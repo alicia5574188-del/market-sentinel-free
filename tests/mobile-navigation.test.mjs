@@ -17,3 +17,20 @@ test("bottom navigation uses a viewport-fixed, transform-free iOS layout", async
   assert.doesNotMatch(block, /transform|backdrop-filter/);
   assert.match(css, /\.app-shell\s*\{[^}]*padding:[^;]*calc\(88px \+ env\(safe-area-inset-bottom\)\)/s);
 });
+
+test("iPhone pull-to-refresh performs one genuine full refresh without starting a deep scan", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const refreshBlock = page.match(/const performPullRefresh = useCallback\(async \(\) => \{([\s\S]*?)\n  \}, \[refreshPositions, refreshVisibleData\]\);/)?.[1] ?? "";
+
+  assert.match(page, /PULL_REFRESH_TRIGGER_PX\s*=\s*68/);
+  assert.match(page, /document\.addEventListener\("touchmove", onTouchMove, \{ passive: false \}\)/);
+  assert.match(page, /window\.addEventListener\("pageshow", syncVisibleData\)/);
+  assert.match(page, /className=\{`pull-refresh \$\{pullRefreshState\}/);
+  assert.match(refreshBlock, /pullRefreshRunning\.current/);
+  assert.match(refreshBlock, /await refreshPositions\(\)/);
+  assert.match(refreshBlock, /await refreshVisibleData\(\)/);
+  assert.doesNotMatch(refreshBlock, /runDeepScan/);
+  assert.match(css, /overscroll-behavior-y:\s*none/);
+  assert.match(css, /\.pull-refresh\.refreshing svg\s*\{[^}]*animation:\s*pull-refresh-spin/s);
+});
