@@ -1,0 +1,1 @@
+ALTER TABLE `live_orders` ADD `market_order_slip_ratio` text DEFAULT '0.003' NOT NULL;

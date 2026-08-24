@@ -1,6 +1,6 @@
 /// <reference types="@cloudflare/workers-types" />
 
-import type { MarketScanner, PositionMonitor } from "../worker";
+import type { LiveTradingCoordinator, MarketScanner, PositionMonitor } from "../worker";
 
 export type RuntimeBindings = {
   SCAN_TOKEN?: string;
@@ -12,6 +12,7 @@ export type RuntimeBindings = {
   OWNER_ACCESS_TOKEN?: string;
   POSITION_MONITOR?: DurableObjectNamespace<PositionMonitor>;
   MARKET_SCANNER?: DurableObjectNamespace<MarketScanner>;
+  LIVE_TRADING_COORDINATOR?: DurableObjectNamespace<LiveTradingCoordinator>;
 };
 
 const runtime = globalThis as typeof globalThis & { __MARKET_SENTINEL_BINDINGS__?: RuntimeBindings };

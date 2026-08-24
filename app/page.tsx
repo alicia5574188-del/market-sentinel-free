@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 type SignalState = "observing" | "pre_alert" | "confirmed" | "blocked";
 type ViewState = SignalState | "holding" | "closed" | "cooldown";
 type FilterState = "all" | "holding" | SignalState;
-type Tab = "机会" | "雷达" | "订单" | "设置";
+type Tab = "机会" | "雷达" | "订单" | "实盘" | "设置";
 type AlertStyle = "early" | "balanced" | "confirmed";
 type PullRefreshState = "idle" | "pulling" | "armed" | "refreshing" | "success" | "error";
 
@@ -250,6 +250,60 @@ type Account = {
   lastSeenAt: number;
   signOutPath: string;
 };
+type LiveTradingSnapshot = {
+  observedAt: number;
+  control: {
+    entryEnabled: boolean;
+    state: "disabled" | "armed" | "risk_locked" | "emergency_stopped";
+    activationEpoch: number;
+    enabledAt: number | null;
+    disabledAt: number | null;
+    emergencyAt: number | null;
+    emergencyReason: string | null;
+    accountEquityPeakUsdt: number | null;
+    accountEquityLastUsdt: number | null;
+    dailyRealizedPnlUsdt: number | null;
+    dailyPnlDate: string | null;
+    accountRiskCheckedAt: number | null;
+    lastReconciledAt: number | null;
+    lastSuccessfulReconcileAt: number | null;
+    lastError: string | null;
+  };
+  credential: { configured: false } | {
+    configured: true;
+    exchange: "gate";
+    environment: "live" | "testnet";
+    keyHint: string;
+    gateUserId: string | null;
+    permissionSummary: { perpetualReadWrite?: boolean | null; ownerConfirmedMinimalPermissions?: boolean; positionMode?: string; ipWhitelistConfigured?: boolean; availableUsdt?: number; totalUsdt?: number };
+    status: "verified" | "error";
+    lastVerifiedAt: number | null;
+    lastError: string | null;
+    updatedAt: number;
+  };
+  orders: {
+    id: string;
+    tradeCaseId: string;
+    symbol: string;
+    side: "LONG" | "SHORT";
+    state: "submitting" | "open" | "protected" | "closing" | "closed" | "cancelled" | "rejected" | "error";
+    requestedContracts: string;
+    filledContracts: string | null;
+    referencePrice: number;
+    fillPrice: number | null;
+    stopLossPrice: number;
+    takeProfitPrice: number;
+    leverage: number;
+    expectedNetTp2Usdt: number;
+    realizedPnlUsdt: number | null;
+    failureReason: string | null;
+    submittedAt: number | null;
+    protectedAt: number | null;
+    closedAt: number | null;
+    updatedAt: number;
+  }[];
+  audit: { id: string; eventType: string; severity: "info" | "warning" | "critical"; symbol: string | null; message: string; createdAt: number }[];
+};
 
 const STATE_META: Record<ViewState, { label: string; short: string }> = {
   observing: { label: "持续观察", short: "观察" },
@@ -279,6 +333,7 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     radar: <><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><path d="m12 12 6-6M12 3v2M3 12h2"/><circle cx="12" cy="12" r="1"/></>,
     log: <><path d="M6 3h12v18H6zM9 8h6M9 12h6M9 16h4"/></>,
     settings: <><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></>,
+    bolt: <path d="m13 2-8 12h7l-1 8 8-12h-7l1-8Z"/>,
     refresh: <><path d="M20 7v5h-5"/><path d="M4 17v-5h5"/><path d="M6.1 9a7 7 0 0 1 11.7-2L20 9M4 15l2.2 2A7 7 0 0 0 18 15"/></>,
   };
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
@@ -483,18 +538,45 @@ export default function Home() {
   const [pullRefreshState, setPullRefreshState] = useState<PullRefreshState>("idle");
   const [pullRefreshMessage, setPullRefreshMessage] = useState("下拉刷新");
   const [pullDistance, setPullDistance] = useState(0);
+  const [liveTrading, setLiveTrading] = useState<LiveTradingSnapshot | null>(null);
+  const [liveTradingError, setLiveTradingError] = useState("");
+  const [liveTradingBusy, setLiveTradingBusy] = useState(false);
+  const [gateApiKey, setGateApiKey] = useState("");
+  const [gateApiSecret, setGateApiSecret] = useState("");
+  const [gateEnvironment, setGateEnvironment] = useState<"live" | "testnet">("testnet");
+  const [gatePermissionsConfirmed, setGatePermissionsConfirmed] = useState(false);
+  const [showCredentialForm, setShowCredentialForm] = useState(false);
+  const [emergencyHolding, setEmergencyHolding] = useState(false);
   const startedForegroundScan = useRef(false);
   const deepScanRunning = useRef(false);
   const positionRefreshRunning = useRef(false);
   const pullRefreshRunning = useRef(false);
   const pullDistanceRef = useRef(0);
   const pullResetTimer = useRef<number | null>(null);
+  const emergencyHoldTimer = useRef<number | null>(null);
   const canManage = account?.role === "owner";
 
   const loadAccount = useCallback(async () => {
     const current = await responseJson<Account>(await fetch("/api/account", { cache: "no-store" }));
     setAccount(current);
   }, []);
+
+  const loadLiveTrading = useCallback(async () => {
+    if (account && account.role !== "owner") {
+      setLiveTrading(null);
+      setLiveTradingError("");
+      return true;
+    }
+    try {
+      const snapshot = await responseJson<LiveTradingSnapshot>(await fetch("/api/live/status", { cache: "no-store" }));
+      setLiveTrading(snapshot);
+      setLiveTradingError("");
+      return true;
+    } catch (error) {
+      setLiveTradingError(error instanceof Error ? error.message : "实盘执行状态不可用");
+      return false;
+    }
+  }, [account]);
 
   const loadBackground = useCallback(async () => {
     try {
@@ -630,9 +712,10 @@ export default function Home() {
       loadScanner(),
       loadDashboard(),
       loadLive(),
+      loadLiveTrading(),
     ]);
     return results.every((result) => result.status === "fulfilled" && result.value !== false);
-  }, [loadAccount, loadBackground, loadDashboard, loadLive, loadScanner]);
+  }, [loadAccount, loadBackground, loadDashboard, loadLive, loadLiveTrading, loadScanner]);
 
   const performPullRefresh = useCallback(async () => {
     if (pullRefreshRunning.current) return;
@@ -780,6 +863,16 @@ export default function Home() {
   }, [loadBackground]);
 
   useEffect(() => {
+    if (account?.role !== "owner") return;
+    const initial = window.setTimeout(() => void loadLiveTrading(), 0);
+    const timer = window.setInterval(() => { if (!document.hidden) void loadLiveTrading(); }, 10_000);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(timer);
+    };
+  }, [account?.role, loadLiveTrading]);
+
+  useEffect(() => {
     if (!background?.active) return;
     const initial = window.setTimeout(() => void loadDashboard(), 500);
     const timer = window.setInterval(() => { if (!document.hidden) void loadDashboard(); }, 10_000);
@@ -844,6 +937,13 @@ export default function Home() {
   const stateCounts = (state: FilterState) => state === "all" ? universe.length : state === "holding" ? universe.filter((item) => openSymbols.has(item.symbol)).length : universe.filter((item) => !openSymbols.has(item.symbol) && item.state === state).length;
   const focusedTrade = dashboard?.trades.find((trade) => trade.id === selectedTradeId) ?? dashboard?.openTrades[0] ?? dashboard?.trades[0] ?? null;
   const focusedMemory = focusedTrade ? dashboard?.memories.find((memory) => memory.symbol === focusedTrade.symbol && memory.side === focusedTrade.side) : null;
+  const activeLiveOrders = liveTrading?.orders.filter((order) => ["submitting", "open", "protected", "closing"].includes(order.state)) ?? [];
+  const liveStateLabel = liveTrading?.control.state === "armed" ? "自动实盘已开启"
+    : liveTrading?.control.state === "emergency_stopped" ? "紧急停机锁定"
+      : liveTrading?.control.state === "risk_locked" ? "风控已锁定"
+        : "自动实盘已关闭";
+  const navigationTabs: Tab[] = canManage ? ["机会", "雷达", "订单", "实盘", "设置"] : ["机会", "雷达", "订单", "设置"];
+  const navigationIcons: Record<Tab, string> = { 机会: "eye", 雷达: "radar", 订单: "log", 实盘: "bolt", 设置: "settings" };
 
   async function saveSettings(patch: Partial<Settings>) {
     if (!settings || saving || !canManage) return;
@@ -861,6 +961,100 @@ export default function Home() {
       setSaving(false);
     }
   }
+
+  async function liveMutation(path: string, body: Record<string, unknown>, method: "POST" | "PUT" | "DELETE" = "POST") {
+    if (liveTradingBusy || !canManage) return null;
+    setLiveTradingBusy(true);
+    setLiveTradingError("");
+    try {
+      const snapshot = await responseJson<LiveTradingSnapshot>(await fetch(path, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }));
+      setLiveTrading(snapshot);
+      return snapshot;
+    } catch (error) {
+      setLiveTradingError(error instanceof Error ? error.message : "实盘操作失败");
+      return null;
+    } finally {
+      setLiveTradingBusy(false);
+    }
+  }
+
+  async function saveGateApiCredentials() {
+    const snapshot = await liveMutation("/api/live/credentials", {
+      apiKey: gateApiKey,
+      apiSecret: gateApiSecret,
+      environment: gateEnvironment,
+      permissionsConfirmed: gatePermissionsConfirmed,
+    }, "PUT");
+    if (!snapshot) return;
+    setGateApiKey("");
+    setGateApiSecret("");
+    setGatePermissionsConfirmed(false);
+    setShowCredentialForm(false);
+  }
+
+  async function deleteGateApiCredentials() {
+    if (!window.confirm("只有 Gate 已无仓位且本程序已无活动实盘订单时才能删除。继续吗？")) return;
+    const snapshot = await liveMutation("/api/live/credentials", {}, "DELETE");
+    if (snapshot) setShowCredentialForm(true);
+  }
+
+  function toggleGateCredentialForm() {
+    if (showCredentialForm) {
+      setGateApiKey("");
+      setGateApiSecret("");
+      setGatePermissionsConfirmed(false);
+    }
+    setShowCredentialForm(!showCredentialForm);
+  }
+
+  function selectTab(nextTab: Tab) {
+    if (nextTab !== "实盘") {
+      setGateApiKey("");
+      setGateApiSecret("");
+      setGatePermissionsConfirmed(false);
+      setShowCredentialForm(false);
+    }
+    setTab(nextTab);
+  }
+
+  async function toggleAutomaticEntry() {
+    const enable = !liveTrading?.control.entryEnabled;
+    if (enable && !window.confirm("开启后，系统会对开启之后的新确认信号自动下单，并立即建立止损和 TP2 止盈。确认开启？")) return;
+    await liveMutation("/api/live/control", { enabled: enable });
+  }
+
+  async function reconcileLiveAccount() {
+    await liveMutation("/api/live/reconcile", {});
+  }
+
+  async function resetEmergencyLatch() {
+    if (!window.confirm("只解除停机锁，自动开仓仍保持关闭。确认 Gate 已完全清空后继续？")) return;
+    await liveMutation("/api/live/emergency", { action: "reset" });
+  }
+
+  function cancelEmergencyHold() {
+    if (emergencyHoldTimer.current !== null) window.clearTimeout(emergencyHoldTimer.current);
+    emergencyHoldTimer.current = null;
+    setEmergencyHolding(false);
+  }
+
+  function startEmergencyHold() {
+    if (liveTradingBusy || !liveTrading?.credential.configured || emergencyHoldTimer.current !== null) return;
+    setEmergencyHolding(true);
+    emergencyHoldTimer.current = window.setTimeout(() => {
+      emergencyHoldTimer.current = null;
+      setEmergencyHolding(false);
+      void liveMutation("/api/live/emergency", { action: "stop" });
+    }, 1_200);
+  }
+
+  useEffect(() => () => {
+    if (emergencyHoldTimer.current !== null) window.clearTimeout(emergencyHoldTimer.current);
+  }, []);
 
   async function enablePush() {
     if (!("serviceWorker" in navigator) || !("PushManager" in window) || typeof Notification === "undefined") {
@@ -952,13 +1146,13 @@ export default function Home() {
     ><div><span><Icon name="refresh" size={16}/></span><b>{pullRefreshMessage}</b></div></div>
     <header className="topbar">
       <div className="brand-lockup"><div className="brand-mark"><Icon name="radar" size={20}/></div><div><strong>Market Sentinel</strong><span>全市场行情哨兵</span></div></div>
-      <div className="topbar-actions"><button className="account-chip" onClick={() => setTab("设置")} aria-label="打开账户设置"><i>{(account?.displayName ?? account?.email ?? "账").slice(0, 1).toUpperCase()}</i><span><b>{account?.displayName ?? "邮箱账户"}</b><small>{account?.email ?? "正在读取账户"}</small></span></button><button className={`icon-button push-toggle ${pushSubscribed ? "push-on" : ""}`} onClick={() => void togglePush()} aria-label={pushSubscribed ? "关闭行情推送" : "开启行情推送"} aria-pressed={pushSubscribed}><Icon name="bell"/><i/></button></div>
+      <div className="topbar-actions"><button className="account-chip" onClick={() => selectTab("设置")} aria-label="打开账户设置"><i>{(account?.displayName ?? account?.email ?? "账").slice(0, 1).toUpperCase()}</i><span><b>{account?.displayName ?? "邮箱账户"}</b><small>{account?.email ?? "正在读取账户"}</small></span></button><button className={`icon-button push-toggle ${pushSubscribed ? "push-on" : ""}`} onClick={() => void togglePush()} aria-label={pushSubscribed ? "关闭行情推送" : "开启行情推送"} aria-pressed={pushSubscribed}><Icon name="bell"/><i/></button></div>
     </header>
 
     <section className={`replay-banner ${decision ? "live" : selectedPacket?.mode === "degraded" ? "degraded" : "loading"}`} aria-label="数据状态">
       <span><i/>{decision ? "Gate 实时" : selectedPacket?.mode === "degraded" ? "数据降级" : "连接中"}</span>
       <p>{decision ? `15 秒更新 · 深度 ${Math.round(decision.dataQuality * 100)}% · ${formatTime(selectedPacket?.observedAt)}` : (selectedPacket?.error ?? sourceError) || "正在读取全市场行情"}</p>
-      <b>无交易权限</b>
+      <b>{liveTrading?.control.entryEnabled ? "自动实盘开启" : liveTrading?.credential.configured ? "实盘关闭" : "无交易权限"}</b>
     </section>
 
     {tab === "机会" && <>
@@ -984,7 +1178,7 @@ export default function Home() {
         <div className="counter-section"><div className="section-title"><span>反证与风险</span><small>强制展示，不只挑好数据</small></div>{decision.counterEvidence.map((item) => <div className="counter-row" key={item.title}><Icon name="alert" size={15}/><div><strong>{item.title}</strong><p>{item.detail}</p></div></div>)}</div>
         <div className="section-title"><span>全部分析维度</span><small>缺失数据明确标 N/A</small></div><div className="analysis-matrix">{decision.metrics.map((item) => <div className={!item.available ? "muted" : item.score * (decision.side === "SHORT" ? -1 : 1) >= 0 ? "support" : "oppose"} key={item.key}><span>{item.label}</span><b>{item.available ? `${item.score >= 0 ? "+" : ""}${item.score.toFixed(2)}` : "N/A"}</b><p>{item.detail}</p></div>)}</div>
         <div className="invalid-box"><Icon name="shield"/><div><span>明确失效条件</span><strong>{decision.invalidation}</strong></div></div>
-        <p className="risk-note">只有全部进场检查通过，深度扫描才会创建一张系统跟踪订单；随后显示“持仓中”，直到命中一条出场规则。系统不自动下单。</p>
+        <p className="risk-note">只有全部进场检查和 15U 净利润闸门通过，深度扫描才会创建系统跟踪订单。{liveTrading?.control.entryEnabled ? "自动实盘已开启：服务器会再次按 Gate 实时价格、张数、保证金和权限复核，成交后必须确认交易所止盈止损。" : "自动实盘当前关闭，不会向交易所创建新订单。"}</p>
       </section> : <section className="decision-card observing loading-card"><div className="utility-heading"><Icon name="radar"/><div><span className="eyebrow">深度分析</span><strong>{selectedPacket?.error ?? "正在合并实时证据…"}</strong></div></div><p>没有实时决策时不会用演示数据冒充信号。</p></section>}
 
       <section className="opportunity-section">
@@ -1025,23 +1219,88 @@ export default function Home() {
       <div className="calibration-list">{dashboard?.stats.calibration.map((bucket) => <div key={bucket.range}><span>{bucket.range}%</span><i><b style={{ width: `${bucket.realized ?? 0}%` }}/></i><strong>{bucket.count ? `${bucket.realized?.toFixed(0)}% / n=${bucket.count}` : "无样本"}</strong></div>)}</div>
     </section>}
 
+    {tab === "实盘" && canManage && <section className="utility-card live-trading-card">
+      <div className="utility-heading"><Icon name="bolt" size={21}/><div><span className="eyebrow">Gate USDT 永续 · 所有者专用</span><strong>实盘执行与安全控制</strong><small>默认关闭 · 开启或持仓时每 10 秒对账 · 所有动作留痕</small></div></div>
+      <div className="live-status-grid">
+        <div><span>执行状态</span><strong className={liveTrading?.control.state === "armed" ? "good" : liveTrading?.control.state === "disabled" ? "muted" : "danger"}>{liveStateLabel}</strong></div>
+        <div><span>Gate 凭据</span><strong className={liveTrading?.credential.configured && liveTrading.credential.status === "verified" ? "good" : "warn"}>{liveTrading?.credential.configured ? liveTrading.credential.keyHint : "未配置"}</strong></div>
+        <div><span>实盘活动单</span><strong>{activeLiveOrders.length}</strong></div>
+        <div><span>最近成功对账</span><strong>{formatTime(liveTrading?.control.lastSuccessfulReconcileAt)}</strong></div>
+        <div><span>Gate 当前权益</span><strong>{liveTrading?.control.accountEquityLastUsdt == null ? "--" : `${liveTrading.control.accountEquityLastUsdt.toFixed(2)}U`}</strong></div>
+        <div><span>UTC 当日已实现</span><strong className={(liveTrading?.control.dailyRealizedPnlUsdt ?? 0) < 0 ? "danger" : "good"}>{displayUsdt(liveTrading?.control.dailyRealizedPnlUsdt)}</strong></div>
+      </div>
+
+      {liveTradingError && <div className="live-error"><Icon name="alert" size={15}/><span>{liveTradingError}</span></div>}
+      {liveTrading?.control.lastError && <div className="live-error"><Icon name="alert" size={15}/><span>{liveTrading.control.lastError}</span></div>}
+
+      <div className="section-title live-section-title"><span>API 凭据保险库</span><small>浏览器不保存，服务端加密后不再返回</small></div>
+      {liveTrading?.credential.configured && <div className="credential-summary">
+        <div><span>环境</span><strong>{liveTrading.credential.environment === "live" ? "Gate 实盘" : "Gate TestNet"}</strong></div>
+        <div><span>永续权限</span><strong>{liveTrading.credential.permissionSummary.perpetualReadWrite === true ? "接口确认读写" : "所有者确认读写"}</strong></div>
+        <div><span>持仓模式</span><strong>{liveTrading.credential.permissionSummary.positionMode === "single" ? "单向" : liveTrading.credential.permissionSummary.positionMode ?? "--"}</strong></div>
+        <div><span>合约可用</span><strong>{liveTrading.credential.permissionSummary.availableUsdt == null ? "--" : `${Number(liveTrading.credential.permissionSummary.availableUsdt).toFixed(2)}U`}</strong></div>
+        <div className="credential-actions"><button className="text-button" onClick={toggleGateCredentialForm}>{showCredentialForm ? "取消更换" : "更换密钥"}</button><button className="text-button danger-button" disabled={liveTradingBusy || activeLiveOrders.length > 0 || liveTrading.control.state === "emergency_stopped"} onClick={() => void deleteGateApiCredentials()}>删除密文</button></div>
+      </div>}
+
+      {(!liveTrading?.credential.configured || showCredentialForm) && <div className="credential-form">
+        <div className="segmented live-environment"><button className={gateEnvironment === "live" ? "active" : ""} onClick={() => setGateEnvironment("live")}>Gate 实盘</button><button className={gateEnvironment === "testnet" ? "active" : ""} onClick={() => setGateEnvironment("testnet")}>TestNet</button></div>
+        <label><span>API Key</span><input type="password" value={gateApiKey} onChange={(event) => setGateApiKey(event.target.value)} autoComplete="off" autoCapitalize="none" spellCheck={false} placeholder="只在这里填写"/></label>
+        <label><span>API Secret</span><input type="password" value={gateApiSecret} onChange={(event) => setGateApiSecret(event.target.value)} autoComplete="off" autoCapitalize="none" spellCheck={false} data-form-type="other" placeholder="保存后不会再次显示"/></label>
+        <label className="permission-check"><input type="checkbox" checked={gatePermissionsConfirmed} onChange={(event) => setGatePermissionsConfirmed(event.target.checked)}/><span>我已确认只开启“永续合约：读写”，钱包和提现权限均关闭；账户使用经典合约账户、单向持仓模式。</span></label>
+        <button className="primary-live-button" disabled={liveTradingBusy || !gateApiKey || !gateApiSecret || !gatePermissionsConfirmed} onClick={() => void saveGateApiCredentials()}>{liveTradingBusy ? "正在验证 Gate…" : "验证并加密保存"}</button>
+        <p>密钥先通过 Gate 私有账户接口验证，再以 AES-GCM 密文写入 D1。保存密钥不会开启自动开仓；更换后台访问码后需重新填写密钥。Cloudflare Worker 没有固定出口 IP，因此若绑定 IP 白名单，需要另配固定出口网络。</p>
+      </div>}
+
+      <div className="section-title live-section-title"><span>自动开仓</span><small>只处理本次开启之后的新确认信号</small></div>
+      <div className="live-control-row"><div><strong>{liveStateLabel}</strong><span>{liveTrading?.control.entryEnabled ? "新订单会自动进场并在 Gate 建立止损与 TP2；关闭后只停止新开仓，已有仓位继续到策略结束。" : "不会创建新的 Gate 订单；已有仓位和交易所保护单仍持续对账。"}</span></div><button disabled={liveTradingBusy || !liveTrading?.credential.configured || liveTrading?.control.state === "emergency_stopped"} className={`switch ${liveTrading?.control.entryEnabled ? "on" : ""}`} onClick={() => void toggleAutomaticEntry()} aria-label="切换自动开仓"><i/></button></div>
+      <div className="live-actions"><button className="text-button" disabled={liveTradingBusy || !liveTrading?.credential.configured} onClick={() => void reconcileLiveAccount()}><Icon name="refresh" size={14}/>立即对账</button><span>开启、部署或刷新页面都不会自动恢复交易。</span></div>
+
+      <div className="section-title live-section-title"><span>一键停机</span><small>撤销全部 USDT 永续挂单并 reduce-only 清仓</small></div>
+      <button
+        className={`emergency-stop-button ${emergencyHolding ? "holding" : ""} ${liveTrading?.control.state === "emergency_stopped" ? "latched" : ""}`}
+        disabled={liveTradingBusy || !liveTrading?.credential.configured || liveTrading?.control.state === "emergency_stopped"}
+        onPointerDown={startEmergencyHold}
+        onPointerUp={cancelEmergencyHold}
+        onPointerLeave={cancelEmergencyHold}
+        onPointerCancel={cancelEmergencyHold}
+        onContextMenu={(event) => event.preventDefault()}
+      ><Icon name="alert" size={18}/><span><strong>{liveTrading?.control.state === "emergency_stopped" ? "停机锁已生效" : emergencyHolding ? "继续按住…" : "按住 1.2 秒紧急停机"}</strong><small>此动作会关闭该 Gate 账户全部 USDT 永续仓位，包括非本程序仓位</small></span></button>
+      {liveTrading?.control.state === "emergency_stopped" && <div className="emergency-latch"><div><strong>停机后不会自动恢复</strong><span>{liveTrading.control.emergencyReason ?? "已停止新开仓并持续确认账户清空"}</span></div><button className="text-button" disabled={liveTradingBusy} onClick={() => void resetEmergencyLatch()}>确认空仓后解除锁</button></div>}
+
+      <div className="safety-list">
+        <div><Icon name="shield" size={14}/><span><strong>二次收益闸门</strong> 下单前按 Gate 实时价格、价格精度、实际费率和双向允许滑点重新确认 TP2 预计净利润 ≥ 15U。</span></div>
+        <div><Icon name="shield" size={14}/><span><strong>按实盘资金缩仓</strong> 仓位同时受 Gate 当前权益 1% 单笔风险、20% 单笔保证金和实际可用余额限制，只会缩小，不会放大模拟计划。</span></div>
+        <div><Icon name="shield" size={14}/><span><strong>账户级熔断</strong> Gate 当日已实现亏损或实盘权益回撤触线后，锁定新开仓；已有仓位仍按保护规则结束。</span></div>
+        <div><Icon name="shield" size={14}/><span><strong>实盘异常提醒</strong> 保护确认、实际平仓、风控锁定和停机结果只推送给保存密钥的所有者账户。</span></div>
+        <div><Icon name="shield" size={14}/><span><strong>成交即保护</strong> 止损与 TP2 必须同时在交易所确认；建立失败则自动平掉该仓并锁定新开仓。</span></div>
+        <div><Icon name="shield" size={14}/><span><strong>止损优先成交</strong> TP2 使用收益闸门中的受限滑点，保护止损使用 Gate 合约默认市价滑点上限，避免过窄限制导致止损触发却无法成交；跳空时实际亏损仍可能超过计划值。</span></div>
+        <div><Icon name="shield" size={14}/><span><strong>幂等与恢复</strong> 每个策略订单只有一个客户端 ID；重试、刷新和 Worker 重启不会重复提交。</span></div>
+      </div>
+
+      <div className="section-title live-section-title"><span>实盘订单账本</span><small>模拟订单与 Gate 实际执行分开记录</small></div>
+      <div className="live-order-list">{liveTrading?.orders.length ? liveTrading.orders.slice(0, 30).map((order) => <div className="live-order-row" key={order.id}><i className={order.state}/><div><strong>{order.symbol.replace("_", "")} · {order.side} · {order.leverage}x</strong><span>{order.state === "protected" ? "交易所止盈止损已确认" : order.failureReason ?? order.state} · TP2预计净 {order.expectedNetTp2Usdt.toFixed(2)}U</span></div><div><strong className={order.realizedPnlUsdt == null ? "" : order.realizedPnlUsdt >= 0 ? "good" : "danger"}>{order.state === "closed" && order.realizedPnlUsdt != null ? displayUsdt(order.realizedPnlUsdt) : `${order.filledContracts ?? order.requestedContracts} 张`}</strong><span>{formatTime(order.closedAt ?? order.protectedAt ?? order.submittedAt ?? order.updatedAt)}</span></div></div>) : <p className="empty-note">尚无 Gate 实盘执行记录。模拟订单不会冒充实盘订单。</p>}</div>
+
+      <div className="section-title live-section-title"><span>安全审计</span><small>不记录 API Key 或 Secret</small></div>
+      <div className="live-audit-list">{liveTrading?.audit.length ? liveTrading.audit.slice(0, 20).map((event) => <div key={event.id}><i className={event.severity}/><span><strong>{event.symbol ? `${event.symbol.replace("_", "")} · ` : ""}{event.message}</strong><small>{formatDateTime(event.createdAt)}</small></span></div>) : <p className="empty-note">暂无实盘操作记录。</p>}</div>
+    </section>}
+
     {tab === "设置" && <section className="utility-card">
-      <div className="utility-heading"><Icon name="settings" size={21}/><div><span className="eyebrow">监测与风险边界</span><strong>{settings?.trialCapitalUsdt ?? 1000}U 模拟合约账户 · 不自动交易</strong></div></div>
+      <div className="utility-heading"><Icon name="settings" size={21}/><div><span className="eyebrow">监测与风险边界</span><strong>{settings?.trialCapitalUsdt ?? 1000}U 模拟策略 · Gate 实盘默认关闭</strong></div></div>
       <div className="account-panel"><div className="account-avatar">{(account?.displayName ?? account?.email ?? "账").slice(0, 1).toUpperCase()}</div><div><span>当前邮箱账户 · {account?.role === "owner" ? "所有者" : "只读成员"}</span><strong>{account?.displayName ?? "账户加载中"}</strong><small>{account?.email ?? "--"}</small></div>{account?.signOutPath && <button className="sign-out-button" onClick={() => void signOut()}>退出登录</button>}</div>
       {!canManage && <div className="account-readonly"><Icon name="shield" size={15}/><span>此账户可查看实时行情、订单记录并单独管理自己的推送；系统量化参数只有所有者可以修改。</span></div>}
       <div className="setting-group"><span>提醒风格</span><div className="segmented">{(["early", "balanced", "confirmed"] as AlertStyle[]).map((style) => <button key={style} disabled={!canManage} className={settings?.alertStyle === style ? "active" : ""} onClick={() => void saveSettings({ alertStyle: style })}>{STYLE_META[style].label}</button>)}</div><p>{STYLE_META[settings?.alertStyle ?? "balanced"].note}</p></div>
       <div className="setting-row"><div><strong>Gate 全市场监测</strong><span>{background?.active ? `每分钟初筛成交额前 ${settings?.universeLimit ?? 30}；每批深度复核 ${background.deepBatchSize ?? 3} 个持仓、异动与轮换标的` : `成交额前 ${settings?.universeLimit ?? 30} 初筛；核心与异动前 ${settings?.deepScanLimit ?? 8} 深度复核`}</span></div><button disabled={!canManage} className={`switch ${settings?.scanEnabled ? "on" : ""}`} onClick={() => void saveSettings({ scanEnabled: !settings?.scanEnabled })} aria-label="切换全市场监测"><i/></button></div>
       <div className="setting-row"><div><strong>发出确认的最低可信度</strong><span>低于阈值只记录、不推送</span></div><label className="number-control"><input disabled={!canManage} type="number" min="55" max="90" value={settings?.minConfidence ?? 72} onChange={(event) => setSettings(settings ? { ...settings, minConfidence: Number(event.target.value) } : settings)} onBlur={(event) => void saveSettings({ minConfidence: Number(event.target.value) })}/><b>%</b></label></div>
       <div className="setting-row"><div><strong>单次最大计划亏损</strong><span>上限 10U = 初始本金 1%；先定风险，再计算杠杆与仓位</span></div><label className="number-control"><input disabled={!canManage} type="number" min="1" max="10" step="1" value={settings?.maxRiskPerAlertUsdt ?? 10} onChange={(event) => setSettings(settings ? { ...settings, maxRiskPerAlertUsdt: Number(event.target.value) } : settings)} onBlur={(event) => void saveSettings({ maxRiskPerAlertUsdt: Number(event.target.value) })}/><b>U</b></label></div>
-      <div className="setting-row"><div><strong>日内暂停 / 最大回撤</strong><span>触及阈值后应停止人工试验，不继续加杠杆翻本</span></div><b>{settings?.dailyPauseUsdt ?? 30}U / {settings?.maxDrawdownUsdt ?? 100}U</b></div>
+      <div className="setting-row"><div><strong>日内暂停 / 最大回撤</strong><span>Gate 实盘触线后自动锁定新开仓；已有仓位继续受保护直到策略结束</span></div><b>{settings?.dailyPauseUsdt ?? 30}U / {settings?.maxDrawdownUsdt ?? 100}U</b></div>
       <div className="setting-row"><div><strong>往返成本假设</strong><span>统计净结果时强制扣除手续费与滑点</span></div><b>{settings?.roundTripCostBps ?? 8} bps</b></div>
       <div className="setting-row"><div><strong>iPhone Web Push</strong><span>{notice}</span></div><button className={`text-button ${pushSubscribed ? "danger-button" : ""}`} onClick={() => void togglePush()}>{pushSubscribed ? "关闭通知" : "开启通知"}</button></div>
       <div className="setting-row"><div><strong>测试推送链路</strong><span>确认手机能收到服务端通知</span></div><button className="text-button" onClick={testPush}>测试</button></div>
-      <div className="invalid-box muted"><Icon name="shield"/><div><span>权限边界</span><strong>只读公开行情，不请求 Gate API Key，不读取资产，不自动下单；高返佣不会被计入交易优势，也不会为了返佣增加交易次数。</strong></div></div>
-      <p className="risk-note">{background?.active ? "免费后台已连接：即使关闭网页，持仓仍每 10 秒按 Gate 报价重估，全市场每分钟初筛并分批深度复核；符合进场、止盈、止损或平仓条件时由服务器发送推送。iPhone 仍需用 Safari 添加到主屏幕后开启通知。" : "iPhone 需要 Safari“添加到主屏幕”后开启通知。网页可见时：持仓每 10 秒按 Gate 报价重估，市场每 60 秒深度复核。关闭网页后，当前部署不会继续扫描；推送只能接收服务端已经产生的事件，不能自行启动扫描。"}</p>
+      <div className="invalid-box muted"><Icon name="shield"/><div><span>权限边界</span><strong>公开行情始终只读；只有所有者主动保存最小权限密钥并开启实盘开关后才允许下单。钱包、提现及其他非永续写权限必须关闭；高返佣不计入交易优势。</strong></div></div>
+      <p className="risk-note">{background?.active ? "免费后台已连接：模拟持仓与市场扫描继续在后台运行；Gate 实盘由独立执行协调器串行处理，开关关闭时不创建新订单，已有实盘仓位仍持续对账。iPhone 仍需用 Safari 添加到主屏幕后开启通知。" : "iPhone 需要 Safari“添加到主屏幕”后开启通知。当前前台模式可继续模拟监测；Gate 实盘必须部署具备 D1 与 Durable Object 的后台执行协调器，页面本身不会直接向交易所下单。"}</p>
     </section>}
 
     </main>
-    <nav className="bottom-nav" aria-label="主导航">{(["机会", "雷达", "订单", "设置"] as Tab[]).map((item) => <button className={tab === item ? "active" : ""} onClick={() => { setTab(item); window.scrollTo({ top: 0, behavior: "smooth" }); }} key={item}><Icon name={{ 机会: "eye", 雷达: "radar", 订单: "log", 设置: "settings" }[item]}/><span>{item}</span></button>)}</nav>
+    <nav className="bottom-nav" aria-label="主导航">{navigationTabs.map((item) => <button className={tab === item ? "active" : ""} onClick={() => { selectTab(item); window.scrollTo({ top: 0, behavior: "smooth" }); }} key={item}><Icon name={navigationIcons[item]}/><span>{item}</span></button>)}</nav>
   </>;
 }

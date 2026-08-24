@@ -11,6 +11,16 @@ import { getSettings } from "../lib/repository";
 import type { SchedulerWorkerStatus } from "../lib/background-scheduler";
 import { resolveVapidConfig } from "../lib/vapid-config";
 import {
+  getLiveTradingSnapshot,
+  liveAlarmDelayMs,
+  reconcileLiveTrading,
+  removeGateCredentials,
+  resetEmergencyStop,
+  runEmergencyStop,
+  saveGateCredentials,
+  setAutomaticEntry,
+} from "../lib/live-trading-engine";
+import {
   accessCodeMatches,
   clearOwnerCookie,
   ownerCookie,
@@ -30,6 +40,7 @@ export interface CloudflareEnv {
   OWNER_ACCESS_TOKEN?: string;
   POSITION_MONITOR?: DurableObjectNamespace<PositionMonitor>;
   MARKET_SCANNER?: DurableObjectNamespace<MarketScanner>;
+  LIVE_TRADING_COORDINATOR?: DurableObjectNamespace<LiveTradingCoordinator>;
   IMAGES?: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {
@@ -166,6 +177,118 @@ export class MarketScanner extends SchedulerObject {
   }
 }
 
+export class LiveTradingCoordinator extends DurableObject<CloudflareEnv> {
+  private operationTail: Promise<void> = Promise.resolve();
+
+  private initializeRuntime() {
+    setRuntimeDb(this.env.DB);
+    setRuntimeBindings(this.env);
+  }
+
+  private async schedule(delayMs = 1_000) {
+    const current = await this.ctx.storage.getAlarm();
+    const requested = Date.now() + delayMs;
+    if (current == null || current > requested) await this.ctx.storage.setAlarm(requested);
+  }
+
+  private async ensureScheduled() {
+    const current = await this.ctx.storage.getAlarm();
+    if (current != null) return current;
+    const requested = Date.now() + 1_000;
+    await this.ctx.storage.setAlarm(requested);
+    return requested;
+  }
+
+  private async nextLiveDelay() {
+    try {
+      return await liveAlarmDelayMs();
+    } catch {
+      return 10_000;
+    }
+  }
+
+  private async exclusive<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.operationTail;
+    let release!: () => void;
+    this.operationTail = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try {
+      this.initializeRuntime();
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+
+  async ensure() {
+    return this.exclusive(async () => {
+      const nextRunAt = await this.ensureScheduled();
+      return { ok: true as const, nextRunAt };
+    });
+  }
+
+  async snapshot() {
+    return this.exclusive(() => getLiveTradingSnapshot());
+  }
+
+  async saveCredentials(input: Parameters<typeof saveGateCredentials>[0], actorAccountId: string) {
+    return this.exclusive(async () => {
+      const result = await saveGateCredentials(input, actorAccountId);
+      await this.schedule();
+      return result;
+    });
+  }
+
+  async removeCredentials(actorAccountId: string) {
+    return this.exclusive(() => removeGateCredentials(actorAccountId));
+  }
+
+  async setAutomaticEntry(enabled: boolean, actorAccountId: string) {
+    return this.exclusive(async () => {
+      const result = await setAutomaticEntry(enabled, actorAccountId);
+      await this.schedule();
+      return result;
+    });
+  }
+
+  async emergencyStop(actorAccountId: string) {
+    return this.exclusive(async () => {
+      const result = await runEmergencyStop(actorAccountId);
+      await this.schedule(10_000);
+      return result;
+    });
+  }
+
+  async resetEmergencyStop(actorAccountId: string) {
+    return this.exclusive(async () => {
+      const result = await resetEmergencyStop(actorAccountId);
+      await this.schedule(60_000);
+      return result;
+    });
+  }
+
+  async reconcileNow() {
+    return this.exclusive(async () => {
+      const result = await reconcileLiveTrading();
+      await this.schedule(await this.nextLiveDelay());
+      return result;
+    });
+  }
+
+  async alarm(): Promise<void> {
+    await this.exclusive(async () => {
+      try {
+        await reconcileLiveTrading();
+      } catch (error) {
+        // Error details are persisted in the redacted live control/audit records.
+        console.error("live trading reconciliation failed", error instanceof Error ? error.message : "unknown error");
+      } finally {
+        await this.ctx.storage.setAlarm(Date.now() + await this.nextLiveDelay());
+      }
+    });
+  }
+}
+
 async function ensureSchedulers(env: CloudflareEnv) {
   if (!env.POSITION_MONITOR || !env.MARKET_SCANNER) {
     await runMarketScan(resolveVapidConfig(env));
@@ -174,6 +297,7 @@ async function ensureSchedulers(env: CloudflareEnv) {
   await Promise.all([
     env.POSITION_MONITOR.getByName("position-monitor").ensure(),
     env.MARKET_SCANNER.getByName("market-scanner").ensure(),
+    env.LIVE_TRADING_COORDINATOR?.getByName("live-trading").ensure(),
   ]);
 }
 
@@ -227,7 +351,7 @@ async function ownerProtectedRequest(request: Request, env: CloudflareEnv): Prom
       schedulerError = errorMessage(error);
     }
     return Response.json({
-      ok: Boolean(env.DB && env.POSITION_MONITOR && env.MARKET_SCANNER && validOwnerAccessToken(env.OWNER_ACCESS_TOKEN)),
+      ok: Boolean(env.DB && env.POSITION_MONITOR && env.MARKET_SCANNER && env.LIVE_TRADING_COORDINATOR && validOwnerAccessToken(env.OWNER_ACCESS_TOKEN)),
       mode: env.BACKGROUND_MODE,
       schedulers,
       schedulerError,

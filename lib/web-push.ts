@@ -9,7 +9,7 @@ type PushSubscriptionRecord = PushSubscriptionKeys & { id: string };
 
 export async function sendPush(subscription: PushSubscriptionRecord, payload: unknown, config: VapidConfig) {
   const request = await createEncryptedPushRequest(subscription, payload, config);
-  const response = await fetch(subscription.endpoint, { method: "POST", headers: request.headers, body: toArrayBuffer(request.body) });
+  const response = await fetch(subscription.endpoint, { method: "POST", headers: request.headers, body: toArrayBuffer(request.body), signal: AbortSignal.timeout(8_000) });
   return { ok: response.ok, status: response.status, expired: response.status === 404 || response.status === 410 };
 }
 

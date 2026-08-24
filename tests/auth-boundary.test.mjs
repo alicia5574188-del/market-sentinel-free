@@ -5,6 +5,7 @@ import test from "node:test";
 const protectedRoutes = [
   "alerts", "background", "chart", "context", "market", "scanner", "settings",
   "account", "positions/refresh", "push/key", "push/subscribe", "push/test", "scan/run",
+  "live/status", "live/credentials", "live/control", "live/emergency", "live/reconcile",
 ];
 
 test("主页面要求登录后才渲染", async () => {
@@ -27,4 +28,14 @@ test("系统设置和手动深度扫描只允许所有者修改", async () => {
   assert.match(settings, /role !== "owner"/);
   assert.match(scan, /role !== "owner"/);
   assert.match(scan, /tokenAuthorized/);
+});
+
+test("实盘账户和所有变更接口均为所有者专用且拒绝跨站 JSON", async () => {
+  for (const route of ["status", "credentials", "control", "emergency", "reconcile"]) {
+    const source = await readFile(new URL(`../app/api/live/${route}/route.ts`, import.meta.url), "utf8");
+    assert.match(source, /role !== "owner"/, route);
+    if (route !== "status") assert.match(source, /mutationRejected/, route);
+  }
+  const credentials = await readFile(new URL("../app/api/live/credentials/route.ts", import.meta.url), "utf8");
+  assert.match(credentials, /readLimitedJsonObject\(request, 4_096\)/);
 });

@@ -36,6 +36,34 @@
       "when": 1787531645261,
       "tag": "0004_lowly_mongoose",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1787579329785,
+      "tag": "0005_many_tenebrous",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1787581384726,
+      "tag": "0006_aberrant_harry_osborn",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1787582926078,
+      "tag": "0007_dapper_meggan",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1787584201193,
+      "tag": "0008_easy_ezekiel",
+      "breakpoints": true
     }
   ]
 }

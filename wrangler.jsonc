@@ -14,7 +14,8 @@
     {
       "binding": "DB",
       "database_name": "market-sentinel-free",
-      "migrations_dir": "./drizzle","database_id": "9863619f-afc7-4dfa-8798-b4445e41c013"
+      "migrations_dir": "./drizzle",
+      "database_id": "9863619f-afc7-4dfa-8798-b4445e41c013"
     }
   ],
   "durable_objects": {
@@ -26,6 +27,10 @@
       {
         "name": "MARKET_SCANNER",
         "class_name": "MarketScanner"
+      },
+      {
+        "name": "LIVE_TRADING_COORDINATOR",
+        "class_name": "LiveTradingCoordinator"
       }
     ]
   },
@@ -33,6 +38,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["PositionMonitor", "MarketScanner"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["LiveTradingCoordinator"]
     }
   ],
   "triggers": {
