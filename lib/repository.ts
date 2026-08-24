@@ -2,7 +2,7 @@ import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { alertEvents, appSettings, pushSubscriptions, regimeState, scanRuns, strategyMemory, symbolLifecycle, tradeCases } from "../db/schema";
 import type { GateAnalysisPacket, GatePositionQuote } from "./gate-client";
-import { buildContractPlan, calculateContractPnl } from "./contract-simulation";
+import { assessTakeProfitViability, buildContractPlan, calculateContractPnl, type ContractPlan, type TakeProfitViability } from "./contract-simulation";
 import {
   accumulateMemory,
   deriveTradeLesson,
@@ -504,6 +504,70 @@ export async function processPositionQuote(quote: GatePositionQuote, settings: A
   }, settings, { source: "Gate 10s position quote", candleTime: quote.candleTime });
 }
 
+function applyMinimumTakeProfitDecision(
+  packet: GateAnalysisPacket,
+  contract: ContractPlan,
+  takeProfitViability: TakeProfitViability,
+): GateAnalysisPacket {
+  const plan = packet.decision.entryPlan;
+  if (!plan || takeProfitViability.passed) return packet;
+  const profitDetail = `按实际 ${contract.leverage}x、名义仓位 ${contract.contractNotionalUsdt.toFixed(2)}U 和往返成本计算，TP2 预计净利润 ${takeProfitViability.netPnlUsdt.toFixed(2)}U / 最低 ${takeProfitViability.minimumNetProfitUsdt.toFixed(2)}U`;
+  return {
+    ...packet,
+    decision: {
+      ...packet.decision,
+      state: "pre_alert",
+      stateLabel: "预警·收益不足",
+      action: `不开仓：TP2预计净利润不足 ${takeProfitViability.minimumNetProfitUsdt.toFixed(0)}U`,
+      thesis: `方向证据虽已通过，但实际仓位在TP2扣除成本后只能预计盈利 ${takeProfitViability.netPnlUsdt.toFixed(2)}U，收益不足，不创建订单。`,
+      trigger: `收益闸门未通过：${profitDetail}`,
+      entryPlan: {
+        ...plan,
+        ready: false,
+        checks: [
+          ...plan.checks.filter((check) => check.key !== "minimum-tp2-net-profit"),
+          { key: "minimum-tp2-net-profit", label: "TP2最低净利润", passed: false, required: true, detail: profitDetail },
+        ],
+      },
+      counterEvidence: [
+        { title: "TP2净利润不足", detail: `${profitDetail}；系统不会通过提高杠杆来勉强开仓。` },
+        ...packet.decision.counterEvidence.filter((item) => item.title !== "TP2净利润不足"),
+      ].slice(0, 5),
+    },
+  };
+}
+
+export async function previewDecisionContract(packet: GateAnalysisPacket, settings: AppSettings) {
+  const plan = packet.decision.entryPlan;
+  if (packet.decision.state !== "confirmed" || !plan?.ready || packet.decision.side === "WAIT") return null;
+  const account = await getAccountSnapshot(settings);
+  const contract = buildContractPlan({
+    side: plan.side,
+    entryPrice: plan.entryPrice,
+    stopLossPrice: plan.stopLossPrice,
+    atrPct: packet.decision.diagnostics.atrPct,
+    dataQuality: packet.decision.dataQuality,
+    confidence: packet.decision.confidence,
+    liquidityVolumeUsd: packet.market.volumeUsd,
+    accountEquityUsdt: account.equityUsdt,
+    availableMarginUsdt: account.availableMarginUsdt,
+    requestedRiskUsdt: settings.maxRiskPerAlertUsdt,
+  });
+  const takeProfitViability = assessTakeProfitViability({
+    side: plan.side,
+    entryPrice: plan.entryPrice,
+    takeProfitPrice: plan.takeProfit2Price,
+    notionalUsdt: contract.contractNotionalUsdt,
+    roundTripCostBps: settings.roundTripCostBps,
+  });
+  return {
+    account,
+    contract,
+    takeProfitViability,
+    packet: applyMinimumTakeProfitDecision(packet, contract, takeProfitViability),
+  };
+}
+
 export async function processDecision(packet: GateAnalysisPacket, settings: AppSettings): Promise<LifecycleResult> {
   const db = getDb();
   await applyPendingLearning(packet.symbol);
@@ -532,19 +596,9 @@ export async function processDecision(packet: GateAnalysisPacket, settings: AppS
 
   const plan = packet.decision.entryPlan;
   if (packet.decision.state === "confirmed" && plan?.ready && packet.decision.side !== "WAIT") {
-    const account = await getAccountSnapshot(settings);
-    const contract = buildContractPlan({
-      side: plan.side,
-      entryPrice: plan.entryPrice,
-      stopLossPrice: plan.stopLossPrice,
-      atrPct: packet.decision.diagnostics.atrPct,
-      dataQuality: packet.decision.dataQuality,
-      confidence: packet.decision.confidence,
-      liquidityVolumeUsd: packet.market.volumeUsd,
-      accountEquityUsdt: account.equityUsdt,
-      availableMarginUsdt: account.availableMarginUsdt,
-      requestedRiskUsdt: settings.maxRiskPerAlertUsdt,
-    });
+    const contractPreview = await previewDecisionContract(packet, settings);
+    if (!contractPreview) throw new Error("Confirmed decision is missing its contract preview");
+    const { account, contract, takeProfitViability } = contractPreview;
     if (contract.contractNotionalUsdt < 1 || contract.marginUsdt < 1) {
       await upsertLifecycle({
         symbol: packet.symbol,
@@ -557,6 +611,22 @@ export async function processDecision(packet: GateAnalysisPacket, settings: AppS
         decisionJson: JSON.stringify({ decision: packet.decision, accountBlocked: "模拟账户可用保证金不足 1U" }),
       });
       return { kind: "transition", trade: null, shouldNotify: false, notification: null, transitionId: null };
+    }
+    if (!takeProfitViability.passed) {
+      packet.decision = contractPreview.packet.decision;
+      const profitBlockChanged = !lifecycle || lifecycle.state !== "pre_alert" || lifecycle.side !== plan.side;
+      await upsertLifecycle({
+        symbol: packet.symbol,
+        state: "pre_alert",
+        side: plan.side,
+        activeTradeId: null,
+        cooldownUntil: null,
+        lastTransitionAt: profitBlockChanged ? packet.observedAt : lifecycle.lastTransitionAt,
+        lastObservedAt: packet.observedAt,
+        decisionJson: JSON.stringify(packet.decision),
+      });
+      const transitionId = profitBlockChanged ? await insertTransition(packet) : null;
+      return { kind: profitBlockChanged ? "transition" : "noop", trade: null, shouldNotify: false, notification: null, transitionId };
     }
     const id = crypto.randomUUID();
     const inserted = await db.insert(tradeCases).values({
