@@ -294,6 +294,17 @@ const worker = {
     request = protectedRequest;
     const url = new URL(request.url);
 
+    // `run_worker_first` sends every request through this Worker, including
+    // Vite's hashed CSS and client bundles. Vinext does not fall through to the
+    // Assets binding for `/assets/*`, so serving those requests through the app
+    // handler leaves the SSR markup unstyled and unhydrated. Return a real
+    // static asset before invoking the Vinext router, while preserving its 404
+    // fallback for route-like paths that merely have a file extension.
+    if (isPublicAsset(url.pathname)) {
+      const assetResponse = await env.ASSETS.fetch(request);
+      if (assetResponse.status !== 404) return assetResponse;
+    }
+
     if (url.pathname === "/_vinext/image") {
       const images = env.IMAGES;
       if (!images) return new Response("Image transformation unavailable", { status: 404 });
