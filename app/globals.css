@@ -19,7 +19,7 @@
 
 * { box-sizing: border-box; }
 
-html { background: var(--bg); color-scheme: dark; scroll-behavior: smooth; }
+html { background: var(--bg); color-scheme: dark; scroll-behavior: smooth; overscroll-behavior-y: none; }
 
 body {
   margin: 0;
@@ -31,6 +31,7 @@ body {
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
 }
 
 button { color: inherit; font: inherit; }
@@ -44,6 +45,48 @@ button, a { -webkit-tap-highlight-color: transparent; }
   padding: env(safe-area-inset-top) 12px calc(88px + env(safe-area-inset-bottom));
   overflow: hidden;
 }
+
+.pull-refresh {
+  grid-column: 1 / -1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--cyan);
+  opacity: 0;
+  transition: height .22s ease, opacity .16s ease;
+  will-change: height;
+}
+.pull-refresh.visible { opacity: 1; }
+.pull-refresh.pulling, .pull-refresh.armed { transition: none; }
+.pull-refresh > div {
+  min-height: 38px;
+  padding: 7px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(67,199,239,.22);
+  border-radius: 999px;
+  background: rgba(11,23,34,.9);
+  box-shadow: 0 8px 24px rgba(0,0,0,.22);
+}
+.pull-refresh span { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; background: rgba(67,199,239,.1); }
+.pull-refresh svg { transition: transform .16s ease; }
+.pull-refresh b { font-size: 10px; letter-spacing: .03em; white-space: nowrap; }
+.pull-refresh.armed { color: var(--amber); }
+.pull-refresh.armed > div { border-color: rgba(255,189,74,.28); }
+.pull-refresh.armed span { background: rgba(255,189,74,.1); }
+.pull-refresh.armed svg { transform: rotate(180deg); }
+.pull-refresh.refreshing svg { animation: pull-refresh-spin .78s linear infinite; }
+.pull-refresh.success { color: var(--green); }
+.pull-refresh.success > div { border-color: rgba(62,229,154,.28); }
+.pull-refresh.success span { background: rgba(62,229,154,.1); }
+.pull-refresh.error { color: var(--red); }
+.pull-refresh.error > div { border-color: rgba(255,110,120,.28); }
+.pull-refresh.error span { background: rgba(255,110,120,.1); }
+
+@keyframes pull-refresh-spin { to { transform: rotate(360deg); } }
 
 .topbar {
   height: 62px;
