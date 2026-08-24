@@ -1,6 +1,6 @@
 import { analyzeGateSymbol, SYMBOL_PATTERN } from "../../../lib/gate-client";
 import { getGlobalRiskContext } from "../../../lib/global-risk";
-import { getExperience, getOpenTrade, getPriorLong, getSettings } from "../../../lib/repository";
+import { getExperience, getOpenTrade, getPriorLong, getSettings, previewDecisionContract } from "../../../lib/repository";
 import { requireApiAccount } from "../../api-auth";
 
 export async function GET(request: Request) {
@@ -25,7 +25,8 @@ export async function GET(request: Request) {
       experience,
       alertStyle: settings.alertStyle,
     });
-    return Response.json({ ...packet, openTrade, experience }, {
+    const contractPreview = openTrade ? null : await previewDecisionContract(packet, settings);
+    return Response.json({ ...(contractPreview?.packet ?? packet), openTrade, experience }, {
       headers: { "Cache-Control": "private, max-age=2, stale-while-revalidate=5" },
     });
   } catch (error) {
