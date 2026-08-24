@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildContractPlan, calculateContractPnl } from "../lib/contract-simulation.ts";
+import { assessTakeProfitViability, buildContractPlan, calculateContractPnl, MIN_TP2_NET_PROFIT_USDT } from "../lib/contract-simulation.ts";
 
 test("高流动性低波动合约按止损风险和20%保证金上限选择杠杆", () => {
   const plan = buildContractPlan({
@@ -66,4 +66,38 @@ test("合约盈亏金额强制扣除往返成本", () => {
     estimatedCostUsdt: 0.64,
     netPnlUsdt: 9.36,
   });
+});
+
+test("QQQX式微小TP2即使使用3倍杠杆也被15U净利润闸门拒绝", () => {
+  const result = assessTakeProfitViability({
+    side: "SHORT",
+    entryPrice: 711.08,
+    takeProfitPrice: 709.830685714286,
+    notionalUsdt: 595.65791728,
+    roundTripCostBps: 8,
+  });
+  assert.equal(result.minimumNetProfitUsdt, MIN_TP2_NET_PROFIT_USDT);
+  assert.equal(result.netPnlUsdt, 0.57);
+  assert.equal(result.passed, false);
+});
+
+test("预计TP2扣成本后达到15U才允许开仓", () => {
+  const atThreshold = assessTakeProfitViability({
+    side: "LONG",
+    entryPrice: 100,
+    takeProfitPrice: 101.58,
+    notionalUsdt: 1000,
+    roundTripCostBps: 8,
+  });
+  const worthwhileOneX = assessTakeProfitViability({
+    side: "LONG",
+    entryPrice: 100,
+    takeProfitPrice: 111.75,
+    notionalUsdt: 170,
+    roundTripCostBps: 8,
+  });
+  assert.equal(atThreshold.netPnlUsdt, 15);
+  assert.equal(atThreshold.passed, true);
+  assert.ok(worthwhileOneX.netPnlUsdt > 15);
+  assert.equal(worthwhileOneX.passed, true);
 });
