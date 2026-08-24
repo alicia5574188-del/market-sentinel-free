@@ -8,19 +8,6 @@ const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 
-const localBindingConfig = {
-  main: "./worker/index.ts",
-  compatibility_flags: ["nodejs_compat"],
-  d1_databases: [
-    {
-      binding: "DB",
-      database_name: "market-sentinel-local",
-      database_id: SITE_CREATOR_PLACEHOLDER_DATABASE_ID,
-    },
-  ],
-  r2_buckets: [],
-};
-
 export default defineConfig(async () => {
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
@@ -45,7 +32,30 @@ export default defineConfig(async () => {
       cloudflare({
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
         inspectorPort: false,
-        config: localBindingConfig,
+        config(config) {
+          // Mutate the file-backed config instead of returning another binding
+          // array. The plugin deep-merges returned arrays, which duplicated the
+          // root `DB` binding in Vinext's generated deployment config.
+          config.main = "./worker/index.ts";
+          config.compatibility_flags = [
+            ...new Set([...(config.compatibility_flags ?? []), "nodejs_compat"]),
+          ];
+
+          const database = config.d1_databases?.find(
+            ({ binding }) => binding === "DB",
+          );
+          if (database && !database.database_id) {
+            database.database_id = SITE_CREATOR_PLACEHOLDER_DATABASE_ID;
+          } else if (!database) {
+            config.d1_databases = [
+              {
+                binding: "DB",
+                database_name: "market-sentinel-local",
+                database_id: SITE_CREATOR_PLACEHOLDER_DATABASE_ID,
+              },
+            ];
+          }
+        },
       }),
     ],
   };
