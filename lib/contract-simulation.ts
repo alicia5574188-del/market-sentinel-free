@@ -32,6 +32,16 @@ export type ContractPnl = {
   netPnlUsdt: number;
 };
 
+export const MIN_TP2_NET_PROFIT_USDT = 15;
+
+export type TakeProfitViability = ContractPnl & {
+  grossMovePct: number;
+  estimatedCostPct: number;
+  netMovePct: number;
+  minimumNetProfitUsdt: number;
+  passed: boolean;
+};
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
@@ -126,5 +136,39 @@ export function calculateContractPnl(notionalUsdt: number, grossMovePct: number,
     grossPnlUsdt: round(grossPnlUsdt),
     estimatedCostUsdt: round(estimatedCostUsdt),
     netPnlUsdt: round(grossPnlUsdt - estimatedCostUsdt),
+  };
+}
+
+/**
+ * Projects the full-position net result at TP2 after the configured round-trip
+ * cost. This gate is evaluated only after the real leverage and notional caps
+ * have been applied, so leverage is never raised merely to make a trade pass.
+ */
+export function assessTakeProfitViability(input: {
+  side: ContractSide;
+  entryPrice: number;
+  takeProfitPrice: number;
+  notionalUsdt: number;
+  roundTripCostBps: number;
+  minimumNetProfitUsdt?: number;
+}): TakeProfitViability {
+  const entryPrice = finitePositive(input.entryPrice);
+  const takeProfitPrice = finitePositive(input.takeProfitPrice);
+  const rawMovePct = entryPrice > 0 && takeProfitPrice > 0
+    ? (takeProfitPrice / entryPrice - 1) * 100
+    : 0;
+  const grossMovePct = input.side === "SHORT" ? -rawMovePct : rawMovePct;
+  const estimatedCostPct = Math.max(0, Number.isFinite(input.roundTripCostBps) ? input.roundTripCostBps : 0) / 100;
+  const minimumNetProfitUsdt = Math.max(0, Number.isFinite(input.minimumNetProfitUsdt)
+    ? input.minimumNetProfitUsdt!
+    : MIN_TP2_NET_PROFIT_USDT);
+  const pnl = calculateContractPnl(input.notionalUsdt, grossMovePct, estimatedCostPct);
+  return {
+    ...pnl,
+    grossMovePct: round(grossMovePct),
+    estimatedCostPct: round(estimatedCostPct),
+    netMovePct: round(grossMovePct - estimatedCostPct),
+    minimumNetProfitUsdt: round(minimumNetProfitUsdt),
+    passed: pnl.netPnlUsdt >= minimumNetProfitUsdt,
   };
 }
