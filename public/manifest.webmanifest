@@ -1,0 +1,20 @@
+{
+  "name": "Market Sentinel 行情哨兵",
+  "short_name": "行情哨兵",
+  "description": "实时监测加密市场，并用支持证据、反证与失效条件解释每一次提醒。",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#071019",
+  "theme_color": "#071019",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
