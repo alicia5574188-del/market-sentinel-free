@@ -7,6 +7,11 @@ type ViewState = SignalState | "holding" | "closed" | "cooldown";
 type FilterState = "all" | "holding" | SignalState;
 type Tab = "机会" | "雷达" | "订单" | "设置";
 type AlertStyle = "early" | "balanced" | "confirmed";
+type PullRefreshState = "idle" | "pulling" | "armed" | "refreshing" | "success" | "error";
+
+const PULL_REFRESH_TRIGGER_PX = 68;
+const PULL_REFRESH_MAX_PX = 96;
+const PULL_REFRESH_SETTLED_PX = 54;
 
 type Metric = { key: string; label: string; score: number; detail: string; available: boolean };
 type EntryCheck = { key: string; label: string; passed: boolean; required: boolean; detail: string };
@@ -475,9 +480,15 @@ export default function Home() {
   const [positionRefreshMessage, setPositionRefreshMessage] = useState("等待 Gate 持仓报价");
   const [saving, setSaving] = useState(false);
   const [account, setAccount] = useState<Account | null>(null);
+  const [pullRefreshState, setPullRefreshState] = useState<PullRefreshState>("idle");
+  const [pullRefreshMessage, setPullRefreshMessage] = useState("下拉刷新");
+  const [pullDistance, setPullDistance] = useState(0);
   const startedForegroundScan = useRef(false);
   const deepScanRunning = useRef(false);
   const positionRefreshRunning = useRef(false);
+  const pullRefreshRunning = useRef(false);
+  const pullDistanceRef = useRef(0);
+  const pullResetTimer = useRef<number | null>(null);
   const canManage = account?.role === "owner";
 
   const loadAccount = useCallback(async () => {
@@ -489,7 +500,7 @@ export default function Home() {
     try {
       const status = await responseJson<BackgroundStatus>(await fetch("/api/background", { cache: "no-store" }));
       setBackground(status);
-      if (!status.active) return;
+      if (!status.active) return true;
       const position = status.position;
       const scannerStatus = status.scanner;
       if (position?.lastSuccessAt) setDashboardUpdatedAt(position.lastSuccessAt);
@@ -510,6 +521,7 @@ export default function Home() {
           ? `后台扫描异常 · ${scannerStatus.lastError ?? "等待自动恢复"}`
           : `免费后台每分钟复核 ${scannerStatus.analyzed ?? 0} 个标的${symbols ? ` · ${symbols}` : ""}`);
       }
+      return true;
     } catch (error) {
       setBackground({
         mode: "foreground-only",
@@ -522,6 +534,7 @@ export default function Home() {
         scanner: null,
         error: error instanceof Error ? error.message : "后台状态不可用",
       });
+      return false;
     }
   }, []);
 
@@ -531,8 +544,10 @@ export default function Home() {
       setScanner(packet);
       setSettings(packet.settings);
       setSourceError("");
+      return true;
     } catch (error) {
       setSourceError(error instanceof Error ? error.message : "全市场初筛暂不可用");
+      return false;
     }
   }, []);
 
@@ -543,10 +558,23 @@ export default function Home() {
       setSettings(packet.settings);
       const latestPositionTime = packet.openTrades.reduce((latest, trade) => Math.max(latest, trade.lastEvaluatedAt), 0);
       if (latestPositionTime > 0) setDashboardUpdatedAt(latestPositionTime);
+      return true;
     } catch {
       // 首次部署迁移或数据源短暂失败时，主行情仍可继续工作。
+      return false;
     }
   }, []);
+
+  const loadLive = useCallback(async () => {
+    try {
+      const packet = await responseJson<LivePacket>(await fetch(`/api/market?symbol=${encodeURIComponent(selectedSymbol)}`, { cache: "no-store" }));
+      setLivePacket(packet);
+      return true;
+    } catch (error) {
+      setLivePacket({ mode: "degraded", observedAt: Date.now(), symbol: selectedSymbol, error: error instanceof Error ? error.message : "Gate 实时数据不可用" });
+      return false;
+    }
+  }, [selectedSymbol]);
 
   const runDeepScan = useCallback(async (manual = false) => {
     if (!canManage) {
@@ -574,7 +602,8 @@ export default function Home() {
   }, [canManage, loadDashboard, loadScanner, selectedSymbol]);
 
   const refreshPositions = useCallback(async () => {
-    if (positionRefreshRunning.current || document.hidden) return;
+    if (positionRefreshRunning.current) return true;
+    if (document.hidden) return false;
     positionRefreshRunning.current = true;
     setPositionRefreshState("running");
     try {
@@ -584,13 +613,148 @@ export default function Home() {
       setDashboardUpdatedAt(packet.observedAt);
       setPositionRefreshState("live");
       setPositionRefreshMessage(packet.refreshed ? `已重估 ${packet.refreshed} 张持仓` : "当前无持仓，账户记录已同步");
+      return true;
     } catch (error) {
       setPositionRefreshState("error");
       setPositionRefreshMessage(error instanceof Error ? error.message : "Gate 持仓报价失败");
+      return false;
     } finally {
       positionRefreshRunning.current = false;
     }
   }, []);
+
+  const refreshVisibleData = useCallback(async () => {
+    const results = await Promise.allSettled([
+      loadAccount(),
+      loadBackground(),
+      loadScanner(),
+      loadDashboard(),
+      loadLive(),
+    ]);
+    return results.every((result) => result.status === "fulfilled" && result.value !== false);
+  }, [loadAccount, loadBackground, loadDashboard, loadLive, loadScanner]);
+
+  const performPullRefresh = useCallback(async () => {
+    if (pullRefreshRunning.current) return;
+    pullRefreshRunning.current = true;
+    if (pullResetTimer.current !== null) {
+      window.clearTimeout(pullResetTimer.current);
+      pullResetTimer.current = null;
+    }
+    setPullRefreshState("refreshing");
+    setPullRefreshMessage("正在刷新行情、订单与账户…");
+    setPullDistance(PULL_REFRESH_SETTLED_PX);
+    try {
+      const positionsReady = await refreshPositions();
+      const visibleDataReady = await refreshVisibleData();
+      const refreshed = positionsReady && visibleDataReady;
+      setPullRefreshState(refreshed ? "success" : "error");
+      setPullRefreshMessage(refreshed ? `刷新完成 · ${formatTime(Date.now())}` : "部分数据刷新失败，请再下拉一次");
+      setPullDistance(PULL_REFRESH_SETTLED_PX);
+      pullResetTimer.current = window.setTimeout(() => {
+        setPullDistance(0);
+        setPullRefreshState("idle");
+        setPullRefreshMessage("下拉刷新");
+        pullResetTimer.current = null;
+      }, refreshed ? 900 : 1_600);
+    } finally {
+      pullRefreshRunning.current = false;
+    }
+  }, [refreshPositions, refreshVisibleData]);
+
+  useEffect(() => {
+    let tracking = false;
+    let startX = 0;
+    let startY = 0;
+
+    const atPageTop = () => window.scrollY <= 0 && (document.scrollingElement?.scrollTop ?? 0) <= 0;
+    const resetPull = () => {
+      tracking = false;
+      pullDistanceRef.current = 0;
+      setPullDistance(0);
+      setPullRefreshState("idle");
+      setPullRefreshMessage("下拉刷新");
+    };
+    const onTouchStart = (event: TouchEvent) => {
+      if (pullRefreshRunning.current || pullResetTimer.current !== null || event.touches.length !== 1 || !atPageTop()) return;
+      const target = event.target;
+      if (target instanceof Element && target.closest("button, a, input, select, textarea")) return;
+      const touch = event.touches[0];
+      tracking = true;
+      startX = touch.clientX;
+      startY = touch.clientY;
+      pullDistanceRef.current = 0;
+    };
+    const onTouchMove = (event: TouchEvent) => {
+      if (!tracking || event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      const deltaX = touch.clientX - startX;
+      const deltaY = touch.clientY - startY;
+      if (deltaY <= 0 || Math.abs(deltaX) > deltaY) {
+        if (deltaY < -8 || Math.abs(deltaX) > 18) resetPull();
+        return;
+      }
+      if (!atPageTop()) {
+        resetPull();
+        return;
+      }
+      if (event.cancelable) event.preventDefault();
+      const distance = Math.min(PULL_REFRESH_MAX_PX, deltaY * 0.7);
+      pullDistanceRef.current = distance;
+      setPullDistance(distance);
+      const armed = distance >= PULL_REFRESH_TRIGGER_PX;
+      setPullRefreshState(armed ? "armed" : "pulling");
+      setPullRefreshMessage(armed ? "松开立即刷新" : "继续下拉刷新");
+    };
+    const onTouchEnd = () => {
+      if (!tracking) return;
+      const armed = pullDistanceRef.current >= PULL_REFRESH_TRIGGER_PX;
+      tracking = false;
+      pullDistanceRef.current = 0;
+      if (armed) void performPullRefresh();
+      else resetPull();
+    };
+    const onTouchCancel = () => {
+      if (tracking) resetPull();
+    };
+
+    document.addEventListener("touchstart", onTouchStart, { passive: true });
+    document.addEventListener("touchmove", onTouchMove, { passive: false });
+    document.addEventListener("touchend", onTouchEnd, { passive: true });
+    document.addEventListener("touchcancel", onTouchCancel, { passive: true });
+    return () => {
+      document.removeEventListener("touchstart", onTouchStart);
+      document.removeEventListener("touchmove", onTouchMove);
+      document.removeEventListener("touchend", onTouchEnd);
+      document.removeEventListener("touchcancel", onTouchCancel);
+      if (pullResetTimer.current !== null) {
+        window.clearTimeout(pullResetTimer.current);
+        pullResetTimer.current = null;
+      }
+    };
+  }, [performPullRefresh]);
+
+  useEffect(() => {
+    let lastResumeRefreshAt = 0;
+    const syncVisibleData = () => {
+      if (document.hidden || pullRefreshRunning.current) return;
+      const now = Date.now();
+      if (now - lastResumeRefreshAt < 2_000) return;
+      lastResumeRefreshAt = now;
+      void refreshVisibleData();
+    };
+    const onVisibilityChange = () => {
+      if (!document.hidden) syncVisibleData();
+    };
+    window.addEventListener("pageshow", syncVisibleData);
+    window.addEventListener("online", syncVisibleData);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("pageshow", syncVisibleData);
+      window.removeEventListener("online", syncVisibleData);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [refreshVisibleData]);
 
   useEffect(() => {
     if ("serviceWorker" in navigator) {
@@ -626,19 +790,13 @@ export default function Home() {
   }, [background?.active, loadDashboard]);
 
   useEffect(() => {
-    let active = true;
-    async function loadLive() {
-      try {
-        const packet = await responseJson<LivePacket>(await fetch(`/api/market?symbol=${encodeURIComponent(selectedSymbol)}`, { cache: "no-store" }));
-        if (active) setLivePacket(packet);
-      } catch (error) {
-        if (active) setLivePacket({ mode: "degraded", observedAt: Date.now(), symbol: selectedSymbol, error: error instanceof Error ? error.message : "Gate 实时数据不可用" });
-      }
-    }
-    void loadLive();
+    const initial = window.setTimeout(() => void loadLive(), 0);
     const timer = window.setInterval(() => { if (!document.hidden) void loadLive(); }, 15_000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, [selectedSymbol]);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(timer);
+    };
+  }, [loadLive]);
 
   useEffect(() => {
     const initial = window.setTimeout(() => void loadScanner(), 0);
@@ -785,6 +943,13 @@ export default function Home() {
 
   return <>
     <main className="app-shell">
+    <div
+      className={`pull-refresh ${pullRefreshState} ${pullDistance > 0 ? "visible" : ""}`}
+      style={{ height: `${pullDistance}px` }}
+      role="status"
+      aria-live="polite"
+      aria-label={pullRefreshMessage}
+    ><div><span><Icon name="refresh" size={16}/></span><b>{pullRefreshMessage}</b></div></div>
     <header className="topbar">
       <div className="brand-lockup"><div className="brand-mark"><Icon name="radar" size={20}/></div><div><strong>Market Sentinel</strong><span>全市场行情哨兵</span></div></div>
       <div className="topbar-actions"><button className="account-chip" onClick={() => setTab("设置")} aria-label="打开账户设置"><i>{(account?.displayName ?? account?.email ?? "账").slice(0, 1).toUpperCase()}</i><span><b>{account?.displayName ?? "邮箱账户"}</b><small>{account?.email ?? "正在读取账户"}</small></span></button><button className={`icon-button push-toggle ${pushSubscribed ? "push-on" : ""}`} onClick={() => void togglePush()} aria-label={pushSubscribed ? "关闭行情推送" : "开启行情推送"} aria-pressed={pushSubscribed}><Icon name="bell"/><i/></button></div>
