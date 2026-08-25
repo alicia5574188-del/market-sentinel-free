@@ -4,7 +4,7 @@ import { beginScan, completeScan, getAlertDashboard, getExperience, getPriorLong
 import { notifyTradeLifecycle, type VapidConfig } from "./web-push.ts";
 import { chooseBackgroundDeepUniverse } from "./background-selection.ts";
 import { evaluateShadowStrategies } from "./shadow-strategy-engine.ts";
-import { processShadowStrategies } from "./shadow-strategy-repository.ts";
+import { processShadowStrategies, retireLegacyShadowTrades } from "./shadow-strategy-repository.ts";
 
 export function chooseDeepUniverse(universe: UniverseTicker[], coreSymbols: string[], openSymbols: string[], limit: number) {
   const selected: UniverseTicker[] = [];
@@ -86,6 +86,7 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
   const settings = await getSettings();
   const coreSymbols = JSON.parse(settings.coreSymbolsJson) as string[];
   if (!settings.scanEnabled) return { status: "paused", observedAt: Date.now(), analyzed: [], notifications: { attempted: 0, delivered: 0 } };
+  await retireLegacyShadowTrades();
   const openSymbols = await listOpenTradeSymbols();
   const [universe, context] = await Promise.all([
     fetchGateUniverse(settings.universeLimit, [...coreSymbols, ...openSymbols]),
@@ -161,10 +162,6 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
       const { packet, growthCandles, growthError } = result.value;
       analyzed.push(packet);
 
-      // Sentinel's original comprehensive model remains the first module.
-      // If it does not open an order, the growth modules below may use the
-      // exact same contract_v2 lifecycle. Whichever module opens first becomes
-      // the single unified order for this symbol.
       const baseResult = await processDecision(packet, settings);
       lifecycle.push({ symbol: packet.symbol, result: baseResult });
       await deliverLifecycle(baseResult);
