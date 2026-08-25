@@ -1,0 +1,97 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  LIVE_LOSS_STREAK_COOLDOWN_MS,
+  evaluateLivePerformanceGate,
+} from "../lib/live-performance-gate.ts";
+
+const now = Date.UTC(2026, 7, 25, 1, 30, 0);
+
+test("two consecutive live losses trigger a six-hour entry cooldown", () => {
+  const result = evaluateLivePerformanceGate({
+    now,
+    recentLive: [
+      { realizedPnlUsdt: -1.2, closedAt: now - 30 * 60_000 },
+      { realizedPnlUsdt: -0.8, closedAt: now - 90 * 60_000 },
+      { realizedPnlUsdt: 2.1, closedAt: now - 3 * 60 * 60_000 },
+    ],
+    recentSimulation: [],
+  });
+  assert.equal(result.passed, false);
+  assert.equal(result.liveLossStreak, 2);
+  assert.equal(result.cooldownUntil, now - 30 * 60_000 + LIVE_LOSS_STREAK_COOLDOWN_MS);
+  assert.match(result.reason ?? "", /连续 2 笔亏损/);
+});
+
+test("expired live cooldown automatically allows entry again", () => {
+  const result = evaluateLivePerformanceGate({
+    now,
+    recentLive: [
+      { realizedPnlUsdt: -1.2, closedAt: now - 7 * 60 * 60_000 },
+      { realizedPnlUsdt: -0.8, closedAt: now - 8 * 60 * 60_000 },
+    ],
+    recentSimulation: [],
+  });
+  assert.equal(result.passed, true);
+});
+
+test("unattributed recent live close fails closed until pnl is known", () => {
+  const result = evaluateLivePerformanceGate({
+    now,
+    recentLive: [{ realizedPnlUsdt: null, closedAt: now - 5 * 60_000 }],
+    recentSimulation: [],
+  });
+  assert.equal(result.passed, false);
+  assert.match(result.reason ?? "", /盈亏尚未完成归因/);
+});
+
+test("three consecutive simulation losses block live entry without stopping simulation", () => {
+  const result = evaluateLivePerformanceGate({
+    now,
+    recentLive: [],
+    recentSimulation: [
+      { netMovePct: -0.7, exitAt: now - 1_000 },
+      { netMovePct: -0.4, exitAt: now - 2_000 },
+      { netMovePct: -0.2, exitAt: now - 3_000 },
+      { netMovePct: 1.1, exitAt: now - 4_000 },
+    ],
+  });
+  assert.equal(result.passed, false);
+  assert.equal(result.simulationLossStreak, 3);
+  assert.match(result.reason ?? "", /连续 3 笔亏损/);
+});
+
+test("rolling simulation window blocks materially weak performance after enough samples", () => {
+  const values = [-0.8, 0.2, -0.5, 0.3, -0.4, -0.2, 0.1, -0.1];
+  const result = evaluateLivePerformanceGate({
+    now,
+    recentLive: [],
+    recentSimulation: values.map((netMovePct, index) => ({ netMovePct, exitAt: now - index * 1_000 })),
+  });
+  assert.equal(result.passed, false);
+  assert.equal(result.simulationSampleCount, 8);
+  assert.equal(result.simulationWinRate, 3 / 8);
+  assert.ok(result.simulationNetPct < 0);
+  assert.match(result.reason ?? "", /胜率 38%/);
+});
+
+test("small samples or recovered recent performance do not over-block live entry", () => {
+  const small = evaluateLivePerformanceGate({
+    now,
+    recentLive: [],
+    recentSimulation: [
+      { netMovePct: -0.4, exitAt: now - 1_000 },
+      { netMovePct: 0.6, exitAt: now - 2_000 },
+    ],
+  });
+  assert.equal(small.passed, true);
+
+  const recovered = evaluateLivePerformanceGate({
+    now,
+    recentLive: [],
+    recentSimulation: [0.5, 0.4, -0.2, 0.3, -0.1, 0.2, -0.15, 0.1]
+      .map((netMovePct, index) => ({ netMovePct, exitAt: now - index * 1_000 })),
+  });
+  assert.equal(recovered.passed, true);
+  assert.ok((recovered.simulationWinRate ?? 0) >= 0.4);
+});
