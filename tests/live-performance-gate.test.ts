@@ -11,9 +11,9 @@ test("two consecutive live losses trigger a six-hour entry cooldown", () => {
   const result = evaluateLivePerformanceGate({
     now,
     recentLive: [
-      { realizedPnlUsdt: -1.2, closedAt: now - 30 * 60_000 },
-      { realizedPnlUsdt: -0.8, closedAt: now - 90 * 60_000 },
-      { realizedPnlUsdt: 2.1, closedAt: now - 3 * 60 * 60_000 },
+      { realizedPnlUsdt: -1.2, riskBudgetUsdt: 1, closedAt: now - 30 * 60_000 },
+      { realizedPnlUsdt: -0.8, riskBudgetUsdt: 1, closedAt: now - 90 * 60_000 },
+      { realizedPnlUsdt: 2.1, riskBudgetUsdt: 1, closedAt: now - 3 * 60 * 60_000 },
     ],
     recentSimulation: [],
   });
@@ -27,8 +27,8 @@ test("expired live cooldown automatically allows entry again", () => {
   const result = evaluateLivePerformanceGate({
     now,
     recentLive: [
-      { realizedPnlUsdt: -1.2, closedAt: now - 7 * 60 * 60_000 },
-      { realizedPnlUsdt: -0.8, closedAt: now - 8 * 60 * 60_000 },
+      { realizedPnlUsdt: -1.2, riskBudgetUsdt: 1, closedAt: now - 7 * 60 * 60_000 },
+      { realizedPnlUsdt: -0.8, riskBudgetUsdt: 1, closedAt: now - 8 * 60 * 60_000 },
     ],
     recentSimulation: [],
   });
@@ -38,11 +38,42 @@ test("expired live cooldown automatically allows entry again", () => {
 test("unattributed recent live close fails closed until pnl is known", () => {
   const result = evaluateLivePerformanceGate({
     now,
-    recentLive: [{ realizedPnlUsdt: null, closedAt: now - 5 * 60_000 }],
+    recentLive: [{ realizedPnlUsdt: null, riskBudgetUsdt: 1, closedAt: now - 5 * 60_000 }],
     recentSimulation: [],
   });
   assert.equal(result.passed, false);
   assert.match(result.reason ?? "", /盈亏尚未完成归因/);
+});
+
+test("10 percent live strategy drawdown blocks entry without using raw Gate balance", () => {
+  const result = evaluateLivePerformanceGate({
+    now,
+    recentLive: [
+      // With a 1U risk budget and 1% risk policy, implied entry equity is 100U.
+      // A 10.5U realized loss is therefore a 10.5% strategy drawdown. There is
+      // intentionally no Gate account-balance input here, so spot/futures cash
+      // transfers cannot manufacture this drawdown.
+      { realizedPnlUsdt: -10.5, riskBudgetUsdt: 1, closedAt: now - 7 * 60 * 60_000 },
+    ],
+    recentSimulation: [],
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.liveStrategyDrawdownPct >= 10);
+  assert.match(result.reason ?? "", /交易回撤/);
+  assert.match(result.reason ?? "", /转入\/转出不计入/);
+});
+
+test("profit recovery removes current strategy drawdown lock", () => {
+  const result = evaluateLivePerformanceGate({
+    now,
+    recentLive: [
+      { realizedPnlUsdt: 12, riskBudgetUsdt: 1, closedAt: now - 7 * 60 * 60_000 },
+      { realizedPnlUsdt: -10, riskBudgetUsdt: 1, closedAt: now - 8 * 60 * 60_000 },
+    ],
+    recentSimulation: [],
+  });
+  assert.equal(result.passed, true);
+  assert.ok(result.liveStrategyDrawdownPct < 10);
 });
 
 test("three consecutive simulation losses block live entry without stopping simulation", () => {
