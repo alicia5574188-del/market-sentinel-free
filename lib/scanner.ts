@@ -1,8 +1,10 @@
-import { analyzeGateSymbol, fetchGatePositionQuotes, fetchGateUniverse, type GateAnalysisPacket, type UniverseTicker } from "./gate-client.ts";
+import { analyzeGateSymbol, fetchGateChartCandles, fetchGatePositionQuotes, fetchGateUniverse, type GateAnalysisPacket, type UniverseTicker } from "./gate-client.ts";
 import { getGlobalRiskContext, type GlobalRiskPacket } from "./global-risk.ts";
 import { beginScan, completeScan, getAlertDashboard, getExperience, getPriorLong, getSettings, listOpenTrades, listOpenTradeSymbols, markNotified, markTradeNotification, processDecision, processPositionQuote, publicSettings, type LifecycleResult } from "./repository.ts";
 import { notifyTradeLifecycle, type VapidConfig } from "./web-push.ts";
 import { chooseBackgroundDeepUniverse } from "./background-selection.ts";
+import { evaluateShadowStrategies } from "./shadow-strategy-engine.ts";
+import { listOpenShadowTradeSymbols, processShadowStrategies } from "./shadow-strategy-repository.ts";
 
 export function chooseDeepUniverse(universe: UniverseTicker[], coreSymbols: string[], openSymbols: string[], limit: number) {
   const selected: UniverseTicker[] = [];
@@ -84,9 +86,10 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
   const settings = await getSettings();
   const coreSymbols = JSON.parse(settings.coreSymbolsJson) as string[];
   if (!settings.scanEnabled) return { status: "paused", observedAt: Date.now(), analyzed: [], notifications: { attempted: 0, delivered: 0 } };
-  const openSymbols = await listOpenTradeSymbols();
+  const [openSymbols, shadowOpenSymbols] = await Promise.all([listOpenTradeSymbols(), listOpenShadowTradeSymbols()]);
+  const priorityOpenSymbols = [...new Set([...openSymbols, ...shadowOpenSymbols])];
   const [universe, context] = await Promise.all([
-    fetchGateUniverse(settings.universeLimit, [...coreSymbols, ...openSymbols]),
+    fetchGateUniverse(settings.universeLimit, [...coreSymbols, ...priorityOpenSymbols]),
     getGlobalRiskContext(),
   ]);
   const scan = await beginScan(universe.length);
@@ -94,26 +97,30 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
     ? chooseBackgroundDeepUniverse(
       universe,
       coreSymbols,
-      openSymbols,
+      priorityOpenSymbols,
       options.deepLimit ?? 3,
       options.rotationOffset ?? 0,
     )
-    : chooseDeepUniverse(universe, coreSymbols, openSymbols, options.deepLimit ?? settings.deepScanLimit);
+    : chooseDeepUniverse(universe, coreSymbols, priorityOpenSymbols, options.deepLimit ?? settings.deepScanLimit);
   const analyzed: GateAnalysisPacket[] = [];
   const lifecycle: { symbol: string; result: LifecycleResult }[] = [];
+  const shadowLifecycle: { symbol: string; opened: number; closed: number; evaluated: number }[] = [];
   const failures: { symbol: string; error: string }[] = [];
   let delivered = 0;
   let attempted = 0;
   try {
     const results = await Promise.allSettled(targets.map(async (ticker) => {
       const [priorLongProbability, experience] = await Promise.all([getPriorLong(ticker.symbol), getExperience(ticker.symbol)]);
-      return analyzeGateSymbol(ticker.symbol, {
+      const packetPromise = analyzeGateSymbol(ticker.symbol, {
         global: context,
         priorLongProbability,
         experience,
         alertStyle: settings.alertStyle,
         detail: "scan",
       });
+      const shadowCandlesPromise = fetchGateChartCandles(ticker.symbol, Date.now() - 18 * 60 * 60_000, Date.now()).catch(() => []);
+      const [packet, shadowCandles] = await Promise.all([packetPromise, shadowCandlesPromise]);
+      return { packet, shadowCandles };
     }));
     for (let index = 0; index < results.length; index += 1) {
       const result = results[index];
@@ -121,10 +128,33 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
         failures.push({ symbol: targets[index].symbol, error: result.reason instanceof Error ? result.reason.message : "analysis failed" });
         continue;
       }
-      const packet = result.value;
+      const { packet, shadowCandles } = result.value;
       analyzed.push(packet);
       const saved = await processDecision(packet, settings);
       lifecycle.push({ symbol: packet.symbol, result: saved });
+
+      if (shadowCandles.length) {
+        const shadowSignals = evaluateShadowStrategies({
+          symbol: packet.symbol,
+          observedAt: packet.observedAt,
+          futuresPrice: packet.market.futuresPrice,
+          volumeUsd: packet.market.volumeUsd,
+          changePercentage: packet.market.changePercentage,
+          fundingRate: packet.market.fundingRate,
+          openInterestChangePct: packet.market.openInterestChangePct,
+          spotCvdRatio: packet.market.spotCvdRatio,
+          orderBookImbalance: packet.market.orderBookImbalance,
+          liquidationImbalance: packet.market.liquidationImbalance,
+          multiTimeframeTrend: packet.market.multiTimeframeTrend,
+          benchmarkMomentum: context.benchmarkMomentum,
+          macroEventRisk: packet.market.macroEventRisk,
+          dataQuality: packet.decision.dataQuality,
+          candles5m: shadowCandles,
+        });
+        const shadow = await processShadowStrategies(packet, shadowCandles, shadowSignals, settings);
+        shadowLifecycle.push({ symbol: packet.symbol, ...shadow });
+      }
+
       if (saved.shouldNotify && saved.notification && saved.trade && vapidConfig) {
         const push = await notifyTradeLifecycle(saved.notification, saved.trade, vapidConfig).catch(() => ({ attempted: 0, delivered: 0 }));
         attempted += push.attempted;
@@ -151,6 +181,7 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
       context: context as GlobalRiskPacket,
       analyzed,
       lifecycle,
+      shadowLifecycle,
       failures,
       notifications: { attempted, delivered },
     };
