@@ -4,7 +4,7 @@ import { beginScan, completeScan, getAlertDashboard, getExperience, getPriorLong
 import { notifyTradeLifecycle, type VapidConfig } from "./web-push.ts";
 import { chooseBackgroundDeepUniverse } from "./background-selection.ts";
 import { evaluateShadowStrategies } from "./shadow-strategy-engine.ts";
-import { listOpenShadowTradeSymbols, processShadowStrategies } from "./shadow-strategy-repository.ts";
+import { processShadowStrategies } from "./shadow-strategy-repository.ts";
 
 export function chooseDeepUniverse(universe: UniverseTicker[], coreSymbols: string[], openSymbols: string[], limit: number) {
   const selected: UniverseTicker[] = [];
@@ -86,10 +86,9 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
   const settings = await getSettings();
   const coreSymbols = JSON.parse(settings.coreSymbolsJson) as string[];
   if (!settings.scanEnabled) return { status: "paused", observedAt: Date.now(), analyzed: [], notifications: { attempted: 0, delivered: 0 } };
-  const [openSymbols, shadowOpenSymbols] = await Promise.all([listOpenTradeSymbols(), listOpenShadowTradeSymbols()]);
-  const priorityOpenSymbols = [...new Set([...openSymbols, ...shadowOpenSymbols])];
+  const openSymbols = await listOpenTradeSymbols();
   const [universe, context] = await Promise.all([
-    fetchGateUniverse(settings.universeLimit, [...coreSymbols, ...priorityOpenSymbols]),
+    fetchGateUniverse(settings.universeLimit, [...coreSymbols, ...openSymbols]),
     getGlobalRiskContext(),
   ]);
   const scan = await beginScan(universe.length);
@@ -97,46 +96,41 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
     ? chooseBackgroundDeepUniverse(
       universe,
       coreSymbols,
-      priorityOpenSymbols,
+      openSymbols,
       options.deepLimit ?? 3,
       options.rotationOffset ?? 0,
     )
-    : chooseDeepUniverse(universe, coreSymbols, priorityOpenSymbols, options.deepLimit ?? settings.deepScanLimit);
+    : chooseDeepUniverse(universe, coreSymbols, openSymbols, options.deepLimit ?? settings.deepScanLimit);
   const analyzed: GateAnalysisPacket[] = [];
   const lifecycle: { symbol: string; result: LifecycleResult }[] = [];
-  const shadowLifecycle: {
+  const growthLifecycle: {
     symbol: string;
     observedAt: number;
     opened: number;
     closed: number;
     evaluated: number;
+    archived: number;
+    selected: string | null;
     ready: number;
     watching: number;
     blocked: number;
     error: string | null;
-    strategies: {
-      strategyId: string;
-      label: string;
-      state: "ready" | "watching" | "blocked";
-      side: "LONG" | "SHORT" | "WAIT";
-      score: number;
-      confidence: number;
-      regime: {
-        kind: string;
-        trendScore: number;
-        atrPct: number | null;
-        compressionRatio: number | null;
-        rangeWidthPct: number | null;
-        relativeStrength24h: number | null;
-        reason: string;
-      };
-      reasons: string[];
-      blockers: string[];
-    }[];
   }[] = [];
   const failures: { symbol: string; error: string }[] = [];
   let delivered = 0;
   let attempted = 0;
+
+  const deliverLifecycle = async (result: LifecycleResult) => {
+    if (!result.shouldNotify || !result.notification || !result.trade || !vapidConfig) return;
+    const push = await notifyTradeLifecycle(result.notification, result.trade, vapidConfig).catch(() => ({ attempted: 0, delivered: 0 }));
+    attempted += push.attempted;
+    delivered += push.delivered;
+    if (push.delivered > 0) {
+      await markTradeNotification(result.trade.id, result.notification);
+      if (result.transitionId) await markNotified(result.transitionId);
+    }
+  };
+
   try {
     const results = await Promise.allSettled(targets.map(async (ticker) => {
       const [priorLongProbability, experience] = await Promise.all([getPriorLong(ticker.symbol), getExperience(ticker.symbol)]);
@@ -147,28 +141,36 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
         alertStyle: settings.alertStyle,
         detail: "scan",
       });
-      const shadowCandlesPromise = fetchGateChartCandles(ticker.symbol, Date.now() - 18 * 60 * 60_000, Date.now())
+      const growthCandlesPromise = fetchGateChartCandles(ticker.symbol, Date.now() - 18 * 60 * 60_000, Date.now())
         .then((candles) => ({ candles, error: null as string | null }))
         .catch((error) => ({
           candles: [],
-          error: error instanceof Error ? error.message : "V3 影子 5m K 线读取失败",
+          error: error instanceof Error ? error.message : "成长策略 5m K 线读取失败",
         }));
-      const [packet, shadowData] = await Promise.all([packetPromise, shadowCandlesPromise]);
-      return { packet, shadowCandles: shadowData.candles, shadowError: shadowData.error };
+      const [packet, growthData] = await Promise.all([packetPromise, growthCandlesPromise]);
+      return { packet, growthCandles: growthData.candles, growthError: growthData.error };
     }));
+
     for (let index = 0; index < results.length; index += 1) {
       const result = results[index];
       if (result.status === "rejected") {
         failures.push({ symbol: targets[index].symbol, error: result.reason instanceof Error ? result.reason.message : "analysis failed" });
         continue;
       }
-      const { packet, shadowCandles, shadowError } = result.value;
-      analyzed.push(packet);
-      const saved = await processDecision(packet, settings);
-      lifecycle.push({ symbol: packet.symbol, result: saved });
 
-      if (shadowCandles.length) {
-        const shadowSignals = evaluateShadowStrategies({
+      const { packet, growthCandles, growthError } = result.value;
+      analyzed.push(packet);
+
+      // Sentinel's original comprehensive model remains the first module.
+      // If it does not open an order, the growth modules below may use the
+      // exact same contract_v2 lifecycle. Whichever module opens first becomes
+      // the single unified order for this symbol.
+      const baseResult = await processDecision(packet, settings);
+      lifecycle.push({ symbol: packet.symbol, result: baseResult });
+      await deliverLifecycle(baseResult);
+
+      if (growthCandles.length) {
+        const growthSignals = evaluateShadowStrategies({
           symbol: packet.symbol,
           observedAt: packet.observedAt,
           futuresPrice: packet.market.futuresPrice,
@@ -183,56 +185,45 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
           benchmarkMomentum: context.benchmarkMomentum,
           macroEventRisk: packet.market.macroEventRisk,
           dataQuality: packet.decision.dataQuality,
-          candles5m: shadowCandles,
+          candles5m: growthCandles,
         });
-        const shadow = await processShadowStrategies(packet, shadowCandles, shadowSignals, settings);
-        shadowLifecycle.push({
+        const growth = await processShadowStrategies(packet, growthCandles, growthSignals, settings);
+        if (growth.lifecycle) {
+          lifecycle.push({ symbol: packet.symbol, result: growth.lifecycle });
+          await deliverLifecycle(growth.lifecycle);
+        }
+        growthLifecycle.push({
           symbol: packet.symbol,
           observedAt: packet.observedAt,
-          ...shadow,
-          ready: shadowSignals.filter((signal) => signal.state === "ready").length,
-          watching: shadowSignals.filter((signal) => signal.state === "watching").length,
-          blocked: shadowSignals.filter((signal) => signal.state === "blocked").length,
+          opened: growth.opened,
+          closed: growth.closed,
+          evaluated: growth.evaluated,
+          archived: growth.archived,
+          selected: growth.selected,
+          ready: growthSignals.filter((signal) => signal.state === "ready").length,
+          watching: growthSignals.filter((signal) => signal.state === "watching").length,
+          blocked: growthSignals.filter((signal) => signal.state === "blocked").length,
           error: null,
-          strategies: shadowSignals.map((signal) => ({
-            strategyId: signal.strategyId,
-            label: signal.label,
-            state: signal.state,
-            side: signal.side,
-            score: signal.score,
-            confidence: signal.confidence,
-            regime: signal.regime,
-            reasons: signal.reasons,
-            blockers: signal.blockers,
-          })),
         });
       } else {
-        const message = shadowError ?? "V3 影子 5m K 线为空";
-        failures.push({ symbol: packet.symbol, error: `V3 策略数据：${message}` });
-        shadowLifecycle.push({
+        const message = growthError ?? "成长策略 5m K 线为空";
+        failures.push({ symbol: packet.symbol, error: `成长策略扩展数据：${message}` });
+        growthLifecycle.push({
           symbol: packet.symbol,
           observedAt: packet.observedAt,
           opened: 0,
           closed: 0,
           evaluated: 0,
+          archived: 0,
+          selected: null,
           ready: 0,
           watching: 0,
           blocked: 0,
           error: message,
-          strategies: [],
         });
       }
-
-      if (saved.shouldNotify && saved.notification && saved.trade && vapidConfig) {
-        const push = await notifyTradeLifecycle(saved.notification, saved.trade, vapidConfig).catch(() => ({ attempted: 0, delivered: 0 }));
-        attempted += push.attempted;
-        delivered += push.delivered;
-        if (push.delivered > 0) {
-          await markTradeNotification(saved.trade.id, saved.notification);
-          if (saved.transitionId) await markNotified(saved.transitionId);
-        }
-      }
     }
+
     const qualities = analyzed.map((packet) => packet.decision.dataQuality);
     await completeScan(scan.id, scan.startedAt, {
       status: failures.length ? "degraded" : "completed",
@@ -249,7 +240,7 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
       context: context as GlobalRiskPacket,
       analyzed,
       lifecycle,
-      shadowLifecycle,
+      growthLifecycle,
       failures,
       notifications: { attempted, delivered },
     };
