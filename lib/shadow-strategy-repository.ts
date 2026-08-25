@@ -83,15 +83,13 @@ function growthPacket(packet: GateAnalysisPacket, signal: ReadyGrowthSignal): Ga
   };
 }
 
-async function archiveLegacyShadowTrades(symbol: string) {
-  const db = getDb();
-  const archived = await db.update(tradeCases).set({
+export async function retireLegacyShadowTrades() {
+  const archived = await getDb().update(tradeCases).set({
     activeKey: null,
     status: "archived",
     archivedAt: Date.now(),
     learningApplied: true,
   }).where(and(
-    eq(tradeCases.symbol, symbol),
     eq(tradeCases.status, "holding"),
     like(tradeCases.simulationModel, `${LEGACY_SHADOW_PREFIX}%`),
   )).returning({ id: tradeCases.id });
@@ -99,9 +97,6 @@ async function archiveLegacyShadowTrades(symbol: string) {
 }
 
 export async function listOpenShadowTradeSymbols() {
-  // V3 modules are no longer separate shadow accounts. New signals join the
-  // normal contract_v2 lifecycle, so there are no shadow positions to favor
-  // in background scheduling. Legacy shadow rows are retired on the next scan.
   return [] as string[];
 }
 
@@ -111,7 +106,6 @@ export async function processShadowStrategies(
   signals: ShadowStrategySignal[],
   settings: AppSettings,
 ): Promise<GrowthModuleResult> {
-  const archived = await archiveLegacyShadowTrades(packet.symbol);
   const db = getDb();
   const [existing] = await db.select({ id: tradeCases.id }).from(tradeCases).where(and(
     eq(tradeCases.symbol, packet.symbol),
@@ -120,34 +114,26 @@ export async function processShadowStrategies(
   )).limit(1);
 
   if (existing) {
-    return { opened: 0, closed: 0, evaluated: signals.length, archived, selected: null, lifecycle: null };
+    return { opened: 0, closed: 0, evaluated: signals.length, archived: 0, selected: null, lifecycle: null };
   }
 
   const selected = chooseGrowthSignal(signals);
   if (!selected) {
-    return { opened: 0, closed: 0, evaluated: signals.length, archived, selected: null, lifecycle: null };
+    return { opened: 0, closed: 0, evaluated: signals.length, archived: 0, selected: null, lifecycle: null };
   }
 
-  // The original comprehensive decision remains the first pass. When it has
-  // not opened a position, a ready growth module may become the same unified
-  // contract_v2 order. From here on it uses the exact same lifecycle, account,
-  // learning, live-entry, risk and Gate execution path as every other Sentinel
-  // order. There is no promotion/approval layer beyond the owner's live switch.
   const lifecycle = await processDecision(growthPacket(packet, selected), settings);
   return {
     opened: lifecycle.kind === "opened" ? 1 : 0,
     closed: lifecycle.kind === "closed" ? 1 : 0,
     evaluated: signals.length,
-    archived,
+    archived: 0,
     selected: lifecycle.kind === "opened" ? selected.strategyId : null,
     lifecycle,
   };
 }
 
 export async function getStrategyLabDashboard() {
-  // Kept temporarily for backward-compatible API callers. The user-facing
-  // product no longer exposes a separate strategy lab: all completed and open
-  // orders are one Sentinel Growth history under contract_v2.
   const rows = await getDb().select({
     status: tradeCases.status,
     netMovePct: tradeCases.netMovePct,
