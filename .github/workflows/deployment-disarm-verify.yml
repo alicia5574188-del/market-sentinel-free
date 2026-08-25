@@ -70,6 +70,11 @@ jobs:
               'Worker 新版本部署后会自动关闭新开仓；普通重启和刷新页面不会改变当前开关状态。',
           )
           replace_exact(
+              "tests/live-trading-ui.test.mjs",
+              'assert.match(source, /开启、部署或刷新页面都不会自动恢复交易/);',
+              'assert.match(source, /Worker 新版本部署后会自动关闭新开仓；普通重启和刷新页面不会改变当前开关状态/);',
+          )
+          replace_exact(
               "README.md",
               '- 自动实盘只接受本次开关开启后产生、且确认时间不超过 2 分钟的新策略订单；Worker 延迟、重启或排队后超过时限的旧信号不会补开仓，同一时间有多个新候选时优先处理最新确认的信号。\n',
               '- 自动实盘只接受本次开关开启后产生、且确认时间不超过 2 分钟的新策略订单；Worker 延迟、重启或排队后超过时限的旧信号不会补开仓，同一时间有多个新候选时优先处理最新确认的信号。\n- Cloudflare Worker 新版本部署会通过官方 Version Metadata 自动识别，并只关闭“新开仓”权限；已有 Gate 仓位、止盈止损和对账继续运行。普通同版本 Worker 重启不会误关开关。\n',
@@ -90,6 +95,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/deployment-disarm-verify.yml
-          git add worker/index.ts app/page.tsx README.md tests/cloudflare-deployment-config.test.mjs
+          git add worker/index.ts app/page.tsx README.md tests/cloudflare-deployment-config.test.mjs tests/live-trading-ui.test.mjs
           git commit -m "Disarm live entry on Worker deployment"
           git push origin HEAD:chatgpt/disarm-live-on-deploy
