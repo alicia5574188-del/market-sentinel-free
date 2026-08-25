@@ -5,6 +5,7 @@ export const RISK_POLICY = {
   dailyRealizedLossPauseRate: 0.03,
   peakDrawdownRate: 0.10,
   maxLiveOpenPositions: 3,
+  maxSameSideLivePositions: 2,
 } as const;
 
 function positive(value: number) {
@@ -51,5 +52,6 @@ export function publicRiskPolicy() {
     dailyRealizedLossPausePct: RISK_POLICY.dailyRealizedLossPauseRate * 100,
     peakDrawdownPct: RISK_POLICY.peakDrawdownRate * 100,
     maxLiveOpenPositions: RISK_POLICY.maxLiveOpenPositions,
+    maxSameSideLivePositions: RISK_POLICY.maxSameSideLivePositions,
   };
 }

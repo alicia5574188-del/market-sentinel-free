@@ -44,6 +44,7 @@ import {
   saveLiveCredentialRecord,
   type LiveOrderRecord,
 } from "./live-trading-repository";
+import { liveDirectionalExposureBlockReason } from "./live-portfolio-risk";
 import { getSettings, getTrade } from "./repository";
 import { resolveVapidConfig } from "./vapid-config";
 import { sendAllPush } from "./web-push";
@@ -1295,7 +1296,8 @@ export async function reconcileLiveTrading() {
       const activeCount = trackedAfterReconcile.length;
       if (activeCount < MAX_LIVE_OPEN_POSITIONS) {
         const candidates = await listLiveEntryCandidates(updatedControl.enabledAt);
-        const candidate = candidates[0];
+        const activeSides = trackedAfterReconcile.map((order) => order.side);
+        const candidate = candidates.find((item) => !liveDirectionalExposureBlockReason(activeSides, item.side));
         if (candidate) {
           const [contract, account] = await Promise.all([
             client.contract(candidate.symbol),
