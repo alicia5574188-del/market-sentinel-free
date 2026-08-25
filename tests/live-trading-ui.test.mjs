@@ -24,19 +24,19 @@ test("owner-only live trading UI keeps credentials ephemeral, live-only and entr
   assert.match(credentialRoute, /environment: "live"/);
   assert.match(engine, /input\.environment !== "live"/);
   assert.match(engine, /旧 Gate TestNet 凭据不能开启自动交易/);
-  // Legacy rows remain readable so old encrypted TestNet credentials can
-  // still be identified and replaced safely; every new save is live-only.
   assert.match(schema, /environment: text\("environment"[^\n]*default\("testnet"\)/);
   assert.match(schema, /entryEnabled: integer\("entry_enabled"[^\n]*default\(false\)/);
 });
 
-test("main order page embeds detailed Gate live orders without a separate-page shortcut", async () => {
+test("live tab embeds detailed Gate orders without a separate-page shortcut", async () => {
   const [layout, inlineOrders, semantics] = await Promise.all([
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/live-orders-inline.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/ui-status-semantic-fix.tsx", import.meta.url), "utf8"),
   ]);
   assert.match(layout, /<LiveOrdersInline \/>/);
+  assert.match(inlineOrders, /\.live-trading-card/);
+  assert.doesNotMatch(inlineOrders, /querySelector<HTMLElement>\("\.order-ledger"\)/);
   assert.match(inlineOrders, /Gate 实盘订单/);
   assert.match(inlineOrders, /实盘持仓 \/ 活动订单/);
   assert.match(inlineOrders, /实盘已平仓订单/);
