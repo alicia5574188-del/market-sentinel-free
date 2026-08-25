@@ -17,15 +17,16 @@ function candle(offsetMinutes: number, high: number, low: number): Candle {
   };
 }
 
-test("shadow window excludes candles completed before the last evaluation boundary", () => {
-  const rows = [candle(0, 102, 98), candle(5, 103, 97), candle(10, 104, 96)];
-  const result = shadowCompletedWindow(rows, start + 10 * minute, start + 16 * minute);
-  assert.equal(result.count, 1);
+test("shadow window excludes candles that started before a mid-candle entry", () => {
+  const rows = [candle(0, 150, 50), candle(5, 103, 97), candle(10, 104, 96)];
+  const result = shadowCompletedWindow(rows, start + 2 * minute, start + 16 * minute);
+  assert.equal(result.count, 2);
   assert.equal(result.highPrice, 104);
   assert.equal(result.lowPrice, 96);
+  assert.equal(result.coveredThroughAt, start + 15 * minute);
 });
 
-test("shadow window aggregates every completed candle skipped by rotating background scans", () => {
+test("shadow window aggregates every whole candle skipped by rotating background scans", () => {
   const rows = [
     candle(0, 101, 99),
     candle(5, 103, 98),
@@ -36,6 +37,7 @@ test("shadow window aggregates every completed candle skipped by rotating backgr
   assert.equal(result.count, 3);
   assert.equal(result.highPrice, 105);
   assert.equal(result.lowPrice, 95);
+  assert.equal(result.coveredThroughAt, start + 20 * minute);
 });
 
 test("shadow window never uses an incomplete candle", () => {
@@ -45,7 +47,8 @@ test("shadow window never uses an incomplete candle", () => {
     candle(10, 150, 50),
   ];
   const result = shadowCompletedWindow(rows, start, start + 14 * minute);
-  assert.equal(result.count, 1);
+  assert.equal(result.count, 2);
   assert.equal(result.highPrice, 102);
   assert.equal(result.lowPrice, 98);
+  assert.equal(result.coveredThroughAt, start + 10 * minute);
 });
