@@ -6,11 +6,15 @@ const start = Date.UTC(2026, 0, 1);
 const day = 24 * 60 * 60_000;
 
 function samples(values: number[], regime = "trend", spreadDays = 1) {
-  return values.map((netMovePct, index) => ({
-    netMovePct,
-    exitAt: start + (index % spreadDays) * day + Math.floor(index / spreadDays) * 60_000,
-    regime: index % 2 ? regime : "range",
-  }));
+  return values.map((netMovePct, index) => {
+    const dayIndex = Math.min(spreadDays - 1, Math.floor(index * spreadDays / Math.max(values.length, 1)));
+    const withinDayIndex = index - Math.floor(dayIndex * values.length / spreadDays);
+    return {
+      netMovePct,
+      exitAt: start + dayIndex * day + Math.max(0, withinDayIndex) * 60_000,
+      regime: index % 2 ? regime : "range",
+    };
+  });
 }
 
 test("ten profitable-looking samples cannot promote a strategy", () => {
@@ -66,6 +70,7 @@ test("large loss streak blocks promotion even when average return stays positive
   const stats = calculateStrategyStatistics(samples(values, "compression", 8));
   const promotion = evaluateStrategyPromotion("volatility_breakout", stats);
   assert.ok(stats.averageNetPct != null && stats.averageNetPct > 0);
+  assert.equal(stats.maxLossStreak, 6);
   assert.equal(promotion.eligible, false);
   assert.match(promotion.reasons.join("；"), /连续亏损/);
 });
