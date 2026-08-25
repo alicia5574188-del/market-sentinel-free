@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   verify:
@@ -19,151 +19,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: chatgpt/proportional-live-risk
 
-      - name: Normalize source policy patch
-        shell: bash
-        run: |
-          python <<'PY'
-          from pathlib import Path
-
-          def replace_exact(path: str, old: str, new: str, expected: int = 1):
-              p = Path(path)
-              text = p.read_text()
-              count = text.count(old)
-              if count != expected:
-                  raise SystemExit(f"{path}: expected {expected} occurrences, found {count}: {old[:80]!r}")
-              p.write_text(text.replace(old, new))
-
-          replace_exact("lib/live-risk.ts", 'from "./contract-simulation";', 'from "./contract-simulation.ts";')
-          replace_exact("lib/live-trading-engine.ts", 'from "./contract-simulation";', 'from "./contract-simulation.ts";')
-
-          replace_exact("app/page.tsx", '  const [gateEnvironment, setGateEnvironment] = useState<"live" | "testnet">("testnet");\n', '')
-          replace_exact("app/page.tsx", '      environment: gateEnvironment,\n', '')
-          replace_exact(
-              "app/page.tsx",
-              '        <div className="segmented live-environment"><button className={gateEnvironment === "live" ? "active" : ""} onClick={() => setGateEnvironment("live")}>Gate 实盘</button><button className={gateEnvironment === "testnet" ? "active" : ""} onClick={() => setGateEnvironment("testnet")}>TestNet</button></div>',
-              '        <p className="risk-note">API 环境：只接受 Gate 实盘 API；策略验证请使用程序内模拟交易。</p>',
-          )
-          replace_exact(
-              "app/page.tsx",
-              'liveTrading.credential.environment === "live" ? "Gate 实盘" : "Gate TestNet"',
-              'liveTrading.credential.environment === "live" ? "Gate 实盘" : "旧 TestNet（需更换）"',
-          )
-          replace_exact(
-              "app/page.tsx",
-              '只有全部进场检查和 15U 净利润闸门通过，深度扫描才会创建系统跟踪订单。',
-              '只有全部进场检查和按当前模拟权益 1.5% 计算的净利润闸门通过，深度扫描才会创建系统跟踪订单。',
-          )
-          replace_exact(
-              "app/page.tsx",
-              '下单前按 Gate 实时价格、价格精度、实际费率和双向允许滑点重新确认 TP2 预计净利润 ≥ 15U。',
-              '下单前按 Gate 实时价格、价格精度、实际费率和双向允许滑点重新确认 TP2 预计净利润 ≥ Gate 当前权益的 1.5%。',
-          )
-          replace_exact(
-              "app/page.tsx",
-              'disabled={liveTradingBusy || !liveTrading?.credential.configured || liveTrading?.control.state === "emergency_stopped"} className={`switch ${liveTrading?.control.entryEnabled ? "on" : ""}`}',
-              'disabled={liveTradingBusy || !liveTrading?.credential.configured || liveTrading?.credential.environment !== "live" || liveTrading?.control.state === "emergency_stopped"} className={`switch ${liveTrading?.control.entryEnabled ? "on" : ""}`}',
-          )
-
-          layout = Path("app/layout.tsx")
-          layout_text = layout.read_text()
-          layout_text = layout_text.replace('import { LivePolicyUiSync } from "./live-policy-ui";\n', '')
-          layout_text = layout_text.replace('<body>{children}<LivePolicyUiSync /></body>', '<body>{children}</body>')
-          layout.write_text(layout_text)
-
-          policy = Path("app/live-policy-ui.tsx")
-          if policy.exists():
-              policy.unlink()
-
-          Path("tests/live-trading-ui.test.mjs").write_text(r'''import assert from "node:assert/strict";
-          import { readFile } from "node:fs/promises";
-          import test from "node:test";
-
-          test("owner-only live trading UI keeps credentials ephemeral, live-only and entry default-off", async () => {
-            const [page, schema, credentialRoute, engine] = await Promise.all([
-              readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
-              readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
-              readFile(new URL("../app/api/live/credentials/route.ts", import.meta.url), "utf8"),
-              readFile(new URL("../lib/live-trading-engine.ts", import.meta.url), "utf8"),
-            ]);
-
-            assert.match(page, /canManage \? \["机会", "雷达", "订单", "实盘", "设置"\]/);
-            assert.match(page, /tab === "实盘" && canManage/);
-            assert.match(page, /API Key<\/span><input type="password"/);
-            assert.match(page, /API Secret<\/span><input type="password"/);
-            assert.doesNotMatch(page, /localStorage|sessionStorage/);
-            assert.match(page, /按住 1\.2 秒紧急停机/);
-            assert.match(page, /包括非本程序仓位/);
-            assert.doesNotMatch(page, /gateEnvironment|setGateEnvironment|live-environment/);
-            assert.match(page, /API 环境：只接受 Gate 实盘 API；策略验证请使用程序内模拟交易/);
-            assert.match(page, /旧 TestNet（需更换）/);
-            assert.match(page, /credential\.environment !== "live"/);
-            assert.match(credentialRoute, /environment: "live"/);
-            assert.match(engine, /input\.environment !== "live"/);
-            assert.match(engine, /旧 Gate TestNet 凭据不能开启自动交易/);
-            // Legacy rows remain readable so old encrypted TestNet credentials can
-            // still be identified and replaced safely; every new save is live-only.
-            assert.match(schema, /environment: text\("environment"[^\n]*default\("testnet"\)/);
-            assert.match(schema, /entryEnabled: integer\("entry_enabled"[^\n]*default\(false\)/);
-          });
-
-          test("live UI exposes real-funds and current-equity safety gates", async () => {
-            const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
-            assert.match(page, /TP2 预计净利润 ≥ Gate 当前权益的 1\.5%/);
-            assert.match(page, /当前模拟权益 1\.5%/);
-            assert.match(page, /Gate 当前权益 1% 单笔风险、20% 单笔保证金/);
-            assert.match(page, /Gate 当日已实现亏损或实盘权益回撤触线后/);
-            assert.match(page, /开启、部署或刷新页面都不会自动恢复交易/);
-          });
-
-          test("Durable Object serializes live mutations and emergency reconciliation", async () => {
-            const [worker, repository, engine] = await Promise.all([
-              readFile(new URL("../worker/index.ts", import.meta.url), "utf8"),
-              readFile(new URL("../lib/live-trading-repository.ts", import.meta.url), "utf8"),
-              readFile(new URL("../lib/live-trading-engine.ts", import.meta.url), "utf8"),
-            ]);
-            assert.match(worker, /private operationTail: Promise<void>/);
-            assert.match(worker, /private async exclusive<T>/);
-            assert.match(worker, /async emergencyStop[\s\S]*this\.exclusive/);
-            assert.match(worker, /async alarm\(\): Promise<void>[\s\S]*this\.exclusive/);
-            assert.match(repository, /if \(current\.state === "emergency_stopped"\)[\s\S]*entryEnabled: false/);
-            assert.match(engine, /sendAllPush\([\s\S]*credential\.ownerAccountId/);
-            assert.match(engine, /nonProtective = initialPriceOrders\.filter\([\s\S]*reduce_only[\s\S]*initial\?\.close/);
-            assert.match(engine, /nonProtective\.slice\(0, EMERGENCY_PRICE_CANCEL_BATCH\)/);
-            assert.match(engine, /if \(postClosePositionsKnown && !postClosePositions\.length\)[\s\S]*cancelAllPriceOrders/);
-            assert.match(engine, /removeOrphanProgramOrders\(client, trackedAfterReconcile/);
-            assert.match(engine, /unmanaged_gate_exposure/);
-            assert.match(engine, /只能轮换同一 Gate 用户、同一环境的 API 密钥/);
-            assert.match(engine, /entry_submission_ambiguous/);
-            assert.match(engine, /下一轮按客户端订单号确认是否到达 Gate/);
-            assert.match(engine, /post_fill_validation_pending/);
-            assert.match(engine, /validateRecoveredPostFill\(client, order, symbolPositions\)/);
-            assert.match(engine, /recovered_position_unattributed/);
-            assert.match(engine, /positionIntegrityIssue\(order, symbolPositions\)/);
-            assert.match(engine, /新保护止损已先确认，再撤销旧止损/);
-          });
-          '''.replace("\n          ", "\n").lstrip())
-          PY
-
-      - name: Commit normalized source
-        shell: bash
-        run: |
-          if git diff --quiet; then
-            echo "Source already normalized"
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add -A
-            git commit -m "Normalize live-only UI and TypeScript imports"
-            git push origin HEAD:chatgpt/proportional-live-risk
-          fi
-
-      - name: Use Node.js 22
+      - name: Use Node.js 22.15
         uses: actions/setup-node@v4
         with:
-          node-version: "22.13.0"
+          node-version: "22.15.0"
           cache: npm
 
       - name: Install
