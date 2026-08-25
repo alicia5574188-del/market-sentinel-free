@@ -193,8 +193,17 @@ export class GatePrivateClient {
     return payload as T;
   }
 
-  accountDetail() {
-    return this.request<{ user_id?: string | number; ip_whitelist?: string[] }>("GET", "/account/detail");
+  async accountDetail() {
+    try {
+      return await this.request<{ user_id?: string | number; ip_whitelist?: string[] }>("GET", "/account/detail");
+    } catch (error) {
+      // A futures-only key intentionally lacks the separate Gate `account`
+      // permission. Account metadata is optional for Market Sentinel; the
+      // futures account endpoint below remains the authoritative credential
+      // and balance check.
+      if (error instanceof GateApiError && error.status === 403) return {};
+      throw error;
+    }
   }
 
   keyInfo() {
