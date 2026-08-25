@@ -1,319 +1,182 @@
-import { and, desc, eq, like, or } from "drizzle-orm";
+import { and, desc, eq, like } from "drizzle-orm";
 import { getDb } from "../db";
 import { tradeCases } from "../db/schema";
 import type { GateAnalysisPacket } from "./gate-client.ts";
-import { assessTakeProfitViability, buildContractPlan, calculateContractPnl } from "./contract-simulation.ts";
-import type { AppSettings } from "./repository.ts";
-import { singleTradeRiskBudgetUsdt } from "./risk-policy.ts";
-import { shadowCompletedWindow } from "./shadow-candle-window.ts";
+import { processDecision, type AppSettings } from "./repository.ts";
 import type { Candle } from "./signal-engine.ts";
 import type { ShadowStrategyId, ShadowStrategySignal } from "./shadow-strategy-engine.ts";
-import { calculateStrategyStatistics, evaluateStrategyPromotion } from "./strategy-promotion.ts";
-import { deriveTradeLesson, evaluatePosition, type TradePositionSnapshot } from "./trade-lifecycle.ts";
+import { calculateStrategyStatistics } from "./strategy-promotion.ts";
 
-const SHADOW_PREFIX = "shadow_v3:";
-const SHADOW_COOLDOWN_MS = 30 * 60_000;
+const LEGACY_SHADOW_PREFIX = "shadow_v3:";
 
 const STRATEGIES: { id: ShadowStrategyId; label: string }[] = [
   { id: "trend_pullback", label: "趋势回踩" },
   { id: "volatility_breakout", label: "波动收缩突破" },
   { id: "range_reversion", label: "震荡均值回归" },
-  { id: "relative_strength", label: "相对强弱（实验）" },
+  { id: "relative_strength", label: "相对强弱" },
 ];
 
-function model(strategyId: ShadowStrategyId) {
-  return `${SHADOW_PREFIX}${strategyId}`;
+type ReadyGrowthSignal = ShadowStrategySignal & {
+  side: "LONG" | "SHORT";
+  entryPlan: NonNullable<ShadowStrategySignal["entryPlan"]>;
+};
+
+function isReadyGrowthSignal(signal: ShadowStrategySignal): signal is ReadyGrowthSignal {
+  return signal.state === "ready" && signal.side !== "WAIT" && Boolean(signal.entryPlan?.ready);
 }
 
-function strategyIdFromModel(value: string): ShadowStrategyId | null {
-  if (!value.startsWith(SHADOW_PREFIX)) return null;
-  const id = value.slice(SHADOW_PREFIX.length) as ShadowStrategyId;
-  return STRATEGIES.some((strategy) => strategy.id === id) ? id : null;
+function chooseGrowthSignal(signals: ShadowStrategySignal[]) {
+  return signals
+    .filter(isReadyGrowthSignal)
+    .sort((a, b) => b.confidence - a.confidence || Math.abs(b.score) - Math.abs(a.score))[0] ?? null;
 }
 
-function parseJson<T>(value: string, fallback: T): T {
-  try { return JSON.parse(value) as T; } catch { return fallback; }
-}
+function growthPacket(packet: GateAnalysisPacket, signal: ReadyGrowthSignal): GateAnalysisPacket {
+  const direction = signal.side === "LONG" ? 1 : -1;
+  const posteriorLong = Math.min(0.98, Math.max(0.02, 0.5 + direction * Math.abs(signal.score) * 0.45));
+  const evidence = signal.reasons.map((detail, index) => ({
+    title: index === 0 ? `${signal.label}触发` : `${signal.label}证据 ${index + 1}`,
+    detail,
+    score: Number(Math.abs(signal.score).toFixed(2)),
+  }));
+  const counterEvidence = signal.blockers.length
+    ? signal.blockers.map((detail) => ({ title: "风险检查", detail }))
+    : packet.decision.counterEvidence.slice(0, 3);
 
-function positionSnapshot(row: typeof tradeCases.$inferSelect): TradePositionSnapshot {
   return {
-    id: row.id,
-    symbol: row.symbol,
-    side: row.side,
-    entryAt: row.entryAt,
-    entryPrice: row.entryPrice,
-    initialStopPrice: row.initialStopPrice,
-    currentStopPrice: row.currentStopPrice,
-    takeProfit1Price: row.takeProfit1Price,
-    takeProfit2Price: row.takeProfit2Price,
-    target1HitAt: row.target1HitAt,
-    maxHoldingMinutes: row.maxHoldingMinutes,
-    maxPriceSeen: row.maxPriceSeen,
-    minPriceSeen: row.minPriceSeen,
-    adverseFlowCount: row.adverseFlowCount,
-    confidence: row.confidence,
-    regime: row.regime,
+    ...packet,
+    decision: {
+      ...packet.decision,
+      state: "confirmed",
+      stateLabel: "成长策略确认",
+      side: signal.side,
+      confidence: signal.confidence,
+      directionalScore: signal.score,
+      posteriorLong,
+      regime: `成长策略 · ${signal.label} · ${signal.regime.kind}`,
+      action: `${signal.label}触发，按统一风控执行`,
+      thesis: `哨兵成长策略当前由「${signal.label}」模块主导。${signal.thesis}`,
+      entryZone: signal.entryPlan.entryZone,
+      trigger: `成长策略 · ${signal.label}：${signal.reasons.join("；")}`,
+      invalidation: `${signal.label}结构失效：触及结构止损 ${signal.entryPlan.stopLossPrice}`,
+      invalidationPrice: signal.entryPlan.stopLossPrice,
+      expiresMinutes: Math.min(packet.decision.expiresMinutes, 15),
+      entryPlan: signal.entryPlan,
+      evidence,
+      counterEvidence,
+      metrics: signal.metrics,
+      diagnostics: {
+        ...packet.decision.diagnostics,
+        confirmationCount: signal.reasons.length,
+        atrPct: signal.regime.atrPct ?? packet.decision.diagnostics.atrPct,
+      },
+    },
   };
+}
+
+async function archiveLegacyShadowTrades(symbol: string) {
+  const db = getDb();
+  const archived = await db.update(tradeCases).set({
+    activeKey: null,
+    status: "archived",
+    archivedAt: Date.now(),
+    learningApplied: true,
+  }).where(and(
+    eq(tradeCases.symbol, symbol),
+    eq(tradeCases.status, "holding"),
+    like(tradeCases.simulationModel, `${LEGACY_SHADOW_PREFIX}%`),
+  )).returning({ id: tradeCases.id });
+  return archived.length;
 }
 
 export async function listOpenShadowTradeSymbols() {
-  const rows = await getDb().select({ symbol: tradeCases.symbol }).from(tradeCases).where(and(
-    eq(tradeCases.status, "holding"),
-    like(tradeCases.simulationModel, `${SHADOW_PREFIX}%`),
-  ));
-  return [...new Set(rows.map((row) => row.symbol))];
+  // V3 modules are no longer separate shadow accounts. New signals join the
+  // normal contract_v2 lifecycle, so there are no shadow positions to favor
+  // in background scheduling. Legacy shadow rows are retired on the next scan.
+  return [] as string[];
 }
 
-async function reconcileShadowTrade(
-  row: typeof tradeCases.$inferSelect,
+export async function processShadowStrategies(
   packet: GateAnalysisPacket,
-  candles5m: Candle[],
-  signal: ShadowStrategySignal | undefined,
+  _candles5m: Candle[],
+  signals: ShadowStrategySignal[],
   settings: AppSettings,
 ) {
+  const archived = await archiveLegacyShadowTrades(packet.symbol);
   const db = getDb();
-  // For shadow rows, lastEvaluatedAt is deliberately the end of the latest
-  // fully consumed 5m candle, not merely the wall-clock time of the last scan.
-  // That lets a rotating free-worker scan catch up without either skipping a
-  // completed bar or borrowing high/low data from before the trade existed.
-  const fromCoveredThrough = Math.max(row.entryAt, row.lastEvaluatedAt);
-  const priceWindow = shadowCompletedWindow(candles5m, fromCoveredThrough, packet.observedAt);
-  const score = signal?.score ?? packet.decision.directionalScore;
-  const metrics = signal?.metrics ?? packet.decision.metrics;
-  const evaluation = evaluatePosition(positionSnapshot(row), {
-    observedAt: packet.observedAt,
-    price: packet.market.futuresPrice,
-    highPrice: priceWindow.highPrice,
-    lowPrice: priceWindow.lowPrice,
-    directionalScore: score,
-    confirmationCount: signal?.reasons.length ?? packet.decision.diagnostics.confirmationCount,
-    macroEventRisk: packet.market.macroEventRisk ?? 0,
-    metrics,
-    roundTripCostBps: settings.roundTripCostBps,
-  });
-  const currentPnl = calculateContractPnl(row.contractNotionalUsdt, evaluation.grossMovePct, evaluation.estimatedCostPct);
-  const where = and(eq(tradeCases.id, row.id), eq(tradeCases.status, "holding"), eq(tradeCases.simulationModel, row.simulationModel));
-  const common = {
-    currentStopPrice: evaluation.currentStopPrice,
-    target1HitAt: evaluation.target1HitAt,
-    lastPrice: packet.market.futuresPrice,
-    lastEvaluatedAt: priceWindow.coveredThroughAt ?? row.lastEvaluatedAt,
-    maxPriceSeen: evaluation.maxPriceSeen,
-    minPriceSeen: evaluation.minPriceSeen,
-    adverseFlowCount: evaluation.adverseFlowCount,
-    unrealizedGrossPct: evaluation.grossMovePct,
-    unrealizedNetPct: evaluation.netMovePct,
-    unrealizedGrossUsdt: currentPnl.grossPnlUsdt,
-    unrealizedNetUsdt: currentPnl.netPnlUsdt,
-    progressR: evaluation.progressR,
-  };
-  if (!evaluation.close) {
-    await db.update(tradeCases).set(common).where(where);
-    return "holding" as const;
-  }
-  const lesson = deriveTradeLesson(positionSnapshot(row), evaluation, parseJson(row.entryEvidenceJson, []), metrics);
-  const amountPnl = calculateContractPnl(row.contractNotionalUsdt, evaluation.grossMovePct, evaluation.estimatedCostPct);
-  await db.update(tradeCases).set({
-    ...common,
-    activeKey: null,
-    status: "closed",
-    exitAt: packet.observedAt,
-    exitPrice: evaluation.exitPrice ?? packet.market.futuresPrice,
-    exitCode: evaluation.exitCode,
-    exitReason: evaluation.exitReason,
-    exitEvidenceJson: JSON.stringify([
-      ...evaluation.exitEvidence,
-      priceWindow.count > 1 ? `后台轮转期间补查 ${priceWindow.count} 根完整 5m K 线，未遗漏期间触价` : "按开仓后的完整 5m 价格窗口判定",
-    ]),
-    exitMetricsJson: JSON.stringify(metrics),
-    grossMovePct: evaluation.grossMovePct,
-    estimatedCostPct: evaluation.estimatedCostPct,
-    netMovePct: evaluation.netMovePct,
-    unrealizedGrossUsdt: 0,
-    unrealizedNetUsdt: 0,
-    grossPnlUsdt: amountPnl.grossPnlUsdt,
-    estimatedCostUsdt: amountPnl.estimatedCostUsdt,
-    netPnlUsdt: amountPnl.netPnlUsdt,
-    accountBalanceAfterUsdt: settings.trialCapitalUsdt,
-    mfePct: evaluation.mfePct,
-    maePct: evaluation.maePct,
-    holdMinutes: evaluation.holdMinutes,
-    lessonJson: JSON.stringify(lesson),
-    learningApplied: true,
-  }).where(where);
-  return "closed" as const;
-}
-
-async function recentShadowClose(symbol: string, strategyId: ShadowStrategyId) {
-  const [row] = await getDb().select({ exitAt: tradeCases.exitAt }).from(tradeCases).where(and(
-    eq(tradeCases.symbol, symbol),
-    eq(tradeCases.status, "closed"),
-    eq(tradeCases.simulationModel, model(strategyId)),
-  )).orderBy(desc(tradeCases.exitAt)).limit(1);
-  return row?.exitAt ?? null;
-}
-
-async function openShadowTrade(packet: GateAnalysisPacket, signal: ShadowStrategySignal, settings: AppSettings) {
-  if (signal.state !== "ready" || signal.side === "WAIT" || !signal.entryPlan?.ready) return false;
-  const db = getDb();
-  const strategyModel = model(signal.strategyId);
-  const activeKey = `shadow:${signal.strategyId}:${packet.symbol}`;
   const [existing] = await db.select({ id: tradeCases.id }).from(tradeCases).where(and(
-    eq(tradeCases.status, "holding"),
-    eq(tradeCases.simulationModel, strategyModel),
     eq(tradeCases.symbol, packet.symbol),
+    eq(tradeCases.status, "holding"),
+    eq(tradeCases.simulationModel, "contract_v2"),
   )).limit(1);
-  if (existing) return false;
-  const lastClose = await recentShadowClose(packet.symbol, signal.strategyId);
-  if (lastClose != null && packet.observedAt - lastClose < SHADOW_COOLDOWN_MS) return false;
 
-  const researchEquity = Math.max(10, settings.trialCapitalUsdt);
-  const contract = buildContractPlan({
-    side: signal.side,
-    entryPrice: signal.entryPlan.entryPrice,
-    stopLossPrice: signal.entryPlan.stopLossPrice,
-    atrPct: signal.regime.atrPct,
-    dataQuality: packet.decision.dataQuality,
-    confidence: signal.confidence,
-    liquidityVolumeUsd: packet.market.volumeUsd,
-    accountEquityUsdt: researchEquity,
-    availableMarginUsdt: researchEquity,
-    requestedRiskUsdt: singleTradeRiskBudgetUsdt(researchEquity),
-  });
-  if (contract.contractNotionalUsdt < 1 || contract.marginUsdt < 1) return false;
-  const viability = assessTakeProfitViability({
-    side: signal.side,
-    entryPrice: signal.entryPlan.entryPrice,
-    takeProfitPrice: signal.entryPlan.takeProfit2Price,
-    notionalUsdt: contract.contractNotionalUsdt,
-    accountEquityUsdt: researchEquity,
-    roundTripCostBps: settings.roundTripCostBps,
-  });
-  if (!viability.passed) return false;
-
-  const id = crypto.randomUUID();
-  const inserted = await db.insert(tradeCases).values({
-    id,
-    activeKey,
-    symbol: packet.symbol,
-    status: "holding",
-    side: signal.side,
-    confidence: signal.confidence,
-    posteriorLong: signal.side === "LONG" ? 0.5 + Math.abs(signal.score) / 2 : 0.5 - Math.abs(signal.score) / 2,
-    dataQuality: packet.decision.dataQuality,
-    regime: `${signal.regime.kind} · ${signal.regime.reason}`,
-    entryDirectionalScore: signal.score,
-    entryAt: packet.observedAt,
-    entryPrice: signal.entryPlan.entryPrice,
-    entryLow: signal.entryPlan.entryZone[0],
-    entryHigh: signal.entryPlan.entryZone[1],
-    entryTrigger: `${signal.label}：${signal.reasons.join("、")}`,
-    entryThesis: signal.thesis,
-    entryChecksJson: JSON.stringify(signal.entryPlan.checks),
-    exitRulesJson: JSON.stringify(signal.entryPlan.exitRules),
-    entryEvidenceJson: JSON.stringify(signal.reasons.map((title) => ({ title }))),
-    entryCounterEvidenceJson: JSON.stringify(signal.blockers.map((detail) => ({ title: "未通过项", detail }))),
-    entryMetricsJson: JSON.stringify(signal.metrics),
-    entrySnapshotJson: JSON.stringify({ strategyId: signal.strategyId, shadowOnly: true, ruleset: SHADOW_PREFIX.slice(0, -1), regime: signal.regime, market: packet.market }),
-    initialStopPrice: signal.entryPlan.stopLossPrice,
-    currentStopPrice: signal.entryPlan.stopLossPrice,
-    takeProfit1Price: signal.entryPlan.takeProfit1Price,
-    takeProfit2Price: signal.entryPlan.takeProfit2Price,
-    target1HitAt: null,
-    maxHoldingMinutes: signal.entryPlan.maxHoldingMinutes,
-    plannedRiskPct: signal.entryPlan.plannedRiskPct,
-    riskReward: signal.entryPlan.riskReward,
-    riskBudgetUsdt: contract.plannedLossUsdt,
-    suggestedNotionalUsdt: contract.contractNotionalUsdt,
-    contractType: contract.contractType,
-    marginMode: contract.marginMode,
-    leverage: contract.leverage,
-    leverageReason: `影子策略 ${signal.label}；${contract.leverageReason}`,
-    marginUsdt: contract.marginUsdt,
-    contractNotionalUsdt: contract.contractNotionalUsdt,
-    quantity: contract.quantity,
-    estimatedLiquidationPrice: contract.estimatedLiquidationPrice,
-    simulationModel: strategyModel,
-    accountBalanceBeforeUsdt: researchEquity,
-    accountBalanceAfterUsdt: null,
-    lastPrice: packet.market.futuresPrice,
-    // Until the first whole post-entry candle closes, keep the entry time as
-    // the coverage boundary. This prevents a scan at 10:02 from later using
-    // the 10:00-10:05 candle's pre-entry high/low.
-    lastEvaluatedAt: packet.observedAt,
-    maxPriceSeen: packet.market.futuresPrice,
-    minPriceSeen: packet.market.futuresPrice,
-    adverseFlowCount: 0,
-    unrealizedGrossPct: 0,
-    unrealizedNetPct: -settings.roundTripCostBps / 100,
-    unrealizedGrossUsdt: 0,
-    unrealizedNetUsdt: -contract.contractNotionalUsdt * settings.roundTripCostBps / 10_000,
-    progressR: 0,
-    learningApplied: true,
-  }).onConflictDoNothing().returning({ id: tradeCases.id });
-  return inserted.length > 0;
-}
-
-export async function processShadowStrategies(packet: GateAnalysisPacket, candles5m: Candle[], signals: ShadowStrategySignal[], settings: AppSettings) {
-  const db = getDb();
-  const open = await db.select().from(tradeCases).where(and(
-    eq(tradeCases.symbol, packet.symbol),
-    eq(tradeCases.status, "holding"),
-    like(tradeCases.simulationModel, `${SHADOW_PREFIX}%`),
-  ));
-  let closed = 0;
-  for (const row of open) {
-    const strategyId = strategyIdFromModel(row.simulationModel);
-    if (!strategyId) continue;
-    const result = await reconcileShadowTrade(row, packet, candles5m, signals.find((signal) => signal.strategyId === strategyId), settings);
-    if (result === "closed") closed += 1;
+  if (existing) {
+    return { opened: 0, closed: 0, evaluated: signals.length, archived };
   }
-  let opened = 0;
-  for (const signal of signals) {
-    if (await openShadowTrade(packet, signal, settings)) opened += 1;
+
+  const selected = chooseGrowthSignal(signals);
+  if (!selected) {
+    return { opened: 0, closed: 0, evaluated: signals.length, archived };
   }
-  return { opened, closed, evaluated: signals.length };
+
+  // The original comprehensive decision remains the first pass. When it has
+  // not opened a position, a ready growth module may become the same unified
+  // contract_v2 order. From here on it uses the exact same lifecycle, account,
+  // learning, live-entry, risk and Gate execution path as every other Sentinel
+  // order. There is no promotion/approval layer beyond the owner's live switch.
+  const result = await processDecision(growthPacket(packet, selected), settings);
+  return {
+    opened: result.kind === "opened" ? 1 : 0,
+    closed: result.kind === "closed" ? 1 : 0,
+    evaluated: signals.length,
+    archived,
+    selected: result.kind === "opened" ? selected.strategyId : null,
+  };
 }
 
 export async function getStrategyLabDashboard() {
-  const db = getDb();
-  const rows = await db.select({
-    simulationModel: tradeCases.simulationModel,
+  // Kept temporarily for backward-compatible API callers. The user-facing
+  // product no longer exposes a separate strategy lab: all completed and open
+  // orders are one Sentinel Growth history under contract_v2.
+  const rows = await getDb().select({
     status: tradeCases.status,
     netMovePct: tradeCases.netMovePct,
     exitAt: tradeCases.exitAt,
     entryAt: tradeCases.entryAt,
     regime: tradeCases.regime,
-  }).from(tradeCases).where(or(
-    eq(tradeCases.simulationModel, "contract_v2"),
-    like(tradeCases.simulationModel, `${SHADOW_PREFIX}%`),
-  )).orderBy(desc(tradeCases.entryAt)).limit(2500);
-
-  const baseline = rows.filter((row) => row.simulationModel === "contract_v2");
-  const baselineStats = calculateStrategyStatistics(baseline.filter((row) => row.status === "closed").map((row) => ({ netMovePct: row.netMovePct, exitAt: row.exitAt, regime: row.regime })));
-  const strategies = STRATEGIES.map((strategy) => {
-    const strategyRows = rows.filter((row) => row.simulationModel === model(strategy.id));
-    const closed = strategyRows.filter((row) => row.status === "closed");
-    const stats = calculateStrategyStatistics(closed.map((row) => ({ netMovePct: row.netMovePct, exitAt: row.exitAt, regime: row.regime })));
-    return {
+  }).from(tradeCases).where(eq(tradeCases.simulationModel, "contract_v2"))
+    .orderBy(desc(tradeCases.entryAt))
+    .limit(2500);
+  const closed = rows.filter((row) => row.status === "closed");
+  const stats = calculateStrategyStatistics(closed.map((row) => ({
+    netMovePct: row.netMovePct,
+    exitAt: row.exitAt,
+    regime: row.regime,
+  })));
+  return {
+    observedAt: Date.now(),
+    note: "所有判断模块已合并为 Sentinel Growth，一套订单、一套学习、一套实盘风控。",
+    baseline: {
+      id: "baseline_v1" as const,
+      label: "Sentinel Growth",
+      mode: "baseline" as const,
+      openCount: rows.filter((row) => row.status === "holding").length,
+      stats,
+    },
+    strategies: STRATEGIES.map((strategy) => ({
       id: strategy.id,
       label: strategy.label,
       mode: "shadow" as const,
-      openCount: strategyRows.filter((row) => row.status === "holding").length,
-      stats,
-      promotion: evaluateStrategyPromotion(strategy.id, stats),
-    };
-  });
-  return {
-    observedAt: Date.now(),
-    note: "新策略只做影子模拟，不会进入 Gate 实盘；达到候选线也必须人工批准。",
-    baseline: {
-      id: "baseline_v1" as const,
-      label: "Sentinel Baseline V1",
-      mode: "baseline" as const,
-      openCount: baseline.filter((row) => row.status === "holding").length,
-      stats: baselineStats,
-    },
-    strategies,
+      openCount: 0,
+      stats: calculateStrategyStatistics([]),
+      promotion: {
+        status: "watch" as const,
+        label: "已并入成长策略",
+        eligible: true,
+        requiredSamples: 0,
+        requiredActiveDays: 0,
+        reasons: ["不再单独晋级；满足完整入场条件即可进入统一订单生命周期"],
+      },
+    })),
   };
 }
