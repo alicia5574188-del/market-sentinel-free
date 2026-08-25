@@ -8,7 +8,7 @@ export const SIMULATION_HARD_LOSS_STREAK = 3;
 
 export type RecentLiveResult = {
   realizedPnlUsdt: number | null;
-  riskBudgetUsdt?: number | null;
+  entryEquityUsdt?: number | null;
   closedAt: number | null;
 };
 
@@ -44,24 +44,21 @@ function lossStreak(values: number[]) {
 
 /**
  * Build a transfer-neutral equity curve from Market Sentinel's own closed live
- * orders. Each order already stores its entry risk budget, which is 1% of the
- * Gate equity observed at entry. That lets us normalize realized PnL back to a
- * contemporaneous account-return fraction without looking at the raw Gate
- * balance. Deposits/withdrawals between futures and spot therefore cannot
- * create a fake strategy drawdown.
+ * orders. Each submitted live order stores a snapshot of the actual Gate equity
+ * immediately before submission. Realized PnL is normalized by that entry-time
+ * equity, so later transfers between futures and spot cannot rewrite historical
+ * trading returns or manufacture a fake drawdown.
  */
 function liveStrategyDrawdownPct(results: RecentLiveResult[]) {
   const chronological = [...results]
-    .filter((item) => finite(item.closedAt) && finite(item.realizedPnlUsdt) && finite(item.riskBudgetUsdt) && (item.riskBudgetUsdt as number) > 0)
+    .filter((item) => finite(item.closedAt) && finite(item.realizedPnlUsdt) && finite(item.entryEquityUsdt) && (item.entryEquityUsdt as number) > 0)
     .sort((a, b) => (a.closedAt ?? 0) - (b.closedAt ?? 0));
   if (!chronological.length) return 0;
 
   let equityIndex = 1;
   let peakIndex = 1;
   for (const item of chronological) {
-    const impliedEntryEquity = (item.riskBudgetUsdt as number) / RISK_POLICY.singleTradeLossRate;
-    if (!(impliedEntryEquity > 0)) continue;
-    const tradeReturn = (item.realizedPnlUsdt as number) / impliedEntryEquity;
+    const tradeReturn = (item.realizedPnlUsdt as number) / (item.entryEquityUsdt as number);
     if (!Number.isFinite(tradeReturn)) continue;
     equityIndex *= Math.max(1e-9, 1 + tradeReturn);
     peakIndex = Math.max(peakIndex, equityIndex);
