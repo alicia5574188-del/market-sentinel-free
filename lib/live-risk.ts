@@ -140,7 +140,10 @@ export function buildLiveEntryPlan(input: {
   const takeProfitIsValid = trade.side === "LONG" ? takeProfitPrice > worstCaseEntryPrice : takeProfitPrice < worstCaseEntryPrice;
   if (!stopIsValid) return failed("按 Gate 价格精度取整后，保护止损不在开仓方向的有效一侧", { markPrice, contractMultiplier: multiplier, stopLossPrice, takeProfitPrice });
   if (!takeProfitIsValid) return failed("按 Gate 价格精度和允许滑点计算后，TP2 已无有效盈利空间", { markPrice, contractMultiplier: multiplier, stopLossPrice, takeProfitPrice });
-  const availableUsdt = Math.max(number(account.available), number(account.cross_available));
+  // Entries are explicitly switched to Gate isolated margin before submission,
+  // so only Gate's isolated `available` field is a valid margin ceiling here.
+  // `cross_available` describes cross-margin capacity and must not enlarge an isolated order.
+  const availableUsdt = Math.max(0, number(account.available));
   const accountEquityUsdt = gateAccountEquityUsdt(account);
   const minimumNetTp2Usdt = minimumTp2NetProfitUsdt(accountEquityUsdt);
   if (accountEquityUsdt <= 0 || availableUsdt <= 0) {
