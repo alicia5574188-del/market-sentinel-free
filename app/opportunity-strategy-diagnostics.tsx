@@ -48,6 +48,7 @@ type Diagnostics = {
     reasons: string[];
     blockers: string[];
     entryPlanReady: boolean;
+    checks: { key: string; label: string; passed: boolean; required: boolean; detail: string }[];
   }[];
 };
 
@@ -185,10 +186,17 @@ export function OpportunityStrategyDiagnostics() {
 
       <div className="section-title"><span>四策略当前判定</span><small>{readyCount ? `${readyCount} 个达到影子入场条件` : "本轮没有完整入场条件"}</small></div>
       <div style={{ display: "grid", gap: 7 }}>
-        {diagnostics.strategies.map((strategy) => <div key={strategy.strategyId} style={{ border: "1px solid rgba(151,174,193,.12)", borderRadius: 11, padding: "9px 10px", background: "rgba(7,16,25,.55)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><strong>{strategy.label} · {strategy.side}</strong><b className={strategy.state === "ready" ? "good" : strategy.state === "blocked" ? "danger" : "warn"}>{strategyStateLabel(strategy.state)}</b></div>
-          <span style={{ display: "block", color: "#8295a6", fontSize: 10, marginTop: 4 }}>可信度 {strategy.confidence}% · {strategy.blockers[0] ?? strategy.reasons.at(-1) ?? "条件已完整"}</span>
-        </div>)}
+        {diagnostics.strategies.map((strategy) => {
+          const failed = strategy.checks.filter((check) => check.required && !check.passed).slice(0, 3);
+          const passed = strategy.checks.filter((check) => check.passed).slice(-2);
+          return <div key={strategy.strategyId} style={{ border: "1px solid rgba(151,174,193,.12)", borderRadius: 11, padding: "9px 10px", background: "rgba(7,16,25,.55)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><strong>{strategy.label} · {strategy.side}</strong><b className={strategy.state === "ready" ? "good" : strategy.state === "blocked" ? "danger" : "warn"}>{strategyStateLabel(strategy.state)}</b></div>
+            <span style={{ display: "block", color: "#8295a6", fontSize: 10, marginTop: 4 }}>可信度 {strategy.confidence}% · {strategy.blockers[0] ?? "无安全级阻塞"}</span>
+            <div style={{ display: "grid", gap: 3, marginTop: 6 }}>
+              {(failed.length ? failed : passed).map((check) => <span key={check.key} style={{ color: check.passed ? "#8295a6" : "#ffbd4a", fontSize: 9 }}>{check.passed ? "✓" : "待"} {check.label}：{check.detail}</span>)}
+            </div>
+          </div>;
+        })}
       </div>
       <p className="risk-note" style={{ marginTop: 10 }}>这里展示的是 V3 新策略真正使用的派生数据和当前卡点；它与 Baseline 原策略并行监控。V3 仍只做影子模拟，不会直接触发 Gate 实盘。</p>
     </>}
