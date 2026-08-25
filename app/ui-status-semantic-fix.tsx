@@ -2,6 +2,23 @@
 
 import { useEffect } from "react";
 
+function normalizeRiskCopy() {
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node) {
+    const original = node.textContent ?? "";
+    let next = original;
+    if (next.includes("Gate 权益较实盘峰值回撤")) {
+      next = next.replace("Gate 权益较实盘峰值回撤", "旧版账户权益回撤");
+    } else if (next.includes("峰值回撤")) {
+      next = next.replaceAll("峰值回撤", "实盘交易回撤");
+      if (!next.includes("资金划转不计")) next += "（资金划转不计）";
+    }
+    if (next !== original) node.textContent = next;
+    node = walker.nextNode();
+  }
+}
+
 function normalizeUiSemantics() {
   const banner = document.querySelector<HTMLElement>('[aria-label="数据状态"]');
   if (banner) {
@@ -22,6 +39,8 @@ function normalizeUiSemantics() {
   for (const label of Array.from(document.querySelectorAll<HTMLElement>(".credential-summary span"))) {
     if (label.textContent?.trim() === "合约可用") label.textContent = "验证时逐仓可用";
   }
+
+  normalizeRiskCopy();
 }
 
 export function UiStatusSemanticFix() {
