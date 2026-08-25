@@ -19,16 +19,6 @@ function normalizeRiskCopy() {
   }
 }
 
-function normalizeOrderLedgerHeading() {
-  const ledger = document.querySelector<HTMLElement>(".order-ledger");
-  const heading = ledger?.querySelector<HTMLElement>(".utility-heading");
-  if (!heading) return;
-  const eyebrow = heading.querySelector<HTMLElement>(".eyebrow");
-  const title = heading.querySelector<HTMLElement>("strong");
-  if (eyebrow?.textContent?.includes("1000U 模拟合约账户")) eyebrow.textContent = "模拟 + Gate 实盘 · 两套账本分开";
-  if (title?.textContent?.includes("确认 → 持仓 → 平仓 → 复盘学习")) title.textContent = "订单账本与交易复盘";
-}
-
 function normalizeUiSemantics() {
   const banner = document.querySelector<HTMLElement>('[aria-label="数据状态"]');
   if (banner) {
@@ -51,7 +41,6 @@ function normalizeUiSemantics() {
   }
 
   normalizeRiskCopy();
-  normalizeOrderLedgerHeading();
 }
 
 export function UiStatusSemanticFix() {
