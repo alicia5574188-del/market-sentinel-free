@@ -1,8 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { requireChatGPTUser } from "./chatgpt-auth";
 import { LiveOrdersInline } from "./live-orders-inline";
-import { OpportunityStrategyDiagnostics } from "./opportunity-strategy-diagnostics";
-import { StrategyLabInline } from "./strategy-lab-inline";
 import { UiStatusSemanticFix } from "./ui-status-semantic-fix";
 import "./globals.css";
 
@@ -53,9 +51,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
     <html lang="zh-CN">
       <body>
         {children}
-        <OpportunityStrategyDiagnostics />
         <LiveOrdersInline />
-        <StrategyLabInline />
         <UiStatusSemanticFix />
         <script src="/live-position-mode-helper.js" defer />
       </body>
