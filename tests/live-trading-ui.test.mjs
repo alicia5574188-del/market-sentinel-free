@@ -30,6 +30,24 @@ test("owner-only live trading UI keeps credentials ephemeral, live-only and entr
   assert.match(schema, /entryEnabled: integer\("entry_enabled"[^\n]*default\(false\)/);
 });
 
+test("main order page embeds detailed Gate live orders without a separate-page shortcut", async () => {
+  const [layout, inlineOrders, semantics] = await Promise.all([
+    readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/live-orders-inline.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/ui-status-semantic-fix.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(layout, /<LiveOrdersInline \/>/);
+  assert.match(inlineOrders, /Gate 实盘订单/);
+  assert.match(inlineOrders, /实盘持仓 \/ 活动订单/);
+  assert.match(inlineOrders, /实盘已平仓订单/);
+  assert.match(inlineOrders, /实盘订单详情/);
+  assert.match(inlineOrders, /真实已实现盈亏/);
+  assert.match(inlineOrders, /止损/);
+  assert.match(inlineOrders, /TP2/);
+  assert.match(inlineOrders, /fetch\("\/api\/live\/status"/);
+  assert.doesNotMatch(semantics, /查看实盘订单|href = "\/live-orders"/);
+});
+
 test("live UI exposes real-funds and current-equity safety gates", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   assert.match(page, /TP2 预计净利润 ≥ Gate 当前权益的 1\.5%/);
