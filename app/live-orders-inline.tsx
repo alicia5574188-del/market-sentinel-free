@@ -27,6 +27,11 @@ type LiveOrder = {
   closedAt: number | null;
   createdAt?: number;
   updatedAt: number;
+  strategyLabel?: string | null;
+  strategyTrigger?: string | null;
+  strategyThesis?: string | null;
+  strategyExitReason?: string | null;
+  strategyExitEvidence?: string[];
 };
 
 type LiveSnapshot = {
@@ -162,7 +167,7 @@ export function LiveOrdersInline() {
   if (!host) return null;
 
   return createPortal(<section aria-label="Gate 实盘订单内嵌账本" style={{ margin: "12px 0 18px", padding: "12px 0 16px", borderBottom: "1px solid rgba(151,174,193,.12)" }}>
-    <div className="section-title"><span>Gate 实盘订单</span><small>真实资金 · 与模拟订单完全分开 · 10 秒刷新</small></div>
+    <div className="section-title"><span>Gate 实盘订单</span><small>真实资金 · 订单与策略解释放在一起 · 10 秒刷新</small></div>
 
     <div className="account-summary">
       <div><span>Gate 当前权益</span><strong>{snapshot?.control.accountEquityLastUsdt == null ? "--" : `${snapshot.control.accountEquityLastUsdt.toFixed(2)}U`}</strong><small>{snapshot?.control.entryEnabled ? "自动实盘已开启" : "自动实盘已关闭"}</small></div>
@@ -177,7 +182,7 @@ export function LiveOrdersInline() {
     <div className="section-title"><span>实盘持仓 / 活动订单</span><small>{active.length} 笔</small></div>
     <div className="order-list">{active.length ? active.map((order) => <LiveOrderRow key={order.id} order={order} selected={selectedId === order.id} onSelect={() => setSelectedId(order.id)} />) : <p className="empty-note">当前没有 Gate 实盘持仓或活动订单。</p>}</div>
 
-    <div className="section-title"><span>实盘已平仓订单</span><small>每单保留真实成交与盈亏</small></div>
+    <div className="section-title"><span>实盘已平仓订单</span><small>每单保留真实成交、盈亏与策略解释</small></div>
     <div className="order-list closed-orders">{closed.length ? closed.map((order) => <LiveOrderRow key={order.id} order={order} selected={selectedId === order.id} onSelect={() => setSelectedId(order.id)} />) : <p className="empty-note">还没有已平仓的 Gate 实盘订单。</p>}</div>
 
     {problems.length > 0 && <><div className="section-title"><span>未成交 / 异常记录</span><small>{problems.length} 笔</small></div><div className="order-list">{problems.map((order) => <LiveOrderRow key={order.id} order={order} selected={selectedId === order.id} onSelect={() => setSelectedId(order.id)} />)}</div></>}
@@ -193,7 +198,7 @@ function LiveOrderRow({ order, selected, onSelect }: { order: LiveOrder; selecte
   const value = order.state === "closed" ? usdt(order.realizedPnlUsdt) : `${order.filledContracts ?? order.requestedContracts} 张`;
   return <button className={`order-row ${selected ? "selected" : ""}`} onClick={onSelect}>
     <span className={`signal-dot ${order.state === "closed" ? "closed" : PROBLEM.has(order.state) ? "blocked" : "holding"}`}/>
-    <div><strong>{order.symbol.replace("_", "")} · {order.side} · {order.leverage}x</strong><span>{STATE_LABEL[order.state]} · 成交 {price(order.fillPrice ?? order.referencePrice)}</span></div>
+    <div><strong>{order.symbol.replace("_", "")} · {order.side} · {order.leverage}x</strong><span>{order.strategyLabel ?? "综合确认"} · {STATE_LABEL[order.state]} · 成交 {price(order.fillPrice ?? order.referencePrice)}</span></div>
     <div><b className={order.state === "closed" && (order.realizedPnlUsdt ?? 0) < 0 ? "danger" : order.state === "closed" ? "good" : stateTone(order.state)}>{value}</b><small>{dateTime(order.closedAt ?? order.protectedAt ?? order.submittedAt ?? order.updatedAt)}</small></div>
   </button>;
 }
@@ -201,7 +206,7 @@ function LiveOrderRow({ order, selected, onSelect }: { order: LiveOrder; selecte
 function LiveOrderDetail({ order }: { order: LiveOrder }) {
   return <article style={{ border: "1px solid #1b2b39", borderRadius: 14, background: "rgba(11,23,34,.72)", padding: 12 }}>
     <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start", marginBottom: 10 }}>
-      <div><strong style={{ fontSize: 16 }}>{order.symbol.replace("_", "")} · {order.side}</strong><span style={{ display: "block", marginTop: 3, color: "#8295a6", fontSize: 10 }}>Gate 真实执行 · {order.leverage}x · {order.filledContracts ?? order.requestedContracts} 张</span></div>
+      <div><strong style={{ fontSize: 16 }}>{order.symbol.replace("_", "")} · {order.side}</strong><span style={{ display: "block", marginTop: 3, color: "#8295a6", fontSize: 10 }}>{order.strategyLabel ?? "综合确认"} · Gate 真实执行 · {order.leverage}x · {order.filledContracts ?? order.requestedContracts} 张</span></div>
       <strong className={stateTone(order.state)}>{STATE_LABEL[order.state]}</strong>
     </div>
     <div className="live-status-grid">
@@ -214,6 +219,19 @@ function LiveOrderDetail({ order }: { order: LiveOrder }) {
       <div><span>开仓时 Gate 权益</span><strong>{order.entryEquityUsdt == null ? "--" : `${order.entryEquityUsdt.toFixed(2)}U`}</strong></div>
       <div><span>策略订单 ID</span><strong>{order.tradeCaseId.slice(0, 8)}</strong></div>
     </div>
+
+    {(order.strategyTrigger || order.strategyThesis) && <div style={{ marginTop: 10, border: "1px solid rgba(67,199,239,.18)", borderRadius: 12, padding: 10, background: "rgba(67,199,239,.05)" }}>
+      <div className="section-title" style={{ marginTop: 0 }}><span>为什么进场</span><small>{order.strategyLabel ?? "综合确认"}</small></div>
+      {order.strategyTrigger && <p style={{ margin: "5px 0", fontSize: 11, lineHeight: 1.6 }}>{order.strategyTrigger}</p>}
+      {order.strategyThesis && <p style={{ margin: "5px 0 0", color: "#8295a6", fontSize: 10, lineHeight: 1.6 }}>{order.strategyThesis}</p>}
+    </div>}
+
+    {(order.strategyExitReason || (order.strategyExitEvidence?.length ?? 0) > 0) && <div style={{ marginTop: 10, borderTop: "1px solid rgba(151,174,193,.12)", paddingTop: 9 }}>
+      <strong style={{ fontSize: 11 }}>为什么退出</strong>
+      {order.strategyExitReason && <p style={{ margin: "5px 0", fontSize: 11 }}>{order.strategyExitReason}</p>}
+      {order.strategyExitEvidence?.slice(0, 4).map((item, index) => <p key={`${index}-${item}`} style={{ margin: "3px 0", color: "#8295a6", fontSize: 10 }}>· {item}</p>)}
+    </div>}
+
     <div className="safety-list" style={{ marginTop: 10 }}>
       <div><span><strong>提交时间</strong> {dateTime(order.submittedAt ?? order.createdAt)}</span></div>
       <div><span><strong>保护确认</strong> {dateTime(order.protectedAt)}</span></div>
