@@ -1,0 +1,196 @@
+from pathlib import Path
+import re
+
+
+def patch(path: str, old: str, new: str, expected: int = 1) -> None:
+    p = Path(path)
+    text = p.read_text()
+    if old in text:
+        count = text.count(old)
+        if count != expected:
+            raise SystemExit(f"{path}: expected {expected}, found {count}: {old[:80]!r}")
+        p.write_text(text.replace(old, new))
+    elif new not in text:
+        raise SystemExit(f"{path}: missing old/new form: {old[:80]!r}")
+
+
+def regex_patch(path: str, pattern: str, replacement: str) -> None:
+    p = Path(path)
+    text = p.read_text()
+    if replacement in text:
+        return
+    updated, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+    if count != 1:
+        raise SystemExit(f"{path}: regex patch failed: {pattern[:90]!r}")
+    p.write_text(updated)
+
+
+Path("lib/risk-policy.ts").write_text(
+    '''export const RISK_POLICY = {
+  singleTradeLossRate: 0.01,
+  minimumTp2NetProfitRate: 0.015,
+  maxMarginAllocationRate: 0.20,
+  dailyRealizedLossPauseRate: 0.03,
+  peakDrawdownRate: 0.10,
+  maxLiveOpenPositions: 3,
+} as const;
+
+function positive(value: number) {
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function round(value: number, digits = 8) {
+  const scale = 10 ** digits;
+  return Math.round((value + Number.EPSILON) * scale) / scale;
+}
+
+export function equityScaledUsdt(equityUsdt: number, rate: number) {
+  return round(positive(equityUsdt) * Math.max(0, Number.isFinite(rate) ? rate : 0));
+}
+
+export function singleTradeRiskBudgetUsdt(equityUsdt: number) {
+  return equityScaledUsdt(equityUsdt, RISK_POLICY.singleTradeLossRate);
+}
+
+export function minimumTp2NetProfitBudgetUsdt(equityUsdt: number) {
+  return equityScaledUsdt(equityUsdt, RISK_POLICY.minimumTp2NetProfitRate);
+}
+
+export function maxMarginAllocationUsdt(equityUsdt: number) {
+  return equityScaledUsdt(equityUsdt, RISK_POLICY.maxMarginAllocationRate);
+}
+
+export function dailyLossPauseUsdt(accountEquityUsdt: number, dailyRealizedPnlUsdt: number) {
+  const current = positive(accountEquityUsdt);
+  const realizedLoss = Math.min(0, Number.isFinite(dailyRealizedPnlUsdt) ? dailyRealizedPnlUsdt : 0);
+  const estimatedStartOfDayEquity = Math.max(current, current - realizedLoss);
+  return equityScaledUsdt(estimatedStartOfDayEquity, RISK_POLICY.dailyRealizedLossPauseRate);
+}
+
+export function peakDrawdownLimitUsdt(accountEquityPeakUsdt: number) {
+  return equityScaledUsdt(accountEquityPeakUsdt, RISK_POLICY.peakDrawdownRate);
+}
+
+export function publicRiskPolicy() {
+  return {
+    singleTradeLossPct: RISK_POLICY.singleTradeLossRate * 100,
+    minimumTp2NetProfitPct: RISK_POLICY.minimumTp2NetProfitRate * 100,
+    maxMarginAllocationPct: RISK_POLICY.maxMarginAllocationRate * 100,
+    dailyRealizedLossPausePct: RISK_POLICY.dailyRealizedLossPauseRate * 100,
+    peakDrawdownPct: RISK_POLICY.peakDrawdownRate * 100,
+    maxLiveOpenPositions: RISK_POLICY.maxLiveOpenPositions,
+  };
+}
+'''
+)
+
+patch(
+    "lib/contract-simulation.ts",
+    'export type ContractSide = "LONG" | "SHORT";\n',
+    'import { RISK_POLICY, maxMarginAllocationUsdt, minimumTp2NetProfitBudgetUsdt, singleTradeRiskBudgetUsdt } from "./risk-policy.ts";\n\nexport type ContractSide = "LONG" | "SHORT";\n',
+)
+patch("lib/contract-simulation.ts", "export const MIN_TP2_NET_PROFIT_EQUITY_RATE = 0.015;", "export const MIN_TP2_NET_PROFIT_EQUITY_RATE = RISK_POLICY.minimumTp2NetProfitRate;")
+patch("lib/contract-simulation.ts", "  return round(finitePositive(accountEquityUsdt) * MIN_TP2_NET_PROFIT_EQUITY_RATE);", "  return minimumTp2NetProfitBudgetUsdt(accountEquityUsdt);")
+patch("lib/contract-simulation.ts", "  const accountRiskCap = equity * 0.01;", "  const accountRiskCap = singleTradeRiskBudgetUsdt(equity);")
+patch("lib/contract-simulation.ts", "  const marginAllocationCap = Math.min(equity * 0.2, availableMargin);", "  const marginAllocationCap = Math.min(maxMarginAllocationUsdt(equity), availableMargin);")
+
+patch(
+    "lib/live-risk.ts",
+    'import { minimumTp2NetProfitUsdt } from "./contract-simulation.ts";\n',
+    'import { minimumTp2NetProfitUsdt } from "./contract-simulation.ts";\nimport { RISK_POLICY, dailyLossPauseUsdt, maxMarginAllocationUsdt, peakDrawdownLimitUsdt, singleTradeRiskBudgetUsdt } from "./risk-policy.ts";\n',
+)
+patch("lib/live-risk.ts", "export const MAX_LIVE_OPEN_POSITIONS = 3;", "export const MAX_LIVE_OPEN_POSITIONS = RISK_POLICY.maxLiveOpenPositions;")
+patch("lib/live-risk.ts", "  maxRiskPerAlertUsdt: number;\n", "  /** @deprecated Risk is always current equity × 1%; retained only for old callers. */\n  maxRiskPerAlertUsdt?: number;\n")
+patch(
+    "lib/live-risk.ts",
+    "  const requestedRiskUsdt = Math.max(0, number(input.maxRiskPerAlertUsdt));\n  const riskBudgetUsdt = Math.min(requestedRiskUsdt, accountEquityUsdt * 0.01);",
+    "  const riskBudgetUsdt = singleTradeRiskBudgetUsdt(accountEquityUsdt);",
+)
+patch("lib/live-risk.ts", "  const marginAllocationUsdt = Math.min(accountEquityUsdt * 0.2, availableUsdt / 1.1);", "  const marginAllocationUsdt = Math.min(maxMarginAllocationUsdt(accountEquityUsdt), availableUsdt / 1.1);")
+regex_patch(
+    "lib/live-risk.ts",
+    r"export function liveAccountRiskLockReason\(input: \{.*?\n\}\n\nexport function protectionTriggerRules",
+    '''export function liveAccountRiskLockReason(input: {
+  dailyRealizedPnlUsdt: number;
+  /** @deprecated Ignored: daily pause is equity-scaled. */
+  dailyPauseUsdt?: number;
+  accountEquityUsdt: number;
+  accountEquityPeakUsdt: number;
+  /** @deprecated Ignored: drawdown is peak-equity-scaled. */
+  maxDrawdownUsdt?: number;
+}) {
+  const dailyPauseUsdt = dailyLossPauseUsdt(input.accountEquityUsdt, input.dailyRealizedPnlUsdt);
+  if (dailyPauseUsdt > 0 && input.dailyRealizedPnlUsdt <= -dailyPauseUsdt) {
+    return `Gate 当日已实现盈亏 ${input.dailyRealizedPnlUsdt.toFixed(2)}U，触及当日参考权益 3% 暂停线 ${dailyPauseUsdt.toFixed(2)}U`;
+  }
+  const drawdownUsdt = Math.max(0, input.accountEquityPeakUsdt - input.accountEquityUsdt);
+  const maxDrawdownUsdt = peakDrawdownLimitUsdt(input.accountEquityPeakUsdt);
+  if (maxDrawdownUsdt > 0 && drawdownUsdt >= maxDrawdownUsdt) {
+    return `Gate 权益较实盘峰值回撤 ${drawdownUsdt.toFixed(2)}U，触及峰值权益 10% 上限 ${maxDrawdownUsdt.toFixed(2)}U`;
+  }
+  return null;
+}
+
+export function protectionTriggerRules''',
+)
+
+patch("lib/live-trading-engine.ts", 'import { minimumTp2NetProfitUsdt } from "./contract-simulation.ts";\n', 'import { minimumTp2NetProfitUsdt } from "./contract-simulation.ts";\nimport { singleTradeRiskBudgetUsdt } from "./risk-policy.ts";\n')
+patch("lib/live-trading-engine.ts", "    dailyPauseUsdt: settings.dailyPauseUsdt,\n", "")
+patch("lib/live-trading-engine.ts", "    maxDrawdownUsdt: settings.maxDrawdownUsdt,\n", "")
+patch("lib/live-trading-engine.ts", "  const riskBudgetUsdt = Math.min(Math.max(0, settings.maxRiskPerAlertUsdt), accountEquityUsdt * 0.01);", "  const riskBudgetUsdt = singleTradeRiskBudgetUsdt(accountEquityUsdt);")
+patch("lib/live-trading-engine.ts", "            maxRiskPerAlertUsdt: settings.maxRiskPerAlertUsdt,\n", "")
+
+patch("lib/repository.ts", 'import { assessTakeProfitViability, buildContractPlan, calculateContractPnl, type ContractPlan, type TakeProfitViability } from "./contract-simulation";\n', 'import { assessTakeProfitViability, buildContractPlan, calculateContractPnl, type ContractPlan, type TakeProfitViability } from "./contract-simulation";\nimport { publicRiskPolicy, singleTradeRiskBudgetUsdt } from "./risk-policy.ts";\n')
+patch("lib/repository.ts", '  "trialCapitalUsdt" | "maxRiskPerAlertUsdt" | "dailyPauseUsdt" | "maxDrawdownUsdt" | "scanEnabled" | "pushEnabled"\n', '  "trialCapitalUsdt" | "scanEnabled" | "pushEnabled"\n')
+patch("lib/repository.ts", "  if (Number.isFinite(patch.maxRiskPerAlertUsdt)) values.maxRiskPerAlertUsdt = Math.min(10, Math.max(0.1, patch.maxRiskPerAlertUsdt!));\n", "")
+patch("lib/repository.ts", "  if (Number.isFinite(patch.dailyPauseUsdt)) values.dailyPauseUsdt = Math.min(100_000, Math.max(0.1, patch.dailyPauseUsdt!));\n", "")
+patch("lib/repository.ts", "  if (Number.isFinite(patch.maxDrawdownUsdt)) values.maxDrawdownUsdt = Math.min(500_000, Math.max(1, patch.maxDrawdownUsdt!));\n", "")
+patch(
+    "lib/repository.ts",
+    'export function publicSettings(settings: AppSettings) {\n  return { ...settings, coreSymbols: parseJson<string[]>(settings.coreSymbolsJson, []) };\n}',
+    'export function publicSettings(settings: AppSettings) {\n  const current: Partial<AppSettings> = { ...settings };\n  delete current.maxRiskPerAlertUsdt;\n  delete current.dailyPauseUsdt;\n  delete current.maxDrawdownUsdt;\n  return { ...current, coreSymbols: parseJson<string[]>(settings.coreSymbolsJson, []), riskPolicy: publicRiskPolicy() };\n}',
+)
+patch("lib/repository.ts", "    requestedRiskUsdt: settings.maxRiskPerAlertUsdt,", "    requestedRiskUsdt: singleTradeRiskBudgetUsdt(account.equityUsdt),")
+
+patch(
+    "app/page.tsx",
+    "  maxRiskPerAlertUsdt: number;\n  dailyPauseUsdt: number;\n  maxDrawdownUsdt: number;\n",
+    "  riskPolicy: { singleTradeLossPct: number; minimumTp2NetProfitPct: number; maxMarginAllocationPct: number; dailyRealizedLossPausePct: number; peakDrawdownPct: number; maxLiveOpenPositions: number };\n",
+)
+regex_patch(
+    "app/page.tsx",
+    r'[ \t]*<div className="setting-row"><div><strong>单次最大计划亏损</strong>.*?\n[ \t]*<div className="setting-row"><div><strong>日内暂停 / 最大回撤</strong>.*?</div>',
+    '''      <div className="setting-row"><div><strong>资金比例风控</strong><span>风险随当前权益自动缩放，不再使用固定 U 金额；本金增减后无需重新设置</span></div><b>单笔 {settings?.riskPolicy.singleTradeLossPct ?? 1}% · 日内 {settings?.riskPolicy.dailyRealizedLossPausePct ?? 3}% · 峰值回撤 {settings?.riskPolicy.peakDrawdownPct ?? 10}%</b></div>
+      <div className="setting-row"><div><strong>仓位 / 收益门槛</strong><span>先按止损风险定仓位，再限制保证金；TP2 扣除成本后仍须达到权益比例门槛</span></div><b>保证金 ≤ {settings?.riskPolicy.maxMarginAllocationPct ?? 20}% · TP2 ≥ {settings?.riskPolicy.minimumTp2NetProfitPct ?? 1.5}%</b></div>''',
+)
+patch("app/page.tsx", "<strong>账户级熔断</strong> Gate 当日已实现亏损或实盘权益回撤触线后，锁定新开仓；已有仓位仍按保护规则结束。", "<strong>账户级熔断</strong> Gate 当日已实现亏损达到当日参考权益 3%，或实盘权益较峰值回撤达到 10% 后，锁定新开仓；已有仓位仍按保护规则结束。")
+
+patch("README.md", "- 实盘下单前按 Gate 含未实现盈亏的实际权益、1% 单笔风险、20% 单笔保证金、价格精度、实际张数、Gate taker 费率及进出场允许滑点复核；保守 TP2 预计净利润必须达到**当前账户权益的 1.5%**才允许提交，真实成交后再用成交价和当前权益复核一次。该比例是开仓前的保守预计门槛，不是成交利润承诺，跳空、流动性、资金费和交易所故障仍可能改变实际结果。", "- 全部资金风控统一按权益比例计算，不再使用固定 U 门槛：单笔结构止损风险 ≤ 当前权益 1%，单笔保证金 ≤ 当前权益 20%，保守 TP2 预计净利润 ≥ 当前权益 1.5%；Gate 当日已实现亏损达到当日参考权益 3% 或权益较实盘峰值回撤达到 10% 后锁定新开仓。真实成交后会按成交价和当前权益再次复核。")
+patch("README.md", "- 模拟交易使用同一套 TP2 收益闸门，并按模拟账户当时的实际权益计算 1.5%，而不是固定 15U；因此 500U 权益对应 7.5U、1,000U 对应 15U。", "- 模拟交易与 Gate 实盘使用同一套比例风控。以 500U / 1,000U / 2,000U 权益为例：单笔风险分别为 5U / 10U / 20U，TP2 最低净利润为 7.5U / 15U / 30U，日内暂停线约为 15U / 30U / 60U；所有金额都会随权益自动变化。")
+
+Path("tests/risk-policy.test.ts").write_text(
+    '''import assert from "node:assert/strict";
+import test from "node:test";
+import { RISK_POLICY, dailyLossPauseUsdt, maxMarginAllocationUsdt, minimumTp2NetProfitBudgetUsdt, peakDrawdownLimitUsdt, publicRiskPolicy, singleTradeRiskBudgetUsdt } from "../lib/risk-policy.ts";
+import { liveAccountRiskLockReason } from "../lib/live-risk.ts";
+
+test("all monetary risk gates scale with equity instead of fixed USDT amounts", () => {
+  assert.deepEqual(publicRiskPolicy(), { singleTradeLossPct: 1, minimumTp2NetProfitPct: 1.5, maxMarginAllocationPct: 20, dailyRealizedLossPausePct: 3, peakDrawdownPct: 10, maxLiveOpenPositions: 3 });
+  for (const [equity, risk, tp2, daily, drawdown, margin] of [[500,5,7.5,15,50,100],[1000,10,15,30,100,200],[2000,20,30,60,200,400]]) {
+    assert.equal(singleTradeRiskBudgetUsdt(equity), risk);
+    assert.equal(minimumTp2NetProfitBudgetUsdt(equity), tp2);
+    assert.equal(dailyLossPauseUsdt(equity, 0), daily);
+    assert.equal(peakDrawdownLimitUsdt(equity), drawdown);
+    assert.equal(maxMarginAllocationUsdt(equity), margin);
+  }
+  assert.equal(RISK_POLICY.singleTradeLossRate, 0.01);
+});
+
+test("daily pause references estimated start-of-day equity and drawdown references peak equity", () => {
+  assert.equal(dailyLossPauseUsdt(970, -30), 30);
+  assert.match(liveAccountRiskLockReason({ dailyRealizedPnlUsdt: -60, accountEquityUsdt: 1940, accountEquityPeakUsdt: 2000 }) ?? "", /3%/);
+  assert.match(liveAccountRiskLockReason({ dailyRealizedPnlUsdt: 0, accountEquityUsdt: 1800, accountEquityPeakUsdt: 2000 }) ?? "", /10%/);
+});
+'''
+)
+patch("package.json", "tests/contract-simulation.test.ts tests/gate-client.test.ts", "tests/risk-policy.test.ts tests/contract-simulation.test.ts tests/gate-client.test.ts")
