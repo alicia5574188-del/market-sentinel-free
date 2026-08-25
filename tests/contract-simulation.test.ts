@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assessTakeProfitViability, buildContractPlan, calculateContractPnl, MIN_TP2_NET_PROFIT_USDT } from "../lib/contract-simulation.ts";
+import {
+  assessTakeProfitViability,
+  buildContractPlan,
+  calculateContractPnl,
+  minimumTp2NetProfitUsdt,
+  MIN_TP2_NET_PROFIT_EQUITY_RATE,
+} from "../lib/contract-simulation.ts";
 
 test("高流动性低波动合约按止损风险和20%保证金上限选择杠杆", () => {
   const plan = buildContractPlan({
@@ -68,36 +74,48 @@ test("合约盈亏金额强制扣除往返成本", () => {
   });
 });
 
-test("QQQX式微小TP2即使使用3倍杠杆也被15U净利润闸门拒绝", () => {
+test("TP2最低净利润按当前账户权益1.5%计算", () => {
+  assert.equal(MIN_TP2_NET_PROFIT_EQUITY_RATE, 0.015);
+  assert.equal(minimumTp2NetProfitUsdt(1000), 15);
+  assert.equal(minimumTp2NetProfitUsdt(500), 7.5);
+  assert.equal(minimumTp2NetProfitUsdt(1250), 18.75);
+});
+
+test("QQQX式微小TP2即使使用3倍杠杆也被权益比例净利润闸门拒绝", () => {
   const result = assessTakeProfitViability({
     side: "SHORT",
     entryPrice: 711.08,
     takeProfitPrice: 709.830685714286,
     notionalUsdt: 595.65791728,
+    accountEquityUsdt: 1000,
     roundTripCostBps: 8,
   });
-  assert.equal(result.minimumNetProfitUsdt, MIN_TP2_NET_PROFIT_USDT);
+  assert.equal(result.minimumNetProfitUsdt, 15);
   assert.equal(result.netPnlUsdt, 0.57);
   assert.equal(result.passed, false);
 });
 
-test("预计TP2扣成本后达到15U才允许开仓", () => {
-  const atThreshold = assessTakeProfitViability({
+test("权益变化时TP2净利润门槛同步变化而不是固定15U", () => {
+  const fiveHundredEquity = assessTakeProfitViability({
+    side: "LONG",
+    entryPrice: 100,
+    takeProfitPrice: 101.58,
+    notionalUsdt: 500,
+    accountEquityUsdt: 500,
+    roundTripCostBps: 8,
+  });
+  const oneThousandEquity = assessTakeProfitViability({
     side: "LONG",
     entryPrice: 100,
     takeProfitPrice: 101.58,
     notionalUsdt: 1000,
+    accountEquityUsdt: 1000,
     roundTripCostBps: 8,
   });
-  const worthwhileOneX = assessTakeProfitViability({
-    side: "LONG",
-    entryPrice: 100,
-    takeProfitPrice: 111.75,
-    notionalUsdt: 170,
-    roundTripCostBps: 8,
-  });
-  assert.equal(atThreshold.netPnlUsdt, 15);
-  assert.equal(atThreshold.passed, true);
-  assert.ok(worthwhileOneX.netPnlUsdt > 15);
-  assert.equal(worthwhileOneX.passed, true);
+  assert.equal(fiveHundredEquity.minimumNetProfitUsdt, 7.5);
+  assert.equal(fiveHundredEquity.netPnlUsdt, 7.5);
+  assert.equal(fiveHundredEquity.passed, true);
+  assert.equal(oneThousandEquity.minimumNetProfitUsdt, 15);
+  assert.equal(oneThousandEquity.netPnlUsdt, 15);
+  assert.equal(oneThousandEquity.passed, true);
 });

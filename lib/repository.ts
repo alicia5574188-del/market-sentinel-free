@@ -558,6 +558,7 @@ export async function previewDecisionContract(packet: GateAnalysisPacket, settin
     entryPrice: plan.entryPrice,
     takeProfitPrice: plan.takeProfit2Price,
     notionalUsdt: contract.contractNotionalUsdt,
+    accountEquityUsdt: account.equityUsdt,
     roundTripCostBps: settings.roundTripCostBps,
   });
   return {

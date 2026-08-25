@@ -32,7 +32,7 @@ export type ContractPnl = {
   netPnlUsdt: number;
 };
 
-export const MIN_TP2_NET_PROFIT_USDT = 15;
+export const MIN_TP2_NET_PROFIT_EQUITY_RATE = 0.015;
 
 export type TakeProfitViability = ContractPnl & {
   grossMovePct: number;
@@ -53,6 +53,10 @@ function finitePositive(value: number, fallback = 0) {
 function round(value: number, digits = 8) {
   const scale = 10 ** digits;
   return Math.round((value + Number.EPSILON) * scale) / scale;
+}
+
+export function minimumTp2NetProfitUsdt(accountEquityUsdt: number) {
+  return round(finitePositive(accountEquityUsdt) * MIN_TP2_NET_PROFIT_EQUITY_RATE);
 }
 
 function liquidityLeverageCap(volumeUsd: number) {
@@ -141,14 +145,17 @@ export function calculateContractPnl(notionalUsdt: number, grossMovePct: number,
 
 /**
  * Projects the full-position net result at TP2 after the configured round-trip
- * cost. This gate is evaluated only after the real leverage and notional caps
- * have been applied, so leverage is never raised merely to make a trade pass.
+ * cost. The minimum useful profit scales with current account equity rather
+ * than a fixed USDT amount. This gate is evaluated only after the real leverage
+ * and notional caps have been applied, so leverage is never raised merely to
+ * make a trade pass.
  */
 export function assessTakeProfitViability(input: {
   side: ContractSide;
   entryPrice: number;
   takeProfitPrice: number;
   notionalUsdt: number;
+  accountEquityUsdt: number;
   roundTripCostBps: number;
   minimumNetProfitUsdt?: number;
 }): TakeProfitViability {
@@ -159,9 +166,10 @@ export function assessTakeProfitViability(input: {
     : 0;
   const grossMovePct = input.side === "SHORT" ? -rawMovePct : rawMovePct;
   const estimatedCostPct = Math.max(0, Number.isFinite(input.roundTripCostBps) ? input.roundTripCostBps : 0) / 100;
-  const minimumNetProfitUsdt = Math.max(0, Number.isFinite(input.minimumNetProfitUsdt)
+  const hasExplicitMinimum = typeof input.minimumNetProfitUsdt === "number" && Number.isFinite(input.minimumNetProfitUsdt);
+  const minimumNetProfitUsdt = Math.max(0, hasExplicitMinimum
     ? input.minimumNetProfitUsdt!
-    : MIN_TP2_NET_PROFIT_USDT);
+    : minimumTp2NetProfitUsdt(input.accountEquityUsdt));
   const pnl = calculateContractPnl(input.notionalUsdt, grossMovePct, estimatedCostPct);
   return {
     ...pnl,

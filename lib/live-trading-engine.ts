@@ -1,5 +1,6 @@
 import { getRuntimeBindings } from "./runtime-bindings";
 import { decryptGateCredentials, encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "./credential-vault";
+import { minimumTp2NetProfitUsdt } from "./contract-simulation.ts";
 import {
   GateApiError,
   GatePrivateClient,
@@ -11,7 +12,6 @@ import {
 } from "./gate-private";
 import {
   MAX_LIVE_OPEN_POSITIONS,
-  MINIMUM_LIVE_TP2_NET_PROFIT_USDT,
   attributablePositionCloses,
   buildLiveEntryPlan,
   gateAccountEquityUsdt,
@@ -257,8 +257,8 @@ function protectionBody(order: LiveOrderRecord, kind: "stop" | "takeProfit") {
       text: `${order.clientOrderText}${isStop ? "s" : "p"}`,
       reduce_only: true,
       // For TP2, keep the same bounded exit-slippage assumption used by the
-      // 15U gate. For a protective stop, use Gate's contract default so a
-      // tight profit-oriented cap does not make the emergency exit unfillable.
+      // equity-scaled profit gate. For a protective stop, use Gate's contract
+      // default so a tight profit-oriented cap does not make the exit unfillable.
       ...(isStop ? {} : { market_order_slip_ratio: order.marketOrderSlipRatio }),
     },
     trigger: {
@@ -468,6 +468,7 @@ async function validateRecoveredPostFill(client: GatePrivateClient, order: LiveO
     : 0;
   const fillPrice = weightedEntry || order.fillPrice || order.referencePrice;
   const accountEquityUsdt = gateAccountEquityUsdt(account);
+  const minimumNetTp2Usdt = minimumTp2NetProfitUsdt(accountEquityUsdt);
   const riskBudgetUsdt = Math.min(Math.max(0, settings.maxRiskPerAlertUsdt), accountEquityUsdt * 0.01);
   const filledStopRiskUsdt = contracts * contractMultiplier * Math.abs(fillPrice - order.stopLossPrice);
   const gateRoundTripCostBps = Math.max(0, number(contract.taker_fee_rate)) * 2 * 10_000;
@@ -487,8 +488,8 @@ async function validateRecoveredPostFill(client: GatePrivateClient, order: LiveO
       ? "Gate 成交恢复数据不足，无法确认权益、合约乘数、张数或成交价"
       : filledStopRiskUsdt > riskBudgetUsdt + 0.01
         ? `恢复成交后的结构止损风险 ${filledStopRiskUsdt.toFixed(2)}U，超过 ${riskBudgetUsdt.toFixed(2)}U 单笔上限`
-        : filledExpectedNetTp2Usdt < MINIMUM_LIVE_TP2_NET_PROFIT_USDT
-          ? `恢复成交后 TP2 预计净利润 ${filledExpectedNetTp2Usdt.toFixed(2)}U，低于 ${MINIMUM_LIVE_TP2_NET_PROFIT_USDT.toFixed(0)}U`
+        : filledExpectedNetTp2Usdt < minimumNetTp2Usdt
+          ? `恢复成交后 TP2 预计净利润 ${filledExpectedNetTp2Usdt.toFixed(2)}U，低于当前权益 1.5% 门槛 ${minimumNetTp2Usdt.toFixed(2)}U`
           : null;
   if (reason) {
     await addLiveAudit({ eventType: "recovered_post_fill_gate_failed", severity: "critical", liveOrderId: order.id, symbol: order.symbol, message: `${order.symbol} ${reason}，立即执行保护性平仓` });
@@ -712,8 +713,8 @@ async function submitCandidate(client: GatePrivateClient, trade: LiveTradeCandid
       await failClosedPosition(client, order, reason, { failureCode: "post_fill_risk_gate_failed" });
       return order;
     }
-    if (filledExpectedNetTp2Usdt < MINIMUM_LIVE_TP2_NET_PROFIT_USDT) {
-      const reason = `真实成交后 TP2 预计净利润 ${filledExpectedNetTp2Usdt.toFixed(2)}U，低于 ${MINIMUM_LIVE_TP2_NET_PROFIT_USDT.toFixed(0)}U`;
+    if (filledExpectedNetTp2Usdt < plan.minimumNetTp2Usdt) {
+      const reason = `真实成交后 TP2 预计净利润 ${filledExpectedNetTp2Usdt.toFixed(2)}U，低于当前权益 1.5% 门槛 ${plan.minimumNetTp2Usdt.toFixed(2)}U`;
       await addLiveAudit({ eventType: "post_fill_profit_gate_failed", severity: "critical", liveOrderId: order.id, symbol: trade.symbol, message: `${trade.symbol} ${reason}，立即执行保护性平仓` });
       await failClosedPosition(client, order, reason, { failureCode: "post_fill_profit_gate_failed" });
       return order;
@@ -987,6 +988,7 @@ async function reconcileOrder(client: GatePrivateClient, order: LiveOrderRecord,
 
 export async function saveGateCredentials(input: CredentialInput, actorAccountId: string) {
   if (!input.permissionsConfirmed) throw new Error("请先确认 Gate 只开启永续合约读写，并关闭钱包和提现权限");
+  if (input.environment !== "live") throw new Error("程序已停用 Gate TestNet 凭据；请填写 Gate 实盘 API");
   const control = await getLiveControl();
   if (control.entryEnabled) throw new Error("请先关闭自动开仓，再更换 Gate API 凭据");
   const existingCredential = await getLiveCredentialRecord();
@@ -1067,6 +1069,7 @@ export async function setAutomaticEntry(enabled: boolean, actorAccountId: string
   }
 
   const { client, credentials } = await loadClient();
+  if (credentials.environment !== "live") throw new Error("旧 Gate TestNet 凭据不能开启自动交易，请更换为 Gate 实盘 API");
   let verified: Awaited<ReturnType<typeof verifyGateCredentials>>;
   try {
     verified = await verifyGateCredentials(credentials);

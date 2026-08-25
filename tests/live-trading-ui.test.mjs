@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("owner-only live trading UI keeps credentials ephemeral and entry default-off", async () => {
-  const [page, schema] = await Promise.all([
+test("owner-only live trading UI keeps credentials ephemeral, live-only and entry default-off", async () => {
+  const [page, schema, credentialRoute, engine] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/live/credentials/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/live-trading-engine.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(page, /canManage \? \["机会", "雷达", "订单", "实盘", "设置"\]/);
@@ -15,14 +17,23 @@ test("owner-only live trading UI keeps credentials ephemeral and entry default-o
   assert.doesNotMatch(page, /localStorage|sessionStorage/);
   assert.match(page, /按住 1\.2 秒紧急停机/);
   assert.match(page, /包括非本程序仓位/);
-  assert.match(page, /useState<"live" \| "testnet">\("testnet"\)/);
+  assert.doesNotMatch(page, /gateEnvironment|setGateEnvironment|live-environment/);
+  assert.match(page, /API 环境：只接受 Gate 实盘 API；策略验证请使用程序内模拟交易/);
+  assert.match(page, /旧 TestNet（需更换）/);
+  assert.match(page, /credential\.environment !== "live"/);
+  assert.match(credentialRoute, /environment: "live"/);
+  assert.match(engine, /input\.environment !== "live"/);
+  assert.match(engine, /旧 Gate TestNet 凭据不能开启自动交易/);
+  // Legacy rows remain readable so old encrypted TestNet credentials can
+  // still be identified and replaced safely; every new save is live-only.
   assert.match(schema, /environment: text\("environment"[^\n]*default\("testnet"\)/);
   assert.match(schema, /entryEnabled: integer\("entry_enabled"[^\n]*default\(false\)/);
 });
 
-test("live UI exposes the real-funds and 15U safety gates", async () => {
+test("live UI exposes real-funds and current-equity safety gates", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
-  assert.match(page, /TP2 预计净利润 ≥ 15U/);
+  assert.match(page, /TP2 预计净利润 ≥ Gate 当前权益的 1\.5%/);
+  assert.match(page, /当前模拟权益 1\.5%/);
   assert.match(page, /Gate 当前权益 1% 单笔风险、20% 单笔保证金/);
   assert.match(page, /Gate 当日已实现亏损或实盘权益回撤触线后/);
   assert.match(page, /开启、部署或刷新页面都不会自动恢复交易/);
