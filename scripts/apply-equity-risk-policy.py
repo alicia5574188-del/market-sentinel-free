@@ -44,6 +44,11 @@ replace_exact(
     "    accountEquityUsdt: 900.01,",
     "    accountEquityUsdt: 970.01,",
 )
+replace_exact(
+    "tests/live-trading-ui.test.mjs",
+    '  assert.match(page, /Gate 当日已实现亏损或实盘权益回撤触线后/);',
+    '  assert.match(page, /当日参考权益 3%.*峰值回撤.*10%/);',
+)
 
 # This is a one-shot finalizer. Remove the migration machinery from the branch
 # before the verified commit is pushed so GitHub Actions cannot retrigger itself.
