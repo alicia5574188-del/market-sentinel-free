@@ -51,6 +51,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
       <body>
         {children}
         <UiStatusSemanticFix />
+        <script src="/live-position-mode-helper.js" defer />
       </body>
     </html>
   );
