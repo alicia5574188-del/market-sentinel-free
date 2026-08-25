@@ -17,6 +17,7 @@ export type LiveOrderRecord = typeof liveOrders.$inferSelect;
 export type LiveOrderState = LiveOrderRecord["state"];
 
 const ACTIVE_LIVE_STATES: LiveOrderState[] = ["submitting", "open", "protected", "closing"];
+const LEGACY_RAW_EQUITY_LOCK = /Gate 权益较实盘峰值回撤/;
 
 function parseJson<T>(value: string, fallback: T): T {
   try { return JSON.parse(value) as T; } catch { return fallback; }
@@ -25,7 +26,26 @@ function parseJson<T>(value: string, fallback: T): T {
 export async function getLiveControl(): Promise<LiveControlRecord> {
   const db = getDb();
   const [existing] = await db.select().from(liveTradingControl).where(eq(liveTradingControl.id, 1)).limit(1);
-  if (existing) return existing;
+  if (existing) {
+    // Older releases treated owner transfers between futures and spot as
+    // trading drawdown because they compared raw Gate account equity with an
+    // all-time raw-equity peak. That rule is retired. Clear only locks created
+    // by that exact legacy reason; every other risk/emergency lock remains.
+    if (existing.state === "risk_locked" && LEGACY_RAW_EQUITY_LOCK.test(existing.lastError ?? "")) {
+      const now = Date.now();
+      await db.update(liveTradingControl).set({
+        entryEnabled: false,
+        state: "disabled",
+        disabledAt: now,
+        lastError: null,
+        accountEquityPeakUsdt: existing.accountEquityLastUsdt ?? existing.accountEquityPeakUsdt,
+        updatedAt: now,
+      }).where(eq(liveTradingControl.id, 1));
+      const [cleared] = await db.select().from(liveTradingControl).where(eq(liveTradingControl.id, 1)).limit(1);
+      if (cleared) return cleared;
+    }
+    return existing;
+  }
   const now = Date.now();
   await db.insert(liveTradingControl).values({ id: 1, entryEnabled: false, state: "disabled", activationEpoch: 0, updatedAt: now }).onConflictDoNothing();
   const [created] = await db.select().from(liveTradingControl).where(eq(liveTradingControl.id, 1)).limit(1);
@@ -191,11 +211,12 @@ export async function getLivePerformanceGate(now = Date.now()) {
   const [recentLive, recentSimulation] = await Promise.all([
     db.select({
       realizedPnlUsdt: liveOrders.realizedPnlUsdt,
+      riskBudgetUsdt: liveOrders.riskBudgetUsdt,
       closedAt: liveOrders.closedAt,
     }).from(liveOrders)
       .where(eq(liveOrders.state, "closed"))
       .orderBy(desc(liveOrders.closedAt))
-      .limit(6),
+      .limit(200),
     db.select({
       netMovePct: tradeCases.netMovePct,
       exitAt: tradeCases.exitAt,
