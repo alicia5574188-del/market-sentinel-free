@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { LIVE_ENTRY_MAX_AGE_MS, liveEntryCandidateCutoff } from "../lib/live-trading-repository.ts";
+import { LIVE_ENTRY_MAX_AGE_MS, liveEntryCandidateCutoff } from "../lib/live-entry-freshness.ts";
 
 test("live entry candidates never predate the current enable session", () => {
   const now = 2_000_000;
