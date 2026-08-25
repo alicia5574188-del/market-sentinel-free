@@ -1,0 +1,121 @@
+import type { ShadowStrategyId } from "./shadow-strategy-engine.ts";
+
+export type StrategyResultSample = {
+  netMovePct: number | null;
+  exitAt: number | null;
+  regime: string;
+};
+
+export type StrategyStatistics = {
+  sampleCount: number;
+  wins: number;
+  losses: number;
+  flats: number;
+  winRate: number | null;
+  averageNetPct: number | null;
+  cumulativeNetPct: number;
+  profitFactor: number | null;
+  maxDrawdownPct: number;
+  maxLossStreak: number;
+  recentSampleCount: number;
+  recentAverageNetPct: number | null;
+  recentProfitFactor: number | null;
+  profitableRegimeCount: number;
+};
+
+export type StrategyPromotion = {
+  status: "collecting" | "watch" | "candidate";
+  label: string;
+  eligible: boolean;
+  requiredSamples: number;
+  reasons: string[];
+};
+
+function finite(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function profitFactor(values: number[]) {
+  const gains = values.filter((value) => value > 0).reduce((sum, value) => sum + value, 0);
+  const losses = Math.abs(values.filter((value) => value < 0).reduce((sum, value) => sum + value, 0));
+  if (losses === 0) return gains > 0 ? null : 0;
+  return gains / losses;
+}
+
+function maxDrawdown(values: number[]) {
+  let equity = 1;
+  let peak = 1;
+  let worst = 0;
+  for (const value of values) {
+    equity *= Math.max(1e-9, 1 + value / 100);
+    peak = Math.max(peak, equity);
+    worst = Math.max(worst, peak > 0 ? (peak - equity) / peak : 1);
+  }
+  return worst * 100;
+}
+
+function maxLossStreak(values: number[]) {
+  let current = 0;
+  let maximum = 0;
+  for (const value of values) {
+    if (value < 0) {
+      current += 1;
+      maximum = Math.max(maximum, current);
+    } else {
+      current = 0;
+    }
+  }
+  return maximum;
+}
+
+export function calculateStrategyStatistics(samples: StrategyResultSample[]): StrategyStatistics {
+  const ordered = [...samples]
+    .filter((sample) => finite(sample.netMovePct) && finite(sample.exitAt))
+    .sort((a, b) => (a.exitAt ?? 0) - (b.exitAt ?? 0));
+  const values = ordered.map((sample) => sample.netMovePct as number);
+  const recent = values.slice(-20);
+  const regime = new Map<string, number[]>();
+  for (const sample of ordered) {
+    const key = sample.regime || "unknown";
+    const bucket = regime.get(key) ?? [];
+    bucket.push(sample.netMovePct as number);
+    regime.set(key, bucket);
+  }
+  const profitableRegimeCount = [...regime.values()].filter((bucket) => bucket.length >= 5 && bucket.reduce((sum, value) => sum + value, 0) > 0).length;
+  const wins = values.filter((value) => value > 0.03).length;
+  const losses = values.filter((value) => value < -0.03).length;
+  return {
+    sampleCount: values.length,
+    wins,
+    losses,
+    flats: Math.max(0, values.length - wins - losses),
+    winRate: values.length ? wins / values.length : null,
+    averageNetPct: values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null,
+    cumulativeNetPct: values.reduce((sum, value) => sum + value, 0),
+    profitFactor: profitFactor(values),
+    maxDrawdownPct: maxDrawdown(values),
+    maxLossStreak: maxLossStreak(values),
+    recentSampleCount: recent.length,
+    recentAverageNetPct: recent.length ? recent.reduce((sum, value) => sum + value, 0) / recent.length : null,
+    recentProfitFactor: profitFactor(recent),
+    profitableRegimeCount,
+  };
+}
+
+export function evaluateStrategyPromotion(strategyId: ShadowStrategyId, stats: StrategyStatistics): StrategyPromotion {
+  const requiredSamples = strategyId === "relative_strength" ? 80 : 50;
+  const reasons: string[] = [];
+  if (stats.sampleCount < requiredSamples) reasons.push(`完整样本 ${stats.sampleCount}/${requiredSamples}`);
+  if ((stats.averageNetPct ?? 0) <= 0.08) reasons.push(`平均净收益需 > 0.08%，当前 ${(stats.averageNetPct ?? 0).toFixed(2)}%`);
+  if ((stats.profitFactor ?? 0) < 1.25) reasons.push(`Profit Factor 需 ≥ 1.25，当前 ${stats.profitFactor == null ? "无亏损样本" : stats.profitFactor.toFixed(2)}`);
+  if (stats.maxDrawdownPct > 8) reasons.push(`最大回撤需 ≤ 8%，当前 ${stats.maxDrawdownPct.toFixed(2)}%`);
+  if (stats.maxLossStreak > 5) reasons.push(`最大连续亏损需 ≤ 5，当前 ${stats.maxLossStreak}`);
+  if (stats.recentSampleCount < 20) reasons.push(`最近样本需满 20，当前 ${stats.recentSampleCount}`);
+  if ((stats.recentAverageNetPct ?? 0) <= 0) reasons.push(`最近 20 笔平均净结果需 > 0，当前 ${(stats.recentAverageNetPct ?? 0).toFixed(2)}%`);
+  if (stats.recentProfitFactor != null && stats.recentProfitFactor < 1.10) reasons.push(`最近 20 笔 Profit Factor 需 ≥ 1.10，当前 ${stats.recentProfitFactor.toFixed(2)}`);
+  if (stats.profitableRegimeCount < 2 && stats.sampleCount >= requiredSamples) reasons.push(`至少两个市场状态有正收益，当前 ${stats.profitableRegimeCount}`);
+  const eligible = reasons.length === 0;
+  if (eligible) return { status: "candidate", label: "达到实盘候选线（仍需人工批准）", eligible: true, requiredSamples, reasons: [] };
+  if (stats.sampleCount >= Math.min(30, requiredSamples)) return { status: "watch", label: "观察期", eligible: false, requiredSamples, reasons };
+  return { status: "collecting", label: "样本积累中", eligible: false, requiredSamples, reasons };
+}
