@@ -48,8 +48,9 @@ export function evaluateLivePerformanceGate(input: {
     .filter((item) => finite(item.closedAt))
     .sort((a, b) => (b.closedAt ?? 0) - (a.closedAt ?? 0));
   const latestLive = recentLive[0] ?? null;
-  const liveValues = recentLive.filter((item) => finite(item.realizedPnlUsdt)).map((item) => item.realizedPnlUsdt as number);
-  const liveLossStreak = lossStreak(liveValues);
+  const attributedLive = recentLive.filter((item) => finite(item.realizedPnlUsdt));
+  const latestAttributedLive = attributedLive[0] ?? null;
+  const liveLossStreak = lossStreak(attributedLive.map((item) => item.realizedPnlUsdt as number));
 
   const recentSimulation = [...input.recentSimulation]
     .filter((item) => finite(item.exitAt) && finite(item.netMovePct))
@@ -79,8 +80,8 @@ export function evaluateLivePerformanceGate(input: {
     };
   }
 
-  if (liveLossStreak >= 2 && finite(latestLive?.closedAt)) {
-    const cooldownUntil = (latestLive!.closedAt as number) + LIVE_LOSS_STREAK_COOLDOWN_MS;
+  if (liveLossStreak >= 2 && finite(latestAttributedLive?.closedAt)) {
+    const cooldownUntil = (latestAttributedLive!.closedAt as number) + LIVE_LOSS_STREAK_COOLDOWN_MS;
     if (cooldownUntil > now) {
       return {
         ...base,
