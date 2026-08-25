@@ -8,6 +8,7 @@ import {
   tradeCases,
 } from "../db/schema";
 import type { EncryptedGateCredentials } from "./credential-vault";
+import { liveEntryCandidateCutoff } from "./live-entry-freshness";
 
 export type LiveCredentialRecord = typeof liveExchangeCredentials.$inferSelect;
 export type LiveControlRecord = typeof liveTradingControl.$inferSelect;
@@ -15,16 +16,9 @@ export type LiveOrderRecord = typeof liveOrders.$inferSelect;
 export type LiveOrderState = LiveOrderRecord["state"];
 
 const ACTIVE_LIVE_STATES: LiveOrderState[] = ["submitting", "open", "protected", "closing"];
-export const LIVE_ENTRY_MAX_AGE_MS = 2 * 60 * 1_000;
 
 function parseJson<T>(value: string, fallback: T): T {
   try { return JSON.parse(value) as T; } catch { return fallback; }
-}
-
-export function liveEntryCandidateCutoff(enabledAt: number, now = Date.now()) {
-  const safeNow = Number.isFinite(now) ? now : Date.now();
-  const safeEnabledAt = Number.isFinite(enabledAt) ? Math.max(0, enabledAt) : safeNow;
-  return Math.max(safeEnabledAt, safeNow - LIVE_ENTRY_MAX_AGE_MS);
 }
 
 export async function getLiveControl(): Promise<LiveControlRecord> {
