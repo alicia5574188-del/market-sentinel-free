@@ -211,9 +211,10 @@ export async function getLivePerformanceGate(now = Date.now()) {
   const [recentLive, recentSimulation] = await Promise.all([
     db.select({
       realizedPnlUsdt: liveOrders.realizedPnlUsdt,
-      riskBudgetUsdt: liveOrders.riskBudgetUsdt,
+      riskBudgetUsdt: tradeCases.riskBudgetUsdt,
       closedAt: liveOrders.closedAt,
     }).from(liveOrders)
+      .leftJoin(tradeCases, eq(liveOrders.tradeCaseId, tradeCases.id))
       .where(eq(liveOrders.state, "closed"))
       .orderBy(desc(liveOrders.closedAt))
       .limit(200),
