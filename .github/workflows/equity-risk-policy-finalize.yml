@@ -1,0 +1,60 @@
+name: Finalize equity-scaled risk policy
+
+on:
+  push:
+    branches:
+      - chatgpt/equity-scaled-risk-policy
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: chatgpt/equity-scaled-risk-policy
+
+      - name: Use Node.js 22.15
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.15.0"
+          cache: npm
+
+      - name: Apply one-shot cleanup
+        run: python scripts/apply-equity-risk-policy.py
+
+      - name: Install
+        run: npm ci
+
+      - name: Audit legacy fixed-USDT runtime references
+        run: |
+          if grep -R -n -E 'settings\.(maxRiskPerAlertUsdt|dailyPauseUsdt|maxDrawdownUsdt)' app lib worker; then exit 1; fi
+          if grep -n -E 'maxRiskPerAlertUsdt|dailyPauseUsdt|maxDrawdownUsdt' app/page.tsx; then exit 1; fi
+
+      - name: Signal and risk tests
+        run: npm run test:signals
+
+      - name: Build and UI tests
+        run: npm test
+
+      - name: Lint
+        run: npm run lint
+
+      - name: TypeScript
+        run: npx tsc --noEmit --incremental false
+
+      - name: Commit verified final state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Finalize equity-scaled risk policy"
+            git push origin HEAD:chatgpt/equity-scaled-risk-policy
+          fi
