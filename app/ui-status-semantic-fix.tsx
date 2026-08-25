@@ -19,53 +19,14 @@ function normalizeRiskCopy() {
   }
 }
 
-function ensureLiveOrdersShortcut() {
-  if (window.location.pathname !== "/") return;
-  const card = document.querySelector<HTMLElement>(".live-trading-card");
-  if (!card || card.querySelector('[data-live-orders-shortcut="true"]')) return;
-  const heading = card.querySelector<HTMLElement>(".utility-heading");
+function normalizeOrderLedgerHeading() {
+  const ledger = document.querySelector<HTMLElement>(".order-ledger");
+  const heading = ledger?.querySelector<HTMLElement>(".utility-heading");
   if (!heading) return;
-
-  const row = document.createElement("div");
-  row.dataset.liveOrdersShortcut = "true";
-  row.style.display = "grid";
-  row.style.gridTemplateColumns = "1fr auto";
-  row.style.alignItems = "center";
-  row.style.gap = "10px";
-  row.style.margin = "10px 0 2px";
-  row.style.padding = "10px 11px";
-  row.style.border = "1px solid rgba(67,199,239,.24)";
-  row.style.borderRadius = "12px";
-  row.style.background = "rgba(67,199,239,.07)";
-
-  const copy = document.createElement("div");
-  const title = document.createElement("strong");
-  title.textContent = "Gate 实盘订单";
-  title.style.display = "block";
-  title.style.fontSize = "12px";
-  const note = document.createElement("span");
-  note.textContent = "真实仓位、已平仓、盈亏和异常记录单独查看";
-  note.style.display = "block";
-  note.style.marginTop = "3px";
-  note.style.fontSize = "10px";
-  note.style.color = "#8295a6";
-  copy.append(title, note);
-
-  const link = document.createElement("a");
-  link.href = "/live-orders";
-  link.textContent = "查看实盘订单";
-  link.style.color = "#43c7ef";
-  link.style.textDecoration = "none";
-  link.style.fontSize = "11px";
-  link.style.fontWeight = "800";
-  link.style.whiteSpace = "nowrap";
-  link.style.padding = "8px 9px";
-  link.style.border = "1px solid rgba(67,199,239,.34)";
-  link.style.borderRadius = "9px";
-  link.style.background = "rgba(67,199,239,.08)";
-
-  row.append(copy, link);
-  heading.insertAdjacentElement("afterend", row);
+  const eyebrow = heading.querySelector<HTMLElement>(".eyebrow");
+  const title = heading.querySelector<HTMLElement>("strong");
+  if (eyebrow?.textContent?.includes("1000U 模拟合约账户")) eyebrow.textContent = "模拟 + Gate 实盘 · 两套账本分开";
+  if (title?.textContent?.includes("确认 → 持仓 → 平仓 → 复盘学习")) title.textContent = "订单账本与交易复盘";
 }
 
 function normalizeUiSemantics() {
@@ -90,7 +51,7 @@ function normalizeUiSemantics() {
   }
 
   normalizeRiskCopy();
-  ensureLiveOrdersShortcut();
+  normalizeOrderLedgerHeading();
 }
 
 export function UiStatusSemanticFix() {
