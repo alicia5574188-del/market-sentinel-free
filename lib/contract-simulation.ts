@@ -166,7 +166,8 @@ export function assessTakeProfitViability(input: {
     : 0;
   const grossMovePct = input.side === "SHORT" ? -rawMovePct : rawMovePct;
   const estimatedCostPct = Math.max(0, Number.isFinite(input.roundTripCostBps) ? input.roundTripCostBps : 0) / 100;
-  const minimumNetProfitUsdt = Math.max(0, Number.isFinite(input.minimumNetProfitUsdt)
+  const hasExplicitMinimum = typeof input.minimumNetProfitUsdt === "number" && Number.isFinite(input.minimumNetProfitUsdt);
+  const minimumNetProfitUsdt = Math.max(0, hasExplicitMinimum
     ? input.minimumNetProfitUsdt!
     : minimumTp2NetProfitUsdt(input.accountEquityUsdt));
   const pnl = calculateContractPnl(input.notionalUsdt, grossMovePct, estimatedCostPct);
