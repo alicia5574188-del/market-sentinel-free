@@ -104,7 +104,36 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
     : chooseDeepUniverse(universe, coreSymbols, priorityOpenSymbols, options.deepLimit ?? settings.deepScanLimit);
   const analyzed: GateAnalysisPacket[] = [];
   const lifecycle: { symbol: string; result: LifecycleResult }[] = [];
-  const shadowLifecycle: { symbol: string; opened: number; closed: number; evaluated: number }[] = [];
+  const shadowLifecycle: {
+    symbol: string;
+    observedAt: number;
+    opened: number;
+    closed: number;
+    evaluated: number;
+    ready: number;
+    watching: number;
+    blocked: number;
+    error: string | null;
+    strategies: {
+      strategyId: string;
+      label: string;
+      state: "ready" | "watching" | "blocked";
+      side: "LONG" | "SHORT" | "WAIT";
+      score: number;
+      confidence: number;
+      regime: {
+        kind: string;
+        trendScore: number;
+        atrPct: number | null;
+        compressionRatio: number | null;
+        rangeWidthPct: number | null;
+        relativeStrength24h: number | null;
+        reason: string;
+      };
+      reasons: string[];
+      blockers: string[];
+    }[];
+  }[] = [];
   const failures: { symbol: string; error: string }[] = [];
   let delivered = 0;
   let attempted = 0;
@@ -118,9 +147,14 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
         alertStyle: settings.alertStyle,
         detail: "scan",
       });
-      const shadowCandlesPromise = fetchGateChartCandles(ticker.symbol, Date.now() - 18 * 60 * 60_000, Date.now()).catch(() => []);
-      const [packet, shadowCandles] = await Promise.all([packetPromise, shadowCandlesPromise]);
-      return { packet, shadowCandles };
+      const shadowCandlesPromise = fetchGateChartCandles(ticker.symbol, Date.now() - 18 * 60 * 60_000, Date.now())
+        .then((candles) => ({ candles, error: null as string | null }))
+        .catch((error) => ({
+          candles: [],
+          error: error instanceof Error ? error.message : "V3 影子 5m K 线读取失败",
+        }));
+      const [packet, shadowData] = await Promise.all([packetPromise, shadowCandlesPromise]);
+      return { packet, shadowCandles: shadowData.candles, shadowError: shadowData.error };
     }));
     for (let index = 0; index < results.length; index += 1) {
       const result = results[index];
@@ -128,7 +162,7 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
         failures.push({ symbol: targets[index].symbol, error: result.reason instanceof Error ? result.reason.message : "analysis failed" });
         continue;
       }
-      const { packet, shadowCandles } = result.value;
+      const { packet, shadowCandles, shadowError } = result.value;
       analyzed.push(packet);
       const saved = await processDecision(packet, settings);
       lifecycle.push({ symbol: packet.symbol, result: saved });
@@ -152,7 +186,41 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
           candles5m: shadowCandles,
         });
         const shadow = await processShadowStrategies(packet, shadowCandles, shadowSignals, settings);
-        shadowLifecycle.push({ symbol: packet.symbol, ...shadow });
+        shadowLifecycle.push({
+          symbol: packet.symbol,
+          observedAt: packet.observedAt,
+          ...shadow,
+          ready: shadowSignals.filter((signal) => signal.state === "ready").length,
+          watching: shadowSignals.filter((signal) => signal.state === "watching").length,
+          blocked: shadowSignals.filter((signal) => signal.state === "blocked").length,
+          error: null,
+          strategies: shadowSignals.map((signal) => ({
+            strategyId: signal.strategyId,
+            label: signal.label,
+            state: signal.state,
+            side: signal.side,
+            score: signal.score,
+            confidence: signal.confidence,
+            regime: signal.regime,
+            reasons: signal.reasons,
+            blockers: signal.blockers,
+          })),
+        });
+      } else {
+        const message = shadowError ?? "V3 影子 5m K 线为空";
+        failures.push({ symbol: packet.symbol, error: `V3 策略数据：${message}` });
+        shadowLifecycle.push({
+          symbol: packet.symbol,
+          observedAt: packet.observedAt,
+          opened: 0,
+          closed: 0,
+          evaluated: 0,
+          ready: 0,
+          watching: 0,
+          blocked: 0,
+          error: message,
+          strategies: [],
+        });
       }
 
       if (saved.shouldNotify && saved.notification && saved.trade && vapidConfig) {
