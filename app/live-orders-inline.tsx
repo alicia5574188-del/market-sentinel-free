@@ -80,42 +80,53 @@ export function LiveOrdersInline() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [forbidden, setForbidden] = useState(false);
 
   useEffect(() => {
+    let currentHost: HTMLElement | null = null;
     const syncHost = () => {
-      const ledger = document.querySelector<HTMLElement>(".order-ledger");
-      if (!ledger) {
-        setHost((current) => current?.isConnected ? current : null);
+      const card = document.querySelector<HTMLElement>(".live-trading-card");
+      if (!card) {
+        if (currentHost && !currentHost.isConnected) {
+          currentHost = null;
+          setHost(null);
+        }
         return;
       }
-      let target = ledger.querySelector<HTMLElement>('[data-inline-live-orders="true"]');
+
+      card.querySelector<HTMLElement>('[data-live-orders-shortcut="true"]')?.remove();
+      const legacyList = card.querySelector<HTMLElement>(".live-order-list");
+      if (legacyList) {
+        legacyList.style.display = "none";
+        const legacyTitle = legacyList.previousElementSibling as HTMLElement | null;
+        if (legacyTitle?.textContent?.includes("实盘订单账本")) legacyTitle.style.display = "none";
+      }
+
+      let target = card.querySelector<HTMLElement>('[data-inline-live-orders="true"]');
       if (!target) {
         target = document.createElement("div");
         target.dataset.inlineLiveOrders = "true";
-        const heading = ledger.querySelector<HTMLElement>(".utility-heading");
-        if (heading) heading.insertAdjacentElement("afterend", target);
-        else ledger.prepend(target);
+        const statusGrid = card.querySelector<HTMLElement>(".live-status-grid");
+        if (statusGrid) statusGrid.insertAdjacentElement("afterend", target);
+        else card.prepend(target);
       }
+      currentHost = target;
       setHost((current) => current === target ? current : target);
     };
+
     syncHost();
     const observer = new MutationObserver(syncHost);
     observer.observe(document.body, { subtree: true, childList: true });
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      currentHost?.remove();
+    };
   }, []);
 
   const load = useCallback(async () => {
-    if (!host || forbidden) return;
+    if (!host) return;
     setLoading(true);
     try {
       const response = await fetch("/api/live/status", { cache: "no-store", credentials: "same-origin" });
-      if (response.status === 403) {
-        setForbidden(true);
-        setSnapshot(null);
-        setError(null);
-        return;
-      }
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload?.error ?? `实盘订单读取失败 (${response.status})`);
       const next = payload as LiveSnapshot;
@@ -130,14 +141,14 @@ export function LiveOrdersInline() {
     } finally {
       setLoading(false);
     }
-  }, [forbidden, host]);
+  }, [host]);
 
   useEffect(() => {
-    if (!host || forbidden) return;
+    if (!host) return;
     void load();
     const timer = window.setInterval(() => { if (!document.hidden) void load(); }, 10_000);
     return () => window.clearInterval(timer);
-  }, [forbidden, host, load]);
+  }, [host, load]);
 
   const orders = snapshot?.orders ?? [];
   const active = useMemo(() => orders.filter((order) => ACTIVE.has(order.state)), [orders]);
@@ -148,14 +159,14 @@ export function LiveOrdersInline() {
   const wins = settled.filter((order) => (order.realizedPnlUsdt ?? 0) > 0).length;
   const selected = orders.find((order) => order.id === selectedId) ?? null;
 
-  if (!host || forbidden) return null;
+  if (!host) return null;
 
   return createPortal(<section aria-label="Gate 实盘订单内嵌账本" style={{ margin: "12px 0 18px", padding: "12px 0 16px", borderBottom: "1px solid rgba(151,174,193,.12)" }}>
-    <div className="section-title"><span>Gate 实盘订单</span><small>真实资金 · 与下方模拟订单完全分开</small></div>
+    <div className="section-title"><span>Gate 实盘订单</span><small>真实资金 · 与模拟订单完全分开 · 10 秒刷新</small></div>
 
     <div className="account-summary">
       <div><span>Gate 当前权益</span><strong>{snapshot?.control.accountEquityLastUsdt == null ? "--" : `${snapshot.control.accountEquityLastUsdt.toFixed(2)}U`}</strong><small>{snapshot?.control.entryEnabled ? "自动实盘已开启" : "自动实盘已关闭"}</small></div>
-      <div><span>活动实盘</span><strong>{active.length}</strong><small>提交 / 持仓 / 保护 / 平仓中</small></div>
+      <div><span>活动实盘</span><strong>{active.length}</strong><small>持仓 / 保护 / 平仓中</small></div>
       <div><span>已结算</span><strong>{settled.length}</strong><small>真实 Gate 成交结果</small></div>
       <div><span>真实累计盈亏</span><strong className={realized >= 0 ? "good" : "danger"}>{usdt(realized)}</strong><small>胜率 {settled.length ? `${(wins / settled.length * 100).toFixed(1)}%` : "--"}</small></div>
     </div>
@@ -166,7 +177,7 @@ export function LiveOrdersInline() {
     <div className="section-title"><span>实盘持仓 / 活动订单</span><small>{active.length} 笔</small></div>
     <div className="order-list">{active.length ? active.map((order) => <LiveOrderRow key={order.id} order={order} selected={selectedId === order.id} onSelect={() => setSelectedId(order.id)} />) : <p className="empty-note">当前没有 Gate 实盘持仓或活动订单。</p>}</div>
 
-    <div className="section-title"><span>实盘已平仓订单</span><small>每笔保留真实成交与盈亏</small></div>
+    <div className="section-title"><span>实盘已平仓订单</span><small>每单保留真实成交与盈亏</small></div>
     <div className="order-list closed-orders">{closed.length ? closed.map((order) => <LiveOrderRow key={order.id} order={order} selected={selectedId === order.id} onSelect={() => setSelectedId(order.id)} />) : <p className="empty-note">还没有已平仓的 Gate 实盘订单。</p>}</div>
 
     {problems.length > 0 && <><div className="section-title"><span>未成交 / 异常记录</span><small>{problems.length} 笔</small></div><div className="order-list">{problems.map((order) => <LiveOrderRow key={order.id} order={order} selected={selectedId === order.id} onSelect={() => setSelectedId(order.id)} />)}</div></>}
@@ -174,7 +185,7 @@ export function LiveOrdersInline() {
     {selected ? <>
       <div className="section-title selected-order-title"><span>实盘订单详情</span><small>ID {selected.id.slice(0, 8)}</small></div>
       <LiveOrderDetail order={selected} />
-    </> : !loading && <p className="empty-note">尚无 Gate 实盘订单。实盘产生订单后会直接显示在这里。</p>}
+    </> : !loading && <p className="empty-note">尚无 Gate 实盘订单。产生真实订单后会直接显示在这里。</p>}
   </section>, host);
 }
 
@@ -199,7 +210,7 @@ function LiveOrderDetail({ order }: { order: LiveOrder }) {
       <div><span>止损</span><strong className="danger">{price(order.stopLossPrice)}</strong></div>
       <div><span>TP2</span><strong className="good">{price(order.takeProfitPrice)}</strong></div>
       <div><span>TP2预计净利润</span><strong>{usdt(order.expectedNetTp2Usdt)}</strong></div>
-      <div><span>真实已实现盈亏</span><strong className={(order.realizedPnlUsdt ?? 0) >= 0 ? "good" : "danger"}>{order.state === "closed" ? usdt(order.realizedPnlUsdt) : "未结算"}</strong></div>
+      <div><span>真实已实现盈亏</span><strong className={(order.realizedPnlUsdt ?? 0) >= 0 ? "good" : "danger"}>{order.state === "closed" ? (order.realizedPnlUsdt == null ? "待归因" : usdt(order.realizedPnlUsdt)) : "未结算"}</strong></div>
       <div><span>开仓时 Gate 权益</span><strong>{order.entryEquityUsdt == null ? "--" : `${order.entryEquityUsdt.toFixed(2)}U`}</strong></div>
       <div><span>策略订单 ID</span><strong>{order.tradeCaseId.slice(0, 8)}</strong></div>
     </div>
