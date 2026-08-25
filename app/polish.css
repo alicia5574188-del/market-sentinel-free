@@ -1,0 +1,69 @@
+/* Market Sentinel compact product pass — keep each tab focused and readable. */
+
+.utility-card {
+  min-height: 0;
+  padding: 13px;
+  box-shadow: 0 10px 28px rgba(0,0,0,.13);
+}
+
+.utility-heading {
+  gap: 8px;
+  padding-bottom: 10px;
+}
+
+.utility-heading strong { font-size: 14px; }
+.replay-banner { margin: 8px 0 10px; }
+
+/* 机会：结论优先，减少装饰占位。 */
+.market-status,
+.decision-card,
+.opportunity-section {
+  box-shadow: 0 10px 28px rgba(0,0,0,.13);
+}
+.market-status { padding: 12px 13px 11px; }
+.status-grid { margin-top: 10px; }
+.opportunity-section { padding: 13px; }
+.stage-guide { margin: 8px 0 5px; padding: 7px; }
+
+/* 雷达：数据源和事件保持一屏可扫读。 */
+.utility-card:has(.radar-health) .radar-health { margin: 10px 0; }
+.utility-card:has(.radar-health) .data-row { padding: 9px 2px; }
+.utility-card:has(.radar-health) .event-title { margin-top: 12px; }
+.utility-card:has(.radar-health) .event-row { padding: 9px 2px; }
+
+/* 订单：只有一套成长策略账本；统计与明细靠近。 */
+.order-ledger { padding-bottom: 14px; }
+.order-ledger .account-summary { margin: 10px 0 6px; }
+.order-ledger .calibration-grid { margin: 8px 0; }
+.order-ledger .metric-strip { margin-bottom: 9px; }
+.order-ledger > .section-title { margin-top: 12px; }
+.order-ledger .order-row { padding: 9px 2px; }
+.order-ledger .selected-order-title { margin-top: 14px !important; }
+.order-ledger .trade-detail { margin-top: 7px; box-shadow: none; }
+.order-ledger .memory-card { margin-top: 8px; }
+
+/* 实盘：账户状态 -> 真实订单 -> 控制与安全，避免重复订单列表。 */
+.live-trading-card { padding-bottom: 14px; }
+.live-trading-card .live-status-grid { margin-top: 10px; }
+.live-trading-card .live-section-title { margin-top: 14px; }
+.live-trading-card .live-control-row { min-height: 62px; }
+.live-trading-card .safety-list { margin-top: 9px; gap: 5px; }
+.live-trading-card .safety-list > div { padding: 7px; }
+.live-trading-card .live-order-list,
+.live-trading-card .live-section-title:has(+ .live-order-list) { display: none !important; }
+
+/* 设置：减少无意义高度，仍保留完整安全说明。 */
+.utility-card:has(.setting-group) .account-panel { margin-top: 10px; padding: 10px; }
+.utility-card:has(.setting-group) .setting-group { margin-top: 11px; padding-bottom: 11px; }
+.utility-card:has(.setting-group) .setting-row { min-height: 58px; gap: 10px; }
+.utility-card:has(.setting-group) .risk-note { margin: 9px 0 2px; }
+
+@media (max-width: 420px) {
+  .app-shell { padding-left: 11px; padding-right: 11px; }
+  .utility-card { padding: 12px; border-radius: 14px; }
+  .market-status, .decision-card, .opportunity-section { border-radius: 14px; }
+  .account-summary { gap: 5px; }
+  .account-summary > div { padding: 9px; }
+  .live-status-grid { gap: 5px; }
+  .closed-orders { max-height: 340px; }
+}
