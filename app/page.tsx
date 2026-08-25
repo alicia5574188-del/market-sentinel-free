@@ -169,9 +169,7 @@ type Settings = {
   minConfidence: number;
   roundTripCostBps: number;
   trialCapitalUsdt: number;
-  maxRiskPerAlertUsdt: number;
-  dailyPauseUsdt: number;
-  maxDrawdownUsdt: number;
+  riskPolicy: { singleTradeLossPct: number; minimumTp2NetProfitPct: number; maxMarginAllocationPct: number; dailyRealizedLossPausePct: number; peakDrawdownPct: number; maxLiveOpenPositions: number };
   scanEnabled: boolean;
   pushEnabled: boolean;
   coreSymbols: string[];
@@ -1268,7 +1266,7 @@ export default function Home() {
       <div className="safety-list">
         <div><Icon name="shield" size={14}/><span><strong>二次收益闸门</strong> 下单前按 Gate 实时价格、价格精度、实际费率和双向允许滑点重新确认 TP2 预计净利润 ≥ Gate 当前权益的 1.5%。</span></div>
         <div><Icon name="shield" size={14}/><span><strong>按实盘资金缩仓</strong> 仓位同时受 Gate 当前权益 1% 单笔风险、20% 单笔保证金和实际可用余额限制，只会缩小，不会放大模拟计划。</span></div>
-        <div><Icon name="shield" size={14}/><span><strong>账户级熔断</strong> Gate 当日已实现亏损或实盘权益回撤触线后，锁定新开仓；已有仓位仍按保护规则结束。</span></div>
+        <div><Icon name="shield" size={14}/><span><strong>账户级熔断</strong> Gate 当日已实现亏损达到当日参考权益 3%，或实盘权益较峰值回撤达到 10% 后，锁定新开仓；已有仓位仍按保护规则结束。</span></div>
         <div><Icon name="shield" size={14}/><span><strong>实盘异常提醒</strong> 保护确认、实际平仓、风控锁定和停机结果只推送给保存密钥的所有者账户。</span></div>
         <div><Icon name="shield" size={14}/><span><strong>成交即保护</strong> 止损与 TP2 必须同时在交易所确认；建立失败则自动平掉该仓并锁定新开仓。</span></div>
         <div><Icon name="shield" size={14}/><span><strong>止损优先成交</strong> TP2 使用收益闸门中的受限滑点，保护止损使用 Gate 合约默认市价滑点上限，避免过窄限制导致止损触发却无法成交；跳空时实际亏损仍可能超过计划值。</span></div>
@@ -1289,8 +1287,8 @@ export default function Home() {
       <div className="setting-group"><span>提醒风格</span><div className="segmented">{(["early", "balanced", "confirmed"] as AlertStyle[]).map((style) => <button key={style} disabled={!canManage} className={settings?.alertStyle === style ? "active" : ""} onClick={() => void saveSettings({ alertStyle: style })}>{STYLE_META[style].label}</button>)}</div><p>{STYLE_META[settings?.alertStyle ?? "balanced"].note}</p></div>
       <div className="setting-row"><div><strong>Gate 全市场监测</strong><span>{background?.active ? `每分钟初筛成交额前 ${settings?.universeLimit ?? 30}；每批深度复核 ${background.deepBatchSize ?? 3} 个持仓、异动与轮换标的` : `成交额前 ${settings?.universeLimit ?? 30} 初筛；核心与异动前 ${settings?.deepScanLimit ?? 8} 深度复核`}</span></div><button disabled={!canManage} className={`switch ${settings?.scanEnabled ? "on" : ""}`} onClick={() => void saveSettings({ scanEnabled: !settings?.scanEnabled })} aria-label="切换全市场监测"><i/></button></div>
       <div className="setting-row"><div><strong>发出确认的最低可信度</strong><span>低于阈值只记录、不推送</span></div><label className="number-control"><input disabled={!canManage} type="number" min="55" max="90" value={settings?.minConfidence ?? 72} onChange={(event) => setSettings(settings ? { ...settings, minConfidence: Number(event.target.value) } : settings)} onBlur={(event) => void saveSettings({ minConfidence: Number(event.target.value) })}/><b>%</b></label></div>
-      <div className="setting-row"><div><strong>单次最大计划亏损</strong><span>上限 10U = 初始本金 1%；先定风险，再计算杠杆与仓位</span></div><label className="number-control"><input disabled={!canManage} type="number" min="1" max="10" step="1" value={settings?.maxRiskPerAlertUsdt ?? 10} onChange={(event) => setSettings(settings ? { ...settings, maxRiskPerAlertUsdt: Number(event.target.value) } : settings)} onBlur={(event) => void saveSettings({ maxRiskPerAlertUsdt: Number(event.target.value) })}/><b>U</b></label></div>
-      <div className="setting-row"><div><strong>日内暂停 / 最大回撤</strong><span>Gate 实盘触线后自动锁定新开仓；已有仓位继续受保护直到策略结束</span></div><b>{settings?.dailyPauseUsdt ?? 30}U / {settings?.maxDrawdownUsdt ?? 100}U</b></div>
+      <div className="setting-row"><div><strong>资金比例风控</strong><span>风险随当前权益自动缩放，不再使用固定 U 金额；本金增减后无需重新设置</span></div><b>单笔 {settings?.riskPolicy.singleTradeLossPct ?? 1}% · 日内 {settings?.riskPolicy.dailyRealizedLossPausePct ?? 3}% · 峰值回撤 {settings?.riskPolicy.peakDrawdownPct ?? 10}%</b></div>
+      <div className="setting-row"><div><strong>仓位 / 收益门槛</strong><span>先按止损风险定仓位，再限制保证金；TP2 扣除成本后仍须达到权益比例门槛</span></div><b>保证金 ≤ {settings?.riskPolicy.maxMarginAllocationPct ?? 20}% · TP2 ≥ {settings?.riskPolicy.minimumTp2NetProfitPct ?? 1.5}%</b></div><b>{settings?.dailyPauseUsdt ?? 30}U / {settings?.maxDrawdownUsdt ?? 100}U</b></div>
       <div className="setting-row"><div><strong>往返成本假设</strong><span>统计净结果时强制扣除手续费与滑点</span></div><b>{settings?.roundTripCostBps ?? 8} bps</b></div>
       <div className="setting-row"><div><strong>iPhone Web Push</strong><span>{notice}</span></div><button className={`text-button ${pushSubscribed ? "danger-button" : ""}`} onClick={() => void togglePush()}>{pushSubscribed ? "关闭通知" : "开启通知"}</button></div>
       <div className="setting-row"><div><strong>测试推送链路</strong><span>确认手机能收到服务端通知</span></div><button className="text-button" onClick={testPush}>测试</button></div>

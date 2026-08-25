@@ -1,7 +1,8 @@
 import { minimumTp2NetProfitUsdt } from "./contract-simulation.ts";
+import { RISK_POLICY, dailyLossPauseUsdt, maxMarginAllocationUsdt, peakDrawdownLimitUsdt, singleTradeRiskBudgetUsdt } from "./risk-policy.ts";
 import type { GateContract, GateFuturesAccount, GatePositionClose } from "./gate-private";
 
-export const MAX_LIVE_OPEN_POSITIONS = 3;
+export const MAX_LIVE_OPEN_POSITIONS = RISK_POLICY.maxLiveOpenPositions;
 const MAX_ENTRY_DRIFT_PCT = 0.3;
 
 export type LiveTradeCandidate = {
@@ -104,7 +105,8 @@ export function buildLiveEntryPlan(input: {
   trade: LiveTradeCandidate;
   contract: GateContract;
   account: GateFuturesAccount;
-  maxRiskPerAlertUsdt: number;
+  /** @deprecated Risk is always current equity × 1%; retained only for old callers. */
+  maxRiskPerAlertUsdt?: number;
   roundTripCostBps: number;
 }): LiveEntryPlan {
   const { trade, contract, account } = input;
@@ -145,12 +147,11 @@ export function buildLiveEntryPlan(input: {
     return failed("Gate 合约账户没有可用资金", { markPrice, contractMultiplier: multiplier, accountEquityUsdt, minimumNetTp2Usdt });
   }
   const stopDistanceFraction = Math.abs(worstCaseEntryPrice - stopLossPrice) / worstCaseEntryPrice;
-  const requestedRiskUsdt = Math.max(0, number(input.maxRiskPerAlertUsdt));
-  const riskBudgetUsdt = Math.min(requestedRiskUsdt, accountEquityUsdt * 0.01);
+  const riskBudgetUsdt = singleTradeRiskBudgetUsdt(accountEquityUsdt);
   const riskNotionalCap = stopDistanceFraction > 0
     ? riskBudgetUsdt * markPrice / Math.abs(worstCaseEntryPrice - stopLossPrice)
     : 0;
-  const marginAllocationUsdt = Math.min(accountEquityUsdt * 0.2, availableUsdt / 1.1);
+  const marginAllocationUsdt = Math.min(maxMarginAllocationUsdt(accountEquityUsdt), availableUsdt / 1.1);
   const targetNotionalUsdt = Math.max(0, Math.min(
     trade.contractNotionalUsdt,
     riskNotionalCap,
@@ -292,19 +293,21 @@ export function projectedNetTp2Usdt(input: {
 
 export function liveAccountRiskLockReason(input: {
   dailyRealizedPnlUsdt: number;
-  dailyPauseUsdt: number;
+  /** @deprecated Ignored: daily pause is equity-scaled. */
+  dailyPauseUsdt?: number;
   accountEquityUsdt: number;
   accountEquityPeakUsdt: number;
-  maxDrawdownUsdt: number;
+  /** @deprecated Ignored: drawdown is peak-equity-scaled. */
+  maxDrawdownUsdt?: number;
 }) {
-  const dailyPauseUsdt = Math.abs(input.dailyPauseUsdt);
-  if (input.dailyRealizedPnlUsdt <= -dailyPauseUsdt) {
-    return `Gate 当日已实现盈亏 ${input.dailyRealizedPnlUsdt.toFixed(2)}U，触及 -${dailyPauseUsdt.toFixed(2)}U 日内暂停线`;
+  const dailyPauseUsdt = dailyLossPauseUsdt(input.accountEquityUsdt, input.dailyRealizedPnlUsdt);
+  if (dailyPauseUsdt > 0 && input.dailyRealizedPnlUsdt <= -dailyPauseUsdt) {
+    return `Gate 当日已实现盈亏 ${input.dailyRealizedPnlUsdt.toFixed(2)}U，触及当日参考权益 3% 暂停线 ${dailyPauseUsdt.toFixed(2)}U`;
   }
   const drawdownUsdt = Math.max(0, input.accountEquityPeakUsdt - input.accountEquityUsdt);
-  const maxDrawdownUsdt = Math.abs(input.maxDrawdownUsdt);
-  if (drawdownUsdt >= maxDrawdownUsdt) {
-    return `Gate 权益较实盘峰值回撤 ${drawdownUsdt.toFixed(2)}U，触及 ${maxDrawdownUsdt.toFixed(2)}U 上限`;
+  const maxDrawdownUsdt = peakDrawdownLimitUsdt(input.accountEquityPeakUsdt);
+  if (maxDrawdownUsdt > 0 && drawdownUsdt >= maxDrawdownUsdt) {
+    return `Gate 权益较实盘峰值回撤 ${drawdownUsdt.toFixed(2)}U，触及峰值权益 10% 上限 ${maxDrawdownUsdt.toFixed(2)}U`;
   }
   return null;
 }
