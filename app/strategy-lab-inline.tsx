@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 
 type Stats = {
   sampleCount: number;
+  activeDayCount: number;
   wins: number;
   losses: number;
   flats: number;
@@ -30,7 +31,7 @@ type Dashboard = {
     mode: "shadow";
     openCount: number;
     stats: Stats;
-    promotion: { status: "collecting" | "watch" | "candidate"; label: string; eligible: boolean; requiredSamples: number; reasons: string[] };
+    promotion: { status: "collecting" | "watch" | "candidate"; label: string; eligible: boolean; requiredSamples: number; requiredActiveDays: number; reasons: string[] };
   }[];
 };
 
@@ -52,6 +53,7 @@ function LabCard({ label, openCount, stats, status, note }: { label: string; ope
     </div>
     <div className="live-status-grid" style={{ marginTop: 9 }}>
       <div><span>完整样本</span><strong>{stats.sampleCount}</strong></div>
+      <div><span>有效交易日</span><strong>{stats.activeDayCount}</strong></div>
       <div><span>影子持仓</span><strong>{openCount}</strong></div>
       <div><span>胜率</span><strong>{stats.winRate == null ? "--" : `${(stats.winRate * 100).toFixed(1)}%`}</strong></div>
       <div><span>平均净结果</span><strong className={(stats.averageNetPct ?? 0) >= 0 ? "good" : "danger"}>{pct(stats.averageNetPct, 2)}</strong></div>
@@ -121,9 +123,9 @@ export function StrategyLabInline() {
     {dashboard ? <>
       <div style={{ display: "grid", gap: 9 }}>
         <LabCard label={dashboard.baseline.label} openCount={dashboard.baseline.openCount} stats={dashboard.baseline.stats} status="原件基线" note="当前 contract_v2，继续作为实盘唯一信号来源" />
-        {dashboard.strategies.map((strategy) => <LabCard key={strategy.id} label={strategy.label} openCount={strategy.openCount} stats={strategy.stats} status={strategy.promotion.label} note={`${strategy.stats.sampleCount}/${strategy.promotion.requiredSamples} 晋级样本 · ${strategy.promotion.reasons[0] ?? "统计门槛已通过，仍不自动实盘"}`} />)}
+        {dashboard.strategies.map((strategy) => <LabCard key={strategy.id} label={strategy.label} openCount={strategy.openCount} stats={strategy.stats} status={strategy.promotion.label} note={`${strategy.stats.sampleCount}/${strategy.promotion.requiredSamples} 样本 · ${strategy.stats.activeDayCount}/${strategy.promotion.requiredActiveDays} 交易日 · ${strategy.promotion.reasons[0] ?? "统计门槛已通过，仍不自动实盘"}`} />)}
       </div>
-      <p className="risk-note" style={{ marginTop: 10 }}>评价不只看胜率：同时看平均净收益、Profit Factor、最大回撤、最大连亏、最近 20 笔和不同市场状态。相对强弱策略因为公开研究结论更分歧，晋级门槛提高到 80 个完整样本。</p>
+      <p className="risk-note" style={{ marginTop: 10 }}>评价不只看胜率：同时看平均净收益、Profit Factor、最大回撤、最大连亏、最近 20 笔、有效交易日和实际交易的市场状态。趋势/突破/震荡策略至少 50 个完整样本且跨 7 个交易日；相对强弱策略要求 80 个样本且跨 10 个交易日。</p>
     </> : <p className="empty-note">策略实验室正在积累第一批影子样本…</p>}
   </section>, host);
 }
