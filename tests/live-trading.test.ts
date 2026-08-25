@@ -27,7 +27,7 @@ test("Gate credentials round-trip through AES-GCM without plaintext persistence"
   assert.equal(gateKeyHint(credentials.apiKey), "api_••••7890");
 });
 
-test("private Gate mutations are signed, bounded by expiry and use the official v4 path", async () => {
+test("private Gate mutations are signed, bounded by expiry and keep legacy TestNet transport isolated to the low-level client", async () => {
   const requests: Request[] = [];
   const fetcher = async (input: string | URL | Request, init?: RequestInit) => {
     const request = new Request(input, init);
@@ -108,7 +108,7 @@ test("live Gate-size preflight rejects the QQQX micro-profit order", () => {
   assert.match(plan.reason ?? "", /TP2.*盈利空间/);
 });
 
-test("live preflight permits a useful 1x order and uses side-correct protection rules", () => {
+test("live preflight permits a useful 1x order when TP2 clears the current-equity gate", () => {
   const plan = buildLiveEntryPlan({
     trade: {
       id: "worthwhile",
@@ -118,7 +118,7 @@ test("live preflight permits a useful 1x order and uses side-correct protection 
       entryLow: 99.9,
       entryHigh: 100.1,
       currentStopPrice: 99,
-      takeProfit2Price: 103,
+      takeProfit2Price: 120,
       leverage: 1,
       contractNotionalUsdt: 1000,
     },
@@ -135,9 +135,10 @@ test("live preflight permits a useful 1x order and uses side-correct protection 
     maxRiskPerAlertUsdt: 10,
     roundTripCostBps: 8,
   });
+  assert.equal(plan.minimumNetTp2Usdt, 90);
   assert.equal(plan.passed, true);
-  assert.ok(plan.expectedNetTp2Usdt > 22.4 && plan.expectedNetTp2Usdt < 22.5);
-  assert.ok(plan.worstCaseNetTp2Usdt > 17.7 && plan.worstCaseNetTp2Usdt < 17.9);
+  assert.ok(plan.expectedNetTp2Usdt > 153 && plan.expectedNetTp2Usdt < 154);
+  assert.ok(plan.worstCaseNetTp2Usdt > 147 && plan.worstCaseNetTp2Usdt < 149);
   assert.equal(plan.marketOrderSlipRatio, "0.003");
   assert.deepEqual(protectionTriggerRules("LONG"), { takeProfit: 1, stopLoss: 2 });
   assert.deepEqual(protectionTriggerRules("SHORT"), { takeProfit: 2, stopLoss: 1 });
@@ -177,7 +178,9 @@ test("live preflight uses Gate taker fees, tick rounding and both-side slippage"
   assert.equal(plan.effectiveRoundTripCostBps, 16);
   assert.equal(plan.stopLossPrice, 99.1);
   assert.equal(plan.takeProfitPrice, 103);
+  assert.equal(plan.minimumNetTp2Usdt, 90);
   assert.ok(plan.expectedNetTp2Usdt > plan.worstCaseNetTp2Usdt);
+  assert.equal(plan.passed, false);
 });
 
 test("actual Gate equity includes unrealized PnL and close PnL is isolated to one position lifecycle", () => {
@@ -226,9 +229,10 @@ test("live preflight caps a position against actual Gate equity and margin alloc
   });
   assert.equal(plan.targetNotionalUsdt, 300);
   assert.equal(plan.actualNotionalUsdt, 300);
+  assert.equal(plan.minimumNetTp2Usdt, 7.5);
   assert.ok(plan.projectedStopLossUsdt > 3.89 && plan.projectedStopLossUsdt < 3.91);
   assert.equal(plan.passed, false);
-  assert.match(plan.reason ?? "", /TP2预计净利润仅/);
+  assert.match(plan.reason ?? "", /TP2预计净利润.*低于当前权益 1\.5%/);
 });
 
 test("account risk locks new entries at the daily-loss or peak-drawdown boundary", () => {
