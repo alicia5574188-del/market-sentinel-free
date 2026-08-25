@@ -71,8 +71,8 @@ jobs:
           )
           replace_exact(
               "tests/live-trading-ui.test.mjs",
-              'assert.match(source, /开启、部署或刷新页面都不会自动恢复交易/);',
-              'assert.match(source, /Worker 新版本部署后会自动关闭新开仓；普通重启和刷新页面不会改变当前开关状态/);',
+              'assert.match(page, /开启、部署或刷新页面都不会自动恢复交易/);',
+              'assert.match(page, /Worker 新版本部署后会自动关闭新开仓；普通重启和刷新页面不会改变当前开关状态/);',
           )
           replace_exact(
               "README.md",
