@@ -8,6 +8,7 @@ import {
   tradeCases,
 } from "../db/schema";
 import type { EncryptedGateCredentials } from "./credential-vault";
+import { liveEntryCandidateCutoff } from "./live-entry-freshness";
 
 export type LiveCredentialRecord = typeof liveExchangeCredentials.$inferSelect;
 export type LiveControlRecord = typeof liveTradingControl.$inferSelect;
@@ -182,13 +183,13 @@ export async function listLiveOrdersAwaitingRealizedPnl(now = Date.now()) {
   )).orderBy(asc(liveOrders.closedAt)).limit(3);
 }
 
-export async function listLiveEntryCandidates(enabledAt: number) {
+export async function listLiveEntryCandidates(enabledAt: number, now = Date.now()) {
   const db = getDb();
   const rows = await db.select().from(tradeCases).where(and(
     eq(tradeCases.status, "holding"),
     eq(tradeCases.simulationModel, "contract_v2"),
-    gte(tradeCases.entryAt, enabledAt),
-  )).orderBy(asc(tradeCases.entryAt)).limit(20);
+    gte(tradeCases.entryAt, liveEntryCandidateCutoff(enabledAt, now)),
+  )).orderBy(desc(tradeCases.entryAt)).limit(20);
   if (!rows.length) return [];
   const existing = await db.select({ tradeCaseId: liveOrders.tradeCaseId }).from(liveOrders).where(inArray(liveOrders.tradeCaseId, rows.map((row) => row.id)));
   const claimed = new Set(existing.map((row) => row.tradeCaseId));
