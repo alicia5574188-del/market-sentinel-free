@@ -63,6 +63,20 @@ type TradeRecord = {
 };
 
 type HistoryPayload = { observedAt: number; trades: TradeRecord[] };
+type BackgroundStatus = {
+  active: boolean;
+  scanCadenceSeconds: number | null;
+  deepBatchSize: number | null;
+  scanner: {
+    state: "starting" | "live" | "paused" | "degraded" | "error";
+    lastRunAt: number | null;
+    lastSuccessAt: number | null;
+    lastError: string | null;
+    analyzed?: number;
+    symbols?: string[];
+  } | null;
+  error?: string;
+};
 
 function pct(value: number | null | undefined, digits = 1) {
   if (value == null || !Number.isFinite(value)) return "--";
@@ -119,6 +133,7 @@ export function StrategyLabInline() {
   const [host, setHost] = useState<HTMLElement | null>(null);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [history, setHistory] = useState<TradeRecord[]>([]);
+  const [background, setBackground] = useState<BackgroundStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -149,16 +164,20 @@ export function StrategyLabInline() {
   const load = useCallback(async () => {
     if (!host) return;
     try {
-      const [dashboardResponse, historyResponse] = await Promise.all([
+      const [dashboardResponse, historyResponse, backgroundResponse] = await Promise.all([
         fetch("/api/strategy-lab", { cache: "no-store", credentials: "same-origin" }),
         fetch("/api/strategy-lab/trades", { cache: "no-store", credentials: "same-origin" }),
+        fetch("/api/background", { cache: "no-store", credentials: "same-origin" }),
       ]);
       const dashboardPayload = await dashboardResponse.json().catch(() => ({}));
       const historyPayload = await historyResponse.json().catch(() => ({}));
+      const backgroundPayload = await backgroundResponse.json().catch(() => ({}));
       if (!dashboardResponse.ok) throw new Error(dashboardPayload?.error ?? `策略实验室读取失败 (${dashboardResponse.status})`);
       if (!historyResponse.ok) throw new Error(historyPayload?.error ?? `策略订单记录读取失败 (${historyResponse.status})`);
+      if (!backgroundResponse.ok) throw new Error(backgroundPayload?.error ?? `后台状态读取失败 (${backgroundResponse.status})`);
       setDashboard(dashboardPayload as Dashboard);
       setHistory((historyPayload as HistoryPayload).trades ?? []);
+      setBackground(backgroundPayload as BackgroundStatus);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "策略实验室读取失败");
@@ -174,10 +193,13 @@ export function StrategyLabInline() {
 
   const baselineHistory = useMemo(() => history.filter((trade) => trade.simulationModel === "contract_v2"), [history]);
   const shadowHistory = useMemo(() => history.filter((trade) => trade.simulationModel.startsWith("shadow_v3:")), [history]);
+  const scannerAge = background?.scanner?.lastSuccessAt ? Date.now() - background.scanner.lastSuccessAt : Number.POSITIVE_INFINITY;
+  const scannerHealthy = Boolean(background?.active && background.scanner?.state === "live" && scannerAge < 150_000 && !background.scanner.lastError);
 
   if (!host) return null;
   return createPortal(<section aria-label="多策略影子实验室" style={{ margin: "15px 0 18px", borderTop: "1px solid rgba(151,174,193,.12)", borderBottom: "1px solid rgba(151,174,193,.12)", padding: "14px 0" }}>
     <div className="section-title"><span>策略实验室 V3</span><small>多策略 · 分市场状态 · 只做影子模拟</small></div>
+    <div className={`invalid-box ${scannerHealthy ? "muted" : ""}`} style={{ marginBottom: 10 }}><div><span>{scannerHealthy ? "V3 后台扫描正常" : "V3 后台状态需要检查"}</span><strong>{background ? `${background.scanner?.state ?? "--"} · 最近成功 ${dateTime(background.scanner?.lastSuccessAt)} · 每 ${background.scanCadenceSeconds ?? "--"} 秒扫描 · 每批 ${background.deepBatchSize ?? "--"} 个深度标的` : "正在读取后台运行状态"}</strong>{background?.scanner?.lastError && <small className="danger">{background.scanner.lastError}</small>}{background?.error && <small className="danger">{background.error}</small>}</div></div>
     <div className="invalid-box muted" style={{ marginBottom: 10 }}><div><span>样本口径</span><strong>Baseline V1 的历史订单完整保留；四个 V3 新策略只统计升级上线后自己真实产生的影子单，不把旧订单伪装成新策略样本。</strong></div></div>
     <div className="invalid-box muted" style={{ marginBottom: 10 }}><div><span>实盘隔离</span><strong>四个新策略不会触发 Gate 下单。达到候选线也只会标记“候选”，必须后续人工批准才能接入实盘。</strong></div></div>
     {error && <div className="live-error"><span>{error}</span></div>}
