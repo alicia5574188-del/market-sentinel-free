@@ -9,6 +9,7 @@ import {
 } from "../db/schema";
 import type { EncryptedGateCredentials } from "./credential-vault";
 import { liveEntryCandidateCutoff } from "./live-entry-freshness";
+import { evaluateLivePerformanceGate } from "./live-performance-gate";
 
 export type LiveCredentialRecord = typeof liveExchangeCredentials.$inferSelect;
 export type LiveControlRecord = typeof liveTradingControl.$inferSelect;
@@ -43,6 +44,8 @@ export async function armLiveControl() {
   const db = getDb();
   const current = await getLiveControl();
   if (current.state === "emergency_stopped") throw new Error("紧急停机锁仍生效，请先确认账户已清空并解除停机锁");
+  const performanceGate = await getLivePerformanceGate();
+  if (!performanceGate.passed) throw new Error(performanceGate.reason ?? "近期策略表现未达到实盘开仓要求");
   const now = Date.now();
   await db.update(liveTradingControl).set({
     entryEnabled: true,
@@ -183,7 +186,30 @@ export async function listLiveOrdersAwaitingRealizedPnl(now = Date.now()) {
   )).orderBy(asc(liveOrders.closedAt)).limit(3);
 }
 
+export async function getLivePerformanceGate(now = Date.now()) {
+  const db = getDb();
+  const [recentLive, recentSimulation] = await Promise.all([
+    db.select({
+      realizedPnlUsdt: liveOrders.realizedPnlUsdt,
+      closedAt: liveOrders.closedAt,
+    }).from(liveOrders)
+      .where(eq(liveOrders.state, "closed"))
+      .orderBy(desc(liveOrders.closedAt))
+      .limit(6),
+    db.select({
+      netMovePct: tradeCases.netMovePct,
+      exitAt: tradeCases.exitAt,
+    }).from(tradeCases)
+      .where(and(eq(tradeCases.status, "closed"), eq(tradeCases.simulationModel, "contract_v2")))
+      .orderBy(desc(tradeCases.exitAt))
+      .limit(8),
+  ]);
+  return evaluateLivePerformanceGate({ now, recentLive, recentSimulation });
+}
+
 export async function listLiveEntryCandidates(enabledAt: number, now = Date.now()) {
+  const performanceGate = await getLivePerformanceGate(now);
+  if (!performanceGate.passed) return [];
   const db = getDb();
   const rows = await db.select().from(tradeCases).where(and(
     eq(tradeCases.status, "holding"),
@@ -259,16 +285,19 @@ function publicOrder(row: LiveOrderRecord) {
 
 export async function getLiveTradingSnapshot() {
   const db = getDb();
-  const [control, credential, orders, audits] = await Promise.all([
+  const now = Date.now();
+  const [control, credential, orders, audits, performanceGate] = await Promise.all([
     getLiveControl(),
     getLiveCredentialRecord(),
     db.select().from(liveOrders).orderBy(desc(liveOrders.createdAt)).limit(100),
     db.select().from(liveAuditEvents).orderBy(desc(liveAuditEvents.createdAt)).limit(30),
+    getLivePerformanceGate(now),
   ]);
   return {
-    observedAt: Date.now(),
+    observedAt: now,
     control,
     credential: publicCredential(credential),
+    performanceGate,
     orders: orders.map(publicOrder),
     audit: audits.map((row) => ({ ...row, details: parseJson<Record<string, unknown>>(row.detailsJson, {}), detailsJson: undefined })),
   };
