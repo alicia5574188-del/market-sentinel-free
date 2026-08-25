@@ -101,10 +101,9 @@ export function OpportunityStrategyDiagnostics() {
     const sync = () => {
       const marketStatus = document.querySelector<HTMLElement>(".market-status");
       if (!marketStatus) {
-        if (current && !current.isConnected) {
-          current = null;
-          setHost(null);
-        }
+        current?.remove();
+        current = null;
+        setHost(null);
         return;
       }
       let target = document.querySelector<HTMLElement>('[data-v3-opportunity-diagnostics="true"]');
