@@ -1,6 +1,6 @@
+import { minimumTp2NetProfitUsdt } from "./contract-simulation";
 import type { GateContract, GateFuturesAccount, GatePositionClose } from "./gate-private";
 
-export const MINIMUM_LIVE_TP2_NET_PROFIT_USDT = 15;
 export const MAX_LIVE_OPEN_POSITIONS = 3;
 const MAX_ENTRY_DRIFT_PCT = 0.3;
 
@@ -22,6 +22,7 @@ export type LiveEntryPlan = {
   reason: string | null;
   markPrice: number;
   accountEquityUsdt: number;
+  minimumNetTp2Usdt: number;
   riskBudgetUsdt: number;
   projectedStopLossUsdt: number;
   targetNotionalUsdt: number;
@@ -51,6 +52,7 @@ function failed(reason: string, partial: Partial<LiveEntryPlan> = {}): LiveEntry
     reason,
     markPrice: 0,
     accountEquityUsdt: 0,
+    minimumNetTp2Usdt: 0,
     riskBudgetUsdt: 0,
     projectedStopLossUsdt: 0,
     targetNotionalUsdt: 0,
@@ -138,8 +140,9 @@ export function buildLiveEntryPlan(input: {
   if (!takeProfitIsValid) return failed("按 Gate 价格精度和允许滑点计算后，TP2 已无有效盈利空间", { markPrice, contractMultiplier: multiplier, stopLossPrice, takeProfitPrice });
   const availableUsdt = Math.max(number(account.available), number(account.cross_available));
   const accountEquityUsdt = gateAccountEquityUsdt(account);
+  const minimumNetTp2Usdt = minimumTp2NetProfitUsdt(accountEquityUsdt);
   if (accountEquityUsdt <= 0 || availableUsdt <= 0) {
-    return failed("Gate 合约账户没有可用资金", { markPrice, contractMultiplier: multiplier, accountEquityUsdt });
+    return failed("Gate 合约账户没有可用资金", { markPrice, contractMultiplier: multiplier, accountEquityUsdt, minimumNetTp2Usdt });
   }
   const stopDistanceFraction = Math.abs(worstCaseEntryPrice - stopLossPrice) / worstCaseEntryPrice;
   const requestedRiskUsdt = Math.max(0, number(input.maxRiskPerAlertUsdt));
@@ -162,6 +165,7 @@ export function buildLiveEntryPlan(input: {
   if (contracts < minimum) return failed("按 Gate 实际资金和风险上限换算后低于最小合约张数", {
     markPrice,
     accountEquityUsdt,
+    minimumNetTp2Usdt,
     riskBudgetUsdt,
     targetNotionalUsdt,
     contractMultiplier: multiplier,
@@ -174,6 +178,7 @@ export function buildLiveEntryPlan(input: {
     return failed("Gate 可用保证金不足（已包含 10% 缓冲）", {
       markPrice,
       accountEquityUsdt,
+      minimumNetTp2Usdt,
       riskBudgetUsdt,
       projectedStopLossUsdt,
       targetNotionalUsdt,
@@ -187,6 +192,7 @@ export function buildLiveEntryPlan(input: {
     return failed("按 Gate 实际张数计算的止损风险超过单笔上限", {
       markPrice,
       accountEquityUsdt,
+      minimumNetTp2Usdt,
       riskBudgetUsdt,
       projectedStopLossUsdt,
       targetNotionalUsdt,
@@ -213,10 +219,11 @@ export function buildLiveEntryPlan(input: {
     roundTripCostBps: effectiveRoundTripCostBps,
     exitSlippageRatio: slip,
   });
-  if (worstCaseNetTp2Usdt < MINIMUM_LIVE_TP2_NET_PROFIT_USDT) {
-    return failed(`按 Gate 实时张数并预留允许滑点后，TP2预计净利润仅 ${worstCaseNetTp2Usdt.toFixed(2)}U`, {
+  if (worstCaseNetTp2Usdt < minimumNetTp2Usdt) {
+    return failed(`按 Gate 实时张数并预留允许滑点后，TP2预计净利润 ${worstCaseNetTp2Usdt.toFixed(2)}U，低于当前权益 1.5% 门槛 ${minimumNetTp2Usdt.toFixed(2)}U`, {
       markPrice,
       accountEquityUsdt,
+      minimumNetTp2Usdt,
       riskBudgetUsdt,
       projectedStopLossUsdt,
       targetNotionalUsdt,
@@ -240,6 +247,7 @@ export function buildLiveEntryPlan(input: {
     reason: null,
     markPrice,
     accountEquityUsdt,
+    minimumNetTp2Usdt,
     riskBudgetUsdt,
     projectedStopLossUsdt,
     targetNotionalUsdt,
