@@ -5,6 +5,7 @@ import type { GateAnalysisPacket } from "./gate-client.ts";
 import { assessTakeProfitViability, buildContractPlan, calculateContractPnl } from "./contract-simulation.ts";
 import type { AppSettings } from "./repository.ts";
 import { singleTradeRiskBudgetUsdt } from "./risk-policy.ts";
+import { shadowCompletedWindow } from "./shadow-candle-window.ts";
 import type { Candle } from "./signal-engine.ts";
 import type { ShadowStrategyId, ShadowStrategySignal } from "./shadow-strategy-engine.ts";
 import { calculateStrategyStatistics, evaluateStrategyPromotion } from "./strategy-promotion.ts";
@@ -34,17 +35,7 @@ function parseJson<T>(value: string, fallback: T): T {
   try { return JSON.parse(value) as T; } catch { return fallback; }
 }
 
-function completedCandle(candles: Candle[], observedAt: number) {
-  return [...candles]
-    .filter((candle) => {
-      const time = candle.time > 10_000_000_000 ? candle.time : candle.time * 1000;
-      return time + 5 * 60_000 <= observedAt;
-    })
-    .sort((a, b) => a.time - b.time)
-    .at(-1) ?? null;
-}
-
-function snapshot(row: typeof tradeCases.$inferSelect): TradePositionSnapshot {
+function positionSnapshot(row: typeof tradeCases.$inferSelect): TradePositionSnapshot {
   return {
     id: row.id,
     symbol: row.symbol,
@@ -81,14 +72,15 @@ async function reconcileShadowTrade(
   settings: AppSettings,
 ) {
   const db = getDb();
-  const latest = completedCandle(candles5m, packet.observedAt);
+  const fromExclusive = Math.max(row.entryAt, row.lastEvaluatedAt);
+  const priceWindow = shadowCompletedWindow(candles5m, fromExclusive, packet.observedAt);
   const score = signal?.score ?? packet.decision.directionalScore;
   const metrics = signal?.metrics ?? packet.decision.metrics;
-  const evaluation = evaluatePosition(snapshot(row), {
+  const evaluation = evaluatePosition(positionSnapshot(row), {
     observedAt: packet.observedAt,
     price: packet.market.futuresPrice,
-    highPrice: latest?.high ?? packet.market.futuresPrice,
-    lowPrice: latest?.low ?? packet.market.futuresPrice,
+    highPrice: priceWindow.highPrice,
+    lowPrice: priceWindow.lowPrice,
     directionalScore: score,
     confirmationCount: signal?.reasons.length ?? packet.decision.diagnostics.confirmationCount,
     macroEventRisk: packet.market.macroEventRisk ?? 0,
@@ -115,7 +107,7 @@ async function reconcileShadowTrade(
     await db.update(tradeCases).set(common).where(where);
     return "holding" as const;
   }
-  const lesson = deriveTradeLesson(snapshot(row), evaluation, parseJson(row.entryEvidenceJson, []), metrics);
+  const lesson = deriveTradeLesson(positionSnapshot(row), evaluation, parseJson(row.entryEvidenceJson, []), metrics);
   const amountPnl = calculateContractPnl(row.contractNotionalUsdt, evaluation.grossMovePct, evaluation.estimatedCostPct);
   await db.update(tradeCases).set({
     ...common,
@@ -125,7 +117,10 @@ async function reconcileShadowTrade(
     exitPrice: evaluation.exitPrice ?? packet.market.futuresPrice,
     exitCode: evaluation.exitCode,
     exitReason: evaluation.exitReason,
-    exitEvidenceJson: JSON.stringify(evaluation.exitEvidence),
+    exitEvidenceJson: JSON.stringify([
+      ...evaluation.exitEvidence,
+      priceWindow.count > 1 ? `后台轮转期间补查 ${priceWindow.count} 根完整 5m K 线，未遗漏期间触价` : "按开仓后的完整 5m 价格窗口判定",
+    ]),
     exitMetricsJson: JSON.stringify(metrics),
     grossMovePct: evaluation.grossMovePct,
     estimatedCostPct: evaluation.estimatedCostPct,
@@ -276,13 +271,9 @@ export async function processShadowStrategies(packet: GateAnalysisPacket, candle
 export async function getStrategyLabDashboard() {
   const db = getDb();
   const rows = await db.select({
-    id: tradeCases.id,
     simulationModel: tradeCases.simulationModel,
     status: tradeCases.status,
-    side: tradeCases.side,
-    symbol: tradeCases.symbol,
     netMovePct: tradeCases.netMovePct,
-    netPnlUsdt: tradeCases.netPnlUsdt,
     exitAt: tradeCases.exitAt,
     entryAt: tradeCases.entryAt,
     regime: tradeCases.regime,
