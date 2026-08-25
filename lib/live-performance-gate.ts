@@ -1,3 +1,5 @@
+import { RISK_POLICY } from "./risk-policy.ts";
+
 export const LIVE_LOSS_STREAK_COOLDOWN_MS = 6 * 60 * 60 * 1_000;
 export const SIMULATION_PERFORMANCE_WINDOW = 8;
 export const SIMULATION_MIN_SAMPLES = 6;
@@ -6,6 +8,7 @@ export const SIMULATION_HARD_LOSS_STREAK = 3;
 
 export type RecentLiveResult = {
   realizedPnlUsdt: number | null;
+  riskBudgetUsdt?: number | null;
   closedAt: number | null;
 };
 
@@ -19,6 +22,7 @@ export type LivePerformanceGate = {
   reason: string | null;
   cooldownUntil: number | null;
   liveLossStreak: number;
+  liveStrategyDrawdownPct: number;
   simulationLossStreak: number;
   simulationSampleCount: number;
   simulationWinRate: number | null;
@@ -38,6 +42,33 @@ function lossStreak(values: number[]) {
   return streak;
 }
 
+/**
+ * Build a transfer-neutral equity curve from Market Sentinel's own closed live
+ * orders. Each order already stores its entry risk budget, which is 1% of the
+ * Gate equity observed at entry. That lets us normalize realized PnL back to a
+ * contemporaneous account-return fraction without looking at the raw Gate
+ * balance. Deposits/withdrawals between futures and spot therefore cannot
+ * create a fake strategy drawdown.
+ */
+function liveStrategyDrawdownPct(results: RecentLiveResult[]) {
+  const chronological = [...results]
+    .filter((item) => finite(item.closedAt) && finite(item.realizedPnlUsdt) && finite(item.riskBudgetUsdt) && (item.riskBudgetUsdt as number) > 0)
+    .sort((a, b) => (a.closedAt ?? 0) - (b.closedAt ?? 0));
+  if (!chronological.length) return 0;
+
+  let equityIndex = 1;
+  let peakIndex = 1;
+  for (const item of chronological) {
+    const impliedEntryEquity = (item.riskBudgetUsdt as number) / RISK_POLICY.singleTradeLossRate;
+    if (!(impliedEntryEquity > 0)) continue;
+    const tradeReturn = (item.realizedPnlUsdt as number) / impliedEntryEquity;
+    if (!Number.isFinite(tradeReturn)) continue;
+    equityIndex *= Math.max(1e-9, 1 + tradeReturn);
+    peakIndex = Math.max(peakIndex, equityIndex);
+  }
+  return peakIndex > 0 ? Math.max(0, (peakIndex - equityIndex) / peakIndex) : 1;
+}
+
 export function evaluateLivePerformanceGate(input: {
   now?: number;
   recentLive: RecentLiveResult[];
@@ -51,6 +82,7 @@ export function evaluateLivePerformanceGate(input: {
   const attributedLive = recentLive.filter((item) => finite(item.realizedPnlUsdt));
   const latestAttributedLive = attributedLive[0] ?? null;
   const liveLossStreak = lossStreak(attributedLive.map((item) => item.realizedPnlUsdt as number));
+  const strategyDrawdown = liveStrategyDrawdownPct(recentLive);
 
   const recentSimulation = [...input.recentSimulation]
     .filter((item) => finite(item.exitAt) && finite(item.netMovePct))
@@ -65,6 +97,7 @@ export function evaluateLivePerformanceGate(input: {
 
   const base: Omit<LivePerformanceGate, "passed" | "reason" | "cooldownUntil"> = {
     liveLossStreak,
+    liveStrategyDrawdownPct: Number((strategyDrawdown * 100).toFixed(6)),
     simulationLossStreak,
     simulationSampleCount,
     simulationWinRate,
@@ -90,6 +123,15 @@ export function evaluateLivePerformanceGate(input: {
         cooldownUntil,
       };
     }
+  }
+
+  if (strategyDrawdown >= RISK_POLICY.peakDrawdownRate) {
+    return {
+      ...base,
+      passed: false,
+      reason: `哨兵实盘交易回撤 ${(strategyDrawdown * 100).toFixed(1)}%，达到 10% 策略回撤上限；Gate 账户转入/转出不计入交易回撤`,
+      cooldownUntil: null,
+    };
   }
 
   if (simulationLossStreak >= SIMULATION_HARD_LOSS_STREAK) {
