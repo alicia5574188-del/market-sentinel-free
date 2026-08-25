@@ -12,10 +12,8 @@ export async function PUT(request: Request) {
     const payload = await readLimitedJsonObject(request, 4_096);
     const apiKey = typeof payload.apiKey === "string" ? payload.apiKey : "";
     const apiSecret = typeof payload.apiSecret === "string" ? payload.apiSecret : "";
-    if (payload.environment !== "live" && payload.environment !== "testnet") throw new Error("Gate 环境必须明确选择实盘或 TestNet");
-    const environment = payload.environment;
     const permissionsConfirmed = payload.permissionsConfirmed === true;
-    return Response.json(await liveTradingCoordinator().saveCredentials({ apiKey, apiSecret, environment, permissionsConfirmed }, auth.account.id), { headers: { "Cache-Control": "no-store" } });
+    return Response.json(await liveTradingCoordinator().saveCredentials({ apiKey, apiSecret, environment: "live", permissionsConfirmed }, auth.account.id), { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Gate API 凭据保存失败" }, { status: 400, headers: { "Cache-Control": "no-store" } });
   }
