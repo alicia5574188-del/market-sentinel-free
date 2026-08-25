@@ -2,7 +2,7 @@ import { and, desc, eq, like } from "drizzle-orm";
 import { getDb } from "../db";
 import { tradeCases } from "../db/schema";
 import type { GateAnalysisPacket } from "./gate-client.ts";
-import { processDecision, type AppSettings } from "./repository.ts";
+import { processDecision, type AppSettings, type LifecycleResult } from "./repository.ts";
 import type { Candle } from "./signal-engine.ts";
 import type { ShadowStrategyId, ShadowStrategySignal } from "./shadow-strategy-engine.ts";
 import { calculateStrategyStatistics } from "./strategy-promotion.ts";
@@ -19,6 +19,15 @@ const STRATEGIES: { id: ShadowStrategyId; label: string }[] = [
 type ReadyGrowthSignal = ShadowStrategySignal & {
   side: "LONG" | "SHORT";
   entryPlan: NonNullable<ShadowStrategySignal["entryPlan"]>;
+};
+
+export type GrowthModuleResult = {
+  opened: number;
+  closed: number;
+  evaluated: number;
+  archived: number;
+  selected: ShadowStrategyId | null;
+  lifecycle: LifecycleResult | null;
 };
 
 function isReadyGrowthSignal(signal: ShadowStrategySignal): signal is ReadyGrowthSignal {
@@ -101,7 +110,7 @@ export async function processShadowStrategies(
   _candles5m: Candle[],
   signals: ShadowStrategySignal[],
   settings: AppSettings,
-) {
+): Promise<GrowthModuleResult> {
   const archived = await archiveLegacyShadowTrades(packet.symbol);
   const db = getDb();
   const [existing] = await db.select({ id: tradeCases.id }).from(tradeCases).where(and(
@@ -111,12 +120,12 @@ export async function processShadowStrategies(
   )).limit(1);
 
   if (existing) {
-    return { opened: 0, closed: 0, evaluated: signals.length, archived };
+    return { opened: 0, closed: 0, evaluated: signals.length, archived, selected: null, lifecycle: null };
   }
 
   const selected = chooseGrowthSignal(signals);
   if (!selected) {
-    return { opened: 0, closed: 0, evaluated: signals.length, archived };
+    return { opened: 0, closed: 0, evaluated: signals.length, archived, selected: null, lifecycle: null };
   }
 
   // The original comprehensive decision remains the first pass. When it has
@@ -124,13 +133,14 @@ export async function processShadowStrategies(
   // contract_v2 order. From here on it uses the exact same lifecycle, account,
   // learning, live-entry, risk and Gate execution path as every other Sentinel
   // order. There is no promotion/approval layer beyond the owner's live switch.
-  const result = await processDecision(growthPacket(packet, selected), settings);
+  const lifecycle = await processDecision(growthPacket(packet, selected), settings);
   return {
-    opened: result.kind === "opened" ? 1 : 0,
-    closed: result.kind === "closed" ? 1 : 0,
+    opened: lifecycle.kind === "opened" ? 1 : 0,
+    closed: lifecycle.kind === "closed" ? 1 : 0,
     evaluated: signals.length,
     archived,
-    selected: result.kind === "opened" ? selected.strategyId : null,
+    selected: lifecycle.kind === "opened" ? selected.strategyId : null,
+    lifecycle,
   };
 }
 
