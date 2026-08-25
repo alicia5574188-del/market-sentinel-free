@@ -16,6 +16,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: chatgpt/equity-scaled-risk-policy
+      - name: Normalize source wording
+        run: |
+          python <<'PY'
+          from pathlib import Path
+          p = Path("README.md")
+          text = p.read_text()
+          text = text.replace("真实成交后再用成交价复核一次，并在后台恢复场景重新读取当前权益。", "真实成交后再用成交价和当前权益复核一次。")
+          p.write_text(text)
+          PY
       - name: Apply policy patch
         run: python scripts/apply-equity-risk-policy.py
       - name: Commit patch
