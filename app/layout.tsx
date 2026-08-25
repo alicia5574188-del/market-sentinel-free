@@ -3,6 +3,7 @@ import { requireChatGPTUser } from "./chatgpt-auth";
 import { LiveOrdersInline } from "./live-orders-inline";
 import { UiStatusSemanticFix } from "./ui-status-semantic-fix";
 import "./globals.css";
+import "./polish.css";
 
 export const dynamic = "force-dynamic";
 
