@@ -68,20 +68,24 @@ function maxLossStreak(values: number[]) {
   return maximum;
 }
 
+function stableRegime(value: string) {
+  return (value || "unknown").split(" · ")[0].trim() || "unknown";
+}
+
 export function calculateStrategyStatistics(samples: StrategyResultSample[]): StrategyStatistics {
   const ordered = [...samples]
     .filter((sample) => finite(sample.netMovePct) && finite(sample.exitAt))
     .sort((a, b) => (a.exitAt ?? 0) - (b.exitAt ?? 0));
   const values = ordered.map((sample) => sample.netMovePct as number);
   const recent = values.slice(-20);
-  const regime = new Map<string, number[]>();
+  const regimes = new Map<string, number[]>();
   for (const sample of ordered) {
-    const key = sample.regime || "unknown";
-    const bucket = regime.get(key) ?? [];
+    const key = stableRegime(sample.regime);
+    const bucket = regimes.get(key) ?? [];
     bucket.push(sample.netMovePct as number);
-    regime.set(key, bucket);
+    regimes.set(key, bucket);
   }
-  const profitableRegimeCount = [...regime.values()].filter((bucket) => bucket.length >= 5 && bucket.reduce((sum, value) => sum + value, 0) > 0).length;
+  const profitableRegimeCount = [...regimes.values()].filter((bucket) => bucket.length >= 5 && bucket.reduce((sum, value) => sum + value, 0) > 0).length;
   const wins = values.filter((value) => value > 0.03).length;
   const losses = values.filter((value) => value < -0.03).length;
   return {
@@ -105,15 +109,20 @@ export function calculateStrategyStatistics(samples: StrategyResultSample[]): St
 export function evaluateStrategyPromotion(strategyId: ShadowStrategyId, stats: StrategyStatistics): StrategyPromotion {
   const requiredSamples = strategyId === "relative_strength" ? 80 : 50;
   const reasons: string[] = [];
+  const effectiveProfitFactor = stats.profitFactor == null && stats.cumulativeNetPct > 0 ? Number.POSITIVE_INFINITY : (stats.profitFactor ?? 0);
+  const recentProfitFactor = stats.recentProfitFactor == null && (stats.recentAverageNetPct ?? 0) > 0 ? Number.POSITIVE_INFINITY : (stats.recentProfitFactor ?? 0);
   if (stats.sampleCount < requiredSamples) reasons.push(`完整样本 ${stats.sampleCount}/${requiredSamples}`);
   if ((stats.averageNetPct ?? 0) <= 0.08) reasons.push(`平均净收益需 > 0.08%，当前 ${(stats.averageNetPct ?? 0).toFixed(2)}%`);
-  if ((stats.profitFactor ?? 0) < 1.25) reasons.push(`Profit Factor 需 ≥ 1.25，当前 ${stats.profitFactor == null ? "无亏损样本" : stats.profitFactor.toFixed(2)}`);
+  if (effectiveProfitFactor < 1.25) reasons.push(`Profit Factor 需 ≥ 1.25，当前 ${stats.profitFactor == null ? "0" : stats.profitFactor.toFixed(2)}`);
   if (stats.maxDrawdownPct > 8) reasons.push(`最大回撤需 ≤ 8%，当前 ${stats.maxDrawdownPct.toFixed(2)}%`);
   if (stats.maxLossStreak > 5) reasons.push(`最大连续亏损需 ≤ 5，当前 ${stats.maxLossStreak}`);
   if (stats.recentSampleCount < 20) reasons.push(`最近样本需满 20，当前 ${stats.recentSampleCount}`);
   if ((stats.recentAverageNetPct ?? 0) <= 0) reasons.push(`最近 20 笔平均净结果需 > 0，当前 ${(stats.recentAverageNetPct ?? 0).toFixed(2)}%`);
-  if (stats.recentProfitFactor != null && stats.recentProfitFactor < 1.10) reasons.push(`最近 20 笔 Profit Factor 需 ≥ 1.10，当前 ${stats.recentProfitFactor.toFixed(2)}`);
-  if (stats.profitableRegimeCount < 2 && stats.sampleCount >= requiredSamples) reasons.push(`至少两个市场状态有正收益，当前 ${stats.profitableRegimeCount}`);
+  if (recentProfitFactor < 1.10) reasons.push(`最近 20 笔 Profit Factor 需 ≥ 1.10，当前 ${stats.recentProfitFactor == null ? "0" : stats.recentProfitFactor.toFixed(2)}`);
+  // A regime-routed strategy is allowed to specialize. It must demonstrate a
+  // positive cluster in at least one regime it actually trades; requiring two
+  // would incorrectly punish a range strategy for refusing trend conditions.
+  if (stats.profitableRegimeCount < 1 && stats.sampleCount >= requiredSamples) reasons.push("至少一个实际交易的市场状态需积累 ≥5 笔且累计正收益");
   const eligible = reasons.length === 0;
   if (eligible) return { status: "candidate", label: "达到实盘候选线（仍需人工批准）", eligible: true, requiredSamples, reasons: [] };
   if (stats.sampleCount >= Math.min(30, requiredSamples)) return { status: "watch", label: "观察期", eligible: false, requiredSamples, reasons };
