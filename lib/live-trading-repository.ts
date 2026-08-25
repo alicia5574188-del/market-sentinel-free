@@ -18,9 +18,14 @@ export type LiveOrderState = LiveOrderRecord["state"];
 
 const ACTIVE_LIVE_STATES: LiveOrderState[] = ["submitting", "open", "protected", "closing"];
 const LEGACY_RAW_EQUITY_LOCK = /Gate 权益较实盘峰值回撤/;
+const ENTRY_EQUITY_SNAPSHOT_EVENT = "entry_equity_snapshot";
 
 function parseJson<T>(value: string, fallback: T): T {
   try { return JSON.parse(value) as T; } catch { return fallback; }
+}
+
+function finitePositive(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
 export async function getLiveControl(): Promise<LiveControlRecord> {
@@ -208,16 +213,22 @@ export async function listLiveOrdersAwaitingRealizedPnl(now = Date.now()) {
 
 export async function getLivePerformanceGate(now = Date.now()) {
   const db = getDb();
-  const [recentLive, recentSimulation] = await Promise.all([
+  const [recentLive, entrySnapshots, recentSimulation] = await Promise.all([
     db.select({
+      id: liveOrders.id,
       realizedPnlUsdt: liveOrders.realizedPnlUsdt,
-      riskBudgetUsdt: tradeCases.riskBudgetUsdt,
       closedAt: liveOrders.closedAt,
     }).from(liveOrders)
-      .leftJoin(tradeCases, eq(liveOrders.tradeCaseId, tradeCases.id))
       .where(eq(liveOrders.state, "closed"))
       .orderBy(desc(liveOrders.closedAt))
       .limit(200),
+    db.select({
+      liveOrderId: liveAuditEvents.liveOrderId,
+      detailsJson: liveAuditEvents.detailsJson,
+    }).from(liveAuditEvents)
+      .where(eq(liveAuditEvents.eventType, ENTRY_EQUITY_SNAPSHOT_EVENT))
+      .orderBy(desc(liveAuditEvents.createdAt))
+      .limit(250),
     db.select({
       netMovePct: tradeCases.netMovePct,
       exitAt: tradeCases.exitAt,
@@ -226,7 +237,21 @@ export async function getLivePerformanceGate(now = Date.now()) {
       .orderBy(desc(tradeCases.exitAt))
       .limit(8),
   ]);
-  return evaluateLivePerformanceGate({ now, recentLive, recentSimulation });
+  const entryEquityByOrder = new Map<string, number>();
+  for (const row of entrySnapshots) {
+    if (!row.liveOrderId || entryEquityByOrder.has(row.liveOrderId)) continue;
+    const details = parseJson<{ entryEquityUsdt?: number }>(row.detailsJson, {});
+    if (finitePositive(details.entryEquityUsdt)) entryEquityByOrder.set(row.liveOrderId, details.entryEquityUsdt);
+  }
+  return evaluateLivePerformanceGate({
+    now,
+    recentLive: recentLive.map((row) => ({
+      realizedPnlUsdt: row.realizedPnlUsdt,
+      entryEquityUsdt: entryEquityByOrder.get(row.id) ?? null,
+      closedAt: row.closedAt,
+    })),
+    recentSimulation,
+  });
 }
 
 export async function listLiveEntryCandidates(enabledAt: number, now = Date.now()) {
@@ -247,7 +272,21 @@ export async function listLiveEntryCandidates(enabledAt: number, now = Date.now(
 export async function createLiveOrderIntent(values: typeof liveOrders.$inferInsert) {
   const db = getDb();
   const inserted = await db.insert(liveOrders).values(values).onConflictDoNothing().returning();
-  if (inserted[0]) return inserted[0];
+  if (inserted[0]) {
+    if (inserted[0].state === "submitting") {
+      const control = await getLiveControl();
+      if (finitePositive(control.accountEquityLastUsdt)) {
+        await addLiveAudit({
+          eventType: ENTRY_EQUITY_SNAPSHOT_EVENT,
+          liveOrderId: inserted[0].id,
+          symbol: inserted[0].symbol,
+          message: `${inserted[0].symbol} 已记录实盘入场时 Gate 权益基准`,
+          details: { entryEquityUsdt: control.accountEquityLastUsdt },
+        });
+      }
+    }
+    return inserted[0];
+  }
   const [existing] = await db.select().from(liveOrders).where(eq(liveOrders.tradeCaseId, values.tradeCaseId)).limit(1);
   return existing ?? null;
 }
