@@ -1,6 +1,7 @@
 import { getRuntimeBindings } from "./runtime-bindings";
 import { decryptGateCredentials, encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "./credential-vault";
 import { minimumTp2NetProfitUsdt } from "./contract-simulation.ts";
+import { singleTradeRiskBudgetUsdt } from "./risk-policy.ts";
 import {
   GateApiError,
   GatePrivateClient,
@@ -219,10 +220,8 @@ async function enforceLiveAccountRisk(client: GatePrivateClient, settings: Await
   });
   const lockReason = liveAccountRiskLockReason({
     dailyRealizedPnlUsdt,
-    dailyPauseUsdt: settings.dailyPauseUsdt,
     accountEquityUsdt,
     accountEquityPeakUsdt,
-    maxDrawdownUsdt: settings.maxDrawdownUsdt,
   });
   if (lockReason) await riskLock(lockReason);
   return account;
@@ -469,7 +468,7 @@ async function validateRecoveredPostFill(client: GatePrivateClient, order: LiveO
   const fillPrice = weightedEntry || order.fillPrice || order.referencePrice;
   const accountEquityUsdt = gateAccountEquityUsdt(account);
   const minimumNetTp2Usdt = minimumTp2NetProfitUsdt(accountEquityUsdt);
-  const riskBudgetUsdt = Math.min(Math.max(0, settings.maxRiskPerAlertUsdt), accountEquityUsdt * 0.01);
+  const riskBudgetUsdt = singleTradeRiskBudgetUsdt(accountEquityUsdt);
   const filledStopRiskUsdt = contracts * contractMultiplier * Math.abs(fillPrice - order.stopLossPrice);
   const gateRoundTripCostBps = Math.max(0, number(contract.taker_fee_rate)) * 2 * 10_000;
   const effectiveRoundTripCostBps = Math.max(0, settings.roundTripCostBps, gateRoundTripCostBps);
@@ -1318,7 +1317,6 @@ export async function reconcileLiveTrading() {
             trade,
             contract,
             account,
-            maxRiskPerAlertUsdt: settings.maxRiskPerAlertUsdt,
             roundTripCostBps: settings.roundTripCostBps,
           });
           if (plan.passed) await submitCandidate(client, trade, updatedControl.activationEpoch, plan);

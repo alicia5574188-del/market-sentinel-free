@@ -137,8 +137,8 @@ test("live preflight permits a useful 1x order when TP2 clears the current-equit
   });
   assert.equal(plan.minimumNetTp2Usdt, 90);
   assert.equal(plan.passed, true);
-  assert.ok(plan.expectedNetTp2Usdt > 153 && plan.expectedNetTp2Usdt < 154);
-  assert.ok(plan.worstCaseNetTp2Usdt > 147 && plan.worstCaseNetTp2Usdt < 149);
+  assert.ok(plan.expectedNetTp2Usdt > 199 && plan.expectedNetTp2Usdt < 200);
+  assert.ok(plan.worstCaseNetTp2Usdt > 192 && plan.worstCaseNetTp2Usdt < 193);
   assert.equal(plan.marketOrderSlipRatio, "0.003");
   assert.deepEqual(protectionTriggerRules("LONG"), { takeProfit: 1, stopLoss: 2 });
   assert.deepEqual(protectionTriggerRules("SHORT"), { takeProfit: 2, stopLoss: 1 });
@@ -239,10 +239,10 @@ test("account risk locks new entries at the daily-loss or peak-drawdown boundary
   assert.match(liveAccountRiskLockReason({
     dailyRealizedPnlUsdt: -30,
     dailyPauseUsdt: 30,
-    accountEquityUsdt: 980,
+    accountEquityUsdt: 970,
     accountEquityPeakUsdt: 1000,
     maxDrawdownUsdt: 100,
-  }) ?? "", /日内暂停线/);
+  }) ?? "", /3% 暂停线/);
   assert.match(liveAccountRiskLockReason({
     dailyRealizedPnlUsdt: 4,
     dailyPauseUsdt: 30,
@@ -253,7 +253,7 @@ test("account risk locks new entries at the daily-loss or peak-drawdown boundary
   assert.equal(liveAccountRiskLockReason({
     dailyRealizedPnlUsdt: -29.99,
     dailyPauseUsdt: 30,
-    accountEquityUsdt: 900.01,
+    accountEquityUsdt: 970.01,
     accountEquityPeakUsdt: 1000,
     maxDrawdownUsdt: 100,
   }), null);

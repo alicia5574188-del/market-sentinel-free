@@ -3,6 +3,7 @@ import { getDb } from "../db";
 import { alertEvents, appSettings, pushSubscriptions, regimeState, scanRuns, strategyMemory, symbolLifecycle, tradeCases } from "../db/schema";
 import type { GateAnalysisPacket, GatePositionQuote } from "./gate-client";
 import { assessTakeProfitViability, buildContractPlan, calculateContractPnl, type ContractPlan, type TakeProfitViability } from "./contract-simulation";
+import { publicRiskPolicy, singleTradeRiskBudgetUsdt } from "./risk-policy.ts";
 import {
   accumulateMemory,
   deriveTradeLesson,
@@ -51,7 +52,7 @@ export async function getSettings(): Promise<AppSettings> {
 
 export async function updateSettings(patch: Partial<Pick<AppSettings,
   "alertStyle" | "universeLimit" | "deepScanLimit" | "minConfidence" | "roundTripCostBps" |
-  "trialCapitalUsdt" | "maxRiskPerAlertUsdt" | "dailyPauseUsdt" | "maxDrawdownUsdt" | "scanEnabled" | "pushEnabled"
+  "trialCapitalUsdt" | "scanEnabled" | "pushEnabled"
 >> & { coreSymbols?: string[] }) {
   const db = getDb();
   await getSettings();
@@ -62,9 +63,6 @@ export async function updateSettings(patch: Partial<Pick<AppSettings,
   if (Number.isFinite(patch.minConfidence)) values.minConfidence = Math.round(Math.min(90, Math.max(55, patch.minConfidence!)));
   if (Number.isFinite(patch.roundTripCostBps)) values.roundTripCostBps = Math.min(100, Math.max(0, patch.roundTripCostBps!));
   if (Number.isFinite(patch.trialCapitalUsdt)) values.trialCapitalUsdt = Math.min(1_000_000, Math.max(10, patch.trialCapitalUsdt!));
-  if (Number.isFinite(patch.maxRiskPerAlertUsdt)) values.maxRiskPerAlertUsdt = Math.min(10, Math.max(0.1, patch.maxRiskPerAlertUsdt!));
-  if (Number.isFinite(patch.dailyPauseUsdt)) values.dailyPauseUsdt = Math.min(100_000, Math.max(0.1, patch.dailyPauseUsdt!));
-  if (Number.isFinite(patch.maxDrawdownUsdt)) values.maxDrawdownUsdt = Math.min(500_000, Math.max(1, patch.maxDrawdownUsdt!));
   if (typeof patch.scanEnabled === "boolean") values.scanEnabled = patch.scanEnabled;
   if (typeof patch.pushEnabled === "boolean") values.pushEnabled = patch.pushEnabled;
   if (patch.coreSymbols) values.coreSymbolsJson = JSON.stringify(patch.coreSymbols.filter((symbol) => /^[A-Z0-9]{2,18}_USDT$/.test(symbol)).slice(0, 20));
@@ -73,7 +71,11 @@ export async function updateSettings(patch: Partial<Pick<AppSettings,
 }
 
 export function publicSettings(settings: AppSettings) {
-  return { ...settings, coreSymbols: parseJson<string[]>(settings.coreSymbolsJson, []) };
+  const current: Partial<AppSettings> = { ...settings };
+  delete current.maxRiskPerAlertUsdt;
+  delete current.dailyPauseUsdt;
+  delete current.maxDrawdownUsdt;
+  return { ...current, coreSymbols: parseJson<string[]>(settings.coreSymbolsJson, []), riskPolicy: publicRiskPolicy() };
 }
 
 export async function getPriorLong(symbol: string) {
@@ -551,7 +553,7 @@ export async function previewDecisionContract(packet: GateAnalysisPacket, settin
     liquidityVolumeUsd: packet.market.volumeUsd,
     accountEquityUsdt: account.equityUsdt,
     availableMarginUsdt: account.availableMarginUsdt,
-    requestedRiskUsdt: settings.maxRiskPerAlertUsdt,
+    requestedRiskUsdt: singleTradeRiskBudgetUsdt(account.equityUsdt),
   });
   const takeProfitViability = assessTakeProfitViability({
     side: plan.side,

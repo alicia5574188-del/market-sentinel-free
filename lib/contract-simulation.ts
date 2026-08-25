@@ -1,3 +1,5 @@
+import { RISK_POLICY, maxMarginAllocationUsdt, minimumTp2NetProfitBudgetUsdt, singleTradeRiskBudgetUsdt } from "./risk-policy.ts";
+
 export type ContractSide = "LONG" | "SHORT";
 
 export type ContractPlanInput = {
@@ -32,7 +34,7 @@ export type ContractPnl = {
   netPnlUsdt: number;
 };
 
-export const MIN_TP2_NET_PROFIT_EQUITY_RATE = 0.015;
+export const MIN_TP2_NET_PROFIT_EQUITY_RATE = RISK_POLICY.minimumTp2NetProfitRate;
 
 export type TakeProfitViability = ContractPnl & {
   grossMovePct: number;
@@ -56,7 +58,7 @@ function round(value: number, digits = 8) {
 }
 
 export function minimumTp2NetProfitUsdt(accountEquityUsdt: number) {
-  return round(finitePositive(accountEquityUsdt) * MIN_TP2_NET_PROFIT_EQUITY_RATE);
+  return minimumTp2NetProfitBudgetUsdt(accountEquityUsdt);
 }
 
 function liquidityLeverageCap(volumeUsd: number) {
@@ -86,13 +88,13 @@ export function buildContractPlan(input: ContractPlanInput): ContractPlan {
     : 1;
   const equity = finitePositive(input.accountEquityUsdt);
   const availableMargin = Math.max(0, Number.isFinite(input.availableMarginUsdt) ? input.availableMarginUsdt : 0);
-  const accountRiskCap = equity * 0.01;
+  const accountRiskCap = singleTradeRiskBudgetUsdt(equity);
   const requestedRisk = Math.min(finitePositive(input.requestedRiskUsdt), accountRiskCap);
   const liquidityCap = liquidityLeverageCap(finitePositive(input.liquidityVolumeUsd));
   const volatilityCap = volatilityLeverageCap(input.atrPct);
   const qualityCap = input.dataQuality < 0.8 || input.confidence < 75 ? 3 : 8;
   const leverageCap = clamp(Math.min(liquidityCap, volatilityCap, qualityCap), 1, 8);
-  const marginAllocationCap = Math.min(equity * 0.2, availableMargin);
+  const marginAllocationCap = Math.min(maxMarginAllocationUsdt(equity), availableMargin);
   const desiredNotional = stopDistanceFraction > 0 ? requestedRisk / stopDistanceFraction : 0;
   const requiredLeverage = marginAllocationCap > 0 ? Math.ceil(desiredNotional / marginAllocationCap) : 1;
   const leverage = clamp(requiredLeverage, 1, leverageCap);

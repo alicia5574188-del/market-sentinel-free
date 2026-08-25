@@ -35,7 +35,7 @@ test("live UI exposes real-funds and current-equity safety gates", async () => {
   assert.match(page, /TP2 预计净利润 ≥ Gate 当前权益的 1\.5%/);
   assert.match(page, /当前模拟权益 1\.5%/);
   assert.match(page, /Gate 当前权益 1% 单笔风险、20% 单笔保证金/);
-  assert.match(page, /Gate 当日已实现亏损或实盘权益回撤触线后/);
+  assert.match(page, /当日参考权益 3%.*峰值回撤.*10%/);
   assert.match(page, /开启、部署或刷新页面都不会自动恢复交易/);
 });
 
