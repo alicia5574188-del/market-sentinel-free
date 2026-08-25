@@ -10,6 +10,7 @@ import { runMarketScan, refreshOpenPositions } from "../lib/scanner";
 import { getSettings } from "../lib/repository";
 import type { SchedulerWorkerStatus } from "../lib/background-scheduler";
 import { resolveVapidConfig } from "../lib/vapid-config";
+import { workerVersionChanged } from "../lib/live-deployment-safety";
 import {
   getLiveTradingSnapshot,
   liveAlarmDelayMs,
@@ -38,6 +39,7 @@ export interface CloudflareEnv {
   BACKGROUND_MODE?: string;
   SITE_OWNER_EMAIL?: string;
   OWNER_ACCESS_TOKEN?: string;
+  CF_VERSION_METADATA?: { id: string; tag?: string; timestamp?: string };
   POSITION_MONITOR?: DurableObjectNamespace<PositionMonitor>;
   MARKET_SCANNER?: DurableObjectNamespace<MarketScanner>;
   LIVE_TRADING_COORDINATOR?: DurableObjectNamespace<LiveTradingCoordinator>;
@@ -185,6 +187,18 @@ export class LiveTradingCoordinator extends DurableObject<CloudflareEnv> {
     setRuntimeBindings(this.env);
   }
 
+  private async enforceDeploymentBoundary() {
+    const versionId = this.env.CF_VERSION_METADATA?.id?.trim();
+    if (!versionId) return;
+    const previousVersionId = await this.ctx.storage.get<string>("workerVersionId");
+    if (!workerVersionChanged(previousVersionId, versionId)) return;
+    const snapshot = await getLiveTradingSnapshot();
+    if (snapshot.control.entryEnabled && snapshot.control.state === "armed") {
+      await setAutomaticEntry(false, "system-worker-deployment");
+    }
+    await this.ctx.storage.put("workerVersionId", versionId);
+  }
+
   private async schedule(delayMs = 1_000) {
     const current = await this.ctx.storage.getAlarm();
     const requested = Date.now() + delayMs;
@@ -214,6 +228,7 @@ export class LiveTradingCoordinator extends DurableObject<CloudflareEnv> {
     await previous;
     try {
       this.initializeRuntime();
+      await this.enforceDeploymentBoundary();
       return await operation();
     } finally {
       release();

@@ -8,6 +8,7 @@ test("generated Cloudflare deployment config has unique bindings", async () => {
   );
   const bindings = [
     config.assets?.binding,
+    config.version_metadata?.binding,
     ...(config.d1_databases ?? []).map(({ binding }) => binding),
     ...(config.durable_objects?.bindings ?? []).map(({ name }) => name),
     ...Object.keys(config.vars ?? {}),
@@ -32,6 +33,7 @@ test("generated Cloudflare deployment config has unique bindings", async () => {
     [{ name: "LIVE_TRADING_COORDINATOR", class_name: "LiveTradingCoordinator" }],
   );
   assert.ok((config.migrations ?? []).some(({ new_sqlite_classes: classes }) => classes?.includes("LiveTradingCoordinator")));
+  assert.deepEqual(config.version_metadata, { binding: "CF_VERSION_METADATA" });
 });
 
 test("Worker serves public bundles from ASSETS before the Vinext router", async () => {

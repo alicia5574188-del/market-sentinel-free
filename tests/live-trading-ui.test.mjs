@@ -36,7 +36,7 @@ test("live UI exposes real-funds and current-equity safety gates", async () => {
   assert.match(page, /当前模拟权益 1\.5%/);
   assert.match(page, /Gate 当前权益 1% 单笔风险、20% 单笔保证金/);
   assert.match(page, /当日参考权益 3%.*峰值回撤.*10%/);
-  assert.match(page, /开启、部署或刷新页面都不会自动恢复交易/);
+  assert.match(page, /Worker 新版本部署后会自动关闭新开仓；普通重启和刷新页面不会改变当前开关状态/);
 });
 
 test("Durable Object serializes live mutations and emergency reconciliation", async () => {
