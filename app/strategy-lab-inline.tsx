@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
 type Stats = {
@@ -35,6 +35,35 @@ type Dashboard = {
   }[];
 };
 
+type TradeRecord = {
+  id: string;
+  simulationModel: string;
+  symbol: string;
+  status: "holding" | "closed";
+  side: "LONG" | "SHORT";
+  confidence: number;
+  regime: string;
+  entryAt: number;
+  entryPrice: number;
+  currentStopPrice: number;
+  takeProfit1Price: number;
+  takeProfit2Price: number;
+  leverage: number;
+  marginUsdt: number;
+  contractNotionalUsdt: number;
+  unrealizedNetPct: number;
+  unrealizedNetUsdt: number;
+  progressR: number;
+  exitAt: number | null;
+  exitPrice: number | null;
+  exitCode: string | null;
+  exitReason: string | null;
+  netMovePct: number | null;
+  netPnlUsdt: number | null;
+};
+
+type HistoryPayload = { observedAt: number; trades: TradeRecord[] };
+
 function pct(value: number | null | undefined, digits = 1) {
   if (value == null || !Number.isFinite(value)) return "--";
   return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}%`;
@@ -43,6 +72,27 @@ function pct(value: number | null | undefined, digits = 1) {
 function pf(value: number | null | undefined) {
   if (value == null) return "∞/未形成亏损样本";
   return Number.isFinite(value) ? value.toFixed(2) : "--";
+}
+
+function price(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value) || value <= 0) return "--";
+  if (value >= 1000) return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  if (value >= 1) return value.toLocaleString("en-US", { maximumFractionDigits: 5 });
+  return value.toPrecision(6);
+}
+
+function dateTime(value: number | null | undefined) {
+  if (!value) return "--";
+  return new Date(value).toLocaleString("zh-CN", { hour12: false });
+}
+
+function strategyLabel(model: string) {
+  if (model === "contract_v2") return "Sentinel Baseline V1";
+  if (model === "shadow_v3:trend_pullback") return "趋势回踩";
+  if (model === "shadow_v3:volatility_breakout") return "波动收缩突破";
+  if (model === "shadow_v3:range_reversion") return "震荡均值回归";
+  if (model === "shadow_v3:relative_strength") return "相对强弱（实验）";
+  return model;
 }
 
 function LabCard({ label, openCount, stats, status, note }: { label: string; openCount: number; stats: Stats; status: string; note: string }) {
@@ -68,6 +118,7 @@ function LabCard({ label, openCount, stats, status, note }: { label: string; ope
 export function StrategyLabInline() {
   const [host, setHost] = useState<HTMLElement | null>(null);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
+  const [history, setHistory] = useState<TradeRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -98,10 +149,16 @@ export function StrategyLabInline() {
   const load = useCallback(async () => {
     if (!host) return;
     try {
-      const response = await fetch("/api/strategy-lab", { cache: "no-store", credentials: "same-origin" });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload?.error ?? `策略实验室读取失败 (${response.status})`);
-      setDashboard(payload as Dashboard);
+      const [dashboardResponse, historyResponse] = await Promise.all([
+        fetch("/api/strategy-lab", { cache: "no-store", credentials: "same-origin" }),
+        fetch("/api/strategy-lab/trades", { cache: "no-store", credentials: "same-origin" }),
+      ]);
+      const dashboardPayload = await dashboardResponse.json().catch(() => ({}));
+      const historyPayload = await historyResponse.json().catch(() => ({}));
+      if (!dashboardResponse.ok) throw new Error(dashboardPayload?.error ?? `策略实验室读取失败 (${dashboardResponse.status})`);
+      if (!historyResponse.ok) throw new Error(historyPayload?.error ?? `策略订单记录读取失败 (${historyResponse.status})`);
+      setDashboard(dashboardPayload as Dashboard);
+      setHistory((historyPayload as HistoryPayload).trades ?? []);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "策略实验室读取失败");
@@ -115,16 +172,35 @@ export function StrategyLabInline() {
     return () => window.clearInterval(timer);
   }, [host, load]);
 
+  const baselineHistory = useMemo(() => history.filter((trade) => trade.simulationModel === "contract_v2"), [history]);
+  const shadowHistory = useMemo(() => history.filter((trade) => trade.simulationModel.startsWith("shadow_v3:")), [history]);
+
   if (!host) return null;
   return createPortal(<section aria-label="多策略影子实验室" style={{ margin: "15px 0 18px", borderTop: "1px solid rgba(151,174,193,.12)", borderBottom: "1px solid rgba(151,174,193,.12)", padding: "14px 0" }}>
     <div className="section-title"><span>策略实验室 V3</span><small>多策略 · 分市场状态 · 只做影子模拟</small></div>
+    <div className="invalid-box muted" style={{ marginBottom: 10 }}><div><span>样本口径</span><strong>Baseline V1 的历史订单完整保留；四个 V3 新策略只统计升级上线后自己真实产生的影子单，不把旧订单伪装成新策略样本。</strong></div></div>
     <div className="invalid-box muted" style={{ marginBottom: 10 }}><div><span>实盘隔离</span><strong>四个新策略不会触发 Gate 下单。达到候选线也只会标记“候选”，必须后续人工批准才能接入实盘。</strong></div></div>
     {error && <div className="live-error"><span>{error}</span></div>}
     {dashboard ? <>
       <div style={{ display: "grid", gap: 9 }}>
-        <LabCard label={dashboard.baseline.label} openCount={dashboard.baseline.openCount} stats={dashboard.baseline.stats} status="原件基线" note="当前 contract_v2，继续作为实盘唯一信号来源" />
+        <LabCard label={`${dashboard.baseline.label}（历史样本保留）`} openCount={dashboard.baseline.openCount} stats={dashboard.baseline.stats} status="原件基线" note={`当前 contract_v2，继续作为实盘唯一信号来源 · 已读取 ${baselineHistory.length} 条近期订单记录`} />
         {dashboard.strategies.map((strategy) => <LabCard key={strategy.id} label={strategy.label} openCount={strategy.openCount} stats={strategy.stats} status={strategy.promotion.label} note={`${strategy.stats.sampleCount}/${strategy.promotion.requiredSamples} 样本 · ${strategy.stats.activeDayCount}/${strategy.promotion.requiredActiveDays} 交易日 · ${strategy.promotion.reasons[0] ?? "统计门槛已通过，仍不自动实盘"}`} />)}
       </div>
+
+      <div className="section-title" style={{ marginTop: 14 }}><span>V3 影子交易记录</span><small>{shadowHistory.length ? `最近 ${shadowHistory.length} 笔` : "刚上线，等待第一笔真实影子信号"}</small></div>
+      <div className="order-list closed-orders">{shadowHistory.length ? shadowHistory.slice(0, 40).map((trade) => <article key={trade.id} className="order-row" style={{ cursor: "default" }}>
+        <span className={`signal-dot ${trade.status === "holding" ? "holding" : "closed"}`}/>
+        <div>
+          <strong>{strategyLabel(trade.simulationModel)} · {trade.symbol.replace("_", "")} · {trade.side} · {trade.leverage}x</strong>
+          <span>入场 {price(trade.entryPrice)} · 止损 {price(trade.currentStopPrice)} · TP1 {price(trade.takeProfit1Price)} · TP2 {price(trade.takeProfit2Price)}</span>
+          <span>{trade.status === "closed" ? (trade.exitReason ?? trade.exitCode ?? "规则退出") : `${trade.regime} · ${trade.progressR.toFixed(2)}R`}</span>
+        </div>
+        <div>
+          <b className={(trade.status === "closed" ? (trade.netPnlUsdt ?? 0) : trade.unrealizedNetUsdt) >= 0 ? "good" : "danger"}>{trade.status === "closed" ? `${(trade.netPnlUsdt ?? 0) >= 0 ? "+" : ""}${(trade.netPnlUsdt ?? 0).toFixed(2)}U` : `${trade.unrealizedNetUsdt >= 0 ? "+" : ""}${trade.unrealizedNetUsdt.toFixed(2)}U`}</b>
+          <small>{trade.status === "closed" ? `${pct(trade.netMovePct, 2)} · ${dateTime(trade.exitAt)}` : `${pct(trade.unrealizedNetPct, 2)} · ${dateTime(trade.entryAt)}`}</small>
+        </div>
+      </article>) : <p className="empty-note">V3 刚上线，目前还没有任何新策略满足完整入场条件。第一笔影子单出现后会自动记录在这里，不需要手动操作。</p>}</div>
+
       <p className="risk-note" style={{ marginTop: 10 }}>评价不只看胜率：同时看平均净收益、Profit Factor、最大回撤、最大连亏、最近 20 笔、有效交易日和实际交易的市场状态。趋势/突破/震荡策略至少 50 个完整样本且跨 7 个交易日；相对强弱策略要求 80 个样本且跨 10 个交易日。</p>
     </> : <p className="empty-note">策略实验室正在积累第一批影子样本…</p>}
   </section>, host);
