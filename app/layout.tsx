@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from "next";
 import { requireChatGPTUser } from "./chatgpt-auth";
-import { LivePolicyUiSync } from "./live-policy-ui";
 import "./globals.css";
 
 export const dynamic = "force-dynamic";
@@ -48,7 +47,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   await requireChatGPTUser("/");
   return (
     <html lang="zh-CN">
-      <body>{children}<LivePolicyUiSync /></body>
+      <body>{children}</body>
     </html>
   );
 }

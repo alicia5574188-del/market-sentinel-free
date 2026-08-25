@@ -543,7 +543,6 @@ export default function Home() {
   const [liveTradingBusy, setLiveTradingBusy] = useState(false);
   const [gateApiKey, setGateApiKey] = useState("");
   const [gateApiSecret, setGateApiSecret] = useState("");
-  const [gateEnvironment, setGateEnvironment] = useState<"live" | "testnet">("testnet");
   const [gatePermissionsConfirmed, setGatePermissionsConfirmed] = useState(false);
   const [showCredentialForm, setShowCredentialForm] = useState(false);
   const [emergencyHolding, setEmergencyHolding] = useState(false);
@@ -986,7 +985,6 @@ export default function Home() {
     const snapshot = await liveMutation("/api/live/credentials", {
       apiKey: gateApiKey,
       apiSecret: gateApiSecret,
-      environment: gateEnvironment,
       permissionsConfirmed: gatePermissionsConfirmed,
     }, "PUT");
     if (!snapshot) return;
@@ -1178,7 +1176,7 @@ export default function Home() {
         <div className="counter-section"><div className="section-title"><span>反证与风险</span><small>强制展示，不只挑好数据</small></div>{decision.counterEvidence.map((item) => <div className="counter-row" key={item.title}><Icon name="alert" size={15}/><div><strong>{item.title}</strong><p>{item.detail}</p></div></div>)}</div>
         <div className="section-title"><span>全部分析维度</span><small>缺失数据明确标 N/A</small></div><div className="analysis-matrix">{decision.metrics.map((item) => <div className={!item.available ? "muted" : item.score * (decision.side === "SHORT" ? -1 : 1) >= 0 ? "support" : "oppose"} key={item.key}><span>{item.label}</span><b>{item.available ? `${item.score >= 0 ? "+" : ""}${item.score.toFixed(2)}` : "N/A"}</b><p>{item.detail}</p></div>)}</div>
         <div className="invalid-box"><Icon name="shield"/><div><span>明确失效条件</span><strong>{decision.invalidation}</strong></div></div>
-        <p className="risk-note">只有全部进场检查和 15U 净利润闸门通过，深度扫描才会创建系统跟踪订单。{liveTrading?.control.entryEnabled ? "自动实盘已开启：服务器会再次按 Gate 实时价格、张数、保证金和权限复核，成交后必须确认交易所止盈止损。" : "自动实盘当前关闭，不会向交易所创建新订单。"}</p>
+        <p className="risk-note">只有全部进场检查和按当前模拟权益 1.5% 计算的净利润闸门通过，深度扫描才会创建系统跟踪订单。{liveTrading?.control.entryEnabled ? "自动实盘已开启：服务器会再次按 Gate 实时价格、张数、保证金和权限复核，成交后必须确认交易所止盈止损。" : "自动实盘当前关闭，不会向交易所创建新订单。"}</p>
       </section> : <section className="decision-card observing loading-card"><div className="utility-heading"><Icon name="radar"/><div><span className="eyebrow">深度分析</span><strong>{selectedPacket?.error ?? "正在合并实时证据…"}</strong></div></div><p>没有实时决策时不会用演示数据冒充信号。</p></section>}
 
       <section className="opportunity-section">
@@ -1235,7 +1233,7 @@ export default function Home() {
 
       <div className="section-title live-section-title"><span>API 凭据保险库</span><small>浏览器不保存，服务端加密后不再返回</small></div>
       {liveTrading?.credential.configured && <div className="credential-summary">
-        <div><span>环境</span><strong>{liveTrading.credential.environment === "live" ? "Gate 实盘" : "Gate TestNet"}</strong></div>
+        <div><span>环境</span><strong>{liveTrading.credential.environment === "live" ? "Gate 实盘" : "旧 TestNet（需更换）"}</strong></div>
         <div><span>永续权限</span><strong>{liveTrading.credential.permissionSummary.perpetualReadWrite === true ? "接口确认读写" : "所有者确认读写"}</strong></div>
         <div><span>持仓模式</span><strong>{liveTrading.credential.permissionSummary.positionMode === "single" ? "单向" : liveTrading.credential.permissionSummary.positionMode ?? "--"}</strong></div>
         <div><span>合约可用</span><strong>{liveTrading.credential.permissionSummary.availableUsdt == null ? "--" : `${Number(liveTrading.credential.permissionSummary.availableUsdt).toFixed(2)}U`}</strong></div>
@@ -1243,7 +1241,7 @@ export default function Home() {
       </div>}
 
       {(!liveTrading?.credential.configured || showCredentialForm) && <div className="credential-form">
-        <div className="segmented live-environment"><button className={gateEnvironment === "live" ? "active" : ""} onClick={() => setGateEnvironment("live")}>Gate 实盘</button><button className={gateEnvironment === "testnet" ? "active" : ""} onClick={() => setGateEnvironment("testnet")}>TestNet</button></div>
+        <p className="risk-note">API 环境：只接受 Gate 实盘 API；策略验证请使用程序内模拟交易。</p>
         <label><span>API Key</span><input type="password" value={gateApiKey} onChange={(event) => setGateApiKey(event.target.value)} autoComplete="off" autoCapitalize="none" spellCheck={false} placeholder="只在这里填写"/></label>
         <label><span>API Secret</span><input type="password" value={gateApiSecret} onChange={(event) => setGateApiSecret(event.target.value)} autoComplete="off" autoCapitalize="none" spellCheck={false} data-form-type="other" placeholder="保存后不会再次显示"/></label>
         <label className="permission-check"><input type="checkbox" checked={gatePermissionsConfirmed} onChange={(event) => setGatePermissionsConfirmed(event.target.checked)}/><span>我已确认只开启“永续合约：读写”，钱包和提现权限均关闭；账户使用经典合约账户、单向持仓模式。</span></label>
@@ -1252,7 +1250,7 @@ export default function Home() {
       </div>}
 
       <div className="section-title live-section-title"><span>自动开仓</span><small>只处理本次开启之后的新确认信号</small></div>
-      <div className="live-control-row"><div><strong>{liveStateLabel}</strong><span>{liveTrading?.control.entryEnabled ? "新订单会自动进场并在 Gate 建立止损与 TP2；关闭后只停止新开仓，已有仓位继续到策略结束。" : "不会创建新的 Gate 订单；已有仓位和交易所保护单仍持续对账。"}</span></div><button disabled={liveTradingBusy || !liveTrading?.credential.configured || liveTrading?.control.state === "emergency_stopped"} className={`switch ${liveTrading?.control.entryEnabled ? "on" : ""}`} onClick={() => void toggleAutomaticEntry()} aria-label="切换自动开仓"><i/></button></div>
+      <div className="live-control-row"><div><strong>{liveStateLabel}</strong><span>{liveTrading?.control.entryEnabled ? "新订单会自动进场并在 Gate 建立止损与 TP2；关闭后只停止新开仓，已有仓位继续到策略结束。" : "不会创建新的 Gate 订单；已有仓位和交易所保护单仍持续对账。"}</span></div><button disabled={liveTradingBusy || !liveTrading?.credential.configured || liveTrading?.credential.environment !== "live" || liveTrading?.control.state === "emergency_stopped"} className={`switch ${liveTrading?.control.entryEnabled ? "on" : ""}`} onClick={() => void toggleAutomaticEntry()} aria-label="切换自动开仓"><i/></button></div>
       <div className="live-actions"><button className="text-button" disabled={liveTradingBusy || !liveTrading?.credential.configured} onClick={() => void reconcileLiveAccount()}><Icon name="refresh" size={14}/>立即对账</button><span>开启、部署或刷新页面都不会自动恢复交易。</span></div>
 
       <div className="section-title live-section-title"><span>一键停机</span><small>撤销全部 USDT 永续挂单并 reduce-only 清仓</small></div>
@@ -1268,7 +1266,7 @@ export default function Home() {
       {liveTrading?.control.state === "emergency_stopped" && <div className="emergency-latch"><div><strong>停机后不会自动恢复</strong><span>{liveTrading.control.emergencyReason ?? "已停止新开仓并持续确认账户清空"}</span></div><button className="text-button" disabled={liveTradingBusy} onClick={() => void resetEmergencyLatch()}>确认空仓后解除锁</button></div>}
 
       <div className="safety-list">
-        <div><Icon name="shield" size={14}/><span><strong>二次收益闸门</strong> 下单前按 Gate 实时价格、价格精度、实际费率和双向允许滑点重新确认 TP2 预计净利润 ≥ 15U。</span></div>
+        <div><Icon name="shield" size={14}/><span><strong>二次收益闸门</strong> 下单前按 Gate 实时价格、价格精度、实际费率和双向允许滑点重新确认 TP2 预计净利润 ≥ Gate 当前权益的 1.5%。</span></div>
         <div><Icon name="shield" size={14}/><span><strong>按实盘资金缩仓</strong> 仓位同时受 Gate 当前权益 1% 单笔风险、20% 单笔保证金和实际可用余额限制，只会缩小，不会放大模拟计划。</span></div>
         <div><Icon name="shield" size={14}/><span><strong>账户级熔断</strong> Gate 当日已实现亏损或实盘权益回撤触线后，锁定新开仓；已有仓位仍按保护规则结束。</span></div>
         <div><Icon name="shield" size={14}/><span><strong>实盘异常提醒</strong> 保护确认、实际平仓、风控锁定和停机结果只推送给保存密钥的所有者账户。</span></div>

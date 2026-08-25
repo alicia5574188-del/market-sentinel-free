@@ -1,4 +1,4 @@
-import { minimumTp2NetProfitUsdt } from "./contract-simulation";
+import { minimumTp2NetProfitUsdt } from "./contract-simulation.ts";
 import type { GateContract, GateFuturesAccount, GatePositionClose } from "./gate-private";
 
 export const MAX_LIVE_OPEN_POSITIONS = 3;

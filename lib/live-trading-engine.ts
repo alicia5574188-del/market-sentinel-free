@@ -1,6 +1,6 @@
 import { getRuntimeBindings } from "./runtime-bindings";
 import { decryptGateCredentials, encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "./credential-vault";
-import { minimumTp2NetProfitUsdt } from "./contract-simulation";
+import { minimumTp2NetProfitUsdt } from "./contract-simulation.ts";
 import {
   GateApiError,
   GatePrivateClient,
