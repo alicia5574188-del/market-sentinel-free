@@ -15,9 +15,16 @@ export type LiveOrderRecord = typeof liveOrders.$inferSelect;
 export type LiveOrderState = LiveOrderRecord["state"];
 
 const ACTIVE_LIVE_STATES: LiveOrderState[] = ["submitting", "open", "protected", "closing"];
+export const LIVE_ENTRY_MAX_AGE_MS = 2 * 60 * 1_000;
 
 function parseJson<T>(value: string, fallback: T): T {
   try { return JSON.parse(value) as T; } catch { return fallback; }
+}
+
+export function liveEntryCandidateCutoff(enabledAt: number, now = Date.now()) {
+  const safeNow = Number.isFinite(now) ? now : Date.now();
+  const safeEnabledAt = Number.isFinite(enabledAt) ? Math.max(0, enabledAt) : safeNow;
+  return Math.max(safeEnabledAt, safeNow - LIVE_ENTRY_MAX_AGE_MS);
 }
 
 export async function getLiveControl(): Promise<LiveControlRecord> {
@@ -182,13 +189,13 @@ export async function listLiveOrdersAwaitingRealizedPnl(now = Date.now()) {
   )).orderBy(asc(liveOrders.closedAt)).limit(3);
 }
 
-export async function listLiveEntryCandidates(enabledAt: number) {
+export async function listLiveEntryCandidates(enabledAt: number, now = Date.now()) {
   const db = getDb();
   const rows = await db.select().from(tradeCases).where(and(
     eq(tradeCases.status, "holding"),
     eq(tradeCases.simulationModel, "contract_v2"),
-    gte(tradeCases.entryAt, enabledAt),
-  )).orderBy(asc(tradeCases.entryAt)).limit(20);
+    gte(tradeCases.entryAt, liveEntryCandidateCutoff(enabledAt, now)),
+  )).orderBy(desc(tradeCases.entryAt)).limit(20);
   if (!rows.length) return [];
   const existing = await db.select({ tradeCaseId: liveOrders.tradeCaseId }).from(liveOrders).where(inArray(liveOrders.tradeCaseId, rows.map((row) => row.id)));
   const claimed = new Set(existing.map((row) => row.tradeCaseId));
