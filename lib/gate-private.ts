@@ -144,7 +144,10 @@ export class GatePrivateClient {
 
   constructor(credentials: GateCredentials, fetcher: typeof fetch = fetch) {
     this.credentials = credentials;
-    this.fetcher = fetcher;
+    // Cloudflare's host-provided fetch requires the Worker global as its receiver.
+    // Calling an unbound host function through `this.fetcher(...)` changes `this`
+    // to the GatePrivateClient instance and triggers "Illegal invocation".
+    this.fetcher = fetcher.bind(globalThis) as typeof fetch;
     this.baseUrl = credentials.environment === "testnet" ? "https://api-testnet.gateapi.io" : "https://api.gateio.ws";
   }
 
