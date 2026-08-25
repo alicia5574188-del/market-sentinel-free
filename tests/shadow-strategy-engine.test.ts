@@ -77,8 +77,16 @@ test("incomplete 5m candle cannot manufacture a volatility regime change", () =>
   assert.equal(withIncompleteSpike.rangeWidthPct, normal.rangeWidthPct);
 });
 
-test("relative-strength research is intentionally confidence-capped", () => {
-  const signal = evaluateShadowStrategies(input({ changePercentage: 9, benchmarkMomentum: 1, multiTimeframeTrend: 0.7, spotCvdRatio: 0.08 })).find((item) => item.strategyId === "relative_strength");
+test("relative-strength research can become a real ready shadow candidate", () => {
+  const signal = evaluateShadowStrategies(input({
+    changePercentage: 9,
+    benchmarkMomentum: 1,
+    multiTimeframeTrend: 0.7,
+    spotCvdRatio: 0.08,
+  })).find((item) => item.strategyId === "relative_strength");
   assert.ok(signal);
+  assert.equal(signal?.state, "ready");
+  assert.equal(signal?.side, "LONG");
+  assert.equal(signal?.entryPlan?.ready, true);
   assert.ok((signal?.confidence ?? 999) <= 76);
 });
