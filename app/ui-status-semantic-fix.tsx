@@ -19,12 +19,6 @@ function normalizeRiskCopy() {
   }
 }
 
-function normalizeNavigationCopy() {
-  for (const label of Array.from(document.querySelectorAll<HTMLElement>(".bottom-nav button span"))) {
-    if (label.textContent?.trim() === "订单") label.textContent = "量化";
-  }
-}
-
 function normalizeUiSemantics() {
   const banner = document.querySelector<HTMLElement>('[aria-label="数据状态"]');
   if (banner) {
@@ -46,7 +40,6 @@ function normalizeUiSemantics() {
     if (label.textContent?.trim() === "合约可用") label.textContent = "验证时逐仓可用";
   }
 
-  normalizeNavigationCopy();
   normalizeRiskCopy();
 }
 
