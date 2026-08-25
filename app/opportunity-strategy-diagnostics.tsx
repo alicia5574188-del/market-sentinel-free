@@ -99,8 +99,8 @@ export function OpportunityStrategyDiagnostics() {
   useEffect(() => {
     let current: HTMLElement | null = null;
     const sync = () => {
-      const marketStatus = document.querySelector<HTMLElement>(".market-status");
-      if (!marketStatus) {
+      const opportunitySection = document.querySelector<HTMLElement>(".opportunity-section");
+      if (!opportunitySection) {
         current?.remove();
         current = null;
         setHost(null);
@@ -110,7 +110,7 @@ export function OpportunityStrategyDiagnostics() {
       if (!target) {
         target = document.createElement("div");
         target.dataset.v3OpportunityDiagnostics = "true";
-        marketStatus.insertAdjacentElement("afterend", target);
+        opportunitySection.insertAdjacentElement("beforebegin", target);
       }
       current = target;
       setHost((previous) => previous === target ? previous : target);
