@@ -1249,7 +1249,7 @@ export default function Home() {
 
       <div className="section-title live-section-title"><span>自动开仓</span><small>只处理本次开启之后的新确认信号</small></div>
       <div className="live-control-row"><div><strong>{liveStateLabel}</strong><span>{liveTrading?.control.entryEnabled ? "新订单会自动进场并在 Gate 建立止损与 TP2；关闭后只停止新开仓，已有仓位继续到策略结束。" : "不会创建新的 Gate 订单；已有仓位和交易所保护单仍持续对账。"}</span></div><button disabled={liveTradingBusy || !liveTrading?.credential.configured || liveTrading?.credential.environment !== "live" || liveTrading?.control.state === "emergency_stopped"} className={`switch ${liveTrading?.control.entryEnabled ? "on" : ""}`} onClick={() => void toggleAutomaticEntry()} aria-label="切换自动开仓"><i/></button></div>
-      <div className="live-actions"><button className="text-button" disabled={liveTradingBusy || !liveTrading?.credential.configured} onClick={() => void reconcileLiveAccount()}><Icon name="refresh" size={14}/>立即对账</button><span>开启、部署或刷新页面都不会自动恢复交易。</span></div>
+      <div className="live-actions"><button className="text-button" disabled={liveTradingBusy || !liveTrading?.credential.configured} onClick={() => void reconcileLiveAccount()}><Icon name="refresh" size={14}/>立即对账</button><span>Worker 新版本部署后会自动关闭新开仓；普通重启和刷新页面不会改变当前开关状态。</span></div>
 
       <div className="section-title live-section-title"><span>一键停机</span><small>撤销全部 USDT 永续挂单并 reduce-only 清仓</small></div>
       <button
