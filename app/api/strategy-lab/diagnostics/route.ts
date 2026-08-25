@@ -94,6 +94,13 @@ export async function GET(request: Request) {
         reasons: strategy.reasons,
         blockers: strategy.blockers,
         entryPlanReady: Boolean(strategy.entryPlan?.ready),
+        checks: strategy.entryPlan?.checks.map((check) => ({
+          key: check.key,
+          label: check.label,
+          passed: check.passed,
+          required: check.required,
+          detail: check.detail,
+        })) ?? [],
       })),
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
