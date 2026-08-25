@@ -48,6 +48,23 @@ test("live tab embeds detailed Gate orders without a separate-page shortcut", as
   assert.doesNotMatch(semantics, /查看实盘订单|href = "\/live-orders"/);
 });
 
+test("live order details preserve the unified strategy entry and exit explanation", async () => {
+  const [inlineOrders, statusRoute] = await Promise.all([
+    readFile(new URL("../app/live-orders-inline.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/live/status/route.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(statusRoute, /strategyLabel/);
+  assert.match(statusRoute, /strategyTrigger/);
+  assert.match(statusRoute, /strategyThesis/);
+  assert.match(statusRoute, /strategyExitReason/);
+  assert.match(statusRoute, /strategyExitEvidence/);
+  assert.match(statusRoute, /function stringList/);
+  assert.match(inlineOrders, /为什么进场/);
+  assert.match(inlineOrders, /为什么退出/);
+  assert.match(inlineOrders, /order\.strategyLabel/);
+  assert.match(inlineOrders, /order\.strategyTrigger/);
+});
+
 test("live UI exposes real-funds and current-equity safety gates", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   assert.match(page, /TP2 预计净利润 ≥ Gate 当前权益的 1\.5%/);
