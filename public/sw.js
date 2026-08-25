@@ -1,4 +1,4 @@
-const CACHE_NAME = "market-sentinel-shell-v2";
+const CACHE_NAME = "market-sentinel-shell-v3";
 const APP_SHELL = ["/", "/manifest.webmanifest", "/favicon.svg"];
 
 self.addEventListener("install", (event) => {
@@ -15,7 +15,18 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET" || new URL(event.request.url).origin !== self.location.origin) return;
-  event.respondWith(fetch(event.request).catch(() => caches.match(event.request).then((cached) => cached || caches.match("/"))));
+  event.respondWith((async () => {
+    try {
+      const response = await fetch(event.request);
+      if (response.ok && (event.request.mode === "navigate" || APP_SHELL.includes(new URL(event.request.url).pathname))) {
+        const cache = await caches.open(CACHE_NAME);
+        await cache.put(event.request.mode === "navigate" ? "/" : event.request, response.clone());
+      }
+      return response;
+    } catch {
+      return (await caches.match(event.request)) || (await caches.match("/"));
+    }
+  })());
 });
 
 self.addEventListener("push", (event) => {
