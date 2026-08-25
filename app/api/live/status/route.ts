@@ -12,6 +12,16 @@ function strategyLabel(trigger: string | null | undefined) {
   return match?.[1]?.trim() || "综合确认";
 }
 
+function stringList(value: string | null | undefined) {
+  if (!value) return [] as string[];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string").slice(0, 12) : [];
+  } catch {
+    return [] as string[];
+  }
+}
+
 export async function GET() {
   const auth = await requireApiAccount();
   if ("response" in auth) return auth.response;
@@ -40,7 +50,7 @@ export async function GET() {
         strategyTrigger: trade?.entryTrigger ?? null,
         strategyThesis: trade?.entryThesis ?? null,
         strategyExitReason: trade?.exitReason ?? null,
-        strategyExitEvidence: trade?.exitEvidenceJson ? JSON.parse(trade.exitEvidenceJson) : [],
+        strategyExitEvidence: stringList(trade?.exitEvidenceJson),
       };
     });
     return Response.json({ ...snapshot, orders }, { headers: { "Cache-Control": "no-store" } });
