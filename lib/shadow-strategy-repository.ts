@@ -72,8 +72,12 @@ async function reconcileShadowTrade(
   settings: AppSettings,
 ) {
   const db = getDb();
-  const fromExclusive = Math.max(row.entryAt, row.lastEvaluatedAt);
-  const priceWindow = shadowCompletedWindow(candles5m, fromExclusive, packet.observedAt);
+  // For shadow rows, lastEvaluatedAt is deliberately the end of the latest
+  // fully consumed 5m candle, not merely the wall-clock time of the last scan.
+  // That lets a rotating free-worker scan catch up without either skipping a
+  // completed bar or borrowing high/low data from before the trade existed.
+  const fromCoveredThrough = Math.max(row.entryAt, row.lastEvaluatedAt);
+  const priceWindow = shadowCompletedWindow(candles5m, fromCoveredThrough, packet.observedAt);
   const score = signal?.score ?? packet.decision.directionalScore;
   const metrics = signal?.metrics ?? packet.decision.metrics;
   const evaluation = evaluatePosition(positionSnapshot(row), {
@@ -93,7 +97,7 @@ async function reconcileShadowTrade(
     currentStopPrice: evaluation.currentStopPrice,
     target1HitAt: evaluation.target1HitAt,
     lastPrice: packet.market.futuresPrice,
-    lastEvaluatedAt: packet.observedAt,
+    lastEvaluatedAt: priceWindow.coveredThroughAt ?? row.lastEvaluatedAt,
     maxPriceSeen: evaluation.maxPriceSeen,
     minPriceSeen: evaluation.minPriceSeen,
     adverseFlowCount: evaluation.adverseFlowCount,
@@ -210,7 +214,7 @@ async function openShadowTrade(packet: GateAnalysisPacket, signal: ShadowStrateg
     entryEvidenceJson: JSON.stringify(signal.reasons.map((title) => ({ title }))),
     entryCounterEvidenceJson: JSON.stringify(signal.blockers.map((detail) => ({ title: "未通过项", detail }))),
     entryMetricsJson: JSON.stringify(signal.metrics),
-    entrySnapshotJson: JSON.stringify({ strategyId: signal.strategyId, shadowOnly: true, regime: signal.regime, market: packet.market }),
+    entrySnapshotJson: JSON.stringify({ strategyId: signal.strategyId, shadowOnly: true, ruleset: SHADOW_PREFIX.slice(0, -1), regime: signal.regime, market: packet.market }),
     initialStopPrice: signal.entryPlan.stopLossPrice,
     currentStopPrice: signal.entryPlan.stopLossPrice,
     takeProfit1Price: signal.entryPlan.takeProfit1Price,
@@ -233,6 +237,9 @@ async function openShadowTrade(packet: GateAnalysisPacket, signal: ShadowStrateg
     accountBalanceBeforeUsdt: researchEquity,
     accountBalanceAfterUsdt: null,
     lastPrice: packet.market.futuresPrice,
+    // Until the first whole post-entry candle closes, keep the entry time as
+    // the coverage boundary. This prevents a scan at 10:02 from later using
+    // the 10:00-10:05 candle's pre-entry high/low.
     lastEvaluatedAt: packet.observedAt,
     maxPriceSeen: packet.market.futuresPrice,
     minPriceSeen: packet.market.futuresPrice,
