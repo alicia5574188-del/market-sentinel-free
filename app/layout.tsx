@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { requireChatGPTUser } from "./chatgpt-auth";
+import { UiStatusSemanticFix } from "./ui-status-semantic-fix";
 import "./globals.css";
 
 export const dynamic = "force-dynamic";
@@ -47,7 +48,10 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   await requireChatGPTUser("/");
   return (
     <html lang="zh-CN">
-      <body>{children}</body>
+      <body>
+        {children}
+        <UiStatusSemanticFix />
+      </body>
     </html>
   );
 }
