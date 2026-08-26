@@ -1,10 +1,11 @@
 import { analyzeGateSymbol, fetchGateChartCandles, fetchGatePositionQuotes, fetchGateUniverse, type GateAnalysisPacket, type UniverseTicker } from "./gate-client.ts";
 import { getGlobalRiskContext, type GlobalRiskPacket } from "./global-risk.ts";
-import { beginScan, completeScan, getAlertDashboard, getExperience, getPriorLong, getSettings, listOpenTrades, listOpenTradeSymbols, markNotified, markTradeNotification, processDecision, processPositionQuote, publicSettings, type LifecycleResult } from "./repository.ts";
+import { beginScan, completeScan, getAlertDashboard, getSettings, listOpenTrades, listOpenTradeSymbols, markNotified, markTradeNotification, processPositionQuote, publicSettings, type LifecycleResult } from "./repository.ts";
 import { notifyTradeLifecycle, type VapidConfig } from "./web-push.ts";
 import { chooseBackgroundDeepUniverse } from "./background-selection.ts";
-import { evaluateShadowStrategies } from "./shadow-strategy-engine.ts";
-import { processShadowStrategies, retireLegacyShadowTrades } from "./shadow-strategy-repository.ts";
+import { evaluateSentinelV2, type MarketBreadth } from "./sentinel-v2-engine.ts";
+import { getLatestSentinelV2Context, getSentinelV2Pulse, saveSentinelV2Evaluation } from "./sentinel-v2-repository.ts";
+import { decoratePacketWithSentinelV2, processShadowStrategies, retireLegacyShadowTrades } from "./shadow-strategy-repository.ts";
 
 export function chooseDeepUniverse(universe: UniverseTicker[], coreSymbols: string[], openSymbols: string[], limit: number) {
   const selected: UniverseTicker[] = [];
@@ -20,6 +21,23 @@ export function chooseDeepUniverse(universe: UniverseTicker[], coreSymbols: stri
   return selected.slice(0, Math.max(limit, openSymbols.length));
 }
 
+export function marketBreadthFromUniverse(universe: UniverseTicker[]): MarketBreadth | null {
+  const valid = universe.filter((item) => Number.isFinite(item.changePercentage));
+  if (!valid.length) return null;
+  const advances = valid.filter((item) => item.changePercentage > 0).length;
+  const declines = valid.filter((item) => item.changePercentage < 0).length;
+  const strongAdvances = valid.filter((item) => item.changePercentage >= 2).length;
+  const strongDeclines = valid.filter((item) => item.changePercentage <= -2).length;
+  return {
+    sampleSize: valid.length,
+    advanceRatio: advances / valid.length,
+    declineRatio: declines / valid.length,
+    strongAdvanceRatio: strongAdvances / valid.length,
+    strongDeclineRatio: strongDeclines / valid.length,
+    averageChangePct: valid.reduce((sum, item) => sum + item.changePercentage, 0) / valid.length,
+  };
+}
+
 export type MarketScanOptions = {
   profile?: "full" | "free-background";
   deepLimit?: number;
@@ -30,11 +48,12 @@ export async function getQuickScanner() {
   const settings = await getSettings();
   const coreSymbols = JSON.parse(settings.coreSymbolsJson) as string[];
   const [openSymbols, openTrades] = await Promise.all([listOpenTradeSymbols(), listOpenTrades()]);
-  const [universe, context] = await Promise.all([
+  const [universe, context, sentinelV2] = await Promise.all([
     fetchGateUniverse(settings.universeLimit, [...coreSymbols, ...openSymbols]),
     getGlobalRiskContext(),
+    getSentinelV2Pulse().catch(() => null),
   ]);
-  return { observedAt: Date.now(), universe, context, openTrades, settings: publicSettings(settings) };
+  return { observedAt: Date.now(), universe, context, sentinelV2, openTrades, settings: publicSettings(settings) };
 }
 
 export async function refreshOpenPositions(vapidConfig?: VapidConfig | null, options: { includeDashboard?: boolean } = {}) {
@@ -92,6 +111,7 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
     fetchGateUniverse(settings.universeLimit, [...coreSymbols, ...openSymbols]),
     getGlobalRiskContext(),
   ]);
+  const breadth = marketBreadthFromUniverse(universe);
   const scan = await beginScan(universe.length);
   const targets = options.profile === "free-background"
     ? chooseBackgroundDeepUniverse(
@@ -134,11 +154,8 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
 
   try {
     const results = await Promise.allSettled(targets.map(async (ticker) => {
-      const [priorLongProbability, experience] = await Promise.all([getPriorLong(ticker.symbol), getExperience(ticker.symbol)]);
       const packetPromise = analyzeGateSymbol(ticker.symbol, {
         global: context,
-        priorLongProbability,
-        experience,
         alertStyle: settings.alertStyle,
         detail: "scan",
       });
@@ -146,10 +163,11 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
         .then((candles) => ({ candles, error: null as string | null }))
         .catch((error) => ({
           candles: [],
-          error: error instanceof Error ? error.message : "成长策略 5m K 线读取失败",
+          error: error instanceof Error ? error.message : "Sentinel V2 5m K 线读取失败",
         }));
-      const [packet, growthData] = await Promise.all([packetPromise, growthCandlesPromise]);
-      return { packet, growthCandles: growthData.candles, growthError: growthData.error };
+      const previousPromise = getLatestSentinelV2Context(ticker.symbol).catch(() => null);
+      const [packet, growthData, previousContext] = await Promise.all([packetPromise, growthCandlesPromise, previousPromise]);
+      return { packet, growthCandles: growthData.candles, growthError: growthData.error, previousContext };
     }));
 
     for (let index = 0; index < results.length; index += 1) {
@@ -159,52 +177,11 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
         continue;
       }
 
-      const { packet, growthCandles, growthError } = result.value;
-      analyzed.push(packet);
-
-      const baseResult = await processDecision(packet, settings);
-      lifecycle.push({ symbol: packet.symbol, result: baseResult });
-      await deliverLifecycle(baseResult);
-
-      if (growthCandles.length) {
-        const growthSignals = evaluateShadowStrategies({
-          symbol: packet.symbol,
-          observedAt: packet.observedAt,
-          futuresPrice: packet.market.futuresPrice,
-          volumeUsd: packet.market.volumeUsd,
-          changePercentage: packet.market.changePercentage,
-          fundingRate: packet.market.fundingRate,
-          openInterestChangePct: packet.market.openInterestChangePct,
-          spotCvdRatio: packet.market.spotCvdRatio,
-          orderBookImbalance: packet.market.orderBookImbalance,
-          liquidationImbalance: packet.market.liquidationImbalance,
-          multiTimeframeTrend: packet.market.multiTimeframeTrend,
-          benchmarkMomentum: context.benchmarkMomentum,
-          macroEventRisk: packet.market.macroEventRisk,
-          dataQuality: packet.decision.dataQuality,
-          candles5m: growthCandles,
-        });
-        const growth = await processShadowStrategies(packet, growthCandles, growthSignals, settings);
-        if (growth.lifecycle) {
-          lifecycle.push({ symbol: packet.symbol, result: growth.lifecycle });
-          await deliverLifecycle(growth.lifecycle);
-        }
-        growthLifecycle.push({
-          symbol: packet.symbol,
-          observedAt: packet.observedAt,
-          opened: growth.opened,
-          closed: growth.closed,
-          evaluated: growth.evaluated,
-          archived: growth.archived,
-          selected: growth.selected,
-          ready: growthSignals.filter((signal) => signal.state === "ready").length,
-          watching: growthSignals.filter((signal) => signal.state === "watching").length,
-          blocked: growthSignals.filter((signal) => signal.state === "blocked").length,
-          error: null,
-        });
-      } else {
-        const message = growthError ?? "成长策略 5m K 线为空";
-        failures.push({ symbol: packet.symbol, error: `成长策略扩展数据：${message}` });
+      const { packet, growthCandles, growthError, previousContext } = result.value;
+      if (!growthCandles.length) {
+        const message = growthError ?? "Sentinel V2 5m K 线为空";
+        failures.push({ symbol: packet.symbol, error: `V2 扩展数据：${message}` });
+        analyzed.push(packet);
         growthLifecycle.push({
           symbol: packet.symbol,
           observedAt: packet.observedAt,
@@ -215,10 +192,55 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
           selected: null,
           ready: 0,
           watching: 0,
-          blocked: 0,
+          blocked: 1,
           error: message,
         });
+        continue;
       }
+
+      const evaluation = evaluateSentinelV2({
+        symbol: packet.symbol,
+        observedAt: packet.observedAt,
+        futuresPrice: packet.market.futuresPrice,
+        volumeUsd: packet.market.volumeUsd,
+        changePercentage: packet.market.changePercentage,
+        fundingRate: packet.market.fundingRate,
+        openInterestChangePct: packet.market.openInterestChangePct,
+        spotCvdRatio: packet.market.spotCvdRatio,
+        orderBookImbalance: packet.market.orderBookImbalance,
+        liquidationImbalance: packet.market.liquidationImbalance,
+        multiTimeframeTrend: packet.market.multiTimeframeTrend,
+        benchmarkMomentum: context.benchmarkMomentum,
+        macroEventRisk: packet.market.macroEventRisk,
+        dataQuality: packet.decision.dataQuality,
+        candles5m: growthCandles,
+        breadth,
+        previousContext,
+      });
+      await saveSentinelV2Evaluation(evaluation);
+      const decoratedPacket = decoratePacketWithSentinelV2(packet, evaluation);
+      analyzed.push(decoratedPacket);
+
+      // V1 evaluateMarket remains a market-data parser only. It no longer calls
+      // processDecision here, so only Sentinel V2 can create a new trade case.
+      const growth = await processShadowStrategies(packet, evaluation, settings);
+      if (growth.lifecycle) {
+        lifecycle.push({ symbol: packet.symbol, result: growth.lifecycle });
+        await deliverLifecycle(growth.lifecycle);
+      }
+      growthLifecycle.push({
+        symbol: packet.symbol,
+        observedAt: packet.observedAt,
+        opened: growth.opened,
+        closed: growth.closed,
+        evaluated: growth.evaluated,
+        archived: growth.archived,
+        selected: growth.selected,
+        ready: evaluation.opportunities.filter((opportunity) => opportunity.state === "TRADE").length,
+        watching: evaluation.opportunities.filter((opportunity) => opportunity.state === "WATCH").length,
+        blocked: evaluation.opportunities.filter((opportunity) => opportunity.state === "REJECT").length,
+        error: null,
+      });
     }
 
     const qualities = analyzed.map((packet) => packet.decision.dataQuality);
@@ -235,6 +257,8 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
       observedAt: Date.now(),
       universe,
       context: context as GlobalRiskPacket,
+      breadth,
+      sentinelV2: await getSentinelV2Pulse().catch(() => null),
       analyzed,
       lifecycle,
       growthLifecycle,
