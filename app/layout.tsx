@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { requireChatGPTUser } from "./chatgpt-auth";
 import { LiveOrdersInline } from "./live-orders-inline";
+import { SentinelV2ContextBar } from "./sentinel-v2-context-bar";
 import { UiStatusSemanticFix } from "./ui-status-semantic-fix";
 import "./globals.css";
 import "./polish.css";
@@ -51,6 +52,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   return (
     <html lang="zh-CN">
       <body>
+        <SentinelV2ContextBar />
         {children}
         <LiveOrdersInline />
         <UiStatusSemanticFix />
