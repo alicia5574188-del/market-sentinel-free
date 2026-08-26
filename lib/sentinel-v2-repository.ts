@@ -20,6 +20,25 @@ export async function listRecentV2Opportunities(limit=80){
   for(const row of rows){const o=parseJson<Strategy2Opportunity|null>(row.payloadJson,null);if(!o)continue;const cur=grouped.get(o.symbol);if(!cur||o.observedAt>cur.observedAt||(o.observedAt===cur.observedAt&&(stateRank(o.state)>stateRank(cur.state)||(stateRank(o.state)===stateRank(cur.state)&&o.opportunityScore>cur.opportunityScore))))grouped.set(o.symbol,o)}
   return [...grouped.values()].sort((a,b)=>stateRank(b.state)-stateRank(a.state)||b.opportunityScore-a.opportunityScore).slice(0,limit);
 }
+export async function getV2StrategyPoolActivity(windowMs=5*60_000){
+  const cutoff=Date.now()-Math.max(60_000,windowMs);
+  const rows=await getDb().select({observedAt:v2Opportunities.observedAt,payloadJson:v2Opportunities.payloadJson}).from(v2Opportunities).orderBy(desc(v2Opportunities.observedAt)).limit(720);
+  const opportunities=rows.filter(row=>row.observedAt>=cutoff).map(row=>parseJson<Strategy2Opportunity|null>(row.payloadJson,null)).filter((row):row is Strategy2Opportunity=>Boolean(row));
+  const playbooks=[...new Set(opportunities.map(item=>item.playbook))].sort((a,b)=>Number(a.match(/^P(\d+)/)?.[1]??99)-Number(b.match(/^P(\d+)/)?.[1]??99));
+  const symbols=[...new Set(opportunities.map(item=>item.symbol))];
+  return {
+    windowMinutes:Math.max(1,Math.round(windowMs/60_000)),
+    evaluations:opportunities.length,
+    symbols:symbols.length,
+    playbookCount:playbooks.length,
+    playbooks,
+    states:{
+      trade:opportunities.filter(item=>item.state==="TRADE").length,
+      watch:opportunities.filter(item=>item.state==="WATCH").length,
+      reject:opportunities.filter(item=>item.state==="REJECT").length,
+    },
+  };
+}
 export async function getV2Opportunity(symbol:string){
   const rows=await getDb().select({payloadJson:v2Opportunities.payloadJson}).from(v2Opportunities).where(eq(v2Opportunities.symbol,symbol)).orderBy(desc(v2Opportunities.observedAt)).limit(24);
   const ops=rows.map(r=>parseJson<Strategy2Opportunity|null>(r.payloadJson,null)).filter((r):r is Strategy2Opportunity=>Boolean(r));if(!ops.length)return null;const at=ops[0].observedAt;return ops.filter(o=>o.observedAt===at).sort((a,b)=>stateRank(b.state)-stateRank(a.state)||b.opportunityScore-a.opportunityScore)[0]??null;
