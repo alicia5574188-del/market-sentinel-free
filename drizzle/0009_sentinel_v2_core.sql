@@ -2,12 +2,23 @@
 -- Old strategy/simulation history is intentionally removed because it was
 -- generated under materially different decision rules. Live exchange orders,
 -- live credentials and live protection/audit tables are deliberately preserved.
+-- If a real Gate order is still active during migration, its linked trade case
+-- and lifecycle row are retained until that live order reaches a terminal state.
 DELETE FROM alert_events;
-DELETE FROM symbol_lifecycle;
 DELETE FROM strategy_memory;
 DELETE FROM regime_state;
 DELETE FROM scan_runs;
-DELETE FROM trade_cases;
+DELETE FROM symbol_lifecycle
+WHERE active_trade_id IS NULL
+   OR active_trade_id NOT IN (
+     SELECT trade_case_id FROM live_orders
+     WHERE state IN ('submitting','open','protected','closing')
+   );
+DELETE FROM trade_cases
+WHERE id NOT IN (
+  SELECT trade_case_id FROM live_orders
+  WHERE state IN ('submitting','open','protected','closing')
+);
 
 CREATE TABLE `v2_market_snapshots` (
   `id` text PRIMARY KEY NOT NULL,
