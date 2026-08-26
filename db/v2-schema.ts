@@ -1,0 +1,85 @@
+import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+
+export const v2MarketSnapshots = sqliteTable("v2_market_snapshots", {
+  id: text("id").primaryKey(),
+  observedAt: integer("observed_at").notNull(),
+  regime: text("regime").notNull(),
+  confidence: integer("confidence").notNull(),
+  stability: integer("stability").notNull(),
+  regimeScore: integer("regime_score").notNull(),
+  regimeMargin: integer("regime_margin").notNull(),
+  transitionRisk: integer("transition_risk").notNull(),
+  transitionVelocity: real("transition_velocity").notNull().default(0),
+  riskAcceleration: real("risk_acceleration").notNull().default(0),
+  developingRegime: text("developing_regime"),
+  permission: text("permission").notNull(),
+  bias: text("bias").notNull(),
+  contextJson: text("context_json").notNull(),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  index("v2_market_snapshots_observed_idx").on(table.observedAt),
+  index("v2_market_snapshots_regime_idx").on(table.regime, table.observedAt),
+]);
+
+export const v2WarningEvents = sqliteTable("v2_warning_events", {
+  id: text("id").primaryKey(),
+  snapshotId: text("snapshot_id").notNull(),
+  warningKey: text("warning_key").notNull(),
+  observedAt: integer("observed_at").notNull(),
+  type: text("type").notNull(),
+  level: text("level").notNull(),
+  status: text("status").notNull(),
+  severity: integer("severity").notNull(),
+  confidence: integer("confidence").notNull(),
+  relevance: integer("relevance").notNull(),
+  timeframe: text("timeframe").notNull(),
+  direction: text("direction").notNull(),
+  title: text("title").notNull(),
+  detail: text("detail").notNull(),
+  impact: text("impact").notNull(),
+  payloadJson: text("payload_json").notNull(),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  index("v2_warning_events_time_idx").on(table.observedAt),
+  index("v2_warning_events_type_idx").on(table.type, table.observedAt),
+]);
+
+export const v2Opportunities = sqliteTable("v2_opportunities", {
+  id: text("id").primaryKey(),
+  symbol: text("symbol").notNull(),
+  observedAt: integer("observed_at").notNull(),
+  playbook: text("playbook").notNull(),
+  side: text("side").notNull(),
+  state: text("state").notNull(),
+  opportunityScore: integer("opportunity_score").notNull(),
+  environmentFit: integer("environment_fit").notNull(),
+  playbookFit: integer("playbook_fit").notNull(),
+  structureScore: integer("structure_score").notNull(),
+  timingScore: integer("timing_score").notNull(),
+  confirmationScore: integer("confirmation_score").notNull(),
+  riskReward: real("risk_reward").notNull().default(0),
+  portfolioImpact: integer("portfolio_impact").notNull(),
+  riskMultiplier: real("risk_multiplier").notNull().default(0),
+  reasonsJson: text("reasons_json").notNull().default("[]"),
+  waitingJson: text("waiting_json").notNull().default("[]"),
+  rejectJson: text("reject_json").notNull().default("[]"),
+  payloadJson: text("payload_json").notNull(),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  index("v2_opportunities_symbol_time_idx").on(table.symbol, table.observedAt),
+  index("v2_opportunities_state_time_idx").on(table.state, table.observedAt),
+  index("v2_opportunities_score_idx").on(table.opportunityScore, table.observedAt),
+]);
+
+export const v2TradeThesis = sqliteTable("v2_trade_thesis", {
+  tradeId: text("trade_id").primaryKey(),
+  playbook: text("playbook").notNull(),
+  entryRegime: text("entry_regime").notNull(),
+  currentRegime: text("current_regime").notNull(),
+  entryTransitionRisk: integer("entry_transition_risk").notNull(),
+  currentTransitionRisk: integer("current_transition_risk").notNull(),
+  thesisHealth: integer("thesis_health").notNull().default(100),
+  entryThesisJson: text("entry_thesis_json").notNull(),
+  currentThesisJson: text("current_thesis_json").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [index("v2_trade_thesis_health_idx").on(table.thesisHealth, table.updatedAt)]);

@@ -235,7 +235,7 @@ test("live preflight caps a position against actual Gate equity and margin alloc
   assert.match(plan.reason ?? "", /TP2预计净利润.*低于当前权益 1\.5%/);
 });
 
-test("account risk locks new entries at the daily-loss or peak-drawdown boundary", () => {
+test("account risk locks daily trading loss but ignores raw Gate balance transfers", () => {
   assert.match(liveAccountRiskLockReason({
     dailyRealizedPnlUsdt: -30,
     dailyPauseUsdt: 30,
@@ -243,13 +243,13 @@ test("account risk locks new entries at the daily-loss or peak-drawdown boundary
     accountEquityPeakUsdt: 1000,
     maxDrawdownUsdt: 100,
   }) ?? "", /3% 暂停线/);
-  assert.match(liveAccountRiskLockReason({
+  assert.equal(liveAccountRiskLockReason({
     dailyRealizedPnlUsdt: 4,
     dailyPauseUsdt: 30,
     accountEquityUsdt: 900,
     accountEquityPeakUsdt: 1000,
     maxDrawdownUsdt: 100,
-  }) ?? "", /峰值回撤/);
+  }), null);
   assert.equal(liveAccountRiskLockReason({
     dailyRealizedPnlUsdt: -29.99,
     dailyPauseUsdt: 30,
