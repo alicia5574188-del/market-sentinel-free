@@ -2,7 +2,7 @@ import { analyzeGateSymbol, fetchGateChartCandles, fetchGatePositionQuotes, fetc
 import { getGlobalRiskContext, type GlobalRiskPacket } from "./global-risk.ts";
 import { beginScan, completeScan, getAlertDashboard, getExperience, getPriorLong, getSettings, listOpenTrades, listOpenTradeSymbols, markNotified, markTradeNotification, processDecision, processPositionQuote, publicSettings, type LifecycleResult } from "./repository.ts";
 import { notifyTradeLifecycle, type VapidConfig } from "./web-push.ts";
-import { chooseBackgroundDeepUniverse } from "./background-selection.ts";
+import { chooseBackgroundDeepUniverse, type BackgroundMarketSnapshot } from "./background-selection.ts";
 import { processShadowStrategies, retireLegacyShadowTrades } from "./shadow-strategy-repository.ts";
 import { buildSentinelV2MarketContext, type V2Opportunity } from "./sentinel-v2-core.ts";
 import { evaluateSentinelV2Strategies } from "./sentinel-v2-strategy.ts";
@@ -27,6 +27,7 @@ export type MarketScanOptions = {
   profile?: "full" | "free-background";
   deepLimit?: number;
   rotationOffset?: number;
+  previousMarketSnapshot?: BackgroundMarketSnapshot;
 };
 
 function legacyObservationOnly(packet: GateAnalysisPacket): GateAnalysisPacket {
@@ -154,6 +155,7 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
       openSymbols,
       options.deepLimit ?? 3,
       options.rotationOffset ?? 0,
+      options.previousMarketSnapshot ?? {},
     )
     : chooseDeepUniverse(universe, coreSymbols, openSymbols, options.deepLimit ?? settings.deepScanLimit);
   const analyzed: GateAnalysisPacket[] = [];

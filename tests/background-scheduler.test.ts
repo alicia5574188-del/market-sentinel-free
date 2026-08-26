@@ -29,7 +29,7 @@ const universe = [
   ticker("TAO_USDT", 0.42),
 ];
 
-test("free background batch caps deep fan-out at three and prioritizes open positions", () => {
+test("free background batch caps deep fan-out at three while preserving anchor and strongest anomaly", () => {
   const selected = chooseBackgroundDeepUniverse(
     universe,
     ["BTC_USDT", "ETH_USDT", "SOL_USDT", "HYPE_USDT"],
@@ -37,10 +37,10 @@ test("free background batch caps deep fan-out at three and prioritizes open posi
     8,
     0,
   );
-  assert.deepEqual(selected.map((item) => item.symbol), ["BTC_USDT", "ETH_USDT", "PUMP_USDT"]);
+  assert.deepEqual(selected.map((item) => item.symbol), ["ETH_USDT", "PUMP_USDT", "BTC_USDT"]);
 });
 
-test("open-position deep checks rotate without losing the strongest anomaly", () => {
+test("cold-start third sensor slot still rotates through coverage candidates", () => {
   const selected = chooseBackgroundDeepUniverse(
     universe,
     ["BTC_USDT", "ETH_USDT", "SOL_USDT", "HYPE_USDT"],
@@ -48,10 +48,10 @@ test("open-position deep checks rotate without losing the strongest anomaly", ()
     3,
     2,
   );
-  assert.deepEqual(selected.map((item) => item.symbol), ["SOL_USDT", "HYPE_USDT", "PUMP_USDT"]);
+  assert.deepEqual(selected.map((item) => item.symbol), ["ETH_USDT", "PUMP_USDT", "SOL_USDT"]);
 });
 
-test("without holdings the strongest anomaly stays immediate while core coverage rotates", () => {
+test("without a prior velocity snapshot the anchor and anomaly stay fixed while coverage rotates", () => {
   const first = chooseBackgroundDeepUniverse(
     universe,
     ["BTC_USDT", "ETH_USDT", "SOL_USDT", "HYPE_USDT"],
@@ -66,6 +66,6 @@ test("without holdings the strongest anomaly stays immediate while core coverage
     3,
     1,
   );
-  assert.deepEqual(first.map((item) => item.symbol), ["PUMP_USDT", "BTC_USDT", "ETH_USDT"]);
-  assert.deepEqual(second.map((item) => item.symbol), ["PUMP_USDT", "ETH_USDT", "SOL_USDT"]);
+  assert.deepEqual(first.map((item) => item.symbol), ["ETH_USDT", "PUMP_USDT", "BTC_USDT"]);
+  assert.deepEqual(second.map((item) => item.symbol), ["ETH_USDT", "PUMP_USDT", "SOL_USDT"]);
 });
