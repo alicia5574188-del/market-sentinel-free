@@ -1,4 +1,4 @@
-import { GatePrivateClient } from "./gate-private";
+import { GatePrivateClient } from "./gate-private.ts";
 
 export type GatePositionModeSwitchResult = {
   changed: boolean;
