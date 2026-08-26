@@ -1068,6 +1068,29 @@ export async function removeGateCredentials(actorAccountId: string) {
   return getLiveTradingSnapshot();
 }
 
+/**
+ * Preserve the owner's Auto Live intent while temporarily blocking new entry.
+ * The existing reconcile path treats an armed control with lastError as a
+ * recovery cycle: current positions and exchange protection are reconciled, no
+ * new candidate is submitted, and a clean cycle clears lastError so the next
+ * alarm resumes entries automatically.
+ */
+export async function pauseAutomaticEntryForRecovery(reason: string, eventType = "automatic_entry_recovery_pause") {
+  const control = await getLiveControl();
+  if (!control.entryEnabled || control.state !== "armed") return getLiveTradingSnapshot();
+  const pauseReason = `自动实盘安全复核：${reason}`.slice(0, 500);
+  const changed = control.lastError !== pauseReason;
+  await patchLiveControl({ lastError: pauseReason });
+  if (changed) {
+    await addLiveAudit({
+      eventType,
+      severity: "warning",
+      message: `${pauseReason}；Auto Live 保持开启，本轮禁止新开仓，完成一轮干净对账后自动恢复`,
+    });
+  }
+  return getLiveTradingSnapshot();
+}
+
 export async function setAutomaticEntry(enabled: boolean, actorAccountId: string) {
   if (!enabled) {
     await disableLiveControl();
