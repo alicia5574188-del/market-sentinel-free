@@ -108,7 +108,7 @@ test("live Gate-size preflight rejects the QQQX micro-profit order", () => {
   assert.match(plan.reason ?? "", /TP2.*盈利空间/);
 });
 
-test("live preflight permits a useful 1x order when TP2 clears the current-equity exploration floor", () => {
+test("live preflight preserves the candidate's scaled risk after slippage", () => {
   const plan = buildLiveEntryPlan({
     trade: {
       id: "worthwhile",
@@ -136,9 +136,11 @@ test("live preflight permits a useful 1x order when TP2 clears the current-equit
     roundTripCostBps: 8,
   });
   assert.equal(plan.minimumNetTp2Usdt, 15);
+  assert.equal(plan.riskBudgetUsdt, 10);
+  assert.equal(plan.actualNotionalUsdt, 769);
   assert.equal(plan.passed, true);
-  assert.ok(plan.expectedNetTp2Usdt > 199 && plan.expectedNetTp2Usdt < 200);
-  assert.ok(plan.worstCaseNetTp2Usdt > 192 && plan.worstCaseNetTp2Usdt < 193);
+  assert.ok(plan.expectedNetTp2Usdt > 153 && plan.expectedNetTp2Usdt < 154);
+  assert.ok(plan.worstCaseNetTp2Usdt > 147 && plan.worstCaseNetTp2Usdt < 149);
   assert.equal(plan.marketOrderSlipRatio, "0.003");
   assert.deepEqual(protectionTriggerRules("LONG"), { takeProfit: 1, stopLoss: 2 });
   assert.deepEqual(protectionTriggerRules("SHORT"), { takeProfit: 2, stopLoss: 1 });
