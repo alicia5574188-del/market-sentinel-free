@@ -7,6 +7,7 @@ import { processShadowStrategies, retireLegacyShadowTrades } from "./shadow-stra
 import { buildSentinelV2MarketContext, type V2Opportunity } from "./sentinel-v2-core.ts";
 import { evaluateSentinelV2Strategies } from "./sentinel-v2-strategy.ts";
 import { getLatestV2MarketContext, saveV2MarketContext, saveV2Opportunities } from "./sentinel-v2-repository.ts";
+import { syncV2OpenTradeTheses } from "./sentinel-v2-thesis.ts";
 
 export function chooseDeepUniverse(universe: UniverseTicker[], coreSymbols: string[], openSymbols: string[], limit: number) {
   const selected: UniverseTicker[] = [];
@@ -136,6 +137,14 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
     previous: previousV2,
   });
   await saveV2MarketContext(v2Market);
+  await syncV2OpenTradeTheses(initialOpenTrades.map((trade) => ({
+    id: trade.id,
+    symbol: trade.symbol,
+    side: trade.side,
+    regime: trade.regime,
+    entryThesis: trade.entryThesis,
+    confidence: trade.confidence,
+  })), v2Market);
 
   const scan = await beginScan(universe.length);
   const targets = options.profile === "free-background"
@@ -251,12 +260,21 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
           lifecycle.push({ symbol: packet.symbol, result: growth.lifecycle });
           await deliverLifecycle(growth.lifecycle);
           if (growth.lifecycle.kind === "opened" && growth.lifecycle.trade) {
+            const openedTrade = growth.lifecycle.trade;
             portfolioTrades.push({
-              symbol: growth.lifecycle.trade.symbol,
-              side: growth.lifecycle.trade.side,
-              entryThesis: growth.lifecycle.trade.entryThesis,
-              regime: growth.lifecycle.trade.regime,
+              symbol: openedTrade.symbol,
+              side: openedTrade.side,
+              entryThesis: openedTrade.entryThesis,
+              regime: openedTrade.regime,
             });
+            await syncV2OpenTradeTheses([{
+              id: openedTrade.id,
+              symbol: openedTrade.symbol,
+              side: openedTrade.side,
+              regime: openedTrade.regime,
+              entryThesis: openedTrade.entryThesis,
+              confidence: openedTrade.confidence,
+            }], v2Market);
           }
         }
         growthLifecycle.push({
