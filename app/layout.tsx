@@ -1,9 +1,11 @@
 import type { Metadata, Viewport } from "next";
 import { requireChatGPTUser } from "./chatgpt-auth";
 import { LiveOrdersInline } from "./live-orders-inline";
+import { SentinelV2Panels } from "./sentinel-v2-panels";
 import { UiStatusSemanticFix } from "./ui-status-semantic-fix";
 import "./globals.css";
 import "./polish.css";
+import "./sentinel-v2.css";
 
 export const dynamic = "force-dynamic";
 
@@ -52,6 +54,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
     <html lang="zh-CN">
       <body>
         {children}
+        <SentinelV2Panels />
         <LiveOrdersInline />
         <UiStatusSemanticFix />
         <script src="/live-position-mode-helper.js" defer />
