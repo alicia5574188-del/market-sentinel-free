@@ -104,5 +104,36 @@ test("纠正迁移隔离旧观察记录且不改写真正的合约持仓", () =>
   const slipColumn = liveOrderColumns.find((row) => row.name === "market_order_slip_ratio");
   assert.equal(slipColumn.notnull, 1);
   assert.equal(slipColumn.dflt_value, "'0.003'");
+
+  // Simulate a real Gate position that is still active at the exact moment V2
+  // is deployed. Its strategy lineage must survive the destructive legacy reset.
+  db.prepare(`INSERT INTO live_orders (
+    id, trade_case_id, client_order_text, symbol, side, state, activation_epoch,
+    requested_contracts, filled_contracts, reference_price, fill_price,
+    stop_loss_price, take_profit_price, leverage, margin_mode,
+    market_order_slip_ratio, expected_net_tp2_usdt, created_at, updated_at
+  ) VALUES (
+    'live-eth', 'legacy:eth-new', 't-ms-testeth', 'ETH_USDT', 'LONG', 'protected', 1,
+    '1', '1', 3000, 3000, 2940, 3120, 4, 'isolated', '0.003', 15, 10, 10
+  )`).run();
+  db.prepare("INSERT INTO strategy_memory (id, symbol, side, updated_at) VALUES ('v1-memory-before-v2', 'ETH_USDT', 'LONG', 10)").run();
+
+  applyMigration(db, "0009_sentinel_v2_core.sql");
+
+  assert.equal(db.prepare("SELECT count(*) AS count FROM alert_events").get().count, 0);
+  assert.equal(db.prepare("SELECT count(*) AS count FROM strategy_memory").get().count, 0);
+  assert.equal(db.prepare("SELECT count(*) AS count FROM regime_state").get().count, 0);
+  assert.equal(db.prepare("SELECT count(*) AS count FROM scan_runs").get().count, 0);
+  assert.equal(db.prepare("SELECT count(*) AS count FROM trade_cases WHERE symbol = 'BTC_USDT'").get().count, 0);
+  assert.equal(db.prepare("SELECT count(*) AS count FROM trade_cases WHERE id = 'legacy:eth-new'").get().count, 1);
+  assert.equal(db.prepare("SELECT active_trade_id FROM symbol_lifecycle WHERE symbol = 'ETH_USDT'").get().active_trade_id, "legacy:eth-new");
+  assert.equal(db.prepare("SELECT count(*) AS count FROM live_orders WHERE id = 'live-eth' AND state = 'protected'").get().count, 1);
+
+  const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name));
+  assert.ok(tables.has("v2_market_snapshots"));
+  assert.ok(tables.has("v2_warning_events"));
+  assert.ok(tables.has("v2_opportunities"));
+  assert.ok(tables.has("v2_trade_thesis"));
+
   db.close();
 });
