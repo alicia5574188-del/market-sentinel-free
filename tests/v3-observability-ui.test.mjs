@@ -29,6 +29,22 @@ test("V2 panels expose environment, transition, opportunity and thesis health on
   assert.match(panels, /thesisHealth/);
 });
 
+test("opportunity detail is V2-first and collapses legacy diagnostics by default", async () => {
+  const panels = await readFile(new URL("../app/sentinel-v2-panels.tsx", import.meta.url), "utf8");
+  assert.match(panels, /selectedOpportunity/);
+  assert.match(panels, /机会评分/);
+  assert.match(panels, /环境/);
+  assert.match(panels, /结构/);
+  assert.match(panels, /时机/);
+  assert.match(panels, /确认/);
+  assert.match(panels, /还差什么/);
+  assert.match(panels, /为什么拒绝/);
+  assert.match(panels, /查看底层详细分析/);
+  assert.match(panels, /v2-opportunity-detail-active:not\(\.v2-show-legacy-analysis\) \.analysis-matrix/);
+  assert.match(panels, /\.risk-note\{display:none!important\}/);
+  assert.match(panels, /V2 机会通过后仍需组合风险与 Execution Engine 复核/);
+});
+
 test("V2 opportunities still enter the normal order lifecycle with detailed explanation", async () => {
   const [growthRepository, v2Strategy] = await Promise.all([
     readFile(new URL("../lib/shadow-strategy-repository.ts", import.meta.url), "utf8"),
