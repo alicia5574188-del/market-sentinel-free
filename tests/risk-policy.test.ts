@@ -4,23 +4,21 @@ import { RISK_POLICY, dailyLossPauseUsdt, maxMarginAllocationUsdt, minimumTp2Net
 import { liveAccountRiskLockReason } from "../lib/live-risk.ts";
 
 test("all monetary risk gates scale with equity instead of fixed USDT amounts", () => {
-  assert.deepEqual(publicRiskPolicy(), { singleTradeLossPct: 1, minimumTp2NetProfitPct: 1.5, maxMarginAllocationPct: 20, dailyRealizedLossPausePct: 3, peakDrawdownPct: 10, maxLiveOpenPositions: 3, maxSameSideLivePositions: 2 });
-  for (const [equity, risk, tp2, daily, margin] of [[500,5,7.5,15,100],[1000,10,15,30,200],[2000,20,30,60,400]]) {
+  assert.deepEqual(publicRiskPolicy(), { singleTradeLossPct: 1, minimumTp2NetProfitPct: 0.25, maxMarginAllocationPct: 20, dailyRealizedLossPausePct: 3, peakDrawdownPct: 10, maxLiveOpenPositions: 3, maxSameSideLivePositions: 2 });
+  for (const [equity, risk, tp2, daily, margin] of [[500,5,1.25,15,100],[1000,10,2.5,30,200],[2000,20,5,60,400]]) {
     assert.equal(singleTradeRiskBudgetUsdt(equity), risk);
     assert.equal(minimumTp2NetProfitBudgetUsdt(equity), tp2);
     assert.equal(dailyLossPauseUsdt(equity, 0), daily);
     assert.equal(maxMarginAllocationUsdt(equity), margin);
   }
   assert.equal(RISK_POLICY.singleTradeLossRate, 0.01);
+  assert.equal(RISK_POLICY.minimumTp2NetProfitRate, 0.0025);
   assert.equal(RISK_POLICY.peakDrawdownRate, 0.10);
 });
 
 test("daily Gate trading loss still pauses, while raw equity transfers no longer trigger drawdown lock", () => {
   assert.equal(dailyLossPauseUsdt(970, -30), 30);
   assert.match(liveAccountRiskLockReason({ dailyRealizedPnlUsdt: -60, accountEquityUsdt: 1940, accountEquityPeakUsdt: 2000 }) ?? "", /3%/);
-
-  // A futures -> spot transfer can make raw Gate equity fall from 100U to 39U
-  // without any trading loss. The legacy raw-equity 10% lock is retired.
   assert.equal(liveAccountRiskLockReason({ dailyRealizedPnlUsdt: 0, accountEquityUsdt: 39.14, accountEquityPeakUsdt: 100 }), null);
   assert.equal(peakDrawdownLimitUsdt(100), Number.POSITIVE_INFINITY);
 });
