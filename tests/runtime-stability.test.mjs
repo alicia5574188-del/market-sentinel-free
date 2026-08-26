@@ -15,6 +15,9 @@ test("background health isolates modules and wakes stale schedulers", () => {
   assert.match(scheduler, /await stub\.wake\(\)/);
   assert.match(scheduler, /autoRecoveryTriggered/);
   assert.match(scheduler, /live_coordinator/);
+  assert.match(scheduler, /市场扫描/);
+  assert.match(scheduler, /持仓监控/);
+  assert.match(scheduler, /实盘协调器/);
   assert.match(scheduler, /issues:/);
 });
 
@@ -24,9 +27,8 @@ test("client retries only safe read APIs and exposes exact health", () => {
   assert.match(client, /response\.status === 429 \|\| response\.status >= 500/);
   assert.match(client, /RETRY_DELAYS = \[350, 900\]/);
   assert.match(client, /系统健康/);
-  assert.match(client, /市场扫描/);
-  assert.match(client, /持仓监控/);
-  assert.match(client, /实盘协调器/);
+  assert.match(client, /后台扫描、持仓监控与实盘协调器/);
+  assert.match(client, /module\.label/);
 });
 
 test("runtime stability layer is mounted globally", () => {
