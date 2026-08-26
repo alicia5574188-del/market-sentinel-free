@@ -11,7 +11,7 @@ import "./strategy-2-unified.css";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://market-sentinel.alicia5574188.chatgpt.site"),
+  metadataBase: new URL("https://market-sentinel-free.alicia5574188.workers.dev"),
   title: "Market Sentinel｜Strategy 2.0",
   description: "Sentinel Strategy 2.0：环境识别、多策略并行竞争、风险控制与交易学习统一展示。",
   applicationName: "Market Sentinel",
