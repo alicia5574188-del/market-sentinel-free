@@ -1,17 +1,20 @@
 import { requireApiAccount } from "../../api-auth";
 import { listOpenTrades } from "../../../lib/repository";
-import { getLatestV2MarketContext, listRecentV2Opportunities, listRecentV2Warnings } from "../../../lib/sentinel-v2-repository";
+import { getLatestV2MarketContext, listRecentV2Opportunities, listRecentV2Warnings, listV2TradeTheses } from "../../../lib/sentinel-v2-repository";
 
 export async function GET() {
   const auth = await requireApiAccount();
   if ("response" in auth) return auth.response;
   try {
-    const [market, opportunities, warnings, openTrades] = await Promise.all([
+    const [market, opportunities, warnings, openTrades, theses] = await Promise.all([
       getLatestV2MarketContext(),
       listRecentV2Opportunities(120),
       listRecentV2Warnings(24),
       listOpenTrades(),
+      listV2TradeTheses(80),
     ]);
+    const openIds = new Set(openTrades.map((trade) => trade.id));
+    const activeTheses = theses.filter((thesis) => openIds.has(thesis.tradeId));
     const longCount = openTrades.filter((trade) => trade.side === "LONG").length;
     const shortCount = openTrades.filter((trade) => trade.side === "SHORT").length;
     const dominantSideCount = Math.max(longCount, shortCount);
@@ -25,6 +28,12 @@ export async function GET() {
         : market?.permission === "YELLOW" ? "缩小新增风险并提高确认门槛"
           : market?.permission === "BLUE" ? "正常持仓，避免追价"
             : "正常风险预算";
+    const averageThesisHealth = activeTheses.length
+      ? Math.round(activeTheses.reduce((sum, thesis) => sum + thesis.thesisHealth, 0) / activeTheses.length)
+      : null;
+    const weakestThesisHealth = activeTheses.length
+      ? Math.min(...activeTheses.map((thesis) => thesis.thesisHealth))
+      : null;
 
     return Response.json({
       observedAt: Date.now(),
@@ -32,6 +41,7 @@ export async function GET() {
       market,
       opportunities,
       warnings,
+      theses: activeTheses,
       portfolio: {
         openCount: openTrades.length,
         longCount,
@@ -39,6 +49,8 @@ export async function GET() {
         directionConcentration: concentration,
         riskLevel: marketRisk,
         currentAction,
+        averageThesisHealth,
+        weakestThesisHealth,
       },
     }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
@@ -48,6 +60,7 @@ export async function GET() {
       market: null,
       opportunities: [],
       warnings: [],
+      theses: [],
       portfolio: null,
       error: error instanceof Error ? error.message : "Sentinel V2 数据暂不可用",
     }, { status: 503, headers: { "Cache-Control": "no-store" } });
