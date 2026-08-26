@@ -1,4 +1,4 @@
-.market-status.strategy2-unified-market> :not(.v2-panel){display:none!important}
+.market-status> :not(.v2-panel),.market-status.strategy2-unified-market> :not(.v2-panel){display:none!important}
 .order-ledger .memory-card{display:none!important}
 .decision-card.strategy2-opportunity-detail-active .score-bars{display:none!important}
 .decision-card.strategy2-opportunity-detail-active .confidence.strategy2-overridden>span,.decision-card.strategy2-opportunity-detail-active .confidence.strategy2-overridden>strong,.decision-card.strategy2-opportunity-detail-active .confidence.strategy2-overridden>small{display:none!important}
