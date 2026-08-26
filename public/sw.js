@@ -1,4 +1,4 @@
-const CACHE_NAME = "market-sentinel-shell-v3";
+const CACHE_NAME = "market-sentinel-shell-v4";
 const APP_SHELL = ["/", "/manifest.webmanifest", "/favicon.svg"];
 
 self.addEventListener("install", (event) => {
@@ -14,17 +14,38 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("fetch", (event) => {
-  if (event.request.method !== "GET" || new URL(event.request.url).origin !== self.location.origin) return;
+  if (event.request.method !== "GET") return;
+
+  let url;
+  try {
+    url = new URL(event.request.url);
+  } catch {
+    return;
+  }
+
+  if (url.origin !== self.location.origin) return;
+
+  // API, auth and health requests must always use the network response directly.
+  // Never fall back to cached HTML for JSON endpoints: that can leave the iOS PWA
+  // showing stale positions while every live/Strategy 2.0 refresh fails.
+  if (url.pathname.startsWith("/api/") || url.pathname === "/__health") return;
+
+  const isNavigation = event.request.mode === "navigate";
+  const isShellAsset = APP_SHELL.includes(url.pathname);
+  if (!isNavigation && !isShellAsset) return;
+
   event.respondWith((async () => {
     try {
       const response = await fetch(event.request);
-      if (response.ok && (event.request.mode === "navigate" || APP_SHELL.includes(new URL(event.request.url).pathname))) {
+      if (response.ok) {
         const cache = await caches.open(CACHE_NAME);
-        await cache.put(event.request.mode === "navigate" ? "/" : event.request, response.clone());
+        await cache.put(isNavigation ? "/" : event.request, response.clone());
       }
       return response;
     } catch {
-      return (await caches.match(event.request)) || (await caches.match("/"));
+      const cached = isNavigation ? await caches.match("/") : await caches.match(event.request);
+      if (cached) return cached;
+      return new Response("Offline", { status: 503, headers: { "Content-Type": "text/plain; charset=utf-8" } });
     }
   })());
 });
@@ -44,7 +65,12 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const target = new URL(event.notification.data?.url || "/", self.location.origin).href;
+  let target;
+  try {
+    target = new URL(event.notification.data?.url || "/", self.location.origin).href;
+  } catch {
+    target = self.location.origin;
+  }
   event.waitUntil(clients.matchAll({ type: "window", includeUncontrolled: true }).then((windows) => {
     const existing = windows.find((client) => client.url.startsWith(self.location.origin));
     return existing ? existing.focus().then(() => existing.navigate(target)) : clients.openWindow(target);
