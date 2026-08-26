@@ -105,7 +105,7 @@ export function buildLiveEntryPlan(input: {
   trade: LiveTradeCandidate;
   contract: GateContract;
   account: GateFuturesAccount;
-  /** @deprecated Risk is always current equity × 1%; retained only for old callers. */
+  /** @deprecated Risk is derived from the scaled Strategy 2.0 candidate and capped by current equity × 1%. */
   maxRiskPerAlertUsdt?: number;
   roundTripCostBps: number;
 }): LiveEntryPlan {
@@ -150,7 +150,16 @@ export function buildLiveEntryPlan(input: {
     return failed("Gate 合约账户没有可用资金", { markPrice, contractMultiplier: multiplier, accountEquityUsdt, minimumNetTp2Usdt });
   }
   const stopDistanceFraction = Math.abs(worstCaseEntryPrice - stopLossPrice) / worstCaseEntryPrice;
-  const riskBudgetUsdt = singleTradeRiskBudgetUsdt(accountEquityUsdt);
+  const accountRiskBudgetUsdt = singleTradeRiskBudgetUsdt(accountEquityUsdt);
+  // The candidate notional has already been multiplied by Strategy 2.0's
+  // exploration/permission/volatility/portfolio multiplier. Reconstruct the
+  // candidate's own stop-defined risk here so live slippage cannot inflate a
+  // 0.25x exploration idea back toward the full 1% account ceiling.
+  const candidateStopDistanceFraction = trade.entryPrice > 0
+    ? Math.abs(trade.entryPrice - stopLossPrice) / trade.entryPrice
+    : 1;
+  const candidateRiskBudgetUsdt = Math.max(0, trade.contractNotionalUsdt * candidateStopDistanceFraction);
+  const riskBudgetUsdt = Math.min(accountRiskBudgetUsdt, candidateRiskBudgetUsdt || accountRiskBudgetUsdt);
   const riskNotionalCap = stopDistanceFraction > 0
     ? riskBudgetUsdt * markPrice / Math.abs(worstCaseEntryPrice - stopLossPrice)
     : 0;
@@ -193,7 +202,7 @@ export function buildLiveEntryPlan(input: {
     });
   }
   if (projectedStopLossUsdt > riskBudgetUsdt + 0.01) {
-    return failed("按 Gate 实际张数计算的止损风险超过单笔上限", {
+    return failed("按 Gate 实际张数计算的止损风险超过该 Strategy 2.0 候选风险上限", {
       markPrice,
       accountEquityUsdt,
       minimumNetTp2Usdt,
@@ -224,7 +233,7 @@ export function buildLiveEntryPlan(input: {
     exitSlippageRatio: slip,
   });
   if (worstCaseNetTp2Usdt < minimumNetTp2Usdt) {
-    return failed(`按 Gate 实时张数并预留允许滑点后，TP2预计净利润 ${worstCaseNetTp2Usdt.toFixed(2)}U，低于当前权益 1.5% 门槛 ${minimumNetTp2Usdt.toFixed(2)}U`, {
+    return failed(`按 Gate 实时张数并预留允许滑点后，TP2预计净利润 ${worstCaseNetTp2Usdt.toFixed(2)}U，低于当前权益 ${(RISK_POLICY.minimumTp2NetProfitRate * 100).toFixed(2)}% 门槛 ${minimumNetTp2Usdt.toFixed(2)}U`, {
       markPrice,
       accountEquityUsdt,
       minimumNetTp2Usdt,

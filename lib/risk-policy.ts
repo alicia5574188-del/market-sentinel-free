@@ -1,6 +1,11 @@
 export const RISK_POLICY = {
   singleTradeLossRate: 0.01,
-  minimumTp2NetProfitRate: 0.015,
+  // Strategy 2.0 deliberately explores with only a fraction of the 1% base
+  // risk. The old 1.5%-of-equity TP2 gate made those small positions
+  // impossible to execute live even when their R/R was good. Keep an economic
+  // floor, but scale it to 0.25% of equity so exploration can produce real
+  // samples without raising the hard account-risk ceiling.
+  minimumTp2NetProfitRate: 0.0025,
   maxMarginAllocationRate: 0.20,
   dailyRealizedLossPauseRate: 0.03,
   // This 10% limit is enforced against Market Sentinel's realized live-trading
@@ -44,13 +49,7 @@ export function dailyLossPauseUsdt(accountEquityUsdt: number, dailyRealizedPnlUs
   return equityScaledUsdt(estimatedStartOfDayEquity, RISK_POLICY.dailyRealizedLossPauseRate);
 }
 
-/**
- * @deprecated Raw Gate-account peak drawdown is intentionally disabled.
- * Gate account equity includes owner deposits/withdrawals/transfers, so using
- * it as a trading-loss signal falsely locks the strategy after a spot/futures
- * transfer. The 10% drawdown rule is enforced in live-performance-gate.ts
- * against the program-attributed live trading equity curve instead.
- */
+/** @deprecated Raw Gate-account peak drawdown is intentionally disabled. */
 export function peakDrawdownLimitUsdt(_accountEquityPeakUsdt: number) {
   return Number.POSITIVE_INFINITY;
 }

@@ -108,7 +108,7 @@ test("live Gate-size preflight rejects the QQQX micro-profit order", () => {
   assert.match(plan.reason ?? "", /TP2.*盈利空间/);
 });
 
-test("live preflight permits a useful 1x order when TP2 clears the current-equity gate", () => {
+test("live preflight preserves the candidate's scaled risk after slippage", () => {
   const plan = buildLiveEntryPlan({
     trade: {
       id: "worthwhile",
@@ -135,10 +135,12 @@ test("live preflight permits a useful 1x order when TP2 clears the current-equit
     maxRiskPerAlertUsdt: 10,
     roundTripCostBps: 8,
   });
-  assert.equal(plan.minimumNetTp2Usdt, 90);
+  assert.equal(plan.minimumNetTp2Usdt, 15);
+  assert.equal(plan.riskBudgetUsdt, 10);
+  assert.equal(plan.actualNotionalUsdt, 769);
   assert.equal(plan.passed, true);
-  assert.ok(plan.expectedNetTp2Usdt > 199 && plan.expectedNetTp2Usdt < 200);
-  assert.ok(plan.worstCaseNetTp2Usdt > 192 && plan.worstCaseNetTp2Usdt < 193);
+  assert.ok(plan.expectedNetTp2Usdt > 153 && plan.expectedNetTp2Usdt < 154);
+  assert.ok(plan.worstCaseNetTp2Usdt > 147 && plan.worstCaseNetTp2Usdt < 149);
   assert.equal(plan.marketOrderSlipRatio, "0.003");
   assert.deepEqual(protectionTriggerRules("LONG"), { takeProfit: 1, stopLoss: 2 });
   assert.deepEqual(protectionTriggerRules("SHORT"), { takeProfit: 2, stopLoss: 1 });
@@ -178,9 +180,9 @@ test("live preflight uses Gate taker fees, tick rounding and both-side slippage"
   assert.equal(plan.effectiveRoundTripCostBps, 16);
   assert.equal(plan.stopLossPrice, 99.1);
   assert.equal(plan.takeProfitPrice, 103);
-  assert.equal(plan.minimumNetTp2Usdt, 90);
+  assert.equal(plan.minimumNetTp2Usdt, 15);
   assert.ok(plan.expectedNetTp2Usdt > plan.worstCaseNetTp2Usdt);
-  assert.equal(plan.passed, false);
+  assert.equal(plan.passed, true);
 });
 
 test("actual Gate equity includes unrealized PnL and close PnL is isolated to one position lifecycle", () => {
@@ -201,7 +203,7 @@ test("actual Gate equity includes unrealized PnL and close PnL is isolated to on
   assert.deepEqual(matching.map((record) => record.pnl), ["12.5"]);
 });
 
-test("live preflight caps a position against actual Gate equity and margin allocation", () => {
+test("live preflight caps a position against actual Gate equity and still permits a useful small-risk sample", () => {
   const plan = buildLiveEntryPlan({
     trade: {
       id: "small-live-balance",
@@ -229,10 +231,10 @@ test("live preflight caps a position against actual Gate equity and margin alloc
   });
   assert.equal(plan.targetNotionalUsdt, 300);
   assert.equal(plan.actualNotionalUsdt, 300);
-  assert.equal(plan.minimumNetTp2Usdt, 7.5);
+  assert.equal(plan.minimumNetTp2Usdt, 1.25);
   assert.ok(plan.projectedStopLossUsdt > 3.89 && plan.projectedStopLossUsdt < 3.91);
-  assert.equal(plan.passed, false);
-  assert.match(plan.reason ?? "", /TP2预计净利润.*低于当前权益 1\.5%/);
+  assert.equal(plan.passed, true);
+  assert.ok(plan.worstCaseNetTp2Usdt > plan.minimumNetTp2Usdt);
 });
 
 test("account risk locks daily trading loss but ignores raw Gate balance transfers", () => {

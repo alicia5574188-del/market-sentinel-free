@@ -45,14 +45,16 @@ test("opportunity detail is V2-first and collapses legacy diagnostics by default
   assert.match(panels, /V2 机会通过后仍需组合风险与 Execution Engine 复核/);
 });
 
-test("V2 opportunities still enter the normal order lifecycle with detailed explanation", async () => {
+test("Strategy 2.0 opportunities still enter the normal order lifecycle with detailed explanation", async () => {
   const [growthRepository, v2Strategy] = await Promise.all([
     readFile(new URL("../lib/shadow-strategy-repository.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/sentinel-v2-strategy.ts", import.meta.url), "utf8"),
   ]);
-  assert.match(growthRepository, /trigger: `成长策略 · \$\{signal\.label\}/);
-  assert.match(growthRepository, /evidence/);
-  assert.match(growthRepository, /processDecision\(growthPacket\(packet, selected\), settings\)/);
-  assert.match(v2Strategy, /Sentinel Growth V2/);
-  assert.match(v2Strategy, /Sentinel V2 环境许可/);
+  assert.match(growthRepository, /trigger:`Strategy 2\.0 · \$\{signal\.label\}/);
+  assert.match(growthRepository, /多策略同向汇合/);
+  assert.match(growthRepository, /processDecision\(growthPacket\(packet,\s*selected\),\s*settings\)/);
+  assert.match(v2Strategy, /Sentinel Strategy 2\.0/);
+  assert.match(v2Strategy, /Strategy 2\.0 综合许可/);
+  assert.match(v2Strategy, /supportingPlaybooks/);
+  assert.match(v2Strategy, /strategyConflict/);
 });
