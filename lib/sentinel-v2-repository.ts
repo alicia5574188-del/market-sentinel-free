@@ -158,6 +158,24 @@ export async function upsertV2TradeThesis(input: {
   });
 }
 
+export async function listV2TradeTheses(limit = 50) {
+  const rows = await getDb().select().from(v2TradeThesis)
+    .orderBy(desc(v2TradeThesis.updatedAt))
+    .limit(Math.max(1, Math.min(200, limit)));
+  return rows.map((row) => ({
+    tradeId: row.tradeId,
+    playbook: row.playbook,
+    entryRegime: row.entryRegime,
+    currentRegime: row.currentRegime,
+    entryTransitionRisk: row.entryTransitionRisk,
+    currentTransitionRisk: row.currentTransitionRisk,
+    thesisHealth: row.thesisHealth,
+    entryThesis: parseJson(row.entryThesisJson, {}),
+    currentThesis: parseJson(row.currentThesisJson, {}),
+    updatedAt: row.updatedAt,
+  }));
+}
+
 export async function deleteV2ThesisForTrades(tradeIds: string[]) {
   if (!tradeIds.length) return;
   await getDb().delete(v2TradeThesis).where(inArray(v2TradeThesis.tradeId, tradeIds));
