@@ -15,6 +15,7 @@ import { workerVersionChanged } from "../lib/live-deployment-safety";
 import {
   getLiveTradingSnapshot,
   liveAlarmDelayMs,
+  pauseAutomaticEntryForRecovery,
   reconcileLiveTrading,
   removeGateCredentials,
   resetEmergencyStop,
@@ -200,7 +201,15 @@ export class LiveTradingCoordinator extends DurableObject<CloudflareEnv> {
     if (!workerVersionChanged(previousVersionId, versionId)) return;
     const snapshot = await getLiveTradingSnapshot();
     if (snapshot.control.entryEnabled && snapshot.control.state === "armed") {
-      await setAutomaticEntry(false, "system-worker-deployment");
+      // A deployment is a safety boundary, but it must not erase the owner's
+      // 24/7 Auto Live intent. Mark one recovery cycle instead: reconcile all
+      // Gate positions/orders and account risk first, skip new entry for that
+      // clean cycle, then resume automatically on the following alarm.
+      await pauseAutomaticEntryForRecovery(
+        `Worker 已更新到新版本 ${versionId.slice(0, 8)}，正在执行部署后安全对账`,
+        "worker_deployment_recovery_pause",
+      );
+      await this.schedule(1_000);
     }
     await this.ctx.storage.put("workerVersionId", versionId);
   }
