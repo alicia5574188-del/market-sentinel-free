@@ -3,8 +3,10 @@ import { getGlobalRiskContext, type GlobalRiskPacket } from "./global-risk.ts";
 import { beginScan, completeScan, getAlertDashboard, getExperience, getPriorLong, getSettings, listOpenTrades, listOpenTradeSymbols, markNotified, markTradeNotification, processDecision, processPositionQuote, publicSettings, type LifecycleResult } from "./repository.ts";
 import { notifyTradeLifecycle, type VapidConfig } from "./web-push.ts";
 import { chooseBackgroundDeepUniverse } from "./background-selection.ts";
-import { evaluateShadowStrategies } from "./shadow-strategy-engine.ts";
 import { processShadowStrategies, retireLegacyShadowTrades } from "./shadow-strategy-repository.ts";
+import { buildSentinelV2MarketContext, type V2Opportunity } from "./sentinel-v2-core.ts";
+import { evaluateSentinelV2Strategies } from "./sentinel-v2-strategy.ts";
+import { getLatestV2MarketContext, saveV2MarketContext, saveV2Opportunities } from "./sentinel-v2-repository.ts";
 
 export function chooseDeepUniverse(universe: UniverseTicker[], coreSymbols: string[], openSymbols: string[], limit: number) {
   const selected: UniverseTicker[] = [];
@@ -26,15 +28,46 @@ export type MarketScanOptions = {
   rotationOffset?: number;
 };
 
+function legacyObservationOnly(packet: GateAnalysisPacket): GateAnalysisPacket {
+  if (packet.decision.state !== "confirmed") return packet;
+  const plan = packet.decision.entryPlan;
+  return {
+    ...packet,
+    decision: {
+      ...packet.decision,
+      state: "pre_alert",
+      stateLabel: "V2 底层观察",
+      action: "旧版评分仅作为证据，等待 Sentinel V2 环境与 Playbook 决策",
+      thesis: `底层分析已确认，但不再拥有开仓权。${packet.decision.thesis}`,
+      trigger: `V2 ENTRY AUTHORITY：${packet.decision.trigger}`,
+      entryPlan: plan ? {
+        ...plan,
+        ready: false,
+        checks: [
+          ...plan.checks.filter((check) => check.key !== "sentinel-v2-entry-authority"),
+          {
+            key: "sentinel-v2-entry-authority",
+            label: "Sentinel V2 唯一开仓权",
+            passed: false,
+            required: true,
+            detail: "旧版基础评分只作为 V2 输入，不能直接创建新订单",
+          },
+        ],
+      } : null,
+    },
+  };
+}
+
 export async function getQuickScanner() {
   const settings = await getSettings();
   const coreSymbols = JSON.parse(settings.coreSymbolsJson) as string[];
   const [openSymbols, openTrades] = await Promise.all([listOpenTradeSymbols(), listOpenTrades()]);
-  const [universe, context] = await Promise.all([
+  const [universe, context, v2] = await Promise.all([
     fetchGateUniverse(settings.universeLimit, [...coreSymbols, ...openSymbols]),
     getGlobalRiskContext(),
+    getLatestV2MarketContext(),
   ]);
-  return { observedAt: Date.now(), universe, context, openTrades, settings: publicSettings(settings) };
+  return { observedAt: Date.now(), universe, context, v2, openTrades, settings: publicSettings(settings) };
 }
 
 export async function refreshOpenPositions(vapidConfig?: VapidConfig | null, options: { includeDashboard?: boolean } = {}) {
@@ -87,11 +120,23 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
   const coreSymbols = JSON.parse(settings.coreSymbolsJson) as string[];
   if (!settings.scanEnabled) return { status: "paused", observedAt: Date.now(), analyzed: [], notifications: { attempted: 0, delivered: 0 } };
   await retireLegacyShadowTrades();
-  const openSymbols = await listOpenTradeSymbols();
-  const [universe, context] = await Promise.all([
+  const [openSymbols, initialOpenTrades] = await Promise.all([listOpenTradeSymbols(), listOpenTrades()]);
+  const [universe, context, previousV2] = await Promise.all([
     fetchGateUniverse(settings.universeLimit, [...coreSymbols, ...openSymbols]),
     getGlobalRiskContext(),
+    getLatestV2MarketContext(),
   ]);
+  const observedAt = Date.now();
+  const v2Market = buildSentinelV2MarketContext({
+    observedAt,
+    universe,
+    benchmarkMomentum: context.benchmarkMomentum,
+    optionsIvPercentile: context.optionsIvPercentile,
+    macroEventRisk: context.macroEventRisk,
+    previous: previousV2,
+  });
+  await saveV2MarketContext(v2Market);
+
   const scan = await beginScan(universe.length);
   const targets = options.profile === "free-background"
     ? chooseBackgroundDeepUniverse(
@@ -104,6 +149,13 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
     : chooseDeepUniverse(universe, coreSymbols, openSymbols, options.deepLimit ?? settings.deepScanLimit);
   const analyzed: GateAnalysisPacket[] = [];
   const lifecycle: { symbol: string; result: LifecycleResult }[] = [];
+  const v2Opportunities: V2Opportunity[] = [];
+  const portfolioTrades = initialOpenTrades.map((trade) => ({
+    symbol: trade.symbol,
+    side: trade.side,
+    entryThesis: trade.entryThesis,
+    regime: trade.regime,
+  }));
   const growthLifecycle: {
     symbol: string;
     observedAt: number;
@@ -146,7 +198,7 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
         .then((candles) => ({ candles, error: null as string | null }))
         .catch((error) => ({
           candles: [],
-          error: error instanceof Error ? error.message : "成长策略 5m K 线读取失败",
+          error: error instanceof Error ? error.message : "Sentinel V2 5m K 线读取失败",
         }));
       const [packet, growthData] = await Promise.all([packetPromise, growthCandlesPromise]);
       return { packet, growthCandles: growthData.candles, growthError: growthData.error };
@@ -162,12 +214,16 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
       const { packet, growthCandles, growthError } = result.value;
       analyzed.push(packet);
 
-      const baseResult = await processDecision(packet, settings);
+      // Existing positions still receive the complete market packet so their
+      // protection lifecycle keeps running. New entries can no longer be
+      // created by the legacy base score: Sentinel V2 is the sole authority.
+      const basePacket = openSymbols.includes(packet.symbol) ? packet : legacyObservationOnly(packet);
+      const baseResult = await processDecision(basePacket, settings);
       lifecycle.push({ symbol: packet.symbol, result: baseResult });
       await deliverLifecycle(baseResult);
 
       if (growthCandles.length) {
-        const growthSignals = evaluateShadowStrategies({
+        const v2 = evaluateSentinelV2Strategies({
           symbol: packet.symbol,
           observedAt: packet.observedAt,
           futuresPrice: packet.market.futuresPrice,
@@ -183,11 +239,25 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
           macroEventRisk: packet.market.macroEventRisk,
           dataQuality: packet.decision.dataQuality,
           candles5m: growthCandles,
+        }, {
+          market: v2Market,
+          openTrades: portfolioTrades,
         });
-        const growth = await processShadowStrategies(packet, growthCandles, growthSignals, settings);
+        v2Opportunities.push(...v2.opportunities);
+        await saveV2Opportunities(v2.opportunities);
+
+        const growth = await processShadowStrategies(packet, growthCandles, v2.signals, settings);
         if (growth.lifecycle) {
           lifecycle.push({ symbol: packet.symbol, result: growth.lifecycle });
           await deliverLifecycle(growth.lifecycle);
+          if (growth.lifecycle.kind === "opened" && growth.lifecycle.trade) {
+            portfolioTrades.push({
+              symbol: growth.lifecycle.trade.symbol,
+              side: growth.lifecycle.trade.side,
+              entryThesis: growth.lifecycle.trade.entryThesis,
+              regime: growth.lifecycle.trade.regime,
+            });
+          }
         }
         growthLifecycle.push({
           symbol: packet.symbol,
@@ -197,14 +267,14 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
           evaluated: growth.evaluated,
           archived: growth.archived,
           selected: growth.selected,
-          ready: growthSignals.filter((signal) => signal.state === "ready").length,
-          watching: growthSignals.filter((signal) => signal.state === "watching").length,
-          blocked: growthSignals.filter((signal) => signal.state === "blocked").length,
+          ready: v2.signals.filter((signal) => signal.state === "ready").length,
+          watching: v2.signals.filter((signal) => signal.state === "watching").length,
+          blocked: v2.signals.filter((signal) => signal.state === "blocked").length,
           error: null,
         });
       } else {
-        const message = growthError ?? "成长策略 5m K 线为空";
-        failures.push({ symbol: packet.symbol, error: `成长策略扩展数据：${message}` });
+        const message = growthError ?? "Sentinel V2 5m K 线为空";
+        failures.push({ symbol: packet.symbol, error: `Sentinel V2 扩展数据：${message}` });
         growthLifecycle.push({
           symbol: packet.symbol,
           observedAt: packet.observedAt,
@@ -226,7 +296,7 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
       status: failures.length ? "degraded" : "completed",
       deepScanned: analyzed.length,
       confirmedCount: lifecycle.filter((item) => item.result.kind === "opened").length,
-      preAlertCount: analyzed.filter((packet) => packet.decision.state === "pre_alert").length,
+      preAlertCount: v2Opportunities.filter((opportunity) => opportunity.state === "WATCH").length,
       averageDataQuality: qualities.length ? qualities.reduce((sum, value) => sum + value, 0) / qualities.length : null,
       error: failures.length ? JSON.stringify(failures) : null,
     });
@@ -235,6 +305,7 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
       observedAt: Date.now(),
       universe,
       context: context as GlobalRiskPacket,
+      v2: { market: v2Market, opportunities: v2Opportunities },
       analyzed,
       lifecycle,
       growthLifecycle,
@@ -246,7 +317,7 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
       status: "failed",
       deepScanned: analyzed.length,
       confirmedCount: lifecycle.filter((item) => item.result.kind === "opened").length,
-      preAlertCount: analyzed.filter((packet) => packet.decision.state === "pre_alert").length,
+      preAlertCount: v2Opportunities.filter((opportunity) => opportunity.state === "WATCH").length,
       averageDataQuality: null,
       error: error instanceof Error ? error.message : "scan failed",
     });
