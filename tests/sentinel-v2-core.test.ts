@@ -76,6 +76,40 @@ test("healthy broad rally remains trade-permitted rather than transition-red", (
   assert.ok(market.breadth.advancingRatio > 0.9);
 });
 
+test("healthy ready trend pullback can become a TRADE opportunity", () => {
+  const market = buildSentinelV2MarketContext({
+    observedAt: Date.UTC(2026, 7, 26, 5),
+    universe: universe([4.1, 3.8, 3.4, 2.9, 2.7, 2.5, 2.2, 1.9, 1.7, 1.4, 1.2, 0.9]),
+    benchmarkMomentum: 3.2,
+    optionsIvPercentile: 0.48,
+    macroEventRisk: 0.1,
+  });
+  const opportunity = evaluateSentinelV2Opportunity({
+    signal: signal("LONG"),
+    asset: {
+      symbol: "BTC_USDT",
+      observedAt: market.observedAt,
+      dataQuality: 0.94,
+      changePercentage: 3.5,
+      fundingRate: 0.0001,
+      openInterestChangePct: 1.1,
+      spotCvdRatio: 0.08,
+      orderBookImbalance: 0.12,
+      liquidationImbalance: 0.05,
+      multiTimeframeTrend: 0.72,
+      volumeUsd: 2_000_000_000,
+    },
+    market,
+    portfolio: { candidateSide: "LONG", candidateSymbol: "BTC_USDT", openTrades: [] },
+  });
+  assert.equal(market.permission, "GREEN");
+  assert.equal(opportunity.state, "TRADE");
+  assert.ok(opportunity.opportunityScore >= 74);
+  assert.ok(opportunity.confirmation >= 62);
+  assert.ok(opportunity.timing >= 62);
+  assert.ok(opportunity.riskMultiplier > 0);
+});
+
 test("benchmark strength with collapsing breadth raises transition risk", () => {
   const market = buildSentinelV2MarketContext({
     observedAt: Date.UTC(2026, 7, 26, 2),
