@@ -1,0 +1,30 @@
+name: Apply live degradation safety patch
+
+on:
+  push:
+    branches:
+      - live-degradation-decouple-2026-08-26
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[live-degradation-applied]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: live-degradation-decouple-2026-08-26
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - run: node scripts/apply-live-degradation-decouple.mjs
+      - name: Commit patched production code
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/live-trading-engine.ts app/page.tsx
+          git commit -m "[live-degradation-applied] Decouple transient degradation from Auto Live"
+          git push origin HEAD:live-degradation-decouple-2026-08-26
