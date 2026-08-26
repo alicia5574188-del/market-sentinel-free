@@ -3,6 +3,8 @@ name: Sentinel V2 CI
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -22,7 +24,7 @@ jobs:
           cache: npm
       - name: Install
         run: npm ci
-      - name: Strategy and migration tests
+      - name: Strategy, risk and migration tests
         run: npm run test:signals
-      - name: Production build
-        run: npm run build
+      - name: Production build and UI safety tests
+        run: npm test
