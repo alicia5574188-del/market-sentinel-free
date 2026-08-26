@@ -74,14 +74,14 @@ test("合约盈亏金额强制扣除往返成本", () => {
   });
 });
 
-test("TP2最低净利润按当前账户权益1.5%计算", () => {
-  assert.equal(MIN_TP2_NET_PROFIT_EQUITY_RATE, 0.015);
-  assert.equal(minimumTp2NetProfitUsdt(1000), 15);
-  assert.equal(minimumTp2NetProfitUsdt(500), 7.5);
-  assert.equal(minimumTp2NetProfitUsdt(1250), 18.75);
+test("TP2最低净利润按当前账户权益0.25%计算，允许小风险探索", () => {
+  assert.equal(MIN_TP2_NET_PROFIT_EQUITY_RATE, 0.0025);
+  assert.equal(minimumTp2NetProfitUsdt(1000), 2.5);
+  assert.equal(minimumTp2NetProfitUsdt(500), 1.25);
+  assert.equal(minimumTp2NetProfitUsdt(1250), 3.125);
 });
 
-test("QQQX式微小TP2即使使用3倍杠杆也被权益比例净利润闸门拒绝", () => {
+test("QQQX式微小TP2即使降低探索门槛仍因净利润过低被拒绝", () => {
   const result = assessTakeProfitViability({
     side: "SHORT",
     entryPrice: 711.08,
@@ -90,12 +90,12 @@ test("QQQX式微小TP2即使使用3倍杠杆也被权益比例净利润闸门拒
     accountEquityUsdt: 1000,
     roundTripCostBps: 8,
   });
-  assert.equal(result.minimumNetProfitUsdt, 15);
+  assert.equal(result.minimumNetProfitUsdt, 2.5);
   assert.equal(result.netPnlUsdt, 0.57);
   assert.equal(result.passed, false);
 });
 
-test("权益变化时TP2净利润门槛同步变化而不是固定15U", () => {
+test("权益变化时TP2净利润门槛仍按比例同步变化而不是固定USDT", () => {
   const fiveHundredEquity = assessTakeProfitViability({
     side: "LONG",
     entryPrice: 100,
@@ -112,10 +112,10 @@ test("权益变化时TP2净利润门槛同步变化而不是固定15U", () => {
     accountEquityUsdt: 1000,
     roundTripCostBps: 8,
   });
-  assert.equal(fiveHundredEquity.minimumNetProfitUsdt, 7.5);
+  assert.equal(fiveHundredEquity.minimumNetProfitUsdt, 1.25);
   assert.equal(fiveHundredEquity.netPnlUsdt, 7.5);
   assert.equal(fiveHundredEquity.passed, true);
-  assert.equal(oneThousandEquity.minimumNetProfitUsdt, 15);
+  assert.equal(oneThousandEquity.minimumNetProfitUsdt, 2.5);
   assert.equal(oneThousandEquity.netPnlUsdt, 15);
   assert.equal(oneThousandEquity.passed, true);
 });
