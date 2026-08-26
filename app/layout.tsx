@@ -1,8 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { requireChatGPTUser } from "./chatgpt-auth";
 import { LiveOrdersInline } from "./live-orders-inline";
-import { SentinelV2Panels } from "./sentinel-v2-panels";
-import { Strategy2Visibility } from "./strategy-2-visibility";
+import { Strategy2Panels } from "./strategy-2-panels";
 import { UiStatusSemanticFix } from "./ui-status-semantic-fix";
 import "./globals.css";
 import "./polish.css";
@@ -12,8 +11,8 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://market-sentinel.alicia5574188.chatgpt.site"),
-  title: "Market Sentinel｜行情哨兵",
-  description: "面向 iPhone 的加密市场实时监测与证据驱动提醒：结论、理由、反证和失效条件一次说清。",
+  title: "Market Sentinel｜Strategy 2.0",
+  description: "Sentinel Strategy 2.0：环境识别、多策略并行竞争、风险控制与交易学习统一展示。",
   applicationName: "Market Sentinel",
   manifest: "/manifest.webmanifest",
   formatDetection: { telephone: false },
@@ -29,14 +28,14 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     locale: "zh_CN",
-    title: "Market Sentinel｜行情哨兵",
-    description: "实时监测 · 证据驱动 · 明确失效",
-    images: [{ url: "/og.png", width: 1200, height: 630, alt: "Market Sentinel 行情哨兵" }],
+    title: "Market Sentinel｜Strategy 2.0",
+    description: "环境识别 · 多策略竞争 · 风险控制 · 持续学习",
+    images: [{ url: "/og.png", width: 1200, height: 630, alt: "Market Sentinel Strategy 2.0" }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Market Sentinel｜行情哨兵",
-    description: "实时监测 · 证据驱动 · 明确失效",
+    title: "Market Sentinel｜Strategy 2.0",
+    description: "环境识别 · 多策略竞争 · 风险控制 · 持续学习",
     images: ["/og.png"],
   },
 };
@@ -55,8 +54,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
     <html lang="zh-CN">
       <body>
         {children}
-        <SentinelV2Panels />
-        <Strategy2Visibility />
+        <Strategy2Panels />
         <LiveOrdersInline />
         <UiStatusSemanticFix />
         <script src="/live-position-mode-helper.js" defer />
