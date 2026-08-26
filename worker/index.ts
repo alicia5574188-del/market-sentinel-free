@@ -7,6 +7,7 @@ import handler from "vinext/server/app-router-entry";
 import { setRuntimeDb } from "../db";
 import { setRuntimeBindings } from "../lib/runtime-bindings";
 import { runMarketScan, refreshOpenPositions } from "../lib/scanner";
+import { snapshotBackgroundUniverse, type BackgroundMarketSnapshot } from "../lib/background-selection";
 import { getSettings } from "../lib/repository";
 import type { SchedulerWorkerStatus } from "../lib/background-scheduler";
 import { resolveVapidConfig } from "../lib/vapid-config";
@@ -146,6 +147,7 @@ export class MarketScanner extends SchedulerObject {
     await this.ctx.storage.setAlarm(nextRunAt);
     const previous = await this.ctx.storage.get<SchedulerWorkerStatus>("status") ?? defaultSchedulerStatus();
     const rotationOffset = await this.ctx.storage.get<number>("rotationOffset") ?? 0;
+    const previousMarketSnapshot = await this.ctx.storage.get<BackgroundMarketSnapshot>("backgroundMarketSnapshot") ?? {};
     setRuntimeDb(this.env.DB);
     setRuntimeBindings(this.env);
     try {
@@ -153,9 +155,13 @@ export class MarketScanner extends SchedulerObject {
         profile: "free-background",
         deepLimit: 3,
         rotationOffset,
+        previousMarketSnapshot,
       });
       const paused = result.status === "paused";
       await this.ctx.storage.put("rotationOffset", paused ? rotationOffset : rotationOffset + 1);
+      if (!paused && "universe" in result) {
+        await this.ctx.storage.put("backgroundMarketSnapshot", snapshotBackgroundUniverse(result.universe));
+      }
       await this.ctx.storage.put<SchedulerWorkerStatus>("status", {
         state: paused ? "paused" : result.status === "degraded" ? "degraded" : "live",
         lastRunAt: startedAt,
