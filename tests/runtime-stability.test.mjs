@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [scheduler, client, layout] = await Promise.all([
+const [scheduler, client, layout, liveEngine, page] = await Promise.all([
   readFile(new URL("../lib/background-scheduler.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/runtime-stability-client.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../lib/live-trading-engine.ts", import.meta.url), "utf8"),
+  readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
 ]);
 
 test("background health isolates modules and wakes stale schedulers", () => {
@@ -34,4 +36,27 @@ test("client retries only safe read APIs and exposes exact health", () => {
 test("runtime stability layer is mounted globally", () => {
   assert.match(layout, /RuntimeStabilityClient/);
   assert.match(layout, /runtime-stability\.css/);
+});
+
+test("transient reconciliation degradation pauses entries without disarming Auto Live", () => {
+  assert.doesNotMatch(liveEngine, /await riskLock\(`后台对账失败：/);
+  assert.match(liveEngine, /后台对账暂时不可用/);
+  assert.match(liveEngine, /reconciliation_temporarily_paused/);
+  assert.match(liveEngine, /recoveringFromTransientPause/);
+  assert.match(liveEngine, /下一轮恢复新开仓/);
+  assert.match(liveEngine, /credentialFailure[\s\S]*await riskLock\(`Gate API 凭据失效：/);
+});
+
+test("hard live safety violations still latch a real risk lock", () => {
+  assert.match(liveEngine, /统一\/组合保证金模式[\s\S]*await riskLock\(reason\)/);
+  assert.match(liveEngine, /无法确认日内盈亏完整性[\s\S]*await riskLock\(reason\)/);
+  assert.match(liveEngine, /合约账户权益无效或已归零[\s\S]*await riskLock\(reason\)/);
+  assert.match(liveEngine, /保护单未完整建立[\s\S]*riskLock/);
+  assert.match(liveEngine, /未纳入账本的 Gate 仓位/);
+});
+
+test("UI separates market-data degradation from the real live-control state", () => {
+  assert.match(page, /实盘状态读取中/);
+  assert.match(page, /自动实盘开启 · 新开仓暂缓/);
+  assert.match(page, /实盘风控锁定/);
 });

@@ -204,11 +204,24 @@ async function enforceLiveAccountRisk(client: GatePrivateClient, settings: Await
     allPositionCloses(client, from, to),
   ]);
   if (account.margin_mode != null && Number(account.margin_mode) !== 0) {
-    throw new Error("Gate 账户已切换为统一/组合保证金模式；无法可靠确认实盘权益，已停止新开仓");
+    const reason = "Gate 账户已切换为统一/组合保证金模式；无法可靠确认实盘权益，已停止新开仓";
+    const current = await getLiveControl();
+    if (current.entryEnabled && current.state === "armed") await riskLock(reason);
+    throw new Error(reason);
   }
-  if (!closePage.complete) throw new Error("Gate 当日平仓记录达到 1000 条，无法确认日内盈亏完整性");
+  if (!closePage.complete) {
+    const reason = "Gate 当日平仓记录达到 1000 条，无法确认日内盈亏完整性";
+    const current = await getLiveControl();
+    if (current.entryEnabled && current.state === "armed") await riskLock(reason);
+    throw new Error(reason);
+  }
   const accountEquityUsdt = gateAccountEquityUsdt(account);
-  if (accountEquityUsdt <= 0) throw new Error("Gate 合约账户权益无效或已归零");
+  if (accountEquityUsdt <= 0) {
+    const reason = "Gate 合约账户权益无效或已归零";
+    const current = await getLiveControl();
+    if (current.entryEnabled && current.state === "armed") await riskLock(reason);
+    throw new Error(reason);
+  }
   const dailyRealizedPnlUsdt = closePage.records.reduce((sum, record) => sum + positionClosePnl(record), 0);
   const control = await getLiveControl();
   const accountEquityPeakUsdt = Math.max(control.accountEquityPeakUsdt ?? accountEquityUsdt, accountEquityUsdt);
@@ -489,7 +502,7 @@ async function validateRecoveredPostFill(client: GatePrivateClient, order: LiveO
       : filledStopRiskUsdt > riskBudgetUsdt + 0.01
         ? `恢复成交后的结构止损风险 ${filledStopRiskUsdt.toFixed(2)}U，超过 ${riskBudgetUsdt.toFixed(2)}U 单笔上限`
         : filledExpectedNetTp2Usdt < minimumNetTp2Usdt
-          ? `恢复成交后 TP2 预计净利润 ${filledExpectedNetTp2Usdt.toFixed(2)}U，低于当前权益 1.5% 门槛 ${minimumNetTp2Usdt.toFixed(2)}U`
+          ? `恢复成交后 TP2 预计净利润 ${filledExpectedNetTp2Usdt.toFixed(2)}U，低于当前权益 0.25% 门槛 ${minimumNetTp2Usdt.toFixed(2)}U`
           : null;
   if (reason) {
     await addLiveAudit({ eventType: "recovered_post_fill_gate_failed", severity: "critical", liveOrderId: order.id, symbol: order.symbol, message: `${order.symbol} ${reason}，立即执行保护性平仓` });
@@ -543,8 +556,9 @@ async function replaceProtectiveStop(client: GatePrivateClient, order: LiveOrder
     return updated ?? order;
   } catch (error) {
     const reason = `更新保护止损失败，旧止损保持有效：${errorMessage(error)}`;
-    await addLiveAudit({ eventType: "protective_stop_update_failed", severity: "critical", liveOrderId: order.id, symbol: order.symbol, message: `${order.symbol} ${reason}` });
-    await riskLock(`${order.symbol} ${reason}`, order);
+    await addLiveAudit({ eventType: "protective_stop_update_failed", severity: "warning", liveOrderId: order.id, symbol: order.symbol, message: `${order.symbol} ${reason}；本轮暂停新开仓并等待自动重试` });
+    // The previous stop is still active at Gate. A transient read/write failure
+    // must pause the current reconciliation cycle, not permanently disarm Auto Live.
     throw error;
   }
 }
@@ -1242,6 +1256,10 @@ export async function reconcileLiveTrading() {
   const credentialRecord = await getLiveCredentialRecord();
   if (!credentialRecord) return getLiveTradingSnapshot();
   if (control.state === "emergency_stopped") return runEmergencyStop("system", control.emergencyReason ?? "紧急停机自动复核");
+  // If the previous cycle failed only because data/network was temporarily unavailable,
+  // keep the owner's Auto Live intent armed but require one fully clean recovery cycle
+  // before a new Gate entry is allowed. Existing positions remain protected/reconciled.
+  const recoveringFromTransientPause = control.entryEnabled && control.state === "armed" && Boolean(control.lastError);
   let client: GatePrivateClient;
   try {
     ({ client } = await loadClient());
@@ -1292,7 +1310,7 @@ export async function reconcileLiveTrading() {
     // accurate account-level safety view.
     const accountForCandidate = await enforceLiveAccountRisk(client, settings);
     const updatedControl = await getLiveControl();
-    if (updatedControl.entryEnabled && updatedControl.state === "armed" && updatedControl.enabledAt) {
+    if (updatedControl.entryEnabled && updatedControl.state === "armed" && updatedControl.enabledAt && !recoveringFromTransientPause) {
       const activeCount = trackedAfterReconcile.length;
       if (activeCount < MAX_LIVE_OPEN_POSITIONS) {
         const candidates = await listLiveEntryCandidates(updatedControl.enabledAt);
@@ -1334,12 +1352,42 @@ export async function reconcileLiveTrading() {
         ? finalControl.lastError
         : conflictError,
     });
+    if (recoveringFromTransientPause && finalControl.entryEnabled && finalControl.state === "armed" && !conflictError) {
+      await addLiveAudit({
+        eventType: "reconciliation_recovered",
+        severity: "info",
+        message: "Gate 后台对账已恢复；本轮仅完成安全复核，下一轮恢复新开仓",
+      });
+    }
     if (credentialRecord.status === "error") await markLiveCredentialVerification(true);
   } catch (error) {
     const reason = errorMessage(error);
     const latest = await getLiveControl();
-    if (latest.entryEnabled && latest.state === "armed") await riskLock(`后台对账失败：${reason}`);
-    else {
+    const credentialFailure = isCredentialFailure(error);
+    if (latest.entryEnabled && latest.state === "armed") {
+      if (credentialFailure) {
+        // 401/403 or an explicit authentication failure is not transient.
+        await riskLock(`Gate API 凭据失效：${reason}`);
+      } else {
+        // A failed observation/reconciliation cycle is fail-safe by construction:
+        // no candidate can be submitted because this function exits before the entry path.
+        // Keep the owner's Auto Live intent armed so a 429/5xx/timeout/D1 hiccup
+        // does not require manual re-arming after every short outage.
+        const pauseReason = `后台对账暂时不可用：${reason}`;
+        const changed = latest.lastError !== pauseReason;
+        await patchLiveControl({ lastReconciledAt: Date.now(), lastError: pauseReason });
+        if (changed) {
+          const activeOrderCount = await countActiveLiveOrders().catch(() => 0);
+          await addLiveAudit({
+            eventType: "reconciliation_temporarily_paused",
+            severity: activeOrderCount > 0 ? "critical" : "warning",
+            message: activeOrderCount > 0
+              ? `已有实盘仓位对账暂时不可用：${reason}；交易所保护单保持生效，停止本轮新开仓并自动重试`
+              : `Gate 后台对账暂时不可用：${reason}；Auto Live 保持开启，停止本轮新开仓并自动重试`,
+          }).catch(() => undefined);
+        }
+      }
+    } else {
       const activeOrderCount = await countActiveLiveOrders().catch(() => 0);
       const nextError = latest.state === "risk_locked" ? latest.lastError : reason;
       await patchLiveControl({ lastReconciledAt: Date.now(), lastError: nextError });
@@ -1348,7 +1396,7 @@ export async function reconcileLiveTrading() {
         await notifyLiveOwner("Gate 已有仓位对账失败", reason, `live-active-reconcile-failed-${Date.now()}`);
       }
     }
-    if (isCredentialFailure(error)) await markLiveCredentialVerification(false, reason).catch(() => undefined);
+    if (credentialFailure) await markLiveCredentialVerification(false, reason).catch(() => undefined);
     throw error;
   }
   return getLiveTradingSnapshot();

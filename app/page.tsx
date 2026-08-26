@@ -1148,7 +1148,7 @@ export default function Home() {
     <section className={`replay-banner ${decision ? "live" : selectedPacket?.mode === "degraded" ? "degraded" : "loading"}`} aria-label="数据状态">
       <span><i/>{decision ? "Gate 实时" : selectedPacket?.mode === "degraded" ? "数据降级" : "连接中"}</span>
       <p>{decision ? `15 秒更新 · 深度 ${Math.round(decision.dataQuality * 100)}% · ${formatTime(selectedPacket?.observedAt)}` : (selectedPacket?.error ?? sourceError) || "正在读取全市场行情"}</p>
-      <b>{liveTrading?.control.entryEnabled ? "自动实盘开启" : liveTrading?.credential.configured ? "实盘关闭" : "无交易权限"}</b>
+      <b>{!liveTrading ? "实盘状态读取中" : liveTrading.control.state === "emergency_stopped" ? "紧急停机" : liveTrading.control.state === "risk_locked" ? "实盘风控锁定" : liveTrading.control.entryEnabled ? liveTrading.control.lastError ? "自动实盘开启 · 新开仓暂缓" : "自动实盘开启" : liveTrading.credential.configured ? "实盘关闭" : "无交易权限"}</b>
     </section>
 
     {tab === "机会" && <>
