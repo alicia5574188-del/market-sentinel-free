@@ -43,8 +43,8 @@ test("Strategy 2.0 visibility explains champion cards and exposes full pool acti
   assert.match(api, /getV2StrategyPoolActivity\(\)/);
   assert.match(api, /strategyPool/);
   assert.match(repository, /getV2StrategyPoolActivity/);
-  assert.match(repository, /evaluations:opportunities\.length/);
-  assert.match(repository, /playbookCount:playbooks\.length/);
+  assert.match(repository, /evaluations:\s*opportunities\.length/);
+  assert.match(repository, /playbookCount:\s*playbooks\.length/);
 });
 
 test("opportunity detail is V2-first and collapses legacy diagnostics by default", async () => {
