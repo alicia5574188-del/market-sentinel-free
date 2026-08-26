@@ -85,6 +85,12 @@ type PortalTargets = {
   opportunity: HTMLElement | null;
   radar: HTMLElement | null;
   orders: HTMLElement | null;
+  decisionCard: HTMLElement | null;
+  decisionConfidence: HTMLElement | null;
+  decisionAction: HTMLElement | null;
+  decisionTrigger: HTMLElement | null;
+  decisionCounter: HTMLElement | null;
+  selectedSymbol: string | null;
 };
 
 const PERMISSION_COPY: Record<V2Market["permission"], string> = {
@@ -95,12 +101,57 @@ const PERMISSION_COPY: Record<V2Market["permission"], string> = {
   RED: "停止新增风险",
 };
 
+const STATE_COPY: Record<V2Opportunity["state"], string> = {
+  TRADE: "允许交易",
+  WATCH: "继续观察",
+  REJECT: "拒绝交易",
+};
+
+const REJECT_COPY: Record<string, string> = {
+  DATA_UNSAFE: "市场数据不完整或不可靠",
+  TRANSITION_HIGH: "环境切换风险过高",
+  REGIME_CONFLICT: "个币机会与当前市场环境冲突",
+  RR_LOW: "预期盈亏比不足",
+  PORTFOLIO_CONCENTRATION: "加入后组合风险过度集中",
+  CHASE_TOO_FAR: "价格已经偏离合理进场位置",
+  LEVERAGE_EXTREME: "杠杆拥挤程度过高",
+};
+
+const OPPORTUNITY_DETAIL_CSS = `
+.decision-card.v2-opportunity-detail-active .score-bars{display:none!important}
+.decision-card.v2-opportunity-detail-active .confidence.v2-overridden>span,.decision-card.v2-opportunity-detail-active .confidence.v2-overridden>strong,.decision-card.v2-opportunity-detail-active .confidence.v2-overridden>small{display:none!important}
+.decision-card.v2-opportunity-detail-active .action-callout.v2-overridden>.action-icon,.decision-card.v2-opportunity-detail-active .action-callout.v2-overridden>div:not(.v2-selected-action){display:none!important}
+.decision-card.v2-opportunity-detail-active .trigger-row.v2-overridden>svg,.decision-card.v2-opportunity-detail-active .trigger-row.v2-overridden>div:not(.v2-selected-next){display:none!important}
+.decision-card.v2-opportunity-detail-active .risk-note{display:none!important}
+.decision-card.v2-opportunity-detail-active:not(.v2-show-legacy-analysis) .analysis-matrix,.decision-card.v2-opportunity-detail-active:not(.v2-show-legacy-analysis) .v2-analysis-heading{display:none!important}
+.decision-card.v2-opportunity-detail-active .confidence.v2-overridden{min-width:82px}
+.v2-selected-score{display:flex;align-items:baseline;justify-content:flex-end;gap:2px;width:100%}.v2-selected-score span{font-size:10px;color:#8290a7}.v2-selected-score strong{font-size:32px;line-height:1;color:#53cdf4}.v2-selected-score small{font-size:10px;color:#75839a}
+.decision-card .action-callout.v2-overridden{display:block;padding:16px}.v2-selected-action{display:grid;gap:9px;width:100%}.v2-selected-action-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.v2-selected-state{padding:5px 8px;border-radius:999px;font-size:10px;font-weight:800;letter-spacing:.04em;background:rgba(255,255,255,.05)}.v2-selected-state.trade{color:#62dfa2;background:rgba(53,199,129,.1)}.v2-selected-state.watch{color:#ffc45f;background:rgba(244,184,57,.1)}.v2-selected-state.reject{color:#ff7884;background:rgba(244,77,91,.12)}.v2-selected-action-head strong{font-size:11px;color:#9aa8bd}.v2-selected-action h3{margin:0;font-size:20px;color:#eef4ff}.v2-selected-action p{margin:0;color:#b5c0d1;font-size:12px;line-height:1.5}.v2-selected-scores{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}.v2-selected-scores div{padding:8px;border-radius:10px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.055);display:flex;flex-direction:column;gap:2px}.v2-selected-scores span{font-size:9px;color:#78879d}.v2-selected-scores strong{font-size:14px}.v2-selected-meta{display:flex;gap:6px;flex-wrap:wrap}.v2-selected-meta span{font-size:9px;color:#8493aa;padding:5px 7px;border-radius:8px;background:rgba(255,255,255,.035)}
+.decision-card .trigger-row.v2-overridden{display:block}.v2-selected-next{display:grid;gap:6px;width:100%}.v2-selected-next>span{font-size:10px;color:#7f8fa7}.v2-selected-next strong{font-size:12px;line-height:1.45;color:#dce5f3}.v2-selected-next ul{list-style:none;margin:0;padding:0;display:grid;gap:4px}.v2-selected-next li{font-size:11px;line-height:1.4;color:#b8c3d4;padding-left:14px;position:relative}.v2-selected-next li:before{content:'•';position:absolute;left:2px;color:#56cfee}.v2-execution-note{font-size:9px!important;color:#718098!important;font-weight:500!important}
+.v2-detail-toggle{margin:10px 0 0;width:100%;border:1px solid rgba(255,255,255,.08);border-radius:11px;padding:10px 12px;background:rgba(255,255,255,.025);color:#91a0b6;font-size:11px;font-weight:700;text-align:center}.v2-detail-toggle:active{background:rgba(255,255,255,.055)}
+@media(max-width:480px){.v2-selected-scores{grid-template-columns:repeat(2,minmax(0,1fr))}.v2-selected-action h3{font-size:18px}.v2-selected-score strong{font-size:29px}}
+`;
+
+function normalizeDisplayedSymbol(value: string | null) {
+  const compact = (value ?? "").trim().toUpperCase().replace(/[^A-Z0-9_]/g, "");
+  if (!compact) return null;
+  if (compact.includes("_")) return compact;
+  if (compact.endsWith("USDT")) return `${compact.slice(0, -4)}_USDT`;
+  return compact;
+}
+
 function findTargets(): PortalTargets {
   const opportunity = document.querySelector<HTMLElement>(".market-status");
   const cards = Array.from(document.querySelectorAll<HTMLElement>(".utility-card"));
   const radar = cards.find((card) => card.querySelector(".eyebrow")?.textContent?.includes("数据雷达")) ?? null;
   const orders = document.querySelector<HTMLElement>(".utility-card.order-ledger");
-  return { opportunity, radar, orders };
+  const decisionCard = document.querySelector<HTMLElement>(".decision-card:not(.loading-card)");
+  const decisionConfidence = decisionCard?.querySelector<HTMLElement>(".confidence") ?? null;
+  const decisionAction = decisionCard?.querySelector<HTMLElement>(".action-callout") ?? null;
+  const decisionTrigger = decisionCard?.querySelector<HTMLElement>(".trigger-row") ?? null;
+  const decisionCounter = decisionCard?.querySelector<HTMLElement>(".counter-section") ?? null;
+  const selectedSymbol = normalizeDisplayedSymbol(decisionCard?.querySelector<HTMLElement>(".ticker-line strong")?.textContent ?? null);
+  return { opportunity, radar, orders, decisionCard, decisionConfidence, decisionAction, decisionTrigger, decisionCounter, selectedSymbol };
 }
 
 function PermissionBadge({ permission }: { permission: V2Market["permission"] }) {
@@ -132,6 +183,46 @@ function OpportunityPanel({ packet }: { packet: V2Packet }) {
       <p>{item.state === "TRADE" ? item.reasons[0] : item.waitingFor[0] ?? "继续等待确认"}</p>
       <small>环境 {item.environmentFit} · 结构 {item.structure} · 时机 {item.timing} · 确认 {item.confirmation} · RR {item.riskReward.toFixed(1)} · 风险倍率 {(item.riskMultiplier * 100).toFixed(0)}%</small>
     </div>)}</div>}
+  </div>;
+}
+
+function SelectedScore({ opportunity }: { opportunity: V2Opportunity }) {
+  return <div className="v2-selected-score"><span>机会评分</span><strong>{opportunity.opportunityScore}</strong><small>/100</small></div>;
+}
+
+function primaryExplanation(opportunity: V2Opportunity) {
+  if (opportunity.state === "REJECT") return opportunity.rejectReasons.map((reason) => REJECT_COPY[reason] ?? reason).join("；") || "当前条件明确不适合交易";
+  if (opportunity.state === "WATCH") return opportunity.waitingFor.join("；") || "机会质量尚未达到当前环境的交易门槛";
+  return opportunity.reasons[0] ?? "V2 条件已经满足";
+}
+
+function SelectedAction({ opportunity, market }: { opportunity: V2Opportunity; market: V2Market }) {
+  return <div className="v2-selected-action">
+    <div className="v2-selected-action-head"><span className={`v2-selected-state ${opportunity.state.toLowerCase()}`}>{opportunity.state} · {STATE_COPY[opportunity.state]}</span><strong>{opportunity.playbookLabel}</strong></div>
+    <h3>{opportunity.side === "WAIT" ? "保持空仓" : `${opportunity.side} · ${STATE_COPY[opportunity.state]}`}</h3>
+    <p>{primaryExplanation(opportunity)}</p>
+    <div className="v2-selected-scores">
+      <div><span>环境</span><strong>{opportunity.environmentFit}</strong></div>
+      <div><span>结构</span><strong>{opportunity.structure}</strong></div>
+      <div><span>时机</span><strong>{opportunity.timing}</strong></div>
+      <div><span>确认</span><strong>{opportunity.confirmation}</strong></div>
+    </div>
+    <div className="v2-selected-meta"><span>Transition {market.transitionRisk}</span><span>RR {opportunity.riskReward.toFixed(1)}</span><span>组合影响 {opportunity.portfolioImpact}</span><span>风险倍率 {(opportunity.riskMultiplier * 100).toFixed(0)}%</span></div>
+  </div>;
+}
+
+function SelectedNext({ opportunity }: { opportunity: V2Opportunity }) {
+  const items = opportunity.state === "REJECT"
+    ? opportunity.rejectReasons.map((reason) => REJECT_COPY[reason] ?? reason)
+    : opportunity.state === "WATCH"
+      ? opportunity.waitingFor
+      : ["V2 条件已满足，等待组合风险、仓位与实盘执行层最终复核"];
+  const shown = items.length ? items.slice(0, 3) : ["继续等待更高质量确认"];
+  return <div className="v2-selected-next">
+    <span>{opportunity.state === "TRADE" ? "执行前复核" : opportunity.state === "WATCH" ? "还差什么" : "为什么拒绝"}</span>
+    <ul>{shown.map((item) => <li key={item}>{item}</li>)}</ul>
+    {opportunity.maxRisk && <strong>最大风险：{opportunity.maxRisk}</strong>}
+    <strong className="v2-execution-note">V2 机会通过后仍需组合风险与 Execution Engine 复核；实盘总开关始终拥有最终权限。</strong>
   </div>;
 }
 
@@ -168,7 +259,8 @@ function OrdersPanel({ packet }: { packet: V2Packet }) {
 
 export function SentinelV2Panels() {
   const [packet, setPacket] = useState<V2Packet | null>(null);
-  const [targets, setTargets] = useState<PortalTargets>({ opportunity: null, radar: null, orders: null });
+  const [showLegacyAnalysis, setShowLegacyAnalysis] = useState(false);
+  const [targets, setTargets] = useState<PortalTargets>({ opportunity: null, radar: null, orders: null, decisionCard: null, decisionConfidence: null, decisionAction: null, decisionTrigger: null, decisionCounter: null, selectedSymbol: null });
 
   useEffect(() => {
     let active = true;
@@ -191,9 +283,36 @@ export function SentinelV2Panels() {
     const sync = () => setTargets(findTargets());
     sync();
     const observer = new MutationObserver(sync);
-    observer.observe(document.body, { childList: true, subtree: true });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => { setShowLegacyAnalysis(false); }, [targets.selectedSymbol]);
+
+  const selectedOpportunity = useMemo(() => {
+    if (!packet || !targets.selectedSymbol) return null;
+    return packet.opportunities.find((item) => item.symbol === targets.selectedSymbol) ?? null;
+  }, [packet, targets.selectedSymbol]);
+
+  useEffect(() => {
+    const card = targets.decisionCard;
+    const controlled = [targets.decisionConfidence, targets.decisionAction, targets.decisionTrigger];
+    const analysisHeading = card?.querySelector<HTMLElement>(".analysis-matrix")?.previousElementSibling as HTMLElement | null;
+    if (analysisHeading) analysisHeading.classList.add("v2-analysis-heading");
+    if (selectedOpportunity && card) {
+      card.classList.add("v2-opportunity-detail-active");
+      card.classList.toggle("v2-show-legacy-analysis", showLegacyAnalysis);
+      controlled.forEach((target) => target?.classList.add("v2-overridden"));
+    } else {
+      card?.classList.remove("v2-opportunity-detail-active", "v2-show-legacy-analysis");
+      controlled.forEach((target) => target?.classList.remove("v2-overridden"));
+    }
+    return () => {
+      card?.classList.remove("v2-opportunity-detail-active", "v2-show-legacy-analysis");
+      controlled.forEach((target) => target?.classList.remove("v2-overridden"));
+      analysisHeading?.classList.remove("v2-analysis-heading");
+    };
+  }, [selectedOpportunity, showLegacyAnalysis, targets.decisionAction, targets.decisionCard, targets.decisionConfidence, targets.decisionTrigger]);
 
   const content = useMemo(() => {
     if (!packet?.market) return null;
@@ -204,10 +323,15 @@ export function SentinelV2Panels() {
     };
   }, [packet]);
 
-  if (!content) return null;
+  if (!content || !packet?.market) return null;
   return <>
+    <style>{OPPORTUNITY_DETAIL_CSS}</style>
     {targets.opportunity && createPortal(content.opportunity, targets.opportunity)}
     {targets.radar && createPortal(content.radar, targets.radar)}
     {targets.orders && createPortal(content.orders, targets.orders)}
+    {selectedOpportunity && targets.decisionConfidence && createPortal(<SelectedScore opportunity={selectedOpportunity}/>, targets.decisionConfidence)}
+    {selectedOpportunity && targets.decisionAction && createPortal(<SelectedAction opportunity={selectedOpportunity} market={packet.market}/>, targets.decisionAction)}
+    {selectedOpportunity && targets.decisionTrigger && createPortal(<SelectedNext opportunity={selectedOpportunity}/>, targets.decisionTrigger)}
+    {selectedOpportunity && targets.decisionCounter && createPortal(<button type="button" className="v2-detail-toggle" onClick={() => setShowLegacyAnalysis((value) => !value)}>{showLegacyAnalysis ? "收起底层详细分析" : "查看底层详细分析"}</button>, targets.decisionCounter)}
   </>;
 }
