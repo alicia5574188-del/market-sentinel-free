@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { requireChatGPTUser } from "./chatgpt-auth";
 import { LiveOrdersInline } from "./live-orders-inline";
 import { SentinelV2Panels } from "./sentinel-v2-panels";
+import { Strategy2Visibility } from "./strategy-2-visibility";
 import { UiStatusSemanticFix } from "./ui-status-semantic-fix";
 import "./globals.css";
 import "./polish.css";
@@ -55,6 +56,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
       <body>
         {children}
         <SentinelV2Panels />
+        <Strategy2Visibility />
         <LiveOrdersInline />
         <UiStatusSemanticFix />
         <script src="/live-position-mode-helper.js" defer />

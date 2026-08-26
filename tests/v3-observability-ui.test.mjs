@@ -13,6 +13,7 @@ test("global layout mounts V2 panels without replacing the stable page shell", a
   assert.doesNotMatch(layout, /OpportunityStrategyDiagnostics/);
   assert.doesNotMatch(layout, /StrategyLabInline/);
   assert.match(layout, /<SentinelV2Panels \/>/);
+  assert.match(layout, /<Strategy2Visibility \/>/);
   assert.match(layout, /<LiveOrdersInline \/>/);
 });
 
@@ -27,6 +28,23 @@ test("V2 panels expose environment, transition, opportunity and thesis health on
   assert.match(panels, /REJECT/);
   assert.match(panels, /riskMultiplier/);
   assert.match(panels, /thesisHealth/);
+});
+
+test("Strategy 2.0 visibility explains champion cards and exposes full pool activity", async () => {
+  const [visibility, api, repository] = await Promise.all([
+    readFile(new URL("../app/strategy-2-visibility.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/v2/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/sentinel-v2-repository.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(visibility, /Sentinel Strategy 2\.0/);
+  assert.match(visibility, /12 策略并行竞争/);
+  assert.match(visibility, /Playbook \{pool\?\.playbookCount \?\? 0\}\/12/);
+  assert.match(visibility, /下方三张卡只显示每个币当前排名最高的冠军策略/);
+  assert.match(api, /getV2StrategyPoolActivity\(\)/);
+  assert.match(api, /strategyPool/);
+  assert.match(repository, /getV2StrategyPoolActivity/);
+  assert.match(repository, /evaluations:opportunities\.length/);
+  assert.match(repository, /playbookCount:playbooks\.length/);
 });
 
 test("opportunity detail is V2-first and collapses legacy diagnostics by default", async () => {
