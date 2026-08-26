@@ -51,12 +51,24 @@ type V2Opportunity = {
   maxRisk: string | null;
 };
 
+type V2Thesis = {
+  tradeId: string;
+  playbook: string;
+  entryRegime: string;
+  currentRegime: string;
+  entryTransitionRisk: number;
+  currentTransitionRisk: number;
+  thesisHealth: number;
+  updatedAt: number;
+};
+
 type V2Packet = {
   observedAt: number;
   version: string;
   market: V2Market | null;
   opportunities: V2Opportunity[];
   warnings: V2Warning[];
+  theses: V2Thesis[];
   portfolio: null | {
     openCount: number;
     longCount: number;
@@ -64,6 +76,8 @@ type V2Packet = {
     directionConcentration: number;
     riskLevel: string;
     currentAction: string;
+    averageThesisHealth: number | null;
+    weakestThesisHealth: number | null;
   };
 };
 
@@ -137,16 +151,18 @@ function RadarPanel({ packet }: { packet: V2Packet }) {
 function OrdersPanel({ packet }: { packet: V2Packet }) {
   const market = packet.market!;
   const portfolio = packet.portfolio;
+  const weakest = packet.theses.slice().sort((a, b) => a.thesisHealth - b.thesisHealth).slice(0, 3);
   return <div className="v2-panel v2-orders-panel">
-    <div className="v2-panel-head"><div><span>PORTFOLIO CONTROL · V2</span><strong>账户风险与环境许可</strong></div><PermissionBadge permission={market.permission}/></div>
+    <div className="v2-panel-head"><div><span>PORTFOLIO CONTROL · V2</span><strong>账户风险与交易逻辑健康度</strong></div><PermissionBadge permission={market.permission}/></div>
     <div className="v2-portfolio-grid">
       <div><span>活动持仓</span><strong>{portfolio?.openCount ?? 0}</strong><small>多 {portfolio?.longCount ?? 0} / 空 {portfolio?.shortCount ?? 0}</small></div>
       <div><span>方向集中</span><strong>{portfolio?.directionConcentration ?? 0}%</strong><small>同方向风险</small></div>
       <div><span>组合风险</span><strong className={portfolio?.riskLevel === "CRITICAL" || portfolio?.riskLevel === "HIGH" ? "v2-danger" : portfolio?.riskLevel === "ELEVATED" ? "v2-warn" : "v2-good"}>{portfolio?.riskLevel ?? "--"}</strong><small>Transition {market.transitionRisk}</small></div>
-      <div><span>当前动作</span><strong>{market.permission}</strong><small>{portfolio?.currentAction ?? PERMISSION_COPY[market.permission]}</small></div>
+      <div><span>平均逻辑健康</span><strong className={(portfolio?.averageThesisHealth ?? 100) < 45 ? "v2-danger" : (portfolio?.averageThesisHealth ?? 100) < 65 ? "v2-warn" : "v2-good"}>{portfolio?.averageThesisHealth ?? "--"}</strong><small>最弱 {portfolio?.weakestThesisHealth ?? "--"}</small></div>
     </div>
+    {weakest.length > 0 && <div className="v2-thesis-list">{weakest.map((thesis) => <div key={thesis.tradeId}><span>{thesis.playbook}</span><strong className={thesis.thesisHealth < 45 ? "v2-danger" : thesis.thesisHealth < 65 ? "v2-warn" : "v2-good"}>{thesis.thesisHealth}</strong><small>{thesis.entryRegime} → {thesis.currentRegime}</small></div>)}</div>}
     {market.topDrivers.length > 0 && <div className="v2-driver-row"><span>环境风险主因</span>{market.topDrivers.map((driver) => <b key={driver}>{driver}</b>)}</div>}
-    <p className="v2-order-note">V2 的组合风险先决定是否允许增加风险；单笔评分再高，也不能绕过环境许可、同方向集中和实盘保护链。</p>
+    <p className="v2-order-note">当前动作：{portfolio?.currentAction ?? PERMISSION_COPY[market.permission]}。Thesis Health 与盈亏分开计算；浮盈也可能因为环境恶化而降低健康度。</p>
   </div>;
 }
 
