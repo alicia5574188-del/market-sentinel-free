@@ -34,3 +34,18 @@ test("iPhone pull-to-refresh performs one genuine full refresh without starting 
   assert.match(css, /overscroll-behavior-y:\s*none/);
   assert.match(css, /\.pull-refresh\.refreshing svg\s*\{[^}]*animation:\s*pull-refresh-spin/s);
 });
+
+test("iPhone PWA never replaces API JSON with the cached app shell", async () => {
+  const sw = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
+  assert.match(sw, /market-sentinel-shell-v4/);
+  assert.match(sw, /url\.pathname\.startsWith\("\/api\/"\)/);
+  assert.match(sw, /url\.pathname === "\/__health"/);
+  assert.match(sw, /if \(!isNavigation && !isShellAsset\) return/);
+  assert.doesNotMatch(sw, /caches\.match\(event\.request\)[\s\S]*caches\.match\("\/"\)/);
+});
+
+test("installed PWA metadata points at the production Worker origin", async () => {
+  const layout = await readFile(new URL("../app/layout.tsx", import.meta.url), "utf8");
+  assert.match(layout, /metadataBase: new URL\("https:\/\/market-sentinel-free\.alicia5574188\.workers\.dev"\)/);
+  assert.doesNotMatch(layout, /market-sentinel\.alicia5574188\.chatgpt\.site/);
+});
