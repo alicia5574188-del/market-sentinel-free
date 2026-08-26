@@ -1,15 +1,17 @@
 import { requireApiAccount } from "../../api-auth";
 import { listOpenTrades } from "../../../lib/repository";
+import { getStrategy2LearningDashboard } from "../../../lib/strategy-2-learning";
 import { getLatestV2MarketContext, getV2StrategyPoolActivity, listRecentV2Opportunities, listRecentV2Warnings, listV2TradeTheses } from "../../../lib/sentinel-v2-repository";
 
 export async function GET() {
   const auth = await requireApiAccount();
   if ("response" in auth) return auth.response;
   try {
-    const [market, opportunities, strategyPool, warnings, openTrades, theses] = await Promise.all([
+    const [market, opportunities, strategyPool, learning, warnings, openTrades, theses] = await Promise.all([
       getLatestV2MarketContext(),
       listRecentV2Opportunities(120),
       getV2StrategyPoolActivity(),
+      getStrategy2LearningDashboard(),
       listRecentV2Warnings(24),
       listOpenTrades(),
       listV2TradeTheses(80),
@@ -42,6 +44,7 @@ export async function GET() {
       market,
       opportunities,
       strategyPool,
+      learning,
       warnings,
       theses: activeTheses,
       portfolio: {
@@ -62,6 +65,7 @@ export async function GET() {
       market: null,
       opportunities: [],
       strategyPool: null,
+      learning: null,
       warnings: [],
       theses: [],
       portfolio: null,
