@@ -1,14 +1,15 @@
 import { requireApiAccount } from "../../api-auth";
 import { listOpenTrades } from "../../../lib/repository";
-import { getLatestV2MarketContext, listRecentV2Opportunities, listRecentV2Warnings, listV2TradeTheses } from "../../../lib/sentinel-v2-repository";
+import { getLatestV2MarketContext, getV2StrategyPoolActivity, listRecentV2Opportunities, listRecentV2Warnings, listV2TradeTheses } from "../../../lib/sentinel-v2-repository";
 
 export async function GET() {
   const auth = await requireApiAccount();
   if ("response" in auth) return auth.response;
   try {
-    const [market, opportunities, warnings, openTrades, theses] = await Promise.all([
+    const [market, opportunities, strategyPool, warnings, openTrades, theses] = await Promise.all([
       getLatestV2MarketContext(),
       listRecentV2Opportunities(120),
+      getV2StrategyPoolActivity(),
       listRecentV2Warnings(24),
       listOpenTrades(),
       listV2TradeTheses(80),
@@ -37,9 +38,10 @@ export async function GET() {
 
     return Response.json({
       observedAt: Date.now(),
-      version: "sentinel-v2",
+      version: "strategy-2.0",
       market,
       opportunities,
+      strategyPool,
       warnings,
       theses: activeTheses,
       portfolio: {
@@ -56,13 +58,14 @@ export async function GET() {
   } catch (error) {
     return Response.json({
       observedAt: Date.now(),
-      version: "sentinel-v2",
+      version: "strategy-2.0",
       market: null,
       opportunities: [],
+      strategyPool: null,
       warnings: [],
       theses: [],
       portfolio: null,
-      error: error instanceof Error ? error.message : "Sentinel V2 数据暂不可用",
+      error: error instanceof Error ? error.message : "Sentinel Strategy 2.0 数据暂不可用",
     }, { status: 503, headers: { "Cache-Control": "no-store" } });
   }
 }
