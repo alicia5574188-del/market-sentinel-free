@@ -55,7 +55,8 @@ test("unified dashboard API exposes the real Strategy 2.0 learning matrix", asyn
   assert.match(api, /getStrategy2LearningDashboard\(\)/);
   assert.match(api, /strategyPool/);
   assert.match(api, /learning/);
-  assert.match(learning, /Global.*Playbook.*Asset-Regime.*Direction/);
+  assert.match(learning, /Exact Regime × Playbook × Asset-Regime × Direction/);
+  assert.match(learning, /strategy2ExperienceKey\(parsed\.playbook, parsed\.globalRegime, parsed\.assetRegime, row\.side\)/);
   assert.match(learning, /getStrategy2LearningDashboard/);
   assert.match(learning, /negative_edge/);
   assert.match(learning, /小风险探索，不因少量输赢过度调整/);
