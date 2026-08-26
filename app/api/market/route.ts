@@ -1,6 +1,7 @@
 import { analyzeGateSymbol, SYMBOL_PATTERN } from "../../../lib/gate-client";
 import { getGlobalRiskContext } from "../../../lib/global-risk";
 import { getExperience, getOpenTrade, getPriorLong, getSettings, previewDecisionContract } from "../../../lib/repository";
+import { getLatestV2MarketContext, getV2Opportunity } from "../../../lib/sentinel-v2-repository";
 import { requireApiAccount } from "../../api-auth";
 
 export async function GET(request: Request) {
@@ -11,12 +12,14 @@ export async function GET(request: Request) {
   if (!SYMBOL_PATTERN.test(symbol)) return Response.json({ error: "symbol must look like SOL_USDT" }, { status: 400 });
 
   try {
-    const [global, settings, priorLongProbability, experience, openTrade] = await Promise.all([
+    const [global, settings, priorLongProbability, experience, openTrade, v2Market, v2Opportunity] = await Promise.all([
       getGlobalRiskContext(),
       getSettings(),
       getPriorLong(symbol),
       getExperience(symbol),
       getOpenTrade(symbol),
+      getLatestV2MarketContext(),
+      getV2Opportunity(symbol),
     ]);
     const packet = await analyzeGateSymbol(symbol, {
       detail: "full",
@@ -25,8 +28,15 @@ export async function GET(request: Request) {
       experience,
       alertStyle: settings.alertStyle,
     });
+    // Contract preview remains useful for explaining the legacy evidence layer,
+    // but actual new entries are authorized only by the V2 scan/playbook path.
     const contractPreview = openTrade ? null : await previewDecisionContract(packet, settings);
-    return Response.json({ ...(contractPreview?.packet ?? packet), openTrade, experience }, {
+    return Response.json({
+      ...(contractPreview?.packet ?? packet),
+      openTrade,
+      experience,
+      v2: { market: v2Market, opportunity: v2Opportunity },
+    }, {
       headers: { "Cache-Control": "private, max-age=2, stale-while-revalidate=5" },
     });
   } catch (error) {
