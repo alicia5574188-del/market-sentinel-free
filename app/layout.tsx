@@ -59,11 +59,11 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   return (
     <html lang="zh-CN">
       <body>
+        <RuntimeStabilityClient />
         {children}
         <Strategy2Dashboard />
         <Strategy2PlaybookDiagnostics />
         <LiveOrdersInline />
-        <RuntimeStabilityClient />
         <UiStatusSemanticFix />
         <script src="/live-position-mode-helper.js" defer />
       </body>
