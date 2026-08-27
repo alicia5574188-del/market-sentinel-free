@@ -2,6 +2,9 @@ import type { GateCredentials } from "./credential-vault";
 
 const encoder = new TextEncoder();
 const API_PREFIX = "/api/v4";
+const DEFAULT_GATE_READ_TIMEOUT_MS = 7_000;
+const DEFAULT_GATE_MUTATION_TIMEOUT_MS = 8_000;
+const SAFE_READ_RETRY_DELAY_MS = 250;
 
 export type GateFuturesAccount = {
   total?: string;
@@ -137,6 +140,17 @@ function safeGateMessage(payload: unknown, status: number) {
   return [label, message].filter(Boolean).join(": ").slice(0, 300) || `Gate 请求失败 (${status})`;
 }
 
+function gateTimeout(error: unknown) {
+  return error instanceof Error && (
+    error.name === "TimeoutError"
+    || /aborted due to timeout|timed out|timeout/i.test(error.message)
+  );
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class GatePrivateClient {
   private readonly baseUrl: string;
   private readonly credentials: GateCredentials;
@@ -160,37 +174,62 @@ export class GatePrivateClient {
     const query = params.toString();
     const body = options.body === undefined ? "" : JSON.stringify(options.body);
     const requestPath = `${API_PREFIX}${path}`;
-    const timestamp = Math.floor(Date.now() / 1_000).toString();
-    const headers = new Headers({
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      KEY: this.credentials.apiKey,
-      Timestamp: timestamp,
-      SIGN: await gateSignature(this.credentials.apiSecret, method, requestPath, query, body, timestamp),
-      "X-Gate-Size-Decimal": "1",
-    });
-    if (method !== "GET") headers.set("x-gate-exptime", String(Date.now() + (options.expiresInMs ?? 5_000)));
-    const response = await this.fetcher(`${this.baseUrl}${requestPath}${query ? `?${query}` : ""}`, {
-      method,
-      headers,
-      body: body || undefined,
-      signal: AbortSignal.timeout(options.timeoutMs ?? 8_000),
-    });
-    const raw = await response.text();
-    let payload: unknown = null;
-    if (raw) {
-      try { payload = JSON.parse(raw); } catch { payload = null; }
+    const url = `${this.baseUrl}${requestPath}${query ? `?${query}` : ""}`;
+    const safeRead = method === "GET";
+    const maxAttempts = safeRead ? 2 : 1;
+    const timeoutMs = options.timeoutMs ?? (safeRead ? DEFAULT_GATE_READ_TIMEOUT_MS : DEFAULT_GATE_MUTATION_TIMEOUT_MS);
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const timestamp = Math.floor(Date.now() / 1_000).toString();
+      const headers = new Headers({
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        KEY: this.credentials.apiKey,
+        Timestamp: timestamp,
+        SIGN: await gateSignature(this.credentials.apiSecret, method, requestPath, query, body, timestamp),
+        "X-Gate-Size-Decimal": "1",
+      });
+      if (!safeRead) headers.set("x-gate-exptime", String(Date.now() + (options.expiresInMs ?? 5_000)));
+
+      let response: Response;
+      try {
+        response = await this.fetcher(url, {
+          method,
+          headers,
+          body: body || undefined,
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (error) {
+        if (safeRead && attempt + 1 < maxAttempts) {
+          await wait(SAFE_READ_RETRY_DELAY_MS);
+          continue;
+        }
+        if (gateTimeout(error)) throw new Error(`Gate ${path} 读取超时（${Math.round(timeoutMs / 1000)}秒）`);
+        throw error;
+      }
+
+      const raw = await response.text();
+      let payload: unknown = null;
+      if (raw) {
+        try { payload = JSON.parse(raw); } catch { payload = null; }
+      }
+      if (!response.ok) {
+        if (safeRead && (response.status === 429 || response.status >= 500) && attempt + 1 < maxAttempts) {
+          await wait(SAFE_READ_RETRY_DELAY_MS);
+          continue;
+        }
+        const record = payload && typeof payload === "object" ? payload as Record<string, unknown> : null;
+        throw new GateApiError(
+          safeGateMessage(payload, response.status),
+          response.status,
+          typeof record?.label === "string" ? record.label : null,
+          response.headers.get("x-gate-trace-id"),
+        );
+      }
+      return payload as T;
     }
-    if (!response.ok) {
-      const record = payload && typeof payload === "object" ? payload as Record<string, unknown> : null;
-      throw new GateApiError(
-        safeGateMessage(payload, response.status),
-        response.status,
-        typeof record?.label === "string" ? record.label : null,
-        response.headers.get("x-gate-trace-id"),
-      );
-    }
-    return payload as T;
+
+    throw new Error(`Gate ${path} 读取失败`);
   }
 
   async accountDetail() {
