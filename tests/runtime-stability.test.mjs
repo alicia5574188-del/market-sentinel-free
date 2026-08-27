@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [scheduler, client, layout, liveEngine, page, liveStatus, gatePrivate] = await Promise.all([
+const [scheduler, client, layout, liveEngine, page, liveStatus, gatePrivate, apiAuth, userAccounts] = await Promise.all([
   readFile(new URL("../lib/background-scheduler.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/runtime-stability-client.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
@@ -10,6 +10,8 @@ const [scheduler, client, layout, liveEngine, page, liveStatus, gatePrivate] = a
   readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/api/live/status/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/gate-private.ts", import.meta.url), "utf8"),
+  readFile(new URL("../app/api-auth.ts", import.meta.url), "utf8"),
+  readFile(new URL("../lib/user-accounts.ts", import.meta.url), "utf8"),
 ]);
 
 test("background health isolates modules and wakes only lightweight schedulers", () => {
@@ -29,25 +31,40 @@ test("background health isolates modules and wakes only lightweight schedulers",
   assert.match(scheduler, /issues:/);
 });
 
-test("client retries only safe read APIs, bounds stalled requests and normalizes broken API bodies", () => {
+test("client retries only safe read APIs, coalesces overlapping polls, backs off failures and normalizes broken API bodies", () => {
   assert.match(client, /method !== "GET"/);
   assert.match(client, /url\.pathname\.startsWith\("\/api\/"\)/);
   assert.match(client, /response\.status === 429 \|\| response\.status >= 500/);
-  assert.match(client, /RETRY_DELAYS = \[350, 900\]/);
+  assert.match(client, /RETRY_DELAYS = \[750, 1_800\]/);
   assert.match(client, /READ_TIMEOUT_MS\s*=\s*8_000/);
   assert.match(client, /MARKET_READ_TIMEOUT_MS\s*=\s*15_000/);
   assert.match(client, /MUTATION_TIMEOUT_MS\s*=\s*20_000/);
   assert.match(client, /LONG_MUTATION_TIMEOUT_MS\s*=\s*45_000/);
   assert.match(client, /DEEP_SCAN_TIMEOUT_MS\s*=\s*45_000/);
+  assert.match(client, /READ_START_GAP_MS\s*=\s*120/);
+  assert.match(client, /EDGE_BACKOFF_MS\s*=\s*1_500/);
+  assert.match(client, /inFlightReads/);
+  assert.match(client, /coalescedRead/);
+  assert.match(client, /waitForReadStart/);
+  assert.match(client, /markTransientBackoff/);
   assert.match(client, /new AbortController\(\)/);
   assert.match(client, /请求超时/);
   assert.match(client, /normalizeApiResponse/);
   assert.match(client, /返回了非 JSON 响应/);
+  assert.match(client, /CF Ray/);
   assert.match(client, /canonicalRequestInput/);
-  assert.match(client, /if \(!retryableRequest\(input, init\)\)/);
+  assert.match(client, /if \(!retryableRequest\(input, init\) \|\| !info\)/);
   assert.match(client, /系统健康/);
   assert.match(client, /后台扫描、持仓监控与实盘协调器/);
   assert.match(client, /module\.label/);
+});
+
+test("shared API auth failures stay inside JSON and normal account polls avoid a duplicate D1 select", () => {
+  assert.match(apiAuth, /try\s*{\s*const user = await getChatGPTUser\(\)/);
+  assert.match(apiAuth, /Response\.json\(\{ error:/);
+  assert.match(apiAuth, /status:\s*503/);
+  assert.match(userAccounts, /if \(existing\)[\s\S]*return existing;/);
+  assert.match(userAccounts, /Only the first-login\/concurrent-create path needs a second read/);
 });
 
 test("live status polling reads durable state without joining the Gate execution queue", () => {
