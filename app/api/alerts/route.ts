@@ -1,3 +1,4 @@
+import { getContractV2HistoryStats } from "../../../lib/dashboard-history-stats";
 import { getAlertDashboard } from "../../../lib/repository";
 import { requireApiAccount } from "../../api-auth";
 
@@ -7,7 +8,11 @@ export async function GET(request: Request) {
   const requestedLimit = Number(new URL(request.url).searchParams.get("limit") ?? 100);
   const limit = Number.isFinite(requestedLimit) ? requestedLimit : 100;
   try {
-    return Response.json(await getAlertDashboard(limit), { headers: { "Cache-Control": "no-store" } });
+    const [dashboard, stats] = await Promise.all([
+      getAlertDashboard(limit),
+      getContractV2HistoryStats(),
+    ]);
+    return Response.json({ ...dashboard, stats }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "提醒历史不可用" }, { status: 503 });
   }
