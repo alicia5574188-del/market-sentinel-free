@@ -34,20 +34,60 @@ type WindowWithSentinelFetch = Window & typeof globalThis & {
 };
 
 const RETRY_DELAYS = [350, 900];
+const READ_TIMEOUT_MS = 8_000;
+const MUTATION_TIMEOUT_MS = 20_000;
+const DEEP_SCAN_TIMEOUT_MS = 45_000;
 
 function wait(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-function retryableRequest(input: RequestInfo | URL, init?: RequestInit) {
+function requestInfo(input: RequestInfo | URL, init?: RequestInit) {
   const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
-  if (method !== "GET") return false;
   try {
     const raw = input instanceof Request ? input.url : String(input);
     const url = new URL(raw, window.location.href);
-    return url.origin === window.location.origin && (url.pathname.startsWith("/api/") || url.pathname === "/__health");
+    if (url.origin !== window.location.origin || !(url.pathname.startsWith("/api/") || url.pathname === "/__health")) return null;
+    return { method, url };
   } catch {
-    return false;
+    return null;
+  }
+}
+
+function retryableRequest(input: RequestInfo | URL, init?: RequestInit) {
+  const info = requestInfo(input, init);
+  const method = info?.method ?? (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+  if (method !== "GET") return false;
+  return Boolean(info);
+}
+
+function requestTimeoutMs(input: RequestInfo | URL, init?: RequestInit) {
+  const info = requestInfo(input, init);
+  if (!info) return null;
+  if (info.method === "GET") return READ_TIMEOUT_MS;
+  if (info.url.pathname === "/api/scan/run") return DEEP_SCAN_TIMEOUT_MS;
+  return MUTATION_TIMEOUT_MS;
+}
+
+async function fetchWithTimeout(nativeFetch: typeof window.fetch, input: RequestInfo | URL, init: RequestInit | undefined, timeoutMs: number) {
+  const controller = new AbortController();
+  const sourceSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+  let timedOut = false;
+  const relayAbort = () => controller.abort(sourceSignal?.reason);
+  if (sourceSignal?.aborted) relayAbort();
+  else sourceSignal?.addEventListener("abort", relayAbort, { once: true });
+  const timer = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  try {
+    return await nativeFetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (timedOut) throw new Error(`请求超时（${Math.round(timeoutMs / 1000)}秒）`);
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+    sourceSignal?.removeEventListener("abort", relayAbort);
   }
 }
 
@@ -58,12 +98,14 @@ function installResilientFetch(onRecovered: () => void) {
   sentinelWindow.__SENTINEL_NATIVE_FETCH__ = nativeFetch;
   sentinelWindow.__SENTINEL_RESILIENT_FETCH_INSTALLED__ = true;
   window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (!retryableRequest(input, init)) return nativeFetch(input, init);
+    const timeoutMs = requestTimeoutMs(input, init);
+    if (timeoutMs == null) return nativeFetch(input, init);
+    if (!retryableRequest(input, init)) return fetchWithTimeout(nativeFetch, input, init, timeoutMs);
     let lastError: unknown = null;
     let lastResponse: Response | null = null;
     for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt += 1) {
       try {
-        const response = await nativeFetch(input, { ...init, cache: "no-store" });
+        const response = await fetchWithTimeout(nativeFetch, input, { ...init, cache: "no-store" }, timeoutMs);
         lastResponse = response;
         const transient = response.status === 429 || response.status >= 500;
         if (!transient || attempt === RETRY_DELAYS.length) {
