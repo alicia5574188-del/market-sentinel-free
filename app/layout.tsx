@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   metadataBase: new URL("https://market-sentinel-free.alicia5574188.workers.dev"),
   title: "Market Sentinel｜Strategy 2.0",
-  description: "Sentinel Strategy 2.0：环境识别、12 Playbook 并行竞争、风险控制、Execution Engine 与持续学习智能。",
+  description: "Sentinel Strategy 2.0：环境识别、多策略并行竞争、风险控制与交易学习统一展示。",
   applicationName: "Market Sentinel",
   manifest: "/manifest.webmanifest",
   formatDetection: { telephone: false },
@@ -33,13 +33,13 @@ export const metadata: Metadata = {
     type: "website",
     locale: "zh_CN",
     title: "Market Sentinel｜Strategy 2.0",
-    description: "环境迁移 · 12 Playbook · 风险控制 · Execution · 持续学习",
+    description: "环境识别 · 多策略竞争 · 风险控制 · 持续学习",
     images: [{ url: "/og.png", width: 1200, height: 630, alt: "Market Sentinel Strategy 2.0" }],
   },
   twitter: {
     card: "summary_large_image",
     title: "Market Sentinel｜Strategy 2.0",
-    description: "环境迁移 · 12 Playbook · 风险控制 · Execution · 持续学习",
+    description: "环境识别 · 多策略竞争 · 风险控制 · 持续学习",
     images: ["/og.png"],
   },
 };
