@@ -5,6 +5,10 @@ import {
   summarizeAdaptiveLearning,
   type AdaptiveLearningObservation,
 } from "../lib/strategy-2-adaptive-learning.ts";
+import {
+  strategy2BeijingSession,
+  strategy2BeijingSessionLabel,
+} from "../lib/strategy-2-session.ts";
 
 function observation(
   resultR: number,
@@ -77,4 +81,15 @@ test("forward validation cohort excludes all trades completed before the frozen 
   const stats = summarizeAdaptiveLearning(rows);
   assert.equal(stats.forwardSampleCount, 2);
   assert.equal(stats.forwardExpectancyR, 0.25);
+});
+
+test("Beijing trading sessions cover all 24 hours without creating a shutdown window", () => {
+  const utc = (hour: number) => Date.UTC(2026, 7, 27, hour, 0, 0);
+  assert.equal(strategy2BeijingSession(utc(16)), "overnight"); // Beijing 00:00
+  assert.equal(strategy2BeijingSession(utc(22)), "morning");   // Beijing 06:00
+  assert.equal(strategy2BeijingSession(utc(4)), "afternoon"); // Beijing 12:00
+  assert.equal(strategy2BeijingSession(utc(10)), "evening");  // Beijing 18:00
+  assert.equal(strategy2BeijingSession(utc(15)), "evening");  // Beijing 23:00
+  assert.match(strategy2BeijingSessionLabel("overnight"), /00:00–06:00/);
+  assert.match(strategy2BeijingSessionLabel("afternoon"), /12:00–18:00/);
 });
