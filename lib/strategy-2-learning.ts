@@ -261,7 +261,7 @@ function pct(value: number | null) {
 function riskAction(stats: AdaptiveLearningStats, stage: Strategy2LearningStage) {
   if (stage === "negative_edge") return `停止该环境组合；后验 ${stats.posteriorExpectancyR?.toFixed(2) ?? "--"}R，方向失败 ${pct(stats.directionFailureRate)}`;
   if (stage === "degrading") return `近期优势衰退，强制降风险；近窗 ${stats.recentExpectancyR?.toFixed(2) ?? "--"}R，漂移 ${stats.driftR?.toFixed(2) ?? "--"}R`;
-  if (stage === "exploration") return "小风险探索；继承上层 Playbook/Asset/Session 先验，不再从零学习";
+  if (stage === "exploration") return "小风险探索；继承上层 Playbook/Asset 先验，并叠加 Session 条件，不再从零学习";
   if (stage === "validated") return `正优势通过收缩与近期验证；T1 ${pct(stats.t1HitRate)}，置信 ${stats.edgeConfidence}%`;
   if ((stats.directionFailureRate ?? 0) >= 0.5) return `方向失败偏高，继续降权；T1 ${pct(stats.t1HitRate)} / 反向T1潜力 ${pct(stats.inverseT1PotentialRate)}`;
   if ((stats.posteriorExpectancyR ?? 0) < -0.08) return "层级后验仍偏负，降低风险并等待新证据";
@@ -291,10 +291,11 @@ function sessionProfiles(parsedRows: ParsedRow[]): Strategy2SessionProfile[] {
 
 /**
  * Adaptive experience book used by every Strategy 2.0 scan.
- * The long-run hierarchy learns Playbook × Global Regime × Asset-Regime ×
- * Direction, then the active Beijing-time session conditions the posterior.
- * Session evidence is never a global on/off clock: only the affected strategy
- * combinations are reduced or rejected, so Strategy 2.0 can keep running 24h.
+ * Exact Regime × Playbook × Asset-Regime × Direction remains the long-run
+ * public learning contract. The active Beijing-time Session then conditions
+ * that exact posterior through hierarchical partial pooling. Session evidence
+ * is never a global on/off clock: only the affected strategy combinations are
+ * reduced or rejected, so Strategy 2.0 can keep running 24 hours.
  */
 export async function getStrategy2ExperienceBook(limit = 2500): Promise<Strategy2ExperienceBook> {
   const parsedRows = toParsedRows(await loadClosedStrategy2Rows(limit));
@@ -302,22 +303,18 @@ export async function getStrategy2ExperienceBook(limit = 2500): Promise<Strategy
   const levels = buildAdaptiveStats(parsedRows, activeSession);
   const entries: [string, Strategy2Experience][] = [];
 
-  // Long-run broad/asset experience remains the safety prior and fallback.
+  // Preserve the complete long-run hierarchy as the fallback. Session evidence
+  // overlays it only where this Beijing-time bucket has observations.
   for (const [key, stats] of levels.broad) entries.push([key, experienceFromStats(stats)]);
   for (const [key, stats] of levels.asset) entries.push([key, experienceFromStats(stats)]);
+  for (const [key, stats] of levels.exact) entries.push([key, experienceFromStats(stats)]);
 
-  // A globally proven-negative exact cell remains blocked in every session
-  // unless that session itself later produces a confidence-bounded positive edge.
-  for (const [key, stats] of levels.exact) {
-    if (stats.edgeState === "negative") entries.push([key, experienceFromStats(stats)]);
-  }
-
-  // Current-session evidence overrides the fallback only for combinations that
-  // have actually traded in this time bucket. No hard-coded night shutdown.
   for (const [key, stats] of levels.sessionBroad) entries.push([key, experienceFromStats(stats)]);
   for (const [key, stats] of levels.sessionAsset) entries.push([key, experienceFromStats(stats)]);
   for (const [key, stats] of levels.sessionExact) {
     const globalStats = levels.exact.get(key);
+    // A globally proven-negative exact cell remains blocked in every session
+    // until this session itself establishes a confidence-bounded positive edge.
     if (globalStats?.edgeState === "negative" && stats.edgeState !== "positive") continue;
     entries.push([key, experienceFromStats(stats)]);
   }
