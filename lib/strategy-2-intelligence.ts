@@ -172,7 +172,7 @@ function grossExpectedR(opportunity: Strategy2Opportunity, winProbability: numbe
     : null;
   if (learned == null) return theoretical == null ? null : round(theoretical, 3);
   if (theoretical == null) return round(learned, 3);
-  const sampleWeight = clamp((opportunity.experienceSamples ?? 0) / 20, 0, 1) / 100;
+  const sampleWeight = Math.min(1, Math.max(0, (opportunity.experienceSamples ?? 0) / 20));
   return round(learned * sampleWeight + theoretical * (1 - sampleWeight), 3);
 }
 
