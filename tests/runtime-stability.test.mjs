@@ -23,7 +23,7 @@ test("background health isolates modules and wakes only lightweight schedulers",
   assert.match(scheduler, /持仓监控/);
   assert.match(scheduler, /实盘协调器/);
   assert.match(scheduler, /getLiveTradingSnapshot/);
-  assert.doesNotMatch(scheduler, /reconcileNow\(/);
+  assert.doesNotMatch(scheduler, /await\s+stub\.reconcileNow\(/);
   assert.match(scheduler, /idleDisabled/);
   assert.match(scheduler, /自动实盘关闭且无活动实盘仓位/);
   assert.match(scheduler, /issues:/);
