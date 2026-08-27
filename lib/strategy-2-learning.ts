@@ -2,6 +2,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { getDb } from "../db";
 import { tradeCases } from "../db/schema";
 import {
+  ADAPTIVE_LEARNING_FORWARD_EPOCH_MS,
   makeAdaptivePrior,
   summarizeAdaptiveLearning,
   type AdaptiveLearningObservation,
@@ -221,8 +222,11 @@ function riskAction(stats: AdaptiveLearningStats, stage: Strategy2LearningStage)
 
 /**
  * Adaptive experience book used by every Strategy 2.0 scan.
- * Exact cells are empirically-Bayesian shrunk toward Asset-level and then
- * Playbook+Direction priors, while recent observations receive more weight.
+ * Exact Regime × Playbook × Asset-Regime × Direction remains the public
+ * learning contract, while each exact cell is empirically-Bayesian shrunk
+ * toward Asset-level and then Playbook+Direction priors. Recent observations
+ * receive more weight so obsolete market edge can decay without discarding
+ * the longer-run prior entirely.
  */
 export async function getStrategy2ExperienceBook(limit = 2500): Promise<Strategy2ExperienceBook> {
   const parsedRows = toParsedRows(await loadClosedStrategy2Rows(limit));
@@ -292,7 +296,7 @@ export async function getStrategy2LearningDashboard(limit = 2500): Promise<Strat
     positiveCells: cells.filter((cell) => cell.stage === "validated").length,
     negativeCells: cells.filter((cell) => cell.stage === "negative_edge").length,
     degradingCells: cells.filter((cell) => cell.stage === "degrading").length,
-    forwardSamples: parsedRows.filter((item) => (item.row.exitAt ?? 0) >= 1787809500000).length,
+    forwardSamples: parsedRows.filter((item) => (item.row.exitAt ?? 0) >= ADAPTIVE_LEARNING_FORWARD_EPOCH_MS).length,
     cells: cells.slice(0, 24),
     recentTrades,
   };
