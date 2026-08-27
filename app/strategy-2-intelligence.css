@@ -1,0 +1,213 @@
+.strategy21-migration {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) minmax(104px, .72fr);
+  gap: 10px;
+  align-items: center;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid rgba(92, 211, 226, .18);
+  border-radius: 16px;
+  background: rgba(5, 19, 30, .48);
+}
+
+.strategy21-migration > div {
+  min-width: 0;
+}
+
+.strategy21-migration > div > span,
+.strategy21-migration-risk small {
+  display: block;
+  color: var(--muted, #8292a6);
+  font-size: 11px;
+}
+
+.strategy21-migration > div > strong {
+  display: block;
+  margin-top: 3px;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.strategy21-migration > i {
+  color: var(--muted, #8292a6);
+  font-style: normal;
+}
+
+.strategy21-migration-risk {
+  text-align: right;
+}
+
+.strategy21-migration-risk strong {
+  font-size: 22px !important;
+}
+
+.strategy21-migration > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted, #91a0b2);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.strategy21-forming .strategy21-migration-risk strong,
+.strategy21-developing .strategy21-migration-risk strong {
+  color: #e5b95e;
+}
+
+.strategy21-switch_watch .strategy21-migration-risk strong {
+  color: #f07a8d;
+}
+
+.strategy21-experts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.strategy21-experts span {
+  padding: 4px 7px;
+  border: 1px solid rgba(92, 211, 226, .14);
+  border-radius: 999px;
+  color: var(--muted, #91a0b2);
+  font-size: 10px;
+}
+
+.strategy21-decision-line {
+  display: block;
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(255, 255, 255, .06);
+  line-height: 1.5;
+}
+
+.strategy21-normal {
+  color: #6ad9a4 !important;
+}
+
+.strategy21-reduce {
+  color: #e5b95e !important;
+}
+
+.strategy21-block {
+  color: #f07a8d !important;
+}
+
+.strategy21-selected-intelligence {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid rgba(92, 211, 226, .14);
+  border-radius: 13px;
+  background: rgba(5, 19, 30, .42);
+}
+
+.strategy21-selected-intelligence span {
+  min-width: 0;
+  color: var(--muted, #91a0b2);
+  font-size: 10px;
+}
+
+.strategy21-selected-intelligence b {
+  display: block;
+  margin-top: 2px;
+  color: inherit;
+  font-size: 13px;
+}
+
+.strategy21-learning-intelligence {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid rgba(92, 211, 226, .16);
+  border-radius: 15px;
+  background: rgba(5, 19, 30, .42);
+}
+
+.strategy21-learning-intelligence > div:first-child {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.strategy21-learning-intelligence > div:first-child strong {
+  font-size: 13px;
+}
+
+.strategy21-learning-intelligence > div:first-child span,
+.strategy21-learning-intelligence p,
+.strategy21-learning-intelligence > small {
+  color: var(--muted, #91a0b2);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.strategy21-learning-intelligence p {
+  margin: 7px 0 0;
+}
+
+.strategy21-learning-intelligence > small {
+  display: block;
+  margin-top: 7px;
+}
+
+.strategy21-learning-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.strategy21-learning-grid span {
+  padding: 7px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .025);
+  color: var(--muted, #91a0b2);
+  font-size: 10px;
+}
+
+.strategy21-learning-grid b {
+  display: block;
+  margin-top: 2px;
+  color: var(--foreground, #ecf4ff);
+  font-size: 13px;
+}
+
+@media (max-width: 640px) {
+  .strategy21-migration {
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  }
+
+  .strategy21-migration-risk {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    text-align: left;
+  }
+
+  .strategy21-migration-risk small {
+    display: inline;
+  }
+
+  .strategy21-selected-intelligence {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .strategy21-learning-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .strategy21-learning-intelligence > div:first-child {
+    display: block;
+  }
+
+  .strategy21-learning-intelligence > div:first-child span {
+    display: block;
+    margin-top: 4px;
+  }
+}

@@ -8,6 +8,7 @@ import "./globals.css";
 import "./polish.css";
 import "./sentinel-v2.css";
 import "./strategy-2-unified.css";
+import "./strategy-2-intelligence.css";
 import "./runtime-stability.css";
 
 export const dynamic = "force-dynamic";

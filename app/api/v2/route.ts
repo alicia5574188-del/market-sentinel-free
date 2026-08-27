@@ -1,5 +1,7 @@
 import { requireApiAccount } from "../../api-auth";
 import { listOpenTrades } from "../../../lib/repository";
+import { getStrategy2CounterfactualArchiveStats } from "../../../lib/strategy-2-counterfactual";
+import { buildStrategy2Intelligence } from "../../../lib/strategy-2-intelligence";
 import { getStrategy2LearningDashboard } from "../../../lib/strategy-2-learning";
 import { getLatestV2MarketContext, getV2StrategyPoolActivity, listRecentV2Opportunities, listRecentV2Warnings, listV2TradeTheses } from "../../../lib/sentinel-v2-repository";
 
@@ -7,7 +9,8 @@ export async function GET() {
   const auth = await requireApiAccount();
   if ("response" in auth) return auth.response;
   try {
-    const [market, opportunities, strategyPool, learning, warnings, openTrades, theses] = await Promise.all([
+    const observedAt = Date.now();
+    const [market, opportunities, strategyPool, learning, warnings, openTrades, theses, counterfactualArchive] = await Promise.all([
       getLatestV2MarketContext(),
       listRecentV2Opportunities(120),
       getV2StrategyPoolActivity(),
@@ -15,6 +18,7 @@ export async function GET() {
       listRecentV2Warnings(24),
       listOpenTrades(),
       listV2TradeTheses(80),
+      getStrategy2CounterfactualArchiveStats({ observedAt }).catch(() => null),
     ]);
     const openIds = new Set(openTrades.map((trade) => trade.id));
     const activeTheses = theses.filter((thesis) => openIds.has(thesis.tradeId));
@@ -37,14 +41,25 @@ export async function GET() {
     const weakestThesisHealth = activeTheses.length
       ? Math.min(...activeTheses.map((thesis) => thesis.thesisHealth))
       : null;
+    const intelligence = buildStrategy2Intelligence({
+      observedAt,
+      market,
+      opportunities,
+      learning,
+      counterfactualArchive,
+      openTrades: openTrades
+        .filter((trade) => trade.side === "LONG" || trade.side === "SHORT")
+        .map((trade) => ({ side: trade.side as "LONG" | "SHORT", regime: trade.regime })),
+    });
 
     return Response.json({
-      observedAt: Date.now(),
+      observedAt,
       version: "strategy-2.0",
       market,
       opportunities,
       strategyPool,
       learning,
+      intelligence,
       warnings,
       theses: activeTheses,
       portfolio: {
@@ -66,6 +81,7 @@ export async function GET() {
       opportunities: [],
       strategyPool: null,
       learning: null,
+      intelligence: null,
       warnings: [],
       theses: [],
       portfolio: null,
