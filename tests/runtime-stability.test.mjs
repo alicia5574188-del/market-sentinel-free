@@ -23,11 +23,17 @@ test("background health isolates modules and wakes stale schedulers", () => {
   assert.match(scheduler, /issues:/);
 });
 
-test("client retries only safe read APIs and exposes exact health", () => {
+test("client retries only safe read APIs, bounds stalled requests and exposes exact health", () => {
   assert.match(client, /method !== "GET"/);
   assert.match(client, /url\.pathname\.startsWith\("\/api\/"\)/);
   assert.match(client, /response\.status === 429 \|\| response\.status >= 500/);
   assert.match(client, /RETRY_DELAYS = \[350, 900\]/);
+  assert.match(client, /READ_TIMEOUT_MS\s*=\s*8_000/);
+  assert.match(client, /MUTATION_TIMEOUT_MS\s*=\s*20_000/);
+  assert.match(client, /DEEP_SCAN_TIMEOUT_MS\s*=\s*45_000/);
+  assert.match(client, /new AbortController\(\)/);
+  assert.match(client, /请求超时/);
+  assert.match(client, /if \(!retryableRequest\(input, init\)\) return fetchWithTimeout/);
   assert.match(client, /系统健康/);
   assert.match(client, /后台扫描、持仓监控与实盘协调器/);
   assert.match(client, /module\.label/);
