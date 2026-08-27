@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { calculateContractV2HistoryStats, type ContractV2HistoryRow } from "../lib/dashboard-history-stats.ts";
+import { calculateContractV2HistoryStats, type ContractV2HistoryRow } from "../lib/dashboard-history-calculator.ts";
 
 function row(index: number): ContractV2HistoryRow {
   const win = index % 3 === 0;
