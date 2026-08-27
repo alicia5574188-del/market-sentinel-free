@@ -33,12 +33,19 @@ type WindowWithSentinelFetch = Window & typeof globalThis & {
   __SENTINEL_RESILIENT_FETCH_INSTALLED__?: boolean;
 };
 
-const RETRY_DELAYS = [350, 900];
+const RETRY_DELAYS = [750, 1_800];
 const READ_TIMEOUT_MS = 8_000;
 const MARKET_READ_TIMEOUT_MS = 15_000;
 const MUTATION_TIMEOUT_MS = 20_000;
 const LONG_MUTATION_TIMEOUT_MS = 45_000;
 const DEEP_SCAN_TIMEOUT_MS = 45_000;
+const READ_START_GAP_MS = 120;
+const EDGE_BACKOFF_MS = 1_500;
+
+const inFlightReads = new Map<string, Promise<Response>>();
+let readStartQueue: Promise<void> = Promise.resolve();
+let nextReadStartAt = 0;
+let edgeBackoffUntil = 0;
 
 function wait(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -80,6 +87,29 @@ function canonicalRequestInput(input: RequestInfo | URL, info: ReturnType<typeof
   return info.url.href;
 }
 
+function readKey(info: NonNullable<ReturnType<typeof requestInfo>>) {
+  return `${info.method}:${info.url.href}`;
+}
+
+async function waitForReadStart() {
+  const scheduled = readStartQueue.then(async () => {
+    const delay = Math.max(0, nextReadStartAt - Date.now());
+    if (delay > 0) await wait(delay);
+    nextReadStartAt = Date.now() + READ_START_GAP_MS;
+  });
+  readStartQueue = scheduled.catch(() => undefined);
+  await scheduled;
+}
+
+async function waitForEdgeBackoff() {
+  const delay = edgeBackoffUntil - Date.now();
+  if (delay > 0) await wait(delay);
+}
+
+function markTransientBackoff() {
+  edgeBackoffUntil = Math.max(edgeBackoffUntil, Date.now() + EDGE_BACKOFF_MS);
+}
+
 async function normalizeApiResponse(response: Response, info: ReturnType<typeof requestInfo>) {
   if (!info) return response;
   const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
@@ -88,10 +118,12 @@ async function normalizeApiResponse(response: Response, info: ReturnType<typeof 
   // iOS/WebKit can surface a generic "The string did not match the expected
   // pattern" when response.json() is called on an empty/HTML/text error body.
   // Every Sentinel API is JSON by contract, so convert a broken edge response
-  // into a deterministic JSON error before page code consumes it.
+  // into a deterministic JSON error before page code consumes it. Preserve the
+  // Cloudflare Ray ID when present so a recurrence can be traced precisely.
   const status = response.ok ? 502 : response.status;
+  const ray = response.headers.get("cf-ray");
   return new Response(JSON.stringify({
-    error: `${info.url.pathname} 返回了非 JSON 响应（HTTP ${response.status}），已自动丢弃异常响应并等待重试`,
+    error: `${info.url.pathname} 返回了非 JSON 响应（HTTP ${response.status}）${ray ? ` · CF Ray ${ray}` : ""}，已自动丢弃异常响应并等待重试`,
   }), {
     status,
     headers: {
@@ -123,6 +155,61 @@ async function fetchWithTimeout(nativeFetch: typeof window.fetch, input: Request
   }
 }
 
+async function resilientRead(
+  nativeFetch: typeof window.fetch,
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  info: NonNullable<ReturnType<typeof requestInfo>>,
+  timeoutMs: number,
+  onRecovered: () => void,
+) {
+  let lastError: unknown = null;
+  let lastResponse: Response | null = null;
+  for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt += 1) {
+    await waitForEdgeBackoff();
+    await waitForReadStart();
+    await waitForEdgeBackoff();
+    try {
+      const response = await fetchWithTimeout(nativeFetch, input, { ...init, cache: "no-store" }, timeoutMs);
+      lastResponse = response;
+      const transient = response.status === 429 || response.status >= 500;
+      if (!transient || attempt === RETRY_DELAYS.length) {
+        if (attempt > 0 && response.ok) onRecovered();
+        return normalizeApiResponse(response, info);
+      }
+      markTransientBackoff();
+    } catch (error) {
+      lastError = error;
+      markTransientBackoff();
+      if (attempt === RETRY_DELAYS.length) throw error;
+    }
+    await wait(RETRY_DELAYS[attempt]);
+  }
+  if (lastResponse) return normalizeApiResponse(lastResponse, info);
+  throw lastError instanceof Error ? lastError : new Error("网络请求失败");
+}
+
+async function coalescedRead(
+  nativeFetch: typeof window.fetch,
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  info: NonNullable<ReturnType<typeof requestInfo>>,
+  timeoutMs: number,
+  onRecovered: () => void,
+) {
+  const key = readKey(info);
+  const existing = inFlightReads.get(key);
+  if (existing) return (await existing).clone();
+
+  const pending = resilientRead(nativeFetch, input, init, info, timeoutMs, onRecovered);
+  inFlightReads.set(key, pending);
+  try {
+    return (await pending).clone();
+  } finally {
+    if (inFlightReads.get(key) === pending) inFlightReads.delete(key);
+  }
+}
+
 function installResilientFetch(onRecovered: () => void) {
   const sentinelWindow = window as WindowWithSentinelFetch;
   if (sentinelWindow.__SENTINEL_RESILIENT_FETCH_INSTALLED__) return;
@@ -134,29 +221,14 @@ function installResilientFetch(onRecovered: () => void) {
     const timeoutMs = requestTimeoutMs(input, init);
     if (timeoutMs == null) return nativeFetch(input, init);
     const normalizedInput = canonicalRequestInput(input, info);
-    if (!retryableRequest(input, init)) {
+    if (!retryableRequest(input, init) || !info) {
       const response = await fetchWithTimeout(nativeFetch, normalizedInput, init, timeoutMs);
       return normalizeApiResponse(response, info);
     }
-    let lastError: unknown = null;
-    let lastResponse: Response | null = null;
-    for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt += 1) {
-      try {
-        const response = await fetchWithTimeout(nativeFetch, normalizedInput, { ...init, cache: "no-store" }, timeoutMs);
-        lastResponse = response;
-        const transient = response.status === 429 || response.status >= 500;
-        if (!transient || attempt === RETRY_DELAYS.length) {
-          if (attempt > 0 && response.ok) onRecovered();
-          return normalizeApiResponse(response, info);
-        }
-      } catch (error) {
-        lastError = error;
-        if (attempt === RETRY_DELAYS.length) throw error;
-      }
-      await wait(RETRY_DELAYS[attempt]);
-    }
-    if (lastResponse) return normalizeApiResponse(lastResponse, info);
-    throw lastError instanceof Error ? lastError : new Error("网络请求失败");
+    // The page has several independent pollers. Coalescing identical reads and
+    // spacing network starts prevents startup/30s/60s polling boundaries from
+    // turning a brief edge slowdown into a self-amplifying retry storm.
+    return coalescedRead(nativeFetch, normalizedInput, init, info, timeoutMs, onRecovered);
   }) as typeof window.fetch;
 }
 
@@ -224,8 +296,9 @@ export function RuntimeStabilityClient() {
       try {
         const response = await fetch("/api/background", { cache: "no-store" });
         const contentType = response.headers.get("content-type") ?? "";
-        if (!response.ok || !contentType.toLowerCase().includes("application/json")) throw new Error(`系统健康检查失败 (${response.status})`);
-        const next = await response.json() as BackgroundHealth;
+        if (!contentType.toLowerCase().includes("application/json")) throw new Error(`系统健康检查失败 (${response.status})`);
+        const next = await response.json() as BackgroundHealth & { error?: string };
+        if (!response.ok) throw new Error(next.error ?? `系统健康检查失败 (${response.status})`);
         if (!cancelled) {
           setHealth(next);
           setHealthError("");
