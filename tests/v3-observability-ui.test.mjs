@@ -47,20 +47,30 @@ test("legacy symbol-direction memory is hidden and trade review is relabeled as 
   assert.match(dashboard, /Strategy 2\.0 机会评分校准/);
 });
 
-test("unified dashboard API exposes the real Strategy 2.0 learning matrix", async () => {
-  const [api, learning] = await Promise.all([
+test("unified dashboard API exposes the adaptive Strategy 2.0 learning matrix", async () => {
+  const [api, learning, adaptive, strategy] = await Promise.all([
     readFile(new URL("../app/api/v2/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/strategy-2-learning.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/strategy-2-adaptive-learning.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/sentinel-v2-strategy.ts", import.meta.url), "utf8"),
   ]);
   assert.match(api, /getStrategy2LearningDashboard\(\)/);
   assert.match(api, /strategyPool/);
   assert.match(api, /learning/);
   assert.match(learning, /Exact Regime × Playbook × Asset-Regime × Direction/);
-  assert.match(learning, /strategy2ExperienceKey\(parsed\.playbook, parsed\.globalRegime, parsed\.assetRegime, row\.side\)/);
+  assert.match(learning, /strategy2ExperienceKey\(row\.playbook, row\.globalRegime, row\.assetRegime, row\.side\)/);
+  assert.match(learning, /makeAdaptivePrior/);
   assert.match(learning, /getStrategy2LearningDashboard/);
   assert.match(learning, /negative_edge/);
-  assert.match(learning, /小风险探索，不因少量输赢过度调整/);
-  assert.match(learning, /停止该环境组合，等待新证据/);
+  assert.match(learning, /degrading/);
+  assert.match(learning, /继承上层 Playbook\/Asset 先验/);
+  assert.match(learning, /停止该环境组合/);
+  assert.match(adaptive, /recencyWeight/);
+  assert.match(adaptive, /directionFailureRate/);
+  assert.match(adaptive, /inverseT1PotentialRate/);
+  assert.match(adaptive, /ADAPTIVE_LEARNING_FORWARD_EPOCH_MS/);
+  assert.match(strategy, /LEARNED_EDGE_NEGATIVE/);
+  assert.match(strategy, /learningScore/);
 });
 
 test("opportunity detail is Strategy 2.0-first and legacy raw diagnostics are collapsed by default", async () => {
