@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [scheduler, client, layout, liveEngine, page, liveStatus, gatePrivate, apiAuth, userAccounts] = await Promise.all([
+const [scheduler, client, layout, liveEngine, page, liveStatus, gatePrivate, apiAuth, userAccounts, serviceWorker] = await Promise.all([
   readFile(new URL("../lib/background-scheduler.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/runtime-stability-client.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
@@ -12,6 +12,7 @@ const [scheduler, client, layout, liveEngine, page, liveStatus, gatePrivate, api
   readFile(new URL("../lib/gate-private.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/api-auth.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/user-accounts.ts", import.meta.url), "utf8"),
+  readFile(new URL("../public/sw.js", import.meta.url), "utf8"),
 ]);
 
 test("background health isolates modules and wakes only lightweight schedulers", () => {
@@ -57,6 +58,15 @@ test("client retries only safe read APIs, coalesces overlapping polls, backs off
   assert.match(client, /系统健康/);
   assert.match(client, /后台扫描、持仓监控与实盘协调器/);
   assert.match(client, /module\.label/);
+});
+
+test("top-level navigation keeps the last good shell on transient Cloudflare resource failures", () => {
+  assert.match(serviceWorker, /const transientEdgeFailure = isNavigation && \(response\.status === 429 \|\| response\.status >= 500\)/);
+  assert.match(serviceWorker, /Cloudflare 1102/);
+  assert.match(serviceWorker, /await caches\.match\("\/"\)/);
+  assert.match(serviceWorker, /X-Sentinel-Navigation-Fallback/);
+  assert.match(serviceWorker, /if \(response\.ok\)/);
+  assert.doesNotMatch(serviceWorker, /url\.pathname\.startsWith\("\/api\/"\)[\s\S]*caches\.match\("\/"\)/);
 });
 
 test("shared API auth failures stay inside JSON and normal account polls avoid a duplicate D1 select", () => {
