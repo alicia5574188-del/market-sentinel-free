@@ -10,6 +10,7 @@ import {
 } from "./strategy-2-engine.ts";
 
 export type Strategy2TradeMode = "exploration" | "standard" | "high_conviction";
+export type Strategy2AdaptiveEdgeState = "uncertain" | "positive" | "negative" | "degrading";
 
 export type Strategy2Experience = {
   sampleCount: number;
@@ -18,6 +19,24 @@ export type Strategy2Experience = {
   winRate: number | null;
   expectancyR: number | null;
   averageNetPct: number | null;
+  rawExpectancyR?: number | null;
+  recencyExpectancyR?: number | null;
+  recentExpectancyR?: number | null;
+  posteriorExpectancyR?: number | null;
+  effectiveSampleCount?: number;
+  averageMfeR?: number | null;
+  averageMaeR?: number | null;
+  t1HitRate?: number | null;
+  directionFailureRate?: number | null;
+  inverseT1PotentialRate?: number | null;
+  edgeLowerBoundR?: number | null;
+  edgeUpperBoundR?: number | null;
+  edgeConfidence?: number;
+  driftR?: number | null;
+  edgeState?: Strategy2AdaptiveEdgeState;
+  forwardSampleCount?: number;
+  forwardExpectancyR?: number | null;
+  forwardInverseT1PotentialRate?: number | null;
 };
 
 export type Strategy2ExperienceBook = Record<string, Strategy2Experience>;
@@ -43,9 +62,15 @@ export type Strategy2Opportunity = {
   globalRegime: string;
   assetRegime: Strategy2AssetRegime;
   learningScore: number;
+  learningConfidence: number;
+  learningState: Strategy2AdaptiveEdgeState;
   explorationValue: number;
   experienceSamples: number;
   expectancyR: number | null;
+  recentExpectancyR: number | null;
+  t1HitRate: number | null;
+  directionFailureRate: number | null;
+  inverseT1PotentialRate: number | null;
   supportingPlaybooks: string[];
   strategyConflict: number;
   waitingFor: string[];
@@ -134,37 +159,66 @@ function portfolioImpact(openTrades: { side: "LONG" | "SHORT"; symbol: string }[
 
 function learningScore(experience: Strategy2Experience | null) {
   if (!experience || experience.sampleCount === 0) return 50;
-  const shrink = experience.sampleCount / (experience.sampleCount + 10);
-  const expectancy = clamp(50 + (experience.expectancyR ?? 0) * 55, 0, 100);
-  const win = experience.winRate == null ? 50 : clamp(50 + (experience.winRate - 0.5) * 90, 0, 100);
-  return Math.round(50 + ((expectancy * 0.68 + win * 0.32) - 50) * shrink);
+  const samples = experience.effectiveSampleCount ?? experience.sampleCount;
+  const shrink = samples / (samples + 8);
+  const posterior = experience.posteriorExpectancyR ?? experience.expectancyR ?? 0;
+  const recent = experience.recentExpectancyR ?? posterior;
+  const expectancy = clamp(50 + posterior * 60, 0, 100);
+  const recentScore = clamp(50 + recent * 48, 0, 100);
+  const win = experience.winRate == null ? 50 : clamp(50 + (experience.winRate - 0.5) * 80, 0, 100);
+  const t1 = experience.t1HitRate ?? 0.5;
+  const directionFailure = experience.directionFailureRate ?? 0;
+  const pathQuality = clamp(50 + (t1 - 0.5) * 70 - directionFailure * 28, 0, 100);
+  const confidence = 0.35 + 0.65 * ((experience.edgeConfidence ?? 0) / 100);
+  const stateAdjustment = experience.edgeState === "positive" ? 8
+    : experience.edgeState === "negative" ? -32
+      : experience.edgeState === "degrading" ? -18
+        : 0;
+  const blended = expectancy * 0.42 + recentScore * 0.25 + pathQuality * 0.18 + win * 0.15;
+  return Math.round(clamp(50 + (blended - 50) * shrink * confidence + stateAdjustment));
 }
 
 function explorationValue(experience: Strategy2Experience | null) {
-  const samples = experience?.sampleCount ?? 0;
-  return Math.round(clamp((20 - Math.min(20, samples)) / 20 * 100));
+  if (!experience) return 100;
+  if (experience.edgeState === "negative") return 0;
+  if (experience.edgeState === "degrading") return 5;
+  const samples = experience.effectiveSampleCount ?? experience.sampleCount;
+  const base = clamp((18 - Math.min(18, samples)) / 18 * 100);
+  const directionPenalty = Math.max(0, ((experience.directionFailureRate ?? 0) - 0.45) * 120);
+  const inversePenalty = Math.max(0, ((experience.inverseT1PotentialRate ?? 0) - 0.55) * 80);
+  return Math.round(clamp(base - directionPenalty - inversePenalty));
 }
 
 function tradeMode(score: number, experience: Strategy2Experience | null): Strategy2TradeMode {
   const samples = experience?.sampleCount ?? 0;
-  if (score >= 85 && samples >= 8 && (experience?.expectancyR ?? 0) >= 0) return "high_conviction";
-  if (score >= 72 && samples >= 5) return "standard";
+  const posterior = experience?.posteriorExpectancyR ?? experience?.expectancyR ?? 0;
+  if (score >= 85 && samples >= 12 && posterior >= 0.12 && (experience?.edgeConfidence ?? 0) >= 55 && experience?.edgeState !== "degrading") return "high_conviction";
+  if (score >= 72 && samples >= 5 && experience?.edgeState !== "negative") return "standard";
   return "exploration";
 }
 
 function modeRiskMultiplier(mode: Strategy2TradeMode, score: number, experience: Strategy2Experience | null) {
   if (mode === "exploration") return 0.25;
   if (mode === "standard") return score >= 80 ? 0.65 : 0.50;
-  const verified = (experience?.sampleCount ?? 0) >= 30 && (experience?.expectancyR ?? 0) >= 0.25;
+  const verified = (experience?.sampleCount ?? 0) >= 30
+    && (experience?.posteriorExpectancyR ?? experience?.expectancyR ?? 0) >= 0.20
+    && (experience?.edgeConfidence ?? 0) >= 65;
   return verified && score >= 88 ? 1 : 0.80;
 }
 
 function learningRiskMultiplier(experience: Strategy2Experience | null) {
-  if (!experience || experience.sampleCount < 6 || experience.expectancyR == null) return 1;
-  if (experience.sampleCount >= 15 && experience.expectancyR <= -0.30) return 0;
-  if (experience.expectancyR < -0.10) return 0.65;
-  if (experience.expectancyR > 0.20) return 1;
-  return 0.85;
+  if (!experience || experience.sampleCount < 5) return 1;
+  if (experience.edgeState === "negative") return 0;
+  if (experience.edgeState === "degrading") return 0.35;
+  const posterior = experience.posteriorExpectancyR ?? experience.expectancyR;
+  const recent = experience.recentExpectancyR ?? posterior;
+  if (posterior == null) return 0.9;
+  if (experience.sampleCount >= 6 && (recent ?? 0) <= -0.30) return 0.45;
+  if (experience.sampleCount >= 8 && (experience.directionFailureRate ?? 0) >= 0.58) return 0.50;
+  if (posterior < -0.12) return 0.55;
+  if (posterior < -0.03) return 0.75;
+  if (experience.edgeState === "positive" && (experience.edgeConfidence ?? 0) >= 60) return 1;
+  return 0.90;
 }
 
 function requiredScore(permission: V2Permission) {
@@ -194,18 +248,18 @@ function evaluateOne(signal: Strategy2Signal, input: Strategy2Input, market: V2M
   const riskReward = signal.entryPlan?.riskReward ?? 0;
   const rrScore = clamp((riskReward - 1) * 58);
   const portfolio = portfolioImpact(openTrades, side, input.symbol);
-  const playbookFit = Math.round(assetFit * 0.78 + learnScore * 0.22);
+  const playbookFit = Math.round(assetFit * 0.72 + learnScore * 0.28);
   const opportunityScore = Math.round(clamp(
-    signal.strategyMeta.setupScore * 0.22
-      + confirmation * 0.20
-      + assetFit * 0.18
-      + globalFit * 0.10
-      + structure * 0.10
+    signal.strategyMeta.setupScore * 0.20
+      + confirmation * 0.19
+      + assetFit * 0.17
+      + globalFit * 0.09
+      + structure * 0.09
       + timing * 0.08
       + rrScore * 0.05
       + portfolio * 0.03
-      + learnScore * 0.025
-      + explore * 0.015,
+      + learnScore * 0.08
+      + explore * 0.02,
   ));
 
   const rejectReasons: string[] = [];
@@ -217,13 +271,14 @@ function evaluateOne(signal: Strategy2Signal, input: Strategy2Input, market: V2M
   if (portfolio < 20) rejectReasons.push("PORTFOLIO_CONCENTRATION");
   if (chase >= 15 && ["trend_breakout", "expansion_momentum", "relative_strength", "rotation_leadership"].includes(signal.strategyId)) rejectReasons.push("CHASE_TOO_FAR");
   if (input.fundingRate != null && Math.abs(input.fundingRate) >= 0.0015) rejectReasons.push("LEVERAGE_EXTREME");
-  if (samples >= 15 && (experience?.expectancyR ?? 0) <= -0.30) rejectReasons.push("LEARNED_EDGE_NEGATIVE");
+  if (experience?.edgeState === "negative") rejectReasons.push("LEARNED_EDGE_NEGATIVE");
 
   const threshold = requiredScore(market.permission);
   if (!signal.strategyMeta.triggerActive) waitingFor.push("等待该 Playbook 的核心结构触发");
   if (opportunityScore < threshold) waitingFor.push(`机会综合分 ${opportunityScore}/${threshold}`);
   if (confirmation < 44) waitingFor.push(`加权确认 ${confirmation}/44`);
   if (timing < 42) waitingFor.push(`时机 ${timing}/42`);
+  if (experience?.edgeState === "degrading") waitingFor.push("该组合近期优势明显衰退，仅允许显著缩小风险");
   if (signal.state === "watching" && signal.strategyMeta.triggerActive) waitingFor.push("策略证据仍在形成，但不要求全部指标同时通过");
 
   let state: Strategy2Opportunity["state"] = "WATCH";
@@ -245,11 +300,18 @@ function evaluateOne(signal: Strategy2Signal, input: Strategy2Input, market: V2M
     ).toFixed(3))
     : 0;
 
+  const adaptiveExpectation = experience?.posteriorExpectancyR ?? experience?.expectancyR ?? null;
+  const recentExpectation = experience?.recentExpectancyR ?? null;
+  const t1 = experience?.t1HitRate ?? null;
+  const directionFailure = experience?.directionFailureRate ?? null;
+  const inversePotential = experience?.inverseT1PotentialRate ?? null;
   const reasons = [
     `${STRATEGY2_LABELS[signal.strategyId]} · 单币环境 ${signal.strategyMeta.assetRegime} 适配 ${assetFit}`,
     `Global ${market.regimeLabel}/${market.permission} 只调整风险，不替代单币策略判断`,
     `结构 ${structure} · 加权确认 ${confirmation} · 时机 ${timing} · RR ${riskReward.toFixed(2)}`,
-    samples ? `真实样本 ${samples} · Expectancy ${experience?.expectancyR == null ? "--" : `${experience.expectancyR.toFixed(2)}R`}` : "该组合尚无真实样本，进入探索优先队列",
+    samples
+      ? `Adaptive 学习：n=${samples} · 后验 ${adaptiveExpectation == null ? "--" : `${adaptiveExpectation.toFixed(2)}R`} · 近窗 ${recentExpectation == null ? "--" : `${recentExpectation.toFixed(2)}R`} · T1 ${t1 == null ? "--" : `${Math.round(t1 * 100)}%`} · 方向失败 ${directionFailure == null ? "--" : `${Math.round(directionFailure * 100)}%`} · 反向T1潜力 ${inversePotential == null ? "--" : `${Math.round(inversePotential * 100)}%`} · 置信 ${experience?.edgeConfidence ?? 0}%`
+      : "该组合尚无精确样本，继承 Playbook/Asset 上层先验并用最小风险探索",
   ];
 
   return {
@@ -273,9 +335,15 @@ function evaluateOne(signal: Strategy2Signal, input: Strategy2Input, market: V2M
     globalRegime: market.regime,
     assetRegime: signal.strategyMeta.assetRegime,
     learningScore: learnScore,
+    learningConfidence: experience?.edgeConfidence ?? 0,
+    learningState: experience?.edgeState ?? "uncertain",
     explorationValue: explore,
     experienceSamples: samples,
-    expectancyR: experience?.expectancyR ?? null,
+    expectancyR: adaptiveExpectation,
+    recentExpectancyR: recentExpectation,
+    t1HitRate: t1,
+    directionFailureRate: directionFailure,
+    inverseT1PotentialRate: inversePotential,
     supportingPlaybooks: [],
     strategyConflict: 0,
     waitingFor,
@@ -359,6 +427,14 @@ function mappedSignal(signal: Strategy2Signal, opportunity: Strategy2Opportunity
         detail: `${opportunity.playbookLabel} · ${opportunity.tradeMode} · ${(opportunity.riskMultiplier * 100).toFixed(0)}%`,
         available: true,
         category: "derivatives" as const,
+      },
+      {
+        key: "strategy2-learning-edge",
+        label: "Adaptive 学习优势",
+        score: (opportunity.learningScore - 50) / 50,
+        detail: `${opportunity.learningState} · 学习 ${opportunity.learningScore}/100 · 置信 ${opportunity.learningConfidence}%`,
+        available: true,
+        category: "cross" as const,
       },
       {
         key: "strategy2-conflict",
