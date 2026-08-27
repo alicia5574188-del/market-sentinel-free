@@ -37,6 +37,27 @@ self.addEventListener("fetch", (event) => {
   event.respondWith((async () => {
     try {
       const response = await fetch(event.request);
+      const transientEdgeFailure = isNavigation && (response.status === 429 || response.status >= 500);
+
+      // Cloudflare 1102 (Worker exceeded resource limits) is returned as a real
+      // HTTP error response, not a rejected fetch. The old network-first code
+      // therefore displayed Cloudflare's error document and never reached the
+      // catch fallback. Keep the last known-good application shell visible for
+      // transient edge/resource failures; API reads have their own retry layer
+      // and will refresh the live data as soon as the Worker recovers.
+      if (transientEdgeFailure) {
+        const cached = await caches.match("/");
+        if (cached) {
+          const headers = new Headers(cached.headers);
+          headers.set("X-Sentinel-Navigation-Fallback", "1");
+          return new Response(cached.body, {
+            status: cached.status,
+            statusText: cached.statusText,
+            headers,
+          });
+        }
+      }
+
       if (response.ok) {
         const cache = await caches.open(CACHE_NAME);
         await cache.put(isNavigation ? "/" : event.request, response.clone());
