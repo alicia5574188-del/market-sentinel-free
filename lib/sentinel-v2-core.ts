@@ -15,6 +15,14 @@ export type V2WarningLevel = "NOTICE" | "WATCH" | "ALERT" | "EMERGENCY";
 export type V2WarningStatus = "DETECTED" | "DEVELOPING" | "CONFIRMED" | "ESCALATED" | "RESOLVED";
 export type V2DecisionState = "TRADE" | "WATCH" | "REJECT";
 export type V2PlaybookId = "P1_TREND_PULLBACK" | "P4_COMPRESSION_BREAKOUT" | "P8_TRANSITION_DEFENSIVE";
+export type V2ScoredRegime = Exclude<V2RegimeKind, "transition">;
+
+export type V2RegimeProbability = {
+  regime: V2ScoredRegime;
+  score: number;
+  probability: number;
+  momentum: number;
+};
 
 export type V2Warning = {
   id: string;
@@ -54,6 +62,10 @@ export type V2MarketContext = {
   transitionVelocity: number;
   riskAcceleration: number;
   developingRegime: V2RegimeKind | null;
+  regimeProbabilities?: V2RegimeProbability[];
+  currentRegimeProbability?: number;
+  candidateProbability?: number;
+  candidateMomentum?: number;
   permission: V2Permission;
   bias: "LONG" | "SHORT" | "NEUTRAL";
   breadth: {
@@ -136,6 +148,8 @@ const REGIME_LABELS: Record<V2RegimeKind, string> = {
   leverage_liquidation: "极端杠杆/清算",
   transition: "环境切换期",
 };
+
+const REGIME_PROBABILITY_TEMPERATURE = 18;
 
 function clamp(value: number, min = 0, max = 100) {
   return Math.min(max, Math.max(min, value));
@@ -227,13 +241,39 @@ function regimeScoreFromInputs(input: {
   };
 }
 
+function regimeProbabilityDistribution(
+  rankedScores: { regime: V2ScoredRegime; score: number }[],
+  previous: Pick<V2MarketContext, "regimeProbabilities"> | null | undefined,
+): V2RegimeProbability[] {
+  const maxScore = Math.max(...rankedScores.map((item) => item.score));
+  const weighted = rankedScores.map((item) => ({
+    ...item,
+    weight: Math.exp((item.score - maxScore) / REGIME_PROBABILITY_TEMPERATURE),
+  }));
+  const total = weighted.reduce((sum, item) => sum + item.weight, 0) || 1;
+  const previousProbability = new Map(
+    (previous?.regimeProbabilities ?? []).map((item) => [item.regime, item.probability] as const),
+  );
+  return weighted
+    .map((item) => {
+      const probability = item.weight / total * 100;
+      return {
+        regime: item.regime,
+        score: Number(item.score.toFixed(2)),
+        probability: Number(probability.toFixed(2)),
+        momentum: Number((probability - (previousProbability.get(item.regime) ?? probability)).toFixed(2)),
+      };
+    })
+    .sort((a, b) => b.probability - a.probability || b.score - a.score);
+}
+
 export function buildSentinelV2MarketContext(input: {
   observedAt: number;
   universe: UniverseTicker[];
   benchmarkMomentum: number | null;
   optionsIvPercentile: number | null;
   macroEventRisk: number | null;
-  previous?: Pick<V2MarketContext, "observedAt" | "transitionRisk" | "transitionVelocity"> | null;
+  previous?: Pick<V2MarketContext, "observedAt" | "transitionRisk" | "transitionVelocity" | "regime" | "regimeProbabilities"> | null;
   strategyHealthDeterioration?: number;
 }): V2MarketContext {
   const changes = input.universe.map((item) => item.changePercentage).filter(Number.isFinite);
@@ -301,11 +341,6 @@ export function buildSentinelV2MarketContext(input: {
   else if (confluence === 2) transitionRisk += 5;
   if ((input.macroEventRisk ?? 0) >= 0.85) transitionRisk += 12;
   if (!dataValid) transitionRisk = Math.max(transitionRisk, 82);
-  transitionRisk = Math.round(clamp(transitionRisk));
-
-  const elapsedHours = input.previous ? Math.max((input.observedAt - input.previous.observedAt) / 3_600_000, 1 / 60) : 1;
-  const transitionVelocity = input.previous ? clamp((transitionRisk - input.previous.transitionRisk) / elapsedHours, -100, 100) : 0;
-  const riskAcceleration = input.previous ? clamp(transitionVelocity - input.previous.transitionVelocity, -100, 100) : 0;
 
   const scores = regimeScoreFromInputs({
     benchmarkMomentum: input.benchmarkMomentum,
@@ -316,27 +351,57 @@ export function buildSentinelV2MarketContext(input: {
     ivPercentile: input.optionsIvPercentile,
     crowdedRatio,
   });
-  const ranked: { regime: Exclude<V2RegimeKind, "transition">; score: number }[] = [
+  const scoredRegimes: { regime: V2ScoredRegime; score: number }[] = [
     { regime: "bull_trend", score: scores.bull },
     { regime: "bear_trend", score: scores.bear },
     { regime: "range", score: scores.range },
     { regime: "compression", score: scores.compression },
     { regime: "expansion", score: scores.expansion },
     { regime: "leverage_liquidation", score: scores.leverage },
-  ].sort((a, b) => b.score - a.score);
-  const best = ranked[0];
-  const second = ranked[1];
-  const margin = clamp(best.score - second.score);
+  ];
+  const regimeProbabilities = regimeProbabilityDistribution(scoredRegimes, input.previous);
+  const best = regimeProbabilities[0];
+  const second = regimeProbabilities[1];
+  const probabilityMargin = clamp(best.probability - second.probability);
+  const candidateMomentum = Math.max(0, second.momentum);
+  const previousCurrentProbability = input.previous?.regimeProbabilities?.find((item) => item.regime === input.previous?.regime)?.probability;
+  const currentDominanceErosion = previousCurrentProbability == null || input.previous?.regime === "transition"
+    ? 0
+    : Math.max(0, previousCurrentProbability - (regimeProbabilities.find((item) => item.regime === input.previous?.regime)?.probability ?? 0));
+  const earlyMigrationPressure = Math.min(14, candidateMomentum * 1.35 + currentDominanceErosion * 0.75);
+  transitionRisk = Math.round(clamp(transitionRisk + earlyMigrationPressure));
+
+  const elapsedHours = input.previous ? Math.max((input.observedAt - input.previous.observedAt) / 3_600_000, 1 / 60) : 1;
+  const rawTransitionVelocity = input.previous ? (transitionRisk - input.previous.transitionRisk) / elapsedHours : 0;
+  const transitionVelocity = input.previous
+    ? clamp(rawTransitionVelocity * 0.35 + input.previous.transitionVelocity * 0.65, -100, 100)
+    : 0;
+  const riskAcceleration = input.previous ? clamp(transitionVelocity - input.previous.transitionVelocity, -100, 100) : 0;
+
   const emergency = !dataValid || (input.macroEventRisk ?? 0) >= 0.98 || scores.leverage >= 88;
-  const uncertain = best.score < 58 || margin < 8;
-  const regime: V2RegimeKind = transitionRisk >= 61 && (uncertain || transitionVelocity >= 12)
+  const uncertain = best.probability < 48 || probabilityMargin < 14;
+  const earlySwitchWatch = second.probability >= 24 && (candidateMomentum >= 2 || currentDominanceErosion >= 5);
+  const regime: V2RegimeKind = transitionRisk >= 55 && (uncertain || transitionVelocity >= 10 || earlySwitchWatch)
     ? "transition"
     : scores.leverage >= 82
       ? "leverage_liquidation"
       : best.regime;
-  const developingRegime = regime === "transition" ? best.regime : second.score >= 58 ? second.regime : null;
-  const confidence = Math.round(clamp(best.score * 0.65 + margin * 0.25 + (dataValid ? 10 : 0)));
-  const stability = Math.round(clamp(100 - transitionRisk * 0.72 - Math.max(0, transitionVelocity) * 0.4 + margin * 0.25));
+  const developingRegime: V2RegimeKind = regime === "transition" ? best.regime : second.regime;
+  const currentRegimeProbability = regime === "transition" ? Math.max(0, 100 - best.probability) : best.probability;
+  const persistence = input.previous ? (input.previous.regime === regime ? 100 : 35) : 70;
+  const confidence = Math.round(clamp(
+    best.probability * 0.65
+    + probabilityMargin * 0.20
+    + (dataValid ? 15 : 0),
+  ));
+  let stability = Math.round(clamp(
+    best.probability * 0.50
+    + probabilityMargin * 0.20
+    + (100 - transitionRisk) * 0.20
+    + persistence * 0.10
+    - candidateMomentum * 0.8,
+  ));
+  if (regime === "transition") stability = Math.min(stability, 55);
   const permission = permissionForRisk(transitionRisk, emergency);
   const bias = regime === "bull_trend" ? "LONG" : regime === "bear_trend" ? "SHORT" : "NEUTRAL";
 
@@ -379,11 +444,15 @@ export function buildSentinelV2MarketContext(input: {
     confidence,
     stability,
     regimeScore: Math.round(best.score),
-    regimeMargin: Math.round(margin),
+    regimeMargin: Math.round(probabilityMargin),
     transitionRisk,
     transitionVelocity: Number(transitionVelocity.toFixed(2)),
     riskAcceleration: Number(riskAcceleration.toFixed(2)),
     developingRegime,
+    regimeProbabilities,
+    currentRegimeProbability: Number(currentRegimeProbability.toFixed(2)),
+    candidateProbability: Number(second.probability.toFixed(2)),
+    candidateMomentum: Number(second.momentum.toFixed(2)),
     permission,
     bias,
     breadth: {

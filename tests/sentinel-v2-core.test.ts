@@ -89,6 +89,47 @@ test("benchmark strength with collapsing breadth raises transition risk", () => 
   assert.ok(market.warnings.some((warning) => warning.type === "breadth_shock"));
 });
 
+test("strong expansion still exposes the nearest alternative instead of hiding candidate state", () => {
+  const market = buildSentinelV2MarketContext({
+    observedAt: Date.UTC(2026, 7, 26, 2, 30),
+    universe: universe([7, -7, 6, -6, 5, -5, 4, -4, 3, -3, 2, -2]),
+    benchmarkMomentum: 0.2,
+    optionsIvPercentile: 0.98,
+    macroEventRisk: 0.1,
+  });
+  assert.equal(market.regime, "expansion");
+  assert.ok(market.developingRegime);
+  assert.notEqual(market.developingRegime, market.regime);
+  assert.equal(market.regimeProbabilities?.length, 6);
+  assert.ok((market.currentRegimeProbability ?? 0) > (market.candidateProbability ?? 0));
+  assert.ok((market.candidateProbability ?? 0) > 0);
+  assert.ok(market.stability < 95);
+  const totalProbability = market.regimeProbabilities?.reduce((sum, item) => sum + item.probability, 0) ?? 0;
+  assert.ok(Math.abs(totalProbability - 100) < 0.1);
+});
+
+test("candidate momentum is tracked across scans before a confirmed regime switch", () => {
+  const first = buildSentinelV2MarketContext({
+    observedAt: Date.UTC(2026, 7, 26, 5),
+    universe: universe([5, -5, 4, -4, 3, -3, 2, -2, 1, -1, 0.5, -0.5]),
+    benchmarkMomentum: 0.1,
+    optionsIvPercentile: 0.9,
+    macroEventRisk: 0.1,
+  });
+  const second = buildSentinelV2MarketContext({
+    observedAt: Date.UTC(2026, 7, 26, 5, 1),
+    universe: universe([2.4, -2.2, 2.0, -1.9, 1.7, -1.5, 1.2, -1.1, 0.8, -0.7, 0.4, -0.3]),
+    benchmarkMomentum: 0.1,
+    optionsIvPercentile: 0.72,
+    macroEventRisk: 0.1,
+    previous: first,
+  });
+  assert.ok(second.developingRegime);
+  assert.ok((second.candidateProbability ?? 0) > 0);
+  assert.ok((second.regimeProbabilities ?? []).some((item) => Math.abs(item.momentum) > 0));
+  assert.ok(second.stability <= first.stability || second.regime !== first.regime);
+});
+
 test("V2 rejects adding another highly concentrated same-direction position", () => {
   const market = buildSentinelV2MarketContext({
     observedAt: Date.UTC(2026, 7, 26, 3),
