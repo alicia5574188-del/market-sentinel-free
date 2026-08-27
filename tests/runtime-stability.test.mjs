@@ -61,12 +61,12 @@ test("client retries only safe read APIs, coalesces overlapping polls, backs off
 });
 
 test("top-level navigation keeps the last good shell on transient Cloudflare resource failures", () => {
+  assert.match(serviceWorker, /if \(url\.pathname\.startsWith\("\/api\/"\) \|\| url\.pathname === "\/__health"\) return;/);
   assert.match(serviceWorker, /const transientEdgeFailure = isNavigation && \(response\.status === 429 \|\| response\.status >= 500\)/);
   assert.match(serviceWorker, /Cloudflare 1102/);
   assert.match(serviceWorker, /await caches\.match\("\/"\)/);
   assert.match(serviceWorker, /X-Sentinel-Navigation-Fallback/);
   assert.match(serviceWorker, /if \(response\.ok\)/);
-  assert.doesNotMatch(serviceWorker, /url\.pathname\.startsWith\("\/api\/"\)[\s\S]*caches\.match\("\/"\)/);
 });
 
 test("shared API auth failures stay inside JSON and normal account polls avoid a duplicate D1 select", () => {
