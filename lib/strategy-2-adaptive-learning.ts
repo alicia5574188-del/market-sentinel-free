@@ -1,4 +1,4 @@
-export const ADAPTIVE_LEARNING_FORWARD_EPOCH_MS = 1787809500000;
+export const ADAPTIVE_LEARNING_FORWARD_EPOCH_MS = 1787811000000;
 
 export type AdaptiveLearningObservation = {
   exitAt: number | null;
