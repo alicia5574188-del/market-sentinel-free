@@ -33,19 +33,22 @@ type WindowWithSentinelFetch = Window & typeof globalThis & {
   __SENTINEL_RESILIENT_FETCH_INSTALLED__?: boolean;
 };
 
-const RETRY_DELAYS = [750, 1_800];
+const RETRY_DELAYS = [900, 2_200];
 const READ_TIMEOUT_MS = 8_000;
 const MARKET_READ_TIMEOUT_MS = 15_000;
 const MUTATION_TIMEOUT_MS = 20_000;
 const LONG_MUTATION_TIMEOUT_MS = 45_000;
 const DEEP_SCAN_TIMEOUT_MS = 45_000;
-const READ_START_GAP_MS = 120;
-const EDGE_BACKOFF_MS = 1_500;
+const READ_START_GAP_MS = 240;
+const EDGE_BACKOFF_MS = 2_500;
+const MAX_CONCURRENT_READS = 3;
 
 const inFlightReads = new Map<string, Promise<Response>>();
 let readStartQueue: Promise<void> = Promise.resolve();
 let nextReadStartAt = 0;
 let edgeBackoffUntil = 0;
+let activeReadCount = 0;
+const readSlotWaiters: Array<() => void> = [];
 
 function wait(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -110,6 +113,29 @@ function markTransientBackoff() {
   edgeBackoffUntil = Math.max(edgeBackoffUntil, Date.now() + EDGE_BACKOFF_MS);
 }
 
+async function acquireReadSlot() {
+  if (activeReadCount < MAX_CONCURRENT_READS) {
+    activeReadCount += 1;
+    return;
+  }
+  await new Promise<void>((resolve) => readSlotWaiters.push(resolve));
+  activeReadCount += 1;
+}
+
+function releaseReadSlot() {
+  activeReadCount = Math.max(0, activeReadCount - 1);
+  readSlotWaiters.shift()?.();
+}
+
+async function withReadSlot<T>(task: () => Promise<T>) {
+  await acquireReadSlot();
+  try {
+    return await task();
+  } finally {
+    releaseReadSlot();
+  }
+}
+
 async function normalizeApiResponse(response: Response, info: ReturnType<typeof requestInfo>) {
   if (!info) return response;
   const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
@@ -170,7 +196,10 @@ async function resilientRead(
     await waitForReadStart();
     await waitForEdgeBackoff();
     try {
-      const response = await fetchWithTimeout(nativeFetch, input, { ...init, cache: "no-store" }, timeoutMs);
+      // The UI has several independent pollers. Limit actual in-flight Worker
+      // reads as well as their start times so opening/resuming the iOS PWA cannot
+      // create a burst of expensive D1/API invocations before backoff engages.
+      const response = await withReadSlot(() => fetchWithTimeout(nativeFetch, input, { ...init, cache: "no-store" }, timeoutMs));
       lastResponse = response;
       const transient = response.status === 429 || response.status >= 500;
       if (!transient || attempt === RETRY_DELAYS.length) {
@@ -225,9 +254,9 @@ function installResilientFetch(onRecovered: () => void) {
       const response = await fetchWithTimeout(nativeFetch, normalizedInput, init, timeoutMs);
       return normalizeApiResponse(response, info);
     }
-    // The page has several independent pollers. Coalescing identical reads and
-    // spacing network starts prevents startup/30s/60s polling boundaries from
-    // turning a brief edge slowdown into a self-amplifying retry storm.
+    // The page has several independent pollers. Coalescing identical reads,
+    // spacing starts and bounding concurrency prevent startup/30s/60s polling
+    // boundaries from turning a brief edge slowdown into a retry storm.
     return coalescedRead(nativeFetch, normalizedInput, init, info, timeoutMs, onRecovered);
   }) as typeof window.fetch;
 }
@@ -308,7 +337,7 @@ export function RuntimeStabilityClient() {
       }
     };
     void load();
-    const timer = window.setInterval(() => { if (!document.hidden) void load(); }, 20_000);
+    const timer = window.setInterval(() => { if (!document.hidden) void load(); }, 30_000);
     const onVisible = () => { if (!document.hidden) void load(); };
     document.addEventListener("visibilitychange", onVisible);
     return () => {

@@ -35,13 +35,16 @@ test("iPhone pull-to-refresh performs one genuine full refresh without starting 
   assert.match(css, /\.pull-refresh\.refreshing svg\s*\{[^}]*animation:\s*pull-refresh-spin/s);
 });
 
-test("iPhone PWA never replaces API JSON with the cached app shell", async () => {
+test("iPhone PWA keeps APIs network-only and never replays stale dynamic app HTML", async () => {
   const sw = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
-  assert.match(sw, /market-sentinel-shell-v4/);
+  assert.match(sw, /market-sentinel-shell-v5/);
+  assert.match(sw, /RECOVERY_URL = "\/recovery\.html"/);
   assert.match(sw, /url\.pathname\.startsWith\("\/api\/"\)/);
   assert.match(sw, /url\.pathname === "\/__health"/);
-  assert.match(sw, /if \(!isNavigation && !isShellAsset\) return/);
-  assert.doesNotMatch(sw, /caches\.match\(event\.request\)[\s\S]*caches\.match\("\/"\)/);
+  assert.match(sw, /if \(!isNavigation\) return/);
+  assert.match(sw, /if \(transientEdgeFailure\) return recoveryResponse\(\)/);
+  assert.doesNotMatch(sw, /caches\.match\("\/"\)/);
+  assert.doesNotMatch(sw, /cache\.put\([^\n]*"\/"/);
 });
 
 test("installed PWA metadata points at the production Worker origin", async () => {

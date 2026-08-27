@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#071019" />
+  <title>Market Sentinel｜正在恢复</title>
+  <style>
+    :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #071019; color: #edf6ff; }
+    body { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 28px; }
+    main { width: min(430px, 100%); border: 1px solid rgba(75, 201, 222, .24); border-radius: 20px; padding: 22px; background: rgba(9, 25, 38, .92); box-shadow: 0 18px 60px rgba(0, 0, 0, .28); }
+    .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+    .mark { width: 44px; height: 44px; display: grid; place-items: center; border: 1px solid rgba(75, 201, 222, .38); border-radius: 14px; color: #52d1e5; font-size: 22px; }
+    h1 { margin: 0; font-size: 19px; letter-spacing: .01em; }
+    .sub { display: block; margin-top: 3px; color: #8395a8; font-size: 12px; }
+    .status { margin: 0; font-size: 16px; font-weight: 700; }
+    p { margin: 10px 0 0; color: #93a4b6; font-size: 13px; line-height: 1.7; }
+    .pulse { display: inline-block; width: 8px; height: 8px; margin-right: 7px; border-radius: 50%; background: #5ad7a1; box-shadow: 0 0 0 0 rgba(90, 215, 161, .5); animation: pulse 1.5s infinite; }
+    button { width: 100%; margin-top: 18px; padding: 12px 14px; border: 1px solid rgba(75, 201, 222, .36); border-radius: 12px; background: rgba(75, 201, 222, .10); color: #dffaff; font: inherit; font-weight: 700; }
+    small { display: block; margin-top: 12px; color: #67798b; font-size: 11px; line-height: 1.55; }
+    @keyframes pulse { 70% { box-shadow: 0 0 0 9px rgba(90, 215, 161, 0); } 100% { box-shadow: 0 0 0 0 rgba(90, 215, 161, 0); } }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand"><div class="mark">◎</div><div><h1>Market Sentinel</h1><span class="sub">运行保护模式</span></div></div>
+    <div class="status"><span class="pulse"></span>正在恢复连接</div>
+    <p>刚才的页面请求遇到临时网络或 Worker 资源异常。程序没有加载旧版本页面，也不会用旧数据冒充实时数据；连接恢复后会自动重新进入。</p>
+    <button type="button" id="retry">立即重试</button>
+    <small id="note">正在安排自动重试…</small>
+  </main>
+  <script>
+    (() => {
+      const KEY = "sentinel-recovery-state-v1";
+      const now = Date.now();
+      let state = { count: 0, lastAt: 0 };
+      try { state = JSON.parse(sessionStorage.getItem(KEY) || "{}") || state; } catch {}
+      if (!Number.isFinite(state.lastAt) || now - state.lastAt > 60_000) state = { count: 0, lastAt: 0 };
+      state.count = Math.min(4, (Number(state.count) || 0) + 1);
+      state.lastAt = now;
+      try { sessionStorage.setItem(KEY, JSON.stringify(state)); } catch {}
+
+      const note = document.getElementById("note");
+      const retry = () => { if (navigator.onLine !== false) location.reload(); };
+      document.getElementById("retry")?.addEventListener("click", retry);
+      window.addEventListener("online", retry, { once: true });
+
+      const delay = Math.min(12_000, 1_800 * state.count);
+      if (note) note.textContent = `约 ${Math.ceil(delay / 1000)} 秒后自动重试；你也可以立即重试。`;
+      window.setTimeout(() => {
+        if (!document.hidden) retry();
+      }, delay);
+    })();
+  </script>
+</body>
+</html>

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [scheduler, client, layout, liveEngine, page, liveStatus, gatePrivate, apiAuth, userAccounts, serviceWorker] = await Promise.all([
+const [scheduler, client, layout, liveEngine, page, liveStatus, gatePrivate, apiAuth, userAccounts, serviceWorker, recoveryPage] = await Promise.all([
   readFile(new URL("../lib/background-scheduler.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/runtime-stability-client.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
@@ -13,6 +13,7 @@ const [scheduler, client, layout, liveEngine, page, liveStatus, gatePrivate, api
   readFile(new URL("../app/api-auth.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/user-accounts.ts", import.meta.url), "utf8"),
   readFile(new URL("../public/sw.js", import.meta.url), "utf8"),
+  readFile(new URL("../public/recovery.html", import.meta.url), "utf8"),
 ]);
 
 test("background health isolates modules and wakes only lightweight schedulers", () => {
@@ -32,22 +33,25 @@ test("background health isolates modules and wakes only lightweight schedulers",
   assert.match(scheduler, /issues:/);
 });
 
-test("client retries only safe read APIs, coalesces overlapping polls, backs off failures and normalizes broken API bodies", () => {
+test("client retries only safe read APIs, coalesces polls, bounds concurrency, backs off failures and normalizes broken API bodies", () => {
   assert.match(client, /method !== "GET"/);
   assert.match(client, /url\.pathname\.startsWith\("\/api\/"\)/);
   assert.match(client, /response\.status === 429 \|\| response\.status >= 500/);
-  assert.match(client, /RETRY_DELAYS = \[750, 1_800\]/);
+  assert.match(client, /RETRY_DELAYS = \[900, 2_200\]/);
   assert.match(client, /READ_TIMEOUT_MS\s*=\s*8_000/);
   assert.match(client, /MARKET_READ_TIMEOUT_MS\s*=\s*15_000/);
   assert.match(client, /MUTATION_TIMEOUT_MS\s*=\s*20_000/);
   assert.match(client, /LONG_MUTATION_TIMEOUT_MS\s*=\s*45_000/);
   assert.match(client, /DEEP_SCAN_TIMEOUT_MS\s*=\s*45_000/);
-  assert.match(client, /READ_START_GAP_MS\s*=\s*120/);
-  assert.match(client, /EDGE_BACKOFF_MS\s*=\s*1_500/);
+  assert.match(client, /READ_START_GAP_MS\s*=\s*240/);
+  assert.match(client, /EDGE_BACKOFF_MS\s*=\s*2_500/);
+  assert.match(client, /MAX_CONCURRENT_READS\s*=\s*3/);
   assert.match(client, /inFlightReads/);
   assert.match(client, /coalescedRead/);
   assert.match(client, /waitForReadStart/);
   assert.match(client, /markTransientBackoff/);
+  assert.match(client, /acquireReadSlot/);
+  assert.match(client, /withReadSlot/);
   assert.match(client, /new AbortController\(\)/);
   assert.match(client, /请求超时/);
   assert.match(client, /normalizeApiResponse/);
@@ -60,13 +64,21 @@ test("client retries only safe read APIs, coalesces overlapping polls, backs off
   assert.match(client, /module\.label/);
 });
 
-test("top-level navigation keeps the last good shell on transient Cloudflare resource failures", () => {
+test("runtime protection mounts before page pollers start", () => {
+  assert.match(layout, /<body>\s*<RuntimeStabilityClient \/>\s*\{children\}/);
+});
+
+test("top-level navigation uses a self-contained recovery page instead of stale dynamic HTML", () => {
+  assert.match(serviceWorker, /CACHE_NAME = "market-sentinel-shell-v5"/);
+  assert.match(serviceWorker, /RECOVERY_URL = "\/recovery\.html"/);
   assert.match(serviceWorker, /if \(url\.pathname\.startsWith\("\/api\/"\) \|\| url\.pathname === "\/__health"\) return;/);
-  assert.match(serviceWorker, /const transientEdgeFailure = isNavigation && \(response\.status === 429 \|\| response\.status >= 500\)/);
-  assert.match(serviceWorker, /Cloudflare 1102/);
-  assert.match(serviceWorker, /await caches\.match\("\/"\)/);
-  assert.match(serviceWorker, /X-Sentinel-Navigation-Fallback/);
-  assert.match(serviceWorker, /if \(response\.ok\)/);
+  assert.match(serviceWorker, /response\.status === 429 \|\| response\.status >= 500/);
+  assert.match(serviceWorker, /return recoveryResponse\(\)/);
+  assert.doesNotMatch(serviceWorker, /cache\.put\(isNavigation \? "\/"/);
+  assert.doesNotMatch(serviceWorker, /caches\.match\("\/"\)/);
+  assert.match(recoveryPage, /正在恢复连接/);
+  assert.match(recoveryPage, /不会用旧数据冒充实时数据/);
+  assert.match(recoveryPage, /location\.reload\(\)/);
 });
 
 test("shared API auth failures stay inside JSON and normal account polls avoid a duplicate D1 select", () => {
