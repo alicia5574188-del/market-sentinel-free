@@ -1,4 +1,5 @@
 import type { V2MarketContext, V2RegimeKind } from "./sentinel-v2-core.ts";
+import type { Strategy2CounterfactualArchiveStats } from "./strategy-2-counterfactual.ts";
 import type { Strategy2LearningDashboard } from "./strategy-2-learning.ts";
 import type { Strategy2Opportunity } from "./sentinel-v2-strategy.ts";
 
@@ -10,6 +11,7 @@ export type Strategy2DecisionIntelligence = {
   playbook: string;
   side: Strategy2Opportunity["side"];
   state: Strategy2Opportunity["state"];
+  estimationMode: "shadow_estimate";
   expertWeight: number;
   estimatedWinProbability: number;
   grossExpectedR: number | null;
@@ -34,7 +36,7 @@ export type Strategy2ExpertIntelligence = {
 };
 
 export type Strategy2Intelligence = {
-  version: "strategy-2.1-intelligence";
+  version: "strategy-2.0-intelligence-v1";
   observedAt: number;
   regimeMigration: {
     currentRegime: V2RegimeKind;
@@ -64,6 +66,10 @@ export type Strategy2Intelligence = {
   counterfactual: {
     trackedDecisionCount: number;
     maturedDecisionCount: number;
+    uniqueSymbols: number;
+    windowHours: number;
+    maturityMinutes: number;
+    source: "persistent_v2_opportunity_archive" | "current_snapshot";
     status: "collecting";
     note: string;
   };
@@ -72,6 +78,15 @@ export type Strategy2Intelligence = {
     regimeSideConcentration: number;
     dominantFactor: string | null;
     riskState: "NORMAL" | "CONCENTRATED" | "HIGH";
+    model: "regime_direction_factor_proxy";
+  };
+  authority: {
+    mode: "shadow_only";
+    liveDecisionAuthority: false;
+    canIncreaseRisk: false;
+    canOverrideHardSafety: false;
+    canAutoPromote: false;
+    note: string;
   };
   governance: {
     champion: "Sentinel Strategy 2.0";
@@ -257,6 +272,7 @@ function decisionIntelligence(opportunity: Strategy2Opportunity, market: V2Marke
     playbook: opportunity.playbook,
     side: opportunity.side,
     state: opportunity.state,
+    estimationMode: "shadow_estimate",
     expertWeight: expertWeight(opportunity),
     estimatedWinProbability: winProbability,
     grossExpectedR: gross,
@@ -323,7 +339,7 @@ function globalRegimeFromTrade(regime: string | null | undefined) {
 
 function portfolioIntelligence(openTrades: { side: "LONG" | "SHORT"; regime?: string | null }[]) {
   if (!openTrades.length) {
-    return { directionConcentration: 0, regimeSideConcentration: 0, dominantFactor: null, riskState: "NORMAL" as const };
+    return { directionConcentration: 0, regimeSideConcentration: 0, dominantFactor: null, riskState: "NORMAL" as const, model: "regime_direction_factor_proxy" as const };
   }
   const sideBuckets = new Map<string, number>();
   const factorBuckets = new Map<string, number>();
@@ -341,7 +357,39 @@ function portfolioIntelligence(openTrades: { side: "LONG" | "SHORT"; regime?: st
     : regimeSideConcentration >= 60 && openTrades.length >= 2
       ? "CONCENTRATED" as const
       : "NORMAL" as const;
-  return { directionConcentration, regimeSideConcentration, dominantFactor: rankedFactor?.[0] ?? null, riskState };
+  return { directionConcentration, regimeSideConcentration, dominantFactor: rankedFactor?.[0] ?? null, riskState, model: "regime_direction_factor_proxy" as const };
+}
+
+function counterfactualIntelligence(input: {
+  observedAt: number;
+  opportunities: Strategy2Opportunity[];
+  archive?: Strategy2CounterfactualArchiveStats | null;
+}): Strategy2Intelligence["counterfactual"] {
+  if (input.archive) {
+    return {
+      trackedDecisionCount: input.archive.trackedDecisionCount,
+      maturedDecisionCount: input.archive.maturedDecisionCount,
+      uniqueSymbols: input.archive.uniqueSymbols,
+      windowHours: input.archive.windowHours,
+      maturityMinutes: input.archive.maturityMinutes,
+      source: input.archive.source,
+      status: "collecting",
+      note: "WATCH/REJECT 已进入持久化反事实档案并按成熟时间统计；它们目前只用于影子评估，不会反向改写实盘参数。",
+    };
+  }
+  const maturityMinutes = 60;
+  const maturedCutoff = input.observedAt - maturityMinutes * 60_000;
+  const tracked = input.opportunities.filter((item) => item.state !== "TRADE");
+  return {
+    trackedDecisionCount: tracked.length,
+    maturedDecisionCount: tracked.filter((item) => item.observedAt <= maturedCutoff).length,
+    uniqueSymbols: new Set(tracked.map((item) => item.symbol)).size,
+    windowHours: 0,
+    maturityMinutes,
+    source: "current_snapshot",
+    status: "collecting",
+    note: "持久化反事实档案暂不可用时退回当前快照统计；不会因此扩大实盘权限或风险。",
+  };
 }
 
 export function buildStrategy2Intelligence(input: {
@@ -350,23 +398,29 @@ export function buildStrategy2Intelligence(input: {
   opportunities: Strategy2Opportunity[];
   learning: Strategy2LearningDashboard | null;
   openTrades: { side: "LONG" | "SHORT"; regime?: string | null }[];
+  counterfactualArchive?: Strategy2CounterfactualArchiveStats | null;
 }): Strategy2Intelligence {
-  const maturedCutoff = input.observedAt - 60 * 60_000;
-  const tracked = input.opportunities.filter((item) => item.state !== "TRADE");
   return {
-    version: "strategy-2.1-intelligence",
+    version: "strategy-2.0-intelligence-v1",
     observedAt: input.observedAt,
     regimeMigration: buildRegimeMigration(input.market),
     decisions: input.opportunities.map((opportunity) => decisionIntelligence(opportunity, input.market)),
     experts: expertIntelligence(input.opportunities),
     learningUpdate: learningUpdate(input.learning),
-    counterfactual: {
-      trackedDecisionCount: tracked.length,
-      maturedDecisionCount: tracked.filter((item) => item.observedAt <= maturedCutoff).length,
-      status: "collecting",
-      note: "WATCH/REJECT 决策继续保留为反事实样本；当前层只做影子归档与成熟度标记，不反向修改实盘参数。",
-    },
+    counterfactual: counterfactualIntelligence({
+      observedAt: input.observedAt,
+      opportunities: input.opportunities,
+      archive: input.counterfactualArchive,
+    }),
     portfolio: portfolioIntelligence(input.openTrades),
+    authority: {
+      mode: "shadow_only",
+      liveDecisionAuthority: false,
+      canIncreaseRisk: false,
+      canOverrideHardSafety: false,
+      canAutoPromote: false,
+      note: "Intelligence 只做影子估计、排序解释和风险提示；Strategy 2.0、组合风控、Execution Engine、Live Master Switch 与 Gate 硬安全链仍是唯一实盘权限来源。",
+    },
     governance: {
       champion: "Sentinel Strategy 2.0",
       mode: "shadow_first",
