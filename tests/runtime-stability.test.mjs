@@ -2,15 +2,17 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [scheduler, client, layout, liveEngine, page] = await Promise.all([
+const [scheduler, client, layout, liveEngine, page, liveStatus, gatePrivate] = await Promise.all([
   readFile(new URL("../lib/background-scheduler.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/runtime-stability-client.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
   readFile(new URL("../lib/live-trading-engine.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../app/api/live/status/route.ts", import.meta.url), "utf8"),
+  readFile(new URL("../lib/gate-private.ts", import.meta.url), "utf8"),
 ]);
 
-test("background health isolates modules and wakes stale schedulers", () => {
+test("background health isolates modules and wakes only lightweight schedulers", () => {
   assert.match(scheduler, /Promise\.allSettled/);
   assert.match(scheduler, /POSITION_STALE_MS\s*=\s*45_000/);
   assert.match(scheduler, /SCANNER_STALE_MS\s*=\s*180_000/);
@@ -20,23 +22,48 @@ test("background health isolates modules and wakes stale schedulers", () => {
   assert.match(scheduler, /市场扫描/);
   assert.match(scheduler, /持仓监控/);
   assert.match(scheduler, /实盘协调器/);
+  assert.match(scheduler, /getLiveTradingSnapshot/);
+  assert.doesNotMatch(scheduler, /await\s+stub\.reconcileNow\(/);
+  assert.match(scheduler, /idleDisabled/);
+  assert.match(scheduler, /自动实盘关闭且无活动实盘仓位/);
   assert.match(scheduler, /issues:/);
 });
 
-test("client retries only safe read APIs, bounds stalled requests and exposes exact health", () => {
+test("client retries only safe read APIs, bounds stalled requests and normalizes broken API bodies", () => {
   assert.match(client, /method !== "GET"/);
   assert.match(client, /url\.pathname\.startsWith\("\/api\/"\)/);
   assert.match(client, /response\.status === 429 \|\| response\.status >= 500/);
   assert.match(client, /RETRY_DELAYS = \[350, 900\]/);
   assert.match(client, /READ_TIMEOUT_MS\s*=\s*8_000/);
+  assert.match(client, /MARKET_READ_TIMEOUT_MS\s*=\s*15_000/);
   assert.match(client, /MUTATION_TIMEOUT_MS\s*=\s*20_000/);
+  assert.match(client, /LONG_MUTATION_TIMEOUT_MS\s*=\s*45_000/);
   assert.match(client, /DEEP_SCAN_TIMEOUT_MS\s*=\s*45_000/);
   assert.match(client, /new AbortController\(\)/);
   assert.match(client, /请求超时/);
-  assert.match(client, /if \(!retryableRequest\(input, init\)\) return fetchWithTimeout/);
+  assert.match(client, /normalizeApiResponse/);
+  assert.match(client, /返回了非 JSON 响应/);
+  assert.match(client, /canonicalRequestInput/);
+  assert.match(client, /if \(!retryableRequest\(input, init\)\)/);
   assert.match(client, /系统健康/);
   assert.match(client, /后台扫描、持仓监控与实盘协调器/);
   assert.match(client, /module\.label/);
+});
+
+test("live status polling reads durable state without joining the Gate execution queue", () => {
+  assert.match(liveStatus, /getLiveTradingSnapshot/);
+  assert.doesNotMatch(liveStatus, /liveTradingCoordinator/);
+  assert.doesNotMatch(liveStatus, /coordinator\.ensure/);
+  assert.doesNotMatch(liveStatus, /coordinator\.snapshot/);
+});
+
+test("Gate private reads retry safely while mutations stay single-attempt", () => {
+  assert.match(gatePrivate, /const safeRead = method === "GET"/);
+  assert.match(gatePrivate, /const maxAttempts = safeRead \? 2 : 1/);
+  assert.match(gatePrivate, /response\.status === 429 \|\| response\.status >= 500/);
+  assert.match(gatePrivate, /Gate \$\{path\} 读取超时/);
+  assert.match(gatePrivate, /DEFAULT_GATE_READ_TIMEOUT_MS\s*=\s*7_000/);
+  assert.match(gatePrivate, /DEFAULT_GATE_MUTATION_TIMEOUT_MS\s*=\s*8_000/);
 });
 
 test("runtime stability layer is mounted globally", () => {

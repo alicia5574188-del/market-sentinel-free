@@ -35,7 +35,9 @@ type WindowWithSentinelFetch = Window & typeof globalThis & {
 
 const RETRY_DELAYS = [350, 900];
 const READ_TIMEOUT_MS = 8_000;
+const MARKET_READ_TIMEOUT_MS = 15_000;
 const MUTATION_TIMEOUT_MS = 20_000;
+const LONG_MUTATION_TIMEOUT_MS = 45_000;
 const DEEP_SCAN_TIMEOUT_MS = 45_000;
 
 function wait(ms: number) {
@@ -64,9 +66,39 @@ function retryableRequest(input: RequestInfo | URL, init?: RequestInit) {
 function requestTimeoutMs(input: RequestInfo | URL, init?: RequestInit) {
   const info = requestInfo(input, init);
   if (!info) return null;
-  if (info.method === "GET") return READ_TIMEOUT_MS;
+  if (info.method === "GET") {
+    if (["/api/market", "/api/scanner", "/api/chart"].includes(info.url.pathname)) return MARKET_READ_TIMEOUT_MS;
+    return READ_TIMEOUT_MS;
+  }
   if (info.url.pathname === "/api/scan/run") return DEEP_SCAN_TIMEOUT_MS;
+  if (info.url.pathname === "/api/live/reconcile" || info.url.pathname === "/api/live/emergency") return LONG_MUTATION_TIMEOUT_MS;
   return MUTATION_TIMEOUT_MS;
+}
+
+function canonicalRequestInput(input: RequestInfo | URL, info: ReturnType<typeof requestInfo>) {
+  if (!info || input instanceof Request) return input;
+  return info.url.href;
+}
+
+async function normalizeApiResponse(response: Response, info: ReturnType<typeof requestInfo>) {
+  if (!info) return response;
+  const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+  if (contentType.includes("application/json")) return response;
+
+  // iOS/WebKit can surface a generic "The string did not match the expected
+  // pattern" when response.json() is called on an empty/HTML/text error body.
+  // Every Sentinel API is JSON by contract, so convert a broken edge response
+  // into a deterministic JSON error before page code consumes it.
+  const status = response.ok ? 502 : response.status;
+  return new Response(JSON.stringify({
+    error: `${info.url.pathname} 返回了非 JSON 响应（HTTP ${response.status}），已自动丢弃异常响应并等待重试`,
+  }), {
+    status,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+    },
+  });
 }
 
 async function fetchWithTimeout(nativeFetch: typeof window.fetch, input: RequestInfo | URL, init: RequestInit | undefined, timeoutMs: number) {
@@ -98,19 +130,24 @@ function installResilientFetch(onRecovered: () => void) {
   sentinelWindow.__SENTINEL_NATIVE_FETCH__ = nativeFetch;
   sentinelWindow.__SENTINEL_RESILIENT_FETCH_INSTALLED__ = true;
   window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const info = requestInfo(input, init);
     const timeoutMs = requestTimeoutMs(input, init);
     if (timeoutMs == null) return nativeFetch(input, init);
-    if (!retryableRequest(input, init)) return fetchWithTimeout(nativeFetch, input, init, timeoutMs);
+    const normalizedInput = canonicalRequestInput(input, info);
+    if (!retryableRequest(input, init)) {
+      const response = await fetchWithTimeout(nativeFetch, normalizedInput, init, timeoutMs);
+      return normalizeApiResponse(response, info);
+    }
     let lastError: unknown = null;
     let lastResponse: Response | null = null;
     for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt += 1) {
       try {
-        const response = await fetchWithTimeout(nativeFetch, input, { ...init, cache: "no-store" }, timeoutMs);
+        const response = await fetchWithTimeout(nativeFetch, normalizedInput, { ...init, cache: "no-store" }, timeoutMs);
         lastResponse = response;
         const transient = response.status === 429 || response.status >= 500;
         if (!transient || attempt === RETRY_DELAYS.length) {
           if (attempt > 0 && response.ok) onRecovered();
-          return response;
+          return normalizeApiResponse(response, info);
         }
       } catch (error) {
         lastError = error;
@@ -118,7 +155,7 @@ function installResilientFetch(onRecovered: () => void) {
       }
       await wait(RETRY_DELAYS[attempt]);
     }
-    if (lastResponse) return lastResponse;
+    if (lastResponse) return normalizeApiResponse(lastResponse, info);
     throw lastError instanceof Error ? lastError : new Error("网络请求失败");
   }) as typeof window.fetch;
 }

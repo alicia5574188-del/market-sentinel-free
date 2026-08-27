@@ -1,4 +1,5 @@
 import { getRuntimeBindings } from "./runtime-bindings";
+import { getLiveTradingSnapshot } from "./live-trading-repository";
 
 export type SchedulerWorkerStatus = {
   state: "starting" | "live" | "paused" | "degraded" | "error";
@@ -99,28 +100,31 @@ async function inspectScheduler(
 
 async function inspectLiveCoordinator(bindings: ReturnType<typeof getRuntimeBindings>): Promise<RuntimeModuleHealth | null> {
   if (!bindings.LIVE_TRADING_COORDINATOR) return null;
-  const stub = bindings.LIVE_TRADING_COORDINATOR.getByName("live-trading");
-  const ensured = await stub.ensure();
-  const snapshot = await stub.snapshot();
+
+  // Health polling must be observation-only. It used to call the Durable Object's
+  // reconcileNow() synchronously when stale, so an 8s browser GET timeout could
+  // abort a full Gate reconciliation and the next health poll would repeat it.
+  // The coordinator already self-schedules its alarm after every cycle and the
+  // Worker cron ensures the alarm exists, so this endpoint only reads durable D1
+  // state and reports recovery without joining the execution queue.
+  const snapshot = await getLiveTradingSnapshot();
   const now = Date.now();
   const control = snapshot.control;
   const configured = snapshot.credential.configured;
+  const activeOrderStates = new Set(["submitting", "open", "protected", "closing"]);
+  const hasActiveOrders = snapshot.orders.some((order) => activeOrderStates.has(order.state));
+  const idleDisabled = !control.entryEnabled && control.state === "disabled" && !hasActiveOrders;
   const lastRunAt = control.lastReconciledAt ?? null;
   const lastSuccessAt = control.lastSuccessfulReconcileAt ?? null;
   const stale = staleFor(lastSuccessAt, lastRunAt, now);
   let health: RuntimeHealthState;
-  let autoRecoveryTriggered = false;
 
-  if (!configured) {
+  if (!configured || idleDisabled) {
     health = "healthy";
   } else if (lastRunAt == null) {
     health = "starting";
   } else if ((stale != null && stale > LIVE_STALE_MS) || (control.lastError && (!lastSuccessAt || lastRunAt > lastSuccessAt))) {
     health = "recovering";
-    if (now - lastRunAt > 60_000) {
-      await stub.reconcileNow();
-      autoRecoveryTriggered = true;
-    }
   } else if (control.lastError) {
     health = "degraded";
   } else {
@@ -129,7 +133,9 @@ async function inspectLiveCoordinator(bindings: ReturnType<typeof getRuntimeBind
 
   const detail = !configured
     ? "实盘协调器正常 · 尚未启用 Gate 实盘"
-    : moduleDetail("实盘协调器", health, stale, control.lastError);
+    : idleDisabled
+      ? "实盘协调器正常 · 自动实盘关闭且无活动实盘仓位"
+      : moduleDetail("实盘协调器", health, stale, control.lastError);
   return {
     module: "live_coordinator",
     label: "实盘协调器",
@@ -137,10 +143,10 @@ async function inspectLiveCoordinator(bindings: ReturnType<typeof getRuntimeBind
     state: control.state,
     lastRunAt,
     lastSuccessAt,
-    nextRunAt: ensured.nextRunAt ?? null,
+    nextRunAt: null,
     staleForMs: stale,
-    lastError: control.lastError ?? null,
-    autoRecoveryTriggered,
+    lastError: idleDisabled ? null : control.lastError ?? null,
+    autoRecoveryTriggered: health === "recovering",
     detail,
   };
 }
