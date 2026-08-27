@@ -21,20 +21,28 @@ export async function ensureUserAccount(input: { email: string; displayName: str
   const role = accountRole(email);
   const [existing] = await db.select().from(userAccounts).where(eq(userAccounts.email, email)).limit(1);
 
-  if (!existing) {
-    await db.insert(userAccounts).values({
-      id: crypto.randomUUID(),
-      email,
-      displayName,
-      role,
-      status: "active",
-      createdAt: now,
-      lastSeenAt: now,
-    }).onConflictDoNothing();
-  } else if (existing.displayName !== displayName || existing.role !== role || now - existing.lastSeenAt >= 15 * 60_000) {
-    await db.update(userAccounts).set({ displayName, role, lastSeenAt: now }).where(eq(userAccounts.id, existing.id));
+  if (existing) {
+    if (existing.status !== "active") throw new Error("账户不可用，请联系站点管理员");
+    if (existing.displayName !== displayName || existing.role !== role || now - existing.lastSeenAt >= 15 * 60_000) {
+      await db.update(userAccounts).set({ displayName, role, lastSeenAt: now }).where(eq(userAccounts.id, existing.id));
+      return { ...existing, displayName, role, lastSeenAt: now };
+    }
+    // The normal hot path is read-only and now needs one D1 lookup instead of
+    // selecting the same account twice for every API poll.
+    return existing;
   }
 
+  await db.insert(userAccounts).values({
+    id: crypto.randomUUID(),
+    email,
+    displayName,
+    role,
+    status: "active",
+    createdAt: now,
+    lastSeenAt: now,
+  }).onConflictDoNothing();
+
+  // Only the first-login/concurrent-create path needs a second read.
   const [account] = await db.select().from(userAccounts).where(eq(userAccounts.email, email)).limit(1);
   if (!account || account.status !== "active") throw new Error("账户不可用，请联系站点管理员");
   return account;
