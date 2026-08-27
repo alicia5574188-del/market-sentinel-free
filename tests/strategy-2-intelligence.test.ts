@@ -114,6 +114,19 @@ test("surfaces a candidate regime without forcing the current regime to switch",
   assert.ok(["forming", "developing", "switch_watch"].includes(result.regimeMigration?.stage ?? ""));
 });
 
+test("no candidate regime stays stable with zero migration estimate", () => {
+  const result = buildStrategy2Intelligence({
+    observedAt: 2_000_000,
+    market: market({ developingRegime: null }),
+    opportunities: [opportunity()],
+    learning: learning(),
+    openTrades: [],
+  });
+  assert.equal(result.regimeMigration?.candidateRegime, null);
+  assert.equal(result.regimeMigration?.transitionProbability, 0);
+  assert.equal(result.regimeMigration?.stage, "stable");
+});
+
 test("uncertainty layer is conservative and can only advise reducing or blocking", () => {
   const result = buildStrategy2Intelligence({
     observedAt: 2_000_000,
@@ -131,6 +144,19 @@ test("uncertainty layer is conservative and can only advise reducing or blocking
   assert.equal(result.decisions[0].advisoryState, "BLOCK");
   assert.ok(result.decisions[0].outOfDistributionRisk >= 80 || result.decisions[0].modelDisagreement >= 90);
   assert.ok(result.decisions[0].advisoryReasons.length > 0);
+  assert.equal(result.decisions[0].estimationMode, "shadow_estimate");
+});
+
+test("invalid market data forces the shadow uncertainty layer toward fail-closed", () => {
+  const result = buildStrategy2Intelligence({
+    observedAt: 2_000_000,
+    market: market({ dataIntegrity: { valid: false, universeSize: 3, stale: true, reason: "stale" }, transitionRisk: 75, stability: 20 }),
+    opportunities: [opportunity({ learningConfidence: 5, experienceSamples: 0 })],
+    learning: learning(),
+    openTrades: [],
+  });
+  assert.equal(result.decisions[0].advisoryState, "BLOCK");
+  assert.ok(result.decisions[0].outOfDistributionRisk >= 80);
 });
 
 test("expert weights rank stronger learned environment fits ahead of weaker experts", () => {
@@ -175,6 +201,29 @@ test("portfolio intelligence detects regime and direction concentration without 
   assert.equal(result.portfolio.regimeSideConcentration, 75);
   assert.equal(result.portfolio.dominantFactor, "SHORT · bear_trend");
   assert.equal(result.portfolio.riskState, "HIGH");
+  assert.equal(result.portfolio.model, "regime_direction_factor_proxy");
+});
+
+test("persistent counterfactual archive stats replace snapshot-only counts", () => {
+  const result = buildStrategy2Intelligence({
+    observedAt: 2_000_000,
+    market: market(),
+    opportunities: [opportunity()],
+    learning: learning(),
+    openTrades: [],
+    counterfactualArchive: {
+      trackedDecisionCount: 240,
+      maturedDecisionCount: 180,
+      uniqueSymbols: 21,
+      windowHours: 24,
+      maturityMinutes: 60,
+      source: "persistent_v2_opportunity_archive",
+    },
+  });
+  assert.equal(result.counterfactual.trackedDecisionCount, 240);
+  assert.equal(result.counterfactual.maturedDecisionCount, 180);
+  assert.equal(result.counterfactual.uniqueSymbols, 21);
+  assert.equal(result.counterfactual.source, "persistent_v2_opportunity_archive");
 });
 
 test("learning update makes degrading and negative cells explicit", () => {
@@ -188,4 +237,33 @@ test("learning update makes degrading and negative cells explicit", () => {
   assert.match(result.learningUpdate?.headline ?? "", /优势衰退/);
   assert.match(result.learningUpdate?.riskNote ?? "", /负优势/);
   assert.equal(result.governance.automaticPromotion, false);
+});
+
+test("intelligence remains shadow-only and can never acquire live risk authority", () => {
+  const source = opportunity({ state: "TRADE", riskMultiplier: 0.7, waitingFor: [] });
+  const result = buildStrategy2Intelligence({
+    observedAt: 2_000_000,
+    market: market(),
+    opportunities: [source],
+    learning: learning(),
+    openTrades: [],
+  });
+  assert.equal(result.version, "strategy-2.0-intelligence-v1");
+  assert.equal(result.authority.mode, "shadow_only");
+  assert.equal(result.authority.liveDecisionAuthority, false);
+  assert.equal(result.authority.canIncreaseRisk, false);
+  assert.equal(result.authority.canOverrideHardSafety, false);
+  assert.equal(result.authority.canAutoPromote, false);
+  assert.equal(source.riskMultiplier, 0.7);
+});
+
+test("identical inputs produce deterministic intelligence output", () => {
+  const input = {
+    observedAt: 2_000_000,
+    market: market(),
+    opportunities: [opportunity()],
+    learning: learning(),
+    openTrades: [] as { side: "LONG" | "SHORT"; regime?: string | null }[],
+  };
+  assert.deepEqual(buildStrategy2Intelligence(input), buildStrategy2Intelligence(input));
 });
