@@ -2,12 +2,19 @@ import { and, desc, eq } from "drizzle-orm";
 import { getDb } from "../db";
 import { tradeCases } from "../db/schema";
 import {
+  ADAPTIVE_LEARNING_FORWARD_EPOCH_MS,
+  makeAdaptivePrior,
+  summarizeAdaptiveLearning,
+  type AdaptiveLearningObservation,
+  type AdaptiveLearningStats,
+} from "./strategy-2-adaptive-learning.ts";
+import {
   strategy2ExperienceKey,
   type Strategy2Experience,
   type Strategy2ExperienceBook,
 } from "./sentinel-v2-strategy.ts";
 
-export type Strategy2LearningStage = "exploration" | "calibrating" | "validated" | "negative_edge";
+export type Strategy2LearningStage = "exploration" | "calibrating" | "validated" | "negative_edge" | "degrading";
 
 export type Strategy2LearningCell = Strategy2Experience & {
   key: string;
@@ -30,6 +37,8 @@ export type Strategy2LearningTrade = {
   resultR: number;
   cellSamples: number;
   cellExpectancyR: number | null;
+  cellRecentExpectancyR: number | null;
+  t1Hit: boolean;
   stage: Strategy2LearningStage;
   riskAction: string;
 };
@@ -40,6 +49,8 @@ export type Strategy2LearningDashboard = {
   exactCellCount: number;
   positiveCells: number;
   negativeCells: number;
+  degradingCells: number;
+  forwardSamples: number;
   cells: Strategy2LearningCell[];
   recentTrades: Strategy2LearningTrade[];
 };
@@ -54,14 +65,6 @@ function parseStrategy2Regime(value: string | null | undefined) {
   return { playbook, globalRegime, assetRegime };
 }
 
-type Accumulator = {
-  sampleCount: number;
-  wins: number;
-  losses: number;
-  totalR: number;
-  totalNetPct: number;
-};
-
 type ClosedStrategy2Row = {
   id: string;
   exitAt: number | null;
@@ -69,43 +72,20 @@ type ClosedStrategy2Row = {
   side: string;
   netMovePct: number | null;
   plannedRiskPct: number | null;
+  mfePct: number | null;
+  maePct: number | null;
+  target1HitAt: number | null;
 };
 
-function add(target: Record<string, Accumulator>, key: string, r: number, netPct: number) {
-  const row = target[key] ?? { sampleCount: 0, wins: 0, losses: 0, totalR: 0, totalNetPct: 0 };
-  row.sampleCount += 1;
-  row.wins += netPct > 0 ? 1 : 0;
-  row.losses += netPct < 0 ? 1 : 0;
-  row.totalR += r;
-  row.totalNetPct += netPct;
-  target[key] = row;
-}
-
-function present(row: Accumulator): Strategy2Experience {
-  return {
-    sampleCount: row.sampleCount,
-    wins: row.wins,
-    losses: row.losses,
-    winRate: row.sampleCount ? row.wins / row.sampleCount : null,
-    expectancyR: row.sampleCount ? row.totalR / row.sampleCount : null,
-    averageNetPct: row.sampleCount ? row.totalNetPct / row.sampleCount : null,
-  };
-}
-
-function learningStage(sampleCount: number, expectancyR: number | null): Strategy2LearningStage {
-  if (sampleCount >= 15 && (expectancyR ?? 0) <= -0.30) return "negative_edge";
-  if (sampleCount < 5) return "exploration";
-  if (sampleCount < 15) return "calibrating";
-  return "validated";
-}
-
-function riskAction(stage: Strategy2LearningStage, expectancyR: number | null) {
-  if (stage === "negative_edge") return "停止该环境组合，等待新证据";
-  if (stage === "exploration") return "小风险探索，不因少量输赢过度调整";
-  if ((expectancyR ?? 0) < -0.10) return "历史优势偏弱，降低风险倍率";
-  if (stage === "validated" && (expectancyR ?? 0) >= 0.20) return "历史优势已验证，可保持正常风险";
-  return "继续校准，按实时机会质量决定风险";
-}
+type ParsedRow = {
+  row: ClosedStrategy2Row;
+  playbook: string;
+  globalRegime: string;
+  assetRegime: string;
+  side: "LONG" | "SHORT";
+  observation: AdaptiveLearningObservation;
+  resultR: number;
+};
 
 async function loadClosedStrategy2Rows(limit: number): Promise<ClosedStrategy2Row[]> {
   return getDb().select({
@@ -115,73 +95,177 @@ async function loadClosedStrategy2Rows(limit: number): Promise<ClosedStrategy2Ro
     side: tradeCases.side,
     netMovePct: tradeCases.netMovePct,
     plannedRiskPct: tradeCases.plannedRiskPct,
+    mfePct: tradeCases.mfePct,
+    maePct: tradeCases.maePct,
+    target1HitAt: tradeCases.target1HitAt,
   }).from(tradeCases).where(and(
     eq(tradeCases.status, "closed"),
     eq(tradeCases.simulationModel, "contract_v2"),
-  )).orderBy(desc(tradeCases.exitAt)).limit(Math.max(50, Math.min(5000, limit)));
+  )).orderBy(desc(tradeCases.exitAt)).limit(Math.max(100, Math.min(5000, limit)));
 }
 
-function rowResult(row: ClosedStrategy2Row) {
-  const netPct = row.netMovePct ?? 0;
-  const plannedRiskPct = Math.max(Math.abs(row.plannedRiskPct ?? 0), 0.05);
-  return { netPct, r: netPct / plannedRiskPct };
+function toParsedRows(rows: ClosedStrategy2Row[]) {
+  const parsedRows: ParsedRow[] = [];
+  for (const row of rows) {
+    const parsed = parseStrategy2Regime(row.regime);
+    if (!parsed || (row.side !== "LONG" && row.side !== "SHORT") || row.netMovePct == null) continue;
+    const plannedRiskPct = Math.max(Math.abs(row.plannedRiskPct ?? 0), 0.05);
+    const observation: AdaptiveLearningObservation = {
+      exitAt: row.exitAt,
+      netPct: row.netMovePct,
+      plannedRiskPct,
+      mfePct: row.mfePct,
+      maePct: row.maePct,
+      target1Hit: row.target1HitAt != null,
+    };
+    parsedRows.push({
+      row,
+      ...parsed,
+      side: row.side,
+      observation,
+      resultR: row.netMovePct / plannedRiskPct,
+    });
+  }
+  return parsedRows;
+}
+
+function groupObservations(parsedRows: ParsedRow[], keyOf: (row: ParsedRow) => string) {
+  const grouped = new Map<string, AdaptiveLearningObservation[]>();
+  for (const row of parsedRows) {
+    const key = keyOf(row);
+    const observations = grouped.get(key) ?? [];
+    observations.push(row.observation);
+    grouped.set(key, observations);
+  }
+  return grouped;
+}
+
+function experienceFromStats(stats: AdaptiveLearningStats): Strategy2Experience {
+  return {
+    sampleCount: stats.sampleCount,
+    wins: stats.wins,
+    losses: stats.losses,
+    winRate: stats.winRate,
+    expectancyR: stats.posteriorExpectancyR,
+    averageNetPct: stats.averageNetPct,
+    rawExpectancyR: stats.rawExpectancyR,
+    recencyExpectancyR: stats.recencyExpectancyR,
+    recentExpectancyR: stats.recentExpectancyR,
+    posteriorExpectancyR: stats.posteriorExpectancyR,
+    effectiveSampleCount: stats.effectiveSampleCount,
+    averageMfeR: stats.averageMfeR,
+    averageMaeR: stats.averageMaeR,
+    t1HitRate: stats.t1HitRate,
+    directionFailureRate: stats.directionFailureRate,
+    inverseT1PotentialRate: stats.inverseT1PotentialRate,
+    edgeLowerBoundR: stats.edgeLowerBoundR,
+    edgeUpperBoundR: stats.edgeUpperBoundR,
+    edgeConfidence: stats.edgeConfidence,
+    driftR: stats.driftR,
+    edgeState: stats.edgeState,
+    forwardSampleCount: stats.forwardSampleCount,
+    forwardExpectancyR: stats.forwardExpectancyR,
+    forwardInverseT1PotentialRate: stats.forwardInverseT1PotentialRate,
+  };
+}
+
+function buildAdaptiveStats(parsedRows: ParsedRow[]) {
+  const broadGroups = groupObservations(parsedRows, (row) => strategy2ExperienceKey(row.playbook, "*", "*", row.side));
+  const assetGroups = groupObservations(parsedRows, (row) => strategy2ExperienceKey(row.playbook, "*", row.assetRegime, row.side));
+  const exactGroups = groupObservations(parsedRows, (row) => strategy2ExperienceKey(row.playbook, row.globalRegime, row.assetRegime, row.side));
+
+  const broad = new Map<string, AdaptiveLearningStats>();
+  for (const [key, observations] of broadGroups) broad.set(key, summarizeAdaptiveLearning(observations));
+
+  const asset = new Map<string, AdaptiveLearningStats>();
+  for (const [key, observations] of assetGroups) {
+    const [playbook, , assetPart, sidePart] = key.split("|");
+    const side = sidePart.replace("side:", "") as "LONG" | "SHORT";
+    const broadKey = strategy2ExperienceKey(playbook, "*", "*", side);
+    asset.set(key, summarizeAdaptiveLearning(observations, makeAdaptivePrior(broad.get(broadKey), 6)));
+    void assetPart;
+  }
+
+  const exact = new Map<string, AdaptiveLearningStats>();
+  for (const [key, observations] of exactGroups) {
+    const [playbook, , assetPart, sidePart] = key.split("|");
+    const assetRegime = assetPart.replace("asset:", "");
+    const side = sidePart.replace("side:", "") as "LONG" | "SHORT";
+    const assetKey = strategy2ExperienceKey(playbook, "*", assetRegime, side);
+    exact.set(key, summarizeAdaptiveLearning(observations, makeAdaptivePrior(asset.get(assetKey), 8)));
+  }
+
+  return { broad, asset, exact };
+}
+
+function learningStage(stats: AdaptiveLearningStats): Strategy2LearningStage {
+  if (stats.edgeState === "negative") return "negative_edge";
+  if (stats.edgeState === "degrading") return "degrading";
+  if (stats.sampleCount < 5) return "exploration";
+  if (stats.edgeState === "positive") return "validated";
+  return "calibrating";
+}
+
+function pct(value: number | null) {
+  return value == null ? "--" : `${Math.round(value * 100)}%`;
+}
+
+function riskAction(stats: AdaptiveLearningStats, stage: Strategy2LearningStage) {
+  if (stage === "negative_edge") return `停止该环境组合；后验 ${stats.posteriorExpectancyR?.toFixed(2) ?? "--"}R，方向失败 ${pct(stats.directionFailureRate)}`;
+  if (stage === "degrading") return `近期优势衰退，强制降风险；近窗 ${stats.recentExpectancyR?.toFixed(2) ?? "--"}R，漂移 ${stats.driftR?.toFixed(2) ?? "--"}R`;
+  if (stage === "exploration") return "小风险探索；继承上层 Playbook/Asset 先验，不再从零学习";
+  if (stage === "validated") return `正优势通过收缩与近期验证；T1 ${pct(stats.t1HitRate)}，置信 ${stats.edgeConfidence}%`;
+  if ((stats.directionFailureRate ?? 0) >= 0.5) return `方向失败偏高，继续降权；T1 ${pct(stats.t1HitRate)} / 反向T1潜力 ${pct(stats.inverseT1PotentialRate)}`;
+  if ((stats.posteriorExpectancyR ?? 0) < -0.08) return "层级后验仍偏负，降低风险并等待新证据";
+  return "继续校准；长期、近期与路径质量共同决定后续风险";
 }
 
 /**
- * Completed Strategy 2.0 trades are the highest-weight learning source.
- * Exact Regime × Playbook × Asset-Regime × Direction cells are kept together
- * with broader fallbacks so sparse new environments can still explore safely.
+ * Adaptive experience book used by every Strategy 2.0 scan.
+ * Exact Regime × Playbook × Asset-Regime × Direction remains the public
+ * learning contract, while each exact cell is empirically-Bayesian shrunk
+ * toward Asset-level and then Playbook+Direction priors. Recent observations
+ * receive more weight so obsolete market edge can decay without discarding
+ * the longer-run prior entirely.
  */
-export async function getStrategy2ExperienceBook(limit = 1500): Promise<Strategy2ExperienceBook> {
-  const rows = await loadClosedStrategy2Rows(limit);
-  const accumulators: Record<string, Accumulator> = {};
-  for (const row of rows) {
-    const parsed = parseStrategy2Regime(row.regime);
-    if (!parsed || (row.side !== "LONG" && row.side !== "SHORT")) continue;
-    const { netPct, r } = rowResult(row);
-    add(accumulators, strategy2ExperienceKey(parsed.playbook, parsed.globalRegime, parsed.assetRegime, row.side), r, netPct);
-    add(accumulators, strategy2ExperienceKey(parsed.playbook, "*", parsed.assetRegime, row.side), r, netPct);
-    add(accumulators, strategy2ExperienceKey(parsed.playbook, "*", "*", row.side), r, netPct);
-  }
-  return Object.fromEntries(Object.entries(accumulators).map(([key, value]) => [key, present(value)]));
+export async function getStrategy2ExperienceBook(limit = 2500): Promise<Strategy2ExperienceBook> {
+  const parsedRows = toParsedRows(await loadClosedStrategy2Rows(limit));
+  const levels = buildAdaptiveStats(parsedRows);
+  const entries: [string, Strategy2Experience][] = [];
+  for (const [key, stats] of levels.broad) entries.push([key, experienceFromStats(stats)]);
+  for (const [key, stats] of levels.asset) entries.push([key, experienceFromStats(stats)]);
+  for (const [key, stats] of levels.exact) entries.push([key, experienceFromStats(stats)]);
+  return Object.fromEntries(entries);
 }
 
-/**
- * User-facing Strategy 2.0 learning view. Only exact cells are shown so the UI
- * never mixes unrelated playbooks into the old symbol+direction memory model.
- */
-export async function getStrategy2LearningDashboard(limit = 1500): Promise<Strategy2LearningDashboard> {
-  const rows = await loadClosedStrategy2Rows(limit);
-  const exact: Record<string, { meta: { playbook: string; globalRegime: string; assetRegime: string; side: "LONG" | "SHORT" }; acc: Accumulator }> = {};
-  const parsedRows: { row: ClosedStrategy2Row; playbook: string; globalRegime: string; assetRegime: string; side: "LONG" | "SHORT"; netPct: number; r: number }[] = [];
-
-  for (const row of rows) {
-    const parsed = parseStrategy2Regime(row.regime);
-    if (!parsed || (row.side !== "LONG" && row.side !== "SHORT")) continue;
-    const side = row.side;
-    const { netPct, r } = rowResult(row);
-    const key = strategy2ExperienceKey(parsed.playbook, parsed.globalRegime, parsed.assetRegime, side);
-    const existing = exact[key]?.acc ?? { sampleCount: 0, wins: 0, losses: 0, totalR: 0, totalNetPct: 0 };
-    existing.sampleCount += 1;
-    existing.wins += netPct > 0 ? 1 : 0;
-    existing.losses += netPct < 0 ? 1 : 0;
-    existing.totalR += r;
-    existing.totalNetPct += netPct;
-    exact[key] = { meta: { playbook: parsed.playbook, globalRegime: parsed.globalRegime, assetRegime: parsed.assetRegime, side }, acc: existing };
-    parsedRows.push({ row, ...parsed, side, netPct, r });
+/** User-facing exact-cell diagnostics; broader priors remain internal. */
+export async function getStrategy2LearningDashboard(limit = 2500): Promise<Strategy2LearningDashboard> {
+  const parsedRows = toParsedRows(await loadClosedStrategy2Rows(limit));
+  const levels = buildAdaptiveStats(parsedRows);
+  const metadata = new Map<string, { playbook: string; globalRegime: string; assetRegime: string; side: "LONG" | "SHORT" }>();
+  for (const row of parsedRows) {
+    metadata.set(strategy2ExperienceKey(row.playbook, row.globalRegime, row.assetRegime, row.side), {
+      playbook: row.playbook,
+      globalRegime: row.globalRegime,
+      assetRegime: row.assetRegime,
+      side: row.side,
+    });
   }
 
-  const cells = Object.entries(exact).map(([key, value]) => {
-    const stats = present(value.acc);
-    const stage = learningStage(stats.sampleCount, stats.expectancyR);
+  const cells = [...levels.exact.entries()].map(([key, stats]) => {
+    const meta = metadata.get(key)!;
+    const stage = learningStage(stats);
     return {
       key,
-      ...value.meta,
-      ...stats,
+      ...meta,
+      ...experienceFromStats(stats),
       stage,
-      riskAction: riskAction(stage, stats.expectancyR),
+      riskAction: riskAction(stats, stage),
     } satisfies Strategy2LearningCell;
-  }).sort((a, b) => b.sampleCount - a.sampleCount || (b.expectancyR ?? -99) - (a.expectancyR ?? -99));
+  }).sort((a, b) => {
+    const priority = (value: Strategy2LearningCell) => value.stage === "negative_edge" ? 4 : value.stage === "degrading" ? 3 : value.stage === "validated" ? 2 : 1;
+    return priority(b) - priority(a) || b.sampleCount - a.sampleCount || (b.expectancyR ?? -99) - (a.expectancyR ?? -99);
+  });
 
   const cellByKey = new Map(cells.map((cell) => [cell.key, cell]));
   const recentTrades = parsedRows.slice(0, 12).map((item) => {
@@ -194,10 +278,12 @@ export async function getStrategy2LearningDashboard(limit = 1500): Promise<Strat
       globalRegime: item.globalRegime,
       assetRegime: item.assetRegime,
       side: item.side,
-      netPct: item.netPct,
-      resultR: item.r,
+      netPct: item.observation.netPct,
+      resultR: item.resultR,
       cellSamples: cell.sampleCount,
       cellExpectancyR: cell.expectancyR,
+      cellRecentExpectancyR: cell.recentExpectancyR ?? null,
+      t1Hit: item.observation.target1Hit,
       stage: cell.stage,
       riskAction: cell.riskAction,
     } satisfies Strategy2LearningTrade;
@@ -207,8 +293,10 @@ export async function getStrategy2LearningDashboard(limit = 1500): Promise<Strat
     totalSamples: parsedRows.length,
     playbookCoverage: new Set(parsedRows.map((item) => item.playbook)).size,
     exactCellCount: cells.length,
-    positiveCells: cells.filter((cell) => cell.sampleCount >= 6 && (cell.expectancyR ?? 0) > 0).length,
+    positiveCells: cells.filter((cell) => cell.stage === "validated").length,
     negativeCells: cells.filter((cell) => cell.stage === "negative_edge").length,
+    degradingCells: cells.filter((cell) => cell.stage === "degrading").length,
+    forwardSamples: parsedRows.filter((item) => (item.row.exitAt ?? 0) >= ADAPTIVE_LEARNING_FORWARD_EPOCH_MS).length,
     cells: cells.slice(0, 24),
     recentTrades,
   };
