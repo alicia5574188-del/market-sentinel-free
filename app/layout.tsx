@@ -3,12 +3,14 @@ import { requireChatGPTUser } from "./chatgpt-auth";
 import { LiveOrdersInline } from "./live-orders-inline";
 import { RuntimeStabilityClient } from "./runtime-stability-client";
 import { Strategy2Dashboard } from "./strategy-2-dashboard";
+import { Strategy2PlaybookDiagnostics } from "./strategy-2-playbook-diagnostics";
 import { UiStatusSemanticFix } from "./ui-status-semantic-fix";
 import "./globals.css";
 import "./polish.css";
 import "./sentinel-v2.css";
 import "./strategy-2-unified.css";
 import "./strategy-2-intelligence.css";
+import "./strategy-2-playbook-diagnostics.css";
 import "./runtime-stability.css";
 
 export const dynamic = "force-dynamic";
@@ -59,6 +61,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
       <body>
         {children}
         <Strategy2Dashboard />
+        <Strategy2PlaybookDiagnostics />
         <LiveOrdersInline />
         <RuntimeStabilityClient />
         <UiStatusSemanticFix />
