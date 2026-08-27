@@ -2,7 +2,7 @@ import { inArray } from "drizzle-orm";
 import { requireApiAccount } from "../../../api-auth";
 import { getDb } from "../../../../db";
 import { tradeCases } from "../../../../db/schema";
-import { liveTradingCoordinator } from "../../../../lib/live-trading-coordinator";
+import { getLiveTradingSnapshot } from "../../../../lib/live-trading-repository";
 
 export const dynamic = "force-dynamic";
 
@@ -27,9 +27,10 @@ export async function GET() {
   if ("response" in auth) return auth.response;
   if (auth.account.role !== "owner") return Response.json({ error: "只有所有者可以查看实盘账户" }, { status: 403 });
   try {
-    const coordinator = liveTradingCoordinator();
-    await coordinator.ensure();
-    const snapshot = await coordinator.snapshot() as {
+    // Status polling is deliberately read-only. Do not enqueue behind the
+    // Durable Object's Gate reconciliation queue: a slow Gate cycle must never
+    // make the phone's 10-second status poll wait for execution to finish.
+    const snapshot = await getLiveTradingSnapshot() as {
       orders?: { tradeCaseId: string; [key: string]: unknown }[];
       [key: string]: unknown;
     };
