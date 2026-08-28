@@ -12,25 +12,29 @@ async function readBuiltWorkerSource() {
   return (await Promise.all(jsFiles.map((file) => readFile(file, "utf8")))).join("\n");
 }
 
-test("production Worker bundle contains the resumable scanner V2 runtime", async () => {
+test("production Worker bundle contains the HTE 3.1 clean runtime", async () => {
   const source = await readBuiltWorkerSource();
-  // These are durable string keys/labels and therefore cannot disappear through
-  // identifier minification. Their presence proves the source state machine is
-  // actually inside the artifact Wrangler deploys.
-  assert.match(source, /freeScanJob/);
-  assert.match(source, /读取设置 \/ Universe 粗扫/);
-  assert.match(source, /Human Trader 三交易员评估 \/ 订单生命周期/);
-  assert.match(source, /MarketScannerV2/);
+  assert.match(source, /hte31-clean-1/);
+  assert.match(source, /HTE 3\.1 Clean/);
+  assert.match(source, /Clean 配置 \/ 持仓隔离/);
+  assert.match(source, /HT1 \/ HT2 \/ HT3 独立评估/);
+  assert.match(source, /HTE31MarketScanner/);
+  assert.match(source, /HTE31TradeManager/);
+  assert.doesNotMatch(source, /class_name":"MarketScannerV2"/);
 });
 
-test("generated Wrangler config binds MARKET_SCANNER to the fresh V2 namespace", async () => {
+test("generated Wrangler config uses fresh clean simulation namespaces", async () => {
   const config = JSON.parse(await readFile(new URL("../dist/server/wrangler.json", import.meta.url), "utf8"));
   assert.deepEqual(
     config.durable_objects?.bindings?.find(({ name }) => name === "MARKET_SCANNER"),
-    { name: "MARKET_SCANNER", class_name: "MarketScannerV2" },
+    { name: "MARKET_SCANNER", class_name: "HTE31MarketScanner" },
+  );
+  assert.deepEqual(
+    config.durable_objects?.bindings?.find(({ name }) => name === "POSITION_MONITOR"),
+    { name: "POSITION_MONITOR", class_name: "HTE31TradeManager" },
   );
   assert.ok(
-    (config.migrations ?? []).some(({ tag, new_sqlite_classes: classes }) => tag === "v3" && classes?.includes("MarketScannerV2")),
-    "production config must create the fresh MarketScannerV2 SQLite namespace",
+    (config.migrations ?? []).some(({ tag, new_sqlite_classes: classes }) => tag === "v4" && classes?.includes("HTE31MarketScanner") && classes?.includes("HTE31TradeManager")),
+    "production config must create fresh HTE31 simulation Durable Object namespaces",
   );
 });
