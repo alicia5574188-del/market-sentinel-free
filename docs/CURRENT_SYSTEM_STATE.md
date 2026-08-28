@@ -4,11 +4,11 @@
 >
 > Chat history is discussion context only. Before any future code change, read the current `main` branch, recent merged PRs/commits, CI status, and this file. Never reconstruct production behavior from memory or a missing chat message.
 
-Last reconciled: **2026-08-28 11:28 +08:00**  
+Last reconciled: **2026-08-28 13:30 +08:00**  
 Repository: `alicia5574188-del/market-sentinel-free`  
 Production strategy identity: **Sentinel Strategy 2.0**  
-Last reconciled **production-behavior** commit: `6c3fe62c0fe9e4507c8d734212f6cd74c0e6fc23`  
-Cloudflare behavior-baseline Version ID: `76cc7a12-3881-4ac9-9e44-2b9e7c9f40af`
+Last reconciled **production-behavior** commit before the current stability change: `6c3fe62c0fe9e4507c8d734212f6cd74c0e6fc23`  
+Cloudflare behavior-baseline Version ID before the current stability change: `76cc7a12-3881-4ac9-9e44-2b9e7c9f40af`
 
 Documentation-only continuity commits may advance `main` and generate a new Cloudflare Version ID without changing runtime behavior. For the actual current HEAD/deployment, always inspect GitHub/Cloudflare before coding rather than copying an ID from this file.
 
@@ -66,18 +66,28 @@ Important unresolved engineering boundary:
 
 Do not remove this containment until sizing is explicitly traced and tested from Strategy intent → risk budget → contract size → execution.
 
-## 4. Current data-degradation protections
+## 4. Current data-degradation / Worker-pressure protections
 
-Recent 503/Worker-pressure work added server-side containment in addition to client retry logic:
+The stability architecture now treats recurrent 503/1102-style pressure as a **load-admission problem**, not merely a retry problem.
 
-- Background deep-scan target concurrency is bounded to **2**.
-- `/api/v2` uses partial-source isolation (`Promise.allSettled`) so one optional diagnostics/learning failure does not make the entire dashboard 503.
-- Heavy interactive learning/counterfactual reads are cached and bounded; background learning can remain deeper than interactive UI reads.
-- `/api/market` treats Gate analysis as essential and historical/V2 enrichments as optional.
-- `/api/market` keeps a last-known-good selected-symbol snapshot for a short TTL during transient failures and marks it explicitly degraded/stale.
-- Dynamic root HTML is not used as an unsafe old-version fallback; recovery behavior must never combine stale HTML with incompatible new JS/CSS assets.
+Current protections:
+
+- Background deep-scan target concurrency remains bounded to **2**.
+- A parser-time `/sentinel-runtime-guard.js` is loaded before React client pollers so foreground request admission starts before hydration.
+- Foreground same-origin GET reads are coalesced and globally spaced; heavy UI reads are limited to one at a time, with a second slot reserved for lighter status reads.
+- Selected-market reads are limited to roughly **30s** spacing, Strategy 2 dashboard reads to **45s**, and research diagnostics to **5m**.
+- A 429/5xx no longer triggers immediate replay from the early guard. It opens a **15s circuit breaker**, extended to **30s** after repeated edge failures, so overload reduces traffic instead of multiplying it.
+- `/api/market` and `/api/v2` also use a server-side same-isolate heavy-read admission lease. Competing heavy reads fail fast with explicit load-shed/degraded output instead of running expensive work concurrently.
+- `/api/market` prefers its explicitly labeled last-known-good selected-symbol snapshot for up to **90s** when a competing/failed heavy read prevents a trustworthy fresh response.
+- `/api/v2` uses partial-source isolation (`Promise.allSettled`) so one optional diagnostics/learning failure does not make the entire dashboard fail.
+- Interactive Strategy 2 learning work is bounded to **400** recent closed rows, recent opportunity payloads to **60**, and recent thesis payloads to **40**. The background decision learner retains its deeper history, so this UI optimization does not change trading behavior.
+- Dynamic root HTML is not used as an unsafe old-version fallback. PWA shell **v6** caches only the dedicated recovery shell/runtime guard/static assets, not dynamic root HTML.
+- Recovery navigation backs off **4s → 8s → 16s → 30s** after repeated failures instead of continuously reloading the Worker.
+- Fatal asset/chunk load failures and a visible blank application shell hand off to the dedicated recovery page when JavaScript is still alive.
 
 Data-safety rule: stale/degraded data may be shown only when explicitly labeled; cached data must never be presented as current real-time market/execution truth.
+
+Execution-safety rule: these load controls apply to read-only UI/observability paths. They do not retry, delay, or acquire authority over Gate mutations, Execution Engine actions, Order Lifecycle, or the live coordinator.
 
 ## 5. Current Regime / market-intelligence state
 
@@ -110,7 +120,7 @@ Existing learning concepts include:
 
 ### Learning Arena
 
-The repository now contains a **read-only Strategy 2.0 Learning Arena**. It adds rolling-edge and diagnostic observability such as:
+The repository contains a **read-only Strategy 2.0 Learning Arena**. It adds rolling-edge and diagnostic observability such as:
 
 - all / last 20 / last 50 / last 100 result rollups
 - forward vs pre-forward evidence
@@ -147,6 +157,7 @@ Do not merge a change that unintentionally weakens any of these:
 - existing order lifecycle/reconciliation safety remains intact
 - a UI/diagnostics failure must not create trading authority
 - a research metric must not be presented as a live decision authority
+- a recovery/load-shed path must not replay a mutation
 
 ## 9. Current operating recommendation
 
@@ -157,7 +168,7 @@ Primary questions for new forward data:
 - Does defensive gating materially reduce the rate of new losing trades?
 - Do recent/forward expectancy and profit factor improve?
 - Which Playbooks/Regimes retain positive edge after the newer Regime engine and loss governor?
-- Does data degradation/503 frequency materially decline under bounded Worker fan-out?
+- Does the frequency of non-JSON 503/black-screen events materially decline after pre-hydration and server-side load admission?
 - Does the missing Playbook learning coverage represent legitimate rarity or unreachable conditions?
 
 Do not loosen a strategy merely to increase trade count or force 12/12 learning coverage.
@@ -173,5 +184,7 @@ Before saying “I will change X”, answer from the repository:
 - What execution/risk authority does X currently have?
 - What invariant could this change break?
 - Does `CURRENT_SYSTEM_STATE.md` need to be updated after the change?
+
+For another 503/black-screen report, also inspect whether the failure occurred **before or after** PWA shell v6/pre-hydration admission became active, and capture CF Ray IDs when available.
 
 If any answer is unknown, inspect first. Do not guess.

@@ -4,9 +4,12 @@ import { getStrategy2CounterfactualArchiveStats } from "../../../lib/strategy-2-
 import { buildStrategy2Intelligence } from "../../../lib/strategy-2-intelligence";
 import { getStrategy2LearningDashboard } from "../../../lib/strategy-2-learning";
 import { getLatestV2MarketContext, getV2StrategyPoolActivity, listRecentV2Opportunities, listRecentV2Warnings, listV2TradeTheses } from "../../../lib/sentinel-v2-repository";
+import { acquireHeavyUiRead, heavyUiReadBusyResponse } from "../../../lib/ui-heavy-read-admission";
 
 const HEAVY_CACHE_MS = 60_000;
-const INTERACTIVE_LEARNING_LIMIT = 800;
+const INTERACTIVE_LEARNING_LIMIT = 400;
+const INTERACTIVE_OPPORTUNITY_LIMIT = 60;
+const INTERACTIVE_THESIS_LIMIT = 40;
 let learningCache: { savedAt: number; value: Awaited<ReturnType<typeof getStrategy2LearningDashboard>> } | null = null;
 let learningPending: Promise<Awaited<ReturnType<typeof getStrategy2LearningDashboard>>> | null = null;
 let counterfactualCache: { savedAt: number; value: Awaited<ReturnType<typeof getStrategy2CounterfactualArchiveStats>> } | null = null;
@@ -20,9 +23,9 @@ async function cachedLearning() {
   const now = Date.now();
   if (learningCache && now - learningCache.savedAt < HEAVY_CACHE_MS) return learningCache.value;
   if (!learningPending) {
-    // The interactive dashboard only exposes recent trades and the top cells.
-    // Keep the full 2,500-row hierarchy for background strategy learning, but
-    // do not make every 15-second UI reader rebuild it from the entire history.
+    // Interactive observability only needs enough recent closed trades to show
+    // the current edge/diagnostics. The background strategy learner keeps its
+    // deeper 2,500-row hierarchy, so this limit cannot change trading behavior.
     learningPending = getStrategy2LearningDashboard(INTERACTIVE_LEARNING_LIMIT).then((value) => {
       learningCache = { savedAt: Date.now(), value };
       return value;
@@ -43,19 +46,16 @@ async function cachedCounterfactual(observedAt: number) {
   return counterfactualPending;
 }
 
-export async function GET() {
-  const auth = await requireApiAccount();
-  if ("response" in auth) return auth.response;
-
+async function buildDashboardResponse() {
   const observedAt = Date.now();
   const results = await Promise.allSettled([
     getLatestV2MarketContext(),
-    listRecentV2Opportunities(120),
+    listRecentV2Opportunities(INTERACTIVE_OPPORTUNITY_LIMIT),
     getV2StrategyPoolActivity(),
     cachedLearning(),
     listRecentV2Warnings(24),
     listOpenTrades(),
-    listV2TradeTheses(80),
+    listV2TradeTheses(INTERACTIVE_THESIS_LIMIT),
     cachedCounterfactual(observedAt),
   ] as const);
 
@@ -137,4 +137,17 @@ export async function GET() {
       ...(degraded ? { "X-Sentinel-Partial-Data": "1" } : {}),
     },
   });
+}
+
+export async function GET() {
+  const auth = await requireApiAccount();
+  if ("response" in auth) return auth.response;
+
+  const lease = acquireHeavyUiRead("/api/v2");
+  if (!lease) return heavyUiReadBusyResponse("/api/v2");
+  try {
+    return await buildDashboardResponse();
+  } finally {
+    lease.release();
+  }
 }

@@ -61,6 +61,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   return (
     <html lang="zh-CN">
       <body>
+        <script src="/sentinel-runtime-guard.js" />
         <RuntimeStabilityClient />
         {children}
         <Strategy2Dashboard />
