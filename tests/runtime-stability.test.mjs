@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [scheduler, client, layout, liveEngine, page, liveStatus, gatePrivate, apiAuth, userAccounts, serviceWorker, recoveryPage] = await Promise.all([
+const [scheduler, client, layout, liveEngine, page, liveStatus, gatePrivate, apiAuth, userAccounts, serviceWorker, recoveryPage, earlyGuard] = await Promise.all([
   readFile(new URL("../lib/background-scheduler.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/runtime-stability-client.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
@@ -14,6 +14,7 @@ const [scheduler, client, layout, liveEngine, page, liveStatus, gatePrivate, api
   readFile(new URL("../lib/user-accounts.ts", import.meta.url), "utf8"),
   readFile(new URL("../public/sw.js", import.meta.url), "utf8"),
   readFile(new URL("../public/recovery.html", import.meta.url), "utf8"),
+  readFile(new URL("../public/sentinel-runtime-guard.js", import.meta.url), "utf8"),
 ]);
 
 test("background health isolates modules and wakes only lightweight schedulers", () => {
@@ -33,7 +34,7 @@ test("background health isolates modules and wakes only lightweight schedulers",
   assert.match(scheduler, /issues:/);
 });
 
-test("client retries only safe read APIs, coalesces polls, bounds concurrency, backs off failures and normalizes broken API bodies", () => {
+test("client fallback retries only safe read APIs, coalesces polls, bounds concurrency, backs off failures and normalizes broken API bodies", () => {
   assert.match(client, /method !== "GET"/);
   assert.match(client, /url\.pathname\.startsWith\("\/api\/"\)/);
   assert.match(client, /response\.status === 429 \|\| response\.status >= 500/);
@@ -64,13 +65,27 @@ test("client retries only safe read APIs, coalesces polls, bounds concurrency, b
   assert.match(client, /module\.label/);
 });
 
-test("runtime protection mounts before page pollers start", () => {
-  assert.match(layout, /<body>\s*<RuntimeStabilityClient \/>\s*\{children\}/);
+test("pre-hydration guard owns read admission before any React poller can start", () => {
+  assert.match(layout, /<body>\s*<script src="\/sentinel-runtime-guard\.js" \/>\s*<RuntimeStabilityClient \/>\s*\{children\}/);
+  assert.match(earlyGuard, /__SENTINEL_RESILIENT_FETCH_INSTALLED__/);
+  assert.match(earlyGuard, /GLOBAL_START_GAP_MS\s*=\s*500/);
+  assert.match(earlyGuard, /EDGE_CIRCUIT_MS\s*=\s*15_000/);
+  assert.match(earlyGuard, /EXTENDED_EDGE_CIRCUIT_MS\s*=\s*30_000/);
+  assert.match(earlyGuard, /MAX_CONCURRENT_READS\s*=\s*2/);
+  assert.match(earlyGuard, /MAX_CONCURRENT_HEAVY_READS\s*=\s*1/);
+  assert.match(earlyGuard, /pathname === "\/api\/market"\) return 30_000/);
+  assert.match(earlyGuard, /pathname === "\/api\/v2"\) return 45_000/);
+  assert.match(earlyGuard, /response\.status === 429 \|\| response\.status >= 500/);
+  assert.match(earlyGuard, /openCircuit/);
+  assert.match(earlyGuard, /sentinel:edge-pressure/);
+  assert.match(earlyGuard, /blank-shell/);
+  assert.doesNotMatch(earlyGuard, /RETRY_DELAYS/);
 });
 
 test("top-level navigation uses a self-contained recovery page instead of stale dynamic HTML", () => {
-  assert.match(serviceWorker, /CACHE_NAME = "market-sentinel-shell-v5"/);
+  assert.match(serviceWorker, /CACHE_NAME = "market-sentinel-shell-v6"/);
   assert.match(serviceWorker, /RECOVERY_URL = "\/recovery\.html"/);
+  assert.match(serviceWorker, /"\/sentinel-runtime-guard\.js"/);
   assert.match(serviceWorker, /if \(url\.pathname\.startsWith\("\/api\/"\) \|\| url\.pathname === "\/__health"\) return;/);
   assert.match(serviceWorker, /response\.status === 429 \|\| response\.status >= 500/);
   assert.match(serviceWorker, /return recoveryResponse\(\)/);
