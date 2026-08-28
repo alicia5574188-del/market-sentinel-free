@@ -8,11 +8,17 @@ import { setRuntimeDb } from "../db";
 import { setRuntimeBindings } from "../lib/runtime-bindings";
 import { runMarketScan, refreshOpenPositions } from "../lib/scanner";
 import { snapshotBackgroundUniverse, type BackgroundMarketSnapshot } from "../lib/background-selection";
-import { getSettings, listOpenTrades, publicSettings } from "../lib/repository";
+import { getSettings, publicSettings } from "../lib/repository";
 import { SYMBOL_PATTERN, type GateAnalysisPacket } from "../lib/gate-client";
 import type { SchedulerWorkerStatus } from "../lib/background-scheduler";
 import { resolveVapidConfig } from "../lib/vapid-config";
 import { workerVersionChanged } from "../lib/live-deployment-safety";
+import {
+  createFreeMarketScanJob,
+  freeMarketScanPhaseLabel,
+  runFreeMarketScanStep,
+  type FreeMarketScanJob,
+} from "../lib/free-market-scan";
 import {
   getLiveTradingSnapshot,
   liveAlarmDelayMs,
@@ -88,6 +94,13 @@ abstract class SchedulerObject extends DurableObject<CloudflareEnv> {
     const now = Date.now();
     const status = await this.ctx.storage.get<SchedulerWorkerStatus>("status") ?? defaultSchedulerStatus();
     let nextRunAt = await this.ctx.storage.getAlarm();
+    if (status.circuitOpen && status.retryAfter != null && status.retryAfter > now) {
+      if (nextRunAt !== status.retryAfter) {
+        nextRunAt = status.retryAfter;
+        await this.ctx.storage.setAlarm(nextRunAt);
+      }
+      return { ...status, nextRunAt };
+    }
     const activityAt = status.lastRunAt ?? status.lastSuccessAt;
     const staleActivity = status.state !== "paused"
       && activityAt != null
@@ -107,7 +120,13 @@ abstract class SchedulerObject extends DurableObject<CloudflareEnv> {
   }
 
   async wake(): Promise<{ ok: true; nextRunAt: number }> {
-    const nextRunAt = Date.now() + Math.min(1_000, this.intervalMs);
+    const status = await this.ctx.storage.get<SchedulerWorkerStatus>("status") ?? defaultSchedulerStatus();
+    const now = Date.now();
+    if (status.circuitOpen && status.retryAfter != null && status.retryAfter > now) {
+      await this.ctx.storage.setAlarm(status.retryAfter);
+      return { ok: true, nextRunAt: status.retryAfter };
+    }
+    const nextRunAt = now + Math.min(1_000, this.intervalMs);
     await this.ctx.storage.setAlarm(nextRunAt);
     return { ok: true, nextRunAt };
   }
@@ -182,11 +201,11 @@ export class MarketScanner extends SchedulerObject {
   async status(): Promise<SchedulerWorkerStatus> {
     const status = await super.status();
     const now = Date.now();
-    if (status.state === "starting" && status.lastRunAt != null && now - status.lastRunAt > 40_000) {
+    if (!status.circuitOpen && status.state === "starting" && status.lastRunAt != null && now - status.lastRunAt > 40_000) {
       return {
         ...status,
         state: "error",
-        lastError: status.lastError ?? "上一次市场扫描 invocation 在完成状态写入前中断；后台已安排自动重试。",
+        lastError: status.lastError ?? `市场扫描阶段「${status.phase ?? "unknown"}」在完成状态写入前中断；后台只会重试当前阶段。`,
       };
     }
     return status;
@@ -195,75 +214,176 @@ export class MarketScanner extends SchedulerObject {
   private async runCycle(): Promise<SchedulerWorkerStatus> {
     const startedAt = Date.now();
     const previous = await this.ctx.storage.get<SchedulerWorkerStatus>("status") ?? defaultSchedulerStatus();
-    const minimumGapMs = previous.state === "error" ? 8_000 : 15_000;
-    if (previous.lastRunAt != null && startedAt - previous.lastRunAt < minimumGapMs) {
-      const nextRunAt = await this.ctx.storage.getAlarm() ?? startedAt + minimumGapMs;
+    if (previous.lastRunAt != null && startedAt - previous.lastRunAt < 750) {
+      const nextRunAt = await this.ctx.storage.getAlarm() ?? startedAt + 1_000;
       if (await this.ctx.storage.getAlarm() == null) await this.ctx.storage.setAlarm(nextRunAt);
       return { ...previous, nextRunAt };
     }
 
-    // Keep a fallback alarm alive before any upstream work begins. If Cloudflare
-    // terminates this cycle before our catch/finally path can run, the fallback
-    // still gives the scanner another chance instead of leaving a dead alarm.
-    let nextRunAt = startedAt + 45_000;
+    const rotationOffset = await this.ctx.storage.get<number>("rotationOffset") ?? 0;
+    const previousMarketSnapshot = await this.ctx.storage.get<BackgroundMarketSnapshot>("backgroundMarketSnapshot") ?? {};
+    let job = await this.ctx.storage.get<FreeMarketScanJob>("freeScanJob")
+      ?? createFreeMarketScanJob(rotationOffset, previousMarketSnapshot);
+
+    if (job.retryAfter != null && job.retryAfter > startedAt) {
+      await this.ctx.storage.setAlarm(job.retryAfter);
+      const status: SchedulerWorkerStatus = {
+        ...previous,
+        state: "degraded",
+        lastRunAt: previous.lastRunAt,
+        nextRunAt: job.retryAfter,
+        lastError: `市场扫描阶段「${freeMarketScanPhaseLabel(job.phase)}」已熔断，等待冷却后只重试该阶段。`,
+        phase: freeMarketScanPhaseLabel(job.phase),
+        phaseAttempt: job.phaseAttempts[job.phase] ?? 0,
+        circuitOpen: true,
+        retryAfter: job.retryAfter,
+        jobId: job.jobId,
+      };
+      await this.ctx.storage.put<SchedulerWorkerStatus>("status", status);
+      return status;
+    }
+
+    if (job.retryAfter != null && job.retryAfter <= startedAt) {
+      job = {
+        ...job,
+        retryAfter: null,
+        phaseAttempts: { ...job.phaseAttempts, [job.phase]: 0 },
+      };
+      await this.ctx.storage.put("freeScanJob", job);
+    }
+
+    const priorAttempts = job.phaseAttempts[job.phase] ?? 0;
+    if (priorAttempts >= 3) {
+      const retryAfter = startedAt + 5 * 60_000;
+      job = { ...job, retryAfter };
+      await this.ctx.storage.put("freeScanJob", job);
+      await this.ctx.storage.setAlarm(retryAfter);
+      const status: SchedulerWorkerStatus = {
+        ...previous,
+        state: "degraded",
+        lastRunAt: previous.lastRunAt,
+        nextRunAt: retryAfter,
+        lastError: `市场扫描阶段「${freeMarketScanPhaseLabel(job.phase)}」连续 3 次未完成，已停止快速重试 5 分钟；不会再从头启动整轮扫描。`,
+        phase: freeMarketScanPhaseLabel(job.phase),
+        phaseAttempt: priorAttempts,
+        circuitOpen: true,
+        retryAfter,
+        jobId: job.jobId,
+      };
+      await this.ctx.storage.put<SchedulerWorkerStatus>("status", status);
+      return status;
+    }
+
+    const phaseAttempt = priorAttempts + 1;
+    job = {
+      ...job,
+      retryAfter: null,
+      phaseAttempts: { ...job.phaseAttempts, [job.phase]: phaseAttempt },
+    };
+    await this.ctx.storage.put("freeScanJob", job);
+
+    // The fallback alarm survives a hard Cloudflare termination. Because the
+    // job and phase attempt are already durable, the next invocation resumes
+    // this exact phase instead of restarting Universe -> Global Risk -> deep scan.
+    let nextRunAt = startedAt + 35_000;
     await this.ctx.storage.setAlarm(nextRunAt);
     await this.ctx.storage.put<SchedulerWorkerStatus>("status", {
       ...previous,
       state: "starting",
       lastRunAt: startedAt,
       nextRunAt,
+      lastError: null,
+      phase: freeMarketScanPhaseLabel(job.phase),
+      phaseAttempt,
+      circuitOpen: false,
+      retryAfter: null,
+      jobId: job.jobId,
     });
 
-    const rotationOffset = await this.ctx.storage.get<number>("rotationOffset") ?? 0;
-    const previousMarketSnapshot = await this.ctx.storage.get<BackgroundMarketSnapshot>("backgroundMarketSnapshot") ?? {};
     setRuntimeDb(this.env.DB);
     setRuntimeBindings(this.env);
     try {
-      // One Cloudflare Free invocation owns exactly one deep symbol. Three
-      // consecutive ~20s invocations form the logical three-slot minute. This
-      // shards D1 queries, external subrequests and CPU instead of merely
-      // serializing three heavy symbols inside one invocation.
-      const result = await runMarketScan(resolveVapidConfig(this.env), {
-        profile: "free-background",
-        deepLimit: 1,
-        rotationOffset,
-        previousMarketSnapshot,
-      });
-      const paused = result.status === "paused";
-      await this.ctx.storage.put("rotationOffset", paused ? rotationOffset : rotationOffset + 1);
-      if (!paused && "universe" in result) {
-        const [settings, openTrades] = await Promise.all([getSettings(), listOpenTrades()]);
-        const readModel: BackgroundReadModel = {
-          observedAt: result.observedAt,
-          status: result.status,
-          universe: result.universe,
-          context: result.context,
-          v2: result.v2,
-          openTrades,
-          settings: publicSettings(settings),
-          failures: result.failures,
+      const step = await runFreeMarketScanStep(job, resolveVapidConfig(this.env));
+
+      if (step.kind === "progress") {
+        await this.ctx.storage.put("freeScanJob", step.job);
+        nextRunAt = Date.now() + 1_000;
+        await this.ctx.storage.setAlarm(nextRunAt);
+        const status: SchedulerWorkerStatus = {
+          ...previous,
+          state: "starting",
+          lastRunAt: startedAt,
+          nextRunAt,
+          lastError: null,
+          phase: freeMarketScanPhaseLabel(step.job.phase),
+          phaseAttempt: step.job.phaseAttempts[step.job.phase] ?? 0,
+          circuitOpen: false,
+          retryAfter: null,
+          jobId: step.job.jobId,
         };
-        await this.ctx.storage.put("backgroundMarketSnapshot", snapshotBackgroundUniverse(result.universe));
-        await this.ctx.storage.put("foregroundReadModel", readModel);
-        for (const packet of result.analyzed) {
-          await this.ctx.storage.put<BackgroundMarketRead>(`foregroundMarket:${packet.symbol}`, {
-            savedAt: packet.observedAt,
-            packet,
-          });
-        }
+        await this.ctx.storage.put<SchedulerWorkerStatus>("status", status);
+        return status;
       }
+
+      if (step.kind === "paused") {
+        await this.ctx.storage.delete("freeScanJob");
+        nextRunAt = Date.now() + 60_000;
+        await this.ctx.storage.setAlarm(nextRunAt);
+        const status: SchedulerWorkerStatus = {
+          ...previous,
+          state: "paused",
+          lastRunAt: startedAt,
+          nextRunAt,
+          lastError: null,
+          phase: null,
+          phaseAttempt: 0,
+          circuitOpen: false,
+          retryAfter: null,
+          jobId: null,
+        };
+        await this.ctx.storage.put<SchedulerWorkerStatus>("status", status);
+        return status;
+      }
+
+      const result = step.result;
+      await this.ctx.storage.delete("freeScanJob");
+      await this.ctx.storage.put("rotationOffset", rotationOffset + 1);
+      const readModel: BackgroundReadModel = {
+        observedAt: result.observedAt,
+        status: result.status,
+        universe: result.universe,
+        context: result.context,
+        v2: result.v2,
+        openTrades: result.openTrades,
+        settings: result.settings,
+        failures: result.failures,
+      };
+      await this.ctx.storage.put("backgroundMarketSnapshot", snapshotBackgroundUniverse(result.universe));
+      await this.ctx.storage.put("foregroundReadModel", readModel);
+      for (const packet of result.analyzed) {
+        await this.ctx.storage.put<BackgroundMarketRead>(`foregroundMarket:${packet.symbol}`, {
+          savedAt: packet.observedAt,
+          packet,
+        });
+      }
+
       nextRunAt = Math.max(Date.now() + 5_000, startedAt + 20_000);
       await this.ctx.storage.setAlarm(nextRunAt);
       const status: SchedulerWorkerStatus = {
-        state: paused ? "paused" : result.status === "degraded" ? "degraded" : "live",
+        state: result.status === "degraded" ? "degraded" : "live",
         lastRunAt: startedAt,
         nextRunAt,
-        lastSuccessAt: paused ? previous.lastSuccessAt : result.observedAt,
-        lastError: "failures" in result && result.failures?.length
+        lastSuccessAt: result.observedAt,
+        lastError: result.failures.length
           ? result.failures.map((failure) => `${failure.symbol}: ${failure.error}`).join("; ")
           : null,
         analyzed: result.analyzed.length,
         symbols: result.analyzed.map((packet) => packet.symbol),
+        phase: null,
+        phaseAttempt: 0,
+        circuitOpen: false,
+        retryAfter: null,
+        jobId: null,
       };
       await this.ctx.storage.put<SchedulerWorkerStatus>("status", status);
       return status;
@@ -275,10 +395,15 @@ export class MarketScanner extends SchedulerObject {
         state: "error",
         lastRunAt: startedAt,
         nextRunAt,
-        lastError: errorMessage(error),
+        lastError: `阶段「${freeMarketScanPhaseLabel(job.phase)}」失败：${errorMessage(error)}`,
+        phase: freeMarketScanPhaseLabel(job.phase),
+        phaseAttempt,
+        circuitOpen: false,
+        retryAfter: null,
+        jobId: job.jobId,
       };
       await this.ctx.storage.put<SchedulerWorkerStatus>("status", status);
-      console.error("market scanner cycle failed", status.lastError);
+      console.error("market scanner phase failed", status.lastError);
       return status;
     }
   }
@@ -492,7 +617,18 @@ async function ownerProtectedRequest(request: Request, env: CloudflareEnv): Prom
         ]);
         schedulers = {
           position: { state: position.state, lastRunAt: position.lastRunAt, lastSuccessAt: position.lastSuccessAt, nextRunAt: position.nextRunAt, lastError: position.lastError },
-          scanner: { state: scanner.state, lastRunAt: scanner.lastRunAt, lastSuccessAt: scanner.lastSuccessAt, nextRunAt: scanner.nextRunAt, lastError: scanner.lastError },
+          scanner: {
+            state: scanner.state,
+            lastRunAt: scanner.lastRunAt,
+            lastSuccessAt: scanner.lastSuccessAt,
+            nextRunAt: scanner.nextRunAt,
+            lastError: scanner.lastError,
+            phase: scanner.phase ?? null,
+            phaseAttempt: scanner.phaseAttempt ?? 0,
+            circuitOpen: scanner.circuitOpen ?? false,
+            retryAfter: scanner.retryAfter ?? null,
+            jobId: scanner.jobId ?? null,
+          },
         };
       }
     } catch (error) {
