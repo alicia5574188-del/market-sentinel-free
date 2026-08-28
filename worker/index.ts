@@ -85,12 +85,19 @@ abstract class SchedulerObject extends DurableObject<CloudflareEnv> {
   protected abstract readonly intervalMs: number;
 
   async ensure(): Promise<SchedulerWorkerStatus> {
+    const now = Date.now();
+    const status = await this.ctx.storage.get<SchedulerWorkerStatus>("status") ?? defaultSchedulerStatus();
     let nextRunAt = await this.ctx.storage.getAlarm();
-    if (nextRunAt == null) {
-      nextRunAt = Date.now() + 1_000;
+    const activityAt = status.lastRunAt ?? status.lastSuccessAt;
+    const staleActivity = status.state !== "paused"
+      && activityAt != null
+      && now - activityAt > Math.max(this.intervalMs * 3, 90_000);
+    const invalidAlarm = nextRunAt != null
+      && (nextRunAt < now - 5_000 || nextRunAt > now + Math.max(this.intervalMs * 4, 120_000));
+    if (nextRunAt == null || invalidAlarm || staleActivity) {
+      nextRunAt = now + 1_000;
       await this.ctx.storage.setAlarm(nextRunAt);
     }
-    const status = await this.ctx.storage.get<SchedulerWorkerStatus>("status") ?? defaultSchedulerStatus();
     return { ...status, nextRunAt };
   }
 
@@ -172,11 +179,28 @@ export class MarketScanner extends SchedulerObject {
     return { readModel: readModel ?? null, deep: deep ?? null };
   }
 
-  async alarm(): Promise<void> {
+  private async runCycle(): Promise<SchedulerWorkerStatus> {
     const startedAt = Date.now();
-    const nextRunAt = startedAt + 60_000;
-    await this.ctx.storage.setAlarm(nextRunAt);
     const previous = await this.ctx.storage.get<SchedulerWorkerStatus>("status") ?? defaultSchedulerStatus();
+    const minimumGapMs = previous.state === "error" ? 15_000 : 45_000;
+    if (previous.lastRunAt != null && startedAt - previous.lastRunAt < minimumGapMs) {
+      const nextRunAt = await this.ctx.storage.getAlarm() ?? startedAt + minimumGapMs;
+      if (await this.ctx.storage.getAlarm() == null) await this.ctx.storage.setAlarm(nextRunAt);
+      return { ...previous, nextRunAt };
+    }
+
+    // Keep a fallback alarm alive before any upstream work begins. If Cloudflare
+    // terminates this cycle before our catch/finally path can run, the fallback
+    // still gives the scanner another chance instead of leaving a dead alarm.
+    let nextRunAt = startedAt + 90_000;
+    await this.ctx.storage.setAlarm(nextRunAt);
+    await this.ctx.storage.put<SchedulerWorkerStatus>("status", {
+      ...previous,
+      state: "starting",
+      lastRunAt: startedAt,
+      nextRunAt,
+    });
+
     const rotationOffset = await this.ctx.storage.get<number>("rotationOffset") ?? 0;
     const previousMarketSnapshot = await this.ctx.storage.get<BackgroundMarketSnapshot>("backgroundMarketSnapshot") ?? {};
     setRuntimeDb(this.env.DB);
@@ -211,7 +235,9 @@ export class MarketScanner extends SchedulerObject {
           });
         }
       }
-      await this.ctx.storage.put<SchedulerWorkerStatus>("status", {
+      nextRunAt = Date.now() + 60_000;
+      await this.ctx.storage.setAlarm(nextRunAt);
+      const status: SchedulerWorkerStatus = {
         state: paused ? "paused" : result.status === "degraded" ? "degraded" : "live",
         lastRunAt: startedAt,
         nextRunAt,
@@ -221,16 +247,31 @@ export class MarketScanner extends SchedulerObject {
           : null,
         analyzed: result.analyzed.length,
         symbols: result.analyzed.map((packet) => packet.symbol),
-      });
+      };
+      await this.ctx.storage.put<SchedulerWorkerStatus>("status", status);
+      return status;
     } catch (error) {
-      await this.ctx.storage.put<SchedulerWorkerStatus>("status", {
+      nextRunAt = Date.now() + 15_000;
+      await this.ctx.storage.setAlarm(nextRunAt);
+      const status: SchedulerWorkerStatus = {
         ...previous,
         state: "error",
         lastRunAt: startedAt,
         nextRunAt,
         lastError: errorMessage(error),
-      });
+      };
+      await this.ctx.storage.put<SchedulerWorkerStatus>("status", status);
+      console.error("market scanner cycle failed", status.lastError);
+      return status;
     }
+  }
+
+  async runIfDue(): Promise<SchedulerWorkerStatus> {
+    return this.runCycle();
+  }
+
+  async alarm(): Promise<void> {
+    await this.runCycle();
   }
 }
 
@@ -379,6 +420,18 @@ async function ensureSchedulers(env: CloudflareEnv) {
   ]);
 }
 
+async function runScheduledSchedulers(env: CloudflareEnv) {
+  if (!env.POSITION_MONITOR || !env.MARKET_SCANNER) {
+    await runMarketScan(resolveVapidConfig(env));
+    return;
+  }
+  await Promise.all([
+    env.POSITION_MONITOR.getByName("position-monitor").ensure(),
+    env.MARKET_SCANNER.getByName("market-scanner").runIfDue(),
+    env.LIVE_TRADING_COORDINATOR?.getByName("live-trading").ensure(),
+  ]);
+}
+
 function loginPage(error = false, unavailable = false) {
   const message = unavailable
     ? "后台访问密钥尚未配置，请重新运行一键部署程序。"
@@ -421,8 +474,8 @@ async function ownerProtectedRequest(request: Request, env: CloudflareEnv): Prom
           env.MARKET_SCANNER.getByName("market-scanner").status(),
         ]);
         schedulers = {
-          position: { state: position.state, lastSuccessAt: position.lastSuccessAt, nextRunAt: position.nextRunAt },
-          scanner: { state: scanner.state, lastSuccessAt: scanner.lastSuccessAt, nextRunAt: scanner.nextRunAt },
+          position: { state: position.state, lastRunAt: position.lastRunAt, lastSuccessAt: position.lastSuccessAt, nextRunAt: position.nextRunAt, lastError: position.lastError },
+          scanner: { state: scanner.state, lastRunAt: scanner.lastRunAt, lastSuccessAt: scanner.lastSuccessAt, nextRunAt: scanner.nextRunAt, lastError: scanner.lastError },
         };
       }
     } catch (error) {
@@ -525,7 +578,7 @@ const worker = {
   async scheduled(_controller: ScheduledController, env: CloudflareEnv, ctx: ExecutionContext): Promise<void> {
     setRuntimeDb(env.DB);
     setRuntimeBindings(env);
-    ctx.waitUntil(ensureSchedulers(env));
+    ctx.waitUntil(runScheduledSchedulers(env));
   },
 } satisfies ExportedHandler<CloudflareEnv>;
 

@@ -153,17 +153,22 @@ export async function GET() {
   if (positionSafetyError) errors.positionSafety = positionSafetyError;
   if (positionSafety?.failures.length) errors.positionSafety = positionSafety.failures.map((item) => `${item.symbol}: ${item.error}`).join("; ");
 
+  const background = results[7].status === "fulfilled" ? results[7].value : null;
   const rawScanner = results[0].status === "fulfilled" ? results[0].value : null;
   const scannerAgeMs = rawScanner?.observedAt ? Math.max(0, requestedAt - rawScanner.observedAt) : null;
+  const schedulerLastError = background?.scanner?.lastError?.trim() || null;
+  const schedulerAttemptAgeMs = background?.scanner?.lastRunAt ? Math.max(0, requestedAt - background.scanner.lastRunAt) : null;
   if (scannerAgeMs != null && scannerAgeMs > SCANNER_STALE_MS) {
     errors.scannerFreshness = `后台市场扫描已经 ${Math.round(scannerAgeMs / 1000)} 秒没有成功生成新快照`;
+    if (schedulerLastError) errors.scannerRuntime = schedulerLastError;
   }
+  const staleScannerDetail = scannerAgeMs != null && scannerAgeMs > SCANNER_STALE_MS
+    ? `后台市场扫描已滞后 ${Math.round(scannerAgeMs / 1000)} 秒；页面刷新本身正常，但行情深扫不是最新。${schedulerAttemptAgeMs != null ? ` 调度器最后尝试在 ${Math.round(schedulerAttemptAgeMs / 1000)} 秒前。` : ""}${schedulerLastError ? ` 最近扫描错误：${schedulerLastError.slice(0, 240)}` : ""}`
+    : null;
   const scanner = rawScanner ? {
     ...rawScanner,
     snapshotAgeMs: scannerAgeMs,
-    ...(scannerAgeMs != null && scannerAgeMs > SCANNER_STALE_MS && !rawScanner.error
-      ? { error: `后台市场扫描已滞后 ${Math.round(scannerAgeMs / 1000)} 秒；页面刷新本身正常，但行情深扫不是最新。` }
-      : {}),
+    ...(staleScannerDetail && !rawScanner.error ? { error: staleScannerDetail } : {}),
   } : null;
 
   const rawMarket = results[1].status === "fulfilled" ? results[1].value : scanner?.v2 ?? null;
@@ -175,7 +180,6 @@ export async function GET() {
   const startingCapitalUsdt = scanner?.settings?.trialCapitalUsdt ?? 1000;
   const orders = humanOnlyDashboard(rawOrders, startingCapitalUsdt);
   const stats = results[6].status === "fulfilled" ? results[6].value : null;
-  const background = results[7].status === "fulfilled" ? results[7].value : null;
   const activity = results[8].status === "fulfilled" ? results[8].value : null;
 
   if (activity && activity.evaluations === 0 && scannerAgeMs != null && scannerAgeMs <= SCANNER_STALE_MS) {
