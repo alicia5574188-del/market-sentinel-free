@@ -2,6 +2,7 @@ import { analyzeGateSymbol, SYMBOL_PATTERN } from "../../../lib/gate-client";
 import { getGlobalRiskContext } from "../../../lib/global-risk";
 import { getExperience, getOpenTrade, getPriorLong, getSettings, previewDecisionContract } from "../../../lib/repository";
 import { getLatestV2MarketContext, getV2Opportunity } from "../../../lib/sentinel-v2-repository";
+import { acquireHeavyUiRead, heavyUiReadBusyResponse } from "../../../lib/ui-heavy-read-admission";
 import { requireApiAccount } from "../../api-auth";
 
 const LAST_GOOD_TTL_MS = 90_000;
@@ -47,6 +48,13 @@ export async function GET(request: Request) {
   const query = queryIndex >= 0 ? request.url.slice(queryIndex + 1) : "";
   const symbol = (new URLSearchParams(query).get("symbol") ?? "SOL_USDT").toUpperCase();
   if (!SYMBOL_PATTERN.test(symbol)) return Response.json({ error: "symbol must look like SOL_USDT" }, { status: 400 });
+
+  const lease = acquireHeavyUiRead(`/api/market:${symbol}`);
+  if (!lease) {
+    const fallback = staleFallback(symbol, "Worker 正在执行另一项重型只读刷新，已主动削峰");
+    if (fallback) return fallback;
+    return heavyUiReadBusyResponse("/api/market");
+  }
 
   try {
     // Gate market data is essential. Historical/V2/D1 enrichments are optional:
@@ -120,5 +128,7 @@ export async function GET(request: Request) {
       symbol,
       error: error instanceof Error ? error.message : "Gate 核心行情暂不可用",
     }, { status: 503, headers: { "Cache-Control": "no-store" } });
+  } finally {
+    lease.release();
   }
 }
