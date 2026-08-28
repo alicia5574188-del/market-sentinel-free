@@ -29,7 +29,7 @@ const universe = [
   ticker("TAO_USDT", 0.42),
 ];
 
-test("free background batch caps deep fan-out at three while preserving anchor and strongest anomaly", () => {
+test("free background batch stays capped at three while keeping priority and rotation", () => {
   const selected = chooseBackgroundDeepUniverse(
     universe,
     ["BTC_USDT", "ETH_USDT", "SOL_USDT", "HYPE_USDT"],
@@ -37,35 +37,47 @@ test("free background batch caps deep fan-out at three while preserving anchor a
     8,
     0,
   );
-  assert.deepEqual(selected.map((item) => item.symbol), ["ETH_USDT", "PUMP_USDT", "BTC_USDT"]);
+  assert.equal(selected.length, 3);
+  assert.equal(new Set(selected.map((item) => item.symbol)).size, 3);
+  assert.ok(selected.some((item) => item.symbol === "PUMP_USDT"));
+  assert.ok(selected.some((item) => /^(BTC|ETH)_USDT$/.test(item.symbol)));
 });
 
-test("cold-start third sensor slot still rotates through coverage candidates", () => {
-  const selected = chooseBackgroundDeepUniverse(
-    universe,
-    ["BTC_USDT", "ETH_USDT", "SOL_USDT", "HYPE_USDT"],
-    ["BTC_USDT", "ETH_USDT", "SOL_USDT", "HYPE_USDT"],
-    3,
-    2,
-  );
-  assert.deepEqual(selected.map((item) => item.symbol), ["ETH_USDT", "PUMP_USDT", "SOL_USDT"]);
-});
-
-test("without a prior velocity snapshot the anchor and anomaly stay fixed while coverage rotates", () => {
-  const first = chooseBackgroundDeepUniverse(
-    universe,
-    ["BTC_USDT", "ETH_USDT", "SOL_USDT", "HYPE_USDT"],
-    [],
-    3,
-    0,
-  );
-  const second = chooseBackgroundDeepUniverse(
+test("non-anchor phases reserve at least two rotating discovery slots", () => {
+  const phaseOne = chooseBackgroundDeepUniverse(
     universe,
     ["BTC_USDT", "ETH_USDT", "SOL_USDT", "HYPE_USDT"],
     [],
     3,
     1,
   );
-  assert.deepEqual(first.map((item) => item.symbol), ["ETH_USDT", "PUMP_USDT", "BTC_USDT"]);
-  assert.deepEqual(second.map((item) => item.symbol), ["ETH_USDT", "PUMP_USDT", "SOL_USDT"]);
+  const phaseTwo = chooseBackgroundDeepUniverse(
+    universe,
+    ["BTC_USDT", "ETH_USDT", "SOL_USDT", "HYPE_USDT"],
+    [],
+    3,
+    2,
+  );
+  assert.equal(phaseOne.length, 3);
+  assert.equal(phaseTwo.length, 3);
+  assert.ok(phaseOne.some((item) => item.symbol === "PUMP_USDT"));
+  assert.ok(phaseTwo.some((item) => item.symbol === "PUMP_USDT"));
+  assert.notDeepEqual(phaseOne.map((item) => item.symbol), phaseTwo.map((item) => item.symbol));
+});
+
+test("six scheduler rotations expand deep coverage beyond the same three leaders", () => {
+  const seen = new Set<string>();
+  for (let offset = 0; offset < 6; offset += 1) {
+    const selected = chooseBackgroundDeepUniverse(
+      universe,
+      ["BTC_USDT", "ETH_USDT", "SOL_USDT", "HYPE_USDT"],
+      [],
+      3,
+      offset,
+    );
+    assert.equal(selected.length, 3);
+    selected.forEach((item) => seen.add(item.symbol));
+  }
+  assert.ok(seen.size >= 6, `expected broad coverage, got ${[...seen].join(",")}`);
+  assert.ok(seen.has("PUMP_USDT"));
 });
