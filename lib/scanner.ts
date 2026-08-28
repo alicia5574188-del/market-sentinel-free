@@ -10,7 +10,12 @@ import { getStrategy2ExperienceBook } from "./strategy-2-learning.ts";
 import { getLatestV2MarketContext, saveV2MarketContext, saveV2Opportunities } from "./sentinel-v2-repository.ts";
 import { syncV2OpenTradeTheses } from "./sentinel-v2-thesis.ts";
 
-const DEEP_TARGET_CONCURRENCY = 2;
+// A single deep target already fans out to four bounded upstream requests plus
+// the parallel Strategy 2.0 5m candle request. Cloudflare allows only six
+// simultaneous outgoing connections per invocation, so two deep targets in
+// parallel can exceed the platform ceiling. Keep target-level concurrency at 1;
+// the three discovery slots are still evaluated in the same scan, serially.
+const DEEP_TARGET_CONCURRENCY = 1;
 
 export function chooseDeepUniverse(universe: UniverseTicker[], coreSymbols: string[], openSymbols: string[], limit: number) {
   const selected: UniverseTicker[] = [];
@@ -206,9 +211,11 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
   };
 
   try {
-    // Each deep symbol internally fans out to several Gate endpoints. Running all
-    // targets at once caused Worker subrequest/CPU bursts and correlated 503s in
-    // the foreground UI. Keep two symbols in flight at most; coverage is unchanged.
+    // A deep symbol already uses up to five simultaneous outgoing connections:
+    // analyzeGateSymbol owns four bounded upstream slots and the Strategy 2.0
+    // candle request runs beside it. Target-level serialization therefore keeps
+    // the invocation below Cloudflare's six-connection ceiling while preserving
+    // all three discovery targets in this scan.
     const results = await analyzeTargetsBounded(targets, context, settings);
 
     for (let index = 0; index < results.length; index += 1) {
