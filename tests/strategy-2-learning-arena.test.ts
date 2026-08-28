@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ADAPTIVE_LEARNING_FORWARD_EPOCH_MS } from "../lib/strategy-2-adaptive-learning.ts";
-import { buildStrategy2LearningArena, type Strategy2ArenaTradeRow } from "../lib/strategy-2-learning-arena.ts";
+import { buildStrategy2LearningArena, type Strategy2ArenaTradeRow } from "../lib/strategy-2-learning-arena-core.ts";
 
 function row(index: number, resultR: number, overrides: Partial<Strategy2ArenaTradeRow> = {}): Strategy2ArenaTradeRow {
   const plannedRiskPct = 1;
