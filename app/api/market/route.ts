@@ -4,8 +4,36 @@ import { getExperience, getOpenTrade, getPriorLong, getSettings, previewDecision
 import { getLatestV2MarketContext, getV2Opportunity } from "../../../lib/sentinel-v2-repository";
 import { requireApiAccount } from "../../api-auth";
 
+const LAST_GOOD_TTL_MS = 90_000;
+type CachedMarketPayload = Record<string, unknown> & { observedAt: number; symbol: string };
+const lastGoodBySymbol = new Map<string, { savedAt: number; payload: CachedMarketPayload }>();
+
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "optional source failed";
+}
+
+function rememberLastGood(symbol: string, payload: CachedMarketPayload) {
+  lastGoodBySymbol.set(symbol, { savedAt: Date.now(), payload });
+  if (lastGoodBySymbol.size <= 16) return;
+  const oldest = [...lastGoodBySymbol.entries()].sort((a, b) => a[1].savedAt - b[1].savedAt)[0]?.[0];
+  if (oldest) lastGoodBySymbol.delete(oldest);
+}
+
+function staleFallback(symbol: string, error: unknown) {
+  const cached = lastGoodBySymbol.get(symbol);
+  if (!cached || Date.now() - cached.savedAt > LAST_GOOD_TTL_MS) return null;
+  return Response.json({
+    ...cached.payload,
+    mode: "degraded",
+    staleFallback: true,
+    staleAgeMs: Date.now() - cached.savedAt,
+    error: `实时 Gate 核心行情短暂不可用，暂保留最近有效快照：${errorMessage(error)}`,
+  }, {
+    headers: {
+      "Cache-Control": "private, no-store",
+      "X-Sentinel-Stale-Fallback": "1",
+    },
+  });
 }
 
 export async function GET(request: Request) {
@@ -69,16 +97,21 @@ export async function GET(request: Request) {
       }
     }
 
-    return Response.json({
+    const payload = {
       ...(contractPreview?.packet ?? packet),
       openTrade,
       experience: experience ?? { LONG: null, SHORT: null },
       v2: { market: v2Market, opportunity: v2Opportunity },
       optionalSourceErrors,
-    }, {
+    } as CachedMarketPayload;
+    rememberLastGood(symbol, payload);
+
+    return Response.json(payload, {
       headers: { "Cache-Control": "private, max-age=2, stale-while-revalidate=5" },
     });
   } catch (error) {
+    const fallback = staleFallback(symbol, error);
+    if (fallback) return fallback;
     return Response.json({
       mode: "degraded",
       source: "Gate API v4",
