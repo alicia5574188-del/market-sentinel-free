@@ -56,25 +56,30 @@ test("Worker serves public bundles from ASSETS before the Vinext router", async 
   assert.ok(appRouter > assetReturn);
 });
 
-test("MarketScanner has a cron-driven watchdog in addition to its Durable Object alarm", async () => {
+test("MarketScanner shards Cloudflare Free deep scans across invocations and keeps cron watchdog", async () => {
   const source = await readFile(new URL("../worker/index.ts", import.meta.url), "utf8");
+  assert.match(source, /export class MarketScanner[\s\S]*?protected readonly intervalMs = 20_000/);
+  assert.match(source, /profile: "free-background"[\s\S]*?deepLimit: 1/);
   assert.match(source, /async runIfDue\(\): Promise<SchedulerWorkerStatus>/);
   assert.match(source, /runScheduledSchedulers/);
   assert.match(source, /MARKET_SCANNER\.getByName\("market-scanner"\)\.runIfDue\(\)/);
   assert.match(source, /ctx\.waitUntil\(runScheduledSchedulers\(env\)\)/);
   assert.match(source, /staleActivity/);
   assert.match(source, /invalidAlarm/);
-  assert.match(source, /startedAt \+ 90_000/);
-  assert.match(source, /Date\.now\(\) \+ 15_000/);
+  assert.match(source, /startedAt \+ 45_000/);
+  assert.match(source, /Math\.max\(Date\.now\(\) \+ 5_000, startedAt \+ 20_000\)/);
+  assert.match(source, /Date\.now\(\) \+ 10_000/);
   assert.match(source, /state: "starting"/);
   assert.match(source, /market scanner cycle failed/);
 });
 
-test("scanner health exposes the real scheduler error instead of only a stale timestamp", async () => {
+test("scanner health exposes explicit hard-interruption diagnosis instead of blank error", async () => {
   const [worker, hte] = await Promise.all([
     readFile(new URL("../worker/index.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/hte/route.ts", import.meta.url), "utf8"),
   ]);
+  assert.match(worker, /status\.state === "starting"[\s\S]*?now - status\.lastRunAt > 40_000/);
+  assert.match(worker, /上一次市场扫描 invocation 在完成状态写入前中断/);
   assert.match(worker, /scanner: \{ state: scanner\.state, lastRunAt: scanner\.lastRunAt, lastSuccessAt: scanner\.lastSuccessAt, nextRunAt: scanner\.nextRunAt, lastError: scanner\.lastError \}/);
   assert.match(hte, /schedulerLastError/);
   assert.match(hte, /schedulerAttemptAgeMs/);
