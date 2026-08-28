@@ -9,13 +9,10 @@ const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 
 export default defineConfig(async () => {
-  // Keep Wrangler and Miniflare state project-local. These are non-secret tool
-  // settings; application environment belongs in ignored `.env*` files.
   process.env.WRANGLER_WRITE_LOGS ??= "false";
   process.env.WRANGLER_LOG_PATH ??= ".wrangler/logs";
   process.env.MINIFLARE_REGISTRY_PATH ??= ".wrangler/registry";
 
-  // Wrangler snapshots its log path while the Cloudflare plugin is imported.
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
@@ -33,11 +30,10 @@ export default defineConfig(async () => {
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
         inspectorPort: false,
         config(config) {
-          // Production is intentionally rooted at the V2 wrapper. The wrapper
-          // re-exports the full Worker but also gives MarketScanner a fresh DO
-          // class export/namespace so legacy scanner runtime state cannot pin
-          // the resumable phase machine behind a poisoned old instance.
-          config.main = "./worker/index-v2.ts";
+          // HTE 3.1 Clean uses fresh simulation scanner/position Durable Object
+          // namespaces. The live Gate coordinator remains the existing audited
+          // implementation and is deliberately not recreated here.
+          config.main = "./worker/index-clean.ts";
           config.compatibility_flags = [
             ...new Set([...(config.compatibility_flags ?? []), "nodejs_compat"]),
           ];
