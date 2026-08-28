@@ -28,28 +28,29 @@
   <main>
     <div class="brand"><div class="mark">◎</div><div><h1>Market Sentinel</h1><span class="sub">运行保护模式</span></div></div>
     <div class="status"><span class="pulse"></span>正在恢复连接</div>
-    <p>刚才的页面请求遇到临时网络或 Worker 资源异常。程序没有加载旧版本页面，也不会用旧数据冒充实时数据；连接恢复后会自动重新进入。</p>
+    <p>刚才的页面请求遇到临时网络或 Worker 资源异常。程序不会加载旧版本页面，也不会用旧数据冒充实时数据；保护层会逐步延长重试间隔，避免恢复过程继续加重 Worker 负载。</p>
     <button type="button" id="retry">立即重试</button>
-    <small id="note">正在安排自动重试…</small>
+    <small id="note">正在安排低频自动重试…</small>
   </main>
   <script>
     (() => {
-      const KEY = "sentinel-recovery-state-v1";
+      const KEY = "sentinel-recovery-state-v2";
+      const DELAYS = [4_000, 8_000, 16_000, 30_000, 30_000];
       const now = Date.now();
       let state = { count: 0, lastAt: 0 };
       try { state = JSON.parse(sessionStorage.getItem(KEY) || "{}") || state; } catch {}
-      if (!Number.isFinite(state.lastAt) || now - state.lastAt > 60_000) state = { count: 0, lastAt: 0 };
-      state.count = Math.min(4, (Number(state.count) || 0) + 1);
+      if (!Number.isFinite(state.lastAt) || now - state.lastAt > 120_000) state = { count: 0, lastAt: 0 };
+      state.count = Math.min(DELAYS.length, (Number(state.count) || 0) + 1);
       state.lastAt = now;
       try { sessionStorage.setItem(KEY, JSON.stringify(state)); } catch {}
 
       const note = document.getElementById("note");
-      const retry = () => { if (navigator.onLine !== false) location.reload(); };
+      const retry = () => { if (navigator.onLine !== false) location.replace("/"); };
       document.getElementById("retry")?.addEventListener("click", retry);
       window.addEventListener("online", retry, { once: true });
 
-      const delay = Math.min(12_000, 1_800 * state.count);
-      if (note) note.textContent = `约 ${Math.ceil(delay / 1000)} 秒后自动重试；你也可以立即重试。`;
+      const delay = DELAYS[Math.max(0, state.count - 1)] ?? 30_000;
+      if (note) note.textContent = `约 ${Math.ceil(delay / 1000)} 秒后自动重试；连续异常时最长等待 30 秒。`;
       window.setTimeout(() => {
         if (!document.hidden) retry();
       }, delay);
