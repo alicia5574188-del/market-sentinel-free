@@ -35,10 +35,13 @@ test("iPhone pull-to-refresh performs one genuine full refresh without starting 
   assert.match(css, /\.pull-refresh\.refreshing svg\s*\{[^}]*animation:\s*pull-refresh-spin/s);
 });
 
-test("iPhone PWA keeps APIs network-only and never replays stale dynamic app HTML", async () => {
+test("iPhone PWA keeps APIs network-only, bounds navigation stalls and never replays stale dynamic app HTML", async () => {
   const sw = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
-  assert.match(sw, /market-sentinel-shell-v6/);
+  assert.match(sw, /market-sentinel-shell-v7/);
   assert.match(sw, /RECOVERY_URL = "\/recovery\.html"/);
+  assert.match(sw, /NAVIGATION_TIMEOUT_MS = 5_000/);
+  assert.match(sw, /navigationFetch/);
+  assert.match(sw, /new AbortController\(\)/);
   assert.match(sw, /"\/sentinel-runtime-guard\.js"/);
   assert.match(sw, /url\.pathname\.startsWith\("\/api\/"\)/);
   assert.match(sw, /url\.pathname === "\/__health"/);
