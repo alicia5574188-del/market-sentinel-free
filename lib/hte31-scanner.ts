@@ -1,4 +1,5 @@
 import { analyzeGateSymbol, fetchGateChartCandles, fetchGateUniverse, type GateAnalysisPacket, type UniverseTicker } from "./gate-client.ts";
+import { recordHte31DiagnosticCycle } from "./hte31-diagnostics.ts";
 import { evaluateHumanTraderPool } from "./human-trader-engine.ts";
 import { getHte31Dashboard, listHte31OpenTrades, recordHte31Evaluations, tryOpenHte31Trade } from "./hte31-repository.ts";
 import { getSettings, type AppSettings } from "./repository.ts";
@@ -244,6 +245,13 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
       marketDecliningRatio: job.market.decliningRatio,
     });
     await recordHte31Evaluations(packet, signals);
+    try {
+      await recordHte31DiagnosticCycle(packet, signals, job.settings);
+    } catch (error) {
+      // Diagnostics and shadow learning are strictly auxiliary. They must never
+      // prevent a valid Human Trader Setup from reaching the simulation ledger.
+      console.error("HTE 3.1 diagnostic cycle failed", error instanceof Error ? error.message : "unknown diagnostic error");
+    }
     const opened = await tryOpenHte31Trade(packet, signals, job.candles, job.settings);
     const result: Hte31ScanCompleted = {
       observedAt: Date.now(),
