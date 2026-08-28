@@ -114,11 +114,11 @@ export async function GET() {
   const auth = await requireApiAccount();
   if ("response" in auth) return auth.response;
 
-  const observedAt = Date.now();
+  const requestedAt = Date.now();
   let timeoutRecovery: Awaited<ReturnType<typeof recoverOverdueSimulationTimeouts>> | null = null;
   let timeoutRecoveryError = "";
   try {
-    timeoutRecovery = await recoverOverdueSimulationTimeouts(observedAt);
+    timeoutRecovery = await recoverOverdueSimulationTimeouts(requestedAt);
   } catch (error) {
     timeoutRecoveryError = errorMessage(error);
   }
@@ -154,7 +154,7 @@ export async function GET() {
   if (positionSafety?.failures.length) errors.positionSafety = positionSafety.failures.map((item) => `${item.symbol}: ${item.error}`).join("; ");
 
   const rawScanner = results[0].status === "fulfilled" ? results[0].value : null;
-  const scannerAgeMs = rawScanner?.observedAt ? Math.max(0, observedAt - rawScanner.observedAt) : null;
+  const scannerAgeMs = rawScanner?.observedAt ? Math.max(0, requestedAt - rawScanner.observedAt) : null;
   if (scannerAgeMs != null && scannerAgeMs > SCANNER_STALE_MS) {
     errors.scannerFreshness = `后台市场扫描已经 ${Math.round(scannerAgeMs / 1000)} 秒没有成功生成新快照`;
   }
@@ -166,9 +166,9 @@ export async function GET() {
       : {}),
   } : null;
 
-  const market = results[1].status === "fulfilled" ? results[1].value : scanner?.v2 ?? null;
+  const rawMarket = results[1].status === "fulfilled" ? results[1].value : scanner?.v2 ?? null;
   const rawOpportunities = results[2].status === "fulfilled" ? results[2].value : [];
-  const opportunities = rawOpportunities.filter((item) => observedAt - item.observedAt <= OPPORTUNITY_FRESH_MS);
+  const opportunities = rawOpportunities.filter((item) => requestedAt - item.observedAt <= OPPORTUNITY_FRESH_MS);
   const warnings = results[3].status === "fulfilled" ? results[3].value : [];
   const traders = results[4].status === "fulfilled" ? results[4].value : null;
   const rawOrders = results[5].status === "fulfilled" ? results[5].value : null;
@@ -177,11 +177,31 @@ export async function GET() {
   const stats = results[6].status === "fulfilled" ? results[6].value : null;
   const background = results[7].status === "fulfilled" ? results[7].value : null;
   const activity = results[8].status === "fulfilled" ? results[8].value : null;
+
+  if (activity && activity.evaluations === 0 && scannerAgeMs != null && scannerAgeMs <= SCANNER_STALE_MS) {
+    errors.strategyActivity = "后台市场快照仍新鲜，但过去 10 分钟没有任何 Human Trader 深度评估；需要检查深扫链路。";
+  }
+
+  const activityLine = activity
+    ? `10分钟 HTE：${activity.symbols} 个币进入深扫 · 三交易员评估 ${activity.evaluations} 次 · TRADE ${activity.states.trade} / WATCH ${activity.states.watch} / REJECT ${activity.states.reject}`
+    : "10分钟 HTE 活动统计暂不可用";
+  const traderLine = traders?.strategies?.length
+    ? `交易员：${traders.strategies.map((strategy) => `${strategy.label.split(" ")[0]} ${strategy.guard?.state ?? (strategy.mode === "active" ? "ACTIVE" : "GUARDED")}`).join(" · ")}`
+    : "交易员状态暂不可用";
+  const market = rawMarket ? {
+    ...rawMarket,
+    topDrivers: [activityLine, traderLine, ...(rawMarket.topDrivers ?? [])].slice(0, 5),
+  } : null;
+
   const degraded = Object.keys(errors).length > 0 || Boolean(scanner?.error);
+  const responseObservedAt = scanner?.snapshotSource === "background_scanner" && scanner.observedAt
+    ? scanner.observedAt
+    : requestedAt;
 
   return Response.json({
     version: "human-trader-3.0",
-    observedAt,
+    observedAt: responseObservedAt,
+    requestObservedAt: requestedAt,
     account: auth.account,
     scanner,
     market,
