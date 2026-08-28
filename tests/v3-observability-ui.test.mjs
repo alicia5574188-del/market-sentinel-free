@@ -54,7 +54,7 @@ test("unified dashboard API exposes the adaptive Strategy 2.0 learning matrix", 
     readFile(new URL("../lib/strategy-2-adaptive-learning.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/sentinel-v2-strategy.ts", import.meta.url), "utf8"),
   ]);
-  assert.match(api, /getStrategy2LearningDashboard\(\)/);
+  assert.match(api, /getStrategy2LearningDashboard\([^)]*\)/);
   assert.match(api, /strategyPool/);
   assert.match(api, /learning/);
   assert.match(learning, /Exact Regime × Playbook × Asset-Regime × Direction/);
@@ -96,7 +96,7 @@ test("Strategy 2.0 opportunities still enter the normal order lifecycle with det
     readFile(new URL("../lib/shadow-strategy-repository.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/sentinel-v2-strategy.ts", import.meta.url), "utf8"),
   ]);
-  assert.match(growthRepository, /trigger:`Strategy 2\.0 · \$\{signal\.label\}/);
+  assert.match(growthRepository, /trigger:\s*`Strategy 2\.0 · \$\{signal\.label\}/);
   assert.match(growthRepository, /多策略同向汇合/);
   assert.match(growthRepository, /processDecision\(growthPacket\(packet,\s*selected\),\s*settings\)/);
   assert.match(strategy, /Sentinel Strategy 2\.0/);
