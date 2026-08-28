@@ -10,6 +10,11 @@ export type SchedulerWorkerStatus = {
   refreshed?: number;
   analyzed?: number;
   symbols?: string[];
+  phase?: string | null;
+  phaseAttempt?: number;
+  circuitOpen?: boolean;
+  retryAfter?: number | null;
+  jobId?: string | null;
 };
 
 export type RuntimeHealthState = "healthy" | "starting" | "paused" | "degraded" | "recovering" | "failed";
@@ -54,7 +59,11 @@ function staleFor(lastSuccessAt: number | null, lastRunAt: number | null, now: n
 
 function healthFromScheduler(status: SchedulerWorkerStatus, staleMs: number, now: number): RuntimeHealthState {
   if (status.state === "paused") return "paused";
-  if (status.state === "starting" && status.lastRunAt == null) return "starting";
+  if (status.circuitOpen) return "degraded";
+  if (status.state === "starting") {
+    if (status.lastRunAt == null) return "starting";
+    if (now - status.lastRunAt <= 60_000) return "starting";
+  }
   const stale = staleFor(status.lastSuccessAt, status.lastRunAt, now);
   if (status.state === "error" || (stale != null && stale > staleMs)) return "recovering";
   if (status.state === "degraded" || status.lastError) return "degraded";
@@ -81,12 +90,15 @@ async function inspectScheduler(
   const now = Date.now();
   let health = healthFromScheduler(status, staleMs, now);
   let autoRecoveryTriggered = false;
-  if (health === "recovering") {
+  if (health === "recovering" && !status.circuitOpen) {
     const wake = await stub.wake();
     autoRecoveryTriggered = true;
     status = { ...status, nextRunAt: wake.nextRunAt };
   }
   const stale = staleFor(status.lastSuccessAt, status.lastRunAt, now);
+  const phaseDetail = status.phase
+    ? ` · 阶段 ${status.phase}${status.phaseAttempt ? ` · 尝试 ${status.phaseAttempt}/3` : ""}${status.circuitOpen && status.retryAfter ? ` · 熔断至 ${new Date(status.retryAfter).toISOString()}` : ""}`
+    : "";
   return {
     ...status,
     module,
@@ -94,7 +106,7 @@ async function inspectScheduler(
     health,
     staleForMs: stale,
     autoRecoveryTriggered,
-    detail: moduleDetail(label, health, stale, status.lastError),
+    detail: `${moduleDetail(label, health, stale, status.lastError)}${phaseDetail}`,
   } satisfies SchedulerWorkerStatus & RuntimeModuleHealth;
 }
 
