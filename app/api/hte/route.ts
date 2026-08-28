@@ -158,12 +158,19 @@ export async function GET() {
   const scannerAgeMs = rawScanner?.observedAt ? Math.max(0, requestedAt - rawScanner.observedAt) : null;
   const schedulerLastError = background?.scanner?.lastError?.trim() || null;
   const schedulerAttemptAgeMs = background?.scanner?.lastRunAt ? Math.max(0, requestedAt - background.scanner.lastRunAt) : null;
+  const schedulerPhase = background?.scanner?.phase?.trim() || null;
+  const schedulerPhaseAttempt = background?.scanner?.phaseAttempt ?? 0;
+  const schedulerCircuitOpen = background?.scanner?.circuitOpen ?? false;
+  const schedulerRetryAfter = background?.scanner?.retryAfter ?? null;
   if (scannerAgeMs != null && scannerAgeMs > SCANNER_STALE_MS) {
     errors.scannerFreshness = `后台市场扫描已经 ${Math.round(scannerAgeMs / 1000)} 秒没有成功生成新快照`;
     if (schedulerLastError) errors.scannerRuntime = schedulerLastError;
   }
+  const phaseDetail = schedulerPhase
+    ? ` 当前恢复阶段：${schedulerPhase}${schedulerPhaseAttempt ? ` · 尝试 ${schedulerPhaseAttempt}/3` : ""}.${schedulerCircuitOpen && schedulerRetryAfter ? ` 已熔断至 ${new Date(schedulerRetryAfter).toISOString()}，不会从头无限重启。` : ""}`
+    : "";
   const staleScannerDetail = scannerAgeMs != null && scannerAgeMs > SCANNER_STALE_MS
-    ? `后台市场扫描已滞后 ${Math.round(scannerAgeMs / 1000)} 秒；页面刷新本身正常，但行情深扫不是最新。${schedulerAttemptAgeMs != null ? ` 调度器最后尝试在 ${Math.round(schedulerAttemptAgeMs / 1000)} 秒前。` : ""}${schedulerLastError ? ` 最近扫描错误：${schedulerLastError.slice(0, 240)}` : ""}`
+    ? `后台市场扫描已滞后 ${Math.round(scannerAgeMs / 1000)} 秒；页面刷新本身正常，但行情深扫不是最新。${schedulerAttemptAgeMs != null ? ` 调度器最后尝试在 ${Math.round(schedulerAttemptAgeMs / 1000)} 秒前。` : ""}${phaseDetail}${schedulerLastError ? ` 最近扫描错误：${schedulerLastError.slice(0, 240)}` : ""}`
     : null;
   const scanner = rawScanner ? {
     ...rawScanner,
