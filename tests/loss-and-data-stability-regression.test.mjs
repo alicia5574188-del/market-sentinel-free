@@ -24,8 +24,10 @@ test("selected market UI keeps the last trustworthy snapshot across transient Ga
   assert.match(marketRoute, /if \(fallback\) return fallback/);
 });
 
-test("Strategy 2 dashboard isolates optional failures and caches heavy learning reads", () => {
+test("Strategy 2 dashboard isolates optional failures and caches bounded heavy learning reads", () => {
   assert.match(v2Route, /HEAVY_CACHE_MS\s*=\s*60_000/);
+  assert.match(v2Route, /INTERACTIVE_LEARNING_LIMIT\s*=\s*800/);
+  assert.match(v2Route, /getStrategy2LearningDashboard\(INTERACTIVE_LEARNING_LIMIT\)/);
   assert.match(v2Route, /cachedLearning/);
   assert.match(v2Route, /cachedCounterfactual/);
   assert.match(v2Route, /Promise\.allSettled/);
@@ -37,6 +39,7 @@ test("persistent losses switch Strategy 2 execution into defense and exploration
   assert.match(strategyRepo, /state:\s*"NORMAL" \| "DEFENSIVE"/);
   assert.match(strategyRepo, /averageNetPct[\s\S]*recentAverageNetPct/);
   assert.match(strategyRepo, /tradeMode === "exploration"\) return false/);
+  assert.match(strategyRepo, /signalRiskMultiplier\(signal\) < 0\.95/);
   assert.match(strategyRepo, /tradeMode === "high_conviction"/);
   assert.match(strategyRepo, /experienceSamples[\s\S]*>= 12/);
   assert.match(strategyRepo, /expectancyR[\s\S]*>= 0\.12/);
