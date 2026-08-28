@@ -37,8 +37,9 @@ test("iPhone pull-to-refresh performs one genuine full refresh without starting 
 
 test("iPhone PWA keeps APIs network-only and never replays stale dynamic app HTML", async () => {
   const sw = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
-  assert.match(sw, /market-sentinel-shell-v5/);
+  assert.match(sw, /market-sentinel-shell-v6/);
   assert.match(sw, /RECOVERY_URL = "\/recovery\.html"/);
+  assert.match(sw, /"\/sentinel-runtime-guard\.js"/);
   assert.match(sw, /url\.pathname\.startsWith\("\/api\/"\)/);
   assert.match(sw, /url\.pathname === "\/__health"/);
   assert.match(sw, /if \(!isNavigation\) return/);
