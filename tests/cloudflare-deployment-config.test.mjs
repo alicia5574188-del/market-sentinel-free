@@ -21,11 +21,24 @@ test("generated Cloudflare deployment config has unique bindings", async () => {
   assert.deepEqual(config.triggers?.crons, ["* * * * *"]);
 });
 
-test("HTE 3.1 uses physically fresh scanner and trade-manager namespaces", async () => {
+test("HTE 3.1 uses fresh bound namespaces while legacy classes stay unbound", async () => {
   const config = JSON.parse(await readFile(new URL("../dist/server/wrangler.json", import.meta.url), "utf8"));
   assert.deepEqual(config.durable_objects?.bindings?.find(({ name }) => name === "MARKET_SCANNER"), { name: "MARKET_SCANNER", class_name: "HTE31MarketScanner" });
   assert.deepEqual(config.durable_objects?.bindings?.find(({ name }) => name === "POSITION_MONITOR"), { name: "POSITION_MONITOR", class_name: "HTE31TradeManager" });
-  assert.ok((config.migrations ?? []).some(({ tag, new_sqlite_classes: classes }) => tag === "v4" && classes?.includes("HTE31MarketScanner") && classes?.includes("HTE31TradeManager")));
+  const migrations = config.migrations ?? [];
+  const v4 = migrations.find(({ tag }) => tag === "v4");
+  assert.ok(v4?.new_sqlite_classes?.includes("HTE31MarketScanner") && v4?.new_sqlite_classes?.includes("HTE31TradeManager"));
+  assert.equal(migrations.some(({ deleted_classes: deleted }) => (deleted ?? []).length > 0), false, "clean deployment must be additive-only");
+  assert.equal(migrations.some(({ renamed_classes: renamed }) => (renamed ?? []).length > 0), false, "clean deployment must not rename legacy storage");
+  const boundClasses = new Set((config.durable_objects?.bindings ?? []).map(({ class_name }) => class_name));
+  for (const retired of ["PositionMonitor", "MarketScanner", "MarketScannerV2"]) assert.equal(boundClasses.has(retired), false);
+});
+
+test("Clean production entry preserves legacy DO exports without binding them", async () => {
+  const source = await readFile(new URL("../worker/index-clean.ts", import.meta.url), "utf8");
+  assert.match(source, /PositionMonitor, MarketScanner, LiveTradingCoordinator/);
+  assert.match(source, /MarketScanner as MarketScannerV2/);
+  assert.match(source, /HTE31MarketScanner, HTE31TradeManager/);
 });
 
 test("Clean scanner is phased and cannot restart the whole old scan loop", async () => {

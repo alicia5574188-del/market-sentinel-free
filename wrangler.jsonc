@@ -50,10 +50,6 @@
     {
       "tag": "v4",
       "new_sqlite_classes": ["HTE31MarketScanner", "HTE31TradeManager"]
-    },
-    {
-      "tag": "v5",
-      "deleted_classes": ["PositionMonitor", "MarketScanner", "MarketScannerV2"]
     }
   ],
   "version_metadata": {
