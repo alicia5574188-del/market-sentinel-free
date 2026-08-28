@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import test from "node:test";
 
-test("renders production Market Sentinel Human Trader Engine 3.0 metadata", async () => {
+test("renders production Market Sentinel HTE 3.1 Clean metadata", async () => {
   const cloudflareRuntimeHook = registerHooks({
     resolve(specifier, context, nextResolve) {
       if (specifier === "cloudflare:workers") {
@@ -20,26 +20,16 @@ test("renders production Market Sentinel Human Trader Engine 3.0 metadata", asyn
 
   const response = await worker.fetch(
     new Request("http://localhost/", {
-      headers: {
-        accept: "text/html",
-        "oai-authenticated-user-email": "owner@example.com",
-      },
+      headers: { accept: "text/html", "oai-authenticated-user-email": "owner@example.com" },
     }),
-    {
-      ASSETS: {
-        fetch: async () => new Response("Not found", { status: 404 }),
-      },
-    },
-    {
-      waitUntil() {},
-      passThroughOnException() {},
-    },
+    { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
+    { waitUntil() {}, passThroughOnException() {} },
   );
 
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
-  assert.match(html, /<title>Market Sentinel｜Human Trader Engine 3\.0<\/title>/i);
-  assert.match(html, /三位独立交易员、环境识别、Risk Governor、模拟与 Gate 实盘统一工作台/);
+  assert.match(html, /<title>Market Sentinel｜HTE 3\.1 Clean<\/title>/i);
+  assert.match(html, /独立交易员、全新模拟账本、独立持仓管理与出场后复盘学习/);
   assert.doesNotMatch(html, /name=["']codex-preview["']/i);
 });
