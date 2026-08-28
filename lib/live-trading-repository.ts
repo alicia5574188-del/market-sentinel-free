@@ -28,9 +28,13 @@ function finitePositive(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
-function v2RiskMultiplier(entryMetricsJson: string) {
+function entryRiskMultiplier(entryMetricsJson: string) {
   const metrics = parseJson<{ key?: string; score?: number }[]>(entryMetricsJson, []);
-  const metric = metrics.find((item) => item.key === "v2-risk-multiplier");
+  // HTE owns new production entries. Keep the old key only as a migration
+  // fallback for an already-created pre-HTE simulation candidate; it cannot
+  // create a new Strategy 2.0 entry because that authority has been retired.
+  const metric = metrics.find((item) => item.key === "human-risk-mode")
+    ?? metrics.find((item) => item.key === "v2-risk-multiplier");
   if (!metric || typeof metric.score !== "number" || !Number.isFinite(metric.score)) return 1;
   return Math.max(0, Math.min(1, metric.score));
 }
@@ -276,12 +280,12 @@ export async function listLiveEntryCandidates(enabledAt: number, now = Date.now(
   return rows
     .filter((row) => !claimed.has(row.id))
     .map((row) => {
-      const multiplier = v2RiskMultiplier(row.entryMetricsJson);
+      const multiplier = entryRiskMultiplier(row.entryMetricsJson);
       return {
         ...row,
-        // The V2 engine can only reduce the existing safety budget. The live
-        // entry planner still independently rechecks current equity, stop risk,
-        // margin, slippage and minimum TP2 profitability before Gate submission.
+        // Human Risk Governor can only reduce the existing safety budget. The
+        // live entry planner still independently rechecks current equity, stop
+        // risk, margin, slippage and minimum TP2 profitability before Gate.
         riskBudgetUsdt: row.riskBudgetUsdt * multiplier,
         contractNotionalUsdt: row.contractNotionalUsdt * multiplier,
       };
