@@ -53,9 +53,10 @@
   }
 
   function isHeavy(pathname) {
-    return pathname === "/api/market"
-      || pathname === "/api/v2"
-      || pathname === "/api/scanner"
+    // /api/market and /api/scanner are background read-model consumers in
+    // Cloudflare production. They must never queue behind Strategy/D1 research
+    // work or be treated as Gate-computation requests in the browser.
+    return pathname === "/api/v2"
       || pathname === "/api/chart"
       || pathname === "/api/v2/learning-arena"
       || pathname === "/api/v2/playbook-diagnostics";
