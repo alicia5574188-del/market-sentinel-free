@@ -164,7 +164,7 @@ export class PositionMonitor extends SchedulerObject {
 }
 
 export class MarketScanner extends SchedulerObject {
-  protected readonly intervalMs = 60_000;
+  protected readonly intervalMs = 20_000;
 
   async readModel(): Promise<BackgroundReadModel | null> {
     return await this.ctx.storage.get<BackgroundReadModel>("foregroundReadModel") ?? null;
@@ -179,10 +179,23 @@ export class MarketScanner extends SchedulerObject {
     return { readModel: readModel ?? null, deep: deep ?? null };
   }
 
+  async status(): Promise<SchedulerWorkerStatus> {
+    const status = await super.status();
+    const now = Date.now();
+    if (status.state === "starting" && status.lastRunAt != null && now - status.lastRunAt > 40_000) {
+      return {
+        ...status,
+        state: "error",
+        lastError: status.lastError ?? "上一次市场扫描 invocation 在完成状态写入前中断；后台已安排自动重试。",
+      };
+    }
+    return status;
+  }
+
   private async runCycle(): Promise<SchedulerWorkerStatus> {
     const startedAt = Date.now();
     const previous = await this.ctx.storage.get<SchedulerWorkerStatus>("status") ?? defaultSchedulerStatus();
-    const minimumGapMs = previous.state === "error" ? 15_000 : 45_000;
+    const minimumGapMs = previous.state === "error" ? 8_000 : 15_000;
     if (previous.lastRunAt != null && startedAt - previous.lastRunAt < minimumGapMs) {
       const nextRunAt = await this.ctx.storage.getAlarm() ?? startedAt + minimumGapMs;
       if (await this.ctx.storage.getAlarm() == null) await this.ctx.storage.setAlarm(nextRunAt);
@@ -192,7 +205,7 @@ export class MarketScanner extends SchedulerObject {
     // Keep a fallback alarm alive before any upstream work begins. If Cloudflare
     // terminates this cycle before our catch/finally path can run, the fallback
     // still gives the scanner another chance instead of leaving a dead alarm.
-    let nextRunAt = startedAt + 90_000;
+    let nextRunAt = startedAt + 45_000;
     await this.ctx.storage.setAlarm(nextRunAt);
     await this.ctx.storage.put<SchedulerWorkerStatus>("status", {
       ...previous,
@@ -206,9 +219,13 @@ export class MarketScanner extends SchedulerObject {
     setRuntimeDb(this.env.DB);
     setRuntimeBindings(this.env);
     try {
+      // One Cloudflare Free invocation owns exactly one deep symbol. Three
+      // consecutive ~20s invocations form the logical three-slot minute. This
+      // shards D1 queries, external subrequests and CPU instead of merely
+      // serializing three heavy symbols inside one invocation.
       const result = await runMarketScan(resolveVapidConfig(this.env), {
         profile: "free-background",
-        deepLimit: 3,
+        deepLimit: 1,
         rotationOffset,
         previousMarketSnapshot,
       });
@@ -235,7 +252,7 @@ export class MarketScanner extends SchedulerObject {
           });
         }
       }
-      nextRunAt = Date.now() + 60_000;
+      nextRunAt = Math.max(Date.now() + 5_000, startedAt + 20_000);
       await this.ctx.storage.setAlarm(nextRunAt);
       const status: SchedulerWorkerStatus = {
         state: paused ? "paused" : result.status === "degraded" ? "degraded" : "live",
@@ -251,7 +268,7 @@ export class MarketScanner extends SchedulerObject {
       await this.ctx.storage.put<SchedulerWorkerStatus>("status", status);
       return status;
     } catch (error) {
-      nextRunAt = Date.now() + 15_000;
+      nextRunAt = Date.now() + 10_000;
       await this.ctx.storage.setAlarm(nextRunAt);
       const status: SchedulerWorkerStatus = {
         ...previous,
