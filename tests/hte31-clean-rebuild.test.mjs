@@ -60,3 +60,18 @@ test("order chart persists entry holding and post-exit windows independently", (
   assert.match(api, /takeProfit2/);
   assert.match(api, /observations/);
 });
+
+test("HTE 3.1 runs independently of the dashboard being open", () => {
+  const [route, worker, wrangler] = [
+    readFileSync(new URL("../app/api/hte31/route.ts", import.meta.url), "utf8"),
+    readFileSync(new URL("../worker/index.ts", import.meta.url), "utf8"),
+    readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8"),
+  ];
+  assert.doesNotMatch(route, /scanner\.ensure\s*\(/);
+  assert.doesNotMatch(route, /position\.ensure\s*\(/);
+  assert.match(route, /scanner\.status\s*\(/);
+  assert.match(route, /scanner\.readModel\s*\(/);
+  assert.match(worker, /async scheduled\([\s\S]*runScheduledSchedulers\(env\)/);
+  assert.match(worker, /MARKET_SCANNER\.getByName\("market-scanner"\)\.runIfDue\(\)/);
+  assert.match(wrangler, /"crons"\s*:\s*\["\* \* \* \* \*"\]/);
+});
