@@ -1,13 +1,30 @@
 import { analyzeGateSymbol, SYMBOL_PATTERN } from "../../../lib/gate-client";
 import { getGlobalRiskContext } from "../../../lib/global-risk";
 import { getExperience, getOpenTrade, getPriorLong, getSettings, previewDecisionContract } from "../../../lib/repository";
+import { getRuntimeBindings } from "../../../lib/runtime-bindings";
 import { getLatestV2MarketContext, getV2Opportunity } from "../../../lib/sentinel-v2-repository";
 import { acquireHeavyUiRead, heavyUiReadBusyResponse } from "../../../lib/ui-heavy-read-admission";
 import { requireApiAccount } from "../../api-auth";
 
 const LAST_GOOD_TTL_MS = 90_000;
+const BACKGROUND_READ_FRESH_MS = 150_000;
+const BACKGROUND_DEEP_FRESH_MS = 180_000;
 type CachedMarketPayload = Record<string, unknown> & { observedAt: number; symbol: string };
 const lastGoodBySymbol = new Map<string, { savedAt: number; payload: CachedMarketPayload }>();
+
+type BackgroundTicker = {
+  symbol: string;
+  price: number;
+  changePercentage: number;
+  volumeUsd: number;
+  fundingRate: number | null;
+  basisPct: number | null;
+};
+
+type BackgroundV2 = {
+  market?: unknown;
+  opportunities?: Array<{ symbol?: string; observedAt?: number; opportunityScore?: number }>;
+};
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "optional source failed";
@@ -37,18 +54,119 @@ function staleFallback(symbol: string, error: unknown) {
   });
 }
 
-export async function GET(request: Request) {
-  const auth = await requireApiAccount();
-  if ("response" in auth) return auth.response;
+function backgroundOpportunity(v2: BackgroundV2 | null, symbol: string) {
+  const candidates = (v2?.opportunities ?? []).filter((item) => item.symbol === symbol);
+  return candidates.sort((a, b) => (b.observedAt ?? 0) - (a.observedAt ?? 0) || (b.opportunityScore ?? 0) - (a.opportunityScore ?? 0))[0] ?? null;
+}
 
-  // Only the query string is needed here. Avoid constructing a URL from
-  // request.url so iOS standalone / Workers request formatting cannot make the
-  // entire selected-symbol endpoint fail before market data is fetched.
-  const queryIndex = request.url.indexOf("?");
-  const query = queryIndex >= 0 ? request.url.slice(queryIndex + 1) : "";
-  const symbol = (new URLSearchParams(query).get("symbol") ?? "SOL_USDT").toUpperCase();
-  if (!SYMBOL_PATTERN.test(symbol)) return Response.json({ error: "symbol must look like SOL_USDT" }, { status: 400 });
+async function backgroundMarketResponse(symbol: string) {
+  const bindings = getRuntimeBindings();
+  const scanner = bindings.MARKET_SCANNER?.getByName("market-scanner");
+  if (!scanner) {
+    return Response.json({
+      mode: "degraded",
+      source: "Background Market Scanner",
+      researchStatus: "uncalibrated-beta",
+      observedAt: Date.now(),
+      symbol,
+      snapshotSource: "background_scanner",
+      error: "后台市场快照服务尚未就绪，前台不会回退为 Gate 重型计算",
+    }, { headers: { "Cache-Control": "private, no-store", "X-Sentinel-Background-Snapshot": "missing" } });
+  }
 
+  try {
+    const snapshot = await scanner.marketSnapshot(symbol);
+    const readModel = snapshot.readModel;
+    const deep = snapshot.deep;
+    const now = Date.now();
+    const backgroundAgeMs = readModel ? Math.max(0, now - readModel.observedAt) : null;
+    const deepAgeMs = deep ? Math.max(0, now - deep.savedAt) : null;
+    const universe = (readModel?.universe ?? []) as BackgroundTicker[];
+    const ticker = universe.find((item) => item.symbol === symbol) ?? null;
+    const openTrades = (readModel?.openTrades ?? []) as Array<{ symbol?: string }>;
+    const openTrade = openTrades.find((trade) => trade.symbol === symbol) ?? null;
+    const v2 = (readModel?.v2 ?? null) as BackgroundV2 | null;
+    const opportunity = backgroundOpportunity(v2, symbol);
+    const readFresh = backgroundAgeMs != null && backgroundAgeMs <= BACKGROUND_READ_FRESH_MS;
+    const deepFresh = deepAgeMs != null && deepAgeMs <= BACKGROUND_DEEP_FRESH_MS;
+
+    if (deep && deepFresh) {
+      const payload = {
+        ...deep.packet,
+        mode: readFresh ? deep.packet.mode : "degraded",
+        source: "Background Market Scanner snapshot",
+        snapshotSource: "background_scanner",
+        backgroundAgeMs,
+        deepAgeMs,
+        openTrade,
+        experience: { LONG: null, SHORT: null },
+        v2: { market: v2?.market ?? null, opportunity },
+        ...(readFresh ? {} : {
+          staleFallback: true,
+          staleAgeMs: backgroundAgeMs,
+          error: "后台全市场快照已超过实时窗口；保留最近一次深度证据但不把它标记为实时数据",
+        }),
+      } as CachedMarketPayload;
+      if (readFresh) rememberLastGood(symbol, payload);
+      return Response.json(payload, {
+        headers: {
+          "Cache-Control": "private, max-age=3, stale-while-revalidate=10",
+          "X-Sentinel-Background-Snapshot": readFresh ? "fresh" : "stale",
+        },
+      });
+    }
+
+    const error = !readModel
+      ? "后台首轮市场快照尚未生成，等待扫描器完成；前台不会自行向 Gate 发起重型分析"
+      : deep
+        ? "该标的后台深度证据已过实时窗口，正在等待下一轮深度复核"
+        : "该标的正在等待后台深度复核；前台只展示可验证的全市场粗粒度快照";
+    return Response.json({
+      mode: "degraded",
+      source: "Background Market Scanner snapshot",
+      researchStatus: "uncalibrated-beta",
+      observedAt: readModel?.observedAt ?? now,
+      symbol,
+      snapshotSource: "background_scanner",
+      backgroundAgeMs,
+      deepAgeMs,
+      openTrade,
+      v2: { market: v2?.market ?? null, opportunity },
+      error,
+      ...(ticker ? {
+        market: {
+          futuresPrice: ticker.price,
+          volumeUsd: ticker.volumeUsd,
+          changePercentage: ticker.changePercentage,
+          fundingRate: ticker.fundingRate,
+          basisPct: ticker.basisPct,
+          openInterestChangePct: null,
+          spotCvdRatio: null,
+          orderBookImbalance: null,
+          liquidationImbalance: null,
+          multiTimeframeTrend: null,
+        },
+      } : {}),
+    }, {
+      headers: {
+        "Cache-Control": "private, max-age=3, stale-while-revalidate=10",
+        "X-Sentinel-Background-Snapshot": readFresh ? "coarse" : "stale",
+      },
+    });
+  } catch (error) {
+    return Response.json({
+      mode: "degraded",
+      source: "Background Market Scanner",
+      researchStatus: "uncalibrated-beta",
+      observedAt: Date.now(),
+      symbol,
+      snapshotSource: "background_scanner",
+      error: `后台市场快照读取暂不可用：${errorMessage(error)}。前台不会回退为 Gate 重型计算`,
+    }, { headers: { "Cache-Control": "private, no-store", "X-Sentinel-Background-Snapshot": "error" } });
+  }
+}
+
+async function directMarketResponse(symbol: string) {
   const lease = acquireHeavyUiRead(`/api/market:${symbol}`);
   if (!lease) {
     const fallback = staleFallback(symbol, "Worker 正在执行另一项重型只读刷新，已主动削峰");
@@ -57,8 +175,6 @@ export async function GET(request: Request) {
   }
 
   try {
-    // Gate market data is essential. Historical/V2/D1 enrichments are optional:
-    // one transient auxiliary failure must not take down the whole live card.
     const [globalResult, settingsResult, priorResult, experienceResult, openTradeResult, v2MarketResult, v2OpportunityResult] = await Promise.allSettled([
       getGlobalRiskContext(),
       getSettings(),
@@ -94,8 +210,6 @@ export async function GET(request: Request) {
       alertStyle: settings?.alertStyle,
     });
 
-    // Contract preview is explanatory only. Strategy 2.0 owns new-entry
-    // authority, so preview failures are recorded but cannot degrade live data.
     let contractPreview: Awaited<ReturnType<typeof previewDecisionContract>> = null;
     if (!openTrade && settings) {
       try {
@@ -131,4 +245,20 @@ export async function GET(request: Request) {
   } finally {
     lease.release();
   }
+}
+
+export async function GET(request: Request) {
+  const auth = await requireApiAccount();
+  if ("response" in auth) return auth.response;
+
+  const queryIndex = request.url.indexOf("?");
+  const query = queryIndex >= 0 ? request.url.slice(queryIndex + 1) : "";
+  const symbol = (new URLSearchParams(query).get("symbol") ?? "SOL_USDT").toUpperCase();
+  if (!SYMBOL_PATTERN.test(symbol)) return Response.json({ error: "symbol must look like SOL_USDT" }, { status: 400 });
+
+  const bindings = getRuntimeBindings();
+  if (bindings.BACKGROUND_MODE === "cloudflare-free") {
+    return backgroundMarketResponse(symbol);
+  }
+  return directMarketResponse(symbol);
 }
