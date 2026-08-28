@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import test from "node:test";
 
-test("renders production Market Sentinel Strategy 2.0 metadata", async () => {
+test("renders production Market Sentinel Human Trader Engine 3.0 metadata", async () => {
   const cloudflareRuntimeHook = registerHooks({
     resolve(specifier, context, nextResolve) {
       if (specifier === "cloudflare:workers") {
@@ -37,12 +37,9 @@ test("renders production Market Sentinel Strategy 2.0 metadata", async () => {
   );
 
   assert.equal(response.status, 200);
-  assert.match(
-    response.headers.get("content-type") ?? "",
-    /^text\/html\b/i,
-  );
+  assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
-  assert.match(html, /<title>Market Sentinel｜Strategy 2\.0<\/title>/i);
-  assert.match(html, /Sentinel Strategy 2\.0：环境识别、多策略并行竞争、风险控制与交易学习统一展示/);
+  assert.match(html, /<title>Market Sentinel｜Human Trader Engine 3\.0<\/title>/i);
+  assert.match(html, /三位独立交易员、环境识别、Risk Governor、模拟与 Gate 实盘统一工作台/);
   assert.doesNotMatch(html, /name=["']codex-preview["']/i);
 });
