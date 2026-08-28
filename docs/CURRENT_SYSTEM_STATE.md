@@ -4,13 +4,11 @@
 >
 > Chat history is discussion context only. Before any future code change, read the current `main` branch, recent merged PRs/commits, CI status, and this file. Never reconstruct production behavior from memory or a missing chat message.
 
-Last reconciled: **2026-08-28 13:30 +08:00**  
+Last reconciled: **2026-08-28 14:10 +08:00**  
 Repository: `alicia5574188-del/market-sentinel-free`  
-Production strategy identity: **Sentinel Strategy 2.0**  
-Last reconciled **production-behavior** commit before the current stability change: `6c3fe62c0fe9e4507c8d734212f6cd74c0e6fc23`  
-Cloudflare behavior-baseline Version ID before the current stability change: `76cc7a12-3881-4ac9-9e44-2b9e7c9f40af`
+Production strategy identity: **Sentinel Strategy 2.0**
 
-Documentation-only continuity commits may advance `main` and generate a new Cloudflare Version ID without changing runtime behavior. For the actual current HEAD/deployment, always inspect GitHub/Cloudflare before coding rather than copying an ID from this file.
+For the actual current HEAD/deployment, always inspect GitHub and Cloudflare rather than copying a historical commit/version ID from this document.
 
 ## 1. Development continuity rule
 
@@ -32,7 +30,11 @@ If chat history and repository state disagree, **repository state wins**.
 
 Production decision flow:
 
-`Gate market data → Market/Regime context → 12 Playbook Strategy 2.0 pool → learning/risk filters → portfolio risk → Execution Engine / Order Lifecycle → simulated or live safety gates`
+`Gate market data → background MarketScanner → Market/Regime context → 12 Playbook Strategy 2.0 pool → learning/risk filters → portfolio risk → Execution Engine / Order Lifecycle → simulated or live safety gates`
+
+Production UI read flow:
+
+`background MarketScanner → Durable Object read model → /api/scanner + /api/market → iPhone/web UI`
 
 Key authority rules:
 
@@ -43,10 +45,11 @@ Key authority rules:
 - Portfolio risk, Execution Engine, Order Lifecycle, Live Master Switch and Gate hard-safety checks remain final execution authorities.
 - Learning cannot bypass hard risk limits.
 - Legacy V1/V3 learning/trade memory is not a valid Strategy 2.0 learning source.
+- In Cloudflare production, foreground market/scanner APIs are **consumers**, not public-market-data producers. They must not recreate Gate deep analysis when the background read model is unavailable.
 
 ## 3. Current loss containment state
 
-A defensive execution governor is now part of Strategy 2.0.
+A defensive execution governor is part of Strategy 2.0.
 
 Reason: the accumulated `contract_v2` sample showed materially weak aggregate performance, so the system must not continue generating low-quality execution merely to gather samples.
 
@@ -66,28 +69,45 @@ Important unresolved engineering boundary:
 
 Do not remove this containment until sizing is explicitly traced and tested from Strategy intent → risk budget → contract size → execution.
 
-## 4. Current data-degradation / Worker-pressure protections
+## 4. Current data-degradation / Worker-pressure architecture
 
-The stability architecture now treats recurrent 503/1102-style pressure as a **load-admission problem**, not merely a retry problem.
+The recurrent non-JSON 503 / black-screen issue is treated as a **producer/consumer architecture problem**, not merely a retry problem.
 
-Current protections:
+### Production read-model boundary
 
-- Background deep-scan target concurrency remains bounded to **2**.
+- The background `MarketScanner` is the producer of public Gate market analysis.
+- After each successful/degraded background scan, the MarketScanner Durable Object persists a current foreground read model and per-symbol deep packets.
+- In Cloudflare production, `/api/scanner` reads that model instead of calling `fetchGateUniverse()` / global-risk upstreams again.
+- In Cloudflare production, `/api/market` reads the stored per-symbol/background model instead of calling `analyzeGateSymbol()` again.
+- Missing or old deep evidence is returned as explicitly degraded data. The UI may show a coarse universe ticker while waiting for background deep coverage, but it must not fabricate a current decision.
+- A background snapshot failure is **not** allowed to trigger a foreground Gate recomputation. This prevents the UI from becoming a second market-data producer exactly when the backend is already under pressure.
+- Direct Gate market analysis remains available for non-Cloudflare/local paths and explicit/manual scan workflows, not normal production phone polling.
+
+### Upstream fan-out boundary
+
+- `analyzeGateSymbol()` no longer fires its entire public Gate source set simultaneously; endpoint fan-out is bounded to **4** concurrent requests.
+- Position quote candle reads use the same bounded fan-out helper.
+- Background deep-symbol concurrency remains separately bounded, so symbol concurrency and per-symbol endpoint concurrency cannot multiply without limit.
+
+### Client/PWA boundary
+
 - A parser-time `/sentinel-runtime-guard.js` is loaded before React client pollers so foreground request admission starts before hydration.
-- Foreground same-origin GET reads are coalesced and globally spaced; heavy UI reads are limited to one at a time, with a second slot reserved for lighter status reads.
-- Selected-market reads are limited to roughly **30s** spacing, Strategy 2 dashboard reads to **45s**, and research diagnostics to **5m**.
-- A 429/5xx no longer triggers immediate replay from the early guard. It opens a **15s circuit breaker**, extended to **30s** after repeated edge failures, so overload reduces traffic instead of multiplying it.
-- `/api/market` and `/api/v2` also use a server-side same-isolate heavy-read admission lease. Competing heavy reads fail fast with explicit load-shed/degraded output instead of running expensive work concurrently.
-- `/api/market` prefers its explicitly labeled last-known-good selected-symbol snapshot for up to **90s** when a competing/failed heavy read prevents a trustworthy fresh response.
-- `/api/v2` uses partial-source isolation (`Promise.allSettled`) so one optional diagnostics/learning failure does not make the entire dashboard fail.
-- Interactive Strategy 2 learning work is bounded to **400** recent closed rows, recent opportunity payloads to **60**, and recent thesis payloads to **40**. The background decision learner retains its deeper history, so this UI optimization does not change trading behavior.
-- Dynamic root HTML is not used as an unsafe old-version fallback. PWA shell **v6** caches only the dedicated recovery shell/runtime guard/static assets, not dynamic root HTML.
-- Recovery navigation backs off **4s → 8s → 16s → 30s** after repeated failures instead of continuously reloading the Worker.
-- Fatal asset/chunk load failures and a visible blank application shell hand off to the dedicated recovery page when JavaScript is still alive.
+- Foreground same-origin GET reads are coalesced and globally spaced.
+- `/api/market` and `/api/scanner` are now treated as lightweight snapshot reads; they do not queue behind Strategy/D1 research work as if they were Gate-computation requests.
+- A 429/5xx opens a circuit breaker instead of being immediately replayed by the early guard.
+- Dynamic root HTML is never reused as an old-version fallback.
+- PWA shell **v7** uses a dedicated recovery shell and places a **5-second upper bound on top-level navigation fetches**. A stalled Worker navigation should hand off to recovery instead of leaving an indefinite dark blank screen.
+- Recovery retries remain backed off rather than continuously reloading the Worker.
+- Fatal asset/chunk failures and a visible blank mounted shell also hand off to recovery when JavaScript is alive.
+
+### Remaining observability reads
+
+- `/api/v2` remains a read-only D1/intelligence dashboard path with partial-source isolation and bounded interactive history. It no longer competes with a foreground `/api/market` Gate analysis lease in the production path.
+- Research diagnostics remain infrequent and read-only.
 
 Data-safety rule: stale/degraded data may be shown only when explicitly labeled; cached data must never be presented as current real-time market/execution truth.
 
-Execution-safety rule: these load controls apply to read-only UI/observability paths. They do not retry, delay, or acquire authority over Gate mutations, Execution Engine actions, Order Lifecycle, or the live coordinator.
+Execution-safety rule: these controls apply to read-only UI/observability paths. They do not retry, delay, or acquire authority over Gate mutations, Execution Engine actions, Order Lifecycle, or the live coordinator.
 
 ## 5. Current Regime / market-intelligence state
 
@@ -158,6 +178,7 @@ Do not merge a change that unintentionally weakens any of these:
 - a UI/diagnostics failure must not create trading authority
 - a research metric must not be presented as a live decision authority
 - a recovery/load-shed path must not replay a mutation
+- a production foreground market read must not silently reacquire public Gate computation authority
 
 ## 9. Current operating recommendation
 
@@ -168,7 +189,7 @@ Primary questions for new forward data:
 - Does defensive gating materially reduce the rate of new losing trades?
 - Do recent/forward expectancy and profit factor improve?
 - Which Playbooks/Regimes retain positive edge after the newer Regime engine and loss governor?
-- Does the frequency of non-JSON 503/black-screen events materially decline after pre-hydration and server-side load admission?
+- Do non-JSON 503/black-screen events disappear after the producer/consumer split, bounded Gate fan-out and timed navigation recovery?
 - Does the missing Playbook learning coverage represent legitimate rarity or unreachable conditions?
 
 Do not loosen a strategy merely to increase trade count or force 12/12 learning coverage.
@@ -185,6 +206,6 @@ Before saying “I will change X”, answer from the repository:
 - What invariant could this change break?
 - Does `CURRENT_SYSTEM_STATE.md` need to be updated after the change?
 
-For another 503/black-screen report, also inspect whether the failure occurred **before or after** PWA shell v6/pre-hydration admission became active, and capture CF Ray IDs when available.
+For another 503/black-screen report, determine first whether the failing foreground endpoint was supposed to be a **snapshot consumer**. If `/api/market` or `/api/scanner` is observed issuing Gate public-market fan-out in Cloudflare production, treat that as a regression. Also capture CF Ray IDs when available.
 
 If any answer is unknown, inspect first. Do not guess.

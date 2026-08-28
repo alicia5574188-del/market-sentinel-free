@@ -1,5 +1,6 @@
-const CACHE_NAME = "market-sentinel-shell-v6";
+const CACHE_NAME = "market-sentinel-shell-v7";
 const RECOVERY_URL = "/recovery.html";
+const NAVIGATION_TIMEOUT_MS = 5_000;
 const STATIC_SHELL = [RECOVERY_URL, "/sentinel-runtime-guard.js", "/manifest.webmanifest", "/favicon.svg"];
 
 self.addEventListener("install", (event) => {
@@ -18,7 +19,7 @@ async function recoveryResponse() {
   const cached = await caches.match(RECOVERY_URL);
   if (cached) {
     const headers = new Headers(cached.headers);
-    headers.set("X-Sentinel-Navigation-Fallback", "recovery-v1");
+    headers.set("X-Sentinel-Navigation-Fallback", "recovery-v2");
     return new Response(cached.body, {
       status: 200,
       statusText: "OK",
@@ -29,6 +30,16 @@ async function recoveryResponse() {
     status: 503,
     headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
   });
+}
+
+async function navigationFetch(request) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), NAVIGATION_TIMEOUT_MS);
+  try {
+    return await fetch(request, { cache: "no-store", signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 self.addEventListener("fetch", (event) => {
@@ -52,7 +63,7 @@ self.addEventListener("fetch", (event) => {
 
   event.respondWith((async () => {
     try {
-      const response = await fetch(event.request, { cache: "no-store" });
+      const response = await navigationFetch(event.request);
       const transientEdgeFailure = response.status === 429 || response.status >= 500;
 
       if (transientEdgeFailure) return recoveryResponse();

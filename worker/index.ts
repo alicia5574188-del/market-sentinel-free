@@ -8,7 +8,8 @@ import { setRuntimeDb } from "../db";
 import { setRuntimeBindings } from "../lib/runtime-bindings";
 import { runMarketScan, refreshOpenPositions } from "../lib/scanner";
 import { snapshotBackgroundUniverse, type BackgroundMarketSnapshot } from "../lib/background-selection";
-import { getSettings } from "../lib/repository";
+import { getSettings, listOpenTrades, publicSettings } from "../lib/repository";
+import { SYMBOL_PATTERN, type GateAnalysisPacket } from "../lib/gate-client";
 import type { SchedulerWorkerStatus } from "../lib/background-scheduler";
 import { resolveVapidConfig } from "../lib/vapid-config";
 import { workerVersionChanged } from "../lib/live-deployment-safety";
@@ -53,6 +54,22 @@ export interface CloudflareEnv {
     };
   };
 }
+
+type BackgroundReadModel = {
+  observedAt: number;
+  status: "completed" | "degraded";
+  universe: unknown[];
+  context: unknown;
+  v2: unknown;
+  openTrades: unknown[];
+  settings: ReturnType<typeof publicSettings>;
+  failures: { symbol: string; error: string }[];
+};
+
+type BackgroundMarketRead = {
+  savedAt: number;
+  packet: GateAnalysisPacket;
+};
 
 function defaultSchedulerStatus(): SchedulerWorkerStatus {
   return {
@@ -142,6 +159,19 @@ export class PositionMonitor extends SchedulerObject {
 export class MarketScanner extends SchedulerObject {
   protected readonly intervalMs = 60_000;
 
+  async readModel(): Promise<BackgroundReadModel | null> {
+    return await this.ctx.storage.get<BackgroundReadModel>("foregroundReadModel") ?? null;
+  }
+
+  async marketSnapshot(symbol: string): Promise<{ readModel: BackgroundReadModel | null; deep: BackgroundMarketRead | null }> {
+    if (!SYMBOL_PATTERN.test(symbol)) return { readModel: null, deep: null };
+    const [readModel, deep] = await Promise.all([
+      this.ctx.storage.get<BackgroundReadModel>("foregroundReadModel"),
+      this.ctx.storage.get<BackgroundMarketRead>(`foregroundMarket:${symbol}`),
+    ]);
+    return { readModel: readModel ?? null, deep: deep ?? null };
+  }
+
   async alarm(): Promise<void> {
     const startedAt = Date.now();
     const nextRunAt = startedAt + 60_000;
@@ -161,7 +191,25 @@ export class MarketScanner extends SchedulerObject {
       const paused = result.status === "paused";
       await this.ctx.storage.put("rotationOffset", paused ? rotationOffset : rotationOffset + 1);
       if (!paused && "universe" in result) {
+        const [settings, openTrades] = await Promise.all([getSettings(), listOpenTrades()]);
+        const readModel: BackgroundReadModel = {
+          observedAt: result.observedAt,
+          status: result.status,
+          universe: result.universe,
+          context: result.context,
+          v2: result.v2,
+          openTrades,
+          settings: publicSettings(settings),
+          failures: result.failures,
+        };
         await this.ctx.storage.put("backgroundMarketSnapshot", snapshotBackgroundUniverse(result.universe));
+        await this.ctx.storage.put("foregroundReadModel", readModel);
+        for (const packet of result.analyzed) {
+          await this.ctx.storage.put<BackgroundMarketRead>(`foregroundMarket:${packet.symbol}`, {
+            savedAt: packet.observedAt,
+            packet,
+          });
+        }
       }
       await this.ctx.storage.put<SchedulerWorkerStatus>("status", {
         state: paused ? "paused" : result.status === "degraded" ? "degraded" : "live",
