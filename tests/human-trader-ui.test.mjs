@@ -46,8 +46,10 @@ test("order audit includes entry exit candlesticks and post-exit observer", () =
 });
 
 test("small-price contracts use dynamic price precision", () => {
-  assert.match(page, /abs >= 1000 \? 2 : abs >= 1 \? 4 : abs >= 0\.01 \? 6 : 8/);
-  assert.doesNotMatch(page, /value\.toFixed\(2\).*fmtPrice/s);
+  const formatter = page.match(/function fmtPrice[\s\S]*?\n}/)?.[0] ?? "";
+  assert.match(formatter, /abs >= 1000 \? 2 : abs >= 1 \? 4 : abs >= 0\.01 \? 6 : 8/);
+  assert.match(formatter, /value\.toFixed\(digits\)/);
+  assert.doesNotMatch(formatter, /value\.toFixed\(2\)/);
 });
 
 test("live boundary preserves explicit controls but clean validation cannot enable new live entries", () => {
