@@ -132,3 +132,10 @@ CREATE TABLE `hte31_post_exit_observations` (
 );
 --> statement-breakpoint
 CREATE INDEX `hte31_post_exit_due_idx` ON `hte31_post_exit_observations` (`status`,`due_at`);
+--> statement-breakpoint
+UPDATE `live_trading_control`
+SET `entry_enabled` = 0,
+    `state` = CASE WHEN `state` = 'emergency_stopped' THEN `state` ELSE 'disabled' END,
+    `activation_epoch` = `activation_epoch` + 1,
+    `updated_at` = CAST(strftime('%s','now') AS INTEGER) * 1000
+WHERE `id` = 1;
