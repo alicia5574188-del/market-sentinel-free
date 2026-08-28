@@ -50,6 +50,35 @@ async function readScannerSnapshot() {
   };
 }
 
+function humanOnlyDashboard(dashboard: Awaited<ReturnType<typeof getAlertDashboard>> | null, startingCapitalUsdt: number) {
+  if (!dashboard) return null;
+  const trades = dashboard.trades.filter((trade) => trade.regime.startsWith("S2|HT"));
+  const openTrades = trades.filter((trade) => trade.status === "holding");
+  const closedTrades = trades.filter((trade) => trade.status === "closed");
+  const realizedPnlUsdt = closedTrades.reduce((sum, trade) => sum + (trade.netPnlUsdt ?? 0), 0);
+  const unrealizedPnlUsdt = openTrades.reduce((sum, trade) => sum + trade.unrealizedNetUsdt, 0);
+  const realizedBalanceUsdt = startingCapitalUsdt + realizedPnlUsdt;
+  const equityUsdt = realizedBalanceUsdt + unrealizedPnlUsdt;
+  const usedMarginUsdt = openTrades.reduce((sum, trade) => sum + trade.marginUsdt, 0);
+  return {
+    ...dashboard,
+    alerts: [],
+    memories: [],
+    trades,
+    openTrades,
+    archivedCount: 0,
+    account: {
+      startingCapitalUsdt,
+      realizedPnlUsdt,
+      unrealizedPnlUsdt,
+      realizedBalanceUsdt,
+      equityUsdt,
+      usedMarginUsdt,
+      availableMarginUsdt: Math.max(0, equityUsdt - usedMarginUsdt),
+    },
+  };
+}
+
 export async function GET() {
   const auth = await requireApiAccount();
   if ("response" in auth) return auth.response;
@@ -77,7 +106,9 @@ export async function GET() {
   const opportunities = results[2].status === "fulfilled" ? results[2].value : [];
   const warnings = results[3].status === "fulfilled" ? results[3].value : [];
   const traders = results[4].status === "fulfilled" ? results[4].value : null;
-  const orders = results[5].status === "fulfilled" ? results[5].value : null;
+  const rawOrders = results[5].status === "fulfilled" ? results[5].value : null;
+  const startingCapitalUsdt = scanner?.settings?.trialCapitalUsdt ?? 1000;
+  const orders = humanOnlyDashboard(rawOrders, startingCapitalUsdt);
   const stats = results[6].status === "fulfilled" ? results[6].value : null;
   const background = results[7].status === "fulfilled" ? results[7].value : null;
   const degraded = Object.keys(errors).length > 0 || Boolean(scanner?.error);
