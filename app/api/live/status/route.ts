@@ -7,9 +7,11 @@ import { getLiveTradingSnapshot } from "../../../../lib/live-trading-repository"
 export const dynamic = "force-dynamic";
 
 function strategyLabel(trigger: string | null | undefined) {
-  if (!trigger) return "综合确认";
-  const match = trigger.match(/^成长策略 · ([^：]+)：/);
-  return match?.[1]?.trim() || "综合确认";
+  if (!trigger) return "Human Trader";
+  const human = trigger.match(/^Human Trader · ([^：]+)：/);
+  if (human?.[1]) return human[1].trim();
+  const strategy2 = trigger.match(/^成长策略 · ([^：]+)：/);
+  return strategy2?.[1]?.trim() || "Human Trader";
 }
 
 function stringList(value: string | null | undefined) {
@@ -29,7 +31,7 @@ export async function GET() {
   try {
     // Status polling is deliberately read-only. Do not enqueue behind the
     // Durable Object's Gate reconciliation queue: a slow Gate cycle must never
-    // make the phone's 10-second status poll wait for execution to finish.
+    // make the phone's live-status poll wait for execution to finish.
     const snapshot = await getLiveTradingSnapshot() as {
       orders?: { tradeCaseId: string; [key: string]: unknown }[];
       [key: string]: unknown;
