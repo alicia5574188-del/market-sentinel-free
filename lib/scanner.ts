@@ -10,11 +10,8 @@ import { getStrategy2ExperienceBook } from "./strategy-2-learning.ts";
 import { getLatestV2MarketContext, saveV2MarketContext, saveV2Opportunities } from "./sentinel-v2-repository.ts";
 import { syncV2OpenTradeTheses } from "./sentinel-v2-thesis.ts";
 
-// A single deep target already fans out to four bounded upstream requests plus
-// the parallel Strategy 2.0 5m candle request. Cloudflare allows only six
-// simultaneous outgoing connections per invocation, so two deep targets in
-// parallel can exceed the platform ceiling. Keep target-level concurrency at 1;
-// the three discovery slots are still evaluated in the same scan, serially.
+// A single deep target already fans out to several bounded upstream requests.
+// Cloudflare Free production therefore keeps target-level concurrency at one.
 const DEEP_TARGET_CONCURRENCY = 1;
 
 export function chooseDeepUniverse(universe: UniverseTicker[], coreSymbols: string[], openSymbols: string[], limit: number) {
@@ -128,41 +125,78 @@ export async function refreshOpenPositions(vapidConfig?: VapidConfig | null, opt
   };
 }
 
-async function analyzeTarget(ticker: UniverseTicker, context: Awaited<ReturnType<typeof getGlobalRiskContext>>, settings: Awaited<ReturnType<typeof getSettings>>) {
-  const [priorLongProbability, experience] = await Promise.all([getPriorLong(ticker.symbol), getExperience(ticker.symbol)]);
-  const packetPromise = analyzeGateSymbol(ticker.symbol, {
+async function analyzeTarget(
+  ticker: UniverseTicker,
+  context: Awaited<ReturnType<typeof getGlobalRiskContext>>,
+  settings: Awaited<ReturnType<typeof getSettings>>,
+  freeBackground: boolean,
+) {
+  // Human Trader Free background does not consume the retired signal-engine
+  // Bayesian memory. That memory belongs to the old compatibility path and adds
+  // two D1 reads to every invocation without affecting HT1/HT2/HT3 ownership.
+  let priorLongProbability: number | null = null;
+  let experience: Awaited<ReturnType<typeof getExperience>> | undefined;
+  if (!freeBackground) {
+    [priorLongProbability, experience] = await Promise.all([getPriorLong(ticker.symbol), getExperience(ticker.symbol)]);
+  }
+
+  const analyze = () => analyzeGateSymbol(ticker.symbol, {
     global: context,
     priorLongProbability,
     experience,
     alertStyle: settings.alertStyle,
     detail: "scan",
   });
-  const growthCandlesPromise = fetchGateChartCandles(ticker.symbol, Date.now() - 18 * 60 * 60_000, Date.now())
+  const growth = () => fetchGateChartCandles(ticker.symbol, Date.now() - 18 * 60 * 60_000, Date.now())
     .then((candles) => ({ candles, error: null as string | null }))
-    .catch((error) => ({ candles: [], error: error instanceof Error ? error.message : "Strategy 2.0 5m K 线读取失败" }));
-  const [packet, growthData] = await Promise.all([packetPromise, growthCandlesPromise]);
+    .catch((error) => ({ candles: [], error: error instanceof Error ? error.message : "Human Trader 5m K 线读取失败" }));
+
+  if (freeBackground) {
+    // Keep the initial-headers connection fanout comfortably below the platform
+    // ceiling. Wall time is cheap for Durable Objects; dead scanners are not.
+    const packet = await analyze();
+    const growthData = await growth();
+    return { packet, ticker, growthCandles: growthData.candles, growthError: growthData.error };
+  }
+
+  const [packet, growthData] = await Promise.all([analyze(), growth()]);
   return { packet, ticker, growthCandles: growthData.candles, growthError: growthData.error };
 }
 
-async function analyzeTargetsBounded(targets: UniverseTicker[], context: Awaited<ReturnType<typeof getGlobalRiskContext>>, settings: Awaited<ReturnType<typeof getSettings>>) {
+async function analyzeTargetsBounded(
+  targets: UniverseTicker[],
+  context: Awaited<ReturnType<typeof getGlobalRiskContext>>,
+  settings: Awaited<ReturnType<typeof getSettings>>,
+  freeBackground: boolean,
+) {
   const results: PromiseSettledResult<Awaited<ReturnType<typeof analyzeTarget>>>[] = [];
   for (let offset = 0; offset < targets.length; offset += DEEP_TARGET_CONCURRENCY) {
     const batch = targets.slice(offset, offset + DEEP_TARGET_CONCURRENCY);
-    results.push(...await Promise.allSettled(batch.map((ticker) => analyzeTarget(ticker, context, settings))));
+    results.push(...await Promise.allSettled(batch.map((ticker) => analyzeTarget(ticker, context, settings, freeBackground))));
   }
   return results;
 }
 
 export async function runMarketScan(vapidConfig?: VapidConfig | null, options: MarketScanOptions = {}) {
+  const freeBackground = options.profile === "free-background";
   const settings = await getSettings();
   const coreSymbols = JSON.parse(settings.coreSymbolsJson) as string[];
   if (!settings.scanEnabled) return { status: "paused", observedAt: Date.now(), analyzed: [], notifications: { attempted: 0, delivered: 0 } };
-  await retireLegacyShadowTrades();
+
+  // Fresh-start migrations already isolate legacy P1-P12/shadow records. Running
+  // two legacy archive UPDATEs every 20 seconds in production only burns D1
+  // budget, so keep that compatibility cleanup out of the HTE background path.
+  if (!freeBackground) await retireLegacyShadowTrades();
 
   const [openSymbols, initialOpenTrades] = await Promise.all([listOpenTradeSymbols(), listOpenTrades()]);
-  const [universe, context, previousV2, experienceBook] = await Promise.all([
-    fetchGateUniverse(settings.universeLimit, [...coreSymbols, ...openSymbols]),
-    getGlobalRiskContext(),
+
+  // Do not mix the full Gate universe request, five-source global-risk fanout and
+  // D1 reads in one Promise.all. Cloudflare Free has strict per-invocation
+  // subrequest/query budgets and six simultaneous connections waiting for
+  // response headers. These stages are deliberately separated.
+  const universe = await fetchGateUniverse(settings.universeLimit, [...coreSymbols, ...openSymbols]);
+  const context = await getGlobalRiskContext();
+  const [previousV2, experienceBook] = await Promise.all([
     getLatestV2MarketContext(),
     getStrategy2ExperienceBook(),
   ]);
@@ -186,8 +220,8 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
   })), v2Market);
 
   const scan = await beginScan(universe.length);
-  const targets = options.profile === "free-background"
-    ? chooseBackgroundDeepUniverse(universe, coreSymbols, openSymbols, options.deepLimit ?? 3, options.rotationOffset ?? 0, options.previousMarketSnapshot ?? {})
+  const targets = freeBackground
+    ? chooseBackgroundDeepUniverse(universe, coreSymbols, openSymbols, options.deepLimit ?? 1, options.rotationOffset ?? 0, options.previousMarketSnapshot ?? {})
     : chooseDeepUniverse(universe, coreSymbols, openSymbols, options.deepLimit ?? settings.deepScanLimit);
   const ranks = crossSectionRanks(universe);
   const analyzed: GateAnalysisPacket[] = [];
@@ -211,12 +245,7 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
   };
 
   try {
-    // A deep symbol already uses up to five simultaneous outgoing connections:
-    // analyzeGateSymbol owns four bounded upstream slots and the Strategy 2.0
-    // candle request runs beside it. Target-level serialization therefore keeps
-    // the invocation below Cloudflare's six-connection ceiling while preserving
-    // all three discovery targets in this scan.
-    const results = await analyzeTargetsBounded(targets, context, settings);
+    const results = await analyzeTargetsBounded(targets, context, settings, freeBackground);
 
     for (let index = 0; index < results.length; index += 1) {
       const result = results[index];
@@ -226,10 +255,17 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
       }
       const { packet, ticker, growthCandles, growthError } = result.value;
       analyzed.push(packet);
-      const basePacket = openSymbols.includes(packet.symbol) ? packet : legacyObservationOnly(packet);
-      const baseResult = await processDecision(basePacket, settings);
-      lifecycle.push({ symbol: packet.symbol, result: baseResult });
-      await deliverLifecycle(baseResult);
+
+      // PositionMonitor owns active HTE positions every 10 seconds. The Free
+      // background scanner therefore does not run the retired base lifecycle on
+      // every WATCH/REJECT symbol before asking the Human Trader Engine. Full
+      // compatibility/manual scans keep the old observation path available.
+      if (!freeBackground) {
+        const basePacket = openSymbols.includes(packet.symbol) ? packet : legacyObservationOnly(packet);
+        const baseResult = await processDecision(basePacket, settings);
+        lifecycle.push({ symbol: packet.symbol, result: baseResult });
+        await deliverLifecycle(baseResult);
+      }
 
       if (growthCandles.length) {
         const v2 = evaluateSentinelV2Strategies({
@@ -286,8 +322,8 @@ export async function runMarketScan(vapidConfig?: VapidConfig | null, options: M
           error: null,
         });
       } else {
-        const message = growthError ?? "Strategy 2.0 5m K 线为空";
-        failures.push({ symbol: packet.symbol, error: `Strategy 2.0 扩展数据：${message}` });
+        const message = growthError ?? "Human Trader 5m K 线为空";
+        failures.push({ symbol: packet.symbol, error: `Human Trader 扩展数据：${message}` });
         growthLifecycle.push({ symbol: packet.symbol, observedAt: packet.observedAt, opened: 0, closed: 0, evaluated: 0, archived: 0, selected: null, ready: 0, watching: 0, blocked: 0, error: message });
       }
     }
