@@ -217,50 +217,54 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
     return { kind: "progress", job: { ...job, phase: "evaluate", candles } };
   }
 
-  if (!job.packet || !job.candles || !job.universe || !job.market || !job.settings || !job.target || !job.coreSymbols) {
-    throw new Error("Clean scan evaluate state incomplete");
+  if (job.phase === "evaluate") {
+    if (!job.packet || !job.candles || !job.universe || !job.market || !job.settings || !job.target || !job.coreSymbols) {
+      throw new Error("Clean scan evaluate state incomplete");
+    }
+    const packet = job.packet;
+    const signals = evaluateHumanTraderPool({
+      symbol: packet.symbol,
+      observedAt: packet.observedAt,
+      futuresPrice: packet.market.futuresPrice,
+      volumeUsd: packet.market.volumeUsd,
+      changePercentage: packet.market.changePercentage,
+      fundingRate: packet.market.fundingRate,
+      openInterestChangePct: packet.market.openInterestChangePct,
+      spotCvdRatio: packet.market.spotCvdRatio,
+      orderBookImbalance: packet.market.orderBookImbalance,
+      liquidationImbalance: packet.market.liquidationImbalance,
+      multiTimeframeTrend: packet.market.multiTimeframeTrend,
+      benchmarkMomentum: job.market.benchmarkMomentum,
+      macroEventRisk: packet.market.macroEventRisk,
+      dataQuality: packet.decision.dataQuality,
+      candles5m: job.candles,
+      crossSectionRank: crossSectionRank(job.universe, packet.symbol),
+      rotationVelocity: 0,
+      marketAdvancingRatio: job.market.advancingRatio,
+      marketDecliningRatio: job.market.decliningRatio,
+    });
+    await recordHte31Evaluations(packet, signals);
+    const opened = await tryOpenHte31Trade(packet, signals, job.candles, job.settings);
+    const result: Hte31ScanCompleted = {
+      observedAt: Date.now(),
+      target: packet.symbol,
+      universe: job.universe,
+      market: { ...job.market, observedAt: Date.now() },
+      packet,
+      signals,
+      openedTradeId: opened.opened?.id ?? null,
+      openReason: opened.reason,
+      settings: {
+        scanEnabled: job.settings.scanEnabled,
+        coreSymbols: job.coreSymbols,
+        universeLimit: job.settings.universeLimit,
+        trialCapitalUsdt: job.settings.trialCapitalUsdt,
+      },
+    };
+    return { kind: "completed", result };
   }
-  const packet = job.packet;
-  const signals = evaluateHumanTraderPool({
-    symbol: packet.symbol,
-    observedAt: packet.observedAt,
-    futuresPrice: packet.market.futuresPrice,
-    volumeUsd: packet.market.volumeUsd,
-    changePercentage: packet.market.changePercentage,
-    fundingRate: packet.market.fundingRate,
-    openInterestChangePct: packet.market.openInterestChangePct,
-    spotCvdRatio: packet.market.spotCvdRatio,
-    orderBookImbalance: packet.market.orderBookImbalance,
-    liquidationImbalance: packet.market.liquidationImbalance,
-    multiTimeframeTrend: packet.market.multiTimeframeTrend,
-    benchmarkMomentum: job.market.benchmarkMomentum,
-    macroEventRisk: packet.market.macroEventRisk,
-    dataQuality: packet.decision.dataQuality,
-    candles5m: job.candles,
-    crossSectionRank: crossSectionRank(job.universe, packet.symbol),
-    rotationVelocity: 0,
-    marketAdvancingRatio: job.market.advancingRatio,
-    marketDecliningRatio: job.market.decliningRatio,
-  });
-  await recordHte31Evaluations(packet, signals);
-  const opened = await tryOpenHte31Trade(packet, signals, job.candles, job.settings);
-  const result: Hte31ScanCompleted = {
-    observedAt: Date.now(),
-    target: packet.symbol,
-    universe: job.universe,
-    market: { ...job.market, observedAt: Date.now() },
-    packet,
-    signals,
-    openedTradeId: opened.opened?.id ?? null,
-    openReason: opened.reason,
-    settings: {
-      scanEnabled: job.settings.scanEnabled,
-      coreSymbols: job.coreSymbols,
-      universeLimit: job.settings.universeLimit,
-      trialCapitalUsdt: job.settings.trialCapitalUsdt,
-    },
-  };
-  return { kind: "completed", result };
+
+  throw new Error(`Unexpected Clean scan phase: ${job.phase}`);
 }
 
 export async function getHte31RuntimeDashboard() {
