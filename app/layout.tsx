@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { requireChatGPTUser } from "./chatgpt-auth";
 import "./globals.css";
 import "./hte31.css";
+import "./hte31-chart.css";
 
 export const dynamic = "force-dynamic";
 
