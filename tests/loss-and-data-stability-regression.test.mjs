@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [scanner, marketRoute, v2Route, hteRoute, strategyRepo, liveRepo, heavyUiAdmission] = await Promise.all([
+const [scanner, gateClient, marketRoute, v2Route, hteRoute, strategyRepo, liveRepo, heavyUiAdmission] = await Promise.all([
   readFile(new URL("../lib/scanner.ts", import.meta.url), "utf8"),
+  readFile(new URL("../lib/gate-client.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/api/market/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/api/v2/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/api/hte/route.ts", import.meta.url), "utf8"),
@@ -12,11 +13,22 @@ const [scanner, marketRoute, v2Route, hteRoute, strategyRepo, liveRepo, heavyUiA
   readFile(new URL("../lib/ui-heavy-read-admission.ts", import.meta.url), "utf8"),
 ]);
 
-test("deep scans bound symbol-level upstream fanout instead of bursting every target at once", () => {
-  assert.match(scanner, /DEEP_TARGET_CONCURRENCY\s*=\s*2/);
+test("deep scans stay below Cloudflare outgoing-connection ceiling while preserving bounded fanout", () => {
   assert.match(scanner, /analyzeTargetsBounded/);
   assert.match(scanner, /offset \+= DEEP_TARGET_CONCURRENCY/);
   assert.doesNotMatch(scanner, /Promise\.allSettled\(targets\.map/);
+
+  const targetConcurrency = Number(scanner.match(/DEEP_TARGET_CONCURRENCY\s*=\s*(\d+)/)?.[1]);
+  const upstreamConcurrency = Number(gateClient.match(/ANALYSIS_UPSTREAM_CONCURRENCY\s*=\s*(\d+)/)?.[1]);
+  assert.equal(targetConcurrency, 1);
+  assert.equal(upstreamConcurrency, 4);
+  assert.match(scanner, /growthCandlesPromise\s*=\s*fetchGateChartCandles/);
+
+  const peakOutgoingConnections = targetConcurrency * (upstreamConcurrency + 1);
+  assert.ok(
+    peakOutgoingConnections <= 6,
+    `deep scan can open ${peakOutgoingConnections} simultaneous outgoing connections, above Cloudflare ceiling`,
+  );
 });
 
 test("selected market UI keeps the last trustworthy snapshot across transient Gate failures", () => {
