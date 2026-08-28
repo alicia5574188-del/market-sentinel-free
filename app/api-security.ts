@@ -9,8 +9,14 @@ export function acceptsJson(request: Request, maxBytes = 8_192) {
   return type === "application/json" && (length === 0 || Number.isFinite(length) && length > 0 && length <= maxBytes);
 }
 
-export function mutationRejected(request: Request, maxBytes = 8_192) {
+export function mutationOriginRejected(request: Request) {
   if (!sameOrigin(request)) return Response.json({ error: "跨站请求已拒绝" }, { status: 403 });
+  return null;
+}
+
+export function mutationRejected(request: Request, maxBytes = 8_192) {
+  const originRejected = mutationOriginRejected(request);
+  if (originRejected) return originRejected;
   if (!acceptsJson(request, maxBytes)) return Response.json({ error: "请求必须是大小受限的 JSON" }, { status: 415 });
   return null;
 }
