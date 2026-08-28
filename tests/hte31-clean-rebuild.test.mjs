@@ -86,3 +86,14 @@ test("clean live page keeps the real Gate account summary visible", () => {
   assert.match(page, />最近成功对账</);
   assert.match(page, /lastSuccessfulReconcileAt/);
 });
+
+test("expanded HTE31 trade review cannot widen the mobile viewport", () => {
+  const css = readFileSync(new URL("../app/hte31.css", import.meta.url), "utf8");
+  assert.match(css, /-webkit-text-size-adjust:100%/);
+  assert.match(css, /\.clean-shell\{max-width:100vw;overflow-x:hidden\}/);
+  assert.match(css, /\.order-card button\.review-toggle\{display:block;touch-action:manipulation\}/);
+  assert.match(css, /\.candle-chart\{width:100%;max-width:100%;min-width:0;overflow:hidden\}/);
+  assert.match(css, /\.observer-timeline\{width:100%;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain\}/);
+  assert.match(css, /repeat\(2,minmax\(0,1fr\)\)/);
+  assert.match(css, /calc\(100vw - 18px\)/);
+});
