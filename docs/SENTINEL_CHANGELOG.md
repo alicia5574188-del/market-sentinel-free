@@ -11,6 +11,45 @@ Rules:
 
 ---
 
+## 2026-08-28 — Root-load shedding for recurring 503 / iOS black screen
+
+PR: `#39 Stop foreground retry storms before hydration`
+
+### Problem
+
+- `/api/market` and `/api/v2` were still able to fail together with Cloudflare non-JSON 503 responses.
+- The existing React-mounted stability layer started after hydration and could therefore lose the race against independent startup pollers.
+- Once Worker pressure produced a 503, the old safe-GET retry loop could immediately replay failed reads and amplify the same pressure it was trying to recover from.
+- A repeated recovery/navigation loop could then contribute to iOS standalone black-screen behavior.
+
+### Changed
+
+- Added a parser-time/pre-hydration runtime guard that owns same-origin read admission before React pollers start.
+- Heavy UI reads are serialized to one at a time, while a second slot remains available for lighter status reads.
+- Added minimum foreground refresh spacing: selected market 30s, Strategy 2 dashboard 45s, research diagnostics 5m.
+- Replaced immediate 429/5xx replay with a 15s circuit breaker, extended to 30s after repeated edge failures.
+- Added server-side same-isolate admission for `/api/market` and `/api/v2`; a competing heavy read now returns explicit load-shed/degraded output instead of competing until Worker failure. `/api/market` prefers its explicitly labeled last-known-good snapshot when available.
+- Reduced interactive-only Strategy 2 learning history to 400 rows and bounded recent opportunity/thesis payloads to 60/40. Background decision learning retains its deeper history.
+- PWA shell advanced to v6 and now caches the early runtime guard.
+- Recovery navigation now backs off 4s → 8s → 16s → 30s instead of rapidly retrying.
+- Added asset-load and blank-shell recovery handoff for iOS PWA rendering failures.
+
+### Deliberately unchanged
+
+- No Strategy 2.0 trigger or Playbook threshold changed.
+- No Regime logic changed.
+- No position sizing, leverage or risk limit changed.
+- No Execution Engine, Order Lifecycle, live coordinator or Gate mutation authority changed.
+- API caches/fallbacks may be shown only when explicitly labeled degraded/stale; no stale value gains live decision authority.
+
+### Verification
+
+- Strategy/risk/migration suite must pass before merge.
+- Production build/UI safety suite must pass before merge.
+- Merged `main` CI and Cloudflare production deployment must be verified after merge.
+
+---
+
 ## 2026-08-28 — Learning Arena added as read-only observability
 
 Production merge commit: `6c3fe62c0fe9e4507c8d734212f6cd74c0e6fc23`  
