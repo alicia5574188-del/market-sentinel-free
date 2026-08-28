@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [scanner, marketRoute, v2Route, strategyRepo, heavyUiAdmission] = await Promise.all([
+const [scanner, marketRoute, v2Route, strategyRepo, liveRepo, heavyUiAdmission] = await Promise.all([
   readFile(new URL("../lib/scanner.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/api/market/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/api/v2/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/shadow-strategy-repository.ts", import.meta.url), "utf8"),
+  readFile(new URL("../lib/live-trading-repository.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/ui-heavy-read-admission.ts", import.meta.url), "utf8"),
 ]);
 
@@ -38,7 +39,7 @@ test("heavy foreground market and Strategy 2 reads fail fast instead of competin
   assert.match(v2Route, /finally\s*\{\s*lease\.release\(\);\s*\}/);
 });
 
-test("Strategy 2 dashboard isolates optional failures and bounds heavy interactive reads", () => {
+test("Strategy dashboard isolates optional failures and bounds heavy interactive reads", () => {
   assert.match(v2Route, /HEAVY_CACHE_MS\s*=\s*60_000/);
   assert.match(v2Route, /INTERACTIVE_LEARNING_LIMIT\s*=\s*400/);
   assert.match(v2Route, /INTERACTIVE_OPPORTUNITY_LIMIT\s*=\s*60/);
@@ -53,13 +54,25 @@ test("Strategy 2 dashboard isolates optional failures and bounds heavy interacti
   assert.doesNotMatch(v2Route, /status:\s*503/);
 });
 
-test("persistent losses switch Strategy 2 execution into defense and exploration cannot silently use full base risk", () => {
-  assert.match(strategyRepo, /state:\s*"NORMAL" \| "DEFENSIVE"/);
-  assert.match(strategyRepo, /averageNetPct[\s\S]*recentAverageNetPct/);
-  assert.match(strategyRepo, /tradeMode === "exploration"\) return false/);
-  assert.match(strategyRepo, /signalRiskMultiplier\(signal\) < 0\.95/);
+test("persistent losses make Human Risk Governor reduce participation instead of loosening entry rules", () => {
+  assert.match(strategyRepo, /"NORMAL" \| "CAUTION" \| "DEFENSIVE" \| "PAUSED"/);
+  assert.match(strategyRepo, /lossStreak >= 7[\s\S]*"PAUSED"/);
+  assert.match(strategyRepo, /lossStreak >= 5[\s\S]*"DEFENSIVE"/);
+  assert.match(strategyRepo, /lossStreak >= 3[\s\S]*"CAUTION"/);
+  assert.match(strategyRepo, /governor\.state === "PAUSED"[\s\S]*return false/);
+  assert.match(strategyRepo, /governor\.state === "CAUTION"/);
+  assert.match(strategyRepo, /tradeMode === "exploration"[\s\S]*signal\.confidence >= 82/);
+  assert.match(strategyRepo, /governor\.state === "DEFENSIVE"/);
   assert.match(strategyRepo, /tradeMode === "high_conviction"/);
   assert.match(strategyRepo, /experienceSamples[\s\S]*>= 12/);
   assert.match(strategyRepo, /expectancyR[\s\S]*>= 0\.12/);
-  assert.match(strategyRepo, /v2-risk-multiplier/);
+  assert.match(strategyRepo, /不为追回亏损提高频率/);
+});
+
+test("Human Risk Governor can only reduce live candidate size and Gate still rechecks execution safety", () => {
+  assert.match(liveRepo, /item\.key === "human-risk-mode"/);
+  assert.match(liveRepo, /Math\.max\(0, Math\.min\(1, metric\.score\)\)/);
+  assert.match(liveRepo, /riskBudgetUsdt:\s*row\.riskBudgetUsdt \* multiplier/);
+  assert.match(liveRepo, /contractNotionalUsdt:\s*row\.contractNotionalUsdt \* multiplier/);
+  assert.match(liveRepo, /live entry planner still independently rechecks current equity/);
 });
