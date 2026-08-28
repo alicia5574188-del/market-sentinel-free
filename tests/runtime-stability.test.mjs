@@ -93,7 +93,8 @@ test("top-level navigation uses a self-contained recovery page instead of stale 
   assert.doesNotMatch(serviceWorker, /caches\.match\("\/"\)/);
   assert.match(recoveryPage, /正在恢复连接/);
   assert.match(recoveryPage, /不会用旧数据冒充实时数据/);
-  assert.match(recoveryPage, /location\.reload\(\)/);
+  assert.match(recoveryPage, /DELAYS = \[4_000, 8_000, 16_000, 30_000, 30_000\]/);
+  assert.match(recoveryPage, /location\.replace\("\/"\)/);
 });
 
 test("shared API auth failures stay inside JSON and normal account polls avoid a duplicate D1 select", () => {
