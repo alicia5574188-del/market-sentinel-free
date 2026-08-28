@@ -1,6 +1,6 @@
-const CACHE_NAME = "market-sentinel-shell-v5";
+const CACHE_NAME = "market-sentinel-shell-v6";
 const RECOVERY_URL = "/recovery.html";
-const STATIC_SHELL = [RECOVERY_URL, "/manifest.webmanifest", "/favicon.svg"];
+const STATIC_SHELL = [RECOVERY_URL, "/sentinel-runtime-guard.js", "/manifest.webmanifest", "/favicon.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_SHELL)));
