@@ -21,11 +21,30 @@ test("generated Cloudflare deployment config has unique bindings", async () => {
   assert.deepEqual(config.triggers?.crons, ["* * * * *"]);
 });
 
-test("HTE 3.1 uses physically fresh scanner and trade-manager namespaces", async () => {
+test("HTE 3.1 uses physically fresh scanner and trade-manager namespaces with declarative lifecycle", async () => {
   const config = JSON.parse(await readFile(new URL("../dist/server/wrangler.json", import.meta.url), "utf8"));
   assert.deepEqual(config.durable_objects?.bindings?.find(({ name }) => name === "MARKET_SCANNER"), { name: "MARKET_SCANNER", class_name: "HTE31MarketScanner" });
   assert.deepEqual(config.durable_objects?.bindings?.find(({ name }) => name === "POSITION_MONITOR"), { name: "POSITION_MONITOR", class_name: "HTE31TradeManager" });
-  assert.ok((config.migrations ?? []).some(({ tag, new_sqlite_classes: classes }) => tag === "v4" && classes?.includes("HTE31MarketScanner") && classes?.includes("HTE31TradeManager")));
+  assert.equal(config.migrations, undefined);
+  assert.deepEqual(config.exports?.HTE31MarketScanner, { type: "durable-object", storage: "sqlite" });
+  assert.deepEqual(config.exports?.HTE31TradeManager, { type: "durable-object", storage: "sqlite" });
+  assert.deepEqual(config.exports?.LiveTradingCoordinator, { type: "durable-object", storage: "sqlite" });
+  assert.equal(config.exports?.PositionMonitor?.state, "renamed");
+  assert.equal(config.exports?.MarketScanner?.state, "renamed");
+  assert.equal(config.exports?.MarketScannerV2?.state, "renamed");
+});
+
+test("retired HTE 3.0 simulation namespaces are archived and cannot keep scheduling work", async () => {
+  const [entry, retired] = await Promise.all([
+    readFile(new URL("../worker/index-clean.ts", import.meta.url), "utf8"),
+    readFile(new URL("../worker/retired-simulation-workers.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(entry, /RetiredPositionMonitor/);
+  assert.match(entry, /RetiredMarketScanner/);
+  assert.match(entry, /RetiredMarketScannerV2/);
+  assert.match(retired, /deleteAlarm\(\)/);
+  assert.match(retired, /hte31RetiredAt/);
+  assert.doesNotMatch(retired, /fetchGate|runHte31ScanStep|evaluateHumanTraderPool/);
 });
 
 test("Clean scanner is phased and cannot restart the whole old scan loop", async () => {
