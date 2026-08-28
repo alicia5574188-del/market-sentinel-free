@@ -13,7 +13,7 @@ const [scanner, gateClient, marketRoute, v2Route, hteRoute, strategyRepo, liveRe
   readFile(new URL("../lib/ui-heavy-read-admission.ts", import.meta.url), "utf8"),
 ]);
 
-test("deep scans stay below Cloudflare outgoing-connection ceiling while preserving bounded fanout", () => {
+test("deep scans stay below Cloudflare outgoing-connection ceiling and Free HTE serializes the extra candle request", () => {
   assert.match(scanner, /analyzeTargetsBounded/);
   assert.match(scanner, /offset \+= DEEP_TARGET_CONCURRENCY/);
   assert.doesNotMatch(scanner, /Promise\.allSettled\(targets\.map/);
@@ -22,12 +22,17 @@ test("deep scans stay below Cloudflare outgoing-connection ceiling while preserv
   const upstreamConcurrency = Number(gateClient.match(/ANALYSIS_UPSTREAM_CONCURRENCY\s*=\s*(\d+)/)?.[1]);
   assert.equal(targetConcurrency, 1);
   assert.equal(upstreamConcurrency, 4);
-  assert.match(scanner, /growthCandlesPromise\s*=\s*fetchGateChartCandles/);
 
-  const peakOutgoingConnections = targetConcurrency * (upstreamConcurrency + 1);
+  const freeBranch = scanner.match(/if \(freeBackground\) \{[\s\S]*?const packet = await analyze\(\);[\s\S]*?const growthData = await growth\(\);[\s\S]*?return \{ packet, ticker, growthCandles: growthData\.candles, growthError: growthData\.error \};[\s\S]*?\}/)?.[0] ?? "";
+  assert.ok(freeBranch, "Free HTE must complete deep analysis before starting the extra 18h candle request");
+  assert.doesNotMatch(freeBranch, /Promise\.all\(\[analyze\(\), growth\(\)\]\)/);
+
+  // In Free background the extra 18h candle request is no longer concurrent
+  // with analyzeGateSymbol, so the live peak is the Gate client's bounded four.
+  const freePeakOutgoingConnections = targetConcurrency * upstreamConcurrency;
   assert.ok(
-    peakOutgoingConnections <= 6,
-    `deep scan can open ${peakOutgoingConnections} simultaneous outgoing connections, above Cloudflare ceiling`,
+    freePeakOutgoingConnections <= 6,
+    `Free HTE scan can open ${freePeakOutgoingConnections} simultaneous outgoing connections, above Cloudflare ceiling`,
   );
 });
 
