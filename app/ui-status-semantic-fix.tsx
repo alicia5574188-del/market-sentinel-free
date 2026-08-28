@@ -19,6 +19,23 @@ function normalizeRiskCopy() {
   }
 }
 
+function normalizeHumanTraderCopy() {
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node) {
+    const original = node.textContent ?? "";
+    let next = original;
+    next = next.replace("12 Playbook 并行策略池 · 动态专家权重", "Human Trader Engine · 3 位独立交易员");
+    next = next.replace("Strategy 2.0 市场智能", "Human Trader 市场智能");
+    next = next.replace("Strategy 2.0 执行与学习", "Human Trader 执行与学习");
+    next = next.replace("Strategy 2.0 机会评分校准", "Human Trader Setup 校准");
+    next = next.replace("组合风险 → Thesis → Execution → Learning", "Trader → Setup → Risk Governor → Execution → Learning");
+    next = next.replace("环境迁移 + 风险预警 + 学习状态", "环境路由 + 独立 Setup + 风险预警 + 学习状态");
+    if (next !== original) node.textContent = next;
+    node = walker.nextNode();
+  }
+}
+
 function normalizeUiSemantics() {
   const banner = document.querySelector<HTMLElement>('[aria-label="数据状态"]');
   if (banner) {
@@ -41,6 +58,7 @@ function normalizeUiSemantics() {
   }
 
   normalizeRiskCopy();
+  normalizeHumanTraderCopy();
 }
 
 export function UiStatusSemanticFix() {
