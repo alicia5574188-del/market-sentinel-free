@@ -7,8 +7,10 @@
 Last reconciled: **2026-08-28 11:28 +08:00**  
 Repository: `alicia5574188-del/market-sentinel-free`  
 Production strategy identity: **Sentinel Strategy 2.0**  
-Reconciled `main` commit: `6c3fe62c0fe9e4507c8d734212f6cd74c0e6fc23`  
-Cloudflare production Version ID at reconciliation: `76cc7a12-3881-4ac9-9e44-2b9e7c9f40af`
+Last reconciled **production-behavior** commit: `6c3fe62c0fe9e4507c8d734212f6cd74c0e6fc23`  
+Cloudflare behavior-baseline Version ID: `76cc7a12-3881-4ac9-9e44-2b9e7c9f40af`
+
+Documentation-only continuity commits may advance `main` and generate a new Cloudflare Version ID without changing runtime behavior. For the actual current HEAD/deployment, always inspect GitHub/Cloudflare before coding rather than copying an ID from this file.
 
 ## 1. Development continuity rule
 
