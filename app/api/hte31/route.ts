@@ -9,13 +9,11 @@ export const dynamic = "force-dynamic";
 const SCANNER_STALE_MS = 90_000;
 
 type CleanScannerStub = {
-  ensure(): Promise<SchedulerWorkerStatus>;
   status(): Promise<SchedulerWorkerStatus>;
   readModel(): Promise<Hte31ScanCompleted | null>;
 };
 
 type CleanPositionStub = {
-  ensure(): Promise<SchedulerWorkerStatus>;
   status(): Promise<SchedulerWorkerStatus>;
 };
 
@@ -39,21 +37,20 @@ export async function GET() {
   if (!scanner || !position) {
     errors.bindings = "HTE 3.1 Clean Durable Object bindings unavailable";
   } else {
+    // The dashboard is deliberately observer-only. Opening the iPhone/web app
+    // must never be required to start or heal market scanning. Cloudflare Cron
+    // and Durable Object alarms are the only runtime drivers.
     const settled = await Promise.allSettled([
-      scanner.ensure(),
-      position.ensure(),
       scanner.status(),
       position.status(),
       scanner.readModel(),
     ]);
-    if (settled[2].status === "fulfilled") scannerStatus = settled[2].value;
-    else errors.scannerStatus = errorMessage(settled[2].reason);
-    if (settled[3].status === "fulfilled") positionStatus = settled[3].value;
-    else errors.positionStatus = errorMessage(settled[3].reason);
-    if (settled[4].status === "fulfilled") readModel = settled[4].value;
-    else errors.scannerReadModel = errorMessage(settled[4].reason);
-    if (settled[0].status === "rejected") errors.scannerEnsure = errorMessage(settled[0].reason);
-    if (settled[1].status === "rejected") errors.positionEnsure = errorMessage(settled[1].reason);
+    if (settled[0].status === "fulfilled") scannerStatus = settled[0].value;
+    else errors.scannerStatus = errorMessage(settled[0].reason);
+    if (settled[1].status === "fulfilled") positionStatus = settled[1].value;
+    else errors.positionStatus = errorMessage(settled[1].reason);
+    if (settled[2].status === "fulfilled") readModel = settled[2].value;
+    else errors.scannerReadModel = errorMessage(settled[2].reason);
   }
 
   let dashboard: Awaited<ReturnType<typeof getHte31Dashboard>> | null = null;
