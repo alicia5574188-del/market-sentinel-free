@@ -36,3 +36,5 @@ jobs:
         run: npm run test:signals
       - name: Production build and UI safety tests
         run: npm test
+      - name: Wrangler production deploy dry-run
+        run: npx wrangler deploy --dry-run --config dist/server/wrangler.json --outdir .wrangler-dry-run
