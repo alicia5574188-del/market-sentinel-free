@@ -22,11 +22,11 @@
     "bindings": [
       {
         "name": "POSITION_MONITOR",
-        "class_name": "PositionMonitor"
+        "class_name": "HTE31TradeManager"
       },
       {
         "name": "MARKET_SCANNER",
-        "class_name": "MarketScannerV2"
+        "class_name": "HTE31MarketScanner"
       },
       {
         "name": "LIVE_TRADING_COORDINATOR",
@@ -46,6 +46,10 @@
     {
       "tag": "v3",
       "new_sqlite_classes": ["MarketScannerV2"]
+    },
+    {
+      "tag": "v4",
+      "new_sqlite_classes": ["HTE31MarketScanner", "HTE31TradeManager"]
     }
   ],
   "version_metadata": {
