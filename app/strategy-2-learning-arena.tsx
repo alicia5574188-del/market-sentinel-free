@@ -192,7 +192,10 @@ export function Strategy2LearningArena() {
   const [arena, setArena] = useState<Arena | null>(null);
 
   useEffect(() => {
-    const syncTarget = () => setTarget((current) => current ?? document.querySelector<HTMLElement>(".order-ledger"));
+    const syncTarget = () => {
+      const next = document.querySelector<HTMLElement>(".order-ledger");
+      setTarget((current) => current === next ? current : next);
+    };
     syncTarget();
     const observer = new MutationObserver(syncTarget);
     observer.observe(document.body, { childList: true, subtree: true });
@@ -201,9 +204,11 @@ export function Strategy2LearningArena() {
 
   useEffect(() => {
     let active = true;
+    let loading = false;
     let timeout: number | null = null;
     const load = async () => {
-      if (document.hidden) return;
+      if (document.hidden || loading) return;
+      loading = true;
       try {
         const response = await fetch("/api/v2/learning-arena", { cache: "no-store" });
         if (!response.ok) return;
@@ -212,6 +217,8 @@ export function Strategy2LearningArena() {
       } catch {
         // Keep the last trustworthy Arena snapshot. This research-only panel
         // must never turn a transient Worker/network error into a global UI error.
+      } finally {
+        loading = false;
       }
     };
 
