@@ -6,6 +6,7 @@ import { getStrategy2LearningDashboard } from "../../../lib/strategy-2-learning"
 import { getLatestV2MarketContext, getV2StrategyPoolActivity, listRecentV2Opportunities, listRecentV2Warnings, listV2TradeTheses } from "../../../lib/sentinel-v2-repository";
 
 const HEAVY_CACHE_MS = 60_000;
+const INTERACTIVE_LEARNING_LIMIT = 800;
 let learningCache: { savedAt: number; value: Awaited<ReturnType<typeof getStrategy2LearningDashboard>> } | null = null;
 let learningPending: Promise<Awaited<ReturnType<typeof getStrategy2LearningDashboard>>> | null = null;
 let counterfactualCache: { savedAt: number; value: Awaited<ReturnType<typeof getStrategy2CounterfactualArchiveStats>> } | null = null;
@@ -19,7 +20,10 @@ async function cachedLearning() {
   const now = Date.now();
   if (learningCache && now - learningCache.savedAt < HEAVY_CACHE_MS) return learningCache.value;
   if (!learningPending) {
-    learningPending = getStrategy2LearningDashboard().then((value) => {
+    // The interactive dashboard only exposes recent trades and the top cells.
+    // Keep the full 2,500-row hierarchy for background strategy learning, but
+    // do not make every 15-second UI reader rebuild it from the entire history.
+    learningPending = getStrategy2LearningDashboard(INTERACTIVE_LEARNING_LIMIT).then((value) => {
       learningCache = { savedAt: Date.now(), value };
       return value;
     }).finally(() => { learningPending = null; });
