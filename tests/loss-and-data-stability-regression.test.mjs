@@ -24,10 +24,14 @@ test("selected market UI keeps the last trustworthy snapshot across transient Ga
   assert.match(marketRoute, /if \(fallback\) return fallback/);
 });
 
-test("Strategy 2 dashboard isolates optional failures and caches bounded heavy learning reads", () => {
+test("Strategy 2 dashboard isolates optional failures and bounds heavy interactive reads", () => {
   assert.match(v2Route, /HEAVY_CACHE_MS\s*=\s*60_000/);
-  assert.match(v2Route, /INTERACTIVE_LEARNING_LIMIT\s*=\s*800/);
+  assert.match(v2Route, /INTERACTIVE_LEARNING_LIMIT\s*=\s*400/);
+  assert.match(v2Route, /INTERACTIVE_OPPORTUNITY_LIMIT\s*=\s*60/);
+  assert.match(v2Route, /INTERACTIVE_THESIS_LIMIT\s*=\s*40/);
   assert.match(v2Route, /getStrategy2LearningDashboard\(INTERACTIVE_LEARNING_LIMIT\)/);
+  assert.match(v2Route, /listRecentV2Opportunities\(INTERACTIVE_OPPORTUNITY_LIMIT\)/);
+  assert.match(v2Route, /listV2TradeTheses\(INTERACTIVE_THESIS_LIMIT\)/);
   assert.match(v2Route, /cachedLearning/);
   assert.match(v2Route, /cachedCounterfactual/);
   assert.match(v2Route, /Promise\.allSettled/);
