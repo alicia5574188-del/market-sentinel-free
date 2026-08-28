@@ -14,6 +14,7 @@ import "./strategy-2-intelligence.css";
 import "./strategy-2-playbook-diagnostics.css";
 import "./strategy-2-learning-arena.css";
 import "./runtime-stability.css";
+import "./bottom-nav-viewport-fix.css";
 
 export const dynamic = "force-dynamic";
 
