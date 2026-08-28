@@ -4,6 +4,7 @@ import { getStrategy2CounterfactualArchiveStats } from "../../../lib/strategy-2-
 import { buildStrategy2Intelligence } from "../../../lib/strategy-2-intelligence";
 import { getStrategy2LearningDashboard } from "../../../lib/strategy-2-learning";
 import { getLatestV2MarketContext, getV2StrategyPoolActivity, listRecentV2Opportunities, listRecentV2Warnings, listV2TradeTheses } from "../../../lib/sentinel-v2-repository";
+import { acquireHeavyUiRead, heavyUiReadBusyResponse } from "../../../lib/ui-heavy-read-admission";
 
 const HEAVY_CACHE_MS = 60_000;
 const INTERACTIVE_LEARNING_LIMIT = 400;
@@ -45,10 +46,7 @@ async function cachedCounterfactual(observedAt: number) {
   return counterfactualPending;
 }
 
-export async function GET() {
-  const auth = await requireApiAccount();
-  if ("response" in auth) return auth.response;
-
+async function buildDashboardResponse() {
   const observedAt = Date.now();
   const results = await Promise.allSettled([
     getLatestV2MarketContext(),
@@ -139,4 +137,17 @@ export async function GET() {
       ...(degraded ? { "X-Sentinel-Partial-Data": "1" } : {}),
     },
   });
+}
+
+export async function GET() {
+  const auth = await requireApiAccount();
+  if ("response" in auth) return auth.response;
+
+  const lease = acquireHeavyUiRead("/api/v2");
+  if (!lease) return heavyUiReadBusyResponse("/api/v2");
+  try {
+    return await buildDashboardResponse();
+  } finally {
+    lease.release();
+  }
 }
