@@ -20,8 +20,8 @@ test("overdue simulated positions can timeout without a fresh Gate quote", () =>
 });
 
 test("HTE snapshot executes clock timeout recovery before ordinary stale quote refresh", () => {
-  const hardIndex = route.indexOf("recoverOverdueSimulationTimeouts(observedAt)");
-  const quoteIndex = route.indexOf("refreshStaleOpenPositionsForSafety()");
+  const hardIndex = route.indexOf("timeoutRecovery = await recoverOverdueSimulationTimeouts(observedAt)");
+  const quoteIndex = route.indexOf("positionSafety = await refreshStaleOpenPositionsForSafety()", hardIndex + 1);
   assert.ok(hardIndex > 0);
   assert.ok(quoteIndex > hardIndex);
   assert.match(route, /timeoutRecovery/);
