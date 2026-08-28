@@ -73,6 +73,22 @@ test("MarketScanner shards Cloudflare Free deep scans across invocations and kee
   assert.match(source, /market scanner cycle failed/);
 });
 
+test("Cloudflare Free HTE scan strips retired lifecycle work and stages upstream load", async () => {
+  const source = await readFile(new URL("../lib/scanner.ts", import.meta.url), "utf8");
+  assert.match(source, /const freeBackground = options\.profile === "free-background"/);
+  assert.match(source, /if \(!freeBackground\) await retireLegacyShadowTrades\(\)/);
+  assert.match(source, /if \(!freeBackground\) \{[\s\S]*?getPriorLong\(ticker\.symbol\)[\s\S]*?getExperience\(ticker\.symbol\)/);
+  assert.match(source, /if \(freeBackground\) \{[\s\S]*?const packet = await analyze\(\);[\s\S]*?const growthData = await growth\(\)/);
+  assert.match(source, /if \(!freeBackground\) \{[\s\S]*?legacyObservationOnly\(packet\)[\s\S]*?processDecision\(basePacket, settings\)/);
+
+  const universe = source.indexOf("const universe = await fetchGateUniverse");
+  const context = source.indexOf("const context = await getGlobalRiskContext", universe);
+  const d1Reads = source.indexOf("const [previousV2, experienceBook] = await Promise.all", context);
+  assert.ok(universe > 0, "universe stage must exist");
+  assert.ok(context > universe, "global risk must start after universe headers/data complete");
+  assert.ok(d1Reads > context, "D1 learning/context reads must start after upstream market stages");
+});
+
 test("scanner health exposes explicit hard-interruption diagnosis instead of blank error", async () => {
   const [worker, hte] = await Promise.all([
     readFile(new URL("../worker/index.ts", import.meta.url), "utf8"),
