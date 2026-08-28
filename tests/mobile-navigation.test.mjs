@@ -18,6 +18,25 @@ test("bottom navigation uses a viewport-fixed, transform-free iOS layout", async
   assert.match(css, /\.app-shell\s*\{[^}]*padding:[^;]*calc\(88px \+ env\(safe-area-inset-bottom\)\)/s);
 });
 
+test("iOS bottom navigation is protected from ancestor containing-block regressions", async () => {
+  const [layout, fix] = await Promise.all([
+    readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/bottom-nav-viewport-fix.css", import.meta.url), "utf8"),
+  ]);
+  const rootBlock = fix.match(/html,\s*body\s*\{([^}]*)\}/s)?.[1] ?? "";
+  const navBlock = fix.match(/\.bottom-nav,\s*body\s*>\s*\.bottom-nav\s*\{([^}]*)\}/s)?.[1] ?? "";
+
+  assert.match(layout, /import "\.\/runtime-stability\.css";\s*import "\.\/bottom-nav-viewport-fix\.css";/);
+  assert.match(rootBlock, /transform:\s*none\s*!important/);
+  assert.match(rootBlock, /filter:\s*none\s*!important/);
+  assert.match(rootBlock, /perspective:\s*none\s*!important/);
+  assert.match(rootBlock, /contain:\s*none\s*!important/);
+  assert.match(navBlock, /position:\s*fixed\s*!important/);
+  assert.match(navBlock, /bottom:\s*0\s*!important/);
+  assert.match(navBlock, /z-index:\s*2147483000\s*!important/);
+  assert.match(fix, /@media \(min-width:\s*680px\)[\s\S]*bottom:\s*24px\s*!important/);
+});
+
 test("iPhone pull-to-refresh performs one genuine full refresh without starting a deep scan", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
