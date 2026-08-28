@@ -43,10 +43,9 @@ async function loadExecutionGovernor(): Promise<ExecutionGovernor> {
   const recentWeak = stats.recentSampleCount >= 20
     && (stats.recentAverageNetPct ?? 0) < 0
     && (stats.recentProfitFactor ?? 0) < 1;
-  const severeLossStreak = stats.maxLossStreak >= 6;
-  const defensive = overallWeak || recentWeak || severeLossStreak;
+  const defensive = overallWeak || recentWeak;
   const reason = defensive
-    ? `Strategy 2.0 进入防守模式：n=${stats.sampleCount}，平均净变动 ${(stats.averageNetPct ?? 0).toFixed(3)}%，最近20笔 ${(stats.recentAverageNetPct ?? 0).toFixed(3)}%，PF ${stats.profitFactor?.toFixed(2) ?? "--"}。暂停探索交易，只允许已验证高置信单元。`
+    ? `Strategy 2.0 进入防守模式：n=${stats.sampleCount}，平均净变动 ${(stats.averageNetPct ?? 0).toFixed(3)}%，最近20笔 ${(stats.recentAverageNetPct ?? 0).toFixed(3)}%，PF ${stats.profitFactor?.toFixed(2) ?? "--"}。暂停探索/普通交易，只允许已验证高置信单元。`
     : `Strategy 2.0 执行正常：n=${stats.sampleCount}，最近20笔 ${(stats.recentAverageNetPct ?? 0).toFixed(3)}%，PF ${stats.profitFactor?.toFixed(2) ?? "--"}。`;
   return { state: defensive ? "DEFENSIVE" : "NORMAL", reason, stats };
 }
@@ -68,16 +67,16 @@ function isReadyGrowthSignal(signal: Strategy2Signal, governor: ExecutionGoverno
 
   // Critical containment: Strategy 2.0 computes a fractional risk multiplier,
   // but the legacy contract preview currently sizes from the full account risk
-  // budget. Never let a 25%-risk exploration candidate silently execute at the
-  // full base risk. Exploration stays observation-only until sizing consumes
-  // the multiplier end-to-end.
+  // budget. Until that multiplier is consumed end-to-end, only signals whose
+  // intended multiplier is effectively the full base risk may create an order.
+  // This prevents a nominal 25%/50% risk decision from silently becoming 100%.
   if (signal.strategyMeta.tradeMode === "exploration") return false;
+  if (signalRiskMultiplier(signal) < 0.95) return false;
 
   if (governor.state === "DEFENSIVE") {
     return signal.strategyMeta.tradeMode === "high_conviction"
       && (signal.strategyMeta.experienceSamples ?? 0) >= 12
-      && (signal.strategyMeta.expectancyR ?? 0) >= 0.12
-      && signalRiskMultiplier(signal) >= 0.70;
+      && (signal.strategyMeta.expectancyR ?? 0) >= 0.12;
   }
   return true;
 }
