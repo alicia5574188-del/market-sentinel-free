@@ -23,7 +23,7 @@ test("production Worker bundle contains the HTE 3.1 clean runtime", async () => 
   assert.doesNotMatch(source, /class_name":"MarketScannerV2"/);
 });
 
-test("generated Wrangler config uses fresh clean simulation namespaces and retires legacy classes", async () => {
+test("generated Wrangler config uses append-only migrations for clean simulation namespaces", async () => {
   const config = JSON.parse(await readFile(new URL("../dist/server/wrangler.json", import.meta.url), "utf8"));
   assert.deepEqual(
     config.durable_objects?.bindings?.find(({ name }) => name === "MARKET_SCANNER"),
@@ -33,15 +33,18 @@ test("generated Wrangler config uses fresh clean simulation namespaces and retir
     config.durable_objects?.bindings?.find(({ name }) => name === "POSITION_MONITOR"),
     { name: "POSITION_MONITOR", class_name: "HTE31TradeManager" },
   );
-  const v4 = (config.migrations ?? []).find(({ tag }) => tag === "v4");
+  const migrations = config.migrations ?? [];
+  const v4 = migrations.find(({ tag }) => tag === "v4");
+  const v5 = migrations.find(({ tag }) => tag === "v5");
   assert.ok(
     v4?.new_sqlite_classes?.includes("HTE31MarketScanner") && v4?.new_sqlite_classes?.includes("HTE31TradeManager"),
-    "production config must create fresh HTE31 simulation Durable Object namespaces",
+    "v4 must remain the immutable creation step for fresh HTE31 namespaces",
   );
+  assert.equal(v4?.deleted_classes, undefined, "do not rewrite an earlier migration tag after deployment has been attempted");
   assert.deepEqual(
-    [...(v4?.deleted_classes ?? [])].sort(),
+    [...(v5?.deleted_classes ?? [])].sort(),
     ["MarketScanner", "MarketScannerV2", "PositionMonitor"],
-    "clean deployment must explicitly delete retired simulation Durable Object classes",
+    "v5 must explicitly retire the old simulation Durable Object namespaces",
   );
   assert.ok(
     (config.durable_objects?.bindings ?? []).every(({ class_name }) => !["MarketScanner", "MarketScannerV2", "PositionMonitor"].includes(class_name)),
