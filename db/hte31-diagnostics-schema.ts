@@ -1,0 +1,43 @@
+import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+
+export const hte31TriggerBuckets = sqliteTable("hte31_trigger_buckets", {
+  bucketStart: integer("bucket_start").primaryKey(),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [
+  index("hte31_trigger_bucket_updated_idx").on(table.updatedAt),
+]);
+
+export const hte31ShadowSamples = sqliteTable("hte31_shadow_samples", {
+  id: text("id").primaryKey(),
+  symbol: text("symbol").notNull(),
+  traderId: text("trader_id", { enum: ["dennis_trend", "raschke_pullback", "turtle_soup"] }).notNull(),
+  setupId: text("setup_id").notNull(),
+  side: text("side", { enum: ["LONG", "SHORT"] }).notNull(),
+  assetRegime: text("asset_regime").notNull(),
+  missingKey: text("missing_key").notNull(),
+  missingLabel: text("missing_label").notNull(),
+  entryAt: integer("entry_at").notNull(),
+  entryPrice: real("entry_price").notNull(),
+  stopPrice: real("stop_price").notNull(),
+  takeProfit2Price: real("take_profit_2_price").notNull(),
+  riskPerUnit: real("risk_per_unit").notNull(),
+  status: text("status", { enum: ["pending", "complete"] }).notNull().default("pending"),
+  maxPriceSeen: real("max_price_seen").notNull(),
+  minPriceSeen: real("min_price_seen").notNull(),
+  lastPrice: real("last_price").notNull(),
+  lastObservedAt: integer("last_observed_at").notNull(),
+  observationsJson: text("observations_json").notNull().default("[]"),
+  finalAt: integer("final_at"),
+  finalPrice: real("final_price"),
+  resultR: real("result_r"),
+  mfeR: real("mfe_r"),
+  maeR: real("mae_r"),
+  outcome: text("outcome", { enum: ["win", "loss", "flat"] }),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [
+  index("hte31_shadow_status_time_idx").on(table.status, table.entryAt),
+  index("hte31_shadow_symbol_status_idx").on(table.symbol, table.status),
+  index("hte31_shadow_trader_status_idx").on(table.traderId, table.status),
+]);
