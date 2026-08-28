@@ -5,6 +5,7 @@ import { getStrategyLabDashboard } from "../../../lib/shadow-strategy-repository
 import { getLatestV2MarketContext, listRecentV2Opportunities, listRecentV2Warnings } from "../../../lib/sentinel-v2-repository";
 import { getContractV2HistoryStats } from "../../../lib/dashboard-history-stats";
 import { refreshOpenPositions } from "../../../lib/scanner";
+import { recoverOverdueSimulationTimeouts } from "../../../lib/position-timeout-recovery";
 import { requireApiAccount } from "../../api-auth";
 
 export const dynamic = "force-dynamic";
@@ -112,6 +113,14 @@ export async function GET() {
   if ("response" in auth) return auth.response;
 
   const observedAt = Date.now();
+  let timeoutRecovery: Awaited<ReturnType<typeof recoverOverdueSimulationTimeouts>> | null = null;
+  let timeoutRecoveryError = "";
+  try {
+    timeoutRecovery = await recoverOverdueSimulationTimeouts(observedAt);
+  } catch (error) {
+    timeoutRecoveryError = errorMessage(error);
+  }
+
   let positionSafety: Awaited<ReturnType<typeof refreshStaleOpenPositionsForSafety>> | null = null;
   let positionSafetyError = "";
   try {
@@ -136,6 +145,8 @@ export async function GET() {
   results.forEach((result, index) => {
     if (result.status === "rejected") errors[names[index]] = errorMessage(result.reason);
   });
+  if (timeoutRecoveryError) errors.timeoutRecovery = timeoutRecoveryError;
+  if (timeoutRecovery?.failures.length) errors.timeoutRecovery = timeoutRecovery.failures.map((item) => `${item.symbol}: ${item.error}`).join("; ");
   if (positionSafetyError) errors.positionSafety = positionSafetyError;
   if (positionSafety?.failures.length) errors.positionSafety = positionSafety.failures.map((item) => `${item.symbol}: ${item.error}`).join("; ");
 
@@ -163,6 +174,7 @@ export async function GET() {
     orders,
     stats,
     background,
+    timeoutRecovery,
     positionSafety,
     degraded,
     errors,
