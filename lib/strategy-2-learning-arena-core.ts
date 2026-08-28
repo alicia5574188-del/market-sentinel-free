@@ -129,20 +129,15 @@ const EXIT_LABELS: Record<string, string> = {
   unknown: "其他退出",
 };
 
-function parseRegime(value: string | null | undefined) {
-  if (!value?.startsWith("S2|")) return null;
-  const parts = value.split("|");
-  const playbook = parts[1];
-  const globalRegime = parts.find((part) => part.startsWith("global:"))?.slice(7) ?? "unknown";
-  return playbook ? { playbook, globalRegime } : null;
-}
-
-function parseRows(rows: Strategy2ArenaTradeRow[]) {
+function parseRows(rows: Strategy2ArenaTradeRow[]): ParsedArenaRow[] {
   return rows.flatMap((row): ParsedArenaRow[] => {
-    const parsed = parseRegime(row.regime);
-    if (!parsed || row.netMovePct == null || (row.side !== "LONG" && row.side !== "SHORT")) return [];
+    if (!row.regime?.startsWith("S2|") || row.netMovePct == null || (row.side !== "LONG" && row.side !== "SHORT")) return [];
+    const parts = row.regime.split("|");
+    const playbook = parts[1];
+    if (!playbook) return [];
+    const globalRegime = parts.find((part) => part.startsWith("global:"))?.slice(7) ?? "unknown";
     const riskPct = Math.max(Math.abs(row.plannedRiskPct ?? 0), 0.05);
-    return [{ ...row, ...parsed, side: row.side, resultR: row.netMovePct / riskPct }];
+    return [{ ...row, playbook, globalRegime, side: row.side, resultR: row.netMovePct / riskPct }];
   }).sort((a, b) => (a.exitAt ?? 0) - (b.exitAt ?? 0));
 }
 
@@ -157,7 +152,7 @@ function profitFactor(values: number[]) {
   return gains / losses;
 }
 
-function maxDrawdownR(values: number[]) {
+function drawdown(values: number[]) {
   let equity = 0;
   let peak = 0;
   let worst = 0;
@@ -169,16 +164,14 @@ function maxDrawdownR(values: number[]) {
   return worst;
 }
 
-function maxLossStreak(values: number[]) {
+function lossStreak(values: number[]) {
   let current = 0;
   let worst = 0;
   for (const value of values) {
     if (value < 0) {
       current += 1;
       worst = Math.max(worst, current);
-    } else {
-      current = 0;
-    }
+    } else current = 0;
   }
   return worst;
 }
@@ -188,7 +181,8 @@ function latest(rows: ParsedArenaRow[], count: number) {
 }
 
 function previous(rows: ParsedArenaRow[], count: number) {
-  return rows.slice(Math.max(0, rows.length - count * 2), Math.max(0, rows.length - count));
+  const end = Math.max(0, rows.length - count);
+  return rows.slice(Math.max(0, rows.length - count * 2), end);
 }
 
 function rollup(label: Strategy2ArenaRollup["label"], rows: ParsedArenaRow[]): Strategy2ArenaRollup {
@@ -201,8 +195,8 @@ function rollup(label: Strategy2ArenaRollup["label"], rows: ParsedArenaRow[]): S
     profitFactorR: profitFactor(values),
     cumulativeR: values.reduce((sum, value) => sum + value, 0),
     cumulativePnlUsdt: rows.reduce((sum, row) => sum + (row.netPnlUsdt ?? 0), 0),
-    maxDrawdownR: maxDrawdownR(values),
-    maxLossStreak: maxLossStreak(values),
+    maxDrawdownR: drawdown(values),
+    maxLossStreak: lossStreak(values),
     t1HitRate: rows.length ? rows.filter((row) => row.target1HitAt != null).length / rows.length : null,
   };
 }
@@ -210,11 +204,11 @@ function rollup(label: Strategy2ArenaRollup["label"], rows: ParsedArenaRow[]): S
 function buildTrend(rows: ParsedArenaRow[]): Strategy2LearningArena["trend"] {
   const recentRows = latest(rows, 20);
   const previousRows = previous(rows, 20);
-  const recentExpectancyR = average(recentRows.map((row) => row.resultR));
-  const previousExpectancyR = average(previousRows.map((row) => row.resultR));
+  const recent20ExpectancyR = average(recentRows.map((row) => row.resultR));
+  const previous20ExpectancyR = average(previousRows.map((row) => row.resultR));
   const enough = recentRows.length >= 10 && previousRows.length >= 10;
-  const expectancyDeltaR = enough && recentExpectancyR != null && previousExpectancyR != null
-    ? recentExpectancyR - previousExpectancyR
+  const expectancyDeltaR = enough && recent20ExpectancyR != null && previous20ExpectancyR != null
+    ? recent20ExpectancyR - previous20ExpectancyR
     : null;
   return {
     state: expectancyDeltaR == null ? "COLLECTING" : expectancyDeltaR > 0.08 ? "IMPROVING" : expectancyDeltaR < -0.08 ? "DEGRADING" : "FLAT",
@@ -249,7 +243,11 @@ function buildExitProfiles(rows: ParsedArenaRow[]): Strategy2ArenaExitProfile[] 
 
 function buildPlaybooks(rows: ParsedArenaRow[]): Strategy2ArenaPlaybook[] {
   const groups = new Map<string, ParsedArenaRow[]>();
-  for (const row of rows) groups.set(row.playbook, [...(groups.get(row.playbook) ?? []), row]);
+  for (const row of rows) {
+    const bucket = groups.get(row.playbook) ?? [];
+    bucket.push(row);
+    groups.set(row.playbook, bucket);
+  }
   return [...groups.entries()].map(([playbook, bucket]) => {
     const sampleCount = bucket.length;
     const expectancyR = average(bucket.map((row) => row.resultR));
@@ -280,7 +278,9 @@ function buildHeatmap(rows: ParsedArenaRow[]): Strategy2ArenaCell[] {
   const groups = new Map<string, ParsedArenaRow[]>();
   for (const row of rows) {
     const key = `${row.globalRegime}|${row.playbook}|${row.side}`;
-    groups.set(key, [...(groups.get(key) ?? []), row]);
+    const bucket = groups.get(key) ?? [];
+    bucket.push(row);
+    groups.set(key, bucket);
   }
   return [...groups.entries()].map(([key, bucket]) => ({
     key,
