@@ -240,7 +240,16 @@ type LiveOrder = {
 
 type LiveSnapshot = {
   observedAt: number;
-  control: { entryEnabled: boolean; state: string; lastError?: string | null; emergencyReason?: string | null; accountEquityLastUsdt?: number | null; dailyRealizedPnlUsdt?: number | null };
+  control: {
+    entryEnabled: boolean;
+    state: string;
+    lastError?: string | null;
+    emergencyReason?: string | null;
+    accountEquityLastUsdt?: number | null;
+    dailyRealizedPnlUsdt?: number | null;
+    lastReconciledAt?: number | null;
+    lastSuccessfulReconcileAt?: number | null;
+  };
   credential: { configured: boolean; environment?: string; keyHint?: string; status?: string; lastVerifiedAt?: number | null; lastError?: string | null };
   performanceGate?: { passed?: boolean; reason?: string | null };
   orders: LiveOrder[];
@@ -536,6 +545,10 @@ export default function CleanPage() {
     </>}
 
     {tab === "实盘" && <>
+      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">GATE CONTRACT ACCOUNT</span><h2>合约账户</h2></div><small>{live?.credential.configured ? "Gate 已连接" : "未连接"}</small></div>
+        <div className="account-grid"><div className="metric"><span>合约权益</span><b>{fmtMoney(live?.control.accountEquityLastUsdt)}</b></div><div className="metric"><span>当日已实现</span><b className={(live?.control.dailyRealizedPnlUsdt??0)<0?"negative":"positive"}>{fmtMoney(live?.control.dailyRealizedPnlUsdt)}</b></div><div className="metric"><span>最近成功对账</span><b>{fmtTime(live?.control.lastSuccessfulReconcileAt)}</b></div><div className="metric"><span>Auto Live</span><b>{live?.control.entryEnabled?"已开启":"已关闭"}</b></div></div>
+        <p className="clean-driver">这里展示 Gate 实盘链已经保存的真实账户状态。当前后端只持久化合约权益、当日已实现和对账时间；没有可靠字段时不会把“可用保证金”估算出来。</p>
+      </section>
       <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">GATE LIVE · SAFETY BOUNDARY</span><h2>实盘链独立保留</h2></div></div>{liveError&&<div className="clean-banner bad"><b>实盘读取失败</b><p>{liveError}</p></div>}
         <div className="clean-live-grid"><article className="clean-panel"><span className="eyebrow">AUTO LIVE</span><div className="clean-market-title"><strong>{live?.control.entryEnabled?"已开启":"已关闭"}</strong></div><p className="clean-driver">HTE 3.1 Clean 从零验证期间，新的 Auto Live 开仓默认锁定；已有真实订单仍由原 Execution / Live Coordinator 管理。</p><div className="clean-actions"><button className={live?.control.entryEnabled?"danger":""} onClick={toggleLive}>{live?.control.entryEnabled?"关闭新实盘开仓":"验证期暂不开放"}</button><button onClick={()=>void mutate("/api/live/reconcile",{method:"POST"},"Gate 对账已完成。",true)}>立即对账</button><button className="danger" onPointerDown={startEmergency} onPointerUp={cancelEmergency} onPointerCancel={cancelEmergency} onPointerLeave={cancelEmergency}>按住 1.2 秒紧急停机</button></div></article>
         <article className="clean-panel"><span className="eyebrow">GATE API</span>{live?.credential.configured?<><div className="clean-market-title"><strong>已配置</strong></div><p className="clean-driver">{live.credential.keyHint ?? "Gate Live"} · {live.credential.status ?? "verified"}</p><div className="clean-actions"><button onClick={()=>void mutate("/api/live/credentials",{method:"DELETE"},"Gate API 凭据已删除。",true)}>删除凭据</button></div></>:<div className="clean-form"><label><span>API Key</span><input type="password" autoComplete="off" value={apiKey} onChange={(e)=>setApiKey(e.target.value)}/></label><label><span>API Secret</span><input type="password" autoComplete="off" value={apiSecret} onChange={(e)=>setApiSecret(e.target.value)}/></label><label className="checkbox"><input type="checkbox" checked={permissionsConfirmed} onChange={(e)=>setPermissionsConfirmed(e.target.checked)}/><span>确认只授予 Gate 合约交易所需权限，不授予提币权限。</span></label><button className="primary" onClick={saveCredentials}>验证并保存</button></div>}</article></div>
