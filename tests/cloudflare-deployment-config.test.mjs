@@ -34,6 +34,7 @@ test("generated Cloudflare deployment config has unique bindings", async () => {
   );
   assert.ok((config.migrations ?? []).some(({ new_sqlite_classes: classes }) => classes?.includes("LiveTradingCoordinator")));
   assert.deepEqual(config.version_metadata, { binding: "CF_VERSION_METADATA" });
+  assert.deepEqual(config.triggers?.crons, ["* * * * *"]);
 });
 
 test("Worker serves public bundles from ASSETS before the Vinext router", async () => {
@@ -53,4 +54,30 @@ test("Worker serves public bundles from ASSETS before the Vinext router", async 
   assert.ok(assetFetch > publicAssetBranch);
   assert.ok(assetReturn > assetFetch);
   assert.ok(appRouter > assetReturn);
+});
+
+test("MarketScanner has a cron-driven watchdog in addition to its Durable Object alarm", async () => {
+  const source = await readFile(new URL("../worker/index.ts", import.meta.url), "utf8");
+  assert.match(source, /async runIfDue\(\): Promise<SchedulerWorkerStatus>/);
+  assert.match(source, /runScheduledSchedulers/);
+  assert.match(source, /MARKET_SCANNER\.getByName\("market-scanner"\)\.runIfDue\(\)/);
+  assert.match(source, /ctx\.waitUntil\(runScheduledSchedulers\(env\)\)/);
+  assert.match(source, /staleActivity/);
+  assert.match(source, /invalidAlarm/);
+  assert.match(source, /startedAt \+ 90_000/);
+  assert.match(source, /Date\.now\(\) \+ 15_000/);
+  assert.match(source, /state: "starting"/);
+  assert.match(source, /market scanner cycle failed/);
+});
+
+test("scanner health exposes the real scheduler error instead of only a stale timestamp", async () => {
+  const [worker, hte] = await Promise.all([
+    readFile(new URL("../worker/index.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/hte/route.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(worker, /scanner: \{ state: scanner\.state, lastRunAt: scanner\.lastRunAt, lastSuccessAt: scanner\.lastSuccessAt, nextRunAt: scanner\.nextRunAt, lastError: scanner\.lastError \}/);
+  assert.match(hte, /schedulerLastError/);
+  assert.match(hte, /schedulerAttemptAgeMs/);
+  assert.match(hte, /最近扫描错误/);
+  assert.match(hte, /调度器最后尝试/);
 });
