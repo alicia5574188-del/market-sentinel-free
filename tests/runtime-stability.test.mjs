@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [scheduler, client, layout, liveEngine, page, liveStatus, gatePrivate, apiAuth, userAccounts, serviceWorker, recoveryPage, earlyGuard] = await Promise.all([
+const [scheduler, client, layout, liveEngine, page, liveStatus, gatePrivate, apiAuth, userAccounts, serviceWorker, recoveryPage, earlyGuard, worker, marketRoute, scannerRoute, gateClient] = await Promise.all([
   readFile(new URL("../lib/background-scheduler.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/runtime-stability-client.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
@@ -15,6 +15,10 @@ const [scheduler, client, layout, liveEngine, page, liveStatus, gatePrivate, api
   readFile(new URL("../public/sw.js", import.meta.url), "utf8"),
   readFile(new URL("../public/recovery.html", import.meta.url), "utf8"),
   readFile(new URL("../public/sentinel-runtime-guard.js", import.meta.url), "utf8"),
+  readFile(new URL("../worker/index.ts", import.meta.url), "utf8"),
+  readFile(new URL("../app/api/market/route.ts", import.meta.url), "utf8"),
+  readFile(new URL("../app/api/scanner/route.ts", import.meta.url), "utf8"),
+  readFile(new URL("../lib/gate-client.ts", import.meta.url), "utf8"),
 ]);
 
 test("background health isolates modules and wakes only lightweight schedulers", () => {
@@ -75,6 +79,8 @@ test("pre-hydration guard owns read admission before any React poller can start"
   assert.match(earlyGuard, /MAX_CONCURRENT_HEAVY_READS\s*=\s*1/);
   assert.match(earlyGuard, /pathname === "\/api\/market"\) return 30_000/);
   assert.match(earlyGuard, /pathname === "\/api\/v2"\) return 45_000/);
+  assert.doesNotMatch(earlyGuard, /return pathname === "\/api\/market"/);
+  assert.doesNotMatch(earlyGuard, /\|\| pathname === "\/api\/scanner"/);
   assert.match(earlyGuard, /response\.status === 429 \|\| response\.status >= 500/);
   assert.match(earlyGuard, /openCircuit/);
   assert.match(earlyGuard, /sentinel:edge-pressure/);
@@ -82,9 +88,36 @@ test("pre-hydration guard owns read admission before any React poller can start"
   assert.doesNotMatch(earlyGuard, /RETRY_DELAYS/);
 });
 
-test("top-level navigation uses a self-contained recovery page instead of stale dynamic HTML", () => {
-  assert.match(serviceWorker, /CACHE_NAME = "market-sentinel-shell-v6"/);
+test("production foreground market reads consume the background scanner model instead of recomputing Gate data", () => {
+  assert.match(worker, /foregroundReadModel/);
+  assert.match(worker, /foregroundMarket:\$\{packet\.symbol\}/);
+  assert.match(worker, /async readModel\(\)/);
+  assert.match(worker, /async marketSnapshot\(symbol: string\)/);
+  assert.match(marketRoute, /bindings\.BACKGROUND_MODE === "cloudflare-free"[\s\S]*return backgroundMarketResponse\(symbol\)/);
+  assert.match(marketRoute, /scanner\.marketSnapshot\(symbol\)/);
+  assert.match(marketRoute, /前台不会回退为 Gate 重型计算/);
+  assert.match(marketRoute, /return directMarketResponse\(symbol\)/);
+  assert.match(scannerRoute, /bindings\.BACKGROUND_MODE === "cloudflare-free"[\s\S]*return backgroundScannerResponse\(\)/);
+  assert.match(scannerRoute, /scanner\.readModel\(\)/);
+  assert.match(scannerRoute, /前台不会自行向 Gate 发起重复扫描/);
+  assert.match(scannerRoute, /return Response\.json\(await getQuickScanner\(\)/);
+});
+
+test("Gate public analysis has bounded endpoint fanout instead of firing every source simultaneously", () => {
+  assert.match(gateClient, /ANALYSIS_UPSTREAM_CONCURRENCY\s*=\s*4/);
+  assert.match(gateClient, /settleFactoriesBounded/);
+  assert.match(gateClient, /const settled = await settleFactoriesBounded\(keys\.map/);
+  assert.doesNotMatch(gateClient, /Promise\.allSettled\(keys\.map/);
+  assert.match(gateClient, /settleFactoriesBounded\(unique\.map/);
+});
+
+test("top-level navigation uses a timed self-contained recovery page instead of hanging or stale dynamic HTML", () => {
+  assert.match(serviceWorker, /CACHE_NAME = "market-sentinel-shell-v7"/);
   assert.match(serviceWorker, /RECOVERY_URL = "\/recovery\.html"/);
+  assert.match(serviceWorker, /NAVIGATION_TIMEOUT_MS = 5_000/);
+  assert.match(serviceWorker, /async function navigationFetch/);
+  assert.match(serviceWorker, /new AbortController\(\)/);
+  assert.match(serviceWorker, /controller\.abort\(\)/);
   assert.match(serviceWorker, /"\/sentinel-runtime-guard\.js"/);
   assert.match(serviceWorker, /if \(url\.pathname\.startsWith\("\/api\/"\) \|\| url\.pathname === "\/__health"\) return;/);
   assert.match(serviceWorker, /response\.status === 429 \|\| response\.status >= 500/);
