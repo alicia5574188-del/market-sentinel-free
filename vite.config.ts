@@ -33,10 +33,11 @@ export default defineConfig(async () => {
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
         inspectorPort: false,
         config(config) {
-          // Mutate the file-backed config instead of returning another binding
-          // array. The plugin deep-merges returned arrays, which duplicated the
-          // root `DB` binding in Vinext's generated deployment config.
-          config.main = "./worker/index.ts";
+          // Production is intentionally rooted at the V2 wrapper. The wrapper
+          // re-exports the full Worker but also gives MarketScanner a fresh DO
+          // class export/namespace so legacy scanner runtime state cannot pin
+          // the resumable phase machine behind a poisoned old instance.
+          config.main = "./worker/index-v2.ts";
           config.compatibility_flags = [
             ...new Set([...(config.compatibility_flags ?? []), "nodejs_compat"]),
           ];
