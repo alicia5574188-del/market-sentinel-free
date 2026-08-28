@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [scanner, marketRoute, v2Route, strategyRepo, liveRepo, heavyUiAdmission] = await Promise.all([
+const [scanner, marketRoute, v2Route, hteRoute, strategyRepo, liveRepo, heavyUiAdmission] = await Promise.all([
   readFile(new URL("../lib/scanner.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/api/market/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/api/v2/route.ts", import.meta.url), "utf8"),
+  readFile(new URL("../app/api/hte/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/shadow-strategy-repository.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/live-trading-repository.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/ui-heavy-read-admission.ts", import.meta.url), "utf8"),
@@ -52,6 +53,16 @@ test("Strategy dashboard isolates optional failures and bounds heavy interactive
   assert.match(v2Route, /Promise\.allSettled/);
   assert.match(v2Route, /optionalSourceErrors/);
   assert.doesNotMatch(v2Route, /status:\s*503/);
+});
+
+test("HTE snapshot has a throttled safety-only fallback for stale or overdue open positions", () => {
+  assert.match(hteRoute, /POSITION_UI_STALE_MS\s*=\s*45_000/);
+  assert.match(hteRoute, /POSITION_SAFETY_REFRESH_GAP_MS\s*=\s*30_000/);
+  const safety = hteRoute.match(/async function refreshStaleOpenPositionsForSafety\(\)[\s\S]*?\n}/)?.[0] ?? "";
+  assert.match(safety, /now - trade\.lastEvaluatedAt > POSITION_UI_STALE_MS/);
+  assert.match(safety, /trade\.maxHoldingMinutes \* 60_000/);
+  assert.match(safety, /refreshOpenPositions\(null, \{ includeDashboard: false \}\)/);
+  assert.doesNotMatch(safety, /runMarketScan|processShadowStrategies|evaluateHumanTraderPool/);
 });
 
 test("same human trader cools itself after repeated losses without freezing the other traders", () => {
