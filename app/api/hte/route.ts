@@ -4,12 +4,40 @@ import { getAlertDashboard, getSettings, listOpenTrades, publicSettings } from "
 import { getStrategyLabDashboard } from "../../../lib/shadow-strategy-repository";
 import { getLatestV2MarketContext, listRecentV2Opportunities, listRecentV2Warnings } from "../../../lib/sentinel-v2-repository";
 import { getContractV2HistoryStats } from "../../../lib/dashboard-history-stats";
+import { refreshOpenPositions } from "../../../lib/scanner";
 import { requireApiAccount } from "../../api-auth";
 
 export const dynamic = "force-dynamic";
 
+const POSITION_UI_STALE_MS = 45_000;
+const POSITION_SAFETY_REFRESH_GAP_MS = 30_000;
+let lastPositionSafetyRefreshAt = 0;
+let positionSafetyPending: Promise<{ refreshed: number; failures: { symbol: string; error: string }[] }> | null = null;
+
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "source unavailable";
+}
+
+async function refreshStaleOpenPositionsForSafety() {
+  const openTrades = await listOpenTrades();
+  const now = Date.now();
+  const stale = openTrades.filter((trade) => now - trade.lastEvaluatedAt > POSITION_UI_STALE_MS);
+  const overdue = openTrades.filter((trade) => now - trade.entryAt >= trade.maxHoldingMinutes * 60_000);
+  const needsSafetyRefresh = [...new Set([...stale.map((trade) => trade.id), ...overdue.map((trade) => trade.id)])];
+  if (!needsSafetyRefresh.length) return { triggered: false, stale: 0, overdue: 0, refreshed: 0, failures: [] as { symbol: string; error: string }[] };
+
+  if (now - lastPositionSafetyRefreshAt < POSITION_SAFETY_REFRESH_GAP_MS) {
+    return { triggered: false, stale: stale.length, overdue: overdue.length, refreshed: 0, failures: [] as { symbol: string; error: string }[] };
+  }
+
+  if (!positionSafetyPending) {
+    lastPositionSafetyRefreshAt = now;
+    positionSafetyPending = refreshOpenPositions(null, { includeDashboard: false })
+      .then((result) => ({ refreshed: result.refreshed, failures: result.failures }))
+      .finally(() => { positionSafetyPending = null; });
+  }
+  const result = await positionSafetyPending;
+  return { triggered: true, stale: stale.length, overdue: overdue.length, ...result };
 }
 
 async function readScannerSnapshot() {
@@ -27,8 +55,8 @@ async function readScannerSnapshot() {
       }
     } catch {
       // The dashboard must stay usable even if the background read model is
-      // temporarily unavailable. Fall back to D1-only state; never fan out to
-      // Gate from the foreground just to render the page.
+      // temporarily unavailable. Fall back to D1-only state; safety management
+      // of an already-open position is handled separately above.
     }
   }
 
@@ -46,7 +74,7 @@ async function readScannerSnapshot() {
     settings: publicSettings(settings),
     snapshotSource: "d1_fallback" as const,
     snapshotAgeMs: null,
-    error: "后台市场快照暂不可用；前台已降级为只读 D1 状态，不会重复向 Gate 扫描。",
+    error: "后台市场快照暂不可用；前台已降级为 D1 状态。已有持仓仍保留独立安全刷新，不会启动新币扫描。",
   };
 }
 
@@ -84,6 +112,14 @@ export async function GET() {
   if ("response" in auth) return auth.response;
 
   const observedAt = Date.now();
+  let positionSafety: Awaited<ReturnType<typeof refreshStaleOpenPositionsForSafety>> | null = null;
+  let positionSafetyError = "";
+  try {
+    positionSafety = await refreshStaleOpenPositionsForSafety();
+  } catch (error) {
+    positionSafetyError = errorMessage(error);
+  }
+
   const results = await Promise.allSettled([
     readScannerSnapshot(),
     getLatestV2MarketContext(),
@@ -100,6 +136,8 @@ export async function GET() {
   results.forEach((result, index) => {
     if (result.status === "rejected") errors[names[index]] = errorMessage(result.reason);
   });
+  if (positionSafetyError) errors.positionSafety = positionSafetyError;
+  if (positionSafety?.failures.length) errors.positionSafety = positionSafety.failures.map((item) => `${item.symbol}: ${item.error}`).join("; ");
 
   const scanner = results[0].status === "fulfilled" ? results[0].value : null;
   const market = results[1].status === "fulfilled" ? results[1].value : scanner?.v2 ?? null;
@@ -125,6 +163,7 @@ export async function GET() {
     orders,
     stats,
     background,
+    positionSafety,
     degraded,
     errors,
   }, {
