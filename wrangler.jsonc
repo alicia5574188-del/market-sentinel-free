@@ -26,7 +26,7 @@
       },
       {
         "name": "MARKET_SCANNER",
-        "class_name": "MarketScanner"
+        "class_name": "MarketScannerV2"
       },
       {
         "name": "LIVE_TRADING_COORDINATOR",
@@ -42,6 +42,10 @@
     {
       "tag": "v2",
       "new_sqlite_classes": ["LiveTradingCoordinator"]
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["MarketScannerV2"]
     }
   ],
   "version_metadata": {
