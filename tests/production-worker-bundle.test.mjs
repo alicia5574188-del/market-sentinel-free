@@ -12,7 +12,7 @@ async function readBuiltWorkerSource() {
   return (await Promise.all(jsFiles.map((file) => readFile(file, "utf8")))).join("\n");
 }
 
-test("production Worker bundle contains the HTE 3.1 clean runtime", async () => {
+test("production Worker bundle contains the HTE 3.1 clean runtime and inert archive classes", async () => {
   const source = await readBuiltWorkerSource();
   assert.match(source, /hte31-clean-1/);
   assert.match(source, /HTE 3\.1 Clean/);
@@ -20,11 +20,14 @@ test("production Worker bundle contains the HTE 3.1 clean runtime", async () => 
   assert.match(source, /HT1 \/ HT2 \/ HT3 独立评估/);
   assert.match(source, /HTE31MarketScanner/);
   assert.match(source, /HTE31TradeManager/);
-  assert.doesNotMatch(source, /class_name":"MarketScannerV2"/);
+  assert.match(source, /RetiredPositionMonitor/);
+  assert.match(source, /RetiredMarketScanner/);
+  assert.match(source, /RetiredMarketScannerV2/);
 });
 
-test("generated Wrangler config uses append-only migrations for clean simulation namespaces", async () => {
+test("generated Wrangler config uses declarative exports as the HTE31 lifecycle source of truth", async () => {
   const config = JSON.parse(await readFile(new URL("../dist/server/wrangler.json", import.meta.url), "utf8"));
+  assert.equal(config.migrations, undefined, "declarative exports and legacy migrations must never be mixed");
   assert.deepEqual(
     config.durable_objects?.bindings?.find(({ name }) => name === "MARKET_SCANNER"),
     { name: "MARKET_SCANNER", class_name: "HTE31MarketScanner" },
@@ -33,21 +36,15 @@ test("generated Wrangler config uses append-only migrations for clean simulation
     config.durable_objects?.bindings?.find(({ name }) => name === "POSITION_MONITOR"),
     { name: "POSITION_MONITOR", class_name: "HTE31TradeManager" },
   );
-  const migrations = config.migrations ?? [];
-  const v4 = migrations.find(({ tag }) => tag === "v4");
-  const v5 = migrations.find(({ tag }) => tag === "v5");
+  for (const className of ["HTE31MarketScanner", "HTE31TradeManager", "LiveTradingCoordinator", "RetiredPositionMonitor", "RetiredMarketScanner", "RetiredMarketScannerV2"]) {
+    assert.deepEqual(config.exports?.[className]?.type, "durable-object");
+    assert.equal(config.exports?.[className]?.storage, "sqlite");
+  }
+  assert.deepEqual(config.exports?.PositionMonitor, { type: "durable-object", state: "renamed", renamed_to: "RetiredPositionMonitor" });
+  assert.deepEqual(config.exports?.MarketScanner, { type: "durable-object", state: "renamed", renamed_to: "RetiredMarketScanner" });
+  assert.deepEqual(config.exports?.MarketScannerV2, { type: "durable-object", state: "renamed", renamed_to: "RetiredMarketScannerV2" });
   assert.ok(
-    v4?.new_sqlite_classes?.includes("HTE31MarketScanner") && v4?.new_sqlite_classes?.includes("HTE31TradeManager"),
-    "v4 must remain the immutable creation step for fresh HTE31 namespaces",
-  );
-  assert.equal(v4?.deleted_classes, undefined, "do not rewrite an earlier migration tag after deployment has been attempted");
-  assert.deepEqual(
-    [...(v5?.deleted_classes ?? [])].sort(),
-    ["MarketScanner", "MarketScannerV2", "PositionMonitor"],
-    "v5 must explicitly retire the old simulation Durable Object namespaces",
-  );
-  assert.ok(
-    (config.durable_objects?.bindings ?? []).every(({ class_name }) => !["MarketScanner", "MarketScannerV2", "PositionMonitor"].includes(class_name)),
-    "no production binding may keep a retired simulation class alive",
+    (config.durable_objects?.bindings ?? []).every(({ class_name }) => !class_name.startsWith("Retired") && !["MarketScanner", "MarketScannerV2", "PositionMonitor"].includes(class_name)),
+    "retired simulation namespaces must never be callable through production bindings",
   );
 });
