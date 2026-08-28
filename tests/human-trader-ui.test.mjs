@@ -27,10 +27,25 @@ test("one HTE snapshot orchestrates the non-live dashboard without foreground Ga
   assert.match(route, /listRecentV2Opportunities\(48\)/);
   assert.match(route, /listRecentV2Warnings\(12\)/);
   assert.match(route, /ensureBackgroundSchedulers\(\)/);
+  assert.match(route, /getV2StrategyPoolActivity\(10 \* 60_000\)/);
   assert.match(route, /scanner\.readModel\(\)/);
   assert.match(route, /humanOnlyDashboard/);
   assert.match(route, /trade\.regime\.startsWith\("S2\|HT"\)/);
   assert.doesNotMatch(route, /fetchGateUniverse|analyzeGateSymbol|fetchGateChartCandles/);
+});
+
+test("page auto-refresh is separate from actual scanner freshness and exposes activity", () => {
+  assert.match(page, /setInterval\(\(\) => \{[\s\S]*refreshMain\(true\)[\s\S]*\}, 20_000\)/);
+  assert.match(page, /visibilitychange/);
+  assert.match(route, /SCANNER_STALE_MS = 150_000/);
+  assert.match(route, /scannerFreshness/);
+  assert.match(route, /后台市场扫描已滞后/);
+  assert.match(route, /OPPORTUNITY_FRESH_MS = 15 \* 60_000/);
+  assert.match(route, /requestedAt - item\.observedAt <= OPPORTUNITY_FRESH_MS/);
+  assert.match(route, /10分钟 HTE：/);
+  assert.match(route, /交易员：/);
+  assert.match(route, /strategyActivity/);
+  assert.match(route, /observedAt: responseObservedAt/);
 });
 
 test("iPhone scroll safety uses native pan-y and no document-level interaction trap", () => {

@@ -77,10 +77,13 @@ test("same human trader cools itself after repeated losses without freezing the 
   assert.match(strategyRepo, /Dennis \/ Raschke \/ Turtle Soup 互不连坐/);
 });
 
-test("global Human Risk Governor reacts later than trader-level circuit breakers", () => {
-  assert.match(strategyRepo, /lossStreak >= 8[\s\S]*"PAUSED"/);
-  assert.match(strategyRepo, /lossStreak >= 6[\s\S]*"DEFENSIVE"/);
-  assert.match(strategyRepo, /lossStreak >= 4[\s\S]*"CAUTION"/);
+test("global Human Risk Governor requires cross-trader damage before streak escalation", () => {
+  assert.match(strategyRepo, /streakTraderIds\.size >= 2 \? lossStreak : 0/);
+  assert.match(strategyRepo, /hasCrossTraderEvidence = allTraderIds\.size >= 2/);
+  assert.match(strategyRepo, /diversifiedLossStreak >= 8[\s\S]*"PAUSED"/);
+  assert.match(strategyRepo, /diversifiedLossStreak >= 6[\s\S]*"DEFENSIVE"/);
+  assert.match(strategyRepo, /diversifiedLossStreak >= 4[\s\S]*"CAUTION"/);
+  assert.match(strategyRepo, /单一交易员，只由该交易员独立熔断，不升级全局门槛/);
   assert.match(strategyRepo, /governor\.state === "PAUSED"[\s\S]*return false/);
   assert.match(strategyRepo, /governor\.state === "CAUTION"/);
   assert.match(strategyRepo, /tradeMode === "exploration"[\s\S]*signal\.confidence >= 84/);
