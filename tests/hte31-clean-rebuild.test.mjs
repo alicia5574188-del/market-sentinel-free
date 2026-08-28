@@ -75,3 +75,14 @@ test("HTE 3.1 runs independently of the dashboard being open", () => {
   assert.match(worker, /MARKET_SCANNER\.getByName\("market-scanner"\)\.runIfDue\(\)/);
   assert.match(wrangler, /"crons"\s*:\s*\["\* \* \* \* \*"\]/);
 });
+
+test("clean live page keeps the real Gate account summary visible", () => {
+  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  assert.match(page, /GATE CONTRACT ACCOUNT/);
+  assert.match(page, />合约权益</);
+  assert.match(page, /accountEquityLastUsdt/);
+  assert.match(page, />当日已实现</);
+  assert.match(page, /dailyRealizedPnlUsdt/);
+  assert.match(page, />最近成功对账</);
+  assert.match(page, /lastSuccessfulReconcileAt/);
+});
