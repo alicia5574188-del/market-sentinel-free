@@ -30,12 +30,22 @@ test("系统设置和手动深度扫描只允许所有者修改", async () => {
   assert.match(scan, /tokenAuthorized/);
 });
 
-test("实盘账户和所有变更接口均为所有者专用且拒绝跨站 JSON", async () => {
+test("实盘账户和所有变更接口均为所有者专用并保持跨站保护", async () => {
   for (const route of ["status", "credentials", "control", "emergency", "reconcile"]) {
     const source = await readFile(new URL(`../app/api/live/${route}/route.ts`, import.meta.url), "utf8");
     assert.match(source, /role !== "owner"/, route);
-    if (route !== "status") assert.match(source, /mutationRejected/, route);
   }
+
+  for (const route of ["credentials", "control", "emergency"]) {
+    const source = await readFile(new URL(`../app/api/live/${route}/route.ts`, import.meta.url), "utf8");
+    assert.match(source, /mutationRejected/, route);
+  }
+
+  const reconcile = await readFile(new URL("../app/api/live/reconcile/route.ts", import.meta.url), "utf8");
+  assert.match(reconcile, /mutationOriginRejected\(request\)/);
+  assert.doesNotMatch(reconcile, /mutationRejected\(request/);
+
   const credentials = await readFile(new URL("../app/api/live/credentials/route.ts", import.meta.url), "utf8");
   assert.match(credentials, /readLimitedJsonObject\(request, 4_096\)/);
+  assert.match(credentials, /export async function DELETE[\s\S]*mutationOriginRejected\(request\)/);
 });
