@@ -100,3 +100,30 @@ test("blocked extreme funding symbols do not consume a discovery slot", () => {
   assert.ok(!selected.some((item) => item.symbol === "BLOCKED_USDT"));
   assert.ok(selected.some((item) => item.symbol === "MOVE_USDT"));
 });
+
+test("single-slot mode never assigns more than one symbol to an invocation and still rotates", () => {
+  const universe = [
+    ticker("BTC_USDT", 0.12, 0.9),
+    ticker("ETH_USDT", 0.08, 0.7),
+    ticker("A_USDT", 0.95, 7.0, "pre_alert"),
+    ticker("B_USDT", -0.60, -3.0, "pre_alert"),
+    ticker("C_USDT", 0.20, 1.0),
+    ticker("D_USDT", 0.18, 0.8),
+  ];
+  const previous = snapshotBackgroundUniverse([
+    ticker("BTC_USDT", 0.11, 0.8),
+    ticker("ETH_USDT", 0.08, 0.7),
+    ticker("A_USDT", 0.90, 6.4, "pre_alert"),
+    ticker("B_USDT", -0.05, -0.1, "pre_alert"),
+    ticker("C_USDT", 0.18, 0.8),
+    ticker("D_USDT", 0.17, 0.7),
+  ]);
+
+  const selections = Array.from({ length: 9 }, (_, offset) =>
+    chooseBackgroundDeepUniverse(universe, ["BTC_USDT", "ETH_USDT"], [], 1, offset, previous),
+  );
+  assert.ok(selections.every((selected) => selected.length === 1));
+  assert.equal(selections[0][0].symbol, "A_USDT");
+  assert.ok(selections.some((selected, offset) => offset % 3 === 2 && selected[0].symbol !== "A_USDT"));
+  assert.ok(new Set(selections.map((selected) => selected[0].symbol)).size >= 4);
+});
