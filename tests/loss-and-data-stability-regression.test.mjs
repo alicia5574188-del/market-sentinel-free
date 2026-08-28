@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [scanner, marketRoute, v2Route, strategyRepo] = await Promise.all([
+const [scanner, marketRoute, v2Route, strategyRepo, heavyUiAdmission] = await Promise.all([
   readFile(new URL("../lib/scanner.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/api/market/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/api/v2/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/shadow-strategy-repository.ts", import.meta.url), "utf8"),
+  readFile(new URL("../lib/ui-heavy-read-admission.ts", import.meta.url), "utf8"),
 ]);
 
 test("deep scans bound symbol-level upstream fanout instead of bursting every target at once", () => {
@@ -22,6 +23,19 @@ test("selected market UI keeps the last trustworthy snapshot across transient Ga
   assert.match(marketRoute, /staleFallback:\s*true/);
   assert.match(marketRoute, /X-Sentinel-Stale-Fallback/);
   assert.match(marketRoute, /if \(fallback\) return fallback/);
+});
+
+test("heavy foreground market and Strategy 2 reads fail fast instead of competing inside one Worker isolate", () => {
+  assert.match(heavyUiAdmission, /STALE_LEASE_MS\s*=\s*30_000/);
+  assert.match(heavyUiAdmission, /acquireHeavyUiRead/);
+  assert.match(heavyUiAdmission, /status:\s*429/);
+  assert.match(heavyUiAdmission, /X-Sentinel-Load-Shed/);
+  assert.match(marketRoute, /acquireHeavyUiRead\(`\/api\/market:\$\{symbol\}`\)/);
+  assert.match(marketRoute, /heavyUiReadBusyResponse\("\/api\/market"\)/);
+  assert.match(marketRoute, /finally\s*\{\s*lease\.release\(\);\s*\}/);
+  assert.match(v2Route, /acquireHeavyUiRead\("\/api\/v2"\)/);
+  assert.match(v2Route, /heavyUiReadBusyResponse\("\/api\/v2"\)/);
+  assert.match(v2Route, /finally\s*\{\s*lease\.release\(\);\s*\}/);
 });
 
 test("Strategy 2 dashboard isolates optional failures and bounds heavy interactive reads", () => {
