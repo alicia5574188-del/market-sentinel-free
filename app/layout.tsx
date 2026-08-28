@@ -1,27 +1,14 @@
 import type { Metadata, Viewport } from "next";
 import { requireChatGPTUser } from "./chatgpt-auth";
-import { LiveOrdersInline } from "./live-orders-inline";
-import { RuntimeStabilityClient } from "./runtime-stability-client";
-import { Strategy2Dashboard } from "./strategy-2-dashboard";
-import { Strategy2LearningArena } from "./strategy-2-learning-arena";
-import { Strategy2PlaybookDiagnostics } from "./strategy-2-playbook-diagnostics";
-import { UiStatusSemanticFix } from "./ui-status-semantic-fix";
 import "./globals.css";
-import "./polish.css";
-import "./sentinel-v2.css";
-import "./strategy-2-unified.css";
-import "./strategy-2-intelligence.css";
-import "./strategy-2-playbook-diagnostics.css";
-import "./strategy-2-learning-arena.css";
-import "./runtime-stability.css";
-import "./bottom-nav-viewport-fix.css";
+import "./human-trader.css";
 
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://market-sentinel-free.alicia5574188.workers.dev"),
-  title: "Market Sentinel｜Strategy 2.0",
-  description: "Sentinel Strategy 2.0：环境识别、多策略并行竞争、风险控制与交易学习统一展示。",
+  title: "Market Sentinel｜Human Trader Engine 3.0",
+  description: "Sentinel Human Trader Engine 3.0：三位独立交易员、环境识别、Risk Governor、模拟与 Gate 实盘统一工作台。",
   applicationName: "Market Sentinel",
   manifest: "/manifest.webmanifest",
   formatDetection: { telephone: false },
@@ -37,14 +24,14 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     locale: "zh_CN",
-    title: "Market Sentinel｜Strategy 2.0",
-    description: "环境识别 · 多策略竞争 · 风险控制 · 持续学习",
-    images: [{ url: "/og.png", width: 1200, height: 630, alt: "Market Sentinel Strategy 2.0" }],
+    title: "Market Sentinel｜Human Trader Engine 3.0",
+    description: "三位独立交易员 · 环境预警 · Risk Governor · 新账本学习",
+    images: [{ url: "/og.png", width: 1200, height: 630, alt: "Market Sentinel Human Trader Engine 3.0" }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Market Sentinel｜Strategy 2.0",
-    description: "环境识别 · 多策略竞争 · 风险控制 · 持续学习",
+    title: "Market Sentinel｜Human Trader Engine 3.0",
+    description: "三位独立交易员 · 环境预警 · Risk Governor · 新账本学习",
     images: ["/og.png"],
   },
 };
@@ -54,24 +41,14 @@ export const viewport: Viewport = {
   initialScale: 1,
   viewportFit: "cover",
   colorScheme: "dark",
-  themeColor: "#071019",
+  themeColor: "#071018",
 };
 
 export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   await requireChatGPTUser("/");
   return (
     <html lang="zh-CN">
-      <body>
-        <script src="/sentinel-runtime-guard.js" />
-        <RuntimeStabilityClient />
-        {children}
-        <Strategy2Dashboard />
-        <Strategy2PlaybookDiagnostics />
-        <Strategy2LearningArena />
-        <LiveOrdersInline />
-        <UiStatusSemanticFix />
-        <script src="/live-position-mode-helper.js" defer />
-      </body>
+      <body>{children}</body>
     </html>
   );
 }
