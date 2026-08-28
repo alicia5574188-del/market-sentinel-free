@@ -1,5 +1,5 @@
 import { requireApiAccount } from "../../../api-auth";
-import { mutationRejected, readLimitedJsonObject } from "../../../api-security";
+import { mutationOriginRejected, mutationRejected, readLimitedJsonObject } from "../../../api-security";
 import { liveTradingCoordinator } from "../../../../lib/live-trading-coordinator";
 
 export async function PUT(request: Request) {
@@ -23,7 +23,7 @@ export async function DELETE(request: Request) {
   const auth = await requireApiAccount();
   if ("response" in auth) return auth.response;
   if (auth.account.role !== "owner") return Response.json({ error: "只有所有者可以删除 Gate API 凭据" }, { status: 403 });
-  const rejected = mutationRejected(request, 1_024);
+  const rejected = mutationOriginRejected(request);
   if (rejected) return rejected;
   try {
     return Response.json(await liveTradingCoordinator().removeCredentials(auth.account.id), { headers: { "Cache-Control": "no-store" } });
