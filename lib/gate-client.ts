@@ -3,6 +3,7 @@ import type { ExperienceBySide } from "./trade-lifecycle.ts";
 
 export const GATE_BASE = "https://api.gateio.ws/api/v4";
 export const SYMBOL_PATTERN = /^[A-Z0-9]{2,18}_USDT$/;
+const ANALYSIS_UPSTREAM_CONCURRENCY = 4;
 
 type JsonObject = Record<string, unknown>;
 
@@ -95,6 +96,25 @@ async function gate(path: string, signal: AbortSignal) {
   });
   if (!response.ok) throw new Error(`Gate ${path.split("?")[0]} returned ${response.status}`);
   return response.json() as Promise<unknown>;
+}
+
+async function settleFactoriesBounded(factories: (() => Promise<unknown>)[], concurrency = ANALYSIS_UPSTREAM_CONCURRENCY) {
+  if (!factories.length) return [] as PromiseSettledResult<unknown>[];
+  const results: PromiseSettledResult<unknown>[] = new Array(factories.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(Math.max(1, concurrency), factories.length) }, async () => {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= factories.length) return;
+      try {
+        results[index] = { status: "fulfilled", value: await factories[index]() };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 export function parseCandles(payload: unknown): Candle[] {
@@ -309,7 +329,7 @@ export async function fetchGatePositionQuotes(symbols: string[]): Promise<GatePo
   try {
     const [tickerPayload, candleResults] = await Promise.all([
       gate("/futures/usdt/tickers", controller.signal),
-      Promise.allSettled(unique.map((symbol) => gate(
+      settleFactoriesBounded(unique.map((symbol) => () => gate(
         `/futures/usdt/candlesticks?contract=${encodeURIComponent(symbol)}&interval=5m&limit=2`,
         controller.signal,
       ))),
@@ -384,7 +404,7 @@ export async function analyzeGateSymbol(symbol: string, options: {
 } = {}): Promise<GateAnalysisPacket> {
   if (!SYMBOL_PATTERN.test(symbol)) throw new Error("Invalid Gate symbol");
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 9_000);
+  const timeout = setTimeout(() => controller.abort(), 15_000);
   const startedAt = Date.now();
   try {
     const requestFactories: Record<string, () => Promise<unknown>> = {
@@ -404,7 +424,7 @@ export async function analyzeGateSymbol(symbol: string, options: {
       requestFactories.eth = () => gate("/futures/usdt/tickers?contract=ETH_USDT", controller.signal);
     }
     const keys = Object.keys(requestFactories);
-    const settled = await Promise.allSettled(keys.map((key) => requestFactories[key]()));
+    const settled = await settleFactoriesBounded(keys.map((key) => requestFactories[key]));
     const data = Object.fromEntries(keys.map((key, index) => [key, settled[index].status === "fulfilled" ? settled[index].value : null])) as Record<string, unknown>;
     const sourceErrors = Object.fromEntries(keys.flatMap((key, index) => settled[index].status === "rejected" ? [[key, settled[index].reason instanceof Error ? settled[index].reason.message : "request failed"]] : []));
     const observedAt = Date.now();
