@@ -57,11 +57,19 @@ function dennisBreakout() {
 
 function turtleSoupFailure() {
   const rows = baseCandles();
-  const priorHigh = Math.max(...rows.slice(-24, -2).map((row) => row.high));
+  const anchorIndex = rows.length - 18;
+  const anchor = rows[anchorIndex];
+  const priorHigh = anchor.close + 0.75;
+  rows[anchorIndex] = { ...anchor, high: priorHigh, close: priorHigh - 0.18, open: priorHigh - 0.25, low: priorHigh - 0.35, volume: 1450 };
+  for (let index = anchorIndex + 1; index < rows.length - 2; index += 1) {
+    const row = rows[index];
+    const close = Math.min(row.close, priorHigh - 0.22);
+    rows[index] = { ...row, open: close - 0.02, high: Math.min(row.high, priorHigh - 0.12), low: close - 0.12, close };
+  }
   const sweep = rows.at(-2)!;
   const reclaim = rows.at(-1)!;
-  rows[rows.length - 2] = { ...sweep, open: priorHigh - 0.03, low: priorHigh - 0.08, high: priorHigh + 0.25, close: priorHigh + 0.12, volume: 1800 };
-  rows[rows.length - 1] = { ...reclaim, open: priorHigh + 0.05, high: priorHigh + 0.08, low: priorHigh - 0.22, close: priorHigh - 0.16, volume: 1900 };
+  rows[rows.length - 2] = { ...sweep, open: priorHigh - 0.05, low: priorHigh - 0.18, high: priorHigh + 0.18, close: priorHigh + 0.06, volume: 2500 };
+  rows[rows.length - 1] = { ...reclaim, open: priorHigh + 0.02, high: priorHigh + 0.04, low: priorHigh - 0.34, close: priorHigh - 0.24, volume: 2200 };
   return rows;
 }
 
@@ -87,7 +95,7 @@ test("Dennis only becomes ready after a completed close outside the old range", 
   assert.ok(triggered.entryPlan?.checks.some((check) => check.key === "dennis-breakout" && check.required && check.passed));
 });
 
-test("Turtle Soup requires sweep plus reclaim and trades opposite the failed breakout", () => {
+test("Turtle Soup requires mature sweep, deep reclaim, volume and multi-source reversal confirmation", () => {
   const rows = turtleSoupFailure();
   const soup = evaluateHumanTraderPool(input(rows, {
     multiTimeframeTrend: 0.05,
@@ -98,8 +106,27 @@ test("Turtle Soup requires sweep plus reclaim and trades opposite the failed bre
   assert.equal(soup.strategyMeta.triggerActive, true);
   assert.equal(soup.side, "SHORT");
   assert.equal(soup.state, "ready");
+  assert.ok(soup.entryPlan?.checks.some((check) => check.key === "soup-mature" && check.passed));
   assert.ok(soup.entryPlan?.checks.some((check) => check.key === "soup-sweep" && check.passed));
   assert.ok(soup.entryPlan?.checks.some((check) => check.key === "soup-reclaim" && check.passed));
+  assert.ok(soup.entryPlan?.checks.some((check) => check.key === "soup-volume" && check.passed));
+  assert.ok(soup.entryPlan?.checks.some((check) => check.key === "soup-micro" && check.passed));
+});
+
+test("Turtle Soup rejects a shallow ordinary poke that the previous implementation would have accepted", () => {
+  const rows = turtleSoupFailure();
+  const prior = rows.slice(-32, -2);
+  const priorHigh = Math.max(...prior.map((row) => row.high));
+  const sweep = rows.at(-2)!;
+  rows[rows.length - 2] = { ...sweep, high: priorHigh + 0.005, volume: 1200 };
+  const soup = evaluateHumanTraderPool(input(rows, {
+    multiTimeframeTrend: 0.05,
+    spotCvdRatio: -0.03,
+    orderBookImbalance: -0.05,
+    changePercentage: 0.3,
+  })).find((signal) => signal.strategyMeta.playbookId === "HT3_TURTLE_SOUP")!;
+  assert.equal(soup.strategyMeta.triggerActive, false);
+  assert.notEqual(soup.state, "ready");
 });
 
 test("emergency event risk blocks all three traders without fallbacks", () => {

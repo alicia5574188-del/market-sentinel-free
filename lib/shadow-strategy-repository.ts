@@ -10,21 +10,30 @@ import { calculateStrategyStatistics, type StrategyStatistics } from "./strategy
 
 const LEGACY_SHADOW_PREFIX = "shadow_v3:";
 const HUMAN_REGIME_PREFIX = "S2|HT";
-const HUMAN_TRADERS: { id: Strategy2Id; label: string }[] = [
-  { id: "trend_breakout", label: HUMAN_TRADER_LABELS.dennis_trend },
-  { id: "trend_pullback", label: HUMAN_TRADER_LABELS.raschke_pullback },
-  { id: "failed_breakout", label: HUMAN_TRADER_LABELS.turtle_soup },
+const HUMAN_TRADERS: { id: Strategy2Id; label: string; tag: string }[] = [
+  { id: "trend_breakout", label: HUMAN_TRADER_LABELS.dennis_trend, tag: "HT1_" },
+  { id: "trend_pullback", label: HUMAN_TRADER_LABELS.raschke_pullback, tag: "HT2_" },
+  { id: "failed_breakout", label: HUMAN_TRADER_LABELS.turtle_soup, tag: "HT3_" },
 ];
 const GOVERNOR_CACHE_MS = 60_000;
 
 type ReadyGrowthSignal = Strategy2Signal & { side: "LONG" | "SHORT"; entryPlan: NonNullable<Strategy2Signal["entryPlan"]> };
 export type GrowthModuleResult = { opened: number; closed: number; evaluated: number; archived: number; selected: Strategy2Id | null; lifecycle: LifecycleResult | null };
+export type TraderGuard = {
+  state: "ACTIVE" | "COOLDOWN" | "PAUSED";
+  lossStreak: number;
+  cooldownUntil: number | null;
+  reason: string;
+};
 type ExecutionGovernor = {
   state: "NORMAL" | "CAUTION" | "DEFENSIVE" | "PAUSED";
   reason: string;
   lossStreak: number;
   stats: StrategyStatistics;
+  traderGuards: Record<Strategy2Id, TraderGuard>;
 };
+
+type ClosedRow = { netMovePct: number | null; exitAt: number | null; regime: string | null };
 
 let governorCache: { savedAt: number; value: ExecutionGovernor } | null = null;
 let governorPending: Promise<ExecutionGovernor> | null = null;
@@ -38,6 +47,51 @@ function currentLossStreak(rows: { netMovePct: number | null }[]) {
   return streak;
 }
 
+function buildTraderGuard(rows: ClosedRow[], trader: { label: string }): TraderGuard {
+  const stats = calculateStrategyStatistics(rows);
+  const lossStreak = currentLossStreak(rows);
+  const latestExitAt = rows[0]?.exitAt ?? null;
+  const structurallyWeak = stats.sampleCount >= 8
+    && (stats.averageNetPct ?? 0) < -0.08
+    && (stats.profitFactor ?? 0) < 0.65;
+  if (structurallyWeak) {
+    return {
+      state: "PAUSED",
+      lossStreak,
+      cooldownUntil: null,
+      reason: `${trader.label} 独立暂停：n=${stats.sampleCount}，PF ${stats.profitFactor?.toFixed(2) ?? "--"}，长期期望为负；不会拖累另外两位交易员。`,
+    };
+  }
+
+  const cooldownMs = lossStreak >= 4
+    ? 12 * 60 * 60_000
+    : lossStreak >= 3
+      ? 360 * 60_000
+      : lossStreak >= 2
+        ? 120 * 60_000
+        : 0;
+  const cooldownUntil = cooldownMs && latestExitAt ? latestExitAt + cooldownMs : null;
+  if (cooldownUntil && cooldownUntil > Date.now()) {
+    return {
+      state: "COOLDOWN",
+      lossStreak,
+      cooldownUntil,
+      reason: `${trader.label} 连续亏损 ${lossStreak} 笔，独立冷却至 ${new Date(cooldownUntil).toISOString()}；Dennis / Raschke / Turtle Soup 互不连坐。`,
+    };
+  }
+  return {
+    state: "ACTIVE",
+    lossStreak,
+    cooldownUntil: null,
+    reason: lossStreak ? `${trader.label} 最近连续亏损 ${lossStreak} 笔，但独立冷却期已结束。` : `${trader.label} 可参与。`,
+  };
+}
+
+function rowsForTrader(rows: ClosedRow[], strategyId: Strategy2Id) {
+  const tag = HUMAN_TRADERS.find((item) => item.id === strategyId)?.tag ?? "";
+  return rows.filter((row) => Boolean(tag) && row.regime?.includes(tag));
+}
+
 async function loadExecutionGovernor(): Promise<ExecutionGovernor> {
   const rows = await getDb().select({
     netMovePct: tradeCases.netMovePct,
@@ -47,34 +101,45 @@ async function loadExecutionGovernor(): Promise<ExecutionGovernor> {
     eq(tradeCases.status, "closed"),
     eq(tradeCases.simulationModel, "contract_v2"),
     like(tradeCases.regime, `${HUMAN_REGIME_PREFIX}%`),
-  )).orderBy(desc(tradeCases.exitAt)).limit(2500);
+  )).orderBy(desc(tradeCases.exitAt)).limit(2500) as ClosedRow[];
+
   const stats = calculateStrategyStatistics(rows);
   const lossStreak = currentLossStreak(rows);
-  const recentWeak = stats.recentSampleCount >= 8
+  const recentWeak = stats.recentSampleCount >= 10
     && (stats.recentAverageNetPct ?? 0) < 0
-    && (stats.recentProfitFactor ?? 0) < 1;
-  const stronglyWeak = stats.recentSampleCount >= 12
+    && (stats.recentProfitFactor ?? 0) < 0.9;
+  const stronglyWeak = stats.recentSampleCount >= 16
     && (stats.recentAverageNetPct ?? 0) < -0.08
-    && (stats.recentProfitFactor ?? 0) < 0.8;
-  const structurallyBroken = stats.sampleCount >= 20
+    && (stats.recentProfitFactor ?? 0) < 0.75;
+  const structurallyBroken = stats.sampleCount >= 30
     && (stats.averageNetPct ?? 0) < -0.12
-    && (stats.profitFactor ?? 0) < 0.7;
+    && (stats.profitFactor ?? 0) < 0.65;
 
-  const state: ExecutionGovernor["state"] = lossStreak >= 7 || structurallyBroken
+  // Account-level protection must not let one over-active trader freeze the
+  // whole engine after only a few losses. Per-trader circuit breakers below
+  // react much earlier; the global governor is reserved for genuine account-wide damage.
+  const state: ExecutionGovernor["state"] = lossStreak >= 8 || structurallyBroken
     ? "PAUSED"
-    : lossStreak >= 5 || stronglyWeak
+    : lossStreak >= 6 || stronglyWeak
       ? "DEFENSIVE"
-      : lossStreak >= 3 || recentWeak
+      : lossStreak >= 4 || recentWeak
         ? "CAUTION"
         : "NORMAL";
+
+  const traderGuards = Object.fromEntries(HUMAN_TRADERS.map((trader) => [
+    trader.id,
+    buildTraderGuard(rowsForTrader(rows, trader.id), trader),
+  ])) as Record<Strategy2Id, TraderGuard>;
+
+  const cooling = HUMAN_TRADERS.filter((trader) => traderGuards[trader.id].state !== "ACTIVE").map((trader) => trader.label);
   const reason = state === "PAUSED"
-    ? `Human Risk Governor 暂停新开仓：连续亏损 ${lossStreak} 笔，n=${stats.sampleCount}，PF ${stats.profitFactor?.toFixed(2) ?? "--"}。保留已有仓位管理，不为追回亏损提高频率。`
+    ? `Human Risk Governor 全局暂停新开仓：账户连续亏损 ${lossStreak} 笔，n=${stats.sampleCount}，PF ${stats.profitFactor?.toFixed(2) ?? "--"}。已有仓位继续保护。`
     : state === "DEFENSIVE"
-      ? `Human Risk Governor 防守：连续亏损 ${lossStreak} 笔；只允许已验证且高置信的独立 Setup。`
+      ? `Human Risk Governor 全局防守：账户连续亏损 ${lossStreak} 笔；只允许已验证且高确信 Setup。${cooling.length ? ` 独立冷却：${cooling.join("、")}。` : ""}`
       : state === "CAUTION"
-        ? `Human Risk Governor 谨慎：连续亏损 ${lossStreak} 笔；探索单只接受 A+ Setup，不允许靠放宽门槛增加频率。`
-        : `Human Risk Governor 正常：n=${stats.sampleCount}，连续亏损 ${lossStreak}，最近 PF ${stats.recentProfitFactor?.toFixed(2) ?? "--"}。`;
-  return { state, reason, lossStreak, stats };
+        ? `Human Risk Governor 全局谨慎：账户连续亏损 ${lossStreak} 笔；不靠放宽门槛增加频率。${cooling.length ? ` 独立冷却：${cooling.join("、")}。` : ""}`
+        : `Human Risk Governor 正常：n=${stats.sampleCount}，账户连续亏损 ${lossStreak}，最近 PF ${stats.recentProfitFactor?.toFixed(2) ?? "--"}。${cooling.length ? ` 独立冷却：${cooling.join("、")}。` : ""}`;
+  return { state, reason, lossStreak, stats, traderGuards };
 }
 
 async function getExecutionGovernor() {
@@ -89,18 +154,24 @@ async function getExecutionGovernor() {
   return governorPending;
 }
 
+function traderGuardForSignal(signal: Strategy2Signal, governor: ExecutionGovernor) {
+  return governor.traderGuards[signal.strategyId];
+}
+
 function isReadyGrowthSignal(signal: Strategy2Signal, governor: ExecutionGovernor): signal is ReadyGrowthSignal {
   if (signal.state !== "ready" || signal.side === "WAIT" || !signal.entryPlan?.ready) return false;
+  const guard = traderGuardForSignal(signal, governor);
+  if (guard && guard.state !== "ACTIVE") return false;
   if (governor.state === "PAUSED") return false;
   if (governor.state === "CAUTION") {
-    if (signal.strategyMeta.tradeMode === "exploration") return signal.confidence >= 82;
-    return signal.confidence >= 74;
+    if (signal.strategyMeta.tradeMode === "exploration") return signal.confidence >= 84;
+    return signal.confidence >= 76;
   }
   if (governor.state === "DEFENSIVE") {
     return signal.strategyMeta.tradeMode === "high_conviction"
       && (signal.strategyMeta.experienceSamples ?? 0) >= 12
       && (signal.strategyMeta.expectancyR ?? 0) >= 0.12
-      && signal.confidence >= 84;
+      && signal.confidence >= 86;
   }
   return true;
 }
@@ -119,15 +190,13 @@ function growthPacket(packet: GateAnalysisPacket, signal: ReadyGrowthSignal, gov
     detail,
     score: Number(Math.abs(signal.score).toFixed(2)),
   }));
-  evidence.unshift({ title: "Human Risk Governor", detail: governor.reason, score: governor.state === "NORMAL" ? 1 : governor.state === "CAUTION" ? 0.72 : 0.45 });
+  const guard = traderGuardForSignal(signal, governor);
+  evidence.unshift({ title: "Human Risk Governor", detail: `${governor.reason}${guard ? ` ${guard.reason}` : ""}`, score: governor.state === "NORMAL" ? 1 : governor.state === "CAUTION" ? 0.72 : 0.45 });
   const counterEvidence = signal.blockers.length
     ? signal.blockers.map((detail) => ({ title: "硬性风险检查", detail }))
     : packet.decision.counterEvidence.slice(0, 3);
   const globalRegime = signal.strategyMeta.globalRegime ?? "unknown";
   const assetRegime = signal.strategyMeta.assetRegime ?? "transition";
-  // Keep the S2 parser prefix for the existing hierarchical learner, but the
-  // playbook identity is now HT1/HT2/HT3. Old P1-P12 samples are archived and
-  // therefore cannot become priors for the new traders.
   const regimeKey = `S2|${signal.strategyMeta.playbookId}|global:${globalRegime}|asset:${assetRegime}`;
   return {
     ...packet,
@@ -161,11 +230,9 @@ function growthPacket(packet: GateAnalysisPacket, signal: ReadyGrowthSignal, gov
 }
 
 /**
- * One-time/non-destructive isolation boundary. Old shadow records and all old
- * contract_v2 trades that are not owned by an HT1/HT2/HT3 regime are archived.
- * This keeps the rows for audit, but removes them from account PnL, live
- * performance gating and the new learner. Existing Gate live orders are stored
- * separately and remain protected by the live order lifecycle.
+ * Old strategy/simulation history remains isolated from Human Trader learning.
+ * Existing Gate live orders are stored separately and remain protected by the
+ * live order lifecycle.
  */
 export async function retireLegacyShadowTrades() {
   const db = getDb();
@@ -240,8 +307,13 @@ export async function getStrategyLabDashboard() {
   const governor = await getExecutionGovernor();
   return {
     observedAt: Date.now(),
-    note: "Human Trader Engine 3.0：Dennis 趋势突破、Raschke 趋势回踩、Turtle Soup 假突破三位交易员独立工作；不投票、不叠加分数。旧 Strategy 2.0 仅作为历史 benchmark，不再拥有新开仓权。",
-    executionGovernor: { state: governor.state, reason: governor.reason, lossStreak: governor.lossStreak },
+    note: "Human Trader Engine 3.0：Dennis 趋势突破、Raschke 趋势回踩、Turtle Soup 假突破独立工作；同一交易员连亏只熔断自己，不再把其他交易员一起锁死。",
+    executionGovernor: {
+      state: governor.state,
+      reason: governor.reason,
+      lossStreak: governor.lossStreak,
+      traderGuards: governor.traderGuards,
+    },
     baseline: {
       id: "human_trader_v3" as const,
       label: "Sentinel Human Trader Engine 3.0",
@@ -252,16 +324,17 @@ export async function getStrategyLabDashboard() {
     strategies: HUMAN_TRADERS.map((strategy) => ({
       id: strategy.id,
       label: strategy.label,
-      mode: "active" as const,
-      openCount: rows.filter((row) => row.status === "holding" && row.regime?.includes(strategy.id === "trend_breakout" ? "HT1_" : strategy.id === "trend_pullback" ? "HT2_" : "HT3_")).length,
-      stats: calculateStrategyStatistics(closed.filter((row) => row.regime?.includes(strategy.id === "trend_breakout" ? "HT1_" : strategy.id === "trend_pullback" ? "HT2_" : "HT3_"))),
+      mode: governor.traderGuards[strategy.id].state === "ACTIVE" ? "active" as const : "guarded" as const,
+      guard: governor.traderGuards[strategy.id],
+      openCount: rows.filter((row) => row.status === "holding" && row.regime?.includes(strategy.tag)).length,
+      stats: calculateStrategyStatistics(closed.filter((row) => row.regime?.includes(strategy.tag))),
       promotion: {
         status: "watch" as const,
         label: "独立交易员",
-        eligible: true,
+        eligible: governor.traderGuards[strategy.id].state === "ACTIVE",
         requiredSamples: 0,
         requiredActiveDays: 0,
-        reasons: ["每位交易员只按自己的 Setup 工作；学习只改变该交易员在对应环境的风险与优先级"],
+        reasons: [governor.traderGuards[strategy.id].reason],
       },
     })),
   };

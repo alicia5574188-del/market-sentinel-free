@@ -295,24 +295,46 @@ function raschke(input: Strategy2Input, rows: Candle[], regime: MarketRegime, as
 
 function turtleSoup(input: Strategy2Input, rows: Candle[], regime: MarketRegime, assetRegime: Strategy2AssetRegime): Strategy2Signal {
   const currentAtr = atr(rows);
-  const prior = rows.slice(-24, -2);
+  const prior = rows.slice(-32, -2);
   const sweep = rows.at(-2);
   const reclaim = rows.at(-1);
   const priorHigh = prior.length ? Math.max(...prior.map((row) => row.high)) : 0;
   const priorLow = prior.length ? Math.min(...prior.map((row) => row.low)) : 0;
-  const sweptHigh = Boolean(sweep && currentAtr && sweep.high > priorHigh + currentAtr * 0.05);
-  const sweptLow = Boolean(sweep && currentAtr && sweep.low < priorLow - currentAtr * 0.05);
-  const failedHigh = Boolean(sweptHigh && reclaim && reclaim.close < priorHigh);
-  const failedLow = Boolean(sweptLow && reclaim && reclaim.close > priorLow);
+  const priorHighIndex = prior.findIndex((row) => row.high === priorHigh);
+  const priorLowIndex = prior.findIndex((row) => row.low === priorLow);
+  const highExtremeMature = priorHighIndex >= 0 && priorHighIndex <= prior.length - 6;
+  const lowExtremeMature = priorLowIndex >= 0 && priorLowIndex <= prior.length - 6;
+  const extremeMature = highExtremeMature || lowExtremeMature;
+
+  const highExcursion = sweep && currentAtr ? (sweep.high - priorHigh) / Math.max(currentAtr, Number.EPSILON) : 0;
+  const lowExcursion = sweep && currentAtr ? (priorLow - sweep.low) / Math.max(currentAtr, Number.EPSILON) : 0;
+  const sweptHigh = Boolean(sweep && currentAtr && highExtremeMature
+    && sweep.high > priorHigh + currentAtr * 0.12
+    && sweep.high < priorHigh + currentAtr * 1.25);
+  const sweptLow = Boolean(sweep && currentAtr && lowExtremeMature
+    && sweep.low < priorLow - currentAtr * 0.12
+    && sweep.low > priorLow - currentAtr * 1.25);
+  const failedHigh = Boolean(sweptHigh && reclaim && currentAtr && reclaim.close < priorHigh - currentAtr * 0.08);
+  const failedLow = Boolean(sweptLow && reclaim && currentAtr && reclaim.close > priorLow + currentAtr * 0.08);
   const side: TradeSide = failedHigh ? "SHORT" : "LONG";
+
   const flow = signed(input.spotCvdRatio, side);
   const book = signed(input.orderBookImbalance, side);
-  const reclaimBody = Boolean(reclaim && currentAtr && Math.abs(reclaim.close - reclaim.open) >= currentAtr * 0.18);
-  const microConfirm = flow >= 0.003 || book >= 0.02 || (reclaimBody && flow >= -0.002 && book >= -0.03);
+  const reclaimBody = Boolean(reclaim && currentAtr && Math.abs(reclaim.close - reclaim.open) >= currentAtr * 0.24);
+  const baselineVolume = mean(rows.slice(-24, -3).map((row) => row.volume));
+  const sweepVolumeRatio = sweep ? sweep.volume / Math.max(baselineVolume, Number.EPSILON) : 0;
+  const flowConfirm = flow >= 0.002;
+  const bookConfirm = book >= 0.02;
+  const volumeConfirm = sweepVolumeRatio >= 1.15;
+  const confirmationVotes = [flowConfirm, bookConfirm, reclaimBody, volumeConfirm].filter(Boolean).length;
+  const microConfirm = confirmationVotes >= 3;
+
   const trend = signed(input.multiTimeframeTrend, side);
-  const fightingStrongTrend = trend < -0.55 && !["transition", "leverage_liquidation"].includes(assetRegime);
-  const routerEligible = ["range", "compression", "transition", "leverage_liquidation", "expansion_up", "expansion_down"].includes(assetRegime) && !fightingStrongTrend;
-  const setupActive = (failedHigh || failedLow) && microConfirm;
+  const fightingStrongTrend = trend < -0.38 && !["transition", "leverage_liquidation"].includes(assetRegime);
+  const routerEligible = ["range", "compression", "transition", "leverage_liquidation"].includes(assetRegime) && !fightingStrongTrend;
+  const liquidEnough = input.volumeUsd >= 30_000_000;
+  const setupActive = (failedHigh || failedLow) && extremeMature && microConfirm && liquidEnough;
+
   return signal(input, {
     trader: "turtle_soup",
     strategyId: "failed_breakout",
@@ -321,17 +343,27 @@ function turtleSoup(input: Strategy2Input, rows: Candle[], regime: MarketRegime,
     regime,
     setupActive,
     routerEligible,
-    setupScore: (failedHigh || failedLow ? 66 : 0) + (reclaimBody ? 16 : 0) + (assetRegime === "transition" || assetRegime === "range" ? 12 : 4),
-    evidenceScore: 48 + (microConfirm ? 24 : -30) + Math.min(16, Math.max(-12, flow * 400)) + Math.min(12, Math.max(-10, book * 120)),
-    thesis: "Turtle Soup 交易员不猜顶部/底部；只有价格先扫过旧极值、随后明确收回区间，才反向交易失败突破。",
-    expectedBehavior: "收回后应继续远离被扫极值；再次有效突破该极值说明流动性扫单假设错误。",
-    stop: swingStop(rows, side, currentAtr, 8, 0.20),
-    rr: 1.9,
-    minutes: 110,
+    setupScore: (failedHigh || failedLow ? 52 : 0)
+      + (extremeMature ? 10 : 0)
+      + (reclaimBody ? 12 : 0)
+      + (volumeConfirm ? 10 : 0)
+      + (assetRegime === "transition" || assetRegime === "range" ? 12 : 6),
+    evidenceScore: 38
+      + confirmationVotes * 12
+      + Math.min(12, Math.max(-12, flow * 350))
+      + Math.min(10, Math.max(-10, book * 100)),
+    thesis: "Turtle Soup 只交易成熟旧极值被明显扫过、放量后重新深度收回区间，并由多源微观结构确认的失败突破；不再把普通刺破当成反转。",
+    expectedBehavior: "收回后应继续远离被扫极值；若再次触及/突破被扫极值，或微观流重新同向突破，立即判定 Thesis 失败。",
+    stop: swingStop(rows, side, currentAtr, 8, 0.18),
+    rr: 2.1,
+    minutes: 100,
     checks: [
-      { key: "soup-sweep", label: "旧高/旧低被真实扫过", passed: sweptHigh || sweptLow, required: true, detail: sweptHigh ? `扫高 ${priorHigh}` : sweptLow ? `扫低 ${priorLow}` : "未扫" },
-      { key: "soup-reclaim", label: "下一根收盘重新回到区间", passed: failedHigh || failedLow, required: true, detail: failedHigh ? "高点假突破" : failedLow ? "低点假突破" : "未收回" },
-      { key: "soup-micro", label: "反向微观结构确认", passed: microConfirm, required: true, detail: `Spot ${flow.toFixed(3)} / Book ${book.toFixed(3)}` },
+      { key: "soup-mature", label: "被扫极值已经成熟", passed: extremeMature, required: true, detail: failedHigh || sweptHigh ? `旧高距扫单至少 5 根 5m K` : `旧低距扫单至少 5 根 5m K` },
+      { key: "soup-sweep", label: "旧高/旧低被明显扫过", passed: sweptHigh || sweptLow, required: true, detail: sweptHigh ? `扫高 ${highExcursion.toFixed(2)} ATR` : sweptLow ? `扫低 ${lowExcursion.toFixed(2)} ATR` : "扫单幅度不足/过度" },
+      { key: "soup-reclaim", label: "下一根深度收回区间", passed: failedHigh || failedLow, required: true, detail: failedHigh ? "高点假突破确认" : failedLow ? "低点假突破确认" : "收回深度不足" },
+      { key: "soup-volume", label: "扫单成交量放大", passed: volumeConfirm, required: true, detail: `${sweepVolumeRatio.toFixed(2)}x` },
+      { key: "soup-micro", label: "反向微观结构多源确认", passed: microConfirm, required: true, detail: `${confirmationVotes}/4 · Spot ${flow.toFixed(3)} / Book ${book.toFixed(3)}` },
+      { key: "soup-liquidity", label: "反转交易只做高流动性合约", passed: liquidEnough, required: true, detail: `${(input.volumeUsd / 1e6).toFixed(1)}M` },
       { key: "soup-trend", label: "不硬抗持续强趋势", passed: !fightingStrongTrend, required: true, detail: `逆向趋势 ${trend.toFixed(2)}` },
     ],
   });
@@ -346,7 +378,7 @@ export function evaluateHumanTraderPool(input: Strategy2Input): Strategy2Signal[
   const rows = completed(input);
   const regime = classifyShadowRegime(input);
   const assetRegime = classifyStrategy2AssetRegime(input);
-  if (rows.length < 30) {
+  if (rows.length < 34) {
     const traders = ["dennis_trend", "raschke_pullback", "turtle_soup"] as HumanTraderId[];
     return traders.map((trader, index) => ({
       strategyId: index === 0 ? "trend_breakout" : index === 1 ? "trend_pullback" : "failed_breakout",

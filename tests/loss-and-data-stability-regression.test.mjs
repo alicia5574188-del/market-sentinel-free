@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [scanner, marketRoute, v2Route, strategyRepo, liveRepo, heavyUiAdmission] = await Promise.all([
+const [scanner, marketRoute, v2Route, hteRoute, strategyRepo, liveRepo, heavyUiAdmission] = await Promise.all([
   readFile(new URL("../lib/scanner.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/api/market/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/api/v2/route.ts", import.meta.url), "utf8"),
+  readFile(new URL("../app/api/hte/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/shadow-strategy-repository.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/live-trading-repository.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/ui-heavy-read-admission.ts", import.meta.url), "utf8"),
@@ -54,19 +55,39 @@ test("Strategy dashboard isolates optional failures and bounds heavy interactive
   assert.doesNotMatch(v2Route, /status:\s*503/);
 });
 
-test("persistent losses make Human Risk Governor reduce participation instead of loosening entry rules", () => {
-  assert.match(strategyRepo, /"NORMAL" \| "CAUTION" \| "DEFENSIVE" \| "PAUSED"/);
-  assert.match(strategyRepo, /lossStreak >= 7[\s\S]*"PAUSED"/);
-  assert.match(strategyRepo, /lossStreak >= 5[\s\S]*"DEFENSIVE"/);
-  assert.match(strategyRepo, /lossStreak >= 3[\s\S]*"CAUTION"/);
+test("HTE snapshot has a throttled safety-only fallback for stale or overdue open positions", () => {
+  assert.match(hteRoute, /POSITION_UI_STALE_MS\s*=\s*45_000/);
+  assert.match(hteRoute, /POSITION_SAFETY_REFRESH_GAP_MS\s*=\s*30_000/);
+  const safety = hteRoute.match(/async function refreshStaleOpenPositionsForSafety\(\)[\s\S]*?\n}/)?.[0] ?? "";
+  assert.match(safety, /now - trade\.lastEvaluatedAt > POSITION_UI_STALE_MS/);
+  assert.match(safety, /trade\.maxHoldingMinutes \* 60_000/);
+  assert.match(safety, /refreshOpenPositions\(null, \{ includeDashboard: false \}\)/);
+  assert.doesNotMatch(safety, /runMarketScan|processShadowStrategies|evaluateHumanTraderPool/);
+});
+
+test("same human trader cools itself after repeated losses without freezing the other traders", () => {
+  assert.match(strategyRepo, /type TraderGuard/);
+  assert.match(strategyRepo, /"ACTIVE" \| "COOLDOWN" \| "PAUSED"/);
+  assert.match(strategyRepo, /lossStreak >= 2/);
+  assert.match(strategyRepo, /120 \* 60_000/);
+  assert.match(strategyRepo, /lossStreak >= 3/);
+  assert.match(strategyRepo, /360 \* 60_000/);
+  assert.match(strategyRepo, /traderGuardForSignal/);
+  assert.match(strategyRepo, /guard && guard\.state !== "ACTIVE"/);
+  assert.match(strategyRepo, /Dennis \/ Raschke \/ Turtle Soup 互不连坐/);
+});
+
+test("global Human Risk Governor reacts later than trader-level circuit breakers", () => {
+  assert.match(strategyRepo, /lossStreak >= 8[\s\S]*"PAUSED"/);
+  assert.match(strategyRepo, /lossStreak >= 6[\s\S]*"DEFENSIVE"/);
+  assert.match(strategyRepo, /lossStreak >= 4[\s\S]*"CAUTION"/);
   assert.match(strategyRepo, /governor\.state === "PAUSED"[\s\S]*return false/);
   assert.match(strategyRepo, /governor\.state === "CAUTION"/);
-  assert.match(strategyRepo, /tradeMode === "exploration"[\s\S]*signal\.confidence >= 82/);
+  assert.match(strategyRepo, /tradeMode === "exploration"[\s\S]*signal\.confidence >= 84/);
   assert.match(strategyRepo, /governor\.state === "DEFENSIVE"/);
   assert.match(strategyRepo, /tradeMode === "high_conviction"/);
   assert.match(strategyRepo, /experienceSamples[\s\S]*>= 12/);
   assert.match(strategyRepo, /expectancyR[\s\S]*>= 0\.12/);
-  assert.match(strategyRepo, /不为追回亏损提高频率/);
 });
 
 test("Human Risk Governor can only reduce live candidate size and Gate still rechecks execution safety", () => {
