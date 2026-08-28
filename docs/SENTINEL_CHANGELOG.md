@@ -11,6 +11,42 @@ Rules:
 
 ---
 
+## 2026-08-28 — Foreground/background market producer split
+
+PR: `#40 Move foreground market reads onto background snapshots`
+
+### Problem
+
+- The prior load-shed work reduced retry amplification but left the underlying duplication intact: the background scanner already computed public Gate market analysis while normal phone polling could independently recompute the same symbol through `/api/market`.
+- `/api/scanner` also refetched Gate/global-risk data instead of consuming the background scanner's latest result.
+- One deep selected-symbol request could fan out to 10+ public Gate endpoints at once; foreground and background producers could therefore overlap and recreate Worker pressure.
+- A top-level navigation could still remain visually blank while a Worker navigation request hung, because the Service Worker had no explicit navigation deadline.
+
+### Changed
+
+- The MarketScanner Durable Object now persists a foreground read model after each background scan plus per-symbol deep packets.
+- Cloudflare-production `/api/scanner` is a snapshot consumer; it does not refetch Gate/global-risk data when the background model is missing.
+- Cloudflare-production `/api/market` is a snapshot consumer; it does not fall back to `analyzeGateSymbol()` when the background model is missing/stale.
+- Missing/stale deep evidence is explicitly degraded; coarse universe data may remain visible, but no current decision is fabricated.
+- `analyzeGateSymbol()` public upstream fan-out is bounded to 4 concurrent endpoints, and position quote candle fan-out uses the same bounded helper.
+- `/api/market` and `/api/scanner` are treated as lightweight read-model calls by the pre-hydration guard instead of competing with Strategy/D1 research reads for the heavy slot.
+- PWA shell advances to v7; top-level navigation has a 5-second network deadline before the dedicated recovery shell takes over.
+
+### Deliberately unchanged
+
+- No Strategy 2.0 trigger, Playbook threshold or Regime logic changed.
+- No position sizing, leverage, risk budget or portfolio gate changed.
+- No Execution Engine, Order Lifecycle, live coordinator or Gate private-mutation authority changed.
+- Direct Gate analysis remains available only outside the normal Cloudflare-production foreground polling path and for explicit/manual scan workflows.
+
+### Verification
+
+- PR strategy/risk/migration suite passed before final documentation reconciliation.
+- PR production build/UI safety suite passed before final documentation reconciliation.
+- Merged `main` CI and Cloudflare production deployment must be verified after merge.
+
+---
+
 ## 2026-08-28 — Root-load shedding for recurring 503 / iOS black screen
 
 PR: `#39 Stop foreground retry storms before hydration`
