@@ -1,0 +1,175 @@
+# Market Sentinel — Current System State
+
+> **Single source of truth for continuation work.**
+>
+> Chat history is discussion context only. Before any future code change, read the current `main` branch, recent merged PRs/commits, CI status, and this file. Never reconstruct production behavior from memory or a missing chat message.
+
+Last reconciled: **2026-08-28 11:28 +08:00**  
+Repository: `alicia5574188-del/market-sentinel-free`  
+Production strategy identity: **Sentinel Strategy 2.0**  
+Reconciled `main` commit: `6c3fe62c0fe9e4507c8d734212f6cd74c0e6fc23`  
+Cloudflare production Version ID at reconciliation: `76cc7a12-3881-4ac9-9e44-2b9e7c9f40af`
+
+## 1. Development continuity rule
+
+Every future change must follow this order:
+
+1. Read current `main`; do not start from remembered code or chat summaries.
+2. Read this file and `docs/SENTINEL_CHANGELOG.md`.
+3. Inspect recent merged PRs/commits that touch the target subsystem.
+4. Identify current authority boundaries before editing Strategy / Regime / Risk / Execution / Order Lifecycle / Learning.
+5. Work on a branch and PR for material changes.
+6. Run both CI gates: strategy/risk/migration tests and production build/UI safety tests.
+7. Merge only when green.
+8. Verify the merged `main` CI and Cloudflare production deployment.
+9. Update this file and the changelog whenever production behavior, safety boundaries, data flow, or observability materially changes.
+
+If chat history and repository state disagree, **repository state wins**.
+
+## 2. Current architecture and authority
+
+Production decision flow:
+
+`Gate market data → Market/Regime context → 12 Playbook Strategy 2.0 pool → learning/risk filters → portfolio risk → Execution Engine / Order Lifecycle → simulated or live safety gates`
+
+Key authority rules:
+
+- **Sentinel Strategy 2.0** is the only active strategy identity.
+- P1–P12 are evaluated as a parallel Playbook pool; learning coverage and use diagnostics are separate from whether a Playbook is evaluated.
+- Regime intelligence exposes current regime, candidate regime, migration probability, stability and transition risk.
+- The Intelligence layer is explanatory/shadow-only and cannot raise live risk, override hard safety, or auto-promote a model.
+- Portfolio risk, Execution Engine, Order Lifecycle, Live Master Switch and Gate hard-safety checks remain final execution authorities.
+- Learning cannot bypass hard risk limits.
+- Legacy V1/V3 learning/trade memory is not a valid Strategy 2.0 learning source.
+
+## 3. Current loss containment state
+
+A defensive execution governor is now part of Strategy 2.0.
+
+Reason: the accumulated `contract_v2` sample showed materially weak aggregate performance, so the system must not continue generating low-quality execution merely to gather samples.
+
+Current behavior:
+
+- The governor evaluates completed Strategy 2.0 results and recent performance.
+- When aggregate/recent performance is weak, state becomes `DEFENSIVE`.
+- Exploration-mode candidates do **not** create new simulated orders.
+- Candidates whose intended V2 risk multiplier is below ~full base risk are fail-closed from order creation until fractional risk sizing is consumed end-to-end by the execution path.
+- In defensive mode, only `high_conviction` candidates with sufficient samples and positive learned expectancy may create new simulated orders.
+- Existing open positions continue their normal lifecycle; the governor does not force-close them.
+- No leverage increase or hard-risk relaxation was introduced.
+
+Important unresolved engineering boundary:
+
+> Strategy 2.0 computes fractional risk multipliers, but the legacy contract-preview sizing path has not yet been fully redesigned to consume those multipliers end-to-end. Current production protects against this mismatch by blocking partial-risk intents from silently executing at full base risk.
+
+Do not remove this containment until sizing is explicitly traced and tested from Strategy intent → risk budget → contract size → execution.
+
+## 4. Current data-degradation protections
+
+Recent 503/Worker-pressure work added server-side containment in addition to client retry logic:
+
+- Background deep-scan target concurrency is bounded to **2**.
+- `/api/v2` uses partial-source isolation (`Promise.allSettled`) so one optional diagnostics/learning failure does not make the entire dashboard 503.
+- Heavy interactive learning/counterfactual reads are cached and bounded; background learning can remain deeper than interactive UI reads.
+- `/api/market` treats Gate analysis as essential and historical/V2 enrichments as optional.
+- `/api/market` keeps a last-known-good selected-symbol snapshot for a short TTL during transient failures and marks it explicitly degraded/stale.
+- Dynamic root HTML is not used as an unsafe old-version fallback; recovery behavior must never combine stale HTML with incompatible new JS/CSS assets.
+
+Data-safety rule: stale/degraded data may be shown only when explicitly labeled; cached data must never be presented as current real-time market/execution truth.
+
+## 5. Current Regime / market-intelligence state
+
+The Regime layer no longer treats a single hard label as sufficient UI truth.
+
+Current observability includes:
+
+- current Regime
+- candidate Regime
+- migration/transition estimate
+- stability
+- transition risk and velocity
+- leading transition components
+
+The candidate state should not disappear merely because an old hard threshold was not crossed. Stability must represent environmental persistence/transition pressure, not merely classifier separation.
+
+Do not infer a Regime bug solely from seeing the same label repeatedly; diagnose probability distribution, candidate strength, transition momentum, data freshness and state persistence first.
+
+## 6. Current Strategy 2.0 learning / observability
+
+Existing learning concepts include:
+
+- `Global Regime × Asset Regime × Playbook × Direction` cells
+- Bayesian/low-sample conservatism
+- positive / negative / degrading cells
+- forward sample tracking
+- Playbook coverage
+- persistent WATCH/REJECT counterfactual archive statistics
+- Playbook usage diagnostics that identify missing learning coverage rather than assuming a strategy is not running
+
+### Learning Arena
+
+The repository now contains a **read-only Strategy 2.0 Learning Arena**. It adds rolling-edge and diagnostic observability such as:
+
+- all / last 20 / last 50 / last 100 result rollups
+- forward vs pre-forward evidence
+- rolling expectancy/profit-factor trend
+- exit-pattern distribution changes
+- Playbook performance
+- Regime × Playbook × direction heatmap
+
+It is explicitly research/observability-only. It does **not** acquire trading, sizing, risk, promotion or execution authority.
+
+Do not interpret period shifts as proven learning alpha unless a frozen baseline/challenger comparison exists.
+
+## 7. UI responsibilities
+
+Current product structure remains centered on:
+
+- **机会**: decision board — Regime, candidate migration, Playbook pool, TRADE/WATCH/REJECT and decision diagnostics.
+- **雷达**: market intelligence — leading transition/risk signals.
+- **订单**: portfolio/thesis/execution/learning observability.
+
+UI metrics must describe real underlying semantics. Avoid vanity labels that imply a capability the engine does not actually possess.
+
+## 8. Safety invariants that must survive every change
+
+Do not merge a change that unintentionally weakens any of these:
+
+- stale/invalid market data cannot become a new-risk permission
+- learning cannot increase risk beyond hard policy
+- no uncontrolled self-modification of production strategy
+- no automatic challenger promotion without explicit governance
+- no accidental restoration of legacy learning memory
+- no duplicate order creation caused by retries/restarts
+- protective exits remain reduce-only where applicable
+- existing order lifecycle/reconciliation safety remains intact
+- a UI/diagnostics failure must not create trading authority
+- a research metric must not be presented as a live decision authority
+
+## 9. Current operating recommendation
+
+The system is in a **containment + observation** phase, not an aggressive parameter-tuning phase.
+
+Primary questions for new forward data:
+
+- Does defensive gating materially reduce the rate of new losing trades?
+- Do recent/forward expectancy and profit factor improve?
+- Which Playbooks/Regimes retain positive edge after the newer Regime engine and loss governor?
+- Does data degradation/503 frequency materially decline under bounded Worker fan-out?
+- Does the missing Playbook learning coverage represent legitimate rarity or unreachable conditions?
+
+Do not loosen a strategy merely to increase trade count or force 12/12 learning coverage.
+
+## 10. Handoff checklist for the next developer/AI
+
+Before saying “I will change X”, answer from the repository:
+
+- What is the current `main` SHA?
+- What was the last production deployment result?
+- Which recent PR/commit last changed X?
+- Which tests cover X?
+- What execution/risk authority does X currently have?
+- What invariant could this change break?
+- Does `CURRENT_SYSTEM_STATE.md` need to be updated after the change?
+
+If any answer is unknown, inspect first. Do not guess.
