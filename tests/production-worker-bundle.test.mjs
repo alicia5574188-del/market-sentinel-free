@@ -12,9 +12,9 @@ async function readBuiltWorkerSource() {
   return (await Promise.all(jsFiles.map((file) => readFile(file, "utf8")))).join("\n");
 }
 
-test("production Worker bundle contains the HTE 3.1 clean runtime", async () => {
+test("production Worker bundle contains the HTE 3.1 low-write clean runtime", async () => {
   const source = await readBuiltWorkerSource();
-  assert.match(source, /hte31-clean-1/);
+  assert.match(source, /hte31-low-write-1/);
   assert.match(source, /HTE 3\.1 Clean/);
   assert.match(source, /Clean 配置 \/ 持仓隔离/);
   assert.match(source, /HT1 \/ HT2 \/ HT3 独立评估/);
