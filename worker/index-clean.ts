@@ -43,4 +43,5 @@ export class MarketScannerV2 extends LegacyMarketScanner {
   }
 }
 
-export { HTE31MarketScanner, HTE31TradeManager } from "./hte31-workers";
+export { HTE31MarketScanner } from "./hte31-workers";
+export { HTE31TradeManager } from "./hte31-recovery-manager";
