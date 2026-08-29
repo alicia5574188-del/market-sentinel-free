@@ -15,5 +15,5 @@ test("HTE31 outage recovery replays missed 5m candles before normal quote manage
   assert.match(recovery, /if \(result\.kind === "closed"\) return \{ replayed, closed: true \}/);
   assert.match(recovery, /await super\.alarm\(\)/);
   assert.doesNotMatch(recovery, /LiveTradingCoordinator|reconcileLiveTrading|live_orders/);
-  assert.match(entry, /export \{ HTE31TradeManager \} from "\.\/hte31-recovery-manager"/);
+  assert.match(entry, /export \{ HTE31MarketScanner, HTE31TradeManager \} from "\.\/hte31-recovery-manager"/);
 });
