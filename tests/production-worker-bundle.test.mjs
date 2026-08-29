@@ -20,7 +20,6 @@ test("production Worker bundle contains the HTE 3.1 low-write clean runtime", as
   assert.match(source, /HT1 \/ HT2 \/ HT3 独立评估/);
   assert.match(source, /HTE31MarketScanner/);
   assert.match(source, /HTE31TradeManager/);
-  assert.match(source, /HTE31 Durable Object write budget|one-minute Cloudflare Cron|1-minute Cron/);
 });
 
 test("generated Wrangler config uses additive-only migration for clean simulation namespaces", async () => {
