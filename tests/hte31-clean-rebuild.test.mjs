@@ -97,3 +97,18 @@ test("expanded HTE31 trade review cannot widen the mobile viewport", () => {
   assert.match(css, /repeat\(2,minmax\(0,1fr\)\)/);
   assert.match(css, /calc\(100vw - 18px\)/);
 });
+
+test("HTE31 Durable Objects use a bounded low-write runtime", () => {
+  const worker = readFileSync(new URL("../worker/hte31-workers.ts", import.meta.url), "utf8");
+  assert.match(worker, /CLEAN_RUNTIME_VERSION = "hte31-low-write-1"/);
+  assert.match(worker, /SCANNER_CYCLE_INTERVAL_MS = 60_000/);
+  assert.match(worker, /TRADE_MANAGER_IDLE_INTERVAL_MS = 60_000/);
+  assert.match(worker, /TRADE_MANAGER_IDLE_HEARTBEAT_MS = 5 \* 60_000/);
+  assert.match(worker, /type ScannerRuntime = \{[\s\S]*rotationOffset:[\s\S]*job:[\s\S]*readModel:[\s\S]*status:/);
+  assert.match(worker, /this\.ctx\.storage\.put\("runtime", runtime\)/);
+  assert.doesNotMatch(worker, /this\.ctx\.storage\.put\("(?:job|status|readModel|rotationOffset)"/);
+  assert.match(worker, /maxSteps = job\.phase === "config" \|\| job\.phase === "candles" \? 2 : 1/);
+  assert.match(worker, /the 1-minute Cron is the independent watchdog/);
+  assert.doesNotMatch(worker, /setAlarm\(fallback\)/);
+  assert.match(worker, /stateChanged \|\| heartbeatDue/);
+});
