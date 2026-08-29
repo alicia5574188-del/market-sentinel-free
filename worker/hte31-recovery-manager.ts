@@ -12,6 +12,8 @@ import type { Candle } from "../lib/signal-engine";
 import type { CloudflareEnv } from "./index";
 import { HTE31TradeManager as BaseHTE31TradeManager } from "./hte31-workers";
 
+export { HTE31MarketScanner } from "./hte31-workers";
+
 const FIVE_MINUTES_MS = 5 * 60_000;
 const REPLAY_GAP_MS = 6 * 60_000;
 
@@ -60,7 +62,7 @@ async function replayStaleTrade(
  * TP / timeout event that occurred during the outage instead of incorrectly
  * closing an overdue position at the recovery-time market price.
  *
- * This wrapper never touches Gate live orders or LiveTradingCoordinator.
+ * This wrapper never touches the real Gate execution chain.
  */
 export class HTE31TradeManager extends BaseHTE31TradeManager {
   override async alarm(): Promise<void> {
