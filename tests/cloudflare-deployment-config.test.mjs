@@ -46,7 +46,7 @@ test("Clean scanner is phased and cannot restart the whole old scan loop", async
     readFile(new URL("../worker/hte31-workers.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/hte31-scanner.ts", import.meta.url), "utf8"),
   ]);
-  assert.match(worker, /CLEAN_RUNTIME_VERSION = "hte31-clean-1"/);
+  assert.match(worker, /CLEAN_RUNTIME_VERSION = "hte31-low-write-1"/);
   assert.match(worker, /export class HTE31MarketScanner/);
   assert.match(worker, /createHte31ScanJob/);
   assert.match(worker, /priorAttempt >= 3/);
