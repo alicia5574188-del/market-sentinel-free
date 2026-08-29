@@ -34,10 +34,21 @@ test("HTE 3.1 uses fresh bound namespaces while legacy classes stay unbound", as
   for (const retired of ["PositionMonitor", "MarketScanner", "MarketScannerV2"]) assert.equal(boundClasses.has(retired), false);
 });
 
-test("Clean production entry preserves legacy DO exports without binding them", async () => {
+test("legacy DO exports self-retire any orphaned stored alarms", async () => {
   const source = await readFile(new URL("../worker/index-clean.ts", import.meta.url), "utf8");
-  assert.match(source, /PositionMonitor, MarketScanner, LiveTradingCoordinator/);
-  assert.match(source, /MarketScanner as MarketScannerV2/);
+  assert.match(source, /LegacyPositionMonitor/);
+  assert.match(source, /LegacyMarketScanner/);
+  assert.match(source, /retireLegacyScheduler/);
+  assert.match(source, /storage\.deleteAlarm\(\)/);
+  assert.match(source, /storage\.deleteAll\(\)/);
+  for (const className of ["PositionMonitor", "MarketScanner", "MarketScannerV2"]) {
+    const start = source.indexOf(`export class ${className}`);
+    assert.ok(start >= 0, `${className} must remain exported for legacy namespace compatibility`);
+    const next = source.indexOf("export class ", start + 1);
+    const block = source.slice(start, next >= 0 ? next : source.indexOf("export { HTE31", start));
+    assert.match(block, /retireLegacyScheduler\(this\.ctx\)/);
+    assert.doesNotMatch(block, /setAlarm\(/);
+  }
   assert.match(source, /HTE31MarketScanner, HTE31TradeManager/);
 });
 
