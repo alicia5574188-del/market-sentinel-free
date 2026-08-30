@@ -3,6 +3,8 @@ import { getDb } from "../../../../db";
 import { hte31PostExitObservations } from "../../../../db/hte31-schema";
 import { fetchGateChartCandles } from "../../../../lib/gate-client";
 import { getHte31Trade, getHte31TradeChart } from "../../../../lib/hte31-repository";
+import { buildHte31Counterfactual } from "../../../../lib/hte31-counterfactual";
+import { getSettings } from "../../../../lib/settings-repository";
 import type { Candle } from "../../../../lib/signal-engine";
 import { requireApiAccount } from "../../../api-auth";
 
@@ -47,6 +49,8 @@ export async function GET(request: Request) {
     stored?.postExitCandles ?? [],
     fresh,
   );
+  const settings = await getSettings();
+  const counterfactual = buildHte31Counterfactual(trade, candles, settings.roundTripCostBps, now);
 
   return Response.json({
     version: "hte-3.1-clean",
@@ -72,6 +76,7 @@ export async function GET(request: Request) {
     postExitStartAt: trade.exitAt,
     observationUntilAt: trade.exitAt ? trade.exitAt + 12 * 60 * 60_000 : null,
     observations,
+    counterfactual,
     diagnosis: {
       mfePct: trade.mfePct,
       maePct: trade.maePct,

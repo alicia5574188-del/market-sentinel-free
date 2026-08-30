@@ -77,7 +77,11 @@ export type Hte31Input = {
   orderBookImbalance: number | null;
   liquidationImbalance: number | null;
   multiTimeframeTrend: number | null;
+  timeframeTrend15m?: number | null;
+  timeframeTrend1h?: number | null;
+  timeframeTrend4h?: number | null;
   benchmarkMomentum: number | null;
+  optionsIvPercentile?: number | null;
   macroEventRisk: number | null;
   dataQuality: number;
   candles5m: Hte31Candle[];
@@ -87,7 +91,7 @@ export type Hte31Input = {
   marketDecliningRatio?: number | null;
 };
 
-export type Hte31StrategyId = "trend_breakout" | "trend_pullback" | "failed_breakout";
+export type Hte31StrategyId = "trend_breakout" | "trend_pullback" | "failed_breakout" | "trend_exhaustion_reversal" | "higher_timeframe_swing";
 
 export type Hte31StrategyMeta = {
   playbookId: string;

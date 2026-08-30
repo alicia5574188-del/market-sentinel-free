@@ -1,6 +1,8 @@
 import { analyzeGateSymbol, fetchGateChartCandles, fetchGateUniverse, type GateAnalysisPacket, type UniverseTicker } from "./gate-client.ts";
 import { recordHte31DiagnosticCycle } from "./hte31-diagnostics.ts";
 import { evaluateHumanTraderPool } from "./hte31-human-trader-engine.ts";
+import { evaluateAdvancedHumanTraders } from "./hte31-advanced-traders.ts";
+import { getGlobalRiskContext } from "./global-risk.ts";
 import { getHte31Dashboard, listHte31OpenTrades, recordHte31Evaluations, tryOpenHte31Trade } from "./hte31-repository.ts";
 import type { Hte31Candle, Hte31Signal } from "./hte31-types.ts";
 import { getSettings, type AppSettings } from "./settings-repository.ts";
@@ -193,13 +195,14 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
 
   if (job.phase === "deep") {
     if (!job.target || !job.market || !job.settings) throw new Error("Clean scan missing target state");
+    const globalRisk = await getGlobalRiskContext();
     const packet = await analyzeGateSymbol(job.target.symbol, {
       global: {
-        benchmarkMomentum: job.market.benchmarkMomentum,
-        macroEventRisk: null,
-        macroEventLabel: null,
-        optionsIvPercentile: null,
-        etfFlowScore: null,
+        benchmarkMomentum: globalRisk.benchmarkMomentum ?? job.market.benchmarkMomentum,
+        macroEventRisk: globalRisk.macroEventRisk,
+        macroEventLabel: globalRisk.macroEventLabel,
+        optionsIvPercentile: globalRisk.optionsIvPercentile,
+        etfFlowScore: globalRisk.etfFlowScore,
       },
       priorLongProbability: null,
       experience: undefined,
@@ -222,7 +225,7 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
       throw new Error("Clean scan evaluate state incomplete");
     }
     const packet = job.packet;
-    const signals = evaluateHumanTraderPool({
+    const baseSignals = evaluateHumanTraderPool({
       symbol: packet.symbol,
       observedAt: packet.observedAt,
       futuresPrice: packet.market.futuresPrice,
@@ -234,7 +237,11 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
       orderBookImbalance: packet.market.orderBookImbalance,
       liquidationImbalance: packet.market.liquidationImbalance,
       multiTimeframeTrend: packet.market.multiTimeframeTrend,
+      timeframeTrend15m: packet.market.timeframeTrend15m,
+      timeframeTrend1h: packet.market.timeframeTrend1h,
+      timeframeTrend4h: packet.market.timeframeTrend4h,
       benchmarkMomentum: job.market.benchmarkMomentum,
+      optionsIvPercentile: packet.market.optionsIvPercentile,
       macroEventRisk: packet.market.macroEventRisk,
       dataQuality: packet.decision.dataQuality,
       candles5m: job.candles,
@@ -243,6 +250,32 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
       marketAdvancingRatio: job.market.advancingRatio,
       marketDecliningRatio: job.market.decliningRatio,
     });
+    const advancedSignals = evaluateAdvancedHumanTraders({
+      symbol: packet.symbol,
+      observedAt: packet.observedAt,
+      futuresPrice: packet.market.futuresPrice,
+      volumeUsd: packet.market.volumeUsd,
+      changePercentage: packet.market.changePercentage,
+      fundingRate: packet.market.fundingRate,
+      openInterestChangePct: packet.market.openInterestChangePct,
+      spotCvdRatio: packet.market.spotCvdRatio,
+      orderBookImbalance: packet.market.orderBookImbalance,
+      liquidationImbalance: packet.market.liquidationImbalance,
+      multiTimeframeTrend: packet.market.multiTimeframeTrend,
+      timeframeTrend15m: packet.market.timeframeTrend15m,
+      timeframeTrend1h: packet.market.timeframeTrend1h,
+      timeframeTrend4h: packet.market.timeframeTrend4h,
+      benchmarkMomentum: job.market.benchmarkMomentum,
+      optionsIvPercentile: packet.market.optionsIvPercentile,
+      macroEventRisk: packet.market.macroEventRisk,
+      dataQuality: packet.decision.dataQuality,
+      candles5m: job.candles,
+      crossSectionRank: crossSectionRank(job.universe, packet.symbol),
+      rotationVelocity: 0,
+      marketAdvancingRatio: job.market.advancingRatio,
+      marketDecliningRatio: job.market.decliningRatio,
+    });
+    const signals = [...baseSignals, ...advancedSignals];
     await recordHte31Evaluations(packet, signals);
     try {
       await recordHte31DiagnosticCycle(packet, signals, job.settings);

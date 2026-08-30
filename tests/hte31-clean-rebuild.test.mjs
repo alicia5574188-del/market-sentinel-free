@@ -31,6 +31,8 @@ test("clean migration preserves real Gate data families and disarms only new ent
 test("clean scanner never re-enters the retired production scan or old simulation repository", () => {
   const scanner = readFileSync(new URL("../lib/hte31-scanner.ts", import.meta.url), "utf8");
   assert.match(scanner, /evaluateHumanTraderPool/);
+  assert.match(scanner, /evaluateAdvancedHumanTraders/);
+  assert.match(scanner, /getGlobalRiskContext/);
   assert.match(scanner, /recordHte31Evaluations/);
   assert.match(scanner, /tryOpenHte31Trade/);
   assert.doesNotMatch(scanner, /runMarketScan|getStrategy2ExperienceBook|processShadowStrategies|getStrategyLabDashboard|tradeCases|trade_cases/);
@@ -59,6 +61,7 @@ test("order chart persists entry holding and post-exit windows independently", (
   assert.match(api, /takeProfit1/);
   assert.match(api, /takeProfit2/);
   assert.match(api, /observations/);
+  assert.match(api, /buildHte31Counterfactual/);
 });
 
 test("HTE 3.1 runs independently of the dashboard being open", () => {

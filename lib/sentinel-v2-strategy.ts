@@ -370,7 +370,7 @@ export function evaluateSentinelV2Strategies(input: Strategy2Input & { candles5m
   openTrades: { symbol: string; side: "LONG" | "SHORT"; entryThesis?: string | null; regime?: string | null }[];
   experienceBook?: Strategy2ExperienceBook;
 }): SentinelV2StrategyResult {
-  const rawSignals = evaluateHumanTraderPool(input);
+  const rawSignals = evaluateHumanTraderPool(input) as Strategy2Signal[];
   const opportunities = selectIndependentOwner(rawSignals.map((signal) => evaluateOne(signal, input, options.market, options.openTrades, options.experienceBook)));
   return {
     signals: rawSignals.map((signal, index) => mappedSignal(signal, opportunities[index], options.market)),

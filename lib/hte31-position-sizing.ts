@@ -156,15 +156,15 @@ export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31P
   );
   if (!(marginCap > 0)) return emptyResult("模拟账户可用保证金不足");
 
-  const desiredNotionalUsdt = targetRiskUsdt / stopDistanceRate;
+  const roundTripCostRate = Math.max(0, Number.isFinite(input.roundTripCostBps) ? input.roundTripCostBps : 0) / 10_000;
+  const netStopLossRate = stopDistanceRate + roundTripCostRate;
+  const desiredNotionalUsdt = targetRiskUsdt / netStopLossRate;
   const requiredLeverage = Math.max(1, Math.ceil(desiredNotionalUsdt / marginCap));
   const leverage = clamp(requiredLeverage, 1, leverageCap);
   const notionalUsdt = Math.min(desiredNotionalUsdt, marginCap * leverage);
   const marginUsdt = notionalUsdt / leverage;
   const quantity = notionalUsdt / entryPrice;
-  const plannedRiskUsdt = notionalUsdt * stopDistanceRate;
-
-  const roundTripCostRate = Math.max(0, Number.isFinite(input.roundTripCostBps) ? input.roundTripCostBps : 0) / 10_000;
+  const plannedRiskUsdt = notionalUsdt * netStopLossRate;
   const minimumTp2NetProfitUsdt = equityUsdt * HTE31_PAPER_POSITION_POLICY.minimumTp2NetProfitRate;
   const targetTp2NetProfitUsdt = equityUsdt * HTE31_PAPER_POSITION_POLICY.targetTp2NetProfitRate;
   const maximumTp2NetProfitUsdt = equityUsdt * HTE31_PAPER_POSITION_POLICY.maximumTp2NetProfitRate;
@@ -193,7 +193,7 @@ export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31P
   const liquidationSafe = liquidationDistanceRate >= requiredLiquidationBufferRate;
 
   const leverageReason = `需求 ${requiredLeverage}x / 上限 ${leverageCap}x；流动性 ${liquidityCap}x，波动 ${volatilityCap}x，质量 ${qualityCap}x；隔离保证金最多使用净值60%`;
-  let reason = `计划风险 ${plannedRiskUsdt.toFixed(2)}U，TP2预计净利润 ${plannedTp2NetProfitUsdt.toFixed(2)}U`;
+  let reason = `计划净风险(含费用) ${plannedRiskUsdt.toFixed(2)}U，TP2预计净利润 ${plannedTp2NetProfitUsdt.toFixed(2)}U`;
   let accepted = true;
   if (plannedRiskUsdt + 1e-8 < minimumRiskUsdt) {
     accepted = false;
