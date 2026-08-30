@@ -6,9 +6,9 @@ import {
   applyHte31PositionQuote,
   listHte31OpenTrades,
 } from "../lib/hte31-repository";
-import { getSettings, type AppSettings } from "../lib/repository";
+import { getSettings, type AppSettings } from "../lib/settings-repository";
 import { setRuntimeBindings } from "../lib/runtime-bindings";
-import type { Candle } from "../lib/signal-engine";
+import type { Hte31Candle } from "../lib/hte31-types";
 import { HTE31TradeManager as BaseHTE31TradeManager } from "./hte31-workers";
 
 export { HTE31MarketScanner } from "./hte31-workers";
@@ -16,7 +16,7 @@ export { HTE31MarketScanner } from "./hte31-workers";
 const FIVE_MINUTES_MS = 5 * 60_000;
 const REPLAY_GAP_MS = 6 * 60_000;
 
-function candleStartMs(candle: Candle) {
+function candleStartMs(candle: Hte31Candle) {
   return candle.time > 10_000_000_000 ? candle.time : candle.time * 1000;
 }
 
