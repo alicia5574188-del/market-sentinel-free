@@ -57,6 +57,9 @@ jobs:
             'dashboard?.settings.scanEnabled?"暂停 Clean Scanner":"开启 Clean Scanner"': 'dashboard?.settings.scanEnabled?"暂停扫描":"开启扫描"',
             '<p className="clean-driver">Clean Scanner 每轮只深扫一个币，按异常 → 核心 → 全市场轮转，优先保证 Cloudflare Free 下持续可靠运行。</p>': '',
             '<p>新账本 n={samples} · W/S/L ': '<p>样本 n={samples} · W/S/L ',
+            'enabled?"Clean Scanner 已开启。":"Clean Scanner 已暂停。"': 'enabled?"扫描已开启。":"扫描已暂停。"',
+            '"Gate 凭据已验证保存；HTE 3.1 新实盘仍保持锁定。"': '"Gate 凭据已验证保存。"',
+            '<p className="clean-driver">这里展示 Gate 实盘链已经保存的真实账户状态。当前后端只持久化合约权益、当日已实现和对账时间；没有可靠字段时不会把“可用保证金”估算出来。</p>': '',
           }
 
           for old, new in replacements.items():
@@ -78,6 +81,10 @@ jobs:
             '暂停 Clean Scanner',
             '开启 Clean Scanner',
             'Clean Scanner 每轮只深扫一个币',
+            'Clean Scanner 已开启',
+            'Clean Scanner 已暂停',
+            'HTE 3.1 新实盘仍保持锁定',
+            '这里展示 Gate 实盘链已经保存的真实账户状态',
           ]
           for phrase in banned:
               if phrase in s:
@@ -87,9 +94,22 @@ jobs:
 
           test_path = Path('tests/human-trader-ui.test.mjs')
           t = test_path.read_text()
+          test_replacements = {
+            'test("production UI is HTE 3.1 Clean and not a Strategy 2 overlay stack", () => {': 'test("production UI is HTE 3.1 and not a Strategy 2 overlay stack", () => {',
+            'assert.match(page, /HUMAN TRADER ENGINE 3\\.1 CLEAN/);': 'assert.match(page, /HTE 3\\.1 · 5 TRADERS/);',
+            '  assert.match(page, /旧 HTE 3\\.0 不进入这里/);': '  assert.doesNotMatch(page, /旧 HTE 3\\.0 不进入这里|SIMULATION LEDGER · CLEAN|HTE 3\\.1 新账本/);',
+            '  assert.match(page, /30m \\/ 1h \\/ 2h \\/ 4h \\/ 12h/);': '  assert.match(page, /chart\\.observations/);',
+            '  assert.match(page, /风险锁、保护单和紧急停机仍可自动阻止新开仓/);': '  assert.match(page, /按住 1\\.2 秒紧急停机/);',
+          }
+          for old, new in test_replacements.items():
+              count = t.count(old)
+              if count != 1:
+                  raise SystemExit(f'Expected one test match for: {old!r}; found {count}')
+              t = t.replace(old, new)
+
           marker = 'test("product UI omits migration and implementation copy", () => {'
           if marker not in t:
-              t += '''\n\ntest("product UI omits migration and implementation copy", () => {\n  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");\n  for (const phrase of [\n    "HTE 3.0 不进入这里",\n    "SIMULATION LEDGER · CLEAN",\n    "HTE 3.1 新账本",\n    "MARKET STATE · CLEAN",\n    "CLEAN RADAR",\n    "CLEAN RUNTIME",\n    "Clean 重建",\n    "新账本从零启动",\n  ]) assert.equal(page.includes(phrase), false, phrase);\n  assert.match(page, />模拟账户</);\n  assert.match(page, />暂无模拟持仓</);\n});\n'''
+              t += '''\n\ntest("product UI omits migration and implementation copy", () => {\n  for (const phrase of [\n    "HTE 3.0 不进入这里",\n    "SIMULATION LEDGER · CLEAN",\n    "HTE 3.1 新账本",\n    "MARKET STATE · CLEAN",\n    "CLEAN RADAR",\n    "CLEAN RUNTIME",\n    "Clean 重建",\n    "新账本从零启动",\n    "Clean Scanner 已开启",\n    "Clean Scanner 已暂停",\n    "HTE 3.1 新实盘仍保持锁定",\n  ]) assert.equal(page.includes(phrase), false, phrase);\n  assert.match(page, />模拟账户</);\n  assert.match(page, />暂无模拟持仓</);\n  assert.match(page, />实盘</);\n});\n'''
           test_path.write_text(t)
           PY
       - name: Install
