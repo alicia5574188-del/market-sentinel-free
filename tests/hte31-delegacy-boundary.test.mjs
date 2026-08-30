@@ -41,3 +41,21 @@ test("HTE31 primitives do not import retired strategy domains", () => {
   assert.doesNotMatch(types, /strategy-2|shadow-strategy|signal-engine|trade-lifecycle/);
   assert.doesNotMatch(regime, /strategy-2|shadow-strategy|signal-engine|trade-lifecycle/);
 });
+
+test("HTE31 repository and workers use only active HTE31 types and settings", () => {
+  const repository = source("../lib/hte31-repository.ts");
+  const workers = source("../worker/hte31-workers.ts");
+  const recovery = source("../worker/hte31-recovery-manager.ts");
+
+  assert.match(repository, /settings-repository\.ts/);
+  assert.match(repository, /hte31-types\.ts/);
+  assert.match(repository, /hte31-human-trader-engine\.ts/);
+  assert.doesNotMatch(repository, /strategy-2-engine|signal-engine|from "\.\/repository\.ts"|from "\.\/human-trader-engine\.ts"/);
+
+  assert.match(workers, /settings-repository/);
+  assert.doesNotMatch(workers, /from "\.\.\/lib\/repository"/);
+
+  assert.match(recovery, /settings-repository/);
+  assert.match(recovery, /hte31-types/);
+  assert.doesNotMatch(recovery, /signal-engine|from "\.\.\/lib\/repository"/);
+});
