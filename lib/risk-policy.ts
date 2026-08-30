@@ -1,24 +1,19 @@
 export const RISK_POLICY = {
-  // HTE 3.1 is the production strategy source for both paper and Gate live.
-  // Live sizing keeps the same equity-scaled 4% stop-risk target as paper,
-  // while Gate execution still independently rechecks actual equity, contract
-  // limits, stop distance, slippage, fees, isolated margin and protective exits.
-  singleTradeLossRate: 0.04,
-  // Paper HTE 3.1 requires at least 5% equity of fee-adjusted TP2 net profit.
-  // Use the same economic floor live so a 500U account scales to a 20U stop
-  // budget and at least 25U conservative TP2 net instead of reviving micro trades.
-  minimumTp2NetProfitRate: 0.05,
-  // A 60% per-position ceiling lets very tight structural stops still reach the
-  // 3% minimum risk with <=50x leverage, while leaving at least 40% equity for
-  // a second concurrent position. Actual Gate available margin remains a hard cap.
-  maxMarginAllocationRate: 0.60,
+  singleTradeLossRate: 0.01,
+  // Strategy 2.0 deliberately explores with only a fraction of the 1% base
+  // risk. The old 1.5%-of-equity TP2 gate made those small positions
+  // impossible to execute live even when their R/R was good. Keep an economic
+  // floor, but scale it to 0.25% of equity so exploration can produce real
+  // samples without raising the hard account-risk ceiling.
+  minimumTp2NetProfitRate: 0.0025,
+  maxMarginAllocationRate: 0.20,
   dailyRealizedLossPauseRate: 0.03,
   // This 10% limit is enforced against Market Sentinel's realized live-trading
   // equity curve, not against raw Gate account equity. Raw equity changes when
   // the owner transfers USDT between futures and spot and must not be treated
   // as trading losses.
   peakDrawdownRate: 0.10,
-  maxLiveOpenPositions: 2,
+  maxLiveOpenPositions: 3,
   maxSameSideLivePositions: 2,
 } as const;
 
