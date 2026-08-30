@@ -8,10 +8,9 @@ import {
   hte31Trades,
 } from "../db/hte31-schema";
 import type { GateAnalysisPacket, GatePositionQuote } from "./gate-client.ts";
-import { getSettings, type AppSettings } from "./repository.ts";
-import type { Candle } from "./signal-engine.ts";
-import type { Strategy2Signal } from "./strategy-2-engine.ts";
-import type { HumanTraderId } from "./human-trader-engine.ts";
+import { getSettings, type AppSettings } from "./settings-repository.ts";
+import type { HumanTraderId } from "./hte31-human-trader-engine.ts";
+import type { Hte31Candle as Candle, Hte31Signal as Strategy2Signal } from "./hte31-types.ts";
 import { buildHte31PaperPosition } from "./hte31-position-sizing.ts";
 import { evaluateHte31PerformanceCell } from "./hte31-performance-gate.ts";
 import { hte31TimeoutExitReason, isSustainedHte31StopRecovery } from "./hte31-exit-quality.ts";
