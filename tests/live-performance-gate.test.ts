@@ -102,7 +102,22 @@ test("rolling simulation window blocks materially weak performance after enough 
   assert.equal(result.simulationSampleCount, 8);
   assert.equal(result.simulationWinRate, 3 / 8);
   assert.ok(result.simulationNetPct < 0);
-  assert.match(result.reason ?? "", /胜率 38%/);
+});
+
+test("full eight-trade window blocks negative expectancy even at 50 percent win rate", () => {
+  const values = [0.5, 0.4, 0.3, 0.2, -1.5, -1.4, -1.6, -1.675];
+  const result = evaluateLivePerformanceGate({
+    now,
+    recentLive: [],
+    recentSimulation: values.map((netMovePct, index) => ({ netMovePct, exitAt: now - index * 1_000 })),
+  });
+  assert.equal(result.passed, false);
+  assert.equal(result.simulationSampleCount, 8);
+  assert.equal(result.simulationWinRate, 0.5);
+  assert.equal(result.simulationNetPct, -4.775);
+  assert.ok((result.simulationExpectancyPct ?? 0) < 0);
+  assert.ok((result.simulationProfitFactor ?? 99) < 1);
+  assert.match(result.reason ?? "", /负期望/);
 });
 
 test("small samples or recovered recent performance do not over-block live entry", () => {
@@ -124,4 +139,5 @@ test("small samples or recovered recent performance do not over-block live entry
   });
   assert.equal(recovered.passed, true);
   assert.ok((recovered.simulationWinRate ?? 0) >= 0.4);
+  assert.ok((recovered.simulationProfitFactor ?? 0) > 1);
 });
