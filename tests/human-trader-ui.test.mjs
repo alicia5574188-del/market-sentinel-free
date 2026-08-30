@@ -11,8 +11,8 @@ const [page, layout, route, chart, css, liveStatus] = await Promise.all([
   readFile(new URL("../app/api/live/status/route.ts", import.meta.url), "utf8"),
 ]);
 
-test("production UI is HTE 3.1 Clean and not a Strategy 2 overlay stack", () => {
-  assert.match(page, /HUMAN TRADER ENGINE 3\.1 CLEAN/);
+test("production UI is HTE 3.1 and not a Strategy 2 overlay stack", () => {
+  assert.match(page, /HTE 3\.1 · 5 TRADERS/);
   assert.match(page, /Dennis/);
   assert.match(page, /Raschke/);
   assert.match(page, /Turtle Soup/);
@@ -20,7 +20,7 @@ test("production UI is HTE 3.1 Clean and not a Strategy 2 overlay stack", () => 
   assert.match(page, /Exhaustion/);
   assert.match(page, /HT5/);
   assert.match(page, /Counterfactual Observer/);
-  assert.match(page, /旧 HTE 3\.0 不进入这里/);
+  assert.doesNotMatch(page, /旧 HTE 3\.0 不进入这里|SIMULATION LEDGER · CLEAN|HTE 3\.1 新账本/);
   assert.match(layout, /<body>\{children\}<\/body>/);
   assert.doesNotMatch(layout, /Strategy2Dashboard|Strategy2PlaybookDiagnostics|Strategy2LearningArena|RuntimeStabilityClient|UiStatusSemanticFix|LiveOrdersInline/);
 });
@@ -40,7 +40,7 @@ test("order audit includes entry exit candlesticks and post-exit observer", () =
   assert.match(page, /TP1/);
   assert.match(page, /TP2/);
   assert.match(page, /Post-Exit/);
-  assert.match(page, /30m \/ 1h \/ 2h \/ 4h \/ 12h/);
+  assert.match(page, /chart\.observations/);
   assert.match(page, /\/api\/hte31\/chart\?trade=/);
   assert.match(chart, /postExitStartAt/);
   assert.match(chart, /observationUntilAt/);
@@ -81,7 +81,27 @@ test("live boundary preserves owner-controlled enable and disable actions", () =
   assert.match(page, /\/api\/live\/emergency/);
   assert.match(page, /开启 Auto Live/);
   assert.match(page, /JSON\.stringify\(\{enabled\}\)/);
-  assert.match(page, /风险锁、保护单和紧急停机仍可自动阻止新开仓/);
+  assert.match(page, /按住 1\.2 秒紧急停机/);
   assert.doesNotMatch(page, /localStorage|sessionStorage/);
   assert.match(liveStatus, /\^Human Trader · \(\[\^：\]\+\)：/);
+});
+
+
+test("product UI omits migration and implementation copy", () => {
+  for (const phrase of [
+    "HTE 3.0 不进入这里",
+    "SIMULATION LEDGER · CLEAN",
+    "HTE 3.1 新账本",
+    "MARKET STATE · CLEAN",
+    "CLEAN RADAR",
+    "CLEAN RUNTIME",
+    "Clean 重建",
+    "新账本从零启动",
+    "Clean Scanner 已开启",
+    "Clean Scanner 已暂停",
+    "HTE 3.1 新实盘仍保持锁定",
+  ]) assert.equal(page.includes(phrase), false, phrase);
+  assert.match(page, />模拟账户</);
+  assert.match(page, /title="暂无模拟持仓"/);
+  assert.match(page, />实盘</);
 });
