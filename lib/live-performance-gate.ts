@@ -5,6 +5,7 @@ export const SIMULATION_PERFORMANCE_WINDOW = 8;
 export const SIMULATION_MIN_SAMPLES = 6;
 export const SIMULATION_MIN_WIN_RATE = 0.40;
 export const SIMULATION_HARD_LOSS_STREAK = 3;
+export const SIMULATION_EXPECTANCY_MIN_SAMPLES = SIMULATION_PERFORMANCE_WINDOW;
 
 export type RecentLiveResult = {
   realizedPnlUsdt: number | null;
@@ -27,6 +28,8 @@ export type LivePerformanceGate = {
   simulationSampleCount: number;
   simulationWinRate: number | null;
   simulationNetPct: number;
+  simulationExpectancyPct: number | null;
+  simulationProfitFactor: number | null;
 };
 
 function finite(value: number | null | undefined): value is number {
@@ -91,6 +94,14 @@ export function evaluateLivePerformanceGate(input: {
   const simulationWins = simulationValues.filter((value) => value > 0).length;
   const simulationWinRate = simulationSampleCount ? simulationWins / simulationSampleCount : null;
   const simulationNetPct = Number(simulationValues.reduce((sum, value) => sum + value, 0).toFixed(6));
+  const simulationExpectancyPct = simulationSampleCount
+    ? Number((simulationNetPct / simulationSampleCount).toFixed(6))
+    : null;
+  const simulationGrossProfitPct = simulationValues.reduce((sum, value) => sum + Math.max(0, value), 0);
+  const simulationGrossLossPct = Math.abs(simulationValues.reduce((sum, value) => sum + Math.min(0, value), 0));
+  const simulationProfitFactor = simulationGrossLossPct > 0
+    ? Number((simulationGrossProfitPct / simulationGrossLossPct).toFixed(6))
+    : simulationGrossProfitPct > 0 ? 99 : null;
 
   const base: Omit<LivePerformanceGate, "passed" | "reason" | "cooldownUntil"> = {
     liveLossStreak,
@@ -99,6 +110,8 @@ export function evaluateLivePerformanceGate(input: {
     simulationSampleCount,
     simulationWinRate,
     simulationNetPct,
+    simulationExpectancyPct,
+    simulationProfitFactor,
   };
 
   if (latestLive && latestLive.realizedPnlUsdt == null && (latestLive.closedAt ?? 0) >= now - 24 * 60 * 60 * 1_000) {
@@ -136,6 +149,18 @@ export function evaluateLivePerformanceGate(input: {
       ...base,
       passed: false,
       reason: "模拟策略最近连续 3 笔亏损，实盘新开仓暂停；模拟扫描继续运行，表现恢复后自动放行",
+      cooldownUntil: null,
+    };
+  }
+
+  if (simulationSampleCount >= SIMULATION_EXPECTANCY_MIN_SAMPLES
+    && simulationNetPct <= 0
+    && simulationProfitFactor != null
+    && simulationProfitFactor < 1) {
+    return {
+      ...base,
+      passed: false,
+      reason: `最近 ${simulationSampleCount} 笔模拟策略为负期望：累计 ${simulationNetPct.toFixed(2)}%，平均 ${simulationExpectancyPct?.toFixed(2) ?? "--"}%/笔，PF ${simulationProfitFactor.toFixed(2)}；模拟盘继续采样，实盘新开仓暂停`,
       cooldownUntil: null,
     };
   }
