@@ -17,7 +17,7 @@ import {
   type Hte31ScanCompleted,
   type Hte31ScanJob,
 } from "../lib/hte31-scanner";
-import { getSettings } from "../lib/repository";
+import { getSettings } from "../lib/settings-repository";
 import type { SchedulerWorkerStatus } from "../lib/background-scheduler";
 import type { CloudflareEnv } from "./index";
 
