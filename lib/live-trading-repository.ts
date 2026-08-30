@@ -1,11 +1,11 @@
 import { and, asc, desc, eq, gte, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { getDb } from "../db";
+import { hte31Trades } from "../db/hte31-schema";
 import {
   liveAuditEvents,
   liveExchangeCredentials,
   liveOrders,
   liveTradingControl,
-  tradeCases,
 } from "../db/schema";
 import type { EncryptedGateCredentials } from "./credential-vault";
 import { liveEntryCandidateCutoff } from "./live-entry-freshness";
@@ -26,17 +26,6 @@ function parseJson<T>(value: string, fallback: T): T {
 
 function finitePositive(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
-}
-
-function entryRiskMultiplier(entryMetricsJson: string) {
-  const metrics = parseJson<{ key?: string; score?: number }[]>(entryMetricsJson, []);
-  // HTE owns new production entries. Keep the old key only as a migration
-  // fallback for an already-created pre-HTE simulation candidate; it cannot
-  // create a new Strategy 2.0 entry because that authority has been retired.
-  const metric = metrics.find((item) => item.key === "human-risk-mode")
-    ?? metrics.find((item) => item.key === "v2-risk-multiplier");
-  if (!metric || typeof metric.score !== "number" || !Number.isFinite(metric.score)) return 1;
-  return Math.max(0, Math.min(1, metric.score));
 }
 
 export async function getLiveControl(): Promise<LiveControlRecord> {
@@ -241,11 +230,11 @@ export async function getLivePerformanceGate(now = Date.now()) {
       .orderBy(desc(liveAuditEvents.createdAt))
       .limit(250),
     db.select({
-      netMovePct: tradeCases.netMovePct,
-      exitAt: tradeCases.exitAt,
-    }).from(tradeCases)
-      .where(and(eq(tradeCases.status, "closed"), eq(tradeCases.simulationModel, "contract_v2")))
-      .orderBy(desc(tradeCases.exitAt))
+      netMovePct: hte31Trades.netMovePct,
+      exitAt: hte31Trades.exitAt,
+    }).from(hte31Trades)
+      .where(eq(hte31Trades.status, "closed"))
+      .orderBy(desc(hte31Trades.exitAt))
       .limit(8),
   ]);
   const entryEquityByOrder = new Map<string, number>();
@@ -269,27 +258,25 @@ export async function listLiveEntryCandidates(enabledAt: number, now = Date.now(
   const performanceGate = await getLivePerformanceGate(now);
   if (!performanceGate.passed) return [];
   const db = getDb();
-  const rows = await db.select().from(tradeCases).where(and(
-    eq(tradeCases.status, "holding"),
-    eq(tradeCases.simulationModel, "contract_v2"),
-    gte(tradeCases.entryAt, liveEntryCandidateCutoff(enabledAt, now)),
-  )).orderBy(desc(tradeCases.entryAt)).limit(20);
+  const rows = await db.select().from(hte31Trades).where(and(
+    eq(hte31Trades.status, "holding"),
+    gte(hte31Trades.entryAt, liveEntryCandidateCutoff(enabledAt, now)),
+  )).orderBy(desc(hte31Trades.entryAt)).limit(20);
   if (!rows.length) return [];
   const existing = await db.select({ tradeCaseId: liveOrders.tradeCaseId }).from(liveOrders).where(inArray(liveOrders.tradeCaseId, rows.map((row) => row.id)));
   const claimed = new Set(existing.map((row) => row.tradeCaseId));
   return rows
     .filter((row) => !claimed.has(row.id))
-    .map((row) => {
-      const multiplier = entryRiskMultiplier(row.entryMetricsJson);
-      return {
-        ...row,
-        // Human Risk Governor can only reduce the existing safety budget. The
-        // live entry planner still independently rechecks current equity, stop
-        // risk, margin, slippage and minimum TP2 profitability before Gate.
-        riskBudgetUsdt: row.riskBudgetUsdt * multiplier,
-        contractNotionalUsdt: row.contractNotionalUsdt * multiplier,
-      };
-    })
+    .map((row) => ({
+      ...row,
+      // HTE 3.1 owns the production signal and already stores its risk-governed
+      // paper sizing. Gate rebuilds the order from current real equity and its
+      // own hard limits, so only the structural prices/notional/leverage are
+      // carried forward here.
+      entryLow: row.entryPrice,
+      entryHigh: row.entryPrice,
+      contractNotionalUsdt: row.notionalUsdt,
+    }))
     .filter((row) => row.riskBudgetUsdt > 0 && row.contractNotionalUsdt >= 1);
 }
 
