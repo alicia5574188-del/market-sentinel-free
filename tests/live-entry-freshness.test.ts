@@ -17,8 +17,9 @@ test("live entry candidates expire after two minutes even if the switch stayed o
   assert.equal(liveEntryCandidateCutoff(enabledAt, now), now - LIVE_ENTRY_MAX_AGE_MS);
 });
 
-test("candidate query applies the freshness cutoff and prioritizes the newest eligible signal", () => {
+test("HTE31 candidate query applies the freshness cutoff and prioritizes the newest eligible signal", () => {
   const source = readFileSync(fileURLToPath(new URL("../lib/live-trading-repository.ts", import.meta.url)), "utf8");
-  assert.match(source, /gte\(tradeCases\.entryAt, liveEntryCandidateCutoff\(enabledAt, now\)\)/);
-  assert.match(source, /orderBy\(desc\(tradeCases\.entryAt\)\)/);
+  assert.match(source, /gte\(hte31Trades\.entryAt, liveEntryCandidateCutoff\(enabledAt, now\)\)/);
+  assert.match(source, /orderBy\(desc\(hte31Trades\.entryAt\)\)/);
+  assert.doesNotMatch(source, /gte\(tradeCases\.entryAt, liveEntryCandidateCutoff/);
 });

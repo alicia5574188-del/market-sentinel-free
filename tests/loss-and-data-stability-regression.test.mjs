@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [scanner, gateClient, marketRoute, v2Route, hteRoute, strategyRepo, liveRepo, heavyUiAdmission] = await Promise.all([
+const [scanner, gateClient, marketRoute, v2Route, hteRoute, strategyRepo, liveRepo, liveRisk, heavyUiAdmission] = await Promise.all([
   readFile(new URL("../lib/scanner.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/gate-client.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/api/market/route.ts", import.meta.url), "utf8"),
@@ -10,6 +10,7 @@ const [scanner, gateClient, marketRoute, v2Route, hteRoute, strategyRepo, liveRe
   readFile(new URL("../app/api/hte/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/shadow-strategy-repository.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/live-trading-repository.ts", import.meta.url), "utf8"),
+  readFile(new URL("../lib/live-risk.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/ui-heavy-read-admission.ts", import.meta.url), "utf8"),
 ]);
 
@@ -110,10 +111,15 @@ test("global Human Risk Governor requires cross-trader damage before streak esca
   assert.match(strategyRepo, /expectancyR[\s\S]*>= 0\.12/);
 });
 
-test("Human Risk Governor can only reduce live candidate size and Gate still rechecks execution safety", () => {
-  assert.match(liveRepo, /item\.key === "human-risk-mode"/);
-  assert.match(liveRepo, /Math\.max\(0, Math\.min\(1, metric\.score\)\)/);
-  assert.match(liveRepo, /riskBudgetUsdt:\s*row\.riskBudgetUsdt \* multiplier/);
-  assert.match(liveRepo, /contractNotionalUsdt:\s*row\.contractNotionalUsdt \* multiplier/);
-  assert.match(liveRepo, /live entry planner still independently rechecks current equity/);
+test("Human Risk Governor can only reduce HTE live size and Gate independently rechecks current execution safety", () => {
+  // The governor is already reflected in the HTE paper order's risk/notional.
+  // Live must carry that bounded notional forward, never recreate the retired
+  // contract_v2 multiplier path, and then independently cap it again from the
+  // current Gate equity, available isolated margin, contract size and fees.
+  assert.match(liveRepo, /contractNotionalUsdt:\s*row\.notionalUsdt/);
+  assert.doesNotMatch(liveRepo, /entryRiskMultiplier\(/);
+  assert.match(liveRisk, /candidateRiskBudgetUsdt\s*=\s*Math\.max\(0, trade\.contractNotionalUsdt \* candidateStopDistanceFraction\)/);
+  assert.match(liveRisk, /riskBudgetUsdt\s*=\s*Math\.min\(accountRiskBudgetUsdt, candidateRiskBudgetUsdt \|\| accountRiskBudgetUsdt\)/);
+  assert.match(liveRisk, /Math\.min\([\s\S]*trade\.contractNotionalUsdt,[\s\S]*riskNotionalCap,[\s\S]*marginAllocationUsdt \* trade\.leverage/);
+  assert.match(liveRisk, /Gate 实际张数计算的止损风险超过该 HTE 3\.1 候选风险上限/);
 });

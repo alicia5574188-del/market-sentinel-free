@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, gte, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { getDb } from "../db";
+import { hte31Trades } from "../db/hte31-schema";
 import {
   liveAuditEvents,
   liveExchangeCredentials,
@@ -19,6 +20,7 @@ export type LiveOrderState = LiveOrderRecord["state"];
 const ACTIVE_LIVE_STATES: LiveOrderState[] = ["submitting", "open", "protected", "closing"];
 const LEGACY_RAW_EQUITY_LOCK = /Gate 权益较实盘峰值回撤/;
 const ENTRY_EQUITY_SNAPSHOT_EVENT = "entry_equity_snapshot";
+const HTE31_LIVE_BRIDGE_MODEL = "hte31_live_bridge";
 
 function parseJson<T>(value: string, fallback: T): T {
   try { return JSON.parse(value) as T; } catch { return fallback; }
@@ -28,25 +30,147 @@ function finitePositive(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
-function entryRiskMultiplier(entryMetricsJson: string) {
-  const metrics = parseJson<{ key?: string; score?: number }[]>(entryMetricsJson, []);
-  // HTE owns new production entries. Keep the old key only as a migration
-  // fallback for an already-created pre-HTE simulation candidate; it cannot
-  // create a new Strategy 2.0 entry because that authority has been retired.
-  const metric = metrics.find((item) => item.key === "human-risk-mode")
-    ?? metrics.find((item) => item.key === "v2-risk-multiplier");
-  if (!metric || typeof metric.score !== "number" || !Number.isFinite(metric.score)) return 1;
-  return Math.max(0, Math.min(1, metric.score));
+function hte31BridgeInsert(row: typeof hte31Trades.$inferSelect): typeof tradeCases.$inferInsert {
+  const plannedRiskPct = row.entryPrice > 0 ? Math.abs(row.entryPrice - row.initialStopPrice) / row.entryPrice * 100 : 0;
+  return {
+    id: row.id,
+    activeKey: null,
+    symbol: row.symbol,
+    status: row.status,
+    side: row.side,
+    confidence: row.confidence,
+    posteriorLong: null,
+    dataQuality: 1,
+    regime: row.assetRegime,
+    entryDirectionalScore: row.side === "LONG" ? 1 : -1,
+    entryAt: row.entryAt,
+    entryPrice: row.entryPrice,
+    entryLow: row.entryPrice,
+    entryHigh: row.entryPrice,
+    entryTrigger: row.entryTrigger,
+    entryThesis: row.entryThesis,
+    entryChecksJson: row.entryChecksJson,
+    exitRulesJson: "[]",
+    entryEvidenceJson: "[]",
+    entryCounterEvidenceJson: "[]",
+    entryMetricsJson: row.entryMetricsJson,
+    entrySnapshotJson: "{}",
+    initialStopPrice: row.initialStopPrice,
+    currentStopPrice: row.currentStopPrice,
+    takeProfit1Price: row.takeProfit1Price,
+    takeProfit2Price: row.takeProfit2Price,
+    target1HitAt: row.target1HitAt,
+    maxHoldingMinutes: row.maxHoldingMinutes,
+    plannedRiskPct,
+    riskReward: row.riskReward,
+    riskBudgetUsdt: row.riskBudgetUsdt,
+    suggestedNotionalUsdt: row.notionalUsdt,
+    contractType: "USDT_PERPETUAL",
+    marginMode: "isolated",
+    leverage: row.leverage,
+    leverageReason: "HTE 3.1 live compatibility bridge; Gate independently revalidates leverage and risk",
+    marginUsdt: row.marginUsdt,
+    contractNotionalUsdt: row.notionalUsdt,
+    quantity: row.quantity,
+    estimatedLiquidationPrice: null,
+    simulationModel: HTE31_LIVE_BRIDGE_MODEL,
+    accountBalanceBeforeUsdt: 0,
+    accountBalanceAfterUsdt: null,
+    lastPrice: row.lastPrice,
+    lastEvaluatedAt: row.lastEvaluatedAt,
+    maxPriceSeen: row.maxPriceSeen,
+    minPriceSeen: row.minPriceSeen,
+    unrealizedNetPct: row.unrealizedNetPct,
+    unrealizedNetUsdt: row.unrealizedNetUsdt,
+    progressR: row.progressR,
+    exitAt: row.exitAt,
+    exitPrice: row.exitPrice,
+    exitCode: null,
+    exitReason: row.exitReason,
+    grossMovePct: row.grossMovePct,
+    netMovePct: row.netMovePct,
+    grossPnlUsdt: row.grossPnlUsdt,
+    estimatedCostUsdt: row.costUsdt,
+    netPnlUsdt: row.netPnlUsdt,
+    mfePct: row.mfePct,
+    maePct: row.maePct,
+    holdMinutes: row.holdMinutes,
+  };
+}
+
+async function ensureHte31LiveBridge(tradeId: string) {
+  const db = getDb();
+  const [hte] = await db.select().from(hte31Trades).where(eq(hte31Trades.id, tradeId)).limit(1);
+  if (!hte) throw new Error("HTE 3.1 实盘候选已不存在，禁止创建 Gate 订单");
+  const [existing] = await db.select({ id: tradeCases.id, simulationModel: tradeCases.simulationModel }).from(tradeCases).where(eq(tradeCases.id, tradeId)).limit(1);
+  if (existing && existing.simulationModel !== HTE31_LIVE_BRIDGE_MODEL) {
+    throw new Error("HTE 3.1 实盘候选 ID 与旧策略账本冲突，已禁止开仓");
+  }
+  if (!existing) await db.insert(tradeCases).values(hte31BridgeInsert(hte));
+  return hte;
+}
+
+async function syncActiveHte31LiveBridges(rows: LiveOrderRecord[]) {
+  if (!rows.length) return rows;
+  const db = getDb();
+  const ids = rows.map((row) => row.tradeCaseId);
+  const [hteRows, bridgeRows] = await Promise.all([
+    db.select().from(hte31Trades).where(inArray(hte31Trades.id, ids)),
+    db.select({
+      id: tradeCases.id,
+      simulationModel: tradeCases.simulationModel,
+      status: tradeCases.status,
+      currentStopPrice: tradeCases.currentStopPrice,
+      target1HitAt: tradeCases.target1HitAt,
+      exitAt: tradeCases.exitAt,
+      exitPrice: tradeCases.exitPrice,
+      exitReason: tradeCases.exitReason,
+    }).from(tradeCases).where(inArray(tradeCases.id, ids)),
+  ]);
+  const hteById = new Map(hteRows.map((row) => [row.id, row]));
+  const bridgeById = new Map(bridgeRows.map((row) => [row.id, row]));
+  for (const order of rows) {
+    const hte = hteById.get(order.tradeCaseId);
+    const bridge = bridgeById.get(order.tradeCaseId);
+    if (!hte || !bridge || bridge.simulationModel !== HTE31_LIVE_BRIDGE_MODEL) continue;
+    const changed = bridge.status !== hte.status
+      || Math.abs(bridge.currentStopPrice - hte.currentStopPrice) > Math.max(1e-12, Math.abs(hte.currentStopPrice) * 1e-10)
+      || bridge.target1HitAt !== hte.target1HitAt
+      || bridge.exitAt !== hte.exitAt
+      || bridge.exitPrice !== hte.exitPrice
+      || bridge.exitReason !== hte.exitReason;
+    if (!changed) continue;
+    await db.update(tradeCases).set({
+      status: hte.status,
+      currentStopPrice: hte.currentStopPrice,
+      target1HitAt: hte.target1HitAt,
+      lastPrice: hte.lastPrice,
+      lastEvaluatedAt: hte.lastEvaluatedAt,
+      maxPriceSeen: hte.maxPriceSeen,
+      minPriceSeen: hte.minPriceSeen,
+      unrealizedNetPct: hte.unrealizedNetPct,
+      unrealizedNetUsdt: hte.unrealizedNetUsdt,
+      progressR: hte.progressR,
+      exitAt: hte.exitAt,
+      exitPrice: hte.exitPrice,
+      exitReason: hte.exitReason,
+      grossMovePct: hte.grossMovePct,
+      netMovePct: hte.netMovePct,
+      grossPnlUsdt: hte.grossPnlUsdt,
+      estimatedCostUsdt: hte.costUsdt,
+      netPnlUsdt: hte.netPnlUsdt,
+      mfePct: hte.mfePct,
+      maePct: hte.maePct,
+      holdMinutes: hte.holdMinutes,
+    }).where(eq(tradeCases.id, hte.id));
+  }
+  return rows;
 }
 
 export async function getLiveControl(): Promise<LiveControlRecord> {
   const db = getDb();
   const [existing] = await db.select().from(liveTradingControl).where(eq(liveTradingControl.id, 1)).limit(1);
   if (existing) {
-    // Older releases treated owner transfers between futures and spot as
-    // trading drawdown because they compared raw Gate account equity with an
-    // all-time raw-equity peak. That rule is retired. Clear only locks created
-    // by that exact legacy reason; every other risk/emergency lock remains.
     if (existing.state === "risk_locked" && LEGACY_RAW_EQUITY_LOCK.test(existing.lastError ?? "")) {
       const now = Date.now();
       await db.update(liveTradingControl).set({
@@ -99,41 +223,18 @@ export async function armLiveControl() {
 export async function disableLiveControl(reason: string | null = null) {
   const current = await getLiveControl();
   if (current.state === "emergency_stopped") {
-    return patchLiveControl({
-      entryEnabled: false,
-      disabledAt: Date.now(),
-      lastError: reason ?? current.lastError,
-    });
+    return patchLiveControl({ entryEnabled: false, disabledAt: Date.now(), lastError: reason ?? current.lastError });
   }
-  return patchLiveControl({
-    entryEnabled: false,
-    state: "disabled",
-    disabledAt: Date.now(),
-    lastError: reason,
-  });
+  return patchLiveControl({ entryEnabled: false, state: "disabled", disabledAt: Date.now(), lastError: reason });
 }
 
 export async function latchEmergencyControl(reason: string) {
   const now = Date.now();
-  return patchLiveControl({
-    entryEnabled: false,
-    state: "emergency_stopped",
-    disabledAt: now,
-    emergencyAt: now,
-    emergencyReason: reason,
-    lastError: null,
-  });
+  return patchLiveControl({ entryEnabled: false, state: "emergency_stopped", disabledAt: now, emergencyAt: now, emergencyReason: reason, lastError: null });
 }
 
 export async function clearEmergencyControl() {
-  return patchLiveControl({
-    entryEnabled: false,
-    state: "disabled",
-    disabledAt: Date.now(),
-    emergencyAt: null,
-    emergencyReason: null,
-    lastError: null,
-  });
+  return patchLiveControl({ entryEnabled: false, state: "disabled", disabledAt: Date.now(), emergencyAt: null, emergencyReason: null, lastError: null });
 }
 
 export async function getLiveCredentialRecord() {
@@ -190,12 +291,7 @@ export async function saveLiveCredentialRecord(values: {
 
 export async function markLiveCredentialVerification(success: boolean, error: string | null = null) {
   const db = getDb();
-  await db.update(liveExchangeCredentials).set({
-    status: success ? "verified" : "error",
-    lastVerifiedAt: success ? Date.now() : undefined,
-    lastError: success ? null : error,
-    updatedAt: Date.now(),
-  }).where(eq(liveExchangeCredentials.id, 1));
+  await db.update(liveExchangeCredentials).set({ status: success ? "verified" : "error", lastVerifiedAt: success ? Date.now() : undefined, lastError: success ? null : error, updatedAt: Date.now() }).where(eq(liveExchangeCredentials.id, 1));
 }
 
 export async function deleteLiveCredentialRecord() {
@@ -210,7 +306,10 @@ export async function countActiveLiveOrders() {
 }
 
 export async function listActiveLiveOrders() {
-  return getDb().select().from(liveOrders).where(inArray(liveOrders.state, ACTIVE_LIVE_STATES)).orderBy(asc(liveOrders.createdAt));
+  const db = getDb();
+  const rows = await db.select().from(liveOrders).where(inArray(liveOrders.state, ACTIVE_LIVE_STATES)).orderBy(asc(liveOrders.createdAt));
+  await syncActiveHte31LiveBridges(rows);
+  return rows;
 }
 
 export async function listLiveOrdersAwaitingRealizedPnl(now = Date.now()) {
@@ -225,28 +324,12 @@ export async function listLiveOrdersAwaitingRealizedPnl(now = Date.now()) {
 export async function getLivePerformanceGate(now = Date.now()) {
   const db = getDb();
   const [recentLive, entrySnapshots, recentSimulation] = await Promise.all([
-    db.select({
-      id: liveOrders.id,
-      realizedPnlUsdt: liveOrders.realizedPnlUsdt,
-      closedAt: liveOrders.closedAt,
-    }).from(liveOrders)
-      .where(eq(liveOrders.state, "closed"))
-      .orderBy(desc(liveOrders.closedAt))
-      .limit(200),
-    db.select({
-      liveOrderId: liveAuditEvents.liveOrderId,
-      detailsJson: liveAuditEvents.detailsJson,
-    }).from(liveAuditEvents)
-      .where(eq(liveAuditEvents.eventType, ENTRY_EQUITY_SNAPSHOT_EVENT))
-      .orderBy(desc(liveAuditEvents.createdAt))
-      .limit(250),
-    db.select({
-      netMovePct: tradeCases.netMovePct,
-      exitAt: tradeCases.exitAt,
-    }).from(tradeCases)
-      .where(and(eq(tradeCases.status, "closed"), eq(tradeCases.simulationModel, "contract_v2")))
-      .orderBy(desc(tradeCases.exitAt))
-      .limit(8),
+    db.select({ id: liveOrders.id, realizedPnlUsdt: liveOrders.realizedPnlUsdt, closedAt: liveOrders.closedAt }).from(liveOrders)
+      .where(eq(liveOrders.state, "closed")).orderBy(desc(liveOrders.closedAt)).limit(200),
+    db.select({ liveOrderId: liveAuditEvents.liveOrderId, detailsJson: liveAuditEvents.detailsJson }).from(liveAuditEvents)
+      .where(eq(liveAuditEvents.eventType, ENTRY_EQUITY_SNAPSHOT_EVENT)).orderBy(desc(liveAuditEvents.createdAt)).limit(250),
+    db.select({ netMovePct: hte31Trades.netMovePct, exitAt: hte31Trades.exitAt }).from(hte31Trades)
+      .where(eq(hte31Trades.status, "closed")).orderBy(desc(hte31Trades.exitAt)).limit(8),
   ]);
   const entryEquityByOrder = new Map<string, number>();
   for (const row of entrySnapshots) {
@@ -256,11 +339,7 @@ export async function getLivePerformanceGate(now = Date.now()) {
   }
   return evaluateLivePerformanceGate({
     now,
-    recentLive: recentLive.map((row) => ({
-      realizedPnlUsdt: row.realizedPnlUsdt,
-      entryEquityUsdt: entryEquityByOrder.get(row.id) ?? null,
-      closedAt: row.closedAt,
-    })),
+    recentLive: recentLive.map((row) => ({ realizedPnlUsdt: row.realizedPnlUsdt, entryEquityUsdt: entryEquityByOrder.get(row.id) ?? null, closedAt: row.closedAt })),
     recentSimulation,
   });
 }
@@ -269,44 +348,28 @@ export async function listLiveEntryCandidates(enabledAt: number, now = Date.now(
   const performanceGate = await getLivePerformanceGate(now);
   if (!performanceGate.passed) return [];
   const db = getDb();
-  const rows = await db.select().from(tradeCases).where(and(
-    eq(tradeCases.status, "holding"),
-    eq(tradeCases.simulationModel, "contract_v2"),
-    gte(tradeCases.entryAt, liveEntryCandidateCutoff(enabledAt, now)),
-  )).orderBy(desc(tradeCases.entryAt)).limit(20);
+  const rows = await db.select().from(hte31Trades).where(and(
+    eq(hte31Trades.status, "holding"),
+    gte(hte31Trades.entryAt, liveEntryCandidateCutoff(enabledAt, now)),
+  )).orderBy(desc(hte31Trades.entryAt)).limit(20);
   if (!rows.length) return [];
   const existing = await db.select({ tradeCaseId: liveOrders.tradeCaseId }).from(liveOrders).where(inArray(liveOrders.tradeCaseId, rows.map((row) => row.id)));
   const claimed = new Set(existing.map((row) => row.tradeCaseId));
   return rows
     .filter((row) => !claimed.has(row.id))
-    .map((row) => {
-      const multiplier = entryRiskMultiplier(row.entryMetricsJson);
-      return {
-        ...row,
-        // Human Risk Governor can only reduce the existing safety budget. The
-        // live entry planner still independently rechecks current equity, stop
-        // risk, margin, slippage and minimum TP2 profitability before Gate.
-        riskBudgetUsdt: row.riskBudgetUsdt * multiplier,
-        contractNotionalUsdt: row.contractNotionalUsdt * multiplier,
-      };
-    })
+    .map((row) => ({ ...row, entryLow: row.entryPrice, entryHigh: row.entryPrice, contractNotionalUsdt: row.notionalUsdt }))
     .filter((row) => row.riskBudgetUsdt > 0 && row.contractNotionalUsdt >= 1);
 }
 
 export async function createLiveOrderIntent(values: typeof liveOrders.$inferInsert) {
   const db = getDb();
+  await ensureHte31LiveBridge(values.tradeCaseId);
   const inserted = await db.insert(liveOrders).values(values).onConflictDoNothing().returning();
   if (inserted[0]) {
     if (inserted[0].state === "submitting") {
       const control = await getLiveControl();
       if (finitePositive(control.accountEquityLastUsdt)) {
-        await addLiveAudit({
-          eventType: ENTRY_EQUITY_SNAPSHOT_EVENT,
-          liveOrderId: inserted[0].id,
-          symbol: inserted[0].symbol,
-          message: `${inserted[0].symbol} 已记录实盘入场时 Gate 权益基准`,
-          details: { entryEquityUsdt: control.accountEquityLastUsdt },
-        });
+        await addLiveAudit({ eventType: ENTRY_EQUITY_SNAPSHOT_EVENT, liveOrderId: inserted[0].id, symbol: inserted[0].symbol, message: `${inserted[0].symbol} 已记录实盘入场时 Gate 权益基准`, details: { entryEquityUsdt: control.accountEquityLastUsdt } });
       }
     }
     return inserted[0];
@@ -361,11 +424,7 @@ function publicCredential(row: LiveCredentialRecord | null) {
 }
 
 function publicOrder(row: LiveOrderRecord) {
-  return {
-    ...row,
-    lastGateStatus: parseJson<Record<string, unknown>>(row.lastGateStatusJson, {}),
-    lastGateStatusJson: undefined,
-  };
+  return { ...row, lastGateStatus: parseJson<Record<string, unknown>>(row.lastGateStatusJson, {}), lastGateStatusJson: undefined };
 }
 
 export async function getLiveTradingSnapshot() {

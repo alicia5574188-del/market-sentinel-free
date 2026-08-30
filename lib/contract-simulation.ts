@@ -1,4 +1,5 @@
-import { RISK_POLICY, maxMarginAllocationUsdt, minimumTp2NetProfitBudgetUsdt, singleTradeRiskBudgetUsdt } from "./risk-policy.ts";
+import { RISK_POLICY, legacySingleTradeRiskBudgetUsdt, maxMarginAllocationUsdt, minimumTp2NetProfitBudgetUsdt } from "./risk-policy.ts";
+import { hte31LiveMinimumTp2NetUsdt } from "./hte31-live-policy.ts";
 
 export type ContractSide = "LONG" | "SHORT";
 
@@ -57,8 +58,14 @@ function round(value: number, digits = 8) {
   return Math.round((value + Number.EPSILON) * scale) / scale;
 }
 
+/**
+ * Compatibility export consumed by the live crash/restart recovery path.
+ * HTE 3.1 owns Gate new-entry authority, so recovery must use the same 5%
+ * current-equity TP2 floor as normal HTE live preflight rather than the retired
+ * contract_v2 exploration floor.
+ */
 export function minimumTp2NetProfitUsdt(accountEquityUsdt: number) {
-  return minimumTp2NetProfitBudgetUsdt(accountEquityUsdt);
+  return hte31LiveMinimumTp2NetUsdt(accountEquityUsdt);
 }
 
 function liquidityLeverageCap(volumeUsd: number) {
@@ -88,7 +95,7 @@ export function buildContractPlan(input: ContractPlanInput): ContractPlan {
     : 1;
   const equity = finitePositive(input.accountEquityUsdt);
   const availableMargin = Math.max(0, Number.isFinite(input.availableMarginUsdt) ? input.availableMarginUsdt : 0);
-  const accountRiskCap = singleTradeRiskBudgetUsdt(equity);
+  const accountRiskCap = legacySingleTradeRiskBudgetUsdt(equity);
   const requestedRisk = Math.min(finitePositive(input.requestedRiskUsdt), accountRiskCap);
   const liquidityCap = liquidityLeverageCap(finitePositive(input.liquidityVolumeUsd));
   const volatilityCap = volatilityLeverageCap(input.atrPct);
@@ -148,9 +155,8 @@ export function calculateContractPnl(notionalUsdt: number, grossMovePct: number,
 /**
  * Projects the full-position net result at TP2 after the configured round-trip
  * cost. The minimum useful profit scales with current account equity rather
- * than a fixed USDT amount. This gate is evaluated only after the real leverage
- * and notional caps have been applied, so leverage is never raised merely to
- * make a trade pass.
+ * than a fixed USDT amount. This retired contract_v2 simulator intentionally
+ * keeps its historical 0.25% exploration floor and is not a Gate entry source.
  */
 export function assessTakeProfitViability(input: {
   side: ContractSide;
@@ -171,7 +177,7 @@ export function assessTakeProfitViability(input: {
   const hasExplicitMinimum = typeof input.minimumNetProfitUsdt === "number" && Number.isFinite(input.minimumNetProfitUsdt);
   const minimumNetProfitUsdt = Math.max(0, hasExplicitMinimum
     ? input.minimumNetProfitUsdt!
-    : minimumTp2NetProfitUsdt(input.accountEquityUsdt));
+    : minimumTp2NetProfitBudgetUsdt(input.accountEquityUsdt));
   const pnl = calculateContractPnl(input.notionalUsdt, grossMovePct, estimatedCostPct);
   return {
     ...pnl,

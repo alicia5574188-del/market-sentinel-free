@@ -46,7 +46,7 @@ export const HTE31_PAPER_POSITION_POLICY = {
   minimumTp2NetProfitRate: 0.05,
   targetTp2NetProfitRate: 0.08,
   maximumTp2NetProfitRate: 0.20,
-  maximumMarginAllocationRate: 0.90,
+  maximumMarginAllocationRate: 0.60,
   maximumLeverage: 50,
   maximumTp2RiskReward: 4,
   liquidationMaintenanceFactor: 0.92,
@@ -115,7 +115,8 @@ function emptyResult(reason: string): Hte31PositionSizing {
 /**
  * Sizes HTE 3.1 paper orders from stop-defined account risk. It preserves the
  * entry signal first: notional and TP2 R are adjusted before a setup can be
- * rejected for weak USDT economics. Gate live sizing is deliberately separate.
+ * rejected for weak USDT economics. Gate live uses the same equity ratios but
+ * independently rebuilds the order against real Gate contract/account limits.
  */
 export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31PositionSizing {
   const entryPrice = positive(input.entryPrice);
@@ -191,7 +192,7 @@ export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31P
     + HTE31_PAPER_POSITION_POLICY.liquidationExtraBufferRate;
   const liquidationSafe = liquidationDistanceRate >= requiredLiquidationBufferRate;
 
-  const leverageReason = `需求 ${requiredLeverage}x / 上限 ${leverageCap}x；流动性 ${liquidityCap}x，波动 ${volatilityCap}x，质量 ${qualityCap}x；隔离保证金最多使用净值90%`;
+  const leverageReason = `需求 ${requiredLeverage}x / 上限 ${leverageCap}x；流动性 ${liquidityCap}x，波动 ${volatilityCap}x，质量 ${qualityCap}x；隔离保证金最多使用净值60%`;
   let reason = `计划风险 ${plannedRiskUsdt.toFixed(2)}U，TP2预计净利润 ${plannedTp2NetProfitUsdt.toFixed(2)}U`;
   let accepted = true;
   if (plannedRiskUsdt + 1e-8 < minimumRiskUsdt) {
