@@ -46,9 +46,10 @@ test("fee-heavy narrow stop raises TP2 R instead of opening the old tiny-profit 
   });
 
   assert.equal(result.accepted, true);
-  assert.equal(result.leverage, 45);
-  assert.ok(result.riskReward > 2.79 && result.riskReward < 2.81);
-  assert.ok(result.plannedTp2CostUsdt > 31);
+  assert.equal(result.leverage, 50);
+  assert.ok(result.plannedRiskUsdt >= 29.99 && result.plannedRiskUsdt <= 30.01);
+  assert.ok(result.riskReward > 3.46 && result.riskReward < 3.47);
+  assert.ok(result.plannedTp2CostUsdt >= 23.99 && result.plannedTp2CostUsdt <= 24.01);
   assert.ok(result.plannedTp2NetProfitUsdt >= 79.99);
 });
 
@@ -70,6 +71,29 @@ test("risk governor reduces normal 40U risk only to the user's 30U economic floo
 
   assert.equal(result.accepted, true);
   assert.equal(result.targetRiskUsdt, 30);
+  assert.ok(result.plannedRiskUsdt >= 29.99 && result.plannedRiskUsdt <= 30.01);
+  assert.ok(result.plannedTp2NetProfitUsdt >= 79.99);
+});
+
+test("a second paper position can still use the reserved 40% margin and reach the 30U floor", () => {
+  const result = buildHte31PaperPosition({
+    side: "LONG",
+    entryPrice: 100,
+    stopLossPrice: 99.85,
+    originalTakeProfit2Price: 100.36,
+    accountEquityUsdt: 1_000,
+    availableMarginUsdt: 400,
+    riskMultiplier: 1,
+    roundTripCostBps: 8,
+    liquidityVolumeUsd: 1_000_000_000,
+    atrPct: 0.25,
+    dataQuality: 0.94,
+    confidence: 88,
+  });
+
+  assert.equal(result.accepted, true);
+  assert.equal(result.leverage, 50);
+  assert.ok(result.marginUsdt <= 400.01);
   assert.ok(result.plannedRiskUsdt >= 29.99 && result.plannedRiskUsdt <= 30.01);
   assert.ok(result.plannedTp2NetProfitUsdt >= 79.99);
 });
@@ -101,5 +125,6 @@ test("paper sizing policy keeps the explicit 30–50U and 50–200U bounds", () 
   assert.equal(HTE31_PAPER_POSITION_POLICY.maximumRiskRate, 0.05);
   assert.equal(HTE31_PAPER_POSITION_POLICY.minimumTp2NetProfitRate, 0.05);
   assert.equal(HTE31_PAPER_POSITION_POLICY.maximumTp2NetProfitRate, 0.20);
+  assert.equal(HTE31_PAPER_POSITION_POLICY.maximumMarginAllocationRate, 0.60);
   assert.equal(HTE31_PAPER_POSITION_POLICY.maximumLeverage, 50);
 });
