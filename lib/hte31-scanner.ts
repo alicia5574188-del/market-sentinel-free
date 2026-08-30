@@ -247,6 +247,8 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
     try {
       await recordHte31DiagnosticCycle(packet, signals, job.settings);
     } catch (error) {
+      // Diagnostics and shadow learning are strictly auxiliary. They must never
+      // prevent a valid Human Trader Setup from reaching the simulation ledger.
       console.error("HTE 3.1 diagnostic cycle failed", error instanceof Error ? error.message : "unknown diagnostic error");
     }
     const opened = await tryOpenHte31Trade(packet, signals, job.candles, job.settings);
