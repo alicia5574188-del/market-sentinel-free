@@ -16,11 +16,18 @@ export type LiveCredentialRecord = typeof liveExchangeCredentials.$inferSelect;
 export type LiveControlRecord = typeof liveTradingControl.$inferSelect;
 export type LiveOrderRecord = typeof liveOrders.$inferSelect;
 export type LiveOrderState = LiveOrderRecord["state"];
+export type LiveLinkedTrade = {
+  source: "hte31" | "legacy";
+  id: string;
+  status: string;
+  currentStopPrice: number;
+  exitCode: string | null;
+  exitReason: string | null;
+};
 
 const ACTIVE_LIVE_STATES: LiveOrderState[] = ["submitting", "open", "protected", "closing"];
 const LEGACY_RAW_EQUITY_LOCK = /Gate 权益较实盘峰值回撤/;
 const ENTRY_EQUITY_SNAPSHOT_EVENT = "entry_equity_snapshot";
-const HTE31_LIVE_BRIDGE_MODEL = "hte31_live_bridge";
 const MIN_VALID_EQUITY_BASELINE_USDT = 0.01;
 
 function parseJson<T>(value: string, fallback: T): T {
@@ -35,141 +42,40 @@ function validEquityBaseline(value: unknown): value is number {
   return finitePositive(value) && value >= MIN_VALID_EQUITY_BASELINE_USDT;
 }
 
-function hte31BridgeInsert(row: typeof hte31Trades.$inferSelect): typeof tradeCases.$inferInsert {
-  const plannedRiskPct = row.entryPrice > 0 ? Math.abs(row.entryPrice - row.initialStopPrice) / row.entryPrice * 100 : 0;
-  return {
-    id: row.id,
-    activeKey: null,
-    symbol: row.symbol,
-    status: row.status,
-    side: row.side,
-    confidence: row.confidence,
-    posteriorLong: null,
-    dataQuality: 1,
-    regime: row.assetRegime,
-    entryDirectionalScore: row.side === "LONG" ? 1 : -1,
-    entryAt: row.entryAt,
-    entryPrice: row.entryPrice,
-    entryLow: row.entryPrice,
-    entryHigh: row.entryPrice,
-    entryTrigger: row.entryTrigger,
-    entryThesis: row.entryThesis,
-    entryChecksJson: row.entryChecksJson,
-    exitRulesJson: "[]",
-    entryEvidenceJson: "[]",
-    entryCounterEvidenceJson: "[]",
-    entryMetricsJson: row.entryMetricsJson,
-    entrySnapshotJson: "{}",
-    initialStopPrice: row.initialStopPrice,
-    currentStopPrice: row.currentStopPrice,
-    takeProfit1Price: row.takeProfit1Price,
-    takeProfit2Price: row.takeProfit2Price,
-    target1HitAt: row.target1HitAt,
-    maxHoldingMinutes: row.maxHoldingMinutes,
-    plannedRiskPct,
-    riskReward: row.riskReward,
-    riskBudgetUsdt: row.riskBudgetUsdt,
-    suggestedNotionalUsdt: row.notionalUsdt,
-    contractType: "USDT_PERPETUAL",
-    marginMode: "isolated",
-    leverage: row.leverage,
-    leverageReason: "HTE 3.1 live compatibility bridge; Gate independently revalidates leverage and risk",
-    marginUsdt: row.marginUsdt,
-    contractNotionalUsdt: row.notionalUsdt,
-    quantity: row.quantity,
-    estimatedLiquidationPrice: null,
-    simulationModel: HTE31_LIVE_BRIDGE_MODEL,
-    accountBalanceBeforeUsdt: 0,
-    accountBalanceAfterUsdt: null,
-    lastPrice: row.lastPrice,
-    lastEvaluatedAt: row.lastEvaluatedAt,
-    maxPriceSeen: row.maxPriceSeen,
-    minPriceSeen: row.minPriceSeen,
-    unrealizedNetPct: row.unrealizedNetPct,
-    unrealizedNetUsdt: row.unrealizedNetUsdt,
-    progressR: row.progressR,
-    exitAt: row.exitAt,
-    exitPrice: row.exitPrice,
-    exitCode: null,
-    exitReason: row.exitReason,
-    grossMovePct: row.grossMovePct,
-    netMovePct: row.netMovePct,
-    grossPnlUsdt: row.grossPnlUsdt,
-    estimatedCostUsdt: row.costUsdt,
-    netPnlUsdt: row.netPnlUsdt,
-    mfePct: row.mfePct,
-    maePct: row.maePct,
-    holdMinutes: row.holdMinutes,
-  };
+async function requireHte31Candidate(tradeId: string) {
+  const [trade] = await getDb().select({ id: hte31Trades.id }).from(hte31Trades).where(eq(hte31Trades.id, tradeId)).limit(1);
+  if (!trade) throw new Error("HTE 3.1 实盘候选已不存在，禁止创建 Gate 订单");
+  return trade;
 }
 
-async function ensureHte31LiveBridge(tradeId: string) {
+/**
+ * Resolve the strategy lineage behind a live order without duplicating HTE31
+ * state into the retired contract_v2 tradeCases ledger.
+ *
+ * New HTE31 orders resolve directly from hte31Trades. The legacy fallback is
+ * intentionally read-only so historical live orders created before the clean
+ * cutover keep their audit/recovery lineage without allowing old strategies to
+ * regain new-entry authority.
+ */
+export async function getLiveLinkedTrade(tradeId: string): Promise<LiveLinkedTrade | null> {
   const db = getDb();
-  const [hte] = await db.select().from(hte31Trades).where(eq(hte31Trades.id, tradeId)).limit(1);
-  if (!hte) throw new Error("HTE 3.1 实盘候选已不存在，禁止创建 Gate 订单");
-  const [existing] = await db.select({ id: tradeCases.id, simulationModel: tradeCases.simulationModel }).from(tradeCases).where(eq(tradeCases.id, tradeId)).limit(1);
-  if (existing && existing.simulationModel !== HTE31_LIVE_BRIDGE_MODEL) {
-    throw new Error("HTE 3.1 实盘候选 ID 与旧策略账本冲突，已禁止开仓");
-  }
-  if (!existing) await db.insert(tradeCases).values(hte31BridgeInsert(hte));
-  return hte;
-}
+  const [hte] = await db.select({
+    id: hte31Trades.id,
+    status: hte31Trades.status,
+    currentStopPrice: hte31Trades.currentStopPrice,
+    exitCode: hte31Trades.exitCode,
+    exitReason: hte31Trades.exitReason,
+  }).from(hte31Trades).where(eq(hte31Trades.id, tradeId)).limit(1);
+  if (hte) return { source: "hte31", ...hte };
 
-async function syncActiveHte31LiveBridges(rows: LiveOrderRecord[]) {
-  if (!rows.length) return rows;
-  const db = getDb();
-  const ids = rows.map((row) => row.tradeCaseId);
-  const [hteRows, bridgeRows] = await Promise.all([
-    db.select().from(hte31Trades).where(inArray(hte31Trades.id, ids)),
-    db.select({
-      id: tradeCases.id,
-      simulationModel: tradeCases.simulationModel,
-      status: tradeCases.status,
-      currentStopPrice: tradeCases.currentStopPrice,
-      target1HitAt: tradeCases.target1HitAt,
-      exitAt: tradeCases.exitAt,
-      exitPrice: tradeCases.exitPrice,
-      exitReason: tradeCases.exitReason,
-    }).from(tradeCases).where(inArray(tradeCases.id, ids)),
-  ]);
-  const hteById = new Map(hteRows.map((row) => [row.id, row]));
-  const bridgeById = new Map(bridgeRows.map((row) => [row.id, row]));
-  for (const order of rows) {
-    const hte = hteById.get(order.tradeCaseId);
-    const bridge = bridgeById.get(order.tradeCaseId);
-    if (!hte || !bridge || bridge.simulationModel !== HTE31_LIVE_BRIDGE_MODEL) continue;
-    const changed = bridge.status !== hte.status
-      || Math.abs(bridge.currentStopPrice - hte.currentStopPrice) > Math.max(1e-12, Math.abs(hte.currentStopPrice) * 1e-10)
-      || bridge.target1HitAt !== hte.target1HitAt
-      || bridge.exitAt !== hte.exitAt
-      || bridge.exitPrice !== hte.exitPrice
-      || bridge.exitReason !== hte.exitReason;
-    if (!changed) continue;
-    await db.update(tradeCases).set({
-      status: hte.status,
-      currentStopPrice: hte.currentStopPrice,
-      target1HitAt: hte.target1HitAt,
-      lastPrice: hte.lastPrice,
-      lastEvaluatedAt: hte.lastEvaluatedAt,
-      maxPriceSeen: hte.maxPriceSeen,
-      minPriceSeen: hte.minPriceSeen,
-      unrealizedNetPct: hte.unrealizedNetPct,
-      unrealizedNetUsdt: hte.unrealizedNetUsdt,
-      progressR: hte.progressR,
-      exitAt: hte.exitAt,
-      exitPrice: hte.exitPrice,
-      exitReason: hte.exitReason,
-      grossMovePct: hte.grossMovePct,
-      netMovePct: hte.netMovePct,
-      grossPnlUsdt: hte.grossPnlUsdt,
-      estimatedCostUsdt: hte.costUsdt,
-      netPnlUsdt: hte.netPnlUsdt,
-      mfePct: hte.mfePct,
-      maePct: hte.maePct,
-      holdMinutes: hte.holdMinutes,
-    }).where(eq(tradeCases.id, hte.id));
-  }
-  return rows;
+  const [legacy] = await db.select({
+    id: tradeCases.id,
+    status: tradeCases.status,
+    currentStopPrice: tradeCases.currentStopPrice,
+    exitCode: tradeCases.exitCode,
+    exitReason: tradeCases.exitReason,
+  }).from(tradeCases).where(eq(tradeCases.id, tradeId)).limit(1);
+  return legacy ? { source: "legacy", ...legacy } : null;
 }
 
 export async function getLiveControl(): Promise<LiveControlRecord> {
@@ -322,10 +228,7 @@ export async function countActiveLiveOrders() {
 }
 
 export async function listActiveLiveOrders() {
-  const db = getDb();
-  const rows = await db.select().from(liveOrders).where(inArray(liveOrders.state, ACTIVE_LIVE_STATES)).orderBy(asc(liveOrders.createdAt));
-  await syncActiveHte31LiveBridges(rows);
-  return rows;
+  return getDb().select().from(liveOrders).where(inArray(liveOrders.state, ACTIVE_LIVE_STATES)).orderBy(asc(liveOrders.createdAt));
 }
 
 export async function listLiveOrdersAwaitingRealizedPnl(now = Date.now()) {
@@ -379,7 +282,7 @@ export async function listLiveEntryCandidates(enabledAt: number, now = Date.now(
 
 export async function createLiveOrderIntent(values: typeof liveOrders.$inferInsert) {
   const db = getDb();
-  await ensureHte31LiveBridge(values.tradeCaseId);
+  await requireHte31Candidate(values.tradeCaseId);
   const inserted = await db.insert(liveOrders).values(values).onConflictDoNothing().returning();
   if (inserted[0]) {
     if (inserted[0].state === "submitting") {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 
 function source(path) {
@@ -64,4 +64,36 @@ test("HTE31 primitives do not import retired strategy domains", () => {
   const regime = source("../lib/hte31-regime.ts");
   assert.doesNotMatch(types, /strategy-2|shadow-strategy|signal-engine|trade-lifecycle/);
   assert.doesNotMatch(regime, /strategy-2|shadow-strategy|signal-engine|trade-lifecycle/);
+});
+
+test("new HTE31 live orders use direct HTE31 lineage without writing compatibility tradeCases", () => {
+  const repository = source("../lib/live-trading-repository.ts");
+  const engine = source("../lib/live-trading-engine.ts");
+  const schema = source("../db/schema.ts");
+
+  assert.match(repository, /export async function getLiveLinkedTrade/);
+  assert.match(repository, /source: "hte31"/);
+  assert.match(repository, /source: "legacy"/);
+  assert.match(repository, /await requireHte31Candidate\(values\.tradeCaseId\)/);
+  assert.doesNotMatch(repository, /hte31BridgeInsert|ensureHte31LiveBridge|syncActiveHte31LiveBridges|HTE31_LIVE_BRIDGE_MODEL/);
+  assert.doesNotMatch(repository, /insert\(tradeCases\)/);
+
+  assert.match(engine, /getLiveLinkedTrade/);
+  assert.match(engine, /await getLiveLinkedTrade\(order\.tradeCaseId\)/);
+  assert.match(engine, /from "\.\/settings-repository"/);
+  assert.doesNotMatch(engine, /getSettings, getTrade|await getTrade\(order\.tradeCaseId\)|from "\.\/repository"/);
+
+  // Historical D1 lineage remains readable: no destructive rename/drop is used.
+  assert.match(schema, /tradeCaseId: text\("trade_case_id"\)\.notNull\(\)\.unique\(\)/);
+});
+
+test("retired UI overlays and patch styles are physically absent", () => {
+  for (const path of [
+    "../app/human-trader.css",
+    "../app/live-orders-inline.tsx",
+    "../app/bottom-nav-viewport-fix.css",
+    "../app/polish.css",
+  ]) {
+    assert.equal(existsSync(new URL(path, import.meta.url)), false, `${path} should stay deleted`);
+  }
 });
