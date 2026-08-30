@@ -32,7 +32,31 @@ test("HTE31 scanner imports the HTE31 engine and owns candle/signal types direct
   assert.match(scanner, /Hte31Candle/);
   assert.match(scanner, /Hte31Signal/);
   assert.match(scanner, /hte31-types\.ts/);
-  assert.doesNotMatch(scanner, /strategy-2-engine|signal-engine/);
+  assert.doesNotMatch(scanner, /strategy-2-engine|signal-engine|from "\.\/repository\.ts"/);
+});
+
+test("HTE31 repository and diagnostics no longer import retired strategy types", () => {
+  const repository = source("../lib/hte31-repository.ts");
+  const diagnostics = source("../lib/hte31-diagnostics.ts");
+  for (const file of [repository, diagnostics]) {
+    assert.match(file, /settings-repository\.ts/);
+    assert.match(file, /hte31-types\.ts/);
+    assert.doesNotMatch(file, /strategy-2-engine|signal-engine|from "\.\/human-trader-engine\.ts"|from "\.\/repository\.ts"/);
+  }
+  assert.match(repository, /Hte31Signal/);
+  assert.match(repository, /Hte31Candle/);
+  assert.match(diagnostics, /Hte31Signal/);
+});
+
+test("HTE31 worker runtime reads settings only from the clean settings repository", () => {
+  const workers = source("../worker/hte31-workers.ts");
+  const recovery = source("../worker/hte31-recovery-manager.ts");
+  for (const file of [workers, recovery]) {
+    assert.match(file, /settings-repository/);
+    assert.doesNotMatch(file, /lib\/repository/);
+  }
+  assert.match(recovery, /Hte31Candle/);
+  assert.doesNotMatch(recovery, /signal-engine/);
 });
 
 test("HTE31 primitives do not import retired strategy domains", () => {

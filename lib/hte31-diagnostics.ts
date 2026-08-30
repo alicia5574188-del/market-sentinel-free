@@ -1,10 +1,10 @@
 import { and, asc, desc, eq, gte } from "drizzle-orm";
 import { getDb } from "../db";
 import { hte31ShadowSamples, hte31TriggerBuckets } from "../db/hte31-diagnostics-schema";
-import type { AppSettings } from "./repository.ts";
-import type { Strategy2Signal } from "./strategy-2-engine.ts";
+import type { AppSettings } from "./settings-repository.ts";
+import type { Hte31Signal } from "./hte31-types.ts";
 import type { GateAnalysisPacket } from "./gate-client.ts";
-import type { HumanTraderId } from "./human-trader-engine.ts";
+import type { HumanTraderId } from "./hte31-human-trader-engine.ts";
 
 const BUCKET_MS = 10 * 60_000;
 const SHADOW_DEDUPE_MS = 30 * 60_000;
@@ -69,20 +69,20 @@ function parseJson<T>(value: string | null | undefined, fallback: T): T {
   try { return JSON.parse(value) as T; } catch { return fallback; }
 }
 
-function traderForSignal(signal: Strategy2Signal): HumanTraderId | null {
+function traderForSignal(signal: Hte31Signal): HumanTraderId | null {
   if (signal.strategyId === "trend_breakout") return "dennis_trend";
   if (signal.strategyId === "trend_pullback") return "raschke_pullback";
   if (signal.strategyId === "failed_breakout") return "turtle_soup";
   return null;
 }
 
-function failedRequired(signal: Strategy2Signal): FailedCheck[] {
+function failedRequired(signal: Hte31Signal): FailedCheck[] {
   return signal.entryPlan?.checks
     .filter((check) => check.required && !check.passed)
     .map((check) => ({ key: check.key, label: check.label })) ?? [];
 }
 
-function isNearReady(traderId: HumanTraderId, signal: Strategy2Signal, failed: FailedCheck[]) {
+function isNearReady(traderId: HumanTraderId, signal: Hte31Signal, failed: FailedCheck[]) {
   return signal.state === "watching"
     && signal.side !== "WAIT"
     && Boolean(signal.entryPlan)
@@ -90,7 +90,7 @@ function isNearReady(traderId: HumanTraderId, signal: Strategy2Signal, failed: F
     && SOFT_CONFIRMATION_KEYS[traderId].has(failed[0].key);
 }
 
-function mergeSignal(bucket: TraderBucket, packet: GateAnalysisPacket, signal: Strategy2Signal, failed: FailedCheck[], nearReady: boolean) {
+function mergeSignal(bucket: TraderBucket, packet: GateAnalysisPacket, signal: Hte31Signal, failed: FailedCheck[], nearReady: boolean) {
   bucket.evaluations += 1;
   if (signal.state === "ready") bucket.ready += 1;
   else if (signal.state === "blocked") bucket.blocked += 1;
@@ -190,7 +190,7 @@ async function advanceShadowSamples(symbol: string, observedAt: number, price: n
   }
 }
 
-async function createNearReadySample(packet: GateAnalysisPacket, signal: Strategy2Signal, traderId: HumanTraderId, failed: FailedCheck[]) {
+async function createNearReadySample(packet: GateAnalysisPacket, signal: Hte31Signal, traderId: HumanTraderId, failed: FailedCheck[]) {
   if (!isNearReady(traderId, signal, failed) || !signal.entryPlan || signal.side === "WAIT") return;
   const plan = signal.entryPlan;
   const riskPerUnit = Math.abs(plan.entryPrice - plan.stopLossPrice);
@@ -228,7 +228,7 @@ async function createNearReadySample(packet: GateAnalysisPacket, signal: Strateg
   }).onConflictDoNothing();
 }
 
-export async function recordHte31DiagnosticCycle(packet: GateAnalysisPacket, signals: Strategy2Signal[], settings: AppSettings) {
+export async function recordHte31DiagnosticCycle(packet: GateAnalysisPacket, signals: Hte31Signal[], settings: AppSettings) {
   await advanceShadowSamples(packet.symbol, packet.observedAt, packet.market.futuresPrice, settings.roundTripCostBps);
 
   const bucketStart = Math.floor(packet.observedAt / BUCKET_MS) * BUCKET_MS;
