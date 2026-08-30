@@ -28,6 +28,8 @@ test("HTE31 Human Trader implementation owns its domain dependencies", () => {
 test("HTE31 scanner imports the HTE31 engine and owns candle/signal types directly", () => {
   const scanner = source("../lib/hte31-scanner.ts");
   assert.match(scanner, /hte31-human-trader-engine\.ts/);
+  assert.match(scanner, /hte31-advanced-traders\.ts/);
+  assert.match(scanner, /evaluateAdvancedHumanTraders/);
   assert.doesNotMatch(scanner, /from "\.\/human-trader-engine\.ts"/);
   assert.match(scanner, /Hte31Candle/);
   assert.match(scanner, /Hte31Signal/);
@@ -85,6 +87,15 @@ test("new HTE31 live orders use direct HTE31 lineage without writing compatibili
 
   // Historical D1 lineage remains readable: no destructive rename/drop is used.
   assert.match(schema, /tradeCaseId: text\("trade_case_id"\)\.notNull\(\)\.unique\(\)/);
+});
+
+test("HT4 and HT5 can learn in paper but cannot silently acquire Gate live authority", () => {
+  const repository = source("../lib/live-trading-repository.ts");
+  assert.match(repository, /HTE31_LIVE_VALIDATED_TRADERS/);
+  assert.match(repository, /"dennis_trend", "raschke_pullback", "turtle_soup"/);
+  assert.doesNotMatch(repository, /HTE31_LIVE_VALIDATED_TRADERS[^\n]*exhaustion_reversal/);
+  assert.doesNotMatch(repository, /HTE31_LIVE_VALIDATED_TRADERS[^\n]*higher_timeframe_swing/);
+  assert.match(repository, /HT4\/HT5 仍在模拟验证阶段，禁止直接进入 Gate 实盘/);
 });
 
 test("retired UI overlays and patch styles are physically absent", () => {

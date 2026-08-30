@@ -16,6 +16,10 @@ test("production UI is HTE 3.1 Clean and not a Strategy 2 overlay stack", () => 
   assert.match(page, /Dennis/);
   assert.match(page, /Raschke/);
   assert.match(page, /Turtle Soup/);
+  assert.match(page, /HT4/);
+  assert.match(page, /Exhaustion/);
+  assert.match(page, /HT5/);
+  assert.match(page, /Counterfactual Observer/);
   assert.match(page, /旧 HTE 3\.0 不进入这里/);
   assert.match(layout, /<body>\{children\}<\/body>/);
   assert.doesNotMatch(layout, /Strategy2Dashboard|Strategy2PlaybookDiagnostics|Strategy2LearningArena|RuntimeStabilityClient|UiStatusSemanticFix|LiveOrdersInline/);

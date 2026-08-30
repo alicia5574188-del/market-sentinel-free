@@ -28,6 +28,9 @@ export type GateMarketSnapshot = {
   orderBookImbalance: number | null;
   liquidationImbalance: number | null;
   multiTimeframeTrend: number | null;
+  timeframeTrend15m: number | null;
+  timeframeTrend1h: number | null;
+  timeframeTrend4h: number | null;
   macroEventRisk: number | null;
   macroEventLabel: string | null;
   optionsIvPercentile: number | null;
@@ -67,6 +70,7 @@ export type GatePositionQuote = {
   highPrice: number | null;
   lowPrice: number | null;
   candleTime: number | null;
+  recentCandles?: Candle[];
   volumeUsd: number;
   observedAt: number;
 };
@@ -251,6 +255,23 @@ export function computeMultiTimeframeTrend(payloads: unknown[], observedAt?: num
   return clamp(used / weight, -1, 1);
 }
 
+export function computeTimeframeTrends(payloads: unknown[], observedAt?: number) {
+  const intervalsMs = [15 * 60_000, 60 * 60_000, 4 * 60 * 60_000];
+  const values = payloads.slice(0, 3).map((payload, index) => {
+    const parsed = parseCandles(payload);
+    const completed = observedAt == null ? parsed : parsed.filter((candle) => {
+      const startedAt = candle.time > 10_000_000_000 ? candle.time : candle.time * 1000;
+      return startedAt + intervalsMs[index] <= observedAt;
+    });
+    return timeframeTrend(completed);
+  });
+  return {
+    trend15m: values[0] ?? null,
+    trend1h: values[1] ?? null,
+    trend4h: values[2] ?? null,
+  };
+}
+
 function benchmarkChange(...payloads: unknown[]) {
   const values = payloads.map((payload) => finite(firstObject(payload).change_percentage)).filter((value): value is number => value != null);
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
@@ -330,7 +351,7 @@ export async function fetchGatePositionQuotes(symbols: string[]): Promise<GatePo
     const [tickerPayload, candleResults] = await Promise.all([
       gate("/futures/usdt/tickers", controller.signal),
       settleFactoriesBounded(unique.map((symbol) => () => gate(
-        `/futures/usdt/candlesticks?contract=${encodeURIComponent(symbol)}&interval=5m&limit=2`,
+        `/futures/usdt/candlesticks?contract=${encodeURIComponent(symbol)}&interval=10s&limit=4`,
         controller.signal,
       ))),
     ]);
@@ -347,13 +368,15 @@ export async function fetchGatePositionQuotes(symbols: string[]): Promise<GatePo
       const price = finite(ticker?.last);
       if (!ticker || price == null || price <= 0) return [];
       const candleResult = candleResults[index];
-      const candle = candleResult.status === "fulfilled" ? parseCandles(candleResult.value).at(-1) : null;
+      const recentCandles = candleResult.status === "fulfilled" ? parseCandles(candleResult.value) : [];
+      const candle = recentCandles.at(-1) ?? null;
       return [{
         symbol,
         price,
         highPrice: candle?.high ?? null,
         lowPrice: candle?.low ?? null,
         candleTime: candle?.time ?? null,
+        recentCandles,
         volumeUsd: volumeUsd(ticker),
         observedAt,
       }];
@@ -439,6 +462,7 @@ export async function analyzeGateSymbol(symbol: string, options: {
     const oi = openInterestChange(data.contractStats);
     const spotPrice = finite(spotTicker.last);
     const multiTimeframeTrend = computeMultiTimeframeTrend([data.candles15m, data.candles1h, data.candles4h], observedAt);
+    const timeframeTrends = computeTimeframeTrends([data.candles15m, data.candles1h, data.candles4h], observedAt);
     const liquidationImbalance = computeLiquidationImbalance(data.liquidations);
     const benchmarkMomentum = options.global?.benchmarkMomentum ?? benchmarkChange(data.btc, data.eth);
     const sourceAgesMs: MarketInputs["sourceAgesMs"] = {
@@ -498,6 +522,9 @@ export async function analyzeGateSymbol(symbol: string, options: {
         orderBookImbalance: input.orderBookImbalance,
         liquidationImbalance,
         multiTimeframeTrend,
+        timeframeTrend15m: timeframeTrends.trend15m,
+        timeframeTrend1h: timeframeTrends.trend1h,
+        timeframeTrend4h: timeframeTrends.trend4h,
         macroEventRisk: input.macroEventRisk ?? null,
         macroEventLabel: input.macroEventLabel ?? null,
         optionsIvPercentile: input.optionsIvPercentile ?? null,

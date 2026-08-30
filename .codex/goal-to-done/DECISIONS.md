@@ -29,3 +29,17 @@ Record only consequential decisions using this format:
 - Reason: The user explicitly authorized live to remain on and states the futures account is unfunded, while real sizing changes still require independent verification.
 - Evidence: User instruction on 2026-08-30; project live controls are owner-controlled and fail-closed.
 - Revisit when: The user funds the futures account or explicitly requests real sizing parity.
+
+## 2026-08-30 — Expand analysis, not execution latency
+
+- Choice: Keep 5m tactical execution for HT1-HT3, expose 15m/1h/4h separately, and add HT4 Exhaustion plus HT5 Higher-Timeframe Swing as independent paper traders.
+- Reason: Recent trades often had short-term favorable excursion while the larger subsequent move ran the other way; averaging timeframes into one scalar hid that conflict.
+- Evidence: Four new paper trades all showed initial profit; two reached TP1, while two later hit valid structural stops and continued adverse.
+- Revisit when: Counterfactual and post-exit samples are large enough to compare original direction, direct opposite, and confirmed reversal paths by trader/regime.
+
+## 2026-08-30 — Fix measurement before tuning setup thresholds
+
+- Choice: Make paper 1R include round-trip fees, classify TP1-protected breakevens as scratches rather than failure losses, and prevent a newly moved TP1 stop from using pre-trigger intrabar history.
+- Reason: Otherwise loss R is overstated, protected trades contaminate loss streaks, and impossible same-candle ordering can create false breakeven exits.
+- Evidence: BTC planned -39.10U realized -48.64U and HYPE planned -39.87U realized -45.29U were explained by fees outside the old risk budget.
+- Revisit when: Real exchange slippage modeling or finer event/tick data is introduced.

@@ -26,6 +26,7 @@ export type LiveLinkedTrade = {
 };
 
 const ACTIVE_LIVE_STATES: LiveOrderState[] = ["submitting", "open", "protected", "closing"];
+const HTE31_LIVE_VALIDATED_TRADERS = new Set(["dennis_trend", "raschke_pullback", "turtle_soup"]);
 const LEGACY_RAW_EQUITY_LOCK = /Gate 权益较实盘峰值回撤/;
 const ENTRY_EQUITY_SNAPSHOT_EVENT = "entry_equity_snapshot";
 const MIN_VALID_EQUITY_BASELINE_USDT = 0.01;
@@ -43,8 +44,9 @@ function validEquityBaseline(value: unknown): value is number {
 }
 
 async function requireHte31Candidate(tradeId: string) {
-  const [trade] = await getDb().select({ id: hte31Trades.id }).from(hte31Trades).where(eq(hte31Trades.id, tradeId)).limit(1);
+  const [trade] = await getDb().select({ id: hte31Trades.id, traderId: hte31Trades.traderId }).from(hte31Trades).where(eq(hte31Trades.id, tradeId)).limit(1);
   if (!trade) throw new Error("HTE 3.1 实盘候选已不存在，禁止创建 Gate 订单");
+  if (!HTE31_LIVE_VALIDATED_TRADERS.has(trade.traderId)) throw new Error("HT4/HT5 仍在模拟验证阶段，禁止直接进入 Gate 实盘");
   return trade;
 }
 

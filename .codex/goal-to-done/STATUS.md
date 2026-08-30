@@ -1,7 +1,7 @@
 # Status
 
-- State: in progress
-- Updated UTC: 2026-08-30T11:22:31+00:00
+- State: implementation verification
+- Updated UTC: 2026-08-30T23:45:00+00:00
 
 ## Completed and verified
 
@@ -38,3 +38,12 @@
 - `npm run lint` — passed with 0 errors.
 - `npx tsc --noEmit --incremental false` — passed.
 - `git diff --check` — passed before commit.
+
+## 2026-08-30 five-trader reversal intelligence
+
+- Added HT4 Exhaustion / Anti-Crowd and HT5 Higher-Timeframe Swing as independent paper traders; max simultaneous paper positions remains 2.
+- Exposed 15m/1h/4h separately instead of using only the composite trend and connected the existing macro/DVOL risk context to the active HTE31 scanner.
+- Paper planned risk now includes round-trip fees; TP1 breakeven exits are scratches for streak/gate classification.
+- Position monitoring uses 10s candles and never retroactively applies a newly moved breakeven stop to earlier intrabar prices.
+- Added Counterfactual Observer for original/opposite and +0.5R/TP1/stop reversal paths.
+- HT4/HT5 are deliberately paper-only until their own samples validate them; HT1-HT3 live authority is unchanged.

@@ -11,21 +11,26 @@ import type { GateAnalysisPacket, GatePositionQuote } from "./gate-client.ts";
 import { getSettings, type AppSettings } from "./settings-repository.ts";
 import type { Hte31Candle, Hte31Signal } from "./hte31-types.ts";
 import type { HumanTraderId } from "./hte31-human-trader-engine.ts";
+import type { AdvancedTraderId } from "./hte31-advanced-traders.ts";
+
+type Hte31TraderId = HumanTraderId | AdvancedTraderId;
 import { buildHte31PaperPosition } from "./hte31-position-sizing.ts";
 import { evaluateHte31PerformanceCell } from "./hte31-performance-gate.ts";
 import { hte31TimeoutExitReason, isSustainedHte31StopRecovery } from "./hte31-exit-quality.ts";
 
 const POST_EXIT_HORIZONS = [0, 30, 60, 120, 240, 720] as const;
-const TRADERS: HumanTraderId[] = ["dennis_trend", "raschke_pullback", "turtle_soup"];
+const TRADERS: Hte31TraderId[] = ["dennis_trend", "raschke_pullback", "turtle_soup", "exhaustion_reversal", "higher_timeframe_swing"];
 
-function traderIdForSignal(signal: Hte31Signal): HumanTraderId | null {
+function traderIdForSignal(signal: Hte31Signal): Hte31TraderId | null {
   if (signal.strategyId === "trend_breakout") return "dennis_trend";
   if (signal.strategyId === "trend_pullback") return "raschke_pullback";
   if (signal.strategyId === "failed_breakout") return "turtle_soup";
+  if (signal.strategyId === "trend_exhaustion_reversal") return "exhaustion_reversal";
+  if (signal.strategyId === "higher_timeframe_swing") return "higher_timeframe_swing";
   return null;
 }
 
-function learningIdFor(traderId: HumanTraderId, assetRegime: string, side: "LONG" | "SHORT") {
+function learningIdFor(traderId: Hte31TraderId, assetRegime: string, side: "LONG" | "SHORT") {
   return `${traderId}|${assetRegime}|${side}`;
 }
 
@@ -57,6 +62,10 @@ function excursionPct(side: "LONG" | "SHORT", entry: number, high: number, low: 
   };
 }
 
+function isHte31FailureLoss(row: { netPnlUsdt: number | null; exitCode: string | null }) {
+  return (row.netPnlUsdt ?? 0) < 0 && row.exitCode !== "breakeven";
+}
+
 export type Hte31TraderGuard = {
   state: "ACTIVE" | "COOLDOWN" | "PAUSED";
   lossStreak: number;
@@ -69,7 +78,7 @@ export type Hte31Governance = {
   riskMultiplier: number;
   lossStreak: number;
   reason: string;
-  traderGuards: Record<HumanTraderId, Hte31TraderGuard>;
+  traderGuards: Record<Hte31TraderId, Hte31TraderGuard>;
 };
 
 export async function getHte31Governance(now = Date.now()): Promise<Hte31Governance> {
@@ -81,7 +90,7 @@ export async function getHte31Governance(now = Date.now()): Promise<Hte31Governa
     const own = rows.filter((row) => row.traderId === traderId && row.exitAt != null);
     let lossStreak = 0;
     for (const row of own) {
-      if ((row.netPnlUsdt ?? 0) < 0) lossStreak += 1;
+      if (isHte31FailureLoss(row)) lossStreak += 1;
       else break;
     }
     const latestExit = own[0]?.exitAt ?? null;
@@ -103,12 +112,12 @@ export async function getHte31Governance(now = Date.now()): Promise<Hte31Governa
           ? `连续亏损 ${lossStreak} 笔，独立冷却至 ${new Date(retryAfter!).toLocaleString("zh-CN")}`
           : lossStreak ? `已完成冷却；此前连续亏损 ${lossStreak} 笔` : "独立交易员正常",
     } satisfies Hte31TraderGuard];
-  })) as Record<HumanTraderId, Hte31TraderGuard>;
+  })) as Record<Hte31TraderId, Hte31TraderGuard>;
 
   let lossStreak = 0;
   const streakTraders = new Set<string>();
   for (const row of rows) {
-    if ((row.netPnlUsdt ?? 0) < 0) {
+    if (isHte31FailureLoss(row)) {
       lossStreak += 1;
       streakTraders.add(row.traderId);
     } else break;
@@ -197,7 +206,7 @@ export async function tryOpenHte31Trade(
   const learningById = new Map(learningRows.map((row) => [row.id, row]));
   const readyCandidates = signals
     .map((signal) => ({ signal, traderId: traderIdForSignal(signal) }))
-    .filter((item): item is { signal: Hte31Signal; traderId: HumanTraderId } => Boolean(item.traderId))
+    .filter((item): item is { signal: Hte31Signal; traderId: Hte31TraderId } => Boolean(item.traderId))
     .filter(({ signal, traderId }) => signal.state === "ready" && Boolean(signal.entryPlan?.ready) && signal.side !== "WAIT" && governance.traderGuards[traderId].state === "ACTIVE");
   const scoredCandidates = readyCandidates.map((item) => {
     const side = item.signal.side as "LONG" | "SHORT";
@@ -330,11 +339,13 @@ export async function tryOpenHte31Trade(
   return { opened: row, reason: `${selected.signal.label} 独立 Setup 完整触发` };
 }
 
-async function updateLearningAfterClose(trade: typeof hte31Trades.$inferSelect, netPnlUsdt: number, mfePct: number, maePct: number, now: number) {
+async function updateLearningAfterClose(trade: typeof hte31Trades.$inferSelect, netPnlUsdt: number, mfePct: number, maePct: number, now: number, exitCode: string | null, target1Hit: boolean) {
   const db = getDb();
   const id = learningIdFor(trade.traderId, trade.assetRegime, trade.side);
   const [existing] = await db.select().from(hte31Learning).where(eq(hte31Learning.id, id)).limit(1);
   const r = trade.riskBudgetUsdt > 0 ? netPnlUsdt / trade.riskBudgetUsdt : 0;
+  const protectedScratch = exitCode === "breakeven" || (target1Hit && r > -0.35);
+  const countedLoss = netPnlUsdt < 0 && !protectedScratch;
   const riskPct = Math.abs(trade.entryPrice - trade.initialStopPrice) / trade.entryPrice * 100;
   const mfeR = riskPct > 0 ? mfePct / riskPct : 0;
   const maeR = riskPct > 0 ? maePct / riskPct : 0;
@@ -346,7 +357,7 @@ async function updateLearningAfterClose(trade: typeof hte31Trades.$inferSelect, 
       side: trade.side,
       sampleCount: 1,
       wins: netPnlUsdt > 0 ? 1 : 0,
-      losses: netPnlUsdt < 0 ? 1 : 0,
+      losses: countedLoss ? 1 : 0,
       expectancyR: r,
       grossProfitR: Math.max(0, r),
       grossLossR: Math.abs(Math.min(0, r)),
@@ -361,7 +372,7 @@ async function updateLearningAfterClose(trade: typeof hte31Trades.$inferSelect, 
   await db.update(hte31Learning).set({
     sampleCount: n,
     wins: existing.wins + (netPnlUsdt > 0 ? 1 : 0),
-    losses: existing.losses + (netPnlUsdt < 0 ? 1 : 0),
+    losses: existing.losses + (countedLoss ? 1 : 0),
     expectancyR: (existing.expectancyR * existing.sampleCount + r) / n,
     grossProfitR: existing.grossProfitR + Math.max(0, r),
     grossLossR: existing.grossLossR + Math.abs(Math.min(0, r)),
@@ -377,15 +388,26 @@ export async function applyHte31PositionQuote(quote: GatePositionQuote, settings
     .where(and(eq(hte31Trades.symbol, quote.symbol), eq(hte31Trades.status, "holding"))).limit(1);
   if (!trade) return { kind: "none" as const };
 
-  const high = quote.highPrice ?? quote.price;
-  const low = quote.lowPrice ?? quote.price;
+  const barTime = (time: number) => time > 10_000_000_000 ? time : time * 1000;
+  const freshBars = (quote.recentCandles ?? []).filter((bar) => {
+    const startedAt = barTime(bar.time);
+    return startedAt >= trade.lastEvaluatedAt && startedAt >= trade.entryAt && startedAt <= quote.observedAt;
+  });
+  const legacyBarFresh = quote.candleTime != null
+    && barTime(quote.candleTime) >= trade.lastEvaluatedAt
+    && barTime(quote.candleTime) >= trade.entryAt;
+  const observedHighs = [quote.price, ...freshBars.map((bar) => bar.high), ...(legacyBarFresh && quote.highPrice != null ? [quote.highPrice] : [])];
+  const observedLows = [quote.price, ...freshBars.map((bar) => bar.low), ...(legacyBarFresh && quote.lowPrice != null ? [quote.lowPrice] : [])];
+  const high = Math.max(...observedHighs);
+  const low = Math.min(...observedLows);
   const maxPriceSeen = Math.max(trade.maxPriceSeen, high, quote.price);
   const minPriceSeen = Math.min(trade.minPriceSeen, low, quote.price);
+  let target1HitAt = trade.target1HitAt;
+  let currentStopPrice = trade.currentStopPrice;
+  const stopBeforeObservation = trade.currentStopPrice;
+  const previouslyProtected = trade.target1HitAt != null;
+  const stopHit = trade.side === "LONG" ? low <= stopBeforeObservation : high >= stopBeforeObservation;
   const tp1Hit = trade.side === "LONG" ? high >= trade.takeProfit1Price : low <= trade.takeProfit1Price;
-  const target1HitAt = trade.target1HitAt ?? (tp1Hit ? quote.observedAt : null);
-  const currentStopPrice = target1HitAt ? (trade.side === "LONG" ? Math.max(trade.currentStopPrice, trade.entryPrice) : Math.min(trade.currentStopPrice, trade.entryPrice)) : trade.currentStopPrice;
-
-  const stopHit = trade.side === "LONG" ? low <= currentStopPrice : high >= currentStopPrice;
   const tp2Hit = trade.side === "LONG" ? high >= trade.takeProfit2Price : low <= trade.takeProfit2Price;
   const timeout = quote.observedAt - trade.entryAt >= trade.maxHoldingMinutes * 60_000;
   const currentExcursion = excursionPct(trade.side, trade.entryPrice, maxPriceSeen, minPriceSeen);
@@ -394,12 +416,13 @@ export async function applyHte31PositionQuote(quote: GatePositionQuote, settings
   let exitCode: string | null = null;
   let exitReason: string | null = null;
   let exitPrice: number | null = null;
-  // Conservative same-candle ordering: when stop and target are both touched,
-  // the simulation assumes the protective stop was hit first.
+  // The stop that existed BEFORE this observation owns same-bar priority. A new
+  // TP1 breakeven stop is installed only for future observations, so a low/high
+  // from before TP1 can never retroactively trigger it.
   if (stopHit) {
-    exitCode = target1HitAt && currentStopPrice === trade.entryPrice ? "breakeven" : "stop_loss";
+    exitCode = previouslyProtected && stopBeforeObservation === trade.entryPrice ? "breakeven" : "stop_loss";
     exitReason = exitCode === "breakeven" ? "TP1 后保护止损被触发" : "结构止损被触发";
-    exitPrice = currentStopPrice;
+    exitPrice = stopBeforeObservation;
   } else if (tp2Hit) {
     exitCode = "take_profit";
     exitReason = "第二目标完成，按交易员计划退出";
@@ -408,10 +431,15 @@ export async function applyHte31PositionQuote(quote: GatePositionQuote, settings
     exitCode = "timeout";
     exitReason = hte31TimeoutExitReason({
       maxHoldingMinutes: trade.maxHoldingMinutes,
-      target1Hit: Boolean(target1HitAt),
+      target1Hit: Boolean(target1HitAt || tp1Hit),
       maximumFavorableR,
     });
     exitPrice = quote.price;
+  } else if (!target1HitAt && tp1Hit) {
+    target1HitAt = quote.observedAt;
+    currentStopPrice = trade.side === "LONG"
+      ? Math.max(trade.currentStopPrice, trade.entryPrice)
+      : Math.min(trade.currentStopPrice, trade.entryPrice);
   }
 
   const grossPct = grossMovePct(trade.side, trade.entryPrice, quote.price);
@@ -471,7 +499,7 @@ export async function applyHte31PositionQuote(quote: GatePositionQuote, settings
         candlesJson: "[]",
       }).onConflictDoNothing();
     }
-    await updateLearningAfterClose(trade, netPnlUsdt, excursion.mfe, excursion.mae, quote.observedAt);
+    await updateLearningAfterClose(trade, netPnlUsdt, excursion.mfe, excursion.mae, quote.observedAt, exitCode, Boolean(target1HitAt));
     return { kind: "closed" as const, tradeId: trade.id, exitCode, exitPrice, netPnlUsdt };
   }
 
@@ -640,7 +668,8 @@ export async function getHte31Dashboard(now = Date.now()) {
     stats: {
       sampleCount: closed.length,
       wins: closed.filter((row) => (row.netPnlUsdt ?? 0) > 0).length,
-      losses: closed.filter((row) => (row.netPnlUsdt ?? 0) < 0).length,
+      scratches: closed.filter((row) => row.exitCode === "breakeven").length,
+      losses: closed.filter((row) => isHte31FailureLoss(row)).length,
       profitFactor: grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 99 : null,
       totalNetPnlUsdt: closed.reduce((sum, row) => sum + (row.netPnlUsdt ?? 0), 0),
     },

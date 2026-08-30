@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Tab = "总览" | "雷达" | "订单" | "实盘" | "设置";
-type TraderId = "dennis_trend" | "raschke_pullback" | "turtle_soup";
+type TraderId = "dennis_trend" | "raschke_pullback" | "turtle_soup" | "exhaustion_reversal" | "higher_timeframe_swing";
 type TradeSide = "LONG" | "SHORT" | "WAIT";
 type GuardState = "ACTIVE" | "COOLDOWN" | "PAUSED";
 
@@ -156,7 +156,7 @@ type CleanDashboard = {
   learning: Learning[];
   governance: Governance;
   activity: { symbols: number; evaluations: number; ready: number; watching: number; blocked: number };
-  stats: { sampleCount: number; wins: number; losses: number; profitFactor: number | null; totalNetPnlUsdt: number };
+  stats: { sampleCount: number; wins: number; scratches: number; losses: number; profitFactor: number | null; totalNetPnlUsdt: number };
   settings: {
     scanEnabled: boolean;
     pushEnabled: boolean;
@@ -209,6 +209,7 @@ type TradeChart = {
   postExitStartAt: number | null;
   observationUntilAt: number | null;
   observations: Observation[];
+  counterfactual: { generatedAt: number; horizons: { minutes: number; observedAt: number; originalR: number; oppositeR: number }[]; reversals: { key: string; label: string; triggeredAt: number; triggerPrice: number; side: "LONG" | "SHORT"; observedMinutes: number; terminalR: number; maxFavorableR: number; maxAdverseR: number }[]; summary: string } | null;
   diagnosis: {
     mfePct: number | null;
     maePct: number | null;
@@ -263,6 +264,8 @@ const TRADER_INFO: Record<TraderId, { code: string; name: string; setup: string;
   dennis_trend: { code: "HT1", name: "Dennis", setup: "趋势突破", copy: "真正离开旧区间才参与，让趋势自己证明方向。" },
   raschke_pullback: { code: "HT2", name: "Raschke", setup: "趋势回踩", copy: "趋势先成立，再等受控回踩与恢复，不追第一根。" },
   turtle_soup: { code: "HT3", name: "Turtle Soup", setup: "假突破", copy: "只做成熟极值被扫后重新收回区间的失败突破。" },
+  exhaustion_reversal: { code: "HT4", name: "Exhaustion", setup: "反拥挤衰竭", copy: "不机械反做；等共识拥挤、趋势延伸过度且继续推进失败后再站到反面。" },
+  higher_timeframe_swing: { code: "HT5", name: "Swing", setup: "大周期结构", copy: "1h/4h 决定数小时方向，15m/5m 只负责等待逆向回撤结束与精确入场。" },
 };
 
 function fmtTime(value: number | null | undefined) {
@@ -394,6 +397,7 @@ function TradeReview({ trade }: { trade: CleanTrade }) {
     </div>
     {trade.status === "closed" && <>
       <div className="observer-timeline">{chart.observations.map((item) => <div className="observer-chip" key={item.horizonMinutes}><b>{horizonLabel(item.horizonMinutes)}</b>{item.status === "complete" ? <><span>有利 {fmtR(item.favorableR)}</span><br/><span>不利 {fmtR(item.adverseR)}</span></> : <span>等待观察</span>}</div>)}</div>
+      {chart.counterfactual && <><div className="review-grid">{chart.counterfactual.horizons.filter((item)=>item.minutes===120||item.minutes===240||item.minutes===480).map((item)=><div key={item.minutes}><span>{horizonLabel(item.minutes)} 原 / 反</span><b>{fmtR(item.originalR)} / {fmtR(item.oppositeR)}</b></div>)}</div><div className="observer-timeline">{chart.counterfactual.reversals.map((item)=><div className="observer-chip" key={item.key}><b>{item.label}</b><span>终值 {fmtR(item.terminalR)}</span><br/><span>MFE {fmtR(item.maxFavorableR)}</span></div>)}</div><p className="order-thesis"><b>Counterfactual Observer</b> · {chart.counterfactual.summary}</p></>}
       <p className="order-thesis"><b>{chart.diagnosis.label ?? "出场后观察中"}</b> · {chart.diagnosis.status === "complete" ? "12h 观察完成，已进入退出质量学习。" : "平仓结果不会被改写；观察结果只用于未来退出模型学习。"}{chart.diagnosis.stopRecovery ? " · 已标记疑似假止损。" : ""}</p>
     </>}
     {chart.upstreamError && <p className="order-thesis">实时 Gate 图层暂不可用：{chart.upstreamError}；页面仍使用已保存的交易快照。</p>}
@@ -427,7 +431,7 @@ function TraderCard({ id, dashboard }: { id: TraderId; dashboard: CleanDashboard
   const samples = learning.reduce((sum, row) => sum + row.sampleCount, 0);
   const expectancy = samples ? learning.reduce((sum, row) => sum + row.expectancyR * row.sampleCount, 0) / samples : null;
   const pausedCells = learning.filter((row) => row.performanceGate?.state === "PAUSED");
-  return <article className="clean-trader"><span className={`guard ${guard.state.toLowerCase()}`}>{guard.state}</span><h3>{info.code} {info.name}</h3><b>{info.setup}</b><p>{info.copy}</p><p>新账本 n={samples} · Expectancy {fmtR(expectancy)} · 负期望暂停组合 {pausedCells.length} 个 · {guard.reason}</p>{pausedCells.slice(0,2).map((row)=><p className="negative" key={row.id}>{row.assetRegime} · {sideLabel(row.side)}：{row.performanceGate?.reason}</p>)}</article>;
+  return <article className="clean-trader"><span className={`guard ${guard.state.toLowerCase()}`}>{guard.state}</span><h3>{info.code} {info.name}</h3><b>{info.setup}</b><p>{info.copy}</p><p>新账本 n={samples} · W/S/L {learning.reduce((sum,row)=>sum+row.wins,0)}/{learning.reduce((sum,row)=>sum+Math.max(0,row.sampleCount-row.wins-row.losses),0)}/{learning.reduce((sum,row)=>sum+row.losses,0)} · Expectancy {fmtR(expectancy)} · 负期望暂停组合 {pausedCells.length} 个 · {guard.reason}</p>{pausedCells.slice(0,2).map((row)=><p className="negative" key={row.id}>{row.assetRegime} · {sideLabel(row.side)}：{row.performanceGate?.reason}</p>)}</article>;
 }
 
 function RadarCard({ item }: { item: Evaluation }) {
@@ -544,7 +548,7 @@ export default function CleanPage() {
   const cancelEmergency = () => { if (emergencyTimer.current) { window.clearTimeout(emergencyTimer.current); emergencyTimer.current=null; } };
 
   return <main className="clean-shell">
-    <header className="clean-header"><div className="clean-logo">O</div><div className="clean-title"><strong>Sentinel</strong><small>HUMAN TRADER ENGINE 3.1 CLEAN</small></div><i className={`clean-health-dot ${healthBad?"bad":healthWarn?"warn":""}`} /></header>
+    <header className="clean-header"><div className="clean-logo">O</div><div className="clean-title"><strong>Sentinel</strong><small>HUMAN TRADER ENGINE 3.1 CLEAN · 5 TRADERS</small></div><i className={`clean-health-dot ${healthBad?"bad":healthWarn?"warn":""}`} /></header>
     <div className={`clean-banner ${healthBad?"bad":healthWarn?"warn":""}`}><b>{healthBad?"运行异常":healthWarn?"恢复 / 启动":"系统运行中"}</b><p>{loading?"正在启动 HTE 3.1 Clean…":statusText}</p></div>
     {message && <div className="clean-banner"><b>系统消息</b><p>{message}</p></div>}
 
@@ -552,14 +556,14 @@ export default function CleanPage() {
       <section className="clean-panel">
         <span className="eyebrow">MARKET STATE · CLEAN</span>
         <div className="clean-market-title"><strong>{snapshot?.market?.label ?? "等待首轮扫描"}</strong><span className={`pill ${snapshot?.market?.permission === "YELLOW"?"wait":""}`}>{snapshot?.market?.permission ?? "START"}</span></div>
-        <p className="clean-driver">10分钟 HTE：{dashboard?.activity.symbols ?? 0} 个币 · 三交易员评估 {dashboard?.activity.evaluations ?? 0} 次 · READY {dashboard?.activity.ready ?? 0} / WATCH {dashboard?.activity.watching ?? 0} / BLOCK {dashboard?.activity.blocked ?? 0} · 本轮目标 {snapshot?.scanner.readModel?.target?.replace("_USDT","") ?? "--"}</p>
+        <p className="clean-driver">10分钟 HTE：{dashboard?.activity.symbols ?? 0} 个币 · 五交易员评估 {dashboard?.activity.evaluations ?? 0} 次 · READY {dashboard?.activity.ready ?? 0} / WATCH {dashboard?.activity.watching ?? 0} / BLOCK {dashboard?.activity.blocked ?? 0} · 本轮目标 {snapshot?.scanner.readModel?.target?.replace("_USDT","") ?? "--"}</p>
         <div className="metric-grid"><div className="metric"><span>市场置信</span><b>{snapshot?.market?.confidence ?? 0}%</b></div><div className="metric"><span>稳定度</span><b>{snapshot?.market?.stability ?? 0}%</b></div><div className="metric"><span>切换风险</span><b>{snapshot?.market?.transitionRisk ?? 0}%</b></div><div className="metric"><span>方向偏置</span><b>{snapshot?.market?.bias === "LONG"?"偏多":snapshot?.market?.bias === "SHORT"?"偏空":"中性"}</b></div></div>
       </section>
       <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">RISK GOVERNOR</span><h2>{dashboard?.governance.state ?? "STARTING"}</h2></div><small>风险倍率 {Math.round((dashboard?.governance.riskMultiplier ?? 0)*100)}%</small></div><div className="clean-panel"><p className="clean-driver">{dashboard?.governance.reason ?? "新账本从零启动，不继承 HTE 3.0 盈亏或学习。"}</p></div></section>
-      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">3 INDEPENDENT TRADERS</span><h2>三位独立交易员</h2></div></div>{dashboard ? <div className="clean-trader-grid"><TraderCard id="dennis_trend" dashboard={dashboard}/><TraderCard id="raschke_pullback" dashboard={dashboard}/><TraderCard id="turtle_soup" dashboard={dashboard}/></div> : <Empty title="等待 Clean 账本" detail="首轮扫描成功后显示交易员状态。" />}</section>
+      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">5 INDEPENDENT TRADERS</span><h2>五位独立交易员</h2></div></div>{dashboard ? <div className="clean-trader-grid"><TraderCard id="dennis_trend" dashboard={dashboard}/><TraderCard id="raschke_pullback" dashboard={dashboard}/><TraderCard id="turtle_soup" dashboard={dashboard}/><TraderCard id="exhaustion_reversal" dashboard={dashboard}/><TraderCard id="higher_timeframe_swing" dashboard={dashboard}/></div> : <Empty title="等待 Clean 账本" detail="首轮扫描成功后显示交易员状态。" />}</section>
     </>}
 
-    {tab === "雷达" && <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">CLEAN RADAR</span><h2>最近 15 分钟真实评估</h2></div><small>{latestRadar.length} 条</small></div>{latestRadar.length?<div className="radar-list">{latestRadar.map((item)=><RadarCard key={item.id} item={item}/>)}</div>:<Empty title="暂时没有新评估" detail={scanner?.phase ? `当前 Scanner 阶段：${scanner.phase}` : "Clean Scanner 成功运行后，这里只显示新系统的 HT1/HT2/HT3 判断。"}/>}</section>}
+    {tab === "雷达" && <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">CLEAN RADAR</span><h2>最近 15 分钟真实评估</h2></div><small>{latestRadar.length} 条</small></div>{latestRadar.length?<div className="radar-list">{latestRadar.map((item)=><RadarCard key={item.id} item={item}/>)}</div>:<Empty title="暂时没有新评估" detail={scanner?.phase ? `当前 Scanner 阶段：${scanner.phase}` : "Clean Scanner 成功运行后，这里只显示新系统的 HT1–HT5 判断。"}/>}</section>}
 
     {tab === "订单" && <>
       <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">SIMULATION LEDGER · CLEAN</span><h2>HTE 3.1 新账本</h2></div><small>旧 HTE 3.0 不进入这里</small></div>
