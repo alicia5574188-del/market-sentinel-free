@@ -8,10 +8,9 @@ import {
   hte31Trades,
 } from "../db/hte31-schema";
 import type { GateAnalysisPacket, GatePositionQuote } from "./gate-client.ts";
-import { getSettings, type AppSettings } from "./repository.ts";
-import type { Candle } from "./signal-engine.ts";
-import type { Strategy2Signal } from "./strategy-2-engine.ts";
-import type { HumanTraderId } from "./human-trader-engine.ts";
+import { getSettings, type AppSettings } from "./settings-repository.ts";
+import type { Hte31Candle, Hte31Signal } from "./hte31-types.ts";
+import type { HumanTraderId } from "./hte31-human-trader-engine.ts";
 import { buildHte31PaperPosition } from "./hte31-position-sizing.ts";
 import { evaluateHte31PerformanceCell } from "./hte31-performance-gate.ts";
 import { hte31TimeoutExitReason, isSustainedHte31StopRecovery } from "./hte31-exit-quality.ts";
@@ -19,7 +18,7 @@ import { hte31TimeoutExitReason, isSustainedHte31StopRecovery } from "./hte31-ex
 const POST_EXIT_HORIZONS = [0, 30, 60, 120, 240, 720] as const;
 const TRADERS: HumanTraderId[] = ["dennis_trend", "raschke_pullback", "turtle_soup"];
 
-function traderIdForSignal(signal: Strategy2Signal): HumanTraderId | null {
+function traderIdForSignal(signal: Hte31Signal): HumanTraderId | null {
   if (signal.strategyId === "trend_breakout") return "dennis_trend";
   if (signal.strategyId === "trend_pullback") return "raschke_pullback";
   if (signal.strategyId === "failed_breakout") return "turtle_soup";
@@ -130,7 +129,7 @@ export async function getHte31Governance(now = Date.now()): Promise<Hte31Governa
   };
 }
 
-export async function recordHte31Evaluations(packet: GateAnalysisPacket, signals: Strategy2Signal[]) {
+export async function recordHte31Evaluations(packet: GateAnalysisPacket, signals: Hte31Signal[]) {
   const db = getDb();
   const rows = signals.flatMap((signal) => {
     const traderId = traderIdForSignal(signal);
@@ -186,8 +185,8 @@ async function accountFromRows(startingCapitalUsdt: number) {
 
 export async function tryOpenHte31Trade(
   packet: GateAnalysisPacket,
-  signals: Strategy2Signal[],
-  candles: Candle[],
+  signals: Hte31Signal[],
+  candles: Hte31Candle[],
   settings: AppSettings,
 ) {
   const db = getDb();
@@ -198,7 +197,7 @@ export async function tryOpenHte31Trade(
   const learningById = new Map(learningRows.map((row) => [row.id, row]));
   const readyCandidates = signals
     .map((signal) => ({ signal, traderId: traderIdForSignal(signal) }))
-    .filter((item): item is { signal: Strategy2Signal; traderId: HumanTraderId } => Boolean(item.traderId))
+    .filter((item): item is { signal: Hte31Signal; traderId: HumanTraderId } => Boolean(item.traderId))
     .filter(({ signal, traderId }) => signal.state === "ready" && Boolean(signal.entryPlan?.ready) && signal.side !== "WAIT" && governance.traderGuards[traderId].state === "ACTIVE");
   const scoredCandidates = readyCandidates.map((item) => {
     const side = item.signal.side as "LONG" | "SHORT";
@@ -504,9 +503,9 @@ export async function getHte31TradeChart(id: string) {
   const [chart] = await getDb().select().from(hte31TradeCharts).where(eq(hte31TradeCharts.tradeId, id)).limit(1);
   return chart ? {
     ...chart,
-    entryCandles: parseJson<Candle[]>(chart.entryCandlesJson, []),
-    holdingCandles: parseJson<Candle[]>(chart.holdingCandlesJson, []),
-    postExitCandles: parseJson<Candle[]>(chart.postExitCandlesJson, []),
+    entryCandles: parseJson<Hte31Candle[]>(chart.entryCandlesJson, []),
+    holdingCandles: parseJson<Hte31Candle[]>(chart.holdingCandlesJson, []),
+    postExitCandles: parseJson<Hte31Candle[]>(chart.postExitCandlesJson, []),
   } : null;
 }
 
@@ -519,7 +518,7 @@ export async function nextHte31PostExitObservation(now = Date.now()) {
   return trade ? { observation: row, trade } : null;
 }
 
-export async function completeHte31PostExitObservation(trade: typeof hte31Trades.$inferSelect, horizonMinutes: number, candles: Candle[], now = Date.now()) {
+export async function completeHte31PostExitObservation(trade: typeof hte31Trades.$inferSelect, horizonMinutes: number, candles: Hte31Candle[], now = Date.now()) {
   if (!trade.exitAt || !trade.exitPrice) return;
   const exitAt = trade.exitAt;
   const exitPrice = trade.exitPrice;
