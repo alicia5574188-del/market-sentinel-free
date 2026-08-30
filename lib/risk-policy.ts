@@ -8,9 +8,10 @@ export const RISK_POLICY = {
   // Use the same economic floor live so a 500U account scales to a 20U stop
   // budget and at least 25U conservative TP2 net instead of reviving micro trades.
   minimumTp2NetProfitRate: 0.05,
-  // Two concurrent HTE positions must be able to coexist without one position
-  // consuming nearly the entire account. 45% per position leaves a 10% reserve.
-  maxMarginAllocationRate: 0.45,
+  // A 60% per-position ceiling lets very tight structural stops still reach the
+  // 3% minimum risk with <=50x leverage, while leaving at least 40% equity for
+  // a second concurrent position. Actual Gate available margin remains a hard cap.
+  maxMarginAllocationRate: 0.60,
   dailyRealizedLossPauseRate: 0.03,
   // This 10% limit is enforced against Market Sentinel's realized live-trading
   // equity curve, not against raw Gate account equity. Raw equity changes when
