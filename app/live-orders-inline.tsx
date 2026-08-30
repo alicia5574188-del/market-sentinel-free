@@ -112,7 +112,7 @@ export function LiveOrdersInline() {
         target.dataset.inlineLiveOrders = "true";
         const statusGrid = card.querySelector<HTMLElement>(".live-status-grid");
         if (statusGrid) statusGrid.insertAdjacentElement("afterend", target);
-        else card.prepend(target);
+        else card.insertAdjacentElement("afterbegin", target);
       }
       currentHost = target;
       setHost((current) => current === target ? current : target);
@@ -132,7 +132,7 @@ export function LiveOrdersInline() {
     setLoading(true);
     try {
       const response = await fetch("/api/live/status", { cache: "no-store", credentials: "same-origin" });
-      const payload = await response.json().catch(() => ({}));
+      const payload = await response.json().catch(() => ({})) as Partial<LiveSnapshot> & { error?: string };
       if (!response.ok) throw new Error(payload?.error ?? `实盘订单读取失败 (${response.status})`);
       const next = payload as LiveSnapshot;
       setSnapshot(next);
@@ -150,12 +150,15 @@ export function LiveOrdersInline() {
 
   useEffect(() => {
     if (!host) return;
-    void load();
+    const initialTimer = window.setTimeout(() => void load(), 0);
     const timer = window.setInterval(() => { if (!document.hidden) void load(); }, 10_000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(timer);
+    };
   }, [host, load]);
 
-  const orders = snapshot?.orders ?? [];
+  const orders = useMemo(() => snapshot?.orders ?? [], [snapshot]);
   const active = useMemo(() => orders.filter((order) => ACTIVE.has(order.state)), [orders]);
   const closed = useMemo(() => orders.filter((order) => order.state === "closed"), [orders]);
   const problems = useMemo(() => orders.filter((order) => PROBLEM.has(order.state)), [orders]);

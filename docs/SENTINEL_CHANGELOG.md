@@ -11,6 +11,28 @@ Rules:
 
 ---
 
+## 2026-08-30 — HTE 3.1 paper economics and negative-cell containment
+
+### Changed
+
+- Replaced the HTE 3.1 10U / 3x / 25%-margin micro-position path with stop-defined 30–50U risk for the 1,000U paper account.
+- Added adaptive isolated paper leverage up to 50x with liquidity, volatility, quality and liquidation-buffer limits.
+- Added fee-aware TP2 adjustment targeting 50–200U net instead of accepting sub-dollar full-target outcomes.
+- Preserved READY-signal frequency by resizing and adjusting TP2 before economic rejection.
+- Added trader/regime/direction performance cells: three straight losses or four proven-negative samples pause only that cell, not the full strategy.
+- Closed and open order cards show original stop, leverage, margin, notional, planned loss, TP2 projected net and realized R.
+- Tightened post-exit learning so a temporary rebound followed by adverse continuation is not called a fake stop, and a TP1-achieving timeout is not described as wholly unfulfilled.
+
+### Deliberately unchanged
+
+- Gate live enablement and real-order sizing remain separate from the HTE 3.1 paper-sizing formula.
+- Existing historical paper orders are not rewritten.
+- Entry setup thresholds are unchanged; negative evidence gates only the specific proven-losing trader/regime/direction cell.
+
+### Verification
+
+- Pending focused, full-suite, CI and production deployment verification on the feature branch.
+
 ## 2026-08-28 — Foreground/background market producer split
 
 PR: `#40 Move foreground market reads onto background snapshots`

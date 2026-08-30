@@ -51,6 +51,7 @@ export function dailyLossPauseUsdt(accountEquityUsdt: number, dailyRealizedPnlUs
 
 /** @deprecated Raw Gate-account peak drawdown is intentionally disabled. */
 export function peakDrawdownLimitUsdt(_accountEquityPeakUsdt: number) {
+  void _accountEquityPeakUsdt;
   return Number.POSITIVE_INFINITY;
 }
 

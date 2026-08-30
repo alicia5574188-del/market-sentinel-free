@@ -9,7 +9,6 @@ import {
 import { getSettings, type AppSettings } from "../lib/repository";
 import { setRuntimeBindings } from "../lib/runtime-bindings";
 import type { Candle } from "../lib/signal-engine";
-import type { CloudflareEnv } from "./index";
 import { HTE31TradeManager as BaseHTE31TradeManager } from "./hte31-workers";
 
 export { HTE31MarketScanner } from "./hte31-workers";

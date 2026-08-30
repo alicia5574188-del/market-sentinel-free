@@ -48,7 +48,7 @@ function enrichDashboardDiagnostics(
       : `Near-Ready 影子完成 ${shadow.completed} / 观察中 ${shadow.pending} · PF ${fmtPf(shadow.profitFactor)} · Exp ${shadow.expectancyR >= 0 ? "+" : ""}${shadow.expectancyR.toFixed(2)}R${shadow.qualifiesForCalibration ? " · 已达到校准样本门槛" : " · 尚未达到 30 样本校准门槛"}`;
     guard.reason = `${guard.reason} · 1h 评估 ${hour.evaluations} / READY ${hour.ready} / Near-Ready ${hour.nearReady}${top ? ` · 常缺：${top}` : ""} · 最近：${near} · 6h READY ${sixHours.ready}/${sixHours.evaluations} · ${shadowText}`;
   }
-  dashboard.governance.reason = `${dashboard.governance.reason} · 风险预算倍率 ${Math.round(dashboard.governance.riskMultiplier * 100)}%：100% 只代表不额外缩减正常风险；基础单笔风险仍约为账户权益 1%，并受单笔风险上限约束。`;
+  dashboard.governance.reason = `${dashboard.governance.reason} · 风险预算倍率 ${Math.round(dashboard.governance.riskMultiplier * 100)}%：新模拟单按账户权益约4%规划风险，并限制在3%–5%；TP2扣费后目标5%–20%，仓位与目标先调整，不能满足安全边界才拒绝。`;
 }
 
 export async function GET() {

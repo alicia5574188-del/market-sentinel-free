@@ -412,7 +412,10 @@ export function Strategy2Dashboard() {
     return () => observer.disconnect();
   }, []);
 
-  useEffect(() => { setShowDetails(false); }, [targets.symbol]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setShowDetails(false), 0);
+    return () => window.clearTimeout(timer);
+  }, [targets.symbol]);
 
   const selected = useMemo(() => packet && targets.symbol ? packet.opportunities.find((item) => item.symbol === targets.symbol) ?? null : null, [packet, targets.symbol]);
   const selectedIntelligence = useMemo(() => selected && packet ? decisionFor(packet.intelligence, selected) : null, [packet, selected]);
