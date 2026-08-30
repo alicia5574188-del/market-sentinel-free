@@ -1,12 +1,20 @@
 # Market Sentinel — Current System State
 
+> **2026-08-30 HTE 3.1 correction (supersedes conflicting strategy and paper-risk statements below).**
+>
+> Production is **Market Sentinel HTE 3.1 Clean**. New simulated entries come from three independent Human Trader setups: Dennis trend breakout, Raschke trend pullback, and Turtle Soup failed breakout.
+>
+> For new HTE 3.1 paper orders, target structural-stop risk is about 4% of equity with an admitted range of 3%–5%; fee-adjusted TP2 net profit targets 5%–20% of equity. Adaptive isolated paper leverage may reach 50x subject to liquidity, volatility, data-quality and liquidation-buffer caps. The sizing layer enlarges notional and may raise TP2 R before rejecting an otherwise valid READY signal. Trader/regime/direction cells with repeated negative expectancy are paused independently instead of reducing the entire strategy's frequency.
+>
+> These paper rules do not silently alter separate Gate live order sizing. Gate live remains owner-controlled and fail-closed; the owner explicitly authorized its enabled state to remain unchanged on 2026-08-30.
+
 > **Single source of truth for continuation work.**
 >
 > Chat history is discussion context only. Before any future code change, read the current `main` branch, recent merged PRs/commits, CI status, and this file. Never reconstruct production behavior from memory or a missing chat message.
 
-Last reconciled: **2026-08-28 14:10 +08:00**  
+Last reconciled: **2026-08-30 19:10 +08:00**
 Repository: `alicia5574188-del/market-sentinel-free`  
-Production strategy identity: **Sentinel Strategy 2.0**
+Production strategy identity: **Market Sentinel HTE 3.1 Clean**
 
 For the actual current HEAD/deployment, always inspect GitHub and Cloudflare rather than copying a historical commit/version ID from this document.
 

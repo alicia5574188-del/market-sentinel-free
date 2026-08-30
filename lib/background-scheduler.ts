@@ -88,7 +88,7 @@ async function inspectScheduler(
   await stub.ensure();
   let status = await stub.status();
   const now = Date.now();
-  let health = healthFromScheduler(status, staleMs, now);
+  const health = healthFromScheduler(status, staleMs, now);
   let autoRecoveryTriggered = false;
   if (health === "recovering" && !status.circuitOpen) {
     const wake = await stub.wake();

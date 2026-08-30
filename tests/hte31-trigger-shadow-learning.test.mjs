@@ -40,7 +40,9 @@ test("dashboard explains risk multiplier and surfaces 1h\/6h trigger funnel", ()
   assert.match(route, /6h READY/);
   assert.match(route, /Near-Ready 影子完成/);
   assert.match(route, /风险预算倍率/);
-  assert.match(route, /基础单笔风险仍约为账户权益 1%/);
+  assert.match(route, /账户权益约4%规划风险/);
+  assert.match(route, /限制在3%–5%/);
+  assert.match(route, /TP2扣费后目标5%–20%/);
 });
 
 test("migration creates isolated diagnostic and shadow tables", () => {

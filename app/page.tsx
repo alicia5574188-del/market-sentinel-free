@@ -127,6 +127,7 @@ type Learning = {
   averageMfeR: number;
   averageMaeR: number;
   averageExitEfficiency: number;
+  performanceGate?: { state: "ACTIVE" | "PAUSED"; reason: string; profitFactor: number | null };
 };
 
 type Guard = { state: GuardState; lossStreak: number; retryAfter: number | null; reason: string };
@@ -269,11 +270,6 @@ function fmtTime(value: number | null | undefined) {
   return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(value));
 }
 
-function fmtDateTime(value: number | null | undefined) {
-  if (!value) return "--";
-  return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
-}
-
 function fmtPrice(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value)) return "--";
   const abs = Math.abs(value);
@@ -294,6 +290,14 @@ function fmtPct(value: number | null | undefined, digits = 2) {
 function fmtR(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value)) return "--";
   return `${value.toFixed(2)}R`;
+}
+
+function plannedTp2NetUsdt(trade: CleanTrade, roundTripCostBps: number) {
+  if (!(trade.entryPrice > 0 && trade.notionalUsdt > 0)) return null;
+  const direction = trade.side === "LONG" ? 1 : -1;
+  const grossMoveRate = direction * (trade.takeProfit2Price / trade.entryPrice - 1);
+  const costRate = Math.max(0, roundTripCostBps) / 10_000;
+  return trade.notionalUsdt * (grossMoveRate - costRate);
 }
 
 function sideLabel(side: TradeSide) {
@@ -396,16 +400,21 @@ function TradeReview({ trade }: { trade: CleanTrade }) {
   </div>;
 }
 
-function OrderCard({ trade }: { trade: CleanTrade }) {
+function OrderCard({ trade, roundTripCostBps }: { trade: CleanTrade; roundTripCostBps: number }) {
   const [expanded, setExpanded] = useState(false);
   const info = TRADER_INFO[trade.traderId];
   const pnl = trade.status === "holding" ? trade.unrealizedNetUsdt : trade.netPnlUsdt;
+  const plannedTp2Net = plannedTp2NetUsdt(trade, roundTripCostBps);
+  const realizedR = trade.status === "closed" && trade.netPnlUsdt != null && trade.riskBudgetUsdt > 0
+    ? trade.netPnlUsdt / trade.riskBudgetUsdt
+    : null;
   return <article className="order-card">
     <button className="review-toggle" type="button" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
       <div className="card-head"><div className="symbol"><strong>{trade.symbol.replace("_USDT", "")}</strong><small>{info.code} {info.name} · {info.setup} · {trade.assetRegime}</small></div><div><span className={`pill ${trade.side === "LONG" ? "long" : "short"}`}>{sideLabel(trade.side)}</span><div className={pnl != null && pnl < 0 ? "negative" : "positive"} style={{textAlign:"right",marginTop:8,fontWeight:850}}>{fmtMoney(pnl)}</div></div></div>
-      <div className="order-numbers"><div><span>入场</span><b>{fmtPrice(trade.entryPrice)}</b></div><div><span>{trade.status === "holding" ? "现价" : "出场"}</span><b>{fmtPrice(trade.status === "holding" ? trade.lastPrice : trade.exitPrice)}</b></div><div><span>Stop</span><b>{fmtPrice(trade.currentStopPrice)}</b></div><div><span>TP2</span><b>{fmtPrice(trade.takeProfit2Price)}</b></div></div>
+      <div className="order-numbers"><div><span>入场</span><b>{fmtPrice(trade.entryPrice)}</b></div><div><span>{trade.status === "holding" ? "现价" : "出场"}</span><b>{fmtPrice(trade.status === "holding" ? trade.lastPrice : trade.exitPrice)}</b></div><div><span>原始 Stop</span><b>{fmtPrice(trade.initialStopPrice)}</b></div><div><span>TP2</span><b>{fmtPrice(trade.takeProfit2Price)}</b></div></div>
+      <div className="order-economics"><div><span>杠杆</span><b>{trade.leverage}x</b></div><div><span>隔离保证金</span><b>{fmtMoney(trade.marginUsdt)}</b></div><div><span>名义仓位</span><b>{fmtMoney(trade.notionalUsdt)}</b></div><div><span>计划亏损</span><b>{fmtMoney(-trade.riskBudgetUsdt)}</b></div><div><span>TP2预计净利</span><b className="positive">{fmtMoney(plannedTp2Net)}</b></div><div><span>{trade.status === "closed" ? "实际结果" : "当前保护价"}</span><b>{trade.status === "closed" ? fmtR(realizedR) : fmtPrice(trade.currentStopPrice)}</b></div></div>
       <p className="order-thesis">{trade.entryThesis}</p>
-      <p className="order-thesis">{trade.status === "holding" ? `${fmtTime(trade.entryAt)} · ${trade.leverage}x · 风险 ${fmtMoney(trade.riskBudgetUsdt)} · ${fmtR(trade.progressR)}` : `${fmtTime(trade.entryAt)} → ${fmtTime(trade.exitAt)} · ${trade.exitReason ?? trade.exitCode ?? "已平仓"} · ${trade.postExitLabel ?? "出场后观察中"}`} · 点击{expanded ? "收起" : "展开"} K 线复盘</p>
+      <p className="order-thesis">{trade.status === "holding" ? `${fmtTime(trade.entryAt)} · ${trade.leverage}x · 风险 ${fmtMoney(trade.riskBudgetUsdt)} · ${fmtR(trade.progressR)}` : `${fmtTime(trade.entryAt)} → ${fmtTime(trade.exitAt)} · ${trade.leverage}x · ${fmtR(realizedR)} · ${trade.exitReason ?? trade.exitCode ?? "已平仓"} · ${trade.postExitLabel ?? "出场后观察中"}`} · 点击{expanded ? "收起" : "展开"} K 线复盘</p>
     </button>
     {expanded && <TradeReview trade={trade} />}
   </article>;
@@ -417,7 +426,8 @@ function TraderCard({ id, dashboard }: { id: TraderId; dashboard: CleanDashboard
   const learning = dashboard.learning.filter((row) => row.traderId === id);
   const samples = learning.reduce((sum, row) => sum + row.sampleCount, 0);
   const expectancy = samples ? learning.reduce((sum, row) => sum + row.expectancyR * row.sampleCount, 0) / samples : null;
-  return <article className="clean-trader"><span className={`guard ${guard.state.toLowerCase()}`}>{guard.state}</span><h3>{info.code} {info.name}</h3><b>{info.setup}</b><p>{info.copy}</p><p>新账本 n={samples} · Expectancy {fmtR(expectancy)} · {guard.reason}</p></article>;
+  const pausedCells = learning.filter((row) => row.performanceGate?.state === "PAUSED");
+  return <article className="clean-trader"><span className={`guard ${guard.state.toLowerCase()}`}>{guard.state}</span><h3>{info.code} {info.name}</h3><b>{info.setup}</b><p>{info.copy}</p><p>新账本 n={samples} · Expectancy {fmtR(expectancy)} · 负期望暂停组合 {pausedCells.length} 个 · {guard.reason}</p>{pausedCells.slice(0,2).map((row)=><p className="negative" key={row.id}>{row.assetRegime} · {sideLabel(row.side)}：{row.performanceGate?.reason}</p>)}</article>;
 }
 
 function RadarCard({ item }: { item: Evaluation }) {
@@ -466,8 +476,23 @@ export default function CleanPage() {
     finally { liveInFlight.current = false; }
   }, []);
 
-  useEffect(() => { void refreshMain(); const id = window.setInterval(() => void refreshMain(true), 20_000); return () => window.clearInterval(id); }, [refreshMain]);
-  useEffect(() => { if (tab !== "实盘") return; void refreshLive(); const id = window.setInterval(() => void refreshLive(true), 12_000); return () => window.clearInterval(id); }, [tab, refreshLive]);
+  useEffect(() => {
+    const initialTimer = window.setTimeout(() => void refreshMain(), 0);
+    const id = window.setInterval(() => void refreshMain(true), 20_000);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(id);
+    };
+  }, [refreshMain]);
+  useEffect(() => {
+    if (tab !== "实盘") return;
+    const initialTimer = window.setTimeout(() => void refreshLive(), 0);
+    const id = window.setInterval(() => void refreshLive(true), 12_000);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(id);
+    };
+  }, [tab, refreshLive]);
 
   const mutate = useCallback(async (url: string, init: RequestInit, success: string, refreshLiveAfter = false) => {
     setMessage("");
@@ -508,8 +533,8 @@ export default function CleanPage() {
   const toggleScan = () => { const enabled = !(dashboard?.settings.scanEnabled ?? true); void mutate("/api/settings", {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({scanEnabled:enabled})}, enabled?"Clean Scanner 已开启。":"Clean Scanner 已暂停。", false); };
   const toggleLive = () => {
     if (!live) return;
-    if (!live.control.entryEnabled) { setMessage("HTE 3.1 Clean 正在从零验证；新的实盘开仓暂时锁定。已有真实仓位仍由原 Live Coordinator 保护。"); return; }
-    void mutate("/api/live/control", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled:false})}, "已关闭 Auto Live 新开仓。", true);
+    const enabled = !live.control.entryEnabled;
+    void mutate("/api/live/control", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled})}, enabled ? "Auto Live 已开启；无合约可用余额时不会成交。" : "已关闭 Auto Live 新开仓。", true);
   };
   const saveCredentials = () => {
     if (!apiKey || !apiSecret || !permissionsConfirmed) return setMessage("请填写 API Key / Secret，并确认不授予提币权限。");
@@ -540,8 +565,8 @@ export default function CleanPage() {
       <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">SIMULATION LEDGER · CLEAN</span><h2>HTE 3.1 新账本</h2></div><small>旧 HTE 3.0 不进入这里</small></div>
         <div className="account-grid"><div className="metric"><span>模拟权益</span><b>{fmtMoney(dashboard?.account.equityUsdt)}</b></div><div className="metric"><span>已实现</span><b className={(dashboard?.account.realizedPnlUsdt??0)<0?"negative":"positive"}>{fmtMoney(dashboard?.account.realizedPnlUsdt)}</b></div><div className="metric"><span>未实现</span><b className={(dashboard?.account.unrealizedPnlUsdt??0)<0?"negative":"positive"}>{fmtMoney(dashboard?.account.unrealizedPnlUsdt)}</b></div><div className="metric"><span>可用保证金</span><b>{fmtMoney(dashboard?.account.availableMarginUsdt)}</b></div></div>
       </section>
-      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">OPEN</span><h2>当前模拟持仓</h2></div><small>{dashboard?.openTrades.length ?? 0} 笔</small></div>{dashboard?.openTrades.length?<div className="order-list">{dashboard.openTrades.map((trade)=><OrderCard key={trade.id} trade={trade}/>)}</div>:<Empty title="当前没有模拟持仓" detail="只有独立交易员的完整 Setup 才会生成新订单。"/>}</section>
-      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">CLOSED · POST-EXIT OBSERVER</span><h2>已平仓 / 持续复盘</h2></div><small>{dashboard?.closedTrades.length ?? 0} 笔</small></div>{dashboard?.closedTrades.length?<div className="order-list">{dashboard.closedTrades.map((trade)=><OrderCard key={trade.id} trade={trade}/>)}</div>:<Empty title="新系统还没有已平仓样本" detail="平仓后仍会观察 30m / 1h / 2h / 4h / 12h，学习进出场质量。"/>}</section>
+      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">OPEN</span><h2>当前模拟持仓</h2></div><small>{dashboard?.openTrades.length ?? 0} 笔</small></div>{dashboard?.openTrades.length?<div className="order-list">{dashboard.openTrades.map((trade)=><OrderCard key={trade.id} trade={trade} roundTripCostBps={dashboard.settings.roundTripCostBps}/>)}</div>:<Empty title="当前没有模拟持仓" detail="只有独立交易员的完整 Setup 才会生成新订单。"/>}</section>
+      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">CLOSED · POST-EXIT OBSERVER</span><h2>已平仓 / 持续复盘</h2></div><small>{dashboard?.closedTrades.length ?? 0} 笔</small></div>{dashboard?.closedTrades.length?<div className="order-list">{dashboard.closedTrades.map((trade)=><OrderCard key={trade.id} trade={trade} roundTripCostBps={dashboard.settings.roundTripCostBps}/>)}</div>:<Empty title="新系统还没有已平仓样本" detail="平仓后仍会观察 30m / 1h / 2h / 4h / 12h，学习进出场质量。"/>}</section>
     </>}
 
     {tab === "实盘" && <>
@@ -550,7 +575,7 @@ export default function CleanPage() {
         <p className="clean-driver">这里展示 Gate 实盘链已经保存的真实账户状态。当前后端只持久化合约权益、当日已实现和对账时间；没有可靠字段时不会把“可用保证金”估算出来。</p>
       </section>
       <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">GATE LIVE · SAFETY BOUNDARY</span><h2>实盘链独立保留</h2></div></div>{liveError&&<div className="clean-banner bad"><b>实盘读取失败</b><p>{liveError}</p></div>}
-        <div className="clean-live-grid"><article className="clean-panel"><span className="eyebrow">AUTO LIVE</span><div className="clean-market-title"><strong>{live?.control.entryEnabled?"已开启":"已关闭"}</strong></div><p className="clean-driver">HTE 3.1 Clean 从零验证期间，新的 Auto Live 开仓默认锁定；已有真实订单仍由原 Execution / Live Coordinator 管理。</p><div className="clean-actions"><button className={live?.control.entryEnabled?"danger":""} onClick={toggleLive}>{live?.control.entryEnabled?"关闭新实盘开仓":"验证期暂不开放"}</button><button onClick={()=>void mutate("/api/live/reconcile",{method:"POST"},"Gate 对账已完成。",true)}>立即对账</button><button className="danger" onPointerDown={startEmergency} onPointerUp={cancelEmergency} onPointerCancel={cancelEmergency} onPointerLeave={cancelEmergency}>按住 1.2 秒紧急停机</button></div></article>
+        <div className="clean-live-grid"><article className="clean-panel"><span className="eyebrow">AUTO LIVE</span><div className="clean-market-title"><strong>{live?.control.entryEnabled?"已开启":"已关闭"}</strong></div><p className="clean-driver">Auto Live 保留所有者手动开关；风险锁、保护单和紧急停机仍可自动阻止新开仓。合约账户没有可用资金时不会成交。</p><div className="clean-actions"><button className={live?.control.entryEnabled?"danger":"primary"} onClick={toggleLive}>{live?.control.entryEnabled?"关闭新实盘开仓":"开启 Auto Live"}</button><button onClick={()=>void mutate("/api/live/reconcile",{method:"POST"},"Gate 对账已完成。",true)}>立即对账</button><button className="danger" onPointerDown={startEmergency} onPointerUp={cancelEmergency} onPointerCancel={cancelEmergency} onPointerLeave={cancelEmergency}>按住 1.2 秒紧急停机</button></div></article>
         <article className="clean-panel"><span className="eyebrow">GATE API</span>{live?.credential.configured?<><div className="clean-market-title"><strong>已配置</strong></div><p className="clean-driver">{live.credential.keyHint ?? "Gate Live"} · {live.credential.status ?? "verified"}</p><div className="clean-actions"><button onClick={()=>void mutate("/api/live/credentials",{method:"DELETE"},"Gate API 凭据已删除。",true)}>删除凭据</button></div></>:<div className="clean-form"><label><span>API Key</span><input type="password" autoComplete="off" value={apiKey} onChange={(e)=>setApiKey(e.target.value)}/></label><label><span>API Secret</span><input type="password" autoComplete="off" value={apiSecret} onChange={(e)=>setApiSecret(e.target.value)}/></label><label className="checkbox"><input type="checkbox" checked={permissionsConfirmed} onChange={(e)=>setPermissionsConfirmed(e.target.checked)}/><span>确认只授予 Gate 合约交易所需权限，不授予提币权限。</span></label><button className="primary" onClick={saveCredentials}>验证并保存</button></div>}</article></div>
       </section>
       <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">ACTIVE LIVE ORDERS</span><h2>真实持仓 / 活动订单</h2></div><small>{activeLiveOrders.length} 笔</small></div>{activeLiveOrders.length?<div className="order-list">{activeLiveOrders.map((order)=><article className="order-card" key={order.id}><div className="card-head"><div className="symbol"><strong>{order.symbol.replace("_USDT","")}</strong><small>{order.strategyLabel ?? "Live lifecycle"} · {order.state}</small></div><span className={`pill ${order.side === "LONG"?"long":"short"}`}>{sideLabel(order.side)}</span></div><div className="order-numbers"><div><span>参考价</span><b>{fmtPrice(order.referencePrice)}</b></div><div><span>成交价</span><b>{fmtPrice(order.fillPrice)}</b></div><div><span>止损</span><b>{fmtPrice(order.stopLossPrice)}</b></div><div><span>止盈</span><b>{fmtPrice(order.takeProfitPrice)}</b></div></div>{order.strategyThesis&&<p className="order-thesis">{order.strategyThesis}</p>}</article>)}</div>:<Empty title="没有活动实盘订单" detail="Clean 重建不会删除或改写 Gate 凭据与实盘审计记录。"/>}</section>

@@ -9,16 +9,17 @@ const credentials = {
 };
 
 test("Gate private client preserves the Cloudflare Worker global receiver for fetch", async () => {
-  let receiver: unknown = null;
-  const hostSensitiveFetch = function (this: unknown, _input: string | URL | Request, _init?: RequestInit) {
-    receiver = this;
+  let receiverWasGlobal = false;
+  const hostSensitiveFetch = function (this: unknown, ...args: Parameters<typeof fetch>) {
+    void args;
+    receiverWasGlobal = this === globalThis;
     if (this !== globalThis) throw new TypeError("Illegal invocation");
     return Promise.resolve(Response.json({ total: "100", available: "100", position_mode: "single" }));
   } as typeof fetch;
 
   const client = new GatePrivateClient(credentials, hostSensitiveFetch);
   const account = await client.futuresAccount();
-  assert.equal(receiver, globalThis);
+  assert.equal(receiverWasGlobal, true);
   assert.equal(account.total, "100");
 });
 

@@ -3,7 +3,7 @@ import type { ShadowStrategyId } from "./shadow-strategy-engine.ts";
 export type StrategyResultSample = {
   netMovePct: number | null;
   exitAt: number | null;
-  regime: string;
+  regime: string | null;
 };
 
 export type StrategyStatistics = {
@@ -70,7 +70,7 @@ function maxLossStreak(values: number[]) {
   return maximum;
 }
 
-function stableRegime(value: string) {
+function stableRegime(value: string | null | undefined) {
   return (value || "unknown").split(" · ")[0].trim() || "unknown";
 }
 

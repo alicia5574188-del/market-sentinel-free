@@ -195,6 +195,7 @@ async function backfillRealizedPnl(client: GatePrivateClient) {
 }
 
 async function enforceLiveAccountRisk(client: GatePrivateClient, settings: Awaited<ReturnType<typeof getSettings>>) {
+  void settings;
   const now = Date.now();
   const utcDay = new Date(now).toISOString().slice(0, 10);
   const from = Math.floor(Date.parse(`${utcDay}T00:00:00.000Z`) / 1_000);

@@ -45,6 +45,22 @@ test("order audit includes entry exit candlesticks and post-exit observer", () =
   assert.match(css, /post-exit-zone/);
 });
 
+test("open and closed paper orders expose leverage and full planned economics", () => {
+  assert.match(page, /原始 Stop/);
+  assert.match(page, /杠杆/);
+  assert.match(page, /隔离保证金/);
+  assert.match(page, /名义仓位/);
+  assert.match(page, /计划亏损/);
+  assert.match(page, /TP2预计净利/);
+  assert.match(page, /trade\.leverage/);
+  assert.match(page, /plannedTp2NetUsdt/);
+});
+
+test("trader cards expose independently paused negative performance cells", () => {
+  assert.match(page, /负期望暂停组合/);
+  assert.match(page, /performanceGate/);
+});
+
 test("small-price contracts use dynamic price precision", () => {
   const formatter = page.match(/function fmtPrice[\s\S]*?\n}/)?.[0] ?? "";
   assert.match(formatter, /abs >= 1000 \? 2 : abs >= 1 \? 4 : abs >= 0\.01 \? 6 : 8/);
@@ -52,15 +68,16 @@ test("small-price contracts use dynamic price precision", () => {
   assert.doesNotMatch(formatter, /value\.toFixed\(2\)/);
 });
 
-test("live boundary preserves explicit controls but clean validation cannot enable new live entries", () => {
+test("live boundary preserves owner-controlled enable and disable actions", () => {
   assert.match(page, /type="password" autoComplete="off" value=\{apiKey\}/);
   assert.match(page, /type="password" autoComplete="off" value=\{apiSecret\}/);
   assert.match(page, /\/api\/live\/control/);
   assert.match(page, /\/api\/live\/credentials/);
   assert.match(page, /\/api\/live\/reconcile/);
   assert.match(page, /\/api\/live\/emergency/);
-  assert.match(page, /HTE 3\.1 Clean 从零验证期间/);
-  assert.match(page, /验证期暂不开放/);
+  assert.match(page, /开启 Auto Live/);
+  assert.match(page, /JSON\.stringify\(\{enabled\}\)/);
+  assert.match(page, /风险锁、保护单和紧急停机仍可自动阻止新开仓/);
   assert.doesNotMatch(page, /localStorage|sessionStorage/);
   assert.match(liveStatus, /\^Human Trader · \(\[\^：\]\+\)：/);
 });
