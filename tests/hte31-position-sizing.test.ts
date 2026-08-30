@@ -5,7 +5,7 @@ import {
   HTE31_PAPER_POSITION_POLICY,
 } from "../lib/hte31-position-sizing.ts";
 
-test("1,000U tight-stop BTC setup is enlarged to about 40U risk and 80U TP2 net", () => {
+test("1,000U tight-stop BTC setup is enlarged to about 40U net risk and 80U TP2 net", () => {
   const result = buildHte31PaperPosition({
     side: "LONG",
     entryPrice: 78_040.10,
@@ -29,7 +29,7 @@ test("1,000U tight-stop BTC setup is enlarged to about 40U risk and 80U TP2 net"
   assert.ok(result.takeProfit2Price > 78_247.29);
 });
 
-test("fee-heavy narrow stop raises TP2 R instead of opening the old tiny-profit target", () => {
+test("fee-heavy narrow stop budgets fees inside 1R before choosing leverage and TP2", () => {
   const result = buildHte31PaperPosition({
     side: "SHORT",
     entryPrice: 100,
@@ -46,11 +46,11 @@ test("fee-heavy narrow stop raises TP2 R instead of opening the old tiny-profit 
   });
 
   assert.equal(result.accepted, true);
-  assert.equal(result.leverage, 50);
-  assert.ok(result.plannedRiskUsdt >= 29.99 && result.plannedRiskUsdt <= 30.01);
-  assert.ok(result.riskReward > 3.46 && result.riskReward < 3.47);
-  assert.ok(result.plannedTp2CostUsdt >= 23.99 && result.plannedTp2CostUsdt <= 24.01);
-  assert.ok(result.plannedTp2NetProfitUsdt >= 79.99);
+  assert.equal(result.leverage, 38);
+  assert.ok(result.plannedRiskUsdt >= 39.99 && result.plannedRiskUsdt <= 40.01);
+  assert.equal(result.riskReward, 4);
+  assert.ok(result.plannedTp2CostUsdt >= 17.77 && result.plannedTp2CostUsdt <= 17.79);
+  assert.ok(result.plannedTp2NetProfitUsdt >= 71.10 && result.plannedTp2NetProfitUsdt <= 71.12);
 });
 
 test("risk governor reduces normal 40U risk only to the user's 30U economic floor", () => {
@@ -75,7 +75,7 @@ test("risk governor reduces normal 40U risk only to the user's 30U economic floo
   assert.ok(result.plannedTp2NetProfitUsdt >= 79.99);
 });
 
-test("a second paper position can still use the reserved 40% margin and reach the 30U floor", () => {
+test("a second paper position can still use reserved margin and reach the 40U net-risk target", () => {
   const result = buildHte31PaperPosition({
     side: "LONG",
     entryPrice: 100,
@@ -92,13 +92,13 @@ test("a second paper position can still use the reserved 40% margin and reach th
   });
 
   assert.equal(result.accepted, true);
-  assert.equal(result.leverage, 50);
+  assert.equal(result.leverage, 44);
   assert.ok(result.marginUsdt <= 400.01);
-  assert.ok(result.plannedRiskUsdt >= 29.99 && result.plannedRiskUsdt <= 30.01);
+  assert.ok(result.plannedRiskUsdt >= 39.99 && result.plannedRiskUsdt <= 40.01);
   assert.ok(result.plannedTp2NetProfitUsdt >= 79.99);
 });
 
-test("illiquid setup is rejected only after its adaptive leverage cap cannot reach 30U risk", () => {
+test("illiquid setup is rejected only after its adaptive leverage cap cannot reach 30U net risk", () => {
   const result = buildHte31PaperPosition({
     side: "LONG",
     entryPrice: 100,
