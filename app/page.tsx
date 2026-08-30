@@ -320,13 +320,13 @@ async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
   return payload;
 }
 
-function Empty({ title, detail }: { title: string; detail: string }) {
-  return <div className="clean-empty"><strong>{title}</strong><span>{detail}</span></div>;
+function Empty({ title, detail }: { title: string; detail?: string }) {
+  return <div className="clean-empty"><strong>{title}</strong>{detail && <span>{detail}</span>}</div>;
 }
 
 function CandleChart({ chart }: { chart: TradeChart }) {
   const candles = chart.candles.slice(-180);
-  if (candles.length < 2) return <Empty title="K 线正在准备" detail={chart.upstreamError ?? "Clean 账本已保存交易，等待 K 线窗口补齐。"} />;
+  if (candles.length < 2) return <Empty title="K 线正在准备" detail={chart.upstreamError ?? "等待 K 线数据补齐。"} />;
   const width = 900;
   const height = 340;
   const pad = { left: 14, right: 74, top: 20, bottom: 30 };
@@ -431,7 +431,7 @@ function TraderCard({ id, dashboard }: { id: TraderId; dashboard: CleanDashboard
   const samples = learning.reduce((sum, row) => sum + row.sampleCount, 0);
   const expectancy = samples ? learning.reduce((sum, row) => sum + row.expectancyR * row.sampleCount, 0) / samples : null;
   const pausedCells = learning.filter((row) => row.performanceGate?.state === "PAUSED");
-  return <article className="clean-trader"><span className={`guard ${guard.state.toLowerCase()}`}>{guard.state}</span><h3>{info.code} {info.name}</h3><b>{info.setup}</b><p>{info.copy}</p><p>新账本 n={samples} · W/S/L {learning.reduce((sum,row)=>sum+row.wins,0)}/{learning.reduce((sum,row)=>sum+Math.max(0,row.sampleCount-row.wins-row.losses),0)}/{learning.reduce((sum,row)=>sum+row.losses,0)} · Expectancy {fmtR(expectancy)} · 负期望暂停组合 {pausedCells.length} 个 · {guard.reason}</p>{pausedCells.slice(0,2).map((row)=><p className="negative" key={row.id}>{row.assetRegime} · {sideLabel(row.side)}：{row.performanceGate?.reason}</p>)}</article>;
+  return <article className="clean-trader"><span className={`guard ${guard.state.toLowerCase()}`}>{guard.state}</span><h3>{info.code} {info.name}</h3><b>{info.setup}</b><p>{info.copy}</p><p>样本 n={samples} · W/S/L {learning.reduce((sum,row)=>sum+row.wins,0)}/{learning.reduce((sum,row)=>sum+Math.max(0,row.sampleCount-row.wins-row.losses),0)}/{learning.reduce((sum,row)=>sum+row.losses,0)} · Expectancy {fmtR(expectancy)} · 负期望暂停组合 {pausedCells.length} 个 · {guard.reason}</p>{pausedCells.slice(0,2).map((row)=><p className="negative" key={row.id}>{row.assetRegime} · {sideLabel(row.side)}：{row.performanceGate?.reason}</p>)}</article>;
 }
 
 function RadarCard({ item }: { item: Evaluation }) {
@@ -464,7 +464,7 @@ export default function CleanPage() {
       setMainError("");
       if (!coreSymbolsText && next.dashboard?.settings.coreSymbols) setCoreSymbolsText(next.dashboard.settings.coreSymbols.join(", "));
     } catch (error) {
-      setMainError(error instanceof Error ? error.message : "HTE 3.1 Clean 暂不可用");
+      setMainError(error instanceof Error ? error.message : "HTE 3.1 暂不可用");
       if (!silent) setSnapshot(null);
     } finally {
       mainInFlight.current = false;
@@ -524,17 +524,17 @@ export default function CleanPage() {
   }, [dashboard]);
 
   const statusText = mainError ? mainError
-    : scanner?.circuitOpen ? `${scanner.lastError ?? "Clean Scanner 已熔断"}${scanner.retryAfter ? ` · ${fmtTime(scanner.retryAfter)} 后重试` : ""}`
-      : scanner?.state === "starting" ? `Clean Scanner 正在执行：${scanner.phase ?? "启动"}${scanner.phaseAttempt ? ` · 尝试 ${scanner.phaseAttempt}/3` : ""}`
-        : ageSeconds != null && ageSeconds > 90 ? `Clean Scanner 已 ${ageSeconds} 秒没有完成新评估 · ${scanner?.lastError ?? scanner?.phase ?? "正在恢复"}`
-          : `Clean Scanner ${scanner?.state ?? "starting"} · 最近成功 ${snapshot?.observedAt ? fmtTime(snapshot.observedAt) : "--"} · Trade Manager ${position?.state ?? "starting"}`;
+    : scanner?.circuitOpen ? `${scanner.lastError ?? "扫描暂时停止"}${scanner.retryAfter ? ` · ${fmtTime(scanner.retryAfter)} 后重试` : ""}`
+      : scanner?.state === "starting" ? `扫描启动中${scanner.phase ? ` · ${scanner.phase}` : ""}`
+        : ageSeconds != null && ageSeconds > 90 ? `扫描延迟 ${ageSeconds} 秒 · ${scanner?.lastError ?? "正在恢复"}`
+          : `最近更新 ${snapshot?.observedAt ? fmtTime(snapshot.observedAt) : "--"}`;
 
   const saveCoreSymbols = () => {
     const coreSymbols = coreSymbolsText.split(/[,，\s]+/).map((v)=>v.trim().toUpperCase()).filter(Boolean).map((v)=>v.includes("_")?v:`${v}_USDT`);
     if (!coreSymbols.length) return setMessage("核心观察币种至少保留 1 个。");
     void mutate("/api/settings", { method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({coreSymbols}) }, "核心观察币种已更新。", false);
   };
-  const toggleScan = () => { const enabled = !(dashboard?.settings.scanEnabled ?? true); void mutate("/api/settings", {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({scanEnabled:enabled})}, enabled?"Clean Scanner 已开启。":"Clean Scanner 已暂停。", false); };
+  const toggleScan = () => { const enabled = !(dashboard?.settings.scanEnabled ?? true); void mutate("/api/settings", {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({scanEnabled:enabled})}, enabled?"扫描已开启。":"扫描已暂停。", false); };
   const toggleLive = () => {
     if (!live) return;
     const enabled = !live.control.entryEnabled;
@@ -542,52 +542,52 @@ export default function CleanPage() {
   };
   const saveCredentials = () => {
     if (!apiKey || !apiSecret || !permissionsConfirmed) return setMessage("请填写 API Key / Secret，并确认不授予提币权限。");
-    void mutate("/api/live/credentials", {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({apiKey,apiSecret,permissionsConfirmed})}, "Gate 凭据已验证保存；HTE 3.1 新实盘仍保持锁定。", true).then(()=>{setApiKey("");setApiSecret("");});
+    void mutate("/api/live/credentials", {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({apiKey,apiSecret,permissionsConfirmed})}, "Gate 凭据已验证保存。", true).then(()=>{setApiKey("");setApiSecret("");});
   };
   const startEmergency = () => { if (emergencyTimer.current) window.clearTimeout(emergencyTimer.current); emergencyTimer.current = window.setTimeout(()=>{emergencyTimer.current=null;void mutate("/api/live/emergency",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"stop"})},"紧急停机已执行。",true);},1200); };
   const cancelEmergency = () => { if (emergencyTimer.current) { window.clearTimeout(emergencyTimer.current); emergencyTimer.current=null; } };
 
   return <main className="clean-shell">
-    <header className="clean-header"><div className="clean-logo">O</div><div className="clean-title"><strong>Sentinel</strong><small>HUMAN TRADER ENGINE 3.1 CLEAN · 5 TRADERS</small></div><i className={`clean-health-dot ${healthBad?"bad":healthWarn?"warn":""}`} /></header>
-    <div className={`clean-banner ${healthBad?"bad":healthWarn?"warn":""}`}><b>{healthBad?"运行异常":healthWarn?"恢复 / 启动":"系统运行中"}</b><p>{loading?"正在启动 HTE 3.1 Clean…":statusText}</p></div>
+    <header className="clean-header"><div className="clean-logo">O</div><div className="clean-title"><strong>Sentinel</strong><small>HTE 3.1 · 5 TRADERS</small></div><i className={`clean-health-dot ${healthBad?"bad":healthWarn?"warn":""}`} /></header>
+    <div className={`clean-banner ${healthBad?"bad":healthWarn?"warn":""}`}><b>{healthBad?"运行异常":healthWarn?"恢复 / 启动":"系统运行中"}</b><p>{loading?"正在启动…":statusText}</p></div>
     {message && <div className="clean-banner"><b>系统消息</b><p>{message}</p></div>}
 
     {tab === "总览" && <>
       <section className="clean-panel">
-        <span className="eyebrow">MARKET STATE · CLEAN</span>
+        <span className="eyebrow">MARKET STATE</span>
         <div className="clean-market-title"><strong>{snapshot?.market?.label ?? "等待首轮扫描"}</strong><span className={`pill ${snapshot?.market?.permission === "YELLOW"?"wait":""}`}>{snapshot?.market?.permission ?? "START"}</span></div>
         <p className="clean-driver">10分钟 HTE：{dashboard?.activity.symbols ?? 0} 个币 · 五交易员评估 {dashboard?.activity.evaluations ?? 0} 次 · READY {dashboard?.activity.ready ?? 0} / WATCH {dashboard?.activity.watching ?? 0} / BLOCK {dashboard?.activity.blocked ?? 0} · 本轮目标 {snapshot?.scanner.readModel?.target?.replace("_USDT","") ?? "--"}</p>
         <div className="metric-grid"><div className="metric"><span>市场置信</span><b>{snapshot?.market?.confidence ?? 0}%</b></div><div className="metric"><span>稳定度</span><b>{snapshot?.market?.stability ?? 0}%</b></div><div className="metric"><span>切换风险</span><b>{snapshot?.market?.transitionRisk ?? 0}%</b></div><div className="metric"><span>方向偏置</span><b>{snapshot?.market?.bias === "LONG"?"偏多":snapshot?.market?.bias === "SHORT"?"偏空":"中性"}</b></div></div>
       </section>
-      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">RISK GOVERNOR</span><h2>{dashboard?.governance.state ?? "STARTING"}</h2></div><small>风险倍率 {Math.round((dashboard?.governance.riskMultiplier ?? 0)*100)}%</small></div><div className="clean-panel"><p className="clean-driver">{dashboard?.governance.reason ?? "新账本从零启动，不继承 HTE 3.0 盈亏或学习。"}</p></div></section>
-      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">5 INDEPENDENT TRADERS</span><h2>五位独立交易员</h2></div></div>{dashboard ? <div className="clean-trader-grid"><TraderCard id="dennis_trend" dashboard={dashboard}/><TraderCard id="raschke_pullback" dashboard={dashboard}/><TraderCard id="turtle_soup" dashboard={dashboard}/><TraderCard id="exhaustion_reversal" dashboard={dashboard}/><TraderCard id="higher_timeframe_swing" dashboard={dashboard}/></div> : <Empty title="等待 Clean 账本" detail="首轮扫描成功后显示交易员状态。" />}</section>
+      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">RISK GOVERNOR</span><h2>{dashboard?.governance.state ?? "STARTING"}</h2></div><small>风险倍率 {Math.round((dashboard?.governance.riskMultiplier ?? 0)*100)}%</small></div><div className="clean-panel"><p className="clean-driver">{dashboard?.governance.reason ?? "等待风险状态"}</p></div></section>
+      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">5 INDEPENDENT TRADERS</span><h2>五位独立交易员</h2></div></div>{dashboard ? <div className="clean-trader-grid"><TraderCard id="dennis_trend" dashboard={dashboard}/><TraderCard id="raschke_pullback" dashboard={dashboard}/><TraderCard id="turtle_soup" dashboard={dashboard}/><TraderCard id="exhaustion_reversal" dashboard={dashboard}/><TraderCard id="higher_timeframe_swing" dashboard={dashboard}/></div> : <Empty title="等待交易员状态" />}</section>
     </>}
 
-    {tab === "雷达" && <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">CLEAN RADAR</span><h2>最近 15 分钟真实评估</h2></div><small>{latestRadar.length} 条</small></div>{latestRadar.length?<div className="radar-list">{latestRadar.map((item)=><RadarCard key={item.id} item={item}/>)}</div>:<Empty title="暂时没有新评估" detail={scanner?.phase ? `当前 Scanner 阶段：${scanner.phase}` : "Clean Scanner 成功运行后，这里只显示新系统的 HT1–HT5 判断。"}/>}</section>}
+    {tab === "雷达" && <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">RADAR</span><h2>最近 15 分钟真实评估</h2></div><small>{latestRadar.length} 条</small></div>{latestRadar.length?<div className="radar-list">{latestRadar.map((item)=><RadarCard key={item.id} item={item}/>)}</div>:<Empty title="暂无评估" />}</section>}
 
     {tab === "订单" && <>
-      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">SIMULATION LEDGER · CLEAN</span><h2>HTE 3.1 新账本</h2></div><small>旧 HTE 3.0 不进入这里</small></div>
+      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">SIMULATION</span><h2>模拟账户</h2></div></div>
         <div className="account-grid"><div className="metric"><span>模拟权益</span><b>{fmtMoney(dashboard?.account.equityUsdt)}</b></div><div className="metric"><span>已实现</span><b className={(dashboard?.account.realizedPnlUsdt??0)<0?"negative":"positive"}>{fmtMoney(dashboard?.account.realizedPnlUsdt)}</b></div><div className="metric"><span>未实现</span><b className={(dashboard?.account.unrealizedPnlUsdt??0)<0?"negative":"positive"}>{fmtMoney(dashboard?.account.unrealizedPnlUsdt)}</b></div><div className="metric"><span>可用保证金</span><b>{fmtMoney(dashboard?.account.availableMarginUsdt)}</b></div></div>
       </section>
-      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">OPEN</span><h2>当前模拟持仓</h2></div><small>{dashboard?.openTrades.length ?? 0} 笔</small></div>{dashboard?.openTrades.length?<div className="order-list">{dashboard.openTrades.map((trade)=><OrderCard key={trade.id} trade={trade} roundTripCostBps={dashboard.settings.roundTripCostBps}/>)}</div>:<Empty title="当前没有模拟持仓" detail="只有独立交易员的完整 Setup 才会生成新订单。"/>}</section>
-      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">CLOSED · POST-EXIT OBSERVER</span><h2>已平仓 / 持续复盘</h2></div><small>{dashboard?.closedTrades.length ?? 0} 笔</small></div>{dashboard?.closedTrades.length?<div className="order-list">{dashboard.closedTrades.map((trade)=><OrderCard key={trade.id} trade={trade} roundTripCostBps={dashboard.settings.roundTripCostBps}/>)}</div>:<Empty title="新系统还没有已平仓样本" detail="平仓后仍会观察 30m / 1h / 2h / 4h / 12h，学习进出场质量。"/>}</section>
+      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">OPEN</span><h2>当前模拟持仓</h2></div><small>{dashboard?.openTrades.length ?? 0} 笔</small></div>{dashboard?.openTrades.length?<div className="order-list">{dashboard.openTrades.map((trade)=><OrderCard key={trade.id} trade={trade} roundTripCostBps={dashboard.settings.roundTripCostBps}/>)}</div>:<Empty title="暂无模拟持仓" />}</section>
+      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">CLOSED</span><h2>已平仓</h2></div><small>{dashboard?.closedTrades.length ?? 0} 笔</small></div>{dashboard?.closedTrades.length?<div className="order-list">{dashboard.closedTrades.map((trade)=><OrderCard key={trade.id} trade={trade} roundTripCostBps={dashboard.settings.roundTripCostBps}/>)}</div>:<Empty title="暂无已平仓交易" />}</section>
     </>}
 
     {tab === "实盘" && <>
       <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">GATE CONTRACT ACCOUNT</span><h2>合约账户</h2></div><small>{live?.credential.configured ? "Gate 已连接" : "未连接"}</small></div>
         <div className="account-grid"><div className="metric"><span>合约权益</span><b>{fmtMoney(live?.control.accountEquityLastUsdt)}</b></div><div className="metric"><span>当日已实现</span><b className={(live?.control.dailyRealizedPnlUsdt??0)<0?"negative":"positive"}>{fmtMoney(live?.control.dailyRealizedPnlUsdt)}</b></div><div className="metric"><span>最近成功对账</span><b>{fmtTime(live?.control.lastSuccessfulReconcileAt)}</b></div><div className="metric"><span>Auto Live</span><b>{live?.control.entryEnabled?"已开启":"已关闭"}</b></div></div>
-        <p className="clean-driver">这里展示 Gate 实盘链已经保存的真实账户状态。当前后端只持久化合约权益、当日已实现和对账时间；没有可靠字段时不会把“可用保证金”估算出来。</p>
+        
       </section>
-      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">GATE LIVE · SAFETY BOUNDARY</span><h2>实盘链独立保留</h2></div></div>{liveError&&<div className="clean-banner bad"><b>实盘读取失败</b><p>{liveError}</p></div>}
-        <div className="clean-live-grid"><article className="clean-panel"><span className="eyebrow">AUTO LIVE</span><div className="clean-market-title"><strong>{live?.control.entryEnabled?"已开启":"已关闭"}</strong></div><p className="clean-driver">Auto Live 保留所有者手动开关；风险锁、保护单和紧急停机仍可自动阻止新开仓。合约账户没有可用资金时不会成交。</p><div className="clean-actions"><button className={live?.control.entryEnabled?"danger":"primary"} onClick={toggleLive}>{live?.control.entryEnabled?"关闭新实盘开仓":"开启 Auto Live"}</button><button onClick={()=>void mutate("/api/live/reconcile",{method:"POST"},"Gate 对账已完成。",true)}>立即对账</button><button className="danger" onPointerDown={startEmergency} onPointerUp={cancelEmergency} onPointerCancel={cancelEmergency} onPointerLeave={cancelEmergency}>按住 1.2 秒紧急停机</button></div></article>
+      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">GATE LIVE</span><h2>实盘</h2></div></div>{liveError&&<div className="clean-banner bad"><b>实盘读取失败</b><p>{liveError}</p></div>}
+        <div className="clean-live-grid"><article className="clean-panel"><span className="eyebrow">AUTO LIVE</span><div className="clean-market-title"><strong>{live?.control.entryEnabled?"已开启":"已关闭"}</strong></div><div className="clean-actions"><button className={live?.control.entryEnabled?"danger":"primary"} onClick={toggleLive}>{live?.control.entryEnabled?"关闭新实盘开仓":"开启 Auto Live"}</button><button onClick={()=>void mutate("/api/live/reconcile",{method:"POST"},"Gate 对账已完成。",true)}>立即对账</button><button className="danger" onPointerDown={startEmergency} onPointerUp={cancelEmergency} onPointerCancel={cancelEmergency} onPointerLeave={cancelEmergency}>按住 1.2 秒紧急停机</button></div></article>
         <article className="clean-panel"><span className="eyebrow">GATE API</span>{live?.credential.configured?<><div className="clean-market-title"><strong>已配置</strong></div><p className="clean-driver">{live.credential.keyHint ?? "Gate Live"} · {live.credential.status ?? "verified"}</p><div className="clean-actions"><button onClick={()=>void mutate("/api/live/credentials",{method:"DELETE"},"Gate API 凭据已删除。",true)}>删除凭据</button></div></>:<div className="clean-form"><label><span>API Key</span><input type="password" autoComplete="off" value={apiKey} onChange={(e)=>setApiKey(e.target.value)}/></label><label><span>API Secret</span><input type="password" autoComplete="off" value={apiSecret} onChange={(e)=>setApiSecret(e.target.value)}/></label><label className="checkbox"><input type="checkbox" checked={permissionsConfirmed} onChange={(e)=>setPermissionsConfirmed(e.target.checked)}/><span>确认只授予 Gate 合约交易所需权限，不授予提币权限。</span></label><button className="primary" onClick={saveCredentials}>验证并保存</button></div>}</article></div>
       </section>
-      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">ACTIVE LIVE ORDERS</span><h2>真实持仓 / 活动订单</h2></div><small>{activeLiveOrders.length} 笔</small></div>{activeLiveOrders.length?<div className="order-list">{activeLiveOrders.map((order)=><article className="order-card" key={order.id}><div className="card-head"><div className="symbol"><strong>{order.symbol.replace("_USDT","")}</strong><small>{order.strategyLabel ?? "Live lifecycle"} · {order.state}</small></div><span className={`pill ${order.side === "LONG"?"long":"short"}`}>{sideLabel(order.side)}</span></div><div className="order-numbers"><div><span>参考价</span><b>{fmtPrice(order.referencePrice)}</b></div><div><span>成交价</span><b>{fmtPrice(order.fillPrice)}</b></div><div><span>止损</span><b>{fmtPrice(order.stopLossPrice)}</b></div><div><span>止盈</span><b>{fmtPrice(order.takeProfitPrice)}</b></div></div>{order.strategyThesis&&<p className="order-thesis">{order.strategyThesis}</p>}</article>)}</div>:<Empty title="没有活动实盘订单" detail="Clean 重建不会删除或改写 Gate 凭据与实盘审计记录。"/>}</section>
+      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">ACTIVE LIVE ORDERS</span><h2>真实持仓 / 活动订单</h2></div><small>{activeLiveOrders.length} 笔</small></div>{activeLiveOrders.length?<div className="order-list">{activeLiveOrders.map((order)=><article className="order-card" key={order.id}><div className="card-head"><div className="symbol"><strong>{order.symbol.replace("_USDT","")}</strong><small>{order.strategyLabel ?? "Live lifecycle"} · {order.state}</small></div><span className={`pill ${order.side === "LONG"?"long":"short"}`}>{sideLabel(order.side)}</span></div><div className="order-numbers"><div><span>参考价</span><b>{fmtPrice(order.referencePrice)}</b></div><div><span>成交价</span><b>{fmtPrice(order.fillPrice)}</b></div><div><span>止损</span><b>{fmtPrice(order.stopLossPrice)}</b></div><div><span>止盈</span><b>{fmtPrice(order.takeProfitPrice)}</b></div></div>{order.strategyThesis&&<p className="order-thesis">{order.strategyThesis}</p>}</article>)}</div>:<Empty title="没有活动实盘订单" />}</section>
     </>}
 
     {tab === "设置" && <>
-      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">CLEAN RUNTIME</span><h2>运行设置</h2></div></div><div className="clean-panel"><div className="system-facts"><div className="system-fact"><span>Scanner</span><b>{scanner?.state ?? "starting"}</b></div><div className="system-fact"><span>Scanner Phase</span><b>{scanner?.phase ?? "idle"}</b></div><div className="system-fact"><span>Trade Manager</span><b>{position?.state ?? "starting"}</b></div><div className="system-fact"><span>新账本样本</span><b>{dashboard?.stats.sampleCount ?? 0}</b></div><div className="system-fact"><span>Profit Factor</span><b>{dashboard?.stats.profitFactor == null?"--":dashboard.stats.profitFactor.toFixed(2)}</b></div></div><div className="clean-actions"><button className="primary" onClick={toggleScan}>{dashboard?.settings.scanEnabled?"暂停 Clean Scanner":"开启 Clean Scanner"}</button></div></div></section>
-      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">UNIVERSE</span><h2>核心观察币</h2></div></div><div className="clean-panel clean-form"><label><span>币种，以逗号或空格分隔</span><input value={coreSymbolsText} onChange={(e)=>setCoreSymbolsText(e.target.value)} placeholder="BTC, ETH, SOL, HYPE"/></label><button className="primary" onClick={saveCoreSymbols}>保存核心观察币</button><p className="clean-driver">Clean Scanner 每轮只深扫一个币，按异常 → 核心 → 全市场轮转，优先保证 Cloudflare Free 下持续可靠运行。</p></div></section>
+      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">RUNTIME</span><h2>运行设置</h2></div></div><div className="clean-panel"><div className="system-facts"><div className="system-fact"><span>Scanner</span><b>{scanner?.state ?? "starting"}</b></div><div className="system-fact"><span>Scanner Phase</span><b>{scanner?.phase ?? "idle"}</b></div><div className="system-fact"><span>Trade Manager</span><b>{position?.state ?? "starting"}</b></div><div className="system-fact"><span>模拟样本</span><b>{dashboard?.stats.sampleCount ?? 0}</b></div><div className="system-fact"><span>Profit Factor</span><b>{dashboard?.stats.profitFactor == null?"--":dashboard.stats.profitFactor.toFixed(2)}</b></div></div><div className="clean-actions"><button className="primary" onClick={toggleScan}>{dashboard?.settings.scanEnabled?"暂停扫描":"开启扫描"}</button></div></div></section>
+      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">UNIVERSE</span><h2>核心观察币</h2></div></div><div className="clean-panel clean-form"><label><span>币种，以逗号或空格分隔</span><input value={coreSymbolsText} onChange={(e)=>setCoreSymbolsText(e.target.value)} placeholder="BTC, ETH, SOL, HYPE"/></label><button className="primary" onClick={saveCoreSymbols}>保存核心观察币</button></div></section>
     </>}
 
     <nav className="clean-nav" aria-label="主导航">{TABS.map((item)=><button type="button" className={tab===item?"active":""} onClick={()=>setTab(item)} key={item}>{item}</button>)}</nav>
