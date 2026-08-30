@@ -6,7 +6,7 @@ const diagnostics = await readFile(new URL("../lib/hte31-diagnostics.ts", import
 const scanner = await readFile(new URL("../lib/hte31-scanner.ts", import.meta.url), "utf8");
 const route = await readFile(new URL("../app/api/hte31/route.ts", import.meta.url), "utf8");
 const migration = await readFile(new URL("../drizzle/0013_hte31_trigger_shadow_learning.sql", import.meta.url), "utf8");
-const engine = await readFile(new URL("../lib/human-trader-engine.ts", import.meta.url), "utf8");
+const engine = await readFile(new URL("../lib/hte31-human-trader-engine.ts", import.meta.url), "utf8");
 
 test("HTE 3.1 diagnoses trigger failures without loosening formal entry gates", () => {
   assert.match(diagnostics, /dennis_trend:\s*new Set\(\["dennis-flow"\]\)/);
@@ -17,7 +17,7 @@ test("HTE 3.1 diagnoses trigger failures without loosening formal entry gates", 
   assert.match(diagnostics, /automaticThresholdChanges:\s*false/);
   assert.match(diagnostics, /turtleSoupRelaxationEnabled:\s*false/);
 
-  // Existing production thresholds remain unchanged by this diagnostics PR.
+  // Existing production thresholds remain unchanged by diagnostics/de-legacy work.
   assert.match(engine, /Math\.abs\(trend\) >= 0\.32/);
   assert.match(engine, /Math\.abs\(trend\) >= 0\.38/);
   assert.match(engine, /sweepVolumeRatio >= 1\.15/);
