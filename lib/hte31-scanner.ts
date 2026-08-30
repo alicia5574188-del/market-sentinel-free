@@ -3,7 +3,7 @@ import { recordHte31DiagnosticCycle } from "./hte31-diagnostics.ts";
 import { evaluateHumanTraderPool } from "./hte31-human-trader-engine.ts";
 import { getHte31Dashboard, listHte31OpenTrades, recordHte31Evaluations, tryOpenHte31Trade } from "./hte31-repository.ts";
 import type { Hte31Candle, Hte31Signal } from "./hte31-types.ts";
-import { getSettings, type AppSettings } from "./repository.ts";
+import { getSettings, type AppSettings } from "./settings-repository.ts";
 
 export type Hte31ScanPhase = "config" | "universe" | "deep" | "candles" | "evaluate";
 
@@ -247,8 +247,6 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
     try {
       await recordHte31DiagnosticCycle(packet, signals, job.settings);
     } catch (error) {
-      // Diagnostics and shadow learning are strictly auxiliary. They must never
-      // prevent a valid Human Trader Setup from reaching the simulation ledger.
       console.error("HTE 3.1 diagnostic cycle failed", error instanceof Error ? error.message : "unknown diagnostic error");
     }
     const opened = await tryOpenHte31Trade(packet, signals, job.candles, job.settings);
