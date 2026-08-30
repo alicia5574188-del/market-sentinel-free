@@ -26,7 +26,7 @@ test("isolated live entry never expands margin with cross_available", () => {
     },
     account: {
       total: "1000",
-      available: "20",
+      available: "100",
       cross_available: "1000",
       position_mode: "single",
       margin_mode: 0,
@@ -35,7 +35,7 @@ test("isolated live entry never expands margin with cross_available", () => {
   });
 
   assert.equal(plan.passed, true);
-  assert.ok(plan.requiredMarginUsdt <= 20 / 1.1 + 1e-9);
-  assert.ok(plan.targetNotionalUsdt < 60);
-  assert.ok(plan.actualNotionalUsdt < 60);
+  assert.ok(plan.requiredMarginUsdt <= 100 / 1.1 + 1e-9);
+  assert.ok(plan.targetNotionalUsdt < 300);
+  assert.ok(plan.actualNotionalUsdt < 300);
 });
