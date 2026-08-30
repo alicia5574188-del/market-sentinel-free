@@ -46,7 +46,7 @@ export const HTE31_PAPER_POSITION_POLICY = {
   minimumTp2NetProfitRate: 0.05,
   targetTp2NetProfitRate: 0.08,
   maximumTp2NetProfitRate: 0.20,
-  maximumMarginAllocationRate: 0.45,
+  maximumMarginAllocationRate: 0.60,
   maximumLeverage: 50,
   maximumTp2RiskReward: 4,
   liquidationMaintenanceFactor: 0.92,
@@ -192,7 +192,7 @@ export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31P
     + HTE31_PAPER_POSITION_POLICY.liquidationExtraBufferRate;
   const liquidationSafe = liquidationDistanceRate >= requiredLiquidationBufferRate;
 
-  const leverageReason = `需求 ${requiredLeverage}x / 上限 ${leverageCap}x；流动性 ${liquidityCap}x，波动 ${volatilityCap}x，质量 ${qualityCap}x；隔离保证金最多使用净值45%`;
+  const leverageReason = `需求 ${requiredLeverage}x / 上限 ${leverageCap}x；流动性 ${liquidityCap}x，波动 ${volatilityCap}x，质量 ${qualityCap}x；隔离保证金最多使用净值60%`;
   let reason = `计划风险 ${plannedRiskUsdt.toFixed(2)}U，TP2预计净利润 ${plannedTp2NetProfitUsdt.toFixed(2)}U`;
   let accepted = true;
   if (plannedRiskUsdt + 1e-8 < minimumRiskUsdt) {
