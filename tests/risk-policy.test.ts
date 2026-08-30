@@ -4,16 +4,15 @@ import { RISK_POLICY, dailyLossPauseUsdt, maxMarginAllocationUsdt, minimumTp2Net
 import { liveAccountRiskLockReason } from "../lib/live-risk.ts";
 
 test("all monetary risk gates scale with equity instead of fixed USDT amounts", () => {
-  assert.deepEqual(publicRiskPolicy(), { singleTradeLossPct: 4, minimumTp2NetProfitPct: 5, maxMarginAllocationPct: 60, dailyRealizedLossPausePct: 3, peakDrawdownPct: 10, maxLiveOpenPositions: 2, maxSameSideLivePositions: 2 });
-  for (const [equity, risk, tp2, daily, margin] of [[500,20,25,15,300],[1000,40,50,30,600],[2000,80,100,60,1200]]) {
+  assert.deepEqual(publicRiskPolicy(), { singleTradeLossPct: 1, minimumTp2NetProfitPct: 0.25, maxMarginAllocationPct: 20, dailyRealizedLossPausePct: 3, peakDrawdownPct: 10, maxLiveOpenPositions: 3, maxSameSideLivePositions: 2 });
+  for (const [equity, risk, tp2, daily, margin] of [[500,5,1.25,15,100],[1000,10,2.5,30,200],[2000,20,5,60,400]]) {
     assert.equal(singleTradeRiskBudgetUsdt(equity), risk);
     assert.equal(minimumTp2NetProfitBudgetUsdt(equity), tp2);
     assert.equal(dailyLossPauseUsdt(equity, 0), daily);
     assert.equal(maxMarginAllocationUsdt(equity), margin);
   }
-  assert.equal(RISK_POLICY.singleTradeLossRate, 0.04);
-  assert.equal(RISK_POLICY.minimumTp2NetProfitRate, 0.05);
-  assert.equal(RISK_POLICY.maxMarginAllocationRate, 0.60);
+  assert.equal(RISK_POLICY.singleTradeLossRate, 0.01);
+  assert.equal(RISK_POLICY.minimumTp2NetProfitRate, 0.0025);
   assert.equal(RISK_POLICY.peakDrawdownRate, 0.10);
 });
 
