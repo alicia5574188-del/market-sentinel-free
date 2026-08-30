@@ -21,6 +21,7 @@ const ACTIVE_LIVE_STATES: LiveOrderState[] = ["submitting", "open", "protected",
 const LEGACY_RAW_EQUITY_LOCK = /Gate 权益较实盘峰值回撤/;
 const ENTRY_EQUITY_SNAPSHOT_EVENT = "entry_equity_snapshot";
 const HTE31_LIVE_BRIDGE_MODEL = "hte31_live_bridge";
+const MIN_VALID_EQUITY_BASELINE_USDT = 0.01;
 
 function parseJson<T>(value: string, fallback: T): T {
   try { return JSON.parse(value) as T; } catch { return fallback; }
@@ -28,6 +29,10 @@ function parseJson<T>(value: string, fallback: T): T {
 
 function finitePositive(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function validEquityBaseline(value: unknown): value is number {
+  return finitePositive(value) && value >= MIN_VALID_EQUITY_BASELINE_USDT;
 }
 
 function hte31BridgeInsert(row: typeof hte31Trades.$inferSelect): typeof tradeCases.$inferInsert {
@@ -234,7 +239,18 @@ export async function latchEmergencyControl(reason: string) {
 }
 
 export async function clearEmergencyControl() {
-  return patchLiveControl({ entryEnabled: false, state: "disabled", disabledAt: Date.now(), emergencyAt: null, emergencyReason: null, lastError: null });
+  const current = await getLiveControl();
+  return patchLiveControl({
+    entryEnabled: false,
+    state: "disabled",
+    disabledAt: Date.now(),
+    emergencyAt: null,
+    emergencyReason: null,
+    lastError: null,
+    accountEquityPeakUsdt: validEquityBaseline(current.accountEquityPeakUsdt) ? current.accountEquityPeakUsdt : null,
+    accountEquityLastUsdt: validEquityBaseline(current.accountEquityLastUsdt) ? current.accountEquityLastUsdt : null,
+    accountRiskCheckedAt: null,
+  });
 }
 
 export async function getLiveCredentialRecord() {
