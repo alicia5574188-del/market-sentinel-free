@@ -17,6 +17,13 @@ export const RISK_POLICY = {
   maxSameSideLivePositions: 2,
 } as const;
 
+// `live-trading-engine.ts` historically imports `singleTradeRiskBudgetUsdt`
+// directly during crash/restart post-fill recovery. HTE 3.1 now owns Gate live
+// entry, so that compatibility export must reflect the HTE normal 4% risk
+// target. Legacy contract_v2 code must use the explicitly named legacy helper
+// below and must never regain authority over HTE 3.1 live recovery.
+const HTE31_LIVE_RECOVERY_RISK_RATE = 0.04;
+
 function positive(value: number) {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
@@ -30,7 +37,13 @@ export function equityScaledUsdt(equityUsdt: number, rate: number) {
   return round(positive(equityUsdt) * Math.max(0, Number.isFinite(rate) ? rate : 0));
 }
 
+/** HTE 3.1 Gate live compatibility helper used by post-fill recovery. */
 export function singleTradeRiskBudgetUsdt(equityUsdt: number) {
+  return equityScaledUsdt(equityUsdt, HTE31_LIVE_RECOVERY_RISK_RATE);
+}
+
+/** Retired contract_v2 exploration policy; never use for HTE 3.1 live entry/recovery. */
+export function legacySingleTradeRiskBudgetUsdt(equityUsdt: number) {
   return equityScaledUsdt(equityUsdt, RISK_POLICY.singleTradeLossRate);
 }
 
