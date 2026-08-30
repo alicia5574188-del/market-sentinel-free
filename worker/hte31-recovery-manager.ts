@@ -6,9 +6,9 @@ import {
   applyHte31PositionQuote,
   listHte31OpenTrades,
 } from "../lib/hte31-repository";
-import { getSettings, type AppSettings } from "../lib/repository";
+import { getSettings, type AppSettings } from "../lib/settings-repository";
 import { setRuntimeBindings } from "../lib/runtime-bindings";
-import type { Candle } from "../lib/signal-engine";
+import type { Hte31Candle as Candle } from "../lib/hte31-types";
 import { HTE31TradeManager as BaseHTE31TradeManager } from "./hte31-workers";
 
 export { HTE31MarketScanner } from "./hte31-workers";
