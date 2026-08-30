@@ -9,7 +9,7 @@ test("HTE 3.1 is the sole new-entry authority and Gate live follows the same lif
     readFile(new URL("../lib/scanner.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/sentinel-v2-strategy.ts", import.meta.url), "utf8"),
   ]);
-  assert.match(liveRepository, /from\("\.\.\/db\/hte31-schema"\)/);
+  assert.match(liveRepository, /import \{ hte31Trades \} from "\.\.\/db\/hte31-schema"/);
   assert.match(liveRepository, /db\.select\(\)\.from\(hte31Trades\)[\s\S]*eq\(hte31Trades\.status, "holding"\)/);
   assert.match(liveRepository, /netMovePct:\s*hte31Trades\.netMovePct[\s\S]*eq\(hte31Trades\.status, "closed"\)/);
   assert.match(liveRepository, /HTE31_LIVE_BRIDGE_MODEL\s*=\s*"hte31_live_bridge"/);
