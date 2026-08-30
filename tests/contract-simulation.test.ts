@@ -74,11 +74,11 @@ test("合约盈亏金额强制扣除往返成本", () => {
   });
 });
 
-test("TP2最低净利润按当前账户权益0.25%计算，允许小风险探索", () => {
+test("旧 contract_v2 保留0.25%探索门槛，而恢复兼容导出按 HTE 3.1 的5%执行", () => {
   assert.equal(MIN_TP2_NET_PROFIT_EQUITY_RATE, 0.0025);
-  assert.equal(minimumTp2NetProfitUsdt(1000), 2.5);
-  assert.equal(minimumTp2NetProfitUsdt(500), 1.25);
-  assert.equal(minimumTp2NetProfitUsdt(1250), 3.125);
+  assert.equal(minimumTp2NetProfitUsdt(1000), 50);
+  assert.equal(minimumTp2NetProfitUsdt(500), 25);
+  assert.equal(minimumTp2NetProfitUsdt(1250), 62.5);
 });
 
 test("QQQX式微小TP2即使降低探索门槛仍因净利润过低被拒绝", () => {
