@@ -4,6 +4,7 @@ import {
   hte31Evaluations,
   hte31Learning,
   hte31PostExitObservations,
+  hte31SimulationEpochs,
   hte31TradeCharts,
   hte31Trades,
 } from "../db/hte31-schema";
@@ -85,6 +86,9 @@ export async function getHte31Governance(now = Date.now()): Promise<Hte31Governa
   const rows = await getDb().select().from(hte31Trades)
     .where(eq(hte31Trades.status, "closed"))
     .orderBy(desc(hte31Trades.exitAt)).limit(80);
+  const [epoch] = await getDb().select().from(hte31SimulationEpochs)
+    .orderBy(desc(hte31SimulationEpochs.startedAt)).limit(1);
+  const accountRows = epoch ? rows.filter((row) => row.entryAt >= epoch.startedAt) : rows;
 
   const traderGuards = Object.fromEntries(TRADERS.map((traderId) => {
     const own = rows.filter((row) => row.traderId === traderId && row.exitAt != null);
@@ -116,7 +120,7 @@ export async function getHte31Governance(now = Date.now()): Promise<Hte31Governa
 
   let lossStreak = 0;
   const streakTraders = new Set<string>();
-  for (const row of rows) {
+  for (const row of accountRows) {
     if (isHte31FailureLoss(row)) {
       lossStreak += 1;
       streakTraders.add(row.traderId);
@@ -167,13 +171,26 @@ export async function recordHte31Evaluations(packet: GateAnalysisPacket, signals
   return rows.length;
 }
 
+async function currentSimulationEpoch(startingCapitalUsdt: number) {
+  const [epoch] = await getDb().select().from(hte31SimulationEpochs)
+    .orderBy(desc(hte31SimulationEpochs.startedAt)).limit(1);
+  return epoch ?? {
+    id: "hte31-epoch:initial",
+    startedAt: 0,
+    startingCapitalUsdt,
+    createdAt: 0,
+  };
+}
+
 async function accountFromRows(startingCapitalUsdt: number) {
   const rows = await getDb().select().from(hte31Trades).orderBy(desc(hte31Trades.entryAt)).limit(500);
+  const epoch = await currentSimulationEpoch(startingCapitalUsdt);
   const closed = rows.filter((row) => row.status === "closed");
   const open = rows.filter((row) => row.status === "holding");
-  const realizedPnlUsdt = closed.reduce((sum, row) => sum + (row.netPnlUsdt ?? 0), 0);
+  const epochClosed = closed.filter((row) => row.entryAt >= epoch.startedAt);
+  const realizedPnlUsdt = epochClosed.reduce((sum, row) => sum + (row.netPnlUsdt ?? 0), 0);
   const unrealizedPnlUsdt = open.reduce((sum, row) => sum + row.unrealizedNetUsdt, 0);
-  const realizedBalanceUsdt = startingCapitalUsdt + realizedPnlUsdt;
+  const realizedBalanceUsdt = epoch.startingCapitalUsdt + realizedPnlUsdt;
   const equityUsdt = realizedBalanceUsdt + unrealizedPnlUsdt;
   const usedMarginUsdt = open.reduce((sum, row) => sum + row.marginUsdt, 0);
   return {
@@ -181,7 +198,9 @@ async function accountFromRows(startingCapitalUsdt: number) {
     closed,
     open,
     account: {
-      startingCapitalUsdt,
+      startingCapitalUsdt: epoch.startingCapitalUsdt,
+      epochId: epoch.id,
+      epochStartedAt: epoch.startedAt,
       realizedPnlUsdt,
       unrealizedPnlUsdt,
       realizedBalanceUsdt,
@@ -190,6 +209,22 @@ async function accountFromRows(startingCapitalUsdt: number) {
       availableMarginUsdt: Math.max(0, equityUsdt - usedMarginUsdt),
     },
   };
+}
+
+export async function resetHte31PaperCapital(startingCapitalUsdt: number, now = Date.now()) {
+  const db = getDb();
+  const open = await db.select({ id: hte31Trades.id }).from(hte31Trades)
+    .where(eq(hte31Trades.status, "holding")).limit(1);
+  if (open.length) throw new Error("存在模拟持仓，平仓后才能重置模拟本金");
+  const capital = Math.min(1_000_000, Math.max(10, startingCapitalUsdt));
+  const epoch = {
+    id: `hte31-epoch:${crypto.randomUUID()}`,
+    startedAt: now,
+    startingCapitalUsdt: capital,
+    createdAt: now,
+  };
+  await db.insert(hte31SimulationEpochs).values(epoch);
+  return epoch;
 }
 
 export async function tryOpenHte31Trade(
