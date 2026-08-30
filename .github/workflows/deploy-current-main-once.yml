@@ -1,0 +1,50 @@
+name: Deploy Current Main Once
+
+on:
+  push:
+    branches: [deploy/hte31-five-trader-20260830]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact merged main
+        uses: actions/checkout@v4
+        with:
+          ref: d97a3ccf8fabb44730380f9695124c06e264c774
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.15.0'
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build production bundle
+        run: npm run build
+      - name: Confirm Cloudflare deployment credentials exist
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "${CLOUDFLARE_API_TOKEN}" ]; then
+            echo "CLOUDFLARE_API_TOKEN repository secret is not configured" >&2
+            exit 78
+          fi
+      - name: Deploy merged main to production Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy --config wrangler.jsonc
+      - name: Verify production health and deployment list
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          sleep 5
+          curl --fail --silent --show-error --max-time 15 https://market-sentinel-free.alicia5574188.workers.dev/__health
+          echo
+          npx wrangler deployments list --config wrangler.jsonc | head -80
