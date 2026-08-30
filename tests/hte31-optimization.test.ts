@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildHte31OptimizationAnalysis, type Hte31OptimizationTrade } from "../lib/hte31-optimization.ts";
+import { buildHte31OptimizationAnalysis, type Hte31OptimizationTrade } from "../lib/hte31-optimization-core.ts";
 
 function trade(index: number, r: number, overrides: Partial<Hte31OptimizationTrade> = {}): Hte31OptimizationTrade {
   const entryPrice = 100;
