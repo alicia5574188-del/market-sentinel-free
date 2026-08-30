@@ -5,15 +5,14 @@
 // HTE31 rollout made Cloudflare lifecycle reconciliation unnecessarily risky.
 //
 // They are no longer bound in production. If an old object still owns a stored
-// alarm, Cloudflare can nevertheless wake that namespace. Override only the
-// alarm handler so the first legacy wake deletes the alarm + private scheduler
-// storage and then stops permanently. No HTE31 D1 ledger, Gate credentials, or
-// live-order lineage lives in these retired namespaces.
-import workerDefault, {
-  LiveTradingCoordinator,
-  MarketScanner as LegacyMarketScanner,
-  PositionMonitor as LegacyPositionMonitor,
-} from "./index";
+// alarm, Cloudflare can nevertheless wake that namespace. These tombstones do
+// not inherit any legacy scanner/position implementation: the first wake only
+// deletes the alarm + private scheduler storage and then stops permanently.
+// No HTE31 D1 ledger, Gate credentials, or live-order lineage lives in these
+// retired namespaces.
+import { DurableObject } from "cloudflare:workers";
+import workerDefault, { LiveTradingCoordinator } from "./index";
+import type { CloudflareEnv } from "./index";
 
 export default workerDefault;
 export { LiveTradingCoordinator };
@@ -25,22 +24,16 @@ async function retireLegacyScheduler(ctx: { storage: { deleteAlarm(): Promise<vo
   await ctx.storage.deleteAll();
 }
 
-export class PositionMonitor extends LegacyPositionMonitor {
-  override async alarm(): Promise<void> {
+class LegacySchedulerTombstone extends DurableObject<CloudflareEnv> {
+  async alarm(): Promise<void> {
     await retireLegacyScheduler(this.ctx);
   }
 }
 
-export class MarketScanner extends LegacyMarketScanner {
-  override async alarm(): Promise<void> {
-    await retireLegacyScheduler(this.ctx);
-  }
-}
-
-export class MarketScannerV2 extends LegacyMarketScanner {
-  override async alarm(): Promise<void> {
-    await retireLegacyScheduler(this.ctx);
-  }
-}
+// These export names are historical Cloudflare migration identities. Keep them
+// exported, but never bind them to production traffic again.
+export class PositionMonitor extends LegacySchedulerTombstone {}
+export class MarketScanner extends LegacySchedulerTombstone {}
+export class MarketScannerV2 extends LegacySchedulerTombstone {}
 
 export { HTE31MarketScanner, HTE31TradeManager } from "./hte31-recovery-manager";
