@@ -1,0 +1,47 @@
+name: Verify Production Once
+
+on:
+  push:
+    branches: [deploy/hte31-five-trader-20260830]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probe Worker health and deployed client markers
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='https://market-sentinel-free.alicia5574188.workers.dev'
+          echo '--- HEALTH ---'
+          curl --fail --silent --show-error --max-time 20 "$base/__health" | tee /tmp/health.txt
+          echo
+          echo '--- ROOT ---'
+          curl --fail --silent --show-error --max-time 20 "$base/" -o /tmp/root.html
+          head -c 1200 /tmp/root.html || true
+          echo
+          : > /tmp/client.txt
+          grep -Eo '(src|href)="[^"]+\.(js|mjs)(\?[^"]*)?"' /tmp/root.html | sed -E 's/^(src|href)="//; s/"$//' | sort -u > /tmp/assets.txt || true
+          while IFS= read -r asset; do
+            [ -n "$asset" ] || continue
+            case "$asset" in
+              http*) url="$asset" ;;
+              /*) url="$base$asset" ;;
+              *) url="$base/$asset" ;;
+            esac
+            curl --fail --silent --show-error --max-time 20 "$url" >> /tmp/client.txt || true
+            echo >> /tmp/client.txt
+          done < /tmp/assets.txt
+          echo '--- MARKERS ---'
+          if grep -Fq '5 TRADERS' /tmp/root.html /tmp/client.txt 2>/dev/null && grep -Fq 'Exhaustion' /tmp/root.html /tmp/client.txt 2>/dev/null && grep -Fq 'Counterfactual Observer' /tmp/root.html /tmp/client.txt 2>/dev/null; then
+            echo 'PRODUCTION_HAS_FIVE_TRADER_BUILD=yes'
+          else
+            echo 'PRODUCTION_HAS_FIVE_TRADER_BUILD=no'
+            echo 'Assets inspected:'
+            cat /tmp/assets.txt || true
+            exit 42
+          fi
