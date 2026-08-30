@@ -25,6 +25,14 @@ test("HTE31 Human Trader implementation owns its domain dependencies", () => {
   assert.match(engine, /minutes: 100/);
 });
 
+test("HTE31 scanner owns candle and signal types instead of importing Strategy2 domains", () => {
+  const scanner = source("../lib/hte31-scanner.ts");
+  assert.match(scanner, /Hte31Candle/);
+  assert.match(scanner, /Hte31Signal/);
+  assert.match(scanner, /hte31-types\.ts/);
+  assert.doesNotMatch(scanner, /strategy-2-engine|signal-engine/);
+});
+
 test("HTE31 primitives do not import retired strategy domains", () => {
   const types = source("../lib/hte31-types.ts");
   const regime = source("../lib/hte31-regime.ts");

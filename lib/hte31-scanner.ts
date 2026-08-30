@@ -2,9 +2,8 @@ import { analyzeGateSymbol, fetchGateChartCandles, fetchGateUniverse, type GateA
 import { recordHte31DiagnosticCycle } from "./hte31-diagnostics.ts";
 import { evaluateHumanTraderPool } from "./human-trader-engine.ts";
 import { getHte31Dashboard, listHte31OpenTrades, recordHte31Evaluations, tryOpenHte31Trade } from "./hte31-repository.ts";
+import type { Hte31Candle, Hte31Signal } from "./hte31-types.ts";
 import { getSettings, type AppSettings } from "./repository.ts";
-import type { Candle } from "./signal-engine.ts";
-import type { Strategy2Signal } from "./strategy-2-engine.ts";
 
 export type Hte31ScanPhase = "config" | "universe" | "deep" | "candles" | "evaluate";
 
@@ -37,8 +36,8 @@ export type Hte31ScanJob = {
   market?: Hte31MarketState;
   target?: UniverseTicker;
   packet?: GateAnalysisPacket;
-  candles?: Candle[];
-  signals?: Strategy2Signal[];
+  candles?: Hte31Candle[];
+  signals?: Hte31Signal[];
   openedTradeId?: string | null;
   openReason?: string;
 };
@@ -49,7 +48,7 @@ export type Hte31ScanCompleted = {
   universe: UniverseTicker[];
   market: Hte31MarketState;
   packet: GateAnalysisPacket;
-  signals: Strategy2Signal[];
+  signals: Hte31Signal[];
   openedTradeId: string | null;
   openReason: string;
   settings: {
