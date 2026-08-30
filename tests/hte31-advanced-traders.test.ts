@@ -66,21 +66,32 @@ function exhaustionRows() {
 
 function swingRows() {
   const rows = candles();
+  const pivot = rows.at(-25)!.close;
+  for (let index = rows.length - 25; index < rows.length - 2; index += 1) {
+    const close = pivot + Math.sin(index) * 0.018;
+    rows[index] = {
+      ...rows[index],
+      open: close + 0.008,
+      high: close + 0.08,
+      low: close - 0.08,
+      close,
+    };
+  }
   const before = rows.at(-3)!;
   rows[rows.length - 2] = {
     ...rows.at(-2)!,
-    open: before.close + 0.02,
-    high: before.close + 0.07,
-    low: before.close - 0.18,
-    close: before.close - 0.10,
+    open: before.close + 0.01,
+    high: before.close + 0.05,
+    low: before.close - 0.16,
+    close: before.close - 0.09,
   };
   const previous = rows.at(-2)!;
   rows[rows.length - 1] = {
     ...rows.at(-1)!,
     open: previous.close - 0.01,
-    high: previous.high + 0.08,
-    low: previous.low + 0.06,
-    close: previous.high + 0.03,
+    high: previous.high + 0.06,
+    low: previous.low + 0.07,
+    close: previous.high + 0.02,
     volume: 1800,
   };
   return rows;
