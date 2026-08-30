@@ -100,7 +100,6 @@ test("live Gate-size preflight rejects the QQQX micro-profit order", () => {
       status: "trading",
     },
     account: { available: "1000", total: "1000", position_mode: "single" },
-    maxRiskPerAlertUsdt: 10,
     roundTripCostBps: 8,
   });
   assert.equal(plan.passed, false);
@@ -108,7 +107,7 @@ test("live Gate-size preflight rejects the QQQX micro-profit order", () => {
   assert.match(plan.reason ?? "", /TP2.*盈利空间/);
 });
 
-test("live preflight preserves the candidate's scaled risk after slippage", () => {
+test("live preflight preserves an HTE candidate's scaled stop risk after slippage", () => {
   const plan = buildLiveEntryPlan({
     trade: {
       id: "worthwhile",
@@ -131,11 +130,10 @@ test("live preflight preserves the candidate's scaled risk after slippage", () =
       market_order_slip_ratio: "0.01",
       status: "trading",
     },
-    account: { available: "6000", total: "6000", position_mode: "single" },
-    maxRiskPerAlertUsdt: 10,
+    account: { available: "1000", total: "1000", position_mode: "single" },
     roundTripCostBps: 8,
   });
-  assert.equal(plan.minimumNetTp2Usdt, 15);
+  assert.equal(plan.minimumNetTp2Usdt, 50);
   assert.equal(plan.riskBudgetUsdt, 10);
   assert.equal(plan.actualNotionalUsdt, 769);
   assert.equal(plan.passed, true);
@@ -146,9 +144,9 @@ test("live preflight preserves the candidate's scaled risk after slippage", () =
   assert.deepEqual(protectionTriggerRules("SHORT"), { takeProfit: 2, stopLoss: 1 });
 });
 
-test("live preflight uses Gate taker fees, tick rounding and both-side slippage", () => {
-  const rounded = normalizeLiveProtectionPrices({ side: "LONG", stopLossPrice: 99.04, takeProfitPrice: 103.09, priceTick: 0.1 });
-  assert.deepEqual(rounded, { stopLossPrice: 99.1, takeProfitPrice: 103 });
+test("live preflight uses Gate taker fees, tick rounding and both-side slippage under the 5% TP2 floor", () => {
+  const rounded = normalizeLiveProtectionPrices({ side: "LONG", stopLossPrice: 99.04, takeProfitPrice: 120.09, priceTick: 0.1 });
+  assert.deepEqual(rounded, { stopLossPrice: 99.1, takeProfitPrice: 120 });
   const plan = buildLiveEntryPlan({
     trade: {
       id: "fees-and-ticks",
@@ -158,7 +156,7 @@ test("live preflight uses Gate taker fees, tick rounding and both-side slippage"
       entryLow: 99.9,
       entryHigh: 100.1,
       currentStopPrice: 99.04,
-      takeProfit2Price: 103.09,
+      takeProfit2Price: 120.09,
       leverage: 1,
       contractNotionalUsdt: 1000,
     },
@@ -173,14 +171,13 @@ test("live preflight uses Gate taker fees, tick rounding and both-side slippage"
       taker_fee_rate: "0.0008",
       status: "trading",
     },
-    account: { available: "6000", total: "6000", position_mode: "single" },
-    maxRiskPerAlertUsdt: 10,
+    account: { available: "1000", total: "1000", position_mode: "single" },
     roundTripCostBps: 8,
   });
   assert.equal(plan.effectiveRoundTripCostBps, 16);
   assert.equal(plan.stopLossPrice, 99.1);
-  assert.equal(plan.takeProfitPrice, 103);
-  assert.equal(plan.minimumNetTp2Usdt, 15);
+  assert.equal(plan.takeProfitPrice, 120);
+  assert.equal(plan.minimumNetTp2Usdt, 50);
   assert.ok(plan.expectedNetTp2Usdt > plan.worstCaseNetTp2Usdt);
   assert.equal(plan.passed, true);
 });
@@ -203,7 +200,7 @@ test("actual Gate equity includes unrealized PnL and close PnL is isolated to on
   assert.deepEqual(matching.map((record) => record.pnl), ["12.5"]);
 });
 
-test("live preflight caps a position against actual Gate equity and still permits a useful small-risk sample", () => {
+test("a 500U Gate account scales HTE risk and profit economics proportionally", () => {
   const plan = buildLiveEntryPlan({
     trade: {
       id: "small-live-balance",
@@ -213,28 +210,28 @@ test("live preflight caps a position against actual Gate equity and still permit
       entryLow: 99.9,
       entryHigh: 100.1,
       currentStopPrice: 99,
-      takeProfit2Price: 102,
-      leverage: 3,
-      contractNotionalUsdt: 1000,
+      takeProfit2Price: 110,
+      leverage: 10,
+      contractNotionalUsdt: 4000,
     },
     contract: {
       mark_price: "100",
       quanto_multiplier: "0.01",
-      leverage_max: "10",
+      leverage_max: "20",
       order_size_min: "1",
       order_size_max: "100000",
       status: "trading",
     },
     account: { available: "500", total: "500", position_mode: "single" },
-    maxRiskPerAlertUsdt: 10,
     roundTripCostBps: 8,
   });
-  assert.equal(plan.targetNotionalUsdt, 300);
-  assert.equal(plan.actualNotionalUsdt, 300);
-  assert.equal(plan.minimumNetTp2Usdt, 1.25);
-  assert.ok(plan.projectedStopLossUsdt > 3.89 && plan.projectedStopLossUsdt < 3.91);
+  assert.equal(plan.minimumNetTp2Usdt, 25);
+  assert.equal(plan.riskBudgetUsdt, 20);
+  assert.ok(plan.targetNotionalUsdt > 1538 && plan.targetNotionalUsdt < 1539);
+  assert.equal(plan.actualNotionalUsdt, 1538);
+  assert.ok(plan.projectedStopLossUsdt > 19.98 && plan.projectedStopLossUsdt < 20.01);
   assert.equal(plan.passed, true);
-  assert.ok(plan.worstCaseNetTp2Usdt > plan.minimumNetTp2Usdt);
+  assert.ok(plan.worstCaseNetTp2Usdt > 100);
 });
 
 test("account risk locks daily trading loss but ignores raw Gate balance transfers", () => {
