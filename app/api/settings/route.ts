@@ -1,4 +1,4 @@
-import { getSettings, publicSettings, updateSettings } from "../../../lib/repository";
+import { getSettings, publicSettings, updateSettings } from "../../../lib/settings-repository";
 import { requireApiAccount } from "../../api-auth";
 
 export async function GET() {
