@@ -33,6 +33,7 @@ import {
   disableLiveControl,
   getLiveControl,
   getLiveCredentialRecord,
+  getLiveLinkedTrade,
   getLiveTradingSnapshot,
   latchEmergencyControl,
   listActiveLiveOrders,
@@ -45,7 +46,7 @@ import {
   type LiveOrderRecord,
 } from "./live-trading-repository";
 import { liveDirectionalExposureBlockReason } from "./live-portfolio-risk";
-import { getSettings, getTrade } from "./repository";
+import { getSettings } from "./settings-repository";
 import { resolveVapidConfig } from "./vapid-config";
 import { sendAllPush } from "./web-push";
 
@@ -872,7 +873,7 @@ async function reconcileOrder(client: GatePrivateClient, order: LiveOrderRecord,
     await patchLiveOrder(order.id, { state: "closed", closedAt: Date.now(), lastReconciledAt: Date.now(), realizedPnlUsdt });
     return;
   }
-  const linkedTrade = await getTrade(order.tradeCaseId);
+  const linkedTrade = await getLiveLinkedTrade(order.tradeCaseId);
   if (linkedTrade && linkedTrade.status !== "holding") {
     await patchLiveOrder(order.id, { state: "closing", failureCode: null, failureReason: null });
     const closeResults = await Promise.allSettled(symbolPositions.map((position) => closePosition(client, position, linkedTrade.exitReason ?? "策略已结束")));
