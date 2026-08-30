@@ -1,0 +1,52 @@
+name: HTE31 PR Bootstrap
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.15.0'
+          cache: npm
+      - name: Apply deterministic upgrade embedded in one-shot workflow
+        run: |
+          python <<'PY'
+          from pathlib import Path
+          import textwrap
+          source = Path('.github/workflows/hte31-five-trader-upgrade-once.yml').read_text()
+          marker = "python <<'PY'\n"
+          if marker not in source:
+              raise SystemExit('embedded upgrade script missing')
+          body = source.split(marker, 1)[1].split("\n          PY", 1)[0]
+          exec(compile(textwrap.dedent(body), 'hte31-upgrade', 'exec'))
+          Path('.github/workflows/hte31-pr-bootstrap.yml').unlink()
+          PY
+      - run: npm ci
+      - name: Focused advanced tests
+        run: node --experimental-strip-types --test tests/hte31-advanced-traders.test.ts tests/hte31-counterfactual.test.ts tests/hte31-position-sizing.test.ts tests/human-trader-engine.test.ts
+      - run: npm run test:signals
+      - run: npm test
+      - run: npm run lint
+      - run: npx tsc --noEmit --incremental false
+      - run: git diff --check
+      - name: Commit verified upgrade
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: add five-trader reversal intelligence"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
