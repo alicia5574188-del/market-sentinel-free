@@ -62,6 +62,15 @@ export const hte31Trades = sqliteTable("hte31_trades", {
   index("hte31_trades_symbol_time_idx").on(table.symbol, table.entryAt),
 ]);
 
+export const hte31SimulationEpochs = sqliteTable("hte31_simulation_epochs", {
+  id: text("id").primaryKey(),
+  startedAt: integer("started_at").notNull(),
+  startingCapitalUsdt: real("starting_capital_usdt").notNull(),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  index("hte31_simulation_epochs_started_idx").on(table.startedAt),
+]);
+
 export const hte31Evaluations = sqliteTable("hte31_evaluations", {
   id: text("id").primaryKey(),
   symbol: text("symbol").notNull(),

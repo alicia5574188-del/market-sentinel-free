@@ -142,6 +142,8 @@ type Governance = {
 type CleanDashboard = {
   account: {
     startingCapitalUsdt: number;
+    epochId: string;
+    epochStartedAt: number;
     realizedPnlUsdt: number;
     unrealizedPnlUsdt: number;
     realizedBalanceUsdt: number;
@@ -534,6 +536,12 @@ export default function CleanPage() {
     if (!coreSymbols.length) return setMessage("核心观察币种至少保留 1 个。");
     void mutate("/api/settings", { method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({coreSymbols}) }, "核心观察币种已更新。", false);
   };
+  const resetPaperCapital = () => {
+    if (!dashboard) return;
+    if (dashboard.openTrades.length) return setMessage("当前有模拟持仓，平仓后才能重置模拟本金。");
+    if (!window.confirm(`将模拟本金重置为 ${fmtMoney(dashboard.settings.trialCapitalUsdt)}？历史订单和学习数据会保留。`)) return;
+    void mutate("/api/hte31/paper-reset", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({confirmed:true})}, "模拟本金已重置。", false);
+  };
   const toggleScan = () => { const enabled = !(dashboard?.settings.scanEnabled ?? true); void mutate("/api/settings", {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({scanEnabled:enabled})}, enabled?"扫描已开启。":"扫描已暂停。", false); };
   const toggleLive = () => {
     if (!live) return;
@@ -587,6 +595,7 @@ export default function CleanPage() {
 
     {tab === "设置" && <>
       <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">RUNTIME</span><h2>运行设置</h2></div></div><div className="clean-panel"><div className="system-facts"><div className="system-fact"><span>Scanner</span><b>{scanner?.state ?? "starting"}</b></div><div className="system-fact"><span>Scanner Phase</span><b>{scanner?.phase ?? "idle"}</b></div><div className="system-fact"><span>Trade Manager</span><b>{position?.state ?? "starting"}</b></div><div className="system-fact"><span>模拟样本</span><b>{dashboard?.stats.sampleCount ?? 0}</b></div><div className="system-fact"><span>Profit Factor</span><b>{dashboard?.stats.profitFactor == null?"--":dashboard.stats.profitFactor.toFixed(2)}</b></div></div><div className="clean-actions"><button className="primary" onClick={toggleScan}>{dashboard?.settings.scanEnabled?"暂停扫描":"开启扫描"}</button></div></div></section>
+      <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">SIMULATION</span><h2>模拟资金</h2></div></div><div className="clean-panel"><div className="system-facts"><div className="system-fact"><span>本轮本金</span><b>{fmtMoney(dashboard?.account.startingCapitalUsdt)}</b></div><div className="system-fact"><span>当前权益</span><b>{fmtMoney(dashboard?.account.equityUsdt)}</b></div><div className="system-fact"><span>累计学习样本</span><b>{dashboard?.stats.sampleCount ?? 0}</b></div></div><div className="clean-actions"><button className="danger" disabled={Boolean(dashboard?.openTrades.length)} onClick={resetPaperCapital}>重置模拟本金</button></div></div></section>
       <section className="clean-section"><div className="clean-section-head"><div><span className="eyebrow">UNIVERSE</span><h2>核心观察币</h2></div></div><div className="clean-panel clean-form"><label><span>币种，以逗号或空格分隔</span><input value={coreSymbolsText} onChange={(e)=>setCoreSymbolsText(e.target.value)} placeholder="BTC, ETH, SOL, HYPE"/></label><button className="primary" onClick={saveCoreSymbols}>保存核心观察币</button></div></section>
     </>}
 
