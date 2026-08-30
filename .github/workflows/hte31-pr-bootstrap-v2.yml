@@ -1,0 +1,100 @@
+name: HTE31 PR Bootstrap V2
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.15.0'
+          cache: npm
+      - name: Apply deterministic upgrade and compatibility fixes
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          source = Path('.github/workflows/hte31-five-trader-upgrade-once.yml').read_text()
+          marker = "python <<'PY'\n"
+          if marker not in source:
+              raise SystemExit('embedded upgrade script missing')
+          body = source.split(marker, 1)[1].split("\n          PY", 1)[0]
+          exec(compile(textwrap.dedent(body), 'hte31-upgrade', 'exec'))
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f'compat pattern missing in {path}: {old!r}')
+              p.write_text(text.replace(old, new, 1))
+
+          # These fields are supplied by the active HTE31 scanner, but optional at
+          # the primitive boundary so archived Strategy2 adapters and parity tests
+          # remain structurally compatible with the clean base-three evaluator.
+          for field in ('timeframeTrend15m', 'timeframeTrend1h', 'timeframeTrend4h', 'optionsIvPercentile'):
+              replace_once('lib/hte31-types.ts', f'  {field}: number | null;', f'  {field}?: number | null;')
+
+          # Historical optimization must be able to summarize all five paper
+          # trader IDs once HT4/HT5 samples begin entering the same clean ledger.
+          replace_once(
+              'lib/hte31-optimization-core.ts',
+              '  traderId: "dennis_trend" | "raschke_pullback" | "turtle_soup";',
+              '  traderId: "dennis_trend" | "raschke_pullback" | "turtle_soup" | "exhaustion_reversal" | "higher_timeframe_swing";',
+          )
+
+          # Retired Sentinel V2 calls only evaluateHumanTraderPool(), which still
+          # returns the original HT1-HT3 set. Keep that compatibility boundary
+          # narrow rather than widening the retired Strategy2 playbook registry.
+          replace_once(
+              'lib/sentinel-v2-strategy.ts',
+              '  const rawSignals = evaluateHumanTraderPool(input);',
+              '  const rawSignals = evaluateHumanTraderPool(input) as Strategy2Signal[];',
+          )
+
+          # Remove every temporary bootstrap workflow from the final feature tree.
+          for path in (
+              '.github/workflows/hte31-five-trader-upgrade-once.yml',
+              '.github/workflows/hte31-pr-bootstrap.yml',
+              '.github/workflows/hte31-pr-bootstrap-v2.yml',
+          ):
+              p = Path(path)
+              if p.exists():
+                  p.unlink()
+          PY
+      - name: Install
+        run: npm ci
+      - name: Focused advanced tests
+        run: node --experimental-strip-types --test tests/hte31-advanced-traders.test.ts tests/hte31-counterfactual.test.ts tests/hte31-position-sizing.test.ts tests/human-trader-engine.test.ts
+      - name: Full signal tests
+        run: npm run test:signals
+      - name: Production build and UI regression
+        run: npm test
+      - name: Lint
+        run: npm run lint
+      - name: TypeScript
+        run: npx tsc --noEmit --incremental false
+      - name: Diff sanity
+        run: git diff --check
+      - name: Commit verified upgrade
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: add five-trader reversal intelligence"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
