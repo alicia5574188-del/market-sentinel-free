@@ -1,6 +1,6 @@
 import { analyzeGateSymbol, fetchGateChartCandles, fetchGateUniverse, type GateAnalysisPacket, type UniverseTicker } from "./gate-client.ts";
 import { recordHte31DiagnosticCycle } from "./hte31-diagnostics.ts";
-import { evaluateHumanTraderPool } from "./human-trader-engine.ts";
+import { evaluateHumanTraderPool } from "./hte31-human-trader-engine.ts";
 import { getHte31Dashboard, listHte31OpenTrades, recordHte31Evaluations, tryOpenHte31Trade } from "./hte31-repository.ts";
 import type { Hte31Candle, Hte31Signal } from "./hte31-types.ts";
 import { getSettings, type AppSettings } from "./repository.ts";
