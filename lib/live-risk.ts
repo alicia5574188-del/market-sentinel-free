@@ -1,8 +1,13 @@
-import { minimumTp2NetProfitUsdt } from "./contract-simulation.ts";
-import { RISK_POLICY, dailyLossPauseUsdt, maxMarginAllocationUsdt, peakDrawdownLimitUsdt, singleTradeRiskBudgetUsdt } from "./risk-policy.ts";
+import { dailyLossPauseUsdt, peakDrawdownLimitUsdt } from "./risk-policy.ts";
+import {
+  HTE31_LIVE_POLICY,
+  hte31LiveMaxMarginUsdt,
+  hte31LiveMinimumTp2NetUsdt,
+  hte31LiveTargetRiskUsdt,
+} from "./hte31-live-policy.ts";
 import type { GateContract, GateFuturesAccount, GatePositionClose } from "./gate-private";
 
-export const MAX_LIVE_OPEN_POSITIONS = RISK_POLICY.maxLiveOpenPositions;
+export const MAX_LIVE_OPEN_POSITIONS = HTE31_LIVE_POLICY.maxOpenPositions;
 const MAX_ENTRY_DRIFT_PCT = 0.3;
 
 export type LiveTradeCandidate = {
@@ -105,7 +110,7 @@ export function buildLiveEntryPlan(input: {
   trade: LiveTradeCandidate;
   contract: GateContract;
   account: GateFuturesAccount;
-  /** @deprecated Risk is derived from the scaled Strategy 2.0 candidate and capped by current equity × 1%. */
+  /** @deprecated HTE 3.1 live risk is derived from current Gate equity and the HTE policy. */
   maxRiskPerAlertUsdt?: number;
   roundTripCostBps: number;
 }): LiveEntryPlan {
@@ -140,21 +145,21 @@ export function buildLiveEntryPlan(input: {
   const takeProfitIsValid = trade.side === "LONG" ? takeProfitPrice > worstCaseEntryPrice : takeProfitPrice < worstCaseEntryPrice;
   if (!stopIsValid) return failed("按 Gate 价格精度取整后，保护止损不在开仓方向的有效一侧", { markPrice, contractMultiplier: multiplier, stopLossPrice, takeProfitPrice });
   if (!takeProfitIsValid) return failed("按 Gate 价格精度和允许滑点计算后，TP2 已无有效盈利空间", { markPrice, contractMultiplier: multiplier, stopLossPrice, takeProfitPrice });
-  // Entries are explicitly switched to Gate isolated margin before submission,
-  // so only Gate's isolated `available` field is a valid margin ceiling here.
-  // `cross_available` describes cross-margin capacity and must not enlarge an isolated order.
+
+  // Live HTE 3.1 deliberately owns a separate risk policy. This keeps the old
+  // contract-v2 simulator and its historical 1%/20% exploration semantics
+  // isolated while Gate follows the current HTE paper economics.
   const availableUsdt = Math.max(0, number(account.available));
   const accountEquityUsdt = gateAccountEquityUsdt(account);
-  const minimumNetTp2Usdt = minimumTp2NetProfitUsdt(accountEquityUsdt);
+  const minimumNetTp2Usdt = hte31LiveMinimumTp2NetUsdt(accountEquityUsdt);
   if (accountEquityUsdt <= 0 || availableUsdt <= 0) {
     return failed("Gate 合约账户没有可用资金", { markPrice, contractMultiplier: multiplier, accountEquityUsdt, minimumNetTp2Usdt });
   }
   const stopDistanceFraction = Math.abs(worstCaseEntryPrice - stopLossPrice) / worstCaseEntryPrice;
-  const accountRiskBudgetUsdt = singleTradeRiskBudgetUsdt(accountEquityUsdt);
-  // The candidate notional has already been multiplied by Strategy 2.0's
-  // exploration/permission/volatility/portfolio multiplier. Reconstruct the
-  // candidate's own stop-defined risk here so live slippage cannot inflate a
-  // 0.25x exploration idea back toward the full 1% account ceiling.
+  const accountRiskBudgetUsdt = hte31LiveTargetRiskUsdt(accountEquityUsdt);
+  // HTE paper normally targets 4% equity risk. Preserve any smaller candidate
+  // risk, but never inflate a setup above the 4% target when it is rebuilt from
+  // the current real Gate equity. Thus 500U -> 20U and 1,000U -> 40U normally.
   const candidateStopDistanceFraction = trade.entryPrice > 0
     ? Math.abs(trade.entryPrice - stopLossPrice) / trade.entryPrice
     : 1;
@@ -163,7 +168,7 @@ export function buildLiveEntryPlan(input: {
   const riskNotionalCap = stopDistanceFraction > 0
     ? riskBudgetUsdt * markPrice / Math.abs(worstCaseEntryPrice - stopLossPrice)
     : 0;
-  const marginAllocationUsdt = Math.min(maxMarginAllocationUsdt(accountEquityUsdt), availableUsdt / 1.1);
+  const marginAllocationUsdt = Math.min(hte31LiveMaxMarginUsdt(accountEquityUsdt), availableUsdt / 1.1);
   const targetNotionalUsdt = Math.max(0, Math.min(
     trade.contractNotionalUsdt,
     riskNotionalCap,
@@ -202,7 +207,7 @@ export function buildLiveEntryPlan(input: {
     });
   }
   if (projectedStopLossUsdt > riskBudgetUsdt + 0.01) {
-    return failed("按 Gate 实际张数计算的止损风险超过该 Strategy 2.0 候选风险上限", {
+    return failed("按 Gate 实际张数计算的止损风险超过该 HTE 3.1 候选风险上限", {
       markPrice,
       accountEquityUsdt,
       minimumNetTp2Usdt,
@@ -233,7 +238,7 @@ export function buildLiveEntryPlan(input: {
     exitSlippageRatio: slip,
   });
   if (worstCaseNetTp2Usdt < minimumNetTp2Usdt) {
-    return failed(`按 Gate 实时张数并预留允许滑点后，TP2预计净利润 ${worstCaseNetTp2Usdt.toFixed(2)}U，低于当前权益 ${(RISK_POLICY.minimumTp2NetProfitRate * 100).toFixed(2)}% 门槛 ${minimumNetTp2Usdt.toFixed(2)}U`, {
+    return failed(`按 Gate 实时张数并预留允许滑点后，TP2预计净利润 ${worstCaseNetTp2Usdt.toFixed(2)}U，低于当前权益 ${(HTE31_LIVE_POLICY.minimumTp2NetProfitRate * 100).toFixed(2)}% 门槛 ${minimumNetTp2Usdt.toFixed(2)}U`, {
       markPrice,
       accountEquityUsdt,
       minimumNetTp2Usdt,
@@ -293,8 +298,6 @@ export function projectedNetTp2Usdt(input: {
   const conservativeExitPrice = input.side === "LONG"
     ? input.takeProfitPrice * (1 - exitSlippageRatio)
     : input.takeProfitPrice * (1 + exitSlippageRatio);
-  // Charging the round-trip rate against the larger side's notional is a
-  // conservative upper bound for entry plus exit taker fees.
   const feeNotional = Math.max(0, input.contracts) * Math.max(0, input.contractMultiplier)
     * Math.max(0, input.entryPrice, conservativeExitPrice);
   const gross = input.side === "LONG"
@@ -342,8 +345,6 @@ export function attributablePositionCloses(records: GatePositionClose[], order: 
 }) {
   const firstOpenStart = order.createdAt / 1_000 - 10;
   const firstOpenEnd = (order.submittedAt ?? order.createdAt) / 1_000 + 30;
-  // Keep a small exchange-indexing grace period without allowing a later
-  // same-symbol lifecycle to leak into this order's realized PnL.
   const closeEnd = (order.closedAt ?? Date.now()) / 1_000 + 15;
   const expectedSide = order.side === "LONG" ? "long" : "short";
   return records.filter((record) => {
