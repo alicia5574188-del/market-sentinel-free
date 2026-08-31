@@ -19,9 +19,11 @@ test("paper capital reset creates a new accounting epoch without deleting learni
   assert.doesNotMatch(route, /DELETE FROM|delete\(hte31|db\.delete/i);
 });
 
-test("account-level loss streak resets with the epoch while trader guards keep all-time history", () => {
-  assert.match(repository, /const accountRows = epoch \? rows\.filter\(\(row\) => row\.entryAt >= epoch\.startedAt\) : rows/);
-  assert.match(repository, /const own = rows\.filter\(\(row\) => row\.traderId === traderId/);
+test("account loss governance respects both the simulation epoch and current Resonance policy", () => {
+  assert.match(repository, /const policyRows = rows\.filter\(\(row\) => isCurrentResonanceTrade\(row\.entryAt\)\)/);
+  assert.match(repository, /const accountGateStartedAt = Math\.max\(epoch\?\.startedAt \?\? 0, RESONANCE_POLICY_STARTED_AT\)/);
+  assert.match(repository, /const accountRows = policyRows\.filter\(\(row\) => row\.entryAt >= accountGateStartedAt\)/);
+  assert.match(repository, /const own = policyRows\.filter\(\(row\) => row\.traderId === traderId/);
   assert.match(repository, /for \(const row of accountRows\)/);
 });
 

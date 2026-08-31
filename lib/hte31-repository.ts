@@ -18,9 +18,17 @@ type Hte31TraderId = HumanTraderId | AdvancedTraderId;
 import { buildHte31PaperPosition } from "./hte31-position-sizing.ts";
 import { evaluateHte31PerformanceCell } from "./hte31-performance-gate.ts";
 import { hte31TimeoutExitReason, isSustainedHte31StopRecovery } from "./hte31-exit-quality.ts";
+import {
+  RESONANCE_POLICY_STARTED_AT,
+  isCurrentResonanceLearningId,
+  isCurrentResonanceTrade,
+  resonanceLearningId,
+} from "./resonance-policy-version.ts";
 
 const POST_EXIT_HORIZONS = [0, 30, 60, 120, 240, 720] as const;
 const TRADERS: Hte31TraderId[] = ["dennis_trend", "raschke_pullback", "turtle_soup", "exhaustion_reversal", "higher_timeframe_swing"];
+const LONG_TERM_REVALIDATION_DELAY_MS = 12 * 60 * 60_000;
+const PAPER_REVALIDATION_MARKER = "PAPER_REVALIDATION_ONLY";
 
 function traderIdForSignal(signal: Hte31Signal): Hte31TraderId | null {
   if (signal.strategyId === "trend_breakout") return "dennis_trend";
@@ -29,10 +37,6 @@ function traderIdForSignal(signal: Hte31Signal): Hte31TraderId | null {
   if (signal.strategyId === "trend_exhaustion_reversal") return "exhaustion_reversal";
   if (signal.strategyId === "higher_timeframe_swing") return "higher_timeframe_swing";
   return null;
-}
-
-function learningIdFor(traderId: Hte31TraderId, assetRegime: string, side: "LONG" | "SHORT") {
-  return `${traderId}|${assetRegime}|${side}`;
 }
 
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
@@ -72,6 +76,7 @@ export type Hte31TraderGuard = {
   lossStreak: number;
   retryAfter: number | null;
   reason: string;
+  revalidation: boolean;
 };
 
 export type Hte31Governance = {
@@ -80,6 +85,7 @@ export type Hte31Governance = {
   lossStreak: number;
   reason: string;
   traderGuards: Record<Hte31TraderId, Hte31TraderGuard>;
+  revalidation: boolean;
 };
 
 export async function getHte31Governance(now = Date.now()): Promise<Hte31Governance> {
@@ -88,33 +94,43 @@ export async function getHte31Governance(now = Date.now()): Promise<Hte31Governa
     .orderBy(desc(hte31Trades.exitAt)).limit(80);
   const [epoch] = await getDb().select().from(hte31SimulationEpochs)
     .orderBy(desc(hte31SimulationEpochs.startedAt)).limit(1);
-  const accountRows = epoch ? rows.filter((row) => row.entryAt >= epoch.startedAt) : rows;
+
+  // Policy governance is version-scoped. Pre-Resonance losses remain in D1 and
+  // owner diagnostics but cannot cool down or pause the new policy.
+  const policyRows = rows.filter((row) => isCurrentResonanceTrade(row.entryAt));
+  const accountGateStartedAt = Math.max(epoch?.startedAt ?? 0, RESONANCE_POLICY_STARTED_AT);
+  const accountRows = policyRows.filter((row) => row.entryAt >= accountGateStartedAt);
 
   const traderGuards = Object.fromEntries(TRADERS.map((traderId) => {
-    const own = rows.filter((row) => row.traderId === traderId && row.exitAt != null);
+    const own = policyRows.filter((row) => row.traderId === traderId && row.exitAt != null);
     let lossStreak = 0;
     for (const row of own) {
       if (isHte31FailureLoss(row)) lossStreak += 1;
       else break;
     }
     const latestExit = own[0]?.exitAt ?? null;
-    const cooldownMs = lossStreak >= 4 ? 12 * 60 * 60_000 : lossStreak >= 3 ? 6 * 60 * 60_000 : lossStreak >= 2 ? 2 * 60 * 60_000 : 0;
-    const retryAfter = latestExit && cooldownMs ? latestExit + cooldownMs : null;
+    const streakCooldownMs = lossStreak >= 4 ? 12 * 60 * 60_000 : lossStreak >= 3 ? 6 * 60 * 60_000 : lossStreak >= 2 ? 2 * 60 * 60_000 : 0;
     const grossProfit = own.reduce((sum, row) => sum + Math.max(0, row.netPnlUsdt ?? 0), 0);
     const grossLoss = Math.abs(own.reduce((sum, row) => sum + Math.min(0, row.netPnlUsdt ?? 0), 0));
     const pf = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 99 : null;
-    const longTermPaused = own.length >= 12 && pf != null && pf < 0.72;
+    const longTermWeak = own.length >= 12 && pf != null && pf < 0.72;
+    const cooldownMs = Math.max(streakCooldownMs, longTermWeak ? LONG_TERM_REVALIDATION_DELAY_MS : 0);
+    const retryAfter = latestExit && cooldownMs ? latestExit + cooldownMs : null;
     const cooling = retryAfter != null && retryAfter > now;
-    const state: Hte31TraderGuard["state"] = longTermPaused ? "PAUSED" : cooling ? "COOLDOWN" : "ACTIVE";
+    const revalidation = longTermWeak && !cooling;
+    const state: Hte31TraderGuard["state"] = cooling ? (longTermWeak ? "PAUSED" : "COOLDOWN") : "ACTIVE";
     return [traderId, {
       state,
       lossStreak,
       retryAfter: cooling ? retryAfter : null,
-      reason: longTermPaused
-        ? `最近 ${own.length} 笔长期 PF ${pf?.toFixed(2)}，暂停该交易员等待重新验证`
+      revalidation,
+      reason: longTermWeak
+        ? cooling
+          ? `Resonance 本版 ${own.length} 笔 PF ${pf?.toFixed(2)}，隔离至 ${new Date(retryAfter!).toLocaleString("zh-CN")} 后仅做模拟复考`
+          : `Resonance 本版长期表现偏弱；隔离结束，当前仅允许模拟复考`
         : cooling
-          ? `连续亏损 ${lossStreak} 笔，独立冷却至 ${new Date(retryAfter!).toLocaleString("zh-CN")}`
-          : lossStreak ? `已完成冷却；此前连续亏损 ${lossStreak} 笔` : "独立交易员正常",
+          ? `Resonance 本版连续亏损 ${lossStreak} 笔，独立冷却至 ${new Date(retryAfter!).toLocaleString("zh-CN")}`
+          : lossStreak ? `已完成冷却；本版此前连续亏损 ${lossStreak} 笔` : "Resonance 本版交易员正常",
     } satisfies Hte31TraderGuard];
   })) as Record<Hte31TraderId, Hte31TraderGuard>;
 
@@ -127,7 +143,13 @@ export async function getHte31Governance(now = Date.now()): Promise<Hte31Governa
     } else break;
   }
   const diversifiedLoss = streakTraders.size >= 2;
-  const state: Hte31Governance["state"] = diversifiedLoss && lossStreak >= 8 ? "PAUSED"
+  const rawPaused = diversifiedLoss && lossStreak >= 8;
+  const latestAccountExit = accountRows[0]?.exitAt ?? null;
+  const globalRetryAfter = rawPaused && latestAccountExit ? latestAccountExit + LONG_TERM_REVALIDATION_DELAY_MS : null;
+  const globalCooling = globalRetryAfter != null && globalRetryAfter > now;
+  const revalidation = rawPaused && !globalCooling;
+  const state: Hte31Governance["state"] = rawPaused
+    ? globalCooling ? "PAUSED" : "DEFENSIVE"
     : diversifiedLoss && lossStreak >= 6 ? "DEFENSIVE"
       : diversifiedLoss && lossStreak >= 4 ? "CAUTION" : "NORMAL";
   const riskMultiplier = state === "PAUSED" ? 0 : state === "DEFENSIVE" ? 0.35 : state === "CAUTION" ? 0.6 : 1;
@@ -135,9 +157,12 @@ export async function getHte31Governance(now = Date.now()): Promise<Hte31Governa
     state,
     riskMultiplier,
     lossStreak,
+    revalidation,
     reason: state === "NORMAL"
-      ? `Clean Risk Governor 正常；跨交易员连续亏损 ${diversifiedLoss ? lossStreak : 0}`
-      : `至少两位独立交易员共同出现 ${lossStreak} 笔连续亏损，账户进入 ${state}`,
+      ? `Resonance 本版风险正常；跨交易员连续亏损 ${diversifiedLoss ? lossStreak : 0}`
+      : revalidation
+        ? `Resonance 本版曾出现 ${lossStreak} 笔跨交易员连续亏损；12小时隔离结束，仅恢复模拟复考`
+        : `Resonance 本版至少两位交易员共同出现 ${lossStreak} 笔连续亏损，账户进入 ${state}`,
     traderGuards,
   };
 }
@@ -245,8 +270,8 @@ export async function tryOpenHte31Trade(
     .filter(({ signal, traderId }) => signal.state === "ready" && Boolean(signal.entryPlan?.ready) && signal.side !== "WAIT" && governance.traderGuards[traderId].state === "ACTIVE");
   const scoredCandidates = readyCandidates.map((item) => {
     const side = item.signal.side as "LONG" | "SHORT";
-    const learning = learningById.get(learningIdFor(item.traderId, item.signal.strategyMeta.assetRegime, side));
-    return { ...item, performanceGate: evaluateHte31PerformanceCell(learning) };
+    const learning = learningById.get(resonanceLearningId(item.traderId, item.signal.strategyMeta.assetRegime, side, packet.observedAt));
+    return { ...item, performanceGate: evaluateHte31PerformanceCell(learning, packet.observedAt) };
   });
   const candidates = scoredCandidates
     .filter((item) => item.performanceGate.state === "ACTIVE")
@@ -254,15 +279,15 @@ export async function tryOpenHte31Trade(
   const selected = candidates[0];
   if (!selected?.signal.entryPlan || selected.signal.side === "WAIT") {
     const paused = scoredCandidates.find((item) => item.performanceGate.state === "PAUSED");
-    return { opened: null, reason: paused ? `负期望组合门控：${paused.performanceGate.reason}` : "三位交易员本轮没有完整 Setup" };
+    return { opened: null, reason: paused ? `负期望组合门控：${paused.performanceGate.reason}` : "五种打法本轮没有完整 Setup" };
   }
 
   const [existing] = await db.select({ id: hte31Trades.id }).from(hte31Trades)
     .where(and(eq(hte31Trades.symbol, packet.symbol), eq(hte31Trades.status, "holding"))).limit(1);
-  if (existing) return { opened: null, reason: "该币已有 HTE 3.1 模拟持仓" };
+  if (existing) return { opened: null, reason: "该币已有 Resonance 模拟持仓" };
 
   const { open, account } = await accountFromRows(settings.trialCapitalUsdt);
-  if (open.length >= 2) return { opened: null, reason: "Clean 账户同时最多 2 笔模拟持仓" };
+  if (open.length >= 2) return { opened: null, reason: "模拟账户同时最多 2 笔持仓" };
   if (account.equityUsdt <= 0) return { opened: null, reason: "模拟账户权益不足" };
 
   const plan = selected.signal.entryPlan;
@@ -295,6 +320,9 @@ export async function tryOpenHte31Trade(
 
   const id = `hte31:${crypto.randomUUID()}`;
   const now = packet.observedAt;
+  const revalidationOnly = governance.revalidation
+    || governance.traderGuards[selected.traderId].revalidation
+    || selected.performanceGate.revalidation;
   const row = {
     id,
     activeKey: packet.symbol,
@@ -319,7 +347,7 @@ export async function tryOpenHte31Trade(
     marginUsdt,
     quantity,
     leverage,
-    entryTrigger: `${selected.signal.label} · ${selected.signal.reasons.join("；")} · ${sizing.leverageReason}`,
+    entryTrigger: `${revalidationOnly ? `${PAPER_REVALIDATION_MARKER} · ` : ""}${selected.signal.label} · ${selected.signal.reasons.join("；")} · ${sizing.leverageReason}`,
     entryThesis: selected.signal.thesis,
     entryChecksJson: JSON.stringify(plan.checks),
     entryMetricsJson: JSON.stringify([
@@ -371,12 +399,12 @@ export async function tryOpenHte31Trade(
     postExitCandlesJson: "[]",
     updatedAt: now,
   });
-  return { opened: row, reason: `${selected.signal.label} 独立 Setup 完整触发` };
+  return { opened: row, reason: revalidationOnly ? `${selected.signal.label} 模拟复考单已建立` : `${selected.signal.label} 独立 Setup 完整触发` };
 }
 
 async function updateLearningAfterClose(trade: typeof hte31Trades.$inferSelect, netPnlUsdt: number, mfePct: number, maePct: number, now: number, exitCode: string | null, target1Hit: boolean) {
   const db = getDb();
-  const id = learningIdFor(trade.traderId, trade.assetRegime, trade.side);
+  const id = resonanceLearningId(trade.traderId, trade.assetRegime, trade.side, trade.entryAt);
   const [existing] = await db.select().from(hte31Learning).where(eq(hte31Learning.id, id)).limit(1);
   const r = trade.riskBudgetUsdt > 0 ? netPnlUsdt / trade.riskBudgetUsdt : 0;
   const protectedScratch = exitCode === "breakeven" || (target1Hit && r > -0.35);
@@ -653,7 +681,7 @@ export async function completeHte31PostExitObservation(trade: typeof hte31Trades
   }).where(eq(hte31Trades.id, trade.id));
 
   if (complete) {
-    const learningId = learningIdFor(trade.traderId, trade.assetRegime, trade.side);
+    const learningId = resonanceLearningId(trade.traderId, trade.assetRegime, trade.side, trade.entryAt);
     const [learning] = await db.select().from(hte31Learning).where(eq(hte31Learning.id, learningId)).limit(1);
     if (learning?.sampleCount) {
       await db.update(hte31Learning).set({
@@ -671,10 +699,11 @@ export async function getHte31Dashboard(now = Date.now()) {
     .where(lte(hte31Evaluations.observedAt, now))
     .orderBy(desc(hte31Evaluations.observedAt)).limit(120);
   const freshEvaluations = evaluations.filter((row) => now - row.observedAt <= 15 * 60_000);
-  const learningRows = await getDb().select().from(hte31Learning).orderBy(desc(hte31Learning.updatedAt)).limit(100);
+  const allLearningRows = await getDb().select().from(hte31Learning).orderBy(desc(hte31Learning.updatedAt)).limit(300);
+  const learningRows = allLearningRows.filter((row) => isCurrentResonanceLearningId(row.id));
   const learning = learningRows.map((row) => ({
     ...row,
-    performanceGate: evaluateHte31PerformanceCell(row),
+    performanceGate: evaluateHte31PerformanceCell(row, now),
   }));
   const governance = await getHte31Governance(now);
   const tenMinute = evaluations.filter((row) => now - row.observedAt <= 10 * 60_000);

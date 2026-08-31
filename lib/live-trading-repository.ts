@@ -27,6 +27,7 @@ export type LiveLinkedTrade = {
 
 const ACTIVE_LIVE_STATES: LiveOrderState[] = ["submitting", "open", "protected", "closing"];
 const HTE31_LIVE_VALIDATED_TRADERS = new Set(["dennis_trend", "raschke_pullback", "turtle_soup"]);
+const PAPER_REVALIDATION_MARKER = "PAPER_REVALIDATION_ONLY";
 const LEGACY_RAW_EQUITY_LOCK = /Gate 权益较实盘峰值回撤/;
 const ENTRY_EQUITY_SNAPSHOT_EVENT = "entry_equity_snapshot";
 const MIN_VALID_EQUITY_BASELINE_USDT = 0.01;
@@ -43,9 +44,18 @@ function validEquityBaseline(value: unknown): value is number {
   return finitePositive(value) && value >= MIN_VALID_EQUITY_BASELINE_USDT;
 }
 
+function isPaperRevalidationTrade(trade: { entryTrigger?: string | null }) {
+  return Boolean(trade.entryTrigger?.includes(PAPER_REVALIDATION_MARKER));
+}
+
 async function requireHte31Candidate(tradeId: string) {
-  const [trade] = await getDb().select({ id: hte31Trades.id, traderId: hte31Trades.traderId }).from(hte31Trades).where(eq(hte31Trades.id, tradeId)).limit(1);
+  const [trade] = await getDb().select({
+    id: hte31Trades.id,
+    traderId: hte31Trades.traderId,
+    entryTrigger: hte31Trades.entryTrigger,
+  }).from(hte31Trades).where(eq(hte31Trades.id, tradeId)).limit(1);
   if (!trade) throw new Error("HTE 3.1 实盘候选已不存在，禁止创建 Gate 订单");
+  if (isPaperRevalidationTrade(trade)) throw new Error("Resonance 模拟复考单禁止进入 Gate 实盘");
   if (!HTE31_LIVE_VALIDATED_TRADERS.has(trade.traderId)) throw new Error("HT4/HT5 仍在模拟验证阶段，禁止直接进入 Gate 实盘");
   return trade;
 }
@@ -273,10 +283,11 @@ export async function listLiveEntryCandidates(enabledAt: number, now = Date.now(
     eq(hte31Trades.status, "holding"),
     gte(hte31Trades.entryAt, liveEntryCandidateCutoff(enabledAt, now)),
   )).orderBy(desc(hte31Trades.entryAt)).limit(20);
-  if (!rows.length) return [];
-  const existing = await db.select({ tradeCaseId: liveOrders.tradeCaseId }).from(liveOrders).where(inArray(liveOrders.tradeCaseId, rows.map((row) => row.id)));
+  const liveEligibleRows = rows.filter((row) => !isPaperRevalidationTrade(row));
+  if (!liveEligibleRows.length) return [];
+  const existing = await db.select({ tradeCaseId: liveOrders.tradeCaseId }).from(liveOrders).where(inArray(liveOrders.tradeCaseId, liveEligibleRows.map((row) => row.id)));
   const claimed = new Set(existing.map((row) => row.tradeCaseId));
-  return rows
+  return liveEligibleRows
     .filter((row) => !claimed.has(row.id))
     .map((row) => ({ ...row, entryLow: row.entryPrice, entryHigh: row.entryPrice, contractNotionalUsdt: row.notionalUsdt }))
     .filter((row) => row.riskBudgetUsdt > 0 && row.contractNotionalUsdt >= 1);
