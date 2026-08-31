@@ -15,3 +15,7 @@ html,body{width:100%;max-width:100%;overflow-x:hidden;-webkit-text-size-adjust:1
 .review-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
 @media(max-width:700px){.account-grid,.order-numbers,.review-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:420px){.clean-nav{width:min(calc(100vw - 18px),796px)}}
+
+/* Monetary PnL values in order-card headers are atomic tokens. Do not split the minus sign from the amount on narrow mobile screens. */
+.order-card .card-head>div:last-child{flex:0 0 auto;min-width:max-content}
+.order-card .card-head>div:last-child .negative,.order-card .card-head>div:last-child .positive{white-space:nowrap;overflow-wrap:normal;word-break:normal}
