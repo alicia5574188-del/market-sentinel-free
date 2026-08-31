@@ -26,11 +26,12 @@ test("clean rebuild migration preserves real exchange data families and disarms 
   assert.match(migration, /`activation_epoch` = `activation_epoch` \+ 1/);
 });
 
-test("Resonance scanner uses five playbooks plus one top-level market authority", () => {
+test("Resonance scanner uses five playbooks plus separate global and symbol market brains", () => {
   const scanner = readFileSync(new URL("../lib/hte31-scanner.ts", import.meta.url), "utf8");
   assert.match(scanner, /evaluateHumanTraderPool/);
   assert.match(scanner, /evaluateAdvancedHumanTraders/);
   assert.match(scanner, /getGlobalRiskContext/);
+  assert.match(scanner, /buildResonanceGlobalMarket/);
   assert.match(scanner, /buildResonanceMarketMemory/);
   assert.match(scanner, /buildResonanceMarketView/);
   assert.match(scanner, /getResonanceSystemReview/);
@@ -100,9 +101,9 @@ test("expanded trade review cannot widen the mobile viewport", () => {
   assert.match(css, /grid-template-columns: repeat\(2, minmax\(0,1fr\)\)/);
 });
 
-test("Durable Objects retain bounded low-write runtime and reset only scheduler state on cutover", () => {
+test("Durable Objects retain bounded low-write runtime and persist the stable market brain", () => {
   const worker = readFileSync(new URL("../worker/hte31-workers.ts", import.meta.url), "utf8");
-  assert.match(worker, /CLEAN_RUNTIME_VERSION = "resonance-v1"/);
+  assert.match(worker, /CLEAN_RUNTIME_VERSION = "resonance-v2-cognitive"/);
   assert.match(worker, /D1 trades, learning, simulation epochs, live[\s\S]*remain untouched/);
   assert.match(worker, /SCANNER_CYCLE_INTERVAL_MS = 60_000/);
   assert.match(worker, /TRADE_MANAGER_IDLE_INTERVAL_MS = 60_000/);
@@ -111,7 +112,6 @@ test("Durable Objects retain bounded low-write runtime and reset only scheduler 
   assert.match(worker, /this\.ctx\.storage\.put\("runtime", runtime\)/);
   assert.doesNotMatch(worker, /this\.ctx\.storage\.put\("(?:job|status|readModel|rotationOffset)"/);
   assert.match(worker, /maxSteps = job\.phase === "config" \|\| job\.phase === "candles" \? 2 : 1/);
-  assert.match(worker, /The 1-minute Cron remains the[\s\S]*independent watchdog/);
-  assert.doesNotMatch(worker, /setAlarm\(fallback\)/);
+  assert.match(worker, /createHte31ScanJob\(runtime\.rotationOffset, runtime\.readModel\?\.market \?\? null\)/);
   assert.match(worker, /stateChanged \|\| heartbeatDue/);
 });
