@@ -30,7 +30,7 @@ test("paper capital reset is owner-confirmed and blocked while a paper position 
   assert.match(route, /confirmed !== true/);
   assert.match(repository, /存在模拟持仓，平仓后才能重置模拟本金/);
   assert.match(page, /重置模拟本金/);
-  assert.match(page, /历史订单和学习数据会保留/);
+  assert.match(page, /历史交易和学习结果继续保留/);
   assert.match(page, /disabled=\{Boolean\(dashboard\?\.openTrades\.length\)\}/);
 });
 
@@ -38,5 +38,6 @@ test("dashboard keeps cumulative samples while current account PnL is epoch scop
   assert.match(repository, /const closed = rows\.filter/);
   assert.match(repository, /const epochClosed = closed\.filter/);
   assert.match(repository, /sampleCount: closed\.length/);
-  assert.match(page, /累计学习样本/);
+  assert.match(page, /dashboard\?\.stats\.sampleCount/);
+  assert.match(page, /笔已完成/);
 });
