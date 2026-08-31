@@ -100,9 +100,10 @@ test("expanded trade review cannot widen the mobile viewport", () => {
   assert.match(css, /grid-template-columns: repeat\(2, minmax\(0,1fr\)\)/);
 });
 
-test("HTE Durable Objects retain bounded low-write runtime", () => {
+test("Durable Objects retain bounded low-write runtime and reset only scheduler state on cutover", () => {
   const worker = readFileSync(new URL("../worker/hte31-workers.ts", import.meta.url), "utf8");
-  assert.match(worker, /CLEAN_RUNTIME_VERSION = "hte31-low-write-1"/);
+  assert.match(worker, /CLEAN_RUNTIME_VERSION = "resonance-v1"/);
+  assert.match(worker, /D1 trades, learning, simulation epochs, live[\s\S]*remain untouched/);
   assert.match(worker, /SCANNER_CYCLE_INTERVAL_MS = 60_000/);
   assert.match(worker, /TRADE_MANAGER_IDLE_INTERVAL_MS = 60_000/);
   assert.match(worker, /TRADE_MANAGER_IDLE_HEARTBEAT_MS = 5 \* 60_000/);
@@ -110,7 +111,7 @@ test("HTE Durable Objects retain bounded low-write runtime", () => {
   assert.match(worker, /this\.ctx\.storage\.put\("runtime", runtime\)/);
   assert.doesNotMatch(worker, /this\.ctx\.storage\.put\("(?:job|status|readModel|rotationOffset)"/);
   assert.match(worker, /maxSteps = job\.phase === "config" \|\| job\.phase === "candles" \? 2 : 1/);
-  assert.match(worker, /the 1-minute Cron is the independent watchdog/);
+  assert.match(worker, /The 1-minute Cron remains the[\s\S]*independent watchdog/);
   assert.doesNotMatch(worker, /setAlarm\(fallback\)/);
   assert.match(worker, /stateChanged \|\| heartbeatDue/);
 });
