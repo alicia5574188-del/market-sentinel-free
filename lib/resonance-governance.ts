@@ -72,6 +72,17 @@ export function evaluateResonanceCellGate(
   now = Date.now(),
 ): ResonanceCellGate {
   const rows = resonanceCellRows(allRows, traderId, assetRegime, side);
+  if (!rows.length) {
+    return {
+      state: "ACTIVE",
+      reason: "Resonance 当前版本暂无该组合样本；旧版本记录只作历史参考",
+      profitFactor: null,
+      sampleCount: 0,
+      retryAfter: null,
+      revalidating: false,
+    };
+  }
+
   const sample = buildResonancePerformanceSample(rows);
   const base = evaluateHte31PerformanceCell(sample);
   if (base.state === "ACTIVE") {
