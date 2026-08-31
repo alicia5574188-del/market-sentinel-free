@@ -97,7 +97,8 @@ function improveEntryTiming(signal: Hte31Signal, packet: MarketAnalysisPacket, c
   }
 
   if (signal.state === "ready" && signal.entryPlan.ready) return signal;
-  if (![("trend_breakout"), ("trend_pullback")].includes(signal.strategyId)) return signal;
+  const continuationSetup = signal.strategyId === "trend_breakout" || signal.strategyId === "trend_pullback";
+  if (!continuationSetup) return signal;
   if (marketView.confidence < 68 || signal.confidence < 70) return signal;
   if (signal.strategyMeta.setupScore < 55 || signal.strategyMeta.evidenceScore < 55) return signal;
 
@@ -136,6 +137,15 @@ function recentRangePct(candles: Hte31Candle[], entryPrice: number) {
   return (high - low) / entryPrice * 100;
 }
 
+function holdingHorizonFactor(minutes: number) {
+  // The entry playbook already declares the expected holding horizon. Reuse
+  // that neutral piece of information instead of teaching the market brain
+  // special cases for named traders or strategy IDs.
+  if (minutes >= 300) return 1.16;
+  if (minutes <= 120) return 0.86;
+  return 1;
+}
+
 function marketTarget(signal: Hte31Signal, packet: MarketAnalysisPacket, candles: Hte31Candle[], marketView: ResonanceMarketView): Hte31Signal {
   if (signal.side === "WAIT" || !signal.entryPlan) return signal;
   const plan = signal.entryPlan;
@@ -154,9 +164,7 @@ function marketTarget(signal: Hte31Signal, packet: MarketAnalysisPacket, candles
   const projectedMovePct = historyMovePct > 0
     ? historyMovePct * 0.62 + structureProjectionPct * 0.38
     : structureProjectionPct * 0.68 + originalProjectionPct * 0.32;
-  const styleFactor = signal.strategyId === "higher_timeframe_swing" ? 1.18
-    : signal.strategyId === "trend_exhaustion_reversal" || signal.strategyId === "failed_breakout" ? 0.84
-      : 1;
+  const styleFactor = holdingHorizonFactor(plan.maxHoldingMinutes);
   const convictionFactor = marketView.strongDirection && marketView.bias === signal.side
     ? 1 + clamp((marketView.confidence - 62) / 100, 0, 0.28)
     : 0.88;
