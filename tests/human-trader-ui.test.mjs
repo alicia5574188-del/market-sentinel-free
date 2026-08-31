@@ -17,7 +17,9 @@ test("production UI is Resonance while preserving all five playbooks", () => {
   assert.match(page, /市场记忆 · 自适应交易/);
   for (const phrase of ["Dennis", "Raschke", "Turtle Soup", "Exhaustion", "Swing"]) assert.match(page, new RegExp(phrase));
   assert.match(page, /系统有没有进步/);
-  assert.match(page, /历史相似/);
+  assert.match(page, /MemoryCard item=\{memory\.short\}/);
+  assert.match(page, /MemoryCard item=\{memory\.swing\}/);
+  assert.match(page, /MemoryCard item=\{memory\.cycle\}/);
   assert.doesNotMatch(page, /旧 HTE 3\.0 不进入这里|SIMULATION LEDGER · CLEAN|HTE 3\.1 新账本|CLEAN RADAR|CLEAN RUNTIME/);
   assert.match(layout, /<body>\{children\}<\/body>/);
   assert.doesNotMatch(layout, /Strategy2Dashboard|Strategy2PlaybookDiagnostics|Strategy2LearningArena|RuntimeStabilityClient|UiStatusSemanticFix|LiveOrdersInline/);
