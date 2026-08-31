@@ -21,10 +21,10 @@ import { getSettings } from "../lib/settings-repository";
 import type { SchedulerWorkerStatus } from "../lib/background-scheduler";
 import type { CloudflareEnv } from "./index";
 
-// Changing generation only resets Durable Object scheduler state. The HTE31 D1
-// ledger, learning samples, Gate credentials, and live-order lineage are not
-// stored here and are therefore untouched by this low-write migration.
-const CLEAN_RUNTIME_VERSION = "hte31-low-write-1";
+// This generation bump discards only the Durable Object scheduler checkpoint
+// from the pre-Resonance scanner. D1 trades, learning, simulation epochs, live
+// credentials and live-order lineage remain untouched.
+const CLEAN_RUNTIME_VERSION = "resonance-v1";
 const SCANNER_CYCLE_INTERVAL_MS = 60_000;
 const TRADE_MANAGER_ACTIVE_INTERVAL_MS = 15_000;
 const TRADE_MANAGER_IDLE_INTERVAL_MS = 60_000;
@@ -69,7 +69,7 @@ function baseTradeManagerRuntime(): TradeManagerRuntime {
 }
 
 function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : "unknown clean runtime error";
+  return error instanceof Error ? error.message : "unknown Resonance runtime error";
 }
 
 function initialize(env: CloudflareEnv) {
@@ -153,10 +153,9 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
   }
 
   private async runSlice(job: Hte31ScanJob) {
-    // HTE31 uses 5m candles, so there is no benefit in paying six DO writes for
-    // each tiny phase. Safe adjacent phases share one invocation while the Gate
-    // deep-analysis phase remains isolated because it has the largest outbound
-    // request footprint.
+    // 5m strategy inputs do not benefit from a Durable Object write after every
+    // tiny phase. Adjacent lightweight phases share one invocation while deep
+    // market analysis remains isolated because it has the largest request set.
     const maxSteps = job.phase === "config" || job.phase === "candles" ? 2 : 1;
     let current = job;
     for (let stepIndex = 0; stepIndex < maxSteps; stepIndex += 1) {
@@ -190,8 +189,6 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
     let job = runtime.job ?? createHte31ScanJob(runtime.rotationOffset);
     if (job.rotationOffset !== runtime.rotationOffset) job = createHte31ScanJob(runtime.rotationOffset);
 
-    // A cooled circuit gets one fresh set of three attempts. This also fixes the
-    // old behavior where an expired circuit could immediately reopen forever.
     if (previous.circuitOpen && previous.retryAfter && previous.retryAfter <= now) {
       job = {
         ...job,
@@ -207,7 +204,7 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
         ...previous,
         state: "degraded",
         nextRunAt: retryAfter,
-        lastError: `HTE 3.1 Clean 阶段「${hte31PhaseLabel(job.phase)}」连续 3 次未完成，熔断 5 分钟。`,
+        lastError: `Resonance 阶段「${hte31PhaseLabel(job.phase)}」连续 3 次未完成，熔断 5 分钟。`,
         phase: hte31PhaseLabel(job.phase),
         phaseAttempt: priorAttempt,
         circuitOpen: true,
@@ -237,9 +234,8 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
     };
     runtime = { ...runtime, job, status: startingStatus };
 
-    // This is the only pre-execution checkpoint. We deliberately do not write a
-    // fallback alarm here: the 1-minute Cron is the independent watchdog if a
-    // Cloudflare invocation is hard-terminated before the next alarm is set.
+    // This is the only pre-execution checkpoint. The 1-minute Cron remains the
+    // independent watchdog if an invocation is terminated before the next alarm.
     await this.saveRuntime(runtime);
 
     initialize(this.env);
@@ -328,7 +324,7 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
         state: "error",
         lastRunAt: now,
         nextRunAt,
-        lastError: `HTE 3.1 Clean 阶段「${hte31PhaseLabel(failedJob.phase)}」失败：${errorMessage(error)}`,
+        lastError: `Resonance 阶段「${hte31PhaseLabel(failedJob.phase)}」失败：${errorMessage(error)}`,
         phase: hte31PhaseLabel(failedJob.phase),
         phaseAttempt,
         circuitOpen: false,
@@ -444,8 +440,6 @@ export class HTE31TradeManager extends DurableObject<CloudflareEnv> {
       const heartbeatDue = previous.lastSuccessAt == null || startedAt - previous.lastSuccessAt >= heartbeatMs;
       const stateChanged = previous.state !== state || previous.lastError !== lastError;
 
-      // One alarm write is enough to keep management 24/7. Status is persisted
-      // only when it changes or on a bounded heartbeat, rather than every 15/30s.
       await this.ctx.storage.setAlarm(nextRunAt);
       if (stateChanged || heartbeatDue) {
         await this.saveRuntime({
@@ -462,7 +456,7 @@ export class HTE31TradeManager extends DurableObject<CloudflareEnv> {
       }
     } catch (error) {
       const nextRunAt = Date.now() + TRADE_MANAGER_IDLE_INTERVAL_MS;
-      const lastError = `HTE 3.1 Trade Manager：${errorMessage(error)}`;
+      const lastError = `Resonance Trade Manager：${errorMessage(error)}`;
       await this.ctx.storage.setAlarm(nextRunAt);
       const stateChanged = previous.state !== "error" || previous.lastError !== lastError;
       const heartbeatDue = previous.lastRunAt == null || startedAt - previous.lastRunAt >= TRADE_MANAGER_IDLE_HEARTBEAT_MS;

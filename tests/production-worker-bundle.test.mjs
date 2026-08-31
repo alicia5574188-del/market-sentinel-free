@@ -12,12 +12,12 @@ async function readBuiltWorkerSource() {
   return (await Promise.all(jsFiles.map((file) => readFile(file, "utf8")))).join("\n");
 }
 
-test("production Worker bundle contains the HTE 3.1 low-write clean runtime", async () => {
+test("production Worker bundle contains the Resonance runtime", async () => {
   const source = await readBuiltWorkerSource();
-  assert.match(source, /hte31-low-write-1/);
-  assert.match(source, /HTE 3\.1 Clean/);
-  assert.match(source, /Clean 配置 \/ 持仓隔离/);
-  assert.match(source, /HT1 \/ HT2 \/ HT3 独立评估/);
+  assert.match(source, /resonance-v1/);
+  assert.match(source, /Resonance/);
+  assert.match(source, /市场记忆 · 自适应交易/);
+  assert.match(source, /五种交易打法评估/);
   assert.match(source, /HTE31MarketScanner/);
   assert.match(source, /HTE31TradeManager/);
 });

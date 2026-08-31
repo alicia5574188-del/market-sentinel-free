@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import test from "node:test";
 
-test("renders production Market Sentinel HTE 3.1 Clean metadata", async () => {
+test("renders production Resonance metadata", async () => {
   const cloudflareRuntimeHook = registerHooks({
     resolve(specifier, context, nextResolve) {
       if (specifier === "cloudflare:workers") {
@@ -29,7 +29,7 @@ test("renders production Market Sentinel HTE 3.1 Clean metadata", async () => {
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
-  assert.match(html, /<title>Market Sentinel｜HTE 3\.1 Clean<\/title>/i);
-  assert.match(html, /独立交易员、全新模拟账本、独立持仓管理与出场后复盘学习/);
+  assert.match(html, /<title>Resonance｜自适应交易系统<\/title>/i);
+  assert.match(html, /当前市场结构、历史相似行情、五种交易打法与阶段复盘/);
   assert.doesNotMatch(html, /name=["']codex-preview["']/i);
 });

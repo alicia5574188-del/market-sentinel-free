@@ -24,15 +24,18 @@ test("HTE 3.1 diagnoses trigger failures without loosening formal entry gates", 
   assert.match(engine, /input\.volumeUsd >= 30_000_000/);
 });
 
-test("Near-Ready shadow learning is bounded and evidence-gated", () => {
+test("Near-Ready shadow learning is bounded, evidence-gated and auxiliary", () => {
   assert.match(diagnostics, /SHADOW_HORIZONS = \[30, 60, 120, 240\]/);
   assert.match(diagnostics, /SHADOW_DEDUPE_MS = 30 \* 60_000/);
   assert.match(diagnostics, /HTE31_SHADOW_MIN_SAMPLES = 30/);
   assert.match(diagnostics, /HTE31_SHADOW_MIN_PROFIT_FACTOR = 1\.3/);
   assert.match(diagnostics, /HTE31_SHADOW_MIN_EXPECTANCY_R = 0\.15/);
   assert.match(diagnostics, /不会自动修改正式阈值/);
-  assert.match(scanner, /recordHte31DiagnosticCycle\(packet, signals, job\.settings\)/);
-  assert.match(scanner, /Diagnostics and shadow learning are strictly auxiliary/);
+  const diagnosticIndex = scanner.indexOf("recordHte31DiagnosticCycle(packet, signals, job.settings)");
+  const openIndex = scanner.indexOf("tryOpenResonanceTrade(packet, signals, job.candles, job.settings, job.marketView, job.review)");
+  assert.ok(diagnosticIndex >= 0, "scanner must record bounded diagnostic evidence");
+  assert.ok(openIndex > diagnosticIndex, "formal trade opening must remain separate from diagnostic recording");
+  assert.match(scanner.slice(diagnosticIndex, openIndex), /catch \(error\)/, "diagnostic failure must not block the formal trading path");
 });
 
 test("dashboard explains risk multiplier and surfaces 1h\/6h trigger funnel", () => {
