@@ -2,8 +2,9 @@ import type { AppSettings } from "./settings-repository.ts";
 import type { Hte31Candle, Hte31Signal } from "./hte31-types.ts";
 import type { MarketAnalysisPacket } from "./exchange-market.ts";
 import type { ResonanceMarketView } from "./resonance-brain.ts";
-import type { ResonanceSystemReview } from "./resonance-review.ts";
-import { tryOpenHte31Trade } from "./hte31-repository.ts";
+import type { ResonanceGlobalMarketState } from "./resonance-global-market.ts";
+import type { ResonanceDirective, ResonanceSystemReview } from "./resonance-review.ts";
+import { openResonancePaperTrade } from "./resonance-paper-execution.ts";
 
 const SAFETY_CHECKS = new Set(["hte-data", "hte-liquidity", "hte-funding", "hte-event", "hte-stop", "hte-router"]);
 
@@ -42,6 +43,20 @@ function signed(value: number | null | undefined, side: "LONG" | "SHORT") {
   return (value ?? 0) * direction(side);
 }
 
+function isTrendSetup(signal: Hte31Signal) {
+  return signal.strategyId === "trend_breakout" || signal.strategyId === "trend_pullback" || signal.strategyId === "higher_timeframe_swing";
+}
+
+function setupFitsRegime(signal: Hte31Signal) {
+  const regime = signal.strategyMeta.assetRegime;
+  if (signal.strategyId === "trend_breakout") return ["compression", "expansion_up", "expansion_down", "trend_up", "trend_down", "transition"].includes(regime);
+  if (signal.strategyId === "trend_pullback") return ["trend_up", "trend_down", "expansion_up", "expansion_down"].includes(regime);
+  if (signal.strategyId === "failed_breakout") return ["range", "transition", "compression", "leverage_liquidation"].includes(regime);
+  if (signal.strategyId === "trend_exhaustion_reversal") return ["expansion_up", "expansion_down", "transition", "leverage_liquidation"].includes(regime);
+  if (signal.strategyId === "higher_timeframe_swing") return ["trend_up", "trend_down", "expansion_up", "expansion_down", "transition"].includes(regime);
+  return true;
+}
+
 function continuationTiming(signal: Hte31Signal, packet: MarketAnalysisPacket, candles: Hte31Candle[], marketView: ResonanceMarketView) {
   if (signal.side === "WAIT" || !marketView.strongDirection || marketView.bias !== signal.side) return false;
   const rows = candles.slice(-12);
@@ -66,6 +81,21 @@ function continuationTiming(signal: Hte31Signal, packet: MarketAnalysisPacket, c
   return pullbackSeen && resumed && notExtended && flowOkay;
 }
 
+function confirmationBar(signal: Hte31Signal, packet: MarketAnalysisPacket, candles: Hte31Candle[]) {
+  if (signal.side === "WAIT") return false;
+  const latest = candles.at(-1);
+  const previous = candles.at(-2);
+  const currentAtr = atr(candles);
+  if (!latest || !previous || currentAtr == null || currentAtr <= 0) return false;
+  const body = Math.abs(latest.close - latest.open);
+  const directional = signal.side === "LONG"
+    ? latest.close > latest.open && latest.close >= previous.close
+    : latest.close < latest.open && latest.close <= previous.close;
+  const flowOkay = signed(packet.market.spotCvdRatio, signal.side) >= -0.0015
+    && signed(packet.market.orderBookImbalance, signal.side) >= -0.03;
+  return directional && body >= currentAtr * 0.18 && volumeRatio(candles) >= 1.02 && flowOkay;
+}
+
 function exceptionalBreakout(signal: Hte31Signal, packet: MarketAnalysisPacket, candles: Hte31Candle[]) {
   if (signal.side === "WAIT") return false;
   const latest = candles.at(-1);
@@ -80,25 +110,33 @@ function exceptionalBreakout(signal: Hte31Signal, packet: MarketAnalysisPacket, 
     && directionalFlow >= 0;
 }
 
+function withCognitiveCheck(signal: Hte31Signal, key: string, label: string, detail: string): Hte31Signal {
+  if (!signal.entryPlan) return signal;
+  return {
+    ...signal,
+    reasons: [...signal.reasons, label],
+    entryPlan: {
+      ...signal.entryPlan,
+      checks: [
+        ...signal.entryPlan.checks,
+        { key, label, passed: true, required: true, detail },
+      ],
+    },
+  };
+}
+
 function improveEntryTiming(signal: Hte31Signal, packet: MarketAnalysisPacket, candles: Hte31Candle[], marketView: ResonanceMarketView): Hte31Signal {
   if (signal.side === "WAIT" || !signal.entryPlan) return signal;
 
-  // A raw breakout is no longer enough by itself. Either the impulse is truly
-  // exceptional or price must show a pullback/resumption pattern before entry.
   if (signal.strategyId === "trend_breakout" && signal.state === "ready" && signal.entryPlan.ready) {
     if (!exceptionalBreakout(signal, packet, candles) && !continuationTiming(signal, packet, candles, marketView)) {
-      return {
-        ...signal,
-        state: "watching",
-        blockers: [...signal.blockers, "等待突破回踩/更强动量确认"],
-      };
+      return { ...signal, state: "watching", blockers: [...signal.blockers, "等待突破回踩/更强动量确认"] };
     }
     return signal;
   }
 
   if (signal.state === "ready" && signal.entryPlan.ready) return signal;
-  const continuationSetup = signal.strategyId === "trend_breakout" || signal.strategyId === "trend_pullback";
-  if (!continuationSetup) return signal;
+  if (!isTrendSetup(signal) || signal.strategyId === "higher_timeframe_swing") return signal;
   if (marketView.confidence < 68 || signal.confidence < 70) return signal;
   if (signal.strategyMeta.setupScore < 55 || signal.strategyMeta.evidenceScore < 55) return signal;
 
@@ -129,6 +167,34 @@ function improveEntryTiming(signal: Hte31Signal, packet: MarketAnalysisPacket, c
   };
 }
 
+function applyCognitiveEntryLearning(
+  signal: Hte31Signal,
+  packet: MarketAnalysisPacket,
+  candles: Hte31Candle[],
+  marketView: ResonanceMarketView,
+  review: ResonanceSystemReview,
+) {
+  if (signal.side === "WAIT" || !signal.entryPlan) return signal;
+  let next = signal;
+
+  if (review.directives.includes("require_retest") && isTrendSetup(next)) {
+    if (!continuationTiming(next, packet, candles, marketView)) {
+      next = { ...next, state: "watching", blockers: [...next.blockers, "系统复盘：等待回踩后重新启动"] };
+    } else {
+      next = withCognitiveCheck(next, "resonance-cognitive-retest", "复盘后增加回踩确认", "重复出现进场过早，候选规则要求回踩后重新启动");
+    }
+  }
+
+  if (review.challengerSetupId === next.strategyId) {
+    if (!confirmationBar(next, packet, candles)) {
+      return { ...next, state: "watching", blockers: [...next.blockers, "原打法长期偏弱，挑战版本等待额外确认"] };
+    }
+    next = withCognitiveCheck(next, "resonance-cognitive-challenger", "弱策略认知挑战版本", "原打法长期表现偏弱，本单采用额外K线/成交量/资金流确认并仅用于模拟验证");
+  }
+
+  return next;
+}
+
 function recentRangePct(candles: Hte31Candle[], entryPrice: number) {
   const rows = candles.slice(-48);
   if (!rows.length || !(entryPrice > 0)) return 0;
@@ -138,15 +204,18 @@ function recentRangePct(candles: Hte31Candle[], entryPrice: number) {
 }
 
 function holdingHorizonFactor(minutes: number) {
-  // The entry playbook already declares the expected holding horizon. Reuse
-  // that neutral piece of information instead of teaching the market brain
-  // special cases for named traders or strategy IDs.
   if (minutes >= 300) return 1.16;
   if (minutes <= 120) return 0.86;
   return 1;
 }
 
-function marketTarget(signal: Hte31Signal, packet: MarketAnalysisPacket, candles: Hte31Candle[], marketView: ResonanceMarketView): Hte31Signal {
+function marketTarget(
+  signal: Hte31Signal,
+  packet: MarketAnalysisPacket,
+  candles: Hte31Candle[],
+  marketView: ResonanceMarketView,
+  directives: ResonanceDirective[],
+): Hte31Signal {
   if (signal.side === "WAIT" || !signal.entryPlan) return signal;
   const plan = signal.entryPlan;
   const entry = plan.entryPrice;
@@ -160,7 +229,6 @@ function marketTarget(signal: Hte31Signal, packet: MarketAnalysisPacket, candles
   const higherTrend = Math.abs(packet.market.timeframeTrend4h ?? 0);
   const structureProjectionPct = localRangePct * clamp(0.42 + higherTrend * 0.55, 0.42, 0.92);
   const originalProjectionPct = plan.riskReward * riskPct;
-
   const projectedMovePct = historyMovePct > 0
     ? historyMovePct * 0.62 + structureProjectionPct * 0.38
     : structureProjectionPct * 0.68 + originalProjectionPct * 0.32;
@@ -168,18 +236,27 @@ function marketTarget(signal: Hte31Signal, packet: MarketAnalysisPacket, candles
   const convictionFactor = marketView.strongDirection && marketView.bias === signal.side
     ? 1 + clamp((marketView.confidence - 62) / 100, 0, 0.28)
     : 0.88;
-  const targetR = clamp(projectedMovePct * styleFactor * convictionFactor / Math.max(riskPct, 0.01), 1, 20);
+  const evidenceR = projectedMovePct / Math.max(riskPct, 0.01);
+  let targetR = clamp(evidenceR * styleFactor * convictionFactor, 1, 20);
+  if (directives.includes("improve_payoff") && evidenceR >= 1.8) targetR = Math.max(targetR, 2.0);
+
   const takeProfit2Price = entry + sideDirection * stopDistance * targetR;
-  const maxHoldingMinutes = targetR >= 10 ? Math.max(plan.maxHoldingMinutes, 720)
+  const currentTp1R = Math.abs(plan.takeProfit1Price - entry) / stopDistance;
+  const delayProtection = directives.includes("delay_protection") && marketView.bias === signal.side && marketView.confidence >= 55;
+  const tp1R = delayProtection ? Math.max(currentTp1R, 1.25) : currentTp1R;
+  const takeProfit1Price = entry + sideDirection * stopDistance * tp1R;
+  let maxHoldingMinutes = targetR >= 10 ? Math.max(plan.maxHoldingMinutes, 720)
     : targetR >= 6 ? Math.max(plan.maxHoldingMinutes, 480)
       : targetR >= 4 ? Math.max(plan.maxHoldingMinutes, 360)
         : plan.maxHoldingMinutes;
+  if (delayProtection) maxHoldingMinutes = Math.max(maxHoldingMinutes, Math.round(plan.maxHoldingMinutes * 1.2));
 
   return {
     ...signal,
-    thesis: `${signal.thesis} 市场空间目标：${targetR.toFixed(2)}R（历史/结构决定，不按固定USDT凑目标）。`,
+    thesis: `${signal.thesis} 市场空间目标：${targetR.toFixed(2)}R（历史/结构决定，不按固定USDT凑目标）。${delayProtection ? " 系统复盘发现保护偏早，候选方案延后TP1保护。" : ""}`,
     entryPlan: {
       ...plan,
+      takeProfit1Price,
       takeProfit2Price,
       riskReward: targetR,
       maxHoldingMinutes,
@@ -190,44 +267,61 @@ function marketTarget(signal: Hte31Signal, packet: MarketAnalysisPacket, candles
 function conflictsWithDirection(
   signal: Hte31Signal,
   packet: MarketAnalysisPacket,
+  globalMarket: ResonanceGlobalMarketState,
   marketView: ResonanceMarketView,
   review: ResonanceSystemReview,
 ) {
   if (signal.side === "WAIT") return false;
-  if (review.directive === "respect_4h_direction") {
+
+  if (review.directives.includes("respect_market_fit") && !setupFitsRegime(signal)) return true;
+
+  if (review.directives.includes("respect_4h_direction")) {
     const fourHourSide = sideFromFourHour(packet);
     if (fourHourSide && signal.side !== fourHourSide) return true;
   }
+
+  // Whole-market structure and the current symbol are separate layers. Stable
+  // global trend only controls trend-following setups; reversal specialists are
+  // still allowed to look for local exhaustion/failure patterns.
+  const stableGlobalDirection = globalMarket.bias !== "NEUTRAL"
+    && globalMarket.stability >= 58
+    && globalMarket.transitionRisk < 64;
+  if (stableGlobalDirection && isTrendSetup(signal) && signal.side !== globalMarket.bias) return true;
+
   if (!marketView.strongDirection || marketView.bias === "NEUTRAL") return false;
-  return signal.side !== marketView.bias;
+  return signal.side !== marketView.bias && isTrendSetup(signal);
 }
 
 /**
- * Resonance owns direction, timing and target-space orchestration. HT1–HT5 are
- * specialists that describe setups; they no longer get to chase a local signal
- * against a strong system direction, and sizing never manufactures a preferred
- * USDT target. Near-ready continuation entries are allowed only when all safety
- * checks pass, the system direction is strong, and 5m price confirms a pullback
- * followed by resumption.
+ * Resonance now follows a decision chain: whole market -> symbol -> historical
+ * memory -> setup -> direction -> entry timing -> exit space -> post-trade
+ * diagnosis. Losses do not create a two-hour paper timeout. Repeated failure
+ * modes change the candidate rule, while weak historical cells may continue
+ * only through paper-only cognitive challengers.
  */
 export async function tryOpenResonanceTrade(
   packet: MarketAnalysisPacket,
   signals: Hte31Signal[],
   candles: Hte31Candle[],
   settings: AppSettings,
+  globalMarket: ResonanceGlobalMarketState,
   marketView: ResonanceMarketView,
   review: ResonanceSystemReview,
 ) {
-  const timedSignals = signals.map((signal) => improveEntryTiming(signal, packet, candles, marketView));
-  const directionEligible = timedSignals.filter((signal) => !conflictsWithDirection(signal, packet, marketView, review));
-  const eligibleSignals = directionEligible.map((signal) => marketTarget(signal, packet, candles, marketView));
+  const timedSignals = signals
+    .map((signal) => improveEntryTiming(signal, packet, candles, marketView))
+    .map((signal) => applyCognitiveEntryLearning(signal, packet, candles, marketView, review));
+  const directionEligible = timedSignals.filter((signal) => !conflictsWithDirection(signal, packet, globalMarket, marketView, review));
+  const eligibleSignals = directionEligible.map((signal) => marketTarget(signal, packet, candles, marketView, review.directives));
 
   if (eligibleSignals.length !== signals.length && !eligibleSignals.some((signal) => signal.state === "ready" && signal.entryPlan?.ready)) {
-    const learned = review.directive === "respect_4h_direction" ? " · 最近两轮复盘都指向方向问题" : "";
+    const pending = globalMarket.pendingLabel
+      ? ` · 整体市场正在确认 ${globalMarket.pendingConfirmations}/${globalMarket.requiredConfirmations}`
+      : "";
     return {
       opened: null,
-      reason: `系统方向门控：${marketView.headline}（${marketView.confidence}%）${learned}，反向 Setup 继续观察但不新开仓`,
+      reason: `决策链门控：整体市场 ${globalMarket.label} / ${globalMarket.bias}，当前币种 ${marketView.headline}${pending}；不合适的Setup继续记录但不硬做`,
     };
   }
-  return tryOpenHte31Trade(packet, eligibleSignals, candles, settings);
+  return openResonancePaperTrade(packet, eligibleSignals, candles, settings);
 }
