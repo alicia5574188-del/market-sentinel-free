@@ -1,10 +1,12 @@
-import { HTE31_PAPER_POSITION_POLICY } from "./hte31-position-sizing.ts";
-
+// Live Gate execution deliberately keeps its own conservative equity-scaled
+// economics. Resonance paper learning now uses a fixed 50U opportunity floor
+// and market-led targets, but that must never silently change real-money risk
+// or force a small live account to chase the same absolute dollar profit.
 export const HTE31_LIVE_POLICY = {
-  targetRiskRate: HTE31_PAPER_POSITION_POLICY.targetRiskRate,
-  maximumRiskRate: HTE31_PAPER_POSITION_POLICY.maximumRiskRate,
-  minimumTp2NetProfitRate: HTE31_PAPER_POSITION_POLICY.minimumTp2NetProfitRate,
-  maximumMarginAllocationRate: HTE31_PAPER_POSITION_POLICY.maximumMarginAllocationRate,
+  targetRiskRate: 0.04,
+  maximumRiskRate: 0.05,
+  minimumTp2NetProfitRate: 0.05,
+  maximumMarginAllocationRate: 0.60,
   maxOpenPositions: 2,
 } as const;
 
