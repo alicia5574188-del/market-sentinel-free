@@ -43,12 +43,10 @@ export const HTE31_PAPER_POSITION_POLICY = {
   minimumRiskRate: 0.03,
   targetRiskRate: 0.04,
   maximumRiskRate: 0.05,
-  minimumTp2NetProfitRate: 0.05,
-  targetTp2NetProfitRate: 0.08,
-  maximumTp2NetProfitRate: 0.20,
+  minimumTp2NetProfitUsdt: 50,
+  maximumMarketRiskReward: 20,
   maximumMarginAllocationRate: 0.60,
   maximumLeverage: 50,
-  maximumTp2RiskReward: 4,
   liquidationMaintenanceFactor: 0.92,
   liquidationStopBufferMultiple: 2.5,
   liquidationExtraBufferRate: 0.003,
@@ -105,18 +103,19 @@ function emptyResult(reason: string): Hte31PositionSizing {
     plannedTp2GrossProfitUsdt: 0,
     plannedTp2CostUsdt: 0,
     plannedTp2NetProfitUsdt: 0,
-    minimumTp2NetProfitUsdt: 0,
-    maximumTp2NetProfitUsdt: 0,
+    minimumTp2NetProfitUsdt: HTE31_PAPER_POSITION_POLICY.minimumTp2NetProfitUsdt,
+    maximumTp2NetProfitUsdt: Number.MAX_VALUE,
     tp2Adjusted: false,
     estimatedLiquidationPrice: 0,
   };
 }
 
 /**
- * Sizes HTE 3.1 paper orders from stop-defined account risk. It preserves the
- * entry signal first: notional and TP2 R are adjusted before a setup can be
- * rejected for weak USDT economics. Gate live uses the same equity ratios but
- * independently rebuilds the order against real Gate contract/account limits.
+ * Paper sizing only decides how much capital can safely express a setup.
+ * Resonance owns the target price before this function is called. This layer
+ * must never stretch a target toward a preferred USDT profit number: 50U is
+ * only the minimum economic value required to take a paper trade, while the
+ * market-defined target may be materially larger.
  */
 export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31PositionSizing {
   const entryPrice = positive(input.entryPrice);
@@ -133,12 +132,13 @@ export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31P
   const originalTp2Distance = direction(input.side) * (originalTakeProfit2Price - entryPrice);
   const originalRiskReward = originalTp2Distance / stopDistance;
   if (!(stopDistanceRate > 0 && originalRiskReward > 0)) return emptyResult("结构止损或TP2方向无效");
+  if (originalRiskReward > HTE31_PAPER_POSITION_POLICY.maximumMarketRiskReward + 1e-8) {
+    return emptyResult(`市场目标 ${originalRiskReward.toFixed(2)}R 超过结构安全上限 ${HTE31_PAPER_POSITION_POLICY.maximumMarketRiskReward}R`);
+  }
 
   const minimumRiskUsdt = equityUsdt * HTE31_PAPER_POSITION_POLICY.minimumRiskRate;
   const maximumRiskUsdt = equityUsdt * HTE31_PAPER_POSITION_POLICY.maximumRiskRate;
   const normalTargetRiskUsdt = equityUsdt * HTE31_PAPER_POSITION_POLICY.targetRiskRate;
-  // CAUTION/DEFENSIVE reduce 40U toward the user's 30U lower bound instead of
-  // creating economically meaningless micro positions. PAUSED is checked first.
   const governedRiskUsdt = normalTargetRiskUsdt * clamp(input.riskMultiplier, 0, 1);
   const targetRiskUsdt = clamp(governedRiskUsdt, minimumRiskUsdt, maximumRiskUsdt);
 
@@ -165,24 +165,14 @@ export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31P
   const marginUsdt = notionalUsdt / leverage;
   const quantity = notionalUsdt / entryPrice;
   const plannedRiskUsdt = notionalUsdt * netStopLossRate;
-  const minimumTp2NetProfitUsdt = equityUsdt * HTE31_PAPER_POSITION_POLICY.minimumTp2NetProfitRate;
-  const targetTp2NetProfitUsdt = equityUsdt * HTE31_PAPER_POSITION_POLICY.targetTp2NetProfitRate;
-  const maximumTp2NetProfitUsdt = equityUsdt * HTE31_PAPER_POSITION_POLICY.maximumTp2NetProfitRate;
-  const targetRiskReward = notionalUsdt > 0 && stopDistanceRate > 0
-    ? (targetTp2NetProfitUsdt / notionalUsdt + roundTripCostRate) / stopDistanceRate
-    : Number.POSITIVE_INFINITY;
-  const minimumRiskReward = notionalUsdt > 0 && stopDistanceRate > 0
-    ? (minimumTp2NetProfitUsdt / notionalUsdt + roundTripCostRate) / stopDistanceRate
-    : Number.POSITIVE_INFINITY;
-  const riskReward = Math.min(
-    HTE31_PAPER_POSITION_POLICY.maximumTp2RiskReward,
-    Math.max(originalRiskReward, targetRiskReward),
-  );
-  const takeProfit2Price = entryPrice + direction(input.side) * stopDistance * riskReward;
+
+  const takeProfit2Price = originalTakeProfit2Price;
+  const riskReward = originalRiskReward;
   const grossTp2MoveRate = riskReward * stopDistanceRate;
   const plannedTp2GrossProfitUsdt = notionalUsdt * grossTp2MoveRate;
   const plannedTp2CostUsdt = notionalUsdt * roundTripCostRate;
   const plannedTp2NetProfitUsdt = plannedTp2GrossProfitUsdt - plannedTp2CostUsdt;
+  const minimumTp2NetProfitUsdt = HTE31_PAPER_POSITION_POLICY.minimumTp2NetProfitUsdt;
 
   const liquidationDistanceRate = HTE31_PAPER_POSITION_POLICY.liquidationMaintenanceFactor / leverage;
   const estimatedLiquidationPrice = input.side === "LONG"
@@ -193,7 +183,7 @@ export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31P
   const liquidationSafe = liquidationDistanceRate >= requiredLiquidationBufferRate;
 
   const leverageReason = `需求 ${requiredLeverage}x / 上限 ${leverageCap}x；流动性 ${liquidityCap}x，波动 ${volatilityCap}x，质量 ${qualityCap}x；隔离保证金最多使用净值60%`;
-  let reason = `计划净风险(含费用) ${plannedRiskUsdt.toFixed(2)}U，TP2预计净利润 ${plannedTp2NetProfitUsdt.toFixed(2)}U`;
+  let reason = `计划净风险(含费用) ${plannedRiskUsdt.toFixed(2)}U，市场目标 ${riskReward.toFixed(2)}R / 预计净利润 ${plannedTp2NetProfitUsdt.toFixed(2)}U`;
   let accepted = true;
   if (plannedRiskUsdt + 1e-8 < minimumRiskUsdt) {
     accepted = false;
@@ -201,12 +191,9 @@ export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31P
   } else if (plannedRiskUsdt - 1e-8 > maximumRiskUsdt) {
     accepted = false;
     reason = `计划风险 ${plannedRiskUsdt.toFixed(2)}U，超过 ${maximumRiskUsdt.toFixed(2)}U`;
-  } else if (minimumRiskReward > HTE31_PAPER_POSITION_POLICY.maximumTp2RiskReward + 1e-8 || plannedTp2NetProfitUsdt + 1e-8 < minimumTp2NetProfitUsdt) {
+  } else if (plannedTp2NetProfitUsdt + 1e-8 < minimumTp2NetProfitUsdt) {
     accepted = false;
-    reason = `提高到 ${HTE31_PAPER_POSITION_POLICY.maximumTp2RiskReward.toFixed(1)}R 后TP2预计净利润仍只有 ${plannedTp2NetProfitUsdt.toFixed(2)}U`;
-  } else if (plannedTp2NetProfitUsdt - 1e-8 > maximumTp2NetProfitUsdt) {
-    accepted = false;
-    reason = `TP2预计净利润 ${plannedTp2NetProfitUsdt.toFixed(2)}U，超过 ${maximumTp2NetProfitUsdt.toFixed(2)}U 上限`;
+    reason = `市场结构只提供约 ${plannedTp2NetProfitUsdt.toFixed(2)}U 净利润，低于最低 ${minimumTp2NetProfitUsdt.toFixed(0)}U；不为凑利润人为抬高TP`;
   } else if (!liquidationSafe) {
     accepted = false;
     reason = `预计强平缓冲 ${(liquidationDistanceRate * 100).toFixed(2)}% 不足以覆盖结构止损与安全余量`;
@@ -231,8 +218,8 @@ export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31P
     plannedTp2CostUsdt: round(plannedTp2CostUsdt),
     plannedTp2NetProfitUsdt: round(plannedTp2NetProfitUsdt),
     minimumTp2NetProfitUsdt: round(minimumTp2NetProfitUsdt),
-    maximumTp2NetProfitUsdt: round(maximumTp2NetProfitUsdt),
-    tp2Adjusted: riskReward > originalRiskReward + 1e-8,
+    maximumTp2NetProfitUsdt: Number.MAX_VALUE,
+    tp2Adjusted: false,
     estimatedLiquidationPrice: round(Math.max(0, estimatedLiquidationPrice)),
   };
 }

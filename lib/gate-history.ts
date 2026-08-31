@@ -27,11 +27,13 @@ function parseCandles(payload: unknown): Hte31Candle[] {
 
 export async function fetchGateHistoricalCandles(symbol: string, interval: HistoricalInterval, limit = 240) {
   if (!SYMBOL_PATTERN.test(symbol)) throw new Error("Invalid Gate symbol");
-  const boundedLimit = Math.max(64, Math.min(500, Math.trunc(limit)));
+  // Gate futures candlesticks support up to 2,000 points in one request, so
+  // Resonance can deepen memory without introducing another pagination layer.
+  const boundedLimit = Math.max(64, Math.min(2_000, Math.trunc(limit)));
   const response = await fetch(`${GATE_BASE}/futures/usdt/candlesticks?contract=${encodeURIComponent(symbol)}&interval=${interval}&limit=${boundedLimit}`, {
     cache: "no-store",
     signal: AbortSignal.timeout(8_000),
-    headers: { Accept: "application/json", "User-Agent": "Resonance/1.0" },
+    headers: { Accept: "application/json", "User-Agent": "Resonance/2.0" },
   });
   if (!response.ok) throw new Error(`Gate historical ${interval} returned ${response.status}`);
   return parseCandles(await response.json());
