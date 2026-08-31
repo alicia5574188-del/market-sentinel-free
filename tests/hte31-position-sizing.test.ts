@@ -5,126 +5,97 @@ import {
   HTE31_PAPER_POSITION_POLICY,
 } from "../lib/hte31-position-sizing.ts";
 
-test("1,000U tight-stop BTC setup is enlarged to about 40U net risk and 80U TP2 net", () => {
-  const result = buildHte31PaperPosition({
-    side: "LONG",
-    entryPrice: 78_040.10,
-    stopLossPrice: 77_914.53,
-    originalTakeProfit2Price: 78_247.29,
-    accountEquityUsdt: 1_000,
-    availableMarginUsdt: 1_000,
-    riskMultiplier: 1,
-    roundTripCostBps: 8,
-    liquidityVolumeUsd: 1_500_000_000,
-    atrPct: 0.22,
-    dataQuality: 0.91,
-    confidence: 84,
-  });
-
-  assert.equal(result.accepted, true);
-  assert.ok(result.plannedRiskUsdt >= 39.99 && result.plannedRiskUsdt <= 40.01);
-  assert.ok(result.plannedTp2NetProfitUsdt >= 79.99 && result.plannedTp2NetProfitUsdt <= 80.01);
-  assert.ok(result.leverage > 3 && result.leverage <= 50);
-  assert.equal(result.tp2Adjusted, true);
-  assert.ok(result.takeProfit2Price > 78_247.29);
-});
-
-test("fee-heavy narrow stop budgets fees inside 1R before choosing leverage and TP2", () => {
-  const result = buildHte31PaperPosition({
-    side: "SHORT",
+function baseInput(overrides: Partial<Parameters<typeof buildHte31PaperPosition>[0]> = {}) {
+  return {
+    side: "LONG" as const,
     entryPrice: 100,
-    stopLossPrice: 100.10,
-    originalTakeProfit2Price: 99.835,
+    stopLossPrice: 99,
+    originalTakeProfit2Price: 102,
     accountEquityUsdt: 1_000,
     availableMarginUsdt: 1_000,
     riskMultiplier: 1,
     roundTripCostBps: 8,
     liquidityVolumeUsd: 1_000_000_000,
-    atrPct: 0.25,
-    dataQuality: 0.94,
-    confidence: 88,
-  });
+    atrPct: 0.7,
+    dataQuality: 0.92,
+    confidence: 84,
+    ...overrides,
+  };
+}
 
+test("paper sizing preserves the market target instead of pulling every trade toward 80U", () => {
+  const result = buildHte31PaperPosition(baseInput());
   assert.equal(result.accepted, true);
-  assert.equal(result.leverage, 38);
   assert.ok(result.plannedRiskUsdt >= 39.99 && result.plannedRiskUsdt <= 40.01);
-  assert.equal(result.riskReward, 4);
-  assert.ok(result.plannedTp2CostUsdt >= 17.77 && result.plannedTp2CostUsdt <= 17.79);
-  assert.ok(result.plannedTp2NetProfitUsdt >= 71.10 && result.plannedTp2NetProfitUsdt <= 71.12);
+  assert.equal(result.takeProfit2Price, 102);
+  assert.equal(result.riskReward, 2);
+  assert.equal(result.tp2Adjusted, false);
+  assert.ok(result.plannedTp2NetProfitUsdt >= 70 && result.plannedTp2NetProfitUsdt < 80);
 });
 
-test("risk governor reduces normal 40U risk only to the user's 30U economic floor", () => {
-  const result = buildHte31PaperPosition({
-    side: "LONG",
-    entryPrice: 100,
-    stopLossPrice: 99,
-    originalTakeProfit2Price: 102.4,
-    accountEquityUsdt: 1_000,
-    availableMarginUsdt: 1_000,
-    riskMultiplier: 0.35,
-    roundTripCostBps: 8,
-    liquidityVolumeUsd: 800_000_000,
-    atrPct: 0.7,
-    dataQuality: 0.9,
-    confidence: 84,
-  });
+test("50U is an economic floor, not a target that sizing manufactures", () => {
+  const result = buildHte31PaperPosition(baseInput({ originalTakeProfit2Price: 101.2 }));
+  assert.equal(result.accepted, false);
+  assert.equal(result.takeProfit2Price, 101.2);
+  assert.equal(result.tp2Adjusted, false);
+  assert.match(result.reason, /低于最低 50U/);
+  assert.match(result.reason, /不为凑利润人为抬高TP/);
+});
 
+test("a genuinely large market target can exceed 500U without a 200U profit ceiling", () => {
+  const result = buildHte31PaperPosition(baseInput({ originalTakeProfit2Price: 115 }));
+  assert.equal(result.accepted, true);
+  assert.equal(result.riskReward, 15);
+  assert.equal(result.takeProfit2Price, 115);
+  assert.ok(result.plannedTp2NetProfitUsdt > 500);
+  assert.equal(result.maximumTp2NetProfitUsdt, Number.MAX_VALUE);
+});
+
+test("risk governor still reduces normal 40U risk to the 30U account-risk floor", () => {
+  const result = buildHte31PaperPosition(baseInput({
+    originalTakeProfit2Price: 103,
+    riskMultiplier: 0.35,
+  }));
   assert.equal(result.accepted, true);
   assert.equal(result.targetRiskUsdt, 30);
   assert.ok(result.plannedRiskUsdt >= 29.99 && result.plannedRiskUsdt <= 30.01);
-  assert.ok(result.plannedTp2NetProfitUsdt >= 79.99);
 });
 
-test("a second paper position can still use reserved margin and reach the 40U net-risk target", () => {
-  const result = buildHte31PaperPosition({
-    side: "LONG",
+test("fee-heavy narrow stop budgets fees inside 1R before choosing leverage", () => {
+  const result = buildHte31PaperPosition(baseInput({
+    side: "SHORT",
     entryPrice: 100,
-    stopLossPrice: 99.85,
-    originalTakeProfit2Price: 100.36,
-    accountEquityUsdt: 1_000,
-    availableMarginUsdt: 400,
-    riskMultiplier: 1,
-    roundTripCostBps: 8,
-    liquidityVolumeUsd: 1_000_000_000,
+    stopLossPrice: 100.10,
+    originalTakeProfit2Price: 99.60,
     atrPct: 0.25,
     dataQuality: 0.94,
     confidence: 88,
-  });
-
+  }));
   assert.equal(result.accepted, true);
-  assert.equal(result.leverage, 44);
-  assert.ok(result.marginUsdt <= 400.01);
+  assert.ok(result.leverage > 1 && result.leverage <= 50);
   assert.ok(result.plannedRiskUsdt >= 39.99 && result.plannedRiskUsdt <= 40.01);
-  assert.ok(result.plannedTp2NetProfitUsdt >= 79.99);
+  assert.equal(result.riskReward, 4);
+  assert.ok(result.plannedTp2NetProfitUsdt >= 50);
 });
 
-test("illiquid setup is rejected only after its adaptive leverage cap cannot reach 30U net risk", () => {
-  const result = buildHte31PaperPosition({
-    side: "LONG",
-    entryPrice: 100,
+test("illiquid setup is rejected when its leverage cap cannot express minimum account risk", () => {
+  const result = buildHte31PaperPosition(baseInput({
     stopLossPrice: 99.90,
-    originalTakeProfit2Price: 100.24,
-    accountEquityUsdt: 1_000,
-    availableMarginUsdt: 1_000,
-    riskMultiplier: 1,
-    roundTripCostBps: 8,
+    originalTakeProfit2Price: 99.5,
     liquidityVolumeUsd: 12_000_000,
     atrPct: 0.4,
-    dataQuality: 0.9,
-    confidence: 84,
-  });
-
+  }));
   assert.equal(result.leverageCap, 10);
   assert.equal(result.accepted, false);
   assert.match(result.reason, /低于 30\.00U/);
 });
 
-test("paper sizing policy keeps the explicit 30–50U and 50–200U bounds", () => {
+test("paper sizing keeps risk bounded while market targets may range from 50U to large runners", () => {
   assert.equal(HTE31_PAPER_POSITION_POLICY.minimumRiskRate, 0.03);
   assert.equal(HTE31_PAPER_POSITION_POLICY.targetRiskRate, 0.04);
   assert.equal(HTE31_PAPER_POSITION_POLICY.maximumRiskRate, 0.05);
-  assert.equal(HTE31_PAPER_POSITION_POLICY.minimumTp2NetProfitRate, 0.05);
-  assert.equal(HTE31_PAPER_POSITION_POLICY.maximumTp2NetProfitRate, 0.20);
+  assert.equal(HTE31_PAPER_POSITION_POLICY.minimumTp2NetProfitUsdt, 50);
+  assert.equal(HTE31_PAPER_POSITION_POLICY.maximumMarketRiskReward, 20);
   assert.equal(HTE31_PAPER_POSITION_POLICY.maximumMarginAllocationRate, 0.60);
   assert.equal(HTE31_PAPER_POSITION_POLICY.maximumLeverage, 50);
 });
