@@ -84,6 +84,7 @@ export function buildResonanceMarketView(packet: MarketAnalysisPacket, memory: R
   const evidenceAgreement = bias === "NEUTRAL" ? 0 : evidence.filter((item) => item === bias).length;
   const evidenceConflict = bias === "NEUTRAL" ? evidence.length : evidence.filter((item) => item !== bias).length;
   const historyAligned = bias !== "NEUTRAL" && memoryBias === bias;
+  const historyConflict = fourHourBias !== "NEUTRAL" && memoryBias !== "NEUTRAL" && fourHourBias !== memoryBias;
   const confidence = Math.round(clamp(
     Math.abs(score) * 100
       + evidenceAgreement * 6
@@ -107,7 +108,8 @@ export function buildResonanceMarketView(packet: MarketAnalysisPacket, memory: R
   const headline = bias === "NEUTRAL"
     ? "大方向暂时没有形成一致意见"
     : `${environment === "趋势" ? "大周期趋势" : "当前结构"}${biasText(bias)}`;
-  const reason = `${fourHourBias === "NEUTRAL" ? "4小时结构中性" : `4小时${biasText(fourHourBias)}`}；${memory.summary}；${flowBias === "NEUTRAL" ? "实时资金流中性" : `实时资金流${biasText(flowBias)}`}。${strongDirection ? `${evidenceAgreement} 项方向证据同向。` : "证据没有达到强方向门槛，不强迫五种打法站队。"}`;
+  const conflictNote = historyConflict ? "历史经验和4小时结构冲突，主动降低方向把握。" : "";
+  const reason = `${fourHourBias === "NEUTRAL" ? "4小时结构中性" : `4小时${biasText(fourHourBias)}`}；${memory.summary}；${flowBias === "NEUTRAL" ? "实时资金流中性" : `实时资金流${biasText(flowBias)}`}。${conflictNote}${strongDirection ? `${evidenceAgreement} 项方向证据同向。` : "证据没有达到强方向门槛，不强迫五种打法站队。"}`;
 
   return {
     bias,
