@@ -81,7 +81,7 @@ test("fee-heavy narrow stop budgets fees inside 1R before choosing leverage", ()
 test("illiquid setup is rejected when its leverage cap cannot express minimum account risk", () => {
   const result = buildHte31PaperPosition(baseInput({
     stopLossPrice: 99.90,
-    originalTakeProfit2Price: 99.5,
+    originalTakeProfit2Price: 101,
     liquidityVolumeUsd: 12_000_000,
     atrPct: 0.4,
   }));
