@@ -26,6 +26,80 @@ function cognitiveSignal(signal: Hte31Signal) {
   return Boolean(signal.entryPlan?.checks.some((check) => check.key.startsWith("resonance-cognitive-")));
 }
 
+function mean(values: number[]) {
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+}
+
+function atr(candles: Hte31Candle[], period = 14) {
+  if (candles.length <= period) return null;
+  const ranges = candles.slice(1).map((candle, index) => Math.max(
+    candle.high - candle.low,
+    Math.abs(candle.high - candles[index].close),
+    Math.abs(candle.low - candles[index].close),
+  ));
+  return mean(ranges.slice(-period));
+}
+
+function volumeRatio(candles: Hte31Candle[]) {
+  if (candles.length < 22) return 1;
+  const baseline = mean(candles.slice(-21, -1).map((row) => row.volume));
+  return candles.at(-1)!.volume / Math.max(baseline, Number.EPSILON);
+}
+
+function signed(value: number | null | undefined, side: "LONG" | "SHORT") {
+  return (value ?? 0) * (side === "LONG" ? 1 : -1);
+}
+
+/**
+ * A negative trader/regime/direction cell is not allowed to deadlock paper
+ * learning. It may continue only when the current tape supplies stronger
+ * evidence than the original setup required. The extra confirmation is stored
+ * in the trade checks, which makes the trade paper-only at the live boundary.
+ */
+function strictCellChallenger(
+  signal: Hte31Signal,
+  packet: MarketAnalysisPacket,
+  candles: Hte31Candle[],
+): Hte31Signal | null {
+  if (signal.side === "WAIT" || !signal.entryPlan?.ready) return null;
+  const latest = candles.at(-1);
+  const previous = candles.at(-2);
+  const currentAtr = atr(candles);
+  if (!latest || !previous || currentAtr == null || currentAtr <= 0) return null;
+  const side = signal.side;
+  const body = Math.abs(latest.close - latest.open);
+  const directional = side === "LONG"
+    ? latest.close > latest.open && latest.close > previous.close
+    : latest.close < latest.open && latest.close < previous.close;
+  const higherTimeframeSupport = signed(packet.market.timeframeTrend1h, side) >= 0.10
+    || signed(packet.market.timeframeTrend4h, side) >= 0.10;
+  const flowSupport = signed(packet.market.spotCvdRatio, side) >= 0
+    && signed(packet.market.orderBookImbalance, side) >= -0.015;
+  const confirmed = directional
+    && body >= currentAtr * 0.22
+    && volumeRatio(candles) >= 1.08
+    && higherTimeframeSupport
+    && flowSupport;
+  if (!confirmed) return null;
+  return {
+    ...signal,
+    reasons: [...signal.reasons, "负期望组合仅通过更严格的挑战条件继续学习"],
+    entryPlan: {
+      ...signal.entryPlan,
+      checks: [
+        ...signal.entryPlan.checks,
+        {
+          key: "resonance-cognitive-cell-challenger",
+          label: "负期望组合挑战确认",
+          passed: true,
+          required: true,
+          detail: "方向K线、成交量、高周期与资金流同时确认；仅模拟，不进入实盘",
+        },
+      ],
+    },
+  };
+}
+
 async function currentSimulationEpoch(startingCapitalUsdt: number) {
   const [epoch] = await getDb().select().from(hte31SimulationEpochs)
     .orderBy(desc(hte31SimulationEpochs.startedAt)).limit(1);
@@ -56,9 +130,8 @@ async function paperAccount(startingCapitalUsdt: number) {
 /**
  * Paper learning no longer treats two losses as a reason to stop collecting
  * evidence. Safety/data/liquidity/structural-stop checks still live inside the
- * playbooks and sizing layer. A statistically weak cell may continue only via
- * a cognitively modified challenger, and that trade is marked paper-only so it
- * can never leak into Gate live trading before it proves itself.
+ * playbooks and sizing layer. Statistically weak cells continue only via a
+ * stricter paper-only challenger instead of waiting six hours for the clock.
  */
 export async function openResonancePaperTrade(
   packet: MarketAnalysisPacket,
@@ -77,8 +150,13 @@ export async function openResonancePaperTrade(
     .map((item) => {
       const side = item.signal.side as "LONG" | "SHORT";
       const learning = learningById.get(resonanceLearningId(item.traderId, item.signal.strategyMeta.assetRegime, side, packet.observedAt));
-      return { ...item, performanceGate: evaluateHte31PerformanceCell(learning, packet.observedAt) };
-    });
+      const performanceGate = evaluateHte31PerformanceCell(learning, packet.observedAt);
+      const signal = performanceGate.state === "PAUSED" && !cognitiveSignal(item.signal)
+        ? strictCellChallenger(item.signal, packet, candles)
+        : item.signal;
+      return signal ? { ...item, signal, performanceGate } : null;
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
 
   const candidates = ready
     .filter((item) => item.performanceGate.state === "ACTIVE" || cognitiveSignal(item.signal))
@@ -90,11 +168,10 @@ export async function openResonancePaperTrade(
     });
   const selected = candidates[0];
   if (!selected?.signal.entryPlan || selected.signal.side === "WAIT") {
-    const weak = ready.find((item) => item.performanceGate.state === "PAUSED");
     return {
       opened: null,
-      reason: weak
-        ? `旧规则在该环境表现偏弱；等待认知挑战版本满足新的确认条件，不再机械冷却两小时`
+      reason: signals.some((signal) => signal.state === "ready" && signal.side !== "WAIT")
+        ? "弱组合没有通过更严格的认知挑战确认；继续扫描，不做时间冷却"
         : "五种打法本轮没有完整 Setup",
     };
   }
