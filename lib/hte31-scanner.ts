@@ -12,33 +12,21 @@ import type { Hte31Candle, Hte31Signal } from "./hte31-types.ts";
 import { getSettings, type AppSettings } from "./settings-repository.ts";
 import { buildResonanceMarketMemory, type ResonanceMarketMemory } from "./resonance-market.ts";
 import { buildResonanceMarketView, type ResonanceMarketView } from "./resonance-brain.ts";
+import { buildResonanceGlobalMarket, type ResonanceGlobalMarketState } from "./resonance-global-market.ts";
 import { getResonanceSystemReview, type ResonanceSystemReview } from "./resonance-review.ts";
 import { tryOpenResonanceTrade } from "./resonance-trading.ts";
 
 export type Hte31ScanPhase = "config" | "universe" | "deep" | "candles" | "evaluate";
-
-export type Hte31MarketState = {
-  observedAt: number;
-  label: "趋势主导" | "波动扩张" | "震荡轮动" | "低波压缩";
-  permission: "GREEN" | "YELLOW";
-  confidence: number;
-  stability: number;
-  transitionRisk: number;
-  bias: "LONG" | "SHORT" | "NEUTRAL";
-  advancingRatio: number;
-  decliningRatio: number;
-  medianChangePct: number;
-  dispersionPct: number;
-  benchmarkMomentum: number;
-};
+export type Hte31MarketState = ResonanceGlobalMarketState;
 
 export type Hte31ScanJob = {
-  version: 2;
+  version: 3;
   id: string;
   phase: Hte31ScanPhase;
   startedAt: number;
   rotationOffset: number;
   attempts: Partial<Record<Hte31ScanPhase, number>>;
+  previousMarket?: Hte31MarketState | null;
   settings?: AppSettings;
   coreSymbols?: string[];
   openSymbols?: string[];
@@ -82,23 +70,6 @@ export type Hte31ScanStep =
 
 const marketExchange = getMarketExchange();
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function median(values: number[]) {
-  if (!values.length) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-}
-
-function stdev(values: number[]) {
-  if (values.length < 2) return 0;
-  const avg = values.reduce((sum, value) => sum + value, 0) / values.length;
-  return Math.sqrt(values.reduce((sum, value) => sum + (value - avg) ** 2, 0) / values.length);
-}
-
 function parseCoreSymbols(settings: AppSettings) {
   try {
     const parsed = JSON.parse(settings.coreSymbolsJson) as unknown;
@@ -108,46 +79,11 @@ function parseCoreSymbols(settings: AppSettings) {
   }
 }
 
-function marketState(universe: MarketUniverseTicker[], observedAt = Date.now()): Hte31MarketState {
-  const changes = universe.map((row) => row.changePercentage).filter(Number.isFinite);
-  const advancingRatio = universe.length ? universe.filter((row) => row.changePercentage > 0).length / universe.length : 0.5;
-  const decliningRatio = universe.length ? universe.filter((row) => row.changePercentage < 0).length / universe.length : 0.5;
-  const medianChangePct = median(changes);
-  const dispersionPct = stdev(changes);
-  const benchmarks = universe.filter((row) => row.symbol === "BTC_USDT" || row.symbol === "ETH_USDT");
-  const benchmarkMomentum = benchmarks.length ? benchmarks.reduce((sum, row) => sum + row.changePercentage, 0) / benchmarks.length : medianChangePct;
-  const participation = Math.max(advancingRatio, decliningRatio);
-  const trendStrength = Math.abs(medianChangePct) + Math.abs(benchmarkMomentum) * 0.5;
-  const label: Hte31MarketState["label"] = dispersionPct >= 5.5 ? "波动扩张"
-    : trendStrength >= 2.2 && participation >= 0.62 ? "趋势主导"
-      : dispersionPct <= 2.2 && Math.abs(medianChangePct) <= 0.9 ? "低波压缩" : "震荡轮动";
-  const bias: Hte31MarketState["bias"] = advancingRatio >= 0.62 && benchmarkMomentum > 0 ? "LONG"
-    : decliningRatio >= 0.62 && benchmarkMomentum < 0 ? "SHORT" : "NEUTRAL";
-  const transitionRisk = clamp(Math.round((Math.abs(advancingRatio - decliningRatio) < 0.12 ? 38 : 16) + Math.min(35, dispersionPct * 4)), 8, 78);
-  return {
-    observedAt,
-    label,
-    permission: universe.length >= 12 ? "GREEN" : "YELLOW",
-    confidence: clamp(Math.round(62 + Math.min(30, universe.length) * 0.7), 55, 92),
-    stability: clamp(100 - transitionRisk, 22, 94),
-    transitionRisk,
-    bias,
-    advancingRatio,
-    decliningRatio,
-    medianChangePct,
-    dispersionPct,
-    benchmarkMomentum,
-  };
-}
-
 function chooseTarget(universe: MarketUniverseTicker[], coreSymbols: string[], openSymbols: string[], rotationOffset: number) {
   const blocked = new Set(openSymbols);
   const eligible = universe.filter((row) => !blocked.has(row.symbol) && row.volumeUsd >= 12_000_000);
   if (!eligible.length) return universe.find((row) => !blocked.has(row.symbol)) ?? universe[0] ?? null;
 
-  // Spend deep-analysis requests on the best coarse opportunities instead of
-  // rotating through arbitrary liquid symbols. Core symbols still receive one
-  // slot in four so BTC/ETH and the user's watch list cannot disappear.
   const ranked = [...eligible].sort((a, b) => {
     const aScore = Math.abs(a.coarseScore) + Math.min(8, Math.abs(a.changePercentage)) * 0.08;
     const bScore = Math.abs(b.coarseScore) + Math.min(8, Math.abs(b.changePercentage)) * 0.08;
@@ -167,22 +103,23 @@ function crossSectionRank(universe: MarketUniverseTicker[], symbol: string) {
   return index < 0 ? 0.5 : index / Math.max(1, sorted.length - 1);
 }
 
-export function createHte31ScanJob(rotationOffset: number): Hte31ScanJob {
+export function createHte31ScanJob(rotationOffset: number, previousMarket: Hte31MarketState | null = null): Hte31ScanJob {
   return {
-    version: 2,
+    version: 3,
     id: crypto.randomUUID(),
     phase: "config",
     startedAt: Date.now(),
     rotationOffset,
     attempts: {},
+    previousMarket,
   };
 }
 
 export function hte31PhaseLabel(phase: Hte31ScanPhase) {
   return ({
     config: "读取运行配置",
-    universe: "扫描市场机会",
-    deep: "分析当前目标",
+    universe: "扫描整体市场",
+    deep: "分析当前币种",
     candles: "读取历史与多周期结构",
     evaluate: "五种交易打法评估",
   } satisfies Record<Hte31ScanPhase, string>)[phase];
@@ -209,7 +146,7 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
     if (!job.settings || !job.coreSymbols || !job.openSymbols) throw new Error("Resonance scan missing config state");
     const universe = await marketExchange.fetchUniverse(job.settings.universeLimit, job.coreSymbols);
     if (!universe.length) throw new Error(`${marketExchange.label} Universe 返回空列表`);
-    const market = marketState(universe);
+    const market = buildResonanceGlobalMarket(universe, job.previousMarket ?? null);
     const target = chooseTarget(universe, job.coreSymbols, job.openSymbols, job.rotationOffset);
     if (!target) throw new Error("Resonance scan 没有可用深扫目标");
     return { kind: "progress", job: { ...job, phase: "deep", universe, market, target } };
@@ -255,7 +192,7 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
       throw new Error("Resonance scan evaluate state incomplete");
     }
     const packet = job.packet;
-    const baseSignals = evaluateHumanTraderPool({
+    const commonInput = {
       symbol: packet.symbol,
       observedAt: packet.observedAt,
       futuresPrice: packet.market.futuresPrice,
@@ -279,40 +216,18 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
       rotationVelocity: 0,
       marketAdvancingRatio: job.market.advancingRatio,
       marketDecliningRatio: job.market.decliningRatio,
-    });
-    const advancedSignals = evaluateAdvancedHumanTraders({
-      symbol: packet.symbol,
-      observedAt: packet.observedAt,
-      futuresPrice: packet.market.futuresPrice,
-      volumeUsd: packet.market.volumeUsd,
-      changePercentage: packet.market.changePercentage,
-      fundingRate: packet.market.fundingRate,
-      openInterestChangePct: packet.market.openInterestChangePct,
-      spotCvdRatio: packet.market.spotCvdRatio,
-      orderBookImbalance: packet.market.orderBookImbalance,
-      liquidationImbalance: packet.market.liquidationImbalance,
-      multiTimeframeTrend: packet.market.multiTimeframeTrend,
-      timeframeTrend15m: packet.market.timeframeTrend15m,
-      timeframeTrend1h: packet.market.timeframeTrend1h,
-      timeframeTrend4h: packet.market.timeframeTrend4h,
-      benchmarkMomentum: job.market.benchmarkMomentum,
-      optionsIvPercentile: packet.market.optionsIvPercentile,
-      macroEventRisk: packet.market.macroEventRisk,
-      dataQuality: packet.decision.dataQuality,
-      candles5m: job.candles,
-      crossSectionRank: crossSectionRank(job.universe, packet.symbol),
-      rotationVelocity: 0,
-      marketAdvancingRatio: job.market.advancingRatio,
-      marketDecliningRatio: job.market.decliningRatio,
-    });
-    const signals = [...baseSignals, ...advancedSignals];
+    };
+    const signals = [
+      ...evaluateHumanTraderPool(commonInput),
+      ...evaluateAdvancedHumanTraders(commonInput),
+    ];
     await recordHte31Evaluations(packet, signals);
     try {
       await recordHte31DiagnosticCycle(packet, signals, job.settings);
     } catch (error) {
       console.error("Resonance diagnostic cycle failed", error instanceof Error ? error.message : "unknown diagnostic error");
     }
-    const opened = await tryOpenResonanceTrade(packet, signals, job.candles, job.settings, job.marketView, job.review);
+    const opened = await tryOpenResonanceTrade(packet, signals, job.candles, job.settings, job.market, job.marketView, job.review);
     const result: Hte31ScanCompleted = {
       observedAt: Date.now(),
       target: packet.symbol,
