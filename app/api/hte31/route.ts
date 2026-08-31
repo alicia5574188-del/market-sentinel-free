@@ -28,6 +28,27 @@ function fmtPf(value: number | null) {
   return value == null ? "--" : value >= 99 ? "∞" : value.toFixed(2);
 }
 
+function biasText(value: "LONG" | "SHORT" | "NEUTRAL") {
+  return value === "LONG" ? "偏多" : value === "SHORT" ? "偏空" : "方向中性";
+}
+
+function dashboardMarketView(readModel: Hte31ScanCompleted) {
+  const market = readModel.market;
+  const asset = readModel.marketView;
+  const pending = market.pendingLabel
+    ? `检测到 ${market.pendingLabel}${market.pendingBias === "NEUTRAL" ? "" : market.pendingBias === "LONG" ? "偏多" : "偏空"}，正在确认 ${market.pendingConfirmations}/${market.requiredConfirmations}，正式状态暂不翻转。`
+    : market.transitionNote;
+  return {
+    ...asset,
+    bias: market.bias,
+    confidence: market.confidence,
+    environment: market.label,
+    headline: `整体市场：${market.label} · ${biasText(market.bias)}`,
+    reason: `${pending} 当前深扫 ${readModel.target.replace("_USDT", "")}：${asset.headline}。下方历史相似行情属于这个当前币种，用来辅助具体进场，不会冒充整个市场。`,
+    strongDirection: market.bias !== "NEUTRAL" && market.stability >= 58 && market.transitionRisk < 64,
+  };
+}
+
 function enrichDashboardDiagnostics(
   dashboard: Awaited<ReturnType<typeof getHte31Dashboard>>,
   diagnostics: Awaited<ReturnType<typeof getHte31Diagnostics>>,
@@ -46,10 +67,6 @@ function enrichDashboardDiagnostics(
     const shadowText = traderId === "turtle_soup"
       ? "HT3 暂不参与旧 Near-Ready 校准"
       : `旧 Near-Ready 影子完成 ${shadow.completed} / 观察中 ${shadow.pending} · PF ${fmtPf(shadow.profitFactor)} · Exp ${shadow.expectancyR >= 0 ? "+" : ""}${shadow.expectancyR.toFixed(2)}R${shadow.qualifiesForCalibration ? " · 已达到校准样本门槛" : " · 尚未达到 30 样本校准门槛"}`;
-    // The cognitive paper executor no longer consumes the legacy two-loss
-    // cooldown guard. Keep the loss streak visible as evidence, but do not tell
-    // the owner that paper learning is sleeping when it is still collecting and
-    // diagnosing samples.
     if (guard.state === "COOLDOWN") {
       guard.state = "ACTIVE";
       guard.reason = `连续亏损 ${guard.lossStreak} 笔已交给认知复盘；模拟学习继续运行，不做机械时间冷却`;
@@ -57,10 +74,6 @@ function enrichDashboardDiagnostics(
     guard.reason = `${guard.reason} · 1h 评估 ${hour.evaluations} / READY ${hour.ready} / Near-Ready ${hour.nearReady}${top ? ` · 常缺：${top}` : ""} · 最近：${near} · 6h READY ${sixHours.ready}/${sixHours.evaluations} · ${shadowText}`;
   }
 
-  // Paper learning uses full nominal sizing unless a trade fails the real
-  // structural/data/economic gates. The old account loss multiplier remains in
-  // the legacy repository for compatibility, but it no longer controls new
-  // Resonance paper entries.
   dashboard.governance.state = "NORMAL";
   dashboard.governance.riskMultiplier = 1;
   dashboard.governance.reason = "认知学习模式：连续亏损触发归因、挑战方案和影子验证；不再用两小时/六小时冷却或缩仓代替思考。";
@@ -118,6 +131,10 @@ export async function GET() {
   if (scannerStatus?.lastError) errors.scannerRuntime = scannerStatus.lastError;
   if (positionStatus?.lastError) errors.positionRuntime = positionStatus.lastError;
 
+  const displayReadModel = readModel
+    ? { ...readModel, marketView: dashboardMarketView(readModel) }
+    : null;
+
   return Response.json({
     version: "resonance-v2-cognitive",
     requestedAt,
@@ -126,10 +143,12 @@ export async function GET() {
     scanner: {
       status: scannerStatus,
       ageMs: scannerAgeMs,
-      readModel,
+      // Existing clients keep the same shape, but the dashboard headline now
+      // represents the stable whole market rather than whichever coin happened
+      // to be deep-scanned in this minute.
+      readModel: displayReadModel,
     },
     position: { status: positionStatus },
-    // Whole-market state is independent from the currently deep-scanned asset.
     market: readModel?.market ?? null,
     asset: readModel ? {
       symbol: readModel.target,
