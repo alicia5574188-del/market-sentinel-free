@@ -1,22 +1,20 @@
 import type { Metadata, Viewport } from "next";
 import { requireChatGPTUser } from "./chatgpt-auth";
 import "./globals.css";
-import "./hte31.css";
-import "./hte31-economics.css";
-import "./hte31-chart.css";
+import "./resonance.css";
 
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://market-sentinel-free.alicia5574188.workers.dev"),
-  title: "Market Sentinel｜HTE 3.1 Clean",
-  description: "Sentinel HTE 3.1 Clean：独立交易员、全新模拟账本、独立持仓管理与出场后复盘学习。",
-  applicationName: "Market Sentinel",
+  title: "Resonance｜自适应交易系统",
+  description: "Resonance：结合当前市场结构、历史相似行情、五种交易打法与阶段复盘的自适应交易系统。",
+  applicationName: "Resonance",
   manifest: "/manifest.webmanifest",
   formatDetection: { telephone: false },
   appleWebApp: {
     capable: true,
-    title: "行情哨兵",
+    title: "Resonance",
     statusBarStyle: "black-translucent",
   },
   icons: {
@@ -26,14 +24,14 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     locale: "zh_CN",
-    title: "Market Sentinel｜HTE 3.1 Clean",
-    description: "Clean Scanner · 独立交易员 · 新账本 · Post-Exit Observer",
-    images: [{ url: "/og.png", width: 1200, height: 630, alt: "Market Sentinel HTE 3.1 Clean" }],
+    title: "Resonance｜自适应交易系统",
+    description: "市场判断 · 历史记忆 · 五种打法 · 整体复盘",
+    images: [{ url: "/og.png", width: 1200, height: 630, alt: "Resonance" }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Market Sentinel｜HTE 3.1 Clean",
-    description: "Clean Scanner · 独立交易员 · 新账本 · Post-Exit Observer",
+    title: "Resonance｜自适应交易系统",
+    description: "市场判断 · 历史记忆 · 五种打法 · 整体复盘",
     images: ["/og.png"],
   },
 };
@@ -43,7 +41,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   viewportFit: "cover",
   colorScheme: "dark",
-  themeColor: "#06111a",
+  themeColor: "#06131c",
 };
 
 export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
