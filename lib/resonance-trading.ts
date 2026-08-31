@@ -112,6 +112,7 @@ function exceptionalBreakout(signal: Hte31Signal, packet: MarketAnalysisPacket, 
 
 function withCognitiveCheck(signal: Hte31Signal, key: string, label: string, detail: string): Hte31Signal {
   if (!signal.entryPlan) return signal;
+  if (signal.entryPlan.checks.some((check) => check.key === key)) return signal;
   return {
     ...signal,
     reasons: [...signal.reasons, label],
@@ -264,6 +265,16 @@ function marketTarget(
   };
 }
 
+function markLearnedPolicyCandidate(signal: Hte31Signal, review: ResonanceSystemReview) {
+  if (!review.directives.length || signal.side === "WAIT" || !signal.entryPlan) return signal;
+  return withCognitiveCheck(
+    signal,
+    "resonance-cognitive-policy",
+    "学习规则候选，仅模拟验证",
+    `当前复盘指令：${review.directives.join(",")}；在足够对照样本证明改善前禁止进入 Gate 实盘`,
+  );
+}
+
 function conflictsWithDirection(
   signal: Hte31Signal,
   packet: MarketAnalysisPacket,
@@ -312,7 +323,9 @@ export async function tryOpenResonanceTrade(
     .map((signal) => improveEntryTiming(signal, packet, candles, marketView))
     .map((signal) => applyCognitiveEntryLearning(signal, packet, candles, marketView, review));
   const directionEligible = timedSignals.filter((signal) => !conflictsWithDirection(signal, packet, globalMarket, marketView, review));
-  const eligibleSignals = directionEligible.map((signal) => marketTarget(signal, packet, candles, marketView, review.directives));
+  const eligibleSignals = directionEligible
+    .map((signal) => marketTarget(signal, packet, candles, marketView, review.directives))
+    .map((signal) => markLearnedPolicyCandidate(signal, review));
 
   if (eligibleSignals.length !== signals.length && !eligibleSignals.some((signal) => signal.state === "ready" && signal.entryPlan?.ready)) {
     const pending = globalMarket.pendingLabel
