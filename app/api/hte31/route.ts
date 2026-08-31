@@ -21,7 +21,7 @@ type CleanPositionStub = {
 };
 
 function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : "unknown HTE 3.1 runtime error";
+  return error instanceof Error ? error.message : "unknown Resonance runtime error";
 }
 
 function fmtPf(value: number | null) {
@@ -44,11 +44,26 @@ function enrichDashboardDiagnostics(
       ? `${hour.nearest.symbol.replace("_USDT", "")} 还差 ${hour.nearest.failed.map((item) => item.label).join(" + ")}`
       : hour.nearest ? `${hour.nearest.symbol.replace("_USDT", "")} 已接近完整 Setup` : "暂无近似候选";
     const shadowText = traderId === "turtle_soup"
-      ? "HT3 暂不参与放宽影子验证"
-      : `Near-Ready 影子完成 ${shadow.completed} / 观察中 ${shadow.pending} · PF ${fmtPf(shadow.profitFactor)} · Exp ${shadow.expectancyR >= 0 ? "+" : ""}${shadow.expectancyR.toFixed(2)}R${shadow.qualifiesForCalibration ? " · 已达到校准样本门槛" : " · 尚未达到 30 样本校准门槛"}`;
+      ? "HT3 暂不参与旧 Near-Ready 校准"
+      : `旧 Near-Ready 影子完成 ${shadow.completed} / 观察中 ${shadow.pending} · PF ${fmtPf(shadow.profitFactor)} · Exp ${shadow.expectancyR >= 0 ? "+" : ""}${shadow.expectancyR.toFixed(2)}R${shadow.qualifiesForCalibration ? " · 已达到校准样本门槛" : " · 尚未达到 30 样本校准门槛"}`;
+    // The cognitive paper executor no longer consumes the legacy two-loss
+    // cooldown guard. Keep the loss streak visible as evidence, but do not tell
+    // the owner that paper learning is sleeping when it is still collecting and
+    // diagnosing samples.
+    if (guard.state === "COOLDOWN") {
+      guard.state = "ACTIVE";
+      guard.reason = `连续亏损 ${guard.lossStreak} 笔已交给认知复盘；模拟学习继续运行，不做机械时间冷却`;
+    }
     guard.reason = `${guard.reason} · 1h 评估 ${hour.evaluations} / READY ${hour.ready} / Near-Ready ${hour.nearReady}${top ? ` · 常缺：${top}` : ""} · 最近：${near} · 6h READY ${sixHours.ready}/${sixHours.evaluations} · ${shadowText}`;
   }
-  dashboard.governance.reason = `${dashboard.governance.reason} · 风险预算倍率 ${Math.round(dashboard.governance.riskMultiplier * 100)}%：新模拟单按账户权益约4%规划风险，并限制在3%–5%；TP2扣费后目标5%–20%，仓位与目标先调整，不能满足安全边界才拒绝。`;
+
+  // Paper learning uses full nominal sizing unless a trade fails the real
+  // structural/data/economic gates. The old account loss multiplier remains in
+  // the legacy repository for compatibility, but it no longer controls new
+  // Resonance paper entries.
+  dashboard.governance.state = "NORMAL";
+  dashboard.governance.riskMultiplier = 1;
+  dashboard.governance.reason = "认知学习模式：连续亏损触发归因、挑战方案和影子验证；不再用两小时/六小时冷却或缩仓代替思考。";
 }
 
 export async function GET() {
@@ -65,11 +80,8 @@ export async function GET() {
   let readModel: Hte31ScanCompleted | null = null;
 
   if (!scanner || !position) {
-    errors.bindings = "HTE 3.1 Clean Durable Object bindings unavailable";
+    errors.bindings = "Resonance Durable Object bindings unavailable";
   } else {
-    // The dashboard is deliberately observer-only. Opening the iPhone/web app
-    // must never be required to start or heal market scanning. Cloudflare Cron
-    // and Durable Object alarms are the only runtime drivers.
     const settled = await Promise.allSettled([
       scanner.status(),
       position.status(),
@@ -101,13 +113,13 @@ export async function GET() {
   const lastSuccessAt = scannerStatus?.lastSuccessAt ?? readModel?.observedAt ?? null;
   const scannerAgeMs = lastSuccessAt == null ? null : Math.max(0, requestedAt - lastSuccessAt);
   if (scannerAgeMs != null && scannerAgeMs > SCANNER_STALE_MS) {
-    errors.scannerFreshness = `Clean Scanner 已 ${Math.round(scannerAgeMs / 1000)} 秒没有完成新评估`;
+    errors.scannerFreshness = `Resonance Scanner 已 ${Math.round(scannerAgeMs / 1000)} 秒没有完成新评估`;
   }
   if (scannerStatus?.lastError) errors.scannerRuntime = scannerStatus.lastError;
   if (positionStatus?.lastError) errors.positionRuntime = positionStatus.lastError;
 
   return Response.json({
-    version: "hte-3.1-clean",
+    version: "resonance-v2-cognitive",
     requestedAt,
     observedAt: lastSuccessAt ?? requestedAt,
     account: auth.account,
@@ -117,7 +129,21 @@ export async function GET() {
       readModel,
     },
     position: { status: positionStatus },
+    // Whole-market state is independent from the currently deep-scanned asset.
     market: readModel?.market ?? null,
+    asset: readModel ? {
+      symbol: readModel.target,
+      view: readModel.marketView,
+      memory: readModel.memory,
+    } : null,
+    decisionChain: readModel ? {
+      wholeMarket: readModel.market,
+      symbol: readModel.target,
+      symbolView: readModel.marketView,
+      historicalMemory: readModel.memory,
+      latestReview: readModel.review,
+      openReason: readModel.openReason,
+    } : null,
     dashboard,
     diagnostics,
     degraded: Object.keys(errors).length > 0,
