@@ -18,8 +18,9 @@ export const metadata: Metadata = {
     statusBarStyle: "black-translucent",
   },
   icons: {
-    icon: "/favicon.svg",
-    apple: "/favicon.svg",
+    icon: "/resonance-icon-v1.svg",
+    shortcut: "/resonance-icon-v1.svg",
+    apple: "/resonance-icon-v1.svg",
   },
   openGraph: {
     type: "website",
