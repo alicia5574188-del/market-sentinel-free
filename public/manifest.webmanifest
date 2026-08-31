@@ -1,17 +1,18 @@
 {
-  "name": "Market Sentinel 行情哨兵",
-  "short_name": "行情哨兵",
-  "description": "实时监测加密市场，并用支持证据、反证与失效条件解释每一次提醒。",
+  "id": "/",
+  "name": "Resonance 自适应交易系统",
+  "short_name": "Resonance",
+  "description": "结合市场结构、历史相似行情、五种交易打法与阶段复盘的自适应交易系统。",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#071019",
-  "theme_color": "#071019",
+  "background_color": "#06131c",
+  "theme_color": "#06131c",
   "lang": "zh-CN",
   "icons": [
     {
-      "src": "/favicon.svg",
+      "src": "/resonance-icon-v1.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any maskable"
