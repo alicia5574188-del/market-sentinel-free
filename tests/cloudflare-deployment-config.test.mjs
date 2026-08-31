@@ -50,12 +50,12 @@ test("legacy DO exports are isolated tombstones that self-retire orphaned alarms
   assert.match(source, /HTE31MarketScanner, HTE31TradeManager/);
 });
 
-test("Clean scanner is phased and cannot restart the whole old scan loop", async () => {
+test("Resonance scanner is phased and cannot restart the whole old scan loop", async () => {
   const [worker, scanner] = await Promise.all([
     readFile(new URL("../worker/hte31-workers.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/hte31-scanner.ts", import.meta.url), "utf8"),
   ]);
-  assert.match(worker, /CLEAN_RUNTIME_VERSION = "hte31-low-write-1"/);
+  assert.match(worker, /CLEAN_RUNTIME_VERSION = "resonance-v1"/);
   assert.match(worker, /export class HTE31MarketScanner/);
   assert.match(worker, /createHte31ScanJob/);
   assert.match(worker, /priorAttempt >= 3/);
