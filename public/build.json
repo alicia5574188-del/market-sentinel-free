@@ -1,0 +1,7 @@
+{
+  "product": "Resonance",
+  "release": "resonance-expectancy-v2",
+  "strategyCommit": "2faefd68de2440fc0388c57451e0b447cb517075",
+  "releasedAt": "2026-08-31T14:25:08Z",
+  "purpose": "Public deployment marker only; contains no credentials or private runtime data."
+}
