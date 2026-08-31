@@ -1,11 +1,19 @@
-import { analyzeGateSymbol, fetchGateChartCandles, fetchGateUniverse, type GateAnalysisPacket, type UniverseTicker } from "./gate-client.ts";
+import {
+  getMarketExchange,
+  type MarketAnalysisPacket,
+  type MarketUniverseTicker,
+} from "./exchange-market.ts";
 import { recordHte31DiagnosticCycle } from "./hte31-diagnostics.ts";
 import { evaluateHumanTraderPool } from "./hte31-human-trader-engine.ts";
 import { evaluateAdvancedHumanTraders } from "./hte31-advanced-traders.ts";
 import { getGlobalRiskContext } from "./global-risk.ts";
-import { getHte31Dashboard, listHte31OpenTrades, recordHte31Evaluations, tryOpenHte31Trade } from "./hte31-repository.ts";
+import { getHte31Dashboard, listHte31OpenTrades, recordHte31Evaluations } from "./hte31-repository.ts";
 import type { Hte31Candle, Hte31Signal } from "./hte31-types.ts";
 import { getSettings, type AppSettings } from "./settings-repository.ts";
+import { buildResonanceMarketMemory, type ResonanceMarketMemory } from "./resonance-market.ts";
+import { buildResonanceMarketView, type ResonanceMarketView } from "./resonance-brain.ts";
+import { getResonanceSystemReview, type ResonanceSystemReview } from "./resonance-review.ts";
+import { tryOpenResonanceTrade } from "./resonance-trading.ts";
 
 export type Hte31ScanPhase = "config" | "universe" | "deep" | "candles" | "evaluate";
 
@@ -25,7 +33,7 @@ export type Hte31MarketState = {
 };
 
 export type Hte31ScanJob = {
-  version: 1;
+  version: 2;
   id: string;
   phase: Hte31ScanPhase;
   startedAt: number;
@@ -34,11 +42,14 @@ export type Hte31ScanJob = {
   settings?: AppSettings;
   coreSymbols?: string[];
   openSymbols?: string[];
-  universe?: UniverseTicker[];
+  universe?: MarketUniverseTicker[];
   market?: Hte31MarketState;
-  target?: UniverseTicker;
-  packet?: GateAnalysisPacket;
+  target?: MarketUniverseTicker;
+  packet?: MarketAnalysisPacket;
   candles?: Hte31Candle[];
+  memory?: ResonanceMarketMemory;
+  marketView?: ResonanceMarketView;
+  review?: ResonanceSystemReview;
   signals?: Hte31Signal[];
   openedTradeId?: string | null;
   openReason?: string;
@@ -47,9 +58,12 @@ export type Hte31ScanJob = {
 export type Hte31ScanCompleted = {
   observedAt: number;
   target: string;
-  universe: UniverseTicker[];
+  universe: MarketUniverseTicker[];
   market: Hte31MarketState;
-  packet: GateAnalysisPacket;
+  packet: MarketAnalysisPacket;
+  memory: ResonanceMarketMemory;
+  marketView: ResonanceMarketView;
+  review: ResonanceSystemReview;
   signals: Hte31Signal[];
   openedTradeId: string | null;
   openReason: string;
@@ -65,6 +79,8 @@ export type Hte31ScanStep =
   | { kind: "progress"; job: Hte31ScanJob }
   | { kind: "paused"; observedAt: number }
   | { kind: "completed"; result: Hte31ScanCompleted };
+
+const marketExchange = getMarketExchange();
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -92,7 +108,7 @@ function parseCoreSymbols(settings: AppSettings) {
   }
 }
 
-function marketState(universe: UniverseTicker[], observedAt = Date.now()): Hte31MarketState {
+function marketState(universe: MarketUniverseTicker[], observedAt = Date.now()): Hte31MarketState {
   const changes = universe.map((row) => row.changePercentage).filter(Number.isFinite);
   const advancingRatio = universe.length ? universe.filter((row) => row.changePercentage > 0).length / universe.length : 0.5;
   const decliningRatio = universe.length ? universe.filter((row) => row.changePercentage < 0).length / universe.length : 0.5;
@@ -124,7 +140,7 @@ function marketState(universe: UniverseTicker[], observedAt = Date.now()): Hte31
   };
 }
 
-function chooseTarget(universe: UniverseTicker[], coreSymbols: string[], openSymbols: string[], rotationOffset: number) {
+function chooseTarget(universe: MarketUniverseTicker[], coreSymbols: string[], openSymbols: string[], rotationOffset: number) {
   const blocked = new Set(openSymbols);
   const eligible = universe.filter((row) => !blocked.has(row.symbol) && row.volumeUsd >= 12_000_000);
   if (!eligible.length) return universe.find((row) => !blocked.has(row.symbol)) ?? universe[0] ?? null;
@@ -133,13 +149,13 @@ function chooseTarget(universe: UniverseTicker[], coreSymbols: string[], openSym
     return [...eligible].sort((a, b) => Math.abs(b.coarseScore) - Math.abs(a.coarseScore))[0];
   }
   if (phase === 1) {
-    const core = coreSymbols.map((symbol) => eligible.find((row) => row.symbol === symbol)).filter((row): row is UniverseTicker => Boolean(row));
+    const core = coreSymbols.map((symbol) => eligible.find((row) => row.symbol === symbol)).filter((row): row is MarketUniverseTicker => Boolean(row));
     if (core.length) return core[Math.floor(rotationOffset / 3) % core.length];
   }
   return eligible[Math.floor(rotationOffset / 3) % eligible.length];
 }
 
-function crossSectionRank(universe: UniverseTicker[], symbol: string) {
+function crossSectionRank(universe: MarketUniverseTicker[], symbol: string) {
   const sorted = [...universe].sort((a, b) => a.changePercentage - b.changePercentage);
   const index = sorted.findIndex((row) => row.symbol === symbol);
   return index < 0 ? 0.5 : index / Math.max(1, sorted.length - 1);
@@ -147,7 +163,7 @@ function crossSectionRank(universe: UniverseTicker[], symbol: string) {
 
 export function createHte31ScanJob(rotationOffset: number): Hte31ScanJob {
   return {
-    version: 1,
+    version: 2,
     id: crypto.randomUUID(),
     phase: "config",
     startedAt: Date.now(),
@@ -158,11 +174,11 @@ export function createHte31ScanJob(rotationOffset: number): Hte31ScanJob {
 
 export function hte31PhaseLabel(phase: Hte31ScanPhase) {
   return ({
-    config: "Clean 配置 / 持仓隔离",
-    universe: "Gate Universe 粗扫",
-    deep: "单币 Gate 深度分析",
-    candles: "18h · 5m K线窗口",
-    evaluate: "HT1 / HT2 / HT3 独立评估",
+    config: "读取运行配置",
+    universe: "扫描市场机会",
+    deep: "分析当前目标",
+    candles: "读取历史与多周期结构",
+    evaluate: "五种交易打法评估",
   } satisfies Record<Hte31ScanPhase, string>)[phase];
 }
 
@@ -184,19 +200,19 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
   }
 
   if (job.phase === "universe") {
-    if (!job.settings || !job.coreSymbols || !job.openSymbols) throw new Error("Clean scan missing config state");
-    const universe = await fetchGateUniverse(job.settings.universeLimit, job.coreSymbols);
-    if (!universe.length) throw new Error("Gate Universe 返回空列表");
+    if (!job.settings || !job.coreSymbols || !job.openSymbols) throw new Error("Resonance scan missing config state");
+    const universe = await marketExchange.fetchUniverse(job.settings.universeLimit, job.coreSymbols);
+    if (!universe.length) throw new Error(`${marketExchange.label} Universe 返回空列表`);
     const market = marketState(universe);
     const target = chooseTarget(universe, job.coreSymbols, job.openSymbols, job.rotationOffset);
-    if (!target) throw new Error("Clean scan 没有可用深扫目标");
+    if (!target) throw new Error("Resonance scan 没有可用深扫目标");
     return { kind: "progress", job: { ...job, phase: "deep", universe, market, target } };
   }
 
   if (job.phase === "deep") {
-    if (!job.target || !job.market || !job.settings) throw new Error("Clean scan missing target state");
+    if (!job.target || !job.market || !job.settings) throw new Error("Resonance scan missing target state");
     const globalRisk = await getGlobalRiskContext();
-    const packet = await analyzeGateSymbol(job.target.symbol, {
+    const packet = await marketExchange.analyzeSymbol(job.target.symbol, {
       global: {
         benchmarkMomentum: globalRisk.benchmarkMomentum ?? job.market.benchmarkMomentum,
         macroEventRisk: globalRisk.macroEventRisk,
@@ -213,16 +229,24 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
   }
 
   if (job.phase === "candles") {
-    if (!job.target) throw new Error("Clean scan missing candle target");
+    if (!job.target || !job.packet) throw new Error("Resonance scan missing candle target");
     const now = Date.now();
-    const candles = await fetchGateChartCandles(job.target.symbol, now - 18 * 60 * 60_000, now);
+    const [candles, hourly, fourHour, daily, review] = await Promise.all([
+      marketExchange.fetchChartCandles(job.target.symbol, now - 18 * 60 * 60_000, now),
+      marketExchange.fetchHistoricalCandles(job.target.symbol, "1h", 260),
+      marketExchange.fetchHistoricalCandles(job.target.symbol, "4h", 260),
+      marketExchange.fetchHistoricalCandles(job.target.symbol, "1d", 320),
+      getResonanceSystemReview(),
+    ]);
     if (candles.length < 34) throw new Error(`5m K线不足：${candles.length} 根`);
-    return { kind: "progress", job: { ...job, phase: "evaluate", candles } };
+    const memory = buildResonanceMarketMemory({ hourly, fourHour, daily });
+    const marketView = buildResonanceMarketView(job.packet, memory);
+    return { kind: "progress", job: { ...job, phase: "evaluate", candles, memory, marketView, review } };
   }
 
   if (job.phase === "evaluate") {
-    if (!job.packet || !job.candles || !job.universe || !job.market || !job.settings || !job.target || !job.coreSymbols) {
-      throw new Error("Clean scan evaluate state incomplete");
+    if (!job.packet || !job.candles || !job.universe || !job.market || !job.settings || !job.target || !job.coreSymbols || !job.memory || !job.marketView || !job.review) {
+      throw new Error("Resonance scan evaluate state incomplete");
     }
     const packet = job.packet;
     const baseSignals = evaluateHumanTraderPool({
@@ -280,17 +304,18 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
     try {
       await recordHte31DiagnosticCycle(packet, signals, job.settings);
     } catch (error) {
-      // Diagnostics and shadow learning are strictly auxiliary. They must never
-      // prevent a valid Human Trader Setup from reaching the simulation ledger.
-      console.error("HTE 3.1 diagnostic cycle failed", error instanceof Error ? error.message : "unknown diagnostic error");
+      console.error("Resonance diagnostic cycle failed", error instanceof Error ? error.message : "unknown diagnostic error");
     }
-    const opened = await tryOpenHte31Trade(packet, signals, job.candles, job.settings);
+    const opened = await tryOpenResonanceTrade(packet, signals, job.candles, job.settings, job.marketView, job.review);
     const result: Hte31ScanCompleted = {
       observedAt: Date.now(),
       target: packet.symbol,
       universe: job.universe,
       market: { ...job.market, observedAt: Date.now() },
       packet,
+      memory: job.memory,
+      marketView: job.marketView,
+      review: job.review,
       signals,
       openedTradeId: opened.opened?.id ?? null,
       openReason: opened.reason,
@@ -304,7 +329,7 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
     return { kind: "completed", result };
   }
 
-  throw new Error(`Unexpected Clean scan phase: ${job.phase}`);
+  throw new Error(`Unexpected Resonance scan phase: ${job.phase}`);
 }
 
 export async function getHte31RuntimeDashboard() {
