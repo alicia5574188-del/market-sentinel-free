@@ -35,17 +35,6 @@ jobs:
       - name: Strategy, risk and migration tests
         run: npm run test:signals
       - name: Production build and UI safety tests
-        shell: bash
-        run: |
-          set -o pipefail
-          npm test 2>&1 | tee ci-ui.log
-      - name: Upload UI diagnostic log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: resonance-ui-ci-log
-          path: ci-ui.log
-          if-no-files-found: ignore
-          retention-days: 1
+        run: npm test
       - name: Wrangler production deploy dry-run
         run: npx wrangler deploy --dry-run --config dist/server/wrangler.json
