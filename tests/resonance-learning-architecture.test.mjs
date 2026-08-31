@@ -37,14 +37,25 @@ test("two similar failures create a diagnosis directive instead of a two-hour pa
   assert.doesNotMatch(execution, /getHte31Governance|COOLDOWN|2 \* 60 \* 60_000/);
 });
 
-test("weak strategies continue only through a paper-only cognitive challenger", () => {
+test("weak strategies and weak performance cells continue only through strict paper challengers", () => {
   assert.match(review, /challengerSetupId/);
   assert.match(review, /items\.length >= 8 && averageR <= -0\.20/);
   assert.match(trading, /resonance-cognitive-challenger/);
+  assert.match(execution, /strictCellChallenger/);
+  assert.match(execution, /resonance-cognitive-cell-challenger/);
   assert.match(execution, /PAPER_REVALIDATION_ONLY/);
   assert.match(execution, /COGNITIVE_ADAPTATION/);
   assert.match(liveRepository, /isPaperRevalidationTrade/);
   assert.match(liveRepository, /模拟复考单禁止进入 Gate 实盘/);
+});
+
+test("learned behavior changes are paper-only until validation proves improvement", () => {
+  assert.match(trading, /markLearnedPolicyCandidate/);
+  assert.match(trading, /resonance-cognitive-policy/);
+  assert.match(trading, /在足够对照样本证明改善前禁止进入 Gate 实盘/);
+  assert.match(execution, /check\.key\.startsWith\("resonance-cognitive-"\)/);
+  assert.match(execution, /paperOnly \? `\$\{PAPER_ONLY_MARKER\}/);
+  assert.match(liveRepository, /PAPER_REVALIDATION_ONLY/);
 });
 
 test("whole-market state has inertia and a direct bull-bear flip requires stronger confirmation", () => {
