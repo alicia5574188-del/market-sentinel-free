@@ -1,7 +1,8 @@
-import { asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { hte31TradeCharts, hte31Trades } from "../db/hte31-schema";
 import { buildHte31Counterfactual } from "./hte31-counterfactual.ts";
+import { RESONANCE_V1_STARTED_AT } from "./resonance-governance.ts";
 import { getSettings } from "./settings-repository.ts";
 import type { Hte31Candle } from "./hte31-types.ts";
 
@@ -92,9 +93,13 @@ function issueLabel(issue: ResonanceReviewIssue) {
 
 export async function getResonanceSystemReview(): Promise<ResonanceSystemReview> {
   const db = getDb();
+  const currentVersion = and(
+    eq(hte31Trades.status, "closed"),
+    gte(hte31Trades.entryAt, RESONANCE_V1_STARTED_AT),
+  );
   const [{ count: totalRaw }, rows, settings] = await Promise.all([
-    db.select({ count: sql<number>`count(*)` }).from(hte31Trades).where(eq(hte31Trades.status, "closed")),
-    db.select().from(hte31Trades).where(eq(hte31Trades.status, "closed")).orderBy(asc(hte31Trades.exitAt)).limit(500),
+    db.select({ count: sql<number>`count(*)` }).from(hte31Trades).where(currentVersion),
+    db.select().from(hte31Trades).where(currentVersion).orderBy(asc(hte31Trades.exitAt)).limit(500),
     getSettings(),
   ]);
   const total = Number(totalRaw ?? rows.length);
@@ -109,8 +114,8 @@ export async function getResonanceSystemReview(): Promise<ResonanceSystemReview>
       issue: "insufficient",
       issueLabel: "样本积累中",
       headline: `还差 ${5 - nextReviewProgress} 笔完成第一次整体复盘`,
-      evidence: ["系统会把方向、进场、退出和盈亏结构放在一起复盘，而不是只看胜率。"],
-      action: "继续收集样本，不因少量交易直接改策略。",
+      evidence: ["旧版本交易继续保留在历史记录中，但 Resonance 只用当前版本的新交易决定是否调整当前策略。"],
+      action: "继续收集当前版本样本，不因旧版本亏损直接限制新策略。",
       status: "观察",
       directive: "none",
       latest: { averageR: 0, directionErrorRate: 0, poorEntryRate: 0, poorExitRate: 0 },
