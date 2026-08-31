@@ -144,15 +144,21 @@ function chooseTarget(universe: MarketUniverseTicker[], coreSymbols: string[], o
   const blocked = new Set(openSymbols);
   const eligible = universe.filter((row) => !blocked.has(row.symbol) && row.volumeUsd >= 12_000_000);
   if (!eligible.length) return universe.find((row) => !blocked.has(row.symbol)) ?? universe[0] ?? null;
-  const phase = rotationOffset % 3;
-  if (phase === 0) {
-    return [...eligible].sort((a, b) => Math.abs(b.coarseScore) - Math.abs(a.coarseScore))[0];
-  }
-  if (phase === 1) {
-    const core = coreSymbols.map((symbol) => eligible.find((row) => row.symbol === symbol)).filter((row): row is MarketUniverseTicker => Boolean(row));
-    if (core.length) return core[Math.floor(rotationOffset / 3) % core.length];
-  }
-  return eligible[Math.floor(rotationOffset / 3) % eligible.length];
+
+  // Spend deep-analysis requests on the best coarse opportunities instead of
+  // rotating through arbitrary liquid symbols. Core symbols still receive one
+  // slot in four so BTC/ETH and the user's watch list cannot disappear.
+  const ranked = [...eligible].sort((a, b) => {
+    const aScore = Math.abs(a.coarseScore) + Math.min(8, Math.abs(a.changePercentage)) * 0.08;
+    const bScore = Math.abs(b.coarseScore) + Math.min(8, Math.abs(b.changePercentage)) * 0.08;
+    return bScore - aScore;
+  });
+  const shortlist = ranked.slice(0, Math.min(6, ranked.length));
+  const core = coreSymbols
+    .map((symbol) => eligible.find((row) => row.symbol === symbol))
+    .filter((row): row is MarketUniverseTicker => Boolean(row));
+  if (rotationOffset % 4 === 3 && core.length) return core[Math.floor(rotationOffset / 4) % core.length];
+  return shortlist[rotationOffset % shortlist.length] ?? ranked[0];
 }
 
 function crossSectionRank(universe: MarketUniverseTicker[], symbol: string) {
@@ -233,9 +239,9 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
     const now = Date.now();
     const [candles, hourly, fourHour, daily, review] = await Promise.all([
       marketExchange.fetchChartCandles(job.target.symbol, now - 18 * 60 * 60_000, now),
-      marketExchange.fetchHistoricalCandles(job.target.symbol, "1h", 260),
-      marketExchange.fetchHistoricalCandles(job.target.symbol, "4h", 260),
-      marketExchange.fetchHistoricalCandles(job.target.symbol, "1d", 320),
+      marketExchange.fetchHistoricalCandles(job.target.symbol, "1h", 720),
+      marketExchange.fetchHistoricalCandles(job.target.symbol, "4h", 1_200),
+      marketExchange.fetchHistoricalCandles(job.target.symbol, "1d", 1_800),
       getResonanceSystemReview(),
     ]);
     if (candles.length < 34) throw new Error(`5m K线不足：${candles.length} 根`);
