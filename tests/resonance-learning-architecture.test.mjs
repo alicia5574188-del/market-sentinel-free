@@ -2,13 +2,15 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [review, trading, scanner, exchange, memory, sizing] = await Promise.all([
+const [review, trading, scanner, exchange, memory, sizing, repository, governance] = await Promise.all([
   readFile(new URL("../lib/resonance-review.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/resonance-trading.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/hte31-scanner.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/exchange-market.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/resonance-market.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/hte31-position-sizing.ts", import.meta.url), "utf8"),
+  readFile(new URL("../lib/hte31-repository.ts", import.meta.url), "utf8"),
+  readFile(new URL("../lib/resonance-governance.ts", import.meta.url), "utf8"),
 ]);
 
 test("system review is grouped by completed blocks of five trades", () => {
@@ -26,6 +28,17 @@ test("one bad five-trade block cannot rewrite production behavior", () => {
   assert.match(review, /repeated && issue === "direction" \? "respect_4h_direction"/);
   assert.match(trading, /review\.directive === "respect_4h_direction"/);
   assert.doesNotMatch(review, /update\(hte31Trades\)|delete\(hte31Trades\)|UPDATE hte31_trades/);
+});
+
+test("Resonance policy state does not inherit old HTE pauses or reviews", () => {
+  assert.match(governance, /RESONANCE_V1_STARTED_AT/);
+  assert.match(governance, /旧版本记录只作历史参考/);
+  assert.match(governance, /RESONANCE_REVALIDATION_MS/);
+  assert.match(repository, /versionRows = rows\.filter\(isCurrentResonanceTrade\)/);
+  assert.match(repository, /evaluateResonanceCellGate/);
+  assert.match(repository, /暂停期已结束，允许重新取样/);
+  assert.doesNotMatch(repository, /learningById/);
+  assert.match(review, /gte\(hte31Trades\.entryAt, RESONANCE_V1_STARTED_AT\)/);
 });
 
 test("five playbooks share one top-level direction timing and target orchestrator", () => {
