@@ -183,11 +183,12 @@ export async function getResonanceSystemReview(): Promise<ResonanceSystemReview>
     eq(hte31Trades.status, "closed"),
     gte(hte31Trades.entryAt, RESONANCE_POLICY_STARTED_AT),
   );
-  const [{ count: totalRaw }, rows, settings] = await Promise.all([
+  const [countRows, rows, settings] = await Promise.all([
     db.select({ count: sql<number>`count(*)` }).from(hte31Trades).where(currentPolicyClosed),
     db.select().from(hte31Trades).where(currentPolicyClosed).orderBy(desc(hte31Trades.exitAt)).limit(40),
     getSettings(),
   ]);
+  const totalRaw = countRows[0]?.count;
   const total = Number(totalRaw ?? rows.length);
   const ids = rows.slice(0, 10).map((row) => row.id);
   const charts = ids.length ? await db.select().from(hte31TradeCharts).where(inArray(hte31TradeCharts.tradeId, ids)) : [];

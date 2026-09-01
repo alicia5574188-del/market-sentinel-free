@@ -1,49 +1,50 @@
 # Status
 
-- State: implementation verification
-- Updated UTC: 2026-08-30T23:45:00+00:00
+- State: final verification
+- Updated UTC: 2026-09-01T03:22:15Z
+- Pull request: `#99` — `fix/resonance-feature-preservation`
+- Verified starting HEAD: `22197d5f9340dfc88b036363c3a558057a236662`
 
 ## Completed and verified
 
-- Durable project state initialized.
-- Current production source verified at `origin/main` commit `b5c9679`.
-- Root cause verified in code: HTE 3.1 risk near 10U, leverage capped at 3x, margin capped at 25% equity, and leverage hidden after close.
-- User explicitly authorized Gate live to remain enabled and clarified that paper position size must increase without reducing existing entry frequency.
-- Implemented adaptive HTE 3.1 paper sizing: 30–50U planned risk, 50–200U fee-adjusted TP2 net target, up to 50x paper leverage, liquidation-buffer checks, and TP2 R adjustment before rejection.
-- Added independent trader/regime/direction performance gates; three straight losses or four proven-negative samples pause only that cell.
-- Added open/closed order transparency for original stop, leverage, margin, notional, planned loss, TP2 projected net and realized R.
-- Corrected timeout and fake-stop classification behavior.
-- Restored owner-facing Auto Live enable/disable control while retaining risk locks, protective orders and emergency stop.
-- `npm run test:signals`: 160 passed; `npm test`: build plus 55 passed; ESLint and TypeScript passed.
+- Reproduced GitHub Actions run `33460289588`, job `99708824337` (`Sentinel V2 CI` run 341).
+- Located all three UI safety failures. They were stale compatibility assertions, not production build, strategy, risk, migration, or Worker-bundle failures:
+  - paper-reset copy required one obsolete exact phrase;
+  - the mobile-scroll test rejected every button-local `preventDefault()` instead of only document/window touch traps;
+  - the layout test required the obsolete exact `<body>{children}</body>` shape and rejected the isolated operator drawer.
+- Updated those tests to preserve behavior and safety outcomes: reset history remains preserved, native document scrolling remains untrapped, one trading page tree remains mounted, and account/push/audit controls remain isolated and reachable.
+- Final compatibility audit passed against `docs/RESONANCE_MUST_KEEP_FEATURES.md`:
+  - all required simulation, review, Gate live, account, Web Push, runtime-diagnostic, navigation, Auto Live, and Emergency Stop capabilities remain reachable;
+  - no duplicate paper-reset action, live authority, risk path, credential path, or market-data authority was added;
+  - no new periodic polling or foreground Gate market producer was added;
+  - account, push, and live-audit reads remain lazy/on-demand and locally degraded;
+  - trading rules, D1 schema/history, scanner cadence, position protection, Gate credential encryption, and live risk limits are unchanged.
+- Closed audit-only quality gaps without changing trading decisions: corrected the system-review count result typing/runtime read, kept cognitive signal return types narrow, deferred initial React effect callbacks, removed lint-only test casts, and retained legacy diagnostics filtering without an unused binding warning.
+
+## Validation evidence
+
+- Focused UI/regression tests: 14 passed, 0 failed.
+- `npm run test:signals`: 189 passed, 0 failed.
+- `npm test`: production build passed; 100 passed, 0 failed.
+- `./node_modules/.bin/wrangler deploy --dry-run --config dist/server/wrangler.json`: passed; production Worker bindings and bundle assembled successfully.
+- `npm run lint`: passed with 0 errors and 0 warnings.
+- `./node_modules/.bin/tsc --noEmit --incremental false`: passed.
+- `git diff --check`: passed.
+- The complete validation set above passed again after updating STATUS and DECISIONS.
 
 ## In progress
 
-- The user explicitly authorized publishing, PR creation, merge and Cloudflare production deployment.
-- Direct HTTPS push has no local Git credential, but the connected GitHub account `alicia5574188-del` has verified admin/push access to the repository; publication is proceeding through that authenticated channel.
-- Read the remote order ledger and live-switch state if configured access allows it after deployment.
-
-## Next action
-
-- Publish the feature branch, complete PR CI and merge, then verify the Cloudflare production build and health endpoint.
+- Commit and push the twice-verified fix to PR #99, then confirm the new GitHub Actions run is green.
 
 ## Blockers
 
-- No source or GitHub-permission blocker remains.
-- Direct Cloudflare CLI network access was unavailable on the first read-only attempt; confirm the connected production build from GitHub and the public Worker health/version response after merge.
+- None.
 
-## Validation
+## Exact final validation commands
 
-- `npm run test:signals` — 160 passed, 0 failed.
-- `npm test` — production build passed; 55 passed, 0 failed.
-- `npm run lint` — passed with 0 errors.
-- `npx tsc --noEmit --incremental false` — passed.
-- `git diff --check` — passed before commit.
-
-## 2026-08-30 five-trader reversal intelligence
-
-- Added HT4 Exhaustion / Anti-Crowd and HT5 Higher-Timeframe Swing as independent paper traders; max simultaneous paper positions remains 2.
-- Exposed 15m/1h/4h separately instead of using only the composite trend and connected the existing macro/DVOL risk context to the active HTE31 scanner.
-- Paper planned risk now includes round-trip fees; TP1 breakeven exits are scratches for streak/gate classification.
-- Position monitoring uses 10s candles and never retroactively applies a newly moved breakeven stop to earlier intrabar prices.
-- Added Counterfactual Observer for original/opposite and +0.5R/TP1/stop reversal paths.
-- HT4/HT5 are deliberately paper-only until their own samples validate them; HT1-HT3 live authority is unchanged.
+- `npm run test:signals`
+- `npm test`
+- `npm run lint`
+- `./node_modules/.bin/tsc --noEmit --incremental false`
+- `./node_modules/.bin/wrangler deploy --dry-run --config dist/server/wrangler.json`
+- `git diff --check`

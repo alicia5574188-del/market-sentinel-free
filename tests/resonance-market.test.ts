@@ -3,6 +3,8 @@ import test from "node:test";
 import { buildHistoricalAnalog, buildResonanceMarketMemory } from "../lib/resonance-market.ts";
 import { buildResonanceMarketView } from "../lib/resonance-brain.ts";
 import type { Hte31Candle } from "../lib/hte31-types.ts";
+import type { MarketAnalysisPacket } from "../lib/exchange-market.ts";
+import type { HistoricalAnalog, ResonanceMarketMemory } from "../lib/resonance-market.ts";
 
 function candlesFromCloses(closes: number[], step = 3_600): Hte31Candle[] {
   return closes.map((close, index) => ({
@@ -15,7 +17,7 @@ function candlesFromCloses(closes: number[], step = 3_600): Hte31Candle[] {
   }));
 }
 
-function analog(bias: "LONG" | "SHORT" | "NEUTRAL", confidence: number, medianForwardPct: number) {
+function analog(bias: "LONG" | "SHORT" | "NEUTRAL", confidence: number, medianForwardPct: number): HistoricalAnalog {
   return {
     label: "短线",
     sampleCount: 16,
@@ -26,7 +28,7 @@ function analog(bias: "LONG" | "SHORT" | "NEUTRAL", confidence: number, medianFo
     neutralRatio: 0.10,
     medianForwardPct,
     averageSimilarity: 0.82,
-  } as any;
+  };
 }
 
 test("historical analog uses independent past episodes instead of overlapping slices of one story", () => {
@@ -71,15 +73,15 @@ test("market brain uses 4h 1h 15m history and live flow as one direction consens
       spotCvdRatio: 0.008,
       orderBookImbalance: 0.12,
     },
-  } as any;
-  const memory = {
+  } as unknown as MarketAnalysisPacket;
+  const memory: ResonanceMarketMemory = {
     short: analog("LONG", 74, 0.9),
     swing: { ...analog("LONG", 78, 2.1), label: "波段" },
     cycle: { ...analog("LONG", 70, 5.2), label: "大周期" },
     combinedBias: "LONG",
     combinedConfidence: 76,
     summary: "历史偏多",
-  } as any;
+  };
   const view = buildResonanceMarketView(packet, memory);
   assert.equal(view.bias, "LONG");
   assert.equal(view.strongDirection, true);
@@ -96,23 +98,23 @@ test("market brain lowers conviction when history and four-hour structure disagr
       spotCvdRatio: 0,
       orderBookImbalance: 0,
     },
-  } as any;
-  const agreeing = {
+  } as unknown as MarketAnalysisPacket;
+  const agreeing: ResonanceMarketMemory = {
     short: analog("LONG", 75, 0.8),
     swing: { ...analog("LONG", 75, 1.6), label: "波段" },
     cycle: { ...analog("LONG", 75, 4), label: "大周期" },
     combinedBias: "LONG",
     combinedConfidence: 75,
     summary: "历史偏多",
-  } as any;
-  const disagreeing = {
+  };
+  const disagreeing: ResonanceMarketMemory = {
     short: analog("SHORT", 75, -0.8),
     swing: { ...analog("SHORT", 75, -1.6), label: "波段" },
     cycle: { ...analog("SHORT", 75, -4), label: "大周期" },
     combinedBias: "SHORT",
     combinedConfidence: 75,
     summary: "历史偏空",
-  } as any;
+  };
   const agreeView = buildResonanceMarketView(packet, agreeing);
   const disagreeView = buildResonanceMarketView(packet, disagreeing);
   assert.equal(agreeView.bias, "LONG");

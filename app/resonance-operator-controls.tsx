@@ -68,7 +68,7 @@ export default function ResonanceOperatorControls() {
 
   useEffect(() => {
     if (!open || accountRequested) return;
-    setAccountRequested(true);
+    queueMicrotask(() => setAccountRequested(true));
     void readJson<Account>("/api/account")
       .then(setAccount)
       .catch((error) => setMessage(error instanceof Error ? error.message : "账户信息读取失败"));
@@ -77,7 +77,7 @@ export default function ResonanceOperatorControls() {
   useEffect(() => {
     if (!open || pushSubscribed !== null) return;
     if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-      setPushSubscribed(false);
+      queueMicrotask(() => setPushSubscribed(false));
       return;
     }
     void navigator.serviceWorker.ready

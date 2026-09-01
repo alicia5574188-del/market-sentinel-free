@@ -502,16 +502,22 @@ export default function ResonancePage() {
   }, []);
 
   useEffect(() => {
-    void refreshMain();
+    const kickoff = window.setTimeout(() => void refreshMain(), 0);
     const timer = window.setInterval(() => void refreshMain(), 15_000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearTimeout(kickoff);
+      window.clearInterval(timer);
+    };
   }, [refreshMain]);
 
   useEffect(() => {
     if (tab !== "实盘") return;
-    void refreshLive();
+    const kickoff = window.setTimeout(() => void refreshLive(), 0);
     const timer = window.setInterval(() => void refreshLive(), 20_000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearTimeout(kickoff);
+      window.clearInterval(timer);
+    };
   }, [tab, refreshLive]);
 
   const dashboard = snapshot?.dashboard;

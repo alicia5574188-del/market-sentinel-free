@@ -20,7 +20,7 @@ test("iPhone keeps native vertical scrolling with no document touch trap", async
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
   ]);
-  assert.doesNotMatch(page, /touchmove|preventDefault\(\)|MutationObserver|createPortal|PULL_REFRESH_TRIGGER_PX/);
+  assert.doesNotMatch(page, /(?:document|window)\s*\.\s*addEventListener\s*\(\s*["']touchmove|MutationObserver|createPortal|PULL_REFRESH_TRIGGER_PX/);
   assert.doesNotMatch(layout, /RuntimeStabilityClient|Strategy2Dashboard|Strategy2PlaybookDiagnostics|Strategy2LearningArena|UiStatusSemanticFix|LiveOrdersInline/);
 });
 
