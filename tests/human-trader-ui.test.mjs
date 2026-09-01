@@ -67,14 +67,15 @@ test("small-price contracts retain eight-decimal precision and pnl never wraps",
   assert.match(css, /\.rz-order-pnl[\s\S]*white-space:\s*nowrap/);
 });
 
-test("simulation reset is visible from funds and settings, not merely present in dead code", () => {
+test("simulation reset is reachable from funds without duplicating its destructive action", () => {
   assert.match(page, /资金设置/);
-  assert.match(page, /更多设置/);
   assert.match(page, /重置模拟本金/);
   assert.match(page, /\/api\/hte31\/paper-reset/);
   assert.match(page, /⚙ 设置/);
   assert.match(page, /tab === "设置"/);
   assert.match(page, /重新开始资金曲线/);
+  const resetButtons = page.match(/onClick=\{resetPaper\}>重置模拟本金<\/button>/g) ?? [];
+  assert.equal(resetButtons.length, 1);
 });
 
 test("runtime settings preserve scanner diagnostics needed to detect silent stalls", () => {
