@@ -4,7 +4,7 @@ import { getHte31Dashboard } from "../../../lib/hte31-repository";
 import type { Hte31ScanCompleted } from "../../../lib/hte31-scanner";
 import { getRuntimeBindings } from "../../../lib/runtime-bindings";
 import type { HumanTraderId } from "../../../lib/human-trader-engine";
-import { requireApiAccount } from "../../api-auth";
+import { requireApiViewer } from "../../api-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -80,7 +80,10 @@ function enrichDashboardDiagnostics(
 }
 
 export async function GET() {
-  const auth = await requireApiAccount();
+  // This is the 15-second read-only observer path. Authentication still comes
+  // from the trusted request identity, but a transient user_accounts/D1 issue
+  // must not turn the whole trading dashboard into a 503.
+  const auth = await requireApiViewer();
   if ("response" in auth) return auth.response;
   const requestedAt = Date.now();
   const bindings = getRuntimeBindings();
