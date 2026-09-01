@@ -646,7 +646,6 @@ export default function ResonancePage() {
           <div className="rz-metric"><span>未实现</span><b className={(dashboard?.account.unrealizedPnlUsdt ?? 0) < 0 ? "rz-negative" : "rz-positive"}>{fmtMoney(dashboard?.account.unrealizedPnlUsdt)}</b></div>
           <div className="rz-metric"><span>可用保证金</span><b>{fmtMoney(dashboard?.account.availableMarginUsdt)}</b></div>
         </div>
-        <div className="rz-actions inline"><button className="danger" disabled={Boolean(dashboard?.openTrades.length)} onClick={resetPaper}>重置模拟本金</button><button onClick={() => setTab("设置")}>更多设置</button></div>
       </section>
 
       <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">正在做什么</span><h2>当前持仓</h2></div><small>{dashboard?.openTrades.length ?? 0} 笔</small></div>
