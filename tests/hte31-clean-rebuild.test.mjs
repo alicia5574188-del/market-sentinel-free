@@ -14,6 +14,8 @@ test("full migration chain preserves the isolated HTE ledger", () => {
   for (const migration of migrations) applyMigration(db, migration);
   const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((row) => row.name));
   for (const table of ["hte31_trades","hte31_evaluations","hte31_learning","hte31_trade_charts","hte31_post_exit_observations"]) assert.ok(tables.has(table), `${table} must exist`);
+  const chartColumns = new Set(db.prepare("PRAGMA table_info(hte31_trade_charts)").all().map((row) => row.name));
+  assert.ok(chartColumns.has("entry_quality_json"));
   assert.equal(db.prepare("SELECT count(*) AS n FROM hte31_trades").get().n, 0);
   db.close();
 });
@@ -58,12 +60,14 @@ test("order chart keeps entry holding post-exit and counterfactual windows", () 
   assert.match(schema, /entryCandlesJson/);
   assert.match(schema, /holdingCandlesJson/);
   assert.match(schema, /postExitCandlesJson/);
+  assert.match(schema, /entryQualityJson/);
   assert.match(api, /markers/);
   assert.match(api, /initialStop/);
   assert.match(api, /takeProfit1/);
   assert.match(api, /takeProfit2/);
   assert.match(api, /observations/);
   assert.match(api, /buildHte31Counterfactual/);
+  assert.match(api, /buildResonanceEntryQuality/);
 });
 
 test("runtime remains independent of the dashboard being open", () => {
@@ -76,6 +80,9 @@ test("runtime remains independent of the dashboard being open", () => {
   assert.doesNotMatch(route, /position\.ensure\s*\(/);
   assert.match(route, /scanner\.status\s*\(/);
   assert.match(route, /scanner\.readModel\s*\(/);
+  assert.match(route, /DIAGNOSTICS_CACHE_MS = 60_000/);
+  assert.match(route, /DIAGNOSTICS_STALE_FALLBACK_MS = 5 \* 60_000/);
+  assert.match(route, /readCachedDiagnostics\(requestedAt\)/);
   assert.match(worker, /async scheduled\([\s\S]*runScheduledSchedulers\(env\)/);
   assert.match(worker, /MARKET_SCANNER\.getByName\("market-scanner"\)\.runIfDue\(\)/);
   assert.match(wrangler, /"crons"\s*:\s*\["\* \* \* \* \*"\]/);

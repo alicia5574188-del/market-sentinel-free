@@ -9,6 +9,7 @@ import {
   hte31Trades,
 } from "../db/hte31-schema";
 import { buildHte31Counterfactual } from "./hte31-counterfactual";
+import type { ResonanceEntryQualityReport } from "./resonance-entry-quality";
 import { getSettings } from "./settings-repository";
 import type { Hte31Candle } from "./hte31-types";
 
@@ -68,8 +69,9 @@ function normalizeCurrentTrade(
       candleCount: chartCandles.length,
       firstCandleAt: chartCandles.length ? candleTime(chartCandles[0]) : null,
       lastCandleAt: chartCandles.length ? candleTime(chartCandles.at(-1)!) : null,
+      entryQuality: parseJson<ResonanceEntryQualityReport | null>(chart.entryQualityJson, null),
       updatedAt: chart.updatedAt,
-    } : { available: false, candleCount: 0, firstCandleAt: null, lastCandleAt: null, updatedAt: null },
+    } : { available: false, candleCount: 0, firstCandleAt: null, lastCandleAt: null, entryQuality: null, updatedAt: null },
     counterfactual: chartCandles.length
       ? buildHte31Counterfactual(row, chartCandles, roundTripCostBps, Date.now())
       : null,
@@ -208,6 +210,7 @@ export async function getOwnerTradeDiagnostic(tradeId: string) {
         holdingCandles,
         postExitCandles,
         mergedCandles: candles,
+        entryQuality: parseJson<ResonanceEntryQualityReport | null>(chartRow.entryQualityJson, null),
       } : null,
       learningCell: learning[0] ?? null,
       counterfactual: candles.length

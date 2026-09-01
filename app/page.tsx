@@ -20,6 +20,7 @@ type SchedulerStatus = {
 
 type HistoricalAnalog = {
   label: string;
+  minimumSamples?: number;
   sampleCount: number;
   bias: "LONG" | "SHORT" | "NEUTRAL";
   confidence: number;
@@ -258,6 +259,24 @@ type ChartData = {
     stopRecovery: boolean | null;
     label: string | null;
     status: string;
+    entryQuality: {
+      sampleSufficient: boolean;
+      classification: string;
+      classificationLabel: string;
+      entryEfficiency: number | null;
+      initialMaeR: number | null;
+      timeToHalfRMinutes: number | null;
+      timeToOneRMinutes: number | null;
+      delayedEntries: {
+        delayBars: 1 | 2 | 3;
+        delayMinutes: number;
+        valid: boolean;
+        terminalR: number | null;
+        improvementR: number | null;
+        maxAdverseR: number | null;
+        stopped: boolean | null;
+      }[];
+    } | null;
   };
   counterfactual: {
     summary: string;
@@ -310,6 +329,7 @@ type LiveSnapshot = {
 };
 
 const NAV: Tab[] = ["机会", "雷达", "订单", "实盘", "设置"];
+const MAIN_REFRESH_MS = 30_000;
 const TRADERS: { id: TraderId; code: string; name: string; setup: string }[] = [
   { id: "dennis_trend", code: "HT1", name: "Dennis", setup: "趋势突破" },
   { id: "raschke_pullback", code: "HT2", name: "Raschke", setup: "趋势回踩" },
@@ -382,11 +402,14 @@ async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
   return payload;
 }
 
-function MemoryCard({ item }: { item: HistoricalAnalog }) {
+function MemoryCard({ item, symbol }: { item: HistoricalAnalog; symbol?: string }) {
+  const minimumSamples = item.minimumSamples ?? 8;
+  const eligible = item.sampleCount >= minimumSamples;
+  const moveLabel = item.medianForwardPct >= 0 ? "涨幅" : "跌幅";
   return <div className="rz-memory">
-    <span>{item.label}</span>
-    <b><Bias value={item.bias} confidence={item.confidence} /></b>
-    <small>{item.sampleCount ? `${item.sampleCount} 个相似片段 · 后续中位 ${item.medianForwardPct >= 0 ? "+" : ""}${item.medianForwardPct.toFixed(2)}%` : "历史样本不足"}</small>
+    <span>{symbol?.replace("_USDT", "") ?? "当前币种"} · {item.label}历史</span>
+    <b>{eligible ? <Bias value={item.bias} confidence={item.confidence} /> : `样本不足 · ${item.sampleCount}/${minimumSamples}`}</b>
+    <small>{eligible ? `有效独立样本 ${item.sampleCount} · 后续中位${moveLabel} ${item.medianForwardPct >= 0 ? "+" : ""}${item.medianForwardPct.toFixed(2)}%` : "暂不参与判断"}</small>
   </div>;
 }
 
@@ -490,6 +513,10 @@ function MiniChart({ chart }: { chart: ChartData }) {
       })}
     </svg>
     <div className="rz-review-metrics">
+      <div><span>Entry Efficiency</span><b>{chart.diagnosis.entryQuality?.entryEfficiency == null ? "--" : `${chart.diagnosis.entryQuality.entryEfficiency.toFixed(1)}%`}</b></div>
+      <div><span>进场归因</span><b>{chart.diagnosis.entryQuality?.classificationLabel ?? "观察中"}</b></div>
+      <div><span>首次 +0.5R 前 MAE</span><b>{fmtR(chart.diagnosis.entryQuality?.initialMaeR)}</b></div>
+      <div><span>达到 +0.5R / +1R</span><b>{chart.diagnosis.entryQuality ? `${chart.diagnosis.entryQuality.timeToHalfRMinutes ?? "--"} / ${chart.diagnosis.entryQuality.timeToOneRMinutes ?? "--"} 分钟` : "--"}</b></div>
       <div><span>仓内 MFE</span><b>{fmtPct(chart.diagnosis.mfePct)}</b></div>
       <div><span>仓内 MAE</span><b>{fmtPct(chart.diagnosis.maePct)}</b></div>
       <div><span>出场后 MFE</span><b>{fmtPct(chart.diagnosis.postExitMfePct)}</b></div>
@@ -497,6 +524,9 @@ function MiniChart({ chart }: { chart: ChartData }) {
       <div><span>Exit Capture</span><b>{fmtPct(chart.diagnosis.exitCapturePct)}</b></div>
       <div><span>Exit Efficiency</span><b>{fmtPct(chart.diagnosis.exitEfficiency)}</b></div>
     </div>
+    {chart.diagnosis.entryQuality?.delayedEntries?.length ? <div className="rz-entry-counterfactuals">
+      {chart.diagnosis.entryQuality.delayedEntries.map((item) => <div key={item.delayBars}><b>晚 {item.delayMinutes} 分钟</b><span>{item.valid ? `结果 ${fmtR(item.terminalR)} · 改善 ${fmtR(item.improvementR)} · MAE ${fmtR(item.maxAdverseR)}${item.stopped ? " · 触发原止损" : ""}` : "原结构止损下不可形成有效入场"}</span></div>)}
+    </div> : null}
     {chart.observations?.length > 0 && <div className="rz-observer-row">{chart.observations.map((item) => <div key={item.horizonMinutes}><b>{horizonLabel(item.horizonMinutes)}</b><span>{item.status === "complete" ? `有利 ${fmtR(item.favorableR)} · 不利 ${fmtR(item.adverseR)}` : "观察中"}</span></div>)}</div>}
     <div className="rz-chart-copy">
       <span>{chart.diagnosis.label ?? "退出后仍在观察"}{chart.diagnosis.stopRecovery ? " · 疑似假止损" : ""}</span>
@@ -555,6 +585,7 @@ export default function ResonancePage() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [live, setLive] = useState<LiveSnapshot | null>(null);
   const [error, setError] = useState("");
+  const [refreshWarning, setRefreshWarning] = useState("");
   const [liveError, setLiveError] = useState("");
   const [message, setMessage] = useState("");
   const [coreSymbolsText, setCoreSymbolsText] = useState("");
@@ -563,14 +594,26 @@ export default function ResonancePage() {
   const [permissionsConfirmed, setPermissionsConfirmed] = useState(false);
   const [emergencyHolding, setEmergencyHolding] = useState(false);
   const emergencyTimer = useRef<number | null>(null);
+  const mainSnapshotSeen = useRef(false);
+  const lastSnapshotAt = useRef<number | null>(null);
 
   const refreshMain = useCallback(async () => {
     try {
       const next = await readJson<Snapshot>("/api/hte31");
       setSnapshot(next);
+      mainSnapshotSeen.current = true;
+      lastSnapshotAt.current = next.observedAt;
       setError("");
+      setRefreshWarning("");
       if (!coreSymbolsText && next.dashboard?.settings.coreSymbols) setCoreSymbolsText(next.dashboard.settings.coreSymbols.map((item) => item.replace("_USDT", "")).join(", "));
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "读取失败"); }
+    } catch (reason) {
+      if (mainSnapshotSeen.current) {
+        setError("");
+        setRefreshWarning(`数据刷新暂时延迟，正在显示 ${fmtTime(lastSnapshotAt.current)} 的最近可信快照；后台扫描与持仓保护独立运行。`);
+      } else {
+        setError(reason instanceof Error ? reason.message : "读取失败");
+      }
+    }
   }, [coreSymbolsText]);
 
   const refreshLive = useCallback(async () => {
@@ -580,7 +623,7 @@ export default function ResonancePage() {
 
   useEffect(() => {
     const kickoff = window.setTimeout(() => void refreshMain(), 0);
-    const timer = window.setInterval(() => void refreshMain(), 15_000);
+    const timer = window.setInterval(() => void refreshMain(), MAIN_REFRESH_MS);
     return () => {
       window.clearTimeout(kickoff);
       window.clearInterval(timer);
@@ -604,7 +647,7 @@ export default function ResonancePage() {
   const review = readModel?.review;
   const ageSeconds = snapshot?.scanner.ageMs == null ? null : Math.round(snapshot.scanner.ageMs / 1000);
   const healthBad = Boolean(error || snapshot?.scanner.status?.circuitOpen || (ageSeconds != null && ageSeconds > 90));
-  const healthWarn = !healthBad && Boolean(snapshot?.degraded);
+  const healthWarn = !healthBad && Boolean(refreshWarning || snapshot?.degraded);
 
   const mutate = useCallback(async (url: string, init: RequestInit, success: string, refreshLiveAfter = false) => {
     setMessage("");
@@ -705,6 +748,7 @@ export default function ResonancePage() {
     </header>
 
     {error && <div className="rz-banner bad">{error}</div>}
+    {refreshWarning && <div className="rz-banner warn">{refreshWarning}</div>}
     {message && <div className="rz-banner">{message}</div>}
 
     {tab === "机会" && <div className="rz-stack">
@@ -715,7 +759,7 @@ export default function ResonancePage() {
             <div className="rz-hero-copy"><Bias value={marketView?.bias ?? "NEUTRAL"} confidence={marketView?.confidence ?? 0} /><h1>{marketView?.headline ?? "正在建立市场判断"}</h1><p>{marketView?.reason ?? "等待新一轮扫描完成。"}</p></div>
             <div className="rz-score"><div><b>{marketView?.confidence ?? 0}</b><span>把握</span></div></div>
           </div>
-          {memory && <div className="rz-memory-grid"><MemoryCard item={memory.short} /><MemoryCard item={memory.swing} /><MemoryCard item={memory.cycle} /></div>}
+          {memory && <div className="rz-memory-grid"><MemoryCard item={memory.short} symbol={readModel?.target} /><MemoryCard item={memory.swing} symbol={readModel?.target} /><MemoryCard item={memory.cycle} symbol={readModel?.target} /></div>}
         </article>
       </section>
 

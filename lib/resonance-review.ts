@@ -2,6 +2,12 @@ import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { hte31TradeCharts, hte31Trades } from "../db/hte31-schema";
 import { buildHte31Counterfactual } from "./hte31-counterfactual.ts";
+import {
+  buildResonanceEntryQuality,
+  buildResonanceEntryQualityPattern,
+  type ResonanceEntryQualityPattern,
+  type ResonanceEntryQualityReport,
+} from "./resonance-entry-quality.ts";
 import { RESONANCE_POLICY_STARTED_AT } from "./resonance-policy-version.ts";
 import { getSettings } from "./settings-repository.ts";
 import type { Hte31Candle } from "./hte31-types.ts";
@@ -14,11 +20,13 @@ export type ResonanceTradeAutopsy = {
   symbol: string;
   traderId: string;
   setupId: string;
+  assetRegime: string;
   resultR: number;
   primaryCause: ResonanceReviewIssue;
   causeLabel: string;
   explanation: string;
   evidence: string[];
+  entryQuality: ResonanceEntryQualityReport | null;
 };
 
 export type ResonanceSystemReview = {
@@ -39,6 +47,7 @@ export type ResonanceSystemReview = {
     repeatedCause: ResonanceReviewIssue;
     repeatedCount: number;
   };
+  entryQualityPattern: ResonanceEntryQualityPattern | null;
   challengerSetupId: string | null;
   weakSetup: {
     setupId: string;
@@ -65,6 +74,7 @@ type ReviewedTrade = {
   symbol: string;
   traderId: string;
   setupId: string;
+  assetRegime: string;
   r: number;
   directionError: boolean;
   poorEntry: boolean;
@@ -72,6 +82,7 @@ type ReviewedTrade = {
   poorExit: boolean;
   smallWinner: boolean;
   marketMismatch: boolean;
+  entryQuality: ResonanceEntryQualityReport | null;
   primaryCause: ResonanceReviewIssue;
   evidence: string[];
 };
@@ -122,10 +133,10 @@ function setupFitsRegime(setupId: string, assetRegime: string) {
 }
 
 function primaryCause(input: Omit<ReviewedTrade, "primaryCause" | "evidence">): ResonanceReviewIssue {
-  if (input.directionError) return "direction";
+  if (input.entryQuality?.classification === "direction_wrong" || input.directionError) return "direction";
   if (input.marketMismatch && input.r < 0) return "market_fit";
-  if (input.stopProblem) return "stop";
-  if (input.poorEntry) return "entry";
+  if (input.entryQuality?.classification === "stop_too_tight" || input.stopProblem) return "stop";
+  if (["entry_too_early", "entry_too_late"].includes(input.entryQuality?.classification ?? "") || input.poorEntry) return "entry";
   if (input.poorExit) return "exit";
   if (input.smallWinner) return "payoff";
   return "insufficient";
@@ -141,12 +152,12 @@ function summarize(rows: ReviewedTrade[]) {
   };
 }
 
-function directivesFromRecent(rows: ReviewedTrade[]) {
+function directivesFromRecent(rows: ReviewedTrade[], entryPattern: ResonanceEntryQualityPattern | null) {
   const recent = rows.slice(0, 3);
   const count = (issue: ResonanceReviewIssue) => recent.filter((row) => row.primaryCause === issue).length;
   const directives: ResonanceDirective[] = [];
   if (count("direction") >= 2) directives.push("respect_4h_direction");
-  if (count("entry") >= 2) directives.push("require_retest");
+  if (entryPattern?.qualifiesForEntryChange && entryPattern.classification === "entry_too_early") directives.push("require_retest");
   if (count("stop") + count("exit") >= 2) directives.push("delay_protection");
   if (count("payoff") >= 2) directives.push("improve_payoff");
   if (count("market_fit") >= 2) directives.push("respect_market_fit");
@@ -201,6 +212,7 @@ export async function getResonanceSystemReview(): Promise<ResonanceSystemReview>
     const maeR = structuralRiskPct > 0 ? (trade.maePct ?? 0) / structuralRiskPct : 0;
     const chart = chartById.get(trade.id);
     let directionError = false;
+    let entryQuality: ResonanceEntryQualityReport | null = null;
     if (chart) {
       const candles = mergeCandles(
         parseJson<Hte31Candle[]>(chart.entryCandlesJson, []),
@@ -208,10 +220,14 @@ export async function getResonanceSystemReview(): Promise<ResonanceSystemReview>
         parseJson<Hte31Candle[]>(chart.postExitCandlesJson, []),
       );
       const counterfactual = buildHte31Counterfactual(trade, candles, settings.roundTripCostBps, Date.now());
-      const horizon = counterfactual?.horizons.find((item) => item.minutes === 240) ?? counterfactual?.horizons.at(-1);
+      const horizon = counterfactual?.horizons.find((item) => item.minutes === 240);
       directionError = Boolean(horizon && horizon.originalR < -0.15 && horizon.oppositeR > horizon.originalR + 0.6);
+      entryQuality = parseJson<ResonanceEntryQualityReport | null>(chart.entryQualityJson, null)
+        ?? buildResonanceEntryQuality(trade, candles, settings.roundTripCostBps, Date.now());
     }
-    const poorEntry = maeR >= 0.75 && mfeR >= 0.6;
+    const poorEntry = entryQuality?.sampleSufficient
+      ? entryQuality.classification === "entry_too_early" || entryQuality.classification === "entry_too_late"
+      : maeR >= 0.75 && mfeR >= 0.6;
     const stopProblem = Boolean(trade.stopRecovery) || trade.postExitLabel === "疑似假止损";
     const poorExit = trade.postExitLabel === "退出偏早" || trade.postExitLabel === "退出偏晚" || (trade.exitEfficiency != null && trade.exitEfficiency < 42);
     const smallWinner = riskR > 0 && riskR < 0.55;
@@ -221,6 +237,7 @@ export async function getResonanceSystemReview(): Promise<ResonanceSystemReview>
       symbol: trade.symbol,
       traderId: trade.traderId,
       setupId: trade.setupId,
+      assetRegime: trade.assetRegime,
       r: riskR,
       directionError,
       poorEntry,
@@ -228,6 +245,7 @@ export async function getResonanceSystemReview(): Promise<ResonanceSystemReview>
       poorExit,
       smallWinner,
       marketMismatch,
+      entryQuality,
     };
     const cause = primaryCause(base);
     const evidence = [
@@ -236,6 +254,7 @@ export async function getResonanceSystemReview(): Promise<ResonanceSystemReview>
       directionError ? "4小时反事实显示反方向明显更优" : "未发现明确的反方向优势",
       marketMismatch ? `当前打法与 ${trade.assetRegime} 环境匹配度偏低` : `打法与 ${trade.assetRegime} 环境没有明显冲突`,
       stopProblem ? "止损后出现明显恢复，怀疑保护过早/位置过紧" : "未发现明确假止损恢复",
+      ...(entryQuality?.evidence ?? []),
     ];
     return { ...base, primaryCause: cause, evidence };
   });
@@ -255,6 +274,7 @@ export async function getResonanceSystemReview(): Promise<ResonanceSystemReview>
       directives: [],
       latestAutopsy: null,
       pattern: { sampleSize: 0, repeatedCause: "insufficient", repeatedCount: 0 },
+      entryQualityPattern: null,
       challengerSetupId: null,
       weakSetup: null,
       latest: { averageR: 0, directionErrorRate: 0, poorEntryRate: 0, poorExitRate: 0 },
@@ -264,13 +284,15 @@ export async function getResonanceSystemReview(): Promise<ResonanceSystemReview>
 
   const latestTrade = reviewed[0];
   const pattern = repeatedPattern(reviewed);
-  const directives = directivesFromRecent(reviewed);
+  const entryPattern = buildResonanceEntryQualityPattern(reviewed);
+  const directives = directivesFromRecent(reviewed, entryPattern);
   const weak = weakSetup(reviewed);
   const latestAutopsy: ResonanceTradeAutopsy = {
     tradeId: latestTrade.tradeId,
     symbol: latestTrade.symbol,
     traderId: latestTrade.traderId,
     setupId: latestTrade.setupId,
+    assetRegime: latestTrade.assetRegime,
     resultR: round(latestTrade.r),
     primaryCause: latestTrade.primaryCause,
     causeLabel: issueLabel(latestTrade.primaryCause),
@@ -278,6 +300,7 @@ export async function getResonanceSystemReview(): Promise<ResonanceSystemReview>
       ? "这笔交易暂时没有单一错误能够压倒其他解释，继续保留多种可能。"
       : `当前首先追查「${issueLabel(latestTrade.primaryCause)}」，而不是因为亏损本身机械暂停。`,
     evidence: latestTrade.evidence,
+    entryQuality: latestTrade.entryQuality,
   };
 
   const latestBlock = reviewed.slice(0, 5);
@@ -290,9 +313,10 @@ export async function getResonanceSystemReview(): Promise<ResonanceSystemReview>
 
   const evidence = [
     `最新一笔：${latestTrade.symbol} ${latestTrade.r >= 0 ? "+" : ""}${latestTrade.r.toFixed(2)}R，首要追查 ${issueLabel(latestTrade.primaryCause)}`,
-    `最近${latestBlock.length}笔平均 ${latest.averageR >= 0 ? "+" : ""}${latest.averageR.toFixed(2)}R · 方向错误 ${pct(latest.directionErrorRate)} · 进场偏早 ${pct(latest.poorEntryRate)} · 退出/保护偏弱 ${pct(latest.poorExitRate)}`,
+    `最近${latestBlock.length}笔平均 ${latest.averageR >= 0 ? "+" : ""}${latest.averageR.toFixed(2)}R · 方向错误 ${pct(latest.directionErrorRate)} · 进场时机异常 ${pct(latest.poorEntryRate)} · 退出/保护偏弱 ${pct(latest.poorExitRate)}`,
   ];
   if (pattern.repeatedCause !== "insufficient") evidence.push(`最近${pattern.sampleSize}笔有 ${pattern.repeatedCount} 笔重复指向「${issueLabel(pattern.repeatedCause)}」`);
+  if (entryPattern) evidence.push(`${entryPattern.setupId} / ${entryPattern.assetRegime}：${entryPattern.sampleSize} 笔同类样本中 ${entryPattern.repeatedCount} 笔为「${entryPattern.classificationLabel}」${entryPattern.qualifiesForEntryChange ? "，已达到模拟入场确认验证门槛" : "，尚未达到 3 笔同环境证据门槛"}`);
   if (weak) evidence.push(`${weak.setupId} 已有 ${weak.sampleCount} 笔，平均 ${weak.averageR >= 0 ? "+" : ""}${weak.averageR.toFixed(2)}R，仅 ${weak.wins} 笔盈利，进入挑战方案验证`);
   if (previous) evidence.push(`再前一组${previousBlock.length}笔平均 ${previous.averageR >= 0 ? "+" : ""}${previous.averageR.toFixed(2)}R`);
 
@@ -302,8 +326,8 @@ export async function getResonanceSystemReview(): Promise<ResonanceSystemReview>
     headline = "方向错误开始重复，系统已加强大周期方向约束";
     action = "反4小时结构的普通Setup不再直接开仓；继续记录被拦截机会，验证这个改变是否真的减少错误。";
   } else if (directives.includes("require_retest")) {
-    headline = "方向未必错，但进场过早开始重复";
-    action = "趋势型Setup改为等待回踩后重新启动再进场，原始触发继续作为对照。";
+    headline = `${entryPattern?.setupId ?? "同类打法"} 在 ${entryPattern?.assetRegime ?? "同类环境"} 的进场过早开始重复`;
+    action = "只对这个打法/环境组合启用等待回踩的模拟挑战版本，其他组合和原始触发继续作为对照。";
   } else if (directives.includes("delay_protection")) {
     headline = "退出/保护问题开始重复，系统会给正确交易更多空间";
     action = "候选方案推迟过早保护并延长合理持有时间；仍保持原始结构止损和风险预算。";
@@ -330,6 +354,7 @@ export async function getResonanceSystemReview(): Promise<ResonanceSystemReview>
     directives,
     latestAutopsy,
     pattern,
+    entryQualityPattern: entryPattern,
     challengerSetupId: weak?.setupId ?? null,
     weakSetup: weak,
     latest,

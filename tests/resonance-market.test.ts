@@ -20,6 +20,7 @@ function candlesFromCloses(closes: number[], step = 3_600): Hte31Candle[] {
 function analog(bias: "LONG" | "SHORT" | "NEUTRAL", confidence: number, medianForwardPct: number): HistoricalAnalog {
   return {
     label: "短线",
+    minimumSamples: 8,
     sampleCount: 16,
     bias,
     confidence,

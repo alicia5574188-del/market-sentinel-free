@@ -178,11 +178,17 @@ function applyCognitiveEntryLearning(
   if (signal.side === "WAIT" || !signal.entryPlan) return signal;
   let next = signal;
 
-  if (review.directives.includes("require_retest") && isTrendSetup(next)) {
+  const entryPattern = review.entryQualityPattern;
+  const scopedEntryRetest = review.directives.includes("require_retest")
+    && entryPattern?.qualifiesForEntryChange
+    && entryPattern.classification === "entry_too_early"
+    && entryPattern.setupId === next.strategyId
+    && entryPattern.assetRegime === next.strategyMeta.assetRegime;
+  if (scopedEntryRetest && isTrendSetup(next)) {
     if (!continuationTiming(next, packet, candles, marketView)) {
       next = { ...next, state: "watching", blockers: [...next.blockers, "系统复盘：等待回踩后重新启动"] };
     } else {
-      next = withCognitiveCheck(next, "resonance-cognitive-retest", "复盘后增加回踩确认", "重复出现进场过早，候选规则要求回踩后重新启动");
+      next = withCognitiveCheck(next, "resonance-cognitive-retest", "同打法同环境增加回踩确认", `${entryPattern.sampleSize} 笔同类样本中 ${entryPattern.repeatedCount} 笔进场过早；候选规则仅用于模拟验证`);
     }
   }
 
