@@ -64,3 +64,10 @@ Record only consequential decisions using this format:
 - Reason: The backend already persisted the required trigger checks, levels, support, counter-evidence, and exit rules; the UI type and compact card were the only missing layer.
 - Evidence: `getHte31Dashboard()` already returns parsed entry plans. The updated page displays direction, trigger/gates, entry zone, stop, TP1/TP2, evidence, missing conditions, and invalidation while the polling and exchange boundaries remain unchanged.
 - Revisit when: The HTE31 entry-plan schema changes or operators require additional execution economics on pre-trade cards.
+
+## 2026-09-01 — Keep the HTE31 observer independent of account persistence
+
+- Choice: Authenticate the high-frequency `/api/hte31` read path with a trusted read-only viewer identity, while retaining durable `requireApiAccount()` checks for account-scoped and mutation APIs.
+- Reason: The core dashboard does not need to read or update `user_accounts` on every 15-second refresh. Making that auxiliary persistence lookup a prerequisite allows a transient account-store failure to surface as a full dashboard 503 instead of local degradation.
+- Evidence: The production iPhone reported `/api/hte31 请求失败 (503)` while its last successful snapshot remained visible; route audit showed `requireApiAccount()` ran before all scanner/dashboard `allSettled` and catch-based degradation handling. PR #100 CI run `33470798900` passed strategy/risk/migration, production build/UI safety, and Wrangler dry-run after removing that hard dependency only from the observer path.
+- Revisit when: HTE31 snapshot responses need durable account identifiers or account-specific authorization beyond owner/member display role.
