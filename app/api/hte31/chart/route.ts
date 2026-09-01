@@ -4,6 +4,7 @@ import { hte31PostExitObservations } from "../../../../db/hte31-schema";
 import { fetchGateChartCandles } from "../../../../lib/gate-client";
 import { getHte31Trade, getHte31TradeChart } from "../../../../lib/hte31-repository";
 import { buildHte31Counterfactual } from "../../../../lib/hte31-counterfactual";
+import { buildResonanceEntryQuality } from "../../../../lib/resonance-entry-quality";
 import { getSettings } from "../../../../lib/settings-repository";
 import type { Candle } from "../../../../lib/signal-engine";
 import { requireApiAccount } from "../../../api-auth";
@@ -51,6 +52,9 @@ export async function GET(request: Request) {
   );
   const settings = await getSettings();
   const counterfactual = buildHte31Counterfactual(trade, candles, settings.roundTripCostBps, now);
+  const entryQuality = candles.length
+    ? buildResonanceEntryQuality(trade, candles, settings.roundTripCostBps, now)
+    : stored?.entryQuality ?? null;
 
   return Response.json({
     version: "hte-3.1-clean",
@@ -87,6 +91,7 @@ export async function GET(request: Request) {
       stopRecovery: trade.stopRecovery,
       label: trade.postExitLabel,
       status: trade.postExitStatus,
+      entryQuality,
     },
     upstreamError,
   }, { headers: { "Cache-Control": "private, max-age=5, stale-while-revalidate=15" } });

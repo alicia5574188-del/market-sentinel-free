@@ -28,10 +28,13 @@ test("every closed Resonance trade gets an immediate autopsy instead of waiting 
   assert.doesNotMatch(review, /reviewNumber < 1/);
 });
 
-test("two similar failures create a diagnosis directive instead of a two-hour paper cooldown", () => {
+test("repeated failures create scoped diagnosis directives instead of a two-hour paper cooldown", () => {
   assert.match(review, /count\("direction"\) >= 2/);
-  assert.match(review, /count\("entry"\) >= 2/);
+  assert.match(review, /buildResonanceEntryQualityPattern/);
+  assert.match(review, /entryPattern\?\.qualifiesForEntryChange/);
   assert.match(review, /count\("stop"\) \+ count\("exit"\) >= 2/);
+  assert.match(trading, /entryPattern\.setupId === next\.strategyId/);
+  assert.match(trading, /entryPattern\.assetRegime === next\.strategyMeta\.assetRegime/);
   assert.match(execution, /Losses change what the brain investigates, not the paper sample size/);
   assert.match(execution, /riskMultiplier: 1/);
   assert.doesNotMatch(execution, /getHte31Governance|COOLDOWN|2 \* 60 \* 60_000/);
@@ -56,6 +59,15 @@ test("learned behavior changes are paper-only until validation proves improvemen
   assert.match(execution, /check\.key\.startsWith\("resonance-cognitive-"\)/);
   assert.match(execution, /paperOnly \? `\$\{PAPER_ONLY_MARKER\}/);
   assert.match(liveRepository, /PAPER_REVALIDATION_ONLY/);
+});
+
+test("entry quality records deterministic timing diagnostics without changing live risk", () => {
+  assert.match(review, /buildResonanceEntryQuality/);
+  assert.match(review, /entryQualityJson/);
+  assert.match(trading, /同打法同环境增加回踩确认/);
+  assert.match(trading, /openResonancePaperTrade/);
+  assert.match(execution, /COGNITIVE_ADAPTATION/);
+  assert.match(liveRepository, /模拟复考单禁止进入 Gate 实盘/);
 });
 
 test("whole-market state has inertia and a direct bull-bear flip requires stronger confirmation", () => {

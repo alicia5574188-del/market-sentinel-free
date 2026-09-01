@@ -419,7 +419,7 @@ export class HTE31TradeManager extends DurableObject<CloudflareEnv> {
           const to = Math.min(Date.now(), due.trade.exitAt + Math.max(5, due.observation.horizonMinutes + 5) * 60_000);
           const from = Math.max(due.trade.entryAt - 90 * 60_000, to - 70 * 60 * 60_000);
           const candles = await fetchGateChartCandles(due.trade.symbol, from, to);
-          await completeHte31PostExitObservation(due.trade, due.observation.horizonMinutes, candles, Date.now());
+          await completeHte31PostExitObservation(due.trade, due.observation.horizonMinutes, candles, settings.roundTripCostBps, Date.now());
           refreshed += 1;
         } catch (error) {
           failures.push(`post-exit ${due.trade.symbol}: ${errorMessage(error)}`);

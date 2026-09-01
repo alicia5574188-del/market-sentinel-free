@@ -9,7 +9,14 @@ import { requireApiViewer } from "../../api-auth";
 export const dynamic = "force-dynamic";
 
 const SCANNER_STALE_MS = 90_000;
+const DIAGNOSTICS_CACHE_MS = 60_000;
+const DIAGNOSTICS_STALE_FALLBACK_MS = 5 * 60_000;
 const TRADERS: HumanTraderId[] = ["dennis_trend", "raschke_pullback", "turtle_soup"];
+
+let diagnosticsCache: {
+  fetchedAt: number;
+  value: Awaited<ReturnType<typeof getHte31Diagnostics>>;
+} | null = null;
 
 type CleanScannerStub = {
   status(): Promise<SchedulerWorkerStatus>;
@@ -26,6 +33,18 @@ function errorMessage(error: unknown) {
 
 function fmtPf(value: number | null) {
   return value == null ? "--" : value >= 99 ? "∞" : value.toFixed(2);
+}
+
+async function readCachedDiagnostics(now: number) {
+  if (diagnosticsCache && now - diagnosticsCache.fetchedAt <= DIAGNOSTICS_CACHE_MS) return diagnosticsCache.value;
+  try {
+    const value = await getHte31Diagnostics(now);
+    diagnosticsCache = { fetchedAt: now, value };
+    return value;
+  } catch (error) {
+    if (diagnosticsCache && now - diagnosticsCache.fetchedAt <= DIAGNOSTICS_STALE_FALLBACK_MS) return diagnosticsCache.value;
+    throw error;
+  }
 }
 
 function biasText(value: "LONG" | "SHORT" | "NEUTRAL") {
@@ -80,9 +99,8 @@ function enrichDashboardDiagnostics(
 }
 
 export async function GET() {
-  // This is the 15-second read-only observer path. Authentication still comes
-  // from the trusted request identity, but a transient user_accounts/D1 issue
-  // must not turn the whole trading dashboard into a 503.
+  // Keep this high-frequency read-only observer independent of user_accounts
+  // persistence while retaining trusted request identity authentication.
   const auth = await requireApiViewer();
   if ("response" in auth) return auth.response;
   const requestedAt = Date.now();
@@ -120,7 +138,7 @@ export async function GET() {
 
   let diagnostics: Awaited<ReturnType<typeof getHte31Diagnostics>> | null = null;
   try {
-    diagnostics = await getHte31Diagnostics(requestedAt);
+    diagnostics = await readCachedDiagnostics(requestedAt);
     if (dashboard) enrichDashboardDiagnostics(dashboard, diagnostics);
   } catch (error) {
     errors.diagnostics = errorMessage(error);

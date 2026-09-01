@@ -118,6 +118,7 @@ export const hte31TradeCharts = sqliteTable("hte31_trade_charts", {
   entryCandlesJson: text("entry_candles_json").notNull().default("[]"),
   holdingCandlesJson: text("holding_candles_json").notNull().default("[]"),
   postExitCandlesJson: text("post_exit_candles_json").notNull().default("[]"),
+  entryQualityJson: text("entry_quality_json").notNull().default("null"),
   updatedAt: integer("updated_at").notNull(),
 });
 

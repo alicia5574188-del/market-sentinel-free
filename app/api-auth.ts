@@ -15,15 +15,7 @@ function viewerRole(email: string): "owner" | "member" {
   return ownerEmail && normalizeAccountEmail(ownerEmail) === email ? "owner" : "member";
 }
 
-/**
- * Authenticate a read-only observer request without making user_accounts a
- * hard dependency of the high-frequency dashboard path.
- *
- * The Cloudflare worker validates the owner session before injecting these
- * identity headers; hosted environments provide the same authenticated user
- * headers. Mutations and account-scoped features must continue to use
- * requireApiAccount() so their durable account id/status checks stay intact.
- */
+/** Authenticate the read-only observer without requiring user_accounts persistence. */
 export async function requireApiViewer(): Promise<{ account: ApiViewer } | { response: Response }> {
   try {
     const user = await getChatGPTUser();

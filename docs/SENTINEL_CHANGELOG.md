@@ -11,6 +11,34 @@ Rules:
 
 ---
 
+## 2026-09-01 — Entry Quality learning and honest historical-memory UI
+
+### Changed
+
+- Added a deterministic, persisted HTE31 Entry Quality report with Entry Efficiency, MAE before first +0.5R, time to +0.5R/+1R, and delayed-entry counterfactuals for 1/2/3 completed 5m candles.
+- Added explainable entry classification: direction wrong, entry too early, entry too late, normal noise, stop too tight, or insufficient data.
+- Scoped `require_retest` to repeated evidence in the same setup and asset regime: at least 3 assessed trades, at least 2 matching early-entry diagnoses, and at least 60% agreement.
+- Added the entry metrics and 5/10/15-minute comparisons to expandable order reviews and owner diagnostics.
+- Changed historical-memory cards below 8 independent episodes from `分歧 0%` to `样本不足 · n/8` and `暂不参与判断`; eligible cards show the symbol/time horizon, effective independent samples, bias, and median forward move.
+- Cached auxiliary HTE31 diagnostics for 60 seconds with a five-minute stale fallback, reduced the single main dashboard poll to 30 seconds, and retained the last trustworthy snapshot with a local refresh-delay notice on transient failure.
+- Added additive migration `0015_resonance_entry_quality.sql` for persisted per-trade entry diagnostics.
+
+### Deliberately unchanged
+
+- No structural stop, paper risk amount, leverage policy, Gate live risk, broad setup threshold, scanner authority, position-protection rule, or real-order execution path changed.
+- Entry Quality adaptations remain cognitive paper challengers and carry the existing marker that prevents Gate live execution.
+- The UI adds no second poll, foreground Gate producer, duplicate destructive control, or second authority source.
+
+### Verification
+
+- Focused Entry Quality/market-memory tests: 9 passed.
+- Focused UI, migration, learning, and Must-Keep tests: 36 passed.
+- Strategy/risk/migration suite: 194 passed.
+- Production build/UI safety suite: 104 passed.
+- TypeScript and ESLint passed; final post-documentation validation, PR CI, merged-main CI, and production deployment remain pending.
+
+---
+
 ## 2026-09-01 — Resonance operator surface and complete pre-trade plans deployed
 
 - Production implementation commit: `0cef71de1eeff41d4cbb64f5951e0c0f188ce824`

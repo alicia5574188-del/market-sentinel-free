@@ -4,6 +4,7 @@ export type ResonanceBias = "LONG" | "SHORT" | "NEUTRAL";
 
 export type HistoricalAnalog = {
   label: "短线" | "波段" | "大周期";
+  minimumSamples: number;
   sampleCount: number;
   bias: ResonanceBias;
   confidence: number;
@@ -37,6 +38,8 @@ type AnalogCandidate = {
   similarity: number;
   forwardPct: number;
 };
+
+export const RESONANCE_ANALOG_MINIMUM_SAMPLES = 8;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -146,6 +149,7 @@ function weightedRatio(matches: AnalogCandidate[], predicate: (row: AnalogCandid
 function emptyAnalog(label: HistoricalAnalog["label"]): HistoricalAnalog {
   return {
     label,
+    minimumSamples: RESONANCE_ANALOG_MINIMUM_SAMPLES,
     sampleCount: 0,
     bias: "NEUTRAL",
     confidence: 0,
@@ -186,7 +190,8 @@ export function buildHistoricalAnalog(candles: Hte31Candle[], options: AnalogOpt
   const bearishRatio = weightedRatio(matches, (match) => match.forwardPct < -options.neutralThresholdPct);
   const neutralRatio = Math.max(0, 1 - bullishRatio - bearishRatio);
   const dominantRatio = Math.max(bullishRatio, bearishRatio);
-  const enoughIndependentHistory = matches.length >= Math.min(8, options.topK);
+  const minimumSamples = Math.min(RESONANCE_ANALOG_MINIMUM_SAMPLES, options.topK);
+  const enoughIndependentHistory = matches.length >= minimumSamples;
   const bias: ResonanceBias = enoughIndependentHistory && bullishRatio >= 0.60 ? "LONG"
     : enoughIndependentHistory && bearishRatio >= 0.60 ? "SHORT" : "NEUTRAL";
   const averageSimilarity = mean(matches.map((match) => match.similarity));
@@ -197,6 +202,7 @@ export function buildHistoricalAnalog(candles: Hte31Candle[], options: AnalogOpt
 
   return {
     label: options.label,
+    minimumSamples,
     sampleCount: matches.length,
     bias,
     confidence,
@@ -224,7 +230,7 @@ export function buildResonanceMarketMemory(input: {
     { item: short, weight: 0.20 },
     { item: swing, weight: 0.45 },
     { item: cycle, weight: 0.35 },
-  ].filter(({ item }) => item.sampleCount >= 8 && item.bias !== "NEUTRAL");
+  ].filter(({ item }) => item.sampleCount >= item.minimumSamples && item.bias !== "NEUTRAL");
   const signed = weighted.reduce((sum, { item, weight }) => sum + (item.bias === "LONG" ? 1 : -1) * (item.confidence / 100) * weight, 0);
   const usedWeight = weighted.reduce((sum, item) => sum + item.weight, 0);
   const normalized = usedWeight > 0 ? signed / usedWeight : 0;

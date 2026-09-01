@@ -65,9 +65,30 @@ Record only consequential decisions using this format:
 - Evidence: `getHte31Dashboard()` already returns parsed entry plans. The updated page displays direction, trigger/gates, entry zone, stop, TP1/TP2, evidence, missing conditions, and invalidation while the polling and exchange boundaries remain unchanged.
 - Revisit when: The HTE31 entry-plan schema changes or operators require additional execution economics on pre-trade cards.
 
+## 2026-09-01 — Learn entry timing with scoped, paper-only evidence
+
+- Choice: Persist a deterministic Entry Quality report for every HTE31 trade chart: Entry Efficiency, MAE before +0.5R, time to +0.5R/+1R, late-1/2/3-bar counterfactuals, and one of five explainable diagnoses. `require_retest` may activate only after at least 3 assessed trades in the same setup and asset regime, with at least 2 and at least 60% classified as entry-too-early.
+- Reason: The previous `MAE ≥ 0.75R && MFE ≥ 0.6R` heuristic could identify a possible entry issue but could not answer whether waiting 5–15 minutes would have improved the trade, and its recent-three-trade directive was not scoped to one playbook/environment.
+- Evidence: `lib/resonance-entry-quality.ts` replays the stored candle path conservatively; `lib/resonance-review.ts` aggregates only matching setup/regime cells; `lib/resonance-trading.ts` applies the retest only to that cell and the existing cognitive marker keeps it out of Gate live.
+- Revisit when: A forward baseline/challenger sample is large enough to compare original versus retest timing without changing stop or risk policy.
+
 ## 2026-09-01 — Keep the HTE31 observer independent of account persistence
 
 - Choice: Authenticate the high-frequency `/api/hte31` read path with a trusted read-only viewer identity, while retaining durable `requireApiAccount()` checks for account-scoped and mutation APIs.
-- Reason: The core dashboard does not need to read or update `user_accounts` on every 15-second refresh. Making that auxiliary persistence lookup a prerequisite allows a transient account-store failure to surface as a full dashboard 503 instead of local degradation.
-- Evidence: The production iPhone reported `/api/hte31 请求失败 (503)` while its last successful snapshot remained visible; route audit showed `requireApiAccount()` ran before all scanner/dashboard `allSettled` and catch-based degradation handling. PR #100 CI run `33470798900` passed strategy/risk/migration, production build/UI safety, and Wrangler dry-run after removing that hard dependency only from the observer path.
+- Reason: The core dashboard does not need to read or update `user_accounts` on every refresh. Making that auxiliary lookup a prerequisite allows a transient account-store failure to surface as a full dashboard 503.
+- Evidence: PR #100 added `requireApiViewer()` to the observer path and passed its production CI. This Entry Quality change preserves that boundary while adding local diagnostic caching and last-trustworthy-snapshot degradation.
 - Revisit when: HTE31 snapshot responses need durable account identifiers or account-specific authorization beyond owner/member display role.
+
+## 2026-09-01 — Present historical analog sample eligibility honestly
+
+- Choice: Expose the 8-independent-episode minimum in the market-memory payload and UI. Below it, show sample progress and exclusion from judgment; at or above it, show bias, effective sample count, and median forward move.
+- Reason: `NEUTRAL / confidence 0` below the evidence floor means “not eligible,” not a measured 0% disagreement.
+- Evidence: `buildHistoricalAnalog()` already deduplicates overlapping windows and requires 8 independent matches; the UI now renders the same threshold rather than inventing a directional reading.
+- Revisit when: The historical analog estimator or its evidence minimum changes.
+
+## 2026-09-01 — Degrade HTE31 refreshes locally
+
+- Choice: Cache auxiliary diagnostics for 60 seconds with a five-minute stale fallback, reduce the single main dashboard poll from 15 to 30 seconds, and retain the last trustworthy snapshot with an amber refresh-delay notice after a transient failure.
+- Reason: A non-JSON edge 503 should not erase valid data or display a raw whole-page failure while the independent Scanner and Position Monitor continue running.
+- Evidence: The reported iPhone screenshot retained the prior snapshot while `/api/hte31` returned 503; the new client state preserves that behavior explicitly and cuts foreground diagnostic reads.
+- Revisit when: Production logs show the remaining request budget or a read-model split supports an even lighter health refresh.

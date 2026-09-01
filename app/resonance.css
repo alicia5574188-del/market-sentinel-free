@@ -152,6 +152,10 @@ button { color: inherit; }
 .rz-review-metrics div, .rz-observer-row div { background: rgba(5,20,28,.48); border-radius: 14px; padding: 10px; }
 .rz-review-metrics span, .rz-observer-row span { display: block; color: var(--rz-muted); font-size: 10px; }
 .rz-review-metrics b, .rz-observer-row b { display: block; margin-top: 3px; font-size: 13px; }
+.rz-entry-counterfactuals { display: grid; gap: 7px; margin-top: 10px; }
+.rz-entry-counterfactuals > div { border: 1px solid var(--rz-line); border-radius: 13px; padding: 10px; min-width: 0; }
+.rz-entry-counterfactuals b, .rz-entry-counterfactuals span { display: block; overflow-wrap: anywhere; }
+.rz-entry-counterfactuals span { margin-top: 4px; color: var(--rz-muted); font-size: 11px; line-height: 1.5; }
 .rz-observer-row { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; margin-top: 8px; }
 .rz-chart-copy { display: grid; gap: 7px; margin-top: 12px; color: var(--rz-muted); font-size: 12px; line-height: 1.55; }
 
@@ -178,6 +182,7 @@ button { color: inherit; }
 .rz-runtime-alert span { color: var(--rz-muted); font-size: 12px; line-height: 1.5; }
 
 .rz-banner { border: 1px solid var(--rz-line); border-radius: 18px; padding: 12px 14px; margin-bottom: 14px; color: var(--rz-muted); }
+.rz-banner.warn { border-color: rgba(242,196,94,.4); color: var(--rz-warn); }
 .rz-banner.bad { border-color: rgba(255,102,122,.45); color: #ff9aa8; }
 .rz-empty { border: 1px dashed var(--rz-line); border-radius: 20px; padding: 24px 18px; text-align: center; color: var(--rz-muted); }
 .rz-empty strong { color: var(--rz-text); display: block; }

@@ -286,6 +286,7 @@ export async function openResonancePaperTrade(
     entryCandlesJson: JSON.stringify(candles.slice(-96)),
     holdingCandlesJson: "[]",
     postExitCandlesJson: "[]",
+    entryQualityJson: "null",
     updatedAt: now,
   });
   return {

@@ -18,6 +18,7 @@ type Hte31TraderId = HumanTraderId | AdvancedTraderId;
 import { buildHte31PaperPosition } from "./hte31-position-sizing.ts";
 import { evaluateHte31PerformanceCell } from "./hte31-performance-gate.ts";
 import { hte31TimeoutExitReason, isSustainedHte31StopRecovery } from "./hte31-exit-quality.ts";
+import { buildResonanceEntryQuality } from "./resonance-entry-quality.ts";
 import {
   RESONANCE_POLICY_STARTED_AT,
   isCurrentResonanceLearningId,
@@ -397,6 +398,7 @@ export async function tryOpenHte31Trade(
     entryCandlesJson: JSON.stringify(candles.slice(-96)),
     holdingCandlesJson: "[]",
     postExitCandlesJson: "[]",
+    entryQualityJson: "null",
     updatedAt: now,
   });
   return { opened: row, reason: revalidationOnly ? `${selected.signal.label} 模拟复考单已建立` : `${selected.signal.label} 独立 Setup 完整触发` };
@@ -597,6 +599,7 @@ export async function getHte31TradeChart(id: string) {
     entryCandles: parseJson<Hte31Candle[]>(chart.entryCandlesJson, []),
     holdingCandles: parseJson<Hte31Candle[]>(chart.holdingCandlesJson, []),
     postExitCandles: parseJson<Hte31Candle[]>(chart.postExitCandlesJson, []),
+    entryQuality: parseJson<ReturnType<typeof buildResonanceEntryQuality> | null>(chart.entryQualityJson, null),
   } : null;
 }
 
@@ -609,7 +612,13 @@ export async function nextHte31PostExitObservation(now = Date.now()) {
   return trade ? { observation: row, trade } : null;
 }
 
-export async function completeHte31PostExitObservation(trade: typeof hte31Trades.$inferSelect, horizonMinutes: number, candles: Hte31Candle[], now = Date.now()) {
+export async function completeHte31PostExitObservation(
+  trade: typeof hte31Trades.$inferSelect,
+  horizonMinutes: number,
+  candles: Hte31Candle[],
+  roundTripCostBps = 0,
+  now = Date.now(),
+) {
   if (!trade.exitAt || !trade.exitPrice) return;
   const exitAt = trade.exitAt;
   const exitPrice = trade.exitPrice;
@@ -661,9 +670,17 @@ export async function completeHte31PostExitObservation(trade: typeof hte31Trades
   const [chart] = await db.select().from(hte31TradeCharts).where(eq(hte31TradeCharts.tradeId, trade.id)).limit(1);
   const fullWindow = candles.slice(-220);
   if (chart) {
+    const entryQuality = buildResonanceEntryQuality(trade, [
+      ...parseJson<Hte31Candle[]>(chart.entryCandlesJson, []),
+      ...parseJson<Hte31Candle[]>(chart.holdingCandlesJson, []),
+      ...parseJson<Hte31Candle[]>(chart.postExitCandlesJson, []),
+      ...fullWindow,
+      ...rows,
+    ], roundTripCostBps, now);
     await db.update(hte31TradeCharts).set({
       holdingCandlesJson: horizonMinutes === 0 ? JSON.stringify(fullWindow) : chart.holdingCandlesJson,
       postExitCandlesJson: horizonMinutes > 0 ? JSON.stringify(rows.slice(-160)) : chart.postExitCandlesJson,
+      entryQualityJson: JSON.stringify(entryQuality),
       updatedAt: now,
     }).where(eq(hte31TradeCharts.tradeId, trade.id));
   }

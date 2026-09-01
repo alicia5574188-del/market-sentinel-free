@@ -1,5 +1,11 @@
 # Market Sentinel — Current System State
 
+> **2026-09-01 Resonance Entry Quality correction (supersedes older learning/UI descriptions below).**
+>
+> Resonance evaluates five paper playbooks (HT1–HT5). Its new Entry Quality observer records Entry Efficiency, MAE before first +0.5R, time to +0.5R/+1R, and 5/10/15-minute delayed-entry counterfactuals. It distinguishes direction error, early entry, late entry, normal noise, and tight stop. Entry confirmation can change only for a setup + asset-regime cell with at least 3 assessed samples and repeated evidence; every such adaptation remains paper-only and is rejected by the Gate live boundary.
+>
+> Historical analog cards now expose the real minimum of 8 independent episodes. Below that floor they are explicitly excluded from judgment. `/api/hte31` auxiliary diagnostics are cached for 60 seconds, the main phone refresh runs every 30 seconds, and a transient failure retains an explicitly labeled last trustworthy snapshot.
+
 > **2026-08-30 HTE 3.1 correction (supersedes conflicting strategy and paper-risk statements below).**
 >
 > Production is **Market Sentinel HTE 3.1 Clean**. New simulated entries come from three independent Human Trader setups: Dennis trend breakout, Raschke trend pullback, and Turtle Soup failed breakout.
@@ -12,7 +18,7 @@
 >
 > Chat history is discussion context only. Before any future code change, read the current `main` branch, recent merged PRs/commits, CI status, and this file. Never reconstruct production behavior from memory or a missing chat message.
 
-Last reconciled: **2026-08-30 19:10 +08:00**
+Last reconciled: **2026-09-01 16:33 +08:00**
 Repository: `alicia5574188-del/market-sentinel-free`  
 Production strategy identity: **Market Sentinel HTE 3.1 Clean**
 

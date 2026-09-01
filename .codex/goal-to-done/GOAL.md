@@ -41,3 +41,14 @@ Restore the complete operator-facing contract on PR #99 without changing trading
 - Preserve account, Web Push, audit, Gate credential/control/reconciliation/emergency, review, and scanner diagnostic capabilities.
 - Add no polling, foreground Gate producer, destructive-action duplicate, live authority, risk path, schema change, or strategy-rule change.
 - Require focused UI tests, strategy/risk tests, production build/UI tests, lint, TypeScript, Wrangler dry-run, compatibility audit, and a green PR #99 remote CI run.
+
+## Current completion objective — Entry Quality learning
+
+Teach Resonance to diagnose entry timing before changing stop or risk policy:
+
+- Show historical analogs as evidence with an explicit independent-sample threshold; fewer than 8 samples must say `样本不足 · n/8` and `暂不参与判断`, never `分歧 0%`.
+- Record per-trade Entry Efficiency, adverse excursion before the first +0.5R, time to +0.5R/+1R, and delayed-entry counterfactuals for 1/2/3 completed 5m candles.
+- Classify entry outcomes as direction wrong, entry too early, entry too late, normal noise, or stop too tight; insufficient paths remain unclassified.
+- Feed the result into the existing cognitive review, but require repeated evidence in the same setup and asset regime before changing entry confirmation.
+- Keep all learned entry-confirmation changes paper-only and traceable through the existing cognitive marker; do not change stop distance, paper/live risk, Gate rules, or broad setup thresholds.
+- Reduce `/api/hte31` foreground pressure and preserve the last trustworthy snapshot during a transient refresh failure.

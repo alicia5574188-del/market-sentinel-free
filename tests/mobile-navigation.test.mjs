@@ -28,7 +28,9 @@ test("iPhone keeps native vertical scrolling with no document touch trap", async
 test("dashboard has one main poll and live polling only on live tab", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   assert.match(page, /readJson<Snapshot>\("\/api\/hte31"\)/);
-  assert.match(page, /15_000/);
+  assert.match(page, /MAIN_REFRESH_MS = 30_000/);
+  assert.match(page, /最近可信快照/);
+  assert.match(page, /后台扫描与持仓保护独立运行/);
   assert.match(page, /if \(tab !== "实盘"\) return/);
   assert.match(page, /readJson<LiveSnapshot>\("\/api\/live\/status"\)/);
   assert.match(page, /20_000/);
