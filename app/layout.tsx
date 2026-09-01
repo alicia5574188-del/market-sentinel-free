@@ -1,7 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import { requireChatGPTUser } from "./chatgpt-auth";
+import ResonanceOperatorControls from "./resonance-operator-controls";
 import "./globals.css";
 import "./resonance.css";
+import "./resonance-operator-controls.css";
 
 export const dynamic = "force-dynamic";
 
@@ -49,7 +51,10 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   await requireChatGPTUser("/");
   return (
     <html lang="zh-CN">
-      <body>{children}</body>
+      <body>
+        {children}
+        <ResonanceOperatorControls />
+      </body>
     </html>
   );
 }
