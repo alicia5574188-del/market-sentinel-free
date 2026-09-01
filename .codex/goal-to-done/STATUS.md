@@ -1,7 +1,7 @@
 # Status
 
-- State: done
-- Updated UTC: 2026-09-01T03:43:34Z
+- State: production-deployed
+- Updated UTC: 2026-09-01T03:53:38Z
 - Pull request: `#99` — `fix/resonance-feature-preservation`
 - Verified starting HEAD: `0de959a15468d27db9b941ea4a7f1e7784e780f0`
 
@@ -31,11 +31,16 @@
 - `git diff --check`: passed.
 - The complete local validation set above passed again after updating GOAL, STATUS, and DECISIONS.
 - GitHub Actions `Sentinel V2 CI` run `33467169944` (run 344), job `99729324911`, passed on implementation commit `b5b1afbdd874051b720a0b313a1e977b40471948`; checkout, install, strategy/risk/migration tests, production build/UI safety tests, and Wrangler production dry-run all succeeded.
+- PR #99 was squash-merged to `main` as `0cef71de1eeff41d4cbb64f5951e0c0f188ce824`.
+- Merged-main GitHub Actions `Sentinel V2 CI` run `33467619313` (run 346), job `99730648020`, passed.
+- Cloudflare Workers Build `ff6a6eed-eb29-4807-9410-f04c4bf00b7b` passed and promoted Version `07eeee00-8226-4616-afdb-1124a7211dd9` to production.
+- Production root `https://market-sentinel-free.alicia5574188.workers.dev/` loaded the owner login surface successfully after deployment.
+- By design, a new Worker version disables new Gate entries while preserving existing-position protection and reconciliation; this deployment did not bypass that safety lock or silently re-enable live financial exposure.
 
 ## Remaining action
 
-- No implementation work remains. PR #99 remains intentionally open and unmerged for review.
-- No production deployment was authorized or performed by this task.
+- No implementation or deployment work remains.
+- The production owner can re-enable Auto Live from the verified live-control surface when intentionally ready to accept new Gate exposure.
 
 ## Blockers
 

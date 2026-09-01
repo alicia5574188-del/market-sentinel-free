@@ -11,6 +11,34 @@ Rules:
 
 ---
 
+## 2026-09-01 — Resonance operator surface and complete pre-trade plans deployed
+
+- Production implementation commit: `0cef71de1eeff41d4cbb64f5951e0c0f188ce824`
+- Cloudflare Build ID: `ff6a6eed-eb29-4807-9410-f04c4bf00b7b`
+- Cloudflare Version ID: `07eeee00-8226-4616-afdb-1124a7211dd9`
+
+### Changed
+
+- Restored the fixed `机会 / 雷达 / 订单 / 实盘 / 设置` bottom navigation while preserving the learning views under Orders.
+- Kept simulation-capital reset discoverable from funds with one Settings execution point, open-position blocking, and historical trade/learning preservation.
+- Added expandable pre-trade cards backed by the existing HTE31 dashboard payload: direction, trigger state and checks, entry zone/price, stop, TP1, TP2, risk/reward, support, counter-evidence, missing conditions, and invalidation rules.
+- Restored or retained operator-critical account, Web Push, audit, scanner diagnostics, Gate credential deletion, reconciliation, risk visibility, strategy lineage, and mobile-safe Emergency Stop capabilities.
+
+### Deliberately unchanged
+
+- No strategy trigger, paper/live sizing rule, risk limit, D1 schema/history, scanner cadence, position-protection rule, Gate credential model, foreground market producer, or execution authority changed.
+- No new periodic polling, duplicate destructive reset, duplicate live control, or second risk path was added.
+- The deployment-version safety lock may disable new Gate entries; existing positions continue normal protection and reconciliation, and Auto Live is not silently re-enabled by deployment automation.
+
+### Verification
+
+- Focused capability/UI/reset regression tests: 24 passed.
+- Strategy/risk/migration suite: 189 passed.
+- Production build/UI safety suite: 102 passed.
+- ESLint, TypeScript, Wrangler production dry-run, and compatibility audit passed.
+- PR CI run 345 and merged-main CI run 346 passed.
+- Cloudflare Workers Build succeeded and promoted the recorded version to production; the public production root served the owner login surface successfully.
+
 ## 2026-08-30 — HTE 3.1 paper economics and negative-cell containment
 
 ### Changed
