@@ -7,7 +7,7 @@ const [page, css] = await Promise.all([
   readFile(new URL("../app/resonance.css", import.meta.url), "utf8"),
 ]);
 
-test("Resonance keeps critical operator controls visible after product refactors", () => {
+test("Resonance keeps critical operator capabilities reachable after product refactors", () => {
   for (const phrase of [
     "重置模拟本金",
     "/api/hte31/paper-reset",
@@ -24,13 +24,15 @@ test("Resonance keeps critical operator controls visible after product refactors
   ]) assert.match(page, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
-test("paper reset is reachable from home and settings", () => {
-  assert.ok((page.match(/重置模拟本金/g) ?? []).length >= 2);
+test("paper reset remains reachable without duplicating the destructive action", () => {
+  const resetButtons = page.match(/onClick=\{resetPaper\}>重置模拟本金<\/button>/g) ?? [];
+  assert.equal(resetButtons.length, 1);
   assert.match(page, /资金设置/);
   assert.match(page, /重新开始资金曲线/);
+  assert.match(page, /有模拟持仓时不得重置|openTrades\.length/);
 });
 
-test("trade review keeps the information operators previously relied on", () => {
+test("trade review keeps the information operators rely on", () => {
   for (const phrase of [
     "原始 Stop",
     "当前保护价",
@@ -57,5 +59,4 @@ test("mobile emergency hold suppresses browser selection and context gestures", 
   assert.match(css, /\.rz-hold-button[\s\S]*-webkit-user-select:\s*none/);
   assert.match(css, /\.rz-hold-button[\s\S]*-webkit-touch-callout:\s*none/);
   assert.match(css, /\.rz-hold-button[\s\S]*touch-action:\s*manipulation/);
-}
-);
+});
