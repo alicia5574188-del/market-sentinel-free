@@ -1,7 +1,7 @@
 # Status
 
-- State: local-complete; final remote CI pending
-- Updated UTC: 2026-09-01T03:39:17Z
+- State: done
+- Updated UTC: 2026-09-01T03:43:34Z
 - Pull request: `#99` — `fix/resonance-feature-preservation`
 - Verified starting HEAD: `0de959a15468d27db9b941ea4a7f1e7784e780f0`
 
@@ -20,7 +20,7 @@
   - the new signal surface reads the existing observer-only dashboard payload and degrades to explicit empty-plan copy when no plan exists;
   - mobile cards use bounded grids, `min-width: 0`, and wrapping rules; the fixed nav remains safe-area aware.
 
-## Validation evidence before this STATUS update
+## Validation evidence
 
 - Focused capability/UI/reset regression tests: 24 passed, 0 failed.
 - `npm run test:signals`: 189 passed, 0 failed.
@@ -29,11 +29,13 @@
 - `./node_modules/.bin/tsc --noEmit --incremental false`: passed.
 - `./node_modules/.bin/wrangler deploy --dry-run --config dist/server/wrangler.json`: passed; the production Worker bundle and bindings assembled successfully.
 - `git diff --check`: passed.
+- The complete local validation set above passed again after updating GOAL, STATUS, and DECISIONS.
+- GitHub Actions `Sentinel V2 CI` run `33467169944` (run 344), job `99729324911`, passed on implementation commit `b5b1afbdd874051b720a0b313a1e977b40471948`; checkout, install, strategy/risk/migration tests, production build/UI safety tests, and Wrangler production dry-run all succeeded.
 
 ## Remaining action
 
-- Repeat the complete validation set after this state-file update, push the implementation to PR #99, and confirm the remote `Sentinel V2 CI` run is green.
-- PR #99 remains intentionally open and unmerged. No production deployment is authorized or performed by this task.
+- No implementation work remains. PR #99 remains intentionally open and unmerged for review.
+- No production deployment was authorized or performed by this task.
 
 ## Blockers
 
