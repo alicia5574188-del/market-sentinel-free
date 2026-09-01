@@ -71,11 +71,23 @@ test("simulation reset is reachable from funds without duplicating its destructi
   assert.match(page, /资金设置/);
   assert.match(page, /重置模拟本金/);
   assert.match(page, /\/api\/hte31\/paper-reset/);
-  assert.match(page, /⚙ 设置/);
+  assert.match(page, /const NAV: Tab\[\] = \["机会", "雷达", "订单", "实盘", "设置"\]/);
   assert.match(page, /tab === "设置"/);
   assert.match(page, /重新开始资金曲线/);
   const resetButtons = page.match(/onClick=\{resetPaper\}>重置模拟本金<\/button>/g) ?? [];
   assert.equal(resetButtons.length, 1);
+});
+
+test("pre-trade signal cards expose the complete decision and risk plan", () => {
+  assert.match(page, /entryPlan: EntryPlan \| null/);
+  assert.match(page, /function SignalCard/);
+  for (const phrase of ["方向", "触发状态", "入场区", "入场价", "止损", "TP1", "TP2", "触发与硬闸门", "支持证据", "反证 / 缺失条件", "失效条件"]) {
+    assert.match(page, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.match(page, /plan\?\.checks/);
+  assert.match(page, /plan\?\.exitRules/);
+  assert.match(page, /item\.reasons/);
+  assert.match(page, /item\.blockers/);
 });
 
 test("runtime settings preserve scanner diagnostics needed to detect silent stalls", () => {

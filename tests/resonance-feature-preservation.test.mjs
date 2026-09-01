@@ -32,6 +32,16 @@ test("paper reset remains reachable without duplicating the destructive action",
   assert.match(page, /有模拟持仓时不得重置|openTrades\.length/);
 });
 
+test("fixed navigation and full pre-trade evidence survive product refactors", () => {
+  assert.match(page, /const NAV: Tab\[\] = \["机会", "雷达", "订单", "实盘", "设置"\]/);
+  assert.match(page, /function SignalCard/);
+  for (const phrase of ["触发状态", "入场区", "止损", "TP1", "TP2", "触发与硬闸门", "支持证据", "反证 / 缺失条件", "失效条件"]) {
+    assert.match(page, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.match(page, /checks\.filter\(\(check\) => !check\.passed\)/);
+  assert.match(page, /exitRules\.map/);
+});
+
 test("trade review keeps the information operators rely on", () => {
   for (const phrase of [
     "原始 Stop",

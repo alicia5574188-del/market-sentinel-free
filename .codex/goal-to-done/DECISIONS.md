@@ -50,3 +50,17 @@ Record only consequential decisions using this format:
 - Reason: The failed assertions encoded obsolete copy and DOM shape, and one over-broad rule treated the Emergency Stop button's local gesture suppression as a page-wide scroll trap.
 - Evidence: GitHub Actions run `33460289588` failed only tests 35, 68, and 96; the production build, 189 strategy/risk tests, 100 UI safety tests, Wrangler dry-run, ESLint, and TypeScript all pass after the compatibility repair.
 - Revisit when: The reset behavior, mobile navigation model, or root operator-control mounting architecture changes.
+
+## 2026-09-01 — Restore the five-tab contract without deleting learning
+
+- Choice: Use exactly `机会 / 雷达 / 订单 / 实盘 / 设置` in the fixed bottom navigation and place the former standalone Learning sections under `订单`.
+- Reason: The original product contract requires those five discoverable destinations, while learning and per-trade review remain Must-Keep capabilities and should not be discarded merely to meet the navigation count.
+- Evidence: The production page previously exposed `首页 / 市场 / 交易 / 学习 / 实盘` and hid Settings behind a header button; focused and full UI tests now enforce the restored fixed tab set while continuing to assert every learning surface.
+- Revisit when: User research supports a different information architecture and the fixed five-tab contract is explicitly changed.
+
+## 2026-09-01 — Adapt existing HTE31 plans into complete pre-trade cards
+
+- Choice: Render full pre-trade evidence and risk detail from the existing dashboard `entryPlan`, `reasons`, and `blockers`, using native expandable cards and no new API or state producer.
+- Reason: The backend already persisted the required trigger checks, levels, support, counter-evidence, and exit rules; the UI type and compact card were the only missing layer.
+- Evidence: `getHte31Dashboard()` already returns parsed entry plans. The updated page displays direction, trigger/gates, entry zone, stop, TP1/TP2, evidence, missing conditions, and invalidation while the polling and exchange boundaries remain unchanged.
+- Revisit when: The HTE31 entry-plan schema changes or operators require additional execution economics on pre-trade cards.
