@@ -36,11 +36,14 @@ async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
   return payload;
 }
 
-function urlBase64ToUint8Array(value: string) {
+function urlBase64ToArrayBuffer(value: string): ArrayBuffer {
   const padding = "=".repeat((4 - value.length % 4) % 4);
   const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
   const raw = window.atob(base64);
-  return Uint8Array.from(raw, (char) => char.charCodeAt(0));
+  const bytes = Uint8Array.from(raw, (char) => char.charCodeAt(0));
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  return buffer;
 }
 
 function formatTime(value: number) {
@@ -98,7 +101,7 @@ export default function ResonanceOperatorControls() {
       const existing = await registration.pushManager.getSubscription();
       const subscription = existing ?? await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(key.publicKey),
+        applicationServerKey: urlBase64ToArrayBuffer(key.publicKey),
       });
       await readJson("/api/push/subscribe", {
         method: "POST",
