@@ -21,7 +21,7 @@ test("production UI is Resonance while preserving all five playbooks", () => {
   assert.match(page, /MemoryCard item=\{memory\.swing\}/);
   assert.match(page, /MemoryCard item=\{memory\.cycle\}/);
   assert.doesNotMatch(page, /旧 HTE 3\.0 不进入这里|SIMULATION LEDGER · CLEAN|HTE 3\.1 新账本|CLEAN RADAR|CLEAN RUNTIME/);
-  assert.match(layout, /<body>\{children\}<\/body>/);
+  assert.match(layout, /<body>[\s\S]*\{children\}[\s\S]*<ResonanceOperatorControls \/>[\s\S]*<\/body>/);
   assert.doesNotMatch(layout, /Strategy2Dashboard|Strategy2PlaybookDiagnostics|Strategy2LearningArena|RuntimeStabilityClient|UiStatusSemanticFix|LiveOrdersInline/);
 });
 
