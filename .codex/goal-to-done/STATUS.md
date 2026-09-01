@@ -1,7 +1,7 @@
 # Status
 
 - State: production-deployed
-- Updated UTC: 2026-09-01T03:53:38Z
+- Updated UTC: 2026-09-01T04:42:20Z
 - Pull request: `#99` — `fix/resonance-feature-preservation`
 - Verified starting HEAD: `0de959a15468d27db9b941ea4a7f1e7784e780f0`
 
@@ -36,6 +36,15 @@
 - Cloudflare Workers Build `ff6a6eed-eb29-4807-9410-f04c4bf00b7b` passed and promoted Version `07eeee00-8226-4616-afdb-1124a7211dd9` to production.
 - Production root `https://market-sentinel-free.alicia5574188.workers.dev/` loaded the owner login surface successfully after deployment.
 - By design, a new Worker version disables new Gate entries while preserving existing-position protection and reconciliation; this deployment did not bypass that safety lock or silently re-enable live financial exposure.
+
+## 2026-09-01 production `/api/hte31` 503 resilience hotfix
+
+- A production iPhone report showed the core `/api/hte31` observer request returning HTTP 503 while the last successful market snapshot remained on screen.
+- Audit confirmed `/api/hte31` is a high-frequency read-only observer, but it performed `ensureUserAccount()` through `requireApiAccount()` before its scanner/dashboard partial-degradation boundary. A transient `user_accounts` persistence failure could therefore take down the whole dashboard request even though account persistence is not required to read the snapshot.
+- PR #100 introduces `requireApiViewer()` for this read-only hot path. It still authenticates the trusted request identity and derives owner/member role, but does not make `user_accounts` D1 persistence a prerequisite for the dashboard.
+- Durable account checks remain unchanged for account details, settings mutations, push subscriptions, Gate credentials, live control, reconciliation, emergency actions, and other account-scoped operations.
+- No polling cadence, Gate foreground request, D1 schema/history, strategy rule, scanner authority, position protection, live risk, credential path, or mutation behavior changed.
+- PR #100 GitHub Actions `Sentinel V2 CI` run `33470798900` (run 348), job `99739988992`, passed on implementation commit `109d82092ef3357466cdc0b5d5130a4aab5b2e51`; strategy/risk/migration tests, production build/UI safety tests, and Wrangler production dry-run all succeeded.
 
 ## Remaining action
 

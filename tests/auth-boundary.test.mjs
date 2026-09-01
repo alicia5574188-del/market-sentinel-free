@@ -22,6 +22,19 @@ test("所有业务 API 都在服务端检查账户身份", async () => {
   }
 });
 
+test("HTE31 高频只读快照认证不依赖 user_accounts D1 写入", async () => {
+  const route = await readFile(new URL("../app/api/hte31/route.ts", import.meta.url), "utf8");
+  const auth = await readFile(new URL("../app/api-auth.ts", import.meta.url), "utf8");
+  const viewer = auth.match(/export async function requireApiViewer[\s\S]*?\n}\n\nexport async function requireApiAccount/)?.[0] ?? "";
+
+  assert.match(route, /requireApiViewer/);
+  assert.doesNotMatch(route, /requireApiAccount/);
+  assert.match(viewer, /getChatGPTUser/);
+  assert.match(viewer, /normalizeAccountEmail/);
+  assert.match(viewer, /viewerRole/);
+  assert.doesNotMatch(viewer, /ensureUserAccount/);
+});
+
 test("系统设置和手动深度扫描只允许所有者修改", async () => {
   const settings = await readFile(new URL("../app/api/settings/route.ts", import.meta.url), "utf8");
   const scan = await readFile(new URL("../app/api/scan/run/route.ts", import.meta.url), "utf8");
