@@ -13,6 +13,10 @@ Rules:
 
 ## 2026-09-01 — Entry Quality learning and honest historical-memory UI
 
+- Production implementation commit: `6450fe04f03f31fa836df22248c556c83ca95f9d`
+- Cloudflare Build ID: `93c6c0bf-c551-4417-8de7-c6ec7411dc39`
+- Cloudflare Version ID: `4a248442-61fb-44ab-ab26-f534730e6a80`
+
 ### Changed
 
 - Added a deterministic, persisted HTE31 Entry Quality report with Entry Efficiency, MAE before first +0.5R, time to +0.5R/+1R, and delayed-entry counterfactuals for 1/2/3 completed 5m candles.
@@ -35,7 +39,9 @@ Rules:
 - Focused UI, migration, learning, and Must-Keep tests: 36 passed.
 - Strategy/risk/migration suite: 194 passed.
 - Production build/UI safety suite: 104 passed.
-- TypeScript and ESLint passed; final post-documentation validation, PR CI, merged-main CI, and production deployment remain pending.
+- TypeScript and ESLint passed.
+- PR #101 CI run 352 and merged-main CI run 353 passed, including Wrangler production dry-run.
+- Cloudflare applied the additive migration and successfully promoted the recorded version; the production root returned HTTP 200 and unauthenticated `/api/hte31` returned the expected JSON HTTP 401 instead of 503/HTML failure.
 
 ---
 

@@ -1,59 +1,38 @@
 # Status
 
-- State: local-verified-awaiting-pr
-- Updated UTC: 2026-09-01T08:33:42Z
-- Base production implementation: `0cef71de1eeff41d4cbb64f5951e0c0f188ce824`
-- Working branch: `codex/pr99-complete-must-keep` (a new remote feature branch will be created from current `main`)
+- State: production-deployed
+- Updated UTC: 2026-09-01T08:45:30Z
+- Pull request: `#101` — `feat/resonance-entry-quality`
+- Production commit: `6450fe04f03f31fa836df22248c556c83ca95f9d`
+- Cloudflare Build ID: `93c6c0bf-c551-4417-8de7-c6ec7411dc39`
+- Cloudflare Version ID: `4a248442-61fb-44ab-ab26-f534730e6a80`
 
-## Completed locally
+## Completed and deployed
 
-- Added `lib/resonance-entry-quality.ts`, a deterministic observer that records:
-  - Entry Efficiency over the initial path;
-  - MAE before the first +0.5R;
-  - time to +0.5R and +1R;
-  - delayed-entry counterfactuals for 1/2/3 completed 5m candles;
-  - direction-wrong, entry-too-early, entry-too-late, normal-noise, stop-too-tight, or insufficient-data classification.
-- Added additive D1 migration `0015_resonance_entry_quality.sql`; new and subsequently observed HTE31 trade charts persist the report in `entry_quality_json`.
-- Exposed Entry Quality in the chart API, expandable order review, and owner diagnostics.
-- Connected Entry Quality to cognitive review. `require_retest` now requires at least 3 assessed trades in the same setup and asset regime, with at least 2 and at least 60% classified as entry-too-early.
-- Scoped the retest rule to that exact setup/regime cell. The existing cognitive marker keeps adapted orders paper-only and Gate live rejects them.
-- Exposed the real historical-analog evidence floor in the payload and UI:
-  - below 8 independent samples: `样本不足 · n/8` and `暂不参与判断`;
-  - at/above 8: symbol + horizon, bias/confidence, effective independent samples, and median forward move.
-- Reduced recurring `/api/hte31` pressure by caching auxiliary diagnostics for 60 seconds with a five-minute stale fallback and changing the single main poll from 15s to 30s.
-- A transient refresh failure now preserves the last trustworthy dashboard and uses an amber “refresh delayed” notice instead of a raw red `/api/hte31 请求失败 (503)` banner; Scanner and Position Monitor remain independent.
+- Added persisted per-trade Entry Quality: Entry Efficiency, MAE before +0.5R, time to +0.5R/+1R, 5/10/15-minute delayed-entry counterfactuals, and explainable direction/early/late/noise/tight-stop classification.
+- Cognitive `require_retest` now needs repeated evidence in the exact setup and asset regime: at least 3 assessed trades, at least 2 early-entry diagnoses, and at least 60% agreement.
+- Entry adaptations remain paper-only and keep the marker rejected by Gate live.
+- Historical analog cards now show `样本不足 · n/8` and `暂不参与判断` below the independent-sample floor; eligible cards show bias, valid sample count, and median forward move.
+- Preserved PR #100's `requireApiViewer()` boundary so `/api/hte31` does not depend on `user_accounts` persistence; added 60-second auxiliary-diagnostic caching, five-minute stale fallback, 30-second polling, and last-trustworthy-snapshot UI degradation.
+- Applied additive D1 migration `0015_resonance_entry_quality.sql`; no trade history or learning data was deleted.
 
 ## Explicitly unchanged
 
-- No stop distance, TP protection rule, paper risk amount, adaptive leverage rule, Gate live sizing, live credential/control path, broad setup threshold, scanner authority, or position-management authority changed.
-- No new polling, foreground Gate producer, destructive action, live authority, schema rewrite, or historical deletion was introduced.
-- Historical trades and learning remain intact; the migration is additive.
+- No stop distance, TP protection, paper risk amount, leverage policy, Gate live size, broad entry threshold, scanner authority, position protection, credential/control path, or emergency behavior changed.
+- Simulation-capital reset, five-tab mobile navigation, five playbooks, Web Push, audit, reconciliation, Auto Live safety lock, and existing-position protection remain present.
 
-## Validation evidence
+## Verification evidence
 
-- Focused Entry Quality and market-memory tests: 9 passed, 0 failed.
-- Focused UI/migration/learning/Must-Keep tests: 36 passed, 0 failed.
-- `npm run test:signals`: 194 passed, 0 failed.
-- `npm test`: production build passed; 104 passed, 0 failed.
-- `npm run lint`: passed with 0 errors and 0 warnings.
-- `./node_modules/.bin/tsc --noEmit --incremental false`: passed.
-- `git diff --check`: passed.
+- Local: `npm run test:signals` 194/194; production build and UI/permission suite 104/104; ESLint, TypeScript, and `git diff --check` passed.
+- PR CI: Sentinel V2 CI run `33488386398` (run 352), job `99793760766`, passed including Wrangler production dry-run.
+- Merged-main CI: run `33488485003` (run 353), job `99794087568`, passed.
+- Cloudflare Workers Build `93c6c0bf-c551-4417-8de7-c6ec7411dc39` succeeded and promoted version `4a248442-61fb-44ab-ab26-f534730e6a80`.
+- Production root returned HTTP 200 with the owner login page; unauthenticated `/api/hte31` returned JSON HTTP 401 rather than a 503 or HTML error page.
 
 ## Remaining action
 
-- Run the full validation set once more after documentation reconciliation.
-- Run Wrangler production dry-run.
-- Create a feature branch/PR from current remote `main`, wait for green CI, merge, verify merged-main CI and Cloudflare migration/deployment, then verify production UI/API behavior.
+- None. Continue collecting paper samples; do not tune stops, live risk, or broad entry gates until repeated forward evidence exists.
 
 ## Blockers
 
 - None.
-
-## Exact final validation commands
-
-- `npm run test:signals`
-- `npm test`
-- `npm run lint`
-- `./node_modules/.bin/tsc --noEmit --incremental false`
-- `./node_modules/.bin/wrangler deploy --dry-run --config dist/server/wrangler.json`
-- `git diff --check`
