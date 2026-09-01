@@ -21,11 +21,32 @@ type CleanPositionStub = {
 };
 
 function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : "unknown HTE 3.1 runtime error";
+  return error instanceof Error ? error.message : "unknown Resonance runtime error";
 }
 
 function fmtPf(value: number | null) {
   return value == null ? "--" : value >= 99 ? "∞" : value.toFixed(2);
+}
+
+function biasText(value: "LONG" | "SHORT" | "NEUTRAL") {
+  return value === "LONG" ? "偏多" : value === "SHORT" ? "偏空" : "方向中性";
+}
+
+function dashboardMarketView(readModel: Hte31ScanCompleted) {
+  const market = readModel.market;
+  const asset = readModel.marketView;
+  const pending = market.pendingLabel
+    ? `检测到 ${market.pendingLabel}${market.pendingBias === "NEUTRAL" ? "" : market.pendingBias === "LONG" ? "偏多" : "偏空"}，正在确认 ${market.pendingConfirmations}/${market.requiredConfirmations}，正式状态暂不翻转。`
+    : market.transitionNote;
+  return {
+    ...asset,
+    bias: market.bias,
+    confidence: market.confidence,
+    environment: market.label,
+    headline: `整体市场：${market.label} · ${biasText(market.bias)}`,
+    reason: `${pending} 当前深扫 ${readModel.target.replace("_USDT", "")}：${asset.headline}。下方历史相似行情属于这个当前币种，用来辅助具体进场，不会冒充整个市场。`,
+    strongDirection: market.bias !== "NEUTRAL" && market.stability >= 58 && market.transitionRisk < 64,
+  };
 }
 
 function enrichDashboardDiagnostics(
@@ -44,11 +65,18 @@ function enrichDashboardDiagnostics(
       ? `${hour.nearest.symbol.replace("_USDT", "")} 还差 ${hour.nearest.failed.map((item) => item.label).join(" + ")}`
       : hour.nearest ? `${hour.nearest.symbol.replace("_USDT", "")} 已接近完整 Setup` : "暂无近似候选";
     const shadowText = traderId === "turtle_soup"
-      ? "HT3 暂不参与放宽影子验证"
-      : `Near-Ready 影子完成 ${shadow.completed} / 观察中 ${shadow.pending} · PF ${fmtPf(shadow.profitFactor)} · Exp ${shadow.expectancyR >= 0 ? "+" : ""}${shadow.expectancyR.toFixed(2)}R${shadow.qualifiesForCalibration ? " · 已达到校准样本门槛" : " · 尚未达到 30 样本校准门槛"}`;
+      ? "HT3 暂不参与旧 Near-Ready 校准"
+      : `旧 Near-Ready 影子完成 ${shadow.completed} / 观察中 ${shadow.pending} · PF ${fmtPf(shadow.profitFactor)} · Exp ${shadow.expectancyR >= 0 ? "+" : ""}${shadow.expectancyR.toFixed(2)}R${shadow.qualifiesForCalibration ? " · 已达到校准样本门槛" : " · 尚未达到 30 样本校准门槛"}`;
+    if (guard.state === "COOLDOWN") {
+      guard.state = "ACTIVE";
+      guard.reason = `连续亏损 ${guard.lossStreak} 笔已交给认知复盘；模拟学习继续运行，不做机械时间冷却`;
+    }
     guard.reason = `${guard.reason} · 1h 评估 ${hour.evaluations} / READY ${hour.ready} / Near-Ready ${hour.nearReady}${top ? ` · 常缺：${top}` : ""} · 最近：${near} · 6h READY ${sixHours.ready}/${sixHours.evaluations} · ${shadowText}`;
   }
-  dashboard.governance.reason = `${dashboard.governance.reason} · 风险预算倍率 ${Math.round(dashboard.governance.riskMultiplier * 100)}%：新模拟单按账户权益约4%规划风险，并限制在3%–5%；TP2扣费后目标5%–20%，仓位与目标先调整，不能满足安全边界才拒绝。`;
+
+  dashboard.governance.state = "NORMAL";
+  dashboard.governance.riskMultiplier = 1;
+  dashboard.governance.reason = "认知学习模式：连续亏损触发归因、挑战方案和影子验证；不再用两小时/六小时冷却或缩仓代替思考。";
 }
 
 export async function GET() {
@@ -65,11 +93,8 @@ export async function GET() {
   let readModel: Hte31ScanCompleted | null = null;
 
   if (!scanner || !position) {
-    errors.bindings = "HTE 3.1 Clean Durable Object bindings unavailable";
+    errors.bindings = "Resonance Durable Object bindings unavailable";
   } else {
-    // The dashboard is deliberately observer-only. Opening the iPhone/web app
-    // must never be required to start or heal market scanning. Cloudflare Cron
-    // and Durable Object alarms are the only runtime drivers.
     const settled = await Promise.allSettled([
       scanner.status(),
       position.status(),
@@ -101,23 +126,43 @@ export async function GET() {
   const lastSuccessAt = scannerStatus?.lastSuccessAt ?? readModel?.observedAt ?? null;
   const scannerAgeMs = lastSuccessAt == null ? null : Math.max(0, requestedAt - lastSuccessAt);
   if (scannerAgeMs != null && scannerAgeMs > SCANNER_STALE_MS) {
-    errors.scannerFreshness = `Clean Scanner 已 ${Math.round(scannerAgeMs / 1000)} 秒没有完成新评估`;
+    errors.scannerFreshness = `Resonance Scanner 已 ${Math.round(scannerAgeMs / 1000)} 秒没有完成新评估`;
   }
   if (scannerStatus?.lastError) errors.scannerRuntime = scannerStatus.lastError;
   if (positionStatus?.lastError) errors.positionRuntime = positionStatus.lastError;
 
+  const displayReadModel = readModel
+    ? { ...readModel, marketView: dashboardMarketView(readModel) }
+    : null;
+
   return Response.json({
-    version: "hte-3.1-clean",
+    version: "resonance-v2-cognitive",
     requestedAt,
     observedAt: lastSuccessAt ?? requestedAt,
     account: auth.account,
     scanner: {
       status: scannerStatus,
       ageMs: scannerAgeMs,
-      readModel,
+      // Existing clients keep the same shape, but the dashboard headline now
+      // represents the stable whole market rather than whichever coin happened
+      // to be deep-scanned in this minute.
+      readModel: displayReadModel,
     },
     position: { status: positionStatus },
     market: readModel?.market ?? null,
+    asset: readModel ? {
+      symbol: readModel.target,
+      view: readModel.marketView,
+      memory: readModel.memory,
+    } : null,
+    decisionChain: readModel ? {
+      wholeMarket: readModel.market,
+      symbol: readModel.target,
+      symbolView: readModel.marketView,
+      historicalMemory: readModel.memory,
+      latestReview: readModel.review,
+      openReason: readModel.openReason,
+    } : null,
     dashboard,
     diagnostics,
     degraded: Object.keys(errors).length > 0,

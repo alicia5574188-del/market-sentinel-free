@@ -21,10 +21,10 @@ import { getSettings } from "../lib/settings-repository";
 import type { SchedulerWorkerStatus } from "../lib/background-scheduler";
 import type { CloudflareEnv } from "./index";
 
-// This generation bump discards only the Durable Object scheduler checkpoint
-// from the pre-Resonance scanner. D1 trades, learning, simulation epochs, live
-// credentials and live-order lineage remain untouched.
-const CLEAN_RUNTIME_VERSION = "resonance-v1";
+// This generation bump resets only Durable Object scheduler/checkpoint state.
+// D1 trades, learning, simulation epochs, live credentials and live-order
+// lineage remain untouched.
+const CLEAN_RUNTIME_VERSION = "resonance-v2-cognitive";
 const SCANNER_CYCLE_INTERVAL_MS = 60_000;
 const TRADE_MANAGER_ACTIVE_INTERVAL_MS = 15_000;
 const TRADE_MANAGER_IDLE_INTERVAL_MS = 60_000;
@@ -32,7 +32,7 @@ const TRADE_MANAGER_ACTIVE_HEARTBEAT_MS = 60_000;
 const TRADE_MANAGER_IDLE_HEARTBEAT_MS = 5 * 60_000;
 
 type ScannerRuntime = {
-  version: 1;
+  version: 2;
   rotationOffset: number;
   job: Hte31ScanJob | null;
   readModel: Hte31ScanCompleted | null;
@@ -56,7 +56,7 @@ function baseStatus(): SchedulerWorkerStatus {
 
 function baseScannerRuntime(): ScannerRuntime {
   return {
-    version: 1,
+    version: 2,
     rotationOffset: 0,
     job: null,
     readModel: null,
@@ -99,8 +99,6 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
   }
 
   private async saveRuntime(runtime: ScannerRuntime) {
-    // One hidden SQLite row contains job + status + read model. Keeping these in
-    // separate keys previously multiplied rows_written on every scan phase.
     await this.ctx.storage.put("runtime", runtime);
   }
 
@@ -153,9 +151,6 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
   }
 
   private async runSlice(job: Hte31ScanJob) {
-    // 5m strategy inputs do not benefit from a Durable Object write after every
-    // tiny phase. Adjacent lightweight phases share one invocation while deep
-    // market analysis remains isolated because it has the largest request set.
     const maxSteps = job.phase === "config" || job.phase === "candles" ? 2 : 1;
     let current = job;
     for (let stepIndex = 0; stepIndex < maxSteps; stepIndex += 1) {
@@ -186,8 +181,10 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
       return previous;
     }
 
-    let job = runtime.job ?? createHte31ScanJob(runtime.rotationOffset);
-    if (job.rotationOffset !== runtime.rotationOffset) job = createHte31ScanJob(runtime.rotationOffset);
+    let job = runtime.job ?? createHte31ScanJob(runtime.rotationOffset, runtime.readModel?.market ?? null);
+    if (job.rotationOffset !== runtime.rotationOffset) {
+      job = createHte31ScanJob(runtime.rotationOffset, runtime.readModel?.market ?? null);
+    }
 
     if (previous.circuitOpen && previous.retryAfter && previous.retryAfter <= now) {
       job = {
@@ -233,9 +230,6 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
       jobId: job.id,
     };
     runtime = { ...runtime, job, status: startingStatus };
-
-    // This is the only pre-execution checkpoint. The 1-minute Cron remains the
-    // independent watchdog if an invocation is terminated before the next alarm.
     await this.saveRuntime(runtime);
 
     initialize(this.env);

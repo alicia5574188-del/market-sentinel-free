@@ -32,20 +32,20 @@ test("Near-Ready shadow learning is bounded, evidence-gated and auxiliary", () =
   assert.match(diagnostics, /HTE31_SHADOW_MIN_EXPECTANCY_R = 0\.15/);
   assert.match(diagnostics, /不会自动修改正式阈值/);
   const diagnosticIndex = scanner.indexOf("recordHte31DiagnosticCycle(packet, signals, job.settings)");
-  const openIndex = scanner.indexOf("tryOpenResonanceTrade(packet, signals, job.candles, job.settings, job.marketView, job.review)");
+  const openIndex = scanner.indexOf("tryOpenResonanceTrade(packet, signals, job.candles, job.settings, job.market, job.marketView, job.review)");
   assert.ok(diagnosticIndex >= 0, "scanner must record bounded diagnostic evidence");
   assert.ok(openIndex > diagnosticIndex, "formal trade opening must remain separate from diagnostic recording");
   assert.match(scanner.slice(diagnosticIndex, openIndex), /catch \(error\)/, "diagnostic failure must not block the formal trading path");
 });
 
-test("dashboard explains risk multiplier and surfaces 1h\/6h trigger funnel", () => {
+test("dashboard exposes cognitive learning instead of mechanical loss cooldown", () => {
   assert.match(route, /1h 评估/);
   assert.match(route, /6h READY/);
   assert.match(route, /Near-Ready 影子完成/);
-  assert.match(route, /风险预算倍率/);
-  assert.match(route, /账户权益约4%规划风险/);
-  assert.match(route, /限制在3%–5%/);
-  assert.match(route, /TP2扣费后目标5%–20%/);
+  assert.match(route, /连续亏损触发归因、挑战方案和影子验证/);
+  assert.match(route, /不再用两小时\/六小时冷却或缩仓代替思考/);
+  assert.match(route, /连续亏损 .*已交给认知复盘/);
+  assert.doesNotMatch(route, /风险预算倍率/);
 });
 
 test("migration creates isolated diagnostic and shadow tables", () => {
