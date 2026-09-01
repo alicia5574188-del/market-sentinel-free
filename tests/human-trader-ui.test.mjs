@@ -21,7 +21,7 @@ test("production UI is Resonance while preserving all five playbooks", () => {
   assert.match(page, /MemoryCard item=\{memory\.swing\}/);
   assert.match(page, /MemoryCard item=\{memory\.cycle\}/);
   assert.doesNotMatch(page, /旧 HTE 3\.0 不进入这里|SIMULATION LEDGER · CLEAN|HTE 3\.1 新账本|CLEAN RADAR|CLEAN RUNTIME/);
-  assert.match(layout, /<body>\{children\}<\/body>/);
+  assert.match(layout, /<body>[\s\S]*\{children\}[\s\S]*<ResonanceOperatorControls \/>[\s\S]*<\/body>/);
   assert.doesNotMatch(layout, /Strategy2Dashboard|Strategy2PlaybookDiagnostics|Strategy2LearningArena|RuntimeStabilityClient|UiStatusSemanticFix|LiveOrdersInline/);
 });
 
@@ -35,44 +35,99 @@ test("main page is observer-only and does not call an exchange directly", () => 
   assert.doesNotMatch(scanner, /from "\.\/gate-client/);
 });
 
-test("trade cards preserve leverage economics and expandable candlestick review", () => {
+test("trade cards preserve leverage economics and full expandable review", () => {
   assert.match(page, /function MiniChart/);
   assert.match(page, /\/api\/hte31\/chart\?trade=/);
-  assert.match(page, />杠杆</);
-  assert.match(page, />保证金</);
-  assert.match(page, />计划风险</);
-  assert.match(page, />TP2</);
+  for (const phrase of ["杠杆", "隔离保证金", "名义仓位", "计划亏损", "TP2预计净利", "当前保护价", "TP1", "TP2"]) assert.match(page, new RegExp(phrase));
+  assert.match(page, /plannedTp2NetUsdt/);
+  assert.match(page, /chart\.markers\.map/);
+  assert.match(page, /post-exit-zone/);
+  for (const metric of ["仓内 MFE", "仓内 MAE", "出场后 MFE", "出场后 MAE", "Exit Capture", "Exit Efficiency"]) assert.match(page, new RegExp(metric));
   assert.match(page, /counterfactual/);
   assert.match(page, /diagnosis/);
   assert.match(chart, /exitCapturePct/);
   assert.match(chart, /exitEfficiency/);
+  assert.match(chart, /markers:/);
   assert.match(css, /\.rz-chart/);
 });
 
-test("learning screen exposes system review and independently disabled negative cells", () => {
-  assert.match(page, /整体复盘/);
-  assert.match(page, /系统正在学什么/);
+test("learning starts after every close and five trades are only a stage summary", () => {
+  assert.match(page, /每笔交易都会立即复盘/);
+  assert.match(page, /5 笔只用于阶段汇总/);
+  assert.match(page, /latestAutopsy/);
+  assert.match(page, /阶段汇总/);
   assert.match(page, /已经被数据否定的组合/);
   assert.match(page, /performanceGate/);
 });
 
-test("small-price contracts retain dynamic precision and pnl never wraps", () => {
+test("small-price contracts retain eight-decimal precision and pnl never wraps", () => {
   const formatter = page.match(/function fmtPrice[\s\S]*?\n}/)?.[0] ?? "";
-  assert.match(formatter, /Math\.abs\(value\) >= 1000 \? 2 : Math\.abs\(value\) >= 1 \? 4 : 6/);
+  assert.match(formatter, /abs >= 1000 \? 2 : abs >= 1 \? 4 : abs >= 0\.01 \? 6 : 8/);
   assert.match(formatter, /value\.toFixed\(digits\)/);
   assert.match(css, /\.rz-order-pnl[\s\S]*white-space:\s*nowrap/);
 });
 
-test("live boundary preserves owner-controlled credentials reconciliation and emergency stop", () => {
+test("simulation reset is reachable from funds without duplicating its destructive action", () => {
+  assert.match(page, /资金设置/);
+  assert.match(page, /重置模拟本金/);
+  assert.match(page, /\/api\/hte31\/paper-reset/);
+  assert.match(page, /const NAV: Tab\[\] = \["机会", "雷达", "订单", "实盘", "设置"\]/);
+  assert.match(page, /tab === "设置"/);
+  assert.match(page, /重新开始资金曲线/);
+  const resetButtons = page.match(/onClick=\{resetPaper\}>重置模拟本金<\/button>/g) ?? [];
+  assert.equal(resetButtons.length, 1);
+});
+
+test("pre-trade signal cards expose the complete decision and risk plan", () => {
+  assert.match(page, /entryPlan: EntryPlan \| null/);
+  assert.match(page, /function SignalCard/);
+  for (const phrase of ["方向", "触发状态", "入场区", "入场价", "止损", "TP1", "TP2", "触发与硬闸门", "支持证据", "反证 / 缺失条件", "失效条件"]) {
+    assert.match(page, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.match(page, /plan\?\.checks/);
+  assert.match(page, /plan\?\.exitRules/);
+  assert.match(page, /item\.reasons/);
+  assert.match(page, /item\.blockers/);
+});
+
+test("runtime settings preserve scanner diagnostics needed to detect silent stalls", () => {
+  assert.match(page, /Scanner/);
+  assert.match(page, /当前阶段/);
+  assert.match(page, /scanner\?\.phase/);
+  assert.match(page, /scanner\?\.lastError/);
+  assert.match(page, /scanner\?\.circuitOpen/);
+  assert.match(page, /ageSeconds/);
+  assert.match(page, /Trade Manager/);
+});
+
+test("live boundary preserves credentials reconciliation emergency stop and mobile hold safety", () => {
   assert.match(page, /type="password" autoComplete="off" value=\{apiKey\}/);
   assert.match(page, /type="password" autoComplete="off" value=\{apiSecret\}/);
   assert.match(page, /\/api\/live\/control/);
   assert.match(page, /\/api\/live\/credentials/);
+  assert.match(page, /method: "DELETE"/);
+  assert.match(page, /删除凭据/);
   assert.match(page, /\/api\/live\/reconcile/);
   assert.match(page, /\/api\/live\/emergency/);
   assert.match(page, /按住 1\.2 秒紧急停机/);
+  assert.match(page, /onContextMenu=\{\(event\) => event\.preventDefault\(\)\}/);
+  assert.match(page, /rz-hold-button/);
+  assert.match(css, /\.rz-hold-button[\s\S]*user-select:\s*none/);
+  assert.match(css, /-webkit-user-select:\s*none/);
+  assert.match(css, /-webkit-touch-callout:\s*none/);
+  assert.match(css, /touch-action:\s*manipulation/);
   assert.doesNotMatch(page, /localStorage|sessionStorage/);
   assert.match(liveStatus, /\^Human Trader · \(\[\^：\]\+\)：/);
+});
+
+test("live page surfaces safety state and strategy lineage instead of hiding it", () => {
+  assert.match(page, /实盘资格/);
+  assert.match(page, /emergencyReason/);
+  assert.match(page, /credential\.lastError/);
+  assert.match(page, /strategyLabel/);
+  assert.match(page, /strategyThesis/);
+  assert.match(page, /marginMode/);
+  assert.match(page, /order\.leverage/);
 });
 
 test("product surface omits migration and implementation copy", () => {

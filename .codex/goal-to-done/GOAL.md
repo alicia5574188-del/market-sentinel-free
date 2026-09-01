@@ -30,3 +30,14 @@
 - Do not silently change real Gate leverage/risk sizing in this paper-sizing change. Future funding would make enabled live trading financially active, so any real sizing change must remain separately traceable and verified.
 - Do not reduce entry frequency merely to improve the displayed average profit.
 - Do not claim guaranteed realized profit; entry economics can be enforced, while timeout, breakeven, fees, and slippage can still alter actual results.
+
+## Current completion objective — PR #99 Must-Keep UI
+
+Restore the complete operator-facing contract on PR #99 without changing trading authority or risk behavior:
+
+- Keep exactly five fixed bottom tabs: `机会 / 雷达 / 订单 / 实盘 / 设置`.
+- Keep the simulation-capital reset discoverable from funds and executable only once from Settings, with open-position blocking and history/learning preservation unchanged.
+- Expose the full pre-trade plan from the existing HTE31 dashboard payload: direction, trigger state and gates, entry zone/price, stop, TP1, TP2, support, counter-evidence, and invalidation rules.
+- Preserve account, Web Push, audit, Gate credential/control/reconciliation/emergency, review, and scanner diagnostic capabilities.
+- Add no polling, foreground Gate producer, destructive-action duplicate, live authority, risk path, schema change, or strategy-rule change.
+- Require focused UI tests, strategy/risk tests, production build/UI tests, lint, TypeScript, Wrangler dry-run, compatibility audit, and a green PR #99 remote CI run.

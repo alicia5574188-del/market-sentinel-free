@@ -1,49 +1,51 @@
 # Status
 
-- State: implementation verification
-- Updated UTC: 2026-08-30T23:45:00+00:00
+- State: done
+- Updated UTC: 2026-09-01T03:43:34Z
+- Pull request: `#99` — `fix/resonance-feature-preservation`
+- Verified starting HEAD: `0de959a15468d27db9b941ea4a7f1e7784e780f0`
 
 ## Completed and verified
 
-- Durable project state initialized.
-- Current production source verified at `origin/main` commit `b5c9679`.
-- Root cause verified in code: HTE 3.1 risk near 10U, leverage capped at 3x, margin capped at 25% equity, and leverage hidden after close.
-- User explicitly authorized Gate live to remain enabled and clarified that paper position size must increase without reducing existing entry frequency.
-- Implemented adaptive HTE 3.1 paper sizing: 30–50U planned risk, 50–200U fee-adjusted TP2 net target, up to 50x paper leverage, liquidation-buffer checks, and TP2 R adjustment before rejection.
-- Added independent trader/regime/direction performance gates; three straight losses or four proven-negative samples pause only that cell.
-- Added open/closed order transparency for original stop, leverage, margin, notional, planned loss, TP2 projected net and realized R.
-- Corrected timeout and fake-stop classification behavior.
-- Restored owner-facing Auto Live enable/disable control while retaining risk locks, protective orders and emergency stop.
-- `npm run test:signals`: 160 passed; `npm test`: build plus 55 passed; ESLint and TypeScript passed.
+- Restored the required fixed bottom navigation: `机会 / 雷达 / 订单 / 实盘 / 设置`.
+- Preserved every learning view by placing the former standalone Learning content under `订单`; no capability was deleted to satisfy the five-tab contract.
+- Kept the simulation-capital reset discoverable through `机会 → 资金设置 → 设置`, with exactly one destructive reset button.
+- Preserved reset behavior: open simulated positions disable reset, and completed trades, per-trade reviews, learning results, and historical samples remain intact.
+- Added an expandable pre-trade signal card powered only by existing HTE31 dashboard data. It now exposes direction, trigger state, complete required/optional gate results, entry zone and price, stop, TP1, TP2, risk/reward and holding limit, support, counter-evidence/missing conditions, and invalidation rules.
+- Added capability-preservation assertions for the exact five-tab contract and full pre-trade evidence/risk surface.
+- Completed the compatibility audit against `docs/RESONANCE_MUST_KEEP_FEATURES.md`:
+  - simulation, trade review, Gate live, account, Web Push, audit, runtime diagnostics, Auto Live, reconciliation, credential deletion, and Emergency Stop remain reachable;
+  - no duplicate reset action, destructive operation, live state source, live authority, risk path, credential path, or market-data producer was added;
+  - no new polling, foreground Gate request, API route, D1/schema change, strategy decision change, scanner cadence change, position-protection change, or live risk change was introduced;
+  - the new signal surface reads the existing observer-only dashboard payload and degrades to explicit empty-plan copy when no plan exists;
+  - mobile cards use bounded grids, `min-width: 0`, and wrapping rules; the fixed nav remains safe-area aware.
 
-## In progress
+## Validation evidence
 
-- The user explicitly authorized publishing, PR creation, merge and Cloudflare production deployment.
-- Direct HTTPS push has no local Git credential, but the connected GitHub account `alicia5574188-del` has verified admin/push access to the repository; publication is proceeding through that authenticated channel.
-- Read the remote order ledger and live-switch state if configured access allows it after deployment.
+- Focused capability/UI/reset regression tests: 24 passed, 0 failed.
+- `npm run test:signals`: 189 passed, 0 failed.
+- `npm test`: production build passed; 102 passed, 0 failed.
+- `npm run lint`: passed with 0 errors and 0 warnings.
+- `./node_modules/.bin/tsc --noEmit --incremental false`: passed.
+- `./node_modules/.bin/wrangler deploy --dry-run --config dist/server/wrangler.json`: passed; the production Worker bundle and bindings assembled successfully.
+- `git diff --check`: passed.
+- The complete local validation set above passed again after updating GOAL, STATUS, and DECISIONS.
+- GitHub Actions `Sentinel V2 CI` run `33467169944` (run 344), job `99729324911`, passed on implementation commit `b5b1afbdd874051b720a0b313a1e977b40471948`; checkout, install, strategy/risk/migration tests, production build/UI safety tests, and Wrangler production dry-run all succeeded.
 
-## Next action
+## Remaining action
 
-- Publish the feature branch, complete PR CI and merge, then verify the Cloudflare production build and health endpoint.
+- No implementation work remains. PR #99 remains intentionally open and unmerged for review.
+- No production deployment was authorized or performed by this task.
 
 ## Blockers
 
-- No source or GitHub-permission blocker remains.
-- Direct Cloudflare CLI network access was unavailable on the first read-only attempt; confirm the connected production build from GitHub and the public Worker health/version response after merge.
+- None.
 
-## Validation
+## Exact final validation commands
 
-- `npm run test:signals` — 160 passed, 0 failed.
-- `npm test` — production build passed; 55 passed, 0 failed.
-- `npm run lint` — passed with 0 errors.
-- `npx tsc --noEmit --incremental false` — passed.
-- `git diff --check` — passed before commit.
-
-## 2026-08-30 five-trader reversal intelligence
-
-- Added HT4 Exhaustion / Anti-Crowd and HT5 Higher-Timeframe Swing as independent paper traders; max simultaneous paper positions remains 2.
-- Exposed 15m/1h/4h separately instead of using only the composite trend and connected the existing macro/DVOL risk context to the active HTE31 scanner.
-- Paper planned risk now includes round-trip fees; TP1 breakeven exits are scratches for streak/gate classification.
-- Position monitoring uses 10s candles and never retroactively applies a newly moved breakeven stop to earlier intrabar prices.
-- Added Counterfactual Observer for original/opposite and +0.5R/TP1/stop reversal paths.
-- HT4/HT5 are deliberately paper-only until their own samples validate them; HT1-HT3 live authority is unchanged.
+- `npm run test:signals`
+- `npm test`
+- `npm run lint`
+- `./node_modules/.bin/tsc --noEmit --incremental false`
+- `./node_modules/.bin/wrangler deploy --dry-run --config dist/server/wrangler.json`
+- `git diff --check`

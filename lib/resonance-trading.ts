@@ -174,7 +174,7 @@ function applyCognitiveEntryLearning(
   candles: Hte31Candle[],
   marketView: ResonanceMarketView,
   review: ResonanceSystemReview,
-) {
+): Hte31Signal {
   if (signal.side === "WAIT" || !signal.entryPlan) return signal;
   let next = signal;
 
@@ -265,7 +265,7 @@ function marketTarget(
   };
 }
 
-function markLearnedPolicyCandidate(signal: Hte31Signal, review: ResonanceSystemReview) {
+function markLearnedPolicyCandidate(signal: Hte31Signal, review: ResonanceSystemReview): Hte31Signal {
   if (!review.directives.length || signal.side === "WAIT" || !signal.entryPlan) return signal;
   return withCognitiveCheck(
     signal,

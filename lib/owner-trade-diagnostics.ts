@@ -89,6 +89,7 @@ function normalizeLegacyTrade(row: typeof tradeCases.$inferSelect) {
     lessonJson,
     ...trade
   } = row;
+  void _entrySnapshotJson;
   return {
     source: "legacy" as const,
     ...trade,

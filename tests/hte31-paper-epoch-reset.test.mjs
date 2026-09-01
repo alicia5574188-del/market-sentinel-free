@@ -32,7 +32,7 @@ test("paper capital reset is owner-confirmed and blocked while a paper position 
   assert.match(route, /confirmed !== true/);
   assert.match(repository, /存在模拟持仓，平仓后才能重置模拟本金/);
   assert.match(page, /重置模拟本金/);
-  assert.match(page, /历史交易和学习结果继续保留/);
+  assert.match(page, /历史交易、逐笔复盘和学习结果全部保留/);
   assert.match(page, /disabled=\{Boolean\(dashboard\?\.openTrades\.length\)\}/);
 });
 

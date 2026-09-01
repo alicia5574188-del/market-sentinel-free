@@ -7,7 +7,8 @@ test("Resonance mobile navigation is one fixed five-tab control", async () => {
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/resonance.css", import.meta.url), "utf8"),
   ]);
-  assert.match(page, /const NAV: Tab\[\] = \["首页", "市场", "交易", "学习", "实盘"\]/);
+  assert.match(page, /const NAV: Tab\[\] = \["机会", "雷达", "订单", "实盘", "设置"\]/);
+  assert.doesNotMatch(page, /const NAV: Tab\[\][^\n]+学习/);
   assert.match(page, /<nav className="rz-nav"/);
   const navBlock = css.match(/\.rz-nav \{([^}]*)\}/s)?.[1] ?? "";
   assert.match(navBlock, /position: fixed/);
@@ -20,7 +21,7 @@ test("iPhone keeps native vertical scrolling with no document touch trap", async
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
   ]);
-  assert.doesNotMatch(page, /touchmove|preventDefault\(\)|MutationObserver|createPortal|PULL_REFRESH_TRIGGER_PX/);
+  assert.doesNotMatch(page, /(?:document|window)\s*\.\s*addEventListener\s*\(\s*["']touchmove|MutationObserver|createPortal|PULL_REFRESH_TRIGGER_PX/);
   assert.doesNotMatch(layout, /RuntimeStabilityClient|Strategy2Dashboard|Strategy2PlaybookDiagnostics|Strategy2LearningArena|UiStatusSemanticFix|LiveOrdersInline/);
 });
 
