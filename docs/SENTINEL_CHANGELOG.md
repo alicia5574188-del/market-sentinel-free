@@ -13,6 +13,12 @@ Rules:
 
 ## 2026-09-02 — Isolated strategy challengers and research router
 
+- Production PR: `#103`
+- Feature commit: `013908658e26c783742e50f21efde3d6307ad1e3`
+- Production merge commit: `599dd815e202e8910b773a4481f45083c35972bc`
+- PR CI run/job: `33612891752` / `100191962600`
+- Merged-main CI run/job: `33612981374` / `100192245504`
+
 ### Changed
 
 - Preserved the five existing control playbooks and froze the HT4 Exhaustion decision block with an exact regression fingerprint.
@@ -34,6 +40,9 @@ Rules:
 - Strategy/risk/migration suite: 204 passed.
 - Production build/UI/Must-Keep suite: 107 passed.
 - TypeScript, ESLint, and Wrangler production dry-run passed.
+- Production served immutable asset `assets/page-BQKWUfKi.js` containing the new strategy-routing surface. `/__health` returned HTTP 200 and `ok: true`; Position Monitor and Market Scanner were live, their successful timestamps advanced between probes, no scheduler error was present, and the scanner circuit remained closed.
+- Cloudflare's internal Build ID and Version ID were not exposed by the current access surface; no identifier was inferred or invented.
+
 
 ---
 
