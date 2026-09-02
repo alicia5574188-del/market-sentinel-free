@@ -666,6 +666,10 @@ export default function ResonancePage() {
   const mainSnapshotSeen = useRef(false);
   const lastSnapshotAt = useRef<number | null>(null);
 
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [tab]);
+
   const refreshMain = useCallback(async () => {
     try {
       const next = await readJson<Snapshot>("/api/hte31");
