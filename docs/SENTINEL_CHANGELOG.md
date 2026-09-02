@@ -11,6 +11,24 @@ Rules:
 
 ---
 
+## 2026-09-02 — D1 daily-write budget and lossless position checkpoints
+
+- Pull request: `#108`
+
+### Changed
+
+- Kept active paper-position evaluation at 15 seconds but changed unchanged holding telemetry persistence to a 60-second durable checkpoint.
+- Added a regression-tested daily budget: 18,720 strategy-evaluation rows + 1,440 diagnostic rows + 7,200 maximum-position checkpoint rows = 27,360 planned recurring writes/day.
+- Made 60,000 planned recurring rows/day the maximum for future upgrades, leaving at least 40,000 rows beneath Cloudflare D1's 100,000 free allowance for lifecycle events and variance.
+
+### Deliberately unchanged
+
+- Stop, TP1 protection, TP2, timeout, close, post-exit learning, outage replay, scanner cadence, order capacity, strategies, leverage, margin, paper/live parity, and Gate safety behavior are unchanged.
+
+### Verification
+
+- Focused D1 budget/position tests passed. Full strategy/risk suite passed 208/208; production build/UI/Must-Keep suite passed 109/109; ESLint and TypeScript passed.
+
 ## 2026-09-02 — Unified paper strategy brain and direct live parity
 
 - Pull request: `#105`

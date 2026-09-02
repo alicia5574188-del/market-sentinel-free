@@ -141,3 +141,10 @@ Record only consequential decisions using this format:
 - Reason: Funding and acceptance belong to the user, not the system.
 - Evidence: Explicit user instruction on 2026-09-02; Gate remains fail-closed without available funds and retains owner-controlled live activation/emergency controls.
 - Revisit when: Only after an explicit owner instruction.
+
+## 2026-09-02 — Protect the D1 daily write allowance without slowing safety checks
+
+- Choice: Continue evaluating active paper positions every 15 seconds, but persist unchanged holding telemetry once per 60 seconds. Stop, target, timeout, TP1-protection, close, learning, and recovery events remain immediate. Treat 60,000 planned recurring rows/day as the ceiling beneath Cloudflare D1's 100,000 free daily allowance.
+- Reason: Five simultaneous paper positions can otherwise create 28,800 unchanged holding-row updates per day and push the account past Cloudflare's warning threshold. The user requires the free daily allowance to remain sufficient after every future upgrade.
+- Evidence: The bounded thirteen-strategy/five-position schedule produces 18,720 evaluation rows, 1,440 diagnostic rows, and 7,200 position checkpoints per day, totaling 27,360 recurring rows and leaving 72,640 rows for lifecycle events and operational variance.
+- Revisit when: Position capacity, scanner cadence, strategy count, persistence cadence, D1 plan, or any other recurring write path changes.

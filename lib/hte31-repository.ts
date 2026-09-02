@@ -16,6 +16,7 @@ import { buildHte31PaperPosition, hte31PaperPortfolioBlockReason } from "./hte31
 import { evaluateHte31PerformanceCell } from "./hte31-performance-gate.ts";
 import { hte31TimeoutExitReason, isSustainedHte31StopRecovery } from "./hte31-exit-quality.ts";
 import { buildResonanceEntryQuality } from "./resonance-entry-quality.ts";
+import { shouldPersistHte31HoldingCheckpoint } from "./hte31-d1-write-budget.ts";
 import {
   RESONANCE_POLICY_STARTED_AT,
   isCurrentResonanceLearningId,
@@ -564,6 +565,15 @@ export async function applyHte31PositionQuote(quote: GatePositionQuote, settings
     }
     await updateLearningAfterClose(trade, netPnlUsdt, excursion.mfe, excursion.mae, quote.observedAt, exitCode, Boolean(target1HitAt));
     return { kind: "closed" as const, tradeId: trade.id, exitCode, exitPrice, netPnlUsdt };
+  }
+
+  const protectionChanged = target1HitAt !== trade.target1HitAt || currentStopPrice !== trade.currentStopPrice;
+  if (!shouldPersistHte31HoldingCheckpoint({
+    lastEvaluatedAt: trade.lastEvaluatedAt,
+    observedAt: quote.observedAt,
+    protectionChanged,
+  })) {
+    return { kind: "holding" as const, tradeId: trade.id, target1HitAt, currentStopPrice };
   }
 
   await db.update(hte31Trades).set({

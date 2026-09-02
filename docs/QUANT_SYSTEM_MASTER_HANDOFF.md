@@ -211,6 +211,13 @@ Runtime cadence:
 - Active heartbeat: 60 seconds; idle heartbeat: 5 minutes.
 - Durable Object generation changes reset scheduler/checkpoint state only. D1 trades, learning, simulation epochs, live credentials, and live-order lineage remain untouched.
 
+D1 daily-write budget:
+
+- Cloudflare Free's 100,000 daily `rows_written` allowance is a hard operating constraint for this system and must be reviewed on every upgrade.
+- Active paper positions are still inspected every 15 seconds. Unchanged holding telemetry is persisted once per 60 seconds; TP1 protection, stop, TP2, timeout, close, learning, and recovery events persist immediately.
+- At thirteen one-minute strategy evaluations and five continuously open positions, planned recurring writes are 27,360 rows/day: 18,720 evaluation rows, 1,440 diagnostic rows, and 7,200 position checkpoints.
+- Planned recurring writes must stay at or below 60,000 rows/day, preserving at least 40,000 rows below the free-plan limit for event-driven lifecycle writes and operational variance. Any future write path must update the regression-tested budget before merge.
+
 The foreground page is a consumer, not a second Gate market-data producer. Do not restore heavy foreground Gate analysis or unbounded polling. Public Gate fan-out and symbol work remain bounded, and stale/degraded data must be labeled rather than fabricated.
 
 ## 9. Database and persistence

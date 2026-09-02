@@ -6,6 +6,13 @@ import {
   HTE31_PAPER_PORTFOLIO_POLICY,
   HTE31_PAPER_POSITION_POLICY,
 } from "../lib/hte31-position-sizing.ts";
+import {
+  D1_FREE_DAILY_ROWS_WRITTEN,
+  HTE31_D1_PLANNED_DAILY_CEILING,
+  HTE31_POSITION_CHECKPOINT_MS,
+  hte31ScheduledDailyWriteBudget,
+  shouldPersistHte31HoldingCheckpoint,
+} from "../lib/hte31-d1-write-budget.ts";
 
 function baseInput(overrides: Partial<Parameters<typeof buildHte31PaperPosition>[0]> = {}) {
   return {
@@ -120,4 +127,34 @@ test("paper portfolio permits five diversified learning positions inside a 20% s
   assert.match(hte31PaperPortfolioBlockReason({ open: [...open, { side: "LONG", riskBudgetUsdt: 40 }], nextSide: "SHORT", nextRiskUsdt: 30, accountEquityUsdt: 1_000 }) ?? "", /最多 5 笔/);
   assert.match(hte31PaperPortfolioBlockReason({ open: open.slice(0, 3), nextSide: "LONG", nextRiskUsdt: 81, accountEquityUsdt: 1_000 }) ?? "", /20% 上限/);
   assert.match(hte31PaperPortfolioBlockReason({ open: [{ side: "LONG", riskBudgetUsdt: 30 }, { side: "LONG", riskBudgetUsdt: 30 }, { side: "LONG", riskBudgetUsdt: 30 }], nextSide: "LONG", nextRiskUsdt: 30, accountEquityUsdt: 1_000 }) ?? "", /同方向同时最多 3 笔/);
+});
+
+test("scheduled HTE31 writes leave more than forty thousand daily D1 rows for events", () => {
+  const budget = hte31ScheduledDailyWriteBudget();
+  assert.equal(budget.evaluationRows, 18_720);
+  assert.equal(budget.diagnosticRows, 1_440);
+  assert.equal(budget.positionCheckpointRows, 7_200);
+  assert.equal(budget.scheduledRows, 27_360);
+  assert.ok(budget.scheduledRows < HTE31_D1_PLANNED_DAILY_CEILING);
+  assert.ok(budget.eventReserveRows > 40_000);
+  assert.equal(budget.dailyLimit, D1_FREE_DAILY_ROWS_WRITTEN);
+});
+
+test("ordinary quotes wait for the one-minute checkpoint while protection persists immediately", () => {
+  const lastEvaluatedAt = 1_700_000_000_000;
+  assert.equal(shouldPersistHte31HoldingCheckpoint({
+    lastEvaluatedAt,
+    observedAt: lastEvaluatedAt + HTE31_POSITION_CHECKPOINT_MS - 1,
+    protectionChanged: false,
+  }), false);
+  assert.equal(shouldPersistHte31HoldingCheckpoint({
+    lastEvaluatedAt,
+    observedAt: lastEvaluatedAt + HTE31_POSITION_CHECKPOINT_MS,
+    protectionChanged: false,
+  }), true);
+  assert.equal(shouldPersistHte31HoldingCheckpoint({
+    lastEvaluatedAt,
+    observedAt: lastEvaluatedAt + 15_000,
+    protectionChanged: true,
+  }), true);
 });
