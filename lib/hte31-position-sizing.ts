@@ -47,7 +47,7 @@ export const HTE31_PAPER_POSITION_POLICY = {
   maximumMarketRiskReward: 20,
   preferredMarginAllocationRate: 0.15,
   maximumMarginAllocationRate: 0.30,
-  maximumLeverage: 50,
+  maximumLeverage: 75,
   liquidationMaintenanceFactor: 0.92,
   liquidationStopBufferMultiple: 2.5,
   liquidationExtraBufferRate: 0.003,
@@ -71,9 +71,9 @@ function direction(side: Hte31PositionSide) {
 }
 
 function liquidityLeverageCap(volumeUsd: number) {
-  if (volumeUsd >= 500_000_000) return 50;
-  if (volumeUsd >= 100_000_000) return 35;
-  if (volumeUsd >= 25_000_000) return 20;
+  if (volumeUsd >= 500_000_000) return 75;
+  if (volumeUsd >= 100_000_000) return 50;
+  if (volumeUsd >= 25_000_000) return 25;
   return 10;
 }
 
@@ -82,7 +82,8 @@ function volatilityLeverageCap(atrPct: number | null) {
   if (atrPct >= 3) return 10;
   if (atrPct >= 1.8) return 15;
   if (atrPct >= 1) return 25;
-  return 50;
+  if (atrPct >= 0.5) return 50;
+  return 75;
 }
 
 function emptyResult(reason: string): Hte31PositionSizing {
@@ -113,10 +114,10 @@ function emptyResult(reason: string): Hte31PositionSizing {
 
 /**
  * Paper sizing decides how much capital can safely express a setup. Higher
- * leverage is used as a capital-efficiency tool, never as permission to raise
- * stop risk. The preferred margin footprint is 15% of equity; if the safe
- * leverage cap is too low, the function may use up to 30% rather than reject
- * an otherwise valid setup only because the preferred footprint was too small.
+ * leverage is a capital-efficiency tool only: it never raises the stop-risk
+ * budget. The preferred margin footprint is 15% of equity, with a 30% hard
+ * cap. Very liquid, low-volatility, high-quality paper setups may use up to
+ * 75x when the liquidation buffer remains safely beyond the structure stop.
  */
 export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31PositionSizing {
   const entryPrice = positive(input.entryPrice);
@@ -166,9 +167,6 @@ export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31P
   const desiredNotionalUsdt = targetRiskUsdt / netStopLossRate;
   const preferredLeverage = Math.max(1, Math.ceil(desiredNotionalUsdt / preferredMarginCap));
   const leverage = clamp(preferredLeverage, 1, leverageCap);
-  // If the safe leverage ceiling is below the preferred leverage, preserve the
-  // risk budget by using more margin up to the hard cap instead of increasing
-  // risk or rejecting a setup solely because the 15% target was too tight.
   const notionalUsdt = Math.min(desiredNotionalUsdt, hardMarginCap * leverage);
   const marginUsdt = notionalUsdt / leverage;
   const quantity = notionalUsdt / entryPrice;
