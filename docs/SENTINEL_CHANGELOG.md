@@ -13,6 +13,8 @@ Rules:
 
 ## 2026-09-02 — D1 daily-write budget and lossless position checkpoints
 
+- Pull request: `#108`
+
 ### Changed
 
 - Kept active paper-position evaluation at 15 seconds but changed unchanged holding telemetry persistence to a 60-second durable checkpoint.

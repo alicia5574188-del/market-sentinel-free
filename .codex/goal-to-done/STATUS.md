@@ -1,5 +1,13 @@
 # Status
 
+## D1 daily-write budget — PR #108
+
+- Active paper positions remain evaluated every 15 seconds; unchanged holding telemetry now persists every 60 seconds.
+- TP1 protection, stop, TP2, timeout, close, learning, and recovery writes remain immediate.
+- Regression-tested recurring budget at the configured maximum: 27,360 rows/day, leaving 72,640 rows beneath the 100,000 free daily allowance.
+- Future upgrades must keep planned recurring writes at or below 60,000 rows/day and update the budget test when adding any D1 write path.
+- Local verification: strategy/risk 208/208; production/UI/Must-Keep 109/109; ESLint, TypeScript, build, and `git diff --check` passed.
+
 - State: production-deployed
 - Updated UTC: 2026-09-02T10:51:00Z
 - Branch: `feat/resonance-unified-paper-live-parity`
