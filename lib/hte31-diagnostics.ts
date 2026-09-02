@@ -1,15 +1,21 @@
 import { and, asc, desc, eq, gte } from "drizzle-orm";
 import { getDb } from "../db";
 import { hte31ShadowSamples, hte31TriggerBuckets } from "../db/hte31-diagnostics-schema";
-import type { AppSettings } from "./settings-repository.ts";
-import type { Hte31Signal } from "./hte31-types.ts";
 import type { GateAnalysisPacket } from "./gate-client.ts";
 import type { HumanTraderId } from "./hte31-human-trader-engine.ts";
+import type { Hte31ResearchSignal } from "./hte31-research-strategies.ts";
+import {
+  HTE31_RESEARCH_TRADER_IDS,
+  type Hte31ResearchTraderId,
+} from "./hte31-strategy-catalog.ts";
+import { buildHte31ResearchRouter, type Hte31RouterEvidence } from "./hte31-strategy-router.ts";
+import type { AppSettings } from "./settings-repository.ts";
+import type { Hte31Signal } from "./hte31-types.ts";
 
 const BUCKET_MS = 10 * 60_000;
 const SHADOW_DEDUPE_MS = 30 * 60_000;
 const SHADOW_HORIZONS = [30, 60, 120, 240] as const;
-const TRADERS: HumanTraderId[] = ["dennis_trend", "raschke_pullback", "turtle_soup"];
+const CORE_TRADERS: HumanTraderId[] = ["dennis_trend", "raschke_pullback", "turtle_soup"];
 const SOFT_CONFIRMATION_KEYS: Record<HumanTraderId, ReadonlySet<string>> = {
   dennis_trend: new Set(["dennis-flow"]),
   raschke_pullback: new Set(["raschke-flow"]),
@@ -19,6 +25,7 @@ const SOFT_CONFIRMATION_KEYS: Record<HumanTraderId, ReadonlySet<string>> = {
 export const HTE31_SHADOW_MIN_SAMPLES = 30;
 export const HTE31_SHADOW_MIN_PROFIT_FACTOR = 1.3;
 export const HTE31_SHADOW_MIN_EXPECTANCY_R = 0.15;
+export const HTE31_MAX_CONCURRENT_RESEARCH_SAMPLES = 64;
 
 type FailedCheck = { key: string; label: string };
 type NearestCandidate = {
@@ -41,7 +48,27 @@ type TraderBucket = {
   nearest: NearestCandidate | null;
 };
 
-type TriggerBucketPayload = Record<HumanTraderId, TraderBucket>;
+type ResearchCandidate = {
+  symbol: string;
+  observedAt: number;
+  state: "ready" | "watching" | "blocked";
+  side: "LONG" | "SHORT" | "WAIT";
+  confidence: number;
+  thesis: string;
+  blockers: string[];
+};
+
+type ResearchBucket = {
+  evaluations: number;
+  ready: number;
+  watching: number;
+  blocked: number;
+  latest: ResearchCandidate | null;
+};
+
+type TriggerBucketPayload = Record<HumanTraderId, TraderBucket> & {
+  __research?: Partial<Record<Hte31ResearchTraderId, ResearchBucket>>;
+};
 
 type ShadowObservation = {
   horizonMinutes: number;
@@ -56,12 +83,26 @@ function emptyTraderBucket(): TraderBucket {
   return { evaluations: 0, ready: 0, watching: 0, blocked: 0, nearReady: 0, failures: {}, nearest: null };
 }
 
+function emptyResearchBucket(): ResearchBucket {
+  return { evaluations: 0, ready: 0, watching: 0, blocked: 0, latest: null };
+}
+
 function emptyBucket(): TriggerBucketPayload {
   return {
     dennis_trend: emptyTraderBucket(),
     raschke_pullback: emptyTraderBucket(),
     turtle_soup: emptyTraderBucket(),
+    __research: Object.fromEntries(HTE31_RESEARCH_TRADER_IDS.map((id) => [id, emptyResearchBucket()])),
   };
+}
+
+function normalizeBucket(payload: TriggerBucketPayload): TriggerBucketPayload {
+  payload.dennis_trend ??= emptyTraderBucket();
+  payload.raschke_pullback ??= emptyTraderBucket();
+  payload.turtle_soup ??= emptyTraderBucket();
+  payload.__research ??= {};
+  for (const traderId of HTE31_RESEARCH_TRADER_IDS) payload.__research[traderId] ??= emptyResearchBucket();
+  return payload;
 }
 
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
@@ -116,6 +157,24 @@ function mergeSignal(bucket: TraderBucket, packet: GateAnalysisPacket, signal: H
   }
 }
 
+function mergeResearchSignal(bucket: ResearchBucket, packet: GateAnalysisPacket, signal: Hte31ResearchSignal) {
+  bucket.evaluations += 1;
+  if (signal.state === "ready") bucket.ready += 1;
+  else if (signal.state === "blocked") bucket.blocked += 1;
+  else bucket.watching += 1;
+  if (!bucket.latest || signal.state === "ready" || signal.confidence >= bucket.latest.confidence || packet.observedAt > bucket.latest.observedAt) {
+    bucket.latest = {
+      symbol: packet.symbol,
+      observedAt: packet.observedAt,
+      state: signal.state,
+      side: signal.side,
+      confidence: signal.confidence,
+      thesis: signal.thesis,
+      blockers: signal.blockers,
+    };
+  }
+}
+
 function costR(entryPrice: number, riskPerUnit: number, roundTripCostBps: number) {
   if (!(entryPrice > 0 && riskPerUnit > 0)) return 0;
   return (entryPrice * roundTripCostBps / 10_000) / riskPerUnit;
@@ -137,7 +196,7 @@ async function advanceShadowSamples(symbol: string, observedAt: number, price: n
   const db = getDb();
   const pending = await db.select().from(hte31ShadowSamples)
     .where(and(eq(hte31ShadowSamples.symbol, symbol), eq(hte31ShadowSamples.status, "pending")))
-    .orderBy(asc(hte31ShadowSamples.entryAt)).limit(24);
+    .orderBy(asc(hte31ShadowSamples.entryAt)).limit(64);
 
   for (const sample of pending) {
     if (observedAt <= sample.entryAt) continue;
@@ -168,6 +227,8 @@ async function advanceShadowSamples(symbol: string, observedAt: number, price: n
       const targetR = Math.abs(sample.takeProfit2Price - sample.entryPrice) / Math.max(sample.riskPerUnit, Number.EPSILON);
       const stopped = move.adverse >= 1;
       const targeted = move.favorable >= targetR;
+      // Conservative accounting: if both boundaries were observed before the
+      // next sampled price, count the stop first rather than manufacturing a win.
       resultR = stopped ? -1 - feeR : targeted ? targetR - feeR : closeR(sample.side, sample.entryPrice, price, sample.riskPerUnit) - feeR;
       outcome = resultR > 0.05 ? "win" : resultR < -0.05 ? "loss" : "flat";
     }
@@ -228,12 +289,74 @@ async function createNearReadySample(packet: GateAnalysisPacket, signal: Hte31Si
   }).onConflictDoNothing();
 }
 
-export async function recordHte31DiagnosticCycle(packet: GateAnalysisPacket, signals: Hte31Signal[], settings: AppSettings) {
+async function createResearchSamples(packet: GateAnalysisPacket, signals: Hte31ResearchSignal[]) {
+  const db = getDb();
+  const [pendingForSymbol, pendingGlobal] = await Promise.all([
+    db.select({ traderId: hte31ShadowSamples.traderId }).from(hte31ShadowSamples)
+      .where(and(eq(hte31ShadowSamples.symbol, packet.symbol), eq(hte31ShadowSamples.status, "pending"))).limit(64),
+    db.select({ id: hte31ShadowSamples.id }).from(hte31ShadowSamples)
+      .where(eq(hte31ShadowSamples.status, "pending")).limit(HTE31_MAX_CONCURRENT_RESEARCH_SAMPLES),
+  ]);
+  const pendingIds = new Set(pendingForSymbol.map((row) => row.traderId));
+  let remaining = Math.max(0, HTE31_MAX_CONCURRENT_RESEARCH_SAMPLES - pendingGlobal.length);
+  if (!remaining) return;
+
+  for (const signal of signals) {
+    if (remaining <= 0) break;
+    if (signal.state !== "ready" || signal.side === "WAIT" || !signal.entryPlan?.ready) continue;
+    if (pendingIds.has(signal.traderId)) continue;
+    const plan = signal.entryPlan;
+    const riskPerUnit = Math.abs(plan.entryPrice - plan.stopLossPrice);
+    if (!(plan.entryPrice > 0 && plan.stopLossPrice > 0 && plan.takeProfit2Price > 0 && riskPerUnit > 0)) continue;
+    const dedupeBucket = Math.floor(packet.observedAt / SHADOW_DEDUPE_MS);
+    const id = `hte31-research:${signal.traderId}:${packet.symbol}:${signal.side}:${signal.assetRegime}:${dedupeBucket}`;
+    const inserted = await db.insert(hte31ShadowSamples).values({
+      id,
+      symbol: packet.symbol,
+      traderId: signal.traderId,
+      setupId: signal.strategyId,
+      side: signal.side,
+      assetRegime: signal.assetRegime,
+      missingKey: "research-ready",
+      missingLabel: "完整研究策略信号",
+      entryAt: packet.observedAt,
+      entryPrice: plan.entryPrice,
+      stopPrice: plan.stopLossPrice,
+      takeProfit2Price: plan.takeProfit2Price,
+      riskPerUnit,
+      status: "pending",
+      maxPriceSeen: plan.entryPrice,
+      minPriceSeen: plan.entryPrice,
+      lastPrice: plan.entryPrice,
+      lastObservedAt: packet.observedAt,
+      observationsJson: "[]",
+      finalAt: null,
+      finalPrice: null,
+      resultR: null,
+      mfeR: null,
+      maeR: null,
+      outcome: null,
+      createdAt: packet.observedAt,
+      updatedAt: packet.observedAt,
+    }).onConflictDoNothing().returning({ id: hte31ShadowSamples.id });
+    if (inserted.length) {
+      pendingIds.add(signal.traderId);
+      remaining -= 1;
+    }
+  }
+}
+
+export async function recordHte31DiagnosticCycle(
+  packet: GateAnalysisPacket,
+  signals: Hte31Signal[],
+  settings: AppSettings,
+  researchSignals: Hte31ResearchSignal[] = [],
+) {
   await advanceShadowSamples(packet.symbol, packet.observedAt, packet.market.futuresPrice, settings.roundTripCostBps);
 
   const bucketStart = Math.floor(packet.observedAt / BUCKET_MS) * BUCKET_MS;
   const [existing] = await getDb().select().from(hte31TriggerBuckets).where(eq(hte31TriggerBuckets.bucketStart, bucketStart)).limit(1);
-  const payload = parseJson<TriggerBucketPayload>(existing?.payloadJson, emptyBucket());
+  const payload = normalizeBucket(parseJson<TriggerBucketPayload>(existing?.payloadJson, emptyBucket()));
 
   for (const signal of signals) {
     const traderId = traderForSignal(signal);
@@ -243,6 +366,13 @@ export async function recordHte31DiagnosticCycle(packet: GateAnalysisPacket, sig
     mergeSignal(payload[traderId], packet, signal, failed, nearReady);
     if (nearReady) await createNearReadySample(packet, signal, traderId, failed);
   }
+
+  for (const signal of researchSignals) {
+    const bucket = payload.__research?.[signal.traderId] ?? emptyResearchBucket();
+    mergeResearchSignal(bucket, packet, signal);
+    payload.__research![signal.traderId] = bucket;
+  }
+  if (researchSignals.length) await createResearchSamples(packet, researchSignals);
 
   await getDb().insert(hte31TriggerBuckets).values({
     bucketStart,
@@ -269,11 +399,11 @@ type TraderWindowSummary = {
 type WindowSummary = { traders: Record<HumanTraderId, TraderWindowSummary> };
 
 function summarizeBuckets(rows: { bucketStart: number; payloadJson: string }[], cutoff: number): WindowSummary {
-  const totals = Object.fromEntries(TRADERS.map((id) => [id, emptyTraderBucket()])) as TriggerBucketPayload;
+  const totals = Object.fromEntries(CORE_TRADERS.map((id) => [id, emptyTraderBucket()])) as Record<HumanTraderId, TraderBucket>;
   for (const row of rows) {
     if (row.bucketStart < cutoff) continue;
-    const payload = parseJson<TriggerBucketPayload>(row.payloadJson, emptyBucket());
-    for (const traderId of TRADERS) {
+    const payload = normalizeBucket(parseJson<TriggerBucketPayload>(row.payloadJson, emptyBucket()));
+    for (const traderId of CORE_TRADERS) {
       const source = payload[traderId] ?? emptyTraderBucket();
       const target = totals[traderId];
       target.evaluations += source.evaluations;
@@ -286,7 +416,7 @@ function summarizeBuckets(rows: { bucketStart: number; payloadJson: string }[], 
     }
   }
   return {
-    traders: Object.fromEntries(TRADERS.map((traderId) => {
+    traders: Object.fromEntries(CORE_TRADERS.map((traderId) => {
       const row = totals[traderId];
       const topFailures = Object.entries(row.failures)
         .map(([label, count]) => ({ label, count, rate: row.evaluations ? count / row.evaluations : 0 }))
@@ -305,7 +435,31 @@ function summarizeBuckets(rows: { bucketStart: number; payloadJson: string }[], 
   };
 }
 
-function shadowSummary(rows: typeof hte31ShadowSamples.$inferSelect[], traderId: HumanTraderId) {
+function summarizeResearchBuckets(rows: { bucketStart: number; payloadJson: string }[], cutoff: number) {
+  const totals = Object.fromEntries(HTE31_RESEARCH_TRADER_IDS.map((id) => [id, emptyResearchBucket()])) as Record<Hte31ResearchTraderId, ResearchBucket>;
+  for (const row of rows) {
+    if (row.bucketStart < cutoff) continue;
+    const payload = normalizeBucket(parseJson<TriggerBucketPayload>(row.payloadJson, emptyBucket()));
+    for (const traderId of HTE31_RESEARCH_TRADER_IDS) {
+      const source = payload.__research?.[traderId] ?? emptyResearchBucket();
+      const target = totals[traderId];
+      target.evaluations += source.evaluations;
+      target.ready += source.ready;
+      target.watching += source.watching;
+      target.blocked += source.blocked;
+      if (source.latest && (!target.latest || source.latest.observedAt > target.latest.observedAt || source.latest.state === "ready")) target.latest = source.latest;
+    }
+  }
+  return Object.fromEntries(HTE31_RESEARCH_TRADER_IDS.map((traderId) => {
+    const row = totals[traderId];
+    return [traderId, {
+      ...row,
+      readyRate: row.evaluations ? row.ready / row.evaluations : 0,
+    }];
+  })) as Record<Hte31ResearchTraderId, ResearchBucket & { readyRate: number }>;
+}
+
+function shadowSummary(rows: typeof hte31ShadowSamples.$inferSelect[], traderId: typeof hte31ShadowSamples.$inferSelect["traderId"]) {
   const own = rows.filter((row) => row.traderId === traderId);
   const complete = own.filter((row) => row.status === "complete" && row.resultR != null);
   const pending = own.filter((row) => row.status === "pending").length;
@@ -329,7 +483,7 @@ function shadowSummary(rows: typeof hte31ShadowSamples.$inferSelect[], traderId:
     profitFactor,
     dominantMissingCondition: missing,
     qualifiesForCalibration,
-    calibrationRule: `至少 ${HTE31_SHADOW_MIN_SAMPLES} 个样本，PF ≥ ${HTE31_SHADOW_MIN_PROFIT_FACTOR.toFixed(2)} 且 Expectancy ≥ +${HTE31_SHADOW_MIN_EXPECTANCY_R.toFixed(2)}R 才允许进入下一阶段校准；不会自动修改正式阈值。`,
+    calibrationRule: `至少 ${HTE31_SHADOW_MIN_SAMPLES} 个独立样本，PF ≥ ${HTE31_SHADOW_MIN_PROFIT_FACTOR.toFixed(2)} 且 Expectancy ≥ +${HTE31_SHADOW_MIN_EXPECTANCY_R.toFixed(2)}R 才允许进入下一阶段校准；不会自动修改正式阈值。`,
   };
 }
 
@@ -337,14 +491,37 @@ export async function getHte31Diagnostics(now = Date.now()) {
   const db = getDb();
   const [buckets, shadowRows] = await Promise.all([
     db.select().from(hte31TriggerBuckets).where(gte(hte31TriggerBuckets.bucketStart, now - 6 * 60 * 60_000)).orderBy(asc(hte31TriggerBuckets.bucketStart)),
-    db.select().from(hte31ShadowSamples).orderBy(desc(hte31ShadowSamples.updatedAt)).limit(500),
+    db.select().from(hte31ShadowSamples).orderBy(desc(hte31ShadowSamples.updatedAt)).limit(1_000),
   ]);
+  const researchShadow = Object.fromEntries(HTE31_RESEARCH_TRADER_IDS.map((traderId) => [traderId, shadowSummary(shadowRows, traderId)])) as Record<Hte31ResearchTraderId, ReturnType<typeof shadowSummary>>;
+  const routerEvidence = Object.fromEntries(HTE31_RESEARCH_TRADER_IDS.map((traderId) => {
+    const row = researchShadow[traderId];
+    return [traderId, {
+      traderId,
+      completed: row.completed,
+      pending: row.pending,
+      wins: row.wins,
+      losses: row.losses,
+      expectancyR: row.expectancyR,
+      profitFactor: row.profitFactor,
+    } satisfies Hte31RouterEvidence];
+  })) as Record<Hte31ResearchTraderId, Hte31RouterEvidence>;
   return {
     windows: {
       h1: summarizeBuckets(buckets, now - 60 * 60_000),
       h6: summarizeBuckets(buckets, now - 6 * 60 * 60_000),
     },
-    shadow: Object.fromEntries(TRADERS.map((traderId) => [traderId, shadowSummary(shadowRows, traderId)])) as Record<HumanTraderId, ReturnType<typeof shadowSummary>>,
+    shadow: Object.fromEntries(CORE_TRADERS.map((traderId) => [traderId, shadowSummary(shadowRows, traderId)])) as Record<HumanTraderId, ReturnType<typeof shadowSummary>>,
+    research: {
+      windows: {
+        h1: summarizeResearchBuckets(buckets, now - 60 * 60_000),
+        h6: summarizeResearchBuckets(buckets, now - 6 * 60 * 60_000),
+      },
+      shadow: researchShadow,
+      router: buildHte31ResearchRouter(routerEvidence),
+      concurrentSampleLimit: HTE31_MAX_CONCURRENT_RESEARCH_SAMPLES,
+      executionAuthority: "none" as const,
+    },
     policy: {
       softConfirmationKeys: {
         dennis_trend: [...SOFT_CONFIRMATION_KEYS.dennis_trend],
@@ -353,6 +530,8 @@ export async function getHte31Diagnostics(now = Date.now()) {
       },
       turtleSoupRelaxationEnabled: false,
       automaticThresholdChanges: false,
+      automaticStrategySwitching: false,
+      researchStrategiesCanExecute: false,
     },
   };
 }

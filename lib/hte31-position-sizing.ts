@@ -45,8 +45,9 @@ export const HTE31_PAPER_POSITION_POLICY = {
   maximumRiskRate: 0.05,
   minimumTp2NetProfitUsdt: 50,
   maximumMarketRiskReward: 20,
-  maximumMarginAllocationRate: 0.60,
-  maximumLeverage: 50,
+  preferredMarginAllocationRate: 0.15,
+  maximumMarginAllocationRate: 0.30,
+  maximumLeverage: 75,
   liquidationMaintenanceFactor: 0.92,
   liquidationStopBufferMultiple: 2.5,
   liquidationExtraBufferRate: 0.003,
@@ -70,9 +71,9 @@ function direction(side: Hte31PositionSide) {
 }
 
 function liquidityLeverageCap(volumeUsd: number) {
-  if (volumeUsd >= 500_000_000) return 50;
-  if (volumeUsd >= 100_000_000) return 35;
-  if (volumeUsd >= 25_000_000) return 20;
+  if (volumeUsd >= 500_000_000) return 75;
+  if (volumeUsd >= 100_000_000) return 50;
+  if (volumeUsd >= 25_000_000) return 25;
   return 10;
 }
 
@@ -81,7 +82,8 @@ function volatilityLeverageCap(atrPct: number | null) {
   if (atrPct >= 3) return 10;
   if (atrPct >= 1.8) return 15;
   if (atrPct >= 1) return 25;
-  return 50;
+  if (atrPct >= 0.5) return 50;
+  return 75;
 }
 
 function emptyResult(reason: string): Hte31PositionSizing {
@@ -111,11 +113,11 @@ function emptyResult(reason: string): Hte31PositionSizing {
 }
 
 /**
- * Paper sizing only decides how much capital can safely express a setup.
- * Resonance owns the target price before this function is called. This layer
- * must never stretch a target toward a preferred USDT profit number: 50U is
- * only the minimum economic value required to take a paper trade, while the
- * market-defined target may be materially larger.
+ * Paper sizing decides how much capital can safely express a setup. Higher
+ * leverage is a capital-efficiency tool only: it never raises the stop-risk
+ * budget. The preferred margin footprint is 15% of equity, with a 30% hard
+ * cap. Very liquid, low-volatility, high-quality paper setups may use up to
+ * 75x when the liquidation buffer remains safely beyond the structure stop.
  */
 export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31PositionSizing {
   const entryPrice = positive(input.entryPrice);
@@ -150,18 +152,22 @@ export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31P
       ? 20
       : HTE31_PAPER_POSITION_POLICY.maximumLeverage;
   const leverageCap = clamp(Math.min(liquidityCap, volatilityCap, qualityCap), 1, HTE31_PAPER_POSITION_POLICY.maximumLeverage);
-  const marginCap = Math.min(
+  const hardMarginCap = Math.min(
     availableMarginUsdt,
     equityUsdt * HTE31_PAPER_POSITION_POLICY.maximumMarginAllocationRate,
   );
-  if (!(marginCap > 0)) return emptyResult("模拟账户可用保证金不足");
+  const preferredMarginCap = Math.min(
+    hardMarginCap,
+    equityUsdt * HTE31_PAPER_POSITION_POLICY.preferredMarginAllocationRate,
+  );
+  if (!(hardMarginCap > 0 && preferredMarginCap > 0)) return emptyResult("模拟账户可用保证金不足");
 
   const roundTripCostRate = Math.max(0, Number.isFinite(input.roundTripCostBps) ? input.roundTripCostBps : 0) / 10_000;
   const netStopLossRate = stopDistanceRate + roundTripCostRate;
   const desiredNotionalUsdt = targetRiskUsdt / netStopLossRate;
-  const requiredLeverage = Math.max(1, Math.ceil(desiredNotionalUsdt / marginCap));
-  const leverage = clamp(requiredLeverage, 1, leverageCap);
-  const notionalUsdt = Math.min(desiredNotionalUsdt, marginCap * leverage);
+  const preferredLeverage = Math.max(1, Math.ceil(desiredNotionalUsdt / preferredMarginCap));
+  const leverage = clamp(preferredLeverage, 1, leverageCap);
+  const notionalUsdt = Math.min(desiredNotionalUsdt, hardMarginCap * leverage);
   const marginUsdt = notionalUsdt / leverage;
   const quantity = notionalUsdt / entryPrice;
   const plannedRiskUsdt = notionalUsdt * netStopLossRate;
@@ -182,12 +188,13 @@ export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31P
     + HTE31_PAPER_POSITION_POLICY.liquidationExtraBufferRate;
   const liquidationSafe = liquidationDistanceRate >= requiredLiquidationBufferRate;
 
-  const leverageReason = `需求 ${requiredLeverage}x / 上限 ${leverageCap}x；流动性 ${liquidityCap}x，波动 ${volatilityCap}x，质量 ${qualityCap}x；隔离保证金最多使用净值60%`;
+  const usedMarginRate = marginUsdt / equityUsdt;
+  const leverageReason = `偏好 ${preferredLeverage}x / 安全上限 ${leverageCap}x；流动性 ${liquidityCap}x，波动 ${volatilityCap}x，质量 ${qualityCap}x；保证金占权益 ${(usedMarginRate * 100).toFixed(1)}%（目标≤15%，硬上限30%）`;
   let reason = `计划净风险(含费用) ${plannedRiskUsdt.toFixed(2)}U，市场目标 ${riskReward.toFixed(2)}R / 预计净利润 ${plannedTp2NetProfitUsdt.toFixed(2)}U`;
   let accepted = true;
   if (plannedRiskUsdt + 1e-8 < minimumRiskUsdt) {
     accepted = false;
-    reason = `最高 ${leverageCap}x 后计划风险仅 ${plannedRiskUsdt.toFixed(2)}U，低于 ${minimumRiskUsdt.toFixed(2)}U`;
+    reason = `安全杠杆与30%保证金上限后计划风险仅 ${plannedRiskUsdt.toFixed(2)}U，低于 ${minimumRiskUsdt.toFixed(2)}U`;
   } else if (plannedRiskUsdt - 1e-8 > maximumRiskUsdt) {
     accepted = false;
     reason = `计划风险 ${plannedRiskUsdt.toFixed(2)}U，超过 ${maximumRiskUsdt.toFixed(2)}U`;

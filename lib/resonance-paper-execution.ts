@@ -10,6 +10,8 @@ import type { Hte31Candle, Hte31Signal } from "./hte31-types.ts";
 
 const PAPER_ONLY_MARKER = "PAPER_REVALIDATION_ONLY";
 const COGNITIVE_MARKER = "COGNITIVE_ADAPTATION";
+export const HTE31_PAPER_MAX_OPEN_POSITIONS = 4;
+export const HTE31_PAPER_MAX_TOTAL_PLANNED_RISK_RATE = 0.16;
 
 type TraderId = "dennis_trend" | "raschke_pullback" | "turtle_soup" | "exhaustion_reversal" | "higher_timeframe_swing";
 
@@ -50,12 +52,6 @@ function signed(value: number | null | undefined, side: "LONG" | "SHORT") {
   return (value ?? 0) * (side === "LONG" ? 1 : -1);
 }
 
-/**
- * A negative trader/regime/direction cell is not allowed to deadlock paper
- * learning. It may continue only when the current tape supplies stronger
- * evidence than the original setup required. The extra confirmation is stored
- * in the trade checks, which makes the trade paper-only at the live boundary.
- */
 function strictCellChallenger(
   signal: Hte31Signal,
   packet: MarketAnalysisPacket,
@@ -120,18 +116,21 @@ async function paperAccount(startingCapitalUsdt: number) {
   const unrealizedPnlUsdt = open.reduce((sum, row) => sum + row.unrealizedNetUsdt, 0);
   const equityUsdt = epoch.startingCapitalUsdt + realizedPnlUsdt + unrealizedPnlUsdt;
   const usedMarginUsdt = open.reduce((sum, row) => sum + row.marginUsdt, 0);
+  const plannedOpenRiskUsdt = open.reduce((sum, row) => sum + row.riskBudgetUsdt, 0);
   return {
     open,
     equityUsdt,
+    plannedOpenRiskUsdt,
     availableMarginUsdt: Math.max(0, equityUsdt - usedMarginUsdt),
   };
 }
 
 /**
- * Paper learning no longer treats two losses as a reason to stop collecting
- * evidence. Safety/data/liquidity/structural-stop checks still live inside the
- * playbooks and sizing layer. Statistically weak cells continue only via a
- * stricter paper-only challenger instead of waiting six hours for the clock.
+ * Core paper execution remains restricted to the original five HTE31 signals.
+ * Research challengers live in the diagnostic shadow ledger and never reach
+ * this function. Concurrency is increased from two to four positions so the
+ * existing profitable strategies are less likely to be starved of samples,
+ * while aggregate planned stop risk remains capped at 16% of current equity.
  */
 export async function openResonancePaperTrade(
   packet: MarketAnalysisPacket,
@@ -172,7 +171,7 @@ export async function openResonancePaperTrade(
       opened: null,
       reason: signals.some((signal) => signal.state === "ready" && signal.side !== "WAIT")
         ? "弱组合没有通过更严格的认知挑战确认；继续扫描，不做时间冷却"
-        : "五种打法本轮没有完整 Setup",
+        : "五种正式打法本轮没有完整 Setup",
     };
   }
 
@@ -181,7 +180,7 @@ export async function openResonancePaperTrade(
   if (existing) return { opened: null, reason: "该币已有 Resonance 模拟持仓" };
 
   const account = await paperAccount(settings.trialCapitalUsdt);
-  if (account.open.length >= 2) return { opened: null, reason: "模拟账户同时最多 2 笔持仓" };
+  if (account.open.length >= HTE31_PAPER_MAX_OPEN_POSITIONS) return { opened: null, reason: `模拟账户同时最多 ${HTE31_PAPER_MAX_OPEN_POSITIONS} 笔正式持仓` };
   if (account.equityUsdt <= 0) return { opened: null, reason: "模拟账户权益不足" };
 
   const plan = selected.signal.entryPlan;
@@ -189,9 +188,6 @@ export async function openResonancePaperTrade(
   const stopDistance = Math.abs(entryPrice - plan.stopLossPrice);
   if (!(entryPrice > 0 && stopDistance > 0)) return { opened: null, reason: "结构止损无效" };
 
-  // Losses change what the brain investigates, not the paper sample size.
-  // The paper account therefore keeps the same nominal risk budget instead of
-  // shrinking position size to make a weak strategy look safer.
   const sizing = buildHte31PaperPosition({
     side: selected.signal.side,
     entryPrice,
@@ -207,6 +203,14 @@ export async function openResonancePaperTrade(
     confidence: selected.signal.confidence,
   });
   if (!sizing.accepted) return { opened: null, reason: `仓位经济门槛：${sizing.reason}` };
+
+  const aggregateRiskLimitUsdt = account.equityUsdt * HTE31_PAPER_MAX_TOTAL_PLANNED_RISK_RATE;
+  if (account.plannedOpenRiskUsdt + sizing.plannedRiskUsdt > aggregateRiskLimitUsdt + 1e-8) {
+    return {
+      opened: null,
+      reason: `组合计划止损风险 ${(account.plannedOpenRiskUsdt + sizing.plannedRiskUsdt).toFixed(2)}U 将超过权益16%上限 ${aggregateRiskLimitUsdt.toFixed(2)}U`,
+    };
+  }
 
   const paperOnly = cognitiveSignal(selected.signal) || selected.performanceGate.state === "PAUSED";
   const id = `hte31:${crypto.randomUUID()}`;
