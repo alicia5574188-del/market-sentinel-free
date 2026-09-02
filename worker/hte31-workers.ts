@@ -24,7 +24,7 @@ import type { CloudflareEnv } from "./index";
 // This generation bump resets only Durable Object scheduler/checkpoint state.
 // D1 trades, learning, simulation epochs, live credentials and live-order
 // lineage remain untouched.
-const CLEAN_RUNTIME_VERSION = "resonance-v3-strategy-research";
+const CLEAN_RUNTIME_VERSION = "resonance-v4-unified-paper-live-parity";
 const SCANNER_CYCLE_INTERVAL_MS = 60_000;
 const TRADE_MANAGER_ACTIVE_INTERVAL_MS = 15_000;
 const TRADE_MANAGER_IDLE_INTERVAL_MS = 60_000;

@@ -11,12 +11,8 @@ import {
 import type { GateAnalysisPacket, GatePositionQuote } from "./gate-client.ts";
 import { getSettings, type AppSettings } from "./settings-repository.ts";
 import type { Hte31Candle, Hte31Signal } from "./hte31-types.ts";
-import { hte31TraderIdForSignal as anyTraderIdForSignal } from "./hte31-strategy-catalog.ts";
-import type { HumanTraderId } from "./hte31-human-trader-engine.ts";
-import type { AdvancedTraderId } from "./hte31-advanced-traders.ts";
-
-type Hte31TraderId = HumanTraderId | AdvancedTraderId;
-import { buildHte31PaperPosition } from "./hte31-position-sizing.ts";
+import { HTE31_ALL_TRADER_IDS, hte31TraderIdForSignal as anyTraderIdForSignal, type Hte31TraderId } from "./hte31-strategy-catalog.ts";
+import { buildHte31PaperPosition, hte31PaperPortfolioBlockReason } from "./hte31-position-sizing.ts";
 import { evaluateHte31PerformanceCell } from "./hte31-performance-gate.ts";
 import { hte31TimeoutExitReason, isSustainedHte31StopRecovery } from "./hte31-exit-quality.ts";
 import { buildResonanceEntryQuality } from "./resonance-entry-quality.ts";
@@ -28,18 +24,13 @@ import {
 } from "./resonance-policy-version.ts";
 
 const POST_EXIT_HORIZONS = [0, 30, 60, 120, 240, 720] as const;
-const TRADERS: Hte31TraderId[] = ["dennis_trend", "raschke_pullback", "turtle_soup", "exhaustion_reversal", "higher_timeframe_swing"];
+const TRADERS: Hte31TraderId[] = [...HTE31_ALL_TRADER_IDS];
 const LONG_TERM_REVALIDATION_DELAY_MS = 12 * 60 * 60_000;
-const PAPER_REVALIDATION_MARKER = "PAPER_REVALIDATION_ONLY";
+const LEARNED_CHALLENGER_MARKER = "LEARNED_CHALLENGER_LIVE_PARITY";
 const HTE31_EVALUATION_BATCH_SIZE = 4;
 
 function traderIdForSignal(signal: Hte31Signal): Hte31TraderId | null {
-  if (signal.strategyId === "trend_breakout") return "dennis_trend";
-  if (signal.strategyId === "trend_pullback") return "raschke_pullback";
-  if (signal.strategyId === "failed_breakout") return "turtle_soup";
-  if (signal.strategyId === "trend_exhaustion_reversal") return "exhaustion_reversal";
-  if (signal.strategyId === "higher_timeframe_swing") return "higher_timeframe_swing";
-  return null;
+  return anyTraderIdForSignal(signal);
 }
 
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
@@ -281,7 +272,7 @@ export async function tryOpenHte31Trade(
   const selected = candidates[0];
   if (!selected?.signal.entryPlan || selected.signal.side === "WAIT") {
     const paused = scoredCandidates.find((item) => item.performanceGate.state === "PAUSED");
-    return { opened: null, reason: paused ? `负期望组合门控：${paused.performanceGate.reason}` : "五种打法本轮没有完整 Setup" };
+    return { opened: null, reason: paused ? `负期望组合门控：${paused.performanceGate.reason}` : "十三种打法本轮没有完整 Setup" };
   }
 
   const [existing] = await db.select({ id: hte31Trades.id }).from(hte31Trades)
@@ -289,7 +280,6 @@ export async function tryOpenHte31Trade(
   if (existing) return { opened: null, reason: "该币已有 Resonance 模拟持仓" };
 
   const { open, account } = await accountFromRows(settings.trialCapitalUsdt);
-  if (open.length >= 2) return { opened: null, reason: "模拟账户同时最多 2 笔持仓" };
   if (account.equityUsdt <= 0) return { opened: null, reason: "模拟账户权益不足" };
 
   const plan = selected.signal.entryPlan;
@@ -312,6 +302,13 @@ export async function tryOpenHte31Trade(
     confidence: selected.signal.confidence,
   });
   if (!sizing.accepted) return { opened: null, reason: `仓位经济门槛：${sizing.reason}` };
+  const portfolioBlock = hte31PaperPortfolioBlockReason({
+    open: open.map((trade) => ({ side: trade.side, riskBudgetUsdt: trade.riskBudgetUsdt })),
+    nextSide: selected.signal.side,
+    nextRiskUsdt: sizing.plannedRiskUsdt,
+    accountEquityUsdt: account.equityUsdt,
+  });
+  if (portfolioBlock) return { opened: null, reason: portfolioBlock };
   const {
     quantity,
     notionalUsdt,
@@ -322,7 +319,7 @@ export async function tryOpenHte31Trade(
 
   const id = `hte31:${crypto.randomUUID()}`;
   const now = packet.observedAt;
-  const revalidationOnly = governance.revalidation
+  const learnedChallenger = governance.revalidation
     || governance.traderGuards[selected.traderId].revalidation
     || selected.performanceGate.revalidation;
   const row = {
@@ -349,7 +346,7 @@ export async function tryOpenHte31Trade(
     marginUsdt,
     quantity,
     leverage,
-    entryTrigger: `${revalidationOnly ? `${PAPER_REVALIDATION_MARKER} · ` : ""}${selected.signal.label} · ${selected.signal.reasons.join("；")} · ${sizing.leverageReason}`,
+    entryTrigger: `${learnedChallenger ? `${LEARNED_CHALLENGER_MARKER} · ` : ""}${selected.signal.label} · ${selected.signal.reasons.join("；")} · ${sizing.leverageReason}`,
     entryThesis: selected.signal.thesis,
     entryChecksJson: JSON.stringify(plan.checks),
     entryMetricsJson: JSON.stringify([
@@ -402,7 +399,7 @@ export async function tryOpenHte31Trade(
     entryQualityJson: "null",
     updatedAt: now,
   });
-  return { opened: row, reason: revalidationOnly ? `${selected.signal.label} 模拟复考单已建立` : `${selected.signal.label} 独立 Setup 完整触发` };
+  return { opened: row, reason: learnedChallenger ? `${selected.signal.label} 学习挑战单已建立（保留实盘血缘）` : `${selected.signal.label} 独立 Setup 完整触发` };
 }
 
 async function updateLearningAfterClose(trade: typeof hte31Trades.$inferSelect, netPnlUsdt: number, mfePct: number, maePct: number, now: number, exitCode: string | null, target1Hit: boolean) {

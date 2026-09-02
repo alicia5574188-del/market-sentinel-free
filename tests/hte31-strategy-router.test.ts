@@ -4,7 +4,7 @@ import { buildHte31StrategyRouterDecision, type Hte31RouterEvidence } from "../l
 import type { Hte31Signal, Hte31StrategyId } from "../lib/hte31-types.ts";
 import type { Hte31TraderId } from "../lib/hte31-strategy-catalog.ts";
 
-function signal(strategyId: Hte31StrategyId, side: "LONG" | "SHORT", score: number, lane: "control" | "research"): Hte31Signal {
+function signal(strategyId: Hte31StrategyId, side: "LONG" | "SHORT", score: number, lane: "paper"): Hte31Signal {
   return {
     strategyId,
     label: strategyId,
@@ -31,36 +31,37 @@ function evidence(traderId: Hte31TraderId, patch: Partial<Hte31RouterEvidence> =
   return { traderId, sampleCount: 0, expectancyR: 0, profitFactor: null, maximumDrawdownR: 0, qualified: false, ...patch };
 }
 
-test("same-side strategies cooperate in research without multiplying executable risk", () => {
+test("same-side strategies cooperate while the brain selects one executable paper strategy", () => {
   const result = buildHte31StrategyRouterDecision({
     observedAt: 1,
     symbol: "PROM_USDT",
-    signals: [signal("trend_breakout", "LONG", 80, "control"), signal("momentum_continuation", "LONG", 78, "research")],
+    signals: [signal("trend_breakout", "LONG", 80, "paper"), signal("momentum_continuation", "LONG", 78, "paper")],
     evidence: [],
   });
   assert.equal(result.mode, "COOPERATE");
   assert.equal(result.supporting.length, 1);
-  assert.match(result.executionRule, /不重复放大|一笔仓位/);
-  assert.equal(result.authority, "research_only");
+  assert.equal(result.selectedForExecution?.traderId, "dennis_trend");
+  assert.equal(result.authority, "paper_brain_live_parity");
 });
 
 test("opposite strategies remain separate hypotheses instead of being averaged into an order", () => {
   const result = buildHte31StrategyRouterDecision({
     observedAt: 1,
     symbol: "BTC_USDT",
-    signals: [signal("trend_exhaustion_reversal", "SHORT", 82, "control"), signal("momentum_continuation", "LONG", 84, "research")],
+    signals: [signal("trend_exhaustion_reversal", "SHORT", 82, "paper"), signal("momentum_continuation", "LONG", 84, "paper")],
     evidence: [],
   });
   assert.equal(result.mode, "CONFLICT");
   assert.equal(result.opposing.length, 1);
-  assert.match(result.executionRule, /不对冲、不叠加风险/);
+  assert.equal(result.selectedForExecution, null);
+  assert.match(result.executionRule, /本轮不下单/);
 });
 
 test("a few profitable HT4 samples do not create a permanent priority boost", () => {
   const result = buildHte31StrategyRouterDecision({
     observedAt: 1,
     symbol: "ETH_USDT",
-    signals: [signal("trend_exhaustion_reversal", "SHORT", 70, "control"), signal("momentum_continuation", "SHORT", 82, "research")],
+    signals: [signal("trend_exhaustion_reversal", "SHORT", 70, "paper"), signal("momentum_continuation", "SHORT", 82, "paper")],
     evidence: [evidence("exhaustion_reversal", { sampleCount: 3, expectancyR: 2, profitFactor: 99 })],
   });
   assert.equal(result.primary?.traderId, "momentum_continuation");
@@ -72,11 +73,24 @@ test("thesis invalidation never auto-flips into an unqualified replacement", () 
     observedAt: 1,
     symbol: "SOL_USDT",
     activePosition: { traderId: "exhaustion_reversal", side: "SHORT" },
-    signals: [signal("trend_exhaustion_reversal", "LONG", 75, "control"), signal("momentum_continuation", "LONG", 86, "research")],
+    signals: [signal("trend_exhaustion_reversal", "LONG", 75, "paper"), signal("momentum_continuation", "LONG", 86, "paper")],
     evidence: [evidence("momentum_continuation", { sampleCount: 12, expectancyR: 0.3, profitFactor: 1.8, qualified: false })],
   });
   assert.equal(result.mode, "SWITCH_WATCH");
   assert.equal(result.currentThesisState, "invalidated");
   assert.equal(result.replacementEligible, false);
-  assert.match(result.executionRule, /禁止自动反手/);
+  assert.equal(result.selectedForExecution, null);
+  assert.match(result.executionRule, /不把退出与反手合并/);
+});
+
+test("a clear score lead lets the brain resolve a directional conflict without hedging", () => {
+  const result = buildHte31StrategyRouterDecision({
+    observedAt: 1,
+    symbol: "BTC_USDT",
+    signals: [signal("trend_breakout", "LONG", 92, "paper"), signal("failed_breakout", "SHORT", 70, "paper")],
+    evidence: [],
+  });
+  assert.equal(result.mode, "CONFLICT");
+  assert.equal(result.selectedForExecution?.traderId, "dennis_trend");
+  assert.match(result.executionRule, /领先差达到 8 分/);
 });

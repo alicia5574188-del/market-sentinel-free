@@ -11,6 +11,31 @@ Rules:
 
 ---
 
+## 2026-09-02 — Unified paper strategy brain and direct live parity
+
+- Pull request: `#105`
+- Feature commit: `fa4f38220be829d4bd67f1962f19020aed73d268`
+- Production merge commit: pending
+- Runtime: `resonance-v4-unified-paper-live-parity`
+
+### Changed
+
+- Unified all thirteen HTE31 strategies into one capital-backed paper execution pool and made the brain's exact selection the only executable candidate.
+- Removed current-cycle shadow trade creation/advancement; actual closed paper orders now drive router performance evidence.
+- Extended Gate live eligibility to the same thirteen-strategy catalog and preserved learned entry checks, stop, targets, leverage, and decision lineage from paper to live.
+- Increased paper/live capacity to five positions and three per direction; paper total planned stop risk is capped at 20% of equity.
+- Changed isolated paper margin from a 15% target/45% fallback to an 8% target/35% liquidation-safe fallback; leverage remains capped at 50x and by market/safety conditions.
+
+### Deliberately unchanged
+
+- HT4's decision source fingerprint, existing position lifecycle, owner controls, credentials, reconciliation, emergency stop, and no-fund fail-closed behavior remain intact.
+- No automatic fund transfer, live activation, hedge, close-and-reverse, or lower-ranked strategy substitution was added.
+
+### Verification
+
+- Local strategy/risk/migration suite: 206 passed. Production build/UI/Must-Keep suite: 107 passed. TypeScript, ESLint, Wrangler production dry-run, and `git diff --check` passed.
+- PR CI run `33620837022` / job `100217233170` passed on the first PR head; the final documentation-head run, merged-main CI, and production health evidence will be recorded before completion.
+
 ## 2026-09-02 — Isolated strategy challengers and research router
 
 - Production PR: `#103`

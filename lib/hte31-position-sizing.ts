@@ -45,13 +45,40 @@ export const HTE31_PAPER_POSITION_POLICY = {
   maximumRiskRate: 0.05,
   minimumTp2NetProfitUsdt: 50,
   maximumMarketRiskReward: 20,
-  targetMarginAllocationRate: 0.15,
-  maximumMarginAllocationRate: 0.45,
+  targetMarginAllocationRate: 0.08,
+  maximumMarginAllocationRate: 0.35,
   maximumLeverage: 50,
   liquidationMaintenanceFactor: 0.92,
   liquidationStopBufferMultiple: 2.5,
   liquidationExtraBufferRate: 0.003,
 } as const;
+
+export const HTE31_PAPER_PORTFOLIO_POLICY = {
+  maxOpenPositions: 5,
+  maximumTotalPlannedRiskRate: 0.20,
+  maxSameSidePositions: 3,
+} as const;
+
+export type Hte31OpenRisk = {
+  side: Hte31PositionSide;
+  riskBudgetUsdt: number;
+};
+
+export function hte31PaperPortfolioBlockReason(input: {
+  open: Hte31OpenRisk[];
+  nextSide: Hte31PositionSide;
+  nextRiskUsdt: number;
+  accountEquityUsdt: number;
+}) {
+  const policy = HTE31_PAPER_PORTFOLIO_POLICY;
+  if (input.open.length >= policy.maxOpenPositions) return `模拟账户同时最多 ${policy.maxOpenPositions} 笔持仓`;
+  const sameSide = input.open.filter((row) => row.side === input.nextSide).length;
+  if (sameSide >= policy.maxSameSidePositions) return `模拟账户同方向同时最多 ${policy.maxSameSidePositions} 笔持仓`;
+  const totalRisk = input.open.reduce((sum, row) => sum + Math.max(0, row.riskBudgetUsdt), 0) + Math.max(0, input.nextRiskUsdt);
+  const maximumRisk = Math.max(0, input.accountEquityUsdt) * policy.maximumTotalPlannedRiskRate;
+  if (totalRisk > maximumRisk + 0.01) return `组合计划止损 ${totalRisk.toFixed(2)}U 超过权益 ${(policy.maximumTotalPlannedRiskRate * 100).toFixed(0)}% 上限 ${maximumRisk.toFixed(2)}U`;
+  return null;
+}
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -72,16 +99,16 @@ function direction(side: Hte31PositionSide) {
 
 function liquidityLeverageCap(volumeUsd: number) {
   if (volumeUsd >= 500_000_000) return 50;
-  if (volumeUsd >= 100_000_000) return 35;
-  if (volumeUsd >= 25_000_000) return 20;
-  return 10;
+  if (volumeUsd >= 100_000_000) return 40;
+  if (volumeUsd >= 25_000_000) return 25;
+  return 15;
 }
 
 function volatilityLeverageCap(atrPct: number | null) {
   if (atrPct == null || !Number.isFinite(atrPct)) return 15;
-  if (atrPct >= 3) return 10;
-  if (atrPct >= 1.8) return 15;
-  if (atrPct >= 1) return 25;
+  if (atrPct >= 3) return 12;
+  if (atrPct >= 1.8) return 20;
+  if (atrPct >= 1) return 30;
   return 50;
 }
 
@@ -146,11 +173,16 @@ export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31P
   const liquidityCap = liquidityLeverageCap(positive(input.liquidityVolumeUsd));
   const volatilityCap = volatilityLeverageCap(input.atrPct);
   const qualityCap = input.dataQuality < 0.75 || input.confidence < 72
-    ? 10
+    ? 12
     : input.dataQuality < 0.82 || input.confidence < 78
-      ? 20
+      ? 25
       : HTE31_PAPER_POSITION_POLICY.maximumLeverage;
-  const leverageCap = clamp(Math.min(liquidityCap, volatilityCap, qualityCap), 1, HTE31_PAPER_POSITION_POLICY.maximumLeverage);
+  const requiredLiquidationBufferRate = stopDistanceRate * HTE31_PAPER_POSITION_POLICY.liquidationStopBufferMultiple
+    + HTE31_PAPER_POSITION_POLICY.liquidationExtraBufferRate;
+  const liquidationSafeCap = Math.max(1, Math.floor(
+    HTE31_PAPER_POSITION_POLICY.liquidationMaintenanceFactor / requiredLiquidationBufferRate,
+  ));
+  const leverageCap = clamp(Math.min(liquidityCap, volatilityCap, qualityCap, liquidationSafeCap), 1, HTE31_PAPER_POSITION_POLICY.maximumLeverage);
   const hardMarginCap = Math.min(
     availableMarginUsdt,
     equityUsdt * HTE31_PAPER_POSITION_POLICY.maximumMarginAllocationRate,
@@ -166,9 +198,9 @@ export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31P
   const desiredNotionalUsdt = targetRiskUsdt / netStopLossRate;
   const requiredLeverage = Math.max(1, Math.ceil(desiredNotionalUsdt / targetMarginCap));
   const leverage = clamp(requiredLeverage, 1, leverageCap);
-  // Most positions stay inside the 15% target. Exceptionally narrow structural
+  // Most positions stay inside the 8% target. Exceptionally narrow structural
   // stops may need more collateral after the 50x safety cap is reached, but can
-  // never cross the smaller 45% hard fallback (previously 60%).
+  // never cross the 35% hard fallback.
   const notionalUsdt = Math.min(desiredNotionalUsdt, hardMarginCap * leverage);
   const marginUsdt = notionalUsdt / leverage;
   const quantity = notionalUsdt / entryPrice;
@@ -186,14 +218,12 @@ export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31P
   const estimatedLiquidationPrice = input.side === "LONG"
     ? entryPrice * (1 - liquidationDistanceRate)
     : entryPrice * (1 + liquidationDistanceRate);
-  const requiredLiquidationBufferRate = stopDistanceRate * HTE31_PAPER_POSITION_POLICY.liquidationStopBufferMultiple
-    + HTE31_PAPER_POSITION_POLICY.liquidationExtraBufferRate;
   const liquidationSafe = liquidationDistanceRate >= requiredLiquidationBufferRate;
 
   const targetMarginPct = HTE31_PAPER_POSITION_POLICY.targetMarginAllocationRate * 100;
   const maximumMarginPct = HTE31_PAPER_POSITION_POLICY.maximumMarginAllocationRate * 100;
   const usedMarginPct = marginUsdt / equityUsdt * 100;
-  const leverageReason = `需求 ${requiredLeverage}x / 上限 ${leverageCap}x；流动性 ${liquidityCap}x，波动 ${volatilityCap}x，质量 ${qualityCap}x；隔离保证金目标净值${targetMarginPct.toFixed(0)}%${usedMarginPct > targetMarginPct + 0.01 ? `，窄止损安全回退 ${usedMarginPct.toFixed(1)}%` : ""}（硬上限${maximumMarginPct.toFixed(0)}%）`;
+  const leverageReason = `需求 ${requiredLeverage}x / 上限 ${leverageCap}x；流动性 ${liquidityCap}x，波动 ${volatilityCap}x，质量 ${qualityCap}x，强平安全 ${liquidationSafeCap}x；隔离保证金目标净值${targetMarginPct.toFixed(0)}%${usedMarginPct > targetMarginPct + 0.01 ? `，安全回退 ${usedMarginPct.toFixed(1)}%` : ""}（硬上限${maximumMarginPct.toFixed(0)}%）`;
   let reason = `计划净风险(含费用) ${plannedRiskUsdt.toFixed(2)}U，市场目标 ${riskReward.toFixed(2)}R / 预计净利润 ${plannedTp2NetProfitUsdt.toFixed(2)}U`;
   let accepted = true;
   if (plannedRiskUsdt + 1e-8 < minimumRiskUsdt) {

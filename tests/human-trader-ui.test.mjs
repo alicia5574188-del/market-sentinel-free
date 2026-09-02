@@ -16,7 +16,7 @@ test("production UI is Resonance while preserving all five playbooks", () => {
   assert.match(page, /Resonance/);
   assert.match(page, /市场记忆 · 自适应交易/);
   for (const phrase of ["Dennis", "Raschke", "Turtle Soup", "Exhaustion", "Swing"]) assert.match(page, new RegExp(phrase));
-  for (const phrase of ["HT1-R", "HT2-R", "HT3-R", "HT5-R", "HT6", "HT7", "HT8", "HT9", "并发研究持仓", "选择、并用与纠错"]) assert.match(page, new RegExp(phrase));
+  for (const phrase of ["HT1-R", "HT2-R", "HT3-R", "HT5-R", "HT6", "HT7", "HT8", "HT9", "统一模拟策略池", "十三种打法由大脑择优"]) assert.match(page, new RegExp(phrase));
   assert.match(page, /系统有没有进步/);
   assert.match(page, /MemoryCard item=\{memory\.short\} symbol=\{readModel\?\.target\}/);
   assert.match(page, /MemoryCard item=\{memory\.swing\} symbol=\{readModel\?\.target\}/);

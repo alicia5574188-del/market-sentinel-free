@@ -30,12 +30,12 @@ test("clean rebuild migration preserves real exchange data families and disarms 
   assert.match(migration, /`activation_epoch` = `activation_epoch` \+ 1/);
 });
 
-test("Resonance scanner preserves five controls and adds an isolated eight-strategy research pool", () => {
+test("Resonance scanner evaluates all thirteen strategies in one paper decision cycle", () => {
   const scanner = readFileSync(new URL("../lib/hte31-scanner.ts", import.meta.url), "utf8");
   assert.match(scanner, /evaluateHumanTraderPool/);
   assert.match(scanner, /evaluateAdvancedHumanTraders/);
   assert.match(scanner, /evaluateHte31ResearchStrategies/);
-  assert.match(scanner, /recordHte31DiagnosticCycle\(packet, signals, job\.settings, job\.candles, activePosition\)/);
+  assert.match(scanner, /recordHte31DiagnosticCycle\(packet, signals, activePosition\)/);
   assert.match(scanner, /getGlobalRiskContext/);
   assert.match(scanner, /buildResonanceGlobalMarket/);
   assert.match(scanner, /buildResonanceMarketMemory/);
@@ -46,12 +46,13 @@ test("Resonance scanner preserves five controls and adds an isolated eight-strat
   assert.doesNotMatch(scanner, /runMarketScan|getStrategy2ExperienceBook|processShadowStrategies|getStrategyLabDashboard|tradeCases|trade_cases/);
 });
 
-test("research candidates cannot enter the five-strategy control execution pool", () => {
+test("all catalog strategies share the paper brain and live-parity boundary", () => {
   const trading = readFileSync(new URL("../lib/resonance-trading.ts", import.meta.url), "utf8");
   const live = readFileSync(new URL("../lib/live-trading-repository.ts", import.meta.url), "utf8");
-  assert.match(trading, /executionLane !== "research"/);
-  assert.match(trading, /cannot enter the control candidate pool or pre-empt HT4/);
-  assert.doesNotMatch(live, /dennis_trend_v2|range_rotation|compression_expansion|relative_strength|momentum_continuation/);
+  assert.match(trading, /All thirteen strategies share one simulation pool/);
+  assert.match(trading, /executionRouter\.selectedForExecution/);
+  assert.match(live, /HTE31_LIVE_PARITY_TRADERS = new Set<string>\(HTE31_ALL_TRADER_IDS\)/);
+  assert.doesNotMatch(live, /PAPER_REVALIDATION_ONLY|模拟复考单禁止进入 Gate/);
 });
 
 test("thirteen-strategy evaluations stay below the D1 bind budget", () => {
@@ -60,16 +61,16 @@ test("thirteen-strategy evaluations stay below the D1 bind budget", () => {
   assert.match(repository, /rows\.slice\(index, index \+ HTE31_EVALUATION_BATCH_SIZE\)/);
 });
 
-test("concurrent shadow samples use conservative candle ordering and exact insert accounting", () => {
+test("historical shadow rows stay readable but current routing learns from actual paper orders", () => {
   const diagnostics = readFileSync(new URL("../lib/hte31-diagnostics.ts", import.meta.url), "utf8");
-  assert.match(diagnostics, /apply the conservative stop-first rule/);
-  assert.match(diagnostics, /if \(stopped\) return \{ reason: "stop_loss"/);
-  assert.match(diagnostics, /\.onConflictDoNothing\(\)\.returning\(\{ id: hte31ShadowSamples\.id \}\)/);
-  assert.match(diagnostics, /return inserted\.length > 0/);
-  assert.match(diagnostics, /seen\.add\(horizon\)/);
-  assert.match(diagnostics, /signal\.side.*signal\.strategyMeta\.assetRegime.*sampleKind/);
-  assert.match(diagnostics, /independentCompletedRows/);
-  assert.match(diagnostics, /if \(row\.entryAt < previousTerminal\) continue/);
+  const currentCycle = diagnostics.slice(
+    diagnostics.indexOf("export async function recordHte31DiagnosticCycle"),
+    diagnostics.indexOf("function paperMaximumDrawdownR"),
+  );
+  assert.doesNotMatch(currentCycle, /advanceShadowSamples|createShadowSample|hte31ShadowSamples/);
+  assert.doesNotMatch(diagnostics, /\.insert\(hte31ShadowSamples\)|\.update\(hte31ShadowSamples\)/);
+  assert.match(diagnostics, /buildPaperRouterEvidence/);
+  assert.match(diagnostics, /\.from\(hte31Trades\)/);
 });
 
 test("post-exit observer still follows every closed trade through twelve hours", () => {
@@ -140,7 +141,7 @@ test("expanded trade review cannot widen the mobile viewport", () => {
 
 test("Durable Objects retain bounded low-write runtime and persist the stable market brain", () => {
   const worker = readFileSync(new URL("../worker/hte31-workers.ts", import.meta.url), "utf8");
-  assert.match(worker, /CLEAN_RUNTIME_VERSION = "resonance-v3-strategy-research"/);
+  assert.match(worker, /CLEAN_RUNTIME_VERSION = "resonance-v4-unified-paper-live-parity"/);
   assert.match(worker, /D1 trades, learning, simulation epochs, live[\s\S]*remain untouched/);
   assert.match(worker, /SCANNER_CYCLE_INTERVAL_MS = 60_000/);
   assert.match(worker, /TRADE_MANAGER_IDLE_INTERVAL_MS = 60_000/);

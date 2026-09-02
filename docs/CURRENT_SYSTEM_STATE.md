@@ -1,5 +1,13 @@
 # Market Sentinel — Current System State
 
+> **2026-09-02 unified-paper/live-parity correction (supersedes all conflicting research-lane, shadow-position, paper-only learning, live allowlist, two-slot, and margin descriptions below).**
+>
+> All thirteen HTE31 strategies now share one capital-backed simulation account. One strategy brain ranks the current stories and chooses the exact executable candidate; actual closed paper orders, not auxiliary shadow trades, drive strategy evidence. The system no longer creates or advances a second simulation layer. Historical shadow rows remain read-only for audit compatibility.
+>
+> Gate live directly inherits the chosen paper trade's strategy, learned entry checks, stop, targets, and leverage for every ID in the same thirteen-strategy catalog. Real balance, fees, slippage, contract limits, reconciliation, owner controls, and hard safety are still live-account facts. The system never moves funds or decides funding approval: the owner will fund only after actual positive simulated growth.
+>
+> Paper/live concurrency is five positions with at most three in one direction. Paper total planned stop risk is capped at 20% of equity and one symbol still has at most one open position. New paper sizing targets 8% isolated margin, allows a liquidation-safe fallback up to 35%, and caps adaptive leverage at 50x plus liquidity/volatility/quality/liquidation constraints. HT4's exact decision source remains frozen, but it receives no permanent priority.
+
 > **2026-09-02 strategy-research correction (supersedes conflicting strategy-count and paper-margin descriptions below).**
 >
 > Resonance keeps HT1–HT5 as the only control/execution lane and freezes HT4 Exhaustion's decision block with a regression fingerprint. Eight HTE31-native challengers run in a separate research lane: revised HT1/HT2/HT3/HT5 plus HT6 range rotation, HT7 compression expansion, HT8 relative strength, and HT9 shallow-pause momentum continuation. They may create up to 64 concurrent shadow observations without consuming control-account capital or either control position slot, and they cannot enter Gate live.

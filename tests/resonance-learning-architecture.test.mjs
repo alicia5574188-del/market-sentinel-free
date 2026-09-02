@@ -40,25 +40,25 @@ test("repeated failures create scoped diagnosis directives instead of a two-hour
   assert.doesNotMatch(execution, /getHte31Governance|COOLDOWN|2 \* 60 \* 60_000/);
 });
 
-test("weak strategies and weak performance cells continue only through strict paper challengers", () => {
+test("weak strategies continue only through strict challengers with live parity lineage", () => {
   assert.match(review, /challengerSetupId/);
   assert.match(review, /items\.length >= 8 && averageR <= -0\.20/);
   assert.match(trading, /resonance-cognitive-challenger/);
   assert.match(execution, /strictCellChallenger/);
   assert.match(execution, /resonance-cognitive-cell-challenger/);
-  assert.match(execution, /PAPER_REVALIDATION_ONLY/);
+  assert.match(execution, /BRAIN_SELECTED_LIVE_PARITY/);
   assert.match(execution, /COGNITIVE_ADAPTATION/);
-  assert.match(liveRepository, /isPaperRevalidationTrade/);
-  assert.match(liveRepository, /模拟复考单禁止进入 Gate 实盘/);
+  assert.match(liveRepository, /HTE31_LIVE_PARITY_TRADERS/);
+  assert.doesNotMatch(liveRepository, /模拟复考单禁止进入 Gate 实盘/);
 });
 
-test("learned behavior changes are paper-only until validation proves improvement", () => {
+test("learned behavior changes remain in the direct paper-to-live lineage", () => {
   assert.match(trading, /markLearnedPolicyCandidate/);
   assert.match(trading, /resonance-cognitive-policy/);
-  assert.match(trading, /在足够对照样本证明改善前禁止进入 Gate 实盘/);
+  assert.match(trading, /模拟订单继续验证，未来实盘直接继承同一已学习规则/);
   assert.match(execution, /check\.key\.startsWith\("resonance-cognitive-"\)/);
-  assert.match(execution, /paperOnly \? `\$\{PAPER_ONLY_MARKER\}/);
-  assert.match(liveRepository, /PAPER_REVALIDATION_ONLY/);
+  assert.match(execution, /BRAIN_SELECTED_LIVE_PARITY/);
+  assert.doesNotMatch(liveRepository, /PAPER_REVALIDATION_ONLY/);
 });
 
 test("entry quality records deterministic timing diagnostics without changing live risk", () => {
@@ -67,7 +67,7 @@ test("entry quality records deterministic timing diagnostics without changing li
   assert.match(trading, /同打法同环境增加回踩确认/);
   assert.match(trading, /openResonancePaperTrade/);
   assert.match(execution, /COGNITIVE_ADAPTATION/);
-  assert.match(liveRepository, /模拟复考单禁止进入 Gate 实盘/);
+  assert.match(liveRepository, /HTE31_ALL_TRADER_IDS/);
 });
 
 test("whole-market state has inertia and a direct bull-bear flip requires stronger confirmation", () => {
@@ -82,7 +82,7 @@ test("whole-market state has inertia and a direct bull-bear flip requires strong
 test("whole market and current-symbol judgment are separate decision layers", () => {
   assert.match(scanner, /buildResonanceGlobalMarket/);
   assert.match(scanner, /buildResonanceMarketView/);
-  assert.match(scanner, /tryOpenResonanceTrade\(packet, signals, job\.candles, job\.settings, job\.market, job\.marketView, job\.review\)/);
+  assert.match(scanner, /tryOpenResonanceTrade\(packet, signals, job\.candles, job\.settings, job\.market, job\.marketView, job\.review, router\)/);
   assert.match(trading, /Whole-market structure and the current symbol are separate layers/);
 });
 

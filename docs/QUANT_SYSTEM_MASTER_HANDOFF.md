@@ -1,13 +1,13 @@
 # Market Sentinel / Resonance — Quant System Master Handoff
 
-Last reconciled: **2026-09-02 09:18 UTC**
+Last reconciled: **2026-09-02 — PR #105 pending CI and production verification**
 Purpose: **the complete continuation entry after deleting all prior chats**
 
 ## 0. Start every new task here
 
 Use this exact starter prompt in a new Project chat:
 
-> Continue the Market Sentinel quantitative system. First read `docs/QUANT_SYSTEM_MASTER_HANDOFF.md`, `AGENTS.md`, `.codex/goal-to-done/GOAL.md`, `STATUS.md`, `DECISIONS.md`, `docs/CURRENT_SYSTEM_STATE.md`, `docs/SENTINEL_CHANGELOG.md`, and `docs/RESONANCE_MUST_KEEP_FEATURES.md` completely. Then inspect current GitHub `main`, recent merged PRs, CI, and production health. Repository and verified production state override chat memory. Keep HT4 frozen, keep all research strategies non-executable, preserve every Must-Keep feature, and work through a branch/PR/green-CI/production-verification loop.
+> Continue the Market Sentinel quantitative system. First read `docs/QUANT_SYSTEM_MASTER_HANDOFF.md`, `AGENTS.md`, `.codex/goal-to-done/GOAL.md`, `STATUS.md`, `DECISIONS.md`, `docs/CURRENT_SYSTEM_STATE.md`, `docs/SENTINEL_CHANGELOG.md`, and `docs/RESONANCE_MUST_KEEP_FEATURES.md` completely. Then inspect current GitHub `main`, recent merged PRs, CI, and production health. Repository and verified production state override chat memory. Keep HT4's decision source frozen, keep all thirteen strategies in the same paper brain and live-parity catalog, never recreate shadow trade simulation, preserve every Must-Keep feature, and work through a branch/PR/green-CI/production-verification loop.
 
 Do not reconstruct the system from a chat summary. The authoritative order is:
 
@@ -24,14 +24,13 @@ If any lower source conflicts with a higher source, the higher source wins.
 | --- | --- |
 | Repository | `alicia5574188-del/market-sentinel-free` |
 | Production Worker | `https://market-sentinel-free.alicia5574188.workers.dev` |
-| Production strategy identity | Market Sentinel HTE 3.1 Clean / Resonance V3 strategy research |
-| Runtime generation | `resonance-v3-strategy-research` |
-| Latest feature PR | `#103` |
-| Feature commit | `013908658e26c783742e50f21efde3d6307ad1e3` |
-| Production merge commit | `599dd815e202e8910b773a4481f45083c35972bc` |
-| PR CI | Run `33612891752`, job `100191962600`, passed |
-| Main CI | Run `33612981374`, job `100192245504`, passed |
-| Production proof | Immutable asset `assets/page-BQKWUfKi.js` served the new routing UI; `/__health` was HTTP 200 and healthy |
+| Target strategy identity | Market Sentinel HTE 3.1 Clean / Resonance V4 unified paper/live parity |
+| Target runtime generation | `resonance-v4-unified-paper-live-parity` |
+| Latest deployed feature PR | `#103` until PR `#105` is merged |
+| Current feature branch | `feat/resonance-unified-paper-live-parity` |
+| Current feature commit | `fa4f38220be829d4bd67f1962f19020aed73d268` |
+| PR CI | Run `33620837022`, job `100217233170`, passed; final documentation-head run pending |
+| Merge/main CI/production proof | Pending |
 
 The older remote branch `feat/resonance-strategy-research` contains an earlier divergent experiment and is not production. PR #103 used `feat/resonance-strategy-research-v2`; current `main` is authoritative.
 
@@ -45,34 +44,35 @@ At the final production probe:
 
 ## 2. The current authority model
 
-There are three separate lanes. Do not collapse them:
+There is one strategy lineage and two account contexts:
 
-1. **Paper control/execution lane:** HT1–HT5 compete for the existing simulated account and its two position slots.
-2. **Research lane:** eight challengers are evaluated and forward-tested without capital or execution authority.
-3. **Gate live lane:** real-order authority remains a separate fail-closed path and currently accepts only the validated HT1–HT3 trader IDs.
+1. **Unified paper brain:** all thirteen strategies compete in one capital-backed simulation account. The brain selects the exact executable candidate; actual orders and closes feed learning.
+2. **Gate live parity:** every catalog strategy may reach Gate only through an actual selected paper trade, reusing that trade's strategy, learned checks, stop, targets, and leverage. Real account/exchange facts and hard safety are reapplied without redesigning the strategy.
+
+Historical shadow tables remain read-only compatibility data. Do not create or advance shadow trades and do not rebuild a second simulation layer.
 
 The retired Strategy 2.0 / P1–P12 engine remains historical and isolated. Some older sections and files still describe it for audit compatibility. It is not the current production decision authority and must not be reconnected by copying historical code.
 
 ## 3. Strategy inventory
 
-### Paper control/execution lane
+### Unified paper/live catalog — original strategies
 
 | Code | Internal ID | Setup | Authority |
 | --- | --- | --- | --- |
-| HT1 | `dennis_trend` | Dennis trend breakout | Paper control/execution |
-| HT2 | `raschke_pullback` | Raschke trend pullback | Paper control/execution |
-| HT3 | `turtle_soup` | Turtle Soup false breakout | Paper control/execution |
-| HT4 | `exhaustion_reversal` | Anti-crowding exhaustion reversal | Paper control/execution; frozen baseline |
-| HT5 | `higher_timeframe_swing` | Higher-timeframe structure | Paper control/execution |
+| HT1 | `dennis_trend` | Dennis trend breakout | Paper brain + live parity |
+| HT2 | `raschke_pullback` | Raschke trend pullback | Paper brain + live parity |
+| HT3 | `turtle_soup` | Turtle Soup false breakout | Paper brain + live parity |
+| HT4 | `exhaustion_reversal` | Anti-crowding exhaustion reversal | Paper brain + live parity; source frozen |
+| HT5 | `higher_timeframe_swing` | Higher-timeframe structure | Paper brain + live parity |
 
 HT4 rules:
 
 - The exact decision block is protected by SHA-256 regression fingerprint `05adae71b2c1169c441e409d831ceb5acbec1390f5b051a5cb18f7a7af8389a3`.
 - Do not tune, wrap, reprioritize, duplicate, or rewrite HT4 because it recently carried the positive result.
 - A small profitable sample does not create permanent priority. The router ignores performance weighting below eight valid samples.
-- Research may observe the same move, but it cannot pre-empt HT4 or alter an HT4 position lifecycle.
+- Other strategies may outrank HT4 on the current market story; none may alter an already-open HT4 lifecycle.
 
-### Research-only challengers
+### Unified paper/live catalog — additional strategies
 
 | Code | Internal ID | Setup story | Family |
 | --- | --- | --- | --- |
@@ -87,21 +87,19 @@ HT4 rules:
 
 HT3-R explicitly evaluates breakout volume/range, reclaim depth, reverse impulse and force ratio, spot/order-book/liquidation evidence, and higher-timeframe opposition. It must not label every return to a prior range as a false breakout.
 
-Every research signal carries `executionLane: "research"`. `tryOpenResonanceTrade()` filters research signals out before choosing any executable paper candidate. The Gate live allowlist contains none of the research IDs.
+Every signal carries `executionLane: "paper"`. The same catalog IDs are accepted by the live-parity boundary. The historical `research` names are descriptive only and grant no separate lane.
 
-## 4. Concurrent evidence and strategy router
+## 4. Capital-backed evidence and strategy router
 
-The research ledger allows up to **64 concurrent pending shadow observations**. They are keyed and attributed by strategy, symbol, direction, setup, asset regime, and time bucket.
+All router performance evidence comes from actual closed HTE31 paper orders under the current policy. Historical shadow rows may be displayed for audit only and must not affect current selection.
 
-Research observations:
+Execution rules:
 
-- Consume no paper capital and no control-account slot.
-- Never create a Gate order.
-- Model stop, TP2, timeout, costs, MFE, and MAE.
-- Use conservative stop-first ordering when stop and target are both touched in one candle.
-- Count only non-overlapping completed forward paths toward routing evidence.
-- Keep same-direction strategies separately attributed even when the router reports cooperation.
-- Keep opposite-direction hypotheses separate; never average them into one order or create a hedge automatically.
+- The brain may rank all complete current setups, but opens only its exact selected candidate.
+- If that candidate fails its final learned/performance/execution gate, the cycle opens nothing; it does not silently substitute a lower-ranked strategy.
+- Same-side stories remain separately attributed while the router can report cooperation.
+- Opposite stories remain separate. A conflict opens only when the leading side is ahead by the explicit score margin; otherwise it waits.
+- Thesis invalidation never auto-closes and reverses. The current position exits by its own lifecycle, then a future cycle decides again.
 
 Router modes:
 
@@ -114,8 +112,7 @@ Router modes:
 Evidence policy:
 
 - Below 8 valid samples: performance contributes zero routing weight.
-- Manual promotion review requires at least 30 independent forward samples, profit factor at least 1.30, expectancy at least +0.15R, and maximum drawdown no more than 6R.
-- Passing those gates only permits a separate human audit. It does not grant paper-control or Gate authority automatically.
+- At 30 actual closed orders, PF 1.30, expectancy +0.15R, and drawdown at most 6R, evidence is considered mature for ranking/reporting. These thresholds do not create a new execution lane or automatic fund approval.
 
 ## 5. Paper account, sizing, and lifecycle
 
@@ -131,12 +128,12 @@ New paper sizing policy:
 - Market structure owns TP2. The system does not pull every target toward a fixed dollar number and does not cap strong runners at 200 USDT.
 - Maximum market-defined reward/risk accepted by the sizing layer: 20R.
 - Adaptive isolated paper leverage may reach 50x, subject to liquidity, volatility, data quality, and liquidation-buffer caps.
-- Normal isolated-margin target: 15% of equity.
-- Narrow-stop collateral fallback hard ceiling: 45% of equity after the safe leverage cap is reached.
+- Normal isolated-margin target: 8% of equity.
+- Narrow-stop collateral fallback hard ceiling: 35% of equity after the safe leverage cap is reached.
 - Higher leverage reduces locked margin; it must not increase the structural-stop loss budget.
 - Fees are included inside planned 1R.
 
-The existing paper control account still has two executable position slots. Research concurrency is deliberately separate rather than raising those two slots and contaminating HT4/control PnL.
+The paper account allows at most five open positions, at most three in the same direction, and no more than 20% of current equity in aggregate planned stop risk. A symbol still has at most one open position.
 
 Lifecycle capabilities that must remain:
 
@@ -157,7 +154,7 @@ PR #101 added a deterministic Entry Quality report for each eligible HTE31 trade
 - Counterfactual entries delayed by 1/2/3 completed 5-minute candles.
 - Diagnosis: direction wrong, entry too early, entry too late, normal noise, stop too tight, or insufficient data.
 
-`require_retest` can activate only within the exact setup + asset-regime cell after at least 3 assessed trades, at least 2 early-entry diagnoses, and at least 60% agreement. It remains paper-only and is blocked from Gate live.
+`require_retest` can activate only within the exact setup + asset-regime cell after at least 3 assessed trades, at least 2 early-entry diagnoses, and at least 60% agreement. When the brain selects that learned version, its check remains in the direct paper-to-live lineage.
 
 Historical analog memory requires 8 independent episodes. Below that floor the UI must say `样本不足 · n/8` and `暂不参与判断`; it must never display a fabricated `分歧 0%`.
 
@@ -170,24 +167,16 @@ The HTE31 foreground dashboard:
 
 ## 7. Gate live trading boundaries
 
-Gate live is separate from paper research. The user's last explicit state decision was to preserve the existing live-enabled intent, while the futures account was expected to remain unfunded for the time being. Never assume the account is still unfunded; inspect the current owner surface and Gate state before any live-risk change.
+Gate live accepts the same thirteen strategy IDs, but only through an actual unified-paper trade selected by the brain. The user explicitly retains funding authority and will not transfer funds until actual simulation growth is positive. Never move funds, infer approval, or replace the owner's decision.
 
-Current Gate entry allowlist:
-
-- `dennis_trend` (HT1)
-- `raschke_pullback` (HT2)
-- `turtle_soup` (HT3)
-
-HT4, HT5, HT1-R/HT2-R/HT3-R/HT5-R, and HT6–HT9 cannot directly enter Gate live.
-
-Current HTE31 live sizing policy is distinct from research/paper margin tuning:
+Current HTE31 live parity and safety policy:
 
 - Normal target stop risk: 4% of current Gate equity, never inflated above a smaller candidate's risk.
 - Maximum risk policy value: 5%.
 - Minimum TP2 net after fees and allowed slippage: 5% of current Gate equity.
-- Maximum Gate margin allocation: 60% of current Gate equity, further limited by actual available isolated margin and a 10% buffer.
-- Maximum open live positions for the HTE31 path: 2.
-- A third same-direction live position is blocked once two same-side positions already exist.
+- Maximum Gate margin allocation per position: 35% of current Gate equity, further limited by actual available isolated margin and a 10% buffer.
+- Maximum open live positions for the HTE31 path: 5.
+- A fourth same-direction live position is blocked once three same-side positions already exist.
 - A live candidate expires after 120 seconds and cannot predate the current enable session.
 - Entry drift beyond 0.3% or outside the expanded entry zone fails closed.
 - Contract status, leverage limit, price tick, minimum/maximum contract size, taker fee, and market-order slippage are checked before submission.
@@ -201,17 +190,17 @@ Live performance gates:
 - An unresolved recently closed Gate order with missing realized PnL fails closed until reconciliation.
 - Daily realized-loss, directional exposure, deployment recovery, reconciliation, reduce-only protection, and Emergency Stop remain independent hard boundaries.
 
-Do not copy the paper 15% margin target or research leverage behavior into Gate live without a separate, explicit, end-to-end risk audit and user authorization.
+Do not change the selected paper strategy's learned rules, stop, targets, or leverage merely because live funding begins. Balance-based notional, fee/slippage, exchange contract limits, and hard safety remain live preflight facts.
 
 ## 8. Background runtime and data flow
 
 Production decision/read flow:
 
-`Gate public market data → HTE31 Market Scanner Durable Object → five controls + eight research evaluations → research diagnostics/router → paper execution filter → persisted read model → /api/hte31 → owner UI`
+`Gate public market data → HTE31 Market Scanner Durable Object → thirteen-strategy evaluation → unified brain selection → paper execution → actual-order learning/read model → /api/hte31 → owner UI`
 
 Live flow:
 
-`eligible fresh HT1–HT3 paper lineage → live performance/portfolio/risk checks → Gate sizing and contract preflight → LiveTradingCoordinator → Gate order + protective orders → reconciliation/audit`
+`eligible fresh brain-selected paper lineage → live performance/portfolio/risk checks → Gate account/contract preflight → LiveTradingCoordinator → Gate order + protective orders → reconciliation/audit`
 
 Runtime cadence:
 
@@ -224,13 +213,13 @@ The foreground page is a consumer, not a second Gate market-data producer. Do no
 
 ## 9. Database and persistence
 
-The deployment is additive-only. Migration `0016_hte31_concurrent_strategy_research.sql` extends the HTE31 research ledger. It does not delete, rename, or reset historical tables or Durable Object classes.
+This change requires no destructive migration. Existing SQLite text columns already store all catalog IDs. Historical research/shadow tables remain intact and read-only; no historical table, Durable Object class, trade, learning row, epoch, credential, or live order is deleted or reset.
 
 Preserve:
 
 - HTE31 paper trades and simulation epochs.
 - Entry Quality and counterfactual reports.
-- Trigger buckets and shadow samples.
+- Trigger buckets and historical shadow samples (read-only compatibility; never resume writes).
 - Strategy memory and per-trade reviews.
 - Account, owner access, Web Push, audit, settings, and scanner diagnostics.
 - Gate credential record, live control intent, live orders, order lineage, and reconciliation audit.
@@ -252,8 +241,8 @@ Must-Keep capabilities include:
 - Account and owner access.
 - Simulation funds, epoch, realized/unrealized equity, and the single safe reset action.
 - Complete pre-trade plan: direction, state, gates, entry zone/price, stop, TP1, TP2, support, counter-evidence, missing conditions, and invalidation.
-- HT1–HT5 control cards plus HT1-R/HT2-R/HT3-R/HT5-R and HT6–HT9 research cards.
-- Router reasoning, concurrent research count, and explicit `research_only` authority.
+- All thirteen unified strategy cards and actual paper-order learning statistics.
+- Router reasoning, selected-for-execution strategy, and explicit paper/live-parity authority.
 - Orders, trade chart/review, Entry Quality, historical analog memory, and learning history.
 - Inline Gate status and orders, credential verification/deletion, Auto Live control, reconciliation, risk visibility, and Emergency Stop.
 - Web Push, audit, runtime health, and scanner diagnostics.
@@ -306,25 +295,21 @@ The final PR #103 evidence was:
 
 ## 13. Next optimization objective
 
-The immediate objective is evidence collection, not another blind strategy rewrite:
+The immediate objective is actual unified-paper evidence collection:
 
-- Let HT4 continue unchanged.
-- Let all eight challengers collect independent forward samples across symbols, directions, and regimes.
-- Review signal frequency, completed independent sample count, expectancy, profit factor, drawdown, stop/TP/timeout composition, and correlation/overlap.
-- Diagnose starvation or correlated overcounting before changing the 64-observation cap.
-- Review HT1-R/HT2-R/HT3-R/HT5-R against their control counterparts by regime.
-- Consider promotion only through a new audit after the explicit gates are met.
-- Keep same-side cooperation and opposite-side conflict explainable; do not auto-switch positions.
+- Let all thirteen strategies compete through the same brain and capital-backed account while HT4's source remains unchanged.
+- Review actual closed-order frequency, expectancy, profit factor, drawdown, stop/TP/timeout composition, direction concentration, and five-slot utilization.
+- Diagnose strategy or regime starvation from actual orders before changing entry rules.
+- Keep same-side cooperation and opposite-side conflict explainable; do not auto-switch positions or substitute a lower-ranked strategy after selection.
+- Treat positive simulated growth as evidence for the owner's later funding decision, never as automatic funding approval.
 
-Non-goals until forward evidence exists:
+Non-goals until actual paper evidence exists:
 
-- No HT4 tuning or priority boost.
-- No auto-promotion.
-- No automatic close-and-reverse.
-- No research strategy in Gate live.
-- No copying paper leverage/margin changes into real money.
-- No increase of the two paper control slots merely to make research look more active.
-- No deletion of old trades, learning, or simulation epochs.
+- No HT4 source tuning or priority boost.
+- No auxiliary shadow-trade simulation.
+- No automatic close-and-reverse or hedge.
+- No fund transfer or owner-approval inference.
+- No deletion of old trades, learning, shadow history, or simulation epochs.
 
 ## 14. How to continue after deleting chats
 

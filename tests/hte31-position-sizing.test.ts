@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildHte31PaperPosition,
+  hte31PaperPortfolioBlockReason,
+  HTE31_PAPER_PORTFOLIO_POLICY,
   HTE31_PAPER_POSITION_POLICY,
 } from "../lib/hte31-position-sizing.ts";
 
@@ -31,7 +33,7 @@ test("paper sizing preserves the market target instead of pulling every trade to
   assert.equal(result.riskReward, 2);
   assert.equal(result.tp2Adjusted, false);
   assert.ok(result.plannedTp2NetProfitUsdt >= 70 && result.plannedTp2NetProfitUsdt < 80);
-  assert.ok(result.marginUsdt <= 150.01);
+  assert.ok(result.marginUsdt <= 350.01);
   assert.ok(result.leverage >= 3);
 });
 
@@ -63,7 +65,7 @@ test("risk governor still reduces normal 40U risk to the 30U account-risk floor"
   assert.ok(result.plannedRiskUsdt >= 29.99 && result.plannedRiskUsdt <= 30.01);
 });
 
-test("fee-heavy narrow stop budgets fees inside 1R before choosing leverage", () => {
+test("fee-heavy narrow stop stays inside the 50x and 35% margin safety caps", () => {
   const result = buildHte31PaperPosition(baseInput({
     side: "SHORT",
     entryPrice: 100,
@@ -75,7 +77,8 @@ test("fee-heavy narrow stop budgets fees inside 1R before choosing leverage", ()
   }));
   assert.equal(result.accepted, true);
   assert.ok(result.leverage > 1 && result.leverage <= 50);
-  assert.ok(result.plannedRiskUsdt >= 39.99 && result.plannedRiskUsdt <= 40.01);
+  assert.ok(result.plannedRiskUsdt >= 31.49 && result.plannedRiskUsdt <= 31.51);
+  assert.equal(result.marginUsdt, 350);
   assert.equal(result.riskReward, 4);
   assert.ok(result.plannedTp2NetProfitUsdt >= 50);
 });
@@ -87,7 +90,7 @@ test("illiquid setup is rejected when its leverage cap cannot express minimum ac
     liquidityVolumeUsd: 12_000_000,
     atrPct: 0.4,
   }));
-  assert.equal(result.leverageCap, 10);
+  assert.equal(result.leverageCap, 15);
   assert.equal(result.accepted, false);
   assert.match(result.reason, /低于 30\.00U/);
 });
@@ -98,7 +101,23 @@ test("paper sizing keeps risk bounded while market targets may range from 50U to
   assert.equal(HTE31_PAPER_POSITION_POLICY.maximumRiskRate, 0.05);
   assert.equal(HTE31_PAPER_POSITION_POLICY.minimumTp2NetProfitUsdt, 50);
   assert.equal(HTE31_PAPER_POSITION_POLICY.maximumMarketRiskReward, 20);
-  assert.equal(HTE31_PAPER_POSITION_POLICY.targetMarginAllocationRate, 0.15);
-  assert.equal(HTE31_PAPER_POSITION_POLICY.maximumMarginAllocationRate, 0.45);
+  assert.equal(HTE31_PAPER_POSITION_POLICY.targetMarginAllocationRate, 0.08);
+  assert.equal(HTE31_PAPER_POSITION_POLICY.maximumMarginAllocationRate, 0.35);
   assert.equal(HTE31_PAPER_POSITION_POLICY.maximumLeverage, 50);
+});
+
+test("paper portfolio permits five diversified learning positions inside a 20% stop-risk envelope", () => {
+  assert.equal(HTE31_PAPER_PORTFOLIO_POLICY.maxOpenPositions, 5);
+  assert.equal(HTE31_PAPER_PORTFOLIO_POLICY.maxSameSidePositions, 3);
+  assert.equal(HTE31_PAPER_PORTFOLIO_POLICY.maximumTotalPlannedRiskRate, 0.20);
+  const open = [
+    { side: "LONG" as const, riskBudgetUsdt: 40 },
+    { side: "SHORT" as const, riskBudgetUsdt: 40 },
+    { side: "LONG" as const, riskBudgetUsdt: 40 },
+    { side: "SHORT" as const, riskBudgetUsdt: 40 },
+  ];
+  assert.equal(hte31PaperPortfolioBlockReason({ open, nextSide: "LONG", nextRiskUsdt: 40, accountEquityUsdt: 1_000 }), null);
+  assert.match(hte31PaperPortfolioBlockReason({ open: [...open, { side: "LONG", riskBudgetUsdt: 40 }], nextSide: "SHORT", nextRiskUsdt: 30, accountEquityUsdt: 1_000 }) ?? "", /最多 5 笔/);
+  assert.match(hte31PaperPortfolioBlockReason({ open: open.slice(0, 3), nextSide: "LONG", nextRiskUsdt: 81, accountEquityUsdt: 1_000 }) ?? "", /20% 上限/);
+  assert.match(hte31PaperPortfolioBlockReason({ open: [{ side: "LONG", riskBudgetUsdt: 30 }, { side: "LONG", riskBudgetUsdt: 30 }, { side: "LONG", riskBudgetUsdt: 30 }], nextSide: "LONG", nextRiskUsdt: 30, accountEquityUsdt: 1_000 }) ?? "", /同方向同时最多 3 笔/);
 });

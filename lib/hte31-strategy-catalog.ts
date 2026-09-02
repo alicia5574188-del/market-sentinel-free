@@ -33,24 +33,24 @@ export type Hte31TraderDefinition = {
   code: string;
   name: string;
   setup: string;
-  lane: "control" | "research";
+  lane: "paper";
   storyFamily: "trend" | "reversal" | "range" | "volatility" | "relative_strength";
 };
 
 export const HTE31_TRADER_DEFINITIONS: Hte31TraderDefinition[] = [
-  { id: "dennis_trend", code: "HT1", name: "Dennis", setup: "趋势突破", lane: "control", storyFamily: "trend" },
-  { id: "raschke_pullback", code: "HT2", name: "Raschke", setup: "趋势回踩", lane: "control", storyFamily: "trend" },
-  { id: "turtle_soup", code: "HT3", name: "Turtle Soup", setup: "假突破", lane: "control", storyFamily: "reversal" },
-  { id: "exhaustion_reversal", code: "HT4", name: "Exhaustion", setup: "反拥挤衰竭", lane: "control", storyFamily: "reversal" },
-  { id: "higher_timeframe_swing", code: "HT5", name: "Swing", setup: "大周期结构", lane: "control", storyFamily: "trend" },
-  { id: "dennis_trend_v2", code: "HT1-R", name: "Accepted Breakout", setup: "突破接受/回踩", lane: "research", storyFamily: "trend" },
-  { id: "raschke_pullback_v2", code: "HT2-R", name: "Adaptive Pullback", setup: "深浅回踩恢复", lane: "research", storyFamily: "trend" },
-  { id: "turtle_soup_v2", code: "HT3-R", name: "Failed Auction", setup: "量价力度假突破", lane: "research", storyFamily: "reversal" },
-  { id: "higher_timeframe_swing_v2", code: "HT5-R", name: "Swing Context", setup: "周期化大结构", lane: "research", storyFamily: "trend" },
-  { id: "range_rotation", code: "HT6", name: "Range Rotation", setup: "区间边缘轮动", lane: "research", storyFamily: "range" },
-  { id: "compression_expansion", code: "HT7", name: "Compression", setup: "压缩后真实扩张", lane: "research", storyFamily: "volatility" },
-  { id: "relative_strength", code: "HT8", name: "Relative Strength", setup: "横截面强弱", lane: "research", storyFamily: "relative_strength" },
-  { id: "momentum_continuation", code: "HT9", name: "Momentum Continuation", setup: "浅回踩趋势延续", lane: "research", storyFamily: "trend" },
+  { id: "dennis_trend", code: "HT1", name: "Dennis", setup: "趋势突破", lane: "paper", storyFamily: "trend" },
+  { id: "raschke_pullback", code: "HT2", name: "Raschke", setup: "趋势回踩", lane: "paper", storyFamily: "trend" },
+  { id: "turtle_soup", code: "HT3", name: "Turtle Soup", setup: "假突破", lane: "paper", storyFamily: "reversal" },
+  { id: "exhaustion_reversal", code: "HT4", name: "Exhaustion", setup: "反拥挤衰竭", lane: "paper", storyFamily: "reversal" },
+  { id: "higher_timeframe_swing", code: "HT5", name: "Swing", setup: "大周期结构", lane: "paper", storyFamily: "trend" },
+  { id: "dennis_trend_v2", code: "HT1-R", name: "Accepted Breakout", setup: "突破接受/回踩", lane: "paper", storyFamily: "trend" },
+  { id: "raschke_pullback_v2", code: "HT2-R", name: "Adaptive Pullback", setup: "深浅回踩恢复", lane: "paper", storyFamily: "trend" },
+  { id: "turtle_soup_v2", code: "HT3-R", name: "Failed Auction", setup: "量价力度假突破", lane: "paper", storyFamily: "reversal" },
+  { id: "higher_timeframe_swing_v2", code: "HT5-R", name: "Swing Context", setup: "周期化大结构", lane: "paper", storyFamily: "trend" },
+  { id: "range_rotation", code: "HT6", name: "Range Rotation", setup: "区间边缘轮动", lane: "paper", storyFamily: "range" },
+  { id: "compression_expansion", code: "HT7", name: "Compression", setup: "压缩后真实扩张", lane: "paper", storyFamily: "volatility" },
+  { id: "relative_strength", code: "HT8", name: "Relative Strength", setup: "横截面强弱", lane: "paper", storyFamily: "relative_strength" },
+  { id: "momentum_continuation", code: "HT9", name: "Momentum Continuation", setup: "浅回踩趋势延续", lane: "paper", storyFamily: "trend" },
 ];
 
 const TRADER_BY_STRATEGY: Record<Hte31StrategyId, Hte31TraderId> = {

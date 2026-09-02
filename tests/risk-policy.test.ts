@@ -4,7 +4,7 @@ import { RISK_POLICY, dailyLossPauseUsdt, legacySingleTradeRiskBudgetUsdt, maxMa
 import { liveAccountRiskLockReason } from "../lib/live-risk.ts";
 
 test("retired contract_v2 monetary gates keep their historical equity scaling", () => {
-  assert.deepEqual(publicRiskPolicy(), { singleTradeLossPct: 1, minimumTp2NetProfitPct: 0.25, maxMarginAllocationPct: 20, dailyRealizedLossPausePct: 3, peakDrawdownPct: 10, maxLiveOpenPositions: 3, maxSameSideLivePositions: 2 });
+  assert.deepEqual(publicRiskPolicy(), { singleTradeLossPct: 1, minimumTp2NetProfitPct: 0.25, maxMarginAllocationPct: 20, dailyRealizedLossPausePct: 3, peakDrawdownPct: 10, maxLiveOpenPositions: 5, maxSameSideLivePositions: 3 });
   for (const [equity, risk, tp2, daily, margin] of [[500,5,1.25,15,100],[1000,10,2.5,30,200],[2000,20,5,60,400]]) {
     assert.equal(legacySingleTradeRiskBudgetUsdt(equity), risk);
     assert.equal(minimumTp2NetProfitBudgetUsdt(equity), tp2);

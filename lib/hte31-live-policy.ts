@@ -1,13 +1,13 @@
-// Live Gate execution deliberately keeps its own conservative equity-scaled
-// economics. Resonance paper learning now uses a fixed 50U opportunity floor
-// and market-led targets, but that must never silently change real-money risk
-// or force a small live account to chase the same absolute dollar profit.
+// Gate consumes the exact strategy lineage, learned entry checks and leverage
+// chosen by the unified paper brain. Exchange balance, contract sizing, fees
+// and slippage remain real-account facts, while portfolio capacity mirrors the
+// five-slot / 20%-planned-risk simulation envelope.
 export const HTE31_LIVE_POLICY = {
   targetRiskRate: 0.04,
   maximumRiskRate: 0.05,
   minimumTp2NetProfitRate: 0.05,
-  maximumMarginAllocationRate: 0.60,
-  maxOpenPositions: 2,
+  maximumMarginAllocationRate: 0.35,
+  maxOpenPositions: 5,
 } as const;
 
 function positive(value: number) {

@@ -5,6 +5,7 @@ import type { ResonanceMarketView } from "./resonance-brain.ts";
 import type { ResonanceGlobalMarketState } from "./resonance-global-market.ts";
 import type { ResonanceDirective, ResonanceSystemReview } from "./resonance-review.ts";
 import { openResonancePaperTrade } from "./resonance-paper-execution.ts";
+import { buildHte31StrategyRouterDecision, type Hte31RouterDecision, type Hte31RouterEvidence } from "./hte31-strategy-router.ts";
 
 const SAFETY_CHECKS = new Set(["hte-data", "hte-liquidity", "hte-funding", "hte-event", "hte-stop", "hte-router"]);
 
@@ -276,8 +277,8 @@ function markLearnedPolicyCandidate(signal: Hte31Signal, review: ResonanceSystem
   return withCognitiveCheck(
     signal,
     "resonance-cognitive-policy",
-    "学习规则候选，仅模拟验证",
-    `当前复盘指令：${review.directives.join(",")}；在足够对照样本证明改善前禁止进入 Gate 实盘`,
+    "学习规则已进入统一决策链",
+    `当前复盘指令：${review.directives.join(",")}；模拟订单继续验证，未来实盘直接继承同一已学习规则`,
   );
 }
 
@@ -314,7 +315,7 @@ function conflictsWithDirection(
  * memory -> setup -> direction -> entry timing -> exit space -> post-trade
  * diagnosis. Losses do not create a two-hour paper timeout. Repeated failure
  * modes change the candidate rule, while weak historical cells may continue
- * only through paper-only cognitive challengers.
+ * only through stricter cognitive challengers whose lineage is preserved for live.
  */
 export async function tryOpenResonanceTrade(
   packet: MarketAnalysisPacket,
@@ -324,11 +325,12 @@ export async function tryOpenResonanceTrade(
   globalMarket: ResonanceGlobalMarketState,
   marketView: ResonanceMarketView,
   review: ResonanceSystemReview,
+  diagnosticRouter: Hte31RouterDecision,
 ) {
-  // Research challengers are deliberately evaluated and sampled in parallel,
-  // but they cannot enter the control candidate pool or pre-empt HT4.
-  const controlSignals = signals.filter((signal) => signal.strategyMeta.executionLane !== "research");
-  const timedSignals = controlSignals
+  // All thirteen strategies share one simulation pool. HT4's decision block
+  // remains frozen, but it receives neither a permanent priority bonus nor a
+  // separate execution lane. The brain ranks the current market story first.
+  const timedSignals = signals
     .map((signal) => improveEntryTiming(signal, packet, candles, marketView))
     .map((signal) => applyCognitiveEntryLearning(signal, packet, candles, marketView, review));
   const directionEligible = timedSignals.filter((signal) => !conflictsWithDirection(signal, packet, globalMarket, marketView, review));
@@ -336,14 +338,28 @@ export async function tryOpenResonanceTrade(
     .map((signal) => marketTarget(signal, packet, candles, marketView, review.directives))
     .map((signal) => markLearnedPolicyCandidate(signal, review));
 
-  if (eligibleSignals.length !== controlSignals.length && !eligibleSignals.some((signal) => signal.state === "ready" && signal.entryPlan?.ready)) {
+  const evidenceByTrader = new Map<string, Hte31RouterEvidence>();
+  for (const candidate of [diagnosticRouter.primary, ...diagnosticRouter.supporting, ...diagnosticRouter.opposing]) {
+    if (candidate) evidenceByTrader.set(candidate.traderId, candidate.evidence);
+  }
+  const executionRouter = buildHte31StrategyRouterDecision({
+    observedAt: packet.observedAt,
+    symbol: packet.symbol,
+    signals: eligibleSignals,
+    evidence: [...evidenceByTrader.values()],
+    activePosition: diagnosticRouter.activePosition,
+  });
+
+  if (!executionRouter.selectedForExecution) {
     const pending = globalMarket.pendingLabel
       ? ` · 整体市场正在确认 ${globalMarket.pendingConfirmations}/${globalMarket.requiredConfirmations}`
       : "";
     return {
       opened: null,
-      reason: `决策链门控：整体市场 ${globalMarket.label} / ${globalMarket.bias}，当前币种 ${marketView.headline}${pending}；不合适的Setup继续记录但不硬做`,
+      reason: `策略大脑：${executionRouter.executionRule} · 整体市场 ${globalMarket.label} / ${globalMarket.bias}，当前币种 ${marketView.headline}${pending}`,
+      router: executionRouter,
     };
   }
-  return openResonancePaperTrade(packet, eligibleSignals, candles, settings);
+  const result = await openResonancePaperTrade(packet, eligibleSignals, candles, settings, executionRouter);
+  return { ...result, router: executionRouter };
 }

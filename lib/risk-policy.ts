@@ -13,8 +13,8 @@ export const RISK_POLICY = {
   // the owner transfers USDT between futures and spot and must not be treated
   // as trading losses.
   peakDrawdownRate: 0.10,
-  maxLiveOpenPositions: 3,
-  maxSameSideLivePositions: 2,
+  maxLiveOpenPositions: 5,
+  maxSameSideLivePositions: 3,
 } as const;
 
 // `live-trading-engine.ts` historically imports `singleTradeRiskBudgetUsdt`

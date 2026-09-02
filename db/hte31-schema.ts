@@ -5,7 +5,11 @@ export const hte31Trades = sqliteTable("hte31_trades", {
   activeKey: text("active_key").unique(),
   symbol: text("symbol").notNull(),
   status: text("status", { enum: ["holding", "closed"] }).notNull().default("holding"),
-  traderId: text("trader_id", { enum: ["dennis_trend", "raschke_pullback", "turtle_soup", "exhaustion_reversal", "higher_timeframe_swing"] }).notNull(),
+  traderId: text("trader_id", { enum: [
+    "dennis_trend", "raschke_pullback", "turtle_soup", "exhaustion_reversal", "higher_timeframe_swing",
+    "dennis_trend_v2", "raschke_pullback_v2", "turtle_soup_v2", "higher_timeframe_swing_v2",
+    "range_rotation", "compression_expansion", "relative_strength", "momentum_continuation",
+  ] }).notNull(),
   setupId: text("setup_id").notNull(),
   side: text("side", { enum: ["LONG", "SHORT"] }).notNull(),
   assetRegime: text("asset_regime").notNull(),
@@ -99,7 +103,11 @@ export const hte31Evaluations = sqliteTable("hte31_evaluations", {
 
 export const hte31Learning = sqliteTable("hte31_learning", {
   id: text("id").primaryKey(),
-  traderId: text("trader_id", { enum: ["dennis_trend", "raschke_pullback", "turtle_soup", "exhaustion_reversal", "higher_timeframe_swing"] }).notNull(),
+  traderId: text("trader_id", { enum: [
+    "dennis_trend", "raschke_pullback", "turtle_soup", "exhaustion_reversal", "higher_timeframe_swing",
+    "dennis_trend_v2", "raschke_pullback_v2", "turtle_soup_v2", "higher_timeframe_swing_v2",
+    "range_rotation", "compression_expansion", "relative_strength", "momentum_continuation",
+  ] }).notNull(),
   assetRegime: text("asset_regime").notNull(),
   side: text("side", { enum: ["LONG", "SHORT"] }).notNull(),
   sampleCount: integer("sample_count").notNull().default(0),

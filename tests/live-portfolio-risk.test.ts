@@ -4,15 +4,16 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { liveDirectionalExposureBlockReason } from "../lib/live-portfolio-risk.ts";
 
-test("two same-direction live positions block a third correlated entry", () => {
-  assert.match(liveDirectionalExposureBlockReason(["LONG", "LONG"], "LONG") ?? "", /同方向实盘仓位已达 2 个/);
-  assert.match(liveDirectionalExposureBlockReason(["SHORT", "SHORT"], "SHORT") ?? "", /同方向实盘仓位已达 2 个/);
+test("three same-direction live positions block a fourth correlated entry", () => {
+  assert.match(liveDirectionalExposureBlockReason(["LONG", "LONG", "LONG"], "LONG") ?? "", /同方向实盘仓位已达 3 个/);
+  assert.match(liveDirectionalExposureBlockReason(["SHORT", "SHORT", "SHORT"], "SHORT") ?? "", /同方向实盘仓位已达 3 个/);
 });
 
 test("one same-direction position or opposite exposure still leaves room", () => {
   assert.equal(liveDirectionalExposureBlockReason([], "LONG"), null);
   assert.equal(liveDirectionalExposureBlockReason(["LONG"], "LONG"), null);
   assert.equal(liveDirectionalExposureBlockReason(["LONG", "SHORT"], "LONG"), null);
+  assert.equal(liveDirectionalExposureBlockReason(["LONG", "LONG"], "LONG"), null);
   assert.equal(liveDirectionalExposureBlockReason(["SHORT", "SHORT"], "LONG"), null);
 });
 

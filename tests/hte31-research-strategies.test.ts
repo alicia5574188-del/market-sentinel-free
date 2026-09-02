@@ -55,7 +55,7 @@ function input(rows: Hte31Candle[], patch: Partial<Hte31Input> = {}): Hte31Input
   };
 }
 
-test("HTE31 evaluates four revised controls and HT6-HT9 as eight isolated research strategies", () => {
+test("HTE31 evaluates the four revised setups and HT6-HT9 inside the unified paper pool", () => {
   const signals = evaluateHte31ResearchStrategies(input(trendWithShallowPause()));
   assert.equal(signals.length, 8);
   assert.deepEqual(signals.map((signal) => signal.strategyId), [
@@ -68,8 +68,8 @@ test("HTE31 evaluates four revised controls and HT6-HT9 as eight isolated resear
     "relative_strength",
     "momentum_continuation",
   ]);
-  assert.ok(signals.every((signal) => signal.strategyMeta.executionLane === "research"));
-  assert.ok(signals.every((signal) => signal.entryPlan?.checks.some((check) => check.key === "hte-research-lane")));
+  assert.ok(signals.every((signal) => signal.strategyMeta.executionLane === "paper"));
+  assert.ok(signals.every((signal) => signal.entryPlan?.checks.some((check) => check.key === "hte-unified-paper-lane")));
   assert.ok(signals.every((signal) => signal.strategyId !== "trend_exhaustion_reversal"));
 });
 
