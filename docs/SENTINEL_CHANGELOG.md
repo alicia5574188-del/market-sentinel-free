@@ -15,7 +15,7 @@ Rules:
 
 - Pull request: `#105`
 - Feature commit: `fa4f38220be829d4bd67f1962f19020aed73d268`
-- Production merge commit: pending
+- Production merge commit: `1c42379177d32d824b9907f4d04558e502607277`
 - Runtime: `resonance-v4-unified-paper-live-parity`
 
 ### Changed
@@ -34,7 +34,9 @@ Rules:
 ### Verification
 
 - Local strategy/risk/migration suite: 206 passed. Production build/UI/Must-Keep suite: 107 passed. TypeScript, ESLint, Wrangler production dry-run, and `git diff --check` passed.
-- PR CI run `33620837022` / job `100217233170` passed on the first PR head; the final documentation-head run, merged-main CI, and production health evidence will be recorded before completion.
+- Final PR CI run `33620998469` / job `100217743306` passed.
+- Merged-main CI run `33621133143` / job `100218154250` passed.
+- Production served immutable asset `assets/page-CLUWv592.js` with the unified strategy brain surface. Two `/__health` probes returned HTTP 200 and `ok: true`; Position Monitor and Market Scanner both remained live and advanced their success timestamps, no scheduler error was present, and the scanner circuit stayed closed.
 
 ## 2026-09-02 — Isolated strategy challengers and research router
 

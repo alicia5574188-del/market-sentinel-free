@@ -1,15 +1,15 @@
 # Status
 
-- State: PR-CI-green; merge/deployment pending
-- Updated UTC: 2026-09-02
+- State: production-deployed
+- Updated UTC: 2026-09-02T10:51:00Z
 - Branch: `feat/resonance-unified-paper-live-parity`
 - Pull request: `#105` — `feat/resonance-unified-paper-live-parity`
 - Feature commit: `fa4f38220be829d4bd67f1962f19020aed73d268`
-- Production merge commit: pending
+- Production merge commit: `1c42379177d32d824b9907f4d04558e502607277`
 - Runtime identity: `resonance-v4-unified-paper-live-parity`
 - Production URL: `https://market-sentinel-free.alicia5574188.workers.dev`
 
-## Completed locally
+## Completed and deployed
 
 - Unified HT1–HT5, HT1-R/HT2-R/HT3-R/HT5-R, and HT6–HT9 into one thirteen-strategy paper execution pool while preserving HT4's exact source fingerprint.
 - Removed all current-cycle shadow trade creation/advancement. Strategy evidence and router ranking now come from actual closed paper orders.
@@ -17,7 +17,7 @@
 - Increased paper/live capacity to five positions, at most three per direction, with a 20%-equity total planned paper stop-risk envelope.
 - Changed paper margin to an 8% target with a 35% liquidation-safe fallback and retained adaptive leverage up to 50x.
 - Preserved Entry Quality, historical-sample eligibility, last-trustworthy-snapshot degradation, five-tab UI, owner controls, Gate safety, paper history, and all open-position lifecycles.
-- Applied additive migration `0016_hte31_concurrent_strategy_research.sql`; no historical trade, learning, account, credential, live-order, or simulation-epoch data was deleted.
+- Required no new migration; no historical trade, learning, shadow row, account, credential, live-order, or simulation-epoch data was deleted.
 
 ## Explicitly unchanged
 
@@ -28,12 +28,14 @@
 ## Verification evidence
 
 - Local: strategy/risk/migration suite 206/206; production build/UI/Must-Keep suite 107/107; TypeScript, ESLint, Wrangler production dry-run, and `git diff --check` passed.
-- PR CI: Sentinel V2 CI run `33620837022` / job `100217233170` passed on the first PR head; final documentation-head CI pending.
-- Merged-main CI and production health evidence: pending.
+- Final PR CI: Sentinel V2 CI run `33620998469` / job `100217743306` passed.
+- Merged-main CI: run `33621133143` / job `100218154250` passed.
+- Production served immutable client asset `assets/page-CLUWv592.js` containing `统一模拟策略池`, `十三种打法由大脑择优`, and `模拟/实盘同链`.
+- Two `/__health` probes returned HTTP 200 with `ok: true`; Position Monitor and Market Scanner success timestamps both advanced, both remained `live`, `lastError` and `schedulerError` were null, and the scanner circuit remained closed.
 
 ## Next action
 
-- Open PR, require green CI, merge, verify production, then collect actual capital-backed paper-order evidence from all thirteen strategies.
+- Collect actual capital-backed paper-order evidence from all thirteen strategies. Do not fund Gate or infer owner approval; the owner decides after actual positive simulated growth.
 - Use `docs/QUANT_SYSTEM_MASTER_HANDOFF.md` as the first entry point for every future quantitative-system task.
 
 ## Blockers
