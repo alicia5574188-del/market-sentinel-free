@@ -6,6 +6,7 @@ import {
 import { recordHte31DiagnosticCycle } from "./hte31-diagnostics.ts";
 import { evaluateHumanTraderPool } from "./hte31-human-trader-engine.ts";
 import { evaluateAdvancedHumanTraders } from "./hte31-advanced-traders.ts";
+import { evaluateHte31ResearchStrategies } from "./hte31-research-strategies.ts";
 import { getGlobalRiskContext } from "./global-risk.ts";
 import { getHte31Dashboard, listHte31OpenTrades, recordHte31Evaluations } from "./hte31-repository.ts";
 import type { Hte31Candle, Hte31Signal } from "./hte31-types.ts";
@@ -121,7 +122,7 @@ export function hte31PhaseLabel(phase: Hte31ScanPhase) {
     universe: "扫描整体市场",
     deep: "分析当前币种",
     candles: "读取历史与多周期结构",
-    evaluate: "五种交易打法评估",
+    evaluate: "正式五策略 + 研究策略并行评估",
   } satisfies Record<Hte31ScanPhase, string>)[phase];
 }
 
@@ -221,12 +222,16 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
       ...evaluateHumanTraderPool(commonInput),
       ...evaluateAdvancedHumanTraders(commonInput),
     ];
+    const researchSignals = evaluateHte31ResearchStrategies(commonInput);
     await recordHte31Evaluations(packet, signals);
     try {
-      await recordHte31DiagnosticCycle(packet, signals, job.settings);
+      await recordHte31DiagnosticCycle(packet, signals, job.settings, researchSignals);
     } catch (error) {
       console.error("Resonance diagnostic cycle failed", error instanceof Error ? error.message : "unknown diagnostic error");
     }
+    // Critical isolation boundary: only the original five HTE31 signals are
+    // handed to the execution path. Research challengers can never consume a
+    // paper/live slot or change HT4 behavior until separately promoted.
     const opened = await tryOpenResonanceTrade(packet, signals, job.candles, job.settings, job.market, job.marketView, job.review);
     const result: Hte31ScanCompleted = {
       observedAt: Date.now(),
