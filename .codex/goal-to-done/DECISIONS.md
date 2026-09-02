@@ -92,3 +92,24 @@ Record only consequential decisions using this format:
 - Reason: A non-JSON edge 503 should not erase valid data or display a raw whole-page failure while the independent Scanner and Position Monitor continue running.
 - Evidence: The reported iPhone screenshot retained the prior snapshot while `/api/hte31` returned 503; the new client state preserves that behavior explicitly and cuts foreground diagnostic reads.
 - Revisit when: Production logs show the remaining request budget or a read-model split supports an even lighter health refresh.
+
+## 2026-09-02 — Freeze HT4 and challenge the other strategy families separately
+
+- Choice: Keep HT1–HT5 as the control lane, freeze HT4 Exhaustion's decision source with a regression fingerprint, and implement revised HT1/HT2/HT3/HT5 plus HT6–HT9 only as HTE31-native research challengers.
+- Reason: HT4 currently carries the positive result, but a few wins are not enough to grant permanent priority. The weaker strategies need new applicability and entry hypotheses without risking the profitable baseline or reconnecting the retired Strategy 2 authority.
+- Evidence: Research signals are filtered out before `tryOpenResonanceTrade()` selects a control candidate; the Gate live allowlist remains unchanged; tests verify HT4's exact source hash and reject any HT4 wrapper in the research module.
+- Revisit when: A challenger has enough non-overlapping forward evidence for a separate promotion audit.
+
+## 2026-09-02 — Increase evidence throughput with independent shadow positions
+
+- Choice: Allow up to 64 concurrent shadow observations keyed by strategy, symbol, direction, regime, and time bucket. Count only non-overlapping completed paths for routing evidence, and keep same-side cooperation or opposite-side conflict as separate attribution rather than extra executable exposure.
+- Reason: Raising the two-slot control-account limit would make experimental strategies compete with HT4 and confound account PnL. A no-capital research ledger provides more strategy opportunities and cleaner comparisons without changing current execution.
+- Evidence: Each READY strategy gets a cost-aware stop/TP/timeout path; same-candle ambiguity is stop-first; duplicate inserts do not consume capacity; router promotion remains gated at 30 samples, PF 1.30, +0.15R expectancy, and 6R drawdown.
+- Revisit when: Forward data shows whether the 64-observation cap or per-symbol independence policy causes starvation or correlated overcounting.
+
+## 2026-09-02 — Lower paper margin without increasing stop-defined risk
+
+- Choice: Target 15% equity per new paper order as isolated margin by selecting the required safe leverage, while preserving the same structural stop, desired notional, 3–5% fee-inclusive account risk, and liquidation buffer. Permit a 45% hard collateral fallback only when a narrow stop reaches the leverage cap.
+- Reason: Margin occupation and stop loss are different quantities. Higher leverage can free simulated collateral for observation without increasing the amount lost at the planned stop.
+- Evidence: Position-sizing tests verify the unchanged risk band, unmodified market TP, adaptive leverage caps, and liquidation distance; the Gate live sizing path is separate and unchanged.
+- Revisit when: Contract-specific leverage tiers, maintenance-margin brackets, or real slippage are modeled for paper execution.

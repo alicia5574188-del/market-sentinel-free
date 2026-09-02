@@ -31,6 +31,8 @@ test("paper sizing preserves the market target instead of pulling every trade to
   assert.equal(result.riskReward, 2);
   assert.equal(result.tp2Adjusted, false);
   assert.ok(result.plannedTp2NetProfitUsdt >= 70 && result.plannedTp2NetProfitUsdt < 80);
+  assert.ok(result.marginUsdt <= 150.01);
+  assert.ok(result.leverage >= 3);
 });
 
 test("50U is an economic floor, not a target that sizing manufactures", () => {
@@ -96,6 +98,7 @@ test("paper sizing keeps risk bounded while market targets may range from 50U to
   assert.equal(HTE31_PAPER_POSITION_POLICY.maximumRiskRate, 0.05);
   assert.equal(HTE31_PAPER_POSITION_POLICY.minimumTp2NetProfitUsdt, 50);
   assert.equal(HTE31_PAPER_POSITION_POLICY.maximumMarketRiskReward, 20);
-  assert.equal(HTE31_PAPER_POSITION_POLICY.maximumMarginAllocationRate, 0.60);
+  assert.equal(HTE31_PAPER_POSITION_POLICY.targetMarginAllocationRate, 0.15);
+  assert.equal(HTE31_PAPER_POSITION_POLICY.maximumMarginAllocationRate, 0.45);
   assert.equal(HTE31_PAPER_POSITION_POLICY.maximumLeverage, 50);
 });

@@ -1,5 +1,13 @@
 # Market Sentinel — Current System State
 
+> **2026-09-02 strategy-research correction (supersedes conflicting strategy-count and paper-margin descriptions below).**
+>
+> Resonance keeps HT1–HT5 as the only control/execution lane and freezes HT4 Exhaustion's decision block with a regression fingerprint. Eight HTE31-native challengers run in a separate research lane: revised HT1/HT2/HT3/HT5 plus HT6 range rotation, HT7 compression expansion, HT8 relative strength, and HT9 shallow-pause momentum continuation. They may create up to 64 concurrent shadow observations without consuming control-account capital or either control position slot, and they cannot enter Gate live.
+>
+> The research router can describe a single story, same-side cooperation, opposite-side conflict, or a possible thesis switch. It keeps each strategy's attribution separate, ignores performance weighting below 8 valid samples, and requires at least 30 non-overlapping forward samples plus PF ≥ 1.30, expectancy ≥ +0.15R, and maximum drawdown ≤ 6R before even requesting manual promotion review. It never auto-promotes, auto-reverses, or changes an existing position.
+>
+> New paper orders now target at most 15% of equity as isolated margin by selecting higher safe leverage, while preserving the market-defined stop, notional, fee-inclusive 3–5% account risk, and liquidation buffer. Exceptionally narrow stops may use a bounded 45% collateral fallback after reaching the safe leverage cap. This does not change Gate live sizing.
+
 > **2026-09-01 Resonance Entry Quality correction (supersedes older learning/UI descriptions below).**
 >
 > Resonance evaluates five paper playbooks (HT1–HT5). Its new Entry Quality observer records Entry Efficiency, MAE before first +0.5R, time to +0.5R/+1R, and 5/10/15-minute delayed-entry counterfactuals. It distinguishes direction error, early entry, late entry, normal noise, and tight stop. Entry confirmation can change only for a setup + asset-regime cell with at least 3 assessed samples and repeated evidence; every such adaptation remains paper-only and is rejected by the Gate live boundary.
@@ -18,7 +26,7 @@
 >
 > Chat history is discussion context only. Before any future code change, read the current `main` branch, recent merged PRs/commits, CI status, and this file. Never reconstruct production behavior from memory or a missing chat message.
 
-Last reconciled: **2026-09-01 16:33 +08:00**
+Last reconciled: **2026-09-02**
 Repository: `alicia5574188-del/market-sentinel-free`  
 Production strategy identity: **Market Sentinel HTE 3.1 Clean**
 

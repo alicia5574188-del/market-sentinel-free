@@ -6,6 +6,7 @@ import {
 import { recordHte31DiagnosticCycle } from "./hte31-diagnostics.ts";
 import { evaluateHumanTraderPool } from "./hte31-human-trader-engine.ts";
 import { evaluateAdvancedHumanTraders } from "./hte31-advanced-traders.ts";
+import { evaluateHte31ResearchStrategies } from "./hte31-research-strategies.ts";
 import { getGlobalRiskContext } from "./global-risk.ts";
 import { getHte31Dashboard, listHte31OpenTrades, recordHte31Evaluations } from "./hte31-repository.ts";
 import type { Hte31Candle, Hte31Signal } from "./hte31-types.ts";
@@ -15,6 +16,7 @@ import { buildResonanceMarketView, type ResonanceMarketView } from "./resonance-
 import { buildResonanceGlobalMarket, type ResonanceGlobalMarketState } from "./resonance-global-market.ts";
 import { getResonanceSystemReview, type ResonanceSystemReview } from "./resonance-review.ts";
 import { tryOpenResonanceTrade } from "./resonance-trading.ts";
+import { buildHte31StrategyRouterDecision, type Hte31RouterDecision } from "./hte31-strategy-router.ts";
 
 export type Hte31ScanPhase = "config" | "universe" | "deep" | "candles" | "evaluate";
 export type Hte31MarketState = ResonanceGlobalMarketState;
@@ -30,6 +32,7 @@ export type Hte31ScanJob = {
   settings?: AppSettings;
   coreSymbols?: string[];
   openSymbols?: string[];
+  openPositions?: { symbol: string; traderId: string; side: "LONG" | "SHORT" }[];
   universe?: MarketUniverseTicker[];
   market?: Hte31MarketState;
   target?: MarketUniverseTicker;
@@ -39,6 +42,7 @@ export type Hte31ScanJob = {
   marketView?: ResonanceMarketView;
   review?: ResonanceSystemReview;
   signals?: Hte31Signal[];
+  router?: Hte31RouterDecision;
   openedTradeId?: string | null;
   openReason?: string;
 };
@@ -53,6 +57,7 @@ export type Hte31ScanCompleted = {
   marketView: ResonanceMarketView;
   review: ResonanceSystemReview;
   signals: Hte31Signal[];
+  router: Hte31RouterDecision;
   openedTradeId: string | null;
   openReason: string;
   settings: {
@@ -80,6 +85,12 @@ function parseCoreSymbols(settings: AppSettings) {
 }
 
 function chooseTarget(universe: MarketUniverseTicker[], coreSymbols: string[], openSymbols: string[], rotationOffset: number) {
+  // Revisit one open symbol every fifth cycle so the research brain can test
+  // thesis invalidation and replacement without adding another Gate producer.
+  if (openSymbols.length && rotationOffset % 5 === 4) {
+    const openTarget = universe.find((row) => row.symbol === openSymbols[Math.floor(rotationOffset / 5) % openSymbols.length]);
+    if (openTarget) return openTarget;
+  }
   const blocked = new Set(openSymbols);
   const eligible = universe.filter((row) => !blocked.has(row.symbol) && row.volumeUsd >= 12_000_000);
   if (!eligible.length) return universe.find((row) => !blocked.has(row.symbol)) ?? universe[0] ?? null;
@@ -121,7 +132,7 @@ export function hte31PhaseLabel(phase: Hte31ScanPhase) {
     universe: "扫描整体市场",
     deep: "分析当前币种",
     candles: "读取历史与多周期结构",
-    evaluate: "五种交易打法评估",
+    evaluate: "控制打法与八种研究挑战评估",
   } satisfies Record<Hte31ScanPhase, string>)[phase];
 }
 
@@ -138,13 +149,14 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
         settings,
         coreSymbols: parseCoreSymbols(settings),
         openSymbols: openTrades.map((trade) => trade.symbol),
+        openPositions: openTrades.map((trade) => ({ symbol: trade.symbol, traderId: trade.traderId, side: trade.side })),
       },
     };
   }
 
   if (job.phase === "universe") {
     if (!job.settings || !job.coreSymbols || !job.openSymbols) throw new Error("Resonance scan missing config state");
-    const universe = await marketExchange.fetchUniverse(job.settings.universeLimit, job.coreSymbols);
+    const universe = await marketExchange.fetchUniverse(job.settings.universeLimit, [...new Set([...job.coreSymbols, ...job.openSymbols])]);
     if (!universe.length) throw new Error(`${marketExchange.label} Universe 返回空列表`);
     const market = buildResonanceGlobalMarket(universe, job.previousMarket ?? null);
     const target = chooseTarget(universe, job.coreSymbols, job.openSymbols, job.rotationOffset);
@@ -220,12 +232,22 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
     const signals = [
       ...evaluateHumanTraderPool(commonInput),
       ...evaluateAdvancedHumanTraders(commonInput),
+      ...evaluateHte31ResearchStrategies(commonInput),
     ];
     await recordHte31Evaluations(packet, signals);
+    const activePosition = job.openPositions?.find((trade) => trade.symbol === packet.symbol) ?? null;
+    let router: Hte31RouterDecision;
     try {
-      await recordHte31DiagnosticCycle(packet, signals, job.settings);
+      router = await recordHte31DiagnosticCycle(packet, signals, job.settings, job.candles, activePosition);
     } catch (error) {
       console.error("Resonance diagnostic cycle failed", error instanceof Error ? error.message : "unknown diagnostic error");
+      router = buildHte31StrategyRouterDecision({
+        observedAt: packet.observedAt,
+        symbol: packet.symbol,
+        signals,
+        evidence: [],
+        activePosition,
+      });
     }
     const opened = await tryOpenResonanceTrade(packet, signals, job.candles, job.settings, job.market, job.marketView, job.review);
     const result: Hte31ScanCompleted = {
@@ -238,6 +260,7 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
       marketView: job.marketView,
       review: job.review,
       signals,
+      router,
       openedTradeId: opened.opened?.id ?? null,
       openReason: opened.reason,
       settings: {

@@ -75,7 +75,11 @@ export const hte31Evaluations = sqliteTable("hte31_evaluations", {
   id: text("id").primaryKey(),
   symbol: text("symbol").notNull(),
   observedAt: integer("observed_at").notNull(),
-  traderId: text("trader_id", { enum: ["dennis_trend", "raschke_pullback", "turtle_soup", "exhaustion_reversal", "higher_timeframe_swing"] }).notNull(),
+  traderId: text("trader_id", { enum: [
+    "dennis_trend", "raschke_pullback", "turtle_soup", "exhaustion_reversal", "higher_timeframe_swing",
+    "dennis_trend_v2", "raschke_pullback_v2", "turtle_soup_v2", "higher_timeframe_swing_v2",
+    "range_rotation", "compression_expansion", "relative_strength", "momentum_continuation",
+  ] }).notNull(),
   setupId: text("setup_id").notNull(),
   state: text("state", { enum: ["ready", "watching", "blocked"] }).notNull(),
   side: text("side", { enum: ["LONG", "SHORT", "WAIT"] }).notNull(),

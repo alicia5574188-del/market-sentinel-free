@@ -11,6 +11,32 @@ Rules:
 
 ---
 
+## 2026-09-02 — Isolated strategy challengers and research router
+
+### Changed
+
+- Preserved the five existing control playbooks and froze the HT4 Exhaustion decision block with an exact regression fingerprint.
+- Added eight HTE31-native research strategies: accepted breakout, adaptive pullback, force-aware failed auction, higher-timeframe swing context, range rotation, compression expansion, relative strength, and shallow-pause momentum continuation.
+- Reworked HT3's research hypothesis to require breakout volume/range, reclaim depth, reverse-force votes, microstructure evidence, and explicit strong-trend opposition handling instead of treating every return to the prior range as a false breakout.
+- Added a 64-position concurrent shadow ledger with strategy/symbol/direction/regime identity, sequential 5m stop/target/timeout observation, conservative same-bar ordering, costs, MFE/MAE, and non-overlapping evidence counts.
+- Added an explainable research router for `SINGLE`, `COOPERATE`, `CONFLICT`, and `SWITCH_WATCH` states. Same-side strategies retain separate attribution without multiplying executable risk; opposite hypotheses are never averaged into an order.
+- Changed paper sizing to target 15% isolated-margin occupation by selecting higher safe leverage while preserving structural stop, notional, fee-inclusive 3–5% equity risk, and liquidation safety. A narrow-stop fallback is hard-capped at 45% collateral.
+- Added radar UI for the eight challengers, concurrent research counts, forward performance, and current router reasoning.
+
+### Deliberately unchanged
+
+- HT4's entry behavior, the five-strategy control candidate pool, its two position slots, every open-position lifecycle, structural stops, Gate live sizing, Gate strategy allowlist, credentials, Auto Live, reconciliation, and Emergency Stop are unchanged.
+- Research strategies cannot consume paper capital, pre-empt HT4, create a Gate order, auto-promote, auto-switch, hedge, or increase executable risk.
+- The retired Strategy 2 engine remains isolated and is not reconnected as a production authority.
+
+### Verification
+
+- Strategy/risk/migration suite: 204 passed.
+- Production build/UI/Must-Keep suite: 107 passed.
+- TypeScript, ESLint, and Wrangler production dry-run passed.
+
+---
+
 ## 2026-09-01 — Entry Quality learning and honest historical-memory UI
 
 - Production implementation commit: `6450fe04f03f31fa836df22248c556c83ca95f9d`

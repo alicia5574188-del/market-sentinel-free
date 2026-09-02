@@ -85,7 +85,7 @@ function enrichDashboardDiagnostics(
       : hour.nearest ? `${hour.nearest.symbol.replace("_USDT", "")} 已接近完整 Setup` : "暂无近似候选";
     const shadowText = traderId === "turtle_soup"
       ? "HT3 暂不参与旧 Near-Ready 校准"
-      : `旧 Near-Ready 影子完成 ${shadow.completed} / 观察中 ${shadow.pending} · PF ${fmtPf(shadow.profitFactor)} · Exp ${shadow.expectancyR >= 0 ? "+" : ""}${shadow.expectancyR.toFixed(2)}R${shadow.qualifiesForCalibration ? " · 已达到校准样本门槛" : " · 尚未达到 30 样本校准门槛"}`;
+      : `旧 Near-Ready 影子完成 ${shadow.nearReady.completed} / 观察中 ${shadow.nearReady.pending} · PF ${fmtPf(shadow.nearReady.profitFactor)} · Exp ${shadow.nearReady.expectancyR >= 0 ? "+" : ""}${shadow.nearReady.expectancyR.toFixed(2)}R`;
     if (guard.state === "COOLDOWN") {
       guard.state = "ACTIVE";
       guard.reason = `连续亏损 ${guard.lossStreak} 笔已交给认知复盘；模拟学习继续运行，不做机械时间冷却`;
@@ -157,7 +157,7 @@ export async function GET() {
     : null;
 
   return Response.json({
-    version: "resonance-v2-cognitive",
+    version: "resonance-v3-strategy-research",
     requestedAt,
     observedAt: lastSuccessAt ?? requestedAt,
     account: auth.account,
@@ -182,6 +182,7 @@ export async function GET() {
       symbolView: readModel.marketView,
       historicalMemory: readModel.memory,
       latestReview: readModel.review,
+      strategyRouter: readModel.router,
       openReason: readModel.openReason,
     } : null,
     dashboard,
