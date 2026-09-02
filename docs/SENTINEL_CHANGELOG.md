@@ -33,7 +33,8 @@ Rules:
 
 ### Verification
 
-- Local strategy/risk/migration suite: 206 passed. Production build/UI/Must-Keep suite: 107 passed. TypeScript, ESLint, Wrangler production dry-run, and `git diff --check` passed. PR CI, merged-main CI, and production health evidence will be recorded before completion.
+- Local strategy/risk/migration suite: 206 passed. Production build/UI/Must-Keep suite: 107 passed. TypeScript, ESLint, Wrangler production dry-run, and `git diff --check` passed.
+- PR CI run `33620837022` / job `100217233170` passed on the first PR head; the final documentation-head run, merged-main CI, and production health evidence will be recorded before completion.
 
 ## 2026-09-02 — Isolated strategy challengers and research router
 

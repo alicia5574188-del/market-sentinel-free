@@ -1,6 +1,6 @@
 # Status
 
-- State: PR-open; CI/deployment pending
+- State: PR-CI-green; merge/deployment pending
 - Updated UTC: 2026-09-02
 - Branch: `feat/resonance-unified-paper-live-parity`
 - Pull request: `#105` — `feat/resonance-unified-paper-live-parity`
@@ -28,7 +28,8 @@
 ## Verification evidence
 
 - Local: strategy/risk/migration suite 206/206; production build/UI/Must-Keep suite 107/107; TypeScript, ESLint, Wrangler production dry-run, and `git diff --check` passed.
-- PR CI, merged-main CI, and production health evidence: pending.
+- PR CI: Sentinel V2 CI run `33620837022` / job `100217233170` passed on the first PR head; final documentation-head CI pending.
+- Merged-main CI and production health evidence: pending.
 
 ## Next action
 

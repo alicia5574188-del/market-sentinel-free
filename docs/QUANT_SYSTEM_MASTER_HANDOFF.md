@@ -29,7 +29,8 @@ If any lower source conflicts with a higher source, the higher source wins.
 | Latest deployed feature PR | `#103` until PR `#105` is merged |
 | Current feature branch | `feat/resonance-unified-paper-live-parity` |
 | Current feature commit | `fa4f38220be829d4bd67f1962f19020aed73d268` |
-| PR/merge/CI/production proof | PR `#105`; CI/merge/production identifiers pending |
+| PR CI | Run `33620837022`, job `100217233170`, passed; final documentation-head run pending |
+| Merge/main CI/production proof | Pending |
 
 The older remote branch `feat/resonance-strategy-research` contains an earlier divergent experiment and is not production. PR #103 used `feat/resonance-strategy-research-v2`; current `main` is authoritative.
 
