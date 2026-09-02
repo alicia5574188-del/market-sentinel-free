@@ -93,7 +93,8 @@ test("fee-heavy narrow stop budgets fees inside 1R before choosing leverage", ()
     confidence: 88,
   }));
   assert.equal(result.accepted, true);
-  assert.ok(result.leverage > 1 && result.leverage <= 50);
+  assert.ok(result.leverage > 1 && result.leverage <= 75);
+  assert.ok(result.marginUsdt <= 300);
   assert.ok(result.plannedRiskUsdt >= 39.99 && result.plannedRiskUsdt <= 40.01);
   assert.equal(result.riskReward, 4);
   assert.ok(result.plannedTp2NetProfitUsdt >= 50);
@@ -119,5 +120,5 @@ test("paper sizing keeps stop risk bounded while using leverage for capital effi
   assert.equal(HTE31_PAPER_POSITION_POLICY.maximumMarketRiskReward, 20);
   assert.equal(HTE31_PAPER_POSITION_POLICY.preferredMarginAllocationRate, 0.15);
   assert.equal(HTE31_PAPER_POSITION_POLICY.maximumMarginAllocationRate, 0.30);
-  assert.equal(HTE31_PAPER_POSITION_POLICY.maximumLeverage, 50);
+  assert.equal(HTE31_PAPER_POSITION_POLICY.maximumLeverage, 75);
 });
