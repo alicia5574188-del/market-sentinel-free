@@ -325,7 +325,10 @@ export async function tryOpenResonanceTrade(
   marketView: ResonanceMarketView,
   review: ResonanceSystemReview,
 ) {
-  const timedSignals = signals
+  // Research challengers are deliberately evaluated and sampled in parallel,
+  // but they cannot enter the control candidate pool or pre-empt HT4.
+  const controlSignals = signals.filter((signal) => signal.strategyMeta.executionLane !== "research");
+  const timedSignals = controlSignals
     .map((signal) => improveEntryTiming(signal, packet, candles, marketView))
     .map((signal) => applyCognitiveEntryLearning(signal, packet, candles, marketView, review));
   const directionEligible = timedSignals.filter((signal) => !conflictsWithDirection(signal, packet, globalMarket, marketView, review));
@@ -333,7 +336,7 @@ export async function tryOpenResonanceTrade(
     .map((signal) => marketTarget(signal, packet, candles, marketView, review.directives))
     .map((signal) => markLearnedPolicyCandidate(signal, review));
 
-  if (eligibleSignals.length !== signals.length && !eligibleSignals.some((signal) => signal.state === "ready" && signal.entryPlan?.ready)) {
+  if (eligibleSignals.length !== controlSignals.length && !eligibleSignals.some((signal) => signal.state === "ready" && signal.entryPlan?.ready)) {
     const pending = globalMarket.pendingLabel
       ? ` · 整体市场正在确认 ${globalMarket.pendingConfirmations}/${globalMarket.requiredConfirmations}`
       : "";

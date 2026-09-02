@@ -11,6 +11,7 @@ import {
 import type { GateAnalysisPacket, GatePositionQuote } from "./gate-client.ts";
 import { getSettings, type AppSettings } from "./settings-repository.ts";
 import type { Hte31Candle, Hte31Signal } from "./hte31-types.ts";
+import { hte31TraderIdForSignal as anyTraderIdForSignal } from "./hte31-strategy-catalog.ts";
 import type { HumanTraderId } from "./hte31-human-trader-engine.ts";
 import type { AdvancedTraderId } from "./hte31-advanced-traders.ts";
 
@@ -30,6 +31,7 @@ const POST_EXIT_HORIZONS = [0, 30, 60, 120, 240, 720] as const;
 const TRADERS: Hte31TraderId[] = ["dennis_trend", "raschke_pullback", "turtle_soup", "exhaustion_reversal", "higher_timeframe_swing"];
 const LONG_TERM_REVALIDATION_DELAY_MS = 12 * 60 * 60_000;
 const PAPER_REVALIDATION_MARKER = "PAPER_REVALIDATION_ONLY";
+const HTE31_EVALUATION_BATCH_SIZE = 4;
 
 function traderIdForSignal(signal: Hte31Signal): Hte31TraderId | null {
   if (signal.strategyId === "trend_breakout") return "dennis_trend";
@@ -170,10 +172,9 @@ export async function getHte31Governance(now = Date.now()): Promise<Hte31Governa
 
 export async function recordHte31Evaluations(packet: GateAnalysisPacket, signals: Hte31Signal[]) {
   const db = getDb();
-  const rows = signals.flatMap((signal) => {
-    const traderId = traderIdForSignal(signal);
-    if (!traderId) return [];
-    return [{
+  const rows = signals.map((signal) => {
+    const traderId = anyTraderIdForSignal(signal);
+    return {
       id: `hte31:${packet.symbol}:${packet.observedAt}:${traderId}`,
       symbol: packet.symbol,
       observedAt: packet.observedAt,
@@ -189,10 +190,10 @@ export async function recordHte31Evaluations(packet: GateAnalysisPacket, signals
       reasonsJson: JSON.stringify(signal.reasons),
       blockersJson: JSON.stringify(signal.blockers),
       entryPlanJson: JSON.stringify(signal.entryPlan),
-    }];
+    };
   });
-  for (const row of rows) {
-    await db.insert(hte31Evaluations).values(row).onConflictDoNothing();
+  for (let index = 0; index < rows.length; index += HTE31_EVALUATION_BATCH_SIZE) {
+    await db.insert(hte31Evaluations).values(rows.slice(index, index + HTE31_EVALUATION_BATCH_SIZE)).onConflictDoNothing();
   }
   return rows.length;
 }

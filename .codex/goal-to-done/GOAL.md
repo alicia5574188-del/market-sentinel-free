@@ -52,3 +52,14 @@ Teach Resonance to diagnose entry timing before changing stop or risk policy:
 - Feed the result into the existing cognitive review, but require repeated evidence in the same setup and asset regime before changing entry confirmation.
 - Keep all learned entry-confirmation changes paper-only and traceable through the existing cognitive marker; do not change stop distance, paper/live risk, Gate rules, or broad setup thresholds.
 - Reduce `/api/hte31` foreground pressure and preserve the last trustworthy snapshot during a transient refresh failure.
+
+## Current completion objective — Strategy research throughput and routing
+
+Increase forward strategy evidence without disturbing HT4's currently positive baseline:
+
+- Freeze HT4 Exhaustion decision behavior with an explicit regression fingerprint; this change may observe it but must not tune, reprioritize, or rewrite its entry rules.
+- Keep the existing five execution playbooks as the control lane while adding HTE31-native research challengers for revised HT1/HT2/HT3/HT5 logic and the missing range-rotation, compression-expansion, relative-strength, and shallow-pullback momentum-continuation stories.
+- Record concurrent, independent research positions by setup, symbol, direction, and market regime without consuming the two control-account slots or its capital; multiple strategies may study the same move without doubling an executable position.
+- Add an explainable shadow router that can report one strategy, same-side cooperation, opposite-side conflict, thesis invalidation, and a replacement candidate. It must remain research-only until forward evidence satisfies explicit sample, expectancy, profit-factor, and drawdown gates.
+- Reduce new paper-position margin occupation by selecting higher safe isolated leverage while preserving the same structural stop, planned 3–5% account risk, notional, fees, and liquidation buffer.
+- Do not auto-promote challengers, auto-switch Gate positions, change live sizing, or let research candidates block/preempt HT4 or any existing position lifecycle.

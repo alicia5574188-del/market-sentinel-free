@@ -1,38 +1,45 @@
 # Status
 
-- State: production-deployed
-- Updated UTC: 2026-09-01T08:45:30Z
-- Pull request: `#101` — `feat/resonance-entry-quality`
-- Production commit: `6450fe04f03f31fa836df22248c556c83ca95f9d`
-- Cloudflare Build ID: `93c6c0bf-c551-4417-8de7-c6ec7411dc39`
-- Cloudflare Version ID: `4a248442-61fb-44ab-ab26-f534730e6a80`
+- State: local-verified — remote publication awaits explicit destination approval
+- Updated UTC: 2026-09-02T06:22:19Z
+- Branch: `feat/resonance-strategy-research`
+- Local implementation commit: `d7c2398`
+- Production baseline: `origin/main` at `e9feeca`
+- Last deployed feature: PR `#101` / commit `6450fe04f03f31fa836df22248c556c83ca95f9d`
 
-## Completed and deployed
+## Completed locally
 
-- Added persisted per-trade Entry Quality: Entry Efficiency, MAE before +0.5R, time to +0.5R/+1R, 5/10/15-minute delayed-entry counterfactuals, and explainable direction/early/late/noise/tight-stop classification.
-- Cognitive `require_retest` now needs repeated evidence in the exact setup and asset regime: at least 3 assessed trades, at least 2 early-entry diagnoses, and at least 60% agreement.
-- Entry adaptations remain paper-only and keep the marker rejected by Gate live.
-- Historical analog cards now show `样本不足 · n/8` and `暂不参与判断` below the independent-sample floor; eligible cards show bias, valid sample count, and median forward move.
-- Preserved PR #100's `requireApiViewer()` boundary so `/api/hte31` does not depend on `user_accounts` persistence; added 60-second auxiliary-diagnostic caching, five-minute stale fallback, 30-second polling, and last-trustworthy-snapshot UI degradation.
-- Applied additive D1 migration `0015_resonance_entry_quality.sql`; no trade history or learning data was deleted.
+- Preserved HT1–HT5 as the five control/execution strategies and froze HT4 Exhaustion with an exact source regression fingerprint.
+- Added eight HTE31-native challengers in a research-only lane: revised HT1/HT2/HT3/HT5 plus HT6 range rotation, HT7 compression expansion, HT8 relative strength, and HT9 momentum continuation.
+- HT3-R now evaluates breakout volume/range, reclaim depth, reverse impulse, force ratio, spot/order-book/liquidation evidence, and higher-timeframe opposition instead of treating every range return as a false breakout.
+- Added up to 64 concurrent shadow observations with strategy/symbol/direction/regime identity, cost-aware stop/TP/timeout outcomes, conservative candle ordering, and non-overlapping forward evidence counts.
+- Added an explainable research router for one strategy, same-side cooperation, opposite-side conflict, and switch-watch hypotheses.
+- Changed new paper sizing to target 15% isolated margin through safe adaptive leverage, with a 45% narrow-stop hard fallback, while preserving structural stop, notional, fee-inclusive 3–5% account risk, and liquidation buffer.
+- Added UI for router reasoning, eight-strategy research performance, concurrent observation count, and explicit research-only authority.
+- Preserved the already-deployed Entry Quality, honest historical-sample UI, and transient-refresh degradation work from PR #101.
 
 ## Explicitly unchanged
 
-- No stop distance, TP protection, paper risk amount, leverage policy, Gate live size, broad entry threshold, scanner authority, position protection, credential/control path, or emergency behavior changed.
-- Simulation-capital reset, five-tab mobile navigation, five playbooks, Web Push, audit, reconciliation, Auto Live safety lock, and existing-position protection remain present.
+- HT4 entry logic, the five-strategy control candidate pool, two control position slots, existing positions, stop/TP lifecycle, and paper account history.
+- Gate live sizing, live strategy allowlist, credentials, Auto Live, reconciliation, safety locks, and Emergency Stop.
+- Simulation-capital reset, five-tab navigation, account, Web Push, audit, scanner diagnostics, trade review, and learning history.
+- Research strategies cannot spend capital, create a Gate order, pre-empt HT4, auto-promote, auto-switch, hedge, or multiply executable risk.
 
-## Verification evidence
+## Final local verification
 
-- Local: `npm run test:signals` 194/194; production build and UI/permission suite 104/104; ESLint, TypeScript, and `git diff --check` passed.
-- PR CI: Sentinel V2 CI run `33488386398` (run 352), job `99793760766`, passed including Wrangler production dry-run.
-- Merged-main CI: run `33488485003` (run 353), job `99794087568`, passed.
-- Cloudflare Workers Build `93c6c0bf-c551-4417-8de7-c6ec7411dc39` succeeded and promoted version `4a248442-61fb-44ab-ab26-f534730e6a80`.
-- Production root returned HTTP 200 with the owner login page; unauthenticated `/api/hte31` returned JSON HTTP 401 rather than a 503 or HTML error page.
+- `npm run test:signals`: 204 passed, 0 failed.
+- `npm test`: production build passed; UI/Must-Keep suite 107 passed, 0 failed.
+- `npm run lint`: passed.
+- `./node_modules/.bin/tsc --noEmit --incremental false`: passed.
+- Wrangler production deploy dry-run: passed before the final `main` ancestry merge; the post-merge file tree is identical for runtime files. A repeat invocation was blocked by the workspace's network-approval layer, not by Wrangler or the bundle.
+- `git diff --check`: passed.
+- Final branch is one feature commit above the latest production `main`; the PR diff contains only this strategy-research change.
 
 ## Remaining action
 
-- None. Continue collecting paper samples; do not tune stops, live risk, or broad entry gates until repeated forward evidence exists.
+- Push `feat/resonance-strategy-research` to `https://github.com/alicia5574188-del/market-sentinel-free.git` after the user explicitly authorizes code egress to that destination.
+- Open the PR, wait for complete Sentinel V2 CI, merge only when green, verify merged-main CI and Cloudflare deployment, then record the final PR/commit/build/version and production health checks.
 
-## Blockers
+## Blocker
 
-- None.
+- The managed approval reviewer rejected the first push because this turn had not explicitly confirmed sending the private repository contents to that GitHub destination. No bypass was attempted.

@@ -91,7 +91,10 @@ export type Hte31Input = {
   marketDecliningRatio?: number | null;
 };
 
-export type Hte31StrategyId = "trend_breakout" | "trend_pullback" | "failed_breakout" | "trend_exhaustion_reversal" | "higher_timeframe_swing";
+export type Hte31StrategyId =
+  | "trend_breakout" | "trend_pullback" | "failed_breakout" | "trend_exhaustion_reversal" | "higher_timeframe_swing"
+  | "trend_breakout_challenger" | "trend_pullback_challenger" | "failed_breakout_challenger" | "higher_timeframe_swing_challenger"
+  | "range_rotation" | "compression_expansion" | "relative_strength" | "momentum_continuation";
 
 export type Hte31StrategyMeta = {
   playbookId: string;
@@ -107,6 +110,9 @@ export type Hte31StrategyMeta = {
   strategyConflict?: number;
   experienceSamples?: number;
   expectancyR?: number | null;
+  executionLane?: "control" | "research";
+  baselineId?: string;
+  storyFamily?: "trend" | "reversal" | "range" | "volatility" | "relative_strength";
 };
 
 export type Hte31Signal = {
