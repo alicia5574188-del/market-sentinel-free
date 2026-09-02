@@ -2,25 +2,16 @@ import { and, desc, eq } from "drizzle-orm";
 import { getDb } from "../db";
 import { hte31Learning, hte31SimulationEpochs, hte31TradeCharts, hte31Trades } from "../db/hte31-schema";
 import type { MarketAnalysisPacket } from "./exchange-market.ts";
-import { buildHte31PaperPosition } from "./hte31-position-sizing.ts";
+import { buildHte31PaperPosition, hte31PaperPortfolioBlockReason } from "./hte31-position-sizing.ts";
 import { evaluateHte31PerformanceCell } from "./hte31-performance-gate.ts";
 import { resonanceLearningId } from "./resonance-policy-version.ts";
 import type { AppSettings } from "./settings-repository.ts";
+import { hte31TraderIdForSignal, type Hte31TraderId } from "./hte31-strategy-catalog.ts";
+import type { Hte31RouterDecision } from "./hte31-strategy-router.ts";
 import type { Hte31Candle, Hte31Signal } from "./hte31-types.ts";
 
-const PAPER_ONLY_MARKER = "PAPER_REVALIDATION_ONLY";
 const COGNITIVE_MARKER = "COGNITIVE_ADAPTATION";
-
-type TraderId = "dennis_trend" | "raschke_pullback" | "turtle_soup" | "exhaustion_reversal" | "higher_timeframe_swing";
-
-function traderIdForSignal(signal: Hte31Signal): TraderId | null {
-  if (signal.strategyId === "trend_breakout") return "dennis_trend";
-  if (signal.strategyId === "trend_pullback") return "raschke_pullback";
-  if (signal.strategyId === "failed_breakout") return "turtle_soup";
-  if (signal.strategyId === "trend_exhaustion_reversal") return "exhaustion_reversal";
-  if (signal.strategyId === "higher_timeframe_swing") return "higher_timeframe_swing";
-  return null;
-}
+const BRAIN_SELECTED_MARKER = "BRAIN_SELECTED_LIVE_PARITY";
 
 function cognitiveSignal(signal: Hte31Signal) {
   return Boolean(signal.entryPlan?.checks.some((check) => check.key.startsWith("resonance-cognitive-")));
@@ -54,7 +45,7 @@ function signed(value: number | null | undefined, side: "LONG" | "SHORT") {
  * A negative trader/regime/direction cell is not allowed to deadlock paper
  * learning. It may continue only when the current tape supplies stronger
  * evidence than the original setup required. The extra confirmation is stored
- * in the trade checks, which makes the trade paper-only at the live boundary.
+ * in the trade checks and remains part of the exact live strategy lineage.
  */
 function strictCellChallenger(
   signal: Hte31Signal,
@@ -93,7 +84,7 @@ function strictCellChallenger(
           label: "负期望组合挑战确认",
           passed: true,
           required: true,
-          detail: "方向K线、成交量、高周期与资金流同时确认；仅模拟，不进入实盘",
+          detail: "方向K线、成交量、高周期与资金流同时确认；学习结果保留统一实盘血缘",
         },
       ],
     },
@@ -131,21 +122,22 @@ async function paperAccount(startingCapitalUsdt: number) {
  * Paper learning no longer treats two losses as a reason to stop collecting
  * evidence. Safety/data/liquidity/structural-stop checks still live inside the
  * playbooks and sizing layer. Statistically weak cells continue only via a
- * stricter paper-only challenger instead of waiting six hours for the clock.
+ * stricter challenger instead of waiting six hours for the clock.
  */
 export async function openResonancePaperTrade(
   packet: MarketAnalysisPacket,
   signals: Hte31Signal[],
   candles: Hte31Candle[],
   settings: AppSettings,
+  brainDecision: Hte31RouterDecision,
 ) {
   const db = getDb();
   const learningRows = await db.select().from(hte31Learning);
   const learningById = new Map(learningRows.map((row) => [row.id, row]));
 
   const ready = signals
-    .map((signal) => ({ signal, traderId: traderIdForSignal(signal) }))
-    .filter((item): item is { signal: Hte31Signal; traderId: TraderId } => Boolean(item.traderId))
+    .map((signal) => ({ signal, traderId: hte31TraderIdForSignal(signal) }))
+    .filter((item): item is { signal: Hte31Signal; traderId: Hte31TraderId } => Boolean(item.traderId))
     .filter(({ signal }) => signal.state === "ready" && Boolean(signal.entryPlan?.ready) && signal.side !== "WAIT")
     .map((item) => {
       const side = item.signal.side as "LONG" | "SHORT";
@@ -158,21 +150,14 @@ export async function openResonancePaperTrade(
     })
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
 
-  const candidates = ready
-    .filter((item) => item.performanceGate.state === "ACTIVE" || cognitiveSignal(item.signal))
-    .sort((a, b) => {
-      const aPenalty = a.performanceGate.state === "ACTIVE" ? 0 : 12;
-      const bPenalty = b.performanceGate.state === "ACTIVE" ? 0 : 12;
-      return (b.signal.confidence - bPenalty) - (a.signal.confidence - aPenalty)
-        || Math.abs(b.signal.score) - Math.abs(a.signal.score);
-    });
-  const selected = candidates[0];
+  const candidates = ready.filter((item) => item.performanceGate.state === "ACTIVE" || cognitiveSignal(item.signal));
+  const selected = candidates.find((item) => item.traderId === brainDecision.selectedForExecution?.traderId);
   if (!selected?.signal.entryPlan || selected.signal.side === "WAIT") {
     return {
       opened: null,
-      reason: signals.some((signal) => signal.state === "ready" && signal.side !== "WAIT")
-        ? "弱组合没有通过更严格的认知挑战确认；继续扫描，不做时间冷却"
-        : "五种打法本轮没有完整 Setup",
+      reason: brainDecision.selectedForExecution
+        ? `${brainDecision.selectedForExecution.label} 没有通过最终学习/执行门控；本轮不改选低排名策略`
+        : brainDecision.executionRule,
     };
   }
 
@@ -181,7 +166,6 @@ export async function openResonancePaperTrade(
   if (existing) return { opened: null, reason: "该币已有 Resonance 模拟持仓" };
 
   const account = await paperAccount(settings.trialCapitalUsdt);
-  if (account.open.length >= 2) return { opened: null, reason: "模拟账户同时最多 2 笔持仓" };
   if (account.equityUsdt <= 0) return { opened: null, reason: "模拟账户权益不足" };
 
   const plan = selected.signal.entryPlan;
@@ -208,7 +192,15 @@ export async function openResonancePaperTrade(
   });
   if (!sizing.accepted) return { opened: null, reason: `仓位经济门槛：${sizing.reason}` };
 
-  const paperOnly = cognitiveSignal(selected.signal) || selected.performanceGate.state === "PAUSED";
+  const portfolioBlock = hte31PaperPortfolioBlockReason({
+    open: account.open.map((trade) => ({ side: trade.side, riskBudgetUsdt: trade.riskBudgetUsdt })),
+    nextSide: selected.signal.side,
+    nextRiskUsdt: sizing.plannedRiskUsdt,
+    accountEquityUsdt: account.equityUsdt,
+  });
+  if (portfolioBlock) return { opened: null, reason: portfolioBlock };
+
+  const learnedAdaptation = cognitiveSignal(selected.signal) || selected.performanceGate.state === "PAUSED";
   const id = `hte31:${crypto.randomUUID()}`;
   const now = packet.observedAt;
   const row = {
@@ -235,11 +227,19 @@ export async function openResonancePaperTrade(
     marginUsdt: sizing.marginUsdt,
     quantity: sizing.quantity,
     leverage: sizing.leverage,
-    entryTrigger: `${paperOnly ? `${PAPER_ONLY_MARKER} · ${COGNITIVE_MARKER} · ` : ""}${selected.signal.label} · ${selected.signal.reasons.join("；")} · ${sizing.leverageReason}`,
+    entryTrigger: `${BRAIN_SELECTED_MARKER} · ${learnedAdaptation ? `${COGNITIVE_MARKER} · ` : ""}${selected.signal.label} · ${selected.signal.reasons.join("；")} · ${sizing.leverageReason}`,
     entryThesis: selected.signal.thesis,
     entryChecksJson: JSON.stringify(plan.checks),
     entryMetricsJson: JSON.stringify([
       ...selected.signal.metrics,
+      {
+        key: "brain-selection",
+        label: "策略大脑选择",
+        score: brainDecision.selectedForExecution?.combinedScore ?? selected.signal.confidence,
+        detail: `${brainDecision.mode} · ${brainDecision.executionRule}`,
+        available: true,
+        category: "cross",
+      },
       {
         key: "paper-position-economics",
         label: "模拟仓位经济性",
@@ -291,6 +291,8 @@ export async function openResonancePaperTrade(
   });
   return {
     opened: row,
-    reason: paperOnly ? `${selected.signal.label} 认知挑战单已建立（仅模拟）` : `${selected.signal.label} Setup 完整触发`,
+    reason: learnedAdaptation
+      ? `${selected.signal.label} 学习后策略由大脑选中；已建立模拟仓并保留实盘同链血缘`
+      : `${selected.signal.label} 由策略大脑选中并触发模拟交易`,
   };
 }

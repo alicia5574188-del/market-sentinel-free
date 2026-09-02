@@ -3,15 +3,15 @@ import { getHte31Diagnostics } from "../../../lib/hte31-diagnostics";
 import { getHte31Dashboard } from "../../../lib/hte31-repository";
 import type { Hte31ScanCompleted } from "../../../lib/hte31-scanner";
 import { getRuntimeBindings } from "../../../lib/runtime-bindings";
-import type { HumanTraderId } from "../../../lib/human-trader-engine";
 import { requireApiViewer } from "../../api-auth";
+import { HTE31_ALL_TRADER_IDS, type Hte31TraderId } from "../../../lib/hte31-strategy-catalog";
 
 export const dynamic = "force-dynamic";
 
 const SCANNER_STALE_MS = 90_000;
 const DIAGNOSTICS_CACHE_MS = 60_000;
 const DIAGNOSTICS_STALE_FALLBACK_MS = 5 * 60_000;
-const TRADERS: HumanTraderId[] = ["dennis_trend", "raschke_pullback", "turtle_soup"];
+const TRADERS: Hte31TraderId[] = [...HTE31_ALL_TRADER_IDS];
 
 let diagnosticsCache: {
   fetchedAt: number;
@@ -29,10 +29,6 @@ type CleanPositionStub = {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "unknown Resonance runtime error";
-}
-
-function fmtPf(value: number | null) {
-  return value == null ? "--" : value >= 99 ? "∞" : value.toFixed(2);
 }
 
 async function readCachedDiagnostics(now: number) {
@@ -76,26 +72,22 @@ function enrichDashboardDiagnostics(
     const guard = dashboard.governance.traderGuards[traderId];
     const hour = diagnostics.windows.h1.traders[traderId];
     const sixHours = diagnostics.windows.h6.traders[traderId];
-    const shadow = diagnostics.shadow[traderId];
     const top = hour.topFailures.slice(0, 2)
       .map((item) => `${item.label} ${Math.round(item.rate * 100)}%`)
       .join(" / ");
     const near = hour.nearest?.failed.length
       ? `${hour.nearest.symbol.replace("_USDT", "")} 还差 ${hour.nearest.failed.map((item) => item.label).join(" + ")}`
       : hour.nearest ? `${hour.nearest.symbol.replace("_USDT", "")} 已接近完整 Setup` : "暂无近似候选";
-    const shadowText = traderId === "turtle_soup"
-      ? "HT3 暂不参与旧 Near-Ready 校准"
-      : `旧 Near-Ready 影子完成 ${shadow.nearReady.completed} / 观察中 ${shadow.nearReady.pending} · PF ${fmtPf(shadow.nearReady.profitFactor)} · Exp ${shadow.nearReady.expectancyR >= 0 ? "+" : ""}${shadow.nearReady.expectancyR.toFixed(2)}R`;
     if (guard.state === "COOLDOWN") {
       guard.state = "ACTIVE";
       guard.reason = `连续亏损 ${guard.lossStreak} 笔已交给认知复盘；模拟学习继续运行，不做机械时间冷却`;
     }
-    guard.reason = `${guard.reason} · 1h 评估 ${hour.evaluations} / READY ${hour.ready} / Near-Ready ${hour.nearReady}${top ? ` · 常缺：${top}` : ""} · 最近：${near} · 6h READY ${sixHours.ready}/${sixHours.evaluations} · ${shadowText}`;
+    guard.reason = `${guard.reason} · 1h 评估 ${hour.evaluations} / READY ${hour.ready} / Near-Ready ${hour.nearReady}${top ? ` · 常缺：${top}` : ""} · 最近：${near} · 6h READY ${sixHours.ready}/${sixHours.evaluations}`;
   }
 
   dashboard.governance.state = "NORMAL";
   dashboard.governance.riskMultiplier = 1;
-  dashboard.governance.reason = "认知学习模式：连续亏损触发归因、挑战方案和影子验证；不再用两小时/六小时冷却或缩仓代替思考。";
+  dashboard.governance.reason = "统一策略大脑：十三种策略共同进入模拟交易池，实际订单与逐笔复盘驱动后续排序；实盘复用同一策略血缘。";
 }
 
 export async function GET() {
@@ -157,7 +149,7 @@ export async function GET() {
     : null;
 
   return Response.json({
-    version: "resonance-v3-strategy-research",
+    version: "resonance-v4-unified-paper-live-parity",
     requestedAt,
     observedAt: lastSuccessAt ?? requestedAt,
     account: auth.account,

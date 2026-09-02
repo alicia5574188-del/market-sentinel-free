@@ -135,10 +135,10 @@ test("live preflight preserves a smaller HTE candidate risk while applying the H
   });
   assert.equal(plan.minimumNetTp2Usdt, 50);
   assert.equal(plan.riskBudgetUsdt, 10);
-  assert.equal(plan.actualNotionalUsdt, 600);
+  assert.equal(plan.actualNotionalUsdt, 350);
   assert.equal(plan.passed, true);
-  assert.ok(plan.expectedNetTp2Usdt > 119 && plan.expectedNetTp2Usdt < 120);
-  assert.ok(plan.worstCaseNetTp2Usdt > 115 && plan.worstCaseNetTp2Usdt < 116);
+  assert.ok(plan.expectedNetTp2Usdt > 69 && plan.expectedNetTp2Usdt < 70);
+  assert.ok(plan.worstCaseNetTp2Usdt > 67 && plan.worstCaseNetTp2Usdt < 68);
   assert.equal(plan.marketOrderSlipRatio, "0.003");
   assert.deepEqual(protectionTriggerRules("LONG"), { takeProfit: 1, stopLoss: 2 });
   assert.deepEqual(protectionTriggerRules("SHORT"), { takeProfit: 2, stopLoss: 1 });

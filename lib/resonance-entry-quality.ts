@@ -373,7 +373,7 @@ export function buildResonanceEntryQuality(
     bestDelay?.valid
       ? `最佳延迟：晚 ${bestDelay.delayMinutes} 分钟，结果改善 ${(bestDelay.improvementR ?? 0) >= 0 ? "+" : ""}${(bestDelay.improvementR ?? 0).toFixed(2)}R`
       : "晚 5/10/15 分钟的路径尚未形成有效对照",
-    `进场归因：${classificationLabel(classification)}（仅模拟学习）`,
+    `进场归因：${classificationLabel(classification)}（进入统一策略学习）`,
   ];
 
   return {

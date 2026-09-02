@@ -24,27 +24,27 @@ test("HTE 3.1 diagnoses trigger failures without loosening formal entry gates", 
   assert.match(engine, /input\.volumeUsd >= 30_000_000/);
 });
 
-test("concurrent shadow learning is bounded, evidence-gated and auxiliary", () => {
-  assert.match(diagnostics, /SHADOW_HORIZONS = \[30, 60, 120, 240, 480, 720\]/);
-  assert.match(diagnostics, /SHADOW_DEDUPE_MS = 30 \* 60_000/);
-  assert.match(diagnostics, /HTE31_RESEARCH_MAX_PENDING = 64/);
-  assert.match(diagnostics, /HTE31_SHADOW_MIN_SAMPLES = 30/);
-  assert.match(diagnostics, /HTE31_SHADOW_MIN_PROFIT_FACTOR = 1\.3/);
-  assert.match(diagnostics, /HTE31_SHADOW_MIN_EXPECTANCY_R = 0\.15/);
-  assert.match(diagnostics, /不会自动修改正式阈值/);
-  const diagnosticIndex = scanner.indexOf("recordHte31DiagnosticCycle(packet, signals, job.settings, job.candles, activePosition)");
-  const openIndex = scanner.indexOf("tryOpenResonanceTrade(packet, signals, job.candles, job.settings, job.market, job.marketView, job.review)");
-  assert.ok(diagnosticIndex >= 0, "scanner must record bounded diagnostic evidence");
-  assert.ok(openIndex > diagnosticIndex, "formal trade opening must remain separate from diagnostic recording");
+test("the current cycle has no simulation-inside-simulation and uses actual paper evidence", () => {
+  const cycle = diagnostics.slice(
+    diagnostics.indexOf("export async function recordHte31DiagnosticCycle"),
+    diagnostics.indexOf("function paperMaximumDrawdownR"),
+  );
+  assert.doesNotMatch(cycle, /advanceShadowSamples|createShadowSample|hte31ShadowSamples/);
+  assert.match(diagnostics, /async function buildPaperRouterEvidence/);
+  assert.match(diagnostics, /\.from\(hte31Trades\)/);
+  assert.match(diagnostics, /isCurrentResonanceTrade/);
+  const diagnosticIndex = scanner.indexOf("recordHte31DiagnosticCycle(packet, signals, activePosition)");
+  const openIndex = scanner.indexOf("tryOpenResonanceTrade(packet, signals, job.candles, job.settings, job.market, job.marketView, job.review, router)");
+  assert.ok(diagnosticIndex >= 0, "scanner must build paper-order router evidence");
+  assert.ok(openIndex > diagnosticIndex, "brain selection must precede paper execution");
   assert.match(scanner.slice(diagnosticIndex, openIndex), /catch \(error\)/, "diagnostic failure must not block the formal trading path");
 });
 
 test("dashboard exposes cognitive learning instead of mechanical loss cooldown", () => {
   assert.match(route, /1h 评估/);
   assert.match(route, /6h READY/);
-  assert.match(route, /Near-Ready 影子完成/);
-  assert.match(route, /连续亏损触发归因、挑战方案和影子验证/);
-  assert.match(route, /不再用两小时\/六小时冷却或缩仓代替思考/);
+  assert.match(route, /实际订单与逐笔复盘驱动后续排序/);
+  assert.match(route, /不做机械时间冷却/);
   assert.match(route, /连续亏损 .*已交给认知复盘/);
   assert.doesNotMatch(route, /风险预算倍率/);
 });

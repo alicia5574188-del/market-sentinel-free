@@ -85,7 +85,7 @@ function parseCoreSymbols(settings: AppSettings) {
 }
 
 function chooseTarget(universe: MarketUniverseTicker[], coreSymbols: string[], openSymbols: string[], rotationOffset: number) {
-  // Revisit one open symbol every fifth cycle so the research brain can test
+  // Revisit one open symbol every fifth cycle so the unified brain can test
   // thesis invalidation and replacement without adding another Gate producer.
   if (openSymbols.length && rotationOffset % 5 === 4) {
     const openTarget = universe.find((row) => row.symbol === openSymbols[Math.floor(rotationOffset / 5) % openSymbols.length]);
@@ -132,7 +132,7 @@ export function hte31PhaseLabel(phase: Hte31ScanPhase) {
     universe: "扫描整体市场",
     deep: "分析当前币种",
     candles: "读取历史与多周期结构",
-    evaluate: "控制打法与八种研究挑战评估",
+    evaluate: "十三种策略统一评估与大脑选单",
   } satisfies Record<Hte31ScanPhase, string>)[phase];
 }
 
@@ -238,7 +238,7 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
     const activePosition = job.openPositions?.find((trade) => trade.symbol === packet.symbol) ?? null;
     let router: Hte31RouterDecision;
     try {
-      router = await recordHte31DiagnosticCycle(packet, signals, job.settings, job.candles, activePosition);
+      router = await recordHte31DiagnosticCycle(packet, signals, activePosition);
     } catch (error) {
       console.error("Resonance diagnostic cycle failed", error instanceof Error ? error.message : "unknown diagnostic error");
       router = buildHte31StrategyRouterDecision({
@@ -249,7 +249,8 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
         activePosition,
       });
     }
-    const opened = await tryOpenResonanceTrade(packet, signals, job.candles, job.settings, job.market, job.marketView, job.review);
+    const opened = await tryOpenResonanceTrade(packet, signals, job.candles, job.settings, job.market, job.marketView, job.review, router);
+    router = opened.router;
     const result: Hte31ScanCompleted = {
       observedAt: Date.now(),
       target: packet.symbol,

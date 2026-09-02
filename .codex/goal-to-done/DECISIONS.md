@@ -113,3 +113,31 @@ Record only consequential decisions using this format:
 - Reason: Margin occupation and stop loss are different quantities. Higher leverage can free simulated collateral for observation without increasing the amount lost at the planned stop.
 - Evidence: Position-sizing tests verify the unchanged risk band, unmodified market TP, adaptive leverage caps, and liquidation distance; the Gate live sizing path is separate and unchanged.
 - Revisit when: Contract-specific leverage tiers, maintenance-margin brackets, or real slippage are modeled for paper execution.
+
+## 2026-09-02 — Replace research isolation with one capital-backed simulation brain
+
+- Choice: Put all thirteen HTE31 strategies into one paper execution pool. The strategy brain selects the single candidate for each symbol/cycle, and routing evidence comes from actual closed paper orders. Stop creating or advancing shadow trades.
+- Reason: The user explicitly rejected “simulation inside simulation” and wants every strategy to learn from the same real simulated account.
+- Evidence: The prior production path split five controls from eight no-capital shadow strategies; the new path gives every catalog strategy `paper` authority and persists the brain selection on each opened trade.
+- Revisit when: Actual paper-order evidence shows a specific strategy or regime cell should be contained; containment must remain scoped and must not recreate an auxiliary simulation layer.
+
+## 2026-09-02 — Make live inherit the exact learned paper lineage
+
+- Choice: Gate live accepts every strategy in the unified thirteen-strategy catalog and directly reuses the selected paper trade's strategy, learned entry checks, stop, targets, and leverage. Real account balance, fees, slippage, contract constraints, and hard safety gates remain live facts.
+- Reason: The user wants live to match the learned simulation exactly so strategy behavior is not redesigned after funding.
+- Evidence: The live candidate boundary now validates against `HTE31_ALL_TRADER_IDS` and no longer rejects cognitive challengers or the former research IDs.
+- Revisit when: Never merely because funding starts. Change only on an explicit strategy/risk optimization request with end-to-end parity tests.
+
+## 2026-09-02 — Increase learning capacity without ceding funding control
+
+- Choice: Allow up to five paper/live positions, at most three in one direction, and cap total planned paper stop risk at 20% of equity. Target 8% isolated paper margin with a liquidation-safe 35% fallback; leverage remains capped at 50x and by liquidity, volatility, quality, and liquidation distance.
+- Reason: More concurrent capital-backed orders increase learning samples, while direction and total-risk envelopes prevent unlimited stacking.
+- Evidence: Position-sizing, portfolio-risk, live-preflight, and router tests cover these limits.
+- Revisit when: Actual simultaneous-position data shows correlation or margin contention not captured by direction and planned-stop risk.
+
+## 2026-09-02 — Real funding remains the owner's approval
+
+- Choice: Do not move funds or infer approval to trade live. The owner will transfer funds only after the unified simulation demonstrates actual positive growth.
+- Reason: Funding and acceptance belong to the user, not the system.
+- Evidence: Explicit user instruction on 2026-09-02; Gate remains fail-closed without available funds and retains owner-controlled live activation/emergency controls.
+- Revisit when: Only after an explicit owner instruction.

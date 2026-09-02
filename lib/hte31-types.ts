@@ -110,7 +110,7 @@ export type Hte31StrategyMeta = {
   strategyConflict?: number;
   experienceSamples?: number;
   expectancyR?: number | null;
-  executionLane?: "control" | "research";
+  executionLane?: "control" | "research" | "paper";
   baselineId?: string;
   storyFamily?: "trend" | "reversal" | "range" | "volatility" | "relative_strength";
 };

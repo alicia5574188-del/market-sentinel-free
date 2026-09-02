@@ -146,9 +146,9 @@ export function buildLiveEntryPlan(input: {
   if (!stopIsValid) return failed("按 Gate 价格精度取整后，保护止损不在开仓方向的有效一侧", { markPrice, contractMultiplier: multiplier, stopLossPrice, takeProfitPrice });
   if (!takeProfitIsValid) return failed("按 Gate 价格精度和允许滑点计算后，TP2 已无有效盈利空间", { markPrice, contractMultiplier: multiplier, stopLossPrice, takeProfitPrice });
 
-  // Live HTE 3.1 deliberately owns a separate risk policy. This keeps the old
-  // contract-v2 simulator and its historical 1%/20% exploration semantics
-  // isolated while Gate follows the current HTE paper economics.
+  // Gate receives the exact paper-brain strategy lineage, stop, target and
+  // leverage. Real account equity, contract precision, fees, slippage and
+  // available isolated margin are then applied without changing the strategy.
   const availableUsdt = Math.max(0, number(account.available));
   const accountEquityUsdt = gateAccountEquityUsdt(account);
   const minimumNetTp2Usdt = hte31LiveMinimumTp2NetUsdt(accountEquityUsdt);

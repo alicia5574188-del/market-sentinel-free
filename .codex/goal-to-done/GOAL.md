@@ -63,3 +63,12 @@ Increase forward strategy evidence without disturbing HT4's currently positive b
 - Add an explainable shadow router that can report one strategy, same-side cooperation, opposite-side conflict, thesis invalidation, and a replacement candidate. It must remain research-only until forward evidence satisfies explicit sample, expectancy, profit-factor, and drawdown gates.
 - Reduce new paper-position margin occupation by selecting higher safe isolated leverage while preserving the same structural stop, planned 3–5% account risk, notional, fees, and liquidation buffer.
 - Do not auto-promote challengers, auto-switch Gate positions, change live sizing, or let research candidates block/preempt HT4 or any existing position lifecycle.
+
+## Current completion objective — Unified paper brain and live parity (supersedes the research-only objective)
+
+- Put all thirteen HT1–HT9 strategy definitions into one capital-backed simulation pool; do not create new shadow trades or any second simulation layer.
+- Let one strategy brain select the executable candidate from current structure plus actual closed paper-order evidence. HT4's source remains frozen, but it has no permanent priority.
+- Preserve the selected strategy, learned entry rules, stop, targets, leverage, and decision lineage for direct Gate live parity. Real balance, fees, slippage, contract limits, and hard safety remain exchange facts.
+- Increase learning throughput to at most five open paper/live positions, at most three in one direction, with total planned paper stop risk no greater than 20% of equity and one open position per symbol.
+- Target 8% isolated margin per paper trade; allow a liquidation-safe narrow-stop fallback up to 35%. Adaptive leverage remains capped at 50x by liquidity, volatility, quality, and stop-before-liquidation safety.
+- Real funds remain entirely the user's decision. The user will not fund Gate until the simulation shows actual positive growth; the system must never move funds or decide that approval for the user.

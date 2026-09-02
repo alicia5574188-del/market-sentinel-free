@@ -40,8 +40,8 @@ test("HTE31 scanner imports the HTE31 engine and owns candle/signal types direct
 test("HTE31 repository and diagnostics no longer import retired strategy types", () => {
   const repository = source("../lib/hte31-repository.ts");
   const diagnostics = source("../lib/hte31-diagnostics.ts");
+  assert.match(repository, /settings-repository\.ts/);
   for (const file of [repository, diagnostics]) {
-    assert.match(file, /settings-repository\.ts/);
     assert.match(file, /hte31-types\.ts/);
     assert.doesNotMatch(file, /strategy-2-engine|signal-engine|from "\.\/human-trader-engine\.ts"|from "\.\/repository\.ts"/);
   }
@@ -89,13 +89,12 @@ test("new HTE31 live orders use direct HTE31 lineage without writing compatibili
   assert.match(schema, /tradeCaseId: text\("trade_case_id"\)\.notNull\(\)\.unique\(\)/);
 });
 
-test("HT4 and HT5 can learn in paper but cannot silently acquire Gate live authority", () => {
+test("all thirteen paper strategies can enter Gate only through the same catalog lineage", () => {
   const repository = source("../lib/live-trading-repository.ts");
-  assert.match(repository, /HTE31_LIVE_VALIDATED_TRADERS/);
-  assert.match(repository, /"dennis_trend", "raschke_pullback", "turtle_soup"/);
-  assert.doesNotMatch(repository, /HTE31_LIVE_VALIDATED_TRADERS[^\n]*exhaustion_reversal/);
-  assert.doesNotMatch(repository, /HTE31_LIVE_VALIDATED_TRADERS[^\n]*higher_timeframe_swing/);
-  assert.match(repository, /HT4\/HT5 仍在模拟验证阶段，禁止直接进入 Gate 实盘/);
+  assert.match(repository, /HTE31_ALL_TRADER_IDS/);
+  assert.match(repository, /HTE31_LIVE_PARITY_TRADERS/);
+  assert.match(repository, /当前统一模拟\/实盘策略目录/);
+  assert.doesNotMatch(repository, /仍在模拟验证阶段，禁止直接进入 Gate 实盘/);
 });
 
 test("retired UI overlays and patch styles are physically absent", () => {

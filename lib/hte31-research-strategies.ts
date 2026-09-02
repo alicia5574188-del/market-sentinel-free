@@ -116,7 +116,7 @@ function buildPlan(input: Hte31Input, side: Hte31TradeSide, stop: number, rr: nu
   const tp2 = entry + direction * risk * rr;
   const allChecks = [
     ...hardChecks(input, riskPct),
-    { key: "hte-research-lane", label: "独立研究通道", passed: true, required: true, detail: "不占控制账户仓位、不进入 Gate 实盘" },
+    { key: "hte-unified-paper-lane", label: "统一模拟交易池", passed: true, required: true, detail: "由策略大脑统一排序，可进入模拟交易并保留实盘同链血缘" },
     ...checks,
   ];
   return {
@@ -168,8 +168,8 @@ function makeSignal(input: Hte31Input, regime: Hte31MarketRegime, assetRegime: H
   const ready = config.setupActive && Boolean(entryPlan?.ready) && !blocked;
   const score = sideDirection(config.side) * clamp(config.setupScore * 0.58 + config.evidenceScore * 0.42) / 100;
   const metrics: Hte31SignalMetric[] = [
-    { key: "research-trader", label: "研究交易员", score: 1, detail: `${definition.code} ${definition.name}`, available: true, category: "cross" },
-    { key: "research-lane", label: "执行通道", score: 0, detail: "并发影子持仓；不争夺控制仓位", available: true, category: "cross" },
+    { key: "paper-trader", label: "模拟策略", score: 1, detail: `${definition.code} ${definition.name}`, available: true, category: "cross" },
+    { key: "paper-lane", label: "执行通道", score: 1, detail: "统一模拟池；由大脑择优执行", available: true, category: "cross" },
     { key: "asset-regime", label: "单币环境", score: Math.abs(regime.trendScore), detail: assetRegime, available: true, category: "cross" },
     { key: "timeframe-context", label: "周期结构", score: higherTimeframeScore(input), detail: `${Math.round(higherTimeframeScore(input) * 100)}`, available: true, category: "price" },
     { key: "spot-flow", label: "现货主动流", score: input.spotCvdRatio ?? 0, detail: input.spotCvdRatio == null ? "--" : `${(input.spotCvdRatio * 100).toFixed(1)}%`, available: input.spotCvdRatio != null, category: "spot" },
@@ -196,7 +196,7 @@ function makeSignal(input: Hte31Input, regime: Hte31MarketRegime, assetRegime: H
       triggerActive: config.setupActive,
       hardGatePassed: Boolean(entryPlan?.ready) && !blocked,
       candidateSide: config.side,
-      executionLane: "research",
+      executionLane: "paper",
       baselineId: config.baselineId,
       storyFamily: definition.storyFamily,
       supportingPlaybooks: [],

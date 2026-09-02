@@ -23,7 +23,7 @@ export type Hte31RouterCandidate = {
   code: string;
   label: string;
   side: Hte31TradeSide;
-  lane: "control" | "research";
+  lane: "paper";
   storyFamily: string;
   currentScore: number;
   evidenceScore: number;
@@ -32,11 +32,12 @@ export type Hte31RouterCandidate = {
 };
 
 export type Hte31RouterDecision = {
-  authority: "research_only";
+  authority: "paper_brain_live_parity";
   mode: "WAIT" | "SINGLE" | "COOPERATE" | "CONFLICT" | "SWITCH_WATCH";
   observedAt: number;
   symbol: string;
   primary: Hte31RouterCandidate | null;
+  selectedForExecution: Hte31RouterCandidate | null;
   supporting: Hte31RouterCandidate[];
   opposing: Hte31RouterCandidate[];
   activePosition: { traderId: string; side: Hte31TradeSide } | null;
@@ -83,7 +84,7 @@ function candidate(signal: Hte31Signal, evidenceByTrader: ReadonlyMap<Hte31Trade
 
 function promotionRule() {
   const policy = HTE31_ROUTER_PROMOTION_POLICY;
-  return `至少 ${policy.minimumSamples} 个独立前向样本、PF ≥ ${policy.minimumProfitFactor.toFixed(2)}、Expectancy ≥ +${policy.minimumExpectancyR.toFixed(2)}R、最大回撤 ≤ ${policy.maximumDrawdownR.toFixed(0)}R；达标也只进入人工审计，不自动获得 Gate 权限。`;
+  return `全部策略都可进入模拟交易；少于 8 笔时历史表现不参与排序。达到 ${policy.minimumSamples} 笔且 PF ≥ ${policy.minimumProfitFactor.toFixed(2)}、Expectancy ≥ +${policy.minimumExpectancyR.toFixed(2)}R、最大回撤 ≤ ${policy.maximumDrawdownR.toFixed(0)}R 后标记为成熟策略。实盘始终复用同一大脑选择和学习结果。`;
 }
 
 export function buildHte31StrategyRouterDecision(input: {
@@ -100,7 +101,7 @@ export function buildHte31StrategyRouterDecision(input: {
     .sort((a, b) => b.combinedScore - a.combinedScore || b.currentScore - a.currentScore || a.code.localeCompare(b.code));
   const activePosition = input.activePosition ?? null;
   const base = {
-    authority: "research_only" as const,
+    authority: "paper_brain_live_parity" as const,
     observedAt: input.observedAt,
     symbol: input.symbol,
     activePosition,
@@ -112,6 +113,7 @@ export function buildHte31StrategyRouterDecision(input: {
       ...base,
       mode: "WAIT",
       primary: null,
+      selectedForExecution: null,
       supporting: [],
       opposing: [],
       currentThesisState: activePosition ? "uncertain" : "none",
@@ -119,7 +121,7 @@ export function buildHte31StrategyRouterDecision(input: {
       reason: activePosition
         ? "当前没有新的完整 Setup。持仓仍由原始止损、目标和失效规则管理，不能因为没有新信号就机械反手。"
         : "当前没有完整 Setup；大脑保持空白而不是强迫选策略。",
-      executionRule: "不创建研究外的额外仓位。",
+      executionRule: "没有完整 Setup，不强迫模拟开仓。",
     };
   }
 
@@ -138,29 +140,33 @@ export function buildHte31StrategyRouterDecision(input: {
         ...base,
         mode: "SWITCH_WATCH",
         primary: replacement,
+        selectedForExecution: null,
         supporting: candidates.filter((item) => item.side === replacement.side && item.traderId !== replacement.traderId),
         opposing: candidates.filter((item) => item.side !== replacement.side),
         currentThesisState: "invalidated",
         replacementEligible: replacement.evidence.qualified,
         reason: `${activePosition.traderId} 的当前方向前提已被新结构否定；${replacement.label} 独立形成 ${replacement.side} Setup。旧仓应先按自身失效规则退出，不能把“退出”和“反手”合并成一个动作。`,
-        executionRule: replacement.evidence.qualified
-          ? "影子路由允许记录换挡候选；正式换挡仍需人工审计后单独授权。"
-          : "只记录换挡反事实；替代策略样本尚未达标，禁止自动反手。",
+        executionRule: "旧仓先按自身失效规则退出；本轮不把退出与反手合并，下一轮再由大脑重新选择。",
       };
     }
   }
 
   if (opposing.length) {
+    const leadingMargin = primary.combinedScore - opposing[0].combinedScore;
+    const selectedForExecution = leadingMargin >= 8 ? primary : null;
     return {
       ...base,
       mode: "CONFLICT",
       primary,
+      selectedForExecution,
       supporting,
       opposing,
       currentThesisState: activePosition ? "uncertain" : "none",
       replacementEligible: false,
-      reason: `${primary.label} 看 ${primary.side}，同时 ${opposing.map((item) => item.label).join("、")} 看相反方向；这代表不同市场故事并存，不是把分数相加后强行下单。`,
-      executionRule: "研究账本可同时记录正反假设；控制账户不对冲、不叠加风险，等待其中一个故事独立失效。",
+      reason: `${primary.label} 看 ${primary.side}，同时 ${opposing.map((item) => item.label).join("、")} 看相反方向；领先差 ${leadingMargin.toFixed(1)} 分。`,
+      executionRule: selectedForExecution
+        ? `领先差达到 8 分，大脑选择 ${primary.label} 建立一笔模拟仓位；不对冲、不重复叠加。`
+        : "多空分歧不足以形成明确优势，本轮不下单。",
     };
   }
 
@@ -169,12 +175,13 @@ export function buildHte31StrategyRouterDecision(input: {
       ...base,
       mode: "COOPERATE",
       primary,
+      selectedForExecution: primary,
       supporting,
       opposing: [],
       currentThesisState: activePosition ? "intact" : "none",
       replacementEligible: primary.evidence.qualified,
       reason: `${primary.label} 与 ${supporting.map((item) => item.label).join("、")} 独立得到同方向结论；它们可以共同归因，但不能因此重复放大名义仓位。`,
-      executionRule: "研究层分别记账；未来控制层最多合并成一笔仓位并保留多策略归因。",
+      executionRule: `大脑选择 ${primary.label} 建立一笔模拟仓位，并保留同向策略的协作归因。`,
     };
   }
 
@@ -182,13 +189,12 @@ export function buildHte31StrategyRouterDecision(input: {
     ...base,
     mode: "SINGLE",
     primary,
+    selectedForExecution: primary,
     supporting: [],
     opposing: [],
     currentThesisState: activePosition ? "intact" : "none",
     replacementEligible: primary.evidence.qualified,
     reason: `${primary.label} 是本轮唯一完整的 ${primary.side} 市场故事；排名来自当前结构质量，历史表现只有达到最低样本后才参与微调。`,
-    executionRule: primary.lane === "research"
-      ? "只建立独立研究样本，不占控制账户仓位。"
-      : "保持现有控制执行规则；影子路由没有开仓、加仓或实盘权限。",
+    executionRule: `大脑选择 ${primary.label} 进入统一模拟交易池；未来实盘沿用同一策略血缘。`,
   };
 }

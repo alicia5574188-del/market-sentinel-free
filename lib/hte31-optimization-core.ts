@@ -1,9 +1,10 @@
 import { evaluateHte31PerformanceCell } from "./hte31-performance-gate.ts";
+import type { Hte31TraderId } from "./hte31-strategy-catalog.ts";
 
 export type Hte31OptimizationTrade = {
   id: string;
   symbol: string;
-  traderId: "dennis_trend" | "raschke_pullback" | "turtle_soup" | "exhaustion_reversal" | "higher_timeframe_swing";
+  traderId: Hte31TraderId;
   setupId: string;
   side: "LONG" | "SHORT";
   assetRegime: string;
