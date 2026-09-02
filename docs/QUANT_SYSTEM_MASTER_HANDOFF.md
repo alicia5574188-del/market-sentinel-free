@@ -1,6 +1,6 @@
 # Market Sentinel / Resonance — Quant System Master Handoff
 
-Last reconciled: **2026-09-02 — unified paper/live parity implementation pending production verification**
+Last reconciled: **2026-09-02 — PR #105 pending CI and production verification**
 Purpose: **the complete continuation entry after deleting all prior chats**
 
 ## 0. Start every new task here
@@ -26,9 +26,10 @@ If any lower source conflicts with a higher source, the higher source wins.
 | Production Worker | `https://market-sentinel-free.alicia5574188.workers.dev` |
 | Target strategy identity | Market Sentinel HTE 3.1 Clean / Resonance V4 unified paper/live parity |
 | Target runtime generation | `resonance-v4-unified-paper-live-parity` |
-| Latest deployed feature PR | `#103` until this pending PR is merged |
+| Latest deployed feature PR | `#103` until PR `#105` is merged |
 | Current feature branch | `feat/resonance-unified-paper-live-parity` |
-| PR/merge/CI/production proof | Pending; record exact identifiers after deployment verification |
+| Current feature commit | `fa4f38220be829d4bd67f1962f19020aed73d268` |
+| PR/merge/CI/production proof | PR `#105`; CI/merge/production identifiers pending |
 
 The older remote branch `feat/resonance-strategy-research` contains an earlier divergent experiment and is not production. PR #103 used `feat/resonance-strategy-research-v2`; current `main` is authoritative.
 

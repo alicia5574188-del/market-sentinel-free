@@ -1,10 +1,10 @@
 # Status
 
-- State: local-verified; PR/deployment pending
+- State: PR-open; CI/deployment pending
 - Updated UTC: 2026-09-02
 - Branch: `feat/resonance-unified-paper-live-parity`
-- Pull request: pending
-- Feature commit: pending
+- Pull request: `#105` — `feat/resonance-unified-paper-live-parity`
+- Feature commit: `fa4f38220be829d4bd67f1962f19020aed73d268`
 - Production merge commit: pending
 - Runtime identity: `resonance-v4-unified-paper-live-parity`
 - Production URL: `https://market-sentinel-free.alicia5574188.workers.dev`

@@ -13,7 +13,9 @@ Rules:
 
 ## 2026-09-02 — Unified paper strategy brain and direct live parity
 
-- Production PR/commit: pending
+- Pull request: `#105`
+- Feature commit: `fa4f38220be829d4bd67f1962f19020aed73d268`
+- Production merge commit: pending
 - Runtime: `resonance-v4-unified-paper-live-parity`
 
 ### Changed
