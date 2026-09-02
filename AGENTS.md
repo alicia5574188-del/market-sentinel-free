@@ -14,3 +14,4 @@ Before restoring any historical feature, compare it with current `main` and clas
 - Do not restore UI features by adding unnecessary polling or by making the foreground page a Gate market-data producer again.
 - Do not duplicate destructive controls merely to mimic an older UI; prefer one clear execution point plus navigation to it.
 - Do not create a second authority, data source, risk path, or live-control implementation when the current architecture already owns that responsibility.
+- Treat Cloudflare D1's 100,000 daily `rows_written` allowance as a hard operating budget. Any change that adds or accelerates D1 writes must update the daily-write estimate and keep planned recurring writes at or below 60,000 rows/day, preserving at least 40,000 rows for lifecycle events and operational variance.

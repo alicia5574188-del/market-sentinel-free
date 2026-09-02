@@ -1,5 +1,9 @@
 # Market Sentinel — Current System State
 
+> **2026-09-02 D1 daily-write budget correction.**
+>
+> The active-position safety loop still evaluates every 15 seconds, while unchanged holding telemetry is durably checkpointed once per 60 seconds. TP1 protection, stop, TP2, timeout, close, learning, and recovery events remain immediate. Under thirteen one-minute evaluations and five continuously open positions, scheduled D1 writes are bounded at 27,360 rows/day, leaving 72,640 rows beneath the 100,000 free daily allowance for lifecycle events and variance. Every future upgrade that adds or accelerates D1 writes must preserve a planned recurring ceiling of 60,000 rows/day.
+
 > **2026-09-02 unified-paper/live-parity correction (supersedes all conflicting research-lane, shadow-position, paper-only learning, live allowlist, two-slot, and margin descriptions below).**
 >
 > All thirteen HTE31 strategies now share one capital-backed simulation account. One strategy brain ranks the current stories and chooses the exact executable candidate; actual closed paper orders, not auxiliary shadow trades, drive strategy evidence. The system no longer creates or advances a second simulation layer. Historical shadow rows remain read-only for audit compatibility.

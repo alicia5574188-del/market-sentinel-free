@@ -72,3 +72,11 @@ Increase forward strategy evidence without disturbing HT4's currently positive b
 - Increase learning throughput to at most five open paper/live positions, at most three in one direction, with total planned paper stop risk no greater than 20% of equity and one open position per symbol.
 - Target 8% isolated margin per paper trade; allow a liquidation-safe narrow-stop fallback up to 35%. Adaptive leverage remains capped at 50x by liquidity, volatility, quality, and stop-before-liquidation safety.
 - Real funds remain entirely the user's decision. The user will not fund Gate until the simulation shows actual positive growth; the system must never move funds or decide that approval for the user.
+
+## Current completion objective — D1 daily write budget
+
+- Keep the 15-second active-position safety observation cadence and 60-second market-scanner cycle unchanged.
+- Persist stop, TP1 protection, TP2, timeout, close, and learning events immediately.
+- Replace unchanged 15-second holding-row writes with durable 60-second checkpoints.
+- Keep planned recurring D1 writes at or below 60,000 rows/day under the configured thirteen-strategy/five-position maximum, leaving at least 40,000 rows below the 100,000 free daily limit for event-driven writes and variance.
+- Make the D1 write budget a required review and regression-test item for every future upgrade.

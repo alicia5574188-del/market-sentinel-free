@@ -61,6 +61,16 @@ test("thirteen-strategy evaluations stay below the D1 bind budget", () => {
   assert.match(repository, /rows\.slice\(index, index \+ HTE31_EVALUATION_BATCH_SIZE\)/);
 });
 
+test("D1 holding checkpoints never delay protection or exits", () => {
+  const repository = readFileSync(new URL("../lib/hte31-repository.ts", import.meta.url), "utf8");
+  const exitWrite = repository.indexOf('if (exitCode && exitPrice != null)');
+  const checkpoint = repository.indexOf('shouldPersistHte31HoldingCheckpoint({');
+  const holdingWrite = repository.indexOf('await db.update(hte31Trades).set({', checkpoint);
+  assert.ok(exitWrite >= 0 && checkpoint > exitWrite && holdingWrite > checkpoint);
+  assert.match(repository.slice(exitWrite, checkpoint), /status: "closed"/);
+  assert.match(repository.slice(exitWrite, checkpoint), /updateLearningAfterClose/);
+});
+
 test("historical shadow rows stay readable but current routing learns from actual paper orders", () => {
   const diagnostics = readFileSync(new URL("../lib/hte31-diagnostics.ts", import.meta.url), "utf8");
   const currentCycle = diagnostics.slice(
