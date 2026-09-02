@@ -1,6 +1,6 @@
 # Market Sentinel / Resonance — Quant System Master Handoff
 
-Last reconciled: **2026-09-02 — PR #105 pending CI and production verification**
+Last reconciled: **2026-09-02 10:51 UTC — PR #105 deployed and verified**
 Purpose: **the complete continuation entry after deleting all prior chats**
 
 ## 0. Start every new task here
@@ -24,13 +24,14 @@ If any lower source conflicts with a higher source, the higher source wins.
 | --- | --- |
 | Repository | `alicia5574188-del/market-sentinel-free` |
 | Production Worker | `https://market-sentinel-free.alicia5574188.workers.dev` |
-| Target strategy identity | Market Sentinel HTE 3.1 Clean / Resonance V4 unified paper/live parity |
-| Target runtime generation | `resonance-v4-unified-paper-live-parity` |
-| Latest deployed feature PR | `#103` until PR `#105` is merged |
-| Current feature branch | `feat/resonance-unified-paper-live-parity` |
-| Current feature commit | `fa4f38220be829d4bd67f1962f19020aed73d268` |
-| PR CI | Run `33620837022`, job `100217233170`, passed; final documentation-head run pending |
-| Merge/main CI/production proof | Pending |
+| Production strategy identity | Market Sentinel HTE 3.1 Clean / Resonance V4 unified paper/live parity |
+| Runtime generation | `resonance-v4-unified-paper-live-parity` |
+| Latest deployed feature PR | `#105` |
+| Feature commit | `fa4f38220be829d4bd67f1962f19020aed73d268` |
+| Production merge commit | `1c42379177d32d824b9907f4d04558e502607277` |
+| Final PR CI | Run `33620998469`, job `100217743306`, passed |
+| Merged-main CI | Run `33621133143`, job `100218154250`, passed |
+| Production proof | Asset `assets/page-CLUWv592.js` served unified-paper/live-parity UI; two healthy advancing scheduler probes |
 
 The older remote branch `feat/resonance-strategy-research` contains an earlier divergent experiment and is not production. PR #103 used `feat/resonance-strategy-research-v2`; current `main` is authoritative.
 
@@ -40,6 +41,7 @@ At the final production probe:
 - Position Monitor state `live`; its successful timestamp advanced between probes; `lastError: null`.
 - Market Scanner state `live`; its successful timestamp advanced between probes; `lastError: null`; `circuitOpen: false`.
 - `schedulerError: null`.
+- Immutable client asset `assets/page-CLUWv592.js` contained `统一模拟策略池`, `十三种打法由大脑择优`, and `模拟/实盘同链`.
 - Cloudflare internal Build ID and Version ID were not exposed by the available surface. They must be queried from Cloudflare in a future authenticated session if needed; never infer them.
 
 ## 2. The current authority model
