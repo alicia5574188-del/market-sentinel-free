@@ -10,6 +10,7 @@ Move the full strategy-family cards out of the bottom of Radar into a dedicated 
 ## Product rules
 
 - The operator UI shows current truth, current decisions, current risk, and current actions only. It must not display release notes, migration explanations, or descriptions of how an upgrade was implemented.
+- Every surface that names a strategy must use one canonical formatter. Do not independently assemble old codes, English names, setup names, or raw regime enums in individual components.
 - Safety instructions, blocking reasons, strategy-health reasons, and current decision evidence remain available, but must be concise and actionable.
 - Keep exactly five bottom tabs: `机会 / 雷达 / 订单 / 实盘 / 设置`.
 - Strategy Center is a dedicated in-app subpage, not a sixth bottom tab.
@@ -29,6 +30,7 @@ Move the full strategy-family cards out of the bottom of Radar into a dedicated 
 - Show all nine canonical families and all thirteen historical variants.
 - Keep current family state, sample count, expectancy, profit factor, recent decay, last-use reason, and next action.
 - Variant names remain available inside the family card but are compact or expandable.
+- Use one current display format everywhere, for example `SF05 大周期波段 / 基础 [HT5] · 极端杠杆/清算`.
 - Remove the long paragraph explaining that thirteen IDs were grouped into nine families and that live inherits the selected variant; those facts belong in documentation, not the daily operator surface.
 - Do not add another API, poller, strategy authority, or data source. Reuse the existing HTE31 dashboard payload.
 
@@ -78,9 +80,25 @@ Classify visible copy before removal:
 - **Remove:** upgrade narrative, old/new version comparison, architecture explanation, repeated paper/live-parity explanation, duplicated family inventory prose.
 - **Documentation only:** migrations, legacy compatibility, implementation history, D1 calculations, and release evidence.
 
+## Cross-surface naming audit
+
+Apply the canonical family/variant label and translated regime label to every current surface, not only Strategy Center:
+
+- open and closed paper-order cards;
+- compact current-position previews;
+- Radar signal/plan cards and router selection;
+- trade chart and post-exit review;
+- strategy-health, paused-cell, and learning summaries;
+- Gate live active orders and lineage details;
+- owner diagnostics, audit/push text, and any API field rendered directly by the UI.
+
+Historical database IDs remain unchanged for lineage. Raw values such as `higher_timeframe_swing`, `HT5 Swing`, or `leverage_liquidation` must not leak into the current operator display when a canonical Chinese label exists.
+
 ## Exact implementation map
 
-- `app/page.tsx`: Strategy Center subpage, links, scroll reset, remove duplicate family lists, compact memory states, copy cleanup.
+- `app/page.tsx`: Strategy Center subpage, links, scroll reset, remove duplicate family lists, compact memory states, copy cleanup, and canonical names on every paper/order/radar/learning surface.
+- `lib/hte31-strategy-catalog.ts`: one canonical current-display formatter shared by family, variant, and legacy-ID resolution.
+- `lib/strategy-2-intelligence.ts` or the current regime-label owner: reuse one translated asset-regime formatter instead of showing raw enum values.
 - `lib/resonance-market.ts`: explicit memory source states and data-quality metadata.
 - `lib/gate-history.ts`: parsed-row/count validation and stable failure classification.
 - `lib/hte31-scanner.ts`: interval isolation, last-good memory input/output, and no-failure core scan behavior.
@@ -95,6 +113,8 @@ Classify visible copy before removal:
 - Radar no longer contains the full nine-family card list or upgrade explanation.
 - Strategy Center is reachable near the top of Radar, opens at the top, and contains every family/variant.
 - Orders does not duplicate the full strategy cards; its learning summary links to Strategy Center.
+- Open/closed paper orders, current positions, Radar, review, learning, and Gate live all show the same canonical family/variant identity.
+- No raw strategy ID, obsolete English display name, or raw regime enum appears on a current operator card when a canonical label exists.
 - No release-history or implementation-explanation copy remains in the daily UI.
 - Sufficient valid history cannot display `0/8`.
 - Missing/short/malformed history is labeled unavailable, not neutral or sample-zero.
@@ -107,7 +127,7 @@ Classify visible copy before removal:
 ## One-pass execution order after allowance reset
 
 1. Start from current `main` and create the implementation branch.
-2. Add failing memory-state/resilience and Strategy Center UI tests.
+2. Add failing memory-state/resilience, Strategy Center, and cross-surface canonical-label tests.
 3. Implement the historical-memory contract, isolated fetches, and last-good fallback.
 4. Implement Strategy Center and remove redundant UI copy/duplicate lists.
 5. Run focused tests, then every full local gate.

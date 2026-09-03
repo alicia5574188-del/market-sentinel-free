@@ -182,6 +182,7 @@ Record only consequential decisions using this format:
 - Choice: Show only current operational truth, decisions, risk, and actions in the daily UI. Move the full family/variant cards into a dedicated Strategy Center reached from Radar, while preserving exactly five bottom tabs.
 - Reason: Upgrade narratives and duplicated strategy lists make the phone interface harder to inspect and do not help daily operation.
 - Evidence: The current Radar and Orders surfaces both render the full family-card list, and Radar includes implementation-history prose beneath the strategy heading.
+- Evidence: Paper `TradeCard` still assembles `trader.code`, the old English trader name, setup text, and raw `assetRegime`, while live/chart paths already expose canonical labels; one shared formatter is required to prevent partial upgrades.
 - Revisit when: The owner explicitly changes the five-tab information architecture.
 
 ## 2026-09-03 — Fix historical-memory validity without lowering evidence quality

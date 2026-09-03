@@ -95,6 +95,7 @@ Increase forward strategy evidence without disturbing HT4's currently positive b
 ## Prepared next objective — Strategy Center and historical memory
 
 - Move the complete nine-family/thirteen-variant cards into a dedicated in-app Strategy Center without adding a sixth bottom tab.
+- Use one canonical family/variant and translated-regime label across paper orders, current positions, Radar, review, learning, live orders, and owner diagnostics; preserve legacy IDs only as stored lineage.
 - Remove upgrade-history, implementation, and duplicated explanatory copy from the daily operator UI; show only current truth, decisions, risk, and actions.
 - Treat persistent three-horizon `0/8` as a data-validity fault, not as genuine evidence or runtime accumulation.
 - Validate and isolate historical-candle sources, retain a bounded labeled last-known-good result, and keep the eight-independent-sample gate.
