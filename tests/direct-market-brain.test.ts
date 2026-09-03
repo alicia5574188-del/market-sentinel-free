@@ -80,7 +80,14 @@ test("risk state is loss-aware and groups correlated orders as one event", () =>
   ]);
   assert.equal(calibrating.sampleCount, 1);
   assert.equal(calibrating.state, "CALIBRATING");
+  assert.equal(calibrating.riskRate, 0.035);
   const defensive = evaluateDirectMarketRisk(Array.from({ length: 12 }, (_, index) => ({ independentEventKey: `e${index}`, resultR: -0.6 })));
   assert.ok(["DEFENSIVE", "PAUSED"].includes(defensive.state));
-  assert.ok(defensive.riskRate <= 0.005);
+  assert.equal(defensive.riskRate, defensive.state === "PAUSED" ? 0 : 0.035);
+});
+
+test("active learning states improve decisions without silently shrinking simulation risk", () => {
+  const caution = evaluateDirectMarketRisk(Array.from({ length: 8 }, (_, index) => ({ independentEventKey: `c${index}`, resultR: index === 0 ? 0.1 : -0.2 })));
+  assert.equal(caution.state, "CAUTION");
+  assert.equal(caution.riskRate, 0.035);
 });

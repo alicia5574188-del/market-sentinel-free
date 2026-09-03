@@ -261,3 +261,17 @@ Record only consequential decisions using this format:
 - Reason: A one-time Gate or Worker fault must not permanently discard the user's required 12-hour observation, while unlimited rapid retries would waste D1 writes and scheduler capacity.
 - Evidence: The observation schema now records retry count and next retry time; the scheduler reads only due retryable nodes, and the per-order 100-row lifecycle reserve covers the bounded retry writes.
 - Revisit when: Production failure telemetry shows four attempts are insufficient or a cheaper durable market-data archive becomes available.
+
+## 2026-09-03 — Isolate the current round and queue paper-capital reset safely
+
+- Choice: Current statistics and immediate Direct Market Brain risk use only the active simulation epoch and exact brain version. Older closed orders remain a collapsed archive and keep their charts, lineage, and 12-hour observations. A reset request blocks new simulated entries, waits for all existing positions to exit under their unchanged plan, then creates the next epoch automatically.
+- Reason: Old strategy losses must not make the replacement brain appear to be losing or control its current risk, while a continuously active scanner must not make capital reset impossible or force-close positions.
+- Evidence: The dashboard now exposes separate current/archive lists, the reset state is durable, the scanner checks it before entry, and the single Trade Manager is the only reset finalizer.
+- Revisit when: The owner requests an explicit forced-close workflow; it is intentionally not inferred from a capital reset.
+
+## 2026-09-03 — Do not shrink active simulation sizing by learning stage
+
+- Choice: Supersede earned-risk staging for sizing. `CALIBRATING`, `VALIDATING`, `NORMAL`, `CAUTION`, and `DEFENSIVE` all use the normal 3.5% simulation risk. `PAUSED` remains zero and all independent-event drawdown, portfolio, market-quality, liquidity, volatility, liquidation, and hard risk limits remain active.
+- Reason: The owner wants losses to change the entry/exit decision through complete review rather than silently producing tiny positions and weak learning evidence.
+- Evidence: Focused tests assert constant active-state sizing and the unchanged hard pause.
+- Revisit when: Comparable forward evidence supports a different normal rate or the owner explicitly restores stage-based exposure reduction.

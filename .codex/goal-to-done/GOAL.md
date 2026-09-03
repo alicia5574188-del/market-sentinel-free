@@ -1,5 +1,13 @@
 # Goal
 
+## Active patch objective — current round, safe reset, normal simulation sizing
+
+- Scope current account statistics and Direct Market Brain risk evidence to the active simulation epoch and current brain version; keep older closed orders in a collapsed read-only archive.
+- Accept an owner reset while positions are open, block replacement entries, let every position follow its existing stop/target/timeout lifecycle, then create the new 1,000U epoch automatically and resume scanning.
+- Keep simulation risk at the normal 3.5% per trade from the first active sample instead of shrinking it by learning stage. Preserve the hard PAUSED stop and all portfolio, liquidity, volatility, quality, liquidation-distance, 5% per-trade, 15% total-risk, and three-position caps.
+- Add no periodic D1 writes. Preserve every historical trade, chart, 12-hour observation, learning row, credential, live order, and owner-only live/funding control.
+- Release through PR/CI and verify the production asset, reset state, scheduler health, and bounded `/api/hte31` behavior.
+
 ## Active prepared objective — Direct Market Brain (supersedes named-strategy authority)
 
 - Replace HT1–HT9/family/variant selection for **new orders** with one deterministic, replayable brain that directly judges location, direction, structural targets, invalidation, expected value, and whether to wait.

@@ -4,6 +4,7 @@ import {
   hte31Evaluations,
   hte31Learning,
   hte31PostExitObservations,
+  hte31PaperResetState,
   hte31SimulationEpochs,
   hte31TradeCharts,
   hte31Trades,
@@ -24,6 +25,7 @@ import {
   resonanceLearningId,
 } from "./resonance-policy-version.ts";
 import { evaluateDirectMarketRisk } from "./direct-market-risk.ts";
+import { DIRECT_MARKET_AUTHORITY, DIRECT_MARKET_BRAIN_VERSION } from "./direct-market-types.ts";
 
 export const POST_EXIT_HORIZONS = [0, 30, 60, 120, 240, 480, 720] as const;
 const TRADERS: Hte31TraderId[] = [...HTE31_ALL_TRADER_IDS];
@@ -231,20 +233,69 @@ async function accountFromRows(startingCapitalUsdt: number) {
   };
 }
 
+export async function getHte31PaperResetState(knownOpenPositions?: number) {
+  const db = getDb();
+  const [state] = await db.select().from(hte31PaperResetState)
+    .where(eq(hte31PaperResetState.id, "singleton")).limit(1);
+  const openPositions = knownOpenPositions ?? (await db.select({ id: hte31Trades.id }).from(hte31Trades)
+    .where(eq(hte31Trades.status, "holding")).limit(4)).length;
+  return state ? { ...state, openPositions } : {
+    id: "singleton",
+    status: "completed" as const,
+    requestedCapitalUsdt: null,
+    requestedAt: null,
+    completedAt: null,
+    updatedAt: null,
+    openPositions,
+  };
+}
+
 export async function resetHte31PaperCapital(startingCapitalUsdt: number, now = Date.now()) {
   const db = getDb();
+  const capital = Math.min(1_000_000, Math.max(10, startingCapitalUsdt));
+  await db.insert(hte31PaperResetState).values({
+    id: "singleton",
+    status: "pending",
+    requestedCapitalUsdt: capital,
+    requestedAt: now,
+    completedAt: null,
+    updatedAt: now,
+  }).onConflictDoUpdate({
+    target: hte31PaperResetState.id,
+    set: {
+      status: "pending",
+      requestedCapitalUsdt: capital,
+      requestedAt: now,
+      completedAt: null,
+      updatedAt: now,
+    },
+  });
+  return getHte31PaperResetState();
+}
+
+export async function finalizePendingHte31PaperCapitalReset(now = Date.now()) {
+  const db = getDb();
+  const [state] = await db.select().from(hte31PaperResetState)
+    .where(and(eq(hte31PaperResetState.id, "singleton"), eq(hte31PaperResetState.status, "pending"))).limit(1);
+  if (!state) return null;
   const open = await db.select({ id: hte31Trades.id }).from(hte31Trades)
     .where(eq(hte31Trades.status, "holding")).limit(1);
-  if (open.length) throw new Error("存在模拟持仓，平仓后才能重置模拟本金");
-  const capital = Math.min(1_000_000, Math.max(10, startingCapitalUsdt));
+  if (open.length) return { ...state, openPositions: 1, completed: false as const };
   const epoch = {
     id: `hte31-epoch:${crypto.randomUUID()}`,
     startedAt: now,
-    startingCapitalUsdt: capital,
+    startingCapitalUsdt: state.requestedCapitalUsdt,
     createdAt: now,
   };
-  await db.insert(hte31SimulationEpochs).values(epoch);
-  return epoch;
+  await db.batch([
+    db.insert(hte31SimulationEpochs).values(epoch),
+    db.update(hte31PaperResetState).set({
+      status: "completed",
+      completedAt: now,
+      updatedAt: now,
+    }).where(and(eq(hte31PaperResetState.id, "singleton"), eq(hte31PaperResetState.status, "pending"))),
+  ]);
+  return { ...state, openPositions: 0, completed: true as const, epoch };
 }
 
 export async function tryOpenHte31Trade(
@@ -822,7 +873,7 @@ export async function markHte31PostExitObservationUnavailable(
 
 export async function getHte31Dashboard(now = Date.now()) {
   const settings = await getSettings();
-  const { rows, closed, open, account } = await accountFromRows(settings.trialCapitalUsdt);
+  const { closed, open, account } = await accountFromRows(settings.trialCapitalUsdt);
   const evaluations = await getDb().select().from(hte31Evaluations)
     .where(lte(hte31Evaluations.observedAt, now))
     .orderBy(desc(hte31Evaluations.observedAt)).limit(120);
@@ -835,19 +886,27 @@ export async function getHte31Dashboard(now = Date.now()) {
   }));
   const governance = await getHte31Governance(now);
   const tenMinute = evaluations.filter((row) => now - row.observedAt <= 10 * 60_000);
-  const grossProfit = closed.reduce((sum, row) => sum + Math.max(0, row.netPnlUsdt ?? 0), 0);
-  const grossLoss = Math.abs(closed.reduce((sum, row) => sum + Math.min(0, row.netPnlUsdt ?? 0), 0));
-  const directRisk = evaluateDirectMarketRisk(closed
-    .filter((row) => row.decisionAuthority === "direct_market_brain" && row.postExitStatus === "complete")
+  const currentClosed = closed.filter((row) => row.entryAt >= account.epochStartedAt
+    && row.decisionAuthority === DIRECT_MARKET_AUTHORITY
+    && row.brainVersion === DIRECT_MARKET_BRAIN_VERSION);
+  const archivedClosed = closed.filter((row) => !currentClosed.includes(row));
+  const grossProfit = currentClosed.reduce((sum, row) => sum + Math.max(0, row.netPnlUsdt ?? 0), 0);
+  const grossLoss = Math.abs(currentClosed.reduce((sum, row) => sum + Math.min(0, row.netPnlUsdt ?? 0), 0));
+  const directRisk = evaluateDirectMarketRisk(currentClosed
+    .filter((row) => row.postExitStatus === "complete")
     .map((row) => ({
       independentEventKey: row.independentEventKey ?? row.id,
       resultR: row.riskBudgetUsdt > 0 ? (row.netPnlUsdt ?? 0) / row.riskBudgetUsdt : 0,
     })));
+  const paperReset = await getHte31PaperResetState(open.length);
   return {
     account,
-    trades: rows.slice(0, 100),
+    trades: [...open, ...currentClosed].slice(0, 100),
     openTrades: open,
-    closedTrades: closed.slice(0, 60),
+    closedTrades: currentClosed.slice(0, 60),
+    archivedTrades: archivedClosed.slice(0, 60),
+    archiveCount: archivedClosed.length,
+    paperReset,
     evaluations: freshEvaluations.map((row) => ({
       ...row,
       reasons: parseJson<string[]>(row.reasonsJson, []),
@@ -865,12 +924,12 @@ export async function getHte31Dashboard(now = Date.now()) {
       blocked: tenMinute.filter((row) => row.state === "blocked").length,
     },
     stats: {
-      sampleCount: closed.length,
-      wins: closed.filter((row) => (row.netPnlUsdt ?? 0) > 0).length,
-      scratches: closed.filter((row) => row.exitCode === "breakeven").length,
-      losses: closed.filter((row) => isHte31FailureLoss(row)).length,
+      sampleCount: currentClosed.length,
+      wins: currentClosed.filter((row) => (row.netPnlUsdt ?? 0) > 0).length,
+      scratches: currentClosed.filter((row) => row.exitCode === "breakeven").length,
+      losses: currentClosed.filter((row) => isHte31FailureLoss(row)).length,
       profitFactor: grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 99 : null,
-      totalNetPnlUsdt: closed.reduce((sum, row) => sum + (row.netPnlUsdt ?? 0), 0),
+      totalNetPnlUsdt: currentClosed.reduce((sum, row) => sum + (row.netPnlUsdt ?? 0), 0),
     },
     settings: {
       scanEnabled: settings.scanEnabled,
