@@ -258,6 +258,15 @@ type Dashboard = {
   };
   openTrades: Trade[];
   closedTrades: Trade[];
+  archivedTrades: Trade[];
+  archiveCount: number;
+  paperReset: {
+    status: "pending" | "completed";
+    requestedCapitalUsdt: number | null;
+    requestedAt: number | null;
+    completedAt: number | null;
+    openPositions: number;
+  };
   evaluations: Evaluation[];
   learning: Learning[];
   governance: {
@@ -807,6 +816,7 @@ export default function ResonancePage() {
   const [apiSecret, setApiSecret] = useState("");
   const [permissionsConfirmed, setPermissionsConfirmed] = useState(false);
   const [emergencyHolding, setEmergencyHolding] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const emergencyTimer = useRef<number | null>(null);
   const mainSnapshotSeen = useRef(false);
   const lastSnapshotAt = useRef<number | null>(null);
@@ -954,11 +964,26 @@ export default function ResonancePage() {
     };
   }), [traderStats, strategyDiagnostics?.familyHealth]);
 
-  const resetPaper = () => {
+  const resetPaper = async () => {
     if (!dashboard) return;
-    if (dashboard.openTrades.length) return setMessage("当前还有模拟持仓，平仓后才能重置模拟本金。");
-    if (!window.confirm(`将模拟本金重新从 ${fmtMoney(dashboard.settings.trialCapitalUsdt)} 开始？历史交易和学习数据不会删除。`)) return;
-    void mutate("/api/hte31/paper-reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirmed: true }) }, "模拟本金已重置，历史学习继续保留。");
+    const prompt = dashboard.openTrades.length
+      ? `暂停新开仓，等待当前 ${dashboard.openTrades.length} 笔模拟持仓自然结束后，从 ${fmtMoney(dashboard.settings.trialCapitalUsdt)} 开始新一轮？`
+      : `从 ${fmtMoney(dashboard.settings.trialCapitalUsdt)} 开始新一轮模拟资金？`;
+    if (!window.confirm(prompt)) return;
+    setMessage("");
+    try {
+      const result = await readJson<{ reset: Dashboard["paperReset"] }>("/api/hte31/paper-reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmed: true }),
+      });
+      setMessage(result.reset.openPositions > 0
+        ? `已排队：等待 ${result.reset.openPositions} 笔持仓自然结束后自动重置。`
+        : "已排队，系统将在下一轮自动重置模拟本金。");
+      await refreshMain();
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : "模拟本金重置失败");
+    }
   };
 
   const saveSymbols = () => {
@@ -1063,11 +1088,12 @@ export default function ResonancePage() {
     </div>}
 
     {tab === "订单" && <div className="rz-stack">
-      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">模拟账户</span><h2>交易记录</h2></div><small>{dashboard?.stats.sampleCount ?? 0} 笔已完成</small></div>
-        <div className="rz-metric-grid"><div className="rz-metric"><span>权益</span><b>{fmtMoney(dashboard?.account.equityUsdt)}</b></div><div className="rz-metric"><span>累计净值变化</span><b className={(dashboard?.stats.totalNetPnlUsdt ?? 0) < 0 ? "rz-negative" : "rz-positive"}>{fmtMoney(dashboard?.stats.totalNetPnlUsdt)}</b></div><div className="rz-metric"><span>胜 / 平 / 负</span><b>{dashboard?.stats.wins ?? 0} / {dashboard?.stats.scratches ?? 0} / {dashboard?.stats.losses ?? 0}</b></div><div className="rz-metric"><span>PF</span><b>{dashboard?.stats.profitFactor == null ? "--" : dashboard.stats.profitFactor >= 99 ? "∞" : dashboard.stats.profitFactor.toFixed(2)}</b></div></div>
+      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">模拟账户</span><h2>本轮交易</h2></div><small>{dashboard?.stats.sampleCount ?? 0} 笔已完成</small></div>
+        <div className="rz-metric-grid"><div className="rz-metric"><span>权益</span><b>{fmtMoney(dashboard?.account.equityUsdt)}</b></div><div className="rz-metric"><span>本轮净值变化</span><b className={(dashboard?.stats.totalNetPnlUsdt ?? 0) < 0 ? "rz-negative" : "rz-positive"}>{fmtMoney(dashboard?.stats.totalNetPnlUsdt)}</b></div><div className="rz-metric"><span>胜 / 平 / 负</span><b>{dashboard?.stats.wins ?? 0} / {dashboard?.stats.scratches ?? 0} / {dashboard?.stats.losses ?? 0}</b></div><div className="rz-metric"><span>PF</span><b>{dashboard?.stats.profitFactor == null ? "--" : dashboard.stats.profitFactor >= 99 ? "∞" : dashboard.stats.profitFactor.toFixed(2)}</b></div></div>
       </section>
       <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">OPEN</span><h2>当前持仓</h2></div><small>{dashboard?.openTrades.length ?? 0} 笔</small></div>{dashboard?.openTrades.length ? <div className="rz-list">{dashboard.openTrades.map((trade) => <TradeCard key={trade.id} trade={trade} roundTripCostBps={dashboard.settings.roundTripCostBps} />)}</div> : <Empty>暂无模拟持仓</Empty>}</section>
       <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">CLOSED</span><h2>已平仓</h2></div><small>{dashboard?.closedTrades.length ?? 0} 笔</small></div>{dashboard?.closedTrades.length ? <div className="rz-list">{dashboard.closedTrades.map((trade) => <TradeCard key={trade.id} trade={trade} roundTripCostBps={dashboard.settings.roundTripCostBps} />)}</div> : <Empty>暂无已平仓交易</Empty>}</section>
+      {(dashboard?.archiveCount ?? 0) > 0 && <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">ARCHIVE</span><h2>历史归档</h2></div><button className="rz-text-action" type="button" onClick={() => setArchiveOpen((value) => !value)}>{archiveOpen ? "收起" : `查看 ${dashboard?.archiveCount ?? 0} 笔`}</button></div>{archiveOpen && <div className="rz-list">{dashboard?.archivedTrades.map((trade) => <TradeCard key={trade.id} trade={trade} roundTripCostBps={dashboard.settings.roundTripCostBps} />)}</div>}</section>}
     </div>}
 
     {tab === "实盘" && <div className="rz-stack">
@@ -1100,7 +1126,7 @@ export default function ResonancePage() {
         <div className="rz-actions"><button onClick={toggleScan}>{dashboard?.settings.scanEnabled ? "暂停市场扫描" : "恢复市场扫描"}</button></div>
       </article></section>
       <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">市场范围</span><h2>动态成交额前十五</h2></div></div><article className="rz-panel"><div className="rz-metric-grid"><div className="rz-metric"><span>轻扫</span><b>15 币</b></div><div className="rz-metric"><span>深扫</span><b>6 币</b></div><div className="rz-metric"><span>最大持仓</span><b>3 笔</b></div><div className="rz-metric"><span>D1 新单保护线</span><b>22,000</b></div></div></article></section>
-      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">模拟资金</span><h2>重新开始资金曲线</h2></div></div><article className="rz-panel"><div className="rz-metric-grid"><div className="rz-metric"><span>本轮本金</span><b>{fmtMoney(dashboard?.account.startingCapitalUsdt)}</b></div><div className="rz-metric"><span>当前权益</span><b>{fmtMoney(dashboard?.account.equityUsdt)}</b></div><div className="rz-metric"><span>开始时间</span><b>{fmtTime(dashboard?.account.epochStartedAt)}</b></div><div className="rz-metric"><span>累计学习样本</span><b>{dashboard?.stats.sampleCount ?? 0}</b></div></div><p className="rz-copy">重置只重新开始资金曲线，历史交易、逐笔复盘和学习结果全部保留。</p><div className="rz-actions"><button className="danger" disabled={Boolean(dashboard?.openTrades.length)} onClick={resetPaper}>重置模拟本金</button></div></article></section>
+      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">模拟资金</span><h2>重新开始资金曲线</h2></div></div><article className="rz-panel"><div className="rz-metric-grid"><div className="rz-metric"><span>本轮本金</span><b>{fmtMoney(dashboard?.account.startingCapitalUsdt)}</b></div><div className="rz-metric"><span>当前权益</span><b>{fmtMoney(dashboard?.account.equityUsdt)}</b></div><div className="rz-metric"><span>开始时间</span><b>{fmtTime(dashboard?.account.epochStartedAt)}</b></div><div className="rz-metric"><span>本轮已平仓</span><b>{dashboard?.stats.sampleCount ?? 0}</b></div></div>{dashboard?.paperReset.status === "pending" && <p className="rz-copy">待重置 · 剩余 {dashboard.paperReset.openPositions} 笔持仓</p>}<div className="rz-actions"><button className="danger" disabled={dashboard?.paperReset.status === "pending"} onClick={() => void resetPaper()}>{dashboard?.paperReset.status === "pending" ? "等待持仓结束" : "重置模拟本金"}</button></div></article></section>
     </div>}
 
     <nav className="rz-nav">{NAV.map((item) => <button key={item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item}</button>)}</nav>

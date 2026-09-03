@@ -1,6 +1,6 @@
 import { and, desc, eq, gte } from "drizzle-orm";
 import { getDb } from "../db";
-import { hte31SimulationEpochs, hte31TradeCharts, hte31Trades } from "../db/hte31-schema";
+import { hte31PaperResetState, hte31SimulationEpochs, hte31TradeCharts, hte31Trades } from "../db/hte31-schema";
 import { directMarketD1Admission } from "./direct-market-d1-budget.ts";
 import { evaluateDirectMarketRisk, type DirectMarketResult } from "./direct-market-risk.ts";
 import {
@@ -35,7 +35,10 @@ async function paperAccount(startingCapitalUsdt: number) {
 }
 
 export async function getDirectMarketRiskDecision() {
-  const rows = await getDb().select({
+  const db = getDb();
+  const [epoch] = await db.select({ startedAt: hte31SimulationEpochs.startedAt }).from(hte31SimulationEpochs)
+    .orderBy(desc(hte31SimulationEpochs.startedAt)).limit(1);
+  const rows = await db.select({
     id: hte31Trades.id,
     independentEventKey: hte31Trades.independentEventKey,
     netPnlUsdt: hte31Trades.netPnlUsdt,
@@ -44,6 +47,8 @@ export async function getDirectMarketRiskDecision() {
     eq(hte31Trades.status, "closed"),
     eq(hte31Trades.postExitStatus, "complete"),
     eq(hte31Trades.decisionAuthority, DIRECT_MARKET_AUTHORITY),
+    eq(hte31Trades.brainVersion, DIRECT_MARKET_BRAIN_VERSION),
+    gte(hte31Trades.entryAt, epoch?.startedAt ?? 0),
   )).orderBy(desc(hte31Trades.exitAt)).limit(200);
   const results: DirectMarketResult[] = rows.map((row) => ({
     independentEventKey: row.independentEventKey ?? row.id,
@@ -63,6 +68,11 @@ export async function openDirectMarketTrade(input: {
     return { opened: null, reason: candidate.counterEvidence[0] ?? "当前位置没有足够净优势" };
   }
   const db = getDb();
+  const [pendingReset] = await db.select({ id: hte31PaperResetState.id }).from(hte31PaperResetState).where(and(
+    eq(hte31PaperResetState.id, "singleton"),
+    eq(hte31PaperResetState.status, "pending"),
+  )).limit(1);
+  if (pendingReset) return { opened: null, reason: "模拟本金等待重置，暂不新开仓" };
   const [existing] = await db.select({ id: hte31Trades.id }).from(hte31Trades).where(and(
     eq(hte31Trades.symbol, candidate.symbol),
     eq(hte31Trades.status, "holding"),

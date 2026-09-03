@@ -7,6 +7,7 @@ import { fetchGateChartCandles, fetchGatePositionQuotes, SYMBOL_PATTERN } from "
 import {
   applyHte31PositionQuote,
   completeHte31PostExitObservation,
+  finalizePendingHte31PaperCapitalReset,
   listHte31OpenTrades,
   markHte31PostExitObservationUnavailable,
   nextHte31PostExitObservation,
@@ -493,6 +494,11 @@ export class HTE31TradeManager extends DurableObject<CloudflareEnv> {
           failures.push(`post-exit ${due.trade.symbol}: ${errorMessage(error)}`);
         }
       }
+
+      // A reset request never force-closes a position. Once the final paper
+      // position has exited, the single Trade Manager creates the new epoch;
+      // the scanner is blocked from opening replacements while it is pending.
+      await finalizePendingHte31PaperCapitalReset(Date.now());
 
       const active = open.length > 0 || Boolean(due);
       const nextRunAt = Date.now() + (active ? TRADE_MANAGER_ACTIVE_INTERVAL_MS : TRADE_MANAGER_IDLE_INTERVAL_MS);

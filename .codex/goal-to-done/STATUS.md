@@ -1,5 +1,16 @@
 # Status
 
+## Current-round/reset/risk patch — implementation verification
+
+- Branch: `fix/current-epoch-reset-risk`, based on production `main` `224654490779147ca4508c0f6fad532572c39e08`.
+- Current Direct Market Brain/version/epoch orders now exclusively drive current stats and risk evidence; prior closed orders remain available under a collapsed history archive.
+- Owner reset is now a durable pending request: new paper entries stop, existing positions retain natural lifecycle, and the single Trade Manager creates the new epoch after the final close. Migration `0018` queues the requested reset on release.
+- Every non-paused simulation risk state now uses normal 3.5% risk; PAUSED and all structural portfolio/liquidity/volatility/data/liquidation safeguards remain unchanged.
+- No live activation, fund transfer, forced close, historical deletion, or recurring D1 write was added.
+- Local verification passed: 224/224 strategy/risk/migration tests, 110/110 production/UI/safety tests, focused reset/direct-brain/full-migration checks, TypeScript, ESLint (warnings only), production build, Wrangler dry-run, and `git diff --check`.
+- Next: push the patch, merge after green CI, then confirm migration-driven reset state, immutable production asset, `/api/hte31`, and scheduler health.
+- Updated UTC: 2026-09-03.
+
 ## Direct Market Brain — implementation verified, release in progress
 
 - Branch `prep/direct-market-brain` now implements the single `direct_market_brain` new-entry authority over a dynamic top-fifteen Gate USDT-perpetual universe, a rotating six-symbol deep pool, cross-market ranking, correlation-cluster blocking, and a three-position maximum.

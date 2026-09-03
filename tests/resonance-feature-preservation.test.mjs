@@ -25,11 +25,12 @@ test("Resonance keeps critical operator capabilities reachable after product ref
 });
 
 test("paper reset remains reachable without duplicating the destructive action", () => {
-  const resetButtons = page.match(/onClick=\{resetPaper\}>重置模拟本金<\/button>/g) ?? [];
+  const resetButtons = page.match(/onClick=\{\(\) => void resetPaper\(\)\}/g) ?? [];
   assert.equal(resetButtons.length, 1);
   assert.match(page, /资金设置/);
   assert.match(page, /重新开始资金曲线/);
-  assert.match(page, /有模拟持仓时不得重置|openTrades\.length/);
+  assert.match(page, /等待持仓结束/);
+  assert.match(page, /paperReset\.status === "pending"/);
 });
 
 test("fixed navigation and full pre-trade evidence survive product refactors", () => {

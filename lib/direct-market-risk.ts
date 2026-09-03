@@ -60,7 +60,12 @@ export function evaluateDirectMarketRisk(rows: DirectMarketResult[]): DirectMark
   else if (sampleCount < 12) state = "CALIBRATING";
   else if (sampleCount < 30 || expectancyR <= 0 || (profitFactor ?? 0) < 1.2) state = "VALIDATING";
   else state = "NORMAL";
-  const riskRate = ({ CALIBRATING: 0.02, VALIDATING: 0.025, NORMAL: 0.035, CAUTION: 0.0125, DEFENSIVE: 0.005, PAUSED: 0 } satisfies Record<DirectMarketRiskState, number>)[state];
+  // The simulation learns by improving its entry/exit decision, not by making
+  // early or losing-stage positions too small to produce useful evidence.
+  // PAUSED remains a hard safety stop; every active state uses the same normal
+  // per-trade risk and the sizing engine still enforces portfolio, liquidity,
+  // volatility, data-quality and liquidation-distance caps.
+  const riskRate = state === "PAUSED" ? 0 : 0.035;
   return {
     state,
     riskRate,

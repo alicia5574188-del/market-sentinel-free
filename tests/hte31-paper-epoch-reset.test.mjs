@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 const repository = readFileSync(new URL("../lib/hte31-repository.ts", import.meta.url), "utf8");
 const schema = readFileSync(new URL("../db/hte31-schema.ts", import.meta.url), "utf8");
 const migration = readFileSync(new URL("../drizzle/0014_hte31_simulation_epochs.sql", import.meta.url), "utf8");
+const resetMigration = readFileSync(new URL("../drizzle/0018_safe_paper_reset.sql", import.meta.url), "utf8");
 const route = readFileSync(new URL("../app/api/hte31/paper-reset/route.ts", import.meta.url), "utf8");
 const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
 
@@ -14,8 +15,10 @@ test("paper capital reset creates a new accounting epoch without deleting learni
   assert.match(repository, /resetHte31PaperCapital/);
   assert.match(repository, /where\(eq\(hte31Trades\.status, "holding"\)\)/);
   assert.match(repository, /learningRows = await db\.select\(\)\.from\(hte31Learning\)/);
-  assert.match(repository, /closedTrades: closed\.slice/);
+  assert.match(repository, /closedTrades: currentClosed\.slice/);
+  assert.match(repository, /archivedTrades: archivedClosed\.slice/);
   assert.doesNotMatch(migration, /DELETE FROM/i);
+  assert.doesNotMatch(resetMigration, /DELETE FROM/i);
   assert.doesNotMatch(route, /DELETE FROM|delete\(hte31|db\.delete/i);
 });
 
@@ -27,19 +30,25 @@ test("account loss governance respects both the simulation epoch and current Res
   assert.match(repository, /for \(const row of accountRows\)/);
 });
 
-test("paper capital reset is owner-confirmed and blocked while a paper position is open", () => {
+test("paper capital reset is owner-confirmed, queued, and finalized only after positions close", () => {
   assert.match(route, /role !== "owner"/);
   assert.match(route, /confirmed !== true/);
-  assert.match(repository, /存在模拟持仓，平仓后才能重置模拟本金/);
+  assert.match(repository, /status: "pending"/);
+  assert.match(repository, /finalizePendingHte31PaperCapitalReset/);
+  assert.match(repository, /if \(open\.length\) return/);
+  assert.match(resetMigration, /'singleton', 'pending'/);
   assert.match(page, /重置模拟本金/);
-  assert.match(page, /历史交易、逐笔复盘和学习结果全部保留/);
-  assert.match(page, /disabled=\{Boolean\(dashboard\?\.openTrades\.length\)\}/);
+  assert.match(page, /等待持仓结束/);
+  assert.match(page, /dashboard\?\.paperReset\.status === "pending"/);
 });
 
-test("dashboard keeps cumulative samples while current account PnL is epoch scoped", () => {
+test("dashboard scopes current statistics to the active direct-brain epoch", () => {
   assert.match(repository, /const closed = rows\.filter/);
   assert.match(repository, /const epochClosed = closed\.filter/);
-  assert.match(repository, /sampleCount: closed\.length/);
+  assert.match(repository, /const currentClosed = closed\.filter/);
+  assert.match(repository, /row\.decisionAuthority === DIRECT_MARKET_AUTHORITY/);
+  assert.match(repository, /row\.brainVersion === DIRECT_MARKET_BRAIN_VERSION/);
+  assert.match(repository, /sampleCount: currentClosed\.length/);
   assert.match(page, /dashboard\?\.stats\.sampleCount/);
   assert.match(page, /笔已完成/);
 });

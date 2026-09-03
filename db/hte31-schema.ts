@@ -80,6 +80,15 @@ export const hte31SimulationEpochs = sqliteTable("hte31_simulation_epochs", {
   index("hte31_simulation_epochs_started_idx").on(table.startedAt),
 ]);
 
+export const hte31PaperResetState = sqliteTable("hte31_paper_reset_state", {
+  id: text("id").primaryKey(),
+  status: text("status", { enum: ["pending", "completed"] }).notNull(),
+  requestedCapitalUsdt: real("requested_capital_usdt").notNull(),
+  requestedAt: integer("requested_at").notNull(),
+  completedAt: integer("completed_at"),
+  updatedAt: integer("updated_at").notNull(),
+});
+
 export const hte31Evaluations = sqliteTable("hte31_evaluations", {
   id: text("id").primaryKey(),
   symbol: text("symbol").notNull(),

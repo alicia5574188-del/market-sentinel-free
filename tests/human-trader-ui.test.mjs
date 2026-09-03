@@ -81,7 +81,7 @@ test("simulation reset is reachable from funds without duplicating its destructi
   assert.match(page, /const NAV: Tab\[\] = \["机会", "雷达", "订单", "实盘", "设置"\]/);
   assert.match(page, /tab === "设置"/);
   assert.match(page, /重新开始资金曲线/);
-  const resetButtons = page.match(/onClick=\{resetPaper\}>重置模拟本金<\/button>/g) ?? [];
+  const resetButtons = page.match(/onClick=\{\(\) => void resetPaper\(\)\}/g) ?? [];
   assert.equal(resetButtons.length, 1);
 });
 
