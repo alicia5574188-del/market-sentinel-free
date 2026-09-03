@@ -1,5 +1,17 @@
 # Status
 
+## Adaptive direct-market decision and position brain — locally verified
+
+- Branch: `feat/adaptive-position-brain`, based on production `main` `7a71f77fa29d3e442d2e8a38a28e1a3eca101d3c`.
+- The rotating deep cohort now ranks up to three fresh candidates together and can execute the best earlier candidate, rather than only the symbol that happened to finish last. Every entry is revalidated against a fresh quote, its original zone, structural invalidation, and current reward/risk.
+- Accepted new orders lock `adaptive-position-v2`. Completed five-minute evidence emits `HOLD`, fee-aware `PROTECT`, or explained early `EXIT`; old open positions without that immutable policy marker retain their original lifecycle.
+- Immediate current-round losses now affect entry admission without waiting 12 hours. Only complete independent 12-hour events can block a repeated failure signature or raise the global edge floor; no incomplete future path changes the model.
+- Capacity remains three positions and 15% planned stop risk, with no more than two in one direction. Active accepted simulation trades remain at 3.5% risk; PAUSED and all existing hard safety boundaries remain intact.
+- No schema, migration, recurring D1 write, Durable Object generation reset, live activation, live sizing change, fund action, forced close, or historical deletion was added. The index-adjusted app plan remains 30,000 rows/day, with new-order admission at 22,000 and 70,000 rows of free-tier headroom.
+- Local verification passed: 224/224 strategy/risk/migration tests, 110/110 production/UI/safety tests, 18/18 adaptive direct-brain tests, TypeScript, ESLint with warnings only, production build, Wrangler dry-run, and `git diff --check`.
+- Next: one PR, green CI, merge, automatic Cloudflare deployment, then production asset/health/scheduler/API verification.
+- Updated UTC: 2026-09-03.
+
 ## Current-round/reset/risk patch — implementation verification
 
 - Branch: `fix/current-epoch-reset-risk`, based on production `main` `224654490779147ca4508c0f6fad532572c39e08`.

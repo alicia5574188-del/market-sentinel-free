@@ -275,3 +275,24 @@ Record only consequential decisions using this format:
 - Reason: The owner wants losses to change the entry/exit decision through complete review rather than silently producing tiny positions and weak learning evidence.
 - Evidence: Focused tests assert constant active-state sizing and the unchanged hard pause.
 - Revisit when: Comparable forward evidence supports a different normal rate or the owner explicitly restores stage-based exposure reduction.
+
+## 2026-09-03 — Rejudge positions on completed evidence instead of holding mechanically
+
+- Choice: New direct-brain orders carry an immutable `adaptive-position-v2` marker. Once per completed five-minute bucket, the position brain may `HOLD`, improve the stop through fee-aware `PROTECT`, or `EXIT` after multi-bar structural invalidation/time decay. It may never loosen the original stop or reverse inside the same order.
+- Reason: A valid entry can become invalid before its original stop, while reacting to incomplete candles would manufacture hindsight and churn. Closing first and requiring a fresh ranked setup keeps reversal evidence-based.
+- Evidence: Deterministic tests cover early invalidation, fee-aware protection, incomplete-evidence holding, and unchanged D1 checkpoint cadence.
+- Revisit when: Complete 12-hour observations show a repeated exit error attributable to the position rule, not a single trade.
+
+## 2026-09-03 — Let losses change admission before changing the learned model
+
+- Choice: Current-epoch closed results immediately drive `NORMAL/CAUTION/DEFENSIVE/PAUSED` admission quality. A model rule changes only after complete 12-hour evidence: four independent weak events can quarantine the exact location/direction/regime signature, while eight weak independent events can raise the edge floor by one versioned variable.
+- Reason: Waiting twelve hours to protect the account is too slow, but learning from unfinished future paths is unreliable. Admission protection and durable model learning therefore have separate evidence clocks.
+- Evidence: The learning profile deduplicates independent event keys and snapshots its action, evidence count, reason, parent version, and revalidation status into every accepted order.
+- Revisit when: Forward samples justify different minimum counts; do not lower them merely to make learning appear faster.
+
+## 2026-09-03 — Compare fresh candidates as a cohort and cap directional concentration
+
+- Choice: Preserve the top-fifteen light universe and six-symbol rotating deep pool, retain each fresh deep candidate with its candles in bounded Durable Object state, rank the cohort, and attempt the top three in order. Keep the global maximum at three positions and normally two per direction; never force a slot.
+- Reason: Executing only the latest completed symbol could miss the strongest earlier candidate. Cohort execution makes cross-market selection real without adding a database write or a second simulator.
+- Evidence: The worker fetches fresh quotes for the ranked finalists in one bounded call, then every candidate independently passes stale/zone/invalidation/economic, correlation, portfolio, risk, learning, and D1 gates.
+- Revisit when: Production latency or forward evidence supports changing the six-symbol deep width; the fifteen-coin light universe and D1 zero-write boundary remain fixed unless explicitly redesigned.

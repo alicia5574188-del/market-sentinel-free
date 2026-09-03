@@ -36,7 +36,7 @@ test("the direct market cycle has no simulation-inside-simulation and opens only
   assert.match(diagnostics, /isCurrentResonanceTrade/);
   assert.match(scanner, /buildDirectMarketCandidate/);
   assert.doesNotMatch(scanner, /recordHte31DiagnosticCycle|tryOpenResonanceTrade|createShadowSample/);
-  const rankIndex = worker.indexOf("freshReady.length >= 3");
+  const rankIndex = worker.indexOf("freshCohort.length >= 3");
   const openIndex = worker.indexOf("openDirectMarketTrade({", rankIndex);
   assert.ok(rankIndex >= 0 && openIndex > rankIndex, "cross-market selection must precede the single paper execution path");
 });

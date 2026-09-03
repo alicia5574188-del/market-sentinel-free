@@ -26,6 +26,7 @@ import {
 } from "./resonance-policy-version.ts";
 import { evaluateDirectMarketRisk } from "./direct-market-risk.ts";
 import { DIRECT_MARKET_AUTHORITY, DIRECT_MARKET_BRAIN_VERSION } from "./direct-market-types.ts";
+import type { DirectPositionDecision } from "./direct-market-position-brain.ts";
 
 export const POST_EXIT_HORIZONS = [0, 30, 60, 120, 240, 480, 720] as const;
 const TRADERS: Hte31TraderId[] = [...HTE31_ALL_TRADER_IDS];
@@ -40,6 +41,21 @@ function traderIdForSignal(signal: Hte31Signal): Hte31TraderId | null {
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
   if (!value) return fallback;
   try { return JSON.parse(value) as T; } catch { return fallback; }
+}
+
+function positionDecisionMetrics(entryMetricsJson: string, decision: DirectPositionDecision | null) {
+  if (!decision) return entryMetricsJson;
+  const existing = parseJson<Record<string, unknown>[]>(entryMetricsJson, []);
+  const next = existing.filter((item) => item.key !== "direct-position-decision");
+  next.push({
+    key: "direct-position-decision",
+    label: "当前持仓判断",
+    score: decision.progressR,
+    detail: JSON.stringify(decision),
+    available: true,
+    category: "position",
+  });
+  return JSON.stringify(next);
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -498,7 +514,11 @@ async function updateLearningAfterClose(trade: typeof hte31Trades.$inferSelect, 
   }).where(eq(hte31Learning.id, id));
 }
 
-export async function applyHte31PositionQuote(quote: GatePositionQuote, settings: AppSettings) {
+export async function applyHte31PositionQuote(
+  quote: GatePositionQuote,
+  settings: AppSettings,
+  positionDecision: DirectPositionDecision | null = null,
+) {
   const db = getDb();
   const [trade] = await db.select().from(hte31Trades)
     .where(and(eq(hte31Trades.symbol, quote.symbol), eq(hte31Trades.status, "holding"))).limit(1);
@@ -536,13 +556,17 @@ export async function applyHte31PositionQuote(quote: GatePositionQuote, settings
   // TP1 breakeven stop is installed only for future observations, so a low/high
   // from before TP1 can never retroactively trigger it.
   if (stopHit) {
-    exitCode = previouslyProtected && stopBeforeObservation === trade.entryPrice ? "breakeven" : "stop_loss";
+    exitCode = previouslyProtected && stopBeforeObservation !== trade.initialStopPrice ? "breakeven" : "stop_loss";
     exitReason = exitCode === "breakeven" ? "TP1 后保护止损被触发" : "结构止损被触发";
     exitPrice = stopBeforeObservation;
   } else if (tp2Hit) {
     exitCode = "take_profit";
     exitReason = "第二目标完成，按交易员计划退出";
     exitPrice = trade.takeProfit2Price;
+  } else if (positionDecision?.action === "EXIT" && positionDecision.exitCode) {
+    exitCode = positionDecision.exitCode;
+    exitReason = `市场大脑持仓复核：${positionDecision.reason}`;
+    exitPrice = quote.price;
   } else if (timeout) {
     exitCode = "timeout";
     exitReason = hte31TimeoutExitReason({
@@ -551,11 +575,20 @@ export async function applyHte31PositionQuote(quote: GatePositionQuote, settings
       maximumFavorableR,
     });
     exitPrice = quote.price;
-  } else if (!target1HitAt && tp1Hit) {
-    target1HitAt = quote.observedAt;
-    currentStopPrice = trade.side === "LONG"
-      ? Math.max(trade.currentStopPrice, trade.entryPrice)
-      : Math.min(trade.currentStopPrice, trade.entryPrice);
+  } else {
+    if (!target1HitAt && tp1Hit) target1HitAt = quote.observedAt;
+    if (target1HitAt) {
+      const roundTripCostRate = Math.max(0, settings.roundTripCostBps) / 10_000;
+      const feeAwareBreakEven = trade.side === "LONG"
+        ? trade.entryPrice * (1 + roundTripCostRate)
+        : trade.entryPrice * (1 - roundTripCostRate);
+      const proposed = positionDecision?.action === "PROTECT" && positionDecision.proposedStopPrice != null
+        ? positionDecision.proposedStopPrice
+        : feeAwareBreakEven;
+      currentStopPrice = trade.side === "LONG"
+        ? Math.max(trade.currentStopPrice, feeAwareBreakEven, proposed)
+        : Math.min(trade.currentStopPrice, feeAwareBreakEven, proposed);
+    }
   }
 
   const grossPct = grossMovePct(trade.side, trade.entryPrice, quote.price);
@@ -598,6 +631,7 @@ export async function applyHte31PositionQuote(quote: GatePositionQuote, settings
       maePct: excursion.mae,
       holdMinutes,
       postExitStatus: "observing",
+      entryMetricsJson: positionDecisionMetrics(trade.entryMetricsJson, positionDecision),
       updatedAt: quote.observedAt,
     }).where(eq(hte31Trades.id, trade.id));
     for (const horizonMinutes of POST_EXIT_HORIZONS) {
@@ -645,6 +679,7 @@ export async function applyHte31PositionQuote(quote: GatePositionQuote, settings
     unrealizedNetPct,
     unrealizedNetUsdt,
     progressR,
+    entryMetricsJson: positionDecisionMetrics(trade.entryMetricsJson, positionDecision),
     updatedAt: quote.observedAt,
   }).where(eq(hte31Trades.id, trade.id));
   return { kind: "holding" as const, tradeId: trade.id, target1HitAt, currentStopPrice };
@@ -892,9 +927,7 @@ export async function getHte31Dashboard(now = Date.now()) {
   const archivedClosed = closed.filter((row) => !currentClosed.includes(row));
   const grossProfit = currentClosed.reduce((sum, row) => sum + Math.max(0, row.netPnlUsdt ?? 0), 0);
   const grossLoss = Math.abs(currentClosed.reduce((sum, row) => sum + Math.min(0, row.netPnlUsdt ?? 0), 0));
-  const directRisk = evaluateDirectMarketRisk(currentClosed
-    .filter((row) => row.postExitStatus === "complete")
-    .map((row) => ({
+  const directRisk = evaluateDirectMarketRisk(currentClosed.map((row) => ({
       independentEventKey: row.independentEventKey ?? row.id,
       resultR: row.riskBudgetUsdt > 0 ? (row.netPnlUsdt ?? 0) / row.riskBudgetUsdt : 0,
     })));
