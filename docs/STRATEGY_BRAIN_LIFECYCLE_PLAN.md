@@ -1,6 +1,6 @@
 # Strategy Brain Lifecycle and Family Consolidation Plan
 
-Status: **prepared only — no strategy/runtime change has been implemented or deployed**
+Status: **implemented, deployed, and production-verified in PR #109**
 Prepared: **2026-09-03 UTC**
 
 ## Objective
@@ -143,10 +143,11 @@ The report must answer both questions requested by the owner: what would have ma
 
 The implementation scope is intentionally limited to family metadata, deterministic analysis/decision modules, existing read-model UI fields, tests, and documentation. It excludes a redesign, a second simulator, destructive migration, new market-data producer, or broad strategy rewrite. Expected implementation is 45–60 minutes; full local/remote verification is expected to bring the end-to-end run to roughly 60–90 minutes. Use the `极高` reasoning level after the five-hour allowance resets; `最高` is not required.
 
-## Implementation checkpoint — 2026-09-03
+## Production checkpoint — 2026-09-03
 
-- Local implementation is complete on `feat/strategy-brain-lifecycle`.
+- Implementation shipped through PR #109; feature commit `e31d7521374bab75894f2da67904de51d2a78653`, production merge `a92a516dd12f960a961814343dc88c9fa33632cf`.
 - All thirteen legacy IDs map to the nine planned families; family-level candidate deduplication, recent-decay ranking, health states, final trade verdicts, UI, and exact live-lineage labels are implemented.
 - No migration, second simulator, fund action, live activation, risk-limit change, or new recurring D1 write was introduced.
 - Local verification passed: 217 strategy/risk tests, 109 production/UI/Must-Keep tests, ESLint, TypeScript, and diff checks.
-- Remote PR/CI/production verification is still required before this plan can be marked deployed.
+- PR CI run `33716373058` and merged-main CI run `33716448405` passed, including Wrangler production dry-run.
+- Production served immutable asset `assets/page-BF9gQ5KC.js`; two advancing health probes confirmed both schedulers live with null errors and a closed scanner circuit.

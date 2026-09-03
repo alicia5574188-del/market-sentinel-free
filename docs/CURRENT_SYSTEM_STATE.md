@@ -1,8 +1,8 @@
 # Market Sentinel — Current System State
 
-> **2026-09-03 strategy lifecycle implementation — locally verified, not yet deployed.**
+> **2026-09-03 strategy-family lifecycle brain — deployed and production-verified in PR #109.**
 >
-> The thirteen legacy strategy IDs now map to nine canonical families locally. Same-family variants keep their IDs/history but only the highest-ranked variant remains executable for a symbol/cycle. Every strategy, including HT4, uses the same health, recent-decay, retest, and pause rules. Completed 12-hour post-exit paths receive a final verdict stating the observed profit path or that the trade should have been skipped. No schema, recurring D1 write, risk limit, owner control, fund action, or Durable Object generation changed. Current production remains on the prior behavior until PR/CI/deployment verification completes.
+> The thirteen legacy strategy IDs now map to nine canonical families in production. Same-family variants keep their IDs/history but only the highest-ranked variant remains executable for a symbol/cycle. Every strategy, including HT4, uses the same health, recent-decay, retest, and pause rules; HT4's former freeze is removed and its prior profit is historical evidence only. Completed 12-hour post-exit paths receive a final verdict stating the observed profit path or that the trade should have been skipped. Paper/live lineage remains exact. No schema, recurring D1 write, risk limit, owner control, fund action, or Durable Object generation changed.
 
 > **2026-09-02 D1 daily-write budget correction.**
 >
@@ -14,7 +14,7 @@
 >
 > Gate live directly inherits the chosen paper trade's strategy, learned entry checks, stop, targets, and leverage for every ID in the same thirteen-strategy catalog. Real balance, fees, slippage, contract limits, reconciliation, owner controls, and hard safety are still live-account facts. The system never moves funds or decides funding approval: the owner will fund only after actual positive simulated growth.
 >
-> Paper/live concurrency is five positions with at most three in one direction. Paper total planned stop risk is capped at 20% of equity and one symbol still has at most one open position. New paper sizing targets 8% isolated margin, allows a liquidation-safe fallback up to 35%, and caps adaptive leverage at 50x plus liquidity/volatility/quality/liquidation constraints. HT4's exact decision source remains frozen, but it receives no permanent priority.
+> Paper/live concurrency is five positions with at most three in one direction. Paper total planned stop risk is capped at 20% of equity and one symbol still has at most one open position. New paper sizing targets 8% isolated margin, allows a liquidation-safe fallback up to 35%, and caps adaptive leverage at 50x plus liquidity/volatility/quality/liquidation constraints. PR #109 later removed HT4's source freeze and placed it under the same lifecycle rules as every other strategy.
 
 > **2026-09-02 strategy-research correction (supersedes conflicting strategy-count and paper-margin descriptions below).**
 >
@@ -42,7 +42,7 @@
 >
 > Chat history is discussion context only. Before any future code change, read the current `main` branch, recent merged PRs/commits, CI status, and this file. Never reconstruct production behavior from memory or a missing chat message.
 
-Last reconciled: **2026-09-02**
+Last reconciled: **2026-09-03 04:53 UTC — PR #109 deployed and verified**
 Repository: `alicia5574188-del/market-sentinel-free`  
 Production strategy identity: **Market Sentinel HTE 3.1 Clean**
 

@@ -1,13 +1,13 @@
 # Market Sentinel / Resonance — Quant System Master Handoff
 
-Last reconciled: **2026-09-02 10:51 UTC — PR #105 deployed and verified**
+Last reconciled: **2026-09-03 04:53 UTC — PR #109 deployed and verified**
 Purpose: **the complete continuation entry after deleting all prior chats**
 
 ## 0. Start every new task here
 
 Use this exact starter prompt in a new Project chat:
 
-> Continue the Market Sentinel quantitative system. First read `docs/QUANT_SYSTEM_MASTER_HANDOFF.md`, `AGENTS.md`, `.codex/goal-to-done/GOAL.md`, `STATUS.md`, `DECISIONS.md`, `docs/CURRENT_SYSTEM_STATE.md`, `docs/SENTINEL_CHANGELOG.md`, `docs/RESONANCE_MUST_KEEP_FEATURES.md`, and `docs/STRATEGY_BRAIN_LIFECYCLE_PLAN.md` completely. Then inspect current GitHub `main`, recent merged PRs, CI, and production health. Repository and verified production state override chat memory. Current production still contains the old HT4 fingerprint, but the owner has superseded the freeze for the next implementation: treat HT4 exactly like every other strategy and retain its prior profitability only as history. Keep all strategies in the same paper brain and live-parity lineage, never recreate shadow trade simulation, preserve every Must-Keep feature, and work through a branch/PR/green-CI/production-verification loop.
+> Continue the Market Sentinel quantitative system. First read `docs/QUANT_SYSTEM_MASTER_HANDOFF.md`, `AGENTS.md`, `.codex/goal-to-done/GOAL.md`, `STATUS.md`, `DECISIONS.md`, `docs/CURRENT_SYSTEM_STATE.md`, `docs/SENTINEL_CHANGELOG.md`, `docs/RESONANCE_MUST_KEEP_FEATURES.md`, and `docs/STRATEGY_BRAIN_LIFECYCLE_PLAN.md` completely. Then inspect current GitHub `main`, recent merged PRs, CI, and production health. Repository and verified production state override chat memory. Production groups thirteen historical strategy IDs into nine canonical families, treats HT4 exactly like every other strategy, and retains its prior profitability only as history. Keep all strategies in the same paper brain and live-parity lineage, never recreate shadow trade simulation, preserve every Must-Keep feature, and work through a branch/PR/green-CI/production-verification loop.
 
 Do not reconstruct the system from a chat summary. The authoritative order is:
 
@@ -24,14 +24,15 @@ If any lower source conflicts with a higher source, the higher source wins.
 | --- | --- |
 | Repository | `alicia5574188-del/market-sentinel-free` |
 | Production Worker | `https://market-sentinel-free.alicia5574188.workers.dev` |
-| Production strategy identity | Market Sentinel HTE 3.1 Clean / Resonance V4 unified paper/live parity |
-| Runtime generation | `resonance-v4-unified-paper-live-parity` |
-| Latest deployed feature PR | `#105` |
-| Feature commit | `fa4f38220be829d4bd67f1962f19020aed73d268` |
-| Production merge commit | `1c42379177d32d824b9907f4d04558e502607277` |
-| Final PR CI | Run `33620998469`, job `100217743306`, passed |
-| Merged-main CI | Run `33621133143`, job `100218154250`, passed |
-| Production proof | Asset `assets/page-CLUWv592.js` served unified-paper/live-parity UI; two healthy advancing scheduler probes |
+| Production strategy identity | Market Sentinel HTE 3.1 Clean / Resonance V5 strategy-family lifecycle |
+| Durable Object generation | `resonance-v4-unified-paper-live-parity` (intentionally unchanged) |
+| Dashboard API identity | `resonance-v5-strategy-lifecycle` |
+| Latest deployed feature PR | `#109` |
+| Feature commit | `e31d7521374bab75894f2da67904de51d2a78653` |
+| Production merge commit | `a92a516dd12f960a961814343dc88c9fa33632cf` |
+| Final PR CI | Run `33716373058`, job `100526308099`, passed |
+| Merged-main CI | Run `33716448405`, job `100526529930`, passed |
+| Production proof | Asset `assets/page-BF9gQ5KC.js` served nine-family lifecycle UI; two healthy advancing scheduler probes |
 
 The older remote branch `feat/resonance-strategy-research` contains an earlier divergent experiment and is not production. PR #103 used `feat/resonance-strategy-research-v2`; current `main` is authoritative.
 
@@ -41,7 +42,7 @@ At the final production probe:
 - Position Monitor state `live`; its successful timestamp advanced between probes; `lastError: null`.
 - Market Scanner state `live`; its successful timestamp advanced between probes; `lastError: null`; `circuitOpen: false`.
 - `schedulerError: null`.
-- Immutable client asset `assets/page-CLUWv592.js` contained `统一模拟策略池`, `十三种打法由大脑择优`, and `模拟/实盘同链`.
+- Immutable client asset `assets/page-BF9gQ5KC.js` contained `9 个策略家族由大脑择优` and `SF09`.
 - Cloudflare internal Build ID and Version ID were not exposed by the available surface. They must be queried from Cloudflare in a future authenticated session if needed; never infer them.
 
 ## 2. The current authority model
@@ -64,15 +65,14 @@ The retired Strategy 2.0 / P1–P12 engine remains historical and isolated. Some
 | HT1 | `dennis_trend` | Dennis trend breakout | Paper brain + live parity |
 | HT2 | `raschke_pullback` | Raschke trend pullback | Paper brain + live parity |
 | HT3 | `turtle_soup` | Turtle Soup false breakout | Paper brain + live parity |
-| HT4 | `exhaustion_reversal` | Anti-crowding exhaustion reversal | Paper brain + live parity; current runtime still has legacy fingerprint |
+| HT4 | `exhaustion_reversal` | Anti-crowding exhaustion reversal | Paper brain + live parity; ordinary lifecycle rules |
 | HT5 | `higher_timeframe_swing` | Higher-timeframe structure | Paper brain + live parity |
 
-HT4 current-runtime and next-change rule:
+HT4 production rule after PR #109:
 
-- The exact decision block is protected by SHA-256 regression fingerprint `05adae71b2c1169c441e409d831ceb5acbec1390f5b051a5cb18f7a7af8389a3`.
-- That fingerprint describes current production only. The owner explicitly removed the freeze for the next strategy-brain implementation.
+- The old source fingerprint `05adae71b2c1169c441e409d831ceb5acbec1390f5b051a5cb18f7a7af8389a3` is historical evidence from the previous production policy, not an active protection.
 - HT4 receives no priority, exemption, permanent score, or special tuning protection. Its prior profitable period is historical evidence only.
-- The next implementation must replace the freeze test with equal-treatment and open-position-lineage safety tests. Existing HT4 positions still keep their original lifecycle through deployment.
+- Equal-treatment and router regression tests prevent HT4-specific ranking branches while existing HT4 positions keep their original lifecycle.
 
 ### Unified paper/live catalog — additional strategies
 
@@ -268,6 +268,9 @@ Before any UI, navigation, PWA, account, notification, order, live-control, or p
 | Account-store fault isolation | `dff20cc` / PR #100 | `/api/hte31` viewer path no longer depends on account persistence |
 | Entry Quality and honest memory | `6450fe0` / PR #101 | Entry timing diagnostics, delayed-entry counterfactuals, 8-sample eligibility, graceful refresh degradation |
 | Isolated strategy research router | `599dd81` / PR #103 | HT4 freeze, eight challengers, 64 shadow observations, research router, lower paper margin |
+| Unified paper brain and live parity | `1c42379` / PR #105 | One capital-backed thirteen-strategy pool, five-position limits, exact paper-to-live lineage |
+| D1 daily-write guardrail | `ce60336` / PR #108 | 15-second safety checks with 60-second unchanged checkpoints; 27,360 planned recurring writes/day |
+| Strategy-family lifecycle brain | `a92a516` / PR #109 | Nine canonical families, equal HT4 treatment, health/decay states, final post-exit verdicts |
 
 All of these are cumulative. A future optimization must not remove an earlier milestone merely because the newest strategy work is the current focus.
 
@@ -292,25 +295,25 @@ For every material change:
 9. Verify immutable production assets plus `/__health`; confirm both schedulers advance and have no errors.
 10. Update `.codex/goal-to-done/STATUS.md`, `DECISIONS.md` when consequential, this handoff, `CURRENT_SYSTEM_STATE.md`, and the changelog.
 
-The final PR #103 evidence was:
+The final PR #109 evidence was:
 
-- 204 strategy/risk/migration tests passed.
-- Production build plus 107 UI/Must-Keep tests passed.
+- 217 strategy/risk/migration tests passed.
+- Production build plus 109 UI/Must-Keep tests passed.
 - ESLint passed.
 - TypeScript passed.
 - Wrangler production dry-run passed.
-- PR and merged-main CI passed.
-- Production immutable asset and scheduler health passed.
+- PR CI run `33716373058` and merged-main CI run `33716448405` passed.
+- Production immutable asset `assets/page-BF9gQ5KC.js` and two advancing scheduler probes passed.
 
-## 13. Next optimization objective
+## 13. Current operating objective
 
-The prepared objective is strategy-family consolidation and full lifecycle management. Follow `docs/STRATEGY_BRAIN_LIFECYCLE_PLAN.md`:
+Strategy-family consolidation and lifecycle management are deployed. Follow `docs/STRATEGY_BRAIN_LIFECYCLE_PLAN.md` and collect real capital-backed paper evidence:
 
 - Treat every strategy equally, including HT4, and retain prior profitability as history rather than permanent protection.
-- Group the thirteen legacy IDs into canonical families/variants, then retire only behaviorally proven duplicates while preserving all lineage.
+- Keep the thirteen legacy IDs under the nine canonical families; retire a variant only after behaviorally comparable evidence proves it redundant, while preserving all lineage.
 - Review actual closed-order frequency, expectancy, profit factor, drawdown, stop/TP/timeout composition, direction concentration, five-slot utilization, and recent-vs-lifetime decay.
 - Diagnose repeated losses, strategy/regime starvation, and degradation before changing entry rules or reducing usage.
-- Convert the existing post-exit and counterfactual evidence into an explainable final trade verdict and remediation action.
+- Use the deployed final trade verdict and remediation action after each complete post-exit observation.
 - Keep same-side cooperation and opposite-side conflict explainable; do not auto-switch positions or substitute a lower-ranked strategy after selection.
 - Treat positive simulated growth as evidence for the owner's later funding decision, never as automatic funding approval.
 

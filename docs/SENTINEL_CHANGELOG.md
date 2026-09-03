@@ -11,6 +11,34 @@ Rules:
 
 ---
 
+## 2026-09-03 — Strategy-family lifecycle brain and post-exit verdicts
+
+- Pull request: `#109`
+- Feature commit: `e31d7521374bab75894f2da67904de51d2a78653`
+- Production merge commit: `a92a516dd12f960a961814343dc88c9fa33632cf`
+- Dashboard API identity: `resonance-v5-strategy-lifecycle`
+
+### Changed
+
+- Organized all thirteen legacy strategy IDs into nine canonical families while retaining every strategy ID, historical trade, learning record, review, open-position lifecycle, and Gate lineage.
+- Limited each family to one executable variant per symbol/cycle and kept suppressed family alternatives visible for independent attribution and learning.
+- Added equal lifecycle health for every strategy, including HT4: learning, active, underperforming, degraded, starved, regime-wait, retest, and paused. Prior profitability is historical evidence only and creates no permanent protection or boost.
+- Added recent-versus-baseline decay evidence to routing and a final verdict after the existing 12-hour post-exit observation, including profit path, whether the trade should have existed, and the next remediation action.
+- Added owner-visible family/variant health and exact family/variant labels to paper review and Gate live lineage.
+
+### Deliberately unchanged
+
+- One capital-backed paper account, exact paper-to-live strategy lineage, five-position/three-direction/20%-risk limits, 8% target margin, 35% safe fallback, and adaptive leverage capped at 50x.
+- Existing positions, stop/TP protection, credentials, Auto Live, reconciliation, Emergency Stop, and exchange hard-safety checks.
+- No second simulator, schema migration, Durable Object generation reset, fund transfer, inferred funding approval, or new recurring D1 write. Planned recurring writes remain 27,360/day.
+
+### Verification
+
+- Local strategy/risk suite passed 217/217; production build/UI/Must-Keep suite passed 109/109; ESLint, TypeScript, and diff checks passed.
+- PR CI run `33716373058` / job `100526308099` and merged-main CI run `33716448405` / job `100526529930` passed, including Wrangler production dry-run.
+- Production served immutable asset `assets/page-BF9gQ5KC.js` containing `9 个策略家族由大脑择优` and `SF09`.
+- Two `/__health` probes returned HTTP 200 and `ok: true`; Position Monitor and Market Scanner success timestamps advanced, both remained live, all scheduler errors were null, and the scanner circuit remained closed.
+
 ## 2026-09-02 — D1 daily-write budget and lossless position checkpoints
 
 - Pull request: `#108`
