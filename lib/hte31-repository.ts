@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, lte } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, lte, or } from "drizzle-orm";
 import { getDb } from "../db";
 import {
   hte31Evaluations,
@@ -23,8 +23,9 @@ import {
   isCurrentResonanceTrade,
   resonanceLearningId,
 } from "./resonance-policy-version.ts";
+import { evaluateDirectMarketRisk } from "./direct-market-risk.ts";
 
-const POST_EXIT_HORIZONS = [0, 30, 60, 120, 240, 720] as const;
+export const POST_EXIT_HORIZONS = [0, 30, 60, 120, 240, 480, 720] as const;
 const TRADERS: Hte31TraderId[] = [...HTE31_ALL_TRADER_IDS];
 const LONG_TERM_REVALIDATION_DELAY_MS = 12 * 60 * 60_000;
 const LEARNED_CHALLENGER_MARKER = "LEARNED_CHALLENGER_LIVE_PARITY";
@@ -555,6 +556,9 @@ export async function applyHte31PositionQuote(quote: GatePositionQuote, settings
         dueAt: quote.observedAt + horizonMinutes * 60_000,
         observedAt: null,
         status: "pending",
+        qualityStatus: "PENDING",
+        retryCount: 0,
+        nextRetryAt: null,
         price: null,
         favorablePct: null,
         adversePct: null,
@@ -563,7 +567,11 @@ export async function applyHte31PositionQuote(quote: GatePositionQuote, settings
         candlesJson: "[]",
       }).onConflictDoNothing();
     }
-    await updateLearningAfterClose(trade, netPnlUsdt, excursion.mfe, excursion.mae, quote.observedAt, exitCode, Boolean(target1HitAt));
+    // Direct Market Brain changes only after the full real 12-hour path is
+    // available. Historical strategies keep their original close-time ledger.
+    if (trade.decisionAuthority !== "direct_market_brain") {
+      await updateLearningAfterClose(trade, netPnlUsdt, excursion.mfe, excursion.mae, quote.observedAt, exitCode, Boolean(target1HitAt));
+    }
     return { kind: "closed" as const, tradeId: trade.id, exitCode, exitPrice, netPnlUsdt };
   }
 
@@ -613,11 +621,53 @@ export async function getHte31TradeChart(id: string) {
 
 export async function nextHte31PostExitObservation(now = Date.now()) {
   const [row] = await getDb().select().from(hte31PostExitObservations)
-    .where(and(eq(hte31PostExitObservations.status, "pending"), lte(hte31PostExitObservations.dueAt, now)))
+    .where(and(
+      eq(hte31PostExitObservations.status, "pending"),
+      lte(hte31PostExitObservations.dueAt, now),
+      or(isNull(hte31PostExitObservations.nextRetryAt), lte(hte31PostExitObservations.nextRetryAt, now)),
+    ))
     .orderBy(asc(hte31PostExitObservations.dueAt)).limit(1);
   if (!row) return null;
   const trade = await getHte31Trade(row.tradeId);
   return trade ? { observation: row, trade } : null;
+}
+
+const MAX_POST_EXIT_RETRIES = 4;
+
+async function scheduleHte31PostExitRetry(input: {
+  tradeId: string;
+  horizonMinutes: number;
+  qualityStatus: "STALE" | "UNAVAILABLE";
+  coveragePct: number;
+  lastError: string;
+  candlesJson: string;
+  now: number;
+}) {
+  const db = getDb();
+  const [current] = await db.select({ retryCount: hte31PostExitObservations.retryCount })
+    .from(hte31PostExitObservations)
+    .where(and(
+      eq(hte31PostExitObservations.tradeId, input.tradeId),
+      eq(hte31PostExitObservations.horizonMinutes, input.horizonMinutes),
+    )).limit(1);
+  const retryCount = (current?.retryCount ?? 0) + 1;
+  const terminal = retryCount >= MAX_POST_EXIT_RETRIES;
+  const retryDelayMinutes = Math.min(30, 5 * 2 ** Math.max(0, retryCount - 1));
+  const nextRetryAt = terminal ? null : input.now + retryDelayMinutes * 60_000;
+  await db.update(hte31PostExitObservations).set({
+    observedAt: input.now,
+    status: terminal ? "complete" : "pending",
+    qualityStatus: input.qualityStatus,
+    coveragePct: input.coveragePct,
+    lastError: input.lastError,
+    candlesJson: input.candlesJson,
+    retryCount,
+    nextRetryAt,
+  }).where(and(
+    eq(hte31PostExitObservations.tradeId, input.tradeId),
+    eq(hte31PostExitObservations.horizonMinutes, input.horizonMinutes),
+  ));
+  return { qualityStatus: input.qualityStatus, coveragePct: input.coveragePct, retryScheduled: !terminal, nextRetryAt };
 }
 
 export async function completeHte31PostExitObservation(
@@ -631,10 +681,29 @@ export async function completeHte31PostExitObservation(
   const exitAt = trade.exitAt;
   const exitPrice = trade.exitPrice;
   const db = getDb();
+  const dueAt = exitAt + horizonMinutes * 60_000;
   const rows = candles.filter((candle) => {
     const time = candle.time > 10_000_000_000 ? candle.time : candle.time * 1000;
-    return time >= exitAt;
+    return time >= exitAt && time <= dueAt + 6 * 60_000;
   });
+  const times = [...new Set(rows.map((candle) => candle.time > 10_000_000_000 ? candle.time : candle.time * 1000))].sort((a, b) => a - b);
+  const expected = horizonMinutes === 0 ? 1 : Math.max(1, Math.floor(horizonMinutes / 5));
+  const coveragePct = Math.min(100, times.length / expected * 100);
+  const largestGap = times.slice(1).reduce((largest, time, index) => Math.max(largest, time - times[index]), 0);
+  const reachesHorizon = horizonMinutes === 0 || (times.at(-1) ?? 0) >= dueAt - 6 * 60_000;
+  const qualityReady = rows.length > 0 && coveragePct >= 95 && largestGap <= 7 * 60_000 && reachesHorizon;
+  if (!qualityReady) {
+    const qualityStatus = rows.length ? "STALE" as const : "UNAVAILABLE" as const;
+    return scheduleHte31PostExitRetry({
+      tradeId: trade.id,
+      horizonMinutes,
+      qualityStatus,
+      coveragePct,
+      lastError: rows.length ? `覆盖率 ${coveragePct.toFixed(1)}% 或K线间隔不完整` : "该观察节点没有可验证K线",
+      candlesJson: JSON.stringify(rows.slice(-160)),
+      now,
+    });
+  }
   const high = rows.length ? Math.max(...rows.map((candle) => candle.high)) : exitPrice;
   const low = rows.length ? Math.min(...rows.map((candle) => candle.low)) : exitPrice;
   const currentPrice = rows.at(-1)?.close ?? exitPrice;
@@ -667,6 +736,10 @@ export async function completeHte31PostExitObservation(
   await db.update(hte31PostExitObservations).set({
     observedAt: now,
     status: "complete",
+    qualityStatus: "READY",
+    coveragePct,
+    lastError: null,
+    nextRetryAt: null,
     price: currentPrice,
     favorablePct,
     adversePct,
@@ -705,6 +778,18 @@ export async function completeHte31PostExitObservation(
     updatedAt: now,
   }).where(eq(hte31Trades.id, trade.id));
 
+  if (complete && trade.decisionAuthority === "direct_market_brain") {
+    await updateLearningAfterClose(
+      trade,
+      trade.netPnlUsdt ?? 0,
+      trade.mfePct ?? 0,
+      trade.maePct ?? 0,
+      now,
+      trade.exitCode ?? "timeout",
+      Boolean(trade.target1HitAt),
+    );
+  }
+
   if (complete) {
     const learningId = resonanceLearningId(trade.traderId, trade.assetRegime, trade.side, trade.entryAt);
     const [learning] = await db.select().from(hte31Learning).where(eq(hte31Learning.id, learningId)).limit(1);
@@ -715,6 +800,24 @@ export async function completeHte31PostExitObservation(
       }).where(eq(hte31Learning.id, learningId));
     }
   }
+  return { qualityStatus: "READY" as const, coveragePct };
+}
+
+export async function markHte31PostExitObservationUnavailable(
+  tradeId: string,
+  horizonMinutes: number,
+  error: unknown,
+  now = Date.now(),
+) {
+  return scheduleHte31PostExitRetry({
+    tradeId,
+    horizonMinutes,
+    qualityStatus: "UNAVAILABLE",
+    coveragePct: 0,
+    lastError: error instanceof Error ? error.message.slice(0, 500) : "K线读取失败",
+    candlesJson: "[]",
+    now,
+  });
 }
 
 export async function getHte31Dashboard(now = Date.now()) {
@@ -734,6 +837,12 @@ export async function getHte31Dashboard(now = Date.now()) {
   const tenMinute = evaluations.filter((row) => now - row.observedAt <= 10 * 60_000);
   const grossProfit = closed.reduce((sum, row) => sum + Math.max(0, row.netPnlUsdt ?? 0), 0);
   const grossLoss = Math.abs(closed.reduce((sum, row) => sum + Math.min(0, row.netPnlUsdt ?? 0), 0));
+  const directRisk = evaluateDirectMarketRisk(closed
+    .filter((row) => row.decisionAuthority === "direct_market_brain" && row.postExitStatus === "complete")
+    .map((row) => ({
+      independentEventKey: row.independentEventKey ?? row.id,
+      resultR: row.riskBudgetUsdt > 0 ? (row.netPnlUsdt ?? 0) / row.riskBudgetUsdt : 0,
+    })));
   return {
     account,
     trades: rows.slice(0, 100),
@@ -747,6 +856,7 @@ export async function getHte31Dashboard(now = Date.now()) {
     })),
     learning,
     governance,
+    directRisk,
     activity: {
       symbols: new Set(tenMinute.map((row) => row.symbol)).size,
       evaluations: tenMinute.length,

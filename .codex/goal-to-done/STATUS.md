@@ -1,5 +1,30 @@
 # Status
 
+## Direct Market Brain — implementation verified, release in progress
+
+- Branch `prep/direct-market-brain` now implements the single `direct_market_brain` new-entry authority over a dynamic top-fifteen Gate USDT-perpetual universe, a rotating six-symbol deep pool, cross-market ranking, correlation-cluster blocking, and a three-position maximum.
+- Every accepted paper order locks its location, three paths, direction, entry zone, structural invalidation, targets, risk state, portfolio checks, universe, and brain version in one immutable decision snapshot. Gate live eligibility requires that exact simulated snapshot and remains owner-controlled; no funding or live activation was performed.
+- Old thirteen-strategy IDs and records remain readable history but are absent from the scanner and new-entry path. The daily UI now shows the direct market decision and top-fifteen radar while retaining the five main tabs, order economics/review, owner controls, and independent scroll-to-top behavior.
+- Every close creates real `0/30/60/120/240/480/720`-minute observations. Incomplete or unavailable Kline windows get bounded exponential retry, retain explicit quality state, and never update learning; only a READY 720-minute path updates direct-brain evidence.
+- Scanner/evaluation/diagnostic D1 writes are zero. The index-adjusted app budget remains capped at 30,000 rows/day, new orders stop at the 22,000 admission line including lifecycle reserve, and the account-wide release threshold remains 65,000 of the 100,000 free allowance.
+- Local gates passed: 224/224 strategy/risk/migration tests, 110/110 production/UI/safety tests, direct-brain focused tests, full migration replay, TypeScript, ESLint (warnings only), production build, and `git diff --check`.
+- Updated UTC: 2026-09-03T18:58:34Z.
+- Next action: commit, push, apply additive D1 migration, deploy, and verify production health/API/runtime identity.
+
+## Direct Market Brain — upgrade preparation complete
+
+- Preparation branch: `prep/direct-market-brain`, based on current `origin/main` `64166992319e7036fbac7cbe07fd7140aa7c5441` (merged PR #111).
+- Frozen implementation/release contract: `docs/DIRECT_MARKET_BRAIN_UPGRADE_PLAN.md`.
+- New-order target authority is one deterministic direct market brain: dynamic fifteen-coin volume universe, all-candidate light scan, six-candidate cross-cluster deep scan, location/direction/target/invalidation judgment, and cross-coin portfolio selection.
+- Capacity is fixed at no more than three total positions from the fifteen candidates, never forced full; one symbol/position, and any same-direction combination must pass correlation-cluster and portfolio stress checks.
+- Raw 2/4/6-order loss streak rules are superseded: correlated overlapping orders count as one independent event, immediate account drawdown reduces exposure without rewriting the model, and 12-hour-complete evidence controls version changes. New authority starts at calibration risk and earns higher risk only from forward evidence.
+- Every close must complete seven real post-exit checkpoints through 12 hours before it can affect versioned learning. Old thirteen-strategy records remain historical only and cannot control new entries.
+- D1 audit found the old 27,360 estimate omitted index writes: the legacy path can conservatively reach 105,120 billed rows/day. The prepared replacement makes all fifteen-coin scanner/diagnostic writes zero, reserves at most 30,000 index-adjusted rows/day for this app, stops new-order admission at 22,000 including future obligations, and requires account-wide production metrics below 65,000.
+- Prebuilt budget contract and passing test: `lib/direct-market-d1-budget.ts` and `tests/direct-market-d1-budget.test.ts` (3/3).
+- One-pass implementation map, type contracts, exact file routing, staged tests and release checks: `docs/DIRECT_MARKET_BRAIN_EXECUTION_PACK.md`. Target formal model-active time is 75–105 minutes and total implementation-to-production time is 105–150 minutes, excluding external service delay.
+- No runtime code, production behavior, current position, strategy/risk rule, Gate control, funds, database row, or Durable Object generation changed during preparation.
+- Next action: after allowance reset, start from `docs/DIRECT_MARKET_BRAIN_EXECUTION_PACK.md` with `GPT-5.6 Sol 极高`, implement each prepared layer, run one final full suite, then CI/deploy/production/D1 verification.
+
 ## Strategy Center and historical memory — locally complete
 
 - Started from current `origin/main` plus the reviewed preparation commits.
@@ -29,7 +54,7 @@
 - Added equal health states for every strategy, including HT4: learning, active, underperforming, degraded, starved, regime-wait, retest, and paused. Recent decay now reduces router evidence score; no strategy has a freeze or permanent advantage.
 - Added a final closed-order verdict after the existing 12-hour observer completes: valid trade, no-trade, wrong direction, early/late entry, early/late exit, risk-plan mismatch, or insufficient evidence. The verdict states the best observed profit path and whether the exact trade should have existed.
 - Added nine-family health/action UI, exact family/variant labels on paper and live lineage, and retained all thirteen variants in the same capital-backed paper brain.
-- No D1 schema/migration or recurring write was added. Planned recurring writes remain 27,360/day, below the 60,000 project ceiling and 100,000 free allowance.
+- No D1 schema/migration or recurring write was added. PR #109 historically reported 27,360 logical rows/day; the later Direct Market Brain audit found that figure omitted billed index writes and supersedes it for quota decisions.
 - Local verification: strategy/risk 217/217; production build/UI/Must-Keep 109/109; ESLint, TypeScript, and `git diff --check` passed.
 - PR CI run `33716373058` / job `100526308099` and merged-main CI run `33716448405` / job `100526529930` passed, including Wrangler production dry-run.
 - Production served immutable asset `assets/page-BF9gQ5KC.js` with the nine-family lifecycle UI. Two advancing `/__health` probes returned `ok: true`; both schedulers stayed live, all errors were null, and the scanner circuit stayed closed.
@@ -38,7 +63,7 @@
 
 - Active paper positions remain evaluated every 15 seconds; unchanged holding telemetry now persists every 60 seconds.
 - TP1 protection, stop, TP2, timeout, close, learning, and recovery writes remain immediate.
-- Regression-tested recurring budget at the configured maximum: 27,360 rows/day, leaving 72,640 rows beneath the 100,000 free daily allowance.
+- PR #108 regression-tested 27,360 logical rows/day at the configured maximum. The later index-aware audit supersedes its claimed headroom because D1 also bills written index entries.
 - Future upgrades must keep planned recurring writes at or below 60,000 rows/day and update the budget test when adding any D1 write path.
 - Local verification: strategy/risk 208/208; production/UI/Must-Keep 109/109; ESLint, TypeScript, build, and `git diff --check` passed.
 

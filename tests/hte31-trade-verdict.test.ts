@@ -18,6 +18,8 @@ const counterfactual: Hte31CounterfactualReport = {
   generatedAt: 1,
   horizons: [{ minutes: 240, observedAt: 1, originalR: -1, oppositeR: 0.9 }],
   reversals: [],
+  noTradeR: 0,
+  delayedEntries: [],
   summary: "test",
 };
 

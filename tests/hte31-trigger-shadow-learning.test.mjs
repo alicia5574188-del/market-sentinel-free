@@ -4,6 +4,7 @@ import test from "node:test";
 
 const diagnostics = await readFile(new URL("../lib/hte31-diagnostics.ts", import.meta.url), "utf8");
 const scanner = await readFile(new URL("../lib/hte31-scanner.ts", import.meta.url), "utf8");
+const worker = await readFile(new URL("../worker/hte31-workers.ts", import.meta.url), "utf8");
 const route = await readFile(new URL("../app/api/hte31/route.ts", import.meta.url), "utf8");
 const migration = await readFile(new URL("../drizzle/0013_hte31_trigger_shadow_learning.sql", import.meta.url), "utf8");
 const engine = await readFile(new URL("../lib/hte31-human-trader-engine.ts", import.meta.url), "utf8");
@@ -24,7 +25,7 @@ test("HTE 3.1 diagnoses trigger failures without loosening formal entry gates", 
   assert.match(engine, /input\.volumeUsd >= 30_000_000/);
 });
 
-test("the current cycle has no simulation-inside-simulation and uses actual paper evidence", () => {
+test("the direct market cycle has no simulation-inside-simulation and opens only one paper order", () => {
   const cycle = diagnostics.slice(
     diagnostics.indexOf("export async function recordHte31DiagnosticCycle"),
     diagnostics.indexOf("function paperMaximumDrawdownR"),
@@ -33,11 +34,11 @@ test("the current cycle has no simulation-inside-simulation and uses actual pape
   assert.match(diagnostics, /async function buildPaperRouterEvidence/);
   assert.match(diagnostics, /\.from\(hte31Trades\)/);
   assert.match(diagnostics, /isCurrentResonanceTrade/);
-  const diagnosticIndex = scanner.indexOf("recordHte31DiagnosticCycle(packet, signals, activePosition)");
-  const openIndex = scanner.indexOf("tryOpenResonanceTrade(packet, signals, job.candles, job.settings, job.market, job.marketView, job.review, router)");
-  assert.ok(diagnosticIndex >= 0, "scanner must build paper-order router evidence");
-  assert.ok(openIndex > diagnosticIndex, "brain selection must precede paper execution");
-  assert.match(scanner.slice(diagnosticIndex, openIndex), /catch \(error\)/, "diagnostic failure must not block the formal trading path");
+  assert.match(scanner, /buildDirectMarketCandidate/);
+  assert.doesNotMatch(scanner, /recordHte31DiagnosticCycle|tryOpenResonanceTrade|createShadowSample/);
+  const rankIndex = worker.indexOf("freshReady.length >= 3");
+  const openIndex = worker.indexOf("openDirectMarketTrade({", rankIndex);
+  assert.ok(rankIndex >= 0 && openIndex > rankIndex, "cross-market selection must precede the single paper execution path");
 });
 
 test("dashboard keeps cognitive diagnostics on demand instead of repeating implementation copy", () => {

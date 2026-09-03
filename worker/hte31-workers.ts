@@ -8,6 +8,7 @@ import {
   applyHte31PositionQuote,
   completeHte31PostExitObservation,
   listHte31OpenTrades,
+  markHte31PostExitObservationUnavailable,
   nextHte31PostExitObservation,
 } from "../lib/hte31-repository";
 import {
@@ -18,26 +19,28 @@ import {
   type Hte31ScanJob,
 } from "../lib/hte31-scanner";
 import { getSettings } from "../lib/settings-repository";
+import { openDirectMarketTrade } from "../lib/direct-market-execution";
 import type { SchedulerWorkerStatus } from "../lib/background-scheduler";
-import type { ResonanceMarketMemory } from "../lib/resonance-market";
+import type { DirectMarketCandidate, DirectMarketRadarItem } from "../lib/direct-market-types";
 import type { CloudflareEnv } from "./index";
 
 // This generation bump resets only Durable Object scheduler/checkpoint state.
 // D1 trades, learning, simulation epochs, live credentials and live-order
 // lineage remain untouched.
-const CLEAN_RUNTIME_VERSION = "resonance-v4-unified-paper-live-parity";
-const SCANNER_CYCLE_INTERVAL_MS = 60_000;
+const CLEAN_RUNTIME_VERSION = "direct-market-brain-v1";
+const SCANNER_CYCLE_INTERVAL_MS = 25_000;
 const TRADE_MANAGER_ACTIVE_INTERVAL_MS = 15_000;
 const TRADE_MANAGER_IDLE_INTERVAL_MS = 60_000;
 const TRADE_MANAGER_ACTIVE_HEARTBEAT_MS = 60_000;
 const TRADE_MANAGER_IDLE_HEARTBEAT_MS = 5 * 60_000;
 
 type ScannerRuntime = {
-  version: 2;
+  version: 3;
   rotationOffset: number;
   job: Hte31ScanJob | null;
   readModel: Hte31ScanCompleted | null;
-  memoryBySymbol?: Record<string, ResonanceMarketMemory>;
+  directBySymbol?: Record<string, Omit<DirectMarketCandidate, "candles5m">>;
+  directHistory?: { symbol: string; observedAt: number; referencePrice: number | null; location: string; decision: string; paths: DirectMarketCandidate["paths"]; riskClusterId: string }[];
   status: SchedulerWorkerStatus;
 };
 
@@ -58,11 +61,12 @@ function baseStatus(): SchedulerWorkerStatus {
 
 function baseScannerRuntime(): ScannerRuntime {
   return {
-    version: 2,
+    version: 3,
     rotationOffset: 0,
     job: null,
     readModel: null,
-    memoryBySymbol: {},
+    directBySymbol: {},
+    directHistory: [],
     status: baseStatus(),
   };
 }
@@ -80,9 +84,27 @@ function initialize(env: CloudflareEnv) {
   setRuntimeBindings(env);
 }
 
-function rememberMarketMemory(runtime: ScannerRuntime, symbol: string, memory: ResonanceMarketMemory) {
-  const entries = Object.entries(runtime.memoryBySymbol ?? {}).filter(([key]) => key !== symbol).slice(-31);
-  return Object.fromEntries([...entries, [symbol, memory]]);
+function withoutCandles(candidate: DirectMarketCandidate): Omit<DirectMarketCandidate, "candles5m"> {
+  const { candles5m: _candles, ...compact } = candidate;
+  return compact;
+}
+
+function buildDirectRadar(result: Hte31ScanCompleted, directBySymbol: Record<string, Omit<DirectMarketCandidate, "candles5m">>): DirectMarketRadarItem[] {
+  const now = Date.now();
+  return result.universe.slice(0, 15).map((row, index) => {
+    const candidate = directBySymbol[row.symbol] ?? null;
+    const freshCandidate = candidate && now - candidate.observedAt <= 3 * 60_000 ? candidate : null;
+    return {
+      symbol: row.symbol,
+      observedAt: freshCandidate?.observedAt ?? result.observedAt,
+      volumeRank: index + 1,
+      volumeUsd: row.volumeUsd,
+      changePercentage: row.changePercentage,
+      scanStage: freshCandidate ? "DEEP" : "LIGHT",
+      freshness: freshCandidate ? (now - freshCandidate.observedAt <= 90_000 ? "FRESH" : "STALE") : "FRESH",
+      candidate: freshCandidate,
+    };
+  });
 }
 
 class Hte31ScanSliceError extends Error {
@@ -193,9 +215,6 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
     if (job.rotationOffset !== runtime.rotationOffset) {
       job = createHte31ScanJob(runtime.rotationOffset, runtime.readModel?.market ?? null);
     }
-    if (job.phase === "candles" && job.target && job.previousMemory === undefined) {
-      job = { ...job, previousMemory: runtime.memoryBySymbol?.[job.target.symbol] ?? null };
-    }
 
     if (previous.circuitOpen && previous.retryAfter && previous.retryAfter <= now) {
       job = {
@@ -286,7 +305,42 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
         return status;
       }
 
-      const result = step.result;
+      let result = step.result;
+      const activeSymbols = new Set(result.universe.slice(0, 15).map((row) => row.symbol));
+      const directBySymbol = Object.fromEntries([
+        ...Object.entries(runtime.directBySymbol ?? {}).filter(([symbol]) => activeSymbols.has(symbol)),
+        [result.directCandidate.symbol, withoutCandles(result.directCandidate)] as const,
+      ]);
+      const directHistory = [{
+        symbol: result.directCandidate.symbol,
+        observedAt: result.directCandidate.observedAt,
+        referencePrice: result.directCandidate.entryZone ? (result.directCandidate.entryZone[0] + result.directCandidate.entryZone[1]) / 2 : result.packet.market.futuresPrice,
+        location: result.directCandidate.location,
+        decision: result.directCandidate.decision,
+        paths: result.directCandidate.paths,
+        riskClusterId: result.directCandidate.riskClusterId,
+      }, ...(runtime.directHistory ?? [])].slice(0, 512);
+      const freshReady = Object.values(directBySymbol)
+        .filter((candidate) => Date.now() - candidate.observedAt <= 3 * 60_000 && candidate.decision !== "WAIT")
+        .sort((a, b) => b.netEdgeR - a.netEdgeR || b.confidence - a.confidence || a.volumeRank - b.volumeRank);
+      const portfolioRank = freshReady.findIndex((candidate) => candidate.symbol === result.directCandidate.symbol) + 1;
+      if (freshReady.length >= 3 && portfolioRank > 0 && portfolioRank <= 3) {
+        const opened = await openDirectMarketTrade({
+          candidate: result.directCandidate,
+          universe: result.universe.map((row) => row.symbol),
+          settings: await getSettings(),
+          portfolioRank,
+        });
+        result = { ...result, openedTradeId: opened.opened?.id ?? null, openReason: opened.reason };
+      } else if (result.directCandidate.decision !== "WAIT") {
+        result = {
+          ...result,
+          openReason: freshReady.length < 3
+            ? `候选池 ${freshReady.length}/3，等待横向比较`
+            : `当前组合排名 ${portfolioRank || ">3"}，本轮不进入前三`,
+        };
+      }
+      const readModel = { ...result, directRadar: buildDirectRadar(result, directBySymbol) };
       const nextRunAt = Date.now() + this.intervalMs;
       const status: SchedulerWorkerStatus = {
         state: "live",
@@ -306,8 +360,9 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
         ...runtime,
         rotationOffset: runtime.rotationOffset + 1,
         job: null,
-        readModel: result,
-        memoryBySymbol: rememberMarketMemory(runtime, result.target, result.memory),
+        readModel,
+        directBySymbol,
+        directHistory,
         status,
       });
       await this.ctx.storage.setAlarm(nextRunAt);
@@ -434,6 +489,7 @@ export class HTE31TradeManager extends DurableObject<CloudflareEnv> {
           await completeHte31PostExitObservation(due.trade, due.observation.horizonMinutes, candles, settings.roundTripCostBps, Date.now());
           refreshed += 1;
         } catch (error) {
+          await markHte31PostExitObservationUnavailable(due.trade.id, due.observation.horizonMinutes, error, Date.now());
           failures.push(`post-exit ${due.trade.symbol}: ${errorMessage(error)}`);
         }
       }

@@ -1,13 +1,13 @@
 # Market Sentinel / Resonance — Quant System Master Handoff
 
-Last reconciled: **2026-09-03 04:53 UTC — PR #109 deployed and verified**
+Last reconciled: **2026-09-03 — current main includes PR #111; Direct Market Brain upgrade prepared, not deployed**
 Purpose: **the complete continuation entry after deleting all prior chats**
 
 ## 0. Start every new task here
 
 Use this exact starter prompt in a new Project chat:
 
-> Continue the Market Sentinel quantitative system. First read `docs/QUANT_SYSTEM_MASTER_HANDOFF.md`, `AGENTS.md`, `.codex/goal-to-done/GOAL.md`, `STATUS.md`, `DECISIONS.md`, `docs/CURRENT_SYSTEM_STATE.md`, `docs/SENTINEL_CHANGELOG.md`, `docs/RESONANCE_MUST_KEEP_FEATURES.md`, and `docs/STRATEGY_BRAIN_LIFECYCLE_PLAN.md` completely. Then inspect current GitHub `main`, recent merged PRs, CI, and production health. Repository and verified production state override chat memory. Production groups thirteen historical strategy IDs into nine canonical families, treats HT4 exactly like every other strategy, and retains its prior profitability only as history. Keep all strategies in the same paper brain and live-parity lineage, never recreate shadow trade simulation, preserve every Must-Keep feature, and work through a branch/PR/green-CI/production-verification loop.
+> Continue the Market Sentinel quantitative system. First read `docs/QUANT_SYSTEM_MASTER_HANDOFF.md`, `AGENTS.md`, `.codex/goal-to-done/GOAL.md`, `STATUS.md`, `DECISIONS.md`, `docs/CURRENT_SYSTEM_STATE.md`, `docs/SENTINEL_CHANGELOG.md`, `docs/RESONANCE_MUST_KEEP_FEATURES.md`, `docs/DIRECT_MARKET_BRAIN_UPGRADE_PLAN.md`, and `docs/DIRECT_MARKET_BRAIN_EXECUTION_PACK.md` completely. Then inspect current GitHub `main`, recent merged PRs, CI, and production health. Repository and verified production state override chat memory. Implement the prepared Direct Market Brain as the only new-order authority: dynamically light-scan the fifteen highest-volume eligible Gate USDT perpetuals, deep-scan six across correlation clusters, select at most three qualified portfolio-safe positions, complete a real 12-hour post-exit observation before learning, preserve old strategy data only as history, maintain exact paper-to-live decision lineage, preserve every Must-Keep feature, and work through a branch/PR/green-CI/production-verification loop. Enforce the index-adjusted D1 30,000 app budget, 22,000 new-order admission line, and 65,000 account safety line. Never move funds or infer funding approval.
 
 Do not reconstruct the system from a chat summary. The authoritative order is:
 
@@ -36,6 +36,8 @@ If any lower source conflicts with a higher source, the higher source wins.
 
 The older remote branch `feat/resonance-strategy-research` contains an earlier divergent experiment and is not production. PR #103 used `feat/resonance-strategy-research-v2`; current `main` is authoritative.
 
+Current repository main is `64166992319e7036fbac7cbe07fd7140aa7c5441` (PR #111, resilient Strategy Center). The older PR #109 rows above remain the last independently recorded production commit/CI proof in this handoff; verify the current Worker version before claiming an exact production SHA.
+
 At the final production probe:
 
 - `ok: true`, mode `cloudflare-free`.
@@ -44,6 +46,23 @@ At the final production probe:
 - `schedulerError: null`.
 - Immutable client asset `assets/page-BF9gQ5KC.js` contained `9 个策略家族由大脑择优` and `SF09`.
 - Cloudflare internal Build ID and Version ID were not exposed by the available surface. They must be queried from Cloudflare in a future authenticated session if needed; never infer them.
+
+## Prepared successor — Direct Market Brain
+
+`docs/DIRECT_MARKET_BRAIN_UPGRADE_PLAN.md` is the frozen next implementation and release contract. It supersedes the strategy-family architecture **for new orders only** after a verified deployment:
+
+- one deterministic, replayable brain judges current location, direction, structural target, invalidation, net expectancy, and `WAIT` directly;
+- each rolling batch light-scans the fifteen eligible Gate USDT perpetuals with the highest confirmed 24-hour quote volume, deep-scans six across correlation clusters, and selects at most three qualified portfolio-safe positions; three is a ceiling, never a quota;
+- one position per symbol, normally at most two in one direction, with correlation-aware portfolio risk; existing positions above three are protected rather than force-closed;
+- HT1–HT9/family/variant fields remain immutable history for old orders but cannot vote, emit candidates, provide fallbacks, or control new-order eligibility;
+- every close receives real `0/30/60/120/240/480/720`-minute observation, and only complete valid 12-hour evidence can modify a versioned rule;
+- simulation remains the only learning/selection environment and Gate only inherits an actual simulated decision snapshot; no fund movement or owner-approval inference;
+- correlated overlapping orders from one market move count as one independent performance event; immediate account protection is separate from 12-hour-complete model learning, and the new brain must earn higher risk through calibration and validation;
+- the daily UI becomes fifteen-coin market judgment, decision, orders, review, and parity rather than a strategy catalog, while all five tabs and Must-Keep controls remain;
+- the old 27,360 logical-row budget is invalid because it omitted index writes; its conservative billed-row upper bound is 105,120/day;
+- all scanner/diagnostic D1 writes become zero, the app receives a 30,000 index-adjusted hard budget, new-order admission stops at 22,000 including committed lifecycle rows, and deployment must prove account-wide usage below 65,000/day.
+
+Preparation branch: `prep/direct-market-brain`, based on current main. `lib/direct-market-d1-budget.ts` plus its passing unit test and `docs/DIRECT_MARKET_BRAIN_EXECUTION_PACK.md` are prebuilt but not connected to production. Runtime behavior remains unchanged until the full implementation, tests, CI, deploy, and production verification all pass.
 
 ## 2. The current authority model
 

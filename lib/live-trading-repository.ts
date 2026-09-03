@@ -11,7 +11,11 @@ import {
 import type { EncryptedGateCredentials } from "./credential-vault";
 import { liveEntryCandidateCutoff } from "./live-entry-freshness";
 import { evaluateLivePerformanceGate } from "./live-performance-gate";
-import { HTE31_ALL_TRADER_IDS } from "./hte31-strategy-catalog";
+import {
+  DIRECT_MARKET_AUTHORITY,
+  DIRECT_MARKET_BRAIN_VERSION,
+  type DirectBrainDecisionSnapshot,
+} from "./direct-market-types";
 
 export type LiveCredentialRecord = typeof liveExchangeCredentials.$inferSelect;
 export type LiveControlRecord = typeof liveTradingControl.$inferSelect;
@@ -27,7 +31,7 @@ export type LiveLinkedTrade = {
 };
 
 const ACTIVE_LIVE_STATES: LiveOrderState[] = ["submitting", "open", "protected", "closing"];
-const HTE31_LIVE_PARITY_TRADERS = new Set<string>(HTE31_ALL_TRADER_IDS);
+const HTE31_LIVE_PARITY_TRADERS = new Set<string>(["direct_market_brain"]);
 const LEGACY_RAW_EQUITY_LOCK = /Gate 权益较实盘峰值回撤/;
 const ENTRY_EQUITY_SNAPSHOT_EVENT = "entry_equity_snapshot";
 const MIN_VALID_EQUITY_BASELINE_USDT = 0.01;
@@ -47,11 +51,28 @@ function validEquityBaseline(value: unknown): value is number {
 async function requireHte31Candidate(tradeId: string) {
   const [trade] = await getDb().select({
     id: hte31Trades.id,
+    symbol: hte31Trades.symbol,
     traderId: hte31Trades.traderId,
     entryTrigger: hte31Trades.entryTrigger,
+    decisionAuthority: hte31Trades.decisionAuthority,
+    brainVersion: hte31Trades.brainVersion,
+    decisionSnapshotJson: hte31Trades.decisionSnapshotJson,
   }).from(hte31Trades).where(eq(hte31Trades.id, tradeId)).limit(1);
   if (!trade) throw new Error("HTE 3.1 实盘候选已不存在，禁止创建 Gate 订单");
-  if (!HTE31_LIVE_PARITY_TRADERS.has(trade.traderId)) throw new Error("该策略不属于当前统一模拟/实盘策略目录，禁止创建 Gate 订单");
+  if (!HTE31_LIVE_PARITY_TRADERS.has(trade.traderId) || !trade.entryTrigger.startsWith("DIRECT_MARKET_BRAIN")) {
+    throw new Error("该订单不是市场大脑已锁定的模拟决策，禁止创建 Gate 订单");
+  }
+  const snapshot = parseJson<Partial<DirectBrainDecisionSnapshot>>(trade.decisionSnapshotJson, {});
+  if (
+    trade.decisionAuthority !== DIRECT_MARKET_AUTHORITY
+    || trade.brainVersion !== DIRECT_MARKET_BRAIN_VERSION
+    || snapshot.authority !== DIRECT_MARKET_AUTHORITY
+    || snapshot.brainVersion !== DIRECT_MARKET_BRAIN_VERSION
+    || snapshot.selectedSymbol !== trade.symbol
+    || snapshot.candidate?.symbol !== trade.symbol
+  ) {
+    throw new Error("模拟决策快照不完整或版本不一致，禁止创建 Gate 订单");
+  }
   return trade;
 }
 
@@ -278,7 +299,7 @@ export async function listLiveEntryCandidates(enabledAt: number, now = Date.now(
     eq(hte31Trades.status, "holding"),
     gte(hte31Trades.entryAt, liveEntryCandidateCutoff(enabledAt, now)),
   )).orderBy(desc(hte31Trades.entryAt)).limit(20);
-  const liveEligibleRows = rows;
+  const liveEligibleRows = rows.filter((row) => row.decisionAuthority === "direct_market_brain" && row.brainVersion === "direct-market-brain-v1");
   if (!liveEligibleRows.length) return [];
   const existing = await db.select({ tradeCaseId: liveOrders.tradeCaseId }).from(liveOrders).where(inArray(liveOrders.tradeCaseId, liveEligibleRows.map((row) => row.id)));
   const claimed = new Set(existing.map((row) => row.tradeCaseId));

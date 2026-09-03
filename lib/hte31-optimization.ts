@@ -3,6 +3,7 @@ import { getDb } from "../db";
 import { hte31Trades } from "../db/hte31-schema";
 import { getHte31Diagnostics } from "./hte31-diagnostics";
 import { buildHte31OptimizationAnalysis } from "./hte31-optimization-core";
+import { HTE31_ALL_TRADER_IDS } from "./hte31-strategy-catalog";
 
 export { buildHte31OptimizationAnalysis, summarizeHte31TradeGroup } from "./hte31-optimization-core";
 export type { Hte31OptimizationTrade } from "./hte31-optimization-core";
@@ -12,7 +13,8 @@ export async function getHte31OptimizationReport(now = Date.now()) {
     getDb().select().from(hte31Trades).where(eq(hte31Trades.status, "closed")).orderBy(desc(hte31Trades.exitAt)).limit(500),
     getHte31Diagnostics(now),
   ]);
-  const analysis = buildHte31OptimizationAnalysis(rows);
+  const legacyIds = new Set<string>(HTE31_ALL_TRADER_IDS);
+  const analysis = buildHte31OptimizationAnalysis(rows.filter((row) => legacyIds.has(row.traderId)) as Parameters<typeof buildHte31OptimizationAnalysis>[0]);
   const frequency = Object.fromEntries(Object.entries(diagnostics.windows.h6.traders).map(([traderId, row]) => [traderId, {
     evaluations: row.evaluations,
     ready: row.ready,

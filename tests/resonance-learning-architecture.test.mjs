@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [review, trading, scanner, exchange, memory, sizing, execution, globalMarket, worker, policyVersion, liveRepository] = await Promise.all([
+const [review, trading, scanner, exchange, memory, sizing, execution, globalMarket, worker, policyVersion, liveRepository, directBrain, directExecution] = await Promise.all([
   readFile(new URL("../lib/resonance-review.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/resonance-trading.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/hte31-scanner.ts", import.meta.url), "utf8"),
@@ -14,6 +14,8 @@ const [review, trading, scanner, exchange, memory, sizing, execution, globalMark
   readFile(new URL("../worker/hte31-workers.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/resonance-policy-version.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/live-trading-repository.ts", import.meta.url), "utf8"),
+  readFile(new URL("../lib/direct-market-brain.ts", import.meta.url), "utf8"),
+  readFile(new URL("../lib/direct-market-execution.ts", import.meta.url), "utf8"),
 ]);
 
 test("every closed Resonance trade gets an immediate autopsy instead of waiting for five", () => {
@@ -61,13 +63,12 @@ test("learned behavior changes remain in the direct paper-to-live lineage", () =
   assert.doesNotMatch(liveRepository, /PAPER_REVALIDATION_ONLY/);
 });
 
-test("entry quality records deterministic timing diagnostics without changing live risk", () => {
+test("entry quality remains historical while direct decisions lock deterministic live parity", () => {
   assert.match(review, /buildResonanceEntryQuality/);
   assert.match(review, /entryQualityJson/);
-  assert.match(trading, /同打法同环境增加回踩确认/);
-  assert.match(trading, /openResonancePaperTrade/);
-  assert.match(execution, /COGNITIVE_ADAPTATION/);
-  assert.match(liveRepository, /HTE31_ALL_TRADER_IDS/);
+  assert.match(directExecution, /DirectBrainDecisionSnapshot/);
+  assert.match(directExecution, /decisionSnapshotJson: JSON\.stringify\(snapshot\)/);
+  assert.match(liveRepository, /snapshot\.brainVersion !== DIRECT_MARKET_BRAIN_VERSION/);
 });
 
 test("whole-market state has inertia and a direct bull-bear flip requires stronger confirmation", () => {
@@ -81,9 +82,9 @@ test("whole-market state has inertia and a direct bull-bear flip requires strong
 
 test("whole market and current-symbol judgment are separate decision layers", () => {
   assert.match(scanner, /buildResonanceGlobalMarket/);
-  assert.match(scanner, /buildResonanceMarketView/);
-  assert.match(scanner, /tryOpenResonanceTrade\(packet, signals, job\.candles, job\.settings, job\.market, job\.marketView, job\.review, router\)/);
-  assert.match(trading, /Whole-market structure and the current symbol are separate layers/);
+  assert.match(scanner, /buildDirectMarketCandidate/);
+  assert.match(directBrain, /location\(candles, price\)/);
+  assert.match(directBrain, /trend4h \* 0\.34 \+ trend1h \* 0\.27 \+ trend15m \* 0\.16/);
 });
 
 test("cognitive directives can alter direction entry routing and exit space without widening hard risk", () => {
@@ -103,13 +104,13 @@ test("old HTE losses remain historical but current policy identity stays version
   assert.doesNotMatch(policyVersion, /DELETE|UPDATE|migration/i);
 });
 
-test("historical memory still rejects overlapping duplicate episodes", () => {
+test("legacy historical memory remains truthful but cannot authorize direct-brain entries", () => {
   assert.match(memory, /chooseDiverseMatches/);
   assert.match(memory, /minimumSpacing/);
   assert.match(memory, /weightedRatio/);
-  assert.match(scanner, /"1h", 720/);
-  assert.match(scanner, /"4h", 1_200/);
-  assert.match(scanner, /"1d", 1_800/);
+  assert.doesNotMatch(scanner, /buildResonanceMarketMemory|fetchHistoricalCandles/);
+  assert.match(directBrain, /buildDirectMarketCandidate/);
+  assert.match(directBrain, /candles\.slice\(-72\)/);
 });
 
 test("strategy runtime still depends on the exchange adapter boundary", () => {

@@ -59,8 +59,9 @@ export async function GET(request: Request) {
     : stored?.entryQuality ?? null;
   const finalVerdict = buildHte31TradeFinalVerdict({ trade, entryQuality, counterfactual });
   const traderId = trade.traderId as Hte31TraderId;
-  const definition = hte31TraderDefinition(traderId);
-  const family = hte31StrategyFamilyForTrader(traderId);
+  const direct = trade.decisionAuthority === "direct_market_brain";
+  const definition = direct ? null : hte31TraderDefinition(traderId);
+  const family = direct ? null : hte31StrategyFamilyForTrader(traderId);
 
   return Response.json({
     version: "resonance-strategy-lifecycle-v1",
@@ -70,12 +71,12 @@ export async function GET(request: Request) {
     traderId: trade.traderId,
     setupId: trade.setupId,
     strategy: {
-      familyId: family.id,
-      familyName: family.name,
-      variantId: definition.variantId,
-      variantName: definition.variantName,
+      familyId: family?.id ?? "DIRECT",
+      familyName: family?.name ?? "市场大脑",
+      variantId: definition?.variantId ?? trade.brainVersion ?? "direct-market-brain-v1",
+      variantName: definition?.variantName ?? "当前位置决策",
       canonicalLabel: hte31CanonicalStrategyLabel(traderId, trade.assetRegime),
-      tags: definition.tags,
+      tags: definition?.tags ?? ["位置", "方向", "目标", "失效"],
     },
     observedAt: now,
     candles,
