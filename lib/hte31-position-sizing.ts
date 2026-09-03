@@ -13,6 +13,8 @@ export type Hte31PositionSizingInput = {
   atrPct: number | null;
   dataQuality: number;
   confidence: number;
+  riskRate?: number;
+  minimumTp2NetProfitUsdt?: number;
 };
 
 export type Hte31PositionSizing = {
@@ -54,8 +56,8 @@ export const HTE31_PAPER_POSITION_POLICY = {
 } as const;
 
 export const HTE31_PAPER_PORTFOLIO_POLICY = {
-  maxOpenPositions: 5,
-  maximumTotalPlannedRiskRate: 0.20,
+  maxOpenPositions: 3,
+  maximumTotalPlannedRiskRate: 0.15,
   maxSameSidePositions: 3,
 } as const;
 
@@ -164,10 +166,11 @@ export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31P
     return emptyResult(`市场目标 ${originalRiskReward.toFixed(2)}R 超过结构安全上限 ${HTE31_PAPER_POSITION_POLICY.maximumMarketRiskReward}R`);
   }
 
-  const minimumRiskUsdt = equityUsdt * HTE31_PAPER_POSITION_POLICY.minimumRiskRate;
-  const maximumRiskUsdt = equityUsdt * HTE31_PAPER_POSITION_POLICY.maximumRiskRate;
-  const normalTargetRiskUsdt = equityUsdt * HTE31_PAPER_POSITION_POLICY.targetRiskRate;
-  const governedRiskUsdt = normalTargetRiskUsdt * clamp(input.riskMultiplier, 0, 1);
+  const explicitRiskRate = input.riskRate == null ? null : clamp(input.riskRate, 0, HTE31_PAPER_POSITION_POLICY.maximumRiskRate);
+  const minimumRiskUsdt = equityUsdt * (explicitRiskRate ?? HTE31_PAPER_POSITION_POLICY.minimumRiskRate);
+  const maximumRiskUsdt = equityUsdt * (explicitRiskRate ?? HTE31_PAPER_POSITION_POLICY.maximumRiskRate);
+  const normalTargetRiskUsdt = equityUsdt * (explicitRiskRate ?? HTE31_PAPER_POSITION_POLICY.targetRiskRate);
+  const governedRiskUsdt = explicitRiskRate == null ? normalTargetRiskUsdt * clamp(input.riskMultiplier, 0, 1) : normalTargetRiskUsdt;
   const targetRiskUsdt = clamp(governedRiskUsdt, minimumRiskUsdt, maximumRiskUsdt);
 
   const liquidityCap = liquidityLeverageCap(positive(input.liquidityVolumeUsd));
@@ -212,7 +215,7 @@ export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31P
   const plannedTp2GrossProfitUsdt = notionalUsdt * grossTp2MoveRate;
   const plannedTp2CostUsdt = notionalUsdt * roundTripCostRate;
   const plannedTp2NetProfitUsdt = plannedTp2GrossProfitUsdt - plannedTp2CostUsdt;
-  const minimumTp2NetProfitUsdt = HTE31_PAPER_POSITION_POLICY.minimumTp2NetProfitUsdt;
+  const minimumTp2NetProfitUsdt = input.minimumTp2NetProfitUsdt ?? HTE31_PAPER_POSITION_POLICY.minimumTp2NetProfitUsdt;
 
   const liquidationDistanceRate = HTE31_PAPER_POSITION_POLICY.liquidationMaintenanceFactor / leverage;
   const estimatedLiquidationPrice = input.side === "LONG"

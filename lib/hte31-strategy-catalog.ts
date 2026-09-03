@@ -146,7 +146,11 @@ export function hte31AssetRegimeLabel(regime: string | null | undefined) {
   return HTE31_ASSET_REGIME_LABELS[regime as Hte31AssetRegime] ?? regime;
 }
 
-export function hte31CanonicalStrategyLabel(traderId: Hte31TraderId, assetRegime?: string | null) {
+export function hte31CanonicalStrategyLabel(traderId: Hte31TraderId | "direct_market_brain", assetRegime?: string | null) {
+  if (traderId === "direct_market_brain") {
+    const regime = hte31AssetRegimeLabel(assetRegime);
+    return `市场大脑${regime ? ` · ${regime}` : ""}`;
+  }
   const trader = hte31TraderDefinition(traderId);
   const family = hte31StrategyFamilyDefinition(trader.familyId);
   const regime = hte31AssetRegimeLabel(assetRegime);

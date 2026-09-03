@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [page, layout, route, chart, css, liveStatus, scanner, catalog, worker] = await Promise.all([
+const [page, layout, route, chart, css, liveStatus, scanner, catalog, worker, repository] = await Promise.all([
   readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/api/hte31/route.ts", import.meta.url), "utf8"),
@@ -12,22 +12,19 @@ const [page, layout, route, chart, css, liveStatus, scanner, catalog, worker] = 
   readFile(new URL("../lib/hte31-scanner.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/hte31-strategy-catalog.ts", import.meta.url), "utf8"),
   readFile(new URL("../worker/index.ts", import.meta.url), "utf8"),
+  readFile(new URL("../lib/hte31-repository.ts", import.meta.url), "utf8"),
 ]);
 
-test("production UI is Resonance while preserving every historical strategy variant", () => {
+test("production UI is the direct market brain while historical strategy identities stay readable", () => {
   assert.match(page, /Resonance/);
-  assert.match(page, /市场记忆 · 自适应交易/);
+  assert.match(page, /直接市场大脑 · 模拟学习/);
   for (const phrase of ["HT1", "HT2", "HT3", "HT4", "HT5", "HT1-R", "HT2-R", "HT3-R", "HT5-R", "HT6", "HT7", "HT8", "HT9"]) assert.match(catalog, new RegExp(phrase));
   for (const family of ["SF01", "SF02", "SF03", "SF04", "SF05", "SF06", "SF07", "SF08", "SF09"]) assert.match(catalog, new RegExp(family));
-  assert.match(page, /策略中心/);
-  assert.match(page, /查看 9 个家族与 13 个独立变体/);
-  assert.match(page, /\/api\/hte31\?view=strategies/);
-  assert.match(page, /系统有没有进步/);
-  assert.match(page, /hasReadyMemory[\s\S]{0,120}<div className="rz-memory-grid">/);
-  assert.match(page, /历史记忆准备中/);
-  assert.match(page, /历史数据暂不可用/);
-  assert.match(page, /state === "STALE"/);
-  assert.match(page, /有效独立样本/);
+  assert.match(page, /成交额前十五/);
+  assert.match(page, /动态成交额前十五/);
+  assert.match(page, /function DirectRadarCard/);
+  const renderedSurface = page.slice(page.lastIndexOf("return ("));
+  assert.doesNotMatch(renderedSurface, /策略中心|9 个家族|13 个独立变体|历史记忆准备中|有效独立样本/);
   assert.doesNotMatch(page, /旧 HTE 3\.0 不进入这里|SIMULATION LEDGER · CLEAN|HTE 3\.1 新账本|CLEAN RADAR|CLEAN RUNTIME/);
   assert.match(layout, /<body>[\s\S]*\{children\}[\s\S]*<ResonanceOperatorControls \/>[\s\S]*<\/body>/);
   assert.doesNotMatch(layout, /Strategy2Dashboard|Strategy2PlaybookDiagnostics|Strategy2LearningArena|RuntimeStabilityClient|UiStatusSemanticFix|LiveOrdersInline/);
@@ -61,11 +58,13 @@ test("trade cards preserve leverage economics and full expandable review", () =>
   assert.match(css, /\.rz-chart/);
 });
 
-test("learning starts after every close and five trades are only a stage summary", () => {
-  assert.match(page, /latestAutopsy/);
-  assert.match(page, /阶段汇总/);
-  assert.match(page, /已经被数据否定的组合/);
-  assert.match(page, /performanceGate/);
+test("direct market learning waits for a complete truthful 12-hour observation", () => {
+  assert.match(repository, /trade\.decisionAuthority !== "direct_market_brain"/);
+  assert.match(repository, /trade\.decisionAuthority === "direct_market_brain"/);
+  assert.match(repository, /\[0, 30, 60, 120, 240, 480, 720\]/);
+  assert.match(repository, /qualityStatus: "READY"/);
+  assert.match(repository, /coveragePct >= 95/);
+  assert.match(page, /qualityStatus/);
 });
 
 test("small-price contracts retain eight-decimal precision and pnl never wraps", () => {
@@ -152,6 +151,8 @@ test("high-frequency read is bounded, diagnostics are on demand, and health stay
   assert.match(route, /staleSources/);
   assert.match(route, /diagnostics: null/);
   assert.match(scanner, /Promise\.allSettled/);
+  assert.match(scanner, /buildDirectMarketCandidate/);
+  assert.doesNotMatch(scanner, /recordHte31StrategyEvaluations|recordHte31StrategyDiagnostic|openHte31PaperTrade/);
   const healthStart = worker.indexOf('if (url.pathname === "/__health")');
   const healthEnd = worker.indexOf('if (url.pathname === "/api/push/vapid-public-key")', healthStart);
   const health = worker.slice(healthStart, healthEnd);

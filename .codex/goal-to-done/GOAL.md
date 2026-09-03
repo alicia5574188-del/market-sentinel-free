@@ -1,5 +1,20 @@
 # Goal
 
+## Active prepared objective — Direct Market Brain (supersedes named-strategy authority)
+
+- Replace HT1–HT9/family/variant selection for **new orders** with one deterministic, replayable brain that directly judges location, direction, structural targets, invalidation, expected value, and whether to wait.
+- Build each rolling decision batch from the fifteen eligible Gate USDT perpetuals with the highest confirmed 24-hour USDT quote volume. Light-scan all fifteen, deep-scan six across multiple correlation clusters, and select at most three qualified portfolio-safe opportunities; never fill slots merely to stay invested.
+- Keep at most three total positions, one per symbol and normally no more than two in the same direction. Existing positions above the new limit are never force-closed; block new entries until the count returns to three or fewer.
+- Preserve every old strategy ID, trade, review, learning row, and live lineage as read-only history, but do not let old strategies vote, provide fallbacks, emit candidates, or control new-order eligibility.
+- Give every closed order a real `0/30/60/120/240/480/720`-minute post-exit observation. Only a complete, valid 12-hour path may change a versioned brain rule; one revision changes one explainable variable and remains rollback-safe.
+- Keep simulation as the only learning and selection environment. Gate live may only inherit an actual simulated order's immutable decision snapshot; never move funds, infer funding approval, or independently redesign the trade.
+- Preserve five bottom tabs and all Must-Keep safety/owner capabilities while replacing strategy-centric daily UI with current fifteen-coin market judgment, brain decision, positions, orders, review, and live parity.
+- Treat correlated, overlapping orders from one market move as one independent performance event. Separate immediate drawdown protection from 12-hour-complete model learning, and graduate the unproven brain through calibration, validation, and normal-risk stages.
+- Stop all periodic scanner/evaluation/diagnostic D1 writes. Count table and index amplification, keep this application's index-adjusted hard budget at or below 30,000/day, stop new-order admission at 22,000 including committed lifecycle rows, and require account-wide production metrics below the 65,000 safety line under Cloudflare Free's 100,000/day allowance.
+- Implement, test, migrate, release, verify, and retain rollback evidence using `docs/DIRECT_MARKET_BRAIN_UPGRADE_PLAN.md`.
+
+Previous sections below remain production-history and compatibility requirements; they do not restore named strategies as the authority for new orders.
+
 ## Objective
 
 放大 HTE 3.1 模拟仓位并持续优化低频亏损策略：1000U 本金单笔风险30–50U、TP2净利润50–200U、杠杆透明；保持实盘开启授权但不自动修改真实风险，使用订单样本淘汰负期望组合。

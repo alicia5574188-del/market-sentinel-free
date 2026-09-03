@@ -198,3 +198,66 @@ Record only consequential decisions using this format:
 - Reason: A single slow dependency currently delays the combined `/api/hte31` request until the client or edge can return 503, after which a cold page has no in-memory snapshot and replaces valid state with blanks.
 - Evidence: A production health request timed out after 20 seconds, followed by a successful 15.2-second probe with both schedulers live, advancing, error-free, and the scanner circuit closed.
 - Revisit when: Cloudflare request traces identify a narrower upstream bottleneck or production latency probes remain bounded after the split.
+
+## 2026-09-03 — Replace named-strategy entry authority with direct market judgment
+
+- Choice: New orders will come only from a deterministic `direct_market_brain` that evaluates current market location, direction, structural targets, invalidation, costs, and portfolio risk. HT1–HT9, families, and variants remain historical lineage but cannot vote, emit new candidates, provide fallbacks, or gate a new order.
+- Reason: Recent losses showed that strategy naming and lifecycle labels were not correcting the actual location and entry problem. The owner wants the system to answer whether this location is tradable, which direction is most probable, and where the move should terminate.
+- Evidence: The current scanner still reaches three legacy evaluator groups and a family router, while incomplete post-exit reviews can influence later execution. The frozen plan records the exact cutover and compatibility boundary.
+- Revisit when: Only if the owner explicitly restores a named-strategy authority after comparable forward evidence; historical IDs alone are not sufficient.
+
+## 2026-09-03 — Select at most three positions from a dynamic five-coin universe
+
+- Choice: Rank five eligible Gate USDT perpetuals by confirmed 24-hour quote volume, compare them in one bounded batch, and open at most the available slots under a three-position global limit. Never force all three slots; use one position per symbol, normally at most two in one direction, and treat correlated exposure as one risk cluster.
+- Reason: Five liquid candidates keep continuous scanning focused while three positions provide learning throughput without disguising correlated bets as independent diversification.
+- Evidence: The current five-position budget and rotating single-symbol scan do not perform same-batch cross-sectional selection. The new plan defines membership stability, failure isolation, correlation gates, and safe handling of pre-existing positions above three.
+- Revisit when: Completed direct-brain orders across several regimes demonstrate that five candidates or three positions materially constrain positive expectancy without breaching the D1/risk budget.
+
+## 2026-09-03 — Require complete 12-hour evidence before learning
+
+- Choice: Observe every close at `0/30/60/120/240/480/720` minutes using real post-exit 5-minute candles. Only a valid 720-minute path with required coverage and timing can change a brain version; incomplete paths stay pending/stale/unavailable and carry zero learning weight.
+- Reason: A useful review must distinguish a bad trade from wrong direction, poor location, early/late entry, protection, target, or holding-time error without using hindsight or an unfinished future path.
+- Evidence: The deployed observer omits 480 minutes and current review can consume trades before their 12-hour observation completes.
+- Revisit when: A longer horizon is justified by measured holding-time distribution; never lower the completeness requirement merely to accumulate samples faster.
+
+## 2026-09-03 — Keep learning single-account, versioned, and D1-bounded
+
+- Choice: Apply one-variable, evidence-linked revisions directly to the sole paper account, with parent versions and rollback; do not create shadow trades or a second simulation. Stop thirteen recurring strategy-evaluation writes and enforce planned total writes at or below 33,120/day, a 55,000-row protective threshold, and the 60,000 project ceiling.
+- Reason: The owner requires one simulation-to-live decision chain and Cloudflare Free's 100,000 daily write allowance must remain sufficient after every upgrade.
+- Evidence: Removing 18,720 daily legacy evaluation rows reduces planned recurring writes from 27,360 to about 5,760 even with three continuous position checkpoints.
+- Revisit when: Any scan cadence, position capacity, observation schedule, schema write, or D1 plan changes.
+
+## 2026-09-03 — Expand the candidate universe without multiplying correlated risk
+
+- Choice: Supersede the prepared five-coin universe with the fifteen eligible Gate USDT perpetuals having the highest confirmed 24-hour quote volume. Light-scan all fifteen every rolling cycle, deep-scan six drawn from multiple correlation clusters, then select at most three positions by marginal portfolio expectancy rather than raw single-coin score.
+- Reason: The five largest crypto contracts can all express the same BTC-driven move. A broader liquid universe improves the chance of finding independent opportunity, but fully refetching every timeframe for fifteen coins each minute would recreate latency and rate-limit failures.
+- Evidence: Shared ticker reads, incremental candle caches, three-minute full light-scan coverage, six bounded deep scans, and three-request concurrency preserve breadth without adding D1 writes or foreground data production.
+- Revisit when: Production request telemetry proves a different deep-scan width or refresh window is safer while maintaining full fifteen-coin coverage.
+
+## 2026-09-03 — Replace raw loss streaks with independent-event protection and earned risk
+
+- Choice: Supersede the provisional 2/4/6-order stop-loss rules. Group same-batch, same-direction, correlated and overlapping orders as one independent performance event; apply realized-PnL/drawdown protection immediately, but permit model changes only after valid 12-hour reviews. Start the new authority in `CALIBRATING`, progress through `VALIDATING`, and grant normal risk only after sufficient independent forward evidence.
+- Reason: Three correlated positions can lose in one market shock and should not be treated as three independent proofs, while waiting 12 hours before reducing exposure is unsafe. The new authority has no comparable live sample and should not start at full risk merely because the retired strategies did.
+- Evidence: The implementation contract now defines sample coverage, risk stages, rolling expectancy/PF/drawdown guards, low-risk recovery probes, and one-variable version promotion/rollback.
+- Revisit when: Enough direct-brain independent events exist to recalibrate thresholds without mixing old-strategy results or overlapping market shocks.
+
+## 2026-09-03 — Budget D1 by billed table and index rows, not logical records
+
+- Choice: Supersede the 27,360 logical-row estimate. The direct brain writes no scanner/evaluation/diagnostic rows to D1, limits its own index-adjusted usage to 30,000 rows/UTC day, stops new-order admission at 22,000 including committed future lifecycle rows, reserves 100 billed rows per accepted trade, and requires account-wide production metrics below 65,000.
+- Reason: Cloudflare bills written table rows and written index entries. The old evaluation table has a text primary key and three explicit indexes, so 18,720 evaluation records can conservatively cost 93,600 billed rows before diagnostics and position checkpoints.
+- Evidence: `lib/direct-market-d1-budget.ts` calculates a 105,120 legacy upper bound and a 30,000 direct-brain hard budget; `tests/direct-market-d1-budget.test.ts` passes all three guard checks. Official D1 metrics expose `rowsWritten` per query and account-wide through GraphQL.
+- Revisit when: Production D1 query metadata proves a safe lower cost, or any schema index, write path, position cadence, observation horizon, or daily order capacity changes.
+
+## 2026-09-03 — Prebuild one-pass execution to protect model allowance
+
+- Choice: Use `docs/DIRECT_MARKET_BRAIN_EXECUTION_PACK.md` as the only formal-upgrade route, with fixed type contracts, exact files, six limited implementation stages, targeted tests per stage, one final full suite, and one CI/deploy verification loop.
+- Reason: Re-analyzing architecture, repeatedly running the full suite, or rediscovering UI/migration boundaries would waste the five-hour model allowance without improving safety.
+- Evidence: The prepared pack routes every module and acceptance gate, while the D1 constants/test are already implemented. Formal target is 75–105 minutes of model-active work and 105–150 minutes including normal local/remote verification.
+- Revisit when: Current `main` changes the prepared interfaces before implementation or external CI/deployment latency exceeds the planned waiting window.
+
+## 2026-09-03 — Retry incomplete post-exit evidence without learning from it
+
+- Choice: A failed or incomplete post-exit Kline checkpoint remains quality-labeled `STALE` or `UNAVAILABLE` and receives up to four exponentially delayed attempts. It cannot update the brain; only a `READY` 720-minute path can do so.
+- Reason: A one-time Gate or Worker fault must not permanently discard the user's required 12-hour observation, while unlimited rapid retries would waste D1 writes and scheduler capacity.
+- Evidence: The observation schema now records retry count and next retry time; the scheduler reads only due retryable nodes, and the per-order 100-row lifecycle reserve covers the bounded retry writes.
+- Revisit when: Production failure telemetry shows four attempts are insufficient or a cheaper durable market-data archive becomes available.

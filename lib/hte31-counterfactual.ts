@@ -23,6 +23,8 @@ export type Hte31CounterfactualReport = {
   generatedAt: number;
   horizons: Hte31CounterfactualHorizon[];
   reversals: Hte31CounterfactualReversal[];
+  noTradeR: 0;
+  delayedEntries: { delayBars: 1 | 2 | 3 | 6; delayMinutes: number; entryPrice: number; terminalR: number; maxFavorableR: number; maxAdverseR: number }[];
   summary: string;
 };
 
@@ -36,7 +38,7 @@ type TradeLike = {
   exitCode?: string | null;
 };
 
-const ENTRY_HORIZONS = [30, 60, 120, 240, 480] as const;
+const ENTRY_HORIZONS = [30, 60, 120, 240, 480, 720] as const;
 const REVERSAL_OBSERVE_MINUTES = 240;
 
 function candleMs(candle: Hte31Candle) {
@@ -182,6 +184,27 @@ export function buildHte31Counterfactual(
     if (result) reversals.push(result);
   }
 
+  const firstEntryIndex = rows.findIndex((row) => row._time >= trade.entryAt);
+  const delayedEntries = ([1, 2, 3, 6] as const).flatMap((delayBars) => {
+    const entry = rows[firstEntryIndex + delayBars];
+    if (!entry) return [];
+    const targetAt = entry._time + 240 * 60_000;
+    const path = rows.filter((row) => row._time >= entry._time && row._time <= targetAt);
+    const terminal = path.at(-1);
+    if (!terminal || path.length < 2) return [];
+    const high = Math.max(...path.map((row) => row.high));
+    const low = Math.min(...path.map((row) => row.low));
+    const dir = direction(trade.side);
+    return [{
+      delayBars,
+      delayMinutes: delayBars * 5,
+      entryPrice: round(entry.close, 8),
+      terminalR: round(dir * (terminal.close - entry.close) / risk - feeR),
+      maxFavorableR: round(Math.max(0, trade.side === "LONG" ? (high - entry.close) / risk : (entry.close - low) / risk)),
+      maxAdverseR: round(Math.max(0, trade.side === "LONG" ? (entry.close - low) / risk : (high - entry.close) / risk)),
+    }];
+  });
+
   const reference = horizons.find((item) => item.minutes === 240) ?? horizons.at(-1) ?? null;
   const bestReverse = [...reversals].sort((a, b) => b.terminalR - a.terminalR)[0] ?? null;
   let summary = "样本仍不足以形成反事实结论；继续观察原方向、直接反向与确认后反转。";
@@ -193,5 +216,5 @@ export function buildHte31Counterfactual(
       summary += " 当前没有足够证据把原策略机械反做。";
     }
   }
-  return { generatedAt: now, horizons, reversals, summary };
+  return { generatedAt: now, horizons, reversals, noTradeR: 0, delayedEntries, summary };
 }

@@ -25,14 +25,13 @@ test("HTE31 Human Trader implementation owns its domain dependencies", () => {
   assert.match(engine, /minutes: 100/);
 });
 
-test("HTE31 scanner imports the HTE31 engine and owns candle/signal types directly", () => {
+test("HTE31 scanner imports the direct market brain and owns candle types directly", () => {
   const scanner = source("../lib/hte31-scanner.ts");
-  assert.match(scanner, /hte31-human-trader-engine\.ts/);
-  assert.match(scanner, /hte31-advanced-traders\.ts/);
-  assert.match(scanner, /evaluateAdvancedHumanTraders/);
-  assert.doesNotMatch(scanner, /from "\.\/human-trader-engine\.ts"/);
+  assert.match(scanner, /direct-market-brain\.ts/);
+  assert.match(scanner, /direct-market-universe\.ts/);
+  assert.match(scanner, /buildDirectMarketCandidate/);
+  assert.doesNotMatch(scanner, /human-trader-engine|hte31-advanced-traders|evaluateAdvancedHumanTraders/);
   assert.match(scanner, /Hte31Candle/);
-  assert.match(scanner, /Hte31Signal/);
   assert.match(scanner, /hte31-types\.ts/);
   assert.doesNotMatch(scanner, /strategy-2-engine|signal-engine|from "\.\/repository\.ts"/);
 });
@@ -89,12 +88,12 @@ test("new HTE31 live orders use direct HTE31 lineage without writing compatibili
   assert.match(schema, /tradeCaseId: text\("trade_case_id"\)\.notNull\(\)\.unique\(\)/);
 });
 
-test("all thirteen paper strategies can enter Gate only through the same catalog lineage", () => {
+test("only exact direct-brain paper snapshots can enter Gate", () => {
   const repository = source("../lib/live-trading-repository.ts");
-  assert.match(repository, /HTE31_ALL_TRADER_IDS/);
-  assert.match(repository, /HTE31_LIVE_PARITY_TRADERS/);
-  assert.match(repository, /当前统一模拟\/实盘策略目录/);
-  assert.doesNotMatch(repository, /仍在模拟验证阶段，禁止直接进入 Gate 实盘/);
+  assert.match(repository, /HTE31_LIVE_PARITY_TRADERS = new Set<string>\(\["direct_market_brain"\]\)/);
+  assert.match(repository, /decisionAuthority !== DIRECT_MARKET_AUTHORITY/);
+  assert.match(repository, /brainVersion !== DIRECT_MARKET_BRAIN_VERSION/);
+  assert.match(repository, /decisionSnapshotJson/);
 });
 
 test("retired UI overlays and patch styles are physically absent", () => {

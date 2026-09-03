@@ -48,18 +48,17 @@ function biasText(value: "LONG" | "SHORT" | "NEUTRAL") {
 
 function dashboardMarketView(readModel: Hte31ScanCompleted) {
   const market = readModel.market;
-  const asset = readModel.marketView;
+  const candidate = readModel.directCandidate;
   const pending = market.pendingLabel
     ? `检测到 ${market.pendingLabel}${market.pendingBias === "NEUTRAL" ? "" : market.pendingBias === "LONG" ? "偏多" : "偏空"}，确认 ${market.pendingConfirmations}/${market.requiredConfirmations}。`
     : market.transitionNote;
   return {
-    ...asset,
-    bias: market.bias,
-    confidence: market.confidence,
+    bias: candidate.decision === "LONG" ? "LONG" as const : candidate.decision === "SHORT" ? "SHORT" as const : "NEUTRAL" as const,
+    confidence: candidate.confidence,
     environment: market.label,
-    headline: `整体市场：${market.label} · ${biasText(market.bias)}`,
-    reason: `${pending} 当前深扫 ${readModel.target.replace("_USDT", "")}：${asset.headline}。`,
-    strongDirection: market.bias !== "NEUTRAL" && market.stability >= 58 && market.transitionRisk < 64,
+    headline: `${readModel.target.replace("_USDT", "")} · ${candidate.location} · ${candidate.decision === "WAIT" ? "等待" : candidate.decision === "LONG" ? "偏多" : "偏空"}`,
+    reason: `${pending} 路径概率：上 ${candidate.paths.up.toFixed(1)}% / 下 ${candidate.paths.down.toFixed(1)}% / 震荡或失效 ${candidate.paths.rangeOrInvalid.toFixed(1)}%。`,
+    strongDirection: candidate.decision !== "WAIT",
   };
 }
 
@@ -129,21 +128,19 @@ export async function GET(request: Request) {
   const displayReadModel = readModel ? { ...readModel, marketView: dashboardMarketView(readModel) } : null;
 
   return Response.json({
-    version: "resonance-v6-strategy-center",
+    version: "direct-market-brain-v1",
     requestedAt,
     observedAt: lastSuccessAt ?? requestedAt,
     account: auth.account,
     scanner: { status: scannerStatus, ageMs: scannerAgeMs, readModel: displayReadModel },
     position: { status: positionStatus },
     market: readModel?.market ?? null,
-    asset: readModel ? { symbol: readModel.target, view: readModel.marketView, memory: readModel.memory } : null,
+    asset: readModel ? { symbol: readModel.target, view: dashboardMarketView(readModel), candidate: readModel.directCandidate } : null,
     decisionChain: readModel ? {
       wholeMarket: readModel.market,
       symbol: readModel.target,
-      symbolView: readModel.marketView,
-      historicalMemory: readModel.memory,
-      latestReview: readModel.review,
-      strategyRouter: readModel.router,
+      symbolView: dashboardMarketView(readModel),
+      directCandidate: readModel.directCandidate,
       openReason: readModel.openReason,
     } : null,
     dashboard,

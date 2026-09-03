@@ -30,29 +30,24 @@ test("clean rebuild migration preserves real exchange data families and disarms 
   assert.match(migration, /`activation_epoch` = `activation_epoch` \+ 1/);
 });
 
-test("Resonance scanner evaluates all thirteen strategies in one paper decision cycle", () => {
+test("scanner gives new-entry authority only to the direct market brain", () => {
   const scanner = readFileSync(new URL("../lib/hte31-scanner.ts", import.meta.url), "utf8");
-  assert.match(scanner, /evaluateHumanTraderPool/);
-  assert.match(scanner, /evaluateAdvancedHumanTraders/);
-  assert.match(scanner, /evaluateHte31ResearchStrategies/);
-  assert.match(scanner, /recordHte31DiagnosticCycle\(packet, signals, activePosition\)/);
+  assert.match(scanner, /buildDirectMarketCandidate/);
+  assert.match(scanner, /rankDirectMarketUniverse/);
+  assert.match(scanner, /chooseDirectMarketTarget/);
   assert.match(scanner, /getGlobalRiskContext/);
   assert.match(scanner, /buildResonanceGlobalMarket/);
-  assert.match(scanner, /buildResonanceMarketMemory/);
-  assert.match(scanner, /buildResonanceMarketView/);
-  assert.match(scanner, /getResonanceSystemReview/);
-  assert.match(scanner, /tryOpenResonanceTrade/);
   assert.match(scanner, /getMarketExchange/);
-  assert.doesNotMatch(scanner, /runMarketScan|getStrategy2ExperienceBook|processShadowStrategies|getStrategyLabDashboard|tradeCases|trade_cases/);
+  assert.doesNotMatch(scanner, /evaluateHumanTraderPool|evaluateAdvancedHumanTraders|evaluateHte31ResearchStrategies|recordHte31Evaluations|tryOpenResonanceTrade|tradeCases|trade_cases/);
 });
 
-test("all strategy families and variants share the paper brain and live-parity boundary", () => {
-  const trading = readFileSync(new URL("../lib/resonance-trading.ts", import.meta.url), "utf8");
+test("legacy families remain historical while live parity requires the exact direct-brain snapshot", () => {
+  const catalog = readFileSync(new URL("../lib/hte31-strategy-catalog.ts", import.meta.url), "utf8");
   const live = readFileSync(new URL("../lib/live-trading-repository.ts", import.meta.url), "utf8");
-  assert.match(trading, /All nine families \/ thirteen historical variants share one simulation/);
-  assert.match(trading, /executionRouter\.selectedForExecution/);
-  assert.match(live, /HTE31_LIVE_PARITY_TRADERS = new Set<string>\(HTE31_ALL_TRADER_IDS\)/);
-  assert.doesNotMatch(live, /PAPER_REVALIDATION_ONLY|模拟复考单禁止进入 Gate/);
+  assert.match(catalog, /HTE31_ALL_TRADER_IDS/);
+  assert.match(live, /HTE31_LIVE_PARITY_TRADERS = new Set<string>\(\["direct_market_brain"\]\)/);
+  assert.match(live, /snapshot\.authority !== DIRECT_MARKET_AUTHORITY/);
+  assert.match(live, /snapshot\.candidate\?\.symbol !== trade\.symbol/);
 });
 
 test("thirteen-strategy evaluations stay below the D1 bind budget", () => {
@@ -85,7 +80,9 @@ test("historical shadow rows stay readable but current routing learns from actua
 
 test("post-exit observer still follows every closed trade through twelve hours", () => {
   const repository = readFileSync(new URL("../lib/hte31-repository.ts", import.meta.url), "utf8");
-  assert.match(repository, /POST_EXIT_HORIZONS = \[0, 30, 60, 120, 240, 720\]/);
+  assert.match(repository, /POST_EXIT_HORIZONS = \[0, 30, 60, 120, 240, 480, 720\]/);
+  assert.match(repository, /coveragePct >= 95/);
+  assert.match(repository, /qualityStatus: "READY"/);
   assert.match(repository, /疑似假止损/);
   assert.match(repository, /退出偏早/);
   assert.match(repository, /退出偏晚/);
@@ -149,17 +146,18 @@ test("expanded trade review cannot widen the mobile viewport", () => {
   assert.match(css, /grid-template-columns: repeat\(2, minmax\(0,1fr\)\)/);
 });
 
-test("Durable Objects retain bounded low-write runtime and persist the stable market brain", () => {
+test("Durable Objects retain bounded no-scan-write runtime and persist the direct brain", () => {
   const worker = readFileSync(new URL("../worker/hte31-workers.ts", import.meta.url), "utf8");
-  assert.match(worker, /CLEAN_RUNTIME_VERSION = "resonance-v4-unified-paper-live-parity"/);
+  assert.match(worker, /CLEAN_RUNTIME_VERSION = "direct-market-brain-v1"/);
   assert.match(worker, /D1 trades, learning, simulation epochs, live[\s\S]*remain untouched/);
-  assert.match(worker, /SCANNER_CYCLE_INTERVAL_MS = 60_000/);
+  assert.match(worker, /SCANNER_CYCLE_INTERVAL_MS = 25_000/);
   assert.match(worker, /TRADE_MANAGER_IDLE_INTERVAL_MS = 60_000/);
   assert.match(worker, /TRADE_MANAGER_IDLE_HEARTBEAT_MS = 5 \* 60_000/);
-  assert.match(worker, /type ScannerRuntime = \{[\s\S]*rotationOffset:[\s\S]*job:[\s\S]*readModel:[\s\S]*status:/);
+  assert.match(worker, /type ScannerRuntime = \{[\s\S]*rotationOffset:[\s\S]*directBySymbol\?:[\s\S]*directHistory\?:[\s\S]*status:/);
   assert.match(worker, /this\.ctx\.storage\.put\("runtime", runtime\)/);
   assert.doesNotMatch(worker, /this\.ctx\.storage\.put\("(?:job|status|readModel|rotationOffset)"/);
   assert.match(worker, /maxSteps = job\.phase === "config" \|\| job\.phase === "candles" \? 2 : 1/);
   assert.match(worker, /createHte31ScanJob\(runtime\.rotationOffset, runtime\.readModel\?\.market \?\? null\)/);
+  assert.match(worker, /directHistory[\s\S]*\.slice\(0, 512\)/);
   assert.match(worker, /stateChanged \|\| heartbeatDue/);
 });

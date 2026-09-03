@@ -12,16 +12,15 @@ async function readBuiltWorkerSource() {
   return (await Promise.all(jsFiles.map((file) => readFile(file, "utf8")))).join("\n");
 }
 
-test("production Worker bundle contains the cognitive Resonance runtime", async () => {
+test("production Worker bundle contains the direct market brain runtime", async () => {
   const source = await readBuiltWorkerSource();
-  assert.match(source, /resonance-v6-strategy-center/);
+  assert.match(source, /direct-market-brain-v1/);
   assert.match(source, /Resonance/);
-  assert.match(source, /市场记忆 · 自适应交易/);
-  assert.match(source, /策略中心/);
-  assert.match(source, /查看 9 个家族与 13 个独立变体/);
+  assert.match(source, /直接市场大脑 · 模拟学习/);
+  assert.match(source, /成交额前十五/);
+  assert.match(source, /最大持仓/);
   assert.match(source, /HTE31MarketScanner/);
   assert.match(source, /HTE31TradeManager/);
-  assert.match(source, /COGNITIVE_ADAPTATION/);
 });
 
 test("generated Wrangler config uses additive-only migration for clean simulation namespaces", async () => {
