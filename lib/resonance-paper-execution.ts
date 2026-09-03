@@ -6,7 +6,7 @@ import { buildHte31PaperPosition, hte31PaperPortfolioBlockReason } from "./hte31
 import { evaluateHte31PerformanceCell } from "./hte31-performance-gate.ts";
 import { resonanceLearningId } from "./resonance-policy-version.ts";
 import type { AppSettings } from "./settings-repository.ts";
-import { hte31TraderIdForSignal, type Hte31TraderId } from "./hte31-strategy-catalog.ts";
+import { hte31CanonicalStrategyLabel, hte31TraderIdForSignal, type Hte31TraderId } from "./hte31-strategy-catalog.ts";
 import type { Hte31RouterDecision } from "./hte31-strategy-router.ts";
 import type { Hte31Candle, Hte31Signal } from "./hte31-types.ts";
 
@@ -227,7 +227,7 @@ export async function openResonancePaperTrade(
     marginUsdt: sizing.marginUsdt,
     quantity: sizing.quantity,
     leverage: sizing.leverage,
-    entryTrigger: `${BRAIN_SELECTED_MARKER} · ${learnedAdaptation ? `${COGNITIVE_MARKER} · ` : ""}${selected.signal.label} · ${selected.signal.reasons.join("；")} · ${sizing.leverageReason}`,
+    entryTrigger: `${BRAIN_SELECTED_MARKER} · ${hte31CanonicalStrategyLabel(selected.traderId)} · ${learnedAdaptation ? `${COGNITIVE_MARKER} · ` : ""}${selected.signal.label} · ${selected.signal.reasons.join("；")} · ${sizing.leverageReason}`,
     entryThesis: selected.signal.thesis,
     entryChecksJson: JSON.stringify(plan.checks),
     entryMetricsJson: JSON.stringify([

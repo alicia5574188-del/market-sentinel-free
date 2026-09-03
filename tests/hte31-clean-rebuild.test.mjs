@@ -46,10 +46,10 @@ test("Resonance scanner evaluates all thirteen strategies in one paper decision 
   assert.doesNotMatch(scanner, /runMarketScan|getStrategy2ExperienceBook|processShadowStrategies|getStrategyLabDashboard|tradeCases|trade_cases/);
 });
 
-test("all catalog strategies share the paper brain and live-parity boundary", () => {
+test("all strategy families and variants share the paper brain and live-parity boundary", () => {
   const trading = readFileSync(new URL("../lib/resonance-trading.ts", import.meta.url), "utf8");
   const live = readFileSync(new URL("../lib/live-trading-repository.ts", import.meta.url), "utf8");
-  assert.match(trading, /All thirteen strategies share one simulation pool/);
+  assert.match(trading, /All nine families \/ thirteen historical variants share one simulation/);
   assert.match(trading, /executionRouter\.selectedForExecution/);
   assert.match(live, /HTE31_LIVE_PARITY_TRADERS = new Set<string>\(HTE31_ALL_TRADER_IDS\)/);
   assert.doesNotMatch(live, /PAPER_REVALIDATION_ONLY|模拟复考单禁止进入 Gate/);

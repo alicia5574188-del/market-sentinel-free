@@ -1,4 +1,4 @@
-import { hte31TraderDefinition, hte31TraderIdForSignal, type Hte31TraderId } from "./hte31-strategy-catalog.ts";
+import { hte31CanonicalStrategyLabel, hte31TraderDefinition, hte31TraderIdForSignal, type Hte31StrategyFamilyId, type Hte31TraderId } from "./hte31-strategy-catalog.ts";
 import type { Hte31Signal, Hte31TradeSide } from "./hte31-types.ts";
 
 export const HTE31_ROUTER_PROMOTION_POLICY = {
@@ -15,6 +15,11 @@ export type Hte31RouterEvidence = {
   profitFactor: number | null;
   maximumDrawdownR: number;
   qualified: boolean;
+  recentSampleCount?: number;
+  recentExpectancyR?: number;
+  baselineSampleCount?: number;
+  baselineExpectancyR?: number;
+  everProfitable?: boolean;
 };
 
 export type Hte31RouterCandidate = {
@@ -25,6 +30,9 @@ export type Hte31RouterCandidate = {
   side: Hte31TradeSide;
   lane: "paper";
   storyFamily: string;
+  familyId: Hte31StrategyFamilyId;
+  variantId: string;
+  tags: readonly string[];
   currentScore: number;
   evidenceScore: number;
   combinedScore: number;
@@ -40,6 +48,7 @@ export type Hte31RouterDecision = {
   selectedForExecution: Hte31RouterCandidate | null;
   supporting: Hte31RouterCandidate[];
   opposing: Hte31RouterCandidate[];
+  familyAlternatives: Hte31RouterCandidate[];
   activePosition: { traderId: string; side: Hte31TradeSide } | null;
   currentThesisState: "none" | "intact" | "uncertain" | "invalidated";
   replacementEligible: boolean;
@@ -54,10 +63,16 @@ function emptyEvidence(traderId: Hte31TraderId): Hte31RouterEvidence {
 
 function evidenceAdjustment(evidence: Hte31RouterEvidence) {
   if (evidence.sampleCount < 8) return 0;
-  const expectancy = Math.max(-1, Math.min(1, evidence.expectancyR)) * 10;
+  const recentReady = (evidence.recentSampleCount ?? 0) >= 4;
+  const effectiveExpectancy = recentReady ? evidence.recentExpectancyR ?? evidence.expectancyR : evidence.expectancyR;
+  const expectancy = Math.max(-1, Math.min(1, effectiveExpectancy)) * 10;
   const profitFactor = evidence.profitFactor == null ? 0 : Math.max(-6, Math.min(8, (evidence.profitFactor - 1) * 8));
   const drawdown = Math.max(0, evidence.maximumDrawdownR - 3) * -0.75;
-  return expectancy + profitFactor + drawdown;
+  const degraded = recentReady
+    && (evidence.baselineSampleCount ?? 0) >= 8
+    && (evidence.baselineExpectancyR ?? 0) >= 0.15
+    && effectiveExpectancy <= -0.15;
+  return expectancy + profitFactor + drawdown + (degraded ? -6 : 0);
 }
 
 function candidate(signal: Hte31Signal, evidenceByTrader: ReadonlyMap<Hte31TraderId, Hte31RouterEvidence>): Hte31RouterCandidate | null {
@@ -71,10 +86,13 @@ function candidate(signal: Hte31Signal, evidenceByTrader: ReadonlyMap<Hte31Trade
     traderId,
     strategyId: signal.strategyId,
     code: definition.code,
-    label: `${definition.code} ${definition.name}`,
+    label: hte31CanonicalStrategyLabel(traderId),
     side: signal.side,
     lane: definition.lane,
     storyFamily: definition.storyFamily,
+    familyId: definition.familyId,
+    variantId: definition.variantId,
+    tags: definition.tags,
     currentScore: Number(currentScore.toFixed(2)),
     evidenceScore: Number(learned.toFixed(2)),
     combinedScore: Number((currentScore + learned).toFixed(2)),
@@ -95,10 +113,17 @@ export function buildHte31StrategyRouterDecision(input: {
   activePosition?: { traderId: string; side: Hte31TradeSide } | null;
 }): Hte31RouterDecision {
   const evidenceByTrader = new Map(input.evidence.map((item) => [item.traderId, item]));
-  const candidates = input.signals
+  const rawCandidates = input.signals
     .map((signal) => candidate(signal, evidenceByTrader))
     .filter((item): item is Hte31RouterCandidate => item != null)
     .sort((a, b) => b.combinedScore - a.combinedScore || b.currentScore - a.currentScore || a.code.localeCompare(b.code));
+  const winnersByFamily = new Map<Hte31StrategyFamilyId, Hte31RouterCandidate>();
+  const familyAlternatives: Hte31RouterCandidate[] = [];
+  for (const item of rawCandidates) {
+    if (winnersByFamily.has(item.familyId)) familyAlternatives.push(item);
+    else winnersByFamily.set(item.familyId, item);
+  }
+  const candidates = [...winnersByFamily.values()];
   const activePosition = input.activePosition ?? null;
   const base = {
     authority: "paper_brain_live_parity" as const,
@@ -116,6 +141,7 @@ export function buildHte31StrategyRouterDecision(input: {
       selectedForExecution: null,
       supporting: [],
       opposing: [],
+      familyAlternatives,
       currentThesisState: activePosition ? "uncertain" : "none",
       replacementEligible: false,
       reason: activePosition
@@ -143,6 +169,7 @@ export function buildHte31StrategyRouterDecision(input: {
         selectedForExecution: null,
         supporting: candidates.filter((item) => item.side === replacement.side && item.traderId !== replacement.traderId),
         opposing: candidates.filter((item) => item.side !== replacement.side),
+        familyAlternatives,
         currentThesisState: "invalidated",
         replacementEligible: replacement.evidence.qualified,
         reason: `${activePosition.traderId} 的当前方向前提已被新结构否定；${replacement.label} 独立形成 ${replacement.side} Setup。旧仓应先按自身失效规则退出，不能把“退出”和“反手”合并成一个动作。`,
@@ -161,6 +188,7 @@ export function buildHte31StrategyRouterDecision(input: {
       selectedForExecution,
       supporting,
       opposing,
+      familyAlternatives,
       currentThesisState: activePosition ? "uncertain" : "none",
       replacementEligible: false,
       reason: `${primary.label} 看 ${primary.side}，同时 ${opposing.map((item) => item.label).join("、")} 看相反方向；领先差 ${leadingMargin.toFixed(1)} 分。`,
@@ -178,6 +206,7 @@ export function buildHte31StrategyRouterDecision(input: {
       selectedForExecution: primary,
       supporting,
       opposing: [],
+      familyAlternatives,
       currentThesisState: activePosition ? "intact" : "none",
       replacementEligible: primary.evidence.qualified,
       reason: `${primary.label} 与 ${supporting.map((item) => item.label).join("、")} 独立得到同方向结论；它们可以共同归因，但不能因此重复放大名义仓位。`,
@@ -192,6 +221,7 @@ export function buildHte31StrategyRouterDecision(input: {
     selectedForExecution: primary,
     supporting: [],
     opposing: [],
+    familyAlternatives,
     currentThesisState: activePosition ? "intact" : "none",
     replacementEligible: primary.evidence.qualified,
     reason: `${primary.label} 是本轮唯一完整的 ${primary.side} 市场故事；排名来自当前结构质量，历史表现只有达到最低样本后才参与微调。`,

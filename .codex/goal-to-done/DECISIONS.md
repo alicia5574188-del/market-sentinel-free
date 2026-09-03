@@ -148,3 +148,31 @@ Record only consequential decisions using this format:
 - Reason: Five simultaneous paper positions can otherwise create 28,800 unchanged holding-row updates per day and push the account past Cloudflare's warning threshold. The user requires the free daily allowance to remain sufficient after every future upgrade.
 - Evidence: The bounded thirteen-strategy/five-position schedule produces 18,720 evaluation rows, 1,440 diagnostic rows, and 7,200 position checkpoints per day, totaling 27,360 recurring rows and leaving 72,640 rows for lifecycle events and operational variance.
 - Revisit when: Position capacity, scanner cadence, strategy count, persistence cadence, D1 plan, or any other recurring write path changes.
+
+## 2026-09-03 — Treat HT4 as ordinary evidence and manage strategies by family lifecycle
+
+- Choice: In the next strategy-brain implementation, remove HT4's freeze and special treatment. Preserve its prior profitable period only as historical evidence. Apply the same recent/lifetime/regime evidence, health states, diagnosis, retest, pause, and consolidation rules to all thirteen current strategy IDs. Group the explicit base/challenger pairs into canonical families without deleting legacy lineage.
+- Reason: A strategy that made money previously is not guaranteed to retain its edge. Permanent protection would prevent the brain from detecting decay and would conflict with the owner's requirement that every strategy be understood, reviewed, and corrected or reduced when necessary.
+- Evidence: Current code already exposes four base/challenger relationships through `baselineId`, and already stores actual paper results, Entry Quality, counterfactual paths, performance cells, and per-strategy evaluations. HT4's source fingerprint is a previous policy guard, not evidence of future profitability.
+- Revisit when: Independent comparable-regime paper evidence supports a different family structure or the owner explicitly changes the equal-treatment rule.
+
+## 2026-09-03 — Consolidate candidates without deleting strategy history
+
+- Choice: Treat the thirteen stored strategy IDs as nine canonical families and thirteen variants. During one symbol/cycle, only the highest-ranked ready variant in a family can remain an executable candidate; the other variant remains visible as a family alternative and keeps its independent history.
+- Reason: HT1/HT1-R, HT2/HT2-R, HT3/HT3-R, and HT5/HT5-R express overlapping stories. Allowing both to open from the same family/cycle would duplicate exposure, while deleting an ID would destroy attribution and Gate lineage.
+- Evidence: `lib/hte31-strategy-catalog.ts` defines the family map and `lib/hte31-strategy-router.ts` performs deterministic family deduplication before conflict/cooperation routing.
+- Revisit when: Comparable-regime closed-order evidence proves two variants are behaviorally independent or one is safely retireable.
+
+## 2026-09-03 — Separate one-order diagnosis from repeated strategy changes
+
+- Choice: Complete the existing 0/30/60/120/240/720-minute observation before issuing a final order verdict. A single order may state a profit path or no-trade conclusion, but strategy rules change only after repeated evidence in the same setup/environment.
+- Reason: The owner requires every order to answer how it could have made money or whether it should not have existed, without turning one hindsight result into uncontrolled overfitting.
+- Evidence: `lib/hte31-trade-verdict.ts` is observer-only; `lib/resonance-review.ts` consumes its result while retaining repeated-pattern thresholds for actual cognitive directives.
+- Revisit when: More granular market replay supports a stronger causal test than the current 5-minute candle path.
+
+## 2026-09-03 — Derive lifecycle health without new recurring D1 writes
+
+- Choice: Compute strategy/family health from existing closed trades and 24-hour trigger buckets. Use recent eight versus older baseline evidence for degradation, and distinguish no suitable regime from active triggers repeatedly blocked by conditions.
+- Reason: The brain must understand both losing and unused strategies, while the free D1 allowance must remain sufficient every day.
+- Evidence: The upgrade adds no insert/update schedule or schema migration. The existing regression budget remains 27,360 planned recurring writes/day.
+- Revisit when: Strategy count, position capacity, scanner cadence, checkpoint cadence, or any new recurring persistence changes.

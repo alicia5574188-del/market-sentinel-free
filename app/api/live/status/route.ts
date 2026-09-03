@@ -2,7 +2,9 @@ import { inArray } from "drizzle-orm";
 import { requireApiAccount } from "../../../api-auth";
 import { getDb } from "../../../../db";
 import { tradeCases } from "../../../../db/schema";
+import { hte31Trades } from "../../../../db/hte31-schema";
 import { getLiveTradingSnapshot } from "../../../../lib/live-trading-repository";
+import { hte31CanonicalStrategyLabel, type Hte31TraderId } from "../../../../lib/hte31-strategy-catalog";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +26,16 @@ function stringList(value: string | null | undefined) {
   }
 }
 
+type LinkedStrategy = {
+  id: string;
+  traderId: string | null;
+  entryTrigger: string | null;
+  entryThesis: string | null;
+  exitReason: string | null;
+  exitEvidenceJson: string | null;
+  strategyLabel: string;
+};
+
 export async function GET() {
   const auth = await requireApiAccount();
   if ("response" in auth) return auth.response;
@@ -37,19 +49,31 @@ export async function GET() {
       [key: string]: unknown;
     };
     const ids = [...new Set((snapshot.orders ?? []).map((order) => order.tradeCaseId).filter(Boolean))];
-    const linked = ids.length ? await getDb().select({
+    const currentLinked = ids.length ? await getDb().select({
+      id: hte31Trades.id,
+      traderId: hte31Trades.traderId,
+      entryTrigger: hte31Trades.entryTrigger,
+      entryThesis: hte31Trades.entryThesis,
+      exitReason: hte31Trades.exitReason,
+    }).from(hte31Trades).where(inArray(hte31Trades.id, ids)) : [];
+    const currentIds = new Set(currentLinked.map((row) => row.id));
+    const legacyIds = ids.filter((id) => !currentIds.has(id));
+    const legacyLinked = legacyIds.length ? await getDb().select({
       id: tradeCases.id,
       entryTrigger: tradeCases.entryTrigger,
       entryThesis: tradeCases.entryThesis,
       exitReason: tradeCases.exitReason,
       exitEvidenceJson: tradeCases.exitEvidenceJson,
-    }).from(tradeCases).where(inArray(tradeCases.id, ids)) : [];
-    const byId = new Map(linked.map((row) => [row.id, row]));
+    }).from(tradeCases).where(inArray(tradeCases.id, legacyIds)) : [];
+    const byId = new Map<string, LinkedStrategy>([
+      ...currentLinked.map((row): [string, LinkedStrategy] => [row.id, { ...row, strategyLabel: hte31CanonicalStrategyLabel(row.traderId as Hte31TraderId), exitEvidenceJson: null }]),
+      ...legacyLinked.map((row): [string, LinkedStrategy] => [row.id, { ...row, strategyLabel: strategyLabel(row.entryTrigger), traderId: null }]),
+    ]);
     const orders = (snapshot.orders ?? []).map((order) => {
       const trade = byId.get(order.tradeCaseId);
       return {
         ...order,
-        strategyLabel: strategyLabel(trade?.entryTrigger),
+        strategyLabel: trade?.strategyLabel ?? strategyLabel(trade?.entryTrigger),
         strategyTrigger: trade?.entryTrigger ?? null,
         strategyThesis: trade?.entryThesis ?? null,
         strategyExitReason: trade?.exitReason ?? null,

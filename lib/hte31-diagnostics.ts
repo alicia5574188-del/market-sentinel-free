@@ -4,8 +4,9 @@ import { hte31ShadowSamples, hte31TriggerBuckets } from "../db/hte31-diagnostics
 import { hte31Trades } from "../db/hte31-schema";
 import { HTE31_PAPER_PORTFOLIO_POLICY } from "./hte31-position-sizing.ts";
 import { isCurrentResonanceTrade } from "./resonance-policy-version.ts";
-import { HTE31_ALL_TRADER_IDS, hte31TraderIdForSignal, type Hte31TraderId } from "./hte31-strategy-catalog.ts";
+import { HTE31_ALL_TRADER_IDS, HTE31_STRATEGY_FAMILIES, hte31TraderDefinition, hte31TraderIdForSignal, type Hte31TraderId } from "./hte31-strategy-catalog.ts";
 import { buildHte31StrategyRouterDecision, HTE31_ROUTER_PROMOTION_POLICY, type Hte31RouterEvidence } from "./hte31-strategy-router.ts";
+import { evaluateHte31StrategyHealth, summarizeHte31FamilyHealth } from "./hte31-strategy-health.ts";
 import type { Hte31Signal } from "./hte31-types.ts";
 import type { GateAnalysisPacket } from "./gate-client.ts";
 
@@ -34,6 +35,7 @@ type NearestCandidate = {
 
 type TraderBucket = {
   evaluations: number;
+  triggerActive: number;
   ready: number;
   watching: number;
   blocked: number;
@@ -45,7 +47,7 @@ type TraderBucket = {
 type TriggerBucketPayload = Record<Hte31TraderId, TraderBucket>;
 
 function emptyTraderBucket(): TraderBucket {
-  return { evaluations: 0, ready: 0, watching: 0, blocked: 0, nearReady: 0, failures: {}, nearest: null };
+  return { evaluations: 0, triggerActive: 0, ready: 0, watching: 0, blocked: 0, nearReady: 0, failures: {}, nearest: null };
 }
 
 function emptyBucket(): TriggerBucketPayload {
@@ -73,6 +75,7 @@ function isNearReady(traderId: Hte31TraderId, signal: Hte31Signal, failed: Faile
 
 function mergeSignal(bucket: TraderBucket, packet: GateAnalysisPacket, signal: Hte31Signal, failed: FailedCheck[], nearReady: boolean) {
   bucket.evaluations += 1;
+  bucket.triggerActive = (bucket.triggerActive ?? 0) + (signal.strategyMeta.triggerActive ? 1 : 0);
   if (signal.state === "ready") bucket.ready += 1;
   else if (signal.state === "blocked") bucket.blocked += 1;
   else bucket.watching += 1;
@@ -154,6 +157,8 @@ async function buildPaperRouterEvidence(): Promise<Hte31RouterEvidence[]> {
   return TRADERS.map((traderId) => {
     const own = rows.filter((row) => row.traderId === traderId);
     const results = own.map((row) => (row.netPnlUsdt ?? 0) / row.riskBudgetUsdt);
+    const recent = results.slice(0, 8);
+    const baseline = results.slice(8);
     const grossProfitR = results.reduce((sum, value) => sum + Math.max(0, value), 0);
     const grossLossR = Math.abs(results.reduce((sum, value) => sum + Math.min(0, value), 0));
     const expectancyR = results.length ? results.reduce((sum, value) => sum + value, 0) / results.length : 0;
@@ -163,7 +168,27 @@ async function buildPaperRouterEvidence(): Promise<Hte31RouterEvidence[]> {
       && profitFactor != null && profitFactor >= HTE31_ROUTER_PROMOTION_POLICY.minimumProfitFactor
       && expectancyR >= HTE31_ROUTER_PROMOTION_POLICY.minimumExpectancyR
       && maximumDrawdownR <= HTE31_ROUTER_PROMOTION_POLICY.maximumDrawdownR;
-    return { traderId, sampleCount: results.length, expectancyR, profitFactor, maximumDrawdownR, qualified };
+    const recentExpectancyR = recent.length ? recent.reduce((sum, value) => sum + value, 0) / recent.length : 0;
+    const baselineExpectancyR = baseline.length ? baseline.reduce((sum, value) => sum + value, 0) / baseline.length : 0;
+    let historical = 0;
+    let everProfitable = false;
+    for (const value of [...results].reverse()) {
+      historical += value;
+      if (historical > 0) everProfitable = true;
+    }
+    return {
+      traderId,
+      sampleCount: results.length,
+      expectancyR,
+      profitFactor,
+      maximumDrawdownR,
+      qualified,
+      recentSampleCount: recent.length,
+      recentExpectancyR,
+      baselineSampleCount: baseline.length,
+      baselineExpectancyR,
+      everProfitable,
+    };
   });
 }
 
@@ -199,6 +224,7 @@ function independentCompletedRows(rows: typeof hte31ShadowSamples.$inferSelect[]
 type FailureSummary = { label: string; count: number; rate: number };
 type TraderWindowSummary = {
   evaluations: number;
+  triggerActive: number;
   ready: number;
   watching: number;
   blocked: number;
@@ -219,6 +245,7 @@ function summarizeBuckets(rows: { bucketStart: number; payloadJson: string }[], 
       const source = payload[traderId] ?? emptyTraderBucket();
       const target = totals[traderId];
       target.evaluations += source.evaluations;
+      target.triggerActive += source.triggerActive ?? 0;
       target.ready += source.ready;
       target.watching += source.watching;
       target.blocked += source.blocked;
@@ -235,6 +262,7 @@ function summarizeBuckets(rows: { bucketStart: number; payloadJson: string }[], 
         .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label)).slice(0, 4);
       return [traderId, {
         evaluations: row.evaluations,
+        triggerActive: row.triggerActive,
         ready: row.ready,
         watching: row.watching,
         blocked: row.blocked,
@@ -292,17 +320,46 @@ function shadowSummary(rows: typeof hte31ShadowSamples.$inferSelect[], traderId:
 export async function getHte31Diagnostics(now = Date.now()) {
   const db = getDb();
   const [buckets, shadowRows, routerEvidence] = await Promise.all([
-    db.select().from(hte31TriggerBuckets).where(gte(hte31TriggerBuckets.bucketStart, now - 6 * 60 * 60_000)).orderBy(asc(hte31TriggerBuckets.bucketStart)),
+    db.select().from(hte31TriggerBuckets).where(gte(hte31TriggerBuckets.bucketStart, now - 24 * 60 * 60_000)).orderBy(asc(hte31TriggerBuckets.bucketStart)),
     db.select().from(hte31ShadowSamples).orderBy(desc(hte31ShadowSamples.updatedAt)).limit(500),
     buildPaperRouterEvidence(),
   ]);
+  const h24 = summarizeBuckets(buckets, now - 24 * 60 * 60_000);
+  const strategyHealth = Object.fromEntries(routerEvidence.map((evidence) => {
+    const activity = h24.traders[evidence.traderId];
+    return [evidence.traderId, {
+      traderId: evidence.traderId,
+      familyId: hte31TraderDefinition(evidence.traderId).familyId,
+      ...evaluateHte31StrategyHealth({
+        sampleCount: evidence.sampleCount,
+        expectancyR: evidence.expectancyR,
+        recentSampleCount: evidence.recentSampleCount ?? 0,
+        recentExpectancyR: evidence.recentExpectancyR ?? 0,
+        baselineSampleCount: evidence.baselineSampleCount ?? 0,
+        baselineExpectancyR: evidence.baselineExpectancyR ?? 0,
+        everProfitable: evidence.everProfitable ?? false,
+        evaluations: activity.evaluations,
+        triggerActive: activity.triggerActive,
+        ready: activity.ready,
+        nearReady: activity.nearReady,
+        topFailures: activity.topFailures,
+      }),
+    }];
+  })) as Record<Hte31TraderId, ReturnType<typeof evaluateHte31StrategyHealth> & { traderId: Hte31TraderId; familyId: string }>;
+  const familyHealth = Object.fromEntries(HTE31_STRATEGY_FAMILIES.map((family) => [family.id, summarizeHte31FamilyHealth({
+    familyId: family.id,
+    members: family.traderIds.map((traderId) => ({ traderId, health: strategyHealth[traderId] })),
+  })]));
   return {
     windows: {
       h1: summarizeBuckets(buckets, now - 60 * 60_000),
       h6: summarizeBuckets(buckets, now - 6 * 60 * 60_000),
+      h24,
     },
     shadow: Object.fromEntries(TRADERS.map((traderId) => [traderId, shadowSummary(shadowRows, traderId)])) as Record<Hte31TraderId, ReturnType<typeof shadowSummary>>,
     routerEvidence,
+    strategyHealth,
+    familyHealth,
     policy: {
       softConfirmationKeys: {
         dennis_trend: [...(SOFT_CONFIRMATION_KEYS.dennis_trend ?? [])],

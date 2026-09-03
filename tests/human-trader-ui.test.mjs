@@ -12,11 +12,11 @@ const [page, layout, route, chart, css, liveStatus, scanner] = await Promise.all
   readFile(new URL("../lib/hte31-scanner.ts", import.meta.url), "utf8"),
 ]);
 
-test("production UI is Resonance while preserving all five playbooks", () => {
+test("production UI is Resonance while preserving every historical strategy variant", () => {
   assert.match(page, /Resonance/);
   assert.match(page, /市场记忆 · 自适应交易/);
-  for (const phrase of ["Dennis", "Raschke", "Turtle Soup", "Exhaustion", "Swing"]) assert.match(page, new RegExp(phrase));
-  for (const phrase of ["HT1-R", "HT2-R", "HT3-R", "HT5-R", "HT6", "HT7", "HT8", "HT9", "统一模拟策略池", "十三种打法由大脑择优"]) assert.match(page, new RegExp(phrase));
+  for (const phrase of ["HT1", "HT2", "HT3", "HT4", "HT5", "HT1-R", "HT2-R", "HT3-R", "HT5-R", "HT6", "HT7", "HT8", "HT9", "统一模拟策略池", "9 个策略家族由大脑择优"]) assert.match(page, new RegExp(phrase));
+  for (const family of ["SF01", "SF02", "SF03", "SF04", "SF05", "SF06", "SF07", "SF08", "SF09"]) assert.match(page, new RegExp(family));
   assert.match(page, /系统有没有进步/);
   assert.match(page, /MemoryCard item=\{memory\.short\} symbol=\{readModel\?\.target\}/);
   assert.match(page, /MemoryCard item=\{memory\.swing\} symbol=\{readModel\?\.target\}/);
@@ -49,6 +49,8 @@ test("trade cards preserve leverage economics and full expandable review", () =>
   for (const metric of ["仓内 MFE", "仓内 MAE", "出场后 MFE", "出场后 MAE", "Exit Capture", "Exit Efficiency"]) assert.match(page, new RegExp(metric));
   assert.match(page, /counterfactual/);
   assert.match(page, /diagnosis/);
+  assert.match(page, /finalVerdict/);
+  assert.match(chart, /buildHte31TradeFinalVerdict/);
   assert.match(chart, /exitCapturePct/);
   assert.match(chart, /exitEfficiency/);
   assert.match(chart, /markers:/);

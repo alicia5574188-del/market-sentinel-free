@@ -5,6 +5,8 @@ import { fetchGateChartCandles } from "../../../../lib/gate-client";
 import { getHte31Trade, getHte31TradeChart } from "../../../../lib/hte31-repository";
 import { buildHte31Counterfactual } from "../../../../lib/hte31-counterfactual";
 import { buildResonanceEntryQuality } from "../../../../lib/resonance-entry-quality";
+import { hte31CanonicalStrategyLabel, hte31StrategyFamilyForTrader, hte31TraderDefinition, type Hte31TraderId } from "../../../../lib/hte31-strategy-catalog";
+import { buildHte31TradeFinalVerdict } from "../../../../lib/hte31-trade-verdict";
 import { getSettings } from "../../../../lib/settings-repository";
 import type { Candle } from "../../../../lib/signal-engine";
 import { requireApiAccount } from "../../../api-auth";
@@ -55,14 +57,26 @@ export async function GET(request: Request) {
   const entryQuality = candles.length
     ? buildResonanceEntryQuality(trade, candles, settings.roundTripCostBps, now)
     : stored?.entryQuality ?? null;
+  const finalVerdict = buildHte31TradeFinalVerdict({ trade, entryQuality, counterfactual });
+  const traderId = trade.traderId as Hte31TraderId;
+  const definition = hte31TraderDefinition(traderId);
+  const family = hte31StrategyFamilyForTrader(traderId);
 
   return Response.json({
-    version: "hte-3.1-clean",
+    version: "resonance-strategy-lifecycle-v1",
     tradeId: trade.id,
     symbol: trade.symbol,
     side: trade.side,
     traderId: trade.traderId,
     setupId: trade.setupId,
+    strategy: {
+      familyId: family.id,
+      familyName: family.name,
+      variantId: definition.variantId,
+      variantName: definition.variantName,
+      canonicalLabel: hte31CanonicalStrategyLabel(traderId),
+      tags: definition.tags,
+    },
     observedAt: now,
     candles,
     currentPrice: candles.at(-1)?.close ?? trade.lastPrice,
@@ -81,6 +95,7 @@ export async function GET(request: Request) {
     observationUntilAt: trade.exitAt ? trade.exitAt + 12 * 60 * 60_000 : null,
     observations,
     counterfactual,
+    finalVerdict,
     diagnosis: {
       mfePct: trade.mfePct,
       maePct: trade.maePct,

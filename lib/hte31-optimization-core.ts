@@ -145,7 +145,7 @@ export function buildHte31OptimizationAnalysis(rows: Hte31OptimizationTrade[]) {
   const sides = grouped(closed, (row) => row.side);
 
   const findings: { priority: "high" | "medium" | "observe"; code: string; evidence: string; action: string }[] = [];
-  if (overall.samples < 12) findings.push({ priority: "observe", code: "sample_size", evidence: `当前只有 ${overall.samples} 笔已平仓样本`, action: "继续模拟和 Shadow 采样；不因为小样本全局提高入场门槛。" });
+  if (overall.samples < 12) findings.push({ priority: "observe", code: "sample_size", evidence: `当前只有 ${overall.samples} 笔已平仓样本`, action: "继续统一模拟池采样；不因为小样本全局提高入场门槛。" });
   if (overall.samples >= 6 && overall.expectancyR < 0) findings.push({ priority: "high", code: "negative_expectancy", evidence: `整体 Exp ${overall.expectancyR.toFixed(2)}R，PF ${overall.profitFactor == null ? "--" : overall.profitFactor.toFixed(2)}`, action: "保持 Gate 新开仓负期望门控；模拟继续运行并优先修复拖累最大的组合。" });
   if (overall.samples >= 6 && overall.payoffRatio != null && overall.payoffRatio < 1.2) findings.push({ priority: "high", code: "payoff_structure", evidence: `平均盈利 ${overall.averageWinR?.toFixed(2)}R，平均亏损 ${overall.averageLossR?.toFixed(2)}R，Payoff ${overall.payoffRatio.toFixed(2)}`, action: "优先检查止盈兑现、TP1 后回本止损和 timeout，而不是继续收紧入场过滤。" });
   for (const cell of cells.filter((item) => item.samples >= 3 && item.expectancyR < 0).slice(0, 3)) findings.push({ priority: cell.performanceGate.state === "PAUSED" ? "high" : "medium", code: "negative_cell", evidence: `${cell.id} · ${cell.samples}笔 · Exp ${cell.expectancyR.toFixed(2)}R · PF ${cell.profitFactor == null ? "--" : cell.profitFactor.toFixed(2)}`, action: cell.performanceGate.state === "PAUSED" ? "该组合保持暂停，其他组合不受影响。" : "继续独立采样到门控样本量，不做全局降频。" });

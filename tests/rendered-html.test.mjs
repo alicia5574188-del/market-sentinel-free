@@ -30,6 +30,6 @@ test("renders production Resonance metadata", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
   assert.match(html, /<title>Resonance｜自适应交易系统<\/title>/i);
-  assert.match(html, /当前市场结构、历史相似行情、十三种统一模拟策略与阶段复盘/);
+  assert.match(html, /当前市场结构、历史相似行情、9个策略家族\/13个变体与逐单复盘/);
   assert.doesNotMatch(html, /name=["']codex-preview["']/i);
 });

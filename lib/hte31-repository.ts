@@ -273,7 +273,7 @@ export async function tryOpenHte31Trade(
   const selected = candidates[0];
   if (!selected?.signal.entryPlan || selected.signal.side === "WAIT") {
     const paused = scoredCandidates.find((item) => item.performanceGate.state === "PAUSED");
-    return { opened: null, reason: paused ? `负期望组合门控：${paused.performanceGate.reason}` : "十三种打法本轮没有完整 Setup" };
+    return { opened: null, reason: paused ? `负期望组合门控：${paused.performanceGate.reason}` : "9个策略家族本轮没有完整 Setup" };
   }
 
   const [existing] = await db.select({ id: hte31Trades.id }).from(hte31Trades)

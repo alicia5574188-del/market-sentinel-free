@@ -2,6 +2,7 @@ import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { hte31TradeCharts, hte31Trades } from "../db/hte31-schema";
 import { buildHte31Counterfactual } from "./hte31-counterfactual.ts";
+import { buildHte31TradeFinalVerdict, type Hte31TradeFinalVerdict } from "./hte31-trade-verdict.ts";
 import {
   buildResonanceEntryQuality,
   buildResonanceEntryQualityPattern,
@@ -27,6 +28,7 @@ export type ResonanceTradeAutopsy = {
   explanation: string;
   evidence: string[];
   entryQuality: ResonanceEntryQualityReport | null;
+  finalVerdict: Hte31TradeFinalVerdict;
 };
 
 export type ResonanceSystemReview = {
@@ -83,6 +85,7 @@ type ReviewedTrade = {
   smallWinner: boolean;
   marketMismatch: boolean;
   entryQuality: ResonanceEntryQualityReport | null;
+  finalVerdict: Hte31TradeFinalVerdict;
   primaryCause: ResonanceReviewIssue;
   evidence: string[];
 };
@@ -213,18 +216,21 @@ export async function getResonanceSystemReview(): Promise<ResonanceSystemReview>
     const chart = chartById.get(trade.id);
     let directionError = false;
     let entryQuality: ResonanceEntryQualityReport | null = null;
+    let counterfactual = null;
     if (chart) {
       const candles = mergeCandles(
         parseJson<Hte31Candle[]>(chart.entryCandlesJson, []),
         parseJson<Hte31Candle[]>(chart.holdingCandlesJson, []),
         parseJson<Hte31Candle[]>(chart.postExitCandlesJson, []),
       );
-      const counterfactual = buildHte31Counterfactual(trade, candles, settings.roundTripCostBps, Date.now());
+      counterfactual = buildHte31Counterfactual(trade, candles, settings.roundTripCostBps, Date.now());
       const horizon = counterfactual?.horizons.find((item) => item.minutes === 240);
       directionError = Boolean(horizon && horizon.originalR < -0.15 && horizon.oppositeR > horizon.originalR + 0.6);
       entryQuality = parseJson<ResonanceEntryQualityReport | null>(chart.entryQualityJson, null)
         ?? buildResonanceEntryQuality(trade, candles, settings.roundTripCostBps, Date.now());
     }
+    const finalVerdict = buildHte31TradeFinalVerdict({ trade, entryQuality, counterfactual });
+    directionError ||= finalVerdict.code === "DIRECTION_WRONG";
     const poorEntry = entryQuality?.sampleSufficient
       ? entryQuality.classification === "entry_too_early" || entryQuality.classification === "entry_too_late"
       : maeR >= 0.75 && mfeR >= 0.6;
@@ -246,6 +252,7 @@ export async function getResonanceSystemReview(): Promise<ResonanceSystemReview>
       smallWinner,
       marketMismatch,
       entryQuality,
+      finalVerdict,
     };
     const cause = primaryCause(base);
     const evidence = [
@@ -255,6 +262,7 @@ export async function getResonanceSystemReview(): Promise<ResonanceSystemReview>
       marketMismatch ? `当前打法与 ${trade.assetRegime} 环境匹配度偏低` : `打法与 ${trade.assetRegime} 环境没有明显冲突`,
       stopProblem ? "止损后出现明显恢复，怀疑保护过早/位置过紧" : "未发现明确假止损恢复",
       ...(entryQuality?.evidence ?? []),
+      `逐单结论：${finalVerdict.label} · ${finalVerdict.profitPath}`,
     ];
     return { ...base, primaryCause: cause, evidence };
   });
@@ -301,6 +309,7 @@ export async function getResonanceSystemReview(): Promise<ResonanceSystemReview>
       : `当前首先追查「${issueLabel(latestTrade.primaryCause)}」，而不是因为亏损本身机械暂停。`,
     evidence: latestTrade.evidence,
     entryQuality: latestTrade.entryQuality,
+    finalVerdict: latestTrade.finalVerdict,
   };
 
   const latestBlock = reviewed.slice(0, 5);
