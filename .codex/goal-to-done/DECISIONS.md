@@ -2,6 +2,13 @@
 
 Record only consequential decisions using this format:
 
+## 2026-09-03 — Restart the adaptive round without deleting evidence
+
+- Choice: Use a one-time migration reset that blocks new entries, archives all pre-upgrade paper positions at fresh Gate quotes, preserves their 12-hour observation chain, and starts a new capital epoch after the last archive. Ordinary owner resets remain non-forcing.
+- Reason: Pre-upgrade positions cannot inherit the new five-minute policy, while hard-deleting them would destroy audit and counterfactual evidence.
+- Evidence: The reset mode is explicit and one-time; the normal reset route always restores `natural`, and all close/observation writes reuse the existing position lifecycle.
+- Revisit when: A future version boundary requires a user-visible choice between natural completion and explicit migration archive.
+
 ## YYYY-MM-DD — Decision
 
 - Choice:

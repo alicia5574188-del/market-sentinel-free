@@ -1,5 +1,10 @@
 # Goal
 
+## Active patch objective — clean adaptive-brain restart
+
+- Stop new paper entries during the release, archive every pre-upgrade open paper position at a fresh exchange quote, retain its immutable lineage and seven-node 12-hour observation trail, then create a new simulation epoch at the configured starting capital.
+- Keep the ordinary owner reset non-forcing, leave Gate/live funds and execution untouched, add no recurring D1 writes, and verify the production schedulers and fresh current-round account after deployment.
+
 ## Active objective — adaptive direct-market decision and position brain
 
 - Keep the Direct Market Brain as the only new-order authority, but replace mechanical fixed-entry/hold behavior with a replayable decision loop that judges current location, direction, target path, invalidation, and whether to wait.

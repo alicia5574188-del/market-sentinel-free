@@ -1,5 +1,14 @@
 # Status
 
+## Clean adaptive-brain restart — locally verified
+
+- Added additive migration `0019_adaptive_brain_fresh_start.sql`: it blocks new paper entries and requests a one-time forced archive reset without deleting any order or learning record.
+- The Trade Manager skips old-policy review during this reset, obtains fresh Gate quotes, closes each old paper position as `version_reset`, creates all seven post-exit checkpoints through 12 hours, and finalizes a new simulation epoch only after every old position is archived.
+- Normal future owner resets remain natural-exit resets. Gate/live controls, credentials, orders, funds, risk sizing, strategy decisions, scheduler generation, and recurring D1 writes are unchanged.
+- Local verification passed: 224/224 strategy/risk/migration tests, 111/111 production/UI/safety tests, 18/18 focused reset/migration tests, TypeScript, ESLint with warnings only, production build, and `git diff --check`.
+- Next: release through PR/green CI/merge, then verify production health, zero old open paper positions, restored starting capital, and resumed adaptive scanning.
+- Updated UTC: 2026-09-03.
+
 ## Adaptive direct-market decision and position brain — locally verified
 
 - Branch: `feat/adaptive-position-brain`, based on production `main` `7a71f77fa29d3e442d2e8a38a28e1a3eca101d3c`.
