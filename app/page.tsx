@@ -225,7 +225,25 @@ type Trade = {
   maePct: number | null;
   postExitLabel: string | null;
   exitEfficiency: number | null;
+  entryMetricsJson: string;
 };
+
+type PositionDecisionView = {
+  action: "HOLD" | "PROTECT" | "EXIT";
+  reason: string;
+};
+
+function latestPositionDecision(trade: Trade): PositionDecisionView | null {
+  try {
+    const metrics = JSON.parse(trade.entryMetricsJson) as { key?: string; detail?: string }[];
+    const row = metrics.find((item) => item.key === "direct-position-decision");
+    if (!row?.detail) return null;
+    const decision = JSON.parse(row.detail) as PositionDecisionView;
+    return ["HOLD", "PROTECT", "EXIT"].includes(decision.action) && decision.reason ? decision : null;
+  } catch {
+    return null;
+  }
+}
 
 type Learning = {
   id: string;
@@ -763,6 +781,7 @@ function TradeCard({ trade, roundTripCostBps }: { trade: Trade; roundTripCostBps
   const pnl = trade.status === "holding" ? trade.unrealizedNetUsdt : trade.netPnlUsdt;
   const realizedR = trade.status === "closed" && trade.netPnlUsdt != null && trade.riskBudgetUsdt > 0 ? trade.netPnlUsdt / trade.riskBudgetUsdt : null;
   const plannedTp2Net = plannedTp2NetUsdt(trade, roundTripCostBps);
+  const positionDecision = latestPositionDecision(trade);
   const toggle = async () => {
     const next = !expanded;
     setExpanded(next);
@@ -792,6 +811,7 @@ function TradeCard({ trade, roundTripCostBps }: { trade: Trade; roundTripCostBps
         <div className="rz-econ"><span>TP2预计净利</span><b className="rz-positive">{fmtMoney(plannedTp2Net)}</b></div>
         <div className="rz-econ"><span>{trade.status === "closed" ? "实际结果" : "当前进度"}</span><b>{trade.status === "closed" ? fmtR(realizedR) : fmtR(trade.progressR)}</b></div>
       </div>
+      {positionDecision && <p className="rz-thesis"><strong>持仓判断：</strong>{positionDecision.action} · {operatorText(positionDecision.reason)}</p>}
       <p className="rz-thesis">{operatorText(trade.entryThesis)}</p>
       <p className="rz-thesis">{fmtTime(trade.entryAt)}{trade.exitAt ? ` → ${fmtTime(trade.exitAt)} · ${trade.exitReason ?? trade.exitCode ?? "已平仓"}` : " · 持仓中"} · 点击{expanded ? "收起" : "展开"}完整复盘</p>
     </button>

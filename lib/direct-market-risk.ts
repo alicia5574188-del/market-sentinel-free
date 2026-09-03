@@ -76,3 +76,23 @@ export function evaluateDirectMarketRisk(rows: DirectMarketResult[]): DirectMark
     reason: `${sampleCount} 个独立事件 · 期望 ${expectancyR.toFixed(2)}R · PF ${profitFactor == null ? "--" : profitFactor >= 99 ? "∞" : profitFactor.toFixed(2)} · 回撤 ${drawdownR.toFixed(2)}R`,
   };
 }
+
+/** Risk stages change admission quality, never the accepted trade's 3.5% size. */
+export function directMarketRiskAdmission(input: {
+  state: DirectMarketRiskState;
+  confidence: number;
+  netEdgeR: number;
+  location: "TOP" | "MIDDLE" | "BOTTOM" | "BREAKOUT" | "BREAKDOWN";
+}) {
+  if (input.state === "PAUSED") return { allowed: false, reason: "即时风险保护已暂停新开仓" };
+  const minimumConfidence = input.state === "DEFENSIVE" ? 82 : input.state === "CAUTION" ? 76 : 70;
+  const minimumEdgeR = input.state === "DEFENSIVE" ? 0.9 : input.state === "CAUTION" ? 0.7 : 0.55;
+  const locationAllowed = !["CAUTION", "DEFENSIVE"].includes(input.state) || input.location !== "MIDDLE";
+  const allowed = input.confidence >= minimumConfidence && input.netEdgeR >= minimumEdgeR && locationAllowed;
+  return {
+    allowed,
+    reason: allowed
+      ? `${input.state} 准入通过：把握 ${input.confidence}，净优势 ${input.netEdgeR.toFixed(2)}R`
+      : `${input.state} 要求把握≥${minimumConfidence}、净优势≥${minimumEdgeR.toFixed(2)}R${locationAllowed ? "" : "且不能位于区间中部"}`,
+  };
+}

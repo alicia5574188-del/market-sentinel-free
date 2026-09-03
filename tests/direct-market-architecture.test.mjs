@@ -2,13 +2,15 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [scanner, worker, repository, liveRepository, page, migration] = await Promise.all([
+const [scanner, worker, repository, liveRepository, page, migration, execution, positionBrain] = await Promise.all([
   readFile(new URL("../lib/hte31-scanner.ts", import.meta.url), "utf8"),
   readFile(new URL("../worker/hte31-workers.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/hte31-repository.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/live-trading-repository.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
   readFile(new URL("../drizzle/0017_direct_market_brain.sql", import.meta.url), "utf8"),
+  readFile(new URL("../lib/direct-market-execution.ts", import.meta.url), "utf8"),
+  readFile(new URL("../lib/direct-market-position-brain.ts", import.meta.url), "utf8"),
 ]);
 
 test("new-entry scanner has no legacy strategy authority or high-frequency D1 writes", () => {
@@ -16,8 +18,20 @@ test("new-entry scanner has no legacy strategy authority or high-frequency D1 wr
     assert.doesNotMatch(scanner, new RegExp(forbidden));
   }
   assert.match(scanner, /buildDirectMarketCandidate/);
-  assert.match(worker, /freshReady\.length >= 3/);
+  assert.match(worker, /freshCohort\.length >= 3/);
+  assert.match(worker, /freshReady\.slice\(0, 3\)/);
+  assert.match(worker, /for \(const \[index, candidate\] of finalists\.entries\(\)\)/);
   assert.match(worker, /SCANNER_CYCLE_INTERVAL_MS = 25_000/);
+  assert.match(worker, /fetchGatePositionQuotes/);
+  assert.match(execution, /validateDirectMarketEntry/);
+});
+
+test("adaptive position decisions use completed candles without adding periodic D1 writes", () => {
+  assert.match(positionBrain, /action: "HOLD" \| "PROTECT" \| "EXIT"/);
+  assert.match(positionBrain, /candleTime\(candle\) < completedBoundary/);
+  assert.match(positionBrain, /brain_invalidation/);
+  assert.match(worker, /positionReviewBuckets/);
+  assert.match(repository, /positionDecisionMetrics/);
 });
 
 test("post-exit truth chain has all seven nodes and data quality isolation", () => {

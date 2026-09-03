@@ -28,6 +28,14 @@ function returns(candles: Hte31Candle[]) {
   return candles.slice(1).map((row, index) => row.close / Math.max(candles[index].close, Number.EPSILON) - 1);
 }
 
+function trendEfficiency(candles: Hte31Candle[]) {
+  const rows = candles.slice(-24);
+  if (rows.length < 3) return 0;
+  const displacement = Math.abs(rows.at(-1)!.close - rows[0].open);
+  const travelled = rows.reduce((sum, row) => sum + Math.abs(row.close - row.open), 0);
+  return clamp(displacement / Math.max(travelled, Number.EPSILON), 0, 1);
+}
+
 export function pearsonCorrelation(leftCandles: Hte31Candle[], rightCandles: Hte31Candle[]) {
   const left = returns(leftCandles).slice(-72);
   const right = returns(rightCandles).slice(-72);
@@ -82,6 +90,7 @@ export function buildDirectMarketCandidate(input: {
 }): DirectMarketCandidate {
   const { packet, candles } = input;
   const price = packet.market.futuresPrice;
+  const marketLocation = location(candles, price);
   const currentAtr = atr(candles);
   const atrPct = currentAtr && price > 0 ? currentAtr / price * 100 : null;
   const trend15m = packet.market.timeframeTrend15m ?? 0;
@@ -89,16 +98,26 @@ export function buildDirectMarketCandidate(input: {
   const trend4h = packet.market.timeframeTrend4h ?? 0;
   const flow = (packet.market.spotCvdRatio ?? 0) * 0.55 + (packet.market.orderBookImbalance ?? 0) * 0.45;
   const crowding = clamp((packet.market.fundingRate ?? 0) / 0.001, -1, 1);
-  const directionalScore = clamp(
+  const baseDirectionalScore = clamp(
     trend4h * 0.34 + trend1h * 0.27 + trend15m * 0.16 + clamp(flow * 2.4, -1, 1) * 0.17 - crowding * 0.06,
     -1,
     1,
   );
+  const provisionalSide = baseDirectionalScore >= 0 ? "LONG" as const : "SHORT" as const;
+  const locationAdjustment = provisionalSide === "LONG"
+    ? marketLocation === "BREAKOUT" ? 0.12 : marketLocation === "BOTTOM" ? 0.06 : marketLocation === "BREAKDOWN" ? -0.28 : marketLocation === "TOP" ? -0.06 : 0
+    : marketLocation === "BREAKDOWN" ? -0.12 : marketLocation === "TOP" ? -0.06 : marketLocation === "BREAKOUT" ? 0.28 : marketLocation === "BOTTOM" ? 0.06 : 0;
+  const directionalScore = clamp(baseDirectionalScore + locationAdjustment, -1, 1);
   const paths = normalizedPaths(directionalScore);
   const side = directionalScore >= 0 ? "LONG" as const : "SHORT" as const;
   const directionalProbability = side === "LONG" ? paths.up : paths.down;
   const confidence = Math.round(clamp(directionalProbability + packet.decision.dataQuality * 18, 0, 99));
-  const netEdgeR = directionalProbability / 100 * 2.8
+  const aligned = [trend15m, trend1h, trend4h].filter((value) => Math.sign(value) === Math.sign(directionalScore) && Math.abs(value) >= 0.08).length;
+  const efficiency = trendEfficiency(candles);
+  const structureQuality = clamp(Math.abs(directionalScore) * 0.5 + aligned / 3 * 0.3 + efficiency * 0.2, 0, 1);
+  const target1R = clamp(1.15 + structureQuality * 0.5, 1.2, 1.65);
+  const target2R = clamp(2.2 + structureQuality * 1.8, 2.4, 4);
+  const netEdgeR = directionalProbability / 100 * target2R
     - (side === "LONG" ? paths.down : paths.up) / 100
     - paths.rangeOrInvalid / 100 * 0.22;
   const btcCorrelation = packet.symbol === "BTC_USDT" ? 1 : pearsonCorrelation(candles, input.btcCandles);
@@ -107,7 +126,6 @@ export function buildDirectMarketCandidate(input: {
     : Math.abs(btcCorrelation) >= 0.8
       ? `btc-${btcCorrelation >= 0 ? "positive" : "inverse"}`
       : `independent-${packet.symbol}`;
-  const aligned = [trend15m, trend1h, trend4h].filter((value) => Math.sign(value) === Math.sign(directionalScore) && Math.abs(value) >= 0.08).length;
   const recent = candles.slice(-72);
   const swingLow = recent.length ? Math.min(...recent.map((row) => row.low)) : price;
   const swingHigh = recent.length ? Math.max(...recent.map((row) => row.high)) : price;
@@ -121,19 +139,22 @@ export function buildDirectMarketCandidate(input: {
   const entryHalfWidth = Math.min(stopDistance * 0.12, price * 0.0015);
   const entryZone: [number, number] = [price - entryHalfWidth, price + entryHalfWidth];
   const targets = side === "LONG"
-    ? [price + stopDistance * 1.4, price + stopDistance * 2.8]
-    : [price - stopDistance * 1.4, price - stopDistance * 2.8];
+    ? [price + stopDistance * target1R, price + stopDistance * target2R]
+    : [price - stopDistance * target1R, price - stopDistance * target2R];
+  const locationValid = side === "LONG" ? marketLocation !== "BREAKDOWN" : marketLocation !== "BREAKOUT";
   const checks = [
     { key: "data", label: "数据完整", passed: packet.decision.dataQuality >= 0.72 && candles.length >= 48, detail: `质量 ${Math.round(packet.decision.dataQuality * 100)}% · 5m K线 ${candles.length}` },
     { key: "direction", label: "方向优势", passed: Math.abs(directionalScore) >= 0.30, detail: `方向分 ${directionalScore.toFixed(2)}` },
     { key: "timeframes", label: "周期共振", passed: aligned >= 2, detail: `${aligned}/3 个周期同向` },
     { key: "edge", label: "扣费后期望", passed: netEdgeR >= 0.55, detail: `${netEdgeR.toFixed(2)}R` },
+    { key: "location", label: "位置没有失效", passed: locationValid, detail: `${marketLocation} · ${side}` },
     { key: "volatility", label: "波动可执行", passed: atrPct != null && atrPct >= 0.15 && atrPct <= 3.2, detail: atrPct == null ? "ATR不可用" : `ATR ${atrPct.toFixed(2)}%` },
   ];
   const ready = checks.every((check) => check.passed) && confidence >= 70;
   const evidence = [
     `${aligned}/3 个周期与${side === "LONG" ? "上涨" : "下跌"}方向一致`,
     `路径概率 上 ${paths.up.toFixed(1)}% / 下 ${paths.down.toFixed(1)}% / 震荡或失效 ${paths.rangeOrInvalid.toFixed(1)}%`,
+    `位置 ${marketLocation} · 结构效率 ${Math.round(efficiency * 100)}% · 目标 ${target1R.toFixed(2)}R/${target2R.toFixed(2)}R`,
     `24h成交额排名 ${input.volumeRank}，数据质量 ${Math.round(packet.decision.dataQuality * 100)}%`,
   ];
   const counterEvidence = checks.filter((check) => !check.passed).map((check) => `${check.label}：${check.detail}`);
@@ -148,7 +169,7 @@ export function buildDirectMarketCandidate(input: {
     volumeUsd: packet.market.volumeUsd,
     riskClusterId,
     btcCorrelation,
-    location: location(candles, price),
+    location: marketLocation,
     paths,
     directionalScore,
     netEdgeR,
@@ -162,7 +183,7 @@ export function buildDirectMarketCandidate(input: {
     checks,
     candles5m: candles.slice(-96),
     assetRegime: Math.abs(directionalScore) < 0.3 ? "range" : directionalScore > 0 ? "trend_up" : "trend_down",
-    maxHoldingMinutes: 8 * 60,
+    maxHoldingMinutes: structureQuality >= 0.75 ? 12 * 60 : structureQuality >= 0.5 ? 8 * 60 : 5 * 60,
   };
 }
 

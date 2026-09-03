@@ -40,12 +40,26 @@ export type DirectBrainDecisionSnapshot = {
   authority: typeof DIRECT_MARKET_AUTHORITY;
   brainVersion: typeof DIRECT_MARKET_BRAIN_VERSION;
   parentVersion: string | null;
+  decisionPolicyVersion: string;
+  positionPolicyVersion: string;
   batchId: string;
   universe: string[];
   selectedSymbol: string;
   portfolioRank: number;
   candidate: Omit<DirectMarketCandidate, "candles5m">;
   portfolioChecks: Record<string, unknown>;
+  entryValidation: {
+    quoteObservedAt: number;
+    candidateAgeMs: number;
+    entryPrice: number;
+    rewardRisk: number;
+  };
+  learningRule: {
+    action: string;
+    reason: string;
+    evidenceCount: number;
+    revalidation: boolean;
+  };
   riskState: DirectMarketRiskState;
   createdAt: number;
 };

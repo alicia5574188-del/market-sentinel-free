@@ -21,6 +21,11 @@ import {
 } from "../lib/hte31-scanner";
 import { getSettings } from "../lib/settings-repository";
 import { openDirectMarketTrade } from "../lib/direct-market-execution";
+import {
+  evaluateDirectPosition,
+  hasAdaptivePositionPolicy,
+  type DirectPositionDecision,
+} from "../lib/direct-market-position-brain";
 import type { SchedulerWorkerStatus } from "../lib/background-scheduler";
 import type { DirectMarketCandidate, DirectMarketRadarItem } from "../lib/direct-market-types";
 import type { CloudflareEnv } from "./index";
@@ -40,13 +45,14 @@ type ScannerRuntime = {
   rotationOffset: number;
   job: Hte31ScanJob | null;
   readModel: Hte31ScanCompleted | null;
-  directBySymbol?: Record<string, Omit<DirectMarketCandidate, "candles5m">>;
+  directBySymbol?: Record<string, DirectMarketCandidate>;
   directHistory?: { symbol: string; observedAt: number; referencePrice: number | null; location: string; decision: string; paths: DirectMarketCandidate["paths"]; riskClusterId: string }[];
   status: SchedulerWorkerStatus;
 };
 
 type TradeManagerRuntime = {
-  version: 1;
+  version: 2;
+  positionReviewBuckets: Record<string, number>;
   status: SchedulerWorkerStatus;
 };
 
@@ -73,7 +79,7 @@ function baseScannerRuntime(): ScannerRuntime {
 }
 
 function baseTradeManagerRuntime(): TradeManagerRuntime {
-  return { version: 1, status: baseStatus() };
+  return { version: 2, positionReviewBuckets: {}, status: baseStatus() };
 }
 
 function errorMessage(error: unknown) {
@@ -87,10 +93,11 @@ function initialize(env: CloudflareEnv) {
 
 function withoutCandles(candidate: DirectMarketCandidate): Omit<DirectMarketCandidate, "candles5m"> {
   const { candles5m: _candles, ...compact } = candidate;
+  void _candles;
   return compact;
 }
 
-function buildDirectRadar(result: Hte31ScanCompleted, directBySymbol: Record<string, Omit<DirectMarketCandidate, "candles5m">>): DirectMarketRadarItem[] {
+function buildDirectRadar(result: Hte31ScanCompleted, directBySymbol: Record<string, DirectMarketCandidate>): DirectMarketRadarItem[] {
   const now = Date.now();
   return result.universe.slice(0, 15).map((row, index) => {
     const candidate = directBySymbol[row.symbol] ?? null;
@@ -103,7 +110,7 @@ function buildDirectRadar(result: Hte31ScanCompleted, directBySymbol: Record<str
       changePercentage: row.changePercentage,
       scanStage: freshCandidate ? "DEEP" : "LIGHT",
       freshness: freshCandidate ? (now - freshCandidate.observedAt <= 90_000 ? "FRESH" : "STALE") : "FRESH",
-      candidate: freshCandidate,
+      candidate: freshCandidate ? withoutCandles(freshCandidate) : null,
     };
   });
 }
@@ -310,7 +317,7 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
       const activeSymbols = new Set(result.universe.slice(0, 15).map((row) => row.symbol));
       const directBySymbol = Object.fromEntries([
         ...Object.entries(runtime.directBySymbol ?? {}).filter(([symbol]) => activeSymbols.has(symbol)),
-        [result.directCandidate.symbol, withoutCandles(result.directCandidate)] as const,
+        [result.directCandidate.symbol, result.directCandidate] as const,
       ]);
       const directHistory = [{
         symbol: result.directCandidate.symbol,
@@ -321,23 +328,42 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
         paths: result.directCandidate.paths,
         riskClusterId: result.directCandidate.riskClusterId,
       }, ...(runtime.directHistory ?? [])].slice(0, 512);
-      const freshReady = Object.values(directBySymbol)
+      const freshCohort = Object.values(directBySymbol)
+        .filter((candidate) => candidate.batchId === result.directCandidate.batchId && Date.now() - candidate.observedAt <= 3 * 60_000);
+      const freshReady = freshCohort
         .filter((candidate) => Date.now() - candidate.observedAt <= 3 * 60_000 && candidate.decision !== "WAIT")
         .sort((a, b) => b.netEdgeR - a.netEdgeR || b.confidence - a.confidence || a.volumeRank - b.volumeRank);
       const portfolioRank = freshReady.findIndex((candidate) => candidate.symbol === result.directCandidate.symbol) + 1;
-      if (freshReady.length >= 3 && portfolioRank > 0 && portfolioRank <= 3) {
-        const opened = await openDirectMarketTrade({
-          candidate: result.directCandidate,
-          universe: result.universe.map((row) => row.symbol),
-          settings: await getSettings(),
-          portfolioRank,
-        });
-        result = { ...result, openedTradeId: opened.opened?.id ?? null, openReason: opened.reason };
+      if (freshCohort.length >= 3 && freshReady.length) {
+        const finalists = freshReady.slice(0, 3);
+        const quotes = await fetchGatePositionQuotes(finalists.map((candidate) => candidate.symbol));
+        const quoteBySymbol = new Map(quotes.map((quote) => [quote.symbol, quote]));
+        const settings = await getSettings();
+        const attempts = [];
+        for (const [index, candidate] of finalists.entries()) {
+          const opened = await openDirectMarketTrade({
+            candidate,
+            universe: result.universe.map((row) => row.symbol),
+            settings,
+            freshQuote: quoteBySymbol.get(candidate.symbol) ?? null,
+            portfolioRank: index + 1,
+          });
+          attempts.push({ symbol: candidate.symbol, ...opened });
+        }
+        const firstOpened = attempts.find((attempt) => attempt.opened);
+        const currentAttempt = attempts.find((attempt) => attempt.symbol === result.directCandidate.symbol);
+        result = {
+          ...result,
+          openedTradeId: firstOpened?.opened?.id ?? null,
+          openReason: firstOpened
+            ? `组合择优已建立 ${firstOpened.symbol.replace("_USDT", "")}，其余候选继续服从组合风险边界`
+            : currentAttempt?.reason ?? `当前组合排名 ${portfolioRank || ">3"}，本轮未建立新仓`,
+        };
       } else if (result.directCandidate.decision !== "WAIT") {
         result = {
           ...result,
-          openReason: freshReady.length < 3
-            ? `候选池 ${freshReady.length}/3，等待横向比较`
+          openReason: freshCohort.length < 3
+            ? `同批已评估 ${freshCohort.length}/3，等待横向比较`
             : `当前组合排名 ${portfolioRank || ">3"}，本轮不进入前三`,
         };
       }
@@ -463,6 +489,29 @@ export class HTE31TradeManager extends DurableObject<CloudflareEnv> {
       const open = await listHte31OpenTrades();
       let refreshed = 0;
       const failures: string[] = [];
+      const activeIds = new Set(open.map((trade) => trade.id));
+      const positionReviewBuckets = Object.fromEntries(
+        Object.entries(runtime.positionReviewBuckets ?? {}).filter(([tradeId]) => activeIds.has(tradeId)),
+      );
+      const completedFiveMinuteBucket = Math.floor(startedAt / (5 * 60_000)) - 1;
+      const reviewCandles = new Map<string, Awaited<ReturnType<typeof fetchGateChartCandles>>>();
+      const reviewDue = open.filter((trade) => trade.decisionAuthority === "direct_market_brain"
+        && hasAdaptivePositionPolicy(trade.decisionSnapshotJson)
+        && positionReviewBuckets[trade.id] !== completedFiveMinuteBucket);
+      const reviewResults = await Promise.allSettled(reviewDue.map((trade) => {
+        const reviewTo = (completedFiveMinuteBucket + 1) * 5 * 60_000 - 1;
+        const reviewFrom = Math.max(trade.entryAt, reviewTo - 3 * 60 * 60_000);
+        return fetchGateChartCandles(trade.symbol, reviewFrom, reviewTo);
+      }));
+      reviewDue.forEach((trade, index) => {
+        const review = reviewResults[index];
+        if (review.status === "fulfilled") {
+          reviewCandles.set(trade.id, review.value);
+          positionReviewBuckets[trade.id] = completedFiveMinuteBucket;
+        } else {
+          failures.push(`${trade.symbol} 持仓复核K线：${errorMessage(review.reason)}`);
+        }
+      });
       if (open.length) {
         const quotes = await fetchGatePositionQuotes(open.map((trade) => trade.symbol));
         const bySymbol = new Map(quotes.map((quote) => [quote.symbol, quote]));
@@ -473,7 +522,24 @@ export class HTE31TradeManager extends DurableObject<CloudflareEnv> {
             continue;
           }
           try {
-            await applyHte31PositionQuote(quote, settings);
+            const candles5m = reviewCandles.get(trade.id);
+            const positionDecision: DirectPositionDecision | null = candles5m
+              ? evaluateDirectPosition({
+                side: trade.side,
+                entryPrice: trade.entryPrice,
+                initialStopPrice: trade.initialStopPrice,
+                currentStopPrice: trade.currentStopPrice,
+                takeProfit1Price: trade.takeProfit1Price,
+                target1HitAt: trade.target1HitAt,
+                entryAt: trade.entryAt,
+                maxHoldingMinutes: trade.maxHoldingMinutes,
+                currentPrice: quote.price,
+                observedAt: quote.observedAt,
+                roundTripCostBps: settings.roundTripCostBps,
+                candles5m,
+              })
+              : null;
+            await applyHte31PositionQuote(quote, settings, positionDecision);
             refreshed += 1;
           } catch (error) {
             failures.push(`${trade.symbol}: ${errorMessage(error)}`);
@@ -509,9 +575,11 @@ export class HTE31TradeManager extends DurableObject<CloudflareEnv> {
       const stateChanged = previous.state !== state || previous.lastError !== lastError;
 
       await this.ctx.storage.setAlarm(nextRunAt);
-      if (stateChanged || heartbeatDue) {
+      const positionReviewChanged = JSON.stringify(positionReviewBuckets) !== JSON.stringify(runtime.positionReviewBuckets ?? {});
+      if (stateChanged || heartbeatDue || positionReviewChanged) {
         await this.saveRuntime({
-          version: 1,
+          version: 2,
+          positionReviewBuckets,
           status: {
             state,
             lastRunAt: startedAt,
@@ -530,7 +598,8 @@ export class HTE31TradeManager extends DurableObject<CloudflareEnv> {
       const heartbeatDue = previous.lastRunAt == null || startedAt - previous.lastRunAt >= TRADE_MANAGER_IDLE_HEARTBEAT_MS;
       if (stateChanged || heartbeatDue) {
         await this.saveRuntime({
-          version: 1,
+          version: 2,
+          positionReviewBuckets: runtime.positionReviewBuckets ?? {},
           status: {
             ...previous,
             state: "error",

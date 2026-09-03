@@ -1,5 +1,17 @@
 # Goal
 
+## Active objective — adaptive direct-market decision and position brain
+
+- Keep the Direct Market Brain as the only new-order authority, but replace mechanical fixed-entry/hold behavior with a replayable decision loop that judges current location, direction, target path, invalidation, and whether to wait.
+- Build cross-market selection from one time-consistent top-fifteen snapshot, deep-rank the strongest independent opportunities, and allow at most three open positions without forcing slot usage; normally no more than two positions may share one direction.
+- Revalidate every candidate against a fresh quote immediately before paper entry. Cancel stale, out-of-zone, invalidated, or no-longer-economic entries rather than using an old candidate price.
+- Reassess every open paper position on completed five-minute evidence. Preserve the original immutable thesis while emitting explainable `HOLD`, `PROTECT`, `EXIT`, or post-exit `REASSESS` decisions. Never reverse merely because a position is losing; close first and require a new independently qualified decision after cooldown.
+- Make TP1 protection fee-aware, and let structure/volatility govern protection, target continuation, and timeout decisions without loosening the original hard stop.
+- Separate immediate closed-trade protection from the complete 12-hour learning path. Immediate losses may tighten admission or pause new entries; only valid complete post-exit evidence may produce a one-variable, versioned, rollback-safe decision revision.
+- Preserve 3.5% planned risk for every accepted non-paused simulation trade, the 15% portfolio cap, owner-only funding/live authority, exact paper-to-live lineage, all historical records, and the pending-reset lifecycle.
+- Add no periodic D1 writes. Keep scanner and reassessment state in Durable Object memory/storage, retain the existing index-adjusted budget gates, and verify the production health/read paths after release.
+- Release once through branch, PR, green CI, merge, deployment, and advancing production scheduler checks. Existing open positions keep their immutable original stop/target plan; adaptive management applies only when enough fresh evidence is available and may only reduce risk through protection or an explained early exit.
+
 ## Active patch objective — current round, safe reset, normal simulation sizing
 
 - Scope current account statistics and Direct Market Brain risk evidence to the active simulation epoch and current brain version; keep older closed orders in a collapsed read-only archive.

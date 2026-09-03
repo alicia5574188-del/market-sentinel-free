@@ -113,15 +113,16 @@ test("paper sizing keeps risk bounded while market targets may range from 50U to
   assert.equal(HTE31_PAPER_POSITION_POLICY.maximumLeverage, 50);
 });
 
-test("paper portfolio permits at most three positions inside a 15% stop-risk envelope", () => {
+test("paper portfolio permits three positions but no more than two in one direction", () => {
   assert.equal(HTE31_PAPER_PORTFOLIO_POLICY.maxOpenPositions, 3);
-  assert.equal(HTE31_PAPER_PORTFOLIO_POLICY.maxSameSidePositions, 3);
+  assert.equal(HTE31_PAPER_PORTFOLIO_POLICY.maxSameSidePositions, 2);
   assert.equal(HTE31_PAPER_PORTFOLIO_POLICY.maximumTotalPlannedRiskRate, 0.15);
   const open = [
     { side: "LONG" as const, riskBudgetUsdt: 35 },
     { side: "SHORT" as const, riskBudgetUsdt: 35 },
   ];
   assert.equal(hte31PaperPortfolioBlockReason({ open, nextSide: "LONG", nextRiskUsdt: 35, accountEquityUsdt: 1_000 }), null);
+  assert.match(hte31PaperPortfolioBlockReason({ open: [{ side: "LONG", riskBudgetUsdt: 35 }, { side: "LONG", riskBudgetUsdt: 35 }], nextSide: "LONG", nextRiskUsdt: 30, accountEquityUsdt: 1_000 }) ?? "", /同方向.*最多 2 笔/);
   assert.match(hte31PaperPortfolioBlockReason({ open: [...open, { side: "LONG", riskBudgetUsdt: 35 }], nextSide: "SHORT", nextRiskUsdt: 30, accountEquityUsdt: 1_000 }) ?? "", /最多 3 笔/);
   assert.match(hte31PaperPortfolioBlockReason({ open, nextSide: "LONG", nextRiskUsdt: 81, accountEquityUsdt: 1_000 }) ?? "", /15% 上限/);
 });

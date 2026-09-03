@@ -58,7 +58,7 @@ export const HTE31_PAPER_POSITION_POLICY = {
 export const HTE31_PAPER_PORTFOLIO_POLICY = {
   maxOpenPositions: 3,
   maximumTotalPlannedRiskRate: 0.15,
-  maxSameSidePositions: 3,
+  maxSameSidePositions: 2,
 } as const;
 
 export type Hte31OpenRisk = {
