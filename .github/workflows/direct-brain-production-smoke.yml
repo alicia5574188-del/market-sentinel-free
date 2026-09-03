@@ -1,0 +1,55 @@
+name: Direct Brain Production Smoke
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/direct-brain-production-smoke.yml
+
+permissions:
+  contents: read
+
+jobs:
+  production-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Wait for immutable Direct Brain asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://market-sentinel-free.alicia5574188.workers.dev"
+          asset="$base/assets/page-B7Q7k79j.js"
+          ready=0
+          for attempt in {1..24}; do
+            code="$(curl -sS --max-time 10 -o /tmp/direct-brain.js -w '%{http_code}' "$asset" || true)"
+            if [[ "$code" == "200" ]] && grep -q 'direct-market-brain-v1' /tmp/direct-brain.js && grep -q '成交额前十五' /tmp/direct-brain.js; then
+              ready=1
+              break
+            fi
+            sleep 15
+          done
+          [[ "$ready" == "1" ]]
+      - name: Verify bounded health and live schedulers
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://market-sentinel-free.alicia5574188.workers.dev"
+          for attempt in 1 2 3; do
+            code="$(curl -sS --max-time 5 -o "/tmp/health-$attempt.json" -w '%{http_code}' "$base/__health")"
+            [[ "$code" == "200" ]]
+            jq -e '
+              .ok == true and
+              .schedulerError == null and
+              .schedulers.position.state == "live" and
+              .schedulers.position.lastError == null and
+              .schedulers.scanner.state == "live" and
+              .schedulers.scanner.lastError == null and
+              .schedulers.scanner.circuitOpen == false
+            ' "/tmp/health-$attempt.json"
+            sleep 5
+          done
+          jq -s -e '
+            (.[1].schedulers.position.lastSuccessAt >= .[0].schedulers.position.lastSuccessAt) and
+            (.[2].schedulers.scanner.lastSuccessAt >= .[0].schedulers.scanner.lastSuccessAt)
+          ' /tmp/health-1.json /tmp/health-2.json /tmp/health-3.json
