@@ -1,5 +1,12 @@
 # Status
 
+## Next upgrade prepared — Strategy Center and historical memory
+
+- Preparation branch: `prep/strategy-center-history-memory`.
+- Scope, exact files, data states, UI rules, tests, D1 constraints, and one-pass release order are fixed in `docs/STRATEGY_CENTER_HISTORY_MEMORY_PLAN.md`.
+- No runtime code, production behavior, D1 write path, strategy, risk, live control, or deployed asset changed during preparation.
+- Next action after the five-hour allowance resets: implement from current `main` using `极高`, complete all local gates, then PR/CI/merge/production verification.
+
 ## Strategy brain lifecycle — production deployed
 
 - Pull request: `#109` — `feat: add strategy family lifecycle brain`.

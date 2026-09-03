@@ -176,3 +176,17 @@ Record only consequential decisions using this format:
 - Reason: The brain must understand both losing and unused strategies, while the free D1 allowance must remain sufficient every day.
 - Evidence: The upgrade adds no insert/update schedule or schema migration. The existing regression budget remains 27,360 planned recurring writes/day.
 - Revisit when: Strategy count, position capacity, scanner cadence, checkpoint cadence, or any new recurring persistence changes.
+
+## 2026-09-03 — Keep daily UI current and move strategy detail to a subpage
+
+- Choice: Show only current operational truth, decisions, risk, and actions in the daily UI. Move the full family/variant cards into a dedicated Strategy Center reached from Radar, while preserving exactly five bottom tabs.
+- Reason: Upgrade narratives and duplicated strategy lists make the phone interface harder to inspect and do not help daily operation.
+- Evidence: The current Radar and Orders surfaces both render the full family-card list, and Radar includes implementation-history prose beneath the strategy heading.
+- Revisit when: The owner explicitly changes the five-tab information architecture.
+
+## 2026-09-03 — Fix historical-memory validity without lowering evidence quality
+
+- Choice: Keep the eight-independent-episode gate, add explicit ready/warming/unavailable/stale states, validate each historical interval, isolate partial failures, and retain only a bounded labeled last-known-good result in scanner state. Hide detailed cards until useful.
+- Reason: With enough valid candles the current nearest-episode algorithm should not remain at zero; three persistent `0/8` results indicate missing/short/stale input, not a need to wait for new live accumulation.
+- Evidence: The scanner requests 720/1,200/1,800 candles while the three calculators require only 44/46/74 valid rows to produce candidates. The current empty result carries no source-health reason.
+- Revisit when: Comparable production probes show whether the upstream history depth or analog definition needs a separate research change.
