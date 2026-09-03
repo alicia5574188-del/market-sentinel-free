@@ -83,6 +83,7 @@ export const hte31SimulationEpochs = sqliteTable("hte31_simulation_epochs", {
 export const hte31PaperResetState = sqliteTable("hte31_paper_reset_state", {
   id: text("id").primaryKey(),
   status: text("status", { enum: ["pending", "completed"] }).notNull(),
+  resetMode: text("reset_mode", { enum: ["natural", "force_archive"] }).notNull().default("natural"),
   requestedCapitalUsdt: real("requested_capital_usdt").notNull(),
   requestedAt: integer("requested_at").notNull(),
   completedAt: integer("completed_at"),

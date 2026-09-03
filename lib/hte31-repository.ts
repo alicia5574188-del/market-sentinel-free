@@ -258,6 +258,7 @@ export async function getHte31PaperResetState(knownOpenPositions?: number) {
   return state ? { ...state, openPositions } : {
     id: "singleton",
     status: "completed" as const,
+    resetMode: "natural" as const,
     requestedCapitalUsdt: null,
     requestedAt: null,
     completedAt: null,
@@ -272,6 +273,7 @@ export async function resetHte31PaperCapital(startingCapitalUsdt: number, now = 
   await db.insert(hte31PaperResetState).values({
     id: "singleton",
     status: "pending",
+    resetMode: "natural",
     requestedCapitalUsdt: capital,
     requestedAt: now,
     completedAt: null,
@@ -280,6 +282,7 @@ export async function resetHte31PaperCapital(startingCapitalUsdt: number, now = 
     target: hte31PaperResetState.id,
     set: {
       status: "pending",
+      resetMode: "natural",
       requestedCapitalUsdt: capital,
       requestedAt: now,
       completedAt: null,
@@ -518,6 +521,7 @@ export async function applyHte31PositionQuote(
   quote: GatePositionQuote,
   settings: AppSettings,
   positionDecision: DirectPositionDecision | null = null,
+  lifecycle: { forceArchiveForReset?: boolean } = {},
 ) {
   const db = getDb();
   const [trade] = await db.select().from(hte31Trades)
@@ -555,7 +559,11 @@ export async function applyHte31PositionQuote(
   // The stop that existed BEFORE this observation owns same-bar priority. A new
   // TP1 breakeven stop is installed only for future observations, so a low/high
   // from before TP1 can never retroactively trigger it.
-  if (stopHit) {
+  if (lifecycle.forceArchiveForReset) {
+    exitCode = "version_reset";
+    exitReason = "新版启用，旧持仓按最新有效报价归档";
+    exitPrice = quote.price;
+  } else if (stopHit) {
     exitCode = previouslyProtected && stopBeforeObservation !== trade.initialStopPrice ? "breakeven" : "stop_loss";
     exitReason = exitCode === "breakeven" ? "TP1 后保护止损被触发" : "结构止损被触发";
     exitPrice = stopBeforeObservation;

@@ -6,6 +6,8 @@ const repository = readFileSync(new URL("../lib/hte31-repository.ts", import.met
 const schema = readFileSync(new URL("../db/hte31-schema.ts", import.meta.url), "utf8");
 const migration = readFileSync(new URL("../drizzle/0014_hte31_simulation_epochs.sql", import.meta.url), "utf8");
 const resetMigration = readFileSync(new URL("../drizzle/0018_safe_paper_reset.sql", import.meta.url), "utf8");
+const freshStartMigration = readFileSync(new URL("../drizzle/0019_adaptive_brain_fresh_start.sql", import.meta.url), "utf8");
+const worker = readFileSync(new URL("../worker/hte31-workers.ts", import.meta.url), "utf8");
 const route = readFileSync(new URL("../app/api/hte31/paper-reset/route.ts", import.meta.url), "utf8");
 const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
 
@@ -19,7 +21,19 @@ test("paper capital reset creates a new accounting epoch without deleting learni
   assert.match(repository, /archivedTrades: archivedClosed\.slice/);
   assert.doesNotMatch(migration, /DELETE FROM/i);
   assert.doesNotMatch(resetMigration, /DELETE FROM/i);
+  assert.doesNotMatch(freshStartMigration, /DELETE FROM/i);
   assert.doesNotMatch(route, /DELETE FROM|delete\(hte31|db\.delete/i);
+});
+
+test("adaptive-brain fresh start archives old paper positions at fresh quotes and keeps their review trail", () => {
+  assert.match(freshStartMigration, /'force_archive'/);
+  assert.match(worker, /paperReset\.resetMode === "force_archive"/);
+  assert.match(worker, /applyHte31PositionQuote\(quote, settings, positionDecision, \{ forceArchiveForReset \}\)/);
+  const forcedExit = repository.indexOf("if (lifecycle.forceArchiveForReset)");
+  const normalStop = repository.indexOf("else if (stopHit)", forcedExit);
+  const observations = repository.indexOf("for (const horizonMinutes of POST_EXIT_HORIZONS)", forcedExit);
+  assert.ok(forcedExit >= 0 && normalStop > forcedExit && observations > normalStop);
+  assert.match(repository.slice(forcedExit, observations), /exitCode = "version_reset"/);
 });
 
 test("account loss governance respects both the simulation epoch and current Resonance policy", () => {
