@@ -27,13 +27,13 @@ jobs:
               echo "asset=$asset"
               asset_code="$(curl -sS --max-time 10 -o /tmp/page.js -w '%{http_code}' "$base/$asset" || true)"
               echo "asset_http=$asset_code"
-              if [[ "$asset_code" == "200" ]] && grep -q 'direct-market-brain-v1' /tmp/page.js && grep -q '成交额前十五' /tmp/page.js; then
+              if [[ "$asset_code" == "200" ]] && grep -q '直接市场大脑' /tmp/page.js && grep -q '成交额前十五' /tmp/page.js; then
                 break
               fi
             fi
             sleep 10
           done
-          grep -q 'direct-market-brain-v1' /tmp/page.js
+          grep -q '直接市场大脑' /tmp/page.js
           for attempt in 1 2 3; do
             code="$(curl -sS --max-time 5 -o "/tmp/health-$attempt.json" -w '%{http_code}' "$base/__health")"
             echo "health_attempt=$attempt http=$code"
