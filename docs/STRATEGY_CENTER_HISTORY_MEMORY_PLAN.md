@@ -5,7 +5,26 @@ Prepared: **2026-09-03 UTC**
 
 ## Objective
 
-Move the full strategy-family cards out of the bottom of Radar into a dedicated Strategy Center, remove upgrade-history and redundant explanatory copy from the operator UI, and make historical-market memory reliable, honest, and useful without lowering its evidence standard.
+Move the full strategy-family cards out of the bottom of Radar into a dedicated Strategy Center, remove upgrade-history and redundant explanatory copy from the operator UI, make historical-market memory reliable without lowering its evidence standard, and prevent transient backend latency from turning the main dashboard into a blank `503` state.
+
+## Observed 503 evidence
+
+- On 2026-09-03, the phone received `/api/hte31 请求失败 (503)` after hours of normal operation.
+- A production `/__health` probe then timed out after 20 seconds with no response; a retry succeeded after about 15.2 seconds.
+- The successful probe still reported Position Monitor and Market Scanner as `live`, both with advancing successful timestamps, null errors, and a closed scanner circuit.
+- This pattern indicates transient request latency/backpressure rather than a stopped scheduler. The exact upstream span still requires Cloudflare request logs when available.
+- `/api/hte31` currently waits without a deadline for three Durable Object calls, then runs the dashboard D1 reads and strategy diagnostics. An isolate-cache miss, a busy Durable Object, D1 latency, or overlap with a background scan can make the combined request exceed the edge/client deadline even though each subsystem later recovers.
+
+## 503 resilience implementation
+
+- Keep the high-frequency main dashboard payload lightweight. Do not load full strategy-family diagnostics every 30 seconds when Strategy Center is closed.
+- Move full strategy-health/family diagnostics behind the on-demand Strategy Center read path, with a bounded server cache and no new foreground Gate producer.
+- Give Durable Object status/read-model calls explicit short deadlines. A slow auxiliary status must produce a partial HTTP 200 response with the last trustworthy read model, not hold the entire request until an edge 503.
+- Run independent dashboard/diagnostic reads concurrently where safe and keep failures source-scoped.
+- Preserve the last trustworthy dashboard snapshot across an iOS/PWA process reload with its timestamp and an explicit stale label. It remains display-only and cannot authorize trading or mutations.
+- Keep the main UI populated during a transient refresh failure; show one compact delayed-refresh banner instead of replacing current values with zeros or `--`.
+- Make `/__health` a fast read-only status probe; it must not block on live reconciliation or scheduler wake/ensure work.
+- Keep mutations non-retrying and outside every cache/fallback path.
 
 ## Product rules
 
@@ -97,6 +116,7 @@ Historical database IDs remain unchanged for lineage. Raw values such as `higher
 ## Exact implementation map
 
 - `app/page.tsx`: Strategy Center subpage, links, scroll reset, remove duplicate family lists, compact memory states, copy cleanup, and canonical names on every paper/order/radar/learning surface.
+- `app/page.tsx` and the existing stability client: persist only the last trustworthy read-only snapshot with a timestamp, restore it as explicitly stale after a cold PWA reload, and never cache/retry mutations.
 - `lib/hte31-strategy-catalog.ts`: one canonical current-display formatter shared by family, variant, and legacy-ID resolution.
 - `lib/strategy-2-intelligence.ts` or the current regime-label owner: reuse one translated asset-regime formatter instead of showing raw enum values.
 - `lib/resonance-market.ts`: explicit memory source states and data-quality metadata.
@@ -104,9 +124,12 @@ Historical database IDs remain unchanged for lineage. Raw values such as `higher
 - `lib/hte31-scanner.ts`: interval isolation, last-good memory input/output, and no-failure core scan behavior.
 - `worker/hte31-workers.ts`: optional backward-compatible per-symbol memory cache in existing runtime storage; no generation reset.
 - `app/api/hte31/route.ts`: return the existing read model with the extended memory contract; no new endpoint or polling.
+- `app/api/hte31/route.ts`: add bounded Durable Object deadlines, partial-response behavior, and remove full Strategy Center diagnostics from the high-frequency critical path.
+- `worker/index.ts`: keep `/__health` read-only and latency-bounded instead of awaiting scheduler/live ensure work.
 - `tests/resonance-market.test.ts`: valid history produces samples; insufficient/malformed history is not represented as genuine zero evidence.
 - `tests/human-trader-ui.test.mjs`, `tests/mobile-navigation.test.mjs`, `tests/resonance-feature-preservation.test.mjs`: dedicated page, five-tab preservation, no duplicate card lists, honest hidden/preparing state, and Must-Keep reachability.
 - Add one focused scanner-memory resilience test for partial failure and last-known-good fallback.
+- Add focused route tests with deliberately hanging Durable Object/D1 stubs to prove that the main read returns bounded partial HTTP 200 instead of 503.
 
 ## Acceptance checks
 
@@ -116,6 +139,9 @@ Historical database IDs remain unchanged for lineage. Raw values such as `higher
 - Open/closed paper orders, current positions, Radar, review, learning, and Gate live all show the same canonical family/variant identity.
 - No raw strategy ID, obsolete English display name, or raw regime enum appears on a current operator card when a canonical label exists.
 - No release-history or implementation-explanation copy remains in the daily UI.
+- A transient slow Durable Object, diagnostics read, or D1 source cannot erase the current dashboard or force the main read to wait until an edge 503.
+- A cold iOS/PWA reload can show a timestamped last trustworthy snapshot while reconnecting; stale data never gains execution authority.
+- `/__health` returns quickly without waiting for live reconciliation or scheduler-start work.
 - Sufficient valid history cannot display `0/8`.
 - Missing/short/malformed history is labeled unavailable, not neutral or sample-zero.
 - One interval failure does not erase valid memory from the other intervals or stop the scanner.
@@ -128,17 +154,18 @@ Historical database IDs remain unchanged for lineage. Raw values such as `higher
 
 1. Start from current `main` and create the implementation branch.
 2. Add failing memory-state/resilience, Strategy Center, and cross-surface canonical-label tests.
-3. Implement the historical-memory contract, isolated fetches, and last-good fallback.
-4. Implement Strategy Center and remove redundant UI copy/duplicate lists.
-5. Run focused tests, then every full local gate.
-6. Review D1 budget and confirm the Durable Object generation is unchanged.
-7. Push, open PR, wait for green CI, merge, verify main CI and production.
-8. Record production evidence in the durable handoff/status/changelog.
+3. Split the high-frequency dashboard from on-demand diagnostics and add bounded partial-response/last-good behavior.
+4. Implement the historical-memory contract, isolated fetches, and last-good fallback.
+5. Implement Strategy Center and remove redundant UI copy/duplicate lists.
+6. Run focused tests, then every full local gate.
+7. Review D1 budget and confirm the Durable Object generation is unchanged.
+8. Push, open PR, wait for green CI, merge, verify main CI and production under repeated overlapping reads.
+9. Record production evidence in the durable handoff/status/changelog.
 
 ## Estimated model and usage
 
 - Recommended reasoning level: **极高**.
 - `最高` is unnecessary because the architecture and exact files are already mapped.
-- Expected implementation and local verification: about 30–45 minutes.
-- Expected end-to-end time including remote CI and production probes: about 45–70 minutes.
+- Expected implementation and local verification: about 45–65 minutes.
+- Expected end-to-end time including remote CI and production probes: about 60–90 minutes.
 - A freshly reset five-hour allowance should be sufficient. Reserve at least half of the allowance before starting; remote CI waiting itself uses little model capacity.

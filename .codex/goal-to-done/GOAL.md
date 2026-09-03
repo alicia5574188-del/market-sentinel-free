@@ -101,4 +101,6 @@ Increase forward strategy evidence without disturbing HT4's currently positive b
 - Validate and isolate historical-candle sources, retain a bounded labeled last-known-good result, and keep the eight-independent-sample gate.
 - Hide detailed historical-memory cards until useful; unavailable or warming data must contribute zero decision weight.
 - Add no new polling, foreground market producer, D1 recurring write, migration, risk change, live authority, fund action, or Durable Object generation reset.
+- Keep `/api/hte31` latency bounded and source-isolated so a slow Durable Object/D1/diagnostic read returns partial HTTP 200 with a timestamped last trustworthy snapshot instead of blanking the iOS/PWA UI with 503.
+- Move full family diagnostics to the on-demand Strategy Center path and make `/__health` a fast read-only probe.
 - Use `docs/STRATEGY_CENTER_HISTORY_MEMORY_PLAN.md` as the implementation and release checklist.

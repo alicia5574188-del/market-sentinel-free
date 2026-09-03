@@ -191,3 +191,10 @@ Record only consequential decisions using this format:
 - Reason: With enough valid candles the current nearest-episode algorithm should not remain at zero; three persistent `0/8` results indicate missing/short/stale input, not a need to wait for new live accumulation.
 - Evidence: The scanner requests 720/1,200/1,800 candles while the three calculators require only 44/46/74 valid rows to produce candidates. The current empty result carries no source-health reason.
 - Revisit when: Comparable production probes show whether the upstream history depth or analog definition needs a separate research change.
+
+## 2026-09-03 — Bound the main dashboard instead of treating transient 503 as a scheduler failure
+
+- Choice: Remove on-demand strategy diagnostics from the 30-second main critical path, add deadlines and source-isolated partial responses around Durable Object/D1 reads, persist a timestamped read-only last-good snapshot across PWA reloads, and make health checks read-only.
+- Reason: A single slow dependency currently delays the combined `/api/hte31` request until the client or edge can return 503, after which a cold page has no in-memory snapshot and replaces valid state with blanks.
+- Evidence: A production health request timed out after 20 seconds, followed by a successful 15.2-second probe with both schedulers live, advancing, error-free, and the scanner circuit closed.
+- Revisit when: Cloudflare request traces identify a narrower upstream bottleneck or production latency probes remain bounded after the split.

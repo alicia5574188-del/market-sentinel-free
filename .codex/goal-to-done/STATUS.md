@@ -4,6 +4,7 @@
 
 - Preparation branch: `prep/strategy-center-history-memory`.
 - Scope, exact files, data states, UI rules, tests, D1 constraints, and one-pass release order are fixed in `docs/STRATEGY_CENTER_HISTORY_MEMORY_PLAN.md`.
+- The same prepared upgrade now includes the reproduced transient-503 boundary: one 20-second health timeout followed by a healthy 15.2-second response while both schedulers remained live. Main reads will be split, deadline-bounded, and last-good capable.
 - No runtime code, production behavior, D1 write path, strategy, risk, live control, or deployed asset changed during preparation.
 - Next action after the five-hour allowance resets: implement from current `main` using `极高`, complete all local gates, then PR/CI/merge/production verification.
 
