@@ -91,3 +91,16 @@ Increase forward strategy evidence without disturbing HT4's currently positive b
 - Diagnose repeated losses, long non-use, and historical-to-recent performance decay before changing entry rules or reducing strategy usage.
 - Preserve the existing paper/live parity, five-position and 20% total-risk limits, adaptive leverage/margin safety, owner-only funding decision, and D1 recurring-write ceiling.
 - Use `docs/STRATEGY_BRAIN_LIFECYCLE_PLAN.md` as the implementation and acceptance checklist.
+
+## Prepared next objective — Strategy Center and historical memory
+
+- Move the complete nine-family/thirteen-variant cards into a dedicated in-app Strategy Center without adding a sixth bottom tab.
+- Use one canonical family/variant and translated-regime label across paper orders, current positions, Radar, review, learning, live orders, and owner diagnostics; preserve legacy IDs only as stored lineage.
+- Remove upgrade-history, implementation, and duplicated explanatory copy from the daily operator UI; show only current truth, decisions, risk, and actions.
+- Treat persistent three-horizon `0/8` as a data-validity fault, not as genuine evidence or runtime accumulation.
+- Validate and isolate historical-candle sources, retain a bounded labeled last-known-good result, and keep the eight-independent-sample gate.
+- Hide detailed historical-memory cards until useful; unavailable or warming data must contribute zero decision weight.
+- Add no new polling, foreground market producer, D1 recurring write, migration, risk change, live authority, fund action, or Durable Object generation reset.
+- Keep `/api/hte31` latency bounded and source-isolated so a slow Durable Object/D1/diagnostic read returns partial HTTP 200 with a timestamped last trustworthy snapshot instead of blanking the iOS/PWA UI with 503.
+- Move full family diagnostics to the on-demand Strategy Center path and make `/__health` a fast read-only probe.
+- Use `docs/STRATEGY_CENTER_HISTORY_MEMORY_PLAN.md` as the implementation and release checklist.

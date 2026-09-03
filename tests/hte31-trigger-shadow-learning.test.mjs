@@ -40,12 +40,11 @@ test("the current cycle has no simulation-inside-simulation and uses actual pape
   assert.match(scanner.slice(diagnosticIndex, openIndex), /catch \(error\)/, "diagnostic failure must not block the formal trading path");
 });
 
-test("dashboard exposes cognitive learning instead of mechanical loss cooldown", () => {
-  assert.match(route, /1h 评估/);
-  assert.match(route, /6h READY/);
-  assert.match(route, /实际订单与逐笔复盘驱动后续排序/);
-  assert.match(route, /不做机械时间冷却/);
-  assert.match(route, /连续亏损 .*已交给认知复盘/);
+test("dashboard keeps cognitive diagnostics on demand instead of repeating implementation copy", () => {
+  assert.match(route, /view === "strategies"/);
+  assert.match(route, /getHte31Diagnostics/);
+  assert.match(route, /diagnostics: null/);
+  assert.doesNotMatch(route, /1h 评估|6h READY|实际订单与逐笔复盘驱动后续排序|不做机械时间冷却/);
   assert.doesNotMatch(route, /风险预算倍率/);
 });
 

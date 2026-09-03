@@ -136,6 +136,20 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "unknown scheduler error";
 }
 
+async function readHealthStatus<T>(promise: Promise<T>, timeoutMs = 900): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`health_status_timeout_${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export class PositionMonitor extends SchedulerObject {
   protected readonly intervalMs = 10_000;
 
@@ -550,18 +564,6 @@ export class LiveTradingCoordinator extends DurableObject<CloudflareEnv> {
   }
 }
 
-async function ensureSchedulers(env: CloudflareEnv) {
-  if (!env.POSITION_MONITOR || !env.MARKET_SCANNER) {
-    await runMarketScan(resolveVapidConfig(env));
-    return;
-  }
-  await Promise.all([
-    env.POSITION_MONITOR.getByName("position-monitor").ensure(),
-    env.MARKET_SCANNER.getByName("market-scanner").ensure(),
-    env.LIVE_TRADING_COORDINATOR?.getByName("live-trading").ensure(),
-  ]);
-}
-
 async function runScheduledSchedulers(env: CloudflareEnv) {
   if (!env.POSITION_MONITOR || !env.MARKET_SCANNER) {
     await runMarketScan(resolveVapidConfig(env));
@@ -609,11 +611,10 @@ async function ownerProtectedRequest(request: Request, env: CloudflareEnv): Prom
     let schedulers: unknown = null;
     let schedulerError: string | null = null;
     try {
-      await ensureSchedulers(env);
       if (env.POSITION_MONITOR && env.MARKET_SCANNER) {
         const [position, scanner] = await Promise.all([
-          env.POSITION_MONITOR.getByName("position-monitor").status(),
-          env.MARKET_SCANNER.getByName("market-scanner").status(),
+          readHealthStatus<SchedulerWorkerStatus>(env.POSITION_MONITOR.getByName("position-monitor").status()),
+          readHealthStatus<SchedulerWorkerStatus>(env.MARKET_SCANNER.getByName("market-scanner").status()),
         ]);
         schedulers = {
           position: { state: position.state, lastRunAt: position.lastRunAt, lastSuccessAt: position.lastSuccessAt, nextRunAt: position.nextRunAt, lastError: position.lastError },

@@ -14,10 +14,11 @@ async function readBuiltWorkerSource() {
 
 test("production Worker bundle contains the cognitive Resonance runtime", async () => {
   const source = await readBuiltWorkerSource();
-  assert.match(source, /resonance-v5-strategy-lifecycle/);
+  assert.match(source, /resonance-v6-strategy-center/);
   assert.match(source, /Resonance/);
   assert.match(source, /市场记忆 · 自适应交易/);
-  assert.match(source, /9个策略家族 \/ 13个变体统一评估与大脑选单/);
+  assert.match(source, /策略中心/);
+  assert.match(source, /查看 9 个家族与 13 个独立变体/);
   assert.match(source, /HTE31MarketScanner/);
   assert.match(source, /HTE31TradeManager/);
   assert.match(source, /COGNITIVE_ADAPTATION/);

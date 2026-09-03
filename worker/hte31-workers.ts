@@ -19,6 +19,7 @@ import {
 } from "../lib/hte31-scanner";
 import { getSettings } from "../lib/settings-repository";
 import type { SchedulerWorkerStatus } from "../lib/background-scheduler";
+import type { ResonanceMarketMemory } from "../lib/resonance-market";
 import type { CloudflareEnv } from "./index";
 
 // This generation bump resets only Durable Object scheduler/checkpoint state.
@@ -36,6 +37,7 @@ type ScannerRuntime = {
   rotationOffset: number;
   job: Hte31ScanJob | null;
   readModel: Hte31ScanCompleted | null;
+  memoryBySymbol?: Record<string, ResonanceMarketMemory>;
   status: SchedulerWorkerStatus;
 };
 
@@ -60,6 +62,7 @@ function baseScannerRuntime(): ScannerRuntime {
     rotationOffset: 0,
     job: null,
     readModel: null,
+    memoryBySymbol: {},
     status: baseStatus(),
   };
 }
@@ -75,6 +78,11 @@ function errorMessage(error: unknown) {
 function initialize(env: CloudflareEnv) {
   setRuntimeDb(env.DB);
   setRuntimeBindings(env);
+}
+
+function rememberMarketMemory(runtime: ScannerRuntime, symbol: string, memory: ResonanceMarketMemory) {
+  const entries = Object.entries(runtime.memoryBySymbol ?? {}).filter(([key]) => key !== symbol).slice(-31);
+  return Object.fromEntries([...entries, [symbol, memory]]);
 }
 
 class Hte31ScanSliceError extends Error {
@@ -184,6 +192,9 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
     let job = runtime.job ?? createHte31ScanJob(runtime.rotationOffset, runtime.readModel?.market ?? null);
     if (job.rotationOffset !== runtime.rotationOffset) {
       job = createHte31ScanJob(runtime.rotationOffset, runtime.readModel?.market ?? null);
+    }
+    if (job.phase === "candles" && job.target && job.previousMemory === undefined) {
+      job = { ...job, previousMemory: runtime.memoryBySymbol?.[job.target.symbol] ?? null };
     }
 
     if (previous.circuitOpen && previous.retryAfter && previous.retryAfter <= now) {
@@ -296,6 +307,7 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
         rotationOffset: runtime.rotationOffset + 1,
         job: null,
         readModel: result,
+        memoryBySymbol: rememberMarketMemory(runtime, result.target, result.memory),
         status,
       });
       await this.ctx.storage.setAlarm(nextRunAt);

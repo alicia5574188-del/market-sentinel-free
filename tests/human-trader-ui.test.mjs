@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [page, layout, route, chart, css, liveStatus, scanner] = await Promise.all([
+const [page, layout, route, chart, css, liveStatus, scanner, catalog, worker] = await Promise.all([
   readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
   readFile(new URL("../app/api/hte31/route.ts", import.meta.url), "utf8"),
@@ -10,19 +10,23 @@ const [page, layout, route, chart, css, liveStatus, scanner] = await Promise.all
   readFile(new URL("../app/resonance.css", import.meta.url), "utf8"),
   readFile(new URL("../app/api/live/status/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/hte31-scanner.ts", import.meta.url), "utf8"),
+  readFile(new URL("../lib/hte31-strategy-catalog.ts", import.meta.url), "utf8"),
+  readFile(new URL("../worker/index.ts", import.meta.url), "utf8"),
 ]);
 
 test("production UI is Resonance while preserving every historical strategy variant", () => {
   assert.match(page, /Resonance/);
   assert.match(page, /市场记忆 · 自适应交易/);
-  for (const phrase of ["HT1", "HT2", "HT3", "HT4", "HT5", "HT1-R", "HT2-R", "HT3-R", "HT5-R", "HT6", "HT7", "HT8", "HT9", "统一模拟策略池", "9 个策略家族由大脑择优"]) assert.match(page, new RegExp(phrase));
-  for (const family of ["SF01", "SF02", "SF03", "SF04", "SF05", "SF06", "SF07", "SF08", "SF09"]) assert.match(page, new RegExp(family));
+  for (const phrase of ["HT1", "HT2", "HT3", "HT4", "HT5", "HT1-R", "HT2-R", "HT3-R", "HT5-R", "HT6", "HT7", "HT8", "HT9"]) assert.match(catalog, new RegExp(phrase));
+  for (const family of ["SF01", "SF02", "SF03", "SF04", "SF05", "SF06", "SF07", "SF08", "SF09"]) assert.match(catalog, new RegExp(family));
+  assert.match(page, /策略中心/);
+  assert.match(page, /查看 9 个家族与 13 个独立变体/);
+  assert.match(page, /\/api\/hte31\?view=strategies/);
   assert.match(page, /系统有没有进步/);
-  assert.match(page, /MemoryCard item=\{memory\.short\} symbol=\{readModel\?\.target\}/);
-  assert.match(page, /MemoryCard item=\{memory\.swing\} symbol=\{readModel\?\.target\}/);
-  assert.match(page, /MemoryCard item=\{memory\.cycle\} symbol=\{readModel\?\.target\}/);
-  assert.match(page, /样本不足 · \$\{item\.sampleCount\}\/\$\{minimumSamples\}/);
-  assert.match(page, /暂不参与判断/);
+  assert.match(page, /hasReadyMemory[\s\S]{0,120}<div className="rz-memory-grid">/);
+  assert.match(page, /历史记忆准备中/);
+  assert.match(page, /历史数据暂不可用/);
+  assert.match(page, /state === "STALE"/);
   assert.match(page, /有效独立样本/);
   assert.doesNotMatch(page, /旧 HTE 3\.0 不进入这里|SIMULATION LEDGER · CLEAN|HTE 3\.1 新账本|CLEAN RADAR|CLEAN RUNTIME/);
   assert.match(layout, /<body>[\s\S]*\{children\}[\s\S]*<ResonanceOperatorControls \/>[\s\S]*<\/body>/);
@@ -58,8 +62,6 @@ test("trade cards preserve leverage economics and full expandable review", () =>
 });
 
 test("learning starts after every close and five trades are only a stage summary", () => {
-  assert.match(page, /每笔交易都会立即复盘/);
-  assert.match(page, /5 笔只用于阶段汇总/);
   assert.match(page, /latestAutopsy/);
   assert.match(page, /阶段汇总/);
   assert.match(page, /已经被数据否定的组合/);
@@ -122,7 +124,8 @@ test("live boundary preserves credentials reconciliation emergency stop and mobi
   assert.match(css, /-webkit-user-select:\s*none/);
   assert.match(css, /-webkit-touch-callout:\s*none/);
   assert.match(css, /touch-action:\s*manipulation/);
-  assert.doesNotMatch(page, /localStorage|sessionStorage/);
+  assert.match(page, /SNAPSHOT_STORAGE_KEY/);
+  assert.doesNotMatch(page, /localStorage[\s\S]{0,200}\/api\/live\/(?:control|credentials|reconcile|emergency)/);
   assert.match(liveStatus, /\^Human Trader · \(\[\^：\]\+\)：/);
 });
 
@@ -137,8 +140,21 @@ test("live page surfaces safety state and strategy lineage instead of hiding it"
 });
 
 test("product surface omits migration and implementation copy", () => {
-  for (const phrase of ["Clean Scanner", "HTE 3.0", "新账本", "de-legacy", "Durable Object", "trade_cases"]) assert.equal(page.includes(phrase), false, phrase);
+  for (const phrase of ["Clean Scanner", "HTE 3.0", "新账本", "de-legacy", "Durable Object", "trade_cases", "13 个旧策略身份完整保留并归入"]) assert.equal(page.includes(phrase), false, phrase);
   assert.match(page, /模拟账户/);
   assert.match(page, /当前没有模拟持仓|暂无模拟持仓/);
   assert.match(page, /Gate 合约账户/);
+});
+
+test("high-frequency read is bounded, diagnostics are on demand, and health stays read-only", () => {
+  assert.match(route, /boundedRead/);
+  assert.match(route, /view === "strategies"/);
+  assert.match(route, /staleSources/);
+  assert.match(route, /diagnostics: null/);
+  assert.match(scanner, /Promise\.allSettled/);
+  const healthStart = worker.indexOf('if (url.pathname === "/__health")');
+  const healthEnd = worker.indexOf('if (url.pathname === "/api/push/vapid-public-key")', healthStart);
+  const health = worker.slice(healthStart, healthEnd);
+  assert.match(health, /readHealthStatus/);
+  assert.doesNotMatch(health, /ensureSchedulers/);
 });

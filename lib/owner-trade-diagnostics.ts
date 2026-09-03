@@ -75,7 +75,7 @@ function normalizeCurrentTrade(
       familyName: family.name,
       variantId: definition.variantId,
       variantName: definition.variantName,
-      canonicalLabel: hte31CanonicalStrategyLabel(traderId),
+      canonicalLabel: hte31CanonicalStrategyLabel(traderId, row.assetRegime),
       tags: definition.tags,
     },
     epoch: epoch ? {

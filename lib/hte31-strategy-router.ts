@@ -86,7 +86,7 @@ function candidate(signal: Hte31Signal, evidenceByTrader: ReadonlyMap<Hte31Trade
     traderId,
     strategyId: signal.strategyId,
     code: definition.code,
-    label: hte31CanonicalStrategyLabel(traderId),
+    label: hte31CanonicalStrategyLabel(traderId, signal.strategyMeta.assetRegime),
     side: signal.side,
     lane: definition.lane,
     storyFamily: definition.storyFamily,

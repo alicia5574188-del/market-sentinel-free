@@ -56,6 +56,7 @@ button { color: inherit; }
 .rz-memory span, .rz-metric span, .rz-econ span { display: block; color: var(--rz-muted); font-size: 12px; margin-bottom: 6px; }
 .rz-memory b { display: block; font-size: 16px; }
 .rz-memory small { color: var(--rz-muted); font-size: 11px; }
+.rz-memory-status { margin-top: 16px; padding: 13px 15px; border-radius: 16px; border: 1px solid rgba(23,60,75,.75); background: rgba(5,20,28,.55); color: var(--rz-muted); font-size: 13px; }
 
 .rz-review h3 { margin: 7px 0 8px; font-size: 20px; }
 .rz-review-line { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -79,6 +80,12 @@ button { color: inherit; }
 .rz-position-preview small { color: var(--rz-muted); }
 
 .rz-list { display: grid; gap: 12px; }
+.rz-center-link { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 14px; text-align: left; color: var(--rz-text); cursor: pointer; }
+.rz-center-link div { display: grid; gap: 4px; }
+.rz-center-link strong { font-size: 20px; }
+.rz-center-link small { color: var(--rz-muted); line-height: 1.45; }
+.rz-center-link > span { color: var(--rz-accent); font-weight: 800; white-space: nowrap; }
+.rz-strategy-center { min-height: 70dvh; }
 .rz-radar { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; align-items: center; }
 .rz-radar strong { font-size: 18px; }
 .rz-radar small { color: var(--rz-muted); line-height: 1.45; }

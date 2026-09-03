@@ -38,7 +38,7 @@ function flowScore(packet: MarketAnalysisPacket) {
 }
 
 function analogDirectionalMove(item: HistoricalAnalog, bias: ResonanceBias) {
-  if (bias === "NEUTRAL" || item.sampleCount < 8) return 0;
+  if (bias === "NEUTRAL" || item.sampleCount < 8 || (item.sourceState != null && item.sourceState !== "READY")) return 0;
   const direction = bias === "LONG" ? 1 : -1;
   const alignedOutcome = item.medianForwardPct * direction;
   return alignedOutcome > 0 ? alignedOutcome * direction : 0;

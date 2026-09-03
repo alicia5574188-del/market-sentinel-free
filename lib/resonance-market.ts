@@ -1,6 +1,7 @@
 import type { Hte31Candle } from "./hte31-types.ts";
 
 export type ResonanceBias = "LONG" | "SHORT" | "NEUTRAL";
+export type HistoricalMemorySourceState = "READY" | "WARMING" | "UNAVAILABLE" | "STALE";
 
 export type HistoricalAnalog = {
   label: "短线" | "波段" | "大周期";
@@ -13,6 +14,12 @@ export type HistoricalAnalog = {
   neutralRatio: number;
   medianForwardPct: number;
   averageSimilarity: number;
+  sourceState?: HistoricalMemorySourceState;
+  receivedCandles?: number;
+  requiredCandles?: number;
+  observedAt?: number;
+  lastSuccessfulAt?: number | null;
+  failureReason?: string | null;
 };
 
 export type ResonanceMarketMemory = {
@@ -40,6 +47,7 @@ type AnalogCandidate = {
 };
 
 export const RESONANCE_ANALOG_MINIMUM_SAMPLES = 8;
+export const RESONANCE_MEMORY_STALE_MS = 6 * 60 * 60_000;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -146,7 +154,11 @@ function weightedRatio(matches: AnalogCandidate[], predicate: (row: AnalogCandid
   return matches.reduce((sum, row) => sum + (predicate(row) ? row.similarity : 0), 0) / total;
 }
 
-function emptyAnalog(label: HistoricalAnalog["label"]): HistoricalAnalog {
+function requiredCandles(options: AnalogOptions) {
+  return options.windowSize * 2 + options.horizon + 4;
+}
+
+function emptyAnalog(label: HistoricalAnalog["label"], metadata: Partial<HistoricalAnalog> = {}): HistoricalAnalog {
   return {
     label,
     minimumSamples: RESONANCE_ANALOG_MINIMUM_SAMPLES,
@@ -158,13 +170,56 @@ function emptyAnalog(label: HistoricalAnalog["label"]): HistoricalAnalog {
     neutralRatio: 1,
     medianForwardPct: 0,
     averageSimilarity: 0,
+    sourceState: "UNAVAILABLE",
+    receivedCandles: 0,
+    requiredCandles: 0,
+    observedAt: Date.now(),
+    lastSuccessfulAt: null,
+    failureReason: "EMPTY_HISTORY",
+    ...metadata,
   };
 }
 
-export function buildHistoricalAnalog(candles: Hte31Candle[], options: AnalogOptions): HistoricalAnalog {
+type HistoricalAnalogSource = {
+  observedAt?: number;
+  failureReason?: string | null;
+  previous?: HistoricalAnalog | null;
+  staleMs?: number;
+};
+
+export function buildHistoricalAnalog(candles: Hte31Candle[], options: AnalogOptions, source: HistoricalAnalogSource = {}): HistoricalAnalog {
+  const observedAt = source.observedAt ?? Date.now();
   const rows = [...candles].sort((a, b) => a.time - b.time);
-  const required = options.windowSize * 2 + options.horizon + 4;
-  if (rows.length < required) return emptyAnalog(options.label);
+  const required = requiredCandles(options);
+  const sourceFailure = source.failureReason ?? (rows.length ? null : "EMPTY_HISTORY");
+  if (sourceFailure || rows.length < required) {
+    const previous = source.previous;
+    const previousSuccessAt = previous?.lastSuccessfulAt ?? previous?.observedAt ?? null;
+    const reusable = previous
+      && (previous.sourceState === "READY" || previous.sourceState === "STALE" || previous.sourceState == null)
+      && previous.sampleCount >= previous.minimumSamples
+      && previousSuccessAt != null
+      && observedAt - previousSuccessAt <= (source.staleMs ?? RESONANCE_MEMORY_STALE_MS);
+    if (reusable) {
+      return {
+        ...previous,
+        sourceState: "STALE",
+        receivedCandles: rows.length,
+        requiredCandles: required,
+        observedAt,
+        lastSuccessfulAt: previousSuccessAt,
+        failureReason: sourceFailure ?? "INSUFFICIENT_CANDLES",
+      };
+    }
+    return emptyAnalog(options.label, {
+      sourceState: rows.length ? "WARMING" : "UNAVAILABLE",
+      receivedCandles: rows.length,
+      requiredCandles: required,
+      observedAt,
+      lastSuccessfulAt: null,
+      failureReason: sourceFailure ?? "INSUFFICIENT_CANDLES",
+    });
+  }
 
   const currentStart = rows.length - options.windowSize;
   const current = rows.slice(currentStart);
@@ -184,7 +239,14 @@ export function buildHistoricalAnalog(candles: Hte31Candle[], options: AnalogOpt
   // sixteen overlapping slices as sixteen independent memories creates fake
   // confidence, so the final analog set intentionally keeps episodes apart.
   const matches = chooseDiverseMatches(candidates, options);
-  if (!matches.length) return emptyAnalog(options.label);
+  if (!matches.length) return emptyAnalog(options.label, {
+    sourceState: "WARMING",
+    receivedCandles: rows.length,
+    requiredCandles: required,
+    observedAt,
+    lastSuccessfulAt: observedAt,
+    failureReason: "NO_VALID_EPISODES",
+  });
 
   const bullishRatio = weightedRatio(matches, (match) => match.forwardPct > options.neutralThresholdPct);
   const bearishRatio = weightedRatio(matches, (match) => match.forwardPct < -options.neutralThresholdPct);
@@ -211,6 +273,12 @@ export function buildHistoricalAnalog(candles: Hte31Candle[], options: AnalogOpt
     neutralRatio,
     medianForwardPct: median(matches.map((match) => match.forwardPct)),
     averageSimilarity,
+    sourceState: enoughIndependentHistory ? "READY" : "WARMING",
+    receivedCandles: rows.length,
+    requiredCandles: required,
+    observedAt,
+    lastSuccessfulAt: observedAt,
+    failureReason: enoughIndependentHistory ? null : "INSUFFICIENT_INDEPENDENT_EPISODES",
   };
 }
 
@@ -222,20 +290,29 @@ export function buildResonanceMarketMemory(input: {
   hourly: Hte31Candle[];
   fourHour: Hte31Candle[];
   daily: Hte31Candle[];
+  failures?: Partial<Record<"short" | "swing" | "cycle", string>>;
+  previous?: ResonanceMarketMemory | null;
+  observedAt?: number;
 }): ResonanceMarketMemory {
-  const short = buildHistoricalAnalog(input.hourly, { label: "短线", windowSize: 18, horizon: 4, topK: 20, neutralThresholdPct: 0.25 });
-  const swing = buildHistoricalAnalog(input.fourHour, { label: "波段", windowSize: 18, horizon: 6, topK: 20, neutralThresholdPct: 0.6 });
-  const cycle = buildHistoricalAnalog(input.daily, { label: "大周期", windowSize: 30, horizon: 10, topK: 20, neutralThresholdPct: 1.5 });
+  const observedAt = input.observedAt ?? Date.now();
+  const short = buildHistoricalAnalog(input.hourly, { label: "短线", windowSize: 18, horizon: 4, topK: 20, neutralThresholdPct: 0.25 }, { observedAt, failureReason: input.failures?.short, previous: input.previous?.short });
+  const swing = buildHistoricalAnalog(input.fourHour, { label: "波段", windowSize: 18, horizon: 6, topK: 20, neutralThresholdPct: 0.6 }, { observedAt, failureReason: input.failures?.swing, previous: input.previous?.swing });
+  const cycle = buildHistoricalAnalog(input.daily, { label: "大周期", windowSize: 30, horizon: 10, topK: 20, neutralThresholdPct: 1.5 }, { observedAt, failureReason: input.failures?.cycle, previous: input.previous?.cycle });
   const weighted = [
     { item: short, weight: 0.20 },
     { item: swing, weight: 0.45 },
     { item: cycle, weight: 0.35 },
-  ].filter(({ item }) => item.sampleCount >= item.minimumSamples && item.bias !== "NEUTRAL");
+  ].filter(({ item }) => item.sourceState === "READY" && item.sampleCount >= item.minimumSamples && item.bias !== "NEUTRAL");
   const signed = weighted.reduce((sum, { item, weight }) => sum + (item.bias === "LONG" ? 1 : -1) * (item.confidence / 100) * weight, 0);
   const usedWeight = weighted.reduce((sum, item) => sum + item.weight, 0);
   const normalized = usedWeight > 0 ? signed / usedWeight : 0;
   const combinedBias: ResonanceBias = normalized >= 0.22 ? "LONG" : normalized <= -0.22 ? "SHORT" : "NEUTRAL";
   const combinedConfidence = Math.round(clamp(Math.abs(normalized) * 100, 0, 88));
-  const summary = `历史相似行情：短线${biasText(short.bias)} ${short.confidence}% · 波段${biasText(swing.bias)} ${swing.confidence}% · 大周期${biasText(cycle.bias)} ${cycle.confidence}%`;
+  const itemSummary = (item: HistoricalAnalog) => item.sourceState === "READY"
+    ? `${item.label}${biasText(item.bias)} ${item.confidence}%`
+    : item.sourceState === "STALE" ? `${item.label}历史暂旧`
+      : item.sourceState === "WARMING" ? `${item.label}历史准备中`
+        : `${item.label}历史不可用`;
+  const summary = `历史相似行情：${[short, swing, cycle].map(itemSummary).join(" · ")}`;
   return { short, swing, cycle, combinedBias, combinedConfidence, summary };
 }
