@@ -132,7 +132,7 @@ export function hte31PhaseLabel(phase: Hte31ScanPhase) {
     universe: "扫描整体市场",
     deep: "分析当前币种",
     candles: "读取历史与多周期结构",
-    evaluate: "十三种策略统一评估与大脑选单",
+    evaluate: "9个策略家族 / 13个变体统一评估与大脑选单",
   } satisfies Record<Hte31ScanPhase, string>)[phase];
 }
 

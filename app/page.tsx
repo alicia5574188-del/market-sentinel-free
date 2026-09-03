@@ -5,7 +5,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 type Tab = "机会" | "雷达" | "订单" | "实盘" | "设置";
 type TraderId = "dennis_trend" | "raschke_pullback" | "turtle_soup" | "exhaustion_reversal" | "higher_timeframe_swing" | "dennis_trend_v2" | "raschke_pullback_v2" | "turtle_soup_v2" | "higher_timeframe_swing_v2" | "range_rotation" | "compression_expansion" | "relative_strength" | "momentum_continuation";
 type AnyTraderId = TraderId;
+type FamilyId = "SF01" | "SF02" | "SF03" | "SF04" | "SF05" | "SF06" | "SF07" | "SF08" | "SF09";
 type Side = "LONG" | "SHORT" | "WAIT";
+
+type TradeFinalVerdict = {
+  final: boolean;
+  code: string;
+  label: string;
+  shouldTrade: boolean | null;
+  explanation: string;
+  profitPath: string;
+  recommendedAction: string;
+};
 
 type SchedulerStatus = {
   state: string;
@@ -58,6 +69,7 @@ type TradeAutopsy = {
   causeLabel: string;
   explanation: string;
   evidence: string[];
+  finalVerdict?: TradeFinalVerdict;
 };
 
 type SystemReview = {
@@ -133,6 +145,9 @@ type RouterCandidate = {
   side: "LONG" | "SHORT";
   lane: "paper";
   storyFamily: string;
+  familyId: FamilyId;
+  variantId: string;
+  tags: string[];
   currentScore: number;
   evidenceScore: number;
   combinedScore: number;
@@ -147,6 +162,7 @@ type StrategyRouter = {
   selectedForExecution: RouterCandidate | null;
   supporting: RouterCandidate[];
   opposing: RouterCandidate[];
+  familyAlternatives: RouterCandidate[];
   currentThesisState: "none" | "intact" | "uncertain" | "invalidated";
   replacementEligible: boolean;
   reason: string;
@@ -272,6 +288,8 @@ type Snapshot = {
   diagnostics: {
     shadow: Record<AnyTraderId, ShadowMetrics & { ready: ShadowMetrics; nearReady: ShadowMetrics; qualifiesForCalibration: boolean }>;
     policy: { maximumConcurrentPaperPositions: number; maximumPortfolioRiskRate: number; routerAuthority: string };
+    strategyHealth: Record<AnyTraderId, StrategyHealth & { traderId: AnyTraderId; familyId: FamilyId }>;
+    familyHealth: Record<FamilyId, StrategyHealth & { familyId: FamilyId; focusTraderId: AnyTraderId | null }>;
   } | null;
   degraded: boolean;
   errors: Record<string, string>;
@@ -289,6 +307,7 @@ type ChartData = {
   tradeId: string;
   symbol: string;
   side: "LONG" | "SHORT";
+  strategy: { familyId: FamilyId; familyName: string; variantId: string; variantName: string; canonicalLabel: string; tags: string[] };
   candles: Candle[];
   levels: { entry: number; initialStop: number; currentStop: number; takeProfit1: number; takeProfit2: number };
   markers: { kind: "ENTRY" | "EXIT"; time: number; price: number; label: string }[];
@@ -328,7 +347,15 @@ type ChartData = {
     horizons?: { minutes: number; originalR: number; oppositeR: number }[];
     reversals?: { key: string; label: string; terminalR: number; maxFavorableR: number; maxAdverseR: number }[];
   } | null;
+  finalVerdict: TradeFinalVerdict;
   upstreamError: string | null;
+};
+
+type StrategyHealth = {
+  state: "LEARNING" | "ACTIVE" | "UNDERPERFORMING" | "DEGRADED" | "STARVED" | "REGIME_WAIT" | "RETEST" | "PAUSED";
+  label: string;
+  reason: string;
+  action: string;
 };
 
 type LiveOrder = {
@@ -375,20 +402,31 @@ type LiveSnapshot = {
 
 const NAV: Tab[] = ["机会", "雷达", "订单", "实盘", "设置"];
 const MAIN_REFRESH_MS = 30_000;
-const TRADERS: { id: TraderId; code: string; name: string; setup: string }[] = [
-  { id: "dennis_trend", code: "HT1", name: "Dennis", setup: "趋势突破" },
-  { id: "raschke_pullback", code: "HT2", name: "Raschke", setup: "趋势回踩" },
-  { id: "turtle_soup", code: "HT3", name: "Turtle Soup", setup: "假突破" },
-  { id: "exhaustion_reversal", code: "HT4", name: "Exhaustion", setup: "反拥挤衰竭" },
-  { id: "higher_timeframe_swing", code: "HT5", name: "Swing", setup: "大周期结构" },
-  { id: "dennis_trend_v2", code: "HT1-R", name: "Accepted Breakout", setup: "突破接受/回踩" },
-  { id: "raschke_pullback_v2", code: "HT2-R", name: "Adaptive Pullback", setup: "深浅回踩恢复" },
-  { id: "turtle_soup_v2", code: "HT3-R", name: "Failed Auction", setup: "量价力度假突破" },
-  { id: "higher_timeframe_swing_v2", code: "HT5-R", name: "Swing Context", setup: "周期化大结构" },
-  { id: "range_rotation", code: "HT6", name: "Range Rotation", setup: "区间边缘轮动" },
-  { id: "compression_expansion", code: "HT7", name: "Compression", setup: "压缩后真实扩张" },
-  { id: "relative_strength", code: "HT8", name: "Relative Strength", setup: "横截面强弱" },
-  { id: "momentum_continuation", code: "HT9", name: "Momentum Continuation", setup: "浅回踩趋势延续" },
+const TRADERS: { id: TraderId; code: string; name: string; setup: string; familyId: FamilyId; variant: string }[] = [
+  { id: "dennis_trend", code: "HT1", name: "基础", setup: "趋势突破", familyId: "SF01", variant: "BASE" },
+  { id: "dennis_trend_v2", code: "HT1-R", name: "接受回踩", setup: "突破接受/回踩", familyId: "SF01", variant: "ACCEPTED_RETEST" },
+  { id: "raschke_pullback", code: "HT2", name: "基础", setup: "趋势回踩", familyId: "SF02", variant: "BASE" },
+  { id: "raschke_pullback_v2", code: "HT2-R", name: "自适应深度", setup: "深浅回踩恢复", familyId: "SF02", variant: "ADAPTIVE_DEPTH" },
+  { id: "turtle_soup", code: "HT3", name: "基础", setup: "失败突破", familyId: "SF03", variant: "BASE" },
+  { id: "turtle_soup_v2", code: "HT3-R", name: "力度确认", setup: "量价力度假突破", familyId: "SF03", variant: "FORCE_AWARE" },
+  { id: "exhaustion_reversal", code: "HT4", name: "基础", setup: "衰竭反转", familyId: "SF04", variant: "BASE" },
+  { id: "higher_timeframe_swing", code: "HT5", name: "基础", setup: "大周期波段", familyId: "SF05", variant: "BASE" },
+  { id: "higher_timeframe_swing_v2", code: "HT5-R", name: "环境上下文", setup: "周期化大结构", familyId: "SF05", variant: "REGIME_CONTEXT" },
+  { id: "range_rotation", code: "HT6", name: "基础", setup: "区间轮动", familyId: "SF06", variant: "BASE" },
+  { id: "compression_expansion", code: "HT7", name: "基础", setup: "压缩扩张", familyId: "SF07", variant: "BASE" },
+  { id: "relative_strength", code: "HT8", name: "基础", setup: "相对强弱", familyId: "SF08", variant: "BASE" },
+  { id: "momentum_continuation", code: "HT9", name: "基础", setup: "动量延续", familyId: "SF09", variant: "BASE" },
+];
+const STRATEGY_FAMILIES: { id: FamilyId; name: string; traderIds: TraderId[]; tags: string[] }[] = [
+  { id: "SF01", name: "趋势突破", traderIds: ["dennis_trend", "dennis_trend_v2"], tags: ["趋势", "突破"] },
+  { id: "SF02", name: "趋势回踩", traderIds: ["raschke_pullback", "raschke_pullback_v2"], tags: ["趋势", "回踩"] },
+  { id: "SF03", name: "失败突破", traderIds: ["turtle_soup", "turtle_soup_v2"], tags: ["反转", "假突破"] },
+  { id: "SF04", name: "衰竭反转", traderIds: ["exhaustion_reversal"], tags: ["反转", "衰竭"] },
+  { id: "SF05", name: "大周期波段", traderIds: ["higher_timeframe_swing", "higher_timeframe_swing_v2"], tags: ["趋势", "大周期"] },
+  { id: "SF06", name: "区间轮动", traderIds: ["range_rotation"], tags: ["区间", "轮动"] },
+  { id: "SF07", name: "压缩扩张", traderIds: ["compression_expansion"], tags: ["波动率", "扩张"] },
+  { id: "SF08", name: "相对强弱", traderIds: ["relative_strength"], tags: ["横截面", "强弱"] },
+  { id: "SF09", name: "动量延续", traderIds: ["momentum_continuation"], tags: ["趋势", "动量"] },
 ];
 const ALL_TRADERS = TRADERS;
 
@@ -514,7 +552,7 @@ function SignalCard({ item }: { item: Evaluation }) {
 }
 
 function RouterCard({ router }: { router: StrategyRouter | undefined }) {
-  if (!router) return <article className="rz-panel"><h3>策略大脑正在评估十三种打法</h3><p className="rz-copy">完整 Setup 会进入统一模拟池，由大脑择优开仓。</p></article>;
+  if (!router) return <article className="rz-panel"><h3>策略大脑正在评估 9 个家族 / 13 个变体</h3><p className="rz-copy">完整 Setup 会进入统一模拟池，由大脑择优开仓。</p></article>;
   const modeLabel = ({ WAIT: "等待", SINGLE: "单一故事", COOPERATE: "同向协作", CONFLICT: "故事冲突", SWITCH_WATCH: "纠错换挡观察" } as const)[router.mode];
   return <article className="rz-panel rz-review">
     <div className="rz-review-line"><span className="rz-eyebrow">STRATEGY BRAIN · 模拟/实盘同链</span><span className={`rz-bias ${router.mode === "CONFLICT" || router.mode === "SWITCH_WATCH" ? "neutral" : router.primary?.side === "LONG" ? "long" : router.primary?.side === "SHORT" ? "short" : "neutral"}`}>{modeLabel}</span></div>
@@ -523,6 +561,7 @@ function RouterCard({ router }: { router: StrategyRouter | undefined }) {
     {router.primary && <div className="rz-trader-stats"><div><span>当前结构分</span><b>{router.primary.currentScore.toFixed(1)}</b></div><div><span>实际订单样本</span><b>{router.primary.evidence.sampleCount}</b></div><div><span>模拟 PF</span><b>{router.primary.evidence.profitFactor == null ? "--" : router.primary.evidence.profitFactor >= 99 ? "∞" : router.primary.evidence.profitFactor.toFixed(2)}</b></div></div>}
     {router.supporting.length > 0 && <p className="rz-copy"><strong>同向：</strong>{router.supporting.map((item) => item.label).join("、")}（分别记账，不重复放大仓位）</p>}
     {router.opposing.length > 0 && <p className="rz-copy rz-negative"><strong>反向：</strong>{router.opposing.map((item) => `${item.label} ${sideText(item.side)}`).join("、")}</p>}
+    {router.familyAlternatives?.length > 0 && <p className="rz-copy"><strong>同家族已合并：</strong>{router.familyAlternatives.map((item) => item.label).join("、")}（保留学习记录，本轮不重复开单）</p>}
     <div className="rz-review-action"><strong>当前权限：</strong>{router.executionRule}</div>
     <details className="rz-inline-details"><summary>查看学习规则</summary><p className="rz-copy">{router.promotionRule}</p></details>
   </article>;
@@ -533,7 +572,7 @@ function ReviewCard({ review }: { review: SystemReview | undefined }) {
   return <article className="rz-panel rz-review">
     <div className="rz-review-line"><span className="rz-eyebrow">系统学习</span><span className="rz-bias neutral">{review.status}</span></div>
     <h3>{review.headline}</h3>
-    {review.latestAutopsy && <div className="rz-autopsy"><strong>最近一笔：{review.latestAutopsy.causeLabel}</strong><span>{review.latestAutopsy.explanation}</span></div>}
+    {review.latestAutopsy && <div className="rz-autopsy"><strong>最近一笔：{review.latestAutopsy.finalVerdict?.label ?? review.latestAutopsy.causeLabel}</strong><span>{review.latestAutopsy.finalVerdict?.profitPath ?? review.latestAutopsy.explanation}</span></div>}
     <div className="rz-review-evidence">{review.evidence.map((line) => <span key={line}>{line}</span>)}</div>
     <div className="rz-review-action"><strong>下一步：</strong>{review.action}</div>
     <div className="rz-progress-label"><span>每笔立即复盘</span><span>阶段汇总 {review.nextReviewProgress}/5</span></div>
@@ -597,12 +636,35 @@ function MiniChart({ chart }: { chart: ChartData }) {
       {chart.diagnosis.entryQuality.delayedEntries.map((item) => <div key={item.delayBars}><b>晚 {item.delayMinutes} 分钟</b><span>{item.valid ? `结果 ${fmtR(item.terminalR)} · 改善 ${fmtR(item.improvementR)} · MAE ${fmtR(item.maxAdverseR)}${item.stopped ? " · 触发原止损" : ""}` : "原结构止损下不可形成有效入场"}</span></div>)}
     </div> : null}
     {chart.observations?.length > 0 && <div className="rz-observer-row">{chart.observations.map((item) => <div key={item.horizonMinutes}><b>{horizonLabel(item.horizonMinutes)}</b><span>{item.status === "complete" ? `有利 ${fmtR(item.favorableR)} · 不利 ${fmtR(item.adverseR)}` : "观察中"}</span></div>)}</div>}
+    <div className="rz-review-action"><strong>{chart.finalVerdict.final ? "最终结论" : "当前结论"}：</strong>{chart.finalVerdict.label} · {chart.finalVerdict.profitPath}<br />{chart.finalVerdict.recommendedAction}</div>
     <div className="rz-chart-copy">
       <span>{chart.diagnosis.label ?? "退出后仍在观察"}{chart.diagnosis.stopRecovery ? " · 疑似假止损" : ""}</span>
       {chart.counterfactual?.summary && <span>{chart.counterfactual.summary}</span>}
       {chart.upstreamError && <span>实时图层暂不可用：{chart.upstreamError}；仍显示已保存交易快照。</span>}
     </div>
   </>;
+}
+
+type StrategyFamilyStat = {
+  id: FamilyId;
+  name: string;
+  tags: string[];
+  variants: { id: TraderId; code: string; name: string; samples: number }[];
+  samples: number;
+  expectancy: number;
+  pf: number | null;
+  health?: StrategyHealth;
+};
+
+function StrategyFamilyCard({ family }: { family: StrategyFamilyStat }) {
+  const state = family.health?.state ?? "LEARNING";
+  const healthClass = ["DEGRADED", "UNDERPERFORMING", "PAUSED"].includes(state) ? "short" : state === "ACTIVE" ? "long" : "neutral";
+  return <article className="rz-panel rz-trader">
+    <div className="rz-trader-top"><div><strong>{family.id} {family.name}</strong><small>{family.tags.map((tag) => `#${tag}`).join(" ")}</small></div><span className={`rz-bias ${healthClass}`}>{family.health?.label ?? "学习中"}</span></div>
+    <div className="rz-trader-stats"><div><span>样本</span><b>{family.samples}</b></div><div><span>Expectancy</span><b className={family.expectancy < 0 ? "rz-negative" : "rz-positive"}>{fmtR(family.expectancy)}</b></div><div><span>PF</span><b>{family.pf == null ? "--" : family.pf >= 99 ? "∞" : family.pf.toFixed(2)}</b></div></div>
+    <p className="rz-copy"><strong>变体：</strong>{family.variants.map((variant) => `${variant.code} ${variant.name} (${variant.samples})`).join(" · ")}</p>
+    {family.health && <p className="rz-copy">{family.health.reason}<br />计划：{family.health.action}</p>}
+  </article>;
 }
 
 function TradeCard({ trade, roundTripCostBps }: { trade: Trade; roundTripCostBps: number }) {
@@ -756,8 +818,24 @@ export default function ResonancePage() {
     const profit = cells.reduce((sum, cell) => sum + cell.grossProfitR, 0);
     const loss = cells.reduce((sum, cell) => sum + cell.grossLossR, 0);
     const pf = loss > 0 ? profit / loss : profit > 0 ? 99 : null;
-    return { ...trader, samples, expectancy, pf, guard: dashboard?.governance.traderGuards[trader.id] };
-  }), [dashboard]);
+    return { ...trader, samples, expectancy, profit, loss, pf, guard: dashboard?.governance.traderGuards[trader.id], health: snapshot?.diagnostics?.strategyHealth?.[trader.id] };
+  }), [dashboard, snapshot?.diagnostics?.strategyHealth]);
+
+  const familyStats = useMemo<StrategyFamilyStat[]>(() => STRATEGY_FAMILIES.map((family) => {
+    const variants = traderStats.filter((trader) => family.traderIds.includes(trader.id));
+    const samples = variants.reduce((sum, variant) => sum + variant.samples, 0);
+    const expectancy = samples ? variants.reduce((sum, variant) => sum + variant.expectancy * variant.samples, 0) / samples : 0;
+    const profit = variants.reduce((sum, variant) => sum + variant.profit, 0);
+    const loss = variants.reduce((sum, variant) => sum + variant.loss, 0);
+    return {
+      ...family,
+      variants: variants.map((variant) => ({ id: variant.id, code: variant.code, name: variant.name, samples: variant.samples })),
+      samples,
+      expectancy,
+      pf: loss > 0 ? profit / loss : profit > 0 ? 99 : null,
+      health: snapshot?.diagnostics?.familyHealth?.[family.id],
+    };
+  }), [traderStats, snapshot?.diagnostics?.familyHealth]);
 
   const resetPaper = () => {
     if (!dashboard) return;
@@ -861,9 +939,9 @@ export default function ResonancePage() {
         {latestRadar.length ? <div className="rz-list">{latestRadar.map((item) => <SignalCard key={item.id} item={item} />)}</div> : <Empty>暂时没有新的市场评估</Empty>}
       </section>
       <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">实时策略大脑</span><h2>选择、并用与纠错</h2></div><small>模拟/实盘同一决策链</small></div><RouterCard router={readModel?.router} /></section>
-      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">统一模拟策略池</span><h2>十三种打法由大脑择优</h2></div><small>最多 {snapshot?.diagnostics?.policy.maximumConcurrentPaperPositions ?? 5} 笔持仓</small></div>
-        <p className="rz-copy">所有策略都能参与模拟交易；实际订单、盈亏和逐笔复盘进入同一学习账本。HT4规则冻结，但不获得永久优先级。</p>
-        <div className="rz-list traders">{traderStats.map((trader) => <article className="rz-panel rz-trader" key={trader.id}><div className="rz-trader-top"><div><strong>{trader.code} {trader.name}</strong><small>{trader.setup}</small></div><span className={`rz-bias ${trader.guard?.state === "ACTIVE" ? "long" : trader.guard?.state === "PAUSED" ? "short" : "neutral"}`}>{trader.guard?.state ?? "ACTIVE"}</span></div><div className="rz-trader-stats"><div><span>样本</span><b>{trader.samples}</b></div><div><span>平均</span><b className={trader.expectancy < 0 ? "rz-negative" : "rz-positive"}>{fmtR(trader.expectancy)}</b></div><div><span>PF</span><b>{trader.pf == null ? "--" : trader.pf >= 99 ? "∞" : trader.pf.toFixed(2)}</b></div></div></article>)}</div>
+      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">统一模拟策略池</span><h2>9 个策略家族由大脑择优</h2></div><small>13 个历史变体 · 最多 {snapshot?.diagnostics?.policy.maximumConcurrentPaperPositions ?? 5} 笔持仓</small></div>
+        <p className="rz-copy">13 个旧策略身份完整保留并归入 9 个家族；同一家族同一轮只选一个变体，所有策略一视同仁。实盘直接继承大脑选中的准确变体与学习结果。</p>
+        <div className="rz-list traders">{familyStats.map((family) => <StrategyFamilyCard key={family.id} family={family} />)}</div>
       </section>
     </div>}
 
@@ -877,7 +955,7 @@ export default function ResonancePage() {
 
     {tab === "订单" && <div className="rz-stack rz-learning-stack">
       <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">逐笔复盘</span><h2>系统正在学什么</h2></div><small>{review ? `${review.completedTrades} 笔已复盘` : "--"}</small></div><ReviewCard review={review} /></section>
-      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">学习结果</span><h2>十三种模拟策略</h2></div></div><div className="rz-list traders">{traderStats.map((trader) => <article className="rz-panel rz-trader" key={trader.id}><div className="rz-trader-top"><div><strong>{trader.code} {trader.name}</strong><small>{trader.setup}</small></div><span className={`rz-bias ${trader.guard?.state === "ACTIVE" ? "long" : trader.guard?.state === "PAUSED" ? "short" : "neutral"}`}>{trader.guard?.state ?? "ACTIVE"}</span></div><div className="rz-trader-stats"><div><span>样本</span><b>{trader.samples}</b></div><div><span>Expectancy</span><b className={trader.expectancy < 0 ? "rz-negative" : "rz-positive"}>{fmtR(trader.expectancy)}</b></div><div><span>PF</span><b>{trader.pf == null ? "--" : trader.pf >= 99 ? "∞" : trader.pf.toFixed(2)}</b></div></div>{trader.guard?.reason && <p className="rz-copy">{trader.guard.reason.split(" · 1h 评估")[0]}</p>}</article>)}</div></section>
+      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">学习结果</span><h2>策略健康与行动计划</h2></div><small>9 家族 / 13 变体</small></div><div className="rz-list traders">{familyStats.map((family) => <StrategyFamilyCard key={family.id} family={family} />)}</div></section>
       <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">最差组合</span><h2>已经被数据否定的组合</h2></div></div>{dashboard?.learning.filter((cell) => cell.performanceGate?.state === "PAUSED").length ? <div className="rz-list">{dashboard.learning.filter((cell) => cell.performanceGate?.state === "PAUSED").slice(0, 12).map((cell) => <article className="rz-panel rz-radar" key={cell.id}><div><strong>{TRADERS.find((item) => item.id === cell.traderId)?.code} · {cell.assetRegime}</strong><small>{sideText(cell.side)} · {cell.sampleCount} 笔</small></div><span className="rz-negative">{fmtR(cell.expectancyR)}</span><div className="rz-radar-reason">{cell.performanceGate?.reason}</div></article>)}</div> : <Empty>目前没有达到暂停门槛的组合</Empty>}</section>
     </div>}
 

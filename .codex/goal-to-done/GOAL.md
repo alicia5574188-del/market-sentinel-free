@@ -80,3 +80,14 @@ Increase forward strategy evidence without disturbing HT4's currently positive b
 - Replace unchanged 15-second holding-row writes with durable 60-second checkpoints.
 - Keep planned recurring D1 writes at or below 60,000 rows/day under the configured thirteen-strategy/five-position maximum, leaving at least 40,000 rows below the 100,000 free daily limit for event-driven writes and variance.
 - Make the D1 write budget a required review and regression-test item for every future upgrade.
+
+## Current completion objective — Strategy family and lifecycle brain
+
+- Treat all thirteen strategies equally. HT4's prior profitable period remains historical evidence only; remove its freeze, permanent protection, and any special treatment in the next implementation.
+- Organize the thirteen legacy strategy IDs into canonical families and variants, preserving all old IDs, trades, learning, reviews, and Gate lineage.
+- Audit behavioral overlap before retiring a duplicate; a family may emit at most one executable candidate for a symbol/cycle.
+- Give every strategy an explainable health state covering learning, active, underperforming, degraded, starved, regime-wait, retest, and paused behavior.
+- Turn the existing post-exit observation and counterfactual evidence into a final verdict: valid trade, no-trade, wrong direction, entry timing, exit timing, risk-plan mismatch, or insufficient evidence.
+- Diagnose repeated losses, long non-use, and historical-to-recent performance decay before changing entry rules or reducing strategy usage.
+- Preserve the existing paper/live parity, five-position and 20% total-risk limits, adaptive leverage/margin safety, owner-only funding decision, and D1 recurring-write ceiling.
+- Use `docs/STRATEGY_BRAIN_LIFECYCLE_PLAN.md` as the implementation and acceptance checklist.

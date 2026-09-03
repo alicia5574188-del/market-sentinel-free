@@ -87,7 +87,7 @@ function enrichDashboardDiagnostics(
 
   dashboard.governance.state = "NORMAL";
   dashboard.governance.riskMultiplier = 1;
-  dashboard.governance.reason = "统一策略大脑：十三种策略共同进入模拟交易池，实际订单与逐笔复盘驱动后续排序；实盘复用同一策略血缘。";
+  dashboard.governance.reason = "统一策略大脑：9 个策略家族、13 个历史变体共同进入模拟交易池；相似变体同轮只选一个，实际订单与逐笔复盘驱动后续排序，实盘复用准确策略血缘。";
 }
 
 export async function GET() {
@@ -149,7 +149,7 @@ export async function GET() {
     : null;
 
   return Response.json({
-    version: "resonance-v4-unified-paper-live-parity",
+    version: "resonance-v5-strategy-lifecycle",
     requestedAt,
     observedAt: lastSuccessAt ?? requestedAt,
     account: auth.account,

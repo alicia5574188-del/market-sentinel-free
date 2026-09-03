@@ -7,7 +7,7 @@ Purpose: **the complete continuation entry after deleting all prior chats**
 
 Use this exact starter prompt in a new Project chat:
 
-> Continue the Market Sentinel quantitative system. First read `docs/QUANT_SYSTEM_MASTER_HANDOFF.md`, `AGENTS.md`, `.codex/goal-to-done/GOAL.md`, `STATUS.md`, `DECISIONS.md`, `docs/CURRENT_SYSTEM_STATE.md`, `docs/SENTINEL_CHANGELOG.md`, and `docs/RESONANCE_MUST_KEEP_FEATURES.md` completely. Then inspect current GitHub `main`, recent merged PRs, CI, and production health. Repository and verified production state override chat memory. Keep HT4's decision source frozen, keep all thirteen strategies in the same paper brain and live-parity catalog, never recreate shadow trade simulation, preserve every Must-Keep feature, and work through a branch/PR/green-CI/production-verification loop.
+> Continue the Market Sentinel quantitative system. First read `docs/QUANT_SYSTEM_MASTER_HANDOFF.md`, `AGENTS.md`, `.codex/goal-to-done/GOAL.md`, `STATUS.md`, `DECISIONS.md`, `docs/CURRENT_SYSTEM_STATE.md`, `docs/SENTINEL_CHANGELOG.md`, `docs/RESONANCE_MUST_KEEP_FEATURES.md`, and `docs/STRATEGY_BRAIN_LIFECYCLE_PLAN.md` completely. Then inspect current GitHub `main`, recent merged PRs, CI, and production health. Repository and verified production state override chat memory. Current production still contains the old HT4 fingerprint, but the owner has superseded the freeze for the next implementation: treat HT4 exactly like every other strategy and retain its prior profitability only as history. Keep all strategies in the same paper brain and live-parity lineage, never recreate shadow trade simulation, preserve every Must-Keep feature, and work through a branch/PR/green-CI/production-verification loop.
 
 Do not reconstruct the system from a chat summary. The authoritative order is:
 
@@ -64,15 +64,15 @@ The retired Strategy 2.0 / P1–P12 engine remains historical and isolated. Some
 | HT1 | `dennis_trend` | Dennis trend breakout | Paper brain + live parity |
 | HT2 | `raschke_pullback` | Raschke trend pullback | Paper brain + live parity |
 | HT3 | `turtle_soup` | Turtle Soup false breakout | Paper brain + live parity |
-| HT4 | `exhaustion_reversal` | Anti-crowding exhaustion reversal | Paper brain + live parity; source frozen |
+| HT4 | `exhaustion_reversal` | Anti-crowding exhaustion reversal | Paper brain + live parity; current runtime still has legacy fingerprint |
 | HT5 | `higher_timeframe_swing` | Higher-timeframe structure | Paper brain + live parity |
 
-HT4 rules:
+HT4 current-runtime and next-change rule:
 
 - The exact decision block is protected by SHA-256 regression fingerprint `05adae71b2c1169c441e409d831ceb5acbec1390f5b051a5cb18f7a7af8389a3`.
-- Do not tune, wrap, reprioritize, duplicate, or rewrite HT4 because it recently carried the positive result.
-- A small profitable sample does not create permanent priority. The router ignores performance weighting below eight valid samples.
-- Other strategies may outrank HT4 on the current market story; none may alter an already-open HT4 lifecycle.
+- That fingerprint describes current production only. The owner explicitly removed the freeze for the next strategy-brain implementation.
+- HT4 receives no priority, exemption, permanent score, or special tuning protection. Its prior profitable period is historical evidence only.
+- The next implementation must replace the freeze test with equal-treatment and open-position-lineage safety tests. Existing HT4 positions still keep their original lifecycle through deployment.
 
 ### Unified paper/live catalog — additional strategies
 
@@ -304,21 +304,23 @@ The final PR #103 evidence was:
 
 ## 13. Next optimization objective
 
-The immediate objective is actual unified-paper evidence collection:
+The prepared objective is strategy-family consolidation and full lifecycle management. Follow `docs/STRATEGY_BRAIN_LIFECYCLE_PLAN.md`:
 
-- Let all thirteen strategies compete through the same brain and capital-backed account while HT4's source remains unchanged.
-- Review actual closed-order frequency, expectancy, profit factor, drawdown, stop/TP/timeout composition, direction concentration, and five-slot utilization.
-- Diagnose strategy or regime starvation from actual orders before changing entry rules.
+- Treat every strategy equally, including HT4, and retain prior profitability as history rather than permanent protection.
+- Group the thirteen legacy IDs into canonical families/variants, then retire only behaviorally proven duplicates while preserving all lineage.
+- Review actual closed-order frequency, expectancy, profit factor, drawdown, stop/TP/timeout composition, direction concentration, five-slot utilization, and recent-vs-lifetime decay.
+- Diagnose repeated losses, strategy/regime starvation, and degradation before changing entry rules or reducing usage.
+- Convert the existing post-exit and counterfactual evidence into an explainable final trade verdict and remediation action.
 - Keep same-side cooperation and opposite-side conflict explainable; do not auto-switch positions or substitute a lower-ranked strategy after selection.
 - Treat positive simulated growth as evidence for the owner's later funding decision, never as automatic funding approval.
 
-Non-goals until actual paper evidence exists:
+Non-goals:
 
-- No HT4 source tuning or priority boost.
 - No auxiliary shadow-trade simulation.
 - No automatic close-and-reverse or hedge.
 - No fund transfer or owner-approval inference.
 - No deletion of old trades, learning, shadow history, or simulation epochs.
+- No per-scan strategy-health write or D1 recurring budget above 60,000 rows/day.
 
 ## 14. How to continue after deleting chats
 

@@ -9,8 +9,10 @@ import {
   hte31Trades,
 } from "../db/hte31-schema";
 import { buildHte31Counterfactual } from "./hte31-counterfactual";
-import type { ResonanceEntryQualityReport } from "./resonance-entry-quality";
+import { buildResonanceEntryQuality, type ResonanceEntryQualityReport } from "./resonance-entry-quality";
 import { getSettings } from "./settings-repository";
+import { hte31CanonicalStrategyLabel, hte31StrategyFamilyForTrader, hte31TraderDefinition, type Hte31TraderId } from "./hte31-strategy-catalog";
+import { buildHte31TradeFinalVerdict } from "./hte31-trade-verdict";
 import type { Hte31Candle } from "./hte31-types";
 
 export type OwnerTradeDiagnosticSource = "hte31" | "legacy" | "all";
@@ -53,11 +55,29 @@ function normalizeCurrentTrade(
     parseJson<Hte31Candle[]>(chart.postExitCandlesJson, []),
   ) : [];
   const epoch = epochFor(row.entryAt, epochs);
+  const traderId = row.traderId as Hte31TraderId;
+  const family = hte31StrategyFamilyForTrader(traderId);
+  const definition = hte31TraderDefinition(traderId);
+  const counterfactual = chartCandles.length
+    ? buildHte31Counterfactual(row, chartCandles, roundTripCostBps, Date.now())
+    : null;
+  const storedEntryQuality = chart ? parseJson<ResonanceEntryQualityReport | null>(chart.entryQualityJson, null) : null;
+  const entryQuality = storedEntryQuality ?? (chartCandles.length
+    ? buildResonanceEntryQuality(row, chartCandles, roundTripCostBps, Date.now())
+    : null);
   return {
     source: "hte31" as const,
     ...trade,
     entryChecks: parseJson<unknown[]>(entryChecksJson, []),
     entryMetrics: parseJson<unknown[]>(entryMetricsJson, []),
+    strategy: {
+      familyId: family.id,
+      familyName: family.name,
+      variantId: definition.variantId,
+      variantName: definition.variantName,
+      canonicalLabel: hte31CanonicalStrategyLabel(traderId),
+      tags: definition.tags,
+    },
     epoch: epoch ? {
       id: epoch.id,
       startedAt: epoch.startedAt,
@@ -69,12 +89,11 @@ function normalizeCurrentTrade(
       candleCount: chartCandles.length,
       firstCandleAt: chartCandles.length ? candleTime(chartCandles[0]) : null,
       lastCandleAt: chartCandles.length ? candleTime(chartCandles.at(-1)!) : null,
-      entryQuality: parseJson<ResonanceEntryQualityReport | null>(chart.entryQualityJson, null),
+      entryQuality,
       updatedAt: chart.updatedAt,
     } : { available: false, candleCount: 0, firstCandleAt: null, lastCandleAt: null, entryQuality: null, updatedAt: null },
-    counterfactual: chartCandles.length
-      ? buildHte31Counterfactual(row, chartCandles, roundTripCostBps, Date.now())
-      : null,
+    counterfactual,
+    finalVerdict: buildHte31TradeFinalVerdict({ trade: row, entryQuality, counterfactual }),
   };
 }
 
@@ -163,7 +182,7 @@ export async function getOwnerTradeHistory(options: {
   const legacyCount = Number(legacyCountRow[0]?.count ?? 0);
   const total = source === "hte31" ? currentCount : source === "legacy" ? legacyCount : currentCount + legacyCount;
   return {
-    version: "owner-trade-diagnostics-v1",
+    version: "owner-trade-diagnostics-v2",
     generatedAt: Date.now(),
     source,
     pagination: {
@@ -213,9 +232,6 @@ export async function getOwnerTradeDiagnostic(tradeId: string) {
         entryQuality: parseJson<ResonanceEntryQualityReport | null>(chartRow.entryQualityJson, null),
       } : null,
       learningCell: learning[0] ?? null,
-      counterfactual: candles.length
-        ? buildHte31Counterfactual(current, candles, settings.roundTripCostBps, Date.now())
-        : null,
     };
   }
 

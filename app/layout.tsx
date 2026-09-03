@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   metadataBase: new URL("https://market-sentinel-free.alicia5574188.workers.dev"),
   title: "Resonance｜自适应交易系统",
-  description: "Resonance：结合当前市场结构、历史相似行情、十三种统一模拟策略与阶段复盘的自适应交易系统。",
+  description: "Resonance：结合当前市场结构、历史相似行情、9个策略家族/13个变体与逐单复盘的自适应交易系统。",
   applicationName: "Resonance",
   manifest: "/manifest.webmanifest",
   formatDetection: { telephone: false },

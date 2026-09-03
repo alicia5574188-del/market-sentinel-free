@@ -327,9 +327,9 @@ export async function tryOpenResonanceTrade(
   review: ResonanceSystemReview,
   diagnosticRouter: Hte31RouterDecision,
 ) {
-  // All thirteen strategies share one simulation pool. HT4's decision block
-  // remains frozen, but it receives neither a permanent priority bonus nor a
-  // separate execution lane. The brain ranks the current market story first.
+  // All nine families / thirteen historical variants share one simulation
+  // pool and the same health/routing rules. No strategy receives a permanent
+  // priority, exemption, or separate execution lane.
   const timedSignals = signals
     .map((signal) => improveEntryTiming(signal, packet, candles, marketView))
     .map((signal) => applyCognitiveEntryLearning(signal, packet, candles, marketView, review));
@@ -339,7 +339,7 @@ export async function tryOpenResonanceTrade(
     .map((signal) => markLearnedPolicyCandidate(signal, review));
 
   const evidenceByTrader = new Map<string, Hte31RouterEvidence>();
-  for (const candidate of [diagnosticRouter.primary, ...diagnosticRouter.supporting, ...diagnosticRouter.opposing]) {
+  for (const candidate of [diagnosticRouter.primary, ...diagnosticRouter.supporting, ...diagnosticRouter.opposing, ...diagnosticRouter.familyAlternatives]) {
     if (candidate) evidenceByTrader.set(candidate.traderId, candidate.evidence);
   }
   const executionRouter = buildHte31StrategyRouterDecision({

@@ -44,6 +44,40 @@ test("same-side strategies cooperate while the brain selects one executable pape
   assert.equal(result.authority, "paper_brain_live_parity");
 });
 
+test("similar variants are merged into one family candidate per symbol and cycle", () => {
+  const result = buildHte31StrategyRouterDecision({
+    observedAt: 1,
+    symbol: "PROM_USDT",
+    signals: [signal("trend_breakout", "LONG", 80, "paper"), signal("trend_breakout_challenger", "LONG", 82, "paper")],
+    evidence: [],
+  });
+  assert.equal(result.mode, "SINGLE");
+  assert.equal(result.primary?.traderId, "dennis_trend_v2");
+  assert.equal(result.primary?.familyId, "SF01");
+  assert.equal(result.familyAlternatives.length, 1);
+  assert.equal(result.familyAlternatives[0]?.traderId, "dennis_trend");
+});
+
+test("recent degradation reduces routing score equally for every strategy", () => {
+  const result = buildHte31StrategyRouterDecision({
+    observedAt: 1,
+    symbol: "ETH_USDT",
+    signals: [signal("trend_exhaustion_reversal", "SHORT", 84, "paper"), signal("momentum_continuation", "SHORT", 80, "paper")],
+    evidence: [evidence("exhaustion_reversal", {
+      sampleCount: 20,
+      expectancyR: 0.3,
+      profitFactor: 1.5,
+      recentSampleCount: 6,
+      recentExpectancyR: -0.5,
+      baselineSampleCount: 14,
+      baselineExpectancyR: 0.4,
+      everProfitable: true,
+    })],
+  });
+  assert.equal(result.primary?.traderId, "momentum_continuation");
+  assert.ok((result.opposing.length === 0));
+});
+
 test("opposite strategies remain separate hypotheses instead of being averaged into an order", () => {
   const result = buildHte31StrategyRouterDecision({
     observedAt: 1,

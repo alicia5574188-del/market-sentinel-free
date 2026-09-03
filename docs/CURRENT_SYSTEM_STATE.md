@@ -1,5 +1,9 @@
 # Market Sentinel — Current System State
 
+> **2026-09-03 strategy lifecycle implementation — locally verified, not yet deployed.**
+>
+> The thirteen legacy strategy IDs now map to nine canonical families locally. Same-family variants keep their IDs/history but only the highest-ranked variant remains executable for a symbol/cycle. Every strategy, including HT4, uses the same health, recent-decay, retest, and pause rules. Completed 12-hour post-exit paths receive a final verdict stating the observed profit path or that the trade should have been skipped. No schema, recurring D1 write, risk limit, owner control, fund action, or Durable Object generation changed. Current production remains on the prior behavior until PR/CI/deployment verification completes.
+
 > **2026-09-02 D1 daily-write budget correction.**
 >
 > The active-position safety loop still evaluates every 15 seconds, while unchanged holding telemetry is durably checkpointed once per 60 seconds. TP1 protection, stop, TP2, timeout, close, learning, and recovery events remain immediate. Under thirteen one-minute evaluations and five continuously open positions, scheduled D1 writes are bounded at 27,360 rows/day, leaving 72,640 rows beneath the 100,000 free daily allowance for lifecycle events and variance. Every future upgrade that adds or accelerates D1 writes must preserve a planned recurring ceiling of 60,000 rows/day.
