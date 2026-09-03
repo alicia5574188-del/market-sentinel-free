@@ -75,9 +75,17 @@ jobs:
         run: |
           set -euo pipefail
           base="https://market-sentinel-free.alicia5574188.workers.dev"
-          asset="$(find dist/client/assets -maxdepth 1 -type f -name 'page-*.js' -printf '%f\n' | head -1)"
-          curl -fsS --max-time 10 "$base/assets/$asset" -o /tmp/release-page.js
-          grep -q 'direct-market-brain-v1' /tmp/release-page.js
+          expected_asset="$(find dist/client/assets -maxdepth 1 -type f -name 'page-*.js' -printf '%f\n' | head -1)"
+          ready=0
+          for attempt in {1..12}; do
+            code="$(curl -sS --max-time 10 -o /tmp/release-page.js -w '%{http_code}' "$base/assets/$expected_asset" || true)"
+            if [[ "$code" == "200" ]] && grep -q '直接市场大脑' /tmp/release-page.js && grep -q '成交额前十五' /tmp/release-page.js; then
+              ready=1
+              break
+            fi
+            sleep 10
+          done
+          [[ "$ready" == "1" ]]
           for attempt in 1 2 3; do
             curl -fsS --max-time 5 "$base/__health" -o "/tmp/health-$attempt.json"
             jq -e '
