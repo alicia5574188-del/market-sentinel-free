@@ -74,7 +74,7 @@ export async function GET(request: Request) {
       familyName: family.name,
       variantId: definition.variantId,
       variantName: definition.variantName,
-      canonicalLabel: hte31CanonicalStrategyLabel(traderId),
+      canonicalLabel: hte31CanonicalStrategyLabel(traderId, trade.assetRegime),
       tags: definition.tags,
     },
     observedAt: now,

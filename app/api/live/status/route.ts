@@ -52,6 +52,7 @@ export async function GET() {
     const currentLinked = ids.length ? await getDb().select({
       id: hte31Trades.id,
       traderId: hte31Trades.traderId,
+      assetRegime: hte31Trades.assetRegime,
       entryTrigger: hte31Trades.entryTrigger,
       entryThesis: hte31Trades.entryThesis,
       exitReason: hte31Trades.exitReason,
@@ -66,7 +67,7 @@ export async function GET() {
       exitEvidenceJson: tradeCases.exitEvidenceJson,
     }).from(tradeCases).where(inArray(tradeCases.id, legacyIds)) : [];
     const byId = new Map<string, LinkedStrategy>([
-      ...currentLinked.map((row): [string, LinkedStrategy] => [row.id, { ...row, strategyLabel: hte31CanonicalStrategyLabel(row.traderId as Hte31TraderId), exitEvidenceJson: null }]),
+      ...currentLinked.map((row): [string, LinkedStrategy] => [row.id, { ...row, strategyLabel: hte31CanonicalStrategyLabel(row.traderId as Hte31TraderId, row.assetRegime), exitEvidenceJson: null }]),
       ...legacyLinked.map((row): [string, LinkedStrategy] => [row.id, { ...row, strategyLabel: strategyLabel(row.entryTrigger), traderId: null }]),
     ]);
     const orders = (snapshot.orders ?? []).map((order) => {

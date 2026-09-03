@@ -19,7 +19,7 @@ test("Resonance mobile navigation is one fixed five-tab control", async () => {
 test("switching tabs returns the document to the top", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   assert.match(page, /window\.scrollTo\(0, 0\);/);
-  assert.match(page, /\}, \[tab\]\);/);
+  assert.match(page, /\}, \[tab, strategyCenterOpen\]\);/);
 });
 
 test("iPhone keeps native vertical scrolling with no document touch trap", async () => {

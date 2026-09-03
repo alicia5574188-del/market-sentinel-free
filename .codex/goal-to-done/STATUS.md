@@ -1,5 +1,23 @@
 # Status
 
+## Strategy Center and historical memory — locally complete
+
+- Started from current `origin/main` plus the reviewed preparation commits.
+- Implemented the dedicated Strategy Center, canonical cross-surface labels, truthful historical-memory states, bounded dashboard/health reads, cold-reload last-good display, scroll isolation, and focused regressions.
+- Local verification passed: strategy/risk/migration 221/221, production build/UI 110/110, focused resilience/UI 26/26, ESLint, TypeScript, Wrangler dry-run, and `git diff --check`.
+- Local feature commit: `4b87beb` (`feat: add resilient strategy center`).
+- Release is blocked before push: this environment rejected writing the commit to the configured GitHub remote without a separate explicit source-export approval, and Wrangler has no authenticated Cloudflare session. Production therefore remains unchanged.
+- Current production is still running, but the old health path reproduced its intermittent latency: one 8-second timeout followed by HTTP 200 in 1.27 seconds; both schedulers were `live`, errors were null, and the scanner circuit was closed.
+- No fund action, risk/live authority change, migration, D1 recurring write, or Durable Object generation reset is authorized.
+
+## Preparation baseline
+
+- Preparation branch: `prep/strategy-center-history-memory`.
+- Scope, exact files, data states, UI rules, tests, D1 constraints, and one-pass release order are fixed in `docs/STRATEGY_CENTER_HISTORY_MEMORY_PLAN.md`.
+- The same prepared upgrade now includes the reproduced transient-503 boundary: one 20-second health timeout followed by a healthy 15.2-second response while both schedulers remained live. Main reads will be split, deadline-bounded, and last-good capable.
+- No runtime code, production behavior, D1 write path, strategy, risk, live control, or deployed asset changed during preparation.
+- Next action after the five-hour allowance resets: implement from current `main` using `极高`, complete all local gates, then PR/CI/merge/production verification.
+
 ## Strategy brain lifecycle — production deployed
 
 - Pull request: `#109` — `feat: add strategy family lifecycle brain`.

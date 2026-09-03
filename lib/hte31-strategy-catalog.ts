@@ -1,4 +1,4 @@
-import type { Hte31Signal, Hte31StrategyId } from "./hte31-types.ts";
+import type { Hte31AssetRegime, Hte31Signal, Hte31StrategyId } from "./hte31-types.ts";
 
 export const HTE31_CONTROL_TRADER_IDS = [
   "dennis_trend",
@@ -130,8 +130,25 @@ export function hte31StrategyFamilyForTrader(traderId: Hte31TraderId) {
   return hte31StrategyFamilyDefinition(hte31TraderDefinition(traderId).familyId);
 }
 
-export function hte31CanonicalStrategyLabel(traderId: Hte31TraderId) {
+const HTE31_ASSET_REGIME_LABELS: Record<Hte31AssetRegime, string> = {
+  trend_up: "上涨趋势",
+  trend_down: "下跌趋势",
+  range: "区间震荡",
+  compression: "波动压缩",
+  expansion_up: "向上扩张",
+  expansion_down: "向下扩张",
+  leverage_liquidation: "极端杠杆/清算",
+  transition: "环境切换",
+};
+
+export function hte31AssetRegimeLabel(regime: string | null | undefined) {
+  if (!regime) return null;
+  return HTE31_ASSET_REGIME_LABELS[regime as Hte31AssetRegime] ?? regime;
+}
+
+export function hte31CanonicalStrategyLabel(traderId: Hte31TraderId, assetRegime?: string | null) {
   const trader = hte31TraderDefinition(traderId);
   const family = hte31StrategyFamilyDefinition(trader.familyId);
-  return `${family.label} · ${trader.variantName} [${trader.code}]`;
+  const regime = hte31AssetRegimeLabel(assetRegime);
+  return `${family.label} / ${trader.variantName} [${trader.code}]${regime ? ` · ${regime}` : ""}`;
 }

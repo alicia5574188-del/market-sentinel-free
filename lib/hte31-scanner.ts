@@ -8,6 +8,7 @@ import { evaluateHumanTraderPool } from "./hte31-human-trader-engine.ts";
 import { evaluateAdvancedHumanTraders } from "./hte31-advanced-traders.ts";
 import { evaluateHte31ResearchStrategies } from "./hte31-research-strategies.ts";
 import { getGlobalRiskContext } from "./global-risk.ts";
+import { GateHistoricalDataError } from "./gate-history.ts";
 import { getHte31Dashboard, listHte31OpenTrades, recordHte31Evaluations } from "./hte31-repository.ts";
 import type { Hte31Candle, Hte31Signal } from "./hte31-types.ts";
 import { getSettings, type AppSettings } from "./settings-repository.ts";
@@ -39,6 +40,7 @@ export type Hte31ScanJob = {
   packet?: MarketAnalysisPacket;
   candles?: Hte31Candle[];
   memory?: ResonanceMarketMemory;
+  previousMemory?: ResonanceMarketMemory | null;
   marketView?: ResonanceMarketView;
   review?: ResonanceSystemReview;
   signals?: Hte31Signal[];
@@ -114,6 +116,12 @@ function crossSectionRank(universe: MarketUniverseTicker[], symbol: string) {
   return index < 0 ? 0.5 : index / Math.max(1, sorted.length - 1);
 }
 
+function historicalFailure(error: unknown) {
+  return error instanceof GateHistoricalDataError
+    ? error.code
+    : error instanceof Error ? error.message : "UPSTREAM_FAILURE";
+}
+
 export function createHte31ScanJob(rotationOffset: number, previousMarket: Hte31MarketState | null = null): Hte31ScanJob {
   return {
     version: 3,
@@ -186,15 +194,26 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
   if (job.phase === "candles") {
     if (!job.target || !job.packet) throw new Error("Resonance scan missing candle target");
     const now = Date.now();
-    const [candles, hourly, fourHour, daily, review] = await Promise.all([
+    const [candles, review, historical] = await Promise.all([
       marketExchange.fetchChartCandles(job.target.symbol, now - 18 * 60 * 60_000, now),
-      marketExchange.fetchHistoricalCandles(job.target.symbol, "1h", 720),
-      marketExchange.fetchHistoricalCandles(job.target.symbol, "4h", 1_200),
-      marketExchange.fetchHistoricalCandles(job.target.symbol, "1d", 1_800),
       getResonanceSystemReview(),
+      Promise.allSettled([
+        marketExchange.fetchHistoricalCandles(job.target.symbol, "1h", 720),
+        marketExchange.fetchHistoricalCandles(job.target.symbol, "4h", 1_200),
+        marketExchange.fetchHistoricalCandles(job.target.symbol, "1d", 1_800),
+      ]),
     ]);
     if (candles.length < 34) throw new Error(`5m K线不足：${candles.length} 根`);
-    const memory = buildResonanceMarketMemory({ hourly, fourHour, daily });
+    const value = (index: number) => historical[index].status === "fulfilled" ? historical[index].value : [];
+    const failure = (index: number) => historical[index].status === "rejected" ? historicalFailure(historical[index].reason) : undefined;
+    const memory = buildResonanceMarketMemory({
+      hourly: value(0),
+      fourHour: value(1),
+      daily: value(2),
+      failures: { short: failure(0), swing: failure(1), cycle: failure(2) },
+      previous: job.previousMemory,
+      observedAt: now,
+    });
     const marketView = buildResonanceMarketView(job.packet, memory);
     return { kind: "progress", job: { ...job, phase: "evaluate", candles, memory, marketView, review } };
   }

@@ -227,7 +227,7 @@ export async function openResonancePaperTrade(
     marginUsdt: sizing.marginUsdt,
     quantity: sizing.quantity,
     leverage: sizing.leverage,
-    entryTrigger: `${BRAIN_SELECTED_MARKER} · ${hte31CanonicalStrategyLabel(selected.traderId)} · ${learnedAdaptation ? `${COGNITIVE_MARKER} · ` : ""}${selected.signal.label} · ${selected.signal.reasons.join("；")} · ${sizing.leverageReason}`,
+    entryTrigger: `${BRAIN_SELECTED_MARKER} · ${hte31CanonicalStrategyLabel(selected.traderId, selected.signal.strategyMeta.assetRegime)} · ${learnedAdaptation ? `${COGNITIVE_MARKER} · ` : ""}${selected.signal.label} · ${selected.signal.reasons.join("；")} · ${sizing.leverageReason}`,
     entryThesis: selected.signal.thesis,
     entryChecksJson: JSON.stringify(plan.checks),
     entryMetricsJson: JSON.stringify([
