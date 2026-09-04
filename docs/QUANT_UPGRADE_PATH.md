@@ -33,7 +33,7 @@ Do not create a second simulator, router, risk authority, market-data producer, 
 3. Add one non-destructive migration naming the new version. Never edit an applied migration.
 4. Run focused decision/cutover tests while editing.
 5. Run the full strategy, UI/safety, lint, type, build, migration, and Wrangler dry-run gates once.
-6. Open one PR, merge only on green CI, then verify the immutable asset, D1 migration, both schedulers, bounded API, and new simulation epoch.
+6. Open one PR, merge only on green CI, then let the deploy gate verify the immutable asset, D1 migration, both schedulers, zero old paper positions, active brain version, and new simulation epoch.
 
 CI must fail when the brain version and declared cutover migration disagree.
 

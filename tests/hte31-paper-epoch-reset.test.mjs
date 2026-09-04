@@ -11,6 +11,7 @@ const releaseMigration = readFileSync(new URL("../drizzle/0020_direct_market_v2_
 const release = readFileSync(new URL("../lib/direct-market-release.ts", import.meta.url), "utf8");
 const directTypes = readFileSync(new URL("../lib/direct-market-types.ts", import.meta.url), "utf8");
 const execution = readFileSync(new URL("../lib/direct-market-execution.ts", import.meta.url), "utf8");
+const workflow = readFileSync(new URL("../.github/workflows/sentinel-v2-ci.yml", import.meta.url), "utf8");
 const worker = readFileSync(new URL("../worker/hte31-workers.ts", import.meta.url), "utf8");
 const route = readFileSync(new URL("../app/api/hte31/paper-reset/route.ts", import.meta.url), "utf8");
 const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
@@ -41,6 +42,9 @@ test("every major brain version declares and enforces one paper cutover", () => 
   assert.match(worker, /ensureDirectMarketReleaseCutover\(settings\.trialCapitalUsdt, startedAt\)/);
   assert.match(release, /state\?\.status === "completed" && state\.targetBrainVersion === DIRECT_MARKET_RELEASE\.brainVersion/);
   assert.match(repository, /activeBrainVersion: state\.targetBrainVersion \?\? state\.activeBrainVersion/);
+  assert.match(workflow, /Verify paper strategy cutover/);
+  assert.match(workflow, /active_brain_version == \$version/);
+  assert.match(workflow, /open_positions == 0/);
 });
 
 test("adaptive-brain fresh start archives old paper positions at fresh quotes and keeps their review trail", () => {
