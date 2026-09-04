@@ -1,6 +1,6 @@
 # Goal
 
-## Active objective — core-three resonance dashboard
+## Completed objective — core-three resonance dashboard
 
 - Replace the Dennis breakout setup for new orders with the original multi-timeframe comprehensive resonance idea: completed 5-minute confirmation, 15m/1h/4h alignment, spot/volume confirmation, structural targets, and anti-chase protection.
 - Keep volume-force failed breakout and exhaustion reversal, and make the three setup stories mutually exclusive under the existing Direct Market Brain authority and hard risk/live-parity boundaries.
