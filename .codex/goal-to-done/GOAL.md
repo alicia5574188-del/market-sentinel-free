@@ -1,5 +1,13 @@
 # Goal
 
+## Active patch objective — return to three useful setups
+
+- Keep the Direct Market Brain as the sole new-order authority, but admit candidates only through three explicit setups: `VOLUME_FORCE_FAILED_BREAKOUT`, `EXHAUSTION_REVERSAL`, and the original low-frequency `DENNIS_TREND_BREAKOUT` baseline.
+- Require setup-specific completed-candle, price/volume force, location, liquidity, funding, macro, volatility, structural edge, and anti-chase evidence. A position slot remains a ceiling, never a quota.
+- Make the selected setup and score visible in the existing compact daily UI; remove upgrade-centric copy without removing owner controls, diagnostics, review, reset, account, push, or live safety capabilities.
+- Preserve current positions, immutable risk plans, paper/live decision lineage, 12-hour observations, historical strategy identities, D1 limits, and the no-fund/no-live-authority boundary.
+- Finish inside one bounded release loop: focused tests, full tests, lint/type/build/dry-run, branch/PR, green CI, merge, and production health verification.
+
 ## Active patch objective — clean adaptive-brain restart
 
 - Stop new paper entries during the release, archive every pre-upgrade open paper position at a fresh exchange quote, retain its immutable lineage and seven-node 12-hour observation trail, then create a new simulation epoch at the configured starting capital.

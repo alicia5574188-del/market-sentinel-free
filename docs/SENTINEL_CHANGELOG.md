@@ -11,6 +11,23 @@ Rules:
 
 ---
 
+## 2026-09-04 — Direct Market Brain reduced to three core setups
+
+### Changed
+
+- Versioned the sole new-order authority as `direct-market-brain-v2-core-three` and limited candidate admission to volume-force failed breakout, exhaustion reversal, and Dennis trend breakout.
+- Added explicit setup identity/score to the immutable decision path and setup-specific completed-candle, volume/force, exhaustion, trend-alignment and anti-chase evidence.
+- Compressed the daily product copy to show the three retained setups while keeping the existing operator navigation and controls.
+
+### Deliberately unchanged
+
+- Existing orders and their immutable stop/target lifecycle, 12-hour observation, historical lineage, portfolio and D1 limits, credentials, owner-only live controls, emergency stop, funding boundary, and five Must-Keep tabs.
+- No migration, destructive reset, forced close, fund movement, live activation, or recurring write was added.
+
+### Verification
+
+- Local direct-brain/architecture tests passed 21/21; production build/UI/safety tests passed 111/111; TypeScript and production build passed. PR, CI, merge and production proof are recorded when completed.
+
 ## 2026-09-03 — Strategy-family lifecycle brain and post-exit verdicts
 
 - Pull request: `#109`

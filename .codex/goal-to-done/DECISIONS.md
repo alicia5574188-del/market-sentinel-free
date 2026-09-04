@@ -303,3 +303,10 @@ Record only consequential decisions using this format:
 - Reason: Executing only the latest completed symbol could miss the strongest earlier candidate. Cohort execution makes cross-market selection real without adding a database write or a second simulator.
 - Evidence: The worker fetches fresh quotes for the ranked finalists in one bounded call, then every candidate independently passes stale/zone/invalidation/economic, correlation, portfolio, risk, learning, and D1 gates.
 - Revisit when: Production latency or forward evidence supports changing the six-symbol deep width; the fifteen-coin light universe and D1 zero-write boundary remain fixed unless explicitly redesigned.
+
+## 2026-09-04 — Reduce new entries to three explicit setups
+
+- Choice: Keep one Direct Market Brain and only admit volume-force failed breakouts, exhaustion reversals, or Dennis trend breakouts. Do not reconnect the retired multi-strategy router or create parallel simulators.
+- Reason: The owner wants the system back to a small set of understandable, useful trading stories, with the original low-frequency profitable idea retained and code/product copy compressed.
+- Evidence: Every candidate now stores one setup and score; deterministic tests cover selection plus low-liquidity/low-volume rejection, while the existing hard risk and exact live-parity gates remain in force.
+- Revisit when: Complete independent 12-hour forward evidence from this exact brain version supports replacing—not stacking—one of the three setups.

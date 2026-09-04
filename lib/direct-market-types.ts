@@ -1,12 +1,13 @@
 import type { Hte31Candle } from "./hte31-types.ts";
 
-export const DIRECT_MARKET_BRAIN_VERSION = "direct-market-brain-v1";
+export const DIRECT_MARKET_BRAIN_VERSION = "direct-market-brain-v2-core-three";
 export const DIRECT_MARKET_AUTHORITY = "direct_market_brain" as const;
 
 export type DirectMarketSide = "LONG" | "SHORT" | "WAIT";
 export type DirectMarketLocation = "TOP" | "MIDDLE" | "BOTTOM" | "BREAKOUT" | "BREAKDOWN";
 export type DirectMarketFreshness = "FRESH" | "STALE" | "UNAVAILABLE";
 export type DirectMarketRiskState = "CALIBRATING" | "VALIDATING" | "NORMAL" | "CAUTION" | "DEFENSIVE" | "PAUSED";
+export type DirectCoreSetup = "VOLUME_FORCE_FAILED_BREAKOUT" | "EXHAUSTION_REVERSAL" | "DENNIS_TREND_BREAKOUT";
 
 export type DirectMarketCandidate = {
   symbol: string;
@@ -23,6 +24,9 @@ export type DirectMarketCandidate = {
   directionalScore: number;
   netEdgeR: number;
   confidence: number;
+  setup: DirectCoreSetup;
+  setupLabel: string;
+  setupScore: number;
   decision: DirectMarketSide;
   entryZone: [number, number] | null;
   invalidationPrice: number | null;

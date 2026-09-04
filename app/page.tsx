@@ -1,8 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  HTE31_STRATEGY_FAMILIES,
   HTE31_TRADER_DEFINITIONS,
   hte31AssetRegimeLabel,
   hte31CanonicalStrategyLabel,
@@ -10,8 +9,6 @@ import {
 
 type Tab = "机会" | "雷达" | "订单" | "实盘" | "设置";
 type TraderId = "dennis_trend" | "raschke_pullback" | "turtle_soup" | "exhaustion_reversal" | "higher_timeframe_swing" | "dennis_trend_v2" | "raschke_pullback_v2" | "turtle_soup_v2" | "higher_timeframe_swing_v2" | "range_rotation" | "compression_expansion" | "relative_strength" | "momentum_continuation";
-type AnyTraderId = TraderId;
-type FamilyId = "SF01" | "SF02" | "SF03" | "SF04" | "SF05" | "SF06" | "SF07" | "SF08" | "SF09";
 type Side = "LONG" | "SHORT" | "WAIT";
 
 type TradeFinalVerdict = {
@@ -36,32 +33,6 @@ type SchedulerStatus = {
   retryAfter?: number | null;
 };
 
-type HistoricalAnalog = {
-  label: string;
-  minimumSamples?: number;
-  sampleCount: number;
-  bias: "LONG" | "SHORT" | "NEUTRAL";
-  confidence: number;
-  bullishRatio: number;
-  bearishRatio: number;
-  medianForwardPct: number;
-  sourceState?: "READY" | "WARMING" | "UNAVAILABLE" | "STALE";
-  receivedCandles?: number;
-  requiredCandles?: number;
-  observedAt?: number;
-  lastSuccessfulAt?: number | null;
-  failureReason?: string | null;
-};
-
-type MarketMemory = {
-  short: HistoricalAnalog;
-  swing: HistoricalAnalog;
-  cycle: HistoricalAnalog;
-  combinedBias: "LONG" | "SHORT" | "NEUTRAL";
-  combinedConfidence: number;
-  summary: string;
-};
-
 type MarketView = {
   bias: "LONG" | "SHORT" | "NEUTRAL";
   confidence: number;
@@ -69,127 +40,6 @@ type MarketView = {
   headline: string;
   reason: string;
   strongDirection: boolean;
-};
-
-type TradeAutopsy = {
-  tradeId: string;
-  symbol: string;
-  traderId: string;
-  setupId: string;
-  resultR: number;
-  primaryCause: string;
-  causeLabel: string;
-  explanation: string;
-  evidence: string[];
-  finalVerdict?: TradeFinalVerdict;
-};
-
-type SystemReview = {
-  reviewNumber: number;
-  completedTrades: number;
-  nextReviewProgress: number;
-  issue: string;
-  issueLabel: string;
-  headline: string;
-  evidence: string[];
-  action: string;
-  status: "观察" | "验证中" | "已启用";
-  directive: string;
-  directives?: string[];
-  latestAutopsy?: TradeAutopsy | null;
-  pattern?: { sampleSize: number; repeatedCause: string; repeatedCount: number };
-  challengerSetupId?: string | null;
-  weakSetup?: { setupId: string; sampleCount: number; averageR: number; wins: number } | null;
-  latest: { averageR: number; directionErrorRate: number; poorEntryRate: number; poorExitRate: number };
-  previous: { averageR: number; directionErrorRate: number; poorEntryRate: number; poorExitRate: number } | null;
-};
-
-type EntryCheck = {
-  key: string;
-  label: string;
-  passed: boolean;
-  required: boolean;
-  detail: string;
-};
-
-type ExitRule = {
-  code: string;
-  label: string;
-  condition: string;
-};
-
-type EntryPlan = {
-  ready: boolean;
-  side: "LONG" | "SHORT";
-  entryPrice: number;
-  entryZone: [number, number];
-  stopLossPrice: number;
-  takeProfit1Price: number;
-  takeProfit2Price: number;
-  riskPerUnit: number;
-  plannedRiskPct: number;
-  riskReward: number;
-  maxHoldingMinutes: number;
-  checks: EntryCheck[];
-  exitRules: ExitRule[];
-};
-
-type Evaluation = {
-  id: string;
-  symbol: string;
-  observedAt: number;
-  traderId: AnyTraderId;
-  state: "ready" | "watching" | "blocked";
-  side: Side;
-  confidence: number;
-  assetRegime: string;
-  thesis: string;
-  reasons: string[];
-  blockers: string[];
-  entryPlan: EntryPlan | null;
-};
-
-type RouterCandidate = {
-  traderId: AnyTraderId;
-  strategyId: string;
-  code: string;
-  label: string;
-  side: "LONG" | "SHORT";
-  lane: "paper";
-  storyFamily: string;
-  familyId: FamilyId;
-  variantId: string;
-  tags: string[];
-  currentScore: number;
-  evidenceScore: number;
-  combinedScore: number;
-  evidence: { sampleCount: number; expectancyR: number; profitFactor: number | null; maximumDrawdownR: number; qualified: boolean };
-};
-
-type StrategyRouter = {
-  authority: "paper_brain_live_parity";
-  mode: "WAIT" | "SINGLE" | "COOPERATE" | "CONFLICT" | "SWITCH_WATCH";
-  symbol: string;
-  primary: RouterCandidate | null;
-  selectedForExecution: RouterCandidate | null;
-  supporting: RouterCandidate[];
-  opposing: RouterCandidate[];
-  familyAlternatives: RouterCandidate[];
-  currentThesisState: "none" | "intact" | "uncertain" | "invalidated";
-  replacementEligible: boolean;
-  reason: string;
-  executionRule: string;
-  promotionRule: string;
-};
-
-type ShadowMetrics = {
-  completed: number;
-  pending: number;
-  wins: number;
-  losses: number;
-  expectancyR: number;
-  profitFactor: number | null;
-  maximumDrawdownR: number;
 };
 
 type Trade = {
@@ -245,24 +95,6 @@ function latestPositionDecision(trade: Trade): PositionDecisionView | null {
   }
 }
 
-type Learning = {
-  id: string;
-  traderId: TraderId;
-  assetRegime: string;
-  side: "LONG" | "SHORT";
-  sampleCount: number;
-  wins: number;
-  losses: number;
-  expectancyR: number;
-  grossProfitR: number;
-  grossLossR: number;
-  averageMfeR: number;
-  averageMaeR: number;
-  averageExitEfficiency: number;
-  performanceGate?: { state: "ACTIVE" | "PAUSED"; reason: string; profitFactor: number | null };
-};
-
-type Guard = { state: "ACTIVE" | "COOLDOWN" | "PAUSED"; lossStreak: number; reason: string };
 
 type Dashboard = {
   account: {
@@ -284,15 +116,6 @@ type Dashboard = {
     requestedAt: number | null;
     completedAt: number | null;
     openPositions: number;
-  };
-  evaluations: Evaluation[];
-  learning: Learning[];
-  governance: {
-    state: string;
-    riskMultiplier: number;
-    lossStreak: number;
-    reason?: string;
-    traderGuards: Record<TraderId, Guard>;
   };
   directRisk?: { state: string; riskRate: number; sampleCount: number; profitFactor: number | null; expectancyR: number; drawdownR: number; reason: string };
   stats: { sampleCount: number; wins: number; scratches: number; losses: number; profitFactor: number | null; totalNetPnlUsdt: number };
@@ -326,21 +149,7 @@ type Snapshot = {
     requiredConfirmations?: number;
   } | null;
   dashboard: Dashboard | null;
-  diagnostics: {
-    shadow: Record<AnyTraderId, ShadowMetrics & { ready: ShadowMetrics; nearReady: ShadowMetrics; qualifiesForCalibration: boolean }>;
-    policy: { maximumConcurrentPaperPositions: number; maximumPortfolioRiskRate: number; routerAuthority: string };
-    strategyHealth: Record<AnyTraderId, StrategyHealth & { traderId: AnyTraderId; familyId: FamilyId }>;
-    familyHealth: Record<FamilyId, StrategyHealth & { familyId: FamilyId; focusTraderId: AnyTraderId | null }>;
-  } | null;
   staleSources?: string[];
-  degraded: boolean;
-  errors: Record<string, string>;
-};
-
-type StrategyDiagnostics = NonNullable<Snapshot["diagnostics"]>;
-type StrategyCenterResponse = {
-  requestedAt: number;
-  diagnostics: StrategyDiagnostics | null;
   degraded: boolean;
   errors: Record<string, string>;
 };
@@ -416,12 +225,17 @@ type DirectCandidate = {
   directionalScore: number;
   netEdgeR: number;
   confidence: number;
+  setup: "VOLUME_FORCE_FAILED_BREAKOUT" | "EXHAUSTION_REVERSAL" | "DENNIS_TREND_BREAKOUT";
+  setupLabel: string;
+  setupScore: number;
   decision: Side;
   entryZone: [number, number] | null;
   invalidationPrice: number | null;
   targets: number[];
   evidence: string[];
   counterEvidence: string[];
+  checks: { key: string; label: string; passed: boolean; detail: string }[];
+  maxHoldingMinutes: number;
 };
 
 type DirectRadarItem = {
@@ -433,13 +247,6 @@ type DirectRadarItem = {
   scanStage: "LIGHT" | "DEEP";
   freshness: "FRESH" | "STALE" | "UNAVAILABLE";
   candidate: DirectCandidate | null;
-};
-
-type StrategyHealth = {
-  state: "LEARNING" | "ACTIVE" | "UNDERPERFORMING" | "DEGRADED" | "STARVED" | "REGIME_WAIT" | "RETEST" | "PAUSED";
-  label: string;
-  reason: string;
-  action: string;
 };
 
 type LiveOrder = {
@@ -486,8 +293,6 @@ type LiveSnapshot = {
 
 const NAV: Tab[] = ["机会", "雷达", "订单", "实盘", "设置"];
 const MAIN_REFRESH_MS = 30_000;
-const TRADERS = HTE31_TRADER_DEFINITIONS;
-const STRATEGY_FAMILIES = HTE31_STRATEGY_FAMILIES;
 const SNAPSHOT_STORAGE_KEY = "resonance:last-trustworthy-snapshot:v1";
 
 function fmtMoney(value: number | null | undefined) {
@@ -572,92 +377,6 @@ async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
   return payload;
 }
 
-function MemoryCard({ item, symbol }: { item: HistoricalAnalog; symbol?: string }) {
-  const minimumSamples = item.minimumSamples ?? 8;
-  const state = item.sourceState ?? (item.sampleCount >= minimumSamples ? "READY" : "WARMING");
-  const eligible = state === "READY" && item.sampleCount >= minimumSamples;
-  const moveLabel = item.medianForwardPct >= 0 ? "涨幅" : "跌幅";
-  return <div className="rz-memory">
-    <span>{symbol?.replace("_USDT", "") ?? "当前币种"} · {item.label}历史</span>
-    <b>{eligible ? <Bias value={item.bias} confidence={item.confidence} /> : state === "STALE" ? "历史暂旧" : state === "WARMING" ? "历史记忆准备中" : "历史数据暂不可用"}</b>
-    <small>{eligible ? `有效独立样本 ${item.sampleCount} · 后续中位${moveLabel} ${item.medianForwardPct >= 0 ? "+" : ""}${item.medianForwardPct.toFixed(2)}%` : `当前不参与判断${item.receivedCandles != null && item.requiredCandles != null ? ` · K线 ${item.receivedCandles}/${item.requiredCandles}` : ""}`}</small>
-  </div>;
-}
-
-function SignalCard({ item }: { item: Evaluation }) {
-  const plan = item.entryPlan;
-  const checks = plan?.checks ?? [];
-  const exitRules = plan?.exitRules ?? [];
-  const counterEvidence = Array.from(new Set([
-    ...item.blockers,
-    ...checks.filter((check) => !check.passed).map((check) => `${check.label}：${check.detail}`),
-  ]));
-  const triggerState = item.state === "ready" && plan?.ready ? "已确认" : item.state === "blocked" ? "已阻塞" : "观察中";
-
-  return <details className="rz-panel rz-signal-card">
-    <summary className="rz-signal-summary">
-      <div className="rz-signal-title"><strong>{item.symbol.replace("_USDT", "")}</strong><small>{hte31CanonicalStrategyLabel(item.traderId, item.assetRegime)}</small></div>
-      <Bias value={item.side === "WAIT" ? "NEUTRAL" : item.side} confidence={item.confidence} />
-      <div className="rz-radar-reason">{item.state === "ready" ? item.thesis : item.blockers[0] ?? item.reasons[0] ?? "继续观察"}</div>
-      <span className="rz-signal-expand">查看完整计划</span>
-    </summary>
-    <div className="rz-signal-detail">
-      <div className="rz-signal-levels">
-        <div><span>方向</span><b>{sideText(item.side)}</b></div>
-        <div><span>触发状态</span><b>{triggerState}</b></div>
-        <div><span>入场区</span><b>{plan ? `${fmtPrice(plan.entryZone?.[0])} – ${fmtPrice(plan.entryZone?.[1])}` : "--"}</b></div>
-        <div><span>入场价</span><b>{fmtPrice(plan?.entryPrice)}</b></div>
-        <div><span>止损</span><b className="rz-negative">{fmtPrice(plan?.stopLossPrice)}</b></div>
-        <div><span>TP1</span><b className="rz-positive">{fmtPrice(plan?.takeProfit1Price)}</b></div>
-        <div><span>TP2</span><b className="rz-positive">{fmtPrice(plan?.takeProfit2Price)}</b></div>
-        <div><span>计划</span><b>{plan ? `${plan.riskReward.toFixed(2)}R · ${plan.maxHoldingMinutes} 分钟` : "--"}</b></div>
-      </div>
-
-      <section className="rz-signal-block">
-        <strong>触发与硬闸门</strong>
-        <p>{operatorText(item.thesis)}</p>
-        {checks.length ? <div className="rz-signal-list">{checks.map((check) => <div key={check.key}><span className={check.passed ? "pass" : "fail"}>{check.passed ? "通过" : "未通过"}</span><b>{operatorText(check.label)}{check.required ? " · 必须" : ""}</b><small>{operatorText(check.detail)}</small></div>)}</div> : <p>尚未形成完整交易计划。</p>}
-      </section>
-
-      <div className="rz-signal-evidence-grid">
-        <section className="rz-signal-block"><strong>支持证据</strong>{item.reasons.length ? <ul>{item.reasons.map((reason, index) => <li key={`${reason}-${index}`}>{operatorText(reason)}</li>)}</ul> : <p>当前没有额外支持证据。</p>}</section>
-        <section className="rz-signal-block"><strong>反证 / 缺失条件</strong>{counterEvidence.length ? <ul>{counterEvidence.map((reason, index) => <li key={`${reason}-${index}`}>{operatorText(reason)}</li>)}</ul> : <p>当前未发现硬性反证。</p>}</section>
-      </div>
-
-      <section className="rz-signal-block"><strong>失效条件</strong>{exitRules.length ? <ul>{exitRules.map((rule) => <li key={rule.code}><b>{operatorText(rule.label)}：</b>{operatorText(rule.condition)}</li>)}</ul> : <p>{plan ? "以结构止损及策略退出规则为准。" : "尚未形成完整交易计划。"}</p>}</section>
-    </div>
-  </details>;
-}
-
-function RouterCard({ router }: { router: StrategyRouter | undefined }) {
-  if (!router) return <article className="rz-panel"><h3>策略大脑正在评估</h3></article>;
-  const modeLabel = ({ WAIT: "等待", SINGLE: "单一故事", COOPERATE: "同向协作", CONFLICT: "故事冲突", SWITCH_WATCH: "纠错换挡观察" } as const)[router.mode];
-  return <article className="rz-panel rz-review">
-    <div className="rz-review-line"><span className="rz-eyebrow">STRATEGY BRAIN · 模拟/实盘同链</span><span className={`rz-bias ${router.mode === "CONFLICT" || router.mode === "SWITCH_WATCH" ? "neutral" : router.primary?.side === "LONG" ? "long" : router.primary?.side === "SHORT" ? "short" : "neutral"}`}>{modeLabel}</span></div>
-    <h3>{router.primary ? `${router.primary.label} · ${sideText(router.primary.side)}` : "本轮不强迫选择策略"}</h3>
-    <p className="rz-copy">{operatorText(router.reason)}</p>
-    {router.primary && <div className="rz-trader-stats"><div><span>当前结构分</span><b>{router.primary.currentScore.toFixed(1)}</b></div><div><span>实际订单样本</span><b>{router.primary.evidence.sampleCount}</b></div><div><span>模拟 PF</span><b>{router.primary.evidence.profitFactor == null ? "--" : router.primary.evidence.profitFactor >= 99 ? "∞" : router.primary.evidence.profitFactor.toFixed(2)}</b></div></div>}
-    {router.supporting.length > 0 && <p className="rz-copy"><strong>同向：</strong>{router.supporting.map((item) => item.label).join("、")}（分别记账，不重复放大仓位）</p>}
-    {router.opposing.length > 0 && <p className="rz-copy rz-negative"><strong>反向：</strong>{router.opposing.map((item) => `${item.label} ${sideText(item.side)}`).join("、")}</p>}
-    {router.familyAlternatives?.length > 0 && <p className="rz-copy"><strong>同家族候选：</strong>{router.familyAlternatives.map((item) => item.label).join("、")} · 本轮择优 1 个</p>}
-    <div className="rz-review-action"><strong>当前权限：</strong>{router.executionRule}</div>
-    <details className="rz-inline-details"><summary>查看学习规则</summary><p className="rz-copy">{router.promotionRule}</p></details>
-  </article>;
-}
-
-function ReviewCard({ review }: { review: SystemReview | undefined }) {
-  if (!review) return <article className="rz-panel rz-review"><h3>等待完整交易复盘</h3></article>;
-  return <article className="rz-panel rz-review">
-    <div className="rz-review-line"><span className="rz-eyebrow">系统学习</span><span className="rz-bias neutral">{review.status}</span></div>
-    <h3>{operatorText(review.headline)}</h3>
-    {review.latestAutopsy && <div className="rz-autopsy"><strong>最近一笔：{operatorText(review.latestAutopsy.finalVerdict?.label ?? review.latestAutopsy.causeLabel)}</strong><span>{operatorText(review.latestAutopsy.finalVerdict?.profitPath ?? review.latestAutopsy.explanation)}</span></div>}
-    <div className="rz-review-evidence">{review.evidence.map((line) => <span key={line}>{operatorText(line)}</span>)}</div>
-    <div className="rz-review-action"><strong>下一步：</strong>{operatorText(review.action)}</div>
-    <div className="rz-progress-label"><span>每笔立即复盘</span><span>阶段汇总 {review.nextReviewProgress}/5</span></div>
-    <div className="rz-progress" aria-label={`阶段汇总 ${review.nextReviewProgress}/5`}><i style={{ width: `${review.nextReviewProgress / 5 * 100}%` }} /></div>
-  </article>;
-}
-
 function DirectRadarCard({ item, expanded }: { item: DirectRadarItem; expanded: boolean }) {
   const candidate = item.candidate;
   const side = candidate?.decision ?? "WAIT";
@@ -669,20 +388,30 @@ function DirectRadarCard({ item, expanded }: { item: DirectRadarItem; expanded: 
     <Bias value={side === "WAIT" ? "NEUTRAL" : side} confidence={candidate?.confidence} />
     <div className="rz-radar-reason">
       {candidate
-        ? `${candidate.location} · 上 ${candidate.paths.up.toFixed(1)}% / 下 ${candidate.paths.down.toFixed(1)}% / 震荡或失效 ${candidate.paths.rangeOrInvalid.toFixed(1)}%`
+        ? `${candidate.setupLabel} · ${candidate.location} · 上 ${candidate.paths.up.toFixed(1)}% / 下 ${candidate.paths.down.toFixed(1)}% / 震荡或失效 ${candidate.paths.rangeOrInvalid.toFixed(1)}%`
         : `24h ${item.changePercentage >= 0 ? "+" : ""}${item.changePercentage.toFixed(2)}% · 等待深扫`}
     </div>
     {expanded && candidate && <div className="rz-signal-detail">
       <div className="rz-signal-levels">
+        <div><span>核心打法</span><b>{candidate.setupLabel}</b></div>
+        <div><span>打法评分</span><b>{candidate.setupScore.toFixed(0)}</b></div>
+        <div><span>方向</span><b>{sideText(candidate.decision)}</b></div>
+        <div><span>触发状态</span><b>{candidate.decision === "WAIT" ? "等待" : "已确认"}</b></div>
         <div><span>位置</span><b>{candidate.location}</b></div>
         <div><span>风险簇</span><b>{candidate.riskClusterId}</b></div>
         <div><span>入场区</span><b>{candidate.entryZone ? `${fmtPrice(candidate.entryZone[0])} – ${fmtPrice(candidate.entryZone[1])}` : "--"}</b></div>
-        <div><span>失效价</span><b>{fmtPrice(candidate.invalidationPrice)}</b></div>
-        <div><span>目标 1</span><b>{fmtPrice(candidate.targets[0])}</b></div>
-        <div><span>目标 2</span><b>{fmtPrice(candidate.targets[1])}</b></div>
+        <div><span>入场价</span><b>{candidate.entryZone ? fmtPrice((candidate.entryZone[0] + candidate.entryZone[1]) / 2) : "--"}</b></div>
+        <div><span>止损 / 失效价</span><b>{fmtPrice(candidate.invalidationPrice)}</b></div>
+        <div><span>TP1</span><b>{fmtPrice(candidate.targets[0])}</b></div>
+        <div><span>TP2</span><b>{fmtPrice(candidate.targets[1])}</b></div>
+        <div><span>最长持仓</span><b>{candidate.maxHoldingMinutes} 分钟</b></div>
       </div>
-      <p className="rz-copy">{candidate.evidence.join("；")}</p>
-      {candidate.counterEvidence.length > 0 && <p className="rz-copy rz-negative">未开仓：{candidate.counterEvidence.join("；")}</p>}
+      <section className="rz-signal-block"><strong>触发与硬闸门</strong><div className="rz-signal-list">{candidate.checks.map((check) => <div key={check.key}><span className={check.passed ? "pass" : "fail"}>{check.passed ? "通过" : "未通过"}</span><b>{check.label} · 必须</b><small>{check.detail}</small></div>)}</div></section>
+      <div className="rz-signal-evidence-grid">
+        <section className="rz-signal-block"><strong>支持证据</strong><p>{candidate.evidence.join("；")}</p></section>
+        <section className="rz-signal-block"><strong>反证 / 缺失条件</strong><p>{candidate.counterEvidence.join("；") || "当前未发现硬性反证。"}</p></section>
+      </div>
+      <section className="rz-signal-block"><strong>失效条件</strong><p>价格触及 {fmtPrice(candidate.invalidationPrice)}，或任一必需硬闸门失效。</p></section>
     </div>}
   </article>;
 }
@@ -752,28 +481,6 @@ function MiniChart({ chart }: { chart: ChartData }) {
   </>;
 }
 
-type StrategyFamilyStat = {
-  id: FamilyId;
-  name: string;
-  tags: readonly string[];
-  variants: { id: TraderId; code: string; name: string; samples: number }[];
-  samples: number;
-  expectancy: number;
-  pf: number | null;
-  health?: StrategyHealth;
-};
-
-function StrategyFamilyCard({ family }: { family: StrategyFamilyStat }) {
-  const state = family.health?.state ?? "LEARNING";
-  const healthClass = ["DEGRADED", "UNDERPERFORMING", "PAUSED"].includes(state) ? "short" : state === "ACTIVE" ? "long" : "neutral";
-  return <article className="rz-panel rz-trader">
-    <div className="rz-trader-top"><div><strong>{family.id} {family.name}</strong><small>{family.tags.map((tag) => `#${tag}`).join(" ")}</small></div><span className={`rz-bias ${healthClass}`}>{family.health?.label ?? "学习中"}</span></div>
-    <div className="rz-trader-stats"><div><span>样本</span><b>{family.samples}</b></div><div><span>Expectancy</span><b className={family.expectancy < 0 ? "rz-negative" : "rz-positive"}>{fmtR(family.expectancy)}</b></div><div><span>PF</span><b>{family.pf == null ? "--" : family.pf >= 99 ? "∞" : family.pf.toFixed(2)}</b></div></div>
-    <p className="rz-copy"><strong>变体：</strong>{family.variants.map((variant) => `${variant.code} ${variant.name} (${variant.samples})`).join(" · ")}</p>
-    {family.health && <p className="rz-copy">{operatorText(family.health.reason)}<br />下一步：{operatorText(family.health.action)}</p>}
-  </article>;
-}
-
 function TradeCard({ trade, roundTripCostBps }: { trade: Trade; roundTripCostBps: number }) {
   const [expanded, setExpanded] = useState(false);
   const [chart, setChart] = useState<ChartData | null>(null);
@@ -821,17 +528,12 @@ function TradeCard({ trade, roundTripCostBps }: { trade: Trade; roundTripCostBps
 
 export default function ResonancePage() {
   const [tab, setTab] = useState<Tab>("机会");
-  const [strategyCenterOpen, setStrategyCenterOpen] = useState(false);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-  const [strategyDiagnostics, setStrategyDiagnostics] = useState<StrategyDiagnostics | null>(null);
-  const [strategyLoading, setStrategyLoading] = useState(false);
-  const [strategyError, setStrategyError] = useState("");
   const [live, setLive] = useState<LiveSnapshot | null>(null);
   const [error, setError] = useState("");
   const [refreshWarning, setRefreshWarning] = useState("");
   const [liveError, setLiveError] = useState("");
   const [message, setMessage] = useState("");
-  const [coreSymbolsText, setCoreSymbolsText] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
   const [permissionsConfirmed, setPermissionsConfirmed] = useState(false);
@@ -843,22 +545,22 @@ export default function ResonancePage() {
 
   useEffect(() => {
     window.scrollTo(0, 0);
-  }, [tab, strategyCenterOpen]);
+  }, [tab]);
 
   useEffect(() => {
     const restore = window.setTimeout(() => {
-    try {
-      const raw = window.localStorage.getItem(SNAPSHOT_STORAGE_KEY);
-      if (!raw) return;
-      const cached = JSON.parse(raw) as Snapshot;
-      if (!cached || typeof cached.observedAt !== "number" || !cached.dashboard || !cached.scanner) return;
-      setSnapshot(cached);
-      mainSnapshotSeen.current = true;
-      lastSnapshotAt.current = cached.observedAt;
-      setRefreshWarning(`正在重新连接，显示 ${fmtTime(cached.observedAt)} 的只读快照。`);
-    } catch {
-      window.localStorage.removeItem(SNAPSHOT_STORAGE_KEY);
-    }
+      try {
+        const raw = window.localStorage.getItem(SNAPSHOT_STORAGE_KEY);
+        if (!raw) return;
+        const cached = JSON.parse(raw) as Snapshot;
+        if (!cached || typeof cached.observedAt !== "number" || !cached.dashboard || !cached.scanner) return;
+        setSnapshot(cached);
+        mainSnapshotSeen.current = true;
+        lastSnapshotAt.current = cached.observedAt;
+        setRefreshWarning(`正在重新连接，显示 ${fmtTime(cached.observedAt)} 的只读快照。`);
+      } catch {
+        window.localStorage.removeItem(SNAPSHOT_STORAGE_KEY);
+      }
     }, 0);
     return () => window.clearTimeout(restore);
   }, []);
@@ -874,7 +576,6 @@ export default function ResonancePage() {
       }
       setError("");
       setRefreshWarning(next.staleSources?.length ? `部分数据刷新延迟，显示 ${fmtTime(next.observedAt)} 的最近可信值。` : "");
-      if (!coreSymbolsText && next.dashboard?.settings.coreSymbols) setCoreSymbolsText(next.dashboard.settings.coreSymbols.map((item) => item.replace("_USDT", "")).join(", "));
     } catch (reason) {
       if (mainSnapshotSeen.current) {
         setError("");
@@ -882,21 +583,6 @@ export default function ResonancePage() {
       } else {
         setError(reason instanceof Error ? reason.message : "读取失败");
       }
-    }
-  }, [coreSymbolsText]);
-
-  const openStrategyCenter = useCallback(async () => {
-    setStrategyCenterOpen(true);
-    setStrategyLoading(true);
-    setStrategyError("");
-    try {
-      const next = await readJson<StrategyCenterResponse>("/api/hte31?view=strategies");
-      if (next.diagnostics) setStrategyDiagnostics(next.diagnostics);
-      if (next.degraded) setStrategyError("策略状态刷新延迟，显示最近可用结果。");
-    } catch (reason) {
-      setStrategyError(reason instanceof Error ? reason.message : "策略状态暂不可用");
-    } finally {
-      setStrategyLoading(false);
     }
   }, []);
 
@@ -941,48 +627,6 @@ export default function ResonancePage() {
     } catch (reason) { setMessage(reason instanceof Error ? reason.message : "操作失败"); }
   }, [refreshMain, refreshLive]);
 
-  const latestRadar = useMemo(() => {
-    if (!dashboard) return [];
-    const seen = new Set<string>();
-    return dashboard.evaluations.filter((item) => {
-      const key = `${item.symbol}:${item.traderId}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }).slice(0, 24);
-  }, [dashboard]);
-
-  const radarCounts = useMemo(() => ({
-    ready: latestRadar.filter((item) => item.state === "ready").length,
-    watching: latestRadar.filter((item) => item.state === "watching").length,
-    blocked: latestRadar.filter((item) => item.state === "blocked").length,
-  }), [latestRadar]);
-
-  const traderStats = useMemo(() => TRADERS.map((trader) => {
-    const cells = dashboard?.learning.filter((cell) => cell.traderId === trader.id) ?? [];
-    const samples = cells.reduce((sum, cell) => sum + cell.sampleCount, 0);
-    const expectancy = samples ? cells.reduce((sum, cell) => sum + cell.expectancyR * cell.sampleCount, 0) / samples : 0;
-    const profit = cells.reduce((sum, cell) => sum + cell.grossProfitR, 0);
-    const loss = cells.reduce((sum, cell) => sum + cell.grossLossR, 0);
-    const pf = loss > 0 ? profit / loss : profit > 0 ? 99 : null;
-    return { ...trader, samples, expectancy, profit, loss, pf, guard: dashboard?.governance.traderGuards[trader.id], health: strategyDiagnostics?.strategyHealth?.[trader.id] };
-  }), [dashboard, strategyDiagnostics?.strategyHealth]);
-
-  const familyStats = useMemo<StrategyFamilyStat[]>(() => STRATEGY_FAMILIES.map((family) => {
-    const variants = traderStats.filter((trader) => family.traderIds.includes(trader.id));
-    const samples = variants.reduce((sum, variant) => sum + variant.samples, 0);
-    const expectancy = samples ? variants.reduce((sum, variant) => sum + variant.expectancy * variant.samples, 0) / samples : 0;
-    const profit = variants.reduce((sum, variant) => sum + variant.profit, 0);
-    const loss = variants.reduce((sum, variant) => sum + variant.loss, 0);
-    return {
-      ...family,
-      variants: variants.map((variant) => ({ id: variant.id, code: variant.code, name: variant.variantName, samples: variant.samples })),
-      samples,
-      expectancy,
-      pf: loss > 0 ? profit / loss : profit > 0 ? 99 : null,
-      health: strategyDiagnostics?.familyHealth?.[family.id],
-    };
-  }), [traderStats, strategyDiagnostics?.familyHealth]);
 
   const resetPaper = async () => {
     if (!dashboard) return;
@@ -1006,11 +650,6 @@ export default function ResonancePage() {
     }
   };
 
-  const saveSymbols = () => {
-    const coreSymbols = coreSymbolsText.split(/[,，\s]+/).map((item) => item.trim().toUpperCase()).filter(Boolean).map((item) => item.includes("_") ? item : `${item}_USDT`);
-    if (!coreSymbols.length) return setMessage("至少保留一个核心观察币种。");
-    void mutate("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ coreSymbols }) }, "核心观察币种已更新。");
-  };
 
   const toggleScan = () => {
     const enabled = !(dashboard?.settings.scanEnabled ?? true);
@@ -1055,7 +694,7 @@ export default function ResonancePage() {
   return <main className="rz-shell">
     <header className="rz-header">
       <div className="rz-mark">R</div>
-      <div className="rz-brand"><strong>Resonance</strong><small>直接市场大脑 · 模拟学习</small></div>
+      <div className="rz-brand"><strong>Resonance</strong><small>三套核心打法 · 模拟学习</small></div>
       <i className={`rz-health ${healthBad ? "bad" : healthWarn ? "warn" : ""}`} />
     </header>
 
@@ -1072,6 +711,7 @@ export default function ResonancePage() {
             <div className="rz-score"><div><b>{marketView?.confidence ?? 0}</b><span>把握</span></div></div>
           </div>
           {readModel?.directCandidate && <div className="rz-signal-levels">
+            <div><span>当前打法</span><b>{readModel.directCandidate.setupLabel}</b></div>
             <div><span>当前位置</span><b>{readModel.directCandidate.location}</b></div>
             <div><span>决定</span><b>{sideText(readModel.directCandidate.decision)}</b></div>
             <div><span>入场区</span><b>{readModel.directCandidate.entryZone ? `${fmtPrice(readModel.directCandidate.entryZone[0])} – ${fmtPrice(readModel.directCandidate.entryZone[1])}` : "--"}</b></div>
@@ -1145,7 +785,7 @@ export default function ResonancePage() {
         {(scanner?.lastError || scanner?.circuitOpen || (ageSeconds != null && ageSeconds > 90)) && <div className="rz-runtime-alert"><strong>运行异常</strong><span>{scanner?.lastError ?? `已 ${ageSeconds} 秒没有完成新评估`}{scanner?.retryAfter ? ` · ${fmtTime(scanner.retryAfter)} 重试` : ""}</span></div>}
         <div className="rz-actions"><button onClick={toggleScan}>{dashboard?.settings.scanEnabled ? "暂停市场扫描" : "恢复市场扫描"}</button></div>
       </article></section>
-      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">市场范围</span><h2>动态成交额前十五</h2></div></div><article className="rz-panel"><div className="rz-metric-grid"><div className="rz-metric"><span>轻扫</span><b>15 币</b></div><div className="rz-metric"><span>深扫</span><b>6 币</b></div><div className="rz-metric"><span>最大持仓</span><b>3 笔</b></div><div className="rz-metric"><span>D1 新单保护线</span><b>22,000</b></div></div></article></section>
+      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">交易核心</span><h2>只保留三套打法</h2></div></div><article className="rz-panel"><div className="rz-metric-grid"><div className="rz-metric"><span>高频机会</span><b>量价力度假突破</b></div><div className="rz-metric"><span>极端机会</span><b>衰竭反转</b></div><div className="rz-metric"><span>低频基线</span><b>经典趋势突破</b></div><div className="rz-metric"><span>最大持仓</span><b>3 笔</b></div></div></article></section>
       <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">模拟资金</span><h2>重新开始资金曲线</h2></div></div><article className="rz-panel"><div className="rz-metric-grid"><div className="rz-metric"><span>本轮本金</span><b>{fmtMoney(dashboard?.account.startingCapitalUsdt)}</b></div><div className="rz-metric"><span>当前权益</span><b>{fmtMoney(dashboard?.account.equityUsdt)}</b></div><div className="rz-metric"><span>开始时间</span><b>{fmtTime(dashboard?.account.epochStartedAt)}</b></div><div className="rz-metric"><span>本轮已平仓</span><b>{dashboard?.stats.sampleCount ?? 0}</b></div></div>{dashboard?.paperReset.status === "pending" && <p className="rz-copy">待重置 · 剩余 {dashboard.paperReset.openPositions} 笔持仓</p>}<div className="rz-actions"><button className="danger" disabled={dashboard?.paperReset.status === "pending"} onClick={() => void resetPaper()}>{dashboard?.paperReset.status === "pending" ? "等待持仓结束" : "重置模拟本金"}</button></div></article></section>
     </div>}
 

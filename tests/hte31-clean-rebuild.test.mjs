@@ -150,7 +150,7 @@ test("expanded trade review cannot widen the mobile viewport", () => {
 
 test("Durable Objects retain bounded no-scan-write runtime and persist the direct brain", () => {
   const worker = readFileSync(new URL("../worker/hte31-workers.ts", import.meta.url), "utf8");
-  assert.match(worker, /CLEAN_RUNTIME_VERSION = "direct-market-brain-v1"/);
+  assert.match(worker, /CLEAN_RUNTIME_VERSION = "direct-market-brain-v2-core-three"/);
   assert.match(worker, /D1 trades, learning, simulation epochs, live[\s\S]*remain untouched/);
   assert.match(worker, /SCANNER_CYCLE_INTERVAL_MS = 25_000/);
   assert.match(worker, /TRADE_MANAGER_IDLE_INTERVAL_MS = 60_000/);

@@ -299,7 +299,7 @@ export async function listLiveEntryCandidates(enabledAt: number, now = Date.now(
     eq(hte31Trades.status, "holding"),
     gte(hte31Trades.entryAt, liveEntryCandidateCutoff(enabledAt, now)),
   )).orderBy(desc(hte31Trades.entryAt)).limit(20);
-  const liveEligibleRows = rows.filter((row) => row.decisionAuthority === "direct_market_brain" && row.brainVersion === "direct-market-brain-v1");
+  const liveEligibleRows = rows.filter((row) => row.decisionAuthority === "direct_market_brain" && row.brainVersion === DIRECT_MARKET_BRAIN_VERSION);
   if (!liveEligibleRows.length) return [];
   const existing = await db.select({ tradeCaseId: liveOrders.tradeCaseId }).from(liveOrders).where(inArray(liveOrders.tradeCaseId, liveEligibleRows.map((row) => row.id)));
   const claimed = new Set(existing.map((row) => row.tradeCaseId));

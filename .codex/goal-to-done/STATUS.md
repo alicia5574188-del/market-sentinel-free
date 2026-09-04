@@ -1,5 +1,15 @@
 # Status
 
+## Core-three return-to-purpose patch — locally verified
+
+- Branch: `refactor/back-to-core-three-setups`, based on current `main` `d0451b98ce41e873d0a3d853b931da373f38f504`.
+- Direct Market Brain v2 now evaluates only three explicit entry stories: volume-force failed breakout, exhaustion reversal, and the original Dennis trend breakout baseline. Setup-specific evidence is replayable and stored in every candidate/decision snapshot.
+- Existing safety remains final: completed candles, data quality, liquidity, volume, funding, macro, ATR, structural edge, anti-chase, portfolio limits, one lifecycle per symbol, immutable stop/targets, and exact paper-to-live lineage.
+- The daily UI exposes the chosen setup and score and compresses the settings summary to the three retained setups. Five operator tabs and every Must-Keep safety/owner capability remain reachable.
+- No migration, recurring D1 write, forced close, fund action, credential/control change, live activation, or historical deletion was added.
+- Local verification: focused direct-brain suite 21/21, production/UI/safety suite 111/111, TypeScript and production build pass. Release/production verification is pending.
+- Updated UTC: 2026-09-04.
+
 ## Clean adaptive-brain restart — locally verified
 
 - Added additive migration `0019_adaptive_brain_fresh_start.sql`: it blocks new paper entries and requests a one-time forced archive reset without deleting any order or learning record.
