@@ -1,8 +1,8 @@
 # Market Sentinel — Current System State
 
-> **2026-09-04 automatic-cutover correction — implementation in progress.**
+> **2026-09-04 automatic-cutover correction — production deployed.**
 >
-> Current production uses `direct-market-brain-v2-core-three` as the sole new-order authority with three setups. The successor patch makes major versions a paper-only boundary: entry blocks first, old paper positions close at fresh quotes as `version_reset`, history and 12-hour observations remain, and a clean epoch starts. Gate/live is outside this authority. See `docs/QUANT_UPGRADE_PATH.md`; this note supersedes conflicting historical Strategy 2.0 text below.
+> Current production uses `direct-market-brain-v2-core-three` as the sole new-order authority with three setups. Major versions are now a paper-only boundary: entry blocks first, pre-cutover/old-version paper positions close at fresh quotes as `version_reset`, history and 12-hour observations remain, and a clean epoch starts. Final D1 proof showed zero legacy open positions; Gate/live is outside this authority. See `docs/QUANT_UPGRADE_PATH.md`; this note supersedes conflicting historical Strategy 2.0 text below.
 
 > **2026-09-04 return-to-purpose patch — production deployed.**
 >

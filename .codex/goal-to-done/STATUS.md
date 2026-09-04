@@ -1,13 +1,16 @@
 # Status
 
-## Automatic major-version cutover — locally verified
+## Automatic major-version cutover — production deployed
 
 - Branch: `feat/automatic-strategy-cutover`, based on deployed `main` `aa4e461`.
 - Added a single release contract for `direct-market-brain-v2-core-three`. Migration `0020` immediately blocks new paper entries and marks all currently open paper positions for fresh-quote `version_reset` archival.
 - Both the entry boundary and Trade Manager enforce the release version. After the last paper close, the reset finalizer records the active brain version, creates a clean simulation epoch, and resumes entry; temporary quote failure remains safely pending for retry.
 - Normal owner resets remain natural. Historical trades, immutable decision lineage, seven post-exit checkpoints through 12 hours, credentials, Gate/live orders, live controls, funding authority, and recurring D1 cadence are unchanged.
 - Local verification passed: strategy/risk/migration 224/224, production/UI/safety 112/112, focused Direct Brain 21/21, reset/migration 19/19, production build, ESLint, TypeScript, and `git diff --check`. Local Wrangler dry-run was blocked by environment network approval; remote CI remains the release gate.
-- Next: push one PR, merge on green CI, then verify the D1 migration, archived old paper positions, clean epoch, immutable asset, and both production schedulers.
+- Release: feature PR `#124`; production proof refinements `#125`–`#127`; current main `6c6b18c`.
+- Final workflow run `33858569353` passed verify and deploy, including Wrangler dry-run, migration check, immutable asset, three bounded health probes, and the new D1 cutover gate.
+- Production D1 proof: `status=completed`, `active_brain_version=direct-market-brain-v2-core-three`, `target_brain_version=null`, and `legacy_open_positions=0`. Two current-version positions opened only after the clean epoch resumed and are not legacy residue.
+- Production Worker version: `bade6b32-a680-463c-b637-fadf44110ddd`.
 - Updated UTC: 2026-09-04.
 
 ## Core-three return-to-purpose patch — production deployed
