@@ -1,10 +1,10 @@
 # Market Sentinel / Resonance — Quant System Master Handoff
 
-> **2026-09-04 successor prepared:** branch `feat/core-three-resonance-dashboard` advances the authority to `direct-market-brain-v3-resonance-three`, replaces Dennis with multi-timeframe comprehensive resonance, restores per-setup contribution statistics and deterministic 12-hour operating review, and reduces the operator surface to `大脑 / 订单 / 管理`. It reuses the existing Scanner Durable Object save, adds no recurring D1 write, preserves every Must-Keep capability, and declares additive cutover migration `0021`. Treat this paragraph as release-candidate truth until merged-main CI and production D1/health proof are recorded.
+> **2026-09-04 current production:** PR `#129` deployed `direct-market-brain-v3-resonance-three`, replaced Dennis with multi-timeframe comprehensive resonance, restored per-setup contribution statistics and deterministic 12-hour operating review, and reduced the operator surface to `大脑 / 订单 / 管理`. It reuses the existing Scanner Durable Object save, adds no recurring D1 write, preserves every Must-Keep capability, and uses additive cutover migration `0021`. Workflow `33865500814` passed full verification, migration, deployment, immutable-asset and health checks; production D1 proved `status=completed`, no pending target, and zero legacy open paper positions. Worker version: `a998bdd9-1833-4535-9efd-22d4e82defc4`.
 
 > **2026-09-04 current correction:** production `main` `6c6b18c` keeps Direct Market Brain as the only new-order authority with three setups and makes every major brain version automatically block new paper entries, archive pre-cutover/old-version paper positions at fresh quotes, and start a clean epoch; Gate/live remains untouched. Final workflow `33858569353` proved `legacy_open_positions=0` and active version `direct-market-brain-v2-core-three`. Use `docs/QUANT_UPGRADE_PATH.md` for the bounded upgrade route.
 
-Last reconciled: **2026-09-03 — current main includes PR #111; Direct Market Brain upgrade prepared, not deployed**
+Last reconciled: **2026-09-04 — current main `0736a225` includes PR #129; resonance-three production proof complete**
 Purpose: **the complete continuation entry after deleting all prior chats**
 
 ## 0. Start every new task here

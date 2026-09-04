@@ -11,7 +11,7 @@ Rules:
 
 ---
 
-## 2026-09-04 — Core-three resonance dashboard release candidate
+## 2026-09-04 — Core-three resonance dashboard deployed
 
 ### Changed
 
@@ -25,10 +25,12 @@ Rules:
 - One Direct Market Brain authority, completed-candle decisions, fresh-quote execution, three-position/portfolio limits, 12-hour post-exit learning, exact paper-to-live lineage, Gate credentials/orders/control, funding authority, and D1 hard budgets.
 - Scanner activity rides the existing Durable Object runtime save. No new periodic D1 table or write schedule was introduced.
 
-### Verification before release
+### Verification
 
 - Focused Direct Brain/performance/architecture tests passed 23/23; focused UI/migration/Must-Keep tests passed 45/45.
 - Full strategy/risk/migration suite passed 224/224; production build/UI/safety suite passed 112/112; ESLint, TypeScript, and diff checks passed. Local Wrangler dry-run was blocked by the environment network-approval layer and remains a required remote CI gate.
+- PR `#129` merged as production commit `0736a225`. Workflow `33865500814` passed the remote Wrangler dry-run, applied migration `0021`, deployed Worker `a998bdd9-1833-4535-9efd-22d4e82defc4`, and passed immutable-asset plus bounded health checks.
+- Production D1 returned `status=completed`, active version `direct-market-brain-v3-resonance-three`, no pending target, and `legacy_open_positions=0`; Gate/live was outside the cutover.
 
 ## 2026-09-04 — Automatic paper cutover for major brain releases
 
