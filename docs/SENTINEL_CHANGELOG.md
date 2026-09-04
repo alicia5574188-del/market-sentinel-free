@@ -11,7 +11,7 @@ Rules:
 
 ---
 
-## 2026-09-04 — Truthful setup-activity correction release candidate
+## 2026-09-04 — Truthful setup-activity correction deployed
 
 ### Changed
 
@@ -23,9 +23,10 @@ Rules:
 
 - Setup thresholds, Direct Market Brain version, current paper/live positions, risk, Gate controls, paper/live lineage, D1 schema, and recurring write cadence.
 
-### Verification before release
+### Verification
 
 - Focused Direct/activity/architecture tests passed 26/26; strategy/risk/migration passed 224/224; production build/UI/Must-Keep passed 112/112; TypeScript, ESLint, and diff checks passed.
+- PR `#131` merged as `113bf39a`; workflow `33894121421` passed Wrangler dry-run, deployment, immutable-asset, bounded-health, and paper-version checks. No migration was pending; the active brain remained v3 and legacy open positions remained zero.
 
 ## 2026-09-04 — Core-three resonance dashboard deployed
 
