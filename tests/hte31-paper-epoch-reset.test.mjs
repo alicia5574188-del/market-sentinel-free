@@ -43,8 +43,8 @@ test("every major brain version declares and enforces one paper cutover", () => 
   assert.match(release, /state\?\.status === "completed" && state\.targetBrainVersion === DIRECT_MARKET_RELEASE\.brainVersion/);
   assert.match(repository, /activeBrainVersion: state\.targetBrainVersion \?\? state\.activeBrainVersion/);
   assert.match(workflow, /Verify paper strategy cutover/);
-  assert.match(workflow, /active_brain_version == \$version/);
-  assert.match(workflow, /open_positions == 0/);
+  assert.match(workflow, /\.active_brain_version == \$version/);
+  assert.match(workflow, /\(\.open_positions \| tonumber\) == 0/);
 });
 
 test("adaptive-brain fresh start archives old paper positions at fresh quotes and keeps their review trail", () => {
