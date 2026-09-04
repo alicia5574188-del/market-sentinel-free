@@ -1,5 +1,15 @@
 # Status
 
+## Truthful per-setup activity — implementation verification
+
+- Branch: `fix/true-strategy-activity`, based on production `main` `b0a36a6`.
+- Root cause confirmed: every scan evaluated all three setups, but the 12-hour recorder incremented only `candidate.setup`; the displayed `7 + 79 + 47 = 133` was a partition of primary selections, not three evaluation totals.
+- A startup window with only about 57 minutes of coverage was also marked complete at the next fixed UTC boundary and displayed as a full 12-hour result.
+- Implementation now carries all three setup evaluations, counts trigger/qualification/selection/entry-block/open separately, measures capped continuous runtime coverage, rejects legacy counters, and refuses to complete a partial window. No D1 write or strategy/risk/live rule changed.
+- Verification passed: focused Direct/activity/architecture 26/26, strategy/risk/migration 224/224, production build/UI/Must-Keep 112/112, TypeScript, ESLint, and `git diff --check`.
+- Next: commit one PR, merge after green CI, then verify the corrected production counters and health without changing strategy or position state.
+- Updated UTC: 2026-09-04.
+
 ## Core-three resonance dashboard — production deployed
 
 - Release: PR `#129`, production `main` `0736a2259103e4fdf602eedccb169a96d5e5a14a`, workflow `33865500814`.

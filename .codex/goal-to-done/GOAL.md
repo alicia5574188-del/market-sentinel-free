@@ -1,5 +1,12 @@
 # Goal
 
+## Active patch objective — truthful per-setup activity
+
+- Count every one of the three core setups on every deep scan instead of attributing the scan only to the selected setup.
+- Separate setup trigger, full hard-gate qualification, primary selection, entry blocking, and actual opening so signal frequency is comparable and understandable.
+- Never label a partial startup window as a completed 12-hour review; expose measured scanner coverage and publish a completed summary only after a continuously covered full window.
+- Change no setup threshold, paper/live position, risk rule, D1 write cadence, or Gate authority; release through focused/full tests, one PR, green CI, and production verification.
+
 ## Completed objective — core-three resonance dashboard
 
 - Replace the Dennis breakout setup for new orders with the original multi-timeframe comprehensive resonance idea: completed 5-minute confirmation, 15m/1h/4h alignment, spot/volume confirmation, structural targets, and anti-chase protection.

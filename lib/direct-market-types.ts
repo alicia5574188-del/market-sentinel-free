@@ -15,11 +15,25 @@ export const DIRECT_CORE_SETUPS = [
 
 export type DirectCoreSetup = typeof DIRECT_CORE_SETUPS[number]["id"];
 
+export type DirectSetupEvaluationSnapshot = {
+  setup: DirectCoreSetup;
+  setupLabel: string;
+  side: Exclude<DirectMarketSide, "WAIT">;
+  score: number;
+  triggered: boolean;
+  qualified: boolean;
+  selected: boolean;
+  blockers: string[];
+};
+
 export type DirectSetupActivity = {
   setup: DirectCoreSetup;
   setupLabel: string;
   evaluations: number;
+  triggeredSignals: number;
   qualifiedSignals: number;
+  selectedSignals: number;
+  blockedEntries: number;
   openedTrades: number;
   leadingBlocker: string | null;
   blockerCount: number;
@@ -30,9 +44,14 @@ export type DirectTwelveHourActivity = {
   windowStartAt: number;
   windowEndAt: number;
   generatedAt: number;
+  lastObservedAt: number | null;
+  coverageMs: number;
   complete: boolean;
   evaluations: number;
+  triggeredSignals: number;
   qualifiedSignals: number;
+  selectedSignals: number;
+  blockedEntries: number;
   openedTrades: number;
   setups: DirectSetupActivity[];
 };
@@ -55,6 +74,7 @@ export type DirectMarketCandidate = {
   setup: DirectCoreSetup;
   setupLabel: string;
   setupScore: number;
+  setupEvaluations?: DirectSetupEvaluationSnapshot[];
   decision: DirectMarketSide;
   entryZone: [number, number] | null;
   invalidationPrice: number | null;
