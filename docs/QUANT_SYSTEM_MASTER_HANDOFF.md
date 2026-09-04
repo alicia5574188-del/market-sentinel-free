@@ -1,6 +1,6 @@
 # Market Sentinel / Resonance — Quant System Master Handoff
 
-> **2026-09-04 current correction:** production `main` `aa4e461` keeps Direct Market Brain as the only new-order authority and reduces its executable entry stories to three: `VOLUME_FORCE_FAILED_BREAKOUT`, `EXHAUSTION_REVERSAL`, and `DENNIS_TREND_BREAKOUT`. The next patch makes every major brain version automatically block new paper entries, archive old paper positions at fresh quotes, and start a clean epoch; Gate/live remains untouched. Use `docs/QUANT_UPGRADE_PATH.md` for the bounded upgrade route.
+> **2026-09-04 current correction:** production `main` `6c6b18c` keeps Direct Market Brain as the only new-order authority with three setups and makes every major brain version automatically block new paper entries, archive pre-cutover/old-version paper positions at fresh quotes, and start a clean epoch; Gate/live remains untouched. Final workflow `33858569353` proved `legacy_open_positions=0` and active version `direct-market-brain-v2-core-three`. Use `docs/QUANT_UPGRADE_PATH.md` for the bounded upgrade route.
 
 Last reconciled: **2026-09-03 — current main includes PR #111; Direct Market Brain upgrade prepared, not deployed**
 Purpose: **the complete continuation entry after deleting all prior chats**

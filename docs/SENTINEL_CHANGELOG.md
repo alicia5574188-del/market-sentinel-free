@@ -24,7 +24,9 @@ Rules:
 
 ### Verification
 
-- Strategy/risk/migration tests passed 224/224; production/UI/safety passed 112/112; focused Direct Brain passed 21/21; cutover/full-migration passed 19/19. Production build, ESLint, TypeScript, and diff checks passed. CI, merge, deployment, and production proof are pending.
+- Strategy/risk/migration tests passed 224/224; production/UI/safety passed 112/112; focused Direct Brain passed 21/21; cutover/full-migration passed 19/19. Production build, ESLint, TypeScript, and diff checks passed.
+- Feature PR `#124` deployed the release; PRs `#125`–`#127` made the production proof distinguish valid new-epoch positions from legacy residue. Final run `33858569353` passed verification and deployment.
+- Production D1 returned `completed`, active version `direct-market-brain-v2-core-three`, no pending target, and zero pre-cutover/old-version open paper positions. Worker version: `bade6b32-a680-463c-b637-fadf44110ddd`.
 
 ## 2026-09-04 — Direct Market Brain reduced to three core setups
 
