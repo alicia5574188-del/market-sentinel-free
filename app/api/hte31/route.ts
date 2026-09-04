@@ -42,10 +42,6 @@ async function readCachedDiagnostics(now: number) {
   }
 }
 
-function biasText(value: "LONG" | "SHORT" | "NEUTRAL") {
-  return value === "LONG" ? "偏多" : value === "SHORT" ? "偏空" : "方向中性";
-}
-
 function dashboardMarketView(readModel: Hte31ScanCompleted) {
   const market = readModel.market;
   const candidate = readModel.directCandidate;
@@ -128,7 +124,7 @@ export async function GET(request: Request) {
   const displayReadModel = readModel ? { ...readModel, marketView: dashboardMarketView(readModel) } : null;
 
   return Response.json({
-    version: "direct-market-brain-v1",
+    version: "direct-market-brain-v2-core-three",
     requestedAt,
     observedAt: lastSuccessAt ?? requestedAt,
     account: auth.account,

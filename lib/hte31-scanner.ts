@@ -90,7 +90,7 @@ export function hte31PhaseLabel(phase: Hte31ScanPhase) {
     universe: "轻扫成交额前十五",
     deep: "深扫当前候选",
     candles: "读取位置与多周期结构",
-    evaluate: "判断方向、目标与失效",
+    evaluate: "评估三套核心打法",
   } satisfies Record<Hte31ScanPhase, string>)[phase];
 }
 

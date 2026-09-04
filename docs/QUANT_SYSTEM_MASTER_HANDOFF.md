@@ -1,5 +1,7 @@
 # Market Sentinel / Resonance — Quant System Master Handoff
 
+> **2026-09-04 current correction:** the current patch keeps Direct Market Brain as the only new-order authority and reduces its executable entry stories to three: `VOLUME_FORCE_FAILED_BREAKOUT`, `EXHAUSTION_REVERSAL`, and `DENNIS_TREND_BREAKOUT`. The shared hard risk, portfolio, completed-candle, D1, observation, paper-to-live and owner/live safety boundaries remain authoritative. Release proof is pending; inspect current GitHub `main` and production before treating this correction as deployed.
+
 Last reconciled: **2026-09-03 — current main includes PR #111; Direct Market Brain upgrade prepared, not deployed**
 Purpose: **the complete continuation entry after deleting all prior chats**
 

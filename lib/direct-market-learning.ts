@@ -1,4 +1,4 @@
-import type { DirectMarketCandidate } from "./direct-market-types.ts";
+import { DIRECT_MARKET_BRAIN_VERSION, type DirectMarketCandidate } from "./direct-market-types.ts";
 
 export type DirectMarketLearningSample = {
   independentEventKey: string;
@@ -92,7 +92,7 @@ export function deriveDirectMarketLearningProfile(samples: DirectMarketLearningS
 
   return {
     version: "adaptive-direct-v2",
-    parentVersion: "direct-market-brain-v1",
+    parentVersion: DIRECT_MARKET_BRAIN_VERSION,
     sampleCount: events.length,
     action: "BASELINE",
     blockedSignature: null,

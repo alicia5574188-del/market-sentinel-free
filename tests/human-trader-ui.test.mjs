@@ -15,13 +15,13 @@ const [page, layout, route, chart, css, liveStatus, scanner, catalog, worker, re
   readFile(new URL("../lib/hte31-repository.ts", import.meta.url), "utf8"),
 ]);
 
-test("production UI is the direct market brain while historical strategy identities stay readable", () => {
+test("production UI exposes the three core setups while historical strategy identities stay readable", () => {
   assert.match(page, /Resonance/);
-  assert.match(page, /直接市场大脑 · 模拟学习/);
+  assert.match(page, /三套核心打法 · 模拟学习/);
   for (const phrase of ["HT1", "HT2", "HT3", "HT4", "HT5", "HT1-R", "HT2-R", "HT3-R", "HT5-R", "HT6", "HT7", "HT8", "HT9"]) assert.match(catalog, new RegExp(phrase));
   for (const family of ["SF01", "SF02", "SF03", "SF04", "SF05", "SF06", "SF07", "SF08", "SF09"]) assert.match(catalog, new RegExp(family));
   assert.match(page, /成交额前十五/);
-  assert.match(page, /动态成交额前十五/);
+  for (const setup of ["量价力度假突破", "衰竭反转", "经典趋势突破"]) assert.match(page, new RegExp(setup));
   assert.match(page, /function DirectRadarCard/);
   const renderedSurface = page.slice(page.lastIndexOf("return ("));
   assert.doesNotMatch(renderedSurface, /策略中心|9 个家族|13 个独立变体|历史记忆准备中|有效独立样本/);
@@ -86,15 +86,14 @@ test("simulation reset is reachable from funds without duplicating its destructi
 });
 
 test("pre-trade signal cards expose the complete decision and risk plan", () => {
-  assert.match(page, /entryPlan: EntryPlan \| null/);
-  assert.match(page, /function SignalCard/);
+  assert.match(page, /function DirectRadarCard/);
   for (const phrase of ["方向", "触发状态", "入场区", "入场价", "止损", "TP1", "TP2", "触发与硬闸门", "支持证据", "反证 / 缺失条件", "失效条件"]) {
     assert.match(page, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
-  assert.match(page, /plan\?\.checks/);
-  assert.match(page, /plan\?\.exitRules/);
-  assert.match(page, /item\.reasons/);
-  assert.match(page, /item\.blockers/);
+  assert.match(page, /candidate\.checks\.map/);
+  assert.match(page, /candidate\.evidence\.join/);
+  assert.match(page, /candidate\.counterEvidence\.join/);
+  assert.match(page, /candidate\.invalidationPrice/);
 });
 
 test("runtime settings preserve scanner diagnostics needed to detect silent stalls", () => {
