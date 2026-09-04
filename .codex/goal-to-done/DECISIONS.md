@@ -1,5 +1,26 @@
 # Decisions
 
+## 2026-09-04 — Restore the original core as multi-timeframe comprehensive resonance
+
+- Choice: Retire Dennis breakout from new-order authority and replace it with `MULTI_TIMEFRAME_RESONANCE`: aligned 15m/1h/4h direction, completed 5m confirmation/resume, spot/volume support, and anti-chase protection. Keep failed breakout and exhaustion reversal as the two mutually exclusive reversal stories.
+- Reason: The user's first profitable concept was multi-timeframe resonance with dynamic protection, not Dennis. Requiring a literal range breakout produced too few samples; the restored setup can participate during orderly continuation without discarding hard safety.
+- Evidence: `lib/direct-market-brain.ts` emits exactly the three setup IDs and focused deterministic tests cover each selection plus liquidity/volume rejection.
+- Revisit when: Current-version independent closed orders and complete 12-hour paths provide enough comparable evidence; do not optimize win rate from isolated trades.
+
+## 2026-09-04 — Summarize strategy contribution without a new D1 write stream
+
+- Choice: Count evaluation, qualified-signal, opening, and leading-blocker activity in the Scanner Durable Object's existing runtime save; combine it with current-version D1 trade results at read time. Use fixed 12-hour buckets and retain the latest completed bucket.
+- Reason: The owner needs to see who is contributing or dragging and what happens next, while D1's billed-row budget prohibits a per-scan statistics ledger.
+- Evidence: `recordTwelveHourActivity`, `buildDirectSetupPerformance`, and `/api/hte31` produce the review. The scanner still performs one runtime save per completed cycle and no new recurring D1 write path exists.
+- Revisit when: Durable Object retention proves insufficient for longer historical reporting; any durable expansion must re-budget indexed D1 writes first.
+
+## 2026-09-04 — Replace abstract navigation while preserving operator capabilities
+
+- Choice: Retire the user-facing Opportunity and Radar pages; reimplement their useful decision evidence as one collapsed section under `大脑`, keep full review under `订单`, and combine live/settings into `管理`. Account, push, and audit remain in the independent on-demand drawer.
+- Reason: The owner explicitly does not use Radar/Opportunity concepts and wants the daily page to answer only brain decision, contribution/drag, orders, and the 12-hour summary.
+- Evidence: The three-tab UI preserves the single paper reset, Gate credentials, Auto Live, reconciliation, Emergency Stop, runtime diagnostics, account, push, audit, and complete order-review paths; focused Must-Keep tests pass.
+- Revisit when: A missing operator task cannot be reached safely from the three destinations; do not restore duplicate pages merely for old test contracts.
+
 ## 2026-09-04 — Make major strategy releases an automatic paper boundary
 
 - Choice: Every Direct Market Brain major version declares one release manifest and additive cutover migration. The entry boundary and Trade Manager compare the declared version with D1 state; a mismatch blocks new paper entries, archives all open paper positions at fresh quotes as `version_reset`, then records the new active version while creating a clean epoch.

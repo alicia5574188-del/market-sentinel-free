@@ -26,6 +26,7 @@ import {
 } from "./resonance-policy-version.ts";
 import { evaluateDirectMarketRisk } from "./direct-market-risk.ts";
 import { DIRECT_MARKET_AUTHORITY, DIRECT_MARKET_BRAIN_VERSION } from "./direct-market-types.ts";
+import { buildDirectSetupPerformance } from "./direct-market-performance.ts";
 import type { DirectPositionDecision } from "./direct-market-position-brain.ts";
 
 export const POST_EXIT_HORIZONS = [0, 30, 60, 120, 240, 480, 720] as const;
@@ -940,6 +941,9 @@ export async function getHte31Dashboard(now = Date.now()) {
   const currentClosed = closed.filter((row) => row.entryAt >= account.epochStartedAt
     && row.decisionAuthority === DIRECT_MARKET_AUTHORITY
     && row.brainVersion === DIRECT_MARKET_BRAIN_VERSION);
+  const currentOpen = open.filter((row) => row.entryAt >= account.epochStartedAt
+    && row.decisionAuthority === DIRECT_MARKET_AUTHORITY
+    && row.brainVersion === DIRECT_MARKET_BRAIN_VERSION);
   const archivedClosed = closed.filter((row) => !currentClosed.includes(row));
   const grossProfit = currentClosed.reduce((sum, row) => sum + Math.max(0, row.netPnlUsdt ?? 0), 0);
   const grossLoss = Math.abs(currentClosed.reduce((sum, row) => sum + Math.min(0, row.netPnlUsdt ?? 0), 0));
@@ -948,6 +952,9 @@ export async function getHte31Dashboard(now = Date.now()) {
       resultR: row.riskBudgetUsdt > 0 ? (row.netPnlUsdt ?? 0) / row.riskBudgetUsdt : 0,
     })));
   const paperReset = await getHte31PaperResetState(open.length);
+  const twelveHoursMs = 12 * 60 * 60_000;
+  const currentWindowStartAt = Math.floor(now / twelveHoursMs) * twelveHoursMs;
+  const performanceRows = [...currentOpen, ...currentClosed];
   return {
     account,
     trades: [...open, ...currentClosed].slice(0, 100),
@@ -965,6 +972,19 @@ export async function getHte31Dashboard(now = Date.now()) {
     learning,
     governance,
     directRisk,
+    setupPerformance: buildDirectSetupPerformance(performanceRows),
+    setupWindows: {
+      current: {
+        windowStartAt: currentWindowStartAt,
+        windowEndAt: currentWindowStartAt + twelveHoursMs,
+        setups: buildDirectSetupPerformance(performanceRows, { from: currentWindowStartAt, to: currentWindowStartAt + twelveHoursMs }),
+      },
+      previous: {
+        windowStartAt: currentWindowStartAt - twelveHoursMs,
+        windowEndAt: currentWindowStartAt,
+        setups: buildDirectSetupPerformance(performanceRows, { from: currentWindowStartAt - twelveHoursMs, to: currentWindowStartAt }),
+      },
+    },
     activity: {
       symbols: new Set(tenMinute.map((row) => row.symbol)).size,
       evaluations: tenMinute.length,

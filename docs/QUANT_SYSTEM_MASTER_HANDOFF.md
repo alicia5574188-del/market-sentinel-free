@@ -1,5 +1,7 @@
 # Market Sentinel / Resonance — Quant System Master Handoff
 
+> **2026-09-04 successor prepared:** branch `feat/core-three-resonance-dashboard` advances the authority to `direct-market-brain-v3-resonance-three`, replaces Dennis with multi-timeframe comprehensive resonance, restores per-setup contribution statistics and deterministic 12-hour operating review, and reduces the operator surface to `大脑 / 订单 / 管理`. It reuses the existing Scanner Durable Object save, adds no recurring D1 write, preserves every Must-Keep capability, and declares additive cutover migration `0021`. Treat this paragraph as release-candidate truth until merged-main CI and production D1/health proof are recorded.
+
 > **2026-09-04 current correction:** production `main` `6c6b18c` keeps Direct Market Brain as the only new-order authority with three setups and makes every major brain version automatically block new paper entries, archive pre-cutover/old-version paper positions at fresh quotes, and start a clean epoch; Gate/live remains untouched. Final workflow `33858569353` proved `legacy_open_positions=0` and active version `direct-market-brain-v2-core-three`. Use `docs/QUANT_UPGRADE_PATH.md` for the bounded upgrade route.
 
 Last reconciled: **2026-09-03 — current main includes PR #111; Direct Market Brain upgrade prepared, not deployed**

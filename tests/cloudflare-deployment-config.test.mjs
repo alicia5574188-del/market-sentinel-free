@@ -55,7 +55,7 @@ test("direct market brain scanner is phased and cannot restart the whole old sca
     readFile(new URL("../worker/hte31-workers.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/hte31-scanner.ts", import.meta.url), "utf8"),
   ]);
-  assert.match(worker, /CLEAN_RUNTIME_VERSION = "direct-market-brain-v2-core-three"/);
+  assert.match(worker, /CLEAN_RUNTIME_VERSION = "direct-market-brain-v3-resonance-three"/);
   assert.match(worker, /export class HTE31MarketScanner/);
   assert.match(worker, /createHte31ScanJob/);
   assert.match(worker, /priorAttempt >= 3/);

@@ -15,14 +15,14 @@ const [page, layout, route, chart, css, liveStatus, scanner, catalog, worker, re
   readFile(new URL("../lib/hte31-repository.ts", import.meta.url), "utf8"),
 ]);
 
-test("production UI exposes the three core setups while historical strategy identities stay readable", () => {
+test("production UI exposes the useful three setups and direct operating truth while history stays readable", () => {
   assert.match(page, /Resonance/);
-  assert.match(page, /三套核心打法 · 模拟学习/);
+  assert.match(page, /大脑决策 · 三策略贡献 · 12小时复盘/);
   for (const phrase of ["HT1", "HT2", "HT3", "HT4", "HT5", "HT1-R", "HT2-R", "HT3-R", "HT5-R", "HT6", "HT7", "HT8", "HT9"]) assert.match(catalog, new RegExp(phrase));
   for (const family of ["SF01", "SF02", "SF03", "SF04", "SF05", "SF06", "SF07", "SF08", "SF09"]) assert.match(catalog, new RegExp(family));
-  assert.match(page, /成交额前十五/);
-  for (const setup of ["量价力度假突破", "衰竭反转", "经典趋势突破"]) assert.match(page, new RegExp(setup));
-  assert.match(page, /function DirectRadarCard/);
+  for (const setup of ["量价力度假突破", "衰竭反转", "多周期综合共振"]) assert.match(page, new RegExp(setup));
+  for (const phrase of ["谁在发力，谁在拖后腿", "每12小时总结", "大脑决定"]) assert.match(page, new RegExp(phrase));
+  assert.match(page, /function DecisionEvidenceCard/);
   const renderedSurface = page.slice(page.lastIndexOf("return ("));
   assert.doesNotMatch(renderedSurface, /策略中心|9 个家族|13 个独立变体|历史记忆准备中|有效独立样本/);
   assert.doesNotMatch(page, /旧 HTE 3\.0 不进入这里|SIMULATION LEDGER · CLEAN|HTE 3\.1 新账本|CLEAN RADAR|CLEAN RUNTIME/);
@@ -78,15 +78,15 @@ test("simulation reset is reachable from funds without duplicating its destructi
   assert.match(page, /资金设置/);
   assert.match(page, /重置模拟本金/);
   assert.match(page, /\/api\/hte31\/paper-reset/);
-  assert.match(page, /const NAV: Tab\[\] = \["机会", "雷达", "订单", "实盘", "设置"\]/);
-  assert.match(page, /tab === "设置"/);
+  assert.match(page, /const NAV: Tab\[\] = \["大脑", "订单", "管理"\]/);
+  assert.match(page, /tab === "管理"/);
   assert.match(page, /重新开始资金曲线/);
   const resetButtons = page.match(/onClick=\{\(\) => void resetPaper\(\)\}/g) ?? [];
   assert.equal(resetButtons.length, 1);
 });
 
 test("pre-trade signal cards expose the complete decision and risk plan", () => {
-  assert.match(page, /function DirectRadarCard/);
+  assert.match(page, /function DecisionEvidenceCard/);
   for (const phrase of ["方向", "触发状态", "入场区", "入场价", "止损", "TP1", "TP2", "触发与硬闸门", "支持证据", "反证 / 缺失条件", "失效条件"]) {
     assert.match(page, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }

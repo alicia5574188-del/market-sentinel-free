@@ -4,7 +4,7 @@ import {
   type MarketUniverseTicker,
 } from "./exchange-market.ts";
 import { buildDirectMarketCandidate } from "./direct-market-brain.ts";
-import type { DirectMarketCandidate, DirectMarketRadarItem } from "./direct-market-types.ts";
+import type { DirectMarketCandidate, DirectMarketRadarItem, DirectTwelveHourActivity } from "./direct-market-types.ts";
 import { chooseDirectMarketTarget, rankDirectMarketUniverse } from "./direct-market-universe.ts";
 import { getGlobalRiskContext } from "./global-risk.ts";
 import { getHte31Dashboard, listHte31OpenTrades } from "./hte31-repository.ts";
@@ -46,6 +46,7 @@ export type Hte31ScanCompleted = {
   packet: MarketAnalysisPacket;
   directCandidate: DirectMarketCandidate;
   directRadar?: DirectMarketRadarItem[];
+  activity12h?: { current: DirectTwelveHourActivity; lastCompleted: DirectTwelveHourActivity | null };
   openedTradeId: string | null;
   openReason: string;
   settings: {

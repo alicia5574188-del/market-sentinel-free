@@ -1,13 +1,41 @@
 import type { Hte31Candle } from "./hte31-types.ts";
 
-export const DIRECT_MARKET_BRAIN_VERSION = "direct-market-brain-v2-core-three";
+export const DIRECT_MARKET_BRAIN_VERSION = "direct-market-brain-v3-resonance-three";
 export const DIRECT_MARKET_AUTHORITY = "direct_market_brain" as const;
 
 export type DirectMarketSide = "LONG" | "SHORT" | "WAIT";
 export type DirectMarketLocation = "TOP" | "MIDDLE" | "BOTTOM" | "BREAKOUT" | "BREAKDOWN";
 export type DirectMarketFreshness = "FRESH" | "STALE" | "UNAVAILABLE";
 export type DirectMarketRiskState = "CALIBRATING" | "VALIDATING" | "NORMAL" | "CAUTION" | "DEFENSIVE" | "PAUSED";
-export type DirectCoreSetup = "VOLUME_FORCE_FAILED_BREAKOUT" | "EXHAUSTION_REVERSAL" | "DENNIS_TREND_BREAKOUT";
+export const DIRECT_CORE_SETUPS = [
+  { id: "VOLUME_FORCE_FAILED_BREAKOUT", label: "量价力度假突破" },
+  { id: "EXHAUSTION_REVERSAL", label: "衰竭反转" },
+  { id: "MULTI_TIMEFRAME_RESONANCE", label: "多周期综合共振" },
+] as const;
+
+export type DirectCoreSetup = typeof DIRECT_CORE_SETUPS[number]["id"];
+
+export type DirectSetupActivity = {
+  setup: DirectCoreSetup;
+  setupLabel: string;
+  evaluations: number;
+  qualifiedSignals: number;
+  openedTrades: number;
+  leadingBlocker: string | null;
+  blockerCount: number;
+  blockers: Record<string, number>;
+};
+
+export type DirectTwelveHourActivity = {
+  windowStartAt: number;
+  windowEndAt: number;
+  generatedAt: number;
+  complete: boolean;
+  evaluations: number;
+  qualifiedSignals: number;
+  openedTrades: number;
+  setups: DirectSetupActivity[];
+};
 
 export type DirectMarketCandidate = {
   symbol: string;

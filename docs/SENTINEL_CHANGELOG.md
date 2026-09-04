@@ -11,6 +11,25 @@ Rules:
 
 ---
 
+## 2026-09-04 — Core-three resonance dashboard release candidate
+
+### Changed
+
+- Replaced Dennis breakout new-order authority with multi-timeframe comprehensive resonance and modestly relaxed the two reversal setups' evidence floors without bypassing shared hard gates.
+- Added per-setup contribution statistics and fixed 12-hour Scanner activity buckets. The summary combines those counters with current-version paper trades and clearly separates insufficient samples from proven contribution or drag.
+- Replaced the abstract Opportunity/Radar navigation with `大脑 / 订单 / 管理`; detailed decision evidence is collapsed under the brain, while order review and all owner/live safety controls remain reachable.
+- Added brain version `direct-market-brain-v3-resonance-three` and additive paper cutover migration `0021`.
+
+### Deliberately unchanged
+
+- One Direct Market Brain authority, completed-candle decisions, fresh-quote execution, three-position/portfolio limits, 12-hour post-exit learning, exact paper-to-live lineage, Gate credentials/orders/control, funding authority, and D1 hard budgets.
+- Scanner activity rides the existing Durable Object runtime save. No new periodic D1 table or write schedule was introduced.
+
+### Verification before release
+
+- Focused Direct Brain/performance/architecture tests passed 23/23; focused UI/migration/Must-Keep tests passed 45/45.
+- Full strategy/risk/migration suite passed 224/224; production build/UI/safety suite passed 112/112; ESLint, TypeScript, and diff checks passed. Local Wrangler dry-run was blocked by the environment network-approval layer and remains a required remote CI gate.
+
 ## 2026-09-04 — Automatic paper cutover for major brain releases
 
 ### Changed

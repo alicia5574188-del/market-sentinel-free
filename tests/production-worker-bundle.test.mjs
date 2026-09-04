@@ -14,13 +14,14 @@ async function readBuiltWorkerSource() {
 
 test("production Worker bundle contains the direct market brain runtime", async () => {
   const source = await readBuiltWorkerSource();
-  assert.match(source, /direct-market-brain-v2-core-three/);
+  assert.match(source, /direct-market-brain-v3-resonance-three/);
   assert.match(source, /Resonance/);
-  assert.match(source, /三套核心打法 · 模拟学习/);
+  assert.match(source, /大脑决策 · 三策略贡献 · 12小时复盘/);
   assert.match(source, /量价力度假突破/);
   assert.match(source, /衰竭反转/);
-  assert.match(source, /经典趋势突破/);
-  assert.match(source, /成交额前十五/);
+  assert.match(source, /多周期综合共振/);
+  assert.match(source, /谁在发力，谁在拖后腿/);
+  assert.match(source, /每12小时总结/);
   assert.match(source, /最大持仓/);
   assert.match(source, /HTE31MarketScanner/);
   assert.match(source, /HTE31TradeManager/);
