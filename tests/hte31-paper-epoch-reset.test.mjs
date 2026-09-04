@@ -7,6 +7,10 @@ const schema = readFileSync(new URL("../db/hte31-schema.ts", import.meta.url), "
 const migration = readFileSync(new URL("../drizzle/0014_hte31_simulation_epochs.sql", import.meta.url), "utf8");
 const resetMigration = readFileSync(new URL("../drizzle/0018_safe_paper_reset.sql", import.meta.url), "utf8");
 const freshStartMigration = readFileSync(new URL("../drizzle/0019_adaptive_brain_fresh_start.sql", import.meta.url), "utf8");
+const releaseMigration = readFileSync(new URL("../drizzle/0020_direct_market_v2_cutover.sql", import.meta.url), "utf8");
+const release = readFileSync(new URL("../lib/direct-market-release.ts", import.meta.url), "utf8");
+const directTypes = readFileSync(new URL("../lib/direct-market-types.ts", import.meta.url), "utf8");
+const execution = readFileSync(new URL("../lib/direct-market-execution.ts", import.meta.url), "utf8");
 const worker = readFileSync(new URL("../worker/hte31-workers.ts", import.meta.url), "utf8");
 const route = readFileSync(new URL("../app/api/hte31/paper-reset/route.ts", import.meta.url), "utf8");
 const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
@@ -22,7 +26,21 @@ test("paper capital reset creates a new accounting epoch without deleting learni
   assert.doesNotMatch(migration, /DELETE FROM/i);
   assert.doesNotMatch(resetMigration, /DELETE FROM/i);
   assert.doesNotMatch(freshStartMigration, /DELETE FROM/i);
+  assert.doesNotMatch(releaseMigration, /DELETE FROM/i);
   assert.doesNotMatch(route, /DELETE FROM|delete\(hte31|db\.delete/i);
+});
+
+test("every major brain version declares and enforces one paper cutover", () => {
+  const version = directTypes.match(/DIRECT_MARKET_BRAIN_VERSION = "([^"]+)"/)?.[1];
+  const migrationTag = release.match(/migrationTag: "([^"]+)"/)?.[1];
+  assert.ok(version && migrationTag);
+  assert.match(release, /cutover: "force_archive_paper"/);
+  assert.ok(releaseMigration.includes(version), "release migration must name the current brain version");
+  assert.equal(migrationTag, "0020_direct_market_v2_cutover");
+  assert.match(execution, /ensureDirectMarketReleaseCutover\(settings\.trialCapitalUsdt, executionNow\)/);
+  assert.match(worker, /ensureDirectMarketReleaseCutover\(settings\.trialCapitalUsdt, startedAt\)/);
+  assert.match(release, /state\?\.status === "completed" && state\.targetBrainVersion === DIRECT_MARKET_RELEASE\.brainVersion/);
+  assert.match(repository, /activeBrainVersion: state\.targetBrainVersion \?\? state\.activeBrainVersion/);
 });
 
 test("adaptive-brain fresh start archives old paper positions at fresh quotes and keeps their review trail", () => {

@@ -1,5 +1,13 @@
 # Decisions
 
+## 2026-09-04 — Make major strategy releases an automatic paper boundary
+
+- Choice: Every Direct Market Brain major version declares one release manifest and additive cutover migration. The entry boundary and Trade Manager compare the declared version with D1 state; a mismatch blocks new paper entries, archives all open paper positions at fresh quotes as `version_reset`, then records the new active version while creating a clean epoch.
+- Reason: A major strategy change makes old and new simulated results incomparable. Waiting for old positions to expire delays the new sample, while deleting or silently mixing them destroys attribution.
+- Evidence: The existing forced-reset lifecycle already preserves immutable trade lineage and creates all seven post-exit observations. The new version state makes that safe path repeatable and CI-enforced instead of a one-off migration comment.
+- Boundary: This mechanism is paper-only. Gate/live positions, orders, credentials, leverage, controls, funding, and Emergency Stop are untouched.
+- Revisit when: A future release is explicitly classified as minor and proven not to change entry, exit, sizing, portfolio, learning, or decision semantics.
+
 Record only consequential decisions using this format:
 
 ## 2026-09-03 — Restart the adaptive round without deleting evidence

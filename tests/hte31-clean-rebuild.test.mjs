@@ -18,8 +18,14 @@ test("full migration chain preserves the isolated HTE ledger", () => {
   assert.ok(chartColumns.has("entry_quality_json"));
   const researchColumns = new Set(db.prepare("PRAGMA table_info(hte31_shadow_samples)").all().map((row) => row.name));
   for (const column of ["sample_kind", "playbook_id", "max_holding_minutes", "terminal_at", "terminal_reason"]) assert.ok(researchColumns.has(column), column);
-  const reset = db.prepare("SELECT status, reset_mode, requested_capital_usdt FROM hte31_paper_reset_state WHERE id = 'singleton'").get();
-  assert.deepEqual({ ...reset }, { status: "pending", reset_mode: "force_archive", requested_capital_usdt: 1000 });
+  const reset = db.prepare("SELECT status, reset_mode, active_brain_version, target_brain_version, requested_capital_usdt FROM hte31_paper_reset_state WHERE id = 'singleton'").get();
+  assert.deepEqual({ ...reset }, {
+    status: "pending",
+    reset_mode: "force_archive",
+    active_brain_version: "direct-market-brain-v1",
+    target_brain_version: "direct-market-brain-v2-core-three",
+    requested_capital_usdt: 1000,
+  });
   assert.equal(db.prepare("SELECT count(*) AS n FROM hte31_trades").get().n, 0);
   db.close();
 });

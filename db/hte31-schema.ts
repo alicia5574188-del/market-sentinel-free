@@ -84,6 +84,8 @@ export const hte31PaperResetState = sqliteTable("hte31_paper_reset_state", {
   id: text("id").primaryKey(),
   status: text("status", { enum: ["pending", "completed"] }).notNull(),
   resetMode: text("reset_mode", { enum: ["natural", "force_archive"] }).notNull().default("natural"),
+  activeBrainVersion: text("active_brain_version"),
+  targetBrainVersion: text("target_brain_version"),
   requestedCapitalUsdt: real("requested_capital_usdt").notNull(),
   requestedAt: integer("requested_at").notNull(),
   completedAt: integer("completed_at"),
