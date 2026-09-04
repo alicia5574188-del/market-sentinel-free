@@ -121,3 +121,26 @@ jobs:
             ' "/tmp/health-$attempt.json"
             sleep 5
           done
+      - name: Verify paper strategy cutover
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_version="$(sed -n 's/^export const DIRECT_MARKET_BRAIN_VERSION = "\([^"]*\)";.*/\1/p' lib/direct-market-types.ts)"
+          cutover_ready=0
+          for attempt in {1..12}; do
+            npx wrangler d1 execute DB --remote --config wrangler.jsonc --json --command \
+              "SELECT status, active_brain_version, target_brain_version, (SELECT COUNT(*) FROM hte31_trades WHERE status = 'holding') AS open_positions FROM hte31_paper_reset_state WHERE id = 'singleton'" \
+              > /tmp/paper-cutover.json
+            if jq -e --arg version "$expected_version" '
+              .[0].success == true and
+              .[0].results[0].status == "completed" and
+              .[0].results[0].active_brain_version == $version and
+              .[0].results[0].target_brain_version == null and
+              .[0].results[0].open_positions == 0
+            ' /tmp/paper-cutover.json >/dev/null; then
+              cutover_ready=1
+              break
+            fi
+            sleep 10
+          done
+          [[ "$cutover_ready" == "1" ]]
