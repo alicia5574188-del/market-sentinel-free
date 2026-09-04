@@ -1,13 +1,13 @@
 # Status
 
-## Truthful per-setup activity — implementation verification
+## Truthful per-setup activity — production deployed
 
-- Branch: `fix/true-strategy-activity`, based on production `main` `b0a36a6`.
+- Release: PR `#131`, production commit `113bf39a8515d4a1cae7d9135c91a4c75654107a`, workflow `33894121421`.
 - Root cause confirmed: every scan evaluated all three setups, but the 12-hour recorder incremented only `candidate.setup`; the displayed `7 + 79 + 47 = 133` was a partition of primary selections, not three evaluation totals.
 - A startup window with only about 57 minutes of coverage was also marked complete at the next fixed UTC boundary and displayed as a full 12-hour result.
 - Implementation now carries all three setup evaluations, counts trigger/qualification/selection/entry-block/open separately, measures capped continuous runtime coverage, rejects legacy counters, and refuses to complete a partial window. No D1 write or strategy/risk/live rule changed.
-- Verification passed: focused Direct/activity/architecture 26/26, strategy/risk/migration 224/224, production build/UI/Must-Keep 112/112, TypeScript, ESLint, and `git diff --check`.
-- Next: commit one PR, merge after green CI, then verify the corrected production counters and health without changing strategy or position state.
+- Verification passed: focused Direct/activity/architecture 26/26, strategy/risk/migration 224/224, production build/UI/Must-Keep 112/112, TypeScript, ESLint, `git diff --check`, remote Wrangler dry-run, immutable asset, bounded health, and paper-cutover proof.
+- Production deployed with no pending migration. The active brain remained `direct-market-brain-v3-resonance-three`, legacy open positions remained zero, and the feature deployment Worker version was `8e978ade-5799-4625-95c6-5398081c5f22`.
 - Updated UTC: 2026-09-04.
 
 ## Core-three resonance dashboard — production deployed

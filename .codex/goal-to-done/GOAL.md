@@ -1,6 +1,6 @@
 # Goal
 
-## Active patch objective — truthful per-setup activity
+## Completed patch objective — truthful per-setup activity
 
 - Count every one of the three core setups on every deep scan instead of attributing the scan only to the selected setup.
 - Separate setup trigger, full hard-gate qualification, primary selection, entry blocking, and actual opening so signal frequency is comparable and understandable.
