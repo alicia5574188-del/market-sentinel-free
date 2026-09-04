@@ -129,7 +129,7 @@ jobs:
           cutover_ready=0
           for attempt in {1..12}; do
             npx wrangler d1 execute DB --remote --config wrangler.jsonc --json --command \
-              "SELECT status, active_brain_version, target_brain_version, (SELECT COUNT(*) FROM hte31_trades WHERE status = 'holding') AS open_positions FROM hte31_paper_reset_state WHERE id = 'singleton'" \
+              "SELECT reset.status, reset.active_brain_version, reset.target_brain_version, (SELECT COUNT(*) FROM hte31_trades paper_trade WHERE paper_trade.status = 'holding' AND (paper_trade.brain_version IS NULL OR paper_trade.brain_version != reset.active_brain_version OR paper_trade.entry_at < reset.completed_at)) AS legacy_open_positions FROM hte31_paper_reset_state reset WHERE reset.id = 'singleton'" \
               > /tmp/paper-cutover.json
             cutover_row="$(jq -c 'if type == "array" then .[0].results[0] else .results[0] end' /tmp/paper-cutover.json)"
             echo "Paper cutover state: $cutover_row"
@@ -137,7 +137,7 @@ jobs:
               .status == "completed" and
               .active_brain_version == $version and
               .target_brain_version == null and
-              ((.open_positions | tonumber) == 0)
+              ((.legacy_open_positions | tonumber) == 0)
             ' <<< "$cutover_row" >/dev/null; then
               cutover_ready=1
               break
