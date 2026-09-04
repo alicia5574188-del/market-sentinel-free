@@ -44,6 +44,9 @@ test("direct brain emits normalized mutually exclusive paths and a replayable pl
   assert.equal(candidate.setup, "MULTI_TIMEFRAME_RESONANCE");
   assert.equal(candidate.entryZone?.length, 2);
   assert.equal(candidate.targets.length, 2);
+  assert.equal(candidate.setupEvaluations?.length, 3);
+  assert.equal(candidate.setupEvaluations?.filter((row) => row.selected).length, 1);
+  assert.ok(candidate.setupEvaluations?.every((row) => typeof row.triggered === "boolean" && typeof row.qualified === "boolean"));
   assert.ok(candidate.invalidationPrice! < candidate.entryZone![0]);
   assert.ok(candidate.targets[1] > candidate.targets[0]);
   assert.equal(candidate.riskClusterId, "btc-positive");

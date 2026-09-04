@@ -1,5 +1,12 @@
 # Decisions
 
+## 2026-09-04 — Treat setup activity as a funnel, not a winner-only partition
+
+- Choice: On every deep scan, count all three setup evaluations independently, then separate setup trigger, shared hard-gate qualification, primary selection, entry blocking, and actual opening. A fixed 12-hour result is complete only when measured Scanner coverage spans the full window; incomplete startup windows remain explicitly in progress.
+- Reason: The first production window showed `7 + 79 + 47 = 133` because only the selected setup received an evaluation, even though all three ran every time. The new runtime started about 57 minutes before a UTC boundary and incorrectly promoted that partial coverage as a completed 12-hour review.
+- Evidence: `lib/direct-market-activity.ts` owns zero-D1 funnel counters and coverage qualification; `DirectMarketCandidate.setupEvaluations` preserves all three deterministic results from the existing brain pass; focused tests prove equal evaluation counts and reject partial completion.
+- Revisit when: A longer activity history is required. Any durable expansion must retain the no-recurring-D1-write boundary and must not change setup thresholds merely to improve displayed frequency.
+
 ## 2026-09-04 — Restore the original core as multi-timeframe comprehensive resonance
 
 - Choice: Retire Dennis breakout from new-order authority and replace it with `MULTI_TIMEFRAME_RESONANCE`: aligned 15m/1h/4h direction, completed 5m confirmation/resume, spot/volume support, and anti-chase protection. Keep failed breakout and exhaustion reversal as the two mutually exclusive reversal stories.

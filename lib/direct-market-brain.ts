@@ -219,14 +219,30 @@ export function buildDirectMarketCandidate(input: {
   const currentAtr = atr(candles);
   const atrPct = currentAtr && price > 0 ? currentAtr / price * 100 : null;
   const setupEvaluations = evaluateCoreSetups(packet, candles);
-  const selectedSetup = [...setupEvaluations].sort((left, right) => Number(right.trigger) - Number(left.trigger) || right.score - left.score)[0];
-  const directionalScore = clamp((selectedSetup.side === "LONG" ? 1 : -1) * (0.28 + selectedSetup.score / 145), -1, 1);
-  const paths = normalizedPaths(directionalScore);
-  const directionalProbability = selectedSetup.side === "LONG" ? paths.up : paths.down;
-  const confidence = Math.round(clamp(selectedSetup.score * 0.78 + packet.decision.dataQuality * 22, 0, 99));
-  const netEdgeR = directionalProbability / 100 * selectedSetup.target2R
-    - (selectedSetup.side === "LONG" ? paths.down : paths.up) / 100
-    - paths.rangeOrInvalid / 100 * 0.22;
+  const currentVolumeRatio = volumeRatio(candles) ?? 0;
+  const macroRisk = packet.market.macroEventRisk ?? 0;
+  const scoredSetups = setupEvaluations.map((setup) => {
+    const directionalScore = clamp((setup.side === "LONG" ? 1 : -1) * (0.28 + setup.score / 145), -1, 1);
+    const paths = normalizedPaths(directionalScore);
+    const directionalProbability = setup.side === "LONG" ? paths.up : paths.down;
+    const confidence = Math.round(clamp(setup.score * 0.78 + packet.decision.dataQuality * 22, 0, 99));
+    const netEdgeR = directionalProbability / 100 * setup.target2R
+      - (setup.side === "LONG" ? paths.down : paths.up) / 100
+      - paths.rangeOrInvalid / 100 * 0.22;
+    const checks = [
+      { key: "setup", label: "核心打法触发", passed: setup.trigger, detail: `${setup.label} · ${setup.score.toFixed(0)}分` },
+      { key: "data", label: "数据完整", passed: packet.decision.dataQuality >= 0.72 && candles.length >= 48, detail: `质量 ${Math.round(packet.decision.dataQuality * 100)}% · 完整5m K线 ${candles.length}` },
+      { key: "liquidity", label: "流动性安全", passed: (packet.market.volumeUsd ?? 0) >= 12_000_000, detail: `${((packet.market.volumeUsd ?? 0) / 1_000_000).toFixed(1)}M USDT/24h` },
+      { key: "volume", label: "量能硬确认", passed: currentVolumeRatio >= setup.volumeMinimum, detail: `${currentVolumeRatio.toFixed(2)}x / 要求 ${setup.volumeMinimum.toFixed(2)}x` },
+      { key: "funding", label: "杠杆拥挤安全", passed: Math.abs(packet.market.fundingRate ?? 0) < 0.0015, detail: `${((packet.market.fundingRate ?? 0) * 100).toFixed(4)}%` },
+      { key: "macro", label: "宏观事件风险", passed: macroRisk < 0.85, detail: `${Math.round(macroRisk * 100)}%` },
+      { key: "edge", label: "结构期望", passed: netEdgeR >= 0.55, detail: `${netEdgeR.toFixed(2)}R` },
+      { key: "volatility", label: "波动可执行", passed: atrPct != null && atrPct >= 0.15 && atrPct <= 3.2, detail: atrPct == null ? "ATR不可用" : `ATR ${atrPct.toFixed(2)}%` },
+    ];
+    return { ...setup, directionalScore, paths, confidence, netEdgeR, checks, qualified: checks.every((check) => check.passed) && confidence >= 70 };
+  });
+  const selectedSetup = [...scoredSetups].sort((left, right) => Number(right.trigger) - Number(left.trigger) || right.score - left.score)[0];
+  const { directionalScore, paths, confidence, netEdgeR, checks } = selectedSetup;
   const btcCorrelation = packet.symbol === "BTC_USDT" ? 1 : pearsonCorrelation(candles, input.btcCandles);
   const riskClusterId = btcCorrelation == null
     ? "btc-correlation-unavailable"
@@ -246,19 +262,7 @@ export function buildDirectMarketCandidate(input: {
   const targets = selectedSetup.side === "LONG"
     ? [price + stopDistance * selectedSetup.target1R, price + stopDistance * selectedSetup.target2R]
     : [price - stopDistance * selectedSetup.target1R, price - stopDistance * selectedSetup.target2R];
-  const currentVolumeRatio = volumeRatio(candles) ?? 0;
-  const macroRisk = packet.market.macroEventRisk ?? 0;
-  const checks = [
-    { key: "setup", label: "核心打法触发", passed: selectedSetup.trigger, detail: `${selectedSetup.label} · ${selectedSetup.score.toFixed(0)}分` },
-    { key: "data", label: "数据完整", passed: packet.decision.dataQuality >= 0.72 && candles.length >= 48, detail: `质量 ${Math.round(packet.decision.dataQuality * 100)}% · 完整5m K线 ${candles.length}` },
-    { key: "liquidity", label: "流动性安全", passed: (packet.market.volumeUsd ?? 0) >= 12_000_000, detail: `${((packet.market.volumeUsd ?? 0) / 1_000_000).toFixed(1)}M USDT/24h` },
-    { key: "volume", label: "量能硬确认", passed: currentVolumeRatio >= selectedSetup.volumeMinimum, detail: `${currentVolumeRatio.toFixed(2)}x / 要求 ${selectedSetup.volumeMinimum.toFixed(2)}x` },
-    { key: "funding", label: "杠杆拥挤安全", passed: Math.abs(packet.market.fundingRate ?? 0) < 0.0015, detail: `${((packet.market.fundingRate ?? 0) * 100).toFixed(4)}%` },
-    { key: "macro", label: "宏观事件风险", passed: macroRisk < 0.85, detail: `${Math.round(macroRisk * 100)}%` },
-    { key: "edge", label: "结构期望", passed: netEdgeR >= 0.55, detail: `${netEdgeR.toFixed(2)}R` },
-    { key: "volatility", label: "波动可执行", passed: atrPct != null && atrPct >= 0.15 && atrPct <= 3.2, detail: atrPct == null ? "ATR不可用" : `ATR ${atrPct.toFixed(2)}%` },
-  ];
-  const ready = checks.every((check) => check.passed) && confidence >= 70;
+  const ready = selectedSetup.qualified;
   const evidence = [
     `${selectedSetup.label} · 只在完整5m证据成立后触发`,
     ...selectedSetup.evidence,
@@ -284,6 +288,20 @@ export function buildDirectMarketCandidate(input: {
     setup: selectedSetup.setup,
     setupLabel: selectedSetup.label,
     setupScore: selectedSetup.score,
+    setupEvaluations: scoredSetups.map((setup) => ({
+      setup: setup.setup,
+      setupLabel: setup.label,
+      side: setup.side,
+      score: setup.score,
+      triggered: setup.trigger,
+      qualified: setup.qualified,
+      selected: setup.setup === selectedSetup.setup,
+      blockers: [...new Set([
+        ...setup.blockers,
+        ...setup.checks.filter((check) => !check.passed).map((check) => `${check.label}：${check.detail}`),
+        ...(setup.confidence < 70 ? [`置信度不足：${setup.confidence}% / 要求 70%`] : []),
+      ])],
+    })),
     decision: ready ? selectedSetup.side : "WAIT",
     entryZone: ready ? entryZone : null,
     invalidationPrice: ready ? structuralStop : null,

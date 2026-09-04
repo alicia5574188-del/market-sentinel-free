@@ -30,11 +30,14 @@ import {
 } from "../lib/direct-market-position-brain";
 import type { SchedulerWorkerStatus } from "../lib/background-scheduler";
 import {
-  DIRECT_CORE_SETUPS,
+  emptyDirectTwelveHourActivity,
+  recordDirectTwelveHourActivity,
+  type DirectTwelveHourActivityState,
+} from "../lib/direct-market-activity";
+import {
   type DirectCoreSetup,
   type DirectMarketCandidate,
   type DirectMarketRadarItem,
-  type DirectTwelveHourActivity,
 } from "../lib/direct-market-types";
 import type { CloudflareEnv } from "./index";
 
@@ -55,7 +58,7 @@ type ScannerRuntime = {
   readModel: Hte31ScanCompleted | null;
   directBySymbol?: Record<string, DirectMarketCandidate>;
   directHistory?: { symbol: string; observedAt: number; referencePrice: number | null; location: string; decision: string; paths: DirectMarketCandidate["paths"]; riskClusterId: string }[];
-  activity12h?: { current: DirectTwelveHourActivity; lastCompleted: DirectTwelveHourActivity | null };
+  activity12h?: DirectTwelveHourActivityState;
   status: SchedulerWorkerStatus;
 };
 
@@ -83,78 +86,8 @@ function baseScannerRuntime(): ScannerRuntime {
     readModel: null,
     directBySymbol: {},
     directHistory: [],
-    activity12h: { current: emptyTwelveHourActivity(Date.now()), lastCompleted: null },
+    activity12h: { current: emptyDirectTwelveHourActivity(Date.now()), lastCompleted: null },
     status: baseStatus(),
-  };
-}
-
-const TWELVE_HOURS_MS = 12 * 60 * 60_000;
-
-function emptyTwelveHourActivity(now: number): DirectTwelveHourActivity {
-  const windowStartAt = Math.floor(now / TWELVE_HOURS_MS) * TWELVE_HOURS_MS;
-  return {
-    windowStartAt,
-    windowEndAt: windowStartAt + TWELVE_HOURS_MS,
-    generatedAt: now,
-    complete: false,
-    evaluations: 0,
-    qualifiedSignals: 0,
-    openedTrades: 0,
-    setups: DIRECT_CORE_SETUPS.map(({ id: setup, label: setupLabel }) => ({
-      setup,
-      setupLabel,
-      evaluations: 0,
-      qualifiedSignals: 0,
-      openedTrades: 0,
-      leadingBlocker: null,
-      blockerCount: 0,
-      blockers: {},
-    })),
-  };
-}
-
-function recordTwelveHourActivity(
-  activity: ScannerRuntime["activity12h"],
-  candidate: DirectMarketCandidate,
-  openedSetup: DirectCoreSetup | null,
-  openReason: string,
-) {
-  const now = candidate.observedAt;
-  let current = activity?.current ?? emptyTwelveHourActivity(now);
-  let lastCompleted = activity?.lastCompleted ?? null;
-  if (now >= current.windowEndAt || now < current.windowStartAt) {
-    lastCompleted = { ...current, complete: true, generatedAt: now };
-    current = emptyTwelveHourActivity(now);
-  }
-  const blocker = candidate.decision === "WAIT"
-    ? candidate.counterEvidence[0] ?? "当前位置没有完整触发"
-    : openedSetup === candidate.setup ? "" : openReason;
-  const setups = current.setups.map((row) => {
-    const evaluated = row.setup === candidate.setup;
-    const opened = row.setup === openedSetup;
-    if (!evaluated && !opened) return row;
-    const blockers = evaluated && blocker ? { ...row.blockers, [blocker]: (row.blockers[blocker] ?? 0) + 1 } : row.blockers;
-    const [leadingBlocker, blockerCount] = Object.entries(blockers).sort((left, right) => right[1] - left[1])[0] ?? [null, 0];
-    return {
-      ...row,
-      evaluations: row.evaluations + Number(evaluated),
-      qualifiedSignals: row.qualifiedSignals + Number(evaluated && candidate.decision !== "WAIT"),
-      openedTrades: row.openedTrades + Number(opened),
-      leadingBlocker,
-      blockerCount,
-      blockers,
-    };
-  });
-  return {
-    current: {
-      ...current,
-      generatedAt: now,
-      evaluations: current.evaluations + 1,
-      qualifiedSignals: current.qualifiedSignals + Number(candidate.decision !== "WAIT"),
-      openedTrades: current.openedTrades + Number(openedSetup != null),
-      setups,
-    },
-    lastCompleted,
   };
 }
 
@@ -449,7 +382,13 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
             : `当前组合排名 ${portfolioRank || ">3"}，本轮不进入前三`,
         };
       }
-      const activity12h = recordTwelveHourActivity(runtime.activity12h, result.directCandidate, openedSetup, result.openReason);
+      const activity12h = recordDirectTwelveHourActivity({
+        activity: runtime.activity12h,
+        candidate: result.directCandidate,
+        openedSetup,
+        openReason: result.openReason,
+        expectedIntervalMs: SCANNER_CYCLE_INTERVAL_MS,
+      });
       const readModel = { ...result, directRadar: buildDirectRadar(result, directBySymbol), activity12h };
       const nextRunAt = Date.now() + this.intervalMs;
       const status: SchedulerWorkerStatus = {

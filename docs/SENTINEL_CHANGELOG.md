@@ -11,6 +11,22 @@ Rules:
 
 ---
 
+## 2026-09-04 — Truthful setup-activity correction release candidate
+
+### Changed
+
+- Every deep scan now records all three setup evaluations instead of attributing the scan only to the selected winner.
+- Setup trigger, shared hard-gate qualification, primary selection, entry blocking, and actual opening are separate counters.
+- A fixed 12-hour window completes only after full measured Scanner coverage; partial startup windows and legacy malformed counters are never presented as completed evidence.
+
+### Deliberately unchanged
+
+- Setup thresholds, Direct Market Brain version, current paper/live positions, risk, Gate controls, paper/live lineage, D1 schema, and recurring write cadence.
+
+### Verification before release
+
+- Focused Direct/activity/architecture tests passed 26/26; strategy/risk/migration passed 224/224; production build/UI/Must-Keep passed 112/112; TypeScript, ESLint, and diff checks passed.
+
 ## 2026-09-04 — Core-three resonance dashboard deployed
 
 ### Changed

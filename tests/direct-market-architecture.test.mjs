@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [scanner, worker, repository, liveRepository, page, migration, execution, positionBrain] = await Promise.all([
+const [scanner, worker, activity, repository, liveRepository, page, migration, execution, positionBrain] = await Promise.all([
   readFile(new URL("../lib/hte31-scanner.ts", import.meta.url), "utf8"),
   readFile(new URL("../worker/hte31-workers.ts", import.meta.url), "utf8"),
+  readFile(new URL("../lib/direct-market-activity.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/hte31-repository.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/live-trading-repository.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
@@ -24,8 +25,11 @@ test("new-entry scanner has no legacy strategy authority or high-frequency D1 wr
   assert.match(worker, /SCANNER_CYCLE_INTERVAL_MS = 25_000/);
   assert.match(worker, /fetchGatePositionQuotes/);
   assert.match(execution, /validateDirectMarketEntry/);
-  assert.match(worker, /recordTwelveHourActivity/);
+  assert.match(worker, /recordDirectTwelveHourActivity/);
   assert.match(worker, /activity12h/);
+  assert.match(activity, /row\.evaluations \+ 1/);
+  assert.match(activity, /triggeredSignals/);
+  assert.match(activity, /coverageMs >= minimumCoverage/);
   assert.match(repository, /buildDirectSetupPerformance/);
 });
 
@@ -59,6 +63,9 @@ test("live entry accepts only the exact direct-brain simulated lineage", () => {
 test("phone UI exposes direct brain contribution and review without an abstract radar page", () => {
   assert.match(page, /谁在发力，谁在拖后腿/);
   assert.match(page, /每12小时总结/);
+  assert.match(page, /全量评估/);
+  assert.match(page, /原始触发/);
+  assert.match(page, /入场拦截/);
   assert.match(page, /<DecisionEvidenceCard/);
   assert.match(page, /const NAV: Tab\[\] = \["大脑", "订单", "管理"\]/);
   const rendered = page.slice(page.indexOf("return <main"));

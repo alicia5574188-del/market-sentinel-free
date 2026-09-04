@@ -257,7 +257,10 @@ type SetupReview = {
   maxDrawdownR: number;
   maxLosingStreak: number;
   evaluations12h: number;
+  triggeredSignals12h: number;
   qualifiedSignals12h: number;
+  selectedSignals12h: number;
+  blockedEntries12h: number;
   openedTrades12h: number;
   closedTrades12h: number;
   netPnl12h: number;
@@ -269,8 +272,12 @@ type TwelveHourReview = {
   windowEndAt: number;
   generatedAt: number;
   complete: boolean;
+  coverageMs: number;
   evaluations: number;
+  triggeredSignals: number;
   qualifiedSignals: number;
+  selectedSignals: number;
+  blockedEntries: number;
   openedTrades: number;
   closedTrades: number;
   netPnlUsdt: number;
@@ -340,6 +347,12 @@ function fmtPrice(value: number | null | undefined) {
 function fmtTime(value: number | null | undefined) {
   if (!value) return "--";
   return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(value));
+}
+
+function fmtDuration(value: number | null | undefined) {
+  const minutes = Math.max(0, Math.floor((value ?? 0) / 60_000));
+  if (minutes < 60) return `${minutes}分钟`;
+  return `${Math.floor(minutes / 60)}小时${minutes % 60 ? `${minutes % 60}分钟` : ""}`;
 }
 
 function fmtR(value: number | null | undefined) {
@@ -461,7 +474,7 @@ function StrategyPerformanceCard({ setup }: { setup: SetupReview }) {
   const tone = setup.status === "发力" ? "power" : setup.status === "拖后腿" ? "drag" : setup.status === "观察" ? "watch" : "quiet";
   return <article className={`rz-panel rz-strategy-performance ${tone}`}>
     <div className="rz-strategy-head">
-      <div><strong>{setup.setupLabel}</strong><small>12小时评估 {setup.evaluations12h} · 完整信号 {setup.qualifiedSignals12h} · 开仓 {setup.openedTrades12h}</small></div>
+      <div><strong>{setup.setupLabel}</strong><small>全量评估 {setup.evaluations12h} · 原始触发 {setup.triggeredSignals12h} · 通过硬门 {setup.qualifiedSignals12h}</small><small>主候选 {setup.selectedSignals12h} · 入场拦截 {setup.blockedEntries12h} · 开仓 {setup.openedTrades12h}</small></div>
       <span>{setup.status}</span>
     </div>
     <div className="rz-strategy-numbers">
@@ -787,10 +800,10 @@ export default function ResonancePage() {
         {review?.setups?.length ? <div className="rz-strategy-grid">{review.setups.map((setup) => <StrategyPerformanceCard key={setup.setup} setup={setup} />)}</div> : <Empty>等待首轮策略统计</Empty>}
       </section>
 
-      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">12H REVIEW</span><h2>每12小时总结</h2></div><small>{review?.complete ? "上一周期" : "本周期进行中"}</small></div>
+      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">12H REVIEW</span><h2>每12小时总结</h2></div><small>{review?.complete ? "最近完整周期" : `运行中 · ${fmtDuration(review?.coverageMs)}`}</small></div>
         {review ? <article className="rz-panel rz-twelve-review">
           <div className="rz-review-title"><strong>{review.headline}</strong><small>{fmtTime(review.windowStartAt)} — {fmtTime(review.windowEndAt)}</small></div>
-          <div className="rz-metric-grid"><div className="rz-metric"><span>市场评估</span><b>{review.evaluations}</b></div><div className="rz-metric"><span>完整信号</span><b>{review.qualifiedSignals}</b></div><div className="rz-metric"><span>开 / 平仓</span><b>{review.openedTrades} / {review.closedTrades}</b></div><div className="rz-metric"><span>净结果</span><b className={review.netPnlUsdt < 0 ? "rz-negative" : "rz-positive"}>{fmtMoney(review.netPnlUsdt)}</b></div></div>
+          <div className="rz-metric-grid"><div className="rz-metric"><span>扫描轮次</span><b>{review.evaluations}</b></div><div className="rz-metric"><span>原始触发</span><b>{review.triggeredSignals}</b></div><div className="rz-metric"><span>通过硬门</span><b>{review.qualifiedSignals}</b></div><div className="rz-metric"><span>主候选</span><b>{review.selectedSignals}</b></div><div className="rz-metric"><span>入场拦截</span><b>{review.blockedEntries}</b></div><div className="rz-metric"><span>开 / 平仓</span><b>{review.openedTrades} / {review.closedTrades}</b></div><div className="rz-metric"><span>净结果</span><b className={review.netPnlUsdt < 0 ? "rz-negative" : "rz-positive"}>{fmtMoney(review.netPnlUsdt)}</b></div></div>
           <p><strong>下一步：</strong>{review.nextAction}</p>
         </article> : <Empty>首个12小时总结正在形成</Empty>}
       </section>

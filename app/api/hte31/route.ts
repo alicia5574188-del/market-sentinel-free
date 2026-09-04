@@ -60,8 +60,15 @@ function dashboardMarketView(readModel: Hte31ScanCompleted) {
 
 function buildTwelveHourReview(readModel: Hte31ScanCompleted | null, dashboard: Dashboard | null, now: number) {
   if (!readModel?.activity12h || !dashboard) return null;
-  const activity = readModel.activity12h.lastCompleted ?? readModel.activity12h.current;
-  const performanceWindow = readModel.activity12h.lastCompleted ? dashboard.setupWindows.previous : dashboard.setupWindows.current;
+  const completed = readModel.activity12h.lastCompleted;
+  const current = readModel.activity12h.current;
+  const hasTruthfulCounters = (row: typeof current | null) => Boolean(row
+    && Number.isFinite(row.coverageMs)
+    && Number.isFinite(row.triggeredSignals)
+    && row.setups.every((setup) => Number.isFinite(setup.triggeredSignals) && Number.isFinite(setup.selectedSignals)));
+  const activity = hasTruthfulCounters(completed) ? completed! : hasTruthfulCounters(current) ? current : null;
+  if (!activity) return null;
+  const performanceWindow = activity.complete ? dashboard.setupWindows.previous : dashboard.setupWindows.current;
   const setups = dashboard.setupPerformance.map((lifetime) => {
     const active = activity.setups.find((row) => row.setup === lifetime.setup);
     const windowed = performanceWindow.setups.find((row) => row.setup === lifetime.setup);
@@ -70,7 +77,10 @@ function buildTwelveHourReview(readModel: Hte31ScanCompleted | null, dashboard: 
       ...lifetime,
       status: currentStatus,
       evaluations12h: active?.evaluations ?? 0,
+      triggeredSignals12h: active?.triggeredSignals ?? 0,
       qualifiedSignals12h: active?.qualifiedSignals ?? 0,
+      selectedSignals12h: active?.selectedSignals ?? 0,
+      blockedEntries12h: active?.blockedEntries ?? 0,
       openedTrades12h: active?.openedTrades ?? 0,
       closedTrades12h: windowed?.sampleCount ?? 0,
       netPnl12h: windowed?.netPnlUsdt ?? 0,
@@ -82,7 +92,13 @@ function buildTwelveHourReview(readModel: Hte31ScanCompleted | null, dashboard: 
   const leader = [...setups].sort((left, right) => right.netPnl12h - left.netPnl12h)[0];
   const drag = [...setups].sort((left, right) => left.netPnl12h - right.netPnl12h)[0];
   const matureDrag = setups.find((row) => row.status === "拖后腿" && row.sampleCount >= 20);
-  const nextAction = matureDrag
+  const coveredMinutes = Math.floor(activity.coverageMs / 60_000);
+  const coverageLabel = coveredMinutes >= 60
+    ? `${Math.floor(coveredMinutes / 60)}小时${coveredMinutes % 60 ? `${coveredMinutes % 60}分钟` : ""}`
+    : `${coveredMinutes}分钟`;
+  const nextAction = !activity.complete
+    ? `本窗口已连续覆盖 ${coverageLabel}；满12小时后才形成正式总结，期间不据此调整策略。`
+    : matureDrag
     ? `${matureDrag.setupLabel} 已有 ${matureDrag.sampleCount} 个样本且仍为负期望；继续由完整12小时证据确认，满足连续弱势条件后按现有学习边界降权或暂停。`
     : "样本不足时不改策略；继续保留硬闸门，只让完整12小时独立证据进入后续学习。";
   return {
@@ -90,12 +106,18 @@ function buildTwelveHourReview(readModel: Hte31ScanCompleted | null, dashboard: 
     windowEndAt: activity.windowEndAt,
     generatedAt: now,
     complete: activity.complete,
+    coverageMs: activity.coverageMs,
     evaluations: activity.evaluations,
+    triggeredSignals: activity.triggeredSignals,
     qualifiedSignals: activity.qualifiedSignals,
+    selectedSignals: activity.selectedSignals,
+    blockedEntries: activity.blockedEntries,
     openedTrades: activity.openedTrades,
     closedTrades,
     netPnlUsdt,
-    headline: closedTrades
+    headline: !activity.complete
+      ? `统计形成中 · 已连续运行 ${coverageLabel}`
+      : closedTrades
       ? `${leader?.setupLabel ?? "策略"}贡献领先${drag && drag.netPnl12h < 0 ? `，${drag.setupLabel}拖累最多` : ""}`
       : activity.qualifiedSignals
         ? `出现 ${activity.qualifiedSignals} 次完整信号，等待订单形成结果`

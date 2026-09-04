@@ -1,5 +1,9 @@
 # Market Sentinel — Current System State
 
+> **2026-09-04 strategy-activity correction — release candidate.**
+>
+> The three core setups still use exactly the deployed v3 decision and risk rules. Activity now reports a truthful funnel for every setup on every deep scan: evaluated, setup-triggered, hard-gate-qualified, selected, entry-blocked, and opened. Scanner coverage is measured inside the existing Durable Object save; an incomplete startup window cannot be promoted or displayed as a completed 12-hour review. Legacy malformed activity is discarded on the first new scan. No D1 write, strategy threshold, position lifecycle, paper/live lineage, Gate control, or funding authority changes.
+
 > **2026-09-04 core-three resonance upgrade — production deployed.**
 >
 > `direct-market-brain-v3-resonance-three` keeps one Direct Market Brain and exactly three new-order setups: volume-force failed breakout, exhaustion reversal, and multi-timeframe comprehensive resonance. Dennis breakout remains historical only. The first two setups receive small evidence-floor relaxations while preserving completed-candle, liquidity, funding, macro, volatility, edge, portfolio, and fresh-entry checks; resonance requires aligned 15m/1h/4h direction, a completed 5m resume, adequate volume/spot flow, and anti-chase protection. The dashboard is now `大脑 / 订单 / 管理`: it ranks setup contribution, shows deterministic 12-hour operating reviews, keeps complete order review, and preserves Gate controls, Emergency Stop, paper reset, account, push, audit, and diagnostics. Scanner activity is accumulated inside the existing Durable Object runtime save and adds no recurring D1 write. PR `#129` deployed commit `0736a225`; workflow `33865500814` applied migration `0021`, deployed Worker `a998bdd9-1833-4535-9efd-22d4e82defc4`, passed asset/health checks, and proved the cutover completed with zero legacy open paper positions. Gate/live remained untouched.
