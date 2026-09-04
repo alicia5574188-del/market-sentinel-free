@@ -79,7 +79,7 @@ jobs:
           ready=0
           for attempt in {1..12}; do
             code="$(curl -sS --max-time 10 -o /tmp/release-page.js -w '%{http_code}' "$base/assets/$expected_asset" || true)"
-            if [[ "$code" == "200" ]] && grep -q '三套核心打法' /tmp/release-page.js && grep -q '成交额前十五' /tmp/release-page.js; then
+            if [[ "$code" == "200" ]] && grep -q 'direct-market-brain-v3-resonance-three' /tmp/release-page.js && grep -q '每12小时总结' /tmp/release-page.js; then
               ready=1
               break
             fi

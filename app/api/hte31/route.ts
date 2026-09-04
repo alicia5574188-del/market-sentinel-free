@@ -58,6 +58,53 @@ function dashboardMarketView(readModel: Hte31ScanCompleted) {
   };
 }
 
+function buildTwelveHourReview(readModel: Hte31ScanCompleted | null, dashboard: Dashboard | null, now: number) {
+  if (!readModel?.activity12h || !dashboard) return null;
+  const activity = readModel.activity12h.lastCompleted ?? readModel.activity12h.current;
+  const performanceWindow = readModel.activity12h.lastCompleted ? dashboard.setupWindows.previous : dashboard.setupWindows.current;
+  const setups = dashboard.setupPerformance.map((lifetime) => {
+    const active = activity.setups.find((row) => row.setup === lifetime.setup);
+    const windowed = performanceWindow.setups.find((row) => row.setup === lifetime.setup);
+    const currentStatus = !active?.evaluations && lifetime.sampleCount === 0 ? "暂无机会" : lifetime.status;
+    return {
+      ...lifetime,
+      status: currentStatus,
+      evaluations12h: active?.evaluations ?? 0,
+      qualifiedSignals12h: active?.qualifiedSignals ?? 0,
+      openedTrades12h: active?.openedTrades ?? 0,
+      closedTrades12h: windowed?.sampleCount ?? 0,
+      netPnl12h: windowed?.netPnlUsdt ?? 0,
+      leadingBlocker12h: active?.leadingBlocker ?? null,
+    };
+  });
+  const closedTrades = performanceWindow.setups.reduce((sum, row) => sum + row.sampleCount, 0);
+  const netPnlUsdt = performanceWindow.setups.reduce((sum, row) => sum + row.netPnlUsdt, 0);
+  const leader = [...setups].sort((left, right) => right.netPnl12h - left.netPnl12h)[0];
+  const drag = [...setups].sort((left, right) => left.netPnl12h - right.netPnl12h)[0];
+  const matureDrag = setups.find((row) => row.status === "拖后腿" && row.sampleCount >= 20);
+  const nextAction = matureDrag
+    ? `${matureDrag.setupLabel} 已有 ${matureDrag.sampleCount} 个样本且仍为负期望；继续由完整12小时证据确认，满足连续弱势条件后按现有学习边界降权或暂停。`
+    : "样本不足时不改策略；继续保留硬闸门，只让完整12小时独立证据进入后续学习。";
+  return {
+    windowStartAt: activity.windowStartAt,
+    windowEndAt: activity.windowEndAt,
+    generatedAt: now,
+    complete: activity.complete,
+    evaluations: activity.evaluations,
+    qualifiedSignals: activity.qualifiedSignals,
+    openedTrades: activity.openedTrades,
+    closedTrades,
+    netPnlUsdt,
+    headline: closedTrades
+      ? `${leader?.setupLabel ?? "策略"}贡献领先${drag && drag.netPnl12h < 0 ? `，${drag.setupLabel}拖累最多` : ""}`
+      : activity.qualifiedSignals
+        ? `出现 ${activity.qualifiedSignals} 次完整信号，等待订单形成结果`
+        : "本周期仍在等待高质量机会",
+    nextAction,
+    setups,
+  };
+}
+
 function resolveReadResult<T>(
   key: string,
   result: ReadResult<T>,
@@ -122,9 +169,10 @@ export async function GET(request: Request) {
   if (scannerStatus?.lastError) errors.scannerRuntime = scannerStatus.lastError;
   if (positionStatus?.lastError) errors.positionRuntime = positionStatus.lastError;
   const displayReadModel = readModel ? { ...readModel, marketView: dashboardMarketView(readModel) } : null;
+  const twelveHourReview = buildTwelveHourReview(readModel, dashboard, requestedAt);
 
   return Response.json({
-    version: "direct-market-brain-v2-core-three",
+    version: "direct-market-brain-v3-resonance-three",
     requestedAt,
     observedAt: lastSuccessAt ?? requestedAt,
     account: auth.account,
@@ -140,6 +188,7 @@ export async function GET(request: Request) {
       openReason: readModel.openReason,
     } : null,
     dashboard,
+    twelveHourReview,
     diagnostics: null,
     staleSources,
     degraded: Object.keys(errors).length > 0,

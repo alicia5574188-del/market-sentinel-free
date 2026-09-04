@@ -1,5 +1,17 @@
 # Status
 
+## Core-three resonance dashboard — locally verified, release pending
+
+- Branch: `feat/core-three-resonance-dashboard`, based on production `main` `394df43`.
+- New authority version: `direct-market-brain-v3-resonance-three`. The three new-order setups are volume-force failed breakout, exhaustion reversal, and multi-timeframe comprehensive resonance; Dennis is historical only.
+- Added current-version per-setup performance, Scanner-owned fixed 12-hour activity buckets, deterministic review/next action, and setup identity on paper order cards. No LLM runtime or recurring D1 write was added.
+- Replaced the five abstract/operator tabs with `大脑 / 订单 / 管理`; detailed decision evidence is collapsed, and complete review, reset, Gate credentials/control/reconciliation/Emergency Stop, account, push, audit, and runtime diagnostics remain reachable.
+- Major paper cutover is declared by additive migration `0021`; the existing fresh-quote `version_reset` lifecycle will archive old paper positions and start a clean epoch. Gate/live remains untouched.
+- Verification: Direct/performance/architecture 23/23; focused UI/migration/Must-Keep 45/45; strategy/risk/migration 224/224; production build/UI/safety 112/112; ESLint, TypeScript, build, and `git diff --check` passed.
+- Local Wrangler dry-run could not start because the environment network-approval layer cancelled network access; remote GitHub CI remains the mandatory dry-run, migration, deploy, D1 cutover, immutable-asset, and production-health gate.
+- Next: inspect final diff, commit, push one PR, merge only after green CI, then record production proof.
+- Updated UTC: 2026-09-04.
+
 ## Automatic major-version cutover — production deployed
 
 - Branch: `feat/automatic-strategy-cutover`, based on deployed `main` `aa4e461`.

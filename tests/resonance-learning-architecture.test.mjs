@@ -84,10 +84,10 @@ test("whole market and current-symbol judgment are separate decision layers", ()
   assert.match(scanner, /buildResonanceGlobalMarket/);
   assert.match(scanner, /buildDirectMarketCandidate/);
   assert.match(directBrain, /location\(candles, price\)/);
-  assert.match(directBrain, /const trendAligned = \[trend15m, trend1h, trend4h\]/);
+  assert.match(directBrain, /const resonanceAligned = \[trend15m, trend1h, trend4h\]/);
   assert.match(directBrain, /VOLUME_FORCE_FAILED_BREAKOUT/);
   assert.match(directBrain, /EXHAUSTION_REVERSAL/);
-  assert.match(directBrain, /DENNIS_TREND_BREAKOUT/);
+  assert.match(directBrain, /MULTI_TIMEFRAME_RESONANCE/);
 });
 
 test("cognitive directives can alter direction entry routing and exit space without widening hard risk", () => {

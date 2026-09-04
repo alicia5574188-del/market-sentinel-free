@@ -175,7 +175,7 @@ export default function ResonanceOperatorControls() {
     {open && <div className="rz-operator-backdrop" role="presentation" onClick={() => setOpen(false)}>
       <section className="rz-operator-drawer" role="dialog" aria-modal="true" aria-label="账户、通知与安全审计" onClick={(event) => event.stopPropagation()}>
         <div className="rz-operator-head">
-          <div><span>必须保留功能</span><strong>账户与通知</strong></div>
+          <div><span>账户中心</span><strong>账户与通知</strong></div>
           <button type="button" onClick={() => setOpen(false)} aria-label="关闭">关闭</button>
         </div>
 

@@ -24,6 +24,9 @@ test("new-entry scanner has no legacy strategy authority or high-frequency D1 wr
   assert.match(worker, /SCANNER_CYCLE_INTERVAL_MS = 25_000/);
   assert.match(worker, /fetchGatePositionQuotes/);
   assert.match(execution, /validateDirectMarketEntry/);
+  assert.match(worker, /recordTwelveHourActivity/);
+  assert.match(worker, /activity12h/);
+  assert.match(repository, /buildDirectSetupPerformance/);
 });
 
 test("adaptive position decisions use completed candles without adding periodic D1 writes", () => {
@@ -53,10 +56,11 @@ test("live entry accepts only the exact direct-brain simulated lineage", () => {
   assert.match(liveRepository, /row\.decisionAuthority === "direct_market_brain"/);
 });
 
-test("phone UI exposes fifteen-coin radar without legacy strategy center copy", () => {
-  assert.match(page, /成交额前十五/);
-  assert.match(page, /<DirectRadarCard/);
-  assert.match(page, /const NAV: Tab\[\] = \["机会", "雷达", "订单", "实盘", "设置"\]/);
+test("phone UI exposes direct brain contribution and review without an abstract radar page", () => {
+  assert.match(page, /谁在发力，谁在拖后腿/);
+  assert.match(page, /每12小时总结/);
+  assert.match(page, /<DecisionEvidenceCard/);
+  assert.match(page, /const NAV: Tab\[\] = \["大脑", "订单", "管理"\]/);
   const rendered = page.slice(page.indexOf("return <main"));
-  assert.doesNotMatch(rendered, /9 个家族|13 个独立变体|策略中心/);
+  assert.doesNotMatch(rendered, /9 个家族|13 个独立变体|策略中心|市场雷达|成交额前十五/);
 });

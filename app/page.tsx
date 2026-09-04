@@ -7,7 +7,7 @@ import {
   hte31CanonicalStrategyLabel,
 } from "../lib/hte31-strategy-catalog";
 
-type Tab = "机会" | "雷达" | "订单" | "实盘" | "设置";
+type Tab = "大脑" | "订单" | "管理";
 type TraderId = "dennis_trend" | "raschke_pullback" | "turtle_soup" | "exhaustion_reversal" | "higher_timeframe_swing" | "dennis_trend_v2" | "raschke_pullback_v2" | "turtle_soup_v2" | "higher_timeframe_swing_v2" | "range_rotation" | "compression_expansion" | "relative_strength" | "momentum_continuation";
 type Side = "LONG" | "SHORT" | "WAIT";
 
@@ -47,6 +47,7 @@ type Trade = {
   symbol: string;
   status: "holding" | "closed";
   traderId: TraderId | "direct_market_brain";
+  setupId: string;
   decisionAuthority?: string;
   brainVersion?: string | null;
   side: "LONG" | "SHORT";
@@ -134,7 +135,6 @@ type Snapshot = {
       marketView?: MarketView;
       openReason?: string;
       directCandidate?: DirectCandidate;
-      directRadar?: DirectRadarItem[];
     } | null;
   };
   position: { status: SchedulerStatus | null };
@@ -149,6 +149,7 @@ type Snapshot = {
     requiredConfirmations?: number;
   } | null;
   dashboard: Dashboard | null;
+  twelveHourReview: TwelveHourReview | null;
   staleSources?: string[];
   degraded: boolean;
   errors: Record<string, string>;
@@ -218,6 +219,7 @@ type DirectCandidate = {
   freshness: "FRESH" | "STALE" | "UNAVAILABLE";
   scanStage: "LIGHT" | "DEEP";
   volumeRank: number;
+  volumeUsd: number;
   riskClusterId: string;
   btcCorrelation: number | null;
   location: "TOP" | "MIDDLE" | "BOTTOM" | "BREAKOUT" | "BREAKDOWN";
@@ -225,7 +227,7 @@ type DirectCandidate = {
   directionalScore: number;
   netEdgeR: number;
   confidence: number;
-  setup: "VOLUME_FORCE_FAILED_BREAKOUT" | "EXHAUSTION_REVERSAL" | "DENNIS_TREND_BREAKOUT";
+  setup: "VOLUME_FORCE_FAILED_BREAKOUT" | "EXHAUSTION_REVERSAL" | "MULTI_TIMEFRAME_RESONANCE";
   setupLabel: string;
   setupScore: number;
   decision: Side;
@@ -238,15 +240,43 @@ type DirectCandidate = {
   maxHoldingMinutes: number;
 };
 
-type DirectRadarItem = {
-  symbol: string;
-  observedAt: number;
-  volumeRank: number;
-  volumeUsd: number;
-  changePercentage: number;
-  scanStage: "LIGHT" | "DEEP";
-  freshness: "FRESH" | "STALE" | "UNAVAILABLE";
-  candidate: DirectCandidate | null;
+type SetupReview = {
+  setup: DirectCandidate["setup"];
+  setupLabel: string;
+  status: "发力" | "正常" | "观察" | "拖后腿" | "暂无机会";
+  openedTrades: number;
+  openTrades: number;
+  sampleCount: number;
+  wins: number;
+  scratches: number;
+  losses: number;
+  winRate: number | null;
+  netPnlUsdt: number;
+  averageR: number | null;
+  profitFactor: number | null;
+  maxDrawdownR: number;
+  maxLosingStreak: number;
+  evaluations12h: number;
+  qualifiedSignals12h: number;
+  openedTrades12h: number;
+  closedTrades12h: number;
+  netPnl12h: number;
+  leadingBlocker12h: string | null;
+};
+
+type TwelveHourReview = {
+  windowStartAt: number;
+  windowEndAt: number;
+  generatedAt: number;
+  complete: boolean;
+  evaluations: number;
+  qualifiedSignals: number;
+  openedTrades: number;
+  closedTrades: number;
+  netPnlUsdt: number;
+  headline: string;
+  nextAction: string;
+  setups: SetupReview[];
 };
 
 type LiveOrder = {
@@ -291,7 +321,7 @@ type LiveSnapshot = {
   error?: string;
 };
 
-const NAV: Tab[] = ["机会", "雷达", "订单", "实盘", "设置"];
+const NAV: Tab[] = ["大脑", "订单", "管理"];
 const MAIN_REFRESH_MS = 30_000;
 const SNAPSHOT_STORAGE_KEY = "resonance:last-trustworthy-snapshot:v1";
 
@@ -336,6 +366,20 @@ function sideText(value: Side) {
   return value === "LONG" ? "做多" : value === "SHORT" ? "做空" : "等待";
 }
 
+function setupLabel(value: string) {
+  return ({
+    VOLUME_FORCE_FAILED_BREAKOUT: "量价力度假突破",
+    EXHAUSTION_REVERSAL: "衰竭反转",
+    MULTI_TIMEFRAME_RESONANCE: "多周期综合共振",
+  } as Record<string, string>)[value] ?? value;
+}
+
+function tradeStrategyLabel(trade: Trade) {
+  return trade.decisionAuthority === "direct_market_brain"
+    ? setupLabel(trade.setupId)
+    : hte31CanonicalStrategyLabel(trade.traderId, trade.assetRegime);
+}
+
 const OPERATOR_TEXT_REPLACEMENTS = ([
   ...HTE31_TRADER_DEFINITIONS.map((item): [string, string] => [item.id, hte31CanonicalStrategyLabel(item.id)]),
   ["trend_breakout_challenger", "SF01 趋势突破 / 接受回踩 [HT1-R]"],
@@ -377,21 +421,18 @@ async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
   return payload;
 }
 
-function DirectRadarCard({ item, expanded }: { item: DirectRadarItem; expanded: boolean }) {
-  const candidate = item.candidate;
-  const side = candidate?.decision ?? "WAIT";
-  return <article className={`rz-panel rz-radar ${expanded ? "rz-direct-expanded" : ""}`}>
+function DecisionEvidenceCard({ candidate }: { candidate: DirectCandidate }) {
+  const side = candidate.decision;
+  return <article className="rz-panel rz-radar rz-direct-expanded">
     <div>
-      <strong>#{item.volumeRank} {item.symbol.replace("_USDT", "")}</strong>
-      <small>{item.scanStage === "DEEP" ? "深扫" : "轻扫"} · 24h成交额 {(item.volumeUsd / 1_000_000).toFixed(0)}M · {item.freshness}</small>
+      <strong>#{candidate.volumeRank} {candidate.symbol.replace("_USDT", "")}</strong>
+      <small>当前判断证据 · 24h成交额 {(candidate.volumeUsd / 1_000_000).toFixed(0)}M · {candidate.freshness}</small>
     </div>
-    <Bias value={side === "WAIT" ? "NEUTRAL" : side} confidence={candidate?.confidence} />
+    <Bias value={side === "WAIT" ? "NEUTRAL" : side} confidence={candidate.confidence} />
     <div className="rz-radar-reason">
-      {candidate
-        ? `${candidate.setupLabel} · ${candidate.location} · 上 ${candidate.paths.up.toFixed(1)}% / 下 ${candidate.paths.down.toFixed(1)}% / 震荡或失效 ${candidate.paths.rangeOrInvalid.toFixed(1)}%`
-        : `24h ${item.changePercentage >= 0 ? "+" : ""}${item.changePercentage.toFixed(2)}% · 等待深扫`}
+      {candidate.setupLabel} · ${candidate.location} · 上 ${candidate.paths.up.toFixed(1)}% / 下 ${candidate.paths.down.toFixed(1)}% / 震荡或失效 ${candidate.paths.rangeOrInvalid.toFixed(1)}%
     </div>
-    {expanded && candidate && <div className="rz-signal-detail">
+    <div className="rz-signal-detail">
       <div className="rz-signal-levels">
         <div><span>核心打法</span><b>{candidate.setupLabel}</b></div>
         <div><span>打法评分</span><b>{candidate.setupScore.toFixed(0)}</b></div>
@@ -412,7 +453,24 @@ function DirectRadarCard({ item, expanded }: { item: DirectRadarItem; expanded: 
         <section className="rz-signal-block"><strong>反证 / 缺失条件</strong><p>{candidate.counterEvidence.join("；") || "当前未发现硬性反证。"}</p></section>
       </div>
       <section className="rz-signal-block"><strong>失效条件</strong><p>价格触及 {fmtPrice(candidate.invalidationPrice)}，或任一必需硬闸门失效。</p></section>
-    </div>}
+    </div>
+  </article>;
+}
+
+function StrategyPerformanceCard({ setup }: { setup: SetupReview }) {
+  const tone = setup.status === "发力" ? "power" : setup.status === "拖后腿" ? "drag" : setup.status === "观察" ? "watch" : "quiet";
+  return <article className={`rz-panel rz-strategy-performance ${tone}`}>
+    <div className="rz-strategy-head">
+      <div><strong>{setup.setupLabel}</strong><small>12小时评估 {setup.evaluations12h} · 完整信号 {setup.qualifiedSignals12h} · 开仓 {setup.openedTrades12h}</small></div>
+      <span>{setup.status}</span>
+    </div>
+    <div className="rz-strategy-numbers">
+      <div><span>总样本 / 胜率</span><b>{setup.sampleCount} / {setup.winRate == null ? "--" : `${setup.winRate.toFixed(0)}%`}</b></div>
+      <div><span>累计贡献</span><b className={setup.netPnlUsdt < 0 ? "rz-negative" : "rz-positive"}>{fmtMoney(setup.netPnlUsdt)}</b></div>
+      <div><span>平均结果 / PF</span><b>{fmtR(setup.averageR)} / {setup.profitFactor == null ? "--" : setup.profitFactor >= 99 ? "∞" : setup.profitFactor.toFixed(2)}</b></div>
+      <div><span>最大回撤 / 连亏</span><b>{setup.maxDrawdownR.toFixed(2)}R / {setup.maxLosingStreak}</b></div>
+    </div>
+    <p>{setup.leadingBlocker12h ? `主要等待原因：${setup.leadingBlocker12h}` : setup.sampleCount < 8 ? `样本不足 · ${setup.sampleCount}/8，暂不调整策略。` : `胜 / 平 / 负：${setup.wins} / ${setup.scratches} / ${setup.losses}`}</p>
   </article>;
 }
 
@@ -501,7 +559,7 @@ function TradeCard({ trade, roundTripCostBps }: { trade: Trade; roundTripCostBps
   return <article className="rz-panel rz-order">
     <button className="rz-order-button" type="button" onClick={() => void toggle()}>
       <div className="rz-order-head">
-        <div className="rz-order-symbol"><strong>{trade.symbol.replace("_USDT", "")}</strong><small>{hte31CanonicalStrategyLabel(trade.traderId, trade.assetRegime)}</small></div>
+        <div className="rz-order-symbol"><strong>{trade.symbol.replace("_USDT", "")}</strong><small>{tradeStrategyLabel(trade)}</small></div>
         <div className="rz-order-side"><span className={`rz-bias ${trade.side === "LONG" ? "long" : "short"}`}>{sideText(trade.side)}</span><div className={`rz-order-pnl ${(pnl ?? 0) < 0 ? "rz-negative" : "rz-positive"}`}>{fmtMoney(pnl)}</div></div>
       </div>
       <div className="rz-econ-grid">
@@ -527,7 +585,7 @@ function TradeCard({ trade, roundTripCostBps }: { trade: Trade; roundTripCostBps
 }
 
 export default function ResonancePage() {
-  const [tab, setTab] = useState<Tab>("机会");
+  const [tab, setTab] = useState<Tab>("大脑");
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [live, setLive] = useState<LiveSnapshot | null>(null);
   const [error, setError] = useState("");
@@ -601,7 +659,7 @@ export default function ResonancePage() {
   }, [refreshMain]);
 
   useEffect(() => {
-    if (tab !== "实盘") return;
+    if (tab !== "管理") return;
     const kickoff = window.setTimeout(() => void refreshLive(), 0);
     const timer = window.setInterval(() => void refreshLive(), 20_000);
     return () => {
@@ -691,10 +749,11 @@ export default function ResonancePage() {
 
   const activeLiveOrders = live?.orders.filter((order) => ["submitting", "open", "protected", "closing"].includes(order.state)) ?? [];
   const scanner = snapshot?.scanner.status;
-  return <main className="rz-shell">
+  const review = snapshot?.twelveHourReview;
+  return <main className="rz-shell" data-release="direct-market-brain-v3-resonance-three">
     <header className="rz-header">
       <div className="rz-mark">R</div>
-      <div className="rz-brand"><strong>Resonance</strong><small>三套核心打法 · 模拟学习</small></div>
+      <div className="rz-brand"><strong>Resonance</strong><small>大脑决策 · 三策略贡献 · 12小时复盘</small></div>
       <i className={`rz-health ${healthBad ? "bad" : healthWarn ? "warn" : ""}`} />
     </header>
 
@@ -702,9 +761,9 @@ export default function ResonancePage() {
     {refreshWarning && <div className="rz-banner warn">{refreshWarning}</div>}
     {message && <div className="rz-banner">{message}</div>}
 
-    {tab === "机会" && <div className="rz-stack">
+    {tab === "大脑" && <div className="rz-stack">
       <section className="rz-section">
-        <div className="rz-section-head"><div><span className="rz-eyebrow">现在怎么看</span><h2>市场判断</h2></div><small>{fmtTime(snapshot?.observedAt)}</small></div>
+        <div className="rz-section-head"><div><span className="rz-eyebrow">BRAIN</span><h2>大脑决定</h2></div><small>{fmtTime(snapshot?.observedAt)}</small></div>
         <article className="rz-panel rz-hero">
           <div className="rz-hero-top">
             <div className="rz-hero-copy"><Bias value={marketView?.bias ?? "NEUTRAL"} confidence={marketView?.confidence ?? 0} /><h1>{marketView?.headline ?? "正在建立市场判断"}</h1><p>{marketView?.reason ?? "等待新一轮扫描完成。"}</p></div>
@@ -719,10 +778,24 @@ export default function ResonancePage() {
             <div><span>目标 1</span><b>{fmtPrice(readModel.directCandidate.targets[0])}</b></div>
             <div><span>目标 2</span><b>{fmtPrice(readModel.directCandidate.targets[1])}</b></div>
           </div>}
+          <p className="rz-brain-reason"><strong>执行结论：</strong>{readModel?.openReason ?? "等待完整市场证据。"}</p>
         </article>
+        {readModel?.directCandidate && <details className="rz-decision-detail"><summary>查看这次决定的证据、反证和失效条件</summary><DecisionEvidenceCard candidate={readModel.directCandidate} /></details>}
       </section>
 
-      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">模拟账户</span><h2>资金状态</h2></div><button className="rz-text-action" type="button" onClick={() => setTab("设置")}>资金设置</button></div>
+      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">CONTRIBUTION</span><h2>谁在发力，谁在拖后腿</h2></div><small>当前版本</small></div>
+        {review?.setups?.length ? <div className="rz-strategy-grid">{review.setups.map((setup) => <StrategyPerformanceCard key={setup.setup} setup={setup} />)}</div> : <Empty>等待首轮策略统计</Empty>}
+      </section>
+
+      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">12H REVIEW</span><h2>每12小时总结</h2></div><small>{review?.complete ? "上一周期" : "本周期进行中"}</small></div>
+        {review ? <article className="rz-panel rz-twelve-review">
+          <div className="rz-review-title"><strong>{review.headline}</strong><small>{fmtTime(review.windowStartAt)} — {fmtTime(review.windowEndAt)}</small></div>
+          <div className="rz-metric-grid"><div className="rz-metric"><span>市场评估</span><b>{review.evaluations}</b></div><div className="rz-metric"><span>完整信号</span><b>{review.qualifiedSignals}</b></div><div className="rz-metric"><span>开 / 平仓</span><b>{review.openedTrades} / {review.closedTrades}</b></div><div className="rz-metric"><span>净结果</span><b className={review.netPnlUsdt < 0 ? "rz-negative" : "rz-positive"}>{fmtMoney(review.netPnlUsdt)}</b></div></div>
+          <p><strong>下一步：</strong>{review.nextAction}</p>
+        </article> : <Empty>首个12小时总结正在形成</Empty>}
+      </section>
+
+      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">模拟账户</span><h2>资金状态</h2></div><button className="rz-text-action" type="button" onClick={() => setTab("管理")}>资金设置</button></div>
         <div className="rz-metric-grid">
           <div className="rz-metric"><span>权益</span><b>{fmtMoney(dashboard?.account.equityUsdt)}</b></div>
           <div className="rz-metric"><span>已实现</span><b className={(dashboard?.account.realizedPnlUsdt ?? 0) < 0 ? "rz-negative" : "rz-positive"}>{fmtMoney(dashboard?.account.realizedPnlUsdt)}</b></div>
@@ -733,17 +806,7 @@ export default function ResonancePage() {
       </section>
 
       <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">正在做什么</span><h2>当前持仓</h2></div><small>{dashboard?.openTrades.length ?? 0} 笔</small></div>
-        {dashboard?.openTrades.length ? <div className="rz-list">{dashboard.openTrades.slice(0, 5).map((trade) => <div className="rz-panel rz-position-preview" key={trade.id}><div><strong>{trade.symbol.replace("_USDT", "")}</strong><small>{hte31CanonicalStrategyLabel(trade.traderId, trade.assetRegime)} · {sideText(trade.side)}</small></div><div className={(trade.unrealizedNetUsdt ?? 0) < 0 ? "rz-negative" : "rz-positive"}><strong>{fmtMoney(trade.unrealizedNetUsdt)}</strong></div></div>)}</div> : <Empty>当前没有模拟持仓</Empty>}
-      </section>
-    </div>}
-
-    {tab === "雷达" && <div className="rz-stack">
-      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">整体市场</span><h2>{snapshot?.market?.label ?? "等待市场状态"}</h2></div><Bias value={snapshot?.market?.bias ?? "NEUTRAL"} confidence={snapshot?.market?.confidence ?? 0} /></div>
-        <div className="rz-metric-grid"><div className="rz-metric"><span>扫描范围</span><b>15 币</b></div><div className="rz-metric"><span>深扫池</span><b>6 币</b></div><div className="rz-metric"><span>持仓上限</span><b>3 笔</b></div><div className="rz-metric"><span>当前深扫</span><b>{readModel?.target?.replace("_USDT", "") ?? "--"}</b></div></div>
-        {snapshot?.market?.pendingLabel && <p className="rz-copy">检测到候选变化：{snapshot.market.pendingLabel}，确认 {snapshot.market.pendingConfirmations ?? 0}/{snapshot.market.requiredConfirmations ?? 0}，正式市场状态尚未翻转。</p>}
-      </section>
-      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">市场雷达</span><h2>成交额前十五</h2></div><small>前三展开</small></div>
-        {readModel?.directRadar?.length ? <div className="rz-list">{readModel.directRadar.map((item, index) => <DirectRadarCard key={item.symbol} item={item} expanded={index < 3} />)}</div> : <Empty>等待首轮十五币扫描</Empty>}
+        {dashboard?.openTrades.length ? <div className="rz-list">{dashboard.openTrades.slice(0, 5).map((trade) => <div className="rz-panel rz-position-preview" key={trade.id}><div><strong>{trade.symbol.replace("_USDT", "")}</strong><small>{tradeStrategyLabel(trade)} · {sideText(trade.side)}</small></div><div className={(trade.unrealizedNetUsdt ?? 0) < 0 ? "rz-negative" : "rz-positive"}><strong>{fmtMoney(trade.unrealizedNetUsdt)}</strong></div></div>)}</div> : <Empty>当前没有模拟持仓</Empty>}
       </section>
     </div>}
 
@@ -756,7 +819,7 @@ export default function ResonancePage() {
       {(dashboard?.archiveCount ?? 0) > 0 && <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">ARCHIVE</span><h2>历史归档</h2></div><button className="rz-text-action" type="button" onClick={() => setArchiveOpen((value) => !value)}>{archiveOpen ? "收起" : `查看 ${dashboard?.archiveCount ?? 0} 笔`}</button></div>{archiveOpen && <div className="rz-list">{dashboard?.archivedTrades.map((trade) => <TradeCard key={trade.id} trade={trade} roundTripCostBps={dashboard.settings.roundTripCostBps} />)}</div>}</section>}
     </div>}
 
-    {tab === "实盘" && <div className="rz-stack">
+    {tab === "管理" && <div className="rz-stack">
       {liveError && <div className="rz-banner bad">{liveError}</div>}
       {live?.control.lastError && <div className="rz-banner bad">实盘控制：{live.control.lastError}</div>}
       {live?.control.emergencyReason && <div className="rz-banner bad">紧急停机锁：{live.control.emergencyReason}</div>}
@@ -779,13 +842,13 @@ export default function ResonancePage() {
       <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">紧急控制</span><h2>停机</h2></div></div><article className="rz-panel"><p className="rz-copy">只有真正需要立即停止实盘新开仓和执行紧急保护时才使用。</p><button className={`rz-button danger rz-hold-button ${emergencyHolding ? "holding" : ""}`} onPointerDown={(event) => { event.preventDefault(); startEmergency(); }} onPointerUp={cancelEmergency} onPointerCancel={cancelEmergency} onPointerLeave={cancelEmergency} onContextMenu={(event) => event.preventDefault()} onDragStart={(event) => event.preventDefault()}>{emergencyHolding ? "继续按住…" : "按住 1.2 秒紧急停机"}</button></article></section>
     </div>}
 
-    {tab === "设置" && <div className="rz-stack">
-      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">运行状态</span><h2>系统设置</h2></div><button className="rz-text-action" type="button" onClick={() => setTab("机会")}>返回机会</button></div><article className="rz-panel">
+    {tab === "管理" && <div className="rz-stack rz-management-settings">
+      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">运行状态</span><h2>系统设置</h2></div><button className="rz-text-action" type="button" onClick={() => setTab("大脑")}>返回大脑</button></div><article className="rz-panel">
         <div className="rz-metric-grid"><div className="rz-metric"><span>Scanner</span><b>{scanner?.state ?? "--"}</b></div><div className="rz-metric"><span>当前阶段</span><b>{scanner?.phase ?? "idle"}</b></div><div className="rz-metric"><span>最近扫描</span><b>{fmtTime(scanner?.lastSuccessAt)}</b></div><div className="rz-metric"><span>Trade Manager</span><b>{snapshot?.position.status?.state ?? "--"}</b></div></div>
         {(scanner?.lastError || scanner?.circuitOpen || (ageSeconds != null && ageSeconds > 90)) && <div className="rz-runtime-alert"><strong>运行异常</strong><span>{scanner?.lastError ?? `已 ${ageSeconds} 秒没有完成新评估`}{scanner?.retryAfter ? ` · ${fmtTime(scanner.retryAfter)} 重试` : ""}</span></div>}
         <div className="rz-actions"><button onClick={toggleScan}>{dashboard?.settings.scanEnabled ? "暂停市场扫描" : "恢复市场扫描"}</button></div>
       </article></section>
-      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">交易核心</span><h2>只保留三套打法</h2></div></div><article className="rz-panel"><div className="rz-metric-grid"><div className="rz-metric"><span>高频机会</span><b>量价力度假突破</b></div><div className="rz-metric"><span>极端机会</span><b>衰竭反转</b></div><div className="rz-metric"><span>低频基线</span><b>经典趋势突破</b></div><div className="rz-metric"><span>最大持仓</span><b>3 笔</b></div></div></article></section>
+      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">交易核心</span><h2>三套互补打法</h2></div></div><article className="rz-panel"><div className="rz-metric-grid"><div className="rz-metric"><span>边界反转</span><b>量价力度假突破</b></div><div className="rz-metric"><span>极端反转</span><b>衰竭反转</b></div><div className="rz-metric"><span>顺势参与</span><b>多周期综合共振</b></div><div className="rz-metric"><span>最大持仓</span><b>3 笔</b></div></div></article></section>
       <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">模拟资金</span><h2>重新开始资金曲线</h2></div></div><article className="rz-panel"><div className="rz-metric-grid"><div className="rz-metric"><span>本轮本金</span><b>{fmtMoney(dashboard?.account.startingCapitalUsdt)}</b></div><div className="rz-metric"><span>当前权益</span><b>{fmtMoney(dashboard?.account.equityUsdt)}</b></div><div className="rz-metric"><span>开始时间</span><b>{fmtTime(dashboard?.account.epochStartedAt)}</b></div><div className="rz-metric"><span>本轮已平仓</span><b>{dashboard?.stats.sampleCount ?? 0}</b></div></div>{dashboard?.paperReset.status === "pending" && <p className="rz-copy">待重置 · 剩余 {dashboard.paperReset.openPositions} 笔持仓</p>}<div className="rz-actions"><button className="danger" disabled={dashboard?.paperReset.status === "pending"} onClick={() => void resetPaper()}>{dashboard?.paperReset.status === "pending" ? "等待持仓结束" : "重置模拟本金"}</button></div></article></section>
     </div>}
 

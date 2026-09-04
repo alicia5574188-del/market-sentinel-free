@@ -132,51 +132,76 @@ function evaluateCoreSetups(packet: MarketAnalysisPacket, candles: Hte31Candle[]
   const lowSweep = previous.low < priorLow && last.close > priorLow && last.close > previous.close;
   const failedSide = lowSweep ? "LONG" as const : "SHORT" as const;
   const failedFlow = signed(flow, failedSide);
-  const failedVolume = currentVolumeRatio >= 1.05;
-  const failedForce = failedFlow >= 0.012 || signed(packet.market.orderBookImbalance, failedSide) >= 0.04;
+  const failedVolume = currentVolumeRatio >= 1.0;
+  const failedForce = failedFlow >= 0.010 || signed(packet.market.orderBookImbalance, failedSide) >= 0.035;
   const failedTrigger = (highSweep || lowSweep) && failedVolume && failedForce;
   const failedScore = clamp(35 + (highSweep || lowSweep ? 28 : 0) + Math.min(18, currentVolumeRatio * 8) + Math.min(19, Math.max(0, failedFlow) * 240), 0, 100);
 
-  const upBreakout = last.close > priorHigh && last.close > last.open;
-  const downBreakout = last.close < priorLow && last.close < last.open;
-  const trendSide = downBreakout ? "SHORT" as const : "LONG" as const;
-  const trendAligned = [trend15m, trend1h, trend4h].filter((value) => signed(value, trendSide) >= 0.10).length;
-  const trendFlow = signed(flow, trendSide);
-  const trendOverheated = trendSide === "LONG"
+  const weightedTrend = trend15m * 0.25 + trend1h * 0.35 + trend4h * 0.40;
+  const resonanceSide = weightedTrend < 0 ? "SHORT" as const : "LONG" as const;
+  const resonanceAligned = [trend15m, trend1h, trend4h].filter((value) => signed(value, resonanceSide) >= 0.08).length;
+  const higherTimeframeConflict = signed(trend1h, resonanceSide) < -0.08 || signed(trend4h, resonanceSide) < -0.08;
+  const fiveMinuteConfirmation = resonanceSide === "LONG"
+    ? last.close > last.open && last.close > previous.close
+    : last.close < last.open && last.close < previous.close;
+  const fiveMinuteResume = resonanceSide === "LONG"
+    ? last.close > mean(rows.slice(-8).map((row) => row.close))
+    : last.close < mean(rows.slice(-8).map((row) => row.close));
+  const resonanceFlow = signed(flow, resonanceSide);
+  const resonanceOverheated = resonanceSide === "LONG"
     ? (currentRsi ?? 50) > 72 || change24h > 12 || (liquidation > 0.45 && change24h > 7)
     : (currentRsi ?? 50) < 28 || change24h < -12 || (liquidation < -0.45 && change24h < -7);
-  const trendTrigger = (upBreakout || downBreakout) && trendAligned >= 2 && currentVolumeRatio >= 1.12 && trendFlow >= 0 && !trendOverheated;
-  const trendScore = clamp(28 + (upBreakout || downBreakout ? 25 : 0) + trendAligned * 10 + Math.min(12, currentVolumeRatio * 6) + Math.min(10, Math.max(0, trendFlow) * 150) - (trendOverheated ? 35 : 0), 0, 100);
+  const resonanceTrigger = Math.abs(weightedTrend) >= 0.14
+    && resonanceAligned >= 2
+    && !higherTimeframeConflict
+    && fiveMinuteConfirmation
+    && fiveMinuteResume
+    && currentVolumeRatio >= 0.92
+    && resonanceFlow >= -0.004
+    && !resonanceOverheated;
+  const resonanceScore = clamp(
+    24
+      + resonanceAligned * 12
+      + Math.min(18, Math.abs(weightedTrend) * 22)
+      + (fiveMinuteConfirmation ? 12 : 0)
+      + (fiveMinuteResume ? 8 : 0)
+      + Math.min(10, currentVolumeRatio * 5)
+      + Math.min(8, Math.max(0, resonanceFlow) * 140)
+      - (higherTimeframeConflict ? 30 : 0)
+      - (resonanceOverheated ? 35 : 0),
+    0,
+    100,
+  );
 
-  const stretchedUp = change24h >= 4.5 || (currentRsi ?? 50) >= 74 || liquidation >= 0.4;
-  const stretchedDown = change24h <= -4.5 || (currentRsi ?? 50) <= 26 || liquidation <= -0.4;
+  const stretchedUp = change24h >= 4 || (currentRsi ?? 50) >= 72 || liquidation >= 0.35;
+  const stretchedDown = change24h <= -4 || (currentRsi ?? 50) <= 28 || liquidation <= -0.35;
   const exhaustionSide = stretchedDown ? "LONG" as const : "SHORT" as const;
   const candleRange = Math.max(last.high - last.low, Number.EPSILON);
   const upperRejection = (last.high - Math.max(last.open, last.close)) / candleRange >= 0.32 && last.close < last.open;
   const lowerRejection = (Math.min(last.open, last.close) - last.low) / candleRange >= 0.32 && last.close > last.open;
   const exhaustionRejection = exhaustionSide === "LONG" ? lowerRejection : upperRejection;
   const reversalFlow = signed(flow, exhaustionSide);
-  const exhaustionTrigger = (stretchedUp || stretchedDown) && (exhaustionRejection || reversalFlow >= 0.025) && currentVolumeRatio >= 0.9;
+  const exhaustionTrigger = (stretchedUp || stretchedDown) && (exhaustionRejection || reversalFlow >= 0.020) && currentVolumeRatio >= 0.85;
   const exhaustionScore = clamp(30 + (stretchedUp || stretchedDown ? 24 : 0) + (exhaustionRejection ? 20 : 0) + Math.min(16, Math.abs(change24h) * 1.5) + Math.min(10, Math.max(0, reversalFlow) * 180), 0, 100);
 
   return [
     {
       setup: "VOLUME_FORCE_FAILED_BREAKOUT", label: "量价力度假突破", side: failedSide,
-      trigger: failedTrigger, score: failedScore, volumeMinimum: 1.05, target1R: 1.25, target2R: 2.5, maxHoldingMinutes: 120,
+      trigger: failedTrigger, score: failedScore, volumeMinimum: 1.0, target1R: 1.25, target2R: 2.5, maxHoldingMinutes: 120,
       evidence: [`扫过区间边界后收回：${highSweep || lowSweep ? "是" : "否"}`, `量能 ${currentVolumeRatio.toFixed(2)}x`, `反向力度 ${failedFlow.toFixed(3)}`],
       blockers: [!highSweep && !lowSweep ? "尚未形成边界扫单并收回" : "", !failedVolume ? "假突破量能不足" : "", !failedForce ? "反向现货流/订单簿力度不足" : ""].filter(Boolean),
     },
     {
       setup: "EXHAUSTION_REVERSAL", label: "衰竭反转", side: exhaustionSide,
-      trigger: exhaustionTrigger, score: exhaustionScore, volumeMinimum: 0.9, target1R: 1.2, target2R: 2.2, maxHoldingMinutes: 100,
+      trigger: exhaustionTrigger, score: exhaustionScore, volumeMinimum: 0.85, target1R: 1.2, target2R: 2.2, maxHoldingMinutes: 100,
       evidence: [`24h位移 ${change24h.toFixed(2)}% · RSI ${currentRsi?.toFixed(1) ?? "--"}`, `拒绝K线：${exhaustionRejection ? "是" : "否"}`, `反转资金流 ${reversalFlow.toFixed(3)}`],
-      blockers: [!stretchedUp && !stretchedDown ? "价格尚未形成可验证衰竭" : "", !exhaustionRejection && reversalFlow < 0.025 ? "缺少拒绝K线或反转资金流" : "", currentVolumeRatio < 0.9 ? "反转量能不足" : ""].filter(Boolean),
+      blockers: [!stretchedUp && !stretchedDown ? "价格尚未形成可验证衰竭" : "", !exhaustionRejection && reversalFlow < 0.020 ? "缺少拒绝K线或反转资金流" : "", currentVolumeRatio < 0.85 ? "反转量能不足" : ""].filter(Boolean),
     },
     {
-      setup: "DENNIS_TREND_BREAKOUT", label: "经典趋势突破", side: trendSide,
-      trigger: trendTrigger, score: trendScore, volumeMinimum: 1.12, target1R: 1.45, target2R: 3.2, maxHoldingMinutes: 360,
-      evidence: [`完整5m收盘突破：${upBreakout || downBreakout ? "是" : "否"}`, `周期共振 ${trendAligned}/3 · 量能 ${currentVolumeRatio.toFixed(2)}x`, `同向资金流 ${trendFlow.toFixed(3)}`],
-      blockers: [!upBreakout && !downBreakout ? "完整5m尚未收在旧区间外" : "", trendAligned < 2 ? "高低周期没有形成共振" : "", currentVolumeRatio < 1.12 ? "突破量能不足" : "", trendFlow < 0 ? "现货流与突破方向相反" : "", trendOverheated ? "RSI/24h位移/清算显示追价风险" : ""].filter(Boolean),
+      setup: "MULTI_TIMEFRAME_RESONANCE", label: "多周期综合共振", side: resonanceSide,
+      trigger: resonanceTrigger, score: resonanceScore, volumeMinimum: 0.92, target1R: 1.3, target2R: 2.6, maxHoldingMinutes: 240,
+      evidence: [`15m/1h/4h 共振 ${resonanceAligned}/3`, `完整5m确认并恢复：${fiveMinuteConfirmation && fiveMinuteResume ? "是" : "否"}`, `量能 ${currentVolumeRatio.toFixed(2)}x · 同向资金流 ${resonanceFlow.toFixed(3)}`],
+      blockers: [Math.abs(weightedTrend) < 0.14 || resonanceAligned < 2 ? "多周期方向尚未形成共振" : "", higherTimeframeConflict ? "1h或4h仍与主方向冲突" : "", !fiveMinuteConfirmation || !fiveMinuteResume ? "完整5m尚未确认恢复" : "", currentVolumeRatio < 0.92 ? "共振量能不足" : "", resonanceFlow < -0.004 ? "现货流与共振方向明显相反" : "", resonanceOverheated ? "RSI/24h位移/清算显示追价风险" : ""].filter(Boolean),
     },
   ];
 }
@@ -267,7 +292,7 @@ export function buildDirectMarketCandidate(input: {
     counterEvidence: [...new Set(counterEvidence)],
     checks,
     candles5m: candles.slice(-96),
-    assetRegime: selectedSetup.setup === "DENNIS_TREND_BREAKOUT"
+    assetRegime: selectedSetup.setup === "MULTI_TIMEFRAME_RESONANCE"
       ? selectedSetup.side === "LONG" ? "trend_up" : "trend_down"
       : selectedSetup.setup === "EXHAUSTION_REVERSAL" ? "leverage_liquidation" : "transition",
     maxHoldingMinutes: selectedSetup.maxHoldingMinutes,

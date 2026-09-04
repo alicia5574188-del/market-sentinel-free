@@ -41,7 +41,7 @@ test("direct brain emits normalized mutually exclusive paths and a replayable pl
   const candidate = buildDirectMarketCandidate({ packet, candles: rows, btcCandles: rows, volumeRank: 1, batchId: "batch:1" });
   assert.equal(Math.round((candidate.paths.up + candidate.paths.down + candidate.paths.rangeOrInvalid) * 10) / 10, 100);
   assert.equal(candidate.decision, "LONG");
-  assert.equal(candidate.setup, "DENNIS_TREND_BREAKOUT");
+  assert.equal(candidate.setup, "MULTI_TIMEFRAME_RESONANCE");
   assert.equal(candidate.entryZone?.length, 2);
   assert.equal(candidate.targets.length, 2);
   assert.ok(candidate.invalidationPrice! < candidate.entryZone![0]);
@@ -89,6 +89,8 @@ test("missing BTC correlation stays in one conservative risk cluster", () => {
 
 test("core setup cannot bypass liquidity or volume hard gates", () => {
   const rows = candles(1);
+  rows[rows.length - 2] = { ...rows.at(-2)!, volume: 20 };
+  rows[rows.length - 1] = { ...rows.at(-1)!, volume: 20 };
   const packet = {
     observedAt: Date.now(), symbol: "BTC_USDT",
     market: {

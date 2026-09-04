@@ -7,7 +7,7 @@ const schema = readFileSync(new URL("../db/hte31-schema.ts", import.meta.url), "
 const migration = readFileSync(new URL("../drizzle/0014_hte31_simulation_epochs.sql", import.meta.url), "utf8");
 const resetMigration = readFileSync(new URL("../drizzle/0018_safe_paper_reset.sql", import.meta.url), "utf8");
 const freshStartMigration = readFileSync(new URL("../drizzle/0019_adaptive_brain_fresh_start.sql", import.meta.url), "utf8");
-const releaseMigration = readFileSync(new URL("../drizzle/0020_direct_market_v2_cutover.sql", import.meta.url), "utf8");
+const releaseMigration = readFileSync(new URL("../drizzle/0021_direct_market_v3_resonance_cutover.sql", import.meta.url), "utf8");
 const release = readFileSync(new URL("../lib/direct-market-release.ts", import.meta.url), "utf8");
 const directTypes = readFileSync(new URL("../lib/direct-market-types.ts", import.meta.url), "utf8");
 const execution = readFileSync(new URL("../lib/direct-market-execution.ts", import.meta.url), "utf8");
@@ -37,7 +37,7 @@ test("every major brain version declares and enforces one paper cutover", () => 
   assert.ok(version && migrationTag);
   assert.match(release, /cutover: "force_archive_paper"/);
   assert.ok(releaseMigration.includes(version), "release migration must name the current brain version");
-  assert.equal(migrationTag, "0020_direct_market_v2_cutover");
+  assert.equal(migrationTag, "0021_direct_market_v3_resonance_cutover");
   assert.match(execution, /ensureDirectMarketReleaseCutover\(settings\.trialCapitalUsdt, executionNow\)/);
   assert.match(worker, /ensureDirectMarketReleaseCutover\(settings\.trialCapitalUsdt, startedAt\)/);
   assert.match(release, /state\?\.status === "completed" && state\.targetBrainVersion === DIRECT_MARKET_RELEASE\.brainVersion/);

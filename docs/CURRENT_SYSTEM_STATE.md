@@ -1,5 +1,9 @@
 # Market Sentinel — Current System State
 
+> **2026-09-04 core-three resonance upgrade — release candidate.**
+>
+> `direct-market-brain-v3-resonance-three` keeps one Direct Market Brain and exactly three new-order setups: volume-force failed breakout, exhaustion reversal, and multi-timeframe comprehensive resonance. Dennis breakout remains historical only. The first two setups receive small evidence-floor relaxations while preserving completed-candle, liquidity, funding, macro, volatility, edge, portfolio, and fresh-entry checks; resonance requires aligned 15m/1h/4h direction, a completed 5m resume, adequate volume/spot flow, and anti-chase protection. The dashboard is now `大脑 / 订单 / 管理`: it ranks setup contribution, shows deterministic 12-hour operating reviews, keeps complete order review, and preserves Gate controls, Emergency Stop, paper reset, account, push, audit, and diagnostics. Scanner activity is accumulated inside the existing Durable Object runtime save and adds no recurring D1 write. Additive migration `0021` invokes the existing paper-only major-version cutover; Gate/live remains untouched.
+
 > **2026-09-04 automatic-cutover correction — production deployed.**
 >
 > Current production uses `direct-market-brain-v2-core-three` as the sole new-order authority with three setups. Major versions are now a paper-only boundary: entry blocks first, pre-cutover/old-version paper positions close at fresh quotes as `version_reset`, history and 12-hour observations remain, and a clean epoch starts. Final D1 proof showed zero legacy open positions; Gate/live is outside this authority. See `docs/QUANT_UPGRADE_PATH.md`; this note supersedes conflicting historical Strategy 2.0 text below.

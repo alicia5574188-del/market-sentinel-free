@@ -1,5 +1,15 @@
 # Goal
 
+## Active objective — core-three resonance dashboard
+
+- Replace the Dennis breakout setup for new orders with the original multi-timeframe comprehensive resonance idea: completed 5-minute confirmation, 15m/1h/4h alignment, spot/volume confirmation, structural targets, and anti-chase protection.
+- Keep volume-force failed breakout and exhaustion reversal, and make the three setup stories mutually exclusive under the existing Direct Market Brain authority and hard risk/live-parity boundaries.
+- Restore current-version per-setup performance truth: activity, qualified signals, orders, wins/losses, win rate, net PnL, average R, profit factor, drawdown, losing streak, and contribution state.
+- Produce deterministic 12-hour operating reviews from the existing Scanner Durable Object state plus current-version paper trades; add no LLM runtime, foreground exchange producer, or recurring D1 write path.
+- Replace the abstract Opportunity/Radar surface with three operator destinations: Brain, Orders, and Management. Keep paper reset, complete trade review, Gate credentials/control/reconciliation/Emergency Stop, account, push, audit, and diagnostics reachable through their existing authority paths.
+- Treat this as a major paper-only release: one additive migration requests the automatic fresh-quote archive of old paper positions and a clean epoch; Gate/live remains untouched.
+- Complete through one branch, focused tests, one full verification suite, one PR, green CI, deployment, D1 cutover proof, and production health verification.
+
 ## Active patch objective — automatic major-version cutover
 
 - Bind every Direct Market Brain major version to one explicit release manifest and additive migration.

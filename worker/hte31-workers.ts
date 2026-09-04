@@ -29,13 +29,19 @@ import {
   type DirectPositionDecision,
 } from "../lib/direct-market-position-brain";
 import type { SchedulerWorkerStatus } from "../lib/background-scheduler";
-import type { DirectMarketCandidate, DirectMarketRadarItem } from "../lib/direct-market-types";
+import {
+  DIRECT_CORE_SETUPS,
+  type DirectCoreSetup,
+  type DirectMarketCandidate,
+  type DirectMarketRadarItem,
+  type DirectTwelveHourActivity,
+} from "../lib/direct-market-types";
 import type { CloudflareEnv } from "./index";
 
 // This generation bump resets only Durable Object scheduler/checkpoint state.
 // D1 trades, learning, simulation epochs, live credentials and live-order
 // lineage remain untouched.
-const CLEAN_RUNTIME_VERSION = "direct-market-brain-v2-core-three";
+const CLEAN_RUNTIME_VERSION = "direct-market-brain-v3-resonance-three";
 const SCANNER_CYCLE_INTERVAL_MS = 25_000;
 const TRADE_MANAGER_ACTIVE_INTERVAL_MS = 15_000;
 const TRADE_MANAGER_IDLE_INTERVAL_MS = 60_000;
@@ -43,12 +49,13 @@ const TRADE_MANAGER_ACTIVE_HEARTBEAT_MS = 60_000;
 const TRADE_MANAGER_IDLE_HEARTBEAT_MS = 5 * 60_000;
 
 type ScannerRuntime = {
-  version: 3;
+  version: 4;
   rotationOffset: number;
   job: Hte31ScanJob | null;
   readModel: Hte31ScanCompleted | null;
   directBySymbol?: Record<string, DirectMarketCandidate>;
   directHistory?: { symbol: string; observedAt: number; referencePrice: number | null; location: string; decision: string; paths: DirectMarketCandidate["paths"]; riskClusterId: string }[];
+  activity12h?: { current: DirectTwelveHourActivity; lastCompleted: DirectTwelveHourActivity | null };
   status: SchedulerWorkerStatus;
 };
 
@@ -70,13 +77,84 @@ function baseStatus(): SchedulerWorkerStatus {
 
 function baseScannerRuntime(): ScannerRuntime {
   return {
-    version: 3,
+    version: 4,
     rotationOffset: 0,
     job: null,
     readModel: null,
     directBySymbol: {},
     directHistory: [],
+    activity12h: { current: emptyTwelveHourActivity(Date.now()), lastCompleted: null },
     status: baseStatus(),
+  };
+}
+
+const TWELVE_HOURS_MS = 12 * 60 * 60_000;
+
+function emptyTwelveHourActivity(now: number): DirectTwelveHourActivity {
+  const windowStartAt = Math.floor(now / TWELVE_HOURS_MS) * TWELVE_HOURS_MS;
+  return {
+    windowStartAt,
+    windowEndAt: windowStartAt + TWELVE_HOURS_MS,
+    generatedAt: now,
+    complete: false,
+    evaluations: 0,
+    qualifiedSignals: 0,
+    openedTrades: 0,
+    setups: DIRECT_CORE_SETUPS.map(({ id: setup, label: setupLabel }) => ({
+      setup,
+      setupLabel,
+      evaluations: 0,
+      qualifiedSignals: 0,
+      openedTrades: 0,
+      leadingBlocker: null,
+      blockerCount: 0,
+      blockers: {},
+    })),
+  };
+}
+
+function recordTwelveHourActivity(
+  activity: ScannerRuntime["activity12h"],
+  candidate: DirectMarketCandidate,
+  openedSetup: DirectCoreSetup | null,
+  openReason: string,
+) {
+  const now = candidate.observedAt;
+  let current = activity?.current ?? emptyTwelveHourActivity(now);
+  let lastCompleted = activity?.lastCompleted ?? null;
+  if (now >= current.windowEndAt || now < current.windowStartAt) {
+    lastCompleted = { ...current, complete: true, generatedAt: now };
+    current = emptyTwelveHourActivity(now);
+  }
+  const blocker = candidate.decision === "WAIT"
+    ? candidate.counterEvidence[0] ?? "当前位置没有完整触发"
+    : openedSetup === candidate.setup ? "" : openReason;
+  const setups = current.setups.map((row) => {
+    const evaluated = row.setup === candidate.setup;
+    const opened = row.setup === openedSetup;
+    if (!evaluated && !opened) return row;
+    const blockers = evaluated && blocker ? { ...row.blockers, [blocker]: (row.blockers[blocker] ?? 0) + 1 } : row.blockers;
+    const [leadingBlocker, blockerCount] = Object.entries(blockers).sort((left, right) => right[1] - left[1])[0] ?? [null, 0];
+    return {
+      ...row,
+      evaluations: row.evaluations + Number(evaluated),
+      qualifiedSignals: row.qualifiedSignals + Number(evaluated && candidate.decision !== "WAIT"),
+      openedTrades: row.openedTrades + Number(opened),
+      leadingBlocker,
+      blockerCount,
+      blockers,
+    };
+  });
+  return {
+    current: {
+      ...current,
+      generatedAt: now,
+      evaluations: current.evaluations + 1,
+      qualifiedSignals: current.qualifiedSignals + Number(candidate.decision !== "WAIT"),
+      openedTrades: current.openedTrades + Number(openedSetup != null),
+      setups,
+    },
+    lastCompleted,
   };
 }
 
@@ -336,6 +414,7 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
         .filter((candidate) => Date.now() - candidate.observedAt <= 3 * 60_000 && candidate.decision !== "WAIT")
         .sort((a, b) => b.netEdgeR - a.netEdgeR || b.confidence - a.confidence || a.volumeRank - b.volumeRank);
       const portfolioRank = freshReady.findIndex((candidate) => candidate.symbol === result.directCandidate.symbol) + 1;
+      let openedSetup: DirectCoreSetup | null = null;
       if (freshCohort.length >= 3 && freshReady.length) {
         const finalists = freshReady.slice(0, 3);
         const quotes = await fetchGatePositionQuotes(finalists.map((candidate) => candidate.symbol));
@@ -353,6 +432,7 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
           attempts.push({ symbol: candidate.symbol, ...opened });
         }
         const firstOpened = attempts.find((attempt) => attempt.opened);
+        openedSetup = firstOpened ? finalists.find((candidate) => candidate.symbol === firstOpened.symbol)?.setup ?? null : null;
         const currentAttempt = attempts.find((attempt) => attempt.symbol === result.directCandidate.symbol);
         result = {
           ...result,
@@ -369,7 +449,8 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
             : `当前组合排名 ${portfolioRank || ">3"}，本轮不进入前三`,
         };
       }
-      const readModel = { ...result, directRadar: buildDirectRadar(result, directBySymbol) };
+      const activity12h = recordTwelveHourActivity(runtime.activity12h, result.directCandidate, openedSetup, result.openReason);
+      const readModel = { ...result, directRadar: buildDirectRadar(result, directBySymbol), activity12h };
       const nextRunAt = Date.now() + this.intervalMs;
       const status: SchedulerWorkerStatus = {
         state: "live",
@@ -392,6 +473,7 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
         readModel,
         directBySymbol,
         directHistory,
+        activity12h,
         status,
       });
       await this.ctx.storage.setAlarm(nextRunAt);
