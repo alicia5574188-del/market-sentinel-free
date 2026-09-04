@@ -11,6 +11,21 @@ Rules:
 
 ---
 
+## 2026-09-04 — Automatic paper cutover for major brain releases
+
+### Changed
+
+- Added persisted active/target brain versions and a single release manifest. A major-version mismatch blocks new paper entries, closes open paper positions at fresh Gate quotes with `version_reset`, then starts a clean simulation epoch and records the new active version.
+- Added a CI guard tying the current brain version to its non-destructive cutover migration, plus a bounded upgrade map for future work.
+
+### Deliberately unchanged
+
+- Normal owner resets, historical trades, immutable lineage, seven-node 12-hour observation, D1 recurring cadence, Gate/live orders, credentials, controls, funding authority, and Emergency Stop.
+
+### Verification
+
+- Strategy/risk/migration tests passed 224/224; production/UI/safety passed 112/112; focused Direct Brain passed 21/21; cutover/full-migration passed 19/19. Production build, ESLint, TypeScript, and diff checks passed. CI, merge, deployment, and production proof are pending.
+
 ## 2026-09-04 — Direct Market Brain reduced to three core setups
 
 ### Changed

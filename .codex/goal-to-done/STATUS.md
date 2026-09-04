@@ -1,13 +1,23 @@
 # Status
 
-## Core-three return-to-purpose patch — locally verified
+## Automatic major-version cutover — locally verified
+
+- Branch: `feat/automatic-strategy-cutover`, based on deployed `main` `aa4e461`.
+- Added a single release contract for `direct-market-brain-v2-core-three`. Migration `0020` immediately blocks new paper entries and marks all currently open paper positions for fresh-quote `version_reset` archival.
+- Both the entry boundary and Trade Manager enforce the release version. After the last paper close, the reset finalizer records the active brain version, creates a clean simulation epoch, and resumes entry; temporary quote failure remains safely pending for retry.
+- Normal owner resets remain natural. Historical trades, immutable decision lineage, seven post-exit checkpoints through 12 hours, credentials, Gate/live orders, live controls, funding authority, and recurring D1 cadence are unchanged.
+- Local verification passed: strategy/risk/migration 224/224, production/UI/safety 112/112, focused Direct Brain 21/21, reset/migration 19/19, production build, ESLint, TypeScript, and `git diff --check`. Local Wrangler dry-run was blocked by environment network approval; remote CI remains the release gate.
+- Next: push one PR, merge on green CI, then verify the D1 migration, archived old paper positions, clean epoch, immutable asset, and both production schedulers.
+- Updated UTC: 2026-09-04.
+
+## Core-three return-to-purpose patch — production deployed
 
 - Branch: `refactor/back-to-core-three-setups`, based on current `main` `d0451b98ce41e873d0a3d853b931da373f38f504`.
 - Direct Market Brain v2 now evaluates only three explicit entry stories: volume-force failed breakout, exhaustion reversal, and the original Dennis trend breakout baseline. Setup-specific evidence is replayable and stored in every candidate/decision snapshot.
 - Existing safety remains final: completed candles, data quality, liquidity, volume, funding, macro, ATR, structural edge, anti-chase, portfolio limits, one lifecycle per symbol, immutable stop/targets, and exact paper-to-live lineage.
 - The daily UI exposes the chosen setup and score and compresses the settings summary to the three retained setups. Five operator tabs and every Must-Keep safety/owner capability remain reachable.
 - No migration, recurring D1 write, forced close, fund action, credential/control change, live activation, or historical deletion was added.
-- Local verification: focused direct-brain suite 21/21, production/UI/safety suite 111/111, TypeScript and production build pass. Release/production verification is pending.
+- Production main is `aa4e461`; final GitHub Actions run `33854604328` passed verification and Cloudflare deployment. Production Worker version is `027625ca-41a6-4442-b50b-665a803ee83c`.
 - Updated UTC: 2026-09-04.
 
 ## Clean adaptive-brain restart — locally verified

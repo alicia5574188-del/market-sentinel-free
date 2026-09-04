@@ -1,5 +1,12 @@
 # Goal
 
+## Active patch objective — automatic major-version cutover
+
+- Bind every Direct Market Brain major version to one explicit release manifest and additive migration.
+- Before the new version can open paper orders, block entry, close every pre-release paper position at a fresh Gate quote with `version_reset`, retain its immutable lineage and complete 12-hour observation trail, then start a clean simulation epoch.
+- Keep owner-requested resets natural, and never close, resize, fund, activate, or otherwise mutate Gate/live positions through this paper cutover.
+- Make future upgrades small and predictable through one stable upgrade map, one CI guard, focused tests, and a single PR/deploy/production-verification loop.
+
 ## Active patch objective — return to three useful setups
 
 - Keep the Direct Market Brain as the sole new-order authority, but admit candidates only through three explicit setups: `VOLUME_FORCE_FAILED_BREAKOUT`, `EXHAUSTION_REVERSAL`, and the original low-frequency `DENNIS_TREND_BREAKOUT` baseline.

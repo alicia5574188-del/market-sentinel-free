@@ -1,6 +1,10 @@
 # Market Sentinel — Current System State
 
-> **2026-09-04 return-to-purpose patch — locally verified, release pending.**
+> **2026-09-04 automatic-cutover correction — implementation in progress.**
+>
+> Current production uses `direct-market-brain-v2-core-three` as the sole new-order authority with three setups. The successor patch makes major versions a paper-only boundary: entry blocks first, old paper positions close at fresh quotes as `version_reset`, history and 12-hour observations remain, and a clean epoch starts. Gate/live is outside this authority. See `docs/QUANT_UPGRADE_PATH.md`; this note supersedes conflicting historical Strategy 2.0 text below.
+
+> **2026-09-04 return-to-purpose patch — production deployed.**
 >
 > The Direct Market Brain remains the sole authority for new orders, but its entry surface is deliberately reduced to three useful setups: volume-force failed breakout, exhaustion reversal, and the original low-frequency Dennis trend breakout. Each setup has explicit completed-candle, volume/force, location and anti-chase conditions, then passes the existing shared liquidity, funding, macro, volatility, structural-edge, portfolio and live-parity gates. The UI now shows the selected setup and score and presents only these three setups in its compact trading summary. Existing positions, risk plans, review/observation history, historical strategy IDs, five operator tabs, owner controls, live safety and D1 boundaries are preserved. No funds, credentials, live switches, existing orders, schema or recurring write path are changed.
 

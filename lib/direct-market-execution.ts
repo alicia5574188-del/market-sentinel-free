@@ -10,6 +10,7 @@ import {
   type DirectMarketLearningSample,
 } from "./direct-market-learning.ts";
 import { DIRECT_POSITION_POLICY_VERSION } from "./direct-market-position-brain.ts";
+import { ensureDirectMarketReleaseCutover } from "./direct-market-release.ts";
 import { directMarketRiskAdmission, evaluateDirectMarketRisk, type DirectMarketResult } from "./direct-market-risk.ts";
 import {
   DIRECT_MARKET_AUTHORITY,
@@ -119,6 +120,7 @@ export async function openDirectMarketTrade(input: {
   }
   const executionNow = input.freshQuote!.observedAt;
   const db = getDb();
+  await ensureDirectMarketReleaseCutover(settings.trialCapitalUsdt, executionNow);
   const [pendingReset] = await db.select({ id: hte31PaperResetState.id }).from(hte31PaperResetState).where(and(
     eq(hte31PaperResetState.id, "singleton"),
     eq(hte31PaperResetState.status, "pending"),

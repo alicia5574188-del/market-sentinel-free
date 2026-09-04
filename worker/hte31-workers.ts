@@ -13,6 +13,7 @@ import {
   markHte31PostExitObservationUnavailable,
   nextHte31PostExitObservation,
 } from "../lib/hte31-repository";
+import { ensureDirectMarketReleaseCutover } from "../lib/direct-market-release";
 import {
   createHte31ScanJob,
   hte31PhaseLabel,
@@ -487,6 +488,7 @@ export class HTE31TradeManager extends DurableObject<CloudflareEnv> {
 
     try {
       const settings = await getSettings();
+      await ensureDirectMarketReleaseCutover(settings.trialCapitalUsdt, startedAt);
       const open = await listHte31OpenTrades();
       const paperReset = await getHte31PaperResetState(open.length);
       const forceArchiveForReset = paperReset.status === "pending" && paperReset.resetMode === "force_archive";
@@ -564,9 +566,9 @@ export class HTE31TradeManager extends DurableObject<CloudflareEnv> {
         }
       }
 
-      // Normal owner resets preserve every open position's lifecycle. The
-      // one-time version migration reset explicitly archives legacy positions
-      // at fresh quotes before the single Trade Manager creates the new epoch.
+      // Normal owner resets preserve every open position's lifecycle. A major
+      // brain release archives paper positions at fresh quotes, then starts the
+      // new version in one clean epoch. Gate/live positions are never touched.
       await finalizePendingHte31PaperCapitalReset(Date.now());
 
       const active = open.length > 0 || Boolean(due);
