@@ -94,7 +94,9 @@ jobs:
               .schedulerError == null and
               .schedulers.position.state == "live" and
               .schedulers.position.lastError == null and
-              .schedulers.scanner.state == "live" and
+              (.schedulers.scanner.state == "live" or .schedulers.scanner.state == "starting") and
+              .schedulers.scanner.lastSuccessAt != null and
+              ((now * 1000 - .schedulers.scanner.lastSuccessAt) < 180000) and
               .schedulers.scanner.lastError == null and
               .schedulers.scanner.circuitOpen == false
             ' /tmp/health-ready.json >/dev/null; then
@@ -111,7 +113,9 @@ jobs:
               .schedulerError == null and
               .schedulers.position.state == "live" and
               .schedulers.position.lastError == null and
-              .schedulers.scanner.state == "live" and
+              (.schedulers.scanner.state == "live" or .schedulers.scanner.state == "starting") and
+              .schedulers.scanner.lastSuccessAt != null and
+              ((now * 1000 - .schedulers.scanner.lastSuccessAt) < 180000) and
               .schedulers.scanner.lastError == null and
               .schedulers.scanner.circuitOpen == false
             ' "/tmp/health-$attempt.json"
