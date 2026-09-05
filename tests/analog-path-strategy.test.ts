@@ -22,11 +22,11 @@ test('historical overall direction can open without trend, volume recovery or pu
 test('sparse or stale history cannot be replaced by a different strategy',()=>{
  const f=forecast();assert.equal(candidate({...f,state:'INSUFFICIENT',sampleCount:4}).decision,'WAIT');
  assert.equal(historicalDirection({...f,signalAt:now-300000},now).side,'WAIT');
- assert.equal(candidate({...f,episodes:f.episodes!.map((e,i)=>i<5?e:{...e,bars:e.bars.map(b=>({...b,closePct:-Math.abs(b.closePct)}))}),medianPct:0}).decision,'WAIT');
+ assert.equal(candidate({...f,episodes:f.episodes!.map((e,i)=>i<5?e:{...e,bars:e.bars.map(b=>({openPct:0,closePct:-Math.abs(b.closePct),highPct:.01,lowPct:-Math.abs(b.highPct)}))}),medianPct:0}).decision,'WAIT');
 });
-test('a wait price cannot rescue an immediate structure that fails the path-quality gate',()=>{
- const f=forecast(false,true),plan=planAnalogEntry(f,'LONG',.1,100,now);assert.equal(plan,null);
- assert.equal(candidate(f).decision,'SHORT','the first downward swing is now actionable despite a higher endpoint');
+test('the candidate follows the first tradable swing instead of the later endpoint',()=>{
+ const f=forecast(false,true);
+ assert.equal(historicalDirection(f,now).side,'SHORT','the first downward swing remains the direction authority despite a higher endpoint');
 });
 test('a stop touched before a later profitable endpoint is counted as a stop; limit fills cannot claim earlier highs',()=>{
  const episode={weight:1,from:0,bars:[{openPct:0,lowPct:-1,highPct:2,closePct:1}]};
@@ -66,11 +66,23 @@ test('six independent positions fit the same loss budget without a three-positio
  assert.equal(analogRiskAllocation(1000,0,6,true),analogRiskAllocation(1000,0,6,false)/2);
 });
 
-test('cost-covered protection is not a loss, but low target coverage still blocks a plan',()=>{
- const f=forecast();f.episodes=Array.from({length:10},(_,j)=>({weight:1,from:j,bars:Array.from({length:12},(_,i)=>i===0?{openPct:0,lowPct:-.01,highPct:.35,closePct:.3}:i===1?{openPct:.3,lowPct:j<8?.1:.15,highPct:.32,closePct:.2}:{openPct:.5+i*.1,lowPct:.47+i*.1,highPct:.52+i*.1,closePct:.5+i*.1})}));
- const protectedOutcome=replayAnalogPath(f.episodes[0],'LONG',0,.3,.6,.12);
- assert.equal(protectedOutcome.exit,'STOP');assert.ok(protectedOutcome.netPct>=0);
- assert.equal(planAnalogEntry(f,'LONG',.1,100,now),null);
+test('majority first swing opens while adverse path ratios remain learning evidence',()=>{
+ const f=forecast();f.episodes=Array.from({length:10},(_,j)=>({weight:1,from:j,bars:Array.from({length:12},(_,i)=>j<6
+  ?i===0?{openPct:0,lowPct:-.05,highPct:.25,closePct:.1}
+   :j<3?{openPct:.1,lowPct:.05,highPct:2,closePct:1.5}:{openPct:.1,lowPct:-.25,highPct:.15,closePct:-.2}
+  :{openPct:0,lowPct:-.25,highPct:.01,closePct:-.2})}));
+ const plan=planAnalogEntry(f,'LONG',.1,100,now);assert.ok(plan);
+ assert.ok(plan.expectedNetR<0);assert.ok(plan.lossPct>35);
+ const c=candidate(f);assert.equal(c.decision,'LONG',JSON.stringify(c.counterEvidence));
+ assert.equal(validateDirectMarketEntry(c,{symbol:c.symbol,price:100,observedAt:now+1000},now+1000).allowed,true);
+});
+
+test('target follows the majority episodes maximum path instead of collapsing to the fee floor',()=>{
+ const f=forecast();f.episodes=Array.from({length:10},(_,j)=>({weight:1,from:j,bars:Array.from({length:12},(_,i)=>j<6
+  ?{openPct:i*.1,lowPct:-.03,highPct:.3+i*.1,closePct:.2+i*.08}
+  :{openPct:-.2,lowPct:-.25,highPct:.02,closePct:-.2})}));
+ const plan=planAnalogEntry(f,'LONG',.1,100,now);assert.ok(plan);
+ assert.ok(plan.targetPct>.8,`expected the supporting paths' maximum excursion, got ${plan.targetPct}`);
 });
 
 test('five independent episodes may enter; four or insufficient effective weight cannot',()=>{

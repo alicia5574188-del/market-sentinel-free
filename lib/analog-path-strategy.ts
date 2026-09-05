@@ -5,6 +5,7 @@ import { cleanAnalogCandles, ANALOG_MIN_SAMPLES, historicalSwingVotes } from './
 import { minuteTime,scalpCostBps } from './scalp-strategy.ts';
 import {DIRECT_POSITION_POLICY_VERSION,type DirectPositionDecision} from './direct-market-position-brain.ts';
 export const ANALOG_POSITION_POLICY='analog-path-exit-v2';
+export const ANALOG_MIN_NET_REWARD_R=1.2;
 export const completeFiveMinutes=(rows:Hte31Candle[],now:number)=>cleanAnalogCandles(rows,now).slice(-400);
 const mean=(xs:number[])=>xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:0;
 const quantile=(xs:number[],p:number)=>{const a=[...xs].sort((x,y)=>x-y);if(!a.length)return 0;const t=(a.length-1)*p,i=Math.floor(t);return a[i]+(a[Math.ceil(t)]-a[i])*(t-i);};
@@ -54,11 +55,18 @@ export function planAnalogEntry(f:HistoricalForecast,side:'LONG'|'SHORT',atrPct:
  const sign=side==='LONG'?1:-1,episodes=f.episodes??[],cost=scalpCostBps(f.costBps)/100;
  if(!episodes.length||!(atrPct>0&&anchor>0))return null;
  const adverse=episodes.map(e=>Math.max(0,...e.bars.map(b=>sign===1?-b.lowPct:b.highPct)));
- const favorable=episodes.map(e=>Math.max(0,...e.bars.map(b=>sign===1?b.highPct:-b.lowPct)));
+ // Direction comes from the first cost-sized swing. Size the target from the
+ // maximum in-horizon excursion of the episodes that actually voted for that
+ // direction; opposite-voting paths must not collapse a valid path target to
+ // the bare fee floor.
+ const votes=historicalSwingVotes(episodes,f.costBps).votes;
+ const supporting=episodes.filter((_,i)=>votes[i]===sign);
+ const favorable=supporting.map(e=>Math.max(0,...e.bars.map(b=>sign===1?b.highPct:-b.lowPct)));
+ if(supporting.length<=episodes.length/2||!favorable.length)return null;
  // Two fixed alternatives, not a parameter search. Entire paths include losing episodes.
  const offset=Math.max(0,mean(adverse)*.5);
  const alternatives=[0,...(offset>=atrPct*.2?[offset]:[])].map(offsetPct=>{
-  const targetPct=Math.max(cost*1.5,quantile(favorable,.35)*.75)+offsetPct;
+  const targetPct=Math.max(cost*1.5,quantile(favorable,.5)*.75)+offsetPct;
   // Once the target was reached, a later reversal must not inflate the initial stop.
   const beforeTarget=episodes.map(e=>{let worst=0;for(const b of e.bars){worst=Math.max(worst,sign===1?-b.lowPct:b.highPct);if((sign===1?b.highPct:-b.lowPct)>=targetPct-offsetPct)break;}return worst;});
   // Never express the same fixed equity risk through a micro stop: a normal five-minute print
@@ -67,7 +75,13 @@ export function planAnalogEntry(f:HistoricalForecast,side:'LONG'|'SHORT',atrPct:
   const stopPct=Math.max(cost*2.5,atrPct*.65,quantile(beforeTarget,.8)-offsetPct+atrPct*.25);
   return {side,anchor,createdAt:now,expiresAt:now+15*60_000,signalKey:`${f.signalAt}:${side}`,offsetPct,stopPct,targetPct,
     ...estimate(episodes,side,offsetPct,stopPct,targetPct,cost),mode:offsetPct===0?'NOW' as const:'PULLBACK' as const};
- }).filter(p=>p.stopPct/(1-sign*p.offsetPct/100)<=2&&p.targetPct>=cost*1.5&&p.expectedNetR>0&&p.fillPct>=40&&p.takeProfitPct>=55&&p.lossPct<=35&&p.takeProfitPct>p.lossPct);
+ // The user's entry thesis is the majority first tradable swing. Path replay
+ // still owns the stop/target and records expectancy, hit rate and losing-path
+ // share for learning, but those retrospective ratios must not silently become
+ // a second direction veto. Keep only executable safety/economics boundaries.
+ }).filter(p=>p.stopPct/(1-sign*p.offsetPct/100)<=2
+  &&(p.targetPct-cost)/(p.stopPct+cost)>=ANALOG_MIN_NET_REWARD_R
+  &&p.fillPct>=40);
  const immediate=alternatives.find(p=>p.mode==='NOW'),delayed=alternatives.find(p=>p.mode==='PULLBACK');
  // Prefer immediacy unless a frequently-filled retracement materially improves expectancy.
  if(delayed&&immediate&&delayed.fillPct>=60&&delayed.expectedNetR>immediate.expectedNetR+.1&&immediate.lossPct>=25)return delayed;
@@ -89,10 +103,10 @@ export function buildAnalogCandidate(input:{symbol:string;candles:Hte31Candle[];
   :[entry*(1-chasePct/100),entry*(1+betterPct/100)];
  const data=cs.length>=24&&cs.slice(-24).every((c,i,a)=>i===0||minuteTime(c)-minuteTime(a[i-1])===300_000)&&!!last&&input.now-minuteTime(last)-300_000<300_000;
  const priceReady=!!plan&&input.price>=zone[0]&&input.price<=zone[1];
- const reason=!data?'五分钟行情不完整或延迟':bias.side==='WAIT'?bias.reason:!plan?'历史路径止损偏多或扣费后空间不足，暂不开单':!priceReady?`${plan.mode==='PULLBACK'?'等待先反向到':'等待回到入场区'} ${entry.toPrecision(7)}；最多等待十五分钟`:`${bias.reason}，当前价格可直接入场`;
+ const reason=!data?'五分钟行情不完整或延迟':bias.side==='WAIT'?bias.reason:!plan?'历史保护距离超过2%，或扣费后目标不足1.2倍完整风险，暂不开单':!priceReady?`${plan.mode==='PULLBACK'?'等待先反向到':'等待回到入场区'} ${entry.toPrecision(7)}；最多等待十五分钟`:`${bias.reason}，当前价格可直接入场`;
  const checks=[{key:'data',label:'行情完整',passed:data,detail:'仅使用完整连续五分钟K线'},
  {key:'history-direction',label:'历史总体方向',passed:bias.side!=='WAIT',detail:bias.reason},
- {key:'setup',label:'历史路径经济性',passed:!!plan,detail:plan?`历史目标命中${plan.takeProfitPct.toFixed(0)}%，净亏结束${plan.lossPct.toFixed(0)}%，保本保护${plan.protectedExitPct.toFixed(0)}%，含费估计${plan.expectedNetR.toFixed(2)}风险倍数`:'目标覆盖不足、逆向结束偏多或扣费后没有优势'},
+ {key:'setup',label:'历史路径保护',passed:!!plan,detail:plan?`扣费后目标至少1.2倍完整风险；历史目标命中${plan.takeProfitPct.toFixed(0)}%，净亏结束${plan.lossPct.toFixed(0)}%，保本保护${plan.protectedExitPct.toFixed(0)}%，含费回放${plan.expectedNetR.toFixed(2)}风险倍数仅用于学习`:'历史保护距离超过2%，或扣费后目标不足1.2倍完整风险'},
  {key:'liquidity',label:'流动性',passed:input.volumeUsd>=12_000_000,detail:'固定币池仍须有可交易成交额'},
  {key:'entry-price',label:'入场价格',passed:priceReady,detail:reason}];
  const ready=checks.every(c=>c.passed),score=checks.filter(c=>c.passed).length/checks.length*100;
