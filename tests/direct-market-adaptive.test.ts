@@ -47,6 +47,22 @@ test("entry is allowed only from a fresh quote still inside the original setup",
   assert.equal(validateDirectMarketEntry(candidate({ observedAt: now - 100_000 }), { symbol: "BTC_USDT", price: 100, observedAt: now - 1_000 }, now).allowed, false);
 });
 
+test("fresh entry quotes cannot exceed the structural risk limit or move the stop", () => {
+  for (const side of ["LONG", "SHORT"] as const) {
+    const plan = candidate({
+      decision: side,
+      invalidationPrice: side === "LONG" ? 95.1 : 104.9,
+      targets: side === "LONG" ? [105, 112] : [95, 88],
+    });
+    const stop = plan.invalidationPrice;
+    assert.equal(validateDirectMarketEntry(plan, { symbol: "BTC_USDT", price: 100, observedAt: now - 1_000 }, now).allowed, true);
+    const drifted = validateDirectMarketEntry(plan, { symbol: "BTC_USDT", price: side === "LONG" ? 100.4 : 99.6, observedAt: now - 1_000 }, now);
+    assert.equal(drifted.allowed, false);
+    assert.match(drifted.reason, /结构止损距离超过5%/);
+    assert.equal(plan.invalidationPrice, stop);
+  }
+});
+
 test("complete independent 12-hour failures block only the repeated signature", () => {
   const samples = Array.from({ length: 4 }, (_, index) => ({
     independentEventKey: `event-${index}`,

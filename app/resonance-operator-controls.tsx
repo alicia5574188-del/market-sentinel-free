@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { chineseOperatorText, operatorLabel } from "../lib/operator-language";
 
 type Account = {
   id: string;
@@ -91,7 +92,7 @@ export default function ResonanceOperatorControls() {
     setMessage("");
     try {
       if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
-        throw new Error("当前浏览器不支持 Web Push；iPhone 请用 Safari 添加到主屏幕后再开启。");
+        throw new Error("当前浏览器不支持 消息推送；苹果手机请用 Safari 添加到主屏幕后再开启。");
       }
       const permission = Notification.permission === "default" ? await Notification.requestPermission() : Notification.permission;
       if (permission !== "granted") throw new Error("通知权限未开启。");
@@ -121,7 +122,7 @@ export default function ResonanceOperatorControls() {
     setPushBusy(true);
     setMessage("");
     try {
-      if (!("serviceWorker" in navigator)) throw new Error("当前浏览器没有可用的 Service Worker。");
+      if (!("serviceWorker" in navigator)) throw new Error("当前浏览器没有可用的后台服务。");
       const registration = await navigator.serviceWorker.ready;
       const subscription = await registration.pushManager.getSubscription();
       if (subscription) {
@@ -188,7 +189,7 @@ export default function ResonanceOperatorControls() {
         </div>
 
         <div className="rz-operator-block">
-          <div className="rz-operator-title"><strong>Web Push</strong><span>关闭页面后仍由后台发送</span></div>
+          <div className="rz-operator-title"><strong>消息推送</strong><span>关闭页面后仍由后台发送</span></div>
           <p className="rz-operator-copy">当前状态：{pushSubscribed === null ? "检查中" : pushSubscribed ? "已开启" : "未开启"}</p>
           <div className="rz-operator-actions">
             <button type="button" disabled={pushBusy} onClick={() => void (pushSubscribed ? disablePush() : enablePush())}>{pushSubscribed ? "关闭通知" : "开启通知"}</button>
@@ -199,7 +200,7 @@ export default function ResonanceOperatorControls() {
         {account?.role === "owner" && <div className="rz-operator-block">
           <div className="rz-operator-title"><strong>实盘安全审计</strong><span>手动读取，不新增后台轮询</span></div>
           <div className="rz-operator-actions"><button type="button" disabled={auditBusy} onClick={() => void loadAudit()}>{auditBusy ? "读取中…" : "查看最近安全审计"}</button></div>
-          {audit && <div className="rz-operator-audit">{audit.length ? audit.map((event) => <div key={event.id}><span>{event.severity}</span><strong>{event.message}</strong><small>{formatTime(event.createdAt)}</small></div>) : <p>暂无审计记录。</p>}</div>}
+          {audit && <div className="rz-operator-audit">{audit.length ? audit.map((event) => <div key={event.id}><span>{operatorLabel(event.severity)}</span><strong>{chineseOperatorText(event.message)}</strong><small>{formatTime(event.createdAt)}</small></div>) : <p>暂无审计记录。</p>}</div>}
         </div>}
 
         {message && <div className="rz-operator-message" aria-live="polite">{message}</div>}

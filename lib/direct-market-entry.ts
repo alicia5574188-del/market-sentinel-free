@@ -47,6 +47,9 @@ export function validateDirectMarketEntry(
   if (!(stopDistance > 0)) {
     return { allowed: false, reason: "最新价格已经触及或越过原判断失效位", entryPrice: quote.price, rewardRisk: null };
   }
+  if (stopDistance / quote.price > 0.05) {
+    return { allowed: false, reason: "最新报价下结构止损距离超过5%，放弃入场而不修改止损", entryPrice: quote.price, rewardRisk: null };
+  }
   const rewardRisk = targetDistance / stopDistance;
   if (!(rewardRisk >= 1.8)) {
     return { allowed: false, reason: `最新价格下结构盈亏比仅 ${rewardRisk.toFixed(2)}R`, entryPrice: quote.price, rewardRisk };

@@ -31,6 +31,6 @@ test("renders production Resonance metadata", async () => {
   const html = await response.text();
   assert.match(html, /<title>Resonance｜自适应交易系统<\/title>/i);
   assert.match(html, /用三套核心策略、当前贡献排名和每12小时复盘驱动/);
-  assert.match(html, /data-release="direct-market-brain-v4-restored-core"/);
+  assert.match(html, /data-release="direct-market-brain-v5-entry-integrity"/);
   assert.doesNotMatch(html, /name=["']codex-preview["']/i);
 });

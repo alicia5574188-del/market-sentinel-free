@@ -33,7 +33,9 @@ jobs:
       - name: Install
         run: npm ci
       - name: Strategy, risk and migration tests
-        run: npm run test:signals
+        run: |
+          npm run test:direct
+          npm run test:signals
       - name: Production build and UI safety tests
         run: npm test
       - name: Wrangler production deploy dry-run

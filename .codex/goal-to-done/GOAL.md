@@ -1,5 +1,25 @@
 # Goal
 
+## Current authorized release — publish the verified V5 optimization
+
+- User authorized immediate GitHub/CI/Cloudflare production release on 2026-09-05 after the local V5 verification. Publish only the already verified scope, using one feature PR and green CI before merge.
+- Verify the immutable V5 client asset, bounded production scheduler health, and completed PAPER cutover with zero legacy open paper positions. No fund movement, live reset or additional strategy tuning is authorized.
+
+## Current authorized optimization — entry integrity and Chinese operator UI
+
+- Keep the prepared compact daily UI and translate visible positions, states, metrics, chart labels and operator controls into Chinese without changing stored IDs, symbols or credentials.
+- Correct the demonstrated HT5-R-derived resonance admission gaps: reuse scanner-owned market breadth/benchmark and the existing asset regime classifier; reject strongly opposing tactical trends and require completed-candle recovery of nearby price structure.
+- Keep stops beyond actual swing invalidation; reject plans outside the historical 5% structural-distance ceiling instead of clamping stops to 3%. Keep sizing, total-risk and live safety authorities unchanged.
+- Attribute all three setups to the actual existing regime classification instead of hardcoded regimes so loss isolation does not merge different environments. Retain the historical reversal pattern conditions and existing data/macro safety boundaries.
+- Declare a new major paper release through the established additive cutover mechanism; do not modify or fund real positions. Run focused tests then one complete local verification pass.
+
+## Current bounded task — compact decision display and strategy identity audit
+
+- Remove the raw score/probability/location/empty-level hero from the daily Brain page. Keep a plain-language operating summary and move the existing complete diagnostic card to collapsed Management diagnostics.
+- Compare the three V4 setups against retained historical sources and reproduce relevant admission differences on identical inputs. Distinguish code evidence from unverified production-order attribution.
+- Do not tune strategies, modify positions, reset capital, add polling, or deploy in this task. Preserve the existing order review and owner/live safety capabilities.
+- Verify the UI change locally, record exact evidence and access blockers, and leave a bounded next action rather than starting another system rewrite.
+
 ## Completed objective — V4 restored three-strategy core
 
 - Replace the September 4 simplified same-name setup rules with traceable adaptations of the original HT3-R failed-auction, HT4 anti-crowding exhaustion, and original Resonance direction plus HT5-R higher-timeframe entry behavior.

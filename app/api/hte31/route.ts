@@ -4,6 +4,7 @@ import { getHte31Diagnostics } from "../../../lib/hte31-diagnostics";
 import { getHte31Dashboard } from "../../../lib/hte31-repository";
 import type { Hte31ScanCompleted } from "../../../lib/hte31-scanner";
 import { getRuntimeBindings } from "../../../lib/runtime-bindings";
+import { DIRECT_MARKET_BRAIN_VERSION } from "../../../lib/direct-market-types";
 import { requireApiViewer } from "../../api-auth";
 
 export const dynamic = "force-dynamic";
@@ -195,7 +196,7 @@ export async function GET(request: Request) {
   const twelveHourReview = buildTwelveHourReview(readModel, dashboard, requestedAt);
 
   return Response.json({
-    version: "direct-market-brain-v4-restored-core",
+    version: DIRECT_MARKET_BRAIN_VERSION,
     requestedAt,
     observedAt: lastSuccessAt ?? requestedAt,
     account: auth.account,

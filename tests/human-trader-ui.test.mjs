@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import vm from "node:vm";
+import ts from "typescript";
 
 const [page, layout, route, chart, css, liveStatus, scanner, catalog, worker, repository] = await Promise.all([
   readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
@@ -40,14 +42,68 @@ test("main page is observer-only and does not call an exchange directly", () => 
   assert.doesNotMatch(scanner, /from "\.\/gate-client/);
 });
 
+test("daily brain hides raw diagnostic scores and keeps full evidence under management", () => {
+  const brain = page.slice(page.indexOf('{tab === "大脑" &&'), page.indexOf('{tab === "订单" &&'));
+  assert.match(brain, /decisionSummary\.title/);
+  assert.match(brain, /decisionSummary\.detail/);
+  assert.doesNotMatch(brain, /<Bias|rz-score|marketView|<DecisionEvidenceCard|rz-signal-levels|执行结论/);
+  const management = page.slice(page.indexOf('{tab === "管理" && <div className="rz-stack rz-management-settings">'));
+  assert.match(management, /<details className="rz-decision-detail"><summary>决策诊断（按需查看）/);
+  assert.match(management, /<DecisionEvidenceCard/);
+  assert.match(management, /readModel\.openReason/);
+  assert.doesNotMatch(css, /\.rz-hero|\.rz-score|\.rz-brain-reason/);
+});
+
+test("plain-language decision never presents a candidate or stale state as a filled trade", () => {
+  const source = page.match(/function operatorDecision\([\s\S]*?\n}/)?.[0];
+  assert.ok(source);
+  const summarize = vm.runInNewContext(ts.transpile(`${source}\noperatorDecision;`));
+  assert.equal(summarize(null, false).title, "正在读取运行状态");
+  const snapshot = {
+    degraded: false,
+    dashboard: { paperReset: { status: "completed" }, settings: { scanEnabled: true }, directRisk: { state: "NORMAL" } },
+    scanner: { readModel: { directCandidate: { symbol: "BTC_USDT", setupLabel: "多周期综合共振", decision: "LONG" } } },
+  };
+  assert.equal(summarize(snapshot, false).title, "BTC 信号待复核");
+  assert.match(summarize(snapshot, false).detail, /不代表已开仓/);
+  assert.equal(summarize(snapshot, true).title, "运行数据需要检查");
+  snapshot.degraded = true;
+  assert.equal(summarize(snapshot, false).title, "运行数据需要检查");
+  snapshot.degraded = false;
+  snapshot.dashboard.directRisk.state = "PAUSED";
+  assert.equal(summarize(snapshot, false).title, "风险保护中");
+  snapshot.dashboard.settings.scanEnabled = false;
+  assert.equal(summarize(snapshot, false).title, "市场扫描已暂停");
+  snapshot.dashboard.paperReset.status = "pending";
+  assert.equal(summarize(snapshot, false).title, "等待新一轮模拟开始");
+});
+
+test("operator enums, technical metrics and chart labels display in Chinese", async () => {
+  const source = await readFile(new URL("../lib/operator-language.ts", import.meta.url), "utf8");
+  const display = vm.runInNewContext(ts.transpile(source.replace(/export /g, "") + "\n({operatorLabel, chineseOperatorText, riskClusterLabel});"));
+  for (const value of ["MIDDLE", "FRESH", "DEFENSIVE", "HOLD", "PROTECT", "EXIT", "ENTRY", "starting", "verified", "isolated", "warning"]) {
+    assert.match(display.operatorLabel(value), /[\u4e00-\u9fff]/);
+    assert.notEqual(display.operatorLabel(value), value);
+  }
+  assert.equal(display.operatorLabel("MIDDLE"), "区间中部");
+  assert.equal(display.operatorLabel("new_internal_state"), "状态待确认");
+  assert.equal(display.riskClusterLabel("independent-ETH_USDT"), "ETH独立风险");
+  assert.equal(display.chineseOperatorText("Funding/OI/Flow/Book/HTF/IV · 5m · 1.00R"), "资金费率/持仓量/资金流/订单簿/高周期/隐含波动率 · 5分钟 · 1.00倍风险");
+  assert.doesNotMatch(page, />\s*(BRAIN|CONTRIBUTION|OPEN|CLOSED|ARCHIVE|PF|Entry Efficiency|Exit Efficiency|Web Push)\s*</);
+  for (const phrase of ["第一止盈", "第二止盈", "入场效率", "盈利因子", "市场扫描", "持仓管理"]) assert.ok(page.includes(phrase));
+  assert.match(page, /operatorLabel\(candidate\.location\)/);
+  assert.match(page, /operatorLabel\(positionDecision\.action\)/);
+  assert.match(page, /operatorLabel\(marker\.kind\)/);
+});
+
 test("trade cards preserve leverage economics and full expandable review", () => {
   assert.match(page, /function MiniChart/);
   assert.match(page, /\/api\/hte31\/chart\?trade=/);
-  for (const phrase of ["杠杆", "隔离保证金", "名义仓位", "计划亏损", "TP2预计净利", "当前保护价", "TP1", "TP2"]) assert.match(page, new RegExp(phrase));
+  for (const phrase of ["杠杆", "隔离保证金", "名义仓位", "计划亏损", "第二止盈预计净利", "当前保护价", "第一止盈", "第二止盈"]) assert.match(page, new RegExp(phrase));
   assert.match(page, /plannedTp2NetUsdt/);
   assert.match(page, /chart\.markers\.map/);
   assert.match(page, /post-exit-zone/);
-  for (const metric of ["仓内 MFE", "仓内 MAE", "出场后 MFE", "出场后 MAE", "Exit Capture", "Exit Efficiency"]) assert.match(page, new RegExp(metric));
+  for (const metric of ["仓内最大浮盈", "仓内最大浮亏", "出场后最大有利波动", "出场后最大不利波动", "收益捕获率", "退出效率"]) assert.match(page, new RegExp(metric));
   assert.match(page, /counterfactual/);
   assert.match(page, /diagnosis/);
   assert.match(page, /finalVerdict/);
@@ -87,7 +143,7 @@ test("simulation reset is reachable from funds without duplicating its destructi
 
 test("pre-trade signal cards expose the complete decision and risk plan", () => {
   assert.match(page, /function DecisionEvidenceCard/);
-  for (const phrase of ["方向", "触发状态", "入场区", "入场价", "止损", "TP1", "TP2", "触发与硬闸门", "支持证据", "反证 / 缺失条件", "失效条件"]) {
+  for (const phrase of ["方向", "触发状态", "入场区", "入场价", "止损", "第一止盈", "第二止盈", "触发与硬闸门", "支持证据", "反证 / 缺失条件", "失效条件"]) {
     assert.match(page, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
   assert.match(page, /candidate\.checks\.map/);
@@ -97,13 +153,13 @@ test("pre-trade signal cards expose the complete decision and risk plan", () => 
 });
 
 test("runtime settings preserve scanner diagnostics needed to detect silent stalls", () => {
-  assert.match(page, /Scanner/);
+  assert.match(page, /市场扫描/);
   assert.match(page, /当前阶段/);
   assert.match(page, /scanner\?\.phase/);
   assert.match(page, /scanner\?\.lastError/);
   assert.match(page, /scanner\?\.circuitOpen/);
   assert.match(page, /ageSeconds/);
-  assert.match(page, /Trade Manager/);
+  assert.match(page, /持仓管理/);
 });
 
 test("live boundary preserves credentials reconciliation emergency stop and mobile hold safety", () => {

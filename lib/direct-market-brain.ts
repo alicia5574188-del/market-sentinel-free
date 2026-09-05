@@ -7,6 +7,10 @@ import {
   type DirectMarketSide,
 } from "./direct-market-types.ts";
 import type { Hte31Candle } from "./hte31-types.ts";
+import { classifyHte31AssetRegime } from "./hte31-regime.ts";
+import type { ResonanceGlobalMarketState } from "./resonance-global-market.ts";
+
+type MarketContext = Pick<ResonanceGlobalMarketState, "benchmarkMomentum" | "advancingRatio" | "decliningRatio">;
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -40,6 +44,12 @@ function atr(candles: Hte31Candle[], period = 14) {
 
 function returns(candles: Hte31Candle[]) {
   return candles.slice(1).map((row, index) => row.close / Math.max(candles[index].close, Number.EPSILON) - 1);
+}
+
+function completedCandles(candles: Hte31Candle[], observedAt: number) {
+  return candles.filter((row) => [row.time, row.open, row.high, row.low, row.close, row.volume].every(Number.isFinite)
+    && (row.time > 10_000_000_000 ? row.time : row.time * 1000) + 300_000 <= observedAt)
+    .sort((left, right) => left.time - right.time);
 }
 
 function barVolumeRatio(candles: Hte31Candle[], bar: Hte31Candle | undefined, endOffset: number) {
@@ -108,7 +118,7 @@ type SetupEvaluation = {
   blockers: string[];
 };
 
-function evaluateCoreSetups(packet: MarketAnalysisPacket, candles: Hte31Candle[]): SetupEvaluation[] {
+function evaluateCoreSetups(packet: MarketAnalysisPacket, candles: Hte31Candle[], marketContext?: MarketContext): SetupEvaluation[] {
   const rows = candles.slice(-96);
   const last = rows.at(-1)!;
   const previous = rows.at(-2)!;
@@ -117,6 +127,12 @@ function evaluateCoreSetups(packet: MarketAnalysisPacket, candles: Hte31Candle[]
   const trend1h = packet.market.timeframeTrend1h ?? 0;
   const trend4h = packet.market.timeframeTrend4h ?? 0;
   const weightedTrend = trend15m * 0.25 + trend1h * 0.35 + trend4h * 0.40;
+  const assetRegime = classifyHte31AssetRegime({
+    ...packet.market, symbol: packet.symbol, observedAt: packet.observedAt,
+    multiTimeframeTrend: packet.market.multiTimeframeTrend ?? weightedTrend,
+    benchmarkMomentum: marketContext?.benchmarkMomentum ?? null,
+    dataQuality: packet.decision.dataQuality, candles5m: candles,
+  });
 
   // HT3-R Failed Auction: a raw signal is the price event (sweep + reclaim).
   // Volume, reverse impulse, microstructure and trend fit remain qualification
@@ -214,17 +230,25 @@ function evaluateCoreSetups(packet: MarketAnalysisPacket, candles: Hte31Candle[]
     : 99;
   const resonanceStructure = Math.abs(trend4h) >= 0.28 && signed(trend1h, resonanceSide) >= 0.04;
   const resonanceNearMean = Boolean(currentAtr && resonanceEma != null && Math.abs(last.close - resonanceEma) <= currentAtr * 1.45);
-  const resonanceTactical = signed(trend15m, resonanceSide) <= 0.58 && resonanceBaseRangeAtr <= 1.65;
+  const tacticalTrend = signed(trend15m, resonanceSide);
+  const resonanceTactical = tacticalTrend >= -0.42 && tacticalTrend <= 0.58 && resonanceBaseRangeAtr <= 1.65;
   const resonanceBodyAtr = currentAtr ? Math.abs(last.close - last.open) / currentAtr : 0;
+  const recoveryBars = rows.slice(-3, -1);
   const resonanceResume = resonanceBodyAtr >= 0.13 && (resonanceSide === "LONG"
-    ? last.close > last.open && last.close > previous.close
-    : last.close < last.open && last.close < previous.close);
+    ? last.close > last.open && last.close > Math.max(...recoveryBars.map((bar) => bar.high))
+    : last.close < last.open && last.close < Math.min(...recoveryBars.map((bar) => bar.low)));
   const resonanceFlow = signed(packet.market.spotCvdRatio, resonanceSide) >= -0.006
     && signed(packet.market.orderBookImbalance, resonanceSide) >= -0.08;
+  const breadth = resonanceSide === "LONG" ? marketContext?.advancingRatio : marketContext?.decliningRatio;
+  const resonanceMarket = Number.isFinite(marketContext?.benchmarkMomentum) && Number.isFinite(breadth)
+    && signed(marketContext?.benchmarkMomentum, resonanceSide) >= -0.9 && breadth! >= 0.37 && breadth! <= 1;
+  const resonanceRegime = ["trend_up", "trend_down", "expansion_up", "expansion_down", "transition"].includes(assetRegime);
   const resonanceTrigger = resonanceStructure && resonanceNearMean && resonanceTactical;
   const resonanceChecks = [
-    { key: "resonance-resume", label: "5m重新服从大周期", passed: resonanceResume, detail: `${resonanceBodyAtr.toFixed(2)} ATR` },
+    { key: "resonance-resume", label: "五分钟收盘收复近端结构", passed: resonanceResume, detail: `${resonanceSide === "LONG" ? "需收于前两根最高价之上" : "需收于前两根最低价之下"}，实体 ${resonanceBodyAtr.toFixed(2)} 倍平均波幅` },
     { key: "resonance-flow", label: "现货与订单簿未逆风", passed: resonanceFlow, detail: `Spot ${signed(packet.market.spotCvdRatio, resonanceSide).toFixed(3)} / Book ${signed(packet.market.orderBookImbalance, resonanceSide).toFixed(3)}` },
+    { key: "resonance-market", label: "整体市场支持当前方向", passed: resonanceMarket, detail: breadth == null ? "市场广度不可用" : `同向品种占比 ${(breadth * 100).toFixed(0)}%` },
+    { key: "resonance-regime", label: "当前行情适合顺势参与", passed: resonanceRegime, detail: assetRegime },
   ];
   const resonanceSetupScore = (resonanceStructure ? 30 : 0) + (resonanceNearMean ? 16 : 0)
     + (resonanceTactical ? 18 : 0) + (resonanceResume ? 22 : 0) + (resonanceFlow ? 10 : 0);
@@ -234,7 +258,7 @@ function evaluateCoreSetups(packet: MarketAnalysisPacket, candles: Hte31Candle[]
     {
       setup: "VOLUME_FORCE_FAILED_BREAKOUT", label: "量价力度假突破", side: failedSide,
       trigger: failedTrigger, score: clamp(failedSetupScore * 0.58 + failedEvidenceScore * 0.42, 0, 100),
-      target1R: 1, target2R: 2.1, maxHoldingMinutes: 120, stopLookback: 8, stopPaddingAtr: 0.20, assetRegime: "transition",
+      target1R: 1, target2R: 2.1, maxHoldingMinutes: 120, stopLookback: 8, stopPaddingAtr: 0.20, assetRegime,
       setupChecks: failedChecks,
       evidence: [`成熟边界扫单并收回：${failedTrigger ? "是" : "否"}`, `扫单量能 ${failedSweepVolume.toFixed(2)}x · 区间 ${failedSweepRangeAtr.toFixed(2)} ATR`, `反向确认 ${failedVotes}/6`],
       blockers: [!failedTrigger ? "尚未形成成熟边界扫单并深度收回" : "", ...failedChecks.filter((check) => !check.passed).map((check) => `${check.label}：${check.detail}`)].filter(Boolean),
@@ -242,7 +266,7 @@ function evaluateCoreSetups(packet: MarketAnalysisPacket, candles: Hte31Candle[]
     {
       setup: "EXHAUSTION_REVERSAL", label: "衰竭反转", side: exhaustionSide,
       trigger: exhaustionTrigger, score: clamp(exhaustionSetupScore * 0.60 + exhaustionEvidenceScore * 0.40, 0, 100),
-      target1R: 1, target2R: 2.6, maxHoldingMinutes: 300, stopLookback: 8, stopPaddingAtr: 0.20, assetRegime: "leverage_liquidation",
+      target1R: 1, target2R: 2.6, maxHoldingMinutes: 300, stopLookback: 8, stopPaddingAtr: 0.20, assetRegime,
       setupChecks: exhaustionChecks,
       evidence: [`15m成熟度 ${Math.abs(exhaustionTrend).toFixed(2)} · 延伸 ${exhaustionStretch.toFixed(2)} ATR`, `拥挤/背离 ${exhaustionVotes}/6`, `推进失败与5m反转：${exhaustionFailure && exhaustionReversal ? "是" : "否"}`],
       blockers: [!exhaustionMature ? "短周期趋势尚未成熟" : "", !exhaustionStretched ? "价格尚未形成ATR级衰竭" : "", ...exhaustionChecks.filter((check) => !check.passed).map((check) => `${check.label}：${check.detail}`)].filter(Boolean),
@@ -251,7 +275,7 @@ function evaluateCoreSetups(packet: MarketAnalysisPacket, candles: Hte31Candle[]
       setup: "MULTI_TIMEFRAME_RESONANCE", label: "多周期综合共振", side: resonanceSide,
       trigger: resonanceTrigger, score: clamp(resonanceSetupScore * 0.58 + resonanceEvidenceScore * 0.42, 0, 100),
       target1R: 1, target2R: 3.0, maxHoldingMinutes: 480, stopLookback: 14, stopPaddingAtr: 0.22,
-      assetRegime: resonanceSide === "LONG" ? "trend_up" : "trend_down", setupChecks: resonanceChecks,
+      assetRegime, setupChecks: resonanceChecks,
       evidence: [`4h主方向 ${trend4h.toFixed(2)} · 1h同向 ${signed(trend1h, resonanceSide).toFixed(2)}`, `位置距均值可执行：${resonanceNearMean && resonanceTactical ? "是" : "否"}`, `完整5m恢复：${resonanceResume ? "是" : "否"}`],
       blockers: [!resonanceStructure ? "4h与1h主故事尚未一致" : "", !resonanceNearMean || !resonanceTactical ? "等待回到可执行位置" : "", ...resonanceChecks.filter((check) => !check.passed).map((check) => `${check.label}：${check.detail}`)].filter(Boolean),
     },
@@ -264,15 +288,28 @@ export function buildDirectMarketCandidate(input: {
   btcCandles: Hte31Candle[];
   volumeRank: number;
   batchId: string;
+  marketContext?: MarketContext;
 }): DirectMarketCandidate {
-  const { packet, candles } = input;
+  const { packet } = input;
+  const candles = completedCandles(input.candles, packet.observedAt);
+  if (candles.length < 2) throw new Error("完整五分钟K线不足，不能形成入场判断");
   const price = packet.market.futuresPrice;
   const marketLocation = location(candles, price);
   const currentAtr = atr(candles);
   const atrPct = currentAtr && price > 0 ? currentAtr / price * 100 : null;
-  const setupEvaluations = evaluateCoreSetups(packet, candles);
+  const setupEvaluations = evaluateCoreSetups(packet, candles, input.marketContext);
   const macroRisk = packet.market.macroEventRisk ?? 0;
   const scoredSetups = setupEvaluations.map((setup) => {
+    const stopWindow = candles.slice(-setup.stopLookback);
+    const stopPadding = (currentAtr ?? 0) * setup.stopPaddingAtr;
+    const structuralStop = setup.side === "LONG"
+      ? Math.min(...stopWindow.map((row) => row.low)) - stopPadding
+      : Math.max(...stopWindow.map((row) => row.high)) + stopPadding;
+    const stopDistance = (setup.side === "LONG" ? 1 : -1) * (price - structuralStop);
+    // Structure owns the stop. An unaffordable/invalid plan must be rejected,
+    // never moved inside its swing just to fit a percentage limit.
+    const structuralRiskValid = Number.isFinite(structuralStop) && structuralStop > 0
+      && price > 0 && stopDistance > 0 && stopDistance / price <= 0.05;
     const directionalScore = clamp((setup.side === "LONG" ? 1 : -1) * (0.28 + setup.score / 145), -1, 1);
     const paths = normalizedPaths(directionalScore);
     const directionalProbability = setup.side === "LONG" ? paths.up : paths.down;
@@ -289,30 +326,19 @@ export function buildDirectMarketCandidate(input: {
       { key: "macro", label: "宏观事件风险", passed: macroRisk < 0.85, detail: `${Math.round(macroRisk * 100)}%` },
       { key: "edge", label: "结构期望", passed: netEdgeR >= 0.55, detail: `${netEdgeR.toFixed(2)}R` },
       { key: "volatility", label: "波动可执行", passed: atrPct != null && atrPct >= 0.15 && atrPct <= 3.2, detail: atrPct == null ? "ATR不可用" : `ATR ${atrPct.toFixed(2)}%` },
+      { key: "structural-stop", label: "真实结构止损可执行", passed: structuralRiskValid, detail: `距离 ${(stopDistance / price * 100).toFixed(2)}%，超出5%则放弃，不向内压缩止损` },
     ];
-    return { ...setup, directionalScore, paths, confidence, netEdgeR, checks, qualified: checks.every((check) => check.passed) && confidence >= 70 };
+    return { ...setup, structuralStop, stopDistance, directionalScore, paths, confidence, netEdgeR, checks, qualified: checks.every((check) => check.passed) && confidence >= 70 };
   });
   const selectedSetup = [...scoredSetups].sort((left, right) => Number(right.qualified) - Number(left.qualified)
     || Number(right.trigger) - Number(left.trigger)
-    || (right.score + (right.setup === "EXHAUSTION_REVERSAL" ? 15 : 0))
-      - (left.score + (left.setup === "EXHAUSTION_REVERSAL" ? 15 : 0)))[0];
+    || right.score - left.score)[0];
   const { directionalScore, paths, confidence, netEdgeR, checks } = selectedSetup;
-  const btcCorrelation = packet.symbol === "BTC_USDT" ? 1 : pearsonCorrelation(candles, input.btcCandles);
+  const btcCorrelation = packet.symbol === "BTC_USDT" ? 1 : pearsonCorrelation(candles, completedCandles(input.btcCandles, packet.observedAt));
   const riskClusterId = btcCorrelation == null
     ? "btc-correlation-unavailable"
     : Math.abs(btcCorrelation) >= 0.8 ? `btc-${btcCorrelation >= 0 ? "positive" : "inverse"}` : `independent-${packet.symbol}`;
-  const stopWindow = candles.slice(-selectedSetup.stopLookback);
-  const swingLow = stopWindow.length ? Math.min(...stopWindow.map((row) => row.low)) : price;
-  const swingHigh = stopWindow.length ? Math.max(...stopWindow.map((row) => row.high)) : price;
-  const stopPadding = currentAtr ? currentAtr * selectedSetup.stopPaddingAtr : 0;
-  const rawStructuralStop = selectedSetup.side === "LONG" ? swingLow - stopPadding : swingHigh + stopPadding;
-  const rawRisk = Math.max(currentAtr ? currentAtr * 0.70 : price * 0.005, price * 0.0035);
-  const maximumRisk = price * 0.03;
-  const riskDistance = Math.min(maximumRisk, rawRisk);
-  const structuralStop = selectedSetup.side === "LONG"
-    ? Math.max(price - maximumRisk, Math.min(price - riskDistance, rawStructuralStop))
-    : Math.min(price + maximumRisk, Math.max(price + riskDistance, rawStructuralStop));
-  const stopDistance = Math.abs(price - structuralStop);
+  const { structuralStop, stopDistance } = selectedSetup;
   const entryHalfWidth = Math.min(stopDistance * 0.12, price * 0.0015);
   const entryZone: [number, number] = [price - entryHalfWidth, price + entryHalfWidth];
   const targets = selectedSetup.side === "LONG"

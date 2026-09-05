@@ -5,7 +5,7 @@ import { DIRECT_MARKET_BRAIN_VERSION } from "./direct-market-types.ts";
 
 export const DIRECT_MARKET_RELEASE = {
   brainVersion: DIRECT_MARKET_BRAIN_VERSION,
-  migrationTag: "0022_direct_market_v4_restored_core_cutover",
+  migrationTag: "0023_direct_market_v5_entry_integrity_cutover",
   cutover: "force_archive_paper",
 } as const;
 
