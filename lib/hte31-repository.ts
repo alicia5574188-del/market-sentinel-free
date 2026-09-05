@@ -25,7 +25,7 @@ import {
   isCurrentResonanceTrade,
   resonanceLearningId,
 } from "./resonance-policy-version.ts";
-import { evaluateDirectMarketRisk } from "./direct-market-risk.ts";
+import { getDirectMarketRiskDecision } from "./direct-market-execution.ts";
 import { DIRECT_MARKET_AUTHORITY, DIRECT_MARKET_BRAIN_VERSION } from "./direct-market-types.ts";
 import { buildDirectSetupPerformance } from "./direct-market-performance.ts";
 import type { DirectPositionDecision } from "./direct-market-position-brain.ts";
@@ -956,10 +956,9 @@ export async function getHte31Dashboard(now = Date.now()) {
   const archivedClosed = closed.filter((row) => !currentClosed.includes(row));
   const grossProfit = currentClosed.reduce((sum, row) => sum + Math.max(0, row.netPnlUsdt ?? 0), 0);
   const grossLoss = Math.abs(currentClosed.reduce((sum, row) => sum + Math.min(0, row.netPnlUsdt ?? 0), 0));
-  const directRisk = evaluateDirectMarketRisk(currentClosed.map((row) => ({
-      independentEventKey: row.independentEventKey ?? row.id,
-      resultR: row.riskBudgetUsdt > 0 ? (row.netPnlUsdt ?? 0) / row.riskBudgetUsdt : 0,
-    })));
+  // Display the same version-specific risk policy used by execution, including
+  // the persisted daily halt. Never reuse the retired 3.5% risk evaluator here.
+  const directRisk = await getDirectMarketRiskDecision();
   const paperReset = await getHte31PaperResetState(open.length);
   const twelveHoursMs = 12 * 60 * 60_000;
   const currentWindowStartAt = Math.floor(now / twelveHoursMs) * twelveHoursMs;

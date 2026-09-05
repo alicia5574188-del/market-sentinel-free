@@ -214,3 +214,8 @@ test("high-frequency read is bounded, diagnostics are on demand, and health stay
   assert.match(health, /readHealthStatus/);
   assert.doesNotMatch(health, /ensureSchedulers/);
 });
+
+test("paper capital card reads the execution risk policy rather than the retired 3.5% evaluator", () => {
+  assert.match(repository, /const directRisk = await getDirectMarketRiskDecision\(\)/);
+  assert.doesNotMatch(repository, /const directRisk = evaluateDirectMarketRisk/);
+});
