@@ -1,5 +1,7 @@
 # Market Sentinel — Current System State
 
+> **2026-09-05 V6 verified production and reliability follow-up.** PR #137 / main `440d5980` / successful production run `33944293649`; Worker `3e8c67c0-17d1-4792-b86b-9bc22d22cdb7`. V6 paper cutover completed, target null, zero legacy holding positions. This supersedes older local/preparation status below. Follow-up fixes partial-success page null overwrites and adds read-only post-deploy/six-hour account D1 read/write plus advancing scheduler checks. Existing CI credential only; no runtime token or recurring D1 ledger. Budget estimates are not actual usage; new audit measurement pending. Idle manager heartbeat is five minutes: verify alarm advancement without increasing persistence frequency.
+
 > **2026-09-05 V6 configured coverage and risk-based capacity — release preparation.**
 >
 > Local V6 removes the fixed top-15/top-6 scan pruning and uses the oldest existing per-symbol Scanner timestamp to rotate through the configured universe (default 30; settings ceiling 50). Fixed PAPER total/same-side counts are removed; 15% aggregate planned risk, 3.5% normal accepted-trade risk, margin, correlation, single-symbol and live safeguards remain. D1 reservation scales with prospective positions and today's snapshot-recorded peak while preserving existing budgets. V6/0024 prepares the standard PAPER-only archive. Current production remains V5 until release proof; no strategy formula or live-risk change is part of V6.
