@@ -1,3 +1,9 @@
+## V13 五段真实K线、频率与仓位修正 — PR验证通过，待合并部署
+
+- 用户截图对应的ETH 02:15预测确有67%先下，但V12被“扣费后目标不足1.2倍完整风险”挡住；顶部蓝线是真实收盘路径，灰/金线只是归一化历史路径，不是历史OHLC K线。V12首笔BNB风险仅1.25U，根因是0.75%组合预算被预先除以六币。
+- PR #158 head `d090ce5`：匹配、方向、目标与回放统一只取最相似5段；每段携带并直接画24根匹配K线+12根实际后续K线。当前PAPER改为单笔1%/组合3%、相关敞口折半，日亏3%或三连亏暂停；经济门槛0.8R，2%保护及其余报价/流动性/资金/D1/实盘安全不变。新增0031隔离V13 PAPER证据，LIVE仍关闭。
+- 本地test:direct 77、test:signals 233、build/UI 118及lint全绿。PR workflow `33984216762` 全绿；真实12小时回放42信号、21完成、7胜、合计+2.891R，另2笔未完。BNB +3.700R、SOL +0.262R、DOGE -1.071R，BTC/ETH/XRP约0。该窗口支持提高频率但不证明未来盈利；不再继续放宽。
+
 ## V12 页面状态与开单链修正 — 生产完成
 
 - PR #156合并为main `03e5c7b`；workflow `33981949818` verify/deploy/operations全部成功。0030完成，active brain=`direct-market-brain-v12-majority-path-learning`、target=null、legacy open PAPER=0，Worker version=`89059834-10fd-4ebc-87d6-c26bd585f906`。

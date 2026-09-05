@@ -1,5 +1,12 @@
 # Decisions
 
+## 2026-09-06 — Exactly five real analogs; usable PAPER risk with bounded frequency
+
+- Select exactly the five closest non-overlapping completed episodes. The same five own the vote, target, stop-path replay and UI evidence; fewer than five fails closed. Carry raw timestamps and OHLC and render five independent-scale candlestick charts with the actual subsequent hour.
+- Set the current analog PAPER budget to 1.00% equity per trade and 3.00% total, without reserving one-sixth for symbols that have no signal. Retain half risk for correlated exposure, 5% free-margin reserve, three-loss pause and raise the coherent daily loss latch to 3.0%. Legacy minute-strategy policy is unchanged.
+- Lower only the executable fee-adjusted target/full-risk boundary from 1.2R to 0.8R. Keep the 2% stop ceiling and every data, quote, zone, invalidation, liquidity, cost, D1 and LIVE boundary. PR replay produced 42 signals / 21 closed / +2.891R versus V12's 11 / 9 / +0.963R, so retain 0.8R but do not relax further.
+- Use V13 and additive PAPER cutover 0031 to prevent mixed evidence. Preserve historical candles, archived orders, credentials and all Gate/live records; LIVE entry remains disabled.
+
 ## 2026-09-05 — Majority direction authorizes entry; path ratios become learning evidence
 
 - A simple majority of at least five independent historical episodes reaching the first tradable up/down swing is the strategy's direction vote. Expected net R, target-hit rate and losing-path share stay visible and persisted for learning, but cannot veto that same direction a second time.
