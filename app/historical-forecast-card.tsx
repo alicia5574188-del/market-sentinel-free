@@ -33,7 +33,7 @@ export function HistoricalForecastCard({ symbol, forecast, candles, observedAt =
         <text x="18" y="194" fill="#aab7ce" fontSize="12">两小时前</text><text x={x(0) - 12} y="194" fill="#aab7ce" fontSize="12">参考时刻</text><text x="384" y="194" fill="#aab7ce" fontSize="12">一小时后</text>
         <text x="446" y="25" fill="#aab7ce" fontSize="10">{max.toFixed(1)}%</text><text x="446" y="168" fill="#aab7ce" fontSize="10">{min.toFixed(1)}%</text>
       </svg>
-      <small>蓝线：已取得的真实走势　灰线：历史片段　金色：{forecast.swingBias && Math.max(forecast.swingBias.upPct, forecast.swingBias.downPct) >= 60 ? "多数方向片段" : "全部片段"}的平均参考路径；阴影：全部片段八成区间</small>
+      <small>蓝线：已取得的真实走势　灰线：历史片段　金色：{forecast.swingBias && Math.max(forecast.swingBias.upPct, forecast.swingBias.downPct) > 50 ? "多数方向片段" : "全部片段"}的平均参考路径；阴影：全部片段八成区间</small>
       <p>{stale ? "数据已过期，图仅作历史参考，不用于当前入场。" : referenceOnly ? `当前${forecast.sampleCount}段相似片段，至少需要${ANALOG_MIN_SAMPLES}段；图仅供观察，暂不作为开仓依据。` : "历史分布是样本参考，不是未来胜率保证。"}{!hasDistribution && " 尚无有效历史后续分布，右侧暂不画预测线。"}</p>
       {hasDistribution && <>
       <div className="rz-strategy-numbers">

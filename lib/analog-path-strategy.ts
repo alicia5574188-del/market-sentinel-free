@@ -16,8 +16,8 @@ export function historicalDirection(f:HistoricalForecast|undefined,now:number,_c
  if(f.state!=='READY')return {side:'WAIT',reason:f.reason};
  const swing=f.episodes?.length?historicalSwingVotes(f.episodes,_costBps).bias:f.swingBias;
  if(!swing)return {side:'WAIT',reason:'正在更新历史途中方向统计'};
- if(swing.upPct>=60)return {side:'LONG',reason:`${swing.upPct.toFixed(0)}%历史片段先向上走出可交易波动，不要求最终收涨`};
- if(swing.downPct>=60)return {side:'SHORT',reason:`${swing.downPct.toFixed(0)}%历史片段先向下走出可交易波动，不要求最终收跌`};
+ if(swing.upPct>50)return {side:'LONG',reason:`${swing.upPct.toFixed(0)}%历史片段先向上走出可交易波动，不要求最终收涨`};
+ if(swing.downPct>50)return {side:'SHORT',reason:`${swing.downPct.toFixed(0)}%历史片段先向下走出可交易波动，不要求最终收跌`};
  return {side:'WAIT',reason:'历史片段的首段可交易波动方向分散，暂不开单'};
 }
 type Episode=NonNullable<HistoricalForecast['episodes']>[number];

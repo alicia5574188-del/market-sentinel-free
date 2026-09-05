@@ -87,3 +87,9 @@ test('ambiguous two-sided first bars abstain rather than invent a favorable orde
  const f=forecast();f.episodes=f.episodes!.map(e=>({...e,bars:[{openPct:0,highPct:1,lowPct:-1,closePct:1}]}));
  assert.equal(historicalDirection(f,now).side,'WAIT');
 });
+
+test('simple majority is enough for direction; eleven of twenty is not rejected by an extra sixty-percent gate',()=>{
+ const f=forecast(),up=f.episodes![0],down=f.episodes![9];
+ f.episodes=Array.from({length:20},(_,i)=>({...i<11?up:down,from:i}));f.sampleCount=20;f.effectiveSamples=20;
+ assert.equal(historicalDirection(f,now).side,'LONG');
+});

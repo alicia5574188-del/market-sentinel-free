@@ -175,7 +175,7 @@ export function buildHistoricalForecast(input: { candles: Hte31Candle[]; now: nu
   });
   const swing = historicalSwingVotes(result.episodes, result.costBps);
   result.swingBias = swing.bias;
-  const majority = swing.bias.upPct >= 60 ? 1 : swing.bias.downPct >= 60 ? -1 : 0;
+  const majority = swing.bias.upPct > 50 ? 1 : swing.bias.downPct > 50 ? -1 : 0;
   const referencePaths = paths.filter((_, i) => !majority || swing.votes[i] === majority);
   const forwards = paths.map((path) => path.at(-1)!);
   const ratio = (predicate: (v: number) => boolean) => totalWeight
