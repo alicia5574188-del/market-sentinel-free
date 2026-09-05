@@ -47,5 +47,5 @@ test("dashboard has one main poll and live polling only on management tab", asyn
 test("installed PWA metadata points at production Worker origin", async () => {
   const layout = await readFile(new URL("../app/layout.tsx", import.meta.url), "utf8");
   assert.match(layout, /metadataBase: new URL\("https:\/\/market-sentinel-free\.alicia5574188\.workers\.dev"\)/);
-  assert.match(layout, /applicationName: "Resonance"/);
+  assert.match(layout, /applicationName: "共振量化"/);
 });

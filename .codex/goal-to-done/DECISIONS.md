@@ -442,3 +442,9 @@ Record only consequential decisions using this format:
 - Strategy, history archive, scheduler, risk, positions, D1 and credentials are unchanged. UI/risk/architecture gates required; release verification pending.
 
 2026-09-05：用户授权立即实现短线及全天运行。采用一个六币一分钟行情生产器和原持仓/归档后台；0.25%含费单笔、0.75%组合、三连亏暂停及日亏持久门控取代旧3.5%及历史相似样本门槛。旧历史完整保留；自动实盘拒绝此版本。验证与实际24小时观察须区分。
+
+## 2026-09-05 — V8 短线交易台页面改版
+
+权益/已实现结果与当前决定在前，当前持仓显示保护价和最迟退出；统计与历史辅助折叠。订单默认紧凑，原经济计划和复盘按需展开。管理页保留扫描、持仓、资金保护、模拟重置及全部实盘/账户/通知能力。暖黑、米白、橙色主题与中文PWA信息统一。
+
+分类：原控制/数据读取保持；首页和订单呈现重新实现；旧三策略比较、重复指标退役；运行资源仅说明实际既有预算/审计，无实时额度则明确未知。不增加轮询、Gate请求或D1写入；交易策略、版本、epoch与旧历史不变。部署证据以STATUS及PR为准。

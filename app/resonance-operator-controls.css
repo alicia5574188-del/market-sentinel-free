@@ -1,13 +1,13 @@
 .rz-operator-bar { width: min(920px, 100%); box-sizing: border-box; margin: 0 auto; padding: calc(env(safe-area-inset-top, 0px) + 12px) 18px 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.rz-operator-bar > span { font-size: 11px; color: #93a1b7; }
+.rz-operator-bar > span { font-size: 11px; color: var(--rz-muted); }
 .rz-operator-launcher {
   position: static;
   flex-shrink: 0;
   border: 1px solid rgba(132, 170, 194, .28);
   border-radius: 999px;
   padding: 8px 11px;
-  background: rgba(7, 25, 36, .92);
-  color: #dcebf3;
+  background: var(--rz-panel);
+  color: var(--rz-text);
   font-size: 12px;
   font-weight: 700;
   box-shadow: 0 8px 30px rgba(0, 0, 0, .2);
@@ -29,7 +29,7 @@
   height: 100%;
   overflow-y: auto;
   padding: calc(env(safe-area-inset-top, 0px) + 18px) 18px calc(env(safe-area-inset-bottom, 0px) + 24px);
-  background: #071721;
+  background: var(--rz-bg);
   border-left: 1px solid rgba(132, 170, 194, .2);
   box-shadow: -18px 0 54px rgba(0, 0, 0, .32);
 }
@@ -60,7 +60,7 @@
 .rz-operator-title span,
 .rz-operator-account span,
 .rz-operator-account small {
-  color: #87a1b0;
+  color: var(--rz-muted);
   font-size: 12px;
 }
 
