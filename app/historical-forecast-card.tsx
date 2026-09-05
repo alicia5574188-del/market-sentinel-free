@@ -1,10 +1,11 @@
+import { historicalDirection } from "../lib/analog-path-strategy";
 import type { HistoricalForecast } from "../lib/historical-forecast";
 
 type Candle = { close: number; time?: number };
 const signed = (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(2)}%`;
 function date(time: number) { return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(time); }
 
-export function HistoricalForecastCard({ symbol, forecast, candles }: { symbol: string; forecast: HistoricalForecast; candles: Candle[] }) {
+export function HistoricalForecastCard({ symbol, forecast, candles, observedAt = forecast.signalAt }: { symbol: string; forecast: HistoricalForecast; candles: Candle[]; observedAt?: number }) {
   const current = candles.filter(c => c.time == null || (c.time > 10_000_000_000 ? c.time : c.time * 1000) + 300_000 <= forecast.signalAt).slice(-24), anchor = current.at(-1)?.close ?? 0;
   const currentPath = anchor > 0 ? current.map((c) => (c.close / anchor - 1) * 100) : [];
   const matches = forecast.matches.slice(0, 3);
@@ -16,7 +17,7 @@ export function HistoricalForecastCard({ symbol, forecast, candles }: { symbol: 
   const band = [...forecast.path.map((p) => `${x(p.minutes)},${y(p.upperPct)}`), ...[...forecast.path].reverse().map((p) => `${x(p.minutes)},${y(p.lowerPct)}`)].join(" ");
   return <article className="rz-panel rz-strategy-performance">
     <div className="rz-strategy-head"><div><strong>{symbol.replace("_USDT", "")} · 历史相似预测</strong><small>观察最近两小时 · 推演未来一小时 · {forecast.signalAt ? date(forecast.signalAt) : "等待数据"}</small></div><span>{forecast.state === "READY" ? "模拟验证" : forecast.state === "STALE" ? "行情延迟" : forecast.historyBars < 60 ? "历史数据不足" : "相似依据不足"}</span></div>
-    <p>{forecast.state === "INSUFFICIENT" && forecast.reason.includes("合格相似走势") ? `找到 ${forecast.sampleCount} 段合格相似走势，至少需要8段；继续寻找。` : forecast.reason}</p>
+    <p>{historicalDirection(forecast,observedAt,forecast.costBps).reason}。方向明确后比较立即入场与先反向后入场；不再叠加回踩信号。</p>
     {forecast.archive && <details className="rz-history-progress"><summary>{forecast.archive.storedBars == null ? "历史库暂时无法读取" : `已存 ${forecast.archive.storedBars} 根K线`}{forecast.archive.from ? ` · ${date(forecast.archive.from)} 起` : ""}</summary><p>{forecast.archive.note}。本轮检索 {forecast.archive.searchedBars} 根，较早历史分批轮换参与匹配。</p></details>}
     {forecast.state === "READY" && <>
       <svg viewBox="0 0 470 204" style={{ width: "100%", display: "block" }} role="img" aria-label="最新两小时与历史相似走势对照，右侧为历史后续分布，不是确定预测">
@@ -31,7 +32,7 @@ export function HistoricalForecastCard({ symbol, forecast, candles }: { symbol: 
       </svg>
       <small>蓝线：最新走势　灰线：历史片段　金色：历史后续中位数与八成区间</small>
       <div className="rz-strategy-numbers">
-        <div><span>历史上涨 / 下跌占比</span><b>{forecast.upPct.toFixed(0)}% / {forecast.downPct.toFixed(0)}%</b></div>
+        <div><span>历史终点上涨 / 下跌占比</span><b>{(forecast.directionUpPct??forecast.upPct).toFixed(0)}% / {(forecast.directionDownPct??forecast.downPct).toFixed(0)}%</b></div>
         <div><span>一小时后涨跌中位数</span><b>{signed(forecast.medianPct)}</b></div>
         <div><span>历史后续八成区间</span><b>{signed(forecast.lowerPct)} ～ {signed(forecast.upperPct)}</b></div>
         <div><span>独立片段 / 平均相似度</span><b>{forecast.sampleCount} / {forecast.similarity.toFixed(0)}%</b></div>

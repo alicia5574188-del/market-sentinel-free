@@ -40,7 +40,7 @@ export function validateDirectMarketEntry(
   if (!candidate.scalp && candidate.forecast && now - candidate.forecast.signalAt >= 300_000) {
     return { allowed: false, reason: "预测信号已跨过下一根完整K线，等待更新", entryPrice: quote.price, rewardRisk: null };
   }
-  if (candidate.scalp && (now < candidate.scalp.signalAt || now-candidate.scalp.signalAt>=60_000)) return {allowed:false,reason:"一分钟信号已过期，等待新信号",entryPrice:quote.price,rewardRisk:null};
+  if (candidate.scalp && (now < candidate.scalp.signalAt || now-candidate.scalp.signalAt>=(candidate.setup==='ANALOG_PATH'?300_000:60_000))) return {allowed:false,reason:"入场信号已过期，等待新信号",entryPrice:quote.price,rewardRisk:null};
   if (![now,candidate.observedAt,quote.observedAt,quote.price,...candidate.entryZone,candidate.invalidationPrice,...candidate.targets].every(Number.isFinite)
     || candidate.observedAt>now+1_000 || quote.observedAt>now+1_000) return {allowed:false,reason:"价格或时间数据异常",entryPrice:null,rewardRisk:null};
   const [low, high] = candidate.entryZone;
@@ -57,9 +57,16 @@ export function validateDirectMarketEntry(
     return { allowed: false, reason: "最新报价下结构止损距离超过5%，放弃入场而不修改止损", entryPrice: quote.price, rewardRisk: null };
   }
   const rewardRisk = targetDistance / stopDistance;
-  if (!(rewardRisk >= (candidate.scalp ? 0.9 : candidate.forecast ? 0.8 : 1.8))) {
+  if(candidate.setup==='ANALOG_PATH') {
+    const plan=candidate.analogIntent;
+    if(!plan||now>=plan.expiresAt)return {allowed:false,reason:'等待入场计划已过期',entryPrice:quote.price,rewardRisk};
+    const plannedEntry=plan.anchor*(1-sideDirection*plan.offsetPct/100);
+    const remainingEdge=plan.expectedNetR*(plan.stopPct+(candidate.scalp?.costBps??12)/100)-sideDirection*(quote.price-plannedEntry)/plan.anchor*100;
+    if(remainingEdge<=0)return {allowed:false,reason:'最新价格已消耗历史路径的估计净优势',entryPrice:quote.price,rewardRisk};
+  }
+  if (!(rewardRisk >= (candidate.setup==='ANALOG_PATH' ? 0 : candidate.scalp ? 0.9 : candidate.forecast ? 0.8 : 1.8))) {
     return { allowed: false, reason: `最新价格下结构盈亏比仅 ${rewardRisk.toFixed(2)}R`, entryPrice: quote.price, rewardRisk };
   }
-  if (candidate.scalp && targetDistance/quote.price*10_000 < candidate.scalp.costBps*3) return {allowed:false,reason:"最新报价下目标空间不足以覆盖三倍往返成本",entryPrice:quote.price,rewardRisk};
+  if (candidate.scalp && targetDistance/quote.price*10_000 < candidate.scalp.costBps*(candidate.setup==='ANALOG_PATH'?1.5:3)) return {allowed:false,reason:"最新报价下目标空间不足以覆盖本策略最低往返成本余量",entryPrice:quote.price,rewardRisk};
   return { allowed: true, reason: `最新报价仍在入场区，结构盈亏比 ${rewardRisk.toFixed(2)}R`, entryPrice: quote.price, rewardRisk };
 }

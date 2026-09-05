@@ -40,7 +40,7 @@ test("clean rebuild migration preserves real exchange data families and disarms 
 
 test("scanner gives new-entry authority only to the direct market brain", () => {
   const scanner = readFileSync(new URL("../lib/hte31-scanner.ts", import.meta.url), "utf8");
-  assert.match(scanner, /buildScalpCandidate/);
+  assert.match(scanner, /buildAnalogCandidate/);
   assert.match(scanner, /HISTORICAL_UNIVERSE/);
   assert.match(scanner, /boundedMap/);
   assert.doesNotMatch(scanner, /analyzeSymbol/);

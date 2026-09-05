@@ -25,7 +25,7 @@ test("per-setup performance identifies contributors and drag without inventing e
   assert.equal(rows.find((row) => row.setup === "VOLUME_FORCE_FAILED_BREAKOUT")?.averageLossR, -1);
   assert.equal(rows.find((row) => row.setup === "VOLUME_FORCE_FAILED_BREAKOUT")?.realizedPayoffRatio, 2);
   assert.equal(rows.find((row) => row.setup === "EXHAUSTION_REVERSAL")?.status, "拖后腿");
-  assert.equal(rows.find((row) => row.setup === "MINUTE_PULLBACK")?.status, "暂无机会");
+  assert.equal(rows.find((row) => row.setup === "ANALOG_PATH")?.status, "暂无机会");
 });
 
 test("windowed setup performance uses exits for results and entries for openings", () => {

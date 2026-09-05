@@ -17,7 +17,7 @@ test("production Worker bundle contains the direct market brain runtime", async 
   const version = (await readFile(new URL("../lib/direct-market-types.ts", import.meta.url), "utf8")).match(/DIRECT_MARKET_BRAIN_VERSION = "([^"]+)"/)[1];
   assert.ok(source.includes(version));
   assert.match(source, /Resonance/);
-  assert.match(source, /顺势回踩短线 · 模拟验证 · 12小时复盘/);
+  assert.match(source, /历史方向交易 · 模拟验证 · 12小时复盘/);
   assert.match(source, /量价力度假突破/);
   assert.match(source, /衰竭反转/);
   assert.match(source, /多周期综合共振/);

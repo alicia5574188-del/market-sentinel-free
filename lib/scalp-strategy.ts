@@ -103,7 +103,7 @@ export function resolveScalpExit(input:{side:'LONG'|'SHORT';stop:number;target:n
   if(stopHit) return {code:'stop_loss',price:input.side==='LONG'?Math.min(input.stop,input.price):Math.max(input.stop,input.price),reason:'结构保护触发，按可见价格保守结算'};
   if(input.side==='LONG'?input.high>=input.target:input.low<=input.target) return {code:'take_profit',price:input.target,reason:'短线目标完成，全部退出'};
   if(input.decision?.action==='EXIT') return {code:input.decision.exitCode??'brain_time_decay',price:input.price,reason:input.decision.reason};
-  if(input.timeout) return {code:'timeout',price:input.price,reason:'十五分钟时间预算结束，全部退出'};
+  if(input.timeout) return {code:'timeout',price:input.price,reason:'持仓时间预算结束，全部退出'};
   return null;
 }
 

@@ -1,3 +1,4 @@
+import { evaluateAnalogPosition } from '../lib/analog-path-strategy';
 import { evaluateScalpPosition } from "../lib/scalp-strategy";
 /// <reference types="@cloudflare/workers-types" />
 
@@ -26,9 +27,9 @@ async function replayStaleTrade(
   settings: AppSettings,
   now: number,
 ) {
-  const scalp=trade.setupId==='MINUTE_PULLBACK' ? JSON.parse(trade.decisionSnapshotJson)?.candidate?.scalp : null;
-  const interval=scalp?60_000:FIVE_MINUTES_MS;
-  const candles = scalp ? await fetchGateMinuteRecovery(trade.symbol,trade.lastEvaluatedAt,now) : await fetchGateChartCandles(trade.symbol, trade.lastEvaluatedAt, now);
+  const scalp=['MINUTE_PULLBACK','ANALOG_PATH'].includes(trade.setupId) ? JSON.parse(trade.decisionSnapshotJson)?.candidate?.scalp : null;
+  const interval=trade.setupId==='MINUTE_PULLBACK'?60_000:FIVE_MINUTES_MS;
+  const candles = trade.setupId==='MINUTE_PULLBACK' ? await fetchGateMinuteRecovery(trade.symbol,trade.lastEvaluatedAt,now) : await fetchGateChartCandles(trade.symbol, trade.lastEvaluatedAt, now);
   const replay = candles
     .map((candle) => ({
       candle,
@@ -47,7 +48,7 @@ async function replayStaleTrade(
       candleTime: item.candle.time,
       volumeUsd: 0,
       observedAt: item.observedAt,
-    }, settings, scalp ? evaluateScalpPosition({side:trade.side,entryPrice:trade.entryPrice,initialStopPrice:trade.initialStopPrice,currentStopPrice:trade.currentStopPrice,
+    }, settings, scalp ? (trade.setupId==='ANALOG_PATH'?evaluateAnalogPosition:evaluateScalpPosition)({side:trade.side,entryPrice:trade.entryPrice,initialStopPrice:trade.initialStopPrice,currentStopPrice:trade.currentStopPrice,
       entryAt:trade.entryAt,currentPrice:item.candle.close,observedAt:item.observedAt,roundTripCostBps:scalp.costBps,confirmationPrice:scalp.confirmationPrice,
       candles:candles.filter(c=>candleStartMs(c)+interval<=item.observedAt)}) : null);
     replayed += 1;

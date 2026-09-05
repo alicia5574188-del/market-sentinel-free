@@ -175,10 +175,10 @@ export async function GET(request: Request) {
 
   const unavailable = <T,>(label: string): Promise<ReadResult<T>> => Promise.resolve({ ok: false, error: `${label}_UNAVAILABLE` });
   const [scannerResult, positionResult, readModelResult, dashboardResult] = await Promise.all([
-    scanner ? boundedRead("scanner_status", scanner.status(), DO_READ_DEADLINE_MS) : unavailable<SchedulerWorkerStatus>("scanner_status"),
-    position ? boundedRead("position_status", position.status(), DO_READ_DEADLINE_MS) : unavailable<SchedulerWorkerStatus>("position_status"),
-    scanner ? boundedRead("scanner_read_model", scanner.readModel(), DO_READ_DEADLINE_MS) : unavailable<Hte31ScanCompleted | null>("scanner_read_model"),
-    boundedRead("dashboard", getHte31Dashboard(requestedAt), MAIN_READ_DEADLINE_MS),
+    scanner ? boundedRead("scanner_status", scanner.status().then(value=>{lastGoodScannerStatus=value;return value;}), DO_READ_DEADLINE_MS) : unavailable<SchedulerWorkerStatus>("scanner_status"),
+    position ? boundedRead("position_status", position.status().then(value=>{lastGoodPositionStatus=value;return value;}), DO_READ_DEADLINE_MS) : unavailable<SchedulerWorkerStatus>("position_status"),
+    scanner ? boundedRead("scanner_read_model", scanner.readModel().then(value=>{if(value)lastGoodReadModel=value;return value;}), DO_READ_DEADLINE_MS) : unavailable<Hte31ScanCompleted | null>("scanner_read_model"),
+    boundedRead("dashboard", getHte31Dashboard(requestedAt).then(value=>{lastGoodDashboard=value;return value;}), MAIN_READ_DEADLINE_MS),
   ]);
 
   const scannerStatus = resolveReadResult("scannerStatus", scannerResult, lastGoodScannerStatus, errors, staleSources);
@@ -190,7 +190,7 @@ export async function GET(request: Request) {
   if (readModelResult.ok && readModelResult.value) lastGoodReadModel = readModelResult.value;
   if (dashboardResult.ok) lastGoodDashboard = dashboardResult.value;
 
-  const lastSuccessAt = scannerStatus?.lastSuccessAt ?? readModel?.observedAt ?? null;
+  const lastSuccessAt = readModel?.observedAt ?? null;
   const scannerAgeMs = lastSuccessAt == null ? null : Math.max(0, requestedAt - lastSuccessAt);
   if (scannerAgeMs != null && scannerAgeMs > SCANNER_STALE_MS) errors.scannerFreshness = `Resonance Scanner 已 ${Math.round(scannerAgeMs / 1000)} 秒没有完成新评估`;
   if (scannerStatus?.lastError) errors.scannerRuntime = scannerStatus.lastError;

@@ -73,7 +73,7 @@ async function requireHte31Candidate(tradeId: string) {
   ) {
     throw new Error("模拟决策快照不完整或版本不一致，禁止创建 Gate 订单");
   }
-  if (["HISTORICAL_ANALOG", "MINUTE_PULLBACK"].includes(snapshot.candidate?.setup ?? "")) {
+  if (["HISTORICAL_ANALOG", "MINUTE_PULLBACK", "ANALOG_PATH"].includes(snapshot.candidate?.setup ?? "")) {
     throw new Error("当前策略处于模拟验证阶段，尚未取得实盘资格");
   }
   return trade;

@@ -538,7 +538,7 @@ export async function applyHte31PositionQuote(
     .where(and(eq(hte31Trades.symbol, quote.symbol), eq(hte31Trades.status, "holding"))).limit(1);
   if (!trade) return { kind: "none" as const };
   if(!Number.isFinite(quote.price)||quote.price<=0||quote.observedAt<trade.lastEvaluatedAt) return {kind:"none" as const};
-  const scalp=trade.setupId==='MINUTE_PULLBACK' ? JSON.parse(trade.decisionSnapshotJson)?.candidate?.scalp : null;
+  const scalp=['MINUTE_PULLBACK','ANALOG_PATH'].includes(trade.setupId) ? JSON.parse(trade.decisionSnapshotJson)?.candidate?.scalp : null;
   const costBps=scalp ? Math.max(12,scalp.costBps??settings.roundTripCostBps) : settings.roundTripCostBps;
 
   const barTime = (time: number) => time > 10_000_000_000 ? time : time * 1000;
@@ -687,6 +687,7 @@ export async function applyHte31PositionQuote(
   }
 
   const protectionChanged = target1HitAt !== trade.target1HitAt || currentStopPrice !== trade.currentStopPrice;
+  if (quote.protectionError && !protectionChanged) return {kind:"holding" as const,tradeId:trade.id,target1HitAt,currentStopPrice};
   if (!shouldPersistHte31HoldingCheckpoint({
     lastEvaluatedAt: trade.lastEvaluatedAt,
     observedAt: quote.observedAt,
@@ -699,7 +700,7 @@ export async function applyHte31PositionQuote(
     currentStopPrice,
     target1HitAt,
     lastPrice: quote.price,
-    lastEvaluatedAt: quote.observedAt,
+    lastEvaluatedAt: quote.protectionError ? trade.lastEvaluatedAt : quote.observedAt,
     maxPriceSeen,
     minPriceSeen,
     unrealizedNetPct,
@@ -934,18 +935,18 @@ export async function markHte31PostExitObservationUnavailable(
 
 export async function getHte31Dashboard(now = Date.now()) {
   const settings = await getSettings();
-  const { closed, open, account } = await accountFromRows(settings.trialCapitalUsdt);
-  const evaluations = await getDb().select().from(hte31Evaluations)
-    .where(lte(hte31Evaluations.observedAt, now))
-    .orderBy(desc(hte31Evaluations.observedAt)).limit(120);
+  const [{ closed, open, account },evaluations,allLearningRows,governance,directRisk] = await Promise.all([
+    accountFromRows(settings.trialCapitalUsdt),
+    getDb().select().from(hte31Evaluations).where(lte(hte31Evaluations.observedAt, now)).orderBy(desc(hte31Evaluations.observedAt)).limit(120),
+    getDb().select().from(hte31Learning).orderBy(desc(hte31Learning.updatedAt)).limit(300),
+    getHte31Governance(now),getDirectMarketRiskDecision(),
+  ]);
   const freshEvaluations = evaluations.filter((row) => now - row.observedAt <= 15 * 60_000);
-  const allLearningRows = await getDb().select().from(hte31Learning).orderBy(desc(hte31Learning.updatedAt)).limit(300);
   const learningRows = allLearningRows.filter((row) => isCurrentResonanceLearningId(row.id));
   const learning = learningRows.map((row) => ({
     ...row,
     performanceGate: evaluateHte31PerformanceCell(row, now),
   }));
-  const governance = await getHte31Governance(now);
   const tenMinute = evaluations.filter((row) => now - row.observedAt <= 10 * 60_000);
   const currentClosed = closed.filter((row) => row.entryAt >= account.epochStartedAt
     && row.decisionAuthority === DIRECT_MARKET_AUTHORITY
@@ -958,7 +959,6 @@ export async function getHte31Dashboard(now = Date.now()) {
   const grossLoss = Math.abs(currentClosed.reduce((sum, row) => sum + Math.min(0, row.netPnlUsdt ?? 0), 0));
   // Display the same version-specific risk policy used by execution, including
   // the persisted daily halt. Never reuse the retired 3.5% risk evaluator here.
-  const directRisk = await getDirectMarketRiskDecision();
   const paperReset = await getHte31PaperResetState(open.length);
   const twelveHoursMs = 12 * 60 * 60_000;
   const currentWindowStartAt = Math.floor(now / twelveHoursMs) * twelveHoursMs;

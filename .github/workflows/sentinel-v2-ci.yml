@@ -39,6 +39,8 @@ jobs:
         run: |
           npm run test:direct
           npm run test:signals
+      - name: Bounded current-history entry replay
+        run: node --experimental-strip-types scripts/replay-analog-path.mjs
       - name: Production build and UI safety tests
         run: npm test
       - name: Wrangler production deploy dry-run

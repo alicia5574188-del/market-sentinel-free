@@ -1,13 +1,15 @@
-import { loadMinuteFeed, nextMinuteScan, type MinuteCache } from "../lib/scalp-feed";
+import { evaluateAnalogPosition } from '../lib/analog-path-strategy';
+import { cleanAnalogCandles } from '../lib/historical-forecast';
+import { loadHourFeed, nextMinuteScan, type MinuteCache } from "../lib/scalp-feed";
 import { evaluateScalpPosition, scalpCostBps } from "../lib/scalp-strategy";
 import { buildHistoricalForecast, type HistoricalForecast } from "../lib/historical-forecast";
 /// <reference types="@cloudflare/workers-types" />
 
-import { loadHistoricalForecastCandles } from "../lib/historical-forecast-cache";
+
 import { DurableObject } from "cloudflare:workers";
 import { setRuntimeDb } from "../db";
 import { setRuntimeBindings } from "../lib/runtime-bindings";
-import { fetchGateChartCandles, fetchGateMinuteCandles, fetchGatePositionQuotes, SYMBOL_PATTERN } from "../lib/gate-client";
+import { fetchGateChartCandles, fetchGateFiveMinuteCandles, fetchGatePositionQuotes, SYMBOL_PATTERN } from "../lib/gate-client";
 import {
   applyHte31PositionQuote,
   completeHte31PostExitObservation,
@@ -147,7 +149,8 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
   private async generationReset() {
     const generation = await this.ctx.storage.get<string>("generation");
     if (generation === CLEAN_RUNTIME_VERSION) return;
-    await this.ctx.storage.deleteAll();
+    // Strategy generations reset decisions, never the reusable historical library.
+    await this.ctx.storage.delete("runtime");
     await this.ctx.storage.put("generation", CLEAN_RUNTIME_VERSION);
   }
 
@@ -212,13 +215,36 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
     return (await this.ctx.storage.get<MinuteCache>(`minute:${symbol}`))?.rows ?? [];
   }
 
+  async hourSnapshot(symbol:string) {
+    if(!SYMBOL_PATTERN.test(symbol)) return [];
+    return (await this.ctx.storage.get<MinuteCache>(`hour:${symbol}`))?.rows??[];
+  }
+
+  private async currentForecast(symbol:string,costBps:number) {
+    const now=Date.now(),old=await this.ctx.storage.get<HistoricalForecast>(`auxiliary:${symbol}`);
+    const rows=await this.hourSnapshot(symbol),signalAt=rows.length?rows.at(-1)!.time*1000+300_000:0;
+    if(old?.signalAt===signalAt&&old.episodes)return old;
+    let library=await this.ctx.storage.get<{candles:import('../lib/hte31-types').Hte31Candle[]}>(`hour-library:${symbol}`);
+    const recentLibrary=!library?await this.ctx.storage.get<{candles:import('../lib/hte31-types').Hte31Candle[]}>(`analog-history-v1:${symbol}`):undefined;
+    let archive=old?.archive;
+    if(!library&&this.env.HISTORICAL_ARCHIVE){
+      try {const saved=await this.env.HISTORICAL_ARCHIVE.getByName(`history:${symbol}`).read(symbol,now,[...(recentLibrary?.candles??[]),...rows]);library={candles:saved.candles};archive=saved.archive;await this.ctx.storage.put(`hour-library:${symbol}`,library);} catch { /* Existing recent cache remains usable; optional archive cannot break the feed. */ }
+    }
+    library??=recentLibrary;
+    const forecast=buildHistoricalForecast({candles:cleanAnalogCandles([...(library?.candles??[]),...rows],now),now,costBps:scalpCostBps(costBps),stopPct:0.3});
+    forecast.archive=archive;
+    await this.ctx.storage.put(`auxiliary:${symbol}`,forecast);
+    return forecast;
+  }
+
   private async enrichHistory(symbol:string,costBps:number) {
     const now=Date.now(), prior=await this.ctx.storage.get<number>("auxiliary-at")??0;
     if(now-prior<5*60_000) return;
     await this.ctx.storage.put("auxiliary-at",now);
     try {
-      const recent=await loadHistoricalForecastCandles(this.ctx.storage,fetchGateChartCandles,symbol,now);
+      const recent=await this.hourSnapshot(symbol);
       const history=this.env.HISTORICAL_ARCHIVE ? await this.env.HISTORICAL_ARCHIVE.getByName(`history:${symbol}`).history(symbol,now,recent) : null;
+      await this.ctx.storage.put(`hour-library:${symbol}`,{candles:history?.candles??recent});
       const forecast=buildHistoricalForecast({candles:history?.candles??recent,now,costBps:scalpCostBps(costBps),stopPct:0.3});
       forecast.archive=history?.archive;
       await this.ctx.storage.put(`auxiliary:${symbol}`,forecast);
@@ -230,8 +256,9 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
     let current = job;
     for (let stepIndex = 0; stepIndex < maxSteps; stepIndex += 1) {
       try {
-        const step = await runHte31ScanStep(current, (symbol,now)=>loadMinuteFeed(this.ctx.storage,fetchGateMinuteCandles,symbol,now),
-          symbol=>this.ctx.storage.get<HistoricalForecast>(`auxiliary:${symbol}`));
+        const step = await runHte31ScanStep(current, (symbol,now)=>loadHourFeed(this.ctx.storage,fetchGateFiveMinuteCandles,symbol,now),
+          symbol=>this.currentForecast(symbol,current.settings?.roundTripCostBps??12),
+          symbol=>this.ctx.storage.get<import("../lib/analog-path-strategy").AnalogIntent>(`analog-intent:${DIRECT_MARKET_BRAIN_VERSION}:${symbol}`));
         if (step.kind !== "progress") return step;
         current = step.job;
       } catch (error) {
@@ -376,16 +403,20 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
       const batch=result.candidates??[result.directCandidate];
       const settings=await getSettings();
       const executable=batch.filter(c=>c.decision!=="WAIT").sort((a,b)=>b.setupScore-a.setupScore);
-      const quotes=executable.length?await fetchGatePositionQuotes(executable.map(c=>c.symbol)):[];
+      const quotes=executable.length?await fetchGatePositionQuotes(executable.map(c=>c.symbol),false):[];
       let activity12h=runtime.activity12h??{current:emptyDirectTwelveHourActivity(result.observedAt),lastCompleted:null};
       let firstOpened: string|null=null;
       for(const candidate of batch) {
-        let openedSetup:DirectCoreSetup|null=null, openReason=candidate.counterEvidence[0]??"等待一分钟入场确认";
+        const key=`analog-intent:${DIRECT_MARKET_BRAIN_VERSION}:${candidate.symbol}`,prior=await this.ctx.storage.get<import('../lib/analog-path-strategy').AnalogIntent>(key);
+        if(candidate.analogIntent&&candidate.analogIntent.createdAt!==prior?.createdAt)await this.ctx.storage.put(key,candidate.analogIntent);
+        else if(!candidate.analogIntent&&prior)await this.ctx.storage.delete(key);
+        let openedSetup:DirectCoreSetup|null=null, openReason=candidate.counterEvidence[0]??"等待历史方向或更合适价格";
         if(candidate.decision!=="WAIT") {
           const opened=await openDirectMarketTrade({candidate,universe:result.universe.map(r=>r.symbol),settings,
             freshQuote:quotes.find(q=>q.symbol===candidate.symbol)??null,portfolioRank:executable.indexOf(candidate)+1});
           openedSetup=opened.opened?candidate.setup:null; openReason=opened.reason;
           firstOpened=firstOpened??opened.opened?.id??null;
+          if(opened.opened||opened.reason==='该币已有模拟持仓')await this.ctx.storage.delete(key);
         }
         activity12h=recordDirectTwelveHourActivity({activity:activity12h,candidate,openedSetup,openReason,expectedIntervalMs:SCANNER_CYCLE_INTERVAL_MS});
         if(candidate.symbol===result.target) result={...result,openReason};
@@ -530,9 +561,10 @@ export class HTE31TradeManager extends DurableObject<CloudflareEnv> {
       const completedFiveMinuteBucket = Math.floor(startedAt / 60_000) - 1;
       const reviewCandles = new Map<string, Awaited<ReturnType<typeof fetchGateChartCandles>>>();
       const reviewDue = forceArchiveForReset ? [] : open.filter((trade) => trade.decisionAuthority === "direct_market_brain"
-        && (trade.setupId === "MINUTE_PULLBACK" || hasAdaptivePositionPolicy(trade.decisionSnapshotJson))
-        && positionReviewBuckets[trade.id] !== completedFiveMinuteBucket);
+        && (["MINUTE_PULLBACK","ANALOG_PATH"].includes(trade.setupId) || hasAdaptivePositionPolicy(trade.decisionSnapshotJson))
+        && positionReviewBuckets[trade.id] !== (trade.setupId==='ANALOG_PATH'?Math.floor(startedAt/300_000)-1:completedFiveMinuteBucket));
       const reviewResults = await Promise.allSettled(reviewDue.map((trade) => {
+        if(trade.setupId === "ANALOG_PATH") return this.env.MARKET_SCANNER?.getByName("market-scanner").hourSnapshot(trade.symbol) ?? Promise.resolve([]);
         if(trade.setupId === "MINUTE_PULLBACK") return this.env.MARKET_SCANNER?.getByName("market-scanner").minuteSnapshot(trade.symbol) ?? Promise.resolve([]);
         const reviewTo = Math.floor(startedAt/300_000)*300_000-1;
         const reviewFrom = Math.max(trade.entryAt, reviewTo - 3 * 60 * 60_000);
@@ -542,7 +574,7 @@ export class HTE31TradeManager extends DurableObject<CloudflareEnv> {
         const review = reviewResults[index];
         if (review.status === "fulfilled") {
           reviewCandles.set(trade.id, review.value);
-          positionReviewBuckets[trade.id] = completedFiveMinuteBucket;
+          positionReviewBuckets[trade.id] = trade.setupId==='ANALOG_PATH'?Math.floor(startedAt/300_000)-1:completedFiveMinuteBucket;
         } else {
           failures.push(`${trade.symbol} 持仓复核K线：${errorMessage(review.reason)}`);
         }
@@ -556,11 +588,12 @@ export class HTE31TradeManager extends DurableObject<CloudflareEnv> {
             failures.push(`${trade.symbol}: quote missing`);
             continue;
           }
+          if(quote.protectionError)failures.push(`${trade.symbol} 持仓区间补查：${quote.protectionError}`);
           try {
             const candles5m = reviewCandles.get(trade.id);
-            const scalp=trade.setupId==='MINUTE_PULLBACK' ? JSON.parse(trade.decisionSnapshotJson)?.candidate?.scalp : null;
+            const scalp=['MINUTE_PULLBACK','ANALOG_PATH'].includes(trade.setupId) ? JSON.parse(trade.decisionSnapshotJson)?.candidate?.scalp : null;
             const positionDecision: DirectPositionDecision | null = scalp
-              ? evaluateScalpPosition({side:trade.side,entryPrice:trade.entryPrice,initialStopPrice:trade.initialStopPrice,currentStopPrice:trade.currentStopPrice,
+              ? (trade.setupId==='ANALOG_PATH'?evaluateAnalogPosition:evaluateScalpPosition)({side:trade.side,entryPrice:trade.entryPrice,initialStopPrice:trade.initialStopPrice,currentStopPrice:trade.currentStopPrice,
                 entryAt:trade.entryAt,currentPrice:quote.price,observedAt:quote.observedAt,roundTripCostBps:scalp.costBps,
                 confirmationPrice:scalp.confirmationPrice,candles:candles5m??[]})
               : candles5m ? evaluateDirectPosition({
@@ -586,7 +619,7 @@ export class HTE31TradeManager extends DurableObject<CloudflareEnv> {
         }
       }
 
-      if(open.some(t=>t.setupId==='MINUTE_PULLBACK') && startedAt-(runtime.status.lastSuccessAt??0)>=60_000) {
+      if(open.some(t=>['MINUTE_PULLBACK','ANALOG_PATH'].includes(t.setupId)) && startedAt-(runtime.status.lastSuccessAt??0)>=60_000) {
         await scalpAccountRisk(settings.trialCapitalUsdt,settings.roundTripCostBps,Date.now());
       }
       const due = await nextHte31PostExitObservation(Date.now());
