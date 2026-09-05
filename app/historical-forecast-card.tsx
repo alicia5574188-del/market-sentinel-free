@@ -21,7 +21,7 @@ export function HistoricalForecastCard({ symbol, forecast, candles, observedAt =
   return <article className="rz-panel rz-strategy-performance">
     <div className="rz-strategy-head"><div><strong>{symbol.replace("_USDT", "")} · 历史相似预测</strong><small>观察最近两小时 · 推演未来一小时 · {forecast.signalAt ? date(forecast.signalAt) : "等待数据"}</small></div><span>{stale ? "行情延迟" : forecast.state === "READY" ? "模拟验证" : forecast.historyBars < 60 ? "历史数据不足" : "相似依据不足"}</span></div>
     <p>{historicalDirection(forecast,observedAt,forecast.costBps).reason}。方向明确后比较立即入场与先反向后入场；不再叠加回踩信号。</p>
-    {forecast.archive && <details className="rz-history-progress"><summary>{forecast.archive.storedBars == null ? "历史库暂时无法读取" : `已存 ${forecast.archive.storedBars} 根K线`}{forecast.archive.from ? ` · ${date(forecast.archive.from)} 起` : ""}</summary><p>{forecast.archive.note}。本轮检索 {forecast.archive.searchedBars} 根，较早历史分批轮换参与匹配。</p></details>}
+    {forecast.archive && <details className="rz-history-progress"><summary>{forecast.archive.storedBars == null ? "历史库暂时无法读取" : `已存 ${forecast.archive.storedBars} 根K线`}{forecast.archive.from ? ` · ${date(forecast.archive.from)} 起` : ""}</summary><p>{/历史请求失败|history/i.test(forecast.archive.note) ? "较早历史本轮暂未更新，已存数据继续参与匹配；后台稍后重试" : forecast.archive.note}。本轮检索 {forecast.archive.searchedBars} 根，较早历史分批轮换参与匹配。</p></details>}
     {<>
       <svg viewBox="0 0 470 204" style={{ width: "100%", display: "block" }} role="img" aria-label="最新两小时与历史相似走势对照，右侧为历史后续分布，不是确定预测">
         <line x1="18" x2="442" y1={y(0)} y2={y(0)} stroke="#63708a" strokeDasharray="3 4" />

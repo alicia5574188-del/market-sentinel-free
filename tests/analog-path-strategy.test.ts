@@ -93,3 +93,11 @@ test('simple majority is enough for direction; eleven of twenty is not rejected 
  f.episodes=Array.from({length:20},(_,i)=>({...i<11?up:down,from:i}));f.sampleCount=20;f.effectiveSamples=20;
  assert.equal(historicalDirection(f,now).side,'LONG');
 });
+
+test('a more favorable live quote may enter while excessive chasing still waits',()=>{
+ const better=candidate(forecast(),{price:99.95});
+ assert.equal(better.decision,'LONG');
+ assert.equal(validateDirectMarketEntry(better,{symbol:better.symbol,price:99.95,observedAt:now+1000},now+1000).allowed,true);
+ const chase=candidate(forecast(),{price:101});
+ assert.equal(chase.decision,'WAIT');
+});
