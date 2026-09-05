@@ -104,7 +104,7 @@ jobs:
               .schedulerError == null and
               (.schedulers.position.state == "live" or .schedulers.position.state == "starting") and
               .schedulers.position.lastError == null and
-              (.schedulers.scanner.state == "live" or .schedulers.scanner.state == "starting" or .schedulers.scanner.state == "degraded") and
+              (.schedulers.scanner.state == "live" or .schedulers.scanner.state == "starting" or .schedulers.scanner.state == "degraded" or .schedulers.scanner.state == "error") and
               .schedulers.scanner.lastSuccessAt != null and
               ((now * 1000 - .schedulers.scanner.lastSuccessAt) < 180000) and
               .schedulers.scanner.analyzed > 0 and
@@ -123,7 +123,7 @@ jobs:
               .schedulerError == null and
               (.schedulers.position.state == "live" or .schedulers.position.state == "starting") and
               .schedulers.position.lastError == null and
-              (.schedulers.scanner.state == "live" or .schedulers.scanner.state == "starting" or .schedulers.scanner.state == "degraded") and
+              (.schedulers.scanner.state == "live" or .schedulers.scanner.state == "starting" or .schedulers.scanner.state == "degraded" or .schedulers.scanner.state == "error") and
               .schedulers.scanner.lastSuccessAt != null and
               ((now * 1000 - .schedulers.scanner.lastSuccessAt) < 180000) and
               .schedulers.scanner.analyzed > 0 and

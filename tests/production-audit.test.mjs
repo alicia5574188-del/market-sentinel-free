@@ -14,6 +14,9 @@ test("health accepts isolated scanner feed failures while useful scans continue"
   data.schedulers.scanner.state = "degraded";
   data.schedulers.scanner.lastError = "BNB 限流；DOGE 超时";
   assert.equal(healthy(data, 1_000), true);
+  data.schedulers.scanner.state = "error";
+  data.schedulers.scanner.lastError = "六币报价暂时超时，已经安排重试";
+  assert.equal(healthy(data, 1_000), true);
   data.schedulers.scanner.analyzed = 0;
   assert.equal(healthy(data, 1_000), false);
   data.schedulers.scanner.analyzed = 4;

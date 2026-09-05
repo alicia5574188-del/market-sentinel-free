@@ -18,7 +18,7 @@ async function json(url, options = {}) {
 export function healthy(data, now = Date.now()) {
   const { scanner, position } = data.schedulers ?? {};
   const scannerHealthy = scanner && !scanner.circuitOpen
-    && ["live", "starting", "degraded"].includes(scanner.state)
+    && ["live", "starting", "degraded", "error"].includes(scanner.state)
     && Number.isFinite(scanner.lastSuccessAt) && now - scanner.lastSuccessAt < 180_000
     && Number.isFinite(scanner.analyzed) && scanner.analyzed > 0;
   const positionHealthy = position && !position.lastError && !position.circuitOpen

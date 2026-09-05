@@ -94,6 +94,7 @@ test("production health verification accepts a scheduler while its normal alarm 
   assert.doesNotMatch(workflow, /\.schedulers\.position\.state == "live" and/);
   assert.equal(workflow.match(/\.schedulers\.scanner\.analyzed > 0/g)?.length, 2);
   assert.equal(workflow.match(/\.schedulers\.scanner\.state == "degraded"/g)?.length, 2);
+  assert.equal(workflow.match(/\.schedulers\.scanner\.state == "error"/g)?.length, 2);
   assert.doesNotMatch(workflow, /\.schedulers\.scanner\.lastError == null/);
   assert.match(workflow, /contains\(github\.event\.head_commit\.message, '\[audit-only\]'\)/);
 });
