@@ -27,10 +27,10 @@ test("direct brain keeps scans out of D1 and reserves seventy thousand rows", ()
   assert.equal(budget.scannerRows, 0);
   assert.equal(budget.evaluationRows, 0);
   assert.equal(budget.diagnosticRows, 0);
-  assert.equal(budget.positionCheckpointLogicalRows, 8_640);
-  assert.equal(budget.positionCheckpointPhysicalRows, 17_280);
-  assert.equal(budget.admittedTradeLifecycleRows, 12_000);
-  assert.equal(budget.mandatoryReserveRows, 720);
+  assert.equal(budget.positionCheckpointLogicalRows, 4_320);
+  assert.equal(budget.positionCheckpointPhysicalRows, 8_640);
+  assert.equal(budget.admittedTradeLifecycleRows, 6_000);
+  assert.equal(budget.mandatoryReserveRows, 15_360);
   assert.equal(budget.plannedPhysicalRows, DIRECT_MARKET_APP_HARD_ROWS_WRITTEN);
   assert.equal(budget.accountSafeLimit, DIRECT_MARKET_ACCOUNT_SAFE_ROWS_WRITTEN);
   assert.equal(budget.freeLimitHeadroom, 70_000);

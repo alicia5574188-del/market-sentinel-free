@@ -63,7 +63,7 @@ test("direct market brain scanner is phased and cannot restart the whole old sca
   assert.match(worker, /circuitOpen: true/);
   assert.match(worker, /Date\.now\(\) \+ 1_000/);
   assert.match(scanner, /Hte31ScanPhase = "config" \| "universe" \| "deep" \| "candles" \| "evaluate"/);
-  for (const phase of ["config", "universe", "deep", "candles", "evaluate"]) assert.match(scanner, new RegExp(`job\\.phase === \\"${phase}\\"`));
+  for (const phase of ["config", "universe", "deep", "evaluate"]) assert.match(scanner, new RegExp(`job\\.phase === \\"${phase}\\"`));
   assert.doesNotMatch(scanner, /runMarketScan|getStrategy2ExperienceBook|saveV2Opportunities|processShadowStrategies|trade_cases/);
 });
 

@@ -1,11 +1,11 @@
 import type { HistoricalForecast } from "../lib/historical-forecast";
 
-type Candle = { close: number };
+type Candle = { close: number; time?: number };
 const signed = (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(2)}%`;
 function date(time: number) { return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(time); }
 
 export function HistoricalForecastCard({ symbol, forecast, candles }: { symbol: string; forecast: HistoricalForecast; candles: Candle[] }) {
-  const current = candles.slice(-24), anchor = current.at(-1)?.close ?? 0;
+  const current = candles.filter(c => c.time == null || (c.time > 10_000_000_000 ? c.time : c.time * 1000) + 300_000 <= forecast.signalAt).slice(-24), anchor = current.at(-1)?.close ?? 0;
   const currentPath = anchor > 0 ? current.map((c) => (c.close / anchor - 1) * 100) : [];
   const matches = forecast.matches.slice(0, 3);
   const values = [...currentPath, ...matches.flatMap((m) => m.pathPct), ...forecast.path.flatMap((p) => [p.lowerPct, p.upperPct])];
@@ -26,7 +26,7 @@ export function HistoricalForecastCard({ symbol, forecast, candles }: { symbol: 
         <polygon points={band} fill="#e8b65a" opacity="0.17" />
         <polyline points={line(currentPath, -(currentPath.length - 1) * 5)} fill="none" stroke="#84b0ff" strokeWidth="2.8" />
         <polyline points={forecast.path.map((p) => `${x(p.minutes)},${y(p.medianPct)}`).join(" ")} fill="none" stroke="#f5c66d" strokeWidth="2.4" strokeDasharray="5 3" />
-        <text x="18" y="194" fill="#aab7ce" fontSize="12">两小时前</text><text x={x(0) - 12} y="194" fill="#aab7ce" fontSize="12">现在</text><text x="384" y="194" fill="#aab7ce" fontSize="12">一小时后</text>
+        <text x="18" y="194" fill="#aab7ce" fontSize="12">两小时前</text><text x={x(0) - 12} y="194" fill="#aab7ce" fontSize="12">参考时刻</text><text x="384" y="194" fill="#aab7ce" fontSize="12">一小时后</text>
         <text x="446" y="25" fill="#aab7ce" fontSize="10">{max.toFixed(1)}%</text><text x="446" y="168" fill="#aab7ce" fontSize="10">{min.toFixed(1)}%</text>
       </svg>
       <small>蓝线：最新走势　灰线：历史片段　金色：历史后续中位数与八成区间</small>

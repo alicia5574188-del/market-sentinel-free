@@ -70,8 +70,9 @@ export function hte31PaperPortfolioBlockReason(input: {
   nextSide: Hte31PositionSide;
   nextRiskUsdt: number;
   accountEquityUsdt: number;
+  maximumTotalPlannedRiskRate?: number;
 }) {
-  const policy = HTE31_PAPER_PORTFOLIO_POLICY;
+  const policy = { maximumTotalPlannedRiskRate: input.maximumTotalPlannedRiskRate ?? HTE31_PAPER_PORTFOLIO_POLICY.maximumTotalPlannedRiskRate };
   if (!Number.isFinite(input.accountEquityUsdt) || input.accountEquityUsdt <= 0
     || !Number.isFinite(input.nextRiskUsdt) || input.nextRiskUsdt <= 0
     || input.open.some((row) => !Number.isFinite(row.riskBudgetUsdt) || row.riskBudgetUsdt < 0)) {
@@ -79,7 +80,7 @@ export function hte31PaperPortfolioBlockReason(input: {
   }
   const totalRisk = input.open.reduce((sum, row) => sum + Math.max(0, row.riskBudgetUsdt), 0) + Math.max(0, input.nextRiskUsdt);
   const maximumRisk = Math.max(0, input.accountEquityUsdt) * policy.maximumTotalPlannedRiskRate;
-  if (totalRisk > maximumRisk + 0.01) return `组合计划止损 ${totalRisk.toFixed(2)}U 超过权益 ${(policy.maximumTotalPlannedRiskRate * 100).toFixed(0)}% 上限 ${maximumRisk.toFixed(2)}U`;
+  if (totalRisk > maximumRisk + 0.01) return `组合计划止损 ${totalRisk.toFixed(2)}U 超过权益 ${Number((policy.maximumTotalPlannedRiskRate * 100).toFixed(2))}% 上限 ${maximumRisk.toFixed(2)}U`;
   return null;
 }
 

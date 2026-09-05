@@ -1,3 +1,4 @@
+import { resolveScalpExit } from "./scalp-strategy.ts";
 import { and, asc, desc, eq, isNull, lte, or } from "drizzle-orm";
 import { getDb } from "../db";
 import {
@@ -536,6 +537,9 @@ export async function applyHte31PositionQuote(
   const [trade] = await db.select().from(hte31Trades)
     .where(and(eq(hte31Trades.symbol, quote.symbol), eq(hte31Trades.status, "holding"))).limit(1);
   if (!trade) return { kind: "none" as const };
+  if(!Number.isFinite(quote.price)||quote.price<=0||quote.observedAt<trade.lastEvaluatedAt) return {kind:"none" as const};
+  const scalp=trade.setupId==='MINUTE_PULLBACK' ? JSON.parse(trade.decisionSnapshotJson)?.candidate?.scalp : null;
+  const costBps=scalp ? Math.max(12,scalp.costBps??settings.roundTripCostBps) : settings.roundTripCostBps;
 
   const barTime = (time: number) => time > 10_000_000_000 ? time : time * 1000;
   const freshBars = (quote.recentCandles ?? []).filter((bar) => {
@@ -568,14 +572,17 @@ export async function applyHte31PositionQuote(
   // The stop that existed BEFORE this observation owns same-bar priority. A new
   // TP1 breakeven stop is installed only for future observations, so a low/high
   // from before TP1 can never retroactively trigger it.
+  const scalpExit=scalp ? resolveScalpExit({side:trade.side,stop:stopBeforeObservation,target:trade.takeProfit2Price,price:quote.price,high,low,timeout,decision:positionDecision}) : null;
   if (lifecycle.forceArchiveForReset) {
     exitCode = "version_reset";
     exitReason = "新版启用，旧持仓按最新有效报价归档";
     exitPrice = quote.price;
+  } else if (scalpExit) {
+    exitCode=scalpExit.code; exitPrice=scalpExit.price; exitReason=scalpExit.reason;
   } else if (stopHit) {
     exitCode = previouslyProtected && stopBeforeObservation !== trade.initialStopPrice ? "breakeven" : "stop_loss";
     exitReason = exitCode === "breakeven" ? "TP1 后保护止损被触发" : "结构止损被触发";
-    exitPrice = stopBeforeObservation;
+    exitPrice = scalp ? (trade.side==='LONG'?Math.min(stopBeforeObservation,quote.price):Math.max(stopBeforeObservation,quote.price)) : stopBeforeObservation;
   } else if (tp2Hit) {
     exitCode = "take_profit";
     exitReason = "第二目标完成，按交易员计划退出";
@@ -594,22 +601,24 @@ export async function applyHte31PositionQuote(
     exitPrice = quote.price;
   } else {
     if (!target1HitAt && tp1Hit) target1HitAt = quote.observedAt;
-    if (target1HitAt) {
-      const roundTripCostRate = Math.max(0, settings.roundTripCostBps) / 10_000;
+    if (target1HitAt || (scalp && positionDecision?.action === "PROTECT")) {
+      const roundTripCostRate = Math.max(0, costBps) / 10_000;
       const feeAwareBreakEven = trade.side === "LONG"
         ? trade.entryPrice * (1 + roundTripCostRate)
         : trade.entryPrice * (1 - roundTripCostRate);
       const proposed = positionDecision?.action === "PROTECT" && positionDecision.proposedStopPrice != null
         ? positionDecision.proposedStopPrice
         : feeAwareBreakEven;
-      currentStopPrice = trade.side === "LONG"
-        ? Math.max(trade.currentStopPrice, feeAwareBreakEven, proposed)
-        : Math.min(trade.currentStopPrice, feeAwareBreakEven, proposed);
+      const nextStop = trade.side === "LONG" ? Math.max(trade.currentStopPrice, feeAwareBreakEven, proposed) : Math.min(trade.currentStopPrice, feeAwareBreakEven, proposed);
+      if(!scalp || (trade.side==='LONG'?nextStop<quote.price:nextStop>quote.price)) {
+        currentStopPrice=nextStop;
+        if(scalp && !target1HitAt) target1HitAt=quote.observedAt;
+      }
     }
   }
 
   const grossPct = grossMovePct(trade.side, trade.entryPrice, quote.price);
-  const estimatedOneWayCostPct = settings.roundTripCostBps / 100 / 2;
+  const estimatedOneWayCostPct = costBps / 100 / (scalp ? 1 : 2);
   const unrealizedNetPct = grossPct - estimatedOneWayCostPct;
   const unrealizedNetUsdt = trade.notionalUsdt * unrealizedNetPct / 100;
   const riskDistance = Math.abs(trade.entryPrice - trade.initialStopPrice);
@@ -618,7 +627,7 @@ export async function applyHte31PositionQuote(
   if (exitCode && exitPrice != null) {
     const realizedGrossPct = grossMovePct(trade.side, trade.entryPrice, exitPrice);
     const grossPnlUsdt = trade.notionalUsdt * realizedGrossPct / 100;
-    const costUsdt = trade.notionalUsdt * settings.roundTripCostBps / 10_000;
+    const costUsdt = trade.notionalUsdt * costBps / 10_000;
     const netPnlUsdt = grossPnlUsdt - costUsdt;
     const netMovePct = trade.notionalUsdt > 0 ? netPnlUsdt / trade.notionalUsdt * 100 : realizedGrossPct;
     const excursion = currentExcursion;
