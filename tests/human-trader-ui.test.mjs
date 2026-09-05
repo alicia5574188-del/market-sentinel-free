@@ -223,6 +223,7 @@ test("paper capital card reads the execution risk policy rather than the retired
 
 test("history backfill delays remain warnings and the mobile navigation uses a compact footprint", () => {
   assert.match(page, /historyOnlyRuntimeError/);
+  assert.match(page, /usablePartialScan/);
   assert.doesNotMatch(page, /healthBad = Boolean\(error \|\| snapshot\?\.scanner\.status\?\.lastError/);
   assert.match(css, /bottom: max\(6px, env\(safe-area-inset-bottom\)\)/);
 });

@@ -729,8 +729,9 @@ export default function ResonancePage() {
   const ageSeconds = snapshot?.scanner.ageMs == null ? null : Math.round(snapshot.scanner.ageMs / 1000);
   const scannerRuntimeError = snapshot?.scanner.status?.lastError ?? "";
   const historyOnlyRuntimeError = Boolean(readModel && /历史|history/i.test(scannerRuntimeError));
-  const healthBad = Boolean(error || snapshot?.scanner.status?.circuitOpen || (scannerRuntimeError && !historyOnlyRuntimeError));
-  const healthWarn = !healthBad && Boolean(refreshWarning || historyOnlyRuntimeError || snapshot?.degraded || (ageSeconds != null && ageSeconds > 90));
+  const usablePartialScan = Boolean(readModel && scannerRuntimeError && !snapshot?.scanner.status?.circuitOpen && ageSeconds != null && ageSeconds <= 180);
+  const healthBad = Boolean(error || snapshot?.scanner.status?.circuitOpen || (scannerRuntimeError && !historyOnlyRuntimeError && !usablePartialScan));
+  const healthWarn = !healthBad && Boolean(refreshWarning || historyOnlyRuntimeError || usablePartialScan || snapshot?.degraded || (ageSeconds != null && ageSeconds > 90));
   const decisionSummary = operatorDecision(snapshot, Boolean(error || snapshot?.errors.scannerReadModel || snapshot?.staleSources?.includes("scannerReadModel") || (ageSeconds != null && ageSeconds > 360)));
 
   const mutate = useCallback(async (url: string, init: RequestInit, success: string, refreshLiveAfter = false) => {

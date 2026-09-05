@@ -631,6 +631,8 @@ async function ownerProtectedRequest(request: Request, env: CloudflareEnv): Prom
             circuitOpen: scanner.circuitOpen ?? false,
             retryAfter: scanner.retryAfter ?? null,
             jobId: scanner.jobId ?? null,
+            analyzed: scanner.analyzed,
+            symbols: scanner.symbols,
           },
         };
       }

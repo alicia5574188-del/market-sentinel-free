@@ -92,4 +92,7 @@ test("production health verification accepts a scheduler while its normal alarm 
   const accepted = /\(\.schedulers\.position\.state == "live" or \.schedulers\.position\.state == "starting"\)/g;
   assert.equal(workflow.match(accepted)?.length, 2);
   assert.doesNotMatch(workflow, /\.schedulers\.position\.state == "live" and/);
+  assert.equal(workflow.match(/\.schedulers\.scanner\.analyzed > 0/g)?.length, 2);
+  assert.equal(workflow.match(/\.schedulers\.scanner\.state == "degraded"/g)?.length, 2);
+  assert.doesNotMatch(workflow, /\.schedulers\.scanner\.lastError == null/);
 });

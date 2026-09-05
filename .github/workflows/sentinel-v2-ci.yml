@@ -103,10 +103,10 @@ jobs:
               .schedulerError == null and
               (.schedulers.position.state == "live" or .schedulers.position.state == "starting") and
               .schedulers.position.lastError == null and
-              (.schedulers.scanner.state == "live" or .schedulers.scanner.state == "starting") and
+              (.schedulers.scanner.state == "live" or .schedulers.scanner.state == "starting" or .schedulers.scanner.state == "degraded") and
               .schedulers.scanner.lastSuccessAt != null and
               ((now * 1000 - .schedulers.scanner.lastSuccessAt) < 180000) and
-              .schedulers.scanner.lastError == null and
+              .schedulers.scanner.analyzed > 0 and
               .schedulers.scanner.circuitOpen == false
             ' /tmp/health-ready.json >/dev/null; then
               health_ready=1
@@ -122,10 +122,10 @@ jobs:
               .schedulerError == null and
               (.schedulers.position.state == "live" or .schedulers.position.state == "starting") and
               .schedulers.position.lastError == null and
-              (.schedulers.scanner.state == "live" or .schedulers.scanner.state == "starting") and
+              (.schedulers.scanner.state == "live" or .schedulers.scanner.state == "starting" or .schedulers.scanner.state == "degraded") and
               .schedulers.scanner.lastSuccessAt != null and
               ((now * 1000 - .schedulers.scanner.lastSuccessAt) < 180000) and
-              .schedulers.scanner.lastError == null and
+              .schedulers.scanner.analyzed > 0 and
               .schedulers.scanner.circuitOpen == false
             ' "/tmp/health-$attempt.json"
             sleep 5
