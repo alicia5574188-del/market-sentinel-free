@@ -20,11 +20,11 @@ test("new-entry scanner has no legacy strategy authority or high-frequency D1 wr
   for (const forbidden of ["evaluateHumanTraderPool", "evaluateAdvancedHumanTraders", "evaluateHte31ResearchStrategies", "recordHte31Evaluations", "recordHte31DiagnosticCycle", "tryOpenResonanceTrade"]) {
     assert.doesNotMatch(scanner, new RegExp(forbidden));
   }
-  assert.match(scanner, /buildDirectMarketCandidate/);
+  assert.match(scanner, /buildScalpCandidate/);
   assert.doesNotMatch(worker, /freshCohort\.length >= 3/);
-  assert.match(worker, /fetchGatePositionQuotes\(\[candidate\.symbol\]\)/);
+  assert.match(worker, /fetchGatePositionQuotes\(executable\.map/);
   assert.match(worker, /loadHistoricalForecastCandles/);
-  assert.match(worker, /SCANNER_CYCLE_INTERVAL_MS = 25_000/);
+  assert.match(worker, /SCANNER_CYCLE_INTERVAL_MS = 60_000/);
   assert.match(worker, /fetchGatePositionQuotes/);
   assert.match(execution, /validateDirectMarketEntry/);
   assert.match(worker, /recordDirectTwelveHourActivity/);
@@ -36,22 +36,22 @@ test("new-entry scanner has no legacy strategy authority or high-frequency D1 wr
   assert.match(types, /HT3-R_FAILED_AUCTION/);
   assert.match(types, /HT4_EXHAUSTION_ANTI_CROWD/);
   assert.match(types, /HT5-R_MARKET_FIT_STRUCTURE_RECOVERY_V5/);
-  assert.match(scanner, /marketContext: job\.market/);
-  assert.match(execution, /getDirectSetupGuardDecision/);
+  assert.match(scanner, /market:.*job\.market/);
+  assert.match(execution, /scalpAccountRisk/);
   assert.match(setupGuard, /losingStreak >= 3/);
 });
 
-test("only historical prediction emits new signals; retired setup scores cannot regain priority", async () => {
+test("minute pullback is the only active producer; analogue builder remains auxiliary", async () => {
   const brain = await readFile(new URL("../lib/direct-market-brain.ts", import.meta.url), "utf8");
   assert.match(brain, /buildHistoricalForecast/);
   assert.doesNotMatch(brain, /evaluateCoreSetups|normalizedPaths|EXHAUSTION_REVERSAL/);
-  assert.match(liveRepository, /历史相似预测处于模拟验证阶段/);
+  assert.match(liveRepository, /当前策略处于模拟验证阶段/);
 });
 
 test("configured scan coverage and risk-based capacity reach the production boundary", () => {
-  assert.match(scanner, /fetchUniverse\(1, HISTORICAL_UNIVERSE\)/);
-  assert.match(scanner, /historicalUniverse\(fetched\)/);
-  assert.match(scanner, /chooseDirectMarketTarget\(universe, job\.rotationOffset, job\.lastObservedAt\)/);
+  assert.match(scanner, /fetchUniverse\(1,\s*HISTORICAL_UNIVERSE\)/);
+  assert.match(scanner, /historicalUniverse\(await marketExchange/);
+  assert.match(scanner, /job\.universe\.map/);
   assert.match(worker, /candidate\.observedAt\]\)\)/);
   assert.doesNotMatch(worker, /universe\.slice\(0, 15\)/);
   assert.doesNotMatch(execution, /account\.open\.length >= 3|maximumOpenPositions: 3|sameDirectionMaximum: 2/);
@@ -59,7 +59,7 @@ test("configured scan coverage and risk-based capacity reach the production boun
   assert.match(execution, /gte\(hte31Trades\.exitAt, today\)/);
   assert.match(execution, /hte31PaperPortfolioBlockReason/);
   assert.match(execution, /if \(sameCluster\)/);
-  assert.match(page, /总计划风险不超过15%/);
+  assert.match(page, /合计不超过0.75%/);
 });
 
 test("adaptive position decisions use completed candles without adding periodic D1 writes", () => {

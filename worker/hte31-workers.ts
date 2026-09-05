@@ -1,10 +1,13 @@
+import { loadMinuteFeed, nextMinuteScan, type MinuteCache } from "../lib/scalp-feed";
+import { evaluateScalpPosition, scalpCostBps } from "../lib/scalp-strategy";
+import { buildHistoricalForecast, type HistoricalForecast } from "../lib/historical-forecast";
 /// <reference types="@cloudflare/workers-types" />
 
 import { loadHistoricalForecastCandles } from "../lib/historical-forecast-cache";
 import { DurableObject } from "cloudflare:workers";
 import { setRuntimeDb } from "../db";
 import { setRuntimeBindings } from "../lib/runtime-bindings";
-import { fetchGateChartCandles, fetchGatePositionQuotes, SYMBOL_PATTERN } from "../lib/gate-client";
+import { fetchGateChartCandles, fetchGateMinuteCandles, fetchGatePositionQuotes, SYMBOL_PATTERN } from "../lib/gate-client";
 import {
   applyHte31PositionQuote,
   completeHte31PostExitObservation,
@@ -23,7 +26,7 @@ import {
   type Hte31ScanJob,
 } from "../lib/hte31-scanner";
 import { getSettings } from "../lib/settings-repository";
-import { openDirectMarketTrade } from "../lib/direct-market-execution";
+import { openDirectMarketTrade, scalpAccountRisk } from "../lib/direct-market-execution";
 import {
   evaluateDirectPosition,
   hasAdaptivePositionPolicy,
@@ -47,7 +50,7 @@ import type { CloudflareEnv } from "./index";
 // D1 trades, learning, simulation epochs, live credentials and live-order
 // lineage remain untouched.
 const CLEAN_RUNTIME_VERSION = DIRECT_MARKET_BRAIN_VERSION;
-const SCANNER_CYCLE_INTERVAL_MS = 25_000;
+const SCANNER_CYCLE_INTERVAL_MS = 60_000;
 const TRADE_MANAGER_ACTIVE_INTERVAL_MS = 15_000;
 const TRADE_MANAGER_IDLE_INTERVAL_MS = 60_000;
 const TRADE_MANAGER_ACTIVE_HEARTBEAT_MS = 60_000;
@@ -107,7 +110,8 @@ function initialize(env: CloudflareEnv) {
 }
 
 function withoutCandles(candidate: DirectMarketCandidate): Omit<DirectMarketCandidate, "candles5m"> {
-  const { candles5m: _candles, ...compact } = candidate;
+  const { candles5m: _candles, forecast: _forecast, ...compact } = candidate;
+  void _forecast;
   void _candles;
   return compact;
 }
@@ -203,21 +207,31 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
     };
   }
 
+  async minuteSnapshot(symbol:string) {
+    if(!SYMBOL_PATTERN.test(symbol)) return [];
+    return (await this.ctx.storage.get<MinuteCache>(`minute:${symbol}`))?.rows ?? [];
+  }
+
+  private async enrichHistory(symbol:string,costBps:number) {
+    const now=Date.now(), prior=await this.ctx.storage.get<number>("auxiliary-at")??0;
+    if(now-prior<60_000) return;
+    await this.ctx.storage.put("auxiliary-at",now);
+    try {
+      const recent=await loadHistoricalForecastCandles(this.ctx.storage,fetchGateChartCandles,symbol,now);
+      const history=this.env.HISTORICAL_ARCHIVE ? await this.env.HISTORICAL_ARCHIVE.getByName(`history:${symbol}`).history(symbol,now,recent) : null;
+      const forecast=buildHistoricalForecast({candles:history?.candles??recent,now,costBps:scalpCostBps(costBps),stopPct:0.3});
+      forecast.archive=history?.archive;
+      await this.ctx.storage.put(`auxiliary:${symbol}`,forecast);
+    } catch { /* Auxiliary outage cannot pause minute entries or position protection. */ }
+  }
+
   private async runSlice(job: Hte31ScanJob) {
-    const maxSteps = job.phase === "config" || job.phase === "candles" ? 2 : 1;
+    const maxSteps = job.phase === "config" || job.phase === "deep" || job.phase === "candles" ? 2 : 1;
     let current = job;
     for (let stepIndex = 0; stepIndex < maxSteps; stepIndex += 1) {
       try {
-        const step = await runHte31ScanStep(current, async (symbol, now) => {
-          const recent = await loadHistoricalForecastCandles(this.ctx.storage, fetchGateChartCandles, symbol, now);
-          try {
-            if (!this.env.HISTORICAL_ARCHIVE) throw new Error("长期历史库尚未连接");
-            return await this.env.HISTORICAL_ARCHIVE.getByName(`history:${symbol}`).history(symbol, now, recent);
-          } catch {
-            return { candles: recent, archive: { storedBars: null, from: null, to: null, searchedBars: recent.length,
-              nextBackfillAt: 0, note: "长期历史库暂不可用，本轮使用已取得的近期行情；历史存量暂不可读" } };
-          }
-        });
+        const step = await runHte31ScanStep(current, (symbol,now)=>loadMinuteFeed(this.ctx.storage,fetchGateMinuteCandles,symbol,now),
+          symbol=>this.ctx.storage.get<HistoricalForecast>(`auxiliary:${symbol}`));
         if (step.kind !== "progress") return step;
         current = step.job;
       } catch (error) {
@@ -227,7 +241,13 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
     return { kind: "progress" as const, job: current };
   }
 
-  private async runCycle(initialRuntime?: ScannerRuntime): Promise<SchedulerWorkerStatus> {
+  private inFlight: Promise<SchedulerWorkerStatus> | null = null;
+  private runCycle(initialRuntime?: ScannerRuntime): Promise<SchedulerWorkerStatus> {
+    if(this.inFlight) return this.inFlight;
+    this.inFlight=this.runCycleOnce(initialRuntime).finally(()=>{this.inFlight=null});
+    return this.inFlight;
+  }
+  private async runCycleOnce(initialRuntime?: ScannerRuntime): Promise<SchedulerWorkerStatus> {
     await this.generationReset();
     let runtime = initialRuntime ?? await this.runtime();
     const now = Date.now();
@@ -342,7 +362,7 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
       const activeSymbols = new Set(result.universe.map((row) => row.symbol));
       const directBySymbol = Object.fromEntries([
         ...Object.entries(runtime.directBySymbol ?? {}).filter(([symbol]) => activeSymbols.has(symbol)),
-        [result.directCandidate.symbol, withoutCandles(result.directCandidate)] as const,
+        ...(result.candidates??[result.directCandidate]).map(c=>[c.symbol,withoutCandles(c)] as const),
       ]);
       const directHistory = [{
         symbol: result.directCandidate.symbol,
@@ -352,40 +372,39 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
         decision: result.directCandidate.decision,
         paths: result.directCandidate.paths,
         riskClusterId: result.directCandidate.riskClusterId,
-      }, ...(runtime.directHistory ?? [])].slice(0, 512);
-      // A complete prediction is executable on its own; never wait for three
-      // other symbols or retry old cached candidates under a new observation.
-      let openedSetup: DirectCoreSetup | null = null;
-      if (result.directCandidate.decision !== "WAIT") {
-        const candidate = result.directCandidate;
-        const quotes = await fetchGatePositionQuotes([candidate.symbol]);
-        const opened = await openDirectMarketTrade({
-          candidate,
-          universe: result.universe.map((row) => row.symbol),
-          settings: await getSettings(),
-          freshQuote: quotes.find((quote) => quote.symbol === candidate.symbol) ?? null,
-          portfolioRank: 1,
-        });
-        openedSetup = opened.opened ? candidate.setup : null;
-        result = { ...result, openedTradeId: opened.opened?.id ?? null, openReason: opened.reason };
+      }, ...(runtime.directHistory ?? [])].slice(0, 96);
+      const batch=result.candidates??[result.directCandidate];
+      const settings=await getSettings();
+      const executable=batch.filter(c=>c.decision!=="WAIT").sort((a,b)=>b.setupScore-a.setupScore);
+      const quotes=executable.length?await fetchGatePositionQuotes(executable.map(c=>c.symbol)):[];
+      let activity12h=runtime.activity12h??{current:emptyDirectTwelveHourActivity(result.observedAt),lastCompleted:null};
+      let firstOpened: string|null=null;
+      for(const candidate of batch) {
+        let openedSetup:DirectCoreSetup|null=null, openReason=candidate.counterEvidence[0]??"等待一分钟入场确认";
+        if(candidate.decision!=="WAIT") {
+          const opened=await openDirectMarketTrade({candidate,universe:result.universe.map(r=>r.symbol),settings,
+            freshQuote:quotes.find(q=>q.symbol===candidate.symbol)??null,portfolioRank:executable.indexOf(candidate)+1});
+          openedSetup=opened.opened?candidate.setup:null; openReason=opened.reason;
+          firstOpened=firstOpened??opened.opened?.id??null;
+        }
+        activity12h=recordDirectTwelveHourActivity({activity:activity12h,candidate,openedSetup,openReason,expectedIntervalMs:SCANNER_CYCLE_INTERVAL_MS});
+        if(candidate.symbol===result.target) result={...result,openReason};
       }
-      const activity12h = recordDirectTwelveHourActivity({
-        activity: runtime.activity12h,
-        candidate: result.directCandidate,
-        openedSetup,
-        openReason: result.openReason,
-        expectedIntervalMs: SCANNER_CYCLE_INTERVAL_MS,
-      });
-      const readModel = { ...result, directRadar: buildDirectRadar(result, directBySymbol), activity12h };
-      const nextRunAt = Date.now() + this.intervalMs;
+      result={...result,openedTradeId:firstOpened};
+      if(firstOpened) await this.env.POSITION_MONITOR?.getByName("position-monitor").wake();
+      // Background auxiliary work has its own keys; it never overwrites scan state.
+      const historySymbol=result.universe[runtime.rotationOffset%result.universe.length].symbol;
+      this.ctx.waitUntil(this.enrichHistory(historySymbol,settings.roundTripCostBps));
+      const readModel = { ...result, candidates: undefined, directRadar: buildDirectRadar(result, directBySymbol), activity12h };
+      const nextRunAt = nextMinuteScan(Date.now());
       const status: SchedulerWorkerStatus = {
-        state: "live",
+        state: result.feedErrors?.length ? "degraded" : "live",
         lastRunAt: now,
         nextRunAt,
-        lastSuccessAt: result.observedAt,
-        lastError: null,
-        analyzed: 1,
-        symbols: [result.target],
+        lastSuccessAt: result.feedErrors?.length===result.universe.length ? previous.lastSuccessAt : result.observedAt,
+        lastError: result.feedErrors?.join("；") || null,
+        analyzed: batch.filter(c=>c.freshness==='FRESH').length,
+        symbols: batch.map(c=>c.symbol),
         phase: null,
         phaseAttempt: 0,
         circuitOpen: false,
@@ -493,6 +512,7 @@ export class HTE31TradeManager extends DurableObject<CloudflareEnv> {
     const runtime = await this.runtime();
     const previous = runtime.status;
     initialize(this.env);
+    await this.ctx.storage.setAlarm(startedAt + TRADE_MANAGER_IDLE_INTERVAL_MS);
 
     try {
       const settings = await getSettings();
@@ -506,13 +526,14 @@ export class HTE31TradeManager extends DurableObject<CloudflareEnv> {
       const positionReviewBuckets = Object.fromEntries(
         Object.entries(runtime.positionReviewBuckets ?? {}).filter(([tradeId]) => activeIds.has(tradeId)),
       );
-      const completedFiveMinuteBucket = Math.floor(startedAt / (5 * 60_000)) - 1;
+      const completedFiveMinuteBucket = Math.floor(startedAt / 60_000) - 1;
       const reviewCandles = new Map<string, Awaited<ReturnType<typeof fetchGateChartCandles>>>();
       const reviewDue = forceArchiveForReset ? [] : open.filter((trade) => trade.decisionAuthority === "direct_market_brain"
-        && hasAdaptivePositionPolicy(trade.decisionSnapshotJson)
+        && (trade.setupId === "MINUTE_PULLBACK" || hasAdaptivePositionPolicy(trade.decisionSnapshotJson))
         && positionReviewBuckets[trade.id] !== completedFiveMinuteBucket);
       const reviewResults = await Promise.allSettled(reviewDue.map((trade) => {
-        const reviewTo = (completedFiveMinuteBucket + 1) * 5 * 60_000 - 1;
+        if(trade.setupId === "MINUTE_PULLBACK") return this.env.MARKET_SCANNER?.getByName("market-scanner").minuteSnapshot(trade.symbol) ?? Promise.resolve([]);
+        const reviewTo = Math.floor(startedAt/300_000)*300_000-1;
         const reviewFrom = Math.max(trade.entryAt, reviewTo - 3 * 60 * 60_000);
         return fetchGateChartCandles(trade.symbol, reviewFrom, reviewTo);
       }));
@@ -536,8 +557,12 @@ export class HTE31TradeManager extends DurableObject<CloudflareEnv> {
           }
           try {
             const candles5m = reviewCandles.get(trade.id);
-            const positionDecision: DirectPositionDecision | null = candles5m
-              ? evaluateDirectPosition({
+            const scalp=trade.setupId==='MINUTE_PULLBACK' ? JSON.parse(trade.decisionSnapshotJson)?.candidate?.scalp : null;
+            const positionDecision: DirectPositionDecision | null = scalp
+              ? evaluateScalpPosition({side:trade.side,entryPrice:trade.entryPrice,initialStopPrice:trade.initialStopPrice,currentStopPrice:trade.currentStopPrice,
+                entryAt:trade.entryAt,currentPrice:quote.price,observedAt:quote.observedAt,roundTripCostBps:scalp.costBps,
+                confirmationPrice:scalp.confirmationPrice,candles:candles5m??[]})
+              : candles5m ? evaluateDirectPosition({
                 side: trade.side,
                 entryPrice: trade.entryPrice,
                 initialStopPrice: trade.initialStopPrice,
@@ -560,6 +585,9 @@ export class HTE31TradeManager extends DurableObject<CloudflareEnv> {
         }
       }
 
+      if(open.some(t=>t.setupId==='MINUTE_PULLBACK') && startedAt-(runtime.status.lastSuccessAt??0)>=60_000) {
+        await scalpAccountRisk(settings.trialCapitalUsdt,settings.roundTripCostBps,Date.now());
+      }
       const due = await nextHte31PostExitObservation(Date.now());
       if (due?.trade.exitAt) {
         try {

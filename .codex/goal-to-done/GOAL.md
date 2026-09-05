@@ -1,3 +1,5 @@
+当前目标：按用户已授权方案发布 V8 顺势回踩短线模拟策略，复用原 GitHub/Cloudflare 路径；验证全天资源预算、故障恢复和版本切换。历史相似度降为辅助。不得宣称绝对不中断或未验证盈利。
+
 # Current UI objective
 
 Remove the obsolete multi-strategy heading; inspect and repair Brain, Orders and Management display issues, preserve capabilities, then release through existing authorized CI/Cloudflare path.

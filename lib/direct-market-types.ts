@@ -1,6 +1,6 @@
 import type { Hte31Candle } from "./hte31-types.ts";
 
-export const DIRECT_MARKET_BRAIN_VERSION = "direct-market-brain-v7-historical-analog";
+export const DIRECT_MARKET_BRAIN_VERSION = "direct-market-brain-v8-minute-pullback";
 export const DIRECT_MARKET_AUTHORITY = "direct_market_brain" as const;
 
 export type DirectMarketSide = "LONG" | "SHORT" | "WAIT";
@@ -8,12 +8,14 @@ export type DirectMarketLocation = "TOP" | "MIDDLE" | "BOTTOM" | "BREAKOUT" | "B
 export type DirectMarketFreshness = "FRESH" | "STALE" | "UNAVAILABLE";
 export type DirectMarketRiskState = "CALIBRATING" | "VALIDATING" | "NORMAL" | "CAUTION" | "DEFENSIVE" | "PAUSED";
 export const DIRECT_LEGACY_SETUPS = [
+  { id: "HISTORICAL_ANALOG", label: "历史相似预测" },
   { id: "VOLUME_FORCE_FAILED_BREAKOUT", label: "量价力度假突破" },
   { id: "EXHAUSTION_REVERSAL", label: "衰竭反转" },
   { id: "MULTI_TIMEFRAME_RESONANCE", label: "多周期综合共振" },
 ] as const;
-export const DIRECT_CORE_SETUPS = [{ id: "HISTORICAL_ANALOG", label: "历史相似预测" }] as const;
+export const DIRECT_CORE_SETUPS = [{ id: "MINUTE_PULLBACK", label: "顺势回踩快进快出" }] as const;
 export const DIRECT_CORE_STRATEGY_LINEAGE = {
+  MINUTE_PULLBACK: "MINUTE_PULLBACK_15M_1M_V1",
   HISTORICAL_ANALOG: "HISTORICAL_ANALOG_2H_14D_1H_V1",
   VOLUME_FORCE_FAILED_BREAKOUT: "HT3-R_FAILED_AUCTION",
   EXHAUSTION_REVERSAL: "HT4_EXHAUSTION_ANTI_CROWD",
@@ -98,6 +100,7 @@ export type DirectMarketCandidate = {
   counterEvidence: string[];
   checks: { key: string; label: string; passed: boolean; detail: string }[];
   candles5m: Hte31Candle[];
+  scalp?: { signalAt: number; structureAt: number; signalKey: string; costBps: number; confirmationPrice: number };
   forecast?: import("./historical-forecast.ts").HistoricalForecast;
   assetRegime: string;
   maxHoldingMinutes: number;

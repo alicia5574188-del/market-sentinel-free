@@ -440,3 +440,5 @@ Record only consequential decisions using this format:
 - Management shows runtime/settings first. Long phase/rule text wraps and the six-coin list occupies a full row. Single strategy spans desktop width; phone headings and summary times wrap. All displayed runtime/order/audit times use Beijing time.
 - A failed live-status read retains the last success with timestamp/error, rather than falsely showing unconfigured/empty. Initial reads show unknown/loading; stale or missing live state disables the normal toggle/reconcile buttons, while emergency remains reachable. No automatic mutation retry or new polling.
 - Strategy, history archive, scheduler, risk, positions, D1 and credentials are unchanged. UI/risk/architecture gates required; release verification pending.
+
+2026-09-05：用户授权立即实现短线及全天运行。采用一个六币一分钟行情生产器和原持仓/归档后台；0.25%含费单笔、0.75%组合、三连亏暂停及日亏持久门控取代旧3.5%及历史相似样本门槛。旧历史完整保留；自动实盘拒绝此版本。验证与实际24小时观察须区分。

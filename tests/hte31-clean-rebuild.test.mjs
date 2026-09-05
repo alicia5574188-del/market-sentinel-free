@@ -40,10 +40,10 @@ test("clean rebuild migration preserves real exchange data families and disarms 
 
 test("scanner gives new-entry authority only to the direct market brain", () => {
   const scanner = readFileSync(new URL("../lib/hte31-scanner.ts", import.meta.url), "utf8");
-  assert.match(scanner, /buildDirectMarketCandidate/);
-  assert.match(scanner, /rankDirectMarketUniverse/);
-  assert.match(scanner, /chooseDirectMarketTarget/);
-  assert.match(scanner, /getGlobalRiskContext/);
+  assert.match(scanner, /buildScalpCandidate/);
+  assert.match(scanner, /HISTORICAL_UNIVERSE/);
+  assert.match(scanner, /boundedMap/);
+  assert.doesNotMatch(scanner, /analyzeSymbol/);
   assert.match(scanner, /buildResonanceGlobalMarket/);
   assert.match(scanner, /getMarketExchange/);
   assert.doesNotMatch(scanner, /evaluateHumanTraderPool|evaluateAdvancedHumanTraders|evaluateHte31ResearchStrategies|recordHte31Evaluations|tryOpenResonanceTrade|tradeCases|trade_cases/);
@@ -158,14 +158,14 @@ test("Durable Objects retain bounded no-scan-write runtime and persist the direc
   const worker = readFileSync(new URL("../worker/hte31-workers.ts", import.meta.url), "utf8");
   assert.match(worker, /CLEAN_RUNTIME_VERSION = DIRECT_MARKET_BRAIN_VERSION/);
   assert.match(worker, /D1 trades, learning, simulation epochs, live[\s\S]*remain untouched/);
-  assert.match(worker, /SCANNER_CYCLE_INTERVAL_MS = 25_000/);
+  assert.match(worker, /SCANNER_CYCLE_INTERVAL_MS = 60_000/);
   assert.match(worker, /TRADE_MANAGER_IDLE_INTERVAL_MS = 60_000/);
   assert.match(worker, /TRADE_MANAGER_IDLE_HEARTBEAT_MS = 5 \* 60_000/);
   assert.match(worker, /type ScannerRuntime = \{[\s\S]*rotationOffset:[\s\S]*directBySymbol\?:[\s\S]*directHistory\?:[\s\S]*status:/);
   assert.match(worker, /this\.ctx\.storage\.put\("runtime", runtime\)/);
   assert.doesNotMatch(worker, /this\.ctx\.storage\.put\("(?:job|status|readModel|rotationOffset)"/);
-  assert.match(worker, /maxSteps = job\.phase === "config" \|\| job\.phase === "candles" \? 2 : 1/);
+  assert.match(worker, /maxSteps = job\.phase === "config" \|\| job\.phase === "deep" \|\| job\.phase === "candles" \? 2 : 1/);
   assert.match(worker, /createHte31ScanJob\(runtime\.rotationOffset, runtime\.readModel\?\.market \?\? null, lastObservedAt\)/);
-  assert.match(worker, /directHistory[\s\S]*\.slice\(0, 512\)/);
+  assert.match(worker, /directHistory[\s\S]*\.slice\(0, 96\)/);
   assert.match(worker, /stateChanged \|\| heartbeatDue/);
 });

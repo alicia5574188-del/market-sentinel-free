@@ -82,7 +82,7 @@ test("whole-market state has inertia and a direct bull-bear flip requires strong
 
 test("market context stays separate from the historical forecast's single entry authority", () => {
   assert.match(scanner, /buildResonanceGlobalMarket/);
-  assert.match(scanner, /buildDirectMarketCandidate/);
+  assert.match(scanner, /buildScalpCandidate/);
   assert.match(directBrain, /buildHistoricalForecast/);
   assert.match(directBrain, /HISTORICAL_ANALOG/);
   assert.match(directBrain, /longStop/);

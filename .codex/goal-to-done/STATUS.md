@@ -1,4 +1,21 @@
-## UI acceptance follow-up
+## 2026-09-05 V8 一分钟回踩发布进行中
+- 已实现固定六币一分钟缓存/十五分钟方向、缩量回踩恢复入场、含费0.25%单笔/0.75%组合、三连亏30分钟暂停、日亏1.5%持久保护、最多15分钟全平。
+- 历史相似模型仅后台辅助，长期归档保持；旧模拟仓位沿0026强制报价归档，不触碰实盘。
+- 短线复核共享缓存；重启/429退避、分钟故障回放、保护优先、信号去重和日初余额缓存已实现。详情 docs/MINUTE_PULLBACK.md。
+- 本地115页面/安全、231信号/风险、52策略+7架构已通过；最终针对性验证与PR/生产核对进行中。24小时仿真已完成，真实24小时在线观察尚未完成。
+
+## Completed UI release — 2026-09-05
+- Main aafdd6ca224155094660046b4095ea6c8040c849 (PR #145) includes #144 dfcd819c30a1d92d5cd389f088ac4081e1ecffc0. Both PR CI runs 33963171666 / 33963360782 and both production runs 33963226619 / 33963406897 passed verify, deploy and operations.
+- Final Worker 865d4244-0de3-4450-a7d1-3a7726782ee0. Active V7 historical analog, target null, legacy PAPER positions 0. No epoch/trading/risk/archive/backend change.
+- Browser verified obsolete heading removed; 策略表现, one expandable archive summary (ETH 5609 bars since Aug17), current versus twelve-hour blocker distinction, Beijing runtime/summary times (08:00–20:00), Management runtime/settings first, wrapping rules and full-row six-coin list.
+- Live initial load visibly says 正在读取 / unknown values, normal toggle/reconcile disabled, credential form withheld until known status, emergency reachable. Account drawer opens and exposes logout, notification/test and audit; measured drawer width430/client429/scroll429 with no horizontal overflow. Desktop browser visual verification plus responsive stylesheet regression; no claim of native iPhone device test.
+- Orders view retained current account and146-trade archive entry. Optional final text-geometry selector timed out; no numerical mobile-layout claim from that probe.
+- Follow-up #145 corrects a production-observed false scheduler-failure label caused by old decision age and unknown order counts. Conservative stale-decision waiting remains. Partial-source refresh latency itself still occurs and is labeled/retained; this UI patch does not claim backend latency is resolved.
+- Final operational acceptance: scanner success1788607796454→1788607881862; position alarm1788607864346→1788607924440; no errors. Account D1 at2026-09-05T11:31:27.556Z: UTCday235649reads/1167writes; rounded24h891578reads/3428writes.
+- Local build,115 UI/safety,231 signals/risk,42 Direct+7architecture,lint,TypeScript passed; focused22 checks passed for follow-up. Full final CI also green.
+- Task complete. Keep this proof in PR conversation; do not redeploy solely for documentation sync.
+
+## UI acceptance follow-up — completed above
 
 Production #144 visual review found stale decision age labeled as a scheduler failure despite a fresh scanner heartbeat. Separate actual scanner errors from decision-data delay, preserve conservative decision waiting, and show unknown order counts as -- during initial loading. No trading/backend changes. Final follow-up CI pending.
 

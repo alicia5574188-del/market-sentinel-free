@@ -19,7 +19,7 @@ const [page, layout, route, chart, css, liveStatus, scanner, catalog, worker, re
 
 test("production UI exposes the useful three setups and direct operating truth while history stays readable", () => {
   assert.match(page, /Resonance/);
-  assert.match(page, /历史走势对照 · 模拟验证 · 12小时复盘/);
+  assert.match(page, /顺势回踩短线 · 模拟验证 · 12小时复盘/);
   for (const phrase of ["HT1", "HT2", "HT3", "HT4", "HT5", "HT1-R", "HT2-R", "HT3-R", "HT5-R", "HT6", "HT7", "HT8", "HT9"]) assert.match(catalog, new RegExp(phrase));
   for (const family of ["SF01", "SF02", "SF03", "SF04", "SF05", "SF06", "SF07", "SF08", "SF09"]) assert.match(catalog, new RegExp(family));
   assert.match(page, /HistoricalForecastCard/);
@@ -205,8 +205,8 @@ test("high-frequency read is bounded, diagnostics are on demand, and health stay
   assert.match(route, /view === "strategies"/);
   assert.match(route, /staleSources/);
   assert.match(route, /diagnostics: null/);
-  assert.match(scanner, /Promise\.allSettled/);
-  assert.match(scanner, /buildDirectMarketCandidate/);
+  assert.match(scanner, /boundedMap\(job\.universe,2/);
+  assert.match(scanner, /buildScalpCandidate/);
   assert.doesNotMatch(scanner, /recordHte31StrategyEvaluations|recordHte31StrategyDiagnostic|openHte31PaperTrade/);
   const healthStart = worker.indexOf('if (url.pathname === "/__health")');
   const healthEnd = worker.indexOf('if (url.pathname === "/api/push/vapid-public-key")', healthStart);

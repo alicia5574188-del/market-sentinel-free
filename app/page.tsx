@@ -234,7 +234,7 @@ type DirectCandidate = {
   directionalScore: number;
   netEdgeR: number;
   confidence: number;
-  setup: "HISTORICAL_ANALOG" | "VOLUME_FORCE_FAILED_BREAKOUT" | "EXHAUSTION_REVERSAL" | "MULTI_TIMEFRAME_RESONANCE";
+  setup: "MINUTE_PULLBACK" | "HISTORICAL_ANALOG" | "VOLUME_FORCE_FAILED_BREAKOUT" | "EXHAUSTION_REVERSAL" | "MULTI_TIMEFRAME_RESONANCE";
   forecast?: HistoricalForecast;
   candles5m?: Candle[];
   setupLabel: string;
@@ -807,7 +807,7 @@ export default function ResonancePage() {
   return <main className="rz-shell" data-release={DIRECT_MARKET_BRAIN_VERSION}>
     <header className="rz-header">
       <div className="rz-mark">R</div>
-      <div className="rz-brand"><strong>共振量化</strong><small>历史走势对照 · 模拟验证 · 12小时复盘</small></div>
+      <div className="rz-brand"><strong>共振量化</strong><small>顺势回踩短线 · 模拟验证 · 12小时复盘</small></div>
       <i className={`rz-health ${healthBad ? "bad" : healthWarn ? "warn" : ""}`} />
     </header>
 
@@ -824,7 +824,7 @@ export default function ResonancePage() {
         </article>
       </section>
 
-      {readModel?.directCandidate?.forecast && <HistoricalForecastCard symbol={readModel.directCandidate.symbol} forecast={readModel.directCandidate.forecast} candles={readModel.directCandidate.candles5m ?? []} />}
+      {readModel?.directCandidate?.forecast && <details className="rz-panel"><summary>历史相似走势辅助参考（不决定开仓）</summary><HistoricalForecastCard symbol={readModel.directCandidate.symbol} forecast={readModel.directCandidate.forecast} candles={readModel.directCandidate.candles5m ?? []} /></details>}
 
       <section className="rz-section"><div className="rz-section-head"><div><h2>策略表现</h2></div><small>当前版本</small></div>
         {review?.setups?.length ? <div className="rz-strategy-grid">{review.setups.map((setup) => <StrategyPerformanceCard key={setup.setup} setup={setup} />)}</div> : <Empty>等待首轮策略统计</Empty>}
@@ -870,7 +870,7 @@ export default function ResonancePage() {
         <div className="rz-actions"><button disabled={!dashboard} onClick={toggleScan}>{dashboard?.settings.scanEnabled ? "暂停市场扫描" : "恢复市场扫描"}</button></div>
       </article></section>
       {readModel?.directCandidate && <details className="rz-decision-detail"><summary>决策诊断（按需查看）</summary><p className="rz-panel rz-copy">最近执行结果：{operatorText(readModel.openReason) || "等待执行反馈"}</p><DecisionEvidenceCard candidate={readModel.directCandidate} /></details>}
-      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">交易核心</span><h2>历史相似预测规则</h2></div></div><article className="rz-panel"><div className="rz-metric-grid"><div className="rz-metric"><span>当前窗口</span><b>最近两小时</b></div><div className="rz-metric"><span>历史范围</span><b>同币长期历史，持续回补</b></div><div className="rz-metric"><span>预测范围</span><b>接下来一小时</b></div><div className="rz-metric"><span>持仓约束</span><b>总计划风险不超过15%</b></div><div className="rz-metric rz-metric-wide"><span>固定币池</span><b>比特币、以太坊、索拉纳、币安币、瑞波币、狗狗币</b></div></div></article></section>
+      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">交易核心</span><h2>短线执行规则</h2></div></div><article className="rz-panel"><div className="rz-metric-grid"><div className="rz-metric"><span>入场依据</span><b>十五分钟方向，一分钟回踩确认</b></div><div className="rz-metric"><span>历史辅助</span><b>持续回补，样本不足不阻止短线信号</b></div><div className="rz-metric"><span>快速退出</span><b>三分钟无推进且确认失效则退出，最长十五分钟</b></div><div className="rz-metric"><span>含费计划风险</span><b>单笔0.25%，合计不超过0.75%</b></div><div className="rz-metric rz-metric-wide"><span>固定币池</span><b>比特币、以太坊、索拉纳、币安币、瑞波币、狗狗币</b></div></div></article></section>
       <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">模拟资金</span><h2>重新开始资金曲线</h2></div></div><article className="rz-panel"><div className="rz-metric-grid"><div className="rz-metric"><span>本轮本金</span><b>{fmtMoney(dashboard?.account.startingCapitalUsdt)}</b></div><div className="rz-metric"><span>当前权益</span><b>{fmtMoney(dashboard?.account.equityUsdt)}</b></div><div className="rz-metric"><span>开始时间</span><b>{fmtTime(dashboard?.account.epochStartedAt)}</b></div><div className="rz-metric"><span>本轮已平仓</span><b>{dashboard?.stats.sampleCount ?? "--"}</b></div></div>{dashboard?.paperReset.status === "pending" && <p className="rz-copy">待重置 · 剩余 {dashboard.paperReset.openPositions} 笔持仓</p>}<div className="rz-actions"><button className="danger" disabled={!dashboard || dashboard.paperReset.status === "pending"} onClick={() => void resetPaper()}>{dashboard?.paperReset.status === "pending" ? "等待持仓结束" : "重置模拟本金"}</button></div></article></section>
     </div>}
 

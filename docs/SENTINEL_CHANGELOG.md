@@ -1,3 +1,9 @@
+## 2026-09-05 V8 一分钟回踩发布进行中
+- 已实现固定六币一分钟缓存/十五分钟方向、缩量回踩恢复入场、含费0.25%单笔/0.75%组合、三连亏30分钟暂停、日亏1.5%持久保护、最多15分钟全平。
+- 历史相似模型仅后台辅助，长期归档保持；旧模拟仓位沿0026强制报价归档，不触碰实盘。
+- 短线复核共享缓存；重启/429退避、分钟故障回放、保护优先、信号去重和日初余额缓存已实现。详情 docs/MINUTE_PULLBACK.md。
+- 本地115页面/安全、231信号/风险、52策略+7架构已通过；最终针对性验证与PR/生产核对进行中。24小时仿真已完成，真实24小时在线观察尚未完成。
+
 ## UI acceptance follow-up
 
 Production #144 visual review found stale decision age labeled as a scheduler failure despite a fresh scanner heartbeat. Separate actual scanner errors from decision-data delay, preserve conservative decision waiting, and show unknown order counts as -- during initial loading. No trading/backend changes. Final follow-up CI pending.

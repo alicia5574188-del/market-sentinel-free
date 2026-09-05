@@ -386,6 +386,24 @@ export async function fetchGatePositionQuotes(symbols: string[]): Promise<GatePo
   }
 }
 
+/** Bounded rolling feed; only the scanner owns this one-minute producer. */
+export async function fetchGateMinuteCandles(symbol: string, limit = 8) {
+  if (!SYMBOL_PATTERN.test(symbol)) throw new Error("Invalid Gate symbol");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 7_000);
+  try {
+    return parseCandles(await gate(`/futures/usdt/candlesticks?contract=${encodeURIComponent(symbol)}&interval=1m&limit=${Math.min(400, Math.max(8, Math.floor(limit)))}`, controller.signal));
+  } finally { clearTimeout(timeout); }
+}
+
+/** Only outage recovery uses a historical minute range; normal monitoring shares scanner cache. */
+export async function fetchGateMinuteRecovery(symbol:string,fromMs:number,toMs:number) {
+  if(!SYMBOL_PATTERN.test(symbol)) throw new Error("Invalid Gate symbol");
+  const controller=new AbortController(), timeout=setTimeout(()=>controller.abort(),7_000);
+  try { return parseCandles(await gate(`/futures/usdt/candlesticks?contract=${encodeURIComponent(symbol)}&interval=1m&from=${Math.floor(fromMs/1000)}&to=${Math.floor(Math.min(toMs,fromMs+6*60*60_000)/1000)}`,controller.signal)); }
+  finally { clearTimeout(timeout); }
+}
+
 export async function fetchGateChartCandles(symbol: string, fromMs: number, toMs: number) {
   if (!SYMBOL_PATTERN.test(symbol)) throw new Error("Invalid Gate symbol");
   const now = Date.now();

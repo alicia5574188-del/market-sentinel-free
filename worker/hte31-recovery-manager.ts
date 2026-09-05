@@ -1,7 +1,8 @@
+import { evaluateScalpPosition } from "../lib/scalp-strategy";
 /// <reference types="@cloudflare/workers-types" />
 
 import { setRuntimeDb } from "../db";
-import { fetchGateChartCandles } from "../lib/gate-client";
+import { fetchGateChartCandles, fetchGateMinuteRecovery } from "../lib/gate-client";
 import {
   applyHte31PositionQuote,
   listHte31OpenTrades,
@@ -25,11 +26,13 @@ async function replayStaleTrade(
   settings: AppSettings,
   now: number,
 ) {
-  const candles = await fetchGateChartCandles(trade.symbol, trade.lastEvaluatedAt, now);
+  const scalp=trade.setupId==='MINUTE_PULLBACK' ? JSON.parse(trade.decisionSnapshotJson)?.candidate?.scalp : null;
+  const interval=scalp?60_000:FIVE_MINUTES_MS;
+  const candles = scalp ? await fetchGateMinuteRecovery(trade.symbol,trade.lastEvaluatedAt,now) : await fetchGateChartCandles(trade.symbol, trade.lastEvaluatedAt, now);
   const replay = candles
     .map((candle) => ({
       candle,
-      observedAt: Math.min(now, candleStartMs(candle) + FIVE_MINUTES_MS),
+      observedAt: Math.min(now, candleStartMs(candle) + interval),
     }))
     .filter((item) => item.observedAt > trade.lastEvaluatedAt)
     .sort((a, b) => a.observedAt - b.observedAt);
@@ -44,7 +47,9 @@ async function replayStaleTrade(
       candleTime: item.candle.time,
       volumeUsd: 0,
       observedAt: item.observedAt,
-    }, settings);
+    }, settings, scalp ? evaluateScalpPosition({side:trade.side,entryPrice:trade.entryPrice,initialStopPrice:trade.initialStopPrice,currentStopPrice:trade.currentStopPrice,
+      entryAt:trade.entryAt,currentPrice:item.candle.close,observedAt:item.observedAt,roundTripCostBps:scalp.costBps,confirmationPrice:scalp.confirmationPrice,
+      candles:candles.filter(c=>candleStartMs(c)+interval<=item.observedAt)}) : null);
     replayed += 1;
     if (result.kind === "closed") return { replayed, closed: true };
   }
@@ -65,13 +70,14 @@ async function replayStaleTrade(
  */
 export class HTE31TradeManager extends BaseHTE31TradeManager {
   override async alarm(): Promise<void> {
+    await this.ctx.storage.setAlarm(Date.now()+60_000);
     setRuntimeDb(this.env.DB);
     setRuntimeBindings(this.env);
 
     try {
       const now = Date.now();
       const open = await listHte31OpenTrades();
-      const stale = open.filter((trade) => now - trade.lastEvaluatedAt >= REPLAY_GAP_MS);
+      const stale = open.filter((trade) => now - trade.lastEvaluatedAt >= (trade.setupId === "MINUTE_PULLBACK" ? 90_000 : REPLAY_GAP_MS));
       if (stale.length) {
         const settings = await getSettings();
         for (const trade of stale) {

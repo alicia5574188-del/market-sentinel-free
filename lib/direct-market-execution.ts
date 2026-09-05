@@ -1,4 +1,5 @@
-import { and, desc, eq, gte, or } from "drizzle-orm";
+import { SCALP_POLICY, SCALP_POSITION_POLICY, scalpCostBps, scalpEntryRisk, correlatedScalpExposure } from "./scalp-strategy.ts";
+import { and, desc, eq, gte, or, sql, lt } from "drizzle-orm";
 import { getDb } from "../db";
 import { hte31PaperResetState, hte31SimulationEpochs, hte31TradeCharts, hte31Trades } from "../db/hte31-schema";
 import { directMarketD1Admission, directMarketPositionCheckpointRows } from "./direct-market-d1-budget.ts";
@@ -6,20 +7,17 @@ import { validateDirectMarketEntry } from "./direct-market-entry.ts";
 import {
   deriveDirectMarketLearningProfile,
   directMarketCandidateSignature,
-  evaluateDirectMarketLearningAdmission,
   type DirectMarketLearningSample,
 } from "./direct-market-learning.ts";
-import { DIRECT_POSITION_POLICY_VERSION } from "./direct-market-position-brain.ts";
 import { ensureDirectMarketReleaseCutover } from "./direct-market-release.ts";
-import { directMarketRiskAdmission, evaluateDirectMarketRisk, type DirectMarketResult } from "./direct-market-risk.ts";
-import { evaluateDirectSetupGuard, type DirectSetupGuardSample } from "./direct-market-setup-guard.ts";
+import { evaluateDirectMarketRisk, type DirectMarketResult } from "./direct-market-risk.ts";
 import {
   DIRECT_MARKET_AUTHORITY,
   DIRECT_MARKET_BRAIN_VERSION,
   type DirectBrainDecisionSnapshot,
   type DirectMarketCandidate,
 } from "./direct-market-types.ts";
-import { buildHte31PaperPosition, hte31PaperPortfolioBlockReason, HTE31_PAPER_PORTFOLIO_POLICY } from "./hte31-position-sizing.ts";
+import { buildHte31PaperPosition, hte31PaperPortfolioBlockReason } from "./hte31-position-sizing.ts";
 import type { MarketPositionQuote } from "./exchange-market.ts";
 import type { AppSettings } from "./settings-repository.ts";
 
@@ -30,19 +28,38 @@ function utcDayStart(now: number) {
   return Math.floor(now / UTC_DAY_MS) * UTC_DAY_MS;
 }
 
-async function paperAccount(startingCapitalUsdt: number) {
-  const db = getDb();
-  const rows = await db.select().from(hte31Trades).orderBy(desc(hte31Trades.entryAt)).limit(500);
-  const [epoch] = await db.select().from(hte31SimulationEpochs).orderBy(desc(hte31SimulationEpochs.startedAt)).limit(1);
-  const startedAt = epoch?.startedAt ?? 0;
-  const starting = epoch?.startingCapitalUsdt ?? startingCapitalUsdt;
-  const open = rows.filter((row) => row.status === "holding");
-  const realized = rows.filter((row) => row.status === "closed" && row.entryAt >= startedAt)
-    .reduce((sum, row) => sum + (row.netPnlUsdt ?? 0), 0);
-  const unrealized = open.reduce((sum, row) => sum + row.unrealizedNetUsdt, 0);
-  const equityUsdt = starting + realized + unrealized;
-  const usedMarginUsdt = open.reduce((sum, row) => sum + row.marginUsdt, 0);
-  return { open, equityUsdt, availableMarginUsdt: Math.max(0, equityUsdt - usedMarginUsdt) };
+export async function scalpAccountRisk(startingCapitalUsdt:number, costBps:number, now=Date.now()) {
+  const db=getDb(), day=utcDayStart(now);
+  const [epoch]=await db.select().from(hte31SimulationEpochs).orderBy(desc(hte31SimulationEpochs.startedAt)).limit(1);
+  const epochAt=epoch?.startedAt??0, starting=epoch?.startingCapitalUsdt??startingCapitalUsdt;
+  const id=`${epochAt}:${day}`;
+  let state=await db.get<{dayBase:number;haltedUntil:number}>(sql`SELECT day_base AS dayBase, halted_until AS haltedUntil FROM scalp_risk_days WHERE id=${id}`);
+  const open=await db.select().from(hte31Trades).where(eq(hte31Trades.status,"holding"));
+  if(!state) {
+    const [before]=await db.select({net:sql<number>`coalesce(sum(${hte31Trades.netPnlUsdt}),0)`}).from(hte31Trades)
+      .where(and(eq(hte31Trades.status,"closed"),gte(hte31Trades.entryAt,epochAt),lt(hte31Trades.exitAt,day)));
+    const dayBase=starting+Number(before?.net??0);
+    await db.run(sql`INSERT OR IGNORE INTO scalp_risk_days(id,day_base,halted_until,updated_at) VALUES(${id},${dayBase},0,${now})`);
+    state={dayBase,haltedUntil:0};
+  }
+  const closed=await db.select({net:hte31Trades.netPnlUsdt,exitAt:hte31Trades.exitAt}).from(hte31Trades)
+    .where(and(eq(hte31Trades.status,"closed"),gte(hte31Trades.entryAt,epochAt),gte(hte31Trades.exitAt,day))).orderBy(desc(hte31Trades.exitAt));
+  const realized=closed.reduce((a,c)=>a+(c.net??0),0);
+  // Include full estimated liquidation costs, even before the first holding checkpoint.
+  const unrealized=open.reduce((a,t)=>{
+    let frozenCost=costBps;
+    try { frozenCost=JSON.parse(t.decisionSnapshotJson)?.candidate?.scalp?.costBps??costBps; } catch { /* Unreadable legacy rows keep conservative configured costs. */ }
+    return a+t.notionalUsdt*((t.side==='LONG'?1:-1)*(t.lastPrice/t.entryPrice-1)-scalpCostBps(frozenCost)/10_000);
+  },0);
+  const equityUsdt=state.dayBase+realized+unrealized;
+  const recent=closed.length>=3?closed:await db.select({net:hte31Trades.netPnlUsdt,exitAt:hte31Trades.exitAt}).from(hte31Trades)
+    .where(and(eq(hte31Trades.status,"closed"),gte(hte31Trades.entryAt,epochAt),gte(hte31Trades.exitAt,now-SCALP_POLICY.lossPauseMs))).orderBy(desc(hte31Trades.exitAt)).limit(3);
+  const reason=scalpEntryRisk({equity:equityUsdt,dayOpeningEquity:state.dayBase,dayNet:realized+unrealized,
+    lastClosed:recent.map(c=>({net:c.net??0,exitAt:c.exitAt??0})),now,latchedUntil:state.haltedUntil});
+  if(realized+unrealized<=-state.dayBase*SCALP_POLICY.dailyLossRate&&state.haltedUntil<day+UTC_DAY_MS) {
+    await db.run(sql`UPDATE scalp_risk_days SET halted_until=${day+UTC_DAY_MS}, updated_at=${now} WHERE id=${id}`);
+  }
+  return {open,equityUsdt,availableMarginUsdt:Math.max(0,equityUsdt-open.reduce((a,t)=>a+t.marginUsdt,0)),reason};
 }
 
 export async function getDirectMarketRiskDecision() {
@@ -51,6 +68,7 @@ export async function getDirectMarketRiskDecision() {
     .orderBy(desc(hte31SimulationEpochs.startedAt)).limit(1);
   const rows = await db.select({
     id: hte31Trades.id,
+    exitAt: hte31Trades.exitAt,
     independentEventKey: hte31Trades.independentEventKey,
     netPnlUsdt: hte31Trades.netPnlUsdt,
     riskBudgetUsdt: hte31Trades.riskBudgetUsdt,
@@ -64,7 +82,12 @@ export async function getDirectMarketRiskDecision() {
     independentEventKey: row.independentEventKey ?? row.id,
     resultR: row.riskBudgetUsdt > 0 ? (row.netPnlUsdt ?? 0) / row.riskBudgetUsdt : 0,
   }));
-  return evaluateDirectMarketRisk(results);
+  const evaluated=evaluateDirectMarketRisk(results);
+  const now=Date.now(), day=utcDayStart(now), id=`${epoch?.startedAt??0}:${day}`;
+  const state=await db.get<{haltedUntil:number}>(sql`SELECT halted_until AS haltedUntil FROM scalp_risk_days WHERE id=${id}`);
+  const paused=(state?.haltedUntil??0)>now || rows.length>=3&&rows.slice(0,3).every(r=>(r.netPnlUsdt??0)<0)&&now-(rows[0].exitAt??0)<SCALP_POLICY.lossPauseMs;
+  return {...evaluated,state:paused?"PAUSED" as const:results.length<12?"CALIBRATING" as const:"VALIDATING" as const,riskRate:paused?0:SCALP_POLICY.riskRate,
+    reason:`${paused?'亏损保护暂停新单；':''}单笔含费风险0.25%；日亏1.5%或三连亏暂停；${evaluated.reason}`};
 }
 
 export async function getDirectMarketLearningDecision() {
@@ -104,35 +127,6 @@ export async function getDirectMarketLearningDecision() {
   return deriveDirectMarketLearningProfile(samples);
 }
 
-async function getDirectSetupGuardDecision(candidate: DirectMarketCandidate, now: number) {
-  const candidateSide = candidate.decision;
-  if (candidateSide === "WAIT") throw new Error("setup guard requires an executable side");
-  const db = getDb();
-  const [epoch] = await db.select({ startedAt: hte31SimulationEpochs.startedAt }).from(hte31SimulationEpochs)
-    .orderBy(desc(hte31SimulationEpochs.startedAt)).limit(1);
-  const rows = await db.select({
-    id: hte31Trades.id,
-    independentEventKey: hte31Trades.independentEventKey,
-    netPnlUsdt: hte31Trades.netPnlUsdt,
-    riskBudgetUsdt: hte31Trades.riskBudgetUsdt,
-    exitAt: hte31Trades.exitAt,
-  }).from(hte31Trades).where(and(
-    eq(hte31Trades.status, "closed"),
-    eq(hte31Trades.decisionAuthority, DIRECT_MARKET_AUTHORITY),
-    eq(hte31Trades.brainVersion, DIRECT_MARKET_BRAIN_VERSION),
-    eq(hte31Trades.setupId, candidate.setup),
-    eq(hte31Trades.side, candidateSide),
-    eq(hte31Trades.assetRegime, candidate.assetRegime),
-    gte(hte31Trades.entryAt, epoch?.startedAt ?? 0),
-  )).orderBy(desc(hte31Trades.exitAt)).limit(100);
-  const samples: DirectSetupGuardSample[] = rows.map((row) => ({
-    independentEventKey: row.independentEventKey ?? row.id,
-    resultR: row.riskBudgetUsdt > 0 ? (row.netPnlUsdt ?? 0) / row.riskBudgetUsdt : 0,
-    exitAt: row.exitAt ?? 0,
-  }));
-  return evaluateDirectSetupGuard(samples, now);
-}
-
 export async function openDirectMarketTrade(input: {
   candidate: DirectMarketCandidate;
   universe: string[];
@@ -144,11 +138,12 @@ export async function openDirectMarketTrade(input: {
   if (candidate.decision === "WAIT" || !candidate.entryZone || !candidate.invalidationPrice || candidate.targets.length < 2) {
     return { opened: null, reason: candidate.counterEvidence[0] ?? "当前位置没有足够净优势" };
   }
-  const entryValidation = validateDirectMarketEntry(candidate, input.freshQuote, input.freshQuote?.observedAt ?? Date.now());
+  const entryValidation = validateDirectMarketEntry(candidate, input.freshQuote, Date.now());
   if (!entryValidation.allowed || entryValidation.entryPrice == null || entryValidation.rewardRisk == null) {
     return { opened: null, reason: `开仓复核：${entryValidation.reason}` };
   }
-  const executionNow = input.freshQuote!.observedAt;
+  const executionNow = Date.now();
+  if (!candidate.scalp || candidate.setup !== "MINUTE_PULLBACK") return { opened: null, reason: "当前版本只接受一分钟回踩策略" };
   const db = getDb();
   await ensureDirectMarketReleaseCutover(settings.trialCapitalUsdt, executionNow);
   const [pendingReset] = await db.select({ id: hte31PaperResetState.id }).from(hte31PaperResetState).where(and(
@@ -170,42 +165,32 @@ export async function openDirectMarketTrade(input: {
     return { opened: null, reason: "刚结束同币种判断，等待一根完整5分钟K线后重新决策" };
   }
 
-  const account = await paperAccount(settings.trialCapitalUsdt);
+  if (recentClosed?.exitAt && candidate.scalp.structureAt <= recentClosed.exitAt) return {opened:null,reason:"等待平仓后形成全新的回踩结构"};
+  const [duplicate]=await db.select({id:hte31Trades.id}).from(hte31Trades).where(eq(hte31Trades.independentEventKey,candidate.scalp.signalKey)).limit(1);
+  if(duplicate) return {opened:null,reason:"同一回踩信号已处理"};
+  const account = await scalpAccountRisk(settings.trialCapitalUsdt, settings.roundTripCostBps, executionNow);
+  if(account.reason) return {opened:null,reason:account.reason};
+  if(account.open.length>=SCALP_POLICY.maximumOpenPositions) return {opened:null,reason:"三笔持仓已用满短线风险预留"};
+  if(account.open.some(t=>executionNow-t.lastEvaluatedAt>90_000)) return {opened:null,reason:"已有持仓报价过期，先恢复持仓保护"};
   if (account.equityUsdt <= 0) return { opened: null, reason: "模拟账户权益不足" };
   const sameCluster = account.open.some((row) => {
-    if (row.side !== candidate.decision || !row.decisionSnapshotJson) return false;
+    if (!row.decisionSnapshotJson) return true;
     try {
       const snapshot = JSON.parse(row.decisionSnapshotJson) as Partial<DirectBrainDecisionSnapshot>;
-      return snapshot.candidate?.riskClusterId === candidate.riskClusterId;
+      return correlatedScalpExposure({side:candidate.decision as "LONG"|"SHORT",correlation:candidate.btcCorrelation},
+        {side:row.side,correlation:snapshot.candidate?.btcCorrelation??null});
     } catch {
-      return false;
+      return true;
     }
   });
   if (sameCluster) return { opened: null, reason: `已有同方向 ${candidate.riskClusterId} 风险簇持仓` };
 
-  const risk = await getDirectMarketRiskDecision();
-  if (risk.state === "PAUSED") return { opened: null, reason: `市场大脑暂停新单：${risk.reason}` };
-  const riskAdmission = directMarketRiskAdmission({
-    state: risk.state,
-    historical: Boolean(candidate.forecast),
-    confidence: candidate.confidence,
-    netEdgeR: candidate.netEdgeR,
-    location: candidate.location,
-  });
-  if (!riskAdmission.allowed) return { opened: null, reason: `即时风险准入：${riskAdmission.reason}` };
-  const learning = await getDirectMarketLearningDecision();
-  const learningAdmission = evaluateDirectMarketLearningAdmission(learning, candidate, executionNow);
-  if (!learningAdmission.allowed) return { opened: null, reason: `完整复盘准入：${learningAdmission.reason}` };
-  const setupGuard = await getDirectSetupGuardDecision(candidate, executionNow);
-  if (setupGuard.state === "PAUSED") return { opened: null, reason: `策略独立门控：${setupGuard.reason}` };
-  if (setupGuard.revalidation) {
-    const revalidationHolding = account.open.some((row) => row.setupId === candidate.setup
-      && row.side === candidate.decision && row.assetRegime === candidate.assetRegime);
-    if (revalidationHolding) return { opened: null, reason: "该打法/方向/行情组合已有复考仓位" };
-    if (candidate.confidence < (candidate.forecast ? 72 : 82) || candidate.netEdgeR < (candidate.forecast ? 0.25 : 0.9)) {
-      return { opened: null, reason: `策略独立门控：${setupGuard.reason}；复考要求更高方向一致性与净优势` };
-    }
-  }
+  // This version uses explicit daily/consecutive-loss guards, not legacy analogue
+  // sample gates. Twelve-hour learning stays observable without mutating this rule.
+  const risk={state:"CALIBRATING" as const,riskRate:SCALP_POLICY.riskRate};
+  const learning=deriveDirectMarketLearningProfile([]);
+  const learningAdmission={revalidation:false};
+  const setupGuard={reason:"单笔0.25%，组合0.75%，三连亏暂停三十分钟",revalidation:false};
   const today = utcDayStart(executionNow);
   const todayRows = await db.select({ entryAt: hte31Trades.entryAt, decisionSnapshotJson: hte31Trades.decisionSnapshotJson }).from(hte31Trades).where(and(
     eq(hte31Trades.decisionAuthority, DIRECT_MARKET_AUTHORITY),
@@ -231,9 +216,9 @@ export async function openDirectMarketTrade(input: {
     availableMarginUsdt: account.availableMarginUsdt,
     riskMultiplier: 1,
     riskRate: risk.riskRate,
-    roundTripCostBps: settings.roundTripCostBps,
-    minimumTp2NetProfitUsdt: candidate.forecast ? 0 : undefined,
-    minimumRiskRate: candidate.forecast ? 0.005 : undefined,
+    roundTripCostBps: scalpCostBps(settings.roundTripCostBps),
+    minimumTp2NetProfitUsdt: 0,
+    minimumRiskRate: 0,
     liquidityVolumeUsd: candidate.volumeUsd,
     atrPct: Math.abs(entryPrice - candidate.invalidationPrice) / entryPrice * 100,
     dataQuality: candidate.checks.find((check) => check.key === "data")?.passed ? 0.85 : 0.7,
@@ -241,6 +226,7 @@ export async function openDirectMarketTrade(input: {
   });
   if (!sizing.accepted) return { opened: null, reason: `仓位经济门槛：${sizing.reason}` };
   const portfolioBlock = hte31PaperPortfolioBlockReason({
+    maximumTotalPlannedRiskRate: SCALP_POLICY.portfolioRiskRate,
     open: account.open.map((row) => ({ side: row.side, riskBudgetUsdt: row.riskBudgetUsdt })),
     nextSide: side,
     nextRiskUsdt: sizing.plannedRiskUsdt,
@@ -249,7 +235,7 @@ export async function openDirectMarketTrade(input: {
   if (portfolioBlock) return { opened: null, reason: portfolioBlock };
 
   const id = `hte31:${crypto.randomUUID()}`;
-  const independentEventKey = `direct:${Math.floor(executionNow / (30 * 60_000))}|${candidate.setup}|${candidate.assetRegime}|${candidate.riskClusterId}|${side}`;
+  const independentEventKey = candidate.scalp.signalKey;
   const { candles5m: _candles, ...candidateSnapshot } = candidate;
   void _candles;
   const snapshot: DirectBrainDecisionSnapshot = {
@@ -258,7 +244,7 @@ export async function openDirectMarketTrade(input: {
     brainVersion: DIRECT_MARKET_BRAIN_VERSION,
     parentVersion: learning.parentVersion,
     decisionPolicyVersion: learning.version,
-    positionPolicyVersion: candidate.forecast ? "historical-analog-horizon-v1" : DIRECT_POSITION_POLICY_VERSION,
+    positionPolicyVersion: SCALP_POSITION_POLICY,
     batchId: candidate.batchId,
     universe: input.universe,
     selectedSymbol: candidate.symbol,
@@ -267,7 +253,7 @@ export async function openDirectMarketTrade(input: {
     portfolioChecks: {
       openPositionsBefore: account.open.length,
       maximumOpenPositions: null,
-      maximumTotalPlannedRiskRate: HTE31_PAPER_PORTFOLIO_POLICY.maximumTotalPlannedRiskRate,
+      maximumTotalPlannedRiskRate: SCALP_POLICY.portfolioRiskRate,
       riskClusterId: candidate.riskClusterId,
       d1ProjectedRows: admission.projectedRows,
       sameDirectionMaximum: null,
@@ -359,5 +345,5 @@ export async function openDirectMarketTrade(input: {
     entryQualityJson: "null",
     updatedAt: executionNow,
   });
-  return { opened: row, reason: `市场大脑以 ${risk.state} 风险档建立模拟仓；决策快照已锁定；历史预测先在模拟验证` };
+  return { opened: row, reason: `市场大脑以 ${risk.state} 风险档建立模拟仓；决策快照已锁定；一分钟回踩策略仅在模拟验证` };
 }
