@@ -6,7 +6,13 @@ import { minuteTime,scalpCostBps } from './scalp-strategy.ts';
 import {DIRECT_POSITION_POLICY_VERSION,type DirectPositionDecision} from './direct-market-position-brain.ts';
 export const ANALOG_POSITION_POLICY='analog-path-exit-v2';
 export const ANALOG_MIN_NET_REWARD_R=0.8;
-export const ANALOG_RISK_POLICY={riskRate:.01,portfolioRiskRate:.03,dailyLossRate:.03,lossPauseMs:30*60_000} as const;
+export const ANALOG_RISK_POLICY={
+ riskRate:.04,
+ portfolioRiskRate:.12,
+ dailyLossRate:.12,
+ minimumTp2NetProfitUsdt:30,
+ lossPauseMs:30*60_000,
+} as const;
 export const completeFiveMinutes=(rows:Hte31Candle[],now:number)=>cleanAnalogCandles(rows,now).slice(-400);
 const mean=(xs:number[])=>xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:0;
 const quantile=(xs:number[],p:number)=>{const a=[...xs].sort((x,y)=>x-y);if(!a.length)return 0;const t=(a.length-1)*p,i=Math.floor(t);return a[i]+(a[Math.ceil(t)]-a[i])*(t-i);};

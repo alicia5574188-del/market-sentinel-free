@@ -1,5 +1,11 @@
 # Decisions
 
+## 2026-09-06 — TP2 net 30U is a floor, not a target
+
+- Raise only new analog PAPER sizing to 4.00% equity per trade and 12.00% total; retain correlated half-risk, margin/leverage/liquidity limits and three-loss pause. Align the daily loss latch at 12.0% so it remains coherent with three full planned losses.
+- After a signal qualifies, back-solve notional from the unchanged market-derived TP2 and estimated round-trip cost, then enlarge the PAPER position so projected TP2 net is at least 30U. The 30U value is not an added entry filter, target or cap; use safety-derived leverage room while retaining the 4% equity-risk ceiling and never stretch or truncate TP2.
+- Treat this as a V13.1 sizing-policy patch, not a new decision brain. Existing positions keep immutable entry economics; five-analog selection, direction, target generation, exits, R-normalized learning, D1, history, credentials and LIVE-disabled state do not change.
+
 ## 2026-09-06 — Exactly five real analogs; usable PAPER risk with bounded frequency
 
 - Select exactly the five closest non-overlapping completed episodes. The same five own the vote, target, stop-path replay and UI evidence; fewer than five fails closed. Carry raw timestamps and OHLC and render five independent-scale candlestick charts with the actual subsequent hour.

@@ -88,7 +88,7 @@ export async function getDirectMarketRiskDecision() {
   const state=await db.get<{haltedUntil:number}>(sql`SELECT halted_until AS haltedUntil FROM scalp_risk_days WHERE id=${id}`);
   const paused=(state?.haltedUntil??0)>now || rows.length>=3&&rows.slice(0,3).every(r=>(r.netPnlUsdt??0)<0)&&now-(rows[0].exitAt??0)<ANALOG_RISK_POLICY.lossPauseMs;
   return {...evaluated,state:paused?"PAUSED" as const:results.length<12?"CALIBRATING" as const:"VALIDATING" as const,riskRate:paused?0:ANALOG_RISK_POLICY.riskRate,
-    reason:`${paused?'亏损保护暂停新单；':''}单笔含费风险上限1.00%；日亏3.0%或三连亏暂停；${evaluated.reason}`};
+    reason:`${paused?'亏损保护暂停新单；':''}单笔含费风险上限4.00%；TP2扣费后至少30U；日亏12.0%或三连亏暂停；${evaluated.reason}`};
 }
 
 export async function getDirectMarketLearningDecision() {
@@ -192,7 +192,7 @@ export async function openDirectMarketTrade(input: {
   const risk={state:"CALIBRATING" as const,riskRate};
   const learning=deriveDirectMarketLearningProfile([]);
   const learningAdmission={revalidation:false};
-  const setupGuard={reason:"单笔最多1.00%，组合3.00%，不再预先按六币均分；相关敞口折半",revalidation:false};
+  const setupGuard={reason:"单笔最多4.00%，组合12.00%；按真实TP2倒算放大至扣费后至少30U且不限制上方利润；相关敞口折半",revalidation:false};
   const today = utcDayStart(executionNow);
   const todayRows = await db.select({ entryAt: hte31Trades.entryAt, decisionSnapshotJson: hte31Trades.decisionSnapshotJson }).from(hte31Trades).where(and(
     eq(hte31Trades.decisionAuthority, DIRECT_MARKET_AUTHORITY),
@@ -219,7 +219,8 @@ export async function openDirectMarketTrade(input: {
     riskMultiplier: 1,
     riskRate: risk.riskRate,
     roundTripCostBps: scalpCostBps(settings.roundTripCostBps),
-    minimumTp2NetProfitUsdt: 0,
+    minimumTp2NetProfitUsdt: ANALOG_RISK_POLICY.minimumTp2NetProfitUsdt,
+    sizeToMinimumTp2NetProfit: true,
     minimumRiskRate: 0,
     liquidityVolumeUsd: candidate.volumeUsd,
     atrPct: Math.abs(entryPrice - candidate.invalidationPrice) / entryPrice * 100,

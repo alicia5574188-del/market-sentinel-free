@@ -15,6 +15,7 @@ export type Hte31PositionSizingInput = {
   confidence: number;
   riskRate?: number;
   minimumTp2NetProfitUsdt?: number;
+  sizeToMinimumTp2NetProfit?: boolean;
   minimumRiskRate?: number;
 };
 
@@ -177,13 +178,28 @@ export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31P
   const governedRiskUsdt = explicitRiskRate == null ? normalTargetRiskUsdt * clamp(input.riskMultiplier, 0, 1) : normalTargetRiskUsdt;
   const targetRiskUsdt = clamp(governedRiskUsdt, minimumRiskUsdt, maximumRiskUsdt);
 
+  const roundTripCostRate = Math.max(0, Number.isFinite(input.roundTripCostBps) ? input.roundTripCostBps : 0) / 10_000;
+  const netStopLossRate = stopDistanceRate + roundTripCostRate;
+  const grossTp2MoveRate = originalRiskReward * stopDistanceRate;
+  const netTp2MoveRate = grossTp2MoveRate - roundTripCostRate;
+  const minimumTp2NetProfitUsdt = input.minimumTp2NetProfitUsdt ?? HTE31_PAPER_POSITION_POLICY.minimumTp2NetProfitUsdt;
+  if (input.sizeToMinimumTp2NetProfit && !(netTp2MoveRate > 0)) return emptyResult("TP2扣费后没有可放大的净利润空间");
+  const minimumProfitNotionalUsdt = input.sizeToMinimumTp2NetProfit
+    ? minimumTp2NetProfitUsdt / netTp2MoveRate
+    : 0;
+
   const liquidityCap = liquidityLeverageCap(positive(input.liquidityVolumeUsd));
   const volatilityCap = volatilityLeverageCap(input.atrPct);
-  const qualityCap = input.dataQuality < 0.75 || input.confidence < 72
-    ? 12
-    : input.dataQuality < 0.82 || input.confidence < 78
-      ? 25
-      : HTE31_PAPER_POSITION_POLICY.maximumLeverage;
+  // In PAPER, an accepted analogue may use the safety-derived leverage room to
+  // express the requested TP2 money floor. This changes position size only;
+  // liquidity, volatility, liquidation and the equity-risk ceiling still cap it.
+  const qualityCap = input.sizeToMinimumTp2NetProfit
+    ? HTE31_PAPER_POSITION_POLICY.maximumLeverage
+    : input.dataQuality < 0.75 || input.confidence < 72
+      ? 12
+      : input.dataQuality < 0.82 || input.confidence < 78
+        ? 25
+        : HTE31_PAPER_POSITION_POLICY.maximumLeverage;
   const requiredLiquidationBufferRate = stopDistanceRate * HTE31_PAPER_POSITION_POLICY.liquidationStopBufferMultiple
     + HTE31_PAPER_POSITION_POLICY.liquidationExtraBufferRate;
   const liquidationSafeCap = Math.max(1, Math.floor(
@@ -200,9 +216,12 @@ export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31P
     equityUsdt * HTE31_PAPER_POSITION_POLICY.targetMarginAllocationRate,
   );
 
-  const roundTripCostRate = Math.max(0, Number.isFinite(input.roundTripCostBps) ? input.roundTripCostBps : 0) / 10_000;
-  const netStopLossRate = stopDistanceRate + roundTripCostRate;
-  const desiredNotionalUsdt = targetRiskUsdt / netStopLossRate;
+  const riskSizedNotionalUsdt = targetRiskUsdt / netStopLossRate;
+  const maximumRiskNotionalUsdt = maximumRiskUsdt / netStopLossRate;
+  const desiredNotionalUsdt = Math.min(
+    Math.max(riskSizedNotionalUsdt, minimumProfitNotionalUsdt),
+    maximumRiskNotionalUsdt,
+  );
   const requiredLeverage = Math.max(1, Math.ceil(desiredNotionalUsdt / targetMarginCap));
   const leverage = clamp(requiredLeverage, 1, leverageCap);
   // Most positions stay inside the 8% target. Exceptionally narrow structural
@@ -215,11 +234,9 @@ export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31P
 
   const takeProfit2Price = originalTakeProfit2Price;
   const riskReward = originalRiskReward;
-  const grossTp2MoveRate = riskReward * stopDistanceRate;
   const plannedTp2GrossProfitUsdt = notionalUsdt * grossTp2MoveRate;
   const plannedTp2CostUsdt = notionalUsdt * roundTripCostRate;
   const plannedTp2NetProfitUsdt = plannedTp2GrossProfitUsdt - plannedTp2CostUsdt;
-  const minimumTp2NetProfitUsdt = input.minimumTp2NetProfitUsdt ?? HTE31_PAPER_POSITION_POLICY.minimumTp2NetProfitUsdt;
 
   const liquidationDistanceRate = HTE31_PAPER_POSITION_POLICY.liquidationMaintenanceFactor / leverage;
   const estimatedLiquidationPrice = input.side === "LONG"
