@@ -31,7 +31,7 @@ test("renders production Resonance metadata", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
   assert.match(html, /<title>共振量化｜短线交易台<\/title>/i);
-  assert.match(html, /顺势回踩短线模拟：当前决定、持仓保护、真实交易结果与每12小时复盘/);
+  assert.match(html, /历史方向交易模拟：历史走势预测、当前决定、持仓保护与交易结果/);
   const version = (await readFile(new URL("../lib/direct-market-types.ts", import.meta.url), "utf8")).match(/DIRECT_MARKET_BRAIN_VERSION = "([^"]+)"/)[1];
   assert.ok(html.includes(`data-release="${version}"`));
   assert.doesNotMatch(html, /name=["']codex-preview["']/i);

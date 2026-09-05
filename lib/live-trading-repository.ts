@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gte, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { hte31Trades } from "../db/hte31-schema";
+import { hte31SimulationEpochs } from "../db/hte31-schema";
 import {
   liveAuditEvents,
   liveExchangeCredentials,
@@ -13,6 +14,7 @@ import { liveEntryCandidateCutoff } from "./live-entry-freshness";
 import { evaluateLivePerformanceGate } from "./live-performance-gate";
 import {
   DIRECT_MARKET_AUTHORITY,
+  DIRECT_CORE_SETUPS,
   DIRECT_MARKET_BRAIN_VERSION,
   type DirectBrainDecisionSnapshot,
 } from "./direct-market-types";
@@ -279,7 +281,11 @@ export async function getLivePerformanceGate(now = Date.now()) {
     db.select({ liveOrderId: liveAuditEvents.liveOrderId, detailsJson: liveAuditEvents.detailsJson }).from(liveAuditEvents)
       .where(eq(liveAuditEvents.eventType, ENTRY_EQUITY_SNAPSHOT_EVENT)).orderBy(desc(liveAuditEvents.createdAt)).limit(250),
     db.select({ netMovePct: hte31Trades.netMovePct, exitAt: hte31Trades.exitAt }).from(hte31Trades)
-      .where(eq(hte31Trades.status, "closed")).orderBy(desc(hte31Trades.exitAt)).limit(8),
+      .where(and(eq(hte31Trades.status, "closed"),
+        eq(hte31Trades.decisionAuthority, DIRECT_MARKET_AUTHORITY),
+        eq(hte31Trades.brainVersion, DIRECT_MARKET_BRAIN_VERSION),
+        gte(hte31Trades.entryAt, sql`coalesce((select max(${hte31SimulationEpochs.startedAt}) from ${hte31SimulationEpochs}), 0)`),
+      )).orderBy(desc(hte31Trades.exitAt)).limit(8),
   ]);
   const entryEquityByOrder = new Map<string, number>();
   for (const row of entrySnapshots) {
@@ -291,6 +297,7 @@ export async function getLivePerformanceGate(now = Date.now()) {
     now,
     recentLive: recentLive.map((row) => ({ realizedPnlUsdt: row.realizedPnlUsdt, entryEquityUsdt: entryEquityByOrder.get(row.id) ?? null, closedAt: row.closedAt })),
     recentSimulation,
+    simulationOnly: DIRECT_CORE_SETUPS.every(setup => ["HISTORICAL_ANALOG", "MINUTE_PULLBACK", "ANALOG_PATH"].includes(setup.id)),
   });
 }
 

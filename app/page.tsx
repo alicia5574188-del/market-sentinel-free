@@ -364,12 +364,6 @@ function fmtTime(value: number | null | undefined) {
   return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(value));
 }
 
-function fmtDuration(value: number | null | undefined) {
-  const minutes = Math.max(0, Math.floor((value ?? 0) / 60_000));
-  if (minutes < 60) return `${minutes}分钟`;
-  return `${Math.floor(minutes / 60)}小时${minutes % 60 ? `${minutes % 60}分钟` : ""}`;
-}
-
 function fmtR(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value)) return "--";
   return `${value >= 0 ? "+" : ""}${value.toFixed(2)}倍`;
@@ -811,7 +805,7 @@ export default function ResonancePage() {
   return <main className="rz-shell" data-release={DIRECT_MARKET_BRAIN_VERSION}>
     <header className="rz-header">
       <div className="rz-mark" aria-hidden="true">共</div>
-      <div className="rz-brand"><strong>共振量化</strong><small>历史方向交易 · 模拟验证 · 12小时复盘</small></div>
+      <div className="rz-brand"><strong>共振量化</strong><small>历史方向交易 · 模拟验证</small></div>
       <span className={`rz-status-label ${healthBad || healthWarn ? "warn" : ""}`}><i className={`rz-health ${healthBad ? "bad" : healthWarn ? "warn" : ""}`} />{healthBad ? "状态异常" : healthWarn ? "数据延迟" : snapshot ? "已更新" : "连接中"}</span>
     </header>
 
@@ -852,14 +846,7 @@ export default function ResonancePage() {
         </div>
         <details className="rz-decision-detail"><summary>交易统计与等待原因</summary>{review?.setups?.length ? <div className="rz-strategy-grid">{review.setups.map((setup) => <StrategyPerformanceCard key={setup.setup} setup={setup} />)}</div> : <Empty>等待首轮策略统计</Empty>}</details>
       </section>
-      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">运行总结</span><h2>每12小时总结</h2></div><small>{review?.complete ? "最近完整周期" : "尚未形成完整总结"}</small></div>
-        {review ? <article className="rz-panel rz-twelve-review">
-          <div className="rz-review-title"><strong>{review.complete ? operatorText(review.headline) : "交易持续运行，无需等待总结"}</strong><small>{fmtTime(review.windowStartAt)} — {fmtTime(review.windowEndAt)}</small></div>
-          <p>本窗口开仓 {review.openedTrades} 笔 · 平仓 {review.closedTrades} 笔 · 已实现净收益 <strong className={review.netPnlUsdt < 0 ? "rz-negative" : "rz-positive"}>{fmtMoney(review.netPnlUsdt)}</strong></p>
-          {review.complete && <p><strong>下一步：</strong>{operatorText(review.nextAction)}</p>}
-          <details><summary>查看运行明细</summary><p>已覆盖 {fmtDuration(review.coverageMs)} · 扫描轮次 {review.evaluations} · 原始触发 {review.triggeredSignals} · 通过条件 {review.qualifiedSignals} · 优先观察（含待确认）{review.selectedSignals} · 入场拦截 {review.blockedEntries}</p></details>
-        </article> : <Empty>总结数据正在读取，不影响后台交易</Empty>}
-      </section>
+
 
 
 
@@ -900,7 +887,7 @@ export default function ResonancePage() {
       <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">实盘账户</span><h2>Gate 合约账户</h2></div><small>{liveError ? "读取异常" : !live ? "正在读取" : !live.credential.configured ? "未配置" : operatorLabel(live.credential.status ?? "configured")}</small></div>
         <div className="rz-metric-grid"><div className="rz-metric"><span>账户权益</span><b>{fmtMoney(live?.control.accountEquityLastUsdt)}</b></div><div className="rz-metric"><span>今日已实现</span><b className={(live?.control.dailyRealizedPnlUsdt ?? 0) < 0 ? "rz-negative" : "rz-positive"}>{fmtMoney(live?.control.dailyRealizedPnlUsdt)}</b></div><div className="rz-metric"><span>新开仓</span><b>{!live ? "--" : live.control.entryEnabled ? "开启" : "关闭"}</b></div><div className="rz-metric"><span>最近成功对账</span><b>{fmtTime(live?.control.lastSuccessfulReconcileAt)}</b></div></div>
         {live?.performanceGate && <p className={`rz-copy ${live.performanceGate.passed ? "" : "rz-negative"}`}><strong>实盘资格：</strong>{live.performanceGate.passed ? "通过" : "未通过"}{live.performanceGate.reason ? ` · ${operatorText(live.performanceGate.reason)}` : ""}</p>}
-        <div className="rz-actions inline"><button className={live?.control.entryEnabled ? "danger" : "primary"} disabled={!live || Boolean(liveError)} onClick={toggleLive}>{live?.control.entryEnabled ? "关闭新开仓" : "开启实盘"}</button><button disabled={!live || Boolean(liveError)} onClick={() => void mutate("/api/live/reconcile", { method: "POST" }, "实盘对账已完成。", true)}>立即对账</button></div>
+        <div className="rz-actions inline"><button className={live?.control.entryEnabled ? "danger" : "primary"} disabled={!live || Boolean(liveError) || (!live.control.entryEnabled && !live.performanceGate?.passed)} onClick={toggleLive}>{live?.control.entryEnabled ? "关闭新开仓" : "开启实盘"}</button><button disabled={!live || Boolean(liveError)} onClick={() => void mutate("/api/live/reconcile", { method: "POST" }, "实盘对账已完成。", true)}>立即对账</button></div>
       </section>
 
       <section className="rz-section"><div className="rz-section-head"><div><h2>交易所连接</h2></div></div><article className="rz-panel">
