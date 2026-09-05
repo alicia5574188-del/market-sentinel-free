@@ -298,3 +298,9 @@ button { color: inherit; }
 }
 
 .rz-forecast-top { grid-column: 1 / -1; }
+
+@media (max-width: 520px) {
+  .rz-nav { width: calc(100% - 20px); bottom: max(6px, env(safe-area-inset-bottom)); padding: 4px; border-radius: 20px; }
+  .rz-nav button { padding: 10px 4px; border-radius: 16px; }
+  .rz-shell { padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
+}

@@ -4,7 +4,7 @@ import type { HistoricalForecast } from './historical-forecast.ts';
 import { cleanAnalogCandles, ANALOG_MIN_SAMPLES, historicalSwingVotes } from './historical-forecast.ts';
 import { minuteTime,scalpCostBps } from './scalp-strategy.ts';
 import {DIRECT_POSITION_POLICY_VERSION,type DirectPositionDecision} from './direct-market-position-brain.ts';
-export const ANALOG_POSITION_POLICY='analog-path-exit-v1';
+export const ANALOG_POSITION_POLICY='analog-path-exit-v2';
 export const completeFiveMinutes=(rows:Hte31Candle[],now:number)=>cleanAnalogCandles(rows,now).slice(-400);
 const mean=(xs:number[])=>xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:0;
 const quantile=(xs:number[],p:number)=>{const a=[...xs].sort((x,y)=>x-y);if(!a.length)return 0;const t=(a.length-1)*p,i=Math.floor(t);return a[i]+(a[Math.ceil(t)]-a[i])*(t-i);};
@@ -23,7 +23,7 @@ export function historicalDirection(f:HistoricalForecast|undefined,now:number,_c
 type Episode=NonNullable<HistoricalForecast['episodes']>[number];
 /** Stop-first, conservative limit fills, no exits before the historical entry. */
 export function replayAnalogPath(episode:Episode,side:'LONG'|'SHORT',offset:number,stop:number,target:number,cost:number) {
- const sign=side==='LONG'?1:-1,entry=-offset;cost*=1-sign*offset/100;let filled=offset===0,stopLevel=entry-stop,move=0,age=0;
+ const sign=side==='LONG'?1:-1,entry=-offset;cost*=1-sign*offset/100;let filled=offset===0,stopLevel=entry-stop,move=0,peak=0,age=0;
  for(let i=0;i<episode.bars.length;i++){
   const b=episode.bars[i],low=sign===1?b.lowPct:-b.highPct,high=sign===1?b.highPct:-b.lowPct,open=b.openPct*sign,close=b.closePct*sign;
   let justFilled=false;
@@ -33,8 +33,12 @@ export function replayAnalogPath(episode:Episode,side:'LONG'|'SHORT',offset:numb
   // A limit first touched inside a bar cannot also claim that bar's earlier high.
   if(!justFilled&&high>=entry+target)return {filled:true,netPct:target-cost,exit:'TARGET' as const};
   move=close-entry;
-  if(age>=3&&move<stop*.25&&close<entry-stop*.5)return {filled:true,netPct:move-cost,exit:'EARLY' as const};
-  if(!justFilled&&move>Math.max(cost*1.5,stop*.5))stopLevel=Math.max(stopLevel,entry+cost);
+  if(!justFilled)peak=Math.max(peak,high-entry);
+  // Protect after a real intrabar advance even if price has already retreated by the close.
+  if(peak>=Math.max(cost*1.5,stop*.35))stopLevel=Math.max(stopLevel,entry+cost);
+  if(age>=2&&move<=-Math.max(stop*.2,cost*1.5))return {filled:true,netPct:move-cost,exit:'EARLY' as const};
+  if(age>=4&&peak<cost*1.5&&move<=0)return {filled:true,netPct:move-cost,exit:'STALL' as const};
+  if(age>=6&&move<=cost)return {filled:true,netPct:move-cost,exit:'FADE' as const};
  }
  return {filled,netPct:filled?move-cost:0,exit:'TIME' as const};
 }
@@ -54,17 +58,20 @@ export function planAnalogEntry(f:HistoricalForecast,side:'LONG'|'SHORT',atrPct:
  // Two fixed alternatives, not a parameter search. Entire paths include losing episodes.
  const offset=Math.max(0,mean(adverse)*.5);
  const alternatives=[0,...(offset>=atrPct*.2?[offset]:[])].map(offsetPct=>{
-  const targetPct=mean(favorable)*.5+offsetPct;
+  const targetPct=Math.max(cost*1.5,quantile(favorable,.35)*.75)+offsetPct;
   // Once the target was reached, a later reversal must not inflate the initial stop.
   const beforeTarget=episodes.map(e=>{let worst=0;for(const b of e.bars){worst=Math.max(worst,sign===1?-b.lowPct:b.highPct);if((sign===1?b.highPct:-b.lowPct)>=targetPct-offsetPct)break;}return worst;});
-  const stopPct=Math.max(atrPct*.65,quantile(beforeTarget,.8)-offsetPct+atrPct*.25);
+  // Never express the same fixed equity risk through a micro stop: a normal five-minute print
+  // could otherwise cross several R before the next conservative replay fill. Wider stop means
+  // proportionally smaller position size; it does not increase the account loss budget.
+  const stopPct=Math.max(cost*2.5,atrPct*.65,quantile(beforeTarget,.8)-offsetPct+atrPct*.25);
   return {side,anchor,createdAt:now,expiresAt:now+15*60_000,signalKey:`${f.signalAt}:${side}`,offsetPct,stopPct,targetPct,
     ...estimate(episodes,side,offsetPct,stopPct,targetPct,cost),mode:offsetPct===0?'NOW' as const:'PULLBACK' as const};
- }).filter(p=>p.stopPct/(1-sign*p.offsetPct/100)<=2&&p.targetPct>=cost*1.5&&p.expectedNetR>=.05&&p.fillPct>=40&&p.takeProfitPct>p.lossPct);
+ }).filter(p=>p.stopPct/(1-sign*p.offsetPct/100)<=2&&p.targetPct>=cost*1.5&&p.expectedNetR>0&&p.fillPct>=40&&p.takeProfitPct>=55&&p.lossPct<=35&&p.takeProfitPct>p.lossPct);
  const immediate=alternatives.find(p=>p.mode==='NOW'),delayed=alternatives.find(p=>p.mode==='PULLBACK');
  // Prefer immediacy unless a frequently-filled retracement materially improves expectancy.
- if(delayed&&(!immediate||delayed.fillPct>=60&&delayed.expectedNetR>immediate.expectedNetR+.1&&immediate.lossPct>=25))return delayed;
- return immediate??delayed??null;
+ if(delayed&&immediate&&delayed.fillPct>=60&&delayed.expectedNetR>immediate.expectedNetR+.1&&immediate.lossPct>=25)return delayed;
+ return immediate??null;
 }
 export function buildAnalogCandidate(input:{symbol:string;candles:Hte31Candle[];btcCandles:Hte31Candle[];now:number;price:number;volumeUsd:number;volumeRank:number;costBps:number;forecast?:HistoricalForecast;intent?:AnalogIntent}):DirectMarketCandidate{
  const cs=completeFiveMinutes(input.candles,input.now),last=cs.at(-1),f=input.forecast;
@@ -74,13 +81,18 @@ export function buildAnalogCandidate(input:{symbol:string;candles:Hte31Candle[];
  const plan=bias.side!=='WAIT'&&f&&last?(pending??planAnalogEntry(f,side,atr/last.close*100,last.close,input.now)):null;
  const entry=plan?plan.anchor*(1-sign*plan.offsetPct/100):0;
  const stop=plan?entry-sign*plan.anchor*plan.stopPct/100:0,target=plan?entry+sign*plan.anchor*plan.targetPct/100:0;
- const tolerance=Math.min(atr*.15,entry*.0005),zone:[number,number]=[entry-tolerance,entry+tolerance];
+ const atrPct=last?atr/last.close*100:0;
+ const betterPct=plan?Math.min(plan.stopPct*.45,Math.max(atrPct*.6,.08)):0;
+ const chasePct=plan?Math.min(plan.targetPct*.2,Math.max(atrPct*.25,.03)):0;
+ const zone:[number,number]=side==='LONG'
+  ?[entry*(1-betterPct/100),entry*(1+chasePct/100)]
+  :[entry*(1-chasePct/100),entry*(1+betterPct/100)];
  const data=cs.length>=24&&cs.slice(-24).every((c,i,a)=>i===0||minuteTime(c)-minuteTime(a[i-1])===300_000)&&!!last&&input.now-minuteTime(last)-300_000<300_000;
  const priceReady=!!plan&&input.price>=zone[0]&&input.price<=zone[1];
  const reason=!data?'五分钟行情不完整或延迟':bias.side==='WAIT'?bias.reason:!plan?'历史路径止损偏多或扣费后空间不足，暂不开单':!priceReady?`${plan.mode==='PULLBACK'?'等待先反向到':'等待回到入场区'} ${entry.toPrecision(7)}；最多等待十五分钟`:`${bias.reason}，当前价格可直接入场`;
  const checks=[{key:'data',label:'行情完整',passed:data,detail:'仅使用完整连续五分钟K线'},
  {key:'history-direction',label:'历史总体方向',passed:bias.side!=='WAIT',detail:bias.reason},
- {key:'setup',label:'历史路径经济性',passed:!!plan,detail:plan?`历史目标命中${plan.takeProfitPct.toFixed(0)}%，净亏结束${plan.lossPct.toFixed(0)}%，保本保护${plan.protectedExitPct.toFixed(0)}%，含费估计${plan.expectedNetR.toFixed(2)}风险倍数`:'中途逆向波动、止损与目标顺序重放后未通过'},
+ {key:'setup',label:'历史路径经济性',passed:!!plan,detail:plan?`历史目标命中${plan.takeProfitPct.toFixed(0)}%，净亏结束${plan.lossPct.toFixed(0)}%，保本保护${plan.protectedExitPct.toFixed(0)}%，含费估计${plan.expectedNetR.toFixed(2)}风险倍数`:'目标覆盖不足、逆向结束偏多或扣费后没有优势'},
  {key:'liquidity',label:'流动性',passed:input.volumeUsd>=12_000_000,detail:'固定币池仍须有可交易成交额'},
  {key:'entry-price',label:'入场价格',passed:priceReady,detail:reason}];
  const ready=checks.every(c=>c.passed),score=checks.filter(c=>c.passed).length/checks.length*100;
@@ -98,11 +110,16 @@ export function buildAnalogCandidate(input:{symbol:string;candles:Hte31Candle[];
 }
 export function evaluateAnalogPosition(input:{side:'LONG'|'SHORT';entryPrice:number;initialStopPrice:number;currentStopPrice:number;entryAt:number;currentPrice:number;observedAt:number;roundTripCostBps:number;candles:Hte31Candle[];confirmationPrice:number}):DirectPositionDecision{
  const sign=input.side==='LONG'?1:-1,risk=Math.abs(input.entryPrice-input.initialStopPrice),progress=sign*(input.currentPrice-input.entryPrice);
- const cs=completeFiveMinutes(input.candles,input.observedAt).filter(c=>minuteTime(c)>=input.entryAt),last=cs.at(-1);
- const failed=!!last&&input.observedAt-minuteTime(last)<600_000&&sign*(last.close-input.confirmationPrice)<0&&sign*(input.currentPrice-input.confirmationPrice)<0;
- const exit=input.observedAt-input.entryAt>=3600000||input.observedAt-input.entryAt>=900000&&progress<risk*.25&&failed;
- const cost=input.entryPrice*scalpCostBps(input.roundTripCostBps)/10000,protect=progress>Math.max(cost*1.5,risk*.5);
- return {policyVersion:DIRECT_POSITION_POLICY_VERSION,action:exit?'EXIT':protect?'PROTECT':'HOLD',reason:exit?'时间到期或逆向运行超出计划，退出':protect?'推进覆盖成本，收紧至含费保本位':'允许计划内的中途逆向波动，保持原止损',observedAt:input.observedAt,completedBars:cs.length,progressR:risk>0?progress/risk:0,fastStructureR:0,slowStructureR:0,proposedStopPrice:protect?input.entryPrice+sign*cost:null,exitCode:exit?'brain_time_decay':null,reversalWatch:false};
+ const cs=completeFiveMinutes(input.candles,input.observedAt).filter(c=>minuteTime(c)>=input.entryAt);
+ const elapsed=input.observedAt-input.entryAt,cost=input.entryPrice*scalpCostBps(input.roundTripCostBps)/10000;
+ const peak=Math.max(0,...cs.map(c=>sign===1?c.high-input.entryPrice:input.entryPrice-c.low));
+ const fastLoss=elapsed>=600_000&&progress<=-Math.max(risk*.2,cost*1.5);
+ const stalled=elapsed>=1_200_000&&peak<cost*1.5&&progress<=0;
+ const faded=elapsed>=1_800_000&&progress<=cost;
+ const expired=elapsed>=3_600_000,exit=fastLoss||stalled||faded||expired;
+ const protect=!exit&&peak>=Math.max(cost*1.5,risk*.35);
+ const reason=fastLoss?'入场后十分钟仍明显逆向，快速退出':stalled?'二十分钟没有覆盖成本的推进，退出':faded?'三十分钟未保住扣费后利润，退出':expired?'一小时持仓期限到，退出':protect?'盘中推进已覆盖成本，收紧至含费保本位':'允许计划内波动，保持结构止损';
+ return {policyVersion:DIRECT_POSITION_POLICY_VERSION,action:exit?'EXIT':protect?'PROTECT':'HOLD',reason,observedAt:input.observedAt,completedBars:cs.length,progressR:risk>0?progress/risk:0,fastStructureR:0,slowStructureR:0,proposedStopPrice:protect?input.entryPrice+sign*cost:null,exitCode:exit?'brain_time_decay':null,reversalWatch:false};
 }
 export function analogRiskAllocation(equity:number,usedRisk:number,remainingSymbols:number,correlated:boolean) {
  if(!Number.isFinite(equity)||equity<=0||!Number.isFinite(usedRisk)||usedRisk<0||!Number.isFinite(remainingSymbols))return 0;

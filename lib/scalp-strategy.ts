@@ -98,9 +98,10 @@ export function evaluateScalpPosition(input:{side:'LONG'|'SHORT';entryPrice:numb
 }
 
 /** Execution truth: old stop wins ambiguous bars; gaps never fill at a better stop. */
-export function resolveScalpExit(input:{side:'LONG'|'SHORT';stop:number;target:number;price:number;high:number;low:number;timeout:boolean;decision:DirectPositionDecision|null}) {
+export function resolveScalpExit(input:{side:'LONG'|'SHORT';stop:number;target:number;price:number;open?:number;high:number;low:number;timeout:boolean;decision:DirectPositionDecision|null}) {
   const stopHit=input.side==='LONG'?input.low<=input.stop:input.high>=input.stop;
-  if(stopHit) return {code:'stop_loss',price:input.side==='LONG'?Math.min(input.stop,input.price):Math.max(input.stop,input.price),reason:'结构保护触发，按可见价格保守结算'};
+  const firstVisible=input.open??input.price;
+  if(stopHit) return {code:'stop_loss',price:input.side==='LONG'?Math.min(input.stop,firstVisible):Math.max(input.stop,firstVisible),reason:'结构保护触发，按首个可见价格保守结算'};
   if(input.side==='LONG'?input.high>=input.target:input.low<=input.target) return {code:'take_profit',price:input.target,reason:'短线目标完成，全部退出'};
   if(input.decision?.action==='EXIT') return {code:input.decision.exitCode??'brain_time_decay',price:input.price,reason:input.decision.reason};
   if(input.timeout) return {code:'timeout',price:input.price,reason:'持仓时间预算结束，全部退出'};

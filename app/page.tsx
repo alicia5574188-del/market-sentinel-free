@@ -685,7 +685,11 @@ export default function ResonancePage() {
         try { window.localStorage.setItem(SNAPSHOT_STORAGE_KEY, JSON.stringify(next)); } catch { /* display cache is optional */ }
       }
       setError("");
-      setRefreshWarning(next.degraded ? `部分数据刷新延迟，显示 ${fmtTime(next.observedAt)} 的最近可信值；缺少的数据正在重试。` : "");
+      const scannerIssue = next.scanner.status?.lastError ?? "";
+      const historyOnly = Boolean(next.scanner.readModel && /历史|history/i.test(scannerIssue));
+      setRefreshWarning(next.degraded ? historyOnly
+        ? "较早历史回补暂时延迟；已有历史和当前扫描继续使用，后台会自动重试。"
+        : `部分数据刷新延迟，显示 ${fmtTime(next.observedAt)} 的最近可信值；缺少的数据正在重试。` : "");
     } catch (reason) {
       if (mainSnapshotSeen.current) {
         setError("");
@@ -723,8 +727,10 @@ export default function ResonancePage() {
   const dashboard = snapshot?.dashboard;
   const readModel = snapshot?.scanner.readModel;
   const ageSeconds = snapshot?.scanner.ageMs == null ? null : Math.round(snapshot.scanner.ageMs / 1000);
-  const healthBad = Boolean(error || snapshot?.scanner.status?.lastError || snapshot?.scanner.status?.circuitOpen);
-  const healthWarn = !healthBad && Boolean(refreshWarning || snapshot?.degraded || (ageSeconds != null && ageSeconds > 90));
+  const scannerRuntimeError = snapshot?.scanner.status?.lastError ?? "";
+  const historyOnlyRuntimeError = Boolean(readModel && /历史|history/i.test(scannerRuntimeError));
+  const healthBad = Boolean(error || snapshot?.scanner.status?.circuitOpen || (scannerRuntimeError && !historyOnlyRuntimeError));
+  const healthWarn = !healthBad && Boolean(refreshWarning || historyOnlyRuntimeError || snapshot?.degraded || (ageSeconds != null && ageSeconds > 90));
   const decisionSummary = operatorDecision(snapshot, Boolean(error || snapshot?.errors.scannerReadModel || snapshot?.staleSources?.includes("scannerReadModel") || (ageSeconds != null && ageSeconds > 360)));
 
   const mutate = useCallback(async (url: string, init: RequestInit, success: string, refreshLiveAfter = false) => {

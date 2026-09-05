@@ -23,13 +23,13 @@ for(const symbol of coins){
   }
   if(symbol==='BTC_USDT')btc=rows;
   const ticker=tickers.find(t=>t.contract===symbol),volumeUsd=Number(ticker?.volume_24h_usd??ticker?.volume_24h_quote??0);
-  let position=null,intent=undefined,lastExit=0,signals=0,closed=0,wins=0,netR=0;const blockers={};let minSamples=Infinity,maxSamples=0,readyForecasts=0;
+  let position=null,intent=undefined,lastExit=0,signals=0,closed=0,wins=0,netR=0;const blockers={},trades=[];let minSamples=Infinity,maxSamples=0,readyForecasts=0;
   const start=Math.max(100,rows.length-144);
   for(let i=start;i<rows.length;i++){
    const bar=rows[i],now=bar.time*1000+300000,history=rows.slice(0,i+1);
    if(position){const p=position,decision=evaluateAnalogPosition({...p,currentPrice:bar.close,observedAt:now,candles:history});
-    const exit=resolveScalpExit({side:p.side,stop:p.currentStopPrice,target:p.target,price:bar.close,high:bar.high,low:bar.low,timeout:now>=p.expiresAt,decision});
-    if(exit){const net=(p.side==='LONG'?1:-1)*(exit.price-p.entryPrice)-p.entryPrice*.0012;netR+=net/p.risk;closed++;wins+=Number(net>0);position=null;lastExit=now;}
+    const exit=resolveScalpExit({side:p.side,stop:p.currentStopPrice,target:p.target,price:bar.close,open:bar.open,high:bar.high,low:bar.low,timeout:now>=p.expiresAt,decision});
+    if(exit){const net=(p.side==='LONG'?1:-1)*(exit.price-p.entryPrice)-p.entryPrice*.0012,tradeR=net/p.risk;netR+=tradeR;closed++;wins+=Number(net>0);trades.push({side:p.side,entryAt:p.entryAt,minutes:(now-p.entryAt)/60000,exit:exit.code,netR:+tradeR.toFixed(3),stopPct:+(Math.abs(p.entryPrice-p.initialStopPrice)/p.entryPrice*100).toFixed(3),targetPct:+(Math.abs(p.target-p.entryPrice)/p.entryPrice*100).toFixed(3),expectedNetR:+p.expectedNetR.toFixed(2),takeProfitPct:+p.takeProfitPct.toFixed(0),lossPct:+p.lossPct.toFixed(0),mode:p.mode});position=null;lastExit=now;}
     else if(decision.proposedStopPrice!=null)p.currentStopPrice=p.side==='LONG'?Math.max(p.currentStopPrice,decision.proposedStopPrice):Math.min(p.currentStopPrice,decision.proposedStopPrice);
    }
    const forecast=buildHistoricalForecast({candles:history,now,costBps:12,stopPct:.3});
@@ -38,9 +38,9 @@ for(const symbol of coins){
    intent=c.analogIntent;
    if(c.decision==='WAIT'){for(const b of c.checks.filter(b=>!b.passed))blockers[b.label]=(blockers[b.label]??0)+1;continue;}
    signals++;if(position||now-lastExit<300000||c.scalp.structureAt<=lastExit)continue;
-   position={side:c.decision,entryPrice:bar.close,initialStopPrice:c.invalidationPrice,currentStopPrice:c.invalidationPrice,entryAt:now,roundTripCostBps:12,confirmationPrice:c.scalp.confirmationPrice,target:c.targets[1],expiresAt:now+c.maxHoldingMinutes*60000,risk:Math.abs(bar.close-c.invalidationPrice)+bar.close*.0012};
+   position={side:c.decision,entryPrice:bar.close,initialStopPrice:c.invalidationPrice,currentStopPrice:c.invalidationPrice,entryAt:now,roundTripCostBps:12,confirmationPrice:c.scalp.confirmationPrice,target:c.targets[1],expiresAt:now+c.maxHoldingMinutes*60000,risk:Math.abs(bar.close-c.invalidationPrice)+bar.close*.0012,expectedNetR:c.analogIntent.expectedNetR,takeProfitPct:c.analogIntent.takeProfitPct,lossPct:c.analogIntent.lossPct,mode:c.analogIntent.mode};
   }
-  reports.push({symbol,available:true,bars:rows.length,from:rows[start].time*1000,to:rows.at(-1).time*1000+300000,signals,closed,wins,netR:+netR.toFixed(3),stillOpen:!!position,minSamples,maxSamples,readyForecasts,historyFrom:rows[0].time*1000,blockers});
+  reports.push({symbol,available:true,bars:rows.length,from:rows[start].time*1000,to:rows.at(-1).time*1000+300000,signals,closed,wins,netR:+netR.toFixed(3),stillOpen:!!position,minSamples,maxSamples,readyForecasts,historyFrom:rows[0].time*1000,blockers,trades});
  }catch(e){reports.push({symbol,available:false,reason:e.message});}
  await new Promise(r=>setTimeout(r,1100));
 }
