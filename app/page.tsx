@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { chineseOperatorText, operatorLabel, riskClusterLabel } from "../lib/operator-language";
 import { DIRECT_MARKET_BRAIN_VERSION } from "../lib/direct-market-types";
 import { retainDashboardSnapshot } from "../lib/dashboard-snapshot";
+import type { DirectSetupActivity } from "../lib/direct-market-types";
 import {
   HTE31_TRADER_DEFINITIONS,
   hte31AssetRegimeLabel,
@@ -272,6 +273,7 @@ type SetupReview = {
   closedTrades12h: number;
   netPnl12h: number;
   leadingBlocker12h: string | null;
+  latestQualifiedSelection?: DirectSetupActivity["latestQualifiedSelection"] | null;
 };
 
 type TwelveHourReview = {
@@ -496,7 +498,7 @@ function StrategyPerformanceCard({ setup }: { setup: SetupReview }) {
   const tone = setup.status === "发力" ? "power" : setup.status === "拖后腿" ? "drag" : setup.status === "观察" ? "watch" : "quiet";
   return <article className={`rz-panel rz-strategy-performance ${tone}`}>
     <div className="rz-strategy-head">
-      <div><strong>{setup.setupLabel}</strong><small>全量评估 {setup.evaluations12h} · 原始触发 {setup.triggeredSignals12h} · 通过硬门 {setup.qualifiedSignals12h}</small><small>主候选 {setup.selectedSignals12h} · 入场拦截 {setup.blockedEntries12h} · 开仓 {setup.openedTrades12h}</small></div>
+      <div><strong>{setup.setupLabel}</strong><small>全量评估 {setup.evaluations12h} · 原始触发 {setup.triggeredSignals12h} · 通过条件 {setup.qualifiedSignals12h}</small><small>优先观察（含待确认）{setup.selectedSignals12h} · 入场拦截 {setup.blockedEntries12h} · 开仓 {setup.openedTrades12h}</small></div>
       <span>{setup.status}</span>
     </div>
     <div className="rz-strategy-numbers">
@@ -507,6 +509,11 @@ function StrategyPerformanceCard({ setup }: { setup: SetupReview }) {
       <div><span>实际盈亏比 / 回撤</span><b>{setup.realizedPayoffRatio == null ? "--" : setup.realizedPayoffRatio.toFixed(2)} / {setup.maxDrawdownR.toFixed(2)}倍</b></div>
       <div><span>最大回撤 / 连亏</span><b>{setup.maxDrawdownR.toFixed(2)}倍 / {setup.maxLosingStreak}</b></div>
     </div>
+    {setup.latestQualifiedSelection && !setup.latestQualifiedSelection.selected
+      ? <p>最近合格信号：{setup.latestQualifiedSelection.symbol.replace("_USDT", "")} · {fmtTime(setup.latestQualifiedSelection.observedAt)}；同币择优采用{setup.latestQualifiedSelection.preferredSetupLabel}，本策略未入选。</p>
+      : !setup.latestQualifiedSelection && setup.qualifiedSignals12h > 0 && setup.selectedSignals12h === 0
+        ? <p>已有合格信号在同币择优时未入选；这条旧统计未保存当时对比，后续信号会保留具体原因。</p>
+        : null}
     <p>{setup.leadingBlocker12h ? `主要等待原因：${operatorText(setup.leadingBlocker12h)}` : setup.sampleCount < 8 ? `样本形成中 · ${setup.sampleCount}/8；独立保护按当前打法、方向和行情分别判断。` : `胜 / 平 / 负：${setup.wins} / ${setup.scratches} / ${setup.losses}`}</p>
   </article>;
 }
@@ -819,7 +826,7 @@ export default function ResonancePage() {
       <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">运行总结</span><h2>每12小时总结</h2></div><small>{review?.complete ? "最近完整周期" : `运行中 · ${fmtDuration(review?.coverageMs)}`}</small></div>
         {review ? <article className="rz-panel rz-twelve-review">
           <div className="rz-review-title"><strong>{operatorText(review.headline)}</strong><small>{fmtTime(review.windowStartAt)} — {fmtTime(review.windowEndAt)}</small></div>
-          <div className="rz-metric-grid"><div className="rz-metric"><span>扫描轮次</span><b>{review.evaluations}</b></div><div className="rz-metric"><span>原始触发</span><b>{review.triggeredSignals}</b></div><div className="rz-metric"><span>通过硬门</span><b>{review.qualifiedSignals}</b></div><div className="rz-metric"><span>主候选</span><b>{review.selectedSignals}</b></div><div className="rz-metric"><span>入场拦截</span><b>{review.blockedEntries}</b></div><div className="rz-metric"><span>开 / 平仓</span><b>{review.openedTrades} / {review.closedTrades}</b></div><div className="rz-metric"><span>净结果</span><b className={review.netPnlUsdt < 0 ? "rz-negative" : "rz-positive"}>{fmtMoney(review.netPnlUsdt)}</b></div></div>
+          <div className="rz-metric-grid"><div className="rz-metric"><span>扫描轮次</span><b>{review.evaluations}</b></div><div className="rz-metric"><span>原始触发</span><b>{review.triggeredSignals}</b></div><div className="rz-metric"><span>通过条件</span><b>{review.qualifiedSignals}</b></div><div className="rz-metric"><span>优先观察（含待确认）</span><b>{review.selectedSignals}</b></div><div className="rz-metric"><span>入场拦截</span><b>{review.blockedEntries}</b></div><div className="rz-metric"><span>开 / 平仓</span><b>{review.openedTrades} / {review.closedTrades}</b></div><div className="rz-metric"><span>净结果</span><b className={review.netPnlUsdt < 0 ? "rz-negative" : "rz-positive"}>{fmtMoney(review.netPnlUsdt)}</b></div></div>
           <p><strong>下一步：</strong>{operatorText(review.nextAction)}</p>
         </article> : <Empty>首个12小时总结正在形成</Empty>}
       </section>

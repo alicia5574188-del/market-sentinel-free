@@ -96,7 +96,7 @@ export function recordDirectTwelveHourActivity(input: {
     const evaluation = evaluations.find((item) => item.setup === row.setup)!;
     const selectedAndBlocked = evaluation.selected && evaluation.qualified && openedSetup !== row.setup;
     const blocker = evaluation.triggered && evaluation.qualified
-      ? selectedAndBlocked ? openReason : ""
+      ? !evaluation.selected ? `同币择优采用${candidate.setupLabel}` : selectedAndBlocked ? openReason : ""
       : evaluation.blockers[0] ?? "当前位置没有完整触发";
     const blockers = blocker ? { ...row.blockers, [blocker]: (row.blockers[blocker] ?? 0) + 1 } : row.blockers;
     const [leadingBlocker, blockerCount] = Object.entries(blockers).sort((left, right) => right[1] - left[1])[0] ?? [null, 0];
@@ -111,6 +111,14 @@ export function recordDirectTwelveHourActivity(input: {
       leadingBlocker,
       blockerCount,
       blockers,
+      latestQualifiedSelection: evaluation.qualified ? {
+        observedAt: now,
+        symbol: candidate.symbol,
+        selected: evaluation.selected,
+        score: evaluation.score,
+        preferredSetupLabel: candidate.setupLabel,
+        preferredScore: candidate.setupScore,
+      } : row.latestQualifiedSelection,
     };
   });
 

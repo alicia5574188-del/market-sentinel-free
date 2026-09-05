@@ -1,11 +1,31 @@
 # Status
 
+## Primary-observation diagnosis — verified locally, release pending
+
+- Screenshot: failed breakout94 evaluations /1 triggered /1 qualified /0 selected; exhaustion94/18/2/18. Current main`62f863d0` selection sorts qualification first, then trigger, then evidence score; no named exhaustion bonus. Thus a qualified failed-breakout setup can lose only at same-symbol comparison to another qualified setup. The screenshot's exact winner/symbol/score was not retained by the old cumulative counters and is not reconstructed or invented.
+- `selectedSignals` counts selected AND triggered even while qualification fails. It is a priority observation count, not strict post-qualification admission. Rename operator text to 优先观察（含待确认） and 通过条件; preserve original counters and historical window.
+- Retain the latest qualified comparison (symbol/time/winner/score/selected) per setup inside the existing DO activity save, record same-symbol selection loss as a distinct reason, and display it when available. Old missing event details are labeled honestly. A strategy with raw signals and zero closed samples now says 观察 rather than 暂无机会.
+- Strategy triggers, evidence ranking, execution/risk policy, positions, epoch, D1 and scanner cadence are unchanged. This does not prove restored frequency:94 evaluations with only1 raw trigger remains a genuine low-trigger observation requiring actual pattern evidence before tuning.
+- Local direct36+architecture7 and production build/UI115 passed; TypeScript and ESLint passed. Existing authorized PR/CI/deployment path next. No production code changed yet.
+
+
+## Reliability follow-up — production verified
+
+- PR #138 merged as `62f863d020b4198744e1ef62907dd627bda96bb7`; PR verify `33944950244`, production verify/deploy/operations `33945003862` all passed. Worker `ba4caf2b-d4ea-493c-8567-cd6b538c5923`, client `assets/page-Di6F9607.js`. CI: direct34 + architecture7 + signals231 + UI115, zero failures.
+- At `2026-09-05T04:38:53.967Z`, Cloudflare account-wide D1 analytics reported UTC-day reads68,452/writes753; rounded-out recent24h reads1,129,862/writes4,298 (about22.6%/4.3% of the5,000,000/100,000 free daily limits). These are observed analytics, not the30,000 app planning estimate. Analytics can lag and the rolling interval is rounded outward to hourly boundaries.
+- Read-only progress probe passed: scanner lastSuccessAt advanced1788583072555→1788583129223; position nextRunAt1788583097868→1788583144709, lastSuccessAt also advanced1788583035970→1788583098060. Both managers live, no runtime error/circuit. Existing every-minute scheduler recovery preserved; new operations audit runs after deploy and every six hours.
+- V6 paper cutover still completed, active version`direct-market-brain-v6-open-coverage`, target null, legacy holdings0. Reliability patch did not create a new epoch or mutate trading policies.
+- Missing-page fix and same-version/same-epoch display fallback are deployed. Full old regression gates retained. No active code/testing/release task remains. Bounded observations do not prove a full future day of uptime or that every possible old failure cannot recur; scheduled checks expose health/capacity failures in Actions.
+- Owner-authenticated visual browser replay was not performed; do not claim it. Production proof is in successful workflow and PR #138 comment. Do not redeploy only to record this proof.
+
+
 ## V6 production verified; reliability follow-up active
 
 - PR #137 merged as `440d59801137ed8dedcfe5f508c7c2dc6dcd0d40`. Production workflow `33944293649` passed. Worker `3e8c67c0-17d1-4792-b86b-9bc22d22cdb7`; client `assets/page-BOG8g7a_.js`.
 - Migration0024 complete: active `direct-market-brain-v6-open-coverage`, target null, legacy open PAPER positions zero. Configured-universe coverage and removal of fixed position count caps are deployed; total planned risk, D1 admission, correlation and live boundaries remain.
 - Latest owner asks for actual D1 daily capacity, 24-hour continuity, missing-page-data fixes, and preservation of past regressions. Found concrete client defect: partial successful API responses replace good sections with null; server isolate cache cannot cover a cold isolate.
 - Follow-up adds display-only same-version/same-epoch source fallback, stale labels, request deadlines, and bounded read-only CI checks of scheduler timestamp advancement and account-wide D1 read/write analytics. Reuses existing CI credentials; no runtime token, new D1 counter ledger, trading change, or new epoch.
+- PR #138 passed full verify (`33944950244`) and merged as `62f863d020b4198744e1ef62907dd627bda96bb7`; production deployment and actual operations audit are pending.
 - Do not call the 30,000 row planning estimate actual usage. Actual analytics and new production proof are still pending. A bounded advancing check cannot prove a full future day of uptime.
 
 ## Current V6 task — configured scan coverage and risk-based paper capacity

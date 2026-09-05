@@ -43,6 +43,14 @@ export type DirectSetupActivity = {
   leadingBlocker: string | null;
   blockerCount: number;
   blockers: Record<string, number>;
+  latestQualifiedSelection?: {
+    observedAt: number;
+    symbol: string;
+    selected: boolean;
+    score: number;
+    preferredSetupLabel: string;
+    preferredScore: number;
+  };
 };
 
 export type DirectTwelveHourActivity = {

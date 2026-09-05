@@ -92,3 +92,37 @@ test("only a continuously covered twelve-hour window becomes the latest complete
   assert.equal(rolled.lastCompleted?.coverageMs, DIRECT_ACTIVITY_WINDOW_MS - INTERVAL_MS * 2);
   assert.equal(rolled.current.complete, false);
 });
+
+test("a qualified losing setup retains the actual same-symbol comparison without inventing an entry rejection", () => {
+  const now = Date.UTC(2026, 8, 5, 5, 0, 0);
+  const scan = candidate(now, "MULTI_TIMEFRAME_RESONANCE");
+  scan.setupLabel = "多周期综合共振";
+  scan.setupScore = 92;
+  scan.setupEvaluations![2].score = 92;
+  const first = recordDirectTwelveHourActivity({ candidate: scan, openedSetup: null, openReason: "等待组合比较", expectedIntervalMs: INTERVAL_MS });
+  const failed = first.current.setups[0];
+  assert.equal(failed.qualifiedSignals, 1);
+  assert.equal(failed.selectedSignals, 0);
+  assert.equal(failed.blockedEntries, 0);
+  assert.equal(failed.leadingBlocker, "同币择优采用多周期综合共振");
+  assert.deepEqual(failed.latestQualifiedSelection, {
+    observedAt: now, symbol: "BTC_USDT", selected: false, score: 88,
+    preferredSetupLabel: "多周期综合共振", preferredScore: 92,
+  });
+  const waiting = candidate(now + INTERVAL_MS);
+  waiting.setupEvaluations = waiting.setupEvaluations!.map((row) => ({ ...row, qualified: false, triggered: false }));
+  const later = recordDirectTwelveHourActivity({ activity: first, candidate: waiting, openedSetup: null, openReason: "等待", expectedIntervalMs: INTERVAL_MS });
+  assert.deepEqual(later.current.setups[0].latestQualifiedSelection, failed.latestQualifiedSelection);
+  assert.equal(later.current.setups[0].evaluations, 2);
+});
+
+test("priority observation can precede qualification and must not be presented as execution admission", () => {
+  const scan = candidate(Date.UTC(2026, 8, 5, 5, 0, 0), "EXHAUSTION_REVERSAL");
+  scan.decision = "WAIT";
+  scan.setupEvaluations = scan.setupEvaluations!.map((row) => ({ ...row, qualified: false, triggered: row.selected }));
+  const activity = recordDirectTwelveHourActivity({ candidate: scan, openedSetup: null, openReason: "等待反转确认", expectedIntervalMs: INTERVAL_MS });
+  assert.equal(activity.current.selectedSignals, 1);
+  assert.equal(activity.current.qualifiedSignals, 0);
+  assert.equal(activity.current.blockedEntries, 0);
+  assert.equal(activity.current.setups[1].latestQualifiedSelection, undefined);
+});
