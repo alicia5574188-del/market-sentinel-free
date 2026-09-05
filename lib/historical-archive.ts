@@ -121,3 +121,14 @@ export async function readHistoricalArchive(store: Store,
   return { candles, archive: { storedBars: meta.bars, from: meta.days[0] ?? null, to: meta.latestAt || null,
     searchedBars: candles.length, nextBackfillAt: meta.nextFetch, note: meta.note } };
 }
+
+/** Read-only startup hydration: reuse saved history without waiting for backfill or spending exchange requests. */
+export async function readStoredHistoricalArchive(store:KV,now:number,seed:Hte31Candle[]):Promise<ArchiveHistory> {
+  const meta=await store.get<Meta>('meta');
+  if(!meta)return {candles:cleanAnalogCandles(seed,now),archive:{storedBars:0,from:null,to:null,searchedBars:seed.length,nextBackfillAt:now,note:'历史库尚未建立，等待后台回补'}};
+  const boundary=dayOf(now-14*DAY),recent=meta.days.filter(d=>d>=boundary),older=meta.days.filter(d=>d<boundary);
+  const chosen=older.length?Array.from({length:Math.min(14,older.length)},(_,i)=>older[(meta.rotation+i)%older.length]):[];
+  const chunks=await Promise.all([...recent,...chosen].map(async d=>await store.get<Packed[]>(keyOf(d))??[]));
+  const candles=cleanAnalogCandles([...chunks.flat().map(unpack),...seed],now);
+  return {candles,archive:{storedBars:meta.bars,from:meta.days[0]??null,to:meta.latestAt||null,searchedBars:candles.length,nextBackfillAt:meta.nextFetch,note:'已直接读取现有历史库；更早数据继续后台回补'}};
+}

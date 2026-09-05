@@ -61,3 +61,8 @@ test('six independent positions fit the same loss budget without a three-positio
  assert.ok(Math.abs(used-7.5)<1e-8);assert.equal(analogRiskAllocation(1000,7.5,1,false),0);
  assert.equal(analogRiskAllocation(1000,0,6,true),analogRiskAllocation(1000,0,6,false)/2);
 });
+
+test('cost-covered protection is not counted as a losing stop that blocks a profitable path plan',()=>{
+ const f=forecast();f.episodes=Array.from({length:10},(_,j)=>({weight:1,from:j,bars:Array.from({length:12},(_,i)=>i===0?{openPct:0,lowPct:-.01,highPct:.35,closePct:.3}:i===1?{openPct:.3,lowPct:j<8?.1:.15,highPct:.32,closePct:.2}:{openPct:.5+i*.1,lowPct:.47+i*.1,highPct:.52+i*.1,closePct:.5+i*.1})}));
+ const plan=planAnalogEntry(f,'LONG',.1,100,now);assert.ok(plan);assert.equal(plan.mode,'NOW');assert.equal(plan.lossPct,0);assert.equal(plan.protectedExitPct,80);
+});

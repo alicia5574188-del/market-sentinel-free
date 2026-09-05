@@ -8,7 +8,7 @@ export const ANALOG_POSITION_POLICY='analog-path-exit-v1';
 export const completeFiveMinutes=(rows:Hte31Candle[],now:number)=>cleanAnalogCandles(rows,now).slice(-400);
 const mean=(xs:number[])=>xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:0;
 const quantile=(xs:number[],p:number)=>{const a=[...xs].sort((x,y)=>x-y);if(!a.length)return 0;const t=(a.length-1)*p,i=Math.floor(t);return a[i]+(a[Math.ceil(t)]-a[i])*(t-i);};
-export type AnalogIntent={side:'LONG'|'SHORT';anchor:number;createdAt:number;expiresAt:number;signalKey:string;offsetPct:number;stopPct:number;targetPct:number;expectedNetR:number;takeProfitPct:number;stopHitPct:number;fillPct:number;mode:'NOW'|'PULLBACK'};
+export type AnalogIntent={side:'LONG'|'SHORT';anchor:number;createdAt:number;expiresAt:number;signalKey:string;offsetPct:number;stopPct:number;targetPct:number;expectedNetR:number;takeProfitPct:number;lossPct:number;protectedExitPct:number;fillPct:number;mode:'NOW'|'PULLBACK'};
 export function historicalDirection(f:HistoricalForecast|undefined,now:number,_costBps=12):{side:'LONG'|'SHORT'|'WAIT';reason:string} {
  void _costBps;
  if(!f||f.state!=='READY'||now<f.signalAt||now-f.signalAt>=300_000||f.sampleCount<8||f.effectiveSamples<7.5)return {side:'WAIT',reason:'历史依据不足或过期，暂不开单'};
@@ -42,7 +42,8 @@ function estimate(episodes:Episode[],side:'LONG'|'SHORT',offset:number,stop:numb
  const total=outcomes.reduce((s,o)=>s+o.weight,0),filled=outcomes.filter(o=>o.filled),weight=filled.reduce((s,o)=>s+o.weight,0);
  return {expectedNetR:weight?filled.reduce((s,o)=>s+o.netPct*o.weight,0)/weight/(stop+cost):0,fillPct:weight/total*100,
   takeProfitPct:weight?filled.reduce((s,o)=>s+(o.exit==='TARGET'?o.weight:0),0)/weight*100:0,
-  stopHitPct:weight?filled.reduce((s,o)=>s+(o.exit==='STOP'?o.weight:0),0)/weight*100:100};
+  lossPct:weight?filled.reduce((s,o)=>s+(o.netPct < -1e-9?o.weight:0),0)/weight*100:100,
+  protectedExitPct:weight?filled.reduce((s,o)=>s+(o.exit==='STOP'&&o.netPct>=-1e-9?o.weight:0),0)/weight*100:0};
 }
 export function planAnalogEntry(f:HistoricalForecast,side:'LONG'|'SHORT',atrPct:number,anchor:number,now:number):AnalogIntent|null{
  const sign=side==='LONG'?1:-1,episodes=f.episodes??[],cost=scalpCostBps(f.costBps)/100;
@@ -56,10 +57,10 @@ export function planAnalogEntry(f:HistoricalForecast,side:'LONG'|'SHORT',atrPct:
   const targetPct=quantile(favorable,.5)*.6+offsetPct;
   return {side,anchor,createdAt:now,expiresAt:now+15*60_000,signalKey:`${f.signalAt}:${side}`,offsetPct,stopPct,targetPct,
     ...estimate(episodes,side,offsetPct,stopPct,targetPct,cost),mode:offsetPct===0?'NOW' as const:'PULLBACK' as const};
- }).filter(p=>p.stopPct/(1-sign*p.offsetPct/100)<=2&&p.targetPct>=cost*1.5&&p.expectedNetR>=.05&&p.fillPct>=40&&p.takeProfitPct>p.stopHitPct);
+ }).filter(p=>p.stopPct/(1-sign*p.offsetPct/100)<=2&&p.targetPct>=cost*1.5&&p.expectedNetR>=.05&&p.fillPct>=40&&p.takeProfitPct>p.lossPct);
  const immediate=alternatives.find(p=>p.mode==='NOW'),delayed=alternatives.find(p=>p.mode==='PULLBACK');
  // Prefer immediacy unless a frequently-filled retracement materially improves expectancy.
- if(delayed&&(!immediate||delayed.fillPct>=60&&delayed.expectedNetR>immediate.expectedNetR+.1&&immediate.stopHitPct>=25))return delayed;
+ if(delayed&&(!immediate||delayed.fillPct>=60&&delayed.expectedNetR>immediate.expectedNetR+.1&&immediate.lossPct>=25))return delayed;
  return immediate??delayed??null;
 }
 export function buildAnalogCandidate(input:{symbol:string;candles:Hte31Candle[];btcCandles:Hte31Candle[];now:number;price:number;volumeUsd:number;volumeRank:number;costBps:number;forecast?:HistoricalForecast;intent?:AnalogIntent}):DirectMarketCandidate{
@@ -76,7 +77,7 @@ export function buildAnalogCandidate(input:{symbol:string;candles:Hte31Candle[];
  const reason=!data?'五分钟行情不完整或延迟':bias.side==='WAIT'?bias.reason:!plan?'历史路径止损偏多或扣费后空间不足，暂不开单':!priceReady?`${plan.mode==='PULLBACK'?'等待先反向到':'等待回到入场区'} ${entry.toPrecision(7)}；最多等待十五分钟`:`${bias.reason}，当前价格可直接入场`;
  const checks=[{key:'data',label:'行情完整',passed:data,detail:'仅使用完整连续五分钟K线'},
  {key:'history-direction',label:'历史总体方向',passed:bias.side!=='WAIT',detail:bias.reason},
- {key:'setup',label:'历史路径经济性',passed:!!plan,detail:plan?`历史目标命中${plan.takeProfitPct.toFixed(0)}%，保护退出${plan.stopHitPct.toFixed(0)}%，含费估计${plan.expectedNetR.toFixed(2)}风险倍数`:'中途逆向波动、止损与目标顺序重放后未通过'},
+ {key:'setup',label:'历史路径经济性',passed:!!plan,detail:plan?`历史目标命中${plan.takeProfitPct.toFixed(0)}%，净亏结束${plan.lossPct.toFixed(0)}%，保本保护${plan.protectedExitPct.toFixed(0)}%，含费估计${plan.expectedNetR.toFixed(2)}风险倍数`:'中途逆向波动、止损与目标顺序重放后未通过'},
  {key:'liquidity',label:'流动性',passed:input.volumeUsd>=12_000_000,detail:'固定币池仍须有可交易成交额'},
  {key:'entry-price',label:'入场价格',passed:priceReady,detail:reason}];
  const ready=checks.every(c=>c.passed),score=checks.filter(c=>c.passed).length/checks.length*100;

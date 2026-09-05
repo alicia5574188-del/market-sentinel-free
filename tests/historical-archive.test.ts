@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readHistoricalArchive, ARCHIVE_BACKFILL_INTERVAL, ARCHIVE_DAILY_WRITES } from "../lib/historical-archive.ts";
+import { readStoredHistoricalArchive, readHistoricalArchive, ARCHIVE_BACKFILL_INTERVAL, ARCHIVE_DAILY_WRITES } from "../lib/historical-archive.ts";
 import { ANALOG_BAR_MS, cleanAnalogCandles, buildHistoricalForecast } from "../lib/historical-forecast.ts";
 import { historicalUniverse, HISTORICAL_UNIVERSE, chooseDirectMarketTarget } from "../lib/direct-market-universe.ts";
 import type { Hte31Candle } from "../lib/hte31-types.ts";
@@ -93,4 +93,13 @@ test("daily write guard preserves history and keeps fresh candles usable, then r
   assert.equal(blocked.candles.at(-1)!.time * 1000, now + ARCHIVE_BACKFILL_INTERVAL - ANALOG_BAR_MS);
   await readHistoricalArchive(store, fetch, "BTC_USDT", now + DAY, rows(now - 13 * DAY, now + DAY));
   assert.equal(calls, 2);
+});
+
+test('startup reuses old stored days without an exchange request, writes or cursor movement',async()=>{
+ const store=memory(),seed=rows(now-14*DAY,now);let calls=0;
+ await readHistoricalArchive(store,async(_s,from,to)=>{calls++;return rows(from,to+1);},'BTC_USDT',now,seed);
+ const before=await store.get('meta');let writes=0;
+ const result=await readStoredHistoricalArchive({...store,put:async()=>{writes++;}},now,seed.slice(-400));
+ assert.equal(writes,0);assert.equal(calls,1);assert.ok(result.candles.length>4000);
+ assert.deepEqual(await store.get('meta'),before);
 });

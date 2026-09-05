@@ -224,10 +224,15 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
     const now=Date.now(),old=await this.ctx.storage.get<HistoricalForecast>(`auxiliary:${symbol}`);
     const rows=await this.hourSnapshot(symbol),signalAt=rows.length?rows.at(-1)!.time*1000+300_000:0;
     if(old?.signalAt===signalAt&&old.episodes)return old;
-    const library=await this.ctx.storage.get<{candles:import('../lib/hte31-types').Hte31Candle[]}>(`hour-library:${symbol}`)
-      ??await this.ctx.storage.get<{candles:import('../lib/hte31-types').Hte31Candle[]}>(`analog-history-v1:${symbol}`);
+    let library=await this.ctx.storage.get<{candles:import('../lib/hte31-types').Hte31Candle[]}>(`hour-library:${symbol}`);
+    const recentLibrary=!library?await this.ctx.storage.get<{candles:import('../lib/hte31-types').Hte31Candle[]}>(`analog-history-v1:${symbol}`):undefined;
+    let archive=old?.archive;
+    if(!library&&this.env.HISTORICAL_ARCHIVE){
+      try {const saved=await this.env.HISTORICAL_ARCHIVE.getByName(`history:${symbol}`).read(symbol,now,[...(recentLibrary?.candles??[]),...rows]);library={candles:saved.candles};archive=saved.archive;await this.ctx.storage.put(`hour-library:${symbol}`,library);} catch { /* Existing recent cache remains usable; optional archive cannot break the feed. */ }
+    }
+    library??=recentLibrary;
     const forecast=buildHistoricalForecast({candles:cleanAnalogCandles([...(library?.candles??[]),...rows],now),now,costBps:scalpCostBps(costBps),stopPct:0.3});
-    forecast.archive=old?.archive;
+    forecast.archive=archive;
     await this.ctx.storage.put(`auxiliary:${symbol}`,forecast);
     return forecast;
   }
