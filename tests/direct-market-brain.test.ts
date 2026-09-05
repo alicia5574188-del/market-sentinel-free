@@ -159,7 +159,7 @@ test("direct brain emits normalized mutually exclusive paths and a replayable pl
   assert.equal(candidate.riskClusterId, "btc-positive");
 });
 
-test("correlation and dynamic top-fifteen rotation are deterministic", () => {
+test("all configured symbols receive deep evaluation even when the top six dominate", () => {
   assert.ok((pearsonCorrelation(candles(1), candles(1)) ?? 0) > 0.99);
   const universe = Array.from({ length: 20 }, (_, index) => ({
     symbol: `COIN${index}_USDT`, price: 1, changePercentage: index, volumeUsd: 1000 - index,
@@ -167,9 +167,22 @@ test("correlation and dynamic top-fifteen rotation are deterministic", () => {
     state: "pre_alert" as const, stateLabel: "", side: "LONG" as const,
   }));
   const ranked = rankDirectMarketUniverse(universe);
-  assert.equal(ranked.length, 15);
+  assert.equal(ranked.length, 20);
   assert.equal(ranked[0].volumeRank, 1);
-  assert.equal(chooseDirectMarketTarget(ranked, 0)?.symbol, chooseDirectMarketTarget(ranked, 6)?.symbol);
+  const observed: Record<string, number> = {};
+  const seen = new Set<string>();
+  for (let turn = 0; turn < 20; turn++) {
+    const target = chooseDirectMarketTarget(ranked, turn, observed)!;
+    assert.equal(seen.has(target.symbol), false);
+    seen.add(target.symbol);
+    observed[target.symbol] = auditNow + turn;
+  }
+  assert.equal(seen.size, ranked.length);
+  const oldest = Object.entries(observed).sort((a, b) => a[1] - b[1])[0][0];
+  assert.equal(chooseDirectMarketTarget([...ranked].reverse(), 20, observed)?.symbol, oldest);
+  const newcomer = { ...universe[0], symbol: "NEW_USDT", volumeUsd: 1 };
+  assert.equal(chooseDirectMarketTarget([...ranked, newcomer], 21, observed)?.symbol, "NEW_USDT");
+  assert.equal(chooseDirectMarketTarget([], 0), null);
 });
 
 test("missing BTC correlation stays in one conservative risk cluster", () => {

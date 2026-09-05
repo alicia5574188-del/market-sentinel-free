@@ -77,7 +77,7 @@ test("whole-market state has inertia and a direct bull-bear flip requires strong
   assert.match(globalMarket, /flip \? 6 : 4/);
   assert.match(globalMarket, /12 \* 60_000/);
   assert.match(globalMarket, /正式市场状态暂不翻转/);
-  assert.match(worker, /createHte31ScanJob\(runtime\.rotationOffset, runtime\.readModel\?\.market \?\? null\)/);
+  assert.match(worker, /createHte31ScanJob\(runtime\.rotationOffset, runtime\.readModel\?\.market \?\? null, lastObservedAt\)/);
 });
 
 test("whole market and current-symbol judgment are separate decision layers", () => {

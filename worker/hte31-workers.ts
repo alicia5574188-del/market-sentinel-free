@@ -113,7 +113,7 @@ function withoutCandles(candidate: DirectMarketCandidate): Omit<DirectMarketCand
 
 function buildDirectRadar(result: Hte31ScanCompleted, directBySymbol: Record<string, DirectMarketCandidate>): DirectMarketRadarItem[] {
   const now = Date.now();
-  return result.universe.slice(0, 15).map((row, index) => {
+  return result.universe.map((row, index) => {
     const candidate = directBySymbol[row.symbol] ?? null;
     const freshCandidate = candidate && now - candidate.observedAt <= 3 * 60_000 ? candidate : null;
     return {
@@ -233,9 +233,10 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
       return previous;
     }
 
-    let job = runtime.job ?? createHte31ScanJob(runtime.rotationOffset, runtime.readModel?.market ?? null);
+    const lastObservedAt = Object.fromEntries(Object.entries(runtime.directBySymbol ?? {}).map(([symbol, candidate]) => [symbol, candidate.observedAt]));
+    let job = runtime.job ?? createHte31ScanJob(runtime.rotationOffset, runtime.readModel?.market ?? null, lastObservedAt);
     if (job.rotationOffset !== runtime.rotationOffset) {
-      job = createHte31ScanJob(runtime.rotationOffset, runtime.readModel?.market ?? null);
+      job = createHte31ScanJob(runtime.rotationOffset, runtime.readModel?.market ?? null, lastObservedAt);
     }
 
     if (previous.circuitOpen && previous.retryAfter && previous.retryAfter <= now) {
@@ -328,7 +329,7 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
       }
 
       let result = step.result;
-      const activeSymbols = new Set(result.universe.slice(0, 15).map((row) => row.symbol));
+      const activeSymbols = new Set(result.universe.map((row) => row.symbol));
       const directBySymbol = Object.fromEntries([
         ...Object.entries(runtime.directBySymbol ?? {}).filter(([symbol]) => activeSymbols.has(symbol)),
         [result.directCandidate.symbol, result.directCandidate] as const,

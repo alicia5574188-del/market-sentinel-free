@@ -1,7 +1,7 @@
-import { and, desc, eq, gte } from "drizzle-orm";
+import { and, desc, eq, gte, or } from "drizzle-orm";
 import { getDb } from "../db";
 import { hte31PaperResetState, hte31SimulationEpochs, hte31TradeCharts, hte31Trades } from "../db/hte31-schema";
-import { directMarketD1Admission } from "./direct-market-d1-budget.ts";
+import { directMarketD1Admission, directMarketPositionCheckpointRows } from "./direct-market-d1-budget.ts";
 import { validateDirectMarketEntry } from "./direct-market-entry.ts";
 import {
   deriveDirectMarketLearningProfile,
@@ -19,12 +19,12 @@ import {
   type DirectBrainDecisionSnapshot,
   type DirectMarketCandidate,
 } from "./direct-market-types.ts";
-import { buildHte31PaperPosition, hte31PaperPortfolioBlockReason } from "./hte31-position-sizing.ts";
+import { buildHte31PaperPosition, hte31PaperPortfolioBlockReason, HTE31_PAPER_PORTFOLIO_POLICY } from "./hte31-position-sizing.ts";
 import type { MarketPositionQuote } from "./exchange-market.ts";
 import type { AppSettings } from "./settings-repository.ts";
 
 const UTC_DAY_MS = 24 * 60 * 60_000;
-const POSITION_DAILY_RESERVE = 8_640;
+const POSITION_MINIMUM_DAILY_RESERVE = 8_640;
 
 function utcDayStart(now: number) {
   return Math.floor(now / UTC_DAY_MS) * UTC_DAY_MS;
@@ -171,7 +171,6 @@ export async function openDirectMarketTrade(input: {
   }
 
   const account = await paperAccount(settings.trialCapitalUsdt);
-  if (account.open.length >= 3) return { opened: null, reason: "组合已达到三笔持仓上限" };
   if (account.equityUsdt <= 0) return { opened: null, reason: "模拟账户权益不足" };
   const sameCluster = account.open.some((row) => {
     if (row.side !== candidate.decision || !row.decisionSnapshotJson) return false;
@@ -207,14 +206,16 @@ export async function openDirectMarketTrade(input: {
     }
   }
   const today = utcDayStart(executionNow);
-  const todayRows = await db.select({ id: hte31Trades.id }).from(hte31Trades).where(and(
+  const todayRows = await db.select({ entryAt: hte31Trades.entryAt, decisionSnapshotJson: hte31Trades.decisionSnapshotJson }).from(hte31Trades).where(and(
     eq(hte31Trades.decisionAuthority, DIRECT_MARKET_AUTHORITY),
-    gte(hte31Trades.entryAt, today),
-  )).limit(121);
+    or(gte(hte31Trades.entryAt, today), gte(hte31Trades.exitAt, today)),
+  )).limit(241);
+  if (todayRows.length >= 241) return { opened: null, reason: "当日仓位历史超出预算校验范围，暂不新开仓" };
   const admission = directMarketD1Admission({
-    estimatedPhysicalRowsToday: POSITION_DAILY_RESERVE,
+    estimatedPhysicalRowsToday: Math.max(POSITION_MINIMUM_DAILY_RESERVE,
+      directMarketPositionCheckpointRows(account.open.length + 1, todayRows.map((row) => row.decisionSnapshotJson))),
     committedMandatoryRows: todayRows.length * 100,
-    newOrdersToday: todayRows.length,
+    newOrdersToday: todayRows.filter((row) => row.entryAt >= today).length,
   });
   if (!admission.allowed) return { opened: null, reason: `D1每日预算保护：${admission.reason}` };
 
@@ -262,10 +263,11 @@ export async function openDirectMarketTrade(input: {
     candidate: candidateSnapshot,
     portfolioChecks: {
       openPositionsBefore: account.open.length,
-      maximumOpenPositions: 3,
+      maximumOpenPositions: null,
+      maximumTotalPlannedRiskRate: HTE31_PAPER_PORTFOLIO_POLICY.maximumTotalPlannedRiskRate,
       riskClusterId: candidate.riskClusterId,
       d1ProjectedRows: admission.projectedRows,
-      sameDirectionMaximum: 2,
+      sameDirectionMaximum: null,
       setupGuard: setupGuard.reason,
     },
     entryValidation: {

@@ -369,7 +369,7 @@ export async function getHte31Diagnostics(now = Date.now()) {
       turtleSoupRelaxationEnabled: false,
       automaticThresholdChanges: false,
       maximumConcurrentResearchPositions: 0,
-      maximumConcurrentPaperPositions: HTE31_PAPER_PORTFOLIO_POLICY.maxOpenPositions,
+      maximumConcurrentPaperPositions: null,
       maximumPortfolioRiskRate: HTE31_PAPER_PORTFOLIO_POLICY.maximumTotalPlannedRiskRate,
       routerAuthority: "paper_brain_live_parity",
       promotion: HTE31_ROUTER_PROMOTION_POLICY,

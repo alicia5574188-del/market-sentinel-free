@@ -56,9 +56,7 @@ export const HTE31_PAPER_POSITION_POLICY = {
 } as const;
 
 export const HTE31_PAPER_PORTFOLIO_POLICY = {
-  maxOpenPositions: 3,
   maximumTotalPlannedRiskRate: 0.15,
-  maxSameSidePositions: 2,
 } as const;
 
 export type Hte31OpenRisk = {
@@ -73,9 +71,11 @@ export function hte31PaperPortfolioBlockReason(input: {
   accountEquityUsdt: number;
 }) {
   const policy = HTE31_PAPER_PORTFOLIO_POLICY;
-  if (input.open.length >= policy.maxOpenPositions) return `模拟账户同时最多 ${policy.maxOpenPositions} 笔持仓`;
-  const sameSide = input.open.filter((row) => row.side === input.nextSide).length;
-  if (sameSide >= policy.maxSameSidePositions) return `模拟账户同方向同时最多 ${policy.maxSameSidePositions} 笔持仓`;
+  if (!Number.isFinite(input.accountEquityUsdt) || input.accountEquityUsdt <= 0
+    || !Number.isFinite(input.nextRiskUsdt) || input.nextRiskUsdt <= 0
+    || input.open.some((row) => !Number.isFinite(row.riskBudgetUsdt) || row.riskBudgetUsdt < 0)) {
+    return "模拟账户权益或持仓风险不可用，暂不新开仓";
+  }
   const totalRisk = input.open.reduce((sum, row) => sum + Math.max(0, row.riskBudgetUsdt), 0) + Math.max(0, input.nextRiskUsdt);
   const maximumRisk = Math.max(0, input.accountEquityUsdt) * policy.maximumTotalPlannedRiskRate;
   if (totalRisk > maximumRisk + 0.01) return `组合计划止损 ${totalRisk.toFixed(2)}U 超过权益 ${(policy.maximumTotalPlannedRiskRate * 100).toFixed(0)}% 上限 ${maximumRisk.toFixed(2)}U`;

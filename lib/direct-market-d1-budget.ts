@@ -7,12 +7,29 @@ export const DIRECT_MARKET_ACCOUNT_SAFE_ROWS_WRITTEN = 65_000;
 export const DIRECT_MARKET_APP_HARD_ROWS_WRITTEN = 30_000;
 export const DIRECT_MARKET_NEW_ORDER_ADMISSION_ROWS = 22_000;
 
-export const DIRECT_MARKET_MAX_OPEN_POSITIONS = 3;
+// Budget planning assumption, not a trading position-count limit. Entry also
+// reserves checkpoint rows for the actual prospective open-position count.
+export const DIRECT_MARKET_PLANNED_OPEN_POSITIONS = 6;
 export const DIRECT_MARKET_POSITION_CHECKPOINT_MS = 60_000;
 export const DIRECT_MARKET_MAX_NEW_ORDERS_PER_UTC_DAY = 120;
 export const DIRECT_MARKET_RESERVED_ROWS_PER_NEW_ORDER = 100;
 
 const DAY_MS = 24 * 60 * 60_000;
+
+export function directMarketPositionCheckpointRows(openPositions: number, todaySnapshots: string[] = []) {
+  if (!Number.isFinite(openPositions) || openPositions < 0) return Number.POSITIVE_INFINITY;
+  let peak = Math.ceil(openPositions);
+  for (const json of todaySnapshots) {
+    try {
+      const before = (JSON.parse(json) as { portfolioChecks?: { openPositionsBefore?: number } }).portfolioChecks?.openPositionsBefore;
+      if (!Number.isFinite(before) || before! < 0) return Number.POSITIVE_INFINITY;
+      peak = Math.max(peak, Math.ceil(before!) + 1);
+    } catch {
+      return Number.POSITIVE_INFINITY;
+    }
+  }
+  return (DAY_MS / DIRECT_MARKET_POSITION_CHECKPOINT_MS) * peak * 2;
+}
 
 export function indexAdjustedRows(logicalRows: number, indexEntriesPerRow: number) {
   return logicalRows * (1 + indexEntriesPerRow);
@@ -44,7 +61,7 @@ export function legacyHte31IndexAdjustedDailyUpperBound() {
 }
 
 /**
- * The fifteen-coin scans persist only bounded Durable Object snapshots. D1 is
+ * Configured-universe scans persist only bounded Durable Object snapshots. D1 is
  * reserved for positions and real lifecycle evidence. A 2x checkpoint factor
  * deliberately covers table/index/accounting uncertainty until production D1
  * query metadata confirms a lower observed value.
@@ -54,8 +71,8 @@ export function directMarketIndexAdjustedDailyBudget() {
   const evaluationRows = 0;
   const diagnosticRows = 0;
   const positionCheckpointLogicalRows =
-    (DAY_MS / DIRECT_MARKET_POSITION_CHECKPOINT_MS) * DIRECT_MARKET_MAX_OPEN_POSITIONS;
-  const positionCheckpointPhysicalRows = positionCheckpointLogicalRows * 2;
+    (DAY_MS / DIRECT_MARKET_POSITION_CHECKPOINT_MS) * DIRECT_MARKET_PLANNED_OPEN_POSITIONS;
+  const positionCheckpointPhysicalRows = directMarketPositionCheckpointRows(DIRECT_MARKET_PLANNED_OPEN_POSITIONS);
   const admittedTradeLifecycleRows =
     DIRECT_MARKET_MAX_NEW_ORDERS_PER_UTC_DAY * DIRECT_MARKET_RESERVED_ROWS_PER_NEW_ORDER;
   const mandatoryReserveRows =
@@ -104,4 +121,3 @@ export function directMarketD1Admission(input: {
   }
   return { allowed: true, projectedRows, reason: "within_budget" };
 }
-

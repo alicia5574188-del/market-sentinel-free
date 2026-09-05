@@ -21,6 +21,7 @@ export type Hte31ScanJob = {
   phase: Hte31ScanPhase;
   startedAt: number;
   rotationOffset: number;
+  lastObservedAt?: Record<string, number>;
   attempts: Partial<Record<Hte31ScanPhase, number>>;
   previousMarket?: Hte31MarketState | null;
   settings?: AppSettings;
@@ -73,13 +74,14 @@ function parseCoreSymbols(settings: AppSettings) {
   }
 }
 
-export function createHte31ScanJob(rotationOffset: number, previousMarket: Hte31MarketState | null = null): Hte31ScanJob {
+export function createHte31ScanJob(rotationOffset: number, previousMarket: Hte31MarketState | null = null, lastObservedAt: Record<string, number> = {}): Hte31ScanJob {
   return {
     version: 4,
     id: crypto.randomUUID(),
     phase: "config",
     startedAt: Date.now(),
     rotationOffset,
+    lastObservedAt,
     attempts: {},
     previousMarket,
   };
@@ -88,7 +90,7 @@ export function createHte31ScanJob(rotationOffset: number, previousMarket: Hte31
 export function hte31PhaseLabel(phase: Hte31ScanPhase) {
   return ({
     config: "读取运行配置",
-    universe: "轻扫成交额前十五",
+    universe: "轻扫配置中的全部交易品种",
     deep: "深扫当前候选",
     candles: "读取位置与多周期结构",
     evaluate: "评估三套核心打法",
@@ -115,11 +117,11 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
 
   if (job.phase === "universe") {
     if (!job.settings) throw new Error("市场大脑缺少运行配置");
-    const fetched = await marketExchange.fetchUniverse(Math.max(15, job.settings.universeLimit), []);
+    const fetched = await marketExchange.fetchUniverse(job.settings.universeLimit, []);
     const universe = rankDirectMarketUniverse(fetched);
     if (!universe.length) throw new Error(`${marketExchange.label} Universe 返回空列表`);
     const market = buildResonanceGlobalMarket(universe, job.previousMarket ?? null);
-    const target = chooseDirectMarketTarget(universe, job.rotationOffset);
+    const target = chooseDirectMarketTarget(universe, job.rotationOffset, job.lastObservedAt);
     if (!target) throw new Error("市场大脑没有可用深扫目标");
     return { kind: "progress", job: { ...job, phase: "deep", universe, market, target } };
   }
@@ -188,7 +190,7 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
         settings: {
           scanEnabled: job.settings.scanEnabled,
           coreSymbols: job.coreSymbols,
-          universeLimit: 15,
+          universeLimit: job.universe.length,
           trialCapitalUsdt: job.settings.trialCapitalUsdt,
         },
       },
