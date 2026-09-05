@@ -160,14 +160,16 @@ test("full two-week inference has a bounded CPU workload", () => {
   assert.ok(performance.now() - start < 3000, "bounded 4032-row inference must not become an unbounded history scan");
 });
 
-test("analog sizing can use smaller collateral-safe exposure without raising leverage or stretching targets", () => {
-  const c = candidate(), entry = (c.entryZone![0] + c.entryZone![1]) / 2;
-  const sizing = buildHte31PaperPosition({ side: "LONG", entryPrice: entry, stopLossPrice: c.invalidationPrice!,
-    originalTakeProfit2Price: c.targets[1], accountEquityUsdt: 1000, availableMarginUsdt: 1000,
-    riskRate: 0.035, minimumRiskRate: 0.005, riskMultiplier: 1, roundTripCostBps: 12,
-    minimumTp2NetProfitUsdt: 0, confidence: 61, dataQuality: 0.85, liquidityVolumeUsd: 1e9, atrPct: 0.2 });
+test("analog sizing requires at least 30U net at TP2 without stretching or capping the market target", () => {
+  const sizing = buildHte31PaperPosition({ side: "LONG", entryPrice: 100, stopLossPrice: 99.6,
+    originalTakeProfit2Price: 100.7, accountEquityUsdt: 1000, availableMarginUsdt: 1000,
+    riskRate: 0.04, minimumRiskRate: 0, riskMultiplier: 1, roundTripCostBps: 12,
+    minimumTp2NetProfitUsdt: 30, sizeToMinimumTp2NetProfit: true,
+    confidence: 61, dataQuality: 0.85, liquidityVolumeUsd: 1e9, atrPct: 0.2 });
   assert.equal(sizing.accepted, true);
-  assert.ok(sizing.plannedRiskUsdt >= 5 && sizing.plannedRiskUsdt <= 35);
-  assert.ok(sizing.leverage <= 12); assert.ok(sizing.marginUsdt <= 350);
-  assert.ok(Math.abs(sizing.takeProfit2Price - c.targets[1]) < 1e-8);
+  assert.ok(sizing.plannedTp2NetProfitUsdt > 30, `${sizing.plannedTp2NetProfitUsdt}U must remain above the floor rather than be capped at it`);
+  assert.ok(sizing.plannedRiskUsdt <= 40);
+  assert.ok(sizing.leverage > 12 && sizing.leverage <= 50); assert.ok(sizing.marginUsdt <= 350);
+  assert.equal(sizing.takeProfit2Price, 100.7);
+  assert.equal(sizing.tp2Adjusted, false);
 });
