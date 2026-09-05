@@ -12,7 +12,7 @@ export async function loadHistoricalForecastCandles(store: Store, fetchCandles: 
   if (!/^[A-Z0-9]{2,18}_USDT$/.test(symbol)) throw new Error("历史行情品种无效");
   const key = `analog-history-v1:${symbol}`;
   const cached = await store.get<Cache>(key);
-  const previous = cleanAnalogCandles(cached?.candles ?? [], now);
+  const previous = cleanAnalogCandles(cached?.candles ?? [], now, now - ANALOG_HISTORY_MS);
   const end = Math.floor(now / ANALOG_BAR_MS) * ANALOG_BAR_MS;
   const start = Math.ceil((now - ANALOG_HISTORY_MS) / ANALOG_BAR_MS) * ANALOG_BAR_MS;
   const times = new Set(previous.map((r) => r.time * 1000));
@@ -42,7 +42,7 @@ export async function loadHistoricalForecastCandles(store: Store, fetchCandles: 
     // upstream history is retried with a cooldown, including newly listed coins.
     for (const result of results) if (result.status === "fulfilled") fetched.push(...result.value);
   }
-  const candles = cleanAnalogCandles([...previous, ...fetched], now).slice(-4032);
+  const candles = cleanAnalogCandles([...previous, ...fetched], now, now - ANALOG_HISTORY_MS).slice(-4032);
   const improved = missing != null && candles.some((r) => r.time * 1000 <= missing! && !times.has(r.time * 1000));
   if (fetched.length || repair) await store.put(key, { observedAt: now, candles,
     repairAt: repair ? now + (improved ? 60_000 : REPAIR_MS) : cached?.repairAt });

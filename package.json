@@ -5,7 +5,7 @@
   "engines": { "node": ">=22.15.0" },
   "scripts": {
     "install:ci": "bash scripts/install-ci.sh",
-    "test:direct": "node --experimental-strip-types --test tests/historical-forecast.test.ts tests/direct-market-brain.test.ts tests/direct-market-adaptive.test.ts tests/direct-market-activity.test.ts tests/direct-market-d1-budget.test.ts tests/direct-market-performance.test.ts tests/direct-market-setup-guard.test.ts && node --test tests/direct-market-architecture.test.mjs",
+    "test:direct": "node --experimental-strip-types --test tests/historical-archive.test.ts tests/historical-forecast.test.ts tests/direct-market-brain.test.ts tests/direct-market-adaptive.test.ts tests/direct-market-activity.test.ts tests/direct-market-d1-budget.test.ts tests/direct-market-performance.test.ts tests/direct-market-setup-guard.test.ts && node --test tests/direct-market-architecture.test.mjs",
     "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vite",
     "build": "bash scripts/build-verified.sh",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",

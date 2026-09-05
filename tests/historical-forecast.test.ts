@@ -146,7 +146,7 @@ test("complete history with too few matches is not described as data collection"
   });
   const f = forecast(rows);
   assert.equal(f.state, "INSUFFICIENT"); assert.equal(f.missingHistoryBars, 0);
-  assert.match(f.reason, /已读完近14天历史/); assert.doesNotMatch(f.reason, /正在准备|正在补取/);
+  assert.match(f.reason, /本轮检索4032根已存K线/); assert.doesNotMatch(f.reason, /正在准备|正在补取/);
   assert.equal(f.side, "WAIT");
   assert.match(forecast([]).reason, /尚未取得有效历史行情/);
 });

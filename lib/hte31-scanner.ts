@@ -5,7 +5,8 @@ import {
 } from "./exchange-market.ts";
 import { buildDirectMarketCandidate } from "./direct-market-brain.ts";
 import type { DirectMarketCandidate, DirectMarketRadarItem, DirectTwelveHourActivity } from "./direct-market-types.ts";
-import { chooseDirectMarketTarget, rankDirectMarketUniverse } from "./direct-market-universe.ts";
+import { chooseDirectMarketTarget, rankDirectMarketUniverse, HISTORICAL_UNIVERSE, historicalUniverse } from "./direct-market-universe.ts";
+import type { ArchiveHistory, ArchiveProgress } from "./historical-archive.ts";
 import { getGlobalRiskContext } from "./global-risk.ts";
 import { getHte31Dashboard, listHte31OpenTrades } from "./hte31-repository.ts";
 import type { Hte31Candle } from "./hte31-types.ts";
@@ -34,6 +35,7 @@ export type Hte31ScanJob = {
   packet?: MarketAnalysisPacket;
   events?: { time: number; title: string }[];
   candles?: Hte31Candle[];
+  archive?: ArchiveProgress;
   btcCandles?: Hte31Candle[];
   directCandidate?: DirectMarketCandidate;
   openedTradeId?: string | null;
@@ -98,7 +100,7 @@ export function hte31PhaseLabel(phase: Hte31ScanPhase) {
   } satisfies Record<Hte31ScanPhase, string>)[phase];
 }
 
-export async function runHte31ScanStep(job: Hte31ScanJob, loadHistory: (symbol: string, now: number) => Promise<Hte31Candle[]>): Promise<Hte31ScanStep> {
+export async function runHte31ScanStep(job: Hte31ScanJob, loadHistory: (symbol: string, now: number) => Promise<Hte31Candle[] | ArchiveHistory>): Promise<Hte31ScanStep> {
   if (job.phase === "config") {
     const settings = await getSettings();
     if (!settings.scanEnabled) return { kind: "paused", observedAt: Date.now() };
@@ -118,8 +120,8 @@ export async function runHte31ScanStep(job: Hte31ScanJob, loadHistory: (symbol: 
 
   if (job.phase === "universe") {
     if (!job.settings) throw new Error("市场大脑缺少运行配置");
-    const fetched = await marketExchange.fetchUniverse(job.settings.universeLimit, []);
-    const universe = rankDirectMarketUniverse(fetched);
+    const fetched = await marketExchange.fetchUniverse(1, HISTORICAL_UNIVERSE);
+    const universe = rankDirectMarketUniverse(historicalUniverse(fetched));
     if (!universe.length) throw new Error(`${marketExchange.label} Universe 返回空列表`);
     const market = buildResonanceGlobalMarket(universe, job.previousMarket ?? null);
     const target = chooseDirectMarketTarget(universe, job.rotationOffset, job.lastObservedAt);
@@ -155,10 +157,12 @@ export async function runHte31ScanStep(job: Hte31ScanJob, loadHistory: (symbol: 
         ? marketExchange.fetchChartCandles(job.target.symbol, now - 18 * 60 * 60_000, now)
         : marketExchange.fetchChartCandles("BTC_USDT", now - 18 * 60 * 60_000, now),
     ]);
-    const candles = candlesResult.status === "fulfilled" ? candlesResult.value : [];
+    const history = candlesResult.status === "fulfilled" ? candlesResult.value : [];
+    const candles = Array.isArray(history) ? history : history.candles;
+    const archive = Array.isArray(history) ? undefined : history.archive;
     const btcCandles = btcCandlesResult.status === "fulfilled" ? btcCandlesResult.value : [];
     // Missing history becomes a visible WAIT result; it cannot fabricate a fallback trade.
-    return { kind: "progress", job: { ...job, phase: "evaluate", candles, btcCandles } };
+    return { kind: "progress", job: { ...job, phase: "evaluate", candles, btcCandles, archive } };
   }
 
   if (job.phase === "evaluate") {
@@ -175,6 +179,7 @@ export async function runHte31ScanStep(job: Hte31ScanJob, loadHistory: (symbol: 
       marketContext: job.market,
       roundTripCostBps: job.settings.roundTripCostBps,
       events: job.events,
+      archive: job.archive,
     });
     return {
       kind: "completed",

@@ -1,4 +1,5 @@
 import type { Hte31Candle } from "./hte31-types.ts";
+import type { ArchiveProgress } from "./historical-archive.ts";
 
 export const ANALOG_BAR_MS = 300_000;
 export const ANALOG_HISTORY_MS = 14 * 24 * 60 * 60_000;
@@ -15,6 +16,7 @@ export type HistoricalForecast = {
   historyTo: number | null;
   historyBars: number;
   missingHistoryBars?: number;
+  archive?: ArchiveProgress;
   windowMinutes: number;
   horizonMinutes: number;
   sampleCount: number;
@@ -37,12 +39,12 @@ export type HistoricalForecast = {
 };
 
 export function candleTimeMs(row: Hte31Candle) { return row.time > 10_000_000_000 ? row.time : row.time * 1000; }
-export function cleanAnalogCandles(candles: Hte31Candle[], now: number) {
+export function cleanAnalogCandles(candles: Hte31Candle[], now: number, oldest = 0) {
   const unique = new Map<number, Hte31Candle>();
   for (const row of candles) {
     const time = candleTimeMs(row);
     if (![time, row.open, row.high, row.low, row.close, row.volume].every(Number.isFinite)
-      || time % ANALOG_BAR_MS !== 0 || time + ANALOG_BAR_MS > now || time < now - ANALOG_HISTORY_MS
+      || time % ANALOG_BAR_MS !== 0 || time + ANALOG_BAR_MS > now || time < oldest
       || Math.min(row.open, row.high, row.low, row.close) <= 0 || row.volume < 0
       || row.high < Math.max(row.open, row.close) || row.low > Math.min(row.open, row.close)) continue;
     unique.set(time, { ...row, time: time / 1000 });
@@ -164,7 +166,7 @@ export function buildHistoricalForecast(input: { candles: Hte31Candle[]; now: nu
       event: eventAt(to, events) ?? "事件资料未覆盖", pathPct: segment.map((r) => (r.close / anchor - 1) * 100) };
   });
   if (result.sampleCount < ANALOG_MIN_SAMPLES || result.effectiveSamples < ANALOG_MIN_SAMPLES - 0.5) return { ...result,
-    reason: `${missingHistoryBars === 0 ? "已读完近14天历史" : `已读取${rows.length}根K线，可用历史不足或有缺口`}；合格相似走势仅${result.sampleCount}/${ANALOG_MIN_SAMPLES}段，暂不开仓。12小时总结不影响开仓。` };
+    reason: `本轮检索${rows.length}根已存K线；合格相似走势${result.sampleCount}/${ANALOG_MIN_SAMPLES}段，暂不开仓。旧历史持续回补和轮换检索。` };
   result.state = "READY";
   const side = result.upPct >= 58 && result.medianPct > costPct ? 1 : result.downPct >= 58 && result.medianPct < -costPct ? -1 : 0;
   if (!side) return { ...result, reason: "相似片段后续方向分散，等待新的完整K线" };

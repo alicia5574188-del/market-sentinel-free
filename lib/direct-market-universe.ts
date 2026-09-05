@@ -1,4 +1,8 @@
 import type { MarketUniverseTicker } from "./exchange-market.ts";
+export const HISTORICAL_UNIVERSE = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "BNB_USDT", "XRP_USDT", "DOGE_USDT"];
+export function historicalUniverse(rows: MarketUniverseTicker[]) {
+  return rows.filter((row) => HISTORICAL_UNIVERSE.includes(row.symbol));
+}
 
 export function directMarketUniverse(rows: MarketUniverseTicker[]) {
   return rows

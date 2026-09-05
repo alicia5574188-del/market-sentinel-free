@@ -2,6 +2,7 @@
 
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { DurableObject } from "cloudflare:workers";
+import type { HistoricalArchive } from "./historical-archive";
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 import { setRuntimeDb } from "../db";
@@ -42,6 +43,7 @@ import {
 export interface CloudflareEnv {
   ASSETS: Fetcher;
   DB: D1Database;
+  HISTORICAL_ARCHIVE?: DurableObjectNamespace<HistoricalArchive>;
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_JWK?: string;
   VAPID_SUBJECT?: string;
