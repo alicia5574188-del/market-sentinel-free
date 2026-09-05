@@ -73,7 +73,9 @@ function buildTwelveHourReview(readModel: Hte31ScanCompleted | null, dashboard: 
   const setups = dashboard.setupPerformance.map((lifetime) => {
     const active = activity.setups.find((row) => row.setup === lifetime.setup);
     const windowed = performanceWindow.setups.find((row) => row.setup === lifetime.setup);
-    const currentStatus = !active?.evaluations && lifetime.sampleCount === 0 ? "暂无机会" : lifetime.status;
+    const currentStatus = lifetime.sampleCount === 0
+      ? active?.triggeredSignals ? "观察" : "暂无机会"
+      : lifetime.status;
     return {
       ...lifetime,
       status: currentStatus,
@@ -86,6 +88,7 @@ function buildTwelveHourReview(readModel: Hte31ScanCompleted | null, dashboard: 
       closedTrades12h: windowed?.sampleCount ?? 0,
       netPnl12h: windowed?.netPnlUsdt ?? 0,
       leadingBlocker12h: active?.leadingBlocker ?? null,
+      latestQualifiedSelection: active?.latestQualifiedSelection ?? null,
     };
   });
   const closedTrades = performanceWindow.setups.reduce((sum, row) => sum + row.sampleCount, 0);

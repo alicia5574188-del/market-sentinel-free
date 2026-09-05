@@ -1,5 +1,11 @@
 # Decisions
 
+## 2026-09-05 — Preserve observation counters and expose qualified selection losses
+
+- The old primary-candidate counter intentionally includes triggered WAIT observations. Correct its label, not its historical values; a strict funnel cannot be reconstructed from old aggregates.
+- Store the latest qualified same-symbol comparison in the existing activity snapshot; add a stable competitor reason for qualified losers. This supplements diagnosis without new recurring D1 writes or a second selection authority.
+- Do not invent the screenshot's historical competitor, reset the paper epoch, or relax strategy triggers just to make the observation count nonzero.
+
 ## 2026-09-05 — Preserve partial page data and measure operational capacity
 
 - Keep fresh successful dashboard sections, fall back only within the same brain version and paper epoch, and clearly mark stale data. Never overwrite the durable browser cache with a degraded response. Bound display reads to 12 seconds.

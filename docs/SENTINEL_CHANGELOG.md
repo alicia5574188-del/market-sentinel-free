@@ -1,5 +1,9 @@
 # Sentinel Production Change Ledger
 
+## 2026-09-05 — Priority-observation wording and qualified-comparison evidence
+
+Correct misleading primary-candidate label without rewriting counts. Add latest qualified same-symbol comparison and truthful unknown-history fallback; use 观察 for triggered strategies without closed samples. Preserve all trading rules, positions, epochs, safety checks and D1 cadence. Local direct43/UI115, build/type/lint passed; release proof follows in STATUS and PR.
+
 This is the durable production-history ledger for Market Sentinel. It exists so future development does not depend on chat history, memory, or screenshots.
 
 Rules:

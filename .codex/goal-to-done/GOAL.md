@@ -1,5 +1,12 @@
 # Goal
 
+## Current bounded correction — explain zero primary observations
+
+- Audit the screenshot's 94 evaluations / one qualified failed-breakout signal / zero primary observations against current production selection and activity counters.
+- Correct the misleading primary-candidate label: it counts triggered priority observations even while they remain unqualified. Preserve existing historical counts; do not fabricate a new strict funnel from incomplete history.
+- Retain the latest qualified same-symbol comparison in the existing Scanner activity snapshot and show a losing strategy's actual preferred competitor going forward. Explicitly acknowledge that old counters did not retain that event.
+- Do not alter strategy triggers, ranking, risk, paper/live positions, epoch, scan cadence or D1 writes. Use the existing authorized CI/deploy path after regression verification.
+
 ## Current optimization — remove fixed scan and paper position-count restrictions
 
 - User requests removal of the 15-symbol / 6-deep restriction and three-position bottleneck. Evaluate the full existing configured universe (default 30, settings ceiling 50); use existing Scanner snapshots to select the least recently evaluated symbol, without more per-slice market requests or recurring D1 writes.
