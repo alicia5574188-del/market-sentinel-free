@@ -815,7 +815,7 @@ export default function ResonancePage() {
 
     {tab === "大脑" && <div className="rz-stack rz-overview">
       <section className="rz-section rz-forecast-top"><div className="rz-section-head"><div><span className="rz-eyebrow">未来一小时 · 方向辅助</span><h2>历史相似走势与预测</h2></div></div>
-        {readModel?.directCandidate?.forecast ? <><HistoricalForecastCard observedAt={snapshot?.requestedAt} symbol={readModel.directCandidate.symbol} forecast={readModel.directCandidate.forecast} candles={readModel.directCandidate.candles5m ?? []} /><p className="rz-copy">{readModel.directCandidate.checks.find(c=>c.key==='history-direction')?.detail ?? '历史方向尚不明确，暂不开单'} · {readModel.directCandidate.decision!=='WAIT'?'当前价格可入场，等待资金复核':readModel.directCandidate.counterEvidence[0]??'暂不开单'}</p></> : <Empty>正在读取历史对照；数据就绪后显示真实预测，不生成替代曲线。</Empty>}
+        {readModel?.directCandidate?.forecast ? <><HistoricalForecastCard observedAt={snapshot?.requestedAt} symbol={readModel.directCandidate.symbol} forecast={readModel.directCandidate.forecast} candles={readModel.directCandidate.candles5m ?? []} /></> : <Empty>正在读取历史对照；数据就绪后显示真实预测，不生成替代曲线。</Empty>}
       </section>
 
       <section className="rz-account-strip" aria-label="模拟账户概览">

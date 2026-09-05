@@ -1,7 +1,7 @@
 import type { Hte31Candle } from './hte31-types.ts';
 import type { DirectMarketCandidate } from './direct-market-types.ts';
 import type { HistoricalForecast } from './historical-forecast.ts';
-import { cleanAnalogCandles } from './historical-forecast.ts';
+import { cleanAnalogCandles, ANALOG_MIN_SAMPLES } from './historical-forecast.ts';
 import { minuteTime,scalpCostBps } from './scalp-strategy.ts';
 import {DIRECT_POSITION_POLICY_VERSION,type DirectPositionDecision} from './direct-market-position-brain.ts';
 export const ANALOG_POSITION_POLICY='analog-path-exit-v1';
@@ -11,7 +11,10 @@ const quantile=(xs:number[],p:number)=>{const a=[...xs].sort((x,y)=>x-y);if(!a.l
 export type AnalogIntent={side:'LONG'|'SHORT';anchor:number;createdAt:number;expiresAt:number;signalKey:string;offsetPct:number;stopPct:number;targetPct:number;expectedNetR:number;takeProfitPct:number;lossPct:number;protectedExitPct:number;fillPct:number;mode:'NOW'|'PULLBACK'};
 export function historicalDirection(f:HistoricalForecast|undefined,now:number,_costBps=12):{side:'LONG'|'SHORT'|'WAIT';reason:string} {
  void _costBps;
- if(!f||f.state!=='READY'||now<f.signalAt||now-f.signalAt>=300_000||f.sampleCount<8||f.effectiveSamples<7.5)return {side:'WAIT',reason:'历史依据不足或过期，暂不开单'};
+ if(!f)return {side:'WAIT',reason:'正在读取历史对照，暂不开单'};
+ if(f.state==='STALE'||now<f.signalAt||now-f.signalAt>=300_000)return {side:'WAIT',reason:'历史判断已过期，等待最新完整五分钟K线'};
+ if(f.sampleCount<ANALOG_MIN_SAMPLES||f.effectiveSamples<ANALOG_MIN_SAMPLES-.5)return {side:'WAIT',reason:`独立相似片段${f.sampleCount}/${ANALOG_MIN_SAMPLES}段，依据不足，暂不开单`};
+ if(f.state!=='READY')return {side:'WAIT',reason:f.reason};
  const episodes=f.episodes??[],sum=episodes.reduce((s,e)=>s+e.weight,0);
  const up=f.directionUpPct!=null?f.directionUpPct/100:sum?episodes.reduce((s,e)=>s+(e.bars.at(-1)!.closePct>0?e.weight:0),0)/sum:0;
  const down=f.directionDownPct!=null?f.directionDownPct/100:sum?episodes.reduce((s,e)=>s+(e.bars.at(-1)!.closePct<0?e.weight:0),0)/sum:0;
