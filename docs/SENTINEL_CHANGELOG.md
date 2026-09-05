@@ -11,6 +11,25 @@ Rules:
 
 ---
 
+## 2026-09-05 — Restored-core V4 deployed
+
+### Changed
+
+- Replaced the simplified same-name setup formulas with HT3-R Failed Auction, HT4 Exhaustion/Anti-Crowd, and Resonance direction plus HT5-R timing.
+- Removed the universal volume gate from resonance, removed 24-hour movement as an exhaustion trigger, and restored setup-specific targets, stops, and holding horizons.
+- Added setup/direction/regime loss isolation and actual average win/loss R plus realized payoff to the operator page.
+- Added migration `0022` for a fresh-quote V3 paper archive and clean V4 epoch.
+
+### Deliberately unchanged
+
+- Gate/live positions, funds, credentials, owner controls, emergency controls, the single Direct Market Brain, D1 recurring-write cadence, and historical review records.
+
+### Verification
+
+- Local suites passed 29/29 Direct, 224/224 signal/risk/migration, and 112/112 production/UI/safety checks plus TypeScript and ESLint.
+- PR `#133` merged as `525a02ff`; PR `#134` corrected a stale V3 release-probe marker and merged as `ebc6284a`. Final workflow `33938628363` passed all deploy gates. Production D1 reported V4 active, no pending target, and zero legacy paper holdings; Worker `f415e87f-5a59-4f46-accf-fa2eec51a392`.
+- The asset probe now derives its expected release from `DIRECT_MARKET_BRAIN_VERSION`, preventing future major upgrades from failing proof because of a stale hardcoded version string.
+
 ## 2026-09-04 — Truthful setup-activity correction deployed
 
 ### Changed

@@ -1,5 +1,9 @@
 # Market Sentinel — Current System State
 
+> **2026-09-05 restored-core V4 — production deployed.**
+>
+> `direct-market-brain-v4-restored-core` uses three traceable strategies: HT3-R Failed Auction, HT4 Exhaustion/Anti-Crowd, and Resonance direction with HT5-R entry timing. Raw setup activity is distinct from qualified entry; volume confirmation is local to failed auction rather than a universal resonance blocker; 24-hour movement alone cannot qualify exhaustion. Each setup/direction/regime cell pauses immediately after three independent consecutive losses or a proven negative four-sample edge, without freezing the other strategies. Strategy cards show actual average win/loss R and realized payoff. Migration `0022` completed the fresh-quote paper archive and clean epoch with zero legacy holdings; Gate/live was untouched. PRs `#133/#134`, workflow `33938628363`, Worker `f415e87f-5a59-4f46-accf-fa2eec51a392`.
+
 > **2026-09-04 strategy-activity correction — production deployed.**
 >
 > The three core setups still use exactly the deployed v3 decision and risk rules. Activity now reports a truthful funnel for every setup on every deep scan: evaluated, setup-triggered, hard-gate-qualified, selected, entry-blocked, and opened. Scanner coverage is measured inside the existing Durable Object save; an incomplete startup window cannot be promoted or displayed as a completed 12-hour review. Legacy malformed activity is discarded on the first new scan. PR `#131` deployed as `113bf39a`; workflow `33894121421` passed verification, deployment, immutable-asset, health, and paper-version checks with no pending migration. No D1 write, strategy threshold, position lifecycle, paper/live lineage, Gate control, or funding authority changed.

@@ -1,6 +1,6 @@
 # Goal
 
-## Active objective — V4 restored three-strategy core
+## Completed objective — V4 restored three-strategy core
 
 - Replace the September 4 simplified same-name setup rules with traceable adaptations of the original HT3-R failed-auction, HT4 anti-crowding exhaustion, and original Resonance direction plus HT5-R higher-timeframe entry behavior.
 - Keep one Direct Market Brain and exactly three new-order setups. Evaluate all three on every deep scan, separate raw trigger from setup qualification, remove performance-paused cells before ranking, and never create a second router or simulator.
