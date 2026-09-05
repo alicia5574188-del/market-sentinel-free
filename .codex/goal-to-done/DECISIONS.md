@@ -1,5 +1,11 @@
 # Decisions
 
+## 2026-09-06 — PAPER持续开仓；五段真实收盘线单图叠加
+
+- 当前历史路径PAPER不再因三连亏或当日模拟亏损进入暂停；持续收集失败与成功样本，风险摘要只报告表现，不把亏损转为零风险。继续强制资金/保证金、单笔4%/组合12%、报价、同币、重复计划、D1、流动性/强平与LIVE关闭边界。
+- 页面不再画六张蜡烛图。把当前24根真实五分钟收盘线及同一决策使用的最相似5段历史收盘线叠加到一张图；每段以自己的参考点归零以比较形状，历史参考点后的12根仍是当时实际发生的数据，不加入平均线或虚构预测线。
+- 作为V13.2观察与展示补丁保留现有epoch、历史及订单，不为本次变化重置证据；只走一次PR、CI与生产部署。
+
 ## 2026-09-06 — TP2 net 30U is a floor, not a target
 
 - Raise new analog PAPER sizing to 4.00% equity per trade and 12.00% total. Remove correlated half-risk because it would make later qualifying orders violate the same 30U minimum; retain the aggregate 12% portfolio ceiling, margin/leverage/liquidity limits and three-loss pause. Align the daily loss latch at 12.0% so it remains coherent with three full planned losses.

@@ -62,6 +62,20 @@ test("configured scan coverage and risk-based capacity reach the production boun
   assert.match(page, /合计不超过12.00%/);
   assert.match(execution, /minimumTp2NetProfitUsdt: ANALOG_RISK_POLICY\.minimumTp2NetProfitUsdt/);
   assert.match(execution, /sizeToMinimumTp2NetProfit: true/);
+  assert.doesNotMatch(execution, /scalpEntryRisk|lossPauseMs|dailyLossRate|haltedUntil/);
+  assert.match(execution, /持续运行，不因连续亏损或当日模拟亏损暂停/);
+  assert.match(page, /连续亏损也持续运行/);
+  assert.doesNotMatch(page, /三连亏暂停三十分钟|日亏12\.0%暂停新开仓/);
+});
+
+test("top analogue evidence is one overlay of the current and five real close paths", async () => {
+  const chart = await readFile(new URL("../app/historical-forecast-card.tsx", import.meta.url), "utf8");
+  assert.match(chart, /OverlayLineChart/);
+  assert.match(chart, /当前真实收盘线与最相似五段历史真实收盘线叠加图/);
+  assert.match(chart, /matches\.slice\(0, ANALOG_MIN_SAMPLES\)/);
+  assert.match(chart, /<polyline/);
+  assert.doesNotMatch(chart, /CandlestickChart/);
+  assert.match(chart, /没有平均线、预测线或虚构数据/);
 });
 
 test("adaptive position decisions use completed candles without adding periodic D1 writes", () => {
