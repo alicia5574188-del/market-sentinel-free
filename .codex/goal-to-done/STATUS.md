@@ -1,12 +1,20 @@
 # Status
 
+## V6 production verified; reliability follow-up active
+
+- PR #137 merged as `440d59801137ed8dedcfe5f508c7c2dc6dcd0d40`. Production workflow `33944293649` passed. Worker `3e8c67c0-17d1-4792-b86b-9bc22d22cdb7`; client `assets/page-BOG8g7a_.js`.
+- Migration0024 complete: active `direct-market-brain-v6-open-coverage`, target null, legacy open PAPER positions zero. Configured-universe coverage and removal of fixed position count caps are deployed; total planned risk, D1 admission, correlation and live boundaries remain.
+- Latest owner asks for actual D1 daily capacity, 24-hour continuity, missing-page-data fixes, and preservation of past regressions. Found concrete client defect: partial successful API responses replace good sections with null; server isolate cache cannot cover a cold isolate.
+- Follow-up adds display-only same-version/same-epoch source fallback, stale labels, request deadlines, and bounded read-only CI checks of scheduler timestamp advancement and account-wide D1 read/write analytics. Reuses existing CI credentials; no runtime token, new D1 counter ledger, trading change, or new epoch.
+- Do not call the 30,000 row planning estimate actual usage. Actual analytics and new production proof are still pending. A bounded advancing check cannot prove a full future day of uptime.
+
 ## Current V6 task — configured scan coverage and risk-based paper capacity
 
 - User asked to remove the fixed 15/6 scan restriction and three-position bottleneck. Local implementation scans the existing configured universe (default 30; existing settings maximum 50), selects the least recently evaluated symbol from existing Scanner snapshots, and removes the top-15 pruning of the read model. One deep target per phased job and existing request/write cadence remain unchanged; this is not simultaneous whole-market deep scanning.
 - Fixed PAPER total and same-direction counts are removed. Aggregate planned stop risk remains 15%, normal accepted trade risk remains 3.5%, and single-symbol, correlation, margin, learning, fresh-quote and live boundaries remain. Usually four normal-risk trades fit; this does not grant unlimited exposure or demonstrate restored historical trade frequency.
 - D1 capacity uses prospective holdings and the day's peak from immutable decision snapshots of today's entries/exits; closing positions cannot reset the estimate downward. The read reuses the bounded daily admission query, creates no new D1 write stream, and retains 22,000 entry admission / 30,000 app hard budgets. The six-position planning assumption is a budget calculation, not a replacement six-position trading cap.
 - V6 / additive migration `0024` prepares the established major PAPER cutover. No three-strategy pattern or Gate/live policy is changed. Current remote main rechecked at V5 `8badc27b`; release will use the user's existing GitHub/CI/Cloudflare authorization after verification.
-- Local verification passed 34 Direct + 7 architecture, 225 signal/risk/migration and 115 build/UI/safety checks, plus TypeScript, ESLint and diff checks. Scope is ready for the existing PR/CI/deploy route; V6 is not yet deployed.
+- Local verification passed 34 Direct + 7 architecture, 225 signal/risk/migration and 115 build/UI/safety checks, plus TypeScript, ESLint and diff checks. Feature commit `b4970e03796e3ef5bf243fa83b5a549f1190deb2` in PR `#137`; PR CI `33944213722` passed including Wrangler dry-run, then merged as `440d59801137ed8dedcfe5f508c7c2dc6dcd0d40`. Production deployment is in progress; V6 is not yet production-verified.
 
 ## Completed release — V5 production deployed and verified
 

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { chineseOperatorText, operatorLabel, riskClusterLabel } from "../lib/operator-language";
 import { DIRECT_MARKET_BRAIN_VERSION } from "../lib/direct-market-types";
+import { retainDashboardSnapshot } from "../lib/dashboard-snapshot";
 import {
   HTE31_TRADER_DEFINITIONS,
   hte31AssetRegimeLabel,
@@ -126,6 +127,7 @@ type Dashboard = {
 };
 
 type Snapshot = {
+  version: string;
   requestedAt: number;
   observedAt: number;
   account: { role: string };
@@ -448,7 +450,7 @@ function operatorDecision(snapshot: Snapshot | null, unavailable: boolean) {
 }
 
 async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { cache: "no-store", ...init });
+  const response = await fetch(url, { cache: "no-store", ...(!init?.method || init.method === "GET" ? { signal: AbortSignal.timeout(12_000) } : {}), ...init });
   const payload = await response.json().catch(() => ({})) as T & { error?: string };
   if (!response.ok) throw new Error(payload.error ?? `${url} 请求失败 (${response.status})`);
   return payload;
@@ -634,6 +636,7 @@ export default function ResonancePage() {
   const [archiveOpen, setArchiveOpen] = useState(false);
   const emergencyTimer = useRef<number | null>(null);
   const mainSnapshotSeen = useRef(false);
+  const snapshotRef = useRef<Snapshot | null>(null);
   const lastSnapshotAt = useRef<number | null>(null);
 
   useEffect(() => {
@@ -642,11 +645,13 @@ export default function ResonancePage() {
 
   useEffect(() => {
     const restore = window.setTimeout(() => {
+      if (snapshotRef.current) return;
       try {
         const raw = window.localStorage.getItem(SNAPSHOT_STORAGE_KEY);
         if (!raw) return;
         const cached = JSON.parse(raw) as Snapshot;
-        if (!cached || typeof cached.observedAt !== "number" || !cached.dashboard || !cached.scanner) return;
+        if (!cached?.version || typeof cached.observedAt !== "number" || !cached.dashboard || !cached.scanner) return;
+        snapshotRef.current = cached;
         setSnapshot(cached);
         mainSnapshotSeen.current = true;
         lastSnapshotAt.current = cached.observedAt;
@@ -660,15 +665,17 @@ export default function ResonancePage() {
 
   const refreshMain = useCallback(async () => {
     try {
-      const next = await readJson<Snapshot>("/api/hte31");
+      const received = await readJson<Snapshot>("/api/hte31");
+      const next = retainDashboardSnapshot(snapshotRef.current, received);
+      snapshotRef.current = next;
       setSnapshot(next);
       mainSnapshotSeen.current = true;
       lastSnapshotAt.current = next.observedAt;
-      if (next.dashboard && next.scanner.readModel) {
+      if (!next.degraded && next.dashboard && next.scanner.readModel) {
         try { window.localStorage.setItem(SNAPSHOT_STORAGE_KEY, JSON.stringify(next)); } catch { /* display cache is optional */ }
       }
       setError("");
-      setRefreshWarning(next.staleSources?.length ? `部分数据刷新延迟，显示 ${fmtTime(next.observedAt)} 的最近可信值。` : "");
+      setRefreshWarning(next.degraded ? `部分数据刷新延迟，显示 ${fmtTime(next.observedAt)} 的最近可信值；缺少的数据正在重试。` : "");
     } catch (reason) {
       if (mainSnapshotSeen.current) {
         setError("");

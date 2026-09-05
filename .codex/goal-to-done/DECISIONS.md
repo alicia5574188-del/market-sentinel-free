@@ -1,5 +1,11 @@
 # Decisions
 
+## 2026-09-05 — Preserve partial page data and measure operational capacity
+
+- Keep fresh successful dashboard sections, fall back only within the same brain version and paper epoch, and clearly mark stale data. Never overwrite the durable browser cache with a degraded response. Bound display reads to 12 seconds.
+- Reuse existing GitHub CI credential for read-only account-wide UTC-day and rounded-out 24-hour D1 analytics; validate both read and write counters, fail on unknown data, and check background scan completion plus position alarm advancement. Run after deployment and every six hours. Health probes cannot prove future 24-hour uptime.
+- Preserve runtime cadence, strategy/risk rules, single data producer and all regression gates. No extra strategy cutover for a display/acceptance-only patch.
+
 ## 2026-09-05 — Remove fixed coverage and position counts without removing risk limits
 
 - Choice: Honor the configured scan universe and schedule the least recently evaluated symbol using existing Scanner snapshots. Remove the hard 15/6 pruning and fixed three-total/two-same-direction PAPER counts; keep total planned stop risk at 15%, normal per-trade risk, single-symbol/correlation, margin and live safeguards.

@@ -6,6 +6,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    - cron: '17 */6 * * *'
 
 # Keep only the newest validation run for each PR. This does not reduce test
 # coverage: every latest PR revision still runs the full suite, while stale
@@ -20,6 +22,7 @@ permissions:
 
 jobs:
   verify:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -149,3 +152,24 @@ jobs:
             sleep 10
           done
           [[ "$cutover_ready" == "1" ]]
+
+  operations:
+    if: always() && (needs.deploy.result == 'success' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    needs: [verify, deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Verify background timestamps advance without a page
+        run: node scripts/check-production.mjs health
+      - name: Audit account-wide D1 reads and writes
+        if: always()
+        run: node scripts/check-production.mjs d1
