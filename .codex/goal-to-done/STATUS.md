@@ -1,13 +1,29 @@
 # Status
 
-## Active V7 historical analog release — local implementation prepared
+## Active: historical-data diagnosis and compact UI
 
+- Local validation passed: focused12; Direct35 + architecture7; signals231; production build/UI115; TypeScript, ESLint and diff checks. Existing CI dry-run and release pending.
+
+## 2026-09-05 — Historical preparation diagnosis and compact summary
+
+- Production browser showed AKE already had4031 valid5m bars from08/22 through09/05, yet only1/8 independent analogs. This observed candidate is similarity-starved, not waiting to accumulate live data or a12h report. Public health showed scanner/position live with no errors. Complete current account/order data was unavailable in the observed partial response; do not infer all-symbol or global counts from it.
+- Reproduced a separate cache defect: fresh80-bar tail prevented any upstream request despite4032 available bars. Repair now checks the whole bounded14d window, retains successful bootstrap pages after a sibling failure, and heals at most one old page alongside the normal current page. No-progress old repairs back off30min; successful repairs can continue after1min. Concurrency remains2 and D1 scan writes remain0.
+- UI hides prediction charts/proportions below the existing8-sample eligibility gate, labels real shortage, hides empty performance grids, and reduces the12h report to actual entries/exits/net results and a completed conclusion. Technical counters remain collapsed.
+- No similarity, direction, edge, risk, order, epoch or live policy changed. This patch does not prove restored trade frequency; AKE's observed sample shortage remains a real trading restriction. Direct local Gate history access was cancelled; no bypass or real-history profitability claim.
+
+## V7 historical analog — deployed and production verified
+
+- PR #141 merged as `1683401814eb75c57365f311a7448e5ad996f9d0`. Production workflow `33952777266` verify/deploy/operations all passed. Worker `2dd398ad-49e0-47a8-9b31-2c25838ddf45`, immutable asset `assets/page-DQDbO0mL.js`.
+- Production0025 cutover completed: active V7, target null, legacy PAPER holdings0. Scanner success advanced1788593595140→1788593683312; position alarm advanced1788593652140→1788593712248, no errors.
+- Account D1 at2026-09-05T07:34:45.873Z: UTCday104,067reads/1,065writes; rounded-out24h1,038,542reads/4,159writes. Bounded health and current usage do not guarantee future uptime or frequency/profit.
+- Release is complete. No Owner-authenticated visual browser check or real-history profitability replay claimed. Production automatically hydrates history per symbol. Evidence retained in PR #141 comment; do not redeploy solely to update proof documentation.
+- PR #141 / feature `5124bb5dc487967b202de7bcb301d427e867d7c7` passed GitHub CI `33952695588`; scoped diff38 files,739 additions/813 deletions, only additive0025 migration. Merged through the existing authorized production path; final proof is recorded above.
 - User now requests one historical K-line analog strategy, superseding draft #140. Implemented two-hour closed-candle shape / fourteen-day same-symbol history / one-hour outcome distribution, calendar and partial recorded-event matching, disjoint purged episodes, cost-aware historical replay, Chinese overlay chart and actual dates.
 - Replaced V6 three-setup authority; remove three-symbol cohort wait, keep one current candidate execution and exact activity attribution. Reuse scanner/DO/PAPER/CI/Cloudflare. New history keys are bounded and write no D1.
 - New evidence-specific risk/learning floors; PAPER sizing permits 0.5%–3.5% actual risk within existing safe leverage/margin, removes fixed $50 profit floor only for analog. Total risk cap and loss protections remain. New strategy is explicitly simulation-only at live submission boundary.
-- V7 / migration0025 uses existing fresh-quote PAPER archive and new epoch. No production mutation yet. Details and limits: docs/HISTORICAL_FORECAST.md.
+- V7 / migration0025 uses existing fresh-quote PAPER archive and new epoch. Production migration and deployment verified above. Details and limits: docs/HISTORICAL_FORECAST.md.
 - Local validation passed: Direct32 + architecture7, signals231, production build/UI115, TypeScript and ESLint. Three tests asserting retired V6 ranking/trigger internals were adapted to the new single-authority contract; protections remain covered.
-- Direct Gate network request approval was cancelled; no live-history replay claim and no bypass. Deterministic tests validate engineering, not profit/frequency. Required final local gates and authorized PR/deploy next.
+- Direct Gate network request approval was cancelled; no live-history replay claim and no bypass. Deterministic tests validate engineering, not profit/frequency. Required CI, deployment, archive and operations gates completed.
 
 ## 2026-09-05 — Owner narrows first-release scope and reuses deployment
 

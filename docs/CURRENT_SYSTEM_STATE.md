@@ -1,4 +1,8 @@
+> 2026-09-05 follow-up: production AKE has4031 history bars but1/8 matches; it is not a12h storage wait. Compact empty-state UI and bounded cache gap repair are prepared; see STATUS for release proof. No threshold/epoch/risk change.
+
 # Market Sentinel — Current System State
+
+> **2026-09-05 V7 production verified.** PR #141 / main `16834018` / workflow `33952777266` verify+deploy+operations passed. Worker `2dd398ad-49e0-47a8-9b31-2c25838ddf45`, page `DQDbO0mL`. PAPER active V7, target null, no legacy holdings. Scanner and position scheduling advanced. Account rounded-out24h D1:1,038,542reads/4,159writes at07:34:45Z. Analog frequency/profit remains unproven; normal production history hydrates per symbol. STATUS and PR comment contain proof; do not redeploy solely to record it.
 
 > **2026-09-05 V7 historical analog prepared, not yet deployed.** The user replaced the three-strategy draft with one historical-pattern predictor. Closed 2h input / up-to-14d history / 1h outcome; calendar and recorded event context, disjoint purged samples, bounded DO cache, immediate single-signal PAPER admission, Chinese overlay/date evidence. V7/0025 retains fresh-quote old PAPER archive; no live authorization. See `docs/HISTORICAL_FORECAST.md` and current STATUS for exact rules, validation and release evidence.
 

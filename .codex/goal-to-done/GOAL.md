@@ -1,5 +1,9 @@
 # Goal
 
+## Current bounded correction — distinguish data from insufficient matches
+
+- Explain the observed zero-entry state from actual production data, repair incomplete historical caching, and simplify empty statistics and12h summaries. Preserve evidence and risk gates; reuse authorized CI/deploy without a new paper epoch.
+
 ## Current implementation — historical analog prediction
 
 - User replaces the three-strategy proposal with one immediately usable historical K-line analog strategy: shape, amplitude, volatility, slope, time/day/weekend and recorded events. Use two hours of closed 5m candles, fourteen days of same-symbol history and a one-hour forecast as the initial bounded specification.
