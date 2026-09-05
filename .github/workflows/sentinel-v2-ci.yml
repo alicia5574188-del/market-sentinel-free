@@ -101,7 +101,7 @@ jobs:
             if [[ "$code" == "200" ]] && jq -e '
               .ok == true and
               .schedulerError == null and
-              .schedulers.position.state == "live" and
+              (.schedulers.position.state == "live" or .schedulers.position.state == "starting") and
               .schedulers.position.lastError == null and
               (.schedulers.scanner.state == "live" or .schedulers.scanner.state == "starting") and
               .schedulers.scanner.lastSuccessAt != null and
@@ -120,7 +120,7 @@ jobs:
             jq -e '
               .ok == true and
               .schedulerError == null and
-              .schedulers.position.state == "live" and
+              (.schedulers.position.state == "live" or .schedulers.position.state == "starting") and
               .schedulers.position.lastError == null and
               (.schedulers.scanner.state == "live" or .schedulers.scanner.state == "starting") and
               .schedulers.scanner.lastSuccessAt != null and

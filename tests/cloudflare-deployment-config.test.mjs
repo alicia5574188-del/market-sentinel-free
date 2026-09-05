@@ -86,3 +86,10 @@ test("Worker serves public bundles from ASSETS before the app router", async () 
   const appRouter = source.indexOf("return handler.fetch(request, env, ctx)");
   assert.ok(publicAssetBranch >= 0 && assetFetch > publicAssetBranch && appRouter > assetFetch);
 });
+
+test("production health verification accepts a scheduler while its normal alarm is running", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/sentinel-v2-ci.yml", import.meta.url), "utf8");
+  const accepted = /\(\.schedulers\.position\.state == "live" or \.schedulers\.position\.state == "starting"\)/g;
+  assert.equal(workflow.match(accepted)?.length, 2);
+  assert.doesNotMatch(workflow, /\.schedulers\.position\.state == "live" and/);
+});
