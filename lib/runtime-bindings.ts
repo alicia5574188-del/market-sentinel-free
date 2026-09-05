@@ -10,6 +10,7 @@ export type RuntimeBindings = {
   BACKGROUND_MODE?: string;
   SITE_OWNER_EMAIL?: string;
   OWNER_ACCESS_TOKEN?: string;
+  CUTOVER_PREFLIGHT_TOKEN?: string;
   POSITION_MONITOR?: DurableObjectNamespace<PositionMonitor>;
   MARKET_SCANNER?: DurableObjectNamespace<MarketScanner>;
   LIVE_TRADING_COORDINATOR?: DurableObjectNamespace<LiveTradingCoordinator>;

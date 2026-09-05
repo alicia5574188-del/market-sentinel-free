@@ -39,6 +39,7 @@ import {
   ownerSessionValue,
   validOwnerAccessToken,
 } from "../lib/owner-access";
+import { cutoverPreflightTokenMatches } from "../lib/cutover-preflight-auth";
 
 export interface CloudflareEnv {
   ASSETS: Fetcher;
@@ -50,6 +51,7 @@ export interface CloudflareEnv {
   BACKGROUND_MODE?: string;
   SITE_OWNER_EMAIL?: string;
   OWNER_ACCESS_TOKEN?: string;
+  CUTOVER_PREFLIGHT_TOKEN?: string;
   CF_VERSION_METADATA?: { id: string; tag?: string; timestamp?: string };
   POSITION_MONITOR?: DurableObjectNamespace<PositionMonitor>;
   MARKET_SCANNER?: DurableObjectNamespace<MarketScanner>;
@@ -675,6 +677,11 @@ async function ownerProtectedRequest(request: Request, env: CloudflareEnv): Prom
   }
 
   if (isPublicAsset(url.pathname)) return request;
+  if (
+    url.pathname === "/api/live/preflight"
+    && request.method === "GET"
+    && await cutoverPreflightTokenMatches(request, env.CUTOVER_PREFLIGHT_TOKEN)
+  ) return request;
   const secret = env.OWNER_ACCESS_TOKEN;
   if (!validOwnerAccessToken(secret)) return loginPage(false, true);
   if (!(await ownerSessionMatches(request.headers.get("cookie"), secret))) {

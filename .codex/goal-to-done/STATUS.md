@@ -459,3 +459,11 @@ Production #144 visual review found stale decision age labeled as a scheduler fa
 ## Blockers
 
 - None.
+## Temporary cutover CI preflight — verified locally
+
+- Branch `cutover/preflight-ci` adds a same-repository PR-only deploy job after `verify`; it builds and dry-runs, performs one migration-free deploy with a masked random 32-byte bearer secret, then verifies Gate positions, ordinary orders, and price orders are all empty twice five seconds apart.
+- `wrangler secret put` was rejected because Wrangler 4.92 and Cloudflare documentation confirm it immediately creates and deploys another Worker version. The job uses additive `wrangler deploy --secrets-file` so code and token are one deployment and existing secrets are preserved.
+- The Worker and route constrain bearer bypass to GET `/api/live/preflight`; owner viewer access remains. No D1/DO migration or Gate mutation is present.
+- Verified locally: targeted boundary/auth tests, TypeScript, production build, Wrangler production dry-run, and the 121-test `npm test` suite pass.
+- Follow-up hardening adds one shared non-cancelling production lock to normal deploy and preflight deploy, rejects stale PR bases and any D1/DO/deployment-config diff, and scopes the Cloudflare credential only to Wrangler-bearing steps. Before the temporary deploy it captures a single 100% production version; cleanup always attempts secret deletion then rollback, and proves the secret is absent, traffic is 100% on the baseline, and the old bearer no longer receives HTTP 200.
+- The bearer format includes its epoch-second issue time and 32 random bytes; the server rejects future tokens and tokens older than 20 minutes. The 25-minute job gives the deploy/check body a 15-minute deadline and bounded cleanup commands the remaining ten minutes. Final revocation proof requires exact HTTP 401, and Wrangler 4.92 secret inspection uses `--format json`.

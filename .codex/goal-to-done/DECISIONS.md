@@ -1,5 +1,13 @@
 # Decisions
 
+## 2026-09-05 — upload the cutover token with the preflight code version
+
+- Do not call `wrangler secret put`: it immediately creates and deploys a new Worker version, producing an avoidable intermediate production deployment.
+- For the temporary `cutover/preflight-ci` pull request only, generate and mask 32 random bytes after build/dry-run, then use additive `wrangler deploy --secrets-file` to upload code and token together. Do not run migrations in this job.
+- Admit that bearer only at the Worker edge and route for exact GET `/api/live/preflight`, using the existing SHA-256 digest constant-time comparison. Keep ordinary authenticated owner access unchanged.
+- Serialize this exceptional PR deployment with ordinary main deployment under `market-sentinel-production`. Pin the event's exact current `origin/main` SHA and Cloudflare's single 100%-traffic baseline version before deploying. Because secret deletion creates a deployment, cleanup first attempts deletion to invalidate the bearer, then unconditionally rolls back the captured baseline and verifies both final states rather than rebuilding or guessing main.
+- Bound the bearer to 20 minutes from its embedded issue time as a second revocation layer. Bound the deployment/check phase to 15 minutes inside a 25-minute job so cleanup retains ten minutes; a network failure (`000`) is never accepted as proof because final bearer verification requires exact HTTP 401.
+
 ## 2026-09-06 — PAPER持续开仓；五段真实收盘线单图叠加
 
 - 当前历史路径PAPER不再因三连亏或当日模拟亏损进入暂停；持续收集失败与成功样本，风险摘要只报告表现，不把亏损转为零风险。继续强制资金/保证金、单笔4%/组合12%、报价、同币、重复计划、D1、流动性/强平与LIVE关闭边界。

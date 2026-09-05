@@ -15,7 +15,7 @@ on:
 # Production/main runs are never cancelled by a newer PR revision.
 concurrency:
   group: sentinel-v2-ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.head_ref != 'cutover/preflight-ci' }}
 
 permissions:
   contents: read
@@ -53,16 +53,10 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    concurrency:
+      group: market-sentinel-production
+      cancel-in-progress: false
     steps:
-      - name: Verify deployment credential
-        shell: bash
-        run: |
-          if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
-            echo "::error::CLOUDFLARE_API_TOKEN repository secret is missing"
-            exit 1
-          fi
       - name: Checkout
         uses: actions/checkout@v4
       - name: Setup Node
@@ -75,8 +69,12 @@ jobs:
       - name: Build release
         run: npm run build
       - name: Apply additive D1 migrations
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: npx wrangler d1 migrations apply DB --remote --config wrangler.jsonc
       - name: Deploy Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: npx wrangler deploy --config dist/server/wrangler.json
       - name: Verify immutable asset and bounded health
         shell: bash
@@ -133,6 +131,8 @@ jobs:
           done
       - name: Verify paper strategy cutover
         shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
           expected_version="$(sed -n 's/^export const DIRECT_MARKET_BRAIN_VERSION = "\([^"]*\)";.*/\1/p' lib/direct-market-types.ts)"
@@ -156,13 +156,204 @@ jobs:
           done
           [[ "$cutover_ready" == "1" ]]
 
+  cutover_preflight:
+    if: github.event_name == 'pull_request' && github.head_ref == 'cutover/preflight-ci' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    concurrency:
+      group: market-sentinel-production
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Lock preflight to the current main and immutable deployment config
+        shell: bash
+        env:
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          origin_main="$(git rev-parse origin/main)"
+          [[ "$EVENT_BASE_SHA" == "$origin_main" ]]
+          git merge-base --is-ancestor "$origin_main" HEAD
+          if ! git diff --quiet "$origin_main"...HEAD -- \
+            wrangler.jsonc drizzle drizzle.config.ts db vite.config.ts \
+            scripts/build-verified.sh package.json package-lock.json; then
+            echo "::error::Preflight PR must not change D1, Durable Object, dependency, or generated deployment configuration"
+            exit 1
+          fi
+          echo "PREFLIGHT_BASE_SHA=$origin_main" >> "$GITHUB_ENV"
+      - name: Start bounded preflight body
+        shell: bash
+        run: echo "PREFLIGHT_BODY_DEADLINE=$(( $(date +%s) + 900 ))" >> "$GITHUB_ENV"
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+          cache: npm
+      - name: Install
+        run: |
+          remaining="$(( PREFLIGHT_BODY_DEADLINE - $(date +%s) ))"
+          (( remaining > 0 ))
+          timeout "${remaining}s" npm ci
+      - name: Build and dry-run preflight release
+        run: |
+          remaining="$(( PREFLIGHT_BODY_DEADLINE - $(date +%s) ))"
+          (( remaining > 0 ))
+          timeout "${remaining}s" npm run build
+          remaining="$(( PREFLIGHT_BODY_DEADLINE - $(date +%s) ))"
+          (( remaining > 0 ))
+          timeout "${remaining}s" npx wrangler deploy --dry-run --config dist/server/wrangler.json
+      - name: Generate ephemeral preflight token
+        shell: bash
+        run: |
+          set -euo pipefail
+          issued_at="$(date +%s)"
+          cutover_token="$issued_at.$(openssl rand -hex 32)"
+          echo "::add-mask::$cutover_token"
+          echo "CUTOVER_PREFLIGHT_TOKEN=$cutover_token" >> "$GITHUB_ENV"
+      - name: Capture single-version production baseline
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]]
+          remaining="$(( PREFLIGHT_BODY_DEADLINE - $(date +%s) ))"
+          (( remaining > 0 ))
+          timeout "${remaining}s" npx wrangler deployments status --name market-sentinel-free --json \
+            > "$RUNNER_TEMP/cutover-baseline.json"
+          jq -e '
+            (.versions | length) == 1 and
+            .versions[0].percentage == 100 and
+            (.versions[0].version_id | type == "string" and length > 0)
+          ' "$RUNNER_TEMP/cutover-baseline.json" >/dev/null
+          baseline_version_id="$(jq -er '.versions[0].version_id' "$RUNNER_TEMP/cutover-baseline.json")"
+          echo "BASELINE_VERSION_ID=$baseline_version_id" >> "$GITHUB_ENV"
+      - name: Deploy read-only preflight with token
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]]
+          secrets_file="$RUNNER_TEMP/cutover-preflight-secrets.json"
+          trap 'rm -f "$secrets_file"' EXIT
+          jq -n --arg token "$CUTOVER_PREFLIGHT_TOKEN" \
+            '{CUTOVER_PREFLIGHT_TOKEN: $token}' > "$secrets_file"
+          chmod 600 "$secrets_file"
+          remaining="$(( PREFLIGHT_BODY_DEADLINE - $(date +%s) ))"
+          (( remaining > 0 ))
+          timeout "${remaining}s" npx wrangler deploy --config dist/server/wrangler.json \
+            --secrets-file "$secrets_file"
+      - name: Verify Gate inventories twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://market-sentinel-free.alicia5574188.workers.dev"
+          validate_preflight() {
+            local output="$1"
+            local code now_ms min_ms max_ms remaining
+            remaining="$(( PREFLIGHT_BODY_DEADLINE - $(date +%s) ))"
+            (( remaining > 0 ))
+            code="$(curl -sS --max-time 20 -o "$output" -w '%{http_code}' \
+              -H "Authorization: Bearer $CUTOVER_PREFLIGHT_TOKEN" \
+              "$base/api/live/preflight" || true)"
+            [[ "$code" == "200" ]]
+            now_ms="$(( $(date +%s) * 1000 ))"
+            min_ms="$(( now_ms - 120000 ))"
+            max_ms="$(( now_ms + 30000 ))"
+            jq -e --argjson min "$min_ms" --argjson max "$max_ms" '
+              .safeToCutover == true and
+              .counts.positions == 0 and
+              .counts.openOrders == 0 and
+              .counts.priceOrders == 0 and
+              .activeContracts == [] and
+              (.checkedAt | type == "number") and
+              .checkedAt >= $min and .checkedAt <= $max
+            ' "$output" >/dev/null
+          }
+
+          validate_preflight /tmp/cutover-preflight-first.json
+          first_checked_at="$(jq -r '.checkedAt' /tmp/cutover-preflight-first.json)"
+          sleep 5
+          validate_preflight /tmp/cutover-preflight-second.json
+          jq -e --argjson first "$first_checked_at" '.checkedAt > $first' \
+            /tmp/cutover-preflight-second.json >/dev/null
+          jq -c '{counts, activeContracts, checkedAt, safeToCutover}' \
+            /tmp/cutover-preflight-second.json | tee cutover-preflight-summary.json
+      - name: Always attempt token revocation and baseline rollback
+        if: always()
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]]
+          [[ -n "${BASELINE_VERSION_ID:-}" ]]
+
+          set +e
+          CI=true timeout 180s npx wrangler secret delete CUTOVER_PREFLIGHT_TOKEN \
+            --name market-sentinel-free
+          secret_delete_rc="$?"
+          timeout 180s npx wrangler rollback "$BASELINE_VERSION_ID" \
+            --name market-sentinel-free \
+            --message "Restore production baseline after read-only Gate cutover preflight" \
+            --yes
+          rollback_rc="$?"
+          set -e
+          echo "Preflight cleanup action status: secret-delete=$secret_delete_rc rollback=$rollback_rc"
+      - name: Always verify Cloudflare cleanup state
+        if: always()
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]]
+          [[ -n "${BASELINE_VERSION_ID:-}" ]]
+          timeout 60s npx wrangler secret list --name market-sentinel-free --format json \
+            > "$RUNNER_TEMP/cutover-secrets-after-cleanup.json"
+          if jq -e '.[] | select(.name == "CUTOVER_PREFLIGHT_TOKEN")' \
+            "$RUNNER_TEMP/cutover-secrets-after-cleanup.json" >/dev/null; then
+            echo "::error::CUTOVER_PREFLIGHT_TOKEN still exists after cleanup"
+            exit 1
+          fi
+
+          timeout 60s npx wrangler deployments status --name market-sentinel-free --json \
+            > "$RUNNER_TEMP/cutover-deployment-after-cleanup.json"
+          jq -e --arg baseline "$BASELINE_VERSION_ID" '
+            (.versions | length) == 1 and
+            .versions[0].percentage == 100 and
+            .versions[0].version_id == $baseline
+          ' "$RUNNER_TEMP/cutover-deployment-after-cleanup.json" >/dev/null
+          echo "CLOUDFLARE_CLEANUP_VERIFIED=1" >> "$GITHUB_ENV"
+      - name: Always verify bearer bypass is inactive
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${CLOUDFLARE_CLEANUP_VERIFIED:-}" == "1" ]]
+          code="$(curl -sS --max-time 20 -o /tmp/cutover-preflight-after-cleanup.json -w '%{http_code}' \
+            -H "Authorization: Bearer $CUTOVER_PREFLIGHT_TOKEN" \
+            "https://market-sentinel-free.alicia5574188.workers.dev/api/live/preflight" || true)"
+          [[ "$code" == "401" ]]
+      - name: Upload safe preflight summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: cutover-preflight-summary-${{ github.run_id }}
+          path: cutover-preflight-summary.json
+          retention-days: 1
+          if-no-files-found: error
+
   operations:
     if: always() && (needs.deploy.result == 'success' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     needs: [verify, deploy]
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -175,4 +366,6 @@ jobs:
         run: node scripts/check-production.mjs health
       - name: Audit account-wide D1 reads and writes
         if: always()
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: node scripts/check-production.mjs d1
