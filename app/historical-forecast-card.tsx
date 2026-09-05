@@ -2,7 +2,7 @@ import type { HistoricalForecast } from "../lib/historical-forecast";
 
 type Candle = { close: number };
 const signed = (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(2)}%`;
-function date(time: number) { return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(time); }
+function date(time: number) { return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(time); }
 
 export function HistoricalForecastCard({ symbol, forecast, candles }: { symbol: string; forecast: HistoricalForecast; candles: Candle[] }) {
   const current = candles.slice(-24), anchor = current.at(-1)?.close ?? 0;
@@ -17,6 +17,7 @@ export function HistoricalForecastCard({ symbol, forecast, candles }: { symbol: 
   return <article className="rz-panel rz-strategy-performance">
     <div className="rz-strategy-head"><div><strong>{symbol.replace("_USDT", "")} · 历史相似预测</strong><small>观察最近两小时 · 推演未来一小时 · {forecast.signalAt ? date(forecast.signalAt) : "等待数据"}</small></div><span>{forecast.state === "READY" ? "模拟验证" : forecast.state === "STALE" ? "行情延迟" : forecast.historyBars < 60 ? "历史数据不足" : "相似依据不足"}</span></div>
     <p>{forecast.reason}</p>
+    {forecast.archive && <p>{forecast.archive.storedBars == null ? "历史库暂时无法读取" : `本地已存 ${forecast.archive.storedBars} 根K线`}{forecast.archive.from ? `，最早 ${date(forecast.archive.from)}` : ""}。{forecast.archive.note}。本轮检索 {forecast.archive.searchedBars} 根，较早历史分批轮换参与匹配。</p>}
     {forecast.state === "READY" && <>
       <svg viewBox="0 0 470 204" style={{ width: "100%", display: "block" }} role="img" aria-label="最新两小时与历史相似走势对照，右侧为历史后续分布，不是确定预测">
         <line x1="18" x2="442" y1={y(0)} y2={y(0)} stroke="#63708a" strokeDasharray="3 4" />

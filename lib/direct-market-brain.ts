@@ -2,6 +2,7 @@ import type { MarketAnalysisPacket } from "./exchange-market.ts";
 import { DIRECT_MARKET_BRAIN_VERSION, type DirectMarketCandidate } from "./direct-market-types.ts";
 import type { Hte31Candle } from "./hte31-types.ts";
 import { buildHistoricalForecast, cleanAnalogCandles, candleTimeMs, type AnalogEvent } from "./historical-forecast.ts";
+import type { ArchiveProgress } from "./historical-archive.ts";
 
 function mean(xs: number[]) { return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0; }
 export function pearsonCorrelation(leftCandles: Hte31Candle[], rightCandles: Hte31Candle[]) {
@@ -20,6 +21,7 @@ export function pearsonCorrelation(leftCandles: Hte31Candle[], rightCandles: Hte
 export function buildDirectMarketCandidate(input: {
   packet: MarketAnalysisPacket; candles: Hte31Candle[]; btcCandles: Hte31Candle[];
   volumeRank: number; batchId: string; roundTripCostBps?: number; events?: AnalogEvent[];
+  archive?: ArchiveProgress;
   marketContext?: { benchmarkMomentum: number | null; advancingRatio: number; decliningRatio: number };
 }): DirectMarketCandidate {
   const { packet } = input, now = packet.observedAt, candles = cleanAnalogCandles(input.candles, now);
@@ -40,6 +42,7 @@ export function buildDirectMarketCandidate(input: {
   const structuralStop = side === "LONG" ? longStop : shortStop;
   const stopDistance = (side === "LONG" ? 1 : -1) * (price - structuralStop);
   forecast = buildHistoricalForecast({ candles, now, events: input.events, costBps: forecast.costBps, stopPct: stopDistance / price * 100 });
+  forecast.archive = input.archive;
   const support = side === "LONG" ? forecast.upPct : forecast.downPct;
   const checks = [
     { key: "setup", label: "历史相似预测", passed: forecast.side !== "WAIT", detail: forecast.reason },
@@ -68,7 +71,7 @@ export function buildDirectMarketCandidate(input: {
     setupEvaluations: [{ setup, setupLabel, side, score: support, triggered: forecast.side !== "WAIT", qualified: ready, selected: true, blockers: counterEvidence }],
     decision: ready ? side : "WAIT", entryZone: ready ? [price - halfWidth, price + halfWidth] : null,
     invalidationPrice: ready ? structuralStop : null, targets: ready ? [price + sign * target * 0.5, price + sign * target] : [],
-    evidence: [`最近两小时对照过去两周，预测未来一小时；${forecast.sampleCount} 个不重叠历史片段`,
+    evidence: [`最近两小时对照本地历史，预测未来一小时；${forecast.sampleCount} 个不重叠历史片段`,
       `历史上涨 ${forecast.upPct.toFixed(1)}% / 下跌 ${forecast.downPct.toFixed(1)}% / 成本内波动 ${forecast.neutralPct.toFixed(1)}%，不是保证胜率`,
       `后续涨跌中位数 ${forecast.medianPct.toFixed(2)}%，按止损与费用重放期望 ${forecast.netEdgeR.toFixed(2)} 倍风险`, forecast.eventContext],
     counterEvidence, checks, candles5m: candles.slice(-96), forecast,

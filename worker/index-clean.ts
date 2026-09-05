@@ -37,3 +37,4 @@ export class MarketScanner extends LegacySchedulerTombstone {}
 export class MarketScannerV2 extends LegacySchedulerTombstone {}
 
 export { HTE31MarketScanner, HTE31TradeManager } from "./hte31-recovery-manager";
+export { HistoricalArchive } from "./historical-archive";

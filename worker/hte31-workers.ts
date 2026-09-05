@@ -208,8 +208,16 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
     let current = job;
     for (let stepIndex = 0; stepIndex < maxSteps; stepIndex += 1) {
       try {
-        const step = await runHte31ScanStep(current, (symbol, now) =>
-          loadHistoricalForecastCandles(this.ctx.storage, fetchGateChartCandles, symbol, now));
+        const step = await runHte31ScanStep(current, async (symbol, now) => {
+          const recent = await loadHistoricalForecastCandles(this.ctx.storage, fetchGateChartCandles, symbol, now);
+          try {
+            if (!this.env.HISTORICAL_ARCHIVE) throw new Error("长期历史库尚未连接");
+            return await this.env.HISTORICAL_ARCHIVE.getByName(`history:${symbol}`).history(symbol, now, recent);
+          } catch {
+            return { candles: recent, archive: { storedBars: null, from: null, to: null, searchedBars: recent.length,
+              nextBackfillAt: 0, note: "长期历史库暂不可用，本轮使用已取得的近期行情；历史存量暂不可读" } };
+          }
+        });
         if (step.kind !== "progress") return step;
         current = step.job;
       } catch (error) {

@@ -49,7 +49,8 @@ test("only historical prediction emits new signals; retired setup scores cannot 
 });
 
 test("configured scan coverage and risk-based capacity reach the production boundary", () => {
-  assert.match(scanner, /fetchUniverse\(job\.settings\.universeLimit, \[\]\)/);
+  assert.match(scanner, /fetchUniverse\(1, HISTORICAL_UNIVERSE\)/);
+  assert.match(scanner, /historicalUniverse\(fetched\)/);
   assert.match(scanner, /chooseDirectMarketTarget\(universe, job\.rotationOffset, job\.lastObservedAt\)/);
   assert.match(worker, /candidate\.observedAt\]\)\)/);
   assert.doesNotMatch(worker, /universe\.slice\(0, 15\)/);

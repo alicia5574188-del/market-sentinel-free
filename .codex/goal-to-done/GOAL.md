@@ -1,5 +1,9 @@
 # Goal
 
+## Current goal — long-term historical archive and fixed small universe
+
+- Continuously retrieve earlier available K-lines at a controlled pace, retain them across upgrades, reuse them locally for historical forecasting, and limit scanning to six stable coins. Expose real progress, enforce request/write/storage budgets and preserve current account/risk/CI/Cloudflare paths. Do not wait for all history to finish before valid predictions can trade.
+
 ## Current bounded correction — distinguish data from insufficient matches
 
 - Explain the observed zero-entry state from actual production data, repair incomplete historical caching, and simplify empty statistics and12h summaries. Preserve evidence and risk gates; reuse authorized CI/deploy without a new paper epoch.

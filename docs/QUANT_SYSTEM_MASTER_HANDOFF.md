@@ -1,3 +1,7 @@
+> 2026-09-05 persistent history prepared: fixed six coins; stable per-symbol daily archive and throttled72h backfill, no14-day retention cutoff. Older history rotates through bounded local matching. No new epoch/threshold/live change. STATUS records release proof.
+
+> Production verification: PR #142 / main b6075da3 / run33961439540 all passed. Browser confirms compact sparse-analog UI; no threshold/epoch change or frequency claim. See STATUS and PR comment.
+
 > 2026-09-05 follow-up: production AKE has4031 history bars but1/8 matches; it is not a12h storage wait. Compact empty-state UI and bounded cache gap repair are prepared; see STATUS for release proof. No threshold/epoch/risk change.
 
 # Market Sentinel / Resonance — Quant System Master Handoff
