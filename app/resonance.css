@@ -145,6 +145,17 @@ button { color: inherit; }
 .rz-strategy-numbers span { display:block; color:var(--rz-muted); font-size:10px; }
 .rz-strategy-numbers b { display:block; margin-top:4px; font-size:14px; overflow-wrap:anywhere; }
 .rz-strategy-performance p,.rz-twelve-review p { color:var(--rz-muted); font-size:12px; line-height:1.55; margin:12px 0 0; }
+.rz-kline-current { margin-top:14px; padding:10px; border-radius:14px; background:rgba(7,11,20,.38); }
+.rz-kline-current > strong,.rz-kline-title strong { display:block; font-size:13px; }
+.rz-kline-current svg,.rz-kline-match svg { display:block; width:100%; margin-top:5px; }
+.rz-kline-title { display:flex; justify-content:space-between; gap:10px; align-items:flex-end; margin-top:14px; }
+.rz-kline-title small { color:var(--rz-muted); font-size:10px; text-align:right; line-height:1.4; }
+.rz-kline-list { display:grid; gap:8px; margin:8px 0; }
+.rz-kline-match { padding:8px 10px 4px; border:1px solid var(--rz-line); border-radius:14px; background:rgba(7,11,20,.3); }
+.rz-kline-match header { display:flex; justify-content:space-between; gap:8px; align-items:center; }
+.rz-kline-match header strong { font-size:11px; }
+.rz-kline-match header span { color:var(--rz-muted); font-size:10px; text-align:right; }
+.rz-kline-empty { min-height:90px; display:grid; place-items:center; color:var(--rz-muted); font-size:11px; }
 .rz-review-title { display:flex; align-items:flex-start; gap:12px; margin-bottom:14px; }
 .rz-review-title strong { flex:1; font-size:19px; }
 .rz-review-title small { color:var(--rz-muted); white-space:nowrap; }
@@ -253,6 +264,8 @@ button { color: inherit; }
   .rz-strategy-head > div { flex-basis: 100%; }
   .rz-review-title strong { flex-basis: 100%; }
   .rz-review-title small { white-space: normal; }
+  .rz-kline-title,.rz-kline-match header { align-items:flex-start; flex-direction:column; }
+  .rz-kline-title small,.rz-kline-match header span { text-align:left; }
 }
 
 /* Short-duration operator surface: one account, one decision, existing data only. */

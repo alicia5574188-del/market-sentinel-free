@@ -79,12 +79,12 @@ export function buildScalpCandidate(input: {symbol:string; candles:Hte31Candle[]
     counterEvidence:blockers,checks,candles5m:aggregateMinutes(cs,5),forecast:input.forecast,assetRegime:'intraday-trend',maxHoldingMinutes:15,
     scalp:{signalAt:last?minuteTime(last)+60_000:0,structureAt:pullback[0]?minuteTime(pullback[0]):0,signalKey:`${input.symbol}:${side}:${pullback[0]?minuteTime(pullback[0]):0}`,costBps:scalpCostBps(input.costBps),confirmationPrice:prior?(sign===1?Math.max(prior.open,prior.close):Math.min(prior.open,prior.close)):signalPrice}};
 }
-export function scalpEntryRisk(input:{equity:number;dayOpeningEquity:number;dayNet:number;lastClosed:{net:number;exitAt:number}[];now:number;latchedUntil?:number}) {
+export function scalpEntryRisk(input:{equity:number;dayOpeningEquity:number;dayNet:number;lastClosed:{net:number;exitAt:number}[];now:number;latchedUntil?:number}, policy:{dailyLossRate:number;lossPauseMs:number}=SCALP_POLICY) {
   if ((input.latchedUntil??0)>input.now) return '当日亏损保护已生效，次日再评估';
   if (![input.equity,input.dayOpeningEquity,input.dayNet,input.now].every(Number.isFinite) || !(input.equity>0&&input.dayOpeningEquity>0)) return '账户权益不可用';
-  if(input.dayNet<=-input.dayOpeningEquity*SCALP_POLICY.dailyLossRate) return '当日净亏损达到1.5%，停止新开仓';
+  if(input.dayNet<=-input.dayOpeningEquity*policy.dailyLossRate) return `当日净亏损达到${(policy.dailyLossRate*100).toFixed(1)}%，停止新开仓`;
   const last=input.lastClosed.slice(0,3);
-  if(last.length===3&&last.every(c=>c.net<0)&&input.now-last[0].exitAt<SCALP_POLICY.lossPauseMs) return '连续三笔亏损，暂停新开仓三十分钟';
+  if(last.length===3&&last.every(c=>c.net<0)&&input.now-last[0].exitAt<policy.lossPauseMs) return '连续三笔亏损，暂停新开仓三十分钟';
   return null;
 }
 export function evaluateScalpPosition(input:{side:'LONG'|'SHORT';entryPrice:number;initialStopPrice:number;currentStopPrice:number;entryAt:number;currentPrice:number;observedAt:number;roundTripCostBps:number;candles:Hte31Candle[];confirmationPrice:number}):DirectPositionDecision {

@@ -5,7 +5,8 @@ import { cleanAnalogCandles, ANALOG_MIN_SAMPLES, historicalSwingVotes } from './
 import { minuteTime,scalpCostBps } from './scalp-strategy.ts';
 import {DIRECT_POSITION_POLICY_VERSION,type DirectPositionDecision} from './direct-market-position-brain.ts';
 export const ANALOG_POSITION_POLICY='analog-path-exit-v2';
-export const ANALOG_MIN_NET_REWARD_R=1.2;
+export const ANALOG_MIN_NET_REWARD_R=0.8;
+export const ANALOG_RISK_POLICY={riskRate:.01,portfolioRiskRate:.03,dailyLossRate:.03,lossPauseMs:30*60_000} as const;
 export const completeFiveMinutes=(rows:Hte31Candle[],now:number)=>cleanAnalogCandles(rows,now).slice(-400);
 const mean=(xs:number[])=>xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:0;
 const quantile=(xs:number[],p:number)=>{const a=[...xs].sort((x,y)=>x-y);if(!a.length)return 0;const t=(a.length-1)*p,i=Math.floor(t);return a[i]+(a[Math.ceil(t)]-a[i])*(t-i);};
@@ -103,10 +104,10 @@ export function buildAnalogCandidate(input:{symbol:string;candles:Hte31Candle[];
   :[entry*(1-chasePct/100),entry*(1+betterPct/100)];
  const data=cs.length>=24&&cs.slice(-24).every((c,i,a)=>i===0||minuteTime(c)-minuteTime(a[i-1])===300_000)&&!!last&&input.now-minuteTime(last)-300_000<300_000;
  const priceReady=!!plan&&input.price>=zone[0]&&input.price<=zone[1];
- const reason=!data?'五分钟行情不完整或延迟':bias.side==='WAIT'?bias.reason:!plan?'历史保护距离超过2%，或扣费后目标不足1.2倍完整风险，暂不开单':!priceReady?`${plan.mode==='PULLBACK'?'等待先反向到':'等待回到入场区'} ${entry.toPrecision(7)}；最多等待十五分钟`:`${bias.reason}，当前价格可直接入场`;
+ const reason=!data?'五分钟行情不完整或延迟':bias.side==='WAIT'?bias.reason:!plan?'历史保护距离超过2%，或扣费后目标不足0.8倍完整风险，暂不开单':!priceReady?`${plan.mode==='PULLBACK'?'等待先反向到':'等待回到入场区'} ${entry.toPrecision(7)}；最多等待十五分钟`:`${bias.reason}，当前价格可直接入场`;
  const checks=[{key:'data',label:'行情完整',passed:data,detail:'仅使用完整连续五分钟K线'},
  {key:'history-direction',label:'历史总体方向',passed:bias.side!=='WAIT',detail:bias.reason},
- {key:'setup',label:'历史路径保护',passed:!!plan,detail:plan?`扣费后目标至少1.2倍完整风险；历史目标命中${plan.takeProfitPct.toFixed(0)}%，净亏结束${plan.lossPct.toFixed(0)}%，保本保护${plan.protectedExitPct.toFixed(0)}%，含费回放${plan.expectedNetR.toFixed(2)}风险倍数仅用于学习`:'历史保护距离超过2%，或扣费后目标不足1.2倍完整风险'},
+ {key:'setup',label:'历史路径保护',passed:!!plan,detail:plan?`扣费后目标至少0.8倍完整风险；历史目标命中${plan.takeProfitPct.toFixed(0)}%，净亏结束${plan.lossPct.toFixed(0)}%，保本保护${plan.protectedExitPct.toFixed(0)}%，含费回放${plan.expectedNetR.toFixed(2)}风险倍数仅用于学习`:'历史保护距离超过2%，或扣费后目标不足0.8倍完整风险'},
  {key:'liquidity',label:'流动性',passed:input.volumeUsd>=12_000_000,detail:'固定币池仍须有可交易成交额'},
  {key:'entry-price',label:'入场价格',passed:priceReady,detail:reason}];
  const ready=checks.every(c=>c.passed),score=checks.filter(c=>c.passed).length/checks.length*100;
@@ -137,5 +138,6 @@ export function evaluateAnalogPosition(input:{side:'LONG'|'SHORT';entryPrice:num
 }
 export function analogRiskAllocation(equity:number,usedRisk:number,remainingSymbols:number,correlated:boolean) {
  if(!Number.isFinite(equity)||equity<=0||!Number.isFinite(usedRisk)||usedRisk<0||!Number.isFinite(remainingSymbols))return 0;
- return Math.min(.0025,Math.max(0,equity*.0075-usedRisk)/equity/Math.max(1,remainingSymbols))*(correlated?.5:1);
+ const availableRate=Math.max(0,equity*ANALOG_RISK_POLICY.portfolioRiskRate-usedRisk)/equity;
+ return Math.min(ANALOG_RISK_POLICY.riskRate,availableRate)*(correlated?.5:1);
 }

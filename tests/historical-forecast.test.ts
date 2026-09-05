@@ -30,11 +30,14 @@ function candidate(sign = 1) {
 
 test("analog evidence uses complete disjoint historical episodes with outcomes purged before current input", () => {
   const f = forecast();
-  assert.equal(f.state, "READY"); assert.equal(f.side, "LONG"); assert.equal(f.sampleCount, 20);
-  assert.ok(f.effectiveSamples >= 8); assert.ok(f.netEdgeR > 0);
+  assert.equal(f.state, "READY"); assert.equal(f.side, "LONG"); assert.equal(f.sampleCount, 5);
+  assert.ok(f.effectiveSamples >= 4.5); assert.ok(f.netEdgeR > 0);
   assert.equal(Math.round(f.upPct + f.downPct + f.neutralPct), 100);
   assert.ok(f.matches.every((m) => m.futureTo <= now - 120 * 60_000));
   for (const m of f.matches) for (const n of f.matches) if (m !== n) assert.ok(m.futureTo <= n.from || n.futureTo <= m.from);
+  assert.equal(f.matches.length, 5);
+  assert.ok(f.matches.every((m) => m.candles?.length === 36));
+  assert.ok(f.matches.every((m) => m.candles?.every((c) => c.open > 0 && c.high >= Math.max(c.open, c.close) && c.low <= Math.min(c.open, c.close))));
   assert.equal(f.path.length, 13);
   const reverse = forecast(history(-1)); assert.equal(reverse.side, "SHORT");
 });

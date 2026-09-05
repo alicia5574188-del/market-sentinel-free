@@ -1,3 +1,7 @@
+## 2026-09-06 — V13 PR验证通过，生产仍为V12
+
+PR #158 head `d090ce5` 的本地全套测试与 workflow `33984216762` 已通过。V13固定最相似5段并传输/展示每段真实24+12根OHLC；历史路径PAPER风险1%/组合3%，经济边界0.8R，其他安全边界及LIVE关闭保留。真实12小时回放42信号、21完成、7胜、+2.891R，另2笔未完成；这是有限PAPER证据，不是盈利保证。尚未合并部署前，生产仍是下述V12。
+
 ## 2026-09-06 — 当前生产状态：V12运行中
 
 生产main `03e5c7b`，Worker version `89059834-10fd-4ebc-87d6-c26bd585f906`。workflow `33981949818` verify/deploy/operations全绿；0030完成，active brain为 `direct-market-brain-v12-majority-path-learning`，target为空，legacy open PAPER为0。无人打开页面时scanner和position时间均推进；验收时scanner live、6/6币完成、无错误，UTC日D1写2051、向外取整24h写2974，低于65000安全线。

@@ -1,6 +1,6 @@
 import type { Hte31Candle } from "./hte31-types.ts";
 
-export const DIRECT_MARKET_BRAIN_VERSION = "direct-market-brain-v12-majority-path-learning";
+export const DIRECT_MARKET_BRAIN_VERSION = "direct-market-brain-v13-five-analog-candles";
 export const DIRECT_MARKET_AUTHORITY = "direct_market_brain" as const;
 
 export type DirectMarketSide = "LONG" | "SHORT" | "WAIT";

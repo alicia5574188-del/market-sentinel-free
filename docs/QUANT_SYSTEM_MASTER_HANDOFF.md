@@ -30,6 +30,8 @@ PR #156 / main `03e5c7b` / workflow `33981949818` 的验证、0030增量迁移�
 
 > 2026-09-05 follow-up: production AKE has4031 history bars but1/8 matches; it is not a12h storage wait. Compact empty-state UI and bounded cache gap repair are prepared; see STATUS for release proof. No threshold/epoch/risk change.
 
+> **2026-09-06 V13 prepared and PR-verified, not deployed yet.** PR #158 head `d090ce5`, workflow `33984216762` passed. Exactly five closest independent analog episodes now own vote/target/replay and expose raw 24+12 OHLC candlesticks in the top UI. Current analog PAPER risk is 1% per trade / 3% portfolio without six-symbol pre-allocation; correlated exposure halves. Executable reward/full-risk boundary is 0.8R, while the 2% stop cap and all data/quote/liquidity/account/D1/LIVE boundaries remain. Bounded 12h replay: 42 signals, 21 closed, 7 wins, +2.891R, 2 open. This is limited evidence, not a profit promise. Production remains V12 until merge/deploy proof.
+
 # Market Sentinel / Resonance — Quant System Master Handoff
 
 > **2026-09-05 V7 production verified.** PR #141 / main `16834018` / workflow `33952777266` verify+deploy+operations passed. Worker `2dd398ad-49e0-47a8-9b31-2c25838ddf45`, page `DQDbO0mL`. PAPER active V7, target null, no legacy holdings. Scanner and position scheduling advanced. Account rounded-out24h D1:1,038,542reads/4,159writes at07:34:45Z. Analog frequency/profit remains unproven; normal production history hydrates per symbol. STATUS and PR comment contain proof; do not redeploy solely to record it.
