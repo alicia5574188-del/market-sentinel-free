@@ -14,6 +14,7 @@ export type HistoricalForecast = {
   historyFrom: number | null;
   historyTo: number | null;
   historyBars: number;
+  missingHistoryBars?: number;
   windowMinutes: number;
   horizonMinutes: number;
   sampleCount: number;
@@ -85,15 +86,18 @@ function contiguous(rows: Hte31Candle[]) { return rows.every((r, i) => i === 0 |
 export function buildHistoricalForecast(input: { candles: Hte31Candle[]; now: number; costBps: number; events?: AnalogEvent[]; stopPct: number }): HistoricalForecast {
   const rows = cleanAnalogCandles(input.candles, input.now);
   const events = input.events ?? [];
+  const expectedBars = (Math.floor(input.now / ANALOG_BAR_MS) - Math.ceil((input.now - ANALOG_HISTORY_MS) / ANALOG_BAR_MS));
+  const missingHistoryBars = Math.max(0, expectedBars - rows.length);
   const signalAt = rows.length ? candleTimeMs(rows.at(-1)!) + ANALOG_BAR_MS : 0;
   const result: HistoricalForecast = {
-    model: "historical-analog-v1", state: "INSUFFICIENT", reason: "历史连续片段不足，正在准备", signalAt,
-    historyFrom: rows.length ? candleTimeMs(rows[0]) : null, historyTo: signalAt || null, historyBars: rows.length,
+    model: "historical-analog-v1", state: "INSUFFICIENT", reason: "可用历史不足，后台正在补取已有行情", signalAt,
+    historyFrom: rows.length ? candleTimeMs(rows[0]) : null, historyTo: signalAt || null, historyBars: rows.length, missingHistoryBars,
     windowMinutes: 120, horizonMinutes: 60, sampleCount: 0, effectiveSamples: 0, similarity: 0,
     upPct: 0, downPct: 0, neutralPct: 0, medianPct: 0, lowerPct: 0, upperPct: 0,
     side: "WAIT", netEdgeR: 0, stopPct: input.stopPct, targetPct: 0,
     costBps: Math.max(0, input.costBps), eventContext: "事件日历为部分覆盖；未收录不代表无事件", path: [], matches: [],
   };
+  if (!rows.length) return { ...result, reason: "尚未取得有效历史行情，后台会继续补取；无需等待12小时总结" };
   if (input.now - signalAt >= ANALOG_BAR_MS || signalAt > input.now) return { ...result, state: "STALE", reason: "最新完整五分钟K线已过期" };
   const currentStart = rows.length - ANALOG_WINDOW;
   if (currentStart < ANALOG_WINDOW + ANALOG_HORIZON) return result;
@@ -159,7 +163,8 @@ export function buildHistoricalForecast(input: { candles: Hte31Candle[]; now: nu
       similarity: s.weight * 100, forwardPct: forwards[i], calendar: `星期${"日一二三四五六"[sc.day]} · ${sc.weekend ? "周末" : "工作日"}`,
       event: eventAt(to, events) ?? "事件资料未覆盖", pathPct: segment.map((r) => (r.close / anchor - 1) * 100) };
   });
-  if (result.sampleCount < ANALOG_MIN_SAMPLES || result.effectiveSamples < ANALOG_MIN_SAMPLES - 0.5) return { ...result, reason: `独立相似片段 ${result.sampleCount}/${ANALOG_MIN_SAMPLES}` };
+  if (result.sampleCount < ANALOG_MIN_SAMPLES || result.effectiveSamples < ANALOG_MIN_SAMPLES - 0.5) return { ...result,
+    reason: `${missingHistoryBars === 0 ? "已读完近14天历史" : `已读取${rows.length}根K线，可用历史不足或有缺口`}；合格相似走势仅${result.sampleCount}/${ANALOG_MIN_SAMPLES}段，暂不开仓。12小时总结不影响开仓。` };
   result.state = "READY";
   const side = result.upPct >= 58 && result.medianPct > costPct ? 1 : result.downPct >= 58 && result.medianPct < -costPct ? -1 : 0;
   if (!side) return { ...result, reason: "相似片段后续方向分散，等待新的完整K线" };

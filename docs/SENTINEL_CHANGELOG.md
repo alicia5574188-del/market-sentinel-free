@@ -1,3 +1,5 @@
+> 2026-09-05 follow-up: production AKE has4031 history bars but1/8 matches; it is not a12h storage wait. Compact empty-state UI and bounded cache gap repair are prepared; see STATUS for release proof. No threshold/epoch/risk change.
+
 # Sentinel Production Change Ledger
 
 ## 2026-09-05 — V7 historical analog, release preparation

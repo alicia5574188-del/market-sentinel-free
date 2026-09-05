@@ -505,14 +505,14 @@ function StrategyPerformanceCard({ setup }: { setup: SetupReview }) {
       <div><strong>{setup.setupLabel}</strong><small>近12小时开仓 {setup.openedTrades12h} · 当前持仓 {setup.openTrades}</small><details><summary>为什么开单或等待</summary><small>全量评估 {setup.evaluations12h} · 原始触发 {setup.triggeredSignals12h} · 通过条件 {setup.qualifiedSignals12h} · 入场拦截 {setup.blockedEntries12h}</small></details></div>
       <span>{setup.status}</span>
     </div>
-    <div className="rz-strategy-numbers">
+    {setup.sampleCount > 0 && <div className="rz-strategy-numbers">
       <div><span>总样本 / 胜率</span><b>{setup.sampleCount} / {setup.winRate == null ? "--" : `${setup.winRate.toFixed(0)}%`}</b></div>
       <div><span>累计贡献</span><b className={setup.netPnlUsdt < 0 ? "rz-negative" : "rz-positive"}>{fmtMoney(setup.netPnlUsdt)}</b></div>
       <div><span>平均风险倍数 / 盈利因子</span><b>{fmtR(setup.averageR)} / {setup.profitFactor == null ? "--" : setup.profitFactor >= 99 ? "∞" : setup.profitFactor.toFixed(2)}</b></div>
       <div><span>实际平均盈 / 亏</span><b>{fmtR(setup.averageWinR)} / {fmtR(setup.averageLossR)}</b></div>
       <div><span>实际盈亏比 / 回撤</span><b>{setup.realizedPayoffRatio == null ? "--" : setup.realizedPayoffRatio.toFixed(2)} / {setup.maxDrawdownR.toFixed(2)}倍</b></div>
       <div><span>最大回撤 / 连亏</span><b>{setup.maxDrawdownR.toFixed(2)}倍 / {setup.maxLosingStreak}</b></div>
-    </div>
+    </div>}
     {setup.latestQualifiedSelection && !setup.latestQualifiedSelection.selected
       ? <p>最近合格信号：{setup.latestQualifiedSelection.symbol.replace("_USDT", "")} · {fmtTime(setup.latestQualifiedSelection.observedAt)}；同币择优采用{setup.latestQualifiedSelection.preferredSetupLabel}，本策略未入选。</p>
       : !setup.latestQualifiedSelection && setup.qualifiedSignals12h > 0 && setup.selectedSignals12h === 0
@@ -829,12 +829,13 @@ export default function ResonancePage() {
         {review?.setups?.length ? <div className="rz-strategy-grid">{review.setups.map((setup) => <StrategyPerformanceCard key={setup.setup} setup={setup} />)}</div> : <Empty>等待首轮策略统计</Empty>}
       </section>
 
-      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">运行总结</span><h2>每12小时总结</h2></div><small>{review?.complete ? "最近完整周期" : `运行中 · ${fmtDuration(review?.coverageMs)}`}</small></div>
+      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">运行总结</span><h2>每12小时总结</h2></div><small>{review?.complete ? "最近完整周期" : "尚未形成完整总结"}</small></div>
         {review ? <article className="rz-panel rz-twelve-review">
-          <div className="rz-review-title"><strong>{operatorText(review.headline)}</strong><small>{fmtTime(review.windowStartAt)} — {fmtTime(review.windowEndAt)}</small></div>
-          <div className="rz-metric-grid"><div className="rz-metric"><span>扫描轮次</span><b>{review.evaluations}</b></div><div className="rz-metric"><span>原始触发</span><b>{review.triggeredSignals}</b></div><div className="rz-metric"><span>通过条件</span><b>{review.qualifiedSignals}</b></div><div className="rz-metric"><span>优先观察（含待确认）</span><b>{review.selectedSignals}</b></div><div className="rz-metric"><span>入场拦截</span><b>{review.blockedEntries}</b></div><div className="rz-metric"><span>开 / 平仓</span><b>{review.openedTrades} / {review.closedTrades}</b></div><div className="rz-metric"><span>净结果</span><b className={review.netPnlUsdt < 0 ? "rz-negative" : "rz-positive"}>{fmtMoney(review.netPnlUsdt)}</b></div></div>
-          <p><strong>下一步：</strong>{operatorText(review.nextAction)}</p>
-        </article> : <Empty>首个12小时总结正在形成</Empty>}
+          <div className="rz-review-title"><strong>{review.complete ? operatorText(review.headline) : "交易持续运行，无需等待总结"}</strong><small>{fmtTime(review.windowStartAt)} — {fmtTime(review.windowEndAt)}</small></div>
+          <p>本窗口开仓 {review.openedTrades} 笔 · 平仓 {review.closedTrades} 笔 · 已实现净收益 <strong className={review.netPnlUsdt < 0 ? "rz-negative" : "rz-positive"}>{fmtMoney(review.netPnlUsdt)}</strong></p>
+          {review.complete && <p><strong>下一步：</strong>{operatorText(review.nextAction)}</p>}
+          <details><summary>查看运行明细</summary><p>已覆盖 {fmtDuration(review.coverageMs)} · 扫描轮次 {review.evaluations} · 原始触发 {review.triggeredSignals} · 通过条件 {review.qualifiedSignals} · 优先观察（含待确认）{review.selectedSignals} · 入场拦截 {review.blockedEntries}</p></details>
+        </article> : <Empty>总结数据正在读取，不影响后台交易</Empty>}
       </section>
 
       <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">模拟账户</span><h2>资金状态</h2></div><button className="rz-text-action" type="button" onClick={() => setTab("管理")}>资金设置</button></div>

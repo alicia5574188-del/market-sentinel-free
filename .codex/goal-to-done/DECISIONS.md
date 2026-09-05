@@ -413,3 +413,10 @@ Record only consequential decisions using this format:
 - Reason: Waiting for a report or twenty samples allowed a losing strategy variant to keep consuming capital, while global throttling would also suppress healthy strategies.
 - Evidence: The execution boundary queries only current-version/current-epoch rows for the exact cell, deduplicates independent event keys, snapshots the guard reason, and tests pause, correlation deduplication, and revalidation.
 - Revisit when: Forward evidence supports different thresholds; never pool correlated orders or unrelated strategies to manufacture the sample count.
+
+## 2026-09-05 — Historical preparation diagnosis and compact summary
+
+- Production browser showed AKE already had4031 valid5m bars from08/22 through09/05, yet only1/8 independent analogs. This observed candidate is similarity-starved, not waiting to accumulate live data or a12h report. Public health showed scanner/position live with no errors. Complete current account/order data was unavailable in the observed partial response; do not infer all-symbol or global counts from it.
+- Reproduced a separate cache defect: fresh80-bar tail prevented any upstream request despite4032 available bars. Repair now checks the whole bounded14d window, retains successful bootstrap pages after a sibling failure, and heals at most one old page alongside the normal current page. No-progress old repairs back off30min; successful repairs can continue after1min. Concurrency remains2 and D1 scan writes remain0.
+- UI hides prediction charts/proportions below the existing8-sample eligibility gate, labels real shortage, hides empty performance grids, and reduces the12h report to actual entries/exits/net results and a completed conclusion. Technical counters remain collapsed.
+- No similarity, direction, edge, risk, order, epoch or live policy changed. This patch does not prove restored trade frequency; AKE's observed sample shortage remains a real trading restriction. Direct local Gate history access was cancelled; no bypass or real-history profitability claim.

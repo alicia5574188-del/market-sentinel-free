@@ -106,6 +106,51 @@ test("history bootstrap is bounded, cached per symbol and updated incrementally 
   assert.equal(calls, 6);
 });
 
+test("fresh latest bars do not prevent repairing truncated history and interior gaps", async () => {
+  const rows = history();
+  for (const previous of [rows.slice(-80), rows.filter((_, i) => i < 2100 || i >= 2400)]) {
+    let cached: unknown = { observedAt: now, candles: previous }, calls = 0;
+    const store = { async get<T>() { return cached as T; }, async put<T>(_key: string, value: T) { cached = value; } };
+    const loaded = await loadHistoricalForecastCandles(store, async (_s, from, to) => {
+      calls++; return rows.filter((r) => r.time * 1000 >= from && r.time * 1000 <= to);
+    }, "BTC_USDT", now);
+    assert.equal(calls, 1, "a warm repair uses one bounded historical request");
+    assert.ok(loaded.length > previous.length);
+    assert.deepEqual(loaded.at(-1), rows.at(-1));
+    if (previous.length > 1000) assert.equal(loaded.length, rows.length);
+  }
+});
+
+test("partial bootstrap survives page failure; an unavailable repair backs off without stopping fresh data", async () => {
+  const rows = history(), data = new Map<string, unknown>(); let calls = 0;
+  const store = { async get<T>(key: string) { return data.get(key) as T | undefined; }, async put<T>(key: string, value: T) { data.set(key, value); } };
+  const partial = await loadHistoricalForecastCandles(store, async (_s, from, to) => {
+    calls++; if (calls === 2) throw new Error("one unavailable page");
+    return rows.filter((r) => r.time * 1000 >= from && r.time * 1000 <= to);
+  }, "BTC_USDT", now);
+  assert.equal(calls, 5); assert.ok(partial.length > 2500 && partial.length < rows.length);
+  assert.ok(data.size === 1, "successful pages survive a failed sibling");
+  const failed = async () => { calls++; throw new Error("history temporarily unavailable"); };
+  await loadHistoricalForecastCandles(store, failed, "BTC_USDT", now + 60_000);
+  assert.equal(calls, 6);
+  await loadHistoricalForecastCandles(store, failed, "BTC_USDT", now + 120_000);
+  assert.equal(calls, 6, "fresh data plus failed old repair respects the cooldown");
+  await loadHistoricalForecastCandles(store, failed, "BTC_USDT", now + ANALOG_BAR_MS);
+  assert.equal(calls, 7, "old repair cooldown does not suspend the latest-bar request");
+});
+
+test("complete history with too few matches is not described as data collection", () => {
+  const rows = history().map((row, i) => i < 4008 ? row : {
+    ...row, open: row.open * Math.exp((i - 4008) * 0.01), close: row.close * Math.exp((i - 4008) * 0.01),
+    high: row.high * Math.exp((i - 4008) * 0.01), low: row.low * Math.exp((i - 4008) * 0.01),
+  });
+  const f = forecast(rows);
+  assert.equal(f.state, "INSUFFICIENT"); assert.equal(f.missingHistoryBars, 0);
+  assert.match(f.reason, /已读完近14天历史/); assert.doesNotMatch(f.reason, /正在准备|正在补取/);
+  assert.equal(f.side, "WAIT");
+  assert.match(forecast([]).reason, /尚未取得有效历史行情/);
+});
+
 test("full two-week inference has a bounded CPU workload", () => {
   const start = performance.now(); forecast();
   assert.ok(performance.now() - start < 3000, "bounded 4032-row inference must not become an unbounded history scan");

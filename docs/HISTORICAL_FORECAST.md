@@ -1,6 +1,6 @@
 # 历史相似预测首版
 
-2026-09-05：用户明确用一个历史相似预测策略替换此前三策略重设计提案。状态：实现完成，发布验证中；生产结果以 STATUS 和 CI 证据为准。
+2026-09-05：用户明确用一个历史相似预测策略替换此前三策略重设计提案。状态：已通过 PR #141 上线，生产工作流33952777266的验证、部署与运行检查全部通过。实际交易频率和盈利仍待真实模拟样本检验。
 
 ## 交易与展示
 
@@ -42,3 +42,10 @@
 - 交易计划：`lib/direct-market-brain.ts`；入口、风险和学习共用既有文件。
 - 页面：`app/historical-forecast-card.tsx`；其他必要能力仍由现有页面负责。
 - 验收：`tests/historical-forecast.test.ts` 和既有 CI。先定位无样本／无净优势／报价过期／资金限制的实际原因，不能每次靠放松阈值制造开单。
+
+## 2026-09-05 — Historical preparation diagnosis and compact summary
+
+- Production browser showed AKE already had4031 valid5m bars from08/22 through09/05, yet only1/8 independent analogs. This observed candidate is similarity-starved, not waiting to accumulate live data or a12h report. Public health showed scanner/position live with no errors. Complete current account/order data was unavailable in the observed partial response; do not infer all-symbol or global counts from it.
+- Reproduced a separate cache defect: fresh80-bar tail prevented any upstream request despite4032 available bars. Repair now checks the whole bounded14d window, retains successful bootstrap pages after a sibling failure, and heals at most one old page alongside the normal current page. No-progress old repairs back off30min; successful repairs can continue after1min. Concurrency remains2 and D1 scan writes remain0.
+- UI hides prediction charts/proportions below the existing8-sample eligibility gate, labels real shortage, hides empty performance grids, and reduces the12h report to actual entries/exits/net results and a completed conclusion. Technical counters remain collapsed.
+- No similarity, direction, edge, risk, order, epoch or live policy changed. This patch does not prove restored trade frequency; AKE's observed sample shortage remains a real trading restriction. Direct local Gate history access was cancelled; no bypass or real-history profitability claim.
