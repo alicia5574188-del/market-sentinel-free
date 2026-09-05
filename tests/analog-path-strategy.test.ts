@@ -41,10 +41,16 @@ test('no unfinished price input, no excessive historical stop and no expiry bypa
  assert.equal(planAnalogEntry({...f,episodes:f.episodes!.map(e=>({...e,bars:e.bars.map(b=>({...b,lowPct:-5}))}))},'LONG',.1,100,now),null);
  assert.equal(validateDirectMarketEntry(c,{symbol:c.symbol,price:100,observedAt:now+300000},now+300000).allowed,false);
 });
-test('within-plan initial reversal is tolerated; excessive persistence and the one-hour deadline exit',()=>{
- const base={side:'LONG' as const,entryPrice:100,initialStopPrice:99,currentStopPrice:99,entryAt:now-20*60000,currentPrice:99.8,observedAt:now,roundTripCostBps:12,candles:[{time:(now-300000)/1000,open:100,close:99.8,high:100,low:99.8,volume:1}],confirmationPrice:99.5};
- assert.equal(evaluateAnalogPosition(base).action,'HOLD');assert.equal(evaluateAnalogPosition({...base,entryAt:now-3600000}).action,'EXIT');
- assert.equal(evaluateAnalogPosition({...base,currentPrice:99.4,candles:[{...base.candles[0],close:99.4,low:99.4}]}).action,'EXIT');
+test('small initial noise is tolerated; fast loss, stalled trade and the one-hour deadline exit',()=>{
+ const base={side:'LONG' as const,entryPrice:100,initialStopPrice:99,currentStopPrice:99,entryAt:now-5*60000,currentPrice:99.9,observedAt:now,roundTripCostBps:12,candles:[{time:(now-300000)/1000,open:100,close:99.9,high:100,low:99.9,volume:1}],confirmationPrice:99.5};
+ assert.equal(evaluateAnalogPosition(base).action,'HOLD');
+ assert.equal(evaluateAnalogPosition({...base,entryAt:now-3600000}).action,'EXIT');
+ assert.equal(evaluateAnalogPosition({...base,entryAt:now-10*60000,currentPrice:99.7,candles:[{...base.candles[0],close:99.7,low:99.7}]}).action,'EXIT');
+ assert.equal(evaluateAnalogPosition({...base,entryAt:now-20*60000,currentPrice:100,candles:[{...base.candles[0],close:100}]}).action,'EXIT');
+});
+test('an intrabar advance protects the position even after price retreats',()=>{
+ const result=evaluateAnalogPosition({side:'LONG',entryPrice:100,initialStopPrice:99,currentStopPrice:99,entryAt:now-10*60000,currentPrice:100.05,observedAt:now,roundTripCostBps:12,candles:[{time:(now-300000)/1000,open:100,close:100.05,high:100.4,low:99.98,volume:1}],confirmationPrice:99.5});
+ assert.equal(result.action,'PROTECT');assert.ok(result.proposedStopPrice!>100);
 });
 test('six coins over twenty-four simulated hours use 1728 core requests, survive restart and honor cooldown',async()=>{
  const map=new Map<string,unknown>();const store={get:async<T>(k:string)=>map.get(k) as T|undefined,put:async<T>(k:string,v:T)=>{map.set(k,v);}};
@@ -63,9 +69,11 @@ test('six independent positions fit the same loss budget without a three-positio
  assert.equal(analogRiskAllocation(1000,0,6,true),analogRiskAllocation(1000,0,6,false)/2);
 });
 
-test('cost-covered protection is not counted as a losing stop that blocks a profitable path plan',()=>{
+test('cost-covered protection is not a loss, but low target coverage still blocks a plan',()=>{
  const f=forecast();f.episodes=Array.from({length:10},(_,j)=>({weight:1,from:j,bars:Array.from({length:12},(_,i)=>i===0?{openPct:0,lowPct:-.01,highPct:.35,closePct:.3}:i===1?{openPct:.3,lowPct:j<8?.1:.15,highPct:.32,closePct:.2}:{openPct:.5+i*.1,lowPct:.47+i*.1,highPct:.52+i*.1,closePct:.5+i*.1})}));
- const plan=planAnalogEntry(f,'LONG',.1,100,now);assert.ok(plan);assert.equal(plan.mode,'NOW');assert.equal(plan.lossPct,0);assert.equal(plan.protectedExitPct,80);
+ const protectedOutcome=replayAnalogPath(f.episodes[0],'LONG',0,.3,.6,.12);
+ assert.equal(protectedOutcome.exit,'STOP');assert.ok(protectedOutcome.netPct>=0);
+ assert.equal(planAnalogEntry(f,'LONG',.1,100,now),null);
 });
 
 test('five independent episodes may enter; four or insufficient effective weight cannot',()=>{
