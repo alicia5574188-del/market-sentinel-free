@@ -1,3 +1,10 @@
+## V12 页面状态与开单链修正 — 生产完成
+
+- PR #156合并为main `03e5c7b`；workflow `33981949818` verify/deploy/operations全部成功。0030完成，active brain=`direct-market-brain-v12-majority-path-learning`、target=null、legacy open PAPER=0，Worker version=`89059834-10fd-4ebc-87d6-c26bd585f906`。
+- 最终PR真实12小时回放11个信号、9个完成单、3胜、合计+0.963R；BNB +1.667R、DOGE -0.704R，其余四币因扣费后完整风险空间不足未开。该窗口只证明路径可达并提供PAPER证据，不承诺未来盈利或当前立即有单。
+- operations确认无人打开页面时position/scanner推进，scanner live且6/6币完成、无错误。D1 UTC日855475读/2051写，向外取整24h 1154109读/2974写，低于3250000/65000安全线。
+- 线上浏览器确认页面不再显示全系统异常；市场扫描/持仓管理均运行中，新PAPER轮次01:48:57开始。当前SOL 64%先下，但2%保护/1.2倍扣费后完整风险边界不满足而等待；旧expected-R/命中率/净亏比例不再二次否决。Gate实盘新开仓关闭。
+
 ## V12 页面状态与持续不开单修正 — 本地回归通过，待CI真实回放/发布
 
 - 生产V11已部署，但main `552ac08` 的operations仍失败。实际健康证据为position live、scanner degraded、4/6币完成，BNB 429、DOGE超时；根因是 `scripts/check-production.mjs` 仍要求scanner无任何lastError，与已更新的Workflow/页面口径不一致。修正后仅在scanner断路、零可用分析或成功时间过期时判全局失败；可用部分扫描显示“部分行情源延迟”。
