@@ -26,8 +26,9 @@ test('sparse or stale history cannot be replaced by a different strategy',()=>{
 });
 test('historical mid-path drawdown can choose a frozen wait price rather than repeated stopouts',()=>{
  const f=forecast(false,true),plan=planAnalogEntry(f,'LONG',.1,100,now);assert.ok(plan);assert.equal(plan.mode,'PULLBACK');
- const waiting=candidate(f);assert.equal(waiting.decision,'WAIT');assert.equal(waiting.analogIntent?.mode,'PULLBACK');
- const entry=plan.anchor*(1-plan.offsetPct/100);const filled=candidate(f,{price:entry,intent:plan,now:now+60000});assert.equal(filled.decision,'LONG',JSON.stringify(filled.counterEvidence));assert.equal(filled.analogIntent?.anchor,100);
+ assert.equal(candidate(f).decision,'SHORT','the first downward swing is now actionable despite a higher endpoint');
+ const waiting=candidate(forecast(),{intent:plan});assert.equal(waiting.decision,'WAIT');assert.equal(waiting.analogIntent?.mode,'PULLBACK');
+ const entry=plan.anchor*(1-plan.offsetPct/100);const filled=candidate(forecast(),{price:entry,intent:plan,now:now+60000});assert.equal(filled.decision,'LONG',JSON.stringify(filled.counterEvidence));assert.equal(filled.analogIntent?.anchor,100);
  const cancelled=candidate(forecast(true),{intent:plan});assert.notEqual(cancelled.analogIntent?.side,'LONG');
 });
 test('a stop touched before a later profitable endpoint is counted as a stop; limit fills cannot claim earlier highs',()=>{
@@ -73,4 +74,22 @@ test('five independent episodes may enter; four or insufficient effective weight
  assert.equal(candidate({...f,sampleCount:4,effectiveSamples:4}).decision,'WAIT');
  assert.equal(candidate({...f,effectiveSamples:4.49}).decision,'WAIT');
  assert.equal(candidate({...f,signalAt:now-300000}).decision,'WAIT');
+});
+
+test('majority first upward swing remains LONG even when every endpoint and median turn negative',()=>{
+ const f=forecast();f.episodes=f.episodes!.map(e=>({...e,bars:e.bars.map((b,i)=>i===11?{openPct:-.8,highPct:-.7,lowPct:-1.1,closePct:-1}:b)}));
+ f.medianPct=-1;f.directionUpPct=0;f.directionDownPct=100;
+ assert.equal(historicalDirection(f,now).side,'LONG');
+ const plan=planAnalogEntry(f,'LONG',.1,100,now);assert.ok(plan);assert.ok(plan.stopPct<1,'post-target plunge must not inflate initial protection');
+ assert.equal(candidate(f).decision,'LONG');
+});
+test('ambiguous two-sided first bars abstain rather than invent a favorable order',()=>{
+ const f=forecast();f.episodes=f.episodes!.map(e=>({...e,bars:[{openPct:0,highPct:1,lowPct:-1,closePct:1}]}));
+ assert.equal(historicalDirection(f,now).side,'WAIT');
+});
+
+test('simple majority is enough for direction; eleven of twenty is not rejected by an extra sixty-percent gate',()=>{
+ const f=forecast(),up=f.episodes![0],down=f.episodes![9];
+ f.episodes=Array.from({length:20},(_,i)=>({...i<11?up:down,from:i}));f.sampleCount=20;f.effectiveSamples=20;
+ assert.equal(historicalDirection(f,now).side,'LONG');
 });

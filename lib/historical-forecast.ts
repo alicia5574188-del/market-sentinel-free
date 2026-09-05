@@ -22,6 +22,7 @@ export type HistoricalForecast = {
   sampleCount: number;
   effectiveSamples: number;
   similarity: number;
+  swingBias?: { upPct: number; downPct: number; neutralPct: number; thresholdPct: number; maxUpPct: number; maxDownPct: number };
   directionUpPct?: number;
   directionDownPct?: number;
   upPct: number;
@@ -36,10 +37,30 @@ export type HistoricalForecast = {
   targetPct: number;
   costBps: number;
   eventContext: string;
-  path: { minutes: number; lowerPct: number; medianPct: number; upperPct: number }[];
+  path: { referencePct?: number; minutes: number; lowerPct: number; medianPct: number; upperPct: number }[];
   episodes?: { weight: number; from: number; bars: { openPct: number; highPct: number; lowPct: number; closePct: number }[] }[];
   matches: { from: number; to: number; futureTo: number; similarity: number; forwardPct: number; calendar: string; event: string; pathPct: number[] }[];
 };
+
+/** Votes use the first cost-sized excursion, never the final close. Ambiguous OHLC bars abstain. */
+export function historicalSwingVotes(episodes: NonNullable<HistoricalForecast["episodes"]>, costBps: number) {
+  const thresholdPct = Math.max(0.05, Math.max(12, costBps) / 100 * 1.5);
+  const votes = episodes.map(e => {
+    for (const b of e.bars) {
+      if (b.openPct >= thresholdPct) return 1;
+      if (b.openPct <= -thresholdPct) return -1;
+      const up = b.highPct >= thresholdPct, down = b.lowPct <= -thresholdPct;
+      if (up && down) return 0;
+      if (up) return 1;
+      if (down) return -1;
+    }
+    return 0;
+  });
+  const ratio = (side: number) => votes.length ? votes.filter(v => v === side).length / votes.length * 100 : 0;
+  return { votes, bias: { upPct: ratio(1), downPct: ratio(-1), neutralPct: ratio(0), thresholdPct,
+    maxUpPct: Math.max(0, ...episodes.flatMap(e => e.bars.map(b => b.highPct))),
+    maxDownPct: Math.max(0, ...episodes.flatMap(e => e.bars.map(b => -b.lowPct))) } };
+}
 
 export function candleTimeMs(row: Hte31Candle) { return row.time > 10_000_000_000 ? row.time : row.time * 1000; }
 export function cleanAnalogCandles(candles: Hte31Candle[], now: number, oldest = 0) {
@@ -152,6 +173,10 @@ export function buildHistoricalForecast(input: { candles: Hte31Candle[]; now: nu
     const anchor=rows[s.start+ANALOG_WINDOW-1].close;
     return {weight:s.weight,from:candleTimeMs(rows[s.start]),bars:rows.slice(s.start+ANALOG_WINDOW,s.start+ANALOG_WINDOW+ANALOG_HORIZON).map(r=>({openPct:(r.open/anchor-1)*100,highPct:(r.high/anchor-1)*100,lowPct:(r.low/anchor-1)*100,closePct:(r.close/anchor-1)*100}))};
   });
+  const swing = historicalSwingVotes(result.episodes, result.costBps);
+  result.swingBias = swing.bias;
+  const majority = swing.bias.upPct > 50 ? 1 : swing.bias.downPct > 50 ? -1 : 0;
+  const referencePaths = paths.filter((_, i) => !majority || swing.votes[i] === majority);
   const forwards = paths.map((path) => path.at(-1)!);
   const ratio = (predicate: (v: number) => boolean) => totalWeight
     ? selected.reduce((sum, s, i) => sum + (predicate(forwards[i]) ? s.weight : 0), 0) / totalWeight * 100 : 0;
@@ -161,6 +186,7 @@ export function buildHistoricalForecast(input: { candles: Hte31Candle[]; now: nu
   result.neutralPct = totalWeight ? Math.max(0, 100 - result.upPct - result.downPct) : 0;
   result.medianPct = quantile(forwards, 0.5); result.lowerPct = quantile(forwards, 0.1); result.upperPct = quantile(forwards, 0.9);
   result.path = selected.length ? Array.from({ length: ANALOG_HORIZON + 1 }, (_, i) => ({ minutes: i * 5,
+    referencePct: i ? mean(referencePaths.map(p => p[i - 1])) : 0,
     lowerPct: i ? quantile(paths.map((p) => p[i - 1]), 0.1) : 0,
     medianPct: i ? quantile(paths.map((p) => p[i - 1]), 0.5) : 0,
     upperPct: i ? quantile(paths.map((p) => p[i - 1]), 0.9) : 0 })) : [];

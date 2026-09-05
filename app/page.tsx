@@ -825,7 +825,7 @@ export default function ResonancePage() {
       <section className="rz-section rz-now">
         <div className="rz-section-head"><div><span className="rz-eyebrow">当前决定</span><h2>大脑决定</h2></div><small>数据时间 {fmtTime(snapshot?.observedAt)}</small></div>
         <article className={`rz-panel rz-decision-summary ${healthBad || healthWarn ? "rz-decision-delayed" : ""}`}>
-          <span className="rz-mode-label">历史总体方向 · 路径择价</span>
+          <span className="rz-mode-label">历史途中方向 · 波段择价</span>
           <strong>{decisionSummary.title}</strong>
           <p className="rz-copy">{decisionSummary.detail}</p>
           <div className="rz-rule-strip"><span>五分钟更新历史判断</span><span>最长持仓一小时</span><span>单笔风险上限0.25%</span></div>
@@ -871,7 +871,7 @@ export default function ResonancePage() {
       </article></section>
       <details className="rz-decision-detail"><summary>资源预算与运行方式</summary><div className="rz-panel rz-copy"><p>行情由后台统一获取，历史分批回补并缓存复用。持仓保护独立调度，失败后限速重试。</p><p>数据库实际用量由定时运维审计检查；本页没有实时额度数据，不把预算当作实际消耗。</p></div></details>
       {readModel?.directCandidate && <details className="rz-decision-detail"><summary>决策诊断（按需查看）</summary><p className="rz-panel rz-copy">最近执行结果：{operatorText(readModel.openReason) || "等待执行反馈"}</p><DecisionEvidenceCard candidate={readModel.directCandidate} /></details>}
-      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">交易核心</span><h2>短线执行规则</h2></div></div><article className="rz-panel"><div className="rz-metric-grid"><div className="rz-metric"><span>入场依据</span><b>历史整体偏多/偏空，直接比较当前价与等待价</b></div><div className="rz-metric"><span>方向依据</span><b>历史方向就是开仓依据；不再额外等回踩信号</b></div><div className="rz-metric"><span>快速退出</span><b>允许计划内逆向波动；偏离过大提前退出，最长一小时</b></div><div className="rz-metric"><span>含费计划风险</span><b>单笔最多0.25%，合计不超过0.75%；无固定笔数上限</b></div><div className="rz-metric rz-metric-wide"><span>固定币池</span><b>比特币、以太坊、索拉纳、币安币、瑞波币、狗狗币</b></div></div></article></section>
+      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">交易核心</span><h2>短线执行规则</h2></div></div><article className="rz-panel"><div className="rz-metric-grid"><div className="rz-metric"><span>入场依据</span><b>多数片段先涨或先跌，比较当前价与等待价</b></div><div className="rz-metric"><span>方向依据</span><b>看途中首段可交易波动，不要求一小时终点同向</b></div><div className="rz-metric"><span>快速退出</span><b>允许计划内逆向波动；偏离过大提前退出，最长一小时</b></div><div className="rz-metric"><span>含费计划风险</span><b>单笔最多0.25%，合计不超过0.75%；无固定笔数上限</b></div><div className="rz-metric rz-metric-wide"><span>固定币池</span><b>比特币、以太坊、索拉纳、币安币、瑞波币、狗狗币</b></div></div></article></section>
       <section className="rz-section"><div className="rz-section-head"><div><h2>资金保护</h2></div></div><article className="rz-panel">
         {dashboard?.directRisk ? <p className="rz-copy"><strong>风险档：</strong>{operatorLabel(dashboard.directRisk.state)} · 单笔风险上限 {(dashboard.directRisk.riskRate * 100).toFixed(2)}% · {operatorText(dashboard.directRisk.reason)}</p> : <p className="rz-copy">风险状态正在读取</p>}
         <div className="rz-rule-strip"><span>组合风险上限0.75%</span><span>三连亏暂停三十分钟</span><span>日亏1.5%暂停新开仓</span></div>

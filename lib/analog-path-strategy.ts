@@ -1,7 +1,7 @@
 import type { Hte31Candle } from './hte31-types.ts';
 import type { DirectMarketCandidate } from './direct-market-types.ts';
 import type { HistoricalForecast } from './historical-forecast.ts';
-import { cleanAnalogCandles, ANALOG_MIN_SAMPLES } from './historical-forecast.ts';
+import { cleanAnalogCandles, ANALOG_MIN_SAMPLES, historicalSwingVotes } from './historical-forecast.ts';
 import { minuteTime,scalpCostBps } from './scalp-strategy.ts';
 import {DIRECT_POSITION_POLICY_VERSION,type DirectPositionDecision} from './direct-market-position-brain.ts';
 export const ANALOG_POSITION_POLICY='analog-path-exit-v1';
@@ -10,17 +10,15 @@ const mean=(xs:number[])=>xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:0;
 const quantile=(xs:number[],p:number)=>{const a=[...xs].sort((x,y)=>x-y);if(!a.length)return 0;const t=(a.length-1)*p,i=Math.floor(t);return a[i]+(a[Math.ceil(t)]-a[i])*(t-i);};
 export type AnalogIntent={side:'LONG'|'SHORT';anchor:number;createdAt:number;expiresAt:number;signalKey:string;offsetPct:number;stopPct:number;targetPct:number;expectedNetR:number;takeProfitPct:number;lossPct:number;protectedExitPct:number;fillPct:number;mode:'NOW'|'PULLBACK'};
 export function historicalDirection(f:HistoricalForecast|undefined,now:number,_costBps=12):{side:'LONG'|'SHORT'|'WAIT';reason:string} {
- void _costBps;
  if(!f)return {side:'WAIT',reason:'正在读取历史对照，暂不开单'};
  if(f.state==='STALE'||now<f.signalAt||now-f.signalAt>=300_000)return {side:'WAIT',reason:'历史判断已过期，等待最新完整五分钟K线'};
  if(f.sampleCount<ANALOG_MIN_SAMPLES||f.effectiveSamples<ANALOG_MIN_SAMPLES-.5)return {side:'WAIT',reason:`独立相似片段${f.sampleCount}/${ANALOG_MIN_SAMPLES}段，依据不足，暂不开单`};
  if(f.state!=='READY')return {side:'WAIT',reason:f.reason};
- const episodes=f.episodes??[],sum=episodes.reduce((s,e)=>s+e.weight,0);
- const up=f.directionUpPct!=null?f.directionUpPct/100:sum?episodes.reduce((s,e)=>s+(e.bars.at(-1)!.closePct>0?e.weight:0),0)/sum:0;
- const down=f.directionDownPct!=null?f.directionDownPct/100:sum?episodes.reduce((s,e)=>s+(e.bars.at(-1)!.closePct<0?e.weight:0),0)/sum:0;
- if(up>=.6&&f.medianPct>0)return {side:'LONG',reason:`历史整体偏多，上涨片段占比${Math.round(up*100)}%`};
- if(down>=.6&&f.medianPct<0)return {side:'SHORT',reason:`历史整体偏空，下跌片段占比${Math.round(down*100)}%`};
- return {side:'WAIT',reason:'历史上涨与下跌方向分散，暂不开单'};
+ const swing=f.episodes?.length?historicalSwingVotes(f.episodes,_costBps).bias:f.swingBias;
+ if(!swing)return {side:'WAIT',reason:'正在更新历史途中方向统计'};
+ if(swing.upPct>50)return {side:'LONG',reason:`${swing.upPct.toFixed(0)}%历史片段先向上走出可交易波动，不要求最终收涨`};
+ if(swing.downPct>50)return {side:'SHORT',reason:`${swing.downPct.toFixed(0)}%历史片段先向下走出可交易波动，不要求最终收跌`};
+ return {side:'WAIT',reason:'历史片段的首段可交易波动方向分散，暂不开单'};
 }
 type Episode=NonNullable<HistoricalForecast['episodes']>[number];
 /** Stop-first, conservative limit fills, no exits before the historical entry. */
@@ -54,10 +52,12 @@ export function planAnalogEntry(f:HistoricalForecast,side:'LONG'|'SHORT',atrPct:
  const adverse=episodes.map(e=>Math.max(0,...e.bars.map(b=>sign===1?-b.lowPct:b.highPct)));
  const favorable=episodes.map(e=>Math.max(0,...e.bars.map(b=>sign===1?b.highPct:-b.lowPct)));
  // Two fixed alternatives, not a parameter search. Entire paths include losing episodes.
- const offset=Math.max(0,quantile(adverse,.5)*.5);
+ const offset=Math.max(0,mean(adverse)*.5);
  const alternatives=[0,...(offset>=atrPct*.2?[offset]:[])].map(offsetPct=>{
-  const stopPct=Math.max(atrPct*.65,quantile(adverse,.8)-offsetPct+atrPct*.25);
-  const targetPct=quantile(favorable,.5)*.6+offsetPct;
+  const targetPct=mean(favorable)*.5+offsetPct;
+  // Once the target was reached, a later reversal must not inflate the initial stop.
+  const beforeTarget=episodes.map(e=>{let worst=0;for(const b of e.bars){worst=Math.max(worst,sign===1?-b.lowPct:b.highPct);if((sign===1?b.highPct:-b.lowPct)>=targetPct-offsetPct)break;}return worst;});
+  const stopPct=Math.max(atrPct*.65,quantile(beforeTarget,.8)-offsetPct+atrPct*.25);
   return {side,anchor,createdAt:now,expiresAt:now+15*60_000,signalKey:`${f.signalAt}:${side}`,offsetPct,stopPct,targetPct,
     ...estimate(episodes,side,offsetPct,stopPct,targetPct,cost),mode:offsetPct===0?'NOW' as const:'PULLBACK' as const};
  }).filter(p=>p.stopPct/(1-sign*p.offsetPct/100)<=2&&p.targetPct>=cost*1.5&&p.expectedNetR>=.05&&p.fillPct>=40&&p.takeProfitPct>p.lossPct);
@@ -90,7 +90,7 @@ export function buildAnalogCandidate(input:{symbol:string;candles:Hte31Candle[];
  const correlation=input.symbol==='BTC_USDT'?1:pairs.length>=24&&den>0?pairs.reduce((s,p)=>s+(p[0]-mx)*(p[1]-my),0)/den:null;
  const setup='ANALOG_PATH' as const,setupLabel='历史路径方向交易';
  return {symbol:input.symbol,batchId:`analog:${Math.floor(input.now/300_000)}`,observedAt:input.now,freshness:data?'FRESH':'UNAVAILABLE',scanStage:'DEEP',volumeRank:input.volumeRank,volumeUsd:input.volumeUsd,
- riskClusterId:correlation==null?'correlation-unknown':Math.abs(correlation)>=.7?'btc-correlated':`independent-${input.symbol}`,btcCorrelation:correlation,location:'MIDDLE',paths:f?{up:f.upPct,down:f.downPct,rangeOrInvalid:f.neutralPct}:{up:0,down:0,rangeOrInvalid:100},directionalScore:bias.side==='WAIT'?0:sign,netEdgeR:plan?.expectedNetR??0,confidence:Math.round(f?.similarity??0),setup,setupLabel,setupScore:score,
+ riskClusterId:correlation==null?'correlation-unknown':Math.abs(correlation)>=.7?'btc-correlated':`independent-${input.symbol}`,btcCorrelation:correlation,location:'MIDDLE',paths:f?.swingBias?{up:f.swingBias.upPct,down:f.swingBias.downPct,rangeOrInvalid:f.swingBias.neutralPct}:{up:0,down:0,rangeOrInvalid:100},directionalScore:bias.side==='WAIT'?0:sign,netEdgeR:plan?.expectedNetR??0,confidence:Math.round(f?.similarity??0),setup,setupLabel,setupScore:score,
  setupEvaluations:[{setup,setupLabel,side,score,triggered:bias.side!=='WAIT',qualified:ready,selected:ready,blockers:checks.filter(c=>!c.passed).map(c=>c.detail)}],
  decision:ready?side:'WAIT',entryZone:plan?zone:null,invalidationPrice:plan?stop:null,targets:plan?[entry+(target-entry)*.5,target]:[],
  evidence:[bias.reason,reason,'历史中途逆向波动决定初始保护距离；更远止损对应更小仓位'],counterEvidence:ready?[]:[reason,...checks.filter(c=>!c.passed).map(c=>c.detail)],checks,candles5m:cs,forecast:f?{...f,episodes:undefined}:undefined,assetRegime:'historical-path',maxHoldingMinutes:plan?Math.max(1,Math.min(60,Math.floor((plan.createdAt+3600000-input.now)/60000))):60,analogIntent:plan??undefined,

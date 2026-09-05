@@ -1,6 +1,6 @@
 import type { Hte31Candle } from "./hte31-types.ts";
 
-export const DIRECT_MARKET_BRAIN_VERSION = "direct-market-brain-v9-analog-path";
+export const DIRECT_MARKET_BRAIN_VERSION = "direct-market-brain-v10-analog-swing";
 export const DIRECT_MARKET_AUTHORITY = "direct_market_brain" as const;
 
 export type DirectMarketSide = "LONG" | "SHORT" | "WAIT";
@@ -16,7 +16,7 @@ export const DIRECT_LEGACY_SETUPS = [
 ] as const;
 export const DIRECT_CORE_SETUPS = [{ id: "ANALOG_PATH", label: "历史路径方向交易" }] as const;
 export const DIRECT_CORE_STRATEGY_LINEAGE = {
-  ANALOG_PATH: "ANALOG_PATH_DIRECT_V1",
+  ANALOG_PATH: "ANALOG_FIRST_SWING_V2",
   MINUTE_PULLBACK: "MINUTE_PULLBACK_15M_1M_V1",
   HISTORICAL_ANALOG: "HISTORICAL_ANALOG_2H_14D_1H_V1",
   VOLUME_FORCE_FAILED_BREAKOUT: "HT3-R_FAILED_AUCTION",
