@@ -1,5 +1,12 @@
 # Decisions
 
+## 2026-09-05 — Majority direction authorizes entry; path ratios become learning evidence
+
+- A simple majority of at least five independent historical episodes reaching the first tradable up/down swing is the strategy's direction vote. Expected net R, target-hit rate and losing-path share stay visible and persisted for learning, but cannot veto that same direction a second time.
+- Keep executable safety boundaries: complete/fresh five-minute data, a target derived from the majority-voting paths' maximum in-horizon excursion, at least 1.2 fee-adjusted reward per full risk, at most 2% historical protection distance, frozen entry zone, fresh quote, invalidation, liquidity, 0.25% per-trade and 0.75% portfolio risk, three-loss/daily-loss pauses, and simulation-only live gating.
+- Treat a recent partial scanner result with at least one analyzed symbol and a closed circuit as useful degraded operation. Show a partial-feed warning and let deployment health accept it; zero analyzed symbols, stale success, a circuit breaker or position-manager failure remains a whole-system failure.
+- Ship as V12 through additive PAPER migration 0030 so current-version evidence is not mixed. Preserve all historical market data, archived orders, credentials, real orders and Gate live state.
+
 ## 2026-09-05 — Historical analog replaces the three-strategy redesign
 
 - Use one two-hour / fourteen-day / one-hour analog model. Calendar is a soft matching feature; events require actual recorded times and unknown coverage is explicit. Purge current/future overlap and de-overlap complete historical episodes.

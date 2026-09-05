@@ -60,9 +60,9 @@ export function validateDirectMarketEntry(
   if(candidate.setup==='ANALOG_PATH') {
     const plan=candidate.analogIntent;
     if(!plan||now>=plan.expiresAt)return {allowed:false,reason:'等待入场计划已过期',entryPrice:quote.price,rewardRisk};
-    const plannedEntry=plan.anchor*(1-sideDirection*plan.offsetPct/100);
-    const remainingEdge=plan.expectedNetR*(plan.stopPct+(candidate.scalp?.costBps??12)/100)-sideDirection*(quote.price-plannedEntry)/plan.anchor*100;
-    if(remainingEdge<=0)return {allowed:false,reason:'最新价格已消耗历史路径的估计净优势',entryPrice:quote.price,rewardRisk};
+    // Historical expectancy is learning telemetry, not a second admission
+    // vote. The immutable entry zone and the cost-covered remaining target
+    // below are the live-price boundaries for this majority-direction plan.
   }
   if (!(rewardRisk >= (candidate.setup==='ANALOG_PATH' ? 0 : candidate.scalp ? 0.9 : candidate.forecast ? 0.8 : 1.8))) {
     return { allowed: false, reason: `最新价格下结构盈亏比仅 ${rewardRisk.toFixed(2)}R`, entryPrice: quote.price, rewardRisk };
