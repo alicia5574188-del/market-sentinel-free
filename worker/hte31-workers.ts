@@ -223,7 +223,7 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
   private async currentForecast(symbol:string,costBps:number) {
     const now=Date.now(),old=await this.ctx.storage.get<HistoricalForecast>(`auxiliary:${symbol}`);
     const rows=await this.hourSnapshot(symbol),signalAt=rows.length?rows.at(-1)!.time*1000+300_000:0;
-    if(old?.signalAt===signalAt&&old.episodes)return old;
+    if(old?.signalAt===signalAt&&old.episodes&&old.swingBias)return old;
     let library=await this.ctx.storage.get<{candles:import('../lib/hte31-types').Hte31Candle[]}>(`hour-library:${symbol}`);
     const recentLibrary=!library?await this.ctx.storage.get<{candles:import('../lib/hte31-types').Hte31Candle[]}>(`analog-history-v1:${symbol}`):undefined;
     let archive=old?.archive;

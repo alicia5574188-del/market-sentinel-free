@@ -9,10 +9,10 @@ export function HistoricalForecastCard({ symbol, forecast, candles, observedAt =
   const current = candles.filter(c => c.time == null || (c.time > 10_000_000_000 ? c.time : c.time * 1000) + 300_000 <= forecast.signalAt).slice(-24), anchor = current.at(-1)?.close ?? 0;
   const currentPath = anchor > 0 ? current.map((c) => (c.close / anchor - 1) * 100) : [];
   const matches = forecast.matches.slice(0, 3);
-  const hasDistribution = forecast.sampleCount > 0 && forecast.path.length > 1;
+  const hasDistribution = forecast.sampleCount > 0 && forecast.path.length > 1 && forecast.path.every(p => p.referencePct != null);
   const stale = forecast.state === "STALE" || observedAt - forecast.signalAt >= 300_000;
   const referenceOnly = stale || forecast.state !== "READY";
-  const values = [...currentPath, ...matches.flatMap((m) => m.pathPct), ...forecast.path.flatMap((p) => [p.lowerPct, p.upperPct])];
+  const values = [...currentPath, ...matches.flatMap((m) => m.pathPct), ...forecast.path.flatMap((p) => [p.lowerPct, p.upperPct, p.referencePct ?? 0])];
   const min = Math.min(0, ...values), max = Math.max(0, ...values), span = Math.max(max - min, 0.05);
   const x = (minutes: number) => 18 + (minutes + 120) / 180 * 424;
   const y = (value: number) => 20 + (max - value) / span * 148;
@@ -29,16 +29,16 @@ export function HistoricalForecastCard({ symbol, forecast, candles, observedAt =
         {matches.map((m) => <polyline key={m.from} points={line(m.pathPct, -115)} fill="none" stroke="#768ba8" strokeWidth="1.1" opacity="0.45" />)}
         {hasDistribution && <polygon points={band} fill="#e8b65a" opacity="0.17" />}
         <polyline points={line(currentPath, -(currentPath.length - 1) * 5)} fill="none" stroke="#84b0ff" strokeWidth="2.8" />
-        {hasDistribution && <polyline points={forecast.path.map((p) => `${x(p.minutes)},${y(p.medianPct)}`).join(" ")} fill="none" stroke="#f5c66d" strokeWidth="2.4" strokeDasharray="5 3" />}
+        {hasDistribution && <polyline points={forecast.path.map((p) => `${x(p.minutes)},${y(p.referencePct ?? 0)}`).join(" ")} fill="none" stroke="#f5c66d" strokeWidth="2.4" strokeDasharray="5 3" />}
         <text x="18" y="194" fill="#aab7ce" fontSize="12">两小时前</text><text x={x(0) - 12} y="194" fill="#aab7ce" fontSize="12">参考时刻</text><text x="384" y="194" fill="#aab7ce" fontSize="12">一小时后</text>
         <text x="446" y="25" fill="#aab7ce" fontSize="10">{max.toFixed(1)}%</text><text x="446" y="168" fill="#aab7ce" fontSize="10">{min.toFixed(1)}%</text>
       </svg>
-      <small>蓝线：已取得的真实走势　灰线：历史片段　金色：历史后续中位数与八成区间</small>
+      <small>蓝线：已取得的真实走势　灰线：历史片段　金色：{forecast.swingBias && Math.max(forecast.swingBias.upPct, forecast.swingBias.downPct) >= 60 ? "多数方向片段" : "全部片段"}的平均参考路径；阴影：全部片段八成区间</small>
       <p>{stale ? "数据已过期，图仅作历史参考，不用于当前入场。" : referenceOnly ? `当前${forecast.sampleCount}段相似片段，至少需要${ANALOG_MIN_SAMPLES}段；图仅供观察，暂不作为开仓依据。` : "历史分布是样本参考，不是未来胜率保证。"}{!hasDistribution && " 尚无有效历史后续分布，右侧暂不画预测线。"}</p>
       {hasDistribution && <>
       <div className="rz-strategy-numbers">
-        <div><span>历史终点上涨 / 下跌占比</span><b>{(forecast.directionUpPct??forecast.upPct).toFixed(0)}% / {(forecast.directionDownPct??forecast.downPct).toFixed(0)}%</b></div>
-        <div><span>一小时后涨跌中位数</span><b>{signed(forecast.medianPct)}</b></div>
+        <div><span>先向上 / 先向下波动占比</span><b>{forecast.swingBias ? `${forecast.swingBias.upPct.toFixed(0)}% / ${forecast.swingBias.downPct.toFixed(0)}%` : "正在更新"}</b></div>
+        <div><span>途中最大上涨 / 最大下跌</span><b>{forecast.swingBias ? `${signed(forecast.swingBias.maxUpPct)} / ${signed(-forecast.swingBias.maxDownPct)}` : "正在更新"}</b></div>
         <div><span>历史后续八成区间</span><b>{signed(forecast.lowerPct)} ～ {signed(forecast.upperPct)}</b></div>
         <div><span>独立片段 / 平均相似度</span><b>{forecast.sampleCount} / {forecast.similarity.toFixed(0)}%</b></div>
       </div>
