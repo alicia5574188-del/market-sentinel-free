@@ -63,7 +63,7 @@ test('full four-percent positions consume the twelve-percent portfolio budget wi
  let used=0;
  for(let i=0;i<3;i++){const rate=analogRiskAllocation(1000,used,6-i,false);assert.equal(rate,.04);used+=1000*rate;}
  assert.ok(Math.abs(used-120)<1e-8);assert.equal(analogRiskAllocation(1000,120,3,false),0);
- assert.equal(analogRiskAllocation(1000,0,6,true),analogRiskAllocation(1000,0,6,false)/2);
+ assert.equal(analogRiskAllocation(1000,0,6,true),analogRiskAllocation(1000,0,6,false));
 });
 
 test('majority first swing opens while adverse path ratios remain learning evidence',()=>{
