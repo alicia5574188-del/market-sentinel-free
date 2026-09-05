@@ -19,11 +19,11 @@ const [page, layout, route, chart, css, liveStatus, scanner, catalog, worker, re
 
 test("production UI exposes the useful three setups and direct operating truth while history stays readable", () => {
   assert.match(page, /Resonance/);
-  assert.match(page, /历史方向交易 · 模拟验证 · 12小时复盘/);
+  assert.match(page, /历史方向交易 · 模拟验证/);
   for (const phrase of ["HT1", "HT2", "HT3", "HT4", "HT5", "HT1-R", "HT2-R", "HT3-R", "HT5-R", "HT6", "HT7", "HT8", "HT9"]) assert.match(catalog, new RegExp(phrase));
   for (const family of ["SF01", "SF02", "SF03", "SF04", "SF05", "SF06", "SF07", "SF08", "SF09"]) assert.match(catalog, new RegExp(family));
   assert.match(page, /HistoricalForecastCard/);
-  for (const phrase of ["策略表现", "每12小时总结", "大脑决定"]) assert.match(page, new RegExp(phrase));
+  for (const phrase of ["策略表现", "大脑决定"]) assert.match(page, new RegExp(phrase));
   assert.match(page, /function DecisionEvidenceCard/);
   const renderedSurface = page.slice(page.lastIndexOf("return ("));
   assert.doesNotMatch(renderedSurface, /策略中心|9 个家族|13 个独立变体|历史记忆准备中|有效独立样本/);

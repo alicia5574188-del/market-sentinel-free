@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   metadataBase: new URL("https://market-sentinel-free.alicia5574188.workers.dev"),
   title: "共振量化｜短线交易台",
-  description: "顺势回踩短线模拟：当前决定、持仓保护、真实交易结果与每12小时复盘。",
+  description: "历史方向交易模拟：历史走势预测、当前决定、持仓保护与交易结果。",
   applicationName: "共振量化",
   manifest: "/manifest.webmanifest",
   formatDetection: { telephone: false },
@@ -28,13 +28,13 @@ export const metadata: Metadata = {
     type: "website",
     locale: "zh_CN",
     title: "共振量化｜短线交易台",
-    description: "顺势回踩短线 · 持仓保护 · 模拟复盘",
+    description: "历史方向交易 · 持仓保护 · 模拟验证",
     images: [{ url: "/og.png", width: 1200, height: 630, alt: "Resonance" }],
   },
   twitter: {
     card: "summary_large_image",
     title: "共振量化｜短线交易台",
-    description: "顺势回踩短线 · 持仓保护 · 模拟复盘",
+    description: "历史方向交易 · 持仓保护 · 模拟验证",
     images: ["/og.png"],
   },
 };

@@ -141,3 +141,12 @@ test("small samples or recovered recent performance do not over-block live entry
   assert.ok((recovered.simulationWinRate ?? 0) >= 0.4);
   assert.ok((recovered.simulationProfitFactor ?? 0) > 1);
 });
+
+ test("simulation-only strategies never report live eligibility even with positive or empty evidence", () => {
+  for (const recentSimulation of [[], Array.from({length:8}, (_, i) => ({netMovePct:1, exitAt:now-i}))]) {
+    const result=evaluateLivePerformanceGate({now,recentLive:[],recentSimulation,simulationOnly:true});
+    assert.equal(result.passed,false);
+    assert.match(result.reason??"", /仅用于模拟验证/);
+    assert.equal(result.simulationSampleCount,recentSimulation.length);
+  }
+ });

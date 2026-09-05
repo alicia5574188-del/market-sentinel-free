@@ -73,6 +73,7 @@ export function evaluateLivePerformanceGate(input: {
   now?: number;
   recentLive: RecentLiveResult[];
   recentSimulation: RecentSimulationResult[];
+  simulationOnly?: boolean;
 }): LivePerformanceGate {
   const now = input.now ?? Date.now();
   const recentLive = [...input.recentLive]
@@ -142,6 +143,11 @@ export function evaluateLivePerformanceGate(input: {
       reason: `哨兵实盘交易回撤 ${(strategyDrawdown * 100).toFixed(1)}%，达到 10% 策略回撤上限；Gate 账户转入/转出不计入交易回撤`,
       cooldownUntil: null,
     };
+  }
+
+  if (input.simulationOnly) {
+    return { ...base, passed: false, cooldownUntil: null,
+      reason: `当前历史路径方向策略仅用于模拟验证；本版本本轮已完成 ${simulationSampleCount} 笔（最近最多8笔）。旧版本订单仅保留归档，不计入当前资格；暂不支持实盘新开仓` };
   }
 
   if (simulationLossStreak >= SIMULATION_HARD_LOSS_STREAK) {
