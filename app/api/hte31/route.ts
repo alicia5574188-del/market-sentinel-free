@@ -91,16 +91,17 @@ function buildTwelveHourReview(readModel: Hte31ScanCompleted | null, dashboard: 
   const netPnlUsdt = performanceWindow.setups.reduce((sum, row) => sum + row.netPnlUsdt, 0);
   const leader = [...setups].sort((left, right) => right.netPnl12h - left.netPnl12h)[0];
   const drag = [...setups].sort((left, right) => left.netPnl12h - right.netPnl12h)[0];
-  const matureDrag = setups.find((row) => row.status === "拖后腿" && row.sampleCount >= 20);
+  const guardedCell = setups.find((row) => row.maxLosingStreak >= 3
+    || (row.sampleCount >= 4 && (row.averageR ?? 0) <= -0.15 && (row.profitFactor ?? 0) < 0.8));
   const coveredMinutes = Math.floor(activity.coverageMs / 60_000);
   const coverageLabel = coveredMinutes >= 60
     ? `${Math.floor(coveredMinutes / 60)}小时${coveredMinutes % 60 ? `${coveredMinutes % 60}分钟` : ""}`
     : `${coveredMinutes}分钟`;
   const nextAction = !activity.complete
-    ? `本窗口已连续覆盖 ${coverageLabel}；满12小时后才形成正式总结，期间不据此调整策略。`
-    : matureDrag
-    ? `${matureDrag.setupLabel} 已有 ${matureDrag.sampleCount} 个样本且仍为负期望；继续由完整12小时证据确认，满足连续弱势条件后按现有学习边界降权或暂停。`
-    : "样本不足时不改策略；继续保留硬闸门，只让完整12小时独立证据进入后续学习。";
+    ? `本窗口已连续覆盖 ${coverageLabel}；满12小时形成正式总结，但连续亏损保护会即时生效，不等待总结。`
+    : guardedCell
+    ? `${guardedCell.setupLabel} 已触及独立保护线；只暂停对应打法/方向/行情组合，其余策略继续运行，冷却后仅允许高质量复考。`
+    : "继续按打法分别积累证据；每12小时总结负责优化方向，连续亏损保护负责即时止血。";
   return {
     windowStartAt: activity.windowStartAt,
     windowEndAt: activity.windowEndAt,
@@ -194,7 +195,7 @@ export async function GET(request: Request) {
   const twelveHourReview = buildTwelveHourReview(readModel, dashboard, requestedAt);
 
   return Response.json({
-    version: "direct-market-brain-v3-resonance-three",
+    version: "direct-market-brain-v4-restored-core",
     requestedAt,
     observedAt: lastSuccessAt ?? requestedAt,
     account: auth.account,

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [scanner, worker, activity, repository, liveRepository, page, migration, execution, positionBrain] = await Promise.all([
+const [scanner, worker, activity, repository, liveRepository, page, migration, execution, positionBrain, types, setupGuard] = await Promise.all([
   readFile(new URL("../lib/hte31-scanner.ts", import.meta.url), "utf8"),
   readFile(new URL("../worker/hte31-workers.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/direct-market-activity.ts", import.meta.url), "utf8"),
@@ -12,6 +12,8 @@ const [scanner, worker, activity, repository, liveRepository, page, migration, e
   readFile(new URL("../drizzle/0017_direct_market_brain.sql", import.meta.url), "utf8"),
   readFile(new URL("../lib/direct-market-execution.ts", import.meta.url), "utf8"),
   readFile(new URL("../lib/direct-market-position-brain.ts", import.meta.url), "utf8"),
+  readFile(new URL("../lib/direct-market-types.ts", import.meta.url), "utf8"),
+  readFile(new URL("../lib/direct-market-setup-guard.ts", import.meta.url), "utf8"),
 ]);
 
 test("new-entry scanner has no legacy strategy authority or high-frequency D1 writes", () => {
@@ -31,6 +33,11 @@ test("new-entry scanner has no legacy strategy authority or high-frequency D1 wr
   assert.match(activity, /triggeredSignals/);
   assert.match(activity, /coverageMs >= minimumCoverage/);
   assert.match(repository, /buildDirectSetupPerformance/);
+  assert.match(types, /HT3-R_FAILED_AUCTION/);
+  assert.match(types, /HT4_EXHAUSTION_ANTI_CROWD/);
+  assert.match(types, /RESONANCE_V1_WITH_HT5-R_TIMING/);
+  assert.match(execution, /getDirectSetupGuardDecision/);
+  assert.match(setupGuard, /losingStreak >= 3/);
 });
 
 test("adaptive position decisions use completed candles without adding periodic D1 writes", () => {

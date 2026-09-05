@@ -51,7 +51,7 @@ test("complete independent 12-hour failures block only the repeated signature", 
   const samples = Array.from({ length: 4 }, (_, index) => ({
     independentEventKey: `event-${index}`,
     resultR: -0.5,
-    signature: "BREAKOUT|LONG|trend_up",
+    signature: "MULTI_TIMEFRAME_RESONANCE|BREAKOUT|LONG|trend_up",
     exitAt: now - index * 60_000,
     complete: true,
   }));

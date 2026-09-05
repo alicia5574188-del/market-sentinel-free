@@ -84,7 +84,9 @@ test("whole market and current-symbol judgment are separate decision layers", ()
   assert.match(scanner, /buildResonanceGlobalMarket/);
   assert.match(scanner, /buildDirectMarketCandidate/);
   assert.match(directBrain, /location\(candles, price\)/);
-  assert.match(directBrain, /const resonanceAligned = \[trend15m, trend1h, trend4h\]/);
+  assert.match(directBrain, /const resonanceStructure = Math\.abs\(trend4h\) >= 0\.28/);
+  assert.match(directBrain, /const resonanceNearMean = Boolean/);
+  assert.match(directBrain, /const resonanceResume =/);
   assert.match(directBrain, /VOLUME_FORCE_FAILED_BREAKOUT/);
   assert.match(directBrain, /EXHAUSTION_REVERSAL/);
   assert.match(directBrain, /MULTI_TIMEFRAME_RESONANCE/);

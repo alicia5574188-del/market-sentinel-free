@@ -73,7 +73,7 @@ export async function GET(request: Request) {
     strategy: {
       familyId: family?.id ?? "DIRECT",
       familyName: family?.name ?? "市场大脑",
-      variantId: definition?.variantId ?? trade.brainVersion ?? "direct-market-brain-v3-resonance-three",
+      variantId: definition?.variantId ?? trade.brainVersion ?? "direct-market-brain-v4-restored-core",
       variantName: definition?.variantName ?? "当前位置决策",
       canonicalLabel: hte31CanonicalStrategyLabel(traderId, trade.assetRegime),
       tags: definition?.tags ?? ["位置", "方向", "目标", "失效"],

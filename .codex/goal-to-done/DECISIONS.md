@@ -346,3 +346,17 @@ Record only consequential decisions using this format:
 - Reason: The owner wants the system back to a small set of understandable, useful trading stories, with the original low-frequency profitable idea retained and code/product copy compressed.
 - Evidence: Every candidate now stores one setup and score; deterministic tests cover selection plus low-liquidity/low-volume rejection, while the existing hard risk and exact live-parity gates remain in force.
 - Revisit when: Complete independent 12-hour forward evidence from this exact brain version supports replacing—not stacking—one of the three setups.
+
+## 2026-09-05 — Restore the original strategy bloodlines instead of tuning substitutes
+
+- Choice: Replace the simplified Sep-4 formulas with direct, named adaptations of HT3-R Failed Auction, HT4 Exhaustion/Anti-Crowd, and the original Resonance direction layer combined with HT5-R timing. Keep one Direct Market Brain and three understandable setups.
+- Reason: Production counters and outcomes showed that the replacement formulas did not behave like the strategies the owner had previously observed. In particular, a universal volume gate starved resonance, and a 24-hour move proxy allowed false exhaustion entries.
+- Evidence: Behavioral tests now prove sweep/reclaim plus setup-local force for HT3-R, no exhaustion from 24-hour movement alone, and 4h/1h direction with mean-location/5m resume timing for resonance. Stable lineage constants make future accidental substitution fail architecture review.
+- Revisit when: Comparable forward results from this exact V4 epoch show a specific rule—not a whole named strategy—is responsible for negative expectancy.
+
+## 2026-09-05 — Separate immediate damage control from twelve-hour optimization
+
+- Choice: Evaluate loss protection independently for each setup, direction, and asset regime. Three consecutive independent losses or a proven four-sample negative cell pauses only that cell immediately; after six or twelve hours it may take one high-confidence, high-edge revalidation order. Twelve-hour reports remain the optimization clock, not the stop-loss clock.
+- Reason: Waiting for a report or twenty samples allowed a losing strategy variant to keep consuming capital, while global throttling would also suppress healthy strategies.
+- Evidence: The execution boundary queries only current-version/current-epoch rows for the exact cell, deduplicates independent event keys, snapshots the guard reason, and tests pause, correlation deduplication, and revalidation.
+- Revisit when: Forward evidence supports different thresholds; never pool correlated orders or unrelated strategies to manufacture the sample count.

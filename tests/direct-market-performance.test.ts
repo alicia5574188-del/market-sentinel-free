@@ -21,6 +21,9 @@ test("per-setup performance identifies contributors and drag without inventing e
   ];
   const rows = buildDirectSetupPerformance(trades);
   assert.equal(rows.find((row) => row.setup === "VOLUME_FORCE_FAILED_BREAKOUT")?.status, "发力");
+  assert.equal(rows.find((row) => row.setup === "VOLUME_FORCE_FAILED_BREAKOUT")?.averageWinR, 2);
+  assert.equal(rows.find((row) => row.setup === "VOLUME_FORCE_FAILED_BREAKOUT")?.averageLossR, -1);
+  assert.equal(rows.find((row) => row.setup === "VOLUME_FORCE_FAILED_BREAKOUT")?.realizedPayoffRatio, 2);
   assert.equal(rows.find((row) => row.setup === "EXHAUSTION_REVERSAL")?.status, "拖后腿");
   assert.equal(rows.find((row) => row.setup === "MULTI_TIMEFRAME_RESONANCE")?.status, "暂无机会");
 });

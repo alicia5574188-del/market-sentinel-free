@@ -14,12 +14,10 @@ function candles(direction = 1): Hte31Candle[] {
 }
 
 test("direct brain emits normalized mutually exclusive paths and a replayable plan", () => {
-  const rows = candles(1);
-  for (let index = rows.length - 16; index < rows.length - 1; index += 1) {
-    const close = rows[index].open + (index % 2 ? -0.5 : 0.1);
-    rows[index] = { ...rows[index], close, high: Math.max(rows[index].open, close) + 0.12, low: Math.min(rows[index].open, close) - 0.12 };
-  }
-  rows[rows.length - 1] = { ...rows.at(-1)!, volume: 320 };
+  const rows = Array.from({ length: 96 }, (_, index) => ({
+    time: 1_800_000_000 + index * 300, open: 100, close: 100 + (index % 2 ? 0.03 : -0.03), high: 100.2, low: 99.8, volume: 100 + index,
+  }));
+  rows[rows.length - 1] = { ...rows.at(-1)!, open: 99.95, close: 100.18, high: 100.24, low: 99.9, volume: 160 };
   const packet = {
     observedAt: Date.now(),
     symbol: "BTC_USDT",
@@ -27,7 +25,7 @@ test("direct brain emits normalized mutually exclusive paths and a replayable pl
       futuresPrice: rows.at(-1)!.close,
       volumeUsd: 1_000_000_000,
       changePercentage: 3,
-      timeframeTrend15m: 0.7,
+      timeframeTrend15m: 0.2,
       timeframeTrend1h: 0.8,
       timeframeTrend4h: 0.75,
       spotCvdRatio: 0.25,
@@ -90,7 +88,7 @@ test("missing BTC correlation stays in one conservative risk cluster", () => {
   assert.equal(candidate.riskClusterId, "btc-correlation-unavailable");
 });
 
-test("core setup cannot bypass liquidity or volume hard gates", () => {
+test("core setup cannot bypass liquidity, while volume remains setup-specific", () => {
   const rows = candles(1);
   rows[rows.length - 2] = { ...rows.at(-2)!, volume: 20 };
   rows[rows.length - 1] = { ...rows.at(-1)!, volume: 20 };
@@ -107,14 +105,14 @@ test("core setup cannot bypass liquidity or volume hard gates", () => {
   const candidate = buildDirectMarketCandidate({ packet, candles: rows, btcCandles: rows, volumeRank: 1, batchId: "batch:hard-gate" });
   assert.equal(candidate.decision, "WAIT");
   assert.equal(candidate.checks.find((check) => check.key === "liquidity")?.passed, false);
-  assert.equal(candidate.checks.find((check) => check.key === "volume")?.passed, false);
+  assert.equal(candidate.checks.find((check) => check.key === "volume"), undefined);
 });
 
 test("volume-force failed breakout is selected only after a sweep, reclaim and reverse force", () => {
   const rows = Array.from({ length: 96 }, (_, index) => ({
     time: 1_800_000_000 + index * 300, open: 100, close: 100 + (index % 2 ? 0.03 : -0.03), high: 100.2, low: 99.8, volume: 100,
   }));
-  rows[rows.length - 2] = { ...rows.at(-2)!, open: 100.1, close: 100.35, high: 100.9, low: 99.95, volume: 180 };
+  rows[rows.length - 2] = { ...rows.at(-2)!, open: 100.1, close: 100.30, high: 100.62, low: 99.95, volume: 180 };
   rows[rows.length - 1] = { ...rows.at(-1)!, open: 100.3, close: 99.95, high: 100.35, low: 99.8, volume: 180 };
   const packet = {
     observedAt: Date.now(), symbol: "ETH_USDT",
@@ -128,15 +126,28 @@ test("volume-force failed breakout is selected only after a sweep, reclaim and r
 
 test("exhaustion reversal wins over chasing an overheated trend", () => {
   const rows = candles(1);
-  rows[rows.length - 1] = { ...rows.at(-1)!, open: 118, close: 117.2, high: 119.2, low: 117, volume: 230 };
+  rows[rows.length - 1] = { ...rows.at(-1)!, open: 118, close: 116.8, high: 119.2, low: 116.6, volume: 230 };
   const packet = {
     observedAt: Date.now(), symbol: "SOL_USDT",
-    market: { futuresPrice: 117.2, volumeUsd: 900_000_000, changePercentage: 9, timeframeTrend15m: 0.7, timeframeTrend1h: 0.8, timeframeTrend4h: 0.75, spotCvdRatio: -0.08, orderBookImbalance: -0.12, fundingRate: 0.0008, liquidationImbalance: 0.55, macroEventRisk: 0.1 },
+    market: { futuresPrice: 116.8, volumeUsd: 900_000_000, changePercentage: 9, timeframeTrend15m: 0.7, timeframeTrend1h: 0.8, timeframeTrend4h: 0.75, spotCvdRatio: -0.08, orderBookImbalance: -0.12, fundingRate: 0.0008, liquidationImbalance: 0.55, macroEventRisk: 0.1 },
     decision: { dataQuality: 0.94 },
   } as Parameters<typeof buildDirectMarketCandidate>[0]["packet"];
   const candidate = buildDirectMarketCandidate({ packet, candles: rows, btcCandles: rows, volumeRank: 3, batchId: "batch:exhaustion" });
   assert.equal(candidate.setup, "EXHAUSTION_REVERSAL");
   assert.equal(candidate.decision, "SHORT");
+});
+
+test("a large 24-hour move alone never qualifies as exhaustion", () => {
+  const rows = candles(0);
+  const packet = {
+    observedAt: Date.now(), symbol: "SOL_USDT",
+    market: { futuresPrice: rows.at(-1)!.close, volumeUsd: 900_000_000, changePercentage: -18, timeframeTrend15m: 0.1, timeframeTrend1h: -0.05, timeframeTrend4h: -0.1, spotCvdRatio: 0, orderBookImbalance: 0, fundingRate: 0, liquidationImbalance: 0, macroEventRisk: 0.1 },
+    decision: { dataQuality: 0.94 },
+  } as Parameters<typeof buildDirectMarketCandidate>[0]["packet"];
+  const candidate = buildDirectMarketCandidate({ packet, candles: rows, btcCandles: rows, volumeRank: 3, batchId: "batch:not-exhausted" });
+  const exhaustion = candidate.setupEvaluations?.find((row) => row.setup === "EXHAUSTION_REVERSAL");
+  assert.equal(exhaustion?.triggered, false);
+  assert.equal(exhaustion?.qualified, false);
 });
 
 test("risk state is loss-aware and groups correlated orders as one event", () => {
