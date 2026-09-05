@@ -36,9 +36,9 @@ test("the direct market cycle has no simulation-inside-simulation and opens only
   assert.match(diagnostics, /isCurrentResonanceTrade/);
   assert.match(scanner, /buildDirectMarketCandidate/);
   assert.doesNotMatch(scanner, /recordHte31DiagnosticCycle|tryOpenResonanceTrade|createShadowSample/);
-  const rankIndex = worker.indexOf("freshCohort.length >= 3");
+  const rankIndex = worker.indexOf('if (result.directCandidate.decision !== "WAIT")');
   const openIndex = worker.indexOf("openDirectMarketTrade({", rankIndex);
-  assert.ok(rankIndex >= 0 && openIndex > rankIndex, "cross-market selection must precede the single paper execution path");
+  assert.ok(rankIndex >= 0 && openIndex > rankIndex, "a complete current prediction must precede the single paper execution path");
 });
 
 test("dashboard keeps cognitive diagnostics on demand instead of repeating implementation copy", () => {

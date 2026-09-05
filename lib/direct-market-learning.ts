@@ -108,15 +108,16 @@ export function evaluateDirectMarketLearningAdmission(
   candidate: DirectMarketCandidate,
   now = Date.now(),
 ) {
-  if (candidate.netEdgeR < 0.55 + profile.minimumEdgeOffsetR) {
-    return { allowed: false, revalidation: false, reason: `学习版本要求净优势至少 ${(0.55 + profile.minimumEdgeOffsetR).toFixed(2)}R` };
+  const baseEdge = candidate.forecast ? 0.05 : 0.55;
+  if (candidate.netEdgeR < baseEdge + profile.minimumEdgeOffsetR) {
+    return { allowed: false, revalidation: false, reason: `学习版本要求净优势至少 ${(baseEdge + profile.minimumEdgeOffsetR).toFixed(2)}R` };
   }
   const signature = directMarketCandidateSignature(candidate);
   if (profile.blockedSignature !== signature) return { allowed: true, revalidation: false, reason: profile.reason };
   const revalidationDue = profile.lastEvidenceAt != null
     && now - profile.lastEvidenceAt >= 12 * 60 * 60_000
-    && candidate.confidence >= 82
-    && candidate.netEdgeR >= 0.9;
+    && candidate.confidence >= (candidate.forecast ? 72 : 82)
+    && candidate.netEdgeR >= (candidate.forecast ? 0.25 : 0.9);
   return revalidationDue
     ? { allowed: true, revalidation: true, reason: `${profile.reason}；当前达到高质量复考条件` }
     : { allowed: false, revalidation: false, reason: profile.reason };

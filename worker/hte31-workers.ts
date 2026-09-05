@@ -1,5 +1,6 @@
 /// <reference types="@cloudflare/workers-types" />
 
+import { loadHistoricalForecastCandles } from "../lib/historical-forecast-cache";
 import { DurableObject } from "cloudflare:workers";
 import { setRuntimeDb } from "../db";
 import { setRuntimeBindings } from "../lib/runtime-bindings";
@@ -57,7 +58,7 @@ type ScannerRuntime = {
   rotationOffset: number;
   job: Hte31ScanJob | null;
   readModel: Hte31ScanCompleted | null;
-  directBySymbol?: Record<string, DirectMarketCandidate>;
+  directBySymbol?: Record<string, Omit<DirectMarketCandidate, "candles5m">>;
   directHistory?: { symbol: string; observedAt: number; referencePrice: number | null; location: string; decision: string; paths: DirectMarketCandidate["paths"]; riskClusterId: string }[];
   activity12h?: DirectTwelveHourActivityState;
   status: SchedulerWorkerStatus;
@@ -111,7 +112,7 @@ function withoutCandles(candidate: DirectMarketCandidate): Omit<DirectMarketCand
   return compact;
 }
 
-function buildDirectRadar(result: Hte31ScanCompleted, directBySymbol: Record<string, DirectMarketCandidate>): DirectMarketRadarItem[] {
+function buildDirectRadar(result: Hte31ScanCompleted, directBySymbol: Record<string, Omit<DirectMarketCandidate, "candles5m">>): DirectMarketRadarItem[] {
   const now = Date.now();
   return result.universe.map((row, index) => {
     const candidate = directBySymbol[row.symbol] ?? null;
@@ -124,7 +125,7 @@ function buildDirectRadar(result: Hte31ScanCompleted, directBySymbol: Record<str
       changePercentage: row.changePercentage,
       scanStage: freshCandidate ? "DEEP" : "LIGHT",
       freshness: freshCandidate ? (now - freshCandidate.observedAt <= 90_000 ? "FRESH" : "STALE") : "FRESH",
-      candidate: freshCandidate ? withoutCandles(freshCandidate) : null,
+      candidate: freshCandidate,
     };
   });
 }
@@ -207,7 +208,8 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
     let current = job;
     for (let stepIndex = 0; stepIndex < maxSteps; stepIndex += 1) {
       try {
-        const step = await runHte31ScanStep(current);
+        const step = await runHte31ScanStep(current, (symbol, now) =>
+          loadHistoricalForecastCandles(this.ctx.storage, fetchGateChartCandles, symbol, now));
         if (step.kind !== "progress") return step;
         current = step.job;
       } catch (error) {
@@ -332,7 +334,7 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
       const activeSymbols = new Set(result.universe.map((row) => row.symbol));
       const directBySymbol = Object.fromEntries([
         ...Object.entries(runtime.directBySymbol ?? {}).filter(([symbol]) => activeSymbols.has(symbol)),
-        [result.directCandidate.symbol, result.directCandidate] as const,
+        [result.directCandidate.symbol, withoutCandles(result.directCandidate)] as const,
       ]);
       const directHistory = [{
         symbol: result.directCandidate.symbol,
@@ -343,46 +345,21 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
         paths: result.directCandidate.paths,
         riskClusterId: result.directCandidate.riskClusterId,
       }, ...(runtime.directHistory ?? [])].slice(0, 512);
-      const freshCohort = Object.values(directBySymbol)
-        .filter((candidate) => candidate.batchId === result.directCandidate.batchId && Date.now() - candidate.observedAt <= 3 * 60_000);
-      const freshReady = freshCohort
-        .filter((candidate) => Date.now() - candidate.observedAt <= 3 * 60_000 && candidate.decision !== "WAIT")
-        .sort((a, b) => b.netEdgeR - a.netEdgeR || b.confidence - a.confidence || a.volumeRank - b.volumeRank);
-      const portfolioRank = freshReady.findIndex((candidate) => candidate.symbol === result.directCandidate.symbol) + 1;
+      // A complete prediction is executable on its own; never wait for three
+      // other symbols or retry old cached candidates under a new observation.
       let openedSetup: DirectCoreSetup | null = null;
-      if (freshCohort.length >= 3 && freshReady.length) {
-        const finalists = freshReady.slice(0, 3);
-        const quotes = await fetchGatePositionQuotes(finalists.map((candidate) => candidate.symbol));
-        const quoteBySymbol = new Map(quotes.map((quote) => [quote.symbol, quote]));
-        const settings = await getSettings();
-        const attempts = [];
-        for (const [index, candidate] of finalists.entries()) {
-          const opened = await openDirectMarketTrade({
-            candidate,
-            universe: result.universe.map((row) => row.symbol),
-            settings,
-            freshQuote: quoteBySymbol.get(candidate.symbol) ?? null,
-            portfolioRank: index + 1,
-          });
-          attempts.push({ symbol: candidate.symbol, ...opened });
-        }
-        const firstOpened = attempts.find((attempt) => attempt.opened);
-        openedSetup = firstOpened ? finalists.find((candidate) => candidate.symbol === firstOpened.symbol)?.setup ?? null : null;
-        const currentAttempt = attempts.find((attempt) => attempt.symbol === result.directCandidate.symbol);
-        result = {
-          ...result,
-          openedTradeId: firstOpened?.opened?.id ?? null,
-          openReason: firstOpened
-            ? `组合择优已建立 ${firstOpened.symbol.replace("_USDT", "")}，其余候选继续服从组合风险边界`
-            : currentAttempt?.reason ?? `当前组合排名 ${portfolioRank || ">3"}，本轮未建立新仓`,
-        };
-      } else if (result.directCandidate.decision !== "WAIT") {
-        result = {
-          ...result,
-          openReason: freshCohort.length < 3
-            ? `同批已评估 ${freshCohort.length}/3，等待横向比较`
-            : `当前组合排名 ${portfolioRank || ">3"}，本轮不进入前三`,
-        };
+      if (result.directCandidate.decision !== "WAIT") {
+        const candidate = result.directCandidate;
+        const quotes = await fetchGatePositionQuotes([candidate.symbol]);
+        const opened = await openDirectMarketTrade({
+          candidate,
+          universe: result.universe.map((row) => row.symbol),
+          settings: await getSettings(),
+          freshQuote: quotes.find((quote) => quote.symbol === candidate.symbol) ?? null,
+          portfolioRank: 1,
+        });
+        openedSetup = opened.opened ? candidate.setup : null;
+        result = { ...result, openedTradeId: opened.opened?.id ?? null, openReason: opened.reason };
       }
       const activity12h = recordDirectTwelveHourActivity({
         activity: runtime.activity12h,

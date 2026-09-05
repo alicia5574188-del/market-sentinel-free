@@ -10,6 +10,7 @@ export type MacroEvent = {
 export type GlobalRiskPacket = GlobalRiskContext & {
   observedAt: number;
   nextEvents: MacroEvent[];
+  calendarEvents?: MacroEvent[];
   options: {
     btcDvol: number | null;
     ethDvol: number | null;
@@ -136,6 +137,7 @@ async function refreshGlobalRiskContext(now: number): Promise<GlobalRiskPacket> 
       macroEventLabel: macro.label,
       etfFlowScore: null,
       nextEvents,
+      calendarEvents: [...blsEvents, ...FOMC_EVENTS].filter((event) => Math.abs(event.time - now) <= 15 * 24 * 3_600_000),
       options: { btcDvol: btcDvol.current, ethDvol: ethDvol.current, percentile30d: ivPercentile },
       sources: {
         gateBenchmarks: benchmarkResult.status === "fulfilled" ? "live" : "unavailable",

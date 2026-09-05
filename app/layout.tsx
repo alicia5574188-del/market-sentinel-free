@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   metadataBase: new URL("https://market-sentinel-free.alicia5574188.workers.dev"),
   title: "Resonance｜自适应交易系统",
-  description: "Resonance：用三套核心策略、当前贡献排名和每12小时复盘驱动的自适应交易系统。",
+  description: "Resonance：用历史相似走势预测、真实模拟结果和每12小时复盘驱动的自适应交易系统。",
   applicationName: "Resonance",
   manifest: "/manifest.webmanifest",
   formatDetection: { telephone: false },
@@ -28,13 +28,13 @@ export const metadata: Metadata = {
     type: "website",
     locale: "zh_CN",
     title: "Resonance｜自适应交易系统",
-    description: "大脑决策 · 三策略贡献 · 12小时复盘 · 模拟实盘同链",
+    description: "历史走势对照 · 模拟验证 · 12小时复盘",
     images: [{ url: "/og.png", width: 1200, height: 630, alt: "Resonance" }],
   },
   twitter: {
     card: "summary_large_image",
     title: "Resonance｜自适应交易系统",
-    description: "大脑决策 · 三策略贡献 · 12小时复盘 · 模拟实盘同链",
+    description: "历史走势对照 · 模拟验证 · 12小时复盘",
     images: ["/og.png"],
   },
 };

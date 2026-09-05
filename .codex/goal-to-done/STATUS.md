@@ -1,12 +1,44 @@
 # Status
 
+## Active V7 historical analog release — local implementation prepared
+
+- User now requests one historical K-line analog strategy, superseding draft #140. Implemented two-hour closed-candle shape / fourteen-day same-symbol history / one-hour outcome distribution, calendar and partial recorded-event matching, disjoint purged episodes, cost-aware historical replay, Chinese overlay chart and actual dates.
+- Replaced V6 three-setup authority; remove three-symbol cohort wait, keep one current candidate execution and exact activity attribution. Reuse scanner/DO/PAPER/CI/Cloudflare. New history keys are bounded and write no D1.
+- New evidence-specific risk/learning floors; PAPER sizing permits 0.5%–3.5% actual risk within existing safe leverage/margin, removes fixed $50 profit floor only for analog. Total risk cap and loss protections remain. New strategy is explicitly simulation-only at live submission boundary.
+- V7 / migration0025 uses existing fresh-quote PAPER archive and new epoch. No production mutation yet. Details and limits: docs/HISTORICAL_FORECAST.md.
+- Local validation passed: Direct32 + architecture7, signals231, production build/UI115, TypeScript and ESLint. Three tests asserting retired V6 ranking/trigger internals were adapted to the new single-authority contract; protections remain covered.
+- Direct Gate network request approval was cancelled; no live-history replay claim and no bypass. Deterministic tests validate engineering, not profit/frequency. Required final local gates and authorized PR/deploy next.
+
+## 2026-09-05 — Owner narrows first-release scope and reuses deployment
+
+- Revised redesign sections 6 and 9: first-hour objective is a compact PAPER release using existing data/account/risk/order/auth/CI/Cloudflare paths. Comprehensive historical replay, full scan-coverage redesign and whole-repository cleanup no longer block that first release.
+- Existing necessary CI, position protection, epoch archive and D1 gates remain; evidence gathering is distinct from engineering acceptance and cannot grant automatic live qualification. No runtime changes in this scope-correction task.
+
+## 2026-09-05 — Redesign proposal complete; implementation has not started
+
+- Saved the single-file design as draft PR #140, commit `3360cb1e8ae5245b52b97b2d0edc5924f288d863`, branch `design/resonance-evidence-first`. Confirmed draft/open/unmerged and exactly one added documentation file; no production deployment initiated.
+- Added `docs/RESONANCE_REDESIGN.md` against main `c4b1b0bf55823001abe55b7be516270f44dc3236`: goals, known facts versus hypotheses, three frozen initial strategy hypotheses, shared engine, entry/exit integrity, evidence gates, Chinese UI, budgets, upgrade scope and recovery.
+- Existing code converts heuristic scores into path probabilities and net edge. The proposal retires uncalibrated probability claims; no measured replacement performance is asserted. Exact screenshot order remains unreplayed.
+- No runtime, risk, order, database, scheduler or deployment mutation in this design task. Documentation-only review; full runtime tests are not applicable.
+- Production remains PR #139 / workflow 33946738899. Next useful engineering task is the first-hour replay/baseline slice in section 9; archive major-version PAPER holdings only during an actual verified cutover.
+
+## Primary-observation correction — production verified
+
+- PR #139 merged as`c4b1b0bf55823001abe55b7be516270f44dc3236`; PR CI33946698532 and production33946738899 verify/deploy/operations all passed. Worker`89a885a5-0c35-4a29-9dfd-3f34a35a9c90`; immutable client`assets/page-2Cs6-feN.js`.
+- Renamed the misleading counter to 优先观察（含待确认）; kept historic counts and paper epoch. Same-symbol qualification-comparison evidence is now retained per setup and exposed when present. Old event details remain explicitly unknown. Triggered strategies without closed samples display 观察.
+- V6 cutover still completed, target null, legacy holding0. No strategy/ranking/risk/position/scan/D1-write semantics changed. This is explanation and observability, not evidence that historic signal frequency is restored.
+- Original screenshot diagnosis:94 evaluations /1 triggered /1 qualified /0 primary observations places the qualified loss at same-symbol comparison. The previous18 exhaustion observations included unqualified WAIT; only2 were qualified. Exact historical competitor was not persisted and has not been invented.
+- Full current CI passes389 test executions (direct36+architecture7+signals231+UI115). New tests cover retained qualified loser evidence and priority WAIT observations. No owner-authenticated visual replay was performed; production assets and background/capacity acceptance passed.
+- This bounded task is complete. Further trigger-frequency tuning needs actual pattern evidence; do not relax setup conditions to manufacture counts. Release proof is in workflow and PR #139 comment. Do not redeploy solely to record proof.
+
+
 ## Primary-observation diagnosis — verified locally, release pending
 
 - Screenshot: failed breakout94 evaluations /1 triggered /1 qualified /0 selected; exhaustion94/18/2/18. Current main`62f863d0` selection sorts qualification first, then trigger, then evidence score; no named exhaustion bonus. Thus a qualified failed-breakout setup can lose only at same-symbol comparison to another qualified setup. The screenshot's exact winner/symbol/score was not retained by the old cumulative counters and is not reconstructed or invented.
 - `selectedSignals` counts selected AND triggered even while qualification fails. It is a priority observation count, not strict post-qualification admission. Rename operator text to 优先观察（含待确认） and 通过条件; preserve original counters and historical window.
 - Retain the latest qualified comparison (symbol/time/winner/score/selected) per setup inside the existing DO activity save, record same-symbol selection loss as a distinct reason, and display it when available. Old missing event details are labeled honestly. A strategy with raw signals and zero closed samples now says 观察 rather than 暂无机会.
 - Strategy triggers, evidence ranking, execution/risk policy, positions, epoch, D1 and scanner cadence are unchanged. This does not prove restored frequency:94 evaluations with only1 raw trigger remains a genuine low-trigger observation requiring actual pattern evidence before tuning.
-- Local direct36+architecture7 and production build/UI115 passed; TypeScript and ESLint passed. Existing authorized PR/CI/deployment path next. No production code changed yet.
+- Local direct36+architecture7 and production build/UI115 passed; TypeScript and ESLint passed. PR #139 (`9982589116cd39ace0fcf1180de8fa19bda4b880`) passed CI33946698532 and merged as`c4b1b0bf55823001abe55b7be516270f44dc3236`. Production verification is pending.
 
 
 ## Reliability follow-up — production verified

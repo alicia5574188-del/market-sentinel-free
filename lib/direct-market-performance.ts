@@ -1,4 +1,4 @@
-import { DIRECT_CORE_SETUPS, type DirectCoreSetup } from "./direct-market-types.ts";
+import { DIRECT_CORE_SETUPS, DIRECT_LEGACY_SETUPS, type DirectCoreSetup } from "./direct-market-types.ts";
 
 type PerformanceTrade = {
   setupId: string;
@@ -48,7 +48,7 @@ export function buildDirectSetupPerformance(
 ): DirectSetupPerformance[] {
   const from = window.from ?? null;
   const to = window.to ?? null;
-  return DIRECT_CORE_SETUPS.map(({ id: setup, label: setupLabel }) => {
+  return [...DIRECT_CORE_SETUPS, ...DIRECT_LEGACY_SETUPS.filter((setup) => trades.some((trade) => trade.setupId === setup.id))].map(({ id: setup, label: setupLabel }) => {
     const setupTrades = trades.filter((trade) => trade.setupId === setup);
     const opened = setupTrades.filter((trade) => inWindow(trade.entryAt, from, to));
     const closed = setupTrades

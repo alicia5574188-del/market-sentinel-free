@@ -32,6 +32,7 @@ export type Hte31ScanJob = {
   market?: Hte31MarketState;
   target?: MarketUniverseTicker;
   packet?: MarketAnalysisPacket;
+  events?: { time: number; title: string }[];
   candles?: Hte31Candle[];
   btcCandles?: Hte31Candle[];
   directCandidate?: DirectMarketCandidate;
@@ -93,11 +94,11 @@ export function hte31PhaseLabel(phase: Hte31ScanPhase) {
     universe: "轻扫配置中的全部交易品种",
     deep: "深扫当前候选",
     candles: "读取位置与多周期结构",
-    evaluate: "评估三套核心打法",
+    evaluate: "对照历史相似片段预测未来一小时",
   } satisfies Record<Hte31ScanPhase, string>)[phase];
 }
 
-export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep> {
+export async function runHte31ScanStep(job: Hte31ScanJob, loadHistory: (symbol: string, now: number) => Promise<Hte31Candle[]>): Promise<Hte31ScanStep> {
   if (job.phase === "config") {
     const settings = await getSettings();
     if (!settings.scanEnabled) return { kind: "paused", observedAt: Date.now() };
@@ -142,22 +143,21 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
       alertStyle: job.settings.alertStyle,
       detail: "scan",
     });
-    return { kind: "progress", job: { ...job, phase: "candles", packet } };
+    return { kind: "progress", job: { ...job, phase: "candles", packet, events: globalRisk.calendarEvents ?? [] } };
   }
 
   if (job.phase === "candles") {
     if (!job.target || !job.packet) throw new Error("市场大脑缺少K线目标");
     const now = Date.now();
     const [candlesResult, btcCandlesResult] = await Promise.allSettled([
-      marketExchange.fetchChartCandles(job.target.symbol, now - 18 * 60 * 60_000, now),
+      loadHistory(job.target.symbol, now),
       job.target.symbol === "BTC_USDT"
         ? marketExchange.fetchChartCandles(job.target.symbol, now - 18 * 60 * 60_000, now)
         : marketExchange.fetchChartCandles("BTC_USDT", now - 18 * 60 * 60_000, now),
     ]);
-    if (candlesResult.status === "rejected") throw candlesResult.reason;
-    const candles = candlesResult.value;
+    const candles = candlesResult.status === "fulfilled" ? candlesResult.value : [];
     const btcCandles = btcCandlesResult.status === "fulfilled" ? btcCandlesResult.value : [];
-    if (candles.length < 48) throw new Error(`5m K线不足：${candles.length} 根`);
+    // Missing history becomes a visible WAIT result; it cannot fabricate a fallback trade.
     return { kind: "progress", job: { ...job, phase: "evaluate", candles, btcCandles } };
   }
 
@@ -173,6 +173,8 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
       volumeRank: Math.max(1, volumeRank),
       batchId: `direct:${Math.floor(job.packet.observedAt / (3 * 60_000))}`,
       marketContext: job.market,
+      roundTripCostBps: job.settings.roundTripCostBps,
+      events: job.events,
     });
     return {
       kind: "completed",
@@ -186,7 +188,7 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
         openedTradeId: null,
         openReason: directCandidate.decision === "WAIT"
           ? directCandidate.counterEvidence[0] ?? "当前位置没有足够净优势"
-          : "等待候选池完成横向择优",
+          : "历史信号已就绪，立即复核报价和组合风险",
         settings: {
           scanEnabled: job.settings.scanEnabled,
           coreSymbols: job.coreSymbols,

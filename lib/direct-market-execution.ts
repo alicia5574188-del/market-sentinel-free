@@ -187,6 +187,7 @@ export async function openDirectMarketTrade(input: {
   if (risk.state === "PAUSED") return { opened: null, reason: `市场大脑暂停新单：${risk.reason}` };
   const riskAdmission = directMarketRiskAdmission({
     state: risk.state,
+    historical: Boolean(candidate.forecast),
     confidence: candidate.confidence,
     netEdgeR: candidate.netEdgeR,
     location: candidate.location,
@@ -201,8 +202,8 @@ export async function openDirectMarketTrade(input: {
     const revalidationHolding = account.open.some((row) => row.setupId === candidate.setup
       && row.side === candidate.decision && row.assetRegime === candidate.assetRegime);
     if (revalidationHolding) return { opened: null, reason: "该打法/方向/行情组合已有复考仓位" };
-    if (candidate.confidence < 82 || candidate.netEdgeR < 0.9) {
-      return { opened: null, reason: `策略独立门控：${setupGuard.reason}；复考要求置信度82%且净优势0.90R` };
+    if (candidate.confidence < (candidate.forecast ? 72 : 82) || candidate.netEdgeR < (candidate.forecast ? 0.25 : 0.9)) {
+      return { opened: null, reason: `策略独立门控：${setupGuard.reason}；复考要求更高方向一致性与净优势` };
     }
   }
   const today = utcDayStart(executionNow);
@@ -231,6 +232,8 @@ export async function openDirectMarketTrade(input: {
     riskMultiplier: 1,
     riskRate: risk.riskRate,
     roundTripCostBps: settings.roundTripCostBps,
+    minimumTp2NetProfitUsdt: candidate.forecast ? 0 : undefined,
+    minimumRiskRate: candidate.forecast ? 0.005 : undefined,
     liquidityVolumeUsd: candidate.volumeUsd,
     atrPct: Math.abs(entryPrice - candidate.invalidationPrice) / entryPrice * 100,
     dataQuality: candidate.checks.find((check) => check.key === "data")?.passed ? 0.85 : 0.7,
@@ -255,7 +258,7 @@ export async function openDirectMarketTrade(input: {
     brainVersion: DIRECT_MARKET_BRAIN_VERSION,
     parentVersion: learning.parentVersion,
     decisionPolicyVersion: learning.version,
-    positionPolicyVersion: DIRECT_POSITION_POLICY_VERSION,
+    positionPolicyVersion: candidate.forecast ? "historical-analog-horizon-v1" : DIRECT_POSITION_POLICY_VERSION,
     batchId: candidate.batchId,
     universe: input.universe,
     selectedSymbol: candidate.symbol,
@@ -356,5 +359,5 @@ export async function openDirectMarketTrade(input: {
     entryQualityJson: "null",
     updatedAt: executionNow,
   });
-  return { opened: row, reason: `市场大脑以 ${risk.state} 风险档建立模拟仓；决策快照已锁定供实盘原样继承` };
+  return { opened: row, reason: `市场大脑以 ${risk.state} 风险档建立模拟仓；决策快照已锁定；历史预测先在模拟验证` };
 }
