@@ -59,10 +59,10 @@ test('six coins over twenty-four simulated hours use 1728 core requests, survive
  let retryCalls=0;await loadHourFeed({...store},async()=>{retryCalls++;return[];},'OTHER',clock+300_000);assert.equal(retryCalls,0);
 });
 
-test('six independent positions fit the same loss budget without a three-position cap',()=>{
+test('full one-percent positions consume the three-percent portfolio budget without pre-dividing six symbols',()=>{
  let used=0;
- for(let i=0;i<6;i++){const rate=analogRiskAllocation(1000,used,6-i,false);assert.ok(rate>0);used+=1000*rate;}
- assert.ok(Math.abs(used-7.5)<1e-8);assert.equal(analogRiskAllocation(1000,7.5,1,false),0);
+ for(let i=0;i<3;i++){const rate=analogRiskAllocation(1000,used,6-i,false);assert.equal(rate,.01);used+=1000*rate;}
+ assert.ok(Math.abs(used-30)<1e-8);assert.equal(analogRiskAllocation(1000,30,3,false),0);
  assert.equal(analogRiskAllocation(1000,0,6,true),analogRiskAllocation(1000,0,6,false)/2);
 });
 

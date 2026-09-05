@@ -39,7 +39,8 @@ export type HistoricalForecast = {
   eventContext: string;
   path: { referencePct?: number; minutes: number; lowerPct: number; medianPct: number; upperPct: number }[];
   episodes?: { weight: number; from: number; bars: { openPct: number; highPct: number; lowPct: number; closePct: number }[] }[];
-  matches: { from: number; to: number; futureTo: number; similarity: number; forwardPct: number; calendar: string; event: string; pathPct: number[] }[];
+  matches: { from: number; to: number; futureTo: number; similarity: number; forwardPct: number; calendar: string; event: string; pathPct: number[];
+    candles?: { time: number; open: number; high: number; low: number; close: number }[] }[];
 };
 
 /** Votes use the first cost-sized excursion, never the final close. Ambiguous OHLC bars abstain. */
@@ -158,7 +159,7 @@ export function buildHistoricalForecast(input: { candles: Hte31Candle[]; now: nu
     // Entire shape AND outcome intervals are disjoint; one move is one sample.
     if (selected.some((s) => Math.abs(s.start - candidate.start) < ANALOG_WINDOW + ANALOG_HORIZON)) continue;
     selected.push(candidate);
-    if (selected.length === 20) break;
+    if (selected.length === ANALOG_MIN_SAMPLES) break;
   }
   const totalWeight = selected.reduce((sum, s) => sum + s.weight, 0);
   result.sampleCount = selected.length;
@@ -197,7 +198,8 @@ export function buildHistoricalForecast(input: { candles: Hte31Candle[]; now: nu
     const sc = analogCalendar(to);
     return { from: candleTimeMs(segment[0]), to, futureTo: candleTimeMs(segment.at(-1)!) + ANALOG_BAR_MS,
       similarity: s.weight * 100, forwardPct: forwards[i], calendar: `星期${"日一二三四五六"[sc.day]} · ${sc.weekend ? "周末" : "工作日"}`,
-      event: eventAt(to, events) ?? "事件资料未覆盖", pathPct: segment.map((r) => (r.close / anchor - 1) * 100) };
+      event: eventAt(to, events) ?? "事件资料未覆盖", pathPct: segment.map((r) => (r.close / anchor - 1) * 100),
+      candles: segment.map((r) => ({ time: candleTimeMs(r), open: r.open, high: r.high, low: r.low, close: r.close })) };
   });
   if (result.sampleCount < ANALOG_MIN_SAMPLES || result.effectiveSamples < ANALOG_MIN_SAMPLES - 0.5) return { ...result,
     reason: `本轮检索${rows.length}根已存K线；合格相似走势${result.sampleCount}/${ANALOG_MIN_SAMPLES}段，暂不开仓。旧历史持续回补和轮换检索。` };

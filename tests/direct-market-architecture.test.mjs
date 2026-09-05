@@ -59,7 +59,7 @@ test("configured scan coverage and risk-based capacity reach the production boun
   assert.match(execution, /gte\(hte31Trades\.exitAt, today\)/);
   assert.match(execution, /hte31PaperPortfolioBlockReason/);
   assert.match(execution, /analogRiskAllocation/);
-  assert.match(page, /合计不超过0.75%/);
+  assert.match(page, /合计不超过3.00%/);
 });
 
 test("adaptive position decisions use completed candles without adding periodic D1 writes", () => {

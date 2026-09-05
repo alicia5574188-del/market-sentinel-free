@@ -1,5 +1,5 @@
-import { analogRiskAllocation, ANALOG_POSITION_POLICY } from "./analog-path-strategy.ts";
-import { SCALP_POLICY, scalpCostBps, scalpEntryRisk, correlatedScalpExposure } from "./scalp-strategy.ts";
+import { analogRiskAllocation, ANALOG_POSITION_POLICY, ANALOG_RISK_POLICY } from "./analog-path-strategy.ts";
+import { scalpCostBps, scalpEntryRisk, correlatedScalpExposure } from "./scalp-strategy.ts";
 import { and, desc, eq, gte, or, sql, lt } from "drizzle-orm";
 import { getDb } from "../db";
 import { hte31PaperResetState, hte31SimulationEpochs, hte31TradeCharts, hte31Trades } from "../db/hte31-schema";
@@ -54,10 +54,10 @@ export async function scalpAccountRisk(startingCapitalUsdt:number, costBps:numbe
   },0);
   const equityUsdt=state.dayBase+realized+unrealized;
   const recent=closed.length>=3?closed:await db.select({net:hte31Trades.netPnlUsdt,exitAt:hte31Trades.exitAt}).from(hte31Trades)
-    .where(and(eq(hte31Trades.status,"closed"),gte(hte31Trades.entryAt,epochAt),gte(hte31Trades.exitAt,now-SCALP_POLICY.lossPauseMs))).orderBy(desc(hte31Trades.exitAt)).limit(3);
+    .where(and(eq(hte31Trades.status,"closed"),gte(hte31Trades.entryAt,epochAt),gte(hte31Trades.exitAt,now-ANALOG_RISK_POLICY.lossPauseMs))).orderBy(desc(hte31Trades.exitAt)).limit(3);
   const reason=scalpEntryRisk({equity:equityUsdt,dayOpeningEquity:state.dayBase,dayNet:realized+unrealized,
-    lastClosed:recent.map(c=>({net:c.net??0,exitAt:c.exitAt??0})),now,latchedUntil:state.haltedUntil});
-  if(realized+unrealized<=-state.dayBase*SCALP_POLICY.dailyLossRate&&state.haltedUntil<day+UTC_DAY_MS) {
+    lastClosed:recent.map(c=>({net:c.net??0,exitAt:c.exitAt??0})),now,latchedUntil:state.haltedUntil},ANALOG_RISK_POLICY);
+  if(realized+unrealized<=-state.dayBase*ANALOG_RISK_POLICY.dailyLossRate&&state.haltedUntil<day+UTC_DAY_MS) {
     await db.run(sql`UPDATE scalp_risk_days SET halted_until=${day+UTC_DAY_MS}, updated_at=${now} WHERE id=${id}`);
   }
   return {open,equityUsdt,availableMarginUsdt:Math.max(0,equityUsdt-open.reduce((a,t)=>a+t.marginUsdt,0)),reason};
@@ -86,9 +86,9 @@ export async function getDirectMarketRiskDecision() {
   const evaluated=evaluateDirectMarketRisk(results);
   const now=Date.now(), day=utcDayStart(now), id=`${epoch?.startedAt??0}:${day}`;
   const state=await db.get<{haltedUntil:number}>(sql`SELECT halted_until AS haltedUntil FROM scalp_risk_days WHERE id=${id}`);
-  const paused=(state?.haltedUntil??0)>now || rows.length>=3&&rows.slice(0,3).every(r=>(r.netPnlUsdt??0)<0)&&now-(rows[0].exitAt??0)<SCALP_POLICY.lossPauseMs;
-  return {...evaluated,state:paused?"PAUSED" as const:results.length<12?"CALIBRATING" as const:"VALIDATING" as const,riskRate:paused?0:SCALP_POLICY.riskRate,
-    reason:`${paused?'亏损保护暂停新单；':''}单笔含费风险上限0.25%；日亏1.5%或三连亏暂停；${evaluated.reason}`};
+  const paused=(state?.haltedUntil??0)>now || rows.length>=3&&rows.slice(0,3).every(r=>(r.netPnlUsdt??0)<0)&&now-(rows[0].exitAt??0)<ANALOG_RISK_POLICY.lossPauseMs;
+  return {...evaluated,state:paused?"PAUSED" as const:results.length<12?"CALIBRATING" as const:"VALIDATING" as const,riskRate:paused?0:ANALOG_RISK_POLICY.riskRate,
+    reason:`${paused?'亏损保护暂停新单；':''}单笔含费风险上限1.00%；日亏3.0%或三连亏暂停；${evaluated.reason}`};
 }
 
 export async function getDirectMarketLearningDecision() {
@@ -192,7 +192,7 @@ export async function openDirectMarketTrade(input: {
   const risk={state:"CALIBRATING" as const,riskRate};
   const learning=deriveDirectMarketLearningProfile([]);
   const learningAdmission={revalidation:false};
-  const setupGuard={reason:"单笔最多0.25%，组合0.75%，按剩余资金与风险分配；相关敞口折半",revalidation:false};
+  const setupGuard={reason:"单笔最多1.00%，组合3.00%，不再预先按六币均分；相关敞口折半",revalidation:false};
   const today = utcDayStart(executionNow);
   const todayRows = await db.select({ entryAt: hte31Trades.entryAt, decisionSnapshotJson: hte31Trades.decisionSnapshotJson }).from(hte31Trades).where(and(
     eq(hte31Trades.decisionAuthority, DIRECT_MARKET_AUTHORITY),
@@ -228,7 +228,7 @@ export async function openDirectMarketTrade(input: {
   });
   if (!sizing.accepted) return { opened: null, reason: `仓位经济门槛：${sizing.reason}` };
   const portfolioBlock = hte31PaperPortfolioBlockReason({
-    maximumTotalPlannedRiskRate: SCALP_POLICY.portfolioRiskRate,
+    maximumTotalPlannedRiskRate: ANALOG_RISK_POLICY.portfolioRiskRate,
     open: account.open.map((row) => ({ side: row.side, riskBudgetUsdt: row.riskBudgetUsdt })),
     nextSide: side,
     nextRiskUsdt: sizing.plannedRiskUsdt,
@@ -255,7 +255,7 @@ export async function openDirectMarketTrade(input: {
     portfolioChecks: {
       openPositionsBefore: account.open.length,
       maximumOpenPositions: null,
-      maximumTotalPlannedRiskRate: SCALP_POLICY.portfolioRiskRate,
+      maximumTotalPlannedRiskRate: ANALOG_RISK_POLICY.portfolioRiskRate,
       riskClusterId: candidate.riskClusterId,
       d1ProjectedRows: admission.projectedRows,
       sameDirectionMaximum: null,
