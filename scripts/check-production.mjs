@@ -26,11 +26,17 @@ export function healthy(data, now = Date.now()) {
 
 async function checkHealth() {
   const first = await json(`${BASE}/__health`);
-  if (!healthy(first)) throw new Error("后台健康检查未通过");
+  if (!healthy(first)) {
+    console.error(JSON.stringify({ check: "scheduler_health", ok: false, schedulerError: first.schedulerError, schedulers: first.schedulers }));
+    throw new Error("后台健康检查未通过");
+  }
   for (let attempt = 0; attempt < 3; attempt++) {
     await pause(35_000);
     const next = await json(`${BASE}/__health`);
-    if (!healthy(next)) throw new Error("后台健康检查未通过");
+    if (!healthy(next)) {
+      console.error(JSON.stringify({ check: "scheduler_health", ok: false, schedulerError: next.schedulerError, schedulers: next.schedulers }));
+      throw new Error("后台健康检查未通过");
+    }
     // The idle position heartbeat is deliberately only persisted every five
     // minutes. Its alarm still moves each minute; do not create false outages
     // or increase storage writes merely to satisfy the acceptance probe.

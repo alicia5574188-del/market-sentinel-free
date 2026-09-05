@@ -214,7 +214,7 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
 
   private async enrichHistory(symbol:string,costBps:number) {
     const now=Date.now(), prior=await this.ctx.storage.get<number>("auxiliary-at")??0;
-    if(now-prior<60_000) return;
+    if(now-prior<5*60_000) return;
     await this.ctx.storage.put("auxiliary-at",now);
     try {
       const recent=await loadHistoricalForecastCandles(this.ctx.storage,fetchGateChartCandles,symbol,now);
@@ -394,7 +394,8 @@ export class HTE31MarketScanner extends DurableObject<CloudflareEnv> {
       if(firstOpened) await this.env.POSITION_MONITOR?.getByName("position-monitor").wake();
       // Background auxiliary work has its own keys; it never overwrites scan state.
       const historySymbol=result.universe[runtime.rotationOffset%result.universe.length].symbol;
-      this.ctx.waitUntil(this.enrichHistory(historySymbol,settings.roundTripCostBps));
+      // Live minute data takes priority over optional historical traffic.
+      if (!result.feedErrors?.length) this.ctx.waitUntil(this.enrichHistory(historySymbol,settings.roundTripCostBps));
       const readModel = { ...result, candidates: undefined, directRadar: buildDirectRadar(result, directBySymbol), activity12h };
       const nextRunAt = nextMinuteScan(Date.now());
       const status: SchedulerWorkerStatus = {
