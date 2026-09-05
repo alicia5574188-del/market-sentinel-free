@@ -20,7 +20,7 @@ test('historical overall direction can open without trend, volume recovery or pu
  for(const short of [false,true]){const c=candidate(forecast(short));assert.equal(c.decision,short?'SHORT':'LONG',JSON.stringify(c.counterEvidence));assert.equal(c.maxHoldingMinutes,60);assert.equal(c.setup,'ANALOG_PATH');assert.equal(validateDirectMarketEntry(c,{symbol:c.symbol,price:100,observedAt:now+1000},now+1000).allowed,true);}
 });
 test('sparse or stale history cannot be replaced by a different strategy',()=>{
- const f=forecast();assert.equal(candidate({...f,state:'INSUFFICIENT',sampleCount:7}).decision,'WAIT');
+ const f=forecast();assert.equal(candidate({...f,state:'INSUFFICIENT',sampleCount:4}).decision,'WAIT');
  assert.equal(historicalDirection({...f,signalAt:now-300000},now).side,'WAIT');
  assert.equal(candidate({...f,episodes:f.episodes!.map((e,i)=>i<5?e:{...e,bars:e.bars.map(b=>({...b,closePct:-Math.abs(b.closePct)}))}),medianPct:0}).decision,'WAIT');
 });
@@ -65,4 +65,12 @@ test('six independent positions fit the same loss budget without a three-positio
 test('cost-covered protection is not counted as a losing stop that blocks a profitable path plan',()=>{
  const f=forecast();f.episodes=Array.from({length:10},(_,j)=>({weight:1,from:j,bars:Array.from({length:12},(_,i)=>i===0?{openPct:0,lowPct:-.01,highPct:.35,closePct:.3}:i===1?{openPct:.3,lowPct:j<8?.1:.15,highPct:.32,closePct:.2}:{openPct:.5+i*.1,lowPct:.47+i*.1,highPct:.52+i*.1,closePct:.5+i*.1})}));
  const plan=planAnalogEntry(f,'LONG',.1,100,now);assert.ok(plan);assert.equal(plan.mode,'NOW');assert.equal(plan.lossPct,0);assert.equal(plan.protectedExitPct,80);
+});
+
+test('five independent episodes may enter; four or insufficient effective weight cannot',()=>{
+ const base=forecast(),f={...base,sampleCount:5,effectiveSamples:5,episodes:base.episodes!.slice(0,5)};
+ assert.equal(candidate(f).decision,'LONG');
+ assert.equal(candidate({...f,sampleCount:4,effectiveSamples:4}).decision,'WAIT');
+ assert.equal(candidate({...f,effectiveSamples:4.49}).decision,'WAIT');
+ assert.equal(candidate({...f,signalAt:now-300000}).decision,'WAIT');
 });

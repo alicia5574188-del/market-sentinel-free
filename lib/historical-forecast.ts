@@ -5,7 +5,7 @@ export const ANALOG_BAR_MS = 300_000;
 export const ANALOG_HISTORY_MS = 14 * 24 * 60 * 60_000;
 export const ANALOG_WINDOW = 24;
 export const ANALOG_HORIZON = 12;
-export const ANALOG_MIN_SAMPLES = 8;
+export const ANALOG_MIN_SAMPLES = 5;
 export type AnalogEvent = { time: number; title: string };
 export type HistoricalForecast = {
   model: "historical-analog-v1";
@@ -102,7 +102,7 @@ export function buildHistoricalForecast(input: { candles: Hte31Candle[]; now: nu
     side: "WAIT", netEdgeR: 0, stopPct: input.stopPct, targetPct: 0,
     costBps: Math.max(0, input.costBps), eventContext: "事件日历为部分覆盖；未收录不代表无事件", path: [], matches: [],
   };
-  if (!rows.length) return { ...result, reason: "尚未取得有效历史行情，后台会继续补取；无需等待12小时总结" };
+  if (!rows.length) return { ...result, reason: "尚未取得有效历史行情，后台会继续补取" };
   if (input.now - signalAt >= ANALOG_BAR_MS || signalAt > input.now) return { ...result, state: "STALE", reason: "最新完整五分钟K线已过期" };
   const currentStart = rows.length - ANALOG_WINDOW;
   if (currentStart < ANALOG_WINDOW + ANALOG_HORIZON) return result;
@@ -160,10 +160,10 @@ export function buildHistoricalForecast(input: { candles: Hte31Candle[]; now: nu
   result.downPct = ratio((v) => v < -costPct);
   result.neutralPct = totalWeight ? Math.max(0, 100 - result.upPct - result.downPct) : 0;
   result.medianPct = quantile(forwards, 0.5); result.lowerPct = quantile(forwards, 0.1); result.upperPct = quantile(forwards, 0.9);
-  result.path = Array.from({ length: ANALOG_HORIZON + 1 }, (_, i) => ({ minutes: i * 5,
+  result.path = selected.length ? Array.from({ length: ANALOG_HORIZON + 1 }, (_, i) => ({ minutes: i * 5,
     lowerPct: i ? quantile(paths.map((p) => p[i - 1]), 0.1) : 0,
     medianPct: i ? quantile(paths.map((p) => p[i - 1]), 0.5) : 0,
-    upperPct: i ? quantile(paths.map((p) => p[i - 1]), 0.9) : 0 }));
+    upperPct: i ? quantile(paths.map((p) => p[i - 1]), 0.9) : 0 })) : [];
   result.matches = selected.slice(0, 5).map((s, i) => {
     const segment = rows.slice(s.start, s.start + ANALOG_WINDOW + ANALOG_HORIZON);
     const anchor = segment[ANALOG_WINDOW - 1].close;

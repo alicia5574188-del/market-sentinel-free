@@ -148,6 +148,7 @@ test("complete history with too few matches is not described as data collection"
   assert.equal(f.state, "INSUFFICIENT"); assert.equal(f.missingHistoryBars, 0);
   assert.match(f.reason, /本轮检索4032根已存K线/); assert.doesNotMatch(f.reason, /正在准备|正在补取/);
   assert.equal(f.side, "WAIT");
+  if (!f.sampleCount) assert.deepEqual(f.path, [], "zero matches must not manufacture a flat forecast");
   assert.match(forecast([]).reason, /尚未取得有效历史行情/);
 });
 
