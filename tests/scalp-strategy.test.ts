@@ -83,7 +83,9 @@ test('bounded acquisition isolates failures and limits concurrency to two',async
 
 test('same-bar stop beats target and a price gap cannot fabricate a stop fill',()=>{
   const base={side:'LONG' as const,stop:99,target:102,price:98,low:97,high:103,timeout:true,decision:null};
-  assert.deepEqual(resolveScalpExit(base),{code:'stop_loss',price:98,reason:'结构保护触发，按可见价格保守结算'});
+  assert.deepEqual(resolveScalpExit(base),{code:'stop_loss',price:98,reason:'结构保护触发，按首个可见价格保守结算'});
+  assert.equal(resolveScalpExit({...base,price:95,open:100})?.price,99,'an intrabar stop fills at the stop, not the later close');
+  assert.equal(resolveScalpExit({...base,price:100,open:98})?.price,98,'a real opening gap remains conservatively priced');
   assert.equal(resolveScalpExit({...base,price:101,low:100,high:102})?.code,'take_profit');
   assert.equal(resolveScalpExit({...base,price:100,low:100,high:101})?.code,'timeout');
 });

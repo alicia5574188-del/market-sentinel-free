@@ -24,12 +24,9 @@ test('sparse or stale history cannot be replaced by a different strategy',()=>{
  assert.equal(historicalDirection({...f,signalAt:now-300000},now).side,'WAIT');
  assert.equal(candidate({...f,episodes:f.episodes!.map((e,i)=>i<5?e:{...e,bars:e.bars.map(b=>({...b,closePct:-Math.abs(b.closePct)}))}),medianPct:0}).decision,'WAIT');
 });
-test('historical mid-path drawdown can choose a frozen wait price rather than repeated stopouts',()=>{
- const f=forecast(false,true),plan=planAnalogEntry(f,'LONG',.1,100,now);assert.ok(plan);assert.equal(plan.mode,'PULLBACK');
+test('a wait price cannot rescue an immediate structure that fails the path-quality gate',()=>{
+ const f=forecast(false,true),plan=planAnalogEntry(f,'LONG',.1,100,now);assert.equal(plan,null);
  assert.equal(candidate(f).decision,'SHORT','the first downward swing is now actionable despite a higher endpoint');
- const waiting=candidate(forecast(),{intent:plan});assert.equal(waiting.decision,'WAIT');assert.equal(waiting.analogIntent?.mode,'PULLBACK');
- const entry=plan.anchor*(1-plan.offsetPct/100);const filled=candidate(forecast(),{price:entry,intent:plan,now:now+60000});assert.equal(filled.decision,'LONG',JSON.stringify(filled.counterEvidence));assert.equal(filled.analogIntent?.anchor,100);
- const cancelled=candidate(forecast(true),{intent:plan});assert.notEqual(cancelled.analogIntent?.side,'LONG');
 });
 test('a stop touched before a later profitable endpoint is counted as a stop; limit fills cannot claim earlier highs',()=>{
  const episode={weight:1,from:0,bars:[{openPct:0,lowPct:-1,highPct:2,closePct:1}]};

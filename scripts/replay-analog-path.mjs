@@ -28,7 +28,7 @@ for(const symbol of coins){
   for(let i=start;i<rows.length;i++){
    const bar=rows[i],now=bar.time*1000+300000,history=rows.slice(0,i+1);
    if(position){const p=position,decision=evaluateAnalogPosition({...p,currentPrice:bar.close,observedAt:now,candles:history});
-    const exit=resolveScalpExit({side:p.side,stop:p.currentStopPrice,target:p.target,price:bar.close,high:bar.high,low:bar.low,timeout:now>=p.expiresAt,decision});
+    const exit=resolveScalpExit({side:p.side,stop:p.currentStopPrice,target:p.target,price:bar.close,open:bar.open,high:bar.high,low:bar.low,timeout:now>=p.expiresAt,decision});
     if(exit){const net=(p.side==='LONG'?1:-1)*(exit.price-p.entryPrice)-p.entryPrice*.0012,tradeR=net/p.risk;netR+=tradeR;closed++;wins+=Number(net>0);trades.push({side:p.side,entryAt:p.entryAt,minutes:(now-p.entryAt)/60000,exit:exit.code,netR:+tradeR.toFixed(3),stopPct:+(Math.abs(p.entryPrice-p.initialStopPrice)/p.entryPrice*100).toFixed(3),targetPct:+(Math.abs(p.target-p.entryPrice)/p.entryPrice*100).toFixed(3),expectedNetR:+p.expectedNetR.toFixed(2),takeProfitPct:+p.takeProfitPct.toFixed(0),lossPct:+p.lossPct.toFixed(0),mode:p.mode});position=null;lastExit=now;}
     else if(decision.proposedStopPrice!=null)p.currentStopPrice=p.side==='LONG'?Math.max(p.currentStopPrice,decision.proposedStopPrice):Math.min(p.currentStopPrice,decision.proposedStopPrice);
    }

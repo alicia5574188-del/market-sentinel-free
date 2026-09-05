@@ -70,8 +70,8 @@ export function planAnalogEntry(f:HistoricalForecast,side:'LONG'|'SHORT',atrPct:
  }).filter(p=>p.stopPct/(1-sign*p.offsetPct/100)<=2&&p.targetPct>=cost*1.5&&p.expectedNetR>0&&p.fillPct>=40&&p.takeProfitPct>=55&&p.lossPct<=35&&p.takeProfitPct>p.lossPct);
  const immediate=alternatives.find(p=>p.mode==='NOW'),delayed=alternatives.find(p=>p.mode==='PULLBACK');
  // Prefer immediacy unless a frequently-filled retracement materially improves expectancy.
- if(delayed&&(!immediate||delayed.fillPct>=60&&delayed.expectedNetR>immediate.expectedNetR+.1&&immediate.lossPct>=25))return delayed;
- return immediate??delayed??null;
+ if(delayed&&immediate&&delayed.fillPct>=60&&delayed.expectedNetR>immediate.expectedNetR+.1&&immediate.lossPct>=25)return delayed;
+ return immediate??null;
 }
 export function buildAnalogCandidate(input:{symbol:string;candles:Hte31Candle[];btcCandles:Hte31Candle[];now:number;price:number;volumeUsd:number;volumeRank:number;costBps:number;forecast?:HistoricalForecast;intent?:AnalogIntent}):DirectMarketCandidate{
  const cs=completeFiveMinutes(input.candles,input.now),last=cs.at(-1),f=input.forecast;
