@@ -23,7 +23,7 @@ test("full migration chain preserves the isolated HTE ledger", () => {
     status: "pending",
     reset_mode: "force_archive",
     active_brain_version: "direct-market-brain-v1",
-    target_brain_version: "direct-market-brain-v5-entry-integrity",
+    target_brain_version: readFileSync(new URL("../lib/direct-market-types.ts", import.meta.url), "utf8").match(/DIRECT_MARKET_BRAIN_VERSION = "([^"]+)"/)[1],
     requested_capital_usdt: 1000,
   });
   assert.equal(db.prepare("SELECT count(*) AS n FROM hte31_trades").get().n, 0);
@@ -165,7 +165,7 @@ test("Durable Objects retain bounded no-scan-write runtime and persist the direc
   assert.match(worker, /this\.ctx\.storage\.put\("runtime", runtime\)/);
   assert.doesNotMatch(worker, /this\.ctx\.storage\.put\("(?:job|status|readModel|rotationOffset)"/);
   assert.match(worker, /maxSteps = job\.phase === "config" \|\| job\.phase === "candles" \? 2 : 1/);
-  assert.match(worker, /createHte31ScanJob\(runtime\.rotationOffset, runtime\.readModel\?\.market \?\? null\)/);
+  assert.match(worker, /createHte31ScanJob\(runtime\.rotationOffset, runtime\.readModel\?\.market \?\? null, lastObservedAt\)/);
   assert.match(worker, /directHistory[\s\S]*\.slice\(0, 512\)/);
   assert.match(worker, /stateChanged \|\| heartbeatDue/);
 });

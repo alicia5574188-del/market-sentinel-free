@@ -1,9 +1,16 @@
 # Goal
 
-## Current authorized release — publish the verified V5 optimization
+## Current optimization — remove fixed scan and paper position-count restrictions
+
+- User requests removal of the 15-symbol / 6-deep restriction and three-position bottleneck. Evaluate the full existing configured universe (default 30, settings ceiling 50); use existing Scanner snapshots to select the least recently evaluated symbol, without more per-slice market requests or recurring D1 writes.
+- Remove fixed total/same-direction PAPER counts; preserve 15% aggregate planned stop risk, 3.5% accepted per-trade risk, single-symbol ownership, correlation, margin, learning and data safeguards. Typically four normal-risk positions fit; do not represent this as unlimited financial exposure or a full-market real-time scan.
+- Reserve D1 writes for prospective holdings and the day's peak reconstructed from existing immutable snapshots. Prepare major paper release V6 / additive 0024 cutover, keep Gate/live authority unchanged, verify before release. No further three-strategy formula change.
+
+## Completed release — V5 production verified
 
 - User authorized immediate GitHub/CI/Cloudflare production release on 2026-09-05 after the local V5 verification. Publish only the already verified scope, using one feature PR and green CI before merge.
 - Verify the immutable V5 client asset, bounded production scheduler health, and completed PAPER cutover with zero legacy open paper positions. No fund movement, live reset or additional strategy tuning is authorized.
+- Completed through PR `#136`, production commit `8badc27b`, successful workflow `33942706243`; migration `0023` completed with V5 active, no pending target and zero legacy open paper positions.
 
 ## Current authorized optimization — entry integrity and Chinese operator UI
 

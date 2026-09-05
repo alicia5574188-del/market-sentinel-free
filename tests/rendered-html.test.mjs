@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { registerHooks } from "node:module";
 import test from "node:test";
 
@@ -31,6 +32,7 @@ test("renders production Resonance metadata", async () => {
   const html = await response.text();
   assert.match(html, /<title>Resonance｜自适应交易系统<\/title>/i);
   assert.match(html, /用三套核心策略、当前贡献排名和每12小时复盘驱动/);
-  assert.match(html, /data-release="direct-market-brain-v5-entry-integrity"/);
+  const version = (await readFile(new URL("../lib/direct-market-types.ts", import.meta.url), "utf8")).match(/DIRECT_MARKET_BRAIN_VERSION = "([^"]+)"/)[1];
+  assert.ok(html.includes(`data-release="${version}"`));
   assert.doesNotMatch(html, /name=["']codex-preview["']/i);
 });

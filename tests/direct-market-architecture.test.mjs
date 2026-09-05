@@ -48,6 +48,19 @@ test("setup ranking has no unconditional exhaustion priority", async () => {
   assert.doesNotMatch(ranking, /EXHAUSTION_REVERSAL/);
 });
 
+test("configured scan coverage and risk-based capacity reach the production boundary", () => {
+  assert.match(scanner, /fetchUniverse\(job\.settings\.universeLimit, \[\]\)/);
+  assert.match(scanner, /chooseDirectMarketTarget\(universe, job\.rotationOffset, job\.lastObservedAt\)/);
+  assert.match(worker, /candidate\.observedAt\]\)\)/);
+  assert.doesNotMatch(worker, /universe\.slice\(0, 15\)/);
+  assert.doesNotMatch(execution, /account\.open\.length >= 3|maximumOpenPositions: 3|sameDirectionMaximum: 2/);
+  assert.match(execution, /directMarketPositionCheckpointRows\(account\.open\.length \+ 1, todayRows\.map/);
+  assert.match(execution, /gte\(hte31Trades\.exitAt, today\)/);
+  assert.match(execution, /hte31PaperPortfolioBlockReason/);
+  assert.match(execution, /if \(sameCluster\)/);
+  assert.match(page, /总计划风险不超过15%/);
+});
+
 test("adaptive position decisions use completed candles without adding periodic D1 writes", () => {
   assert.match(positionBrain, /action: "HOLD" \| "PROTECT" \| "EXIT"/);
   assert.match(positionBrain, /candleTime\(candle\) < completedBoundary/);

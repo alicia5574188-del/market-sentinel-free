@@ -1,6 +1,6 @@
 import type { Hte31Candle } from "./hte31-types.ts";
 
-export const DIRECT_MARKET_BRAIN_VERSION = "direct-market-brain-v5-entry-integrity";
+export const DIRECT_MARKET_BRAIN_VERSION = "direct-market-brain-v6-open-coverage";
 export const DIRECT_MARKET_AUTHORITY = "direct_market_brain" as const;
 
 export type DirectMarketSide = "LONG" | "SHORT" | "WAIT";

@@ -1,5 +1,13 @@
 # Market Sentinel — Current System State
 
+> **2026-09-05 V6 configured coverage and risk-based capacity — release preparation.**
+>
+> Local V6 removes the fixed top-15/top-6 scan pruning and uses the oldest existing per-symbol Scanner timestamp to rotate through the configured universe (default 30; settings ceiling 50). Fixed PAPER total/same-side counts are removed; 15% aggregate planned risk, 3.5% normal accepted-trade risk, margin, correlation, single-symbol and live safeguards remain. D1 reservation scales with prospective positions and today's snapshot-recorded peak while preserving existing budgets. V6/0024 prepares the standard PAPER-only archive. Current production remains V5 until release proof; no strategy formula or live-risk change is part of V6.
+
+> **2026-09-05 V5 production deployed and verified.**
+>
+> Current production commit is `8badc27bfd678f9317bbbb1301bdda30fed834c7` (PR `#136`). Workflow `33942706243` completed successfully, including Wrangler dry-run, migration, deployment, immutable V5 asset, bounded scheduler health and PAPER cutover. Worker `fefcf159-98eb-4e9e-b922-b8be62877ca5`; migration `0023` reports V5 active, `target_brain_version=null` and `legacy_open_positions=0`. Chinese compact UI and entry/structure corrections are live. No real-position reset or fund movement occurred. The local-only entries below are historical, not current status; proof is also recorded on PR `#136`.
+
 > **2026-09-05 V5 entry-integrity / Chinese UI — locally verified, NOT deployed.**
 >
 > The working tree contains completed-candle entry filtering, structural resonance recovery with existing market context, unclamped swing stops with a 5% candidate/fresh-quote distance ceiling, actual environment labels and no exhaustion ranking bonus. The compact operator page uses Chinese labels/states and preserves contribution, orders, twelve-hour review, account and live safety capabilities. Local tests passed 39 Direct/architecture, 224 signal and 115 build/UI/safety checks. Migration `0023` prepares the existing old-PAPER fresh-quote archive/clean epoch; it has not run and live positions are outside this cutover. Last known deployed main remains V4 `b97baf1f` / workflow `33938908870`. See `.codex/goal-to-done/STATUS.md` before releasing; local fixes are not production verification, exact order replay or proof of profitability.

@@ -1,12 +1,23 @@
 # Status
 
-## Active release — user authorized V5 publication
+## Current V6 task — configured scan coverage and risk-based paper capacity
+
+- User asked to remove the fixed 15/6 scan restriction and three-position bottleneck. Local implementation scans the existing configured universe (default 30; existing settings maximum 50), selects the least recently evaluated symbol from existing Scanner snapshots, and removes the top-15 pruning of the read model. One deep target per phased job and existing request/write cadence remain unchanged; this is not simultaneous whole-market deep scanning.
+- Fixed PAPER total and same-direction counts are removed. Aggregate planned stop risk remains 15%, normal accepted trade risk remains 3.5%, and single-symbol, correlation, margin, learning, fresh-quote and live boundaries remain. Usually four normal-risk trades fit; this does not grant unlimited exposure or demonstrate restored historical trade frequency.
+- D1 capacity uses prospective holdings and the day's peak from immutable decision snapshots of today's entries/exits; closing positions cannot reset the estimate downward. The read reuses the bounded daily admission query, creates no new D1 write stream, and retains 22,000 entry admission / 30,000 app hard budgets. The six-position planning assumption is a budget calculation, not a replacement six-position trading cap.
+- V6 / additive migration `0024` prepares the established major PAPER cutover. No three-strategy pattern or Gate/live policy is changed. Current remote main rechecked at V5 `8badc27b`; release will use the user's existing GitHub/CI/Cloudflare authorization after verification.
+- Local verification passed 34 Direct + 7 architecture, 225 signal/risk/migration and 115 build/UI/safety checks, plus TypeScript, ESLint and diff checks. Scope is ready for the existing PR/CI/deploy route; V6 is not yet deployed.
+
+## Completed release — V5 production deployed and verified
 
 - User instruction: publish now, quickly. Current remote `main` rechecked at `b97baf1f65339dd03221f5207b98347df67d8fe6`; its source tree matches the local tested base. Reuse the prepared 39 Direct/architecture + 224 signal + 115 build/UI/safety checks and existing CI gates.
 - Release branch: `fix/v5-entry-integrity-chinese-ui`. Publish the existing patch only; merge after green CI and verify production health plus PAPER cutover. No new live/funding authority and no new strategy edits.
-- Release is in progress, not yet production-verified. The implementation record below describes the pre-release local evidence.
+- Published feature commit `94279a44f53c1e96db56d2d2ec024fdc0e521aab`, PR `#136`; PR CI run `33942658322` passed including Wrangler dry-run. Merged as `8badc27bfd678f9317bbbb1301bdda30fed834c7`; production workflow `33942706243` completed successfully at 2026-09-05T03:47:06Z.
+- Worker `fefcf159-98eb-4e9e-b922-b8be62877ca5` deployed; immutable client `assets/page-eomFNgKd.js` and bounded scheduler health passed the existing CI production probes. Deploy job `101243138701` provides the exact logs.
+- Migration `0023_direct_market_v5_entry_integrity_cutover.sql` applied. Production D1 returned `status=completed`, `active_brain_version=direct-market-brain-v5-entry-integrity`, `target_brain_version=null`, `legacy_open_positions=0`. Old paper archive and clean epoch are verified; the paper cutover does not mutate Gate/live positions or funds.
+- Production evidence is recorded on PR `#136` and in the successful workflow. No further runtime change or deployment is needed for this task. The implementation record below is historical pre-release evidence; its local-only wording no longer describes current production.
 
-## Current task — V5 entry integrity and Chinese UI implemented and locally verified
+## Pre-release implementation — V5 entry integrity and Chinese UI locally verified
 
 - User authorized the bounded optimization after the diagnostic/UI task below. Local version is `direct-market-brain-v5-entry-integrity`; it has NOT been pushed, deployed, or applied to production data. Last known deployed main remains V4 `b97baf1f` / workflow `33938908870`.
 - Entry now filters unfinished/non-finite five-minute candles before setup evaluation, structural stops and correlation. Synthetic regressions prove an unfinished candle cannot authorize a trade or change its stop/targets.

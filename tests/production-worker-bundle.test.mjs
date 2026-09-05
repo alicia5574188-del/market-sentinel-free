@@ -14,7 +14,8 @@ async function readBuiltWorkerSource() {
 
 test("production Worker bundle contains the direct market brain runtime", async () => {
   const source = await readBuiltWorkerSource();
-  assert.match(source, /direct-market-brain-v5-entry-integrity/);
+  const version = (await readFile(new URL("../lib/direct-market-types.ts", import.meta.url), "utf8")).match(/DIRECT_MARKET_BRAIN_VERSION = "([^"]+)"/)[1];
+  assert.ok(source.includes(version));
   assert.match(source, /Resonance/);
   assert.match(source, /大脑决策 · 三策略贡献 · 12小时复盘/);
   assert.match(source, /量价力度假突破/);
@@ -22,7 +23,7 @@ test("production Worker bundle contains the direct market brain runtime", async 
   assert.match(source, /多周期综合共振/);
   assert.match(source, /谁在发力，谁在拖后腿/);
   assert.match(source, /每12小时总结/);
-  assert.match(source, /最大持仓/);
+  assert.match(source, /持仓约束/);
   assert.match(source, /HTE31MarketScanner/);
   assert.match(source, /HTE31TradeManager/);
 });

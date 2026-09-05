@@ -113,18 +113,19 @@ test("paper sizing keeps risk bounded while market targets may range from 50U to
   assert.equal(HTE31_PAPER_POSITION_POLICY.maximumLeverage, 50);
 });
 
-test("paper portfolio permits three positions but no more than two in one direction", () => {
-  assert.equal(HTE31_PAPER_PORTFOLIO_POLICY.maxOpenPositions, 3);
-  assert.equal(HTE31_PAPER_PORTFOLIO_POLICY.maxSameSidePositions, 2);
+test("paper capacity follows aggregate risk rather than three total or two same-side positions", () => {
   assert.equal(HTE31_PAPER_PORTFOLIO_POLICY.maximumTotalPlannedRiskRate, 0.15);
   const open = [
     { side: "LONG" as const, riskBudgetUsdt: 35 },
     { side: "SHORT" as const, riskBudgetUsdt: 35 },
   ];
   assert.equal(hte31PaperPortfolioBlockReason({ open, nextSide: "LONG", nextRiskUsdt: 35, accountEquityUsdt: 1_000 }), null);
-  assert.match(hte31PaperPortfolioBlockReason({ open: [{ side: "LONG", riskBudgetUsdt: 35 }, { side: "LONG", riskBudgetUsdt: 35 }], nextSide: "LONG", nextRiskUsdt: 30, accountEquityUsdt: 1_000 }) ?? "", /同方向.*最多 2 笔/);
-  assert.match(hte31PaperPortfolioBlockReason({ open: [...open, { side: "LONG", riskBudgetUsdt: 35 }], nextSide: "SHORT", nextRiskUsdt: 30, accountEquityUsdt: 1_000 }) ?? "", /最多 3 笔/);
+  assert.equal(hte31PaperPortfolioBlockReason({ open: [{ side: "LONG", riskBudgetUsdt: 35 }, { side: "LONG", riskBudgetUsdt: 35 }], nextSide: "LONG", nextRiskUsdt: 35, accountEquityUsdt: 1_000 }), null);
+  const three = [...open, { side: "LONG" as const, riskBudgetUsdt: 35 }];
+  assert.equal(hte31PaperPortfolioBlockReason({ open: three, nextSide: "SHORT", nextRiskUsdt: 35, accountEquityUsdt: 1_000 }), null);
+  assert.match(hte31PaperPortfolioBlockReason({ open: [...three, { side: "SHORT", riskBudgetUsdt: 35 }], nextSide: "LONG", nextRiskUsdt: 35, accountEquityUsdt: 1_000 }) ?? "", /15% 上限/);
   assert.match(hte31PaperPortfolioBlockReason({ open, nextSide: "LONG", nextRiskUsdt: 81, accountEquityUsdt: 1_000 }) ?? "", /15% 上限/);
+  assert.match(hte31PaperPortfolioBlockReason({ open, nextSide: "LONG", nextRiskUsdt: Number.NaN, accountEquityUsdt: 1_000 }) ?? "", /不可用/);
 });
 
 test("scheduled HTE31 writes leave more than forty thousand daily D1 rows for events", () => {

@@ -11,6 +11,15 @@ Rules:
 
 ---
 
+## 2026-09-05 — V5 entry integrity and Chinese operator UI deployed
+
+- Filter unfinished five-minute entry candles; require resonance recovery of nearby structure and existing benchmark/breadth/regime support. Preserve HT3-R/HT4 core patterns and shared safety gates.
+- Keep actual swing invalidation instead of pulling it inward to a 3% clamp; reject over-5% structural plans and fresh entry quotes without moving the stop or increasing account risk sizing.
+- Classify actual setup environments and remove exhaustion's fixed ranking bonus. Simplify the daily decision summary and translate known UI labels/states into Chinese without changing stored IDs, order lineage or owner safety controls.
+- Add Direct strategy regressions to CI. Local gates passed 39 Direct/architecture, 224 signal/risk and 115 build/UI/safety checks, plus TypeScript and ESLint.
+- PR `#136`; production commit `8badc27bfd678f9317bbbb1301bdda30fed834c7`; successful workflow `33942706243`. Worker `fefcf159-98eb-4e9e-b922-b8be62877ca5`, immutable client `assets/page-eomFNgKd.js`; bounded health and cutover proof passed.
+- Additive migration `0023` completed the old-PAPER fresh-quote archive and new epoch: V5 active, no pending target, zero legacy open paper positions. Gate/live reset, funds, credentials, risk sizing and recurring D1 cadence remain outside this change. No claim of screenshot-order replay or improved profitability is implied by deployment.
+
 ## 2026-09-05 — Restored-core V4 deployed
 
 ### Changed

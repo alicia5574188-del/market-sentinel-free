@@ -1,5 +1,12 @@
 # Decisions
 
+## 2026-09-05 — Remove fixed coverage and position counts without removing risk limits
+
+- Choice: Honor the configured scan universe and schedule the least recently evaluated symbol using existing Scanner snapshots. Remove the hard 15/6 pruning and fixed three-total/two-same-direction PAPER counts; keep total planned stop risk at 15%, normal per-trade risk, single-symbol/correlation, margin and live safeguards.
+- Reason: Restoring core pattern formulas did not restore the old outer decision process. A persistent top-six pool can starve other configured symbols, and the fixed three-count veto blocks otherwise affordable independent positions.
+- Budget: Reserve holding writes from prospective positions and today's maximum count recorded in existing immutable entry snapshots; include exits from overnight positions. Keep the old minimum estimate and the existing D1 admission ceiling. A six-position budget planning assumption is not an execution quota.
+- Limits: Broader coverage means a longer revisit interval at unchanged request cadence; do not promise higher frequency, profit, unlimited positions or a live whole-market scan. The three-candidate per-batch quote/attempt bound and cross-comparison requirement remain transport/selection limits, not a total holding cap. Version V6 with additive PAPER-only migration 0024 prevents mixed-version samples.
+
 ## 2026-09-05 — Correct entry invariants without another strategy rewrite
 
 - Choice: Only completed five-minute candles may confirm entries. Resonance must recover nearby structure with market support; stops remain outside their actual swing and are rejected, never clamped inward, when price-distance risk exceeds 5% (also checked at the final quote). Reuse the existing regime classifier and rank qualified setups without a named-strategy bonus.

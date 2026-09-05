@@ -8,6 +8,7 @@ import {
   DIRECT_MARKET_NEW_ORDER_ADMISSION_ROWS,
   DIRECT_MARKET_RESERVED_ROWS_PER_NEW_ORDER,
   directMarketD1Admission,
+  directMarketPositionCheckpointRows,
   directMarketIndexAdjustedDailyBudget,
   legacyHte31IndexAdjustedDailyUpperBound,
 } from "../lib/direct-market-d1-budget.ts";
@@ -26,13 +27,22 @@ test("direct brain keeps scans out of D1 and reserves seventy thousand rows", ()
   assert.equal(budget.scannerRows, 0);
   assert.equal(budget.evaluationRows, 0);
   assert.equal(budget.diagnosticRows, 0);
-  assert.equal(budget.positionCheckpointLogicalRows, 4_320);
-  assert.equal(budget.positionCheckpointPhysicalRows, 8_640);
+  assert.equal(budget.positionCheckpointLogicalRows, 8_640);
+  assert.equal(budget.positionCheckpointPhysicalRows, 17_280);
   assert.equal(budget.admittedTradeLifecycleRows, 12_000);
-  assert.equal(budget.mandatoryReserveRows, 9_360);
+  assert.equal(budget.mandatoryReserveRows, 720);
   assert.equal(budget.plannedPhysicalRows, DIRECT_MARKET_APP_HARD_ROWS_WRITTEN);
   assert.equal(budget.accountSafeLimit, DIRECT_MARKET_ACCOUNT_SAFE_ROWS_WRITTEN);
   assert.equal(budget.freeLimitHeadroom, 70_000);
+});
+
+test("position write reserve scales with actual capacity and retains today's peak after closure", () => {
+  assert.equal(directMarketPositionCheckpointRows(4), 11_520);
+  assert.equal(directMarketPositionCheckpointRows(6), 17_280);
+  const snapshots = [JSON.stringify({ portfolioChecks: { openPositionsBefore: 5 } })];
+  assert.equal(directMarketPositionCheckpointRows(2, snapshots), 17_280);
+  assert.equal(directMarketD1Admission({ estimatedPhysicalRowsToday: directMarketPositionCheckpointRows(8), committedMandatoryRows: 0, newOrdersToday: 0 }).allowed, false);
+  assert.equal(directMarketPositionCheckpointRows(2, ["invalid"]), Number.POSITIVE_INFINITY);
 });
 
 test("new orders stop before mandatory lifecycle writes lose their reserve", () => {
@@ -62,4 +72,3 @@ test("new orders stop before mandatory lifecycle writes lose their reserve", () 
     nextTradeReserveRows: DIRECT_MARKET_RESERVED_ROWS_PER_NEW_ORDER,
   }).reason, "hard_limit");
 });
-
