@@ -90,7 +90,7 @@ test("live entry accepts only the exact direct-brain simulated lineage", () => {
 });
 
 test("phone UI exposes direct brain contribution and review without an abstract radar page", () => {
-  assert.match(page, /谁在发力，谁在拖后腿/);
+  assert.match(page, /策略表现/);
   assert.match(page, /每12小时总结/);
   assert.match(page, /全量评估/);
   assert.match(page, /原始触发/);

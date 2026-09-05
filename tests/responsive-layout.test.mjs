@@ -14,7 +14,7 @@ test("Resonance stays compact on iPhone and expands on desktop", async () => {
 test("new layout mounts one page tree and only Resonance UI styles", async () => {
   const layout = await readFile(new URL("../app/layout.tsx", import.meta.url), "utf8");
   assert.equal(layout.match(/\{children\}/g)?.length, 1);
-  assert.match(layout, /<body>[\s\S]*\{children\}[\s\S]*<ResonanceOperatorControls \/>[\s\S]*<\/body>/);
+  assert.match(layout, /<body>[\s\S]*<ResonanceOperatorControls \/>[\s\S]*\{children\}[\s\S]*<\/body>/);
   assert.match(layout, /import "\.\/resonance\.css"/);
   assert.doesNotMatch(layout, /hte31\.css|hte31-chart\.css|hte31-economics\.css|human-trader\.css|strategy-2-unified\.css|runtime-stability\.css|bottom-nav-viewport-fix\.css/);
 });

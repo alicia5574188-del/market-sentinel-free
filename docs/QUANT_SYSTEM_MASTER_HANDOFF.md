@@ -1,3 +1,11 @@
+## 2026-09-05 — Compact single-strategy UI and management display correction
+
+- Remove multi-strategy comparison heading; show 策略表现 and preserve statistics/history. Distinguish the 12-hour common blocker from the current prediction; remove duplicated drawdown and history paragraphs.
+- Adapt existing controls, do not restore old feature implementations: account/push/audit stay outside the page failure domain in an ordinary top toolbar; no floating content obstruction. Drawer uses border-box sizing. Existing emergency, credentials, reset and trading boundaries remain reachable.
+- Management shows runtime/settings first. Long phase/rule text wraps and the six-coin list occupies a full row. Single strategy spans desktop width; phone headings and summary times wrap. All displayed runtime/order/audit times use Beijing time.
+- A failed live-status read retains the last success with timestamp/error, rather than falsely showing unconfigured/empty. Initial reads show unknown/loading; stale or missing live state disables the normal toggle/reconcile buttons, while emergency remains reachable. No automatic mutation retry or new polling.
+- Strategy, history archive, scheduler, risk, positions, D1 and credentials are unchanged. UI/risk/architecture gates required; release verification pending.
+
 > 2026-09-05 persistent history prepared: fixed six coins; stable per-symbol daily archive and throttled72h backfill, no14-day retention cutoff. Older history rotates through bounded local matching. No new epoch/threshold/live change. STATUS records release proof.
 
 > Production verification: PR #142 / main b6075da3 / run33961439540 all passed. Browser confirms compact sparse-analog UI; no threshold/epoch change or frequency claim. See STATUS and PR comment.

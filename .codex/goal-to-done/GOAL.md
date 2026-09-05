@@ -1,3 +1,7 @@
+# Current UI objective
+
+Remove the obsolete multi-strategy heading; inspect and repair Brain, Orders and Management display issues, preserve capabilities, then release through existing authorized CI/Cloudflare path.
+
 # Goal
 
 ## Current goal — long-term historical archive and fixed small universe

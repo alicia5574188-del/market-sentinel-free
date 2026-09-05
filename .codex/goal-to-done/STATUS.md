@@ -1,6 +1,24 @@
+## 2026-09-05 — Compact single-strategy UI and management display correction
+
+- Remove multi-strategy comparison heading; show 策略表现 and preserve statistics/history. Distinguish the 12-hour common blocker from the current prediction; remove duplicated drawdown and history paragraphs.
+- Adapt existing controls, do not restore old feature implementations: account/push/audit stay outside the page failure domain in an ordinary top toolbar; no floating content obstruction. Drawer uses border-box sizing. Existing emergency, credentials, reset and trading boundaries remain reachable.
+- Management shows runtime/settings first. Long phase/rule text wraps and the six-coin list occupies a full row. Single strategy spans desktop width; phone headings and summary times wrap. All displayed runtime/order/audit times use Beijing time.
+- A failed live-status read retains the last success with timestamp/error, rather than falsely showing unconfigured/empty. Initial reads show unknown/loading; stale or missing live state disables the normal toggle/reconcile buttons, while emergency remains reachable. No automatic mutation retry or new polling.
+- Strategy, history archive, scheduler, risk, positions, D1 and credentials are unchanged. UI/risk/architecture gates required; release verification pending.
+
 # Status
 
-## Active: persistent archive release pending
+## Completed: persistent archive production verified
+
+## Production verification — 2026-09-05
+- PR #143 merged as e72b92597c761488ab56e4689c7cff1c5ab0e55b. PR CI 33962470146 passed. Production workflow 33962510387: verify, deploy and operations all succeeded.
+- Worker version c1aee79e-d46d-495c-9e72-a1e1f45cdfcf; HistoricalArchive binding deployed. Active V7 historical-analog, target null, legacy open positions 0; no epoch reset or live activation.
+- Production browser verified XRP 4,741 stored AND searched 5-minute bars, DOGE 4,742; earliest saved day 2026-08-20 08:00 Beijing time. Both show backward backfill in progress and 3/8 qualified episodes. This proves older-than-14-day data is stored and participates in inference; no new order observed.
+- Management displays fixed BTC/ETH/SOL/BNB/XRP/DOGE, continuous long-term history, existing total planned-risk cap 15%, scanner and position manager running.
+- Independent background acceptance passed: scanner lastSuccessAt 1788606594030 -> 1788606687561; position nextRunAt 1788606662511 -> 1788606722606; no scheduler errors.
+- Account-wide D1 at 2026-09-05T11:11:33.554Z: UTC day 178,969 reads / 1,163 writes; rounded rolling 24h 834,898 reads / 3,424 writes. Archive adds no historical D1 rows. Archive DO budget is a configured contribution bound, not measured account-wide DO usage.
+- Remaining limitations: browser still sometimes reports partial-source refresh delay and retains timestamped values. This release does not claim that existing display latency is solved, fixed order frequency, complete exchange history, unlimited storage, or exhaustive whole-archive matching on every cycle.
+- Release complete. Do not redeploy solely to sync these proof notes.
 
 ## 2026-09-05 — Persistent historical archive and fixed six-symbol coverage
 
