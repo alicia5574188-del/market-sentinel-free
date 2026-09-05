@@ -1,5 +1,38 @@
 # Status
 
+## Active release — user authorized V5 publication
+
+- User instruction: publish now, quickly. Current remote `main` rechecked at `b97baf1f65339dd03221f5207b98347df67d8fe6`; its source tree matches the local tested base. Reuse the prepared 39 Direct/architecture + 224 signal + 115 build/UI/safety checks and existing CI gates.
+- Release branch: `fix/v5-entry-integrity-chinese-ui`. Publish the existing patch only; merge after green CI and verify production health plus PAPER cutover. No new live/funding authority and no new strategy edits.
+- Release is in progress, not yet production-verified. The implementation record below describes the pre-release local evidence.
+
+## Current task — V5 entry integrity and Chinese UI implemented and locally verified
+
+- User authorized the bounded optimization after the diagnostic/UI task below. Local version is `direct-market-brain-v5-entry-integrity`; it has NOT been pushed, deployed, or applied to production data. Last known deployed main remains V4 `b97baf1f` / workflow `33938908870`.
+- Entry now filters unfinished/non-finite five-minute candles before setup evaluation, structural stops and correlation. Synthetic regressions prove an unfinished candle cannot authorize a trade or change its stop/targets.
+- Resonance rejects a strong opposing tactical trend, requires a completed close beyond the previous two-bar structure, and restores benchmark/breadth plus actual classified-regime admission using existing scanner context. It still has no universal volume-spike requirement; no new market producer was added.
+- Every setup uses its actual classified environment rather than hardcoded transition/liquidation labels. Removed exhaustion's unconditional 15-point selection bonus; overlapping qualified setups now rank by their evidence score. The HT3-R/HT4 core patterns and existing data/macro/portfolio/learning safety thresholds are unchanged.
+- Structural invalidation stays outside the actual swing with its existing ATR padding. Removed the shared 3% clamp; invalid or over-5% structural plans are rejected, not moved inward. The final fresh-quote boundary rechecks the 5% price-distance limit without changing the stored stop or account risk sizing.
+- Daily UI keeps the compact operating summary, contribution, orders and twelve-hour review. Locations, labels, chart markers, diagnostic states and known technical wording are translated through one small display-only module; stored IDs, ticker symbols, owner input, auth and live controls remain intact. Complete diagnostics remain collapsed under Management.
+- Release manifest/migration `0023` prepares the existing fresh-quote forced PAPER archive and clean epoch. No old migration or historical order was edited, no live reset is added, and no cutover has run. Worker/UI/API/probes use the canonical release constant to avoid stale verification markers.
+- Verification: `npm run test:direct` 33 core + 6 architecture passed; `npm run test:signals` 224 passed; `npm test` production build + 115 UI/safety/migration tests passed; ESLint, TypeScript and `git diff --check` passed. CI now includes `test:direct`, which the default verify job previously omitted.
+- Limits: No exact production-order replay, visual browser proof, remote CI or production proof in this task. Production query access remains blocked by the previously cancelled network approval and absent configured owner-query credentials; do not bypass it or ask the user to supply an order ID. Synthetic defects are proven, but are not a unique attribution of the screenshot's loss, demonstrated profitability or restored historical frequency.
+- Next: after release authorization, use the existing single PR/green CI/merge/deploy route and verify immutable assets, health and D1 cutover (V5 active, no pending target, zero legacy open PAPER positions). Do not restart strategy research or rebuild the repository.
+- Updated UTC: 2026-09-05.
+
+## Previous task — compact decision UI locally verified; strategy identity audited, not retuned
+
+- Local-only UI change removes the daily Brain hero's raw confidence/probabilities, English location, empty price grid and technical blocker string. A compact operating summary distinguishes loading/degraded/reset/scanner-paused/risk-paused/candidate states without claiming a signal is a filled order. The existing complete evidence and execution reason are collapsed under Management; no new polling or execution path.
+- Historical comparison: retained `hte31-research-strategies.ts` HT3-R and `hte31-advanced-traders.ts` HT4 contain largely the same core pattern thresholds as V4. They are not evidence that the owner's entire original profitable system was restored. V4 wraps them with stricter/different admission: data 0.68→0.72, macro ceiling 0.98→0.85, ATR 0.15–3.2%, confidence 70 and calculated edge 0.55R, plus the current portfolio/learning/per-setup guard path.
+- Same-input synthetic probes based on the existing Direct Brain failed-breakout/exhaustion fixtures: both legacy evaluators are READY at dataQuality 0.70 or macroEventRisk 0.90, while V4 rejects the corresponding setup at the data/macro gate. Normal-input controls qualify in both. This establishes behavioral differences, not the production frequency attribution or a reason to disable safety gates blindly.
+- Resonance uses HT5-R timing, not the complete first Resonance system. Its weak one-bar resume and one-sided 15m bound also exist in the retained HT5-R source; V4 additionally omits HT5-R benchmark/breadth and classified-regime admission. A identical synthetic packet with 15m=-0.9, 1h=0.8, 4h=0.75, benchmark=-2 and advancing breadth=0.2 leaves legacy HT5-R watching but V4 LONG.
+- Structural-stop synthetic probe: entry 100.18, prior 14-bar low 96.60 gives the legacy structural plan stop 96.462657, but V4 admits LONG with stop 97.1746 (exactly 3% below entry and above the prior low). The legacy signal in that probe is watching for regime reasons; compare its generated plan, not a historical executed trade. Strategy/stop code was NOT modified.
+- Verification: `npm test` passed production build and 113 UI/safety tests before the final extra summary-state test; final targeted UI/Must-Keep/architecture run passed 28/28 including that test. `npm run test:signals` passed 224/224; TypeScript, ESLint and `git diff --check` passed.
+- No commit/push/CI/production deployment, strategy tuning, database write, reset, position change or Gate/funding action in this task. Last known deployed main remains `b97baf1f` (workflow `33938908870`), not these local UI edits.
+- Production-order replay remains blocked by the prior network access approval cancellation and absent configured production-query credentials. Do not request an order ID from the user: use the existing owner-history list route to match the screenshot's times/strategy/prices once normal read access is available. Do not bypass owner authentication or extract CI secrets.
+- Next bounded strategy change, after authorization: reproduce the bad-admission and clamped-stop cases in regressions; correct missing market-fit/structural invariants without blanket gate relaxation or another strategy rewrite. Preserve major-release paper archival and live boundaries if trading semantics change.
+- Updated UTC: 2026-09-05.
+
 ## V4 restored core strategies — production deployed
 
 - Release: PR `#133` merged as `525a02ff`; verification correction PR `#134` merged as `ebc6284a`; final production workflow `33938628363`.

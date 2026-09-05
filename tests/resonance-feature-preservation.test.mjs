@@ -19,8 +19,8 @@ test("Resonance keeps critical operator capabilities reachable after product ref
     "/api/live/emergency",
     "实盘资格",
     "最近成功对账",
-    "Scanner",
-    "Trade Manager",
+    "市场扫描",
+    "持仓管理",
   ]) assert.match(page, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
@@ -36,7 +36,7 @@ test("paper reset remains reachable without duplicating the destructive action",
 test("fixed navigation and full pre-trade evidence survive product refactors", () => {
   assert.match(page, /const NAV: Tab\[\] = \["大脑", "订单", "管理"\]/);
   assert.match(page, /function DecisionEvidenceCard/);
-  for (const phrase of ["触发状态", "入场区", "止损", "TP1", "TP2", "触发与硬闸门", "支持证据", "反证 / 缺失条件", "失效条件"]) {
+  for (const phrase of ["触发状态", "入场区", "止损", "第一止盈", "第二止盈", "触发与硬闸门", "支持证据", "反证 / 缺失条件", "失效条件"]) {
     assert.match(page, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
   assert.match(page, /candidate\.checks\.map/);
@@ -45,20 +45,20 @@ test("fixed navigation and full pre-trade evidence survive product refactors", (
 
 test("trade review keeps the information operators rely on", () => {
   for (const phrase of [
-    "原始 Stop",
+    "原始止损",
     "当前保护价",
-    "TP1",
-    "TP2",
+    "第一止盈",
+    "第二止盈",
     "隔离保证金",
     "名义仓位",
     "计划亏损",
-    "TP2预计净利",
-    "仓内 MFE",
-    "仓内 MAE",
-    "出场后 MFE",
-    "出场后 MAE",
-    "Exit Capture",
-    "Exit Efficiency",
+    "第二止盈预计净利",
+    "仓内最大浮盈",
+    "仓内最大浮亏",
+    "出场后最大有利波动",
+    "出场后最大不利波动",
+    "收益捕获率",
+    "退出效率",
   ]) assert.match(page, new RegExp(phrase));
 });
 

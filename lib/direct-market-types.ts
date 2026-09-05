@@ -1,6 +1,6 @@
 import type { Hte31Candle } from "./hte31-types.ts";
 
-export const DIRECT_MARKET_BRAIN_VERSION = "direct-market-brain-v4-restored-core";
+export const DIRECT_MARKET_BRAIN_VERSION = "direct-market-brain-v5-entry-integrity";
 export const DIRECT_MARKET_AUTHORITY = "direct_market_brain" as const;
 
 export type DirectMarketSide = "LONG" | "SHORT" | "WAIT";
@@ -15,7 +15,7 @@ export const DIRECT_CORE_SETUPS = [
 export const DIRECT_CORE_STRATEGY_LINEAGE = {
   VOLUME_FORCE_FAILED_BREAKOUT: "HT3-R_FAILED_AUCTION",
   EXHAUSTION_REVERSAL: "HT4_EXHAUSTION_ANTI_CROWD",
-  MULTI_TIMEFRAME_RESONANCE: "RESONANCE_V1_WITH_HT5-R_TIMING",
+  MULTI_TIMEFRAME_RESONANCE: "HT5-R_MARKET_FIT_STRUCTURE_RECOVERY_V5",
 } as const;
 
 export type DirectCoreSetup = typeof DIRECT_CORE_SETUPS[number]["id"];

@@ -170,6 +170,7 @@ export async function runHte31ScanStep(job: Hte31ScanJob): Promise<Hte31ScanStep
       btcCandles: job.btcCandles,
       volumeRank: Math.max(1, volumeRank),
       batchId: `direct:${Math.floor(job.packet.observedAt / (3 * 60_000))}`,
+      marketContext: job.market,
     });
     return {
       kind: "completed",

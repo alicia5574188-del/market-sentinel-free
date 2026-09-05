@@ -14,7 +14,7 @@ async function readBuiltWorkerSource() {
 
 test("production Worker bundle contains the direct market brain runtime", async () => {
   const source = await readBuiltWorkerSource();
-  assert.match(source, /direct-market-brain-v4-restored-core/);
+  assert.match(source, /direct-market-brain-v5-entry-integrity/);
   assert.match(source, /Resonance/);
   assert.match(source, /大脑决策 · 三策略贡献 · 12小时复盘/);
   assert.match(source, /量价力度假突破/);

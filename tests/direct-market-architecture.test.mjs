@@ -35,9 +35,17 @@ test("new-entry scanner has no legacy strategy authority or high-frequency D1 wr
   assert.match(repository, /buildDirectSetupPerformance/);
   assert.match(types, /HT3-R_FAILED_AUCTION/);
   assert.match(types, /HT4_EXHAUSTION_ANTI_CROWD/);
-  assert.match(types, /RESONANCE_V1_WITH_HT5-R_TIMING/);
+  assert.match(types, /HT5-R_MARKET_FIT_STRUCTURE_RECOVERY_V5/);
+  assert.match(scanner, /marketContext: job\.market/);
   assert.match(execution, /getDirectSetupGuardDecision/);
   assert.match(setupGuard, /losingStreak >= 3/);
+});
+
+test("setup ranking has no unconditional exhaustion priority", async () => {
+  const brain = await readFile(new URL("../lib/direct-market-brain.ts", import.meta.url), "utf8");
+  const ranking = brain.slice(brain.indexOf("const selectedSetup ="), brain.indexOf("const { directionalScore", brain.indexOf("const selectedSetup =")));
+  assert.match(ranking, /right\.score - left\.score/);
+  assert.doesNotMatch(ranking, /EXHAUSTION_REVERSAL/);
 });
 
 test("adaptive position decisions use completed candles without adding periodic D1 writes", () => {

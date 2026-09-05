@@ -1,5 +1,20 @@
 # Decisions
 
+## 2026-09-05 — Correct entry invariants without another strategy rewrite
+
+- Choice: Only completed five-minute candles may confirm entries. Resonance must recover nearby structure with market support; stops remain outside their actual swing and are rejected, never clamped inward, when price-distance risk exceeds 5% (also checked at the final quote). Reuse the existing regime classifier and rank qualified setups without a named-strategy bonus.
+- Reason: Same-input probes reproduced weak bounce admission, missing market-fit checks and a 3% stop inside structure. Scanner source also passes unfinished chart candles. Hardcoded regime labels and exhaustion's fixed score bonus distorted isolation and selection; this does not establish the unique cause of an unseen production order.
+- Scope: Preserve HT3-R/HT4 core patterns, quality/macro/portfolio/learning thresholds, risk sizing, live authority and D1 cadence. Use the existing major PAPER release cutover for V5; no production reset occurs during local implementation.
+- UI: Centralize Chinese presentation only; retain stored English IDs and history, remove daily raw diagnostic clutter, keep complete evidence in Management and preserve all Must-Keep capabilities.
+- Verification lesson: Run `npm run test:direct` in CI as well as signal/build/UI gates. Test clean exhaustion separately from overlapping reversal patterns, so removing a hidden ranking bonus cannot be mistaken for loss of the core exhaustion trigger. Use the canonical version in runtime and release proofs.
+
+## 2026-09-05 — Separate useful operator status from raw diagnostics and restored-rule claims
+
+- Choice: Remove the raw candidate hero from the daily Brain page; show plain operating status and keep complete evidence collapsed under Management. Preserve contribution, orders, twelve-hour review, account and live safety capabilities.
+- Reason: The user explicitly rejects scores, English location codes, probabilities and empty levels as daily-use content. Candidate readiness must not be presented as a completed entry.
+- Evidence: Local UI capability and state tests cover the new compact summary. Historical same-input probes show V4 differs from retained HT3-R/HT4/HT5-R through outer gates, omitted HT5-R market checks and clamped stops; copying core thresholds is not behavioral parity or verified profitability.
+- Boundary: UI only is implemented locally; strategy findings are diagnosis, not a silent live-policy change. A fast follow-up must start from these exact probes rather than rediscovering the repository or guessing the screenshot's order ID.
+
 ## 2026-09-04 — Treat setup activity as a funnel, not a winner-only partition
 
 - Choice: On every deep scan, count all three setup evaluations independently, then separate setup trigger, shared hard-gate qualification, primary selection, entry blocking, and actual opening. A fixed 12-hour result is complete only when measured Scanner coverage spans the full window; incomplete startup windows remain explicitly in progress.
