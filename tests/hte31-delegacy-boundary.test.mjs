@@ -27,9 +27,9 @@ test("HTE31 Human Trader implementation owns its domain dependencies", () => {
 
 test("HTE31 scanner imports the direct market brain and owns candle types directly", () => {
   const scanner = source("../lib/hte31-scanner.ts");
-  assert.match(scanner, /scalp-strategy\.ts/);
+  assert.match(scanner, /analog-path-strategy\.ts/);
   assert.match(scanner, /direct-market-universe\.ts/);
-  assert.match(scanner, /buildScalpCandidate/);
+  assert.match(scanner, /buildAnalogCandidate/);
   assert.doesNotMatch(scanner, /human-trader-engine|hte31-advanced-traders|evaluateAdvancedHumanTraders/);
   assert.match(scanner, /Hte31Candle/);
   assert.match(scanner, /hte31-types\.ts/);

@@ -22,6 +22,8 @@ export type HistoricalForecast = {
   sampleCount: number;
   effectiveSamples: number;
   similarity: number;
+  directionUpPct?: number;
+  directionDownPct?: number;
   upPct: number;
   downPct: number;
   neutralPct: number;
@@ -35,6 +37,7 @@ export type HistoricalForecast = {
   costBps: number;
   eventContext: string;
   path: { minutes: number; lowerPct: number; medianPct: number; upperPct: number }[];
+  episodes?: { weight: number; from: number; bars: { openPct: number; highPct: number; lowPct: number; closePct: number }[] }[];
   matches: { from: number; to: number; futureTo: number; similarity: number; forwardPct: number; calendar: string; event: string; pathPct: number[] }[];
 };
 
@@ -145,9 +148,14 @@ export function buildHistoricalForecast(input: { candles: Hte31Candle[]; now: nu
     const anchor = rows[s.start + ANALOG_WINDOW - 1].close;
     return rows.slice(s.start + ANALOG_WINDOW, s.start + ANALOG_WINDOW + ANALOG_HORIZON).map((r) => (r.close / anchor - 1) * 100);
   });
+  result.episodes=selected.map(s=>{
+    const anchor=rows[s.start+ANALOG_WINDOW-1].close;
+    return {weight:s.weight,from:candleTimeMs(rows[s.start]),bars:rows.slice(s.start+ANALOG_WINDOW,s.start+ANALOG_WINDOW+ANALOG_HORIZON).map(r=>({openPct:(r.open/anchor-1)*100,highPct:(r.high/anchor-1)*100,lowPct:(r.low/anchor-1)*100,closePct:(r.close/anchor-1)*100}))};
+  });
   const forwards = paths.map((path) => path.at(-1)!);
   const ratio = (predicate: (v: number) => boolean) => totalWeight
     ? selected.reduce((sum, s, i) => sum + (predicate(forwards[i]) ? s.weight : 0), 0) / totalWeight * 100 : 0;
+  result.directionUpPct=ratio(v=>v>0); result.directionDownPct=ratio(v=>v<0);
   result.upPct = ratio((v) => v > costPct);
   result.downPct = ratio((v) => v < -costPct);
   result.neutralPct = totalWeight ? Math.max(0, 100 - result.upPct - result.downPct) : 0;

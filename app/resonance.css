@@ -296,3 +296,5 @@ button { color: inherit; }
   .rz-brand small { max-width: 185px; }
   .rz-position-preview { flex-wrap: wrap; }
 }
+
+.rz-forecast-top { grid-column: 1 / -1; }

@@ -9,7 +9,7 @@ export const DIRECT_MARKET_NEW_ORDER_ADMISSION_ROWS = 22_000;
 
 // Budget planning assumption, not a trading position-count limit. Entry also
 // reserves checkpoint rows for the actual prospective open-position count.
-export const DIRECT_MARKET_PLANNED_OPEN_POSITIONS = 3;
+export const DIRECT_MARKET_PLANNED_OPEN_POSITIONS = 6;
 export const DIRECT_MARKET_POSITION_CHECKPOINT_MS = 60_000;
 export const DIRECT_MARKET_MAX_NEW_ORDERS_PER_UTC_DAY = 60;
 export const DIRECT_MARKET_RESERVED_ROWS_PER_NEW_ORDER = 100;

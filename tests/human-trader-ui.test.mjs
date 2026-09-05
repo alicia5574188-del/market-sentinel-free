@@ -19,7 +19,7 @@ const [page, layout, route, chart, css, liveStatus, scanner, catalog, worker, re
 
 test("production UI exposes the useful three setups and direct operating truth while history stays readable", () => {
   assert.match(page, /Resonance/);
-  assert.match(page, /顺势回踩短线 · 模拟验证 · 12小时复盘/);
+  assert.match(page, /历史方向交易 · 模拟验证 · 12小时复盘/);
   for (const phrase of ["HT1", "HT2", "HT3", "HT4", "HT5", "HT1-R", "HT2-R", "HT3-R", "HT5-R", "HT6", "HT7", "HT8", "HT9"]) assert.match(catalog, new RegExp(phrase));
   for (const family of ["SF01", "SF02", "SF03", "SF04", "SF05", "SF06", "SF07", "SF08", "SF09"]) assert.match(catalog, new RegExp(family));
   assert.match(page, /HistoricalForecastCard/);
@@ -68,7 +68,8 @@ test("plain-language decision never presents a candidate or stale state as a fil
   assert.match(summarize(snapshot, false).detail, /不代表已开仓/);
   assert.equal(summarize(snapshot, true).title, "运行数据需要检查");
   snapshot.degraded = true;
-  assert.equal(summarize(snapshot, false).title, "运行数据需要检查");
+  assert.equal(summarize(snapshot, true).title, "运行数据需要检查");
+  assert.equal(summarize(snapshot, false).title, "BTC 信号待复核", "unrelated partial data must not mask the current candidate");
   snapshot.degraded = false;
   snapshot.dashboard.directRisk.state = "PAUSED";
   assert.equal(summarize(snapshot, false).title, "风险保护中");
@@ -206,7 +207,7 @@ test("high-frequency read is bounded, diagnostics are on demand, and health stay
   assert.match(route, /staleSources/);
   assert.match(route, /diagnostics: null/);
   assert.match(scanner, /boundedMap\(job\.universe,2/);
-  assert.match(scanner, /buildScalpCandidate/);
+  assert.match(scanner, /buildAnalogCandidate/);
   assert.doesNotMatch(scanner, /recordHte31StrategyEvaluations|recordHte31StrategyDiagnostic|openHte31PaperTrade/);
   const healthStart = worker.indexOf('if (url.pathname === "/__health")');
   const healthEnd = worker.indexOf('if (url.pathname === "/api/push/vapid-public-key")', healthStart);
@@ -216,6 +217,6 @@ test("high-frequency read is bounded, diagnostics are on demand, and health stay
 });
 
 test("paper capital card reads the execution risk policy rather than the retired 3.5% evaluator", () => {
-  assert.match(repository, /const directRisk = await getDirectMarketRiskDecision\(\)/);
+  assert.match(repository, /getDirectMarketRiskDecision\(\)/);
   assert.doesNotMatch(repository, /const directRisk = evaluateDirectMarketRisk/);
 });

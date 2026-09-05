@@ -37,7 +37,7 @@ export function retainDashboardSnapshot<T extends SnapshotShape>(previous: T | n
   if (review == null && fallback?.twelveHourReview != null) {
     review = retain("twelveHourReview", review, fallback.twelveHourReview);
   }
-  const retained = staleSources.size > 0;
+  const retained = staleSources.has("scannerReadModel");
   const observedAt = retained && fallback ? Math.min(next.observedAt, fallback.observedAt) : next.observedAt;
   return {
     ...next,

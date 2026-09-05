@@ -65,6 +65,7 @@ type Trade = {
   takeProfit1Price: number;
   takeProfit2Price: number;
   target1HitAt: number | null;
+  maxHoldingMinutes: number;
   riskBudgetUsdt: number;
   notionalUsdt: number;
   marginUsdt: number;
@@ -234,7 +235,8 @@ type DirectCandidate = {
   directionalScore: number;
   netEdgeR: number;
   confidence: number;
-  setup: "MINUTE_PULLBACK" | "HISTORICAL_ANALOG" | "VOLUME_FORCE_FAILED_BREAKOUT" | "EXHAUSTION_REVERSAL" | "MULTI_TIMEFRAME_RESONANCE";
+  setup: "ANALOG_PATH" | "MINUTE_PULLBACK" | "HISTORICAL_ANALOG" | "VOLUME_FORCE_FAILED_BREAKOUT" | "EXHAUSTION_REVERSAL" | "MULTI_TIMEFRAME_RESONANCE";
+  analogIntent?: import("../lib/analog-path-strategy").AnalogIntent;
   forecast?: HistoricalForecast;
   candles5m?: Candle[];
   setupLabel: string;
@@ -442,7 +444,7 @@ function Empty({ children }: { children: React.ReactNode }) {
 
 function operatorDecision(snapshot: Snapshot | null, unavailable: boolean) {
   if (!snapshot) return { title: "正在读取运行状态", detail: "数据就绪后显示当前决定。" };
-  if (unavailable || snapshot.degraded) return { title: "运行数据需要检查", detail: "当前信息可能延迟，请在管理页检查运行状态。" };
+  if (unavailable) return { title: "运行数据需要检查", detail: "当前信息可能延迟，请在管理页检查运行状态。" };
   const dashboard = snapshot.dashboard;
   if (dashboard?.paperReset.status === "pending") return { title: "等待新一轮模拟开始", detail: "重置完成前不再新开仓，原有记录保留。" };
   if (dashboard?.settings.scanEnabled === false) return { title: "市场扫描已暂停", detail: "恢复扫描可在管理页操作。" };
@@ -729,7 +731,7 @@ export default function ResonancePage() {
   const ageSeconds = snapshot?.scanner.ageMs == null ? null : Math.round(snapshot.scanner.ageMs / 1000);
   const healthBad = Boolean(error || snapshot?.scanner.status?.lastError || snapshot?.scanner.status?.circuitOpen);
   const healthWarn = !healthBad && Boolean(refreshWarning || snapshot?.degraded || (ageSeconds != null && ageSeconds > 90));
-  const decisionSummary = operatorDecision(snapshot, healthBad || healthWarn);
+  const decisionSummary = operatorDecision(snapshot, Boolean(error || snapshot?.errors.scannerReadModel || snapshot?.staleSources?.includes("scannerReadModel") || (ageSeconds != null && ageSeconds > 360)));
 
   const mutate = useCallback(async (url: string, init: RequestInit, success: string, refreshLiveAfter = false) => {
     setMessage("");
@@ -809,7 +811,7 @@ export default function ResonancePage() {
   return <main className="rz-shell" data-release={DIRECT_MARKET_BRAIN_VERSION}>
     <header className="rz-header">
       <div className="rz-mark" aria-hidden="true">共</div>
-      <div className="rz-brand"><strong>共振量化</strong><small>顺势回踩短线 · 模拟验证 · 12小时复盘</small></div>
+      <div className="rz-brand"><strong>共振量化</strong><small>历史方向交易 · 模拟验证 · 12小时复盘</small></div>
       <span className={`rz-status-label ${healthBad || healthWarn ? "warn" : ""}`}><i className={`rz-health ${healthBad ? "bad" : healthWarn ? "warn" : ""}`} />{healthBad ? "状态异常" : healthWarn ? "数据延迟" : snapshot ? "已更新" : "连接中"}</span>
     </header>
 
@@ -818,6 +820,10 @@ export default function ResonancePage() {
     {message && <div className="rz-banner">{message}</div>}
 
     {tab === "大脑" && <div className="rz-stack rz-overview">
+      <section className="rz-section rz-forecast-top"><div className="rz-section-head"><div><span className="rz-eyebrow">未来一小时 · 方向辅助</span><h2>历史相似走势与预测</h2></div></div>
+        {readModel?.directCandidate?.forecast ? <><HistoricalForecastCard observedAt={snapshot?.requestedAt} symbol={readModel.directCandidate.symbol} forecast={readModel.directCandidate.forecast} candles={readModel.directCandidate.candles5m ?? []} /><p className="rz-copy">{readModel.directCandidate.checks.find(c=>c.key==='history-direction')?.detail ?? '历史方向尚不明确，暂不开单'} · {readModel.directCandidate.decision!=='WAIT'?'当前价格可入场，等待资金复核':readModel.directCandidate.counterEvidence[0]??'暂不开单'}</p></> : <Empty>正在读取历史对照；数据就绪后显示真实预测，不生成替代曲线。</Empty>}
+      </section>
+
       <section className="rz-account-strip" aria-label="模拟账户概览">
         <div><span className="rz-eyebrow">模拟账户 · 当前权益</span><strong>{fmtMoney(dashboard?.account.equityUsdt)}</strong><small>本轮本金 {fmtMoney(dashboard?.account.startingCapitalUsdt)}</small></div>
         <div className="rz-account-result"><span>本轮已实现净收益</span><b className={(dashboard?.account.realizedPnlUsdt ?? 0) < 0 ? "rz-negative" : "rz-positive"}>{fmtMoney(dashboard?.account.realizedPnlUsdt)}</b><button className="rz-text-action" onClick={() => setTab("管理")}>资金设置 ↗</button></div>
@@ -825,15 +831,15 @@ export default function ResonancePage() {
       <section className="rz-section rz-now">
         <div className="rz-section-head"><div><span className="rz-eyebrow">当前决定</span><h2>大脑决定</h2></div><small>数据时间 {fmtTime(snapshot?.observedAt)}</small></div>
         <article className={`rz-panel rz-decision-summary ${healthBad || healthWarn ? "rz-decision-delayed" : ""}`}>
-          <span className="rz-mode-label">顺势回踩 · 快进快出</span>
+          <span className="rz-mode-label">历史总体方向 · 路径择价</span>
           <strong>{decisionSummary.title}</strong>
           <p className="rz-copy">{decisionSummary.detail}</p>
-          <div className="rz-rule-strip"><span>一分钟寻找入场</span><span>最长持仓十五分钟</span><span>单笔含费风险0.25%</span></div>
+          <div className="rz-rule-strip"><span>五分钟更新历史判断</span><span>最长持仓一小时</span><span>单笔风险上限0.25%</span></div>
         </article>
       </section>
       <section className="rz-section rz-active-positions"><div className="rz-section-head"><div><h2>当前持仓</h2></div><button className="rz-text-action" onClick={() => setTab("订单")}>查看订单 ↗</button></div>
         {dashboard?.openTrades.length ? <div className="rz-list">{dashboard.openTrades.map((trade) => <button type="button" className="rz-panel rz-position-preview" key={trade.id} onClick={() => setTab("订单")}>
-          <div><strong>{trade.symbol.replace("_USDT", "")} <small>{sideText(trade.side)}</small></strong><small>入场 {fmtTime(trade.entryAt)} · 当前保护价 {fmtPrice(trade.currentStopPrice)}</small><small>{trade.setupId === "MINUTE_PULLBACK" ? `最迟退出 ${fmtTime(trade.entryAt + 15 * 60_000)}` : tradeStrategyLabel(trade)}</small></div>
+          <div><strong>{trade.symbol.replace("_USDT", "")} <small>{sideText(trade.side)}</small></strong><small>入场 {fmtTime(trade.entryAt)} · 当前保护价 {fmtPrice(trade.currentStopPrice)}</small><small>{["MINUTE_PULLBACK","ANALOG_PATH"].includes(trade.setupId) ? `最迟退出 ${fmtTime(trade.entryAt + (trade.maxHoldingMinutes ?? (trade.setupId==='ANALOG_PATH'?60:15)) * 60_000)}` : tradeStrategyLabel(trade)}</small></div>
           <div><strong className={(trade.unrealizedNetUsdt ?? 0) < 0 ? "rz-negative" : "rz-positive"}>{fmtMoney(trade.unrealizedNetUsdt)}</strong><small>未实现净收益</small></div>
         </button>)}</div> : <Empty><strong>{dashboard ? "当前空仓" : "正在读取订单数据"}</strong>{dashboard && "没有已成交订单；符合条件后由后台执行。"}</Empty>}
       </section>
@@ -856,7 +862,7 @@ export default function ResonancePage() {
       </section>
 
 
-      {readModel?.directCandidate?.forecast && <details className="rz-decision-detail"><summary>历史相似走势辅助参考（不决定开仓）</summary><HistoricalForecastCard symbol={readModel.directCandidate.symbol} forecast={readModel.directCandidate.forecast} candles={readModel.directCandidate.candles5m ?? []} /></details>}
+
     </div>}
 
     {tab === "订单" && <div className="rz-stack">
@@ -878,7 +884,7 @@ export default function ResonancePage() {
       </article></section>
       <details className="rz-decision-detail"><summary>资源预算与运行方式</summary><div className="rz-panel rz-copy"><p>行情由后台统一获取，历史分批回补并缓存复用。持仓保护独立调度，失败后限速重试。</p><p>数据库实际用量由定时运维审计检查；本页没有实时额度数据，不把预算当作实际消耗。</p></div></details>
       {readModel?.directCandidate && <details className="rz-decision-detail"><summary>决策诊断（按需查看）</summary><p className="rz-panel rz-copy">最近执行结果：{operatorText(readModel.openReason) || "等待执行反馈"}</p><DecisionEvidenceCard candidate={readModel.directCandidate} /></details>}
-      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">交易核心</span><h2>短线执行规则</h2></div></div><article className="rz-panel"><div className="rz-metric-grid"><div className="rz-metric"><span>入场依据</span><b>十五分钟方向，一分钟回踩确认</b></div><div className="rz-metric"><span>历史辅助</span><b>持续回补，样本不足不阻止短线信号</b></div><div className="rz-metric"><span>快速退出</span><b>三分钟无推进且确认失效则退出，最长十五分钟</b></div><div className="rz-metric"><span>含费计划风险</span><b>单笔0.25%，合计不超过0.75%</b></div><div className="rz-metric rz-metric-wide"><span>固定币池</span><b>比特币、以太坊、索拉纳、币安币、瑞波币、狗狗币</b></div></div></article></section>
+      <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">交易核心</span><h2>短线执行规则</h2></div></div><article className="rz-panel"><div className="rz-metric-grid"><div className="rz-metric"><span>入场依据</span><b>历史整体偏多/偏空，直接比较当前价与等待价</b></div><div className="rz-metric"><span>方向依据</span><b>历史方向就是开仓依据；不再额外等回踩信号</b></div><div className="rz-metric"><span>快速退出</span><b>允许计划内逆向波动；偏离过大提前退出，最长一小时</b></div><div className="rz-metric"><span>含费计划风险</span><b>单笔最多0.25%，合计不超过0.75%；无固定笔数上限</b></div><div className="rz-metric rz-metric-wide"><span>固定币池</span><b>比特币、以太坊、索拉纳、币安币、瑞波币、狗狗币</b></div></div></article></section>
       <section className="rz-section"><div className="rz-section-head"><div><h2>资金保护</h2></div></div><article className="rz-panel">
         {dashboard?.directRisk ? <p className="rz-copy"><strong>风险档：</strong>{operatorLabel(dashboard.directRisk.state)} · 单笔风险上限 {(dashboard.directRisk.riskRate * 100).toFixed(2)}% · {operatorText(dashboard.directRisk.reason)}</p> : <p className="rz-copy">风险状态正在读取</p>}
         <div className="rz-rule-strip"><span>组合风险上限0.75%</span><span>三连亏暂停三十分钟</span><span>日亏1.5%暂停新开仓</span></div>

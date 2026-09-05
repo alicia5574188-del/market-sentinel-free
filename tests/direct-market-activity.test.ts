@@ -7,10 +7,10 @@ function candidate(observedAt: number): DirectMarketCandidate {
   return { symbol: "BTC_USDT", batchId: "batch", observedAt, freshness: "FRESH", scanStage: "DEEP",
     volumeRank: 1, volumeUsd: 1e9, riskClusterId: "btc-positive", btcCorrelation: 1,
     location: "TOP", paths: { up: 20, down: 65, rangeOrInvalid: 15 }, directionalScore: -0.45,
-    netEdgeR: 0.2, confidence: 65, setup: "MINUTE_PULLBACK", setupLabel: "顺势回踩快进快出", setupScore: 65,
-    setupEvaluations: [{ setup: "MINUTE_PULLBACK", setupLabel: "顺势回踩快进快出", side: "SHORT", score: 65, triggered: true, qualified: true, selected: true, blockers: [] }],
+    netEdgeR: 0.2, confidence: 65, setup: "ANALOG_PATH", setupLabel: "历史路径方向交易", setupScore: 65,
+    setupEvaluations: [{ setup: "ANALOG_PATH", setupLabel: "历史路径方向交易", side: "SHORT", score: 65, triggered: true, qualified: true, selected: true, blockers: [] }],
     decision: "SHORT", entryZone: [99,100], invalidationPrice: 101, targets: [98,97], evidence: [], counterEvidence: [],
-    checks: [{ key: "setup", label: "顺势回踩快进快出", passed: true, detail: "" }], candles5m: [], assetRegime: "transition", maxHoldingMinutes: 60 };
+    checks: [{ key: "setup", label: "历史路径方向交易", passed: true, detail: "" }], candles5m: [], assetRegime: "transition", maxHoldingMinutes: 60 };
 }
 test("one active prediction has separate signal, qualification, rejection and actual-open counts", () => {
   const now = Date.UTC(2026,8,5,12);
@@ -19,7 +19,7 @@ test("one active prediction has separate signal, qualification, rejection and ac
   assert.equal(first.current.qualifiedSignals, 1); assert.equal(first.current.blockedEntries, 1);
   assert.equal(first.current.openedTrades, 0); assert.equal(first.current.setups.length, 1);
   assert.equal(first.current.setups[0].leadingBlocker, "组合总风险已用满");
-  const second = recordDirectTwelveHourActivity({ activity: first, candidate: candidate(now + INTERVAL_MS), openedSetup: "MINUTE_PULLBACK", openReason: "已开仓", expectedIntervalMs: INTERVAL_MS });
+  const second = recordDirectTwelveHourActivity({ activity: first, candidate: candidate(now + INTERVAL_MS), openedSetup: "ANALOG_PATH", openReason: "已开仓", expectedIntervalMs: INTERVAL_MS });
   assert.equal(second.current.openedTrades, 1); assert.equal(second.current.setups[0].evaluations, 2);
   assert.equal(second.current.coverageMs, INTERVAL_MS);
 });
@@ -27,7 +27,7 @@ test("old strategy activity cannot crash or contaminate the new forecast epoch",
   const now = Date.UTC(2026,8,5,12), old = emptyDirectTwelveHourActivity(now);
   old.setups[0].setup = "EXHAUSTION_REVERSAL"; old.evaluations = 400; old.coverageMs = 10 * 3_600_000;
   const next = recordDirectTwelveHourActivity({ activity: { current: old, lastCompleted: { ...old, complete: true } }, candidate: candidate(now), openedSetup: null, openReason: "等待", expectedIntervalMs: INTERVAL_MS });
-  assert.equal(next.current.evaluations, 1); assert.equal(next.current.setups[0].setup, "MINUTE_PULLBACK");
+  assert.equal(next.current.evaluations, 1); assert.equal(next.current.setups[0].setup, "ANALOG_PATH");
   assert.equal(next.lastCompleted, null); assert.equal(next.current.coverageMs, 0);
 });
 test("partial or interrupted coverage does not become a complete twelve-hour review", () => {

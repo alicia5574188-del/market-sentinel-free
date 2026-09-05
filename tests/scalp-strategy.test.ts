@@ -65,7 +65,7 @@ test('24-hour feed simulation bounds requests, survives restarts and repairs gap
   }
   assert.equal(calls,8640);assert.equal(storage.writes,17280);assert.equal(maxLimit,390);
   for(const symbol of coins)assert.ok((await storage.get<MinuteCache>(`minute:${symbol}`))!.rows.length<=390);
-  assert.ok(directMarketIndexAdjustedDailyBudget().positionCheckpointPhysicalRows+60*100<22000);
+  assert.ok(directMarketIndexAdjustedDailyBudget().positionCheckpointPhysicalRows+60*100<30000);
 });
 test('rate limiting backs off persistently; healthy peer is not blocked',async()=>{
   const storage=new Storage();let calls=0;

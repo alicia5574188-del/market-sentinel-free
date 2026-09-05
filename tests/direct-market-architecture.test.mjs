@@ -20,10 +20,10 @@ test("new-entry scanner has no legacy strategy authority or high-frequency D1 wr
   for (const forbidden of ["evaluateHumanTraderPool", "evaluateAdvancedHumanTraders", "evaluateHte31ResearchStrategies", "recordHte31Evaluations", "recordHte31DiagnosticCycle", "tryOpenResonanceTrade"]) {
     assert.doesNotMatch(scanner, new RegExp(forbidden));
   }
-  assert.match(scanner, /buildScalpCandidate/);
+  assert.match(scanner, /buildAnalogCandidate/);
   assert.doesNotMatch(worker, /freshCohort\.length >= 3/);
   assert.match(worker, /fetchGatePositionQuotes\(executable\.map/);
-  assert.match(worker, /loadHistoricalForecastCandles/);
+  assert.match(worker, /currentForecast/);
   assert.match(worker, /SCANNER_CYCLE_INTERVAL_MS = 60_000/);
   assert.match(worker, /fetchGatePositionQuotes/);
   assert.match(execution, /validateDirectMarketEntry/);
@@ -41,7 +41,7 @@ test("new-entry scanner has no legacy strategy authority or high-frequency D1 wr
   assert.match(setupGuard, /losingStreak >= 3/);
 });
 
-test("minute pullback is the only active producer; analogue builder remains auxiliary", async () => {
+test("five-minute pullback is the only active producer; analogue builder remains auxiliary", async () => {
   const brain = await readFile(new URL("../lib/direct-market-brain.ts", import.meta.url), "utf8");
   assert.match(brain, /buildHistoricalForecast/);
   assert.doesNotMatch(brain, /evaluateCoreSetups|normalizedPaths|EXHAUSTION_REVERSAL/);
@@ -58,7 +58,7 @@ test("configured scan coverage and risk-based capacity reach the production boun
   assert.match(execution, /directMarketPositionCheckpointRows\(account\.open\.length \+ 1, todayRows\.map/);
   assert.match(execution, /gte\(hte31Trades\.exitAt, today\)/);
   assert.match(execution, /hte31PaperPortfolioBlockReason/);
-  assert.match(execution, /if \(sameCluster\)/);
+  assert.match(execution, /analogRiskAllocation/);
   assert.match(page, /合计不超过0.75%/);
 });
 

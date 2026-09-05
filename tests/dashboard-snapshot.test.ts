@@ -49,3 +49,10 @@ test("stale responses and malformed payloads cannot replace newer state", () => 
   const good = retainDashboardSnapshot(current, { ...snapshot(), requestedAt: 2_000 });
   assert.equal(good.degraded, false);
 });
+
+ test("a missing account section cannot freeze a fresh scanner timestamp",()=>{
+ const old=snapshot(), next={...snapshot(),requestedAt:2000,observedAt:1900,dashboard:null};
+ const result=retainDashboardSnapshot(old,next);
+ assert.equal(result.observedAt,1900);assert.equal(result.scanner.ageMs,100);
+ assert.deepEqual(result.dashboard?.openTrades,['one']);assert.equal(result.degraded,true);
+ });

@@ -34,7 +34,7 @@ test("the direct market cycle has no simulation-inside-simulation and opens only
   assert.match(diagnostics, /async function buildPaperRouterEvidence/);
   assert.match(diagnostics, /\.from\(hte31Trades\)/);
   assert.match(diagnostics, /isCurrentResonanceTrade/);
-  assert.match(scanner, /buildScalpCandidate/);
+  assert.match(scanner, /buildAnalogCandidate/);
   assert.doesNotMatch(scanner, /recordHte31DiagnosticCycle|tryOpenResonanceTrade|createShadowSample/);
   const rankIndex = worker.indexOf('if(candidate.decision!=="WAIT")');
   const openIndex = worker.indexOf("openDirectMarketTrade({", rankIndex);

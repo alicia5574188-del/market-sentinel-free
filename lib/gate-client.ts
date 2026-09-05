@@ -71,6 +71,7 @@ export type GatePositionQuote = {
   lowPrice: number | null;
   candleTime: number | null;
   recentCandles?: Candle[];
+  protectionError?: string;
   volumeUsd: number;
   observedAt: number;
 };
@@ -92,13 +93,21 @@ function firstObject(value: unknown): JsonObject {
   return Array.isArray(value) ? asObject(value[0]) : asObject(value);
 }
 
+const gateCooldown=new Map<string,number>();
 async function gate(path: string, signal: AbortSignal) {
+  const endpoint=path.split("?")[0],blockedUntil=gateCooldown.get(endpoint)??0;
+  if(blockedUntil>Date.now())throw Object.assign(new Error(`Gate ${endpoint} 限流冷却中`),{retryAt:blockedUntil});
   const response = await fetch(`${GATE_BASE}${path}`, {
     signal,
     cache: "no-store",
     headers: { Accept: "application/json", "User-Agent": "Market-Sentinel/1.0" },
   });
-  if (!response.ok) throw new Error(`Gate ${path.split("?")[0]} returned ${response.status}`);
+  if (!response.ok) {
+    const reset=Number(response.headers.get('X-Gate-RateLimit-Reset-Timestamp')),retry=response.headers.get('Retry-After');
+    const retryAt=Math.max(Date.now()+60_000,reset>0?(reset>1e12?reset:reset*1000):0,retry?(/^\d+$/.test(retry)?Date.now()+Number(retry)*1000:Date.parse(retry)||0):0);
+    if(response.status===429)gateCooldown.set(endpoint,retryAt);
+    throw Object.assign(new Error(`Gate ${endpoint} returned ${response.status}${response.status===429?`; 剩余=${response.headers.get('X-Gate-RateLimit-Requests-Remain')??'未知'}; 重试=${new Date(retryAt).toISOString()}`:''}`),{retryAt:response.status===429?retryAt:0});
+  }
   return response.json() as Promise<unknown>;
 }
 
@@ -340,7 +349,8 @@ export async function fetchGateUniverse(limit = 30, coreSymbols: string[] = []) 
   }
 }
 
-export async function fetchGatePositionQuotes(symbols: string[]): Promise<GatePositionQuote[]> {
+const protectionCandleCache=new Map<string,{at:number;rows:Candle[]}>();
+export async function fetchGatePositionQuotes(symbols: string[],includeRecentCandles=true): Promise<GatePositionQuote[]> {
   const unique = [...new Set(symbols)].slice(0, 20);
   if (unique.some((symbol) => !SYMBOL_PATTERN.test(symbol))) throw new Error("Invalid Gate symbol");
   if (!unique.length) return [];
@@ -350,10 +360,17 @@ export async function fetchGatePositionQuotes(symbols: string[]): Promise<GatePo
   try {
     const [tickerPayload, candleResults] = await Promise.all([
       gate("/futures/usdt/tickers", controller.signal),
-      settleFactoriesBounded(unique.map((symbol) => () => gate(
-        `/futures/usdt/candlesticks?contract=${encodeURIComponent(symbol)}&interval=10s&limit=4`,
-        controller.signal,
-      ))),
+      Promise.all(unique.map(async(symbol)=>{
+        if(!includeRecentCandles)return {status:'fulfilled' as const,value:[]};
+        const cached=protectionCandleCache.get(symbol);
+        if(cached&&Date.now()-cached.at<30_000)return {status:'fulfilled' as const,value:cached.rows};
+        try {
+          const rows=parseCandles(await gate(`/futures/usdt/candlesticks?contract=${encodeURIComponent(symbol)}&interval=10s&limit=8`,controller.signal));
+          if(protectionCandleCache.size>=32)protectionCandleCache.delete(protectionCandleCache.keys().next().value!);
+          protectionCandleCache.set(symbol,{at:Date.now(),rows});
+          return {status:'fulfilled' as const,value:rows};
+        } catch(reason){return {status:'rejected' as const,reason};}
+      })),
     ]);
     const tickerMap = new Map<string, JsonObject>();
     if (Array.isArray(tickerPayload)) {
@@ -368,7 +385,7 @@ export async function fetchGatePositionQuotes(symbols: string[]): Promise<GatePo
       const price = finite(ticker?.last);
       if (!ticker || price == null || price <= 0) return [];
       const candleResult = candleResults[index];
-      const recentCandles = candleResult.status === "fulfilled" ? parseCandles(candleResult.value) : [];
+      const recentCandles = candleResult.status === "fulfilled" ? candleResult.value : [];
       const candle = recentCandles.at(-1) ?? null;
       return [{
         symbol,
@@ -377,6 +394,7 @@ export async function fetchGatePositionQuotes(symbols: string[]): Promise<GatePo
         lowPrice: candle?.low ?? null,
         candleTime: candle?.time ?? null,
         recentCandles,
+        ...(includeRecentCandles&&candleResult.status==='rejected'?{protectionError:candleResult.reason instanceof Error?candleResult.reason.message:'持仓区间行情不可用'}:{}),
         volumeUsd: volumeUsd(ticker),
         observedAt,
       }];
@@ -393,6 +411,16 @@ export async function fetchGateMinuteCandles(symbol: string, limit = 8) {
   const timeout = setTimeout(() => controller.abort(), 7_000);
   try {
     return parseCandles(await gate(`/futures/usdt/candlesticks?contract=${encodeURIComponent(symbol)}&interval=1m&limit=${Math.min(400, Math.max(8, Math.floor(limit)))}`, controller.signal));
+  } finally { clearTimeout(timeout); }
+}
+
+/** Bounded rolling feed; only the scanner owns this five-minute producer. */
+export async function fetchGateFiveMinuteCandles(symbol: string, limit = 8) {
+  if (!SYMBOL_PATTERN.test(symbol)) throw new Error("Invalid Gate symbol");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 7_000);
+  try {
+    return parseCandles(await gate(`/futures/usdt/candlesticks?contract=${encodeURIComponent(symbol)}&interval=5m&limit=${Math.min(400, Math.max(8, Math.floor(limit)))}`, controller.signal));
   } finally { clearTimeout(timeout); }
 }
 
