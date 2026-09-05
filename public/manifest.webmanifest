@@ -1,14 +1,14 @@
 {
   "id": "/",
-  "name": "Resonance 自适应交易系统",
-  "short_name": "Resonance",
-  "description": "结合市场结构、历史相似行情、五种交易打法与阶段复盘的自适应交易系统。",
+  "name": "共振量化 · 短线交易台",
+  "short_name": "共振量化",
+  "description": "顺势回踩短线模拟、持仓保护与每12小时复盘。",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#06131c",
-  "theme_color": "#06131c",
+  "background_color": "#121411",
+  "theme_color": "#121411",
   "lang": "zh-CN",
   "icons": [
     {
