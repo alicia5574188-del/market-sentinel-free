@@ -105,6 +105,7 @@ test('simple majority is enough for direction; eleven of twenty is not rejected 
 test('a more favorable live quote may enter while excessive chasing still waits',()=>{
  const better=candidate(forecast(),{price:99.95});
  assert.equal(better.decision,'LONG');
+ assert.ok(better.analogIntent!.stopPct>=.3,'twelve basis-point cost requires at least a 0.30% structural stop');
  assert.equal(validateDirectMarketEntry(better,{symbol:better.symbol,price:99.95,observedAt:now+1000},now+1000).allowed,true);
  const chase=candidate(forecast(),{price:101});
  assert.equal(chase.decision,'WAIT');

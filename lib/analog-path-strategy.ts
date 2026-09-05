@@ -61,7 +61,10 @@ export function planAnalogEntry(f:HistoricalForecast,side:'LONG'|'SHORT',atrPct:
   const targetPct=Math.max(cost*1.5,quantile(favorable,.35)*.75)+offsetPct;
   // Once the target was reached, a later reversal must not inflate the initial stop.
   const beforeTarget=episodes.map(e=>{let worst=0;for(const b of e.bars){worst=Math.max(worst,sign===1?-b.lowPct:b.highPct);if((sign===1?b.highPct:-b.lowPct)>=targetPct-offsetPct)break;}return worst;});
-  const stopPct=Math.max(atrPct*.65,quantile(beforeTarget,.8)-offsetPct+atrPct*.25);
+  // Never express the same fixed equity risk through a micro stop: a normal five-minute print
+  // could otherwise cross several R before the next conservative replay fill. Wider stop means
+  // proportionally smaller position size; it does not increase the account loss budget.
+  const stopPct=Math.max(cost*2.5,atrPct*.65,quantile(beforeTarget,.8)-offsetPct+atrPct*.25);
   return {side,anchor,createdAt:now,expiresAt:now+15*60_000,signalKey:`${f.signalAt}:${side}`,offsetPct,stopPct,targetPct,
     ...estimate(episodes,side,offsetPct,stopPct,targetPct,cost),mode:offsetPct===0?'NOW' as const:'PULLBACK' as const};
  }).filter(p=>p.stopPct/(1-sign*p.offsetPct/100)<=2&&p.targetPct>=cost*1.5&&p.expectedNetR>0&&p.fillPct>=40&&p.takeProfitPct>=55&&p.lossPct<=35&&p.takeProfitPct>p.lossPct);
