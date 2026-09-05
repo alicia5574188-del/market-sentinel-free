@@ -37,6 +37,9 @@ export function validateDirectMarketEntry(
   if (now - quote.observedAt > DIRECT_ENTRY_MAX_QUOTE_AGE_MS) {
     return { allowed: false, reason: "开仓前报价已过期", entryPrice: quote.price, rewardRisk: null };
   }
+  if (candidate.forecast && now - candidate.forecast.signalAt >= 300_000) {
+    return { allowed: false, reason: "预测信号已跨过下一根完整K线，等待更新", entryPrice: quote.price, rewardRisk: null };
+  }
   const [low, high] = candidate.entryZone;
   if (quote.price < low || quote.price > high) {
     return { allowed: false, reason: `现价已离开入场区 ${low}–${high}`, entryPrice: quote.price, rewardRisk: null };
@@ -51,7 +54,7 @@ export function validateDirectMarketEntry(
     return { allowed: false, reason: "最新报价下结构止损距离超过5%，放弃入场而不修改止损", entryPrice: quote.price, rewardRisk: null };
   }
   const rewardRisk = targetDistance / stopDistance;
-  if (!(rewardRisk >= 1.8)) {
+  if (!(rewardRisk >= (candidate.forecast ? 0.8 : 1.8))) {
     return { allowed: false, reason: `最新价格下结构盈亏比仅 ${rewardRisk.toFixed(2)}R`, entryPrice: quote.price, rewardRisk };
   }
   return { allowed: true, reason: `最新报价仍在入场区，结构盈亏比 ${rewardRisk.toFixed(2)}R`, entryPrice: quote.price, rewardRisk };

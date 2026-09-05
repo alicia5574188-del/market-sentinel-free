@@ -21,9 +21,9 @@ test("new-entry scanner has no legacy strategy authority or high-frequency D1 wr
     assert.doesNotMatch(scanner, new RegExp(forbidden));
   }
   assert.match(scanner, /buildDirectMarketCandidate/);
-  assert.match(worker, /freshCohort\.length >= 3/);
-  assert.match(worker, /freshReady\.slice\(0, 3\)/);
-  assert.match(worker, /for \(const \[index, candidate\] of finalists\.entries\(\)\)/);
+  assert.doesNotMatch(worker, /freshCohort\.length >= 3/);
+  assert.match(worker, /fetchGatePositionQuotes\(\[candidate\.symbol\]\)/);
+  assert.match(worker, /loadHistoricalForecastCandles/);
   assert.match(worker, /SCANNER_CYCLE_INTERVAL_MS = 25_000/);
   assert.match(worker, /fetchGatePositionQuotes/);
   assert.match(execution, /validateDirectMarketEntry/);
@@ -41,11 +41,11 @@ test("new-entry scanner has no legacy strategy authority or high-frequency D1 wr
   assert.match(setupGuard, /losingStreak >= 3/);
 });
 
-test("setup ranking has no unconditional exhaustion priority", async () => {
+test("only historical prediction emits new signals; retired setup scores cannot regain priority", async () => {
   const brain = await readFile(new URL("../lib/direct-market-brain.ts", import.meta.url), "utf8");
-  const ranking = brain.slice(brain.indexOf("const selectedSetup ="), brain.indexOf("const { directionalScore", brain.indexOf("const selectedSetup =")));
-  assert.match(ranking, /right\.score - left\.score/);
-  assert.doesNotMatch(ranking, /EXHAUSTION_REVERSAL/);
+  assert.match(brain, /buildHistoricalForecast/);
+  assert.doesNotMatch(brain, /evaluateCoreSetups|normalizedPaths|EXHAUSTION_REVERSAL/);
+  assert.match(liveRepository, /历史相似预测处于模拟验证阶段/);
 });
 
 test("configured scan coverage and risk-based capacity reach the production boundary", () => {

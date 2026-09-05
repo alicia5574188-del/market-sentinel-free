@@ -1,5 +1,17 @@
 # Goal
 
+## Current implementation — historical analog prediction
+
+- User replaces the three-strategy proposal with one immediately usable historical K-line analog strategy: shape, amplitude, volatility, slope, time/day/weekend and recorded events. Use two hours of closed 5m candles, fourteen days of same-symbol history and a one-hour forecast as the initial bounded specification.
+- Reuse existing PAPER/account/protection/D1/CI/Cloudflare infrastructure and prior release authorization. Remove the artificial three-symbol admission wait. Preserve fee-aware accounting and major PAPER archive; new unvalidated analog decisions remain in simulation.
+- Deliver running code with honest historical outcome distributions, date evidence, sparse-data reasons and frequency/latency limitations; do not guarantee trades or profits. This supersedes the three-strategy design draft.
+
+## Current goal — redesign before another trading rewrite
+
+- Owner asks to rethink the entire product after repeated low-frequency and loss complaints. Deliver a concrete Chinese design first; this task does not activate new trading rules.
+- Follow `docs/RESONANCE_REDESIGN.md`: shared replay/online rules, three explicitly unvalidated strategy candidates, measured frequency/net results, simple Chinese UI, preserved history and safety.
+- Owner corrected the delivery scope: reuse existing authenticated GitHub/CI/Cloudflare deployment, target a compact three-strategy Chinese PAPER first release within a one-hour engineering budget, and separate extended replay/soak work. Keep necessary engineering, protection and release gates; no unconditional deployment-time or profit guarantee.
+
 ## Current bounded correction — explain zero primary observations
 
 - Audit the screenshot's 94 evaluations / one qualified failed-breakout signal / zero primary observations against current production selection and activity counters.

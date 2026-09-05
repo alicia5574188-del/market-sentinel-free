@@ -80,16 +80,14 @@ test("whole-market state has inertia and a direct bull-bear flip requires strong
   assert.match(worker, /createHte31ScanJob\(runtime\.rotationOffset, runtime\.readModel\?\.market \?\? null, lastObservedAt\)/);
 });
 
-test("whole market and current-symbol judgment are separate decision layers", () => {
+test("market context stays separate from the historical forecast's single entry authority", () => {
   assert.match(scanner, /buildResonanceGlobalMarket/);
   assert.match(scanner, /buildDirectMarketCandidate/);
-  assert.match(directBrain, /location\(candles, price\)/);
-  assert.match(directBrain, /const resonanceStructure = Math\.abs\(trend4h\) >= 0\.28/);
-  assert.match(directBrain, /const resonanceNearMean = Boolean/);
-  assert.match(directBrain, /const resonanceResume =/);
-  assert.match(directBrain, /VOLUME_FORCE_FAILED_BREAKOUT/);
-  assert.match(directBrain, /EXHAUSTION_REVERSAL/);
-  assert.match(directBrain, /MULTI_TIMEFRAME_RESONANCE/);
+  assert.match(directBrain, /buildHistoricalForecast/);
+  assert.match(directBrain, /HISTORICAL_ANALOG/);
+  assert.match(directBrain, /longStop/);
+  assert.match(directBrain, /shortStop/);
+  assert.doesNotMatch(directBrain, /evaluateCoreSetups|normalizedPaths/);
 });
 
 test("cognitive directives can alter direction entry routing and exit space without widening hard risk", () => {
@@ -115,7 +113,7 @@ test("legacy historical memory remains truthful but cannot authorize direct-brai
   assert.match(memory, /weightedRatio/);
   assert.doesNotMatch(scanner, /buildResonanceMarketMemory|fetchHistoricalCandles/);
   assert.match(directBrain, /buildDirectMarketCandidate/);
-  assert.match(directBrain, /candles\.slice\(-72\)/);
+  assert.match(directBrain, /cleanAnalogCandles/);
 });
 
 test("strategy runtime still depends on the exchange adapter boundary", () => {

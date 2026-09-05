@@ -15,6 +15,7 @@ export type Hte31PositionSizingInput = {
   confidence: number;
   riskRate?: number;
   minimumTp2NetProfitUsdt?: number;
+  minimumRiskRate?: number;
 };
 
 export type Hte31PositionSizing = {
@@ -167,7 +168,9 @@ export function buildHte31PaperPosition(input: Hte31PositionSizingInput): Hte31P
   }
 
   const explicitRiskRate = input.riskRate == null ? null : clamp(input.riskRate, 0, HTE31_PAPER_POSITION_POLICY.maximumRiskRate);
-  const minimumRiskUsdt = equityUsdt * (explicitRiskRate ?? HTE31_PAPER_POSITION_POLICY.minimumRiskRate);
+  const minimumRiskUsdt = equityUsdt * (input.minimumRiskRate == null
+    ? (explicitRiskRate ?? HTE31_PAPER_POSITION_POLICY.minimumRiskRate)
+    : clamp(input.minimumRiskRate, 0, explicitRiskRate ?? HTE31_PAPER_POSITION_POLICY.minimumRiskRate));
   const maximumRiskUsdt = equityUsdt * (explicitRiskRate ?? HTE31_PAPER_POSITION_POLICY.maximumRiskRate);
   const normalTargetRiskUsdt = equityUsdt * (explicitRiskRate ?? HTE31_PAPER_POSITION_POLICY.targetRiskRate);
   const governedRiskUsdt = explicitRiskRate == null ? normalTargetRiskUsdt * clamp(input.riskMultiplier, 0, 1) : normalTargetRiskUsdt;

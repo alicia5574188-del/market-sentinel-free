@@ -81,13 +81,18 @@ export function evaluateDirectMarketRisk(rows: DirectMarketResult[]): DirectMark
 export function directMarketRiskAdmission(input: {
   state: DirectMarketRiskState;
   confidence: number;
+  historical?: boolean;
   netEdgeR: number;
   location: "TOP" | "MIDDLE" | "BOTTOM" | "BREAKOUT" | "BREAKDOWN";
 }) {
   if (input.state === "PAUSED") return { allowed: false, reason: "即时风险保护已暂停新开仓" };
-  const minimumConfidence = input.state === "DEFENSIVE" ? 82 : input.state === "CAUTION" ? 76 : 70;
-  const minimumEdgeR = input.state === "DEFENSIVE" ? 0.9 : input.state === "CAUTION" ? 0.7 : 0.55;
-  const locationAllowed = !["CAUTION", "DEFENSIVE"].includes(input.state) || input.location !== "MIDDLE";
+  const minimumConfidence = input.historical
+    ? input.state === "DEFENSIVE" ? 72 : input.state === "CAUTION" ? 65 : 58
+    : input.state === "DEFENSIVE" ? 82 : input.state === "CAUTION" ? 76 : 70;
+  const minimumEdgeR = input.historical
+    ? input.state === "DEFENSIVE" ? 0.25 : input.state === "CAUTION" ? 0.12 : 0.05
+    : input.state === "DEFENSIVE" ? 0.9 : input.state === "CAUTION" ? 0.7 : 0.55;
+  const locationAllowed = input.historical || !["CAUTION", "DEFENSIVE"].includes(input.state) || input.location !== "MIDDLE";
   const allowed = input.confidence >= minimumConfidence && input.netEdgeR >= minimumEdgeR && locationAllowed;
   return {
     allowed,

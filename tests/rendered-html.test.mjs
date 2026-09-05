@@ -31,7 +31,7 @@ test("renders production Resonance metadata", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
   assert.match(html, /<title>Resonance｜自适应交易系统<\/title>/i);
-  assert.match(html, /用三套核心策略、当前贡献排名和每12小时复盘驱动/);
+  assert.match(html, /用历史相似走势预测、真实模拟结果和每12小时复盘驱动/);
   const version = (await readFile(new URL("../lib/direct-market-types.ts", import.meta.url), "utf8")).match(/DIRECT_MARKET_BRAIN_VERSION = "([^"]+)"/)[1];
   assert.ok(html.includes(`data-release="${version}"`));
   assert.doesNotMatch(html, /name=["']codex-preview["']/i);

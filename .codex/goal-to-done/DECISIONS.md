@@ -1,5 +1,24 @@
 # Decisions
 
+## 2026-09-05 — Historical analog replaces the three-strategy redesign
+
+- Use one two-hour / fourteen-day / one-hour analog model. Calendar is a soft matching feature; events require actual recorded times and unknown coverage is explicit. Purge current/future overlap and de-overlap complete historical episodes.
+- Reuse original infrastructure and release path. Remove batch waiting and mismatched heuristic scoring gates; do not fabricate analogs or select on future profit.
+- Permit smaller collateral-safe PAPER risk while retaining the 3.5% ceiling, 15% total ceiling and all hard protections. Confidence is empirical directional support, not the former synthetic score.
+- New analog decisions remain in simulation; future live eligibility requires a separate evidence-based change. Preserve real holdings and history through the PAPER-only major cutover.
+
+## 2026-09-05 — Reuse deployment and separate first-release scope from research
+
+- The user rejects a 3–5 hour initial rebuild estimate because infrastructure, credentials and authorization already exist. Revise the first iteration to a one-hour engineering budget for the compact PAPER product, while treating timing as a target conditional on required gates.
+- Preserve necessary validation and safety, but do not make comprehensive research infrastructure or a 24-hour observation period prerequisites for delivering a clearly labeled PAPER validation version.
+
+## 2026-09-05 — Evidence-first redesign, with one trading authority
+
+- Treat the user request as a complete design task before implementation. Preserve production and historical evidence while preparing a reviewable draft.
+- Research-supported strategy families are hypotheses, not a market-best ranking or proven 5-minute profitability. Require comparable risk/cost/frequency evidence before promotion.
+- Share replay and online strategy/lifecycle logic, measure coverage instead of merely expanding the universe, and remove uncalibrated score-to-probability product claims in the proposed successor.
+- Preserve necessary account, protection, history, recovery and live-parity capabilities; simplify their presentation. No second runtime simulator or trading authority.
+
 ## 2026-09-05 — Preserve observation counters and expose qualified selection losses
 
 - The old primary-candidate counter intentionally includes triggered WAIT observations. Correct its label, not its historical values; a strict funnel cannot be reconstructed from old aggregates.

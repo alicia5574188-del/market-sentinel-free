@@ -1,5 +1,9 @@
 # Sentinel Production Change Ledger
 
+## 2026-09-05 — V7 historical analog, release preparation
+
+Replace active three-setup rules with one closed-candle analog predictor and empirical historical outcomes. Remove batch wait and incompatible old score gates, retain risk/account/real-order protections, add bounded non-D1 history cache and Chinese comparison chart. Major PAPER archive via0025. Validation and production proof follow in STATUS; no profitability claim.
+
 ## 2026-09-05 — Priority-observation wording and qualified-comparison evidence
 
 Correct misleading primary-candidate label without rewriting counts. Add latest qualified same-symbol comparison and truthful unknown-history fallback; use 观察 for triggered strategies without closed samples. Preserve all trading rules, positions, epochs, safety checks and D1 cadence. Local direct43/UI115, build/type/lint passed; release proof follows in STATUS and PR.

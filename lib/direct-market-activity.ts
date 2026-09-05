@@ -49,6 +49,8 @@ function hasTruthfulSchema(activity: DirectTwelveHourActivityState | undefined) 
   return Boolean(current
     && Number.isFinite(current.coverageMs)
     && "triggeredSignals" in current
+    && current.setups.length === DIRECT_CORE_SETUPS.length
+    && current.setups.every((row) => DIRECT_CORE_SETUPS.some((setup) => setup.id === row.setup))
     && current.setups.every((row) => "triggeredSignals" in row && "selectedSignals" in row && "blockedEntries" in row));
 }
 
