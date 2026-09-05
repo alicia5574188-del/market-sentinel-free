@@ -144,6 +144,7 @@ export function evaluateAnalogPosition(input:{side:'LONG'|'SHORT';entryPrice:num
 }
 export function analogRiskAllocation(equity:number,usedRisk:number,remainingSymbols:number,correlated:boolean) {
  if(!Number.isFinite(equity)||equity<=0||!Number.isFinite(usedRisk)||usedRisk<0||!Number.isFinite(remainingSymbols))return 0;
+ void correlated;
  const availableRate=Math.max(0,equity*ANALOG_RISK_POLICY.portfolioRiskRate-usedRisk)/equity;
- return Math.min(ANALOG_RISK_POLICY.riskRate,availableRate)*(correlated?.5:1);
+ return Math.min(ANALOG_RISK_POLICY.riskRate,availableRate);
 }

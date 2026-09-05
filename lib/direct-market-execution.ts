@@ -192,7 +192,7 @@ export async function openDirectMarketTrade(input: {
   const risk={state:"CALIBRATING" as const,riskRate};
   const learning=deriveDirectMarketLearningProfile([]);
   const learningAdmission={revalidation:false};
-  const setupGuard={reason:"单笔最多4.00%，组合12.00%；按真实TP2倒算放大至扣费后至少30U且不限制上方利润；相关敞口折半",revalidation:false};
+  const setupGuard={reason:"单笔最多4.00%，组合12.00%；每单按真实TP2倒算放大至扣费后至少30U且不限制上方利润",revalidation:false};
   const today = utcDayStart(executionNow);
   const todayRows = await db.select({ entryAt: hte31Trades.entryAt, decisionSnapshotJson: hte31Trades.decisionSnapshotJson }).from(hte31Trades).where(and(
     eq(hte31Trades.decisionAuthority, DIRECT_MARKET_AUTHORITY),
