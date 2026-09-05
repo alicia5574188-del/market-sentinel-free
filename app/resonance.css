@@ -235,3 +235,22 @@ button { color: inherit; }
   .rz-memory-grid { grid-template-columns: 1fr; }
   .rz-trader-stats { grid-template-columns: repeat(3,minmax(0,1fr)); }
 }
+
+/* Compact single-strategy layout; text must fit narrow phones. */
+.rz-shell { padding-top: 14px; padding-bottom: calc(112px + env(safe-area-inset-bottom, 0px)); }
+.rz-section-head { flex-wrap: wrap; }
+.rz-strategy-grid { grid-template-columns: minmax(0, 1fr); }
+.rz-metric { min-width: 0; }
+.rz-metric b { white-space: normal; overflow-wrap: anywhere; }
+.rz-metric-wide { grid-column: 1 / -1; }
+.rz-metric-wide b { font-size: 16px; line-height: 1.6; }
+.rz-management-settings .rz-metric b { font-size: 17px; line-height: 1.5; }
+.rz-management-settings { margin: 0 0 24px; padding: 0; border: 0; }
+.rz-strategy-performance p { overflow-wrap: anywhere; }
+.rz-history-progress { color: var(--rz-muted); font-size: 13px; line-height: 1.6; margin-top: 12px; }
+@media (max-width: 520px) {
+  .rz-strategy-head, .rz-review-title { flex-wrap: wrap; }
+  .rz-strategy-head > div { flex-basis: 100%; }
+  .rz-review-title strong { flex-basis: 100%; }
+  .rz-review-title small { white-space: normal; }
+}

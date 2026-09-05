@@ -21,7 +21,7 @@ test("production Worker bundle contains the direct market brain runtime", async 
   assert.match(source, /量价力度假突破/);
   assert.match(source, /衰竭反转/);
   assert.match(source, /多周期综合共振/);
-  assert.match(source, /谁在发力，谁在拖后腿/);
+  assert.match(source, /策略表现/);
   assert.match(source, /每12小时总结/);
   assert.match(source, /持仓约束/);
   assert.match(source, /HTE31MarketScanner/);

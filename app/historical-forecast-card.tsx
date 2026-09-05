@@ -16,8 +16,8 @@ export function HistoricalForecastCard({ symbol, forecast, candles }: { symbol: 
   const band = [...forecast.path.map((p) => `${x(p.minutes)},${y(p.upperPct)}`), ...[...forecast.path].reverse().map((p) => `${x(p.minutes)},${y(p.lowerPct)}`)].join(" ");
   return <article className="rz-panel rz-strategy-performance">
     <div className="rz-strategy-head"><div><strong>{symbol.replace("_USDT", "")} · 历史相似预测</strong><small>观察最近两小时 · 推演未来一小时 · {forecast.signalAt ? date(forecast.signalAt) : "等待数据"}</small></div><span>{forecast.state === "READY" ? "模拟验证" : forecast.state === "STALE" ? "行情延迟" : forecast.historyBars < 60 ? "历史数据不足" : "相似依据不足"}</span></div>
-    <p>{forecast.reason}</p>
-    {forecast.archive && <p>{forecast.archive.storedBars == null ? "历史库暂时无法读取" : `本地已存 ${forecast.archive.storedBars} 根K线`}{forecast.archive.from ? `，最早 ${date(forecast.archive.from)}` : ""}。{forecast.archive.note}。本轮检索 {forecast.archive.searchedBars} 根，较早历史分批轮换参与匹配。</p>}
+    <p>{forecast.state === "INSUFFICIENT" && forecast.reason.includes("合格相似走势") ? `找到 ${forecast.sampleCount} 段合格相似走势，至少需要8段；继续寻找。` : forecast.reason}</p>
+    {forecast.archive && <details className="rz-history-progress"><summary>{forecast.archive.storedBars == null ? "历史库暂时无法读取" : `已存 ${forecast.archive.storedBars} 根K线`}{forecast.archive.from ? ` · ${date(forecast.archive.from)} 起` : ""}</summary><p>{forecast.archive.note}。本轮检索 {forecast.archive.searchedBars} 根，较早历史分批轮换参与匹配。</p></details>}
     {forecast.state === "READY" && <>
       <svg viewBox="0 0 470 204" style={{ width: "100%", display: "block" }} role="img" aria-label="最新两小时与历史相似走势对照，右侧为历史后续分布，不是确定预测">
         <line x1="18" x2="442" y1={y(0)} y2={y(0)} stroke="#63708a" strokeDasharray="3 4" />
@@ -41,6 +41,6 @@ export function HistoricalForecastCard({ symbol, forecast, candles }: { symbol: 
         <p>形状、波幅、波动、斜率、成交量、时段、星期、周末和月末综合对照。日期均为北京时间。{forecast.eventContext}</p>
       </details>
     </>}
-    <small>已读取 {forecast.historyBars} 根五分钟K线{forecast.historyFrom ? `，${date(forecast.historyFrom)} 起` : ""}。{forecast.state === "READY" ? "历史分布不等于未来胜率，实际成交以订单为准。" : "样本不足时不展示预测比例。"}</small>
+    {!forecast.archive && <small>已读取 {forecast.historyBars} 根五分钟K线{forecast.historyFrom ? `，${date(forecast.historyFrom)} 起` : ""}。{forecast.state === "READY" ? "历史分布不等于未来胜率，实际成交以订单为准。" : "样本不足时不展示预测比例。"}</small>}
   </article>;
 }

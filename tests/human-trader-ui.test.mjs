@@ -23,12 +23,12 @@ test("production UI exposes the useful three setups and direct operating truth w
   for (const phrase of ["HT1", "HT2", "HT3", "HT4", "HT5", "HT1-R", "HT2-R", "HT3-R", "HT5-R", "HT6", "HT7", "HT8", "HT9"]) assert.match(catalog, new RegExp(phrase));
   for (const family of ["SF01", "SF02", "SF03", "SF04", "SF05", "SF06", "SF07", "SF08", "SF09"]) assert.match(catalog, new RegExp(family));
   assert.match(page, /HistoricalForecastCard/);
-  for (const phrase of ["谁在发力，谁在拖后腿", "每12小时总结", "大脑决定"]) assert.match(page, new RegExp(phrase));
+  for (const phrase of ["策略表现", "每12小时总结", "大脑决定"]) assert.match(page, new RegExp(phrase));
   assert.match(page, /function DecisionEvidenceCard/);
   const renderedSurface = page.slice(page.lastIndexOf("return ("));
   assert.doesNotMatch(renderedSurface, /策略中心|9 个家族|13 个独立变体|历史记忆准备中|有效独立样本/);
   assert.doesNotMatch(page, /旧 HTE 3\.0 不进入这里|SIMULATION LEDGER · CLEAN|HTE 3\.1 新账本|CLEAN RADAR|CLEAN RUNTIME/);
-  assert.match(layout, /<body>[\s\S]*\{children\}[\s\S]*<ResonanceOperatorControls \/>[\s\S]*<\/body>/);
+  assert.match(layout, /<body>[\s\S]*<ResonanceOperatorControls \/>[\s\S]*\{children\}[\s\S]*<\/body>/);
   assert.doesNotMatch(layout, /Strategy2Dashboard|Strategy2PlaybookDiagnostics|Strategy2LearningArena|RuntimeStabilityClient|UiStatusSemanticFix|LiveOrdersInline/);
 });
 
@@ -155,7 +155,7 @@ test("pre-trade signal cards expose the complete decision and risk plan", () => 
 test("runtime settings preserve scanner diagnostics needed to detect silent stalls", () => {
   assert.match(page, /市场扫描/);
   assert.match(page, /当前阶段/);
-  assert.match(page, /scanner\?\.phase/);
+  assert.match(page, /scanner\.phase/);
   assert.match(page, /scanner\?\.lastError/);
   assert.match(page, /scanner\?\.circuitOpen/);
   assert.match(page, /ageSeconds/);

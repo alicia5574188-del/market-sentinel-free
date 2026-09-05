@@ -432,3 +432,11 @@ Record only consequential decisions using this format:
 - Cloudflare primary documentation checked2026-09-05: https://developers.cloudflare.com/durable-objects/platform/pricing/ and https://developers.cloudflare.com/durable-objects/platform/limits/ . Free SQL DO limits are5m reads/100k writes daily and5GB total; SQLite KV key+value limit2MB. No paid service enabled or R2 setup required.
 - Browser/API slowdown is isolated: unavailable archive falls back to the same strategy's already valid recent data with an explicit unavailable-library label, never invented stored counts or a legacy strategy. No promise of fixed trade frequency or profitability.
 - Local tests42 Direct +7 architecture,231 signals/risk,115 build/UI passed; lint and TypeScript passed. Final CI/deployment verification pending.
+
+## 2026-09-05 — Compact single-strategy UI and management display correction
+
+- Remove multi-strategy comparison heading; show 策略表现 and preserve statistics/history. Distinguish the 12-hour common blocker from the current prediction; remove duplicated drawdown and history paragraphs.
+- Adapt existing controls, do not restore old feature implementations: account/push/audit stay outside the page failure domain in an ordinary top toolbar; no floating content obstruction. Drawer uses border-box sizing. Existing emergency, credentials, reset and trading boundaries remain reachable.
+- Management shows runtime/settings first. Long phase/rule text wraps and the six-coin list occupies a full row. Single strategy spans desktop width; phone headings and summary times wrap. All displayed runtime/order/audit times use Beijing time.
+- A failed live-status read retains the last success with timestamp/error, rather than falsely showing unconfigured/empty. Initial reads show unknown/loading; stale or missing live state disables the normal toggle/reconcile buttons, while emergency remains reachable. No automatic mutation retry or new polling.
+- Strategy, history archive, scheduler, risk, positions, D1 and credentials are unchanged. UI/risk/architecture gates required; release verification pending.
