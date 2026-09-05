@@ -72,7 +72,7 @@ test("plain-language decision never presents a candidate or stale state as a fil
   assert.equal(summarize(snapshot, false).title, "BTC 信号待复核", "unrelated partial data must not mask the current candidate");
   snapshot.degraded = false;
   snapshot.dashboard.directRisk.state = "PAUSED";
-  assert.equal(summarize(snapshot, false).title, "风险保护中");
+  assert.equal(summarize(snapshot, false).title, "BTC 信号待复核", "legacy PAUSED labels cannot hide a current PAPER signal");
   snapshot.dashboard.settings.scanEnabled = false;
   assert.equal(summarize(snapshot, false).title, "市场扫描已暂停");
   snapshot.dashboard.paperReset.status = "pending";

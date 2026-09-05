@@ -9,9 +9,7 @@ export const ANALOG_MIN_NET_REWARD_R=0.8;
 export const ANALOG_RISK_POLICY={
  riskRate:.04,
  portfolioRiskRate:.12,
- dailyLossRate:.12,
  minimumTp2NetProfitUsdt:30,
- lossPauseMs:30*60_000,
 } as const;
 export const completeFiveMinutes=(rows:Hte31Candle[],now:number)=>cleanAnalogCandles(rows,now).slice(-400);
 const mean=(xs:number[])=>xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:0;

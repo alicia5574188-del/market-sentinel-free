@@ -442,7 +442,6 @@ function operatorDecision(snapshot: Snapshot | null, unavailable: boolean) {
   const dashboard = snapshot.dashboard;
   if (dashboard?.paperReset.status === "pending") return { title: "等待新一轮模拟开始", detail: "重置完成前不再新开仓，原有记录保留。" };
   if (dashboard?.settings.scanEnabled === false) return { title: "市场扫描已暂停", detail: "恢复扫描可在管理页操作。" };
-  if (dashboard?.directRisk?.state === "PAUSED") return { title: "风险保护中", detail: "新开仓已暂停，已有订单请在订单页查看。" };
   const candidate = snapshot.scanner.readModel?.directCandidate;
   if (candidate && candidate.decision !== "WAIT") return {
     title: `${candidate.symbol.replace("_USDT", "")} 信号待复核`,
@@ -881,7 +880,7 @@ export default function ResonancePage() {
       <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">交易核心</span><h2>短线执行规则</h2></div></div><article className="rz-panel"><div className="rz-metric-grid"><div className="rz-metric"><span>入场依据</span><b>最相似五段多数先涨或先跌，比较当前价与等待价</b></div><div className="rz-metric"><span>方向依据</span><b>看途中首段可交易波动，不要求一小时终点同向</b></div><div className="rz-metric"><span>快速退出</span><b>允许计划内逆向波动；偏离过大提前退出，最长一小时</b></div><div className="rz-metric"><span>含费计划风险</span><b>单笔最多4.00%，合计不超过12.00%；TP2扣费后至少30U，不限制更大利润</b></div><div className="rz-metric rz-metric-wide"><span>固定币池</span><b>比特币、以太坊、索拉纳、币安币、瑞波币、狗狗币</b></div></div></article></section>
       <section className="rz-section"><div className="rz-section-head"><div><h2>资金保护</h2></div></div><article className="rz-panel">
         {dashboard?.directRisk ? <p className="rz-copy"><strong>风险档：</strong>{operatorLabel(dashboard.directRisk.state)} · 单笔风险上限 {(dashboard.directRisk.riskRate * 100).toFixed(2)}% · {operatorText(dashboard.directRisk.reason)}</p> : <p className="rz-copy">风险状态正在读取</p>}
-        <div className="rz-rule-strip"><span>组合风险上限12.00%</span><span>三连亏暂停三十分钟</span><span>日亏12.0%暂停新开仓</span></div>
+        <div className="rz-rule-strip"><span>组合风险上限12.00%</span><span>连续亏损也持续运行</span><span>全天积累模拟问题</span></div>
         <p className="rz-copy">已用保证金 {fmtMoney(dashboard?.account.usedMarginUsdt)} · 可用保证金 {fmtMoney(dashboard?.account.availableMarginUsdt)}</p>
       </article></section>
       <section className="rz-section"><div className="rz-section-head"><div><span className="rz-eyebrow">模拟资金</span><h2>重新开始资金曲线</h2></div></div><article className="rz-panel"><div className="rz-metric-grid"><div className="rz-metric"><span>本轮本金</span><b>{fmtMoney(dashboard?.account.startingCapitalUsdt)}</b></div><div className="rz-metric"><span>当前权益</span><b>{fmtMoney(dashboard?.account.equityUsdt)}</b></div><div className="rz-metric"><span>开始时间</span><b>{fmtTime(dashboard?.account.epochStartedAt)}</b></div><div className="rz-metric"><span>本轮已平仓</span><b>{dashboard?.stats.sampleCount ?? "--"}</b></div></div>{dashboard?.paperReset.status === "pending" && <p className="rz-copy">待重置 · 剩余 {dashboard.paperReset.openPositions} 笔持仓</p>}<div className="rz-actions"><button className="danger" disabled={!dashboard || dashboard.paperReset.status === "pending"} onClick={() => void resetPaper()}>{dashboard?.paperReset.status === "pending" ? "等待持仓结束" : "重置模拟本金"}</button></div></article></section>

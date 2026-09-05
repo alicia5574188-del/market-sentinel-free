@@ -1,5 +1,5 @@
 import { analogRiskAllocation, ANALOG_POSITION_POLICY, ANALOG_RISK_POLICY } from "./analog-path-strategy.ts";
-import { scalpCostBps, scalpEntryRisk, correlatedScalpExposure } from "./scalp-strategy.ts";
+import { scalpCostBps, correlatedScalpExposure } from "./scalp-strategy.ts";
 import { and, desc, eq, gte, or, sql, lt } from "drizzle-orm";
 import { getDb } from "../db";
 import { hte31PaperResetState, hte31SimulationEpochs, hte31TradeCharts, hte31Trades } from "../db/hte31-schema";
@@ -34,14 +34,14 @@ export async function scalpAccountRisk(startingCapitalUsdt:number, costBps:numbe
   const [epoch]=await db.select().from(hte31SimulationEpochs).orderBy(desc(hte31SimulationEpochs.startedAt)).limit(1);
   const epochAt=epoch?.startedAt??0, starting=epoch?.startingCapitalUsdt??startingCapitalUsdt;
   const id=`${epochAt}:${day}`;
-  let state=await db.get<{dayBase:number;haltedUntil:number}>(sql`SELECT day_base AS dayBase, halted_until AS haltedUntil FROM scalp_risk_days WHERE id=${id}`);
+  let state=await db.get<{dayBase:number}>(sql`SELECT day_base AS dayBase FROM scalp_risk_days WHERE id=${id}`);
   const open=await db.select().from(hte31Trades).where(eq(hte31Trades.status,"holding"));
   if(!state) {
     const [before]=await db.select({net:sql<number>`coalesce(sum(${hte31Trades.netPnlUsdt}),0)`}).from(hte31Trades)
       .where(and(eq(hte31Trades.status,"closed"),gte(hte31Trades.entryAt,epochAt),lt(hte31Trades.exitAt,day)));
     const dayBase=starting+Number(before?.net??0);
     await db.run(sql`INSERT OR IGNORE INTO scalp_risk_days(id,day_base,halted_until,updated_at) VALUES(${id},${dayBase},0,${now})`);
-    state={dayBase,haltedUntil:0};
+    state={dayBase};
   }
   const closed=await db.select({net:hte31Trades.netPnlUsdt,exitAt:hte31Trades.exitAt}).from(hte31Trades)
     .where(and(eq(hte31Trades.status,"closed"),gte(hte31Trades.entryAt,epochAt),gte(hte31Trades.exitAt,day))).orderBy(desc(hte31Trades.exitAt));
@@ -53,14 +53,7 @@ export async function scalpAccountRisk(startingCapitalUsdt:number, costBps:numbe
     return a+t.notionalUsdt*((t.side==='LONG'?1:-1)*(t.lastPrice/t.entryPrice-1)-scalpCostBps(frozenCost)/10_000);
   },0);
   const equityUsdt=state.dayBase+realized+unrealized;
-  const recent=closed.length>=3?closed:await db.select({net:hte31Trades.netPnlUsdt,exitAt:hte31Trades.exitAt}).from(hte31Trades)
-    .where(and(eq(hte31Trades.status,"closed"),gte(hte31Trades.entryAt,epochAt),gte(hte31Trades.exitAt,now-ANALOG_RISK_POLICY.lossPauseMs))).orderBy(desc(hte31Trades.exitAt)).limit(3);
-  const reason=scalpEntryRisk({equity:equityUsdt,dayOpeningEquity:state.dayBase,dayNet:realized+unrealized,
-    lastClosed:recent.map(c=>({net:c.net??0,exitAt:c.exitAt??0})),now,latchedUntil:state.haltedUntil},ANALOG_RISK_POLICY);
-  if(realized+unrealized<=-state.dayBase*ANALOG_RISK_POLICY.dailyLossRate&&state.haltedUntil<day+UTC_DAY_MS) {
-    await db.run(sql`UPDATE scalp_risk_days SET halted_until=${day+UTC_DAY_MS}, updated_at=${now} WHERE id=${id}`);
-  }
-  return {open,equityUsdt,availableMarginUsdt:Math.max(0,equityUsdt-open.reduce((a,t)=>a+t.marginUsdt,0)),reason};
+  return {open,equityUsdt,availableMarginUsdt:Math.max(0,equityUsdt-open.reduce((a,t)=>a+t.marginUsdt,0)),reason:null};
 }
 
 export async function getDirectMarketRiskDecision() {
@@ -84,11 +77,8 @@ export async function getDirectMarketRiskDecision() {
     resultR: row.riskBudgetUsdt > 0 ? (row.netPnlUsdt ?? 0) / row.riskBudgetUsdt : 0,
   }));
   const evaluated=evaluateDirectMarketRisk(results);
-  const now=Date.now(), day=utcDayStart(now), id=`${epoch?.startedAt??0}:${day}`;
-  const state=await db.get<{haltedUntil:number}>(sql`SELECT halted_until AS haltedUntil FROM scalp_risk_days WHERE id=${id}`);
-  const paused=(state?.haltedUntil??0)>now || rows.length>=3&&rows.slice(0,3).every(r=>(r.netPnlUsdt??0)<0)&&now-(rows[0].exitAt??0)<ANALOG_RISK_POLICY.lossPauseMs;
-  return {...evaluated,state:paused?"PAUSED" as const:results.length<12?"CALIBRATING" as const:"VALIDATING" as const,riskRate:paused?0:ANALOG_RISK_POLICY.riskRate,
-    reason:`${paused?'亏损保护暂停新单；':''}单笔含费风险上限4.00%；TP2扣费后至少30U；日亏12.0%或三连亏暂停；${evaluated.reason}`};
+  return {...evaluated,state:results.length<12?"CALIBRATING" as const:"VALIDATING" as const,riskRate:ANALOG_RISK_POLICY.riskRate,
+    reason:`持续运行，不因连续亏损或当日模拟亏损暂停；单笔含费风险上限4.00%；TP2扣费后至少30U；${evaluated.reason}`};
 }
 
 export async function getDirectMarketLearningDecision() {
@@ -185,8 +175,8 @@ export async function openDirectMarketTrade(input: {
   });
 
 
-  // This version uses explicit daily/consecutive-loss guards, not legacy analogue
-  // sample gates. Twelve-hour learning stays observable without mutating this rule.
+  // PAPER keeps collecting outcomes through losing runs. Structural capital, quote,
+  // D1, duplicate-plan and portfolio boundaries remain mandatory.
   const riskRate=analogRiskAllocation(account.equityUsdt,account.open.reduce((sum,row)=>sum+row.riskBudgetUsdt,0),input.universe.length-account.open.length,sameCluster);
   if(riskRate<=0)return {opened:null,reason:"组合风险预算已用尽"};
   const risk={state:"CALIBRATING" as const,riskRate};
