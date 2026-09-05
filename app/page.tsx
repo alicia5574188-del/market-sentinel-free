@@ -253,6 +253,9 @@ type SetupReview = {
   winRate: number | null;
   netPnlUsdt: number;
   averageR: number | null;
+  averageWinR: number | null;
+  averageLossR: number | null;
+  realizedPayoffRatio: number | null;
   profitFactor: number | null;
   maxDrawdownR: number;
   maxLosingStreak: number;
@@ -443,7 +446,7 @@ function DecisionEvidenceCard({ candidate }: { candidate: DirectCandidate }) {
     </div>
     <Bias value={side === "WAIT" ? "NEUTRAL" : side} confidence={candidate.confidence} />
     <div className="rz-radar-reason">
-      {candidate.setupLabel} · ${candidate.location} · 上 ${candidate.paths.up.toFixed(1)}% / 下 ${candidate.paths.down.toFixed(1)}% / 震荡或失效 ${candidate.paths.rangeOrInvalid.toFixed(1)}%
+      {candidate.setupLabel} · {candidate.location} · 上 {candidate.paths.up.toFixed(1)}% / 下 {candidate.paths.down.toFixed(1)}% / 震荡或失效 {candidate.paths.rangeOrInvalid.toFixed(1)}%
     </div>
     <div className="rz-signal-detail">
       <div className="rz-signal-levels">
@@ -481,9 +484,11 @@ function StrategyPerformanceCard({ setup }: { setup: SetupReview }) {
       <div><span>总样本 / 胜率</span><b>{setup.sampleCount} / {setup.winRate == null ? "--" : `${setup.winRate.toFixed(0)}%`}</b></div>
       <div><span>累计贡献</span><b className={setup.netPnlUsdt < 0 ? "rz-negative" : "rz-positive"}>{fmtMoney(setup.netPnlUsdt)}</b></div>
       <div><span>平均结果 / PF</span><b>{fmtR(setup.averageR)} / {setup.profitFactor == null ? "--" : setup.profitFactor >= 99 ? "∞" : setup.profitFactor.toFixed(2)}</b></div>
+      <div><span>实际平均盈 / 亏</span><b>{fmtR(setup.averageWinR)} / {fmtR(setup.averageLossR)}</b></div>
+      <div><span>实际盈亏比 / 回撤</span><b>{setup.realizedPayoffRatio == null ? "--" : setup.realizedPayoffRatio.toFixed(2)} / {setup.maxDrawdownR.toFixed(2)}R</b></div>
       <div><span>最大回撤 / 连亏</span><b>{setup.maxDrawdownR.toFixed(2)}R / {setup.maxLosingStreak}</b></div>
     </div>
-    <p>{setup.leadingBlocker12h ? `主要等待原因：${setup.leadingBlocker12h}` : setup.sampleCount < 8 ? `样本不足 · ${setup.sampleCount}/8，暂不调整策略。` : `胜 / 平 / 负：${setup.wins} / ${setup.scratches} / ${setup.losses}`}</p>
+    <p>{setup.maxLosingStreak >= 3 ? "已触发对应打法/方向/行情的独立保护，不影响另外两条策略。" : setup.leadingBlocker12h ? `主要等待原因：${setup.leadingBlocker12h}` : setup.sampleCount < 8 ? `样本形成中 · ${setup.sampleCount}/8；连续亏损保护仍会即时生效。` : `胜 / 平 / 负：${setup.wins} / ${setup.scratches} / ${setup.losses}`}</p>
   </article>;
 }
 
@@ -763,7 +768,7 @@ export default function ResonancePage() {
   const activeLiveOrders = live?.orders.filter((order) => ["submitting", "open", "protected", "closing"].includes(order.state)) ?? [];
   const scanner = snapshot?.scanner.status;
   const review = snapshot?.twelveHourReview;
-  return <main className="rz-shell" data-release="direct-market-brain-v3-resonance-three">
+  return <main className="rz-shell" data-release="direct-market-brain-v4-restored-core">
     <header className="rz-header">
       <div className="rz-mark">R</div>
       <div className="rz-brand"><strong>Resonance</strong><small>大脑决策 · 三策略贡献 · 12小时复盘</small></div>

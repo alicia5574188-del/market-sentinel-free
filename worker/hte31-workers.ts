@@ -44,7 +44,7 @@ import type { CloudflareEnv } from "./index";
 // This generation bump resets only Durable Object scheduler/checkpoint state.
 // D1 trades, learning, simulation epochs, live credentials and live-order
 // lineage remain untouched.
-const CLEAN_RUNTIME_VERSION = "direct-market-brain-v3-resonance-three";
+const CLEAN_RUNTIME_VERSION = "direct-market-brain-v4-restored-core";
 const SCANNER_CYCLE_INTERVAL_MS = 25_000;
 const TRADE_MANAGER_ACTIVE_INTERVAL_MS = 15_000;
 const TRADE_MANAGER_IDLE_INTERVAL_MS = 60_000;

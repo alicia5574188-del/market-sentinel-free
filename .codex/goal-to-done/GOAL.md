@@ -1,5 +1,15 @@
 # Goal
 
+## Active objective — V4 restored three-strategy core
+
+- Replace the September 4 simplified same-name setup rules with traceable adaptations of the original HT3-R failed-auction, HT4 anti-crowding exhaustion, and original Resonance direction plus HT5-R higher-timeframe entry behavior.
+- Keep one Direct Market Brain and exactly three new-order setups. Evaluate all three on every deep scan, separate raw trigger from setup qualification, remove performance-paused cells before ranking, and never create a second router or simulator.
+- Restore setup-specific market fit, confirmation, targets, and holding horizons so trend exhaustion cannot repeatedly fade a still-expanding move and the two starved setups can trigger at their original decision stages.
+- Add immediate per-setup/direction/regime performance protection using independent events, while retaining account-wide risk and complete 12-hour learning as separate boundaries.
+- Expose actual average win/loss R and realized payoff in the compact contribution cards; preserve the three-tab operator surface and every existing owner/live safety capability.
+- Treat V4 as a major paper release: block new entries, archive all V3 paper positions at fresh quotes with full review lineage, start a clean 1,000U epoch, and leave Gate/live positions, funds, credentials, and owner authority untouched.
+- Add behavioral identity tests and a source fingerprint so a future release cannot call a rewritten setup “restored” without changing its declared version. Complete through focused/full verification, one PR, green CI, deployment, cutover proof, and production health checks.
+
 ## Completed patch objective — truthful per-setup activity
 
 - Count every one of the three core setups on every deep scan instead of attributing the scan only to the selected setup.

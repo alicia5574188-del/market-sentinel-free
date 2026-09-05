@@ -1,5 +1,17 @@
 # Status
 
+## V4 restored core strategies — locally verified, release ready
+
+- Branch: `feat/v4-restored-core-strategies`, based on production `main` `91704e51`.
+- Restored traceable entry behavior instead of tuning the Sep-4 simplified substitutes: `HT3-R_FAILED_AUCTION`, `HT4_EXHAUSTION_ANTI_CROWD`, and `RESONANCE_V1_WITH_HT5-R_TIMING`.
+- Raw activity is intentionally broader than qualified entry: failed-auction activity counts sweep/reclaim before its own volume/reversal gates, and resonance no longer inherits a universal volume-spike requirement. HT4 no longer treats a 24-hour move as exhaustion and requires mature ATR stretch, at least three crowding/divergence sources, failed continuation, and a completed 5m reversal.
+- Added per setup/direction/regime loss isolation: three independent consecutive losses pause the exact cell immediately; a negative four-sample cell also pauses; other strategies continue; only one high-quality revalidation may enter after quarantine.
+- Added actual average winner R, average loser R, and realized payoff ratio to each strategy card. The 12-hour summary no longer implies that immediate loss protection waits for the next report.
+- Major paper cutover is declared by additive migration `0022_direct_market_v4_restored_core_cutover.sql`: old paper holdings must close at fresh quotes as `version_reset`, archive, and start a clean epoch. Gate/live tables and controls remain untouched.
+- Local verification passed: Direct/architecture 29/29, signal/risk/migration 224/224, production build/UI/safety 112/112, TypeScript, ESLint, build, migration replay, and `git diff --check`. Local Wrangler dry-run was blocked by the environment's external-destination policy; remote CI remains the deploy gate.
+- Next: commit, push PR, merge only after green CI, then verify the deployed version, migration completion, zero legacy paper positions, scheduler health, and API identity.
+- Updated UTC: 2026-09-05.
+
 ## Truthful per-setup activity — production deployed
 
 - Release: PR `#131`, production commit `113bf39a8515d4a1cae7d9135c91a4c75654107a`, workflow `33894121421`.

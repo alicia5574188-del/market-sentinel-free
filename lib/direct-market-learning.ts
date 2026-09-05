@@ -20,8 +20,8 @@ export type DirectMarketLearningProfile = {
   reason: string;
 };
 
-export function directMarketCandidateSignature(candidate: Pick<DirectMarketCandidate, "location" | "decision" | "assetRegime">) {
-  return `${candidate.location}|${candidate.decision}|${candidate.assetRegime}`;
+export function directMarketCandidateSignature(candidate: Pick<DirectMarketCandidate, "setup" | "location" | "decision" | "assetRegime">) {
+  return `${candidate.setup}|${candidate.location}|${candidate.decision}|${candidate.assetRegime}`;
 }
 
 function uniqueCompleteEvents(samples: DirectMarketLearningSample[]) {

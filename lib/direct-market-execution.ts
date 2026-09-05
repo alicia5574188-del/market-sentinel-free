@@ -12,6 +12,7 @@ import {
 import { DIRECT_POSITION_POLICY_VERSION } from "./direct-market-position-brain.ts";
 import { ensureDirectMarketReleaseCutover } from "./direct-market-release.ts";
 import { directMarketRiskAdmission, evaluateDirectMarketRisk, type DirectMarketResult } from "./direct-market-risk.ts";
+import { evaluateDirectSetupGuard, type DirectSetupGuardSample } from "./direct-market-setup-guard.ts";
 import {
   DIRECT_MARKET_AUTHORITY,
   DIRECT_MARKET_BRAIN_VERSION,
@@ -103,6 +104,35 @@ export async function getDirectMarketLearningDecision() {
   return deriveDirectMarketLearningProfile(samples);
 }
 
+async function getDirectSetupGuardDecision(candidate: DirectMarketCandidate, now: number) {
+  const candidateSide = candidate.decision;
+  if (candidateSide === "WAIT") throw new Error("setup guard requires an executable side");
+  const db = getDb();
+  const [epoch] = await db.select({ startedAt: hte31SimulationEpochs.startedAt }).from(hte31SimulationEpochs)
+    .orderBy(desc(hte31SimulationEpochs.startedAt)).limit(1);
+  const rows = await db.select({
+    id: hte31Trades.id,
+    independentEventKey: hte31Trades.independentEventKey,
+    netPnlUsdt: hte31Trades.netPnlUsdt,
+    riskBudgetUsdt: hte31Trades.riskBudgetUsdt,
+    exitAt: hte31Trades.exitAt,
+  }).from(hte31Trades).where(and(
+    eq(hte31Trades.status, "closed"),
+    eq(hte31Trades.decisionAuthority, DIRECT_MARKET_AUTHORITY),
+    eq(hte31Trades.brainVersion, DIRECT_MARKET_BRAIN_VERSION),
+    eq(hte31Trades.setupId, candidate.setup),
+    eq(hte31Trades.side, candidateSide),
+    eq(hte31Trades.assetRegime, candidate.assetRegime),
+    gte(hte31Trades.entryAt, epoch?.startedAt ?? 0),
+  )).orderBy(desc(hte31Trades.exitAt)).limit(100);
+  const samples: DirectSetupGuardSample[] = rows.map((row) => ({
+    independentEventKey: row.independentEventKey ?? row.id,
+    resultR: row.riskBudgetUsdt > 0 ? (row.netPnlUsdt ?? 0) / row.riskBudgetUsdt : 0,
+    exitAt: row.exitAt ?? 0,
+  }));
+  return evaluateDirectSetupGuard(samples, now);
+}
+
 export async function openDirectMarketTrade(input: {
   candidate: DirectMarketCandidate;
   universe: string[];
@@ -166,6 +196,16 @@ export async function openDirectMarketTrade(input: {
   const learning = await getDirectMarketLearningDecision();
   const learningAdmission = evaluateDirectMarketLearningAdmission(learning, candidate, executionNow);
   if (!learningAdmission.allowed) return { opened: null, reason: `完整复盘准入：${learningAdmission.reason}` };
+  const setupGuard = await getDirectSetupGuardDecision(candidate, executionNow);
+  if (setupGuard.state === "PAUSED") return { opened: null, reason: `策略独立门控：${setupGuard.reason}` };
+  if (setupGuard.revalidation) {
+    const revalidationHolding = account.open.some((row) => row.setupId === candidate.setup
+      && row.side === candidate.decision && row.assetRegime === candidate.assetRegime);
+    if (revalidationHolding) return { opened: null, reason: "该打法/方向/行情组合已有复考仓位" };
+    if (candidate.confidence < 82 || candidate.netEdgeR < 0.9) {
+      return { opened: null, reason: `策略独立门控：${setupGuard.reason}；复考要求置信度82%且净优势0.90R` };
+    }
+  }
   const today = utcDayStart(executionNow);
   const todayRows = await db.select({ id: hte31Trades.id }).from(hte31Trades).where(and(
     eq(hte31Trades.decisionAuthority, DIRECT_MARKET_AUTHORITY),
@@ -205,7 +245,7 @@ export async function openDirectMarketTrade(input: {
   if (portfolioBlock) return { opened: null, reason: portfolioBlock };
 
   const id = `hte31:${crypto.randomUUID()}`;
-  const independentEventKey = `direct:${Math.floor(executionNow / (30 * 60_000))}|${candidate.riskClusterId}|${side}`;
+  const independentEventKey = `direct:${Math.floor(executionNow / (30 * 60_000))}|${candidate.setup}|${candidate.assetRegime}|${candidate.riskClusterId}|${side}`;
   const { candles5m: _candles, ...candidateSnapshot } = candidate;
   void _candles;
   const snapshot: DirectBrainDecisionSnapshot = {
@@ -226,6 +266,7 @@ export async function openDirectMarketTrade(input: {
       riskClusterId: candidate.riskClusterId,
       d1ProjectedRows: admission.projectedRows,
       sameDirectionMaximum: 2,
+      setupGuard: setupGuard.reason,
     },
     entryValidation: {
       quoteObservedAt: executionNow,
@@ -237,7 +278,7 @@ export async function openDirectMarketTrade(input: {
       action: learning.action,
       reason: learning.reason,
       evidenceCount: learning.evidenceCount,
-      revalidation: learningAdmission.revalidation,
+      revalidation: learningAdmission.revalidation || setupGuard.revalidation,
     },
     riskState: risk.state,
     createdAt: executionNow,

@@ -22,6 +22,9 @@ export type DirectSetupPerformance = {
   winRate: number | null;
   netPnlUsdt: number;
   averageR: number | null;
+  averageWinR: number | null;
+  averageLossR: number | null;
+  realizedPayoffRatio: number | null;
   profitFactor: number | null;
   maxDrawdownR: number;
   maxLosingStreak: number;
@@ -71,6 +74,13 @@ export function buildDirectSetupPerformance(
     const losses = closed.filter((trade) => (trade.netPnlUsdt ?? 0) < 0 && trade.exitCode !== "breakeven").length;
     const netPnlUsdt = closed.reduce((sum, trade) => sum + (trade.netPnlUsdt ?? 0), 0);
     const averageR = resultsR.length ? resultsR.reduce((sum, value) => sum + value, 0) / resultsR.length : null;
+    const winResults = resultsR.filter((value) => value > 0);
+    const lossResults = resultsR.filter((value) => value < 0);
+    const averageWinR = winResults.length ? winResults.reduce((sum, value) => sum + value, 0) / winResults.length : null;
+    const averageLossR = lossResults.length ? lossResults.reduce((sum, value) => sum + value, 0) / lossResults.length : null;
+    const realizedPayoffRatio = averageWinR != null && averageLossR != null
+      ? averageWinR / Math.abs(averageLossR)
+      : null;
     const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 99 : null;
     return {
       setup,
@@ -84,6 +94,9 @@ export function buildDirectSetupPerformance(
       winRate: closed.length ? wins / closed.length * 100 : null,
       netPnlUsdt,
       averageR,
+      averageWinR,
+      averageLossR,
+      realizedPayoffRatio,
       profitFactor,
       maxDrawdownR,
       maxLosingStreak,
