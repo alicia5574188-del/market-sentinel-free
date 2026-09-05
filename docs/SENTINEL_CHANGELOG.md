@@ -1,3 +1,7 @@
+## UI acceptance follow-up
+
+Production #144 visual review found stale decision age labeled as a scheduler failure despite a fresh scanner heartbeat. Separate actual scanner errors from decision-data delay, preserve conservative decision waiting, and show unknown order counts as -- during initial loading. No trading/backend changes. Final follow-up CI pending.
+
 ## 2026-09-05 — Compact single-strategy UI and management display correction
 
 - Remove multi-strategy comparison heading; show 策略表现 and preserve statistics/history. Distinguish the 12-hour common blocker from the current prediction; remove duplicated drawdown and history paragraphs.
