@@ -17,11 +17,16 @@ async function json(url, options = {}) {
 
 export function healthy(data, now = Date.now()) {
   const { scanner, position } = data.schedulers ?? {};
-  return data.ok === true && data.schedulerError == null
-    && [scanner, position].every((s) => s && !s.lastError && !s.circuitOpen
-      && ["live", "starting"].includes(s.state)
-      && Number.isFinite(s.lastSuccessAt) && now - s.lastSuccessAt < (s === position ? 360_000 : 180_000))
-    && Number.isFinite(position.nextRunAt) && position.nextRunAt > now - 5_000 && position.nextRunAt < now + 90_000;
+  const scannerHealthy = scanner && !scanner.circuitOpen
+    && ["live", "starting", "degraded"].includes(scanner.state)
+    && Number.isFinite(scanner.lastSuccessAt) && now - scanner.lastSuccessAt < 180_000
+    && Number.isFinite(scanner.analyzed) && scanner.analyzed > 0;
+  const positionHealthy = position && !position.lastError && !position.circuitOpen
+    && ["live", "starting"].includes(position.state)
+    && Number.isFinite(position.lastSuccessAt) && now - position.lastSuccessAt < 360_000;
+  return Boolean(data.ok === true && data.schedulerError == null
+    && scannerHealthy && positionHealthy
+    && Number.isFinite(position.nextRunAt) && position.nextRunAt > now - 5_000 && position.nextRunAt < now + 90_000);
 }
 
 async function checkHealth() {
