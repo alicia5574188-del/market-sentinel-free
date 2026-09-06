@@ -1,5 +1,6 @@
 import {
   aggregateBook,
+  breakoutEntryConfirmed,
   cascadeRatio,
   dataIsFresh,
   decideThreeState,
@@ -455,7 +456,8 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
         targetTimeframe: currentTarget.timeframe, nextTarget: next?.zone.price ?? null, confirmationScore, fakeoutRisk,
         activationDistanceRate, score, executableNow: Math.abs(entryTrigger - midpoint) / midpoint <= activationDistanceRate
           && confirmationScore >= 0.52 && fakeoutRisk <= 0.62,
-        reason: ["15分钟重复边界", nodeBeyondProjection ? "先兑现15分钟局部量度空间" : `${first.timeframe}流动性作为本段终点`,
+        reason: ["15分钟重复边界", "完整1分钟收在突破位外才允许成交",
+          nodeBeyondProjection ? "先兑现15分钟局部量度空间" : `${first.timeframe}流动性作为本段终点`,
           "更远高周期节点留给下一段重判", "订单流、微价格与周期方向联合过滤假突破"] });
       if (next) {
         const nodeBuffer = Math.max(midpoint * 0.00035, Math.abs(next.zone.price - currentTarget.price) * 0.04);
@@ -706,7 +708,9 @@ export function reconcilePaper(input: {
       }
     }
   }
-  if ((input.allowOpen ?? true) && plan?.state === "PREPARED" && position?.status !== "OPEN" && planTriggered(plan, input.midpoint)) {
+  if ((input.allowOpen ?? true) && plan?.state === "PREPARED" && position?.status !== "OPEN"
+    && planTriggered(plan, input.midpoint)
+    && breakoutEntryConfirmed(plan, input.confirmationMinute, input.confirmationCandle)) {
     const confidence = clamp(plan.score / Math.max(plan.score + plan.oppositeScore, Number.EPSILON), 0, 1);
     const resized = sizePaperPosition({ equity: input.equity, entry: input.midpoint, invalidation: plan.invalidation, feeBps: 10,
       stressSlippageBps: 8, confidence, openRisk: input.openRisk });
