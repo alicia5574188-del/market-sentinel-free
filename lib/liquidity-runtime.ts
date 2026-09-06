@@ -4,6 +4,7 @@ import {
   dataIsFresh,
   decideThreeState,
   flowPressure,
+  MAX_GENERIC_PLAN_DISTANCE_RATE,
   PLAN_SOFT_INVALIDATION_CONFIRMATIONS,
   planTriggered,
   selectSafeLeverage,
@@ -298,8 +299,8 @@ export function analyzeSnapshot(memory: SymbolMemory, snapshot: BookSnapshot) {
     h4: snapshot.observedAt - memory.timeframeUpdatedAt.h4 <= 12 * 60 * 60_000 ? memory.timeframeBias.h4 : "UNKNOWN" as const,
   };
   const routes = buildLiquidityRoutes(memory, snapshot.symbol, snapshot.observedAt, midpoint, absorption);
-  const routeDecision = selectRouteDecision(routes, snapshot.observedAt);
-  const decision = routeDecision ?? decideThreeState({ symbol: snapshot.symbol, observedAt: snapshot.observedAt, mid: midpoint, zones, bands, flow: memory.flow, absorption, timeframeBias: freshBias });
+  const fallbackDecision = decideThreeState({ symbol: snapshot.symbol, observedAt: snapshot.observedAt, mid: midpoint, zones, bands, flow: memory.flow, absorption, timeframeBias: freshBias });
+  const decision = arbitrateDecision(routes, snapshot.observedAt, fallbackDecision);
   const confirmationBySide = { LONG: routeConfirmation(memory, "LONG"), SHORT: routeConfirmation(memory, "SHORT") };
   return { midpoint, zones, bands, absorption, decision, routes, range15m: memory.range15m, confirmationBySide };
 }
@@ -394,8 +395,10 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
   const width = range.upper - range.lower;
   const buffer = Math.max(midpoint * 0.00025, width * 0.06);
   const activationDistanceRate = Math.max(0.0025, Math.min(0.0075, range.widthRate * 0.65));
+  const maxSegmentDistanceRate = Math.max(0.012, Math.min(0.015, range.widthRate * 3));
   const higher = (side: Side) => {
     const ordered = [
+      ...memory.structureByTimeframe.m15.map((zone) => ({ zone, timeframe: "15m" as const })),
       ...memory.structureByTimeframe.h4.map((zone) => ({ zone, timeframe: "4h" as const })),
       ...memory.structureByTimeframe.h1.map((zone) => ({ zone, timeframe: "1h" as const })),
     ].filter((item) => item.zone.side === side && (side === "LONG" ? item.zone.price > range.upper + buffer : item.zone.price < range.lower - buffer))
@@ -405,7 +408,10 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
   const routes: LiquidityRoute[] = [];
   for (const side of ["LONG", "SHORT"] as const) {
     const nodes = higher(side);
-    const first = nodes.find((item) => Math.abs(item.zone.price - (side === "LONG" ? range.upper : range.lower)) / midpoint >= 0.0025);
+    const first = nodes.find((item) => {
+      const distanceRate = Math.abs(item.zone.price - (side === "LONG" ? range.upper : range.lower)) / midpoint;
+      return distanceRate >= 0.0025 && distanceRate <= maxSegmentDistanceRate;
+    });
     const confirmationScore = routeConfirmation(memory, side);
     const fakeoutRisk = clamp(absorption * 0.35 + (1 - confirmationScore) * 0.55
       + (memory.timeframeBias.h1 === (side === "LONG" ? "DOWN" : "UP") ? 0.18 : 0), 0, 1);
@@ -413,7 +419,8 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
       const entryTrigger = side === "LONG" ? range.upper + buffer : range.lower - buffer;
       const invalidation = side === "LONG" ? range.upper - Math.max(buffer * 1.5, width * 0.24)
         : range.lower + Math.max(buffer * 1.5, width * 0.24);
-      const next = nodes.find((item) => side === "LONG" ? item.zone.price > first.zone.price * 1.0025 : item.zone.price < first.zone.price * 0.9975);
+      const next = nodes.find((item) => (side === "LONG" ? item.zone.price > first.zone.price * 1.0025 : item.zone.price < first.zone.price * 0.9975)
+        && Math.abs(item.zone.price - first.zone.price) / first.zone.price <= maxSegmentDistanceRate);
       const score = range.quality * 0.38 + confirmationScore * 0.47 + first.zone.probabilityReach * 0.15;
       routes.push({ id: `${symbol}:LOCAL_BREAKOUT:${side}:${stablePriceBin(range.upper)}:${stablePriceBin(range.lower)}`,
         symbol, side, kind: "LOCAL_BREAKOUT", stage: "LOCAL_TO_NODE", entryTrigger, invalidation,
@@ -466,6 +473,13 @@ export function selectRouteDecision(routes: LiquidityRoute[], observedAt: number
     targetTimeframe: selected.targetTimeframe, nextTarget: selected.nextTarget,
     confirmationScore: selected.confirmationScore, fakeoutRisk: selected.fakeoutRisk,
     activationDistanceRate: selected.activationDistanceRate };
+}
+
+export function arbitrateDecision(routes: LiquidityRoute[], observedAt: number, fallback: Decision | null) {
+  // Once a valid 15m route map exists it is the only execution authority.
+  // A legacy all-timeframe decision may still describe the market, but it may
+  // not turn a distant higher-timeframe liquidity area into today's entry.
+  return routes.length > 0 ? selectRouteDecision(routes, observedAt) : fallback;
 }
 
 export function deriveStructureZones(rows: Array<{ volume: number; close: number; high: number; low: number }>, timeframe: "1m" | "15m" | "1h" | "4h", midpoint: number) {
@@ -556,14 +570,19 @@ export function reconcilePaper(input: {
     && Math.abs(plan.entryTrigger - input.midpoint) / Math.max(input.midpoint, 1e-9) > plan.activationDistanceRate * 1.6;
   const invalidationCrossed = plan?.state === "PREPARED"
     && (plan.side === "LONG" ? input.midpoint <= plan.invalidation : input.midpoint >= plan.invalidation);
+  const invalidLegacyFallback = plan?.state === "PREPARED" && !plan.routeId
+    && ((input.activeRoutes?.length ?? 0) > 0
+      || (!triggered && plan.activationDistanceRate != null
+        && Math.abs(plan.entryTrigger - input.midpoint) / Math.max(input.midpoint, 1e-9) > MAX_GENERIC_PLAN_DISTANCE_RATE));
   // Freeze a prepared thesis instead of chasing every two-second recalculation.
   // Stale data and a crossed structural invalidation are hard faults. Route
   // disappearance and activation drift need two completed 1m confirmations so
   // a transient two-second recomputation cannot cancel an otherwise valid plan.
-  if ((!input.fresh || input.sequenceFault || invalidationCrossed) && plan?.state === "PREPARED") {
+  if ((!input.fresh || input.sequenceFault || invalidationCrossed || invalidLegacyFallback) && plan?.state === "PREPARED") {
     plan = { ...plan, state: "CANCELLED" };
     cancelledThisCycle = true;
-    events.push(!input.fresh ? "STALE_CANCEL" : input.sequenceFault ? "SEQUENCE_REBUILD_CANCEL" : "PRE_ENTRY_INVALIDATION_CANCEL");
+    events.push(!input.fresh ? "STALE_CANCEL" : input.sequenceFault ? "SEQUENCE_REBUILD_CANCEL"
+      : invalidationCrossed ? "PRE_ENTRY_INVALIDATION_CANCEL" : "NONLOCAL_FALLBACK_CANCEL");
   } else if (plan?.state === "PREPARED") {
     const softReason = !targetPresent ? "TARGET_GONE_CANCEL" as const : routeWeak ? "ROUTE_WEAK_CANCEL" as const
       : movedAway ? "ACTIVATION_LOST_CANCEL" as const : null;
