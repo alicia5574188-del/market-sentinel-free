@@ -155,6 +155,7 @@ function CandleChart({ symbol, evidence, decision, position }: {
 }) {
   const [interval, setIntervalValue] = useState<Timeframe>("15m");
   const [candles, setCandles] = useState<Candle[]>([]);
+  const [loadedInterval, setLoadedInterval] = useState<Timeframe | null>(null);
   const [loading, setLoading] = useState(true);
   const [chartError, setChartError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState(0);
@@ -172,7 +173,7 @@ function CandleChart({ symbol, evidence, decision, position }: {
         const payload = await response.json() as { source: string; candles: Candle[]; generatedAt: number };
         const valid = (payload.candles ?? []).filter((row) => [row.time, row.open, row.high, row.low, row.close, row.volume].every(Number.isFinite) && row.time > 0 && row.low > 0 && row.high >= row.low);
         if (!valid.length || payload.source !== "GATE_USDT_FUTURES") throw new Error("真实K线暂不可用");
-        if (active) { setCandles(valid); setUpdatedAt(payload.generatedAt); setChartError(null); }
+        if (active) { setCandles(valid); setLoadedInterval(interval); setUpdatedAt(payload.generatedAt); setChartError(null); }
       } catch (failure) {
         if (active) setChartError(failure instanceof Error && failure.name !== "AbortError" ? failure.message : "更新超时");
       } finally {
@@ -184,7 +185,7 @@ function CandleChart({ symbol, evidence, decision, position }: {
     return () => { active = false; controller?.abort(); window.clearInterval(timer); };
   }, [symbol, interval]);
 
-  const rows = candles.slice(-72);
+  const rows = loadedInterval === interval ? candles.slice(-72) : [];
   const width = 720, height = 286, left = 10, right = 10, top = 24, bottom = 34;
   const rawLevels = [
     evidence?.topLong && { value: evidence.topLong.price, label: "上方流动性", kind: "liquidity" },

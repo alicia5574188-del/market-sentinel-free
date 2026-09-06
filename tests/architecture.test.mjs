@@ -66,6 +66,7 @@ test("external API is read-only PAPER and the operator UI explains every decisio
   assert.match(page, /为什么.*进场|距离触发价|上下流动性优势不足/);
   assert.match(page, /实盘目前安全锁定/);
   assert.match(page, /function CandleChart/);
+  assert.match(page, /loadedInterval === interval \? candles\.slice\(-72\) : \[\]/);
   assert.match(page, /Gate USDT 合约 · 已收盘数据/);
   assert.match(page, /1分钟.*15分钟.*1小时/s);
   assert.match(page, /不预挂单，等待实时价格到达/);
