@@ -93,6 +93,9 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(page, /document\.hidden/);
   assert.match(page, /系统现在的决定/);
   assert.match(page, /模拟账户权益/);
+  assert.match(page, /\{tab === "brain" && <>\s*<section className="brain-hero">/);
+  assert.ok(page.indexOf('{tab === "brain" && <>') < page.indexOf('模拟账户权益'));
+  assert.ok(page.indexOf('</>}\n\n    <nav className="tabs">') > page.indexOf('模拟账户权益'));
   assert.match(page, /当前持仓浮盈亏/);
   assert.match(page, /组合风险预算/);
   assert.match(page, /准备进场/);

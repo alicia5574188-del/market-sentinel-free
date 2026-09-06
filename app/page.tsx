@@ -149,15 +149,17 @@ export default function Home() {
       <div className="top-actions"><div role="status" className={`health ${healthy ? "" : "bad"}`}><span />{healthy ? "后台运行中" : error ? "页面连接中断" : runtime?.stale ? "行情重连中" : runtime ? stateText[runtime.state] ?? runtime.state : "正在连接"}</div><div className="mode-switch"><button className={!liveEnabled ? "active" : ""} type="button" onClick={() => liveEnabled && liveControl()}>模拟</button><button className={liveEnabled ? "active live-on" : ""} type="button" onClick={liveControl}>实盘 <em>{!auth.authenticated ? "登录" : liveEnabled ? live?.operational ? "已开" : "待恢复" : "已关"}</em></button></div></div>
     </header>
 
-    <section className="brain-hero"><div><p className="eyebrow">系统现在的决定</p><h1>{headline}</h1><p className="hero-detail">{headlineDetail}</p></div><div className="decision-badge"><small>当前市场状态</small><strong>{primary ? stateText[primary.state] : "等待"}</strong><span>{primary ? sideText(primary.side) : "没有勉强开仓"}</span></div></section>
+    {tab === "brain" && <>
+      <section className="brain-hero"><div><p className="eyebrow">系统现在的决定</p><h1>{headline}</h1><p className="hero-detail">{headlineDetail}</p></div><div className="decision-badge"><small>当前市场状态</small><strong>{primary ? stateText[primary.state] : "等待"}</strong><span>{primary ? sideText(primary.side) : "没有勉强开仓"}</span></div></section>
 
-    <section className="summary four">
-      <article><small>模拟账户权益</small><strong>{runtime ? `${num(runtime.equity, 2)} U` : "—"}</strong><p>初始资金 {num(INITIAL_EQUITY, 0)} U</p></article>
-      <article><small>累计模拟盈亏</small><strong className={(runtime?.equity ?? INITIAL_EQUITY) >= INITIAL_EQUITY ? "positive" : "negative"}>{runtime ? `${signed(runtime.equity - INITIAL_EQUITY)} U` : "—"}</strong><p>{runtime ? `${signed((runtime.equity / INITIAL_EQUITY - 1) * 100)}%` : "等待数据"}</p></article>
-      <article><small>当前持仓浮盈亏</small><strong className={floatingPnl >= 0 ? "positive" : "negative"}>{runtime ? `${signed(floatingPnl)} U` : "—"}</strong><p>{openPositions.length} 笔模拟持仓</p></article>
-      <article><small>组合风险预算</small><strong>{num(riskUsed, 2)} / {num(riskLimit, 2)} U</strong><div className="risk-bar"><i style={{ width: `${Math.min(100, riskLimit ? riskUsed / riskLimit * 100 : 0)}%` }} /></div><p>剩余 {num(Math.max(0, riskLimit - riskUsed), 2)} U</p></article>
-    </section>
-    {(!responseFresh || error) && runtime && <p className="notice">手机页面更新延迟，下面保留最近一次后台状态；服务器仍独立运行，不会因此停止判断或开模拟单。</p>}{runtime?.lastError && <p className="notice">系统正在自动恢复：{runtime.lastError}</p>}
+      <section className="summary four">
+        <article><small>模拟账户权益</small><strong>{runtime ? `${num(runtime.equity, 2)} U` : "—"}</strong><p>初始资金 {num(INITIAL_EQUITY, 0)} U</p></article>
+        <article><small>累计模拟盈亏</small><strong className={(runtime?.equity ?? INITIAL_EQUITY) >= INITIAL_EQUITY ? "positive" : "negative"}>{runtime ? `${signed(runtime.equity - INITIAL_EQUITY)} U` : "—"}</strong><p>{runtime ? `${signed((runtime.equity / INITIAL_EQUITY - 1) * 100)}%` : "等待数据"}</p></article>
+        <article><small>当前持仓浮盈亏</small><strong className={floatingPnl >= 0 ? "positive" : "negative"}>{runtime ? `${signed(floatingPnl)} U` : "—"}</strong><p>{openPositions.length} 笔模拟持仓</p></article>
+        <article><small>组合风险预算</small><strong>{num(riskUsed, 2)} / {num(riskLimit, 2)} U</strong><div className="risk-bar"><i style={{ width: `${Math.min(100, riskLimit ? riskUsed / riskLimit * 100 : 0)}%` }} /></div><p>剩余 {num(Math.max(0, riskLimit - riskUsed), 2)} U</p></article>
+      </section>
+      {(!responseFresh || error) && runtime && <p className="notice">手机页面更新延迟，下面保留最近一次后台状态；服务器仍独立运行，不会因此停止判断或开模拟单。</p>}{runtime?.lastError && <p className="notice">系统正在自动恢复：{runtime.lastError}</p>}
+    </>}
 
     <nav className="tabs">{([['brain', '大脑'], ['orders', `订单 ${openPositions.length + preparedPlans.length || ''}`], ['live', `实盘 ${openLivePositions.length + openLiveEntries.length || ''}`], ['history', '历史'], ['settings', '设置']] as const).map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => selectTab(key)}>{label}</button>)}</nav>
 
