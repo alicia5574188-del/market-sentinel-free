@@ -23,7 +23,7 @@ test("runtime uses bounded futures REST snapshots, no continuous WebSocket", asy
   assert.match(worker, /plannedMaxD1BilledWritesPerDay: 4_800/);
   assert.match(worker, /DEFAULT_SYMBOLS = \["BTC_USDT", "ETH_USDT", "SOL_USDT"\]/);
   assert.doesNotMatch(worker, /ZEC_USDT|BNB_USDT/);
-  assert.match(worker, /maxSubrequestsPerAlarm: 5/);
+  assert.match(worker, /maxSubrequestsPerAlarm: 24/);
   assert.match(worker, /now - this\.runtime\.lastStopCheckpointAt < 60_000/);
 });
 
@@ -37,15 +37,16 @@ test("only one new DO is bound and all legacy DO storage is explicitly deleted",
   for (const name of ["PositionMonitor", "MarketScanner", "LiveTradingCoordinator", "MarketScannerV2", "HTE31MarketScanner", "HTE31TradeManager", "HistoricalArchive"]) assert.ok(retire.deleted_classes.includes(name));
 });
 
-test("external API is read-only PAPER and the operator UI explains every decision", async () => {
-  const [worker, page, layout, workflow, css] = await Promise.all([
+test("owner-authenticated live API is isolated while the operator UI explains every decision", async () => {
+  const [worker, page, layout, workflow, css, live, auth] = await Promise.all([
     read("worker/index-clean.ts"),
     read("app/page.tsx"),
     read("app/layout.tsx"),
     read(".github/workflows/sentinel-v2-ci.yml"),
     read("app/globals.css"),
+    read("lib/gate-live.ts"),
+    read("lib/owner-auth.ts"),
   ]);
-  assert.match(worker, /read-only PAPER surface/);
   assert.match(worker, /return handler\.fetch\(request, env, ctx\)/);
   assert.match(worker, /url\.pathname === "\/api\/history" && request\.method === "GET"/);
   assert.match(worker, /url\.pathname === "\/api\/candles" && request\.method === "GET"/);
@@ -56,7 +57,20 @@ test("external API is read-only PAPER and the operator UI explains every decisio
   assert.match(worker, /actual candles warming/);
   assert.match(worker, /serving last actual candles/);
   assert.match(worker, /FROM paper_positions/);
-  assert.doesNotMatch(worker, /request\.method === "POST"|request\.method === "DELETE"|createOrder|submitOrder/);
+  assert.match(worker, /url\.pathname === "\/api\/auth\/login" && request\.method === "POST"/);
+  assert.match(worker, /url\.pathname === "\/api\/live\/mode" && request\.method === "POST"/);
+  assert.match(worker, /if \(!await ownerAuthenticated\(request, env\)\) return json\(\{ error: "请先登录" \}, 401\)/);
+  assert.match(worker, /sameOriginMutation\(request\)/);
+  assert.match(worker, /const \{ outbox, live, \.\.\.publicRuntime \} = this\.runtime/);
+  assert.match(worker, /\["SUBMITTING", "OPEN"\]\.includes\(entry\.status\).*entry\.plannedRisk/s);
+  assert.match(worker, /prior\.planId === plan\.id && prior\.status !== "CANCELLED"/);
+  assert.match(worker, /availableForNewEntries - intent\.margin/);
+  assert.match(live, /\/futures\/usdt\/price_orders/);
+  assert.match(live, /\/futures\/usdt\/orders/);
+  assert.match(live, /reduce_only: true/);
+  assert.match(live, /PORTFOLIO_RISK_CAP/);
+  assert.match(live, /credentials\.environment !== "live"/);
+  assert.match(auth, /HttpOnly; Secure; SameSite=Strict/);
   assert.match(page, /setInterval\(read, 15_000\)/);
   assert.match(page, /RUNTIME_REQUEST_TIMEOUT_MS = 30_000/);
   assert.match(page, /RUNTIME_DISPLAY_TTL_MS = 90_000/);
@@ -77,12 +91,15 @@ test("external API is read-only PAPER and the operator UI explains every decisio
   assert.match(page, /准备进场/);
   assert.match(page, /判断错误就退出/);
   assert.match(page, /为什么.*进场|距离触发价|上下流动性优势不足/);
-  assert.match(page, /实盘目前安全锁定/);
+  assert.match(page, /所有者登录/);
+  assert.match(page, /确认开启实盘/);
+  assert.match(page, /实盘交易开关/);
   assert.match(page, /function CandleChart/);
   assert.match(page, /loadedInterval === interval \? candles\.slice\(-72\) : \[\]/);
   assert.match(page, /Gate USDT 合约 · 已收盘数据/);
   assert.match(page, /1分钟.*15分钟.*1小时/s);
-  assert.match(page, /不预挂单，等待实时价格到达/);
+  assert.match(page, /Gate 价格触发/);
+  assert.match(page, /Gate 限价/);
   assert.match(page, /authorityOperational && evidence\?\.fresh && evidence\?\.ancillaryFresh/);
   assert.match(page, /订单.*历史.*设置/s);
   assert.doesNotMatch(layout, /requireChatGPTUser|redirect|signin-with-chatgpt/);

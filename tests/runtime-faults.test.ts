@@ -551,7 +551,15 @@ test("status exposes bounded mirror telemetry, never the complete outage outbox"
   const text = await response.text();
   const body = JSON.parse(text) as Record<string, unknown>;
   assert.equal(body.outbox, undefined);
+  assert.equal(body.live, undefined);
+  assert.deepEqual(body.liveMode, { requestedEnabled: false, operational: false });
   assert.equal(body.outboxLength, 512);
   assert.equal(body.authorityReady, true);
   assert.ok(text.length < 200_000);
+
+  const owner = await (await stream.fetch(new Request("https://market-stream/owner-runtime"))).json() as Record<string, unknown>;
+  assert.deepEqual(owner.live, {
+    requestedEnabled: false, operational: false, changedAt: null, lastSyncAt: null, lastError: null,
+    equity: null, available: null, credentialConfigured: false, entries: {}, positions: {},
+  });
 });

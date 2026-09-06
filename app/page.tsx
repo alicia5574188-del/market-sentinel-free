@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { runtimeReady } from "../lib/runtime-health.ts";
 
 type Side = "LONG" | "SHORT";
@@ -9,12 +9,18 @@ type Zone = { price: number; score: number; source: "BOOK" | "STOP_POOL" | "LIQU
 type Decision = { marketState: MarketState; side: Side; entryTrigger: number; invalidation: number; target: number; score: number; reason: string[] };
 type Plan = Decision & { state: "PREPARED" | "TRIGGERED" | "CANCELLED"; plannedRisk: number; notional: number };
 type Position = { side: Side; scenario: MarketState; status: "OPEN" | "CLOSED"; entryAt?: number; entryPrice: number; currentStop: number; currentTarget: number; plannedRisk: number; notional: number; realizedPnl?: number; exitReason?: string };
+type LiveEntry = { planId: string; symbol: string; side: Side; scenario: MarketState; kind: "PRICE_TRIGGER" | "LIMIT"; status: string; trigger: number; invalidation: number; target: number; plannedRisk: number; notional: number; leverage: number; margin: number; lastError: string | null };
+type LivePosition = Position & { id: string; symbol: string; exchangeSize: number; leverage: number; margin: number; stopPrice: number | null; exitRequestedAt: number | null };
+type LiveRuntime = { requestedEnabled: boolean; operational: boolean; changedAt: number | null; lastSyncAt: number | null; lastError: string | null; equity: number | null; available: number | null; credentialConfigured: boolean; entries: Record<string, LiveEntry | null>; positions: Record<string, LivePosition | null> };
 type Runtime = {
   version: string; mode: "PAPER"; state: string; stale: boolean; generatedAt: number; lastSuccessAt: number | null; lastError: string | null; symbols: string[]; equity: number;
   decisions: Record<string, Decision | null>; plans: Record<string, Plan | null>; positions: Record<string, Position | null>; authorityReady: boolean;
   evidence: Record<string, { midpoint: number; observedAt: number; warmup: number; fresh: boolean; ancillaryFresh: boolean; topLong: Zone | null; topShort: Zone | null; absorption: number }>;
   limits: { maxOpenPositions: number };
+  liveMode: { requestedEnabled: boolean; operational: boolean };
+  live?: LiveRuntime;
 };
+type AuthSession = { configured: boolean; authenticated: boolean; username: string };
 type HistoryItem = { id: string; symbol: string; marketState: MarketState; side: Side; status: "OPEN" | "CLOSED"; entryAt: number; entryPrice: number; currentStop: number; currentTarget: number; plannedRisk: number; notional: number; exitAt: number | null; exitPrice: number | null; exitReason: string | null; realizedPnl: number | null };
 type Tab = "brain" | "orders" | "history" | "settings";
 type Timeframe = "1m" | "15m" | "1h";
@@ -54,7 +60,11 @@ export default function Home() {
   const [clock, setClock] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("brain");
-  const [showLiveLock, setShowLiveLock] = useState(false);
+  const [auth, setAuth] = useState<AuthSession>({ configured: true, authenticated: false, username: "owner" });
+  const [showLogin, setShowLogin] = useState(false);
+  const [showLiveConfirm, setShowLiveConfirm] = useState(false);
+  const [liveBusy, setLiveBusy] = useState(false);
+  const [liveActionError, setLiveActionError] = useState<string | null>(null);
   const selectTab = (next: Tab) => { setTab(next); window.scrollTo(0, 0); };
 
   useEffect(() => {
@@ -85,6 +95,36 @@ export default function Home() {
     return () => { active = false; controller?.abort(); clearInterval(timer); document.removeEventListener("visibilitychange", visibility); };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/auth/session", { cache: "no-store" }).then(async (response) => {
+      if (response.ok && active) setAuth(await response.json() as AuthSession);
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, []);
+
+  const setLiveMode = async (enabled: boolean) => {
+    setLiveBusy(true); setLiveActionError(null);
+    try {
+      const response = await fetch("/api/live/mode", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }) });
+      const payload = await response.json() as { error?: string; live?: LiveRuntime };
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      if (payload.live && runtime) setRuntime({ ...runtime, live: payload.live, liveMode: { requestedEnabled: payload.live.requestedEnabled, operational: payload.live.operational } });
+      setShowLiveConfirm(false);
+    } catch (failure) { setLiveActionError(failure instanceof Error ? failure.message : "操作失败"); }
+    finally { setLiveBusy(false); }
+  };
+
+  const live = runtime?.live;
+  const liveEnabled = Boolean(live?.requestedEnabled ?? runtime?.liveMode?.requestedEnabled);
+  const openLivePositions = Object.values(live?.positions ?? {}).filter((position): position is LivePosition => position?.status === "OPEN");
+  const openLiveEntries = Object.values(live?.entries ?? {}).filter((entry): entry is LiveEntry => Boolean(entry && ["SUBMITTING", "OPEN"].includes(entry.status)));
+  const liveControl = () => {
+    if (!auth.authenticated) setShowLogin(true);
+    else if (liveEnabled) void setLiveMode(false);
+    else setShowLiveConfirm(true);
+  };
+
   const responseFresh = runtime != null && clock - receivedAt < RUNTIME_DISPLAY_TTL_MS && clock - runtime.generatedAt < RUNTIME_DISPLAY_TTL_MS;
   const healthy = runtimeReady(runtime, responseFresh);
   const authorityOperational = runtime != null && runtime.authorityReady && !runtime.stale;
@@ -104,7 +144,7 @@ export default function Home() {
   return <main>
     <header className="topbar">
       <div className="brand"><span className="brand-mark">三</span><div><p>流动性三态</p><small>预测型量化交易系统</small></div></div>
-      <div className="top-actions"><div role="status" className={`health ${healthy ? "" : "bad"}`}><span />{healthy ? "后台运行中" : error ? "页面连接中断" : runtime?.stale ? "行情重连中" : runtime ? stateText[runtime.state] ?? runtime.state : "正在连接"}</div><div className="mode-switch"><button className="active" type="button">模拟</button><button type="button" onClick={() => setShowLiveLock(true)}>实盘 <em>锁定</em></button></div></div>
+      <div className="top-actions"><div role="status" className={`health ${healthy ? "" : "bad"}`}><span />{healthy ? "后台运行中" : error ? "页面连接中断" : runtime?.stale ? "行情重连中" : runtime ? stateText[runtime.state] ?? runtime.state : "正在连接"}</div><div className="mode-switch"><button className={!liveEnabled ? "active" : ""} type="button" onClick={() => liveEnabled && liveControl()}>模拟</button><button className={liveEnabled ? "active live-on" : ""} type="button" onClick={liveControl}>实盘 <em>{!auth.authenticated ? "登录" : liveEnabled ? live?.operational ? "已开" : "待恢复" : "已关"}</em></button></div></div>
     </header>
 
     <section className="brain-hero"><div><p className="eyebrow">系统现在的决定</p><h1>{headline}</h1><p className="hero-detail">{headlineDetail}</p></div><div className="decision-badge"><small>当前市场状态</small><strong>{primary ? stateText[primary.state] : "等待"}</strong><span>{primary ? sideText(primary.side) : "没有勉强开仓"}</span></div></section>
@@ -117,7 +157,7 @@ export default function Home() {
     </section>
     {(!responseFresh || error) && runtime && <p className="notice">手机页面更新延迟，下面保留最近一次后台状态；服务器仍独立运行，不会因此停止判断或开模拟单。</p>}{runtime?.lastError && <p className="notice">系统正在自动恢复：{runtime.lastError}</p>}
 
-    <nav className="tabs">{([['brain', '大脑'], ['orders', `订单 ${openPositions.length + preparedPlans.length || ''}`], ['history', '历史'], ['settings', '设置']] as const).map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => selectTab(key)}>{label}</button>)}</nav>
+    <nav className="tabs">{([['brain', '大脑'], ['orders', `订单 ${openPositions.length + preparedPlans.length + openLivePositions.length + openLiveEntries.length || ''}`], ['history', '历史'], ['settings', '设置']] as const).map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => selectTab(key)}>{label}</button>)}</nav>
 
     {tab === "brain" && <section className="markets">{runtime?.symbols.map((symbol) => {
       const evidence = runtime.evidence[symbol], marketFresh = Boolean(authorityOperational && evidence?.fresh && evidence?.ancillaryFresh);
@@ -127,13 +167,15 @@ export default function Home() {
       return <article className="market" key={symbol}><div className="market-title"><div><small>{symbol.replace("_", "/")}</small><h2>{marketFresh ? status : "数据恢复中"}</h2></div><strong>{marketFresh ? num(evidence?.midpoint, 5) : "—"}</strong></div>
         <div className="plain-answer"><small>系统判断</small><b>{intent ? `${sideText(intent.side)} · ${stateText[intent.marketState]}` : "暂时没有值得执行的方向"}</b><p>{waitReason(runtime, marketFresh, symbol)}</p></div>
         {intent && <div className="trade-levels"><div><small>准备进场</small><b>{num(intent.entryTrigger, 5)}</b></div><div><small>判断错误就退出</small><b>{num(intent.invalidation, 5)}</b></div><div><small>当前目标</small><b>{num(intent.target, 5)}</b></div><div><small>预计盈亏比</small><b>{num(rr(intent.entryTrigger, intent.invalidation, intent.target), 2)} : 1</b></div></div>}
-        <div className="execution"><small>执行方式</small><b>{position?.status === "OPEN" ? "已按实时价格触发，正在持仓" : plan?.state === "PREPARED" ? `不预挂单，等待实时价格到达 ${num(plan.entryTrigger, 5)}` : intent ? "方向已形成，等待系统建立进场计划" : "不挂单，继续等待完整机会"}</b></div>
+        <div className="execution"><small>执行方式</small><b>{position?.status === "OPEN" ? "已按实时价格触发，正在持仓" : plan?.state === "PREPARED" ? liveEnabled ? `${plan.marketState === "BREAKOUT" ? "Gate 价格触发" : "Gate 限价"}挂单等待 ${num(plan.entryTrigger, 5)}` : `模拟等待实时价格到达 ${num(plan.entryTrigger, 5)}` : intent ? "方向已形成，等待系统建立进场计划" : "继续等待完整机会"}</b></div>
         <CandleChart symbol={symbol} evidence={evidence} decision={intent} position={position?.status === "OPEN" ? position : null} />
         <details><summary>查看判断依据</summary><p>{intent?.reason.join("；") || "尚未形成完整判断"}</p><div className="targets"><span>上方吸引区：{num(evidence?.topLong?.price, 5)} · {sourceText[evidence?.topLong?.source ?? ""] ?? "识别中"}</span><span>下方吸引区：{num(evidence?.topShort?.price, 5)} · {sourceText[evidence?.topShort?.source ?? ""] ?? "识别中"}</span></div></details>
       </article>;
     }) ?? <div className="empty">正在读取市场数据…</div>}</section>}
 
-    {tab === "orders" && <section className="panel-list">{!openPositions.length && !preparedPlans.length && <div className="empty"><b>当前没有订单</b><p>出现合适位置后会先显示准备计划，再自动建立模拟持仓。</p></div>}
+    {tab === "orders" && <section className="panel-list">{!openPositions.length && !preparedPlans.length && !openLivePositions.length && !openLiveEntries.length && <div className="empty"><b>当前没有订单</b><p>出现合适位置后会先显示准备计划；实盘开启时会同步提交 Gate 合约挂单。</p></div>}
+      {auth.authenticated && openLivePositions.map((position) => <OrderCard key={`live:${position.symbol}`} symbol={position.symbol} side={position.side} label="实盘持仓" state={position.scenario} notional={position.notional} equity={live?.equity ?? INITIAL_EQUITY} mode="LIVE" leverage={position.leverage} margin={position.margin} values={[["真实进场", position.entryPrice], ["交易所止损", position.stopPrice ?? position.currentStop], ["动态目标", position.currentTarget], ["实际计划风险", position.plannedRisk]]} />)}
+      {auth.authenticated && openLiveEntries.map((entry) => <OrderCard key={`live:${entry.symbol}:entry`} symbol={entry.symbol} side={entry.side} label={entry.kind === "PRICE_TRIGGER" ? "实盘触发挂单" : "实盘限价挂单"} state={entry.scenario} notional={entry.notional} equity={live?.equity ?? INITIAL_EQUITY} mode="LIVE" leverage={entry.leverage} margin={entry.margin} values={[["挂单进场", entry.trigger], ["结构止损", entry.invalidation], ["动态目标", entry.target], ["实际计划风险", entry.plannedRisk]]} />)}
       {openPositions.map(({ symbol, position }) => <OrderCard key={symbol} symbol={symbol} side={position.side} label="持仓中" state={position.scenario} notional={position.notional} equity={runtime?.equity ?? INITIAL_EQUITY} values={[["进场", position.entryPrice], ["保护价", position.currentStop], ["动态目标", position.currentTarget], ["计划风险", position.plannedRisk]]} />)}
       {preparedPlans.map(({ symbol, plan }) => <OrderCard key={symbol} symbol={symbol} side={plan.side} label="等待触发" state={plan.marketState} notional={plan.notional} equity={runtime?.equity ?? INITIAL_EQUITY} values={[["触发进场", plan.entryTrigger], ["结构止损", plan.invalidation], ["目标", plan.target], ["计划风险", plan.plannedRisk]]} />)}
     </section>}
@@ -142,15 +184,33 @@ export default function Home() {
       {!history.length ? <div className="empty"><b>还没有历史交易</b><p>产生第一笔模拟交易后会自动出现在这里。</p></div> : <div className="history-table">{history.map((item) => <article key={item.id}><div><span className={`side ${item.side.toLowerCase()}`}>{item.side === "LONG" ? "多" : "空"}</span><div><b>{item.symbol.replace("_", "/")}</b><small>{time(item.entryAt)} · {stateText[item.marketState]}</small></div></div><div><small>进场 / 出场</small><b>{num(item.entryPrice, 5)} / {num(item.exitPrice, 5)}</b></div><div><small>结果</small><b className={(item.realizedPnl ?? 0) >= 0 ? "positive" : "negative"}>{item.status === "OPEN" ? "持仓中" : `${signed(item.realizedPnl ?? 0)} U`}</b></div><div><small>结束原因</small><b>{item.status === "OPEN" ? "尚未结束" : exitText[item.exitReason ?? ""] ?? item.exitReason ?? "已结束"}</b></div></article>)}</div>}
     </section>}
 
-    {tab === "settings" && <section className="settings-panel"><Setting title="交易模式" detail="当前所有信号、订单和盈亏均为模拟。" value="模拟运行" tone="online"/><button className="setting-row" type="button" onClick={() => setShowLiveLock(true)}><div><b>实盘交易</b><p>需要所有者验证和独立实盘执行版本，防止公开页面被他人操作。</p></div><span className="setting-value locked">安全锁定 ›</span></button><Setting title="最大组合风险" detail="包含手续费和压力滑点，止损只允许收紧。" value="5%"/><Setting title="持仓时间与止盈" detail="不固定时间，不固定止盈；目标变化时动态退出。" value="动态"/><Setting title="系统状态" detail="页面关闭后服务器仍然持续运行。" value={healthy ? "正常" : "恢复中"} tone={healthy ? "online" : "locked"}/><p className="last-update">最近后台成功：{time(runtime?.lastSuccessAt)}</p></section>}
+    {tab === "settings" && <section className="settings-panel"><button className="setting-row" type="button" onClick={() => auth.authenticated ? void fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(() => { setAuth({ ...auth, authenticated: false }); setRuntime(runtime ? { ...runtime, live: undefined } : runtime); }) : setShowLogin(true)}><div><b>所有者账户</b><p>{auth.authenticated ? "已通过安全会话验证；退出登录不会改变实盘开关。" : "登录后才可以查看真实账户并操作实盘开关。"}</p></div><span className={`setting-value ${auth.authenticated ? "online" : "locked"}`}>{auth.authenticated ? "owner · 退出 ›" : "登录 ›"}</span></button><button className="setting-row" type="button" disabled={liveBusy} onClick={liveControl}><div><b>实盘交易开关</b><p>{liveEnabled ? "关闭后撤销未成交入场挂单；已有仓位继续保护并按策略退出。" : "开启后，实盘完全复用当前 BTC/ETH/SOL 策略和 5% 总风险限制。"}</p></div><span className={`setting-value ${liveEnabled && live?.operational ? "online" : "locked"}`}>{liveBusy ? "处理中…" : !auth.authenticated ? "需登录 ›" : liveEnabled ? live?.operational ? "已开启 ›" : "已开启·待恢复 ›" : "已关闭 ›"}</span></button>{auth.authenticated && <><Setting title="Gate 实盘账户" detail={`可用 ${num(live?.available, 2)} U · ${openLivePositions.length} 个真实持仓`} value={live?.equity != null ? `${num(live.equity, 2)} U` : "连接中"} tone={live?.credentialConfigured ? "online" : "locked"}/><Setting title="实盘执行状态" detail={live?.lastError || "突破预挂触发单；反转/震荡预挂限价单。"} value={live?.operational ? "可开仓" : liveEnabled ? "暂停新单" : "已关闭"} tone={live?.operational ? "online" : "locked"}/></>}<Setting title="最大组合风险" detail="模拟与实盘均包含手续费和压力滑点，结构止损只允许收紧。" value="5%"/><Setting title="持仓时间与止盈" detail="不固定时间，不固定止盈；目标变化时动态退出。" value="动态"/><Setting title="系统状态" detail="页面关闭后服务器仍然持续运行。" value={healthy ? "正常" : "恢复中"} tone={healthy ? "online" : "locked"}/><p className="last-update">最近后台成功：{time(runtime?.lastSuccessAt)}{live?.lastSyncAt ? ` · 实盘核对：${time(live.lastSyncAt)}` : ""}</p></section>}
 
-    {showLiveLock && <div className="modal-backdrop" onClick={() => setShowLiveLock(false)}><section className="modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}><span className="lock-icon">锁</span><h2>实盘目前安全锁定</h2><p>当前公网页面没有所有者身份验证。为避免任何人打开网址就能操作真实资金，实盘下单必须在独立版本中接入验证后才能开放。</p><p>模拟系统会继续 24 小时运行，不会因为页面关闭而停止。</p><button type="button" onClick={() => setShowLiveLock(false)}>我知道了</button></section></div>}
+    {showLogin && <LoginModal configured={auth.configured} onClose={() => setShowLogin(false)} onSuccess={(session) => { setAuth(session); setShowLogin(false); location.reload(); }} />}
+    {showLiveConfirm && <div className="modal-backdrop" onClick={() => !liveBusy && setShowLiveConfirm(false)}><section className="modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}><span className="lock-icon">实</span><h2>确认开启实盘</h2><p>开启后，当前系统形成的 BTC、ETH、SOL 计划会自动提交 Gate 合约挂单，成交后使用真实资金，并立即建立结构止损。</p><p>实盘仍遵守账户总风险不超过 5%；只有你登录后可以改变这个开关。</p>{liveActionError && <p className="form-error">{liveActionError}</p>}<div className="modal-actions"><button className="secondary" type="button" disabled={liveBusy} onClick={() => setShowLiveConfirm(false)}>取消</button><button type="button" disabled={liveBusy} onClick={() => void setLiveMode(true)}>{liveBusy ? "正在核对 Gate…" : "确认开启实盘"}</button></div></section></div>}
   </main>;
 }
 
-function OrderCard({ symbol, side, label, state, notional, equity, values }: { symbol: string; side: Side; label: string; state: MarketState; notional: number; equity: number; values: [string, number][] }) {
-  const leverage = displayLeverage(notional, equity), margin = notional / leverage;
-  return <article className="order-card"><div><span className={`side ${side.toLowerCase()}`}>{side === "LONG" ? "多" : "空"}</span><div><h3>{symbol.replace("_", "/")} · {label}</h3><p>{stateText[state]} · PAPER 模拟合约</p></div></div><strong style={{ textAlign: "right" }}><small style={{ display: "block", color: "var(--muted)", fontSize: 10 }}>合约名义价值</small>{num(notional, 2)} U</strong><dl>{values.map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{num(value, name.includes("风险") ? 2 : 5)}{name.includes("风险") ? " U" : ""}</dd></div>)}<div><dt>模拟杠杆</dt><dd>{leverage}×</dd></div><div><dt>预计保证金</dt><dd>{num(margin, 2)} U</dd></div></dl><p style={{ gridColumn: "1 / -1", margin: 0, color: "var(--muted)", fontSize: 11 }}>触发时按最新价格、权益和组合风险重新计算；当前不会向 Gate 提交真实订单。</p></article>;
+function OrderCard({ symbol, side, label, state, notional, equity, values, mode = "PAPER", leverage: actualLeverage, margin: actualMargin }: { symbol: string; side: Side; label: string; state: MarketState; notional: number; equity: number; values: [string, number][]; mode?: "PAPER" | "LIVE"; leverage?: number; margin?: number }) {
+  const leverage = actualLeverage ?? displayLeverage(notional, equity), margin = actualMargin ?? notional / leverage;
+  return <article className={`order-card ${mode === "LIVE" ? "live-card" : ""}`}><div><span className={`side ${side.toLowerCase()}`}>{side === "LONG" ? "多" : "空"}</span><div><h3>{symbol.replace("_", "/")} · {label}</h3><p>{stateText[state]} · {mode === "LIVE" ? "Gate 真实合约" : "PAPER 模拟合约"}</p></div></div><strong style={{ textAlign: "right" }}><small style={{ display: "block", color: "var(--muted)", fontSize: 10 }}>合约名义价值</small>{num(notional, 2)} U</strong><dl>{values.map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{num(value, name.includes("风险") ? 2 : 5)}{name.includes("风险") ? " U" : ""}</dd></div>)}<div><dt>{mode === "LIVE" ? "真实杠杆" : "模拟杠杆"}</dt><dd>{leverage}×</dd></div><div><dt>{mode === "LIVE" ? "实际保证金" : "预计保证金"}</dt><dd>{num(margin, 2)} U</dd></div></dl><p style={{ gridColumn: "1 / -1", margin: 0, color: "var(--muted)", fontSize: 11 }}>{mode === "LIVE" ? "真实订单由 Gate 托管；结构止损为 reduce-only，不能反向开仓。" : "触发时按最新价格、权益和组合风险重新计算。"}</p></article>;
+}
+
+function LoginModal({ configured, onClose, onSuccess }: { configured: boolean; onClose: () => void; onSuccess: (session: AuthSession) => void }) {
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault(); setBusy(true); setLoginError(null);
+    try {
+      const response = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "owner", password }) });
+      const payload = await response.json() as { error?: string; authenticated?: boolean; username?: string };
+      if (!response.ok || !payload.authenticated) throw new Error(payload.error || "登录失败");
+      setPassword(""); onSuccess({ configured: true, authenticated: true, username: payload.username ?? "owner" });
+    } catch (failure) { setLoginError(failure instanceof Error ? failure.message : "登录失败"); }
+    finally { setBusy(false); }
+  };
+  return <div className="modal-backdrop" onClick={() => !busy && onClose()}><form className="modal" role="dialog" aria-modal="true" onSubmit={submit} onClick={(event) => event.stopPropagation()}><span className="lock-icon">登</span><h2>所有者登录</h2><p>账户固定为 owner。密码只发送给后台验证，不保存到浏览器，也不会显示 Gate API 密钥。</p><label className="login-field"><span>账户</span><input value="owner" readOnly autoComplete="username" /></label><label className="login-field"><span>密码</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" autoFocus /></label>{!configured && <p className="form-error">后台访问码尚未配置。</p>}{loginError && <p className="form-error">{loginError}</p>}<div className="modal-actions"><button className="secondary" type="button" disabled={busy} onClick={onClose}>取消</button><button type="submit" disabled={busy || !configured || password.length < 16}>{busy ? "登录中…" : "登录"}</button></div></form></div>;
 }
 
 function CandleChart({ symbol, evidence, decision, position }: {

@@ -77,6 +77,7 @@ export type GateContract = {
   order_price_round?: string;
   quanto_multiplier?: string;
   maintenance_rate?: string;
+  leverage_max?: string;
 };
 
 export async function fetchActiveContracts() {
@@ -98,6 +99,7 @@ export async function fetchActiveContracts() {
         tickSize: available.get(row.contract!) ?? 0.0001,
         quantoMultiplier: Number(contract?.quanto_multiplier ?? 1),
         maintenanceRate: Number(contract?.maintenance_rate ?? 0.005),
+        leverageMax: Number(contract?.leverage_max ?? 50),
         fundingRate: Number(row.funding_rate ?? 0),
       };
     });

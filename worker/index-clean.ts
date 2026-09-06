@@ -3,10 +3,12 @@
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
 import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchRecentTrades, fetchStructureCandles } from "../lib/gate-market.ts";
-import { closePaperPosition, remainingStressRisk, SYSTEM_VERSION, type Decision, type LiquidityZone, type PaperPlan, type PaperPosition } from "../lib/liquidity-core.ts";
+import { closePaperPosition, PORTFOLIO_RISK_CAP, remainingStressRisk, SYSTEM_VERSION, updatePosition, type Decision, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type Side } from "../lib/liquidity-core.ts";
 import { analyzeSnapshot, ancillaryIsFresh, ancillarySchedule, applyFlow, deriveStructureZones, emptySymbolMemory, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
 import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem } from "../lib/paper-outbox.ts";
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveClient } from "../lib/gate-live.ts";
+import { clearOwnerSessionCookie, createOwnerSession, ownerAuthConfigured, ownerPasswordMatches, ownerSessionCookie, sameOriginMutation, verifyOwnerSession } from "../lib/owner-auth.ts";
 
 const LOOP_MS = 2_000;
 const HEARTBEAT_MS = 30_000;
@@ -24,7 +26,62 @@ export interface CloudflareEnv {
   ASSETS: Fetcher;
   DB: D1Database;
   MARKET_STREAM: DurableObjectNamespace<MarketStream>;
+  OWNER_ACCESS_TOKEN?: string;
   CF_VERSION_METADATA?: { id: string; tag?: string; timestamp?: string };
+}
+
+type LiveEntry = {
+  planId: string;
+  symbol: string;
+  side: Side;
+  scenario: MarketState;
+  kind: "PRICE_TRIGGER" | "LIMIT";
+  status: "SUBMITTING" | "OPEN" | "FILLED" | "CANCELLED" | "ERROR";
+  tag: string;
+  exchangeOrderId: string | null;
+  createdAt: number;
+  expiresAt: number;
+  trigger: number;
+  invalidation: number;
+  target: number;
+  size: number;
+  contracts: number;
+  notional: number;
+  plannedRisk: number;
+  leverage: number;
+  margin: number;
+  missingSince: number | null;
+  lastError: string | null;
+};
+
+type LivePosition = PaperPosition & {
+  exchangeSize: number;
+  leverage: number;
+  margin: number;
+  stopOrderId: string | null;
+  stopTag: string | null;
+  stopPrice: number | null;
+  stopSubmittingAt: number | null;
+  exitRequestedAt: number | null;
+  exchangeUpdatedAt: number;
+};
+
+type LiveRuntime = {
+  requestedEnabled: boolean;
+  operational: boolean;
+  changedAt: number | null;
+  lastSyncAt: number | null;
+  lastError: string | null;
+  equity: number | null;
+  available: number | null;
+  credentialConfigured: boolean;
+  entries: Record<string, LiveEntry | null>;
+  positions: Record<string, LivePosition | null>;
+};
+
+function initialLiveState(): LiveRuntime {
+  return { requestedEnabled: false, operational: false, changedAt: null, lastSyncAt: null, lastError: null,
+    equity: null, available: null, credentialConfigured: false, entries: {}, positions: {} };
 }
 
 type RuntimeState = {
@@ -57,7 +114,7 @@ type RuntimeState = {
   d1MirrorError: string | null;
   riskBreach: boolean;
   tickSize: Record<string, number>;
-  contractMeta: Record<string, { quantoMultiplier: number; maintenanceRate: number; fundingRate: number }>;
+  contractMeta: Record<string, { quantoMultiplier: number; maintenanceRate: number; leverageMax: number; fundingRate: number }>;
   decisions: Record<string, Decision | null>;
   plans: Record<string, PaperPlan | null>;
   positions: Record<string, PaperPosition | null>;
@@ -65,6 +122,7 @@ type RuntimeState = {
   analysisMs: number[];
   equity: number;
   outbox: PositionOutboxItem[];
+  live: LiveRuntime;
 };
 
 type Checkpoint = Omit<RuntimeState, "analysisMs">;
@@ -79,7 +137,7 @@ function initialState(): RuntimeState {
     lastAlarmAt: null, lastSuccessAt: null, lastHeartbeatAt: null, lastStopCheckpointAt: null, nextAlarmAt: null, lastUniverseAt: 0, lastChartMirrorAt: 0,
     utcDay: day(), alarmCount: 0, d1Writes: 0, nonAlarmWrites: 0, d1RetryAt: 0, d1FailureCount: 0, equityVersion: 0, ancillaryCursor: 0, subrequestCount: 0, maxSubrequestsInAlarm: 0, sequenceRebuilds: 0, lastProcessedSlot: -1, feedFailures: {},
     lastError: null, d1MirrorError: null, riskBreach: false, tickSize: Object.fromEntries(DEFAULT_SYMBOLS.map((symbol) => [symbol, 0.0001])), contractMeta: {},
-    decisions: {}, plans: {}, positions: {}, evidence: {}, analysisMs: [], equity: 1_000, outbox: [],
+    decisions: {}, plans: {}, positions: {}, evidence: {}, analysisMs: [], equity: 1_000, outbox: [], live: initialLiveState(),
   };
 }
 
@@ -119,13 +177,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private sessionWarmup: Record<string, number> = {};
   private authorityReady = true;
   private authorityView = { positions: {} as RuntimeState["positions"], equity: 1_000, equityVersion: 0 };
+  private liveClient: GateLiveClient | null = null;
 
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
       const saved = await ctx.storage.get<Checkpoint>("checkpoint");
       if (saved?.authoritySchemaVersion === AUTHORITY_SCHEMA_VERSION) {
-        this.runtime = { ...initialState(), ...saved, version: SYSTEM_VERSION, symbols: [...DEFAULT_SYMBOLS], outbox: saved.outbox ?? [], analysisMs: [], state: "WARMING" };
+        this.runtime = { ...initialState(), ...saved, version: SYSTEM_VERSION, symbols: [...DEFAULT_SYMBOLS], outbox: saved.outbox ?? [], live: saved.live ?? initialLiveState(), analysisMs: [], state: "WARMING" };
         for (const symbol of new Set([...Object.keys(this.runtime.decisions), ...Object.keys(this.runtime.plans),
           ...Object.keys(this.runtime.positions), ...Object.keys(this.runtime.evidence), ...Object.keys(this.runtime.feedFailures),
           ...Object.keys(this.runtime.tickSize), ...Object.keys(this.runtime.contractMeta)])) {
@@ -200,7 +259,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.symbols = next;
     this.runtime.tickSize = { ...this.runtime.tickSize, ...Object.fromEntries(ranked.map((row) => [row.symbol, row.tickSize])) };
     const oldMeta = this.runtime.contractMeta;
-    this.runtime.contractMeta = { ...oldMeta, ...Object.fromEntries(ranked.map((row) => [row.symbol, { quantoMultiplier: row.quantoMultiplier, maintenanceRate: row.maintenanceRate, fundingRate: row.fundingRate }])) };
+    this.runtime.contractMeta = { ...oldMeta, ...Object.fromEntries(ranked.map((row) => [row.symbol, { quantoMultiplier: row.quantoMultiplier, maintenanceRate: row.maintenanceRate, leverageMax: row.leverageMax, fundingRate: row.fundingRate }])) };
     this.runtime.lastUniverseAt = now;
     if (changed) {
       for (const symbol of Object.keys(this.runtime.plans)) {
@@ -355,6 +414,266 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.runtime.d1Writes += 1;
       this.runtime.lastChartMirrorAt = now;
     } catch { /* Chart mirroring is optional and must never interrupt PAPER authority. */ }
+  }
+
+  private async gateLive() {
+    if (!this.env.OWNER_ACCESS_TOKEN) throw new Error("所有者访问码尚未配置");
+    this.liveClient ??= await loadGateLiveClient(this.env.DB, this.env.OWNER_ACCESS_TOKEN);
+    this.runtime.live.credentialConfigured = true;
+    return this.liveClient;
+  }
+
+  private liveOpenRisk() {
+    const positionRisk = Object.values(this.runtime.live.positions).reduce((sum, position) => sum + (position?.status === "OPEN"
+      ? remainingStressRisk(position, this.runtime.evidence[position.symbol]?.midpoint ?? position.entryPrice) : 0), 0);
+    const pendingRisk = Object.values(this.runtime.live.entries).reduce((sum, entry) => sum + (entry && ["SUBMITTING", "OPEN"].includes(entry.status)
+      ? entry.plannedRisk : 0), 0);
+    return positionRisk + pendingRisk;
+  }
+
+  private async cancelLiveEntry(client: GateLiveClient, entry: LiveEntry) {
+    if (entry.status === "FILLED" || entry.status === "CANCELLED") return;
+    if (entry.exchangeOrderId) await client.cancelOrder(entry.kind, entry.exchangeOrderId);
+    entry.status = "CANCELLED";
+    entry.lastError = null;
+  }
+
+  private async ensureLiveStop(client: GateLiveClient, position: LivePosition, openPriceOrders: Awaited<ReturnType<GateLiveClient["snapshot"]>>["priceOrders"]) {
+    const existing = position.stopTag ? openPriceOrders.find((order) => liveOrderTag(order) === position.stopTag) : null;
+    if (existing) {
+      position.stopOrderId = liveOrderId(existing) ?? position.stopOrderId;
+      position.stopSubmittingAt = null;
+    } else if (position.stopOrderId) {
+      position.stopOrderId = null;
+      position.stopTag = null;
+      position.stopPrice = null;
+      position.stopSubmittingAt = null;
+    }
+    const tick = this.runtime.tickSize[position.symbol] ?? position.currentStop * 1e-8;
+    if (position.stopOrderId && position.stopPrice != null && Math.abs(position.stopPrice - position.currentStop) < tick * 0.5) return;
+    if (position.stopOrderId) {
+      try {
+        await client.amendStop(position.stopOrderId, position.currentStop);
+        position.stopPrice = position.currentStop;
+        return;
+      } catch (error) {
+        if (!position.exitRequestedAt) {
+          position.exitRequestedAt = Date.now();
+          position.exitReason = "PROTECTIVE_STOP_UPDATE_FAILED";
+          await client.closePosition(position.symbol, liveExitTag(position.id));
+        }
+        throw new Error(`结构止损更新失败，已请求市价退出：${safeError(error)}`);
+      }
+    }
+    if (position.stopTag && position.stopSubmittingAt && Date.now() - position.stopSubmittingAt < 6_000) return;
+    const stop = buildLiveStopIntent(position);
+    position.stopTag = stop.tag;
+    position.stopPrice = position.currentStop;
+    position.stopSubmittingAt = Date.now();
+    await this.saveCheckpoint(Date.now(), true);
+    try {
+      const nextStopId = await client.createStop(stop);
+      position.stopOrderId = nextStopId;
+      position.stopSubmittingAt = null;
+    } catch (error) {
+      if (!position.exitRequestedAt) {
+        position.exitRequestedAt = Date.now();
+        position.exitReason = "PROTECTIVE_STOP_CREATE_FAILED";
+        await client.closePosition(position.symbol, liveExitTag(position.id));
+      }
+      throw new Error(`结构止损挂单失败，已请求市价退出：${safeError(error)}`);
+    }
+  }
+
+  private async syncLive(now: number, initialEnable = false) {
+    const activePositions = Object.values(this.runtime.live.positions).some((position) => position?.status === "OPEN");
+    const activeEntries = Object.values(this.runtime.live.entries).some((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status));
+    if (!this.runtime.live.requestedEnabled && !activePositions && !activeEntries && !initialEnable) return;
+    const client = await this.gateLive();
+    const snapshot = await client.snapshot();
+    const equity = Number(snapshot.account.total ?? 0);
+    const available = Number(snapshot.account.available ?? 0);
+    if (!(equity > 0) || !(available >= 0)) throw new Error("Gate 合约账户权益不可用");
+    if (snapshot.account.in_dual_mode === true || ["dual", "dual_plus"].includes(String(snapshot.account.position_mode ?? "").toLowerCase())) {
+      throw new Error("Gate 当前不是单向持仓模式");
+    }
+    this.runtime.live.equity = equity;
+    this.runtime.live.available = available;
+    this.runtime.live.lastSyncAt = now;
+
+    const knownTags = new Set([
+      ...Object.values(this.runtime.live.entries).flatMap((entry) => entry?.tag && !["FILLED", "CANCELLED"].includes(entry.status) ? [entry.tag] : []),
+      ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" && position.stopTag ? [position.stopTag] : []),
+    ]);
+    const exchangeOrders = [...snapshot.orders, ...snapshot.priceOrders];
+    const unknownOrders = exchangeOrders.filter((order) => !knownTags.has(liveOrderTag(order) ?? ""));
+    const actualPositions = snapshot.positions.filter((position) => Number(position.size ?? 0) !== 0);
+    const unmanagedPositions = actualPositions.filter((actual) => {
+      const symbol = actual.contract ?? "";
+      const side: Side = Number(actual.size ?? 0) > 0 ? "LONG" : "SHORT";
+      const position = this.runtime.live.positions[symbol];
+      const entry = this.runtime.live.entries[symbol];
+      return !(position?.status === "OPEN" && position.side === side)
+        && !(entry?.side === side && (["SUBMITTING", "OPEN", "FILLED", "ERROR"].includes(entry.status)
+          || (entry.status === "CANCELLED" && now - entry.createdAt < 60_000)));
+    });
+    if (initialEnable && (unknownOrders.length || unmanagedPositions.length)) {
+      throw new Error("Gate 已有未纳管仓位或挂单；为避免冲突，实盘未开启");
+    }
+
+    for (const [symbol, entry] of Object.entries(this.runtime.live.entries)) {
+      if (!entry || entry.status === "FILLED" || entry.status === "CANCELLED") continue;
+      const openOrder = exchangeOrders.find((order) => liveOrderTag(order) === entry.tag);
+      if (openOrder) {
+        entry.status = "OPEN";
+        entry.exchangeOrderId = liveOrderId(openOrder) ?? entry.exchangeOrderId;
+        entry.missingSince = null;
+      } else {
+        entry.missingSince ??= now;
+        const inspected = await client.inspectEntry(entry.kind, symbol, entry.tag, entry.exchangeOrderId);
+        if (inspected) {
+          entry.exchangeOrderId = liveOrderId(inspected) ?? entry.exchangeOrderId;
+          entry.status = liveEntryDisposition(inspected, entry.kind);
+          entry.lastError = entry.status === "ERROR" ? `Gate 挂单执行失败：${inspected.finish_as ?? inspected.status ?? "unknown"}` : null;
+        } else if (now - entry.missingSince >= 6_000) {
+          entry.status = "CANCELLED";
+        }
+      }
+      const plan = this.runtime.plans[symbol] ?? null;
+      const shouldCancel = !this.runtime.live.requestedEnabled || !plan || plan.id !== entry.planId || plan.state === "CANCELLED" || now >= entry.expiresAt;
+      if (shouldCancel && openOrder && entry.exchangeOrderId) await this.cancelLiveEntry(client, entry);
+      else if (shouldCancel && !openOrder && entry.status !== "FILLED" && entry.missingSince != null && now - entry.missingSince >= 6_000) entry.status = "CANCELLED";
+    }
+
+    for (const actual of actualPositions) {
+      const symbol = actual.contract ?? "";
+      if (!DEFAULT_SYMBOLS.includes(symbol)) throw new Error(`发现未纳管实盘仓位 ${symbol || "UNKNOWN"}`);
+      const exchangeSize = Number(actual.size ?? 0);
+      const side: Side = exchangeSize > 0 ? "LONG" : "SHORT";
+      let position = this.runtime.live.positions[symbol] ?? null;
+      if (!position || position.status !== "OPEN") {
+        const entry = this.runtime.live.entries[symbol];
+        if (!entry || entry.side !== side || (!["SUBMITTING", "OPEN", "FILLED", "ERROR"].includes(entry.status)
+          && !(entry.status === "CANCELLED" && now - entry.createdAt < 60_000))) throw new Error(`发现未纳管实盘仓位 ${symbol}`);
+        const entryPrice = Number(actual.entry_price ?? entry.trigger) || entry.trigger;
+        const multiplier = this.runtime.contractMeta[symbol]?.quantoMultiplier ?? 1;
+        const notional = Math.abs(exchangeSize) * entryPrice * multiplier;
+        const leverage = Math.max(1, Number(actual.leverage ?? entry.leverage) || entry.leverage);
+        position = {
+          id: entry.planId, symbol, side, scenario: entry.scenario, entryAt: now, entryPrice,
+          initialStop: entry.invalidation, currentStop: entry.invalidation, currentTarget: entry.target,
+          plannedRisk: notional * (Math.abs(entryPrice - entry.invalidation) / Math.max(entryPrice, 1e-9) + 0.0018),
+          notional, targetScore: this.runtime.plans[symbol]?.score ?? 0, targetIdentity: this.runtime.plans[symbol]?.targetIdentity,
+          status: "OPEN", exchangeSize: Math.abs(exchangeSize), leverage, margin: notional / leverage,
+          stopOrderId: null, stopTag: null, stopPrice: null, stopSubmittingAt: null, exitRequestedAt: null, exchangeUpdatedAt: now,
+        };
+        this.runtime.live.positions[symbol] = position;
+        entry.status = "FILLED";
+        entry.missingSince = null;
+      } else if (position.side !== side) {
+        throw new Error(`${symbol} 实盘方向与系统记录冲突`);
+      }
+      position.exchangeUpdatedAt = now;
+      const evidence = this.runtime.evidence[symbol];
+      if (evidence?.fresh && evidence.ancillaryFresh && !position.exitRequestedAt) {
+        const bestTarget = position.side === "LONG" ? evidence.topLong : evidence.topShort;
+        const oppositeTarget = position.side === "LONG" ? evidence.topShort : evidence.topLong;
+        const updated = updatePosition(position, { now, price: evidence.midpoint, bestTarget, oppositeTarget, absorption: evidence.absorption });
+        if (updated.status === "CLOSED") {
+          position = { ...position, currentStop: updated.currentStop, currentTarget: updated.currentTarget,
+            exitReason: updated.exitReason, exitRequestedAt: now };
+          await client.closePosition(symbol, liveExitTag(position.id));
+          this.runtime.live.positions[symbol] = position;
+        } else {
+          position = { ...position, currentStop: updated.currentStop, currentTarget: updated.currentTarget, targetScore: updated.targetScore };
+          this.runtime.live.positions[symbol] = position;
+        }
+      }
+      if (!position.exitRequestedAt) {
+        await this.ensureLiveStop(client, position, snapshot.priceOrders);
+        if (this.liveOpenRisk() > equity * PORTFOLIO_RISK_CAP + 1e-8) {
+          position.exitRequestedAt = now;
+          position.exitReason = "RISK_CAP_AFTER_FILL";
+          await client.closePosition(symbol, liveExitTag(position.id));
+        }
+      } else if (now - position.exitRequestedAt >= 6_000) {
+        position.exitRequestedAt = now;
+        await client.closePosition(symbol, liveExitTag(position.id));
+      }
+    }
+
+    for (const [symbol, position] of Object.entries(this.runtime.live.positions)) {
+      if (!position || position.status !== "OPEN") continue;
+      const actual = actualPositions.find((row) => row.contract === symbol && Number(row.size ?? 0) !== 0);
+      if (actual) continue;
+      const stopId = position.stopOrderId ?? (position.stopTag
+        ? liveOrderId(snapshot.priceOrders.find((order) => liveOrderTag(order) === position.stopTag) ?? {})
+        : null);
+      if (stopId) await client.cancelOrder("PRICE_TRIGGER", stopId);
+      this.runtime.live.positions[symbol] = { ...position, status: "CLOSED", exitAt: now,
+        exitPrice: this.runtime.evidence[symbol]?.midpoint ?? position.entryPrice,
+        exitReason: position.exitReason ?? "EXCHANGE_FLAT", stopOrderId: null, stopTag: null, stopPrice: null, stopSubmittingAt: null };
+    }
+
+    if (!this.runtime.live.requestedEnabled) {
+      this.runtime.live.operational = false;
+      this.runtime.live.lastError = null;
+      return;
+    }
+    if (unknownOrders.length) throw new Error("Gate 存在未纳管挂单；已停止新开仓");
+
+    this.runtime.live.operational = true;
+    this.runtime.live.lastError = null;
+    let availableForNewEntries = available;
+    for (const symbol of this.runtime.symbols) {
+      const plan = this.runtime.plans[symbol] ?? null;
+      if (!plan || plan.state !== "PREPARED" || now >= plan.expiresAt || this.runtime.live.positions[symbol]?.status === "OPEN") continue;
+      const prior = this.runtime.live.entries[symbol];
+      // A timed-out submission remains reserved until Gate proves it absent for
+      // six seconds. Never replay the same plan while its status is ambiguous.
+      if (prior && prior.planId === plan.id && prior.status !== "CANCELLED") continue;
+      if (prior && !["FILLED", "CANCELLED"].includes(prior.status)) await this.cancelLiveEntry(client, prior);
+      const intent = buildLiveEntryIntent({ plan, equity, available: availableForNewEntries, openRisk: this.liveOpenRisk(),
+        quantoMultiplier: this.runtime.contractMeta[symbol]?.quantoMultiplier ?? 1,
+        leverageMax: this.runtime.contractMeta[symbol]?.leverageMax ?? 50 });
+      const entry: LiveEntry = {
+        planId: plan.id, symbol, side: plan.side, scenario: plan.marketState, kind: intent.kind, status: "SUBMITTING",
+        tag: intent.tag, exchangeOrderId: null, createdAt: now, expiresAt: plan.expiresAt, trigger: plan.entryTrigger,
+        invalidation: plan.invalidation, target: plan.target, size: intent.size, contracts: intent.contracts,
+        notional: intent.notional, plannedRisk: intent.plannedRisk, leverage: intent.leverage, margin: intent.margin,
+        missingSince: null, lastError: null,
+      };
+      this.runtime.live.entries[symbol] = entry;
+      await this.saveCheckpoint(now, true);
+      try {
+        await client.setLeverage(symbol, intent.leverage);
+        entry.exchangeOrderId = await client.createEntry(intent);
+        entry.status = "OPEN";
+        availableForNewEntries = Math.max(0, availableForNewEntries - intent.margin);
+      } catch (error) {
+        entry.status = "ERROR";
+        entry.lastError = safeError(error);
+        throw error;
+      }
+    }
+  }
+
+  private async setLiveMode(enabled: boolean) {
+    this.runtime.live.requestedEnabled = enabled;
+    if (!enabled) this.runtime.live.operational = false;
+    this.runtime.live.changedAt = Date.now();
+    this.runtime.live.lastError = null;
+    try {
+      await this.syncLive(Date.now(), enabled);
+      await this.saveCheckpoint(Date.now(), true);
+      return { ok: true, live: this.runtime.live };
+    } catch (error) {
+      if (enabled) this.runtime.live.requestedEnabled = false;
+      this.runtime.live.operational = false;
+      this.runtime.live.lastError = safeError(error);
+      await this.saveCheckpoint(Date.now(), true).catch(() => undefined);
+      return { ok: false, error: this.runtime.live.lastError, live: this.runtime.live };
+    }
   }
 
   private async processBooks(now: number, cycleSymbols = [...this.runtime.symbols]) {
@@ -599,6 +918,20 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       const successes = books.successes;
       subrequests += books.requests;
+      const liveNeedsSync = this.runtime.live.requestedEnabled
+        || Object.values(this.runtime.live.entries).some((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status))
+        || Object.values(this.runtime.live.positions).some((position) => position?.status === "OPEN");
+      if (liveNeedsSync) {
+        const liveRequestsBefore = this.liveClient?.requestCount ?? 0;
+        try {
+          await this.syncLive(Date.now());
+        } catch (error) {
+          this.runtime.live.operational = false;
+          this.runtime.live.lastError = safeError(error);
+        } finally {
+          subrequests += Math.max(0, (this.liveClient?.requestCount ?? liveRequestsBefore) - liveRequestsBefore);
+        }
+      }
       await this.mirrorChartCandles(now);
       this.runtime.lastAlarmAt = now;
       this.runtime.lastSuccessAt = successes > 0 ? now : this.runtime.lastSuccessAt;
@@ -640,22 +973,32 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       return json({ ok: true, stale, nextAlarmAt: await this.ctx.storage.getAlarm() });
     }
-    if (path === "/status") {
+    if (path === "/status" || path === "/owner-runtime") {
       await this.ensureAlarm();
-      const { outbox, ...publicRuntime } = this.runtime;
+      const { outbox, live, ...publicRuntime } = this.runtime;
       const stale = !this.authorityReady || this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > 3_000;
       const effectiveState = !this.authorityReady ? "RECOVERY_REQUIRED" : stale ? "RECONNECTING" : this.runtime.state;
-      return json({ ...publicRuntime, ...this.authorityView, outboxLength: outbox.length,
+      return json({ ...publicRuntime, ...this.authorityView, ...(path === "/owner-runtime" ? { live } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length,
         oldestOutboxAgeMs: outbox.length ? Math.max(0, Date.now() - (outbox[0].position.exitAt ?? outbox[0].position.entryAt)) : 0,
         authorityReady: this.authorityReady, generatedAt: Date.now(), state: effectiveState, stale,
         analysisP99Ms: percentile99(this.runtime.analysisMs), limits: { loopMs: LOOP_MS, markets: 3, warmupSnapshots: WARMUP_SNAPSHOTS,
-          maxAncillaryConcurrency: MAX_ANCILLARY_CONCURRENCY, maxSubrequestsPerAlarm: 5, plannedAlarmRequestsPerDay: 43_200,
+          maxAncillaryConcurrency: MAX_ANCILLARY_CONCURRENCY, maxSubrequestsPerAlarm: 24, plannedAlarmRequestsPerDay: 43_200,
           plannedAlarmWritesPerDay: 43_200, watchdogWriteReservePerDay: WATCHDOG_WRITE_RESERVE,
           nonAlarmWriteCapPerDay: NON_ALARM_WRITE_CAP, nonAlarmWritesToday: this.runtime.nonAlarmWrites,
           plannedDoWritesPerDay: 54_080,
           internalAnalysisP99RedlineMs: 25, topLevelCpuP99RedlineMs: 8, assumedRuntimePollSeconds: 15,
           plannedForegroundDoRequestsPerDay: 5_760, plannedCronWatchdogsPerDay: 1_440, plannedTotalDoRequestsPerDay: 50_400,
           maxOpenPositions: MAX_OPEN_POSITIONS, plannedMaxD1BilledWritesPerDay: 4_800 } });
+    }
+    if (path === "/owner-status" && request.method === "GET") {
+      await this.ensureAlarm();
+      return json({ live: this.runtime.live, generatedAt: Date.now() });
+    }
+    if (path === "/live-mode" && request.method === "POST") {
+      const body = await request.json<{ enabled?: unknown }>().catch(() => ({} as { enabled?: unknown }));
+      if (typeof body.enabled !== "boolean") return json({ error: "invalid live mode" }, 400);
+      const result = await this.setLiveMode(body.enabled);
+      return json(result, result.ok ? 200 : 409);
     }
     return json({ error: "not found" }, 404);
   }
@@ -665,11 +1008,12 @@ const isAsset = (pathname: string) => pathname.startsWith("/_next/") || pathname
 let runtimeCache: { response: string; expiresAt: number } | null = null;
 let historyCache: { response: string; expiresAt: number } | null = null;
 const candleCache = new Map<string, { response: string; expiresAt: number }>();
-async function runtimeStatus(env: CloudflareEnv, useCache = true) {
-  if (useCache && runtimeCache && runtimeCache.expiresAt > Date.now()) return new Response(runtimeCache.response, { headers: { "Content-Type": "application/json", "Cache-Control": "private, max-age=10" } });
-  const response = await env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/status");
+const failedLogins = new Map<string, { count: number; resetAt: number }>();
+async function runtimeStatus(env: CloudflareEnv, useCache = true, owner = false) {
+  if (!owner && useCache && runtimeCache && runtimeCache.expiresAt > Date.now()) return new Response(runtimeCache.response, { headers: { "Content-Type": "application/json", "Cache-Control": "private, max-age=10" } });
+  const response = await env.MARKET_STREAM.getByName("primary").fetch(owner ? "https://market-stream/owner-runtime" : "https://market-stream/status");
   const body = await response.text();
-  if (response.ok) runtimeCache = { response: body, expiresAt: Date.now() + 10_000 };
+  if (!owner && response.ok) runtimeCache = { response: body, expiresAt: Date.now() + 10_000 };
   return new Response(body, { status: response.status, headers: { "Content-Type": "application/json", "Cache-Control": "private, max-age=10" } });
 }
 
@@ -717,6 +1061,61 @@ async function chartCandles(url: URL, env: CloudflareEnv) {
   }
 }
 
+async function ownerAuthenticated(request: Request, env: CloudflareEnv) {
+  return env.OWNER_ACCESS_TOKEN ? verifyOwnerSession(request, env.OWNER_ACCESS_TOKEN) : false;
+}
+
+async function authSession(request: Request, env: CloudflareEnv) {
+  return json({ configured: ownerAuthConfigured(env.OWNER_ACCESS_TOKEN), authenticated: await ownerAuthenticated(request, env), username: "owner" });
+}
+
+async function ownerLogin(request: Request, env: CloudflareEnv) {
+  if (!sameOriginMutation(request)) return json({ error: "请求来源验证失败" }, 403);
+  if (!ownerAuthConfigured(env.OWNER_ACCESS_TOKEN)) return json({ error: "后台所有者访问码尚未配置" }, 503);
+  const contentLength = Number(request.headers.get("content-length") ?? 0);
+  if (contentLength > 2_048) return json({ error: "登录请求过大" }, 413);
+  const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+  const attempt = failedLogins.get(ip);
+  if (attempt && attempt.resetAt > Date.now() && attempt.count >= 5) return json({ error: "登录尝试过多，请稍后再试" }, 429);
+  if (attempt && attempt.resetAt <= Date.now()) failedLogins.delete(ip);
+  const body = await request.json<{ username?: unknown; password?: unknown }>().catch(() => ({} as { username?: unknown; password?: unknown }));
+  const username = typeof body.username === "string" ? body.username : "";
+  const password = typeof body.password === "string" ? body.password : "";
+  const valid = username === "owner" && await ownerPasswordMatches(password, env.OWNER_ACCESS_TOKEN!);
+  if (!valid) {
+    const current = failedLogins.get(ip);
+    failedLogins.set(ip, { count: (current?.count ?? 0) + 1, resetAt: current?.resetAt ?? Date.now() + 15 * 60_000 });
+    return json({ error: "账户或密码不正确" }, 401);
+  }
+  failedLogins.delete(ip);
+  const session = await createOwnerSession(env.OWNER_ACCESS_TOKEN!);
+  return new Response(JSON.stringify({ ok: true, authenticated: true, username: "owner" }), {
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "Set-Cookie": ownerSessionCookie(session) },
+  });
+}
+
+async function ownerLogout(request: Request) {
+  if (!sameOriginMutation(request)) return json({ error: "请求来源验证失败" }, 403);
+  return new Response(JSON.stringify({ ok: true }), {
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "Set-Cookie": clearOwnerSessionCookie() },
+  });
+}
+
+async function ownerLiveStatus(request: Request, env: CloudflareEnv) {
+  if (!await ownerAuthenticated(request, env)) return json({ error: "请先登录" }, 401);
+  return env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/owner-status");
+}
+
+async function ownerLiveMode(request: Request, env: CloudflareEnv) {
+  if (!sameOriginMutation(request)) return json({ error: "请求来源验证失败" }, 403);
+  if (!await ownerAuthenticated(request, env)) return json({ error: "请先登录" }, 401);
+  const body = await request.json<{ enabled?: unknown }>().catch(() => ({} as { enabled?: unknown }));
+  if (typeof body.enabled !== "boolean") return json({ error: "实盘开关参数无效" }, 400);
+  return env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/live-mode", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: body.enabled }),
+  });
+}
+
 const worker = {
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
     const url = new URL(request.url);
@@ -728,10 +1127,15 @@ const worker = {
       const live = runtimeReady(runtime as RuntimeHealthShape);
       return json({ ok: response.ok && live, ready: live, version: SYSTEM_VERSION, mode: "PAPER", runtime, topLevelCpuMs: performance.now() - started }, live ? 200 : 503);
     }
-    if (url.pathname === "/api/runtime" && request.method === "GET") return runtimeStatus(env);
+    if (url.pathname === "/api/runtime" && request.method === "GET") return runtimeStatus(env, true, await ownerAuthenticated(request, env));
     if (url.pathname === "/api/history" && request.method === "GET") return paperHistory(env);
     if (url.pathname === "/api/candles" && request.method === "GET") return chartCandles(url, env);
-    if (url.pathname.startsWith("/api/")) return json({ error: "read-only PAPER surface" }, 404);
+    if (url.pathname === "/api/auth/session" && request.method === "GET") return authSession(request, env);
+    if (url.pathname === "/api/auth/login" && request.method === "POST") return ownerLogin(request, env);
+    if (url.pathname === "/api/auth/logout" && request.method === "POST") return ownerLogout(request);
+    if (url.pathname === "/api/live/status" && request.method === "GET") return ownerLiveStatus(request, env);
+    if (url.pathname === "/api/live/mode" && request.method === "POST") return ownerLiveMode(request, env);
+    if (url.pathname.startsWith("/api/")) return json({ error: "not found" }, 404);
     return handler.fetch(request, env, ctx);
   },
   async scheduled(_controller: ScheduledController, env: CloudflareEnv, ctx: ExecutionContext) {

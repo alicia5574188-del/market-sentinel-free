@@ -979,6 +979,14 @@ jobs:
             (if type == "array" then .[0].results[0] else .results[0] end).tables_csv ==
             "live_exchange_credentials,paper_events,paper_plans,paper_positions,system_settings"
           ' "$RUNNER_TEMP/main-table-gate.json" >/dev/null
+      - name: Require owner authentication secret without exposing it
+        working-directory: release
+        run: |
+          set -euo pipefail
+          npx wrangler secret list --name "$WORKER_NAME" --format json \
+            > "$RUNNER_TEMP/main-secrets.json"
+          jq -e 'any(.[]; .name == "OWNER_ACCESS_TOKEN")' \
+            "$RUNNER_TEMP/main-secrets.json" >/dev/null
       - name: Record already-idempotent D1 migrations and deploy final config
         working-directory: release
         run: |
@@ -1017,6 +1025,14 @@ jobs:
           curl -fsS --max-time 15 "$WORKER_BASE_URL/api/history" \
             > "$RUNNER_TEMP/main-history.json"
           jq -e '.items | type == "array"' "$RUNNER_TEMP/main-history.json" >/dev/null
+          curl -fsS --max-time 15 "$WORKER_BASE_URL/api/auth/session" \
+            > "$RUNNER_TEMP/main-auth-session.json"
+          jq -e '.configured == true and .authenticated == false and .username == "owner"' \
+            "$RUNNER_TEMP/main-auth-session.json" >/dev/null
+          curl -fsS --max-time 15 "$WORKER_BASE_URL/api/runtime" \
+            > "$RUNNER_TEMP/main-public-runtime.json"
+          jq -e '(.live == null) and (.liveMode.requestedEnabled | type == "boolean") and (.liveMode.operational | type == "boolean")' \
+            "$RUNNER_TEMP/main-public-runtime.json" >/dev/null
           candles_ok=0
           for attempt in 1 2 3 4 5 6; do
             if curl -fsS --max-time 15 "$WORKER_BASE_URL/api/candles?symbol=BTC_USDT&interval=15m" \
