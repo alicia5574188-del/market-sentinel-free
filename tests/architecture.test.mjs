@@ -71,6 +71,9 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
 test("cutover is credential-bound and removes legacy DOs only after v6 health", async () => {
   const workflow = await read(".github/workflows/sentinel-v2-ci.yml");
   assert.match(workflow, /id,exchange,environment,ciphertext,iv,crypto_version,key_hint,gate_user_id,owner_account_id,permission_summary_json,status,last_verified_at,last_error,created_at,updated_at/);
+  assert.match(workflow, /index\.prepare\.js/);
+  assert.match(workflow, /class RetiredDurableObject extends DurableObject/);
+  assert.ok(workflow.indexOf("index.prepare.js") < workflow.indexOf("Deploy v6 prepare config"));
   assert.ok(workflow.indexOf("wrangler.prepare.json") < workflow.indexOf("Deploy reviewed final v7"));
   assert.ok(workflow.indexOf("Require continuously advancing v6 health") < workflow.indexOf("Deploy reviewed final v7"));
   assert.ok(workflow.indexOf("Recheck Gate twice") < workflow.indexOf("Deploy reviewed final v7"));

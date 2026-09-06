@@ -1,5 +1,5 @@
 # Status
 
-Rebuild is implemented locally on rebuild/three-state-core and is not deployed. The active design uses one SQLite MarketStream Durable Object, 2-second Gate futures REST books for a dynamic four-contract universe, bounded ancillary futures data, compact multi-scale structure, estimated liquidation cohorts, and a minimal read-only PAPER UI.
+Rebuild is implemented on rebuild/three-state-core and is not deployed. Manual cutover run #509 passed verification, read-only Gate zero-inventory checks, credential fingerprinting, and D1 prepare, then failed safely before v6 because Cloudflare requires legacy Durable Object classes to remain exported until their delete-class migration. Production was restored to its baseline and the temporary token was removed. The v6 workflow now generates inert, transition-only exports; v7 still deploys the clean one-class runtime.
 
 MarketStream storage is the PAPER authority. D1 is an idempotent versioned mirror with an outbox. The release workflow uses an immutable trusted read-only Gate preflight, complete 15-column credential fingerprinting, v6 create-only deployment and health/restart checks, v7 legacy Durable Object retirement, then the explicit D1 purge. Direct behavior tests, migration tests, clean build, typecheck, lint, and artifact scans pass locally; no production action was taken.

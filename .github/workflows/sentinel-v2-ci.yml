@@ -208,7 +208,33 @@ jobs:
           ' dist/server/wrangler.json >/dev/null
           jq '.migrations = .migrations[0:-1]' dist/server/wrangler.json \
             > dist/server/wrangler.prepare.json
+          # Cloudflare requires every class retained by an earlier migration to
+          # remain exported until the later delete-class migration is applied.
+          # This entry exists only for v6: no legacy namespace is bound, every
+          # legacy request is inert, and v7 deploys the clean index.js instead.
+          cat > dist/server/index.prepare.js <<'EOF'
+          import { DurableObject } from "cloudflare:workers";
+          export { default, MarketStream } from "./index.js";
+
+          class RetiredDurableObject extends DurableObject {
+            async fetch() {
+              return new Response("retired", { status: 410 });
+            }
+          }
+
+          export class PositionMonitor extends RetiredDurableObject {}
+          export class MarketScanner extends RetiredDurableObject {}
+          export class LiveTradingCoordinator extends RetiredDurableObject {}
+          export class MarketScannerV2 extends RetiredDurableObject {}
+          export class HTE31MarketScanner extends RetiredDurableObject {}
+          export class HTE31TradeManager extends RetiredDurableObject {}
+          export class HistoricalArchive extends RetiredDurableObject {}
+          EOF
+          jq '.main = "index.prepare.js"' dist/server/wrangler.prepare.json \
+            > "$RUNNER_TEMP/wrangler.prepare.json"
+          mv "$RUNNER_TEMP/wrangler.prepare.json" dist/server/wrangler.prepare.json
           jq -e '
+            .main == "index.prepare.js" and
             .migrations[-1] == {
               tag: "v6-liquidity-three-state",
               new_sqlite_classes: ["MarketStream"]
