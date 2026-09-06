@@ -302,6 +302,7 @@ jobs:
               no_bundle: .no_bundle,
               compatibility_date: .compatibility_date,
               compatibility_flags: .compatibility_flags,
+              rules: .rules,
               d1_databases: [{
                 binding: "DB",
                 database_name: "market-sentinel-free",
@@ -322,7 +323,8 @@ jobs:
             (.durable_objects == null) and
             (.migrations == null) and
             (.triggers == null) and
-            (.assets == null)
+            (.assets == null) and
+            (.rules | type == "array" and length > 0)
           ' dist/server/wrangler.initial-preview.json >/dev/null
 
           alias="p${GITHUB_RUN_ID}"
@@ -608,6 +610,7 @@ jobs:
               no_bundle: .no_bundle,
               compatibility_date: .compatibility_date,
               compatibility_flags: .compatibility_flags,
+              rules: .rules,
               d1_databases: [{
                 binding: "DB",
                 database_name: "market-sentinel-free",
