@@ -57,6 +57,9 @@ test("external API is read-only PAPER and the operator UI explains every decisio
   assert.match(worker, /FROM paper_positions/);
   assert.doesNotMatch(worker, /request\.method === "POST"|request\.method === "DELETE"|createOrder|submitOrder/);
   assert.match(page, /setInterval\(read, 15_000\)/);
+  assert.match(page, /RUNTIME_REQUEST_TIMEOUT_MS = 30_000/);
+  assert.match(page, /RUNTIME_DISPLAY_TTL_MS = 90_000/);
+  assert.doesNotMatch(page, /responseFresh && !error/);
   assert.match(page, /AbortController/);
   assert.match(page, /document\.hidden/);
   assert.match(page, /系统现在的决定/);

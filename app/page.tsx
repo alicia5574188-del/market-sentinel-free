@@ -21,6 +21,8 @@ type Timeframe = "1m" | "15m" | "1h";
 type Candle = { time: number; volume: number; close: number; high: number; low: number; open: number };
 
 const INITIAL_EQUITY = 1_000;
+const RUNTIME_REQUEST_TIMEOUT_MS = 30_000;
+const RUNTIME_DISPLAY_TTL_MS = 90_000;
 const stateText: Record<string, string> = { BREAKOUT: "突破", REVERSAL: "反转", RANGE: "震荡", LIVE: "运行中", WARMING: "预热中", DEGRADED: "部分数据恢复中", RECONNECTING: "重新连接中", RECOVERY_REQUIRED: "需要恢复", STARTING: "启动中" };
 const sourceText: Record<string, string> = { BOOK: "真实挂单区", STOP_POOL: "止损集中区", LIQUIDATION: "估计清算区" };
 const exitText: Record<string, string> = { STRUCTURAL_STOP: "结构失效止损", TARGET_ABSORBED: "目标流动性已被吸收", TARGET_VANISHED: "目标消失", OPPOSITE_TARGET_DOMINANT: "反向目标占优" };
@@ -59,7 +61,7 @@ export default function Home() {
     const read = async () => {
       if (!active || document.hidden || inFlight) return;
       setClock(Date.now()); inFlight = true; controller = new AbortController();
-      const timeout = setTimeout(() => controller?.abort(), 5_000);
+      const timeout = setTimeout(() => controller?.abort(), RUNTIME_REQUEST_TIMEOUT_MS);
       try {
         const response = await fetch("/api/runtime", { cache: "no-store", signal: controller.signal });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -81,9 +83,9 @@ export default function Home() {
     return () => { active = false; controller?.abort(); clearInterval(timer); document.removeEventListener("visibilitychange", visibility); };
   }, []);
 
-  const responseFresh = runtime != null && clock - receivedAt < 20_000 && clock - runtime.generatedAt < 20_000;
-  const healthy = runtimeReady(runtime, responseFresh && !error);
-  const operational = runtime != null && responseFresh && !error && runtime.authorityReady && !runtime.stale;
+  const responseFresh = runtime != null && clock - receivedAt < RUNTIME_DISPLAY_TTL_MS && clock - runtime.generatedAt < RUNTIME_DISPLAY_TTL_MS;
+  const healthy = runtimeReady(runtime, responseFresh);
+  const operational = runtime != null && responseFresh && runtime.authorityReady && !runtime.stale;
   const openPositions = useMemo(() => runtime?.symbols.flatMap((symbol) => runtime.positions[symbol]?.status === "OPEN" ? [{ symbol, position: runtime.positions[symbol]! }] : []) ?? [], [runtime]);
   const preparedPlans = useMemo(() => runtime?.symbols.flatMap((symbol) => runtime.plans[symbol]?.state === "PREPARED" ? [{ symbol, plan: runtime.plans[symbol]! }] : []) ?? [], [runtime]);
   const bestDecision = useMemo(() => runtime?.symbols.map((symbol) => ({ symbol, decision: runtime.decisions[symbol] })).filter((row): row is { symbol: string; decision: Decision } => row.decision != null).sort((a, b) => b.decision.score - a.decision.score)[0] ?? null, [runtime]);
