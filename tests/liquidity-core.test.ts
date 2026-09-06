@@ -239,6 +239,9 @@ test("HTTP 200 data with an old timestamp stays stale and a clear REST sequence 
   const unchanged = usableSnapshot({ symbol: "X_USDT", observedAt: 10_000, sequence: 100, tickSize: 1, bids: [], asks: [] }, 10_001, 100, 10_000);
   assert.equal(unchanged.unchanged, true);
   assert.equal(unchanged.sequenceFault, false);
+  const sameMillisecondAdvance = usableSnapshot({ symbol: "X_USDT", observedAt: 10_000, sequence: 101, tickSize: 1, bids: [], asks: [] }, 10_001, 100, 10_000);
+  assert.equal(sameMillisecondAdvance.advanced, true);
+  assert.equal(sameMillisecondAdvance.sequenceFault, false);
   const reset = usableSnapshot({ symbol: "X_USDT", observedAt: 12_000, sequence: 10, tickSize: 1, bids: [], asks: [] }, 12_001, 100, 10_000);
   assert.equal(reset.sequenceReset, true);
   assert.equal(reset.sequenceFault, false);

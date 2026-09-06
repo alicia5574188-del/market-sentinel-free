@@ -57,6 +57,7 @@ test("at-least-once alarm and independent feed recovery are explicit", async () 
   assert.ok(worker.indexOf("setAlarm(next)") < worker.indexOf("saveCheckpoint(now)"));
   assert.match(worker, /this\.processBooks\(now, cycleSymbols\)/);
   assert.doesNotMatch(worker, /this\.processBooks\(slot \* LOOP_MS/);
+  assert.match(worker, /usableSnapshot\(snapshot, Math\.max\(now, Date\.now\(\)\)/);
 });
 
 test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {

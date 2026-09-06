@@ -369,7 +369,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       const { symbol, snapshot } = result.value;
       let memory = this.memory[symbol] ??= emptySymbolMemory();
-      const validation = usableSnapshot(snapshot, now, memory.lastSequence, memory.lastBookObservedAt);
+      // Network time belongs to freshness validation too. An exchange update
+      // received near the request timeout may legitimately be later than the
+      // alarm's start timestamp.
+      const validation = usableSnapshot(snapshot, Math.max(now, Date.now()), memory.lastSequence, memory.lastBookObservedAt);
       if (validation.sequenceReset) {
         const replacement = emptySymbolMemory();
         replacement.quantoMultiplier = memory.quantoMultiplier;

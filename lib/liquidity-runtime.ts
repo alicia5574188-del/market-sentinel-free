@@ -454,7 +454,10 @@ export function reconcilePaper(input: {
 export function usableSnapshot(snapshot: BookSnapshot, now: number, lastSequence: number, lastObservedAt = 0) {
   const sequenceReset = snapshot.sequence > 0 && lastSequence > 0 && snapshot.sequence < lastSequence && snapshot.observedAt > lastObservedAt;
   const unchanged = snapshot.sequence > 0 && snapshot.sequence === lastSequence && snapshot.observedAt === lastObservedAt;
-  const advanced = lastSequence === 0 || (snapshot.sequence > lastSequence && snapshot.observedAt > lastObservedAt);
+  // Sequence is the ordering authority. Gate can publish more than one book
+  // id within the same timestamp, so equal (but never older) update time is a
+  // valid advance.
+  const advanced = lastSequence === 0 || (snapshot.sequence > lastSequence && snapshot.observedAt >= lastObservedAt);
   const sequenceFault = snapshot.sequence > 0 && lastSequence > 0 && !sequenceReset && !unchanged && !advanced;
   return { fresh: dataIsFresh(snapshot.observedAt, now), sequenceFault, sequenceReset, unchanged, advanced };
 }
