@@ -79,6 +79,13 @@ test("cutover is credential-bound and removes legacy DOs only after v6 health", 
   assert.ok(workflow.indexOf("index.prepare.js") < workflow.indexOf("Deploy v6 prepare config"));
   assert.match(workflow, /for attempt in 1 2 3 4 5/);
   assert.match(workflow, /valid non-zero inventory result is authoritative/);
+  assert.match(workflow, /wrangler\.initial-preview\.json/);
+  assert.match(workflow, /CUTOVER_PREFLIGHT_URL\/api\/live\/preflight/);
+  assert.match(workflow, /\.durable_objects == null/);
+  assert.match(workflow, /\.migrations == null/);
+  assert.ok(workflow.indexOf("versions upload") < workflow.indexOf("Require two fresh read-only Gate"));
+  assert.ok(workflow.indexOf("Require two fresh read-only Gate") < workflow.indexOf("Deploy v6 prepare config"));
+  assert.doesNotMatch(workflow, /Generate masked TTL token and deploy trusted read-only preflight/);
   assert.ok(workflow.indexOf("wrangler.prepare.json") < workflow.indexOf("Deploy reviewed final v7"));
   assert.ok(workflow.indexOf("Require continuously advancing v6 health") < workflow.indexOf("Deploy reviewed final v7"));
   assert.ok(workflow.indexOf("Recheck Gate twice") < workflow.indexOf("Deploy reviewed final v7"));
