@@ -9,7 +9,10 @@ export const MIN_SINGLE_TRADE_RISK_RATE = 0.01;
 export const MAX_SINGLE_TRADE_RISK_RATE = 0.018;
 export const MAX_NOTIONAL_TO_EQUITY = 4;
 export const MIN_NET_TARGET_RETURN_ON_EQUITY = 0.015;
-export const DYNAMIC_EXIT_CONFIRMATIONS = 2;
+export const DYNAMIC_EXIT_CONFIRMATIONS = 3;
+export const PLAN_SOFT_INVALIDATION_CONFIRMATIONS = 2;
+export const MIN_SOFT_EXIT_HOLD_MS = 2 * 60_000;
+export const SOFT_EXIT_ADVERSE_R = 0.25;
 export const TARGET_MARGIN_RATE = 0.10;
 export const PORTFOLIO_MARGIN_CAP = 0.30;
 
@@ -126,6 +129,9 @@ export type PaperPlan = Decision & {
   notional: number;
   leverage?: number;
   margin?: number;
+  invalidationSignalMinute?: number;
+  invalidationSignalCount?: number;
+  invalidationSignalReason?: "TARGET_GONE_CANCEL" | "ACTIVATION_LOST_CANCEL" | "ROUTE_WEAK_CANCEL";
 };
 
 export type PaperPosition = {
@@ -156,6 +162,7 @@ export type PaperPosition = {
   exitSignalMinute?: number;
   exitSignalCount?: number;
   exitSignalReason?: string;
+  stopUpdatedMinute?: number;
 };
 
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
@@ -436,6 +443,7 @@ export function updatePosition(position: PaperPosition, input: {
   oppositeTarget: LiquidityZone | null;
   absorption: number;
   confirmationMinute?: number;
+  confirmationPrice?: number;
   continuationRoute?: LiquidityRoute | null;
 }): PaperPosition {
   if (position.status === "CLOSED") return position;
@@ -450,7 +458,11 @@ export function updatePosition(position: PaperPosition, input: {
   };
   const stopped = observed.side === "LONG" ? input.price <= observed.currentStop : input.price >= observed.currentStop;
   const close = (reason: string) => closePaperPosition(observed, input.now, input.price, reason);
-  if (stopped) return close("STRUCTURAL_STOP");
+  if (stopped) {
+    const initialRisk = Math.max(Math.abs(observed.entryPrice - observed.initialStop), observed.entryPrice * 0.0001);
+    const tightened = Math.abs(observed.currentStop - observed.initialStop) > initialRisk * 0.001;
+    return close(tightened ? "DYNAMIC_PROTECTION_STOP" : "STRUCTURAL_STOP");
+  }
 
   const arrived = observed.side === "LONG" ? input.price >= observed.currentTarget : input.price <= observed.currentTarget;
   if (arrived && input.absorption >= 0.55) return close("TARGET_ABSORBED");
@@ -481,33 +493,50 @@ export function updatePosition(position: PaperPosition, input: {
     exitSignalMinute = input.confirmationMinute;
     exitSignalReason = adverseReason;
   }
-  if (adverseReason && exitSignalCount >= DYNAMIC_EXIT_CONFIRMATIONS) {
+  const initialRisk = Math.max(Math.abs(observed.entryPrice - observed.initialStop), observed.entryPrice * 0.0001);
+  const adverseMove = observed.side === "LONG" ? observed.entryPrice - input.price : input.price - observed.entryPrice;
+  const softExitEligible = input.now - observed.entryAt >= MIN_SOFT_EXIT_HOLD_MS
+    && adverseMove / initialRisk >= SOFT_EXIT_ADVERSE_R;
+  if (adverseReason && softExitEligible && exitSignalCount >= DYNAMIC_EXIT_CONFIRMATIONS) {
     return close(adverseReason);
   }
 
   let currentStop = observed.currentStop;
-  const favorable = observed.side === "LONG" ? input.price > observed.entryPrice : input.price < observed.entryPrice;
-  if (favorable) {
-    const rawCandidate = observed.side === "LONG"
-      ? observed.entryPrice + (input.price - observed.entryPrice) * 0.25
-      : observed.entryPrice - (observed.entryPrice - input.price) * 0.25;
-    const initialRisk = Math.max(Math.abs(observed.entryPrice - observed.initialStop), observed.entryPrice * 0.0001);
-    const step = initialRisk * 0.1;
-    const steps = observed.side === "LONG"
-      ? Math.max(0, Math.floor((rawCandidate - observed.initialStop) / step))
-      : Math.max(0, Math.floor((observed.initialStop - rawCandidate) / step));
-    const candidate = observed.side === "LONG" ? observed.initialStop + steps * step : observed.initialStop - steps * step;
-    currentStop = observed.side === "LONG" ? Math.max(currentStop, candidate) : Math.min(currentStop, candidate);
+  let stopUpdatedMinute = observed.stopUpdatedMinute;
+  const completedMinute = input.confirmationMinute && input.confirmationMinute > observed.entryAt
+    && input.confirmationMinute !== observed.stopUpdatedMinute && Number.isFinite(input.confirmationPrice)
+    ? input.confirmationMinute : null;
+  if (completedMinute && input.confirmationPrice != null) {
+    const confirmedMove = observed.side === "LONG"
+      ? input.confirmationPrice - observed.entryPrice
+      : observed.entryPrice - input.confirmationPrice;
+    const confirmedR = confirmedMove / initialRisk;
+    let candidate: number | null = null;
+    if (confirmedR >= 1) {
+      candidate = observed.side === "LONG"
+        ? observed.entryPrice - initialRisk * 0.5
+        : observed.entryPrice + initialRisk * 0.5;
+    }
+    const feeDistance = observed.entryPrice * ROUND_TRIP_FRICTION_RATE;
+    if (confirmedMove >= feeDistance + initialRisk * 0.5) {
+      const lockedMove = Math.max(feeDistance, confirmedMove * 0.35);
+      candidate = observed.side === "LONG" ? observed.entryPrice + lockedMove : observed.entryPrice - lockedMove;
+    }
+    if (candidate != null) {
+      currentStop = observed.side === "LONG" ? Math.max(currentStop, candidate) : Math.min(currentStop, candidate);
+    }
+    stopUpdatedMinute = completedMinute;
   }
   const targetStillBest = input.bestTarget && input.bestTarget.side === observed.side;
   return {
     ...observed,
     currentStop,
-    currentTarget: targetStillBest ? input.bestTarget!.price : position.currentTarget,
-    targetScore: targetStillBest ? input.bestTarget!.score : position.targetScore,
+    currentTarget: observed.routeId ? position.currentTarget : targetStillBest ? input.bestTarget!.price : position.currentTarget,
+    targetScore: observed.routeId ? position.targetScore : targetStillBest ? input.bestTarget!.score : position.targetScore,
     exitSignalMinute,
     exitSignalCount,
     exitSignalReason,
+    stopUpdatedMinute,
   };
 }
 

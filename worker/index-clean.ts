@@ -398,6 +398,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           memory.timeframeBias[key] = structureDirection(memory.structureByTimeframe[key]);
           const seconds = timeframe === "1m" ? 60 : timeframe === "15m" ? 900 : 3_600;
           memory.timeframeUpdatedAt[key] = (rows.at(-1)!.time + seconds) * 1_000;
+          if (timeframe === "1m") memory.lastCompletedMinuteClose = rows.at(-1)!.close;
         }
       }
     }
@@ -839,7 +840,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           && Math.abs(route.entryTrigger - position!.currentTarget) / Math.max(position!.currentTarget, 1e-9) <= route.activationDistanceRate)
           .sort((a, b) => b.score - a.score)[0] ?? null;
         const updated = updatePosition(position, { now, price: evidence.midpoint, bestTarget, oppositeTarget, absorption: evidence.absorption,
-          confirmationMinute: this.memory[symbol]?.timeframeUpdatedAt.m1, continuationRoute });
+          confirmationMinute: this.memory[symbol]?.timeframeUpdatedAt.m1,
+          confirmationPrice: this.memory[symbol]?.lastCompletedMinuteClose, continuationRoute });
         if (updated.status === "CLOSED") {
           position = { ...position, currentStop: updated.currentStop, currentTarget: updated.currentTarget,
             exitReason: updated.exitReason, exitRequestedAt: now };
@@ -1063,7 +1065,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const openRisk = openStressRisk(this.runtime);
       const reconciled = reconcilePaper({ now, midpoint: analyzed.midpoint, fresh: validation.fresh, sequenceFault: validation.sequenceFault,
         decision, plan: priorPlan, position: priorPosition, zones: analyzed.zones, absorption: analyzed.absorption,
-        confirmationMinute: memory.timeframeUpdatedAt.m1, equity: markToMarketEquity(this.runtime), openRisk, allowOpen: false,
+        confirmationMinute: memory.timeframeUpdatedAt.m1, confirmationPrice: memory.lastCompletedMinuteClose,
+        equity: markToMarketEquity(this.runtime), openRisk, allowOpen: false,
         protectOnly: (this.sessionWarmup[symbol] ?? 0) < WARMUP_SNAPSHOTS,
         activeRoutes: analyzed.routes, breakoutConfirmation: priorPlan ? analyzed.confirmationBySide[priorPlan.side] : undefined,
         maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate, leverageMax: this.runtime.contractMeta[symbol]?.leverageMax });
@@ -1187,6 +1190,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const reconciled = reconcilePaper({ now, midpoint: row.analyzed.midpoint, fresh: true, sequenceFault: false,
         decision: this.runtime.decisions[row.symbol], plan: priorPlan, position: priorPosition, zones: row.analyzed.zones,
         absorption: row.analyzed.absorption, confirmationMinute: this.memory[row.symbol]?.timeframeUpdatedAt.m1,
+        confirmationPrice: this.memory[row.symbol]?.lastCompletedMinuteClose,
         equity: markToMarketEquity(this.runtime), openRisk, allowOpen: true,
         activeRoutes: row.analyzed.routes, breakoutConfirmation: priorPlan ? row.analyzed.confirmationBySide[priorPlan.side] : undefined,
         maintenanceRate: this.runtime.contractMeta[row.symbol]?.maintenanceRate, leverageMax: this.runtime.contractMeta[row.symbol]?.leverageMax });
