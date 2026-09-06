@@ -4,6 +4,8 @@ export const STALE_AFTER_MS = 3_000;
 export const WALL_WINDOW = 30;
 export const ROUND_TRIP_FRICTION_RATE = 0.0018;
 export const MIN_TARGET_DISTANCE_RATE = 0.0025;
+export const MIN_NET_REWARD_RISK = 1.2;
+export const DYNAMIC_EXIT_CONFIRMATIONS = 2;
 
 export type Side = "LONG" | "SHORT";
 export type MarketState = "BREAKOUT" | "REVERSAL" | "RANGE";
@@ -97,6 +99,9 @@ export type PaperPosition = {
   exitReason?: string;
   realizedPnl?: number;
   feesAndSlippage?: number;
+  exitSignalMinute?: number;
+  exitSignalCount?: number;
+  exitSignalReason?: string;
 };
 
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
@@ -316,6 +321,15 @@ export function sizePaperPosition(input: {
   return { allowedLoss, notional, lossRate, portfolioRiskAfter: input.openRisk + allowedLoss };
 }
 
+export function tradeEconomics(input: { entry: number; target: number; lossRate: number; confidence: number }) {
+  const rewardRate = Math.abs(input.target - input.entry) / Math.max(input.entry, 1e-9);
+  const netRewardRate = Math.max(0, rewardRate - ROUND_TRIP_FRICTION_RATE);
+  const netRewardRisk = netRewardRate / Math.max(input.lossRate, 1e-9);
+  const expectedReturnRate = input.confidence * netRewardRate - (1 - input.confidence) * input.lossRate;
+  return { rewardRate, netRewardRate, netRewardRisk, expectedReturnRate,
+    executable: netRewardRisk >= MIN_NET_REWARD_RISK && expectedReturnRate > 0 };
+}
+
 export function remainingStressRisk(position: PaperPosition, markPrice = position.entryPrice) {
   if (position.status !== "OPEN") return 0;
   const adverseMove = position.side === "LONG"
@@ -338,20 +352,34 @@ export function updatePosition(position: PaperPosition, input: {
   bestTarget: LiquidityZone | null;
   oppositeTarget: LiquidityZone | null;
   absorption: number;
+  confirmationMinute?: number;
 }): PaperPosition {
   if (position.status === "CLOSED") return position;
   const stopped = position.side === "LONG" ? input.price <= position.currentStop : input.price >= position.currentStop;
   const close = (reason: string) => closePaperPosition(position, input.now, input.price, reason);
   if (stopped) return close("STRUCTURAL_STOP");
 
-  if (!input.bestTarget) return close("TARGET_DISAPPEARED");
-
   const arrived = position.side === "LONG" ? input.price >= position.currentTarget : input.price <= position.currentTarget;
+  if (arrived && input.absorption >= 0.55) return close("TARGET_ABSORBED");
+
   const oppositeDominates = input.oppositeTarget && input.bestTarget
-    ? input.oppositeTarget.score > input.bestTarget.score * 1.18
+    ? input.oppositeTarget.score > Math.max(input.bestTarget.score, position.targetScore) * 1.5
     : false;
-  if ((arrived && input.absorption >= 0.55) || oppositeDominates) {
-    return close(arrived ? "TARGET_ABSORBED" : "OPPOSITE_UTILITY_DOMINANT");
+  const adverseReason = !input.bestTarget ? "TARGET_DISAPPEARED" : oppositeDominates ? "OPPOSITE_UTILITY_DOMINANT" : null;
+  let exitSignalMinute = position.exitSignalMinute;
+  let exitSignalCount = position.exitSignalCount ?? 0;
+  let exitSignalReason = position.exitSignalReason;
+  if (!adverseReason) {
+    exitSignalMinute = undefined;
+    exitSignalCount = 0;
+    exitSignalReason = undefined;
+  } else if (input.confirmationMinute && input.confirmationMinute > position.entryAt && input.confirmationMinute !== exitSignalMinute) {
+    exitSignalCount = exitSignalReason === adverseReason ? exitSignalCount + 1 : 1;
+    exitSignalMinute = input.confirmationMinute;
+    exitSignalReason = adverseReason;
+  }
+  if (adverseReason && exitSignalCount >= DYNAMIC_EXIT_CONFIRMATIONS) {
+    return close(adverseReason);
   }
 
   let currentStop = position.currentStop;
@@ -374,6 +402,9 @@ export function updatePosition(position: PaperPosition, input: {
     currentStop,
     currentTarget: targetStillBest ? input.bestTarget!.price : position.currentTarget,
     targetScore: targetStillBest ? input.bestTarget!.score : position.targetScore,
+    exitSignalMinute,
+    exitSignalCount,
+    exitSignalReason,
   };
 }
 

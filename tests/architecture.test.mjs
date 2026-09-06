@@ -49,6 +49,7 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   ]);
   assert.match(worker, /return handler\.fetch\(request, env, ctx\)/);
   assert.match(worker, /url\.pathname === "\/api\/history" && request\.method === "GET"/);
+  assert.match(worker, /url\.pathname === "\/api\/order-chart" && request\.method === "GET"/);
   assert.match(worker, /url\.pathname === "\/api\/candles" && request\.method === "GET"/);
   assert.match(worker, /GATE_USDT_FUTURES/);
   assert.match(worker, /\["1m", "15m", "1h"\]\.includes\(interval\)/);
@@ -57,6 +58,9 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(worker, /actual candles warming/);
   assert.match(worker, /serving last actual candles/);
   assert.match(worker, /FROM paper_positions/);
+  assert.match(worker, /ORDER_ENTRY_CHART/);
+  assert.match(worker, /ORDER_EXIT_CHART/);
+  assert.match(worker, /fees_and_slippage AS feesAndSlippage/);
   assert.match(worker, /url\.pathname === "\/api\/auth\/login" && request\.method === "POST"/);
   assert.match(worker, /url\.pathname === "\/api\/live\/mode" && request\.method === "POST"/);
   assert.match(worker, /url\.pathname === "\/api\/live\/credentials" && \["GET", "PUT", "DELETE"\]\.includes\(request\.method\)/);
@@ -92,6 +96,10 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(page, /hidden=\{tab !== "live"\}/);
   assert.doesNotMatch(page, /className="mode-switch"/);
   assert.match(page, /setInterval\(readHistory, 15_000\)/);
+  assert.match(page, /function OrderReviewChart/);
+  assert.match(page, /查看 1 分钟进出场 K 线/);
+  assert.match(page, /进场 \{num\(item\.entryPrice, 5\)\}/);
+  assert.match(page, /出场 \{num\(exitPrice, 5\)\}/);
   assert.match(page, /recentClosedPositions/);
   assert.match(page, /当前持仓/);
   assert.match(page, /刚刚结束/);
@@ -162,6 +170,8 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
   assert.ok(worker.indexOf("await fetchActiveContracts()") < worker.indexOf("const booksPromise = this.processBooks"));
   assert.match(worker, /runtimeCache.*expiresAt/s);
   assert.match(worker, /this\.runtime\.d1Writes \+ billedWrites > 4_800/);
+  assert.match(worker, /review-entry:\$\{position\.id\}/);
+  assert.match(worker, /review-exit:\$\{item\.id\}/);
 });
 
 test("cutover is credential-bound and removes legacy DOs only after v6 health", async () => {

@@ -12,12 +12,19 @@
 - The v6 create-only deployment uses generated inert exports for retired Durable Object classes because Cloudflare requires them until v7 applies delete-class. These shims are not bound and are absent from the final v7 entry.
 - The public dashboard remains read-only and exposes only plain-language decisions plus cached PAPER history. Authenticated owner responses may additionally expose Gate balances and managed order/position metadata, but never credentials.
 - Every market card decides freshness independently. Its switchable 1m/15m/1h chart reads a bounded D1 mirror of the same actual completed Gate candles already collected by the 24-hour MarketStream authority, avoiding a second ad-hoc Gate request path and avoiding foreground contention with the authority. It overlays liquidity, trigger, invalidation, target, or live position levels; execution intent remains explicit text rather than an ambiguous drawing.
-- A prepared entry is a frozen, executable thesis, not a two-second moving suggestion. It lasts at most 15 minutes; no neutral, same-side, or opposite-side recalculation may cancel, move, or replace it. A fresh trigger crossing is evaluated first. It cancels only for authoritative data faults, target disappearance before the trigger, expiry, or trigger-time risk/economic failure. Destinations inside 0.25% and plans that cannot cover modeled 0.18% round-trip friction are rejected before presentation.
+- A prepared entry is a frozen, executable thesis, not a two-second moving suggestion. It lasts at most 15 minutes; no neutral, same-side, or opposite-side recalculation may move or replace it. It cancels for authoritative data faults, target disappearance before the trigger, expiry, or trigger-time risk/economic failure. Every plan and actual trigger fill must retain at least 1.2:1 net reward/risk after modeled 0.18% round-trip friction; REVERSAL/RANGE additionally require absorption of at least 0.55 at the trigger.
 - Routine main releases run one full deploy acceptance gate; the identical monitor remains scheduled every six hours instead of repeating immediately after every successful deploy.
 - Live enabling is transactional at the strategy batch boundary: size/risk/margin checks for every BTC/ETH/SOL candidate complete before the first Gate mutation. Any later submission failure forces the switch back off and reconciles/cancels every system-tagged entry; turning the switch off performs the same forced reconciliation even when runtime memory is empty.
 - Only Gate orders tagged with the system entry prefix may be treated as recoverable orphans. The owner has a separate authenticated cleanup action for those orders; manual Gate orders are never cancelled by that action.
 - Gate API save/replace/delete lives in the authenticated Live Center. Save validates the account read-only, encrypts server-side, never returns the secret, and never enables LIVE. Delete is allowed only while LIVE is off and no managed position or pending entry remains; scheduled schema monitoring accepts either zero or one credential row.
 - The Brain decision hero and PAPER account summary belong only to the Brain tab. Orders, Live, History, and Settings start directly with their own content; the fixed iPhone bottom navigation remains global.
+
+# 2026-09-06 — 亏损归因、动态退出去噪与逐单复盘
+
+- 生产的首批 6 笔已结束订单全部只持有 2 秒；两笔 BTC 在进出场价格完全相同的情况下只损失往返成本，另有一笔 SOL 毛盈利但仍被成本变成净亏。这证明首要故障是两秒流动性重算直接触发退出，而不是六次方向判断全部错误。
+- 结构止损继续实时执行。`TARGET_DISAPPEARED` 和 `OPPOSITE_UTILITY_DOMINANT` 改为必须在进场后两个不同的已收盘 1m K 线上连续成立；同一分钟重复轮询不重复计数，信号恢复就清零。反向效用阈值提高到原目标效用的 1.5 倍。
+- 目标身份允许同方向、价格相差不超过 0.15% 的连续区域，避免订单簿分桶抖动把同一目标误判为消失。PAPER 与 LIVE 使用完全相同的目标连续性和确认逻辑。
+- 历史订单的真实 Gate 1m 进场片段随 OPEN 写入，出场片段在已收盘 K 线可用后补齐；每单最多保存 120 根，保留开头 40 根与结尾 80 根，受既有 D1 4,800 次/日硬上限约束。
 # 2026-09-06 — Gate 撤单必须用无损订单 ID 并回查确认
 
 - Gate 的 int64 订单编号在所有响应中都先转为字符串，禁止经过 JavaScript `number`。

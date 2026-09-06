@@ -4,9 +4,9 @@ import {
   dataIsFresh,
   decideThreeState,
   planTriggered,
-  ROUND_TRIP_FRICTION_RATE,
   sizePaperPosition,
   stablePriceBin,
+  tradeEconomics,
   updatePosition,
   zoneUtility,
   type BookSnapshot,
@@ -364,6 +364,7 @@ export function reconcilePaper(input: {
   position: PaperPosition | null;
   zones: LiquidityZone[];
   absorption: number;
+  confirmationMinute?: number;
   equity: number;
   openRisk: number;
   allowOpen?: boolean;
@@ -374,12 +375,14 @@ export function reconcilePaper(input: {
   const events: string[] = [];
   let expiredThisCycle = false;
   let cancelledThisCycle = false;
-  const triggerReached = plan?.state === "PREPARED" && planTriggered(plan, input.midpoint);
-  const targetPresent = plan?.state !== "PREPARED" || input.zones.some((zone) => zone.side === plan!.side && zone.identity === plan!.targetIdentity);
+  const continuousTarget = (side: "LONG" | "SHORT", identity: string | undefined, price: number) => input.zones
+    .filter((zone) => zone.side === side && (zone.identity === identity || Math.abs(zone.price - price) / Math.max(price, 1e-9) <= 0.0015))
+    .sort((a, b) => b.score - a.score)[0] ?? null;
+  const targetPresent = plan?.state !== "PREPARED" || continuousTarget(plan.side, plan.targetIdentity, plan.target) != null;
   // Freeze a prepared thesis instead of chasing every two-second recalculation.
-  // A fresh opposing score never replaces it, and a trigger reached on this
-  // snapshot has priority over a coincident target-book recalculation.
-  if ((!input.fresh || input.sequenceFault || (!targetPresent && !triggerReached)) && plan?.state === "PREPARED") {
+  // A fresh opposing score never replaces it, but the frozen destination must
+  // still exist when price reaches the trigger.
+  if ((!input.fresh || input.sequenceFault || !targetPresent) && plan?.state === "PREPARED") {
     plan = { ...plan, state: "CANCELLED" };
     cancelledThisCycle = true;
     events.push(!input.fresh ? "STALE_CANCEL" : input.sequenceFault ? "SEQUENCE_REBUILD_CANCEL" : "TARGET_GONE_CANCEL");
@@ -387,10 +390,10 @@ export function reconcilePaper(input: {
   if (position?.status === "OPEN" && input.fresh && !input.sequenceFault) {
     const own = input.protectOnly ? zoneUtility({ side: position.side, price: position.currentTarget, liquidity: 1, cascade: 0, pathCost: 1,
       distanceCost: 1, probabilityReach: 1, persistence: 1, source: "BOOK" })
-      : input.zones.filter((zone) => zone.side === position!.side && (!position!.targetIdentity
-        || zone.identity === position!.targetIdentity)).sort((a, b) => b.score - a.score)[0] ?? null;
+      : continuousTarget(position.side, position.targetIdentity, position.currentTarget);
     const opposite = input.zones.filter((zone) => zone.side !== position!.side).sort((a, b) => b.score - a.score)[0] ?? null;
-    position = updatePosition(position, { now: input.now, price: input.midpoint, bestTarget: own, oppositeTarget: input.protectOnly ? null : opposite, absorption: input.protectOnly ? 0 : input.absorption });
+    position = updatePosition(position, { now: input.now, price: input.midpoint, bestTarget: own, oppositeTarget: input.protectOnly ? null : opposite,
+      absorption: input.protectOnly ? 0 : input.absorption, confirmationMinute: input.confirmationMinute });
     if (position.status === "CLOSED") {
       events.push(position.exitReason ?? "CLOSED");
       return { plan, position, events };
@@ -411,9 +414,8 @@ export function reconcilePaper(input: {
     if (materiallyDifferent) {
       const sized = sizePaperPosition({ equity: input.equity, entry: input.decision.entryTrigger, invalidation: input.decision.invalidation, feeBps: 10, stressSlippageBps: 8, confidence: clamp(input.decision.score / Math.max(input.decision.score + input.decision.oppositeScore, Number.EPSILON), 0, 1), openRisk: input.openRisk });
       const confidence = clamp(input.decision.score / Math.max(input.decision.score + input.decision.oppositeScore, Number.EPSILON), 0, 1);
-      const rewardRate = Math.abs(input.decision.target - input.decision.entryTrigger) / Math.max(input.decision.entryTrigger, 1e-9);
-      const positiveEv = confidence * rewardRate - (1 - confidence) * sized.lossRate - ROUND_TRIP_FRICTION_RATE > 0;
-      if (sized.allowedLoss > 0 && sized.portfolioRiskAfter <= input.equity * 0.05 + 1e-9 && rewardRate > ROUND_TRIP_FRICTION_RATE && positiveEv) {
+      const economics = tradeEconomics({ entry: input.decision.entryTrigger, target: input.decision.target, lossRate: sized.lossRate, confidence });
+      if (sized.allowedLoss > 0 && sized.portfolioRiskAfter <= input.equity * 0.05 + 1e-9 && economics.executable) {
         plan = { ...input.decision, id: `${input.decision.symbol}:${input.now}`, state: "PREPARED", createdAt: input.now, expiresAt: input.now + PLAN_TTL_MS, plannedRisk: sized.allowedLoss, notional: sized.notional };
         events.push("PLAN_PREPARED");
       } else if (sized.allowedLoss > 0) {
@@ -427,12 +429,11 @@ export function reconcilePaper(input: {
       stressSlippageBps: 8, confidence, openRisk: input.openRisk });
     const invalidFill = plan.side === "LONG" ? input.midpoint <= plan.invalidation : input.midpoint >= plan.invalidation;
     const passedTarget = plan.side === "LONG" ? input.midpoint >= plan.target : input.midpoint <= plan.target;
-    const rewardRate = Math.abs(plan.target - input.midpoint) / Math.max(input.midpoint, 1e-9);
-    const friction = ROUND_TRIP_FRICTION_RATE;
-    const positiveEv = confidence * rewardRate - (1 - confidence) * resized.lossRate - friction > 0;
-    if (invalidFill || resized.allowedLoss <= 0 || resized.portfolioRiskAfter > input.equity * 0.05 + 1e-9 || passedTarget || rewardRate <= friction || !positiveEv) {
+    const economics = tradeEconomics({ entry: input.midpoint, target: plan.target, lossRate: resized.lossRate, confidence });
+    const scenarioConfirmed = plan.marketState === "BREAKOUT" || input.absorption >= 0.55;
+    if (invalidFill || resized.allowedLoss <= 0 || resized.portfolioRiskAfter > input.equity * 0.05 + 1e-9 || passedTarget || !economics.executable || !scenarioConfirmed) {
       plan = { ...plan, state: "CANCELLED" };
-      events.push(invalidFill || resized.portfolioRiskAfter > input.equity * 0.05 + 1e-9 ? "GAP_RISK_CANCEL" : "GAP_ECONOMICS_CANCEL");
+      events.push(invalidFill || resized.portfolioRiskAfter > input.equity * 0.05 + 1e-9 ? "GAP_RISK_CANCEL" : !scenarioConfirmed ? "TRIGGER_STRUCTURE_CANCEL" : "GAP_ECONOMICS_CANCEL");
       return { plan, position, events };
     }
     plan = { ...plan, state: "TRIGGERED" };

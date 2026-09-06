@@ -23,7 +23,7 @@ type Runtime = {
 type AuthSession = { configured: boolean; authenticated: boolean; username: string };
 type CredentialStatus = { configured: boolean; environment: string | null; keyHint: string | null; gateUserId: string | null; status: string; lastVerifiedAt: number | null; lastError: string | null; updatedAt: number | null };
 type CredentialVerification = { equity: number; available: number; positions: number; orders: number; conditionalOrders: number; checkedAt: number };
-type HistoryItem = { id: string; symbol: string; marketState: MarketState; side: Side; status: "OPEN" | "CLOSED"; entryAt: number; entryPrice: number; currentStop: number; currentTarget: number; plannedRisk: number; notional: number; exitAt: number | null; exitPrice: number | null; exitReason: string | null; realizedPnl: number | null };
+type HistoryItem = { id: string; symbol: string; marketState: MarketState; side: Side; status: "OPEN" | "CLOSED"; entryAt: number; entryPrice: number; initialStop: number; currentStop: number; currentTarget: number; plannedRisk: number; notional: number; exitAt: number | null; exitPrice: number | null; exitReason: string | null; realizedPnl: number | null; feesAndSlippage: number | null };
 type Tab = "brain" | "orders" | "live" | "history" | "settings";
 type LiveView = "account" | "orders" | "api";
 type Timeframe = "1m" | "15m" | "1h";
@@ -34,13 +34,14 @@ const RUNTIME_REQUEST_TIMEOUT_MS = 30_000;
 const RUNTIME_DISPLAY_TTL_MS = 90_000;
 const stateText: Record<string, string> = { BREAKOUT: "突破", REVERSAL: "反转", RANGE: "震荡", LIVE: "运行中", WARMING: "预热中", DEGRADED: "部分数据恢复中", RECONNECTING: "重新连接中", RECOVERY_REQUIRED: "需要恢复", STARTING: "启动中" };
 const sourceText: Record<string, string> = { BOOK: "真实挂单区", STOP_POOL: "止损集中区", LIQUIDATION: "估计清算区" };
-const exitText: Record<string, string> = { STRUCTURAL_STOP: "结构失效止损", TARGET_ABSORBED: "目标流动性已被吸收", TARGET_VANISHED: "目标消失", OPPOSITE_TARGET_DOMINANT: "反向目标占优", OPPOSITE_UTILITY_DOMINANT: "反向流动性效用占优", RISK_CAP_REBALANCE: "组合风险重新平衡" };
+const exitText: Record<string, string> = { STRUCTURAL_STOP: "结构失效止损", TARGET_ABSORBED: "目标流动性已被吸收", TARGET_DISAPPEARED: "目标流动性连续消失", TARGET_VANISHED: "目标消失", OPPOSITE_TARGET_DOMINANT: "反向目标占优", OPPOSITE_UTILITY_DOMINANT: "反向流动性连续占优", RISK_CAP_REBALANCE: "组合风险重新平衡", PORTFOLIO_RISK_REBALANCE: "组合风险重新平衡" };
 const num = (value: number | null | undefined, digits = 3) => Number.isFinite(value) ? Number(value).toLocaleString("zh-CN", { maximumFractionDigits: digits }) : "—";
 const signed = (value: number, digits = 2) => `${value >= 0 ? "+" : ""}${num(value, digits)}`;
 const time = (value: number | null | undefined) => value ? new Date(value).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : "—";
 const sideText = (side: Side) => side === "LONG" ? "做多" : "做空";
 const distancePct = (from: number, to: number) => Math.abs(to - from) / Math.max(from, 1e-9) * 100;
-const rr = (entry: number, stop: number, target: number) => Math.abs(target - entry) / Math.max(Math.abs(entry - stop), 1e-9);
+const netRr = (entry: number, stop: number, target: number) => Math.max(0, Math.abs(target - entry) / Math.max(entry, 1e-9) - .0018)
+  / Math.max(Math.abs(entry - stop) / Math.max(entry, 1e-9) + .0018, 1e-9);
 const displayLeverage = (notional: number, equity: number) => [1, 2, 3, 5, 10, 20, 50].find((value) => notional / value <= equity * .6) ?? 50;
 const friendlyLiveError = (value: string | null | undefined) => !value ? null
   : value.includes("AUTO_INVALID_PARAM_TRIGGER_EXPIRATION")
@@ -189,7 +190,7 @@ export default function Home() {
       const status = position?.status === "OPEN" ? "持仓中" : plan?.state === "PREPARED" ? "等待进场" : intent ? "发现机会" : evidence?.warmup < 30 ? `预热 ${evidence?.warmup ?? 0}/30` : "继续观察";
       return <article className="market" key={symbol}><div className="market-title"><div><small>{symbol.replace("_", "/")}</small><h2>{marketFresh ? status : "数据恢复中"}</h2></div><strong>{marketFresh ? num(evidence?.midpoint, 5) : "—"}</strong></div>
         <div className="plain-answer"><small>系统判断</small><b>{intent ? `${sideText(intent.side)} · ${stateText[intent.marketState]}` : "暂时没有值得执行的方向"}</b><p>{waitReason(runtime, marketFresh, symbol)}</p></div>
-        {intent && <div className="trade-levels"><div><small>准备进场</small><b>{num(intent.entryTrigger, 5)}</b></div><div><small>判断错误就退出</small><b>{num(intent.invalidation, 5)}</b></div><div><small>当前目标</small><b>{num(intent.target, 5)}</b></div><div><small>预计盈亏比</small><b>{num(rr(intent.entryTrigger, intent.invalidation, intent.target), 2)} : 1</b></div></div>}
+        {intent && <div className="trade-levels"><div><small>准备进场</small><b>{num(intent.entryTrigger, 5)}</b></div><div><small>判断错误就退出</small><b>{num(intent.invalidation, 5)}</b></div><div><small>当前目标</small><b>{num(intent.target, 5)}</b></div><div><small>扣成本后盈亏比</small><b>{num(netRr(intent.entryTrigger, intent.invalidation, intent.target), 2)} : 1</b></div></div>}
         <div className="execution"><small>执行方式</small><b>{position?.status === "OPEN" ? "已按实时价格触发，正在持仓" : plan?.state === "PREPARED" ? liveEnabled ? `${plan.marketState === "BREAKOUT" ? "Gate 价格触发" : "Gate 限价"}挂单等待 ${num(plan.entryTrigger, 5)}` : `模拟等待实时价格到达 ${num(plan.entryTrigger, 5)}` : intent ? "方向已形成，等待系统建立进场计划" : "继续等待完整机会"}</b></div>
         <CandleChart symbol={symbol} evidence={evidence} decision={intent} position={position?.status === "OPEN" ? position : null} />
         <details><summary>查看判断依据</summary><p>{intent?.reason.join("；") || "尚未形成完整判断"}</p><div className="targets"><span>上方吸引区：{num(evidence?.topLong?.price, 5)} · {sourceText[evidence?.topLong?.source ?? ""] ?? "识别中"}</span><span>下方吸引区：{num(evidence?.topShort?.price, 5)} · {sourceText[evidence?.topShort?.source ?? ""] ?? "识别中"}</span></div></details>
@@ -208,7 +209,7 @@ export default function Home() {
     <div hidden={tab !== "live"}><LiveCenter auth={auth} runtime={runtime} live={live} liveEnabled={liveEnabled} liveBusy={liveBusy} liveActionError={liveActionError} positions={openLivePositions} entries={openLiveEntries} onLogin={() => setShowLogin(true)} onToggle={liveControl} onCleanup={() => void setLiveMode(false)} /></div>
 
     <section className="history-panel" hidden={tab !== "history"}><div className="section-heading"><div><h2>最近模拟交易</h2><p>只展示真实产生过的记录，不填充示例数据。</p></div><span>{history.filter((item) => item.status === "CLOSED").length} 笔已结束</span></div>
-      {!history.length ? <div className="empty"><b>还没有历史交易</b><p>产生第一笔模拟交易后会自动出现在这里。</p></div> : <div className="history-table">{history.map((item) => <article key={item.id}><div><span className={`side ${item.side.toLowerCase()}`}>{item.side === "LONG" ? "多" : "空"}</span><div><b>{item.symbol.replace("_", "/")}</b><small>{time(item.entryAt)} · {stateText[item.marketState]}</small></div></div><div><small>进场 / 出场</small><b>{num(item.entryPrice, 5)} / {num(item.exitPrice, 5)}</b></div><div><small>结果</small><b className={(item.realizedPnl ?? 0) >= 0 ? "positive" : "negative"}>{item.status === "OPEN" ? "持仓中" : `${signed(item.realizedPnl ?? 0)} U`}</b></div><div><small>结束原因</small><b>{item.status === "OPEN" ? "尚未结束" : exitText[item.exitReason ?? ""] ?? item.exitReason ?? "已结束"}</b></div></article>)}</div>}
+      {!history.length ? <div className="empty"><b>还没有历史交易</b><p>产生第一笔模拟交易后会自动出现在这里。</p></div> : <div className="history-table">{history.map((item) => <HistoryOrder key={item.id} item={item} />)}</div>}
     </section>
 
     <section className="settings-panel" hidden={tab !== "settings"}><button className="setting-row" type="button" onClick={() => auth.authenticated ? void fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(() => { setAuth({ ...auth, authenticated: false }); setRuntime(runtime ? { ...runtime, live: undefined } : runtime); }) : setShowLogin(true)}><div><b>所有者账户</b><p>{auth.authenticated ? "已通过安全会话验证；退出登录不会改变实盘开关。" : "登录后才可以查看真实账户并操作实盘开关。"}</p></div><span className={`setting-value ${auth.authenticated ? "online" : "locked"}`}>{auth.authenticated ? "owner · 退出 ›" : "登录 ›"}</span></button><button className="setting-row" type="button" disabled={liveBusy} onClick={liveControl}><div><b>实盘交易开关</b><p>{liveEnabled ? "关闭后撤销未成交入场挂单；已有仓位继续保护并按策略退出。" : "开启后，实盘完全复用当前 BTC/ETH/SOL 策略和 5% 总风险限制。"}</p></div><span className={`setting-value ${liveEnabled && live?.operational ? "online" : "locked"}`}>{liveBusy ? "处理中…" : !auth.authenticated ? "需登录 ›" : liveEnabled ? live?.operational ? "已开启 ›" : "已开启·待恢复 ›" : "已关闭 ›"}</span></button>{auth.authenticated && <><Setting title="Gate 实盘账户" detail={`可用 ${num(live?.available, 2)} U · ${openLivePositions.length} 个真实持仓`} value={live?.equity != null ? `${num(live.equity, 2)} U` : "连接中"} tone={live?.credentialConfigured ? "online" : "locked"}/><Setting title="实盘执行状态" detail={friendlyLiveError(live?.lastError) || "突破预挂触发单；反转/震荡预挂限价单。"} value={live?.operational ? "可开仓" : liveEnabled ? "暂停新单" : "已关闭"} tone={live?.operational ? "online" : "locked"}/></>}<Setting title="最大组合风险" detail="模拟与实盘均包含手续费和压力滑点，结构止损只允许收紧。" value="5%"/><Setting title="持仓时间与止盈" detail="不固定时间，不固定止盈；目标变化时动态退出。" value="动态"/><Setting title="系统状态" detail="页面关闭后后台仍然持续运行。" value={healthy ? "正常" : "恢复中"} tone={healthy ? "online" : "locked"}/><p className="last-update">最近后台成功：{time(runtime?.lastSuccessAt)}{live?.lastSyncAt ? ` · 实盘核对：${time(live.lastSyncAt)}` : ""}</p></section>
@@ -331,6 +332,73 @@ function LoginModal({ configured, onClose, onSuccess }: { configured: boolean; o
     finally { setBusy(false); }
   };
   return <div className="modal-backdrop" onClick={() => !busy && onClose()}><form className="modal" role="dialog" aria-modal="true" onSubmit={submit} onClick={(event) => event.stopPropagation()}><span className="lock-icon">登</span><h2>所有者登录</h2><p>账户固定为 owner。密码只发送给后台验证，不保存到浏览器，也不会显示 Gate API 密钥。</p><label className="login-field"><span>账户</span><input value="owner" readOnly autoComplete="username" /></label><label className="login-field"><span>密码</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" autoFocus /></label>{!configured && <p className="form-error">后台访问码尚未配置。</p>}{loginError && <p className="form-error">{loginError}</p>}<div className="modal-actions"><button className="secondary" type="button" disabled={busy} onClick={onClose}>取消</button><button type="submit" disabled={busy || !configured || password.length < 16}>{busy ? "登录中…" : "登录"}</button></div></form></div>;
+}
+
+function durationText(start: number, end: number | null) {
+  if (!end) return "持仓中";
+  const seconds = Math.max(0, Math.round((end - start) / 1_000));
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  return minutes < 60 ? `${minutes} 分 ${seconds % 60} 秒` : `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
+}
+
+function HistoryOrder({ item }: { item: HistoryItem }) {
+  const [open, setOpen] = useState(false);
+  const cost = item.feesAndSlippage ?? 0;
+  const gross = (item.realizedPnl ?? 0) + cost;
+  return <article className="history-order"><div><span className={`side ${item.side.toLowerCase()}`}>{item.side === "LONG" ? "多" : "空"}</span><div><b>{item.symbol.replace("_", "/")}</b><small>{time(item.entryAt)} · {stateText[item.marketState]}</small></div></div><div><small>进场 / 出场</small><b>{num(item.entryPrice, 5)} / {num(item.exitPrice, 5)}</b></div><div><small>净结果</small><b className={(item.realizedPnl ?? 0) >= 0 ? "positive" : "negative"}>{item.status === "OPEN" ? "持仓中" : `${signed(item.realizedPnl ?? 0)} U`}</b></div><div><small>持仓 / 结束原因</small><b>{durationText(item.entryAt, item.exitAt)} · {item.status === "OPEN" ? "尚未结束" : exitText[item.exitReason ?? ""] ?? item.exitReason ?? "已结束"}</b></div>
+    <details className="history-review" onToggle={(event) => setOpen(event.currentTarget.open)}><summary>查看 1 分钟进出场 K 线</summary>{open && <OrderReviewChart item={item} gross={gross} cost={cost} />}</details>
+  </article>;
+}
+
+function OrderReviewChart({ item, gross, cost }: { item: HistoryItem; gross: number; cost: number }) {
+  const [candles, setCandles] = useState<Candle[]>([]);
+  const [ready, setReady] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [chartError, setChartError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    const read = async () => {
+      try {
+        const response = await fetch(`/api/order-chart?id=${encodeURIComponent(item.id)}`, { cache: "no-store" });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json() as { source: string; ready: boolean; candles: Candle[] };
+        const valid = (payload.candles ?? []).filter((row) => [row.time, row.open, row.high, row.low, row.close, row.volume].every(Number.isFinite) && row.time > 0 && row.low > 0 && row.high >= row.low);
+        if (active) { setCandles(valid); setReady(Boolean(payload.ready)); setChartError(null); }
+      } catch (failure) { if (active) setChartError(failure instanceof Error ? failure.message : "读取失败"); }
+      finally { if (active) setLoading(false); }
+    };
+    void read();
+    const timer = window.setInterval(read, 15_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [item.id]);
+
+  const rows = candles.length <= 120 ? candles : [...candles.slice(0, 40), ...candles.slice(-80)];
+  const width = 720, height = 270, left = 12, right = 12, top = 24, bottom = 34;
+  const candleEnd = rows.at(-1)?.time ? rows.at(-1)!.time * 1_000 + 60_000 : null;
+  const exitAt = item.exitAt ?? candleEnd ?? item.entryAt, exitPrice = item.exitPrice ?? item.entryPrice;
+  const allPrices = [...rows.flatMap((row) => [row.high, row.low]), item.entryPrice, exitPrice];
+  const rawMin = allPrices.length ? Math.min(...allPrices) : 0, rawMax = allPrices.length ? Math.max(...allPrices) : 1;
+  const padding = Math.max((rawMax - rawMin) * .09, rawMax * .0004, 1e-9);
+  const minPrice = rawMin - padding, maxPrice = rawMax + padding, plotHeight = height - top - bottom;
+  const y = (value: number) => top + (maxPrice - value) / Math.max(maxPrice - minPrice, 1e-9) * plotHeight;
+  const startAt = Math.min(rows[0]?.time ? rows[0].time * 1_000 : item.entryAt, item.entryAt);
+  const endAt = Math.max(rows.at(-1)?.time ? rows.at(-1)!.time * 1_000 + 60_000 : exitAt, exitAt, startAt + 60_000);
+  const x = (value: number) => left + (Math.max(startAt, Math.min(endAt, value)) - startAt) / Math.max(endAt - startAt, 1) * (width - left - right);
+  const candleWidth = Math.max(2, Math.min(7, (width - left - right) / Math.max(rows.length, 1) * .55));
+  return <div className="review-chart"><div className="review-metrics"><span>毛盈亏 <b className={gross >= 0 ? "positive" : "negative"}>{signed(gross)} U</b></span><span>成本 <b className="negative">-{num(cost, 2)} U</b></span><span>净盈亏 <b className={(item.realizedPnl ?? 0) >= 0 ? "positive" : "negative"}>{signed(item.realizedPnl ?? 0)} U</b></span><span>持仓 <b>{durationText(item.entryAt, item.exitAt)}</b></span></div>
+    {!rows.length ? <div className="chart-loading">{loading ? "正在读取这笔订单的真实 1 分钟 K 线…" : `复盘 K 线暂不可用${chartError ? `：${chartError}` : ""}`}</div> : <>
+      <div className="chart-canvas review-canvas"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${item.symbol.replace("_", "/")} 订单进出场1分钟K线`} preserveAspectRatio="none">
+        {[.25, .5, .75].map((ratio) => <line className="chart-grid" key={ratio} x1={left} x2={width - right} y1={top + plotHeight * ratio} y2={top + plotHeight * ratio} />)}
+        {rows.map((row) => { const candleX = x(row.time * 1_000 + 30_000), up = row.close >= row.open, bodyTop = y(Math.max(row.open, row.close)), bodyHeight = Math.max(1.8, Math.abs(y(row.open) - y(row.close))); return <g className={`candle ${up ? "up" : "down"}`} key={row.time}><line x1={candleX} x2={candleX} y1={y(row.high)} y2={y(row.low)} /><rect x={candleX - candleWidth / 2} y={bodyTop} width={candleWidth} height={bodyHeight} /></g>; })}
+        <g className="review-marker entry"><line className="price" x1={left} x2={width - right} y1={y(item.entryPrice)} y2={y(item.entryPrice)} /><line className="moment" x1={x(item.entryAt)} x2={x(item.entryAt)} y1={top} y2={height - bottom} /><circle cx={x(item.entryAt)} cy={y(item.entryPrice)} r="5" /><text x={left + 5} y={Math.max(13, y(item.entryPrice) - 7)}>进场 {num(item.entryPrice, 5)}</text></g>
+        <g className="review-marker exit"><line className="price" x1={left} x2={width - right} y1={y(exitPrice)} y2={y(exitPrice)} /><line className="moment" x1={x(exitAt)} x2={x(exitAt)} y1={top} y2={height - bottom} /><circle cx={x(exitAt)} cy={y(exitPrice)} r="5" /><text x={left + 5} y={Math.min(height - bottom - 4, y(exitPrice) + 15)}>出场 {num(exitPrice, 5)}</text></g>
+        <text className="axis-label" x={left} y={height - 9}>{time(startAt)}</text><text className="axis-label end" x={width - right} y={height - 9}>{time(endAt)}</text>
+      </svg></div>
+      <div className="review-levels"><span>初始止损 <b>{num(item.initialStop, 5)}</b></span><span>计划目标 <b>{num(item.currentTarget, 5)}</b></span><span>{rows.length} 根真实已收盘 1 分钟 K 线</span></div>
+      {!ready && <p className="review-wait">出场所在的 1 分钟 K 线收盘后会自动补全。</p>}
+    </>}
+  </div>;
 }
 
 function CandleChart({ symbol, evidence, decision, position }: {

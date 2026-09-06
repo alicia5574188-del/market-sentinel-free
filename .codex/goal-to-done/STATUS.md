@@ -1,5 +1,7 @@
 # Status
 
+Current release candidate diagnoses the first six production losses and implements the strategy correction plus per-order review charts. All six positions lasted exactly two seconds; two closed at the identical entry price and one had positive gross movement but negative net PnL after modeled costs. The candidate therefore blocks entries below 1.2 net R after costs, reconfirms absorption for RANGE/REVERSAL triggers, requires target continuity at crossing, and confirms non-stop liquidity exits with two distinct completed 1m candles. Structural stops remain immediate. History now lazily renders bounded actual Gate 1m candles with exact entry/exit markers and a gross/cost/net breakdown. Deployment is pending final regression verification.
+
 Done on production at commit `7fc1c425a8ffffc66938937b45083feb7e9c3d1e`. GitHub Actions run #538 completed verify, deploy, and monitor successfully, including advancing PAPER authority, schema/credential-presence checks, homepage/history smoke tests, and the actual Gate futures candle proof.
 
 The authoritative universe is permanently BTC, ETH, and SOL; checkpoint recovery removes ZEC and every prior rotating symbol. Each market has an independent freshness decision, so one recovering feed no longer labels every coin incomplete.

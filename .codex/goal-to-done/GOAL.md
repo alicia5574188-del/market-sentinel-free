@@ -8,4 +8,6 @@ The operator page must be understandable without engineering knowledge: lead wit
 
 During one open browser session, every main tab and nested Live view must retain its own last scroll position and selected controls independently. Navigating away and back must not reset charts, expanded details, API form state, or the selected Live subpage; a full close/reopen may reset UI state. The LIVE switch belongs in the Live page and Settings only, not in the global header.
 
-A PREPARED entry is one immutable lifecycle: later opposite-side scoring cannot replace it, and a fresh price crossing must be evaluated against that frozen side and trigger before any new thesis is considered.
+A PREPARED entry is one immutable lifecycle: later opposite-side scoring cannot replace it. A fresh price crossing is evaluated against that frozen side only while its destination still exists, trigger-time economics still provide at least 1.2 net R after modeled costs, and REVERSAL/RANGE still show absorption.
+
+Every historical PAPER order must provide a real Gate USDT futures 1m review chart with exact entry and exit markers, planned stop/target, gross PnL, modeled cost, net PnL, holding duration, and a plain-language exit reason.
