@@ -12,10 +12,10 @@ export class GatePublicError extends Error {
   }
 }
 
-async function gatePublic<T>(path: string): Promise<T> {
+async function gatePublic<T>(path: string, timeoutMs = 1_200): Promise<T> {
   const response = await fetch(`${BASE}${path}`, {
     headers: { Accept: "application/json", "X-Gate-Size-Decimal": "1" },
-    signal: AbortSignal.timeout(1_200),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) {
     const retryAfter = Number(response.headers.get("retry-after") ?? 0);
@@ -127,9 +127,10 @@ export async function fetchContractStats(symbol: string) {
 export type GateCandle = { time: number; volume: number; close: number; high: number; low: number; open: number };
 type GateCandleRow = { t?: number; v?: string | number; c?: string | number; h?: string | number; l?: string | number; o?: string | number };
 
-export async function fetchStructureCandles(symbol: string, interval: "1m" | "15m" | "1h") {
+export async function fetchStructureCandles(symbol: string, interval: "1m" | "15m" | "1h", timeoutMs = 1_200) {
   const rows = await gatePublic<GateCandleRow[]>(
     `/futures/usdt/candlesticks?contract=${encodeURIComponent(symbol)}&interval=${interval}&limit=120`,
+    timeoutMs,
   );
   const intervalSeconds = interval === "1m" ? 60 : interval === "15m" ? 900 : 3_600;
   const completedBefore = Math.floor(Date.now() / 1_000 / intervalSeconds) * intervalSeconds;

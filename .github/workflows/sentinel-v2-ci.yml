@@ -1017,13 +1017,17 @@ jobs:
           curl -fsS --max-time 15 "$WORKER_BASE_URL/api/history" \
             > "$RUNNER_TEMP/main-history.json"
           jq -e '.items | type == "array"' "$RUNNER_TEMP/main-history.json" >/dev/null
-          curl -fsS --max-time 15 "$WORKER_BASE_URL/api/candles?symbol=BTC_USDT&interval=15m" \
-            > "$RUNNER_TEMP/main-candles.json"
-          jq -e '
-            .source == "GATE_USDT_FUTURES" and .symbol == "BTC_USDT" and .interval == "15m" and
-            (.candles | type == "array" and length > 10) and
-            ([.candles[] | (.time | numbers), (.open | numbers), (.high | numbers), (.low | numbers), (.close | numbers)] | length > 50)
-          ' "$RUNNER_TEMP/main-candles.json" >/dev/null
+          candles_ok=0
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsS --max-time 15 "$WORKER_BASE_URL/api/candles?symbol=BTC_USDT&interval=15m" \
+              > "$RUNNER_TEMP/main-candles.json" && jq -e '
+                .source == "GATE_USDT_FUTURES" and .symbol == "BTC_USDT" and .interval == "15m" and
+                (.candles | type == "array" and length > 10) and
+                ([.candles[] | (.time | numbers), (.open | numbers), (.high | numbers), (.low | numbers), (.close | numbers)] | length > 50)
+              ' "$RUNNER_TEMP/main-candles.json" >/dev/null; then candles_ok=1; break; fi
+            sleep 3
+          done
+          (( candles_ok == 1 ))
 
   monitor:
     if: always() && (github.event_name == 'schedule' || needs.deploy.result == 'success' || needs.cutover.result == 'success')
@@ -1083,10 +1087,14 @@ jobs:
           curl -fsS --max-time 15 "$WORKER_BASE_URL/api/history" \
             > "$RUNNER_TEMP/monitor-history.json"
           jq -e '.items | type == "array"' "$RUNNER_TEMP/monitor-history.json" >/dev/null
-          curl -fsS --max-time 15 "$WORKER_BASE_URL/api/candles?symbol=BTC_USDT&interval=15m" \
-            > "$RUNNER_TEMP/monitor-candles.json"
-          jq -e '
-            .source == "GATE_USDT_FUTURES" and .symbol == "BTC_USDT" and .interval == "15m" and
-            (.candles | type == "array" and length > 10) and
-            ([.candles[] | (.time | numbers), (.open | numbers), (.high | numbers), (.low | numbers), (.close | numbers)] | length > 50)
-          ' "$RUNNER_TEMP/monitor-candles.json" >/dev/null
+          candles_ok=0
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsS --max-time 15 "$WORKER_BASE_URL/api/candles?symbol=BTC_USDT&interval=15m" \
+              > "$RUNNER_TEMP/monitor-candles.json" && jq -e '
+                .source == "GATE_USDT_FUTURES" and .symbol == "BTC_USDT" and .interval == "15m" and
+                (.candles | type == "array" and length > 10) and
+                ([.candles[] | (.time | numbers), (.open | numbers), (.high | numbers), (.low | numbers), (.close | numbers)] | length > 50)
+              ' "$RUNNER_TEMP/monitor-candles.json" >/dev/null; then candles_ok=1; break; fi
+            sleep 3
+          done
+          (( candles_ok == 1 ))

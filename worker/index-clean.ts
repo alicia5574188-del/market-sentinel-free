@@ -686,10 +686,15 @@ async function chartCandles(url: URL) {
   if (cached && cached.expiresAt > Date.now()) {
     return new Response(cached.response, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=20" } });
   }
-  const candles = await fetchStructureCandles(symbol, interval as "1m" | "15m" | "1h");
-  const body = JSON.stringify({ symbol, interval, source: "GATE_USDT_FUTURES", candles, generatedAt: Date.now() });
-  candleCache.set(key, { response: body, expiresAt: Date.now() + 20_000 });
-  return new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=20" } });
+  try {
+    const candles = await fetchStructureCandles(symbol, interval as "1m" | "15m" | "1h", 5_000);
+    const body = JSON.stringify({ symbol, interval, source: "GATE_USDT_FUTURES", candles, generatedAt: Date.now() });
+    candleCache.set(key, { response: body, expiresAt: Date.now() + 20_000 });
+    return new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=20" } });
+  } catch (error) {
+    if (cached) return new Response(cached.response, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=5", Warning: '110 - "Gate refresh delayed; serving last actual candles"' } });
+    throw error;
+  }
 }
 
 const worker = {

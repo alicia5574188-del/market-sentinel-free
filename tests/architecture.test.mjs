@@ -50,6 +50,8 @@ test("external API is read-only PAPER and the operator UI explains every decisio
   assert.match(worker, /url\.pathname === "\/api\/candles" && request\.method === "GET"/);
   assert.match(worker, /GATE_USDT_FUTURES/);
   assert.match(worker, /\["1m", "15m", "1h"\]\.includes\(interval\)/);
+  assert.match(worker, /fetchStructureCandles\(symbol, interval as "1m" \| "15m" \| "1h", 5_000\)/);
+  assert.match(worker, /serving last actual candles/);
   assert.match(worker, /FROM paper_positions/);
   assert.doesNotMatch(worker, /request\.method === "POST"|request\.method === "DELETE"|createOrder|submitOrder/);
   assert.match(page, /setInterval\(read, 15_000\)/);
@@ -75,6 +77,7 @@ test("external API is read-only PAPER and the operator UI explains every decisio
   assert.equal((workflow.match(/grep -Fq '流动性三态'/g) ?? []).length, 2);
   assert.equal((workflow.match(/WORKER_BASE_URL\/api\/history/g) ?? []).length, 2);
   assert.equal((workflow.match(/WORKER_BASE_URL\/api\/candles\?symbol=BTC_USDT&interval=15m/g) ?? []).length, 2);
+  assert.equal((workflow.match(/for attempt in 1 2 3 4 5 6/g) ?? []).length, 2);
 });
 
 test("at-least-once alarm and independent feed recovery are explicit", async () => {
