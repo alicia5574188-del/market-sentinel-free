@@ -641,12 +641,32 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
 const isAsset = (pathname: string) => pathname.startsWith("/_next/") || pathname.startsWith("/assets/") || /\.[a-z0-9]{2,8}$/i.test(pathname);
 let runtimeCache: { response: string; expiresAt: number } | null = null;
+let historyCache: { response: string; expiresAt: number } | null = null;
 async function runtimeStatus(env: CloudflareEnv, useCache = true) {
   if (useCache && runtimeCache && runtimeCache.expiresAt > Date.now()) return new Response(runtimeCache.response, { headers: { "Content-Type": "application/json", "Cache-Control": "private, max-age=10" } });
   const response = await env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/status");
   const body = await response.text();
   if (response.ok) runtimeCache = { response: body, expiresAt: Date.now() + 10_000 };
   return new Response(body, { status: response.status, headers: { "Content-Type": "application/json", "Cache-Control": "private, max-age=10" } });
+}
+
+async function paperHistory(env: CloudflareEnv) {
+  if (historyCache && historyCache.expiresAt > Date.now()) {
+    return new Response(historyCache.response, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=30" } });
+  }
+  const result = await env.DB.prepare(`SELECT
+    id, symbol, market_state AS marketState, side, status,
+    entry_at AS entryAt, entry_price AS entryPrice,
+    current_stop AS currentStop, current_target AS currentTarget,
+    planned_risk AS plannedRisk, notional,
+    exit_at AS exitAt, exit_price AS exitPrice,
+    exit_reason AS exitReason, realized_pnl AS realizedPnl
+    FROM paper_positions
+    ORDER BY COALESCE(exit_at, entry_at) DESC
+    LIMIT 60`).all();
+  const body = JSON.stringify({ items: result.results ?? [], generatedAt: Date.now() });
+  historyCache = { response: body, expiresAt: Date.now() + 30_000 };
+  return new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=30" } });
 }
 
 const worker = {
@@ -661,6 +681,7 @@ const worker = {
       return json({ ok: response.ok && live, ready: live, version: SYSTEM_VERSION, mode: "PAPER", runtime, topLevelCpuMs: performance.now() - started }, live ? 200 : 503);
     }
     if (url.pathname === "/api/runtime" && request.method === "GET") return runtimeStatus(env);
+    if (url.pathname === "/api/history" && request.method === "GET") return paperHistory(env);
     if (url.pathname.startsWith("/api/")) return json({ error: "read-only PAPER surface" }, 404);
     return handler.fetch(request, env, ctx);
   },

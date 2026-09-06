@@ -8,3 +8,4 @@
 - Cloudflare Free uses REST alarms, not a high-frequency WebSocket. Planned DO requests and writes stay below 55,000/day and D1 billed writes are hard-gated below 5,000/day.
 - The encrypted credential row id=1 remains byte-for-byte unchanged through cutover. Old business tables and old Durable Object classes are removed only after the new v6 Worker proves healthy.
 - The v6 create-only deployment uses generated inert exports for retired Durable Object classes because Cloudflare requires them until v7 applies delete-class. These shims are not bound and are absent from the final v7 entry.
+- The public dashboard is an operator product, not an engineering telemetry page. It exposes only plain-language decisions and a cached, read-only PAPER history feed. LIVE remains visibly locked because a public unauthenticated control must never mutate the preserved Gate account.

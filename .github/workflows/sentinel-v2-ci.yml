@@ -1014,6 +1014,9 @@ jobs:
             "$WORKER_BASE_URL/" || true)"
           [[ "$page_code" == "200" ]]
           grep -Fq '流动性三态' "$RUNNER_TEMP/main-page.html"
+          curl -fsS --max-time 15 "$WORKER_BASE_URL/api/history" \
+            > "$RUNNER_TEMP/main-history.json"
+          jq -e '.items | type == "array"' "$RUNNER_TEMP/main-history.json" >/dev/null
 
   monitor:
     if: always() && (github.event_name == 'schedule' || needs.deploy.result == 'success' || needs.cutover.result == 'success')
@@ -1070,3 +1073,6 @@ jobs:
             "$WORKER_BASE_URL/" || true)"
           [[ "$page_code" == "200" ]]
           grep -Fq '流动性三态' "$RUNNER_TEMP/monitor-page.html"
+          curl -fsS --max-time 15 "$WORKER_BASE_URL/api/history" \
+            > "$RUNNER_TEMP/monitor-history.json"
+          jq -e '.items | type == "array"' "$RUNNER_TEMP/monitor-history.json" >/dev/null

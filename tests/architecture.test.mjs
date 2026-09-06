@@ -35,7 +35,7 @@ test("only one new DO is bound and all legacy DO storage is explicitly deleted",
   for (const name of ["PositionMonitor", "MarketScanner", "LiveTradingCoordinator", "MarketScannerV2", "HTE31MarketScanner", "HTE31TradeManager", "HistoricalArchive"]) assert.ok(retire.deleted_classes.includes(name));
 });
 
-test("external API is read-only PAPER and UI polling is at least 15 seconds", async () => {
+test("external API is read-only PAPER and the operator UI explains every decision", async () => {
   const [worker, page, layout, workflow] = await Promise.all([
     read("worker/index-clean.ts"),
     read("app/page.tsx"),
@@ -44,16 +44,26 @@ test("external API is read-only PAPER and UI polling is at least 15 seconds", as
   ]);
   assert.match(worker, /read-only PAPER surface/);
   assert.match(worker, /return handler\.fetch\(request, env, ctx\)/);
+  assert.match(worker, /url\.pathname === "\/api\/history" && request\.method === "GET"/);
+  assert.match(worker, /FROM paper_positions/);
   assert.doesNotMatch(worker, /request\.method === "POST"|request\.method === "DELETE"|createOrder|submitOrder/);
   assert.match(page, /setInterval\(read, 15_000\)/);
   assert.match(page, /AbortController/);
   assert.match(page, /document\.hidden/);
-  assert.match(page, /物理上没有实盘下单接口/);
-  assert.match(page, /清算梯度是.*估计/);
+  assert.match(page, /系统现在的决定/);
+  assert.match(page, /模拟账户权益/);
+  assert.match(page, /当前持仓浮盈亏/);
+  assert.match(page, /组合风险预算/);
+  assert.match(page, /准备进场/);
+  assert.match(page, /判断错误就退出/);
+  assert.match(page, /为什么.*进场|距离触发价|上下流动性优势不足/);
+  assert.match(page, /实盘目前安全锁定/);
+  assert.match(page, /订单.*历史.*设置/s);
   assert.doesNotMatch(layout, /requireChatGPTUser|redirect|signin-with-chatgpt/);
   assert.equal(await read("app/chatgpt-auth.ts").then(() => false, () => true), true);
   assert.equal(await read("lib/auth-paths.ts").then(() => false, () => true), true);
   assert.equal((workflow.match(/grep -Fq '流动性三态'/g) ?? []).length, 2);
+  assert.equal((workflow.match(/WORKER_BASE_URL\/api\/history/g) ?? []).length, 2);
 });
 
 test("at-least-once alarm and independent feed recovery are explicit", async () => {

@@ -1,39 +1,62 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { runtimeReady } from "../lib/runtime-health.ts";
 
+type Side = "LONG" | "SHORT";
+type MarketState = "BREAKOUT" | "REVERSAL" | "RANGE";
 type Zone = { price: number; score: number; source: "BOOK" | "STOP_POOL" | "LIQUIDATION" };
-type Decision = { marketState: "BREAKOUT" | "REVERSAL" | "RANGE"; side: "LONG" | "SHORT"; entryTrigger: number; invalidation: number; target: number; score: number; reason: string[] };
+type Decision = { marketState: MarketState; side: Side; entryTrigger: number; invalidation: number; target: number; score: number; reason: string[] };
 type Plan = Decision & { state: "PREPARED" | "TRIGGERED" | "CANCELLED"; plannedRisk: number; notional: number };
-type Position = { side: "LONG" | "SHORT"; scenario: string; status: "OPEN" | "CLOSED"; entryPrice: number; currentStop: number; currentTarget: number; plannedRisk: number; notional: number; realizedPnl?: number; exitReason?: string };
+type Position = { side: Side; scenario: MarketState; status: "OPEN" | "CLOSED"; entryAt?: number; entryPrice: number; currentStop: number; currentTarget: number; plannedRisk: number; notional: number; realizedPnl?: number; exitReason?: string };
 type Runtime = {
   version: string; mode: "PAPER"; state: string; stale: boolean; generatedAt: number; lastSuccessAt: number | null; lastError: string | null; symbols: string[]; equity: number;
-  decisions: Record<string, Decision | null>; plans: Record<string, Plan | null>; positions: Record<string, Position | null>;
-  authorityReady: boolean;
+  decisions: Record<string, Decision | null>; plans: Record<string, Plan | null>; positions: Record<string, Position | null>; authorityReady: boolean;
   evidence: Record<string, { midpoint: number; observedAt: number; warmup: number; fresh: boolean; ancillaryFresh: boolean; topLong: Zone | null; topShort: Zone | null; absorption: number }>;
-  limits: { plannedTotalDoRequestsPerDay: number; plannedDoWritesPerDay: number; plannedMaxD1BilledWritesPerDay: number; maxSubrequestsPerAlarm: number };
+  limits: { maxOpenPositions: number };
 };
+type HistoryItem = { id: string; symbol: string; marketState: MarketState; side: Side; status: "OPEN" | "CLOSED"; entryAt: number; entryPrice: number; currentStop: number; currentTarget: number; plannedRisk: number; notional: number; exitAt: number | null; exitPrice: number | null; exitReason: string | null; realizedPnl: number | null };
+type Tab = "brain" | "orders" | "history" | "settings";
 
-const stateText: Record<string, string> = { BREAKOUT: "突破", REVERSAL: "反转", RANGE: "震荡", LIVE: "运行中", WARMING: "预热中", DEGRADED: "局部降级", RECONNECTING: "重连中", RECOVERY_REQUIRED: "需人工恢复", STARTING: "启动中" };
-const sourceText: Record<string, string> = { BOOK: "期货订单簿", STOP_POOL: "多尺度止损池", LIQUIDATION: "估计清算梯度" };
-const num = (value: number | undefined, digits = 3) => Number.isFinite(value) ? Number(value).toLocaleString("zh-CN", { maximumFractionDigits: digits }) : "—";
-const time = (value: number | null | undefined) => value ? new Date(value).toLocaleTimeString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }) : "—";
+const INITIAL_EQUITY = 1_000;
+const stateText: Record<string, string> = { BREAKOUT: "突破", REVERSAL: "反转", RANGE: "震荡", LIVE: "运行中", WARMING: "预热中", DEGRADED: "部分数据恢复中", RECONNECTING: "重新连接中", RECOVERY_REQUIRED: "需要恢复", STARTING: "启动中" };
+const sourceText: Record<string, string> = { BOOK: "真实挂单区", STOP_POOL: "止损集中区", LIQUIDATION: "估计清算区" };
+const exitText: Record<string, string> = { STRUCTURAL_STOP: "结构失效止损", TARGET_ABSORBED: "目标流动性已被吸收", TARGET_VANISHED: "目标消失", OPPOSITE_TARGET_DOMINANT: "反向目标占优" };
+const num = (value: number | null | undefined, digits = 3) => Number.isFinite(value) ? Number(value).toLocaleString("zh-CN", { maximumFractionDigits: digits }) : "—";
+const signed = (value: number, digits = 2) => `${value >= 0 ? "+" : ""}${num(value, digits)}`;
+const time = (value: number | null | undefined) => value ? new Date(value).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : "—";
+const sideText = (side: Side) => side === "LONG" ? "做多" : "做空";
+const distancePct = (from: number, to: number) => Math.abs(to - from) / Math.max(from, 1e-9) * 100;
+const rr = (entry: number, stop: number, target: number) => Math.abs(target - entry) / Math.max(Math.abs(entry - stop), 1e-9);
+
+function waitReason(runtime: Runtime | null, healthy: boolean, symbol: string) {
+  if (!runtime) return "正在连接后台行情";
+  const evidence = runtime.evidence[symbol];
+  if (!healthy || !evidence?.fresh || !evidence?.ancillaryFresh) return "行情证据暂时不完整，禁止使用旧价格进场";
+  if (evidence.warmup < 30) return `正在积累真实快照，还差 ${30 - evidence.warmup} 次`;
+  const position = runtime.positions[symbol];
+  if (position?.status === "OPEN") return "已经持仓，系统正动态保护并跟踪目标";
+  const plan = runtime.plans[symbol];
+  if (plan?.state === "PREPARED") return `方向已判断，距离触发价约 ${num(distancePct(evidence.midpoint, plan.entryTrigger), 2)}%`;
+  if (runtime.decisions[symbol]) return "方向已经出现，但进场条件或风险空间暂不合适";
+  return "上下流动性优势不足，突破、反转和震荡条件都未成立";
+}
 
 export default function Home() {
   const [runtime, setRuntime] = useState<Runtime | null>(null);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
   const [receivedAt, setReceivedAt] = useState(0);
   const [clock, setClock] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<Tab>("brain");
+  const [showLiveLock, setShowLiveLock] = useState(false);
+
   useEffect(() => {
-    let active = true;
-    let inFlight = false;
+    let active = true, inFlight = false;
     let controller: AbortController | null = null;
     const read = async () => {
       if (!active || document.hidden || inFlight) return;
-      setClock(Date.now());
-      inFlight = true;
-      controller = new AbortController();
+      setClock(Date.now()); inFlight = true; controller = new AbortController();
       const timeout = setTimeout(() => controller?.abort(), 5_000);
       try {
         const response = await fetch("/api/runtime", { cache: "no-store", signal: controller.signal });
@@ -43,8 +66,14 @@ export default function Home() {
       } catch (failure) { if (active) setError(failure instanceof Error ? failure.message : "读取失败"); }
       finally { clearTimeout(timeout); inFlight = false; controller = null; }
     };
+    const readHistory = async () => {
+      try {
+        const response = await fetch("/api/history", { cache: "no-store" });
+        if (response.ok && active) setHistory(((await response.json()) as { items: HistoryItem[] }).items ?? []);
+      } catch { /* History is optional; the live runtime remains authoritative. */ }
+    };
     const visibility = () => { if (!document.hidden) void read(); else controller?.abort(); };
-    void read();
+    void read(); void readHistory();
     const timer = setInterval(read, 15_000);
     document.addEventListener("visibilitychange", visibility);
     return () => { active = false; controller?.abort(); clearInterval(timer); document.removeEventListener("visibilitychange", visibility); };
@@ -52,45 +81,65 @@ export default function Home() {
 
   const responseFresh = runtime != null && clock - receivedAt < 20_000 && clock - runtime.generatedAt < 20_000;
   const healthy = runtimeReady(runtime, responseFresh && !error);
+  const openPositions = useMemo(() => runtime?.symbols.flatMap((symbol) => runtime.positions[symbol]?.status === "OPEN" ? [{ symbol, position: runtime.positions[symbol]! }] : []) ?? [], [runtime]);
+  const preparedPlans = useMemo(() => runtime?.symbols.flatMap((symbol) => runtime.plans[symbol]?.state === "PREPARED" ? [{ symbol, plan: runtime.plans[symbol]! }] : []) ?? [], [runtime]);
+  const bestDecision = useMemo(() => runtime?.symbols.map((symbol) => ({ symbol, decision: runtime.decisions[symbol] })).filter((row): row is { symbol: string; decision: Decision } => row.decision != null).sort((a, b) => b.decision.score - a.decision.score)[0] ?? null, [runtime]);
+  const floatingPnl = openPositions.reduce((sum, row) => { const mark = runtime?.evidence[row.symbol]?.midpoint ?? row.position.entryPrice; return sum + row.position.notional * (mark - row.position.entryPrice) / Math.max(row.position.entryPrice, 1e-9) * (row.position.side === "LONG" ? 1 : -1); }, 0);
+  const riskUsed = openPositions.reduce((sum, row) => sum + row.position.plannedRisk, 0);
+  const riskLimit = (runtime?.equity ?? INITIAL_EQUITY) * .05;
+  const primary = openPositions[0] ? { symbol: openPositions[0].symbol, side: openPositions[0].position.side, state: openPositions[0].position.scenario, kind: "position" }
+    : preparedPlans[0] ? { symbol: preparedPlans[0].symbol, side: preparedPlans[0].plan.side, state: preparedPlans[0].plan.marketState, kind: "plan" }
+      : bestDecision ? { symbol: bestDecision.symbol, side: bestDecision.decision.side, state: bestDecision.decision.marketState, kind: "decision" } : null;
+  const headline = !healthy ? "行情正在恢复，暂不进场" : primary?.kind === "position" ? `正在持有 ${primary.symbol.replace("_", "/")} ${primary.side === "LONG" ? "多单" : "空单"}` : primary ? `准备${sideText(primary.side)} ${primary.symbol.replace("_", "/")}` : "继续观察，暂不开仓";
+  const headlineDetail = primary ? `${stateText[primary.state]}判断 · ${waitReason(runtime, healthy, primary.symbol)}` : runtime?.symbols[0] ? waitReason(runtime, healthy, runtime.symbols[0]) : "正在等待第一批行情";
+
   return <main>
-    <header>
-      <div><p className="eyebrow">全新系统 · 仅模拟</p><h1>流动性三态</h1><p className="subtitle">预测价格更愿意去哪里，再决定突破、反转或震荡。</p></div>
-      <div role="status" className={`health ${healthy ? "" : "bad"}`}><span />{healthy ? "运行中" : error ? "页面数据中断" : runtime?.stale ? "重连中" : runtime ? stateText[runtime.state] ?? runtime.state : "连接中"}</div>
+    <header className="topbar">
+      <div className="brand"><span className="brand-mark">三</span><div><p>流动性三态</p><small>预测型量化交易系统</small></div></div>
+      <div className="top-actions"><div role="status" className={`health ${healthy ? "" : "bad"}`}><span />{healthy ? "后台运行中" : error ? "页面连接中断" : runtime?.stale ? "行情重连中" : runtime ? stateText[runtime.state] ?? runtime.state : "正在连接"}</div><div className="mode-switch"><button className="active" type="button">模拟</button><button type="button" onClick={() => setShowLiveLock(true)}>实盘 <em>锁定</em></button></div></div>
     </header>
 
-    <section className="summary">
-      <article><small>运行模式</small><strong>PAPER</strong><p>物理上没有实盘下单接口</p></article>
-      <article><small>模拟权益</small><strong>{runtime ? `${num(runtime.equity, 2)} U` : "—"}</strong><p>正常成交与压力滑点预算内，组合结构风险 ≤ 5%</p></article>
-      <article><small>最新后台成功</small><strong>{time(runtime?.lastSuccessAt)}</strong><p>页面关闭后仍由服务器运行</p></article>
+    <section className="brain-hero"><div><p className="eyebrow">系统现在的决定</p><h1>{headline}</h1><p className="hero-detail">{headlineDetail}</p></div><div className="decision-badge"><small>当前市场状态</small><strong>{primary ? stateText[primary.state] : "等待"}</strong><span>{primary ? sideText(primary.side) : "没有勉强开仓"}</span></div></section>
+
+    <section className="summary four">
+      <article><small>模拟账户权益</small><strong>{runtime ? `${num(runtime.equity, 2)} U` : "—"}</strong><p>初始资金 {num(INITIAL_EQUITY, 0)} U</p></article>
+      <article><small>累计模拟盈亏</small><strong className={(runtime?.equity ?? INITIAL_EQUITY) >= INITIAL_EQUITY ? "positive" : "negative"}>{runtime ? `${signed(runtime.equity - INITIAL_EQUITY)} U` : "—"}</strong><p>{runtime ? `${signed((runtime.equity / INITIAL_EQUITY - 1) * 100)}%` : "等待数据"}</p></article>
+      <article><small>当前持仓浮盈亏</small><strong className={floatingPnl >= 0 ? "positive" : "negative"}>{runtime ? `${signed(floatingPnl)} U` : "—"}</strong><p>{openPositions.length} 笔模拟持仓</p></article>
+      <article><small>组合风险预算</small><strong>{num(riskUsed, 2)} / {num(riskLimit, 2)} U</strong><div className="risk-bar"><i style={{ width: `${Math.min(100, riskLimit ? riskUsed / riskLimit * 100 : 0)}%` }} /></div><p>剩余 {num(Math.max(0, riskLimit - riskUsed), 2)} U</p></article>
     </section>
+    {error && <p className="notice">页面读取延迟：{error}。服务器仍会独立运行。</p>}{runtime?.lastError && <p className="notice">系统正在自动恢复：{runtime.lastError}</p>}
 
-    {error && <p className="notice">页面读取延迟：{error}。后台不会因页面失败停止。</p>}
-    {runtime?.lastError && <p className="notice">后台正在恢复：{runtime.lastError}</p>}
+    <nav className="tabs">{([['brain', '大脑'], ['orders', `订单 ${openPositions.length + preparedPlans.length || ''}`], ['history', '历史'], ['settings', '设置']] as const).map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => setTab(key)}>{label}</button>)}</nav>
 
-    <section className="markets">
-      {runtime?.symbols.map((symbol) => {
-        const evidence = runtime.evidence[symbol];
-        const marketFresh = healthy && evidence?.fresh && evidence?.ancillaryFresh;
-        const decision = marketFresh ? runtime.decisions[symbol] : null;
-        const plan = marketFresh ? runtime.plans[symbol] : null;
-        const position = runtime.positions[symbol];
-        return <article className="market" key={symbol}>
-          <div className="market-title"><div><small>{symbol}</small><h2>{!marketFresh ? "行情陈旧" : decision ? stateText[decision.marketState] : evidence?.warmup < 30 ? `预热 ${evidence?.warmup ?? 0}/30` : "等待目标"}</h2></div><strong>{marketFresh ? num(evidence?.midpoint, 5) : "—"}</strong></div>
-          <div className="targets">
-            <div><small>上方目标</small><b>{marketFresh ? num(evidence?.topLong?.price, 5) : "陈旧"}</b><span>{marketFresh ? `${sourceText[evidence?.topLong?.source ?? ""] ?? "等待识别"} · ${num(evidence?.topLong?.score, 2)}` : "等待新快照"}</span></div>
-            <div><small>下方目标</small><b>{marketFresh ? num(evidence?.topShort?.price, 5) : "陈旧"}</b><span>{marketFresh ? `${sourceText[evidence?.topShort?.source ?? ""] ?? "等待识别"} · ${num(evidence?.topShort?.score, 2)}` : "等待新快照"}</span></div>
-          </div>
-          {decision && <div className="decision"><b>{decision.side === "LONG" ? "做多" : "做空"} · {stateText[decision.marketState]}</b><p>{decision.reason.join("；")}</p><p>预判触发 {num(decision.entryTrigger, 5)} · 结构失效 {num(decision.invalidation, 5)} · 当前目标 {num(decision.target, 5)}</p></div>}
-          {plan?.state === "PREPARED" && <div className="plan"><b>已提前准备 PAPER 计划</b><p>计划风险 {num(plan.plannedRisk, 2)} U · 名义仓位 {num(plan.notional, 2)} U</p></div>}
-          {position?.status === "OPEN" && <div className="position"><b>PAPER 持仓 · {position.side === "LONG" ? "多" : "空"}</b><p>进场 {num(position.entryPrice, 5)} · 当前保护 {num(position.currentStop, 5)} · 动态目标 {num(position.currentTarget, 5)}{!marketFresh ? " · 行情陈旧，显示最后持久状态" : ""}</p></div>}
-        </article>;
-      })}
-    </section>
+    {tab === "brain" && <section className="markets">{runtime?.symbols.map((symbol) => {
+      const evidence = runtime.evidence[symbol], marketFresh = healthy && evidence?.fresh && evidence?.ancillaryFresh;
+      const decision = marketFresh ? runtime.decisions[symbol] : null, plan = marketFresh ? runtime.plans[symbol] : null, position = runtime.positions[symbol];
+      const status = position?.status === "OPEN" ? "持仓中" : plan?.state === "PREPARED" ? "等待进场" : decision ? "发现机会" : evidence?.warmup < 30 ? `预热 ${evidence?.warmup ?? 0}/30` : "继续观察";
+      return <article className="market" key={symbol}><div className="market-title"><div><small>{symbol.replace("_", "/")}</small><h2>{marketFresh ? status : "数据恢复中"}</h2></div><strong>{marketFresh ? num(evidence?.midpoint, 5) : "—"}</strong></div>
+        <div className="plain-answer"><small>系统判断</small><b>{decision ? `${sideText(decision.side)} · ${stateText[decision.marketState]}` : "暂时没有值得执行的方向"}</b><p>{waitReason(runtime, healthy, symbol)}</p></div>
+        {decision && <div className="trade-levels"><div><small>准备进场</small><b>{num(decision.entryTrigger, 5)}</b></div><div><small>判断错误就退出</small><b>{num(decision.invalidation, 5)}</b></div><div><small>当前目标</small><b>{num(decision.target, 5)}</b></div><div><small>预计盈亏比</small><b>{num(rr(decision.entryTrigger, decision.invalidation, decision.target), 2)} : 1</b></div></div>}
+        <details><summary>查看判断依据</summary><p>{decision?.reason.join("；") || "尚未形成完整判断"}</p><div className="targets"><span>上方吸引区：{num(evidence?.topLong?.price, 5)} · {sourceText[evidence?.topLong?.source ?? ""] ?? "识别中"}</span><span>下方吸引区：{num(evidence?.topShort?.price, 5)} · {sourceText[evidence?.topShort?.source ?? ""] ?? "识别中"}</span></div></details>
+      </article>;
+    }) ?? <div className="empty">正在读取市场数据…</div>}</section>}
 
-    <footer>
-      <p>清算梯度是基于 ΔOI、主动方向、合约乘数、维持保证金率和公开清算记录的估计，不是交易所全部账户的真实清算价。</p>
-      <p>5% 是含手续费与压力滑点的事前风险预算；极端跳空可能越过止损，不能保证实际亏损绝不超过 5%。</p>
-      {runtime?.limits && <p>日预算：DO 请求约 {num(runtime.limits.plannedTotalDoRequestsPerDay, 0)} · DO 写约 {num(runtime.limits.plannedDoWritesPerDay, 0)} · D1 计费写最坏 {num(runtime.limits.plannedMaxD1BilledWritesPerDay, 0)}。</p>}
-    </footer>
+    {tab === "orders" && <section className="panel-list">{!openPositions.length && !preparedPlans.length && <div className="empty"><b>当前没有订单</b><p>出现合适位置后会先显示准备计划，再自动建立模拟持仓。</p></div>}
+      {openPositions.map(({ symbol, position }) => <OrderCard key={symbol} symbol={symbol} side={position.side} label="持仓中" state={position.scenario} notional={position.notional} values={[["进场", position.entryPrice], ["保护价", position.currentStop], ["动态目标", position.currentTarget], ["计划风险", position.plannedRisk]]} />)}
+      {preparedPlans.map(({ symbol, plan }) => <OrderCard key={symbol} symbol={symbol} side={plan.side} label="等待触发" state={plan.marketState} notional={plan.notional} values={[["触发进场", plan.entryTrigger], ["结构止损", plan.invalidation], ["目标", plan.target], ["计划风险", plan.plannedRisk]]} />)}
+    </section>}
+
+    {tab === "history" && <section className="history-panel"><div className="section-heading"><div><h2>最近模拟交易</h2><p>只展示真实产生过的记录，不填充示例数据。</p></div><span>{history.filter((item) => item.status === "CLOSED").length} 笔已结束</span></div>
+      {!history.length ? <div className="empty"><b>还没有历史交易</b><p>产生第一笔模拟交易后会自动出现在这里。</p></div> : <div className="history-table">{history.map((item) => <article key={item.id}><div><span className={`side ${item.side.toLowerCase()}`}>{item.side === "LONG" ? "多" : "空"}</span><div><b>{item.symbol.replace("_", "/")}</b><small>{time(item.entryAt)} · {stateText[item.marketState]}</small></div></div><div><small>进场 / 出场</small><b>{num(item.entryPrice, 5)} / {num(item.exitPrice, 5)}</b></div><div><small>结果</small><b className={(item.realizedPnl ?? 0) >= 0 ? "positive" : "negative"}>{item.status === "OPEN" ? "持仓中" : `${signed(item.realizedPnl ?? 0)} U`}</b></div><div><small>结束原因</small><b>{item.status === "OPEN" ? "尚未结束" : exitText[item.exitReason ?? ""] ?? item.exitReason ?? "已结束"}</b></div></article>)}</div>}
+    </section>}
+
+    {tab === "settings" && <section className="settings-panel"><Setting title="交易模式" detail="当前所有信号、订单和盈亏均为模拟。" value="模拟运行" tone="online"/><button className="setting-row" type="button" onClick={() => setShowLiveLock(true)}><div><b>实盘交易</b><p>需要所有者验证和独立实盘执行版本，防止公开页面被他人操作。</p></div><span className="setting-value locked">安全锁定 ›</span></button><Setting title="最大组合风险" detail="包含手续费和压力滑点，止损只允许收紧。" value="5%"/><Setting title="持仓时间与止盈" detail="不固定时间，不固定止盈；目标变化时动态退出。" value="动态"/><Setting title="系统状态" detail="页面关闭后服务器仍然持续运行。" value={healthy ? "正常" : "恢复中"} tone={healthy ? "online" : "locked"}/><p className="last-update">最近后台成功：{time(runtime?.lastSuccessAt)}</p></section>}
+
+    {showLiveLock && <div className="modal-backdrop" onClick={() => setShowLiveLock(false)}><section className="modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}><span className="lock-icon">锁</span><h2>实盘目前安全锁定</h2><p>当前公网页面没有所有者身份验证。为避免任何人打开网址就能操作真实资金，实盘下单必须在独立版本中接入验证后才能开放。</p><p>模拟系统会继续 24 小时运行，不会因为页面关闭而停止。</p><button type="button" onClick={() => setShowLiveLock(false)}>我知道了</button></section></div>}
   </main>;
+}
+
+function OrderCard({ symbol, side, label, state, notional, values }: { symbol: string; side: Side; label: string; state: MarketState; notional: number; values: [string, number][] }) {
+  return <article className="order-card"><div><span className={`side ${side.toLowerCase()}`}>{side === "LONG" ? "多" : "空"}</span><div><h3>{symbol.replace("_", "/")} · {label}</h3><p>{stateText[state]}策略</p></div></div><strong>{num(notional, 2)} U</strong><dl>{values.map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{num(value, name.includes("风险") ? 2 : 5)}{name.includes("风险") ? " U" : ""}</dd></div>)}</dl></article>;
+}
+function Setting({ title, detail, value, tone = "" }: { title: string; detail: string; value: string; tone?: string }) {
+  return <div className="setting-row"><div><b>{title}</b><p>{detail}</p></div><span className={`setting-value ${tone}`}>{value}</span></div>;
 }
