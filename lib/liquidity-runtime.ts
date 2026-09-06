@@ -374,15 +374,15 @@ export function reconcilePaper(input: {
   const events: string[] = [];
   let expiredThisCycle = false;
   let cancelledThisCycle = false;
+  const triggerReached = plan?.state === "PREPARED" && planTriggered(plan, input.midpoint);
   const targetPresent = plan?.state !== "PREPARED" || input.zones.some((zone) => zone.side === plan!.side && zone.identity === plan!.targetIdentity);
   // Freeze a prepared thesis instead of chasing every two-second recalculation.
-  // Neutral ticks and same-direction level drift are not cancellation signals.
-  const opposingThesis = plan?.state === "PREPARED" && input.decision != null
-    && plan.side !== input.decision.side && input.decision.score >= plan.score * 1.25;
-  if ((!input.fresh || input.sequenceFault || !targetPresent || opposingThesis) && plan?.state === "PREPARED") {
+  // A fresh opposing score never replaces it, and a trigger reached on this
+  // snapshot has priority over a coincident target-book recalculation.
+  if ((!input.fresh || input.sequenceFault || (!targetPresent && !triggerReached)) && plan?.state === "PREPARED") {
     plan = { ...plan, state: "CANCELLED" };
     cancelledThisCycle = true;
-    events.push(!input.fresh ? "STALE_CANCEL" : input.sequenceFault ? "SEQUENCE_REBUILD_CANCEL" : !targetPresent ? "TARGET_GONE_CANCEL" : "OPPOSING_THESIS_CANCEL");
+    events.push(!input.fresh ? "STALE_CANCEL" : input.sequenceFault ? "SEQUENCE_REBUILD_CANCEL" : "TARGET_GONE_CANCEL");
   }
   if (position?.status === "OPEN" && input.fresh && !input.sequenceFault) {
     const own = input.protectOnly ? zoneUtility({ side: position.side, price: position.currentTarget, liquidity: 1, cascade: 0, pathCost: 1,
@@ -405,10 +405,9 @@ export function reconcilePaper(input: {
     const sameClosedThesis = position?.status === "CLOSED" && position.side === input.decision.side && position.scenario === input.decision.marketState;
     const triggerProbe: PaperPlan = { ...input.decision, id: "probe", state: "PREPARED", createdAt: input.now, expiresAt: input.now, plannedRisk: 0, notional: 0 };
     if (sameClosedThesis && planTriggered(triggerProbe, input.midpoint)) return { plan, position, events: [...events, "WAIT_REARM"] };
-    const materiallyDifferent = !plan || plan.state !== "PREPARED"
-      || plan.side !== input.decision.side
-      || plan.marketState !== input.decision.marketState
-      || (input.now - plan.createdAt > 30_000 && Math.abs(plan.target - input.decision.target) / input.midpoint > 0.002);
+    // PREPARED is a direction-locked lifecycle. Recalculation can describe a
+    // different market, but cannot mutate or replace the executable plan.
+    const materiallyDifferent = !plan || plan.state !== "PREPARED";
     if (materiallyDifferent) {
       const sized = sizePaperPosition({ equity: input.equity, entry: input.decision.entryTrigger, invalidation: input.decision.invalidation, feeBps: 10, stressSlippageBps: 8, confidence: clamp(input.decision.score / Math.max(input.decision.score + input.decision.oppositeScore, Number.EPSILON), 0, 1), openRisk: input.openRisk });
       const confidence = clamp(input.decision.score / Math.max(input.decision.score + input.decision.oppositeScore, Number.EPSILON), 0, 1);

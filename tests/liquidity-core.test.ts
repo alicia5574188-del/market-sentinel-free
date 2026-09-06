@@ -174,6 +174,43 @@ test("a frozen prepared plan can trigger during a neutral tick", () => {
   assert.ok(result.events.includes("PAPER_OPEN"));
 });
 
+test("an opposite recalculation cannot replace a frozen prepared plan", () => {
+  const shortDecision = { symbol: "SOL_USDT", observedAt: 1, marketState: "RANGE" as const, side: "SHORT" as const,
+    entryTrigger: 101, invalidation: 102, target: 95, targetIdentity: "BOOK:SHORT:95", score: 10, oppositeScore: 1, reason: [] };
+  const plan: PaperPlan = { ...shortDecision, id: "short-frozen", state: "PREPARED", createdAt: 1,
+    expiresAt: PLAN_TTL_MS + 1, plannedRisk: 10, notional: 1_000 };
+  const longDecision = { ...shortDecision, side: "LONG" as const, entryTrigger: 99, invalidation: 98,
+    target: 110, targetIdentity: "BOOK:LONG:110", score: 100 };
+  const result = reconcilePaper({ now: 2, midpoint: 100.9, fresh: true, sequenceFault: false, decision: longDecision,
+    plan, position: null, zones: [zone("SHORT", 95), zone("LONG", 110)], absorption: 0, equity: 1_000,
+    openRisk: 0, allowOpen: false });
+  assert.equal(result.plan?.id, "short-frozen");
+  assert.equal(result.plan?.side, "SHORT");
+  assert.equal(result.plan?.entryTrigger, 101);
+  assert.equal(result.plan?.state, "PREPARED");
+  assert.deepEqual(result.events, []);
+});
+
+test("a frozen plan crossing triggers before an opposite recalculation", () => {
+  const shortDecision = { symbol: "SOL_USDT", observedAt: 1, marketState: "RANGE" as const, side: "SHORT" as const,
+    entryTrigger: 101, invalidation: 102, target: 95, targetIdentity: "BOOK:SHORT:95", score: 100, oppositeScore: 1, reason: [] };
+  const plan: PaperPlan = { ...shortDecision, id: "short-cross", state: "PREPARED", createdAt: 1,
+    expiresAt: PLAN_TTL_MS + 1, plannedRisk: 10, notional: 1_000 };
+  const longDecision = { ...shortDecision, side: "LONG" as const, entryTrigger: 99, invalidation: 98,
+    target: 110, targetIdentity: "BOOK:LONG:110", score: 1_000 };
+  const firstPass = reconcilePaper({ now: 2, midpoint: 101.1, fresh: true, sequenceFault: false, decision: longDecision,
+    plan, position: null, zones: [zone("LONG", 110)], absorption: 0, equity: 1_000, openRisk: 0, allowOpen: false });
+  assert.equal(firstPass.plan?.id, "short-cross");
+  assert.equal(firstPass.plan?.state, "PREPARED");
+  const triggerPass = reconcilePaper({ now: 2, midpoint: 101.1, fresh: true, sequenceFault: false, decision: longDecision,
+    plan: firstPass.plan, position: null, zones: [zone("LONG", 110)], absorption: 0, equity: 1_000, openRisk: 0,
+    allowOpen: true });
+  assert.equal(triggerPass.plan?.state, "TRIGGERED");
+  assert.equal(triggerPass.position?.side, "SHORT");
+  assert.equal(triggerPass.position?.status, "OPEN");
+  assert.ok(triggerPass.events.includes("PAPER_OPEN"));
+});
+
 test("an economically untradeable target is rejected before it reaches the order page", () => {
   const decision = { symbol: "SOL_USDT", observedAt: 1, marketState: "BREAKOUT" as const, side: "LONG" as const,
     entryTrigger: 100, invalidation: 99.9, target: 100.1, targetIdentity: "BOOK:LONG:100.1", score: 100, oppositeScore: 0.1, reason: [] };
