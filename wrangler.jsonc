@@ -23,20 +23,8 @@
   "durable_objects": {
     "bindings": [
       {
-        "name": "POSITION_MONITOR",
-        "class_name": "HTE31TradeManager"
-      },
-      {
-        "name": "MARKET_SCANNER",
-        "class_name": "HTE31MarketScanner"
-      },
-      {
-        "name": "LIVE_TRADING_COORDINATOR",
-        "class_name": "LiveTradingCoordinator"
-      },
-      {
-        "name": "HISTORICAL_ARCHIVE",
-        "class_name": "HistoricalArchive"
+        "name": "MARKET_STREAM",
+        "class_name": "MarketStream"
       }
     ]
   },
@@ -72,6 +60,22 @@
       "new_sqlite_classes": [
         "HistoricalArchive"
       ]
+    },
+    {
+      "tag": "v6-liquidity-three-state",
+      "new_sqlite_classes": ["MarketStream"]
+    },
+    {
+      "tag": "v7-delete-legacy-do",
+      "deleted_classes": [
+        "PositionMonitor",
+        "MarketScanner",
+        "LiveTradingCoordinator",
+        "MarketScannerV2",
+        "HTE31MarketScanner",
+        "HTE31TradeManager",
+        "HistoricalArchive"
+      ]
     }
   ],
   "version_metadata": {
@@ -79,11 +83,6 @@
   },
   "triggers": {
     "crons": ["* * * * *"]
-  },
-  "vars": {
-    "BACKGROUND_MODE": "cloudflare-free",
-    "SITE_OWNER_EMAIL": "alicia5574188@gmail.com",
-    "VAPID_SUBJECT": "mailto:alicia5574188@gmail.com"
   },
   "observability": {
     "enabled": true

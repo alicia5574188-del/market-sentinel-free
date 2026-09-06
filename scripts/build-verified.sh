@@ -19,6 +19,22 @@ if [[ ! -x "${vinext}" ]]; then
 fi
 
 echo "Running bounded vinext build..."
+project_root="$(cd "${SITES_PROJECT_ROOT}" && pwd -P)"
+git_root="$(git -C "${project_root}" rev-parse --show-toplevel 2>/dev/null || true)"
+git_root="$(cd "${git_root:-/}" && pwd -P)"
+if [[ "${project_root}" != "${git_root}" ]] ||
+  ! grep -Eq '"name"[[:space:]]*:[[:space:]]*"market-sentinel-free"' "${project_root}/package.json" ||
+  [[ ! -f "${project_root}/wrangler.jsonc" ]]; then
+  echo "Refusing to clean an unverified project path." >&2
+  exit 70
+fi
+
+dist_dir="${project_root}/dist"
+case "${dist_dir}" in
+  */market-sentinel-free/dist|*/release/dist) ;;
+  *) echo "Refusing to clean an unexpected build directory." >&2; exit 70 ;;
+esac
+rm -rf -- "${dist_dir}"
 timeout \
   --signal=TERM \
   --kill-after="${SITES_BUILD_KILL_AFTER:-10s}" \

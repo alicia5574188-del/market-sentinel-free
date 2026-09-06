@@ -1,21 +1,9 @@
 {
-  "id": "/",
-  "name": "共振量化 · 短线交易台",
-  "short_name": "共振量化",
-  "description": "顺势回踩短线模拟、持仓保护与每12小时复盘。",
+  "name": "流动性三态",
+  "short_name": "三态",
   "start_url": "/",
-  "scope": "/",
   "display": "standalone",
-  "orientation": "portrait",
-  "background_color": "#121411",
-  "theme_color": "#121411",
-  "lang": "zh-CN",
-  "icons": [
-    {
-      "src": "/resonance-icon-v1.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
-      "purpose": "any maskable"
-    }
-  ]
+  "background_color": "#0d100e",
+  "theme_color": "#0d100e",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
 }
