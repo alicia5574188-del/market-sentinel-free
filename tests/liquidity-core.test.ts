@@ -78,7 +78,7 @@ test("15m balance creates two-sided local routes and a gated next-node leg", () 
   assert.ok(routes.some((route) => route.kind === "EDGE_REJECTION"));
 });
 
-test("a local breakout crossing is cancelled when live confirmation deteriorates", () => {
+test("a frozen local breakout is not vetoed by one transient trigger-time score", () => {
   const memory = emptySymbolMemory();
   memory.range15m = { lower: 99, upper: 100, midpoint: 99.5, widthRate: 1 / 99.5,
     touchesLower: 3, touchesUpper: 3, quality: 0.9, observedAt: 10_000 };
@@ -95,8 +95,33 @@ test("a local breakout crossing is cancelled when live confirmation deteriorates
   const crossed = reconcilePaper({ now: 10_002, midpoint: prepared.plan!.entryTrigger + 0.01, fresh: true,
     sequenceFault: false, decision, plan: prepared.plan, position: null, zones: [], activeRoutes: routes,
     breakoutConfirmation: 0.3, absorption: 0.1, equity: 1_000, openRisk: 0, allowOpen: true });
-  assert.equal(crossed.plan?.state, "CANCELLED");
-  assert.ok(crossed.events.includes("TRIGGER_STRUCTURE_CANCEL"));
+  assert.equal(crossed.plan?.state, "TRIGGERED");
+  assert.equal(crossed.position?.status, "OPEN");
+  assert.ok(crossed.events.includes("PAPER_OPEN"));
+});
+
+test("a prepared route needs two completed minutes below its hysteresis floor before cancellation", () => {
+  const decision = { symbol: "BTC_USDT", observedAt: 1, marketState: "BREAKOUT" as const, side: "LONG" as const,
+    entryTrigger: 101, invalidation: 99, target: 110, targetIdentity: "HTF:LONG:110", score: 2, oppositeScore: 1,
+    reason: [], routeId: "local-long", routeKind: "LOCAL_BREAKOUT" as const, routeStage: "LOCAL_TO_NODE" as const,
+    targetTimeframe: "4h" as const, confirmationScore: 0.6, fakeoutRisk: 0.4, activationDistanceRate: 0.01 };
+  const plan: PaperPlan = { ...decision, id: "route-warning", state: "PREPARED", createdAt: 1,
+    expiresAt: PLAN_TTL_MS + 1, plannedRisk: 10, notional: 1_000 };
+  const weakRoute: LiquidityRoute = { id: "local-long", symbol: "BTC_USDT", side: "LONG", kind: "LOCAL_BREAKOUT",
+    stage: "LOCAL_TO_NODE", entryTrigger: 101, invalidation: 99, target: 110, targetIdentity: "HTF:LONG:110",
+    targetTimeframe: "4h", nextTarget: null, confirmationScore: 0.39, fakeoutRisk: 0.74,
+    activationDistanceRate: 0.01, score: 2, executableNow: false, reason: [] };
+  const first = reconcilePaper({ now: 60_001, midpoint: 100, fresh: true, sequenceFault: false, decision: null,
+    plan, position: null, zones: [], activeRoutes: [weakRoute], absorption: 0, confirmationMinute: 60_000,
+    equity: 1_000, openRisk: 0 });
+  assert.equal(first.plan?.state, "PREPARED");
+  assert.equal(first.plan?.invalidationSignalReason, "ROUTE_WEAK_CANCEL");
+  assert.equal(first.plan?.invalidationSignalCount, 1);
+  const cancelled = reconcilePaper({ now: 120_001, midpoint: 100, fresh: true, sequenceFault: false, decision: null,
+    plan: first.plan, position: null, zones: [], activeRoutes: [weakRoute], absorption: 0,
+    confirmationMinute: 120_000, equity: 1_000, openRisk: 0 });
+  assert.equal(cancelled.plan?.state, "CANCELLED");
+  assert.deepEqual(cancelled.events, ["ROUTE_WEAK_CANCEL"]);
 });
 
 test("dynamic leverage targets ten-percent margin but preserves liquidation distance", () => {
@@ -184,11 +209,38 @@ test("single-entry risk is capped at 1.8% and notional is capped at four times e
 
 test("dynamic protection tightens only and target absorption exits without fixed TP", () => {
   const position: PaperPosition = { id: "x", symbol: "SOL_USDT", side: "LONG", scenario: "BREAKOUT", entryAt: 1, entryPrice: 100, initialStop: 95, currentStop: 95, currentTarget: 110, plannedRisk: 10, notional: 1_000, targetScore: 20, status: "OPEN" };
-  const held = updatePosition(position, { now: 2, price: 105, bestTarget: zone("LONG", 112), oppositeTarget: zone("SHORT", 90, 0.2), absorption: 0.2 });
+  const held = updatePosition(position, { now: 60_001, price: 105, bestTarget: zone("LONG", 112), oppositeTarget: zone("SHORT", 90, 0.2),
+    absorption: 0.2, confirmationMinute: 60_000, confirmationPrice: 105 });
   assert.ok(held.currentStop > position.currentStop);
-  const closed = updatePosition(held, { now: 3, price: 112, bestTarget: zone("LONG", 112), oppositeTarget: zone("SHORT", 90, 0.2), absorption: 0.8 });
+  assert.ok(held.currentStop > position.entryPrice);
+  const closed = updatePosition(held, { now: 120_001, price: 112, bestTarget: zone("LONG", 112), oppositeTarget: zone("SHORT", 90, 0.2), absorption: 0.8 });
   assert.equal(closed.status, "CLOSED");
   assert.ok(Number.isFinite(closed.realizedPnl));
+});
+
+test("the observed ETH path cannot move protection to entry before one confirmed R", () => {
+  const position: PaperPosition = { id: "eth-regression", symbol: "ETH_USDT", side: "SHORT", scenario: "BREAKOUT",
+    entryAt: 1, entryPrice: 2496.725, initialStop: 2498.8252, currentStop: 2498.8252, currentTarget: 2452.93,
+    plannedRisk: 10, notional: 3_500, targetScore: 20, status: "OPEN" };
+  const favorableTick = updatePosition(position, { now: 44_001, price: 2495.94, bestTarget: zone("SHORT", 2452.93),
+    oppositeTarget: zone("LONG", 2510), absorption: 0.2 });
+  assert.equal(favorableTick.currentStop, position.initialStop);
+  const completedBelowOneR = updatePosition(favorableTick, { now: 60_001, price: 2495.05,
+    bestTarget: zone("SHORT", 2452.93), oppositeTarget: zone("LONG", 2510), absorption: 0.2,
+    confirmationMinute: 60_000, confirmationPrice: 2495.05 });
+  assert.equal(completedBelowOneR.currentStop, position.initialStop);
+  const normalPullback = updatePosition(completedBelowOneR, { now: 70_001, price: 2497.015,
+    bestTarget: zone("SHORT", 2452.93), oppositeTarget: zone("LONG", 2510), absorption: 0.2 });
+  assert.equal(normalPullback.status, "OPEN");
+});
+
+test("a tightened stop is reported as dynamic protection instead of structural invalidation", () => {
+  const position: PaperPosition = { id: "dynamic-stop", symbol: "BTC_USDT", side: "LONG", scenario: "BREAKOUT",
+    entryAt: 1, entryPrice: 100, initialStop: 95, currentStop: 97.5, currentTarget: 115,
+    plannedRisk: 10, notional: 1_000, targetScore: 20, status: "OPEN" };
+  const stopped = updatePosition(position, { now: 180_001, price: 97.4, bestTarget: zone("LONG", 115),
+    oppositeTarget: zone("SHORT", 90), absorption: 0 });
+  assert.equal(stopped.exitReason, "DYNAMIC_PROTECTION_STOP");
 });
 
 test("a route position exits at its liquidity node when continuation is not confirmed", () => {
@@ -232,23 +284,45 @@ test("stale or sequence-fault data cancels only prepared plan and cannot close a
   assert.equal(usableSnapshot({ symbol: "X_USDT", observedAt: 9_000, sequence: 9, tickSize: 1, bids: [], asks: [] }, 10_001, 10, 10_000).sequenceFault, true);
 });
 
-test("a vanished target immediately cancels a prepared plan", () => {
-  const decision = decideThreeState({ symbol: "BTC_USDT", observedAt: 1, mid: 100, zones: [zone("LONG", 110), zone("SHORT", 90)], bands: [], flow: flow(), absorption: 0.3 })!;
-  const plan: PaperPlan = { ...decision, id: "gone", state: "PREPARED", createdAt: 1, expiresAt: 9_999, plannedRisk: 10, notional: 1_000 };
-  const result = reconcilePaper({ now: 2, midpoint: 100, fresh: true, sequenceFault: false, decision: null, plan, position: null, zones: [], absorption: 0, equity: 1_000, openRisk: 0 });
+test("crossing the frozen structural invalidation still cancels a prepared plan immediately", () => {
+  const decision = { symbol: "BTC_USDT", observedAt: 1, marketState: "BREAKOUT" as const, side: "LONG" as const,
+    entryTrigger: 101, invalidation: 99, target: 110, targetIdentity: "target", score: 20, oppositeScore: 1, reason: [] };
+  const plan: PaperPlan = { ...decision, id: "invalid-before-entry", state: "PREPARED", createdAt: 1,
+    expiresAt: PLAN_TTL_MS + 1, plannedRisk: 10, notional: 1_000 };
+  const result = reconcilePaper({ now: 2, midpoint: 98.9, fresh: true, sequenceFault: false, decision: null,
+    plan, position: null, zones: [zone("LONG", 110)], absorption: 0, equity: 1_000, openRisk: 0 });
   assert.equal(result.plan?.state, "CANCELLED");
-  assert.deepEqual(result.events, ["TARGET_GONE_CANCEL"]);
+  assert.deepEqual(result.events, ["PRE_ENTRY_INVALIDATION_CANCEL"]);
 });
 
-test("a replacement decision cannot keep an old prepared thesis alive", () => {
+test("a vanished target needs two distinct completed-minute confirmations", () => {
+  const decision = { symbol: "BTC_USDT", observedAt: 1, marketState: "BREAKOUT" as const, side: "LONG" as const,
+    entryTrigger: 101, invalidation: 99, target: 110, targetIdentity: "old-target", score: 2, oppositeScore: 1, reason: [] };
+  const plan: PaperPlan = { ...decision, id: "gone", state: "PREPARED", createdAt: 1, expiresAt: PLAN_TTL_MS + 1, plannedRisk: 10, notional: 1_000 };
+  const first = reconcilePaper({ now: 60_001, midpoint: 100, fresh: true, sequenceFault: false, decision: null, plan,
+    position: null, zones: [], absorption: 0, confirmationMinute: 60_000, equity: 1_000, openRisk: 0 });
+  assert.equal(first.plan?.state, "PREPARED");
+  assert.equal(first.plan?.invalidationSignalCount, 1);
+  const duplicate = reconcilePaper({ now: 61_001, midpoint: 100, fresh: true, sequenceFault: false, decision: null,
+    plan: first.plan, position: null, zones: [], absorption: 0, confirmationMinute: 60_000, equity: 1_000, openRisk: 0 });
+  assert.equal(duplicate.plan?.invalidationSignalCount, 1);
+  const cancelled = reconcilePaper({ now: 120_001, midpoint: 100, fresh: true, sequenceFault: false, decision: null,
+    plan: duplicate.plan, position: null, zones: [], absorption: 0, confirmationMinute: 120_000, equity: 1_000, openRisk: 0 });
+  assert.equal(cancelled.plan?.state, "CANCELLED");
+  assert.deepEqual(cancelled.events, ["TARGET_GONE_CANCEL"]);
+});
+
+test("a replacement decision neither replaces nor instantly cancels the frozen thesis", () => {
   const oldDecision = { symbol: "BTC_USDT", observedAt: 1, marketState: "RANGE" as const, side: "LONG" as const,
     entryTrigger: 95, invalidation: 93, target: 110, targetIdentity: "old-target", score: 2, oppositeScore: 1, reason: [] };
   const plan: PaperPlan = { ...oldDecision, id: "old", state: "PREPARED", createdAt: 1, expiresAt: 9_999, plannedRisk: 10, notional: 1_000 };
   const changed = { ...oldDecision, target: 112, score: oldDecision.score * 1.3 };
   const result = reconcilePaper({ now: 2, midpoint: 100, fresh: true, sequenceFault: false, decision: changed, plan, position: null,
     zones: [zone("LONG", 112), zone("SHORT", 90)], absorption: 0, equity: 1_000, openRisk: 0 });
-  assert.equal(result.plan?.state, "CANCELLED");
-  assert.ok(result.events.includes("TARGET_GONE_CANCEL") || result.events.includes("THESIS_CHANGED_CANCEL"));
+  assert.equal(result.plan?.state, "PREPARED");
+  assert.equal(result.plan?.id, "old");
+  assert.equal(result.plan?.target, 110);
+  assert.deepEqual(result.events, []);
 });
 
 test("a prepared plan survives neutral ticks without chasing recalculated levels", () => {
@@ -297,10 +371,16 @@ test("a trigger crossing cannot override a vanished frozen target", () => {
     expiresAt: PLAN_TTL_MS + 1, plannedRisk: 10, notional: 1_000 };
   const longDecision = { ...shortDecision, side: "LONG" as const, entryTrigger: 99, invalidation: 98,
     target: 110, targetIdentity: "BOOK:LONG:110", score: 1_000 };
-  const firstPass = reconcilePaper({ now: 2, midpoint: 101.1, fresh: true, sequenceFault: false, decision: longDecision,
-    plan, position: null, zones: [zone("LONG", 110)], absorption: 0, equity: 1_000, openRisk: 0, allowOpen: false });
+  const warned = reconcilePaper({ now: 60_001, midpoint: 100.5, fresh: true, sequenceFault: false, decision: longDecision,
+    plan, position: null, zones: [zone("LONG", 110)], absorption: 0, confirmationMinute: 60_000,
+    equity: 1_000, openRisk: 0, allowOpen: false });
+  assert.equal(warned.plan?.state, "PREPARED");
+  const firstPass = reconcilePaper({ now: 120_001, midpoint: 101.1, fresh: true, sequenceFault: false, decision: longDecision,
+    plan: warned.plan, position: null, zones: [zone("LONG", 110)], absorption: 0, confirmationMinute: 120_000,
+    equity: 1_000, openRisk: 0, allowOpen: true });
   assert.equal(firstPass.plan?.id, "short-cross");
   assert.equal(firstPass.plan?.state, "CANCELLED");
+  assert.equal(firstPass.position, null);
   assert.deepEqual(firstPass.events, ["TARGET_GONE_CANCEL"]);
 });
 
@@ -331,7 +411,7 @@ test("a mathematically acceptable R multiple is still rejected when its net prof
   assert.equal(result.executable, false);
 });
 
-test("range entries must still show absorption when the frozen trigger is reached", () => {
+test("a frozen range entry is not vetoed by one transient absorption dip", () => {
   const decision = { symbol: "SOL_USDT", observedAt: 1, marketState: "RANGE" as const, side: "SHORT" as const,
     entryTrigger: 101, invalidation: 102, target: 95, targetIdentity: "BOOK:SHORT:95", score: 100, oppositeScore: 1, reason: [] };
   const plan: PaperPlan = { ...decision, id: "range-without-absorption", state: "PREPARED", createdAt: 1,
@@ -339,9 +419,9 @@ test("range entries must still show absorption when the frozen trigger is reache
   const result = reconcilePaper({ now: 2, midpoint: 101.1, fresh: true, sequenceFault: false, decision: null,
     plan, position: null, zones: [zone("SHORT", 95), zone("LONG", 110)], absorption: 0.2, equity: 1_000,
     openRisk: 0, allowOpen: true });
-  assert.equal(result.plan?.state, "CANCELLED");
-  assert.equal(result.position, null);
-  assert.ok(result.events.includes("TRIGGER_STRUCTURE_CANCEL"));
+  assert.equal(result.plan?.state, "TRIGGERED");
+  assert.equal(result.position?.status, "OPEN");
+  assert.ok(result.events.includes("PAPER_OPEN"));
 });
 
 test("new executable plans remain valid for fifteen minutes", () => {
@@ -482,18 +562,32 @@ test("higher timeframe vetoes an opposing reversal and exact balance waits", () 
   assert.equal(decideThreeState({ symbol: "X", observedAt: 1, mid: 100, zones: [zone("LONG", 110), zone("SHORT", 90)], bands: [], flow: flow(), absorption: 0 }), null);
 });
 
-test("a missing target exits only after two distinct completed one-minute confirmations", () => {
+test("a missing target exits only after protection time, adverse price, and three completed minutes", () => {
   const position: PaperPosition = { id: "gone", symbol: "SOL_USDT", side: "LONG", scenario: "BREAKOUT", entryAt: 1, entryPrice: 100,
     initialStop: 95, currentStop: 95, currentTarget: 110, plannedRisk: 10, notional: 1_000, targetScore: 20, status: "OPEN" };
-  const first = updatePosition(position, { now: 60_001, price: 101, bestTarget: null, oppositeTarget: zone("SHORT", 90), absorption: 0, confirmationMinute: 60_000 });
+  const first = updatePosition(position, { now: 60_001, price: 98, bestTarget: null, oppositeTarget: zone("SHORT", 90), absorption: 0, confirmationMinute: 60_000 });
   assert.equal(first.status, "OPEN");
   assert.equal(first.exitSignalCount, 1);
-  const duplicate = updatePosition(first, { now: 61_001, price: 101, bestTarget: null, oppositeTarget: zone("SHORT", 90), absorption: 0, confirmationMinute: 60_000 });
+  const duplicate = updatePosition(first, { now: 61_001, price: 98, bestTarget: null, oppositeTarget: zone("SHORT", 90), absorption: 0, confirmationMinute: 60_000 });
   assert.equal(duplicate.status, "OPEN");
   assert.equal(duplicate.exitSignalCount, 1);
-  const closed = updatePosition(duplicate, { now: 120_001, price: 101, bestTarget: null, oppositeTarget: zone("SHORT", 90), absorption: 0, confirmationMinute: 120_000 });
+  const second = updatePosition(duplicate, { now: 120_001, price: 98, bestTarget: null, oppositeTarget: zone("SHORT", 90), absorption: 0, confirmationMinute: 120_000 });
+  assert.equal(second.status, "OPEN");
+  assert.equal(second.exitSignalCount, 2);
+  const closed = updatePosition(second, { now: 180_001, price: 98, bestTarget: null, oppositeTarget: zone("SHORT", 90), absorption: 0, confirmationMinute: 180_000 });
   assert.equal(closed.status, "CLOSED");
   assert.equal(closed.exitReason, "TARGET_DISAPPEARED");
+});
+
+test("three soft warnings cannot close a position while price still confirms its direction", () => {
+  const position: PaperPosition = { id: "profitable", symbol: "BTC_USDT", side: "SHORT", scenario: "BREAKOUT", entryAt: 1,
+    entryPrice: 100, initialStop: 105, currentStop: 105, currentTarget: 90, plannedRisk: 10, notional: 1_000,
+    targetScore: 20, status: "OPEN" };
+  const first = updatePosition(position, { now: 60_001, price: 99, bestTarget: null, oppositeTarget: zone("LONG", 110), absorption: 0, confirmationMinute: 60_000 });
+  const second = updatePosition(first, { now: 120_001, price: 98.5, bestTarget: null, oppositeTarget: zone("LONG", 110), absorption: 0, confirmationMinute: 120_000 });
+  const third = updatePosition(second, { now: 180_001, price: 98, bestTarget: null, oppositeTarget: zone("LONG", 110), absorption: 0, confirmationMinute: 180_000 });
+  assert.equal(third.status, "OPEN");
+  assert.equal(third.exitSignalCount, 3);
 });
 
 test("a one-minute opposite-utility spike clears instead of forcing an exit", () => {

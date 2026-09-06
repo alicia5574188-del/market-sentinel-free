@@ -111,7 +111,9 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(page, /当前持仓/);
   assert.match(page, /刚刚结束/);
   assert.match(css, /position:fixed!important/);
-  assert.match(page, /const intent = plan\?\.state === "PREPARED" \? plan : decision/);
+  assert.match(page, /const intent = positionIntent \?\? \(plan\?\.state === "PREPARED" \? plan : decision\)/);
+  assert.match(page, /旧版即时保本止损/);
+  assert.match(page, /软失效观察/);
   assert.match(page, /AbortController/);
   assert.match(page, /document\.hidden/);
   assert.match(page, /系统现在的决定/);

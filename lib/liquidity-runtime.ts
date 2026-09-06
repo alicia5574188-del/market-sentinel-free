@@ -4,6 +4,7 @@ import {
   dataIsFresh,
   decideThreeState,
   flowPressure,
+  PLAN_SOFT_INVALIDATION_CONFIRMATIONS,
   planTriggered,
   selectSafeLeverage,
   sizePaperPosition,
@@ -58,6 +59,7 @@ export type SymbolMemory = {
   oiCohorts: Array<{ entryPrice: number; longNotional: number; shortNotional: number }>;
   timeframeBias: { m1: TimeframeState; m15: TimeframeState; h1: TimeframeState; h4: TimeframeState };
   timeframeUpdatedAt: { m1: number; m15: number; h1: number; h4: number };
+  lastCompletedMinuteClose: number;
 };
 
 export function emptySymbolMemory(): SymbolMemory {
@@ -80,6 +82,7 @@ export function emptySymbolMemory(): SymbolMemory {
     structureZones: [], structureByTimeframe: { m1: [], m15: [], h1: [], h4: [] }, range15m: null,
     oiCohorts: [],
     timeframeBias: { m1: "UNKNOWN", m15: "UNKNOWN", h1: "UNKNOWN", h4: "UNKNOWN" }, timeframeUpdatedAt: { m1: 0, m15: 0, h1: 0, h4: 0 },
+    lastCompletedMinuteClose: 0,
   };
 }
 
@@ -511,6 +514,7 @@ export function reconcilePaper(input: {
   zones: LiquidityZone[];
   absorption: number;
   confirmationMinute?: number;
+  confirmationPrice?: number;
   equity: number;
   openRisk: number;
   allowOpen?: boolean;
@@ -536,18 +540,52 @@ export function reconcilePaper(input: {
       persistence: 1, source: "STOP_POOL" }) : null;
   };
   const planRouteId = plan?.routeId;
+  const activePlanRoute = !planRouteId ? null : input.activeRoutes?.filter((route) => route.id === planRouteId || (route.side === plan?.side
+    && route.kind === plan.routeKind
+    && Math.abs(route.target - plan.target) / Math.max(plan.target, 1e-9) <= 0.0015
+    && Math.abs(route.entryTrigger - plan.entryTrigger) / Math.max(plan.entryTrigger, 1e-9) <= 0.0015))
+    .sort((a, b) => Number(b.id === planRouteId) - Number(a.id === planRouteId))[0] ?? null;
+  const routePresent = !planRouteId || activePlanRoute != null;
+  const routeWeak = activePlanRoute != null && (activePlanRoute.confirmationScore < (plan?.routeKind === "NODE_CONTINUATION" ? 0.5 : 0.42)
+    || activePlanRoute.fakeoutRisk > (plan?.routeKind === "NODE_CONTINUATION" ? 0.62 : 0.72));
   const targetPresent = !plan || plan.state !== "PREPARED" || (planRouteId
-    ? input.activeRoutes?.some((route) => route.id === planRouteId) === true
+    ? routePresent
     : continuousTarget(plan.side, plan.targetIdentity, plan.target) != null);
-  const movedAway = plan?.state === "PREPARED" && plan.activationDistanceRate != null
+  const triggered = plan?.state === "PREPARED" && planTriggered(plan, input.midpoint);
+  const movedAway = plan?.state === "PREPARED" && !triggered && plan.activationDistanceRate != null
     && Math.abs(plan.entryTrigger - input.midpoint) / Math.max(input.midpoint, 1e-9) > plan.activationDistanceRate * 1.6;
+  const invalidationCrossed = plan?.state === "PREPARED"
+    && (plan.side === "LONG" ? input.midpoint <= plan.invalidation : input.midpoint >= plan.invalidation);
   // Freeze a prepared thesis instead of chasing every two-second recalculation.
-  // A fresh opposing score never replaces it, but the frozen destination must
-  // still exist when price reaches the trigger.
-  if ((!input.fresh || input.sequenceFault || !targetPresent || movedAway) && plan?.state === "PREPARED") {
+  // Stale data and a crossed structural invalidation are hard faults. Route
+  // disappearance and activation drift need two completed 1m confirmations so
+  // a transient two-second recomputation cannot cancel an otherwise valid plan.
+  if ((!input.fresh || input.sequenceFault || invalidationCrossed) && plan?.state === "PREPARED") {
     plan = { ...plan, state: "CANCELLED" };
     cancelledThisCycle = true;
-    events.push(!input.fresh ? "STALE_CANCEL" : input.sequenceFault ? "SEQUENCE_REBUILD_CANCEL" : movedAway ? "ACTIVATION_LOST_CANCEL" : "TARGET_GONE_CANCEL");
+    events.push(!input.fresh ? "STALE_CANCEL" : input.sequenceFault ? "SEQUENCE_REBUILD_CANCEL" : "PRE_ENTRY_INVALIDATION_CANCEL");
+  } else if (plan?.state === "PREPARED") {
+    const softReason = !targetPresent ? "TARGET_GONE_CANCEL" as const : routeWeak ? "ROUTE_WEAK_CANCEL" as const
+      : movedAway ? "ACTIVATION_LOST_CANCEL" as const : null;
+    let invalidationSignalMinute = plan.invalidationSignalMinute;
+    let invalidationSignalCount = plan.invalidationSignalCount ?? 0;
+    let invalidationSignalReason = plan.invalidationSignalReason;
+    if (!softReason) {
+      invalidationSignalMinute = undefined;
+      invalidationSignalCount = 0;
+      invalidationSignalReason = undefined;
+    } else if (input.confirmationMinute && input.confirmationMinute > plan.createdAt
+      && input.confirmationMinute !== invalidationSignalMinute) {
+      invalidationSignalCount = invalidationSignalReason === softReason ? invalidationSignalCount + 1 : 1;
+      invalidationSignalMinute = input.confirmationMinute;
+      invalidationSignalReason = softReason;
+    }
+    plan = { ...plan, invalidationSignalMinute, invalidationSignalCount, invalidationSignalReason };
+    if (softReason && invalidationSignalCount >= PLAN_SOFT_INVALIDATION_CONFIRMATIONS) {
+      plan = { ...plan, state: "CANCELLED" };
+      cancelledThisCycle = true;
+      events.push(softReason);
+    }
   }
   if (position?.status === "OPEN" && input.fresh && !input.sequenceFault) {
     const own = input.protectOnly ? zoneUtility({ side: position.side, price: position.currentTarget, liquidity: 1, cascade: 0, pathCost: 1,
@@ -559,6 +597,7 @@ export function reconcilePaper(input: {
       .sort((a, b) => b.score - a.score)[0] ?? null;
     position = updatePosition(position, { now: input.now, price: input.midpoint, bestTarget: own, oppositeTarget: input.protectOnly ? null : opposite,
       absorption: input.protectOnly ? 0 : input.absorption, confirmationMinute: input.confirmationMinute,
+      confirmationPrice: input.confirmationPrice,
       continuationRoute: input.protectOnly ? null : continuationRoute });
     if (position.status === "CLOSED") {
       events.push(position.exitReason ?? "CLOSED");
@@ -604,12 +643,9 @@ export function reconcilePaper(input: {
     const passedTarget = plan.side === "LONG" ? input.midpoint >= plan.target : input.midpoint <= plan.target;
     const economics = tradeEconomics({ entry: input.midpoint, target: plan.target, lossRate: resized.lossRate, confidence,
       notional: resized.notional, equity: input.equity });
-    const scenarioConfirmed = plan.marketState === "BREAKOUT"
-      ? (plan.routeKind == null || ((input.breakoutConfirmation ?? plan.confirmationScore ?? 0) >= 0.58 && (plan.fakeoutRisk ?? 1) <= 0.62))
-      : input.absorption >= 0.55;
-    if (invalidFill || resized.allowedLoss <= 0 || resized.portfolioRiskAfter > input.equity * 0.05 + 1e-9 || passedTarget || !economics.executable || !scenarioConfirmed) {
+    if (invalidFill || resized.allowedLoss <= 0 || resized.portfolioRiskAfter > input.equity * 0.05 + 1e-9 || passedTarget || !economics.executable) {
       plan = { ...plan, state: "CANCELLED" };
-      events.push(invalidFill || resized.portfolioRiskAfter > input.equity * 0.05 + 1e-9 ? "GAP_RISK_CANCEL" : !scenarioConfirmed ? "TRIGGER_STRUCTURE_CANCEL" : "GAP_ECONOMICS_CANCEL");
+      events.push(invalidFill || resized.portfolioRiskAfter > input.equity * 0.05 + 1e-9 ? "GAP_RISK_CANCEL" : "GAP_ECONOMICS_CANCEL");
       return { plan, position, events };
     }
     plan = { ...plan, state: "TRIGGERED" };
