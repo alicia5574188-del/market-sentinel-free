@@ -17,7 +17,7 @@ test("runtime uses bounded futures REST snapshots, no continuous WebSocket", asy
   assert.match(gate, /\/futures\/usdt\/candlesticks/);
   assert.doesNotMatch(worker + gate, /new WebSocket|futures\.order_book_update/);
   assert.match(worker, /MAX_ANCILLARY_CONCURRENCY = 2/);
-  assert.match(worker, /plannedTotalDoRequestsPerDay: 54_720/);
+  assert.match(worker, /plannedTotalDoRequestsPerDay: 50_400/);
   assert.match(worker, /plannedDoWritesPerDay: 54_080/);
   assert.match(worker, /NON_ALARM_WRITE_CAP = 8_000/);
   assert.match(worker, /plannedMaxD1BilledWritesPerDay: 4_800/);
@@ -50,7 +50,8 @@ test("external API is read-only PAPER and the operator UI explains every decisio
   assert.match(worker, /url\.pathname === "\/api\/candles" && request\.method === "GET"/);
   assert.match(worker, /GATE_USDT_FUTURES/);
   assert.match(worker, /\["1m", "15m", "1h"\]\.includes\(interval\)/);
-  assert.match(worker, /market-stream\/candles\?symbol=/);
+  assert.match(worker, /SELECT chart_cache_json AS chartCache,chart_cache_at AS chartCacheAt FROM system_settings/);
+  assert.match(worker, /mirrorChartCandles/);
   assert.match(worker, /actual candles warming/);
   assert.match(worker, /serving last actual candles/);
   assert.match(worker, /FROM paper_positions/);

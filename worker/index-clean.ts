@@ -39,6 +39,7 @@ type RuntimeState = {
   lastStopCheckpointAt: number | null;
   nextAlarmAt: number | null;
   lastUniverseAt: number;
+  lastChartMirrorAt: number;
   utcDay: string;
   alarmCount: number;
   d1Writes: number;
@@ -75,7 +76,7 @@ const json = (value: unknown, status = 200) => Response.json(value, { status, he
 function initialState(): RuntimeState {
   return {
     version: SYSTEM_VERSION, authoritySchemaVersion: AUTHORITY_SCHEMA_VERSION, mode: "PAPER", state: "STARTING", symbols: DEFAULT_SYMBOLS,
-    lastAlarmAt: null, lastSuccessAt: null, lastHeartbeatAt: null, lastStopCheckpointAt: null, nextAlarmAt: null, lastUniverseAt: 0,
+    lastAlarmAt: null, lastSuccessAt: null, lastHeartbeatAt: null, lastStopCheckpointAt: null, nextAlarmAt: null, lastUniverseAt: 0, lastChartMirrorAt: 0,
     utcDay: day(), alarmCount: 0, d1Writes: 0, nonAlarmWrites: 0, d1RetryAt: 0, d1FailureCount: 0, equityVersion: 0, ancillaryCursor: 0, subrequestCount: 0, maxSubrequestsInAlarm: 0, sequenceRebuilds: 0, lastProcessedSlot: -1, feedFailures: {},
     lastError: null, d1MirrorError: null, riskBreach: false, tickSize: Object.fromEntries(DEFAULT_SYMBOLS.map((symbol) => [symbol, 0.0001])), contractMeta: {},
     decisions: {}, plans: {}, positions: {}, evidence: {}, analysisMs: [], equity: 1_000, outbox: [],
@@ -344,6 +345,18 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
   }
 
+  private async mirrorChartCandles(now: number) {
+    if (now - this.runtime.lastChartMirrorAt < 5 * 60_000 || this.runtime.d1Writes >= 4_800) return;
+    const complete = DEFAULT_SYMBOLS.every((symbol) => ["1m", "15m", "1h"].every((interval) => (this.chartCandles[symbol]?.[interval as "1m" | "15m" | "1h"]?.length ?? 0) >= 20));
+    if (!complete) return;
+    try {
+      await this.env.DB.prepare("UPDATE system_settings SET chart_cache_json=?,chart_cache_at=? WHERE id=1")
+        .bind(JSON.stringify(this.chartCandles), now).run();
+      this.runtime.d1Writes += 1;
+      this.runtime.lastChartMirrorAt = now;
+    } catch { /* Chart mirroring is optional and must never interrupt PAPER authority. */ }
+  }
+
   private async processBooks(now: number, cycleSymbols = [...this.runtime.symbols]) {
     const authorityBefore = this.captureAuthority();
     const dueSymbols = cycleSymbols.filter((symbol) => (this.runtime.feedFailures[symbol]?.retryAt ?? 0) <= now);
@@ -586,6 +599,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       const successes = books.successes;
       subrequests += books.requests;
+      await this.mirrorChartCandles(now);
       this.runtime.lastAlarmAt = now;
       this.runtime.lastSuccessAt = successes > 0 ? now : this.runtime.lastSuccessAt;
       const allWarm = this.runtime.symbols.every((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS);
@@ -640,15 +654,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           nonAlarmWriteCapPerDay: NON_ALARM_WRITE_CAP, nonAlarmWritesToday: this.runtime.nonAlarmWrites,
           plannedDoWritesPerDay: 54_080,
           internalAnalysisP99RedlineMs: 25, topLevelCpuP99RedlineMs: 8, assumedRuntimePollSeconds: 15,
-          plannedForegroundDoRequestsPerDay: 10_080, plannedCronWatchdogsPerDay: 1_440, plannedTotalDoRequestsPerDay: 54_720,
+          plannedForegroundDoRequestsPerDay: 5_760, plannedCronWatchdogsPerDay: 1_440, plannedTotalDoRequestsPerDay: 50_400,
           maxOpenPositions: MAX_OPEN_POSITIONS, plannedMaxD1BilledWritesPerDay: 4_800 } });
-    }
-    if (path === "/candles") {
-      const symbol = url.searchParams.get("symbol") ?? "";
-      const interval = url.searchParams.get("interval") ?? "15m";
-      if (!DEFAULT_SYMBOLS.includes(symbol) || !["1m", "15m", "1h"].includes(interval)) return json({ error: "unsupported futures chart" }, 400);
-      const candles = this.chartCandles[symbol]?.[interval as "1m" | "15m" | "1h"] ?? [];
-      return candles.length ? json({ symbol, interval, source: "GATE_USDT_FUTURES", candles, generatedAt: Date.now() }) : json({ error: "actual candles warming" }, 503);
     }
     return json({ error: "not found" }, 404);
   }
@@ -697,14 +704,16 @@ async function chartCandles(url: URL, env: CloudflareEnv) {
     return new Response(cached.response, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=20" } });
   }
   try {
-    const response = await env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/candles?symbol=${encodeURIComponent(symbol)}&interval=${interval}`);
-    const body = await response.text();
-    if (!response.ok) throw new Error(`candle authority ${response.status}`);
+    const row = await env.DB.prepare("SELECT chart_cache_json AS chartCache,chart_cache_at AS chartCacheAt FROM system_settings WHERE id=1").first<{ chartCache: string | null; chartCacheAt: number | null }>();
+    const bundle = row?.chartCache ? JSON.parse(row.chartCache) as Record<string, Partial<Record<"1m" | "15m" | "1h", Awaited<ReturnType<typeof fetchStructureCandles>>>>> : {};
+    const candles = bundle[symbol]?.[interval as "1m" | "15m" | "1h"] ?? [];
+    if (candles.length < 20) throw new Error("actual candles warming");
+    const body = JSON.stringify({ symbol, interval, source: "GATE_USDT_FUTURES", candles, generatedAt: row?.chartCacheAt ?? Date.now() });
     candleCache.set(key, { response: body, expiresAt: Date.now() + 20_000 });
     return new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=20" } });
   } catch (error) {
     if (cached) return new Response(cached.response, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=5", Warning: '110 - "Gate refresh delayed; serving last actual candles"' } });
-    throw error;
+    return json({ error: safeError(error) }, 503);
   }
 }
 

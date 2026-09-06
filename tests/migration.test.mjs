@@ -5,6 +5,7 @@ import test from "node:test";
 
 const prepare = (await readFile(new URL("../drizzle/0032_liquidity_core_prepare.sql", import.meta.url), "utf8")).replaceAll("--> statement-breakpoint", "");
 const purge = (await readFile(new URL("../drizzle/0033_purge_legacy_system.sql", import.meta.url), "utf8")).replaceAll("--> statement-breakpoint", "");
+const chartCache = (await readFile(new URL("../drizzle/0034_chart_cache.sql", import.meta.url), "utf8")).replaceAll("--> statement-breakpoint", "");
 const credentialSchema = `CREATE TABLE live_exchange_credentials (
   id integer PRIMARY KEY DEFAULT 1 NOT NULL, exchange text NOT NULL, environment text NOT NULL, ciphertext text NOT NULL,
   iv text NOT NULL, crypto_version integer NOT NULL, key_hint text NOT NULL, gate_user_id text, owner_account_id text,
@@ -13,10 +14,12 @@ const credentialSchema = `CREATE TABLE live_exchange_credentials (
 
 test("fresh prepare and purge produce only the minimal system plus credential table", () => {
   const db = new DatabaseSync(":memory:");
-  db.exec(prepare); db.exec(purge);
+  db.exec(prepare); db.exec(purge); db.exec(chartCache);
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map((row) => row.name);
   assert.deepEqual(tables, ["live_exchange_credentials", "paper_events", "paper_plans", "paper_positions", "system_settings"]);
   assert.equal(db.prepare("SELECT mode,portfolio_risk_cap FROM system_settings WHERE id=1").get().mode, "PAPER");
+  const cache = db.prepare("SELECT chart_cache_json,chart_cache_at FROM system_settings WHERE id=1").get();
+  assert.equal(cache.chart_cache_json, null); assert.equal(cache.chart_cache_at, null);
 });
 
 test("real legacy credential schema and id=1 row survive prepare and destructive purge byte-for-byte", () => {
