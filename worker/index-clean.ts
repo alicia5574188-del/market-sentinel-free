@@ -3,7 +3,7 @@
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
 import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchRecentTrades, fetchStructureCandles } from "../lib/gate-market.ts";
-import { breakoutEntryConfirmed, breakoutEntryPriceAcceptable, closePaperPosition, planTriggered, PORTFOLIO_RISK_CAP, remainingStressRisk, SYSTEM_VERSION, updatePosition, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
+import { breakoutEntryConfirmed, breakoutEntryPriceAcceptable, closePaperPosition, PORTFOLIO_RISK_CAP, remainingStressRisk, SYSTEM_VERSION, updatePosition, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
 import { aggregateFourHourCandles, analyzeSnapshot, ancillaryIsFresh, ancillarySchedule, applyFlow, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
 import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem, type ReviewCandle } from "../lib/paper-outbox.ts";
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
@@ -920,12 +920,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     for (const symbol of this.runtime.symbols) {
       const plan = this.runtime.plans[symbol] ?? null;
-      if (!plan || plan.state !== "PREPARED" || now >= plan.expiresAt || this.runtime.live.positions[symbol]?.status === "OPEN") {
+      const paperPosition = this.runtime.positions[symbol] ?? null;
+      const justTriggeredBreakout = plan?.marketState === "BREAKOUT" && plan.state === "TRIGGERED"
+        && paperPosition?.status === "OPEN" && paperPosition.id === plan.id
+        && paperPosition.entryAt >= (this.runtime.live.changedAt ?? now)
+        && now >= paperPosition.entryAt && now - paperPosition.entryAt <= 10_000;
+      if (!plan || (plan.state !== "PREPARED" && !justTriggeredBreakout) || now >= plan.expiresAt
+        || this.runtime.live.positions[symbol]?.status === "OPEN") {
         delete this.runtime.live.entrySkips[symbol];
         continue;
       }
       const midpoint = this.runtime.evidence[symbol]?.midpoint ?? 0;
-      if (plan.marketState === "BREAKOUT" && (!planTriggered(plan, midpoint)
+      const priceCrossed = plan.side === "LONG" ? midpoint >= plan.entryTrigger : midpoint <= plan.entryTrigger;
+      if (plan.marketState === "BREAKOUT" && (!priceCrossed
         || !breakoutEntryConfirmed(plan, this.memory[symbol]?.timeframeUpdatedAt.m1,
           this.memory[symbol]?.lastCompletedMinuteCandle)
         || !breakoutEntryPriceAcceptable(plan, midpoint))) continue;
@@ -1527,7 +1534,15 @@ async function ownerAuthenticated(request: Request, env: CloudflareEnv) {
 }
 
 async function authSession(request: Request, env: CloudflareEnv) {
-  return json({ configured: ownerAuthConfigured(env.OWNER_ACCESS_TOKEN), authenticated: await ownerAuthenticated(request, env), username: "owner" });
+  const configured = ownerAuthConfigured(env.OWNER_ACCESS_TOKEN);
+  const authenticated = await ownerAuthenticated(request, env);
+  if (!authenticated) return json({ configured, authenticated: false, username: "owner" });
+  // A valid owner visit renews the signed HttpOnly session. This keeps the
+  // phone control surface usable without weakening same-origin LIVE mutation.
+  const session = await createOwnerSession(env.OWNER_ACCESS_TOKEN!);
+  return new Response(JSON.stringify({ configured, authenticated: true, username: "owner" }), {
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "Set-Cookie": ownerSessionCookie(session) },
+  });
 }
 
 async function ownerLogin(request: Request, env: CloudflareEnv) {

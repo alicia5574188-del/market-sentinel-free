@@ -9,12 +9,14 @@ import {
   MAX_GENERIC_PLAN_DISTANCE_RATE,
   MIN_NET_REWARD_RISK,
   MIN_STRUCTURAL_STOP_RATE,
+  observeFastBreakout,
   PLAN_SOFT_INVALIDATION_CONFIRMATIONS,
   planTriggered,
   ROUND_TRIP_FRICTION_RATE,
   selectSafeLeverage,
   sizePaperPosition,
   stablePriceBin,
+  stagedEconomicTarget,
   tradeEconomics,
   updatePosition,
   zoneUtility,
@@ -457,7 +459,7 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
         targetTimeframe: currentTarget.timeframe, nextTarget: next?.zone.price ?? null, confirmationScore, fakeoutRisk,
         activationDistanceRate, score, executableNow: Math.abs(entryTrigger - midpoint) / midpoint <= activationDistanceRate
           && confirmationScore >= 0.52 && fakeoutRisk <= 0.62,
-        reason: ["15分钟重复边界", "完整1分钟收在突破位外才允许成交",
+        reason: ["15分钟重复边界", "高质量突破用连续三次两秒盘口确认，中等质量等待完整1分钟",
           nodeBeyondProjection ? "先兑现15分钟局部量度空间" : `${first.timeframe}流动性作为本段终点`,
           "更远高周期节点留给下一段重判", "订单流、微价格与周期方向联合过滤假突破"] });
       if (next) {
@@ -656,6 +658,11 @@ export function reconcilePaper(input: {
       events.push(softReason);
     }
   }
+  if (plan?.state === "PREPARED" && input.fresh && !input.sequenceFault && (input.allowOpen ?? true) === false) {
+    plan = observeFastBreakout(plan, { now: input.now, price: input.midpoint,
+      confirmation: input.breakoutConfirmation ?? 0,
+      fakeoutRisk: activePlanRoute?.fakeoutRisk ?? plan.fakeoutRisk ?? 1 });
+  }
   if (position?.status === "OPEN" && input.fresh && !input.sequenceFault) {
     const own = input.protectOnly ? zoneUtility({ side: position.side, price: position.currentTarget, liquidity: 1, cascade: 0, pathCost: 1,
       distanceCost: 1, probabilityReach: 1, persistence: 1, source: "BOOK" })
@@ -697,14 +704,15 @@ export function reconcilePaper(input: {
     if (materiallyDifferent && withinActivation) {
       const sized = sizePaperPosition({ equity: input.equity, entry: input.decision.entryTrigger, invalidation: input.decision.invalidation, feeBps: 10, stressSlippageBps: 8, confidence: clamp(input.decision.score / Math.max(input.decision.score + input.decision.oppositeScore, Number.EPSILON), 0, 1), openRisk: input.openRisk });
       const confidence = clamp(input.decision.score / Math.max(input.decision.score + input.decision.oppositeScore, Number.EPSILON), 0, 1);
-      const economics = tradeEconomics({ entry: input.decision.entryTrigger, target: input.decision.target, lossRate: sized.lossRate, confidence,
+      const economicTarget = stagedEconomicTarget(input.decision);
+      const economics = tradeEconomics({ entry: input.decision.entryTrigger, target: economicTarget, lossRate: sized.lossRate, confidence,
         notional: sized.notional, equity: input.equity });
       if (sized.allowedLoss > 0 && sized.portfolioRiskAfter <= input.equity * 0.05 + 1e-9 && economics.executable) {
         const leverage = selectSafeLeverage({ notional: sized.notional, equity: input.equity, entry: input.decision.entryTrigger,
           invalidation: input.decision.invalidation, maintenanceRate: input.maintenanceRate, leverageMax: input.leverageMax });
         plan = { ...input.decision, id: `${input.decision.symbol}:${input.now}`, state: "PREPARED", createdAt: input.now,
           expiresAt: input.now + PLAN_TTL_MS, plannedRisk: sized.allowedLoss, notional: sized.notional,
-          leverage: leverage.leverage, margin: leverage.margin };
+          leverage: leverage.leverage, margin: leverage.margin, economicTarget };
         events.push("PLAN_PREPARED");
       } else if (sized.allowedLoss > 0) {
         events.push("PLAN_REJECTED_ECONOMICS");
@@ -720,7 +728,7 @@ export function reconcilePaper(input: {
       stressSlippageBps: 8, confidence, openRisk: input.openRisk });
     const invalidFill = plan.side === "LONG" ? input.midpoint <= plan.invalidation : input.midpoint >= plan.invalidation;
     const passedTarget = plan.side === "LONG" ? input.midpoint >= plan.target : input.midpoint <= plan.target;
-    const economics = tradeEconomics({ entry: input.midpoint, target: plan.target, lossRate: resized.lossRate, confidence,
+    const economics = tradeEconomics({ entry: input.midpoint, target: plan.economicTarget ?? stagedEconomicTarget(plan), lossRate: resized.lossRate, confidence,
       notional: resized.notional, equity: input.equity });
     if (invalidFill || resized.allowedLoss <= 0 || resized.portfolioRiskAfter > input.equity * 0.05 + 1e-9 || passedTarget || !economics.executable) {
       plan = { ...plan, state: "CANCELLED" };

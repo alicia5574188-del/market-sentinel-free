@@ -625,7 +625,7 @@ test("a capacity-limited plan is skipped without blocking LIVE or other affordab
   assert.match(stream.runtime.live.entrySkips.ETH_USDT.reason, /本轮未挂单/);
 });
 
-test("LIVE submits a confirmed breakout as current-price IOC, never as a pre-hung trigger", async () => {
+test("LIVE submits a three-snapshot-confirmed breakout as current-price IOC without waiting a minute", async () => {
   const { stream } = await makeStream();
   stream.runtime.symbols = ["BTC_USDT"];
   stream.runtime.plans = { BTC_USDT: plan("BTC_USDT") };
@@ -645,12 +645,13 @@ test("LIVE submits a confirmed breakout as current-price IOC, never as a pre-hun
   assert.equal(enabled.ok, true);
   assert.equal(createCalls, 0);
 
-  stream.runtime.evidence.BTC_USDT = { midpoint: 101.2, observedAt: 60_001, warmup: 30, fresh: true,
+  const triggeredAt = stream.runtime.live.changedAt + 1;
+  stream.runtime.plans.BTC_USDT = { ...stream.runtime.plans.BTC_USDT, state: "TRIGGERED", breakoutSignalCount: 3 };
+  stream.runtime.positions.BTC_USDT = position(stream.runtime.plans.BTC_USDT.id, "BTC_USDT",
+    { entryAt: triggeredAt, entryPrice: 101.2 });
+  stream.runtime.evidence.BTC_USDT = { midpoint: 101.2, observedAt: triggeredAt, warmup: 30, fresh: true,
     ancillaryFresh: true, topLong: null, topShort: null, absorption: 0 };
-  stream.memory.BTC_USDT = emptySymbolMemory();
-  stream.memory.BTC_USDT.timeframeUpdatedAt.m1 = 60_000;
-  stream.memory.BTC_USDT.lastCompletedMinuteCandle = { time: 0, open: 100.5, high: 101.7, low: 100.4, close: 101.6 };
-  await stream.syncLive(60_001);
+  await stream.syncLive(triggeredAt + 1);
   assert.equal(createCalls, 1);
   assert.equal(stream.runtime.live.entries.BTC_USDT.kind, "MARKET");
 });

@@ -12,6 +12,7 @@ import {
   selectSafeLeverage,
   sizePaperPosition,
   stablePriceBin,
+  stagedEconomicTarget,
   tradeEconomics,
   updatePosition,
   wallPersistence,
@@ -198,6 +199,28 @@ test("the observed BTC wick below its trigger is rejected until a bearish minute
     confirmationPrice: 79_500,
     confirmationCandle: { time: 1788707940, open: 79_550, high: 79_560, low: 79_490, close: 79_500 } });
   assert.equal(confirmed.position?.status, "OPEN");
+});
+
+test("a high-quality breakout opens after three consecutive two-second confirmations without waiting a minute", () => {
+  const plan: PaperPlan = { id: "fast-breakout", symbol: "SOL_USDT", observedAt: 1,
+    marketState: "BREAKOUT", side: "LONG", entryTrigger: 101, invalidation: 99,
+    target: 110, targetIdentity: "BOOK:LONG:110", score: 9, oppositeScore: 1,
+    confirmationScore: 0.9, fakeoutRisk: 0.1, reason: [], state: "PREPARED", createdAt: 1,
+    expiresAt: PLAN_TTL_MS + 1, plannedRisk: 10, notional: 1_000 };
+  const target = zone("LONG", 110); target.identity = plan.targetIdentity;
+  let observed = plan;
+  for (const now of [2_001, 4_001, 6_001]) {
+    const result = reconcilePaper({ now, midpoint: 101.25, fresh: true, sequenceFault: false,
+      decision: null, plan: observed, position: null, zones: [target, zone("SHORT", 95)], absorption: 0.1,
+      breakoutConfirmation: 0.9, equity: 1_000, openRisk: 0, allowOpen: false });
+    observed = result.plan!;
+    assert.equal(result.position, null);
+  }
+  assert.equal(observed.breakoutSignalCount, 3);
+  const opened = reconcilePaper({ now: 6_001, midpoint: 101.25, fresh: true, sequenceFault: false,
+    decision: null, plan: observed, position: null, zones: [target, zone("SHORT", 95)], absorption: 0.1,
+    breakoutConfirmation: 0.9, equity: 1_000, openRisk: 0, allowOpen: true });
+  assert.equal(opened.position?.status, "OPEN");
 });
 
 test("a confirmed breakout waits for a retest instead of chasing beyond half an R", () => {
@@ -541,6 +564,21 @@ test("an economically untradeable target is rejected before it reaches the order
     zones: [zone("LONG", 100.1), zone("SHORT", 90)], absorption: 0, equity: 1_000, openRisk: 0, allowOpen: false });
   assert.equal(result.plan, null);
   assert.ok(result.events.includes("PLAN_REJECTED_ECONOMICS"));
+});
+
+test("a strong local breakout can qualify on its next staged node while retaining the first-node exit", () => {
+  const decision = { symbol: "SOL_USDT", observedAt: 1, marketState: "BREAKOUT" as const, side: "LONG" as const,
+    entryTrigger: 100, invalidation: 99.8, target: 100.6, nextTarget: 101,
+    targetIdentity: "STOP:15m:LONG:100.6", score: 9, oppositeScore: 1, reason: [],
+    routeId: "SOL_USDT:LOCAL_BREAKOUT:LONG", routeKind: "LOCAL_BREAKOUT" as const,
+    routeStage: "LOCAL_TO_NODE" as const, targetTimeframe: "15m" as const,
+    confirmationScore: 0.9, fakeoutRisk: 0.1, activationDistanceRate: 0.01 };
+  assert.equal(stagedEconomicTarget(decision), 101);
+  const result = reconcilePaper({ now: 2, midpoint: 99.9, fresh: true, sequenceFault: false,
+    decision, plan: null, position: null, zones: [], absorption: 0, equity: 1_000, openRisk: 0, allowOpen: false });
+  assert.equal(result.plan?.state, "PREPARED");
+  assert.equal(result.plan?.target, 100.6);
+  assert.equal(result.plan?.economicTarget, 101);
 });
 
 test("trade economics require at least 1.2R after round-trip costs", () => {

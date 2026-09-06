@@ -22,6 +22,12 @@ export const BREAKOUT_REJECTION_MAX_RETENTION = 0.30;
 export const BREAKOUT_ENTRY_MIN_EXTENSION_R = 0.10;
 export const BREAKOUT_ENTRY_MIN_CLOSE_RETENTION = 0.55;
 export const BREAKOUT_ENTRY_MAX_CHASE_R = 0.50;
+export const FAST_BREAKOUT_MIN_CONFIRMATION = 0.78;
+export const FAST_BREAKOUT_MAX_FAKEOUT_RISK = 0.25;
+export const FAST_BREAKOUT_REQUIRED_SNAPSHOTS = 3;
+export const FAST_BREAKOUT_MAX_SNAPSHOT_GAP_MS = 10_000;
+export const STAGED_ROUTE_MIN_CONFIRMATION = 0.78;
+export const STAGED_ROUTE_MAX_FAKEOUT_RISK = 0.25;
 export const DYNAMIC_PROTECTION_NET_CUSHION_R = 0.15;
 
 export type Side = "LONG" | "SHORT";
@@ -137,6 +143,9 @@ export type PaperPlan = Decision & {
   notional: number;
   leverage?: number;
   margin?: number;
+  economicTarget?: number;
+  breakoutSignalCount?: number;
+  breakoutSignalAt?: number;
   invalidationSignalMinute?: number;
   invalidationSignalCount?: number;
   invalidationSignalReason?: "TARGET_GONE_CANCEL" | "ACTIVATION_LOST_CANCEL" | "ROUTE_WEAK_CANCEL";
@@ -439,6 +448,16 @@ export function tradeEconomics(input: { entry: number; target: number; lossRate:
     executable: netRewardRisk >= MIN_NET_REWARD_RISK && expectedReturnRate > 0 && netTargetProfit >= minimumNetTargetProfit };
 }
 
+export function stagedEconomicTarget(plan: Pick<Decision, "marketState" | "side" | "target" | "nextTarget" | "routeKind" | "confirmationScore" | "fakeoutRisk">) {
+  const next = plan.nextTarget;
+  const continues = next != null && Number.isFinite(next)
+    && (plan.side === "LONG" ? next > plan.target : next < plan.target);
+  return plan.marketState === "BREAKOUT" && plan.routeKind === "LOCAL_BREAKOUT" && continues
+    && (plan.confirmationScore ?? 0) >= STAGED_ROUTE_MIN_CONFIRMATION
+    && (plan.fakeoutRisk ?? 1) <= STAGED_ROUTE_MAX_FAKEOUT_RISK
+    ? next! : plan.target;
+}
+
 export function remainingStressRisk(position: PaperPosition, markPrice = position.entryPrice) {
   if (position.status !== "OPEN") return 0;
   const adverseMove = position.side === "LONG"
@@ -605,11 +624,12 @@ export function planTriggered(plan: PaperPlan, price: number) {
 }
 
 export function breakoutEntryConfirmed(
-  plan: Pick<PaperPlan, "marketState" | "side" | "entryTrigger" | "invalidation" | "createdAt">,
+  plan: Pick<PaperPlan, "marketState" | "side" | "entryTrigger" | "invalidation" | "createdAt" | "breakoutSignalCount">,
   confirmationMinute?: number,
   confirmationCandle?: CompletedMinuteCandle | null,
 ) {
   if (plan.marketState !== "BREAKOUT") return true;
+  if ((plan.breakoutSignalCount ?? 0) >= FAST_BREAKOUT_REQUIRED_SNAPSHOTS) return true;
   if (!confirmationMinute || confirmationMinute <= plan.createdAt || !confirmationCandle) return false;
   const completedAt = (confirmationCandle.time + 60) * 1_000;
   if (completedAt <= plan.createdAt || completedAt > confirmationMinute) return false;
@@ -626,6 +646,29 @@ export function breakoutEntryConfirmed(
   return confirmationCandle.close <= plan.entryTrigger - extension
     && confirmationCandle.close < confirmationCandle.open
     && closeRetention >= BREAKOUT_ENTRY_MIN_CLOSE_RETENTION;
+}
+
+export function observeFastBreakout(
+  plan: PaperPlan,
+  input: { now: number; price: number; confirmation: number; fakeoutRisk: number },
+) {
+  if (plan.marketState !== "BREAKOUT" || plan.state !== "PREPARED") return plan;
+  const initialRisk = Math.max(Math.abs(plan.entryTrigger - plan.invalidation), plan.entryTrigger * 0.0001);
+  const extension = plan.side === "LONG" ? input.price - plan.entryTrigger : plan.entryTrigger - input.price;
+  const minimumExtension = Math.max(plan.entryTrigger * 0.00005, initialRisk * BREAKOUT_ENTRY_MIN_EXTENSION_R);
+  const highQuality = (plan.confirmationScore ?? 0) >= FAST_BREAKOUT_MIN_CONFIRMATION
+    && input.confirmation >= FAST_BREAKOUT_MIN_CONFIRMATION
+    && input.fakeoutRisk <= FAST_BREAKOUT_MAX_FAKEOUT_RISK
+    && extension >= minimumExtension
+    && breakoutEntryPriceAcceptable(plan, input.price);
+  if (!highQuality) return (plan.breakoutSignalCount ?? 0) > 0
+    ? { ...plan, breakoutSignalCount: 0, breakoutSignalAt: undefined }
+    : plan;
+  if (plan.breakoutSignalAt === input.now) return plan;
+  const consecutive = plan.breakoutSignalAt != null && input.now - plan.breakoutSignalAt <= FAST_BREAKOUT_MAX_SNAPSHOT_GAP_MS;
+  return { ...plan,
+    breakoutSignalCount: Math.min(FAST_BREAKOUT_REQUIRED_SNAPSHOTS, consecutive ? (plan.breakoutSignalCount ?? 0) + 1 : 1),
+    breakoutSignalAt: input.now };
 }
 
 export function breakoutEntryPriceAcceptable(
