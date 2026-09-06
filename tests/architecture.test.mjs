@@ -53,7 +53,7 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(worker, /url\.pathname === "\/api\/order-chart" && request\.method === "GET"/);
   assert.match(worker, /url\.pathname === "\/api\/candles" && request\.method === "GET"/);
   assert.match(worker, /GATE_USDT_FUTURES/);
-  assert.match(worker, /\["1m", "15m", "1h"\]\.includes\(interval\)/);
+  assert.match(worker, /\["1m", "15m", "1h", "4h"\]\.includes\(interval\)/);
   assert.match(worker, /SELECT chart_cache_json AS chartCache,chart_cache_at AS chartCacheAt FROM system_settings/);
   assert.match(worker, /mirrorChartCandles/);
   assert.match(worker, /actual candles warming/);
@@ -144,6 +144,14 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(page, /loadedInterval === interval \? candles\.slice\(-72\) : \[\]/);
   assert.match(page, /Gate USDT 合约 · 已收盘数据/);
   assert.match(page, /1分钟.*15分钟.*1小时/s);
+  assert.match(page, /4小时/);
+  assert.match(page, /分段流动性路线/);
+  assert.match(page, /多个方案观察，单一方案执行/);
+  assert.match(page, /软计划不占保证金/);
+  assert.match(worker, /aggregateFourHourCandles/);
+  assert.match(worker, /activeRoutes/);
+  assert.match(live, /PORTFOLIO_MARGIN_CAP/);
+  assert.match(live, /openMargin/);
   assert.match(page, /Gate 价格触发/);
   assert.match(page, /Gate 限价/);
   assert.match(page, /authorityOperational && evidence\?\.fresh && evidence\?\.ancillaryFresh/);

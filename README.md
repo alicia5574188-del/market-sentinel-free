@@ -1,16 +1,18 @@
 # Liquidity Three State
 
-A deliberately small Gate USDT perpetuals system with one shared strategy and separate PAPER/owner-controlled LIVE execution. It predicts the highest-utility reachable liquidity target, then chooses exactly one of `BREAKOUT`, `REVERSAL`, or `RANGE`.
+A deliberately small Gate USDT perpetuals system with one shared strategy and separate PAPER/owner-controlled LIVE execution. It maps several hierarchical liquidity routes per coin, then promotes exactly one current segment to `BREAKOUT`, `REVERSAL`, or `RANGE` execution.
 
 ## Runtime
 
 - One SQLite Durable Object (`MarketStream`) owns the fixed BTC/ETH/SOL loop.
 - Every two seconds it fetches three full futures order-book snapshots with IDs. There is no continuous WebSocket and no foreground market-data producer.
-- Every five minutes, Gate futures metadata is refreshed for BTC, ETH, and SOL only. Other cycles pair three books with at most two ancillary requests: contract stats for OI plus rotating signed trades, public liquidations, or completed 1m/15m/1h structure candles.
+- Every five minutes, Gate futures metadata is refreshed for BTC, ETH, and SOL only. Other cycles pair three books with at most two ancillary requests: contract stats for OI plus rotating signed trades, public liquidations, or completed 1m/15m/1h structure candles. Completed 4h candles are aggregated locally from 1h rows, so higher-timeframe routing adds no Gate request.
+- A detected 15m balance exposes upper/lower breakouts and edge rejections as soft routes. The first breakout leg ends at the nearest viable 1h/4h liquidity node; continuation beyond that node stays inactive until price arrives and the stronger node-confirmation gate passes.
 - A 30-second compact checkpoint, immediate authority checkpoints for PAPER state changes, and a one-minute Cron watchdog recover eviction, stale alarms, 429s, and partial market outages. The hard budget is 43,200 alarm writes + 8,000 non-alarm writes + 2,880 watchdog reserve = 54,080/day.
 - Actual chart candles are mirrored from the same authority to D1 at most once every five minutes; one continuously open operator page adds only cached D1 reads and no Durable Object request load. Each PAPER fill also keeps a bounded entry/exit review window and a close diagnostic in `paper_events`, so History can draw the real Gate 1m candles and exact entry/exit markers without replaying old market data. Every PAPER bankruptcy is retained there as a permanent account-level report.
 - PAPER runs continuously. LIVE defaults off, requires the fixed `owner` account plus the existing `OWNER_ACCESS_TOKEN`, and can be changed only from an authenticated same-origin session. The public runtime never returns balances, order IDs, positions, or credentials.
 - LIVE reads the exact frozen PAPER plan. BREAKOUT uses a Gate price-triggered market order; REVERSAL and RANGE use resting Gate limit orders. Turning LIVE off cancels unfilled entries, while an already-open position keeps its exchange-side reduce-only structural stop and continues the same dynamic exit policy.
+- PAPER and LIVE choose leverage from the same liquidation-aware function: approximately 10% margin per executable plan, no more than 30% aggregate pending/open margin, and no expansion of the existing 5% aggregate structural-risk budget.
 
 ## Decision and risk
 
