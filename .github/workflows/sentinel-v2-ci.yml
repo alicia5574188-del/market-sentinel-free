@@ -206,10 +206,10 @@ jobs:
           (( remaining > 0 ))
           timeout "${remaining}s" npx wrangler deploy --dry-run --config dist/server/wrangler.json
 
-          # Cloudflare validates every previously migrated class even for an
-          # undeployed preview version. Re-export the immutable preflight's
+          # Cloudflare validates every previously migrated class on a
+          # compatibility preflight. Re-export the immutable preflight's
           # legacy classes and add an inert MarketStream compatibility class.
-          # No Durable Object is bound in either preview config below.
+          # No Durable Object is bound and no cron is present in that config.
           cat > dist/server/index.cutover-preview.js <<'EOF'
           import { DurableObject } from "cloudflare:workers";
           export {
@@ -225,7 +225,7 @@ jobs:
 
           export class MarketStream extends DurableObject {
             async fetch() {
-              return new Response("preview-only", { status: 410 });
+              return new Response("preflight-only", { status: 410 });
             }
           }
           EOF
@@ -305,7 +305,7 @@ jobs:
           jq -er '.versions[0].version_id' "$RUNNER_TEMP/baseline.json" \
             > "$RUNNER_TEMP/baseline-version-id"
 
-      - name: Generate masked TTL token and upload isolated read-only preflight
+      - name: Generate masked TTL token and deploy migration-compatible read-only preflight
         working-directory: preflight
         shell: bash
         run: |
@@ -318,10 +318,10 @@ jobs:
           jq -n --arg token "$token" '{CUTOVER_PREFLIGHT_TOKEN: $token}' \
             > "$RUNNER_TEMP/preflight-secrets.json"
 
-          # The production script may already be on v6 after a recoverable
-          # cutover attempt. Upload the immutable preflight as an isolated
-          # preview with D1 only, so Cloudflare never tries to replay its old
-          # Durable Object migrations and production traffic never moves.
+          # The production script is already on v6 after a recoverable attempt.
+          # Append exactly that published tag, export every historical class,
+          # and omit all DO bindings and cron triggers. This makes the brief
+          # production preflight read-only without replaying any migration.
           jq --arg database "$D1_DATABASE_ID" '
             {
               name: .name,
@@ -330,17 +330,21 @@ jobs:
               compatibility_date: .compatibility_date,
               compatibility_flags: .compatibility_flags,
               rules: .rules,
+              assets: .assets,
               d1_databases: [{
                 binding: "DB",
                 database_name: "market-sentinel-free",
                 database_id: $database
               }],
+              migrations: (.migrations + [{
+                tag: "v6-liquidity-three-state",
+                new_sqlite_classes: ["MarketStream"]
+              }]),
+              vars: .vars,
               version_metadata: .version_metadata,
-              observability: {enabled: false},
-              workers_dev: true,
-              preview_urls: true
+              observability: {enabled: false}
             }
-          ' dist/server/wrangler.json > dist/server/wrangler.initial-preview.json
+          ' dist/server/wrangler.json > dist/server/wrangler.compat-preflight.json
           jq -e --arg database "$D1_DATABASE_ID" '
             .main == "index.cutover-preview.js" and
             .d1_databases == [{
@@ -349,31 +353,22 @@ jobs:
               database_id: $database
             }] and
             (.durable_objects == null) and
-            (.migrations == null) and
             (.triggers == null) and
-            (.assets == null) and
+            .migrations[-1] == {
+              tag: "v6-liquidity-three-state",
+              new_sqlite_classes: ["MarketStream"]
+            } and
+            ([.migrations[] | .deleted_classes? // []] | add | length) == 0 and
+            (.assets | type == "object") and
             (.rules | type == "array" and length > 0)
-          ' dist/server/wrangler.initial-preview.json >/dev/null
+          ' dist/server/wrangler.compat-preflight.json >/dev/null
 
-          alias="p${GITHUB_RUN_ID}"
-          echo "CUTOVER_PREFLIGHT_URL=https://${alias}-${WORKER_NAME}.alicia5574188.workers.dev" >> "$GITHUB_ENV"
           remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
           (( remaining > 0 ))
-          timeout "${remaining}s" npx wrangler versions upload \
-            --config dist/server/wrangler.initial-preview.json \
-            --preview-alias "$alias" \
-            --secrets-file "$RUNNER_TEMP/preflight-secrets.json" \
-            --keep-vars
+          timeout "${remaining}s" npx wrangler deploy \
+            --config dist/server/wrangler.compat-preflight.json \
+            --secrets-file "$RUNNER_TEMP/preflight-secrets.json"
           rm -f "$RUNNER_TEMP/preflight-secrets.json"
-
-          # A preview upload creates no production deployment.
-          npx wrangler deployments status --name "$WORKER_NAME" --json \
-            > "$RUNNER_TEMP/post-initial-preview-production.json"
-          jq -e --arg baseline "$(cat "$RUNNER_TEMP/baseline-version-id")" '
-            (.versions | length) == 1 and
-            .versions[0].percentage == 100 and
-            .versions[0].version_id == $baseline
-          ' "$RUNNER_TEMP/post-initial-preview-production.json" >/dev/null
 
       - name: Require two fresh read-only Gate zero-inventory results
         shell: bash
@@ -387,7 +382,7 @@ jobs:
               (( remaining > 0 ))
               code="$(curl -sS --max-time 20 -o "$output" -w '%{http_code}' \
                 -H "Authorization: Bearer $CUTOVER_PREFLIGHT_TOKEN" \
-                "$CUTOVER_PREFLIGHT_URL/api/live/preflight" || true)"
+                "$WORKER_BASE_URL/api/live/preflight" || true)"
               now_ms="$(( $(date +%s) * 1000 ))"
               if [[ "$code" == "200" ]] && jq -e \
                 --argjson min "$((now_ms - 120000))" --argjson max "$((now_ms + 30000))" '
@@ -563,17 +558,15 @@ jobs:
           fi
           (( healthy >= 2 ))
 
-      - name: Redeploy clean v6 and run restart canary
+      - name: Revoke production token, observe its new version, and run restart canary
         working-directory: release
         shell: bash
         run: |
           set -euo pipefail
-          # The preflight token exists only on an undeployed preview version.
-          # A second clean v6 deploy is the intentional restart canary.
-          remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
-          (( remaining > 0 ))
-          timeout "${remaining}s" npx wrangler deploy \
-            --config dist/server/wrangler.prepare.json
+          # Secret deletion creates a clean Worker version. Treat that as an
+          # intentional restart canary and verify both version and runtime move.
+          CI=true timeout 180s npx wrangler secret delete CUTOVER_PREFLIGHT_TOKEN \
+            --name "$WORKER_NAME"
           npx wrangler secret list --name "$WORKER_NAME" --format json \
             > "$RUNNER_TEMP/secrets-after-v6.json"
           ! jq -e '.[] | select(.name == "CUTOVER_PREFLIGHT_TOKEN")' \
@@ -615,10 +608,9 @@ jobs:
           umask 077
           [[ "$(cat "$RUNNER_TEMP/cutover-phase")" == "v6" ]]
 
-          # Upload, but never deploy, the exact trusted preflight build. The
-          # preview version inherits the Worker's existing OWNER_ACCESS_TOKEN,
-          # binds only the preserved D1 database, and has no DO binding or cron.
-          # Its bearer expires inside the immutable trusted code after 20 min.
+          # Briefly deploy the same migration-compatible read-only preflight.
+          # It has no DO binding or cron, and its bearer expires inside the
+          # immutable trusted code after 20 minutes.
           npx wrangler deployments status --name "$WORKER_NAME" --json \
             > "$RUNNER_TEMP/pre-v7-production-deployment.json"
           jq -e '(.versions | length) == 1 and .versions[0].percentage == 100' \
@@ -631,44 +623,22 @@ jobs:
           echo "CUTOVER_AUDIT_TOKEN=$audit_token" >> "$GITHUB_ENV"
           jq -n --arg token "$audit_token" '{CUTOVER_PREFLIGHT_TOKEN: $token}' \
             > "$RUNNER_TEMP/audit-secrets.json"
-          jq --arg database "$D1_DATABASE_ID" '
-            {
-              name: .name,
-              main: "index.cutover-preview.js",
-              no_bundle: .no_bundle,
-              compatibility_date: .compatibility_date,
-              compatibility_flags: .compatibility_flags,
-              rules: .rules,
-              d1_databases: [{
-                binding: "DB",
-                database_name: "market-sentinel-free",
-                database_id: $database
-              }],
-              version_metadata: .version_metadata,
-              observability: {enabled: false},
-              workers_dev: true,
-              preview_urls: true
-            }
-          ' dist/server/wrangler.json > dist/server/wrangler.audit-preview.json
-          alias="c${GITHUB_RUN_ID}"
-          echo "CUTOVER_AUDIT_PREVIEW=https://${alias}-${WORKER_NAME}.alicia5574188.workers.dev" >> "$GITHUB_ENV"
           remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
           (( remaining > 0 ))
-          timeout "${remaining}s" npx wrangler versions upload \
-            --config dist/server/wrangler.audit-preview.json \
-            --preview-alias "$alias" \
-            --secrets-file "$RUNNER_TEMP/audit-secrets.json" \
-            --keep-vars
+          timeout "${remaining}s" npx wrangler deploy \
+            --config dist/server/wrangler.compat-preflight.json \
+            --secrets-file "$RUNNER_TEMP/audit-secrets.json"
           rm -f "$RUNNER_TEMP/audit-secrets.json"
+          printf '%s\n' audit > "$RUNNER_TEMP/cutover-phase"
 
-          # versions upload must not move any production traffic.
+          # Prove the 100% production deployment is now the isolated preflight.
           npx wrangler deployments status --name "$WORKER_NAME" --json \
-            > "$RUNNER_TEMP/post-preview-upload-production-deployment.json"
+            > "$RUNNER_TEMP/audit-production-deployment.json"
           jq -e --arg before "$production_before" '
             (.versions | length) == 1 and
             .versions[0].percentage == 100 and
-            .versions[0].version_id == $before
-          ' "$RUNNER_TEMP/post-preview-upload-production-deployment.json" >/dev/null
+            .versions[0].version_id != $before
+          ' "$RUNNER_TEMP/audit-production-deployment.json" >/dev/null
 
       - name: Capture D1 Time Travel boundary before final Gate check
         working-directory: release
@@ -676,7 +646,7 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          [[ "$(cat "$RUNNER_TEMP/cutover-phase")" == "v6" ]]
+          [[ "$(cat "$RUNNER_TEMP/cutover-phase")" == "audit" ]]
 
           remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
           (( remaining > 0 ))
@@ -722,7 +692,7 @@ jobs:
             local output="$1" code now_ms
             code="$(curl -sS --max-time 20 -o "$output" -w '%{http_code}' \
               -H "Authorization: Bearer $CUTOVER_AUDIT_TOKEN" \
-              "$CUTOVER_AUDIT_PREVIEW/api/live/preflight" || true)"
+              "$WORKER_BASE_URL/api/live/preflight" || true)"
             [[ "$code" == "200" ]]
             now_ms="$(( $(date +%s) * 1000 ))"
             jq -e --argjson min "$((now_ms - 120000))" --argjson max "$((now_ms + 30000))" '
@@ -744,17 +714,17 @@ jobs:
             "$RUNNER_TEMP/pre-v7-gate-second.json" >/dev/null
           jq -c '{safeToCutover, counts, checkedAt}' "$RUNNER_TEMP/pre-v7-gate-second.json"
 
-          # Recheck the traffic assignment after both preview calls. The next
-          # step is forbidden unless production still serves the v6 canary at 100%.
+          # Recheck the traffic assignment after both preflight calls. The next
+          # step is forbidden unless the isolated audit deployment is still 100%.
           production_before="$(cat "$RUNNER_TEMP/pre-v7-production-version-id")"
           npx wrangler deployments status --name "$WORKER_NAME" --json \
             > "$RUNNER_TEMP/post-pre-v7-gate-production-deployment.json"
           jq -e --arg before "$production_before" '
             (.versions | length) == 1 and
             .versions[0].percentage == 100 and
-            .versions[0].version_id == $before
+            .versions[0].version_id != $before
           ' "$RUNNER_TEMP/post-pre-v7-gate-production-deployment.json" >/dev/null
-          [[ "$(cat "$RUNNER_TEMP/cutover-phase")" == "v6" ]]
+          [[ "$(cat "$RUNNER_TEMP/cutover-phase")" == "audit" ]]
           jq -e --arg release "$GITHUB_SHA" '
             (.bookmark | type == "string" and length > 0) and
             .release_sha == $release
@@ -770,7 +740,7 @@ jobs:
           set -euo pipefail
           # Local, bounded authorization assertions only; no network or
           # account operation is allowed between the final Gate check and v7.
-          [[ "$(cat "$RUNNER_TEMP/cutover-phase")" == "v6" ]]
+          [[ "$(cat "$RUNNER_TEMP/cutover-phase")" == "audit" ]]
           [[ -s "$RUNNER_TEMP/pre-v7-gate-authorized-at" ]]
           remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
           (( remaining > 0 ))
@@ -827,39 +797,31 @@ jobs:
           [[ "$final_fingerprint" == "$(cat "$RUNNER_TEMP/credential-fingerprint")" ]]
           echo "final_schema_and_full_credential_fingerprint_verified=true"
 
-      - name: Post-purge decrypt and Gate recheck using the same TTL preview
-        working-directory: preflight
+      - name: Revoke final audit token and prove clean v7 deployment
+        working-directory: release
         shell: bash
         run: |
           set -euo pipefail
-          umask 077
-          code="$(curl -sS --max-time 20 -o "$RUNNER_TEMP/post-purge-gate.json" -w '%{http_code}' \
-            -H "Authorization: Bearer $CUTOVER_AUDIT_TOKEN" \
-            "$CUTOVER_AUDIT_PREVIEW/api/live/preflight" || true)"
-          [[ "$code" == "200" ]]
-          jq -e '
-            .safeToCutover == true and
-            .counts.positions == 0 and
-            .counts.openOrders == 0 and
-            .counts.priceOrders == 0 and
-            .activeContracts == [] and
-            (.checkedAt | type == "number") and
-            ((now * 1000 - .checkedAt) < 120000)
-          ' "$RUNNER_TEMP/post-purge-gate.json" >/dev/null
-          jq -c '{postPurgeDecryptAndGateRead: true, counts, checkedAt}' \
-            "$RUNNER_TEMP/post-purge-gate.json"
-
-          # The successful decrypt/Gate call proves the existing OWNER_ACCESS_TOKEN
-          # was inherited. The current deployment must be the 100% final v7
-          # production version, not the undeployed preview version.
-          pre_v7_production="$(cat "$RUNNER_TEMP/pre-v7-production-version-id")"
+          [[ "$(cat "$RUNNER_TEMP/cutover-phase")" == "purged" ]]
           npx wrangler deployments status --name "$WORKER_NAME" --json \
-            > "$RUNNER_TEMP/post-audit-production-deployment.json"
-          jq -e --arg old "$pre_v7_production" '
+            > "$RUNNER_TEMP/v7-with-audit-token.json"
+          before="$(jq -er '.versions[0].version_id' "$RUNNER_TEMP/v7-with-audit-token.json")"
+          jq -e '(.versions | length) == 1 and .versions[0].percentage == 100' \
+            "$RUNNER_TEMP/v7-with-audit-token.json" >/dev/null
+
+          CI=true timeout 180s npx wrangler secret delete CUTOVER_PREFLIGHT_TOKEN \
+            --name "$WORKER_NAME"
+          npx wrangler secret list --name "$WORKER_NAME" --format json \
+            > "$RUNNER_TEMP/final-secrets-after-audit.json"
+          ! jq -e '.[] | select(.name == "CUTOVER_PREFLIGHT_TOKEN")' \
+            "$RUNNER_TEMP/final-secrets-after-audit.json" >/dev/null
+          npx wrangler deployments status --name "$WORKER_NAME" --json \
+            > "$RUNNER_TEMP/clean-v7-deployment.json"
+          jq -e --arg before "$before" '
             (.versions | length) == 1 and
             .versions[0].percentage == 100 and
-            .versions[0].version_id != $old
-          ' "$RUNNER_TEMP/post-audit-production-deployment.json" >/dev/null
+            .versions[0].version_id != $before
+          ' "$RUNNER_TEMP/clean-v7-deployment.json" >/dev/null
 
       - name: Require final production health to advance
         shell: bash
@@ -908,11 +870,25 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
           phase="$(cat "$RUNNER_TEMP/cutover-phase" 2>/dev/null || echo pre-v6)"
+          if [[ "$phase" == "audit" ]]; then
+            # The final Gate audit temporarily serves the read-only preflight.
+            # Restore the clean v6 canary before removing its transient token.
+            set -e
+            timeout 180s npx wrangler deploy \
+              --config dist/server/wrangler.prepare.json
+            if npx wrangler secret list --name "$WORKER_NAME" --format json \
+              > "$RUNNER_TEMP/audit-failure-secrets.json" && jq -e \
+              '.[] | select(.name == "CUTOVER_PREFLIGHT_TOKEN")' \
+              "$RUNNER_TEMP/audit-failure-secrets.json" >/dev/null; then
+              CI=true timeout 180s npx wrangler secret delete CUTOVER_PREFLIGHT_TOKEN \
+                --name "$WORKER_NAME"
+            fi
+            echo "Failure occurred during the final read-only audit; restored clean v6 without purging D1 or deleting another DO."
+            exit 0
+          fi
           if [[ "$phase" != "pre-v6" ]]; then
-            # A v6-or-later failure still revokes a production token if the
-            # normal revocation step was not reached. This creates a new version
-            # of the current code, but never rolls back, purges D1, or deletes a
-            # legacy DO from a v6 configuration.
+            # A v6-or-later failure revokes any transient token but never rolls
+            # back, purges D1, or deletes another legacy DO.
             npx wrangler secret list --name "$WORKER_NAME" --format json \
               > "$RUNNER_TEMP/v6-failure-secrets.json"
             if jq -e '.[] | select(.name == "CUTOVER_PREFLIGHT_TOKEN")' \
