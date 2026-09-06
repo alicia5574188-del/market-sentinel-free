@@ -206,6 +206,30 @@ jobs:
           (( remaining > 0 ))
           timeout "${remaining}s" npx wrangler deploy --dry-run --config dist/server/wrangler.json
 
+          # Cloudflare validates every previously migrated class even for an
+          # undeployed preview version. Re-export the immutable preflight's
+          # legacy classes and add an inert MarketStream compatibility class.
+          # No Durable Object is bound in either preview config below.
+          cat > dist/server/index.cutover-preview.js <<'EOF'
+          import { DurableObject } from "cloudflare:workers";
+          export {
+            default,
+            PositionMonitor,
+            MarketScanner,
+            LiveTradingCoordinator,
+            MarketScannerV2,
+            HTE31MarketScanner,
+            HTE31TradeManager,
+            HistoricalArchive
+          } from "./index.js";
+
+          export class MarketStream extends DurableObject {
+            async fetch() {
+              return new Response("preview-only", { status: 410 });
+            }
+          }
+          EOF
+
       - name: Build exact final release and derive prepare-only config
         working-directory: release
         shell: bash
@@ -301,7 +325,7 @@ jobs:
           jq --arg database "$D1_DATABASE_ID" '
             {
               name: .name,
-              main: .main,
+              main: "index.cutover-preview.js",
               no_bundle: .no_bundle,
               compatibility_date: .compatibility_date,
               compatibility_flags: .compatibility_flags,
@@ -318,6 +342,7 @@ jobs:
             }
           ' dist/server/wrangler.json > dist/server/wrangler.initial-preview.json
           jq -e --arg database "$D1_DATABASE_ID" '
+            .main == "index.cutover-preview.js" and
             .d1_databases == [{
               binding: "DB",
               database_name: "market-sentinel-free",
@@ -609,7 +634,7 @@ jobs:
           jq --arg database "$D1_DATABASE_ID" '
             {
               name: .name,
-              main: .main,
+              main: "index.cutover-preview.js",
               no_bundle: .no_bundle,
               compatibility_date: .compatibility_date,
               compatibility_flags: .compatibility_flags,
