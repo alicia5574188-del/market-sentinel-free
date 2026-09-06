@@ -154,7 +154,8 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(worker, /activeRoutes/);
   assert.match(live, /PORTFOLIO_MARGIN_CAP/);
   assert.match(live, /openMargin/);
-  assert.match(page, /Gate 价格触发/);
+  assert.match(page, /内部监测/);
+  assert.match(page, /实时 IOC/);
   assert.match(page, /Gate 限价/);
   assert.match(page, /authorityOperational && evidence\?\.fresh && evidence\?\.ancillaryFresh/);
   assert.match(page, /订单.*实盘.*历史.*设置/s);
@@ -188,8 +189,9 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
   assert.doesNotMatch(worker, /loadEquity|hydrateOpenPositions/);
   assert.match(worker, /if \(criticalChanged \|\| openedThisCycle\)/);
   assert.ok(worker.indexOf("saveCheckpoint(now, true)") < worker.indexOf("await this.drainOutbox(now)"));
-  assert.match(worker, /const booksPromise = this\.processBooks/);
-  assert.ok(worker.indexOf("await fetchActiveContracts()") < worker.indexOf("const booksPromise = this.processBooks"));
+  assert.match(worker, /Promise\.all\(\[this\.processBooks\(now, cycleSymbols\), this\.updateAncillary\(now\)\]\)/);
+  assert.match(worker, /this\.priorityMinuteSymbols\(now\)\.length[\s\S]*await this\.updateAncillary\(now\);[\s\S]*await this\.processBooks\(now, cycleSymbols\)/);
+  assert.ok(worker.indexOf("await fetchActiveContracts()") < worker.indexOf("let books:"));
   assert.match(worker, /runtimeCache.*expiresAt/s);
   assert.match(worker, /this\.runtime\.d1Writes \+ billedWrites > 4_800/);
   assert.match(worker, /review-entry:\$\{position\.id\}/);

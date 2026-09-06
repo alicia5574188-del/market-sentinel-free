@@ -12,20 +12,18 @@ function plan(marketState: PaperPlan["marketState"], side: PaperPlan["side"]): P
   };
 }
 
-test("breakout becomes exchange price-trigger market order within 5% risk", () => {
-  const intent = buildLiveEntryIntent({ plan: plan("BREAKOUT", "LONG"), equity: 1_000, available: 1_000, openRisk: 0, quantoMultiplier: 0.001, leverageMax: 50 });
-  assert.equal(intent.kind, "PRICE_TRIGGER");
+test("a confirmed breakout becomes an IOC market order sized from its current entry", () => {
+  const intent = buildLiveEntryIntent({ plan: plan("BREAKOUT", "LONG"), entryPrice: 100.25,
+    equity: 1_000, available: 1_000, openRisk: 0, quantoMultiplier: 0.001, leverageMax: 50 });
+  assert.equal(intent.kind, "MARKET");
   assert.ok(intent.plannedRisk > 0 && intent.plannedRisk <= 50);
   assert.ok(intent.notional <= 4_000);
   assert.ok(intent.notional * 0.0018 <= 7.2);
   assert.ok(intent.margin <= 200.01);
-  assert.deepEqual((intent.body.trigger as { strategy_type: number; price_type: number; rule: number }).strategy_type, 0);
-  assert.equal((intent.body.trigger as { price_type: number }).price_type, 0);
-  assert.equal((intent.body.trigger as { rule: number }).rule, 1);
-  assert.equal((intent.body.trigger as { expiration: number }).expiration, 86_400);
-  assert.equal((intent.body.initial as { price: string; tif: string; reduce_only: boolean }).price, "0");
-  assert.equal((intent.body.initial as { tif: string }).tif, "ioc");
-  assert.equal((intent.body.initial as { reduce_only: boolean }).reduce_only, false);
+  assert.equal(intent.body.price, "0");
+  assert.equal(intent.body.tif, "ioc");
+  assert.equal(intent.body.reduce_only, false);
+  assert.equal(intent.body.trigger, undefined);
 });
 
 test("a 10 U LIVE account uses Gate's one-contract lot when its actual stop risk still fits 5%", () => {
@@ -72,6 +70,8 @@ test("protective stop is close-only and cannot reverse the account", () => {
 
 test("terminal Gate orders are classified without ever replaying a successful entry", () => {
   assert.equal(liveEntryDisposition({ status: "finished", finish_as: "filled" }, "LIMIT"), "FILLED");
+  assert.equal(liveEntryDisposition({ status: "finished", finish_as: "filled" }, "MARKET"), "FILLED");
+  assert.equal(liveEntryDisposition({ status: "finished", finish_as: "ioc" }, "MARKET"), "CANCELLED");
   assert.equal(liveEntryDisposition({ status: "finished", finish_as: "cancelled" }, "LIMIT"), "CANCELLED");
   assert.equal(liveEntryDisposition({ status: "finished", finish_as: "succeeded" }, "PRICE_TRIGGER"), "FILLED");
   assert.equal(liveEntryDisposition({ status: "finished", finish_as: "failed" }, "PRICE_TRIGGER"), "ERROR");
@@ -93,6 +93,23 @@ test("private Gate requests are signed and order IDs remain strings", async () =
     assert.equal(seen[0].headers.get("KEY"), "abcdefgh12345678");
     assert.match(seen[0].headers.get("SIGN") ?? "", /^[0-9a-f]{128}$/);
     assert.equal(seen[0].url.includes("secret-value"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("an IOC market entry is inspected through Gate's regular futures-order endpoint", async () => {
+  const originalFetch = globalThis.fetch;
+  const seen: Request[] = [];
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init); seen.push(request);
+    return Response.json({ id_string: "123", status: "finished", finish_as: "filled" });
+  };
+  try {
+    const client = new GateLiveClient({ apiKey: "abcdefgh12345678", apiSecret: "secret-value-12345678", environment: "live" });
+    const order = await client.inspectEntry("MARKET", "BTC_USDT", "t-ms-e-market", "123");
+    assert.equal(order?.finish_as, "filled");
+    assert.equal(new URL(seen[0].url).pathname, "/api/v4/futures/usdt/orders/123");
   } finally {
     globalThis.fetch = originalFetch;
   }
