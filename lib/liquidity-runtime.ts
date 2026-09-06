@@ -5,6 +5,7 @@ import {
   decideThreeState,
   flowPressure,
   MAX_GENERIC_PLAN_DISTANCE_RATE,
+  MIN_STRUCTURAL_STOP_RATE,
   PLAN_SOFT_INVALIDATION_CONFIRMATIONS,
   planTriggered,
   selectSafeLeverage,
@@ -14,6 +15,7 @@ import {
   updatePosition,
   zoneUtility,
   type BookSnapshot,
+  type CompletedMinuteCandle,
   type Decision,
   type FlowEvidence,
   type LiquidationBand,
@@ -61,6 +63,8 @@ export type SymbolMemory = {
   timeframeBias: { m1: TimeframeState; m15: TimeframeState; h1: TimeframeState; h4: TimeframeState };
   timeframeUpdatedAt: { m1: number; m15: number; h1: number; h4: number };
   lastCompletedMinuteClose: number;
+  lastCompletedMinuteCandle: CompletedMinuteCandle | null;
+  minuteNoiseRate: number;
 };
 
 export function emptySymbolMemory(): SymbolMemory {
@@ -84,6 +88,8 @@ export function emptySymbolMemory(): SymbolMemory {
     oiCohorts: [],
     timeframeBias: { m1: "UNKNOWN", m15: "UNKNOWN", h1: "UNKNOWN", h4: "UNKNOWN" }, timeframeUpdatedAt: { m1: 0, m15: 0, h1: 0, h4: 0 },
     lastCompletedMinuteClose: 0,
+    lastCompletedMinuteCandle: null,
+    minuteNoiseRate: 0,
   };
 }
 
@@ -299,7 +305,8 @@ export function analyzeSnapshot(memory: SymbolMemory, snapshot: BookSnapshot) {
     h4: snapshot.observedAt - memory.timeframeUpdatedAt.h4 <= 12 * 60 * 60_000 ? memory.timeframeBias.h4 : "UNKNOWN" as const,
   };
   const routes = buildLiquidityRoutes(memory, snapshot.symbol, snapshot.observedAt, midpoint, absorption);
-  const fallbackDecision = decideThreeState({ symbol: snapshot.symbol, observedAt: snapshot.observedAt, mid: midpoint, zones, bands, flow: memory.flow, absorption, timeframeBias: freshBias });
+  const fallbackDecision = decideThreeState({ symbol: snapshot.symbol, observedAt: snapshot.observedAt, mid: midpoint, zones, bands,
+    flow: memory.flow, absorption, timeframeBias: freshBias, minuteNoiseRate: memory.minuteNoiseRate });
   const decision = arbitrateDecision(routes, snapshot.observedAt, fallbackDecision);
   const confirmationBySide = { LONG: routeConfirmation(memory, "LONG"), SHORT: routeConfirmation(memory, "SHORT") };
   return { midpoint, zones, bands, absorption, decision, routes, range15m: memory.range15m, confirmationBySide };
@@ -335,6 +342,14 @@ export function updateOpenInterestCohorts(memory: SymbolMemory, nextOpenInterest
 }
 
 type StructureCandle = { time: number; volume: number; close: number; high: number; low: number; open: number };
+
+export function deriveMinuteNoiseRate(rows: StructureCandle[]) {
+  const ranges = rows.slice(-20).map((row) => (row.high - row.low) / Math.max((row.high + row.low + row.close) / 3, 1e-9))
+    .filter((value) => Number.isFinite(value) && value > 0).sort((a, b) => a - b);
+  if (!ranges.length) return 0;
+  const percentile = ranges[Math.min(ranges.length - 1, Math.floor((ranges.length - 1) * 0.7))];
+  return clamp(percentile, 0, 0.0045);
+}
 
 export function aggregateFourHourCandles(rows: StructureCandle[]) {
   const groups = new Map<number, StructureCandle[]>();
@@ -394,6 +409,7 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
   if (!range || midpoint <= 0 || observedAt - range.observedAt > 45 * 60_000) return [] as LiquidityRoute[];
   const width = range.upper - range.lower;
   const buffer = Math.max(midpoint * 0.00025, width * 0.06);
+  const minimumStopDistance = midpoint * Math.max(MIN_STRUCTURAL_STOP_RATE, memory.minuteNoiseRate * 1.1);
   const activationDistanceRate = Math.max(0.0025, Math.min(0.0075, range.widthRate * 0.65));
   const maxSegmentDistanceRate = Math.max(0.012, Math.min(0.015, range.widthRate * 3));
   const higher = (side: Side) => {
@@ -417,25 +433,36 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
       + (memory.timeframeBias.h1 === (side === "LONG" ? "DOWN" : "UP") ? 0.18 : 0), 0, 1);
     if (first) {
       const entryTrigger = side === "LONG" ? range.upper + buffer : range.lower - buffer;
-      const invalidation = side === "LONG" ? range.upper - Math.max(buffer * 1.5, width * 0.24)
+      const structuralInvalidation = side === "LONG" ? range.upper - Math.max(buffer * 1.5, width * 0.24)
         : range.lower + Math.max(buffer * 1.5, width * 0.24);
-      const next = nodes.find((item) => (side === "LONG" ? item.zone.price > first.zone.price * 1.0025 : item.zone.price < first.zone.price * 0.9975)
+      const invalidation = side === "LONG" ? Math.min(structuralInvalidation, entryTrigger - minimumStopDistance)
+        : Math.max(structuralInvalidation, entryTrigger + minimumStopDistance);
+      const projectedDistance = midpoint * clamp(range.widthRate * 0.85, 0.0065, 0.009);
+      const projectedTarget = side === "LONG" ? entryTrigger + projectedDistance : entryTrigger - projectedDistance;
+      const nodeBeyondProjection = side === "LONG" ? first.zone.price > projectedTarget : first.zone.price < projectedTarget;
+      const currentTarget = nodeBeyondProjection
+        ? { price: projectedTarget, identity: `RANGE_PROJECTION:${side}:${stablePriceBin(projectedTarget)}`, timeframe: "15m" as const }
+        : { price: first.zone.price, identity: first.zone.identity ?? `HTF:${side}:${stablePriceBin(first.zone.price)}`, timeframe: first.timeframe };
+      const next = nodeBeyondProjection ? first : nodes.find((item) => (side === "LONG" ? item.zone.price > first.zone.price * 1.0025 : item.zone.price < first.zone.price * 0.9975)
         && Math.abs(item.zone.price - first.zone.price) / first.zone.price <= maxSegmentDistanceRate);
       const score = range.quality * 0.38 + confirmationScore * 0.47 + first.zone.probabilityReach * 0.15;
       routes.push({ id: `${symbol}:LOCAL_BREAKOUT:${side}:${stablePriceBin(range.upper)}:${stablePriceBin(range.lower)}`,
         symbol, side, kind: "LOCAL_BREAKOUT", stage: "LOCAL_TO_NODE", entryTrigger, invalidation,
-        target: first.zone.price, targetIdentity: first.zone.identity ?? `HTF:${side}:${stablePriceBin(first.zone.price)}`,
-        targetTimeframe: first.timeframe, nextTarget: next?.zone.price ?? null, confirmationScore, fakeoutRisk,
+        target: currentTarget.price, targetIdentity: currentTarget.identity,
+        targetTimeframe: currentTarget.timeframe, nextTarget: next?.zone.price ?? null, confirmationScore, fakeoutRisk,
         activationDistanceRate, score, executableNow: Math.abs(entryTrigger - midpoint) / midpoint <= activationDistanceRate
           && confirmationScore >= 0.52 && fakeoutRisk <= 0.62,
-        reason: ["15分钟重复边界", `${first.timeframe}流动性作为本段终点`, "订单流、微价格与周期方向联合过滤假突破"] });
+        reason: ["15分钟重复边界", nodeBeyondProjection ? "先兑现15分钟局部量度空间" : `${first.timeframe}流动性作为本段终点`,
+          "更远高周期节点留给下一段重判", "订单流、微价格与周期方向联合过滤假突破"] });
       if (next) {
-        const nodeBuffer = Math.max(midpoint * 0.00035, Math.abs(next.zone.price - first.zone.price) * 0.04);
-        const nodeEntry = side === "LONG" ? first.zone.price + nodeBuffer : first.zone.price - nodeBuffer;
-        const atNode = Math.abs(midpoint - first.zone.price) / midpoint <= Math.max(0.0025, range.widthRate * 0.5);
-        routes.push({ id: `${symbol}:NODE_CONTINUATION:${side}:${stablePriceBin(first.zone.price)}`, symbol, side,
+        const nodeBuffer = Math.max(midpoint * 0.00035, Math.abs(next.zone.price - currentTarget.price) * 0.04);
+        const nodeEntry = side === "LONG" ? currentTarget.price + nodeBuffer : currentTarget.price - nodeBuffer;
+        const atNode = Math.abs(midpoint - currentTarget.price) / midpoint <= Math.max(0.0025, range.widthRate * 0.5);
+        const continuationInvalidation = side === "LONG" ? Math.min(currentTarget.price - nodeBuffer * 1.5, nodeEntry - minimumStopDistance)
+          : Math.max(currentTarget.price + nodeBuffer * 1.5, nodeEntry + minimumStopDistance);
+        routes.push({ id: `${symbol}:NODE_CONTINUATION:${side}:${stablePriceBin(currentTarget.price)}`, symbol, side,
           kind: "NODE_CONTINUATION", stage: atNode ? "AT_NODE" : "NODE_TO_NEXT", entryTrigger: nodeEntry,
-          invalidation: side === "LONG" ? first.zone.price - nodeBuffer * 1.5 : first.zone.price + nodeBuffer * 1.5,
+          invalidation: continuationInvalidation,
           target: next.zone.price, targetIdentity: next.zone.identity ?? `HTF:${side}:${stablePriceBin(next.zone.price)}`,
           targetTimeframe: next.timeframe, nextTarget: null, confirmationScore, fakeoutRisk,
           activationDistanceRate, score: score * 0.92, executableNow: atNode && Math.abs(nodeEntry - midpoint) / midpoint <= activationDistanceRate
@@ -447,17 +474,24 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
     const edgePrice = side === "LONG" ? range.upper : range.lower;
     const rejectionConfirmation = routeConfirmation(memory, rejectionSide);
     const rejectionEntry = side === "LONG" ? edgePrice - buffer * 0.25 : edgePrice + buffer * 0.25;
-    const rejectionTarget = side === "LONG" ? range.lower + buffer : range.upper - buffer;
+    const rejectionTarget = side === "LONG" ? range.upper - width * 0.7 : range.lower + width * 0.7;
+    const structuralInvalidation = side === "LONG" ? range.upper + buffer * 1.5 : range.lower - buffer * 1.5;
+    const rejectionInvalidation = rejectionSide === "LONG" ? Math.min(structuralInvalidation, rejectionEntry - minimumStopDistance)
+      : Math.max(structuralInvalidation, rejectionEntry + minimumStopDistance);
+    const minute = memory.lastCompletedMinuteCandle;
+    const rejectionConfirmed = minute != null && (side === "LONG"
+      ? minute.high >= edgePrice - buffer * 0.25 && minute.close <= rejectionEntry && minute.close < minute.open
+      : minute.low <= edgePrice + buffer * 0.25 && minute.close >= rejectionEntry && minute.close > minute.open);
     const rejectionScore = range.quality * 0.48 + rejectionConfirmation * 0.27 + absorption * 0.25;
     routes.push({ id: `${symbol}:EDGE_REJECTION:${side}:${stablePriceBin(edgePrice)}`, symbol, side: rejectionSide,
       kind: "EDGE_REJECTION", stage: "LOCAL_TO_NODE", entryTrigger: rejectionEntry,
-      invalidation: side === "LONG" ? range.upper + buffer * 1.5 : range.lower - buffer * 1.5,
-      target: rejectionTarget, targetIdentity: `RANGE:${rejectionSide}:${stablePriceBin(rejectionTarget)}`,
+      invalidation: rejectionInvalidation,
+      target: rejectionTarget, targetIdentity: `RANGE_SEGMENT:${rejectionSide}:${stablePriceBin(rejectionTarget)}`,
       targetTimeframe: "15m", nextTarget: null, confirmationScore: rejectionConfirmation,
       fakeoutRisk: clamp(1 - absorption * 0.55 - rejectionConfirmation * 0.3, 0, 1), activationDistanceRate,
       score: rejectionScore, executableNow: Math.abs(rejectionEntry - midpoint) / midpoint <= activationDistanceRate
-        && absorption >= 0.55 && rejectionConfirmation >= 0.48,
-      reason: ["15分钟区间边界出现吸收", "先交易回到区间另一侧", "失效后等待突破路线重新评估"] });
+        && absorption >= 0.55 && rejectionConfirmation >= 0.48 && rejectionConfirmed,
+      reason: ["15分钟区间边界出现吸收", "完整1分钟K线完成扫边并收回", "先兑现区间内70%的局部路程", "失效后等待突破路线重新评估"] });
   }
   return routes.sort((a, b) => Number(b.executableNow) - Number(a.executableNow) || b.score - a.score).slice(0, 6);
 }
@@ -529,6 +563,7 @@ export function reconcilePaper(input: {
   absorption: number;
   confirmationMinute?: number;
   confirmationPrice?: number;
+  confirmationCandle?: CompletedMinuteCandle | null;
   equity: number;
   openRisk: number;
   allowOpen?: boolean;
@@ -617,6 +652,7 @@ export function reconcilePaper(input: {
     position = updatePosition(position, { now: input.now, price: input.midpoint, bestTarget: own, oppositeTarget: input.protectOnly ? null : opposite,
       absorption: input.protectOnly ? 0 : input.absorption, confirmationMinute: input.confirmationMinute,
       confirmationPrice: input.confirmationPrice,
+      confirmationCandle: input.confirmationCandle,
       continuationRoute: input.protectOnly ? null : continuationRoute });
     if (position.status === "CLOSED") {
       events.push(position.exitReason ?? "CLOSED");
@@ -629,9 +665,15 @@ export function reconcilePaper(input: {
     events.push("PLAN_EXPIRED");
   }
   if (input.fresh && !input.sequenceFault && input.decision && !cancelledThisCycle && !expiredThisCycle && position?.status !== "OPEN") {
-    const sameClosedThesis = position?.status === "CLOSED" && position.side === input.decision.side && position.scenario === input.decision.marketState;
-    const triggerProbe: PaperPlan = { ...input.decision, id: "probe", state: "PREPARED", createdAt: input.now, expiresAt: input.now, plannedRisk: 0, notional: 0 };
-    if (sameClosedThesis && planTriggered(triggerProbe, input.midpoint)) return { plan, position, events: [...events, "WAIT_REARM"] };
+    const sameClosedThesis = position?.status === "CLOSED" && position.exitReason === "STRUCTURAL_STOP"
+      && position.side === input.decision.side && position.scenario === input.decision.marketState
+      && (position.routeId && input.decision.routeId ? position.routeId === input.decision.routeId : true);
+    const rebuildMinute = position?.exitAt ? Math.floor(position.exitAt / 60_000) * 60_000 + 120_000 : Infinity;
+    const reclaimed = input.confirmationPrice != null && (input.decision.side === "LONG"
+      ? input.confirmationPrice > input.decision.entryTrigger : input.confirmationPrice < input.decision.entryTrigger);
+    if (sameClosedThesis && (!(input.confirmationMinute && input.confirmationMinute >= rebuildMinute) || !reclaimed)) {
+      return { plan, position, events: [...events, "WAIT_STRUCTURE_REBUILD"] };
+    }
     // PREPARED is a direction-locked lifecycle. Recalculation can describe a
     // different market, but cannot mutate or replace the executable plan.
     const materiallyDifferent = !plan || plan.state !== "PREPARED";

@@ -23,7 +23,7 @@ import {
   type PaperPlan,
   type PaperPosition,
 } from "../lib/liquidity-core.ts";
-import { PLAN_TTL_MS, aggregateFourHourCandles, ancillarySchedule, arbitrateDecision, buildLiquidityRoutes, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, inferLiquidationBands, reconcilePaper, selectRouteDecision, updateOpenInterestCohorts, usableSnapshot } from "../lib/liquidity-runtime.ts";
+import { PLAN_TTL_MS, aggregateFourHourCandles, ancillarySchedule, arbitrateDecision, buildLiquidityRoutes, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, inferLiquidationBands, reconcilePaper, selectRouteDecision, updateOpenInterestCohorts, usableSnapshot } from "../lib/liquidity-runtime.ts";
 import { drainPositionOutbox, enqueuePositionTransition } from "../lib/paper-outbox.ts";
 
 const flow = (patch: Partial<FlowEvidence> = {}): FlowEvidence => ({ ofi: 0, micropriceDisplacementBps: 0, takerDelta: 0, openInterestDelta: 0, funding: 0, actualLiquidations: 0, priceResponseBps: 0, ...patch });
@@ -70,13 +70,39 @@ test("15m balance creates two-sided local routes and a gated next-node leg", () 
   const routes = buildLiquidityRoutes(memory, "BTC_USDT", observedAt, 99.9, 0.15);
   const first = routes.find((route) => route.kind === "LOCAL_BREAKOUT" && route.side === "LONG");
   const next = routes.find((route) => route.kind === "NODE_CONTINUATION" && route.side === "LONG");
-  assert.equal(first?.target, 101.2);
-  assert.equal(first?.targetTimeframe, "4h");
-  assert.equal(first?.nextTarget, 102.4);
+  assert.ok(first && first.target < 101.2 && first.target > first.entryTrigger);
+  assert.equal(first.targetTimeframe, "15m");
+  assert.equal(first.nextTarget, 101.2);
   assert.equal(first?.executableNow, true);
   assert.equal(next?.executableNow, false);
+  assert.equal(next?.target, 101.2);
   assert.equal(selectRouteDecision(routes, observedAt)?.routeId, first?.id);
   assert.ok(routes.some((route) => route.kind === "EDGE_REJECTION"));
+});
+
+test("completed one-minute noise sets a stop floor and edge rejection waits for a sweep-and-reclaim close", () => {
+  const memory = emptySymbolMemory();
+  memory.range15m = { lower: 99, upper: 101, midpoint: 100, widthRate: 0.02,
+    touchesLower: 4, touchesUpper: 4, quality: 0.9, observedAt: 10_000 };
+  memory.minuteNoiseRate = 0.002;
+  memory.flow = flow({ ofi: 0.6, takerDelta: 0.8, micropriceDisplacementBps: 2 });
+  memory.timeframeBias = { m1: "UP", m15: "NEUTRAL", h1: "NEUTRAL", h4: "NEUTRAL" };
+  let routes = buildLiquidityRoutes(memory, "SOL_USDT", 10_001, 99.05, 0.9);
+  let lowerLong = routes.find((route) => route.kind === "EDGE_REJECTION" && route.side === "LONG")!;
+  assert.equal(lowerLong.executableNow, false);
+  memory.lastCompletedMinuteCandle = { time: 0, open: 98.98, high: 99.2, low: 98.9, close: 99.12 };
+  routes = buildLiquidityRoutes(memory, "SOL_USDT", 10_001, 99.05, 0.9);
+  lowerLong = routes.find((route) => route.kind === "EDGE_REJECTION" && route.side === "LONG")!;
+  assert.equal(lowerLong.executableNow, true);
+  assert.ok((lowerLong.entryTrigger - lowerLong.invalidation) / 99.05 >= 0.0022 - 1e-9);
+  assert.ok(lowerLong.target < 100.9 && lowerLong.target > 100);
+});
+
+test("the robust one-minute noise estimate ignores tiny bars and caps a volatility spike", () => {
+  const rows = Array.from({ length: 19 }, (_, time) => ({ time: time * 60, open: 100, high: 100.2, low: 100, close: 100.1, volume: 1 }));
+  rows.push({ time: 19 * 60, open: 100, high: 105, low: 95, close: 100, volume: 1 });
+  const rate = deriveMinuteNoiseRate(rows);
+  assert.ok(rate >= 0.0019 && rate <= 0.0021);
 });
 
 test("ETH local routing rejects a distant 4h node and uses the nearest segment", () => {
@@ -276,6 +302,20 @@ test("the observed ETH path cannot move protection to entry before one confirmed
   const normalPullback = updatePosition(completedBelowOneR, { now: 70_001, price: 2497.015,
     bestTarget: zone("SHORT", 2452.93), oppositeTarget: zone("LONG", 2510), absorption: 0.2 });
   assert.equal(normalPullback.status, "OPEN");
+});
+
+test("the observed BTC breakout exits after a completed candle gives back most of a two-R-plus excursion", () => {
+  const position: PaperPosition = { id: "btc-profit-rejection", symbol: "BTC_USDT", side: "SHORT", scenario: "BREAKOUT",
+    entryAt: 45_000, entryPrice: 79_476.3, initialStop: 79_577.834, currentStop: 79_577.834,
+    currentTarget: 78_609.1, plannedRisk: 10.66, notional: 3_462.81, targetScore: 20, status: "OPEN" };
+  const closed = updatePosition(position, { now: 120_001, price: 79_441.1, bestTarget: zone("SHORT", 78_609.1),
+    oppositeTarget: zone("LONG", 80_000), absorption: 0.1, confirmationMinute: 120_000,
+    confirmationPrice: 79_441.1,
+    confirmationCandle: { time: 60, open: 79_512.8, high: 79_543.5, low: 79_170, close: 79_441.1 } });
+  assert.equal(closed.status, "CLOSED");
+  assert.equal(closed.exitReason, "BREAKOUT_PROFIT_REJECTION");
+  assert.equal(closed.maxFavorablePrice, 79_170);
+  assert.ok((closed.realizedPnl ?? -Infinity) > -10.75);
 });
 
 test("a tightened stop is reported as dynamic protection instead of structural invalidation", () => {
@@ -502,6 +542,26 @@ test("confidence and actual-fill sizing are invariant to utility score scale", (
       zones: [zone("LONG", 110), zone("SHORT", 90)], absorption: 0, equity: 1_000, openRisk: 0 }).position?.notional;
   };
   assert.ok(Math.abs((make(1) ?? 0) - (make(10) ?? 0)) < 1e-9);
+});
+
+test("a structural stop blocks the same route until two completed minutes rebuild and reclaim it", () => {
+  const decision = { symbol: "SOL_USDT", observedAt: 1, marketState: "RANGE" as const, side: "LONG" as const,
+    entryTrigger: 100, invalidation: 99.8, target: 101, targetIdentity: "RANGE_SEGMENT:LONG:101",
+    score: 2, oppositeScore: 1, reason: [], routeId: "same-range-long", routeKind: "EDGE_REJECTION" as const };
+  const stopped: PaperPosition = { id: "stopped", symbol: "SOL_USDT", side: "LONG", scenario: "RANGE",
+    entryAt: 1, entryPrice: 100, initialStop: 99.8, currentStop: 99.8, currentTarget: 101,
+    plannedRisk: 10, notional: 3_000, targetScore: 2, targetIdentity: decision.targetIdentity,
+    routeId: decision.routeId, routeKind: "EDGE_REJECTION", status: "CLOSED", exitAt: 61_000,
+    exitPrice: 99.79, exitReason: "STRUCTURAL_STOP", realizedPnl: -10 };
+  const blocked = reconcilePaper({ now: 62_000, midpoint: 99.95, fresh: true, sequenceFault: false, decision,
+    plan: null, position: stopped, zones: [], absorption: 0.8, confirmationMinute: 120_000,
+    confirmationPrice: 99.95, equity: 1_000, openRisk: 0, allowOpen: false });
+  assert.equal(blocked.plan, null);
+  assert.ok(blocked.events.includes("WAIT_STRUCTURE_REBUILD"));
+  const rebuilt = reconcilePaper({ now: 180_001, midpoint: 100.1, fresh: true, sequenceFault: false, decision,
+    plan: null, position: stopped, zones: [], absorption: 0.8, confirmationMinute: 180_000,
+    confirmationPrice: 100.1, equity: 1_000, openRisk: 0, allowOpen: false });
+  assert.equal(rebuilt.plan?.state, "PREPARED");
 });
 
 test("an expired plan is not rebuilt in the same reconciliation", () => {

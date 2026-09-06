@@ -12,7 +12,7 @@ type Decision = { marketState: MarketState; side: Side; entryTrigger: number; in
 type Plan = Decision & { state: "PREPARED" | "TRIGGERED" | "CANCELLED"; plannedRisk: number; notional: number; expiresAt: number; leverage?: number; margin?: number; invalidationSignalCount?: number; invalidationSignalReason?: "TARGET_GONE_CANCEL" | "ACTIVATION_LOST_CANCEL" | "ROUTE_WEAK_CANCEL" };
 type LiquidityRoute = { id: string; side: Side; kind: RouteKind; stage: RouteStage; entryTrigger: number; invalidation: number; target: number; targetTimeframe: "15m" | "1h" | "4h"; nextTarget: number | null; confirmationScore: number; fakeoutRisk: number; score: number; executableNow: boolean; reason: string[] };
 type RangeStructure = { lower: number; upper: number; widthRate: number; quality: number };
-type Position = { side: Side; scenario: MarketState; status: "OPEN" | "CLOSED"; entryAt?: number; entryPrice: number; initialStop: number; currentStop: number; currentTarget: number; plannedRisk: number; notional: number; exitAt?: number; exitPrice?: number; realizedPnl?: number; exitReason?: string; exitSignalCount?: number; exitSignalReason?: string };
+type Position = { side: Side; scenario: MarketState; status: "OPEN" | "CLOSED"; entryAt?: number; entryPrice: number; initialStop: number; currentStop: number; currentTarget: number; plannedRisk: number; notional: number; routeId?: string; exitAt?: number; exitPrice?: number; realizedPnl?: number; exitReason?: string; exitSignalCount?: number; exitSignalReason?: string };
 type LiveEntry = { planId: string; symbol: string; side: Side; scenario: MarketState; kind: "PRICE_TRIGGER" | "LIMIT"; status: string; trigger: number; invalidation: number; target: number; plannedRisk: number; notional: number; leverage: number; margin: number; lastError: string | null };
 type LivePosition = Position & { id: string; symbol: string; exchangeSize: number; leverage: number; margin: number; stopPrice: number | null; exitRequestedAt: number | null };
 type LiveEntrySkip = { planId: string; symbol: string; code: "MIN_CONTRACT" | "MARGIN" | "RISK_CAP" | "ECONOMICS"; reason: string; observedAt: number };
@@ -55,7 +55,7 @@ const stateText: Record<string, string> = { BREAKOUT: "突破", REVERSAL: "反�
 const sourceText: Record<string, string> = { BOOK: "真实挂单区", STOP_POOL: "止损集中区", LIQUIDATION: "估计清算区" };
 const routeText: Record<RouteKind, string> = { LOCAL_BREAKOUT: "小区间突破", EDGE_REJECTION: "区间边界回撤", NODE_CONTINUATION: "高周期节点续破" };
 const stageText: Record<RouteStage, string> = { LOCAL_TO_NODE: "当前段", AT_NODE: "节点决策", NODE_TO_NEXT: "后续段" };
-const exitText: Record<string, string> = { STRUCTURAL_STOP: "原始结构止损", DYNAMIC_PROTECTION_STOP: "分级动态保护止损", TARGET_ABSORBED: "目标流动性已被吸收", TARGET_NODE_EXIT: "到达流动性节点，续破未确认", TARGET_DISAPPEARED: "目标流动性连续消失", TARGET_VANISHED: "目标消失", OPPOSITE_TARGET_DOMINANT: "反向目标占优", OPPOSITE_UTILITY_DOMINANT: "反向流动性连续占优", RISK_CAP_REBALANCE: "组合风险重新平衡", PORTFOLIO_RISK_REBALANCE: "组合风险重新平衡" };
+const exitText: Record<string, string> = { STRUCTURAL_STOP: "原始结构止损", DYNAMIC_PROTECTION_STOP: "分级动态保护止损", BREAKOUT_PROFIT_REJECTION: "突破浮盈大幅回吐，确认失败退出", TARGET_ABSORBED: "目标流动性已被吸收", TARGET_NODE_EXIT: "到达流动性节点，续破未确认", TARGET_DISAPPEARED: "目标流动性连续消失", TARGET_VANISHED: "目标消失", OPPOSITE_TARGET_DOMINANT: "反向目标占优", OPPOSITE_UTILITY_DOMINANT: "反向流动性连续占优", RISK_CAP_REBALANCE: "组合风险重新平衡", PORTFOLIO_RISK_REBALANCE: "组合风险重新平衡" };
 const resolvedExitText = (reason: string | null | undefined, initialStop: number, currentStop: number) => {
   if (reason === "STRUCTURAL_STOP" && Math.abs(currentStop - initialStop) > Math.max(Math.abs(initialStop) * 1e-8, 1e-8)) return "旧版即时保本止损";
   return exitText[reason ?? ""] ?? reason ?? "订单已经结束";
@@ -84,6 +84,15 @@ function waitReason(runtime: Runtime | null, marketReady: boolean, symbol: strin
     if (age < 2 * 60_000) return "持仓保护期：原始止损和目标仍实时执行，短周期软信号暂不平仓";
     if ((position.exitSignalCount ?? 0) > 0) return `软失效观察 ${position.exitSignalCount}/3；需要价格与完整1分钟证据共同确认`;
     return "持仓由完整1分钟证据管理，达到1R前不移动原始止损";
+  }
+  const decision = runtime.decisions[symbol];
+  const rebuildAt = position?.exitAt ? Math.floor(position.exitAt / 60_000) * 60_000 + 120_000 : Infinity;
+  const reclaimedNow = decision ? (decision.side === "LONG" ? evidence.midpoint > decision.entryTrigger : evidence.midpoint < decision.entryTrigger) : false;
+  if (position?.status === "CLOSED" && position.exitReason === "STRUCTURAL_STOP" && decision
+    && position.side === decision.side && position.scenario === decision.marketState
+    && (!position.routeId || !decision.routeId || position.routeId === decision.routeId)
+    && (runtime.generatedAt < rebuildAt || !reclaimedNow)) {
+    return "原结构已经止损；同方向方案等待两根完整1分钟K线重建并收复触发位";
   }
   const plan = runtime.plans[symbol];
   if (plan?.state === "PREPARED") return (plan.invalidationSignalCount ?? 0) > 0

@@ -16,6 +16,9 @@ export const SOFT_EXIT_ADVERSE_R = 0.25;
 export const MAX_GENERIC_PLAN_DISTANCE_RATE = 0.0075;
 export const TARGET_MARGIN_RATE = 0.10;
 export const PORTFOLIO_MARGIN_CAP = 0.30;
+export const MIN_STRUCTURAL_STOP_RATE = ROUND_TRIP_FRICTION_RATE;
+export const BREAKOUT_REJECTION_MIN_R = 2;
+export const BREAKOUT_REJECTION_MAX_RETENTION = 0.30;
 
 export type Side = "LONG" | "SHORT";
 export type MarketState = "BREAKOUT" | "REVERSAL" | "RANGE";
@@ -166,6 +169,14 @@ export type PaperPosition = {
   stopUpdatedMinute?: number;
 };
 
+export type CompletedMinuteCandle = {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+};
+
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 
 export function priceBinSize(mid: number, tickSize: number) {
@@ -295,6 +306,7 @@ export function decideThreeState(input: {
   flow: FlowEvidence;
   absorption: number;
   timeframeBias?: TimeframeBias;
+  minuteNoiseRate?: number;
 }): Decision | null {
   // A nearby liquidity pocket can be real yet still be untradeable after fees
   // and stress slippage. Do not build plans whose destination cannot pay for
@@ -351,7 +363,8 @@ export function decideThreeState(input: {
   const entryTrigger = state === "BREAKOUT"
     ? (side === "LONG" ? input.mid + distance * 0.18 : input.mid - distance * 0.18)
     : input.mid + (entryEdge - input.mid) * (state === "REVERSAL" ? 0.72 : 0.66);
-  const invalidationDistance = Math.max(input.mid * 0.001, Math.abs(entryTrigger - input.mid) * 0.38);
+  const invalidationDistance = Math.max(input.mid * Math.max(MIN_STRUCTURAL_STOP_RATE, (input.minuteNoiseRate ?? 0) * 1.1),
+    Math.abs(entryTrigger - input.mid) * 0.38);
   const invalidation = side === "LONG" ? entryTrigger - invalidationDistance : entryTrigger + invalidationDistance;
   return {
     symbol: input.symbol,
@@ -446,17 +459,28 @@ export function updatePosition(position: PaperPosition, input: {
   absorption: number;
   confirmationMinute?: number;
   confirmationPrice?: number;
+  confirmationCandle?: CompletedMinuteCandle | null;
   continuationRoute?: LiquidityRoute | null;
 }): PaperPosition {
   if (position.status === "CLOSED") return position;
+  const fullMinuteStart = Math.ceil(position.entryAt / 60_000) * 60_000;
+  const confirmationCandle = input.confirmationCandle
+    && input.confirmationCandle.time * 1_000 >= fullMinuteStart
+    ? input.confirmationCandle : null;
+  const candleFavorablePrice = confirmationCandle
+    ? (position.side === "LONG" ? confirmationCandle.high : confirmationCandle.low)
+    : position.entryPrice;
+  const candleAdversePrice = confirmationCandle
+    ? (position.side === "LONG" ? confirmationCandle.low : confirmationCandle.high)
+    : position.entryPrice;
   const observed = {
     ...position,
     maxFavorablePrice: position.side === "LONG"
-      ? Math.max(position.maxFavorablePrice ?? position.entryPrice, input.price)
-      : Math.min(position.maxFavorablePrice ?? position.entryPrice, input.price),
+      ? Math.max(position.maxFavorablePrice ?? position.entryPrice, input.price, candleFavorablePrice)
+      : Math.min(position.maxFavorablePrice ?? position.entryPrice, input.price, candleFavorablePrice),
     maxAdversePrice: position.side === "LONG"
-      ? Math.min(position.maxAdversePrice ?? position.entryPrice, input.price)
-      : Math.max(position.maxAdversePrice ?? position.entryPrice, input.price),
+      ? Math.min(position.maxAdversePrice ?? position.entryPrice, input.price, candleAdversePrice)
+      : Math.max(position.maxAdversePrice ?? position.entryPrice, input.price, candleAdversePrice),
   };
   const stopped = observed.side === "LONG" ? input.price <= observed.currentStop : input.price >= observed.currentStop;
   const close = (reason: string) => closePaperPosition(observed, input.now, input.price, reason);
@@ -496,6 +520,26 @@ export function updatePosition(position: PaperPosition, input: {
     exitSignalReason = adverseReason;
   }
   const initialRisk = Math.max(Math.abs(observed.entryPrice - observed.initialStop), observed.entryPrice * 0.0001);
+  const completedMinute = input.confirmationMinute && input.confirmationMinute > observed.entryAt
+    && input.confirmationMinute !== observed.stopUpdatedMinute && Number.isFinite(input.confirmationPrice)
+    ? input.confirmationMinute : null;
+  const feeDistance = observed.entryPrice * ROUND_TRIP_FRICTION_RATE;
+  if (completedMinute && confirmationCandle && observed.scenario === "BREAKOUT") {
+    const extremeMove = observed.side === "LONG"
+      ? confirmationCandle.high - observed.entryPrice
+      : observed.entryPrice - confirmationCandle.low;
+    const retainedMove = observed.side === "LONG"
+      ? confirmationCandle.close - observed.entryPrice
+      : observed.entryPrice - confirmationCandle.close;
+    const retention = Math.max(0, retainedMove) / Math.max(extremeMove, 1e-9);
+    const extremeR = extremeMove / initialRisk;
+    if (input.now - observed.entryAt >= 60_000
+      && extremeR >= BREAKOUT_REJECTION_MIN_R
+      && extremeMove >= feeDistance + initialRisk * 0.5
+      && retention <= BREAKOUT_REJECTION_MAX_RETENTION) {
+      return close("BREAKOUT_PROFIT_REJECTION");
+    }
+  }
   const adverseMove = observed.side === "LONG" ? observed.entryPrice - input.price : input.price - observed.entryPrice;
   const softExitEligible = input.now - observed.entryAt >= MIN_SOFT_EXIT_HOLD_MS
     && adverseMove / initialRisk >= SOFT_EXIT_ADVERSE_R;
@@ -505,13 +549,15 @@ export function updatePosition(position: PaperPosition, input: {
 
   let currentStop = observed.currentStop;
   let stopUpdatedMinute = observed.stopUpdatedMinute;
-  const completedMinute = input.confirmationMinute && input.confirmationMinute > observed.entryAt
-    && input.confirmationMinute !== observed.stopUpdatedMinute && Number.isFinite(input.confirmationPrice)
-    ? input.confirmationMinute : null;
   if (completedMinute && input.confirmationPrice != null) {
-    const confirmedMove = observed.side === "LONG"
+    const closeMove = observed.side === "LONG"
       ? input.confirmationPrice - observed.entryPrice
       : observed.entryPrice - input.confirmationPrice;
+    const extremeMove = confirmationCandle
+      ? (observed.side === "LONG" ? confirmationCandle.high - observed.entryPrice : observed.entryPrice - confirmationCandle.low)
+      : closeMove;
+    const retention = Math.max(0, closeMove) / Math.max(extremeMove, 1e-9);
+    const confirmedMove = retention >= 0.5 ? Math.max(closeMove, extremeMove * 0.5) : closeMove;
     const confirmedR = confirmedMove / initialRisk;
     let candidate: number | null = null;
     if (confirmedR >= 1) {
@@ -519,7 +565,6 @@ export function updatePosition(position: PaperPosition, input: {
         ? observed.entryPrice - initialRisk * 0.5
         : observed.entryPrice + initialRisk * 0.5;
     }
-    const feeDistance = observed.entryPrice * ROUND_TRIP_FRICTION_RATE;
     if (confirmedMove >= feeDistance + initialRisk * 0.5) {
       const lockedMove = Math.max(feeDistance, confirmedMove * 0.35);
       candidate = observed.side === "LONG" ? observed.entryPrice + lockedMove : observed.entryPrice - lockedMove;
