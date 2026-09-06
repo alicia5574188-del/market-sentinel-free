@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchStructureCandles } from "../lib/gate-market.ts";
+import { fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchStructureCandles } from "../lib/gate-market.ts";
 
 const withFetch = async (body: unknown, run: () => Promise<void>) => {
   const prior = globalThis.fetch;
@@ -27,6 +27,24 @@ test("Gate candle objects exclude unfinished rows, deduplicate, and retain only 
     const rows = await fetchStructureCandles("X_USDT", "1m");
     assert.deepEqual(rows.map((item) => item.time), [now - 180, now - 120, now - 60]);
   });
+});
+
+test("active universe is permanently limited to BTC, ETH, and SOL futures", async () => {
+  const prior = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.endsWith("/futures/usdt/tickers")) return Response.json([
+      { contract: "ZEC_USDT", volume_24h_settle: "999999999" },
+      { contract: "SOL_USDT", funding_rate: "0.0001" },
+      { contract: "BTC_USDT", funding_rate: "0.0002" },
+      { contract: "ETH_USDT", funding_rate: "0.0003" },
+      { contract: "BNB_USDT", volume_24h_settle: "888888888" },
+    ]);
+    return Response.json(["ZEC_USDT", "SOL_USDT", "BTC_USDT", "ETH_USDT", "BNB_USDT"].map((name) => ({ name, status: "trading", order_price_round: "0.1", quanto_multiplier: "0.01", maintenance_rate: "0.005" })));
+  };
+  try {
+    assert.deepEqual((await fetchActiveContracts()).map((item) => item.symbol), ["BTC_USDT", "ETH_USDT", "SOL_USDT"]);
+  } finally { globalThis.fetch = prior; }
 });
 
 test("Gate stats use contract_stats and liquidations retain signed order_size", async () => {

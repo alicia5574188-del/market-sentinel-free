@@ -13,12 +13,12 @@ const HEARTBEAT_MS = 30_000;
 const UNIVERSE_MS = 5 * 60_000;
 const WARMUP_SNAPSHOTS = 30;
 const MAX_ANCILLARY_CONCURRENCY = 2;
-const MAX_OPEN_POSITIONS = 4;
+const MAX_OPEN_POSITIONS = 3;
 const MAX_OUTBOX_ITEMS = 512;
 const NON_ALARM_WRITE_CAP = 8_000;
 const WATCHDOG_WRITE_RESERVE = 2_880;
 const AUTHORITY_SCHEMA_VERSION = 1;
-const DEFAULT_SYMBOLS = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "BNB_USDT"];
+const DEFAULT_SYMBOLS = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];
 
 export interface CloudflareEnv {
   ASSETS: Fetcher;
@@ -123,7 +123,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     ctx.blockConcurrencyWhile(async () => {
       const saved = await ctx.storage.get<Checkpoint>("checkpoint");
       if (saved?.authoritySchemaVersion === AUTHORITY_SCHEMA_VERSION) {
-        this.runtime = { ...initialState(), ...saved, version: SYSTEM_VERSION, outbox: saved.outbox ?? [], analysisMs: [], state: "WARMING" };
+        this.runtime = { ...initialState(), ...saved, version: SYSTEM_VERSION, symbols: [...DEFAULT_SYMBOLS], outbox: saved.outbox ?? [], analysisMs: [], state: "WARMING" };
+        for (const symbol of new Set([...Object.keys(this.runtime.decisions), ...Object.keys(this.runtime.plans),
+          ...Object.keys(this.runtime.positions), ...Object.keys(this.runtime.evidence), ...Object.keys(this.runtime.feedFailures),
+          ...Object.keys(this.runtime.tickSize), ...Object.keys(this.runtime.contractMeta)])) {
+          if (DEFAULT_SYMBOLS.includes(symbol)) continue;
+          delete this.runtime.decisions[symbol]; delete this.runtime.plans[symbol]; delete this.runtime.positions[symbol];
+          delete this.runtime.evidence[symbol]; delete this.runtime.feedFailures[symbol]; delete this.runtime.tickSize[symbol];
+          delete this.runtime.contractMeta[symbol];
+        }
         for (const symbol of this.runtime.symbols) {
           this.memory[symbol] = emptySymbolMemory();
           this.memory[symbol].quantoMultiplier = this.runtime.contractMeta[symbol]?.quantoMultiplier ?? 1;
@@ -183,9 +191,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private refreshUniverse(now: number, ranked: Awaited<ReturnType<typeof fetchActiveContracts>>) {
-    const pinned = Object.values(this.runtime.positions).filter((position): position is PaperPosition => position?.status === "OPEN").map((position) => position.symbol);
-    if (pinned.length > MAX_OPEN_POSITIONS) throw new Error("open position invariant exceeds four");
-    const next = [...new Set([...pinned, ...ranked.map((row) => row.symbol)])].slice(0, MAX_OPEN_POSITIONS);
+    const next = [...DEFAULT_SYMBOLS];
     if (!next.length) return;
     const prior = new Set(this.runtime.symbols);
     const changed = next.some((symbol, index) => symbol !== this.runtime.symbols[index]);
@@ -560,8 +566,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const universeDue = now - this.runtime.lastUniverseAt >= UNIVERSE_MS;
       if (universeDue) {
         subrequests += 2;
-        const pinned = Object.values(this.runtime.positions).filter((position): position is PaperPosition => position?.status === "OPEN").map((position) => position.symbol);
-        try { this.refreshUniverse(now, await fetchActiveContracts(pinned)); }
+        try { this.refreshUniverse(now, await fetchActiveContracts()); }
         catch (error) { this.runtime.lastError = `universe: ${safeError(error)}`; }
       }
       const cycleSymbols = [...this.runtime.symbols];
@@ -626,8 +631,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       return json({ ...publicRuntime, ...this.authorityView, outboxLength: outbox.length,
         oldestOutboxAgeMs: outbox.length ? Math.max(0, Date.now() - (outbox[0].position.exitAt ?? outbox[0].position.entryAt)) : 0,
         authorityReady: this.authorityReady, generatedAt: Date.now(), state: effectiveState, stale,
-        analysisP99Ms: percentile99(this.runtime.analysisMs), limits: { loopMs: LOOP_MS, markets: 4, warmupSnapshots: WARMUP_SNAPSHOTS,
-          maxAncillaryConcurrency: MAX_ANCILLARY_CONCURRENCY, maxSubrequestsPerAlarm: 6, plannedAlarmRequestsPerDay: 43_200,
+        analysisP99Ms: percentile99(this.runtime.analysisMs), limits: { loopMs: LOOP_MS, markets: 3, warmupSnapshots: WARMUP_SNAPSHOTS,
+          maxAncillaryConcurrency: MAX_ANCILLARY_CONCURRENCY, maxSubrequestsPerAlarm: 5, plannedAlarmRequestsPerDay: 43_200,
           plannedAlarmWritesPerDay: 43_200, watchdogWriteReservePerDay: WATCHDOG_WRITE_RESERVE,
           nonAlarmWriteCapPerDay: NON_ALARM_WRITE_CAP, nonAlarmWritesToday: this.runtime.nonAlarmWrites,
           plannedDoWritesPerDay: 54_080,
@@ -642,6 +647,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 const isAsset = (pathname: string) => pathname.startsWith("/_next/") || pathname.startsWith("/assets/") || /\.[a-z0-9]{2,8}$/i.test(pathname);
 let runtimeCache: { response: string; expiresAt: number } | null = null;
 let historyCache: { response: string; expiresAt: number } | null = null;
+const candleCache = new Map<string, { response: string; expiresAt: number }>();
 async function runtimeStatus(env: CloudflareEnv, useCache = true) {
   if (useCache && runtimeCache && runtimeCache.expiresAt > Date.now()) return new Response(runtimeCache.response, { headers: { "Content-Type": "application/json", "Cache-Control": "private, max-age=10" } });
   const response = await env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/status");
@@ -669,6 +675,23 @@ async function paperHistory(env: CloudflareEnv) {
   return new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=30" } });
 }
 
+async function chartCandles(url: URL) {
+  const symbol = url.searchParams.get("symbol") ?? "";
+  const interval = url.searchParams.get("interval") ?? "15m";
+  if (!DEFAULT_SYMBOLS.includes(symbol) || !["1m", "15m", "1h"].includes(interval)) {
+    return json({ error: "unsupported futures chart" }, 400);
+  }
+  const key = `${symbol}:${interval}`;
+  const cached = candleCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return new Response(cached.response, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=20" } });
+  }
+  const candles = await fetchStructureCandles(symbol, interval as "1m" | "15m" | "1h");
+  const body = JSON.stringify({ symbol, interval, source: "GATE_USDT_FUTURES", candles, generatedAt: Date.now() });
+  candleCache.set(key, { response: body, expiresAt: Date.now() + 20_000 });
+  return new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=20" } });
+}
+
 const worker = {
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
     const url = new URL(request.url);
@@ -682,6 +705,7 @@ const worker = {
     }
     if (url.pathname === "/api/runtime" && request.method === "GET") return runtimeStatus(env);
     if (url.pathname === "/api/history" && request.method === "GET") return paperHistory(env);
+    if (url.pathname === "/api/candles" && request.method === "GET") return chartCandles(url);
     if (url.pathname.startsWith("/api/")) return json({ error: "read-only PAPER surface" }, 404);
     return handler.fetch(request, env, ctx);
   },

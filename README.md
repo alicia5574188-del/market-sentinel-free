@@ -4,9 +4,9 @@ A deliberately small, PAPER-only Gate USDT perpetuals system. It predicts the hi
 
 ## Runtime
 
-- One SQLite Durable Object (`MarketStream`) owns the four-market loop.
-- Every two seconds it fetches four full futures order-book snapshots with IDs. There is no continuous WebSocket and no foreground market-data producer.
-- Every five minutes, Gate futures tickers/contracts first select four active contracts by settlement volume while pinning open PAPER positions. Other cycles pair four books with at most two ancillary requests: contract stats for OI plus rotating signed trades, public liquidations, or completed 1m/15m/1h structure candles.
+- One SQLite Durable Object (`MarketStream`) owns the fixed BTC/ETH/SOL loop.
+- Every two seconds it fetches three full futures order-book snapshots with IDs. There is no continuous WebSocket and no foreground market-data producer.
+- Every five minutes, Gate futures metadata is refreshed for BTC, ETH, and SOL only. Other cycles pair three books with at most two ancillary requests: contract stats for OI plus rotating signed trades, public liquidations, or completed 1m/15m/1h structure candles.
 - A 30-second compact checkpoint, immediate authority checkpoints for PAPER state changes, and a one-minute Cron watchdog recover eviction, stale alarms, 429s, and partial market outages. The hard budget is 43,200 alarm writes + 8,000 non-alarm writes + 2,880 watchdog reserve = 54,080/day.
 - New orders are PAPER only. The final Worker exposes no POST/DELETE trading endpoint.
 

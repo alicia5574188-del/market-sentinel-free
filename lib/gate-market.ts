@@ -79,7 +79,7 @@ export type GateContract = {
   maintenance_rate?: string;
 };
 
-export async function fetchActiveContracts(pinned: string[] = []) {
+export async function fetchActiveContracts() {
   const [rows, contracts] = await Promise.all([
     gatePublic<GateTicker[]>("/futures/usdt/tickers"),
     gatePublic<GateContract[]>("/futures/usdt/contracts"),
@@ -87,17 +87,10 @@ export async function fetchActiveContracts(pinned: string[] = []) {
   const available = new Map(contracts
     .filter((contract) => !contract.in_delisting && (!contract.status || contract.status === "trading"))
     .map((contract) => [contract.name ?? "", Number(contract.order_price_round ?? 0.0001)]));
+  const tracked = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];
   return rows
-    .filter((row) => /^[A-Z0-9]{2,20}_USDT$/.test(row.contract ?? "") && available.has(row.contract ?? ""))
-    .sort((a, b) => {
-      const volume = (row: GateTicker) => Number(row.volume_24h_settle ?? 0)
-        || Number(row.volume_24h_usd ?? 0)
-        || Number(row.volume_24h ?? 0) * Number(row.last ?? 0)
-          * Number(contracts.find((item) => item.name === row.contract)?.quanto_multiplier ?? 1);
-      return volume(b) - volume(a);
-    })
-    .sort((a, b) => (pinned.includes(a.contract ?? "") ? -1 : 0) - (pinned.includes(b.contract ?? "") ? -1 : 0))
-    .slice(0, 4)
+    .filter((row) => tracked.includes(row.contract ?? "") && available.has(row.contract ?? ""))
+    .sort((a, b) => tracked.indexOf(a.contract ?? "") - tracked.indexOf(b.contract ?? ""))
     .map((row) => {
       const contract = contracts.find((item) => item.name === row.contract);
       return {

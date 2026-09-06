@@ -17,6 +17,8 @@ type Runtime = {
 };
 type HistoryItem = { id: string; symbol: string; marketState: MarketState; side: Side; status: "OPEN" | "CLOSED"; entryAt: number; entryPrice: number; currentStop: number; currentTarget: number; plannedRisk: number; notional: number; exitAt: number | null; exitPrice: number | null; exitReason: string | null; realizedPnl: number | null };
 type Tab = "brain" | "orders" | "history" | "settings";
+type Timeframe = "1m" | "15m" | "1h";
+type Candle = { time: number; volume: number; close: number; high: number; low: number; open: number };
 
 const INITIAL_EQUITY = 1_000;
 const stateText: Record<string, string> = { BREAKOUT: "突破", REVERSAL: "反转", RANGE: "震荡", LIVE: "运行中", WARMING: "预热中", DEGRADED: "部分数据恢复中", RECONNECTING: "重新连接中", RECOVERY_REQUIRED: "需要恢复", STARTING: "启动中" };
@@ -29,10 +31,10 @@ const sideText = (side: Side) => side === "LONG" ? "做多" : "做空";
 const distancePct = (from: number, to: number) => Math.abs(to - from) / Math.max(from, 1e-9) * 100;
 const rr = (entry: number, stop: number, target: number) => Math.abs(target - entry) / Math.max(Math.abs(entry - stop), 1e-9);
 
-function waitReason(runtime: Runtime | null, healthy: boolean, symbol: string) {
+function waitReason(runtime: Runtime | null, marketReady: boolean, symbol: string) {
   if (!runtime) return "正在连接后台行情";
   const evidence = runtime.evidence[symbol];
-  if (!healthy || !evidence?.fresh || !evidence?.ancillaryFresh) return "行情证据暂时不完整，禁止使用旧价格进场";
+  if (!marketReady || !evidence?.fresh || !evidence?.ancillaryFresh) return "该币行情证据暂时不完整，禁止使用旧价格进场";
   if (evidence.warmup < 30) return `正在积累真实快照，还差 ${30 - evidence.warmup} 次`;
   const position = runtime.positions[symbol];
   if (position?.status === "OPEN") return "已经持仓，系统正动态保护并跟踪目标";
@@ -81,6 +83,7 @@ export default function Home() {
 
   const responseFresh = runtime != null && clock - receivedAt < 20_000 && clock - runtime.generatedAt < 20_000;
   const healthy = runtimeReady(runtime, responseFresh && !error);
+  const operational = runtime != null && responseFresh && !error && runtime.authorityReady && !runtime.stale;
   const openPositions = useMemo(() => runtime?.symbols.flatMap((symbol) => runtime.positions[symbol]?.status === "OPEN" ? [{ symbol, position: runtime.positions[symbol]! }] : []) ?? [], [runtime]);
   const preparedPlans = useMemo(() => runtime?.symbols.flatMap((symbol) => runtime.plans[symbol]?.state === "PREPARED" ? [{ symbol, plan: runtime.plans[symbol]! }] : []) ?? [], [runtime]);
   const bestDecision = useMemo(() => runtime?.symbols.map((symbol) => ({ symbol, decision: runtime.decisions[symbol] })).filter((row): row is { symbol: string; decision: Decision } => row.decision != null).sort((a, b) => b.decision.score - a.decision.score)[0] ?? null, [runtime]);
@@ -90,8 +93,9 @@ export default function Home() {
   const primary = openPositions[0] ? { symbol: openPositions[0].symbol, side: openPositions[0].position.side, state: openPositions[0].position.scenario, kind: "position" }
     : preparedPlans[0] ? { symbol: preparedPlans[0].symbol, side: preparedPlans[0].plan.side, state: preparedPlans[0].plan.marketState, kind: "plan" }
       : bestDecision ? { symbol: bestDecision.symbol, side: bestDecision.decision.side, state: bestDecision.decision.marketState, kind: "decision" } : null;
-  const headline = !healthy ? "行情正在恢复，暂不进场" : primary?.kind === "position" ? `正在持有 ${primary.symbol.replace("_", "/")} ${primary.side === "LONG" ? "多单" : "空单"}` : primary ? `准备${sideText(primary.side)} ${primary.symbol.replace("_", "/")}` : "继续观察，暂不开仓";
-  const headlineDetail = primary ? `${stateText[primary.state]}判断 · ${waitReason(runtime, healthy, primary.symbol)}` : runtime?.symbols[0] ? waitReason(runtime, healthy, runtime.symbols[0]) : "正在等待第一批行情";
+  const primaryReady = primary ? Boolean(operational && runtime?.evidence[primary.symbol]?.fresh && runtime.evidence[primary.symbol]?.ancillaryFresh) : false;
+  const headline = !operational ? "行情正在恢复，暂不进场" : primary?.kind === "position" ? `正在持有 ${primary.symbol.replace("_", "/")} ${primary.side === "LONG" ? "多单" : "空单"}` : primary ? `准备${sideText(primary.side)} ${primary.symbol.replace("_", "/")}` : "继续观察，暂不开仓";
+  const headlineDetail = primary ? `${stateText[primary.state]}判断 · ${waitReason(runtime, primaryReady, primary.symbol)}` : runtime?.symbols[0] ? waitReason(runtime, Boolean(operational && runtime.evidence[runtime.symbols[0]]?.fresh && runtime.evidence[runtime.symbols[0]]?.ancillaryFresh), runtime.symbols[0]) : "正在等待第一批行情";
 
   return <main>
     <header className="topbar">
@@ -112,12 +116,14 @@ export default function Home() {
     <nav className="tabs">{([['brain', '大脑'], ['orders', `订单 ${openPositions.length + preparedPlans.length || ''}`], ['history', '历史'], ['settings', '设置']] as const).map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => setTab(key)}>{label}</button>)}</nav>
 
     {tab === "brain" && <section className="markets">{runtime?.symbols.map((symbol) => {
-      const evidence = runtime.evidence[symbol], marketFresh = healthy && evidence?.fresh && evidence?.ancillaryFresh;
+      const evidence = runtime.evidence[symbol], marketFresh = Boolean(operational && evidence?.fresh && evidence?.ancillaryFresh);
       const decision = marketFresh ? runtime.decisions[symbol] : null, plan = marketFresh ? runtime.plans[symbol] : null, position = runtime.positions[symbol];
       const status = position?.status === "OPEN" ? "持仓中" : plan?.state === "PREPARED" ? "等待进场" : decision ? "发现机会" : evidence?.warmup < 30 ? `预热 ${evidence?.warmup ?? 0}/30` : "继续观察";
       return <article className="market" key={symbol}><div className="market-title"><div><small>{symbol.replace("_", "/")}</small><h2>{marketFresh ? status : "数据恢复中"}</h2></div><strong>{marketFresh ? num(evidence?.midpoint, 5) : "—"}</strong></div>
-        <div className="plain-answer"><small>系统判断</small><b>{decision ? `${sideText(decision.side)} · ${stateText[decision.marketState]}` : "暂时没有值得执行的方向"}</b><p>{waitReason(runtime, healthy, symbol)}</p></div>
+        <div className="plain-answer"><small>系统判断</small><b>{decision ? `${sideText(decision.side)} · ${stateText[decision.marketState]}` : "暂时没有值得执行的方向"}</b><p>{waitReason(runtime, marketFresh, symbol)}</p></div>
         {decision && <div className="trade-levels"><div><small>准备进场</small><b>{num(decision.entryTrigger, 5)}</b></div><div><small>判断错误就退出</small><b>{num(decision.invalidation, 5)}</b></div><div><small>当前目标</small><b>{num(decision.target, 5)}</b></div><div><small>预计盈亏比</small><b>{num(rr(decision.entryTrigger, decision.invalidation, decision.target), 2)} : 1</b></div></div>}
+        <div className="execution"><small>执行方式</small><b>{position?.status === "OPEN" ? "已按实时价格触发，正在持仓" : plan?.state === "PREPARED" ? `不预挂单，等待实时价格到达 ${num(plan.entryTrigger, 5)}` : decision ? "方向已形成，等待系统建立进场计划" : "不挂单，继续等待完整机会"}</b></div>
+        <CandleChart symbol={symbol} evidence={evidence} decision={plan?.state === "PREPARED" ? plan : decision} position={position?.status === "OPEN" ? position : null} />
         <details><summary>查看判断依据</summary><p>{decision?.reason.join("；") || "尚未形成完整判断"}</p><div className="targets"><span>上方吸引区：{num(evidence?.topLong?.price, 5)} · {sourceText[evidence?.topLong?.source ?? ""] ?? "识别中"}</span><span>下方吸引区：{num(evidence?.topShort?.price, 5)} · {sourceText[evidence?.topShort?.source ?? ""] ?? "识别中"}</span></div></details>
       </article>;
     }) ?? <div className="empty">正在读取市场数据…</div>}</section>}
@@ -140,6 +146,89 @@ export default function Home() {
 function OrderCard({ symbol, side, label, state, notional, values }: { symbol: string; side: Side; label: string; state: MarketState; notional: number; values: [string, number][] }) {
   return <article className="order-card"><div><span className={`side ${side.toLowerCase()}`}>{side === "LONG" ? "多" : "空"}</span><div><h3>{symbol.replace("_", "/")} · {label}</h3><p>{stateText[state]}策略</p></div></div><strong>{num(notional, 2)} U</strong><dl>{values.map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{num(value, name.includes("风险") ? 2 : 5)}{name.includes("风险") ? " U" : ""}</dd></div>)}</dl></article>;
 }
+
+function CandleChart({ symbol, evidence, decision, position }: {
+  symbol: string;
+  evidence: Runtime["evidence"][string] | undefined;
+  decision: Decision | Plan | null;
+  position: Position | null;
+}) {
+  const [interval, setIntervalValue] = useState<Timeframe>("15m");
+  const [candles, setCandles] = useState<Candle[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [chartError, setChartError] = useState<string | null>(null);
+  const [updatedAt, setUpdatedAt] = useState(0);
+
+  useEffect(() => {
+    let active = true, inFlight = false;
+    let controller: AbortController | null = null;
+    const read = async () => {
+      if (!active || document.hidden || inFlight) return;
+      inFlight = true; controller = new AbortController(); setLoading(true);
+      const timeout = window.setTimeout(() => controller?.abort(), 8_000);
+      try {
+        const response = await fetch(`/api/candles?symbol=${encodeURIComponent(symbol)}&interval=${interval}`, { cache: "no-store", signal: controller.signal });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json() as { source: string; candles: Candle[]; generatedAt: number };
+        const valid = (payload.candles ?? []).filter((row) => [row.time, row.open, row.high, row.low, row.close, row.volume].every(Number.isFinite) && row.time > 0 && row.low > 0 && row.high >= row.low);
+        if (!valid.length || payload.source !== "GATE_USDT_FUTURES") throw new Error("真实K线暂不可用");
+        if (active) { setCandles(valid); setUpdatedAt(payload.generatedAt); setChartError(null); }
+      } catch (failure) {
+        if (active) setChartError(failure instanceof Error && failure.name !== "AbortError" ? failure.message : "更新超时");
+      } finally {
+        window.clearTimeout(timeout); inFlight = false; if (active) setLoading(false);
+      }
+    };
+    void read();
+    const timer = window.setInterval(read, 60_000);
+    return () => { active = false; controller?.abort(); window.clearInterval(timer); };
+  }, [symbol, interval]);
+
+  const rows = candles.slice(-72);
+  const width = 720, height = 286, left = 10, right = 10, top = 24, bottom = 34;
+  const rawLevels = [
+    evidence?.topLong && { value: evidence.topLong.price, label: "上方流动性", kind: "liquidity" },
+    evidence?.topShort && { value: evidence.topShort.price, label: "下方流动性", kind: "liquidity" },
+    position && { value: position.entryPrice, label: "持仓进场", kind: "entry" },
+    position && { value: position.currentStop, label: "保护价", kind: "stop" },
+    position && { value: position.currentTarget, label: "动态目标", kind: "target" },
+    !position && decision && { value: decision.entryTrigger, label: "触发价", kind: "entry" },
+    !position && decision && { value: decision.invalidation, label: "失效价", kind: "stop" },
+    !position && decision && { value: decision.target, label: "目标价", kind: "target" },
+  ].filter((level): level is { value: number; label: string; kind: string } => Boolean(level && Number.isFinite(level.value) && level.value > 0));
+  const levels = rawLevels.filter((level, index) => rawLevels.findIndex((candidate) => Math.abs(candidate.value - level.value) <= Math.max(level.value, 1) * 1e-7) === index);
+  const allPrices = [...rows.flatMap((row) => [row.high, row.low]), ...levels.map((level) => level.value)];
+  const rawMin = allPrices.length ? Math.min(...allPrices) : 0;
+  const rawMax = allPrices.length ? Math.max(...allPrices) : 1;
+  const padding = Math.max((rawMax - rawMin) * .07, rawMax * .0005, 1e-9);
+  const minPrice = rawMin - padding, maxPrice = rawMax + padding;
+  const plotHeight = height - top - bottom;
+  const y = (value: number) => top + (maxPrice - value) / Math.max(maxPrice - minPrice, 1e-9) * plotHeight;
+  const step = (width - left - right) / Math.max(rows.length, 1);
+  const bodyWidth = Math.max(2, Math.min(8, step * .58));
+  const latest = rows.at(-1);
+
+  return <section className="chart-shell" aria-label={`${symbol.replace("_", "/")} 真实期货K线`}>
+    <div className="chart-head"><div><b>真实期货 K 线</b><small>Gate USDT 合约 · 已收盘数据</small></div><div className="timeframes" aria-label="切换策略结构周期">{([['1m', '1分钟'], ['15m', '15分钟'], ['1h', '1小时']] as const).map(([value, label]) => <button type="button" key={value} className={interval === value ? "active" : ""} onClick={() => setIntervalValue(value)}>{label}</button>)}</div></div>
+    {!rows.length ? <div className="chart-loading">{loading ? "正在读取真实 K 线…" : `真实 K 线更新延迟${chartError ? `：${chartError}` : ""}`}</div> : <>
+      <div className="chart-canvas"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${rows.length} 根 ${interval} 已收盘K线及策略区域`} preserveAspectRatio="none">
+        {[.25, .5, .75].map((ratio) => <line className="chart-grid" key={ratio} x1={left} x2={width - right} y1={top + plotHeight * ratio} y2={top + plotHeight * ratio} />)}
+        {levels.filter((level) => level.kind === "liquidity").map((level) => <rect className="zone-band" key={`${level.label}:${level.value}`} x={left} width={width - left - right} y={y(level.value) - 4} height="8" />)}
+        {rows.map((row, index) => {
+          const x = left + step * index + step / 2;
+          const up = row.close >= row.open;
+          const bodyTop = y(Math.max(row.open, row.close));
+          const bodyHeight = Math.max(1.8, Math.abs(y(row.open) - y(row.close)));
+          return <g className={`candle ${up ? "up" : "down"}`} key={row.time}><line x1={x} x2={x} y1={y(row.high)} y2={y(row.low)} /><rect x={x - bodyWidth / 2} y={bodyTop} width={bodyWidth} height={bodyHeight} /></g>;
+        })}
+        {levels.map((level, index) => { const levelY = y(level.value); return <g className={`chart-level ${level.kind}`} key={`${level.kind}:${level.value}`}><line x1={left} x2={width - right} y1={levelY} y2={levelY} /><text x={left + 5} y={Math.max(12, levelY - 5 - (index % 2) * 11)}>{level.label} {num(level.value, 5)}</text></g>; })}
+        <text className="axis-label" x={left} y={height - 9}>{rows[0] ? time(rows[0].time * 1_000) : ""}</text><text className="axis-label end" x={width - right} y={height - 9}>{latest ? time(latest.time * 1_000) : ""}</text>
+      </svg></div>
+      <div className="ohlc"><span>开 <b>{num(latest?.open, 5)}</b></span><span>高 <b>{num(latest?.high, 5)}</b></span><span>低 <b>{num(latest?.low, 5)}</b></span><span>收 <b>{num(latest?.close, 5)}</b></span><small>{loading ? "更新中" : chartError ? "保留上次真实数据" : `${rows.length} 根 · ${time(updatedAt)}`}</small></div>
+    </>}
+  </section>;
+}
+
 function Setting({ title, detail, value, tone = "" }: { title: string; detail: string; value: string; tone?: string }) {
   return <div className="setting-row"><div><b>{title}</b><p>{detail}</p></div><span className={`setting-value ${tone}`}>{value}</span></div>;
 }

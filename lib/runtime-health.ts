@@ -10,6 +10,6 @@ export type RuntimeHealthShape = {
 export function runtimeReady(runtime: RuntimeHealthShape | null, transportFresh = true) {
   if (!runtime || !transportFresh || runtime.state !== "LIVE" || runtime.stale !== false || runtime.authorityReady !== true || runtime.lastError != null) return false;
   const symbols = runtime.symbols ?? [];
-  return symbols.length === 4 && new Set(symbols).size === 4
+  return symbols.length === 3 && new Set(symbols).size === 3
     && symbols.every((symbol) => runtime.evidence?.[symbol]?.fresh === true && runtime.evidence[symbol]?.ancillaryFresh === true);
 }

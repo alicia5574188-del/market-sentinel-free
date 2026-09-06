@@ -485,7 +485,7 @@ test("mark-to-market drawdown rebalances the weakest PAPER risk back under five 
   assert.ok(remaining <= markedEquity * 0.05 + 1e-9, `${remaining} must be <= 5% of MTM equity ${markedEquity}`);
 });
 
-test("a full day of universe churn leaves only four in-memory symbols", async () => {
+test("market refresh can never add a fourth symbol", async () => {
   const { stream } = await makeStream();
   for (let cycle = 0; cycle < 288; cycle += 1) {
     const ranked = Array.from({ length: 4 }, (_, index) => ({
@@ -506,12 +506,12 @@ test("a full day of universe churn leaves only four in-memory symbols", async ()
 
   for (const map of [stream.memory, stream.sessionWarmup, stream.runtime.decisions, stream.runtime.plans,
     stream.runtime.positions, stream.runtime.evidence, stream.runtime.feedFailures, stream.runtime.tickSize,
-    stream.runtime.contractMeta]) assert.ok(Object.keys(map).length <= 4);
+    stream.runtime.contractMeta]) assert.ok(Object.keys(map).every((symbol) => ["BTC_USDT", "ETH_USDT", "SOL_USDT"].includes(symbol)));
 });
 
 test("funding-only metadata changes update resident memory without resetting warmup", async () => {
   const { stream } = await makeStream();
-  const symbols = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "BNB_USDT"];
+  const symbols = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];
   stream.runtime.symbols = [...symbols];
   stream.runtime.contractMeta = Object.fromEntries(symbols.map((symbol) => [symbol, {
     quantoMultiplier: 1,
