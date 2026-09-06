@@ -278,7 +278,7 @@ jobs:
           jq -er '.versions[0].version_id' "$RUNNER_TEMP/baseline.json" \
             > "$RUNNER_TEMP/baseline-version-id"
 
-      - name: Generate masked TTL token and deploy trusted read-only preflight
+      - name: Generate masked TTL token and upload isolated read-only preflight
         working-directory: preflight
         shell: bash
         run: |
@@ -290,12 +290,60 @@ jobs:
           echo "CUTOVER_PREFLIGHT_TOKEN=$token" >> "$GITHUB_ENV"
           jq -n --arg token "$token" '{CUTOVER_PREFLIGHT_TOKEN: $token}' \
             > "$RUNNER_TEMP/preflight-secrets.json"
+
+          # The production script may already be on v6 after a recoverable
+          # cutover attempt. Upload the immutable preflight as an isolated
+          # preview with D1 only, so Cloudflare never tries to replay its old
+          # Durable Object migrations and production traffic never moves.
+          jq --arg database "$D1_DATABASE_ID" '
+            {
+              name: .name,
+              main: .main,
+              no_bundle: .no_bundle,
+              compatibility_date: .compatibility_date,
+              compatibility_flags: .compatibility_flags,
+              d1_databases: [{
+                binding: "DB",
+                database_name: "market-sentinel-free",
+                database_id: $database
+              }],
+              version_metadata: .version_metadata,
+              observability: {enabled: false},
+              workers_dev: true,
+              preview_urls: true
+            }
+          ' dist/server/wrangler.json > dist/server/wrangler.initial-preview.json
+          jq -e --arg database "$D1_DATABASE_ID" '
+            .d1_databases == [{
+              binding: "DB",
+              database_name: "market-sentinel-free",
+              database_id: $database
+            }] and
+            (.durable_objects == null) and
+            (.migrations == null) and
+            (.triggers == null) and
+            (.assets == null)
+          ' dist/server/wrangler.initial-preview.json >/dev/null
+
+          alias="p${GITHUB_RUN_ID}"
+          echo "CUTOVER_PREFLIGHT_URL=https://${alias}-${WORKER_NAME}.alicia5574188.workers.dev" >> "$GITHUB_ENV"
           remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
           (( remaining > 0 ))
-          timeout "${remaining}s" npx wrangler deploy \
-            --config dist/server/wrangler.json \
-            --secrets-file "$RUNNER_TEMP/preflight-secrets.json"
+          timeout "${remaining}s" npx wrangler versions upload \
+            --config dist/server/wrangler.initial-preview.json \
+            --preview-alias "$alias" \
+            --secrets-file "$RUNNER_TEMP/preflight-secrets.json" \
+            --keep-vars
           rm -f "$RUNNER_TEMP/preflight-secrets.json"
+
+          # A preview upload creates no production deployment.
+          npx wrangler deployments status --name "$WORKER_NAME" --json \
+            > "$RUNNER_TEMP/post-initial-preview-production.json"
+          jq -e --arg baseline "$(cat "$RUNNER_TEMP/baseline-version-id")" '
+            (.versions | length) == 1 and
+            .versions[0].percentage == 100 and
+            .versions[0].version_id == $baseline
+          ' "$RUNNER_TEMP/post-initial-preview-production.json" >/dev/null
 
       - name: Require two fresh read-only Gate zero-inventory results
         shell: bash
@@ -309,7 +357,7 @@ jobs:
               (( remaining > 0 ))
               code="$(curl -sS --max-time 20 -o "$output" -w '%{http_code}' \
                 -H "Authorization: Bearer $CUTOVER_PREFLIGHT_TOKEN" \
-                "$WORKER_BASE_URL/api/live/preflight" || true)"
+                "$CUTOVER_PREFLIGHT_URL/api/live/preflight" || true)"
               now_ms="$(( $(date +%s) * 1000 ))"
               if [[ "$code" == "200" ]] && jq -e \
                 --argjson min "$((now_ms - 120000))" --argjson max "$((now_ms + 30000))" '
@@ -485,15 +533,17 @@ jobs:
           fi
           (( healthy >= 2 ))
 
-      - name: Revoke production token, observe its new version, and run restart canary
+      - name: Redeploy clean v6 and run restart canary
         working-directory: release
         shell: bash
         run: |
           set -euo pipefail
-          # secret delete itself creates a Worker version. Treat that as an
-          # intentional restart canary and verify the version and runtime move.
-          CI=true timeout 180s npx wrangler secret delete CUTOVER_PREFLIGHT_TOKEN \
-            --name "$WORKER_NAME"
+          # The preflight token exists only on an undeployed preview version.
+          # A second clean v6 deploy is the intentional restart canary.
+          remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
+          (( remaining > 0 ))
+          timeout "${remaining}s" npx wrangler deploy \
+            --config dist/server/wrangler.prepare.json
           npx wrangler secret list --name "$WORKER_NAME" --format json \
             > "$RUNNER_TEMP/secrets-after-v6.json"
           ! jq -e '.[] | select(.name == "CUTOVER_PREFLIGHT_TOKEN")' \
