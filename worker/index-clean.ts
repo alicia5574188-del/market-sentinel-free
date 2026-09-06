@@ -114,6 +114,7 @@ function markToMarketEquity(runtime: RuntimeState) {
 export class MarketStream extends DurableObject<CloudflareEnv> {
   private runtime = initialState();
   private memory: Record<string, SymbolMemory> = {};
+  private chartCandles: Record<string, Partial<Record<"1m" | "15m" | "1h", Awaited<ReturnType<typeof fetchStructureCandles>>>>> = {};
   private sessionWarmup: Record<string, number> = {};
   private authorityReady = true;
   private authorityView = { positions: {} as RuntimeState["positions"], equity: 1_000, equityVersion: 0 };
@@ -283,6 +284,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       } else {
         const rows = result.value.value as Awaited<ReturnType<typeof fetchStructureCandles>>;
         const timeframe = result.value.timeframe!;
+        (this.chartCandles[result.value.symbol] ??= {})[timeframe] = rows;
         const key = timeframe === "1m" ? "m1" : timeframe === "15m" ? "m15" : "h1";
         memory.structureByTimeframe[key] = deriveStructureZones(rows, timeframe, memory.lastMid);
         memory.structureZones = [...memory.structureByTimeframe.m1, ...memory.structureByTimeframe.m15, ...memory.structureByTimeframe.h1];
@@ -612,7 +614,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   async fetch(request: Request) {
-    const path = new URL(request.url).pathname;
+    const url = new URL(request.url);
+    const path = url.pathname;
     if (path === "/watchdog") {
       const stale = this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > 3_000;
       const alarm = await this.ctx.storage.getAlarm();
@@ -637,8 +640,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           nonAlarmWriteCapPerDay: NON_ALARM_WRITE_CAP, nonAlarmWritesToday: this.runtime.nonAlarmWrites,
           plannedDoWritesPerDay: 54_080,
           internalAnalysisP99RedlineMs: 25, topLevelCpuP99RedlineMs: 8, assumedRuntimePollSeconds: 15,
-          plannedForegroundDoRequestsPerDay: 5_760, plannedCronWatchdogsPerDay: 1_440, plannedTotalDoRequestsPerDay: 50_400,
+          plannedForegroundDoRequestsPerDay: 10_080, plannedCronWatchdogsPerDay: 1_440, plannedTotalDoRequestsPerDay: 54_720,
           maxOpenPositions: MAX_OPEN_POSITIONS, plannedMaxD1BilledWritesPerDay: 4_800 } });
+    }
+    if (path === "/candles") {
+      const symbol = url.searchParams.get("symbol") ?? "";
+      const interval = url.searchParams.get("interval") ?? "15m";
+      if (!DEFAULT_SYMBOLS.includes(symbol) || !["1m", "15m", "1h"].includes(interval)) return json({ error: "unsupported futures chart" }, 400);
+      const candles = this.chartCandles[symbol]?.[interval as "1m" | "15m" | "1h"] ?? [];
+      return candles.length ? json({ symbol, interval, source: "GATE_USDT_FUTURES", candles, generatedAt: Date.now() }) : json({ error: "actual candles warming" }, 503);
     }
     return json({ error: "not found" }, 404);
   }
@@ -675,7 +685,7 @@ async function paperHistory(env: CloudflareEnv) {
   return new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=30" } });
 }
 
-async function chartCandles(url: URL) {
+async function chartCandles(url: URL, env: CloudflareEnv) {
   const symbol = url.searchParams.get("symbol") ?? "";
   const interval = url.searchParams.get("interval") ?? "15m";
   if (!DEFAULT_SYMBOLS.includes(symbol) || !["1m", "15m", "1h"].includes(interval)) {
@@ -687,8 +697,9 @@ async function chartCandles(url: URL) {
     return new Response(cached.response, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=20" } });
   }
   try {
-    const candles = await fetchStructureCandles(symbol, interval as "1m" | "15m" | "1h", 5_000);
-    const body = JSON.stringify({ symbol, interval, source: "GATE_USDT_FUTURES", candles, generatedAt: Date.now() });
+    const response = await env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/candles?symbol=${encodeURIComponent(symbol)}&interval=${interval}`);
+    const body = await response.text();
+    if (!response.ok) throw new Error(`candle authority ${response.status}`);
     candleCache.set(key, { response: body, expiresAt: Date.now() + 20_000 });
     return new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=20" } });
   } catch (error) {
@@ -710,7 +721,7 @@ const worker = {
     }
     if (url.pathname === "/api/runtime" && request.method === "GET") return runtimeStatus(env);
     if (url.pathname === "/api/history" && request.method === "GET") return paperHistory(env);
-    if (url.pathname === "/api/candles" && request.method === "GET") return chartCandles(url);
+    if (url.pathname === "/api/candles" && request.method === "GET") return chartCandles(url, env);
     if (url.pathname.startsWith("/api/")) return json({ error: "read-only PAPER surface" }, 404);
     return handler.fetch(request, env, ctx);
   },
