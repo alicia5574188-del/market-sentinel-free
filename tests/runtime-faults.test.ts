@@ -449,6 +449,7 @@ test("re-instantiated retries handle future, missing and past alarms without rep
 
 test("ancillary wheel covers every symbol/feature and each TTL fails one millisecond beyond its boundary", () => {
   const symbols = ["A", "B", "C", "D"];
+  assert.deepEqual(ancillarySchedule(7, symbols, ["C"]), { symbol: "C", feature: "1m" });
   const schedule = Array.from({ length: 20 }, (_, cursor) => ancillarySchedule(cursor, symbols)!);
   assert.equal(new Set(schedule.map((row) => `${row.symbol}:${row.feature}`)).size, 20);
   assert.deepEqual(schedule, Array.from({ length: 20 }, (_, cursor) => ancillarySchedule(cursor + 20, symbols)!));
@@ -597,7 +598,7 @@ test("a capacity-limited plan is skipped without blocking LIVE or other affordab
   const { stream } = await makeStream();
   const symbols = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];
   stream.runtime.symbols = symbols;
-  stream.runtime.plans = Object.fromEntries(symbols.map((symbol) => [symbol, plan(symbol)]));
+  stream.runtime.plans = Object.fromEntries(symbols.map((symbol) => [symbol, { ...plan(symbol), marketState: "RANGE" }]));
   stream.runtime.contractMeta = Object.fromEntries(symbols.map((symbol) => [symbol, {
     quantoMultiplier: 0.001, maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0,
   }]));
@@ -622,6 +623,36 @@ test("a capacity-limited plan is skipped without blocking LIVE or other affordab
   assert.equal(snapshotCalls, 1);
   assert.equal(Object.values(stream.runtime.live.entrySkips).filter(Boolean).length, 2);
   assert.match(stream.runtime.live.entrySkips.ETH_USDT.reason, /本轮未挂单/);
+});
+
+test("LIVE submits a confirmed breakout as current-price IOC, never as a pre-hung trigger", async () => {
+  const { stream } = await makeStream();
+  stream.runtime.symbols = ["BTC_USDT"];
+  stream.runtime.plans = { BTC_USDT: plan("BTC_USDT") };
+  stream.runtime.contractMeta = { BTC_USDT: {
+    quantoMultiplier: 0.001, maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0,
+  } };
+  let createCalls = 0;
+  stream.liveClient = {
+    requestCount: 0,
+    snapshot: async () => ({ account: { total: "1000", available: "1000", in_dual_mode: false },
+      positions: [], orders: [], priceOrders: [], checkedAt: Date.now() }),
+    createEntry: async () => { createCalls += 1; return "confirmed-breakout"; },
+    setLeverage: async () => undefined,
+  };
+
+  const enabled = await stream.setLiveMode(true);
+  assert.equal(enabled.ok, true);
+  assert.equal(createCalls, 0);
+
+  stream.runtime.evidence.BTC_USDT = { midpoint: 101.2, observedAt: 60_001, warmup: 30, fresh: true,
+    ancillaryFresh: true, topLong: null, topShort: null, absorption: 0 };
+  stream.memory.BTC_USDT = emptySymbolMemory();
+  stream.memory.BTC_USDT.timeframeUpdatedAt.m1 = 60_000;
+  stream.memory.BTC_USDT.lastCompletedMinuteCandle = { time: 0, open: 100.5, high: 101.7, low: 100.4, close: 101.6 };
+  await stream.syncLive(60_001);
+  assert.equal(createCalls, 1);
+  assert.equal(stream.runtime.live.entries.BTC_USDT.kind, "MARKET");
 });
 
 test("forced OFF reconciliation cancels only orphaned Market Sentinel entry tags", async () => {

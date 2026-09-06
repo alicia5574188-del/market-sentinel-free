@@ -12,13 +12,17 @@ export const MIN_NET_TARGET_RETURN_ON_EQUITY = 0.015;
 export const DYNAMIC_EXIT_CONFIRMATIONS = 3;
 export const PLAN_SOFT_INVALIDATION_CONFIRMATIONS = 2;
 export const MIN_SOFT_EXIT_HOLD_MS = 2 * 60_000;
-export const SOFT_EXIT_ADVERSE_R = 0.25;
+export const SOFT_EXIT_ADVERSE_R = 0.75;
 export const MAX_GENERIC_PLAN_DISTANCE_RATE = 0.0075;
 export const TARGET_MARGIN_RATE = 0.10;
 export const PORTFOLIO_MARGIN_CAP = 0.30;
 export const MIN_STRUCTURAL_STOP_RATE = ROUND_TRIP_FRICTION_RATE;
 export const BREAKOUT_REJECTION_MIN_R = 2;
 export const BREAKOUT_REJECTION_MAX_RETENTION = 0.30;
+export const BREAKOUT_ENTRY_MIN_EXTENSION_R = 0.10;
+export const BREAKOUT_ENTRY_MIN_CLOSE_RETENTION = 0.55;
+export const BREAKOUT_ENTRY_MAX_CHASE_R = 0.50;
+export const DYNAMIC_PROTECTION_NET_CUSHION_R = 0.15;
 
 export type Side = "LONG" | "SHORT";
 export type MarketState = "BREAKOUT" | "REVERSAL" | "RANGE";
@@ -540,9 +544,11 @@ export function updatePosition(position: PaperPosition, input: {
       return close("BREAKOUT_PROFIT_REJECTION");
     }
   }
-  const adverseMove = observed.side === "LONG" ? observed.entryPrice - input.price : input.price - observed.entryPrice;
-  const softExitEligible = input.now - observed.entryAt >= MIN_SOFT_EXIT_HOLD_MS
-    && adverseMove / initialRisk >= SOFT_EXIT_ADVERSE_R;
+  const adverseCloseMove = input.confirmationPrice == null ? 0
+    : observed.side === "LONG" ? observed.entryPrice - input.confirmationPrice : input.confirmationPrice - observed.entryPrice;
+  const softExitEligible = completedMinute != null
+    && input.now - observed.entryAt >= MIN_SOFT_EXIT_HOLD_MS
+    && adverseCloseMove / initialRisk >= SOFT_EXIT_ADVERSE_R;
   if (adverseReason && softExitEligible && exitSignalCount >= DYNAMIC_EXIT_CONFIRMATIONS) {
     return close(adverseReason);
   }
@@ -566,7 +572,7 @@ export function updatePosition(position: PaperPosition, input: {
         : observed.entryPrice + initialRisk * 0.5;
     }
     if (confirmedMove >= feeDistance + initialRisk * 0.5) {
-      const lockedMove = Math.max(feeDistance, confirmedMove * 0.35);
+      const lockedMove = Math.max(feeDistance + initialRisk * DYNAMIC_PROTECTION_NET_CUSHION_R, confirmedMove * 0.35);
       candidate = observed.side === "LONG" ? observed.entryPrice + lockedMove : observed.entryPrice - lockedMove;
     }
     if (candidate != null) {
@@ -596,4 +602,38 @@ export function planTriggered(plan: PaperPlan, price: number) {
   return plan.side === "LONG"
     ? (plan.marketState === "BREAKOUT" ? price >= plan.entryTrigger : price <= plan.entryTrigger)
     : (plan.marketState === "BREAKOUT" ? price <= plan.entryTrigger : price >= plan.entryTrigger);
+}
+
+export function breakoutEntryConfirmed(
+  plan: Pick<PaperPlan, "marketState" | "side" | "entryTrigger" | "invalidation" | "createdAt">,
+  confirmationMinute?: number,
+  confirmationCandle?: CompletedMinuteCandle | null,
+) {
+  if (plan.marketState !== "BREAKOUT") return true;
+  if (!confirmationMinute || confirmationMinute <= plan.createdAt || !confirmationCandle) return false;
+  const completedAt = (confirmationCandle.time + 60) * 1_000;
+  if (completedAt <= plan.createdAt || completedAt > confirmationMinute) return false;
+  const initialRisk = Math.max(Math.abs(plan.entryTrigger - plan.invalidation), plan.entryTrigger * 0.0001);
+  const extension = Math.max(plan.entryTrigger * 0.00005, initialRisk * BREAKOUT_ENTRY_MIN_EXTENSION_R);
+  const candleRange = Math.max(confirmationCandle.high - confirmationCandle.low, plan.entryTrigger * 1e-9);
+  if (plan.side === "LONG") {
+    const closeRetention = (confirmationCandle.close - confirmationCandle.low) / candleRange;
+    return confirmationCandle.close >= plan.entryTrigger + extension
+      && confirmationCandle.close > confirmationCandle.open
+      && closeRetention >= BREAKOUT_ENTRY_MIN_CLOSE_RETENTION;
+  }
+  const closeRetention = (confirmationCandle.high - confirmationCandle.close) / candleRange;
+  return confirmationCandle.close <= plan.entryTrigger - extension
+    && confirmationCandle.close < confirmationCandle.open
+    && closeRetention >= BREAKOUT_ENTRY_MIN_CLOSE_RETENTION;
+}
+
+export function breakoutEntryPriceAcceptable(
+  plan: Pick<PaperPlan, "marketState" | "side" | "entryTrigger" | "invalidation">,
+  price: number,
+) {
+  if (plan.marketState !== "BREAKOUT") return true;
+  const initialRisk = Math.max(Math.abs(plan.entryTrigger - plan.invalidation), plan.entryTrigger * 0.0001);
+  const extension = plan.side === "LONG" ? price - plan.entryTrigger : plan.entryTrigger - price;
+  return extension >= 0 && extension <= initialRisk * BREAKOUT_ENTRY_MAX_CHASE_R;
 }

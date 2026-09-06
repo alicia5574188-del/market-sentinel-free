@@ -3,7 +3,7 @@
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
 import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchRecentTrades, fetchStructureCandles } from "../lib/gate-market.ts";
-import { closePaperPosition, PORTFOLIO_RISK_CAP, remainingStressRisk, SYSTEM_VERSION, updatePosition, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
+import { breakoutEntryConfirmed, breakoutEntryPriceAcceptable, closePaperPosition, planTriggered, PORTFOLIO_RISK_CAP, remainingStressRisk, SYSTEM_VERSION, updatePosition, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
 import { aggregateFourHourCandles, analyzeSnapshot, ancillaryIsFresh, ancillarySchedule, applyFlow, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
 import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem, type ReviewCandle } from "../lib/paper-outbox.ts";
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
@@ -40,7 +40,7 @@ type LiveEntry = {
   symbol: string;
   side: Side;
   scenario: MarketState;
-  kind: "PRICE_TRIGGER" | "LIMIT";
+  kind: "PRICE_TRIGGER" | "LIMIT" | "MARKET";
   status: "SUBMITTING" | "OPEN" | "FILLED" | "CANCELLED" | "ERROR";
   tag: string;
   exchangeOrderId: string | null;
@@ -325,8 +325,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
   }
 
+  private priorityMinuteSymbols(now: number) {
+    const completedMinute = Math.floor(now / 60_000) * 60_000;
+    return this.runtime.symbols.filter((symbol) => {
+      const plan = this.runtime.plans[symbol];
+      return plan?.state === "PREPARED" && plan.marketState === "BREAKOUT"
+        && (this.memory[symbol]?.timeframeUpdatedAt.m1 ?? 0) < completedMinute;
+    });
+  }
+
   private async updateAncillary(now: number) {
-    const scheduled = ancillarySchedule(this.runtime.ancillaryCursor++, this.runtime.symbols);
+    const scheduled = ancillarySchedule(this.runtime.ancillaryCursor++, this.runtime.symbols, this.priorityMinuteSymbols(now));
     if (!scheduled) return 0;
     const symbol = scheduled.symbol;
     let featureTask: () => Promise<{ kind: string; symbol: string; value: unknown; timeframe?: "1m" | "15m" | "1h" }>;
@@ -915,6 +924,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         delete this.runtime.live.entrySkips[symbol];
         continue;
       }
+      const midpoint = this.runtime.evidence[symbol]?.midpoint ?? 0;
+      if (plan.marketState === "BREAKOUT" && (!planTriggered(plan, midpoint)
+        || !breakoutEntryConfirmed(plan, this.memory[symbol]?.timeframeUpdatedAt.m1,
+          this.memory[symbol]?.lastCompletedMinuteCandle)
+        || !breakoutEntryPriceAcceptable(plan, midpoint))) continue;
       const prior = this.runtime.live.entries[symbol];
       // A timed-out submission remains reserved until Gate proves it absent for
       // six seconds. Never replay the same plan while its status is ambiguous.
@@ -926,6 +940,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       let intent: ReturnType<typeof buildLiveEntryIntent>;
       try {
         intent = buildLiveEntryIntent({ plan, equity, available: availableForNewEntries, openRisk: riskForNewEntries,
+          entryPrice: plan.marketState === "BREAKOUT" ? midpoint : undefined,
           quantoMultiplier: this.runtime.contractMeta[symbol]?.quantoMultiplier ?? 1,
           maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate ?? 0.005,
           leverageMax: this.runtime.contractMeta[symbol]?.leverageMax ?? 50, openMargin: marginForNewEntries });
@@ -1274,12 +1289,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // Use the actual invocation time for exchange freshness. The slot is
       // only an idempotency key; its floor can be almost two seconds behind a
       // fresh Gate snapshot and must never be used as the freshness clock.
-      const booksPromise = this.processBooks(now, cycleSymbols);
       let books: Awaited<ReturnType<MarketStream["processBooks"]>>;
       if (universeDue) {
-        books = await booksPromise;
+        books = await this.processBooks(now, cycleSymbols);
+      } else if (this.priorityMinuteSymbols(now).length) {
+        // A confirmed breakout must consume the newly completed official 1m
+        // candle in the same decision pass. Fetch that candle before books;
+        // otherwise LIVE could act one loop before PAPER sees the same proof.
+        subrequests += await this.updateAncillary(now);
+        books = await this.processBooks(now, cycleSymbols);
       } else {
-        const [bookResult, ancillary] = await Promise.all([booksPromise, this.updateAncillary(now)]);
+        const [bookResult, ancillary] = await Promise.all([this.processBooks(now, cycleSymbols), this.updateAncillary(now)]);
         books = bookResult;
         subrequests += ancillary;
       }

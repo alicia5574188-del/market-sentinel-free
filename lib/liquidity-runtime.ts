@@ -1,5 +1,7 @@
 import {
   aggregateBook,
+  breakoutEntryConfirmed,
+  breakoutEntryPriceAcceptable,
   cascadeRatio,
   dataIsFresh,
   decideThreeState,
@@ -455,7 +457,8 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
         targetTimeframe: currentTarget.timeframe, nextTarget: next?.zone.price ?? null, confirmationScore, fakeoutRisk,
         activationDistanceRate, score, executableNow: Math.abs(entryTrigger - midpoint) / midpoint <= activationDistanceRate
           && confirmationScore >= 0.52 && fakeoutRisk <= 0.62,
-        reason: ["15分钟重复边界", nodeBeyondProjection ? "先兑现15分钟局部量度空间" : `${first.timeframe}流动性作为本段终点`,
+        reason: ["15分钟重复边界", "完整1分钟收在突破位外才允许成交",
+          nodeBeyondProjection ? "先兑现15分钟局部量度空间" : `${first.timeframe}流动性作为本段终点`,
           "更远高周期节点留给下一段重判", "订单流、微价格与周期方向联合过滤假突破"] });
       if (next) {
         const nodeBuffer = Math.max(midpoint * 0.00035, Math.abs(next.zone.price - currentTarget.price) * 0.04);
@@ -615,6 +618,8 @@ export function reconcilePaper(input: {
     && Math.abs(plan.entryTrigger - input.midpoint) / Math.max(input.midpoint, 1e-9) > plan.activationDistanceRate * 1.6;
   const invalidationCrossed = plan?.state === "PREPARED"
     && (plan.side === "LONG" ? input.midpoint <= plan.invalidation : input.midpoint >= plan.invalidation);
+  const targetPassed = plan?.state === "PREPARED" && triggered
+    && (plan.side === "LONG" ? input.midpoint >= plan.target : input.midpoint <= plan.target);
   const invalidLegacyFallback = plan?.state === "PREPARED" && !plan.routeId
     && ((input.activeRoutes?.length ?? 0) > 0
       || (!triggered && plan.activationDistanceRate != null
@@ -623,11 +628,11 @@ export function reconcilePaper(input: {
   // Stale data and a crossed structural invalidation are hard faults. Route
   // disappearance and activation drift need two completed 1m confirmations so
   // a transient two-second recomputation cannot cancel an otherwise valid plan.
-  if ((!input.fresh || input.sequenceFault || invalidationCrossed || invalidLegacyFallback) && plan?.state === "PREPARED") {
+  if ((!input.fresh || input.sequenceFault || invalidationCrossed || targetPassed || invalidLegacyFallback) && plan?.state === "PREPARED") {
     plan = { ...plan, state: "CANCELLED" };
     cancelledThisCycle = true;
     events.push(!input.fresh ? "STALE_CANCEL" : input.sequenceFault ? "SEQUENCE_REBUILD_CANCEL"
-      : invalidationCrossed ? "PRE_ENTRY_INVALIDATION_CANCEL" : "NONLOCAL_FALLBACK_CANCEL");
+      : invalidationCrossed ? "PRE_ENTRY_INVALIDATION_CANCEL" : targetPassed ? "GAP_ECONOMICS_CANCEL" : "NONLOCAL_FALLBACK_CANCEL");
   } else if (plan?.state === "PREPARED") {
     const softReason = !targetPresent ? "TARGET_GONE_CANCEL" as const : routeWeak ? "ROUTE_WEAK_CANCEL" as const
       : movedAway ? "ACTIVATION_LOST_CANCEL" as const : null;
@@ -706,7 +711,10 @@ export function reconcilePaper(input: {
       }
     }
   }
-  if ((input.allowOpen ?? true) && plan?.state === "PREPARED" && position?.status !== "OPEN" && planTriggered(plan, input.midpoint)) {
+  if ((input.allowOpen ?? true) && plan?.state === "PREPARED" && position?.status !== "OPEN"
+    && planTriggered(plan, input.midpoint)
+    && breakoutEntryConfirmed(plan, input.confirmationMinute, input.confirmationCandle)
+    && breakoutEntryPriceAcceptable(plan, input.midpoint)) {
     const confidence = clamp(plan.score / Math.max(plan.score + plan.oppositeScore, Number.EPSILON), 0, 1);
     const resized = sizePaperPosition({ equity: input.equity, entry: input.midpoint, invalidation: plan.invalidation, feeBps: 10,
       stressSlippageBps: 8, confidence, openRisk: input.openRisk });
@@ -757,8 +765,11 @@ export function usableSnapshot(snapshot: BookSnapshot, now: number, lastSequence
   return { fresh: dataIsFresh(snapshot.observedAt, now), sequenceFault, sequenceReset, unchanged, advanced };
 }
 
-export function ancillarySchedule(cursor: number, symbols: string[]) {
+export function ancillarySchedule(cursor: number, symbols: string[], priorityMinuteSymbols: string[] = []) {
   if (!symbols.length) return null;
+  const eligiblePriority = priorityMinuteSymbols.filter((symbol) => symbols.includes(symbol));
+  const prioritySymbol = eligiblePriority.length ? eligiblePriority[Math.abs(cursor) % eligiblePriority.length] : null;
+  if (prioritySymbol) return { symbol: prioritySymbol, feature: "1m" as const };
   const feature = (["trades", "liquidations", "1m", "15m", "1h"] as const)[Math.floor(cursor / symbols.length) % 5];
   return { symbol: symbols[cursor % symbols.length], feature };
 }

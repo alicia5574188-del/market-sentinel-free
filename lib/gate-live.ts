@@ -50,7 +50,7 @@ export type GateLiveSnapshot = {
 };
 
 export type LiveEntryIntent = {
-  kind: "PRICE_TRIGGER" | "LIMIT";
+  kind: "PRICE_TRIGGER" | "LIMIT" | "MARKET";
   tag: string;
   size: number;
   contracts: number;
@@ -172,9 +172,9 @@ export class GateLiveClient {
     return responseId(response.raw, response.data);
   }
 
-  async inspectEntry(kind: "PRICE_TRIGGER" | "LIMIT", symbol: string, tag: string, orderId: string | null) {
+  async inspectEntry(kind: "PRICE_TRIGGER" | "LIMIT" | "MARKET", symbol: string, tag: string, orderId: string | null) {
     try {
-      if (kind === "LIMIT") {
+      if (kind !== "PRICE_TRIGGER") {
         return (await this.request<GateLiveOrder>("GET", `/futures/usdt/orders/${encodeURIComponent(orderId ?? tag)}`)).data;
       }
       if (orderId) {
@@ -200,7 +200,7 @@ export class GateLiveClient {
     });
   }
 
-  async cancelOrder(kind: "PRICE_TRIGGER" | "LIMIT", orderId: string) {
+  async cancelOrder(kind: "PRICE_TRIGGER" | "LIMIT" | "MARKET", orderId: string) {
     const family = kind === "PRICE_TRIGGER" ? "price_orders" : "orders";
     try {
       await this.request("DELETE", `/futures/usdt/${family}/${encodeURIComponent(orderId)}`);
@@ -249,7 +249,7 @@ export function liveOrderId(order: GateLiveOrder) {
   return order.id_string ?? (order.id == null ? null : String(order.id));
 }
 
-export function liveEntryDisposition(order: GateLiveOrder, kind: "PRICE_TRIGGER" | "LIMIT") {
+export function liveEntryDisposition(order: GateLiveOrder, kind: "PRICE_TRIGGER" | "LIMIT" | "MARKET") {
   if (order.status === "open") return "OPEN" as const;
   if (kind === "PRICE_TRIGGER") {
     if (order.finish_as === "succeeded") return "FILLED" as const;
@@ -270,28 +270,30 @@ export function buildLiveEntryIntent(input: {
   maintenanceRate?: number;
   leverageMax?: number;
   openMargin?: number;
+  entryPrice?: number;
 }): LiveEntryIntent {
   const { plan } = input;
+  const entryPrice = plan.marketState === "BREAKOUT" ? input.entryPrice ?? plan.entryTrigger : plan.entryTrigger;
   const confidence = plan.score / Math.max(plan.score + plan.oppositeScore, Number.EPSILON);
-  const sized = sizePaperPosition({ equity: input.equity, entry: plan.entryTrigger, invalidation: plan.invalidation, feeBps: 10, stressSlippageBps: 8, confidence, openRisk: input.openRisk });
+  const sized = sizePaperPosition({ equity: input.equity, entry: entryPrice, invalidation: plan.invalidation, feeBps: 10, stressSlippageBps: 8, confidence, openRisk: input.openRisk });
   const multiplier = Math.max(input.quantoMultiplier, 1e-12);
   const maxLeverage = Math.max(1, Math.floor(input.leverageMax ?? 50));
-  const contractNotional = Math.max(plan.entryTrigger * multiplier, 1e-12);
+  const contractNotional = Math.max(entryPrice * multiplier, 1e-12);
   // LIVE follows the PAPER account ratio. When that proportional amount is
   // smaller than Gate's indivisible one-contract lot, use one lot only if its
   // real loss remains inside the user's 5% account-wide risk boundary.
   let contracts = Math.max(1, Math.floor(sized.notional / contractNotional));
   let leverageChoice = selectSafeLeverage({ notional: contracts * contractNotional, equity: input.equity,
-    entry: plan.entryTrigger, invalidation: plan.invalidation, maintenanceRate: input.maintenanceRate, leverageMax: maxLeverage });
+    entry: entryPrice, invalidation: plan.invalidation, maintenanceRate: input.maintenanceRate, leverageMax: maxLeverage });
   const affordable = Math.floor(input.available * 0.95 * leverageChoice.leverage / contractNotional);
   contracts = Math.min(contracts, affordable);
   if (contracts < 1) throw new LiveEntrySizingError("MARGIN", plan.symbol, `${plan.symbol} 可用保证金不足 1 张合约，本轮未挂单`);
-  const notional = contracts * plan.entryTrigger * multiplier;
-  leverageChoice = selectSafeLeverage({ notional, equity: input.equity, entry: plan.entryTrigger,
+  const notional = contracts * entryPrice * multiplier;
+  leverageChoice = selectSafeLeverage({ notional, equity: input.equity, entry: entryPrice,
     invalidation: plan.invalidation, maintenanceRate: input.maintenanceRate, leverageMax: maxLeverage });
   const leverage = leverageChoice.leverage;
   const margin = leverageChoice.margin;
-  const lossRate = Math.abs(plan.entryTrigger - plan.invalidation) / Math.max(plan.entryTrigger, 1e-9) + ROUND_TRIP_FRICTION_RATE;
+  const lossRate = Math.abs(entryPrice - plan.invalidation) / Math.max(entryPrice, 1e-9) + ROUND_TRIP_FRICTION_RATE;
   const plannedRisk = notional * lossRate;
   if (input.openRisk + plannedRisk > input.equity * PORTFOLIO_RISK_CAP + 1e-8) {
     throw new LiveEntrySizingError("RISK_CAP", plan.symbol, `${plan.symbol} 最小 1 张合约将超过账户 5% 总风险，本轮未挂单`);
@@ -299,19 +301,13 @@ export function buildLiveEntryIntent(input: {
   if ((input.openMargin ?? 0) + margin > input.equity * PORTFOLIO_MARGIN_CAP + 1e-8) {
     throw new LiveEntrySizingError("MARGIN", plan.symbol, `${plan.symbol} 将超过账户 30% 挂单与持仓保证金上限，本轮未挂单`);
   }
-  const economics = tradeEconomics({ entry: plan.entryTrigger, target: plan.target, lossRate, confidence, notional, equity: input.equity });
+  const economics = tradeEconomics({ entry: entryPrice, target: plan.target, lossRate, confidence, notional, equity: input.equity });
   if (!economics.executable) throw new LiveEntrySizingError("ECONOMICS", plan.symbol, `${plan.symbol} 实盘合约取整后净利润空间不足，本轮未挂单`);
   const size = plan.side === "LONG" ? contracts : -contracts;
   const tag = shortTag("e", plan.id);
   const initial = { contract: plan.symbol, size, price: "0", tif: "ioc", text: tag, reduce_only: false };
-  const kind = plan.marketState === "BREAKOUT" ? "PRICE_TRIGGER" : "LIMIT";
-  const body = kind === "PRICE_TRIGGER" ? {
-    initial,
-    // Gate only accepts whole-day trigger expirations from one to thirty days.
-    // The strategy still owns the shorter plan lifetime and actively cancels
-    // this exchange order when the immutable plan expires.
-    trigger: { strategy_type: 0, price_type: 0, price: String(plan.entryTrigger), rule: plan.side === "LONG" ? 1 : 2, expiration: GATE_TRIGGER_DAY_SECONDS },
-  } : { ...initial, price: String(plan.entryTrigger), tif: "gtc" };
+  const kind = plan.marketState === "BREAKOUT" ? "MARKET" : "LIMIT";
+  const body = kind === "MARKET" ? initial : { ...initial, price: String(plan.entryTrigger), tif: "gtc" };
   return { kind, tag, size, contracts, notional, plannedRisk, leverage, margin, body };
 }
 
