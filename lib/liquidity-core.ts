@@ -13,6 +13,7 @@ export const DYNAMIC_EXIT_CONFIRMATIONS = 3;
 export const PLAN_SOFT_INVALIDATION_CONFIRMATIONS = 2;
 export const MIN_SOFT_EXIT_HOLD_MS = 2 * 60_000;
 export const SOFT_EXIT_ADVERSE_R = 0.25;
+export const MAX_GENERIC_PLAN_DISTANCE_RATE = 0.0075;
 export const TARGET_MARGIN_RATE = 0.10;
 export const PORTFOLIO_MARGIN_CAP = 0.30;
 
@@ -364,6 +365,7 @@ export function decideThreeState(input: {
     score: targetZone.score,
     oppositeScore: oppositeZone.score,
     reason,
+    activationDistanceRate: MAX_GENERIC_PLAN_DISTANCE_RATE,
   };
 }
 

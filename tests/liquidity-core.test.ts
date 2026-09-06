@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   PORTFOLIO_RISK_CAP,
   MIN_NET_REWARD_RISK,
+  MAX_GENERIC_PLAN_DISTANCE_RATE,
   cascadeRatio,
   decideThreeState as rawDecideThreeState,
   hasCascade,
@@ -22,7 +23,7 @@ import {
   type PaperPlan,
   type PaperPosition,
 } from "../lib/liquidity-core.ts";
-import { PLAN_TTL_MS, aggregateFourHourCandles, ancillarySchedule, buildLiquidityRoutes, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, inferLiquidationBands, reconcilePaper, selectRouteDecision, updateOpenInterestCohorts, usableSnapshot } from "../lib/liquidity-runtime.ts";
+import { PLAN_TTL_MS, aggregateFourHourCandles, ancillarySchedule, arbitrateDecision, buildLiquidityRoutes, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, inferLiquidationBands, reconcilePaper, selectRouteDecision, updateOpenInterestCohorts, usableSnapshot } from "../lib/liquidity-runtime.ts";
 import { drainPositionOutbox, enqueuePositionTransition } from "../lib/paper-outbox.ts";
 
 const flow = (patch: Partial<FlowEvidence> = {}): FlowEvidence => ({ ofi: 0, micropriceDisplacementBps: 0, takerDelta: 0, openInterestDelta: 0, funding: 0, actualLiquidations: 0, priceResponseBps: 0, ...patch });
@@ -64,18 +65,60 @@ test("15m balance creates two-sided local routes and a gated next-node leg", () 
   memory.range15m = range;
   memory.flow = flow({ ofi: 0.55, takerDelta: 0.45, micropriceDisplacementBps: 2 });
   memory.timeframeBias = { m1: "UP", m15: "UP", h1: "UP", h4: "UP" };
-  memory.structureByTimeframe.h4 = [zone("LONG", 102), zone("LONG", 105), zone("SHORT", 96)];
+  memory.structureByTimeframe.h4 = [zone("LONG", 101.2), zone("LONG", 102.4), zone("SHORT", 98.7)];
   const observedAt = range.observedAt + 1;
   const routes = buildLiquidityRoutes(memory, "BTC_USDT", observedAt, 99.9, 0.15);
   const first = routes.find((route) => route.kind === "LOCAL_BREAKOUT" && route.side === "LONG");
   const next = routes.find((route) => route.kind === "NODE_CONTINUATION" && route.side === "LONG");
-  assert.equal(first?.target, 102);
+  assert.equal(first?.target, 101.2);
   assert.equal(first?.targetTimeframe, "4h");
-  assert.equal(first?.nextTarget, 105);
+  assert.equal(first?.nextTarget, 102.4);
   assert.equal(first?.executableNow, true);
   assert.equal(next?.executableNow, false);
   assert.equal(selectRouteDecision(routes, observedAt)?.routeId, first?.id);
   assert.ok(routes.some((route) => route.kind === "EDGE_REJECTION"));
+});
+
+test("ETH local routing rejects a distant 4h node and uses the nearest segment", () => {
+  const memory = emptySymbolMemory();
+  memory.range15m = { lower: 2491, upper: 2502.29, midpoint: 2496.645, widthRate: 0.004522068616082769,
+    touchesLower: 4, touchesUpper: 7, quality: 0.8125, observedAt: 10_000 };
+  memory.flow = flow({ ofi: -0.2, takerDelta: -0.15 });
+  memory.timeframeBias = { m1: "NEUTRAL", m15: "NEUTRAL", h1: "NEUTRAL", h4: "NEUTRAL" };
+  memory.structureByTimeframe.m15 = [zone("SHORT", 2480.63)];
+  memory.structureByTimeframe.h4 = [zone("SHORT", 2430), zone("SHORT", 2419.7), zone("LONG", 2515.16)];
+  const routes = buildLiquidityRoutes(memory, "ETH_USDT", 10_001, 2500.54, 0.2);
+  const short = routes.find((route) => route.kind === "LOCAL_BREAKOUT" && route.side === "SHORT");
+  assert.equal(short?.target, 2480.63);
+  assert.equal(short?.targetTimeframe, "15m");
+  assert.ok(!routes.some((route) => route.kind === "LOCAL_BREAKOUT" && [2430, 2419.7].includes(route.target)));
+});
+
+test("a valid 15m route map blocks the legacy all-timeframe fallback", () => {
+  const fallback = { symbol: "ETH_USDT", observedAt: 1, marketState: "RANGE" as const, side: "LONG" as const,
+    entryTrigger: 2419.4973, invalidation: 2394.45617, target: 2500.9, targetIdentity: "local-target", score: 1, oppositeScore: 0.9,
+    reason: [], activationDistanceRate: MAX_GENERIC_PLAN_DISTANCE_RATE };
+  const observingRoute: LiquidityRoute = { id: "local", symbol: "ETH_USDT", side: "LONG", kind: "LOCAL_BREAKOUT",
+    stage: "LOCAL_TO_NODE", entryTrigger: 2502.97, invalidation: 2499.58, target: 2515.16, targetIdentity: "route-target",
+    targetTimeframe: "1h", nextTarget: null, confirmationScore: 0.4, fakeoutRisk: 0.7,
+    activationDistanceRate: 0.003, score: 0.8, executableNow: false, reason: [] };
+  assert.equal(arbitrateDecision([observingRoute], 1, fallback), null);
+  assert.equal(arbitrateDecision([], 1, fallback), fallback);
+});
+
+test("an existing nonlocal fallback plan is cancelled immediately", () => {
+  const plan: PaperPlan = { symbol: "ETH_USDT", observedAt: 1, marketState: "RANGE", side: "LONG",
+    entryTrigger: 2419.4973, invalidation: 2394.45617, target: 2500.9, targetIdentity: "legacy-target", score: 1, oppositeScore: 0.9,
+    reason: [], id: "legacy-far", state: "PREPARED", createdAt: 1, expiresAt: PLAN_TTL_MS + 1,
+    plannedRisk: 12, notional: 1_000 };
+  const observingRoute: LiquidityRoute = { id: "local", symbol: "ETH_USDT", side: "LONG", kind: "LOCAL_BREAKOUT",
+    stage: "LOCAL_TO_NODE", entryTrigger: 2502.97, invalidation: 2499.58, target: 2515.16, targetIdentity: "route-target",
+    targetTimeframe: "1h", nextTarget: null, confirmationScore: 0.4, fakeoutRisk: 0.7,
+    activationDistanceRate: 0.003, score: 0.8, executableNow: false, reason: [] };
+  const result = reconcilePaper({ now: 2, midpoint: 2500.54, fresh: true, sequenceFault: false, decision: null,
+    plan, position: null, zones: [], activeRoutes: [observingRoute], absorption: 0, equity: 1_000, openRisk: 0 });
+  assert.equal(result.plan?.state, "CANCELLED");
+  assert.deepEqual(result.events, ["NONLOCAL_FALLBACK_CANCEL"]);
 });
 
 test("a frozen local breakout is not vetoed by one transient trigger-time score", () => {
@@ -84,7 +127,7 @@ test("a frozen local breakout is not vetoed by one transient trigger-time score"
     touchesLower: 3, touchesUpper: 3, quality: 0.9, observedAt: 10_000 };
   memory.flow = flow({ ofi: 0.6, takerDelta: 0.5, micropriceDisplacementBps: 2 });
   memory.timeframeBias = { m1: "UP", m15: "UP", h1: "UP", h4: "UP" };
-  memory.structureByTimeframe.h4 = [zone("LONG", 102), zone("SHORT", 96)];
+  memory.structureByTimeframe.h4 = [zone("LONG", 101.2), zone("SHORT", 98.7)];
   const routes = buildLiquidityRoutes(memory, "BTC_USDT", 10_001, 99.9, 0.1);
   const decision = selectRouteDecision(routes, 10_001);
   assert.ok(decision?.routeKind === "LOCAL_BREAKOUT");
@@ -155,6 +198,7 @@ test("three states are mutually exclusive", () => {
   assert.equal(breakout?.marketState, "BREAKOUT");
   assert.equal(reversal?.marketState, "REVERSAL");
   assert.equal(range?.marketState, "RANGE");
+  assert.equal(range?.activationDistanceRate, MAX_GENERIC_PLAN_DISTANCE_RATE);
   assert.equal(new Set([breakout?.marketState, reversal?.marketState, range?.marketState]).size, 3);
 });
 
