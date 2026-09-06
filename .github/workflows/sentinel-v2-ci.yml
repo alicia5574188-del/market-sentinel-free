@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main, rebuild/three-state-core]
+    branches: [main]
   workflow_dispatch:
   schedule:
     - cron: "17 */6 * * *"
@@ -105,14 +105,11 @@ jobs:
             echo '{"runtimeSnapshot":"unavailable"}'
           fi
 
-  # One-time action: manual dispatch, or the exact deliberately named release
-  # commit used to recover from a manual-dispatch tooling loop.
+  # Manual one-time action: dispatch this workflow on rebuild/three-state-core.
   # The job takes the production mutex before re-reading main and the PR, so a
   # verification result cannot be used after either ref moves.
   cutover:
-    if: >-
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/rebuild/three-state-core') ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/rebuild/three-state-core' && github.event.head_commit.message == 'Run verified final cutover once')
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/rebuild/three-state-core'
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 50
