@@ -94,8 +94,8 @@ test("completed one-minute noise sets a stop floor and edge rejection waits for 
   routes = buildLiquidityRoutes(memory, "SOL_USDT", 10_001, 99.05, 0.9);
   lowerLong = routes.find((route) => route.kind === "EDGE_REJECTION" && route.side === "LONG")!;
   assert.equal(lowerLong.executableNow, true);
-  assert.ok((lowerLong.entryTrigger - lowerLong.invalidation) / 99.05 >= 0.0022 - 1e-9);
-  assert.ok(lowerLong.target < 100.9 && lowerLong.target > 100);
+  assert.ok((lowerLong.entryTrigger - lowerLong.invalidation) / lowerLong.entryTrigger >= 0.0022 - 1e-9);
+  assert.ok(lowerLong.target <= 100.7 && lowerLong.target >= 100);
 });
 
 test("the robust one-minute noise estimate ignores tiny bars and caps a volatility spike", () => {

@@ -5,9 +5,11 @@ import {
   decideThreeState,
   flowPressure,
   MAX_GENERIC_PLAN_DISTANCE_RATE,
+  MIN_NET_REWARD_RISK,
   MIN_STRUCTURAL_STOP_RATE,
   PLAN_SOFT_INVALIDATION_CONFIRMATIONS,
   planTriggered,
+  ROUND_TRIP_FRICTION_RATE,
   selectSafeLeverage,
   sizePaperPosition,
   stablePriceBin,
@@ -409,7 +411,7 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
   if (!range || midpoint <= 0 || observedAt - range.observedAt > 45 * 60_000) return [] as LiquidityRoute[];
   const width = range.upper - range.lower;
   const buffer = Math.max(midpoint * 0.00025, width * 0.06);
-  const minimumStopDistance = midpoint * Math.max(MIN_STRUCTURAL_STOP_RATE, memory.minuteNoiseRate * 1.1);
+  const minimumStopRate = Math.max(MIN_STRUCTURAL_STOP_RATE, memory.minuteNoiseRate * 1.1);
   const activationDistanceRate = Math.max(0.0025, Math.min(0.0075, range.widthRate * 0.65));
   const maxSegmentDistanceRate = Math.max(0.012, Math.min(0.015, range.widthRate * 3));
   const higher = (side: Side) => {
@@ -435,6 +437,7 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
       const entryTrigger = side === "LONG" ? range.upper + buffer : range.lower - buffer;
       const structuralInvalidation = side === "LONG" ? range.upper - Math.max(buffer * 1.5, width * 0.24)
         : range.lower + Math.max(buffer * 1.5, width * 0.24);
+      const minimumStopDistance = entryTrigger * minimumStopRate;
       const invalidation = side === "LONG" ? Math.min(structuralInvalidation, entryTrigger - minimumStopDistance)
         : Math.max(structuralInvalidation, entryTrigger + minimumStopDistance);
       const projectedDistance = midpoint * clamp(range.widthRate * 0.85, 0.0065, 0.009);
@@ -458,8 +461,9 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
         const nodeBuffer = Math.max(midpoint * 0.00035, Math.abs(next.zone.price - currentTarget.price) * 0.04);
         const nodeEntry = side === "LONG" ? currentTarget.price + nodeBuffer : currentTarget.price - nodeBuffer;
         const atNode = Math.abs(midpoint - currentTarget.price) / midpoint <= Math.max(0.0025, range.widthRate * 0.5);
-        const continuationInvalidation = side === "LONG" ? Math.min(currentTarget.price - nodeBuffer * 1.5, nodeEntry - minimumStopDistance)
-          : Math.max(currentTarget.price + nodeBuffer * 1.5, nodeEntry + minimumStopDistance);
+        const continuationStopDistance = nodeEntry * minimumStopRate;
+        const continuationInvalidation = side === "LONG" ? Math.min(currentTarget.price - nodeBuffer * 1.5, nodeEntry - continuationStopDistance)
+          : Math.max(currentTarget.price + nodeBuffer * 1.5, nodeEntry + continuationStopDistance);
         routes.push({ id: `${symbol}:NODE_CONTINUATION:${side}:${stablePriceBin(currentTarget.price)}`, symbol, side,
           kind: "NODE_CONTINUATION", stage: atNode ? "AT_NODE" : "NODE_TO_NEXT", entryTrigger: nodeEntry,
           invalidation: continuationInvalidation,
@@ -474,10 +478,16 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
     const edgePrice = side === "LONG" ? range.upper : range.lower;
     const rejectionConfirmation = routeConfirmation(memory, rejectionSide);
     const rejectionEntry = side === "LONG" ? edgePrice - buffer * 0.25 : edgePrice + buffer * 0.25;
-    const rejectionTarget = side === "LONG" ? range.upper - width * 0.7 : range.lower + width * 0.7;
     const structuralInvalidation = side === "LONG" ? range.upper + buffer * 1.5 : range.lower - buffer * 1.5;
-    const rejectionInvalidation = rejectionSide === "LONG" ? Math.min(structuralInvalidation, rejectionEntry - minimumStopDistance)
-      : Math.max(structuralInvalidation, rejectionEntry + minimumStopDistance);
+    const rejectionStopDistance = rejectionEntry * minimumStopRate;
+    const rejectionInvalidation = rejectionSide === "LONG" ? Math.min(structuralInvalidation, rejectionEntry - rejectionStopDistance)
+      : Math.max(structuralInvalidation, rejectionEntry + rejectionStopDistance);
+    const actualStopDistance = Math.abs(rejectionEntry - rejectionInvalidation);
+    const frictionDistance = rejectionEntry * ROUND_TRIP_FRICTION_RATE;
+    const minimumEconomicDistance = frictionDistance + MIN_NET_REWARD_RISK * (actualStopDistance + frictionDistance);
+    const midpointDistance = Math.abs(rejectionEntry - range.midpoint);
+    const rejectionDistance = Math.min(width * 0.7, Math.max(midpointDistance, minimumEconomicDistance));
+    const rejectionTarget = rejectionSide === "LONG" ? rejectionEntry + rejectionDistance : rejectionEntry - rejectionDistance;
     const minute = memory.lastCompletedMinuteCandle;
     const rejectionConfirmed = minute != null && (side === "LONG"
       ? minute.high >= edgePrice - buffer * 0.25 && minute.close <= rejectionEntry && minute.close < minute.open
@@ -491,7 +501,7 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
       fakeoutRisk: clamp(1 - absorption * 0.55 - rejectionConfirmation * 0.3, 0, 1), activationDistanceRate,
       score: rejectionScore, executableNow: Math.abs(rejectionEntry - midpoint) / midpoint <= activationDistanceRate
         && absorption >= 0.55 && rejectionConfirmation >= 0.48 && rejectionConfirmed,
-      reason: ["15分钟区间边界出现吸收", "完整1分钟K线完成扫边并收回", "先兑现区间内70%的局部路程", "失效后等待突破路线重新评估"] });
+      reason: ["15分钟区间边界出现吸收", "完整1分钟K线完成扫边并收回", "优先兑现区间中轴，扣成本不足时最多延伸到70%", "失效后等待突破路线重新评估"] });
   }
   return routes.sort((a, b) => Number(b.executableNow) - Number(a.executableNow) || b.score - a.score).slice(0, 6);
 }

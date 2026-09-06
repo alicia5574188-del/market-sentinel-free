@@ -363,7 +363,7 @@ export function decideThreeState(input: {
   const entryTrigger = state === "BREAKOUT"
     ? (side === "LONG" ? input.mid + distance * 0.18 : input.mid - distance * 0.18)
     : input.mid + (entryEdge - input.mid) * (state === "REVERSAL" ? 0.72 : 0.66);
-  const invalidationDistance = Math.max(input.mid * Math.max(MIN_STRUCTURAL_STOP_RATE, (input.minuteNoiseRate ?? 0) * 1.1),
+  const invalidationDistance = Math.max(entryTrigger * Math.max(MIN_STRUCTURAL_STOP_RATE, (input.minuteNoiseRate ?? 0) * 1.1),
     Math.abs(entryTrigger - input.mid) * 0.38);
   const invalidation = side === "LONG" ? entryTrigger - invalidationDistance : entryTrigger + invalidationDistance;
   return {
