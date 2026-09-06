@@ -4,7 +4,7 @@ import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
 import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchRecentTrades, fetchStructureCandles } from "../lib/gate-market.ts";
 import { closePaperPosition, PORTFOLIO_RISK_CAP, remainingStressRisk, SYSTEM_VERSION, updatePosition, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
-import { aggregateFourHourCandles, analyzeSnapshot, ancillaryIsFresh, ancillarySchedule, applyFlow, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
+import { aggregateFourHourCandles, analyzeSnapshot, ancillaryIsFresh, ancillarySchedule, applyFlow, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
 import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem, type ReviewCandle } from "../lib/paper-outbox.ts";
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
   PAPER_BANKRUPTCY_EQUITY, PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
@@ -398,7 +398,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           memory.timeframeBias[key] = structureDirection(memory.structureByTimeframe[key]);
           const seconds = timeframe === "1m" ? 60 : timeframe === "15m" ? 900 : 3_600;
           memory.timeframeUpdatedAt[key] = (rows.at(-1)!.time + seconds) * 1_000;
-          if (timeframe === "1m") memory.lastCompletedMinuteClose = rows.at(-1)!.close;
+          if (timeframe === "1m") {
+            memory.lastCompletedMinuteClose = rows.at(-1)!.close;
+            memory.lastCompletedMinuteCandle = rows.at(-1)!;
+            memory.minuteNoiseRate = deriveMinuteNoiseRate(rows);
+          }
         }
       }
     }
@@ -841,7 +845,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           .sort((a, b) => b.score - a.score)[0] ?? null;
         const updated = updatePosition(position, { now, price: evidence.midpoint, bestTarget, oppositeTarget, absorption: evidence.absorption,
           confirmationMinute: this.memory[symbol]?.timeframeUpdatedAt.m1,
-          confirmationPrice: this.memory[symbol]?.lastCompletedMinuteClose, continuationRoute });
+          confirmationPrice: this.memory[symbol]?.lastCompletedMinuteClose,
+          confirmationCandle: this.memory[symbol]?.lastCompletedMinuteCandle, continuationRoute });
         if (updated.status === "CLOSED") {
           position = { ...position, currentStop: updated.currentStop, currentTarget: updated.currentTarget,
             exitReason: updated.exitReason, exitRequestedAt: now };
@@ -851,7 +856,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           position = { ...position, currentStop: updated.currentStop, currentTarget: updated.currentTarget, targetScore: updated.targetScore,
             targetIdentity: updated.targetIdentity, routeId: updated.routeId, routeKind: updated.routeKind,
             targetTimeframe: updated.targetTimeframe, exitSignalMinute: updated.exitSignalMinute,
-            exitSignalCount: updated.exitSignalCount, exitSignalReason: updated.exitSignalReason };
+            exitSignalCount: updated.exitSignalCount, exitSignalReason: updated.exitSignalReason,
+            stopUpdatedMinute: updated.stopUpdatedMinute, maxFavorablePrice: updated.maxFavorablePrice,
+            maxAdversePrice: updated.maxAdversePrice };
           this.runtime.live.positions[symbol] = position;
         }
       }
@@ -1066,6 +1073,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const reconciled = reconcilePaper({ now, midpoint: analyzed.midpoint, fresh: validation.fresh, sequenceFault: validation.sequenceFault,
         decision, plan: priorPlan, position: priorPosition, zones: analyzed.zones, absorption: analyzed.absorption,
         confirmationMinute: memory.timeframeUpdatedAt.m1, confirmationPrice: memory.lastCompletedMinuteClose,
+        confirmationCandle: memory.lastCompletedMinuteCandle,
         equity: markToMarketEquity(this.runtime), openRisk, allowOpen: false,
         protectOnly: (this.sessionWarmup[symbol] ?? 0) < WARMUP_SNAPSHOTS,
         activeRoutes: analyzed.routes, breakoutConfirmation: priorPlan ? analyzed.confirmationBySide[priorPlan.side] : undefined,
@@ -1191,6 +1199,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         decision: this.runtime.decisions[row.symbol], plan: priorPlan, position: priorPosition, zones: row.analyzed.zones,
         absorption: row.analyzed.absorption, confirmationMinute: this.memory[row.symbol]?.timeframeUpdatedAt.m1,
         confirmationPrice: this.memory[row.symbol]?.lastCompletedMinuteClose,
+        confirmationCandle: this.memory[row.symbol]?.lastCompletedMinuteCandle,
         equity: markToMarketEquity(this.runtime), openRisk, allowOpen: true,
         activeRoutes: row.analyzed.routes, breakoutConfirmation: priorPlan ? row.analyzed.confirmationBySide[priorPlan.side] : undefined,
         maintenanceRate: this.runtime.contractMeta[row.symbol]?.maintenanceRate, leverageMax: this.runtime.contractMeta[row.symbol]?.leverageMax });
