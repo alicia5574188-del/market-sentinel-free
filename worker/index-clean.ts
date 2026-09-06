@@ -49,6 +49,11 @@ type LiveEntry = {
   trigger: number;
   invalidation: number;
   target: number;
+  targetIdentity?: string;
+  targetScore?: number;
+  routeId?: string;
+  routeKind?: PaperPlan["routeKind"];
+  targetTimeframe?: PaperPlan["targetTimeframe"];
   size: number;
   contracts: number;
   notional: number;
@@ -803,7 +808,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           id: entry.planId, symbol, side, scenario: entry.scenario, entryAt: now, entryPrice,
           initialStop: entry.invalidation, currentStop: entry.invalidation, currentTarget: entry.target,
           plannedRisk: notional * (Math.abs(entryPrice - entry.invalidation) / Math.max(entryPrice, 1e-9) + 0.0018),
-          notional, targetScore: this.runtime.plans[symbol]?.score ?? 0, targetIdentity: this.runtime.plans[symbol]?.targetIdentity,
+          notional, targetScore: entry.targetScore ?? this.runtime.plans[symbol]?.score ?? 0,
+          targetIdentity: entry.targetIdentity ?? this.runtime.plans[symbol]?.targetIdentity,
+          routeId: entry.routeId, routeKind: entry.routeKind, targetTimeframe: entry.targetTimeframe,
           status: "OPEN", exchangeSize: Math.abs(exchangeSize), leverage, margin: notional / leverage,
           stopOrderId: null, stopTag: null, stopPrice: null, stopSubmittingAt: null, exitRequestedAt: null, exchangeUpdatedAt: now,
         };
@@ -816,13 +823,23 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       position.exchangeUpdatedAt = now;
       const evidence = this.runtime.evidence[symbol];
       if (evidence?.fresh && evidence.ancillaryFresh && !position.exitRequestedAt) {
+        const routes = this.runtime.routes[symbol] ?? [];
+        const matchingRoute = routes.filter((route) => route.side === position!.side && (route.targetIdentity === position!.targetIdentity
+          || Math.abs(route.target - position!.currentTarget) / Math.max(position!.currentTarget, 1e-9) <= 0.0015))
+          .sort((a, b) => b.score - a.score)[0];
         const candidateTarget = position.side === "LONG" ? evidence.topLong : evidence.topShort;
         const bestTarget = candidateTarget && (candidateTarget.identity === position.targetIdentity
           || Math.abs(candidateTarget.price - position.currentTarget) / Math.max(position.currentTarget, 1e-9) <= 0.0015)
-          ? candidateTarget : null;
+          ? candidateTarget : matchingRoute ? { identity: matchingRoute.targetIdentity, side: matchingRoute.side,
+            price: matchingRoute.target, liquidity: matchingRoute.score, cascade: 0, pathCost: 1, distanceCost: 1,
+            probabilityReach: matchingRoute.confirmationScore, persistence: 1, score: matchingRoute.score,
+            source: "STOP_POOL" as const, spoofed: false } : null;
         const oppositeTarget = position.side === "LONG" ? evidence.topShort : evidence.topLong;
+        const continuationRoute = routes.filter((route) => route.kind === "NODE_CONTINUATION" && route.side === position!.side
+          && Math.abs(route.entryTrigger - position!.currentTarget) / Math.max(position!.currentTarget, 1e-9) <= route.activationDistanceRate)
+          .sort((a, b) => b.score - a.score)[0] ?? null;
         const updated = updatePosition(position, { now, price: evidence.midpoint, bestTarget, oppositeTarget, absorption: evidence.absorption,
-          confirmationMinute: this.memory[symbol]?.timeframeUpdatedAt.m1 });
+          confirmationMinute: this.memory[symbol]?.timeframeUpdatedAt.m1, continuationRoute });
         if (updated.status === "CLOSED") {
           position = { ...position, currentStop: updated.currentStop, currentTarget: updated.currentTarget,
             exitReason: updated.exitReason, exitRequestedAt: now };
@@ -830,7 +847,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           this.runtime.live.positions[symbol] = position;
         } else {
           position = { ...position, currentStop: updated.currentStop, currentTarget: updated.currentTarget, targetScore: updated.targetScore,
-            exitSignalMinute: updated.exitSignalMinute, exitSignalCount: updated.exitSignalCount, exitSignalReason: updated.exitSignalReason };
+            targetIdentity: updated.targetIdentity, routeId: updated.routeId, routeKind: updated.routeKind,
+            targetTimeframe: updated.targetTimeframe, exitSignalMinute: updated.exitSignalMinute,
+            exitSignalCount: updated.exitSignalCount, exitSignalReason: updated.exitSignalReason };
           this.runtime.live.positions[symbol] = position;
         }
       }
@@ -916,7 +935,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const entry: LiveEntry = {
         planId: plan.id, symbol, side: plan.side, scenario: plan.marketState, kind: intent.kind, status: "SUBMITTING",
         tag: intent.tag, exchangeOrderId: null, createdAt: now, expiresAt: plan.expiresAt, trigger: plan.entryTrigger,
-        invalidation: plan.invalidation, target: plan.target, size: intent.size, contracts: intent.contracts,
+        invalidation: plan.invalidation, target: plan.target, targetIdentity: plan.targetIdentity, targetScore: plan.score,
+        routeId: plan.routeId, routeKind: plan.routeKind, targetTimeframe: plan.targetTimeframe,
+        size: intent.size, contracts: intent.contracts,
         notional: intent.notional, plannedRisk: intent.plannedRisk, leverage: intent.leverage, margin: intent.margin,
         missingSince: null, lastError: null,
       };

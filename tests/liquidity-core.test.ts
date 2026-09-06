@@ -17,6 +17,7 @@ import {
   zoneUtility,
   type FlowEvidence,
   type LiquidationBand,
+  type LiquidityRoute,
   type LiquidityZone,
   type PaperPlan,
   type PaperPosition,
@@ -188,6 +189,36 @@ test("dynamic protection tightens only and target absorption exits without fixed
   const closed = updatePosition(held, { now: 3, price: 112, bestTarget: zone("LONG", 112), oppositeTarget: zone("SHORT", 90, 0.2), absorption: 0.8 });
   assert.equal(closed.status, "CLOSED");
   assert.ok(Number.isFinite(closed.realizedPnl));
+});
+
+test("a route position exits at its liquidity node when continuation is not confirmed", () => {
+  const position: PaperPosition = { id: "node-exit", symbol: "BTC_USDT", side: "LONG", scenario: "BREAKOUT",
+    entryAt: 1, entryPrice: 100, initialStop: 98, currentStop: 99, currentTarget: 110, plannedRisk: 10,
+    notional: 1_000, targetScore: 20, targetIdentity: "HTF:LONG:110", routeId: "local-long",
+    routeKind: "LOCAL_BREAKOUT", targetTimeframe: "4h", status: "OPEN" };
+  const closed = updatePosition(position, { now: 2, price: 110, bestTarget: zone("LONG", 110),
+    oppositeTarget: zone("SHORT", 95), absorption: 0.2, continuationRoute: null });
+  assert.equal(closed.status, "CLOSED");
+  assert.equal(closed.exitReason, "TARGET_NODE_EXIT");
+});
+
+test("a confirmed node continuation hands the position to the next liquidity target", () => {
+  const position: PaperPosition = { id: "node-handoff", symbol: "BTC_USDT", side: "LONG", scenario: "BREAKOUT",
+    entryAt: 1, entryPrice: 100, initialStop: 98, currentStop: 99, currentTarget: 110, plannedRisk: 10,
+    notional: 1_000, targetScore: 20, targetIdentity: "HTF:LONG:110", routeId: "local-long",
+    routeKind: "LOCAL_BREAKOUT", targetTimeframe: "4h", status: "OPEN" };
+  const continuation: LiquidityRoute = { id: "node-long", symbol: "BTC_USDT", side: "LONG",
+    kind: "NODE_CONTINUATION", stage: "AT_NODE", entryTrigger: 110.1, invalidation: 109.4,
+    target: 118, targetIdentity: "HTF:LONG:118", targetTimeframe: "4h", nextTarget: null,
+    confirmationScore: 0.7, fakeoutRisk: 0.3, activationDistanceRate: 0.004, score: 25,
+    executableNow: true, reason: ["node confirmed"] };
+  const continued = updatePosition(position, { now: 2, price: 110, bestTarget: zone("LONG", 110),
+    oppositeTarget: zone("SHORT", 95), absorption: 0.2, continuationRoute: continuation });
+  assert.equal(continued.status, "OPEN");
+  assert.equal(continued.currentTarget, 118);
+  assert.equal(continued.currentStop, 109.4);
+  assert.equal(continued.routeId, "node-long");
+  assert.equal(continued.routeKind, "NODE_CONTINUATION");
 });
 
 test("stale or sequence-fault data cancels only prepared plan and cannot close a position", () => {

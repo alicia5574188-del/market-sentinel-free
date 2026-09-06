@@ -142,6 +142,9 @@ export type PaperPosition = {
   notional: number;
   targetScore: number;
   targetIdentity?: string;
+  routeId?: string;
+  routeKind?: RouteKind;
+  targetTimeframe?: "15m" | "1h" | "4h";
   status: "OPEN" | "CLOSED";
   exitAt?: number;
   exitPrice?: number;
@@ -433,6 +436,7 @@ export function updatePosition(position: PaperPosition, input: {
   oppositeTarget: LiquidityZone | null;
   absorption: number;
   confirmationMinute?: number;
+  continuationRoute?: LiquidityRoute | null;
 }): PaperPosition {
   if (position.status === "CLOSED") return position;
   const observed = {
@@ -450,6 +454,16 @@ export function updatePosition(position: PaperPosition, input: {
 
   const arrived = observed.side === "LONG" ? input.price >= observed.currentTarget : input.price <= observed.currentTarget;
   if (arrived && input.absorption >= 0.55) return close("TARGET_ABSORBED");
+  if (arrived && observed.routeId && input.continuationRoute?.executableNow && input.continuationRoute.side === observed.side) {
+    const continuation = input.continuationRoute;
+    return { ...observed,
+      currentStop: observed.side === "LONG" ? Math.max(observed.currentStop, continuation.invalidation)
+        : Math.min(observed.currentStop, continuation.invalidation),
+      currentTarget: continuation.target, targetScore: continuation.score, targetIdentity: continuation.targetIdentity,
+      routeId: continuation.id, routeKind: continuation.kind, targetTimeframe: continuation.targetTimeframe,
+      exitSignalMinute: undefined, exitSignalCount: 0, exitSignalReason: undefined };
+  }
+  if (arrived && observed.routeId) return close("TARGET_NODE_EXIT");
 
   const oppositeDominates = input.oppositeTarget && input.bestTarget
     ? input.oppositeTarget.score > Math.max(input.bestTarget.score, observed.targetScore) * 1.5
