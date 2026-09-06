@@ -80,6 +80,8 @@ test("cutover is credential-bound and removes legacy DOs only after v6 health", 
   assert.match(workflow, /for attempt in 1 2 3 4 5/);
   assert.match(workflow, /valid non-zero inventory result is authoritative/);
   assert.match(workflow, /wrangler\.initial-preview\.json/);
+  assert.match(workflow, /index\.cutover-preview\.js/);
+  assert.match(workflow, /export class MarketStream extends DurableObject/);
   assert.match(workflow, /CUTOVER_PREFLIGHT_URL\/api\/live\/preflight/);
   assert.match(workflow, /\.durable_objects == null/);
   assert.match(workflow, /\.migrations == null/);
