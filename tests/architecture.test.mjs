@@ -83,6 +83,7 @@ test("cutover is credential-bound and removes legacy DOs only after v6 health", 
   assert.match(workflow, /CUTOVER_PREFLIGHT_URL\/api\/live\/preflight/);
   assert.match(workflow, /\.durable_objects == null/);
   assert.match(workflow, /\.migrations == null/);
+  assert.equal((workflow.match(/rules: \.rules/g) ?? []).length, 2);
   assert.ok(workflow.indexOf("versions upload") < workflow.indexOf("Require two fresh read-only Gate"));
   assert.ok(workflow.indexOf("Require two fresh read-only Gate") < workflow.indexOf("Deploy v6 prepare config"));
   assert.doesNotMatch(workflow, /Generate masked TTL token and deploy trusted read-only preflight/);
