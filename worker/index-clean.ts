@@ -1199,7 +1199,7 @@ async function paperHistory(env: CloudflareEnv) {
     ORDER BY COALESCE(exit_at, entry_at) DESC
     LIMIT 60`).all();
   const body = JSON.stringify({ items: result.results ?? [], generatedAt: Date.now() });
-  historyCache = { response: body, expiresAt: Date.now() + 30_000 };
+  historyCache = { response: body, expiresAt: Date.now() + 10_000 };
   return new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=30" } });
 }
 

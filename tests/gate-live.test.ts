@@ -20,6 +20,7 @@ test("breakout becomes exchange price-trigger market order within 5% risk", () =
   assert.deepEqual((intent.body.trigger as { strategy_type: number; price_type: number; rule: number }).strategy_type, 0);
   assert.equal((intent.body.trigger as { price_type: number }).price_type, 0);
   assert.equal((intent.body.trigger as { rule: number }).rule, 1);
+  assert.equal((intent.body.trigger as { expiration: number }).expiration, 86_400);
   assert.equal((intent.body.initial as { price: string; tif: string; reduce_only: boolean }).price, "0");
   assert.equal((intent.body.initial as { tif: string }).tif, "ioc");
   assert.equal((intent.body.initial as { reduce_only: boolean }).reduce_only, false);
@@ -42,6 +43,7 @@ test("protective stop is close-only and cannot reverse the account", () => {
   assert.deepEqual(initial, { contract: "SOL_USDT", size: 0, price: "0", tif: "ioc", close: true, reduce_only: true, text: stop.tag });
   assert.equal(trigger.rule, 2);
   assert.equal(trigger.price, "99");
+  assert.equal((stop.body.trigger as { expiration: number }).expiration, 86_400 * 30);
 });
 
 test("terminal Gate orders are classified without ever replaying a successful entry", () => {

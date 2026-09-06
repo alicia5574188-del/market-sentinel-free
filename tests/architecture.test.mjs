@@ -86,7 +86,15 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(page, /合约名义价值/);
   assert.match(page, /模拟杠杆/);
   assert.match(page, /预计保证金/);
-  assert.match(page, /window\.scrollTo\(0, 0\)/);
+  assert.match(page, /tabScroll\.current\[tab\] = window\.scrollY/);
+  assert.match(page, /window\.scrollTo\(\{ top: tabScroll\.current\[tab\]/);
+  assert.match(page, /viewScroll\.current\[view\] = window\.scrollY/);
+  assert.match(page, /hidden=\{tab !== "live"\}/);
+  assert.doesNotMatch(page, /className="mode-switch"/);
+  assert.match(page, /setInterval\(readHistory, 15_000\)/);
+  assert.match(page, /recentClosedPositions/);
+  assert.match(page, /当前持仓/);
+  assert.match(page, /刚刚结束/);
   assert.match(css, /position:fixed!important/);
   assert.match(page, /const intent = plan\?\.state === "PREPARED" \? plan : decision/);
   assert.match(page, /AbortController/);
@@ -111,6 +119,8 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(worker, /cancelAndConfirmSystemEntries/);
   assert.match(worker, /Gate 仍有 \$\{remaining\.length\} 张系统挂单未撤销/);
   assert.match(live, /function parseGateJson/);
+  assert.match(live, /expiration: GATE_TRIGGER_DAY_SECONDS/);
+  assert.match(live, /expiration: GATE_TRIGGER_DAY_SECONDS \* GATE_TRIGGER_MAX_DAYS/);
   assert.match(page, /function CandleChart/);
   assert.match(page, /loadedInterval === interval \? candles\.slice\(-72\) : \[\]/);
   assert.match(page, /Gate USDT 合约 · 已收盘数据/);

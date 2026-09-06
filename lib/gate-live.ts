@@ -2,6 +2,8 @@ import { decryptGateCredentials, type EncryptedGateCredentials, type GateCredent
 import { PORTFOLIO_RISK_CAP, ROUND_TRIP_FRICTION_RATE, sizePaperPosition, type PaperPlan, type Side } from "./liquidity-core.ts";
 
 const encoder = new TextEncoder();
+const GATE_TRIGGER_DAY_SECONDS = 86_400;
+const GATE_TRIGGER_MAX_DAYS = 30;
 
 export type GateLiveAccount = {
   user?: string | number;
@@ -273,7 +275,10 @@ export function buildLiveEntryIntent(input: {
   const kind = plan.marketState === "BREAKOUT" ? "PRICE_TRIGGER" : "LIMIT";
   const body = kind === "PRICE_TRIGGER" ? {
     initial,
-    trigger: { strategy_type: 0, price_type: 0, price: String(plan.entryTrigger), rule: plan.side === "LONG" ? 1 : 2, expiration: Math.max(1, Math.floor((plan.expiresAt - Date.now()) / 1_000)) },
+    // Gate only accepts whole-day trigger expirations from one to thirty days.
+    // The strategy still owns the shorter plan lifetime and actively cancels
+    // this exchange order when the immutable plan expires.
+    trigger: { strategy_type: 0, price_type: 0, price: String(plan.entryTrigger), rule: plan.side === "LONG" ? 1 : 2, expiration: GATE_TRIGGER_DAY_SECONDS },
   } : { ...initial, price: String(plan.entryTrigger), tif: "gtc" };
   return { kind, tag, size, contracts, notional, plannedRisk, leverage, margin: notional / leverage, body };
 }
@@ -284,7 +289,7 @@ export function buildLiveStopIntent(position: { id: string; symbol: string; side
     tag,
     body: {
       initial: { contract: position.symbol, size: 0, price: "0", tif: "ioc", close: true, reduce_only: true, text: tag },
-      trigger: { strategy_type: 0, price_type: 0, price: String(position.currentStop), rule: position.side === "LONG" ? 2 : 1, expiration: 86_400 * 365 },
+      trigger: { strategy_type: 0, price_type: 0, price: String(position.currentStop), rule: position.side === "LONG" ? 2 : 1, expiration: GATE_TRIGGER_DAY_SECONDS * GATE_TRIGGER_MAX_DAYS },
     },
   } satisfies LiveStopIntent;
 }
