@@ -1,5 +1,12 @@
 # Decisions
 
+## 2026-09-07 — 突破分级确认、分段经济性与长期登录
+
+- 生产从 #568 部署到诊断时超过七小时没有新成交，后台健康且行情持续推进；期间 BTC、ETH、SOL 各形成过突破计划但均在入场前取消。问题不是数据中断，而是所有突破统一等待完整1分钟后仍要求价格处于0.5R内，强突破常在确认前已经越界，形成自我阻塞。
+- 高质量突破改为实时路径：冻结计划确认度至少78%、当前假突破风险不高于25%、价格至少越过0.1R且不超过0.5R时，需要连续三个不同的两秒盘口快照成立；任一快照失败即清零。满足后 PAPER 与 LIVE 同时放行，LIVE按当前价提交IOC。中等质量仍等待完整1分钟收盘，高假突破风险继续放弃。
+- 诊断时 SOL `106.2614 → 106.83` 路线确认度约94.6%、假突破风险约5.5%，但第一段净盈亏比约0.95R、模型净利润11.40U，略低于当时12.04U最低门槛；同一路线已经明确映射下一节点107.13。强分段路线现在可用下一节点做入场经济性，实际持仓目标仍先停在106.83并必须重新判断，绝不把107.13变成无需确认的固定止盈。
+- owner 页面退出来自固定8小时登录有效期，不代表Gate凭据丢失。签名HttpOnly、Secure、SameSite=Strict会话延长为30天，并在每次已认证页面打开时重新签发；登录或续期仍不能改变LIVE开关。
+
 ## 2026-09-06 — 假突破实时确认、软退出耐心与净保护垫
 
 - 后台最新四笔已结束订单合计净亏 24.85 U，模型费用与压力滑点为 23.54 U，占净亏约94.7%；真实方向毛亏只有1.31 U。四单均未因5%组合风险上限被迫结束，因此把组合风险提高到15%或把单笔风险提高到5%只会放大执行摩擦，不会增加止损价格空间。
@@ -46,7 +53,7 @@
 - The universe is permanently limited to BTC_USDT, ETH_USDT, and SOL_USDT. Restart recovery prunes every old symbol from the authoritative checkpoint, so ZEC and prior rotating markets cannot return.
 - Every structural loss calculation includes fees and stress slippage; total open risk is capped at 5% of current PAPER equity. Stops only tighten in 0.1R steps. Holding time and take profit are not fixed, and there is no PnL pause.
 - LIVE is a separate execution lane over the exact same frozen plan, never a second strategy. It defaults off and can change only after `owner` login with an HttpOnly signed session and a same-origin JSON mutation. Login and deployment never auto-enable it.
-- BREAKOUT uses a Gate price-triggered market entry; REVERSAL and RANGE use Gate GTC limit entries. Turning LIVE off cancels unfilled entries but never abandons an open position. Every live position receives a reduce-only exchange stop and remains under dynamic strategy exits until flat.
+- BREAKOUT is internally confirmed and then uses a Gate IOC market entry; REVERSAL and RANGE use Gate GTC limit entries. Turning LIVE off cancels unfilled entries but never abandons an open position. Every live position receives a reduce-only exchange stop and remains under dynamic strategy exits until flat.
 - Ambiguous Gate submissions are reconciled by unique tags and order status before retry. Unrecognized Gate orders/positions or hedge mode block LIVE startup; failure to create or tighten protection requests a reduce-only market close.
 - Cloudflare Free uses REST alarms, not a high-frequency WebSocket. Planned DO requests and writes stay below 55,000/day and D1 billed writes are hard-gated below 5,000/day.
 - The encrypted credential row id=1 remains byte-for-byte unchanged through cutover. Old business tables and old Durable Object classes are removed only after the new v6 Worker proves healthy.

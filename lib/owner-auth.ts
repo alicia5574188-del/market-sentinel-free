@@ -1,6 +1,6 @@
 const encoder = new TextEncoder();
 const SESSION_COOKIE = "ms_owner_session";
-const SESSION_TTL_SECONDS = 8 * 60 * 60;
+export const OWNER_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 function bytesToBase64Url(bytes: Uint8Array) {
   let binary = "";
@@ -51,7 +51,7 @@ export async function ownerPasswordMatches(candidate: string, ownerAccessToken: 
 
 export async function createOwnerSession(ownerAccessToken: string, now = Date.now()) {
   if (!ownerAuthConfigured(ownerAccessToken)) throw new Error("所有者访问码尚未配置");
-  const expiresAt = Math.floor(now / 1_000) + SESSION_TTL_SECONDS;
+  const expiresAt = Math.floor(now / 1_000) + OWNER_SESSION_TTL_SECONDS;
   const nonce = bytesToBase64Url(crypto.getRandomValues(new Uint8Array(18)));
   const payload = `${expiresAt}.${nonce}`;
   const signature = bytesToBase64Url(await hmac(ownerAccessToken, payload));
@@ -73,7 +73,7 @@ export async function verifyOwnerSession(request: Request, ownerAccessToken: str
 }
 
 export function ownerSessionCookie(value: string) {
-  return `${SESSION_COOKIE}=${value}; Path=/; Max-Age=${SESSION_TTL_SECONDS}; HttpOnly; Secure; SameSite=Strict`;
+  return `${SESSION_COOKIE}=${value}; Path=/; Max-Age=${OWNER_SESSION_TTL_SECONDS}; HttpOnly; Secure; SameSite=Strict`;
 }
 
 export function clearOwnerSessionCookie() {
@@ -85,4 +85,3 @@ export function sameOriginMutation(request: Request) {
   const contentType = request.headers.get("content-type") ?? "";
   return origin === new URL(request.url).origin && contentType.toLowerCase().startsWith("application/json");
 }
-

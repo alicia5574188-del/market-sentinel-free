@@ -127,6 +127,8 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(page, /判断错误就退出/);
   assert.match(page, /为什么.*进场|距离触发价|上下流动性优势不足/);
   assert.match(page, /所有者登录/);
+  assert.match(page, /安全登录有效30天/);
+  assert.match(worker, /authSession[\s\S]*Set-Cookie[\s\S]*ownerSessionCookie/);
   assert.match(page, /确认开启实盘/);
   assert.match(page, /实盘交易开关/);
   assert.match(page, /实盘账户/);
@@ -152,10 +154,12 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(page, /软计划不占保证金/);
   assert.match(worker, /aggregateFourHourCandles/);
   assert.match(worker, /activeRoutes/);
+  assert.match(worker, /justTriggeredBreakout/);
   assert.match(live, /PORTFOLIO_MARGIN_CAP/);
   assert.match(live, /openMargin/);
   assert.match(page, /内部监测/);
   assert.match(page, /实时 IOC/);
+  assert.match(page, /连续3次盘口确认/);
   assert.match(page, /Gate 限价/);
   assert.match(page, /authorityOperational && evidence\?\.fresh && evidence\?\.ancillaryFresh/);
   assert.match(page, /订单.*实盘.*历史.*设置/s);
