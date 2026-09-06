@@ -1010,6 +1010,11 @@ jobs:
           done
           (( advancing >= 2 ))
 
+          page_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/main-page.html" -w '%{http_code}' \
+            "$WORKER_BASE_URL/" || true)"
+          [[ "$page_code" == "200" ]]
+          grep -Fq '流动性三态' "$RUNNER_TEMP/main-page.html"
+
   monitor:
     if: always() && (github.event_name == 'schedule' || needs.deploy.result == 'success' || needs.cutover.result == 'success')
     needs: [verify, deploy, cutover]
@@ -1060,3 +1065,8 @@ jobs:
           first="$(jq -er '.runtime.lastSuccessAt' "$RUNNER_TEMP/monitor-health-1.json")"
           second="$(jq -er '.runtime.lastSuccessAt' "$RUNNER_TEMP/monitor-health-2.json")"
           (( second > first ))
+
+          page_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/monitor-page.html" -w '%{http_code}' \
+            "$WORKER_BASE_URL/" || true)"
+          [[ "$page_code" == "200" ]]
+          grep -Fq '流动性三态' "$RUNNER_TEMP/monitor-page.html"

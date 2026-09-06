@@ -1,5 +1,4 @@
 import type { Metadata, Viewport } from "next";
-import { requireChatGPTUser } from "./chatgpt-auth";
 import "./globals.css";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +12,6 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = { width: "device-width", initialScale: 1, viewportFit: "cover", themeColor: "#0d100e" };
 
-export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  await requireChatGPTUser("/");
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return <html lang="zh-CN"><body>{children}</body></html>;
 }

@@ -36,14 +36,24 @@ test("only one new DO is bound and all legacy DO storage is explicitly deleted",
 });
 
 test("external API is read-only PAPER and UI polling is at least 15 seconds", async () => {
-  const [worker, page] = await Promise.all([read("worker/index-clean.ts"), read("app/page.tsx")]);
+  const [worker, page, layout, workflow] = await Promise.all([
+    read("worker/index-clean.ts"),
+    read("app/page.tsx"),
+    read("app/layout.tsx"),
+    read(".github/workflows/sentinel-v2-ci.yml"),
+  ]);
   assert.match(worker, /read-only PAPER surface/);
+  assert.match(worker, /return handler\.fetch\(request, env, ctx\)/);
   assert.doesNotMatch(worker, /request\.method === "POST"|request\.method === "DELETE"|createOrder|submitOrder/);
   assert.match(page, /setInterval\(read, 15_000\)/);
   assert.match(page, /AbortController/);
   assert.match(page, /document\.hidden/);
   assert.match(page, /物理上没有实盘下单接口/);
   assert.match(page, /清算梯度是.*估计/);
+  assert.doesNotMatch(layout, /requireChatGPTUser|redirect|signin-with-chatgpt/);
+  assert.equal(await read("app/chatgpt-auth.ts").then(() => false, () => true), true);
+  assert.equal(await read("lib/auth-paths.ts").then(() => false, () => true), true);
+  assert.equal((workflow.match(/grep -Fq '流动性三态'/g) ?? []).length, 2);
 });
 
 test("at-least-once alarm and independent feed recovery are explicit", async () => {
