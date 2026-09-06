@@ -87,6 +87,24 @@ jobs:
           ! grep -Eq 'DROP[[:space:]]+TABLE([[:space:]]+IF[[:space:]]+EXISTS)?[[:space:]]+`?live_exchange_credentials`?' \
             drizzle/0033_purge_legacy_system.sql
 
+      - name: Observe sanitized production runtime after PR verification
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -uo pipefail
+          body="$(curl -sS --max-time 15 "$WORKER_BASE_URL/api/runtime" || true)"
+          if jq -e . >/dev/null 2>&1 <<<"$body"; then
+            jq -c '{
+              version, mode, state, stale, authorityReady, lastError,
+              lastSuccessAt, lastAlarmAt, symbols, feedFailures,
+              evidence: ((.evidence // {}) | with_entries(.value |= {
+                fresh, ancillaryFresh, warmup, observedAt
+              }))
+            }' <<<"$body"
+          else
+            echo '{"runtimeSnapshot":"unavailable"}'
+          fi
+
   # Manual one-time action: dispatch this workflow on rebuild/three-state-core.
   # The job takes the production mutex before re-reading main and the PR, so a
   # verification result cannot be used after either ref moves.
