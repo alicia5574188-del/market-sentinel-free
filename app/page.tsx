@@ -55,6 +55,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("brain");
   const [showLiveLock, setShowLiveLock] = useState(false);
+  const selectTab = (next: Tab) => { setTab(next); window.scrollTo(0, 0); };
 
   useEffect(() => {
     let active = true, inFlight = false;
@@ -116,7 +117,7 @@ export default function Home() {
     </section>
     {(!responseFresh || error) && runtime && <p className="notice">手机页面更新延迟，下面保留最近一次后台状态；服务器仍独立运行，不会因此停止判断或开模拟单。</p>}{runtime?.lastError && <p className="notice">系统正在自动恢复：{runtime.lastError}</p>}
 
-    <nav className="tabs">{([['brain', '大脑'], ['orders', `订单 ${openPositions.length + preparedPlans.length || ''}`], ['history', '历史'], ['settings', '设置']] as const).map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => setTab(key)}>{label}</button>)}</nav>
+    <nav className="tabs">{([['brain', '大脑'], ['orders', `订单 ${openPositions.length + preparedPlans.length || ''}`], ['history', '历史'], ['settings', '设置']] as const).map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => selectTab(key)}>{label}</button>)}</nav>
 
     {tab === "brain" && <section className="markets">{runtime?.symbols.map((symbol) => {
       const evidence = runtime.evidence[symbol], marketFresh = Boolean(authorityOperational && evidence?.fresh && evidence?.ancillaryFresh);

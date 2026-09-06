@@ -1030,7 +1030,9 @@ jobs:
           (( candles_ok == 1 ))
 
   monitor:
-    if: always() && (github.event_name == 'schedule' || needs.deploy.result == 'success' || needs.cutover.result == 'success')
+    # Main deploy already performs the same D1, page, candle and advancing-health
+    # checks. Avoid repeating them immediately; the six-hour monitor remains.
+    if: always() && (github.event_name == 'schedule' || needs.cutover.result == 'success')
     needs: [verify, deploy, cutover]
     runs-on: ubuntu-latest
     timeout-minutes: 8

@@ -4,6 +4,7 @@ import {
   dataIsFresh,
   decideThreeState,
   planTriggered,
+  ROUND_TRIP_FRICTION_RATE,
   sizePaperPosition,
   stablePriceBin,
   updatePosition,
@@ -19,6 +20,8 @@ import {
   type WallEvidence,
   WALL_WINDOW,
 } from "./liquidity-core.ts";
+
+export const PLAN_TTL_MS = 15 * 60_000;
 
 export type SymbolMemory = {
   lastSequence: number;
@@ -370,17 +373,16 @@ export function reconcilePaper(input: {
   let position = input.position;
   const events: string[] = [];
   let expiredThisCycle = false;
+  let cancelledThisCycle = false;
   const targetPresent = plan?.state !== "PREPARED" || input.zones.some((zone) => zone.side === plan!.side && zone.identity === plan!.targetIdentity);
-  const thesisStable = plan?.state !== "PREPARED" || (input.decision != null
-    && plan.side === input.decision.side && plan.marketState === input.decision.marketState
-    && plan.targetIdentity === input.decision.targetIdentity
-    && Math.abs(plan.entryTrigger - input.decision.entryTrigger) / Math.max(input.midpoint, 1e-9) <= 0.0005
-    && Math.abs(plan.invalidation - input.decision.invalidation) / Math.max(input.midpoint, 1e-9) <= 0.0005
-    && Math.abs(plan.score - input.decision.score) / Math.max(plan.score, 1e-9) <= 0.1);
-  const cancelledForTarget = plan?.state === "PREPARED" && (!targetPresent || !thesisStable);
-  if ((!input.fresh || input.sequenceFault || !input.decision || !targetPresent || !thesisStable) && plan?.state === "PREPARED") {
+  // Freeze a prepared thesis instead of chasing every two-second recalculation.
+  // Neutral ticks and same-direction level drift are not cancellation signals.
+  const opposingThesis = plan?.state === "PREPARED" && input.decision != null
+    && plan.side !== input.decision.side && input.decision.score >= plan.score * 1.25;
+  if ((!input.fresh || input.sequenceFault || !targetPresent || opposingThesis) && plan?.state === "PREPARED") {
     plan = { ...plan, state: "CANCELLED" };
-    events.push(!input.fresh ? "STALE_CANCEL" : input.sequenceFault ? "SEQUENCE_REBUILD_CANCEL" : !targetPresent ? "TARGET_GONE_CANCEL" : "THESIS_CHANGED_CANCEL");
+    cancelledThisCycle = true;
+    events.push(!input.fresh ? "STALE_CANCEL" : input.sequenceFault ? "SEQUENCE_REBUILD_CANCEL" : !targetPresent ? "TARGET_GONE_CANCEL" : "OPPOSING_THESIS_CANCEL");
   }
   if (position?.status === "OPEN" && input.fresh && !input.sequenceFault) {
     const own = input.protectOnly ? zoneUtility({ side: position.side, price: position.currentTarget, liquidity: 1, cascade: 0, pathCost: 1,
@@ -399,7 +401,7 @@ export function reconcilePaper(input: {
     expiredThisCycle = true;
     events.push("PLAN_EXPIRED");
   }
-  if (input.fresh && !input.sequenceFault && input.decision && !cancelledForTarget && !expiredThisCycle && position?.status !== "OPEN") {
+  if (input.fresh && !input.sequenceFault && input.decision && !cancelledThisCycle && !expiredThisCycle && position?.status !== "OPEN") {
     const sameClosedThesis = position?.status === "CLOSED" && position.side === input.decision.side && position.scenario === input.decision.marketState;
     const triggerProbe: PaperPlan = { ...input.decision, id: "probe", state: "PREPARED", createdAt: input.now, expiresAt: input.now, plannedRisk: 0, notional: 0 };
     if (sameClosedThesis && planTriggered(triggerProbe, input.midpoint)) return { plan, position, events: [...events, "WAIT_REARM"] };
@@ -409,9 +411,14 @@ export function reconcilePaper(input: {
       || (input.now - plan.createdAt > 30_000 && Math.abs(plan.target - input.decision.target) / input.midpoint > 0.002);
     if (materiallyDifferent) {
       const sized = sizePaperPosition({ equity: input.equity, entry: input.decision.entryTrigger, invalidation: input.decision.invalidation, feeBps: 10, stressSlippageBps: 8, confidence: clamp(input.decision.score / Math.max(input.decision.score + input.decision.oppositeScore, Number.EPSILON), 0, 1), openRisk: input.openRisk });
-      if (sized.allowedLoss > 0 && sized.portfolioRiskAfter <= input.equity * 0.05 + 1e-9) {
-        plan = { ...input.decision, id: `${input.decision.symbol}:${input.now}`, state: "PREPARED", createdAt: input.now, expiresAt: input.now + 90_000, plannedRisk: sized.allowedLoss, notional: sized.notional };
+      const confidence = clamp(input.decision.score / Math.max(input.decision.score + input.decision.oppositeScore, Number.EPSILON), 0, 1);
+      const rewardRate = Math.abs(input.decision.target - input.decision.entryTrigger) / Math.max(input.decision.entryTrigger, 1e-9);
+      const positiveEv = confidence * rewardRate - (1 - confidence) * sized.lossRate - ROUND_TRIP_FRICTION_RATE > 0;
+      if (sized.allowedLoss > 0 && sized.portfolioRiskAfter <= input.equity * 0.05 + 1e-9 && rewardRate > ROUND_TRIP_FRICTION_RATE && positiveEv) {
+        plan = { ...input.decision, id: `${input.decision.symbol}:${input.now}`, state: "PREPARED", createdAt: input.now, expiresAt: input.now + PLAN_TTL_MS, plannedRisk: sized.allowedLoss, notional: sized.notional };
         events.push("PLAN_PREPARED");
+      } else if (sized.allowedLoss > 0) {
+        events.push("PLAN_REJECTED_ECONOMICS");
       }
     }
   }
@@ -422,7 +429,7 @@ export function reconcilePaper(input: {
     const invalidFill = plan.side === "LONG" ? input.midpoint <= plan.invalidation : input.midpoint >= plan.invalidation;
     const passedTarget = plan.side === "LONG" ? input.midpoint >= plan.target : input.midpoint <= plan.target;
     const rewardRate = Math.abs(plan.target - input.midpoint) / Math.max(input.midpoint, 1e-9);
-    const friction = 0.0018;
+    const friction = ROUND_TRIP_FRICTION_RATE;
     const positiveEv = confidence * rewardRate - (1 - confidence) * resized.lossRate - friction > 0;
     if (invalidFill || resized.allowedLoss <= 0 || resized.portfolioRiskAfter > input.equity * 0.05 + 1e-9 || passedTarget || rewardRate <= friction || !positiveEv) {
       plan = { ...plan, state: "CANCELLED" };

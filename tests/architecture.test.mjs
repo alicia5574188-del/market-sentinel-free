@@ -38,11 +38,12 @@ test("only one new DO is bound and all legacy DO storage is explicitly deleted",
 });
 
 test("external API is read-only PAPER and the operator UI explains every decision", async () => {
-  const [worker, page, layout, workflow] = await Promise.all([
+  const [worker, page, layout, workflow, css] = await Promise.all([
     read("worker/index-clean.ts"),
     read("app/page.tsx"),
     read("app/layout.tsx"),
     read(".github/workflows/sentinel-v2-ci.yml"),
+    read("app/globals.css"),
   ]);
   assert.match(worker, /read-only PAPER surface/);
   assert.match(worker, /return handler\.fetch\(request, env, ctx\)/);
@@ -64,6 +65,8 @@ test("external API is read-only PAPER and the operator UI explains every decisio
   assert.match(page, /合约名义价值/);
   assert.match(page, /模拟杠杆/);
   assert.match(page, /预计保证金/);
+  assert.match(page, /window\.scrollTo\(0, 0\)/);
+  assert.match(css, /position:fixed!important/);
   assert.match(page, /AbortController/);
   assert.match(page, /document\.hidden/);
   assert.match(page, /系统现在的决定/);

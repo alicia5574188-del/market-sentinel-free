@@ -2,6 +2,8 @@ export const SYSTEM_VERSION = "liquidity-three-state-v1";
 export const PORTFOLIO_RISK_CAP = 0.05;
 export const STALE_AFTER_MS = 3_000;
 export const WALL_WINDOW = 30;
+export const ROUND_TRIP_FRICTION_RATE = 0.0018;
+export const MIN_TARGET_DISTANCE_RATE = 0.0025;
 
 export type Side = "LONG" | "SHORT";
 export type MarketState = "BREAKOUT" | "REVERSAL" | "RANGE";
@@ -223,8 +225,11 @@ export function decideThreeState(input: {
   absorption: number;
   timeframeBias?: TimeframeBias;
 }): Decision | null {
-  const longZones = input.zones.filter((zone) => zone.side === "LONG" && zone.price > input.mid).sort((a, b) => b.score - a.score);
-  const shortZones = input.zones.filter((zone) => zone.side === "SHORT" && zone.price < input.mid).sort((a, b) => b.score - a.score);
+  // A nearby liquidity pocket can be real yet still be untradeable after fees
+  // and stress slippage. Do not build plans whose destination cannot pay for
+  // the round trip.
+  const longZones = input.zones.filter((zone) => zone.side === "LONG" && zone.price >= input.mid * (1 + MIN_TARGET_DISTANCE_RATE)).sort((a, b) => b.score - a.score);
+  const shortZones = input.zones.filter((zone) => zone.side === "SHORT" && zone.price <= input.mid * (1 - MIN_TARGET_DISTANCE_RATE)).sort((a, b) => b.score - a.score);
   const long = longZones[0];
   const short = shortZones[0];
   if (!long || !short) return null;
@@ -316,14 +321,14 @@ export function remainingStressRisk(position: PaperPosition, markPrice = positio
   const adverseMove = position.side === "LONG"
     ? Math.max(0, markPrice - position.currentStop) / Math.max(markPrice, 1e-9)
     : Math.max(0, position.currentStop - markPrice) / Math.max(markPrice, 1e-9);
-  return position.notional * (adverseMove + 0.0018);
+  return position.notional * (adverseMove + ROUND_TRIP_FRICTION_RATE);
 }
 
 export function closePaperPosition(position: PaperPosition, now: number, price: number, reason: string): PaperPosition {
   if (position.status === "CLOSED") return position;
   const direction = position.side === "LONG" ? 1 : -1;
   const gross = position.notional * ((price - position.entryPrice) / Math.max(position.entryPrice, 1e-9)) * direction;
-  const feesAndSlippage = position.notional * 0.0018;
+  const feesAndSlippage = position.notional * ROUND_TRIP_FRICTION_RATE;
   return { ...position, status: "CLOSED", exitAt: now, exitPrice: price, exitReason: reason, realizedPnl: gross - feesAndSlippage, feesAndSlippage };
 }
 

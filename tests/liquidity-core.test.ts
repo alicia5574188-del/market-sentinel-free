@@ -18,7 +18,7 @@ import {
   type PaperPlan,
   type PaperPosition,
 } from "../lib/liquidity-core.ts";
-import { ancillarySchedule, deriveStructureZones, emptySymbolMemory, inferLiquidationBands, reconcilePaper, updateOpenInterestCohorts, usableSnapshot } from "../lib/liquidity-runtime.ts";
+import { PLAN_TTL_MS, ancillarySchedule, deriveStructureZones, emptySymbolMemory, inferLiquidationBands, reconcilePaper, updateOpenInterestCohorts, usableSnapshot } from "../lib/liquidity-runtime.ts";
 import { drainPositionOutbox, enqueuePositionTransition } from "../lib/paper-outbox.ts";
 
 const flow = (patch: Partial<FlowEvidence> = {}): FlowEvidence => ({ ofi: 0, micropriceDisplacementBps: 0, takerDelta: 0, openInterestDelta: 0, funding: 0, actualLiquidations: 0, priceResponseBps: 0, ...patch });
@@ -150,6 +150,45 @@ test("a replacement decision cannot keep an old prepared thesis alive", () => {
     zones: [zone("LONG", 112), zone("SHORT", 90)], absorption: 0, equity: 1_000, openRisk: 0 });
   assert.equal(result.plan?.state, "CANCELLED");
   assert.ok(result.events.includes("TARGET_GONE_CANCEL") || result.events.includes("THESIS_CHANGED_CANCEL"));
+});
+
+test("a prepared plan survives neutral ticks without chasing recalculated levels", () => {
+  const decision = { symbol: "BTC_USDT", observedAt: 1, marketState: "BREAKOUT" as const, side: "LONG" as const,
+    entryTrigger: 101, invalidation: 99, target: 110, targetIdentity: "BOOK:LONG:110", score: 2, oppositeScore: 1, reason: [] };
+  const plan: PaperPlan = { ...decision, id: "frozen", state: "PREPARED", createdAt: 1, expiresAt: PLAN_TTL_MS + 1, plannedRisk: 10, notional: 1_000 };
+  const neutral = reconcilePaper({ now: 2, midpoint: 100, fresh: true, sequenceFault: false, decision: null, plan, position: null,
+    zones: [zone("LONG", 110), zone("SHORT", 90)], absorption: 0, equity: 1_000, openRisk: 0 });
+  assert.equal(neutral.plan?.state, "PREPARED");
+  assert.equal(neutral.plan?.entryTrigger, 101);
+  assert.deepEqual(neutral.events, []);
+});
+
+test("a frozen prepared plan can trigger during a neutral tick", () => {
+  const decision = { symbol: "BTC_USDT", observedAt: 1, marketState: "BREAKOUT" as const, side: "LONG" as const,
+    entryTrigger: 101, invalidation: 99, target: 110, targetIdentity: "BOOK:LONG:110", score: 100, oppositeScore: 1, reason: [] };
+  const plan: PaperPlan = { ...decision, id: "cross", state: "PREPARED", createdAt: 1, expiresAt: PLAN_TTL_MS + 1, plannedRisk: 10, notional: 1_000 };
+  const result = reconcilePaper({ now: 2, midpoint: 101.1, fresh: true, sequenceFault: false, decision: null, plan, position: null,
+    zones: [zone("LONG", 110), zone("SHORT", 90)], absorption: 0, equity: 1_000, openRisk: 0 });
+  assert.equal(result.plan?.state, "TRIGGERED");
+  assert.equal(result.position?.status, "OPEN");
+  assert.ok(result.events.includes("PAPER_OPEN"));
+});
+
+test("an economically untradeable target is rejected before it reaches the order page", () => {
+  const decision = { symbol: "SOL_USDT", observedAt: 1, marketState: "BREAKOUT" as const, side: "LONG" as const,
+    entryTrigger: 100, invalidation: 99.9, target: 100.1, targetIdentity: "BOOK:LONG:100.1", score: 100, oppositeScore: 0.1, reason: [] };
+  const result = reconcilePaper({ now: 2, midpoint: 99.9, fresh: true, sequenceFault: false, decision, plan: null, position: null,
+    zones: [zone("LONG", 100.1), zone("SHORT", 90)], absorption: 0, equity: 1_000, openRisk: 0, allowOpen: false });
+  assert.equal(result.plan, null);
+  assert.ok(result.events.includes("PLAN_REJECTED_ECONOMICS"));
+});
+
+test("new executable plans remain valid for fifteen minutes", () => {
+  const decision = { symbol: "ETH_USDT", observedAt: 1, marketState: "BREAKOUT" as const, side: "LONG" as const,
+    entryTrigger: 101, invalidation: 99, target: 110, targetIdentity: "BOOK:LONG:110", score: 100, oppositeScore: 1, reason: [] };
+  const result = reconcilePaper({ now: 10, midpoint: 100, fresh: true, sequenceFault: false, decision, plan: null, position: null,
+    zones: [zone("LONG", 110), zone("SHORT", 90)], absorption: 0, equity: 1_000, openRisk: 0, allowOpen: false });
+  assert.equal(result.plan?.expiresAt, 10 + PLAN_TTL_MS);
 });
 
 test("jump trigger recalculates actual-fill notional and keeps aggregate risk at five percent", () => {
