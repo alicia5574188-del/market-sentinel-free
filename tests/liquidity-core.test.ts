@@ -244,6 +244,12 @@ test("HTTP 200 data with an old timestamp stays stale and a clear REST sequence 
   assert.equal(reset.sequenceFault, false);
 });
 
+test("exchange freshness uses actual invocation time, never the two-second slot floor", () => {
+  const snapshot = { symbol: "X_USDT", observedAt: 10_350, sequence: 1, tickSize: 1, bids: [], asks: [] };
+  assert.equal(usableSnapshot(snapshot, 10_400, 0).fresh, true);
+  assert.equal(usableSnapshot(snapshot, 8_000, 0).fresh, false);
+});
+
 test("independent ancillary cursor covers every symbol and evidence kind", () => {
   const symbols = ["A", "B", "C", "D"];
   const seen = new Set(Array.from({ length: 20 }, (_, cursor) => {

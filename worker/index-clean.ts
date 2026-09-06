@@ -562,7 +562,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         catch (error) { this.runtime.lastError = `universe: ${safeError(error)}`; }
       }
       const cycleSymbols = [...this.runtime.symbols];
-      const booksPromise = this.processBooks(slot * LOOP_MS, cycleSymbols);
+      // Use the actual invocation time for exchange freshness. The slot is
+      // only an idempotency key; its floor can be almost two seconds behind a
+      // fresh Gate snapshot and must never be used as the freshness clock.
+      const booksPromise = this.processBooks(now, cycleSymbols);
       let books: Awaited<ReturnType<MarketStream["processBooks"]>>;
       if (universeDue) {
         books = await booksPromise;

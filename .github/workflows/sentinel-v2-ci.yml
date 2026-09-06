@@ -468,6 +468,21 @@ jobs:
             fi
             sleep 5
           done
+          if (( healthy < 2 )); then
+            jq -c '{
+              version, mode, state, stale,
+              runtime: {
+                state: .runtime.state, stale: .runtime.stale,
+                authorityReady: .runtime.authorityReady,
+                lastError: .runtime.lastError,
+                lastSuccessAt: .runtime.lastSuccessAt,
+                symbols: .runtime.symbols,
+                evidence: ((.runtime.evidence // {}) | with_entries(.value |= {
+                  fresh, ancillaryFresh, warmup, observedAt
+                }))
+              }
+            }' "$RUNNER_TEMP/v6-health.json" >&2 || true
+          fi
           (( healthy >= 2 ))
 
       - name: Revoke production token, observe its new version, and run restart canary
