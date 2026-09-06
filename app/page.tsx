@@ -122,13 +122,14 @@ export default function Home() {
     {tab === "brain" && <section className="markets">{runtime?.symbols.map((symbol) => {
       const evidence = runtime.evidence[symbol], marketFresh = Boolean(authorityOperational && evidence?.fresh && evidence?.ancillaryFresh);
       const decision = marketFresh ? runtime.decisions[symbol] : null, plan = marketFresh ? runtime.plans[symbol] : null, position = runtime.positions[symbol];
-      const status = position?.status === "OPEN" ? "持仓中" : plan?.state === "PREPARED" ? "等待进场" : decision ? "发现机会" : evidence?.warmup < 30 ? `预热 ${evidence?.warmup ?? 0}/30` : "继续观察";
+      const intent = plan?.state === "PREPARED" ? plan : decision;
+      const status = position?.status === "OPEN" ? "持仓中" : plan?.state === "PREPARED" ? "等待进场" : intent ? "发现机会" : evidence?.warmup < 30 ? `预热 ${evidence?.warmup ?? 0}/30` : "继续观察";
       return <article className="market" key={symbol}><div className="market-title"><div><small>{symbol.replace("_", "/")}</small><h2>{marketFresh ? status : "数据恢复中"}</h2></div><strong>{marketFresh ? num(evidence?.midpoint, 5) : "—"}</strong></div>
-        <div className="plain-answer"><small>系统判断</small><b>{decision ? `${sideText(decision.side)} · ${stateText[decision.marketState]}` : "暂时没有值得执行的方向"}</b><p>{waitReason(runtime, marketFresh, symbol)}</p></div>
-        {decision && <div className="trade-levels"><div><small>准备进场</small><b>{num(decision.entryTrigger, 5)}</b></div><div><small>判断错误就退出</small><b>{num(decision.invalidation, 5)}</b></div><div><small>当前目标</small><b>{num(decision.target, 5)}</b></div><div><small>预计盈亏比</small><b>{num(rr(decision.entryTrigger, decision.invalidation, decision.target), 2)} : 1</b></div></div>}
-        <div className="execution"><small>执行方式</small><b>{position?.status === "OPEN" ? "已按实时价格触发，正在持仓" : plan?.state === "PREPARED" ? `不预挂单，等待实时价格到达 ${num(plan.entryTrigger, 5)}` : decision ? "方向已形成，等待系统建立进场计划" : "不挂单，继续等待完整机会"}</b></div>
-        <CandleChart symbol={symbol} evidence={evidence} decision={plan?.state === "PREPARED" ? plan : decision} position={position?.status === "OPEN" ? position : null} />
-        <details><summary>查看判断依据</summary><p>{decision?.reason.join("；") || "尚未形成完整判断"}</p><div className="targets"><span>上方吸引区：{num(evidence?.topLong?.price, 5)} · {sourceText[evidence?.topLong?.source ?? ""] ?? "识别中"}</span><span>下方吸引区：{num(evidence?.topShort?.price, 5)} · {sourceText[evidence?.topShort?.source ?? ""] ?? "识别中"}</span></div></details>
+        <div className="plain-answer"><small>系统判断</small><b>{intent ? `${sideText(intent.side)} · ${stateText[intent.marketState]}` : "暂时没有值得执行的方向"}</b><p>{waitReason(runtime, marketFresh, symbol)}</p></div>
+        {intent && <div className="trade-levels"><div><small>准备进场</small><b>{num(intent.entryTrigger, 5)}</b></div><div><small>判断错误就退出</small><b>{num(intent.invalidation, 5)}</b></div><div><small>当前目标</small><b>{num(intent.target, 5)}</b></div><div><small>预计盈亏比</small><b>{num(rr(intent.entryTrigger, intent.invalidation, intent.target), 2)} : 1</b></div></div>}
+        <div className="execution"><small>执行方式</small><b>{position?.status === "OPEN" ? "已按实时价格触发，正在持仓" : plan?.state === "PREPARED" ? `不预挂单，等待实时价格到达 ${num(plan.entryTrigger, 5)}` : intent ? "方向已形成，等待系统建立进场计划" : "不挂单，继续等待完整机会"}</b></div>
+        <CandleChart symbol={symbol} evidence={evidence} decision={intent} position={position?.status === "OPEN" ? position : null} />
+        <details><summary>查看判断依据</summary><p>{intent?.reason.join("；") || "尚未形成完整判断"}</p><div className="targets"><span>上方吸引区：{num(evidence?.topLong?.price, 5)} · {sourceText[evidence?.topLong?.source ?? ""] ?? "识别中"}</span><span>下方吸引区：{num(evidence?.topShort?.price, 5)} · {sourceText[evidence?.topShort?.source ?? ""] ?? "识别中"}</span></div></details>
       </article>;
     }) ?? <div className="empty">正在读取市场数据…</div>}</section>}
 

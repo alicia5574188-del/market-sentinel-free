@@ -67,6 +67,7 @@ test("external API is read-only PAPER and the operator UI explains every decisio
   assert.match(page, /预计保证金/);
   assert.match(page, /window\.scrollTo\(0, 0\)/);
   assert.match(css, /position:fixed!important/);
+  assert.match(page, /const intent = plan\?\.state === "PREPARED" \? plan : decision/);
   assert.match(page, /AbortController/);
   assert.match(page, /document\.hidden/);
   assert.match(page, /系统现在的决定/);
