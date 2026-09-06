@@ -554,8 +554,12 @@ export function reconcilePaper(input: {
       distanceCost: 1, probabilityReach: 1, persistence: 1, source: "BOOK" })
       : continuousTarget(position.side, position.targetIdentity, position.currentTarget);
     const opposite = input.zones.filter((zone) => zone.side !== position!.side).sort((a, b) => b.score - a.score)[0] ?? null;
+    const continuationRoute = input.activeRoutes?.filter((route) => route.kind === "NODE_CONTINUATION" && route.side === position!.side
+      && Math.abs(route.entryTrigger - position!.currentTarget) / Math.max(position!.currentTarget, 1e-9) <= route.activationDistanceRate)
+      .sort((a, b) => b.score - a.score)[0] ?? null;
     position = updatePosition(position, { now: input.now, price: input.midpoint, bestTarget: own, oppositeTarget: input.protectOnly ? null : opposite,
-      absorption: input.protectOnly ? 0 : input.absorption, confirmationMinute: input.confirmationMinute });
+      absorption: input.protectOnly ? 0 : input.absorption, confirmationMinute: input.confirmationMinute,
+      continuationRoute: input.protectOnly ? null : continuationRoute });
     if (position.status === "CLOSED") {
       events.push(position.exitReason ?? "CLOSED");
       return { plan, position, events };
@@ -623,6 +627,9 @@ export function reconcilePaper(input: {
       notional: resized.notional,
       targetScore: plan.score,
       targetIdentity: plan.targetIdentity,
+      routeId: plan.routeId,
+      routeKind: plan.routeKind,
+      targetTimeframe: plan.targetTimeframe,
       status: "OPEN",
       maxFavorablePrice: input.midpoint,
       maxAdversePrice: input.midpoint,

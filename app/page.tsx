@@ -55,7 +55,7 @@ const stateText: Record<string, string> = { BREAKOUT: "突破", REVERSAL: "反�
 const sourceText: Record<string, string> = { BOOK: "真实挂单区", STOP_POOL: "止损集中区", LIQUIDATION: "估计清算区" };
 const routeText: Record<RouteKind, string> = { LOCAL_BREAKOUT: "小区间突破", EDGE_REJECTION: "区间边界回撤", NODE_CONTINUATION: "高周期节点续破" };
 const stageText: Record<RouteStage, string> = { LOCAL_TO_NODE: "当前段", AT_NODE: "节点决策", NODE_TO_NEXT: "后续段" };
-const exitText: Record<string, string> = { STRUCTURAL_STOP: "结构失效止损", TARGET_ABSORBED: "目标流动性已被吸收", TARGET_DISAPPEARED: "目标流动性连续消失", TARGET_VANISHED: "目标消失", OPPOSITE_TARGET_DOMINANT: "反向目标占优", OPPOSITE_UTILITY_DOMINANT: "反向流动性连续占优", RISK_CAP_REBALANCE: "组合风险重新平衡", PORTFOLIO_RISK_REBALANCE: "组合风险重新平衡" };
+const exitText: Record<string, string> = { STRUCTURAL_STOP: "结构失效止损", TARGET_ABSORBED: "目标流动性已被吸收", TARGET_NODE_EXIT: "到达流动性节点，续破未确认", TARGET_DISAPPEARED: "目标流动性连续消失", TARGET_VANISHED: "目标消失", OPPOSITE_TARGET_DOMINANT: "反向目标占优", OPPOSITE_UTILITY_DOMINANT: "反向流动性连续占优", RISK_CAP_REBALANCE: "组合风险重新平衡", PORTFOLIO_RISK_REBALANCE: "组合风险重新平衡" };
 const num = (value: number | null | undefined, digits = 3) => Number.isFinite(value) ? Number(value).toLocaleString("zh-CN", { maximumFractionDigits: digits }) : "—";
 const signed = (value: number, digits = 2) => `${value >= 0 ? "+" : ""}${num(value, digits)}`;
 const time = (value: number | null | undefined) => value ? new Date(value).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : "—";
