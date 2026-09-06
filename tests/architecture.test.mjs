@@ -49,6 +49,7 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   ]);
   assert.match(worker, /return handler\.fetch\(request, env, ctx\)/);
   assert.match(worker, /url\.pathname === "\/api\/history" && request\.method === "GET"/);
+  assert.match(worker, /url\.pathname === "\/api\/account-logs" && request\.method === "GET"/);
   assert.match(worker, /url\.pathname === "\/api\/order-chart" && request\.method === "GET"/);
   assert.match(worker, /url\.pathname === "\/api\/candles" && request\.method === "GET"/);
   assert.match(worker, /GATE_USDT_FUTURES/);
@@ -72,7 +73,10 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(worker, /await this\.syncLive\(Date\.now\(\), false, true\)/);
   assert.match(worker, /if \(!await ownerAuthenticated\(request, env\)\) return json\(\{ error: "请先登录" \}, 401\)/);
   assert.match(worker, /sameOriginMutation\(request\)/);
-  assert.match(worker, /const \{ outbox, live, \.\.\.publicRuntime \} = this\.runtime/);
+  assert.match(worker, /const \{ outbox, live, paperCycle, bankruptcyOutbox, \.\.\.publicRuntime \} = this\.runtime/);
+  assert.match(worker, /paperCycleSummary\(paperCycle, this\.authorityView\.equity\)/);
+  assert.match(worker, /PAPER_CYCLE_BANKRUPTCY/);
+  assert.match(worker, /PAPER_BANKRUPTCY/);
   assert.match(worker, /\["SUBMITTING", "OPEN"\]\.includes\(entry\.status\).*entry\.plannedRisk/s);
   assert.match(worker, /prior\.planId === plan\.id && prior\.status !== "CANCELLED"/);
   assert.match(worker, /availableForNewEntries - intent\.margin/);
@@ -98,6 +102,9 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(page, /setInterval\(readHistory, 15_000\)/);
   assert.match(page, /function OrderReviewChart/);
   assert.match(page, /查看 1 分钟进出场 K 线/);
+  assert.match(page, /账户日志/);
+  assert.match(page, /复制完整诊断/);
+  assert.match(page, /权益达到 300 U 时/);
   assert.match(page, /进场 \{num\(item\.entryPrice, 5\)\}/);
   assert.match(page, /出场 \{num\(exitPrice, 5\)\}/);
   assert.match(page, /recentClosedPositions/);
@@ -142,6 +149,7 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.equal(await read("lib/auth-paths.ts").then(() => false, () => true), true);
   assert.equal((workflow.match(/grep -Fq '流动性三态'/g) ?? []).length, 2);
   assert.equal((workflow.match(/WORKER_BASE_URL\/api\/history/g) ?? []).length, 2);
+  assert.equal((workflow.match(/WORKER_BASE_URL\/api\/account-logs/g) ?? []).length, 2);
   assert.equal((workflow.match(/WORKER_BASE_URL\/api\/candles\?symbol=BTC_USDT&interval=15m/g) ?? []).length, 2);
   assert.equal((workflow.match(/WORKER_BASE_URL\/api\/live\/credentials/g) ?? []).length, 2);
   assert.equal((workflow.match(/for attempt in 1 2 3 4 5 6/g) ?? []).length, 2);
@@ -172,6 +180,18 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
   assert.match(worker, /this\.runtime\.d1Writes \+ billedWrites > 4_800/);
   assert.match(worker, /review-entry:\$\{position\.id\}/);
   assert.match(worker, /review-exit:\$\{item\.id\}/);
+  assert.match(worker, /ORDER_CLOSE_DIAGNOSTIC/);
+  assert.match(worker, /FROM paper_events WHERE event_type='PAPER_BANKRUPTCY'/);
+});
+
+test("PAPER and LIVE share bounded sizing and meaningful net-profit economics", async () => {
+  const [core, live] = await Promise.all([read("lib/liquidity-core.ts"), read("lib/gate-live.ts")]);
+  assert.match(core, /MAX_SINGLE_TRADE_RISK_RATE = 0\.018/);
+  assert.match(core, /MAX_NOTIONAL_TO_EQUITY = 4/);
+  assert.match(core, /MIN_NET_TARGET_RETURN_ON_EQUITY = 0\.015/);
+  assert.match(core, /Math\.min\(riskSizedNotional, input\.equity \* MAX_NOTIONAL_TO_EQUITY\)/);
+  assert.match(live, /sizePaperPosition\(/);
+  assert.match(live, /tradeEconomics\(/);
 });
 
 test("cutover is credential-bound and removes legacy DOs only after v6 health", async () => {

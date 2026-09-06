@@ -1,5 +1,5 @@
 import { decryptGateCredentials, type EncryptedGateCredentials, type GateCredentials } from "./credential-vault.ts";
-import { PORTFOLIO_RISK_CAP, ROUND_TRIP_FRICTION_RATE, sizePaperPosition, type PaperPlan, type Side } from "./liquidity-core.ts";
+import { PORTFOLIO_RISK_CAP, ROUND_TRIP_FRICTION_RATE, sizePaperPosition, tradeEconomics, type PaperPlan, type Side } from "./liquidity-core.ts";
 
 const encoder = new TextEncoder();
 const GATE_TRIGGER_DAY_SECONDS = 86_400;
@@ -269,6 +269,8 @@ export function buildLiveEntryIntent(input: {
   const lossRate = Math.abs(plan.entryTrigger - plan.invalidation) / Math.max(plan.entryTrigger, 1e-9) + ROUND_TRIP_FRICTION_RATE;
   const plannedRisk = notional * lossRate;
   if (input.openRisk + plannedRisk > input.equity * PORTFOLIO_RISK_CAP + 1e-8) throw new Error(`${plan.symbol} 将超过账户 5% 总风险`);
+  const economics = tradeEconomics({ entry: plan.entryTrigger, target: plan.target, lossRate, confidence, notional, equity: input.equity });
+  if (!economics.executable) throw new Error(`${plan.symbol} 实盘合约取整后净利润空间不足`);
   const size = plan.side === "LONG" ? contracts : -contracts;
   const tag = shortTag("e", plan.id);
   const initial = { contract: plan.symbol, size, price: "0", tif: "ioc", text: tag, reduce_only: false };

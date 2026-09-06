@@ -5,7 +5,7 @@
   "engines": { "node": ">=22.15.0" },
   "scripts": {
     "install:ci": "bash scripts/install-ci.sh",
-    "test:direct": "node --experimental-strip-types --test tests/liquidity-core.test.ts tests/gate-market.test.ts tests/runtime-health.test.ts tests/runtime-faults.test.ts tests/credential-vault.test.ts tests/owner-auth.test.ts tests/gate-live.test.ts",
+    "test:direct": "node --experimental-strip-types --test tests/liquidity-core.test.ts tests/paper-cycle.test.ts tests/gate-market.test.ts tests/runtime-health.test.ts tests/runtime-faults.test.ts tests/credential-vault.test.ts tests/owner-auth.test.ts tests/gate-live.test.ts",
     "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vite",
     "build": "bash scripts/build-verified.sh",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",

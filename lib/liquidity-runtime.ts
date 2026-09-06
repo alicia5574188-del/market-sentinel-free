@@ -414,7 +414,8 @@ export function reconcilePaper(input: {
     if (materiallyDifferent) {
       const sized = sizePaperPosition({ equity: input.equity, entry: input.decision.entryTrigger, invalidation: input.decision.invalidation, feeBps: 10, stressSlippageBps: 8, confidence: clamp(input.decision.score / Math.max(input.decision.score + input.decision.oppositeScore, Number.EPSILON), 0, 1), openRisk: input.openRisk });
       const confidence = clamp(input.decision.score / Math.max(input.decision.score + input.decision.oppositeScore, Number.EPSILON), 0, 1);
-      const economics = tradeEconomics({ entry: input.decision.entryTrigger, target: input.decision.target, lossRate: sized.lossRate, confidence });
+      const economics = tradeEconomics({ entry: input.decision.entryTrigger, target: input.decision.target, lossRate: sized.lossRate, confidence,
+        notional: sized.notional, equity: input.equity });
       if (sized.allowedLoss > 0 && sized.portfolioRiskAfter <= input.equity * 0.05 + 1e-9 && economics.executable) {
         plan = { ...input.decision, id: `${input.decision.symbol}:${input.now}`, state: "PREPARED", createdAt: input.now, expiresAt: input.now + PLAN_TTL_MS, plannedRisk: sized.allowedLoss, notional: sized.notional };
         events.push("PLAN_PREPARED");
@@ -429,7 +430,8 @@ export function reconcilePaper(input: {
       stressSlippageBps: 8, confidence, openRisk: input.openRisk });
     const invalidFill = plan.side === "LONG" ? input.midpoint <= plan.invalidation : input.midpoint >= plan.invalidation;
     const passedTarget = plan.side === "LONG" ? input.midpoint >= plan.target : input.midpoint <= plan.target;
-    const economics = tradeEconomics({ entry: input.midpoint, target: plan.target, lossRate: resized.lossRate, confidence });
+    const economics = tradeEconomics({ entry: input.midpoint, target: plan.target, lossRate: resized.lossRate, confidence,
+      notional: resized.notional, equity: input.equity });
     const scenarioConfirmed = plan.marketState === "BREAKOUT" || input.absorption >= 0.55;
     if (invalidFill || resized.allowedLoss <= 0 || resized.portfolioRiskAfter > input.equity * 0.05 + 1e-9 || passedTarget || !economics.executable || !scenarioConfirmed) {
       plan = { ...plan, state: "CANCELLED" };
@@ -452,6 +454,8 @@ export function reconcilePaper(input: {
       targetScore: plan.score,
       targetIdentity: plan.targetIdentity,
       status: "OPEN",
+      maxFavorablePrice: input.midpoint,
+      maxAdversePrice: input.midpoint,
     };
     events.push("PAPER_OPEN");
   }

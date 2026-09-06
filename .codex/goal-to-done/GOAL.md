@@ -11,3 +11,7 @@ During one open browser session, every main tab and nested Live view must retain
 A PREPARED entry is one immutable lifecycle: later opposite-side scoring cannot replace it. A fresh price crossing is evaluated against that frozen side only while its destination still exists, trigger-time economics still provide at least 1.2 net R after modeled costs, and REVERSAL/RANGE still show absorption.
 
 Every historical PAPER order must provide a real Gate USDT futures 1m review chart with exact entry and exit markers, planned stop/target, gross PnL, modeled cost, net PnL, holding duration, and a plain-language exit reason.
+
+PAPER must never become permanently unusable after a drawdown. Preserve the current cycle until equity reaches 300 U; then safely close remaining PAPER exposure using fresh prices, permanently archive a detailed bankruptcy report, and start the next 1,000 U PAPER cycle automatically without pausing the 24-hour runtime. History must contain a dedicated Account Logs view with the current cycle and every archived bankruptcy, including a copyable machine-readable report for later Codex analysis.
+
+PAPER and LIVE must use one shared sizing policy: 1%–1.8% planned risk per entry, no more than 4× account equity in notional, no more than 5% aggregate structural risk, and no entry whose modeled net target profit is below 1.5% of the applicable account equity. LIVE applies Gate contract rounding and available-margin limits after the shared calculation, so it may reduce or reject size but never silently enlarge it.

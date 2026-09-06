@@ -5,6 +5,10 @@ export const WALL_WINDOW = 30;
 export const ROUND_TRIP_FRICTION_RATE = 0.0018;
 export const MIN_TARGET_DISTANCE_RATE = 0.0025;
 export const MIN_NET_REWARD_RISK = 1.2;
+export const MIN_SINGLE_TRADE_RISK_RATE = 0.01;
+export const MAX_SINGLE_TRADE_RISK_RATE = 0.018;
+export const MAX_NOTIONAL_TO_EQUITY = 4;
+export const MIN_NET_TARGET_RETURN_ON_EQUITY = 0.015;
 export const DYNAMIC_EXIT_CONFIRMATIONS = 2;
 
 export type Side = "LONG" | "SHORT";
@@ -99,6 +103,8 @@ export type PaperPosition = {
   exitReason?: string;
   realizedPnl?: number;
   feesAndSlippage?: number;
+  maxFavorablePrice?: number;
+  maxAdversePrice?: number;
   exitSignalMinute?: number;
   exitSignalCount?: number;
   exitSignalReason?: string;
@@ -312,22 +318,26 @@ export function sizePaperPosition(input: {
   openRisk: number;
 }) {
   const availableRisk = Math.max(0, input.equity * PORTFOLIO_RISK_CAP - input.openRisk);
-  const desiredRiskRate = clamp(0.01 + input.confidence * 0.02, 0.01, 0.03);
-  const allowedLoss = Math.min(availableRisk, input.equity * desiredRiskRate);
+  const desiredRiskRate = clamp(MIN_SINGLE_TRADE_RISK_RATE + input.confidence * 0.008, MIN_SINGLE_TRADE_RISK_RATE, MAX_SINGLE_TRADE_RISK_RATE);
+  const desiredLoss = Math.min(availableRisk, input.equity * desiredRiskRate);
   const structuralMove = Math.abs(input.entry - input.invalidation) / Math.max(input.entry, 1e-9);
   const friction = (input.feeBps + input.stressSlippageBps) / 10_000;
   const lossRate = structuralMove + friction;
-  const notional = lossRate > 0 ? allowedLoss / lossRate : 0;
+  const riskSizedNotional = lossRate > 0 ? desiredLoss / lossRate : 0;
+  const notional = Math.min(riskSizedNotional, input.equity * MAX_NOTIONAL_TO_EQUITY);
+  const allowedLoss = notional * lossRate;
   return { allowedLoss, notional, lossRate, portfolioRiskAfter: input.openRisk + allowedLoss };
 }
 
-export function tradeEconomics(input: { entry: number; target: number; lossRate: number; confidence: number }) {
+export function tradeEconomics(input: { entry: number; target: number; lossRate: number; confidence: number; notional: number; equity: number }) {
   const rewardRate = Math.abs(input.target - input.entry) / Math.max(input.entry, 1e-9);
   const netRewardRate = Math.max(0, rewardRate - ROUND_TRIP_FRICTION_RATE);
   const netRewardRisk = netRewardRate / Math.max(input.lossRate, 1e-9);
   const expectedReturnRate = input.confidence * netRewardRate - (1 - input.confidence) * input.lossRate;
-  return { rewardRate, netRewardRate, netRewardRisk, expectedReturnRate,
-    executable: netRewardRisk >= MIN_NET_REWARD_RISK && expectedReturnRate > 0 };
+  const netTargetProfit = input.notional * netRewardRate;
+  const minimumNetTargetProfit = input.equity * MIN_NET_TARGET_RETURN_ON_EQUITY;
+  return { rewardRate, netRewardRate, netRewardRisk, expectedReturnRate, netTargetProfit, minimumNetTargetProfit,
+    executable: netRewardRisk >= MIN_NET_REWARD_RISK && expectedReturnRate > 0 && netTargetProfit >= minimumNetTargetProfit };
 }
 
 export function remainingStressRisk(position: PaperPosition, markPrice = position.entryPrice) {
@@ -355,25 +365,34 @@ export function updatePosition(position: PaperPosition, input: {
   confirmationMinute?: number;
 }): PaperPosition {
   if (position.status === "CLOSED") return position;
-  const stopped = position.side === "LONG" ? input.price <= position.currentStop : input.price >= position.currentStop;
-  const close = (reason: string) => closePaperPosition(position, input.now, input.price, reason);
+  const observed = {
+    ...position,
+    maxFavorablePrice: position.side === "LONG"
+      ? Math.max(position.maxFavorablePrice ?? position.entryPrice, input.price)
+      : Math.min(position.maxFavorablePrice ?? position.entryPrice, input.price),
+    maxAdversePrice: position.side === "LONG"
+      ? Math.min(position.maxAdversePrice ?? position.entryPrice, input.price)
+      : Math.max(position.maxAdversePrice ?? position.entryPrice, input.price),
+  };
+  const stopped = observed.side === "LONG" ? input.price <= observed.currentStop : input.price >= observed.currentStop;
+  const close = (reason: string) => closePaperPosition(observed, input.now, input.price, reason);
   if (stopped) return close("STRUCTURAL_STOP");
 
-  const arrived = position.side === "LONG" ? input.price >= position.currentTarget : input.price <= position.currentTarget;
+  const arrived = observed.side === "LONG" ? input.price >= observed.currentTarget : input.price <= observed.currentTarget;
   if (arrived && input.absorption >= 0.55) return close("TARGET_ABSORBED");
 
   const oppositeDominates = input.oppositeTarget && input.bestTarget
-    ? input.oppositeTarget.score > Math.max(input.bestTarget.score, position.targetScore) * 1.5
+    ? input.oppositeTarget.score > Math.max(input.bestTarget.score, observed.targetScore) * 1.5
     : false;
   const adverseReason = !input.bestTarget ? "TARGET_DISAPPEARED" : oppositeDominates ? "OPPOSITE_UTILITY_DOMINANT" : null;
-  let exitSignalMinute = position.exitSignalMinute;
-  let exitSignalCount = position.exitSignalCount ?? 0;
-  let exitSignalReason = position.exitSignalReason;
+  let exitSignalMinute = observed.exitSignalMinute;
+  let exitSignalCount = observed.exitSignalCount ?? 0;
+  let exitSignalReason = observed.exitSignalReason;
   if (!adverseReason) {
     exitSignalMinute = undefined;
     exitSignalCount = 0;
     exitSignalReason = undefined;
-  } else if (input.confirmationMinute && input.confirmationMinute > position.entryAt && input.confirmationMinute !== exitSignalMinute) {
+  } else if (input.confirmationMinute && input.confirmationMinute > observed.entryAt && input.confirmationMinute !== exitSignalMinute) {
     exitSignalCount = exitSignalReason === adverseReason ? exitSignalCount + 1 : 1;
     exitSignalMinute = input.confirmationMinute;
     exitSignalReason = adverseReason;
@@ -382,23 +401,23 @@ export function updatePosition(position: PaperPosition, input: {
     return close(adverseReason);
   }
 
-  let currentStop = position.currentStop;
-  const favorable = position.side === "LONG" ? input.price > position.entryPrice : input.price < position.entryPrice;
+  let currentStop = observed.currentStop;
+  const favorable = observed.side === "LONG" ? input.price > observed.entryPrice : input.price < observed.entryPrice;
   if (favorable) {
-    const rawCandidate = position.side === "LONG"
-      ? position.entryPrice + (input.price - position.entryPrice) * 0.25
-      : position.entryPrice - (position.entryPrice - input.price) * 0.25;
-    const initialRisk = Math.max(Math.abs(position.entryPrice - position.initialStop), position.entryPrice * 0.0001);
+    const rawCandidate = observed.side === "LONG"
+      ? observed.entryPrice + (input.price - observed.entryPrice) * 0.25
+      : observed.entryPrice - (observed.entryPrice - input.price) * 0.25;
+    const initialRisk = Math.max(Math.abs(observed.entryPrice - observed.initialStop), observed.entryPrice * 0.0001);
     const step = initialRisk * 0.1;
-    const steps = position.side === "LONG"
-      ? Math.max(0, Math.floor((rawCandidate - position.initialStop) / step))
-      : Math.max(0, Math.floor((position.initialStop - rawCandidate) / step));
-    const candidate = position.side === "LONG" ? position.initialStop + steps * step : position.initialStop - steps * step;
-    currentStop = position.side === "LONG" ? Math.max(currentStop, candidate) : Math.min(currentStop, candidate);
+    const steps = observed.side === "LONG"
+      ? Math.max(0, Math.floor((rawCandidate - observed.initialStop) / step))
+      : Math.max(0, Math.floor((observed.initialStop - rawCandidate) / step));
+    const candidate = observed.side === "LONG" ? observed.initialStop + steps * step : observed.initialStop - steps * step;
+    currentStop = observed.side === "LONG" ? Math.max(currentStop, candidate) : Math.min(currentStop, candidate);
   }
-  const targetStillBest = input.bestTarget && input.bestTarget.side === position.side;
+  const targetStillBest = input.bestTarget && input.bestTarget.side === observed.side;
   return {
-    ...position,
+    ...observed,
     currentStop,
     currentTarget: targetStillBest ? input.bestTarget!.price : position.currentTarget,
     targetScore: targetStillBest ? input.bestTarget!.score : position.targetScore,

@@ -262,6 +262,32 @@ test("an unchanged book at TTL plus one millisecond cancels entry intent but nev
   assert.equal(stream.runtime.evidence.ETH_USDT.fresh, false);
 });
 
+test("a bankrupt PAPER cycle is archived before a fresh 1000 U cycle starts", async () => {
+  const { stream, db } = await makeStream();
+  const now = 1_800_000_075_000;
+  stream.runtime.symbols = ["BTC_USDT"];
+  stream.runtime.tickSize = { BTC_USDT: 0.1 };
+  stream.runtime.contractMeta = { BTC_USDT: { quantoMultiplier: 1, maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0 } };
+  stream.runtime.equity = 290;
+  stream.runtime.paperCycle = { number: 4, startedAt: now - 86_400_000, startingEquity: 1_000, peakEquity: 1_050, trades: [] };
+  stream.memory.BTC_USDT = emptySymbolMemory();
+  stream.sessionWarmup.BTC_USDT = 0;
+
+  await withGateBooks({ BTC_USDT: { midpoint: 100, now, sequence: 1 } }, async () => {
+    await stream.processBooks(now, ["BTC_USDT"]);
+  });
+
+  assert.equal(stream.runtime.equity, 1_000);
+  assert.equal(stream.runtime.paperCycle.number, 5);
+  assert.equal(stream.runtime.paperCycle.startingEquity, 1_000);
+  assert.equal(stream.runtime.bankruptcyOutbox.length, 0, "successful D1 archive drains only after the authority checkpoint");
+  const archive = db.statements.flat().find((statement) => statement.args.includes("PAPER_BANKRUPTCY"));
+  assert.ok(archive);
+  const payload = JSON.parse(String(archive.args.at(-1)));
+  assert.equal(payload.cycleNumber, 4);
+  assert.equal(payload.endingEquity, 290);
+});
+
 test("restart preserves committed OPEN authority, cancels PREPARED work and warms from zero", async () => {
   const seed = await makeStream();
   const saved = structuredClone(seed.stream.runtime);
@@ -321,7 +347,7 @@ test("a full D1 outage for 24h has bounded retries and a bounded latest-state ou
   await stream.drainOutbox(stream.runtime.d1RetryAt);
   assert.equal(stream.runtime.outbox.length, 0);
   assert.equal(stream.runtime.d1FailureCount, 0);
-  assert.equal(stream.runtime.d1Writes, 1_024);
+  assert.equal(stream.runtime.d1Writes, 1_536, "closed rows also retain one detailed diagnostic record each");
 });
 
 test("24h Free-plan budget stays below every published daily cap", () => {

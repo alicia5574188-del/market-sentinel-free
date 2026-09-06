@@ -19,6 +19,14 @@
 - Gate API save/replace/delete lives in the authenticated Live Center. Save validates the account read-only, encrypts server-side, never returns the secret, and never enables LIVE. Delete is allowed only while LIVE is off and no managed position or pending entry remains; scheduled schema monitoring accepts either zero or one credential row.
 - The Brain decision hero and PAPER account summary belong only to the Brain tab. Orders, Live, History, and Settings start directly with their own content; the fixed iPhone bottom navigation remains global.
 
+# 2026-09-06 — 共享仓位上限与模拟账户破产日志
+
+- PAPER 与 LIVE 共用同一个仓位函数：单笔结构风险随置信度在账户权益 1%–1.8% 之间变化，名义价值硬上限为权益 4 倍，组合风险仍不得超过 5%。Gate 合约取整、可用保证金和最大杠杆只允许让实盘更小或拒单，绝不放大到模拟比例以上。
+- 除至少 1.2:1 扣成本盈亏比外，目标扣除 0.18% 模型往返成本后的利润空间还必须达到当前账户权益 1.5%。以 1,000 U 为例，单笔名义价值最多 4,000 U、模型往返成本最多 7.2 U、可接受目标的净利润空间至少 15 U；这些是进场门槛，不是收益保证。
+- PAPER 权益达到 300 U 时判定本轮破产。系统先取消准备计划，并只使用三秒内的新鲜价格结束尚存 PAPER 仓位；没有新鲜价格时继续保护而不以旧价结算。全部结束后，权威状态先将完整报告与新周期一起写入 Durable Object 检查点，再异步幂等写入 D1。
+- 每份破产报告保存逐单诊断、方向正确率、曾经覆盖成本的顺向波动比例、目标到达率与进度、止损命中和最大逆向波动、净盈亏比、成本、持仓时长、退出原因，以及按币种/三态/方向的分解和自动排序的主要原因。报告永久显示在历史页的“账户日志”，并可复制为 JSON 发给 Codex。
+- 归档完成后立即建立新的 1,000 U PAPER 周期，不设置亏损暂停。部署升级不会重置当前模拟权益：缺少周期字段的旧检查点以当时实际权益作为第一轮起点。
+
 # 2026-09-06 — 亏损归因、动态退出去噪与逐单复盘
 
 - 生产的首批 6 笔已结束订单全部只持有 2 秒；两笔 BTC 在进出场价格完全相同的情况下只损失往返成本，另有一笔 SOL 毛盈利但仍被成本变成净亏。这证明首要故障是两秒流动性重算直接触发退出，而不是六次方向判断全部错误。

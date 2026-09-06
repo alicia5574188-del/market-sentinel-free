@@ -107,11 +107,13 @@ test("position sizing never breaches five percent portfolio structural loss", ()
   assert.ok(sized.portfolioRiskAfter <= 50);
 });
 
-test("high-confidence single entry can use about three percent while the portfolio stays below five", () => {
+test("single-entry risk is capped at 1.8% and notional is capped at four times equity", () => {
   const single = sizePaperPosition({ equity: 1_000, entry: 100, invalidation: 98, feeBps: 10, stressSlippageBps: 8, confidence: 1, openRisk: 0 });
-  assert.equal(single.allowedLoss, 30);
+  assert.equal(single.allowedLoss, 18);
+  assert.ok(single.notional <= 4_000);
+  assert.ok(single.notional * 0.0018 <= 7.2);
   const next = sizePaperPosition({ equity: 1_000, entry: 100, invalidation: 98, feeBps: 10, stressSlippageBps: 8, confidence: 1, openRisk: single.allowedLoss });
-  assert.equal(next.allowedLoss, 20);
+  assert.equal(next.allowedLoss, 18);
   assert.ok(single.portfolioRiskAfter <= 50 && next.portfolioRiskAfter <= 50);
 });
 
@@ -218,12 +220,20 @@ test("an economically untradeable target is rejected before it reaches the order
 
 test("trade economics require at least 1.2R after round-trip costs", () => {
   assert.equal(MIN_NET_REWARD_RISK, 1.2);
-  const weak = tradeEconomics({ entry: 100, target: 100.4, lossRate: 0.003, confidence: 0.8 });
+  const weak = tradeEconomics({ entry: 100, target: 100.4, lossRate: 0.003, confidence: 0.8, notional: 4_000, equity: 1_000 });
   assert.ok(weak.netRewardRisk < MIN_NET_REWARD_RISK);
   assert.equal(weak.executable, false);
-  const healthy = tradeEconomics({ entry: 100, target: 101, lossRate: 0.003, confidence: 0.8 });
+  const healthy = tradeEconomics({ entry: 100, target: 101, lossRate: 0.003, confidence: 0.8, notional: 4_000, equity: 1_000 });
   assert.ok(healthy.netRewardRisk > MIN_NET_REWARD_RISK);
+  assert.ok(healthy.netTargetProfit >= 15);
   assert.equal(healthy.executable, true);
+});
+
+test("a mathematically acceptable R multiple is still rejected when its net profit is immaterial", () => {
+  const result = tradeEconomics({ entry: 100, target: 100.6, lossRate: 0.003, confidence: 0.8, notional: 1_000, equity: 1_000 });
+  assert.ok(result.netRewardRisk >= MIN_NET_REWARD_RISK);
+  assert.ok(result.netTargetProfit < result.minimumNetTargetProfit);
+  assert.equal(result.executable, false);
 });
 
 test("range entries must still show absorption when the frozen trigger is reached", () => {
@@ -250,9 +260,9 @@ test("new executable plans remain valid for fifteen minutes", () => {
 test("jump trigger recalculates actual-fill notional and keeps aggregate risk at five percent", () => {
   const decision = decideThreeState({ symbol: "BTC_USDT", observedAt: 1, mid: 100, zones: [zone("LONG", 110, 2), zone("SHORT", 90)], bands: [band("LONG", 105, 2), band("LONG", 106, 2)], flow: flow({ ofi: 0.8 }), absorption: 0.1 })!;
   const plan: PaperPlan = { ...decision, id: "gap", state: "PREPARED", createdAt: 1, expiresAt: 9_999, plannedRisk: 15, notional: 1_000 };
-  const result = reconcilePaper({ now: 2, midpoint: decision.entryTrigger + 3, fresh: true, sequenceFault: false, decision, plan, position: null, zones: [zone("LONG", 110), zone("SHORT", 90)], absorption: 0.1, equity: 1_000, openRisk: 40 });
+  const result = reconcilePaper({ now: 2, midpoint: decision.entryTrigger + 3, fresh: true, sequenceFault: false, decision, plan, position: null, zones: [zone("LONG", 110), zone("SHORT", 90)], absorption: 0.1, equity: 1_000, openRisk: 20 });
   assert.equal(result.position?.status, "OPEN");
-  assert.ok(40 + (result.position?.plannedRisk ?? 99) <= 50);
+  assert.ok(20 + (result.position?.plannedRisk ?? 99) <= 50);
 });
 
 test("a jump beyond the target is cancelled on economics, never opened", () => {

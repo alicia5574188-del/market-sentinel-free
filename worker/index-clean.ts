@@ -6,6 +6,8 @@ import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchFutures
 import { closePaperPosition, PORTFOLIO_RISK_CAP, remainingStressRisk, SYSTEM_VERSION, updatePosition, type Decision, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type Side } from "../lib/liquidity-core.ts";
 import { analyzeSnapshot, ancillaryIsFresh, ancillarySchedule, applyFlow, deriveStructureZones, emptySymbolMemory, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
 import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem, type ReviewCandle } from "../lib/paper-outbox.ts";
+import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
+  PAPER_BANKRUPTCY_EQUITY, PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
 import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveSnapshot } from "../lib/gate-live.ts";
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
@@ -125,6 +127,8 @@ type RuntimeState = {
   analysisMs: number[];
   equity: number;
   outbox: PositionOutboxItem[];
+  paperCycle: PaperCycle;
+  bankruptcyOutbox: Array<{ report: BankruptcyReport; equity: number; equityVersion: number }>;
   live: LiveRuntime;
 };
 
@@ -152,7 +156,8 @@ function initialState(): RuntimeState {
     lastAlarmAt: null, lastSuccessAt: null, lastHeartbeatAt: null, lastStopCheckpointAt: null, nextAlarmAt: null, lastUniverseAt: 0, lastChartMirrorAt: 0,
     utcDay: day(), alarmCount: 0, d1Writes: 0, nonAlarmWrites: 0, d1RetryAt: 0, d1FailureCount: 0, equityVersion: 0, ancillaryCursor: 0, subrequestCount: 0, maxSubrequestsInAlarm: 0, sequenceRebuilds: 0, lastProcessedSlot: -1, feedFailures: {},
     lastError: null, d1MirrorError: null, riskBreach: false, tickSize: Object.fromEntries(DEFAULT_SYMBOLS.map((symbol) => [symbol, 0.0001])), contractMeta: {},
-    decisions: {}, plans: {}, positions: {}, evidence: {}, analysisMs: [], equity: 1_000, outbox: [], live: initialLiveState(),
+    decisions: {}, plans: {}, positions: {}, evidence: {}, analysisMs: [], equity: PAPER_INITIAL_EQUITY, outbox: [],
+    paperCycle: startPaperCycle(Date.now()), bankruptcyOutbox: [], live: initialLiveState(),
   };
 }
 
@@ -199,7 +204,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     ctx.blockConcurrencyWhile(async () => {
       const saved = await ctx.storage.get<Checkpoint>("checkpoint");
       if (saved?.authoritySchemaVersion === AUTHORITY_SCHEMA_VERSION) {
-        this.runtime = { ...initialState(), ...saved, version: SYSTEM_VERSION, symbols: [...DEFAULT_SYMBOLS], outbox: saved.outbox ?? [], live: saved.live ?? initialLiveState(), analysisMs: [], state: "WARMING" };
+        this.runtime = { ...initialState(), ...saved, version: SYSTEM_VERSION, symbols: [...DEFAULT_SYMBOLS], outbox: saved.outbox ?? [],
+          paperCycle: saved.paperCycle ?? startPaperCycle(Date.now(), saved.equity, 1), bankruptcyOutbox: saved.bankruptcyOutbox ?? [],
+          live: saved.live ?? initialLiveState(), analysisMs: [], state: "WARMING" };
         for (const symbol of new Set([...Object.keys(this.runtime.decisions), ...Object.keys(this.runtime.plans),
           ...Object.keys(this.runtime.positions), ...Object.keys(this.runtime.evidence), ...Object.keys(this.runtime.feedFailures),
           ...Object.keys(this.runtime.tickSize), ...Object.keys(this.runtime.contractMeta)])) {
@@ -228,7 +235,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private captureAuthority() {
     return structuredClone({ positions: this.runtime.positions, plans: this.runtime.plans, decisions: this.runtime.decisions,
       evidence: this.runtime.evidence, equity: this.runtime.equity, equityVersion: this.runtime.equityVersion,
-      outbox: this.runtime.outbox, lastStopCheckpointAt: this.runtime.lastStopCheckpointAt });
+      outbox: this.runtime.outbox, paperCycle: this.runtime.paperCycle, bankruptcyOutbox: this.runtime.bankruptcyOutbox,
+      lastStopCheckpointAt: this.runtime.lastStopCheckpointAt });
   }
 
   private restoreAuthority(authority: ReturnType<MarketStream["captureAuthority"]>) {
@@ -239,6 +247,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.equity = authority.equity;
     this.runtime.equityVersion = authority.equityVersion;
     this.runtime.outbox = authority.outbox;
+    this.runtime.paperCycle = authority.paperCycle;
+    this.runtime.bankruptcyOutbox = authority.bankruptcyOutbox;
     this.runtime.lastStopCheckpointAt = authority.lastStopCheckpointAt;
   }
 
@@ -376,7 +386,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private queueTransition(position: PaperPosition | null, priorPosition: PaperPosition | null) {
     const changed = position != null && !(priorPosition?.id === position.id && priorPosition.status === position.status && priorPosition.currentStop === position.currentStop);
     if (!changed) return;
-    if (priorPosition?.status === "OPEN" && position.status === "CLOSED") this.runtime.equity = Math.max(0.01, this.runtime.equity + (position.realizedPnl ?? 0));
+    if (priorPosition?.status === "OPEN" && position.status === "CLOSED") {
+      this.runtime.equity = Math.max(0.01, this.runtime.equity + (position.realizedPnl ?? 0));
+      this.runtime.paperCycle = recordCycleTrade(this.runtime.paperCycle, position, this.runtime.equity);
+    }
     this.runtime.equityVersion += 1;
     const priorReview = this.runtime.outbox.find((item) => item.position.id === position.id)?.entryCandles;
     const entryCandles = priorReview ?? (position.status === "OPEN" && priorPosition?.status !== "OPEN"
@@ -402,6 +415,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       (id,symbol,event_type,observed_at,payload_json) VALUES (?,?,?,?,?)`).bind(
       `review-entry:${position.id}`, position.symbol, "ORDER_ENTRY_CHART", position.entryAt, JSON.stringify({ candles: item.entryCandles }),
     ));
+    if (position.status === "CLOSED") statements.push(this.env.DB.prepare(`INSERT OR IGNORE INTO paper_events
+      (id,symbol,event_type,observed_at,payload_json) VALUES (?,?,?,?,?)`).bind(
+      `diagnostic:${position.id}`, position.symbol, "ORDER_CLOSE_DIAGNOSTIC", position.exitAt ?? position.entryAt,
+      JSON.stringify(diagnoseClosedPosition(position)),
+    ));
     const billedWrites = statements.length;
     if (this.runtime.d1Writes + billedWrites > 4_800) throw new Error("daily D1 write budget reached");
     await this.env.DB.batch(statements);
@@ -425,6 +443,29 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.runtime.d1FailureCount = 0;
       this.runtime.d1RetryAt = 0;
       this.runtime.d1MirrorError = null;
+    }
+    if (!this.runtime.outbox.length && this.runtime.bankruptcyOutbox.length) {
+      while (this.runtime.bankruptcyOutbox.length) {
+        const item = this.runtime.bankruptcyOutbox[0];
+        if (this.runtime.d1Writes + 2 > 4_800) break;
+        try {
+          await this.env.DB.batch([
+            this.env.DB.prepare(`INSERT OR IGNORE INTO paper_events
+              (id,symbol,event_type,observed_at,payload_json) VALUES (?,?,?,?,?)`).bind(
+              item.report.id, "ACCOUNT", "PAPER_BANKRUPTCY", item.report.endedAt, JSON.stringify(item.report),
+            ),
+            this.env.DB.prepare("UPDATE system_settings SET paper_equity=?,equity_version=?,updated_at=? WHERE id=1 AND equity_version<?")
+              .bind(item.equity, item.equityVersion, Date.now(), item.equityVersion),
+          ]);
+          this.runtime.d1Writes += 2;
+          this.runtime.bankruptcyOutbox.shift();
+        } catch {
+          this.runtime.d1FailureCount = Math.min(5, this.runtime.d1FailureCount + 1);
+          this.runtime.d1RetryAt = now + [2_000, 10_000, 30_000, 120_000, 300_000][this.runtime.d1FailureCount - 1];
+          this.runtime.d1MirrorError = `D1 bankruptcy log pending ${this.runtime.bankruptcyOutbox.length} record(s)`;
+          break;
+        }
+      }
     }
   }
 
@@ -1009,10 +1050,50 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       closedThisCycle.add(candidate.symbol);
       criticalChanged = true;
     }
+    const paperEquity = markToMarketEquity(this.runtime);
+    this.runtime.paperCycle.peakEquity = Math.max(this.runtime.paperCycle.peakEquity, paperEquity);
+    let bankruptcyPending = paperEquity <= PAPER_BANKRUPTCY_EQUITY;
+    let rolledOverThisCycle = false;
+    if (bankruptcyPending) {
+      for (const symbol of this.runtime.symbols) {
+        const plan = this.runtime.plans[symbol];
+        if (plan?.state === "PREPARED") {
+          this.runtime.plans[symbol] = { ...plan, state: "CANCELLED" };
+          criticalChanged = true;
+        }
+        const position = this.runtime.positions[symbol];
+        if (position?.status !== "OPEN") continue;
+        const evidence = this.runtime.evidence[symbol];
+        if (!evidence?.fresh || now - evidence.observedAt > 3_000 || evidence.midpoint <= 0) continue;
+        const closed = closePaperPosition(position, now, evidence.midpoint, "PAPER_CYCLE_BANKRUPTCY");
+        this.runtime.positions[symbol] = closed;
+        this.queueTransition(closed, position);
+        closedThisCycle.add(symbol);
+        criticalChanged = true;
+      }
+      const openPositionsRemain = Object.values(this.runtime.positions).some((position) => position?.status === "OPEN");
+      if (!openPositionsRemain) {
+        const report = buildBankruptcyReport(this.runtime.paperCycle, now, this.runtime.equity);
+        if (!this.runtime.bankruptcyOutbox.some((item) => item.report.id === report.id)) {
+          const nextVersion = this.runtime.equityVersion + 1;
+          this.runtime.bankruptcyOutbox.push({ report, equity: PAPER_INITIAL_EQUITY, equityVersion: nextVersion });
+          this.runtime.equityVersion = nextVersion;
+        }
+        const nextCycleNumber = this.runtime.paperCycle.number + 1;
+        this.runtime.equity = PAPER_INITIAL_EQUITY;
+        this.runtime.paperCycle = startPaperCycle(now, PAPER_INITIAL_EQUITY, nextCycleNumber);
+        this.runtime.positions = {};
+        this.runtime.plans = {};
+        this.runtime.decisions = {};
+        bankruptcyPending = false;
+        rolledOverThisCycle = true;
+        criticalChanged = true;
+      }
+    }
     this.runtime.riskBreach = openStressRisk(this.runtime) > markToMarketEquity(this.runtime) * 0.05 + 1e-9;
     // Exits update draft absolute equity before candidates are ranked; nothing is published yet.
     const rankedCandidates = analyzedRows
-      .filter(({ symbol, validation }) => validation.fresh && !validation.sequenceFault && !closedThisCycle.has(symbol) && this.runtime.positions[symbol]?.status !== "OPEN")
+      .filter(({ symbol, validation }) => !bankruptcyPending && !rolledOverThisCycle && validation.fresh && !validation.sequenceFault && !closedThisCycle.has(symbol) && this.runtime.positions[symbol]?.status !== "OPEN")
       .sort((a, b) => {
         const utility = (row: typeof a) => {
           const plan = this.runtime.plans[row.symbol];
@@ -1176,10 +1257,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     if (path === "/status" || path === "/owner-runtime") {
       await this.ensureAlarm();
-      const { outbox, live, ...publicRuntime } = this.runtime;
+      const { outbox, live, paperCycle, bankruptcyOutbox, ...publicRuntime } = this.runtime;
       const stale = !this.authorityReady || this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > 3_000;
       const effectiveState = !this.authorityReady ? "RECOVERY_REQUIRED" : stale ? "RECONNECTING" : this.runtime.state;
-      return json({ ...publicRuntime, ...this.authorityView, ...(path === "/owner-runtime" ? { live } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length,
+      return json({ ...publicRuntime, ...this.authorityView, paperCycle: paperCycleSummary(paperCycle, this.authorityView.equity), ...(path === "/owner-runtime" ? { live } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length + bankruptcyOutbox.length,
         oldestOutboxAgeMs: outbox.length ? Math.max(0, Date.now() - (outbox[0].position.exitAt ?? outbox[0].position.entryAt)) : 0,
         authorityReady: this.authorityReady, generatedAt: Date.now(), state: effectiveState, stale,
         analysisP99Ms: percentile99(this.runtime.analysisMs), limits: { loopMs: LOOP_MS, markets: 3, warmupSnapshots: WARMUP_SNAPSHOTS,
@@ -1227,6 +1308,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 const isAsset = (pathname: string) => pathname.startsWith("/_next/") || pathname.startsWith("/assets/") || /\.[a-z0-9]{2,8}$/i.test(pathname);
 let runtimeCache: { response: string; expiresAt: number } | null = null;
 let historyCache: { response: string; expiresAt: number } | null = null;
+let accountLogCache: { response: string; expiresAt: number } | null = null;
 const candleCache = new Map<string, { response: string; expiresAt: number }>();
 const orderChartCache = new Map<string, { response: string; expiresAt: number }>();
 const failedLogins = new Map<string, { count: number; resetAt: number }>();
@@ -1254,6 +1336,22 @@ async function paperHistory(env: CloudflareEnv) {
     LIMIT 60`).all();
   const body = JSON.stringify({ items: result.results ?? [], generatedAt: Date.now() });
   historyCache = { response: body, expiresAt: Date.now() + 10_000 };
+  return new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=30" } });
+}
+
+async function accountLogs(env: CloudflareEnv) {
+  if (accountLogCache && accountLogCache.expiresAt > Date.now()) {
+    return new Response(accountLogCache.response, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=30" } });
+  }
+  const result = await env.DB.prepare(`SELECT id,observed_at AS observedAt,payload_json AS payload
+    FROM paper_events WHERE event_type='PAPER_BANKRUPTCY'
+    ORDER BY observed_at DESC LIMIT 30`).all<{ id: string; observedAt: number; payload: string }>();
+  const items = (result.results ?? []).flatMap((row) => {
+    try { return [{ id: row.id, observedAt: row.observedAt, report: JSON.parse(row.payload) as BankruptcyReport }]; }
+    catch { return []; }
+  });
+  const body = JSON.stringify({ items, generatedAt: Date.now() });
+  accountLogCache = { response: body, expiresAt: Date.now() + 30_000 };
   return new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=30" } });
 }
 
@@ -1407,6 +1505,7 @@ const worker = {
     }
     if (url.pathname === "/api/runtime" && request.method === "GET") return runtimeStatus(env, true, await ownerAuthenticated(request, env));
     if (url.pathname === "/api/history" && request.method === "GET") return paperHistory(env);
+    if (url.pathname === "/api/account-logs" && request.method === "GET") return accountLogs(env);
     if (url.pathname === "/api/candles" && request.method === "GET") return chartCandles(url, env);
     if (url.pathname === "/api/order-chart" && request.method === "GET") return orderReviewChart(url, env);
     if (url.pathname === "/api/auth/session" && request.method === "GET") return authSession(request, env);

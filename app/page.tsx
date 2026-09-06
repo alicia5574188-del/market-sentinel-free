@@ -12,20 +12,34 @@ type Position = { side: Side; scenario: MarketState; status: "OPEN" | "CLOSED"; 
 type LiveEntry = { planId: string; symbol: string; side: Side; scenario: MarketState; kind: "PRICE_TRIGGER" | "LIMIT"; status: string; trigger: number; invalidation: number; target: number; plannedRisk: number; notional: number; leverage: number; margin: number; lastError: string | null };
 type LivePosition = Position & { id: string; symbol: string; exchangeSize: number; leverage: number; margin: number; stopPrice: number | null; exitRequestedAt: number | null };
 type LiveRuntime = { requestedEnabled: boolean; operational: boolean; changedAt: number | null; lastSyncAt: number | null; lastError: string | null; equity: number | null; available: number | null; credentialConfigured: boolean; entries: Record<string, LiveEntry | null>; positions: Record<string, LivePosition | null> };
+type PaperCycleSummary = { number: number; startedAt: number; startingEquity: number; currentEquity: number; bankruptcyLine: number; peakEquity: number; trades: number; drawdownRate: number };
 type Runtime = {
   version: string; mode: "PAPER"; state: string; stale: boolean; generatedAt: number; lastSuccessAt: number | null; lastError: string | null; symbols: string[]; equity: number;
   decisions: Record<string, Decision | null>; plans: Record<string, Plan | null>; positions: Record<string, Position | null>; authorityReady: boolean;
   evidence: Record<string, { midpoint: number; observedAt: number; warmup: number; fresh: boolean; ancillaryFresh: boolean; topLong: Zone | null; topShort: Zone | null; absorption: number }>;
   limits: { maxOpenPositions: number };
   liveMode: { requestedEnabled: boolean; operational: boolean };
+  paperCycle: PaperCycleSummary;
   live?: LiveRuntime;
 };
 type AuthSession = { configured: boolean; authenticated: boolean; username: string };
 type CredentialStatus = { configured: boolean; environment: string | null; keyHint: string | null; gateUserId: string | null; status: string; lastVerifiedAt: number | null; lastError: string | null; updatedAt: number | null };
 type CredentialVerification = { equity: number; available: number; positions: number; orders: number; conditionalOrders: number; checkedAt: number };
 type HistoryItem = { id: string; symbol: string; marketState: MarketState; side: Side; status: "OPEN" | "CLOSED"; entryAt: number; entryPrice: number; initialStop: number; currentStop: number; currentTarget: number; plannedRisk: number; notional: number; exitAt: number | null; exitPrice: number | null; exitReason: string | null; realizedPnl: number | null; feesAndSlippage: number | null };
+type BreakdownRow = { trades: number; wins: number; netPnl: number };
+type BankruptcyReport = { id: string; cycleNumber: number; startedAt: number; endedAt: number; startingEquity: number; endingEquity: number; bankruptcyLine: number; loss: number; maxDrawdownRate: number;
+  performance: { trades: number; wins: number; losses: number; breakeven: number; grossPnl: number; costs: number; netPnl: number; profitFactor: number | null; expectancy: number };
+  direction: { correctAtExit: number; correctAtExitRate: number; feeCoveringMoves: number; feeCoveringMoveRate: number };
+  entries: { averagePlannedNetRewardRisk: number; belowMinimumCount: number };
+  stops: { reached: number; structuralStopExits: number; averageMaximumAdverseVsStop: number; stoppedAfterFavorableMove: number };
+  targets: { reached: number; reachedRate: number; averageProgress: number };
+  exits: { averageHoldingSeconds: number; underOneMinute: number; reasons: Record<string, number> };
+  breakdown: { symbols: Record<string, BreakdownRow>; scenarios: Record<string, BreakdownRow>; sides: Record<string, BreakdownRow> };
+  rootCauses: string[]; trades: unknown[] };
+type AccountLogItem = { id: string; observedAt: number; report: BankruptcyReport };
 type Tab = "brain" | "orders" | "live" | "history" | "settings";
 type LiveView = "account" | "orders" | "api";
+type HistoryView = "trades" | "account_logs";
 type Timeframe = "1m" | "15m" | "1h";
 type Candle = { time: number; volume: number; close: number; high: number; low: number; open: number };
 
@@ -64,6 +78,8 @@ function waitReason(runtime: Runtime | null, marketReady: boolean, symbol: strin
 export default function Home() {
   const [runtime, setRuntime] = useState<Runtime | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [accountLogs, setAccountLogs] = useState<AccountLogItem[]>([]);
+  const [historyView, setHistoryView] = useState<HistoryView>("trades");
   const [receivedAt, setReceivedAt] = useState(0);
   const [clock, setClock] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -101,8 +117,12 @@ export default function Home() {
     };
     const readHistory = async () => {
       try {
-        const response = await fetch("/api/history", { cache: "no-store" });
-        if (response.ok && active) setHistory(((await response.json()) as { items: HistoryItem[] }).items ?? []);
+        const [tradesResponse, logsResponse] = await Promise.all([
+          fetch("/api/history", { cache: "no-store" }),
+          fetch("/api/account-logs", { cache: "no-store" }),
+        ]);
+        if (tradesResponse.ok && active) setHistory(((await tradesResponse.json()) as { items: HistoryItem[] }).items ?? []);
+        if (logsResponse.ok && active) setAccountLogs(((await logsResponse.json()) as { items: AccountLogItem[] }).items ?? []);
       } catch { /* History is optional; the live runtime remains authoritative. */ }
     };
     const visibility = () => { if (!document.hidden) void read(); else controller?.abort(); };
@@ -156,6 +176,7 @@ export default function Home() {
   const floatingPnl = openPositions.reduce((sum, row) => { const mark = runtime?.evidence[row.symbol]?.midpoint ?? row.position.entryPrice; return sum + row.position.notional * (mark - row.position.entryPrice) / Math.max(row.position.entryPrice, 1e-9) * (row.position.side === "LONG" ? 1 : -1); }, 0);
   const riskUsed = openPositions.reduce((sum, row) => sum + row.position.plannedRisk, 0);
   const riskLimit = (runtime?.equity ?? INITIAL_EQUITY) * .05;
+  const cycleStart = runtime?.paperCycle?.startingEquity ?? INITIAL_EQUITY;
   const primary = openPositions[0] ? { symbol: openPositions[0].symbol, side: openPositions[0].position.side, state: openPositions[0].position.scenario, kind: "position" }
     : preparedPlans[0] ? { symbol: preparedPlans[0].symbol, side: preparedPlans[0].plan.side, state: preparedPlans[0].plan.marketState, kind: "plan" }
       : bestDecision ? { symbol: bestDecision.symbol, side: bestDecision.decision.side, state: bestDecision.decision.marketState, kind: "decision" } : null;
@@ -173,8 +194,8 @@ export default function Home() {
       <section className="brain-hero"><div><p className="eyebrow">系统现在的决定</p><h1>{headline}</h1><p className="hero-detail">{headlineDetail}</p></div><div className="decision-badge"><small>当前市场状态</small><strong>{primary ? stateText[primary.state] : "等待"}</strong><span>{primary ? sideText(primary.side) : "没有勉强开仓"}</span></div></section>
 
       <section className="summary four">
-        <article><small>模拟账户权益</small><strong>{runtime ? `${num(runtime.equity, 2)} U` : "—"}</strong><p>初始资金 {num(INITIAL_EQUITY, 0)} U</p></article>
-        <article><small>累计模拟盈亏</small><strong className={(runtime?.equity ?? INITIAL_EQUITY) >= INITIAL_EQUITY ? "positive" : "negative"}>{runtime ? `${signed(runtime.equity - INITIAL_EQUITY)} U` : "—"}</strong><p>{runtime ? `${signed((runtime.equity / INITIAL_EQUITY - 1) * 100)}%` : "等待数据"}</p></article>
+        <article><small>模拟账户权益</small><strong>{runtime ? `${num(runtime.equity, 2)} U` : "—"}</strong><p>第 {runtime?.paperCycle?.number ?? 1} 轮 · 起始 {num(cycleStart, 0)} U</p></article>
+        <article><small>本轮模拟盈亏</small><strong className={(runtime?.equity ?? cycleStart) >= cycleStart ? "positive" : "negative"}>{runtime ? `${signed(runtime.equity - cycleStart)} U` : "—"}</strong><p>{runtime ? `${signed((runtime.equity / Math.max(cycleStart, 1) - 1) * 100)}%` : "等待数据"}</p></article>
         <article><small>当前持仓浮盈亏</small><strong className={floatingPnl >= 0 ? "positive" : "negative"}>{runtime ? `${signed(floatingPnl)} U` : "—"}</strong><p>{openPositions.length} 笔模拟持仓</p></article>
         <article><small>组合风险预算</small><strong>{num(riskUsed, 2)} / {num(riskLimit, 2)} U</strong><div className="risk-bar"><i style={{ width: `${Math.min(100, riskLimit ? riskUsed / riskLimit * 100 : 0)}%` }} /></div><p>剩余 {num(Math.max(0, riskLimit - riskUsed), 2)} U</p></article>
       </section>
@@ -208,8 +229,11 @@ export default function Home() {
 
     <div hidden={tab !== "live"}><LiveCenter auth={auth} runtime={runtime} live={live} liveEnabled={liveEnabled} liveBusy={liveBusy} liveActionError={liveActionError} positions={openLivePositions} entries={openLiveEntries} onLogin={() => setShowLogin(true)} onToggle={liveControl} onCleanup={() => void setLiveMode(false)} /></div>
 
-    <section className="history-panel" hidden={tab !== "history"}><div className="section-heading"><div><h2>最近模拟交易</h2><p>只展示真实产生过的记录，不填充示例数据。</p></div><span>{history.filter((item) => item.status === "CLOSED").length} 笔已结束</span></div>
-      {!history.length ? <div className="empty"><b>还没有历史交易</b><p>产生第一笔模拟交易后会自动出现在这里。</p></div> : <div className="history-table">{history.map((item) => <HistoryOrder key={item.id} item={item} />)}</div>}
+    <section className="history-panel" hidden={tab !== "history"}>
+      <div className="history-subnav">{([['trades', '交易记录'], ['account_logs', `账户日志 ${accountLogs.length || ''}`]] as const).map(([key, label]) => <button type="button" key={key} className={historyView === key ? "active" : ""} onClick={() => setHistoryView(key)}>{label}</button>)}</div>
+      {historyView === "trades" && <><div className="section-heading"><div><h2>最近模拟交易</h2><p>只展示真实产生过的记录，不填充示例数据。</p></div><span>{history.filter((item) => item.status === "CLOSED").length} 笔已结束</span></div>
+        {!history.length ? <div className="empty"><b>还没有历史交易</b><p>产生第一笔模拟交易后会自动出现在这里。</p></div> : <div className="history-table">{history.map((item) => <HistoryOrder key={item.id} item={item} />)}</div>}</>}
+      {historyView === "account_logs" && <AccountLogs cycle={runtime?.paperCycle ?? null} items={accountLogs} />}
     </section>
 
     <section className="settings-panel" hidden={tab !== "settings"}><button className="setting-row" type="button" onClick={() => auth.authenticated ? void fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(() => { setAuth({ ...auth, authenticated: false }); setRuntime(runtime ? { ...runtime, live: undefined } : runtime); }) : setShowLogin(true)}><div><b>所有者账户</b><p>{auth.authenticated ? "已通过安全会话验证；退出登录不会改变实盘开关。" : "登录后才可以查看真实账户并操作实盘开关。"}</p></div><span className={`setting-value ${auth.authenticated ? "online" : "locked"}`}>{auth.authenticated ? "owner · 退出 ›" : "登录 ›"}</span></button><button className="setting-row" type="button" disabled={liveBusy} onClick={liveControl}><div><b>实盘交易开关</b><p>{liveEnabled ? "关闭后撤销未成交入场挂单；已有仓位继续保护并按策略退出。" : "开启后，实盘完全复用当前 BTC/ETH/SOL 策略和 5% 总风险限制。"}</p></div><span className={`setting-value ${liveEnabled && live?.operational ? "online" : "locked"}`}>{liveBusy ? "处理中…" : !auth.authenticated ? "需登录 ›" : liveEnabled ? live?.operational ? "已开启 ›" : "已开启·待恢复 ›" : "已关闭 ›"}</span></button>{auth.authenticated && <><Setting title="Gate 实盘账户" detail={`可用 ${num(live?.available, 2)} U · ${openLivePositions.length} 个真实持仓`} value={live?.equity != null ? `${num(live.equity, 2)} U` : "连接中"} tone={live?.credentialConfigured ? "online" : "locked"}/><Setting title="实盘执行状态" detail={friendlyLiveError(live?.lastError) || "突破预挂触发单；反转/震荡预挂限价单。"} value={live?.operational ? "可开仓" : liveEnabled ? "暂停新单" : "已关闭"} tone={live?.operational ? "online" : "locked"}/></>}<Setting title="最大组合风险" detail="模拟与实盘均包含手续费和压力滑点，结构止损只允许收紧。" value="5%"/><Setting title="持仓时间与止盈" detail="不固定时间，不固定止盈；目标变化时动态退出。" value="动态"/><Setting title="系统状态" detail="页面关闭后后台仍然持续运行。" value={healthy ? "正常" : "恢复中"} tone={healthy ? "online" : "locked"}/><p className="last-update">最近后台成功：{time(runtime?.lastSuccessAt)}{live?.lastSyncAt ? ` · 实盘核对：${time(live.lastSyncAt)}` : ""}</p></section>
@@ -349,6 +373,31 @@ function HistoryOrder({ item }: { item: HistoryItem }) {
   return <article className="history-order"><div><span className={`side ${item.side.toLowerCase()}`}>{item.side === "LONG" ? "多" : "空"}</span><div><b>{item.symbol.replace("_", "/")}</b><small>{time(item.entryAt)} · {stateText[item.marketState]}</small></div></div><div><small>进场 / 出场</small><b>{num(item.entryPrice, 5)} / {num(item.exitPrice, 5)}</b></div><div><small>净结果</small><b className={(item.realizedPnl ?? 0) >= 0 ? "positive" : "negative"}>{item.status === "OPEN" ? "持仓中" : `${signed(item.realizedPnl ?? 0)} U`}</b></div><div><small>持仓 / 结束原因</small><b>{durationText(item.entryAt, item.exitAt)} · {item.status === "OPEN" ? "尚未结束" : exitText[item.exitReason ?? ""] ?? item.exitReason ?? "已结束"}</b></div>
     <details className="history-review" onToggle={(event) => setOpen(event.currentTarget.open)}><summary>查看 1 分钟进出场 K 线</summary>{open && <OrderReviewChart item={item} gross={gross} cost={cost} />}</details>
   </article>;
+}
+
+function AccountLogs({ cycle, items }: { cycle: PaperCycleSummary | null; items: AccountLogItem[] }) {
+  const [copied, setCopied] = useState<string | null>(null);
+  const copyReport = (item: AccountLogItem) => {
+    void navigator.clipboard.writeText(JSON.stringify(item.report, null, 2)).then(() => {
+      setCopied(item.id);
+      window.setTimeout(() => setCopied((current) => current === item.id ? null : current), 2_000);
+    }).catch(() => setCopied(null));
+  };
+  return <div className="account-log-list">
+    <section className="cycle-card"><div><small>当前模拟账户周期</small><h2>第 {cycle?.number ?? 1} 轮运行中</h2><p>权益达到 300 U 时，系统会归档完整破产分析，并自动开启新的 1,000 U 模拟周期。</p></div><div className="cycle-metrics"><span>本轮起始<b>{num(cycle?.startingEquity, 2)} U</b></span><span>当前权益<b>{num(cycle?.currentEquity, 2)} U</b></span><span>破产线<b>300 U</b></span><span>已结束交易<b>{cycle?.trades ?? 0} 笔</b></span></div>{cycle && <div className="cycle-progress"><i style={{ width: `${Math.max(0, Math.min(100, (cycle.currentEquity - cycle.bankruptcyLine) / Math.max(cycle.startingEquity - cycle.bankruptcyLine, 1) * 100))}%` }} /></div>}</section>
+    {!items.length ? <div className="empty"><b>还没有破产记录</b><p>当前周期结束后，这里会永久保留详细诊断，不会覆盖交易历史。</p></div> : items.map((item) => {
+      const report = item.report;
+      return <article className="bankruptcy-card" key={item.id}><div className="bankruptcy-head"><div><small>模拟账户破产记录</small><h2>第 {report.cycleNumber} 轮 · 已归档</h2><p>{time(report.startedAt)} 至 {time(report.endedAt)}</p></div><button type="button" onClick={() => copyReport(item)}>{copied === item.id ? "已复制" : "复制完整诊断"}</button></div>
+        <div className="bankruptcy-metrics"><span>起始 / 结束<b>{num(report.startingEquity, 2)} / {num(report.endingEquity, 2)} U</b></span><span>本轮净结果<b className="negative">-{num(report.loss, 2)} U</b></span><span>最大回撤<b>{num(report.maxDrawdownRate * 100, 1)}%</b></span><span>交易 / 胜率<b>{report.performance.trades} 笔 / {num(report.performance.wins / Math.max(report.performance.trades, 1) * 100, 1)}%</b></span><span>方向正确率<b>{num(report.direction.correctAtExitRate * 100, 1)}%</b></span><span>覆盖成本波动<b>{num(report.direction.feeCoveringMoveRate * 100, 1)}%</b></span><span>目标到达率<b>{num(report.targets.reachedRate * 100, 1)}%</b></span><span>平均持仓<b>{durationText(0, report.exits.averageHoldingSeconds * 1_000)}</b></span><span>毛结果 / 成本<b>{signed(report.performance.grossPnl)} / {num(report.performance.costs, 2)} U</b></span><span>平均计划净盈亏比<b>{num(report.entries.averagePlannedNetRewardRisk, 2)} : 1</b></span><span>止损触发<b>{report.stops.reached} 笔</b></span><span>一分钟内结束<b>{report.exits.underOneMinute} 笔</b></span></div>
+        <section className="root-causes"><h3>系统归纳的主要破产原因</h3><ol>{report.rootCauses.map((cause) => <li key={cause}>{cause}</li>)}</ol></section>
+        <details className="bankruptcy-details"><summary>查看分类结果和指标定义</summary><p>“方向正确”表示扣除成本前，出场价格仍在计划方向；“覆盖成本波动”表示持仓期间最大顺向波动达到模型往返成本 0.18%。完整 JSON 还包含每一笔订单的最大顺向/逆向波动、止损使用比例和目标进度。</p><Breakdown title="按币种" rows={report.breakdown.symbols} /><Breakdown title="按三态" rows={report.breakdown.scenarios} /><Breakdown title="按方向" rows={report.breakdown.sides} /></details>
+      </article>;
+    })}
+  </div>;
+}
+
+function Breakdown({ title, rows }: { title: string; rows: Record<string, BreakdownRow> }) {
+  return <div className="breakdown"><b>{title}</b>{Object.entries(rows).map(([name, row]) => <span key={name}>{stateText[name] ?? (name === "LONG" ? "做多" : name === "SHORT" ? "做空" : name.replace("_", "/"))}<small>{row.trades} 笔 · {row.wins} 胜 · <i className={row.netPnl >= 0 ? "positive" : "negative"}>{signed(row.netPnl)} U</i></small></span>)}</div>;
 }
 
 function OrderReviewChart({ item, gross, cost }: { item: HistoryItem; gross: number; cost: number }) {

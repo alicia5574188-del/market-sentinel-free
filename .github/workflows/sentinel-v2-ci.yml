@@ -1025,6 +1025,9 @@ jobs:
           curl -fsS --max-time 15 "$WORKER_BASE_URL/api/history" \
             > "$RUNNER_TEMP/main-history.json"
           jq -e '.items | type == "array"' "$RUNNER_TEMP/main-history.json" >/dev/null
+          curl -fsS --max-time 15 "$WORKER_BASE_URL/api/account-logs" \
+            > "$RUNNER_TEMP/main-account-logs.json"
+          jq -e '.items | type == "array"' "$RUNNER_TEMP/main-account-logs.json" >/dev/null
           curl -fsS --max-time 15 "$WORKER_BASE_URL/api/auth/session" \
             > "$RUNNER_TEMP/main-auth-session.json"
           jq -e '.configured == true and .authenticated == false and .username == "owner"' \
@@ -1112,6 +1115,9 @@ jobs:
           curl -fsS --max-time 15 "$WORKER_BASE_URL/api/history" \
             > "$RUNNER_TEMP/monitor-history.json"
           jq -e '.items | type == "array"' "$RUNNER_TEMP/monitor-history.json" >/dev/null
+          curl -fsS --max-time 15 "$WORKER_BASE_URL/api/account-logs" \
+            > "$RUNNER_TEMP/monitor-account-logs.json"
+          jq -e '.items | type == "array"' "$RUNNER_TEMP/monitor-account-logs.json" >/dev/null
           credential_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/monitor-credential-unauthorized.json" -w '%{http_code}' \
             "$WORKER_BASE_URL/api/live/credentials" || true)"
           [[ "$credential_code" == "401" ]]

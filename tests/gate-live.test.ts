@@ -16,6 +16,8 @@ test("breakout becomes exchange price-trigger market order within 5% risk", () =
   const intent = buildLiveEntryIntent({ plan: plan("BREAKOUT", "LONG"), equity: 1_000, available: 1_000, openRisk: 0, quantoMultiplier: 0.001, leverageMax: 50 });
   assert.equal(intent.kind, "PRICE_TRIGGER");
   assert.ok(intent.plannedRisk > 0 && intent.plannedRisk <= 50);
+  assert.ok(intent.notional <= 4_000);
+  assert.ok(intent.notional * 0.0018 <= 7.2);
   assert.ok(intent.margin <= 200.01);
   assert.deepEqual((intent.body.trigger as { strategy_type: number; price_type: number; rule: number }).strategy_type, 0);
   assert.equal((intent.body.trigger as { price_type: number }).price_type, 0);
