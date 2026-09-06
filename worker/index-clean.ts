@@ -9,7 +9,7 @@ import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
   PAPER_BANKRUPTCY_EQUITY, PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
-import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveSnapshot } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
 import { credentialMetadata } from "../lib/gate-readonly.ts";
 import { clearOwnerSessionCookie, createOwnerSession, ownerAuthConfigured, ownerPasswordMatches, ownerSessionCookie, sameOriginMutation, verifyOwnerSession } from "../lib/owner-auth.ts";
@@ -82,11 +82,12 @@ type LiveRuntime = {
   credentialConfigured: boolean;
   entries: Record<string, LiveEntry | null>;
   positions: Record<string, LivePosition | null>;
+  entrySkips: Record<string, { planId: string; symbol: string; code: LiveEntrySizingCode; reason: string; observedAt: number } | null>;
 };
 
 function initialLiveState(): LiveRuntime {
   return { requestedEnabled: false, operational: false, changedAt: null, lastSyncAt: null, lastError: null,
-    equity: null, available: null, credentialConfigured: false, entries: {}, positions: {} };
+    equity: null, available: null, credentialConfigured: false, entries: {}, positions: {}, entrySkips: {} };
 }
 
 type RuntimeState = {
@@ -206,7 +207,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if (saved?.authoritySchemaVersion === AUTHORITY_SCHEMA_VERSION) {
         this.runtime = { ...initialState(), ...saved, version: SYSTEM_VERSION, symbols: [...DEFAULT_SYMBOLS], outbox: saved.outbox ?? [],
           paperCycle: saved.paperCycle ?? startPaperCycle(Date.now(), saved.equity, 1), bankruptcyOutbox: saved.bankruptcyOutbox ?? [],
-          live: saved.live ?? initialLiveState(), analysisMs: [], state: "WARMING" };
+          live: { ...initialLiveState(), ...(saved.live ?? {}), entries: saved.live?.entries ?? {},
+            positions: saved.live?.positions ?? {}, entrySkips: saved.live?.entrySkips ?? {} }, analysisMs: [], state: "WARMING" };
         for (const symbol of new Set([...Object.keys(this.runtime.decisions), ...Object.keys(this.runtime.plans),
           ...Object.keys(this.runtime.positions), ...Object.keys(this.runtime.evidence), ...Object.keys(this.runtime.feedFailures),
           ...Object.keys(this.runtime.tickSize), ...Object.keys(this.runtime.contractMeta)])) {
@@ -847,6 +849,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (!this.runtime.live.requestedEnabled) {
       this.runtime.live.operational = false;
       this.runtime.live.lastError = null;
+      this.runtime.live.entrySkips = {};
       return;
     }
     if (unknownOrders.length) throw new Error("Gate 存在未纳管挂单；已停止新开仓");
@@ -856,17 +859,35 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     let availableForNewEntries = available;
     let riskForNewEntries = this.liveOpenRisk();
     const staged: Array<{ symbol: string; plan: PaperPlan; intent: ReturnType<typeof buildLiveEntryIntent> }> = [];
+    for (const [symbol, skip] of Object.entries(this.runtime.live.entrySkips)) {
+      const plan = this.runtime.plans[symbol] ?? null;
+      if (!skip || !plan || plan.id !== skip.planId || plan.state !== "PREPARED" || now >= plan.expiresAt) delete this.runtime.live.entrySkips[symbol];
+    }
     for (const symbol of this.runtime.symbols) {
       const plan = this.runtime.plans[symbol] ?? null;
-      if (!plan || plan.state !== "PREPARED" || now >= plan.expiresAt || this.runtime.live.positions[symbol]?.status === "OPEN") continue;
+      if (!plan || plan.state !== "PREPARED" || now >= plan.expiresAt || this.runtime.live.positions[symbol]?.status === "OPEN") {
+        delete this.runtime.live.entrySkips[symbol];
+        continue;
+      }
       const prior = this.runtime.live.entries[symbol];
       // A timed-out submission remains reserved until Gate proves it absent for
       // six seconds. Never replay the same plan while its status is ambiguous.
-      if (prior && prior.planId === plan.id && prior.status !== "CANCELLED") continue;
+      if (prior && prior.planId === plan.id && prior.status !== "CANCELLED") {
+        delete this.runtime.live.entrySkips[symbol];
+        continue;
+      }
       if (prior && !["FILLED", "CANCELLED"].includes(prior.status)) await this.cancelLiveEntry(client, prior);
-      const intent = buildLiveEntryIntent({ plan, equity, available: availableForNewEntries, openRisk: riskForNewEntries,
-        quantoMultiplier: this.runtime.contractMeta[symbol]?.quantoMultiplier ?? 1,
-        leverageMax: this.runtime.contractMeta[symbol]?.leverageMax ?? 50 });
+      let intent: ReturnType<typeof buildLiveEntryIntent>;
+      try {
+        intent = buildLiveEntryIntent({ plan, equity, available: availableForNewEntries, openRisk: riskForNewEntries,
+          quantoMultiplier: this.runtime.contractMeta[symbol]?.quantoMultiplier ?? 1,
+          leverageMax: this.runtime.contractMeta[symbol]?.leverageMax ?? 50 });
+      } catch (error) {
+        if (!(error instanceof LiveEntrySizingError)) throw error;
+        this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: error.code, reason: error.message, observedAt: now };
+        continue;
+      }
+      delete this.runtime.live.entrySkips[symbol];
       availableForNewEntries = Math.max(0, availableForNewEntries - intent.margin);
       riskForNewEntries += intent.plannedRisk;
       staged.push({ symbol, plan, intent });

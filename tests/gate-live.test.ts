@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, liveEntryDisposition, liveOrderId } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, LiveEntrySizingError, liveEntryDisposition, liveOrderId } from "../lib/gate-live.ts";
 import type { PaperPlan } from "../lib/liquidity-core.ts";
 
 function plan(marketState: PaperPlan["marketState"], side: PaperPlan["side"]): PaperPlan {
@@ -26,6 +26,28 @@ test("breakout becomes exchange price-trigger market order within 5% risk", () =
   assert.equal((intent.body.initial as { price: string; tif: string; reduce_only: boolean }).price, "0");
   assert.equal((intent.body.initial as { tif: string }).tif, "ioc");
   assert.equal((intent.body.initial as { reduce_only: boolean }).reduce_only, false);
+});
+
+test("a 10 U LIVE account uses Gate's one-contract lot when its actual stop risk still fits 5%", () => {
+  const scaled = { ...plan("BREAKOUT", "LONG"), invalidation: 99.8 };
+  const intent = buildLiveEntryIntent({ plan: scaled, equity: 10, available: 5.88, openRisk: 0, quantoMultiplier: 1, leverageMax: 50 });
+  assert.equal(intent.contracts, 1);
+  assert.equal(intent.notional, 100);
+  assert.equal(intent.leverage, 50);
+  assert.ok(intent.margin <= 5.88);
+  assert.ok(intent.plannedRisk <= 0.5);
+});
+
+test("an indivisible Gate lot is rejected only when its real 5% risk or margin cannot fit", () => {
+  assert.throws(
+    () => buildLiveEntryIntent({ plan: plan("BREAKOUT", "LONG"), equity: 10, available: 5.88, openRisk: 0, quantoMultiplier: 1, leverageMax: 50 }),
+    (error) => error instanceof LiveEntrySizingError && error.code === "RISK_CAP",
+  );
+  const scaled = { ...plan("BREAKOUT", "LONG"), invalidation: 99.8 };
+  assert.throws(
+    () => buildLiveEntryIntent({ plan: scaled, equity: 10, available: 0.01, openRisk: 0, quantoMultiplier: 1, leverageMax: 50 }),
+    (error) => error instanceof LiveEntrySizingError && error.code === "MARGIN",
+  );
 });
 
 test("reversal and range become passive limit entries, not early-filling short limits", () => {

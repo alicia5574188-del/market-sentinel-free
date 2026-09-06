@@ -587,17 +587,17 @@ test("status exposes bounded mirror telemetry, never the complete outage outbox"
   const owner = await (await stream.fetch(new Request("https://market-stream/owner-runtime"))).json() as Record<string, unknown>;
   assert.deepEqual(owner.live, {
     requestedEnabled: false, operational: false, changedAt: null, lastSyncAt: null, lastError: null,
-    equity: null, available: null, credentialConfigured: false, entries: {}, positions: {},
+    equity: null, available: null, credentialConfigured: false, entries: {}, positions: {}, entrySkips: {},
   });
 });
 
-test("an enable that cannot fund every staged plan creates zero Gate orders and forces cleanup", async () => {
+test("a capacity-limited plan is skipped without blocking LIVE or other affordable plans", async () => {
   const { stream } = await makeStream();
   const symbols = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];
   stream.runtime.symbols = symbols;
   stream.runtime.plans = Object.fromEntries(symbols.map((symbol) => [symbol, plan(symbol)]));
   stream.runtime.contractMeta = Object.fromEntries(symbols.map((symbol) => [symbol, {
-    quantoMultiplier: 1, maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0,
+    quantoMultiplier: 0.001, maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0,
   }]));
   let createCalls = 0;
   let snapshotCalls = 0;
@@ -605,7 +605,7 @@ test("an enable that cannot fund every staged plan creates zero Gate orders and 
     requestCount: 0,
     snapshot: async () => {
       snapshotCalls += 1;
-      return { account: { total: "1000", available: "50", in_dual_mode: false }, positions: [], orders: [], priceOrders: [], checkedAt: Date.now() };
+      return { account: { total: "1000", available: "100", in_dual_mode: false }, positions: [], orders: [], priceOrders: [], checkedAt: Date.now() };
     },
     createEntry: async () => { createCalls += 1; return "should-not-exist"; },
     setLeverage: async () => undefined,
@@ -613,10 +613,13 @@ test("an enable that cannot fund every staged plan creates zero Gate orders and 
 
   const result = await stream.setLiveMode(true);
 
-  assert.equal(result.ok, false);
-  assert.equal(stream.runtime.live.requestedEnabled, false);
-  assert.equal(createCalls, 0, "all three plans must pass funding before the first Gate mutation");
-  assert.ok(snapshotCalls >= 2, "failed enable must immediately perform an OFF cleanup reconciliation");
+  assert.equal(result.ok, true);
+  assert.equal(stream.runtime.live.requestedEnabled, true);
+  assert.equal(stream.runtime.live.operational, true);
+  assert.equal(createCalls, 1, "the affordable plan must not be blocked by later capacity-limited plans");
+  assert.equal(snapshotCalls, 1);
+  assert.equal(Object.values(stream.runtime.live.entrySkips).filter(Boolean).length, 2);
+  assert.match(stream.runtime.live.entrySkips.ETH_USDT.reason, /本轮未挂单/);
 });
 
 test("forced OFF reconciliation cancels only orphaned Market Sentinel entry tags", async () => {

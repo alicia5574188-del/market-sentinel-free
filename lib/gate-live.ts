@@ -66,6 +66,20 @@ export type LiveStopIntent = {
   body: Record<string, unknown>;
 };
 
+export type LiveEntrySizingCode = "MIN_CONTRACT" | "MARGIN" | "RISK_CAP" | "ECONOMICS";
+
+export class LiveEntrySizingError extends Error {
+  readonly code: LiveEntrySizingCode;
+  readonly symbol: string;
+
+  constructor(code: LiveEntrySizingCode, symbol: string, message: string) {
+    super(message);
+    this.name = "LiveEntrySizingError";
+    this.code = code;
+    this.symbol = symbol;
+  }
+}
+
 function hex(buffer: ArrayBuffer) {
   return Array.from(new Uint8Array(buffer), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -260,17 +274,23 @@ export function buildLiveEntryIntent(input: {
   const sized = sizePaperPosition({ equity: input.equity, entry: plan.entryTrigger, invalidation: plan.invalidation, feeBps: 10, stressSlippageBps: 8, confidence, openRisk: input.openRisk });
   const multiplier = Math.max(input.quantoMultiplier, 1e-12);
   const maxLeverage = Math.max(1, Math.floor(input.leverageMax ?? 50));
-  let contracts = Math.floor(sized.notional / Math.max(plan.entryTrigger * multiplier, 1e-12));
+  const contractNotional = Math.max(plan.entryTrigger * multiplier, 1e-12);
+  // LIVE follows the PAPER account ratio. When that proportional amount is
+  // smaller than Gate's indivisible one-contract lot, use one lot only if its
+  // real loss remains inside the user's 5% account-wide risk boundary.
+  let contracts = Math.max(1, Math.floor(sized.notional / contractNotional));
   const leverage = Math.min(maxLeverage, Math.max(1, Math.ceil((contracts * plan.entryTrigger * multiplier) / Math.max(input.equity * 0.2, 1e-9))));
-  const affordable = Math.floor(input.available * 0.95 * leverage / Math.max(plan.entryTrigger * multiplier, 1e-12));
+  const affordable = Math.floor(input.available * 0.95 * leverage / contractNotional);
   contracts = Math.min(contracts, affordable);
-  if (contracts < 1) throw new Error(`${plan.symbol} 可用保证金不足一个合约`);
+  if (contracts < 1) throw new LiveEntrySizingError("MARGIN", plan.symbol, `${plan.symbol} 可用保证金不足 1 张合约，本轮未挂单`);
   const notional = contracts * plan.entryTrigger * multiplier;
   const lossRate = Math.abs(plan.entryTrigger - plan.invalidation) / Math.max(plan.entryTrigger, 1e-9) + ROUND_TRIP_FRICTION_RATE;
   const plannedRisk = notional * lossRate;
-  if (input.openRisk + plannedRisk > input.equity * PORTFOLIO_RISK_CAP + 1e-8) throw new Error(`${plan.symbol} 将超过账户 5% 总风险`);
+  if (input.openRisk + plannedRisk > input.equity * PORTFOLIO_RISK_CAP + 1e-8) {
+    throw new LiveEntrySizingError("RISK_CAP", plan.symbol, `${plan.symbol} 最小 1 张合约将超过账户 5% 总风险，本轮未挂单`);
+  }
   const economics = tradeEconomics({ entry: plan.entryTrigger, target: plan.target, lossRate, confidence, notional, equity: input.equity });
-  if (!economics.executable) throw new Error(`${plan.symbol} 实盘合约取整后净利润空间不足`);
+  if (!economics.executable) throw new LiveEntrySizingError("ECONOMICS", plan.symbol, `${plan.symbol} 实盘合约取整后净利润空间不足，本轮未挂单`);
   const size = plan.side === "LONG" ? contracts : -contracts;
   const tag = shortTag("e", plan.id);
   const initial = { contract: plan.symbol, size, price: "0", tif: "ioc", text: tag, reduce_only: false };

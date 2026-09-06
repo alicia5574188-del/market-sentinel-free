@@ -133,7 +133,11 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(page, /撤销系统遗留挂单/);
   assert.match(worker, /cancelAndConfirmSystemEntries/);
   assert.match(worker, /Gate 仍有 \$\{remaining\.length\} 张系统挂单未撤销/);
+  assert.match(worker, /error instanceof LiveEntrySizingError/);
+  assert.match(worker, /entrySkips/);
   assert.match(live, /function parseGateJson/);
+  assert.match(live, /Math\.max\(1, Math\.floor\(sized\.notional \/ contractNotional\)\)/);
+  assert.match(page, /本轮未挂单/);
   assert.match(live, /expiration: GATE_TRIGGER_DAY_SECONDS/);
   assert.match(live, /expiration: GATE_TRIGGER_DAY_SECONDS \* GATE_TRIGGER_MAX_DAYS/);
   assert.match(page, /function CandleChart/);
