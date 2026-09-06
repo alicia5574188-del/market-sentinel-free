@@ -1,5 +1,15 @@
 # Decisions
 
+## 2026-09-06 — 多周期分段流动性路线
+
+- 单币不再只有一个扁平预测。系统从最近 12 根已收盘 15m K 线识别重复上下边界，同时保留向上突破、向下突破和两侧吸收回撤软路线；软路线不提交 Gate、不占保证金。
+- 当前 15m 边界突破只交易到最近可达的 1h/4h 流动性节点。该节点同时是本段目标和下一次决策门：价格到达后重新判断拒绝、吸收或延续，只有更高确认阈值通过才启动节点上方/下方的下一段。
+- 4h K 线由现有连续已收盘 1h 数据按交易所时间桶聚合，不新增 Gate 请求。15m 区间与 4h 结构都有独立新鲜度；任一缺失时相关路线失败关闭。
+- 假突破过滤联合订单流、微价格、主动成交、OI、清算和 1m/15m/1h/4h 方向。突破路线只有靠近自适应激活区、确认分数合格且假突破风险不过线时才进入单执行仲裁；触发时再次确认。
+- 任一币同一时刻仍只允许一张真实入场单。远期路线只能观察；现有 PREPARED 计划保留 15 分钟硬有效期，并在路线消失、目标消失、行情失鲜或价格离开激活区时提前自动撤销。
+- 杠杆不再用占权益 60% 的展示档位。PAPER 与 LIVE 共用安全杠杆函数，目标单计划约占 10% 保证金，全部挂单与持仓保证金不超过权益 30%，并在预计强平边界前保留约三倍结构止损距离。提高杠杆绝不提高名义仓位或 5% 组合止损风险。
+- 图表默认只绘制当前执行段和 15m 边界；超出当前 K 线视窗的高周期目标显示为图外标签，不参与 Y 轴缩放。卡片另用紧凑路线表展示其他软方案，避免 K 线被远端水平线压扁。
+
 - Market states are mutually exclusive: BREAKOUT, REVERSAL, RANGE; otherwise WAIT.
 - Inputs are predictive liquidity, path resistance, active-flow/price response, entry-price OI cohorts, public liquidation calibration, and completed 1m/15m/1h structure. Lagging oscillator and historical-analog systems are retired.
 - The universe is permanently limited to BTC_USDT, ETH_USDT, and SOL_USDT. Restart recovery prunes every old symbol from the authoritative checkpoint, so ZEC and prior rotating markets cannot return.

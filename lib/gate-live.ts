@@ -1,5 +1,5 @@
 import { decryptGateCredentials, type EncryptedGateCredentials, type GateCredentials } from "./credential-vault.ts";
-import { PORTFOLIO_RISK_CAP, ROUND_TRIP_FRICTION_RATE, sizePaperPosition, tradeEconomics, type PaperPlan, type Side } from "./liquidity-core.ts";
+import { PORTFOLIO_MARGIN_CAP, PORTFOLIO_RISK_CAP, ROUND_TRIP_FRICTION_RATE, selectSafeLeverage, sizePaperPosition, tradeEconomics, type PaperPlan, type Side } from "./liquidity-core.ts";
 
 const encoder = new TextEncoder();
 const GATE_TRIGGER_DAY_SECONDS = 86_400;
@@ -267,7 +267,9 @@ export function buildLiveEntryIntent(input: {
   available: number;
   openRisk: number;
   quantoMultiplier: number;
+  maintenanceRate?: number;
   leverageMax?: number;
+  openMargin?: number;
 }): LiveEntryIntent {
   const { plan } = input;
   const confidence = plan.score / Math.max(plan.score + plan.oppositeScore, Number.EPSILON);
@@ -279,15 +281,23 @@ export function buildLiveEntryIntent(input: {
   // smaller than Gate's indivisible one-contract lot, use one lot only if its
   // real loss remains inside the user's 5% account-wide risk boundary.
   let contracts = Math.max(1, Math.floor(sized.notional / contractNotional));
-  const leverage = Math.min(maxLeverage, Math.max(1, Math.ceil((contracts * plan.entryTrigger * multiplier) / Math.max(input.equity * 0.2, 1e-9))));
-  const affordable = Math.floor(input.available * 0.95 * leverage / contractNotional);
+  let leverageChoice = selectSafeLeverage({ notional: contracts * contractNotional, equity: input.equity,
+    entry: plan.entryTrigger, invalidation: plan.invalidation, maintenanceRate: input.maintenanceRate, leverageMax: maxLeverage });
+  const affordable = Math.floor(input.available * 0.95 * leverageChoice.leverage / contractNotional);
   contracts = Math.min(contracts, affordable);
   if (contracts < 1) throw new LiveEntrySizingError("MARGIN", plan.symbol, `${plan.symbol} 可用保证金不足 1 张合约，本轮未挂单`);
   const notional = contracts * plan.entryTrigger * multiplier;
+  leverageChoice = selectSafeLeverage({ notional, equity: input.equity, entry: plan.entryTrigger,
+    invalidation: plan.invalidation, maintenanceRate: input.maintenanceRate, leverageMax: maxLeverage });
+  const leverage = leverageChoice.leverage;
+  const margin = leverageChoice.margin;
   const lossRate = Math.abs(plan.entryTrigger - plan.invalidation) / Math.max(plan.entryTrigger, 1e-9) + ROUND_TRIP_FRICTION_RATE;
   const plannedRisk = notional * lossRate;
   if (input.openRisk + plannedRisk > input.equity * PORTFOLIO_RISK_CAP + 1e-8) {
     throw new LiveEntrySizingError("RISK_CAP", plan.symbol, `${plan.symbol} 最小 1 张合约将超过账户 5% 总风险，本轮未挂单`);
+  }
+  if ((input.openMargin ?? 0) + margin > input.equity * PORTFOLIO_MARGIN_CAP + 1e-8) {
+    throw new LiveEntrySizingError("MARGIN", plan.symbol, `${plan.symbol} 将超过账户 30% 挂单与持仓保证金上限，本轮未挂单`);
   }
   const economics = tradeEconomics({ entry: plan.entryTrigger, target: plan.target, lossRate, confidence, notional, equity: input.equity });
   if (!economics.executable) throw new LiveEntrySizingError("ECONOMICS", plan.symbol, `${plan.symbol} 实盘合约取整后净利润空间不足，本轮未挂单`);
@@ -302,7 +312,7 @@ export function buildLiveEntryIntent(input: {
     // this exchange order when the immutable plan expires.
     trigger: { strategy_type: 0, price_type: 0, price: String(plan.entryTrigger), rule: plan.side === "LONG" ? 1 : 2, expiration: GATE_TRIGGER_DAY_SECONDS },
   } : { ...initial, price: String(plan.entryTrigger), tif: "gtc" };
-  return { kind, tag, size, contracts, notional, plannedRisk, leverage, margin: notional / leverage, body };
+  return { kind, tag, size, contracts, notional, plannedRisk, leverage, margin, body };
 }
 
 export function buildLiveStopIntent(position: { id: string; symbol: string; side: Side; currentStop: number }) {

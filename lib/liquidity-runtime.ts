@@ -3,7 +3,9 @@ import {
   cascadeRatio,
   dataIsFresh,
   decideThreeState,
+  flowPressure,
   planTriggered,
+  selectSafeLeverage,
   sizePaperPosition,
   stablePriceBin,
   tradeEconomics,
@@ -13,9 +15,12 @@ import {
   type Decision,
   type FlowEvidence,
   type LiquidationBand,
+  type LiquidityRoute,
   type LiquidityZone,
   type PaperPlan,
   type PaperPosition,
+  type RangeStructure,
+  type Side,
   type TimeframeState,
   type WallEvidence,
   WALL_WINDOW,
@@ -48,10 +53,11 @@ export type SymbolMemory = {
   longCohortNotional: number;
   shortCohortNotional: number;
   structureZones: LiquidityZone[];
-  structureByTimeframe: { m1: LiquidityZone[]; m15: LiquidityZone[]; h1: LiquidityZone[] };
+  structureByTimeframe: { m1: LiquidityZone[]; m15: LiquidityZone[]; h1: LiquidityZone[]; h4: LiquidityZone[] };
+  range15m: RangeStructure | null;
   oiCohorts: Array<{ entryPrice: number; longNotional: number; shortNotional: number }>;
-  timeframeBias: { m1: TimeframeState; m15: TimeframeState; h1: TimeframeState };
-  timeframeUpdatedAt: { m1: number; m15: number; h1: number };
+  timeframeBias: { m1: TimeframeState; m15: TimeframeState; h1: TimeframeState; h4: TimeframeState };
+  timeframeUpdatedAt: { m1: number; m15: number; h1: number; h4: number };
 };
 
 export function emptySymbolMemory(): SymbolMemory {
@@ -71,9 +77,9 @@ export function emptySymbolMemory(): SymbolMemory {
     maintenanceRate: 0.005,
     longCohortNotional: 0,
     shortCohortNotional: 0,
-    structureZones: [], structureByTimeframe: { m1: [], m15: [], h1: [] },
+    structureZones: [], structureByTimeframe: { m1: [], m15: [], h1: [], h4: [] }, range15m: null,
     oiCohorts: [],
-    timeframeBias: { m1: "UNKNOWN", m15: "UNKNOWN", h1: "UNKNOWN" }, timeframeUpdatedAt: { m1: 0, m15: 0, h1: 0 },
+    timeframeBias: { m1: "UNKNOWN", m15: "UNKNOWN", h1: "UNKNOWN", h4: "UNKNOWN" }, timeframeUpdatedAt: { m1: 0, m15: 0, h1: 0, h4: 0 },
   };
 }
 
@@ -256,6 +262,7 @@ export function analyzeSnapshot(memory: SymbolMemory, snapshot: BookSnapshot) {
     ...(snapshot.observedAt - memory.timeframeUpdatedAt.m1 <= 3 * 60_000 ? memory.structureByTimeframe.m1 : []),
     ...(snapshot.observedAt - memory.timeframeUpdatedAt.m15 <= 45 * 60_000 ? memory.structureByTimeframe.m15 : []),
     ...(snapshot.observedAt - memory.timeframeUpdatedAt.h1 <= 3 * 60 * 60_000 ? memory.structureByTimeframe.h1 : []),
+    ...(snapshot.observedAt - memory.timeframeUpdatedAt.h4 <= 12 * 60 * 60_000 ? memory.structureByTimeframe.h4 : []),
   ];
   const zones = [...bookZones, ...liquidationZones, ...repeatedExtrema(memory, midpoint), ...structureZones].map((zone) => {
     const nearby = bands.filter((band) => band.side === zone.side && Math.abs(band.price - zone.price) / midpoint < 0.01);
@@ -285,9 +292,13 @@ export function analyzeSnapshot(memory: SymbolMemory, snapshot: BookSnapshot) {
     m1: snapshot.observedAt - memory.timeframeUpdatedAt.m1 <= 3 * 60_000 ? memory.timeframeBias.m1 : "UNKNOWN" as const,
     m15: snapshot.observedAt - memory.timeframeUpdatedAt.m15 <= 45 * 60_000 ? memory.timeframeBias.m15 : "UNKNOWN" as const,
     h1: snapshot.observedAt - memory.timeframeUpdatedAt.h1 <= 3 * 60 * 60_000 ? memory.timeframeBias.h1 : "UNKNOWN" as const,
+    h4: snapshot.observedAt - memory.timeframeUpdatedAt.h4 <= 12 * 60 * 60_000 ? memory.timeframeBias.h4 : "UNKNOWN" as const,
   };
-  const decision = decideThreeState({ symbol: snapshot.symbol, observedAt: snapshot.observedAt, mid: midpoint, zones, bands, flow: memory.flow, absorption, timeframeBias: freshBias });
-  return { midpoint, zones, bands, absorption, decision };
+  const routes = buildLiquidityRoutes(memory, snapshot.symbol, snapshot.observedAt, midpoint, absorption);
+  const routeDecision = selectRouteDecision(routes, snapshot.observedAt);
+  const decision = routeDecision ?? decideThreeState({ symbol: snapshot.symbol, observedAt: snapshot.observedAt, mid: midpoint, zones, bands, flow: memory.flow, absorption, timeframeBias: freshBias });
+  const confirmationBySide = { LONG: routeConfirmation(memory, "LONG"), SHORT: routeConfirmation(memory, "SHORT") };
+  return { midpoint, zones, bands, absorption, decision, routes, range15m: memory.range15m, confirmationBySide };
 }
 
 export function updateOpenInterestCohorts(memory: SymbolMemory, nextOpenInterest: number) {
@@ -319,9 +330,144 @@ export function updateOpenInterestCohorts(memory: SymbolMemory, nextOpenInterest
   memory.lastOpenInterest = nextOpenInterest;
 }
 
-export function deriveStructureZones(rows: Array<{ volume: number; close: number; high: number; low: number }>, timeframe: "1m" | "15m" | "1h", midpoint: number) {
+type StructureCandle = { time: number; volume: number; close: number; high: number; low: number; open: number };
+
+export function aggregateFourHourCandles(rows: StructureCandle[]) {
+  const groups = new Map<number, StructureCandle[]>();
+  for (const row of rows) {
+    const bucket = Math.floor(row.time / 14_400) * 14_400;
+    const group = groups.get(bucket) ?? [];
+    group.push(row);
+    groups.set(bucket, group);
+  }
+  return [...groups.entries()].sort((a, b) => a[0] - b[0]).flatMap(([time, group]) => {
+    const ordered = [...group].sort((a, b) => a.time - b.time);
+    const contiguous = ordered.length === 4 && ordered.every((row, index) => row.time === time + index * 3_600);
+    if (!contiguous) return [];
+    return [{ time, open: ordered[0].open, close: ordered[3].close,
+      high: Math.max(...ordered.map((row) => row.high)), low: Math.min(...ordered.map((row) => row.low)),
+      volume: ordered.reduce((sum, row) => sum + row.volume, 0) }];
+  });
+}
+
+export function deriveRangeStructure(rows: StructureCandle[]): RangeStructure | null {
+  const window = rows.slice(-12);
+  if (window.length < 10) return null;
+  const quantile = (values: number[], ratio: number) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted[Math.min(sorted.length - 1, Math.max(0, Math.round((sorted.length - 1) * ratio)))];
+  };
+  // Repeated upper/lower quartiles ignore a single sweep wick while retaining
+  // the boundary that price actually tests on the 15-minute chart.
+  const upper = quantile(window.map((row) => row.high), 0.75);
+  const lower = quantile(window.map((row) => row.low), 0.25);
+  const midpoint = (upper + lower) / 2;
+  const width = upper - lower;
+  const widthRate = width / Math.max(midpoint, 1e-9);
+  if (!(lower > 0 && widthRate >= 0.0012 && widthRate <= 0.025)) return null;
+  const edge = width * 0.16;
+  const touchesUpper = window.filter((row) => row.high >= upper - edge).length;
+  const touchesLower = window.filter((row) => row.low <= lower + edge).length;
+  const contained = window.filter((row) => row.close <= upper + edge * 0.4 && row.close >= lower - edge * 0.4).length / window.length;
+  const drift = Math.abs(window.at(-1)!.close - window[0].open) / width;
+  const quality = clamp(contained * 0.45 + Math.min(1, touchesUpper / 3) * 0.2
+    + Math.min(1, touchesLower / 3) * 0.2 + Math.max(0, 1 - drift) * 0.15, 0, 1);
+  if (touchesUpper < 2 || touchesLower < 2 || quality < 0.58) return null;
+  return { lower, upper, midpoint, widthRate, touchesLower, touchesUpper, quality,
+    observedAt: (window.at(-1)!.time + 900) * 1_000 };
+}
+
+function routeConfirmation(memory: SymbolMemory, side: Side) {
+  const direction = side === "LONG" ? 1 : -1;
+  const bias = (value: TimeframeState) => value === "UP" ? 1 : value === "DOWN" ? -1 : 0;
+  const aligned = direction * (bias(memory.timeframeBias.m1) * 0.12 + bias(memory.timeframeBias.m15) * 0.22
+    + bias(memory.timeframeBias.h1) * 0.18 + bias(memory.timeframeBias.h4) * 0.08);
+  return clamp(0.5 + direction * flowPressure(memory.flow) * 0.34 + aligned, 0, 1);
+}
+
+export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, observedAt: number, midpoint: number, absorption: number) {
+  const range = memory.range15m;
+  if (!range || midpoint <= 0 || observedAt - range.observedAt > 45 * 60_000) return [] as LiquidityRoute[];
+  const width = range.upper - range.lower;
+  const buffer = Math.max(midpoint * 0.00025, width * 0.06);
+  const activationDistanceRate = Math.max(0.0025, Math.min(0.0075, range.widthRate * 0.65));
+  const higher = (side: Side) => {
+    const ordered = [
+      ...memory.structureByTimeframe.h4.map((zone) => ({ zone, timeframe: "4h" as const })),
+      ...memory.structureByTimeframe.h1.map((zone) => ({ zone, timeframe: "1h" as const })),
+    ].filter((item) => item.zone.side === side && (side === "LONG" ? item.zone.price > range.upper + buffer : item.zone.price < range.lower - buffer))
+      .sort((a, b) => side === "LONG" ? a.zone.price - b.zone.price : b.zone.price - a.zone.price);
+    return ordered;
+  };
+  const routes: LiquidityRoute[] = [];
+  for (const side of ["LONG", "SHORT"] as const) {
+    const nodes = higher(side);
+    const first = nodes.find((item) => Math.abs(item.zone.price - (side === "LONG" ? range.upper : range.lower)) / midpoint >= 0.0025);
+    const confirmationScore = routeConfirmation(memory, side);
+    const fakeoutRisk = clamp(absorption * 0.35 + (1 - confirmationScore) * 0.55
+      + (memory.timeframeBias.h1 === (side === "LONG" ? "DOWN" : "UP") ? 0.18 : 0), 0, 1);
+    if (first) {
+      const entryTrigger = side === "LONG" ? range.upper + buffer : range.lower - buffer;
+      const invalidation = side === "LONG" ? range.upper - Math.max(buffer * 1.5, width * 0.24)
+        : range.lower + Math.max(buffer * 1.5, width * 0.24);
+      const next = nodes.find((item) => side === "LONG" ? item.zone.price > first.zone.price * 1.0025 : item.zone.price < first.zone.price * 0.9975);
+      const score = range.quality * 0.38 + confirmationScore * 0.47 + first.zone.probabilityReach * 0.15;
+      routes.push({ id: `${symbol}:LOCAL_BREAKOUT:${side}:${stablePriceBin(range.upper)}:${stablePriceBin(range.lower)}`,
+        symbol, side, kind: "LOCAL_BREAKOUT", stage: "LOCAL_TO_NODE", entryTrigger, invalidation,
+        target: first.zone.price, targetIdentity: first.zone.identity ?? `HTF:${side}:${stablePriceBin(first.zone.price)}`,
+        targetTimeframe: first.timeframe, nextTarget: next?.zone.price ?? null, confirmationScore, fakeoutRisk,
+        activationDistanceRate, score, executableNow: Math.abs(entryTrigger - midpoint) / midpoint <= activationDistanceRate
+          && confirmationScore >= 0.52 && fakeoutRisk <= 0.62,
+        reason: ["15分钟重复边界", `${first.timeframe}流动性作为本段终点`, "订单流、微价格与周期方向联合过滤假突破"] });
+      if (next) {
+        const nodeBuffer = Math.max(midpoint * 0.00035, Math.abs(next.zone.price - first.zone.price) * 0.04);
+        const nodeEntry = side === "LONG" ? first.zone.price + nodeBuffer : first.zone.price - nodeBuffer;
+        const atNode = Math.abs(midpoint - first.zone.price) / midpoint <= Math.max(0.0025, range.widthRate * 0.5);
+        routes.push({ id: `${symbol}:NODE_CONTINUATION:${side}:${stablePriceBin(first.zone.price)}`, symbol, side,
+          kind: "NODE_CONTINUATION", stage: atNode ? "AT_NODE" : "NODE_TO_NEXT", entryTrigger: nodeEntry,
+          invalidation: side === "LONG" ? first.zone.price - nodeBuffer * 1.5 : first.zone.price + nodeBuffer * 1.5,
+          target: next.zone.price, targetIdentity: next.zone.identity ?? `HTF:${side}:${stablePriceBin(next.zone.price)}`,
+          targetTimeframe: next.timeframe, nextTarget: null, confirmationScore, fakeoutRisk,
+          activationDistanceRate, score: score * 0.92, executableNow: atNode && Math.abs(nodeEntry - midpoint) / midpoint <= activationDistanceRate
+            && confirmationScore >= 0.62 && fakeoutRisk <= 0.48,
+          reason: ["到达上一段高周期流动性节点", "仅在节点被吸收且延续强度通过后启动", `${next.timeframe}下一流动性为新目标`] });
+      }
+    }
+    const rejectionSide: Side = side === "LONG" ? "SHORT" : "LONG";
+    const edgePrice = side === "LONG" ? range.upper : range.lower;
+    const rejectionConfirmation = routeConfirmation(memory, rejectionSide);
+    const rejectionEntry = side === "LONG" ? edgePrice - buffer * 0.25 : edgePrice + buffer * 0.25;
+    const rejectionTarget = side === "LONG" ? range.lower + buffer : range.upper - buffer;
+    const rejectionScore = range.quality * 0.48 + rejectionConfirmation * 0.27 + absorption * 0.25;
+    routes.push({ id: `${symbol}:EDGE_REJECTION:${side}:${stablePriceBin(edgePrice)}`, symbol, side: rejectionSide,
+      kind: "EDGE_REJECTION", stage: "LOCAL_TO_NODE", entryTrigger: rejectionEntry,
+      invalidation: side === "LONG" ? range.upper + buffer * 1.5 : range.lower - buffer * 1.5,
+      target: rejectionTarget, targetIdentity: `RANGE:${rejectionSide}:${stablePriceBin(rejectionTarget)}`,
+      targetTimeframe: "15m", nextTarget: null, confirmationScore: rejectionConfirmation,
+      fakeoutRisk: clamp(1 - absorption * 0.55 - rejectionConfirmation * 0.3, 0, 1), activationDistanceRate,
+      score: rejectionScore, executableNow: Math.abs(rejectionEntry - midpoint) / midpoint <= activationDistanceRate
+        && absorption >= 0.55 && rejectionConfirmation >= 0.48,
+      reason: ["15分钟区间边界出现吸收", "先交易回到区间另一侧", "失效后等待突破路线重新评估"] });
+  }
+  return routes.sort((a, b) => Number(b.executableNow) - Number(a.executableNow) || b.score - a.score).slice(0, 6);
+}
+
+export function selectRouteDecision(routes: LiquidityRoute[], observedAt: number): Decision | null {
+  const selected = routes.filter((route) => route.executableNow).sort((a, b) => b.score - a.score)[0];
+  if (!selected) return null;
+  const oppositeScore = routes.filter((route) => route.side !== selected.side).sort((a, b) => b.score - a.score)[0]?.score ?? 0;
+  return { symbol: selected.symbol, observedAt, marketState: selected.kind === "EDGE_REJECTION" ? "RANGE" : "BREAKOUT",
+    side: selected.side, entryTrigger: selected.entryTrigger, invalidation: selected.invalidation,
+    target: selected.target, targetIdentity: selected.targetIdentity, score: selected.score, oppositeScore,
+    reason: selected.reason, routeId: selected.id, routeStage: selected.stage, routeKind: selected.kind,
+    targetTimeframe: selected.targetTimeframe, nextTarget: selected.nextTarget,
+    confirmationScore: selected.confirmationScore, fakeoutRisk: selected.fakeoutRisk,
+    activationDistanceRate: selected.activationDistanceRate };
+}
+
+export function deriveStructureZones(rows: Array<{ volume: number; close: number; high: number; low: number }>, timeframe: "1m" | "15m" | "1h" | "4h", midpoint: number) {
   if (rows.length < 20 || midpoint <= 0) return [] as LiquidityZone[];
-  const weight = timeframe === "1h" ? 1.35 : timeframe === "15m" ? 1.15 : 1;
+  const weight = timeframe === "4h" ? 1.65 : timeframe === "1h" ? 1.35 : timeframe === "15m" ? 1.15 : 1;
   const highs: number[] = [];
   const lows: number[] = [];
   for (let index = 2; index < rows.length - 2; index += 1) {
@@ -369,23 +515,39 @@ export function reconcilePaper(input: {
   openRisk: number;
   allowOpen?: boolean;
   protectOnly?: boolean;
+  activeRoutes?: LiquidityRoute[];
+  breakoutConfirmation?: number;
+  maintenanceRate?: number;
+  leverageMax?: number;
 }) {
   let plan = input.plan;
   let position = input.position;
   const events: string[] = [];
   let expiredThisCycle = false;
   let cancelledThisCycle = false;
-  const continuousTarget = (side: "LONG" | "SHORT", identity: string | undefined, price: number) => input.zones
-    .filter((zone) => zone.side === side && (zone.identity === identity || Math.abs(zone.price - price) / Math.max(price, 1e-9) <= 0.0015))
-    .sort((a, b) => b.score - a.score)[0] ?? null;
-  const targetPresent = plan?.state !== "PREPARED" || continuousTarget(plan.side, plan.targetIdentity, plan.target) != null;
+  const continuousTarget = (side: "LONG" | "SHORT", identity: string | undefined, price: number) => {
+    const zone = input.zones.filter((item) => item.side === side && (item.identity === identity
+      || Math.abs(item.price - price) / Math.max(price, 1e-9) <= 0.0015)).sort((a, b) => b.score - a.score)[0];
+    if (zone) return zone;
+    const route = input.activeRoutes?.filter((item) => item.side === side && (item.targetIdentity === identity
+      || Math.abs(item.target - price) / Math.max(price, 1e-9) <= 0.0015)).sort((a, b) => b.score - a.score)[0];
+    return route ? zoneUtility({ identity: route.targetIdentity, side, price: route.target, liquidity: route.score,
+      cascade: 0, pathCost: 1, distanceCost: 1, probabilityReach: route.confirmationScore,
+      persistence: 1, source: "STOP_POOL" }) : null;
+  };
+  const planRouteId = plan?.routeId;
+  const targetPresent = !plan || plan.state !== "PREPARED" || (planRouteId
+    ? input.activeRoutes?.some((route) => route.id === planRouteId) === true
+    : continuousTarget(plan.side, plan.targetIdentity, plan.target) != null);
+  const movedAway = plan?.state === "PREPARED" && plan.activationDistanceRate != null
+    && Math.abs(plan.entryTrigger - input.midpoint) / Math.max(input.midpoint, 1e-9) > plan.activationDistanceRate * 1.6;
   // Freeze a prepared thesis instead of chasing every two-second recalculation.
   // A fresh opposing score never replaces it, but the frozen destination must
   // still exist when price reaches the trigger.
-  if ((!input.fresh || input.sequenceFault || !targetPresent) && plan?.state === "PREPARED") {
+  if ((!input.fresh || input.sequenceFault || !targetPresent || movedAway) && plan?.state === "PREPARED") {
     plan = { ...plan, state: "CANCELLED" };
     cancelledThisCycle = true;
-    events.push(!input.fresh ? "STALE_CANCEL" : input.sequenceFault ? "SEQUENCE_REBUILD_CANCEL" : "TARGET_GONE_CANCEL");
+    events.push(!input.fresh ? "STALE_CANCEL" : input.sequenceFault ? "SEQUENCE_REBUILD_CANCEL" : movedAway ? "ACTIVATION_LOST_CANCEL" : "TARGET_GONE_CANCEL");
   }
   if (position?.status === "OPEN" && input.fresh && !input.sequenceFault) {
     const own = input.protectOnly ? zoneUtility({ side: position.side, price: position.currentTarget, liquidity: 1, cascade: 0, pathCost: 1,
@@ -411,13 +573,19 @@ export function reconcilePaper(input: {
     // PREPARED is a direction-locked lifecycle. Recalculation can describe a
     // different market, but cannot mutate or replace the executable plan.
     const materiallyDifferent = !plan || plan.state !== "PREPARED";
-    if (materiallyDifferent) {
+    const withinActivation = input.decision.activationDistanceRate == null
+      || Math.abs(input.decision.entryTrigger - input.midpoint) / Math.max(input.midpoint, 1e-9) <= input.decision.activationDistanceRate;
+    if (materiallyDifferent && withinActivation) {
       const sized = sizePaperPosition({ equity: input.equity, entry: input.decision.entryTrigger, invalidation: input.decision.invalidation, feeBps: 10, stressSlippageBps: 8, confidence: clamp(input.decision.score / Math.max(input.decision.score + input.decision.oppositeScore, Number.EPSILON), 0, 1), openRisk: input.openRisk });
       const confidence = clamp(input.decision.score / Math.max(input.decision.score + input.decision.oppositeScore, Number.EPSILON), 0, 1);
       const economics = tradeEconomics({ entry: input.decision.entryTrigger, target: input.decision.target, lossRate: sized.lossRate, confidence,
         notional: sized.notional, equity: input.equity });
       if (sized.allowedLoss > 0 && sized.portfolioRiskAfter <= input.equity * 0.05 + 1e-9 && economics.executable) {
-        plan = { ...input.decision, id: `${input.decision.symbol}:${input.now}`, state: "PREPARED", createdAt: input.now, expiresAt: input.now + PLAN_TTL_MS, plannedRisk: sized.allowedLoss, notional: sized.notional };
+        const leverage = selectSafeLeverage({ notional: sized.notional, equity: input.equity, entry: input.decision.entryTrigger,
+          invalidation: input.decision.invalidation, maintenanceRate: input.maintenanceRate, leverageMax: input.leverageMax });
+        plan = { ...input.decision, id: `${input.decision.symbol}:${input.now}`, state: "PREPARED", createdAt: input.now,
+          expiresAt: input.now + PLAN_TTL_MS, plannedRisk: sized.allowedLoss, notional: sized.notional,
+          leverage: leverage.leverage, margin: leverage.margin };
         events.push("PLAN_PREPARED");
       } else if (sized.allowedLoss > 0) {
         events.push("PLAN_REJECTED_ECONOMICS");
@@ -432,7 +600,9 @@ export function reconcilePaper(input: {
     const passedTarget = plan.side === "LONG" ? input.midpoint >= plan.target : input.midpoint <= plan.target;
     const economics = tradeEconomics({ entry: input.midpoint, target: plan.target, lossRate: resized.lossRate, confidence,
       notional: resized.notional, equity: input.equity });
-    const scenarioConfirmed = plan.marketState === "BREAKOUT" || input.absorption >= 0.55;
+    const scenarioConfirmed = plan.marketState === "BREAKOUT"
+      ? (plan.routeKind == null || ((input.breakoutConfirmation ?? plan.confirmationScore ?? 0) >= 0.58 && (plan.fakeoutRisk ?? 1) <= 0.62))
+      : input.absorption >= 0.55;
     if (invalidFill || resized.allowedLoss <= 0 || resized.portfolioRiskAfter > input.equity * 0.05 + 1e-9 || passedTarget || !economics.executable || !scenarioConfirmed) {
       plan = { ...plan, state: "CANCELLED" };
       events.push(invalidFill || resized.portfolioRiskAfter > input.equity * 0.05 + 1e-9 ? "GAP_RISK_CANCEL" : !scenarioConfirmed ? "TRIGGER_STRUCTURE_CANCEL" : "GAP_ECONOMICS_CANCEL");
@@ -485,5 +655,6 @@ export function ancillaryIsFresh(memory: SymbolMemory, now: number) {
     && now - memory.liquidationsUpdatedAt <= 120_000
     && now - memory.timeframeUpdatedAt.m1 <= 3 * 60_000
     && now - memory.timeframeUpdatedAt.m15 <= 45 * 60_000
-    && now - memory.timeframeUpdatedAt.h1 <= 3 * 60 * 60_000;
+    && now - memory.timeframeUpdatedAt.h1 <= 3 * 60 * 60_000
+    && now - memory.timeframeUpdatedAt.h4 <= 12 * 60 * 60_000;
 }

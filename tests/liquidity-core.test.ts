@@ -8,6 +8,7 @@ import {
   hasCascade,
   planTriggered,
   remainingStressRisk,
+  selectSafeLeverage,
   sizePaperPosition,
   stablePriceBin,
   tradeEconomics,
@@ -20,7 +21,7 @@ import {
   type PaperPlan,
   type PaperPosition,
 } from "../lib/liquidity-core.ts";
-import { PLAN_TTL_MS, ancillarySchedule, deriveStructureZones, emptySymbolMemory, inferLiquidationBands, reconcilePaper, updateOpenInterestCohorts, usableSnapshot } from "../lib/liquidity-runtime.ts";
+import { PLAN_TTL_MS, aggregateFourHourCandles, ancillarySchedule, buildLiquidityRoutes, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, inferLiquidationBands, reconcilePaper, selectRouteDecision, updateOpenInterestCohorts, usableSnapshot } from "../lib/liquidity-runtime.ts";
 import { drainPositionOutbox, enqueuePositionTransition } from "../lib/paper-outbox.ts";
 
 const flow = (patch: Partial<FlowEvidence> = {}): FlowEvidence => ({ ofi: 0, micropriceDisplacementBps: 0, takerDelta: 0, openInterestDelta: 0, funding: 0, actualLiquidations: 0, priceResponseBps: 0, ...patch });
@@ -42,6 +43,69 @@ test("utility ordering is invariant when every USDT amount changes scale", () =>
   const one = zoneUtility({ side: "LONG", price: 110, liquidity: 800, cascade: 200, pathCost: 200, distanceCost: 50, probabilityReach: 0.6, persistence: 0.75, source: "BOOK" });
   const ten = zoneUtility({ side: "LONG", price: 110, liquidity: 8_000, cascade: 2_000, pathCost: 2_000, distanceCost: 500, probabilityReach: 0.6, persistence: 0.75, source: "BOOK" });
   assert.equal(one.score, ten.score);
+});
+
+test("completed 1h candles form 4h structure without another exchange request", () => {
+  const rows = Array.from({ length: 9 }, (_, index) => ({ time: index * 3_600, open: 100 + index,
+    close: 100.5 + index, high: 101 + index, low: 99 + index, volume: 10 + index }));
+  const h4 = aggregateFourHourCandles(rows);
+  assert.equal(h4.length, 2);
+  assert.deepEqual(h4[0], { time: 0, open: 100, close: 103.5, high: 104, low: 99, volume: 46 });
+});
+
+test("15m balance creates two-sided local routes and a gated next-node leg", () => {
+  const rows = Array.from({ length: 12 }, (_, index) => ({ time: index * 900, open: 99.45,
+    close: index % 2 ? 99.72 : 99.3, high: index % 3 === 0 ? 100 : 99.82,
+    low: index % 3 === 1 ? 99 : 99.18, volume: 10 }));
+  const range = deriveRangeStructure(rows);
+  assert.ok(range && range.lower < 99.3 && range.upper > 99.7);
+  const memory = emptySymbolMemory();
+  memory.range15m = range;
+  memory.flow = flow({ ofi: 0.55, takerDelta: 0.45, micropriceDisplacementBps: 2 });
+  memory.timeframeBias = { m1: "UP", m15: "UP", h1: "UP", h4: "UP" };
+  memory.structureByTimeframe.h4 = [zone("LONG", 102), zone("LONG", 105), zone("SHORT", 96)];
+  const observedAt = range.observedAt + 1;
+  const routes = buildLiquidityRoutes(memory, "BTC_USDT", observedAt, 99.9, 0.15);
+  const first = routes.find((route) => route.kind === "LOCAL_BREAKOUT" && route.side === "LONG");
+  const next = routes.find((route) => route.kind === "NODE_CONTINUATION" && route.side === "LONG");
+  assert.equal(first?.target, 102);
+  assert.equal(first?.targetTimeframe, "4h");
+  assert.equal(first?.nextTarget, 105);
+  assert.equal(first?.executableNow, true);
+  assert.equal(next?.executableNow, false);
+  assert.equal(selectRouteDecision(routes, observedAt)?.routeId, first?.id);
+  assert.ok(routes.some((route) => route.kind === "EDGE_REJECTION"));
+});
+
+test("a local breakout crossing is cancelled when live confirmation deteriorates", () => {
+  const memory = emptySymbolMemory();
+  memory.range15m = { lower: 99, upper: 100, midpoint: 99.5, widthRate: 1 / 99.5,
+    touchesLower: 3, touchesUpper: 3, quality: 0.9, observedAt: 10_000 };
+  memory.flow = flow({ ofi: 0.6, takerDelta: 0.5, micropriceDisplacementBps: 2 });
+  memory.timeframeBias = { m1: "UP", m15: "UP", h1: "UP", h4: "UP" };
+  memory.structureByTimeframe.h4 = [zone("LONG", 102), zone("SHORT", 96)];
+  const routes = buildLiquidityRoutes(memory, "BTC_USDT", 10_001, 99.9, 0.1);
+  const decision = selectRouteDecision(routes, 10_001);
+  assert.ok(decision?.routeKind === "LOCAL_BREAKOUT");
+  const prepared = reconcilePaper({ now: 10_001, midpoint: 99.9, fresh: true, sequenceFault: false,
+    decision, plan: null, position: null, zones: [], activeRoutes: routes, absorption: 0.1,
+    equity: 1_000, openRisk: 0, allowOpen: false });
+  assert.equal(prepared.plan?.state, "PREPARED");
+  const crossed = reconcilePaper({ now: 10_002, midpoint: prepared.plan!.entryTrigger + 0.01, fresh: true,
+    sequenceFault: false, decision, plan: prepared.plan, position: null, zones: [], activeRoutes: routes,
+    breakoutConfirmation: 0.3, absorption: 0.1, equity: 1_000, openRisk: 0, allowOpen: true });
+  assert.equal(crossed.plan?.state, "CANCELLED");
+  assert.ok(crossed.events.includes("TRIGGER_STRUCTURE_CANCEL"));
+});
+
+test("dynamic leverage targets ten-percent margin but preserves liquidation distance", () => {
+  const sized = selectSafeLeverage({ notional: 4_000, equity: 1_000, entry: 100, invalidation: 99.7,
+    maintenanceRate: 0.005, leverageMax: 50 });
+  assert.equal(sized.leverage, 40);
+  assert.equal(sized.margin, 100);
+  const wideStop = selectSafeLeverage({ notional: 4_000, equity: 1_000, entry: 100, invalidation: 97,
+    maintenanceRate: 0.005, leverageMax: 50 });
+  assert.ok(wideStop.leverage < sized.leverage);
 });
 
 test("wall needs 70% of 30 snapshots and is rejected above 50% approach cancellations", () => {

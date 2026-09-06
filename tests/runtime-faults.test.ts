@@ -458,7 +458,8 @@ test("ancillary wheel covers every symbol/feature and each TTL fails one millise
   fresh.oiUpdatedAt = now - 6 * 60_000;
   fresh.tradesUpdatedAt = now - 120_000;
   fresh.liquidationsUpdatedAt = now - 120_000;
-  fresh.timeframeUpdatedAt = { m1: now - 3 * 60_000, m15: now - 45 * 60_000, h1: now - 3 * 60 * 60_000 };
+  fresh.timeframeUpdatedAt = { m1: now - 3 * 60_000, m15: now - 45 * 60_000,
+    h1: now - 3 * 60 * 60_000, h4: now - 12 * 60 * 60_000 };
   assert.equal(ancillaryIsFresh(fresh, now), true);
 
   const expiryCases: Array<(memory: ReturnType<typeof emptySymbolMemory>) => void> = [
@@ -468,6 +469,7 @@ test("ancillary wheel covers every symbol/feature and each TTL fails one millise
     (memory) => { memory.timeframeUpdatedAt.m1 -= 1; },
     (memory) => { memory.timeframeUpdatedAt.m15 -= 1; },
     (memory) => { memory.timeframeUpdatedAt.h1 -= 1; },
+    (memory) => { memory.timeframeUpdatedAt.h4 -= 1; },
   ];
   for (const expire of expiryCases) {
     const stale = structuredClone(fresh);

@@ -3,8 +3,8 @@
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
 import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchRecentTrades, fetchStructureCandles } from "../lib/gate-market.ts";
-import { closePaperPosition, PORTFOLIO_RISK_CAP, remainingStressRisk, SYSTEM_VERSION, updatePosition, type Decision, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type Side } from "../lib/liquidity-core.ts";
-import { analyzeSnapshot, ancillaryIsFresh, ancillarySchedule, applyFlow, deriveStructureZones, emptySymbolMemory, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
+import { closePaperPosition, PORTFOLIO_RISK_CAP, remainingStressRisk, SYSTEM_VERSION, updatePosition, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
+import { aggregateFourHourCandles, analyzeSnapshot, ancillaryIsFresh, ancillarySchedule, applyFlow, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
 import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem, type ReviewCandle } from "../lib/paper-outbox.ts";
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
   PAPER_BANKRUPTCY_EQUITY, PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
@@ -122,9 +122,10 @@ type RuntimeState = {
   tickSize: Record<string, number>;
   contractMeta: Record<string, { quantoMultiplier: number; maintenanceRate: number; leverageMax: number; fundingRate: number }>;
   decisions: Record<string, Decision | null>;
+  routes: Record<string, LiquidityRoute[]>;
   plans: Record<string, PaperPlan | null>;
   positions: Record<string, PaperPosition | null>;
-  evidence: Record<string, { midpoint: number; observedAt: number; warmup: number; fresh: boolean; ancillaryFresh: boolean; topLong: LiquidityZone | null; topShort: LiquidityZone | null; absorption: number }>;
+  evidence: Record<string, { midpoint: number; observedAt: number; warmup: number; fresh: boolean; ancillaryFresh: boolean; topLong: LiquidityZone | null; topShort: LiquidityZone | null; absorption: number; range15m: RangeStructure | null }>;
   analysisMs: number[];
   equity: number;
   outbox: PositionOutboxItem[];
@@ -157,7 +158,7 @@ function initialState(): RuntimeState {
     lastAlarmAt: null, lastSuccessAt: null, lastHeartbeatAt: null, lastStopCheckpointAt: null, nextAlarmAt: null, lastUniverseAt: 0, lastChartMirrorAt: 0,
     utcDay: day(), alarmCount: 0, d1Writes: 0, nonAlarmWrites: 0, d1RetryAt: 0, d1FailureCount: 0, equityVersion: 0, ancillaryCursor: 0, subrequestCount: 0, maxSubrequestsInAlarm: 0, sequenceRebuilds: 0, lastProcessedSlot: -1, feedFailures: {},
     lastError: null, d1MirrorError: null, riskBreach: false, tickSize: Object.fromEntries(DEFAULT_SYMBOLS.map((symbol) => [symbol, 0.0001])), contractMeta: {},
-    decisions: {}, plans: {}, positions: {}, evidence: {}, analysisMs: [], equity: PAPER_INITIAL_EQUITY, outbox: [],
+    decisions: {}, routes: {}, plans: {}, positions: {}, evidence: {}, analysisMs: [], equity: PAPER_INITIAL_EQUITY, outbox: [],
     paperCycle: startPaperCycle(Date.now()), bankruptcyOutbox: [], live: initialLiveState(),
   };
 }
@@ -194,7 +195,7 @@ function markToMarketEquity(runtime: RuntimeState) {
 export class MarketStream extends DurableObject<CloudflareEnv> {
   private runtime = initialState();
   private memory: Record<string, SymbolMemory> = {};
-  private chartCandles: Record<string, Partial<Record<"1m" | "15m" | "1h", Awaited<ReturnType<typeof fetchStructureCandles>>>>> = {};
+  private chartCandles: Record<string, Partial<Record<"1m" | "15m" | "1h" | "4h", Awaited<ReturnType<typeof fetchStructureCandles>>>>> = {};
   private sessionWarmup: Record<string, number> = {};
   private authorityReady = true;
   private authorityView = { positions: {} as RuntimeState["positions"], equity: 1_000, equityVersion: 0 };
@@ -209,11 +210,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           paperCycle: saved.paperCycle ?? startPaperCycle(Date.now(), saved.equity, 1), bankruptcyOutbox: saved.bankruptcyOutbox ?? [],
           live: { ...initialLiveState(), ...(saved.live ?? {}), entries: saved.live?.entries ?? {},
             positions: saved.live?.positions ?? {}, entrySkips: saved.live?.entrySkips ?? {} }, analysisMs: [], state: "WARMING" };
-        for (const symbol of new Set([...Object.keys(this.runtime.decisions), ...Object.keys(this.runtime.plans),
+        for (const symbol of new Set([...Object.keys(this.runtime.decisions), ...Object.keys(this.runtime.routes), ...Object.keys(this.runtime.plans),
           ...Object.keys(this.runtime.positions), ...Object.keys(this.runtime.evidence), ...Object.keys(this.runtime.feedFailures),
           ...Object.keys(this.runtime.tickSize), ...Object.keys(this.runtime.contractMeta)])) {
           if (DEFAULT_SYMBOLS.includes(symbol)) continue;
-          delete this.runtime.decisions[symbol]; delete this.runtime.plans[symbol]; delete this.runtime.positions[symbol];
+          delete this.runtime.decisions[symbol]; delete this.runtime.routes[symbol]; delete this.runtime.plans[symbol]; delete this.runtime.positions[symbol];
           delete this.runtime.evidence[symbol]; delete this.runtime.feedFailures[symbol]; delete this.runtime.tickSize[symbol];
           delete this.runtime.contractMeta[symbol];
         }
@@ -235,7 +236,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private captureAuthority() {
-    return structuredClone({ positions: this.runtime.positions, plans: this.runtime.plans, decisions: this.runtime.decisions,
+    return structuredClone({ positions: this.runtime.positions, plans: this.runtime.plans, decisions: this.runtime.decisions, routes: this.runtime.routes,
       evidence: this.runtime.evidence, equity: this.runtime.equity, equityVersion: this.runtime.equityVersion,
       outbox: this.runtime.outbox, paperCycle: this.runtime.paperCycle, bankruptcyOutbox: this.runtime.bankruptcyOutbox,
       lastStopCheckpointAt: this.runtime.lastStopCheckpointAt });
@@ -245,6 +246,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.positions = authority.positions;
     this.runtime.plans = authority.plans;
     this.runtime.decisions = authority.decisions;
+    this.runtime.routes = authority.routes;
     this.runtime.evidence = authority.evidence;
     this.runtime.equity = authority.equity;
     this.runtime.equityVersion = authority.equityVersion;
@@ -304,14 +306,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         this.memory[symbol].flow.funding = after?.fundingRate ?? 0;
         this.sessionWarmup[symbol] = 0;
         this.runtime.decisions[symbol] = null;
+        this.runtime.routes[symbol] = [];
       }
       if (this.memory[symbol]) this.memory[symbol].flow.funding = after?.fundingRate ?? 0;
     }
-    for (const symbol of new Set([...Object.keys(this.memory), ...Object.keys(this.sessionWarmup), ...Object.keys(this.runtime.decisions),
+    for (const symbol of new Set([...Object.keys(this.memory), ...Object.keys(this.sessionWarmup), ...Object.keys(this.runtime.decisions), ...Object.keys(this.runtime.routes),
       ...Object.keys(this.runtime.plans), ...Object.keys(this.runtime.positions), ...Object.keys(this.runtime.evidence),
       ...Object.keys(this.runtime.feedFailures), ...Object.keys(this.runtime.tickSize), ...Object.keys(this.runtime.contractMeta)])) {
       if (next.includes(symbol)) continue;
-      delete this.memory[symbol]; delete this.sessionWarmup[symbol]; delete this.runtime.decisions[symbol]; delete this.runtime.plans[symbol];
+      delete this.memory[symbol]; delete this.sessionWarmup[symbol]; delete this.runtime.decisions[symbol]; delete this.runtime.routes[symbol]; delete this.runtime.plans[symbol];
       delete this.runtime.positions[symbol]; delete this.runtime.evidence[symbol]; delete this.runtime.feedFailures[symbol];
       delete this.runtime.tickSize[symbol]; delete this.runtime.contractMeta[symbol];
     }
@@ -374,7 +377,18 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         (this.chartCandles[result.value.symbol] ??= {})[timeframe] = rows;
         const key = timeframe === "1m" ? "m1" : timeframe === "15m" ? "m15" : "h1";
         memory.structureByTimeframe[key] = deriveStructureZones(rows, timeframe, memory.lastMid);
-        memory.structureZones = [...memory.structureByTimeframe.m1, ...memory.structureByTimeframe.m15, ...memory.structureByTimeframe.h1];
+        if (timeframe === "15m") memory.range15m = deriveRangeStructure(rows);
+        if (timeframe === "1h") {
+          const h4 = aggregateFourHourCandles(rows);
+          this.chartCandles[result.value.symbol]!["4h"] = h4;
+          memory.structureByTimeframe.h4 = deriveStructureZones(h4, "4h", memory.lastMid);
+          if (h4.length >= 20) {
+            memory.timeframeBias.h4 = structureDirection(memory.structureByTimeframe.h4);
+            memory.timeframeUpdatedAt.h4 = (h4.at(-1)!.time + 14_400) * 1_000;
+          }
+        }
+        memory.structureZones = [...memory.structureByTimeframe.m1, ...memory.structureByTimeframe.m15,
+          ...memory.structureByTimeframe.h1, ...memory.structureByTimeframe.h4];
         if (rows.length >= 20) {
           memory.timeframeBias[key] = structureDirection(memory.structureByTimeframe[key]);
           const seconds = timeframe === "1m" ? 60 : timeframe === "15m" ? 900 : 3_600;
@@ -473,7 +487,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private async mirrorChartCandles(now: number) {
     if (now - this.runtime.lastChartMirrorAt < 5 * 60_000 || this.runtime.d1Writes >= 4_800) return;
-    const complete = DEFAULT_SYMBOLS.every((symbol) => ["1m", "15m", "1h"].every((interval) => (this.chartCandles[symbol]?.[interval as "1m" | "15m" | "1h"]?.length ?? 0) >= 20));
+    const complete = DEFAULT_SYMBOLS.every((symbol) => ["1m", "15m", "1h", "4h"].every((interval) => (this.chartCandles[symbol]?.[interval as "1m" | "15m" | "1h" | "4h"]?.length ?? 0) >= 20));
     if (!complete) return;
     try {
       await this.env.DB.prepare("UPDATE system_settings SET chart_cache_json=?,chart_cache_at=? WHERE id=1")
@@ -858,6 +872,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.live.lastError = null;
     let availableForNewEntries = available;
     let riskForNewEntries = this.liveOpenRisk();
+    let marginForNewEntries = [
+      ...Object.values(this.runtime.live.positions).filter((position) => position?.status === "OPEN"),
+      ...Object.values(this.runtime.live.entries).filter((entry) => entry && ["SUBMITTING", "OPEN"].includes(entry.status)),
+    ].reduce((sum, item) => sum + (item?.margin ?? 0), 0);
     const staged: Array<{ symbol: string; plan: PaperPlan; intent: ReturnType<typeof buildLiveEntryIntent> }> = [];
     for (const [symbol, skip] of Object.entries(this.runtime.live.entrySkips)) {
       const plan = this.runtime.plans[symbol] ?? null;
@@ -881,7 +899,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       try {
         intent = buildLiveEntryIntent({ plan, equity, available: availableForNewEntries, openRisk: riskForNewEntries,
           quantoMultiplier: this.runtime.contractMeta[symbol]?.quantoMultiplier ?? 1,
-          leverageMax: this.runtime.contractMeta[symbol]?.leverageMax ?? 50 });
+          maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate ?? 0.005,
+          leverageMax: this.runtime.contractMeta[symbol]?.leverageMax ?? 50, openMargin: marginForNewEntries });
       } catch (error) {
         if (!(error instanceof LiveEntrySizingError)) throw error;
         this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: error.code, reason: error.message, observedAt: now };
@@ -890,6 +909,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       delete this.runtime.live.entrySkips[symbol];
       availableForNewEntries = Math.max(0, availableForNewEntries - intent.margin);
       riskForNewEntries += intent.plannedRisk;
+      marginForNewEntries += intent.margin;
       staged.push({ symbol, plan, intent });
     }
     for (const { symbol, plan, intent } of staged) {
@@ -965,6 +985,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         this.runtime.plans[attemptedSymbol] = cancelled.plan;
         this.runtime.positions[attemptedSymbol] = cancelled.position;
         this.runtime.decisions[attemptedSymbol] = null;
+        this.runtime.routes[attemptedSymbol] = [];
         if (this.runtime.evidence[attemptedSymbol]) this.runtime.evidence[attemptedSymbol].fresh = false;
         continue;
       }
@@ -1002,13 +1023,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           this.runtime.plans[symbol] = cancelled.plan;
           this.runtime.positions[symbol] = cancelled.position;
           this.runtime.decisions[symbol] = null;
+          this.runtime.routes[symbol] = [];
         }
         continue;
       }
       const analysisStart = performance.now();
       const analyzed = validation.fresh && !validation.sequenceFault && progressed
         ? analyzeSnapshot(memory, snapshot)
-        : { midpoint: memory.lastMid, zones: [] as LiquidityZone[], bands: [], absorption: 0, decision: null };
+        : { midpoint: memory.lastMid, zones: [] as LiquidityZone[], bands: [], absorption: 0, decision: null,
+          routes: [] as LiquidityRoute[], range15m: memory.range15m, confirmationBySide: { LONG: 0, SHORT: 0 } };
       this.runtime.analysisMs.push(performance.now() - analysisStart);
       if (this.runtime.analysisMs.length > 240) this.runtime.analysisMs.shift();
       const priorPlan = this.runtime.plans[symbol] ?? null;
@@ -1020,8 +1043,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const reconciled = reconcilePaper({ now, midpoint: analyzed.midpoint, fresh: validation.fresh, sequenceFault: validation.sequenceFault,
         decision, plan: priorPlan, position: priorPosition, zones: analyzed.zones, absorption: analyzed.absorption,
         confirmationMinute: memory.timeframeUpdatedAt.m1, equity: markToMarketEquity(this.runtime), openRisk, allowOpen: false,
-        protectOnly: (this.sessionWarmup[symbol] ?? 0) < WARMUP_SNAPSHOTS });
+        protectOnly: (this.sessionWarmup[symbol] ?? 0) < WARMUP_SNAPSHOTS,
+        activeRoutes: analyzed.routes, breakoutConfirmation: priorPlan ? analyzed.confirmationBySide[priorPlan.side] : undefined,
+        maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate, leverageMax: this.runtime.contractMeta[symbol]?.leverageMax });
       this.runtime.decisions[symbol] = decision;
+      this.runtime.routes[symbol] = ancillaryFresh ? analyzed.routes : [];
       this.runtime.plans[symbol] = reconciled.plan;
       const closedNow = priorPosition?.status === "OPEN" && reconciled.position?.status === "CLOSED";
       if (closedNow) closedThisCycle.add(symbol);
@@ -1037,7 +1063,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         fresh: validation.fresh && !validation.sequenceFault, ancillaryFresh,
         topLong: analyzed.zones.filter((zone) => zone.side === "LONG").sort((a, b) => b.score - a.score)[0] ?? null,
         topShort: analyzed.zones.filter((zone) => zone.side === "SHORT").sort((a, b) => b.score - a.score)[0] ?? null,
-        absorption: analyzed.absorption,
+        absorption: analyzed.absorption, range15m: analyzed.range15m,
       };
       if (validation.fresh && !validation.sequenceFault && progressed) {
         memory.lastSequence = snapshot.sequence || memory.lastSequence;
@@ -1106,6 +1132,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         this.runtime.positions = {};
         this.runtime.plans = {};
         this.runtime.decisions = {};
+        this.runtime.routes = {};
         bankruptcyPending = false;
         rolledOverThisCycle = true;
         criticalChanged = true;
@@ -1115,6 +1142,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // Exits update draft absolute equity before candidates are ranked; nothing is published yet.
     const rankedCandidates = analyzedRows
       .filter(({ symbol, validation }) => !bankruptcyPending && !rolledOverThisCycle && validation.fresh && !validation.sequenceFault && !closedThisCycle.has(symbol) && this.runtime.positions[symbol]?.status !== "OPEN")
+      .filter(({ symbol }) => this.runtime.plans[symbol]?.state === "PREPARED")
       .sort((a, b) => {
         const utility = (row: typeof a) => {
           const plan = this.runtime.plans[row.symbol];
@@ -1138,7 +1166,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const reconciled = reconcilePaper({ now, midpoint: row.analyzed.midpoint, fresh: true, sequenceFault: false,
         decision: this.runtime.decisions[row.symbol], plan: priorPlan, position: priorPosition, zones: row.analyzed.zones,
         absorption: row.analyzed.absorption, confirmationMinute: this.memory[row.symbol]?.timeframeUpdatedAt.m1,
-        equity: markToMarketEquity(this.runtime), openRisk, allowOpen: true });
+        equity: markToMarketEquity(this.runtime), openRisk, allowOpen: true,
+        activeRoutes: row.analyzed.routes, breakoutConfirmation: priorPlan ? row.analyzed.confirmationBySide[priorPlan.side] : undefined,
+        maintenanceRate: this.runtime.contractMeta[row.symbol]?.maintenanceRate, leverageMax: this.runtime.contractMeta[row.symbol]?.leverageMax });
       this.runtime.plans[row.symbol] = reconciled.plan;
       this.runtime.positions[row.symbol] = reconciled.position;
       this.queueTransition(reconciled.position, priorPosition);
@@ -1244,7 +1274,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const ancillaryStarted = this.runtime.symbols.every((symbol) => {
         const memory = this.memory[symbol];
         return memory && memory.oiUpdatedAt > 0 && memory.tradesUpdatedAt > 0 && memory.liquidationsUpdatedAt > 0
-          && memory.timeframeUpdatedAt.m1 > 0 && memory.timeframeUpdatedAt.m15 > 0 && memory.timeframeUpdatedAt.h1 > 0;
+          && memory.timeframeUpdatedAt.m1 > 0 && memory.timeframeUpdatedAt.m15 > 0
+          && memory.timeframeUpdatedAt.h1 > 0 && memory.timeframeUpdatedAt.h4 > 0;
       });
       this.runtime.state = !this.authorityReady ? "RECOVERY_REQUIRED" : successes === 0 ? "RECONNECTING"
         : successes !== this.runtime.symbols.length ? "DEGRADED"
@@ -1379,7 +1410,7 @@ async function accountLogs(env: CloudflareEnv) {
 async function chartCandles(url: URL, env: CloudflareEnv) {
   const symbol = url.searchParams.get("symbol") ?? "";
   const interval = url.searchParams.get("interval") ?? "15m";
-  if (!DEFAULT_SYMBOLS.includes(symbol) || !["1m", "15m", "1h"].includes(interval)) {
+  if (!DEFAULT_SYMBOLS.includes(symbol) || !["1m", "15m", "1h", "4h"].includes(interval)) {
     return json({ error: "unsupported futures chart" }, 400);
   }
   const key = `${symbol}:${interval}`;
@@ -1389,8 +1420,8 @@ async function chartCandles(url: URL, env: CloudflareEnv) {
   }
   try {
     const row = await env.DB.prepare("SELECT chart_cache_json AS chartCache,chart_cache_at AS chartCacheAt FROM system_settings WHERE id=1").first<{ chartCache: string | null; chartCacheAt: number | null }>();
-    const bundle = row?.chartCache ? JSON.parse(row.chartCache) as Record<string, Partial<Record<"1m" | "15m" | "1h", Awaited<ReturnType<typeof fetchStructureCandles>>>>> : {};
-    const candles = bundle[symbol]?.[interval as "1m" | "15m" | "1h"] ?? [];
+    const bundle = row?.chartCache ? JSON.parse(row.chartCache) as Record<string, Partial<Record<"1m" | "15m" | "1h" | "4h", Awaited<ReturnType<typeof fetchStructureCandles>>>>> : {};
+    const candles = bundle[symbol]?.[interval as "1m" | "15m" | "1h" | "4h"] ?? [];
     if (candles.length < 20) throw new Error("actual candles warming");
     const body = JSON.stringify({ symbol, interval, source: "GATE_USDT_FUTURES", candles, generatedAt: row?.chartCacheAt ?? Date.now() });
     candleCache.set(key, { response: body, expiresAt: Date.now() + 20_000 });

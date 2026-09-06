@@ -1,4 +1,4 @@
-export const SYSTEM_VERSION = "liquidity-three-state-v1";
+export const SYSTEM_VERSION = "liquidity-route-v2";
 export const PORTFOLIO_RISK_CAP = 0.05;
 export const STALE_AFTER_MS = 3_000;
 export const WALL_WINDOW = 30;
@@ -10,6 +10,8 @@ export const MAX_SINGLE_TRADE_RISK_RATE = 0.018;
 export const MAX_NOTIONAL_TO_EQUITY = 4;
 export const MIN_NET_TARGET_RETURN_ON_EQUITY = 0.015;
 export const DYNAMIC_EXIT_CONFIRMATIONS = 2;
+export const TARGET_MARGIN_RATE = 0.10;
+export const PORTFOLIO_MARGIN_CAP = 0.30;
 
 export type Side = "LONG" | "SHORT";
 export type MarketState = "BREAKOUT" | "REVERSAL" | "RANGE";
@@ -36,7 +38,40 @@ export type FlowEvidence = {
 };
 
 export type TimeframeState = "UNKNOWN" | "NEUTRAL" | "UP" | "DOWN";
-export type TimeframeBias = { m1: TimeframeState; m15: TimeframeState; h1: TimeframeState };
+export type TimeframeBias = { m1: TimeframeState; m15: TimeframeState; h1: TimeframeState; h4?: TimeframeState };
+
+export type RangeStructure = {
+  lower: number;
+  upper: number;
+  midpoint: number;
+  widthRate: number;
+  touchesLower: number;
+  touchesUpper: number;
+  quality: number;
+  observedAt: number;
+};
+
+export type RouteStage = "LOCAL_TO_NODE" | "AT_NODE" | "NODE_TO_NEXT";
+export type RouteKind = "LOCAL_BREAKOUT" | "EDGE_REJECTION" | "NODE_CONTINUATION";
+export type LiquidityRoute = {
+  id: string;
+  symbol: string;
+  side: Side;
+  kind: RouteKind;
+  stage: RouteStage;
+  entryTrigger: number;
+  invalidation: number;
+  target: number;
+  targetIdentity: string;
+  targetTimeframe: "15m" | "1h" | "4h";
+  nextTarget: number | null;
+  confirmationScore: number;
+  fakeoutRisk: number;
+  activationDistanceRate: number;
+  score: number;
+  executableNow: boolean;
+  reason: string[];
+};
 
 export type WallEvidence = {
   snapshots: number;
@@ -72,6 +107,14 @@ export type Decision = {
   score: number;
   oppositeScore: number;
   reason: string[];
+  routeId?: string;
+  routeStage?: RouteStage;
+  routeKind?: RouteKind;
+  targetTimeframe?: "15m" | "1h" | "4h";
+  nextTarget?: number | null;
+  confirmationScore?: number;
+  fakeoutRisk?: number;
+  activationDistanceRate?: number;
 };
 
 export type PaperPlan = Decision & {
@@ -81,6 +124,8 @@ export type PaperPlan = Decision & {
   expiresAt: number;
   plannedRisk: number;
   notional: number;
+  leverage?: number;
+  margin?: number;
 };
 
 export type PaperPosition = {
@@ -226,6 +271,10 @@ function directionalPressure(flow: FlowEvidence) {
   );
 }
 
+export function flowPressure(flow: FlowEvidence) {
+  return directionalPressure(flow);
+}
+
 export function decideThreeState(input: {
   symbol: string;
   observedAt: number;
@@ -248,7 +297,7 @@ export function decideThreeState(input: {
   const longCascade = hasCascade(input.bands, "LONG", input.mid);
   const shortCascade = hasCascade(input.bands, "SHORT", input.mid);
   const timeframe = input.timeframeBias ?? { m1: "UNKNOWN", m15: "UNKNOWN", h1: "UNKNOWN" };
-  if (Object.values(timeframe).includes("UNKNOWN")) return null;
+  if ([timeframe.m1, timeframe.m15, timeframe.h1].includes("UNKNOWN")) return null;
   const direction = (value: TimeframeState) => value === "UP" ? 1 : value === "DOWN" ? -1 : 0;
   const matrix = { m1: direction(timeframe.m1), m15: direction(timeframe.m15), h1: direction(timeframe.h1) };
   const directional = Object.values(matrix).filter((value) => value !== 0);
@@ -327,6 +376,27 @@ export function sizePaperPosition(input: {
   const notional = Math.min(riskSizedNotional, input.equity * MAX_NOTIONAL_TO_EQUITY);
   const allowedLoss = notional * lossRate;
   return { allowedLoss, notional, lossRate, portfolioRiskAfter: input.openRisk + allowedLoss };
+}
+
+export function selectSafeLeverage(input: {
+  notional: number;
+  equity: number;
+  entry: number;
+  invalidation: number;
+  maintenanceRate?: number;
+  leverageMax?: number;
+}) {
+  const structuralMove = Math.abs(input.entry - input.invalidation) / Math.max(input.entry, 1e-9);
+  const maintenanceRate = clamp(input.maintenanceRate ?? 0.005, 0, 0.25);
+  const exchangeMax = Math.max(1, Math.floor(input.leverageMax ?? 50));
+  // Reserve roughly three structural-stop distances before the estimated
+  // liquidation boundary. Higher leverage only releases margin; risk sizing
+  // and the account-wide stop-loss budget remain unchanged.
+  const liquidationSafeMax = Math.max(1, Math.floor(1 / Math.max(maintenanceRate + structuralMove * 3 + ROUND_TRIP_FRICTION_RATE, 1e-6)));
+  const targetLeverage = Math.max(1, Math.ceil(input.notional / Math.max(input.equity * TARGET_MARGIN_RATE, 1e-9)));
+  const leverage = Math.min(exchangeMax, liquidationSafeMax, targetLeverage);
+  const margin = input.notional / Math.max(leverage, 1);
+  return { leverage, margin, marginRate: margin / Math.max(input.equity, 1e-9), liquidationSafeMax };
 }
 
 export function tradeEconomics(input: { entry: number; target: number; lossRate: number; confidence: number; notional: number; equity: number }) {
