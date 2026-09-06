@@ -32,6 +32,7 @@ const time = (value: number | null | undefined) => value ? new Date(value).toLoc
 const sideText = (side: Side) => side === "LONG" ? "做多" : "做空";
 const distancePct = (from: number, to: number) => Math.abs(to - from) / Math.max(from, 1e-9) * 100;
 const rr = (entry: number, stop: number, target: number) => Math.abs(target - entry) / Math.max(Math.abs(entry - stop), 1e-9);
+const displayLeverage = (notional: number, equity: number) => [1, 2, 3, 5, 10, 20, 50].find((value) => notional / value <= equity * .6) ?? 50;
 
 function waitReason(runtime: Runtime | null, marketReady: boolean, symbol: string) {
   if (!runtime) return "正在连接后台行情";
@@ -85,7 +86,7 @@ export default function Home() {
 
   const responseFresh = runtime != null && clock - receivedAt < RUNTIME_DISPLAY_TTL_MS && clock - runtime.generatedAt < RUNTIME_DISPLAY_TTL_MS;
   const healthy = runtimeReady(runtime, responseFresh);
-  const operational = runtime != null && responseFresh && runtime.authorityReady && !runtime.stale;
+  const authorityOperational = runtime != null && runtime.authorityReady && !runtime.stale;
   const openPositions = useMemo(() => runtime?.symbols.flatMap((symbol) => runtime.positions[symbol]?.status === "OPEN" ? [{ symbol, position: runtime.positions[symbol]! }] : []) ?? [], [runtime]);
   const preparedPlans = useMemo(() => runtime?.symbols.flatMap((symbol) => runtime.plans[symbol]?.state === "PREPARED" ? [{ symbol, plan: runtime.plans[symbol]! }] : []) ?? [], [runtime]);
   const bestDecision = useMemo(() => runtime?.symbols.map((symbol) => ({ symbol, decision: runtime.decisions[symbol] })).filter((row): row is { symbol: string; decision: Decision } => row.decision != null).sort((a, b) => b.decision.score - a.decision.score)[0] ?? null, [runtime]);
@@ -95,9 +96,9 @@ export default function Home() {
   const primary = openPositions[0] ? { symbol: openPositions[0].symbol, side: openPositions[0].position.side, state: openPositions[0].position.scenario, kind: "position" }
     : preparedPlans[0] ? { symbol: preparedPlans[0].symbol, side: preparedPlans[0].plan.side, state: preparedPlans[0].plan.marketState, kind: "plan" }
       : bestDecision ? { symbol: bestDecision.symbol, side: bestDecision.decision.side, state: bestDecision.decision.marketState, kind: "decision" } : null;
-  const primaryReady = primary ? Boolean(operational && runtime?.evidence[primary.symbol]?.fresh && runtime.evidence[primary.symbol]?.ancillaryFresh) : false;
-  const headline = !operational ? "行情正在恢复，暂不进场" : primary?.kind === "position" ? `正在持有 ${primary.symbol.replace("_", "/")} ${primary.side === "LONG" ? "多单" : "空单"}` : primary ? `准备${sideText(primary.side)} ${primary.symbol.replace("_", "/")}` : "继续观察，暂不开仓";
-  const headlineDetail = primary ? `${stateText[primary.state]}判断 · ${waitReason(runtime, primaryReady, primary.symbol)}` : runtime?.symbols[0] ? waitReason(runtime, Boolean(operational && runtime.evidence[runtime.symbols[0]]?.fresh && runtime.evidence[runtime.symbols[0]]?.ancillaryFresh), runtime.symbols[0]) : "正在等待第一批行情";
+  const primaryReady = primary ? Boolean(authorityOperational && runtime?.evidence[primary.symbol]?.fresh && runtime.evidence[primary.symbol]?.ancillaryFresh) : false;
+  const headline = !authorityOperational ? "行情正在恢复，暂不进场" : primary?.kind === "position" ? `正在持有 ${primary.symbol.replace("_", "/")} ${primary.side === "LONG" ? "多单" : "空单"}` : primary ? `准备${sideText(primary.side)} ${primary.symbol.replace("_", "/")}` : "继续观察，暂不开仓";
+  const headlineDetail = primary ? `${stateText[primary.state]}判断 · ${waitReason(runtime, primaryReady, primary.symbol)}` : runtime?.symbols[0] ? waitReason(runtime, Boolean(authorityOperational && runtime.evidence[runtime.symbols[0]]?.fresh && runtime.evidence[runtime.symbols[0]]?.ancillaryFresh), runtime.symbols[0]) : "正在等待第一批行情";
 
   return <main>
     <header className="topbar">
@@ -113,12 +114,12 @@ export default function Home() {
       <article><small>当前持仓浮盈亏</small><strong className={floatingPnl >= 0 ? "positive" : "negative"}>{runtime ? `${signed(floatingPnl)} U` : "—"}</strong><p>{openPositions.length} 笔模拟持仓</p></article>
       <article><small>组合风险预算</small><strong>{num(riskUsed, 2)} / {num(riskLimit, 2)} U</strong><div className="risk-bar"><i style={{ width: `${Math.min(100, riskLimit ? riskUsed / riskLimit * 100 : 0)}%` }} /></div><p>剩余 {num(Math.max(0, riskLimit - riskUsed), 2)} U</p></article>
     </section>
-    {error && <p className="notice">页面读取延迟：{error}。服务器仍会独立运行。</p>}{runtime?.lastError && <p className="notice">系统正在自动恢复：{runtime.lastError}</p>}
+    {(!responseFresh || error) && runtime && <p className="notice">手机页面更新延迟，下面保留最近一次后台状态；服务器仍独立运行，不会因此停止判断或开模拟单。</p>}{runtime?.lastError && <p className="notice">系统正在自动恢复：{runtime.lastError}</p>}
 
     <nav className="tabs">{([['brain', '大脑'], ['orders', `订单 ${openPositions.length + preparedPlans.length || ''}`], ['history', '历史'], ['settings', '设置']] as const).map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => setTab(key)}>{label}</button>)}</nav>
 
     {tab === "brain" && <section className="markets">{runtime?.symbols.map((symbol) => {
-      const evidence = runtime.evidence[symbol], marketFresh = Boolean(operational && evidence?.fresh && evidence?.ancillaryFresh);
+      const evidence = runtime.evidence[symbol], marketFresh = Boolean(authorityOperational && evidence?.fresh && evidence?.ancillaryFresh);
       const decision = marketFresh ? runtime.decisions[symbol] : null, plan = marketFresh ? runtime.plans[symbol] : null, position = runtime.positions[symbol];
       const status = position?.status === "OPEN" ? "持仓中" : plan?.state === "PREPARED" ? "等待进场" : decision ? "发现机会" : evidence?.warmup < 30 ? `预热 ${evidence?.warmup ?? 0}/30` : "继续观察";
       return <article className="market" key={symbol}><div className="market-title"><div><small>{symbol.replace("_", "/")}</small><h2>{marketFresh ? status : "数据恢复中"}</h2></div><strong>{marketFresh ? num(evidence?.midpoint, 5) : "—"}</strong></div>
@@ -131,8 +132,8 @@ export default function Home() {
     }) ?? <div className="empty">正在读取市场数据…</div>}</section>}
 
     {tab === "orders" && <section className="panel-list">{!openPositions.length && !preparedPlans.length && <div className="empty"><b>当前没有订单</b><p>出现合适位置后会先显示准备计划，再自动建立模拟持仓。</p></div>}
-      {openPositions.map(({ symbol, position }) => <OrderCard key={symbol} symbol={symbol} side={position.side} label="持仓中" state={position.scenario} notional={position.notional} values={[["进场", position.entryPrice], ["保护价", position.currentStop], ["动态目标", position.currentTarget], ["计划风险", position.plannedRisk]]} />)}
-      {preparedPlans.map(({ symbol, plan }) => <OrderCard key={symbol} symbol={symbol} side={plan.side} label="等待触发" state={plan.marketState} notional={plan.notional} values={[["触发进场", plan.entryTrigger], ["结构止损", plan.invalidation], ["目标", plan.target], ["计划风险", plan.plannedRisk]]} />)}
+      {openPositions.map(({ symbol, position }) => <OrderCard key={symbol} symbol={symbol} side={position.side} label="持仓中" state={position.scenario} notional={position.notional} equity={runtime?.equity ?? INITIAL_EQUITY} values={[["进场", position.entryPrice], ["保护价", position.currentStop], ["动态目标", position.currentTarget], ["计划风险", position.plannedRisk]]} />)}
+      {preparedPlans.map(({ symbol, plan }) => <OrderCard key={symbol} symbol={symbol} side={plan.side} label="等待触发" state={plan.marketState} notional={plan.notional} equity={runtime?.equity ?? INITIAL_EQUITY} values={[["触发进场", plan.entryTrigger], ["结构止损", plan.invalidation], ["目标", plan.target], ["计划风险", plan.plannedRisk]]} />)}
     </section>}
 
     {tab === "history" && <section className="history-panel"><div className="section-heading"><div><h2>最近模拟交易</h2><p>只展示真实产生过的记录，不填充示例数据。</p></div><span>{history.filter((item) => item.status === "CLOSED").length} 笔已结束</span></div>
@@ -145,8 +146,9 @@ export default function Home() {
   </main>;
 }
 
-function OrderCard({ symbol, side, label, state, notional, values }: { symbol: string; side: Side; label: string; state: MarketState; notional: number; values: [string, number][] }) {
-  return <article className="order-card"><div><span className={`side ${side.toLowerCase()}`}>{side === "LONG" ? "多" : "空"}</span><div><h3>{symbol.replace("_", "/")} · {label}</h3><p>{stateText[state]}策略</p></div></div><strong>{num(notional, 2)} U</strong><dl>{values.map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{num(value, name.includes("风险") ? 2 : 5)}{name.includes("风险") ? " U" : ""}</dd></div>)}</dl></article>;
+function OrderCard({ symbol, side, label, state, notional, equity, values }: { symbol: string; side: Side; label: string; state: MarketState; notional: number; equity: number; values: [string, number][] }) {
+  const leverage = displayLeverage(notional, equity), margin = notional / leverage;
+  return <article className="order-card"><div><span className={`side ${side.toLowerCase()}`}>{side === "LONG" ? "多" : "空"}</span><div><h3>{symbol.replace("_", "/")} · {label}</h3><p>{stateText[state]} · PAPER 模拟合约</p></div></div><strong style={{ textAlign: "right" }}><small style={{ display: "block", color: "var(--muted)", fontSize: 10 }}>合约名义价值</small>{num(notional, 2)} U</strong><dl>{values.map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{num(value, name.includes("风险") ? 2 : 5)}{name.includes("风险") ? " U" : ""}</dd></div>)}<div><dt>模拟杠杆</dt><dd>{leverage}×</dd></div><div><dt>预计保证金</dt><dd>{num(margin, 2)} U</dd></div></dl><p style={{ gridColumn: "1 / -1", margin: 0, color: "var(--muted)", fontSize: 11 }}>触发时按最新价格、权益和组合风险重新计算；当前不会向 Gate 提交真实订单。</p></article>;
 }
 
 function CandleChart({ symbol, evidence, decision, position }: {

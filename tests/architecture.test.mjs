@@ -60,6 +60,10 @@ test("external API is read-only PAPER and the operator UI explains every decisio
   assert.match(page, /RUNTIME_REQUEST_TIMEOUT_MS = 30_000/);
   assert.match(page, /RUNTIME_DISPLAY_TTL_MS = 90_000/);
   assert.doesNotMatch(page, /responseFresh && !error/);
+  assert.match(page, /authorityOperational && evidence\?\.fresh && evidence\?\.ancillaryFresh/);
+  assert.match(page, /合约名义价值/);
+  assert.match(page, /模拟杠杆/);
+  assert.match(page, /预计保证金/);
   assert.match(page, /AbortController/);
   assert.match(page, /document\.hidden/);
   assert.match(page, /系统现在的决定/);
@@ -75,7 +79,7 @@ test("external API is read-only PAPER and the operator UI explains every decisio
   assert.match(page, /Gate USDT 合约 · 已收盘数据/);
   assert.match(page, /1分钟.*15分钟.*1小时/s);
   assert.match(page, /不预挂单，等待实时价格到达/);
-  assert.match(page, /operational && evidence\?\.fresh && evidence\?\.ancillaryFresh/);
+  assert.match(page, /authorityOperational && evidence\?\.fresh && evidence\?\.ancillaryFresh/);
   assert.match(page, /订单.*历史.*设置/s);
   assert.doesNotMatch(layout, /requireChatGPTUser|redirect|signin-with-chatgpt/);
   assert.equal(await read("app/chatgpt-auth.ts").then(() => false, () => true), true);
