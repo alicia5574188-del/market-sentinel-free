@@ -108,6 +108,9 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(page, /实盘订单/);
   assert.match(page, /API 管理/);
   assert.match(page, /撤销系统遗留挂单/);
+  assert.match(worker, /cancelAndConfirmSystemEntries/);
+  assert.match(worker, /Gate 仍有 \$\{remaining\.length\} 张系统挂单未撤销/);
+  assert.match(live, /function parseGateJson/);
   assert.match(page, /function CandleChart/);
   assert.match(page, /loadedInterval === interval \? candles\.slice\(-72\) : \[\]/);
   assert.match(page, /Gate USDT 合约 · 已收盘数据/);

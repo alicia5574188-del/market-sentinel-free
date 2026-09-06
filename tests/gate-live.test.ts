@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, liveEntryDisposition } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, liveEntryDisposition, liveOrderId } from "../lib/gate-live.ts";
 import type { PaperPlan } from "../lib/liquidity-core.ts";
 
 function plan(marketState: PaperPlan["marketState"], side: PaperPlan["side"]): PaperPlan {
@@ -67,6 +67,29 @@ test("private Gate requests are signed and order IDs remain strings", async () =
     assert.equal(seen[0].headers.get("KEY"), "abcdefgh12345678");
     assert.match(seen[0].headers.get("SIGN") ?? "", /^[0-9a-f]{128}$/);
     assert.equal(seen[0].url.includes("secret-value"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("int64 order IDs from Gate snapshots survive JSON parsing and cancellation unchanged", async () => {
+  const originalFetch = globalThis.fetch;
+  const seen: Request[] = [];
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init); seen.push(request);
+    const path = new URL(request.url).pathname;
+    if (request.method === "DELETE") return new Response("{}", { headers: { "Content-Type": "application/json" } });
+    if (path.endsWith("/accounts")) return new Response('{"user":1,"total":"10","available":"5"}');
+    if (path.endsWith("/positions")) return new Response("[]");
+    if (path.endsWith("/price_orders")) return new Response("[]");
+    return new Response('[{"id":9223372036854775807,"text":"t-ms-e-stale","contract":"BTC_USDT"}]');
+  };
+  try {
+    const client = new GateLiveClient({ apiKey: "abcdefgh12345678", apiSecret: "secret-value-12345678", environment: "live" });
+    const snapshot = await client.snapshot();
+    assert.equal(liveOrderId(snapshot.orders[0]), "9223372036854775807");
+    await client.cancelOrder("LIMIT", liveOrderId(snapshot.orders[0])!);
+    assert.equal(new URL(seen.at(-1)!.url).pathname.endsWith("/orders/9223372036854775807"), true);
   } finally {
     globalThis.fetch = originalFetch;
   }

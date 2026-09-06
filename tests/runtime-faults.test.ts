@@ -615,3 +615,20 @@ test("forced OFF reconciliation cancels only orphaned Market Sentinel entry tags
   assert.deepEqual(cancelled, [["LIMIT", "101"]]);
   assert.equal(stream.runtime.live.requestedEnabled, false);
 });
+
+test("forced OFF reconciliation fails unless Gate confirms system orders are gone", async () => {
+  const { stream } = await makeStream();
+  let snapshotCalls = 0;
+  stream.liveClient = {
+    requestCount: 0,
+    snapshot: async () => {
+      snapshotCalls += 1;
+      return { account: { total: "1000", available: "1000", in_dual_mode: false }, positions: [],
+        orders: [{ id_string: "9223372036854775807", text: "t-ms-e-stuck" }], priceOrders: [], checkedAt: Date.now() };
+    },
+    cancelOrder: async () => undefined,
+  };
+
+  await assert.rejects(() => stream.syncLive(Date.now(), false, true), /仍有 1 张系统挂单未撤销/);
+  assert.equal(snapshotCalls, 3, "cleanup must re-read Gate after both cancellation attempts");
+});

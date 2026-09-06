@@ -7,7 +7,7 @@ import { closePaperPosition, PORTFOLIO_RISK_CAP, remainingStressRisk, SYSTEM_VER
 import { analyzeSnapshot, ancillaryIsFresh, ancillarySchedule, applyFlow, deriveStructureZones, emptySymbolMemory, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
 import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem } from "../lib/paper-outbox.ts";
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
-import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveSnapshot } from "../lib/gate-live.ts";
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
 import { credentialMetadata } from "../lib/gate-readonly.ts";
 import { clearOwnerSessionCookie, createOwnerSession, ownerAuthConfigured, ownerPasswordMatches, ownerSessionCookie, sameOriginMutation, verifyOwnerSession } from "../lib/owner-auth.ts";
@@ -574,6 +574,41 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
   }
 
+  private systemEntryOrders(snapshot: GateLiveSnapshot, trackedIds: Set<string>) {
+    const systemEntry = (order: GateLiveOrder) => {
+      const tag = liveOrderTag(order) ?? "";
+      const id = liveOrderId(order);
+      return tag.startsWith("t-ms-e-") || Boolean(id && trackedIds.has(id));
+    };
+    return [
+      ...snapshot.orders.filter(systemEntry).map((order) => ({ kind: "LIMIT" as const, order })),
+      ...snapshot.priceOrders.filter(systemEntry).map((order) => ({ kind: "PRICE_TRIGGER" as const, order })),
+    ];
+  }
+
+  private async cancelAndConfirmSystemEntries(client: GateLiveClient, snapshot: GateLiveSnapshot, trackedIds: Set<string>, knownTags?: Set<string>) {
+    let current = snapshot;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const candidates = this.systemEntryOrders(current, trackedIds).filter(({ order }) => {
+        if (!knownTags) return true;
+        const tag = liveOrderTag(order) ?? "";
+        return tag.startsWith("t-ms-e-") && !knownTags.has(tag);
+      });
+      if (!candidates.length) return current;
+      const unresolvedId = candidates.find(({ order }) => !liveOrderId(order));
+      if (unresolvedId) throw new Error("Gate 返回了无法识别编号的系统挂单，撤单未确认");
+      await Promise.all(candidates.map(({ kind, order }) => client.cancelOrder(kind, liveOrderId(order)!)));
+      current = await client.snapshot();
+    }
+    const remaining = this.systemEntryOrders(current, trackedIds).filter(({ order }) => {
+      if (!knownTags) return true;
+      const tag = liveOrderTag(order) ?? "";
+      return tag.startsWith("t-ms-e-") && !knownTags.has(tag);
+    });
+    if (remaining.length) throw new Error(`Gate 仍有 ${remaining.length} 张系统挂单未撤销，实盘保持关闭`);
+    return current;
+  }
+
   private async syncLive(now: number, initialEnable = false, forceEntryCleanup = false) {
     const activePositions = Object.values(this.runtime.live.positions).some((position) => position?.status === "OPEN");
     const activeEntries = Object.values(this.runtime.live.entries).some((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status));
@@ -584,20 +619,18 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ...Object.values(this.runtime.live.entries).flatMap((entry) => entry?.tag && !["FILLED", "CANCELLED"].includes(entry.status) ? [entry.tag] : []),
       ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" && position.stopTag ? [position.stopTag] : []),
     ]);
-    const orphanRegular = snapshot.orders.filter((order) => {
-      const tag = liveOrderTag(order) ?? "";
-      return tag.startsWith("t-ms-e-") && !knownTags.has(tag);
-    });
-    const orphanTriggers = snapshot.priceOrders.filter((order) => {
-      const tag = liveOrderTag(order) ?? "";
-      return tag.startsWith("t-ms-e-") && !knownTags.has(tag);
-    });
-    if (orphanRegular.length || orphanTriggers.length) {
-      await Promise.all([
-        ...orphanRegular.map((order) => liveOrderId(order)).filter((id): id is string => Boolean(id)).map((id) => client.cancelOrder("LIMIT", id)),
-        ...orphanTriggers.map((order) => liveOrderId(order)).filter((id): id is string => Boolean(id)).map((id) => client.cancelOrder("PRICE_TRIGGER", id)),
-      ]);
-      snapshot = await client.snapshot();
+    const trackedEntryIds = new Set(Object.values(this.runtime.live.entries)
+      .flatMap((entry) => entry?.exchangeOrderId ? [entry.exchangeOrderId] : []));
+    snapshot = forceEntryCleanup
+      ? await this.cancelAndConfirmSystemEntries(client, snapshot, trackedEntryIds)
+      : await this.cancelAndConfirmSystemEntries(client, snapshot, trackedEntryIds, knownTags);
+    if (forceEntryCleanup) {
+      for (const entry of Object.values(this.runtime.live.entries)) {
+        if (!entry || ["FILLED", "CANCELLED"].includes(entry.status)) continue;
+        entry.status = "CANCELLED";
+        entry.missingSince = null;
+        entry.lastError = null;
+      }
     }
     const equity = Number(snapshot.account.total ?? 0);
     const available = Number(snapshot.account.available ?? 0);

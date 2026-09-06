@@ -34,7 +34,9 @@ export type GateLiveOrder = {
   left?: string | number;
   fill_price?: string | number;
   trade_id?: string | number;
-  initial?: { contract?: string; text?: string; size?: string | number; price?: string };
+  close?: boolean;
+  reduce_only?: boolean;
+  initial?: { contract?: string; text?: string; size?: string | number; price?: string; close?: boolean; reduce_only?: boolean };
 };
 
 export type GateLiveSnapshot = {
@@ -90,6 +92,15 @@ function responseId(raw: string, parsed: GateLiveOrder) {
   throw new Error("Gate 返回的订单编号无效");
 }
 
+// Gate uses signed int64 identifiers. JSON.parse would round bare integers
+// above Number.MAX_SAFE_INTEGER, which can turn a valid cancel request into a
+// different order ID. Quote identifier fields before parsing so they remain
+// byte-for-byte strings throughout reconciliation and cancellation.
+function parseGateJson<T>(raw: string): T {
+  const idSafe = raw.replace(/("(?:id|order_id|trade_id)"\s*:\s*)(-?\d{16,})(?=\s*[,}\]])/g, '$1"$2"');
+  return JSON.parse(idSafe) as T;
+}
+
 export class GateLiveClient {
   readonly credentials: GateCredentials;
   requestCount = 0;
@@ -116,7 +127,7 @@ export class GateLiveClient {
     });
     const raw = await response.text();
     if (!response.ok) throw new Error(safeGateError(raw, response.status));
-    return { data: (raw ? JSON.parse(raw) : {}) as T, raw };
+    return { data: (raw ? parseGateJson<T>(raw) : {}) as T, raw };
   }
 
   async snapshot(): Promise<GateLiveSnapshot> {
