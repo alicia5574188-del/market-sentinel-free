@@ -1,4 +1,4 @@
-name: Sentinel V2 CI
+name: Liquidity Three State Final Cutover
 
 on:
   pull_request:
@@ -7,18 +7,22 @@ on:
     branches: [main]
   workflow_dispatch:
   schedule:
-    - cron: '17 */6 * * *'
+    - cron: "17 */6 * * *"
 
-# Keep only the newest validation run for each PR. This does not reduce test
-# coverage: every latest PR revision still runs the full suite, while stale
-# in-progress revisions are cancelled instead of generating redundant failures.
-# Production/main runs are never cancelled by a newer PR revision.
-concurrency:
-  group: sentinel-v2-ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
+# This proposal is intentionally safe to review as a standalone file. The one-time
+# cutover runs only when this workflow is manually dispatched on the exact release
+# branch. PR updates never mutate production.
 permissions:
   contents: read
+  pull-requests: read
+
+env:
+  WORKER_NAME: market-sentinel-free
+  WORKER_BASE_URL: https://market-sentinel-free.alicia5574188.workers.dev
+  D1_DATABASE_ID: 9863619f-afc7-4dfa-8798-b4445e41c013
+  RELEASE_BRANCH: rebuild/three-state-core
+  PREFLIGHT_SHA: 19bac9dd912cc07a01139a836f48559610e3ad2a
+  WRANGLER_SEND_METRICS: "false"
 
 jobs:
   verify:
@@ -26,153 +30,895 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Checkout
+      - name: Checkout the exact revision being verified
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: release
+          fetch-depth: 0
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22.16.0
           cache: npm
+          cache-dependency-path: release/package-lock.json
+
       - name: Install
+        working-directory: release
         run: npm ci
-      - name: Strategy, risk and migration tests
+
+      - name: Test, build, lint and dry-run
+        working-directory: release
         run: |
+          set -euo pipefail
           npm run test:direct
-          npm run test:signals
-      - name: Bounded current-history entry replay
-        if: ${{ github.event_name != 'push' || !contains(github.event.head_commit.message, '[audit-only]') }}
-        run: node --experimental-strip-types scripts/replay-analog-path.mjs
-      - name: Production build and UI safety tests
-        run: npm test
-      - name: Wrangler production deploy dry-run
-        run: npx wrangler deploy --dry-run --config dist/server/wrangler.json
+          npm test
+          npm run typecheck
+          npm run lint
+          git diff --check
+          npx wrangler deploy --dry-run --config dist/server/wrangler.json
 
+      - name: Require the reviewed two-phase Durable Object migration
+        working-directory: release
+        run: |
+          set -euo pipefail
+          jq -e --arg database "$D1_DATABASE_ID" '
+            .d1_databases == [{
+              binding: "DB",
+              database_name: "market-sentinel-free",
+              migrations_dir: "./drizzle",
+              database_id: $database
+            }] and
+            .durable_objects.bindings == [{name: "MARKET_STREAM", class_name: "MarketStream"}] and
+            .migrations[-2] == {
+              tag: "v6-liquidity-three-state",
+              new_sqlite_classes: ["MarketStream"]
+            } and
+            .migrations[-1] == {
+              tag: "v7-delete-legacy-do",
+              deleted_classes: [
+                "PositionMonitor", "MarketScanner", "LiveTradingCoordinator",
+                "MarketScannerV2", "HTE31MarketScanner", "HTE31TradeManager",
+                "HistoricalArchive"
+              ]
+            }
+          ' wrangler.jsonc >/dev/null
+          ! grep -Eq 'DROP[[:space:]]+TABLE([[:space:]]+IF[[:space:]]+EXISTS)?[[:space:]]+`?live_exchange_credentials`?' \
+            drizzle/0033_purge_legacy_system.sql
 
+  # Manual one-time action: dispatch this workflow on rebuild/three-state-core.
+  # The job takes the production mutex before re-reading main and the PR, so a
+  # verification result cannot be used after either ref moves.
+  cutover:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/rebuild/three-state-core'
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    concurrency:
+      group: market-sentinel-production
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout exact final revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: release
+          fetch-depth: 0
+
+      - name: Checkout immutable trusted preflight revision
+        uses: actions/checkout@v4
+        with:
+          repository: alicia5574188-del/market-sentinel-free
+          ref: 19bac9dd912cc07a01139a836f48559610e3ad2a
+          path: preflight
+          fetch-depth: 1
+
+      - name: Revalidate exact same-repository PR and latest base after taking lock
+        working-directory: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == "alicia5574188-del/market-sentinel-free" ]]
+          [[ "$GITHUB_REF" == "refs/heads/$RELEASE_BRANCH" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          [[ "$(git -C ../preflight rev-parse HEAD)" == "$PREFLIGHT_SHA" ]]
+
+          git fetch --no-tags origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/$RELEASE_BRANCH:refs/remotes/origin/$RELEASE_BRANCH"
+          origin_main="$(git rev-parse refs/remotes/origin/main)"
+          remote_head="$(git rev-parse "refs/remotes/origin/$RELEASE_BRANCH")"
+          [[ "$remote_head" == "$GITHUB_SHA" ]]
+          git merge-base --is-ancestor "$origin_main" "$GITHUB_SHA"
+
+          gh api --method GET "/repos/$GITHUB_REPOSITORY/pulls?state=open&base=main&per_page=100" \
+            > "$RUNNER_TEMP/open-prs.json"
+          jq -e \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg branch "$RELEASE_BRANCH" \
+            --arg head "$GITHUB_SHA" \
+            --arg base "$origin_main" '
+              [.[] | select(
+                .head.repo.full_name == $repo and
+                .head.ref == $branch and
+                .head.sha == $head and
+                .base.ref == "main" and
+                .base.sha == $base and
+                .draft == false
+              )] | length == 1
+            ' "$RUNNER_TEMP/open-prs.json" >/dev/null
+          echo "CUTOVER_BASE_SHA=$origin_main" >> "$GITHUB_ENV"
+
+      - name: Start bounded body with cleanup reserve
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s\n' pre-v6 > "$RUNNER_TEMP/cutover-phase"
+          echo "CUTOVER_DEADLINE=$(( $(date +%s) + 2100 ))" >> "$GITHUB_ENV"
+
+      - name: Setup Node for both immutable checkouts
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+          cache: npm
+          cache-dependency-path: |
+            release/package-lock.json
+            preflight/package-lock.json
+
+      - name: Build immutable trusted preflight first
+        working-directory: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
+          (( remaining > 0 ))
+          timeout "${remaining}s" npm ci
+          remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
+          (( remaining > 0 ))
+          timeout "${remaining}s" npm run build
+          remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
+          (( remaining > 0 ))
+          timeout "${remaining}s" npx wrangler deploy --dry-run --config dist/server/wrangler.json
+
+      - name: Build exact final release and derive prepare-only config
+        working-directory: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
+          (( remaining > 0 ))
+          timeout "${remaining}s" npm ci
+          remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
+          (( remaining > 0 ))
+          timeout "${remaining}s" npm run build
+
+          # Keep v1-v6 and remove only v7. Because reviewed v6 contains only
+          # new_sqlite_classes, this deploy cannot delete a legacy namespace.
+          jq -e '
+            .migrations[-2] == {
+              tag: "v6-liquidity-three-state",
+              new_sqlite_classes: ["MarketStream"]
+            } and
+            .migrations[-1].tag == "v7-delete-legacy-do"
+          ' dist/server/wrangler.json >/dev/null
+          jq '.migrations = .migrations[0:-1]' dist/server/wrangler.json \
+            > dist/server/wrangler.prepare.json
+          jq -e '
+            .migrations[-1] == {
+              tag: "v6-liquidity-three-state",
+              new_sqlite_classes: ["MarketStream"]
+            } and
+            ([.migrations[] | .deleted_classes? // []] | add | length) == 0
+          ' dist/server/wrangler.prepare.json >/dev/null
+
+      - name: Capture single-version production baseline
+        working-directory: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]]
+          remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
+          (( remaining > 0 ))
+          timeout "${remaining}s" npx wrangler deployments status \
+            --name "$WORKER_NAME" --json > "$RUNNER_TEMP/baseline.json"
+          jq -e '
+            (.versions | length) == 1 and
+            .versions[0].percentage == 100 and
+            (.versions[0].version_id | type == "string" and length > 0)
+          ' "$RUNNER_TEMP/baseline.json" >/dev/null
+          jq -er '.versions[0].version_id' "$RUNNER_TEMP/baseline.json" \
+            > "$RUNNER_TEMP/baseline-version-id"
+
+      - name: Generate masked TTL token and deploy trusted read-only preflight
+        working-directory: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          issued_at="$(date +%s)"
+          token="$issued_at.$(openssl rand -hex 32)"
+          echo "::add-mask::$token"
+          echo "CUTOVER_PREFLIGHT_TOKEN=$token" >> "$GITHUB_ENV"
+          jq -n --arg token "$token" '{CUTOVER_PREFLIGHT_TOKEN: $token}' \
+            > "$RUNNER_TEMP/preflight-secrets.json"
+          remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
+          (( remaining > 0 ))
+          timeout "${remaining}s" npx wrangler deploy \
+            --config dist/server/wrangler.json \
+            --secrets-file "$RUNNER_TEMP/preflight-secrets.json"
+          rm -f "$RUNNER_TEMP/preflight-secrets.json"
+
+      - name: Require two fresh read-only Gate zero-inventory results
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          validate_gate() {
+            local output="$1" code now_ms
+            remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
+            (( remaining > 0 ))
+            code="$(curl -sS --max-time 20 -o "$output" -w '%{http_code}' \
+              -H "Authorization: Bearer $CUTOVER_PREFLIGHT_TOKEN" \
+              "$WORKER_BASE_URL/api/live/preflight" || true)"
+            [[ "$code" == "200" ]]
+            now_ms="$(( $(date +%s) * 1000 ))"
+            jq -e --argjson min "$((now_ms - 120000))" --argjson max "$((now_ms + 30000))" '
+              .safeToCutover == true and
+              .counts.positions == 0 and
+              .counts.openOrders == 0 and
+              .counts.priceOrders == 0 and
+              .activeContracts == [] and
+              (.checkedAt | type == "number") and
+              .checkedAt >= $min and .checkedAt <= $max
+            ' "$output" >/dev/null
+          }
+
+          validate_gate "$RUNNER_TEMP/gate-first.json"
+          first_checked="$(jq -er '.checkedAt' "$RUNNER_TEMP/gate-first.json")"
+          sleep 5
+          validate_gate "$RUNNER_TEMP/gate-second.json"
+          jq -e --argjson first "$first_checked" '.checkedAt > $first' \
+            "$RUNNER_TEMP/gate-second.json" >/dev/null
+          # Log counts only. Never print the token, active contract names, keys,
+          # ciphertext, order rows, position rows, or account detail.
+          jq -c '{safeToCutover, counts, checkedAt}' "$RUNNER_TEMP/gate-second.json"
+
+      - name: Capture canonical SHA-256 fingerprint of all 15 credential columns
+        working-directory: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
+          (( remaining > 0 ))
+          timeout "${remaining}s" npx wrangler d1 execute DB --remote \
+            --config wrangler.jsonc --json --command \
+            "SELECT id,exchange,environment,ciphertext,iv,crypto_version,key_hint,gate_user_id,owner_account_id,permission_summary_json,status,last_verified_at,last_error,created_at,updated_at FROM live_exchange_credentials ORDER BY id" \
+            > "$RUNNER_TEMP/credential-before.json"
+          jq -e '(if type == "array" then .[0].results else .results end) | length == 1 and (.[0].id | tonumber) == 1' \
+            "$RUNNER_TEMP/credential-before.json" >/dev/null
+          jq -c '
+            (if type == "array" then .[0].results[0] else .results[0] end) |
+            [
+              (.id | tonumber), (.exchange | tostring), (.environment | tostring),
+              (.ciphertext | tostring), (.iv | tostring), (.crypto_version | tonumber),
+              (.key_hint | tostring),
+              (if .gate_user_id == null then null else (.gate_user_id | tostring) end),
+              (if .owner_account_id == null then null else (.owner_account_id | tostring) end),
+              (.permission_summary_json | tostring), (.status | tostring),
+              (if .last_verified_at == null then null else (.last_verified_at | tonumber) end),
+              (if .last_error == null then null else (.last_error | tostring) end),
+              (.created_at | tonumber), (.updated_at | tonumber)
+            ]
+          ' "$RUNNER_TEMP/credential-before.json" > "$RUNNER_TEMP/credential-before.canonical"
+          sha256sum "$RUNNER_TEMP/credential-before.canonical" | awk '{print $1}' \
+            > "$RUNNER_TEMP/credential-fingerprint"
+          [[ "$(cat "$RUNNER_TEMP/credential-fingerprint")" =~ ^[0-9a-f]{64}$ ]]
+          echo "credential_fingerprint_captured=true"
+
+      - name: Apply idempotent 0032 prepare only and prove credential unchanged
+        working-directory: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_prepare() {
+            local remaining
+            remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
+            (( remaining > 0 ))
+            timeout "${remaining}s" npx wrangler d1 execute DB --remote \
+              --config wrangler.jsonc --file drizzle/0032_liquidity_core_prepare.sql
+          }
+          # 0032 is CREATE IF NOT EXISTS / INSERT OR IGNORE, so a transport-
+          # ambiguous first attempt can be completed by exactly one safe retry.
+          run_prepare || run_prepare
+
+          npx wrangler d1 execute DB --remote --config wrangler.jsonc --json --command \
+            "SELECT id,exchange,environment,ciphertext,iv,crypto_version,key_hint,gate_user_id,owner_account_id,permission_summary_json,status,last_verified_at,last_error,created_at,updated_at FROM live_exchange_credentials ORDER BY id" \
+            > "$RUNNER_TEMP/credential-after-prepare.json"
+          jq -e '(if type == "array" then .[0].results else .results end) | length == 1 and (.[0].id | tonumber) == 1' \
+            "$RUNNER_TEMP/credential-after-prepare.json" >/dev/null
+          jq -c '
+            (if type == "array" then .[0].results[0] else .results[0] end) |
+            [
+              (.id | tonumber), (.exchange | tostring), (.environment | tostring),
+              (.ciphertext | tostring), (.iv | tostring), (.crypto_version | tonumber),
+              (.key_hint | tostring),
+              (if .gate_user_id == null then null else (.gate_user_id | tostring) end),
+              (if .owner_account_id == null then null else (.owner_account_id | tostring) end),
+              (.permission_summary_json | tostring), (.status | tostring),
+              (if .last_verified_at == null then null else (.last_verified_at | tonumber) end),
+              (if .last_error == null then null else (.last_error | tostring) end),
+              (.created_at | tonumber), (.updated_at | tonumber)
+            ]
+          ' "$RUNNER_TEMP/credential-after-prepare.json" > "$RUNNER_TEMP/credential-after-prepare.canonical"
+          after="$(sha256sum "$RUNNER_TEMP/credential-after-prepare.canonical" | awk '{print $1}')"
+          [[ "$after" == "$(cat "$RUNNER_TEMP/credential-fingerprint")" ]]
+
+      - name: Deploy v6 prepare config without deleting any legacy Durable Object
+        working-directory: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
+          (( remaining > 0 ))
+          timeout "${remaining}s" npx wrangler deploy \
+            --config dist/server/wrangler.prepare.json
+          # This file is the rollback boundary. From here onward cleanup must
+          # revoke a lingering production token but must never roll back to the
+          # old Worker, purge D1, or delete a legacy DO.
+          printf '%s\n' v6 > "$RUNNER_TEMP/cutover-phase"
+
+          npx wrangler deployments status --name "$WORKER_NAME" --json \
+            > "$RUNNER_TEMP/v6-deployment.json"
+          jq -e '(.versions | length) == 1 and .versions[0].percentage == 100' \
+            "$RUNNER_TEMP/v6-deployment.json" >/dev/null
+          jq -er '.versions[0].version_id' "$RUNNER_TEMP/v6-deployment.json" \
+            > "$RUNNER_TEMP/v6-version-id"
+          [[ "$(cat "$RUNNER_TEMP/v6-version-id")" != "$(cat "$RUNNER_TEMP/baseline-version-id")" ]]
+
+      - name: Require continuously advancing v6 health
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous=0
+          healthy=0
+          for attempt in {1..36}; do
+            code="$(curl -sS --max-time 8 -o "$RUNNER_TEMP/v6-health.json" -w '%{http_code}' \
+              "$WORKER_BASE_URL/__health" || true)"
+            if [[ "$code" == "200" ]] && jq -e '
+              .ok == true and .version == "liquidity-three-state-v1" and .mode == "PAPER" and
+              .runtime.version == "liquidity-three-state-v1" and .runtime.mode == "PAPER" and
+              .runtime.state == "LIVE" and .runtime.stale == false and .runtime.lastError == null and
+              (.runtime.lastSuccessAt | type == "number") and
+              ((now * 1000 - .runtime.lastSuccessAt) < 10000) and
+              .runtime.limits.plannedTotalDoRequestsPerDay < 55000 and
+              .runtime.limits.plannedDoWritesPerDay < 55000 and
+              .runtime.limits.plannedMaxD1BilledWritesPerDay < 5000
+            ' "$RUNNER_TEMP/v6-health.json" >/dev/null; then
+              current="$(jq -er '.runtime.lastSuccessAt' "$RUNNER_TEMP/v6-health.json")"
+              if (( previous > 0 && current > previous )); then healthy="$((healthy + 1))"; fi
+              previous="$current"
+              (( healthy >= 2 )) && break
+            fi
+            sleep 5
+          done
+          (( healthy >= 2 ))
+
+      - name: Revoke production token, observe its new version, and run restart canary
+        working-directory: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          # secret delete itself creates a Worker version. Treat that as an
+          # intentional restart canary and verify the version and runtime move.
+          CI=true timeout 180s npx wrangler secret delete CUTOVER_PREFLIGHT_TOKEN \
+            --name "$WORKER_NAME"
+          npx wrangler secret list --name "$WORKER_NAME" --format json \
+            > "$RUNNER_TEMP/secrets-after-v6.json"
+          ! jq -e '.[] | select(.name == "CUTOVER_PREFLIGHT_TOKEN")' \
+            "$RUNNER_TEMP/secrets-after-v6.json" >/dev/null
+          npx wrangler deployments status --name "$WORKER_NAME" --json \
+            > "$RUNNER_TEMP/v6-restart-deployment.json"
+          jq -e '(.versions | length) == 1 and .versions[0].percentage == 100' \
+            "$RUNNER_TEMP/v6-restart-deployment.json" >/dev/null
+          restart_version="$(jq -er '.versions[0].version_id' "$RUNNER_TEMP/v6-restart-deployment.json")"
+          [[ "$restart_version" != "$(cat "$RUNNER_TEMP/v6-version-id")" ]]
+
+          previous=0
+          advancing=0
+          for attempt in {1..30}; do
+            code="$(curl -sS --max-time 8 -o "$RUNNER_TEMP/restart-health.json" -w '%{http_code}' \
+              "$WORKER_BASE_URL/__health" || true)"
+            if [[ "$code" == "200" ]] && jq -e '
+              .ok == true and .version == "liquidity-three-state-v1" and .mode == "PAPER" and
+              .runtime.state == "LIVE" and .runtime.stale == false and .runtime.lastError == null and
+              ((now * 1000 - .runtime.lastSuccessAt) < 10000) and
+              .runtime.limits.plannedTotalDoRequestsPerDay < 55000 and
+              .runtime.limits.plannedDoWritesPerDay < 55000 and
+              .runtime.limits.plannedMaxD1BilledWritesPerDay < 5000
+            ' "$RUNNER_TEMP/restart-health.json" >/dev/null; then
+              current="$(jq -er '.runtime.lastSuccessAt' "$RUNNER_TEMP/restart-health.json")"
+              if (( previous > 0 && current > previous )); then advancing="$((advancing + 1))"; fi
+              previous="$current"
+              (( advancing >= 2 )) && break
+            fi
+            sleep 5
+          done
+          (( advancing >= 2 ))
+
+      - name: Final pre-v7 gate
+        working-directory: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$(cat "$RUNNER_TEMP/cutover-phase")" == "v6" ]]
+
+          # Upload, but never deploy, the exact trusted preflight build. The
+          # preview version inherits the Worker's existing OWNER_ACCESS_TOKEN,
+          # binds only the preserved D1 database, and has no DO binding or cron.
+          # Its bearer expires inside the immutable trusted code after 20 min.
+          npx wrangler deployments status --name "$WORKER_NAME" --json \
+            > "$RUNNER_TEMP/pre-v7-production-deployment.json"
+          jq -e '(.versions | length) == 1 and .versions[0].percentage == 100' \
+            "$RUNNER_TEMP/pre-v7-production-deployment.json" >/dev/null
+          production_before="$(jq -er '.versions[0].version_id' "$RUNNER_TEMP/pre-v7-production-deployment.json")"
+          printf '%s\n' "$production_before" > "$RUNNER_TEMP/pre-v7-production-version-id"
+
+          audit_token="$(date +%s).$(openssl rand -hex 32)"
+          echo "::add-mask::$audit_token"
+          echo "CUTOVER_AUDIT_TOKEN=$audit_token" >> "$GITHUB_ENV"
+          jq -n --arg token "$audit_token" '{CUTOVER_PREFLIGHT_TOKEN: $token}' \
+            > "$RUNNER_TEMP/audit-secrets.json"
+          jq --arg database "$D1_DATABASE_ID" '
+            {
+              name: .name,
+              main: .main,
+              no_bundle: .no_bundle,
+              compatibility_date: .compatibility_date,
+              compatibility_flags: .compatibility_flags,
+              d1_databases: [{
+                binding: "DB",
+                database_name: "market-sentinel-free",
+                database_id: $database
+              }],
+              version_metadata: .version_metadata,
+              observability: {enabled: false},
+              workers_dev: true,
+              preview_urls: true
+            }
+          ' dist/server/wrangler.json > dist/server/wrangler.audit-preview.json
+          alias="c${GITHUB_RUN_ID}"
+          echo "CUTOVER_AUDIT_PREVIEW=https://${alias}-${WORKER_NAME}.alicia5574188.workers.dev" >> "$GITHUB_ENV"
+          remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
+          (( remaining > 0 ))
+          timeout "${remaining}s" npx wrangler versions upload \
+            --config dist/server/wrangler.audit-preview.json \
+            --preview-alias "$alias" \
+            --secrets-file "$RUNNER_TEMP/audit-secrets.json" \
+            --keep-vars
+          rm -f "$RUNNER_TEMP/audit-secrets.json"
+
+          # versions upload must not move any production traffic.
+          npx wrangler deployments status --name "$WORKER_NAME" --json \
+            > "$RUNNER_TEMP/post-preview-upload-production-deployment.json"
+          jq -e --arg before "$production_before" '
+            (.versions | length) == 1 and
+            .versions[0].percentage == 100 and
+            .versions[0].version_id == $before
+          ' "$RUNNER_TEMP/post-preview-upload-production-deployment.json" >/dev/null
+
+      - name: Capture D1 Time Travel boundary before final Gate check
+        working-directory: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$(cat "$RUNNER_TEMP/cutover-phase")" == "v6" ]]
+
+          remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
+          (( remaining > 0 ))
+          timeout "${remaining}s" npx wrangler d1 info DB --json \
+            --config wrangler.jsonc > "$RUNNER_TEMP/d1-info.json"
+          # Wrangler 4.92 emits version="alpha" for an alpha database and omits
+          # the version key for the production backend. Therefore exact UUID +
+          # absent version rejects alpha; the succeeding Time Travel call below
+          # independently proves the production backend supports PITR.
+          jq -e --arg database "$D1_DATABASE_ID" '
+            .uuid == $database and
+            (.version == null) and
+            .name == "market-sentinel-free"
+          ' "$RUNNER_TEMP/d1-info.json" >/dev/null
+
+          remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
+          (( remaining > 0 ))
+          timeout "${remaining}s" npx wrangler d1 time-travel info DB --json \
+            --config wrangler.jsonc > "$RUNNER_TEMP/d1-time-travel.json"
+          jq -e '.bookmark | type == "string" and length > 0' \
+            "$RUNNER_TEMP/d1-time-travel.json" >/dev/null
+          jq -n \
+            --arg bookmark "$(jq -er '.bookmark' "$RUNNER_TEMP/d1-time-travel.json")" \
+            --arg release_sha "$GITHUB_SHA" \
+            '{bookmark: $bookmark, release_sha: $release_sha}' \
+            > "$RUNNER_TEMP/d1-time-travel-boundary.json"
+
+      - name: Retain D1 recovery boundary only
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1-time-travel-boundary-${{ github.run_id }}
+          path: ${{ runner.temp }}/d1-time-travel-boundary.json
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Recheck Gate twice immediately before irreversible v7
+        working-directory: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          validate_gate() {
+            local output="$1" code now_ms
+            code="$(curl -sS --max-time 20 -o "$output" -w '%{http_code}' \
+              -H "Authorization: Bearer $CUTOVER_AUDIT_TOKEN" \
+              "$CUTOVER_AUDIT_PREVIEW/api/live/preflight" || true)"
+            [[ "$code" == "200" ]]
+            now_ms="$(( $(date +%s) * 1000 ))"
+            jq -e --argjson min "$((now_ms - 120000))" --argjson max "$((now_ms + 30000))" '
+              .safeToCutover == true and
+              .counts.positions == 0 and
+              .counts.openOrders == 0 and
+              .counts.priceOrders == 0 and
+              .activeContracts == [] and
+              (.checkedAt | type == "number") and
+              .checkedAt >= $min and .checkedAt <= $max
+            ' "$output" >/dev/null
+          }
+
+          validate_gate "$RUNNER_TEMP/pre-v7-gate-first.json"
+          first_checked="$(jq -er '.checkedAt' "$RUNNER_TEMP/pre-v7-gate-first.json")"
+          sleep 5
+          validate_gate "$RUNNER_TEMP/pre-v7-gate-second.json"
+          jq -e --argjson first "$first_checked" '.checkedAt > $first' \
+            "$RUNNER_TEMP/pre-v7-gate-second.json" >/dev/null
+          jq -c '{safeToCutover, counts, checkedAt}' "$RUNNER_TEMP/pre-v7-gate-second.json"
+
+          # Recheck the traffic assignment after both preview calls. The next
+          # step is forbidden unless production still serves the v6 canary at 100%.
+          production_before="$(cat "$RUNNER_TEMP/pre-v7-production-version-id")"
+          npx wrangler deployments status --name "$WORKER_NAME" --json \
+            > "$RUNNER_TEMP/post-pre-v7-gate-production-deployment.json"
+          jq -e --arg before "$production_before" '
+            (.versions | length) == 1 and
+            .versions[0].percentage == 100 and
+            .versions[0].version_id == $before
+          ' "$RUNNER_TEMP/post-pre-v7-gate-production-deployment.json" >/dev/null
+          [[ "$(cat "$RUNNER_TEMP/cutover-phase")" == "v6" ]]
+          jq -e --arg release "$GITHUB_SHA" '
+            (.bookmark | type == "string" and length > 0) and
+            .release_sha == $release
+          ' "$RUNNER_TEMP/d1-time-travel-boundary.json" >/dev/null
+          [[ "$(cat "$RUNNER_TEMP/credential-fingerprint")" =~ ^[0-9a-f]{64}$ ]]
+          printf '%s\n' "$(jq -er '.checkedAt' "$RUNNER_TEMP/pre-v7-gate-second.json")" \
+            > "$RUNNER_TEMP/pre-v7-gate-authorized-at"
+
+      - name: Deploy reviewed final v7 config to delete legacy Durable Objects
+        working-directory: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Local, bounded authorization assertions only; no network or
+          # account operation is allowed between the final Gate check and v7.
+          [[ "$(cat "$RUNNER_TEMP/cutover-phase")" == "v6" ]]
+          [[ -s "$RUNNER_TEMP/pre-v7-gate-authorized-at" ]]
+          remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
+          (( remaining > 0 ))
+          timeout "${remaining}s" npx wrangler deploy \
+            --config dist/server/wrangler.json
+          printf '%s\n' v7 > "$RUNNER_TEMP/cutover-phase"
+
+      - name: Apply explicit idempotent 0033 D1 purge last
+        working-directory: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(cat "$RUNNER_TEMP/cutover-phase")" == "v7" ]]
+          remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
+          (( remaining > 0 ))
+          timeout "${remaining}s" npx wrangler d1 execute DB --remote \
+            --config wrangler.jsonc --file drizzle/0033_purge_legacy_system.sql
+          printf '%s\n' purged > "$RUNNER_TEMP/cutover-phase"
+
+      - name: Verify exact final tables and complete credential fingerprint
+        working-directory: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          npx wrangler d1 execute DB --remote --config wrangler.jsonc --json --command \
+            "SELECT (SELECT group_concat(name, ',') FROM (SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name != 'd1_migrations' ORDER BY name)) AS tables_csv, (SELECT COUNT(*) FROM live_exchange_credentials) AS credential_rows, (SELECT COUNT(*) FROM live_exchange_credentials WHERE id=1) AS id1_rows" \
+            > "$RUNNER_TEMP/final-shape.json"
+          jq -e '
+            (if type == "array" then .[0].results[0] else .results[0] end) |
+            .tables_csv == "live_exchange_credentials,paper_events,paper_plans,paper_positions,system_settings" and
+            (.credential_rows | tonumber) == 1 and
+            (.id1_rows | tonumber) == 1
+          ' "$RUNNER_TEMP/final-shape.json" >/dev/null
+
+          npx wrangler d1 execute DB --remote --config wrangler.jsonc --json --command \
+            "SELECT id,exchange,environment,ciphertext,iv,crypto_version,key_hint,gate_user_id,owner_account_id,permission_summary_json,status,last_verified_at,last_error,created_at,updated_at FROM live_exchange_credentials ORDER BY id" \
+            > "$RUNNER_TEMP/credential-final.json"
+          jq -c '
+            (if type == "array" then .[0].results[0] else .results[0] end) |
+            [
+              (.id | tonumber), (.exchange | tostring), (.environment | tostring),
+              (.ciphertext | tostring), (.iv | tostring), (.crypto_version | tonumber),
+              (.key_hint | tostring),
+              (if .gate_user_id == null then null else (.gate_user_id | tostring) end),
+              (if .owner_account_id == null then null else (.owner_account_id | tostring) end),
+              (.permission_summary_json | tostring), (.status | tostring),
+              (if .last_verified_at == null then null else (.last_verified_at | tonumber) end),
+              (if .last_error == null then null else (.last_error | tostring) end),
+              (.created_at | tonumber), (.updated_at | tonumber)
+            ]
+          ' "$RUNNER_TEMP/credential-final.json" > "$RUNNER_TEMP/credential-final.canonical"
+          final_fingerprint="$(sha256sum "$RUNNER_TEMP/credential-final.canonical" | awk '{print $1}')"
+          [[ "$final_fingerprint" == "$(cat "$RUNNER_TEMP/credential-fingerprint")" ]]
+          echo "final_schema_and_full_credential_fingerprint_verified=true"
+
+      - name: Post-purge decrypt and Gate recheck using the same TTL preview
+        working-directory: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          code="$(curl -sS --max-time 20 -o "$RUNNER_TEMP/post-purge-gate.json" -w '%{http_code}' \
+            -H "Authorization: Bearer $CUTOVER_AUDIT_TOKEN" \
+            "$CUTOVER_AUDIT_PREVIEW/api/live/preflight" || true)"
+          [[ "$code" == "200" ]]
+          jq -e '
+            .safeToCutover == true and
+            .counts.positions == 0 and
+            .counts.openOrders == 0 and
+            .counts.priceOrders == 0 and
+            .activeContracts == [] and
+            (.checkedAt | type == "number") and
+            ((now * 1000 - .checkedAt) < 120000)
+          ' "$RUNNER_TEMP/post-purge-gate.json" >/dev/null
+          jq -c '{postPurgeDecryptAndGateRead: true, counts, checkedAt}' \
+            "$RUNNER_TEMP/post-purge-gate.json"
+
+          # The successful decrypt/Gate call proves the existing OWNER_ACCESS_TOKEN
+          # was inherited. The current deployment must be the 100% final v7
+          # production version, not the undeployed preview version.
+          pre_v7_production="$(cat "$RUNNER_TEMP/pre-v7-production-version-id")"
+          npx wrangler deployments status --name "$WORKER_NAME" --json \
+            > "$RUNNER_TEMP/post-audit-production-deployment.json"
+          jq -e --arg old "$pre_v7_production" '
+            (.versions | length) == 1 and
+            .versions[0].percentage == 100 and
+            .versions[0].version_id != $old
+          ' "$RUNNER_TEMP/post-audit-production-deployment.json" >/dev/null
+
+      - name: Require final production health to advance
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous=0
+          advancing=0
+          for attempt in {1..36}; do
+            code="$(curl -sS --max-time 8 -o "$RUNNER_TEMP/final-health.json" -w '%{http_code}' \
+              "$WORKER_BASE_URL/__health" || true)"
+            if [[ "$code" == "200" ]] && jq -e '
+              .ok == true and .version == "liquidity-three-state-v1" and .mode == "PAPER" and
+              .runtime.version == "liquidity-three-state-v1" and .runtime.mode == "PAPER" and
+              .runtime.state == "LIVE" and .runtime.stale == false and .runtime.lastError == null and
+              ((now * 1000 - .runtime.lastSuccessAt) < 10000) and
+              .runtime.limits.plannedTotalDoRequestsPerDay < 55000 and
+              .runtime.limits.plannedDoWritesPerDay < 55000 and
+              .runtime.limits.plannedMaxD1BilledWritesPerDay < 5000
+            ' "$RUNNER_TEMP/final-health.json" >/dev/null; then
+              current="$(jq -er '.runtime.lastSuccessAt' "$RUNNER_TEMP/final-health.json")"
+              if (( previous > 0 && current > previous )); then advancing="$((advancing + 1))"; fi
+              previous="$current"
+              (( advancing >= 2 )) && break
+            fi
+            sleep 5
+          done
+          (( advancing >= 2 ))
+
+      - name: Pre-v6 failure cleanup only
+        if: failure() || cancelled()
+        working-directory: release
+        shell: bash
+        run: |
+          set -u
+          if [[ -s "$RUNNER_TEMP/d1-time-travel-boundary.json" ]]; then
+            bookmark="$(jq -er '.bookmark' "$RUNNER_TEMP/d1-time-travel-boundary.json")"
+            {
+              echo "### D1 recovery boundary"
+              echo
+              echo 'Time Travel restores D1 only; it cannot restore Durable Objects deleted by v7.'
+              echo 'Restore is destructive, overwrites D1 in place, and cancels in-flight queries.'
+              echo
+              echo '```bash'
+              echo "npx wrangler d1 time-travel restore DB --bookmark=$bookmark --config wrangler.jsonc"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          phase="$(cat "$RUNNER_TEMP/cutover-phase" 2>/dev/null || echo pre-v6)"
+          if [[ "$phase" != "pre-v6" ]]; then
+            # A v6-or-later failure still revokes a production token if the
+            # normal revocation step was not reached. This creates a new version
+            # of the current code, but never rolls back, purges D1, or deletes a
+            # legacy DO from a v6 configuration.
+            npx wrangler secret list --name "$WORKER_NAME" --format json \
+              > "$RUNNER_TEMP/v6-failure-secrets.json"
+            if jq -e '.[] | select(.name == "CUTOVER_PREFLIGHT_TOKEN")' \
+              "$RUNNER_TEMP/v6-failure-secrets.json" >/dev/null; then
+              CI=true timeout 180s npx wrangler secret delete CUTOVER_PREFLIGHT_TOKEN \
+                --name "$WORKER_NAME"
+            fi
+            echo "Failure occurred at $phase; preserving v6-or-later recoverable state. No rollback, D1 purge, or additional DO deletion is attempted by cleanup."
+            exit 0
+          fi
+
+          # Deleting a secret deploys a new version. Always perform rollback
+          # after deletion, never before it, and verify the 100% baseline.
+          baseline="$(cat "$RUNNER_TEMP/baseline-version-id" 2>/dev/null || true)"
+          [[ -n "$baseline" ]] || exit 0
+          set +e
+          npx wrangler secret list --name "$WORKER_NAME" --format json \
+            > "$RUNNER_TEMP/failure-secrets-before.json"
+          list_rc="$?"
+          if [[ "$list_rc" == "0" ]] && jq -e '.[] | select(.name == "CUTOVER_PREFLIGHT_TOKEN")' \
+            "$RUNNER_TEMP/failure-secrets-before.json" >/dev/null; then
+            CI=true timeout 180s npx wrangler secret delete CUTOVER_PREFLIGHT_TOKEN \
+              --name "$WORKER_NAME"
+            delete_rc="$?"
+          else
+            delete_rc="$list_rc"
+          fi
+          timeout 180s npx wrangler rollback "$baseline" --name "$WORKER_NAME" \
+            --message "Restore baseline after failed pre-v6 final cutover" --yes
+          rollback_rc="$?"
+          set -e
+
+          npx wrangler secret list --name "$WORKER_NAME" --format json \
+            > "$RUNNER_TEMP/failure-secrets-after.json"
+          ! jq -e '.[] | select(.name == "CUTOVER_PREFLIGHT_TOKEN")' \
+            "$RUNNER_TEMP/failure-secrets-after.json" >/dev/null
+          npx wrangler deployments status --name "$WORKER_NAME" --json \
+            > "$RUNNER_TEMP/failure-deployment-after.json"
+          jq -e --arg baseline "$baseline" '
+            (.versions | length) == 1 and
+            .versions[0].percentage == 100 and
+            .versions[0].version_id == $baseline
+          ' "$RUNNER_TEMP/failure-deployment-after.json" >/dev/null
+          [[ "$delete_rc" == "0" && "$rollback_rc" == "0" ]]
+
+      - name: Always verify no production cutover token remains
+        if: always()
+        working-directory: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler secret list --name "$WORKER_NAME" --format json \
+            > "$RUNNER_TEMP/final-production-secrets.json"
+          ! jq -e '.[] | select(.name == "CUTOVER_PREFLIGHT_TOKEN")' \
+            "$RUNNER_TEMP/final-production-secrets.json" >/dev/null
+
+  # A main push is deliberately boring and idempotent. It is allowed only after
+  # the one-time cutover has already produced the exact minimal table set; this
+  # prevents an accidental merge from using migrations apply as the first purge.
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: verify
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-    steps:
-      - name: Verify deployment credential
-        shell: bash
-        run: |
-          if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
-            echo "::error::CLOUDFLARE_API_TOKEN repository secret is missing"
-            exit 1
-          fi
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22.16.0
-          cache: npm
-      - name: Install
-        run: npm ci
-      - name: Build release
-        run: npm run build
-      - name: Apply additive D1 migrations
-        run: npx wrangler d1 migrations apply DB --remote --config wrangler.jsonc
-      - name: Deploy Worker
-        run: npx wrangler deploy --config dist/server/wrangler.json
-      - name: Verify immutable asset and bounded health
-        shell: bash
-        run: |
-          set -euo pipefail
-          base="https://market-sentinel-free.alicia5574188.workers.dev"
-          expected_asset="$(find dist/client/assets -maxdepth 1 -type f -name 'page-*.js' -printf '%f\n' | head -1)"
-          expected_version="$(sed -n 's/^export const DIRECT_MARKET_BRAIN_VERSION = "\([^"]*\)";/\1/p' lib/direct-market-types.ts)"
-          [[ -n "$expected_version" ]]
-          ready=0
-          for attempt in {1..12}; do
-            code="$(curl -sS --max-time 10 -o /tmp/release-page.js -w '%{http_code}' "$base/assets/$expected_asset" || true)"
-            if [[ "$code" == "200" ]] && grep -Fq "$expected_version" /tmp/release-page.js && cmp -s "dist/client/assets/$expected_asset" /tmp/release-page.js; then
-              ready=1
-              break
-            fi
-            sleep 10
-          done
-          [[ "$ready" == "1" ]]
-          health_ready=0
-          for attempt in {1..12}; do
-            code="$(curl -sS --max-time 5 -o /tmp/health-ready.json -w '%{http_code}' "$base/__health" || true)"
-            if [[ "$code" == "200" ]] && jq -e '
-              .ok == true and
-              .schedulerError == null and
-              (.schedulers.position.state == "live" or .schedulers.position.state == "starting") and
-              .schedulers.position.lastError == null and
-              (.schedulers.scanner.state == "live" or .schedulers.scanner.state == "starting" or .schedulers.scanner.state == "degraded" or .schedulers.scanner.state == "error") and
-              .schedulers.scanner.lastSuccessAt != null and
-              ((now * 1000 - .schedulers.scanner.lastSuccessAt) < 180000) and
-              .schedulers.scanner.analyzed > 0 and
-              .schedulers.scanner.circuitOpen == false
-            ' /tmp/health-ready.json >/dev/null; then
-              health_ready=1
-              break
-            fi
-            sleep 10
-          done
-          [[ "$health_ready" == "1" ]]
-          for attempt in 1 2 3; do
-            curl -fsS --max-time 5 "$base/__health" -o "/tmp/health-$attempt.json"
-            jq -e '
-              .ok == true and
-              .schedulerError == null and
-              (.schedulers.position.state == "live" or .schedulers.position.state == "starting") and
-              .schedulers.position.lastError == null and
-              (.schedulers.scanner.state == "live" or .schedulers.scanner.state == "starting" or .schedulers.scanner.state == "degraded" or .schedulers.scanner.state == "error") and
-              .schedulers.scanner.lastSuccessAt != null and
-              ((now * 1000 - .schedulers.scanner.lastSuccessAt) < 180000) and
-              .schedulers.scanner.analyzed > 0 and
-              .schedulers.scanner.circuitOpen == false
-            ' "/tmp/health-$attempt.json"
-            sleep 5
-          done
-      - name: Verify paper strategy cutover
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected_version="$(sed -n 's/^export const DIRECT_MARKET_BRAIN_VERSION = "\([^"]*\)";.*/\1/p' lib/direct-market-types.ts)"
-          cutover_ready=0
-          for attempt in {1..12}; do
-            npx wrangler d1 execute DB --remote --config wrangler.jsonc --json --command \
-              "SELECT reset.status, reset.active_brain_version, reset.target_brain_version, (SELECT COUNT(*) FROM hte31_trades paper_trade WHERE paper_trade.status = 'holding' AND (paper_trade.brain_version IS NULL OR paper_trade.brain_version != reset.active_brain_version OR paper_trade.entry_at < reset.completed_at)) AS legacy_open_positions FROM hte31_paper_reset_state reset WHERE reset.id = 'singleton'" \
-              > /tmp/paper-cutover.json
-            cutover_row="$(jq -c 'if type == "array" then .[0].results[0] else .results[0] end' /tmp/paper-cutover.json)"
-            echo "Paper cutover state: $cutover_row"
-            if jq -e --arg version "$expected_version" '
-              .status == "completed" and
-              .active_brain_version == $version and
-              .target_brain_version == null and
-              ((.legacy_open_positions | tonumber) == 0)
-            ' <<< "$cutover_row" >/dev/null; then
-              cutover_ready=1
-              break
-            fi
-            sleep 10
-          done
-          [[ "$cutover_ready" == "1" ]]
-
-  operations:
-    if: always() && (needs.deploy.result == 'success' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
-    needs: [verify, deploy]
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
+    concurrency:
+      group: market-sentinel-production
+      cancel-in-progress: false
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: release
       - uses: actions/setup-node@v4
         with:
           node-version: 22.16.0
           cache: npm
-      - name: Install
+          cache-dependency-path: release/package-lock.json
+      - working-directory: release
         run: npm ci
-      - name: Verify background timestamps advance without a page
-        run: node scripts/check-production.mjs health
-      - name: Audit account-wide D1 reads and writes
-        if: always()
-        run: node scripts/check-production.mjs d1
+      - working-directory: release
+        run: npm run build
+      - name: Require completed one-time cutover before ordinary deploy
+        working-directory: release
+        run: |
+          set -euo pipefail
+          npx wrangler d1 execute DB --remote --config wrangler.jsonc --json --command \
+            "SELECT group_concat(name, ',') AS tables_csv FROM (SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name != 'd1_migrations' ORDER BY name)" \
+            > "$RUNNER_TEMP/main-table-gate.json"
+          jq -e '
+            (if type == "array" then .[0].results[0] else .results[0] end).tables_csv ==
+            "live_exchange_credentials,paper_events,paper_plans,paper_positions,system_settings"
+          ' "$RUNNER_TEMP/main-table-gate.json" >/dev/null
+      - name: Record already-idempotent D1 migrations and deploy final config
+        working-directory: release
+        run: |
+          set -euo pipefail
+          npx wrangler d1 migrations apply DB --remote --config wrangler.jsonc
+          npx wrangler deploy --config dist/server/wrangler.json
+      - name: Verify advancing production health
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 8 "$WORKER_BASE_URL/__health" > "$RUNNER_TEMP/main-health-1.json"
+          sleep 8
+          curl -fsS --max-time 8 "$WORKER_BASE_URL/__health" > "$RUNNER_TEMP/main-health-2.json"
+          jq -e '
+            .ok == true and .version == "liquidity-three-state-v1" and .mode == "PAPER" and
+            .runtime.state == "LIVE" and .runtime.stale == false and .runtime.lastError == null and
+            .runtime.limits.plannedTotalDoRequestsPerDay < 55000 and
+            .runtime.limits.plannedDoWritesPerDay < 55000 and
+            .runtime.limits.plannedMaxD1BilledWritesPerDay < 5000
+          ' "$RUNNER_TEMP/main-health-2.json" >/dev/null
+          first="$(jq -er '.runtime.lastSuccessAt' "$RUNNER_TEMP/main-health-1.json")"
+          second="$(jq -er '.runtime.lastSuccessAt' "$RUNNER_TEMP/main-health-2.json")"
+          (( second > first ))
+
+  monitor:
+    if: always() && (github.event_name == 'schedule' || needs.deploy.result == 'success' || needs.cutover.result == 'success')
+    needs: [verify, deploy, cutover]
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A post-cutover monitor runs before merge, so it must use the exact
+          # verified release SHA. Scheduled and post-main-deploy runs use main.
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || 'main' }}
+          path: release
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+          cache: npm
+          cache-dependency-path: release/package-lock.json
+      - working-directory: release
+        run: npm ci
+      - name: Read-only six-hour schema, credential-presence and advancing-health monitor
+        working-directory: release
+        run: |
+          set -euo pipefail
+          npx wrangler d1 execute DB --remote --config wrangler.jsonc --json --command \
+            "SELECT (SELECT group_concat(name, ',') FROM (SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name != 'd1_migrations' ORDER BY name)) AS tables_csv, (SELECT COUNT(*) FROM live_exchange_credentials) AS credential_rows, (SELECT COUNT(*) FROM live_exchange_credentials WHERE id=1) AS id1_rows" \
+            > "$RUNNER_TEMP/monitor-d1.json"
+          jq -e '
+            (if type == "array" then .[0].results[0] else .results[0] end) |
+            .tables_csv == "live_exchange_credentials,paper_events,paper_plans,paper_positions,system_settings" and
+            (.credential_rows | tonumber) == 1 and
+            (.id1_rows | tonumber) == 1
+          ' "$RUNNER_TEMP/monitor-d1.json" >/dev/null
+
+          curl -fsS --max-time 8 "$WORKER_BASE_URL/__health" > "$RUNNER_TEMP/monitor-health-1.json"
+          sleep 8
+          curl -fsS --max-time 8 "$WORKER_BASE_URL/__health" > "$RUNNER_TEMP/monitor-health-2.json"
+          jq -e '
+            .ok == true and .version == "liquidity-three-state-v1" and .mode == "PAPER" and
+            .runtime.version == "liquidity-three-state-v1" and .runtime.mode == "PAPER" and
+            .runtime.state == "LIVE" and .runtime.stale == false and .runtime.lastError == null and
+            ((now * 1000 - .runtime.lastSuccessAt) < 10000) and
+            .runtime.limits.plannedTotalDoRequestsPerDay < 55000 and
+            .runtime.limits.plannedDoWritesPerDay < 55000 and
+            .runtime.limits.plannedMaxD1BilledWritesPerDay < 5000
+          ' "$RUNNER_TEMP/monitor-health-2.json" >/dev/null
+          first="$(jq -er '.runtime.lastSuccessAt' "$RUNNER_TEMP/monitor-health-1.json")"
+          second="$(jq -er '.runtime.lastSuccessAt' "$RUNNER_TEMP/monitor-health-2.json")"
+          (( second > first ))

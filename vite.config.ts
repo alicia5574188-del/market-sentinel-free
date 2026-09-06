@@ -30,9 +30,7 @@ export default defineConfig(async () => {
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
         inspectorPort: false,
         config(config) {
-          // HTE 3.1 Clean uses fresh simulation scanner/position Durable Object
-          // namespaces. The live Gate coordinator remains the existing audited
-          // implementation and is deliberately not recreated here.
+          // The new PAPER-only liquidity runtime has one SQLite Durable Object.
           config.main = "./worker/index-clean.ts";
           config.compatibility_flags = [
             ...new Set([...(config.compatibility_flags ?? []), "nodejs_compat"]),

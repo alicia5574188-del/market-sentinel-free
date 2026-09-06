@@ -1,3 +1,1 @@
-# Cloudflare 一键部署页面会要求填写此密钥。
-# 请设置至少 16 位、只有你知道的访问码；不要使用邮箱或交易所密码。
-OWNER_ACCESS_TOKEN=
+# No local trading secrets are accepted. The preserved Gate credential stays encrypted in D1.

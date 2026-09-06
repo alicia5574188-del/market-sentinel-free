@@ -1,17 +1,13 @@
-# Project agent instructions
+# Project instructions
 
-Before starting work, read `.codex/goal-to-done/GOAL.md`, `STATUS.md`, and `DECISIONS.md` when present.
-For every quantitative-strategy, learning, risk, execution, live-trading, scheduler, deployment, or operator-UI task, also read `docs/QUANT_SYSTEM_MASTER_HANDOFF.md` completely. It is the durable continuation entry after chat deletion; current `main` and verified production state still take precedence over every document.
-Before any UI, navigation, PWA, account, notification, order, live-control, or product-surface refactor, also read `docs/RESONANCE_MUST_KEEP_FEATURES.md` and preserve every applicable Must-Keep capability.
-Before restoring any historical feature, compare it with current `main` and classify it as **keep-current**, **supplement/adapt**, **reimplement**, or **retire**. Must-Keep protects capabilities and safety outcomes, not old components, old page locations, or duplicate buttons.
+Read `.codex/goal-to-done/GOAL.md`, `STATUS.md`, and `DECISIONS.md` before changes.
 
-- Work toward the stated outcome end to end and verify the result.
-- Preserve unrelated user changes.
-- Update `STATUS.md` after verified milestones and before stopping.
-- Ask the user only for authentication, required permissions, irreversible actions, or a materially ambiguous choice.
-- Never store credentials or secrets in project documentation.
-- Do not treat a redesign as complete if Must-Keep regression tests fail or if required capabilities become unreachable.
-- Do not restore UI features by adding unnecessary polling or by making the foreground page a Gate market-data producer again.
-- Do not duplicate destructive controls merely to mimic an older UI; prefer one clear execution point plus navigation to it.
-- Do not create a second authority, data source, risk path, or live-control implementation when the current architecture already owns that responsibility.
-- Treat Cloudflare D1's 100,000 daily `rows_written` allowance as a hard operating budget. Any change that adds or accelerates D1 writes must update the daily-write estimate and keep planned recurring writes at or below 60,000 rows/day, preserving at least 40,000 rows for lifecycle events and operational variance.
+- This repository contains one authority: `MarketStream` and the pure modules it calls.
+- Keep the public product PAPER-only. Never add a Gate order mutation, fund transfer, Auto Live switch, or live-entry endpoint without a new explicit owner authorization and separate release.
+- Preserve the existing AES-GCM/HKDF format and the production `live_exchange_credentials.id=1` row. Never log or return key material.
+- Futures data only. Spot order books, historical analogs, RSI/MACD-style lagging signals, and legacy strategy fallbacks are retired.
+- Keep total structural stop risk at or below 5% of current PAPER equity. Include fee and stress-slippage estimates and recalculate on actual fill.
+- Stale, failed, or sequence-fault data may cancel prepared plans, but may not open or close a position from an old price.
+- Every alarm must remain idempotent and re-arm before optional checkpoint work. Do not add per-snapshot D1 writes.
+- Keep planned daily DO requests and writes below 55,000 and planned D1 billed writes below 5,000. Update tests and README if cadence or persistence changes.
+- Use `apply_patch` for edits. Run all README verification commands and `git diff --check` before commit. Do not deploy from a coding branch.
