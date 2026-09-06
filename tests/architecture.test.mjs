@@ -74,6 +74,8 @@ test("cutover is credential-bound and removes legacy DOs only after v6 health", 
   assert.match(workflow, /index\.prepare\.js/);
   assert.match(workflow, /class RetiredDurableObject extends DurableObject/);
   assert.ok(workflow.indexOf("index.prepare.js") < workflow.indexOf("Deploy v6 prepare config"));
+  assert.match(workflow, /for attempt in 1 2 3 4 5/);
+  assert.match(workflow, /valid non-zero inventory result is authoritative/);
   assert.ok(workflow.indexOf("wrangler.prepare.json") < workflow.indexOf("Deploy reviewed final v7"));
   assert.ok(workflow.indexOf("Require continuously advancing v6 health") < workflow.indexOf("Deploy reviewed final v7"));
   assert.ok(workflow.indexOf("Recheck Gate twice") < workflow.indexOf("Deploy reviewed final v7"));

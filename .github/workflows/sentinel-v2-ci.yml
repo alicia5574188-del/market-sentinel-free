@@ -285,23 +285,40 @@ jobs:
           set -euo pipefail
           umask 077
           validate_gate() {
-            local output="$1" code now_ms
-            remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
-            (( remaining > 0 ))
-            code="$(curl -sS --max-time 20 -o "$output" -w '%{http_code}' \
-              -H "Authorization: Bearer $CUTOVER_PREFLIGHT_TOKEN" \
-              "$WORKER_BASE_URL/api/live/preflight" || true)"
-            [[ "$code" == "200" ]]
-            now_ms="$(( $(date +%s) * 1000 ))"
-            jq -e --argjson min "$((now_ms - 120000))" --argjson max "$((now_ms + 30000))" '
-              .safeToCutover == true and
-              .counts.positions == 0 and
-              .counts.openOrders == 0 and
-              .counts.priceOrders == 0 and
-              .activeContracts == [] and
-              (.checkedAt | type == "number") and
-              .checkedAt >= $min and .checkedAt <= $max
-            ' "$output" >/dev/null
+            local output="$1" code now_ms attempt
+            for attempt in 1 2 3 4 5; do
+              remaining="$(( CUTOVER_DEADLINE - $(date +%s) ))"
+              (( remaining > 0 ))
+              code="$(curl -sS --max-time 20 -o "$output" -w '%{http_code}' \
+                -H "Authorization: Bearer $CUTOVER_PREFLIGHT_TOKEN" \
+                "$WORKER_BASE_URL/api/live/preflight" || true)"
+              now_ms="$(( $(date +%s) * 1000 ))"
+              if [[ "$code" == "200" ]] && jq -e \
+                --argjson min "$((now_ms - 120000))" --argjson max "$((now_ms + 30000))" '
+                  .safeToCutover == true and
+                  .counts.positions == 0 and
+                  .counts.openOrders == 0 and
+                  .counts.priceOrders == 0 and
+                  .activeContracts == [] and
+                  (.checkedAt | type == "number") and
+                  .checkedAt >= $min and .checkedAt <= $max
+                ' "$output" >/dev/null; then
+                return 0
+              fi
+              # A valid non-zero inventory result is authoritative, not a
+              # propagation failure. Log counts only and stop immediately.
+              if [[ "$code" == "200" ]] && jq -e '
+                (.counts.positions | type == "number") and
+                (.counts.openOrders | type == "number") and
+                (.counts.priceOrders | type == "number")
+              ' "$output" >/dev/null; then
+                jq -c '{safeToCutover, counts, checkedAt}' "$output"
+                return 1
+              fi
+              (( attempt < 5 )) && sleep 3
+            done
+            echo "Gate preflight unavailable after bounded propagation retries (HTTP $code)" >&2
+            return 1
           }
 
           validate_gate "$RUNNER_TEMP/gate-first.json"
