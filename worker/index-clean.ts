@@ -7,7 +7,9 @@ import { closePaperPosition, PORTFOLIO_RISK_CAP, remainingStressRisk, SYSTEM_VER
 import { analyzeSnapshot, ancillaryIsFresh, ancillarySchedule, applyFlow, deriveStructureZones, emptySymbolMemory, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
 import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem } from "../lib/paper-outbox.ts";
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
-import { buildLiveEntryIntent, buildLiveStopIntent, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveClient } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient } from "../lib/gate-live.ts";
+import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
+import { credentialMetadata } from "../lib/gate-readonly.ts";
 import { clearOwnerSessionCookie, createOwnerSession, ownerAuthConfigured, ownerPasswordMatches, ownerSessionCookie, sameOriginMutation, verifyOwnerSession } from "../lib/owner-auth.ts";
 
 const LOOP_MS = 2_000;
@@ -423,6 +425,93 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return this.liveClient;
   }
 
+  private activeLivePositions() {
+    return Object.values(this.runtime.live.positions).filter((position): position is LivePosition => position?.status === "OPEN");
+  }
+
+  private activeLiveEntries() {
+    return Object.values(this.runtime.live.entries).filter((entry): entry is LiveEntry => Boolean(entry && !["FILLED", "CANCELLED"].includes(entry.status)));
+  }
+
+  private async replaceLiveCredentials(raw: GateCredentials) {
+    if (this.runtime.live.requestedEnabled) throw new Error("请先关闭实盘开关，再更换 API");
+    const credentials = normalizeGateCredentials(raw);
+    if (credentials.environment !== "live") throw new Error("这里只接受 Gate 实盘 API");
+    const candidate = new GateLiveClient(credentials);
+    const snapshot = await candidate.snapshot();
+    const equity = Number(snapshot.account.total);
+    const available = Number(snapshot.account.available);
+    if (snapshot.account.total == null || snapshot.account.available == null || !Number.isFinite(equity) || equity < 0 || !Number.isFinite(available) || available < 0) {
+      throw new Error("Gate 合约账户权益不可用");
+    }
+    if (snapshot.account.in_dual_mode === true || ["dual", "dual_plus"].includes(String(snapshot.account.position_mode ?? "").toLowerCase())) {
+      throw new Error("Gate 当前不是单向持仓模式");
+    }
+
+    const positions = this.activeLivePositions();
+    const entries = this.activeLiveEntries();
+    const existing = await this.env.DB.prepare("SELECT gate_user_id FROM live_exchange_credentials WHERE id=1 LIMIT 1").first<{ gate_user_id: string | null }>();
+    const gateUserId = snapshot.account.user == null ? null : String(snapshot.account.user);
+    if ((positions.length || entries.length) && existing?.gate_user_id && gateUserId && existing.gate_user_id !== gateUserId) {
+      throw new Error("新 API 不属于当前持仓账户，已拒绝替换");
+    }
+    for (const position of positions) {
+      const actual = snapshot.positions.find((row) => row.contract === position.symbol && Number(row.size ?? 0) !== 0);
+      const side = Number(actual?.size ?? 0) > 0 ? "LONG" : "SHORT";
+      if (!actual || side !== position.side) throw new Error(`${position.symbol} 未在新 API 账户中找到，已拒绝替换`);
+    }
+    const exchangeOrders = [...snapshot.orders, ...snapshot.priceOrders];
+    for (const entry of entries) {
+      if (exchangeOrders.some((order) => liveOrderTag(order) === entry.tag)) continue;
+      if (entry.status === "ERROR") { entry.status = "CANCELLED"; continue; }
+      throw new Error(`${entry.symbol} 未决挂单无法由新 API 接管`);
+    }
+
+    const encrypted = await encryptGateCredentials(credentials, this.env.OWNER_ACCESS_TOKEN ?? "");
+    const now = Date.now();
+    const resolvedGateUserId = gateUserId ?? existing?.gate_user_id ?? null;
+    const permissions = JSON.stringify({ futuresRead: true, futuresTrade: "requiredOnEnable", positionMode: "single", verifiedAt: now });
+    await this.env.DB.prepare(`INSERT INTO live_exchange_credentials
+      (id,exchange,environment,ciphertext,iv,crypto_version,key_hint,gate_user_id,owner_account_id,permission_summary_json,status,last_verified_at,last_error,created_at,updated_at)
+      VALUES (1,'gate','live',?,?,?,?,?,?,NULL,?,'verified',?,NULL,?,?)
+      ON CONFLICT(id) DO UPDATE SET exchange=excluded.exchange,environment=excluded.environment,ciphertext=excluded.ciphertext,iv=excluded.iv,
+      crypto_version=excluded.crypto_version,key_hint=excluded.key_hint,gate_user_id=excluded.gate_user_id,owner_account_id=NULL,
+      permission_summary_json=excluded.permission_summary_json,status='verified',last_verified_at=excluded.last_verified_at,last_error=NULL,updated_at=excluded.updated_at`)
+      .bind(encrypted.ciphertext, encrypted.iv, encrypted.cryptoVersion, gateKeyHint(credentials.apiKey), resolvedGateUserId, permissions, now, now, now).run();
+    this.liveClient = candidate;
+    this.runtime.live.credentialConfigured = true;
+    this.runtime.live.equity = equity;
+    this.runtime.live.available = available;
+    this.runtime.live.lastSyncAt = now;
+    this.runtime.live.lastError = null;
+    if (positions.length || entries.length) await this.syncLive(now);
+    await this.saveCheckpoint(now, true);
+    return { ok: true, credential: await credentialMetadata(this.env.DB), verification: {
+      equity, available, positions: snapshot.positions.filter((position) => Number(position.size ?? 0) !== 0).length,
+      orders: snapshot.orders.length, conditionalOrders: snapshot.priceOrders.length, checkedAt: now,
+    } };
+  }
+
+  private async deleteLiveCredentials() {
+    if (this.runtime.live.requestedEnabled) throw new Error("请先关闭实盘开关，再删除 API");
+    if (this.activeLivePositions().length) throw new Error("仍有实盘持仓，不能删除管理它的 API");
+    if (this.activeLiveEntries().length) throw new Error("仍有未决实盘挂单，不能删除 API");
+    const snapshot = await (await this.gateLive()).snapshot();
+    if (snapshot.positions.some((position) => Number(position.size ?? 0) !== 0)
+      || snapshot.orders.length > 0 || snapshot.priceOrders.length > 0) {
+      throw new Error("Gate 仍有持仓或挂单；请先清空后再删除 API");
+    }
+    await this.env.DB.prepare("DELETE FROM live_exchange_credentials WHERE id=1").run();
+    this.liveClient = null;
+    this.runtime.live.credentialConfigured = false;
+    this.runtime.live.equity = null;
+    this.runtime.live.available = null;
+    this.runtime.live.lastSyncAt = null;
+    this.runtime.live.lastError = null;
+    await this.saveCheckpoint(Date.now(), true);
+    return { ok: true, credential: await credentialMetadata(this.env.DB) };
+  }
+
   private liveOpenRisk() {
     const positionRisk = Object.values(this.runtime.live.positions).reduce((sum, position) => sum + (position?.status === "OPEN"
       ? remainingStressRisk(position, this.runtime.evidence[position.symbol]?.midpoint ?? position.entryPrice) : 0), 0);
@@ -485,12 +574,31 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
   }
 
-  private async syncLive(now: number, initialEnable = false) {
+  private async syncLive(now: number, initialEnable = false, forceEntryCleanup = false) {
     const activePositions = Object.values(this.runtime.live.positions).some((position) => position?.status === "OPEN");
     const activeEntries = Object.values(this.runtime.live.entries).some((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status));
-    if (!this.runtime.live.requestedEnabled && !activePositions && !activeEntries && !initialEnable) return;
+    if (!this.runtime.live.requestedEnabled && !activePositions && !activeEntries && !initialEnable && !forceEntryCleanup) return;
     const client = await this.gateLive();
-    const snapshot = await client.snapshot();
+    let snapshot = await client.snapshot();
+    const knownTags = new Set([
+      ...Object.values(this.runtime.live.entries).flatMap((entry) => entry?.tag && !["FILLED", "CANCELLED"].includes(entry.status) ? [entry.tag] : []),
+      ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" && position.stopTag ? [position.stopTag] : []),
+    ]);
+    const orphanRegular = snapshot.orders.filter((order) => {
+      const tag = liveOrderTag(order) ?? "";
+      return tag.startsWith("t-ms-e-") && !knownTags.has(tag);
+    });
+    const orphanTriggers = snapshot.priceOrders.filter((order) => {
+      const tag = liveOrderTag(order) ?? "";
+      return tag.startsWith("t-ms-e-") && !knownTags.has(tag);
+    });
+    if (orphanRegular.length || orphanTriggers.length) {
+      await Promise.all([
+        ...orphanRegular.map((order) => liveOrderId(order)).filter((id): id is string => Boolean(id)).map((id) => client.cancelOrder("LIMIT", id)),
+        ...orphanTriggers.map((order) => liveOrderId(order)).filter((id): id is string => Boolean(id)).map((id) => client.cancelOrder("PRICE_TRIGGER", id)),
+      ]);
+      snapshot = await client.snapshot();
+    }
     const equity = Number(snapshot.account.total ?? 0);
     const available = Number(snapshot.account.available ?? 0);
     if (!(equity > 0) || !(available >= 0)) throw new Error("Gate 合约账户权益不可用");
@@ -501,10 +609,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.live.available = available;
     this.runtime.live.lastSyncAt = now;
 
-    const knownTags = new Set([
-      ...Object.values(this.runtime.live.entries).flatMap((entry) => entry?.tag && !["FILLED", "CANCELLED"].includes(entry.status) ? [entry.tag] : []),
-      ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" && position.stopTag ? [position.stopTag] : []),
-    ]);
     const exchangeOrders = [...snapshot.orders, ...snapshot.priceOrders];
     const unknownOrders = exchangeOrders.filter((order) => !knownTags.has(liveOrderTag(order) ?? ""));
     const actualPositions = snapshot.positions.filter((position) => Number(position.size ?? 0) !== 0);
@@ -625,6 +729,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.live.operational = true;
     this.runtime.live.lastError = null;
     let availableForNewEntries = available;
+    let riskForNewEntries = this.liveOpenRisk();
+    const staged: Array<{ symbol: string; plan: PaperPlan; intent: ReturnType<typeof buildLiveEntryIntent> }> = [];
     for (const symbol of this.runtime.symbols) {
       const plan = this.runtime.plans[symbol] ?? null;
       if (!plan || plan.state !== "PREPARED" || now >= plan.expiresAt || this.runtime.live.positions[symbol]?.status === "OPEN") continue;
@@ -633,9 +739,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // six seconds. Never replay the same plan while its status is ambiguous.
       if (prior && prior.planId === plan.id && prior.status !== "CANCELLED") continue;
       if (prior && !["FILLED", "CANCELLED"].includes(prior.status)) await this.cancelLiveEntry(client, prior);
-      const intent = buildLiveEntryIntent({ plan, equity, available: availableForNewEntries, openRisk: this.liveOpenRisk(),
+      const intent = buildLiveEntryIntent({ plan, equity, available: availableForNewEntries, openRisk: riskForNewEntries,
         quantoMultiplier: this.runtime.contractMeta[symbol]?.quantoMultiplier ?? 1,
         leverageMax: this.runtime.contractMeta[symbol]?.leverageMax ?? 50 });
+      availableForNewEntries = Math.max(0, availableForNewEntries - intent.margin);
+      riskForNewEntries += intent.plannedRisk;
+      staged.push({ symbol, plan, intent });
+    }
+    for (const { symbol, plan, intent } of staged) {
       const entry: LiveEntry = {
         planId: plan.id, symbol, side: plan.side, scenario: plan.marketState, kind: intent.kind, status: "SUBMITTING",
         tag: intent.tag, exchangeOrderId: null, createdAt: now, expiresAt: plan.expiresAt, trigger: plan.entryTrigger,
@@ -649,7 +760,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         await client.setLeverage(symbol, intent.leverage);
         entry.exchangeOrderId = await client.createEntry(intent);
         entry.status = "OPEN";
-        availableForNewEntries = Math.max(0, availableForNewEntries - intent.margin);
       } catch (error) {
         entry.status = "ERROR";
         entry.lastError = safeError(error);
@@ -664,13 +774,18 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.live.changedAt = Date.now();
     this.runtime.live.lastError = null;
     try {
-      await this.syncLive(Date.now(), enabled);
+      await this.syncLive(Date.now(), enabled, !enabled);
       await this.saveCheckpoint(Date.now(), true);
       return { ok: true, live: this.runtime.live };
     } catch (error) {
-      if (enabled) this.runtime.live.requestedEnabled = false;
+      let cleanupError: string | null = null;
+      if (enabled) {
+        this.runtime.live.requestedEnabled = false;
+        try { await this.syncLive(Date.now(), false, true); }
+        catch (cleanupFailure) { cleanupError = safeError(cleanupFailure); }
+      }
       this.runtime.live.operational = false;
-      this.runtime.live.lastError = safeError(error);
+      this.runtime.live.lastError = cleanupError ? `${safeError(error)}；撤单核对失败：${cleanupError}` : safeError(error);
       await this.saveCheckpoint(Date.now(), true).catch(() => undefined);
       return { ok: false, error: this.runtime.live.lastError, live: this.runtime.live };
     }
@@ -982,7 +1097,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         oldestOutboxAgeMs: outbox.length ? Math.max(0, Date.now() - (outbox[0].position.exitAt ?? outbox[0].position.entryAt)) : 0,
         authorityReady: this.authorityReady, generatedAt: Date.now(), state: effectiveState, stale,
         analysisP99Ms: percentile99(this.runtime.analysisMs), limits: { loopMs: LOOP_MS, markets: 3, warmupSnapshots: WARMUP_SNAPSHOTS,
-          maxAncillaryConcurrency: MAX_ANCILLARY_CONCURRENCY, maxSubrequestsPerAlarm: 24, plannedAlarmRequestsPerDay: 43_200,
+          maxAncillaryConcurrency: MAX_ANCILLARY_CONCURRENCY, maxSubrequestsPerAlarm: 32, plannedAlarmRequestsPerDay: 43_200,
           plannedAlarmWritesPerDay: 43_200, watchdogWriteReservePerDay: WATCHDOG_WRITE_RESERVE,
           nonAlarmWriteCapPerDay: NON_ALARM_WRITE_CAP, nonAlarmWritesToday: this.runtime.nonAlarmWrites,
           plannedDoWritesPerDay: 54_080,
@@ -993,6 +1108,25 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (path === "/owner-status" && request.method === "GET") {
       await this.ensureAlarm();
       return json({ live: this.runtime.live, generatedAt: Date.now() });
+    }
+    if (path === "/credential-status" && request.method === "GET") {
+      return json({ credential: await credentialMetadata(this.env.DB) });
+    }
+    if (path === "/credentials" && request.method === "PUT") {
+      const body = await request.json<{ apiKey?: unknown; apiSecret?: unknown; environment?: unknown }>().catch(() => ({} as { apiKey?: unknown; apiSecret?: unknown; environment?: unknown }));
+      if (typeof body.apiKey !== "string" || typeof body.apiSecret !== "string" || body.environment !== "live") {
+        return json({ error: "Gate 实盘 API 参数不完整" }, 400);
+      }
+      try {
+        const result = await this.ctx.blockConcurrencyWhile(() => this.replaceLiveCredentials({ apiKey: body.apiKey as string, apiSecret: body.apiSecret as string, environment: "live" }));
+        return json(result);
+      } catch (error) { return json({ error: safeError(error) }, 409); }
+    }
+    if (path === "/credentials" && request.method === "DELETE") {
+      try {
+        const result = await this.ctx.blockConcurrencyWhile(() => this.deleteLiveCredentials());
+        return json(result);
+      } catch (error) { return json({ error: safeError(error) }, 409); }
     }
     if (path === "/live-mode" && request.method === "POST") {
       const body = await request.json<{ enabled?: unknown }>().catch(() => ({} as { enabled?: unknown }));
@@ -1116,6 +1250,27 @@ async function ownerLiveMode(request: Request, env: CloudflareEnv) {
   });
 }
 
+async function ownerLiveCredentials(request: Request, env: CloudflareEnv) {
+  if (!await ownerAuthenticated(request, env)) return json({ error: "请先登录" }, 401);
+  const stream = env.MARKET_STREAM.getByName("primary");
+  if (request.method === "GET") return stream.fetch("https://market-stream/credential-status");
+  if (!sameOriginMutation(request)) return json({ error: "请求来源验证失败" }, 403);
+  if (request.method === "DELETE") {
+    return stream.fetch("https://market-stream/credentials", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: "{}" });
+  }
+  if (request.method !== "PUT") return json({ error: "不支持的 API 操作" }, 405);
+  const contentLength = Number(request.headers.get("content-length") ?? 0);
+  if (contentLength > 2_048) return json({ error: "API 请求过大" }, 413);
+  const raw = await request.text();
+  if (raw.length > 2_048) return json({ error: "API 请求过大" }, 413);
+  const body = (() => { try { return JSON.parse(raw) as { apiKey?: unknown; apiSecret?: unknown }; } catch { return {}; } })();
+  if (typeof body.apiKey !== "string" || typeof body.apiSecret !== "string") return json({ error: "请完整填写 API Key 和 Secret" }, 400);
+  return stream.fetch("https://market-stream/credentials", {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ apiKey: body.apiKey, apiSecret: body.apiSecret, environment: "live" }),
+  });
+}
+
 const worker = {
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
     const url = new URL(request.url);
@@ -1135,6 +1290,7 @@ const worker = {
     if (url.pathname === "/api/auth/logout" && request.method === "POST") return ownerLogout(request);
     if (url.pathname === "/api/live/status" && request.method === "GET") return ownerLiveStatus(request, env);
     if (url.pathname === "/api/live/mode" && request.method === "POST") return ownerLiveMode(request, env);
+    if (url.pathname === "/api/live/credentials" && ["GET", "PUT", "DELETE"].includes(request.method)) return ownerLiveCredentials(request, env);
     if (url.pathname.startsWith("/api/")) return json({ error: "not found" }, 404);
     return handler.fetch(request, env, ctx);
   },

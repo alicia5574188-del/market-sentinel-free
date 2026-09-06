@@ -33,4 +33,4 @@ npm run typecheck
 npm run lint
 ```
 
-Ordinary production releases require the existing Cloudflare `OWNER_ACCESS_TOKEN` secret and the preserved encrypted `live_exchange_credentials` row with `id=1`. The release path never prints or rewrites either value.
+Ordinary production releases require the existing Cloudflare `OWNER_ACCESS_TOKEN` secret. The credential table is preserved, while the owner UI may hold either zero rows after an intentional delete or exactly the encrypted `live_exchange_credentials` row with `id=1` after save/replace. The release path never prints or rewrites either value.

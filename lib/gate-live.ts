@@ -4,8 +4,12 @@ import { PORTFOLIO_RISK_CAP, ROUND_TRIP_FRICTION_RATE, sizePaperPosition, type P
 const encoder = new TextEncoder();
 
 export type GateLiveAccount = {
+  user?: string | number;
   total?: string | number;
   available?: string | number;
+  order_margin?: string | number;
+  position_margin?: string | number;
+  unrealised_pnl?: string | number;
   in_dual_mode?: boolean;
   position_mode?: string;
 };
@@ -174,7 +178,7 @@ export class GateLiveClient {
     try {
       await this.request("DELETE", `/futures/usdt/${family}/${encodeURIComponent(orderId)}`);
     } catch (error) {
-      if (!(error instanceof Error) || !/404|ORDER_NOT_FOUND|POSITION_CROSS_MARGIN/.test(error.message)) throw error;
+      if (!(error instanceof Error) || !/404|ORDER_NOT_FOUND/.test(error.message)) throw error;
     }
   }
 

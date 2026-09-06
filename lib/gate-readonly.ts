@@ -34,28 +34,34 @@ type CredentialRow = {
   ciphertext: string;
   iv: string;
   crypto_version: number;
+  environment: string;
   key_hint: string | null;
+  gate_user_id: string | null;
   status: string;
   last_verified_at: number | null;
   last_error: string | null;
+  updated_at: number;
 };
 
 export async function credentialMetadata(db: D1Database) {
   const row = await db.prepare(
-    "SELECT ciphertext, iv, crypto_version, key_hint, status, last_verified_at, last_error FROM live_exchange_credentials WHERE id = 1 LIMIT 1",
+    "SELECT ciphertext,iv,crypto_version,environment,key_hint,gate_user_id,status,last_verified_at,last_error,updated_at FROM live_exchange_credentials WHERE id=1 LIMIT 1",
   ).first<CredentialRow>();
   return row ? {
     configured: true,
+    environment: row.environment,
     keyHint: row.key_hint,
+    gateUserId: row.gate_user_id,
     status: row.status,
     lastVerifiedAt: row.last_verified_at,
     lastError: row.last_error,
-  } : { configured: false, keyHint: null, status: "missing", lastVerifiedAt: null, lastError: null };
+    updatedAt: row.updated_at,
+  } : { configured: false, environment: null, keyHint: null, gateUserId: null, status: "missing", lastVerifiedAt: null, lastError: null, updatedAt: null };
 }
 
 export async function verifyCredentialReadOnly(db: D1Database, ownerAccessToken: string) {
   const row = await db.prepare(
-    "SELECT ciphertext, iv, crypto_version, key_hint, status, last_verified_at, last_error FROM live_exchange_credentials WHERE id = 1 LIMIT 1",
+    "SELECT ciphertext,iv,crypto_version,environment,key_hint,gate_user_id,status,last_verified_at,last_error,updated_at FROM live_exchange_credentials WHERE id=1 LIMIT 1",
   ).first<CredentialRow>();
   if (!row) return { configured: false, verified: false, keyHint: null, positions: null, orders: null, conditionalOrders: null };
   const credentials = await decryptGateCredentials({

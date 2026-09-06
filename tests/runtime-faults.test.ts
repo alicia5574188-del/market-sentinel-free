@@ -103,6 +103,7 @@ async function makeStreamFromStorage(storage: FakeStorage) {
     ASSETS: { fetch: async () => new Response("asset") },
     DB: db,
     MARKET_STREAM: {},
+    OWNER_ACCESS_TOKEN: "owner-access-token-long-enough",
   };
   // Test-only reflective access is required to inject failures into private transaction boundaries.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -562,4 +563,55 @@ test("status exposes bounded mirror telemetry, never the complete outage outbox"
     requestedEnabled: false, operational: false, changedAt: null, lastSyncAt: null, lastError: null,
     equity: null, available: null, credentialConfigured: false, entries: {}, positions: {},
   });
+});
+
+test("an enable that cannot fund every staged plan creates zero Gate orders and forces cleanup", async () => {
+  const { stream } = await makeStream();
+  const symbols = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];
+  stream.runtime.symbols = symbols;
+  stream.runtime.plans = Object.fromEntries(symbols.map((symbol) => [symbol, plan(symbol)]));
+  stream.runtime.contractMeta = Object.fromEntries(symbols.map((symbol) => [symbol, {
+    quantoMultiplier: 1, maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0,
+  }]));
+  let createCalls = 0;
+  let snapshotCalls = 0;
+  stream.liveClient = {
+    requestCount: 0,
+    snapshot: async () => {
+      snapshotCalls += 1;
+      return { account: { total: "1000", available: "50", in_dual_mode: false }, positions: [], orders: [], priceOrders: [], checkedAt: Date.now() };
+    },
+    createEntry: async () => { createCalls += 1; return "should-not-exist"; },
+    setLeverage: async () => undefined,
+  };
+
+  const result = await stream.setLiveMode(true);
+
+  assert.equal(result.ok, false);
+  assert.equal(stream.runtime.live.requestedEnabled, false);
+  assert.equal(createCalls, 0, "all three plans must pass funding before the first Gate mutation");
+  assert.ok(snapshotCalls >= 2, "failed enable must immediately perform an OFF cleanup reconciliation");
+});
+
+test("forced OFF reconciliation cancels only orphaned Market Sentinel entry tags", async () => {
+  const { stream } = await makeStream();
+  const cancelled: Array<[string, string]> = [];
+  let snapshotCalls = 0;
+  stream.liveClient = {
+    requestCount: 0,
+    snapshot: async () => {
+      snapshotCalls += 1;
+      return { account: { total: "1000", available: "1000", in_dual_mode: false }, positions: [],
+        orders: snapshotCalls === 1 ? [
+          { id_string: "101", text: "t-ms-e-stale" },
+          { id_string: "102", text: "manual-order" },
+        ] : [{ id_string: "102", text: "manual-order" }], priceOrders: [], checkedAt: Date.now() };
+    },
+    cancelOrder: async (kind: string, id: string) => { cancelled.push([kind, id]); },
+  };
+
+  await stream.syncLive(Date.now(), false, true);
+
+  assert.deepEqual(cancelled, [["LIMIT", "101"]]);
+  assert.equal(stream.runtime.live.requestedEnabled, false);
 });

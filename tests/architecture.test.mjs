@@ -23,7 +23,7 @@ test("runtime uses bounded futures REST snapshots, no continuous WebSocket", asy
   assert.match(worker, /plannedMaxD1BilledWritesPerDay: 4_800/);
   assert.match(worker, /DEFAULT_SYMBOLS = \["BTC_USDT", "ETH_USDT", "SOL_USDT"\]/);
   assert.doesNotMatch(worker, /ZEC_USDT|BNB_USDT/);
-  assert.match(worker, /maxSubrequestsPerAlarm: 24/);
+  assert.match(worker, /maxSubrequestsPerAlarm: 32/);
   assert.match(worker, /now - this\.runtime\.lastStopCheckpointAt < 60_000/);
 });
 
@@ -59,6 +59,13 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(worker, /FROM paper_positions/);
   assert.match(worker, /url\.pathname === "\/api\/auth\/login" && request\.method === "POST"/);
   assert.match(worker, /url\.pathname === "\/api\/live\/mode" && request\.method === "POST"/);
+  assert.match(worker, /url\.pathname === "\/api\/live\/credentials" && \["GET", "PUT", "DELETE"\]\.includes\(request\.method\)/);
+  assert.match(worker, /encryptGateCredentials/);
+  assert.match(worker, /Gate 仍有持仓或挂单；请先清空后再删除 API/);
+  assert.match(worker, /DELETE FROM live_exchange_credentials WHERE id=1/);
+  assert.match(worker, /tag\.startsWith\("t-ms-e-"\) && !knownTags\.has\(tag\)/);
+  assert.ok(worker.indexOf("const staged:") < worker.indexOf("await client.setLeverage"));
+  assert.match(worker, /await this\.syncLive\(Date\.now\(\), false, true\)/);
   assert.match(worker, /if \(!await ownerAuthenticated\(request, env\)\) return json\(\{ error: "请先登录" \}, 401\)/);
   assert.match(worker, /sameOriginMutation\(request\)/);
   assert.match(worker, /const \{ outbox, live, \.\.\.publicRuntime \} = this\.runtime/);
@@ -94,6 +101,10 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(page, /所有者登录/);
   assert.match(page, /确认开启实盘/);
   assert.match(page, /实盘交易开关/);
+  assert.match(page, /实盘账户/);
+  assert.match(page, /实盘订单/);
+  assert.match(page, /API 管理/);
+  assert.match(page, /撤销系统遗留挂单/);
   assert.match(page, /function CandleChart/);
   assert.match(page, /loadedInterval === interval \? candles\.slice\(-72\) : \[\]/);
   assert.match(page, /Gate USDT 合约 · 已收盘数据/);
@@ -101,13 +112,14 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(page, /Gate 价格触发/);
   assert.match(page, /Gate 限价/);
   assert.match(page, /authorityOperational && evidence\?\.fresh && evidence\?\.ancillaryFresh/);
-  assert.match(page, /订单.*历史.*设置/s);
+  assert.match(page, /订单.*实盘.*历史.*设置/s);
   assert.doesNotMatch(layout, /requireChatGPTUser|redirect|signin-with-chatgpt/);
   assert.equal(await read("app/chatgpt-auth.ts").then(() => false, () => true), true);
   assert.equal(await read("lib/auth-paths.ts").then(() => false, () => true), true);
   assert.equal((workflow.match(/grep -Fq '流动性三态'/g) ?? []).length, 2);
   assert.equal((workflow.match(/WORKER_BASE_URL\/api\/history/g) ?? []).length, 2);
   assert.equal((workflow.match(/WORKER_BASE_URL\/api\/candles\?symbol=BTC_USDT&interval=15m/g) ?? []).length, 2);
+  assert.equal((workflow.match(/WORKER_BASE_URL\/api\/live\/credentials/g) ?? []).length, 2);
   assert.equal((workflow.match(/for attempt in 1 2 3 4 5 6/g) ?? []).length, 2);
 });
 

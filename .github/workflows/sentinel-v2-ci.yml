@@ -1029,6 +1029,10 @@ jobs:
             > "$RUNNER_TEMP/main-auth-session.json"
           jq -e '.configured == true and .authenticated == false and .username == "owner"' \
             "$RUNNER_TEMP/main-auth-session.json" >/dev/null
+          credential_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/main-credential-unauthorized.json" -w '%{http_code}' \
+            "$WORKER_BASE_URL/api/live/credentials" || true)"
+          [[ "$credential_code" == "401" ]]
+          jq -e '.error == "请先登录"' "$RUNNER_TEMP/main-credential-unauthorized.json" >/dev/null
           curl -fsS --max-time 15 "$WORKER_BASE_URL/api/runtime" \
             > "$RUNNER_TEMP/main-public-runtime.json"
           jq -e '(.live == null) and (.liveMode.requestedEnabled | type == "boolean") and (.liveMode.operational | type == "boolean")' \
@@ -1081,8 +1085,8 @@ jobs:
           jq -e '
             (if type == "array" then .[0].results[0] else .results[0] end) |
             .tables_csv == "live_exchange_credentials,paper_events,paper_plans,paper_positions,system_settings" and
-            (.credential_rows | tonumber) == 1 and
-            (.id1_rows | tonumber) == 1
+            ((.credential_rows | tonumber) == 0 or (.credential_rows | tonumber) == 1) and
+            (.id1_rows | tonumber) == (.credential_rows | tonumber)
           ' "$RUNNER_TEMP/monitor-d1.json" >/dev/null
 
           curl -fsS --max-time 8 "$WORKER_BASE_URL/__health" > "$RUNNER_TEMP/monitor-health-1.json"
@@ -1108,6 +1112,9 @@ jobs:
           curl -fsS --max-time 15 "$WORKER_BASE_URL/api/history" \
             > "$RUNNER_TEMP/monitor-history.json"
           jq -e '.items | type == "array"' "$RUNNER_TEMP/monitor-history.json" >/dev/null
+          credential_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/monitor-credential-unauthorized.json" -w '%{http_code}' \
+            "$WORKER_BASE_URL/api/live/credentials" || true)"
+          [[ "$credential_code" == "401" ]]
           candles_ok=0
           for attempt in 1 2 3 4 5 6; do
             if curl -fsS --max-time 15 "$WORKER_BASE_URL/api/candles?symbol=BTC_USDT&interval=15m" \

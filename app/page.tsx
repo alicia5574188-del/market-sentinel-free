@@ -21,8 +21,10 @@ type Runtime = {
   live?: LiveRuntime;
 };
 type AuthSession = { configured: boolean; authenticated: boolean; username: string };
+type CredentialStatus = { configured: boolean; environment: string | null; keyHint: string | null; gateUserId: string | null; status: string; lastVerifiedAt: number | null; lastError: string | null; updatedAt: number | null };
+type CredentialVerification = { equity: number; available: number; positions: number; orders: number; conditionalOrders: number; checkedAt: number };
 type HistoryItem = { id: string; symbol: string; marketState: MarketState; side: Side; status: "OPEN" | "CLOSED"; entryAt: number; entryPrice: number; currentStop: number; currentTarget: number; plannedRisk: number; notional: number; exitAt: number | null; exitPrice: number | null; exitReason: string | null; realizedPnl: number | null };
-type Tab = "brain" | "orders" | "history" | "settings";
+type Tab = "brain" | "orders" | "live" | "history" | "settings";
 type Timeframe = "1m" | "15m" | "1h";
 type Candle = { time: number; volume: number; close: number; high: number; low: number; open: number };
 
@@ -118,7 +120,7 @@ export default function Home() {
   const live = runtime?.live;
   const liveEnabled = Boolean(live?.requestedEnabled ?? runtime?.liveMode?.requestedEnabled);
   const openLivePositions = Object.values(live?.positions ?? {}).filter((position): position is LivePosition => position?.status === "OPEN");
-  const openLiveEntries = Object.values(live?.entries ?? {}).filter((entry): entry is LiveEntry => Boolean(entry && ["SUBMITTING", "OPEN"].includes(entry.status)));
+  const openLiveEntries = Object.values(live?.entries ?? {}).filter((entry): entry is LiveEntry => Boolean(entry && !["FILLED", "CANCELLED"].includes(entry.status)));
   const liveControl = () => {
     if (!auth.authenticated) setShowLogin(true);
     else if (liveEnabled) void setLiveMode(false);
@@ -157,7 +159,7 @@ export default function Home() {
     </section>
     {(!responseFresh || error) && runtime && <p className="notice">手机页面更新延迟，下面保留最近一次后台状态；服务器仍独立运行，不会因此停止判断或开模拟单。</p>}{runtime?.lastError && <p className="notice">系统正在自动恢复：{runtime.lastError}</p>}
 
-    <nav className="tabs">{([['brain', '大脑'], ['orders', `订单 ${openPositions.length + preparedPlans.length + openLivePositions.length + openLiveEntries.length || ''}`], ['history', '历史'], ['settings', '设置']] as const).map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => selectTab(key)}>{label}</button>)}</nav>
+    <nav className="tabs">{([['brain', '大脑'], ['orders', `订单 ${openPositions.length + preparedPlans.length || ''}`], ['live', `实盘 ${openLivePositions.length + openLiveEntries.length || ''}`], ['history', '历史'], ['settings', '设置']] as const).map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => selectTab(key)}>{label}</button>)}</nav>
 
     {tab === "brain" && <section className="markets">{runtime?.symbols.map((symbol) => {
       const evidence = runtime.evidence[symbol], marketFresh = Boolean(authorityOperational && evidence?.fresh && evidence?.ancillaryFresh);
@@ -173,12 +175,12 @@ export default function Home() {
       </article>;
     }) ?? <div className="empty">正在读取市场数据…</div>}</section>}
 
-    {tab === "orders" && <section className="panel-list">{!openPositions.length && !preparedPlans.length && !openLivePositions.length && !openLiveEntries.length && <div className="empty"><b>当前没有订单</b><p>出现合适位置后会先显示准备计划；实盘开启时会同步提交 Gate 合约挂单。</p></div>}
-      {auth.authenticated && openLivePositions.map((position) => <OrderCard key={`live:${position.symbol}`} symbol={position.symbol} side={position.side} label="实盘持仓" state={position.scenario} notional={position.notional} equity={live?.equity ?? INITIAL_EQUITY} mode="LIVE" leverage={position.leverage} margin={position.margin} values={[["真实进场", position.entryPrice], ["交易所止损", position.stopPrice ?? position.currentStop], ["动态目标", position.currentTarget], ["实际计划风险", position.plannedRisk]]} />)}
-      {auth.authenticated && openLiveEntries.map((entry) => <OrderCard key={`live:${entry.symbol}:entry`} symbol={entry.symbol} side={entry.side} label={entry.kind === "PRICE_TRIGGER" ? "实盘触发挂单" : "实盘限价挂单"} state={entry.scenario} notional={entry.notional} equity={live?.equity ?? INITIAL_EQUITY} mode="LIVE" leverage={entry.leverage} margin={entry.margin} values={[["挂单进场", entry.trigger], ["结构止损", entry.invalidation], ["动态目标", entry.target], ["实际计划风险", entry.plannedRisk]]} />)}
+    {tab === "orders" && <section className="panel-list">{!openPositions.length && !preparedPlans.length && <div className="empty"><b>当前没有模拟订单</b><p>出现合适位置后会先显示准备计划；真实订单请进入底部「实盘」。</p></div>}
       {openPositions.map(({ symbol, position }) => <OrderCard key={symbol} symbol={symbol} side={position.side} label="持仓中" state={position.scenario} notional={position.notional} equity={runtime?.equity ?? INITIAL_EQUITY} values={[["进场", position.entryPrice], ["保护价", position.currentStop], ["动态目标", position.currentTarget], ["计划风险", position.plannedRisk]]} />)}
       {preparedPlans.map(({ symbol, plan }) => <OrderCard key={symbol} symbol={symbol} side={plan.side} label="等待触发" state={plan.marketState} notional={plan.notional} equity={runtime?.equity ?? INITIAL_EQUITY} values={[["触发进场", plan.entryTrigger], ["结构止损", plan.invalidation], ["目标", plan.target], ["计划风险", plan.plannedRisk]]} />)}
     </section>}
+
+    {tab === "live" && <LiveCenter auth={auth} runtime={runtime} live={live} liveEnabled={liveEnabled} liveBusy={liveBusy} liveActionError={liveActionError} positions={openLivePositions} entries={openLiveEntries} onLogin={() => setShowLogin(true)} onToggle={liveControl} onCleanup={() => void setLiveMode(false)} />}
 
     {tab === "history" && <section className="history-panel"><div className="section-heading"><div><h2>最近模拟交易</h2><p>只展示真实产生过的记录，不填充示例数据。</p></div><span>{history.filter((item) => item.status === "CLOSED").length} 笔已结束</span></div>
       {!history.length ? <div className="empty"><b>还没有历史交易</b><p>产生第一笔模拟交易后会自动出现在这里。</p></div> : <div className="history-table">{history.map((item) => <article key={item.id}><div><span className={`side ${item.side.toLowerCase()}`}>{item.side === "LONG" ? "多" : "空"}</span><div><b>{item.symbol.replace("_", "/")}</b><small>{time(item.entryAt)} · {stateText[item.marketState]}</small></div></div><div><small>进场 / 出场</small><b>{num(item.entryPrice, 5)} / {num(item.exitPrice, 5)}</b></div><div><small>结果</small><b className={(item.realizedPnl ?? 0) >= 0 ? "positive" : "negative"}>{item.status === "OPEN" ? "持仓中" : `${signed(item.realizedPnl ?? 0)} U`}</b></div><div><small>结束原因</small><b>{item.status === "OPEN" ? "尚未结束" : exitText[item.exitReason ?? ""] ?? item.exitReason ?? "已结束"}</b></div></article>)}</div>}
@@ -191,9 +193,91 @@ export default function Home() {
   </main>;
 }
 
-function OrderCard({ symbol, side, label, state, notional, equity, values, mode = "PAPER", leverage: actualLeverage, margin: actualMargin }: { symbol: string; side: Side; label: string; state: MarketState; notional: number; equity: number; values: [string, number][]; mode?: "PAPER" | "LIVE"; leverage?: number; margin?: number }) {
+function LiveCenter({ auth, runtime, live, liveEnabled, liveBusy, liveActionError, positions, entries, onLogin, onToggle, onCleanup }: {
+  auth: AuthSession;
+  runtime: Runtime | null;
+  live: LiveRuntime | undefined;
+  liveEnabled: boolean;
+  liveBusy: boolean;
+  liveActionError: string | null;
+  positions: LivePosition[];
+  entries: LiveEntry[];
+  onLogin: () => void;
+  onToggle: () => void;
+  onCleanup: () => void;
+}) {
+  const [view, setView] = useState<"account" | "orders" | "api">("account");
+  const [credential, setCredential] = useState<CredentialStatus | null>(null);
+  const [apiKey, setApiKey] = useState("");
+  const [apiSecret, setApiSecret] = useState("");
+  const [credentialBusy, setCredentialBusy] = useState(false);
+  const [credentialError, setCredentialError] = useState<string | null>(null);
+  const [credentialNotice, setCredentialNotice] = useState<string | null>(null);
+  const [verification, setVerification] = useState<CredentialVerification | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    if (!auth.authenticated) return () => { active = false; };
+    void fetch("/api/live/credentials", { cache: "no-store" }).then(async (response) => {
+      const payload = await response.json() as { credential?: CredentialStatus; error?: string };
+      if (!response.ok) throw new Error(payload.error || "读取 API 状态失败");
+      if (active) setCredential(payload.credential ?? null);
+    }).catch((failure) => { if (active) setCredentialError(failure instanceof Error ? failure.message : "读取失败"); });
+    return () => { active = false; };
+  }, [auth.authenticated]);
+
+  const saveCredential = async (event: FormEvent) => {
+    event.preventDefault(); setCredentialBusy(true); setCredentialError(null); setCredentialNotice(null); setVerification(null);
+    try {
+      if (liveEnabled) throw new Error("请先关闭实盘开关，再更换 API");
+      const response = await fetch("/api/live/credentials", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ apiKey, apiSecret }) });
+      const payload = await response.json() as { credential?: CredentialStatus; verification?: CredentialVerification; error?: string };
+      if (!response.ok || !payload.credential) throw new Error(payload.error || "API 保存失败");
+      setCredential(payload.credential); setVerification(payload.verification ?? null); setApiKey(""); setApiSecret("");
+      setCredentialNotice("Gate 验证通过并已加密保存；实盘开关保持关闭。下一次开启会使用这组新 API。");
+    } catch (failure) { setCredentialError(failure instanceof Error ? failure.message : "API 保存失败"); }
+    finally { setCredentialBusy(false); }
+  };
+
+  const deleteCredential = async () => {
+    if (!window.confirm("确认删除已保存的 Gate API？删除后系统不能读取账户或管理实盘订单。")) return;
+    setCredentialBusy(true); setCredentialError(null); setCredentialNotice(null); setVerification(null);
+    try {
+      const response = await fetch("/api/live/credentials", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const payload = await response.json() as { credential?: CredentialStatus; error?: string };
+      if (!response.ok || !payload.credential) throw new Error(payload.error || "API 删除失败");
+      setCredential(payload.credential); setCredentialNotice("已删除加密 API，实盘保持关闭。");
+    } catch (failure) { setCredentialError(failure instanceof Error ? failure.message : "API 删除失败"); }
+    finally { setCredentialBusy(false); }
+  };
+
+  if (!auth.authenticated) return <section className="live-center"><div className="empty live-lock"><b>登录后查看实盘</b><p>实盘账户、真实订单和 Gate API 管理只对所有者开放。</p><button className="primary-action" type="button" onClick={onLogin}>所有者登录</button></div></section>;
+
+  const occupiedMargin = [...positions, ...entries].reduce((sum, item) => sum + item.margin, 0);
+  const liveRisk = [...positions, ...entries].reduce((sum, item) => sum + item.plannedRisk, 0);
+  const liveFloating = positions.reduce((sum, position) => {
+    const mark = runtime?.evidence[position.symbol]?.midpoint ?? position.entryPrice;
+    return sum + position.notional * (mark - position.entryPrice) / Math.max(position.entryPrice, 1e-9) * (position.side === "LONG" ? 1 : -1);
+  }, 0);
+  const connectionText = !credential?.configured ? "未保存 API" : live?.lastError ? "连接异常" : live?.lastSyncAt ? "已连接 Gate" : "等待首次核对";
+
+  return <section className="live-center">
+    <div className="live-subnav">{([['account', '实盘账户'], ['orders', `实盘订单 ${positions.length + entries.length || ''}`], ['api', 'API 管理']] as const).map(([key, label]) => <button type="button" key={key} className={view === key ? "active" : ""} onClick={() => setView(key)}>{label}</button>)}</div>
+    {view === "account" && <>
+      <section className="live-status-card"><div><small>Gate 实盘状态</small><h2>{liveEnabled ? live?.operational ? "实盘已开启" : "实盘已开启 · 等待恢复" : "实盘已关闭"}</h2><p>{live?.lastError || connectionText}</p></div><div className="live-actions"><button type="button" disabled={liveBusy || !credential?.configured || liveEnabled} className="danger-outline" onClick={onCleanup}>撤销系统遗留挂单</button><button type="button" disabled={liveBusy || !credential?.configured} className={liveEnabled ? "danger-action" : "primary-action"} onClick={onToggle}>{liveBusy ? "正在与 Gate 核对…" : liveEnabled ? "关闭实盘并撤单" : "开启实盘"}</button></div></section>
+      {liveActionError && <p className="form-error">{liveActionError}</p>}
+      {!liveEnabled && <p className="cleanup-help">如果 Gate 仍显示以前由本系统创建的挂单，点“撤销系统遗留挂单”。只撤销带本系统标签的入场单，不会撤销你的手工订单。</p>}
+      <section className="summary four live-summary"><article><small>真实账户权益</small><strong>{num(live?.equity, 2)} U</strong><p>{connectionText}</p></article><article><small>可用保证金</small><strong>{num(live?.available, 2)} U</strong><p>Gate 返回的可用余额</p></article><article><small>持仓浮盈亏</small><strong className={liveFloating >= 0 ? "positive" : "negative"}>{signed(liveFloating)} U</strong><p>{positions.length} 个真实持仓</p></article><article><small>已计划风险</small><strong>{num(liveRisk, 2)} U</strong><p>保证金约 {num(occupiedMargin, 2)} U · 上限 5%</p></article></section>
+      <div className="live-facts"><Setting title="API 状态" detail={credential?.configured ? `密钥 ${credential.keyHint ?? "已加密"} · ${time(credential.lastVerifiedAt)}` : "进入 API 管理保存或更换"} value={credential?.configured ? "已验证" : "未配置"} tone={credential?.configured ? "online" : "locked"}/><Setting title="最近账户核对" detail="页面关闭后后台仍按策略运行。" value={time(live?.lastSyncAt)} tone={live?.lastSyncAt ? "online" : "locked"}/></div>
+    </>}
+    {view === "orders" && <section className="panel-list live-orders">{!positions.length && !entries.length && <div className="empty"><b>当前没有实盘订单</b><p>开启实盘后，系统会在 Gate 预挂当前策略形成的真实合约订单。</p></div>}{positions.map((position) => <OrderCard key={`live:${position.symbol}`} symbol={position.symbol} side={position.side} label="实盘持仓" state={position.scenario} notional={position.notional} equity={live?.equity ?? INITIAL_EQUITY} mode="LIVE" leverage={position.leverage} margin={position.margin} values={[["真实进场", position.entryPrice], ["交易所止损", position.stopPrice ?? position.currentStop], ["动态目标", position.currentTarget], ["实际计划风险", position.plannedRisk]]} />)}{entries.map((entry) => <OrderCard key={`live:${entry.symbol}:entry`} symbol={entry.symbol} side={entry.side} label={entry.status === "ERROR" ? "异常待核对" : entry.kind === "PRICE_TRIGGER" ? "实盘触发挂单" : "实盘限价挂单"} state={entry.scenario} notional={entry.notional} equity={live?.equity ?? INITIAL_EQUITY} mode="LIVE" leverage={entry.leverage} margin={entry.margin} note={entry.lastError ?? undefined} values={[["挂单进场", entry.trigger], ["结构止损", entry.invalidation], ["动态目标", entry.target], ["实际计划风险", entry.plannedRisk]]} />)}</section>}
+    {view === "api" && <section className="credential-panel"><div className="section-heading"><div><h2>Gate 实盘 API</h2><p>新 API 验证成功后会加密覆盖旧 API，页面永远不回显 Secret。</p></div><span className={credential?.configured ? "positive" : "negative"}>{credential?.configured ? "已保存" : "未保存"}</span></div><div className="credential-current"><div><small>当前 API</small><b>{credential?.keyHint ?? "尚未配置"}</b><p>{credential?.configured ? `最后验证 ${time(credential.lastVerifiedAt)} · Gate 实盘` : "填写下方两项后保存"}</p></div>{credential?.configured && <button className="danger-outline" type="button" disabled={credentialBusy || liveEnabled || positions.length > 0 || entries.length > 0} onClick={() => void deleteCredential()}>删除 API</button>}</div><form className="credential-form" onSubmit={saveCredential}><label><span>API Key</span><input value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" spellCheck={false} placeholder="填写新的 Gate API Key" /></label><label><span>API Secret</span><input type="password" value={apiSecret} onChange={(event) => setApiSecret(event.target.value)} autoComplete="new-password" spellCheck={false} placeholder="填写新的 Gate API Secret" /></label><p className="credential-help">只使用 Gate USDT 永续合约读取与交易权限；不要开启提现权限。保存 API 不会开启实盘。API 过期时直接验证并覆盖；只有 Gate 已无持仓和挂单时才允许删除。</p>{liveEnabled && <p className="form-error">请先关闭实盘开关，才可以更换或删除 API。</p>}{credentialError && <p className="form-error">{credentialError}</p>}{credentialNotice && <p className="form-success">{credentialNotice}</p>}{verification && <p className="credential-check">已核对：权益 {num(verification.equity, 2)} U · 持仓 {verification.positions} · 普通挂单 {verification.orders} · 条件单 {verification.conditionalOrders}</p>}<button className="primary-action" type="submit" disabled={credentialBusy || liveEnabled || apiKey.trim().length < 8 || apiSecret.trim().length < 8}>{credentialBusy ? "正在验证 Gate…" : credential?.configured ? "验证并更换 API" : "验证并保存 API"}</button></form></section>}
+  </section>;
+}
+
+function OrderCard({ symbol, side, label, state, notional, equity, values, mode = "PAPER", leverage: actualLeverage, margin: actualMargin, note }: { symbol: string; side: Side; label: string; state: MarketState; notional: number; equity: number; values: [string, number][]; mode?: "PAPER" | "LIVE"; leverage?: number; margin?: number; note?: string }) {
   const leverage = actualLeverage ?? displayLeverage(notional, equity), margin = actualMargin ?? notional / leverage;
-  return <article className={`order-card ${mode === "LIVE" ? "live-card" : ""}`}><div><span className={`side ${side.toLowerCase()}`}>{side === "LONG" ? "多" : "空"}</span><div><h3>{symbol.replace("_", "/")} · {label}</h3><p>{stateText[state]} · {mode === "LIVE" ? "Gate 真实合约" : "PAPER 模拟合约"}</p></div></div><strong style={{ textAlign: "right" }}><small style={{ display: "block", color: "var(--muted)", fontSize: 10 }}>合约名义价值</small>{num(notional, 2)} U</strong><dl>{values.map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{num(value, name.includes("风险") ? 2 : 5)}{name.includes("风险") ? " U" : ""}</dd></div>)}<div><dt>{mode === "LIVE" ? "真实杠杆" : "模拟杠杆"}</dt><dd>{leverage}×</dd></div><div><dt>{mode === "LIVE" ? "实际保证金" : "预计保证金"}</dt><dd>{num(margin, 2)} U</dd></div></dl><p style={{ gridColumn: "1 / -1", margin: 0, color: "var(--muted)", fontSize: 11 }}>{mode === "LIVE" ? "真实订单由 Gate 托管；结构止损为 reduce-only，不能反向开仓。" : "触发时按最新价格、权益和组合风险重新计算。"}</p></article>;
+  return <article className={`order-card ${mode === "LIVE" ? "live-card" : ""}`}><div><span className={`side ${side.toLowerCase()}`}>{side === "LONG" ? "多" : "空"}</span><div><h3>{symbol.replace("_", "/")} · {label}</h3><p>{stateText[state]} · {mode === "LIVE" ? "Gate 真实合约" : "PAPER 模拟合约"}</p></div></div><strong style={{ textAlign: "right" }}><small style={{ display: "block", color: "var(--muted)", fontSize: 10 }}>合约名义价值</small>{num(notional, 2)} U</strong><dl>{values.map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{num(value, name.includes("风险") ? 2 : 5)}{name.includes("风险") ? " U" : ""}</dd></div>)}<div><dt>{mode === "LIVE" ? "真实杠杆" : "模拟杠杆"}</dt><dd>{leverage}×</dd></div><div><dt>{mode === "LIVE" ? "实际保证金" : "预计保证金"}</dt><dd>{num(margin, 2)} U</dd></div></dl><p style={{ gridColumn: "1 / -1", margin: 0, color: note ? "var(--red)" : "var(--muted)", fontSize: 11 }}>{note ?? (mode === "LIVE" ? "真实订单由 Gate 托管；结构止损为 reduce-only，不能反向开仓。" : "触发时按最新价格、权益和组合风险重新计算。")}</p></article>;
 }
 
 function LoginModal({ configured, onClose, onSuccess }: { configured: boolean; onClose: () => void; onSuccess: (session: AuthSession) => void }) {
