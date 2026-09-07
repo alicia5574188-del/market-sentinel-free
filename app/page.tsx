@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { directionalReturnRate, marginReturnRate, unrealizedPnl } from "../lib/position-metrics.ts";
 import { runtimeReady } from "../lib/runtime-health.ts";
 
 type Side = "LONG" | "SHORT";
@@ -49,6 +50,8 @@ type LiveView = "account" | "orders" | "api";
 type HistoryView = "trades" | "account_logs";
 type Timeframe = "1m" | "15m" | "1h" | "4h";
 type Candle = { time: number; volume: number; close: number; high: number; low: number; open: number };
+type PositionView = { entryAt?: number; entryPrice: number; stopPrice: number; targetPrice: number; markPrice?: number; markAt?: number; fresh: boolean };
+type PricePoint = { time: number; price: number };
 
 const INITIAL_EQUITY = 1_000;
 const RUNTIME_REQUEST_TIMEOUT_MS = 30_000;
@@ -70,6 +73,11 @@ const distancePct = (from: number, to: number) => Math.abs(to - from) / Math.max
 const netRr = (entry: number, stop: number, target: number) => Math.max(0, Math.abs(target - entry) / Math.max(entry, 1e-9) - .0018)
   / Math.max(Math.abs(entry - stop) / Math.max(entry, 1e-9) + .0018, 1e-9);
 const displayLeverage = (notional: number, equity: number) => [1, 2, 3, 5, 10, 20, 30, 40, 50].find((value) => notional / value <= equity * .12) ?? 50;
+const mergePricePoints = (current: PricePoint[], incoming: PricePoint[]) => {
+  const merged = new Map<number, PricePoint>();
+  [...current, ...incoming].forEach((point) => { if (Number.isFinite(point.time) && Number.isFinite(point.price) && point.price > 0) merged.set(point.time, point); });
+  return [...merged.values()].sort((a, b) => a.time - b.time).slice(-72);
+};
 const friendlyLiveError = (value: string | null | undefined) => !value ? null
   : value.includes("AUTO_INVALID_PARAM_TRIGGER_EXPIRATION")
     ? "Gate 拒绝了旧版触发单的有效期格式；系统已修复并会重新核对。"
@@ -223,7 +231,7 @@ export default function Home() {
   }) ?? [], [runtime, clock]);
   const preparedPlans = useMemo(() => runtime?.symbols.flatMap((symbol) => runtime.plans[symbol]?.state === "PREPARED" ? [{ symbol, plan: runtime.plans[symbol]! }] : []) ?? [], [runtime]);
   const bestDecision = useMemo(() => runtime?.symbols.map((symbol) => ({ symbol, decision: runtime.decisions[symbol] })).filter((row): row is { symbol: string; decision: Decision } => row.decision != null).sort((a, b) => b.decision.score - a.decision.score)[0] ?? null, [runtime]);
-  const floatingPnl = openPositions.reduce((sum, row) => { const mark = runtime?.evidence[row.symbol]?.midpoint ?? row.position.entryPrice; return sum + row.position.notional * (mark - row.position.entryPrice) / Math.max(row.position.entryPrice, 1e-9) * (row.position.side === "LONG" ? 1 : -1); }, 0);
+  const floatingPnl = openPositions.reduce((sum, row) => { const mark = runtime?.evidence[row.symbol]?.midpoint ?? row.position.entryPrice; return sum + unrealizedPnl(row.position.notional, row.position.side, row.position.entryPrice, mark); }, 0);
   const riskUsed = openPositions.reduce((sum, row) => sum + row.position.plannedRisk, 0);
   const riskLimit = (runtime?.equity ?? INITIAL_EQUITY) * .10;
   const feedDiagnostics = runtime?.symbols.map((symbol) => runtime.feedFailures?.[symbol]).filter(Boolean) ?? [];
@@ -281,7 +289,7 @@ export default function Home() {
 
     <section className="panel-list" hidden={tab !== "orders"}>{!openPositions.length && !preparedPlans.length && !recentClosedPositions.length && <div className="empty"><b>当前没有模拟订单</b><p>出现合适位置后会先显示准备计划；真实订单请进入底部「实盘」。</p></div>}
       {!!openPositions.length && <h2 className="order-group-title">当前持仓 <span>{openPositions.length}</span></h2>}
-      {openPositions.map(({ symbol, position }) => <OrderCard key={symbol} symbol={symbol} side={position.side} label="持仓中" state={position.scenario} notional={position.notional} equity={runtime?.equity ?? INITIAL_EQUITY} note={waitReason(runtime, true, symbol)} values={[["进场", position.entryPrice], ["原始止损", position.initialStop], ["当前保护位", position.currentStop], ["动态目标", position.currentTarget], ["计划风险", position.plannedRisk]]} />)}
+      {openPositions.map(({ symbol, position }) => { const evidence = runtime?.evidence[symbol]; return <OrderCard key={symbol} symbol={symbol} side={position.side} label="持仓中" state={position.scenario} notional={position.notional} equity={runtime?.equity ?? INITIAL_EQUITY} note={waitReason(runtime, true, symbol)} positionView={{ entryAt: position.entryAt, entryPrice: position.entryPrice, stopPrice: position.currentStop, targetPrice: position.currentTarget, markPrice: evidence?.midpoint, markAt: evidence?.observedAt, fresh: Boolean(evidence?.fresh) }} values={[["进场", position.entryPrice], ["原始止损", position.initialStop], ["当前保护位", position.currentStop], ["动态目标", position.currentTarget], ["计划风险", position.plannedRisk]]} />; })}
       {!!preparedPlans.length && <h2 className="order-group-title">等待进场 <span>{preparedPlans.length}</span></h2>}
       {preparedPlans.map(({ symbol, plan }) => <OrderCard key={symbol} symbol={symbol} side={plan.side} label={runtime?.evidence[symbol]?.entryReady === false ? "计划冻结" : plan.marketState === "BREAKOUT" ? "等待确认" : "等待触发"} state={plan.marketState} notional={plan.notional} equity={runtime?.equity ?? INITIAL_EQUITY} leverage={plan.leverage} margin={plan.margin} note={runtime?.evidence[symbol]?.entryReady === false ? `行情短暂延迟时不成交、不移动原边界；计划保留至 ${time(plan.expiresAt)}，连续2份新盘口后重新核对。` : (plan.invalidationSignalCount ?? 0) > 0 ? `软失效观察 ${plan.invalidationSignalCount}/2，计划仍锁定；连续确认后才撤销。有效至 ${time(plan.expiresAt)}。` : plan.routeKind === "BREAKOUT_RETEST" ? `完整1分钟回踩原边界并守住；等待重新越过回踩K线极值后IOC，不追0.5R外价格。有效至 ${time(plan.expiresAt)}。` : plan.routeKind === "FAILED_BREAKOUT_REVERSAL" ? `完整1分钟扫边并收回；等待区间内部反抽原边界后反向限价成交。有效至 ${time(plan.expiresAt)}。` : plan.routeKind === "EDGE_REJECTION" ? `扫盘已收回区间，极值 ${num(plan.sweepExtreme, 5)}；等待内侧回踩，不在下跌途中接单。有效至 ${time(plan.expiresAt)}。` : plan.marketState === "BREAKOUT" ? `${plan.routeKind === "INTERNAL_ROTATION" ? "子区间迁移" : "父区间突破"}内部观察；仅A级强势允许直入，连续盘口确认 ${(plan.breakoutSignalCount ?? 0)}/4。有效至 ${time(plan.expiresAt)}。` : `本挂单有效至 ${time(plan.expiresAt)}；短周期变化先观察，硬失效或到期才立即撤销。`} values={[[plan.marketState === "BREAKOUT" ? (plan.routeKind === "BREAKOUT_RETEST" ? "回踩再加速位" : plan.routeKind === "INTERNAL_ROTATION" ? "子区间观察位" : "父区间观察位") : plan.routeKind === "FAILED_BREAKOUT_REVERSAL" ? "反抽进场" : plan.routeKind === "EDGE_REJECTION" ? "收回后回踩进场" : "触发进场", plan.entryTrigger], ["扫盘外硬止损", plan.invalidation], ["实际第一目标", plan.target], ["计划风险", plan.plannedRisk]]} />)}
       {!!recentClosedPositions.length && <h2 className="order-group-title">刚刚结束 <span>{recentClosedPositions.length}</span></h2>}
@@ -379,7 +387,7 @@ function LiveCenter({ auth, runtime, live, liveEnabled, liveBusy, liveActionErro
   const liveRisk = [...positions, ...entries].reduce((sum, item) => sum + item.plannedRisk, 0);
   const liveFloating = positions.reduce((sum, position) => {
     const mark = runtime?.evidence[position.symbol]?.midpoint ?? position.entryPrice;
-    return sum + position.notional * (mark - position.entryPrice) / Math.max(position.entryPrice, 1e-9) * (position.side === "LONG" ? 1 : -1);
+    return sum + unrealizedPnl(position.notional, position.side, position.entryPrice, mark);
   }, 0);
   const readableLiveError = friendlyLiveError(live?.lastError);
   const connectionText = !credential?.configured ? "未保存 API" : readableLiveError ? "连接异常" : live?.lastSyncAt ? "已连接 Gate" : "等待首次核对";
@@ -393,14 +401,60 @@ function LiveCenter({ auth, runtime, live, liveEnabled, liveBusy, liveActionErro
       <section className="summary four live-summary"><article><small>真实账户权益</small><strong>{num(live?.equity, 2)} U</strong><p>{connectionText}</p></article><article><small>可用保证金</small><strong>{num(live?.available, 2)} U</strong><p>Gate 返回的可用余额</p></article><article><small>持仓浮盈亏</small><strong className={liveFloating >= 0 ? "positive" : "negative"}>{signed(liveFloating)} U</strong><p>{positions.length} 个真实持仓</p></article><article><small>已计划风险</small><strong>{num(liveRisk, 2)} U</strong><p>保证金约 {num(occupiedMargin, 2)} U · 总上限 10%</p></article></section>
       <div className="live-facts"><Setting title="API 状态" detail={credential?.configured ? `密钥 ${credential.keyHint ?? "已加密"} · ${time(credential.lastVerifiedAt)}` : "进入 API 管理保存或更换"} value={credential?.configured ? "已验证" : "未配置"} tone={credential?.configured ? "online" : "locked"}/><Setting title="最近账户核对" detail="页面关闭后后台仍按策略运行。" value={time(live?.lastSyncAt)} tone={live?.lastSyncAt ? "online" : "locked"}/></div>
     </>}
-    {view === "orders" && <section className="panel-list live-orders">{!positions.length && !entries.length && !skips.length && <div className="empty"><b>当前没有实盘订单</b><p>震荡/反转会在 Gate 预挂限价；突破只在收盘确认后实时成交。</p></div>}{skips.map((skip) => <article className="live-skip-card" key={`live-skip:${skip.symbol}:${skip.planId}`}><div><small>{skip.symbol.replace("_", "/")}</small><h3>本轮未挂单</h3></div><p>{skip.reason}</p><span>实盘仍在运行；出现账户可承受的新计划时会自动挂单。</span></article>)}{positions.map((position) => <OrderCard key={`live:${position.symbol}`} symbol={position.symbol} side={position.side} label="实盘持仓" state={position.scenario} notional={position.notional} equity={live?.equity ?? INITIAL_EQUITY} mode="LIVE" leverage={position.leverage} margin={position.margin} values={[["真实进场", position.entryPrice], ["原始止损", position.initialStop], ["交易所保护位", position.stopPrice ?? position.currentStop], ["动态目标", position.currentTarget], ["实际计划风险", position.plannedRisk]]} />)}{entries.map((entry) => <OrderCard key={`live:${entry.symbol}:entry`} symbol={entry.symbol} side={entry.side} label={entry.status === "ERROR" ? "异常待核对" : entry.kind === "MARKET" ? "突破确认后实时单" : entry.kind === "PRICE_TRIGGER" ? "旧版触发挂单" : "实盘限价挂单"} state={entry.scenario} notional={entry.notional} equity={live?.equity ?? INITIAL_EQUITY} mode="LIVE" leverage={entry.leverage} margin={entry.margin} note={friendlyLiveError(entry.lastError) ?? undefined} values={[[entry.kind === "MARKET" ? "确认进场参考" : "挂单进场", entry.trigger], ["结构止损", entry.invalidation], ["动态目标", entry.target], ["实际计划风险", entry.plannedRisk]]} />)}</section>}
+    {view === "orders" && <section className="panel-list live-orders">{!positions.length && !entries.length && !skips.length && <div className="empty"><b>当前没有实盘订单</b><p>震荡/反转会在 Gate 预挂限价；突破只在收盘确认后实时成交。</p></div>}{skips.map((skip) => <article className="live-skip-card" key={`live-skip:${skip.symbol}:${skip.planId}`}><div><small>{skip.symbol.replace("_", "/")}</small><h3>本轮未挂单</h3></div><p>{skip.reason}</p><span>实盘仍在运行；出现账户可承受的新计划时会自动挂单。</span></article>)}{positions.map((position) => { const evidence = runtime?.evidence[position.symbol]; const protection = position.stopPrice ?? position.currentStop; return <OrderCard key={`live:${position.symbol}`} symbol={position.symbol} side={position.side} label="实盘持仓" state={position.scenario} notional={position.notional} equity={live?.equity ?? INITIAL_EQUITY} mode="LIVE" leverage={position.leverage} margin={position.margin} positionView={{ entryAt: position.entryAt, entryPrice: position.entryPrice, stopPrice: protection, targetPrice: position.currentTarget, markPrice: evidence?.midpoint, markAt: evidence?.observedAt, fresh: Boolean(evidence?.fresh) }} values={[["真实进场", position.entryPrice], ["原始止损", position.initialStop], ["交易所保护位", protection], ["动态目标", position.currentTarget], ["实际计划风险", position.plannedRisk]]} />; })}{entries.map((entry) => <OrderCard key={`live:${entry.symbol}:entry`} symbol={entry.symbol} side={entry.side} label={entry.status === "ERROR" ? "异常待核对" : entry.kind === "MARKET" ? "突破确认后实时单" : entry.kind === "PRICE_TRIGGER" ? "旧版触发挂单" : "实盘限价挂单"} state={entry.scenario} notional={entry.notional} equity={live?.equity ?? INITIAL_EQUITY} mode="LIVE" leverage={entry.leverage} margin={entry.margin} note={friendlyLiveError(entry.lastError) ?? undefined} values={[[entry.kind === "MARKET" ? "确认进场参考" : "挂单进场", entry.trigger], ["结构止损", entry.invalidation], ["动态目标", entry.target], ["实际计划风险", entry.plannedRisk]]} />)}</section>}
     {view === "api" && <section className="credential-panel"><div className="section-heading"><div><h2>Gate 实盘 API</h2><p>新 API 验证成功后会加密覆盖旧 API，页面永远不回显 Secret。</p></div><span className={credential?.configured ? "positive" : "negative"}>{credential?.configured ? "已保存" : "未保存"}</span></div><div className="credential-current"><div><small>当前 API</small><b>{credential?.keyHint ?? "尚未配置"}</b><p>{credential?.configured ? `最后验证 ${time(credential.lastVerifiedAt)} · Gate 实盘` : "填写下方两项后保存"}</p></div>{credential?.configured && <button className="danger-outline" type="button" disabled={credentialBusy || liveEnabled || positions.length > 0 || entries.length > 0} onClick={() => void deleteCredential()}>删除 API</button>}</div><form className="credential-form" onSubmit={saveCredential}><label><span>API Key</span><input value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" spellCheck={false} placeholder="填写新的 Gate API Key" /></label><label><span>API Secret</span><input type="password" value={apiSecret} onChange={(event) => setApiSecret(event.target.value)} autoComplete="new-password" spellCheck={false} placeholder="填写新的 Gate API Secret" /></label><p className="credential-help">只使用 Gate USDT 永续合约读取与交易权限；不要开启提现权限。保存 API 不会开启实盘。API 过期时直接验证并覆盖；只有 Gate 已无持仓和挂单时才允许删除。</p>{liveEnabled && <p className="form-error">请先关闭实盘开关，才可以更换或删除 API。</p>}{credentialError && <p className="form-error">{credentialError}</p>}{credentialNotice && <p className="form-success">{credentialNotice}</p>}{verification && <p className="credential-check">已核对：权益 {num(verification.equity, 2)} U · 持仓 {verification.positions} · 普通挂单 {verification.orders} · 条件单 {verification.conditionalOrders}</p>}<button className="primary-action" type="submit" disabled={credentialBusy || liveEnabled || apiKey.trim().length < 8 || apiSecret.trim().length < 8}>{credentialBusy ? "正在验证 Gate…" : credential?.configured ? "验证并更换 API" : "验证并保存 API"}</button></form></section>}
   </section>;
 }
 
-function OrderCard({ symbol, side, label, state, notional, equity, values, mode = "PAPER", leverage: actualLeverage, margin: actualMargin, note }: { symbol: string; side: Side; label: string; state: MarketState; notional: number; equity: number; values: [string, number][]; mode?: "PAPER" | "LIVE"; leverage?: number; margin?: number; note?: string }) {
+function OrderCard({ symbol, side, label, state, notional, equity, values, mode = "PAPER", leverage: actualLeverage, margin: actualMargin, note, positionView }: { symbol: string; side: Side; label: string; state: MarketState; notional: number; equity: number; values: [string, number][]; mode?: "PAPER" | "LIVE"; leverage?: number; margin?: number; note?: string; positionView?: PositionView }) {
   const leverage = actualLeverage ?? displayLeverage(notional, equity), margin = actualMargin ?? notional / leverage;
-  return <article className={`order-card ${mode === "LIVE" ? "live-card" : ""}`}><div><span className={`side ${side.toLowerCase()}`}>{side === "LONG" ? "多" : "空"}</span><div><h3>{symbol.replace("_", "/")} · {label}</h3><p>{stateText[state]} · {mode === "LIVE" ? "Gate 真实合约" : "PAPER 模拟合约"}</p></div></div><strong style={{ textAlign: "right" }}><small style={{ display: "block", color: "var(--muted)", fontSize: 10 }}>合约名义价值</small>{num(notional, 2)} U</strong><dl>{values.map(([name, value]) => { const money = /风险|盈亏/.test(name); return <div key={name}><dt>{name}</dt><dd className={name.includes("盈亏") ? value >= 0 ? "positive" : "negative" : ""}>{num(value, money ? 2 : 5)}{money ? " U" : ""}</dd></div>; })}<div><dt>{mode === "LIVE" ? "真实杠杆" : "模拟杠杆"}</dt><dd>{leverage}×</dd></div><div><dt>{mode === "LIVE" ? "实际保证金" : "预计保证金"}</dt><dd>{num(margin, 2)} U</dd></div></dl><p style={{ gridColumn: "1 / -1", margin: 0, color: note && mode === "LIVE" ? "var(--red)" : "var(--muted)", fontSize: 11 }}>{note ?? (mode === "LIVE" ? "真实订单由 Gate 托管；结构止损为 reduce-only，不能反向开仓。" : "触发时按最新价格、权益和组合风险重新计算。")}</p></article>;
+  const mark = positionView?.markPrice;
+  const pnl = positionView && mark ? unrealizedPnl(notional, side, positionView.entryPrice, mark) : null;
+  const priceReturn = positionView && mark ? directionalReturnRate(side, positionView.entryPrice, mark) : null;
+  const marginReturn = pnl == null ? null : marginReturnRate(pnl, margin);
+  return <article className={`order-card ${mode === "LIVE" ? "live-card" : ""}`}><div><span className={`side ${side.toLowerCase()}`}>{side === "LONG" ? "多" : "空"}</span><div><h3>{symbol.replace("_", "/")} · {label}</h3><p>{stateText[state]} · {mode === "LIVE" ? "Gate 真实合约" : "PAPER 模拟合约"}</p></div></div><strong style={{ textAlign: "right" }}><small style={{ display: "block", color: "var(--muted)", fontSize: 10 }}>合约名义价值</small>{num(notional, 2)} U</strong>{positionView && <section className="position-pnl"><div><small>浮动盈亏</small><strong className={pnl == null ? "" : pnl >= 0 ? "positive" : "negative"}>{pnl == null ? "等待行情" : `${signed(pnl)} U`}</strong><span>未扣平仓成本</span></div><div><small>保证金收益率</small><strong className={marginReturn == null ? "" : marginReturn >= 0 ? "positive" : "negative"}>{marginReturn == null ? "—" : `${signed(marginReturn * 100)}%`}</strong><span>方向价格变动 {priceReturn == null ? "—" : `${signed(priceReturn * 100)}%`}</span></div><div><small>当前价格</small><strong>{num(mark, 5)}</strong><span>{positionView.fresh ? `行情 ${time(positionView.markAt)}` : "最近后台价 · 行情恢复中"}</span></div></section>}<dl>{values.map(([name, value]) => { const money = /风险|盈亏/.test(name); return <div key={name}><dt>{name}</dt><dd className={name.includes("盈亏") ? value >= 0 ? "positive" : "negative" : ""}>{num(value, money ? 2 : 5)}{money ? " U" : ""}</dd></div>; })}<div><dt>{mode === "LIVE" ? "真实杠杆" : "模拟杠杆"}</dt><dd>{leverage}×</dd></div><div><dt>{mode === "LIVE" ? "实际保证金" : "预计保证金"}</dt><dd>{num(margin, 2)} U</dd></div></dl>{positionView && <PositionLiveChart symbol={symbol} side={side} view={positionView} />}<p style={{ gridColumn: "1 / -1", margin: 0, color: note && mode === "LIVE" ? "var(--red)" : "var(--muted)", fontSize: 11 }}>{note ?? (mode === "LIVE" ? "真实订单由 Gate 托管；结构止损为 reduce-only，不能反向开仓。" : "触发时按最新价格、权益和组合风险重新计算。")}</p></article>;
+}
+
+function PositionLiveChart({ symbol, side, view }: { symbol: string; side: Side; view: PositionView }) {
+  const [points, setPoints] = useState<PricePoint[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+    void fetch(`/api/candles?symbol=${encodeURIComponent(symbol)}&interval=1m`, { cache: "no-store", signal: controller.signal }).then(async (response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = await response.json() as { candles?: Candle[] };
+      const start = (view.entryAt ?? 0) - 60_000;
+      const seeded = (payload.candles ?? []).filter((row) => row.time * 1_000 >= start && Number.isFinite(row.close) && row.close > 0).map((row) => ({ time: row.time * 1_000, price: row.close }));
+      if (active) setPoints((current) => mergePricePoints(seeded, current));
+    }).catch(() => undefined).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; controller.abort(); };
+  }, [symbol, view.entryAt]);
+
+  const fallbackTime = view.markAt ?? points.at(-1)?.time ?? view.entryAt ?? 0;
+  const currentPoint = view.markPrice && fallbackTime > 0 ? [{ time: fallbackTime, price: view.markPrice }] : [];
+  const observed = mergePricePoints(points, currentPoint);
+  const rows = observed.length > 1 ? observed : mergePricePoints([{ time: view.entryAt ?? Math.max(0, fallbackTime - 60_000), price: view.entryPrice }], observed);
+  const width = 760, height = 250, left = 18, right = 18, top = 24, bottom = 28;
+  const levels = [{ value: view.entryPrice, label: "进场", kind: "entry" }, { value: view.stopPrice, label: "止损", kind: "stop" }, { value: view.targetPrice, label: "止盈", kind: "target" }].filter((level) => Number.isFinite(level.value) && level.value > 0);
+  const prices = [...rows.map((row) => row.price), ...levels.map((level) => level.value), ...(view.markPrice ? [view.markPrice] : [])];
+  const rawMin = prices.length ? Math.min(...prices) : 0, rawMax = prices.length ? Math.max(...prices) : 1;
+  const padding = Math.max((rawMax - rawMin) * .09, rawMax * .0005, 1e-9);
+  const minPrice = rawMin - padding, maxPrice = rawMax + padding, plotHeight = height - top - bottom;
+  const startTime = rows[0]?.time ?? fallbackTime - 60_000, endTime = Math.max(rows.at(-1)?.time ?? fallbackTime, startTime + 1_000);
+  const x = (value: number) => left + (value - startTime) / Math.max(endTime - startTime, 1) * (width - left - right);
+  const y = (value: number) => top + (maxPrice - value) / Math.max(maxPrice - minPrice, 1e-9) * plotHeight;
+  const line = rows.map((point) => `${x(point.time)},${y(point.price)}`).join(" ");
+  const current = rows.at(-1);
+
+  return <section className="position-chart" aria-label={`${symbol.replace("_", "/")} 持仓实时价格走势`}><div className="position-chart-head"><div><b>持仓实时走势</b><small>1分钟收盘线 + 约15秒当前价</small></div><span className={view.fresh ? "positive" : "negative"}>{view.fresh ? "实时" : "保留最近价"}</span></div><div className="position-line-canvas">{!rows.length ? <div className="chart-loading">{loading ? "正在读取走势…" : "等待行情"}</div> : <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`从进场至今的价格线，含进场、止损和止盈`} preserveAspectRatio="none">
+    {[.25, .5, .75].map((ratio) => <line className="chart-grid" key={ratio} x1={left} x2={width - right} y1={top + plotHeight * ratio} y2={top + plotHeight * ratio} />)}
+    {levels.map((level, index) => <g className={`position-level ${level.kind}`} key={`${level.kind}:${level.value}`}><line x1={left} x2={width - right} y1={y(level.value)} y2={y(level.value)} /><text x={index === 0 ? left + 5 : index === 1 ? width * .42 : width - right - 5} textAnchor={index === 2 ? "end" : "start"} y={Math.max(13, y(level.value) - 6)}>{level.label} {num(level.value, 5)}</text></g>)}
+    {line && <polyline className={`position-price-line ${side.toLowerCase()}`} points={line} />}
+    {current && <g className="position-current"><line x1={left} x2={width - right} y1={y(current.price)} y2={y(current.price)} /><circle cx={x(current.time)} cy={y(current.price)} r="5" /><text x={width - right - 5} y={Math.max(13, y(current.price) - 7)} textAnchor="end">当前 {num(current.price, 5)}</text></g>}
+    <text className="axis-label" x={left} y={height - 8}>{time(startTime)}</text><text className="axis-label end" x={width - right} y={height - 8}>{time(endTime)}</text>
+  </svg>}</div><p>{loading ? "正在补齐进场后的缓存走势" : `${rows.length} 个价格点 · 行情恢复时图线保留，不用旧价格触发交易`}</p></section>;
 }
 
 function LoginModal({ configured, onClose, onSuccess }: { configured: boolean; onClose: () => void; onSuccess: (session: AuthSession) => void }) {

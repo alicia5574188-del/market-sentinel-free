@@ -38,7 +38,7 @@ test("only one new DO is bound and all legacy DO storage is explicitly deleted",
 });
 
 test("owner-authenticated live API is isolated while the operator UI explains every decision", async () => {
-  const [worker, page, layout, workflow, css, live, auth] = await Promise.all([
+  const [worker, page, layout, workflow, css, live, auth, positionMetrics] = await Promise.all([
     read("worker/index-clean.ts"),
     read("app/page.tsx"),
     read("app/layout.tsx"),
@@ -46,6 +46,7 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
     read("app/globals.css"),
     read("lib/gate-live.ts"),
     read("lib/owner-auth.ts"),
+    read("lib/position-metrics.ts"),
   ]);
   assert.match(worker, /return handler\.fetch\(request, env, ctx\)/);
   assert.match(worker, /url\.pathname === "\/api\/history" && request\.method === "GET"/);
@@ -145,6 +146,14 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(live, /expiration: GATE_TRIGGER_DAY_SECONDS/);
   assert.match(live, /expiration: GATE_TRIGGER_DAY_SECONDS \* GATE_TRIGGER_MAX_DAYS/);
   assert.match(page, /function CandleChart/);
+  assert.match(page, /function PositionLiveChart/);
+  assert.match(page, /浮动盈亏/);
+  assert.match(page, /保证金收益率/);
+  assert.match(page, /1分钟收盘线 \+ 约15秒当前价/);
+  assert.equal((page.match(/positionView=\{\{ entryAt: position\.entryAt/g) ?? []).length, 2);
+  assert.match(positionMetrics, /export function unrealizedPnl/);
+  assert.match(positionMetrics, /export function marginReturnRate/);
+  assert.match(css, /\.position-price-line/);
   assert.match(page, /loadedInterval === interval \? candles\.slice\(-72\) : \[\]/);
   assert.match(page, /Gate USDT 合约 · 已收盘数据/);
   assert.match(page, /1分钟.*15分钟.*1小时/s);
