@@ -1,5 +1,9 @@
 # Goal
 
+## Completed upgrade — 2026-09-07 PAPER controls and health-state separation
+
+Stop an optional D1 history-mirror retry from making a healthy trading authority appear permanently “recovering.” Trading health is determined only by the live Durable Object authority, transport freshness, and fresh/recovered evidence for all three markets; mirror delay remains a visible non-blocking warning. Add owner-only, same-origin, explicitly confirmed controls to reset PAPER to a new 1,000 U cycle and clear completed PAPER history. Reset may close PAPER exposure only from fresh evidence and must preserve its audit history; history clearing preserves current equity, open PAPER exposure and its entry review, and every Gate LIVE field. Neither operation may send a Gate request or change the LIVE switch.
+
 ## Completed upgrade — 2026-09-07 realtime conditional entries
 
 Replace exchange-resting RANGE/REVERSAL entry orders with the same internal realtime observation model used by BREAKOUT. A valid frozen route may capture an exceptional first cross within 0.5R, otherwise it waits at its structural trigger for consecutive fresh book confirmation and submits a current-price IOC only after confirmation. Never create a plan after its stop or first target is already crossed; expose the exact route blocker in the UI. Reuse the existing two-second books without increasing request cadence, risk, margin, writes, or LIVE authority.

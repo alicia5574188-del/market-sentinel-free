@@ -269,7 +269,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return structuredClone({ positions: this.runtime.positions, plans: this.runtime.plans, decisions: this.runtime.decisions, routes: this.runtime.routes,
       evidence: this.runtime.evidence, equity: this.runtime.equity, equityVersion: this.runtime.equityVersion,
       outbox: this.runtime.outbox, paperCycle: this.runtime.paperCycle, bankruptcyOutbox: this.runtime.bankruptcyOutbox,
-      lastStopCheckpointAt: this.runtime.lastStopCheckpointAt });
+      lastStopCheckpointAt: this.runtime.lastStopCheckpointAt, riskBreach: this.runtime.riskBreach });
   }
 
   private restoreAuthority(authority: ReturnType<MarketStream["captureAuthority"]>) {
@@ -284,6 +284,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.paperCycle = authority.paperCycle;
     this.runtime.bankruptcyOutbox = authority.bankruptcyOutbox;
     this.runtime.lastStopCheckpointAt = authority.lastStopCheckpointAt;
+    this.runtime.riskBreach = authority.riskBreach;
   }
 
   private publishAuthority() {
@@ -660,6 +661,72 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.live.lastError = null;
     await this.saveCheckpoint(Date.now(), true);
     return { ok: true, credential: await credentialMetadata(this.env.DB) };
+  }
+
+  private async resetPaperAccount() {
+    const now = Date.now();
+    const authorityBefore = this.captureAuthority();
+    const openPositions = Object.values(this.runtime.positions).filter((position): position is PaperPosition => position?.status === "OPEN");
+    for (const position of openPositions) {
+      const evidence = this.runtime.evidence[position.symbol];
+      if (!evidence?.fresh || now - evidence.observedAt > STALE_AFTER_MS || evidence.midpoint <= 0) {
+        throw new Error(`${position.symbol} 行情不新鲜，不能用旧价格重置模拟持仓`);
+      }
+    }
+    try {
+      for (const position of openPositions) {
+        const closed = closePaperPosition(position, now, this.runtime.evidence[position.symbol]!.midpoint, "MANUAL_PAPER_RESET");
+        this.runtime.positions[position.symbol] = closed;
+        this.queueTransition(closed, position);
+      }
+      this.runtime.equity = PAPER_INITIAL_EQUITY;
+      this.runtime.equityVersion += 1;
+      this.runtime.paperCycle = startPaperCycle(now, PAPER_INITIAL_EQUITY, this.runtime.paperCycle.number + 1);
+      this.runtime.positions = {};
+      this.runtime.plans = {};
+      this.runtime.decisions = {};
+      this.runtime.routes = {};
+      this.runtime.riskBreach = false;
+      await this.saveCheckpoint(now, true);
+      this.publishAuthority();
+    } catch (error) {
+      this.restoreAuthority(authorityBefore);
+      this.publishAuthority();
+      throw error;
+    }
+    await this.drainOutbox(now);
+    try {
+      await this.env.DB.batch([this.env.DB.prepare("UPDATE system_settings SET paper_equity=?,equity_version=?,updated_at=? WHERE id=1 AND equity_version<?")
+        .bind(PAPER_INITIAL_EQUITY, this.runtime.equityVersion, now, this.runtime.equityVersion)]);
+      this.runtime.d1Writes += 1;
+    } catch (error) {
+      this.runtime.d1MirrorError = `D1 reset mirror pending: ${safeError(error)}`;
+    }
+    return { ok: true, equity: this.runtime.equity, paperCycle: paperCycleSummary(this.runtime.paperCycle, this.runtime.equity) };
+  }
+
+  private async clearPaperHistory() {
+    const now = Date.now();
+    const authorityBefore = this.captureAuthority();
+    try {
+      this.runtime.positions = Object.fromEntries(Object.entries(this.runtime.positions)
+        .map(([symbol, position]) => [symbol, position?.status === "OPEN" ? position : null]));
+      this.runtime.outbox = this.runtime.outbox.filter((item) => item.position.status === "OPEN");
+      this.runtime.bankruptcyOutbox = [];
+      this.runtime.paperCycle = startPaperCycle(now, this.runtime.equity, this.runtime.paperCycle.number + 1);
+      await this.saveCheckpoint(now, true);
+      this.publishAuthority();
+    } catch (error) {
+      this.restoreAuthority(authorityBefore);
+      this.publishAuthority();
+      throw error;
+    }
+    await this.env.DB.batch([
+      this.env.DB.prepare("DELETE FROM paper_events WHERE id NOT IN (SELECT 'review-entry:' || id FROM paper_positions WHERE status='OPEN')").bind(),
+      this.env.DB.prepare("DELETE FROM paper_positions WHERE status='CLOSED'").bind(),
+    ]);
+    this.runtime.d1Writes += 2;
+    return { ok: true, paperCycle: paperCycleSummary(this.runtime.paperCycle, this.runtime.equity) };
   }
 
   private liveOpenRisk() {
@@ -1535,6 +1602,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const result = await this.setLiveMode(body.enabled);
       return json(result, result.ok ? 200 : 409);
     }
+    if (path === "/paper-reset" && request.method === "POST") {
+      try { return json(await this.ctx.blockConcurrencyWhile(() => this.resetPaperAccount())); }
+      catch (error) { return json({ error: safeError(error) }, 409); }
+    }
+    if (path === "/paper-history-clear" && request.method === "POST") {
+      try { return json(await this.ctx.blockConcurrencyWhile(() => this.clearPaperHistory())); }
+      catch (error) { return json({ error: safeError(error) }, 409); }
+    }
     return json({ error: "not found" }, 404);
   }
 }
@@ -1734,6 +1809,25 @@ async function ownerLiveCredentials(request: Request, env: CloudflareEnv) {
   });
 }
 
+async function ownerPaperAction(request: Request, env: CloudflareEnv, action: "RESET" | "CLEAR_HISTORY") {
+  if (!sameOriginMutation(request)) return json({ error: "请求来源验证失败" }, 403);
+  if (!await ownerAuthenticated(request, env)) return json({ error: "请先登录" }, 401);
+  const body = await request.json<{ confirm?: unknown }>().catch(() => ({} as { confirm?: unknown }));
+  const expected = action === "RESET" ? "RESET_PAPER" : "CLEAR_PAPER_HISTORY";
+  if (body.confirm !== expected) return json({ error: "确认参数无效" }, 400);
+  const path = action === "RESET" ? "/paper-reset" : "/paper-history-clear";
+  const response = await env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream${path}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+  });
+  if (response.ok) {
+    runtimeCache = null;
+    historyCache = null;
+    accountLogCache = null;
+    orderChartCache.clear();
+  }
+  return response;
+}
+
 const worker = {
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
     const url = new URL(request.url);
@@ -1756,6 +1850,8 @@ const worker = {
     if (url.pathname === "/api/live/status" && request.method === "GET") return ownerLiveStatus(request, env);
     if (url.pathname === "/api/live/mode" && request.method === "POST") return ownerLiveMode(request, env);
     if (url.pathname === "/api/live/credentials" && ["GET", "PUT", "DELETE"].includes(request.method)) return ownerLiveCredentials(request, env);
+    if (url.pathname === "/api/paper/reset" && request.method === "POST") return ownerPaperAction(request, env, "RESET");
+    if (url.pathname === "/api/paper/history/clear" && request.method === "POST") return ownerPaperAction(request, env, "CLEAR_HISTORY");
     if (url.pathname.startsWith("/api/")) return json({ error: "not found" }, 404);
     return handler.fetch(request, env, ctx);
   },

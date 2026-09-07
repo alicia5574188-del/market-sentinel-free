@@ -1,5 +1,11 @@
 # Decisions
 
+## 2026-09-07 — Trading health and PAPER maintenance are separate authorities
+
+- `runtime.lastError` may contain a retryable D1 mirror warning while the Durable Object is LIVE and every market feed is fresh. That warning remains visible but cannot make the trading status or health endpoint report recovery.
+- PAPER reset is an owner-authenticated, same-origin, explicit-confirmation operation. Every open PAPER position must have fresh evidence and is closed into the normal history outbox before equity becomes 1,000 U and a new cycle begins. It does not inspect or mutate Gate LIVE state.
+- Clearing history deletes completed PAPER positions, diagnostics, and account logs while preserving current equity, open PAPER positions, and their entry review events. It clears pending closed-history mirrors so deleted history cannot be recreated later, and it never changes LIVE state.
+
 ## 2026-09-07 — 实时条件进场替代交易所预挂
 
 - BREAKOUT、REVERSAL、RANGE 全部由后台内部观察；确认后按当时价格向 Gate 提交 IOC，交易所不再长期保留入场限价单。REVERSAL/RANGE 需要三个连续新鲜两秒证据，BREAKOUT 继续使用四次强势确认。

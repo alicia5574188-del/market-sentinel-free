@@ -66,6 +66,9 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(worker, /url\.pathname === "\/api\/auth\/login" && request\.method === "POST"/);
   assert.match(worker, /url\.pathname === "\/api\/live\/mode" && request\.method === "POST"/);
   assert.match(worker, /url\.pathname === "\/api\/live\/credentials" && \["GET", "PUT", "DELETE"\]\.includes\(request\.method\)/);
+  assert.match(worker, /url\.pathname === "\/api\/paper\/reset" && request\.method === "POST"/);
+  assert.match(worker, /url\.pathname === "\/api\/paper\/history\/clear" && request\.method === "POST"/);
+  assert.match(worker, /body\.confirm !== expected/);
   assert.match(worker, /encryptGateCredentials/);
   assert.match(worker, /Gate 仍有持仓或挂单；请先清空后再删除 API/);
   assert.match(worker, /DELETE FROM live_exchange_credentials WHERE id=1/);
@@ -132,6 +135,9 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(worker, /authSession[\s\S]*Set-Cookie[\s\S]*ownerSessionCookie/);
   assert.match(page, /确认开启实盘/);
   assert.match(page, /实盘交易开关/);
+  assert.match(page, /重置模拟账户/);
+  assert.match(page, /清除模拟历史/);
+  assert.match(page, /只影响 PAPER 模拟系统/);
   assert.match(page, /实盘账户/);
   assert.match(page, /实盘订单/);
   assert.match(page, /API 管理/);

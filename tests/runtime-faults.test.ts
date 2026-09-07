@@ -326,6 +326,71 @@ test("a bankrupt PAPER cycle is archived before a fresh 1000 U cycle starts", as
   assert.equal(payload.endingEquity, 290);
 });
 
+test("manual PAPER reset closes only PAPER positions at a fresh price and starts a 1000 U cycle", async () => {
+  const { stream } = await makeStream();
+  const now = Date.now();
+  const open = position("manual-reset", "BTC_USDT");
+  stream.runtime.equity = 740;
+  stream.runtime.paperCycle = { number: 3, startedAt: now - 10_000, startingEquity: 1_000, peakEquity: 1_000, trades: [] };
+  stream.runtime.positions = { BTC_USDT: open };
+  stream.runtime.plans = { BTC_USDT: plan("BTC_USDT") };
+  stream.runtime.decisions = { BTC_USDT: { ...plan("BTC_USDT") } };
+  stream.runtime.routes = { BTC_USDT: [] };
+  stream.runtime.evidence = { BTC_USDT: { midpoint: 102, observedAt: now, warmup: 30, fresh: true, ancillaryFresh: true,
+    topLong: null, topShort: null, absorption: 0, range15m: null } };
+  const liveBefore = structuredClone(stream.runtime.live);
+
+  const result = await stream.resetPaperAccount();
+
+  assert.equal(result.ok, true);
+  assert.equal(stream.runtime.equity, 1_000);
+  assert.equal(stream.runtime.paperCycle.number, 4);
+  assert.deepEqual(stream.runtime.positions, {});
+  assert.deepEqual(stream.runtime.plans, {});
+  assert.deepEqual(stream.runtime.live, liveBefore, "manual PAPER reset cannot mutate Gate state");
+});
+
+test("manual PAPER reset refuses to price an open position from stale evidence", async () => {
+  const { stream, storage } = await makeStream();
+  const now = Date.now();
+  stream.runtime.positions = { BTC_USDT: position("stale-reset", "BTC_USDT") };
+  stream.runtime.evidence = { BTC_USDT: { midpoint: 102, observedAt: now - STALE_AFTER_MS - 1, warmup: 30, fresh: true,
+    ancillaryFresh: true, topLong: null, topShort: null, absorption: 0, range15m: null } };
+  const before = structuredClone(stream.runtime);
+
+  await assert.rejects(stream.resetPaperAccount(), /行情不新鲜/);
+
+  assert.deepEqual(stream.runtime, before);
+  assert.equal(storage.putCalls, 0);
+});
+
+test("clearing PAPER history preserves current equity, open PAPER exposure and Gate state", async () => {
+  const { stream, db } = await makeStream();
+  const now = Date.now();
+  const open = position("keep-open", "BTC_USDT");
+  const closed = { ...position("drop-closed", "ETH_USDT"), status: "CLOSED" as const, exitAt: now, exitPrice: 99, realizedPnl: -11 };
+  stream.runtime.equity = 812;
+  stream.runtime.positions = { BTC_USDT: open, ETH_USDT: closed };
+  stream.runtime.outbox = [
+    { key: "keep-open:1", position: open, equity: 812, equityVersion: 1 },
+    { key: "drop-closed:2", position: closed, equity: 812, equityVersion: 2 },
+  ];
+  stream.runtime.bankruptcyOutbox = [{ report: { id: "old-log" }, equity: 1_000, equityVersion: 3 }];
+  const liveBefore = structuredClone(stream.runtime.live);
+
+  const result = await stream.clearPaperHistory();
+
+  assert.equal(result.ok, true);
+  assert.equal(stream.runtime.equity, 812);
+  assert.equal(stream.runtime.positions.BTC_USDT.status, "OPEN");
+  assert.equal(stream.runtime.positions.ETH_USDT, null);
+  assert.deepEqual(stream.runtime.outbox.map((item: { position: PaperPosition }) => item.position.id), ["keep-open"]);
+  assert.equal(stream.runtime.bankruptcyOutbox.length, 0);
+  assert.deepEqual(stream.runtime.live, liveBefore);
+  assert.ok(db.statements.flat().some((statement) => statement.sql.startsWith("DELETE FROM paper_events")));
+  assert.ok(db.statements.flat().some((statement) => statement.sql.includes("DELETE FROM paper_positions")));
+});
+
 test("restart preserves committed OPEN authority, cancels PREPARED work and warms from zero", async () => {
   const seed = await makeStream();
   const saved = structuredClone(seed.stream.runtime);

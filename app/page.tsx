@@ -48,6 +48,7 @@ type AccountLogItem = { id: string; observedAt: number; report: BankruptcyReport
 type Tab = "brain" | "orders" | "live" | "history" | "settings";
 type LiveView = "account" | "orders" | "api";
 type HistoryView = "trades" | "account_logs";
+type PaperAction = "RESET" | "CLEAR_HISTORY";
 type Timeframe = "1m" | "15m" | "1h" | "4h";
 type Candle = { time: number; volume: number; close: number; high: number; low: number; open: number };
 type PositionView = { entryAt?: number; entryPrice: number; stopPrice: number; targetPrice: number; markPrice?: number; markAt?: number; fresh: boolean };
@@ -60,7 +61,7 @@ const sourceText: Record<string, string> = { BOOK: "真实挂单区", STOP_POOL:
 const routeText: Record<RouteKind, string> = { LOCAL_BREAKOUT: "父区间强势突破观察", INTERNAL_ROTATION: "子区间强势迁移观察", BREAKOUT_RETEST: "突破回踩后再加速", FAILED_BREAKOUT_REVERSAL: "强假突破反向反抽", EDGE_REJECTION: "扫流动性收回后回踩", NODE_CONTINUATION: "高周期节点续破" };
 const cancelText: Record<string, string> = { STALE_CANCEL: "行情失鲜", SEQUENCE_REBUILD_CANCEL: "盘口序列重建", PRE_ENTRY_INVALIDATION_CANCEL: "冻结结构已失效", GAP_ECONOMICS_CANCEL: "跳空后盈亏空间不足", STRUCTURE_REPLACED_CANCEL: "相关边界已被新结构替代", NONLOCAL_FALLBACK_CANCEL: "旧版非局部方案失效", TARGET_GONE_CANCEL: "目标连续消失", ROUTE_WEAK_CANCEL: "路线连续转弱", ACTIVATION_LOST_CANCEL: "价格连续离开激活范围", BREAKOUT_MISSED_CANCEL: "突破已超过追价上限", BREAKOUT_FIRST_CROSS_FAILED_CANCEL: "首次穿越立即失败", BREAKOUT_ACCEPTED_WAIT_RETEST: "普通突破转入回踩分支", PLAN_EXPIRED: "计划到期", GAP_RISK_CANCEL: "实际成交风险超限", FEED_HARD_FAILURE_CANCEL: "关键行情持续中断", PROCESS_RESTART_CANCEL: "后台版本切换", PAPER_CYCLE_BANKRUPTCY: "模拟轮次结束" };
 const stageText: Record<RouteStage, string> = { LOCAL_TO_NODE: "当前段", AT_NODE: "节点决策", NODE_TO_NEXT: "后续段" };
-const exitText: Record<string, string> = { STRUCTURAL_STOP: "价格到达扫盘与结构之外的硬止损", RANGE_OUTSIDE_ACCEPTANCE: "连续两根完整1分钟收在区间外，震荡结构失效", DYNAMIC_PROTECTION_STOP: "目标进度风险收缩止损", BREAKOUT_PROFIT_REJECTION: "突破浮盈大幅回吐，确认失败退出", TARGET_ABSORBED: "目标流动性已被吸收", TARGET_NODE_EXIT: "到达流动性节点，续破未确认", TARGET_DISAPPEARED: "目标流动性连续消失", TARGET_VANISHED: "目标消失", OPPOSITE_TARGET_DOMINANT: "反向目标占优", OPPOSITE_UTILITY_DOMINANT: "反向流动性连续占优", RISK_CAP_REBALANCE: "组合风险重新平衡", PORTFOLIO_RISK_REBALANCE: "组合风险重新平衡" };
+const exitText: Record<string, string> = { STRUCTURAL_STOP: "价格到达扫盘与结构之外的硬止损", RANGE_OUTSIDE_ACCEPTANCE: "连续两根完整1分钟收在区间外，震荡结构失效", DYNAMIC_PROTECTION_STOP: "目标进度风险收缩止损", BREAKOUT_PROFIT_REJECTION: "突破浮盈大幅回吐，确认失败退出", TARGET_ABSORBED: "目标流动性已被吸收", TARGET_NODE_EXIT: "到达流动性节点，续破未确认", TARGET_DISAPPEARED: "目标流动性连续消失", TARGET_VANISHED: "目标消失", OPPOSITE_TARGET_DOMINANT: "反向目标占优", OPPOSITE_UTILITY_DOMINANT: "反向流动性连续占优", RISK_CAP_REBALANCE: "组合风险重新平衡", PORTFOLIO_RISK_REBALANCE: "组合风险重新平衡", MANUAL_PAPER_RESET: "手动重置模拟账户" };
 const resolvedExitText = (reason: string | null | undefined, initialStop: number, currentStop: number) => {
   if (reason === "STRUCTURAL_STOP" && Math.abs(currentStop - initialStop) > Math.max(Math.abs(initialStop) * 1e-8, 1e-8)) return "旧版即时保本止损";
   return exitText[reason ?? ""] ?? reason ?? "订单已经结束";
@@ -152,6 +153,9 @@ export default function Home() {
   const [showLiveConfirm, setShowLiveConfirm] = useState(false);
   const [liveBusy, setLiveBusy] = useState(false);
   const [liveActionError, setLiveActionError] = useState<string | null>(null);
+  const [paperAction, setPaperAction] = useState<PaperAction | null>(null);
+  const [paperBusy, setPaperBusy] = useState(false);
+  const [paperActionError, setPaperActionError] = useState<string | null>(null);
   const tabScroll = useRef<Record<Tab, number>>({ brain: 0, orders: 0, live: 0, history: 0, settings: 0 });
   const selectTab = (next: Tab) => {
     if (next === tab) return;
@@ -216,6 +220,27 @@ export default function Home() {
     finally { setLiveBusy(false); }
   };
 
+  const runPaperAction = async () => {
+    if (!paperAction) return;
+    setPaperBusy(true); setPaperActionError(null);
+    try {
+      const reset = paperAction === "RESET";
+      const response = await fetch(reset ? "/api/paper/reset" : "/api/paper/history/clear", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: reset ? "RESET_PAPER" : "CLEAR_PAPER_HISTORY" }),
+      });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      location.reload();
+    } catch (failure) { setPaperActionError(failure instanceof Error ? failure.message : "操作失败"); }
+    finally { setPaperBusy(false); }
+  };
+
+  const openPaperAction = (action: PaperAction) => {
+    if (!auth.authenticated) { setShowLogin(true); return; }
+    setPaperActionError(null); setPaperAction(action);
+  };
+
   const live = runtime?.live;
   const liveEnabled = Boolean(live?.requestedEnabled ?? runtime?.liveMode?.requestedEnabled);
   const openLivePositions = Object.values(live?.positions ?? {}).filter((position): position is LivePosition => position?.status === "OPEN");
@@ -268,7 +293,7 @@ export default function Home() {
         <article><small>当前持仓浮盈亏</small><strong className={floatingPnl >= 0 ? "positive" : "negative"}>{runtime ? `${signed(floatingPnl)} U` : "—"}</strong><p>{openPositions.length} 笔模拟持仓</p></article>
         <article><small>组合风险预算</small><strong>{num(riskUsed, 2)} / {num(riskLimit, 2)} U</strong><div className="risk-bar"><i style={{ width: `${Math.min(100, riskLimit ? riskUsed / riskLimit * 100 : 0)}%` }} /></div><p>剩余 {num(Math.max(0, riskLimit - riskUsed), 2)} U</p></article>
       </section>
-      {(!responseFresh || error) && runtime && <p className="notice">手机页面更新延迟，下面保留最近一次后台状态；服务器仍独立运行，不会因此停止判断或开模拟单。</p>}{runtime?.lastError && <p className="notice">系统正在自动恢复：{runtime.lastError}</p>}
+      {(!responseFresh || error) && runtime && <p className="notice">手机页面更新延迟，下面保留最近一次后台状态；服务器仍独立运行，不会因此停止判断或开模拟单。</p>}{runtime?.lastError && <p className="notice">{runtime.lastError.startsWith("D1") ? `历史镜像稍后重试，不影响行情判断和开仓：${runtime.lastError}` : `系统正在自动恢复：${runtime.lastError}`}</p>}
     </>}
 
     <nav className="tabs">{([['brain', '大脑'], ['orders', `订单 ${openPositions.length + preparedPlans.length || ''}`], ['live', `实盘 ${openLivePositions.length + openLiveEntries.length || ''}`], ['history', '历史'], ['settings', '设置']] as const).map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => selectTab(key)}>{label}</button>)}</nav>
@@ -314,10 +339,23 @@ export default function Home() {
       {historyView === "account_logs" && <AccountLogs cycle={runtime?.paperCycle ?? null} items={accountLogs} />}
     </section>
 
-    <section className="settings-panel" hidden={tab !== "settings"}><button className="setting-row" type="button" onClick={() => auth.authenticated ? void fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(() => { setAuth({ ...auth, authenticated: false }); setRuntime(runtime ? { ...runtime, live: undefined } : runtime); }) : setShowLogin(true)}><div><b>所有者账户</b><p>{auth.authenticated ? "安全登录有效30天；每次打开页面自动续期。" : "登录后才可以查看真实账户并操作实盘开关。"}</p></div><span className={`setting-value ${auth.authenticated ? "online" : "locked"}`}>{auth.authenticated ? "owner · 退出 ›" : "登录 ›"}</span></button><button className="setting-row" type="button" disabled={liveBusy} onClick={liveControl}><div><b>实盘交易开关</b><p>{liveEnabled ? "关闭后撤销未成交入场挂单；已有仓位继续保护并按策略退出。" : "开启后，实盘完全复用当前 BTC/ETH/SOL 策略、10%总风险和6.5%同向限制。"}</p></div><span className={`setting-value ${liveEnabled && live?.operational ? "online" : "locked"}`}>{liveBusy ? "处理中…" : !auth.authenticated ? "需登录 ›" : liveEnabled ? live?.operational ? "已开启 ›" : "已开启·待恢复 ›" : "已关闭 ›"}</span></button>{auth.authenticated && <><Setting title="Gate 实盘账户" detail={`可用 ${num(live?.available, 2)} U · ${openLivePositions.length} 个真实持仓`} value={live?.equity != null ? `${num(live.equity, 2)} U` : "连接中"} tone={live?.credentialConfigured ? "online" : "locked"}/><Setting title="实盘执行状态" detail={friendlyLiveError(live?.lastError) || "强突破约8秒确认后IOC；普通突破等回踩，震荡先扫边收回再等内侧回踩。"} value={live?.operational ? "可开仓" : liveEnabled ? "暂停新单" : "已关闭"} tone={live?.operational ? "online" : "locked"}/></>}<Setting title="最大组合风险" detail="10%是硬上限；BTC/ETH/SOL同向相关风险另限6.5%，均含手续费和压力滑点。" value="10%"/><Setting title="保证金与杠杆" detail="动态杠杆目标每个执行计划约占 10% 保证金；挂单与持仓合计不超过权益 30%，并保留强平缓冲。" value="动态"/><Setting title="持仓时间与止盈" detail="不固定时间，不固定止盈；到达流动性节点后重新判断下一段。" value="分段"/><Setting title="数据容错" detail={`累计短时失败 ${totalFeedFailures} 次 · 自动恢复 ${totalFeedRecoveries} 次 · 最大观测延迟 ${num(maxFeedLag / 1_000, 2)} 秒`} value={activeFeedSuspensions ? `${activeFeedSuspensions}币冻结` : "正常"} tone={activeFeedSuspensions ? "locked" : "online"}/><Setting title="系统状态" detail="页面关闭后后台仍然持续运行。" value={healthy ? "正常" : "恢复中"} tone={healthy ? "online" : "locked"}/><p className="last-update">最近后台成功：{time(runtime?.lastSuccessAt)}{live?.lastSyncAt ? ` · 实盘核对：${time(live.lastSyncAt)}` : ""}</p></section>
+    <section className="settings-panel" hidden={tab !== "settings"}>
+      <button className="setting-row" type="button" onClick={() => auth.authenticated ? void fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(() => { setAuth({ ...auth, authenticated: false }); setRuntime(runtime ? { ...runtime, live: undefined } : runtime); }) : setShowLogin(true)}><div><b>所有者账户</b><p>{auth.authenticated ? "安全登录有效30天；每次打开页面自动续期。" : "登录后才可以查看真实账户并操作实盘开关。"}</p></div><span className={`setting-value ${auth.authenticated ? "online" : "locked"}`}>{auth.authenticated ? "owner · 退出 ›" : "登录 ›"}</span></button>
+      <button className="setting-row" type="button" disabled={liveBusy} onClick={liveControl}><div><b>实盘交易开关</b><p>{liveEnabled ? "关闭后撤销未成交入场挂单；已有仓位继续保护并按策略退出。" : "开启后，实盘完全复用当前 BTC/ETH/SOL 策略、10%总风险和6.5%同向限制。"}</p></div><span className={`setting-value ${liveEnabled && live?.operational ? "online" : "locked"}`}>{liveBusy ? "处理中…" : !auth.authenticated ? "需登录 ›" : liveEnabled ? live?.operational ? "已开启 ›" : "已开启·待恢复 ›" : "已关闭 ›"}</span></button>
+      {auth.authenticated && <><Setting title="Gate 实盘账户" detail={`可用 ${num(live?.available, 2)} U · ${openLivePositions.length} 个真实持仓`} value={live?.equity != null ? `${num(live.equity, 2)} U` : "连接中"} tone={live?.credentialConfigured ? "online" : "locked"}/><Setting title="实盘执行状态" detail={friendlyLiveError(live?.lastError) || "强突破约8秒确认后IOC；普通突破等回踩，震荡先扫边收回再等内侧回踩。"} value={live?.operational ? "可开仓" : liveEnabled ? "暂停新单" : "已关闭"} tone={live?.operational ? "online" : "locked"}/></>}
+      <Setting title="最大组合风险" detail="10%是硬上限；BTC/ETH/SOL同向相关风险另限6.5%，均含手续费和压力滑点。" value="10%"/>
+      <Setting title="保证金与杠杆" detail="动态杠杆目标每个执行计划约占 10% 保证金；挂单与持仓合计不超过权益 30%，并保留强平缓冲。" value="动态"/>
+      <Setting title="持仓时间与止盈" detail="不固定时间，不固定止盈；到达流动性节点后重新判断下一段。" value="分段"/>
+      <Setting title="数据容错" detail={`累计短时失败 ${totalFeedFailures} 次 · 自动恢复 ${totalFeedRecoveries} 次 · 最大观测延迟 ${num(maxFeedLag / 1_000, 2)} 秒`} value={activeFeedSuspensions ? `${activeFeedSuspensions}币冻结` : "正常"} tone={activeFeedSuspensions ? "locked" : "online"}/>
+      <Setting title="系统状态" detail="交易健康只由后台权威、行情新鲜度和各币恢复状态决定；历史镜像延迟不再误报故障。" value={healthy ? "正常" : "恢复中"} tone={healthy ? "online" : "locked"}/>
+      <button className="setting-row" type="button" disabled={paperBusy} onClick={() => openPaperAction("RESET")}><div><b>重置模拟账户</b><p>以新一轮 1,000 U 开始；模拟持仓按新鲜价格结束，保留历史，绝不操作 Gate 实盘。</p></div><span className="setting-value danger">重置 ›</span></button>
+      <button className="setting-row" type="button" disabled={paperBusy} onClick={() => openPaperAction("CLEAR_HISTORY")}><div><b>清除模拟历史</b><p>删除已结束交易和账户日志；保留当前权益、模拟持仓和实盘数据。</p></div><span className="setting-value danger">清除 ›</span></button>
+      <p className="last-update">最近后台成功：{time(runtime?.lastSuccessAt)}{live?.lastSyncAt ? ` · 实盘核对：${time(live.lastSyncAt)}` : ""}</p>
+    </section>
 
     {showLogin && <LoginModal configured={auth.configured} onClose={() => setShowLogin(false)} onSuccess={(session) => { setAuth(session); setShowLogin(false); location.reload(); }} />}
     {showLiveConfirm && <div className="modal-backdrop" onClick={() => !liveBusy && setShowLiveConfirm(false)}><section className="modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}><span className="lock-icon">实</span><h2>确认开启实盘</h2><p>开启后，系统会内部观察 BTC、ETH、SOL 计划，只有实时证据确认时才向 Gate 提交当前价 IOC；成交后立即建立结构止损，不预挂入场单。</p><p>实盘账户总风险硬上限为10%，同方向相关风险不超过6.5%；只有你登录后可以改变这个开关。</p>{liveActionError && <p className="form-error">{liveActionError}</p>}<div className="modal-actions"><button className="secondary" type="button" disabled={liveBusy} onClick={() => setShowLiveConfirm(false)}>取消</button><button type="button" disabled={liveBusy} onClick={() => void setLiveMode(true)}>{liveBusy ? "正在核对 Gate…" : "确认开启实盘"}</button></div></section></div>}
+    {paperAction && <div className="modal-backdrop" onClick={() => !paperBusy && setPaperAction(null)}><section className="modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}><span className="lock-icon">模</span><h2>{paperAction === "RESET" ? "确认重置模拟账户" : "确认清除模拟历史"}</h2><p>{paperAction === "RESET" ? "模拟权益将重置为 1,000 U 并开始新一轮；当前模拟持仓只会在行情新鲜时按当前价结束，历史记录会保留。" : "已结束的模拟交易和账户日志将永久删除；当前模拟权益、持仓以及全部 Gate 实盘数据不会改变。"}</p><p>这项操作只影响 PAPER 模拟系统，不会下单、平仓或修改实盘开关。</p>{paperActionError && <p className="form-error">{paperActionError}</p>}<div className="modal-actions"><button className="secondary" type="button" disabled={paperBusy} onClick={() => setPaperAction(null)}>取消</button><button className="danger-action" type="button" disabled={paperBusy} onClick={() => void runPaperAction()}>{paperBusy ? "处理中…" : paperAction === "RESET" ? "确认重置" : "确认清除"}</button></div></section></div>}
   </main>;
 }
 

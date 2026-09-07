@@ -12,7 +12,7 @@ test("runtime readiness rejects every stale, incomplete, recovery, or transport-
   for (const state of ["STARTING", "WARMING", "DEGRADED", "RECONNECTING", "RECOVERY_REQUIRED"]) assert.equal(runtimeReady({ ...live(), state }), false);
   assert.equal(runtimeReady({ ...live(), stale: true }), false);
   assert.equal(runtimeReady({ ...live(), authorityReady: false }), false);
-  assert.equal(runtimeReady({ ...live(), lastError: "mirror pending" }), false);
+  assert.equal(runtimeReady({ ...live(), lastError: "D1 mirror pending" }), true, "optional history mirroring is not a trading outage");
   assert.equal(runtimeReady({ ...live(), symbols: ["A", "B"] }), false);
   assert.equal(runtimeReady({ ...live(), symbols: ["A", "A", "C"] }), false);
   assert.equal(runtimeReady({ ...live(), evidence: { ...live().evidence, A: { fresh: false, ancillaryFresh: true } } }), false);

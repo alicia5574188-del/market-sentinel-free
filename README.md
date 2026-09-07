@@ -27,6 +27,8 @@ Stops and exits are structural and dynamic. RANGE is no longer a passive boundar
 
 LIVE is deliberately fail-closed: it refuses to start around an unrecognized Gate position/order or hedge mode, checkpoints intent before a mutation, reconciles uncertain submissions before retrying, and requests a reduce-only market close if protection cannot be created or tightened. The switch is never enabled by deployment or login.
 
+The owner settings page separates trading health from optional D1 history mirroring. A mirror retry is shown as a non-blocking warning rather than “recovering.” Owner-only confirmed controls can reset PAPER to a fresh 1,000 U cycle or clear completed PAPER history; neither control changes Gate positions, orders, credentials, or the LIVE switch.
+
 ## Verification
 
 ```bash
