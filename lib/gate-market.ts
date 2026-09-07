@@ -15,7 +15,7 @@ export class GatePublicError extends Error {
 async function gatePublic<T>(path: string): Promise<T> {
   const response = await fetch(`${BASE}${path}`, {
     headers: { Accept: "application/json", "X-Gate-Size-Decimal": "1" },
-    signal: AbortSignal.timeout(1_200),
+    signal: AbortSignal.timeout(2_000),
   });
   if (!response.ok) {
     const retryAfter = Number(response.headers.get("retry-after") ?? 0);

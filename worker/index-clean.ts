@@ -3,8 +3,8 @@
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
 import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchRecentTrades, fetchStructureCandles } from "../lib/gate-market.ts";
-import { breakoutEntryConfirmed, breakoutEntryPriceAcceptable, closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_RISK_CAP, remainingStressRisk, SYSTEM_VERSION, updatePosition, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
-import { aggregateFourHourCandles, analyzeSnapshot, ancillaryIsFresh, ancillarySchedule, applyFlow, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
+import { breakoutEntryConfirmed, breakoutEntryPriceAcceptable, closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_RISK_CAP, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, updatePosition, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
+import { aggregateFourHourCandles, analyzeSnapshot, ancillaryIsFresh, ancillarySchedule, applyFlow, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, optionalEvidenceIsFresh, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
 import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem, type ReviewCandle } from "../lib/paper-outbox.ts";
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
   PAPER_BANKRUPTCY_EQUITY, PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
@@ -15,6 +15,10 @@ import { credentialMetadata } from "../lib/gate-readonly.ts";
 import { clearOwnerSessionCookie, createOwnerSession, ownerAuthConfigured, ownerPasswordMatches, ownerSessionCookie, sameOriginMutation, verifyOwnerSession } from "../lib/owner-auth.ts";
 
 const LOOP_MS = 2_000;
+const AUTHORITY_STALE_AFTER_MS = 8_000;
+const FEED_HARD_FAILURE_COUNT = 4;
+const FEED_HARD_FAILURE_MS = 15_000;
+const FEED_RECOVERY_CONFIRMATIONS = 2;
 const HEARTBEAT_MS = 30_000;
 const UNIVERSE_MS = 5 * 60_000;
 const WARMUP_SNAPSHOTS = 30;
@@ -125,7 +129,9 @@ type RuntimeState = {
   maxSubrequestsInAlarm: number;
   sequenceRebuilds: number;
   lastProcessedSlot: number;
-  feedFailures: Record<string, { count: number; retryAt: number }>;
+  feedFailures: Record<string, { count: number; retryAt: number; suspendedSince?: number | null; lastFreshAt?: number;
+    recoveryFreshCount?: number; totalFailures?: number; recoveries?: number; lastFailureAt?: number | null;
+    lastError?: string | null; maxObservedLagMs?: number }>;
   lastError: string | null;
   d1MirrorError: string | null;
   riskBreach: boolean;
@@ -135,7 +141,9 @@ type RuntimeState = {
   routes: Record<string, LiquidityRoute[]>;
   plans: Record<string, PaperPlan | null>;
   positions: Record<string, PaperPosition | null>;
-  evidence: Record<string, { midpoint: number; observedAt: number; warmup: number; fresh: boolean; ancillaryFresh: boolean; topLong: LiquidityZone | null; topShort: LiquidityZone | null; absorption: number; range15m: RangeStructure | null }>;
+  evidence: Record<string, { midpoint: number; observedAt: number; warmup: number; fresh: boolean; ancillaryFresh: boolean;
+    entryReady?: boolean; optionalFresh?: boolean; recoveryFreshCount?: number; suspensionReason?: string | null;
+    topLong: LiquidityZone | null; topShort: LiquidityZone | null; absorption: number; range15m: RangeStructure | null }>;
   analysisMs: number[];
   equity: number;
   outbox: PositionOutboxItem[];
@@ -824,7 +832,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         }
       }
       const plan = this.runtime.plans[symbol] ?? null;
-      const shouldCancel = !this.runtime.live.requestedEnabled || !plan || plan.id !== entry.planId || plan.state === "CANCELLED" || now >= entry.expiresAt;
+      const shouldCancel = !this.runtime.live.requestedEnabled || !plan || plan.id !== entry.planId || plan.state === "CANCELLED"
+        || now >= entry.expiresAt || !this.symbolEntryReady(symbol);
       if (shouldCancel && openOrder && entry.exchangeOrderId) await this.cancelLiveEntry(client, entry);
       else if (shouldCancel && !openOrder && entry.status !== "FILLED" && entry.missingSince != null && now - entry.missingSince >= 6_000) entry.status = "CANCELLED";
     }
@@ -959,7 +968,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         && paperPosition.entryAt >= (this.runtime.live.changedAt ?? now)
         && now >= paperPosition.entryAt && now - paperPosition.entryAt <= 10_000;
       if (!plan || (plan.state !== "PREPARED" && !justTriggeredBreakout) || now >= plan.expiresAt
-        || this.runtime.live.positions[symbol]?.status === "OPEN") {
+        || this.runtime.live.positions[symbol]?.status === "OPEN" || !this.symbolEntryReady(symbol)) {
         delete this.runtime.live.entrySkips[symbol];
         continue;
       }
@@ -1046,6 +1055,65 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
   }
 
+  private suspendSymbol(symbol: string, now: number, error: string, retryAt: number, increment = true) {
+    const evidence = this.runtime.evidence[symbol];
+    const prior = this.runtime.feedFailures[symbol] ?? { count: 0, retryAt: 0 };
+    const count = increment ? Math.min(5, prior.count + 1) : prior.count;
+    const suspendedSince = prior.suspendedSince ?? now;
+    const lastFreshAt = prior.lastFreshAt ?? evidence?.observedAt ?? now;
+    const hardFailure = count >= FEED_HARD_FAILURE_COUNT || now - lastFreshAt >= FEED_HARD_FAILURE_MS;
+    this.runtime.feedFailures[symbol] = {
+      ...prior,
+      count,
+      retryAt,
+      suspendedSince,
+      lastFreshAt,
+      recoveryFreshCount: 0,
+      totalFailures: (prior.totalFailures ?? 0) + (increment ? 1 : 0),
+      lastFailureAt: increment ? now : prior.lastFailureAt ?? now,
+      lastError: error,
+    };
+    this.runtime.decisions[symbol] = null;
+    if (evidence) {
+      evidence.fresh = false;
+      evidence.entryReady = false;
+      evidence.recoveryFreshCount = 0;
+      evidence.suspensionReason = hardFailure ? "关键行情持续中断，计划已撤销" : "关键行情短暂延迟，计划冻结且禁止成交";
+    }
+    const plan = this.runtime.plans[symbol];
+    if (hardFailure) this.runtime.routes[symbol] = [];
+    if (!hardFailure || plan?.state !== "PREPARED") return false;
+    this.runtime.plans[symbol] = { ...plan, state: "CANCELLED" };
+    return true;
+  }
+
+  private acceptFreshSymbol(symbol: string, now: number, observedAt: number, progressed: boolean) {
+    const prior = this.runtime.feedFailures[symbol] ?? { count: 0, retryAt: 0 };
+    const wasSuspended = prior.suspendedSince != null;
+    const recoveryFreshCount = wasSuspended && progressed
+      ? Math.min(FEED_RECOVERY_CONFIRMATIONS, (prior.recoveryFreshCount ?? 0) + 1)
+      : wasSuspended ? prior.recoveryFreshCount ?? 0 : FEED_RECOVERY_CONFIRMATIONS;
+    const recovered = wasSuspended && recoveryFreshCount >= FEED_RECOVERY_CONFIRMATIONS;
+    const entryReady = !wasSuspended || recovered;
+    this.runtime.feedFailures[symbol] = {
+      ...prior,
+      count: 0,
+      retryAt: 0,
+      suspendedSince: entryReady ? null : prior.suspendedSince,
+      lastFreshAt: now,
+      recoveryFreshCount,
+      recoveries: (prior.recoveries ?? 0) + (recovered ? 1 : 0),
+      lastError: entryReady ? null : "等待第二次新鲜盘口确认",
+      maxObservedLagMs: Math.max(prior.maxObservedLagMs ?? 0, Math.max(0, now - observedAt)),
+    };
+    return { entryReady, recoveryFreshCount };
+  }
+
+  private symbolEntryReady(symbol: string) {
+    const evidence = this.runtime.evidence[symbol];
+    return Boolean(evidence?.fresh && evidence.ancillaryFresh && evidence.entryReady !== false);
+  }
+
   private async processBooks(now: number, cycleSymbols = [...this.runtime.symbols]) {
     const authorityBefore = this.captureAuthority();
     const dueSymbols = cycleSymbols.filter((symbol) => (this.runtime.feedFailures[symbol]?.retryAt ?? 0) <= now);
@@ -1065,17 +1133,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const count = Math.min(5, prior + 1);
         const backoff = [2_000, 4_000, 8_000, 16_000, 30_000][count - 1];
         const gateRetry = result.reason instanceof GatePublicError ? result.reason.retryAt : null;
-        this.runtime.feedFailures[attemptedSymbol] = { count, retryAt: Math.max(now + backoff, gateRetry ?? 0) };
-        const plan = this.runtime.plans[attemptedSymbol] ?? null;
-        const position = this.runtime.positions[attemptedSymbol] ?? null;
-        const cancelled = reconcilePaper({ now, midpoint: this.runtime.evidence[attemptedSymbol]?.midpoint ?? 0, fresh: false,
-          sequenceFault: false, decision: null, plan, position, zones: [], absorption: 0, equity: this.runtime.equity,
-          openRisk: openStressRisk(this.runtime) });
-        this.runtime.plans[attemptedSymbol] = cancelled.plan;
-        this.runtime.positions[attemptedSymbol] = cancelled.position;
-        this.runtime.decisions[attemptedSymbol] = null;
-        this.runtime.routes[attemptedSymbol] = [];
-        if (this.runtime.evidence[attemptedSymbol]) this.runtime.evidence[attemptedSymbol].fresh = false;
+        criticalChanged = this.suspendSymbol(attemptedSymbol, now, safeError(result.reason), Math.max(now + backoff, gateRetry ?? 0)) || criticalChanged;
         continue;
       }
       const { symbol, snapshot } = result.value;
@@ -1084,6 +1142,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // received near the request timeout may legitimately be later than the
       // alarm's start timestamp.
       const validation = usableSnapshot(snapshot, Math.max(now, Date.now()), memory.lastSequence, memory.lastBookObservedAt);
+      if (!validation.fresh) {
+        criticalChanged = this.suspendSymbol(symbol, now, "Gate 订单簿时间戳失鲜", now + LOOP_MS) || criticalChanged;
+        continue;
+      }
       if (validation.sequenceReset) {
         const replacement = emptySymbolMemory();
         replacement.quantoMultiplier = memory.quantoMultiplier;
@@ -1093,26 +1155,42 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         this.sessionWarmup[symbol] = 0;
       }
       const progressed = validation.advanced || validation.sequenceReset;
+      if (validation.sequenceFault || validation.sequenceReset) {
+        this.runtime.sequenceRebuilds += 1;
+        const plan = this.runtime.plans[symbol];
+        if (plan?.state === "PREPARED") {
+          this.runtime.plans[symbol] = { ...plan, state: "CANCELLED" };
+          criticalChanged = true;
+        }
+        this.runtime.decisions[symbol] = null;
+        this.runtime.routes[symbol] = [];
+        if (validation.sequenceFault) {
+          if (this.runtime.evidence[symbol]) {
+            this.runtime.evidence[symbol].fresh = false;
+            this.runtime.evidence[symbol].entryReady = false;
+            this.runtime.evidence[symbol].suspensionReason = "订单簿序列异常，原计划已撤销";
+          }
+          continue;
+        }
+      }
+      const recovery = this.acceptFreshSymbol(symbol, now, snapshot.observedAt, progressed);
       if (validation.fresh && !validation.sequenceFault && progressed) {
         successes += 1;
-        this.runtime.feedFailures[symbol] = { count: 0, retryAt: 0 };
       }
       if (validation.fresh && validation.unchanged) successes += 1;
-      if (validation.sequenceFault || validation.sequenceReset) this.runtime.sequenceRebuilds += 1;
       if (validation.fresh && !validation.sequenceFault && progressed) {
         applyFlow(memory, snapshot);
         this.sessionWarmup[symbol] = (this.sessionWarmup[symbol] ?? 0) + 1;
       }
       if (validation.unchanged) {
-        if (this.runtime.evidence[symbol]) this.runtime.evidence[symbol].fresh = validation.fresh;
-        if (!validation.fresh) {
-          const cancelled = reconcilePaper({ now, midpoint: this.runtime.evidence[symbol]?.midpoint ?? memory.lastMid, fresh: false,
-            sequenceFault: false, decision: null, plan: this.runtime.plans[symbol] ?? null, position: this.runtime.positions[symbol] ?? null,
-            zones: [], absorption: 0, equity: markToMarketEquity(this.runtime), openRisk: openStressRisk(this.runtime), allowOpen: false });
-          this.runtime.plans[symbol] = cancelled.plan;
-          this.runtime.positions[symbol] = cancelled.position;
-          this.runtime.decisions[symbol] = null;
-          this.runtime.routes[symbol] = [];
+        if (this.runtime.evidence[symbol]) {
+          const coreFresh = ancillaryIsFresh(memory, now);
+          this.runtime.evidence[symbol].fresh = true;
+          this.runtime.evidence[symbol].ancillaryFresh = coreFresh;
+          this.runtime.evidence[symbol].optionalFresh = optionalEvidenceIsFresh(memory, now);
+          this.runtime.evidence[symbol].entryReady = recovery.entryReady && coreFresh;
+          this.runtime.evidence[symbol].recoveryFreshCount = recovery.recoveryFreshCount;
+          this.runtime.evidence[symbol].suspensionReason = recovery.entryReady ? null : "已恢复第一份盘口，等待第二份新盘口确认";
         }
         continue;
       }
@@ -1126,8 +1204,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const priorPlan = this.runtime.plans[symbol] ?? null;
       const priorPosition = this.runtime.positions[symbol] ?? null;
       const ancillaryFresh = ancillaryIsFresh(memory, now);
+      const optionalFresh = optionalEvidenceIsFresh(memory, now);
       const contractReady = this.runtime.contractMeta[symbol] != null;
-      const decision = this.authorityReady && contractReady && ancillaryFresh && (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS ? analyzed.decision : null;
+      const entryReady = recovery.entryReady && ancillaryFresh;
+      const decision = this.authorityReady && contractReady && entryReady && (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS ? analyzed.decision : null;
       const openRisk = openStressRisk(this.runtime);
       const planSide = priorPlan?.state === "PREPARED" ? priorPlan.side : decision?.side;
       const reconciled = reconcilePaper({ now, midpoint: analyzed.midpoint, fresh: validation.fresh, sequenceFault: validation.sequenceFault,
@@ -1152,7 +1232,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.runtime.positions[symbol] = reconciled.position;
       this.runtime.evidence[symbol] = {
         midpoint: analyzed.midpoint, observedAt: snapshot.observedAt, warmup: Math.min(WARMUP_SNAPSHOTS, this.sessionWarmup[symbol] ?? 0),
-        fresh: validation.fresh && !validation.sequenceFault, ancillaryFresh,
+        fresh: true, ancillaryFresh, optionalFresh, entryReady,
+        recoveryFreshCount: recovery.recoveryFreshCount,
+        suspensionReason: !ancillaryFresh ? "关键周期结构正在刷新，禁止成交" : recovery.entryReady ? null : "已恢复第一份盘口，等待第二份新盘口确认",
         topLong: analyzed.zones.filter((zone) => zone.side === "LONG").sort((a, b) => b.score - a.score)[0] ?? null,
         topShort: analyzed.zones.filter((zone) => zone.side === "SHORT").sort((a, b) => b.score - a.score)[0] ?? null,
         absorption: analyzed.absorption, range15m: analyzed.range15m,
@@ -1166,15 +1248,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       analyzedRows.push({ symbol, snapshot, validation, analyzed });
     }
     for (const symbol of cycleSymbols.filter((item) => !dueSymbols.includes(item))) {
-      const evidence = this.runtime.evidence[symbol];
-      if (evidence && now - evidence.observedAt > 3_000) evidence.fresh = false;
-      const plan = this.runtime.plans[symbol] ?? null;
-      const position = this.runtime.positions[symbol] ?? null;
-      const cancelled = reconcilePaper({ now, midpoint: evidence?.midpoint ?? 0, fresh: false, sequenceFault: false, decision: null,
-        plan, position, zones: [], absorption: 0, equity: this.runtime.equity,
-        openRisk: openStressRisk(this.runtime) });
-      this.runtime.plans[symbol] = cancelled.plan;
-      this.runtime.positions[symbol] = cancelled.position;
+      const feed = this.runtime.feedFailures[symbol];
+      criticalChanged = this.suspendSymbol(symbol, now, feed?.lastError ?? "等待 Gate 重试", feed?.retryAt ?? now + LOOP_MS, false) || criticalChanged;
     }
     // A realized loss can shrink the 10% cap. Reduce weakest fresh PAPER exposure before considering any new entry.
     for (const candidate of Object.values(this.runtime.positions)
@@ -1203,7 +1278,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const position = this.runtime.positions[symbol];
         if (position?.status !== "OPEN") continue;
         const evidence = this.runtime.evidence[symbol];
-        if (!evidence?.fresh || now - evidence.observedAt > 3_000 || evidence.midpoint <= 0) continue;
+        if (!evidence?.fresh || now - evidence.observedAt > STALE_AFTER_MS || evidence.midpoint <= 0) continue;
         const closed = closePaperPosition(position, now, evidence.midpoint, "PAPER_CYCLE_BANKRUPTCY");
         this.runtime.positions[symbol] = closed;
         this.queueTransition(closed, position);
@@ -1234,6 +1309,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // Exits update draft absolute equity before candidates are ranked; nothing is published yet.
     const rankedCandidates = analyzedRows
       .filter(({ symbol, validation }) => !bankruptcyPending && !rolledOverThisCycle && validation.fresh && !validation.sequenceFault && !closedThisCycle.has(symbol) && this.runtime.positions[symbol]?.status !== "OPEN")
+      .filter(({ symbol }) => this.symbolEntryReady(symbol))
       .filter(({ symbol }) => this.runtime.plans[symbol]?.state === "PREPARED")
       .sort((a, b) => {
         const utility = (row: typeof a) => {
@@ -1371,17 +1447,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const allWarm = this.runtime.symbols.every((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS);
       const allMeta = this.runtime.symbols.every((symbol) => this.runtime.contractMeta[symbol] != null);
       const allAncillary = this.runtime.symbols.every((symbol) => ancillaryIsFresh(this.memory[symbol] ?? emptySymbolMemory(), now));
+      const allEntryReady = this.runtime.symbols.every((symbol) => this.symbolEntryReady(symbol));
       const ancillaryStarted = this.runtime.symbols.every((symbol) => {
         const memory = this.memory[symbol];
-        return memory && memory.oiUpdatedAt > 0 && memory.tradesUpdatedAt > 0 && memory.liquidationsUpdatedAt > 0
-          && memory.timeframeUpdatedAt.m1 > 0 && memory.timeframeUpdatedAt.m15 > 0
+        return memory && memory.timeframeUpdatedAt.m1 > 0 && memory.timeframeUpdatedAt.m15 > 0
           && memory.timeframeUpdatedAt.h1 > 0 && memory.timeframeUpdatedAt.h4 > 0;
       });
       this.runtime.state = !this.authorityReady ? "RECOVERY_REQUIRED" : successes === 0 ? "RECONNECTING"
         : successes !== this.runtime.symbols.length ? "DEGRADED"
-          : this.runtime.riskBreach ? "DEGRADED" : allWarm && allMeta && allAncillary ? "LIVE" : allWarm && allMeta && ancillaryStarted ? "DEGRADED" : "WARMING";
+          : this.runtime.riskBreach ? "DEGRADED" : allWarm && allMeta && allAncillary && allEntryReady ? "LIVE" : allWarm && allMeta && ancillaryStarted ? "DEGRADED" : "WARMING";
+      const recoveringMarkets = this.runtime.symbols.filter((symbol) => !this.symbolEntryReady(symbol)).length;
       const feedError = successes !== this.runtime.symbols.length ? `${this.runtime.symbols.length - successes} market snapshots unavailable; retrying`
-        : !allMeta ? "contract metadata unavailable" : !allAncillary && ancillaryStarted ? "ancillary evidence stale; entries blocked" : null;
+        : recoveringMarkets > 0 ? `${recoveringMarkets} market feeds recovering; plans frozen`
+          : !allMeta ? "contract metadata unavailable" : !allAncillary && ancillaryStarted ? "critical structure evidence stale; entries blocked" : null;
       this.runtime.lastError = (this.runtime.riskBreach ? "portfolio stress risk exceeds 10%; new entries blocked" : feedError) ?? this.runtime.d1MirrorError;
     } catch (error) {
       this.runtime.state = "RECONNECTING";
@@ -1398,7 +1476,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const url = new URL(request.url);
     const path = url.pathname;
     if (path === "/watchdog") {
-      const stale = this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > 3_000;
+      const stale = this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > AUTHORITY_STALE_AFTER_MS;
       const alarm = await this.ctx.storage.getAlarm();
       if (alarm == null || alarm < Date.now() - 6_000) {
         this.runtime.state = this.authorityReady ? "RECONNECTING" : "RECOVERY_REQUIRED";
@@ -1410,7 +1488,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (path === "/status" || path === "/owner-runtime") {
       await this.ensureAlarm();
       const { outbox, live, paperCycle, bankruptcyOutbox, ...publicRuntime } = this.runtime;
-      const stale = !this.authorityReady || this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > 3_000;
+      const stale = !this.authorityReady || this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > AUTHORITY_STALE_AFTER_MS;
       const effectiveState = !this.authorityReady ? "RECOVERY_REQUIRED" : stale ? "RECONNECTING" : this.runtime.state;
       return json({ ...publicRuntime, ...this.authorityView, paperCycle: paperCycleSummary(paperCycle, this.authorityView.equity), ...(path === "/owner-runtime" ? { live } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length + bankruptcyOutbox.length,
         oldestOutboxAgeMs: outbox.length ? Math.max(0, Date.now() - (outbox[0].position.exitAt ?? outbox[0].position.entryAt)) : 0,

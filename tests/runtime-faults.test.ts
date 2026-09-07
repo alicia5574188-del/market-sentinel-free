@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import test from "node:test";
-import { ancillaryIsFresh, ancillarySchedule, emptySymbolMemory } from "../lib/liquidity-runtime.ts";
-import { remainingStressRisk, type PaperPlan, type PaperPosition } from "../lib/liquidity-core.ts";
+import { ancillaryIsFresh, ancillarySchedule, emptySymbolMemory, optionalEvidenceIsFresh } from "../lib/liquidity-runtime.ts";
+import { remainingStressRisk, STALE_AFTER_MS, type PaperPlan, type PaperPosition } from "../lib/liquidity-core.ts";
 
 const cloudflareStub = `
   export class DurableObject {
@@ -223,10 +223,10 @@ test("failed authoritative checkpoint rolls back CLOSE, equity and outbox before
   assert.equal(db.batchCalls, 0);
 });
 
-test("an unchanged book at TTL plus one millisecond cancels entry intent but never closes an open position", async () => {
+test("one stale book freezes entry intent but never destroys the plan or closes an open position", async () => {
   const { stream } = await makeStream();
   const now = 1_800_000_050_000;
-  const observedAt = now - 3_001;
+  const observedAt = now - STALE_AFTER_MS - 1;
   const open = position("stale-open", "ETH_USDT");
   stream.runtime.symbols = ["BTC_USDT", "ETH_USDT"];
   stream.runtime.tickSize = { BTC_USDT: 0.1, ETH_USDT: 0.1 };
@@ -254,12 +254,50 @@ test("an unchanged book at TTL plus one millisecond cancels entry intent but nev
     ETH_USDT: { midpoint: 100, now: observedAt, sequence: 10 },
   }, async () => { await stream.processBooks(now, ["BTC_USDT", "ETH_USDT"]); });
 
-  assert.equal(stream.runtime.plans.BTC_USDT.state, "CANCELLED");
+  assert.equal(stream.runtime.plans.BTC_USDT.state, "PREPARED");
   assert.equal(stream.runtime.decisions.BTC_USDT, null);
   assert.equal(stream.runtime.positions.BTC_USDT, null);
   assert.deepEqual(stream.runtime.positions.ETH_USDT, open, "stale transport data is never an exit price");
   assert.equal(stream.runtime.evidence.BTC_USDT.fresh, false);
   assert.equal(stream.runtime.evidence.ETH_USDT.fresh, false);
+  assert.equal(stream.runtime.feedFailures.BTC_USDT.count, 1);
+  assert.match(stream.runtime.evidence.BTC_USDT.suspensionReason, /计划冻结/);
+});
+
+test("a frozen plan needs two advancing fresh books to re-arm and persistent failure eventually cancels", async () => {
+  const { stream } = await makeStream();
+  const now = 1_800_000_060_000;
+  stream.runtime.symbols = ["BTC_USDT"];
+  stream.runtime.tickSize = { BTC_USDT: 0.1 };
+  stream.runtime.contractMeta = { BTC_USDT: { quantoMultiplier: 1, maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0 } };
+  stream.runtime.plans = { BTC_USDT: plan("BTC_USDT") };
+  stream.runtime.positions = { BTC_USDT: null };
+  stream.runtime.evidence = { BTC_USDT: { midpoint: 100, observedAt: now - 1_000, warmup: 30, fresh: false, ancillaryFresh: true,
+    entryReady: false, topLong: null, topShort: null, absorption: 0, range15m: null } };
+  stream.runtime.feedFailures.BTC_USDT = { count: 1, retryAt: 0, suspendedSince: now - 2_000, lastFreshAt: now - 2_000, recoveryFreshCount: 0 };
+  stream.memory.BTC_USDT = emptySymbolMemory();
+  stream.memory.BTC_USDT.lastSequence = 10;
+  stream.memory.BTC_USDT.lastBookObservedAt = now - 1_000;
+  stream.memory.BTC_USDT.lastMid = 100;
+  stream.memory.BTC_USDT.timeframeUpdatedAt = { m1: now, m15: now, h1: now, h4: now };
+  stream.sessionWarmup.BTC_USDT = 30;
+
+  await withGateBooks({ BTC_USDT: { midpoint: 100.2, now, sequence: 11 } }, async () => { await stream.processBooks(now, ["BTC_USDT"]); });
+  assert.equal(stream.runtime.plans.BTC_USDT.state, "PREPARED");
+  assert.equal(stream.runtime.evidence.BTC_USDT.entryReady, false);
+  assert.equal(stream.runtime.evidence.BTC_USDT.recoveryFreshCount, 1);
+
+  await withGateBooks({ BTC_USDT: { midpoint: 100.3, now: now + 2_000, sequence: 12 } }, async () => { await stream.processBooks(now + 2_000, ["BTC_USDT"]); });
+  assert.equal(stream.runtime.evidence.BTC_USDT.entryReady, true);
+  assert.equal(stream.runtime.feedFailures.BTC_USDT.recoveries, 1);
+
+  stream.runtime.plans.BTC_USDT = plan("BTC_USDT");
+  stream.runtime.evidence.BTC_USDT.observedAt = now + 2_000;
+  for (const failureAt of [now + 4_000, now + 6_000, now + 10_000, now + 18_000]) {
+    await withGateBooks({}, async () => { await stream.processBooks(failureAt, ["BTC_USDT"]); });
+  }
+  assert.equal(stream.runtime.plans.BTC_USDT.state, "CANCELLED");
+  assert.equal(stream.runtime.feedFailures.BTC_USDT.count, 4);
 });
 
 test("a bankrupt PAPER cycle is archived before a fresh 1000 U cycle starts", async () => {
@@ -447,7 +485,7 @@ test("re-instantiated retries handle future, missing and past alarms without rep
   }
 });
 
-test("ancillary wheel covers every symbol/feature and each TTL fails one millisecond beyond its boundary", () => {
+test("critical structure blocks entries while OI, trades and liquidation remain optional", () => {
   const symbols = ["A", "B", "C", "D"];
   assert.deepEqual(ancillarySchedule(7, symbols, ["C"]), { symbol: "C", feature: "1m" });
   const schedule = Array.from({ length: 20 }, (_, cursor) => ancillarySchedule(cursor, symbols)!);
@@ -462,17 +500,23 @@ test("ancillary wheel covers every symbol/feature and each TTL fails one millise
   fresh.timeframeUpdatedAt = { m1: now - 3 * 60_000, m15: now - 45 * 60_000,
     h1: now - 3 * 60 * 60_000, h4: now - 12 * 60 * 60_000 };
   assert.equal(ancillaryIsFresh(fresh, now), true);
+  assert.equal(optionalEvidenceIsFresh(fresh, now), true);
 
-  const expiryCases: Array<(memory: ReturnType<typeof emptySymbolMemory>) => void> = [
-    (memory) => { memory.oiUpdatedAt -= 1; },
-    (memory) => { memory.tradesUpdatedAt -= 1; },
-    (memory) => { memory.liquidationsUpdatedAt -= 1; },
+  const optionalExpiryCases: Array<(memory: ReturnType<typeof emptySymbolMemory>) => void> = [
+    (memory) => { memory.oiUpdatedAt -= 1; }, (memory) => { memory.tradesUpdatedAt -= 1; }, (memory) => { memory.liquidationsUpdatedAt -= 1; },
+  ];
+  for (const expire of optionalExpiryCases) {
+    const stale = structuredClone(fresh); expire(stale);
+    assert.equal(ancillaryIsFresh(stale, now), true);
+    assert.equal(optionalEvidenceIsFresh(stale, now), false);
+  }
+  const criticalExpiryCases: Array<(memory: ReturnType<typeof emptySymbolMemory>) => void> = [
     (memory) => { memory.timeframeUpdatedAt.m1 -= 1; },
     (memory) => { memory.timeframeUpdatedAt.m15 -= 1; },
     (memory) => { memory.timeframeUpdatedAt.h1 -= 1; },
     (memory) => { memory.timeframeUpdatedAt.h4 -= 1; },
   ];
-  for (const expire of expiryCases) {
+  for (const expire of criticalExpiryCases) {
     const stale = structuredClone(fresh);
     expire(stale);
     assert.equal(ancillaryIsFresh(stale, now), false);
@@ -601,6 +645,10 @@ test("a capacity-limited plan is skipped without blocking LIVE or other affordab
   stream.runtime.plans = Object.fromEntries(symbols.map((symbol) => [symbol, { ...plan(symbol), marketState: "RANGE" }]));
   stream.runtime.contractMeta = Object.fromEntries(symbols.map((symbol) => [symbol, {
     quantoMultiplier: 0.001, maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0,
+  }]));
+  stream.runtime.evidence = Object.fromEntries(symbols.map((symbol) => [symbol, {
+    midpoint: 100, observedAt: Date.now(), warmup: 30, fresh: true, ancillaryFresh: true, entryReady: true,
+    topLong: null, topShort: null, absorption: 0, range15m: null,
   }]));
   let createCalls = 0;
   let snapshotCalls = 0;
