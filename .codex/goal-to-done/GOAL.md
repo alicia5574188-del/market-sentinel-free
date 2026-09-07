@@ -2,7 +2,7 @@
 
 ## Active upgrade — 2026-09-07 open-position PnL and live line charts
 
-Make every open PAPER position and owner-visible Gate LIVE position understandable at a glance. Each position card must show gross unrealized PnL in USDT, margin return percentage, direction-adjusted price return, and the latest market price. Add a compact line chart from entry to the latest observation with explicit entry, current protection, target, and current-price levels. Seed the chart from the existing cached Gate 1m candle endpoint and append the midpoint already delivered by the 15-second page runtime poll; do not add Gate requests, Durable Object loops, writes, trading authority, or any new way for stale data to execute orders. Keep LIVE default OFF and owner-only.
+Make every open PAPER position and owner-visible Gate LIVE position understandable at a glance. Each position card must show gross unrealized PnL in USDT, margin return percentage, direction-adjusted price return, and the latest market price. Add a compact 5m close line chart from entry to the latest observation: entry is an exact point, while current protection and target remain reference lines. Historical reviews use the same 5m line convention with distinct entry/exit points. Aggregate the existing cached Gate 1m candle endpoint on the client and append the midpoint already delivered by the 15-second page runtime poll; do not add Gate requests, Durable Object loops, writes, trading authority, or any new way for stale data to execute orders. Keep LIVE default OFF and owner-only.
 
 ## Active upgrade — 2026-09-07 feed jitter grace and frozen-plan recovery
 

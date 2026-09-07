@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { directionalReturnRate, marginReturnRate, unrealizedPnl } from "../lib/position-metrics.ts";
+import { aggregateClosePoints, directionalReturnRate, marginReturnRate, unrealizedPnl, type PositionPricePoint } from "../lib/position-metrics.ts";
 import { runtimeReady } from "../lib/runtime-health.ts";
 
 type Side = "LONG" | "SHORT";
@@ -51,7 +51,6 @@ type HistoryView = "trades" | "account_logs";
 type Timeframe = "1m" | "15m" | "1h" | "4h";
 type Candle = { time: number; volume: number; close: number; high: number; low: number; open: number };
 type PositionView = { entryAt?: number; entryPrice: number; stopPrice: number; targetPrice: number; markPrice?: number; markAt?: number; fresh: boolean };
-type PricePoint = { time: number; price: number };
 
 const INITIAL_EQUITY = 1_000;
 const RUNTIME_REQUEST_TIMEOUT_MS = 30_000;
@@ -73,8 +72,8 @@ const distancePct = (from: number, to: number) => Math.abs(to - from) / Math.max
 const netRr = (entry: number, stop: number, target: number) => Math.max(0, Math.abs(target - entry) / Math.max(entry, 1e-9) - .0018)
   / Math.max(Math.abs(entry - stop) / Math.max(entry, 1e-9) + .0018, 1e-9);
 const displayLeverage = (notional: number, equity: number) => [1, 2, 3, 5, 10, 20, 30, 40, 50].find((value) => notional / value <= equity * .12) ?? 50;
-const mergePricePoints = (current: PricePoint[], incoming: PricePoint[]) => {
-  const merged = new Map<number, PricePoint>();
+const mergePricePoints = (current: PositionPricePoint[], incoming: PositionPricePoint[]) => {
+  const merged = new Map<number, PositionPricePoint>();
   [...current, ...incoming].forEach((point) => { if (Number.isFinite(point.time) && Number.isFinite(point.price) && point.price > 0) merged.set(point.time, point); });
   return [...merged.values()].sort((a, b) => a.time - b.time).slice(-72);
 };
@@ -416,7 +415,7 @@ function OrderCard({ symbol, side, label, state, notional, equity, values, mode 
 }
 
 function PositionLiveChart({ symbol, side, view }: { symbol: string; side: Side; view: PositionView }) {
-  const [points, setPoints] = useState<PricePoint[]>([]);
+  const [points, setPoints] = useState<PositionPricePoint[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -434,11 +433,11 @@ function PositionLiveChart({ symbol, side, view }: { symbol: string; side: Side;
 
   const fallbackTime = view.markAt ?? points.at(-1)?.time ?? view.entryAt ?? 0;
   const currentPoint = view.markPrice && fallbackTime > 0 ? [{ time: fallbackTime, price: view.markPrice }] : [];
-  const observed = mergePricePoints(points, currentPoint);
+  const observed = mergePricePoints(aggregateClosePoints(points, 5 * 60_000), currentPoint);
   const rows = observed.length > 1 ? observed : mergePricePoints([{ time: view.entryAt ?? Math.max(0, fallbackTime - 60_000), price: view.entryPrice }], observed);
   const width = 760, height = 250, left = 18, right = 18, top = 24, bottom = 28;
-  const levels = [{ value: view.entryPrice, label: "进场", kind: "entry" }, { value: view.stopPrice, label: "止损", kind: "stop" }, { value: view.targetPrice, label: "止盈", kind: "target" }].filter((level) => Number.isFinite(level.value) && level.value > 0);
-  const prices = [...rows.map((row) => row.price), ...levels.map((level) => level.value), ...(view.markPrice ? [view.markPrice] : [])];
+  const levels = [{ value: view.stopPrice, label: "止损", kind: "stop" }, { value: view.targetPrice, label: "止盈", kind: "target" }].filter((level) => Number.isFinite(level.value) && level.value > 0);
+  const prices = [...rows.map((row) => row.price), view.entryPrice, ...levels.map((level) => level.value), ...(view.markPrice ? [view.markPrice] : [])];
   const rawMin = prices.length ? Math.min(...prices) : 0, rawMax = prices.length ? Math.max(...prices) : 1;
   const padding = Math.max((rawMax - rawMin) * .09, rawMax * .0005, 1e-9);
   const minPrice = rawMin - padding, maxPrice = rawMax + padding, plotHeight = height - top - bottom;
@@ -448,13 +447,14 @@ function PositionLiveChart({ symbol, side, view }: { symbol: string; side: Side;
   const line = rows.map((point) => `${x(point.time)},${y(point.price)}`).join(" ");
   const current = rows.at(-1);
 
-  return <section className="position-chart" aria-label={`${symbol.replace("_", "/")} 持仓实时价格走势`}><div className="position-chart-head"><div><b>持仓实时走势</b><small>1分钟收盘线 + 约15秒当前价</small></div><span className={view.fresh ? "positive" : "negative"}>{view.fresh ? "实时" : "保留最近价"}</span></div><div className="position-line-canvas">{!rows.length ? <div className="chart-loading">{loading ? "正在读取走势…" : "等待行情"}</div> : <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`从进场至今的价格线，含进场、止损和止盈`} preserveAspectRatio="none">
+  return <section className="position-chart" aria-label={`${symbol.replace("_", "/")} 持仓实时价格走势`}><div className="position-chart-head"><div><b>持仓实时走势</b><small>5分钟收盘线 + 约15秒当前价</small></div><span className={view.fresh ? "positive" : "negative"}>{view.fresh ? "实时" : "保留最近价"}</span></div><div className="position-line-canvas">{!rows.length ? <div className="chart-loading">{loading ? "正在读取走势…" : "等待行情"}</div> : <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`从进场至今的5分钟价格线，含进场、止损和止盈`} preserveAspectRatio="none">
     {[.25, .5, .75].map((ratio) => <line className="chart-grid" key={ratio} x1={left} x2={width - right} y1={top + plotHeight * ratio} y2={top + plotHeight * ratio} />)}
-    {levels.map((level, index) => <g className={`position-level ${level.kind}`} key={`${level.kind}:${level.value}`}><line x1={left} x2={width - right} y1={y(level.value)} y2={y(level.value)} /><text x={index === 0 ? left + 5 : index === 1 ? width * .42 : width - right - 5} textAnchor={index === 2 ? "end" : "start"} y={Math.max(13, y(level.value) - 6)}>{level.label} {num(level.value, 5)}</text></g>)}
+    {levels.map((level, index) => <g className={`position-level ${level.kind}`} key={`${level.kind}:${level.value}`}><line x1={left} x2={width - right} y1={y(level.value)} y2={y(level.value)} /><text x={index === 0 ? width * .42 : width - right - 5} textAnchor={index === 1 ? "end" : "start"} y={Math.max(13, y(level.value) - 6)}>{level.label} {num(level.value, 5)}</text></g>)}
     {line && <polyline className={`position-price-line ${side.toLowerCase()}`} points={line} />}
+    <g className="position-entry-marker"><circle cx={x(view.entryAt ?? startTime)} cy={y(view.entryPrice)} r="6" /><text x={Math.min(width - right - 90, x(view.entryAt ?? startTime) + 10)} y={Math.max(13, y(view.entryPrice) - 8)}>进场 {num(view.entryPrice, 5)}</text></g>
     {current && <g className="position-current"><line x1={left} x2={width - right} y1={y(current.price)} y2={y(current.price)} /><circle cx={x(current.time)} cy={y(current.price)} r="5" /><text x={width - right - 5} y={Math.max(13, y(current.price) - 7)} textAnchor="end">当前 {num(current.price, 5)}</text></g>}
     <text className="axis-label" x={left} y={height - 8}>{time(startTime)}</text><text className="axis-label end" x={width - right} y={height - 8}>{time(endTime)}</text>
-  </svg>}</div><p>{loading ? "正在补齐进场后的缓存走势" : `${rows.length} 个价格点 · 行情恢复时图线保留，不用旧价格触发交易`}</p></section>;
+  </svg>}</div><p>{loading ? "正在补齐进场后的缓存走势" : `${rows.length} 个5分钟节点 · 行情恢复时图线保留，不用旧价格触发交易`}</p></section>;
 }
 
 function LoginModal({ configured, onClose, onSuccess }: { configured: boolean; onClose: () => void; onSuccess: (session: AuthSession) => void }) {
@@ -487,7 +487,7 @@ function HistoryOrder({ item }: { item: HistoryItem }) {
   const cost = item.feesAndSlippage ?? 0;
   const gross = (item.realizedPnl ?? 0) + cost;
   return <article className="history-order"><div><span className={`side ${item.side.toLowerCase()}`}>{item.side === "LONG" ? "多" : "空"}</span><div><b>{item.symbol.replace("_", "/")}</b><small>{time(item.entryAt)} · {stateText[item.marketState]}</small></div></div><div><small>进场 / 出场</small><b>{num(item.entryPrice, 5)} / {num(item.exitPrice, 5)}</b></div><div><small>净结果</small><b className={(item.realizedPnl ?? 0) >= 0 ? "positive" : "negative"}>{item.status === "OPEN" ? "持仓中" : `${signed(item.realizedPnl ?? 0)} U`}</b></div><div><small>持仓 / 结束原因</small><b>{durationText(item.entryAt, item.exitAt)} · {item.status === "OPEN" ? "尚未结束" : resolvedExitText(item.exitReason, item.initialStop, item.currentStop)}</b></div>
-    <details className="history-review" onToggle={(event) => setOpen(event.currentTarget.open)}><summary>查看 1 分钟进出场 K 线</summary>{open && <OrderReviewChart item={item} gross={gross} cost={cost} />}</details>
+    <details className="history-review" onToggle={(event) => setOpen(event.currentTarget.open)}><summary>查看 5 分钟进出场走势</summary>{open && <OrderReviewChart item={item} gross={gross} cost={cost} />}</details>
   </article>;
 }
 
@@ -538,30 +538,33 @@ function OrderReviewChart({ item, gross, cost }: { item: HistoryItem; gross: num
     return () => { active = false; window.clearInterval(timer); };
   }, [item.id]);
 
-  const rows = candles.length <= 120 ? candles : [...candles.slice(0, 40), ...candles.slice(-80)];
+  const points = aggregateClosePoints(candles.map((row) => ({ time: row.time * 1_000, price: row.close })), 5 * 60_000);
+  const rows = points.length <= 72 ? points : [...points.slice(0, 24), ...points.slice(-48)];
   const width = 720, height = 270, left = 12, right = 12, top = 24, bottom = 34;
-  const candleEnd = rows.at(-1)?.time ? rows.at(-1)!.time * 1_000 + 60_000 : null;
+  const candleEnd = rows.at(-1)?.time ? rows.at(-1)!.time + 5 * 60_000 : null;
   const exitAt = item.exitAt ?? candleEnd ?? item.entryAt, exitPrice = item.exitPrice ?? item.entryPrice;
-  const allPrices = [...rows.flatMap((row) => [row.high, row.low]), item.entryPrice, exitPrice];
+  const levels = [{ value: item.initialStop, label: "原始止损", kind: "stop" }, { value: item.currentTarget, label: "计划止盈", kind: "target" }].filter((level) => Number.isFinite(level.value) && level.value > 0);
+  const allPrices = [...rows.map((row) => row.price), item.entryPrice, exitPrice, ...levels.map((level) => level.value)];
   const rawMin = allPrices.length ? Math.min(...allPrices) : 0, rawMax = allPrices.length ? Math.max(...allPrices) : 1;
   const padding = Math.max((rawMax - rawMin) * .09, rawMax * .0004, 1e-9);
   const minPrice = rawMin - padding, maxPrice = rawMax + padding, plotHeight = height - top - bottom;
   const y = (value: number) => top + (maxPrice - value) / Math.max(maxPrice - minPrice, 1e-9) * plotHeight;
-  const startAt = Math.min(rows[0]?.time ? rows[0].time * 1_000 : item.entryAt, item.entryAt);
-  const endAt = Math.max(rows.at(-1)?.time ? rows.at(-1)!.time * 1_000 + 60_000 : exitAt, exitAt, startAt + 60_000);
+  const startAt = Math.min(rows[0]?.time ?? item.entryAt, item.entryAt);
+  const endAt = Math.max(rows.at(-1)?.time ? rows.at(-1)!.time + 5 * 60_000 : exitAt, exitAt, startAt + 5 * 60_000);
   const x = (value: number) => left + (Math.max(startAt, Math.min(endAt, value)) - startAt) / Math.max(endAt - startAt, 1) * (width - left - right);
-  const candleWidth = Math.max(2, Math.min(7, (width - left - right) / Math.max(rows.length, 1) * .55));
+  const line = rows.map((point) => `${x(point.time)},${y(point.price)}`).join(" ");
   return <div className="review-chart"><div className="review-metrics"><span>毛盈亏 <b className={gross >= 0 ? "positive" : "negative"}>{signed(gross)} U</b></span><span>成本 <b className="negative">-{num(cost, 2)} U</b></span><span>净盈亏 <b className={(item.realizedPnl ?? 0) >= 0 ? "positive" : "negative"}>{signed(item.realizedPnl ?? 0)} U</b></span><span>持仓 <b>{durationText(item.entryAt, item.exitAt)}</b></span></div>
-    {!rows.length ? <div className="chart-loading">{loading ? "正在读取这笔订单的真实 1 分钟 K 线…" : `复盘 K 线暂不可用${chartError ? `：${chartError}` : ""}`}</div> : <>
-      <div className="chart-canvas review-canvas"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${item.symbol.replace("_", "/")} 订单进出场1分钟K线`} preserveAspectRatio="none">
+    {!rows.length ? <div className="chart-loading">{loading ? "正在读取并整理这笔订单的 5 分钟走势…" : `复盘走势暂不可用${chartError ? `：${chartError}` : ""}`}</div> : <>
+      <div className="chart-canvas review-canvas"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${item.symbol.replace("_", "/")} 订单5分钟进出场走势`} preserveAspectRatio="none">
         {[.25, .5, .75].map((ratio) => <line className="chart-grid" key={ratio} x1={left} x2={width - right} y1={top + plotHeight * ratio} y2={top + plotHeight * ratio} />)}
-        {rows.map((row) => { const candleX = x(row.time * 1_000 + 30_000), up = row.close >= row.open, bodyTop = y(Math.max(row.open, row.close)), bodyHeight = Math.max(1.8, Math.abs(y(row.open) - y(row.close))); return <g className={`candle ${up ? "up" : "down"}`} key={row.time}><line x1={candleX} x2={candleX} y1={y(row.high)} y2={y(row.low)} /><rect x={candleX - candleWidth / 2} y={bodyTop} width={candleWidth} height={bodyHeight} /></g>; })}
-        <g className="review-marker entry"><line className="price" x1={left} x2={width - right} y1={y(item.entryPrice)} y2={y(item.entryPrice)} /><line className="moment" x1={x(item.entryAt)} x2={x(item.entryAt)} y1={top} y2={height - bottom} /><circle cx={x(item.entryAt)} cy={y(item.entryPrice)} r="5" /><text x={left + 5} y={Math.max(13, y(item.entryPrice) - 7)}>进场 {num(item.entryPrice, 5)}</text></g>
-        <g className="review-marker exit"><line className="price" x1={left} x2={width - right} y1={y(exitPrice)} y2={y(exitPrice)} /><line className="moment" x1={x(exitAt)} x2={x(exitAt)} y1={top} y2={height - bottom} /><circle cx={x(exitAt)} cy={y(exitPrice)} r="5" /><text x={left + 5} y={Math.min(height - bottom - 4, y(exitPrice) + 15)}>出场 {num(exitPrice, 5)}</text></g>
+        {levels.map((level, index) => <g className={`position-level ${level.kind}`} key={`${level.kind}:${level.value}`}><line x1={left} x2={width - right} y1={y(level.value)} y2={y(level.value)} /><text x={index === 0 ? left + 5 : width - right - 5} textAnchor={index === 1 ? "end" : "start"} y={Math.max(13, y(level.value) - 6)}>{level.label} {num(level.value, 5)}</text></g>)}
+        {line && <polyline className={`position-price-line ${item.side.toLowerCase()}`} points={line} />}
+        <g className="review-marker entry"><circle cx={x(item.entryAt)} cy={y(item.entryPrice)} r="6" /><text x={Math.min(width - right - 90, x(item.entryAt) + 10)} y={Math.max(13, y(item.entryPrice) - 8)}>进场 {num(item.entryPrice, 5)}</text></g>
+        <g className="review-marker exit"><circle cx={x(exitAt)} cy={y(exitPrice)} r="6" /><text x={Math.max(left + 90, x(exitAt) - 10)} textAnchor="end" y={Math.min(height - bottom - 4, y(exitPrice) + 16)}>出场 {num(exitPrice, 5)}</text></g>
         <text className="axis-label" x={left} y={height - 9}>{time(startAt)}</text><text className="axis-label end" x={width - right} y={height - 9}>{time(endAt)}</text>
       </svg></div>
-      <div className="review-levels"><span>原始止损 <b>{num(item.initialStop, 5)}</b></span><span>最终保护位 <b>{num(item.currentStop, 5)}</b></span><span>计划目标 <b>{num(item.currentTarget, 5)}</b></span><span>{rows.length} 根真实已收盘 1 分钟 K 线</span></div>
-      {!ready && <p className="review-wait">出场所在的 1 分钟 K 线收盘后会自动补全。</p>}
+      <div className="review-levels"><span>原始止损 <b>{num(item.initialStop, 5)}</b></span><span>最终保护位 <b>{num(item.currentStop, 5)}</b></span><span>计划目标 <b>{num(item.currentTarget, 5)}</b></span><span>{rows.length} 个 5 分钟收盘节点</span></div>
+      {!ready && <p className="review-wait">出场附近的原始分钟数据收齐后会自动补全。</p>}
     </>}
   </div>;
 }
