@@ -1,4 +1,4 @@
-export const SYSTEM_VERSION = "liquidity-route-v6";
+export const SYSTEM_VERSION = "market-anomaly-scalper-v1";
 export const PORTFOLIO_RISK_CAP = 0.10;
 export const CORRELATED_DIRECTION_RISK_CAP = 0.065;
 export const STALE_AFTER_MS = 5_000;
@@ -6,10 +6,10 @@ export const WALL_WINDOW = 30;
 export const ROUND_TRIP_FRICTION_RATE = 0.0018;
 export const MIN_TARGET_DISTANCE_RATE = 0.0025;
 export const MIN_NET_REWARD_RISK = 1.2;
-export const MIN_SINGLE_TRADE_RISK_RATE = 0.015;
-export const MAX_SINGLE_TRADE_RISK_RATE = 0.03;
+export const MIN_SINGLE_TRADE_RISK_RATE = 0.005;
+export const MAX_SINGLE_TRADE_RISK_RATE = 0.01;
 export const MAX_NOTIONAL_TO_EQUITY = 4;
-export const MIN_NET_TARGET_RETURN_ON_EQUITY = 0.015;
+export const MIN_NET_TARGET_RETURN_ON_EQUITY = 0.002;
 export const DYNAMIC_EXIT_CONFIRMATIONS = 3;
 export const PLAN_SOFT_INVALIDATION_CONFIRMATIONS = 2;
 export const MIN_SOFT_EXIT_HOLD_MS = 2 * 60_000;
@@ -451,7 +451,7 @@ export function sizePaperPosition(input: {
   const availablePortfolioRisk = Math.max(0, input.equity * PORTFOLIO_RISK_CAP - input.openRisk);
   const availableCorrelatedRisk = Math.max(0, input.equity * CORRELATED_DIRECTION_RISK_CAP - (input.sameDirectionRisk ?? 0));
   const availableRisk = Math.min(availablePortfolioRisk, availableCorrelatedRisk);
-  const desiredRiskRate = clamp(MIN_SINGLE_TRADE_RISK_RATE + input.confidence * 0.015, MIN_SINGLE_TRADE_RISK_RATE, MAX_SINGLE_TRADE_RISK_RATE);
+  const desiredRiskRate = clamp(MIN_SINGLE_TRADE_RISK_RATE + input.confidence * 0.005, MIN_SINGLE_TRADE_RISK_RATE, MAX_SINGLE_TRADE_RISK_RATE);
   const desiredLoss = Math.min(availableRisk, input.equity * desiredRiskRate);
   const structuralMove = Math.abs(input.entry - input.invalidation) / Math.max(input.entry, 1e-9);
   const friction = (input.feeBps + input.stressSlippageBps) / 10_000;
@@ -554,6 +554,16 @@ export function updatePosition(position: PaperPosition, input: {
     const initialRisk = Math.max(Math.abs(observed.entryPrice - observed.initialStop), observed.entryPrice * 0.0001);
     const tightened = Math.abs(observed.currentStop - observed.initialStop) > initialRisk * 0.001;
     return close(tightened ? "DYNAMIC_PROTECTION_STOP" : "STRUCTURAL_STOP");
+  }
+  if (observed.targetIdentity?.startsWith("EVENT_TARGET:")) {
+    const age = input.now - observed.entryAt;
+    const initialRisk = Math.max(Math.abs(observed.entryPrice - observed.initialStop), observed.entryPrice * 0.0001);
+    const favorable = observed.side === "LONG"
+      ? (observed.maxFavorablePrice ?? input.price) - observed.entryPrice
+      : observed.entryPrice - (observed.maxFavorablePrice ?? input.price);
+    const currentMove = observed.side === "LONG" ? input.price - observed.entryPrice : observed.entryPrice - input.price;
+    if (age >= 20 * 60_000) return close("EVENT_MAX_HOLD_EXIT");
+    if (age >= 10 * 60_000 && favorable < initialRisk * 0.35 && currentMove < initialRisk * 0.15) return close("EVENT_STALLED_EXIT");
   }
 
   const arrived = observed.side === "LONG" ? input.price >= observed.currentTarget : input.price <= observed.currentTarget;

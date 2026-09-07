@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchStructureCandles } from "../lib/gate-market.ts";
+import { fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchMarketTickers, fetchStructureCandles } from "../lib/gate-market.ts";
 
 const withFetch = async (body: unknown, run: () => Promise<void>) => {
   const prior = globalThis.fetch;
@@ -29,22 +29,28 @@ test("Gate candle objects exclude unfinished rows, deduplicate, and retain only 
   });
 });
 
-test("active universe is permanently limited to BTC, ETH, and SOL futures", async () => {
+test("active universe exposes every liquid trading USDT future to the radar", async () => {
   const prior = globalThis.fetch;
   globalThis.fetch = async (input) => {
     const url = String(input);
     if (url.endsWith("/futures/usdt/tickers")) return Response.json([
-      { contract: "ZEC_USDT", volume_24h_settle: "999999999" },
-      { contract: "SOL_USDT", funding_rate: "0.0001" },
-      { contract: "BTC_USDT", funding_rate: "0.0002" },
-      { contract: "ETH_USDT", funding_rate: "0.0003" },
-      { contract: "BNB_USDT", volume_24h_settle: "888888888" },
+      { contract: "ZEC_USDT", last: "10", volume_24h_settle: "999999999" },
+      { contract: "SOL_USDT", last: "100", volume_24h_settle: "500000000", funding_rate: "0.0001" },
+      { contract: "BTC_USDT", last: "80000", volume_24h_settle: "800000000", funding_rate: "0.0002" },
+      { contract: "ETH_USDT", last: "2500", volume_24h_settle: "600000000", funding_rate: "0.0003" },
+      { contract: "BNB_USDT", last: "900", volume_24h_settle: "888888888" },
     ]);
     return Response.json(["ZEC_USDT", "SOL_USDT", "BTC_USDT", "ETH_USDT", "BNB_USDT"].map((name) => ({ name, status: "trading", order_price_round: "0.1", quanto_multiplier: "0.01", maintenance_rate: "0.005" })));
   };
   try {
-    assert.deepEqual((await fetchActiveContracts()).map((item) => item.symbol), ["BTC_USDT", "ETH_USDT", "SOL_USDT"]);
+    assert.deepEqual((await fetchActiveContracts()).map((item) => item.symbol), ["ZEC_USDT", "BNB_USDT", "BTC_USDT", "ETH_USDT", "SOL_USDT"]);
   } finally { globalThis.fetch = prior; }
+});
+
+test("one bulk ticker request returns the complete low-cost radar surface", async () => {
+  await withFetch([{ contract: "X_USDT", last: "2", volume_24h_usd: "3000000", total_size: "55", funding_rate: "0.001" }], async () => {
+    assert.deepEqual(await fetchMarketTickers(), [{ symbol: "X_USDT", last: 2, volume24hUsd: 3_000_000, fundingRate: 0.001, openInterest: 55 }]);
+  });
 });
 
 test("Gate stats use contract_stats and liquidations retain signed order_size", async () => {

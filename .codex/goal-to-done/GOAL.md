@@ -1,5 +1,9 @@
 # Goal
 
+## Active upgrade — 2026-09-07 all-market anomaly scalper
+
+Replace fixed BTC/ETH/SOL structural opportunity discovery with one ten-second bulk scan of every eligible Gate USDT perpetual, then promote only the strongest event candidates into the existing bounded two-second realtime pool. PAPER and LIVE must share current-price IOC entry, actual-fill sizing, hard-stop protection and idempotent recovery. Do not impose a daily order-count limit or daily loss stop in this version. Use 1,000 U PAPER equity and display +150 U as a New-York-day aspirational goal that never weakens admission economics. Size each trade at 0.5%–1% planned risk, retain 10% aggregate/6.5% correlated risk, 30% margin and 4× notional hard limits, require at least 1.2 net reward/risk after friction, and keep the prior credential, LIVE safety, reset, history, bankruptcy, PnL/chart and recovery work. Redesign the operator surface around a simple market radar while preserving owner-only LIVE controls and review detail.
+
 ## Completed upgrade — 2026-09-07 PAPER controls and health-state separation
 
 Stop an optional D1 history-mirror retry from making a healthy trading authority appear permanently “recovering.” Trading health is determined only by the live Durable Object authority, transport freshness, and fresh/recovered evidence for all three markets; mirror delay remains a visible non-blocking warning. Add owner-only, same-origin, explicitly confirmed controls to reset PAPER to a new 1,000 U cycle and clear completed PAPER history. Reset may close PAPER exposure only from fresh evidence and must preserve its audit history; history clearing preserves current equity, open PAPER exposure and its entry review, and every Gate LIVE field. Neither operation may send a Gate request or change the LIVE switch.

@@ -21,8 +21,9 @@ test("runtime uses bounded futures REST snapshots, no continuous WebSocket", asy
   assert.match(worker, /plannedDoWritesPerDay: 54_080/);
   assert.match(worker, /NON_ALARM_WRITE_CAP = 8_000/);
   assert.match(worker, /plannedMaxD1BilledWritesPerDay: 4_800/);
-  assert.match(worker, /DEFAULT_SYMBOLS = \["BTC_USDT", "ETH_USDT", "SOL_USDT"\]/);
-  assert.doesNotMatch(worker, /ZEC_USDT|BNB_USDT/);
+  assert.match(worker, /RADAR_MS = 10_000/);
+  assert.match(worker, /await fetchMarketTickers\(\)/);
+  assert.match(worker, /radar\.candidates/);
   assert.match(worker, /maxSubrequestsPerAlarm: 32/);
   assert.match(worker, /now - this\.runtime\.lastStopCheckpointAt < 60_000/);
 });
@@ -120,7 +121,7 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(page, /软失效观察/);
   assert.match(page, /AbortController/);
   assert.match(page, /document\.hidden/);
-  assert.match(page, /系统现在的决定/);
+  assert.match(page, /全市场资金雷达/);
   assert.match(page, /模拟账户权益/);
   assert.match(page, /\{tab === "brain" && <>\s*<section className="brain-hero">/);
   assert.ok(page.indexOf('{tab === "brain" && <>') < page.indexOf('模拟账户权益'));
@@ -186,7 +187,7 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.doesNotMatch(layout, /requireChatGPTUser|redirect|signin-with-chatgpt/);
   assert.equal(await read("app/chatgpt-auth.ts").then(() => false, () => true), true);
   assert.equal(await read("lib/auth-paths.ts").then(() => false, () => true), true);
-  assert.equal((workflow.match(/grep -Fq '流动性三态'/g) ?? []).length, 2);
+  assert.equal((workflow.match(/grep -Fq '资金异动雷达'/g) ?? []).length, 2);
   assert.equal((workflow.match(/WORKER_BASE_URL\/api\/history/g) ?? []).length, 2);
   assert.equal((workflow.match(/WORKER_BASE_URL\/api\/account-logs/g) ?? []).length, 2);
   assert.equal((workflow.match(/WORKER_BASE_URL\/api\/candles\?symbol=BTC_USDT&interval=15m/g) ?? []).length, 2);
@@ -226,14 +227,14 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
 
 test("PAPER and LIVE share bounded sizing and meaningful net-profit economics", async () => {
   const [core, live] = await Promise.all([read("lib/liquidity-core.ts"), read("lib/gate-live.ts")]);
-  assert.match(core, /MIN_SINGLE_TRADE_RISK_RATE = 0\.015/);
-  assert.match(core, /MAX_SINGLE_TRADE_RISK_RATE = 0\.03/);
+  assert.match(core, /MIN_SINGLE_TRADE_RISK_RATE = 0\.005/);
+  assert.match(core, /MAX_SINGLE_TRADE_RISK_RATE = 0\.01/);
   assert.match(core, /PORTFOLIO_RISK_CAP = 0\.10/);
   assert.match(core, /CORRELATED_DIRECTION_RISK_CAP = 0\.065/);
   assert.match(core, /DYNAMIC_PROTECTION_MIN_CONFIRMED_R = 1\.5/);
   assert.match(core, /DYNAMIC_PROTECTION_MIN_TARGET_PROGRESS = 0\.70/);
   assert.match(core, /MAX_NOTIONAL_TO_EQUITY = 4/);
-  assert.match(core, /MIN_NET_TARGET_RETURN_ON_EQUITY = 0\.015/);
+  assert.match(core, /MIN_NET_TARGET_RETURN_ON_EQUITY = 0\.002/);
   assert.match(core, /Math\.min\(riskSizedNotional, input\.equity \* MAX_NOTIONAL_TO_EQUITY\)/);
   assert.match(live, /sizePaperPosition\(/);
   assert.match(live, /tradeEconomics\(/);

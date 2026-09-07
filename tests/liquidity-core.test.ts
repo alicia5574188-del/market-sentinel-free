@@ -668,13 +668,13 @@ test("position sizing never breaches ten percent portfolio or correlated-directi
   assert.equal(correlated.allowedLoss, 5);
 });
 
-test("single-entry risk is capped at 3% and notional is capped at four times equity", () => {
+test("single-entry risk is capped at 1% and notional is capped at four times equity", () => {
   const single = sizePaperPosition({ equity: 1_000, entry: 100, invalidation: 98, feeBps: 10, stressSlippageBps: 8, confidence: 1, openRisk: 0 });
-  assert.ok(Math.abs(single.allowedLoss - 30) < 1e-9);
+  assert.ok(Math.abs(single.allowedLoss - 10) < 1e-9);
   assert.ok(single.notional <= 4_000);
   assert.ok(single.notional * 0.0018 <= 7.2);
   const next = sizePaperPosition({ equity: 1_000, entry: 100, invalidation: 98, feeBps: 10, stressSlippageBps: 8, confidence: 1, openRisk: single.allowedLoss });
-  assert.ok(Math.abs(next.allowedLoss - 30) < 1e-9);
+  assert.ok(Math.abs(next.allowedLoss - 10) < 1e-9);
   assert.ok(single.portfolioRiskAfter <= 100 && next.portfolioRiskAfter <= 100);
 });
 
@@ -961,7 +961,7 @@ test("an economically untradeable target is rejected before it reaches the order
   assert.ok(result.events.includes("PLAN_REJECTED_ECONOMICS"));
 });
 
-test("a farther node cannot subsidize an uneconomical first-node breakout", () => {
+test("a farther node cannot subsidize an uneconomical short-term target", () => {
   const decision = { symbol: "SOL_USDT", observedAt: 1, marketState: "BREAKOUT" as const, side: "LONG" as const,
     entryTrigger: 100, invalidation: 99.8, target: 100.6, nextTarget: 101,
     targetIdentity: "STOP:15m:LONG:100.6", score: 9, oppositeScore: 1, reason: [],
@@ -1046,7 +1046,7 @@ test("trade economics require at least 1.2R after round-trip costs", () => {
 });
 
 test("a mathematically acceptable R multiple is still rejected when its net profit is immaterial", () => {
-  const result = tradeEconomics({ entry: 100, target: 100.6, lossRate: 0.003, confidence: 0.8, notional: 1_000, equity: 1_000 });
+  const result = tradeEconomics({ entry: 100, target: 100.6, lossRate: 0.003, confidence: 0.8, notional: 300, equity: 1_000 });
   assert.ok(result.netRewardRisk >= MIN_NET_REWARD_RISK);
   assert.ok(result.netTargetProfit < result.minimumNetTargetProfit);
   assert.equal(result.executable, false);

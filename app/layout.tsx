@@ -4,9 +4,9 @@ import "./globals.css";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "流动性三态 · PAPER",
+  title: "资金异动雷达 · PAPER",
   description: "基于期货流动性目标、估计清算梯度与突破/反转/震荡三态的模拟交易系统",
-  applicationName: "流动性三态",
+  applicationName: "资金异动雷达",
   manifest: "/manifest.webmanifest",
 };
 

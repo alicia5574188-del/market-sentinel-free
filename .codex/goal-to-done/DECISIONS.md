@@ -1,5 +1,9 @@
 # Decisions
 
+- 2026-09-07: The +150 U daily number is an aspirational display target, not an execution gate. There is no daily order cap and no daily loss halt in this version; per-entry/portfolio/margin/economic hard limits remain authoritative.
+- 2026-09-07: Scan all eligible Gate USDT perpetuals with one bulk ticker request every ten seconds. Never fetch per-symbol detail across the full universe; only three priority symbols receive two-second books and rotating detail.
+- 2026-09-07: Retire the fixed three-coin liquidity-route decision as the new-entry authority. Retain its proven execution, protection, persistence, chart, owner security and reconciliation infrastructure.
+
 ## 2026-09-07 — Trading health and PAPER maintenance are separate authorities
 
 - `runtime.lastError` may contain a retryable D1 mirror warning while the Durable Object is LIVE and every market feed is fresh. That warning remains visible but cannot make the trading status or health endpoint report recovery.

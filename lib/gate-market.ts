@@ -68,6 +68,9 @@ export type GateTicker = {
   volume_24h_usd?: string;
   volume_24h_settle?: string;
   funding_rate?: string;
+  mark_price?: string;
+  index_price?: string;
+  total_size?: string;
 };
 
 export type GateContract = {
@@ -88,10 +91,9 @@ export async function fetchActiveContracts() {
   const available = new Map(contracts
     .filter((contract) => !contract.in_delisting && (!contract.status || contract.status === "trading"))
     .map((contract) => [contract.name ?? "", Number(contract.order_price_round ?? 0.0001)]));
-  const tracked = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];
   return rows
-    .filter((row) => tracked.includes(row.contract ?? "") && available.has(row.contract ?? ""))
-    .sort((a, b) => tracked.indexOf(a.contract ?? "") - tracked.indexOf(b.contract ?? ""))
+    .filter((row) => available.has(row.contract ?? "") && Number(row.last ?? 0) > 0)
+    .sort((a, b) => Number(b.volume_24h_usd ?? b.volume_24h_settle ?? 0) - Number(a.volume_24h_usd ?? a.volume_24h_settle ?? 0))
     .map((row) => {
       const contract = contracts.find((item) => item.name === row.contract);
       return {
@@ -101,8 +103,21 @@ export async function fetchActiveContracts() {
         maintenanceRate: Number(contract?.maintenance_rate ?? 0.005),
         leverageMax: Number(contract?.leverage_max ?? 50),
         fundingRate: Number(row.funding_rate ?? 0),
+        last: Number(row.last ?? 0),
+        volume24hUsd: Number(row.volume_24h_usd ?? row.volume_24h_settle ?? 0),
       };
     });
+}
+
+export async function fetchMarketTickers() {
+  const rows = await gatePublic<GateTicker[]>("/futures/usdt/tickers");
+  return rows.map((row) => ({
+    symbol: row.contract ?? "",
+    last: Number(row.last ?? 0),
+    volume24hUsd: Number(row.volume_24h_usd ?? row.volume_24h_settle ?? 0),
+    fundingRate: Number(row.funding_rate ?? 0),
+    openInterest: Math.abs(Number(row.total_size ?? 0)),
+  })).filter((row) => row.symbol.endsWith("_USDT") && row.last > 0 && row.volume24hUsd > 0);
 }
 
 export async function fetchTicker(symbol: string) {

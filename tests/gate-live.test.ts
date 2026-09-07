@@ -36,7 +36,7 @@ test("confirmed retest and failed-break entries both use realtime IOC", () => {
   assert.equal(failed.body.tif, "ioc");
 });
 
-test("LIVE ignores a legacy farther economic target and requires the actual first node", () => {
+test("LIVE ignores a legacy farther target and rejects an uneconomic short-term target", () => {
   const staged = { ...plan("BREAKOUT", "LONG"), invalidation: 99.8, target: 100.6, nextTarget: 101,
     routeKind: "LOCAL_BREAKOUT" as const, confirmationScore: 0.9, fakeoutRisk: 0.1, economicTarget: 101 };
   assert.throws(() => buildLiveEntryIntent({ plan: staged, entryPrice: 100, equity: 1_000, available: 1_000,
