@@ -381,7 +381,11 @@ export function analyzeSnapshot(memory: SymbolMemory, snapshot: BookSnapshot) {
     flow: memory.flow, absorption, timeframeBias: freshBias, minuteNoiseRate: memory.minuteNoiseRate });
   const decision = arbitrateDecision(routes, snapshot.observedAt, fallbackDecision);
   const confirmationBySide = { LONG: routeConfirmation(memory, "LONG"), SHORT: routeConfirmation(memory, "SHORT") };
-  return { midpoint, zones, bands, absorption, decision, routes, range15m: memory.range15m, confirmationBySide };
+  const fakeoutBySide = {
+    LONG: routeFakeoutRisk(memory, "LONG", absorption, confirmationBySide.LONG),
+    SHORT: routeFakeoutRisk(memory, "SHORT", absorption, confirmationBySide.SHORT),
+  };
+  return { midpoint, zones, bands, absorption, decision, routes, range15m: memory.range15m, confirmationBySide, fakeoutBySide };
 }
 
 export function updateOpenInterestCohorts(memory: SymbolMemory, nextOpenInterest: number) {
@@ -514,6 +518,11 @@ function routeConfirmation(memory: SymbolMemory, side: Side) {
   return clamp(0.5 + direction * flowPressure(memory.flow) * 0.34 + aligned, 0, 1);
 }
 
+function routeFakeoutRisk(memory: SymbolMemory, side: Side, absorption: number, confirmationScore = routeConfirmation(memory, side)) {
+  return clamp(absorption * 0.35 + (1 - confirmationScore) * 0.55
+    + (memory.timeframeBias.h1 === (side === "LONG" ? "DOWN" : "UP") ? 0.18 : 0), 0, 1);
+}
+
 export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, observedAt: number, midpoint: number, absorption: number) {
   const range = memory.range15m;
   if (!range || midpoint <= 0 || observedAt - range.observedAt > 45 * 60_000) return [] as LiquidityRoute[];
@@ -639,7 +648,8 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
       activationDistanceRate: input.activationRate, score: input.baseScore * 1.04,
       executableNow: preAcceleration && Math.abs(entryTrigger - midpoint) / midpoint <= input.activationRate
         && input.confirmationScore >= 0.62 && input.fakeoutRisk <= 0.48,
-      structureId: input.band.id, structureRole: input.role,
+      structureId: input.band.id, structureRole: input.role, rangeBoundary: input.boundary,
+      rangeBuffer: input.bandBuffer,
       reason: [`完整1分钟在${input.role === "CHILD" ? "子" : "父"}区间边界外回踩并守住`,
         "不在首次突破后追价，只等待重新越过回踩K线极值", "当前第一目标必须独立满足扣成本经济性"] });
   };
@@ -676,7 +686,7 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
       score: band.quality * 0.35 + reversalConfirmation * 0.4 + absorption * 0.25,
       executableNow: waitingInsideRetest && Math.abs(entryTrigger - midpoint) / midpoint <= activationRate
         && absorption >= 0.55 && reversalConfirmation >= 0.55 && fakeoutRisk <= 0.45,
-      structureId: band.id, structureRole: role,
+      structureId: band.id, structureRole: role, rangeBoundary: boundary, rangeBuffer: bandBuffer,
       reason: [`${role === "CHILD" ? "子区间" : "父区间"}边界外流动性被扫后完整1分钟收回区间`, "反向实体、收盘保持率、吸收与订单流共同确认失败突破",
         "不追已经离开边界的反向行情，等待区间内部反抽原边界", "第一目标为同级结构最近反向流动性"] });
   };
@@ -694,8 +704,7 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
       const childInvalidation = side === "LONG" ? Math.min(childStructuralStop, childEntry - childStopDistance)
         : Math.max(childStructuralStop, childEntry + childStopDistance);
       const confirmationScore = routeConfirmation(memory, side);
-      const fakeoutRisk = clamp(absorption * 0.35 + (1 - confirmationScore) * 0.55
-        + (memory.timeframeBias.h1 === (side === "LONG" ? "DOWN" : "UP") ? 0.18 : 0), 0, 1);
+      const fakeoutRisk = routeFakeoutRisk(memory, side, absorption, confirmationScore);
       const childActivation = Math.max(0.002, Math.min(0.006, child.widthRate * 0.7));
       const preTriggerSide = side === "LONG" ? midpoint < childEntry : midpoint > childEntry;
       const childScore = child.quality * 0.28 + range.quality * 0.25 + confirmationScore * 0.47;
@@ -725,9 +734,12 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
       return distanceRate >= 0.0025 && distanceRate <= maxSegmentDistanceRate;
     });
     const confirmationScore = routeConfirmation(memory, side);
-    const fakeoutRisk = clamp(absorption * 0.35 + (1 - confirmationScore) * 0.55
-      + (memory.timeframeBias.h1 === (side === "LONG" ? "DOWN" : "UP") ? 0.18 : 0), 0, 1);
-    if (first && parentActive) {
+    const fakeoutRisk = routeFakeoutRisk(memory, side, absorption, confirmationScore);
+    const acceptedBreakSide = range.breakState === (side === "LONG" ? "BROKEN_UP" : "BROKEN_DOWN");
+    // An accepted parent break starts an auction; it must not erase the exact
+    // boundary that was crossed. Keep that first segment mapped for the direct,
+    // retest and failed-break branches, while preventing a late chase.
+    if (first && (parentActive || acceptedBreakSide)) {
       const entryTrigger = side === "LONG" ? range.upper + buffer : range.lower - buffer;
       const structuralInvalidation = side === "LONG" ? range.upper - Math.max(buffer * 1.5, width * 0.24)
         : range.lower + Math.max(buffer * 1.5, width * 0.24);
@@ -750,8 +762,9 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
         targetTimeframe: currentTarget.timeframe, nextTarget: next?.zone.price ?? null, confirmationScore, fakeoutRisk,
         activationDistanceRate, score, executableNow: preTriggerSide && Math.abs(entryTrigger - midpoint) / midpoint <= activationDistanceRate
           && confirmationScore >= 0.52 && fakeoutRisk <= 0.62,
-        structureId: range.id, structureRole: "PARENT",
-        reason: ["15分钟父级复合区间边界", "计划只能在首次穿越前建立", "仅A级强势突破允许连续四次两秒盘口直入；普通突破等待回踩，失败突破准备反向",
+        structureId: range.id, structureRole: "PARENT", rangeBoundary: side === "LONG" ? range.upper : range.lower,
+        rangeBuffer: buffer,
+        reason: ["15分钟父级复合区间边界", acceptedBreakSide ? "父区间突破事件已保留，禁止追价并继续等待回踩或失败收回" : "计划只能在首次穿越前建立", "仅A级强势突破允许连续四次两秒盘口直入；普通突破等待回踩，失败突破准备反向",
           nodeBeyondProjection ? "先兑现15分钟局部量度空间" : `${first.timeframe}流动性作为本段终点`,
           "更远高周期节点留给下一段重判", "订单流、微价格与周期方向联合过滤假突破"] });
       pushRetestRoute({ band: range, role: "PARENT", side, boundary: side === "LONG" ? range.upper : range.lower,
@@ -770,13 +783,12 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
           invalidation: continuationInvalidation,
           target: next.zone.price, targetIdentity: next.zone.identity ?? `HTF:${side}:${stablePriceBin(next.zone.price)}`,
           targetTimeframe: next.timeframe, nextTarget: null, confirmationScore, fakeoutRisk,
-          activationDistanceRate, score: score * 0.92, executableNow: atNode && Math.abs(nodeEntry - midpoint) / midpoint <= activationDistanceRate
-            && confirmationScore >= 0.62 && fakeoutRisk <= 0.48,
+          activationDistanceRate, score: score * 0.92, executableNow: false,
           structureId: range.id, structureRole: "PARENT",
           reason: ["到达上一段高周期流动性节点", "仅在节点被吸收且延续强度通过后启动", `${next.timeframe}下一流动性为新目标`] });
       }
     }
-    if (parentActive) pushFailedBreakRoute(range, "PARENT", side,
+    if (parentActive || acceptedBreakSide) pushFailedBreakRoute(range, "PARENT", side,
       side === "LONG" ? range.upper : range.lower, buffer, activationDistanceRate);
     if (parentActive) pushEdgeReclaimRoute(range, "PARENT", side,
       side === "LONG" ? range.upper : range.lower, buffer, activationDistanceRate);
@@ -868,6 +880,7 @@ export function reconcilePaper(input: {
   protectOnly?: boolean;
   activeRoutes?: LiquidityRoute[];
   breakoutConfirmation?: number;
+  breakoutFakeoutRisk?: number;
   maintenanceRate?: number;
   leverageMax?: number;
 }) {
@@ -887,9 +900,18 @@ export function reconcilePaper(input: {
       persistence: 1, source: "STOP_POOL" }) : null;
   };
   const planRouteId = plan?.routeId;
-  const activePlanRoute = !planRouteId ? null : input.activeRoutes?.find((route) => route.id === planRouteId) ?? null;
+  const exactPlanRoute = !planRouteId ? null : input.activeRoutes?.find((route) => route.id === planRouteId) ?? null;
+  // The opposite edge can roll while the boundary relevant to this plan stays
+  // unchanged. Treat the route as the same frozen auction when side, role,
+  // route kind and trigger still match within structural tolerance.
+  const equivalentPlanRoute = !plan || exactPlanRoute ? null : input.activeRoutes?.filter((route) => route.side === plan!.side
+    && route.kind === plan!.routeKind && route.structureRole === plan!.structureRole
+    && Math.abs(route.entryTrigger - plan!.entryTrigger) / Math.max(plan!.entryTrigger, 1e-9) <= 0.0015)
+    .sort((a, b) => Math.abs(a.entryTrigger - plan!.entryTrigger) - Math.abs(b.entryTrigger - plan!.entryTrigger))[0] ?? null;
+  const activePlanRoute = exactPlanRoute ?? equivalentPlanRoute;
   const structureRoutes = plan?.structureId == null ? [] : input.activeRoutes?.filter((route) => route.structureRole === plan!.structureRole) ?? [];
-  const structureStillMapped = plan?.structureId != null && structureRoutes.some((route) => route.structureId === plan!.structureId);
+  const structureStillMapped = plan?.structureId != null && (structureRoutes.some((route) => route.structureId === plan!.structureId)
+    || equivalentPlanRoute != null);
   const structureReplaced = plan?.state === "PREPARED" && plan.structureId != null && !structureStillMapped
     && structureRoutes.some((route) => route.structureId != null && route.structureId !== plan!.structureId);
   const routePresent = !planRouteId || activePlanRoute != null;
@@ -916,11 +938,12 @@ export function reconcilePaper(input: {
   // disappearance and activation drift need two completed 1m confirmations so
   // a transient two-second recomputation cannot cancel an otherwise valid plan.
   if ((!input.fresh || input.sequenceFault || invalidationCrossed || targetPassed || invalidLegacyFallback || structureReplaced) && plan?.state === "PREPARED") {
-    plan = { ...plan, state: "CANCELLED" };
-    cancelledThisCycle = true;
-    events.push(!input.fresh ? "STALE_CANCEL" : input.sequenceFault ? "SEQUENCE_REBUILD_CANCEL"
+    const cancelReason = !input.fresh ? "STALE_CANCEL" : input.sequenceFault ? "SEQUENCE_REBUILD_CANCEL"
       : invalidationCrossed ? "PRE_ENTRY_INVALIDATION_CANCEL" : targetPassed ? "GAP_ECONOMICS_CANCEL"
-        : structureReplaced ? "STRUCTURE_REPLACED_CANCEL" : "NONLOCAL_FALLBACK_CANCEL");
+        : structureReplaced ? "STRUCTURE_REPLACED_CANCEL" : "NONLOCAL_FALLBACK_CANCEL";
+    plan = { ...plan, state: "CANCELLED", cancelReason, cancelledAt: input.now };
+    cancelledThisCycle = true;
+    events.push(cancelReason);
   } else if (plan?.state === "PREPARED") {
     const softReason = !targetPresent ? "TARGET_GONE_CANCEL" as const : routeWeak ? "ROUTE_WEAK_CANCEL" as const
       : movedAway ? "ACTIVATION_LOST_CANCEL" as const : null;
@@ -939,7 +962,7 @@ export function reconcilePaper(input: {
     }
     plan = { ...plan, invalidationSignalMinute, invalidationSignalCount, invalidationSignalReason };
     if (softReason && invalidationSignalCount >= PLAN_SOFT_INVALIDATION_CONFIRMATIONS) {
-      plan = { ...plan, state: "CANCELLED" };
+      plan = { ...plan, state: "CANCELLED", cancelReason: softReason, cancelledAt: input.now };
       cancelledThisCycle = true;
       events.push(softReason);
     }
@@ -947,16 +970,17 @@ export function reconcilePaper(input: {
   if (plan?.state === "PREPARED" && input.fresh && !input.sequenceFault && (input.allowOpen ?? true) === false) {
     plan = observeFastBreakout(plan, { now: input.now, price: input.midpoint,
       confirmation: input.breakoutConfirmation ?? 0,
-      fakeoutRisk: activePlanRoute?.fakeoutRisk ?? plan.fakeoutRisk ?? 1 });
+      fakeoutRisk: input.breakoutFakeoutRisk ?? activePlanRoute?.fakeoutRisk ?? plan.fakeoutRisk ?? 1 });
     if (plan.breakoutFailedAt != null || plan.breakoutMissedAt != null) {
       const missed = plan.breakoutMissedAt != null;
-      plan = { ...plan, state: "CANCELLED" };
+      const cancelReason = missed ? "BREAKOUT_MISSED_CANCEL" : "BREAKOUT_FIRST_CROSS_FAILED_CANCEL";
+      plan = { ...plan, state: "CANCELLED", cancelReason, cancelledAt: input.now };
       cancelledThisCycle = true;
-      events.push(missed ? "BREAKOUT_MISSED_CANCEL" : "BREAKOUT_FIRST_CROSS_FAILED_CANCEL");
+      events.push(cancelReason);
     } else if (plan.marketState === "BREAKOUT" && plan.routeKind !== "BREAKOUT_RETEST"
       && breakoutMinuteAccepted(plan, input.confirmationMinute, input.confirmationCandle)
       && !breakoutEntryConfirmed(plan, input.confirmationMinute, input.confirmationCandle)) {
-      plan = { ...plan, state: "CANCELLED" };
+      plan = { ...plan, state: "CANCELLED", cancelReason: "BREAKOUT_ACCEPTED_WAIT_RETEST", cancelledAt: input.now };
       cancelledThisCycle = true;
       events.push("BREAKOUT_ACCEPTED_WAIT_RETEST");
     }
@@ -980,7 +1004,7 @@ export function reconcilePaper(input: {
     }
   }
   if (plan?.state === "PREPARED" && input.now > plan.expiresAt) {
-    plan = { ...plan, state: "CANCELLED" };
+    plan = { ...plan, state: "CANCELLED", cancelReason: "PLAN_EXPIRED", cancelledAt: input.now };
     expiredThisCycle = true;
     events.push("PLAN_EXPIRED");
   }
@@ -1036,8 +1060,9 @@ export function reconcilePaper(input: {
     const economics = tradeEconomics({ entry: input.midpoint, target: stagedEconomicTarget(plan), lossRate: resized.lossRate, confidence,
       notional: resized.notional, equity: input.equity });
     if (invalidFill || resized.allowedLoss <= 0 || resized.portfolioRiskAfter > input.equity * PORTFOLIO_RISK_CAP + 1e-9 || passedTarget || !economics.executable) {
-      plan = { ...plan, state: "CANCELLED" };
-      events.push(invalidFill || resized.portfolioRiskAfter > input.equity * PORTFOLIO_RISK_CAP + 1e-9 ? "GAP_RISK_CANCEL" : "GAP_ECONOMICS_CANCEL");
+      const cancelReason = invalidFill || resized.portfolioRiskAfter > input.equity * PORTFOLIO_RISK_CAP + 1e-9 ? "GAP_RISK_CANCEL" : "GAP_ECONOMICS_CANCEL";
+      plan = { ...plan, state: "CANCELLED", cancelReason, cancelledAt: input.now };
+      events.push(cancelReason);
       return { plan, position, events };
     }
     plan = { ...plan, state: "TRIGGERED" };
