@@ -625,7 +625,7 @@ test("a capacity-limited plan is skipped without blocking LIVE or other affordab
   assert.match(stream.runtime.live.entrySkips.ETH_USDT.reason, /本轮未挂单/);
 });
 
-test("LIVE submits a three-snapshot-confirmed breakout as current-price IOC without waiting a minute", async () => {
+test("LIVE waits through three snapshots and submits only a four-snapshot exceptional breakout", async () => {
   const { stream } = await makeStream();
   stream.runtime.symbols = ["BTC_USDT"];
   stream.runtime.plans = { BTC_USDT: plan("BTC_USDT") };
@@ -652,6 +652,10 @@ test("LIVE submits a three-snapshot-confirmed breakout as current-price IOC with
   stream.runtime.evidence.BTC_USDT = { midpoint: 101.2, observedAt: triggeredAt, warmup: 30, fresh: true,
     ancillaryFresh: true, topLong: null, topShort: null, absorption: 0 };
   await stream.syncLive(triggeredAt + 1);
+  assert.equal(createCalls, 0);
+
+  stream.runtime.plans.BTC_USDT = { ...stream.runtime.plans.BTC_USDT, breakoutSignalCount: 4 };
+  await stream.syncLive(triggeredAt + 2);
   assert.equal(createCalls, 1);
   assert.equal(stream.runtime.live.entries.BTC_USDT.kind, "MARKET");
 });

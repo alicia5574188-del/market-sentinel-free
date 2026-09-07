@@ -78,7 +78,6 @@ test("15m balance creates two-sided local routes and a gated next-node leg", () 
   assert.equal(next?.executableNow, false);
   assert.equal(next?.target, 101.2);
   assert.equal(selectRouteDecision(routes, observedAt)?.routeId, first?.id);
-  assert.ok(routes.some((route) => route.kind === "EDGE_REJECTION"));
 });
 
 test("a nested 15m child range is an internal rotation toward the parent boundary", () => {
@@ -112,6 +111,49 @@ test("a nested 15m child range is an internal rotation toward the parent boundar
   assert.ok(internal.reason.some((reason) => reason.includes("不是父级突破")));
 });
 
+test("an accepted parent break must retest and reaccelerate before a continuation entry", () => {
+  const memory = emptySymbolMemory();
+  memory.range15m = { lower: 99, upper: 100, midpoint: 99.5, widthRate: 1 / 99.5,
+    touchesLower: 3, touchesUpper: 3, quality: 0.9, observedAt: 60_000,
+    id: "PARENT:99:100", role: "PARENT", breakState: "INSIDE" };
+  memory.lastCompletedMinuteCandle = { time: 0, open: 100.12, high: 100.35, low: 100.03, close: 100.28 };
+  memory.flow = flow({ ofi: 0.45, takerDelta: 0.4, micropriceDisplacementBps: 2 });
+  memory.timeframeBias = { m1: "UP", m15: "UP", h1: "UP", h4: "NEUTRAL" };
+  memory.structureByTimeframe.h4 = [zone("LONG", 101.2), zone("SHORT", 98.7)];
+  const routes = buildLiquidityRoutes(memory, "BTC_USDT", 60_001, 100.3, 0.1);
+  const retest = routes.find((route) => route.kind === "BREAKOUT_RETEST");
+  assert.ok(retest);
+  assert.equal(retest.side, "LONG");
+  assert.equal(retest.structureRole, "PARENT");
+  assert.ok(retest.entryTrigger > memory.lastCompletedMinuteCandle.high);
+  assert.ok(retest.invalidation < memory.lastCompletedMinuteCandle.low);
+  assert.equal(retest.executableNow, true);
+});
+
+test("a completed child sweep-and-reclaim prepares the opposite-side liquidity route", () => {
+  const memory = emptySymbolMemory();
+  memory.range15m = { lower: 98, upper: 102, midpoint: 100, widthRate: 0.04,
+    touchesLower: 3, touchesUpper: 3, quality: 0.9, observedAt: 60_000,
+    id: "PARENT:98:102", role: "PARENT", breakState: "INSIDE",
+    child: { lower: 99, upper: 100, midpoint: 99.5, widthRate: 1 / 99.5,
+      touchesLower: 3, touchesUpper: 3, quality: 0.85, observedAt: 60_000,
+      id: "CHILD:99:100", role: "CHILD", breakState: "INSIDE" } };
+  memory.lastCompletedMinuteCandle = { time: 0, open: 99.95, high: 100.2, low: 99.6, close: 99.7 };
+  memory.flow = flow({ ofi: -0.6, takerDelta: -0.55, micropriceDisplacementBps: -2 });
+  memory.timeframeBias = { m1: "DOWN", m15: "DOWN", h1: "NEUTRAL", h4: "NEUTRAL" };
+  memory.structureByTimeframe.m15 = [zone("SHORT", 99.3)];
+  const routes = buildLiquidityRoutes(memory, "BTC_USDT", 60_001, 99.7, 0.6);
+  const reversal = routes.find((route) => route.kind === "FAILED_BREAKOUT_REVERSAL" && route.structureRole === "CHILD");
+  assert.ok(reversal);
+  assert.equal(reversal.side, "SHORT");
+  assert.ok(reversal.entryTrigger < 100 && reversal.entryTrigger > 99.7);
+  assert.ok(reversal.invalidation > memory.lastCompletedMinuteCandle.high);
+  assert.equal(reversal.target, 99.3);
+  assert.equal(reversal.nextTarget, 99);
+  assert.equal(reversal.executableNow, true);
+  assert.equal(selectRouteDecision(routes, 60_001)?.marketState, "REVERSAL");
+});
+
 test("two completed closes consume the SOL-style child boundary without consuming its parent", () => {
   const rows = Array.from({ length: 38 }, (_, index) => ({ time: index * 900, open: 106,
     close: 106.1, high: 106.6, low: 105.7, volume: 10 }));
@@ -134,7 +176,7 @@ test("two completed closes consume the SOL-style child boundary without consumin
   assert.ok(routes.some((route) => route.kind === "LOCAL_BREAKOUT" && route.structureRole === "PARENT"));
 });
 
-test("completed one-minute noise sets a stop floor and edge rejection waits for a sweep-and-reclaim close", () => {
+test("completed one-minute noise sets a stop floor and failed breakout waits for a sweep-and-reclaim close", () => {
   const memory = emptySymbolMemory();
   memory.range15m = { lower: 99, upper: 101, midpoint: 100, widthRate: 0.02,
     touchesLower: 4, touchesUpper: 4, quality: 0.9, observedAt: 10_000 };
@@ -142,14 +184,15 @@ test("completed one-minute noise sets a stop floor and edge rejection waits for 
   memory.flow = flow({ ofi: 0.6, takerDelta: 0.8, micropriceDisplacementBps: 2 });
   memory.timeframeBias = { m1: "UP", m15: "NEUTRAL", h1: "NEUTRAL", h4: "NEUTRAL" };
   let routes = buildLiquidityRoutes(memory, "SOL_USDT", 10_001, 99.05, 0.9);
-  let lowerLong = routes.find((route) => route.kind === "EDGE_REJECTION" && route.side === "LONG")!;
-  assert.equal(lowerLong.executableNow, false);
+  let lowerLong = routes.find((route) => route.kind === "FAILED_BREAKOUT_REVERSAL" && route.side === "LONG");
+  assert.equal(lowerLong, undefined);
   memory.lastCompletedMinuteCandle = { time: 0, open: 98.98, high: 99.2, low: 98.9, close: 99.12 };
   routes = buildLiquidityRoutes(memory, "SOL_USDT", 10_001, 99.05, 0.9);
-  lowerLong = routes.find((route) => route.kind === "EDGE_REJECTION" && route.side === "LONG")!;
-  assert.equal(lowerLong.executableNow, true);
+  lowerLong = routes.find((route) => route.kind === "FAILED_BREAKOUT_REVERSAL" && route.side === "LONG");
+  assert.equal(lowerLong?.executableNow, true);
+  assert.ok(lowerLong);
   assert.ok((lowerLong.entryTrigger - lowerLong.invalidation) / lowerLong.entryTrigger >= 0.0022 - 1e-9);
-  assert.ok(lowerLong.target <= 100.7 && lowerLong.target >= 100);
+  assert.equal(lowerLong.target, 101);
 });
 
 test("the robust one-minute noise estimate ignores tiny bars and caps a volatility spike", () => {
@@ -201,7 +244,7 @@ test("an existing nonlocal fallback plan is cancelled immediately", () => {
   assert.deepEqual(result.events, ["NONLOCAL_FALLBACK_CANCEL"]);
 });
 
-test("a frozen local breakout waits for a completed close but ignores a transient trigger-time score", () => {
+test("an ordinary accepted break hands off to retest instead of entering on the completed close", () => {
   const memory = emptySymbolMemory();
   memory.range15m = { lower: 99, upper: 100, midpoint: 99.5, widthRate: 1 / 99.5,
     touchesLower: 3, touchesUpper: 3, quality: 0.9, observedAt: 10_000 };
@@ -226,12 +269,18 @@ test("a frozen local breakout waits for a completed close but ignores a transien
     breakoutConfirmation: 0.3, absorption: 0.1, equity: 1_000, openRisk: 0, allowOpen: true,
     confirmationMinute: 60_000, confirmationPrice: trigger + 0.3,
     confirmationCandle: { time: 0, open: trigger - 0.1, high: trigger + 0.4, low: trigger - 0.2, close: trigger + 0.3 } });
-  assert.equal(crossed.plan?.state, "TRIGGERED");
-  assert.equal(crossed.position?.status, "OPEN");
-  assert.ok(crossed.events.includes("PAPER_OPEN"));
+  assert.equal(crossed.plan?.state, "PREPARED");
+  assert.equal(crossed.position, null);
+  const handoff = reconcilePaper({ now: 60_002, midpoint: trigger + 0.02, fresh: true,
+    sequenceFault: false, decision, plan: crossed.plan, position: null, zones: [], activeRoutes: routes,
+    breakoutConfirmation: 0.3, absorption: 0.1, equity: 1_000, openRisk: 0, allowOpen: false,
+    confirmationMinute: 60_000, confirmationPrice: trigger + 0.3,
+    confirmationCandle: { time: 0, open: trigger - 0.1, high: trigger + 0.4, low: trigger - 0.2, close: trigger + 0.3 } });
+  assert.equal(handoff.plan?.state, "CANCELLED");
+  assert.ok(handoff.events.includes("BREAKOUT_ACCEPTED_WAIT_RETEST"));
 });
 
-test("the observed BTC wick below its trigger is rejected until a bearish minute closes outside", () => {
+test("the observed BTC wick is rejected and an ordinary accepted minute waits for a distinct retest", () => {
   const plan: PaperPlan = { id: "btc-fake-break", symbol: "BTC_USDT", observedAt: 1788707798059,
     marketState: "BREAKOUT", side: "SHORT", entryTrigger: 79_526.05, invalidation: 79_675.72591,
     target: 79_015.295325, targetIdentity: "BOOK:SHORT:79015.295325", score: 20, oppositeScore: 1,
@@ -251,10 +300,17 @@ test("the observed BTC wick below its trigger is rejected until a bearish minute
     equity: 820, openRisk: 0, allowOpen: true, confirmationMinute: 1788708000000,
     confirmationPrice: 79_500,
     confirmationCandle: { time: 1788707940, open: 79_550, high: 79_560, low: 79_490, close: 79_500 } });
-  assert.equal(confirmed.position?.status, "OPEN");
+  assert.equal(confirmed.position, null);
+  const handoff = reconcilePaper({ now: 1788708000002, midpoint: 79_520, fresh: true, sequenceFault: false,
+    decision: null, plan: confirmed.plan, position: null, zones: [target, zone("LONG", 80_000)], absorption: 0.1,
+    equity: 820, openRisk: 0, allowOpen: false, confirmationMinute: 1788708000000,
+    confirmationPrice: 79_500,
+    confirmationCandle: { time: 1788707940, open: 79_550, high: 79_560, low: 79_490, close: 79_500 } });
+  assert.equal(handoff.plan?.state, "CANCELLED");
+  assert.ok(handoff.events.includes("BREAKOUT_ACCEPTED_WAIT_RETEST"));
 });
 
-test("a high-quality breakout opens after three consecutive two-second confirmations without waiting a minute", () => {
+test("only an exceptional breakout opens after four consecutive two-second confirmations", () => {
   const plan: PaperPlan = { id: "fast-breakout", symbol: "SOL_USDT", observedAt: 1,
     marketState: "BREAKOUT", side: "LONG", entryTrigger: 101, invalidation: 99,
     target: 110, targetIdentity: "BOOK:LONG:110", score: 9, oppositeScore: 1,
@@ -262,21 +318,34 @@ test("a high-quality breakout opens after three consecutive two-second confirmat
     expiresAt: PLAN_TTL_MS + 1, plannedRisk: 10, notional: 1_000 };
   const target = zone("LONG", 110); target.identity = plan.targetIdentity;
   let observed = plan;
-  for (const now of [2_001, 4_001, 6_001]) {
+  for (const now of [2_001, 4_001, 6_001, 8_001]) {
     const result = reconcilePaper({ now, midpoint: 101.25, fresh: true, sequenceFault: false,
       decision: null, plan: observed, position: null, zones: [target, zone("SHORT", 95)], absorption: 0.1,
       breakoutConfirmation: 0.9, equity: 1_000, openRisk: 0, allowOpen: false });
     observed = result.plan!;
     assert.equal(result.position, null);
   }
-  assert.equal(observed.breakoutSignalCount, 3);
-  const opened = reconcilePaper({ now: 6_001, midpoint: 101.25, fresh: true, sequenceFault: false,
+  assert.equal(observed.breakoutSignalCount, 4);
+  const opened = reconcilePaper({ now: 8_001, midpoint: 101.25, fresh: true, sequenceFault: false,
     decision: null, plan: observed, position: null, zones: [target, zone("SHORT", 95)], absorption: 0.1,
     breakoutConfirmation: 0.9, equity: 1_000, openRisk: 0, allowOpen: true });
   assert.equal(opened.position?.status, "OPEN");
 });
 
-test("a confirmed breakout waits for a retest instead of chasing beyond half an R", () => {
+test("near-threshold flow cannot accumulate direct-breakout confirmation", () => {
+  const plan: PaperPlan = { id: "not-exceptional", symbol: "SOL_USDT", observedAt: 1,
+    marketState: "BREAKOUT", side: "LONG", entryTrigger: 101, invalidation: 99,
+    target: 110, targetIdentity: "BOOK:LONG:110", score: 9, oppositeScore: 1,
+    confirmationScore: 0.85, fakeoutRisk: 0.19, reason: [], state: "PREPARED", createdAt: 1,
+    expiresAt: PLAN_TTL_MS + 1, plannedRisk: 10, notional: 1_000 };
+  const result = reconcilePaper({ now: 2_001, midpoint: 101.25, fresh: true, sequenceFault: false,
+    decision: null, plan, position: null, zones: [zone("LONG", 110), zone("SHORT", 95)], absorption: 0.1,
+    breakoutConfirmation: 0.85, equity: 1_000, openRisk: 0, allowOpen: false });
+  assert.equal(result.plan?.breakoutSignalCount ?? 0, 0);
+  assert.equal(result.position, null);
+});
+
+test("an overextended direct breakout is abandoned so only a distinct retest route may revive it", () => {
   const plan: PaperPlan = { id: "no-chase", symbol: "BTC_USDT", observedAt: 1, marketState: "BREAKOUT",
     side: "LONG", entryTrigger: 101, invalidation: 99, target: 110, targetIdentity: "BOOK:LONG:110",
     score: 20, oppositeScore: 1, reason: [], state: "PREPARED", createdAt: 1, expiresAt: PLAN_TTL_MS + 1,
@@ -285,13 +354,10 @@ test("a confirmed breakout waits for a retest instead of chasing beyond half an 
     confirmationCandle: { time: 0, open: 100.5, high: 101.8, low: 100.4, close: 101.6 } };
   const extended = reconcilePaper({ now: 60_001, midpoint: 102.2, fresh: true, sequenceFault: false,
     decision: null, plan, position: null, zones: [zone("LONG", 110), zone("SHORT", 95)], absorption: 0.1,
-    equity: 1_000, openRisk: 0, allowOpen: true, ...evidence });
-  assert.equal(extended.plan?.state, "PREPARED");
+    equity: 1_000, openRisk: 0, allowOpen: false, ...evidence });
+  assert.equal(extended.plan?.state, "CANCELLED");
   assert.equal(extended.position, null);
-  const retest = reconcilePaper({ now: 62_001, midpoint: 101.8, fresh: true, sequenceFault: false,
-    decision: null, plan: extended.plan, position: null, zones: [zone("LONG", 110), zone("SHORT", 95)], absorption: 0.1,
-    equity: 1_000, openRisk: 0, allowOpen: true, ...evidence });
-  assert.equal(retest.position?.status, "OPEN");
+  assert.ok(extended.events.includes("BREAKOUT_MISSED_CANCEL"));
 });
 
 test("a prepared route needs two completed minutes below its hysteresis floor before cancellation", () => {
@@ -560,10 +626,11 @@ test("a prepared plan survives neutral ticks without chasing recalculated levels
   assert.deepEqual(neutral.events, []);
 });
 
-test("a frozen prepared breakout can trigger during a neutral tick after its close confirms", () => {
+test("a frozen completed-minute retest can trigger during a neutral decision tick", () => {
   const decision = { symbol: "BTC_USDT", observedAt: 1, marketState: "BREAKOUT" as const, side: "LONG" as const,
     entryTrigger: 101, invalidation: 99, target: 110, targetIdentity: "BOOK:LONG:110", score: 100, oppositeScore: 1, reason: [] };
-  const plan: PaperPlan = { ...decision, id: "cross", state: "PREPARED", createdAt: 1, expiresAt: PLAN_TTL_MS + 1, plannedRisk: 10, notional: 1_000 };
+  const plan: PaperPlan = { ...decision, routeKind: "BREAKOUT_RETEST", id: "cross", state: "PREPARED", createdAt: 1,
+    expiresAt: PLAN_TTL_MS + 1, plannedRisk: 10, notional: 1_000 };
   const result = reconcilePaper({ now: 60_001, midpoint: 101.1, fresh: true, sequenceFault: false, decision: null, plan, position: null,
     zones: [zone("LONG", 110), zone("SHORT", 90)], absorption: 0, equity: 1_000, openRisk: 0,
     confirmationMinute: 60_000, confirmationPrice: 101.4,
@@ -571,6 +638,28 @@ test("a frozen prepared breakout can trigger during a neutral tick after its clo
   assert.equal(result.plan?.state, "TRIGGERED");
   assert.equal(result.position?.status, "OPEN");
   assert.ok(result.events.includes("PAPER_OPEN"));
+});
+
+test("a frozen retest keeps its original trigger when the event route rolls off", () => {
+  const decision = { symbol: "BTC_USDT", observedAt: 1, marketState: "BREAKOUT" as const, side: "LONG" as const,
+    entryTrigger: 101, invalidation: 99, target: 110, targetIdentity: "HTF:LONG:110", score: 9,
+    oppositeScore: 1, reason: [], routeId: "retest:minute:1", routeKind: "BREAKOUT_RETEST" as const,
+    routeStage: "LOCAL_TO_NODE" as const, targetTimeframe: "4h" as const, structureId: "PARENT:99:100",
+    structureRole: "PARENT" as const, confirmationScore: 0.7, fakeoutRisk: 0.3, activationDistanceRate: 0.01 };
+  const plan: PaperPlan = { ...decision, id: "frozen-retest", state: "PREPARED", createdAt: 1,
+    expiresAt: PLAN_TTL_MS + 1, plannedRisk: 10, notional: 1_000 };
+  const continuingStructure: LiquidityRoute = { id: "parent-observation", symbol: "BTC_USDT", side: "LONG",
+    kind: "LOCAL_BREAKOUT", stage: "LOCAL_TO_NODE", entryTrigger: 100.2, invalidation: 99,
+    target: 110, targetIdentity: "HTF:LONG:110", targetTimeframe: "4h", nextTarget: null,
+    confirmationScore: 0.7, fakeoutRisk: 0.3, activationDistanceRate: 0.01, score: 8,
+    executableNow: false, reason: [], structureId: "PARENT:99:100", structureRole: "PARENT" };
+  const result = reconcilePaper({ now: 60_001, midpoint: 101.1, fresh: true, sequenceFault: false,
+    decision: null, plan, position: null, zones: [], activeRoutes: [continuingStructure], absorption: 0.1,
+    equity: 1_000, openRisk: 0, allowOpen: true });
+  assert.equal(result.plan?.id, "frozen-retest");
+  assert.equal(result.plan?.entryTrigger, 101);
+  assert.equal(result.plan?.state, "TRIGGERED");
+  assert.equal(result.position?.status, "OPEN");
 });
 
 test("an opposite recalculation cannot replace a frozen prepared plan", () => {
@@ -708,7 +797,8 @@ test("new executable plans remain valid for fifteen minutes", () => {
 
 test("jump trigger recalculates actual-fill notional and keeps aggregate risk at five percent", () => {
   const decision = decideThreeState({ symbol: "BTC_USDT", observedAt: 1, mid: 100, zones: [zone("LONG", 110, 2), zone("SHORT", 90)], bands: [band("LONG", 105, 2), band("LONG", 106, 2)], flow: flow({ ofi: 0.8 }), absorption: 0.1 })!;
-  const plan: PaperPlan = { ...decision, id: "gap", state: "PREPARED", createdAt: 1, expiresAt: PLAN_TTL_MS + 1, plannedRisk: 15, notional: 1_000 };
+  const plan: PaperPlan = { ...decision, routeKind: "BREAKOUT_RETEST", id: "gap", state: "PREPARED", createdAt: 1,
+    expiresAt: PLAN_TTL_MS + 1, plannedRisk: 15, notional: 1_000 };
   const risk = Math.abs(decision.entryTrigger - decision.invalidation);
   const fill = decision.entryTrigger + risk * 0.4;
   const result = reconcilePaper({ now: 60_001, midpoint: fill, fresh: true, sequenceFault: false, decision, plan, position: null,

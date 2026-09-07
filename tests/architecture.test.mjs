@@ -159,7 +159,7 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(live, /openMargin/);
   assert.match(page, /内部监测/);
   assert.match(page, /实时 IOC/);
-  assert.match(page, /连续3次盘口确认/);
+  assert.match(page, /连续4次盘口/);
   assert.match(page, /Gate 限价/);
   assert.match(page, /authorityOperational && evidence\?\.fresh && evidence\?\.ancillaryFresh/);
   assert.match(page, /订单.*实盘.*历史.*设置/s);

@@ -1,19 +1,18 @@
 import {
   aggregateBook,
   breakoutEntryConfirmed,
+  breakoutMinuteAccepted,
   breakoutEntryPriceAcceptable,
   cascadeRatio,
   dataIsFresh,
   decideThreeState,
   flowPressure,
   MAX_GENERIC_PLAN_DISTANCE_RATE,
-  MIN_NET_REWARD_RISK,
   MIN_TARGET_DISTANCE_RATE,
   MIN_STRUCTURAL_STOP_RATE,
   observeFastBreakout,
   PLAN_SOFT_INVALIDATION_CONFIRMATIONS,
   planTriggered,
-  ROUND_TRIP_FRICTION_RATE,
   selectSafeLeverage,
   sizePaperPosition,
   stablePriceBin,
@@ -31,6 +30,7 @@ import {
   type PaperPlan,
   type PaperPosition,
   type RangeBand,
+  type RangeRole,
   type RangeStructure,
   type Side,
   type TimeframeState,
@@ -466,6 +466,95 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
     return ordered;
   };
   const routes: LiquidityRoute[] = [];
+  const nearestOppositeLiquidity = (side: Side, entry: number, lower: number, upper: number) => {
+    const edge = side === "LONG" ? upper : lower;
+    const candidates = memory.structureByTimeframe.m15
+      .filter((zone) => zone.side === side && zone.price >= lower && zone.price <= upper
+        && (side === "LONG" ? zone.price > entry : zone.price < entry))
+      .sort((a, b) => side === "LONG" ? a.price - b.price : b.price - a.price);
+    const first = candidates[0];
+    return first
+      ? { price: first.price, identity: first.identity ?? `STOP:15m:${side}:${stablePriceBin(first.price)}`,
+        next: Math.abs(first.price - edge) / Math.max(edge, 1e-9) > 0.001 ? edge : null }
+      : { price: edge, identity: `RANGE_OPPOSITE:${side}:${stablePriceBin(edge)}`, next: null };
+  };
+  const pushRetestRoute = (input: {
+    band: RangeBand; role: RangeRole; side: Side; boundary: number; bandBuffer: number;
+    target: number; targetIdentity: string; targetTimeframe: "15m" | "1h" | "4h"; nextTarget: number | null;
+    confirmationScore: number; fakeoutRisk: number; activationRate: number; baseScore: number;
+  }) => {
+    const minute = memory.lastCompletedMinuteCandle;
+    if (!minute) return;
+    const candleRange = Math.max(minute.high - minute.low, midpoint * 1e-9);
+    const closeRetention = input.side === "LONG"
+      ? (minute.close - minute.low) / candleRange
+      : (minute.high - minute.close) / candleRange;
+    const heldBoundary = input.side === "LONG"
+      ? minute.open > input.boundary && minute.low <= input.boundary + input.bandBuffer * 1.25
+        && minute.low >= input.boundary - input.bandBuffer * 0.5
+        && minute.close >= input.boundary + input.bandBuffer * 0.2 && minute.close > minute.open
+      : minute.open < input.boundary && minute.high >= input.boundary - input.bandBuffer * 1.25
+        && minute.high <= input.boundary + input.bandBuffer * 0.5
+        && minute.close <= input.boundary - input.bandBuffer * 0.2 && minute.close < minute.open;
+    if (!heldBoundary || closeRetention < 0.55) return;
+    const entryTrigger = input.side === "LONG"
+      ? minute.high + input.bandBuffer * 0.15
+      : minute.low - input.bandBuffer * 0.15;
+    const minimumStopDistance = entryTrigger * minimumStopRate;
+    const invalidation = input.side === "LONG"
+      ? Math.min(minute.low - input.bandBuffer * 0.25, entryTrigger - minimumStopDistance)
+      : Math.max(minute.high + input.bandBuffer * 0.25, entryTrigger + minimumStopDistance);
+    const targetAhead = input.side === "LONG" ? input.target > entryTrigger : input.target < entryTrigger;
+    const preAcceleration = input.side === "LONG" ? midpoint < entryTrigger : midpoint > entryTrigger;
+    if (!targetAhead || Math.abs(input.target - entryTrigger) / midpoint < MIN_TARGET_DISTANCE_RATE) return;
+    routes.push({ id: `${symbol}:BREAKOUT_RETEST:${input.side}:${input.band.id ?? stablePriceBin(input.boundary)}:${minute.time}`,
+      symbol, side: input.side, kind: "BREAKOUT_RETEST", stage: "LOCAL_TO_NODE", entryTrigger, invalidation,
+      target: input.target, targetIdentity: input.targetIdentity, targetTimeframe: input.targetTimeframe,
+      nextTarget: input.nextTarget, confirmationScore: input.confirmationScore, fakeoutRisk: input.fakeoutRisk,
+      activationDistanceRate: input.activationRate, score: input.baseScore * 1.04,
+      executableNow: preAcceleration && Math.abs(entryTrigger - midpoint) / midpoint <= input.activationRate
+        && input.confirmationScore >= 0.62 && input.fakeoutRisk <= 0.48,
+      structureId: input.band.id, structureRole: input.role,
+      reason: [`完整1分钟在${input.role === "CHILD" ? "子" : "父"}区间边界外回踩并守住`,
+        "不在首次突破后追价，只等待重新越过回踩K线极值", "当前第一目标必须独立满足扣成本经济性"] });
+  };
+  const pushFailedBreakRoute = (band: RangeBand, role: RangeRole, crossedSide: Side, boundary: number,
+    bandBuffer: number, activationRate: number) => {
+    const minute = memory.lastCompletedMinuteCandle;
+    if (!minute) return;
+    const candleRange = Math.max(minute.high - minute.low, midpoint * 1e-9);
+    const reversalSide: Side = crossedSide === "LONG" ? "SHORT" : "LONG";
+    const reversalConfirmation = routeConfirmation(memory, reversalSide);
+    const swept = crossedSide === "LONG"
+      ? minute.high >= boundary + bandBuffer * 0.25
+      : minute.low <= boundary - bandBuffer * 0.25;
+    const reclaimed = crossedSide === "LONG"
+      ? minute.close <= boundary - bandBuffer * 0.15 && minute.close < minute.open
+      : minute.close >= boundary + bandBuffer * 0.15 && minute.close > minute.open;
+    const rejectionRetention = crossedSide === "LONG"
+      ? (minute.high - minute.close) / candleRange
+      : (minute.close - minute.low) / candleRange;
+    if (!swept || !reclaimed || rejectionRetention < 0.6) return;
+    const entryTrigger = crossedSide === "LONG" ? boundary - bandBuffer * 0.25 : boundary + bandBuffer * 0.25;
+    const minimumStopDistance = entryTrigger * minimumStopRate;
+    const invalidation = reversalSide === "LONG"
+      ? Math.min(minute.low - bandBuffer * 0.25, entryTrigger - minimumStopDistance)
+      : Math.max(minute.high + bandBuffer * 0.25, entryTrigger + minimumStopDistance);
+    const target = nearestOppositeLiquidity(reversalSide, entryTrigger, band.lower, band.upper);
+    if (Math.abs(target.price - entryTrigger) / midpoint < MIN_TARGET_DISTANCE_RATE) return;
+    const waitingInsideRetest = reversalSide === "LONG" ? midpoint >= entryTrigger : midpoint <= entryTrigger;
+    const fakeoutRisk = clamp((1 - absorption) * 0.45 + (1 - reversalConfirmation) * 0.55, 0, 1);
+    routes.push({ id: `${symbol}:FAILED_BREAKOUT_REVERSAL:${reversalSide}:${band.id ?? stablePriceBin(boundary)}:${minute.time}`,
+      symbol, side: reversalSide, kind: "FAILED_BREAKOUT_REVERSAL", stage: "LOCAL_TO_NODE",
+      entryTrigger, invalidation, target: target.price, targetIdentity: target.identity, targetTimeframe: "15m",
+      nextTarget: target.next, confirmationScore: reversalConfirmation, fakeoutRisk, activationDistanceRate: activationRate,
+      score: band.quality * 0.35 + reversalConfirmation * 0.4 + absorption * 0.25,
+      executableNow: waitingInsideRetest && Math.abs(entryTrigger - midpoint) / midpoint <= activationRate
+        && absorption >= 0.55 && reversalConfirmation >= 0.55 && fakeoutRisk <= 0.45,
+      structureId: band.id, structureRole: role,
+      reason: [`${role === "CHILD" ? "子区间" : "父区间"}边界外流动性被扫后完整1分钟收回区间`, "反向实体、收盘保持率、吸收与订单流共同确认失败突破",
+        "不追已经离开边界的反向行情，等待区间内部反抽原边界", "第一目标为同级结构最近反向流动性"] });
+  };
   for (const side of ["LONG", "SHORT"] as const) {
     if (child) {
       const childWidth = child.upper - child.lower;
@@ -484,19 +573,25 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
         + (memory.timeframeBias.h1 === (side === "LONG" ? "DOWN" : "UP") ? 0.18 : 0), 0, 1);
       const childActivation = Math.max(0.002, Math.min(0.006, child.widthRate * 0.7));
       const preTriggerSide = side === "LONG" ? midpoint < childEntry : midpoint > childEntry;
+      const childScore = child.quality * 0.28 + range.quality * 0.25 + confirmationScore * 0.47;
       if (targetAhead && targetDistanceRate >= MIN_TARGET_DISTANCE_RATE) {
         routes.push({ id: `${symbol}:INTERNAL_ROTATION:${side}:${child.id ?? stablePriceBin(child.midpoint)}:${range.id ?? stablePriceBin(range.midpoint)}`,
           symbol, side, kind: "INTERNAL_ROTATION", stage: "LOCAL_TO_NODE", entryTrigger: childEntry,
           invalidation: childInvalidation, target: parentTarget,
           targetIdentity: `PARENT_RANGE:${side}:${stablePriceBin(parentTarget)}`, targetTimeframe: "15m",
           nextTarget: null, confirmationScore, fakeoutRisk, activationDistanceRate: childActivation,
-          score: child.quality * 0.28 + range.quality * 0.25 + confirmationScore * 0.47,
+          score: childScore,
           executableNow: preTriggerSide && Math.abs(childEntry - midpoint) / midpoint <= childActivation
             && confirmationScore >= 0.52 && fakeoutRisk <= 0.62,
           structureId: child.id, structureRole: "CHILD",
           reason: ["15分钟父区间内部的子区间边界", "本次只属于区间内部迁移，不是父级突破",
             "实际第一目标为15分钟父区间边缘", "第一目标必须独立满足扣成本盈亏比"] });
+        pushRetestRoute({ band: child, role: "CHILD", side, boundary: side === "LONG" ? child.upper : child.lower,
+          bandBuffer: childBuffer, target: parentTarget,
+          targetIdentity: `PARENT_RANGE:${side}:${stablePriceBin(parentTarget)}`, targetTimeframe: "15m",
+          nextTarget: null, confirmationScore, fakeoutRisk, activationRate: childActivation, baseScore: childScore });
       }
+      pushFailedBreakRoute(child, "CHILD", side, side === "LONG" ? child.upper : child.lower, childBuffer, childActivation);
     }
     const nodes = higher(side);
     const first = nodes.find((item) => {
@@ -530,9 +625,13 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
         activationDistanceRate, score, executableNow: preTriggerSide && Math.abs(entryTrigger - midpoint) / midpoint <= activationDistanceRate
           && confirmationScore >= 0.52 && fakeoutRisk <= 0.62,
         structureId: range.id, structureRole: "PARENT",
-        reason: ["15分钟父级复合区间边界", "计划只能在首次穿越前建立", "高质量突破用连续三次两秒盘口确认，中等质量等待完整1分钟",
+        reason: ["15分钟父级复合区间边界", "计划只能在首次穿越前建立", "仅A级强势突破允许连续四次两秒盘口直入；普通突破等待回踩，失败突破准备反向",
           nodeBeyondProjection ? "先兑现15分钟局部量度空间" : `${first.timeframe}流动性作为本段终点`,
           "更远高周期节点留给下一段重判", "订单流、微价格与周期方向联合过滤假突破"] });
+      pushRetestRoute({ band: range, role: "PARENT", side, boundary: side === "LONG" ? range.upper : range.lower,
+        bandBuffer: buffer, target: currentTarget.price, targetIdentity: currentTarget.identity,
+        targetTimeframe: currentTarget.timeframe, nextTarget: next?.zone.price ?? null,
+        confirmationScore, fakeoutRisk, activationRate: activationDistanceRate, baseScore: score });
       if (next) {
         const nodeBuffer = Math.max(midpoint * 0.00035, Math.abs(next.zone.price - currentTarget.price) * 0.04);
         const nodeEntry = side === "LONG" ? currentTarget.price + nodeBuffer : currentTarget.price - nodeBuffer;
@@ -551,35 +650,8 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
           reason: ["到达上一段高周期流动性节点", "仅在节点被吸收且延续强度通过后启动", `${next.timeframe}下一流动性为新目标`] });
       }
     }
-    const rejectionSide: Side = side === "LONG" ? "SHORT" : "LONG";
-    const edgePrice = side === "LONG" ? range.upper : range.lower;
-    const rejectionConfirmation = routeConfirmation(memory, rejectionSide);
-    const rejectionEntry = side === "LONG" ? edgePrice - buffer * 0.25 : edgePrice + buffer * 0.25;
-    const structuralInvalidation = side === "LONG" ? range.upper + buffer * 1.5 : range.lower - buffer * 1.5;
-    const rejectionStopDistance = rejectionEntry * minimumStopRate;
-    const rejectionInvalidation = rejectionSide === "LONG" ? Math.min(structuralInvalidation, rejectionEntry - rejectionStopDistance)
-      : Math.max(structuralInvalidation, rejectionEntry + rejectionStopDistance);
-    const actualStopDistance = Math.abs(rejectionEntry - rejectionInvalidation);
-    const frictionDistance = rejectionEntry * ROUND_TRIP_FRICTION_RATE;
-    const minimumEconomicDistance = frictionDistance + MIN_NET_REWARD_RISK * (actualStopDistance + frictionDistance);
-    const midpointDistance = Math.abs(rejectionEntry - range.midpoint);
-    const rejectionDistance = Math.min(width * 0.7, Math.max(midpointDistance, minimumEconomicDistance));
-    const rejectionTarget = rejectionSide === "LONG" ? rejectionEntry + rejectionDistance : rejectionEntry - rejectionDistance;
-    const minute = memory.lastCompletedMinuteCandle;
-    const rejectionConfirmed = minute != null && (side === "LONG"
-      ? minute.high >= edgePrice - buffer * 0.25 && minute.close <= rejectionEntry && minute.close < minute.open
-      : minute.low <= edgePrice + buffer * 0.25 && minute.close >= rejectionEntry && minute.close > minute.open);
-    const rejectionScore = range.quality * 0.48 + rejectionConfirmation * 0.27 + absorption * 0.25;
-    if (parentActive) routes.push({ id: `${symbol}:EDGE_REJECTION:${side}:${range.id ?? stablePriceBin(edgePrice)}`, symbol, side: rejectionSide,
-      kind: "EDGE_REJECTION", stage: "LOCAL_TO_NODE", entryTrigger: rejectionEntry,
-      invalidation: rejectionInvalidation,
-      target: rejectionTarget, targetIdentity: `RANGE_SEGMENT:${rejectionSide}:${stablePriceBin(rejectionTarget)}`,
-      targetTimeframe: "15m", nextTarget: null, confirmationScore: rejectionConfirmation,
-      fakeoutRisk: clamp(1 - absorption * 0.55 - rejectionConfirmation * 0.3, 0, 1), activationDistanceRate,
-      score: rejectionScore, executableNow: Math.abs(rejectionEntry - midpoint) / midpoint <= activationDistanceRate
-        && absorption >= 0.55 && rejectionConfirmation >= 0.48 && rejectionConfirmed,
-      structureId: range.id, structureRole: "PARENT",
-      reason: ["15分钟父级区间边界出现吸收", "完整1分钟K线完成扫边并收回", "优先兑现区间中轴，扣成本不足时最多延伸到70%", "失效后等待突破路线重新评估"] });
+    if (parentActive) pushFailedBreakRoute(range, "PARENT", side,
+      side === "LONG" ? range.upper : range.lower, buffer, activationDistanceRate);
   }
   return routes.sort((a, b) => Number(b.executableNow) - Number(a.executableNow) || b.score - a.score).slice(0, 6);
 }
@@ -588,7 +660,9 @@ export function selectRouteDecision(routes: LiquidityRoute[], observedAt: number
   const selected = routes.filter((route) => route.executableNow).sort((a, b) => b.score - a.score)[0];
   if (!selected) return null;
   const oppositeScore = routes.filter((route) => route.side !== selected.side).sort((a, b) => b.score - a.score)[0]?.score ?? 0;
-  return { symbol: selected.symbol, observedAt, marketState: selected.kind === "EDGE_REJECTION" ? "RANGE" : "BREAKOUT",
+  return { symbol: selected.symbol, observedAt,
+    marketState: selected.kind === "FAILED_BREAKOUT_REVERSAL" ? "REVERSAL"
+      : selected.kind === "EDGE_REJECTION" ? "RANGE" : "BREAKOUT",
     side: selected.side, entryTrigger: selected.entryTrigger, invalidation: selected.invalidation,
     target: selected.target, targetIdentity: selected.targetIdentity, score: selected.score, oppositeScore,
     reason: selected.reason, routeId: selected.id, routeStage: selected.stage, routeKind: selected.kind,
@@ -679,14 +753,16 @@ export function reconcilePaper(input: {
   };
   const planRouteId = plan?.routeId;
   const activePlanRoute = !planRouteId ? null : input.activeRoutes?.find((route) => route.id === planRouteId) ?? null;
-  const structureReplaced = plan?.state === "PREPARED" && plan.structureId != null
-    && input.activeRoutes?.some((route) => route.side === plan!.side && route.kind === plan!.routeKind
-      && route.structureId != null && route.structureId !== plan!.structureId);
+  const structureRoutes = plan?.structureId == null ? [] : input.activeRoutes?.filter((route) => route.structureRole === plan!.structureRole) ?? [];
+  const structureStillMapped = plan?.structureId != null && structureRoutes.some((route) => route.structureId === plan!.structureId);
+  const structureReplaced = plan?.state === "PREPARED" && plan.structureId != null && !structureStillMapped
+    && structureRoutes.some((route) => route.structureId != null && route.structureId !== plan!.structureId);
   const routePresent = !planRouteId || activePlanRoute != null;
   const routeWeak = activePlanRoute != null && (activePlanRoute.confirmationScore < (plan?.routeKind === "NODE_CONTINUATION" ? 0.5 : 0.42)
     || activePlanRoute.fakeoutRisk > (plan?.routeKind === "NODE_CONTINUATION" ? 0.62 : 0.72));
+  const frozenAuctionRoute = plan?.routeKind === "BREAKOUT_RETEST" || plan?.routeKind === "FAILED_BREAKOUT_REVERSAL";
   const targetPresent = !plan || plan.state !== "PREPARED" || (planRouteId
-    ? routePresent
+    ? routePresent || (frozenAuctionRoute && structureStillMapped)
     : continuousTarget(plan.side, plan.targetIdentity, plan.target) != null);
   const triggered = plan?.state === "PREPARED" && planTriggered(plan, input.midpoint);
   const movedAway = plan?.state === "PREPARED" && !triggered && plan.activationDistanceRate != null
@@ -741,6 +817,12 @@ export function reconcilePaper(input: {
       plan = { ...plan, state: "CANCELLED" };
       cancelledThisCycle = true;
       events.push(missed ? "BREAKOUT_MISSED_CANCEL" : "BREAKOUT_FIRST_CROSS_FAILED_CANCEL");
+    } else if (plan.marketState === "BREAKOUT" && plan.routeKind !== "BREAKOUT_RETEST"
+      && breakoutMinuteAccepted(plan, input.confirmationMinute, input.confirmationCandle)
+      && !breakoutEntryConfirmed(plan, input.confirmationMinute, input.confirmationCandle)) {
+      plan = { ...plan, state: "CANCELLED" };
+      cancelledThisCycle = true;
+      events.push("BREAKOUT_ACCEPTED_WAIT_RETEST");
     }
   }
   if (position?.status === "OPEN" && input.fresh && !input.sequenceFault) {
