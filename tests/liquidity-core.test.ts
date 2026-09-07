@@ -81,6 +81,59 @@ test("15m balance creates two-sided local routes and a gated next-node leg", () 
   assert.ok(routes.some((route) => route.kind === "EDGE_REJECTION"));
 });
 
+test("a nested 15m child range is an internal rotation toward the parent boundary", () => {
+  const rows = Array.from({ length: 38 }, (_, index) => ({ time: index * 900, open: 106,
+    close: 106.1, high: 106.6, low: 105.7, volume: 10 }));
+  for (const index of [12, 16, 20, 24]) rows[index].high = 107.1;
+  for (const index of [14, 18, 22, 25]) rows[index].low = 105.2;
+  for (let index = 26; index <= 35; index += 1) {
+    rows[index] = { ...rows[index], open: 106.1, close: index % 2 ? 106.2 : 106.05,
+      high: index % 2 ? 106.45 : 106.35, low: index % 2 ? 105.9 : 106 };
+  }
+  rows[36].close = 106.2;
+  rows[37].close = 106.3;
+  const range = deriveRangeStructure(rows)!;
+  assert.ok(range.child, "the rolling inner balance must not replace its broader parent");
+  assert.equal(range.role, "PARENT");
+  assert.equal(range.breakState, "INSIDE");
+  assert.equal(range.child?.breakState, "INSIDE");
+  assert.ok(range.upper > 107 && (range.child?.upper ?? Infinity) < 106.5);
+  const memory = emptySymbolMemory();
+  memory.range15m = range;
+  memory.flow = flow({ ofi: 0.65, takerDelta: 0.55, micropriceDisplacementBps: 2 });
+  memory.timeframeBias = { m1: "UP", m15: "UP", h1: "UP", h4: "UP" };
+  memory.structureByTimeframe.h4 = [zone("LONG", 108.2), zone("SHORT", 104.5)];
+  const routes = buildLiquidityRoutes(memory, "SOL_USDT", range.observedAt + 1, 106.3, 0.1);
+  const internal = routes.find((route) => route.kind === "INTERNAL_ROTATION" && route.side === "LONG");
+  assert.ok(internal);
+  assert.equal(internal.structureRole, "CHILD");
+  assert.equal(internal.target, range.upper);
+  assert.equal(internal.nextTarget, null);
+  assert.ok(internal.reason.some((reason) => reason.includes("不是父级突破")));
+});
+
+test("two completed closes consume the SOL-style child boundary without consuming its parent", () => {
+  const rows = Array.from({ length: 38 }, (_, index) => ({ time: index * 900, open: 106,
+    close: 106.1, high: 106.6, low: 105.7, volume: 10 }));
+  for (const index of [12, 16, 20, 24]) rows[index].high = 107.1;
+  for (const index of [14, 18, 22, 25]) rows[index].low = 105.2;
+  for (let index = 26; index <= 35; index += 1) rows[index] = { ...rows[index], open: 106.1,
+    close: index % 2 ? 106.2 : 106.05, high: index % 2 ? 106.45 : 106.35, low: index % 2 ? 105.9 : 106 };
+  rows[36].close = 106.52;
+  rows[37].close = 106.58;
+  const range = deriveRangeStructure(rows)!;
+  assert.equal(range.breakState, "INSIDE");
+  assert.equal(range.child?.breakState, "BROKEN_UP");
+  const memory = emptySymbolMemory();
+  memory.range15m = range;
+  memory.flow = flow({ ofi: 0.65, takerDelta: 0.55, micropriceDisplacementBps: 2 });
+  memory.timeframeBias = { m1: "UP", m15: "UP", h1: "UP", h4: "UP" };
+  memory.structureByTimeframe.h4 = [zone("LONG", 108.2), zone("SHORT", 104.5)];
+  const routes = buildLiquidityRoutes(memory, "SOL_USDT", range.observedAt + 1, 106.58, 0.1);
+  assert.equal(routes.some((route) => route.kind === "INTERNAL_ROTATION"), false);
+  assert.ok(routes.some((route) => route.kind === "LOCAL_BREAKOUT" && route.structureRole === "PARENT"));
+});
+
 test("completed one-minute noise sets a stop floor and edge rejection waits for a sweep-and-reclaim close", () => {
   const memory = emptySymbolMemory();
   memory.range15m = { lower: 99, upper: 101, midpoint: 100, widthRate: 0.02,
@@ -566,19 +619,52 @@ test("an economically untradeable target is rejected before it reaches the order
   assert.ok(result.events.includes("PLAN_REJECTED_ECONOMICS"));
 });
 
-test("a strong local breakout can qualify on its next staged node while retaining the first-node exit", () => {
+test("a farther node cannot subsidize an uneconomical first-node breakout", () => {
   const decision = { symbol: "SOL_USDT", observedAt: 1, marketState: "BREAKOUT" as const, side: "LONG" as const,
     entryTrigger: 100, invalidation: 99.8, target: 100.6, nextTarget: 101,
     targetIdentity: "STOP:15m:LONG:100.6", score: 9, oppositeScore: 1, reason: [],
     routeId: "SOL_USDT:LOCAL_BREAKOUT:LONG", routeKind: "LOCAL_BREAKOUT" as const,
     routeStage: "LOCAL_TO_NODE" as const, targetTimeframe: "15m" as const,
     confirmationScore: 0.9, fakeoutRisk: 0.1, activationDistanceRate: 0.01 };
-  assert.equal(stagedEconomicTarget(decision), 101);
+  assert.equal(stagedEconomicTarget(decision), 100.6);
   const result = reconcilePaper({ now: 2, midpoint: 99.9, fresh: true, sequenceFault: false,
     decision, plan: null, position: null, zones: [], absorption: 0, equity: 1_000, openRisk: 0, allowOpen: false });
-  assert.equal(result.plan?.state, "PREPARED");
-  assert.equal(result.plan?.target, 100.6);
-  assert.equal(result.plan?.economicTarget, 101);
+  assert.equal(result.plan, null);
+  assert.ok(result.events.includes("PLAN_REJECTED_ECONOMICS"));
+});
+
+test("a breakout decision discovered after price crossed is skipped instead of backfilled", () => {
+  const decision = { symbol: "SOL_USDT", observedAt: 1, marketState: "BREAKOUT" as const, side: "LONG" as const,
+    entryTrigger: 100, invalidation: 99, target: 103, targetIdentity: "PARENT_RANGE:LONG:103",
+    score: 9, oppositeScore: 1, reason: [], routeId: "child", routeKind: "INTERNAL_ROTATION" as const,
+    structureId: "CHILD:1", structureRole: "CHILD" as const, activationDistanceRate: 0.01 };
+  const result = reconcilePaper({ now: 2, midpoint: 100.1, fresh: true, sequenceFault: false,
+    decision, plan: null, position: null, zones: [], absorption: 0, equity: 1_000, openRisk: 0, allowOpen: false });
+  assert.equal(result.plan, null);
+  assert.ok(result.events.includes("BREAKOUT_ALREADY_CROSSED_SKIP"));
+});
+
+test("a failed or overextended first cross cannot revive on a later retrace", () => {
+  const decision = { symbol: "SOL_USDT", observedAt: 1, marketState: "BREAKOUT" as const, side: "LONG" as const,
+    entryTrigger: 101, invalidation: 99, target: 106, targetIdentity: "PARENT_RANGE:LONG:106",
+    score: 9, oppositeScore: 1, reason: [], routeId: "child", routeKind: "INTERNAL_ROTATION" as const,
+    confirmationScore: 0.9, fakeoutRisk: 0.1, activationDistanceRate: 0.02 };
+  const plan: PaperPlan = { ...decision, id: "first-cross", state: "PREPARED", createdAt: 1,
+    expiresAt: PLAN_TTL_MS + 1, plannedRisk: 10, notional: 1_000 };
+  const crossed = reconcilePaper({ now: 2_000, midpoint: 101.25, fresh: true, sequenceFault: false,
+    decision, plan, position: null, zones: [], absorption: 0, breakoutConfirmation: 0.9,
+    equity: 1_000, openRisk: 0, allowOpen: false });
+  assert.equal(crossed.plan?.breakoutCrossedAt, 2_000);
+  const failed = reconcilePaper({ now: 4_000, midpoint: 100.99, fresh: true, sequenceFault: false,
+    decision, plan: crossed.plan, position: null, zones: [], absorption: 0, breakoutConfirmation: 0.9,
+    equity: 1_000, openRisk: 0, allowOpen: false });
+  assert.equal(failed.plan?.state, "CANCELLED");
+  assert.ok(failed.events.includes("BREAKOUT_FIRST_CROSS_FAILED_CANCEL"));
+  const missed = reconcilePaper({ now: 2_000, midpoint: 102.1, fresh: true, sequenceFault: false,
+    decision, plan, position: null, zones: [], absorption: 0, breakoutConfirmation: 0.9,
+    equity: 1_000, openRisk: 0, allowOpen: false });
+  assert.equal(missed.plan?.state, "CANCELLED");
+  assert.ok(missed.events.includes("BREAKOUT_MISSED_CANCEL"));
 });
 
 test("trade economics require at least 1.2R after round-trip costs", () => {

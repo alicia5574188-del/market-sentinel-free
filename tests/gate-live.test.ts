@@ -26,12 +26,12 @@ test("a confirmed breakout becomes an IOC market order sized from its current en
   assert.equal(intent.body.trigger, undefined);
 });
 
-test("LIVE accepts a strong staged breakout on its next node without replacing the first target", () => {
+test("LIVE ignores a legacy farther economic target and requires the actual first node", () => {
   const staged = { ...plan("BREAKOUT", "LONG"), invalidation: 99.8, target: 100.6, nextTarget: 101,
     routeKind: "LOCAL_BREAKOUT" as const, confirmationScore: 0.9, fakeoutRisk: 0.1, economicTarget: 101 };
-  const intent = buildLiveEntryIntent({ plan: staged, entryPrice: 100, equity: 1_000, available: 1_000,
-    openRisk: 0, quantoMultiplier: 0.001, leverageMax: 50 });
-  assert.equal(intent.kind, "MARKET");
+  assert.throws(() => buildLiveEntryIntent({ plan: staged, entryPrice: 100, equity: 1_000, available: 1_000,
+    openRisk: 0, quantoMultiplier: 0.001, leverageMax: 50 }),
+  (error) => error instanceof LiveEntrySizingError && error.code === "ECONOMICS");
   assert.equal(staged.target, 100.6);
 });
 

@@ -1,4 +1,4 @@
-export const SYSTEM_VERSION = "liquidity-route-v2";
+export const SYSTEM_VERSION = "liquidity-route-v3";
 export const PORTFOLIO_RISK_CAP = 0.05;
 export const STALE_AFTER_MS = 3_000;
 export const WALL_WINDOW = 30;
@@ -26,8 +26,6 @@ export const FAST_BREAKOUT_MIN_CONFIRMATION = 0.78;
 export const FAST_BREAKOUT_MAX_FAKEOUT_RISK = 0.25;
 export const FAST_BREAKOUT_REQUIRED_SNAPSHOTS = 3;
 export const FAST_BREAKOUT_MAX_SNAPSHOT_GAP_MS = 10_000;
-export const STAGED_ROUTE_MIN_CONFIRMATION = 0.78;
-export const STAGED_ROUTE_MAX_FAKEOUT_RISK = 0.25;
 export const DYNAMIC_PROTECTION_NET_CUSHION_R = 0.15;
 
 export type Side = "LONG" | "SHORT";
@@ -57,7 +55,9 @@ export type FlowEvidence = {
 export type TimeframeState = "UNKNOWN" | "NEUTRAL" | "UP" | "DOWN";
 export type TimeframeBias = { m1: TimeframeState; m15: TimeframeState; h1: TimeframeState; h4?: TimeframeState };
 
-export type RangeStructure = {
+export type RangeBreakState = "INSIDE" | "BROKEN_UP" | "BROKEN_DOWN";
+export type RangeRole = "PARENT" | "CHILD";
+export type RangeBand = {
   lower: number;
   upper: number;
   midpoint: number;
@@ -66,10 +66,14 @@ export type RangeStructure = {
   touchesUpper: number;
   quality: number;
   observedAt: number;
+  id?: string;
+  role?: RangeRole;
+  breakState?: RangeBreakState;
 };
+export type RangeStructure = RangeBand & { child?: RangeBand | null };
 
 export type RouteStage = "LOCAL_TO_NODE" | "AT_NODE" | "NODE_TO_NEXT";
-export type RouteKind = "LOCAL_BREAKOUT" | "EDGE_REJECTION" | "NODE_CONTINUATION";
+export type RouteKind = "LOCAL_BREAKOUT" | "INTERNAL_ROTATION" | "EDGE_REJECTION" | "NODE_CONTINUATION";
 export type LiquidityRoute = {
   id: string;
   symbol: string;
@@ -88,6 +92,8 @@ export type LiquidityRoute = {
   score: number;
   executableNow: boolean;
   reason: string[];
+  structureId?: string;
+  structureRole?: RangeRole;
 };
 
 export type WallEvidence = {
@@ -132,6 +138,8 @@ export type Decision = {
   confirmationScore?: number;
   fakeoutRisk?: number;
   activationDistanceRate?: number;
+  structureId?: string;
+  structureRole?: RangeRole;
 };
 
 export type PaperPlan = Decision & {
@@ -146,6 +154,9 @@ export type PaperPlan = Decision & {
   economicTarget?: number;
   breakoutSignalCount?: number;
   breakoutSignalAt?: number;
+  breakoutCrossedAt?: number;
+  breakoutFailedAt?: number;
+  breakoutMissedAt?: number;
   invalidationSignalMinute?: number;
   invalidationSignalCount?: number;
   invalidationSignalReason?: "TARGET_GONE_CANCEL" | "ACTIVATION_LOST_CANCEL" | "ROUTE_WEAK_CANCEL";
@@ -449,13 +460,10 @@ export function tradeEconomics(input: { entry: number; target: number; lossRate:
 }
 
 export function stagedEconomicTarget(plan: Pick<Decision, "marketState" | "side" | "target" | "nextTarget" | "routeKind" | "confirmationScore" | "fakeoutRisk">) {
-  const next = plan.nextTarget;
-  const continues = next != null && Number.isFinite(next)
-    && (plan.side === "LONG" ? next > plan.target : next < plan.target);
-  return plan.marketState === "BREAKOUT" && plan.routeKind === "LOCAL_BREAKOUT" && continues
-    && (plan.confirmationScore ?? 0) >= STAGED_ROUTE_MIN_CONFIRMATION
-    && (plan.fakeoutRisk ?? 1) <= STAGED_ROUTE_MAX_FAKEOUT_RISK
-    ? next! : plan.target;
+  // Admission must stand on the target that the position will actually use.
+  // A farther node is context for a later at-node decision, never collateral
+  // for an otherwise uneconomical first segment.
+  return plan.target;
 }
 
 export function remainingStressRisk(position: PaperPosition, markPrice = position.entryPrice) {
@@ -655,6 +663,11 @@ export function observeFastBreakout(
   if (plan.marketState !== "BREAKOUT" || plan.state !== "PREPARED") return plan;
   const initialRisk = Math.max(Math.abs(plan.entryTrigger - plan.invalidation), plan.entryTrigger * 0.0001);
   const extension = plan.side === "LONG" ? input.price - plan.entryTrigger : plan.entryTrigger - input.price;
+  const breakoutCrossedAt = plan.breakoutCrossedAt ?? (extension >= 0 ? input.now : undefined);
+  if (breakoutCrossedAt != null && extension < 0) return { ...plan, breakoutCrossedAt, breakoutFailedAt: input.now,
+    breakoutSignalCount: 0, breakoutSignalAt: undefined };
+  if (extension > initialRisk * BREAKOUT_ENTRY_MAX_CHASE_R) return { ...plan, breakoutCrossedAt,
+    breakoutMissedAt: input.now, breakoutSignalCount: 0, breakoutSignalAt: undefined };
   const minimumExtension = Math.max(plan.entryTrigger * 0.00005, initialRisk * BREAKOUT_ENTRY_MIN_EXTENSION_R);
   const highQuality = (plan.confirmationScore ?? 0) >= FAST_BREAKOUT_MIN_CONFIRMATION
     && input.confirmation >= FAST_BREAKOUT_MIN_CONFIRMATION
@@ -662,11 +675,12 @@ export function observeFastBreakout(
     && extension >= minimumExtension
     && breakoutEntryPriceAcceptable(plan, input.price);
   if (!highQuality) return (plan.breakoutSignalCount ?? 0) > 0
-    ? { ...plan, breakoutSignalCount: 0, breakoutSignalAt: undefined }
-    : plan;
+    ? { ...plan, breakoutCrossedAt, breakoutSignalCount: 0, breakoutSignalAt: undefined }
+    : breakoutCrossedAt === plan.breakoutCrossedAt ? plan : { ...plan, breakoutCrossedAt };
   if (plan.breakoutSignalAt === input.now) return plan;
   const consecutive = plan.breakoutSignalAt != null && input.now - plan.breakoutSignalAt <= FAST_BREAKOUT_MAX_SNAPSHOT_GAP_MS;
   return { ...plan,
+    breakoutCrossedAt,
     breakoutSignalCount: Math.min(FAST_BREAKOUT_REQUIRED_SNAPSHOTS, consecutive ? (plan.breakoutSignalCount ?? 0) + 1 : 1),
     breakoutSignalAt: input.now };
 }

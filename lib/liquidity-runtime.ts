@@ -8,6 +8,7 @@ import {
   flowPressure,
   MAX_GENERIC_PLAN_DISTANCE_RATE,
   MIN_NET_REWARD_RISK,
+  MIN_TARGET_DISTANCE_RATE,
   MIN_STRUCTURAL_STOP_RATE,
   observeFastBreakout,
   PLAN_SOFT_INVALIDATION_CONFIRMATIONS,
@@ -29,6 +30,7 @@ import {
   type LiquidityZone,
   type PaperPlan,
   type PaperPosition,
+  type RangeBand,
   type RangeStructure,
   type Side,
   type TimeframeState,
@@ -375,31 +377,65 @@ export function aggregateFourHourCandles(rows: StructureCandle[]) {
   });
 }
 
-export function deriveRangeStructure(rows: StructureCandle[]): RangeStructure | null {
-  const window = rows.slice(-12);
-  if (window.length < 10) return null;
+function deriveRangeBand(rows: StructureCandle[], role: "PARENT" | "CHILD", size: number, upperRatio: number, lowerRatio: number): RangeBand | null {
+  // The last two completed candles are evidence about an already-built
+  // boundary, not input allowed to move that boundary after the fact.
+  const evidence = rows.slice(-2);
+  const history = rows.slice(0, -2);
+  if (history.length < size) return null;
+  const window = history.slice(-size);
   const quantile = (values: number[], ratio: number) => {
     const sorted = [...values].sort((a, b) => a - b);
     return sorted[Math.min(sorted.length - 1, Math.max(0, Math.round((sorted.length - 1) * ratio)))];
   };
-  // Repeated upper/lower quartiles ignore a single sweep wick while retaining
-  // the boundary that price actually tests on the 15-minute chart.
-  const upper = quantile(window.map((row) => row.high), 0.75);
-  const lower = quantile(window.map((row) => row.low), 0.25);
+  const upper = quantile(window.map((row) => row.high), upperRatio);
+  const lower = quantile(window.map((row) => row.low), lowerRatio);
   const midpoint = (upper + lower) / 2;
   const width = upper - lower;
   const widthRate = width / Math.max(midpoint, 1e-9);
-  if (!(lower > 0 && widthRate >= 0.0012 && widthRate <= 0.025)) return null;
-  const edge = width * 0.16;
+  const maximumWidth = role === "PARENT" ? 0.04 : 0.025;
+  if (!(lower > 0 && widthRate >= 0.0012 && widthRate <= maximumWidth)) return null;
+  const edge = width * (role === "PARENT" ? 0.12 : 0.16);
   const touchesUpper = window.filter((row) => row.high >= upper - edge).length;
   const touchesLower = window.filter((row) => row.low <= lower + edge).length;
   const contained = window.filter((row) => row.close <= upper + edge * 0.4 && row.close >= lower - edge * 0.4).length / window.length;
   const drift = Math.abs(window.at(-1)!.close - window[0].open) / width;
   const quality = clamp(contained * 0.45 + Math.min(1, touchesUpper / 3) * 0.2
     + Math.min(1, touchesLower / 3) * 0.2 + Math.max(0, 1 - drift) * 0.15, 0, 1);
-  if (touchesUpper < 2 || touchesLower < 2 || quality < 0.58) return null;
-  return { lower, upper, midpoint, widthRate, touchesLower, touchesUpper, quality,
-    observedAt: (window.at(-1)!.time + 900) * 1_000 };
+  const minimumQuality = role === "PARENT" ? 0.62 : 0.58;
+  if (touchesUpper < 2 || touchesLower < 2 || quality < minimumQuality) return null;
+  const tolerance = Math.max(midpoint * 0.0003, width * 0.04);
+  const brokenUp = evidence.length === 2 && evidence.every((row) => row.close > upper + tolerance);
+  const brokenDown = evidence.length === 2 && evidence.every((row) => row.close < lower - tolerance);
+  const breakState = brokenUp ? "BROKEN_UP" as const : brokenDown ? "BROKEN_DOWN" as const : "INSIDE" as const;
+  const observedAt = ((rows.at(-1) ?? window.at(-1)!).time + 900) * 1_000;
+  return { lower, upper, midpoint, widthRate, touchesLower, touchesUpper, quality, observedAt,
+    id: `${role}:${stablePriceBin(lower)}:${stablePriceBin(upper)}`, role, breakState };
+}
+
+export function deriveRangeStructure(rows: StructureCandle[]): RangeStructure | null {
+  if (rows.length < 12) return null;
+  const child = deriveRangeBand(rows, "CHILD", 10, 0.75, 0.25);
+  if (!child) return null;
+  const recent = rows.slice(-12);
+  const candidates = [24, 36, 48, 72].flatMap((size) => {
+    const band = deriveRangeBand(rows, "PARENT", size, 0.88, 0.12);
+    if (!band) return [];
+    const recentContained = recent.filter((row) => row.close <= band.upper + (band.upper - band.lower) * 0.05
+      && row.close >= band.lower - (band.upper - band.lower) * 0.05).length / Math.max(recent.length, 1);
+    const nested = band.lower <= child.lower + (child.upper - child.lower) * 0.2
+      && band.upper >= child.upper - (child.upper - child.lower) * 0.2;
+    return recentContained >= 0.75 && nested && band.widthRate >= child.widthRate * 1.35 ? [band] : [];
+  });
+  // Prefer the nearest valid parent regime. Wider, older windows are only used
+  // when the recent 24-candle structure cannot contain the child balance.
+  const parent = candidates[0];
+  if (!parent) {
+    return { ...child, id: `PARENT:${stablePriceBin(child.lower)}:${stablePriceBin(child.upper)}`,
+      role: "PARENT", child: null };
+  }
+  const distinctChild = child.widthRate <= parent.widthRate * 0.8 ? child : null;
+  return { ...parent, child: distinctChild };
 }
 
 function routeConfirmation(memory: SymbolMemory, side: Side) {
@@ -413,6 +449,8 @@ function routeConfirmation(memory: SymbolMemory, side: Side) {
 export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, observedAt: number, midpoint: number, absorption: number) {
   const range = memory.range15m;
   if (!range || midpoint <= 0 || observedAt - range.observedAt > 45 * 60_000) return [] as LiquidityRoute[];
+  const parentActive = (range.breakState ?? "INSIDE") === "INSIDE";
+  const child = parentActive && range.child && (range.child.breakState ?? "INSIDE") === "INSIDE" ? range.child : null;
   const width = range.upper - range.lower;
   const buffer = Math.max(midpoint * 0.00025, width * 0.06);
   const minimumStopRate = Math.max(MIN_STRUCTURAL_STOP_RATE, memory.minuteNoiseRate * 1.1);
@@ -429,6 +467,37 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
   };
   const routes: LiquidityRoute[] = [];
   for (const side of ["LONG", "SHORT"] as const) {
+    if (child) {
+      const childWidth = child.upper - child.lower;
+      const childBuffer = Math.max(midpoint * 0.00025, childWidth * 0.06);
+      const childEntry = side === "LONG" ? child.upper + childBuffer : child.lower - childBuffer;
+      const parentTarget = side === "LONG" ? range.upper : range.lower;
+      const targetAhead = side === "LONG" ? parentTarget > childEntry : parentTarget < childEntry;
+      const targetDistanceRate = Math.abs(parentTarget - childEntry) / midpoint;
+      const childStopDistance = childEntry * minimumStopRate;
+      const childStructuralStop = side === "LONG" ? child.upper - Math.max(childBuffer * 1.5, childWidth * 0.24)
+        : child.lower + Math.max(childBuffer * 1.5, childWidth * 0.24);
+      const childInvalidation = side === "LONG" ? Math.min(childStructuralStop, childEntry - childStopDistance)
+        : Math.max(childStructuralStop, childEntry + childStopDistance);
+      const confirmationScore = routeConfirmation(memory, side);
+      const fakeoutRisk = clamp(absorption * 0.35 + (1 - confirmationScore) * 0.55
+        + (memory.timeframeBias.h1 === (side === "LONG" ? "DOWN" : "UP") ? 0.18 : 0), 0, 1);
+      const childActivation = Math.max(0.002, Math.min(0.006, child.widthRate * 0.7));
+      const preTriggerSide = side === "LONG" ? midpoint < childEntry : midpoint > childEntry;
+      if (targetAhead && targetDistanceRate >= MIN_TARGET_DISTANCE_RATE) {
+        routes.push({ id: `${symbol}:INTERNAL_ROTATION:${side}:${child.id ?? stablePriceBin(child.midpoint)}:${range.id ?? stablePriceBin(range.midpoint)}`,
+          symbol, side, kind: "INTERNAL_ROTATION", stage: "LOCAL_TO_NODE", entryTrigger: childEntry,
+          invalidation: childInvalidation, target: parentTarget,
+          targetIdentity: `PARENT_RANGE:${side}:${stablePriceBin(parentTarget)}`, targetTimeframe: "15m",
+          nextTarget: null, confirmationScore, fakeoutRisk, activationDistanceRate: childActivation,
+          score: child.quality * 0.28 + range.quality * 0.25 + confirmationScore * 0.47,
+          executableNow: preTriggerSide && Math.abs(childEntry - midpoint) / midpoint <= childActivation
+            && confirmationScore >= 0.52 && fakeoutRisk <= 0.62,
+          structureId: child.id, structureRole: "CHILD",
+          reason: ["15分钟父区间内部的子区间边界", "本次只属于区间内部迁移，不是父级突破",
+            "实际第一目标为15分钟父区间边缘", "第一目标必须独立满足扣成本盈亏比"] });
+      }
+    }
     const nodes = higher(side);
     const first = nodes.find((item) => {
       const distanceRate = Math.abs(item.zone.price - (side === "LONG" ? range.upper : range.lower)) / midpoint;
@@ -437,7 +506,7 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
     const confirmationScore = routeConfirmation(memory, side);
     const fakeoutRisk = clamp(absorption * 0.35 + (1 - confirmationScore) * 0.55
       + (memory.timeframeBias.h1 === (side === "LONG" ? "DOWN" : "UP") ? 0.18 : 0), 0, 1);
-    if (first) {
+    if (first && parentActive) {
       const entryTrigger = side === "LONG" ? range.upper + buffer : range.lower - buffer;
       const structuralInvalidation = side === "LONG" ? range.upper - Math.max(buffer * 1.5, width * 0.24)
         : range.lower + Math.max(buffer * 1.5, width * 0.24);
@@ -453,13 +522,15 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
       const next = nodeBeyondProjection ? first : nodes.find((item) => (side === "LONG" ? item.zone.price > first.zone.price * 1.0025 : item.zone.price < first.zone.price * 0.9975)
         && Math.abs(item.zone.price - first.zone.price) / first.zone.price <= maxSegmentDistanceRate);
       const score = range.quality * 0.38 + confirmationScore * 0.47 + first.zone.probabilityReach * 0.15;
-      routes.push({ id: `${symbol}:LOCAL_BREAKOUT:${side}:${stablePriceBin(range.upper)}:${stablePriceBin(range.lower)}`,
+      const preTriggerSide = side === "LONG" ? midpoint < entryTrigger : midpoint > entryTrigger;
+      routes.push({ id: `${symbol}:LOCAL_BREAKOUT:${side}:${range.id ?? `${stablePriceBin(range.upper)}:${stablePriceBin(range.lower)}`}`,
         symbol, side, kind: "LOCAL_BREAKOUT", stage: "LOCAL_TO_NODE", entryTrigger, invalidation,
         target: currentTarget.price, targetIdentity: currentTarget.identity,
         targetTimeframe: currentTarget.timeframe, nextTarget: next?.zone.price ?? null, confirmationScore, fakeoutRisk,
-        activationDistanceRate, score, executableNow: Math.abs(entryTrigger - midpoint) / midpoint <= activationDistanceRate
+        activationDistanceRate, score, executableNow: preTriggerSide && Math.abs(entryTrigger - midpoint) / midpoint <= activationDistanceRate
           && confirmationScore >= 0.52 && fakeoutRisk <= 0.62,
-        reason: ["15分钟重复边界", "高质量突破用连续三次两秒盘口确认，中等质量等待完整1分钟",
+        structureId: range.id, structureRole: "PARENT",
+        reason: ["15分钟父级复合区间边界", "计划只能在首次穿越前建立", "高质量突破用连续三次两秒盘口确认，中等质量等待完整1分钟",
           nodeBeyondProjection ? "先兑现15分钟局部量度空间" : `${first.timeframe}流动性作为本段终点`,
           "更远高周期节点留给下一段重判", "订单流、微价格与周期方向联合过滤假突破"] });
       if (next) {
@@ -476,6 +547,7 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
           targetTimeframe: next.timeframe, nextTarget: null, confirmationScore, fakeoutRisk,
           activationDistanceRate, score: score * 0.92, executableNow: atNode && Math.abs(nodeEntry - midpoint) / midpoint <= activationDistanceRate
             && confirmationScore >= 0.62 && fakeoutRisk <= 0.48,
+          structureId: range.id, structureRole: "PARENT",
           reason: ["到达上一段高周期流动性节点", "仅在节点被吸收且延续强度通过后启动", `${next.timeframe}下一流动性为新目标`] });
       }
     }
@@ -498,7 +570,7 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
       ? minute.high >= edgePrice - buffer * 0.25 && minute.close <= rejectionEntry && minute.close < minute.open
       : minute.low <= edgePrice + buffer * 0.25 && minute.close >= rejectionEntry && minute.close > minute.open);
     const rejectionScore = range.quality * 0.48 + rejectionConfirmation * 0.27 + absorption * 0.25;
-    routes.push({ id: `${symbol}:EDGE_REJECTION:${side}:${stablePriceBin(edgePrice)}`, symbol, side: rejectionSide,
+    if (parentActive) routes.push({ id: `${symbol}:EDGE_REJECTION:${side}:${range.id ?? stablePriceBin(edgePrice)}`, symbol, side: rejectionSide,
       kind: "EDGE_REJECTION", stage: "LOCAL_TO_NODE", entryTrigger: rejectionEntry,
       invalidation: rejectionInvalidation,
       target: rejectionTarget, targetIdentity: `RANGE_SEGMENT:${rejectionSide}:${stablePriceBin(rejectionTarget)}`,
@@ -506,7 +578,8 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
       fakeoutRisk: clamp(1 - absorption * 0.55 - rejectionConfirmation * 0.3, 0, 1), activationDistanceRate,
       score: rejectionScore, executableNow: Math.abs(rejectionEntry - midpoint) / midpoint <= activationDistanceRate
         && absorption >= 0.55 && rejectionConfirmation >= 0.48 && rejectionConfirmed,
-      reason: ["15分钟区间边界出现吸收", "完整1分钟K线完成扫边并收回", "优先兑现区间中轴，扣成本不足时最多延伸到70%", "失效后等待突破路线重新评估"] });
+      structureId: range.id, structureRole: "PARENT",
+      reason: ["15分钟父级区间边界出现吸收", "完整1分钟K线完成扫边并收回", "优先兑现区间中轴，扣成本不足时最多延伸到70%", "失效后等待突破路线重新评估"] });
   }
   return routes.sort((a, b) => Number(b.executableNow) - Number(a.executableNow) || b.score - a.score).slice(0, 6);
 }
@@ -521,7 +594,8 @@ export function selectRouteDecision(routes: LiquidityRoute[], observedAt: number
     reason: selected.reason, routeId: selected.id, routeStage: selected.stage, routeKind: selected.kind,
     targetTimeframe: selected.targetTimeframe, nextTarget: selected.nextTarget,
     confirmationScore: selected.confirmationScore, fakeoutRisk: selected.fakeoutRisk,
-    activationDistanceRate: selected.activationDistanceRate };
+    activationDistanceRate: selected.activationDistanceRate,
+    structureId: selected.structureId, structureRole: selected.structureRole };
 }
 
 export function arbitrateDecision(routes: LiquidityRoute[], observedAt: number, fallback: Decision | null) {
@@ -604,11 +678,10 @@ export function reconcilePaper(input: {
       persistence: 1, source: "STOP_POOL" }) : null;
   };
   const planRouteId = plan?.routeId;
-  const activePlanRoute = !planRouteId ? null : input.activeRoutes?.filter((route) => route.id === planRouteId || (route.side === plan?.side
-    && route.kind === plan.routeKind
-    && Math.abs(route.target - plan.target) / Math.max(plan.target, 1e-9) <= 0.0015
-    && Math.abs(route.entryTrigger - plan.entryTrigger) / Math.max(plan.entryTrigger, 1e-9) <= 0.0015))
-    .sort((a, b) => Number(b.id === planRouteId) - Number(a.id === planRouteId))[0] ?? null;
+  const activePlanRoute = !planRouteId ? null : input.activeRoutes?.find((route) => route.id === planRouteId) ?? null;
+  const structureReplaced = plan?.state === "PREPARED" && plan.structureId != null
+    && input.activeRoutes?.some((route) => route.side === plan!.side && route.kind === plan!.routeKind
+      && route.structureId != null && route.structureId !== plan!.structureId);
   const routePresent = !planRouteId || activePlanRoute != null;
   const routeWeak = activePlanRoute != null && (activePlanRoute.confirmationScore < (plan?.routeKind === "NODE_CONTINUATION" ? 0.5 : 0.42)
     || activePlanRoute.fakeoutRisk > (plan?.routeKind === "NODE_CONTINUATION" ? 0.62 : 0.72));
@@ -630,11 +703,12 @@ export function reconcilePaper(input: {
   // Stale data and a crossed structural invalidation are hard faults. Route
   // disappearance and activation drift need two completed 1m confirmations so
   // a transient two-second recomputation cannot cancel an otherwise valid plan.
-  if ((!input.fresh || input.sequenceFault || invalidationCrossed || targetPassed || invalidLegacyFallback) && plan?.state === "PREPARED") {
+  if ((!input.fresh || input.sequenceFault || invalidationCrossed || targetPassed || invalidLegacyFallback || structureReplaced) && plan?.state === "PREPARED") {
     plan = { ...plan, state: "CANCELLED" };
     cancelledThisCycle = true;
     events.push(!input.fresh ? "STALE_CANCEL" : input.sequenceFault ? "SEQUENCE_REBUILD_CANCEL"
-      : invalidationCrossed ? "PRE_ENTRY_INVALIDATION_CANCEL" : targetPassed ? "GAP_ECONOMICS_CANCEL" : "NONLOCAL_FALLBACK_CANCEL");
+      : invalidationCrossed ? "PRE_ENTRY_INVALIDATION_CANCEL" : targetPassed ? "GAP_ECONOMICS_CANCEL"
+        : structureReplaced ? "STRUCTURE_REPLACED_CANCEL" : "NONLOCAL_FALLBACK_CANCEL");
   } else if (plan?.state === "PREPARED") {
     const softReason = !targetPresent ? "TARGET_GONE_CANCEL" as const : routeWeak ? "ROUTE_WEAK_CANCEL" as const
       : movedAway ? "ACTIVATION_LOST_CANCEL" as const : null;
@@ -662,6 +736,12 @@ export function reconcilePaper(input: {
     plan = observeFastBreakout(plan, { now: input.now, price: input.midpoint,
       confirmation: input.breakoutConfirmation ?? 0,
       fakeoutRisk: activePlanRoute?.fakeoutRisk ?? plan.fakeoutRisk ?? 1 });
+    if (plan.breakoutFailedAt != null || plan.breakoutMissedAt != null) {
+      const missed = plan.breakoutMissedAt != null;
+      plan = { ...plan, state: "CANCELLED" };
+      cancelledThisCycle = true;
+      events.push(missed ? "BREAKOUT_MISSED_CANCEL" : "BREAKOUT_FIRST_CROSS_FAILED_CANCEL");
+    }
   }
   if (position?.status === "OPEN" && input.fresh && !input.sequenceFault) {
     const own = input.protectOnly ? zoneUtility({ side: position.side, price: position.currentTarget, liquidity: 1, cascade: 0, pathCost: 1,
@@ -701,7 +781,9 @@ export function reconcilePaper(input: {
     const materiallyDifferent = !plan || plan.state !== "PREPARED";
     const withinActivation = input.decision.activationDistanceRate == null
       || Math.abs(input.decision.entryTrigger - input.midpoint) / Math.max(input.midpoint, 1e-9) <= input.decision.activationDistanceRate;
-    if (materiallyDifferent && withinActivation) {
+    const breakoutStillAhead = input.decision.marketState !== "BREAKOUT"
+      || (input.decision.side === "LONG" ? input.midpoint < input.decision.entryTrigger : input.midpoint > input.decision.entryTrigger);
+    if (materiallyDifferent && withinActivation && breakoutStillAhead) {
       const sized = sizePaperPosition({ equity: input.equity, entry: input.decision.entryTrigger, invalidation: input.decision.invalidation, feeBps: 10, stressSlippageBps: 8, confidence: clamp(input.decision.score / Math.max(input.decision.score + input.decision.oppositeScore, Number.EPSILON), 0, 1), openRisk: input.openRisk });
       const confidence = clamp(input.decision.score / Math.max(input.decision.score + input.decision.oppositeScore, Number.EPSILON), 0, 1);
       const economicTarget = stagedEconomicTarget(input.decision);
@@ -717,6 +799,8 @@ export function reconcilePaper(input: {
       } else if (sized.allowedLoss > 0) {
         events.push("PLAN_REJECTED_ECONOMICS");
       }
+    } else if (materiallyDifferent && withinActivation && !breakoutStillAhead) {
+      events.push("BREAKOUT_ALREADY_CROSSED_SKIP");
     }
   }
   if ((input.allowOpen ?? true) && plan?.state === "PREPARED" && position?.status !== "OPEN"
@@ -728,7 +812,7 @@ export function reconcilePaper(input: {
       stressSlippageBps: 8, confidence, openRisk: input.openRisk });
     const invalidFill = plan.side === "LONG" ? input.midpoint <= plan.invalidation : input.midpoint >= plan.invalidation;
     const passedTarget = plan.side === "LONG" ? input.midpoint >= plan.target : input.midpoint <= plan.target;
-    const economics = tradeEconomics({ entry: input.midpoint, target: plan.economicTarget ?? stagedEconomicTarget(plan), lossRate: resized.lossRate, confidence,
+    const economics = tradeEconomics({ entry: input.midpoint, target: stagedEconomicTarget(plan), lossRate: resized.lossRate, confidence,
       notional: resized.notional, equity: input.equity });
     if (invalidFill || resized.allowedLoss <= 0 || resized.portfolioRiskAfter > input.equity * 0.05 + 1e-9 || passedTarget || !economics.executable) {
       plan = { ...plan, state: "CANCELLED" };

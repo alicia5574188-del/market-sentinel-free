@@ -93,3 +93,10 @@
 - 五个主页面和实盘的三个子页面在当前打开期间分别保存滚动位置；主页面内容保持挂载，以保留 K 线周期、展开项、实盘子页和 API 表单状态。关闭或重新载入页面后允许重置。
 - 全局右上角不再重复提供模拟/实盘切换；实盘开关只保留在实盘账户与设置页。
 - 模拟订单页分组显示当前持仓、等待进场和最近 15 分钟刚结束的订单。这样两秒内完成、快于页面轮询的真实模拟成交也不会从用户视野中消失；历史数据同时每 15 秒刷新。
+# 2026-09-07 — Parent/child structure semantics (authorized, implementation pending)
+
+- The candle interval is not the structural grade. The current twelve-completed-15m-candle quartile box is a child balance when it is nested inside a broader repeated 15m balance.
+- A child break inside the parent is `INTERNAL_ROTATION` and may target the parent boundary; only acceptance beyond the parent boundary is a parent `LOCAL_BREAKOUT`.
+- Breakout plans must be armed while price remains on the pre-trigger side. Already-crossed, consumed, or structurally replaced boundaries are missed/invalid and cannot be revived as fresh breakouts.
+- The actual first target alone must pass net economics. A farther 1h/4h node cannot subsidize admission before price reaches and re-evaluates the nearer node.
+- This correction does not increase leverage, per-trade loss, aggregate risk, request cadence, or LIVE authority.
