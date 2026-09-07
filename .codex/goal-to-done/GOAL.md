@@ -1,5 +1,9 @@
 # Goal
 
+## Completed upgrade — 2026-09-07 accepted-break auction persistence
+
+Keep the crossed parent 15m boundary and first-segment target alive after the range itself reports `BROKEN_UP` or `BROKEN_DOWN`. A pre-armed plan may use live confirmation and fakeout evidence at the actual cross, while its trigger, stop, target, and range geometry remain frozen. Only an exceptional cross may enter directly; ordinary acceptance waits for a separate hold-and-reacceleration retest; a failed break waits for an inside reverse retest. An already-extended move is observation-only, and `NODE_CONTINUATION` may extend an open position but may never become a standalone first entry. Rolling of the irrelevant opposite range edge must not cancel the relevant frozen boundary. Record every cancellation reason and time, expose accepted-break observation plainly in the UI, and add no Gate requests, alarm cadence, D1 writes, risk expansion, or LIVE authority.
+
 ## Active upgrade — 2026-09-07 open-position PnL and live line charts
 
 Make every open PAPER position and owner-visible Gate LIVE position understandable at a glance. Each position card must show gross unrealized PnL in USDT, margin return percentage, direction-adjusted price return, and the latest market price. Add a compact 5m close line chart from entry to the latest observation: entry is an exact point, while current protection and target remain reference lines. Historical reviews use the same 5m line convention with distinct entry/exit points. Aggregate the existing cached Gate 1m candle endpoint on the client and append the midpoint already delivered by the 15-second page runtime poll; do not add Gate requests, Durable Object loops, writes, trading authority, or any new way for stale data to execute orders. Keep LIVE default OFF and owner-only.
