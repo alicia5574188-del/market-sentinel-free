@@ -172,6 +172,10 @@ export type PaperPlan = Decision & {
   breakoutCrossedAt?: number;
   breakoutFailedAt?: number;
   breakoutMissedAt?: number;
+  latestConfirmationScore?: number;
+  latestFakeoutRisk?: number;
+  cancelReason?: string;
+  cancelledAt?: number;
   invalidationSignalMinute?: number;
   invalidationSignalCount?: number;
   invalidationSignalReason?: "TARGET_GONE_CANCEL" | "ACTIVATION_LOST_CANCEL" | "ROUTE_WEAK_CANCEL";
@@ -724,25 +728,28 @@ export function observeFastBreakout(
   input: { now: number; price: number; confirmation: number; fakeoutRisk: number },
 ) {
   if (plan.marketState !== "BREAKOUT" || plan.routeKind === "BREAKOUT_RETEST" || plan.state !== "PREPARED") return plan;
+  const livePlan = { ...plan, latestConfirmationScore: input.confirmation, latestFakeoutRisk: input.fakeoutRisk };
   const initialRisk = Math.max(Math.abs(plan.entryTrigger - plan.invalidation), plan.entryTrigger * 0.0001);
   const extension = plan.side === "LONG" ? input.price - plan.entryTrigger : plan.entryTrigger - input.price;
   const breakoutCrossedAt = plan.breakoutCrossedAt ?? (extension >= 0 ? input.now : undefined);
-  if (breakoutCrossedAt != null && extension < 0) return { ...plan, breakoutCrossedAt, breakoutFailedAt: input.now,
+  if (breakoutCrossedAt != null && extension < 0) return { ...livePlan, breakoutCrossedAt, breakoutFailedAt: input.now,
     breakoutSignalCount: 0, breakoutSignalAt: undefined };
-  if (extension > initialRisk * BREAKOUT_ENTRY_MAX_CHASE_R) return { ...plan, breakoutCrossedAt,
+  if (extension > initialRisk * BREAKOUT_ENTRY_MAX_CHASE_R) return { ...livePlan, breakoutCrossedAt,
     breakoutMissedAt: input.now, breakoutSignalCount: 0, breakoutSignalAt: undefined };
   const minimumExtension = Math.max(plan.entryTrigger * 0.00005, initialRisk * BREAKOUT_ENTRY_MIN_EXTENSION_R);
-  const highQuality = (plan.confirmationScore ?? 0) >= FAST_BREAKOUT_MIN_CONFIRMATION
-    && input.confirmation >= FAST_BREAKOUT_MIN_CONFIRMATION
+  // Geometry is frozen when the plan is created, but breakout quality is live
+  // evidence. A mediocre pre-break snapshot must not permanently veto a later
+  // exceptional cross.
+  const highQuality = input.confirmation >= FAST_BREAKOUT_MIN_CONFIRMATION
     && input.fakeoutRisk <= FAST_BREAKOUT_MAX_FAKEOUT_RISK
     && extension >= minimumExtension
     && breakoutEntryPriceAcceptable(plan, input.price);
   if (!highQuality) return (plan.breakoutSignalCount ?? 0) > 0
-    ? { ...plan, breakoutCrossedAt, breakoutSignalCount: 0, breakoutSignalAt: undefined }
-    : breakoutCrossedAt === plan.breakoutCrossedAt ? plan : { ...plan, breakoutCrossedAt };
-  if (plan.breakoutSignalAt === input.now) return plan;
+    ? { ...livePlan, breakoutCrossedAt, breakoutSignalCount: 0, breakoutSignalAt: undefined }
+    : { ...livePlan, breakoutCrossedAt };
+  if (plan.breakoutSignalAt === input.now) return livePlan;
   const consecutive = plan.breakoutSignalAt != null && input.now - plan.breakoutSignalAt <= FAST_BREAKOUT_MAX_SNAPSHOT_GAP_MS;
-  return { ...plan,
+  return { ...livePlan,
     breakoutCrossedAt,
     breakoutSignalCount: Math.min(FAST_BREAKOUT_REQUIRED_SNAPSHOTS, consecutive ? (plan.breakoutSignalCount ?? 0) + 1 : 1),
     breakoutSignalAt: input.now };

@@ -132,6 +132,25 @@ test("an accepted parent break must retest and reaccelerate before a continuatio
   assert.equal(retest.executableNow, true);
 });
 
+test("an accepted parent break keeps the crossed boundary and its retest auction mapped", () => {
+  const memory = emptySymbolMemory();
+  memory.range15m = { lower: 99, upper: 100, midpoint: 99.5, widthRate: 1 / 99.5,
+    touchesLower: 3, touchesUpper: 3, quality: 0.9, observedAt: 60_000,
+    id: "PARENT:99:100", role: "PARENT", breakState: "BROKEN_DOWN" };
+  memory.lastCompletedMinuteCandle = { time: 0, open: 98.96, high: 99.02, low: 98.82, close: 98.85 };
+  memory.flow = flow({ ofi: -0.7, takerDelta: -0.6, micropriceDisplacementBps: -2 });
+  memory.timeframeBias = { m1: "DOWN", m15: "DOWN", h1: "DOWN", h4: "NEUTRAL" };
+  memory.structureByTimeframe.h4 = [zone("SHORT", 98), zone("LONG", 101.2)];
+  const routes = buildLiquidityRoutes(memory, "BTC_USDT", 60_001, 98.9, 0.1);
+  const frozen = routes.find((route) => route.kind === "LOCAL_BREAKOUT" && route.side === "SHORT");
+  const retest = routes.find((route) => route.kind === "BREAKOUT_RETEST" && route.side === "SHORT");
+  assert.ok(frozen, "the crossed parent boundary must survive its own confirmation");
+  assert.equal(frozen.rangeBoundary, 99);
+  assert.equal(frozen.executableNow, false, "an already-crossed boundary cannot create a chasing plan");
+  assert.ok(retest, "ordinary acceptance must remain eligible for a distinct boundary retest");
+  assert.equal(retest.rangeBoundary, 99);
+});
+
 test("a completed child sweep-and-reclaim prepares the opposite-side liquidity route", () => {
   const memory = emptySymbolMemory();
   memory.range15m = { lower: 98, upper: 102, midpoint: 100, widthRate: 0.04,
@@ -404,6 +423,25 @@ test("only an exceptional breakout opens after four consecutive two-second confi
     decision: null, plan: observed, position: null, zones: [target, zone("SHORT", 95)], absorption: 0.1,
     breakoutConfirmation: 0.9, equity: 1_000, openRisk: 0, allowOpen: true });
   assert.equal(opened.position?.status, "OPEN");
+});
+
+test("live breakout quality can upgrade a mediocre pre-break plan to an exceptional cross", () => {
+  const plan: PaperPlan = { id: "live-upgrade", symbol: "SOL_USDT", observedAt: 1,
+    marketState: "BREAKOUT", side: "LONG", entryTrigger: 101, invalidation: 99,
+    target: 110, targetIdentity: "BOOK:LONG:110", score: 9, oppositeScore: 1,
+    confirmationScore: 0.78, fakeoutRisk: 0.3, reason: [], state: "PREPARED", createdAt: 1,
+    expiresAt: PLAN_TTL_MS + 1, plannedRisk: 10, notional: 1_000 };
+  const target = zone("LONG", 110); target.identity = plan.targetIdentity;
+  let observed = plan;
+  for (const now of [2_001, 4_001, 6_001, 8_001]) {
+    observed = reconcilePaper({ now, midpoint: 101.25, fresh: true, sequenceFault: false,
+      decision: null, plan: observed, position: null, zones: [target, zone("SHORT", 95)], absorption: 0.1,
+      breakoutConfirmation: 0.91, breakoutFakeoutRisk: 0.12,
+      equity: 1_000, openRisk: 0, allowOpen: false }).plan!;
+  }
+  assert.equal(observed.breakoutSignalCount, 4);
+  assert.equal(observed.latestConfirmationScore, 0.91);
+  assert.equal(observed.latestFakeoutRisk, 0.12);
 });
 
 test("near-threshold flow cannot accumulate direct-breakout confirmation", () => {
@@ -682,6 +720,7 @@ test("crossing the frozen structural invalidation still cancels a prepared plan 
   const result = reconcilePaper({ now: 2, midpoint: 98.9, fresh: true, sequenceFault: false, decision: null,
     plan, position: null, zones: [zone("LONG", 110)], absorption: 0, equity: 1_000, openRisk: 0 });
   assert.equal(result.plan?.state, "CANCELLED");
+  assert.equal(result.plan?.cancelReason, "PRE_ENTRY_INVALIDATION_CANCEL");
   assert.deepEqual(result.events, ["PRE_ENTRY_INVALIDATION_CANCEL"]);
 });
 
@@ -713,6 +752,24 @@ test("a replacement decision neither replaces nor instantly cancels the frozen t
   assert.equal(result.plan?.state, "PREPARED");
   assert.equal(result.plan?.id, "old");
   assert.equal(result.plan?.target, 110);
+  assert.deepEqual(result.events, []);
+});
+
+test("rolling the irrelevant range edge cannot cancel a frozen breakout boundary", () => {
+  const plan: PaperPlan = { symbol: "BTC_USDT", observedAt: 1, marketState: "BREAKOUT", side: "SHORT",
+    entryTrigger: 99, invalidation: 100, target: 96, targetIdentity: "node-96", score: 2, oppositeScore: 1,
+    reason: [], routeId: "old-parent", routeKind: "LOCAL_BREAKOUT", routeStage: "LOCAL_TO_NODE",
+    structureId: "PARENT:99:101", structureRole: "PARENT", activationDistanceRate: 0.02,
+    id: "frozen-parent", state: "PREPARED", createdAt: 1, expiresAt: PLAN_TTL_MS + 1,
+    plannedRisk: 10, notional: 1_000 };
+  const rolled: LiquidityRoute = { id: "new-parent", symbol: "BTC_USDT", side: "SHORT", kind: "LOCAL_BREAKOUT",
+    stage: "LOCAL_TO_NODE", entryTrigger: 99, invalidation: 100, target: 96, targetIdentity: "node-96",
+    targetTimeframe: "15m", nextTarget: null, confirmationScore: 0.7, fakeoutRisk: 0.3,
+    activationDistanceRate: 0.02, score: 2, executableNow: false, structureId: "PARENT:99:100.5",
+    structureRole: "PARENT", rangeBoundary: 99, reason: [] };
+  const result = reconcilePaper({ now: 2, midpoint: 99.2, fresh: true, sequenceFault: false, decision: null,
+    plan, position: null, zones: [], activeRoutes: [rolled], absorption: 0.1, equity: 1_000, openRisk: 0 });
+  assert.equal(result.plan?.state, "PREPARED");
   assert.deepEqual(result.events, []);
 });
 

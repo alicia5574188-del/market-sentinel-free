@@ -254,7 +254,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           this.memory[symbol].maintenanceRate = this.runtime.contractMeta[symbol]?.maintenanceRate ?? 0.005;
           this.memory[symbol].flow.funding = this.runtime.contractMeta[symbol]?.fundingRate ?? 0;
           this.sessionWarmup[symbol] = 0;
-          if (this.runtime.plans[symbol]?.state === "PREPARED") this.runtime.plans[symbol] = { ...this.runtime.plans[symbol]!, state: "CANCELLED" };
+          if (this.runtime.plans[symbol]?.state === "PREPARED") this.runtime.plans[symbol] = { ...this.runtime.plans[symbol]!, state: "CANCELLED", cancelReason: "PROCESS_RESTART_CANCEL", cancelledAt: Date.now() };
         }
       } else if (saved) {
         this.authorityReady = false;
@@ -322,7 +322,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.lastUniverseAt = now;
     if (changed) {
       for (const symbol of Object.keys(this.runtime.plans)) {
-        if (!next.includes(symbol) && this.runtime.plans[symbol]?.state === "PREPARED") this.runtime.plans[symbol] = { ...this.runtime.plans[symbol]!, state: "CANCELLED" };
+        if (!next.includes(symbol) && this.runtime.plans[symbol]?.state === "PREPARED") this.runtime.plans[symbol] = { ...this.runtime.plans[symbol]!, state: "CANCELLED", cancelReason: "UNIVERSE_REMOVED_CANCEL", cancelledAt: now };
       }
     }
     for (const symbol of next) {
@@ -1083,7 +1083,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const plan = this.runtime.plans[symbol];
     if (hardFailure) this.runtime.routes[symbol] = [];
     if (!hardFailure || plan?.state !== "PREPARED") return false;
-    this.runtime.plans[symbol] = { ...plan, state: "CANCELLED" };
+    this.runtime.plans[symbol] = { ...plan, state: "CANCELLED", cancelReason: "FEED_HARD_FAILURE_CANCEL", cancelledAt: now };
     return true;
   }
 
@@ -1159,7 +1159,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         this.runtime.sequenceRebuilds += 1;
         const plan = this.runtime.plans[symbol];
         if (plan?.state === "PREPARED") {
-          this.runtime.plans[symbol] = { ...plan, state: "CANCELLED" };
+          this.runtime.plans[symbol] = { ...plan, state: "CANCELLED", cancelReason: "SEQUENCE_REBUILD_CANCEL", cancelledAt: now };
           criticalChanged = true;
         }
         this.runtime.decisions[symbol] = null;
@@ -1198,7 +1198,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const analyzed = validation.fresh && !validation.sequenceFault && progressed
         ? analyzeSnapshot(memory, snapshot)
         : { midpoint: memory.lastMid, zones: [] as LiquidityZone[], bands: [], absorption: 0, decision: null,
-          routes: [] as LiquidityRoute[], range15m: memory.range15m, confirmationBySide: { LONG: 0, SHORT: 0 } };
+          routes: [] as LiquidityRoute[], range15m: memory.range15m, confirmationBySide: { LONG: 0, SHORT: 0 },
+          fakeoutBySide: { LONG: 1, SHORT: 1 } };
       this.runtime.analysisMs.push(performance.now() - analysisStart);
       if (this.runtime.analysisMs.length > 240) this.runtime.analysisMs.shift();
       const priorPlan = this.runtime.plans[symbol] ?? null;
@@ -1217,6 +1218,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         equity: markToMarketEquity(this.runtime), openRisk, sameDirectionRisk: directionalStressRisk(this.runtime, planSide), allowOpen: false,
         protectOnly: (this.sessionWarmup[symbol] ?? 0) < WARMUP_SNAPSHOTS,
         activeRoutes: analyzed.routes, breakoutConfirmation: priorPlan ? analyzed.confirmationBySide[priorPlan.side] : undefined,
+        breakoutFakeoutRisk: priorPlan ? analyzed.fakeoutBySide[priorPlan.side] : undefined,
         maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate, leverageMax: this.runtime.contractMeta[symbol]?.leverageMax });
       this.runtime.decisions[symbol] = decision;
       this.runtime.routes[symbol] = ancillaryFresh ? analyzed.routes : [];
@@ -1272,7 +1274,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       for (const symbol of this.runtime.symbols) {
         const plan = this.runtime.plans[symbol];
         if (plan?.state === "PREPARED") {
-          this.runtime.plans[symbol] = { ...plan, state: "CANCELLED" };
+          this.runtime.plans[symbol] = { ...plan, state: "CANCELLED", cancelReason: "PAPER_CYCLE_BANKRUPTCY", cancelledAt: now };
           criticalChanged = true;
         }
         const position = this.runtime.positions[symbol];
@@ -1339,6 +1341,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         confirmationCandle: this.memory[row.symbol]?.lastCompletedMinuteCandle,
         equity: markToMarketEquity(this.runtime), openRisk, sameDirectionRisk: directionalStressRisk(this.runtime, planSide), allowOpen: true,
         activeRoutes: row.analyzed.routes, breakoutConfirmation: priorPlan ? row.analyzed.confirmationBySide[priorPlan.side] : undefined,
+        breakoutFakeoutRisk: priorPlan ? row.analyzed.fakeoutBySide[priorPlan.side] : undefined,
         maintenanceRate: this.runtime.contractMeta[row.symbol]?.maintenanceRate, leverageMax: this.runtime.contractMeta[row.symbol]?.leverageMax });
       this.runtime.plans[row.symbol] = reconciled.plan;
       this.runtime.positions[row.symbol] = reconciled.position;
