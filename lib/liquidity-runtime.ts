@@ -8,10 +8,13 @@ import {
   decideThreeState,
   flowPressure,
   MAX_GENERIC_PLAN_DISTANCE_RATE,
+  MIN_NET_REWARD_RISK,
   MIN_TARGET_DISTANCE_RATE,
   MIN_STRUCTURAL_STOP_RATE,
+  ROUND_TRIP_FRICTION_RATE,
   observeFastBreakout,
   PLAN_SOFT_INVALIDATION_CONFIRMATIONS,
+  PORTFOLIO_RISK_CAP,
   planTriggered,
   selectSafeLeverage,
   sizePaperPosition,
@@ -39,6 +42,19 @@ import {
 } from "./liquidity-core.ts";
 
 export const PLAN_TTL_MS = 15 * 60_000;
+
+export type RangeSweepObservation = {
+  structureId: string;
+  structureRole: "PARENT" | "CHILD";
+  side: Side;
+  boundary: number;
+  buffer: number;
+  extreme: number;
+  sweptAt: number;
+  lastObservedAt: number;
+  reclaimCount: number;
+  reclaimedAt?: number;
+};
 
 export type SymbolMemory = {
   lastSequence: number;
@@ -73,6 +89,7 @@ export type SymbolMemory = {
   lastCompletedMinuteClose: number;
   lastCompletedMinuteCandle: CompletedMinuteCandle | null;
   minuteNoiseRate: number;
+  rangeSweeps: RangeSweepObservation[];
 };
 
 export function emptySymbolMemory(): SymbolMemory {
@@ -98,6 +115,7 @@ export function emptySymbolMemory(): SymbolMemory {
     lastCompletedMinuteClose: 0,
     lastCompletedMinuteCandle: null,
     minuteNoiseRate: 0,
+    rangeSweeps: [],
   };
 }
 
@@ -249,6 +267,51 @@ function repeatedExtrema(memory: SymbolMemory, midpoint: number): LiquidityZone[
   return zones;
 }
 
+function observeRealtimeRangeSweeps(memory: SymbolMemory, midpoint: number, observedAt: number, absorption: number) {
+  const parent = memory.range15m;
+  if (!parent || (parent.breakState ?? "INSIDE") !== "INSIDE") {
+    memory.rangeSweeps = [];
+    return;
+  }
+  const bands: RangeBand[] = [parent];
+  if (parent.child && (parent.child.breakState ?? "INSIDE") === "INSIDE") bands.push(parent.child);
+  const activeIds = new Set(bands.map((band) => band.id).filter((id): id is string => Boolean(id)));
+  memory.rangeSweeps = memory.rangeSweeps.filter((row) => activeIds.has(row.structureId)
+    && observedAt - row.lastObservedAt <= 3 * 60_000);
+  for (const band of bands) {
+    if (!band.id) continue;
+    const width = band.upper - band.lower;
+    const buffer = Math.max(midpoint * 0.00025, width * 0.06);
+    for (const side of ["LONG", "SHORT"] as const) {
+      const boundary = side === "LONG" ? band.lower : band.upper;
+      const swept = side === "LONG" ? midpoint <= boundary - buffer * 0.25 : midpoint >= boundary + buffer * 0.25;
+      const reclaimed = side === "LONG" ? midpoint >= boundary + buffer * 0.15 : midpoint <= boundary - buffer * 0.15;
+      const index = memory.rangeSweeps.findIndex((row) => row.structureId === band.id && row.side === side);
+      let row = index >= 0 ? memory.rangeSweeps[index] : null;
+      if (swept) {
+        if (!row) {
+          row = { structureId: band.id, structureRole: band.role ?? "PARENT", side, boundary, buffer,
+            extreme: midpoint, sweptAt: observedAt, lastObservedAt: observedAt, reclaimCount: 0 };
+          memory.rangeSweeps.push(row);
+        } else {
+          row.extreme = side === "LONG" ? Math.min(row.extreme, midpoint) : Math.max(row.extreme, midpoint);
+          row.lastObservedAt = observedAt;
+          row.reclaimCount = 0;
+          row.reclaimedAt = undefined;
+        }
+        continue;
+      }
+      if (!row || !reclaimed) continue;
+      const confirmation = routeConfirmation(memory, side);
+      const strong = confirmation >= 0.65 && absorption >= 0.60;
+      const consecutive = observedAt - row.lastObservedAt <= 10_000;
+      row.reclaimCount = strong ? (consecutive ? row.reclaimCount + 1 : 1) : 0;
+      row.lastObservedAt = observedAt;
+      if (row.reclaimCount >= 4) row.reclaimedAt ??= observedAt;
+    }
+  }
+}
+
 export function analyzeSnapshot(memory: SymbolMemory, snapshot: BookSnapshot) {
   const midpoint = mid(snapshot);
   const rawBookZones = aggregateBook(snapshot);
@@ -306,6 +369,7 @@ export function analyzeSnapshot(memory: SymbolMemory, snapshot: BookSnapshot) {
   });
   const activeFlow = Math.abs(memory.flow.takerDelta);
   const absorption = clamp(activeFlow * (1 - Math.min(1, Math.abs(memory.flow.priceResponseBps) / Math.max(2, activeFlow * 8))), 0, 1);
+  observeRealtimeRangeSweeps(memory, midpoint, snapshot.observedAt, absorption);
   const freshBias = {
     m1: snapshot.observedAt - memory.timeframeUpdatedAt.m1 <= 3 * 60_000 ? memory.timeframeBias.m1 : "UNKNOWN" as const,
     m15: snapshot.observedAt - memory.timeframeUpdatedAt.m15 <= 45 * 60_000 ? memory.timeframeBias.m15 : "UNKNOWN" as const,
@@ -409,8 +473,12 @@ function deriveRangeBand(rows: StructureCandle[], role: "PARENT" | "CHILD", size
   const brokenDown = evidence.length === 2 && evidence.every((row) => row.close < lower - tolerance);
   const breakState = brokenUp ? "BROKEN_UP" as const : brokenDown ? "BROKEN_DOWN" as const : "INSIDE" as const;
   const observedAt = ((rows.at(-1) ?? window.at(-1)!).time + 900) * 1_000;
+  const lowerExcursions = window.map((row) => Math.max(0, lower - row.low)).filter((value) => value > 0);
+  const upperExcursions = window.map((row) => Math.max(0, row.high - upper)).filter((value) => value > 0);
+  const sweepDepth = (values: number[]) => values.length ? quantile(values, 0.8) : 0;
   return { lower, upper, midpoint, widthRate, touchesLower, touchesUpper, quality, observedAt,
-    id: `${role}:${stablePriceBin(lower)}:${stablePriceBin(upper)}`, role, breakState };
+    id: `${role}:${stablePriceBin(lower)}:${stablePriceBin(upper)}`, role, breakState,
+    lowerSweepDepth: sweepDepth(lowerExcursions), upperSweepDepth: sweepDepth(upperExcursions) };
 }
 
 export function deriveRangeStructure(rows: StructureCandle[]): RangeStructure | null {
@@ -477,6 +545,63 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
       ? { price: first.price, identity: first.identity ?? `STOP:15m:${side}:${stablePriceBin(first.price)}`,
         next: Math.abs(first.price - edge) / Math.max(edge, 1e-9) > 0.001 ? edge : null }
       : { price: edge, identity: `RANGE_OPPOSITE:${side}:${stablePriceBin(edge)}`, next: null };
+  };
+  const pushEdgeReclaimRoute = (band: RangeBand, role: RangeRole, crossedSide: Side, boundary: number,
+    bandBuffer: number, activationRate: number) => {
+    const side: Side = crossedSide === "LONG" ? "SHORT" : "LONG";
+    const minute = memory.lastCompletedMinuteCandle;
+    const minuteRange = minute ? Math.max(minute.high - minute.low, midpoint * 1e-9) : 0;
+    const minuteSwept = minute != null && (side === "LONG"
+      ? minute.low <= boundary - bandBuffer * 0.25
+      : minute.high >= boundary + bandBuffer * 0.25);
+    const minuteReclaimed = minute != null && (side === "LONG"
+      ? minute.close >= boundary + bandBuffer * 0.15 && minute.close > minute.open
+      : minute.close <= boundary - bandBuffer * 0.15 && minute.close < minute.open);
+    const minuteRetention = !minute ? 0 : side === "LONG"
+      ? (minute.close - minute.low) / minuteRange
+      : (minute.high - minute.close) / minuteRange;
+    const completedSignal = minuteSwept && minuteReclaimed && minuteRetention >= 0.55;
+    const realtime = memory.rangeSweeps.find((row) => row.structureId === band.id && row.side === side
+      && row.reclaimedAt != null && observedAt - row.reclaimedAt <= 30_000 && row.reclaimCount >= 4);
+    if (!completedSignal && !realtime) return;
+    const reclaimSource = completedSignal ? "COMPLETED_MINUTE" as const : "FAST_BOOK" as const;
+    const sweepExtreme = completedSignal ? (side === "LONG" ? minute!.low : minute!.high) : realtime!.extreme;
+    const confirmationScore = routeConfirmation(memory, side);
+    const reclaimStrength = clamp(band.quality * 0.35 + (completedSignal ? minuteRetention : 0.75) * 0.35
+      + confirmationScore * 0.2 + absorption * 0.1, 0, 1);
+    const fakeoutRisk = clamp((1 - reclaimStrength) * 0.8
+      + (memory.timeframeBias.h1 === (side === "LONG" ? "DOWN" : "UP") ? 0.12 : 0), 0, 1);
+    const entryTrigger = side === "LONG" ? boundary + bandBuffer * 0.2 : boundary - bandBuffer * 0.2;
+    const minimumStopDistance = entryTrigger * minimumStopRate;
+    const historicalSweepDepth = side === "LONG" ? band.lowerSweepDepth ?? 0 : band.upperSweepDepth ?? 0;
+    const historicalEnvelope = Math.max(bandBuffer * 1.5, historicalSweepDepth * 1.15, minimumStopDistance);
+    const sweepPadding = Math.max(bandBuffer * 0.25, minimumStopDistance * 0.25);
+    const invalidation = side === "LONG"
+      ? Math.min(boundary - historicalEnvelope, sweepExtreme - sweepPadding, entryTrigger - minimumStopDistance)
+      : Math.max(boundary + historicalEnvelope, sweepExtreme + sweepPadding, entryTrigger + minimumStopDistance);
+    const lossRate = Math.abs(entryTrigger - invalidation) / Math.max(entryTrigger, 1e-9) + ROUND_TRIP_FRICTION_RATE;
+    const requiredDistance = entryTrigger * (lossRate * MIN_NET_REWARD_RISK + ROUND_TRIP_FRICTION_RATE);
+    const width = band.upper - band.lower;
+    const cap = side === "LONG" ? band.lower + width * 0.7 : band.upper - width * 0.7;
+    const target = side === "LONG"
+      ? Math.min(cap, Math.max(band.midpoint, entryTrigger + requiredDistance))
+      : Math.max(cap, Math.min(band.midpoint, entryTrigger - requiredDistance));
+    const targetAhead = side === "LONG" ? target > entryTrigger : target < entryTrigger;
+    const economicallyReachable = side === "LONG" ? target >= entryTrigger + requiredDistance : target <= entryTrigger - requiredDistance;
+    const waitingInsideRetest = side === "LONG" ? midpoint > entryTrigger : midpoint < entryTrigger;
+    if (!targetAhead || !economicallyReachable || Math.abs(target - entryTrigger) / midpoint < MIN_TARGET_DISTANCE_RATE) return;
+    routes.push({ id: `${symbol}:EDGE_REJECTION:${side}:${band.id ?? stablePriceBin(boundary)}:${completedSignal ? minute!.time : realtime!.sweptAt}`,
+      symbol, side, kind: "EDGE_REJECTION", stage: "LOCAL_TO_NODE", entryTrigger, invalidation,
+      target, targetIdentity: `RANGE_SEGMENT:${side}:${stablePriceBin(target)}`, targetTimeframe: "15m",
+      nextTarget: null, confirmationScore, fakeoutRisk, activationDistanceRate: activationRate,
+      score: band.quality * 0.4 + reclaimStrength * 0.45 + confirmationScore * 0.15,
+      executableNow: waitingInsideRetest && Math.abs(entryTrigger - midpoint) / midpoint <= activationRate
+        && confirmationScore >= 0.42 && fakeoutRisk <= 0.72,
+      structureId: band.id, structureRole: role, rangeBoundary: boundary, rangeBuffer: bandBuffer,
+      sweepExtreme, reclaimSource, reclaimStrength,
+      reason: [`完整${reclaimSource === "FAST_BOOK" ? "实时盘口" : "1分钟K线"}确认${role === "CHILD" ? "子" : "父"}区间扫边并收回`,
+        "不在扫流动性过程中接单，只等待区间内侧回踩", "硬止损位于本次扫盘、历史扫盘与分钟噪声之外",
+        "反转强度只调整置信度；只要价格继续接受在区间内就保留震荡逻辑"] });
   };
   const pushRetestRoute = (input: {
     band: RangeBand; role: RangeRole; side: Side; boundary: number; bandBuffer: number;
@@ -592,6 +717,7 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
           nextTarget: null, confirmationScore, fakeoutRisk, activationRate: childActivation, baseScore: childScore });
       }
       pushFailedBreakRoute(child, "CHILD", side, side === "LONG" ? child.upper : child.lower, childBuffer, childActivation);
+      pushEdgeReclaimRoute(child, "CHILD", side, side === "LONG" ? child.upper : child.lower, childBuffer, childActivation);
     }
     const nodes = higher(side);
     const first = nodes.find((item) => {
@@ -652,6 +778,8 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
     }
     if (parentActive) pushFailedBreakRoute(range, "PARENT", side,
       side === "LONG" ? range.upper : range.lower, buffer, activationDistanceRate);
+    if (parentActive) pushEdgeReclaimRoute(range, "PARENT", side,
+      side === "LONG" ? range.upper : range.lower, buffer, activationDistanceRate);
   }
   return routes.sort((a, b) => Number(b.executableNow) - Number(a.executableNow) || b.score - a.score).slice(0, 6);
 }
@@ -669,14 +797,20 @@ export function selectRouteDecision(routes: LiquidityRoute[], observedAt: number
     targetTimeframe: selected.targetTimeframe, nextTarget: selected.nextTarget,
     confirmationScore: selected.confirmationScore, fakeoutRisk: selected.fakeoutRisk,
     activationDistanceRate: selected.activationDistanceRate,
-    structureId: selected.structureId, structureRole: selected.structureRole };
+    structureId: selected.structureId, structureRole: selected.structureRole,
+    rangeBoundary: selected.rangeBoundary, rangeBuffer: selected.rangeBuffer,
+    sweepExtreme: selected.sweepExtreme, reclaimSource: selected.reclaimSource,
+    reclaimStrength: selected.reclaimStrength };
 }
 
 export function arbitrateDecision(routes: LiquidityRoute[], observedAt: number, fallback: Decision | null) {
   // Once a valid 15m route map exists it is the only execution authority.
   // A legacy all-timeframe decision may still describe the market, but it may
   // not turn a distant higher-timeframe liquidity area into today's entry.
-  return routes.length > 0 ? selectRouteDecision(routes, observedAt) : fallback;
+  // A generic balanced-liquidity label is not enough to place a passive range
+  // catch. RANGE execution requires a frozen 15m edge plus observed reclaim.
+  return routes.length > 0 ? selectRouteDecision(routes, observedAt)
+    : fallback?.marketState === "RANGE" ? null : fallback;
 }
 
 export function deriveStructureZones(rows: Array<{ volume: number; close: number; high: number; low: number }>, timeframe: "1m" | "15m" | "1h" | "4h", midpoint: number) {
@@ -729,6 +863,7 @@ export function reconcilePaper(input: {
   confirmationCandle?: CompletedMinuteCandle | null;
   equity: number;
   openRisk: number;
+  sameDirectionRisk?: number;
   allowOpen?: boolean;
   protectOnly?: boolean;
   activeRoutes?: LiquidityRoute[];
@@ -760,7 +895,8 @@ export function reconcilePaper(input: {
   const routePresent = !planRouteId || activePlanRoute != null;
   const routeWeak = activePlanRoute != null && (activePlanRoute.confirmationScore < (plan?.routeKind === "NODE_CONTINUATION" ? 0.5 : 0.42)
     || activePlanRoute.fakeoutRisk > (plan?.routeKind === "NODE_CONTINUATION" ? 0.62 : 0.72));
-  const frozenAuctionRoute = plan?.routeKind === "BREAKOUT_RETEST" || plan?.routeKind === "FAILED_BREAKOUT_REVERSAL";
+  const frozenAuctionRoute = plan?.routeKind === "BREAKOUT_RETEST" || plan?.routeKind === "FAILED_BREAKOUT_REVERSAL"
+    || plan?.routeKind === "EDGE_REJECTION";
   const targetPresent = !plan || plan.state !== "PREPARED" || (planRouteId
     ? routePresent || (frozenAuctionRoute && structureStillMapped)
     : continuousTarget(plan.side, plan.targetIdentity, plan.target) != null);
@@ -772,7 +908,7 @@ export function reconcilePaper(input: {
   const targetPassed = plan?.state === "PREPARED" && triggered
     && (plan.side === "LONG" ? input.midpoint >= plan.target : input.midpoint <= plan.target);
   const invalidLegacyFallback = plan?.state === "PREPARED" && !plan.routeId
-    && ((input.activeRoutes?.length ?? 0) > 0
+    && (plan.marketState === "RANGE" || (input.activeRoutes?.length ?? 0) > 0
       || (!triggered && plan.activationDistanceRate != null
         && Math.abs(plan.entryTrigger - input.midpoint) / Math.max(input.midpoint, 1e-9) > MAX_GENERIC_PLAN_DISTANCE_RATE));
   // Freeze a prepared thesis instead of chasing every two-second recalculation.
@@ -866,12 +1002,15 @@ export function reconcilePaper(input: {
     const breakoutStillAhead = input.decision.marketState !== "BREAKOUT"
       || (input.decision.side === "LONG" ? input.midpoint < input.decision.entryTrigger : input.midpoint > input.decision.entryTrigger);
     if (materiallyDifferent && withinActivation && breakoutStillAhead) {
-      const sized = sizePaperPosition({ equity: input.equity, entry: input.decision.entryTrigger, invalidation: input.decision.invalidation, feeBps: 10, stressSlippageBps: 8, confidence: clamp(input.decision.score / Math.max(input.decision.score + input.decision.oppositeScore, Number.EPSILON), 0, 1), openRisk: input.openRisk });
+      const sized = sizePaperPosition({ equity: input.equity, entry: input.decision.entryTrigger, invalidation: input.decision.invalidation,
+        feeBps: 10, stressSlippageBps: 8,
+        confidence: clamp(input.decision.score / Math.max(input.decision.score + input.decision.oppositeScore, Number.EPSILON), 0, 1),
+        openRisk: input.openRisk, sameDirectionRisk: input.sameDirectionRisk });
       const confidence = clamp(input.decision.score / Math.max(input.decision.score + input.decision.oppositeScore, Number.EPSILON), 0, 1);
       const economicTarget = stagedEconomicTarget(input.decision);
       const economics = tradeEconomics({ entry: input.decision.entryTrigger, target: economicTarget, lossRate: sized.lossRate, confidence,
         notional: sized.notional, equity: input.equity });
-      if (sized.allowedLoss > 0 && sized.portfolioRiskAfter <= input.equity * 0.05 + 1e-9 && economics.executable) {
+      if (sized.allowedLoss > 0 && sized.portfolioRiskAfter <= input.equity * PORTFOLIO_RISK_CAP + 1e-9 && economics.executable) {
         const leverage = selectSafeLeverage({ notional: sized.notional, equity: input.equity, entry: input.decision.entryTrigger,
           invalidation: input.decision.invalidation, maintenanceRate: input.maintenanceRate, leverageMax: input.leverageMax });
         plan = { ...input.decision, id: `${input.decision.symbol}:${input.now}`, state: "PREPARED", createdAt: input.now,
@@ -891,14 +1030,14 @@ export function reconcilePaper(input: {
     && breakoutEntryPriceAcceptable(plan, input.midpoint)) {
     const confidence = clamp(plan.score / Math.max(plan.score + plan.oppositeScore, Number.EPSILON), 0, 1);
     const resized = sizePaperPosition({ equity: input.equity, entry: input.midpoint, invalidation: plan.invalidation, feeBps: 10,
-      stressSlippageBps: 8, confidence, openRisk: input.openRisk });
+      stressSlippageBps: 8, confidence, openRisk: input.openRisk, sameDirectionRisk: input.sameDirectionRisk });
     const invalidFill = plan.side === "LONG" ? input.midpoint <= plan.invalidation : input.midpoint >= plan.invalidation;
     const passedTarget = plan.side === "LONG" ? input.midpoint >= plan.target : input.midpoint <= plan.target;
     const economics = tradeEconomics({ entry: input.midpoint, target: stagedEconomicTarget(plan), lossRate: resized.lossRate, confidence,
       notional: resized.notional, equity: input.equity });
-    if (invalidFill || resized.allowedLoss <= 0 || resized.portfolioRiskAfter > input.equity * 0.05 + 1e-9 || passedTarget || !economics.executable) {
+    if (invalidFill || resized.allowedLoss <= 0 || resized.portfolioRiskAfter > input.equity * PORTFOLIO_RISK_CAP + 1e-9 || passedTarget || !economics.executable) {
       plan = { ...plan, state: "CANCELLED" };
-      events.push(invalidFill || resized.portfolioRiskAfter > input.equity * 0.05 + 1e-9 ? "GAP_RISK_CANCEL" : "GAP_ECONOMICS_CANCEL");
+      events.push(invalidFill || resized.portfolioRiskAfter > input.equity * PORTFOLIO_RISK_CAP + 1e-9 ? "GAP_RISK_CANCEL" : "GAP_ECONOMICS_CANCEL");
       return { plan, position, events };
     }
     plan = { ...plan, state: "TRIGGERED" };
@@ -922,6 +1061,11 @@ export function reconcilePaper(input: {
       status: "OPEN",
       maxFavorablePrice: input.midpoint,
       maxAdversePrice: input.midpoint,
+      rangeBoundary: plan.rangeBoundary,
+      rangeBuffer: plan.rangeBuffer,
+      sweepExtreme: plan.sweepExtreme,
+      reclaimSource: plan.reclaimSource,
+      reclaimStrength: plan.reclaimStrength,
     };
     events.push("PAPER_OPEN");
   }

@@ -1,5 +1,5 @@
 import { decryptGateCredentials, type EncryptedGateCredentials, type GateCredentials } from "./credential-vault.ts";
-import { PORTFOLIO_MARGIN_CAP, PORTFOLIO_RISK_CAP, ROUND_TRIP_FRICTION_RATE, selectSafeLeverage, sizePaperPosition, stagedEconomicTarget, tradeEconomics, type PaperPlan, type Side } from "./liquidity-core.ts";
+import { CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_MARGIN_CAP, PORTFOLIO_RISK_CAP, ROUND_TRIP_FRICTION_RATE, selectSafeLeverage, sizePaperPosition, stagedEconomicTarget, tradeEconomics, type PaperPlan, type Side } from "./liquidity-core.ts";
 
 const encoder = new TextEncoder();
 const GATE_TRIGGER_DAY_SECONDS = 86_400;
@@ -266,6 +266,7 @@ export function buildLiveEntryIntent(input: {
   equity: number;
   available: number;
   openRisk: number;
+  sameDirectionRisk?: number;
   quantoMultiplier: number;
   maintenanceRate?: number;
   leverageMax?: number;
@@ -275,13 +276,14 @@ export function buildLiveEntryIntent(input: {
   const { plan } = input;
   const entryPrice = plan.marketState === "BREAKOUT" ? input.entryPrice ?? plan.entryTrigger : plan.entryTrigger;
   const confidence = plan.score / Math.max(plan.score + plan.oppositeScore, Number.EPSILON);
-  const sized = sizePaperPosition({ equity: input.equity, entry: entryPrice, invalidation: plan.invalidation, feeBps: 10, stressSlippageBps: 8, confidence, openRisk: input.openRisk });
+  const sized = sizePaperPosition({ equity: input.equity, entry: entryPrice, invalidation: plan.invalidation, feeBps: 10,
+    stressSlippageBps: 8, confidence, openRisk: input.openRisk, sameDirectionRisk: input.sameDirectionRisk });
   const multiplier = Math.max(input.quantoMultiplier, 1e-12);
   const maxLeverage = Math.max(1, Math.floor(input.leverageMax ?? 50));
   const contractNotional = Math.max(entryPrice * multiplier, 1e-12);
   // LIVE follows the PAPER account ratio. When that proportional amount is
   // smaller than Gate's indivisible one-contract lot, use one lot only if its
-  // real loss remains inside the user's 5% account-wide risk boundary.
+  // real loss remains inside both account-wide and correlated-direction boundaries.
   let contracts = Math.max(1, Math.floor(sized.notional / contractNotional));
   let leverageChoice = selectSafeLeverage({ notional: contracts * contractNotional, equity: input.equity,
     entry: entryPrice, invalidation: plan.invalidation, maintenanceRate: input.maintenanceRate, leverageMax: maxLeverage });
@@ -296,7 +298,10 @@ export function buildLiveEntryIntent(input: {
   const lossRate = Math.abs(entryPrice - plan.invalidation) / Math.max(entryPrice, 1e-9) + ROUND_TRIP_FRICTION_RATE;
   const plannedRisk = notional * lossRate;
   if (input.openRisk + plannedRisk > input.equity * PORTFOLIO_RISK_CAP + 1e-8) {
-    throw new LiveEntrySizingError("RISK_CAP", plan.symbol, `${plan.symbol} 最小 1 张合约将超过账户 5% 总风险，本轮未挂单`);
+    throw new LiveEntrySizingError("RISK_CAP", plan.symbol, `${plan.symbol} 最小 1 张合约将超过账户 10% 总风险，本轮未挂单`);
+  }
+  if ((input.sameDirectionRisk ?? 0) + plannedRisk > input.equity * CORRELATED_DIRECTION_RISK_CAP + 1e-8) {
+    throw new LiveEntrySizingError("RISK_CAP", plan.symbol, `${plan.symbol} 最小 1 张合约将超过同方向 6.5% 相关风险，本轮未挂单`);
   }
   if ((input.openMargin ?? 0) + margin > input.equity * PORTFOLIO_MARGIN_CAP + 1e-8) {
     throw new LiveEntrySizingError("MARGIN", plan.symbol, `${plan.symbol} 将超过账户 30% 挂单与持仓保证金上限，本轮未挂单`);

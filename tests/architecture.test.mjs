@@ -206,7 +206,12 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
 
 test("PAPER and LIVE share bounded sizing and meaningful net-profit economics", async () => {
   const [core, live] = await Promise.all([read("lib/liquidity-core.ts"), read("lib/gate-live.ts")]);
-  assert.match(core, /MAX_SINGLE_TRADE_RISK_RATE = 0\.018/);
+  assert.match(core, /MIN_SINGLE_TRADE_RISK_RATE = 0\.015/);
+  assert.match(core, /MAX_SINGLE_TRADE_RISK_RATE = 0\.03/);
+  assert.match(core, /PORTFOLIO_RISK_CAP = 0\.10/);
+  assert.match(core, /CORRELATED_DIRECTION_RISK_CAP = 0\.065/);
+  assert.match(core, /DYNAMIC_PROTECTION_MIN_CONFIRMED_R = 1\.5/);
+  assert.match(core, /DYNAMIC_PROTECTION_MIN_TARGET_PROGRESS = 0\.70/);
   assert.match(core, /MAX_NOTIONAL_TO_EQUITY = 4/);
   assert.match(core, /MIN_NET_TARGET_RETURN_ON_EQUITY = 0\.015/);
   assert.match(core, /Math\.min\(riskSizedNotional, input\.equity \* MAX_NOTIONAL_TO_EQUITY\)/);

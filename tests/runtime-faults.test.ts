@@ -479,10 +479,10 @@ test("ancillary wheel covers every symbol/feature and each TTL fails one millise
   }
 });
 
-test("mark-to-market drawdown rebalances the weakest PAPER risk back under five percent", async () => {
+test("mark-to-market drawdown rebalances the weakest PAPER risk back under ten percent", async () => {
   const { stream } = await makeStream();
   const now = 1_800_000_400_000;
-  const stop = 87.462;
+  const stop = 86.112;
   const weak = position("weak", "BTC_USDT", { currentStop: stop, initialStop: stop, targetScore: 1 });
   const strong = position("strong", "ETH_USDT", { currentStop: stop, initialStop: stop, targetScore: 2 });
   stream.runtime.symbols = ["BTC_USDT", "ETH_USDT"];
@@ -512,7 +512,7 @@ test("mark-to-market drawdown rebalances the weakest PAPER risk back under five 
   const markedEquity = stream.runtime.equity
     + stream.runtime.positions.ETH_USDT.notional * (90 - stream.runtime.positions.ETH_USDT.entryPrice) / stream.runtime.positions.ETH_USDT.entryPrice;
   const remaining = remainingStressRisk(stream.runtime.positions.ETH_USDT, 90);
-  assert.ok(remaining <= markedEquity * 0.05 + 1e-9, `${remaining} must be <= 5% of MTM equity ${markedEquity}`);
+  assert.ok(remaining <= markedEquity * 0.10 + 1e-9, `${remaining} must be <= 10% of MTM equity ${markedEquity}`);
 });
 
 test("market refresh can never add a fourth symbol", async () => {

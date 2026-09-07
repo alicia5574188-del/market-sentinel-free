@@ -44,17 +44,17 @@ test("LIVE ignores a legacy farther economic target and requires the actual firs
   assert.equal(staged.target, 100.6);
 });
 
-test("a 10 U LIVE account uses Gate's one-contract lot when its actual stop risk still fits 5%", () => {
+test("a 10 U LIVE account uses Gate's one-contract lot when its actual stop risk fits total and correlated caps", () => {
   const scaled = { ...plan("BREAKOUT", "LONG"), invalidation: 99.8 };
   const intent = buildLiveEntryIntent({ plan: scaled, equity: 10, available: 5.88, openRisk: 0, quantoMultiplier: 1, leverageMax: 50 });
   assert.equal(intent.contracts, 1);
   assert.equal(intent.notional, 100);
   assert.equal(intent.leverage, 50);
   assert.ok(intent.margin <= 5.88);
-  assert.ok(intent.plannedRisk <= 0.5);
+  assert.ok(intent.plannedRisk <= 0.65);
 });
 
-test("an indivisible Gate lot is rejected only when its real 5% risk or margin cannot fit", () => {
+test("an indivisible Gate lot is rejected when its real correlated risk or margin cannot fit", () => {
   assert.throws(
     () => buildLiveEntryIntent({ plan: plan("BREAKOUT", "LONG"), equity: 10, available: 5.88, openRisk: 0, quantoMultiplier: 1, leverageMax: 50 }),
     (error) => error instanceof LiveEntrySizingError && error.code === "RISK_CAP",

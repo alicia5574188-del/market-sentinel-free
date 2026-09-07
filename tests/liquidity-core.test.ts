@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  CORRELATED_DIRECTION_RISK_CAP,
   PORTFOLIO_RISK_CAP,
   MIN_NET_REWARD_RISK,
   MAX_GENERIC_PLAN_DISTANCE_RATE,
@@ -24,7 +25,7 @@ import {
   type PaperPlan,
   type PaperPosition,
 } from "../lib/liquidity-core.ts";
-import { PLAN_TTL_MS, aggregateFourHourCandles, ancillarySchedule, arbitrateDecision, buildLiquidityRoutes, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, inferLiquidationBands, reconcilePaper, selectRouteDecision, updateOpenInterestCohorts, usableSnapshot } from "../lib/liquidity-runtime.ts";
+import { PLAN_TTL_MS, aggregateFourHourCandles, analyzeSnapshot, ancillarySchedule, applyFlow, arbitrateDecision, buildLiquidityRoutes, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, inferLiquidationBands, reconcilePaper, selectRouteDecision, updateOpenInterestCohorts, usableSnapshot } from "../lib/liquidity-runtime.ts";
 import { drainPositionOutbox, enqueuePositionTransition } from "../lib/paper-outbox.ts";
 
 const flow = (patch: Partial<FlowEvidence> = {}): FlowEvidence => ({ ofi: 0, micropriceDisplacementBps: 0, takerDelta: 0, openInterestDelta: 0, funding: 0, actualLiquidations: 0, priceResponseBps: 0, ...patch });
@@ -195,6 +196,78 @@ test("completed one-minute noise sets a stop floor and failed breakout waits for
   assert.equal(lowerLong.target, 101);
 });
 
+test("an ordinary range sweep must reclaim before it offers an inside retest with a stop beyond the sweep", () => {
+  const memory = emptySymbolMemory();
+  memory.range15m = { lower: 99, upper: 101, midpoint: 100, widthRate: 0.02,
+    touchesLower: 4, touchesUpper: 4, quality: 0.9, observedAt: 60_000,
+    id: "PARENT:99:101", role: "PARENT", breakState: "INSIDE", lowerSweepDepth: 0.18, upperSweepDepth: 0.2 };
+  memory.minuteNoiseRate = 0.002;
+  memory.flow = flow({ ofi: 0.15, takerDelta: 0.2, micropriceDisplacementBps: 0.5 });
+  memory.timeframeBias = { m1: "NEUTRAL", m15: "NEUTRAL", h1: "NEUTRAL", h4: "NEUTRAL" };
+  memory.lastCompletedMinuteCandle = { time: 0, open: 99.04, high: 99.42, low: 98.72, close: 99.26 };
+  const routes = buildLiquidityRoutes(memory, "SOL_USDT", 60_001, 99.3, 0.2);
+  const edge = routes.find((route) => route.kind === "EDGE_REJECTION" && route.side === "LONG");
+  assert.ok(edge);
+  assert.equal(edge.reclaimSource, "COMPLETED_MINUTE");
+  assert.equal(edge.rangeBoundary, 99);
+  assert.equal(edge.sweepExtreme, 98.72);
+  assert.ok(edge.entryTrigger > 99 && edge.entryTrigger < 99.3, "entry waits for an inside retest after reclaim");
+  assert.ok(edge.invalidation < 98.72, "hard stop is beyond the observed sweep");
+  assert.ok(edge.target <= 100.4 + 1e-9, "first target cannot exceed seventy percent of the balance");
+  assert.equal(edge.executableNow, true);
+
+  memory.lastCompletedMinuteCandle = { time: 60, open: 99.04, high: 99.2, low: 98.72, close: 98.9 };
+  const unclaimed = buildLiquidityRoutes(memory, "SOL_USDT", 120_001, 98.9, 0.2);
+  assert.equal(unclaimed.some((route) => route.kind === "EDGE_REJECTION" && route.side === "LONG"), false);
+});
+
+test("four strong fresh book observations can confirm a fast range reclaim without waiting for a minute close", () => {
+  const memory = emptySymbolMemory();
+  memory.range15m = { lower: 99, upper: 101, midpoint: 100, widthRate: 0.02,
+    touchesLower: 4, touchesUpper: 4, quality: 0.9, observedAt: 1_000,
+    id: "PARENT:fast", role: "PARENT", breakState: "INSIDE" };
+  memory.timeframeBias = { m1: "UP", m15: "UP", h1: "NEUTRAL", h4: "NEUTRAL" };
+  memory.flow.takerDelta = 0.8;
+  const snapshot = (midpoint: number, sequence: number, observedAt: number) => ({ symbol: "SOL_USDT", observedAt, sequence,
+    tickSize: 0.01, bids: [{ price: midpoint - 0.01, size: 100 }], asks: [{ price: midpoint + 0.01, size: 100 }] });
+  let row = snapshot(98.95, 1, 1_000);
+  applyFlow(memory, row);
+  analyzeSnapshot(memory, row);
+  for (let index = 2; index <= 6; index += 1) {
+    row = snapshot(99.05, index, index * 2_000);
+    applyFlow(memory, row);
+    memory.flow.takerDelta = 0.8;
+    analyzeSnapshot(memory, row);
+  }
+  const analyzed = analyzeSnapshot(memory, snapshot(99.05, 7, 14_000));
+  const edge = analyzed.routes.find((route) => route.kind === "EDGE_REJECTION" && route.side === "LONG");
+  assert.ok(edge);
+  assert.equal(edge.reclaimSource, "FAST_BOOK");
+  assert.ok(edge.sweepExtreme != null && edge.sweepExtreme <= 98.95);
+});
+
+test("a reclaimed range position ignores weak flow inside but exits after two completed outside acceptances", () => {
+  const position: PaperPosition = { id: "range-reclaim", symbol: "SOL_USDT", side: "LONG", scenario: "RANGE",
+    entryAt: 1, entryPrice: 99.05, initialStop: 98.6, currentStop: 98.6, currentTarget: 100,
+    plannedRisk: 20, notional: 2_000, targetScore: 10, status: "OPEN", routeId: "edge:long",
+    routeKind: "EDGE_REJECTION", rangeBoundary: 99, rangeBuffer: 0.12, sweepExtreme: 98.72, reclaimStrength: 0.5 };
+  const held = updatePosition(position, { now: 60_001, price: 99.1, bestTarget: null, oppositeTarget: zone("SHORT", 98),
+    absorption: 0, confirmationMinute: 60_000, confirmationPrice: 99.1,
+    confirmationCandle: { time: 0, open: 99, high: 99.2, low: 98.95, close: 99.1 } });
+  assert.equal(held.status, "OPEN");
+  assert.equal(held.exitSignalCount, 0);
+  assert.equal(held.rangeAcceptanceCount, 0);
+  const firstOutside = updatePosition(held, { now: 120_001, price: 98.96, bestTarget: null, oppositeTarget: zone("SHORT", 98),
+    absorption: 0, confirmationMinute: 120_000, confirmationPrice: 98.96,
+    confirmationCandle: { time: 60, open: 99.02, high: 99.04, low: 98.9, close: 98.96 } });
+  assert.equal(firstOutside.status, "OPEN");
+  assert.equal(firstOutside.rangeAcceptanceCount, 1);
+  const acceptedOutside = updatePosition(firstOutside, { now: 180_001, price: 98.94, bestTarget: null, oppositeTarget: zone("SHORT", 98),
+    absorption: 0, confirmationMinute: 180_000, confirmationPrice: 98.94,
+    confirmationCandle: { time: 120, open: 98.97, high: 99, low: 98.88, close: 98.94 } });
+  assert.equal(acceptedOutside.exitReason, "RANGE_OUTSIDE_ACCEPTANCE");
+});
+
 test("the robust one-minute noise estimate ignores tiny bars and caps a volatility spike", () => {
   const rows = Array.from({ length: 19 }, (_, time) => ({ time: time * 60, open: 100, high: 100.2, low: 100, close: 100.1, volume: 1 }));
   rows.push({ time: 19 * 60, open: 100, high: 105, low: 95, close: 100, volume: 1 });
@@ -226,7 +299,7 @@ test("a valid 15m route map blocks the legacy all-timeframe fallback", () => {
     targetTimeframe: "1h", nextTarget: null, confirmationScore: 0.4, fakeoutRisk: 0.7,
     activationDistanceRate: 0.003, score: 0.8, executableNow: false, reason: [] };
   assert.equal(arbitrateDecision([observingRoute], 1, fallback), null);
-  assert.equal(arbitrateDecision([], 1, fallback), fallback);
+  assert.equal(arbitrateDecision([], 1, fallback), null, "generic RANGE labels cannot place passive catch orders");
 });
 
 test("an existing nonlocal fallback plan is cancelled immediately", () => {
@@ -451,47 +524,73 @@ test("reversal and range pre-position at the opposite liquidity edge", () => {
   assert.equal(planTriggered(plan, reversal.entryTrigger + 0.01), true);
 });
 
-test("position sizing never breaches five percent portfolio structural loss", () => {
-  const sized = sizePaperPosition({ equity: 1_000, entry: 100, invalidation: 98, feeBps: 10, stressSlippageBps: 8, confidence: 1, openRisk: 44 });
-  assert.equal(PORTFOLIO_RISK_CAP, 0.05);
+test("position sizing never breaches ten percent portfolio or correlated-direction structural loss", () => {
+  const sized = sizePaperPosition({ equity: 1_000, entry: 100, invalidation: 98, feeBps: 10, stressSlippageBps: 8,
+    confidence: 1, openRisk: 94, sameDirectionRisk: 40 });
+  assert.equal(PORTFOLIO_RISK_CAP, 0.10);
+  assert.equal(CORRELATED_DIRECTION_RISK_CAP, 0.065);
   assert.equal(sized.allowedLoss, 6);
-  assert.ok(sized.portfolioRiskAfter <= 50);
+  assert.ok(sized.portfolioRiskAfter <= 100);
+  const correlated = sizePaperPosition({ equity: 1_000, entry: 100, invalidation: 98, feeBps: 10, stressSlippageBps: 8,
+    confidence: 1, openRisk: 40, sameDirectionRisk: 60 });
+  assert.equal(correlated.allowedLoss, 5);
 });
 
-test("single-entry risk is capped at 1.8% and notional is capped at four times equity", () => {
+test("single-entry risk is capped at 3% and notional is capped at four times equity", () => {
   const single = sizePaperPosition({ equity: 1_000, entry: 100, invalidation: 98, feeBps: 10, stressSlippageBps: 8, confidence: 1, openRisk: 0 });
-  assert.equal(single.allowedLoss, 18);
+  assert.ok(Math.abs(single.allowedLoss - 30) < 1e-9);
   assert.ok(single.notional <= 4_000);
   assert.ok(single.notional * 0.0018 <= 7.2);
   const next = sizePaperPosition({ equity: 1_000, entry: 100, invalidation: 98, feeBps: 10, stressSlippageBps: 8, confidence: 1, openRisk: single.allowedLoss });
-  assert.equal(next.allowedLoss, 18);
-  assert.ok(single.portfolioRiskAfter <= 50 && next.portfolioRiskAfter <= 50);
+  assert.ok(Math.abs(next.allowedLoss - 30) < 1e-9);
+  assert.ok(single.portfolioRiskAfter <= 100 && next.portfolioRiskAfter <= 100);
 });
 
-test("dynamic protection tightens only and target absorption exits without fixed TP", () => {
+test("dynamic protection waits for 1.5R and seventy-percent target progress without crossing entry", () => {
   const position: PaperPosition = { id: "x", symbol: "SOL_USDT", side: "LONG", scenario: "BREAKOUT", entryAt: 1, entryPrice: 100, initialStop: 95, currentStop: 95, currentTarget: 110, plannedRisk: 10, notional: 1_000, targetScore: 20, status: "OPEN" };
-  const held = updatePosition(position, { now: 60_001, price: 105, bestTarget: zone("LONG", 112), oppositeTarget: zone("SHORT", 90, 0.2),
-    absorption: 0.2, confirmationMinute: 60_000, confirmationPrice: 105 });
-  assert.ok(held.currentStop > position.currentStop);
-  assert.ok(held.currentStop > position.entryPrice);
-  const closed = updatePosition(held, { now: 120_001, price: 112, bestTarget: zone("LONG", 112), oppositeTarget: zone("SHORT", 90, 0.2), absorption: 0.8 });
+  const early = updatePosition(position, { now: 60_001, price: 106.9, bestTarget: zone("LONG", 110), oppositeTarget: zone("SHORT", 90, 0.2),
+    absorption: 0.2, confirmationMinute: 60_000, confirmationPrice: 106.9 });
+  assert.equal(early.currentStop, position.initialStop);
+  const protectedPosition = updatePosition(early, { now: 120_001, price: 107.5, bestTarget: zone("LONG", 110), oppositeTarget: zone("SHORT", 90, 0.2),
+    absorption: 0.2, confirmationMinute: 120_000, confirmationPrice: 107.5 });
+  assert.equal(protectedPosition.currentStop, 97.5);
+  assert.ok(protectedPosition.currentStop < position.entryPrice);
+  const closed = updatePosition(protectedPosition, { now: 120_002, price: 110, bestTarget: zone("LONG", 110), oppositeTarget: zone("SHORT", 90, 0.2), absorption: 0.8 });
   assert.equal(closed.status, "CLOSED");
   assert.ok(Number.isFinite(closed.realizedPnl));
 });
 
-test("the latest SOL protection locks a positive net cushion after costs", () => {
+test("a strong move below seventy-percent target progress still keeps the original stop", () => {
   const position: PaperPosition = { id: "sol-net-protection", symbol: "SOL_USDT", side: "LONG", scenario: "RANGE",
     entryAt: 1_788_708_906_135, entryPrice: 105.575, initialStop: 105.43222977, currentStop: 105.43222977,
     currentTarget: 106.345, plannedRisk: 10.1279, notional: 3_212.8483, targetScore: 20, status: "OPEN" };
-  const protectedPosition = updatePosition(position, { now: 1_788_709_200_001, price: 105.89,
+  const held = updatePosition(position, { now: 1_788_709_200_001, price: 105.89,
     bestTarget: zone("LONG", 106.345), oppositeTarget: zone("SHORT", 105), absorption: 0.2,
     confirmationMinute: 1_788_709_200_000, confirmationPrice: 105.9,
     confirmationCandle: { time: 1_788_709_140, open: 105.82, high: 105.94, low: 105.82, close: 105.9 } });
-  assert.ok(protectedPosition.currentStop > position.entryPrice + position.entryPrice * 0.0018);
-  const stopped = updatePosition(protectedPosition, { now: 1_788_709_202_001, price: 105.775,
+  assert.equal(held.currentStop, position.initialStop);
+  const pullback = updatePosition(held, { now: 1_788_709_202_001, price: 105.50,
     bestTarget: zone("LONG", 106.345), oppositeTarget: zone("SHORT", 105), absorption: 0.2 });
-  assert.equal(stopped.exitReason, "DYNAMIC_PROTECTION_STOP");
-  assert.ok((stopped.realizedPnl ?? 0) > 0);
+  assert.equal(pullback.status, "OPEN");
+});
+
+test("the observed ETH pullback stays open instead of exiting at the old thirty-five-percent MFE trail", () => {
+  const position: PaperPosition = { id: "eth-range-pullback", symbol: "ETH_USDT", side: "LONG", scenario: "RANGE",
+    entryAt: 1, entryPrice: 2498.135, initialStop: 2494.10961, currentStop: 2494.10961,
+    currentTarget: 2515.16, plannedRisk: 20, notional: 3_100, targetScore: 20, status: "OPEN",
+    routeId: "eth-range-edge", routeKind: "EDGE_REJECTION" };
+  const advanced = updatePosition(position, { now: 60_001, price: 2512.7,
+    bestTarget: zone("LONG", 2515.16), oppositeTarget: zone("SHORT", 2485), absorption: 0.2,
+    confirmationMinute: 60_000, confirmationPrice: 2512.7,
+    confirmationCandle: { time: 0, open: 2508, high: 2513, low: 2507.5, close: 2512.7 } });
+  assert.equal(advanced.currentStop, 2498.135 - (2498.135 - 2494.10961) * 0.5);
+  assert.ok(advanced.currentStop < position.entryPrice);
+  const pullback = updatePosition(advanced, { now: 60_002, price: 2503.235,
+    bestTarget: zone("LONG", 2515.16), oppositeTarget: zone("SHORT", 2485), absorption: 0.2 });
+  assert.equal(pullback.status, "OPEN");
+  const target = updatePosition(pullback, { now: 60_003, price: 2515.16,
+    bestTarget: zone("LONG", 2515.16), oppositeTarget: zone("SHORT", 2485), absorption: 0.2 });
+  assert.equal(target.exitReason, "TARGET_NODE_EXIT");
 });
 
 test("the observed ETH path cannot move protection to entry before one confirmed R", () => {
@@ -604,7 +703,8 @@ test("a vanished target needs two distinct completed-minute confirmations", () =
 
 test("a replacement decision neither replaces nor instantly cancels the frozen thesis", () => {
   const oldDecision = { symbol: "BTC_USDT", observedAt: 1, marketState: "RANGE" as const, side: "LONG" as const,
-    entryTrigger: 95, invalidation: 93, target: 110, targetIdentity: "old-target", score: 2, oppositeScore: 1, reason: [] };
+    entryTrigger: 95, invalidation: 93, target: 110, targetIdentity: "old-target", score: 2, oppositeScore: 1, reason: [],
+    routeId: "edge:long", routeKind: "EDGE_REJECTION" as const };
   const plan: PaperPlan = { ...oldDecision, id: "old", state: "PREPARED", createdAt: 1, expiresAt: 9_999, plannedRisk: 10, notional: 1_000 };
   const changed = { ...oldDecision, target: 112, score: oldDecision.score * 1.3 };
   const result = reconcilePaper({ now: 2, midpoint: 100, fresh: true, sequenceFault: false, decision: changed, plan, position: null,
@@ -664,7 +764,8 @@ test("a frozen retest keeps its original trigger when the event route rolls off"
 
 test("an opposite recalculation cannot replace a frozen prepared plan", () => {
   const shortDecision = { symbol: "SOL_USDT", observedAt: 1, marketState: "RANGE" as const, side: "SHORT" as const,
-    entryTrigger: 101, invalidation: 102, target: 95, targetIdentity: "BOOK:SHORT:95", score: 10, oppositeScore: 1, reason: [] };
+    entryTrigger: 101, invalidation: 102, target: 95, targetIdentity: "BOOK:SHORT:95", score: 10, oppositeScore: 1, reason: [],
+    routeId: "edge:short", routeKind: "EDGE_REJECTION" as const };
   const plan: PaperPlan = { ...shortDecision, id: "short-frozen", state: "PREPARED", createdAt: 1,
     expiresAt: PLAN_TTL_MS + 1, plannedRisk: 10, notional: 1_000 };
   const longDecision = { ...shortDecision, side: "LONG" as const, entryTrigger: 99, invalidation: 98,
@@ -681,7 +782,8 @@ test("an opposite recalculation cannot replace a frozen prepared plan", () => {
 
 test("a trigger crossing cannot override a vanished frozen target", () => {
   const shortDecision = { symbol: "SOL_USDT", observedAt: 1, marketState: "RANGE" as const, side: "SHORT" as const,
-    entryTrigger: 101, invalidation: 102, target: 95, targetIdentity: "BOOK:SHORT:95", score: 100, oppositeScore: 1, reason: [] };
+    entryTrigger: 101, invalidation: 102, target: 95, targetIdentity: "BOOK:SHORT:95", score: 100, oppositeScore: 1, reason: [],
+    routeId: "edge:short-cross", routeKind: "EDGE_REJECTION" as const };
   const plan: PaperPlan = { ...shortDecision, id: "short-cross", state: "PREPARED", createdAt: 1,
     expiresAt: PLAN_TTL_MS + 1, plannedRisk: 10, notional: 1_000 };
   const longDecision = { ...shortDecision, side: "LONG" as const, entryTrigger: 99, invalidation: 98,
@@ -776,7 +878,8 @@ test("a mathematically acceptable R multiple is still rejected when its net prof
 
 test("a frozen range entry is not vetoed by one transient absorption dip", () => {
   const decision = { symbol: "SOL_USDT", observedAt: 1, marketState: "RANGE" as const, side: "SHORT" as const,
-    entryTrigger: 101, invalidation: 102, target: 95, targetIdentity: "BOOK:SHORT:95", score: 100, oppositeScore: 1, reason: [] };
+    entryTrigger: 101, invalidation: 102, target: 95, targetIdentity: "BOOK:SHORT:95", score: 100, oppositeScore: 1, reason: [],
+    routeId: "edge:absorption", routeKind: "EDGE_REJECTION" as const };
   const plan: PaperPlan = { ...decision, id: "range-without-absorption", state: "PREPARED", createdAt: 1,
     expiresAt: PLAN_TTL_MS + 1, plannedRisk: 10, notional: 1_000 };
   const result = reconcilePaper({ now: 2, midpoint: 101.1, fresh: true, sequenceFault: false, decision: null,
@@ -795,7 +898,7 @@ test("new executable plans remain valid for fifteen minutes", () => {
   assert.equal(result.plan?.expiresAt, 10 + PLAN_TTL_MS);
 });
 
-test("jump trigger recalculates actual-fill notional and keeps aggregate risk at five percent", () => {
+test("jump trigger recalculates actual-fill notional and keeps aggregate risk at ten percent", () => {
   const decision = decideThreeState({ symbol: "BTC_USDT", observedAt: 1, mid: 100, zones: [zone("LONG", 110, 2), zone("SHORT", 90)], bands: [band("LONG", 105, 2), band("LONG", 106, 2)], flow: flow({ ofi: 0.8 }), absorption: 0.1 })!;
   const plan: PaperPlan = { ...decision, routeKind: "BREAKOUT_RETEST", id: "gap", state: "PREPARED", createdAt: 1,
     expiresAt: PLAN_TTL_MS + 1, plannedRisk: 15, notional: 1_000 };
@@ -942,7 +1045,7 @@ test("remaining structural stress risk falls as a persisted stop tightens", () =
   assert.ok(remainingStressRisk({ ...base, currentStop: 99 }, 100) < remainingStressRisk(base, 100));
   const equityAfterLoss = 800;
   const remaining = remainingStressRisk({ ...base, currentStop: 98.2 }, 100);
-  assert.ok(remaining <= equityAfterLoss * 0.05);
+  assert.ok(remaining <= equityAfterLoss * 0.10);
 });
 
 test("higher timeframe vetoes an opposing reversal and exact balance waits", () => {
