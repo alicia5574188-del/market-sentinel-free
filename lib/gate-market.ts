@@ -160,18 +160,3 @@ export async function fetchStructureCandles(symbol: string, interval: "1m" | "15
   while (start > 0 && unique[start].time - unique[start - 1].time === intervalSeconds) start -= 1;
   return unique.slice(start);
 }
-
-export async function fetchReviewCandles(symbol: string, fromSeconds: number, toSeconds: number) {
-  const from = Math.max(0, Math.floor(fromSeconds));
-  const to = Math.max(from + 300, Math.floor(toSeconds));
-  const rows = await gatePublic<GateCandleRow[]>(
-    `/futures/usdt/candlesticks?contract=${encodeURIComponent(symbol)}&interval=5m&from=${from}&to=${to}`,
-  );
-  const completedBefore = Math.floor(Date.now() / 1_000 / 300) * 300;
-  return [...new Map(rows.map((row) => ({
-    time: Number(row.t), volume: Number(row.v), close: Number(row.c), high: Number(row.h), low: Number(row.l), open: Number(row.o),
-  })).filter((row) => row.time >= from && row.time <= to && row.time < completedBefore
-    && [row.volume, row.close, row.high, row.low, row.open].every(Number.isFinite)
-    && row.close > 0 && row.high >= row.low && row.volume >= 0)
-    .map((row) => [row.time, row] as const)).values()].sort((a, b) => a.time - b.time);
-}

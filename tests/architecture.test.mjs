@@ -52,17 +52,10 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(worker, /return handler\.fetch\(request, env, ctx\)/);
   assert.match(worker, /url\.pathname === "\/api\/history" && request\.method === "GET"/);
   assert.match(worker, /url\.pathname === "\/api\/account-logs" && request\.method === "GET"/);
-  assert.match(worker, /url\.pathname === "\/api\/order-chart" && request\.method === "GET"/);
-  assert.match(worker, /url\.pathname === "\/api\/candles" && request\.method === "GET"/);
-  assert.match(worker, /GATE_USDT_FUTURES/);
-  assert.match(worker, /\["1m", "15m", "1h", "4h"\]\.includes\(interval\)/);
-  assert.match(worker, /SELECT chart_cache_json AS chartCache,chart_cache_at AS chartCacheAt FROM system_settings/);
-  assert.match(worker, /mirrorChartCandles/);
-  assert.match(worker, /actual candles warming/);
-  assert.match(worker, /serving last actual candles/);
+  assert.doesNotMatch(worker, /\/api\/order-chart|\/api\/candles/);
+  assert.doesNotMatch(worker, /fetchReviewCandles|mirrorChartCandles|chart_cache_json/);
   assert.match(worker, /FROM paper_positions/);
-  assert.match(worker, /ORDER_ENTRY_CHART/);
-  assert.match(worker, /ORDER_EXIT_CHART/);
+  assert.doesNotMatch(worker, /ORDER_ENTRY_CHART|ORDER_EXIT_CHART|review-entry:|review-exit:/);
   assert.match(worker, /fees_and_slippage AS feesAndSlippage/);
   assert.match(worker, /url\.pathname === "\/api\/auth\/login" && request\.method === "POST"/);
   assert.match(worker, /url\.pathname === "\/api\/live\/mode" && request\.method === "POST"/);
@@ -104,13 +97,12 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(page, /viewScroll\.current\[view\] = window\.scrollY/);
   assert.match(page, /hidden=\{tab !== "live"\}/);
   assert.doesNotMatch(page, /className="mode-switch"/);
-  assert.match(page, /setInterval\(readHistory, 60_000\)/);
-  assert.match(page, /function OrderReviewChart/);
-  assert.match(page, /查看 5 分钟蜡烛图（B\/S）/);
+  assert.match(page, /if \(tab !== "history"\) return/);
+  assert.match(page, /setInterval\(\(\) => void readHistory\(!loadedAll\), 60_000\)/);
+  assert.doesNotMatch(page, /function OrderReviewChart|\/api\/order-chart|蜡烛图/);
   assert.match(worker, /nextCursor/);
-  assert.match(worker, /fetchReviewCandles/);
-  assert.match(worker, /interval: "5m"/);
-  assert.match(worker, /12 \* 60 \* 60_000/);
+  assert.match(page, /runtime\.limits\.warmupSnapshots \?\? 4/);
+  assert.doesNotMatch(page, /warmup < 30|30 - evidence\.warmup/);
   assert.match(page, /账户日志/);
   assert.match(page, /复制完整诊断/);
   assert.match(page, /权益达到 300 U 时/);
@@ -160,13 +152,12 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.doesNotMatch(page, /function PositionLiveChart/);
   assert.match(page, /浮动盈亏/);
   assert.match(page, /保证金收益率/);
-  assert.match(page, /订单5分钟蜡烛图，B为买入，S为卖出/);
-  assert.match(page, /className="marker-letter"/);
-  assert.match(page, /出场后12小时/);
+  assert.match(page, /查看订单数据/);
+  assert.match(page, /实际 R 倍数/);
   assert.match(page, /查看本轮完整订单记录/);
   assert.match(positionMetrics, /export function unrealizedPnl/);
   assert.match(positionMetrics, /export function marginReturnRate/);
-  assert.match(css, /\.position-price-line/);
+  assert.doesNotMatch(css, /\.review-chart|\.position-price-line/);
   assert.doesNotMatch(page, /loadedInterval === interval \? candles\.slice\(-72\) : \[\]/);
   assert.match(page, /分段流动性路线/);
   assert.match(page, /多个方案观察，单一方案执行/);
@@ -189,9 +180,8 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.equal((workflow.match(/grep -Fq '资金异动雷达'/g) ?? []).length, 2);
   assert.equal((workflow.match(/WORKER_BASE_URL\/api\/history/g) ?? []).length, 2);
   assert.equal((workflow.match(/WORKER_BASE_URL\/api\/account-logs/g) ?? []).length, 2);
-  assert.equal((workflow.match(/WORKER_BASE_URL\/api\/candles\?symbol=BTC_USDT&interval=15m/g) ?? []).length, 2);
+  assert.equal((workflow.match(/WORKER_BASE_URL\/api\/candles/g) ?? []).length, 0);
   assert.equal((workflow.match(/WORKER_BASE_URL\/api\/live\/credentials/g) ?? []).length, 2);
-  assert.equal((workflow.match(/for attempt in 1 2 3 4 5 6/g) ?? []).length, 2);
 });
 
 test("at-least-once alarm and independent feed recovery are explicit", async () => {
@@ -218,8 +208,7 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
   assert.ok(worker.indexOf("await fetchActiveContracts()") < worker.indexOf("let books:"));
   assert.match(worker, /runtimeCache.*expiresAt/s);
   assert.match(worker, /this\.runtime\.d1Writes \+ billedWrites > 4_800/);
-  assert.match(worker, /review-entry:\$\{position\.id\}/);
-  assert.match(worker, /review-exit:\$\{item\.id\}/);
+  assert.doesNotMatch(worker, /review-entry:|review-exit:/);
   assert.match(worker, /ORDER_CLOSE_DIAGNOSTIC/);
   assert.match(worker, /FROM paper_events WHERE event_type='PAPER_BANKRUPTCY'/);
   assert.match(worker, /event_type='ORDER_CLOSE_DIAGNOSTIC'[\s\S]*observed_at>=\? AND observed_at<=\?/);

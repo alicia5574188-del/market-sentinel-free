@@ -1040,20 +1040,9 @@ jobs:
             > "$RUNNER_TEMP/main-public-runtime.json"
           jq -e '(.live == null) and (.liveMode.requestedEnabled | type == "boolean") and (.liveMode.operational | type == "boolean")' \
             "$RUNNER_TEMP/main-public-runtime.json" >/dev/null
-          candles_ok=0
-          for attempt in 1 2 3 4 5 6; do
-            if curl -fsS --max-time 15 "$WORKER_BASE_URL/api/candles?symbol=BTC_USDT&interval=15m" \
-              > "$RUNNER_TEMP/main-candles.json" && jq -e '
-                .source == "GATE_USDT_FUTURES" and .symbol == "BTC_USDT" and .interval == "15m" and
-                (.candles | type == "array" and length > 10) and
-                ([.candles[] | (.time | numbers), (.open | numbers), (.high | numbers), (.low | numbers), (.close | numbers)] | length > 50)
-              ' "$RUNNER_TEMP/main-candles.json" >/dev/null; then candles_ok=1; break; fi
-            sleep 3
-          done
-          (( candles_ok == 1 ))
 
   monitor:
-    # Main deploy already performs the same D1, page, candle and advancing-health
+    # Main deploy already performs the same D1, page and advancing-health
     # checks. Avoid repeating them immediately; the six-hour monitor remains.
     if: always() && (github.event_name == 'schedule' || needs.cutover.result == 'success')
     needs: [verify, deploy, cutover]
@@ -1121,14 +1110,3 @@ jobs:
           credential_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/monitor-credential-unauthorized.json" -w '%{http_code}' \
             "$WORKER_BASE_URL/api/live/credentials" || true)"
           [[ "$credential_code" == "401" ]]
-          candles_ok=0
-          for attempt in 1 2 3 4 5 6; do
-            if curl -fsS --max-time 15 "$WORKER_BASE_URL/api/candles?symbol=BTC_USDT&interval=15m" \
-              > "$RUNNER_TEMP/monitor-candles.json" && jq -e '
-                .source == "GATE_USDT_FUTURES" and .symbol == "BTC_USDT" and .interval == "15m" and
-                (.candles | type == "array" and length > 10) and
-                ([.candles[] | (.time | numbers), (.open | numbers), (.high | numbers), (.low | numbers), (.close | numbers)] | length > 50)
-              ' "$RUNNER_TEMP/monitor-candles.json" >/dev/null; then candles_ok=1; break; fi
-            sleep 3
-          done
-          (( candles_ok == 1 ))

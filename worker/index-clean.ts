@@ -2,10 +2,10 @@
 
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
-import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchMarketTickers, fetchRecentTrades, fetchReviewCandles, fetchStructureCandles } from "../lib/gate-market.ts";
+import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchMarketTickers, fetchRecentTrades, fetchStructureCandles } from "../lib/gate-market.ts";
 import { breakoutEntryPriceAcceptable, closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, planTriggered, PORTFOLIO_RISK_CAP, realtimeEntryConfirmed, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, updatePosition, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
 import { aggregateFourHourCandles, analyzeSnapshot, ancillarySchedule, applyFlow, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, optionalEvidenceIsFresh, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
-import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem, type ReviewCandle } from "../lib/paper-outbox.ts";
+import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem } from "../lib/paper-outbox.ts";
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
   PAPER_BANKRUPTCY_EQUITY, PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
@@ -31,7 +31,6 @@ const NON_ALARM_WRITE_CAP = 8_000;
 const WATCHDOG_WRITE_RESERVE = 2_880;
 const AUTHORITY_SCHEMA_VERSION = 1;
 const DEFAULT_SYMBOLS = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];
-const ORDER_REVIEW_BATCH = 6;
 
 export interface CloudflareEnv {
   ASSETS: Fetcher;
@@ -119,7 +118,6 @@ type RuntimeState = {
   nextAlarmAt: number | null;
   lastUniverseAt: number;
   lastRadarAt: number;
-  lastChartMirrorAt: number;
   utcDay: string;
   dailyStartEquity: number;
   alarmCount: number;
@@ -163,18 +161,10 @@ const day = (now = Date.now()) => new Intl.DateTimeFormat("en-CA", { timeZone: "
 const safeError = (error: unknown) => error instanceof Error ? error.message.slice(0, 240) : "unknown error";
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { "Cache-Control": "no-store" } });
 
-function reviewWindow(rows: ReviewCandle[], entryAt: number, exitAt: number) {
-  const entrySecond = Math.floor(entryAt / 60_000) * 60;
-  const exitSecond = Math.floor(exitAt / 60_000) * 60;
-  const selected = rows.filter((row) => row.time >= entrySecond - 20 * 60 && row.time <= exitSecond + 20 * 60);
-  if (selected.length <= 120) return selected;
-  return [...selected.slice(0, 40), ...selected.slice(-80)];
-}
-
 function initialState(): RuntimeState {
   return {
     version: SYSTEM_VERSION, authoritySchemaVersion: AUTHORITY_SCHEMA_VERSION, mode: "PAPER", state: "STARTING", symbols: DEFAULT_SYMBOLS,
-    lastAlarmAt: null, lastSuccessAt: null, lastHeartbeatAt: null, lastStopCheckpointAt: null, nextAlarmAt: null, lastUniverseAt: 0, lastRadarAt: 0, lastChartMirrorAt: 0,
+    lastAlarmAt: null, lastSuccessAt: null, lastHeartbeatAt: null, lastStopCheckpointAt: null, nextAlarmAt: null, lastUniverseAt: 0, lastRadarAt: 0,
     utcDay: day(), dailyStartEquity: PAPER_INITIAL_EQUITY, alarmCount: 0, d1Writes: 0, nonAlarmWrites: 0, d1RetryAt: 0, d1FailureCount: 0, equityVersion: 0, ancillaryCursor: 0, subrequestCount: 0, maxSubrequestsInAlarm: 0, sequenceRebuilds: 0, lastProcessedSlot: -1, feedFailures: {},
     lastError: null, d1MirrorError: null, riskBreach: false, tickSize: Object.fromEntries(DEFAULT_SYMBOLS.map((symbol) => [symbol, 0.0001])), contractMeta: {},
     decisions: {}, routes: {}, plans: {}, positions: {}, evidence: {}, analysisMs: [], equity: PAPER_INITIAL_EQUITY, outbox: [],
@@ -226,7 +216,7 @@ function markToMarketEquity(runtime: RuntimeState) {
 export class MarketStream extends DurableObject<CloudflareEnv> {
   private runtime = initialState();
   private memory: Record<string, SymbolMemory> = {};
-  private chartCandles: Record<string, Partial<Record<"1m" | "15m" | "1h" | "4h", Awaited<ReturnType<typeof fetchStructureCandles>>>>> = {};
+  private structureCandles: Record<string, Partial<Record<"1m" | "15m" | "1h" | "4h", Awaited<ReturnType<typeof fetchStructureCandles>>>>> = {};
   private sessionWarmup: Record<string, number> = {};
   private radarBaselines: Record<string, RadarBaseline> = {};
   private contractCatalog = new Map<string, Awaited<ReturnType<typeof fetchActiveContracts>>[number]>();
@@ -469,13 +459,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       } else {
         const rows = result.value.value as Awaited<ReturnType<typeof fetchStructureCandles>>;
         const timeframe = result.value.timeframe!;
-        (this.chartCandles[result.value.symbol] ??= {})[timeframe] = rows;
+        (this.structureCandles[result.value.symbol] ??= {})[timeframe] = rows;
         const key = timeframe === "1m" ? "m1" : timeframe === "15m" ? "m15" : "h1";
         memory.structureByTimeframe[key] = deriveStructureZones(rows, timeframe, memory.lastMid);
         if (timeframe === "15m") memory.range15m = deriveRangeStructure(rows);
         if (timeframe === "1h") {
           const h4 = aggregateFourHourCandles(rows);
-          this.chartCandles[result.value.symbol]!["4h"] = h4;
+          this.structureCandles[result.value.symbol]!["4h"] = h4;
           memory.structureByTimeframe.h4 = deriveStructureZones(h4, "4h", memory.lastMid);
           if (h4.length >= 20) {
             memory.timeframeBias.h4 = structureDirection(memory.structureByTimeframe.h4);
@@ -510,11 +500,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.runtime.paperCycle = recordCycleTrade(this.runtime.paperCycle, position, this.runtime.equity);
     }
     this.runtime.equityVersion += 1;
-    const priorReview = this.runtime.outbox.find((item) => item.position.id === position.id)?.entryCandles;
-    const entryCandles = priorReview ?? (position.status === "OPEN" && priorPosition?.status !== "OPEN"
-      ? (this.chartCandles[position.symbol]?.["1m"] ?? []).filter((row) => row.time * 1_000 < position.entryAt).slice(-30)
-      : undefined);
-    this.runtime.outbox = enqueuePositionTransition(this.runtime.outbox, priorPosition, position, this.runtime.equity, this.runtime.equityVersion, entryCandles);
+    this.runtime.outbox = enqueuePositionTransition(this.runtime.outbox, priorPosition, position, this.runtime.equity, this.runtime.equityVersion);
   }
 
   private async writePosition(item: PositionOutboxItem) {
@@ -530,10 +516,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.env.DB.prepare("UPDATE system_settings SET paper_equity=?,equity_version=?,updated_at=? WHERE id=1 AND equity_version<?")
         .bind(item.equity, item.equityVersion, Date.now(), item.equityVersion),
     ];
-    if (item.entryCandles?.length) statements.push(this.env.DB.prepare(`INSERT OR IGNORE INTO paper_events
-      (id,symbol,event_type,observed_at,payload_json) VALUES (?,?,?,?,?)`).bind(
-      `review-entry:${position.id}`, position.symbol, "ORDER_ENTRY_CHART", position.entryAt, JSON.stringify({ candles: item.entryCandles }),
-    ));
     if (position.status === "CLOSED") statements.push(this.env.DB.prepare(`INSERT OR IGNORE INTO paper_events
       (id,symbol,event_type,observed_at,payload_json) VALUES (?,?,?,?,?)`).bind(
       `diagnostic:${position.id}`, position.symbol, "ORDER_CLOSE_DIAGNOSTIC", position.exitAt ?? position.entryAt,
@@ -609,42 +591,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         }
       }
     }
-  }
-
-  private async mirrorChartCandles(now: number) {
-    if (now - this.runtime.lastChartMirrorAt < 5 * 60_000 || this.runtime.d1Writes >= 4_800) return;
-    const complete = DEFAULT_SYMBOLS.every((symbol) => ["1m", "15m", "1h", "4h"].every((interval) => (this.chartCandles[symbol]?.[interval as "1m" | "15m" | "1h" | "4h"]?.length ?? 0) >= 20));
-    if (!complete) return;
-    try {
-      await this.env.DB.prepare("UPDATE system_settings SET chart_cache_json=?,chart_cache_at=? WHERE id=1")
-        .bind(JSON.stringify(this.chartCandles), now).run();
-      this.runtime.d1Writes += 1;
-      await this.mirrorOrderReviews(now);
-      this.runtime.lastChartMirrorAt = now;
-    } catch { /* Chart mirroring is optional and must never interrupt PAPER authority. */ }
-  }
-
-  private async mirrorOrderReviews(now: number) {
-    const capacity = Math.min(ORDER_REVIEW_BATCH, 4_800 - this.runtime.d1Writes);
-    if (capacity <= 0) return;
-    const pending = await this.env.DB.prepare(`SELECT id,symbol,entry_at AS entryAt,exit_at AS exitAt
-      FROM paper_positions p WHERE status='CLOSED' AND exit_at IS NOT NULL
-      AND NOT EXISTS (SELECT 1 FROM paper_events e WHERE e.id='review-exit:' || p.id)
-      ORDER BY exit_at DESC LIMIT ?`).bind(capacity).all<{ id: string; symbol: string; entryAt: number; exitAt: number }>();
-    const statements = (pending.results ?? []).flatMap((item) => {
-      const rows = this.chartCandles[item.symbol]?.["1m"] ?? [];
-      const exitSecond = Math.floor(item.exitAt / 60_000) * 60;
-      if (!rows.some((row) => row.time === exitSecond)) return [];
-      const candles = reviewWindow(rows, item.entryAt, item.exitAt);
-      if (!candles.length) return [];
-      return [this.env.DB.prepare(`INSERT OR IGNORE INTO paper_events
-        (id,symbol,event_type,observed_at,payload_json) VALUES (?,?,?,?,?)`).bind(
-        `review-exit:${item.id}`, item.symbol, "ORDER_EXIT_CHART", now, JSON.stringify({ candles }),
-      )];
-    });
-    if (!statements.length) return;
-    await this.env.DB.batch(statements);
-    this.runtime.d1Writes += statements.length;
   }
 
   private async gateLive() {
@@ -800,7 +746,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       throw error;
     }
     await this.env.DB.batch([
-      this.env.DB.prepare("DELETE FROM paper_events WHERE id NOT IN (SELECT 'review-entry:' || id FROM paper_positions WHERE status='OPEN')").bind(),
+      this.env.DB.prepare("DELETE FROM paper_events").bind(),
       this.env.DB.prepare("DELETE FROM paper_positions WHERE status='CLOSED'").bind(),
     ]);
     this.runtime.d1Writes += 2;
@@ -1597,7 +1543,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           subrequests += Math.max(0, (this.liveClient?.requestCount ?? liveRequestsBefore) - liveRequestsBefore);
         }
       }
-      await this.mirrorChartCandles(now);
       this.runtime.lastAlarmAt = now;
       this.runtime.lastSuccessAt = successes > 0 ? now : this.runtime.lastSuccessAt;
       const allWarm = this.runtime.symbols.every((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS);
@@ -1703,8 +1648,6 @@ const isAsset = (pathname: string) => pathname.startsWith("/_next/") || pathname
 let runtimeCache: { response: string; expiresAt: number } | null = null;
 const historyCache = new Map<string, { response: string; expiresAt: number }>();
 let accountLogCache: { response: string; expiresAt: number } | null = null;
-const candleCache = new Map<string, { response: string; expiresAt: number }>();
-const orderChartCache = new Map<string, { response: string; expiresAt: number }>();
 const failedLogins = new Map<string, { count: number; resetAt: number }>();
 async function runtimeStatus(env: CloudflareEnv, useCache = true, owner = false) {
   if (!owner && useCache && runtimeCache && runtimeCache.expiresAt > Date.now()) return new Response(runtimeCache.response, { headers: { "Content-Type": "application/json", "Cache-Control": "private, max-age=10" } });
@@ -1762,56 +1705,6 @@ async function accountLogs(env: CloudflareEnv) {
   const body = JSON.stringify({ items, generatedAt: Date.now() });
   accountLogCache = { response: body, expiresAt: Date.now() + 30_000 };
   return new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=30" } });
-}
-
-async function chartCandles(url: URL, env: CloudflareEnv) {
-  const symbol = url.searchParams.get("symbol") ?? "";
-  const interval = url.searchParams.get("interval") ?? "15m";
-  if (!DEFAULT_SYMBOLS.includes(symbol) || !["1m", "15m", "1h", "4h"].includes(interval)) {
-    return json({ error: "unsupported futures chart" }, 400);
-  }
-  const key = `${symbol}:${interval}`;
-  const cached = candleCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) {
-    return new Response(cached.response, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=20" } });
-  }
-  try {
-    const row = await env.DB.prepare("SELECT chart_cache_json AS chartCache,chart_cache_at AS chartCacheAt FROM system_settings WHERE id=1").first<{ chartCache: string | null; chartCacheAt: number | null }>();
-    const bundle = row?.chartCache ? JSON.parse(row.chartCache) as Record<string, Partial<Record<"1m" | "15m" | "1h" | "4h", Awaited<ReturnType<typeof fetchStructureCandles>>>>> : {};
-    const candles = bundle[symbol]?.[interval as "1m" | "15m" | "1h" | "4h"] ?? [];
-    if (candles.length < 20) throw new Error("actual candles warming");
-    const body = JSON.stringify({ symbol, interval, source: "GATE_USDT_FUTURES", candles, generatedAt: row?.chartCacheAt ?? Date.now() });
-    candleCache.set(key, { response: body, expiresAt: Date.now() + 20_000 });
-    return new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=20" } });
-  } catch (error) {
-    if (cached) return new Response(cached.response, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=5", Warning: '110 - "Gate refresh delayed; serving last actual candles"' } });
-    return json({ error: safeError(error) }, 503);
-  }
-}
-
-async function orderReviewChart(url: URL, env: CloudflareEnv) {
-  const id = url.searchParams.get("id") ?? "";
-  if (!/^[\p{L}\p{N}_-]+:\d+$/u.test(id) || id.length > 96) return json({ error: "invalid order id" }, 400);
-  const cached = orderChartCache.get(id);
-  if (cached && cached.expiresAt > Date.now()) return new Response(cached.response, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=30" } });
-  const row = await env.DB.prepare(`SELECT id,symbol,entry_at AS entryAt,exit_at AS exitAt
-    FROM paper_positions WHERE id=? LIMIT 1`).bind(id).first<{ id: string; symbol: string; entryAt: number; exitAt: number | null }>();
-  if (!row) return json({ error: "order not found" }, 404);
-  const now = Date.now();
-  const followUntil = row.exitAt == null ? now : row.exitAt + 12 * 60 * 60_000;
-  const fromSeconds = Math.floor((row.entryAt - 30 * 60_000) / 1_000);
-  const toSeconds = Math.floor(Math.min(now, followUntil) / 1_000);
-  try {
-    const candles = await fetchReviewCandles(row.symbol, fromSeconds, toSeconds);
-    const latestCloseAt = ((candles.at(-1)?.time ?? 0) + 300) * 1_000;
-    const ready = row.exitAt != null && now >= followUntil && latestCloseAt >= followUntil;
-    const body = JSON.stringify({ id: row.id, symbol: row.symbol, interval: "5m", source: "GATE_USDT_FUTURES", ready, followUntil, candles });
-    orderChartCache.set(id, { response: body, expiresAt: now + (ready ? 6 * 60 * 60_000 : 60_000) });
-    return new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": `public, max-age=${ready ? 21_600 : 60}` } });
-  } catch (error) {
-    if (cached) return new Response(cached.response, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=30", Warning: '110 - "Gate review refresh delayed"' } });
-    return json({ error: safeError(error) }, 503);
-  }
 }
 
 async function ownerAuthenticated(request: Request, env: CloudflareEnv) {
@@ -1912,7 +1805,6 @@ async function ownerPaperAction(request: Request, env: CloudflareEnv, action: "R
     runtimeCache = null;
     historyCache.clear();
     accountLogCache = null;
-    orderChartCache.clear();
   }
   return response;
 }
@@ -1931,8 +1823,6 @@ const worker = {
     if (url.pathname === "/api/runtime" && request.method === "GET") return runtimeStatus(env, true, await ownerAuthenticated(request, env));
     if (url.pathname === "/api/history" && request.method === "GET") return paperHistory(url, env);
     if (url.pathname === "/api/account-logs" && request.method === "GET") return accountLogs(env);
-    if (url.pathname === "/api/candles" && request.method === "GET") return chartCandles(url, env);
-    if (url.pathname === "/api/order-chart" && request.method === "GET") return orderReviewChart(url, env);
     if (url.pathname === "/api/auth/session" && request.method === "GET") return authSession(request, env);
     if (url.pathname === "/api/auth/login" && request.method === "POST") return ownerLogin(request, env);
     if (url.pathname === "/api/auth/logout" && request.method === "POST") return ownerLogout(request);

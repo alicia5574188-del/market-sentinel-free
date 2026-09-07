@@ -24,7 +24,7 @@ A Gate USDT perpetual event-scalping system. One `MarketStream` Durable Object i
 - AES-GCM/HKDF credential format, fixed owner authentication, signed same-origin HttpOnly session, LIVE default-off boundary, and the prohibition on fund transfers.
 - Exact string Gate order IDs, ambiguous-order reconciliation, system-tag-only cleanup, actual Gate lot/margin revalidation, and per-symbol feed recovery.
 - PAPER reset to 1,000 U, separate completed-history clearing, bankruptcy rollover/reporting, idempotent D1 outbox, complete cursor-paginated PAPER history, and full cycle-order disclosure rebuilt from durable per-order diagnostics at bankruptcy archival.
-- History is the only chart surface. Each order loads cached, completed Gate 5m OHLC candles on demand, marks its exact buy (`B`) and sell (`S`) points, and continues the review window through twelve hours after exit. This review path does not add Durable Object alarms or D1 writes.
+- The operator page has no market or history charts. History loads only when the review tab is opened, then refreshes only the newest page; each order keeps prices, gross result, modeled cost, net result, realized R, original stop, target, duration, and exit reason without making another Gate candle request.
 - Public PAPER page and owner-only LIVE account/position controls. Old completed trades remain available for review; the new strategy version starts separate runtime decisions.
 
 ## Planned Free-tier budget
@@ -32,7 +32,7 @@ A Gate USDT perpetual event-scalping system. One `MarketStream` Durable Object i
 - 43,200 two-second alarm requests and alarm writes per day.
 - 8,000 non-alarm DO write cap plus 2,880 watchdog reserve: 54,080 planned DO writes/day.
 - 5,760 foreground requests at one continuously open 15-second page poll plus 1,440 watchdog requests: 50,400 planned DO requests/day.
-- D1 billed writes are capped at 4,800/day; normal event trading is expected to be materially lower.
+- D1 billed writes are capped at 4,800/day; removing chart mirrors and chart review events leaves only position/account audit persistence, so normal event trading is expected to be materially lower.
 - One bulk Gate ticker scan every 10 seconds adds 8,640 public requests/day. Two-second detail remains capped to the three realtime symbols and preserves the existing per-alarm subrequest/concurrency redlines.
 
 ## Verification

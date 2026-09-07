@@ -1152,11 +1152,9 @@ test("an expired plan is not rebuilt in the same reconciliation", () => {
 test("position outbox keeps the latest complete authority snapshot and retries it", async () => {
   const open: PaperPosition = { id: "o", symbol: "BTC_USDT", side: "LONG", scenario: "BREAKOUT", entryAt: 1, entryPrice: 100, initialStop: 95, currentStop: 95, currentTarget: 110, plannedRisk: 10, notional: 1_000, targetScore: 1, status: "OPEN" };
   const closed: PaperPosition = { ...open, status: "CLOSED", exitAt: 2, exitPrice: 110, realizedPnl: 98.2 };
-  const entryCandles = [{ time: 1, open: 99, high: 101, low: 98, close: 100, volume: 7 }];
-  let outbox = enqueuePositionTransition([], null, open, 1_000, 0, entryCandles);
+  let outbox = enqueuePositionTransition([], null, open, 1_000, 0);
   outbox = enqueuePositionTransition(outbox, open, closed);
   outbox = enqueuePositionTransition(outbox, open, closed);
-  assert.deepEqual(outbox[0].entryCandles, entryCandles);
   let fail = true; const writes: string[] = [];
   outbox = await drainPositionOutbox(outbox, async ({ position }) => { if (fail) { fail = false; throw new Error("D1 down"); } writes.push(position.status); });
   assert.equal(outbox.length, 1);

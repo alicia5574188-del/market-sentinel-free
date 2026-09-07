@@ -1,5 +1,7 @@
 # Status
 
+The chart-free operator upgrade is implemented locally and under final verification. Production inspection proved the apparent permanent 26-count was a client-only arithmetic defect: every promoted symbol had reached the authority's current 4/4 warmup threshold, but the page still subtracted from the retired value 30. The page now reads `limits.warmupSnapshots`, prioritizes open-position management text over entry readiness, and exposes the bounded all-market/three-symbol/phone-poll data contract. All browser chart code, public chart endpoints, request-time Gate 5m review fetches, D1 chart mirrors, and per-order chart events are removed. History remains complete and diagnostic but loads only on the review tab and refreshes only its newest page after initial pagination. Strategy inputs, execution, risk, and LIVE controls are unchanged. Direct verification passes 135 tests; full build/architecture/lint/deploy verification is next.
+
 The complete PAPER audit upgrade is implemented locally and under final verification. History is cursor-paginated in deterministic newest-first order; the client retrieves every page. Brain, PAPER Orders, and owner LIVE cards no longer render charts. Historical PAPER rows use a request-time cached Gate 5m candlestick review with exact B/S execution markers and continue refreshing until twelve hours after exit. Bankruptcy logs expose their stored per-order diagnostics. No strategy, LIVE control, market scan, alarm cadence, or D1 write path changed.
 
 

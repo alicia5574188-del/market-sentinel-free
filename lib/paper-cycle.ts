@@ -143,7 +143,7 @@ export function buildBankruptcyReport(cycle: PaperCycle, endedAt: number, ending
   const scenarios = breakdown(trades, (item) => item.scenario);
   const worst = Object.entries(scenarios).sort((a, b) => a[1].netPnl - b[1].netPnl)[0];
   if (worst?.[1].netPnl < 0) rootCauses.push(`${worst[0]} 是本周期拖累最大的市场状态，净结果 ${worst[1].netPnl.toFixed(2)} U`);
-  if (!rootCauses.length) rootCauses.push("样本没有单一主导故障，需要结合逐单 1 分钟 K 线继续检查入场、止损、目标和退出时机");
+  if (!rootCauses.length) rootCauses.push("样本没有单一主导故障，需要结合逐单价格、成本、止损、目标进度和退出时机继续检查");
   const positive = wins.reduce((sum, item) => sum + item.netPnl, 0);
   const negative = Math.abs(losses.reduce((sum, item) => sum + item.netPnl, 0));
   return {

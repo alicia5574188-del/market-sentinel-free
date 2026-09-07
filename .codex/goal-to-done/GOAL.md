@@ -1,5 +1,9 @@
 # Goal
 
+## Active upgrade — 2026-09-08 truthful warmup and chart-free operator surface
+
+Eliminate the permanent “26 snapshots remaining” display by deriving client warmup progress from the authority's published `limits.warmupSnapshots` instead of a retired hard-coded value, and never show entry warmup as the management state of an open position. Remove every user-facing chart plus the public candle/review endpoints, Gate 5m review fetch, D1 chart mirror, and per-order chart events. Preserve all completed PAPER trade and bankruptcy diagnostics as lightweight text. Load complete history only when the review tab opens, then refresh only the newest page. Explain the actual bounded data contract: all eligible futures are scanned in one roughly ten-second ticker snapshot, while at most three promoted symbols receive two-second books and rotating detail; the phone reads a summary every fifteen seconds. Keep execution, risk, credentials, LIVE authority, and strategy-required completed-candle inputs unchanged.
+
 ## Active upgrade — 2026-09-08 complete PAPER audit and 12-hour review
 
 Make the PAPER audit complete and visually diagnostic without changing trading behavior. `/api/history` must page through the complete D1 PAPER history instead of returning only the newest 60 rows. Remove market and open-position charts from Brain, Orders, and LIVE; History becomes the only chart surface. Each historical PAPER order must request real completed Gate 5m OHLC candles, show an exact B (buy) and S (sell) marker, original stop and planned target, and keep extending until twelve hours after exit. The archived bankruptcy card must expose every stored order in the cycle rather than only aggregate statistics. Keep all LIVE data and actions isolated, preserve existing execution/risk/data cadence, and add no trading-loop or D1 writes.
