@@ -165,4 +165,4 @@
 - Only History renders charts. Brain, PAPER Orders, and LIVE retain prices/PnL/risk text but no longer draw market or open-position charts.
 - A historical review is fetched on demand from Gate as completed 5m OHLC data, cached at the Worker edge, and refreshed once a minute until the last completed candle reaches exit plus twelve hours. This adds no Durable Object alarm request and no D1 write.
 - Exact B/S markers encode the actual action: long entry B and exit S; short entry S and exit B. Original stop and planned target remain reference lines.
-- Bankruptcy summaries expose the report's full stored `trades` array in the UI so a complete failed cycle can be inspected order by order.
+- Bankruptcy archival waits for the position outbox, reads every cycle-scoped `ORDER_CLOSE_DIAGNOSTIC` row from D1, and rebuilds the permanent report before writing it. The checkpoint can remain bounded while Account Logs still exposes the complete failed cycle order by order.

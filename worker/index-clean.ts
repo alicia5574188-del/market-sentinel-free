@@ -568,10 +568,33 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const item = this.runtime.bankruptcyOutbox[0];
         if (this.runtime.d1Writes + 2 > 4_800) break;
         try {
+          // The checkpoint keeps only a bounded diagnostic tail. Once every
+          // position transition has reached D1, rebuild the permanent report
+          // from the complete cycle so high-frequency cycles are never cut at
+          // MAX_CYCLE_TRADES in Account Logs.
+          const diagnostics = await this.env.DB.prepare(`SELECT payload_json AS payload
+            FROM paper_events WHERE event_type='ORDER_CLOSE_DIAGNOSTIC'
+              AND observed_at>=? AND observed_at<=? ORDER BY observed_at,id`)
+            .bind(item.report.startedAt, item.report.endedAt).all<{ payload: string }>();
+          const completeTrades = [...new Map((diagnostics.results ?? []).flatMap((row) => {
+            try {
+              const trade = JSON.parse(row.payload) as ReturnType<typeof diagnoseClosedPosition>;
+              return trade?.id ? [[trade.id, trade] as const] : [];
+            } catch { return []; }
+          })).values()];
+          const report = completeTrades.length > item.report.trades.length
+            ? buildBankruptcyReport({
+              number: item.report.cycleNumber,
+              startedAt: item.report.startedAt,
+              startingEquity: item.report.startingEquity,
+              peakEquity: item.report.endingEquity / Math.max(1 - item.report.maxDrawdownRate, 1e-9),
+              trades: completeTrades,
+            }, item.report.endedAt, item.report.endingEquity)
+            : item.report;
           await this.env.DB.batch([
             this.env.DB.prepare(`INSERT OR IGNORE INTO paper_events
               (id,symbol,event_type,observed_at,payload_json) VALUES (?,?,?,?,?)`).bind(
-              item.report.id, "ACCOUNT", "PAPER_BANKRUPTCY", item.report.endedAt, JSON.stringify(item.report),
+              report.id, "ACCOUNT", "PAPER_BANKRUPTCY", report.endedAt, JSON.stringify(report),
             ),
             this.env.DB.prepare("UPDATE system_settings SET paper_equity=?,equity_version=?,updated_at=? WHERE id=1 AND equity_version<?")
               .bind(item.equity, item.equityVersion, Date.now(), item.equityVersion),

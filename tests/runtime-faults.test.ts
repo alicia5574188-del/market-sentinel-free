@@ -85,7 +85,7 @@ class FakeD1 {
   statements: Array<Array<{ sql: string; args: unknown[] }>> = [];
 
   prepare(sql: string) {
-    return { bind: (...args: unknown[]) => ({ sql, args }) };
+    return { bind: (...args: unknown[]) => ({ sql, args, all: async () => ({ results: [] }) }) };
   }
 
   async batch(statements: Array<{ sql: string; args: unknown[] }>) {

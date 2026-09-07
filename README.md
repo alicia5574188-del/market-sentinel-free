@@ -23,7 +23,7 @@ A Gate USDT perpetual event-scalping system. One `MarketStream` Durable Object i
 
 - AES-GCM/HKDF credential format, fixed owner authentication, signed same-origin HttpOnly session, LIVE default-off boundary, and the prohibition on fund transfers.
 - Exact string Gate order IDs, ambiguous-order reconciliation, system-tag-only cleanup, actual Gate lot/margin revalidation, and per-symbol feed recovery.
-- PAPER reset to 1,000 U, separate completed-history clearing, bankruptcy rollover/reporting, idempotent D1 outbox, complete cursor-paginated PAPER history, and full stored cycle-order disclosure.
+- PAPER reset to 1,000 U, separate completed-history clearing, bankruptcy rollover/reporting, idempotent D1 outbox, complete cursor-paginated PAPER history, and full cycle-order disclosure rebuilt from durable per-order diagnostics at bankruptcy archival.
 - History is the only chart surface. Each order loads cached, completed Gate 5m OHLC candles on demand, marks its exact buy (`B`) and sell (`S`) points, and continues the review window through twelve hours after exit. This review path does not add Durable Object alarms or D1 writes.
 - Public PAPER page and owner-only LIVE account/position controls. Old completed trades remain available for review; the new strategy version starts separate runtime decisions.
 

@@ -222,6 +222,8 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
   assert.match(worker, /review-exit:\$\{item\.id\}/);
   assert.match(worker, /ORDER_CLOSE_DIAGNOSTIC/);
   assert.match(worker, /FROM paper_events WHERE event_type='PAPER_BANKRUPTCY'/);
+  assert.match(worker, /event_type='ORDER_CLOSE_DIAGNOSTIC'[\s\S]*observed_at>=\? AND observed_at<=\?/);
+  assert.match(worker, /completeTrades\.length > item\.report\.trades\.length/);
 });
 
 test("PAPER and LIVE share bounded sizing and meaningful net-profit economics", async () => {
