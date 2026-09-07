@@ -1,4 +1,4 @@
-export const SYSTEM_VERSION = "liquidity-route-v3";
+export const SYSTEM_VERSION = "liquidity-route-v4";
 export const PORTFOLIO_RISK_CAP = 0.05;
 export const STALE_AFTER_MS = 3_000;
 export const WALL_WINDOW = 30;
@@ -22,9 +22,9 @@ export const BREAKOUT_REJECTION_MAX_RETENTION = 0.30;
 export const BREAKOUT_ENTRY_MIN_EXTENSION_R = 0.10;
 export const BREAKOUT_ENTRY_MIN_CLOSE_RETENTION = 0.55;
 export const BREAKOUT_ENTRY_MAX_CHASE_R = 0.50;
-export const FAST_BREAKOUT_MIN_CONFIRMATION = 0.78;
-export const FAST_BREAKOUT_MAX_FAKEOUT_RISK = 0.25;
-export const FAST_BREAKOUT_REQUIRED_SNAPSHOTS = 3;
+export const FAST_BREAKOUT_MIN_CONFIRMATION = 0.86;
+export const FAST_BREAKOUT_MAX_FAKEOUT_RISK = 0.18;
+export const FAST_BREAKOUT_REQUIRED_SNAPSHOTS = 4;
 export const FAST_BREAKOUT_MAX_SNAPSHOT_GAP_MS = 10_000;
 export const DYNAMIC_PROTECTION_NET_CUSHION_R = 0.15;
 
@@ -73,7 +73,7 @@ export type RangeBand = {
 export type RangeStructure = RangeBand & { child?: RangeBand | null };
 
 export type RouteStage = "LOCAL_TO_NODE" | "AT_NODE" | "NODE_TO_NEXT";
-export type RouteKind = "LOCAL_BREAKOUT" | "INTERNAL_ROTATION" | "EDGE_REJECTION" | "NODE_CONTINUATION";
+export type RouteKind = "LOCAL_BREAKOUT" | "INTERNAL_ROTATION" | "BREAKOUT_RETEST" | "FAILED_BREAKOUT_REVERSAL" | "EDGE_REJECTION" | "NODE_CONTINUATION";
 export type LiquidityRoute = {
   id: string;
   symbol: string;
@@ -632,12 +632,21 @@ export function planTriggered(plan: PaperPlan, price: number) {
 }
 
 export function breakoutEntryConfirmed(
-  plan: Pick<PaperPlan, "marketState" | "side" | "entryTrigger" | "invalidation" | "createdAt" | "breakoutSignalCount">,
+  plan: Pick<PaperPlan, "marketState" | "routeKind" | "breakoutSignalCount">,
+  _confirmationMinute?: number,
+  _confirmationCandle?: CompletedMinuteCandle | null,
+) {
+  if (plan.marketState !== "BREAKOUT") return true;
+  if (plan.routeKind === "BREAKOUT_RETEST") return true;
+  return (plan.breakoutSignalCount ?? 0) >= FAST_BREAKOUT_REQUIRED_SNAPSHOTS;
+}
+
+export function breakoutMinuteAccepted(
+  plan: Pick<PaperPlan, "marketState" | "side" | "entryTrigger" | "invalidation" | "createdAt">,
   confirmationMinute?: number,
   confirmationCandle?: CompletedMinuteCandle | null,
 ) {
-  if (plan.marketState !== "BREAKOUT") return true;
-  if ((plan.breakoutSignalCount ?? 0) >= FAST_BREAKOUT_REQUIRED_SNAPSHOTS) return true;
+  if (plan.marketState !== "BREAKOUT") return false;
   if (!confirmationMinute || confirmationMinute <= plan.createdAt || !confirmationCandle) return false;
   const completedAt = (confirmationCandle.time + 60) * 1_000;
   if (completedAt <= plan.createdAt || completedAt > confirmationMinute) return false;
@@ -660,7 +669,7 @@ export function observeFastBreakout(
   plan: PaperPlan,
   input: { now: number; price: number; confirmation: number; fakeoutRisk: number },
 ) {
-  if (plan.marketState !== "BREAKOUT" || plan.state !== "PREPARED") return plan;
+  if (plan.marketState !== "BREAKOUT" || plan.routeKind === "BREAKOUT_RETEST" || plan.state !== "PREPARED") return plan;
   const initialRisk = Math.max(Math.abs(plan.entryTrigger - plan.invalidation), plan.entryTrigger * 0.0001);
   const extension = plan.side === "LONG" ? input.price - plan.entryTrigger : plan.entryTrigger - input.price;
   const breakoutCrossedAt = plan.breakoutCrossedAt ?? (extension >= 0 ? input.now : undefined);

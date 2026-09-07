@@ -26,6 +26,15 @@ test("a confirmed breakout becomes an IOC market order sized from its current en
   assert.equal(intent.body.trigger, undefined);
 });
 
+test("a confirmed breakout retest reaccelerates with IOC while a failed breakout waits passively", () => {
+  const retest = buildLiveEntryIntent({ plan: { ...plan("BREAKOUT", "LONG"), routeKind: "BREAKOUT_RETEST" },
+    entryPrice: 100.2, equity: 1_000, available: 1_000, openRisk: 0, quantoMultiplier: 0.001, leverageMax: 50 });
+  assert.equal(retest.kind, "MARKET");
+  const failed = buildLiveEntryIntent({ plan: { ...plan("REVERSAL", "SHORT"), routeKind: "FAILED_BREAKOUT_REVERSAL" },
+    equity: 1_000, available: 1_000, openRisk: 0, quantoMultiplier: 0.001, leverageMax: 50 });
+  assert.equal(failed.kind, "LIMIT");
+});
+
 test("LIVE ignores a legacy farther economic target and requires the actual first node", () => {
   const staged = { ...plan("BREAKOUT", "LONG"), invalidation: 99.8, target: 100.6, nextTarget: 101,
     routeKind: "LOCAL_BREAKOUT" as const, confirmationScore: 0.9, fakeoutRisk: 0.1, economicTarget: 101 };
