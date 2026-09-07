@@ -128,3 +128,9 @@
 - The observed ETH RANGE long entered at 2,498.135 and exited at 2,503.235 with 6.33 U gross but 5.58 U modeled cost, leaving only 0.75 U while price later resumed upward. The exit price matches the old rule that locked roughly 35% of a confirmed favorable excursion, proving that the protection sat inside an ordinary pre-target pullback.
 - A routed trade already has a frozen first liquidity node that is checked on every fresh two-second price. Therefore an aggressive pre-target profit trail is redundant: it reduces target-hit probability without adding a distinct thesis invalidation.
 - Before the first node, completed target progress—not MFE—is the protection clock. At 1.5R and 70% progress, the system may reduce remaining loss to 0.5R but cannot cross entry. Target arrival still exits or hands off to a confirmed continuation, where the next segment's structural stop becomes valid.
+
+# 2026-09-07 — Position PnL display and line-chart data source
+
+- PAPER and LIVE position cards use the same mark-to-market formula. “浮动盈亏” is gross USDT before closing friction, “保证金收益率” is gross PnL divided by the displayed position margin, and direction-adjusted price return is shown separately so leverage does not hide the underlying move.
+- A position line chart reads the already-mirrored 1m candle cache once when mounted and appends the midpoint already present in the page's 15-second runtime response. It must not start another Gate request stream or increase Durable Object polling/writes.
+- A stale midpoint may remain visible and is explicitly labeled as the last backend price, but it cannot create a chart point that changes execution authority; trading continues to use the existing per-symbol freshness gates.

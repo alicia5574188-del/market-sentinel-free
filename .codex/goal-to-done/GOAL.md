@@ -1,5 +1,9 @@
 # Goal
 
+## Active upgrade — 2026-09-07 open-position PnL and live line charts
+
+Make every open PAPER position and owner-visible Gate LIVE position understandable at a glance. Each position card must show gross unrealized PnL in USDT, margin return percentage, direction-adjusted price return, and the latest market price. Add a compact line chart from entry to the latest observation with explicit entry, current protection, target, and current-price levels. Seed the chart from the existing cached Gate 1m candle endpoint and append the midpoint already delivered by the 15-second page runtime poll; do not add Gate requests, Durable Object loops, writes, trading authority, or any new way for stale data to execute orders. Keep LIVE default OFF and owner-only.
+
 ## Active upgrade — 2026-09-07 feed jitter grace and frozen-plan recovery
 
 Stop treating one slow Gate response or ordinary Cloudflare alarm jitter as a destroyed trading thesis. Keep the two-second market loop and existing request/write ceilings, but give the authority a realistic freshness envelope, separate critical book/structure evidence from optional OI/trade/liquidation evidence, and isolate recovery per symbol. A transient critical failure must block fills and cancel any exchange-resident LIVE entry, while preserving the immutable PAPER plan in a suspended state. Re-arm only after two newly advancing fresh books; then execute only if the frozen entry is still economical and within its original chase limits. Cancel the plan only after persistent critical failure, expiry, structural invalidation, sequence fault, or a missed target. Expose the distinction between phone transport delay, brief plan suspension, optional-evidence degradation, and a real critical-data outage. Persist bounded diagnostic counters without adding per-snapshot D1 writes. Keep LIVE owner-controlled and default OFF.
