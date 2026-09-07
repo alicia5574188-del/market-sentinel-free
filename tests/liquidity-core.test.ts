@@ -5,6 +5,7 @@ import {
   PORTFOLIO_RISK_CAP,
   MIN_NET_REWARD_RISK,
   MAX_GENERIC_PLAN_DISTANCE_RATE,
+  STALE_AFTER_MS,
   cascadeRatio,
   decideThreeState as rawDecideThreeState,
   hasCascade,
@@ -1009,7 +1010,7 @@ test("OI cohorts allocate by current price/taker direction and shrink as OI fall
 });
 
 test("HTTP 200 data with an old timestamp stays stale and a clear REST sequence epoch reset is accepted", () => {
-  const stale = usableSnapshot({ symbol: "X_USDT", observedAt: 1_000, sequence: 101, tickSize: 1, bids: [], asks: [] }, 5_001, 100, 900);
+  const stale = usableSnapshot({ symbol: "X_USDT", observedAt: 1_000, sequence: 101, tickSize: 1, bids: [], asks: [] }, 1_000 + STALE_AFTER_MS + 1, 100, 900);
   assert.equal(stale.fresh, false);
   const future = usableSnapshot({ symbol: "X_USDT", observedAt: 20_000, sequence: 102, tickSize: 1, bids: [], asks: [] }, 10_000, 101, 9_000);
   assert.equal(future.fresh, false);

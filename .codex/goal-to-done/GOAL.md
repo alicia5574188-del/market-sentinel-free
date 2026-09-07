@@ -1,5 +1,9 @@
 # Goal
 
+## Active upgrade — 2026-09-07 feed jitter grace and frozen-plan recovery
+
+Stop treating one slow Gate response or ordinary Cloudflare alarm jitter as a destroyed trading thesis. Keep the two-second market loop and existing request/write ceilings, but give the authority a realistic freshness envelope, separate critical book/structure evidence from optional OI/trade/liquidation evidence, and isolate recovery per symbol. A transient critical failure must block fills and cancel any exchange-resident LIVE entry, while preserving the immutable PAPER plan in a suspended state. Re-arm only after two newly advancing fresh books; then execute only if the frozen entry is still economical and within its original chase limits. Cancel the plan only after persistent critical failure, expiry, structural invalidation, sequence fault, or a missed target. Expose the distinction between phone transport delay, brief plan suspension, optional-evidence degradation, and a real critical-data outage. Persist bounded diagnostic counters without adding per-snapshot D1 writes. Keep LIVE owner-controlled and default OFF.
+
 ## Active upgrade — 2026-09-07 range sweep/reclaim execution and adaptive risk
 
 Stop treating a passive touch below a 15m range edge as a valid RANGE entry. A range-edge trade must first observe a liquidity sweep, then distinguish reclaim from outside acceptance with data the authority already owns, and enter only after either an exceptional real-time reclaim or a completed 1m reclaim followed by an economical boundary retest/reacceleration. Range positions must tolerate an ordinary wick outside the frozen boundary: the exchange-side hard stop sits beyond the observed sweep/structural/noise envelope, while evidence-based early exits require persistent completed-minute outside acceptance. Weak reclaim strength may reduce confidence or protection expectations but cannot by itself invalidate a still-reclaimed balance.

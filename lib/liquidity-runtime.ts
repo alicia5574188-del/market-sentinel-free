@@ -1093,11 +1093,14 @@ export function ancillarySchedule(cursor: number, symbols: string[], priorityMin
 }
 
 export function ancillaryIsFresh(memory: SymbolMemory, now: number) {
-  return now - memory.oiUpdatedAt <= 6 * 60_000
-    && now - memory.tradesUpdatedAt <= 120_000
-    && now - memory.liquidationsUpdatedAt <= 120_000
-    && now - memory.timeframeUpdatedAt.m1 <= 3 * 60_000
+  return now - memory.timeframeUpdatedAt.m1 <= 3 * 60_000
     && now - memory.timeframeUpdatedAt.m15 <= 45 * 60_000
     && now - memory.timeframeUpdatedAt.h1 <= 3 * 60 * 60_000
     && now - memory.timeframeUpdatedAt.h4 <= 12 * 60 * 60_000;
+}
+
+export function optionalEvidenceIsFresh(memory: SymbolMemory, now: number) {
+  return now - memory.oiUpdatedAt <= 6 * 60_000
+    && now - memory.tradesUpdatedAt <= 120_000
+    && now - memory.liquidationsUpdatedAt <= 120_000;
 }

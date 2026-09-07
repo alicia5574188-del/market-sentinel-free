@@ -1,7 +1,7 @@
-export const SYSTEM_VERSION = "liquidity-route-v5";
+export const SYSTEM_VERSION = "liquidity-route-v6";
 export const PORTFOLIO_RISK_CAP = 0.10;
 export const CORRELATED_DIRECTION_RISK_CAP = 0.065;
-export const STALE_AFTER_MS = 3_000;
+export const STALE_AFTER_MS = 5_000;
 export const WALL_WINDOW = 30;
 export const ROUND_TRIP_FRICTION_RATE = 0.0018;
 export const MIN_TARGET_DISTANCE_RATE = 0.0025;
