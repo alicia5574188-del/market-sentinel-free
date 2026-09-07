@@ -3,7 +3,7 @@
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
 import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchRecentTrades, fetchStructureCandles } from "../lib/gate-market.ts";
-import { breakoutEntryConfirmed, breakoutEntryPriceAcceptable, closePaperPosition, PORTFOLIO_RISK_CAP, remainingStressRisk, SYSTEM_VERSION, updatePosition, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
+import { breakoutEntryConfirmed, breakoutEntryPriceAcceptable, closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_RISK_CAP, remainingStressRisk, SYSTEM_VERSION, updatePosition, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
 import { aggregateFourHourCandles, analyzeSnapshot, ancillaryIsFresh, ancillarySchedule, applyFlow, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
 import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem, type ReviewCandle } from "../lib/paper-outbox.ts";
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
@@ -54,6 +54,11 @@ type LiveEntry = {
   routeId?: string;
   routeKind?: PaperPlan["routeKind"];
   targetTimeframe?: PaperPlan["targetTimeframe"];
+  rangeBoundary?: number;
+  rangeBuffer?: number;
+  sweepExtreme?: number;
+  reclaimSource?: PaperPlan["reclaimSource"];
+  reclaimStrength?: number;
   size: number;
   contracts: number;
   notional: number;
@@ -184,6 +189,18 @@ function percentile99(values: number[]) {
 function openStressRisk(runtime: RuntimeState) {
   return Object.values(runtime.positions).reduce((sum, position) => sum + (position?.status === "OPEN"
     ? remainingStressRisk(position, runtime.evidence[position.symbol]?.midpoint ?? position.entryPrice) : 0), 0);
+}
+
+function directionalStressRisk(runtime: RuntimeState, side: Side | undefined) {
+  if (!side) return 0;
+  return Object.values(runtime.positions).reduce((sum, position) => sum + (position?.status === "OPEN" && position.side === side
+    ? remainingStressRisk(position, runtime.evidence[position.symbol]?.midpoint ?? position.entryPrice) : 0), 0);
+}
+
+function paperRiskWithinLimits(runtime: RuntimeState, equity = markToMarketEquity(runtime)) {
+  return openStressRisk(runtime) <= equity * PORTFOLIO_RISK_CAP + 1e-9
+    && directionalStressRisk(runtime, "LONG") <= equity * CORRELATED_DIRECTION_RISK_CAP + 1e-9
+    && directionalStressRisk(runtime, "SHORT") <= equity * CORRELATED_DIRECTION_RISK_CAP + 1e-9;
 }
 
 function markToMarketEquity(runtime: RuntimeState) {
@@ -642,6 +659,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return positionRisk + pendingRisk;
   }
 
+  private liveDirectionalRisk(side: Side) {
+    const positionRisk = Object.values(this.runtime.live.positions).reduce((sum, position) => sum + (position?.status === "OPEN" && position.side === side
+      ? remainingStressRisk(position, this.runtime.evidence[position.symbol]?.midpoint ?? position.entryPrice) : 0), 0);
+    const pendingRisk = Object.values(this.runtime.live.entries).reduce((sum, entry) => sum + (entry && entry.side === side
+      && ["SUBMITTING", "OPEN"].includes(entry.status) ? entry.plannedRisk : 0), 0);
+    return positionRisk + pendingRisk;
+  }
+
   private async cancelLiveEntry(client: GateLiveClient, entry: LiveEntry) {
     if (entry.status === "FILLED" || entry.status === "CANCELLED") return;
     if (entry.exchangeOrderId) await client.cancelOrder(entry.kind, entry.exchangeOrderId);
@@ -825,6 +850,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           notional, targetScore: entry.targetScore ?? this.runtime.plans[symbol]?.score ?? 0,
           targetIdentity: entry.targetIdentity ?? this.runtime.plans[symbol]?.targetIdentity,
           routeId: entry.routeId, routeKind: entry.routeKind, targetTimeframe: entry.targetTimeframe,
+          rangeBoundary: entry.rangeBoundary, rangeBuffer: entry.rangeBuffer, sweepExtreme: entry.sweepExtreme,
+          reclaimSource: entry.reclaimSource, reclaimStrength: entry.reclaimStrength,
           status: "OPEN", exchangeSize: Math.abs(exchangeSize), leverage, margin: notional / leverage,
           stopOrderId: null, stopTag: null, stopPrice: null, stopSubmittingAt: null, exitRequestedAt: null, exchangeUpdatedAt: now,
         };
@@ -867,13 +894,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             targetTimeframe: updated.targetTimeframe, exitSignalMinute: updated.exitSignalMinute,
             exitSignalCount: updated.exitSignalCount, exitSignalReason: updated.exitSignalReason,
             stopUpdatedMinute: updated.stopUpdatedMinute, maxFavorablePrice: updated.maxFavorablePrice,
-            maxAdversePrice: updated.maxAdversePrice };
+            maxAdversePrice: updated.maxAdversePrice, rangeAcceptanceMinute: updated.rangeAcceptanceMinute,
+            rangeAcceptanceCount: updated.rangeAcceptanceCount };
           this.runtime.live.positions[symbol] = position;
         }
       }
       if (!position.exitRequestedAt) {
         await this.ensureLiveStop(client, position, snapshot.priceOrders);
-        if (this.liveOpenRisk() > equity * PORTFOLIO_RISK_CAP + 1e-8) {
+        if (this.liveOpenRisk() > equity * PORTFOLIO_RISK_CAP + 1e-8
+          || this.liveDirectionalRisk(position.side) > equity * CORRELATED_DIRECTION_RISK_CAP + 1e-8) {
           position.exitRequestedAt = now;
           position.exitReason = "RISK_CAP_AFTER_FILL";
           await client.closePosition(symbol, liveExitTag(position.id));
@@ -909,6 +938,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.live.lastError = null;
     let availableForNewEntries = available;
     let riskForNewEntries = this.liveOpenRisk();
+    const directionRiskForNewEntries: Record<Side, number> = {
+      LONG: this.liveDirectionalRisk("LONG"),
+      SHORT: this.liveDirectionalRisk("SHORT"),
+    };
     let marginForNewEntries = [
       ...Object.values(this.runtime.live.positions).filter((position) => position?.status === "OPEN"),
       ...Object.values(this.runtime.live.entries).filter((entry) => entry && ["SUBMITTING", "OPEN"].includes(entry.status)),
@@ -947,6 +980,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       let intent: ReturnType<typeof buildLiveEntryIntent>;
       try {
         intent = buildLiveEntryIntent({ plan, equity, available: availableForNewEntries, openRisk: riskForNewEntries,
+          sameDirectionRisk: directionRiskForNewEntries[plan.side],
           entryPrice: plan.marketState === "BREAKOUT" ? midpoint : undefined,
           quantoMultiplier: this.runtime.contractMeta[symbol]?.quantoMultiplier ?? 1,
           maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate ?? 0.005,
@@ -959,6 +993,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       delete this.runtime.live.entrySkips[symbol];
       availableForNewEntries = Math.max(0, availableForNewEntries - intent.margin);
       riskForNewEntries += intent.plannedRisk;
+      directionRiskForNewEntries[plan.side] += intent.plannedRisk;
       marginForNewEntries += intent.margin;
       staged.push({ symbol, plan, intent });
     }
@@ -968,6 +1003,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         tag: intent.tag, exchangeOrderId: null, createdAt: now, expiresAt: plan.expiresAt, trigger: plan.entryTrigger,
         invalidation: plan.invalidation, target: plan.target, targetIdentity: plan.targetIdentity, targetScore: plan.score,
         routeId: plan.routeId, routeKind: plan.routeKind, targetTimeframe: plan.targetTimeframe,
+        rangeBoundary: plan.rangeBoundary, rangeBuffer: plan.rangeBuffer, sweepExtreme: plan.sweepExtreme,
+        reclaimSource: plan.reclaimSource, reclaimStrength: plan.reclaimStrength,
         size: intent.size, contracts: intent.contracts,
         notional: intent.notional, plannedRisk: intent.plannedRisk, leverage: intent.leverage, margin: intent.margin,
         missingSince: null, lastError: null,
@@ -1092,11 +1129,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const contractReady = this.runtime.contractMeta[symbol] != null;
       const decision = this.authorityReady && contractReady && ancillaryFresh && (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS ? analyzed.decision : null;
       const openRisk = openStressRisk(this.runtime);
+      const planSide = priorPlan?.state === "PREPARED" ? priorPlan.side : decision?.side;
       const reconciled = reconcilePaper({ now, midpoint: analyzed.midpoint, fresh: validation.fresh, sequenceFault: validation.sequenceFault,
         decision, plan: priorPlan, position: priorPosition, zones: analyzed.zones, absorption: analyzed.absorption,
         confirmationMinute: memory.timeframeUpdatedAt.m1, confirmationPrice: memory.lastCompletedMinuteClose,
         confirmationCandle: memory.lastCompletedMinuteCandle,
-        equity: markToMarketEquity(this.runtime), openRisk, allowOpen: false,
+        equity: markToMarketEquity(this.runtime), openRisk, sameDirectionRisk: directionalStressRisk(this.runtime, planSide), allowOpen: false,
         protectOnly: (this.sessionWarmup[symbol] ?? 0) < WARMUP_SNAPSHOTS,
         activeRoutes: analyzed.routes, breakoutConfirmation: priorPlan ? analyzed.confirmationBySide[priorPlan.side] : undefined,
         maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate, leverageMax: this.runtime.contractMeta[symbol]?.leverageMax });
@@ -1138,11 +1176,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.runtime.plans[symbol] = cancelled.plan;
       this.runtime.positions[symbol] = cancelled.position;
     }
-    // A realized loss can shrink the 5% cap. Reduce weakest fresh PAPER exposure before considering any new entry.
+    // A realized loss can shrink the 10% cap. Reduce weakest fresh PAPER exposure before considering any new entry.
     for (const candidate of Object.values(this.runtime.positions)
       .filter((position): position is PaperPosition => position?.status === "OPEN")
       .sort((a, b) => a.targetScore - b.targetScore)) {
-      if (openStressRisk(this.runtime) <= markToMarketEquity(this.runtime) * 0.05 + 1e-9) break;
+      if (paperRiskWithinLimits(this.runtime)) break;
       const row = analyzedRows.find((item) => item.symbol === candidate.symbol && item.validation.fresh && !item.validation.sequenceFault);
       if (!row) continue;
       const closed = closePaperPosition(candidate, now, row.analyzed.midpoint, "PORTFOLIO_RISK_REBALANCE");
@@ -1192,7 +1230,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         criticalChanged = true;
       }
     }
-    this.runtime.riskBreach = openStressRisk(this.runtime) > markToMarketEquity(this.runtime) * 0.05 + 1e-9;
+    this.runtime.riskBreach = !paperRiskWithinLimits(this.runtime);
     // Exits update draft absolute equity before candidates are ranked; nothing is published yet.
     const rankedCandidates = analyzedRows
       .filter(({ symbol, validation }) => !bankruptcyPending && !rolledOverThisCycle && validation.fresh && !validation.sequenceFault && !closedThisCycle.has(symbol) && this.runtime.positions[symbol]?.status !== "OPEN")
@@ -1217,12 +1255,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const priorPosition = this.runtime.positions[row.symbol] ?? null;
       const priorPlan = this.runtime.plans[row.symbol] ?? null;
       const openRisk = openStressRisk(this.runtime);
+      const planSide = priorPlan?.state === "PREPARED" ? priorPlan.side : this.runtime.decisions[row.symbol]?.side;
       const reconciled = reconcilePaper({ now, midpoint: row.analyzed.midpoint, fresh: true, sequenceFault: false,
         decision: this.runtime.decisions[row.symbol], plan: priorPlan, position: priorPosition, zones: row.analyzed.zones,
         absorption: row.analyzed.absorption, confirmationMinute: this.memory[row.symbol]?.timeframeUpdatedAt.m1,
         confirmationPrice: this.memory[row.symbol]?.lastCompletedMinuteClose,
         confirmationCandle: this.memory[row.symbol]?.lastCompletedMinuteCandle,
-        equity: markToMarketEquity(this.runtime), openRisk, allowOpen: true,
+        equity: markToMarketEquity(this.runtime), openRisk, sameDirectionRisk: directionalStressRisk(this.runtime, planSide), allowOpen: true,
         activeRoutes: row.analyzed.routes, breakoutConfirmation: priorPlan ? row.analyzed.confirmationBySide[priorPlan.side] : undefined,
         maintenanceRate: this.runtime.contractMeta[row.symbol]?.maintenanceRate, leverageMax: this.runtime.contractMeta[row.symbol]?.leverageMax });
       this.runtime.plans[row.symbol] = reconciled.plan;
@@ -1343,7 +1382,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           : this.runtime.riskBreach ? "DEGRADED" : allWarm && allMeta && allAncillary ? "LIVE" : allWarm && allMeta && ancillaryStarted ? "DEGRADED" : "WARMING";
       const feedError = successes !== this.runtime.symbols.length ? `${this.runtime.symbols.length - successes} market snapshots unavailable; retrying`
         : !allMeta ? "contract metadata unavailable" : !allAncillary && ancillaryStarted ? "ancillary evidence stale; entries blocked" : null;
-      this.runtime.lastError = (this.runtime.riskBreach ? "portfolio stress risk exceeds 5%; new entries blocked" : feedError) ?? this.runtime.d1MirrorError;
+      this.runtime.lastError = (this.runtime.riskBreach ? "portfolio stress risk exceeds 10%; new entries blocked" : feedError) ?? this.runtime.d1MirrorError;
     } catch (error) {
       this.runtime.state = "RECONNECTING";
       this.runtime.lastError = safeError(error);

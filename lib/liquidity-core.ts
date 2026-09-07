@@ -1,12 +1,13 @@
-export const SYSTEM_VERSION = "liquidity-route-v4";
-export const PORTFOLIO_RISK_CAP = 0.05;
+export const SYSTEM_VERSION = "liquidity-route-v5";
+export const PORTFOLIO_RISK_CAP = 0.10;
+export const CORRELATED_DIRECTION_RISK_CAP = 0.065;
 export const STALE_AFTER_MS = 3_000;
 export const WALL_WINDOW = 30;
 export const ROUND_TRIP_FRICTION_RATE = 0.0018;
 export const MIN_TARGET_DISTANCE_RATE = 0.0025;
 export const MIN_NET_REWARD_RISK = 1.2;
-export const MIN_SINGLE_TRADE_RISK_RATE = 0.01;
-export const MAX_SINGLE_TRADE_RISK_RATE = 0.018;
+export const MIN_SINGLE_TRADE_RISK_RATE = 0.015;
+export const MAX_SINGLE_TRADE_RISK_RATE = 0.03;
 export const MAX_NOTIONAL_TO_EQUITY = 4;
 export const MIN_NET_TARGET_RETURN_ON_EQUITY = 0.015;
 export const DYNAMIC_EXIT_CONFIRMATIONS = 3;
@@ -26,7 +27,9 @@ export const FAST_BREAKOUT_MIN_CONFIRMATION = 0.86;
 export const FAST_BREAKOUT_MAX_FAKEOUT_RISK = 0.18;
 export const FAST_BREAKOUT_REQUIRED_SNAPSHOTS = 4;
 export const FAST_BREAKOUT_MAX_SNAPSHOT_GAP_MS = 10_000;
-export const DYNAMIC_PROTECTION_NET_CUSHION_R = 0.15;
+export const DYNAMIC_PROTECTION_MIN_CONFIRMED_R = 1.5;
+export const DYNAMIC_PROTECTION_MIN_TARGET_PROGRESS = 0.70;
+export const DYNAMIC_PROTECTION_REMAINING_RISK_R = 0.50;
 
 export type Side = "LONG" | "SHORT";
 export type MarketState = "BREAKOUT" | "REVERSAL" | "RANGE";
@@ -69,6 +72,8 @@ export type RangeBand = {
   id?: string;
   role?: RangeRole;
   breakState?: RangeBreakState;
+  lowerSweepDepth?: number;
+  upperSweepDepth?: number;
 };
 export type RangeStructure = RangeBand & { child?: RangeBand | null };
 
@@ -94,6 +99,11 @@ export type LiquidityRoute = {
   reason: string[];
   structureId?: string;
   structureRole?: RangeRole;
+  rangeBoundary?: number;
+  rangeBuffer?: number;
+  sweepExtreme?: number;
+  reclaimSource?: "COMPLETED_MINUTE" | "FAST_BOOK";
+  reclaimStrength?: number;
 };
 
 export type WallEvidence = {
@@ -140,6 +150,11 @@ export type Decision = {
   activationDistanceRate?: number;
   structureId?: string;
   structureRole?: RangeRole;
+  rangeBoundary?: number;
+  rangeBuffer?: number;
+  sweepExtreme?: number;
+  reclaimSource?: "COMPLETED_MINUTE" | "FAST_BOOK";
+  reclaimStrength?: number;
 };
 
 export type PaperPlan = Decision & {
@@ -191,6 +206,13 @@ export type PaperPosition = {
   exitSignalCount?: number;
   exitSignalReason?: string;
   stopUpdatedMinute?: number;
+  rangeBoundary?: number;
+  rangeBuffer?: number;
+  sweepExtreme?: number;
+  reclaimSource?: "COMPLETED_MINUTE" | "FAST_BOOK";
+  reclaimStrength?: number;
+  rangeAcceptanceMinute?: number;
+  rangeAcceptanceCount?: number;
 };
 
 export type CompletedMinuteCandle = {
@@ -414,9 +436,12 @@ export function sizePaperPosition(input: {
   stressSlippageBps: number;
   confidence: number;
   openRisk: number;
+  sameDirectionRisk?: number;
 }) {
-  const availableRisk = Math.max(0, input.equity * PORTFOLIO_RISK_CAP - input.openRisk);
-  const desiredRiskRate = clamp(MIN_SINGLE_TRADE_RISK_RATE + input.confidence * 0.008, MIN_SINGLE_TRADE_RISK_RATE, MAX_SINGLE_TRADE_RISK_RATE);
+  const availablePortfolioRisk = Math.max(0, input.equity * PORTFOLIO_RISK_CAP - input.openRisk);
+  const availableCorrelatedRisk = Math.max(0, input.equity * CORRELATED_DIRECTION_RISK_CAP - (input.sameDirectionRisk ?? 0));
+  const availableRisk = Math.min(availablePortfolioRisk, availableCorrelatedRisk);
+  const desiredRiskRate = clamp(MIN_SINGLE_TRADE_RISK_RATE + input.confidence * 0.015, MIN_SINGLE_TRADE_RISK_RATE, MAX_SINGLE_TRADE_RISK_RATE);
   const desiredLoss = Math.min(availableRisk, input.equity * desiredRiskRate);
   const structuralMove = Math.abs(input.entry - input.invalidation) / Math.max(input.entry, 1e-9);
   const friction = (input.feeBps + input.stressSlippageBps) / 10_000;
@@ -534,10 +559,21 @@ export function updatePosition(position: PaperPosition, input: {
   }
   if (arrived && observed.routeId) return close("TARGET_NODE_EXIT");
 
+  const rangeReclaim = observed.scenario === "RANGE" && observed.routeKind === "EDGE_REJECTION"
+    && observed.rangeBoundary != null && observed.rangeBuffer != null;
+  const acceptedInsideRange = rangeReclaim && input.confirmationPrice != null
+    ? (observed.side === "LONG"
+      ? input.confirmationPrice >= observed.rangeBoundary! - observed.rangeBuffer! * 0.15
+      : input.confirmationPrice <= observed.rangeBoundary! + observed.rangeBuffer! * 0.15)
+    : false;
   const oppositeDominates = input.oppositeTarget && input.bestTarget
     ? input.oppositeTarget.score > Math.max(input.bestTarget.score, observed.targetScore) * 1.5
     : false;
-  const adverseReason = !input.bestTarget ? "TARGET_DISAPPEARED" : oppositeDominates ? "OPPOSITE_UTILITY_DOMINANT" : null;
+  // A reclaimed balance is governed by price acceptance at its frozen edge.
+  // Weak flow or a temporarily missing target cannot evict it while completed
+  // candles continue to accept inside the range.
+  const adverseReason = rangeReclaim && acceptedInsideRange ? null
+    : !input.bestTarget ? "TARGET_DISAPPEARED" : oppositeDominates ? "OPPOSITE_UTILITY_DOMINANT" : null;
   let exitSignalMinute = observed.exitSignalMinute;
   let exitSignalCount = observed.exitSignalCount ?? 0;
   let exitSignalReason = observed.exitSignalReason;
@@ -554,6 +590,20 @@ export function updatePosition(position: PaperPosition, input: {
   const completedMinute = input.confirmationMinute && input.confirmationMinute > observed.entryAt
     && input.confirmationMinute !== observed.stopUpdatedMinute && Number.isFinite(input.confirmationPrice)
     ? input.confirmationMinute : null;
+  let rangeAcceptanceMinute = observed.rangeAcceptanceMinute;
+  let rangeAcceptanceCount = observed.rangeAcceptanceCount ?? 0;
+  if (rangeReclaim && input.confirmationMinute && input.confirmationMinute > observed.entryAt
+    && input.confirmationMinute !== rangeAcceptanceMinute && input.confirmationPrice != null) {
+    const acceptedOutside = observed.side === "LONG"
+      ? input.confirmationPrice < observed.rangeBoundary! - observed.rangeBuffer! * 0.15
+      : input.confirmationPrice > observed.rangeBoundary! + observed.rangeBuffer! * 0.15;
+    rangeAcceptanceCount = acceptedOutside ? rangeAcceptanceCount + 1 : 0;
+    rangeAcceptanceMinute = input.confirmationMinute;
+    if (rangeAcceptanceCount >= 2) {
+      const closed = close("RANGE_OUTSIDE_ACCEPTANCE");
+      return { ...closed, rangeAcceptanceMinute, rangeAcceptanceCount };
+    }
+  }
   const feeDistance = observed.entryPrice * ROUND_TRIP_FRICTION_RATE;
   if (completedMinute && confirmationCandle && observed.scenario === "BREAKOUT") {
     const extremeMove = observed.side === "LONG"
@@ -586,21 +636,21 @@ export function updatePosition(position: PaperPosition, input: {
     const closeMove = observed.side === "LONG"
       ? input.confirmationPrice - observed.entryPrice
       : observed.entryPrice - input.confirmationPrice;
-    const extremeMove = confirmationCandle
-      ? (observed.side === "LONG" ? confirmationCandle.high - observed.entryPrice : observed.entryPrice - confirmationCandle.low)
-      : closeMove;
-    const retention = Math.max(0, closeMove) / Math.max(extremeMove, 1e-9);
-    const confirmedMove = retention >= 0.5 ? Math.max(closeMove, extremeMove * 0.5) : closeMove;
-    const confirmedR = confirmedMove / initialRisk;
+    const targetDistance = observed.side === "LONG"
+      ? observed.currentTarget - observed.entryPrice
+      : observed.entryPrice - observed.currentTarget;
+    const confirmedR = closeMove / initialRisk;
+    const targetProgress = targetDistance > 0 ? closeMove / targetDistance : 0;
     let candidate: number | null = null;
-    if (confirmedR >= 1) {
+    // The first liquidity node is already checked on every fresh tick. Before
+    // that node, an MFE-percentage trail only places protection inside normal
+    // rotation. Completed target progress may reduce remaining loss, but it
+    // cannot manufacture a profit stop before the planned target is reached.
+    if (confirmedR >= DYNAMIC_PROTECTION_MIN_CONFIRMED_R
+      && targetProgress >= DYNAMIC_PROTECTION_MIN_TARGET_PROGRESS) {
       candidate = observed.side === "LONG"
-        ? observed.entryPrice - initialRisk * 0.5
-        : observed.entryPrice + initialRisk * 0.5;
-    }
-    if (confirmedMove >= feeDistance + initialRisk * 0.5) {
-      const lockedMove = Math.max(feeDistance + initialRisk * DYNAMIC_PROTECTION_NET_CUSHION_R, confirmedMove * 0.35);
-      candidate = observed.side === "LONG" ? observed.entryPrice + lockedMove : observed.entryPrice - lockedMove;
+        ? observed.entryPrice - initialRisk * DYNAMIC_PROTECTION_REMAINING_RISK_R
+        : observed.entryPrice + initialRisk * DYNAMIC_PROTECTION_REMAINING_RISK_R;
     }
     if (candidate != null) {
       currentStop = observed.side === "LONG" ? Math.max(currentStop, candidate) : Math.min(currentStop, candidate);
@@ -617,6 +667,8 @@ export function updatePosition(position: PaperPosition, input: {
     exitSignalCount,
     exitSignalReason,
     stopUpdatedMinute,
+    rangeAcceptanceMinute,
+    rangeAcceptanceCount,
   };
 }
 
@@ -636,6 +688,8 @@ export function breakoutEntryConfirmed(
   _confirmationMinute?: number,
   _confirmationCandle?: CompletedMinuteCandle | null,
 ) {
+  void _confirmationMinute;
+  void _confirmationCandle;
   if (plan.marketState !== "BREAKOUT") return true;
   if (plan.routeKind === "BREAKOUT_RETEST") return true;
   return (plan.breakoutSignalCount ?? 0) >= FAST_BREAKOUT_REQUIRED_SNAPSHOTS;

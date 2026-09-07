@@ -108,3 +108,15 @@
 - Breakout plans must be armed while price remains on the pre-trigger side. Already-crossed, consumed, or structurally replaced boundaries are missed/invalid and cannot be revived as fresh breakouts.
 - The actual first target alone must pass net economics. A farther 1h/4h node cannot subsidize admission before price reaches and re-evaluates the nearer node.
 - This correction does not increase leverage, per-trade loss, aggregate risk, request cadence, or LIVE authority.
+# 2026-09-07 — Range sweeps are evidence, not passive entries
+
+- The reproduced SOL plan `105.08061 / 104.89146 / 105.75132` placed its stop roughly 0.18% below entry inside a price area already visited by repeated 15m lower wicks. The upstream defect is not only stop width: a passive RANGE buy fills while the boundary sweep is still moving down, before the market proves a reclaim.
+- A new RANGE lifecycle observes the frozen edge without reserving an exchange order, records the sweep extreme, and trades only after reclaim evidence. Exceptional real-time reclaim may use consecutive fresh books; ordinary reclaim uses completed 1m evidence and a later boundary retest/reacceleration. Failure to reclaim is outside acceptance and cancels the range thesis rather than filling it.
+- RANGE and BREAKOUT no longer share invalidation semantics. A reclaimed RANGE position may survive an ordinary wick through the edge, protected by a hard stop beyond the observed sweep/structure/noise envelope. Persistent completed-minute acceptance outside may exit earlier at a controlled loss. Weak reversal flow alone is not an exit while price remains accepted inside the balance.
+- The aggregate structural-risk hard ceiling becomes 10% for PAPER and LIVE, with adaptive 1.5%–3% per-entry risk and a lower same-direction BTC/ETH/SOL correlated-risk ceiling. The 10% ceiling is capacity, not a target; wider stops still reduce notional, and leverage still only releases margin. Existing positions are not resized or widened during deployment.
+
+# 2026-09-07 — First-target progress replaces MFE-percentage trailing
+
+- The observed ETH RANGE long entered at 2,498.135 and exited at 2,503.235 with 6.33 U gross but 5.58 U modeled cost, leaving only 0.75 U while price later resumed upward. The exit price matches the old rule that locked roughly 35% of a confirmed favorable excursion, proving that the protection sat inside an ordinary pre-target pullback.
+- A routed trade already has a frozen first liquidity node that is checked on every fresh two-second price. Therefore an aggressive pre-target profit trail is redundant: it reduces target-hit probability without adding a distinct thesis invalidation.
+- Before the first node, completed target progress—not MFE—is the protection clock. At 1.5R and 70% progress, the system may reduce remaining loss to 0.5R but cannot cross entry. Target arrival still exits or hands off to a confirmed continuation, where the next segment's structural stop becomes valid.
