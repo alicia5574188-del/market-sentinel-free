@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { aggregateClosePoints, directionalReturnRate, marginReturnRate, unrealizedPnl, type PositionPricePoint } from "../lib/position-metrics.ts";
+import { directionalReturnRate, marginReturnRate, unrealizedPnl } from "../lib/position-metrics.ts";
 import { runtimeReady } from "../lib/runtime-health.ts";
 
 type Side = "LONG" | "SHORT";
@@ -20,6 +20,7 @@ type LivePosition = Position & { id: string; symbol: string; exchangeSize: numbe
 type LiveEntrySkip = { planId: string; symbol: string; code: "MIN_CONTRACT" | "MARGIN" | "RISK_CAP" | "ECONOMICS"; reason: string; observedAt: number };
 type LiveRuntime = { requestedEnabled: boolean; operational: boolean; changedAt: number | null; lastSyncAt: number | null; lastError: string | null; equity: number | null; available: number | null; credentialConfigured: boolean; entries: Record<string, LiveEntry | null>; positions: Record<string, LivePosition | null>; entrySkips: Record<string, LiveEntrySkip | null> };
 type PaperCycleSummary = { number: number; startedAt: number; startingEquity: number; currentEquity: number; bankruptcyLine: number; peakEquity: number; trades: number; drawdownRate: number };
+type CycleTradeDiagnostic = { id: string; symbol: string; scenario: MarketState; side: Side; entryAt: number; exitAt: number; holdingSeconds: number; entryPrice: number; exitPrice: number; initialStop: number; target: number; notional: number; plannedRisk: number; plannedNetRewardRisk: number; grossPnl: number; costs: number; netPnl: number; mfeRate: number; maeRate: number; targetProgress: number; stopUse: number; directionCorrectAtExit: boolean; feeCoveringMove: boolean; targetReached: boolean; stopReached: boolean; exitReason: string };
 type RadarCandidate = { id: string; symbol: string; side: Side; strength: number; moveRate: number; movementMultiple: number; volume24hUsd: number; confirmations: number; firstSeenAt: number; observedAt: number; kind: "NEW_MONEY" | "SQUEEZE" | "LIQUIDATION" | "PRICE_SHOCK" };
 type Runtime = {
   version: string; mode: "PAPER"; state: string; stale: boolean; generatedAt: number; lastSuccessAt: number | null; lastError: string | null; symbols: string[]; equity: number; dailyStartEquity?: number;
@@ -45,13 +46,12 @@ type BankruptcyReport = { id: string; cycleNumber: number; startedAt: number; en
   targets: { reached: number; reachedRate: number; averageProgress: number };
   exits: { averageHoldingSeconds: number; underOneMinute: number; reasons: Record<string, number> };
   breakdown: { symbols: Record<string, BreakdownRow>; scenarios: Record<string, BreakdownRow>; sides: Record<string, BreakdownRow> };
-  rootCauses: string[]; trades: unknown[] };
+  rootCauses: string[]; trades: CycleTradeDiagnostic[] };
 type AccountLogItem = { id: string; observedAt: number; report: BankruptcyReport };
 type Tab = "brain" | "orders" | "live" | "history" | "settings";
 type LiveView = "account" | "orders" | "api";
 type HistoryView = "trades" | "account_logs";
 type PaperAction = "RESET" | "CLEAR_HISTORY";
-type Timeframe = "1m" | "15m" | "1h" | "4h";
 type Candle = { time: number; volume: number; close: number; high: number; low: number; open: number };
 type PositionView = { entryAt?: number; entryPrice: number; stopPrice: number; targetPrice: number; markPrice?: number; markAt?: number; fresh: boolean };
 
@@ -77,11 +77,6 @@ const distancePct = (from: number, to: number) => Math.abs(to - from) / Math.max
 const netRr = (entry: number, stop: number, target: number) => Math.max(0, Math.abs(target - entry) / Math.max(entry, 1e-9) - .0018)
   / Math.max(Math.abs(entry - stop) / Math.max(entry, 1e-9) + .0018, 1e-9);
 const displayLeverage = (notional: number, equity: number) => [1, 2, 3, 5, 10, 20, 30, 40, 50].find((value) => notional / value <= equity * .12) ?? 50;
-const mergePricePoints = (current: PositionPricePoint[], incoming: PositionPricePoint[]) => {
-  const merged = new Map<number, PositionPricePoint>();
-  [...current, ...incoming].forEach((point) => { if (Number.isFinite(point.time) && Number.isFinite(point.price) && point.price > 0) merged.set(point.time, point); });
-  return [...merged.values()].sort((a, b) => a.time - b.time).slice(-72);
-};
 const friendlyLiveError = (value: string | null | undefined) => !value ? null
   : value.includes("AUTO_INVALID_PARAM_TRIGGER_EXPIRATION")
     ? "Gate 拒绝了旧版触发单的有效期格式；系统已修复并会重新核对。"
@@ -190,18 +185,29 @@ export default function Home() {
     };
     const readHistory = async () => {
       try {
-        const [tradesResponse, logsResponse] = await Promise.all([
-          fetch("/api/history", { cache: "no-store" }),
-          fetch("/api/account-logs", { cache: "no-store" }),
-        ]);
-        if (tradesResponse.ok && active) setHistory(((await tradesResponse.json()) as { items: HistoryItem[] }).items ?? []);
+        const logsResponse = await fetch("/api/account-logs", { cache: "no-store" });
+        const all: HistoryItem[] = [];
+        let cursor: string | null = null;
+        const seenCursors = new Set<string>();
+        for (let page = 0; page < 100; page += 1) {
+          const query = new URLSearchParams({ limit: "100" });
+          if (cursor) query.set("cursor", cursor);
+          const tradesResponse = await fetch(`/api/history?${query}`, { cache: "no-store" });
+          if (!tradesResponse.ok) break;
+          const payload = await tradesResponse.json() as { items: HistoryItem[]; nextCursor: string | null };
+          all.push(...(payload.items ?? []));
+          cursor = payload.nextCursor;
+          if (!cursor || seenCursors.has(cursor)) break;
+          seenCursors.add(cursor);
+        }
+        if (active) setHistory([...new Map(all.map((item) => [item.id, item])).values()]);
         if (logsResponse.ok && active) setAccountLogs(((await logsResponse.json()) as { items: AccountLogItem[] }).items ?? []);
       } catch { /* History is optional; the live runtime remains authoritative. */ }
     };
     const visibility = () => { if (!document.hidden) void read(); else controller?.abort(); };
     void read(); void readHistory();
     const timer = setInterval(read, 15_000);
-    const historyTimer = setInterval(readHistory, 15_000);
+    const historyTimer = setInterval(readHistory, 60_000);
     document.addEventListener("visibilitychange", visibility);
     return () => { active = false; controller?.abort(); clearInterval(timer); clearInterval(historyTimer); document.removeEventListener("visibilitychange", visibility); };
   }, []);
@@ -333,7 +339,6 @@ export default function Home() {
         {!!routes.length && <section className="route-map"><div className="route-map-head"><div><small>分段流动性路线</small><b>多个方案观察，单一方案执行</b></div><span>软计划不占保证金</span></div><div className="route-list">{routes.map((route) => <article className={route.executableNow ? "active" : ""} key={route.id}><div><span>{stageText[route.stage]}</span><b>{sideText(route.side)} · {routeText[route.kind]}</b></div><p>{num(route.entryTrigger, 5)} → {num(route.target, 5)} <small>{route.targetTimeframe} 流动性 · 确认 {num(route.confirmationScore * 100, 0)}% · 假突破风险 {num(route.fakeoutRisk * 100, 0)}%</small></p><em>{route.executableNow ? "可进入执行仲裁" : route.stage === "NODE_TO_NEXT" ? "到节点后重判" : route.blockReason ?? "继续观察确认"}</em></article>)}</div></section>}
         {position?.status === "OPEN" ? <div className="trade-levels"><div><small>实际进场</small><b>{num(position.entryPrice, 5)}</b></div><div><small>原始结构止损</small><b>{num(position.initialStop, 5)}</b></div><div><small>当前保护位</small><b>{num(position.currentStop, 5)}</b></div><div><small>当前目标</small><b>{num(position.currentTarget, 5)}</b></div></div> : intent && <div className="trade-levels"><div><small>准备进场</small><b>{num(intent.entryTrigger, 5)}</b></div><div><small>判断错误就退出</small><b>{num(intent.invalidation, 5)}</b></div><div><small>当前目标</small><b>{num(intent.target, 5)}</b></div><div><small>第一目标扣成本盈亏比</small><b>{num(netRr(intent.entryTrigger, intent.invalidation, intent.target), 2)} : 1</b></div></div>}
         <div className="execution"><small>执行方式</small><b>{!marketFresh && plan?.state === "PREPARED" ? `原计划与边界保持不变；当前禁止成交，连续2份新盘口恢复后再核对，仍有效至 ${time(plan.expiresAt)}` : position?.status === "OPEN" ? waitReason(runtime, marketFresh, symbol) : plan?.state === "PREPARED" ? eventIntent ? `资金异动已确认；按当前实时价IOC进场，盘口逆向或超过允许滑点立即放弃` : plan.marketState === "BREAKOUT" ? `内部实时确认 ${num(plan.entryTrigger, 5)}；强突破连续 ${(plan.breakoutSignalCount ?? 0)}/4，确认后IOC，0.5R外不追` : `价格到达 ${num(plan.entryTrigger, 5)} 后连续实时确认 ${(plan.realtimeSignalCount ?? 0)}/3；确认后IOC，不预挂交易所` : intent ? "方向已形成，等待系统建立实时进场计划" : reclaimedEdge ? "反弹和再次下破同时观察；只有实时证据确认的分支才IOC进场" : "继续等待完整机会"}</b></div>
-        <CandleChart symbol={symbol} evidence={evidence} decision={intent} position={position?.status === "OPEN" ? position : null} />
         <details><summary>查看判断依据</summary><p>{intent?.reason.join("；") || "尚未形成完整判断"}</p><div className="targets"><span>上方吸引区：{num(evidence?.topLong?.price, 5)} · {sourceText[evidence?.topLong?.source ?? ""] ?? "识别中"}</span><span>下方吸引区：{num(evidence?.topShort?.price, 5)} · {sourceText[evidence?.topShort?.source ?? ""] ?? "识别中"}</span></div></details>
       </article>;
     }) ?? <div className="empty">正在读取市场数据…</div>}</section>
@@ -351,7 +356,7 @@ export default function Home() {
 
     <section className="history-panel" hidden={tab !== "history"}>
       <div className="history-subnav">{([['trades', '交易记录'], ['account_logs', `账户日志 ${accountLogs.length || ''}`]] as const).map(([key, label]) => <button type="button" key={key} className={historyView === key ? "active" : ""} onClick={() => setHistoryView(key)}>{label}</button>)}</div>
-      {historyView === "trades" && <><div className="section-heading"><div><h2>最近模拟交易</h2><p>只展示真实产生过的记录，不填充示例数据。</p></div><span>{history.filter((item) => item.status === "CLOSED").length} 笔已结束</span></div>
+      {historyView === "trades" && <><div className="section-heading"><div><h2>全部模拟交易</h2><p>分页读取后台完整记录；每笔复盘图持续更新到出场后12小时。</p></div><span>{history.filter((item) => item.status === "CLOSED").length} 笔已结束</span></div>
         {!history.length ? <div className="empty"><b>还没有历史交易</b><p>产生第一笔模拟交易后会自动出现在这里。</p></div> : <div className="history-table">{history.map((item) => <HistoryOrder key={item.id} item={item} />)}</div>}</>}
       {historyView === "account_logs" && <AccountLogs cycle={runtime?.paperCycle ?? null} items={accountLogs} />}
     </section>
@@ -477,50 +482,7 @@ function OrderCard({ symbol, side, label, state, notional, equity, values, mode 
   const pnl = positionView && mark ? unrealizedPnl(notional, side, positionView.entryPrice, mark) : null;
   const priceReturn = positionView && mark ? directionalReturnRate(side, positionView.entryPrice, mark) : null;
   const marginReturn = pnl == null ? null : marginReturnRate(pnl, margin);
-  return <article className={`order-card ${mode === "LIVE" ? "live-card" : ""}`}><div><span className={`side ${side.toLowerCase()}`}>{side === "LONG" ? "多" : "空"}</span><div><h3>{symbol.replace("_", "/")} · {label}</h3><p>{stateText[state]} · {mode === "LIVE" ? "Gate 真实合约" : "PAPER 模拟合约"}</p></div></div><strong style={{ textAlign: "right" }}><small style={{ display: "block", color: "var(--muted)", fontSize: 10 }}>合约名义价值</small>{num(notional, 2)} U</strong>{positionView && <section className="position-pnl"><div><small>浮动盈亏</small><strong className={pnl == null ? "" : pnl >= 0 ? "positive" : "negative"}>{pnl == null ? "等待行情" : `${signed(pnl)} U`}</strong><span>未扣平仓成本</span></div><div><small>保证金收益率</small><strong className={marginReturn == null ? "" : marginReturn >= 0 ? "positive" : "negative"}>{marginReturn == null ? "—" : `${signed(marginReturn * 100)}%`}</strong><span>方向价格变动 {priceReturn == null ? "—" : `${signed(priceReturn * 100)}%`}</span></div><div><small>当前价格</small><strong>{num(mark, 5)}</strong><span>{positionView.fresh ? `行情 ${time(positionView.markAt)}` : "最近后台价 · 行情恢复中"}</span></div></section>}<dl>{values.map(([name, value]) => { const money = /风险|盈亏/.test(name); return <div key={name}><dt>{name}</dt><dd className={name.includes("盈亏") ? value >= 0 ? "positive" : "negative" : ""}>{num(value, money ? 2 : 5)}{money ? " U" : ""}</dd></div>; })}<div><dt>{mode === "LIVE" ? "真实杠杆" : "模拟杠杆"}</dt><dd>{leverage}×</dd></div><div><dt>{mode === "LIVE" ? "实际保证金" : "预计保证金"}</dt><dd>{num(margin, 2)} U</dd></div></dl>{positionView && <PositionLiveChart symbol={symbol} side={side} view={positionView} />}<p style={{ gridColumn: "1 / -1", margin: 0, color: note && mode === "LIVE" ? "var(--red)" : "var(--muted)", fontSize: 11 }}>{note ?? (mode === "LIVE" ? "真实订单由 Gate 托管；结构止损为 reduce-only，不能反向开仓。" : "触发时按最新价格、权益和组合风险重新计算。")}</p></article>;
-}
-
-function PositionLiveChart({ symbol, side, view }: { symbol: string; side: Side; view: PositionView }) {
-  const [points, setPoints] = useState<PositionPricePoint[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    let active = true;
-    void fetch(`/api/candles?symbol=${encodeURIComponent(symbol)}&interval=1m`, { cache: "no-store", signal: controller.signal }).then(async (response) => {
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const payload = await response.json() as { candles?: Candle[] };
-      const start = (view.entryAt ?? 0) - 60_000;
-      const seeded = (payload.candles ?? []).filter((row) => row.time * 1_000 >= start && Number.isFinite(row.close) && row.close > 0).map((row) => ({ time: row.time * 1_000, price: row.close }));
-      if (active) setPoints((current) => mergePricePoints(seeded, current));
-    }).catch(() => undefined).finally(() => { if (active) setLoading(false); });
-    return () => { active = false; controller.abort(); };
-  }, [symbol, view.entryAt]);
-
-  const fallbackTime = view.markAt ?? points.at(-1)?.time ?? view.entryAt ?? 0;
-  const currentPoint = view.markPrice && fallbackTime > 0 ? [{ time: fallbackTime, price: view.markPrice }] : [];
-  const observed = mergePricePoints(aggregateClosePoints(points, 5 * 60_000), currentPoint);
-  const rows = observed.length > 1 ? observed : mergePricePoints([{ time: view.entryAt ?? Math.max(0, fallbackTime - 60_000), price: view.entryPrice }], observed);
-  const width = 760, height = 250, left = 18, right = 18, top = 24, bottom = 28;
-  const levels = [{ value: view.stopPrice, label: "止损", kind: "stop" }, { value: view.targetPrice, label: "止盈", kind: "target" }].filter((level) => Number.isFinite(level.value) && level.value > 0);
-  const prices = [...rows.map((row) => row.price), view.entryPrice, ...levels.map((level) => level.value), ...(view.markPrice ? [view.markPrice] : [])];
-  const rawMin = prices.length ? Math.min(...prices) : 0, rawMax = prices.length ? Math.max(...prices) : 1;
-  const padding = Math.max((rawMax - rawMin) * .09, rawMax * .0005, 1e-9);
-  const minPrice = rawMin - padding, maxPrice = rawMax + padding, plotHeight = height - top - bottom;
-  const startTime = rows[0]?.time ?? fallbackTime - 60_000, endTime = Math.max(rows.at(-1)?.time ?? fallbackTime, startTime + 1_000);
-  const x = (value: number) => left + (value - startTime) / Math.max(endTime - startTime, 1) * (width - left - right);
-  const y = (value: number) => top + (maxPrice - value) / Math.max(maxPrice - minPrice, 1e-9) * plotHeight;
-  const line = rows.map((point) => `${x(point.time)},${y(point.price)}`).join(" ");
-  const current = rows.at(-1);
-
-  return <section className="position-chart" aria-label={`${symbol.replace("_", "/")} 持仓实时价格走势`}><div className="position-chart-head"><div><b>持仓实时走势</b><small>5分钟收盘线 + 约15秒当前价</small></div><span className={view.fresh ? "positive" : "negative"}>{view.fresh ? "实时" : "保留最近价"}</span></div><div className="position-line-canvas">{!rows.length ? <div className="chart-loading">{loading ? "正在读取走势…" : "等待行情"}</div> : <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`从进场至今的5分钟价格线，含进场、止损和止盈`} preserveAspectRatio="none">
-    {[.25, .5, .75].map((ratio) => <line className="chart-grid" key={ratio} x1={left} x2={width - right} y1={top + plotHeight * ratio} y2={top + plotHeight * ratio} />)}
-    {levels.map((level, index) => <g className={`position-level ${level.kind}`} key={`${level.kind}:${level.value}`}><line x1={left} x2={width - right} y1={y(level.value)} y2={y(level.value)} /><text x={index === 0 ? width * .42 : width - right - 5} textAnchor={index === 1 ? "end" : "start"} y={Math.max(13, y(level.value) - 6)}>{level.label} {num(level.value, 5)}</text></g>)}
-    {line && <polyline className={`position-price-line ${side.toLowerCase()}`} points={line} />}
-    <g className="position-entry-marker"><circle cx={x(view.entryAt ?? startTime)} cy={y(view.entryPrice)} r="6" /><text x={Math.min(width - right - 90, x(view.entryAt ?? startTime) + 10)} y={Math.max(13, y(view.entryPrice) - 8)}>进场 {num(view.entryPrice, 5)}</text></g>
-    {current && <g className="position-current"><line x1={left} x2={width - right} y1={y(current.price)} y2={y(current.price)} /><circle cx={x(current.time)} cy={y(current.price)} r="5" /><text x={width - right - 5} y={Math.max(13, y(current.price) - 7)} textAnchor="end">当前 {num(current.price, 5)}</text></g>}
-    <text className="axis-label" x={left} y={height - 8}>{time(startTime)}</text><text className="axis-label end" x={width - right} y={height - 8}>{time(endTime)}</text>
-  </svg>}</div><p>{loading ? "正在补齐进场后的缓存走势" : `${rows.length} 个5分钟节点 · 行情恢复时图线保留，不用旧价格触发交易`}</p></section>;
+  return <article className={`order-card ${mode === "LIVE" ? "live-card" : ""}`}><div><span className={`side ${side.toLowerCase()}`}>{side === "LONG" ? "多" : "空"}</span><div><h3>{symbol.replace("_", "/")} · {label}</h3><p>{stateText[state]} · {mode === "LIVE" ? "Gate 真实合约" : "PAPER 模拟合约"}</p></div></div><strong style={{ textAlign: "right" }}><small style={{ display: "block", color: "var(--muted)", fontSize: 10 }}>合约名义价值</small>{num(notional, 2)} U</strong>{positionView && <section className="position-pnl"><div><small>浮动盈亏</small><strong className={pnl == null ? "" : pnl >= 0 ? "positive" : "negative"}>{pnl == null ? "等待行情" : `${signed(pnl)} U`}</strong><span>未扣平仓成本</span></div><div><small>保证金收益率</small><strong className={marginReturn == null ? "" : marginReturn >= 0 ? "positive" : "negative"}>{marginReturn == null ? "—" : `${signed(marginReturn * 100)}%`}</strong><span>方向价格变动 {priceReturn == null ? "—" : `${signed(priceReturn * 100)}%`}</span></div><div><small>当前价格</small><strong>{num(mark, 5)}</strong><span>{positionView.fresh ? `行情 ${time(positionView.markAt)}` : "最近后台价 · 行情恢复中"}</span></div></section>}<dl>{values.map(([name, value]) => { const money = /风险|盈亏/.test(name); return <div key={name}><dt>{name}</dt><dd className={name.includes("盈亏") ? value >= 0 ? "positive" : "negative" : ""}>{num(value, money ? 2 : 5)}{money ? " U" : ""}</dd></div>; })}<div><dt>{mode === "LIVE" ? "真实杠杆" : "模拟杠杆"}</dt><dd>{leverage}×</dd></div><div><dt>{mode === "LIVE" ? "实际保证金" : "预计保证金"}</dt><dd>{num(margin, 2)} U</dd></div></dl><p style={{ gridColumn: "1 / -1", margin: 0, color: note && mode === "LIVE" ? "var(--red)" : "var(--muted)", fontSize: 11 }}>{note ?? (mode === "LIVE" ? "真实订单由 Gate 托管；结构止损为 reduce-only，不能反向开仓。" : "触发时按最新价格、权益和组合风险重新计算。")}</p></article>;
 }
 
 function LoginModal({ configured, onClose, onSuccess }: { configured: boolean; onClose: () => void; onSuccess: (session: AuthSession) => void }) {
@@ -553,7 +515,7 @@ function HistoryOrder({ item }: { item: HistoryItem }) {
   const cost = item.feesAndSlippage ?? 0;
   const gross = (item.realizedPnl ?? 0) + cost;
   return <article className="history-order"><div><span className={`side ${item.side.toLowerCase()}`}>{item.side === "LONG" ? "多" : "空"}</span><div><b>{item.symbol.replace("_", "/")}</b><small>{time(item.entryAt)} · {stateText[item.marketState]}</small></div></div><div><small>进场 / 出场</small><b>{num(item.entryPrice, 5)} / {num(item.exitPrice, 5)}</b></div><div><small>净结果</small><b className={(item.realizedPnl ?? 0) >= 0 ? "positive" : "negative"}>{item.status === "OPEN" ? "持仓中" : `${signed(item.realizedPnl ?? 0)} U`}</b></div><div><small>持仓 / 结束原因</small><b>{durationText(item.entryAt, item.exitAt)} · {item.status === "OPEN" ? "尚未结束" : resolvedExitText(item.exitReason, item.initialStop, item.currentStop)}</b></div>
-    <details className="history-review" onToggle={(event) => setOpen(event.currentTarget.open)}><summary>查看 5 分钟进出场走势</summary>{open && <OrderReviewChart item={item} gross={gross} cost={cost} />}</details>
+    <details className="history-review" onToggle={(event) => setOpen(event.currentTarget.open)}><summary>查看 5 分钟蜡烛图（B/S）</summary>{open && <OrderReviewChart item={item} gross={gross} cost={cost} />}</details>
   </article>;
 }
 
@@ -573,6 +535,7 @@ function AccountLogs({ cycle, items }: { cycle: PaperCycleSummary | null; items:
         <div className="bankruptcy-metrics"><span>起始 / 结束<b>{num(report.startingEquity, 2)} / {num(report.endingEquity, 2)} U</b></span><span>本轮净结果<b className="negative">-{num(report.loss, 2)} U</b></span><span>最大回撤<b>{num(report.maxDrawdownRate * 100, 1)}%</b></span><span>交易 / 胜率<b>{report.performance.trades} 笔 / {num(report.performance.wins / Math.max(report.performance.trades, 1) * 100, 1)}%</b></span><span>方向正确率<b>{num(report.direction.correctAtExitRate * 100, 1)}%</b></span><span>覆盖成本波动<b>{num(report.direction.feeCoveringMoveRate * 100, 1)}%</b></span><span>目标到达率<b>{num(report.targets.reachedRate * 100, 1)}%</b></span><span>平均持仓<b>{durationText(0, report.exits.averageHoldingSeconds * 1_000)}</b></span><span>毛结果 / 成本<b>{signed(report.performance.grossPnl)} / {num(report.performance.costs, 2)} U</b></span><span>平均计划净盈亏比<b>{num(report.entries.averagePlannedNetRewardRisk, 2)} : 1</b></span><span>止损触发<b>{report.stops.reached} 笔</b></span><span>一分钟内结束<b>{report.exits.underOneMinute} 笔</b></span></div>
         <section className="root-causes"><h3>系统归纳的主要破产原因</h3><ol>{report.rootCauses.map((cause) => <li key={cause}>{cause}</li>)}</ol></section>
         <details className="bankruptcy-details"><summary>查看分类结果和指标定义</summary><p>“方向正确”表示扣除成本前，出场价格仍在计划方向；“覆盖成本波动”表示持仓期间最大顺向波动达到模型往返成本 0.18%。完整 JSON 还包含每一笔订单的最大顺向/逆向波动、止损使用比例和目标进度。</p><Breakdown title="按币种" rows={report.breakdown.symbols} /><Breakdown title="按三态" rows={report.breakdown.scenarios} /><Breakdown title="按方向" rows={report.breakdown.sides} /></details>
+        <details className="bankruptcy-details bankruptcy-orders"><summary>查看本轮完整订单记录（{report.trades.length} 笔）</summary><div className="bankruptcy-order-head"><span>订单</span><span>进场 / 出场</span><span>持仓</span><span>毛利 / 成本 / 净利</span><span>结束原因</span></div>{report.trades.map((trade) => <div className="bankruptcy-order-row" key={trade.id}><span><b>{trade.symbol.replace("_", "/")}</b><small>{trade.side === "LONG" ? "B 多" : "S 空"} · {time(trade.entryAt)}</small></span><span>{num(trade.entryPrice, 5)}<small>{num(trade.exitPrice, 5)}</small></span><span>{durationText(trade.entryAt, trade.exitAt)}<small>目标进度 {num(trade.targetProgress * 100, 0)}%</small></span><span><b className={trade.netPnl >= 0 ? "positive" : "negative"}>{signed(trade.grossPnl)} / -{num(trade.costs, 2)} / {signed(trade.netPnl)} U</b><small>计划 {num(trade.plannedNetRewardRisk, 2)}R</small></span><span>{resolvedExitText(trade.exitReason, trade.initialStop, trade.initialStop)}</span></div>)}</details>
       </article>;
     })}
   </div>;
@@ -585,6 +548,7 @@ function Breakdown({ title, rows }: { title: string; rows: Record<string, Breakd
 function OrderReviewChart({ item, gross, cost }: { item: HistoryItem; gross: number; cost: number }) {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [ready, setReady] = useState(false);
+  const [followUntil, setFollowUntil] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [chartError, setChartError] = useState<string | null>(null);
   useEffect(() => {
@@ -593,141 +557,49 @@ function OrderReviewChart({ item, gross, cost }: { item: HistoryItem; gross: num
       try {
         const response = await fetch(`/api/order-chart?id=${encodeURIComponent(item.id)}`, { cache: "no-store" });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const payload = await response.json() as { source: string; ready: boolean; candles: Candle[] };
+        const payload = await response.json() as { source: string; ready: boolean; followUntil: number; candles: Candle[] };
         const valid = (payload.candles ?? []).filter((row) => [row.time, row.open, row.high, row.low, row.close, row.volume].every(Number.isFinite) && row.time > 0 && row.low > 0 && row.high >= row.low);
-        if (active) { setCandles(valid); setReady(Boolean(payload.ready)); setChartError(null); }
+        if (active) { setCandles(valid); setReady(Boolean(payload.ready)); setFollowUntil(payload.followUntil); setChartError(null); }
       } catch (failure) { if (active) setChartError(failure instanceof Error ? failure.message : "读取失败"); }
       finally { if (active) setLoading(false); }
     };
     void read();
-    const timer = window.setInterval(read, 15_000);
+    const timer = window.setInterval(read, 60_000);
     return () => { active = false; window.clearInterval(timer); };
   }, [item.id]);
 
-  const points = aggregateClosePoints(candles.map((row) => ({ time: row.time * 1_000, price: row.close })), 5 * 60_000);
-  const rows = points.length <= 72 ? points : [...points.slice(0, 24), ...points.slice(-48)];
+  const rows = candles;
   const width = 720, height = 270, left = 12, right = 12, top = 24, bottom = 34;
-  const candleEnd = rows.at(-1)?.time ? rows.at(-1)!.time + 5 * 60_000 : null;
+  const candleEnd = rows.at(-1)?.time ? (rows.at(-1)!.time + 300) * 1_000 : null;
   const exitAt = item.exitAt ?? candleEnd ?? item.entryAt, exitPrice = item.exitPrice ?? item.entryPrice;
   const levels = [{ value: item.initialStop, label: "原始止损", kind: "stop" }, { value: item.currentTarget, label: "计划止盈", kind: "target" }].filter((level) => Number.isFinite(level.value) && level.value > 0);
-  const allPrices = [...rows.map((row) => row.price), item.entryPrice, exitPrice, ...levels.map((level) => level.value)];
+  const allPrices = [...rows.flatMap((row) => [row.high, row.low]), item.entryPrice, exitPrice, ...levels.map((level) => level.value)];
   const rawMin = allPrices.length ? Math.min(...allPrices) : 0, rawMax = allPrices.length ? Math.max(...allPrices) : 1;
   const padding = Math.max((rawMax - rawMin) * .09, rawMax * .0004, 1e-9);
   const minPrice = rawMin - padding, maxPrice = rawMax + padding, plotHeight = height - top - bottom;
   const y = (value: number) => top + (maxPrice - value) / Math.max(maxPrice - minPrice, 1e-9) * plotHeight;
-  const startAt = Math.min(rows[0]?.time ?? item.entryAt, item.entryAt);
-  const endAt = Math.max(rows.at(-1)?.time ? rows.at(-1)!.time + 5 * 60_000 : exitAt, exitAt, startAt + 5 * 60_000);
+  const startAt = Math.min(rows[0]?.time ? rows[0].time * 1_000 : item.entryAt, item.entryAt);
+  const endAt = Math.max(rows.at(-1)?.time ? (rows.at(-1)!.time + 300) * 1_000 : exitAt, exitAt, startAt + 5 * 60_000);
   const x = (value: number) => left + (Math.max(startAt, Math.min(endAt, value)) - startAt) / Math.max(endAt - startAt, 1) * (width - left - right);
-  const line = rows.map((point) => `${x(point.time)},${y(point.price)}`).join(" ");
+  const step = (width - left - right) / Math.max(rows.length, 1);
+  const bodyWidth = Math.max(1.5, Math.min(6, step * .58));
+  const entryLetter = item.side === "LONG" ? "B" : "S";
+  const exitLetter = item.side === "LONG" ? "S" : "B";
   return <div className="review-chart"><div className="review-metrics"><span>毛盈亏 <b className={gross >= 0 ? "positive" : "negative"}>{signed(gross)} U</b></span><span>成本 <b className="negative">-{num(cost, 2)} U</b></span><span>净盈亏 <b className={(item.realizedPnl ?? 0) >= 0 ? "positive" : "negative"}>{signed(item.realizedPnl ?? 0)} U</b></span><span>持仓 <b>{durationText(item.entryAt, item.exitAt)}</b></span></div>
     {!rows.length ? <div className="chart-loading">{loading ? "正在读取并整理这笔订单的 5 分钟走势…" : `复盘走势暂不可用${chartError ? `：${chartError}` : ""}`}</div> : <>
-      <div className="chart-canvas review-canvas"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${item.symbol.replace("_", "/")} 订单5分钟进出场走势`} preserveAspectRatio="none">
+      <div className="chart-canvas review-canvas"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${item.symbol.replace("_", "/")} 订单5分钟蜡烛图，B为买入，S为卖出`} preserveAspectRatio="none">
         {[.25, .5, .75].map((ratio) => <line className="chart-grid" key={ratio} x1={left} x2={width - right} y1={top + plotHeight * ratio} y2={top + plotHeight * ratio} />)}
         {levels.map((level, index) => <g className={`position-level ${level.kind}`} key={`${level.kind}:${level.value}`}><line x1={left} x2={width - right} y1={y(level.value)} y2={y(level.value)} /><text x={index === 0 ? left + 5 : width - right - 5} textAnchor={index === 1 ? "end" : "start"} y={Math.max(13, y(level.value) - 6)}>{level.label} {num(level.value, 5)}</text></g>)}
-        {line && <polyline className={`position-price-line ${item.side.toLowerCase()}`} points={line} />}
-        <g className="review-marker entry"><circle cx={x(item.entryAt)} cy={y(item.entryPrice)} r="6" /><text x={Math.min(width - right - 90, x(item.entryAt) + 10)} y={Math.max(13, y(item.entryPrice) - 8)}>进场 {num(item.entryPrice, 5)}</text></g>
-        <g className="review-marker exit"><circle cx={x(exitAt)} cy={y(exitPrice)} r="6" /><text x={Math.max(left + 90, x(exitAt) - 10)} textAnchor="end" y={Math.min(height - bottom - 4, y(exitPrice) + 16)}>出场 {num(exitPrice, 5)}</text></g>
+        {rows.map((row) => { const cx = x(row.time * 1_000 + 150_000), up = row.close >= row.open, bodyTop = y(Math.max(row.open, row.close)), bodyHeight = Math.max(1.5, Math.abs(y(row.open) - y(row.close))); return <g className={`candle ${up ? "up" : "down"}`} key={row.time}><line x1={cx} x2={cx} y1={y(row.high)} y2={y(row.low)} /><rect x={cx - bodyWidth / 2} y={bodyTop} width={bodyWidth} height={bodyHeight} /></g>; })}
+        <g className={`review-marker ${entryLetter === "B" ? "buy" : "sell"}`}><circle cx={x(item.entryAt)} cy={y(item.entryPrice)} r="7" /><text className="marker-letter" x={x(item.entryAt)} y={y(item.entryPrice) + 3} textAnchor="middle">{entryLetter}</text></g>
+        <g className={`review-marker ${exitLetter === "B" ? "buy" : "sell"}`}><circle cx={x(exitAt)} cy={y(exitPrice)} r="7" /><text className="marker-letter" x={x(exitAt)} y={y(exitPrice) + 3} textAnchor="middle">{exitLetter}</text></g>
         <text className="axis-label" x={left} y={height - 9}>{time(startAt)}</text><text className="axis-label end" x={width - right} y={height - 9}>{time(endAt)}</text>
       </svg></div>
-      <div className="review-levels"><span>原始止损 <b>{num(item.initialStop, 5)}</b></span><span>最终保护位 <b>{num(item.currentStop, 5)}</b></span><span>计划目标 <b>{num(item.currentTarget, 5)}</b></span><span>{rows.length} 个 5 分钟收盘节点</span></div>
-      {!ready && <p className="review-wait">出场附近的原始分钟数据收齐后会自动补全。</p>}
+      <div className="review-levels"><span>B / S <b>买入 / 卖出</b></span><span>原始止损 <b>{num(item.initialStop, 5)}</b></span><span>计划目标 <b>{num(item.currentTarget, 5)}</b></span><span>{rows.length} 根 5 分钟蜡烛</span></div>
+      {!ready && <p className="review-wait">图表正在持续更新，直到出场后12小时（{time(followUntil)}）形成完整复盘窗口。</p>}
+      {ready && <p className="review-complete">已完整记录到出场后12小时。</p>}
     </>}
   </div>;
-}
-
-function CandleChart({ symbol, evidence, decision, position }: {
-  symbol: string;
-  evidence: Runtime["evidence"][string] | undefined;
-  decision: Decision | Plan | null;
-  position: Position | null;
-}) {
-  const [interval, setIntervalValue] = useState<Timeframe>("15m");
-  const [candles, setCandles] = useState<Candle[]>([]);
-  const [loadedInterval, setLoadedInterval] = useState<Timeframe | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [chartError, setChartError] = useState<string | null>(null);
-  const [updatedAt, setUpdatedAt] = useState(0);
-
-  useEffect(() => {
-    let active = true, inFlight = false;
-    let controller: AbortController | null = null;
-    const read = async () => {
-      if (!active || document.hidden || inFlight) return;
-      inFlight = true; controller = new AbortController(); setLoading(true);
-      const timeout = window.setTimeout(() => controller?.abort(), 8_000);
-      try {
-        const response = await fetch(`/api/candles?symbol=${encodeURIComponent(symbol)}&interval=${interval}`, { cache: "no-store", signal: controller.signal });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const payload = await response.json() as { source: string; candles: Candle[]; generatedAt: number };
-        const valid = (payload.candles ?? []).filter((row) => [row.time, row.open, row.high, row.low, row.close, row.volume].every(Number.isFinite) && row.time > 0 && row.low > 0 && row.high >= row.low);
-        if (!valid.length || payload.source !== "GATE_USDT_FUTURES") throw new Error("真实K线暂不可用");
-        if (active) { setCandles(valid); setLoadedInterval(interval); setUpdatedAt(payload.generatedAt); setChartError(null); }
-      } catch (failure) {
-        if (active) setChartError(failure instanceof Error && failure.name !== "AbortError" ? failure.message : "更新超时");
-      } finally {
-        window.clearTimeout(timeout); inFlight = false; if (active) setLoading(false);
-      }
-    };
-    void read();
-    const timer = window.setInterval(read, 60_000);
-    return () => { active = false; controller?.abort(); window.clearInterval(timer); };
-  }, [symbol, interval]);
-
-  const rows = loadedInterval === interval ? candles.slice(-72) : [];
-  const width = 720, height = 286, left = 10, right = 10, top = 24, bottom = 34;
-  const chartStructureAligned = interval !== "15m" || !evidence?.range15m?.observedAt
-    || ((rows.at(-1)?.time ?? 0) + 900) * 1_000 >= evidence.range15m.observedAt;
-  const rawLevels = [
-    interval === "15m" && chartStructureAligned && evidence?.range15m && { value: evidence.range15m.upper, label: "15m父区间上沿", kind: "range" },
-    interval === "15m" && chartStructureAligned && evidence?.range15m && { value: evidence.range15m.lower, label: "15m父区间下沿", kind: "range" },
-    interval === "15m" && chartStructureAligned && evidence?.range15m?.child && { value: evidence.range15m.child.upper, label: "15m子区间上沿", kind: "range" },
-    interval === "15m" && chartStructureAligned && evidence?.range15m?.child && { value: evidence.range15m.child.lower, label: "15m子区间下沿", kind: "range" },
-    position && { value: position.entryPrice, label: "持仓进场", kind: "entry" },
-    position && { value: position.currentStop, label: "保护价", kind: "stop" },
-    position && { value: position.currentTarget, label: "动态目标", kind: "target" },
-    !position && decision && { value: decision.entryTrigger, label: "触发价", kind: "entry" },
-    !position && decision && { value: decision.invalidation, label: "失效价", kind: "stop" },
-    !position && decision && { value: decision.target, label: `${decision.targetTimeframe ?? "当前"}目标`, kind: "target" },
-  ].filter((level): level is { value: number; label: string; kind: string } => Boolean(level && Number.isFinite(level.value) && level.value > 0));
-  const uniqueLevels = rawLevels.filter((level, index) => rawLevels.findIndex((candidate) => Math.abs(candidate.value - level.value) <= Math.max(level.value, 1) * 1e-7) === index);
-  const candlePrices = rows.flatMap((row) => [row.high, row.low]);
-  const candleMin = candlePrices.length ? Math.min(...candlePrices) : 0;
-  const candleMax = candlePrices.length ? Math.max(...candlePrices) : 1;
-  const candleSpan = Math.max(candleMax - candleMin, candleMax * .001);
-  const levels = uniqueLevels.filter((level) => level.value >= candleMin - candleSpan * .18 && level.value <= candleMax + candleSpan * .18);
-  const offscreenLevels = uniqueLevels.filter((level) => !levels.includes(level));
-  const allPrices = [...candlePrices, ...levels.map((level) => level.value)];
-  const rawMin = allPrices.length ? Math.min(...allPrices) : 0;
-  const rawMax = allPrices.length ? Math.max(...allPrices) : 1;
-  const padding = Math.max((rawMax - rawMin) * .07, rawMax * .0005, 1e-9);
-  const minPrice = rawMin - padding, maxPrice = rawMax + padding;
-  const plotHeight = height - top - bottom;
-  const y = (value: number) => top + (maxPrice - value) / Math.max(maxPrice - minPrice, 1e-9) * plotHeight;
-  const step = (width - left - right) / Math.max(rows.length, 1);
-  const bodyWidth = Math.max(2, Math.min(8, step * .58));
-  const latest = rows.at(-1);
-
-  return <section className="chart-shell" aria-label={`${symbol.replace("_", "/")} 真实期货K线`}>
-    <div className="chart-head"><div><b>真实期货 K 线</b><small>Gate USDT 合约 · 已收盘数据</small></div><div className="timeframes" aria-label="切换策略结构周期">{([['1m', '1分钟'], ['15m', '15分钟'], ['1h', '1小时'], ['4h', '4小时']] as const).map(([value, label]) => <button type="button" key={value} className={interval === value ? "active" : ""} onClick={() => setIntervalValue(value)}>{label}</button>)}</div></div>
-    {!rows.length ? <div className="chart-loading">{loading ? "正在读取真实 K 线…" : `真实 K 线更新延迟${chartError ? `：${chartError}` : ""}`}</div> : <>
-      <div className="chart-canvas"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${rows.length} 根 ${interval} 已收盘K线及策略区域`} preserveAspectRatio="none">
-        {[.25, .5, .75].map((ratio) => <line className="chart-grid" key={ratio} x1={left} x2={width - right} y1={top + plotHeight * ratio} y2={top + plotHeight * ratio} />)}
-        {levels.filter((level) => level.kind === "range").map((level) => <rect className="zone-band" key={`${level.label}:${level.value}`} x={left} width={width - left - right} y={y(level.value) - 4} height="8" />)}
-        {rows.map((row, index) => {
-          const x = left + step * index + step / 2;
-          const up = row.close >= row.open;
-          const bodyTop = y(Math.max(row.open, row.close));
-          const bodyHeight = Math.max(1.8, Math.abs(y(row.open) - y(row.close)));
-          return <g className={`candle ${up ? "up" : "down"}`} key={row.time}><line x1={x} x2={x} y1={y(row.high)} y2={y(row.low)} /><rect x={x - bodyWidth / 2} y={bodyTop} width={bodyWidth} height={bodyHeight} /></g>;
-        })}
-        {levels.map((level, index) => { const levelY = y(level.value); return <g className={`chart-level ${level.kind}`} key={`${level.kind}:${level.value}`}><line x1={left} x2={width - right} y1={levelY} y2={levelY} /><text x={left + 5} y={Math.max(12, levelY - 5 - (index % 2) * 11)}>{level.label} {num(level.value, 5)}</text></g>; })}
-        <text className="axis-label" x={left} y={height - 9}>{rows[0] ? time(rows[0].time * 1_000) : ""}</text><text className="axis-label end" x={width - right} y={height - 9}>{latest ? time(latest.time * 1_000) : ""}</text>
-      </svg></div>
-      {!!offscreenLevels.length && <div className="offscreen-levels">{offscreenLevels.map((level) => <span key={`${level.kind}:${level.value}`}>{level.value > candleMax ? "↑" : "↓"} {level.label} <b>{num(level.value, 5)}</b></span>)}</div>}
-      {!chartStructureAligned && <p className="review-wait">结构已使用更新的完整15分钟K线，图表同步前暂不叠加边界，避免新旧数据错位。</p>}
-      <div className="ohlc"><span>开 <b>{num(latest?.open, 5)}</b></span><span>高 <b>{num(latest?.high, 5)}</b></span><span>低 <b>{num(latest?.low, 5)}</b></span><span>收 <b>{num(latest?.close, 5)}</b></span><small>{loading ? "更新中" : chartError ? "保留上次真实数据" : `${rows.length} 根 · ${time(updatedAt)}`}</small></div>
-    </>}
-  </section>;
 }
 
 function Setting({ title, detail, value, tone = "" }: { title: string; detail: string; value: string; tone?: string }) {

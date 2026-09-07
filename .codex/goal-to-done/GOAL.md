@@ -1,5 +1,9 @@
 # Goal
 
+## Active upgrade — 2026-09-08 complete PAPER audit and 12-hour review
+
+Make the PAPER audit complete and visually diagnostic without changing trading behavior. `/api/history` must page through the complete D1 PAPER history instead of returning only the newest 60 rows. Remove market and open-position charts from Brain, Orders, and LIVE; History becomes the only chart surface. Each historical PAPER order must request real completed Gate 5m OHLC candles, show an exact B (buy) and S (sell) marker, original stop and planned target, and keep extending until twelve hours after exit. The archived bankruptcy card must expose every stored order in the cycle rather than only aggregate statistics. Keep all LIVE data and actions isolated, preserve existing execution/risk/data cadence, and add no trading-loop or D1 writes.
+
 ## Active upgrade — 2026-09-07 all-market anomaly scalper
 
 Replace fixed BTC/ETH/SOL structural opportunity discovery with one ten-second bulk scan of every eligible Gate USDT perpetual, then promote only the strongest event candidates into the existing bounded two-second realtime pool. PAPER and LIVE must share current-price IOC entry, actual-fill sizing, hard-stop protection and idempotent recovery. Do not impose a daily order-count limit or daily loss stop in this version. Use 1,000 U PAPER equity and display +150 U as a New-York-day aspirational goal that never weakens admission economics. Size each trade at 0.5%–1% planned risk, retain 10% aggregate/6.5% correlated risk, 30% margin and 4× notional hard limits, require at least 1.2 net reward/risk after friction, and keep the prior credential, LIVE safety, reset, history, bankruptcy, PnL/chart and recovery work. Redesign the operator surface around a simple market radar while preserving owner-only LIVE controls and review detail.

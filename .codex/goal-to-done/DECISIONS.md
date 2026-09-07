@@ -159,3 +159,10 @@
 - The authority now replays at most 90 already-fetched completed 1m candles into a bounded in-memory event. It accepts either a directional retained reclaim or two consecutive inside closes, keeps compatible boundary identity through a range-id roll, and invalidates reclaim only after two completed outside closes.
 - A completed reclaim remains observation until a later completed inside retest holds the boundary. The rebound and renewed-break routes coexist, but ordinary arbitration can promote only one. A first target that cannot pay for the structural stop remains visible and non-executable instead of being mistaken for no detected opportunity.
 - This event memory is in-process and reconstructed from the next existing 1m response after a restart. It adds no Gate request, alarm, D1 write, leverage, risk, or LIVE authority.
+# 2026-09-08 — Complete PAPER history and isolated review charts
+
+- PAPER history is a deterministic cursor API ordered by `COALESCE(exit_at, entry_at), id`; the page follows cursors rather than silently truncating at 60 rows.
+- Only History renders charts. Brain, PAPER Orders, and LIVE retain prices/PnL/risk text but no longer draw market or open-position charts.
+- A historical review is fetched on demand from Gate as completed 5m OHLC data, cached at the Worker edge, and refreshed once a minute until the last completed candle reaches exit plus twelve hours. This adds no Durable Object alarm request and no D1 write.
+- Exact B/S markers encode the actual action: long entry B and exit S; short entry S and exit B. Original stop and planned target remain reference lines.
+- Bankruptcy summaries expose the report's full stored `trades` array in the UI so a complete failed cycle can be inspected order by order.

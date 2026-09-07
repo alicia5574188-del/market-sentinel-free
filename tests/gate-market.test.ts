@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchMarketTickers, fetchStructureCandles } from "../lib/gate-market.ts";
+import { fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchMarketTickers, fetchReviewCandles, fetchStructureCandles } from "../lib/gate-market.ts";
 
 const withFetch = async (body: unknown, run: () => Promise<void>) => {
   const prior = globalThis.fetch;
@@ -27,6 +27,25 @@ test("Gate candle objects exclude unfinished rows, deduplicate, and retain only 
     const rows = await fetchStructureCandles("X_USDT", "1m");
     assert.deepEqual(rows.map((item) => item.time), [now - 180, now - 120, now - 60]);
   });
+});
+
+test("order review requests exact Gate 5m history, excludes live candle, and sorts unique rows", async () => {
+  const now = Math.floor(Date.now() / 300_000) * 300;
+  const from = now - 900;
+  const prior = globalThis.fetch;
+  let requested = "";
+  globalThis.fetch = async (input) => {
+    requested = String(input);
+    const row = (t: number) => ({ t, v: "1", o: "100", h: "102", l: "99", c: "101" });
+    return Response.json([row(now - 300), row(from), row(now - 300), row(now)]);
+  };
+  try {
+    const rows = await fetchReviewCandles("X_USDT", from, now);
+    assert.match(requested, /interval=5m/);
+    assert.match(requested, new RegExp(`from=${from}`));
+    assert.match(requested, new RegExp(`to=${now}`));
+    assert.deepEqual(rows.map((item) => item.time), [from, now - 300]);
+  } finally { globalThis.fetch = prior; }
 });
 
 test("active universe exposes every liquid trading USDT future to the radar", async () => {

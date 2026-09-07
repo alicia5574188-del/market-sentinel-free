@@ -2,7 +2,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
-import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchMarketTickers, fetchRecentTrades, fetchStructureCandles } from "../lib/gate-market.ts";
+import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchMarketTickers, fetchRecentTrades, fetchReviewCandles, fetchStructureCandles } from "../lib/gate-market.ts";
 import { breakoutEntryPriceAcceptable, closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, planTriggered, PORTFOLIO_RISK_CAP, realtimeEntryConfirmed, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, updatePosition, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
 import { aggregateFourHourCandles, analyzeSnapshot, ancillarySchedule, applyFlow, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, optionalEvidenceIsFresh, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
 import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem, type ReviewCandle } from "../lib/paper-outbox.ts";
@@ -169,10 +169,6 @@ function reviewWindow(rows: ReviewCandle[], entryAt: number, exitAt: number) {
   const selected = rows.filter((row) => row.time >= entrySecond - 20 * 60 && row.time <= exitSecond + 20 * 60);
   if (selected.length <= 120) return selected;
   return [...selected.slice(0, 40), ...selected.slice(-80)];
-}
-
-function mergeReviewCandles(...groups: ReviewCandle[][]) {
-  return [...new Map(groups.flat().map((row) => [row.time, row])).values()].sort((a, b) => a.time - b.time);
 }
 
 function initialState(): RuntimeState {
@@ -1682,7 +1678,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
 const isAsset = (pathname: string) => pathname.startsWith("/_next/") || pathname.startsWith("/assets/") || /\.[a-z0-9]{2,8}$/i.test(pathname);
 let runtimeCache: { response: string; expiresAt: number } | null = null;
-let historyCache: { response: string; expiresAt: number } | null = null;
+const historyCache = new Map<string, { response: string; expiresAt: number }>();
 let accountLogCache: { response: string; expiresAt: number } | null = null;
 const candleCache = new Map<string, { response: string; expiresAt: number }>();
 const orderChartCache = new Map<string, { response: string; expiresAt: number }>();
@@ -1695,9 +1691,17 @@ async function runtimeStatus(env: CloudflareEnv, useCache = true, owner = false)
   return new Response(body, { status: response.status, headers: { "Content-Type": "application/json", "Cache-Control": "private, max-age=10" } });
 }
 
-async function paperHistory(env: CloudflareEnv) {
-  if (historyCache && historyCache.expiresAt > Date.now()) {
-    return new Response(historyCache.response, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=30" } });
+async function paperHistory(url: URL, env: CloudflareEnv) {
+  const limit = Math.max(1, Math.min(100, Number(url.searchParams.get("limit") ?? 100) || 100));
+  const cursor = url.searchParams.get("cursor") ?? "";
+  const separator = cursor.indexOf("|");
+  const beforeAt = separator > 0 ? Number(cursor.slice(0, separator)) : null;
+  const beforeId = separator > 0 ? cursor.slice(separator + 1) : null;
+  if (cursor && (!(beforeAt! > 0) || !beforeId || beforeId.length > 96)) return json({ error: "invalid history cursor" }, 400);
+  const cacheKey = `${limit}:${cursor}`;
+  const cached = historyCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return new Response(cached.response, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=10" } });
   }
   const result = await env.DB.prepare(`SELECT
     id, symbol, market_state AS marketState, side, status,
@@ -1707,11 +1711,18 @@ async function paperHistory(env: CloudflareEnv) {
     exit_at AS exitAt, exit_price AS exitPrice,
     exit_reason AS exitReason, realized_pnl AS realizedPnl, fees_and_slippage AS feesAndSlippage
     FROM paper_positions
-    ORDER BY COALESCE(exit_at, entry_at) DESC
-    LIMIT 60`).all();
-  const body = JSON.stringify({ items: result.results ?? [], generatedAt: Date.now() });
-  historyCache = { response: body, expiresAt: Date.now() + 10_000 };
-  return new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=30" } });
+    WHERE (? IS NULL OR COALESCE(exit_at,entry_at) < ? OR (COALESCE(exit_at,entry_at)=? AND id<?))
+    ORDER BY COALESCE(exit_at,entry_at) DESC,id DESC
+    LIMIT ?`).bind(beforeAt, beforeAt, beforeAt, beforeId, limit + 1).all<Record<string, unknown>>();
+  const rows = result.results ?? [];
+  const items = rows.slice(0, limit);
+  const tail = items.at(-1);
+  const sortAt = tail ? Number(tail.exitAt ?? tail.entryAt) : null;
+  const nextCursor = rows.length > limit && tail && sortAt ? `${sortAt}|${String(tail.id)}` : null;
+  const body = JSON.stringify({ items, nextCursor, generatedAt: Date.now() });
+  historyCache.set(cacheKey, { response: body, expiresAt: Date.now() + 10_000 });
+  if (historyCache.size > 30) historyCache.delete(historyCache.keys().next().value!);
+  return new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=10" } });
 }
 
 async function accountLogs(env: CloudflareEnv) {
@@ -1757,38 +1768,27 @@ async function chartCandles(url: URL, env: CloudflareEnv) {
 
 async function orderReviewChart(url: URL, env: CloudflareEnv) {
   const id = url.searchParams.get("id") ?? "";
-  if (!/^[A-Z_]+:\d+$/.test(id) || id.length > 96) return json({ error: "invalid order id" }, 400);
+  if (!/^[\p{L}\p{N}_-]+:\d+$/u.test(id) || id.length > 96) return json({ error: "invalid order id" }, 400);
   const cached = orderChartCache.get(id);
   if (cached && cached.expiresAt > Date.now()) return new Response(cached.response, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=30" } });
-  const row = await env.DB.prepare(`SELECT p.id,p.symbol,p.entry_at AS entryAt,p.exit_at AS exitAt,
-    entry.payload_json AS entryReview,exit.payload_json AS exitReview
-    FROM paper_positions p
-    LEFT JOIN paper_events entry ON entry.id='review-entry:' || p.id
-    LEFT JOIN paper_events exit ON exit.id='review-exit:' || p.id
-    WHERE p.id=? LIMIT 1`).bind(id).first<{ id: string; symbol: string; entryAt: number; exitAt: number | null; entryReview: string | null; exitReview: string | null }>();
+  const row = await env.DB.prepare(`SELECT id,symbol,entry_at AS entryAt,exit_at AS exitAt
+    FROM paper_positions WHERE id=? LIMIT 1`).bind(id).first<{ id: string; symbol: string; entryAt: number; exitAt: number | null }>();
   if (!row) return json({ error: "order not found" }, 404);
-  const parse = (value: string | null) => {
-    if (!value) return [] as ReviewCandle[];
-    try {
-      const candles = (JSON.parse(value) as { candles?: ReviewCandle[] }).candles ?? [];
-      return candles.filter((item) => item.time > 0 && [item.open, item.high, item.low, item.close, item.volume].every(Number.isFinite));
-    } catch { return [] as ReviewCandle[]; }
-  };
-  let candles = mergeReviewCandles(parse(row.entryReview), parse(row.exitReview));
-  if (!row.exitReview) {
-    const settings = await env.DB.prepare("SELECT chart_cache_json AS chartCache FROM system_settings WHERE id=1")
-      .first<{ chartCache: string | null }>();
-    try {
-      const bundle = settings?.chartCache ? JSON.parse(settings.chartCache) as Record<string, { "1m"?: ReviewCandle[] }> : {};
-      candles = mergeReviewCandles(candles, reviewWindow(bundle[row.symbol]?.["1m"] ?? [], row.entryAt, row.exitAt ?? Date.now()));
-    } catch { /* The archived entry segment remains usable. */ }
+  const now = Date.now();
+  const followUntil = row.exitAt == null ? now : row.exitAt + 12 * 60 * 60_000;
+  const fromSeconds = Math.floor((row.entryAt - 30 * 60_000) / 1_000);
+  const toSeconds = Math.floor(Math.min(now, followUntil) / 1_000);
+  try {
+    const candles = await fetchReviewCandles(row.symbol, fromSeconds, toSeconds);
+    const latestCloseAt = ((candles.at(-1)?.time ?? 0) + 300) * 1_000;
+    const ready = row.exitAt != null && now >= followUntil && latestCloseAt >= followUntil;
+    const body = JSON.stringify({ id: row.id, symbol: row.symbol, interval: "5m", source: "GATE_USDT_FUTURES", ready, followUntil, candles });
+    orderChartCache.set(id, { response: body, expiresAt: now + (ready ? 6 * 60 * 60_000 : 60_000) });
+    return new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": `public, max-age=${ready ? 21_600 : 60}` } });
+  } catch (error) {
+    if (cached) return new Response(cached.response, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=30", Warning: '110 - "Gate review refresh delayed"' } });
+    return json({ error: safeError(error) }, 503);
   }
-  if (candles.length > 120) candles = [...candles.slice(0, 40), ...candles.slice(-80)];
-  const exitSecond = row.exitAt == null ? null : Math.floor(row.exitAt / 60_000) * 60;
-  const ready = row.exitAt == null || candles.some((item) => item.time === exitSecond);
-  const body = JSON.stringify({ id: row.id, symbol: row.symbol, interval: "1m", source: "GATE_USDT_FUTURES", ready, candles });
-  orderChartCache.set(id, { response: body, expiresAt: Date.now() + (ready ? 60_000 : 10_000) });
-  return new Response(body, { headers: { "Content-Type": "application/json", "Cache-Control": `public, max-age=${ready ? 60 : 10}` } });
 }
 
 async function ownerAuthenticated(request: Request, env: CloudflareEnv) {
@@ -1887,7 +1887,7 @@ async function ownerPaperAction(request: Request, env: CloudflareEnv, action: "R
   });
   if (response.ok) {
     runtimeCache = null;
-    historyCache = null;
+    historyCache.clear();
     accountLogCache = null;
     orderChartCache.clear();
   }
@@ -1906,7 +1906,7 @@ const worker = {
       return json({ ok: response.ok && live, ready: live, version: SYSTEM_VERSION, mode: "PAPER", runtime, topLevelCpuMs: performance.now() - started }, live ? 200 : 503);
     }
     if (url.pathname === "/api/runtime" && request.method === "GET") return runtimeStatus(env, true, await ownerAuthenticated(request, env));
-    if (url.pathname === "/api/history" && request.method === "GET") return paperHistory(env);
+    if (url.pathname === "/api/history" && request.method === "GET") return paperHistory(url, env);
     if (url.pathname === "/api/account-logs" && request.method === "GET") return accountLogs(env);
     if (url.pathname === "/api/candles" && request.method === "GET") return chartCandles(url, env);
     if (url.pathname === "/api/order-chart" && request.method === "GET") return orderReviewChart(url, env);
