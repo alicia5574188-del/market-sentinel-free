@@ -102,7 +102,7 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.doesNotMatch(page, /className="mode-switch"/);
   assert.match(page, /setInterval\(readHistory, 15_000\)/);
   assert.match(page, /function OrderReviewChart/);
-  assert.match(page, /查看 1 分钟进出场 K 线/);
+  assert.match(page, /查看 5 分钟进出场走势/);
   assert.match(page, /账户日志/);
   assert.match(page, /复制完整诊断/);
   assert.match(page, /权益达到 300 U 时/);
@@ -149,7 +149,11 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(page, /function PositionLiveChart/);
   assert.match(page, /浮动盈亏/);
   assert.match(page, /保证金收益率/);
-  assert.match(page, /1分钟收盘线 \+ 约15秒当前价/);
+  assert.match(page, /5分钟收盘线 \+ 约15秒当前价/);
+  assert.match(page, /aggregateClosePoints\(points, 5 \* 60_000\)/);
+  assert.match(page, /className="position-entry-marker"/);
+  assert.match(page, /订单5分钟进出场走势/);
+  assert.match(page, /个 5 分钟收盘节点/);
   assert.equal((page.match(/positionView=\{\{ entryAt: position\.entryAt/g) ?? []).length, 2);
   assert.match(positionMetrics, /export function unrealizedPnl/);
   assert.match(positionMetrics, /export function marginReturnRate/);

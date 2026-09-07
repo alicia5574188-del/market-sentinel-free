@@ -132,5 +132,6 @@
 # 2026-09-07 — Position PnL display and line-chart data source
 
 - PAPER and LIVE position cards use the same mark-to-market formula. “浮动盈亏” is gross USDT before closing friction, “保证金收益率” is gross PnL divided by the displayed position margin, and direction-adjusted price return is shown separately so leverage does not hide the underlying move.
-- A position line chart reads the already-mirrored 1m candle cache once when mounted and appends the midpoint already present in the page's 15-second runtime response. It must not start another Gate request stream or increase Durable Object polling/writes.
+- A position line chart reads the already-mirrored 1m candle cache once when mounted, aggregates it into 5m closes in the browser, and appends the midpoint already present in the page's 15-second runtime response. This makes the trend more legible without starting another Gate request stream or increasing Durable Object polling/writes.
+- Entry is rendered as an exact time/price point rather than a full-width level. Historical order review uses the same 5m close line with distinct entry and exit points; structural stop and planned target remain reference levels so current PAPER, current LIVE, and historical diagnosis share one visual grammar.
 - A stale midpoint may remain visible and is explicitly labeled as the last backend price, but it cannot create a chart point that changes execution authority; trading continues to use the existing per-symbol freshness gates.
