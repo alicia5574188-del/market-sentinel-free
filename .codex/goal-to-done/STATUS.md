@@ -1,5 +1,9 @@
 # Status
 
+Commit `0cb8ed28d0a06c1cd6405086240e456ea21a30f5` deployed successfully in GitHub Actions run #594, including Cloudflare deployment and advancing-production-health verification. RANGE/REVERSAL and BREAKOUT now share internal realtime confirmation followed by current-price IOC execution; no entry order rests on Gate. Exceptional first crosses within 0.5R can be captured, crossed stop/target geometry is rejected before plan creation, short-window OFI/microprice evidence is smoothed, and blocked routes show a concrete reason. No data cadence, D1 writes, risk limits, credentials, or LIVE control changed. Local verification passed 129 direct tests, 13 architecture/migration tests, TypeScript, lint, production build, and whitespace checks; CI and production health also passed.
+
+# Status
+
 Merge commit `2cdf4e4c69f24aa0392bfe834c73cec76e24f794` deployed successfully after PR #182 passed verification run #592; GitHub Actions run #593 completed the Cloudflare deployment and advancing-production-health gate. The authority now reconstructs sweep, later reclaim, and retest from the existing bounded 1m response, preserves compatible events across rolling range ids, exposes rebound and renewed-break observations together, and requires a later held retest plus first-target economics before the completed-candle rebound may execute. Structurally detected but uneconomic auctions remain visible and non-executable. Production returned ready, fresh BTC/ETH/SOL authority with advancing futures data after deployment. No request cadence, D1 writes, risk limits, credentials, or LIVE authority changed. Local and CI verification passed 127 direct tests, 13 architecture/migration tests, TypeScript, lint, production build, whitespace validation, and production health.
 
 # Status
