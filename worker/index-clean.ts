@@ -435,6 +435,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           if (timeframe === "1m") {
             memory.lastCompletedMinuteClose = rows.at(-1)!.close;
             memory.lastCompletedMinuteCandle = rows.at(-1)!;
+            memory.recentCompletedMinuteCandles = rows.slice(-90).map(({ time, open, high, low, close }) => ({
+              time, open, high, low, close,
+            }));
             memory.minuteNoiseRate = deriveMinuteNoiseRate(rows);
           }
         }
