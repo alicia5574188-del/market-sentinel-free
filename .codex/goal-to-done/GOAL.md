@@ -1,6 +1,6 @@
 # Goal
 
-## Active upgrade — 2026-09-07 persistent range-auction memory
+## Completed upgrade — 2026-09-07 persistent range-auction memory
 
 Recognize the post-break auction shown in production without increasing market-data frequency. Use the authority's existing completed 1m candle response to preserve a bounded sequence of sweep, outside stay, reclaim, and later retest across multiple candles and compatible rolling 15m range identities. A reclaimed lower or upper edge must remain visible as a rebound route while a renewed strong break remains a separate route; only one route may pass execution arbitration. Completed-candle reclaim alone is observation, a later held inside retest is required before the rebound branch can prepare, and a structurally real but uneconomic rebound remains visible with its blocking reason instead of disappearing. Preserve the 15-minute executable-plan lifetime, 10% aggregate/6.5% same-direction risk caps, request/write budgets, PAPER/LIVE shared logic, owner-only LIVE control, and default-off state.
 
