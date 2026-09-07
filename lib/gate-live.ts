@@ -301,7 +301,7 @@ export function buildLiveEntryIntent(input: {
   if ((input.openMargin ?? 0) + margin > input.equity * PORTFOLIO_MARGIN_CAP + 1e-8) {
     throw new LiveEntrySizingError("MARGIN", plan.symbol, `${plan.symbol} 将超过账户 30% 挂单与持仓保证金上限，本轮未挂单`);
   }
-  const economics = tradeEconomics({ entry: entryPrice, target: plan.economicTarget ?? stagedEconomicTarget(plan), lossRate, confidence, notional, equity: input.equity });
+  const economics = tradeEconomics({ entry: entryPrice, target: stagedEconomicTarget(plan), lossRate, confidence, notional, equity: input.equity });
   if (!economics.executable) throw new LiveEntrySizingError("ECONOMICS", plan.symbol, `${plan.symbol} 实盘合约取整后净利润空间不足，本轮未挂单`);
   const size = plan.side === "LONG" ? contracts : -contracts;
   const tag = shortTag("e", plan.id);
