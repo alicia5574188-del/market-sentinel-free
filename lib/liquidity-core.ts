@@ -27,6 +27,9 @@ export const FAST_BREAKOUT_MIN_CONFIRMATION = 0.86;
 export const FAST_BREAKOUT_MAX_FAKEOUT_RISK = 0.18;
 export const FAST_BREAKOUT_REQUIRED_SNAPSHOTS = 4;
 export const FAST_BREAKOUT_MAX_SNAPSHOT_GAP_MS = 10_000;
+export const REALTIME_RETEST_MIN_CONFIRMATION = 0.55;
+export const REALTIME_RETEST_MAX_FAKEOUT_RISK = 0.55;
+export const REALTIME_RETEST_REQUIRED_SNAPSHOTS = 3;
 export const DYNAMIC_PROTECTION_MIN_CONFIRMED_R = 1.5;
 export const DYNAMIC_PROTECTION_MIN_TARGET_PROGRESS = 0.70;
 export const DYNAMIC_PROTECTION_REMAINING_RISK_R = 0.50;
@@ -96,6 +99,7 @@ export type LiquidityRoute = {
   activationDistanceRate: number;
   score: number;
   executableNow: boolean;
+  blockReason?: string;
   reason: string[];
   structureId?: string;
   structureRole?: RangeRole;
@@ -174,6 +178,8 @@ export type PaperPlan = Decision & {
   breakoutMissedAt?: number;
   latestConfirmationScore?: number;
   latestFakeoutRisk?: number;
+  realtimeSignalCount?: number;
+  realtimeSignalAt?: number;
   cancelReason?: string;
   cancelledAt?: number;
   invalidationSignalMinute?: number;
@@ -753,6 +759,33 @@ export function observeFastBreakout(
     breakoutCrossedAt,
     breakoutSignalCount: Math.min(FAST_BREAKOUT_REQUIRED_SNAPSHOTS, consecutive ? (plan.breakoutSignalCount ?? 0) + 1 : 1),
     breakoutSignalAt: input.now };
+}
+
+export function observeRealtimeRetest(
+  plan: PaperPlan,
+  input: { now: number; price: number; confirmation: number; fakeoutRisk: number },
+) {
+  if (plan.state !== "PREPARED" || plan.marketState === "BREAKOUT" && plan.routeKind !== "FAILED_BREAKOUT_REVERSAL" && plan.routeKind !== "EDGE_REJECTION") return plan;
+  const livePlan = { ...plan, latestConfirmationScore: input.confirmation, latestFakeoutRisk: input.fakeoutRisk };
+  if (!planTriggered(plan, input.price)) return (plan.realtimeSignalCount ?? 0) > 0
+    ? { ...livePlan, realtimeSignalCount: 0, realtimeSignalAt: undefined }
+    : livePlan;
+  const confirmed = input.confirmation >= REALTIME_RETEST_MIN_CONFIRMATION
+    && input.fakeoutRisk <= REALTIME_RETEST_MAX_FAKEOUT_RISK;
+  if (!confirmed) return (plan.realtimeSignalCount ?? 0) > 0
+    ? { ...livePlan, realtimeSignalCount: 0, realtimeSignalAt: undefined }
+    : livePlan;
+  if (plan.realtimeSignalAt === input.now) return livePlan;
+  const consecutive = plan.realtimeSignalAt != null && input.now - plan.realtimeSignalAt <= FAST_BREAKOUT_MAX_SNAPSHOT_GAP_MS;
+  return { ...livePlan,
+    realtimeSignalCount: Math.min(REALTIME_RETEST_REQUIRED_SNAPSHOTS, consecutive ? (plan.realtimeSignalCount ?? 0) + 1 : 1),
+    realtimeSignalAt: input.now };
+}
+
+export function realtimeEntryConfirmed(plan: Pick<PaperPlan, "marketState" | "routeKind" | "breakoutSignalCount" | "realtimeSignalCount">) {
+  return plan.marketState === "BREAKOUT" && plan.routeKind !== "FAILED_BREAKOUT_REVERSAL" && plan.routeKind !== "EDGE_REJECTION"
+    ? breakoutEntryConfirmed(plan)
+    : (plan.realtimeSignalCount ?? 0) >= REALTIME_RETEST_REQUIRED_SNAPSHOTS;
 }
 
 export function breakoutEntryPriceAcceptable(

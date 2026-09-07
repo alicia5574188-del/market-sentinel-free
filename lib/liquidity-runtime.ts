@@ -11,11 +11,16 @@ import {
   MIN_NET_REWARD_RISK,
   MIN_TARGET_DISTANCE_RATE,
   MIN_STRUCTURAL_STOP_RATE,
+  BREAKOUT_ENTRY_MAX_CHASE_R,
+  FAST_BREAKOUT_MAX_FAKEOUT_RISK,
+  FAST_BREAKOUT_MIN_CONFIRMATION,
   ROUND_TRIP_FRICTION_RATE,
   observeFastBreakout,
+  observeRealtimeRetest,
   PLAN_SOFT_INVALIDATION_CONFIRMATIONS,
   PORTFOLIO_RISK_CAP,
   planTriggered,
+  realtimeEntryConfirmed,
   selectSafeLeverage,
   sizePaperPosition,
   stablePriceBin,
@@ -192,8 +197,11 @@ export function applyFlow(memory: SymbolMemory, snapshot: BookSnapshot) {
   const microprice = bestBid && bestAsk
     ? (bestAsk.price * bestBid.size + bestBid.price * bestAsk.size) / Math.max(1e-9, bestBid.size + bestAsk.size)
     : midpoint;
-  memory.flow.ofi = memory.lastMid > 0 ? ofi : 0;
-  memory.flow.micropriceDisplacementBps = midpoint > 0 ? (microprice - midpoint) / midpoint * 10_000 : 0;
+  const micropriceDisplacementBps = midpoint > 0 ? (microprice - midpoint) / midpoint * 10_000 : 0;
+  memory.flow.ofi = memory.lastMid > 0 ? memory.flow.ofi * 0.6 + ofi * 0.4 : 0;
+  memory.flow.micropriceDisplacementBps = memory.lastMid > 0
+    ? memory.flow.micropriceDisplacementBps * 0.5 + micropriceDisplacementBps * 0.5
+    : 0;
   memory.priorMid = memory.lastMid;
   memory.lastBidDepth = bidDepth;
   memory.lastAskDepth = askDepth;
@@ -758,13 +766,16 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
       : Math.max(minute.high + input.bandBuffer * 0.25, entryTrigger + minimumStopDistance);
     const targetAhead = input.side === "LONG" ? input.target > entryTrigger : input.target < entryTrigger;
     const preAcceleration = input.side === "LONG" ? midpoint < entryTrigger : midpoint > entryTrigger;
+    const retestExtension = input.side === "LONG" ? midpoint - entryTrigger : entryTrigger - midpoint;
+    const retestRisk = Math.max(Math.abs(entryTrigger - invalidation), entryTrigger * 0.0001);
+    const crossedWithinChase = retestExtension >= 0 && retestExtension <= retestRisk * BREAKOUT_ENTRY_MAX_CHASE_R;
     if (!targetAhead || Math.abs(input.target - entryTrigger) / midpoint < MIN_TARGET_DISTANCE_RATE) return;
     routes.push({ id: `${symbol}:BREAKOUT_RETEST:${input.side}:${input.band.id ?? stablePriceBin(input.boundary)}:${minute.time}`,
       symbol, side: input.side, kind: "BREAKOUT_RETEST", stage: "LOCAL_TO_NODE", entryTrigger, invalidation,
       target: input.target, targetIdentity: input.targetIdentity, targetTimeframe: input.targetTimeframe,
       nextTarget: input.nextTarget, confirmationScore: input.confirmationScore, fakeoutRisk: input.fakeoutRisk,
       activationDistanceRate: input.activationRate, score: input.baseScore * 1.04,
-      executableNow: preAcceleration && Math.abs(entryTrigger - midpoint) / midpoint <= input.activationRate
+      executableNow: (preAcceleration || crossedWithinChase) && Math.abs(entryTrigger - midpoint) / midpoint <= input.activationRate
         && input.confirmationScore >= 0.62 && input.fakeoutRisk <= 0.48,
       structureId: input.band.id, structureRole: input.role, rangeBoundary: input.boundary,
       rangeBuffer: input.bandBuffer,
@@ -825,6 +836,10 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
       const fakeoutRisk = routeFakeoutRisk(memory, side, absorption, confirmationScore);
       const childActivation = Math.max(0.002, Math.min(0.006, child.widthRate * 0.7));
       const preTriggerSide = side === "LONG" ? midpoint < childEntry : midpoint > childEntry;
+      const childExtension = side === "LONG" ? midpoint - childEntry : childEntry - midpoint;
+      const childRisk = Math.max(Math.abs(childEntry - childInvalidation), childEntry * 0.0001);
+      const exceptionalChildCross = parentActive && childExtension >= 0 && childExtension <= childRisk * BREAKOUT_ENTRY_MAX_CHASE_R
+        && confirmationScore >= FAST_BREAKOUT_MIN_CONFIRMATION && fakeoutRisk <= FAST_BREAKOUT_MAX_FAKEOUT_RISK;
       const childScore = child.quality * 0.28 + range.quality * 0.25 + confirmationScore * 0.47;
       if (targetAhead && targetDistanceRate >= MIN_TARGET_DISTANCE_RATE) {
         routes.push({ id: `${symbol}:INTERNAL_ROTATION:${side}:${child.id ?? stablePriceBin(child.midpoint)}:${range.id ?? stablePriceBin(range.midpoint)}`,
@@ -833,8 +848,8 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
           targetIdentity: `PARENT_RANGE:${side}:${stablePriceBin(parentTarget)}`, targetTimeframe: "15m",
           nextTarget: null, confirmationScore, fakeoutRisk, activationDistanceRate: childActivation,
           score: childScore,
-          executableNow: preTriggerSide && Math.abs(childEntry - midpoint) / midpoint <= childActivation
-            && confirmationScore >= 0.52 && fakeoutRisk <= 0.62,
+          executableNow: Math.abs(childEntry - midpoint) / midpoint <= childActivation
+            && ((preTriggerSide && confirmationScore >= 0.52 && fakeoutRisk <= 0.62) || exceptionalChildCross),
           structureId: child.id, structureRole: "CHILD",
           reason: ["15分钟父区间内部的子区间边界", "本次只属于区间内部迁移，不是父级突破",
             "实际第一目标为15分钟父区间边缘", "第一目标必须独立满足扣成本盈亏比"] });
@@ -874,12 +889,16 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
         && Math.abs(item.zone.price - first.zone.price) / first.zone.price <= maxSegmentDistanceRate);
       const score = range.quality * 0.38 + confirmationScore * 0.47 + first.zone.probabilityReach * 0.15;
       const preTriggerSide = side === "LONG" ? midpoint < entryTrigger : midpoint > entryTrigger;
+      const extension = side === "LONG" ? midpoint - entryTrigger : entryTrigger - midpoint;
+      const initialRisk = Math.max(Math.abs(entryTrigger - invalidation), entryTrigger * 0.0001);
+      const exceptionalLiveCross = parentActive && extension >= 0 && extension <= initialRisk * BREAKOUT_ENTRY_MAX_CHASE_R
+        && confirmationScore >= FAST_BREAKOUT_MIN_CONFIRMATION && fakeoutRisk <= FAST_BREAKOUT_MAX_FAKEOUT_RISK;
       routes.push({ id: `${symbol}:LOCAL_BREAKOUT:${side}:${range.id ?? `${stablePriceBin(range.upper)}:${stablePriceBin(range.lower)}`}`,
         symbol, side, kind: "LOCAL_BREAKOUT", stage: "LOCAL_TO_NODE", entryTrigger, invalidation,
         target: currentTarget.price, targetIdentity: currentTarget.identity,
         targetTimeframe: currentTarget.timeframe, nextTarget: next?.zone.price ?? null, confirmationScore, fakeoutRisk,
-        activationDistanceRate, score, executableNow: preTriggerSide && Math.abs(entryTrigger - midpoint) / midpoint <= activationDistanceRate
-          && confirmationScore >= 0.52 && fakeoutRisk <= 0.62,
+        activationDistanceRate, score, executableNow: Math.abs(entryTrigger - midpoint) / midpoint <= activationDistanceRate
+          && ((preTriggerSide && confirmationScore >= 0.52 && fakeoutRisk <= 0.62) || exceptionalLiveCross),
         structureId: range.id, structureRole: "PARENT", rangeBoundary: side === "LONG" ? range.upper : range.lower,
         rangeBuffer: buffer,
         reason: ["15分钟父级复合区间边界", acceptedBreakSide ? "父区间突破事件已保留，禁止追价并继续等待回踩或失败收回" : "计划只能在首次穿越前建立", "仅A级强势突破允许连续四次两秒盘口直入；普通突破等待回踩，失败突破准备反向",
@@ -911,7 +930,15 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
     pushEdgeReclaimRoute(range, "PARENT", side,
       side === "LONG" ? range.upper : range.lower, buffer, activationDistanceRate);
   }
-  return routes.sort((a, b) => Number(b.executableNow) - Number(a.executableNow) || b.score - a.score).slice(0, 6);
+  const diagnosed = routes.map((route) => {
+    const invalidated = route.side === "LONG" ? midpoint <= route.invalidation : midpoint >= route.invalidation;
+    const targetPassed = route.side === "LONG" ? midpoint >= route.target : midpoint <= route.target;
+    const tooFar = Math.abs(route.entryTrigger - midpoint) / midpoint > route.activationDistanceRate;
+    const blockReason = invalidated ? "当前价已越过结构止损" : targetPassed ? "当前价已越过第一目标"
+      : tooFar ? "尚未进入触发区域" : !route.executableNow ? "等待对应结构与实时强度确认" : undefined;
+    return { ...route, executableNow: route.executableNow && !invalidated && !targetPassed, blockReason };
+  });
+  return diagnosed.sort((a, b) => Number(b.executableNow) - Number(a.executableNow) || b.score - a.score).slice(0, 6);
 }
 
 export function selectRouteDecision(routes: LiquidityRoute[], observedAt: number): Decision | null {
@@ -1086,9 +1113,12 @@ export function reconcilePaper(input: {
     }
   }
   if (plan?.state === "PREPARED" && input.fresh && !input.sequenceFault && (input.allowOpen ?? true) === false) {
-    plan = observeFastBreakout(plan, { now: input.now, price: input.midpoint,
+    plan = plan.marketState === "BREAKOUT" ? observeFastBreakout(plan, { now: input.now, price: input.midpoint,
       confirmation: input.breakoutConfirmation ?? 0,
-      fakeoutRisk: input.breakoutFakeoutRisk ?? activePlanRoute?.fakeoutRisk ?? plan.fakeoutRisk ?? 1 });
+      fakeoutRisk: input.breakoutFakeoutRisk ?? activePlanRoute?.fakeoutRisk ?? plan.fakeoutRisk ?? 1 })
+      : observeRealtimeRetest(plan, { now: input.now, price: input.midpoint,
+        confirmation: input.breakoutConfirmation ?? 0,
+        fakeoutRisk: input.breakoutFakeoutRisk ?? activePlanRoute?.fakeoutRisk ?? plan.fakeoutRisk ?? 1 });
     if (plan.breakoutFailedAt != null || plan.breakoutMissedAt != null) {
       const missed = plan.breakoutMissedAt != null;
       const cancelReason = missed ? "BREAKOUT_MISSED_CANCEL" : "BREAKOUT_FIRST_CROSS_FAILED_CANCEL";
@@ -1143,7 +1173,16 @@ export function reconcilePaper(input: {
       || Math.abs(input.decision.entryTrigger - input.midpoint) / Math.max(input.midpoint, 1e-9) <= input.decision.activationDistanceRate;
     const breakoutStillAhead = input.decision.marketState !== "BREAKOUT"
       || (input.decision.side === "LONG" ? input.midpoint < input.decision.entryTrigger : input.midpoint > input.decision.entryTrigger);
-    if (materiallyDifferent && withinActivation && breakoutStillAhead) {
+    const crossedExtension = input.decision.side === "LONG" ? input.midpoint - input.decision.entryTrigger : input.decision.entryTrigger - input.midpoint;
+    const crossedRisk = Math.max(Math.abs(input.decision.entryTrigger - input.decision.invalidation), input.decision.entryTrigger * 0.0001);
+    const crossedBreakoutCanArm = input.decision.marketState === "BREAKOUT" && crossedExtension >= 0
+      && crossedExtension <= crossedRisk * BREAKOUT_ENTRY_MAX_CHASE_R
+      && (input.decision.routeKind === "BREAKOUT_RETEST" || ((input.decision.confirmationScore ?? 0) >= FAST_BREAKOUT_MIN_CONFIRMATION
+        && (input.decision.fakeoutRisk ?? 1) <= FAST_BREAKOUT_MAX_FAKEOUT_RISK));
+    const geometryLive = input.decision.side === "LONG"
+      ? input.midpoint > input.decision.invalidation && input.midpoint < input.decision.target
+      : input.midpoint < input.decision.invalidation && input.midpoint > input.decision.target;
+    if (materiallyDifferent && withinActivation && (breakoutStillAhead || crossedBreakoutCanArm) && geometryLive) {
       const sized = sizePaperPosition({ equity: input.equity, entry: input.decision.entryTrigger, invalidation: input.decision.invalidation,
         feeBps: 10, stressSlippageBps: 8,
         confidence: clamp(input.decision.score / Math.max(input.decision.score + input.decision.oppositeScore, Number.EPSILON), 0, 1),
@@ -1157,18 +1196,24 @@ export function reconcilePaper(input: {
           invalidation: input.decision.invalidation, maintenanceRate: input.maintenanceRate, leverageMax: input.leverageMax });
         plan = { ...input.decision, id: `${input.decision.symbol}:${input.now}`, state: "PREPARED", createdAt: input.now,
           expiresAt: input.now + PLAN_TTL_MS, plannedRisk: sized.allowedLoss, notional: sized.notional,
-          leverage: leverage.leverage, margin: leverage.margin, economicTarget };
+          leverage: leverage.leverage, margin: leverage.margin, economicTarget,
+          ...(crossedBreakoutCanArm && input.decision.routeKind !== "BREAKOUT_RETEST" ? {
+            breakoutCrossedAt: input.now, breakoutSignalCount: 1, breakoutSignalAt: input.now,
+            latestConfirmationScore: input.decision.confirmationScore, latestFakeoutRisk: input.decision.fakeoutRisk,
+          } : {}) };
         events.push("PLAN_PREPARED");
       } else if (sized.allowedLoss > 0) {
         events.push("PLAN_REJECTED_ECONOMICS");
       }
+    } else if (materiallyDifferent && withinActivation && !geometryLive) {
+      events.push("PLAN_REJECTED_STRUCTURE");
     } else if (materiallyDifferent && withinActivation && !breakoutStillAhead) {
       events.push("BREAKOUT_ALREADY_CROSSED_SKIP");
     }
   }
   if ((input.allowOpen ?? true) && plan?.state === "PREPARED" && position?.status !== "OPEN"
     && planTriggered(plan, input.midpoint)
-    && breakoutEntryConfirmed(plan, input.confirmationMinute, input.confirmationCandle)
+    && realtimeEntryConfirmed(plan)
     && breakoutEntryPriceAcceptable(plan, input.midpoint)) {
     const confidence = clamp(plan.score / Math.max(plan.score + plan.oppositeScore, Number.EPSILON), 0, 1);
     const resized = sizePaperPosition({ equity: input.equity, entry: input.midpoint, invalidation: plan.invalidation, feeBps: 10,

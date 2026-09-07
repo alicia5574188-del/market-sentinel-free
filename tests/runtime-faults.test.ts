@@ -642,7 +642,9 @@ test("a capacity-limited plan is skipped without blocking LIVE or other affordab
   const { stream } = await makeStream();
   const symbols = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];
   stream.runtime.symbols = symbols;
-  stream.runtime.plans = Object.fromEntries(symbols.map((symbol) => [symbol, { ...plan(symbol), marketState: "RANGE" }]));
+  stream.runtime.plans = Object.fromEntries(symbols.map((symbol) => [symbol, {
+    ...plan(symbol), marketState: "RANGE", realtimeSignalCount: 3,
+  }]));
   stream.runtime.contractMeta = Object.fromEntries(symbols.map((symbol) => [symbol, {
     quantoMultiplier: 0.001, maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0,
   }]));

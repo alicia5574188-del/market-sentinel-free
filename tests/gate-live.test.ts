@@ -26,13 +26,14 @@ test("a confirmed breakout becomes an IOC market order sized from its current en
   assert.equal(intent.body.trigger, undefined);
 });
 
-test("a confirmed breakout retest reaccelerates with IOC while a failed breakout waits passively", () => {
+test("confirmed retest and failed-break entries both use realtime IOC", () => {
   const retest = buildLiveEntryIntent({ plan: { ...plan("BREAKOUT", "LONG"), routeKind: "BREAKOUT_RETEST" },
     entryPrice: 100.2, equity: 1_000, available: 1_000, openRisk: 0, quantoMultiplier: 0.001, leverageMax: 50 });
   assert.equal(retest.kind, "MARKET");
   const failed = buildLiveEntryIntent({ plan: { ...plan("REVERSAL", "SHORT"), routeKind: "FAILED_BREAKOUT_REVERSAL" },
-    equity: 1_000, available: 1_000, openRisk: 0, quantoMultiplier: 0.001, leverageMax: 50 });
-  assert.equal(failed.kind, "LIMIT");
+    entryPrice: 99.8, equity: 1_000, available: 1_000, openRisk: 0, quantoMultiplier: 0.001, leverageMax: 50 });
+  assert.equal(failed.kind, "MARKET");
+  assert.equal(failed.body.tif, "ioc");
 });
 
 test("LIVE ignores a legacy farther economic target and requires the actual first node", () => {
@@ -66,12 +67,12 @@ test("an indivisible Gate lot is rejected when its real correlated risk or margi
   );
 });
 
-test("reversal and range become passive limit entries, not early-filling short limits", () => {
+test("reversal and range submit only realtime IOC after internal confirmation", () => {
   for (const state of ["REVERSAL", "RANGE"] as const) {
     const intent = buildLiveEntryIntent({ plan: plan(state, "SHORT"), equity: 1_000, available: 1_000, openRisk: 0, quantoMultiplier: 0.001, leverageMax: 50 });
-    assert.equal(intent.kind, "LIMIT");
-    assert.equal(intent.body.price, "100");
-    assert.equal(intent.body.tif, "gtc");
+    assert.equal(intent.kind, "MARKET");
+    assert.equal(intent.body.price, "0");
+    assert.equal(intent.body.tif, "ioc");
     assert.ok(Number(intent.body.size) < 0);
   }
 });

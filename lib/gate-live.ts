@@ -274,7 +274,7 @@ export function buildLiveEntryIntent(input: {
   entryPrice?: number;
 }): LiveEntryIntent {
   const { plan } = input;
-  const entryPrice = plan.marketState === "BREAKOUT" ? input.entryPrice ?? plan.entryTrigger : plan.entryTrigger;
+  const entryPrice = input.entryPrice ?? plan.entryTrigger;
   const confidence = plan.score / Math.max(plan.score + plan.oppositeScore, Number.EPSILON);
   const sized = sizePaperPosition({ equity: input.equity, entry: entryPrice, invalidation: plan.invalidation, feeBps: 10,
     stressSlippageBps: 8, confidence, openRisk: input.openRisk, sameDirectionRisk: input.sameDirectionRisk });
@@ -311,8 +311,8 @@ export function buildLiveEntryIntent(input: {
   const size = plan.side === "LONG" ? contracts : -contracts;
   const tag = shortTag("e", plan.id);
   const initial = { contract: plan.symbol, size, price: "0", tif: "ioc", text: tag, reduce_only: false };
-  const kind = plan.marketState === "BREAKOUT" ? "MARKET" : "LIMIT";
-  const body = kind === "MARKET" ? initial : { ...initial, price: String(plan.entryTrigger), tif: "gtc" };
+  const kind = "MARKET" as const;
+  const body = initial;
   return { kind, tag, size, contracts, notional, plannedRisk, leverage, margin, body };
 }
 

@@ -3,7 +3,7 @@
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
 import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchRecentTrades, fetchStructureCandles } from "../lib/gate-market.ts";
-import { breakoutEntryConfirmed, breakoutEntryPriceAcceptable, closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_RISK_CAP, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, updatePosition, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
+import { breakoutEntryPriceAcceptable, closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, planTriggered, PORTFOLIO_RISK_CAP, realtimeEntryConfirmed, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, updatePosition, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
 import { aggregateFourHourCandles, analyzeSnapshot, ancillaryIsFresh, ancillarySchedule, applyFlow, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, optionalEvidenceIsFresh, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
 import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem, type ReviewCandle } from "../lib/paper-outbox.ts";
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
@@ -966,21 +966,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     for (const symbol of this.runtime.symbols) {
       const plan = this.runtime.plans[symbol] ?? null;
       const paperPosition = this.runtime.positions[symbol] ?? null;
-      const justTriggeredBreakout = plan?.marketState === "BREAKOUT" && plan.state === "TRIGGERED"
+      const justTriggeredEntry = plan?.state === "TRIGGERED"
         && paperPosition?.status === "OPEN" && paperPosition.id === plan.id
         && paperPosition.entryAt >= (this.runtime.live.changedAt ?? now)
         && now >= paperPosition.entryAt && now - paperPosition.entryAt <= 10_000;
-      if (!plan || (plan.state !== "PREPARED" && !justTriggeredBreakout) || now >= plan.expiresAt
+      if (!plan || (plan.state !== "PREPARED" && !justTriggeredEntry) || now >= plan.expiresAt
         || this.runtime.live.positions[symbol]?.status === "OPEN" || !this.symbolEntryReady(symbol)) {
         delete this.runtime.live.entrySkips[symbol];
         continue;
       }
       const midpoint = this.runtime.evidence[symbol]?.midpoint ?? 0;
-      const priceCrossed = plan.side === "LONG" ? midpoint >= plan.entryTrigger : midpoint <= plan.entryTrigger;
-      if (plan.marketState === "BREAKOUT" && (!priceCrossed
-        || !breakoutEntryConfirmed(plan, this.memory[symbol]?.timeframeUpdatedAt.m1,
-          this.memory[symbol]?.lastCompletedMinuteCandle)
-        || !breakoutEntryPriceAcceptable(plan, midpoint))) continue;
+      const priceCrossed = justTriggeredEntry || planTriggered(plan, midpoint);
+      if (!priceCrossed || !realtimeEntryConfirmed(plan)
+        || (plan.marketState === "BREAKOUT" && !breakoutEntryPriceAcceptable(plan, midpoint))) continue;
       const prior = this.runtime.live.entries[symbol];
       // A timed-out submission remains reserved until Gate proves it absent for
       // six seconds. Never replay the same plan while its status is ambiguous.
@@ -993,7 +991,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       try {
         intent = buildLiveEntryIntent({ plan, equity, available: availableForNewEntries, openRisk: riskForNewEntries,
           sameDirectionRisk: directionRiskForNewEntries[plan.side],
-          entryPrice: plan.marketState === "BREAKOUT" ? midpoint : undefined,
+          entryPrice: midpoint,
           quantoMultiplier: this.runtime.contractMeta[symbol]?.quantoMultiplier ?? 1,
           maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate ?? 0.005,
           leverageMax: this.runtime.contractMeta[symbol]?.leverageMax ?? 50, openMargin: marginForNewEntries });

@@ -142,7 +142,7 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(worker, /entrySkips/);
   assert.match(live, /function parseGateJson/);
   assert.match(live, /Math\.max\(1, Math\.floor\(sized\.notional \/ contractNotional\)\)/);
-  assert.match(page, /本轮未挂单/);
+  assert.match(page, /本轮未成交/);
   assert.match(live, /expiration: GATE_TRIGGER_DAY_SECONDS/);
   assert.match(live, /expiration: GATE_TRIGGER_DAY_SECONDS \* GATE_TRIGGER_MAX_DAYS/);
   assert.match(page, /function CandleChart/);
@@ -167,13 +167,14 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(page, /软计划不占保证金/);
   assert.match(worker, /aggregateFourHourCandles/);
   assert.match(worker, /activeRoutes/);
-  assert.match(worker, /justTriggeredBreakout/);
+  assert.match(worker, /justTriggeredEntry/);
+  assert.match(worker, /realtimeEntryConfirmed/);
   assert.match(live, /PORTFOLIO_MARGIN_CAP/);
   assert.match(live, /openMargin/);
-  assert.match(page, /内部监测/);
+  assert.match(page, /内部实时确认/);
   assert.match(page, /实时 IOC/);
-  assert.match(page, /连续4次盘口/);
-  assert.match(page, /Gate 限价/);
+  assert.match(page, /强突破连续/);
+  assert.match(page, /不预挂交易所/);
   assert.match(page, /authorityOperational && evidence\?\.fresh && evidence\?\.ancillaryFresh/);
   assert.match(page, /订单.*实盘.*历史.*设置/s);
   assert.doesNotMatch(layout, /requireChatGPTUser|redirect|signin-with-chatgpt/);

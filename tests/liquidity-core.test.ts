@@ -955,7 +955,7 @@ test("a trigger crossing cannot override a vanished frozen target", () => {
 test("an economically untradeable target is rejected before it reaches the order page", () => {
   const decision = { symbol: "SOL_USDT", observedAt: 1, marketState: "BREAKOUT" as const, side: "LONG" as const,
     entryTrigger: 100, invalidation: 99.9, target: 100.1, targetIdentity: "BOOK:LONG:100.1", score: 100, oppositeScore: 0.1, reason: [] };
-  const result = reconcilePaper({ now: 2, midpoint: 99.9, fresh: true, sequenceFault: false, decision, plan: null, position: null,
+  const result = reconcilePaper({ now: 2, midpoint: 99.95, fresh: true, sequenceFault: false, decision, plan: null, position: null,
     zones: [zone("LONG", 100.1), zone("SHORT", 90)], absorption: 0, equity: 1_000, openRisk: 0, allowOpen: false });
   assert.equal(result.plan, null);
   assert.ok(result.events.includes("PLAN_REJECTED_ECONOMICS"));
@@ -984,6 +984,31 @@ test("a breakout decision discovered after price crossed is skipped instead of b
     decision, plan: null, position: null, zones: [], absorption: 0, equity: 1_000, openRisk: 0, allowOpen: false });
   assert.equal(result.plan, null);
   assert.ok(result.events.includes("BREAKOUT_ALREADY_CROSSED_SKIP"));
+});
+
+test("an exceptional first cross can arm realtime confirmation within the chase cap", () => {
+  const decision = { symbol: "SOL_USDT", observedAt: 1, marketState: "BREAKOUT" as const, side: "LONG" as const,
+    entryTrigger: 100, invalidation: 99, target: 103, targetIdentity: "PARENT_RANGE:LONG:103",
+    score: 9, oppositeScore: 1, reason: [], routeId: "child", routeKind: "INTERNAL_ROTATION" as const,
+    structureId: "CHILD:1", structureRole: "CHILD" as const, activationDistanceRate: 0.01,
+    confirmationScore: 0.9, fakeoutRisk: 0.1 };
+  const result = reconcilePaper({ now: 2_000, midpoint: 100.2, fresh: true, sequenceFault: false,
+    decision, plan: null, position: null, zones: [], absorption: 0, equity: 1_000, openRisk: 0, allowOpen: false });
+  assert.equal(result.plan?.state, "PREPARED");
+  assert.equal(result.plan?.breakoutSignalCount, 1);
+  assert.equal(result.plan?.breakoutCrossedAt, 2_000);
+});
+
+test("a new plan is never created after current price has crossed its invalidation", () => {
+  const decision = { symbol: "SOL_USDT", observedAt: 1, marketState: "BREAKOUT" as const, side: "LONG" as const,
+    entryTrigger: 105.2274, invalidation: 104.9904, target: 106.44, targetIdentity: "PARENT_RANGE:LONG:106.44",
+    score: 9, oppositeScore: 1, reason: [], routeId: "child", routeKind: "INTERNAL_ROTATION" as const,
+    structureId: "CHILD:1", structureRole: "CHILD" as const, activationDistanceRate: 0.01,
+    confirmationScore: 0.9, fakeoutRisk: 0.1 };
+  const result = reconcilePaper({ now: 2_000, midpoint: 104.925, fresh: true, sequenceFault: false,
+    decision, plan: null, position: null, zones: [], absorption: 0, equity: 1_000, openRisk: 0, allowOpen: false });
+  assert.equal(result.plan, null);
+  assert.ok(result.events.includes("PLAN_REJECTED_STRUCTURE"));
 });
 
 test("a failed or overextended first cross cannot revive on a later retrace", () => {
@@ -1027,14 +1052,22 @@ test("a mathematically acceptable R multiple is still rejected when its net prof
   assert.equal(result.executable, false);
 });
 
-test("a frozen range entry is not vetoed by one transient absorption dip", () => {
+test("a frozen range entry waits for three realtime confirmations before IOC", () => {
   const decision = { symbol: "SOL_USDT", observedAt: 1, marketState: "RANGE" as const, side: "SHORT" as const,
     entryTrigger: 101, invalidation: 102, target: 95, targetIdentity: "BOOK:SHORT:95", score: 100, oppositeScore: 1, reason: [],
     routeId: "edge:absorption", routeKind: "EDGE_REJECTION" as const };
   const plan: PaperPlan = { ...decision, id: "range-without-absorption", state: "PREPARED", createdAt: 1,
     expiresAt: PLAN_TTL_MS + 1, plannedRisk: 10, notional: 1_000 };
-  const result = reconcilePaper({ now: 2, midpoint: 101.1, fresh: true, sequenceFault: false, decision: null,
-    plan, position: null, zones: [zone("SHORT", 95), zone("LONG", 110)], absorption: 0.2, equity: 1_000,
+  const observe = (current: PaperPlan, now: number) => reconcilePaper({ now, midpoint: 101.1, fresh: true,
+    sequenceFault: false, decision: null, plan: current, position: null,
+    zones: [zone("SHORT", 95), zone("LONG", 110)], absorption: 0.2, equity: 1_000,
+    openRisk: 0, allowOpen: false, breakoutConfirmation: 0.8, breakoutFakeoutRisk: 0.2 }).plan!;
+  const first = observe(plan, 2);
+  const second = observe(first, 2_002);
+  const third = observe(second, 4_002);
+  assert.equal(third.realtimeSignalCount, 3);
+  const result = reconcilePaper({ now: 4_002, midpoint: 101.1, fresh: true, sequenceFault: false, decision: null,
+    plan: third, position: null, zones: [zone("SHORT", 95), zone("LONG", 110)], absorption: 0.2, equity: 1_000,
     openRisk: 0, allowOpen: true });
   assert.equal(result.plan?.state, "TRIGGERED");
   assert.equal(result.position?.status, "OPEN");
