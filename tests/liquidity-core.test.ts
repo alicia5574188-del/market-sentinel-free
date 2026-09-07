@@ -234,11 +234,104 @@ test("an ordinary range sweep must reclaim before it offers an inside retest wit
   assert.ok(edge.entryTrigger > 99 && edge.entryTrigger < 99.3, "entry waits for an inside retest after reclaim");
   assert.ok(edge.invalidation < 98.72, "hard stop is beyond the observed sweep");
   assert.ok(edge.target <= 100.4 + 1e-9, "first target cannot exceed seventy percent of the balance");
-  assert.equal(edge.executableNow, true);
+  assert.equal(edge.executableNow, false, "the reclaim candle itself is not also treated as the later retest");
 
-  memory.lastCompletedMinuteCandle = { time: 60, open: 99.04, high: 99.2, low: 98.72, close: 98.9 };
-  const unclaimed = buildLiquidityRoutes(memory, "SOL_USDT", 120_001, 98.9, 0.2);
+  memory.recentCompletedMinuteCandles = [
+    memory.lastCompletedMinuteCandle!,
+    { time: 60, open: 99.12, high: 99.4, low: 99.05, close: 99.3 },
+  ];
+  memory.lastCompletedMinuteCandle = memory.recentCompletedMinuteCandles.at(-1)!;
+  const heldRetest = buildLiquidityRoutes(memory, "SOL_USDT", 120_001, 99.32, 0.2)
+    .find((route) => route.kind === "EDGE_REJECTION" && route.side === "LONG");
+  assert.equal(heldRetest?.executableNow, true);
+
+  memory.recentCompletedMinuteCandles = [
+    { time: 60, open: 99.04, high: 99.2, low: 98.72, close: 98.9 },
+    { time: 120, open: 98.9, high: 98.96, low: 98.7, close: 98.82 },
+  ];
+  memory.lastCompletedMinuteCandle = memory.recentCompletedMinuteCandles.at(-1)!;
+  const unclaimed = buildLiquidityRoutes(memory, "SOL_USDT", 180_001, 98.82, 0.2);
   assert.equal(unclaimed.some((route) => route.kind === "EDGE_REJECTION" && route.side === "LONG"), false);
+});
+
+test("a sweep and later reclaim across completed minutes remains a live auction route", () => {
+  const memory = emptySymbolMemory();
+  memory.range15m = { lower: 99, upper: 101, midpoint: 100, widthRate: 0.02,
+    touchesLower: 4, touchesUpper: 4, quality: 0.9, observedAt: 180_000,
+    id: "PARENT:new-balance", role: "PARENT", breakState: "INSIDE", lowerSweepDepth: 0.2 };
+  memory.minuteNoiseRate = 0.002;
+  memory.flow = flow({ ofi: 0.15, takerDelta: 0.2, micropriceDisplacementBps: 0.5 });
+  memory.timeframeBias = { m1: "NEUTRAL", m15: "NEUTRAL", h1: "NEUTRAL", h4: "NEUTRAL" };
+  memory.recentCompletedMinuteCandles = [
+    { time: 0, open: 99.08, high: 99.12, low: 98.7, close: 98.9 },
+    { time: 60, open: 98.9, high: 99.12, low: 98.86, close: 99.05 },
+    { time: 120, open: 99.05, high: 99.3, low: 99.02, close: 99.16 },
+  ];
+  memory.lastCompletedMinuteCandle = memory.recentCompletedMinuteCandles.at(-1)!;
+  const routes = buildLiquidityRoutes(memory, "BTC_USDT", 180_001, 99.3, 0.2);
+  const edge = routes.find((route) => route.kind === "EDGE_REJECTION" && route.side === "LONG");
+  assert.ok(edge, "the sweep and reclaim no longer need to occur in one candle");
+  assert.equal(edge.reclaimSource, "COMPLETED_MINUTE");
+  assert.equal(edge.sweepExtreme, 98.7);
+  assert.ok(edge.reason.some((reason) => reason.includes("跨多根")));
+});
+
+test("a rolling range id does not erase a compatible reclaimed boundary", () => {
+  const memory = emptySymbolMemory();
+  memory.range15m = { lower: 99, upper: 101, midpoint: 100, widthRate: 0.02,
+    touchesLower: 4, touchesUpper: 4, quality: 0.9, observedAt: 180_000,
+    id: "PARENT:first", role: "PARENT", breakState: "INSIDE" };
+  memory.recentCompletedMinuteCandles = [
+    { time: 0, open: 99.05, high: 99.1, low: 98.7, close: 98.9 },
+    { time: 60, open: 98.9, high: 99.18, low: 98.88, close: 99.08 },
+    { time: 120, open: 99.08, high: 99.3, low: 99.04, close: 99.16 },
+  ];
+  buildLiquidityRoutes(memory, "BTC_USDT", 180_001, 99.3, 0.2);
+  assert.ok(memory.rangeSweeps.some((row) => row.reclaimedAt));
+
+  memory.recentCompletedMinuteCandles = [];
+  memory.lastCompletedMinuteCandle = null;
+  memory.range15m = { ...memory.range15m, lower: 99.01, midpoint: 100.005,
+    id: "PARENT:rolled", observedAt: 181_000 };
+  const rolled = buildLiquidityRoutes(memory, "BTC_USDT", 181_001, 99.3, 0.2);
+  const edge = rolled.find((route) => route.kind === "EDGE_REJECTION" && route.side === "LONG");
+  assert.ok(edge);
+  assert.equal(edge.structureId, "PARENT:rolled");
+});
+
+test("a reclaimed edge stays visible when first-target economics require a tighter retest", () => {
+  const memory = emptySymbolMemory();
+  memory.range15m = { lower: 99, upper: 99.35, midpoint: 99.175, widthRate: 0.00353,
+    touchesLower: 3, touchesUpper: 3, quality: 0.8, observedAt: 180_000,
+    id: "PARENT:tight", role: "PARENT", breakState: "INSIDE" };
+  memory.recentCompletedMinuteCandles = [
+    { time: 0, open: 99, high: 99.04, low: 98.5, close: 98.85 },
+    { time: 60, open: 98.85, high: 99.08, low: 98.8, close: 99.04 },
+    { time: 120, open: 99.04, high: 99.12, low: 99.02, close: 99.08 },
+  ];
+  const routes = buildLiquidityRoutes(memory, "BTC_USDT", 180_001, 99.1, 0.2);
+  const edge = routes.find((route) => route.kind === "EDGE_REJECTION" && route.side === "LONG");
+  assert.ok(edge, "recognized auctions must remain visible even when they cannot execute yet");
+  assert.equal(edge.executableNow, false);
+  assert.ok(edge.reason.some((reason) => reason.includes("净空间不足")));
+});
+
+test("rebound and downside rebreak coexist as observations but arbitration selects at most one", () => {
+  const memory = emptySymbolMemory();
+  memory.range15m = { lower: 99, upper: 101, midpoint: 100, widthRate: 0.02,
+    touchesLower: 4, touchesUpper: 4, quality: 0.9, observedAt: 180_000,
+    id: "PARENT:dual", role: "PARENT", breakState: "INSIDE" };
+  memory.recentCompletedMinuteCandles = [
+    { time: 0, open: 99.05, high: 99.1, low: 98.7, close: 98.9 },
+    { time: 60, open: 98.9, high: 99.18, low: 98.88, close: 99.08 },
+    { time: 120, open: 99.08, high: 99.3, low: 99.04, close: 99.16 },
+  ];
+  memory.structureByTimeframe.h4 = [zone("SHORT", 98)];
+  const routes = buildLiquidityRoutes(memory, "BTC_USDT", 180_001, 99.3, 0.2);
+  assert.ok(routes.some((route) => route.kind === "EDGE_REJECTION" && route.side === "LONG"));
+  assert.ok(routes.some((route) => route.kind === "LOCAL_BREAKOUT" && route.side === "SHORT"));
+  const selected = selectRouteDecision(routes, 180_001);
+  assert.ok(selected == null || routes.filter((route) => route.id === selected.routeId).length === 1);
 });
 
 test("four strong fresh book observations can confirm a fast range reclaim without waiting for a minute close", () => {

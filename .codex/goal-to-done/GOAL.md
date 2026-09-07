@@ -1,5 +1,9 @@
 # Goal
 
+## Active upgrade — 2026-09-07 persistent range-auction memory
+
+Recognize the post-break auction shown in production without increasing market-data frequency. Use the authority's existing completed 1m candle response to preserve a bounded sequence of sweep, outside stay, reclaim, and later retest across multiple candles and compatible rolling 15m range identities. A reclaimed lower or upper edge must remain visible as a rebound route while a renewed strong break remains a separate route; only one route may pass execution arbitration. Completed-candle reclaim alone is observation, a later held inside retest is required before the rebound branch can prepare, and a structurally real but uneconomic rebound remains visible with its blocking reason instead of disappearing. Preserve the 15-minute executable-plan lifetime, 10% aggregate/6.5% same-direction risk caps, request/write budgets, PAPER/LIVE shared logic, owner-only LIVE control, and default-off state.
+
 ## Completed upgrade — 2026-09-07 accepted-break auction persistence
 
 Keep the crossed parent 15m boundary and first-segment target alive after the range itself reports `BROKEN_UP` or `BROKEN_DOWN`. A pre-armed plan may use live confirmation and fakeout evidence at the actual cross, while its trigger, stop, target, and range geometry remain frozen. Only an exceptional cross may enter directly; ordinary acceptance waits for a separate hold-and-reacceleration retest; a failed break waits for an inside reverse retest. An already-extended move is observation-only, and `NODE_CONTINUATION` may extend an open position but may never become a standalone first entry. Rolling of the irrelevant opposite range edge must not cancel the relevant frozen boundary. Record every cancellation reason and time, expose accepted-break observation plainly in the UI, and add no Gate requests, alarm cadence, D1 writes, risk expansion, or LIVE authority.

@@ -42,6 +42,8 @@ import {
 } from "./liquidity-core.ts";
 
 export const PLAN_TTL_MS = 15 * 60_000;
+export const RANGE_AUCTION_MEMORY_MS = 90 * 60_000;
+export const RANGE_RECLAIM_ROUTE_MS = 45 * 60_000;
 
 export type RangeSweepObservation = {
   structureId: string;
@@ -54,6 +56,8 @@ export type RangeSweepObservation = {
   lastObservedAt: number;
   reclaimCount: number;
   reclaimedAt?: number;
+  reclaimSource?: "COMPLETED_MINUTE" | "FAST_BOOK";
+  reclaimRetention?: number;
 };
 
 export type SymbolMemory = {
@@ -88,6 +92,7 @@ export type SymbolMemory = {
   timeframeUpdatedAt: { m1: number; m15: number; h1: number; h4: number };
   lastCompletedMinuteClose: number;
   lastCompletedMinuteCandle: CompletedMinuteCandle | null;
+  recentCompletedMinuteCandles: CompletedMinuteCandle[];
   minuteNoiseRate: number;
   rangeSweeps: RangeSweepObservation[];
 };
@@ -114,6 +119,7 @@ export function emptySymbolMemory(): SymbolMemory {
     timeframeBias: { m1: "UNKNOWN", m15: "UNKNOWN", h1: "UNKNOWN", h4: "UNKNOWN" }, timeframeUpdatedAt: { m1: 0, m15: 0, h1: 0, h4: 0 },
     lastCompletedMinuteClose: 0,
     lastCompletedMinuteCandle: null,
+    recentCompletedMinuteCandles: [],
     minuteNoiseRate: 0,
     rangeSweeps: [],
   };
@@ -267,30 +273,133 @@ function repeatedExtrema(memory: SymbolMemory, midpoint: number): LiquidityZone[
   return zones;
 }
 
-function observeRealtimeRangeSweeps(memory: SymbolMemory, midpoint: number, observedAt: number, absorption: number) {
+function rangeObservationId(band: RangeBand) {
+  return band.id ?? `${band.role ?? "PARENT"}:${stablePriceBin(band.lower)}:${stablePriceBin(band.upper)}`;
+}
+
+function observedRangeBands(memory: SymbolMemory) {
   const parent = memory.range15m;
-  if (!parent || (parent.breakState ?? "INSIDE") !== "INSIDE") {
-    memory.rangeSweeps = [];
-    return;
+  if (!parent) return [] as RangeBand[];
+  return [parent, ...(parent.child ? [parent.child] : [])];
+}
+
+function compatibleRangeSweep(memory: SymbolMemory, band: RangeBand, side: Side, boundary: number, buffer: number) {
+  const exactId = rangeObservationId(band);
+  const exact = memory.rangeSweeps.find((row) => row.structureId === exactId && row.side === side);
+  if (exact) return exact;
+  const compatible = memory.rangeSweeps
+    .filter((row) => row.side === side
+      && Math.abs(row.boundary - boundary) <= Math.max(row.buffer, buffer) * 1.5)
+    .sort((a, b) => Math.max(b.reclaimedAt ?? 0, b.sweptAt) - Math.max(a.reclaimedAt ?? 0, a.sweptAt))[0];
+  if (!compatible) return null;
+  compatible.structureId = exactId;
+  compatible.structureRole = band.role ?? "PARENT";
+  compatible.boundary = boundary;
+  compatible.buffer = buffer;
+  return compatible;
+}
+
+function completedRangeSweep(memory: SymbolMemory, band: RangeBand, side: Side, boundary: number,
+  buffer: number, observedAt: number) {
+  const fallback = memory.lastCompletedMinuteCandle ? [memory.lastCompletedMinuteCandle] : [];
+  const candles = (memory.recentCompletedMinuteCandles.length ? memory.recentCompletedMinuteCandles : fallback)
+    .filter((candle) => {
+      const completedAt = (candle.time + 60) * 1_000;
+      return completedAt <= observedAt && observedAt - completedAt <= RANGE_AUCTION_MEMORY_MS;
+    })
+    .sort((a, b) => a.time - b.time);
+  let candidate: RangeSweepObservation | null = null;
+  let consecutiveInside = 0;
+  let consecutiveOutside = 0;
+  for (const candle of candles) {
+    const completedAt = (candle.time + 60) * 1_000;
+    const swept = side === "LONG"
+      ? candle.low <= boundary - buffer * 0.25
+      : candle.high >= boundary + buffer * 0.25;
+    const inside = side === "LONG"
+      ? candle.close >= boundary + buffer * 0.10
+      : candle.close <= boundary - buffer * 0.10;
+    const outside = side === "LONG"
+      ? candle.close <= boundary - buffer * 0.15
+      : candle.close >= boundary + buffer * 0.15;
+    const candleRange = Math.max(candle.high - candle.low, Math.abs(boundary) * 1e-9);
+    const retention = side === "LONG"
+      ? (candle.close - candle.low) / candleRange
+      : (candle.high - candle.close) / candleRange;
+    const reverseBody = side === "LONG" ? candle.close > candle.open : candle.close < candle.open;
+
+    if (swept && (!candidate || (candidate.reclaimedAt != null && outside))) {
+      candidate = { structureId: rangeObservationId(band), structureRole: band.role ?? "PARENT", side,
+        boundary, buffer, extreme: side === "LONG" ? candle.low : candle.high,
+        sweptAt: completedAt, lastObservedAt: completedAt, reclaimCount: 0,
+        reclaimedAt: undefined, reclaimSource: undefined, reclaimRetention: undefined };
+      consecutiveInside = 0;
+      consecutiveOutside = 0;
+    } else if (swept && candidate) {
+      candidate.extreme = side === "LONG" ? Math.min(candidate.extreme, candle.low) : Math.max(candidate.extreme, candle.high);
+      candidate.lastObservedAt = completedAt;
+    }
+    if (!candidate) continue;
+
+    consecutiveInside = inside ? consecutiveInside + 1 : 0;
+    consecutiveOutside = outside ? consecutiveOutside + 1 : 0;
+    const strongReclaim = inside && reverseBody && retention >= 0.55;
+    if (strongReclaim || consecutiveInside >= 2) {
+      candidate.reclaimedAt ??= completedAt;
+      candidate.reclaimCount = Math.max(candidate.reclaimCount, strongReclaim ? 1 : consecutiveInside);
+      candidate.reclaimSource = "COMPLETED_MINUTE";
+      candidate.reclaimRetention = Math.max(candidate.reclaimRetention ?? 0, retention);
+      candidate.lastObservedAt = completedAt;
+      consecutiveOutside = 0;
+    } else if (candidate.reclaimedAt != null && consecutiveOutside >= 2) {
+      candidate.reclaimedAt = undefined;
+      candidate.reclaimSource = undefined;
+      candidate.reclaimRetention = undefined;
+      candidate.reclaimCount = 0;
+      candidate.sweptAt = completedAt;
+      candidate.extreme = side === "LONG" ? candle.low : candle.high;
+      candidate.lastObservedAt = completedAt;
+    }
   }
-  const bands: RangeBand[] = [parent];
-  if (parent.child && (parent.child.breakState ?? "INSIDE") === "INSIDE") bands.push(parent.child);
-  const activeIds = new Set(bands.map((band) => band.id).filter((id): id is string => Boolean(id)));
-  memory.rangeSweeps = memory.rangeSweeps.filter((row) => activeIds.has(row.structureId)
-    && observedAt - row.lastObservedAt <= 3 * 60_000);
+  return candidate;
+}
+
+function observeCompletedRangeSweeps(memory: SymbolMemory, observedAt: number) {
+  for (const band of observedRangeBands(memory)) {
+    const width = band.upper - band.lower;
+    const buffer = Math.max(Math.max(memory.lastMid, band.midpoint) * 0.00025, width * 0.06);
+    for (const side of ["LONG", "SHORT"] as const) {
+      const boundary = side === "LONG" ? band.lower : band.upper;
+      const candidate = completedRangeSweep(memory, band, side, boundary, buffer, observedAt);
+      if (!candidate) continue;
+      const current = compatibleRangeSweep(memory, band, side, boundary, buffer);
+      const candidateTime = Math.max(candidate.reclaimedAt ?? 0, candidate.sweptAt);
+      const currentTime = current ? Math.max(current.reclaimedAt ?? 0, current.sweptAt) : 0;
+      if (!current) memory.rangeSweeps.push(candidate);
+      else if (candidateTime >= currentTime && current.reclaimSource !== "FAST_BOOK") Object.assign(current, candidate);
+    }
+  }
+  memory.rangeSweeps = memory.rangeSweeps
+    .filter((row) => observedAt - Math.max(row.reclaimedAt ?? 0, row.sweptAt, row.lastObservedAt) <= RANGE_AUCTION_MEMORY_MS)
+    .sort((a, b) => Math.max(b.reclaimedAt ?? 0, b.sweptAt) - Math.max(a.reclaimedAt ?? 0, a.sweptAt))
+    .slice(0, 8);
+}
+
+function observeRealtimeRangeSweeps(memory: SymbolMemory, midpoint: number, observedAt: number, absorption: number) {
+  const bands = observedRangeBands(memory);
+  memory.rangeSweeps = memory.rangeSweeps.filter((row) => observedAt
+    - Math.max(row.reclaimedAt ?? 0, row.sweptAt, row.lastObservedAt) <= RANGE_AUCTION_MEMORY_MS);
   for (const band of bands) {
-    if (!band.id) continue;
     const width = band.upper - band.lower;
     const buffer = Math.max(midpoint * 0.00025, width * 0.06);
     for (const side of ["LONG", "SHORT"] as const) {
       const boundary = side === "LONG" ? band.lower : band.upper;
       const swept = side === "LONG" ? midpoint <= boundary - buffer * 0.25 : midpoint >= boundary + buffer * 0.25;
       const reclaimed = side === "LONG" ? midpoint >= boundary + buffer * 0.15 : midpoint <= boundary - buffer * 0.15;
-      const index = memory.rangeSweeps.findIndex((row) => row.structureId === band.id && row.side === side);
-      let row = index >= 0 ? memory.rangeSweeps[index] : null;
+      let row = compatibleRangeSweep(memory, band, side, boundary, buffer);
       if (swept) {
         if (!row) {
-          row = { structureId: band.id, structureRole: band.role ?? "PARENT", side, boundary, buffer,
+          row = { structureId: rangeObservationId(band), structureRole: band.role ?? "PARENT", side, boundary, buffer,
             extreme: midpoint, sweptAt: observedAt, lastObservedAt: observedAt, reclaimCount: 0 };
           memory.rangeSweeps.push(row);
         } else {
@@ -298,6 +407,8 @@ function observeRealtimeRangeSweeps(memory: SymbolMemory, midpoint: number, obse
           row.lastObservedAt = observedAt;
           row.reclaimCount = 0;
           row.reclaimedAt = undefined;
+          row.reclaimSource = undefined;
+          row.reclaimRetention = undefined;
         }
         continue;
       }
@@ -307,7 +418,11 @@ function observeRealtimeRangeSweeps(memory: SymbolMemory, midpoint: number, obse
       const consecutive = observedAt - row.lastObservedAt <= 10_000;
       row.reclaimCount = strong ? (consecutive ? row.reclaimCount + 1 : 1) : 0;
       row.lastObservedAt = observedAt;
-      if (row.reclaimCount >= 4) row.reclaimedAt ??= observedAt;
+      if (row.reclaimCount >= 4) {
+        row.reclaimedAt ??= observedAt;
+        row.reclaimSource = "FAST_BOOK";
+        row.reclaimRetention = 0.75;
+      }
     }
   }
 }
@@ -526,6 +641,7 @@ function routeFakeoutRisk(memory: SymbolMemory, side: Side, absorption: number, 
 export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, observedAt: number, midpoint: number, absorption: number) {
   const range = memory.range15m;
   if (!range || midpoint <= 0 || observedAt - range.observedAt > 45 * 60_000) return [] as LiquidityRoute[];
+  observeCompletedRangeSweeps(memory, observedAt);
   const parentActive = (range.breakState ?? "INSIDE") === "INSIDE";
   const child = parentActive && range.child && (range.child.breakState ?? "INSIDE") === "INSIDE" ? range.child : null;
   const width = range.upper - range.lower;
@@ -558,25 +674,12 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
   const pushEdgeReclaimRoute = (band: RangeBand, role: RangeRole, crossedSide: Side, boundary: number,
     bandBuffer: number, activationRate: number) => {
     const side: Side = crossedSide === "LONG" ? "SHORT" : "LONG";
-    const minute = memory.lastCompletedMinuteCandle;
-    const minuteRange = minute ? Math.max(minute.high - minute.low, midpoint * 1e-9) : 0;
-    const minuteSwept = minute != null && (side === "LONG"
-      ? minute.low <= boundary - bandBuffer * 0.25
-      : minute.high >= boundary + bandBuffer * 0.25);
-    const minuteReclaimed = minute != null && (side === "LONG"
-      ? minute.close >= boundary + bandBuffer * 0.15 && minute.close > minute.open
-      : minute.close <= boundary - bandBuffer * 0.15 && minute.close < minute.open);
-    const minuteRetention = !minute ? 0 : side === "LONG"
-      ? (minute.close - minute.low) / minuteRange
-      : (minute.high - minute.close) / minuteRange;
-    const completedSignal = minuteSwept && minuteReclaimed && minuteRetention >= 0.55;
-    const realtime = memory.rangeSweeps.find((row) => row.structureId === band.id && row.side === side
-      && row.reclaimedAt != null && observedAt - row.reclaimedAt <= 30_000 && row.reclaimCount >= 4);
-    if (!completedSignal && !realtime) return;
-    const reclaimSource = completedSignal ? "COMPLETED_MINUTE" as const : "FAST_BOOK" as const;
-    const sweepExtreme = completedSignal ? (side === "LONG" ? minute!.low : minute!.high) : realtime!.extreme;
+    const event = compatibleRangeSweep(memory, band, side, boundary, bandBuffer);
+    if (!event?.reclaimedAt || observedAt - event.reclaimedAt > RANGE_RECLAIM_ROUTE_MS) return;
+    const reclaimSource = event.reclaimSource ?? "COMPLETED_MINUTE";
+    const sweepExtreme = event.extreme;
     const confirmationScore = routeConfirmation(memory, side);
-    const reclaimStrength = clamp(band.quality * 0.35 + (completedSignal ? minuteRetention : 0.75) * 0.35
+    const reclaimStrength = clamp(band.quality * 0.35 + (event.reclaimRetention ?? 0.55) * 0.35
       + confirmationScore * 0.2 + absorption * 0.1, 0, 1);
     const fakeoutRisk = clamp((1 - reclaimStrength) * 0.8
       + (memory.timeframeBias.h1 === (side === "LONG" ? "DOWN" : "UP") ? 0.12 : 0), 0, 1);
@@ -598,19 +701,34 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
     const targetAhead = side === "LONG" ? target > entryTrigger : target < entryTrigger;
     const economicallyReachable = side === "LONG" ? target >= entryTrigger + requiredDistance : target <= entryTrigger - requiredDistance;
     const waitingInsideRetest = side === "LONG" ? midpoint > entryTrigger : midpoint < entryTrigger;
-    if (!targetAhead || !economicallyReachable || Math.abs(target - entryTrigger) / midpoint < MIN_TARGET_DISTANCE_RATE) return;
-    routes.push({ id: `${symbol}:EDGE_REJECTION:${side}:${band.id ?? stablePriceBin(boundary)}:${completedSignal ? minute!.time : realtime!.sweptAt}`,
+    const minute = memory.lastCompletedMinuteCandle;
+    const minuteCompletedAt = minute ? (minute.time + 60) * 1_000 : 0;
+    const completedRetestHeld = reclaimSource === "COMPLETED_MINUTE" && minute != null
+      && minuteCompletedAt > event.reclaimedAt
+      && (side === "LONG"
+        ? minute.low <= boundary + bandBuffer * 1.25 && minute.low >= boundary - bandBuffer * 0.35
+          && minute.close >= boundary + bandBuffer * 0.2 && minute.close > minute.open
+        : minute.high >= boundary - bandBuffer * 1.25 && minute.high <= boundary + bandBuffer * 0.35
+          && minute.close <= boundary - bandBuffer * 0.2 && minute.close < minute.open);
+    const entryBranchConfirmed = reclaimSource === "FAST_BOOK" || completedRetestHeld;
+    const targetDistanceEnough = Math.abs(target - entryTrigger) / midpoint >= MIN_TARGET_DISTANCE_RATE;
+    if (!targetAhead) return;
+    routes.push({ id: `${symbol}:EDGE_REJECTION:${side}:${rangeObservationId(band)}:${event.sweptAt}`,
       symbol, side, kind: "EDGE_REJECTION", stage: "LOCAL_TO_NODE", entryTrigger, invalidation,
       target, targetIdentity: `RANGE_SEGMENT:${side}:${stablePriceBin(target)}`, targetTimeframe: "15m",
       nextTarget: null, confirmationScore, fakeoutRisk, activationDistanceRate: activationRate,
       score: band.quality * 0.4 + reclaimStrength * 0.45 + confirmationScore * 0.15,
-      executableNow: waitingInsideRetest && Math.abs(entryTrigger - midpoint) / midpoint <= activationRate
+      executableNow: economicallyReachable && targetDistanceEnough && entryBranchConfirmed && waitingInsideRetest
+        && Math.abs(entryTrigger - midpoint) / midpoint <= activationRate
         && confirmationScore >= 0.42 && fakeoutRisk <= 0.72,
       structureId: band.id, structureRole: role, rangeBoundary: boundary, rangeBuffer: bandBuffer,
       sweepExtreme, reclaimSource, reclaimStrength,
-      reason: [`完整${reclaimSource === "FAST_BOOK" ? "实时盘口" : "1分钟K线"}确认${role === "CHILD" ? "子" : "父"}区间扫边并收回`,
-        "不在扫流动性过程中接单，只等待区间内侧回踩", "硬止损位于本次扫盘、历史扫盘与分钟噪声之外",
-        "反转强度只调整置信度；只要价格继续接受在区间内就保留震荡逻辑"] });
+      reason: [`${reclaimSource === "FAST_BOOK" ? "连续实时盘口" : "跨多根完整1分钟K线"}确认${role === "CHILD" ? "子" : "父"}区间扫边并收回`,
+        entryBranchConfirmed ? "区间内侧回踩已经守住，才允许反弹分支进入仲裁" : "扫盘收回只建立观察；等待后续完整1分钟回踩守住边界",
+        "硬止损位于本次扫盘、历史扫盘与分钟噪声之外",
+        economicallyReachable && targetDistanceEnough
+          ? "反转强度只调整置信度；只要价格继续接受在区间内就保留震荡逻辑"
+          : "扫盘事件继续保留；当前止损到第一目标的净空间不足，等待更紧的回踩结构而不勉强成交"] });
   };
   const pushRetestRoute = (input: {
     band: RangeBand; role: RangeRole; side: Side; boundary: number; bandBuffer: number;
@@ -790,7 +908,7 @@ export function buildLiquidityRoutes(memory: SymbolMemory, symbol: string, obser
     }
     if (parentActive || acceptedBreakSide) pushFailedBreakRoute(range, "PARENT", side,
       side === "LONG" ? range.upper : range.lower, buffer, activationDistanceRate);
-    if (parentActive) pushEdgeReclaimRoute(range, "PARENT", side,
+    pushEdgeReclaimRoute(range, "PARENT", side,
       side === "LONG" ? range.upper : range.lower, buffer, activationDistanceRate);
   }
   return routes.sort((a, b) => Number(b.executableNow) - Number(a.executableNow) || b.score - a.score).slice(0, 6);

@@ -1,5 +1,9 @@
 # Status
 
+Persistent range-auction memory is implemented on `fix/persistent-range-auction-events` and local direct tests pass 127/127. The authority now reconstructs sweep, later reclaim, and retest from the existing bounded 1m response, preserves compatible events across rolling range ids, exposes rebound and renewed-break observations together, and requires a later held retest plus first-target economics before the completed-candle rebound may execute. No request cadence, D1 writes, risk limits, credentials, or LIVE authority changed. Full lint/type/build verification and GitHub/Cloudflare deployment remain next.
+
+# Status
+
 Merge commit `2e3294ac7b7a9b6a40bd9e67ae334c9cde9091d9` deployed successfully after PR #181 passed verification run #589; GitHub Actions run #590 completed the Cloudflare deployment and advancing-production-health gate. Production immediately reported ready, fresh BTC/ETH/SOL authority and retained the accepted BTC `BROKEN_DOWN` parent boundary as a non-chasing `LOCAL_BREAKOUT SHORT` observation at 79,550 instead of deleting all routes. Accepted parent breaks now preserve the first-segment auction, live breakout evidence can upgrade a pre-break plan without moving its geometry, ordinary breaks remain eligible for a distinct retest, failed breaks for a reverse retest, and higher-node continuation cannot enter as a standalone first leg. Every cancellation stores its exact reason/time and the page explains accepted-break observation rather than claiming no direction. No market request, alarm, D1 write, risk, credential, or LIVE-control boundary changed. Local and CI verification passed 123 direct tests, 13 architecture/migration tests, TypeScript, lint, production build, whitespace validation, and production health.
 
 # Status
