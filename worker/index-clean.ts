@@ -1636,6 +1636,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       return json({ ...publicRuntime, ...this.authorityView, paperCycle: paperCycleSummary(paperCycle, this.authorityView.equity),
         rejectionAudit: { startedAt: rejectionAudit.startedAt, pendingCount: Object.keys(rejectionAudit.pending).length,
           completed: rejectionAudit.completed, dropped: rejectionAudit.dropped, rules: rejectionAudit.rules,
+          primaryRules: rejectionAudit.primaryRules ?? {}, isolatedRules: rejectionAudit.isolatedRules ?? {},
+          combinations: rejectionAudit.combinations ?? {}, combinationOverflow: rejectionAudit.combinationOverflow ?? 0,
           recent: rejectionAudit.recent.slice(-20).reverse() },
         ...(path === "/owner-runtime" ? { live } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length + bankruptcyOutbox.length,
         oldestOutboxAgeMs: outbox.length ? Math.max(0, Date.now() - (outbox[0].position.exitAt ?? outbox[0].position.entryAt)) : 0,

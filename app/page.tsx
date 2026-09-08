@@ -24,8 +24,11 @@ type CycleTradeDiagnostic = { id: string; symbol: string; scenario: MarketState;
 type RadarCandidate = { id: string; symbol: string; side: Side; strength: number; moveRate: number; movementMultiple: number; volume24hUsd: number; confirmations: number; firstSeenAt: number; observedAt: number; kind: "NEW_MONEY" | "SQUEEZE" | "LIQUIDATION" | "PRICE_SHOCK" };
 type EntryAssessment = { accepted: boolean; blocker: string | null; alignedFlow: number; spreadBps: number; extensionRate: number; costShare: number; conservativeWinRate: number; expectedReturnRate: number; qualityScore: number; qualityRequired: number; qualityEvidence: string[] };
 type RejectionRuleStats = { id: string; label: string; kind: "EXECUTION" | "DIRECTION" | "ECONOMICS" | "QUALITY"; resolved: number; profitableAfterCost: number; feeCovered: number; targetFirst: number; stopFirst: number; stalledExit: number; timeExpired: number; netReturnRateSum: number };
+type RejectionCombinationStats = Omit<RejectionRuleStats, "label" | "kind"> & { ruleIds: string[]; labels: string[] };
 type RejectionSample = { id: string; symbol: string; side: Side; startedAt: number; primaryBlocker: string; outcome: "TARGET_FIRST" | "STOP_FIRST" | "STALLED_EXIT" | "TIME_EXPIRED"; netReturnRate: number; feeCovered: boolean; profitableAfterCost: boolean };
-type RejectionAudit = { startedAt: number; pendingCount: number; completed: number; dropped: number; rules: Record<string, RejectionRuleStats>; recent: RejectionSample[] };
+type RejectionAudit = { startedAt: number; pendingCount: number; completed: number; dropped: number; rules: Record<string, RejectionRuleStats>;
+  primaryRules?: Record<string, RejectionRuleStats>; isolatedRules?: Record<string, RejectionRuleStats>;
+  combinations?: Record<string, RejectionCombinationStats>; combinationOverflow?: number; recent: RejectionSample[] };
 type Runtime = {
   version: string; mode: "PAPER"; state: string; stale: boolean; generatedAt: number; lastSuccessAt: number | null; lastError: string | null; symbols: string[]; equity: number; dailyStartEquity?: number;
   decisions: Record<string, Decision | null>; routes: Record<string, LiquidityRoute[]>; plans: Record<string, Plan | null>; positions: Record<string, Position | null>; authorityReady: boolean;
@@ -574,20 +577,33 @@ function AccountLogs({ cycle, items }: { cycle: PaperCycleSummary | null; items:
 
 function RejectionAuditPanel({ audit }: { audit: RejectionAudit | null }) {
   const rows = Object.values(audit?.rules ?? {}).sort((left, right) => right.resolved - left.resolved);
+  const primaryRows = Object.values(audit?.primaryRules ?? {}).sort((left, right) => right.resolved - left.resolved);
+  const isolatedRows = Object.values(audit?.isolatedRules ?? {}).sort((left, right) => right.resolved - left.resolved);
+  const combinations = Object.values(audit?.combinations ?? {}).sort((left, right) => right.resolved - left.resolved).slice(0, 12);
+  const ruleCards = (items: RejectionRuleStats[], decisive = false) => <div className="audit-rules">{items.map((row) => {
+    const profitRate = row.profitableAfterCost / Math.max(row.resolved, 1);
+    const feeRate = row.feeCovered / Math.max(row.resolved, 1);
+    const averageNet = row.netReturnRateSum / Math.max(row.resolved, 1);
+    const suspicious = decisive && row.resolved >= 30 && profitRate >= .55 && averageNet > 0 && row.targetFirst > row.stopFirst;
+    return <article key={row.id} className={suspicious ? "suspect" : ""}><div><small>{row.kind === "EXECUTION" ? "执行硬门槛" : row.kind === "ECONOMICS" ? "成本门槛" : row.kind === "QUALITY" ? "评分组成项" : "方向门槛"}</small><b>{row.label}</b></div><strong>{row.resolved < 30 ? "样本不足" : suspicious ? "疑似误杀" : decisive ? "暂时保留" : "关联观察"}</strong><dl><div><dt>完整样本</dt><dd>{row.resolved}</dd></div><div><dt>扣成本盈利</dt><dd>{num(profitRate * 100, 1)}%</dd></div><div><dt>覆盖手续费</dt><dd>{num(feeRate * 100, 1)}%</dd></div><div><dt>目标/止损先到</dt><dd>{row.targetFirst}/{row.stopFirst}</dd></div><div><dt>平均净变动</dt><dd>{signed(averageNet * 100, 2)}%</dd></div></dl></article>;
+  })}</div>;
   return <div className="rejection-audit">
     <div className="section-heading"><div><h2>被拦截机会的影子复盘</h2><p>冻结拦截时的方向、价格、止损与目标，复用全市场价格跟踪20分钟；只做研究，不下单、不自动修改规则。</p></div><span>{audit?.pendingCount ?? 0} 笔跟踪中 · {audit?.completed ?? 0} 笔完成</span></div>
     {!audit?.completed ? <div className="empty"><b>正在积累第一批样本</b><p>版本上线后，每个被拦截的异动只记录一次；20分钟内按目标先到、止损先到或到期价格结算，并扣除完整交易成本。</p></div> : <>
-      {audit.completed < 30 && <p className="notice">当前只有 {audit.completed} 笔完整样本，先看数据，不删规则；至少30笔才显示初步误杀判断。同一候选可能同时触发多条规则，因此这里只标记疑似问题。</p>}
-      <div className="audit-rules">{rows.map((row) => {
+      {audit.completed < 30 && <p className="notice">当前只有 {audit.completed} 笔完整样本，先看数据，不删规则；至少30笔独立失败样本才显示初步误杀判断。</p>}
+      {!!primaryRows.length && <><div className="section-heading"><div><h3>第一道拦截</h3><p>只把订单归给当时最先阻止进场的规则；仍可能同时存在其他问题。</p></div></div>{ruleCards(primaryRows)}</>}
+      {!!isolatedRows.length && <><div className="section-heading"><div><h3>仅失败这一条</h3><p>其他检查全部通过，仅此规则阻止进场；只有这里达到门槛才标记“疑似误杀”。</p></div></div>{ruleCards(isolatedRows, true)}</>}
+      {!!combinations.length && <><div className="section-heading"><div><h3>常见拦截组合</h3><p>识别哪些条件经常一起失败，避免把同一订单误算成多份独立证据。</p></div></div><div className="audit-rules">{combinations.map((row) => {
         const profitRate = row.profitableAfterCost / Math.max(row.resolved, 1);
-        const feeRate = row.feeCovered / Math.max(row.resolved, 1);
         const averageNet = row.netReturnRateSum / Math.max(row.resolved, 1);
-        const suspicious = row.resolved >= 30 && profitRate >= .55 && averageNet > 0 && row.targetFirst > row.stopFirst;
-        return <article key={row.id} className={suspicious ? "suspect" : ""}><div><small>{row.kind === "EXECUTION" ? "执行硬门槛" : row.kind === "ECONOMICS" ? "成本门槛" : row.kind === "QUALITY" ? "评分组成项" : "方向门槛"}</small><b>{row.label}</b></div><strong>{row.resolved < 30 ? "样本不足" : suspicious ? "疑似误杀" : "暂时保留"}</strong><dl><div><dt>完整样本</dt><dd>{row.resolved}</dd></div><div><dt>扣成本盈利</dt><dd>{num(profitRate * 100, 1)}%</dd></div><div><dt>覆盖手续费</dt><dd>{num(feeRate * 100, 1)}%</dd></div><div><dt>目标/止损先到</dt><dd>{row.targetFirst}/{row.stopFirst}</dd></div><div><dt>平均净变动</dt><dd>{signed(averageNet * 100, 2)}%</dd></div></dl></article>;
-      })}</div>
+        return <article key={row.id}><div><small>{row.ruleIds.length} 条规则共同失败</small><b>{row.labels.join(" + ")}</b></div><strong>组合观察</strong><dl><div><dt>完整样本</dt><dd>{row.resolved}</dd></div><div><dt>扣成本盈利</dt><dd>{num(profitRate * 100, 1)}%</dd></div><div><dt>目标/止损先到</dt><dd>{row.targetFirst}/{row.stopFirst}</dd></div><div><dt>平均净变动</dt><dd>{signed(averageNet * 100, 2)}%</dd></div></dl></article>;
+      })}</div></>}
+      {!primaryRows.length && <p className="notice">细分审计将在升级上线后开始独立积累；旧版“所有关联规则”总表继续保留，不会伪造历史归因。</p>}
+      <details className="history-diagnostic"><summary>查看所有关联规则（存在重叠）</summary>{ruleCards(rows)}</details>
       {!!audit.recent.length && <div className="audit-recent"><h3>最近完成的影子订单</h3>{audit.recent.map((item) => <article key={item.id}><div><b>{item.symbol.replace("_", "/")} · {sideText(item.side)}</b><small>{time(item.startedAt)}</small></div><span>{item.primaryBlocker}</span><strong className={item.profitableAfterCost ? "positive" : "negative"}>{item.outcome === "TARGET_FIRST" ? "目标先到" : item.outcome === "STOP_FIRST" ? "止损先到" : item.outcome === "STALLED_EXIT" ? "10分钟无推进" : "20分钟到期"} · {signed(item.netReturnRate * 100, 2)}%</strong></article>)}</div>}
     </>}
     {!!audit?.dropped && <p className="notice">因同时跟踪数量达到上限，跳过 {audit.dropped} 个样本；这些样本不会混入统计。</p>}
+    {!!audit?.combinationOverflow && <p className="notice">规则组合类型达到64种上限，另有 {audit.combinationOverflow} 笔只保留单规则统计，未混入组合排行。</p>}
   </div>;
 }
 

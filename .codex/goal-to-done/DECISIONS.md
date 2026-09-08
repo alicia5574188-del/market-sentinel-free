@@ -199,3 +199,10 @@
 - User-facing charts are retired. The Worker no longer exposes `/api/candles` or `/api/order-chart`, fetches on-demand Gate 5m review history, mirrors candle bundles to D1, or stores `ORDER_ENTRY_CHART`/`ORDER_EXIT_CHART` events. Existing schema columns may remain inert for migration compatibility.
 - History remains a complete cursor-paginated audit. It is fetched only when the review tab opens; later one-minute refreshes merge only the newest 100 rows. Static order data exposes entry/exit, gross PnL, modeled cost, net PnL, realized R, stop, target, duration, and exit reason without external market requests.
 - “Realtime” is explicitly layered: roughly ten-second bulk tickers cover all eligible contracts, at most three promoted symbols receive two-second order books plus rotating detail, and the phone polls a read-only summary every fifteen seconds. This is current and sufficient for the implemented REST strategy, but it is not a complete tick-by-tick feed for every Gate contract.
+
+## 2026-09-08 — False-rejection labels require isolated rule failures
+
+- The original per-rule totals remain useful for screening but are correlated: one shadow order can contribute the same outcome to several failed rules. They may no longer produce a false-rejection label.
+- Forward attribution records the admission-order primary blocker, exactly-one-rule failures, and the complete unique rule combination. Only exactly-one-rule failures may become a preliminary suspected false rejection after the existing sample, post-cost profitability, average-net-return, and target-versus-stop thresholds pass.
+- Existing aggregate history is preserved. New attribution buckets start empty on an old checkpoint instead of backfilling only the bounded recent tail and misrepresenting it as complete history. Pending old-version samples retain enough frozen data to enter the new buckets when they resolve.
+- Rule combinations are capped at 64 identities; overflow is counted and exposed. The upgrade adds no market request, D1 write, trading mutation, strategy threshold change, risk, or LIVE authority.

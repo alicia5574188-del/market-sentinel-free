@@ -37,6 +37,12 @@ test("bulk ticker path resolves rejected candidates and attributes after-cost ou
   assert.equal(state.recent[0].profitableAfterCost, true);
   assert.equal(state.rules.QUALITY_SCORE.profitableAfterCost, 1);
   assert.equal(state.rules.OPPOSITE_FLOW.targetFirst, 1);
+  assert.equal(state.primaryRules.QUALITY_SCORE.targetFirst, 1);
+  assert.equal(state.primaryRules.OPPOSITE_FLOW, undefined);
+  assert.deepEqual(state.isolatedRules, {});
+  const combination = state.combinations["OPPOSITE_FLOW+QUALITY_SCORE"];
+  assert.equal(combination.resolved, 1);
+  assert.deepEqual(combination.ruleIds, ["OPPOSITE_FLOW", "QUALITY_SCORE"]);
 });
 
 test("unresolved rejected candidate closes at the frozen twenty-minute horizon", () => {
@@ -46,6 +52,8 @@ test("unresolved rejected candidate closes at the frozen twenty-minute horizon",
   assert.equal(state.recent[0].outcome, "TIME_EXPIRED");
   assert.equal(state.recent[0].feeCovered, false);
   assert.equal(state.recent[0].profitableAfterCost, false);
+  assert.equal(state.primaryRules.QUALITY_SCORE.timeExpired, 1);
+  assert.equal(state.isolatedRules.QUALITY_SCORE.timeExpired, 1);
 });
 
 test("shadow trade mirrors the event ten-minute no-progress exit", () => {
@@ -54,4 +62,18 @@ test("shadow trade mirrors the event ten-minute no-progress exit", () => {
   state = advanceRejectionAudit({ state, quotes: { X_USDT: 100.02 }, now: 602_000, roundTripFrictionRate: 0.0018 });
   assert.equal(state.recent[0].outcome, "STALLED_EXIT");
   assert.equal(state.rules.QUALITY_SCORE.stalledExit, 1);
+});
+
+test("legacy checkpoints gain empty isolated attribution without discarding old aggregate totals", () => {
+  const legacy = initialRejectionAudit(1_000) as Partial<ReturnType<typeof initialRejectionAudit>>;
+  delete legacy.primaryRules;
+  delete legacy.isolatedRules;
+  delete legacy.combinations;
+  delete legacy.combinationOverflow;
+  const state = advanceRejectionAudit({ state: legacy as ReturnType<typeof initialRejectionAudit>, quotes: {},
+    now: 2_000, roundTripFrictionRate: 0.0018 });
+  assert.deepEqual(state.primaryRules, {});
+  assert.deepEqual(state.isolatedRules, {});
+  assert.deepEqual(state.combinations, {});
+  assert.equal(state.combinationOverflow, 0);
 });

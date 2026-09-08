@@ -220,7 +220,11 @@ test("rejected entry audit is bounded, observational and reuses the bulk ticker 
   assert.match(audit, /REJECTION_AUDIT_HORIZON_MS = 20 \* 60_000/);
   assert.match(audit, /MAX_PENDING_REJECTION_AUDITS = 120/);
   assert.match(audit, /MAX_RECENT_REJECTION_AUDITS = 200/);
+  assert.match(audit, /MAX_REJECTION_RULE_COMBINATIONS = 64/);
   assert.match(worker, /quotes: Object\.fromEntries\(rows\.map/);
+  assert.match(worker, /primaryRules: rejectionAudit\.primaryRules \?\? \{\}/);
+  assert.match(worker, /isolatedRules: rejectionAudit\.isolatedRules \?\? \{\}/);
+  assert.match(worker, /combinations: rejectionAudit\.combinations \?\? \{\}/);
   assert.match(worker, /recent: rejectionAudit\.recent\.slice\(-20\)\.reverse\(\)/);
   assert.doesNotMatch(audit, /fetch\(|DB\.prepare|D1Database|GateLiveClient/);
 });
