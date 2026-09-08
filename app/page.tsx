@@ -22,15 +22,21 @@ type LiveRuntime = { requestedEnabled: boolean; operational: boolean; changedAt:
 type PaperCycleSummary = { number: number; startedAt: number; startingEquity: number; currentEquity: number; bankruptcyLine: number; peakEquity: number; trades: number; drawdownRate: number };
 type CycleTradeDiagnostic = { id: string; symbol: string; scenario: MarketState; side: Side; entryAt: number; exitAt: number; holdingSeconds: number; entryPrice: number; exitPrice: number; initialStop: number; target: number; notional: number; plannedRisk: number; plannedNetRewardRisk: number; grossPnl: number; costs: number; netPnl: number; mfeRate: number; maeRate: number; targetProgress: number; stopUse: number; directionCorrectAtExit: boolean; feeCoveringMove: boolean; targetReached: boolean; stopReached: boolean; exitReason: string };
 type RadarCandidate = { id: string; symbol: string; side: Side; strength: number; moveRate: number; movementMultiple: number; volume24hUsd: number; confirmations: number; firstSeenAt: number; observedAt: number; kind: "NEW_MONEY" | "SQUEEZE" | "LIQUIDATION" | "PRICE_SHOCK" };
+type EntryAssessment = { accepted: boolean; blocker: string | null; alignedFlow: number; spreadBps: number; extensionRate: number; costShare: number; conservativeWinRate: number; expectedReturnRate: number; qualityScore: number; qualityRequired: number; qualityEvidence: string[] };
+type RejectionRuleStats = { id: string; label: string; kind: "EXECUTION" | "DIRECTION" | "ECONOMICS" | "QUALITY"; resolved: number; profitableAfterCost: number; feeCovered: number; targetFirst: number; stopFirst: number; stalledExit: number; timeExpired: number; netReturnRateSum: number };
+type RejectionSample = { id: string; symbol: string; side: Side; startedAt: number; primaryBlocker: string; outcome: "TARGET_FIRST" | "STOP_FIRST" | "STALLED_EXIT" | "TIME_EXPIRED"; netReturnRate: number; feeCovered: boolean; profitableAfterCost: boolean };
+type RejectionAudit = { startedAt: number; pendingCount: number; completed: number; dropped: number; rules: Record<string, RejectionRuleStats>; recent: RejectionSample[] };
 type Runtime = {
   version: string; mode: "PAPER"; state: string; stale: boolean; generatedAt: number; lastSuccessAt: number | null; lastError: string | null; symbols: string[]; equity: number; dailyStartEquity?: number;
   decisions: Record<string, Decision | null>; routes: Record<string, LiquidityRoute[]>; plans: Record<string, Plan | null>; positions: Record<string, Position | null>; authorityReady: boolean;
   evidence: Record<string, { midpoint: number; observedAt: number; warmup: number; fresh: boolean; ancillaryFresh: boolean; entryReady?: boolean; optionalFresh?: boolean; recoveryFreshCount?: number; suspensionReason?: string | null; topLong: Zone | null; topShort: Zone | null; absorption: number; range15m: RangeStructure | null }>;
+  entryAssessments?: Record<string, EntryAssessment | null>;
   feedFailures?: Record<string, { count: number; retryAt: number; suspendedSince?: number | null; totalFailures?: number; recoveries?: number; lastFailureAt?: number | null; lastError?: string | null; maxObservedLagMs?: number }>;
   limits: { maxOpenPositions: number; warmupSnapshots?: number; loopMs?: number; radarMs?: number; scannedMarkets?: number; maxAncillaryConcurrency?: number };
   liveMode: { requestedEnabled: boolean; operational: boolean };
   paperCycle: PaperCycleSummary;
   radar?: { scanned: number; lastScanAt: number | null; candidates: RadarCandidate[] };
+  rejectionAudit?: RejectionAudit;
   live?: LiveRuntime;
 };
 type AuthSession = { configured: boolean; authenticated: boolean; username: string };
@@ -50,7 +56,7 @@ type BankruptcyReport = { id: string; cycleNumber: number; startedAt: number; en
 type AccountLogItem = { id: string; observedAt: number; report: BankruptcyReport };
 type Tab = "brain" | "orders" | "live" | "history" | "settings";
 type LiveView = "account" | "orders" | "api";
-type HistoryView = "trades" | "account_logs";
+type HistoryView = "trades" | "rejection_audit" | "account_logs";
 type PaperAction = "RESET" | "CLEAR_HISTORY";
 type PositionView = { entryAt?: number; entryPrice: number; stopPrice: number; targetPrice: number; markPrice?: number; markAt?: number; fresh: boolean };
 
@@ -108,6 +114,7 @@ function waitReason(runtime: Runtime | null, marketReady: boolean, symbol: strin
   if (!marketReady || evidence.entryReady === false) return `行情已恢复，正在确认 ${evidence.recoveryFreshCount ?? 0}/2；确认前不成交`;
   const warmupTarget = Math.max(1, runtime.limits.warmupSnapshots ?? 4);
   if (evidence.warmup < warmupTarget) return `正在积累真实快照，还差 ${warmupTarget - evidence.warmup} 次`;
+  const entryAssessment = runtime.entryAssessments?.[symbol];
   const decision = runtime.decisions[symbol];
   const rebuildAt = position?.exitAt ? Math.floor(position.exitAt / 60_000) * 60_000 + 120_000 : Infinity;
   const reclaimedNow = decision ? (decision.side === "LONG" ? evidence.midpoint > decision.entryTrigger : evidence.midpoint < decision.entryTrigger) : false;
@@ -118,7 +125,7 @@ function waitReason(runtime: Runtime | null, marketReady: boolean, symbol: strin
     return "原结构已经止损；同方向方案等待两根完整1分钟K线重建并收复触发位";
   }
   if (plan?.state === "PREPARED") return plan.targetIdentity?.startsWith("EVENT_TARGET:")
-    ? "全市场异动已通过两轮扫描，正在用实时盘口、主动成交和持仓量确认；通过后立即IOC，不等待K线收盘"
+    ? `异动质量 ${entryAssessment?.qualityScore ?? 0}/${entryAssessment?.qualityRequired ?? 3} 已通过；正在等待连续强势盘口，确认后立即IOC`
     : (plan.invalidationSignalCount ?? 0) > 0
     ? `计划仍锁定，软失效观察 ${plan.invalidationSignalCount}/2；不会因一次短周期变化撤单`
     : plan.routeKind === "BREAKOUT_RETEST"
@@ -133,6 +140,7 @@ function waitReason(runtime: Runtime | null, marketReady: boolean, symbol: strin
         : "仅A级强势突破允许直入；普通突破等待完整回踩，假突破等待反向反抽"
       : `方向已判断，距离触发价约 ${num(distancePct(evidence.midpoint, plan.entryTrigger), 2)}%`;
   if (runtime.decisions[symbol]) return "方向已经出现，但进场条件或风险空间暂不合适";
+  if (entryAssessment && !entryAssessment.accepted) return `异动质量 ${entryAssessment.qualityScore}/${entryAssessment.qualityRequired}；${entryAssessment.blocker ?? "等待更多方向证据"}`;
   const reclaimedEdge = runtime.routes[symbol]?.find((route) => route.kind === "EDGE_REJECTION");
   if (reclaimedEdge) return reclaimedEdge.executableNow
     ? `${reclaimedEdge.side === "LONG" ? "下" : "上"}边界扫盘已收回，反弹回踩路线可进入仲裁；反向再次突破仍独立观察`
@@ -375,9 +383,10 @@ export default function Home() {
     <div hidden={tab !== "live"}><LiveCenter auth={auth} runtime={runtime} live={live} liveEnabled={liveEnabled} liveBusy={liveBusy} liveActionError={liveActionError} positions={openLivePositions} entries={openLiveEntries} skips={liveEntrySkips} onLogin={() => setShowLogin(true)} onToggle={liveControl} onCleanup={() => void setLiveMode(false)} /></div>
 
     <section className="history-panel" hidden={tab !== "history"}>
-      <div className="history-subnav">{([['trades', '交易记录'], ['account_logs', `账户日志 ${accountLogs.length || ''}`]] as const).map(([key, label]) => <button type="button" key={key} className={historyView === key ? "active" : ""} onClick={() => setHistoryView(key)}>{label}</button>)}</div>
+      <div className="history-subnav">{([['trades', '交易记录'], ['rejection_audit', `拦截审计 ${runtime?.rejectionAudit?.completed || ''}`], ['account_logs', `账户日志 ${accountLogs.length || ''}`]] as const).map(([key, label]) => <button type="button" key={key} className={historyView === key ? "active" : ""} onClick={() => setHistoryView(key)}>{label}</button>)}</div>
       {historyView === "trades" && <><div className="section-heading"><div><h2>全部模拟交易</h2><p>进入复盘页才读取完整记录；之后只刷新最新一页，不请求额外行情图。</p></div><span>{history.filter((item) => item.status === "CLOSED").length} 笔已结束</span></div>
         {!history.length ? <div className="empty"><b>还没有历史交易</b><p>产生第一笔模拟交易后会自动出现在这里。</p></div> : <div className="history-table">{history.map((item) => <HistoryOrder key={item.id} item={item} />)}</div>}</>}
+      {historyView === "rejection_audit" && <RejectionAuditPanel audit={runtime?.rejectionAudit ?? null} />}
       {historyView === "account_logs" && <AccountLogs cycle={runtime?.paperCycle ?? null} items={accountLogs} />}
     </section>
 
@@ -560,6 +569,25 @@ function AccountLogs({ cycle, items }: { cycle: PaperCycleSummary | null; items:
         <details className="bankruptcy-details bankruptcy-orders"><summary>查看本轮完整订单记录（{report.trades.length} 笔）</summary><div className="bankruptcy-order-head"><span>订单</span><span>进场 / 出场</span><span>持仓</span><span>毛利 / 成本 / 净利</span><span>结束原因</span></div>{report.trades.map((trade) => <div className="bankruptcy-order-row" key={trade.id}><span><b>{trade.symbol.replace("_", "/")}</b><small>{trade.side === "LONG" ? "B 多" : "S 空"} · {time(trade.entryAt)}</small></span><span>{num(trade.entryPrice, 5)}<small>{num(trade.exitPrice, 5)}</small></span><span>{durationText(trade.entryAt, trade.exitAt)}<small>目标进度 {num(trade.targetProgress * 100, 0)}%</small></span><span><b className={trade.netPnl >= 0 ? "positive" : "negative"}>{signed(trade.grossPnl)} / -{num(trade.costs, 2)} / {signed(trade.netPnl)} U</b><small>计划 {num(trade.plannedNetRewardRisk, 2)}R</small></span><span>{resolvedExitText(trade.exitReason, trade.initialStop, trade.initialStop)}</span></div>)}</details>
       </article>;
     })}
+  </div>;
+}
+
+function RejectionAuditPanel({ audit }: { audit: RejectionAudit | null }) {
+  const rows = Object.values(audit?.rules ?? {}).sort((left, right) => right.resolved - left.resolved);
+  return <div className="rejection-audit">
+    <div className="section-heading"><div><h2>被拦截机会的影子复盘</h2><p>冻结拦截时的方向、价格、止损与目标，复用全市场价格跟踪20分钟；只做研究，不下单、不自动修改规则。</p></div><span>{audit?.pendingCount ?? 0} 笔跟踪中 · {audit?.completed ?? 0} 笔完成</span></div>
+    {!audit?.completed ? <div className="empty"><b>正在积累第一批样本</b><p>版本上线后，每个被拦截的异动只记录一次；20分钟内按目标先到、止损先到或到期价格结算，并扣除完整交易成本。</p></div> : <>
+      {audit.completed < 30 && <p className="notice">当前只有 {audit.completed} 笔完整样本，先看数据，不删规则；至少30笔才显示初步误杀判断。同一候选可能同时触发多条规则，因此这里只标记疑似问题。</p>}
+      <div className="audit-rules">{rows.map((row) => {
+        const profitRate = row.profitableAfterCost / Math.max(row.resolved, 1);
+        const feeRate = row.feeCovered / Math.max(row.resolved, 1);
+        const averageNet = row.netReturnRateSum / Math.max(row.resolved, 1);
+        const suspicious = row.resolved >= 30 && profitRate >= .55 && averageNet > 0 && row.targetFirst > row.stopFirst;
+        return <article key={row.id} className={suspicious ? "suspect" : ""}><div><small>{row.kind === "EXECUTION" ? "执行硬门槛" : row.kind === "ECONOMICS" ? "成本门槛" : row.kind === "QUALITY" ? "评分组成项" : "方向门槛"}</small><b>{row.label}</b></div><strong>{row.resolved < 30 ? "样本不足" : suspicious ? "疑似误杀" : "暂时保留"}</strong><dl><div><dt>完整样本</dt><dd>{row.resolved}</dd></div><div><dt>扣成本盈利</dt><dd>{num(profitRate * 100, 1)}%</dd></div><div><dt>覆盖手续费</dt><dd>{num(feeRate * 100, 1)}%</dd></div><div><dt>目标/止损先到</dt><dd>{row.targetFirst}/{row.stopFirst}</dd></div><div><dt>平均净变动</dt><dd>{signed(averageNet * 100, 2)}%</dd></div></dl></article>;
+      })}</div>
+      {!!audit.recent.length && <div className="audit-recent"><h3>最近完成的影子订单</h3>{audit.recent.map((item) => <article key={item.id}><div><b>{item.symbol.replace("_", "/")} · {sideText(item.side)}</b><small>{time(item.startedAt)}</small></div><span>{item.primaryBlocker}</span><strong className={item.profitableAfterCost ? "positive" : "negative"}>{item.outcome === "TARGET_FIRST" ? "目标先到" : item.outcome === "STOP_FIRST" ? "止损先到" : item.outcome === "STALLED_EXIT" ? "10分钟无推进" : "20分钟到期"} · {signed(item.netReturnRate * 100, 2)}%</strong></article>)}</div>}
+    </>}
+    {!!audit?.dropped && <p className="notice">因同时跟踪数量达到上限，跳过 {audit.dropped} 个样本；这些样本不会混入统计。</p>}
   </div>;
 }
 

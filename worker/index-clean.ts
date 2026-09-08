@@ -13,7 +13,8 @@ import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, LiveEntrySiz
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
 import { credentialMetadata } from "../lib/gate-readonly.ts";
 import { clearOwnerSessionCookie, createOwnerSession, ownerAuthConfigured, ownerPasswordMatches, ownerSessionCookie, sameOriginMutation, verifyOwnerSession } from "../lib/owner-auth.ts";
-import { assessEventEntry, selectRealtimePool, updateRadar, type RadarBaseline, type RadarCandidate } from "../lib/market-radar.ts";
+import { assessEventEntry, selectRealtimePool, updateRadar, type EventEntryAssessment, type RadarBaseline, type RadarCandidate } from "../lib/market-radar.ts";
+import { advanceRejectionAudit, initialRejectionAudit, recordRejectedCandidate, type RejectionAuditState } from "../lib/rejection-audit.ts";
 
 const LOOP_MS = 2_000;
 const AUTHORITY_STALE_AFTER_MS = 8_000;
@@ -147,6 +148,8 @@ type RuntimeState = {
   evidence: Record<string, { midpoint: number; observedAt: number; warmup: number; fresh: boolean; ancillaryFresh: boolean;
     entryReady?: boolean; optionalFresh?: boolean; recoveryFreshCount?: number; suspensionReason?: string | null;
     topLong: LiquidityZone | null; topShort: LiquidityZone | null; absorption: number; range15m: RangeStructure | null }>;
+  entryAssessments: Record<string, EventEntryAssessment | null>;
+  rejectionAudit: RejectionAuditState;
   radar: { scanned: number; lastScanAt: number | null; candidates: RadarCandidate[] };
   analysisMs: number[];
   equity: number;
@@ -168,7 +171,7 @@ function initialState(): RuntimeState {
     lastAlarmAt: null, lastSuccessAt: null, lastHeartbeatAt: null, lastStopCheckpointAt: null, nextAlarmAt: null, lastUniverseAt: 0, lastRadarAt: 0,
     utcDay: day(), dailyStartEquity: PAPER_INITIAL_EQUITY, alarmCount: 0, d1Writes: 0, nonAlarmWrites: 0, d1RetryAt: 0, d1FailureCount: 0, equityVersion: 0, ancillaryCursor: 0, subrequestCount: 0, maxSubrequestsInAlarm: 0, sequenceRebuilds: 0, lastProcessedSlot: -1, feedFailures: {},
     lastError: null, d1MirrorError: null, riskBreach: false, tickSize: Object.fromEntries(DEFAULT_SYMBOLS.map((symbol) => [symbol, 0.0001])), contractMeta: {},
-    decisions: {}, routes: {}, plans: {}, positions: {}, evidence: {}, analysisMs: [], equity: PAPER_INITIAL_EQUITY, outbox: [],
+    decisions: {}, routes: {}, plans: {}, positions: {}, evidence: {}, entryAssessments: {}, rejectionAudit: initialRejectionAudit(), analysisMs: [], equity: PAPER_INITIAL_EQUITY, outbox: [],
     radar: { scanned: 0, lastScanAt: null, candidates: [] }, paperCycle: startPaperCycle(Date.now()), bankruptcyOutbox: [], live: initialLiveState(),
   };
 }
@@ -232,15 +235,16 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if (saved?.authoritySchemaVersion === AUTHORITY_SCHEMA_VERSION) {
         this.runtime = { ...initialState(), ...saved, version: SYSTEM_VERSION, symbols: saved.symbols?.length ? saved.symbols : [...DEFAULT_SYMBOLS],
           lastUniverseAt: 0, lastRadarAt: 0, radar: saved.radar ?? { scanned: 0, lastScanAt: null, candidates: [] }, outbox: saved.outbox ?? [],
+          rejectionAudit: saved.rejectionAudit ?? initialRejectionAudit(),
           paperCycle: saved.paperCycle ?? startPaperCycle(Date.now(), saved.equity, 1), bankruptcyOutbox: saved.bankruptcyOutbox ?? [],
           live: { ...initialLiveState(), ...(saved.live ?? {}), entries: saved.live?.entries ?? {},
             positions: saved.live?.positions ?? {}, entrySkips: saved.live?.entrySkips ?? {} }, analysisMs: [], state: "WARMING" };
         for (const symbol of new Set([...Object.keys(this.runtime.decisions), ...Object.keys(this.runtime.routes), ...Object.keys(this.runtime.plans),
-          ...Object.keys(this.runtime.positions), ...Object.keys(this.runtime.evidence), ...Object.keys(this.runtime.feedFailures),
+          ...Object.keys(this.runtime.positions), ...Object.keys(this.runtime.evidence), ...Object.keys(this.runtime.entryAssessments), ...Object.keys(this.runtime.feedFailures),
           ...Object.keys(this.runtime.tickSize), ...Object.keys(this.runtime.contractMeta)])) {
           if (this.runtime.symbols.includes(symbol)) continue;
           delete this.runtime.decisions[symbol]; delete this.runtime.routes[symbol]; delete this.runtime.plans[symbol]; delete this.runtime.positions[symbol];
-          delete this.runtime.evidence[symbol]; delete this.runtime.feedFailures[symbol]; delete this.runtime.tickSize[symbol];
+          delete this.runtime.evidence[symbol]; delete this.runtime.entryAssessments[symbol]; delete this.runtime.feedFailures[symbol]; delete this.runtime.tickSize[symbol];
           delete this.runtime.contractMeta[symbol];
         }
         for (const symbol of this.runtime.symbols) {
@@ -262,7 +266,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private captureAuthority() {
     return structuredClone({ positions: this.runtime.positions, plans: this.runtime.plans, decisions: this.runtime.decisions, routes: this.runtime.routes,
-      evidence: this.runtime.evidence, equity: this.runtime.equity, equityVersion: this.runtime.equityVersion,
+      evidence: this.runtime.evidence, entryAssessments: this.runtime.entryAssessments,
+      equity: this.runtime.equity, equityVersion: this.runtime.equityVersion,
       outbox: this.runtime.outbox, paperCycle: this.runtime.paperCycle, bankruptcyOutbox: this.runtime.bankruptcyOutbox,
       lastStopCheckpointAt: this.runtime.lastStopCheckpointAt, riskBreach: this.runtime.riskBreach });
   }
@@ -273,6 +278,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.decisions = authority.decisions;
     this.runtime.routes = authority.routes;
     this.runtime.evidence = authority.evidence;
+    this.runtime.entryAssessments = authority.entryAssessments;
     this.runtime.equity = authority.equity;
     this.runtime.equityVersion = authority.equityVersion;
     this.runtime.outbox = authority.outbox;
@@ -340,16 +346,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if (this.memory[symbol]) this.memory[symbol].flow.funding = after?.fundingRate ?? 0;
     }
     for (const symbol of new Set([...Object.keys(this.memory), ...Object.keys(this.sessionWarmup), ...Object.keys(this.runtime.decisions), ...Object.keys(this.runtime.routes),
-      ...Object.keys(this.runtime.plans), ...Object.keys(this.runtime.positions), ...Object.keys(this.runtime.evidence),
+      ...Object.keys(this.runtime.plans), ...Object.keys(this.runtime.positions), ...Object.keys(this.runtime.evidence), ...Object.keys(this.runtime.entryAssessments),
       ...Object.keys(this.runtime.feedFailures), ...Object.keys(this.runtime.tickSize), ...Object.keys(this.runtime.contractMeta)])) {
       if (next.includes(symbol)) continue;
       delete this.memory[symbol]; delete this.sessionWarmup[symbol]; delete this.runtime.decisions[symbol]; delete this.runtime.routes[symbol]; delete this.runtime.plans[symbol];
-      delete this.runtime.positions[symbol]; delete this.runtime.evidence[symbol]; delete this.runtime.feedFailures[symbol];
+      delete this.runtime.positions[symbol]; delete this.runtime.evidence[symbol]; delete this.runtime.entryAssessments[symbol]; delete this.runtime.feedFailures[symbol];
       delete this.runtime.tickSize[symbol]; delete this.runtime.contractMeta[symbol];
     }
   }
 
   private refreshRadar(now: number, rows: Awaited<ReturnType<typeof fetchMarketTickers>>) {
+    this.runtime.rejectionAudit = advanceRejectionAudit({ state: this.runtime.rejectionAudit,
+      quotes: Object.fromEntries(rows.map((row) => [row.symbol, row.last])), now,
+      roundTripFrictionRate: ROUND_TRIP_FRICTION_RATE });
     const eligible = new Set(this.contractCatalog.keys());
     const radar = updateRadar(this.radarBaselines, rows, eligible, now);
     this.radarBaselines = radar.baselines;
@@ -358,14 +367,26 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const locked = this.runtime.symbols.filter((symbol) => this.runtime.positions[symbol]?.status === "OPEN"
       || this.runtime.plans[symbol]?.state === "PREPARED" || this.runtime.live.positions[symbol]?.status === "OPEN"
       || Boolean(this.runtime.live.entries[symbol] && !["FILLED", "CANCELLED"].includes(this.runtime.live.entries[symbol]!.status)));
-    const ranked = radar.candidates.filter((row) => row.kind === "NEW_MONEY").map((row) => row.symbol);
+    const ranked = [...radar.candidates].sort((left, right) => Number(right.kind === "NEW_MONEY") - Number(left.kind === "NEW_MONEY")
+      || right.strength - left.strength).map((row) => row.symbol);
     const liquidFallback = rows.filter((row) => eligible.has(row.symbol)).sort((a, b) => b.volume24hUsd - a.volume24hUsd).map((row) => row.symbol);
-    const next = selectRealtimePool({ locked, current: this.runtime.symbols, candidates: ranked,
+    const priorityCandidates = radar.candidates.filter((row) => row.kind === "NEW_MONEY").map((row) => row.symbol);
+    const next = selectRealtimePool({ locked, current: this.runtime.symbols, candidates: ranked, priorityCandidates,
       fallback: liquidFallback, limit: MAX_OPEN_POSITIONS });
     if (next.length) this.applyRealtimeSymbols(next);
   }
 
-  private eventDecision(symbol: string, midpoint: number, snapshot: BookSnapshot): Decision | null {
+  private eventAssessment(symbol: string, midpoint: number, snapshot: BookSnapshot): EventEntryAssessment | null {
+    const candidate = this.runtime.radar.candidates.find((row) => row.symbol === symbol);
+    const memory = this.memory[symbol];
+    if (!candidate || !memory) return null;
+    const noise = Math.max(0.0032, Math.min(0.006, memory.minuteNoiseRate * 1.15));
+    const targetDistance = Math.max(0.0085, noise * 2.25);
+    return assessEventEntry({ candidate, midpoint, snapshot, flow: memory.flow, stopRate: noise,
+      targetRate: targetDistance, roundTripFrictionRate: ROUND_TRIP_FRICTION_RATE });
+  }
+
+  private eventDecision(symbol: string, midpoint: number, assessment: EventEntryAssessment | null): Decision | null {
     const candidate = this.runtime.radar.candidates.find((row) => row.symbol === symbol);
     const memory = this.memory[symbol];
     const prior = this.runtime.positions[symbol];
@@ -374,9 +395,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         && candidate.observedAt - prior.exitAt < EVENT_REENTRY_COOLDOWN_MS) return null;
     const noise = Math.max(0.0032, Math.min(0.006, memory.minuteNoiseRate * 1.15));
     const targetDistance = Math.max(0.0085, noise * 2.25);
-    const assessment = assessEventEntry({ candidate, midpoint, snapshot, flow: memory.flow, stopRate: noise,
-      targetRate: targetDistance, roundTripFrictionRate: ROUND_TRIP_FRICTION_RATE });
-    if (!assessment.accepted) return null;
+    if (!assessment?.accepted) return null;
     const confidence = assessment.conservativeWinRate;
     const confirmationScore = Math.max(0.86, Math.min(0.95, 0.86 + (candidate.strength - 62) * 0.002
       + Math.max(0, assessment.alignedFlow - 0.32) * 0.04));
@@ -390,10 +409,22 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       score: confidence, oppositeScore: 1 - confidence,
       routeId: candidate.id, routeStage: "LOCAL_TO_NODE", routeKind: "LOCAL_BREAKOUT", targetTimeframe: "15m",
       confirmationScore, fakeoutRisk, activationDistanceRate: noise * 0.75,
-      reason: [`新增持仓资金异动强度 ${Math.round(candidate.strength)}%`, `${candidate.confirmations}轮批量快照确认`,
+      reason: [`${candidate.kind}异动强度 ${Math.round(candidate.strength)}%`, `${candidate.confirmations}轮批量快照确认`,
+        `方向证据 ${assessment.qualityScore}/${assessment.qualityRequired}：${assessment.qualityEvidence.join("、")}`,
         `主动资金同向 ${Math.round(assessment.alignedFlow * 100)}%`, `价差 ${assessment.spreadBps.toFixed(1)}bps，双边近端深度通过`,
         `模型成本占第一目标 ${Math.round(assessment.costShare * 100)}%`, "继续位移需通过连续强势盘口确认后才IOC进场"],
     };
+  }
+
+  private auditRejectedEvent(symbol: string, midpoint: number, assessment: EventEntryAssessment | null, now: number) {
+    if (!assessment || assessment.accepted) return;
+    const candidate = this.runtime.radar.candidates.find((row) => row.symbol === symbol);
+    const memory = this.memory[symbol];
+    if (!candidate || !memory) return;
+    const stopRate = Math.max(0.0032, Math.min(0.006, memory.minuteNoiseRate * 1.15));
+    const targetRate = Math.max(0.0085, stopRate * 2.25);
+    this.runtime.rejectionAudit = recordRejectedCandidate({ state: this.runtime.rejectionAudit, candidate, assessment,
+      midpoint, stopRate, targetRate, now });
   }
 
   private priorityMinuteSymbols(now: number) {
@@ -1308,8 +1339,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const optionalFresh = optionalEvidenceIsFresh(memory, now);
       const contractReady = this.runtime.contractMeta[symbol] != null;
       const entryReady = recovery.entryReady && ancillaryFresh;
-      const decision = this.authorityReady && contractReady && entryReady && (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS
-        ? this.eventDecision(symbol, analyzed.midpoint, snapshot) : null;
+      const assessment = this.authorityReady && contractReady && entryReady && (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS
+        ? this.eventAssessment(symbol, analyzed.midpoint, snapshot) : null;
+      const decision = assessment ? this.eventDecision(symbol, analyzed.midpoint, assessment) : null;
+      this.auditRejectedEvent(symbol, analyzed.midpoint, assessment, now);
       const openRisk = openStressRisk(this.runtime);
       const planSide = priorPlan?.state === "PREPARED" ? priorPlan.side : decision?.side;
       const reconciled = reconcilePaper({ now, midpoint: analyzed.midpoint, fresh: validation.fresh, sequenceFault: validation.sequenceFault,
@@ -1322,6 +1355,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         breakoutFakeoutRisk: priorPlan ? analyzed.fakeoutBySide[priorPlan.side] : undefined,
         maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate, leverageMax: this.runtime.contractMeta[symbol]?.leverageMax });
       this.runtime.decisions[symbol] = decision;
+      this.runtime.entryAssessments[symbol] = assessment;
       this.runtime.routes[symbol] = [];
       this.runtime.plans[symbol] = reconciled.plan;
       const closedNow = priorPosition?.status === "OPEN" && reconciled.position?.status === "CLOSED";
@@ -1596,10 +1630,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     if (path === "/status" || path === "/owner-runtime") {
       await this.ensureAlarm();
-      const { outbox, live, paperCycle, bankruptcyOutbox, ...publicRuntime } = this.runtime;
+      const { outbox, live, paperCycle, bankruptcyOutbox, rejectionAudit, ...publicRuntime } = this.runtime;
       const stale = !this.authorityReady || this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > AUTHORITY_STALE_AFTER_MS;
       const effectiveState = !this.authorityReady ? "RECOVERY_REQUIRED" : stale ? "RECONNECTING" : this.runtime.state;
-      return json({ ...publicRuntime, ...this.authorityView, paperCycle: paperCycleSummary(paperCycle, this.authorityView.equity), ...(path === "/owner-runtime" ? { live } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length + bankruptcyOutbox.length,
+      return json({ ...publicRuntime, ...this.authorityView, paperCycle: paperCycleSummary(paperCycle, this.authorityView.equity),
+        rejectionAudit: { startedAt: rejectionAudit.startedAt, pendingCount: Object.keys(rejectionAudit.pending).length,
+          completed: rejectionAudit.completed, dropped: rejectionAudit.dropped, rules: rejectionAudit.rules,
+          recent: rejectionAudit.recent.slice(-20).reverse() },
+        ...(path === "/owner-runtime" ? { live } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length + bankruptcyOutbox.length,
         oldestOutboxAgeMs: outbox.length ? Math.max(0, Date.now() - (outbox[0].position.exitAt ?? outbox[0].position.entryAt)) : 0,
         authorityReady: this.authorityReady, generatedAt: Date.now(), state: effectiveState, stale,
         analysisP99Ms: percentile99(this.runtime.analysisMs), limits: { loopMs: LOOP_MS, markets: this.runtime.symbols.length, scannedMarkets: this.runtime.radar.scanned, radarMs: RADAR_MS, warmupSnapshots: WARMUP_SNAPSHOTS,

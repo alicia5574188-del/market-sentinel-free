@@ -1,5 +1,15 @@
 # Goal
 
+## Active upgrade — 2026-09-08 rejected-entry shadow audit
+
+Measure the rules that suppress orders instead of weakening them by intuition. When a deeply analyzed anomaly is rejected, freeze one non-executable shadow trade per event with its actual direction, midpoint, noise-derived stop, economical target, complete failed-rule set and the five directional-score components. Reuse the existing ten-second all-market ticker response to follow that hypothetical trade and mirror the event exits: target-first, stop-first, ten-minute no-progress or twenty-minute maximum hold, including full round-trip friction, fee coverage, after-cost profitability and net return. Aggregate outcomes by hard gate and individual score component, retain bounded recent samples in the existing Durable Object checkpoint, and expose the result on the phone review page. Do not place PAPER/LIVE orders, change strategy decisions automatically, add Gate requests, add D1 writes, expand risk, or enable LIVE. Require at least thirty resolved samples before labeling a rule as a preliminary false-rejection candidate; correlated multi-rule failures remain explicitly non-causal until reviewed.
+
+## Active correction — 2026-09-08 scored anomaly admission
+
+Correct the proven zero-trade failure mode without restoring the original unrestricted anomaly entry. Keep freshness, contract validity, two-sided executable depth, spread, maximum extension, fee-to-target economics, structural stop and every portfolio/LIVE safety limit as hard gates. Replace the conjunction of event kind, OI growth, strong aligned flow, event strength and repeated radar confirmation with an explainable evidence score: require at least three of five independent quality checks after rejecting materially opposite realtime flow. Admit all frozen anomaly kinds into the bounded three-symbol realtime pool. Keep the existing four-book execution confirmation, current-price IOC, PAPER/LIVE parity and user-controlled default-off LIVE authority.
+
+Expose the exact assessment score and blocker for every deeply analyzed candidate in the public runtime and operator wait reason, without adding Gate requests, alarm frequency or D1 writes. This local coding branch may be tested and committed but must not deploy without explicit user authorization.
+
 ## Active hotfix — 2026-09-08 stable realtime candidate pool
 
 Stop the three-symbol realtime pool from replacing still-valid entry-eligible anomaly candidates every ten-second radar ranking. Preserve locked exposure first, then retain current `NEW_MONEY` symbols, and promote new ranked `NEW_MONEY` candidates ahead of observation-only anomalies. Restore sustained four-book warmup and minute evidence without changing entry gates, market-data cadence, risk, UI, credentials, or LIVE authority.

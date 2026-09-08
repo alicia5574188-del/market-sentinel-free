@@ -71,7 +71,7 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(worker, /await this\.syncLive\(Date\.now\(\), false, true\)/);
   assert.match(worker, /if \(!await ownerAuthenticated\(request, env\)\) return json\(\{ error: "请先登录" \}, 401\)/);
   assert.match(worker, /sameOriginMutation\(request\)/);
-  assert.match(worker, /const \{ outbox, live, paperCycle, bankruptcyOutbox, \.\.\.publicRuntime \} = this\.runtime/);
+  assert.match(worker, /const \{ outbox, live, paperCycle, bankruptcyOutbox, rejectionAudit, \.\.\.publicRuntime \} = this\.runtime/);
   assert.match(worker, /paperCycleSummary\(paperCycle, this\.authorityView\.equity\)/);
   assert.match(worker, /PAPER_CYCLE_BANKRUPTCY/);
   assert.match(worker, /PAPER_BANKRUPTCY/);
@@ -213,6 +213,16 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
   assert.match(worker, /FROM paper_events WHERE event_type='PAPER_BANKRUPTCY'/);
   assert.match(worker, /event_type='ORDER_CLOSE_DIAGNOSTIC'[\s\S]*observed_at>=\? AND observed_at<=\?/);
   assert.match(worker, /completeTrades\.length > item\.report\.trades\.length/);
+});
+
+test("rejected entry audit is bounded, observational and reuses the bulk ticker path", async () => {
+  const [audit, worker] = await Promise.all([read("lib/rejection-audit.ts"), read("worker/index-clean.ts")]);
+  assert.match(audit, /REJECTION_AUDIT_HORIZON_MS = 20 \* 60_000/);
+  assert.match(audit, /MAX_PENDING_REJECTION_AUDITS = 120/);
+  assert.match(audit, /MAX_RECENT_REJECTION_AUDITS = 200/);
+  assert.match(worker, /quotes: Object\.fromEntries\(rows\.map/);
+  assert.match(worker, /recent: rejectionAudit\.recent\.slice\(-20\)\.reverse\(\)/);
+  assert.doesNotMatch(audit, /fetch\(|DB\.prepare|D1Database|GateLiveClient/);
 });
 
 test("PAPER and LIVE share bounded sizing and meaningful net-profit economics", async () => {

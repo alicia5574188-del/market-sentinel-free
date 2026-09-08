@@ -65,17 +65,27 @@ const candidate = {
   kind: "NEW_MONEY" as const, openInterestChangeRate: 0.001, referencePrice: 99.8,
 };
 
-test("event admission requires new money, aligned flow, real depth, early extension and affordable friction", () => {
+test("event admission scores directional evidence while keeping execution gates hard", () => {
   const accepted = assessEventEntry({ candidate, midpoint: 100, snapshot: book(), flow, stopRate: 0.0032,
     targetRate: 0.0085, roundTripFrictionRate: 0.0018 });
   assert.equal(accepted.accepted, true);
+  assert.equal(accepted.qualityScore, 4);
   assert.ok(accepted.expectedReturnRate > 0);
-  assert.equal(assessEventEntry({ candidate: { ...candidate, kind: "PRICE_SHOCK" }, midpoint: 100, snapshot: book(), flow,
-    stopRate: 0.0032, targetRate: 0.0085, roundTripFrictionRate: 0.0018 }).accepted, false);
+  const priceShock = assessEventEntry({ candidate: { ...candidate, kind: "PRICE_SHOCK" }, midpoint: 100,
+    snapshot: book(), flow, stopRate: 0.0032, targetRate: 0.0085, roundTripFrictionRate: 0.0018 });
+  assert.equal(priceShock.accepted, true);
+  assert.equal(priceShock.qualityScore, 3);
+  const weakAssessment = assessEventEntry({ candidate: { ...candidate, kind: "PRICE_SHOCK", strength: 59,
+    confirmations: 2, movementMultiple: 2 }, midpoint: 100, snapshot: book(), flow: { ...flow, ofi: 0, takerDelta: 0,
+    openInterestDelta: 0 }, stopRate: 0.0032, targetRate: 0.0085,
+    roundTripFrictionRate: 0.0018 });
+  assert.equal(weakAssessment.blocker, "方向证据 0/3");
+  assert.deepEqual(weakAssessment.failedRules.map((rule) => rule.id), ["QUALITY_SCORE", "QUALITY_STRENGTH",
+    "QUALITY_THIRD_CONFIRMATION", "QUALITY_NEW_MONEY", "QUALITY_ALIGNED_FLOW", "QUALITY_RELATIVE_MOVE"]);
   assert.equal(assessEventEntry({ candidate, midpoint: 100, snapshot: book(4, 1_000), flow,
     stopRate: 0.0032, targetRate: 0.0085, roundTripFrictionRate: 0.0018 }).blocker, "近端双边盘口深度不足");
   assert.equal(assessEventEntry({ candidate, midpoint: 100, snapshot: book(), flow: { ...flow, ofi: -1, takerDelta: -1 },
-    stopRate: 0.0032, targetRate: 0.0085, roundTripFrictionRate: 0.0018 }).blocker, "主动资金未与异动方向一致");
+    stopRate: 0.0032, targetRate: 0.0085, roundTripFrictionRate: 0.0018 }).blocker, "实时主动资金明显反向");
   assert.equal(assessEventEntry({ candidate, midpoint: 100, snapshot: book(), flow,
     stopRate: 0.0032, targetRate: 0.006, roundTripFrictionRate: 0.0018 }).blocker, "交易成本占第一目标空间过高");
 });
@@ -98,6 +108,7 @@ test("realtime pool keeps valid residents and replaces only candidates that expi
   }), ["C_USDT", "A_USDT", "B_USDT"]);
   assert.deepEqual(selectRealtimePool({
     locked: [], current: ["PRICE_SHOCK_A", "PRICE_SHOCK_B", "PRICE_SHOCK_C"],
-    candidates: ["NEW_MONEY_WLD"], fallback: ["PRICE_SHOCK_D"], limit: 3,
+    candidates: ["PRICE_SHOCK_A", "PRICE_SHOCK_B", "PRICE_SHOCK_C", "NEW_MONEY_WLD"],
+    priorityCandidates: ["NEW_MONEY_WLD"], fallback: ["PRICE_SHOCK_D"], limit: 3,
   }), ["NEW_MONEY_WLD", "PRICE_SHOCK_A", "PRICE_SHOCK_B"]);
 });

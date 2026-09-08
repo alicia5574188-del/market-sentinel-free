@@ -1,5 +1,19 @@
 # Decisions
 
+## 2026-09-08 — Rejected signals need prospective shadow outcomes
+
+- Existing production history cannot truthfully reconstruct blocked opportunities because only completed positions and the current candidate assessment are retained. Start prospective evidence collection rather than infer unobserved entry state from later candles.
+- Freeze one shadow trade per radar event at the first deep rejection. Keep its contemporaneous direction, entry, stop, target, primary blocker, all simultaneous failed rules and score evidence; never update its geometry after the fact.
+- Follow outcomes for twenty minutes with the existing all-market ten-second ticker snapshot. This adds no exchange request, D1 write, PAPER position, LIVE authority or capital risk. Persist bounded audit state inside the existing heartbeat checkpoint.
+- Attribute a resolved sample to every rule it failed, including missing score components. Because simultaneous failures are correlated, thirty samples can only mark a preliminary suspected false rejection; deletion or weight changes require a separate review and regression test, never automatic mutation.
+
+## 2026-09-08 — Directional evidence is scored; execution safety remains conjunctive
+
+- The first anomaly release was fluid because it had few directional vetoes, while the current release can produce zero entries because event kind, OI, flow and several execution conditions are all mandatory. Restoring the first release would restore its losses as well as its frequency.
+- Hard gates remain for two radar confirmations, minimum event strength, materially opposite realtime flow, liquidity, spread, near-book depth, established-but-not-overextended displacement, and fee share. These protect executability and cannot be traded away for frequency.
+- Quality requires three of five: stronger event, a third radar confirmation, frozen new-money/OI agreement, strongly aligned realtime flow, and unusually large movement versus the symbol baseline. No single optional observation may veto an otherwise supported event.
+- Record score and blocker in bounded runtime state only; add no persistent per-snapshot writes. Preserve the four-book trigger and all PAPER/LIVE parity and authority boundaries. Deployment remains a separate user decision.
+
 ## 2026-09-08 — Realtime promotion needs residence hysteresis
 
 - A ten-second ranking change may not evict a current realtime symbol while it remains an entry-eligible `NEW_MONEY` radar candidate. Locked positions/plans remain first, valid resident `NEW_MONEY` candidates remain next, and newly ranked `NEW_MONEY` candidates displace observation-only anomalies before using remaining slots.

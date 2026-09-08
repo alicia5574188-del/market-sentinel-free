@@ -7,6 +7,7 @@ export const MAX_EVENT_SPREAD_BPS = 12;
 export const MIN_EVENT_ALIGNED_FLOW = 0.32;
 export const MAX_EVENT_EXTENSION_RATE = 0.0075;
 export const MAX_FRICTION_SHARE_OF_TARGET = 0.25;
+export const MIN_EVENT_QUALITY_SCORE = 3;
 
 export type RadarTicker = {
   symbol: string;
@@ -60,18 +61,34 @@ export type EventEntryAssessment = {
   costShare: number;
   conservativeWinRate: number;
   expectedReturnRate: number;
+  qualityScore: number;
+  qualityRequired: number;
+  qualityEvidence: string[];
+  failedRules: EventEntryRule[];
+};
+
+export type EventEntryRule = {
+  id: "MIN_VOLUME" | "EVENT_CONFIRMATION" | "OPPOSITE_FLOW" | "MAX_SPREAD" | "MIN_DEPTH"
+    | "MIN_DISPLACEMENT" | "MAX_EXTENSION" | "MAX_COST_SHARE" | "QUALITY_SCORE" | "POSITIVE_EXPECTANCY"
+    | "QUALITY_STRENGTH" | "QUALITY_THIRD_CONFIRMATION" | "QUALITY_NEW_MONEY" | "QUALITY_ALIGNED_FLOW" | "QUALITY_RELATIVE_MOVE";
+  label: string;
+  kind: "EXECUTION" | "DIRECTION" | "ECONOMICS" | "QUALITY";
 };
 
 export function selectRealtimePool(input: {
   locked: string[];
   current: string[];
   candidates: string[];
+  priorityCandidates?: string[];
   fallback: string[];
   limit: number;
 }) {
   const candidateSet = new Set(input.candidates);
-  const residentCandidates = input.current.filter((symbol) => candidateSet.has(symbol));
-  return [...new Set([...input.locked, ...residentCandidates, ...input.candidates, ...input.current, ...input.fallback])]
+  const prioritySet = new Set(input.priorityCandidates ?? []);
+  const priorityCandidates = input.candidates.filter((symbol) => prioritySet.has(symbol));
+  const residentCandidates = input.current.filter((symbol) => candidateSet.has(symbol) && !prioritySet.has(symbol));
+  const otherCandidates = input.candidates.filter((symbol) => !prioritySet.has(symbol));
+  return [...new Set([...input.locked, ...priorityCandidates, ...residentCandidates, ...otherCandidates, ...input.current, ...input.fallback])]
     .slice(0, Math.max(0, input.limit));
 }
 
@@ -174,22 +191,39 @@ export function assessEventEntry(input: {
   const nearAskDepthUsd = input.snapshot.asks.filter((row) => row.price <= input.midpoint * 1.001).reduce((sum, row) => sum + row.size, 0);
   const extensionRate = direction * (input.midpoint - input.candidate.referencePrice) / Math.max(input.candidate.referencePrice, 1e-9);
   const costShare = input.roundTripFrictionRate / Math.max(input.targetRate, 1e-9);
-  const conservativeWinRate = clamp(0.50 + (input.candidate.strength - 60) * 0.002
-    + Math.max(0, alignedFlow - MIN_EVENT_ALIGNED_FLOW) * 0.08, 0.50, 0.62);
+  const qualityEvidence = [
+    input.candidate.strength >= 62 ? "异动强度" : null,
+    input.candidate.confirmations >= 3 ? "三轮扫描" : null,
+    input.candidate.kind === "NEW_MONEY" && input.candidate.openInterestChangeRate >= 0.0002 ? "新增持仓" : null,
+    alignedFlow >= MIN_EVENT_ALIGNED_FLOW ? "主动资金同向" : null,
+    input.candidate.movementMultiple >= 2.5 ? "相对位移" : null,
+  ].filter((item): item is string => item != null);
+  const qualityScore = qualityEvidence.length;
+  const conservativeWinRate = clamp(0.46 + qualityScore * 0.025 + Math.max(0, input.candidate.strength - 62) * 0.001,
+    0.48, 0.62);
   const netRewardRate = Math.max(0, input.targetRate - input.roundTripFrictionRate);
   const lossRate = input.stopRate + input.roundTripFrictionRate;
   const expectedReturnRate = conservativeWinRate * netRewardRate - (1 - conservativeWinRate) * lossRate;
-  const blocker = input.candidate.kind !== "NEW_MONEY" ? "事件不是新增持仓推动"
-    : input.candidate.volume24hUsd < MIN_EVENT_VOLUME_24H_USD ? "24小时成交额低于流动性门槛"
-      : input.candidate.confirmations < 2 || input.candidate.strength < 62 ? "异动尚未形成两轮高强度确认"
-        : input.candidate.openInterestChangeRate < 0.0002 ? "持仓量没有继续增加"
-          : alignedFlow < MIN_EVENT_ALIGNED_FLOW ? "主动资金未与异动方向一致"
-            : spreadBps > MAX_EVENT_SPREAD_BPS ? "盘口价差过大"
-              : nearBidDepthUsd < depthFloor || nearAskDepthUsd < depthFloor ? "近端双边盘口深度不足"
-                : extensionRate < 0.0006 ? "异动位移尚未成立"
-                  : extensionRate > MAX_EVENT_EXTENSION_RATE ? "行情已经延伸，禁止追价"
-                    : costShare > MAX_FRICTION_SHARE_OF_TARGET ? "交易成本占第一目标空间过高"
-                      : expectedReturnRate <= 0 ? "保守估计的成本后期望值不为正" : null;
+  const failedRuleCandidates: Array<EventEntryRule | null> = [
+    input.candidate.volume24hUsd < MIN_EVENT_VOLUME_24H_USD ? { id: "MIN_VOLUME", label: "24小时成交额低于流动性门槛", kind: "EXECUTION" } as const : null,
+    input.candidate.confirmations < 2 || input.candidate.strength < 58 ? { id: "EVENT_CONFIRMATION", label: "异动尚未形成两轮有效确认", kind: "DIRECTION" } as const : null,
+    alignedFlow < -0.28 ? { id: "OPPOSITE_FLOW", label: "实时主动资金明显反向", kind: "DIRECTION" } as const : null,
+    spreadBps > MAX_EVENT_SPREAD_BPS ? { id: "MAX_SPREAD", label: "盘口价差过大", kind: "EXECUTION" } as const : null,
+    nearBidDepthUsd < depthFloor || nearAskDepthUsd < depthFloor ? { id: "MIN_DEPTH", label: "近端双边盘口深度不足", kind: "EXECUTION" } as const : null,
+    extensionRate < 0.0006 ? { id: "MIN_DISPLACEMENT", label: "异动位移尚未成立", kind: "DIRECTION" } as const : null,
+    extensionRate > MAX_EVENT_EXTENSION_RATE ? { id: "MAX_EXTENSION", label: "行情已经延伸，禁止追价", kind: "DIRECTION" } as const : null,
+    costShare > MAX_FRICTION_SHARE_OF_TARGET ? { id: "MAX_COST_SHARE", label: "交易成本占第一目标空间过高", kind: "ECONOMICS" } as const : null,
+    qualityScore < MIN_EVENT_QUALITY_SCORE ? { id: "QUALITY_SCORE", label: `方向证据 ${qualityScore}/${MIN_EVENT_QUALITY_SCORE}`, kind: "DIRECTION" } as const : null,
+    qualityScore < MIN_EVENT_QUALITY_SCORE && input.candidate.strength < 62 ? { id: "QUALITY_STRENGTH", label: "评分项：异动强度不足62", kind: "QUALITY" } as const : null,
+    qualityScore < MIN_EVENT_QUALITY_SCORE && input.candidate.confirmations < 3 ? { id: "QUALITY_THIRD_CONFIRMATION", label: "评分项：缺少第三轮确认", kind: "QUALITY" } as const : null,
+    qualityScore < MIN_EVENT_QUALITY_SCORE && !(input.candidate.kind === "NEW_MONEY" && input.candidate.openInterestChangeRate >= 0.0002) ? { id: "QUALITY_NEW_MONEY", label: "评分项：缺少新增持仓", kind: "QUALITY" } as const : null,
+    qualityScore < MIN_EVENT_QUALITY_SCORE && alignedFlow < MIN_EVENT_ALIGNED_FLOW ? { id: "QUALITY_ALIGNED_FLOW", label: "评分项：主动资金未强同向", kind: "QUALITY" } as const : null,
+    qualityScore < MIN_EVENT_QUALITY_SCORE && input.candidate.movementMultiple < 2.5 ? { id: "QUALITY_RELATIVE_MOVE", label: "评分项：相对位移不足2.5倍", kind: "QUALITY" } as const : null,
+    expectedReturnRate <= 0 ? { id: "POSITIVE_EXPECTANCY", label: "保守估计的成本后期望值不为正", kind: "ECONOMICS" } as const : null,
+  ];
+  const failedRules = failedRuleCandidates.filter((item): item is EventEntryRule => item != null);
+  const blocker = failedRules[0]?.label ?? null;
   return { accepted: blocker == null, blocker, alignedFlow, spreadBps, nearBidDepthUsd, nearAskDepthUsd,
-    extensionRate, costShare, conservativeWinRate, expectedReturnRate };
+    extensionRate, costShare, conservativeWinRate, expectedReturnRate, qualityScore,
+    qualityRequired: MIN_EVENT_QUALITY_SCORE, qualityEvidence, failedRules };
 }
