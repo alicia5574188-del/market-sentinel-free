@@ -41,6 +41,19 @@ type ReactionStats = { opportunities: number; triggered: number; noTrigger: numb
   feeCovered: number; targetFirst: number; stopFirst: number; stalledExit: number; timeExpired: number; netReturnRateSum: number };
 type ReactionLab = { version: 1; startedAt: number; activeCount: number; completed: number; dropped: number;
   stats: Record<"CONTINUATION" | "REVERSAL", ReactionStats>; active: ReactionExperiment[]; recent: ReactionExperiment[] };
+type OutcomeAggregate = { samples: number; wins: number; losses: number; targetFirst: number; stopFirst: number;
+  stalledExit: number; timeExpired: number; netReturnRateSum: number };
+type OutcomeProfile = { impulseRate: number; strength: number; movementMultiple: number; volume24hUsd: number;
+  openInterestChangeRate: number; startSpreadBps: number; startDepthAlignment: number; triggerRetraceRatio: number;
+  triggerFlowSupport: number; triggerDelayMs: number; stopRate: number; bestGrossReturnRate: number;
+  worstGrossReturnRate: number; holdingMs: number };
+type OutcomeGroup = OutcomeAggregate & { id: string; dimension: string; dimensionLabel: string; bucket: string; label: string;
+  discovery: OutcomeAggregate; confirmation: OutcomeAggregate };
+type OutcomeSegment = OutcomeAggregate & { id: string; labels: string[]; discovery: OutcomeAggregate; confirmation: OutcomeAggregate };
+type OutcomeResearch = { version: 1; startedAt: number; skippedLegacy: number; aggregate: OutcomeAggregate;
+  discovery: OutcomeAggregate; confirmation: OutcomeAggregate; winnerProfileSums: OutcomeProfile;
+  loserProfileSums: OutcomeProfile; candidatesFrozenAt: number | null; candidateGroupIds: string[];
+  candidateSegmentIds: string[]; groups: OutcomeGroup[]; segments: OutcomeSegment[] };
 type Runtime = {
   version: string; mode: "PAPER"; state: string; stale: boolean; generatedAt: number; lastSuccessAt: number | null; lastError: string | null; symbols: string[]; equity: number; dailyStartEquity?: number;
   decisions: Record<string, Decision | null>; routes: Record<string, LiquidityRoute[]>; plans: Record<string, Plan | null>; positions: Record<string, Position | null>; authorityReady: boolean;
@@ -53,6 +66,7 @@ type Runtime = {
   radar?: { scanned: number; lastScanAt: number | null; candidates: RadarCandidate[] };
   rejectionAudit?: RejectionAudit;
   reactionLab?: ReactionLab;
+  outcomeResearch?: OutcomeResearch;
   live?: LiveRuntime;
 };
 type AuthSession = { configured: boolean; authenticated: boolean; username: string };
@@ -72,7 +86,7 @@ type BankruptcyReport = { id: string; cycleNumber: number; startedAt: number; en
 type AccountLogItem = { id: string; observedAt: number; report: BankruptcyReport };
 type Tab = "brain" | "orders" | "live" | "history" | "settings";
 type LiveView = "account" | "orders" | "api";
-type HistoryView = "trades" | "reaction_lab" | "rejection_audit" | "account_logs";
+type HistoryView = "trades" | "reaction_lab" | "outcome_research" | "rejection_audit" | "account_logs";
 type PaperAction = "RESET" | "CLEAR_HISTORY";
 type PositionView = { entryAt?: number; entryPrice: number; stopPrice: number; targetPrice: number; markPrice?: number; markAt?: number; fresh: boolean };
 
@@ -396,10 +410,11 @@ export default function Home() {
     <div hidden={tab !== "live"}><LiveCenter auth={auth} runtime={runtime} live={live} liveEnabled={liveEnabled} liveBusy={liveBusy} liveActionError={liveActionError} positions={openLivePositions} entries={openLiveEntries} skips={liveEntrySkips} onLogin={() => setShowLogin(true)} onToggle={liveControl} onCleanup={() => void setLiveMode(false)} /></div>
 
     <section className="history-panel" hidden={tab !== "history"}>
-      <div className="history-subnav">{([['trades', '交易记录'], ['reaction_lab', `双向实验 ${runtime?.reactionLab?.completed || ''}`], ['rejection_audit', '旧方案归档'], ['account_logs', `账户日志 ${accountLogs.length || ''}`]] as const).map(([key, label]) => <button type="button" key={key} className={historyView === key ? "active" : ""} onClick={() => setHistoryView(key)}>{label}</button>)}</div>
+      <div className="history-subnav">{([['trades', '交易记录'], ['reaction_lab', `双向实验 ${runtime?.reactionLab?.completed || ''}`], ['outcome_research', `胜负研究 ${runtime?.outcomeResearch?.aggregate.samples || ''}`], ['rejection_audit', '旧方案归档'], ['account_logs', `账户日志 ${accountLogs.length || ''}`]] as const).map(([key, label]) => <button type="button" key={key} className={historyView === key ? "active" : ""} onClick={() => setHistoryView(key)}>{label}</button>)}</div>
       {historyView === "trades" && <><div className="section-heading"><div><h2>全部模拟交易</h2><p>进入复盘页才读取完整记录；之后只刷新最新一页，不请求额外行情图。</p></div><span>{history.filter((item) => item.status === "CLOSED").length} 笔已结束</span></div>
         {!history.length ? <div className="empty"><b>还没有历史交易</b><p>产生第一笔模拟交易后会自动出现在这里。</p></div> : <div className="history-table">{history.map((item) => <HistoryOrder key={item.id} item={item} />)}</div>}</>}
       {historyView === "reaction_lab" && <ReactionLabPanel lab={runtime?.reactionLab ?? null} />}
+      {historyView === "outcome_research" && <OutcomeResearchPanel research={runtime?.outcomeResearch ?? null} />}
       {historyView === "rejection_audit" && <RejectionAuditPanel audit={runtime?.rejectionAudit ?? null} />}
       {historyView === "account_logs" && <AccountLogs cycle={runtime?.paperCycle ?? null} items={accountLogs} />}
     </section>
@@ -598,7 +613,7 @@ function ReactionLabPanel({ lab }: { lab: ReactionLab | null }) {
   const statCard = (branch: "CONTINUATION" | "REVERSAL", title: string) => {
     const row = lab?.stats[branch];
     const resolved = row?.resolved ?? 0;
-    return <article><div><small>{title}</small><b>{row?.triggered ?? 0} 次触发 / {row?.noTrigger ?? 0} 次不交易</b></div><strong>{resolved >= 30 ? `${num((row?.netReturnRateSum ?? 0) / resolved * 100, 3)}%` : "积累样本"}</strong><dl><div><dt>机会数</dt><dd>{row?.opportunities ?? 0}</dd></div><div><dt>已结算</dt><dd>{resolved}</dd></div><div><dt>扣成本盈利</dt><dd>{num((row?.profitableAfterCost ?? 0) / Math.max(resolved, 1) * 100, 1)}%</dd></div><div><dt>覆盖成本</dt><dd>{num((row?.feeCovered ?? 0) / Math.max(resolved, 1) * 100, 1)}%</dd></div><div><dt>目标/止损</dt><dd>{row?.targetFirst ?? 0}/{row?.stopFirst ?? 0}</dd></div></dl></article>;
+    return <article><div><small>{title}</small><b>{row?.triggered ?? 0} 次触发 / {row?.noTrigger ?? 0} 次不交易</b></div><strong>{resolved >= 30 ? `${num((row?.netReturnRateSum ?? 0) / resolved * 100, 3)}%` : "积累样本"}</strong><dl><div><dt>机会数</dt><dd>{row?.opportunities ?? 0}</dd></div><div><dt>已结算</dt><dd>{resolved}</dd></div><div><dt>净盈利胜率</dt><dd>{num((row?.profitableAfterCost ?? 0) / Math.max(resolved, 1) * 100, 1)}%</dd></div><div><dt>无推进/超时</dt><dd>{row?.stalledExit ?? 0}/{row?.timeExpired ?? 0}</dd></div><div><dt>目标/止损</dt><dd>{row?.targetFirst ?? 0}/{row?.stopFirst ?? 0}</dd></div></dl></article>;
   };
   return <div className="rejection-audit reaction-lab">
     <div className="section-heading"><div><h2>延续 / 反转配对实验</h2><p>同一异动同时观察两条互斥方向；冻结各自触发价、止损和目标，扣除0.18%完整成本。只研究，不下单。</p></div><span>{lab?.activeCount ?? 0} 组观察中 · {lab?.completed ?? 0} 组完成</span></div>
@@ -607,6 +622,55 @@ function ReactionLabPanel({ lab }: { lab: ReactionLab | null }) {
     {!!lab?.active.length && <div className="reaction-recent"><h3>当前实验</h3>{lab.active.map((item) => <article key={item.id}><div><b>{item.symbol.replace("_", "/")} · {impulseText(item.impulseSide)}</b><small>{time(item.startedAt)} · 回撤 {num(item.retraceRatio * 100, 0)}%</small></div><ReactionRouteCard title="延续" route={item.continuation} /><ReactionRouteCard title="反转" route={item.reversal} /></article>)}</div>}
     {!!lab?.recent.length && <div className="audit-recent"><h3>最近完成的配对实验</h3>{lab.recent.map((item) => <article key={item.id}><div><b>{item.symbol.replace("_", "/")} · {impulseText(item.impulseSide)}</b><small>{time(item.startedAt)}</small></div><span>延续：{item.continuation.outcome === "NO_TRIGGER" ? "不交易" : item.continuation.outcome} · 反转：{item.reversal.outcome === "NO_TRIGGER" ? "不交易" : item.reversal.outcome}</span><strong>成本后 {signed((item.continuation.netReturnRate ?? 0) * 100, 2)}% / {signed((item.reversal.netReturnRate ?? 0) * 100, 2)}%</strong></article>)}</div>}
     {!lab?.activeCount && !lab?.completed && <div className="empty"><b>等待第一组双向样本</b><p>异动连续确认后会进入3分钟反应观察；没有满足条件也会明确记为“不交易”。</p></div>}
+  </div>;
+}
+
+function OutcomeResearchPanel({ research }: { research: OutcomeResearch | null }) {
+  const total = research?.aggregate.samples ?? 0;
+  const wins = research?.aggregate.wins ?? 0;
+  const losses = research?.aggregate.losses ?? 0;
+  const averageNet = (row: OutcomeAggregate) => row.netReturnRateSum / Math.max(row.samples, 1);
+  const winner = research?.winnerProfileSums;
+  const loser = research?.loserProfileSums;
+  const profileRows: Array<[string, keyof OutcomeProfile, (value: number) => string]> = [
+    ["异动幅度", "impulseRate", (value) => `${num(value * 100, 2)}%`],
+    ["异动强度", "strength", (value) => num(value, 1)],
+    ["相对平时波动", "movementMultiple", (value) => `${num(value, 1)}倍`],
+    ["OI变化", "openInterestChangeRate", (value) => `${signed(value * 100, 3)}%`],
+    ["起始点差", "startSpreadBps", (value) => `${num(value, 2)} bps`],
+    ["同向盘口深度", "startDepthAlignment", (value) => `${signed(value * 100, 1)}%`],
+    ["触发回撤", "triggerRetraceRatio", (value) => `${num(value * 100, 1)}%`],
+    ["触发资金流", "triggerFlowSupport", (value) => `${num(value * 100, 1)}%`],
+    ["触发速度", "triggerDelayMs", (value) => `${num(value / 1_000, 0)}秒`],
+    ["止损宽度", "stopRate", (value) => `${num(value * 100, 2)}%`],
+  ];
+  const pathRows: Array<[string, keyof OutcomeProfile, (value: number) => string]> = [
+    ["最大顺向波动", "bestGrossReturnRate", (value) => `${signed(value * 100, 2)}%`],
+    ["最大逆向波动", "worstGrossReturnRate", (value) => `${signed(value * 100, 2)}%`],
+    ["平均持有时间", "holdingMs", (value) => `${num(value / 60_000, 1)}分钟`],
+  ];
+  const candidatesFrozen = research?.candidatesFrozenAt != null;
+  const groupRows = [...(research?.groups ?? [])]
+    .filter((row) => candidatesFrozen ? research!.candidateGroupIds.includes(row.id) : row.discovery.samples >= 8)
+    .sort((left, right) => candidatesFrozen ? averageNet(right.discovery) - averageNet(left.discovery)
+      : right.discovery.samples - left.discovery.samples || averageNet(right.discovery) - averageNet(left.discovery)).slice(0, 24);
+  const segmentRows = [...(research?.segments ?? [])]
+    .filter((row) => candidatesFrozen ? research!.candidateSegmentIds.includes(row.id) : row.discovery.samples >= 6)
+    .sort((left, right) => averageNet(right.discovery) - averageNet(left.discovery));
+  const segmentDisplay = [...segmentRows.slice(0, 3), ...segmentRows.slice(-3)]
+    .filter((row, index, rows) => rows.findIndex((item) => item.id === row.id) === index);
+  const phaseCard = (title: string, row: OutcomeAggregate, note: string) => <article><div><small>{title}</small><b>{row.samples} 笔</b></div>
+    <strong className={averageNet(row) >= 0 ? "positive" : "negative"}>{row.samples ? `${signed(averageNet(row) * 100, 3)}%` : "等待样本"}</strong>
+    <span>净盈利 {row.wins} / 亏损 {row.losses}</span><small>{note}</small></article>;
+  return <div className="outcome-research">
+    <div className="section-heading"><div><h2>盈利 / 亏损归因研究</h2><p>只读取双向实验结果；所有入场特征在结果产生前冻结，不下单，也不会自动修改策略。</p></div><span>{total} 笔完整新样本</span></div>
+    <p className="notice">前100笔属于探索样本，用来寻找可能有用的条件；第101笔起进入独立确认。只有在确认样本中仍保持正收益的条件，才有资格进入下一版模拟策略。</p>
+    <div className="research-phases">{phaseCard("探索阶段", research?.discovery ?? { samples: 0, wins: 0, losses: 0, targetFirst: 0, stopFirst: 0, stalledExit: 0, timeExpired: 0, netReturnRateSum: 0 }, "发现差异，不作为盈利证明")}{phaseCard("独立确认", research?.confirmation ?? { samples: 0, wins: 0, losses: 0, targetFirst: 0, stopFirst: 0, stalledExit: 0, timeExpired: 0, netReturnRateSum: 0 }, "不参与前100笔条件选择")}</div>
+    {total > 0 && <><div className="research-profile"><h3>盈利组与亏损组的触发前差异</h3><div className="profile-head"><b>指标</b><b>盈利 {wins}</b><b>亏损 {losses}</b></div>{profileRows.map(([label, key, format]) => <div key={key}><span>{label}</span><b>{format((winner?.[key] ?? 0) / Math.max(wins, 1))}</b><b>{format((loser?.[key] ?? 0) / Math.max(losses, 1))}</b></div>)}</div>
+      <div className="research-profile"><h3>持仓路径诊断（不能用作入场条件）</h3><div className="profile-head"><b>指标</b><b>盈利 {wins}</b><b>亏损 {losses}</b></div>{pathRows.map(([label, key, format]) => <div key={key}><span>{label}</span><b>{format((winner?.[key] ?? 0) / Math.max(wins, 1))}</b><b>{format((loser?.[key] ?? 0) / Math.max(losses, 1))}</b></div>)}</div>
+      <div className="research-groups"><h3>{candidatesFrozen ? "前100笔冻结的单项候选" : "探索中的单项条件分桶"}</h3>{groupRows.length ? groupRows.map((row) => <article key={row.id}><div><small>{row.dimensionLabel}</small><b>{row.label}</b></div><strong className={averageNet(row.discovery) >= 0 ? "positive" : "negative"}>探索 {signed(averageNet(row.discovery) * 100, 3)}%</strong><span>{row.discovery.samples}笔 · 胜率 {num(row.discovery.wins / Math.max(row.discovery.samples, 1) * 100, 1)}%</span>{candidatesFrozen && <span>确认 {row.confirmation.samples}笔 · {row.confirmation.samples ? `${signed(averageNet(row.confirmation) * 100, 3)}%` : "等待"}</span>}</article>) : <p>{candidatesFrozen ? "前100笔没有产生满足最低样本、正平均收益和50%净胜率的单项候选。" : "每个分桶至少8笔后显示，避免被极少数订单误导。"}</p>}</div>
+      <div className="research-segments"><h3>{candidatesFrozen ? "前100笔冻结的组合候选" : "探索中的多条件组合"}</h3>{segmentDisplay.length ? segmentDisplay.map((row) => <article key={row.id}><b>{row.labels.join(" · ")}</b><span>探索 {row.discovery.samples}笔 · {signed(averageNet(row.discovery) * 100, 3)}%</span>{candidatesFrozen && <span>确认 {row.confirmation.samples}笔 · {row.confirmation.samples ? `${signed(averageNet(row.confirmation) * 100, 3)}%` : "等待"}</span>}<strong>{num(row.discovery.wins / Math.max(row.discovery.samples, 1) * 100, 1)}%</strong></article>) : <p>{candidatesFrozen ? "前100笔没有产生达到冻结门槛的组合候选。" : "同一组合至少6笔后显示；这里仅用于提出候选条件，最终必须由独立确认样本验证。"}</p>}</div></>}
+    {!total && <div className="empty"><b>从现在开始收集完整样本</b><p>旧结果缺少冻结的触发环境，不会被强行纳入。首批新路线结算后，这里会自动出现盈利组与亏损组对照。</p></div>}
   </div>;
 }
 

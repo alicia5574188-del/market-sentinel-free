@@ -71,7 +71,7 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(worker, /await this\.syncLive\(Date\.now\(\), false, true\)/);
   assert.match(worker, /if \(!await ownerAuthenticated\(request, env\)\) return json\(\{ error: "请先登录" \}, 401\)/);
   assert.match(worker, /sameOriginMutation\(request\)/);
-  assert.match(worker, /const \{ outbox, live, paperCycle, bankruptcyOutbox, rejectionAudit, reactionLab, \.\.\.publicRuntime \} = this\.runtime/);
+  assert.match(worker, /const \{ outbox, live, paperCycle, bankruptcyOutbox, rejectionAudit, reactionLab, outcomeResearch, \.\.\.publicRuntime \} = this\.runtime/);
   assert.match(worker, /paperCycleSummary\(paperCycle, this\.authorityView\.equity\)/);
   assert.match(worker, /PAPER_CYCLE_BANKRUPTCY/);
   assert.match(worker, /PAPER_BANKRUPTCY/);
@@ -241,6 +241,23 @@ test("paired reaction lab is bounded, non-executable and keeps no-trade controls
   assert.match(worker, /advanceReactionLab/);
   assert.match(page, /只记影子结果，不产生新 PAPER \/ LIVE 订单/);
   assert.match(page, /旧单向方案审计（已归档）/);
+});
+
+test("win/loss research freezes pre-outcome features and cannot execute", async () => {
+  const [research, lab, worker, page] = await Promise.all([read("lib/outcome-research.ts"), read("lib/reaction-lab.ts"),
+    read("worker/index-clean.ts"), read("app/page.tsx")]);
+  assert.match(research, /OUTCOME_DISCOVERY_SAMPLES = 100/);
+  assert.match(research, /MAX_OUTCOME_PROCESSED = 512/);
+  assert.match(research, /experiment\.featureVersion !== 1/);
+  assert.match(research, /"DISCOVERY" as const : "CONFIRMATION" as const/);
+  assert.match(research, /function freezeCandidates/);
+  assert.match(research, /candidateGroupIds/);
+  assert.doesNotMatch(research, /fetch\(|DB\.prepare|D1Database|GateLiveClient|reconcilePaper/);
+  assert.match(lab, /triggerRetraceRatio: retraceRatio/);
+  assert.match(lab, /triggerAlignedFlow: alignedFlow/);
+  assert.match(worker, /ingestReactionOutcomes/);
+  assert.match(page, /盈利 \/ 亏损归因研究/);
+  assert.match(page, /不下单，也不会自动修改策略/);
 });
 
 test("PAPER and LIVE share bounded sizing and meaningful net-profit economics", async () => {

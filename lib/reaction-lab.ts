@@ -13,6 +13,9 @@ export type ReactionRoute = {
   side: "LONG" | "SHORT";
   status: "WATCHING" | "OPEN" | "RESOLVED" | "NO_TRIGGER";
   conditionStreak: number;
+  triggerRetraceRatio: number | null;
+  triggerAlignedFlow: number | null;
+  triggerStepRate: number | null;
   triggerAt: number | null;
   entryPrice: number | null;
   stopPrice: number | null;
@@ -31,6 +34,7 @@ export type ReactionRoute = {
 };
 
 export type ReactionExperiment = {
+  featureVersion: 1;
   id: string;
   eventId: string;
   symbol: string;
@@ -38,6 +42,12 @@ export type ReactionExperiment = {
   kind: RadarCandidate["kind"];
   strength: number;
   confirmations: number;
+  moveRate: number;
+  movementMultiple: number;
+  volume24hUsd: number;
+  openInterestChangeRate: number;
+  startSpreadBps: number;
+  startDepthAlignment: number;
   startedAt: number;
   observationExpiresAt: number;
   referencePrice: number;
@@ -93,13 +103,14 @@ const opposite = (side: "LONG" | "SHORT") => side === "LONG" ? "SHORT" as const 
 const directionalReturn = (side: "LONG" | "SHORT", entry: number, price: number) =>
   direction(side) * (price - entry) / Math.max(entry, 1e-9);
 const route = (branch: ReactionBranch, side: "LONG" | "SHORT", price: number): ReactionRoute => ({ branch, side,
-  status: "WATCHING", conditionStreak: 0, triggerAt: null, entryPrice: null, stopPrice: null, targetPrice: null,
+  status: "WATCHING", conditionStreak: 0, triggerRetraceRatio: null, triggerAlignedFlow: null,
+  triggerStepRate: null, triggerAt: null, entryPrice: null, stopPrice: null, targetPrice: null,
   expiresAt: null, lastPrice: price, bestGrossReturnRate: 0, worstGrossReturnRate: 0, outcome: null,
   resolvedAt: null, exitPrice: null, grossReturnRate: null, netReturnRate: null, feeCovered: null,
   profitableAfterCost: null });
 
 export function recordReactionEvent(input: { state: ReactionLabState; candidate: RadarCandidate; midpoint: number;
-  stopRate: number; targetRate: number; now: number }) {
+  stopRate: number; targetRate: number; startSpreadBps?: number; startDepthAlignment?: number; now: number }) {
   if (input.state.seenEventIds.includes(input.candidate.id)) return input.state;
   if (Object.values(input.state.active).some((item) => item.symbol === input.candidate.symbol
     && (item.continuation.status === "WATCHING" || item.reversal.status === "WATCHING"))) return input.state;
@@ -111,9 +122,12 @@ export function recordReactionEvent(input: { state: ReactionLabState; candidate:
   const referencePrice = input.candidate.referencePrice > 0 ? input.candidate.referencePrice : inferredReference;
   const initialImpulseRate = Math.max(0.001, Math.abs(input.midpoint - referencePrice) / Math.max(referencePrice, 1e-9),
     Math.abs(input.candidate.moveRate));
-  const experiment: ReactionExperiment = { id: `reaction:${input.candidate.id}`, eventId: input.candidate.id,
+  const experiment: ReactionExperiment = { featureVersion: 1, id: `reaction:${input.candidate.id}`, eventId: input.candidate.id,
     symbol: input.candidate.symbol, impulseSide: input.candidate.side, kind: input.candidate.kind,
-    strength: input.candidate.strength, confirmations: input.candidate.confirmations, startedAt: input.now,
+    strength: input.candidate.strength, confirmations: input.candidate.confirmations, moveRate: input.candidate.moveRate,
+    movementMultiple: input.candidate.movementMultiple, volume24hUsd: input.candidate.volume24hUsd,
+    openInterestChangeRate: input.candidate.openInterestChangeRate, startSpreadBps: input.startSpreadBps ?? 0,
+    startDepthAlignment: input.startDepthAlignment ?? 0, startedAt: input.now,
     observationExpiresAt: input.now + REACTION_OBSERVATION_MS, referencePrice, initialPrice: input.midpoint,
     initialImpulseRate, extremePrice: input.midpoint, lastPrice: input.midpoint, retraceRatio: 0, pullbackSeen: false,
     stopRate: input.stopRate, targetRate: input.targetRate, alignedFlow: 0,
@@ -124,9 +138,11 @@ export function recordReactionEvent(input: { state: ReactionLabState; candidate:
       REVERSAL: { ...input.state.stats.REVERSAL, opportunities: input.state.stats.REVERSAL.opportunities + 1 } } };
 }
 
-function openRoute(routeBefore: ReactionRoute, price: number, stopRate: number, targetRate: number, now: number) {
+function openRoute(routeBefore: ReactionRoute, price: number, stopRate: number, targetRate: number, now: number,
+  retraceRatio: number, alignedFlow: number, stepRate: number) {
   const d = direction(routeBefore.side);
-  return { ...routeBefore, status: "OPEN" as const, triggerAt: now, entryPrice: price,
+  return { ...routeBefore, status: "OPEN" as const, triggerAt: now, triggerRetraceRatio: retraceRatio,
+    triggerAlignedFlow: alignedFlow, triggerStepRate: stepRate, entryPrice: price,
     stopPrice: price * (1 - d * stopRate), targetPrice: price * (1 + d * targetRate),
     expiresAt: now + REACTION_MAX_HOLD_MS, lastPrice: price, conditionStreak: 2 };
 }
@@ -173,7 +189,8 @@ export function observeReaction(input: { state: ReactionLabState; experimentId: 
     const conditionStreak = met ? continuation.conditionStreak + 1 : 0;
     continuation = { ...continuation, conditionStreak, lastPrice: input.midpoint };
     if (conditionStreak >= 2) {
-      continuation = openRoute(continuation, input.midpoint, prior.stopRate, prior.targetRate, input.now);
+      continuation = openRoute(continuation, input.midpoint, prior.stopRate, prior.targetRate, input.now,
+        retraceRatio, input.alignedFlow, step);
       state = { ...state, stats: { ...state.stats, CONTINUATION: { ...state.stats.CONTINUATION,
         triggered: state.stats.CONTINUATION.triggered + 1 } } };
     }
@@ -183,7 +200,8 @@ export function observeReaction(input: { state: ReactionLabState; experimentId: 
     const conditionStreak = met ? reversal.conditionStreak + 1 : 0;
     reversal = { ...reversal, conditionStreak, lastPrice: input.midpoint };
     if (conditionStreak >= 2) {
-      reversal = openRoute(reversal, input.midpoint, prior.stopRate, prior.targetRate, input.now);
+      reversal = openRoute(reversal, input.midpoint, prior.stopRate, prior.targetRate, input.now,
+        retraceRatio, input.alignedFlow, step);
       state = { ...state, stats: { ...state.stats, REVERSAL: { ...state.stats.REVERSAL,
         triggered: state.stats.REVERSAL.triggered + 1 } } };
     }

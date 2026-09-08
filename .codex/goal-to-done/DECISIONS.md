@@ -1,5 +1,13 @@
 # Decisions
 
+## 2026-09-09 — Win/loss attribution must freeze features and candidates before validation
+
+- Keep the paired reaction lab unchanged as the sample generator. The outcome researcher is a separate pure module that reads completed shadow routes and has no exchange, D1, PAPER, LIVE or automatic strategy-mutation authority.
+- Accept only routes created after this upgrade with a complete `featureVersion=1` snapshot. Freeze event strength/type, impulse and relative movement, volume, OI, starting spread/depth, trigger retrace/flow/speed and stop width before the outcome is known; do not backfill missing old fields from final state.
+- Treat maximum favorable/adverse movement and holding time as path diagnostics only. They explain how winners and losers developed but are forbidden from becoming entry evidence because they occur after entry.
+- Reserve the first 100 complete routes for discovery. Immediately before route 101, freeze only qualifying single-feature buckets and multi-feature segments; grade those unchanged candidates on later confirmation samples. Continue displaying an empty candidate set truthfully if discovery produces no positive candidate.
+- Keep deduplication, recent samples and combination identities bounded in the existing Durable Object checkpoint. Reuse existing market observations and preserve the research-only LIVE hard lock.
+
 ## 2026-09-08 — Compare both reactions before authorizing execution
 
 - An anomaly is a sample selector, not a directional signal. Each selected event receives the same three-minute observation window and independently eligible continuation and reversal routes; neither route inherits the anomaly direction as permission to trade.
