@@ -1,6 +1,6 @@
 # Goal
 
-## Active upgrade — 2026-09-08 isolated rejection attribution
+## Completed upgrade — 2026-09-08 isolated rejection attribution
 
 Make the rejection audit capable of evaluating one rule without treating a multi-rule rejection as independent evidence for every failed check. Preserve the existing all-associated-rule totals, and add three bounded forward-only views: the first blocker selected by admission precedence, samples where exactly one unique rule failed, and the most common complete failed-rule combinations. Only the exactly-one-rule view may receive the existing preliminary false-rejection label. Preserve existing completed totals without partial backfilling, normalize old checkpoints safely, cap combination state at sixty-four identities, and expose the attribution on the phone review page. Do not change admission, exits, PAPER/LIVE orders, Gate requests, D1 writes, risk, credentials, or LIVE authority; do not deploy without explicit user authorization.
 
