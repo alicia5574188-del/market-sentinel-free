@@ -1,24 +1,24 @@
 # Market Anomaly Radar
 
-A Gate USDT perpetual event-scalping system. One `MarketStream` Durable Object is the sole authority for both PAPER and owner-controlled LIVE execution.
+A Gate USDT perpetual paired-reaction research system. One `MarketStream` Durable Object remains the sole authority for market state and protection of any pre-existing PAPER/LIVE positions.
 
 ## Market-data architecture
 
 - Every 10 seconds one bulk Gate futures-ticker request scans every eligible USDT perpetual. The local radar compares each contract with its own short-window movement baseline, rejects contracts below the liquidity floor, and publishes at most twelve ranked anomalies.
 - Open exposure and the strongest candidates have priority. At most three symbols receive two-second order-book monitoring. Candidate detail is fetched from completed 1m candles plus rotating signed trades, OI statistics, and liquidations; the system never opens one full feed per contract.
-- An anomaly is discovery, not an entry signal. Event type and identity are frozen; same-direction impulses remain one event through a three-minute quiet re-arm window, and a persisted same-direction close adds a five-minute restart-safe re-entry cooldown.
-- Only a `NEW_MONEY` continuation may reach execution: open interest must increase, active flow must align, the move must still be early, 24-hour turnover must exceed 10M USDT, spread must be at most 12 bps, and both sides of the near book must clear a turnover-scaled depth floor. Squeeze, liquidation, and unsupported price shocks remain visible but observation-only.
-- Modeled round-trip friction may consume at most 25% of the first target space, and a conservative cost-after expectation must remain positive. A passing event still needs the existing four consecutive strong two-second breakout confirmations before current-price IOC; it is never filled directly from the ten-second bulk scan.
+- An anomaly is only a sample selector, never an entry direction. After two radar confirmations, the system freezes the event reference and opens a three-minute paired observation: pullback-then-continuation, deep-retrace reversal, or explicit no-trade when neither condition completes.
+- Continuation requires a 20%-70% retrace followed by two advancing, impulse-aligned flow observations. Reversal requires at least a 70% retrace followed by two declining, opposite-flow observations. Each triggered branch freezes its own shadow entry, noise-bounded stop, and target.
+- Triggered shadow branches are followed for up to twenty minutes, use the same ten-minute no-progress exit, and deduct 0.18% modeled round-trip friction. The paired lab is bounded and checkpointed without per-snapshot D1 writes.
 - The public ticker scan finds where activity occurs. OI, taker flow, liquidations, and order-book imbalance classify whether the move resembles new money, squeeze/liquidation, or an unsupported price shock. Missing optional evidence lowers confidence instead of putting the entire service into recovery.
 - Contract metadata refreshes every ten minutes. A 30-second compact checkpoint and one-minute Cron watchdog recover eviction or missed alarms. No market snapshot is written to D1.
 
-## Execution and risk
+## Execution lock and retained risk controls
 
-- PAPER and LIVE consume the same frozen plan, actual-fill sizing, fees, stress slippage, leverage selection, stop, and target. LIVE defaults off and deployment/login never enables it.
-- Entry is a current-price IOC. No exchange-resident entry order waits for price. After a LIVE fill, a reduce-only exchange hard stop is required; failure to protect fails closed.
+- The paired-reaction lab has no PAPER or LIVE order authority. Runtime decisions are explicitly null, PAPER opening is disabled, the LIVE enable endpoint rejects activation, and every process restart restores LIVE to off.
+- Existing PAPER/LIVE positions, if any, keep their original stop and exit management. Gate account visibility, reconciliation, reduce-only protection, owner authentication, and system-tag cleanup remain available.
 - Per-entry planned loss is confidence-scaled from 0.5% to 1% of applicable equity. Planned notional remains capped at 4× equity, aggregate structural risk at 10%, same-direction correlated risk at 6.5%, and aggregate margin at 30%.
 - Every entry must independently provide at least 1.2:1 net reward/risk after modeled 0.18% round-trip friction and at least 0.2% of equity in net target value. Wider/noisier stops reduce notional instead of increasing dollar loss.
-- There is no daily order-count ceiling and currently no daily loss shutoff. The operator UI shows a New-York-day goal of +150 U from a 1,000 U PAPER base, but the goal never relaxes entry quality or risk limits.
+- Historical PAPER performance remains visible, but the research version measures branch trigger rate, cost coverage, after-cost win rate, and average net return instead of targeting order count.
 - Stops remain immediate. Optional soft exits need completed-minute evidence and cannot fire from a few two-second ticks. Dynamic protection still waits for both 1.5R and 70% target progress, so an ordinary pullback is not turned into a premature micro-profit exit.
 
 ## Retained operations
@@ -27,7 +27,7 @@ A Gate USDT perpetual event-scalping system. One `MarketStream` Durable Object i
 - Exact string Gate order IDs, ambiguous-order reconciliation, system-tag-only cleanup, actual Gate lot/margin revalidation, and per-symbol feed recovery.
 - PAPER reset to 1,000 U, separate completed-history clearing, bankruptcy rollover/reporting, idempotent D1 outbox, complete cursor-paginated PAPER history, and full cycle-order disclosure rebuilt from durable per-order diagnostics at bankruptcy archival.
 - The operator page has no market or history charts. History loads only when the review tab is opened, then refreshes only the newest page; each order keeps prices, gross result, modeled cost, net result, realized R, original stop, target, duration, and exit reason without making another Gate candle request.
-- Public PAPER page and owner-only LIVE account/position controls. Old completed trades remain available for review; the new strategy version starts separate runtime decisions.
+- Public research page and owner-only LIVE account/position controls. Old completed trades remain available, the old single-direction rejection audit is archived, and the new paired experiment has a separate review page.
 
 ## Planned Free-tier budget
 
@@ -47,4 +47,4 @@ npm run lint
 git diff --check
 ```
 
-Production releases use the existing GitHub-to-Cloudflare workflow. The encrypted Gate credential row is preserved, and every deployment must pass advancing runtime-health checks while LIVE remains user-controlled.
+Production releases use the existing GitHub-to-Cloudflare workflow. The encrypted Gate credential row is preserved, and every deployment must pass advancing runtime-health checks while LIVE remains forced off for this research version.

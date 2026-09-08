@@ -3,7 +3,7 @@
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
 import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchMarketTickers, fetchRecentTrades, fetchStructureCandles } from "../lib/gate-market.ts";
-import { breakoutEntryPriceAcceptable, closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, planTriggered, PORTFOLIO_RISK_CAP, realtimeEntryConfirmed, remainingStressRisk, ROUND_TRIP_FRICTION_RATE, STALE_AFTER_MS, SYSTEM_VERSION, updatePosition, type BookSnapshot, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
+import { breakoutEntryPriceAcceptable, closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, planTriggered, PORTFOLIO_RISK_CAP, realtimeEntryConfirmed, remainingStressRisk, ROUND_TRIP_FRICTION_RATE, STALE_AFTER_MS, SYSTEM_VERSION, updatePosition, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
 import { aggregateFourHourCandles, analyzeSnapshot, ancillarySchedule, applyFlow, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, optionalEvidenceIsFresh, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
 import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem } from "../lib/paper-outbox.ts";
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
@@ -13,8 +13,10 @@ import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, LiveEntrySiz
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
 import { credentialMetadata } from "../lib/gate-readonly.ts";
 import { clearOwnerSessionCookie, createOwnerSession, ownerAuthConfigured, ownerPasswordMatches, ownerSessionCookie, sameOriginMutation, verifyOwnerSession } from "../lib/owner-auth.ts";
-import { assessEventEntry, selectRealtimePool, updateRadar, type EventEntryAssessment, type RadarBaseline, type RadarCandidate } from "../lib/market-radar.ts";
-import { advanceRejectionAudit, initialRejectionAudit, recordRejectedCandidate, type RejectionAuditState } from "../lib/rejection-audit.ts";
+import { eventAlignedFlow, selectRealtimePool, updateRadar, type EventEntryAssessment, type RadarBaseline, type RadarCandidate } from "../lib/market-radar.ts";
+import { initialRejectionAudit, type RejectionAuditState } from "../lib/rejection-audit.ts";
+import { activeReactionForSymbol, advanceReactionLab, initialReactionLab, observeReaction, recordReactionEvent,
+  type ReactionLabState } from "../lib/reaction-lab.ts";
 
 const LOOP_MS = 2_000;
 const AUTHORITY_STALE_AFTER_MS = 8_000;
@@ -32,7 +34,6 @@ const NON_ALARM_WRITE_CAP = 8_000;
 const WATCHDOG_WRITE_RESERVE = 2_880;
 const AUTHORITY_SCHEMA_VERSION = 1;
 const DEFAULT_SYMBOLS = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];
-const EVENT_REENTRY_COOLDOWN_MS = 5 * 60_000;
 
 export interface CloudflareEnv {
   ASSETS: Fetcher;
@@ -150,6 +151,7 @@ type RuntimeState = {
     topLong: LiquidityZone | null; topShort: LiquidityZone | null; absorption: number; range15m: RangeStructure | null }>;
   entryAssessments: Record<string, EventEntryAssessment | null>;
   rejectionAudit: RejectionAuditState;
+  reactionLab: ReactionLabState;
   radar: { scanned: number; lastScanAt: number | null; candidates: RadarCandidate[] };
   analysisMs: number[];
   equity: number;
@@ -171,7 +173,8 @@ function initialState(): RuntimeState {
     lastAlarmAt: null, lastSuccessAt: null, lastHeartbeatAt: null, lastStopCheckpointAt: null, nextAlarmAt: null, lastUniverseAt: 0, lastRadarAt: 0,
     utcDay: day(), dailyStartEquity: PAPER_INITIAL_EQUITY, alarmCount: 0, d1Writes: 0, nonAlarmWrites: 0, d1RetryAt: 0, d1FailureCount: 0, equityVersion: 0, ancillaryCursor: 0, subrequestCount: 0, maxSubrequestsInAlarm: 0, sequenceRebuilds: 0, lastProcessedSlot: -1, feedFailures: {},
     lastError: null, d1MirrorError: null, riskBreach: false, tickSize: Object.fromEntries(DEFAULT_SYMBOLS.map((symbol) => [symbol, 0.0001])), contractMeta: {},
-    decisions: {}, routes: {}, plans: {}, positions: {}, evidence: {}, entryAssessments: {}, rejectionAudit: initialRejectionAudit(), analysisMs: [], equity: PAPER_INITIAL_EQUITY, outbox: [],
+    decisions: {}, routes: {}, plans: {}, positions: {}, evidence: {}, entryAssessments: {}, rejectionAudit: initialRejectionAudit(),
+    reactionLab: initialReactionLab(), analysisMs: [], equity: PAPER_INITIAL_EQUITY, outbox: [],
     radar: { scanned: 0, lastScanAt: null, candidates: [] }, paperCycle: startPaperCycle(Date.now()), bankruptcyOutbox: [], live: initialLiveState(),
   };
 }
@@ -236,9 +239,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         this.runtime = { ...initialState(), ...saved, version: SYSTEM_VERSION, symbols: saved.symbols?.length ? saved.symbols : [...DEFAULT_SYMBOLS],
           lastUniverseAt: 0, lastRadarAt: 0, radar: saved.radar ?? { scanned: 0, lastScanAt: null, candidates: [] }, outbox: saved.outbox ?? [],
           rejectionAudit: saved.rejectionAudit ?? initialRejectionAudit(),
+          reactionLab: saved.reactionLab ? { ...initialReactionLab(), ...saved.reactionLab,
+            stats: { ...initialReactionLab().stats, ...saved.reactionLab.stats } } : initialReactionLab(),
           paperCycle: saved.paperCycle ?? startPaperCycle(Date.now(), saved.equity, 1), bankruptcyOutbox: saved.bankruptcyOutbox ?? [],
           live: { ...initialLiveState(), ...(saved.live ?? {}), entries: saved.live?.entries ?? {},
-            positions: saved.live?.positions ?? {}, entrySkips: saved.live?.entrySkips ?? {} }, analysisMs: [], state: "WARMING" };
+            positions: saved.live?.positions ?? {}, entrySkips: saved.live?.entrySkips ?? {},
+            requestedEnabled: false, operational: false }, analysisMs: [], state: "WARMING" };
         for (const symbol of new Set([...Object.keys(this.runtime.decisions), ...Object.keys(this.runtime.routes), ...Object.keys(this.runtime.plans),
           ...Object.keys(this.runtime.positions), ...Object.keys(this.runtime.evidence), ...Object.keys(this.runtime.entryAssessments), ...Object.keys(this.runtime.feedFailures),
           ...Object.keys(this.runtime.tickSize), ...Object.keys(this.runtime.contractMeta)])) {
@@ -356,7 +362,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private refreshRadar(now: number, rows: Awaited<ReturnType<typeof fetchMarketTickers>>) {
-    this.runtime.rejectionAudit = advanceRejectionAudit({ state: this.runtime.rejectionAudit,
+    this.runtime.reactionLab = advanceReactionLab({ state: this.runtime.reactionLab,
       quotes: Object.fromEntries(rows.map((row) => [row.symbol, row.last])), now,
       roundTripFrictionRate: ROUND_TRIP_FRICTION_RATE });
     const eligible = new Set(this.contractCatalog.keys());
@@ -366,7 +372,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.lastRadarAt = now;
     const locked = this.runtime.symbols.filter((symbol) => this.runtime.positions[symbol]?.status === "OPEN"
       || this.runtime.plans[symbol]?.state === "PREPARED" || this.runtime.live.positions[symbol]?.status === "OPEN"
-      || Boolean(this.runtime.live.entries[symbol] && !["FILLED", "CANCELLED"].includes(this.runtime.live.entries[symbol]!.status)));
+      || Boolean(this.runtime.live.entries[symbol] && !["FILLED", "CANCELLED"].includes(this.runtime.live.entries[symbol]!.status))
+      || Boolean(activeReactionForSymbol(this.runtime.reactionLab, symbol)));
     const ranked = [...radar.candidates].sort((left, right) => Number(right.kind === "NEW_MONEY") - Number(left.kind === "NEW_MONEY")
       || right.strength - left.strength).map((row) => row.symbol);
     const liquidFallback = rows.filter((row) => eligible.has(row.symbol)).sort((a, b) => b.volume24hUsd - a.volume24hUsd).map((row) => row.symbol);
@@ -376,55 +383,21 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (next.length) this.applyRealtimeSymbols(next);
   }
 
-  private eventAssessment(symbol: string, midpoint: number, snapshot: BookSnapshot): EventEntryAssessment | null {
+  private observeReaction(symbol: string, midpoint: number, now: number) {
     const candidate = this.runtime.radar.candidates.find((row) => row.symbol === symbol);
     const memory = this.memory[symbol];
-    if (!candidate || !memory) return null;
-    const noise = Math.max(0.0032, Math.min(0.006, memory.minuteNoiseRate * 1.15));
-    const targetDistance = Math.max(0.0085, noise * 2.25);
-    return assessEventEntry({ candidate, midpoint, snapshot, flow: memory.flow, stopRate: noise,
-      targetRate: targetDistance, roundTripFrictionRate: ROUND_TRIP_FRICTION_RATE });
-  }
-
-  private eventDecision(symbol: string, midpoint: number, assessment: EventEntryAssessment | null): Decision | null {
-    const candidate = this.runtime.radar.candidates.find((row) => row.symbol === symbol);
-    const memory = this.memory[symbol];
-    const prior = this.runtime.positions[symbol];
-    if (!candidate || !memory || prior?.routeId === candidate.id
-      || prior?.status === "CLOSED" && prior.side === candidate.side && prior.exitAt != null
-        && candidate.observedAt - prior.exitAt < EVENT_REENTRY_COOLDOWN_MS) return null;
-    const noise = Math.max(0.0032, Math.min(0.006, memory.minuteNoiseRate * 1.15));
-    const targetDistance = Math.max(0.0085, noise * 2.25);
-    if (!assessment?.accepted) return null;
-    const confidence = assessment.conservativeWinRate;
-    const confirmationScore = Math.max(0.86, Math.min(0.95, 0.86 + (candidate.strength - 62) * 0.002
-      + Math.max(0, assessment.alignedFlow - 0.32) * 0.04));
-    const fakeoutRisk = Math.max(0.08, Math.min(0.18, 1 - confirmationScore));
-    const direction = candidate.side === "LONG" ? 1 : -1;
-    const invalidation = midpoint * (1 - direction * noise);
-    const target = midpoint * (1 + direction * targetDistance);
-    return {
-      symbol, observedAt: candidate.observedAt, marketState: "BREAKOUT", side: candidate.side,
-      entryTrigger: midpoint, invalidation, target, targetIdentity: `EVENT_TARGET:${candidate.id}`,
-      score: confidence, oppositeScore: 1 - confidence,
-      routeId: candidate.id, routeStage: "LOCAL_TO_NODE", routeKind: "LOCAL_BREAKOUT", targetTimeframe: "15m",
-      confirmationScore, fakeoutRisk, activationDistanceRate: noise * 0.75,
-      reason: [`${candidate.kind}异动强度 ${Math.round(candidate.strength)}%`, `${candidate.confirmations}轮批量快照确认`,
-        `方向证据 ${assessment.qualityScore}/${assessment.qualityRequired}：${assessment.qualityEvidence.join("、")}`,
-        `主动资金同向 ${Math.round(assessment.alignedFlow * 100)}%`, `价差 ${assessment.spreadBps.toFixed(1)}bps，双边近端深度通过`,
-        `模型成本占第一目标 ${Math.round(assessment.costShare * 100)}%`, "继续位移需通过连续强势盘口确认后才IOC进场"],
-    };
-  }
-
-  private auditRejectedEvent(symbol: string, midpoint: number, assessment: EventEntryAssessment | null, now: number) {
-    if (!assessment || assessment.accepted) return;
-    const candidate = this.runtime.radar.candidates.find((row) => row.symbol === symbol);
-    const memory = this.memory[symbol];
-    if (!candidate || !memory) return;
+    if (!memory) return;
     const stopRate = Math.max(0.0032, Math.min(0.006, memory.minuteNoiseRate * 1.15));
     const targetRate = Math.max(0.0085, stopRate * 2.25);
-    this.runtime.rejectionAudit = recordRejectedCandidate({ state: this.runtime.rejectionAudit, candidate, assessment,
-      midpoint, stopRate, targetRate, now });
+    if (candidate?.confirmations && candidate.confirmations >= 2) {
+      this.runtime.reactionLab = recordReactionEvent({ state: this.runtime.reactionLab, candidate, midpoint,
+        stopRate, targetRate, now });
+    }
+    const experiment = activeReactionForSymbol(this.runtime.reactionLab, symbol);
+    if (!experiment) return;
+    this.runtime.reactionLab = observeReaction({ state: this.runtime.reactionLab, experimentId: experiment.id,
+      midpoint, alignedFlow: eventAlignedFlow(experiment.impulseSide, memory.flow), now,
+      roundTripFrictionRate: ROUND_TRIP_FRICTION_RATE });
   }
 
   private priorityMinuteSymbols(now: number) {
@@ -1339,12 +1312,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const optionalFresh = optionalEvidenceIsFresh(memory, now);
       const contractReady = this.runtime.contractMeta[symbol] != null;
       const entryReady = recovery.entryReady && ancillaryFresh;
-      const assessment = this.authorityReady && contractReady && entryReady && (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS
-        ? this.eventAssessment(symbol, analyzed.midpoint, snapshot) : null;
-      const decision = assessment ? this.eventDecision(symbol, analyzed.midpoint, assessment) : null;
-      this.auditRejectedEvent(symbol, analyzed.midpoint, assessment, now);
+      const decision: Decision | null = null;
+      if (this.authorityReady && contractReady && entryReady && (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS) {
+        this.observeReaction(symbol, analyzed.midpoint, now);
+      }
       const openRisk = openStressRisk(this.runtime);
-      const planSide = priorPlan?.state === "PREPARED" ? priorPlan.side : decision?.side;
+      const planSide = priorPlan?.state === "PREPARED" ? priorPlan.side : undefined;
       const reconciled = reconcilePaper({ now, midpoint: analyzed.midpoint, fresh: validation.fresh, sequenceFault: validation.sequenceFault,
         decision, plan: priorPlan, position: priorPosition, zones: analyzed.zones, absorption: analyzed.absorption,
         confirmationMinute: memory.timeframeUpdatedAt.m1, confirmationPrice: memory.lastCompletedMinuteClose,
@@ -1355,7 +1328,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         breakoutFakeoutRisk: priorPlan ? analyzed.fakeoutBySide[priorPlan.side] : undefined,
         maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate, leverageMax: this.runtime.contractMeta[symbol]?.leverageMax });
       this.runtime.decisions[symbol] = decision;
-      this.runtime.entryAssessments[symbol] = assessment;
+      this.runtime.entryAssessments[symbol] = null;
       this.runtime.routes[symbol] = [];
       this.runtime.plans[symbol] = reconciled.plan;
       const closedNow = priorPosition?.status === "OPEN" && reconciled.position?.status === "CLOSED";
@@ -1630,7 +1603,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     if (path === "/status" || path === "/owner-runtime") {
       await this.ensureAlarm();
-      const { outbox, live, paperCycle, bankruptcyOutbox, rejectionAudit, ...publicRuntime } = this.runtime;
+      const { outbox, live, paperCycle, bankruptcyOutbox, rejectionAudit, reactionLab, ...publicRuntime } = this.runtime;
       const stale = !this.authorityReady || this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > AUTHORITY_STALE_AFTER_MS;
       const effectiveState = !this.authorityReady ? "RECOVERY_REQUIRED" : stale ? "RECONNECTING" : this.runtime.state;
       return json({ ...publicRuntime, ...this.authorityView, paperCycle: paperCycleSummary(paperCycle, this.authorityView.equity),
@@ -1639,6 +1612,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           primaryRules: rejectionAudit.primaryRules ?? {}, isolatedRules: rejectionAudit.isolatedRules ?? {},
           combinations: rejectionAudit.combinations ?? {}, combinationOverflow: rejectionAudit.combinationOverflow ?? 0,
           recent: rejectionAudit.recent.slice(-20).reverse() },
+        reactionLab: { version: reactionLab.version, startedAt: reactionLab.startedAt,
+          activeCount: Object.keys(reactionLab.active).length, completed: reactionLab.completed, dropped: reactionLab.dropped,
+          stats: reactionLab.stats, active: Object.values(reactionLab.active).slice(-6).reverse(),
+          recent: reactionLab.recent.slice(-20).reverse() },
         ...(path === "/owner-runtime" ? { live } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length + bankruptcyOutbox.length,
         oldestOutboxAgeMs: outbox.length ? Math.max(0, Date.now() - (outbox[0].position.exitAt ?? outbox[0].position.entryAt)) : 0,
         authorityReady: this.authorityReady, generatedAt: Date.now(), state: effectiveState, stale,
@@ -1677,6 +1654,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (path === "/live-mode" && request.method === "POST") {
       const body = await request.json<{ enabled?: unknown }>().catch(() => ({} as { enabled?: unknown }));
       if (typeof body.enabled !== "boolean") return json({ error: "invalid live mode" }, 400);
+      if (body.enabled) return json({ ok: false, error: "双向实验仍是影子研究，实盘新开仓已锁定", live: this.runtime.live }, 409);
       const result = await this.setLiveMode(body.enabled);
       return json(result, result.ok ? 200 : 409);
     }

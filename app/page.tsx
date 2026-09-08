@@ -29,6 +29,18 @@ type RejectionSample = { id: string; symbol: string; side: Side; startedAt: numb
 type RejectionAudit = { startedAt: number; pendingCount: number; completed: number; dropped: number; rules: Record<string, RejectionRuleStats>;
   primaryRules?: Record<string, RejectionRuleStats>; isolatedRules?: Record<string, RejectionRuleStats>;
   combinations?: Record<string, RejectionCombinationStats>; combinationOverflow?: number; recent: RejectionSample[] };
+type ReactionOutcome = "TARGET_FIRST" | "STOP_FIRST" | "STALLED_EXIT" | "TIME_EXPIRED" | "NO_TRIGGER";
+type ReactionRoute = { branch: "CONTINUATION" | "REVERSAL"; side: Side; status: "WATCHING" | "OPEN" | "RESOLVED" | "NO_TRIGGER";
+  conditionStreak: number; triggerAt: number | null; entryPrice: number | null; stopPrice: number | null; targetPrice: number | null;
+  outcome: ReactionOutcome | null; netReturnRate: number | null; feeCovered: boolean | null; profitableAfterCost: boolean | null };
+type ReactionExperiment = { id: string; eventId: string; symbol: string; impulseSide: Side; kind: RadarCandidate["kind"];
+  strength: number; confirmations: number; startedAt: number; observationExpiresAt: number; referencePrice: number;
+  initialPrice: number; lastPrice: number; retraceRatio: number; pullbackSeen: boolean; alignedFlow: number;
+  continuation: ReactionRoute; reversal: ReactionRoute };
+type ReactionStats = { opportunities: number; triggered: number; noTrigger: number; resolved: number; profitableAfterCost: number;
+  feeCovered: number; targetFirst: number; stopFirst: number; stalledExit: number; timeExpired: number; netReturnRateSum: number };
+type ReactionLab = { version: 1; startedAt: number; activeCount: number; completed: number; dropped: number;
+  stats: Record<"CONTINUATION" | "REVERSAL", ReactionStats>; active: ReactionExperiment[]; recent: ReactionExperiment[] };
 type Runtime = {
   version: string; mode: "PAPER"; state: string; stale: boolean; generatedAt: number; lastSuccessAt: number | null; lastError: string | null; symbols: string[]; equity: number; dailyStartEquity?: number;
   decisions: Record<string, Decision | null>; routes: Record<string, LiquidityRoute[]>; plans: Record<string, Plan | null>; positions: Record<string, Position | null>; authorityReady: boolean;
@@ -40,6 +52,7 @@ type Runtime = {
   paperCycle: PaperCycleSummary;
   radar?: { scanned: number; lastScanAt: number | null; candidates: RadarCandidate[] };
   rejectionAudit?: RejectionAudit;
+  reactionLab?: ReactionLab;
   live?: LiveRuntime;
 };
 type AuthSession = { configured: boolean; authenticated: boolean; username: string };
@@ -59,7 +72,7 @@ type BankruptcyReport = { id: string; cycleNumber: number; startedAt: number; en
 type AccountLogItem = { id: string; observedAt: number; report: BankruptcyReport };
 type Tab = "brain" | "orders" | "live" | "history" | "settings";
 type LiveView = "account" | "orders" | "api";
-type HistoryView = "trades" | "rejection_audit" | "account_logs";
+type HistoryView = "trades" | "reaction_lab" | "rejection_audit" | "account_logs";
 type PaperAction = "RESET" | "CLEAR_HISTORY";
 type PositionView = { entryAt?: number; entryPrice: number; stopPrice: number; targetPrice: number; markPrice?: number; markAt?: number; fresh: boolean };
 
@@ -81,6 +94,7 @@ const num = (value: number | null | undefined, digits = 3) => Number.isFinite(va
 const signed = (value: number, digits = 2) => `${value >= 0 ? "+" : ""}${num(value, digits)}`;
 const time = (value: number | null | undefined) => value ? new Date(value).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : "—";
 const sideText = (side: Side) => side === "LONG" ? "做多" : "做空";
+const impulseText = (side: Side) => side === "LONG" ? "向上异动" : "向下异动";
 const distancePct = (from: number, to: number) => Math.abs(to - from) / Math.max(from, 1e-9) * 100;
 const netRr = (entry: number, stop: number, target: number) => Math.max(0, Math.abs(target - entry) / Math.max(entry, 1e-9) - .0018)
   / Math.max(Math.abs(entry - stop) / Math.max(entry, 1e-9) + .0018, 1e-9);
@@ -164,7 +178,6 @@ export default function Home() {
   const [tab, setTab] = useState<Tab>("brain");
   const [auth, setAuth] = useState<AuthSession>({ configured: true, authenticated: false, username: "owner" });
   const [showLogin, setShowLogin] = useState(false);
-  const [showLiveConfirm, setShowLiveConfirm] = useState(false);
   const [liveBusy, setLiveBusy] = useState(false);
   const [liveActionError, setLiveActionError] = useState<string | null>(null);
   const [paperAction, setPaperAction] = useState<PaperAction | null>(null);
@@ -257,7 +270,6 @@ export default function Home() {
       const payload = await response.json() as { error?: string; live?: LiveRuntime };
       if (payload.live) setRuntime((current) => current ? { ...current, live: payload.live, liveMode: { requestedEnabled: payload.live!.requestedEnabled, operational: payload.live!.operational } } : current);
       if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-      setShowLiveConfirm(false);
     } catch (failure) { setLiveActionError(failure instanceof Error ? failure.message : "操作失败"); }
     finally { setLiveBusy(false); }
   };
@@ -291,7 +303,6 @@ export default function Home() {
   const liveControl = () => {
     if (!auth.authenticated) setShowLogin(true);
     else if (liveEnabled) void setLiveMode(false);
-    else setShowLiveConfirm(true);
   };
 
   const responseFresh = runtime != null && clock - receivedAt < RUNTIME_DISPLAY_TTL_MS && clock - runtime.generatedAt < RUNTIME_DISPLAY_TTL_MS;
@@ -315,11 +326,11 @@ export default function Home() {
   const cycleStart = runtime?.paperCycle?.startingEquity ?? INITIAL_EQUITY;
   const dailyPnl = runtime ? runtime.equity - (runtime.dailyStartEquity ?? cycleStart) : 0;
   const dailyProgress = Math.max(0, Math.min(100, dailyPnl / DAILY_PROFIT_TARGET * 100));
+  const activeReactions = runtime?.reactionLab?.active ?? [];
   const primary = openPositions[0] ? { symbol: openPositions[0].symbol, side: openPositions[0].position.side, state: openPositions[0].position.scenario, kind: "position" }
     : preparedPlans[0] ? { symbol: preparedPlans[0].symbol, side: preparedPlans[0].plan.side, state: preparedPlans[0].plan.marketState, kind: "plan" }
       : bestDecision ? { symbol: bestDecision.symbol, side: bestDecision.decision.side, state: bestDecision.decision.marketState, kind: "decision" } : null;
-  const primaryReady = primary ? Boolean(authorityOperational && runtime?.evidence[primary.symbol]?.fresh && runtime.evidence[primary.symbol]?.ancillaryFresh && runtime.evidence[primary.symbol]?.entryReady !== false) : false;
-  const headline = !authorityOperational ? "行情正在恢复，暂不进场" : primary?.kind === "position" ? `正在持有 ${primary.symbol.replace("_", "/")} ${primary.side === "LONG" ? "多单" : "空单"}` : primary && !primaryReady ? "计划已冻结，等待行情确认" : primary ? `准备${sideText(primary.side)} ${primary.symbol.replace("_", "/")}` : "继续观察，暂不开仓";
+  const headline = !authorityOperational ? "行情正在恢复，研究暂停" : primary?.kind === "position" ? `正在保护 ${primary.symbol.replace("_", "/")} ${primary.side === "LONG" ? "多单" : "空单"}` : activeReactions.length ? `正在比较 ${activeReactions.length} 组延续与反转` : "扫描异动，等待双向反应";
 
   return <main>
     <header className="topbar">
@@ -328,7 +339,7 @@ export default function Home() {
     </header>
 
     {tab === "brain" && <>
-      <section className="brain-hero"><div><p className="eyebrow">全市场资金雷达</p><h1>{headline}</h1><p className="hero-detail">已扫描 {runtime?.radar?.scanned ?? 0} 个可交易合约 · 当前 {runtime?.radar?.candidates.length ?? 0} 个异动候选 · 订单数量不设每日上限</p></div><div className="decision-badge"><small>今日目标进度</small><strong>{num(dailyProgress, 0)}%</strong><span>{signed(dailyPnl)} / +150 U</span></div></section>
+      <section className="brain-hero"><div><p className="eyebrow">双向反应实验 V1</p><h1>{headline}</h1><p className="hero-detail">已扫描 {runtime?.radar?.scanned ?? 0} 个可交易合约 · {activeReactions.length} 组观察中 · 只记影子结果，不产生新 PAPER / LIVE 订单</p></div><div className="decision-badge"><small>完整实验</small><strong>{runtime?.reactionLab?.completed ?? 0}</strong><span>延续 vs 反转</span></div></section>
 
       <section className="summary four">
         <article><small>模拟账户权益</small><strong>{runtime ? `${num(runtime.equity, 2)} U` : "—"}</strong><p>第 {runtime?.paperCycle?.number ?? 1} 轮 · 起始 {num(cycleStart, 0)} U</p></article>
@@ -342,34 +353,33 @@ export default function Home() {
     <nav className="tabs">{([['brain', '雷达'], ['orders', `订单 ${openPositions.length + preparedPlans.length || ''}`], ['live', `实盘 ${openLivePositions.length + openLiveEntries.length || ''}`], ['history', '复盘'], ['settings', '设置']] as const).map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => selectTab(key)}>{label}</button>)}</nav>
 
     <section className="radar-board" hidden={tab !== "brain"}>
-      <div className="radar-board-head"><div><small>实时异动</small><b>只把最强 3 个候选升级为 2 秒监控</b></div><span>{time(runtime?.radar?.lastScanAt)}</span></div>
+      <div className="radar-board-head"><div><small>事件触发器</small><b>异动只负责选样本，不再直接决定交易方向</b></div><span>{time(runtime?.radar?.lastScanAt)}</span></div>
       <div className="radar-candidates">{runtime?.radar?.candidates.slice(0, 6).map((item) => <article key={item.id}>
         <div><b>{item.symbol.replace("_", "/")}</b><small>{item.kind === "NEW_MONEY" ? "新增资金" : item.kind === "SQUEEZE" ? "空头挤压" : item.kind === "LIQUIDATION" ? "多头出清" : "价格异动"}</small></div>
-        <strong className={item.side === "LONG" ? "positive" : "negative"}>{item.side === "LONG" ? "做多" : "做空"}</strong>
-        <span>强度 {num(item.strength, 0)} · {item.confirmations}轮</span>
-      </article>)}{!runtime?.radar?.candidates.length && <p>正在扫描所有 Gate USDT 永续合约，出现异常资金后自动进入实时确认。</p>}</div>
+        <strong className={item.side === "LONG" ? "positive" : "negative"}>{impulseText(item.side)}</strong>
+        <span>强度 {num(item.strength, 0)} · {item.confirmations}轮 · 等待回撤后的延续/反转证据</span>
+      </article>)}{!runtime?.radar?.candidates.length && <p>正在扫描所有 Gate USDT 永续合约；异动出现后，同时观察延续、反转和不交易。</p>}</div>
     </section>
 
     <section className="markets" hidden={tab !== "brain"}>{runtime?.symbols.map((symbol) => {
       const evidence = runtime.evidence[symbol], marketFresh = Boolean(authorityOperational && evidence?.fresh && evidence?.ancillaryFresh && evidence?.entryReady !== false);
       const decision = marketFresh ? runtime.decisions[symbol] : null, plan = runtime.plans[symbol], position = runtime.positions[symbol];
       const routes = runtime.routes[symbol] ?? [];
-      const acceptedBreak = evidence?.range15m?.breakState === "BROKEN_UP" ? "向上" : evidence?.range15m?.breakState === "BROKEN_DOWN" ? "向下" : null;
-      const reclaimedEdge = routes.find((route) => route.kind === "EDGE_REJECTION");
+      const reaction = activeReactions.find((item) => item.symbol === symbol);
       const positionIntent: Decision | null = position?.status === "OPEN" ? { marketState: position.scenario, side: position.side,
         entryTrigger: position.entryPrice, invalidation: position.currentStop, target: position.currentTarget, score: 0,
         reason: ["沿冻结路线持仓；短周期变化只预警，完整确认后才调整保护"] } : null;
       const intent = positionIntent ?? (plan?.state === "PREPARED" ? plan : decision);
-      const eventIntent = Boolean(intent?.targetIdentity?.startsWith("EVENT_TARGET:") || position?.targetIdentity?.startsWith("EVENT_TARGET:"));
       const warmupTarget = Math.max(1, runtime.limits.warmupSnapshots ?? 4);
-      const status = !authorityOperational ? "后台循环恢复中" : !evidence?.fresh ? plan?.state === "PREPARED" ? "计划冻结 · 行情延迟" : "行情短暂延迟" : position?.status === "OPEN" ? "持仓中" : !evidence.ancillaryFresh ? "关键结构刷新中" : evidence.entryReady === false ? `恢复确认 ${evidence.recoveryFreshCount ?? 0}/2` : plan?.state === "PREPARED" ? "等待进场" : intent ? "发现机会" : reclaimedEdge ? "扫盘已收回 · 双向观察" : acceptedBreak ? `父区间${acceptedBreak}突破 · 分支观察` : evidence?.warmup < warmupTarget ? `预热 ${evidence?.warmup ?? 0}/${warmupTarget}` : "继续观察";
+      const status = !authorityOperational ? "后台循环恢复中" : !evidence?.fresh ? plan?.state === "PREPARED" ? "旧计划冻结 · 行情延迟" : "行情短暂延迟" : position?.status === "OPEN" ? "旧持仓保护中" : reaction ? "双向实验观察中" : evidence?.warmup < warmupTarget ? `预热 ${evidence?.warmup ?? 0}/${warmupTarget}` : "等待异动样本";
       return <article className="market" key={symbol}><div className="market-title"><div><small>{symbol.replace("_", "/")}</small><h2>{status}</h2></div><strong>{evidence?.midpoint ? num(evidence.midpoint, 5) : "—"}</strong></div>
-        <div className="plain-answer"><small>系统判断</small><b>{intent ? `${sideText(intent.side)} · ${eventIntent ? "资金异动跟随" : intent.routeKind === "INTERNAL_ROTATION" ? "区间内部迁移" : intent.routeKind === "BREAKOUT_RETEST" ? "突破回踩延续" : intent.routeKind === "FAILED_BREAKOUT_REVERSAL" ? "强假突破反转" : intent.routeKind === "EDGE_REJECTION" ? "扫流动性后震荡回归" : stateText[intent.marketState]}` : reclaimedEdge ? "扫盘收回后双分支观察" : acceptedBreak ? `15分钟父区间已${acceptedBreak}突破` : "暂时没有值得执行的方向"}</b><p>{waitReason(runtime, marketFresh, symbol)}</p></div>
+        <div className="plain-answer"><small>{position?.status === "OPEN" ? "持仓管理" : "研究判断"}</small><b>{position?.status === "OPEN" ? `${sideText(position.side)} · 只管理既有仓位` : reaction ? `${impulseText(reaction.impulseSide)} · 延续和反转同时观察` : "尚无方向结论"}</b><p>{position?.status === "OPEN" ? waitReason(runtime, marketFresh, symbol) : reaction ? `回撤 ${num(reaction.retraceRatio * 100, 0)}% · 延续确认 ${reaction.continuation.conditionStreak}/2 · 反转确认 ${reaction.reversal.conditionStreak}/2` : "异动出现后先观察价格回撤与主动资金，不把异动方向直接当成入场方向。"}</p></div>
+        {reaction && <section className="reaction-pair"><ReactionRouteCard title="延续分支" route={reaction.continuation} /><ReactionRouteCard title="反转分支" route={reaction.reversal} /></section>}
         {plan?.state === "CANCELLED" && plan.cancelReason && <p className="notice">最近计划撤销：{cancelText[plan.cancelReason] ?? plan.cancelReason}{plan.cancelledAt ? ` · ${time(plan.cancelledAt)}` : ""}</p>}
         {evidence?.optionalFresh === false && <p className="notice">OI、主动成交或清算数据部分延迟；关键盘口与周期结构仍独立工作，该项只降低确认度，不会强制撤销计划。</p>}
         {!!routes.length && <section className="route-map"><div className="route-map-head"><div><small>分段流动性路线</small><b>多个方案观察，单一方案执行</b></div><span>软计划不占保证金</span></div><div className="route-list">{routes.map((route) => <article className={route.executableNow ? "active" : ""} key={route.id}><div><span>{stageText[route.stage]}</span><b>{sideText(route.side)} · {routeText[route.kind]}</b></div><p>{num(route.entryTrigger, 5)} → {num(route.target, 5)} <small>{route.targetTimeframe} 流动性 · 确认 {num(route.confirmationScore * 100, 0)}% · 假突破风险 {num(route.fakeoutRisk * 100, 0)}%</small></p><em>{route.executableNow ? "可进入执行仲裁" : route.stage === "NODE_TO_NEXT" ? "到节点后重判" : route.blockReason ?? "继续观察确认"}</em></article>)}</div></section>}
         {position?.status === "OPEN" ? <div className="trade-levels"><div><small>实际进场</small><b>{num(position.entryPrice, 5)}</b></div><div><small>原始结构止损</small><b>{num(position.initialStop, 5)}</b></div><div><small>当前保护位</small><b>{num(position.currentStop, 5)}</b></div><div><small>当前目标</small><b>{num(position.currentTarget, 5)}</b></div></div> : intent && <div className="trade-levels"><div><small>准备进场</small><b>{num(intent.entryTrigger, 5)}</b></div><div><small>判断错误就退出</small><b>{num(intent.invalidation, 5)}</b></div><div><small>当前目标</small><b>{num(intent.target, 5)}</b></div><div><small>第一目标扣成本盈亏比</small><b>{num(netRr(intent.entryTrigger, intent.invalidation, intent.target), 2)} : 1</b></div></div>}
-        <div className="execution"><small>执行方式</small><b>{!marketFresh && plan?.state === "PREPARED" ? `原计划与边界保持不变；当前禁止成交，连续2份新盘口恢复后再核对，仍有效至 ${time(plan.expiresAt)}` : position?.status === "OPEN" ? waitReason(runtime, marketFresh, symbol) : plan?.state === "PREPARED" ? eventIntent ? `资金异动已确认；按当前实时价IOC进场，盘口逆向或超过允许滑点立即放弃` : plan.marketState === "BREAKOUT" ? `内部实时确认 ${num(plan.entryTrigger, 5)}；强突破连续 ${(plan.breakoutSignalCount ?? 0)}/4，确认后IOC，0.5R外不追` : `价格到达 ${num(plan.entryTrigger, 5)} 后连续实时确认 ${(plan.realtimeSignalCount ?? 0)}/3；确认后IOC，不预挂交易所` : intent ? "方向已形成，等待系统建立实时进场计划" : reclaimedEdge ? "反弹和再次下破同时观察；只有实时证据确认的分支才IOC进场" : "继续等待完整机会"}</b></div>
+        <div className="execution"><small>执行权限</small><b>{position?.status === "OPEN" ? "既有仓位继续执行原止损和退出规则" : "影子研究：记录触发价、止损、目标和完整成本，但不会下模拟单或实盘单"}</b></div>
         <details><summary>查看判断依据</summary><p>{intent?.reason.join("；") || "尚未形成完整判断"}</p><div className="targets"><span>上方吸引区：{num(evidence?.topLong?.price, 5)} · {sourceText[evidence?.topLong?.source ?? ""] ?? "识别中"}</span><span>下方吸引区：{num(evidence?.topShort?.price, 5)} · {sourceText[evidence?.topShort?.source ?? ""] ?? "识别中"}</span></div></details>
       </article>;
     }) ?? <div className="empty">正在读取市场数据…</div>}</section>
@@ -386,19 +396,20 @@ export default function Home() {
     <div hidden={tab !== "live"}><LiveCenter auth={auth} runtime={runtime} live={live} liveEnabled={liveEnabled} liveBusy={liveBusy} liveActionError={liveActionError} positions={openLivePositions} entries={openLiveEntries} skips={liveEntrySkips} onLogin={() => setShowLogin(true)} onToggle={liveControl} onCleanup={() => void setLiveMode(false)} /></div>
 
     <section className="history-panel" hidden={tab !== "history"}>
-      <div className="history-subnav">{([['trades', '交易记录'], ['rejection_audit', `拦截审计 ${runtime?.rejectionAudit?.completed || ''}`], ['account_logs', `账户日志 ${accountLogs.length || ''}`]] as const).map(([key, label]) => <button type="button" key={key} className={historyView === key ? "active" : ""} onClick={() => setHistoryView(key)}>{label}</button>)}</div>
+      <div className="history-subnav">{([['trades', '交易记录'], ['reaction_lab', `双向实验 ${runtime?.reactionLab?.completed || ''}`], ['rejection_audit', '旧方案归档'], ['account_logs', `账户日志 ${accountLogs.length || ''}`]] as const).map(([key, label]) => <button type="button" key={key} className={historyView === key ? "active" : ""} onClick={() => setHistoryView(key)}>{label}</button>)}</div>
       {historyView === "trades" && <><div className="section-heading"><div><h2>全部模拟交易</h2><p>进入复盘页才读取完整记录；之后只刷新最新一页，不请求额外行情图。</p></div><span>{history.filter((item) => item.status === "CLOSED").length} 笔已结束</span></div>
         {!history.length ? <div className="empty"><b>还没有历史交易</b><p>产生第一笔模拟交易后会自动出现在这里。</p></div> : <div className="history-table">{history.map((item) => <HistoryOrder key={item.id} item={item} />)}</div>}</>}
+      {historyView === "reaction_lab" && <ReactionLabPanel lab={runtime?.reactionLab ?? null} />}
       {historyView === "rejection_audit" && <RejectionAuditPanel audit={runtime?.rejectionAudit ?? null} />}
       {historyView === "account_logs" && <AccountLogs cycle={runtime?.paperCycle ?? null} items={accountLogs} />}
     </section>
 
     <section className="settings-panel" hidden={tab !== "settings"}>
       <button className="setting-row" type="button" onClick={() => auth.authenticated ? void fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(() => { setAuth({ ...auth, authenticated: false }); setRuntime(runtime ? { ...runtime, live: undefined } : runtime); }) : setShowLogin(true)}><div><b>所有者账户</b><p>{auth.authenticated ? "安全登录有效30天；每次打开页面自动续期。" : "登录后才可以查看真实账户并操作实盘开关。"}</p></div><span className={`setting-value ${auth.authenticated ? "online" : "locked"}`}>{auth.authenticated ? "owner · 退出 ›" : "登录 ›"}</span></button>
-      <button className="setting-row" type="button" disabled={liveBusy} onClick={liveControl}><div><b>实盘交易开关</b><p>{liveEnabled ? "关闭后停止新进场；已有仓位继续保护并按策略退出。" : "开启后，实盘完全复用全市场资金异动策略、IOC进场和10%组合风险硬上限。"}</p></div><span className={`setting-value ${liveEnabled && live?.operational ? "online" : "locked"}`}>{liveBusy ? "处理中…" : !auth.authenticated ? "需登录 ›" : liveEnabled ? live?.operational ? "已开启 ›" : "已开启·待恢复 ›" : "已关闭 ›"}</span></button>
-      {auth.authenticated && <><Setting title="Gate 实盘账户" detail={`可用 ${num(live?.available, 2)} U · ${openLivePositions.length} 个真实持仓`} value={live?.equity != null ? `${num(live.equity, 2)} U` : "连接中"} tone={live?.credentialConfigured ? "online" : "locked"}/><Setting title="实盘执行状态" detail={friendlyLiveError(live?.lastError) || "全市场每10秒扫描资金异动；候选进入2秒实时资金流确认后按当前价IOC。"} value={live?.operational ? "可开仓" : liveEnabled ? "暂停新单" : "已关闭"} tone={live?.operational ? "online" : "locked"}/></>}
+      <button className="setting-row" type="button" disabled={liveBusy || !liveEnabled} onClick={liveControl}><div><b>实盘交易开关</b><p>{liveEnabled ? "建议立即关闭；研究版不会用双向实验产生新仓，已有仓位继续保护。" : "保持关闭。双向实验没有 PAPER / LIVE 下单权限，验证正期望后才会另行讨论执行版。"}</p></div><span className="setting-value locked">{liveBusy ? "处理中…" : liveEnabled ? "关闭 ›" : "研究锁定"}</span></button>
+      {auth.authenticated && <><Setting title="Gate 实盘账户" detail={`可用 ${num(live?.available, 2)} U · ${openLivePositions.length} 个真实持仓`} value={live?.equity != null ? `${num(live.equity, 2)} U` : "连接中"} tone={live?.credentialConfigured ? "online" : "locked"}/><Setting title="实盘执行状态" detail={friendlyLiveError(live?.lastError) || "双向实验只记录影子结果，不向 Gate 提交新订单；既有真实仓位仍保留保护和对账。"} value={live?.operational ? "仅保护旧仓" : liveEnabled ? "无新单权限" : "已关闭"} tone={live?.operational ? "locked" : "locked"}/></>}
       <Setting title="最大组合风险" detail="10%是硬上限；全部高相关同向持仓风险另限6.5%，均含手续费和压力滑点。" value="10%"/>
-      <Setting title="每日交易目标" detail="1000 U 本金以每日净盈利 150 U 为进取目标；不限制订单数量，也不会为了凑目标放宽信号。暂不设置每日亏损停机线。" value="+150 U"/>
+      <Setting title="当前研究目标" detail="分别验证延续、反转与不交易的成本后结果；在样本证明正期望前，不把成交频率当作目标。" value="正期望"/>
       <Setting title="保证金与杠杆" detail="动态杠杆目标每个执行计划约占 10% 保证金；挂单与持仓合计不超过权益 30%，并保留强平缓冲。" value="动态"/>
       <Setting title="持仓时间与止盈" detail="不固定时间，不固定止盈；到达流动性节点后重新判断下一段。" value="分段"/>
       <Setting title="数据容错" detail={`累计短时失败 ${totalFeedFailures} 次 · 自动恢复 ${totalFeedRecoveries} 次 · 最大观测延迟 ${num(maxFeedLag / 1_000, 2)} 秒`} value={activeFeedSuspensions ? `${activeFeedSuspensions}币冻结` : "正常"} tone={activeFeedSuspensions ? "locked" : "online"}/>
@@ -411,7 +422,6 @@ export default function Home() {
     </section>
 
     {showLogin && <LoginModal configured={auth.configured} onClose={() => setShowLogin(false)} onSuccess={(session) => { setAuth(session); setShowLogin(false); location.reload(); }} />}
-    {showLiveConfirm && <div className="modal-backdrop" onClick={() => !liveBusy && setShowLiveConfirm(false)}><section className="modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}><span className="lock-icon">实</span><h2>确认开启实盘</h2><p>开启后，系统每10秒扫描 Gate 全部合格 USDT 永续合约，把最强候选升级到2秒实时确认；只有资金流同向时才提交当前价 IOC，成交后立即建立硬止损。</p><p>实盘账户总风险硬上限为10%，同方向相关风险不超过6.5%；只有你登录后可以改变这个开关。</p>{liveActionError && <p className="form-error">{liveActionError}</p>}<div className="modal-actions"><button className="secondary" type="button" disabled={liveBusy} onClick={() => setShowLiveConfirm(false)}>取消</button><button type="button" disabled={liveBusy} onClick={() => void setLiveMode(true)}>{liveBusy ? "正在核对 Gate…" : "确认开启实盘"}</button></div></section></div>}
     {paperAction && <div className="modal-backdrop" onClick={() => !paperBusy && setPaperAction(null)}><section className="modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}><span className="lock-icon">模</span><h2>{paperAction === "RESET" ? "确认重置模拟账户" : "确认清除模拟历史"}</h2><p>{paperAction === "RESET" ? "模拟权益将重置为 1,000 U 并开始新一轮；当前模拟持仓只会在行情新鲜时按当前价结束，历史记录会保留。" : "已结束的模拟交易和账户日志将永久删除；当前模拟权益、持仓以及全部 Gate 实盘数据不会改变。"}</p><p>这项操作只影响 PAPER 模拟系统，不会下单、平仓或修改实盘开关。</p>{paperActionError && <p className="form-error">{paperActionError}</p>}<div className="modal-actions"><button className="secondary" type="button" disabled={paperBusy} onClick={() => setPaperAction(null)}>取消</button><button className="danger-action" type="button" disabled={paperBusy} onClick={() => void runPaperAction()}>{paperBusy ? "处理中…" : paperAction === "RESET" ? "确认重置" : "确认清除"}</button></div></section></div>}
   </main>;
 }
@@ -499,13 +509,13 @@ function LiveCenter({ auth, runtime, live, liveEnabled, liveBusy, liveActionErro
   return <section className="live-center">
     <div className="live-subnav">{([['account', '实盘账户'], ['orders', `实盘订单 ${positions.length + entries.length || ''}`], ['api', 'API 管理']] as const).map(([key, label]) => <button type="button" key={key} className={view === key ? "active" : ""} onClick={() => selectView(key)}>{label}</button>)}</div>
     {view === "account" && <>
-      <section className="live-status-card"><div><small>Gate 实盘状态</small><h2>{liveEnabled ? live?.operational ? "实盘已开启" : "实盘待恢复 · 暂停新单" : "实盘已关闭"}</h2><p>{readableLiveError || (skips.length ? `${skips.length} 个计划受当前账户规模限制，系统会继续等待其他可执行计划` : connectionText)}</p></div><div className="live-actions"><button type="button" disabled={liveBusy || !credential?.configured || liveEnabled} className="danger-outline" onClick={onCleanup}>撤销系统遗留挂单</button><button type="button" disabled={liveBusy || !credential?.configured} className={liveEnabled ? "danger-action" : "primary-action"} onClick={onToggle}>{liveBusy ? "正在与 Gate 核对…" : liveEnabled ? "关闭实盘并撤单" : "开启实盘"}</button></div></section>
+      <section className="live-status-card"><div><small>Gate 实盘状态</small><h2>{liveEnabled ? "等待关闭旧实盘状态" : "实盘已关闭 · 研究锁定"}</h2><p>{readableLiveError || (liveEnabled ? "双向实验不会开新仓；请关闭实盘状态" : "账户功能保留，双向实验没有下单权限")}</p></div><div className="live-actions"><button type="button" disabled={liveBusy || !credential?.configured || liveEnabled} className="danger-outline" onClick={onCleanup}>撤销系统遗留挂单</button><button type="button" disabled={liveBusy || !credential?.configured || !liveEnabled} className="danger-action" onClick={onToggle}>{liveBusy ? "正在与 Gate 核对…" : liveEnabled ? "关闭实盘并撤单" : "研究版禁止开启"}</button></div></section>
       {liveActionError && <p className="form-error">{liveActionError}</p>}
       {!liveEnabled && <p className="cleanup-help">如果 Gate 仍显示以前由本系统创建的挂单，点“撤销系统遗留挂单”。只撤销带本系统标签的入场单，不会撤销你的手工订单。</p>}
       <section className="summary four live-summary"><article><small>真实账户权益</small><strong>{num(live?.equity, 2)} U</strong><p>{connectionText}</p></article><article><small>可用保证金</small><strong>{num(live?.available, 2)} U</strong><p>Gate 返回的可用余额</p></article><article><small>持仓浮盈亏</small><strong className={liveFloating >= 0 ? "positive" : "negative"}>{signed(liveFloating)} U</strong><p>{positions.length} 个真实持仓</p></article><article><small>已计划风险</small><strong>{num(liveRisk, 2)} U</strong><p>保证金约 {num(occupiedMargin, 2)} U · 总上限 10%</p></article></section>
       <div className="live-facts"><Setting title="API 状态" detail={credential?.configured ? `密钥 ${credential.keyHint ?? "已加密"} · ${time(credential.lastVerifiedAt)}` : "进入 API 管理保存或更换"} value={credential?.configured ? "已验证" : "未配置"} tone={credential?.configured ? "online" : "locked"}/><Setting title="最近账户核对" detail="页面关闭后后台仍按策略运行。" value={time(live?.lastSyncAt)} tone={live?.lastSyncAt ? "online" : "locked"}/></div>
     </>}
-    {view === "orders" && <section className="panel-list live-orders">{!positions.length && !entries.length && !skips.length && <div className="empty"><b>当前没有实盘订单</b><p>所有路线都在后台观察，只有实时证据确认后才提交IOC，不预挂接刀单。</p></div>}{skips.map((skip) => <article className="live-skip-card" key={`live-skip:${skip.symbol}:${skip.planId}`}><div><small>{skip.symbol.replace("_", "/")}</small><h3>本轮未成交</h3></div><p>{skip.reason}</p><span>实盘仍在运行；出现账户可承受的新计划时会继续实时确认。</span></article>)}{positions.map((position) => { const evidence = runtime?.evidence[position.symbol]; const protection = position.stopPrice ?? position.currentStop; return <OrderCard key={`live:${position.symbol}`} symbol={position.symbol} side={position.side} label="实盘持仓" state={position.scenario} notional={position.notional} equity={live?.equity ?? INITIAL_EQUITY} mode="LIVE" leverage={position.leverage} margin={position.margin} positionView={{ entryAt: position.entryAt, entryPrice: position.entryPrice, stopPrice: protection, targetPrice: position.currentTarget, markPrice: evidence?.midpoint, markAt: evidence?.observedAt, fresh: Boolean(evidence?.fresh) }} values={[["真实进场", position.entryPrice], ["原始止损", position.initialStop], ["交易所保护位", protection], ["动态目标", position.currentTarget], ["实际计划风险", position.plannedRisk]]} />; })}{entries.map((entry) => <OrderCard key={`live:${entry.symbol}:entry`} symbol={entry.symbol} side={entry.side} label={entry.status === "ERROR" ? "异常待核对" : "实时确认IOC"} state={entry.scenario} notional={entry.notional} equity={live?.equity ?? INITIAL_EQUITY} mode="LIVE" leverage={entry.leverage} margin={entry.margin} note={friendlyLiveError(entry.lastError) ?? undefined} values={[["确认进场参考", entry.trigger], ["结构止损", entry.invalidation], ["动态目标", entry.target], ["实际计划风险", entry.plannedRisk]]} />)}</section>}
+    {view === "orders" && <section className="panel-list live-orders">{!positions.length && !entries.length && !skips.length && <div className="empty"><b>当前没有实盘订单</b><p>双向实验只记录影子结果，不会向 Gate 提交新订单。</p></div>}{skips.map((skip) => <article className="live-skip-card" key={`live-skip:${skip.symbol}:${skip.planId}`}><div><small>{skip.symbol.replace("_", "/")}</small><h3>旧计划未成交</h3></div><p>{skip.reason}</p><span>已停止新计划，记录仅作历史核对。</span></article>)}{positions.map((position) => { const evidence = runtime?.evidence[position.symbol]; const protection = position.stopPrice ?? position.currentStop; return <OrderCard key={`live:${position.symbol}`} symbol={position.symbol} side={position.side} label="实盘持仓" state={position.scenario} notional={position.notional} equity={live?.equity ?? INITIAL_EQUITY} mode="LIVE" leverage={position.leverage} margin={position.margin} positionView={{ entryAt: position.entryAt, entryPrice: position.entryPrice, stopPrice: protection, targetPrice: position.currentTarget, markPrice: evidence?.midpoint, markAt: evidence?.observedAt, fresh: Boolean(evidence?.fresh) }} values={[["真实进场", position.entryPrice], ["原始止损", position.initialStop], ["交易所保护位", protection], ["动态目标", position.currentTarget], ["实际计划风险", position.plannedRisk]]} />; })}{entries.map((entry) => <OrderCard key={`live:${entry.symbol}:entry`} symbol={entry.symbol} side={entry.side} label={entry.status === "ERROR" ? "异常待核对" : "旧单待清理"} state={entry.scenario} notional={entry.notional} equity={live?.equity ?? INITIAL_EQUITY} mode="LIVE" leverage={entry.leverage} margin={entry.margin} note={friendlyLiveError(entry.lastError) ?? undefined} values={[["原进场参考", entry.trigger], ["结构止损", entry.invalidation], ["动态目标", entry.target], ["实际计划风险", entry.plannedRisk]]} />)}</section>}
     {view === "api" && <section className="credential-panel"><div className="section-heading"><div><h2>Gate 实盘 API</h2><p>新 API 验证成功后会加密覆盖旧 API，页面永远不回显 Secret。</p></div><span className={credential?.configured ? "positive" : "negative"}>{credential?.configured ? "已保存" : "未保存"}</span></div><div className="credential-current"><div><small>当前 API</small><b>{credential?.keyHint ?? "尚未配置"}</b><p>{credential?.configured ? `最后验证 ${time(credential.lastVerifiedAt)} · Gate 实盘` : "填写下方两项后保存"}</p></div>{credential?.configured && <button className="danger-outline" type="button" disabled={credentialBusy || liveEnabled || positions.length > 0 || entries.length > 0} onClick={() => void deleteCredential()}>删除 API</button>}</div><form className="credential-form" onSubmit={saveCredential}><label><span>API Key</span><input value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" spellCheck={false} placeholder="填写新的 Gate API Key" /></label><label><span>API Secret</span><input type="password" value={apiSecret} onChange={(event) => setApiSecret(event.target.value)} autoComplete="new-password" spellCheck={false} placeholder="填写新的 Gate API Secret" /></label><p className="credential-help">只使用 Gate USDT 永续合约读取与交易权限；不要开启提现权限。保存 API 不会开启实盘。API 过期时直接验证并覆盖；只有 Gate 已无持仓和挂单时才允许删除。</p>{liveEnabled && <p className="form-error">请先关闭实盘开关，才可以更换或删除 API。</p>}{credentialError && <p className="form-error">{credentialError}</p>}{credentialNotice && <p className="form-success">{credentialNotice}</p>}{verification && <p className="credential-check">已核对：权益 {num(verification.equity, 2)} U · 持仓 {verification.positions} · 普通挂单 {verification.orders} · 条件单 {verification.conditionalOrders}</p>}<button className="primary-action" type="submit" disabled={credentialBusy || liveEnabled || apiKey.trim().length < 8 || apiSecret.trim().length < 8}>{credentialBusy ? "正在验证 Gate…" : credential?.configured ? "验证并更换 API" : "验证并保存 API"}</button></form></section>}
   </section>;
 }
@@ -575,6 +585,31 @@ function AccountLogs({ cycle, items }: { cycle: PaperCycleSummary | null; items:
   </div>;
 }
 
+function ReactionRouteCard({ title, route }: { title: string; route: ReactionRoute }) {
+  const status = route.status === "WATCHING" ? `条件确认 ${route.conditionStreak}/2` : route.status === "OPEN" ? "影子持有中"
+    : route.status === "NO_TRIGGER" ? "未触发（不交易）" : route.outcome === "TARGET_FIRST" ? "目标先到"
+      : route.outcome === "STOP_FIRST" ? "止损先到" : route.outcome === "STALLED_EXIT" ? "10分钟无推进" : "20分钟到期";
+  return <article><div><small>{title}</small><b>{sideText(route.side)} · {status}</b></div>
+    {route.entryPrice != null ? <span>{num(route.entryPrice, 5)} → {num(route.targetPrice, 5)}<small>止损 {num(route.stopPrice, 5)}</small></span> : <span>等待价格结构和主动资金同时确认</span>}
+  </article>;
+}
+
+function ReactionLabPanel({ lab }: { lab: ReactionLab | null }) {
+  const statCard = (branch: "CONTINUATION" | "REVERSAL", title: string) => {
+    const row = lab?.stats[branch];
+    const resolved = row?.resolved ?? 0;
+    return <article><div><small>{title}</small><b>{row?.triggered ?? 0} 次触发 / {row?.noTrigger ?? 0} 次不交易</b></div><strong>{resolved >= 30 ? `${num((row?.netReturnRateSum ?? 0) / resolved * 100, 3)}%` : "积累样本"}</strong><dl><div><dt>机会数</dt><dd>{row?.opportunities ?? 0}</dd></div><div><dt>已结算</dt><dd>{resolved}</dd></div><div><dt>扣成本盈利</dt><dd>{num((row?.profitableAfterCost ?? 0) / Math.max(resolved, 1) * 100, 1)}%</dd></div><div><dt>覆盖成本</dt><dd>{num((row?.feeCovered ?? 0) / Math.max(resolved, 1) * 100, 1)}%</dd></div><div><dt>目标/止损</dt><dd>{row?.targetFirst ?? 0}/{row?.stopFirst ?? 0}</dd></div></dl></article>;
+  };
+  return <div className="rejection-audit reaction-lab">
+    <div className="section-heading"><div><h2>延续 / 反转配对实验</h2><p>同一异动同时观察两条互斥方向；冻结各自触发价、止损和目标，扣除0.18%完整成本。只研究，不下单。</p></div><span>{lab?.activeCount ?? 0} 组观察中 · {lab?.completed ?? 0} 组完成</span></div>
+    <p className="notice">这不是盈利承诺。至少每个分支30笔完整结算前只看运行正确性；之后再用未参与调参的新样本判断是否存在可执行正期望。</p>
+    <div className="audit-rules">{statCard("CONTINUATION", "回撤后延续")}{statCard("REVERSAL", "深回撤后反转")}</div>
+    {!!lab?.active.length && <div className="reaction-recent"><h3>当前实验</h3>{lab.active.map((item) => <article key={item.id}><div><b>{item.symbol.replace("_", "/")} · {impulseText(item.impulseSide)}</b><small>{time(item.startedAt)} · 回撤 {num(item.retraceRatio * 100, 0)}%</small></div><ReactionRouteCard title="延续" route={item.continuation} /><ReactionRouteCard title="反转" route={item.reversal} /></article>)}</div>}
+    {!!lab?.recent.length && <div className="audit-recent"><h3>最近完成的配对实验</h3>{lab.recent.map((item) => <article key={item.id}><div><b>{item.symbol.replace("_", "/")} · {impulseText(item.impulseSide)}</b><small>{time(item.startedAt)}</small></div><span>延续：{item.continuation.outcome === "NO_TRIGGER" ? "不交易" : item.continuation.outcome} · 反转：{item.reversal.outcome === "NO_TRIGGER" ? "不交易" : item.reversal.outcome}</span><strong>成本后 {signed((item.continuation.netReturnRate ?? 0) * 100, 2)}% / {signed((item.reversal.netReturnRate ?? 0) * 100, 2)}%</strong></article>)}</div>}
+    {!lab?.activeCount && !lab?.completed && <div className="empty"><b>等待第一组双向样本</b><p>异动连续确认后会进入3分钟反应观察；没有满足条件也会明确记为“不交易”。</p></div>}
+  </div>;
+}
+
 function RejectionAuditPanel({ audit }: { audit: RejectionAudit | null }) {
   const rows = Object.values(audit?.rules ?? {}).sort((left, right) => right.resolved - left.resolved);
   const primaryRows = Object.values(audit?.primaryRules ?? {}).sort((left, right) => right.resolved - left.resolved);
@@ -588,7 +623,8 @@ function RejectionAuditPanel({ audit }: { audit: RejectionAudit | null }) {
     return <article key={row.id} className={suspicious ? "suspect" : ""}><div><small>{row.kind === "EXECUTION" ? "执行硬门槛" : row.kind === "ECONOMICS" ? "成本门槛" : row.kind === "QUALITY" ? "评分组成项" : "方向门槛"}</small><b>{row.label}</b></div><strong>{row.resolved < 30 ? "样本不足" : suspicious ? "疑似误杀" : decisive ? "暂时保留" : "关联观察"}</strong><dl><div><dt>完整样本</dt><dd>{row.resolved}</dd></div><div><dt>扣成本盈利</dt><dd>{num(profitRate * 100, 1)}%</dd></div><div><dt>覆盖手续费</dt><dd>{num(feeRate * 100, 1)}%</dd></div><div><dt>目标/止损先到</dt><dd>{row.targetFirst}/{row.stopFirst}</dd></div><div><dt>平均净变动</dt><dd>{signed(averageNet * 100, 2)}%</dd></div></dl></article>;
   })}</div>;
   return <div className="rejection-audit">
-    <div className="section-heading"><div><h2>被拦截机会的影子复盘</h2><p>冻结拦截时的方向、价格、止损与目标，复用全市场价格跟踪20分钟；只做研究，不下单、不自动修改规则。</p></div><span>{audit?.pendingCount ?? 0} 笔跟踪中 · {audit?.completed ?? 0} 笔完成</span></div>
+    <div className="section-heading"><div><h2>旧单向方案审计（已归档）</h2><p>这是旧“顺异动方向”方案的历史证据，只保留查看，不再新增样本，也不再据此产生订单。</p></div><span>{audit?.completed ?? 0} 笔历史完成</span></div>
+    {!!audit?.pendingCount && <p className="notice">版本切换时仍有 {audit.pendingCount} 笔旧影子样本未完成；它们已冻结，不会混入新双向实验统计。</p>}
     {!audit?.completed ? <div className="empty"><b>正在积累第一批样本</b><p>版本上线后，每个被拦截的异动只记录一次；20分钟内按目标先到、止损先到或到期价格结算，并扣除完整交易成本。</p></div> : <>
       {audit.completed < 30 && <p className="notice">当前只有 {audit.completed} 笔完整样本，先看数据，不删规则；至少30笔独立失败样本才显示初步误杀判断。</p>}
       {!!primaryRows.length && <><div className="section-heading"><div><h3>第一道拦截</h3><p>只把订单归给当时最先阻止进场的规则；仍可能同时存在其他问题。</p></div></div>{ruleCards(primaryRows)}</>}

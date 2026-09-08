@@ -181,8 +181,7 @@ export function assessEventEntry(input: {
   roundTripFrictionRate: number;
 }): EventEntryAssessment {
   const direction = input.candidate.side === "LONG" ? 1 : -1;
-  const alignedFlow = direction * (input.flow.ofi * 0.45 + input.flow.takerDelta * 0.35
-    + clamp(input.flow.openInterestDelta, -1, 1) * 0.20);
+  const alignedFlow = eventAlignedFlow(input.candidate.side, input.flow);
   const bestBid = input.snapshot.bids[0]?.price ?? 0;
   const bestAsk = input.snapshot.asks[0]?.price ?? 0;
   const spreadBps = bestBid > 0 && bestAsk >= bestBid ? (bestAsk - bestBid) / ((bestAsk + bestBid) / 2) * 10_000 : Infinity;
@@ -226,4 +225,9 @@ export function assessEventEntry(input: {
   return { accepted: blocker == null, blocker, alignedFlow, spreadBps, nearBidDepthUsd, nearAskDepthUsd,
     extensionRate, costShare, conservativeWinRate, expectedReturnRate, qualityScore,
     qualityRequired: MIN_EVENT_QUALITY_SCORE, qualityEvidence, failedRules };
+}
+
+export function eventAlignedFlow(side: "LONG" | "SHORT", flow: FlowEvidence) {
+  const direction = side === "LONG" ? 1 : -1;
+  return direction * (flow.ofi * 0.45 + flow.takerDelta * 0.35 + clamp(flow.openInterestDelta, -1, 1) * 0.20);
 }

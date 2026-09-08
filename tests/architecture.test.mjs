@@ -71,7 +71,7 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(worker, /await this\.syncLive\(Date\.now\(\), false, true\)/);
   assert.match(worker, /if \(!await ownerAuthenticated\(request, env\)\) return json\(\{ error: "请先登录" \}, 401\)/);
   assert.match(worker, /sameOriginMutation\(request\)/);
-  assert.match(worker, /const \{ outbox, live, paperCycle, bankruptcyOutbox, rejectionAudit, \.\.\.publicRuntime \} = this\.runtime/);
+  assert.match(worker, /const \{ outbox, live, paperCycle, bankruptcyOutbox, rejectionAudit, reactionLab, \.\.\.publicRuntime \} = this\.runtime/);
   assert.match(worker, /paperCycleSummary\(paperCycle, this\.authorityView\.equity\)/);
   assert.match(worker, /PAPER_CYCLE_BANKRUPTCY/);
   assert.match(worker, /PAPER_BANKRUPTCY/);
@@ -117,7 +117,7 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(page, /软失效观察/);
   assert.match(page, /AbortController/);
   assert.match(page, /document\.hidden/);
-  assert.match(page, /全市场资金雷达/);
+  assert.match(page, /双向反应实验 V1/);
   assert.match(page, /模拟账户权益/);
   assert.match(page, /\{tab === "brain" && <>\s*<section className="brain-hero">/);
   assert.ok(page.indexOf('{tab === "brain" && <>') < page.indexOf('模拟账户权益'));
@@ -130,7 +130,7 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(page, /所有者登录/);
   assert.match(page, /安全登录有效30天/);
   assert.match(worker, /authSession[\s\S]*Set-Cookie[\s\S]*ownerSessionCookie/);
-  assert.match(page, /确认开启实盘/);
+  assert.match(page, /研究版禁止开启/);
   assert.match(page, /实盘交易开关/);
   assert.match(page, /重置模拟账户/);
   assert.match(page, /清除模拟历史/);
@@ -145,7 +145,7 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(worker, /entrySkips/);
   assert.match(live, /function parseGateJson/);
   assert.match(live, /Math\.max\(1, Math\.floor\(sized\.notional \/ contractNotional\)\)/);
-  assert.match(page, /本轮未成交/);
+  assert.match(page, /旧计划未成交/);
   assert.match(live, /expiration: GATE_TRIGGER_DAY_SECONDS/);
   assert.match(live, /expiration: GATE_TRIGGER_DAY_SECONDS \* GATE_TRIGGER_MAX_DAYS/);
   assert.doesNotMatch(page, /function CandleChart/);
@@ -168,12 +168,10 @@ test("owner-authenticated live API is isolated while the operator UI explains ev
   assert.match(worker, /realtimeEntryConfirmed/);
   assert.match(live, /PORTFOLIO_MARGIN_CAP/);
   assert.match(live, /openMargin/);
-  assert.match(page, /内部实时确认/);
   assert.match(page, /实时 IOC/);
-  assert.match(page, /强突破连续/);
-  assert.match(page, /不预挂交易所/);
+  assert.match(page, /双向实验只记录影子结果/);
   assert.match(page, /authorityOperational && evidence\?\.fresh && evidence\?\.ancillaryFresh/);
-  assert.match(page, /订单.*实盘.*历史.*设置/s);
+  assert.match(page, /订单.*实盘.*复盘.*设置/s);
   assert.doesNotMatch(layout, /requireChatGPTUser|redirect|signin-with-chatgpt/);
   assert.equal(await read("app/chatgpt-auth.ts").then(() => false, () => true), true);
   assert.equal(await read("lib/auth-paths.ts").then(() => false, () => true), true);
@@ -226,7 +224,23 @@ test("rejected entry audit is bounded, observational and reuses the bulk ticker 
   assert.match(worker, /isolatedRules: rejectionAudit\.isolatedRules \?\? \{\}/);
   assert.match(worker, /combinations: rejectionAudit\.combinations \?\? \{\}/);
   assert.match(worker, /recent: rejectionAudit\.recent\.slice\(-20\)\.reverse\(\)/);
+  assert.doesNotMatch(worker, /advanceRejectionAudit|recordRejectedCandidate/);
   assert.doesNotMatch(audit, /fetch\(|DB\.prepare|D1Database|GateLiveClient/);
+});
+
+test("paired reaction lab is bounded, non-executable and keeps no-trade controls", async () => {
+  const [lab, worker, page] = await Promise.all([read("lib/reaction-lab.ts"), read("worker/index-clean.ts"), read("app/page.tsx")]);
+  assert.match(lab, /REACTION_OBSERVATION_MS = 3 \* 60_000/);
+  assert.match(lab, /MAX_ACTIVE_REACTIONS = 36/);
+  assert.match(lab, /"CONTINUATION" \| "REVERSAL"/);
+  assert.match(lab, /"NO_TRIGGER"/);
+  assert.doesNotMatch(lab, /fetch\(|DB\.prepare|D1Database|GateLiveClient|reconcilePaper/);
+  assert.match(worker, /const decision: Decision \| null = null/);
+  assert.match(worker, /allowOpen: false/);
+  assert.match(worker, /if \(body\.enabled\) return json\(\{ ok: false, error: "双向实验仍是影子研究，实盘新开仓已锁定"/);
+  assert.match(worker, /advanceReactionLab/);
+  assert.match(page, /只记影子结果，不产生新 PAPER \/ LIVE 订单/);
+  assert.match(page, /旧单向方案审计（已归档）/);
 });
 
 test("PAPER and LIVE share bounded sizing and meaningful net-profit economics", async () => {

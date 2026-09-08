@@ -1,4 +1,4 @@
-export const SYSTEM_VERSION = "market-anomaly-scalper-v1";
+export const SYSTEM_VERSION = "paired-reaction-lab-v1";
 export const PORTFOLIO_RISK_CAP = 0.10;
 export const CORRELATED_DIRECTION_RISK_CAP = 0.065;
 export const STALE_AFTER_MS = 5_000;
