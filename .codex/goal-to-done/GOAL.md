@@ -2,7 +2,7 @@
 
 ## Active hotfix — 2026-09-08 stable realtime candidate pool
 
-Stop the three-symbol realtime pool from replacing still-valid resident anomaly candidates every ten-second radar ranking. Preserve locked exposure first, then retain current symbols that remain candidates, and promote new ranked candidates only into slots whose prior candidate expired. Restore sustained four-book warmup and minute evidence without changing entry gates, market-data cadence, risk, UI, credentials, or LIVE authority.
+Stop the three-symbol realtime pool from replacing still-valid entry-eligible anomaly candidates every ten-second radar ranking. Preserve locked exposure first, then retain current `NEW_MONEY` symbols, and promote new ranked `NEW_MONEY` candidates ahead of observation-only anomalies. Restore sustained four-book warmup and minute evidence without changing entry gates, market-data cadence, risk, UI, credentials, or LIVE authority.
 
 ## Active upgrade — 2026-09-08 evidence-gated anomaly entry
 

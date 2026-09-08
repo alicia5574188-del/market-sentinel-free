@@ -96,4 +96,8 @@ test("realtime pool keeps valid residents and replaces only candidates that expi
     candidates: ["D_USDT", "A_USDT", "B_USDT"],
     fallback: ["F_USDT"], limit: 3,
   }), ["C_USDT", "A_USDT", "B_USDT"]);
+  assert.deepEqual(selectRealtimePool({
+    locked: [], current: ["PRICE_SHOCK_A", "PRICE_SHOCK_B", "PRICE_SHOCK_C"],
+    candidates: ["NEW_MONEY_WLD"], fallback: ["PRICE_SHOCK_D"], limit: 3,
+  }), ["NEW_MONEY_WLD", "PRICE_SHOCK_A", "PRICE_SHOCK_B"]);
 });

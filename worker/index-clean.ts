@@ -358,7 +358,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const locked = this.runtime.symbols.filter((symbol) => this.runtime.positions[symbol]?.status === "OPEN"
       || this.runtime.plans[symbol]?.state === "PREPARED" || this.runtime.live.positions[symbol]?.status === "OPEN"
       || Boolean(this.runtime.live.entries[symbol] && !["FILLED", "CANCELLED"].includes(this.runtime.live.entries[symbol]!.status)));
-    const ranked = radar.candidates.map((row) => row.symbol);
+    const ranked = radar.candidates.filter((row) => row.kind === "NEW_MONEY").map((row) => row.symbol);
     const liquidFallback = rows.filter((row) => eligible.has(row.symbol)).sort((a, b) => b.volume24hUsd - a.volume24hUsd).map((row) => row.symbol);
     const next = selectRealtimePool({ locked, current: this.runtime.symbols, candidates: ranked,
       fallback: liquidFallback, limit: MAX_OPEN_POSITIONS });

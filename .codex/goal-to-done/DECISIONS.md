@@ -2,7 +2,7 @@
 
 ## 2026-09-08 — Realtime promotion needs residence hysteresis
 
-- A ten-second ranking change may not evict a current realtime symbol while it remains an active radar candidate. Locked positions/plans remain first, valid resident candidates remain next, and only expired candidate slots admit newly ranked symbols.
+- A ten-second ranking change may not evict a current realtime symbol while it remains an entry-eligible `NEW_MONEY` radar candidate. Locked positions/plans remain first, valid resident `NEW_MONEY` candidates remain next, and newly ranked `NEW_MONEY` candidates displace observation-only anomalies before using remaining slots.
 - This is admission stability, not slower market scanning: the bulk all-market scan and three-symbol realtime cap keep their existing cadence and limits.
 
 ## 2026-09-08 — Anomaly is discovery, not directional proof
