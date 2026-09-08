@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assessEventEntry, updateRadar, type RadarBaseline, type RadarTicker } from "../lib/market-radar.ts";
+import { assessEventEntry, selectRealtimePool, updateRadar, type RadarBaseline, type RadarTicker } from "../lib/market-radar.ts";
 import type { BookSnapshot, FlowEvidence } from "../lib/liquidity-core.ts";
 
 const ticker = (last: number, openInterest = 1_000): RadarTicker => ({
@@ -78,4 +78,22 @@ test("event admission requires new money, aligned flow, real depth, early extens
     stopRate: 0.0032, targetRate: 0.0085, roundTripFrictionRate: 0.0018 }).blocker, "主动资金未与异动方向一致");
   assert.equal(assessEventEntry({ candidate, midpoint: 100, snapshot: book(), flow,
     stopRate: 0.0032, targetRate: 0.006, roundTripFrictionRate: 0.0018 }).blocker, "交易成本占第一目标空间过高");
+});
+
+test("realtime pool keeps valid residents and replaces only candidates that expired", () => {
+  assert.deepEqual(selectRealtimePool({
+    locked: [], current: ["A_USDT", "B_USDT", "C_USDT"],
+    candidates: ["D_USDT", "A_USDT", "E_USDT", "B_USDT", "C_USDT"],
+    fallback: ["F_USDT"], limit: 3,
+  }), ["A_USDT", "B_USDT", "C_USDT"]);
+  assert.deepEqual(selectRealtimePool({
+    locked: [], current: ["A_USDT", "B_USDT", "C_USDT"],
+    candidates: ["D_USDT", "A_USDT", "E_USDT", "B_USDT"],
+    fallback: ["F_USDT"], limit: 3,
+  }), ["A_USDT", "B_USDT", "D_USDT"]);
+  assert.deepEqual(selectRealtimePool({
+    locked: ["C_USDT"], current: ["A_USDT", "B_USDT", "C_USDT"],
+    candidates: ["D_USDT", "A_USDT", "B_USDT"],
+    fallback: ["F_USDT"], limit: 3,
+  }), ["C_USDT", "A_USDT", "B_USDT"]);
 });

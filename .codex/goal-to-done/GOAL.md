@@ -1,5 +1,9 @@
 # Goal
 
+## Active hotfix — 2026-09-08 stable realtime candidate pool
+
+Stop the three-symbol realtime pool from replacing still-valid resident anomaly candidates every ten-second radar ranking. Preserve locked exposure first, then retain current symbols that remain candidates, and promote new ranked candidates only into slots whose prior candidate expired. Restore sustained four-book warmup and minute evidence without changing entry gates, market-data cadence, risk, UI, credentials, or LIVE authority.
+
 ## Active upgrade — 2026-09-08 evidence-gated anomaly entry
 
 Correct only the proven anomaly-entry defect without redesigning the operator surface or unrelated execution/risk behavior. A bulk price anomaly is a candidate event, never directional proof. Freeze its event type and identity, keep a same-direction event identity through a bounded quiet re-arm period, and reject continuation entries unless the event is genuinely new-money (rising open interest), still early, supported by aligned realtime flow, and executable through a tight, sufficiently deep futures book. Require the modeled round-trip friction to consume no more than one quarter of the first target space and a positive conservative after-cost expectation. A qualified event must still prove continued displacement through the existing multi-snapshot breakout observer before IOC entry. Add a restart-safe same-symbol/same-direction re-entry cooldown from the persisted closed position. Preserve PAPER/LIVE parity, owner-only LIVE default-off behavior, all existing portfolio caps, request/write cadence, data sources, history, and UI.

@@ -1,5 +1,10 @@
 # Decisions
 
+## 2026-09-08 — Realtime promotion needs residence hysteresis
+
+- A ten-second ranking change may not evict a current realtime symbol while it remains an active radar candidate. Locked positions/plans remain first, valid resident candidates remain next, and only expired candidate slots admit newly ranked symbols.
+- This is admission stability, not slower market scanning: the bulk all-market scan and three-symbol realtime cap keep their existing cadence and limits.
+
 ## 2026-09-08 — Anomaly is discovery, not directional proof
 
 - Only a frozen `NEW_MONEY` event may enter as continuation; squeeze, liquidation, and unsupported price shocks remain visible candidates but cannot be converted into directional orders by this release.

@@ -62,6 +62,19 @@ export type EventEntryAssessment = {
   expectedReturnRate: number;
 };
 
+export function selectRealtimePool(input: {
+  locked: string[];
+  current: string[];
+  candidates: string[];
+  fallback: string[];
+  limit: number;
+}) {
+  const candidateSet = new Set(input.candidates);
+  const residentCandidates = input.current.filter((symbol) => candidateSet.has(symbol));
+  return [...new Set([...input.locked, ...residentCandidates, ...input.candidates, ...input.current, ...input.fallback])]
+    .slice(0, Math.max(0, input.limit));
+}
+
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 
 export function updateRadar(

@@ -13,7 +13,7 @@ import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, LiveEntrySiz
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
 import { credentialMetadata } from "../lib/gate-readonly.ts";
 import { clearOwnerSessionCookie, createOwnerSession, ownerAuthConfigured, ownerPasswordMatches, ownerSessionCookie, sameOriginMutation, verifyOwnerSession } from "../lib/owner-auth.ts";
-import { assessEventEntry, updateRadar, type RadarBaseline, type RadarCandidate } from "../lib/market-radar.ts";
+import { assessEventEntry, selectRealtimePool, updateRadar, type RadarBaseline, type RadarCandidate } from "../lib/market-radar.ts";
 
 const LOOP_MS = 2_000;
 const AUTHORITY_STALE_AFTER_MS = 8_000;
@@ -360,7 +360,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       || Boolean(this.runtime.live.entries[symbol] && !["FILLED", "CANCELLED"].includes(this.runtime.live.entries[symbol]!.status)));
     const ranked = radar.candidates.map((row) => row.symbol);
     const liquidFallback = rows.filter((row) => eligible.has(row.symbol)).sort((a, b) => b.volume24hUsd - a.volume24hUsd).map((row) => row.symbol);
-    const next = [...new Set([...locked, ...ranked, ...this.runtime.symbols, ...liquidFallback])].slice(0, MAX_OPEN_POSITIONS);
+    const next = selectRealtimePool({ locked, current: this.runtime.symbols, candidates: ranked,
+      fallback: liquidFallback, limit: MAX_OPEN_POSITIONS });
     if (next.length) this.applyRealtimeSymbols(next);
   }
 
