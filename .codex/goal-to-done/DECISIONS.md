@@ -1,5 +1,12 @@
 # Decisions
 
+## 2026-09-08 — Anomaly is discovery, not directional proof
+
+- Only a frozen `NEW_MONEY` event may enter as continuation; squeeze, liquidation, and unsupported price shocks remain visible candidates but cannot be converted into directional orders by this release.
+- The event must also pass realtime spread/depth, aligned-flow, early-extension, friction-share, and conservative after-cost expectation gates. Passing those gates arms the existing strong-break observer; it does not execute immediately.
+- Same-direction impulses keep one event identity through a three-minute quiet re-arm window, and a persisted same-symbol/same-direction closed position enforces a five-minute restart-safe cooldown. This prevents repeated consumption of one funding event without adding D1 or per-snapshot writes.
+
+
 - 2026-09-07: The +150 U daily number is an aspirational display target, not an execution gate. There is no daily order cap and no daily loss halt in this version; per-entry/portfolio/margin/economic hard limits remain authoritative.
 - 2026-09-07: Scan all eligible Gate USDT perpetuals with one bulk ticker request every ten seconds. Never fetch per-symbol detail across the full universe; only three priority symbols receive two-second books and rotating detail.
 - 2026-09-07: Retire the fixed three-coin liquidity-route decision as the new-entry authority. Retain its proven execution, protection, persistence, chart, owner security and reconciliation infrastructure.

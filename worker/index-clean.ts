@@ -3,7 +3,7 @@
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
 import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchMarketTickers, fetchRecentTrades, fetchStructureCandles } from "../lib/gate-market.ts";
-import { breakoutEntryPriceAcceptable, closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, planTriggered, PORTFOLIO_RISK_CAP, realtimeEntryConfirmed, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, updatePosition, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
+import { breakoutEntryPriceAcceptable, closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, planTriggered, PORTFOLIO_RISK_CAP, realtimeEntryConfirmed, remainingStressRisk, ROUND_TRIP_FRICTION_RATE, STALE_AFTER_MS, SYSTEM_VERSION, updatePosition, type BookSnapshot, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
 import { aggregateFourHourCandles, analyzeSnapshot, ancillarySchedule, applyFlow, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, optionalEvidenceIsFresh, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
 import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem } from "../lib/paper-outbox.ts";
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
@@ -13,7 +13,7 @@ import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, LiveEntrySiz
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
 import { credentialMetadata } from "../lib/gate-readonly.ts";
 import { clearOwnerSessionCookie, createOwnerSession, ownerAuthConfigured, ownerPasswordMatches, ownerSessionCookie, sameOriginMutation, verifyOwnerSession } from "../lib/owner-auth.ts";
-import { updateRadar, type RadarBaseline, type RadarCandidate } from "../lib/market-radar.ts";
+import { assessEventEntry, updateRadar, type RadarBaseline, type RadarCandidate } from "../lib/market-radar.ts";
 
 const LOOP_MS = 2_000;
 const AUTHORITY_STALE_AFTER_MS = 8_000;
@@ -31,6 +31,7 @@ const NON_ALARM_WRITE_CAP = 8_000;
 const WATCHDOG_WRITE_RESERVE = 2_880;
 const AUTHORITY_SCHEMA_VERSION = 1;
 const DEFAULT_SYMBOLS = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];
+const EVENT_REENTRY_COOLDOWN_MS = 5 * 60_000;
 
 export interface CloudflareEnv {
   ASSETS: Fetcher;
@@ -363,28 +364,34 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (next.length) this.applyRealtimeSymbols(next);
   }
 
-  private eventDecision(symbol: string, midpoint: number): Decision | null {
+  private eventDecision(symbol: string, midpoint: number, snapshot: BookSnapshot): Decision | null {
     const candidate = this.runtime.radar.candidates.find((row) => row.symbol === symbol);
     const memory = this.memory[symbol];
     const prior = this.runtime.positions[symbol];
-    if (!candidate || candidate.confirmations < 2 || candidate.strength < 58 || !memory || prior?.routeId === candidate.id) return null;
-    const direction = candidate.side === "LONG" ? 1 : -1;
-    const flow = direction * (memory.flow.ofi * 0.45 + memory.flow.takerDelta * 0.35
-      + Math.max(-1, Math.min(1, memory.flow.openInterestDelta)) * 0.20);
-    if (flow < -0.28) return null;
+    if (!candidate || !memory || prior?.routeId === candidate.id
+      || prior?.status === "CLOSED" && prior.side === candidate.side && prior.exitAt != null
+        && candidate.observedAt - prior.exitAt < EVENT_REENTRY_COOLDOWN_MS) return null;
     const noise = Math.max(0.0032, Math.min(0.006, memory.minuteNoiseRate * 1.15));
     const targetDistance = Math.max(0.0085, noise * 2.25);
-    const confidence = Math.max(0.58, Math.min(0.92, candidate.strength / 100 + Math.max(0, flow) * 0.12));
+    const assessment = assessEventEntry({ candidate, midpoint, snapshot, flow: memory.flow, stopRate: noise,
+      targetRate: targetDistance, roundTripFrictionRate: ROUND_TRIP_FRICTION_RATE });
+    if (!assessment.accepted) return null;
+    const confidence = assessment.conservativeWinRate;
+    const confirmationScore = Math.max(0.86, Math.min(0.95, 0.86 + (candidate.strength - 62) * 0.002
+      + Math.max(0, assessment.alignedFlow - 0.32) * 0.04));
+    const fakeoutRisk = Math.max(0.08, Math.min(0.18, 1 - confirmationScore));
+    const direction = candidate.side === "LONG" ? 1 : -1;
     const invalidation = midpoint * (1 - direction * noise);
     const target = midpoint * (1 + direction * targetDistance);
     return {
       symbol, observedAt: candidate.observedAt, marketState: "BREAKOUT", side: candidate.side,
       entryTrigger: midpoint, invalidation, target, targetIdentity: `EVENT_TARGET:${candidate.id}`,
       score: confidence, oppositeScore: 1 - confidence,
-      routeId: candidate.id, routeStage: "LOCAL_TO_NODE", routeKind: "BREAKOUT_RETEST", targetTimeframe: "15m",
-      confirmationScore: confidence, fakeoutRisk: 1 - confidence, activationDistanceRate: noise * 0.75,
-      reason: [`全市场资金异动强度 ${Math.round(candidate.strength)}%`, `${candidate.confirmations}轮批量快照确认`,
-        flow >= 0 ? "实时主动资金与异动方向一致" : "实时资金未形成明显反向阻力", "当前价IOC，事件衰减后快速退出"],
+      routeId: candidate.id, routeStage: "LOCAL_TO_NODE", routeKind: "LOCAL_BREAKOUT", targetTimeframe: "15m",
+      confirmationScore, fakeoutRisk, activationDistanceRate: noise * 0.75,
+      reason: [`新增持仓资金异动强度 ${Math.round(candidate.strength)}%`, `${candidate.confirmations}轮批量快照确认`,
+        `主动资金同向 ${Math.round(assessment.alignedFlow * 100)}%`, `价差 ${assessment.spreadBps.toFixed(1)}bps，双边近端深度通过`,
+        `模型成本占第一目标 ${Math.round(assessment.costShare * 100)}%`, "继续位移需通过连续强势盘口确认后才IOC进场"],
     };
   }
 
@@ -1301,7 +1308,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const contractReady = this.runtime.contractMeta[symbol] != null;
       const entryReady = recovery.entryReady && ancillaryFresh;
       const decision = this.authorityReady && contractReady && entryReady && (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS
-        ? this.eventDecision(symbol, analyzed.midpoint) : null;
+        ? this.eventDecision(symbol, analyzed.midpoint, snapshot) : null;
       const openRisk = openStressRisk(this.runtime);
       const planSide = priorPlan?.state === "PREPARED" ? priorPlan.side : decision?.side;
       const reconciled = reconcilePaper({ now, midpoint: analyzed.midpoint, fresh: validation.fresh, sequenceFault: validation.sequenceFault,

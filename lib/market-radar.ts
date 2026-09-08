@@ -1,3 +1,13 @@
+import type { BookSnapshot, FlowEvidence } from "./liquidity-core.ts";
+
+export const EVENT_REARM_QUIET_SCANS = 18;
+export const EVENT_VISIBLE_QUIET_SCANS = 4;
+export const MIN_EVENT_VOLUME_24H_USD = 10_000_000;
+export const MAX_EVENT_SPREAD_BPS = 12;
+export const MIN_EVENT_ALIGNED_FLOW = 0.32;
+export const MAX_EVENT_EXTENSION_RATE = 0.0075;
+export const MAX_FRICTION_SHARE_OF_TARGET = 0.25;
+
 export type RadarTicker = {
   symbol: string;
   last: number;
@@ -17,6 +27,9 @@ export type RadarBaseline = {
   eventSide: "LONG" | "SHORT" | null;
   eventStrength: number;
   eventMoveRate: number;
+  eventKind: RadarCandidate["kind"] | null;
+  eventReferencePrice: number;
+  eventOpenInterestChangeRate: number;
   openInterest: number;
 };
 
@@ -32,6 +45,21 @@ export type RadarCandidate = {
   firstSeenAt: number;
   observedAt: number;
   kind: "NEW_MONEY" | "SQUEEZE" | "LIQUIDATION" | "PRICE_SHOCK";
+  openInterestChangeRate: number;
+  referencePrice: number;
+};
+
+export type EventEntryAssessment = {
+  accepted: boolean;
+  blocker: string | null;
+  alignedFlow: number;
+  spreadBps: number;
+  nearBidDepthUsd: number;
+  nearAskDepthUsd: number;
+  extensionRate: number;
+  costShare: number;
+  conservativeWinRate: number;
+  expectedReturnRate: number;
 };
 
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
@@ -58,14 +86,25 @@ export function updateRadar(
     const active = before != null && before.samples >= 2 && absoluteMove >= Math.max(0.0006, before.movementEma * 2.2) && strength >= 55;
     const side = moveRate >= 0 ? "LONG" as const : "SHORT" as const;
     const sameDirection = before?.eventStartedAt != null && before.eventSide === side;
-    const eventStartedAt = active ? before?.eventStartedAt ?? now : before?.eventStartedAt ?? null;
+    const eventStartedAt = active ? (sameDirection ? before!.eventStartedAt : now) : before?.eventStartedAt ?? null;
     const quietScans = active ? 0 : (before?.quietScans ?? 0) + 1;
-    const retainedEvent = quietScans < 4 ? eventStartedAt : null;
+    const retainedEvent = quietScans < EVENT_REARM_QUIET_SCANS ? eventStartedAt : null;
     const confirmations = active ? (sameDirection ? (before?.confirmations ?? 0) + 1 : 1)
       : retainedEvent ? Math.min(6, (before?.confirmations ?? 0) + 1) : 0;
     const eventSide = active ? side : retainedEvent ? before?.eventSide ?? null : null;
     const eventStrength = active ? Math.max(strength, before?.eventStrength ?? 0) : retainedEvent ? (before?.eventStrength ?? 0) * 0.96 : 0;
     const eventMoveRate = active ? ((before?.eventMoveRate ?? 0) + moveRate) : retainedEvent ? before?.eventMoveRate ?? 0 : 0;
+    const priorOpenInterest = before?.openInterest ?? row.openInterest;
+    const openInterestChangeRate = priorOpenInterest > 0 ? (row.openInterest - priorOpenInterest) / priorOpenInterest : 0;
+    const impulseKind: RadarCandidate["kind"] = openInterestChangeRate >= 0.0002 ? "NEW_MONEY"
+      : openInterestChangeRate <= -0.0002 ? (side === "LONG" ? "SQUEEZE" : "LIQUIDATION") : "PRICE_SHOCK";
+    const eventKind = active ? (sameDirection ? before?.eventKind ?? impulseKind : impulseKind)
+      : retainedEvent ? before?.eventKind ?? null : null;
+    const eventReferencePrice = active ? (sameDirection ? before?.eventReferencePrice || before!.last : before?.last ?? row.last)
+      : retainedEvent ? before?.eventReferencePrice ?? row.last : 0;
+    const eventOpenInterestChangeRate = active ? (sameDirection
+      ? Math.max(before?.eventOpenInterestChangeRate ?? openInterestChangeRate, openInterestChangeRate)
+      : openInterestChangeRate) : retainedEvent ? before?.eventOpenInterestChangeRate ?? 0 : 0;
     baselines[row.symbol] = {
       last: row.last,
       observedAt: now,
@@ -77,11 +116,12 @@ export function updateRadar(
       eventSide,
       eventStrength,
       eventMoveRate,
+      eventKind,
+      eventReferencePrice,
+      eventOpenInterestChangeRate,
       openInterest: row.openInterest,
     };
-    if (!retainedEvent || !eventSide || eventStrength < 52) continue;
-    const oiGrowing = row.openInterest > 0 && (before?.openInterest ?? row.openInterest) > 0
-      && row.openInterest > (before?.openInterest ?? row.openInterest) * 1.0002;
+    if (!retainedEvent || !eventSide || !eventKind || eventStrength < 52 || quietScans >= EVENT_VISIBLE_QUIET_SCANS) continue;
     candidates.push({
       id: `${row.symbol}:${retainedEvent}`,
       symbol: row.symbol,
@@ -93,8 +133,50 @@ export function updateRadar(
       confirmations,
       firstSeenAt: retainedEvent,
       observedAt: now,
-      kind: oiGrowing ? "NEW_MONEY" : eventSide === "LONG" ? "SQUEEZE" : "LIQUIDATION",
+      kind: eventKind,
+      openInterestChangeRate: eventOpenInterestChangeRate,
+      referencePrice: eventReferencePrice,
     });
   }
   return { baselines, candidates: candidates.sort((a, b) => b.strength - a.strength).slice(0, 12), scanned: Object.keys(baselines).length };
+}
+
+export function assessEventEntry(input: {
+  candidate: RadarCandidate;
+  midpoint: number;
+  snapshot: BookSnapshot;
+  flow: FlowEvidence;
+  stopRate: number;
+  targetRate: number;
+  roundTripFrictionRate: number;
+}): EventEntryAssessment {
+  const direction = input.candidate.side === "LONG" ? 1 : -1;
+  const alignedFlow = direction * (input.flow.ofi * 0.45 + input.flow.takerDelta * 0.35
+    + clamp(input.flow.openInterestDelta, -1, 1) * 0.20);
+  const bestBid = input.snapshot.bids[0]?.price ?? 0;
+  const bestAsk = input.snapshot.asks[0]?.price ?? 0;
+  const spreadBps = bestBid > 0 && bestAsk >= bestBid ? (bestAsk - bestBid) / ((bestAsk + bestBid) / 2) * 10_000 : Infinity;
+  const depthFloor = clamp(input.candidate.volume24hUsd * 0.00025, 25_000, 150_000);
+  const nearBidDepthUsd = input.snapshot.bids.filter((row) => row.price >= input.midpoint * 0.999).reduce((sum, row) => sum + row.size, 0);
+  const nearAskDepthUsd = input.snapshot.asks.filter((row) => row.price <= input.midpoint * 1.001).reduce((sum, row) => sum + row.size, 0);
+  const extensionRate = direction * (input.midpoint - input.candidate.referencePrice) / Math.max(input.candidate.referencePrice, 1e-9);
+  const costShare = input.roundTripFrictionRate / Math.max(input.targetRate, 1e-9);
+  const conservativeWinRate = clamp(0.50 + (input.candidate.strength - 60) * 0.002
+    + Math.max(0, alignedFlow - MIN_EVENT_ALIGNED_FLOW) * 0.08, 0.50, 0.62);
+  const netRewardRate = Math.max(0, input.targetRate - input.roundTripFrictionRate);
+  const lossRate = input.stopRate + input.roundTripFrictionRate;
+  const expectedReturnRate = conservativeWinRate * netRewardRate - (1 - conservativeWinRate) * lossRate;
+  const blocker = input.candidate.kind !== "NEW_MONEY" ? "事件不是新增持仓推动"
+    : input.candidate.volume24hUsd < MIN_EVENT_VOLUME_24H_USD ? "24小时成交额低于流动性门槛"
+      : input.candidate.confirmations < 2 || input.candidate.strength < 62 ? "异动尚未形成两轮高强度确认"
+        : input.candidate.openInterestChangeRate < 0.0002 ? "持仓量没有继续增加"
+          : alignedFlow < MIN_EVENT_ALIGNED_FLOW ? "主动资金未与异动方向一致"
+            : spreadBps > MAX_EVENT_SPREAD_BPS ? "盘口价差过大"
+              : nearBidDepthUsd < depthFloor || nearAskDepthUsd < depthFloor ? "近端双边盘口深度不足"
+                : extensionRate < 0.0006 ? "异动位移尚未成立"
+                  : extensionRate > MAX_EVENT_EXTENSION_RATE ? "行情已经延伸，禁止追价"
+                    : costShare > MAX_FRICTION_SHARE_OF_TARGET ? "交易成本占第一目标空间过高"
+                      : expectedReturnRate <= 0 ? "保守估计的成本后期望值不为正" : null;
+  return { accepted: blocker == null, blocker, alignedFlow, spreadBps, nearBidDepthUsd, nearAskDepthUsd,
+    extensionRate, costShare, conservativeWinRate, expectedReturnRate };
 }

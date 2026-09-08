@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { updateRadar, type RadarBaseline, type RadarTicker } from "../lib/market-radar.ts";
+import { assessEventEntry, updateRadar, type RadarBaseline, type RadarTicker } from "../lib/market-radar.ts";
+import type { BookSnapshot, FlowEvidence } from "../lib/liquidity-core.ts";
 
 const ticker = (last: number, openInterest = 1_000): RadarTicker => ({
   symbol: "X_USDT", last, volume24hUsd: 20_000_000, fundingRate: 0, openInterest,
@@ -32,8 +33,49 @@ test("an anomaly survives quiet confirmation scans long enough for realtime entr
 test("illiquid and non-trading contracts never enter the candidate pool", () => {
   const prior: Record<string, RadarBaseline> = {
     X_USDT: { last: 100, observedAt: 0, samples: 5, movementEma: 0.0001, eventStartedAt: null,
-      confirmations: 0, quietScans: 5, eventSide: null, eventStrength: 0, eventMoveRate: 0, openInterest: 1_000 },
+      confirmations: 0, quietScans: 5, eventSide: null, eventStrength: 0, eventMoveRate: 0,
+      eventKind: null, eventReferencePrice: 0, eventOpenInterestChangeRate: 0, openInterest: 1_000 },
   };
   assert.equal(updateRadar(prior, [{ ...ticker(101), volume24hUsd: 500_000 }], new Set(["X_USDT"]), 10_000).candidates.length, 0);
   assert.equal(updateRadar(prior, [ticker(101)], new Set(), 10_000).candidates.length, 0);
+});
+
+test("one same-direction event keeps its identity through a quiet gap and freezes its type", () => {
+  let baselines: Record<string, RadarBaseline> = {};
+  for (let index = 0; index < 3; index += 1) baselines = updateRadar(baselines, [ticker(100)], new Set(["X_USDT"]), index * 10_000).baselines;
+  let scan = updateRadar(baselines, [ticker(100.2, 1_001)], new Set(["X_USDT"]), 30_000);
+  const eventId = scan.candidates[0]?.id;
+  assert.equal(scan.candidates[0]?.kind, "NEW_MONEY");
+  for (let index = 1; index <= 5; index += 1) scan = updateRadar(scan.baselines, [ticker(100.2, 1_001)], new Set(["X_USDT"]), 30_000 + index * 10_000);
+  scan = updateRadar(scan.baselines, [ticker(100.45, 1_001)], new Set(["X_USDT"]), 90_000);
+  assert.equal(scan.candidates[0]?.id, eventId);
+  assert.equal(scan.candidates[0]?.kind, "NEW_MONEY");
+});
+
+const book = (spreadBps = 4, depth = 60_000): BookSnapshot => ({
+  symbol: "X_USDT", observedAt: 1, sequence: 1, tickSize: 0.01,
+  bids: [{ price: 100 - spreadBps / 20_000 * 100, size: depth }],
+  asks: [{ price: 100 + spreadBps / 20_000 * 100, size: depth }],
+});
+const flow: FlowEvidence = { ofi: 0.8, micropriceDisplacementBps: 2, takerDelta: 0.7,
+  openInterestDelta: 0.5, funding: 0, actualLiquidations: 0, priceResponseBps: 4 };
+const candidate = {
+  id: "X_USDT:1", symbol: "X_USDT", side: "LONG" as const, strength: 75, moveRate: 0.002,
+  movementMultiple: 4, volume24hUsd: 100_000_000, confirmations: 2, firstSeenAt: 1, observedAt: 2,
+  kind: "NEW_MONEY" as const, openInterestChangeRate: 0.001, referencePrice: 99.8,
+};
+
+test("event admission requires new money, aligned flow, real depth, early extension and affordable friction", () => {
+  const accepted = assessEventEntry({ candidate, midpoint: 100, snapshot: book(), flow, stopRate: 0.0032,
+    targetRate: 0.0085, roundTripFrictionRate: 0.0018 });
+  assert.equal(accepted.accepted, true);
+  assert.ok(accepted.expectedReturnRate > 0);
+  assert.equal(assessEventEntry({ candidate: { ...candidate, kind: "PRICE_SHOCK" }, midpoint: 100, snapshot: book(), flow,
+    stopRate: 0.0032, targetRate: 0.0085, roundTripFrictionRate: 0.0018 }).accepted, false);
+  assert.equal(assessEventEntry({ candidate, midpoint: 100, snapshot: book(4, 1_000), flow,
+    stopRate: 0.0032, targetRate: 0.0085, roundTripFrictionRate: 0.0018 }).blocker, "近端双边盘口深度不足");
+  assert.equal(assessEventEntry({ candidate, midpoint: 100, snapshot: book(), flow: { ...flow, ofi: -1, takerDelta: -1 },
+    stopRate: 0.0032, targetRate: 0.0085, roundTripFrictionRate: 0.0018 }).blocker, "主动资金未与异动方向一致");
+  assert.equal(assessEventEntry({ candidate, midpoint: 100, snapshot: book(), flow,
+    stopRate: 0.0032, targetRate: 0.006, roundTripFrictionRate: 0.0018 }).blocker, "交易成本占第一目标空间过高");
 });
