@@ -1,5 +1,13 @@
 # Decisions
 
+## 2026-09-08 — Compare both reactions before authorizing execution
+
+- An anomaly is a sample selector, not a directional signal. Each selected event receives the same three-minute observation window and independently eligible continuation and reversal routes; neither route inherits the anomaly direction as permission to trade.
+- A continuation route requires a controlled 20%–70% retrace followed by two aligned advancing-flow observations. A reversal route requires at least a 70% retrace followed by two declining opposite-flow observations. If neither appears, retain an explicit no-trigger control instead of inventing a trade.
+- Freeze entry, stop and target when each route triggers, apply the same 0.18% round-trip friction model, and resolve target-first, stop-first, ten-minute no-progress or twenty-minute maximum hold. Keep state bounded and reuse existing ticker/book traffic.
+- The lab has no new PAPER or LIVE execution path: publish `decision=null`, set `allowOpen=false`, force restored LIVE authority off, and reject requests to enable it. Continue managing any pre-existing PAPER/LIVE exposure so research lock never weakens safety.
+- Archive the one-direction rejection audit and its accumulated evidence rather than deleting history. Accounts, settings, completed orders, credentials and risk protections remain unchanged.
+
 ## 2026-09-08 — Rejected signals need prospective shadow outcomes
 
 - Existing production history cannot truthfully reconstruct blocked opportunities because only completed positions and the current candidate assessment are retained. Start prospective evidence collection rather than infer unobserved entry state from later candles.

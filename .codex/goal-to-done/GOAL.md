@@ -1,5 +1,9 @@
 # Goal
 
+## Completed upgrade — 2026-09-08 paired reaction shadow lab
+
+Use the all-market anomaly radar only to select moments worth studying, never as proof of trade direction. For every selected event, observe three minutes and independently test continuation, reversal, and no-trigger outcomes with frozen shadow geometry, identical modeled friction, and bounded forward tracking. Produce no new PAPER or LIVE orders, keep LIVE hard-locked OFF, preserve protection and reconciliation for any pre-existing position, and archive the retired one-direction rejection audit without erasing it. Redesign the phone review surface around paired evidence so a later execution strategy can be chosen from comparable real-time samples rather than intuition.
+
 ## Completed upgrade — 2026-09-08 isolated rejection attribution
 
 Make the rejection audit capable of evaluating one rule without treating a multi-rule rejection as independent evidence for every failed check. Preserve the existing all-associated-rule totals, and add three bounded forward-only views: the first blocker selected by admission precedence, samples where exactly one unique rule failed, and the most common complete failed-rule combinations. Only the exactly-one-rule view may receive the existing preliminary false-rejection label. Preserve existing completed totals without partial backfilling, normalize old checkpoints safely, cap combination state at sixty-four identities, and expose the attribution on the phone review page. Do not change admission, exits, PAPER/LIVE orders, Gate requests, D1 writes, risk, credentials, or LIVE authority; do not deploy without explicit user authorization.
