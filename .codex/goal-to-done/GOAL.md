@@ -1,6 +1,6 @@
 # Goal
 
-## Active upgrade — 2026-09-09 win/loss attribution research
+## Completed upgrade — 2026-09-09 win/loss attribution research
 
 Keep the deployed paired-reaction lab running unchanged and add a separate non-executable research authority that begins with newly completed, fully captured routes after deployment. Freeze event context and trigger context before the outcome is known, then compare profitable and losing routes by branch, event kind, impulse size, relative movement, volume, OI change, spread, aligned book depth, trigger retrace, supporting flow, trigger speed and stop width. Preserve outcome-path diagnostics separately so future information cannot masquerade as an entry filter. Maintain bounded checkpoint state, explicit discovery-versus-confirmation sample phases, and minimum-sample warnings; add no Gate requests, D1 writes, PAPER/LIVE orders or automatic strategy mutation. Expose the findings on a dedicated phone review page while keeping LIVE hard-locked OFF and all existing position protection intact.
 
