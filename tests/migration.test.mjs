@@ -6,6 +6,7 @@ import test from "node:test";
 const prepare = (await readFile(new URL("../drizzle/0032_liquidity_core_prepare.sql", import.meta.url), "utf8")).replaceAll("--> statement-breakpoint", "");
 const purge = (await readFile(new URL("../drizzle/0033_purge_legacy_system.sql", import.meta.url), "utf8")).replaceAll("--> statement-breakpoint", "");
 const chartCache = (await readFile(new URL("../drizzle/0034_chart_cache.sql", import.meta.url), "utf8")).replaceAll("--> statement-breakpoint", "");
+const arenaFreshStart = (await readFile(new URL("../drizzle/0035_strategy_arena_fresh_start.sql", import.meta.url), "utf8")).replaceAll("--> statement-breakpoint", "");
 const credentialSchema = `CREATE TABLE live_exchange_credentials (
   id integer PRIMARY KEY DEFAULT 1 NOT NULL, exchange text NOT NULL, environment text NOT NULL, ciphertext text NOT NULL,
   iv text NOT NULL, crypto_version integer NOT NULL, key_hint text NOT NULL, gate_user_id text, owner_account_id text,
@@ -64,4 +65,21 @@ test("a stale D1 mirror event cannot overwrite a newer closed position", () => {
     ON CONFLICT(id) DO UPDATE SET status=excluded.status,mirror_version=excluded.mirror_version WHERE excluded.mirror_version > paper_positions.mirror_version`);
   upsert.run("CLOSED", 2); upsert.run("OPEN", 1);
   assert.equal(db.prepare("SELECT status FROM paper_positions WHERE id='x'").get().status, "CLOSED");
+});
+
+test("strategy arena fresh start deletes only retired PAPER records and resets PAPER equity", () => {
+  const db = new DatabaseSync(":memory:"); db.exec(prepare);
+  const credential = [1,"gate","live","cipher","iv",1,"hint","123","owner","{}","verified",123,null,111,222];
+  db.prepare("INSERT INTO live_exchange_credentials VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(...credential);
+  db.prepare("INSERT INTO paper_plans (id,symbol,market_state,side,state,created_at,expires_at,entry_trigger,invalidation,target,planned_risk,notional,score) VALUES ('p','BTC_USDT','BREAKOUT','LONG','PREPARED',1,2,100,99,102,10,1000,1)").run();
+  db.prepare("INSERT INTO paper_positions (id,symbol,market_state,side,status,entry_at,entry_price,initial_stop,current_stop,current_target,target_identity,planned_risk,notional) VALUES ('x','BTC_USDT','BREAKOUT','LONG','CLOSED',1,100,99,99,102,'x',10,1000)").run();
+  db.prepare("INSERT INTO paper_events (id,symbol,event_type,observed_at) VALUES ('e','BTC_USDT','OLD',1)").run();
+  db.prepare("UPDATE system_settings SET paper_equity=712,equity_version=8 WHERE id=1").run();
+  db.exec(arenaFreshStart);
+  assert.equal(db.prepare("SELECT COUNT(*) count FROM paper_plans").get().count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) count FROM paper_positions").get().count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) count FROM paper_events").get().count, 0);
+  assert.deepEqual(Object.values(db.prepare("SELECT * FROM live_exchange_credentials WHERE id=1").get()), credential);
+  const settings = db.prepare("SELECT paper_equity,equity_version FROM system_settings WHERE id=1").get();
+  assert.equal(settings.paper_equity, 1000); assert.equal(settings.equity_version, 9);
 });

@@ -3,7 +3,7 @@
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
 import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchMarketTickers, fetchRecentTrades, fetchStructureCandles } from "../lib/gate-market.ts";
-import { breakoutEntryPriceAcceptable, closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, planTriggered, PORTFOLIO_RISK_CAP, realtimeEntryConfirmed, remainingStressRisk, ROUND_TRIP_FRICTION_RATE, STALE_AFTER_MS, SYSTEM_VERSION, updatePosition, type BookSnapshot, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
+import { breakoutEntryPriceAcceptable, closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, planTriggered, PORTFOLIO_RISK_CAP, realtimeEntryConfirmed, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, updatePosition, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
 import { aggregateFourHourCandles, analyzeSnapshot, ancillarySchedule, applyFlow, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, optionalEvidenceIsFresh, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
 import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem } from "../lib/paper-outbox.ts";
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
@@ -14,10 +14,8 @@ import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type Gat
 import { credentialMetadata } from "../lib/gate-readonly.ts";
 import { clearOwnerSessionCookie, createOwnerSession, ownerAuthConfigured, ownerPasswordMatches, ownerSessionCookie, sameOriginMutation, verifyOwnerSession } from "../lib/owner-auth.ts";
 import { eventAlignedFlow, selectRealtimePool, updateRadar, type EventEntryAssessment, type RadarBaseline, type RadarCandidate } from "../lib/market-radar.ts";
-import { initialRejectionAudit, type RejectionAuditState } from "../lib/rejection-audit.ts";
-import { activeReactionForSymbol, advanceReactionLab, initialReactionLab, observeReaction, recordReactionEvent,
-  type ReactionLabState } from "../lib/reaction-lab.ts";
-import { ingestReactionOutcomes, initialOutcomeResearch, type OutcomeResearchState } from "../lib/outcome-research.ts";
+import { advanceStrategyArena, arenaSummary, initialStrategyArena, normalizeStrategyArena, observeStrategyArena,
+  type StrategyArenaState } from "../lib/strategy-arena.ts";
 
 const LOOP_MS = 2_000;
 const AUTHORITY_STALE_AFTER_MS = 8_000;
@@ -151,9 +149,7 @@ type RuntimeState = {
     entryReady?: boolean; optionalFresh?: boolean; recoveryFreshCount?: number; suspensionReason?: string | null;
     topLong: LiquidityZone | null; topShort: LiquidityZone | null; absorption: number; range15m: RangeStructure | null }>;
   entryAssessments: Record<string, EventEntryAssessment | null>;
-  rejectionAudit: RejectionAuditState;
-  reactionLab: ReactionLabState;
-  outcomeResearch: OutcomeResearchState;
+  strategyArena: StrategyArenaState;
   radar: { scanned: number; lastScanAt: number | null; candidates: RadarCandidate[] };
   analysisMs: number[];
   equity: number;
@@ -175,8 +171,8 @@ function initialState(): RuntimeState {
     lastAlarmAt: null, lastSuccessAt: null, lastHeartbeatAt: null, lastStopCheckpointAt: null, nextAlarmAt: null, lastUniverseAt: 0, lastRadarAt: 0,
     utcDay: day(), dailyStartEquity: PAPER_INITIAL_EQUITY, alarmCount: 0, d1Writes: 0, nonAlarmWrites: 0, d1RetryAt: 0, d1FailureCount: 0, equityVersion: 0, ancillaryCursor: 0, subrequestCount: 0, maxSubrequestsInAlarm: 0, sequenceRebuilds: 0, lastProcessedSlot: -1, feedFailures: {},
     lastError: null, d1MirrorError: null, riskBreach: false, tickSize: Object.fromEntries(DEFAULT_SYMBOLS.map((symbol) => [symbol, 0.0001])), contractMeta: {},
-    decisions: {}, routes: {}, plans: {}, positions: {}, evidence: {}, entryAssessments: {}, rejectionAudit: initialRejectionAudit(),
-    reactionLab: initialReactionLab(), outcomeResearch: initialOutcomeResearch(), analysisMs: [], equity: PAPER_INITIAL_EQUITY, outbox: [],
+    decisions: {}, routes: {}, plans: {}, positions: {}, evidence: {}, entryAssessments: {},
+    strategyArena: initialStrategyArena(), analysisMs: [], equity: PAPER_INITIAL_EQUITY, outbox: [],
     radar: { scanned: 0, lastScanAt: null, candidates: [] }, paperCycle: startPaperCycle(Date.now()), bankruptcyOutbox: [], live: initialLiveState(),
   };
 }
@@ -238,22 +234,25 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     ctx.blockConcurrencyWhile(async () => {
       const saved = await ctx.storage.get<Checkpoint>("checkpoint");
       if (saved?.authoritySchemaVersion === AUTHORITY_SCHEMA_VERSION) {
+        const strategyCutover = saved.version !== SYSTEM_VERSION;
         this.runtime = { ...initialState(), ...saved, version: SYSTEM_VERSION, symbols: saved.symbols?.length ? saved.symbols : [...DEFAULT_SYMBOLS],
-          lastUniverseAt: 0, lastRadarAt: 0, radar: saved.radar ?? { scanned: 0, lastScanAt: null, candidates: [] }, outbox: saved.outbox ?? [],
-          rejectionAudit: saved.rejectionAudit ?? initialRejectionAudit(),
-          reactionLab: saved.reactionLab ? { ...initialReactionLab(), ...saved.reactionLab,
-            stats: { ...initialReactionLab().stats, ...saved.reactionLab.stats } } : initialReactionLab(),
-          outcomeResearch: saved.outcomeResearch ? { ...initialOutcomeResearch(), ...saved.outcomeResearch,
-            aggregate: { ...initialOutcomeResearch().aggregate, ...saved.outcomeResearch.aggregate },
-            discovery: { ...initialOutcomeResearch().discovery, ...saved.outcomeResearch.discovery },
-            confirmation: { ...initialOutcomeResearch().confirmation, ...saved.outcomeResearch.confirmation },
-            winnerProfileSums: { ...initialOutcomeResearch().winnerProfileSums, ...saved.outcomeResearch.winnerProfileSums },
-            loserProfileSums: { ...initialOutcomeResearch().loserProfileSums, ...saved.outcomeResearch.loserProfileSums } }
-            : initialOutcomeResearch(),
-          paperCycle: saved.paperCycle ?? startPaperCycle(Date.now(), saved.equity, 1), bankruptcyOutbox: saved.bankruptcyOutbox ?? [],
+          lastUniverseAt: 0, lastRadarAt: 0, radar: saved.radar ?? { scanned: 0, lastScanAt: null, candidates: [] },
+          strategyArena: strategyCutover ? initialStrategyArena() : normalizeStrategyArena(saved.strategyArena),
+          equity: strategyCutover ? PAPER_INITIAL_EQUITY : saved.equity,
+          equityVersion: strategyCutover ? saved.equityVersion + 1 : saved.equityVersion,
+          decisions: strategyCutover ? {} : saved.decisions,
+          routes: strategyCutover ? {} : saved.routes,
+          plans: strategyCutover ? {} : saved.plans,
+          positions: strategyCutover ? {} : saved.positions,
+          outbox: strategyCutover ? [] : saved.outbox ?? [],
+          paperCycle: strategyCutover ? startPaperCycle(Date.now()) : saved.paperCycle ?? startPaperCycle(Date.now(), saved.equity, 1),
+          bankruptcyOutbox: strategyCutover ? [] : saved.bankruptcyOutbox ?? [],
           live: { ...initialLiveState(), ...(saved.live ?? {}), entries: saved.live?.entries ?? {},
             positions: saved.live?.positions ?? {}, entrySkips: saved.live?.entrySkips ?? {},
             requestedEnabled: false, operational: false }, analysisMs: [], state: "WARMING" };
+        delete (this.runtime as unknown as Record<string, unknown>).rejectionAudit;
+        delete (this.runtime as unknown as Record<string, unknown>).reactionLab;
+        delete (this.runtime as unknown as Record<string, unknown>).outcomeResearch;
         for (const symbol of new Set([...Object.keys(this.runtime.decisions), ...Object.keys(this.runtime.routes), ...Object.keys(this.runtime.plans),
           ...Object.keys(this.runtime.positions), ...Object.keys(this.runtime.evidence), ...Object.keys(this.runtime.entryAssessments), ...Object.keys(this.runtime.feedFailures),
           ...Object.keys(this.runtime.tickSize), ...Object.keys(this.runtime.contractMeta)])) {
@@ -284,6 +283,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       evidence: this.runtime.evidence, entryAssessments: this.runtime.entryAssessments,
       equity: this.runtime.equity, equityVersion: this.runtime.equityVersion,
       outbox: this.runtime.outbox, paperCycle: this.runtime.paperCycle, bankruptcyOutbox: this.runtime.bankruptcyOutbox,
+      strategyArena: this.runtime.strategyArena,
       lastStopCheckpointAt: this.runtime.lastStopCheckpointAt, riskBreach: this.runtime.riskBreach });
   }
 
@@ -299,6 +299,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.outbox = authority.outbox;
     this.runtime.paperCycle = authority.paperCycle;
     this.runtime.bankruptcyOutbox = authority.bankruptcyOutbox;
+    this.runtime.strategyArena = authority.strategyArena;
     this.runtime.lastStopCheckpointAt = authority.lastStopCheckpointAt;
     this.runtime.riskBreach = authority.riskBreach;
   }
@@ -371,10 +372,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private refreshRadar(now: number, rows: Awaited<ReturnType<typeof fetchMarketTickers>>) {
-    this.runtime.reactionLab = advanceReactionLab({ state: this.runtime.reactionLab,
-      quotes: Object.fromEntries(rows.map((row) => [row.symbol, row.last])), now,
-      roundTripFrictionRate: ROUND_TRIP_FRICTION_RATE });
-    this.runtime.outcomeResearch = ingestReactionOutcomes(this.runtime.outcomeResearch, this.runtime.reactionLab);
+    this.runtime.strategyArena = advanceStrategyArena({ state: this.runtime.strategyArena,
+      quotes: Object.fromEntries(rows.map((row) => [row.symbol, row.last])), now });
     const eligible = new Set(this.contractCatalog.keys());
     const radar = updateRadar(this.radarBaselines, rows, eligible, now);
     this.radarBaselines = radar.baselines;
@@ -383,7 +382,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const locked = this.runtime.symbols.filter((symbol) => this.runtime.positions[symbol]?.status === "OPEN"
       || this.runtime.plans[symbol]?.state === "PREPARED" || this.runtime.live.positions[symbol]?.status === "OPEN"
       || Boolean(this.runtime.live.entries[symbol] && !["FILLED", "CANCELLED"].includes(this.runtime.live.entries[symbol]!.status))
-      || Boolean(activeReactionForSymbol(this.runtime.reactionLab, symbol)));
+      || Object.values(this.runtime.strategyArena.open).some((trade) => trade.symbol === symbol));
     const ranked = [...radar.candidates].sort((left, right) => Number(right.kind === "NEW_MONEY") - Number(left.kind === "NEW_MONEY")
       || right.strength - left.strength).map((row) => row.symbol);
     const liquidFallback = rows.filter((row) => eligible.has(row.symbol)).sort((a, b) => b.volume24hUsd - a.volume24hUsd).map((row) => row.symbol);
@@ -393,29 +392,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (next.length) this.applyRealtimeSymbols(next);
   }
 
-  private observeReaction(symbol: string, midpoint: number, snapshot: BookSnapshot, now: number) {
+  private observeArena(symbol: string, midpoint: number, analyzed: ReturnType<typeof analyzeSnapshot>, now: number) {
     const candidate = this.runtime.radar.candidates.find((row) => row.symbol === symbol);
     const memory = this.memory[symbol];
-    if (!memory) return;
-    const stopRate = Math.max(0.0032, Math.min(0.006, memory.minuteNoiseRate * 1.15));
-    const targetRate = Math.max(0.0085, stopRate * 2.25);
-    const bestBid = snapshot.bids[0]?.price ?? 0;
-    const bestAsk = snapshot.asks[0]?.price ?? 0;
-    const startSpreadBps = bestBid > 0 && bestAsk >= bestBid ? (bestAsk - bestBid) / midpoint * 10_000 : 0;
-    const bidDepth = snapshot.bids.filter((row) => row.price >= midpoint * .999).reduce((sum, row) => sum + row.size, 0);
-    const askDepth = snapshot.asks.filter((row) => row.price <= midpoint * 1.001).reduce((sum, row) => sum + row.size, 0);
-    const rawDepthAlignment = (bidDepth - askDepth) / Math.max(bidDepth + askDepth, 1e-9);
-    const startDepthAlignment = candidate?.side === "SHORT" ? -rawDepthAlignment : rawDepthAlignment;
-    if (candidate?.confirmations && candidate.confirmations >= 2) {
-      this.runtime.reactionLab = recordReactionEvent({ state: this.runtime.reactionLab, candidate, midpoint,
-        stopRate, targetRate, startSpreadBps, startDepthAlignment, now });
-    }
-    const experiment = activeReactionForSymbol(this.runtime.reactionLab, symbol);
-    if (!experiment) return;
-    this.runtime.reactionLab = observeReaction({ state: this.runtime.reactionLab, experimentId: experiment.id,
-      midpoint, alignedFlow: eventAlignedFlow(experiment.impulseSide, memory.flow), now,
-      roundTripFrictionRate: ROUND_TRIP_FRICTION_RATE });
-    this.runtime.outcomeResearch = ingestReactionOutcomes(this.runtime.outcomeResearch, this.runtime.reactionLab);
+    if (!candidate || !memory || candidate.confirmations < 2) return;
+    this.runtime.strategyArena = observeStrategyArena({ state: this.runtime.strategyArena, observation: {
+      candidate, midpoint, alignedFlow: eventAlignedFlow(candidate.side, memory.flow), minuteNoiseRate: memory.minuteNoiseRate,
+      range15m: analyzed.range15m, confirmationBySide: analyzed.confirmationBySide,
+      fakeoutBySide: analyzed.fakeoutBySide, routes: analyzed.routes, now,
+    } });
   }
 
   private priorityMinuteSymbols(now: number) {
@@ -1332,7 +1317,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const entryReady = recovery.entryReady && ancillaryFresh;
       const decision: Decision | null = null;
       if (this.authorityReady && contractReady && entryReady && (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS) {
-        this.observeReaction(symbol, analyzed.midpoint, snapshot, now);
+        this.observeArena(symbol, analyzed.midpoint, analyzed, now);
       }
       const openRisk = openStressRisk(this.runtime);
       const planSide = priorPlan?.state === "PREPARED" ? priorPlan.side : undefined;
@@ -1621,26 +1606,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     if (path === "/status" || path === "/owner-runtime") {
       await this.ensureAlarm();
-      const { outbox, live, paperCycle, bankruptcyOutbox, rejectionAudit, reactionLab, outcomeResearch, ...publicRuntime } = this.runtime;
+      const { outbox, live, paperCycle, bankruptcyOutbox, strategyArena, ...publicRuntime } = this.runtime;
       const stale = !this.authorityReady || this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > AUTHORITY_STALE_AFTER_MS;
       const effectiveState = !this.authorityReady ? "RECOVERY_REQUIRED" : stale ? "RECONNECTING" : this.runtime.state;
       return json({ ...publicRuntime, ...this.authorityView, paperCycle: paperCycleSummary(paperCycle, this.authorityView.equity),
-        rejectionAudit: { startedAt: rejectionAudit.startedAt, pendingCount: Object.keys(rejectionAudit.pending).length,
-          completed: rejectionAudit.completed, dropped: rejectionAudit.dropped, rules: rejectionAudit.rules,
-          primaryRules: rejectionAudit.primaryRules ?? {}, isolatedRules: rejectionAudit.isolatedRules ?? {},
-          combinations: rejectionAudit.combinations ?? {}, combinationOverflow: rejectionAudit.combinationOverflow ?? 0,
-          recent: rejectionAudit.recent.slice(-20).reverse() },
-        reactionLab: { version: reactionLab.version, startedAt: reactionLab.startedAt,
-          activeCount: Object.keys(reactionLab.active).length, completed: reactionLab.completed, dropped: reactionLab.dropped,
-          stats: reactionLab.stats, active: Object.values(reactionLab.active).slice(-6).reverse(),
-          recent: reactionLab.recent.slice(-20).reverse() },
-        outcomeResearch: { version: outcomeResearch.version, startedAt: outcomeResearch.startedAt,
-          aggregate: outcomeResearch.aggregate, discovery: outcomeResearch.discovery, confirmation: outcomeResearch.confirmation,
-          winnerProfileSums: outcomeResearch.winnerProfileSums, loserProfileSums: outcomeResearch.loserProfileSums,
-          skippedLegacy: outcomeResearch.skippedLegacy, candidatesFrozenAt: outcomeResearch.candidatesFrozenAt,
-          candidateGroupIds: outcomeResearch.candidateGroupIds, candidateSegmentIds: outcomeResearch.candidateSegmentIds,
-          groups: Object.values(outcomeResearch.groups),
-          segments: Object.values(outcomeResearch.segments), recent: outcomeResearch.recent.slice(-20).reverse() },
+        strategyArena: arenaSummary(strategyArena),
         ...(path === "/owner-runtime" ? { live } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length + bankruptcyOutbox.length,
         oldestOutboxAgeMs: outbox.length ? Math.max(0, Date.now() - (outbox[0].position.exitAt ?? outbox[0].position.entryAt)) : 0,
         authorityReady: this.authorityReady, generatedAt: Date.now(), state: effectiveState, stale,
@@ -1679,7 +1649,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (path === "/live-mode" && request.method === "POST") {
       const body = await request.json<{ enabled?: unknown }>().catch(() => ({} as { enabled?: unknown }));
       if (typeof body.enabled !== "boolean") return json({ error: "invalid live mode" }, 400);
-      if (body.enabled) return json({ ok: false, error: "双向实验仍是影子研究，实盘新开仓已锁定", live: this.runtime.live }, 409);
+      if (body.enabled) return json({ ok: false, error: "策略竞技场仅运行影子与模拟验证，实盘新开仓已锁定", live: this.runtime.live }, 409);
       const result = await this.setLiveMode(body.enabled);
       return json(result, result.ok ? 200 : 409);
     }

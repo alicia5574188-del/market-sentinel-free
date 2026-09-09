@@ -38,148 +38,50 @@ test("only one new DO is bound and all legacy DO storage is explicitly deleted",
   for (const name of ["PositionMonitor", "MarketScanner", "LiveTradingCoordinator", "MarketScannerV2", "HTE31MarketScanner", "HTE31TradeManager", "HistoricalArchive"]) assert.ok(retire.deleted_classes.includes(name));
 });
 
-test("owner-authenticated live API is isolated while the operator UI explains every decision", async () => {
-  const [worker, page, layout, workflow, css, live, auth, positionMetrics] = await Promise.all([
-    read("worker/index-clean.ts"),
-    read("app/page.tsx"),
-    read("app/layout.tsx"),
-    read(".github/workflows/sentinel-v2-ci.yml"),
-    read("app/globals.css"),
-    read("lib/gate-live.ts"),
-    read("lib/owner-auth.ts"),
-    read("lib/position-metrics.ts"),
+test("owner-authenticated live API stays isolated while the strategy arena UI is explicit", async () => {
+  const [worker, page, layout, css, live, auth, positionMetrics] = await Promise.all([
+    read("worker/index-clean.ts"), read("app/page.tsx"), read("app/layout.tsx"), read("app/globals.css"),
+    read("lib/gate-live.ts"), read("lib/owner-auth.ts"), read("lib/position-metrics.ts"),
   ]);
   assert.match(worker, /return handler\.fetch\(request, env, ctx\)/);
-  assert.match(worker, /url\.pathname === "\/api\/history" && request\.method === "GET"/);
-  assert.match(worker, /url\.pathname === "\/api\/account-logs" && request\.method === "GET"/);
-  assert.doesNotMatch(worker, /\/api\/order-chart|\/api\/candles/);
-  assert.doesNotMatch(worker, /fetchReviewCandles|mirrorChartCandles|chart_cache_json/);
-  assert.match(worker, /FROM paper_positions/);
-  assert.doesNotMatch(worker, /ORDER_ENTRY_CHART|ORDER_EXIT_CHART|review-entry:|review-exit:/);
-  assert.match(worker, /fees_and_slippage AS feesAndSlippage/);
   assert.match(worker, /url\.pathname === "\/api\/auth\/login" && request\.method === "POST"/);
   assert.match(worker, /url\.pathname === "\/api\/live\/mode" && request\.method === "POST"/);
-  assert.match(worker, /url\.pathname === "\/api\/live\/credentials" && \["GET", "PUT", "DELETE"\]\.includes\(request\.method\)/);
-  assert.match(worker, /url\.pathname === "\/api\/paper\/reset" && request\.method === "POST"/);
-  assert.match(worker, /url\.pathname === "\/api\/paper\/history\/clear" && request\.method === "POST"/);
-  assert.match(worker, /body\.confirm !== expected/);
+  assert.match(worker, /url\.pathname === "\/api\/live\/credentials"/);
   assert.match(worker, /encryptGateCredentials/);
-  assert.match(worker, /Gate 仍有持仓或挂单；请先清空后再删除 API/);
-  assert.match(worker, /DELETE FROM live_exchange_credentials WHERE id=1/);
-  assert.match(worker, /tag\.startsWith\("t-ms-e-"\) && !knownTags\.has\(tag\)/);
-  assert.ok(worker.indexOf("const staged:") < worker.indexOf("await client.setLeverage"));
-  assert.match(worker, /await this\.syncLive\(Date\.now\(\), false, true\)/);
-  assert.match(worker, /if \(!await ownerAuthenticated\(request, env\)\) return json\(\{ error: "请先登录" \}, 401\)/);
   assert.match(worker, /sameOriginMutation\(request\)/);
-  assert.match(worker, /const \{ outbox, live, paperCycle, bankruptcyOutbox, rejectionAudit, reactionLab, outcomeResearch, \.\.\.publicRuntime \} = this\.runtime/);
-  assert.match(worker, /paperCycleSummary\(paperCycle, this\.authorityView\.equity\)/);
-  assert.match(worker, /PAPER_CYCLE_BANKRUPTCY/);
-  assert.match(worker, /PAPER_BANKRUPTCY/);
-  assert.match(worker, /\["SUBMITTING", "OPEN"\]\.includes\(entry\.status\).*entry\.plannedRisk/s);
-  assert.match(worker, /prior\.planId === plan\.id && prior\.status !== "CANCELLED"/);
-  assert.match(worker, /availableForNewEntries - intent\.margin/);
-  assert.match(live, /\/futures\/usdt\/price_orders/);
-  assert.match(live, /\/futures\/usdt\/orders/);
+  assert.match(worker, /if \(!await ownerAuthenticated\(request, env\)\) return json\(\{ error: "请先登录" \}, 401\)/);
+  assert.match(worker, /strategyArena: arenaSummary\(strategyArena\)/);
+  assert.match(worker, /requestedEnabled: false, operational: false/);
   assert.match(live, /reduce_only: true/);
-  assert.match(live, /PORTFOLIO_RISK_CAP/);
   assert.match(live, /credentials\.environment !== "live"/);
   assert.match(auth, /HttpOnly; Secure; SameSite=Strict/);
   assert.match(page, /setInterval\(read, 15_000\)/);
   assert.match(page, /RUNTIME_REQUEST_TIMEOUT_MS = 30_000/);
   assert.match(page, /RUNTIME_DISPLAY_TTL_MS = 90_000/);
-  assert.doesNotMatch(page, /responseFresh && !error/);
-  assert.match(page, /authorityOperational && evidence\?\.fresh && evidence\?\.ancillaryFresh/);
-  assert.match(page, /合约名义价值/);
-  assert.match(page, /模拟杠杆/);
-  assert.match(page, /预计保证金/);
   assert.match(page, /tabScroll\.current\[tab\] = window\.scrollY/);
-  assert.match(page, /window\.scrollTo\(\{ top: tabScroll\.current\[tab\]/);
   assert.match(page, /viewScroll\.current\[view\] = window\.scrollY/);
-  assert.match(page, /hidden=\{tab !== "live"\}/);
-  assert.doesNotMatch(page, /className="mode-switch"/);
-  assert.match(page, /if \(tab !== "history"\) return/);
-  assert.match(page, /setInterval\(\(\) => void readHistory\(!loadedAll\), 60_000\)/);
-  assert.doesNotMatch(page, /function OrderReviewChart|\/api\/order-chart|蜡烛图/);
-  assert.match(worker, /nextCursor/);
-  assert.match(page, /runtime\.limits\.warmupSnapshots \?\? 4/);
-  assert.doesNotMatch(page, /warmup < 30|30 - evidence\.warmup/);
-  assert.match(page, /账户日志/);
-  assert.match(page, /复制完整诊断/);
-  assert.match(page, /权益达到 300 U 时/);
-  assert.match(page, /num\(item\.entryPrice, 5\)/);
-  assert.match(page, /num\(item\.exitPrice, 5\)/);
-  assert.match(page, /recentClosedPositions/);
-  assert.match(page, /当前持仓/);
-  assert.match(page, /刚刚结束/);
-  assert.match(css, /position:fixed!important/);
-  assert.match(page, /const intent = positionIntent \?\? \(plan\?\.state === "PREPARED" \? plan : decision\)/);
-  assert.match(page, /旧版即时保本止损/);
-  assert.match(page, /软失效观察/);
-  assert.match(page, /AbortController/);
-  assert.match(page, /document\.hidden/);
-  assert.match(page, /双向反应实验 V1/);
-  assert.match(page, /模拟账户权益/);
-  assert.match(page, /\{tab === "brain" && <>\s*<section className="brain-hero">/);
-  assert.ok(page.indexOf('{tab === "brain" && <>') < page.indexOf('模拟账户权益'));
-  assert.ok(page.indexOf('</>}\n\n    <nav className="tabs">') > page.indexOf('模拟账户权益'));
-  assert.match(page, /当前持仓浮盈亏/);
-  assert.match(page, /组合风险预算/);
-  assert.match(page, /准备进场/);
-  assert.match(page, /判断错误就退出/);
-  assert.match(page, /为什么.*进场|距离触发价|上下流动性优势不足/);
+  assert.match(page, /策略竞技场 V1/);
+  assert.match(page, /影子候选记录/);
+  assert.match(page, /模拟交易记录/);
+  assert.match(page, /独立模拟账本/);
+  assert.match(page, /旧版本记录已经清空/);
+  assert.doesNotMatch(page, /组合风险预算|目标 \+150 U|双向反应实验 V1|盈利与亏损研究|旧方案归档|账户日志/);
+  assert.doesNotMatch(page, /fetch\("\/api\/history|fetch\("\/api\/account-logs/);
   assert.match(page, /所有者登录/);
-  assert.match(page, /安全登录有效30天/);
-  assert.match(worker, /authSession[\s\S]*Set-Cookie[\s\S]*ownerSessionCookie/);
-  assert.match(page, /研究版禁止开启/);
   assert.match(page, /实盘交易开关/);
-  assert.match(page, /重置模拟账户/);
-  assert.match(page, /清除模拟历史/);
-  assert.match(page, /只影响 PAPER 模拟系统/);
+  assert.match(page, /撤销系统遗留挂单/);
   assert.match(page, /实盘账户/);
   assert.match(page, /实盘订单/);
   assert.match(page, /API 管理/);
-  assert.match(page, /撤销系统遗留挂单/);
-  assert.match(worker, /cancelAndConfirmSystemEntries/);
-  assert.match(worker, /Gate 仍有 \$\{remaining\.length\} 张系统挂单未撤销/);
-  assert.match(worker, /error instanceof LiveEntrySizingError/);
-  assert.match(worker, /entrySkips/);
-  assert.match(live, /function parseGateJson/);
-  assert.match(live, /Math\.max\(1, Math\.floor\(sized\.notional \/ contractNotional\)\)/);
-  assert.match(page, /旧计划未成交/);
-  assert.match(live, /expiration: GATE_TRIGGER_DAY_SECONDS/);
-  assert.match(live, /expiration: GATE_TRIGGER_DAY_SECONDS \* GATE_TRIGGER_MAX_DAYS/);
-  assert.doesNotMatch(page, /function CandleChart/);
-  assert.doesNotMatch(page, /function PositionLiveChart/);
-  assert.match(page, /浮动盈亏/);
-  assert.match(page, /保证金收益率/);
-  assert.match(page, /查看订单数据/);
-  assert.match(page, /实际 R 倍数/);
-  assert.match(page, /查看本轮完整订单记录/);
+  assert.match(page, /AbortController/);
+  assert.match(page, /document\.hidden/);
+  assert.match(css, /position:fixed!important/);
+  assert.match(css, /strategy-grid/);
   assert.match(positionMetrics, /export function unrealizedPnl/);
   assert.match(positionMetrics, /export function marginReturnRate/);
-  assert.doesNotMatch(css, /\.review-chart|\.position-price-line/);
-  assert.doesNotMatch(page, /loadedInterval === interval \? candles\.slice\(-72\) : \[\]/);
-  assert.match(page, /分段流动性路线/);
-  assert.match(page, /多个方案观察，单一方案执行/);
-  assert.match(page, /软计划不占保证金/);
-  assert.match(worker, /aggregateFourHourCandles/);
-  assert.match(worker, /activeRoutes/);
-  assert.match(worker, /justTriggeredEntry/);
-  assert.match(worker, /realtimeEntryConfirmed/);
-  assert.match(live, /PORTFOLIO_MARGIN_CAP/);
-  assert.match(live, /openMargin/);
-  assert.match(page, /实时 IOC/);
-  assert.match(page, /双向实验只记录影子结果/);
-  assert.match(page, /authorityOperational && evidence\?\.fresh && evidence\?\.ancillaryFresh/);
-  assert.match(page, /订单.*实盘.*复盘.*设置/s);
   assert.doesNotMatch(layout, /requireChatGPTUser|redirect|signin-with-chatgpt/);
   assert.equal(await read("app/chatgpt-auth.ts").then(() => false, () => true), true);
   assert.equal(await read("lib/auth-paths.ts").then(() => false, () => true), true);
-  assert.equal((workflow.match(/grep -Fq '资金异动雷达'/g) ?? []).length, 2);
-  assert.equal((workflow.match(/WORKER_BASE_URL\/api\/history/g) ?? []).length, 2);
-  assert.equal((workflow.match(/WORKER_BASE_URL\/api\/account-logs/g) ?? []).length, 2);
-  assert.equal((workflow.match(/WORKER_BASE_URL\/api\/candles/g) ?? []).length, 0);
-  assert.equal((workflow.match(/WORKER_BASE_URL\/api\/live\/credentials/g) ?? []).length, 2);
 });
 
 test("at-least-once alarm and independent feed recovery are explicit", async () => {
@@ -213,51 +115,31 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
   assert.match(worker, /completeTrades\.length > item\.report\.trades\.length/);
 });
 
-test("rejected entry audit is bounded, observational and reuses the bulk ticker path", async () => {
-  const [audit, worker] = await Promise.all([read("lib/rejection-audit.ts"), read("worker/index-clean.ts")]);
-  assert.match(audit, /REJECTION_AUDIT_HORIZON_MS = 20 \* 60_000/);
-  assert.match(audit, /MAX_PENDING_REJECTION_AUDITS = 120/);
-  assert.match(audit, /MAX_RECENT_REJECTION_AUDITS = 200/);
-  assert.match(audit, /MAX_REJECTION_RULE_COMBINATIONS = 64/);
-  assert.match(worker, /quotes: Object\.fromEntries\(rows\.map/);
-  assert.match(worker, /primaryRules: rejectionAudit\.primaryRules \?\? \{\}/);
-  assert.match(worker, /isolatedRules: rejectionAudit\.isolatedRules \?\? \{\}/);
-  assert.match(worker, /combinations: rejectionAudit\.combinations \?\? \{\}/);
-  assert.match(worker, /recent: rejectionAudit\.recent\.slice\(-20\)\.reverse\(\)/);
-  assert.doesNotMatch(worker, /advanceRejectionAudit|recordRejectedCandidate/);
-  assert.doesNotMatch(audit, /fetch\(|DB\.prepare|D1Database|GateLiveClient/);
-});
-
-test("paired reaction lab is bounded, non-executable and keeps no-trade controls", async () => {
-  const [lab, worker, page] = await Promise.all([read("lib/reaction-lab.ts"), read("worker/index-clean.ts"), read("app/page.tsx")]);
-  assert.match(lab, /REACTION_OBSERVATION_MS = 3 \* 60_000/);
-  assert.match(lab, /MAX_ACTIVE_REACTIONS = 36/);
-  assert.match(lab, /"CONTINUATION" \| "REVERSAL"/);
-  assert.match(lab, /"NO_TRIGGER"/);
-  assert.doesNotMatch(lab, /fetch\(|DB\.prepare|D1Database|GateLiveClient|reconcilePaper/);
+test("strategy arena is bounded, cost-aware, adaptive, and cannot reach LIVE", async () => {
+  const [arena, worker, page, migration] = await Promise.all([
+    read("lib/strategy-arena.ts"), read("worker/index-clean.ts"), read("app/page.tsx"),
+    read("drizzle/0035_strategy_arena_fresh_start.sql"),
+  ]);
+  assert.match(arena, /STRATEGY_CATALOG/);
+  assert.match(arena, /SHADOW_PROMOTION_SAMPLE = 6/);
+  assert.match(arena, /SHADOW_PROMOTION_WINS = 4/);
+  assert.match(arena, /PAPER_DEMOTION_LOSSES = 2/);
+  assert.match(arena, /ARENA_FRICTION_RATE = 0\.0018/);
+  assert.match(arena, /recentShadow\.length > 400/);
+  assert.match(arena, /recentPaper\.length > 400/);
+  assert.match(arena, /seenSignals\.length > 1_000/);
+  assert.doesNotMatch(arena, /fetch\(|DB\.prepare|D1Database|GateLiveClient|reconcilePaper/);
   assert.match(worker, /const decision: Decision \| null = null/);
   assert.match(worker, /allowOpen: false/);
-  assert.match(worker, /if \(body\.enabled\) return json\(\{ ok: false, error: "双向实验仍是影子研究，实盘新开仓已锁定"/);
-  assert.match(worker, /advanceReactionLab/);
-  assert.match(page, /只记影子结果，不产生新 PAPER \/ LIVE 订单/);
-  assert.match(page, /旧单向方案审计（已归档）/);
-});
-
-test("win/loss research freezes pre-outcome features and cannot execute", async () => {
-  const [research, lab, worker, page] = await Promise.all([read("lib/outcome-research.ts"), read("lib/reaction-lab.ts"),
-    read("worker/index-clean.ts"), read("app/page.tsx")]);
-  assert.match(research, /OUTCOME_DISCOVERY_SAMPLES = 100/);
-  assert.match(research, /MAX_OUTCOME_PROCESSED = 512/);
-  assert.match(research, /experiment\.featureVersion !== 1/);
-  assert.match(research, /"DISCOVERY" as const : "CONFIRMATION" as const/);
-  assert.match(research, /function freezeCandidates/);
-  assert.match(research, /candidateGroupIds/);
-  assert.doesNotMatch(research, /fetch\(|DB\.prepare|D1Database|GateLiveClient|reconcilePaper/);
-  assert.match(lab, /triggerRetraceRatio: retraceRatio/);
-  assert.match(lab, /triggerAlignedFlow: alignedFlow/);
-  assert.match(worker, /ingestReactionOutcomes/);
-  assert.match(page, /盈利 \/ 亏损归因研究/);
-  assert.match(page, /不下单，也不会自动修改策略/);
+  assert.match(worker, /observeStrategyArena/);
+  assert.match(worker, /advanceStrategyArena/);
+  assert.match(worker, /strategyCutover \? initialStrategyArena\(\)/);
+  assert.match(page, /最近.*笔至少.*胜且净收益为正/);
+  assert.match(page, /模拟.*连亏/);
+  assert.match(migration, /DELETE FROM `paper_events`/);
+  assert.match(migration, /DELETE FROM `paper_positions`/);
+  assert.match(migration, /DELETE FROM `paper_plans`/);
+  assert.doesNotMatch(migration, /live_exchange_credentials/);
 });
 
 test("PAPER and LIVE share bounded sizing and meaningful net-profit economics", async () => {

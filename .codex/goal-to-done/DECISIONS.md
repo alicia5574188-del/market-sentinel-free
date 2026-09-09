@@ -222,3 +222,10 @@
 - Forward attribution records the admission-order primary blocker, exactly-one-rule failures, and the complete unique rule combination. Only exactly-one-rule failures may become a preliminary suspected false rejection after the existing sample, post-cost profitability, average-net-return, and target-versus-stop thresholds pass.
 - Existing aggregate history is preserved. New attribution buckets start empty on an old checkpoint instead of backfilling only the bounded recent tail and misrepresenting it as complete history. Pending old-version samples retain enough frozen data to enter the new buckets when they resolve.
 - Rule combinations are capped at 64 identities; overflow is counted and exposed. The upgrade adds no market request, D1 write, trading mutation, strategy threshold change, risk, or LIVE authority.
+# 2026-09-09 — Strategy rotation requires short evidence, not one lucky win
+
+- “All market strategies” is bounded to ten interpretable families fully supported by the existing ticker, order-book, completed-candle, signed-trade, OI and liquidation inputs. No synthetic strategy may silently require unavailable tick history or external indicators.
+- One profitable shadow trade is not promotion evidence when many strategies compete. Promotion uses the user's fast-rotation intent but requires a rolling 6-trade window, at least 4 after-cost wins, and positive window net return.
+- Every strategy keeps its own 1,000 U validation ledger. This prevents multiple strategies on one market event from hiding individual losses in a combined account.
+- Two consecutive PAPER losses remain the hard demotion rule requested by the user. A non-positive rolling 6-trade PAPER result is an additional regime-change guard.
+- The arena is research-only: no strategy result feeds the legacy PAPER executor or LIVE coordinator. Old PAPER history is deleted by migration and version cutover; Gate credentials and LIVE reconciliation state are preserved.
