@@ -4,7 +4,7 @@ A Gate USDT perpetual market-regime and progressive strategy-rotation system. On
 
 ## Data architecture
 
-- Every 10 seconds, the bulk futures-ticker request scans the 30 most liquid eligible Gate USDT perpetuals. It maintains compact profiles for trend, range, compression and anomaly/expansion.
+- Every 10 seconds, the bulk futures-ticker request scans the 30 most liquid eligible Gate USDT perpetuals. Its four-second timeout is isolated from the two-second position-book timeout and runs only after position management. It maintains compact profiles for trend, range, compression and anomaly/expansion.
 - Position books and owner-controlled LIVE reconciliation run before the optional bulk scan. A failed bulk scan preserves the last good radar snapshot, retries at most once per normal ten-second scan, never becomes a global execution fault, and cannot authorize new strategy observations once that snapshot is older than 30 seconds. Partial candidate-book loss remains isolated per symbol and does not misreport the whole authority as recovering.
 - The bulk scan uses price, turnover, funding and open interest. A profile needs 18 observations and three confirmations before a regime change is accepted.
 - Up to ten priority symbols receive the two-second order book plus rotating completed 1m/15m/1h data, locally aggregated 4h structure, signed trades, open interest, funding and liquidation observations. Open PAPER/LIVE positions and effective-shadow trades retain priority; new candidates compete for remaining capacity.

@@ -1,5 +1,11 @@
 # Status
 
+## 2026-09-09 radar recovery correction — deployed
+
+- The initial exponential radar backoff was confirmed to starve the 18-observation regime warmup during intermittent Gate timeouts. Recovery now retries at most once per normal ten-second scan, and the larger all-market ticker payload gets a dedicated four-second timeout only after position books and LIVE reconciliation.
+- Partial ordinary-candidate book failures remain individually fail-closed but no longer make the whole authority report recovery. The phone shows a radar warning only after the last good scan is stale for 30 seconds.
+- Production correction commit and Cloudflare version are recorded after the release gate below; LIVE remains OFF throughout.
+
 ## 2026-09-09 isolated radar timeout recovery — deployed
 
 - Gate bulk-ticker timeouts no longer enter global execution health or retry every two seconds. The authority preserves the last good 30-market result and retries at most once per normal ten-second scan, so the 18-observation regime warmup is not starved by 15/30/60-second gaps.

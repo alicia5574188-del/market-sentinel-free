@@ -1,6 +1,8 @@
 import type { BookLevel, BookSnapshot } from "./liquidity-core.ts";
 
 const BASE = "https://api.gateio.ws/api/v4";
+const GATE_PUBLIC_TIMEOUT_MS = 2_000;
+const GATE_BULK_TICKER_TIMEOUT_MS = 4_000;
 
 export class GatePublicError extends Error {
   readonly status: number;
@@ -12,10 +14,10 @@ export class GatePublicError extends Error {
   }
 }
 
-async function gatePublic<T>(path: string): Promise<T> {
+async function gatePublic<T>(path: string, timeoutMs = GATE_PUBLIC_TIMEOUT_MS): Promise<T> {
   const response = await fetch(`${BASE}${path}`, {
     headers: { Accept: "application/json", "X-Gate-Size-Decimal": "1" },
-    signal: AbortSignal.timeout(2_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) {
     const retryAfter = Number(response.headers.get("retry-after") ?? 0);
@@ -110,7 +112,7 @@ export async function fetchActiveContracts() {
 }
 
 export async function fetchMarketTickers() {
-  const rows = await gatePublic<GateTicker[]>("/futures/usdt/tickers");
+  const rows = await gatePublic<GateTicker[]>("/futures/usdt/tickers", GATE_BULK_TICKER_TIMEOUT_MS);
   return rows.map((row) => ({
     symbol: row.contract ?? "",
     last: Number(row.last ?? 0),

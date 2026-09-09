@@ -268,5 +268,13 @@
 - The two-second authority must process current PAPER books and any LIVE reconciliation before attempting the optional ten-second whole-market ticker scan.
 - A bulk radar failure retains the last successful 30-market snapshot and retries at most once per normal ten-second scan. The earlier 15/30/60-second backoff was removed because it could starve the 18-observation regime warmup and repeatedly reset profiles after five-minute gaps. Failed attempts do not update success time, do not enter global `lastError`, and do not increase the normal request cadence.
 - A partial failure among ordinary candidate-market books stays in per-symbol diagnostics. It degrades the whole authority only when no market snapshot succeeds or protected-position data is unavailable; every failed symbol remains individually blocked from new entries.
+- The all-market ticker payload has a dedicated four-second timeout; position-book and other execution-path requests retain their two-second timeout. Radar still runs after PAPER books and LIVE reconciliation, keeping the current management pass ahead of optional scanning while allowing the larger bulk response to survive ordinary network jitter.
 - Radar candidates older than 30 seconds cannot create new strategy observations, effective shadows, or simulated orders. Existing PAPER/LIVE positions continue to use only their independent fresh bid/ask path.
 - The phone shows the dedicated Chinese radar-delay notice only once the last successful scan is over 30 seconds old; a single transient timeout is silent. One successful scan clears the failure state automatically.
+
+# 2026-09-09 — Permanent operational path memory
+
+- Source of truth is `alicia5574188-del/market-sentinel-free` on GitHub `main`; production releases only through `.github/workflows/sentinel-v2-ci.yml` to the configured Cloudflare Worker. Do not use old branches or alternate sites.
+- Scratch absolute paths and linked worktrees are temporary. If a saved worktree points to a deleted scratch Git directory, make one fresh shallow clone of the source-of-truth repository instead of probing unrelated folders.
+- If local Git push lacks credentials, use the connected GitHub Git Data API once: read current `main`, create changed blobs/tree/commit, and fast-forward `main`. Do not retry the same unauthenticated CLI push.
+- Production truth comes from the matching GitHub Actions run, deploy-job log, Cloudflare version ID, and its advancing `/__health` gate. Direct Chrome navigation to public JSON endpoints can be blocked by the client and is not a valid failure signal; inspect the rendered production page only for UI state.

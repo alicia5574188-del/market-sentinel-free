@@ -14,6 +14,9 @@ test("runtime uses bounded futures REST snapshots, no continuous WebSocket", asy
   assert.doesNotMatch(gate, /liq_orders\?status=/);
   assert.match(gate, /X-Gate-Size-Decimal/);
   assert.match(gate, /volume_24h_settle/);
+  assert.match(gate, /GATE_PUBLIC_TIMEOUT_MS = 2_000/);
+  assert.match(gate, /GATE_BULK_TICKER_TIMEOUT_MS = 4_000/);
+  assert.match(gate, /gatePublic<GateTicker\[\]>\("\/futures\/usdt\/tickers", GATE_BULK_TICKER_TIMEOUT_MS\)/);
   assert.match(gate, /\/futures\/usdt\/candlesticks/);
   assert.doesNotMatch(worker + gate, /new WebSocket|futures\.order_book_update/);
   assert.match(worker, /MAX_ANCILLARY_CONCURRENCY = 2/);
