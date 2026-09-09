@@ -1,4 +1,4 @@
-export const SYSTEM_VERSION = "market-regime-arena-v3";
+export const SYSTEM_VERSION = "adaptive-shadow-v4";
 export const PORTFOLIO_RISK_CAP = 0.10;
 export const CORRELATED_DIRECTION_RISK_CAP = 0.065;
 export const STALE_AFTER_MS = 5_000;
@@ -6,8 +6,8 @@ export const WALL_WINDOW = 30;
 export const ROUND_TRIP_FRICTION_RATE = 0.0018;
 export const MIN_TARGET_DISTANCE_RATE = 0.0025;
 export const MIN_NET_REWARD_RISK = 1.2;
-export const MIN_SINGLE_TRADE_RISK_RATE = 0.005;
-export const MAX_SINGLE_TRADE_RISK_RATE = 0.01;
+export const MIN_SINGLE_TRADE_RISK_RATE = 0.01;
+export const MAX_SINGLE_TRADE_RISK_RATE = 0.02;
 export const MAX_NOTIONAL_TO_EQUITY = 4;
 export const MIN_NET_TARGET_RETURN_ON_EQUITY = 0.002;
 export const DYNAMIC_EXIT_CONFIRMATIONS = 3;
@@ -451,7 +451,9 @@ export function sizePaperPosition(input: {
   const availablePortfolioRisk = Math.max(0, input.equity * PORTFOLIO_RISK_CAP - input.openRisk);
   const availableCorrelatedRisk = Math.max(0, input.equity * CORRELATED_DIRECTION_RISK_CAP - (input.sameDirectionRisk ?? 0));
   const availableRisk = Math.min(availablePortfolioRisk, availableCorrelatedRisk);
-  const desiredRiskRate = clamp(MIN_SINGLE_TRADE_RISK_RATE + input.confidence * 0.005, MIN_SINGLE_TRADE_RISK_RATE, MAX_SINGLE_TRADE_RISK_RATE);
+  const desiredRiskRate = clamp(MIN_SINGLE_TRADE_RISK_RATE
+    + input.confidence * (MAX_SINGLE_TRADE_RISK_RATE - MIN_SINGLE_TRADE_RISK_RATE),
+  MIN_SINGLE_TRADE_RISK_RATE, MAX_SINGLE_TRADE_RISK_RATE);
   const desiredLoss = Math.min(availableRisk, input.equity * desiredRiskRate);
   const structuralMove = Math.abs(input.entry - input.invalidation) / Math.max(input.entry, 1e-9);
   const friction = (input.feeBps + input.stressSlippageBps) / 10_000;

@@ -4,9 +4,9 @@ import "./globals.css";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "市场状态竞技场 · PAPER",
-  description: "基于期货流动性目标、估计清算梯度与突破/反转/震荡三态的模拟交易系统",
-  applicationName: "市场状态竞技场",
+  title: "V4自适应影子策略 · PAPER",
+  description: "30币市场状态、滚动影子验证与动态风险的Gate永续合约模拟系统",
+  applicationName: "V4自适应影子策略",
   manifest: "/manifest.webmanifest",
 };
 

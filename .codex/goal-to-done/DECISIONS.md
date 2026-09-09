@@ -253,3 +253,12 @@
 - Every strategy keeps its own 1,000 U validation ledger. This prevents multiple strategies on one market event from hiding individual losses in a combined account.
 - Two consecutive PAPER losses remain the hard demotion rule requested by the user. A non-positive rolling 6-trade PAPER result is an additional regime-change guard.
 - The arena is research-only: no strategy result feeds the legacy PAPER executor or LIVE coordinator. Old PAPER history is deleted by migration and version cutover; Gate credentials and LIVE reconciliation state are preserved.
+# 2026-09-09 — V4 uses rolling evidence and one dynamic-risk account
+
+- Observation shadows never count. Effective shadows require a fresh executable bid/ask, live entry location, structure/noise stop, cost-covering target, two-sided depth, sufficient turnover and complete Gate contract metadata.
+- Strategy activation is exactly latest-three independent effective-shadow wins OR positive latest-six after-cost total. Deactivation is exactly latest-three PAPER losses OR non-positive latest-six PAPER total. Demotion requires a newly resolved effective shadow before reactivation.
+- Regime absence is `SLEEPING`, not failure. It retains evidence and enabled intent, resumes only when its channel returns, and opens nothing while asleep.
+- Confirmation/retest variants freeze different trigger locations; fast/structure variants freeze different targets and holding/no-progress horizons. Equal conditions may not create a second score identity.
+- The unified account has no product-level three-position quota. Each entry risks continuously 1%–2% of current equity; admission is bounded by 10% total stop risk, 6.5% same-direction risk, 30% margin, 4× total notional, one symbol/event winner and ten actively manageable symbols.
+- The 10-second scan is limited to the thirty most liquid eligible Gate USDT perpetuals. PAPER/LIVE and effective-shadow exposure retain deep-data priority; stale or insufficient management capacity blocks only new entries and never executes an old-price exit.
+- V3 account exposure survives restart until every open symbol has a fresh executable quote, then it is settled and archived. V4 starts at 1,000 U with fresh effective-shadow evidence; old trade/cycle history remains available. LIVE is forced OFF across the cutover.

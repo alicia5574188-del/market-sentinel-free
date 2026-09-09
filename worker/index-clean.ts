@@ -17,8 +17,8 @@ import { clearOwnerSessionCookie, createOwnerSession, ownerAuthConfigured, owner
 import { eventAlignedFlow, updateRadar, type EventEntryAssessment, type RadarBaseline, type RadarCandidate } from "../lib/market-radar.ts";
 import { anomalyCandidate, initialMarketRegimes, marketRegimeSummary, normalizeMarketRegimes, selectDiverseMarketPool, updateMarketRegimes,
   type MarketRegimeState } from "../lib/market-regime.ts";
-import { advanceStrategyArena, arenaSummary, initialStrategyArena, normalizeStrategyArena, observeStrategyArena,
-  resetStrategyArenaAccount, type StrategyArenaState } from "../lib/strategy-arena.ts";
+import { advanceStrategyArena, applyStrategySleepStates, arenaSummary, initialStrategyArena, normalizeStrategyArena, observeStrategyArena,
+  PORTFOLIO_REALTIME_CAPACITY, resetStrategyArenaAccount, type StrategyArenaState } from "../lib/strategy-arena.ts";
 
 const LOOP_MS = 2_000;
 const AUTHORITY_STALE_AFTER_MS = 8_000;
@@ -30,7 +30,8 @@ const UNIVERSE_MS = 10 * 60_000;
 const RADAR_MS = 10_000;
 const WARMUP_SNAPSHOTS = 4;
 const MAX_ANCILLARY_CONCURRENCY = 2;
-const MAX_OPEN_POSITIONS = 3;
+const MAX_OPEN_POSITIONS = PORTFOLIO_REALTIME_CAPACITY;
+const SCAN_UNIVERSE_SIZE = 30;
 const MAX_OUTBOX_ITEMS = 512;
 const NON_ALARM_WRITE_CAP = 8_000;
 const WATCHDOG_WRITE_RESERVE = 2_880;
@@ -378,23 +379,28 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private refreshRadar(now: number, rows: Awaited<ReturnType<typeof fetchMarketTickers>>) {
-    this.runtime.strategyArena = advanceStrategyArena({ state: this.runtime.strategyArena,
-      quotes: Object.fromEntries(rows.map((row) => [row.symbol, row.last])), now });
     const eligible = new Set(this.contractCatalog.keys());
-    const radar = updateRadar(this.radarBaselines, rows, eligible, now);
+    const universeRows = rows.filter((row) => eligible.has(row.symbol))
+      .sort((left, right) => right.volume24hUsd - left.volume24hUsd).slice(0, SCAN_UNIVERSE_SIZE);
+    const universe = new Set(universeRows.map((row) => row.symbol));
+    const radar = updateRadar(this.radarBaselines, universeRows, universe, now);
     this.radarBaselines = radar.baselines;
     this.runtime.radar = { scanned: radar.scanned, lastScanAt: now, candidates: radar.candidates };
-    const regimes = updateMarketRegimes({ state: this.runtime.marketRegimes, rows, eligible, now });
+    const regimes = updateMarketRegimes({ state: this.runtime.marketRegimes, rows: universeRows, eligible: universe, now });
     const allCandidates = [...regimes.candidates, ...radar.candidates.map(anomalyCandidate)]
       .sort((left, right) => right.score - left.score).slice(0, 36);
     this.runtime.marketRegimes = { ...regimes, candidates: allCandidates };
+    this.runtime.strategyArena = applyStrategySleepStates(this.runtime.strategyArena,
+      new Set(allCandidates.map((candidate) => candidate.channel)), now);
     this.runtime.lastRadarAt = now;
     const locked = this.runtime.symbols.filter((symbol) => this.runtime.positions[symbol]?.status === "OPEN"
       || this.runtime.plans[symbol]?.state === "PREPARED" || this.runtime.live.positions[symbol]?.status === "OPEN"
+      || this.runtime.strategyArena.portfolioOpen[symbol]
+      || Object.values(this.runtime.strategyArena.open).some((trade) => trade.symbol === symbol)
       || Boolean(this.runtime.live.entries[symbol] && !["FILLED", "CANCELLED"].includes(this.runtime.live.entries[symbol]!.status)));
-    const liquidFallback = rows.filter((row) => eligible.has(row.symbol)).sort((a, b) => b.volume24hUsd - a.volume24hUsd).map((row) => row.symbol);
+    const liquidFallback = universeRows.map((row) => row.symbol);
     const next = selectDiverseMarketPool({ locked, current: this.runtime.symbols, candidates: allCandidates,
-      fallback: liquidFallback, limit: MAX_OPEN_POSITIONS });
+      fallback: liquidFallback, limit: PORTFOLIO_REALTIME_CAPACITY });
     if (next.length) this.applyRealtimeSymbols(next);
   }
 
@@ -412,9 +418,23 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         spreadRate, range15m: analyzed.range15m, confirmationBySide: analyzed.confirmationBySide,
         fakeoutBySide: analyzed.fakeoutBySide, routes: analyzed.routes, bidDepthUsd, askDepthUsd,
         quantoMultiplier: this.runtime.contractMeta[symbol]?.quantoMultiplier,
-        maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate,
-        leverageMax: this.runtime.contractMeta[symbol]?.leverageMax, now,
+        maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate, completedMinuteAt: memory.timeframeUpdatedAt.m1,
+        leverageMax: this.runtime.contractMeta[symbol]?.leverageMax, now, dataFresh: true,
+        contractReady: this.runtime.contractMeta[symbol] != null,
+        managementCapacity: Object.keys(this.runtime.strategyArena.portfolioOpen)
+          .every((openSymbol) => this.runtime.symbols.includes(openSymbol) && this.runtime.evidence[openSymbol]?.fresh !== false),
       } });
+    }
+    if (this.runtime.strategyArena.cutoverPending) {
+      const positions = Object.values(this.runtime.strategyArena.portfolioOpen);
+      if (positions.every((position) => {
+        const evidence = this.runtime.evidence[position.symbol];
+        return evidence?.fresh && now - evidence.observedAt <= STALE_AFTER_MS && evidence.bestBid != null && evidence.bestAsk != null;
+      })) this.runtime.strategyArena = resetStrategyArenaAccount({ state: this.runtime.strategyArena,
+        quotes: Object.fromEntries(positions.map((position) => [position.symbol, {
+          midpoint: this.runtime.evidence[position.symbol]!.midpoint, bestBid: this.runtime.evidence[position.symbol]!.bestBid,
+          bestAsk: this.runtime.evidence[position.symbol]!.bestAsk, observedAt: this.runtime.evidence[position.symbol]!.observedAt, fresh: true,
+        }])), now, reason: "V4切换：以新鲜可成交价格结算并归档V3模拟周期" });
     }
   }
 
@@ -1622,14 +1642,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         ...(path === "/owner-runtime" ? { live } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length + bankruptcyOutbox.length,
         oldestOutboxAgeMs: outbox.length ? Math.max(0, Date.now() - (outbox[0].position.exitAt ?? outbox[0].position.entryAt)) : 0,
         authorityReady: this.authorityReady, generatedAt: Date.now(), state: effectiveState, stale,
-        analysisP99Ms: percentile99(this.runtime.analysisMs), limits: { loopMs: LOOP_MS, markets: this.runtime.symbols.length, scannedMarkets: this.runtime.radar.scanned, radarMs: RADAR_MS, warmupSnapshots: WARMUP_SNAPSHOTS,
+        analysisP99Ms: percentile99(this.runtime.analysisMs), limits: { loopMs: LOOP_MS, markets: this.runtime.symbols.length, scannedMarkets: this.runtime.radar.scanned, scanUniverse: SCAN_UNIVERSE_SIZE, radarMs: RADAR_MS, warmupSnapshots: WARMUP_SNAPSHOTS,
           maxAncillaryConcurrency: MAX_ANCILLARY_CONCURRENCY, maxSubrequestsPerAlarm: 32, plannedAlarmRequestsPerDay: 43_200,
           plannedAlarmWritesPerDay: 43_200, watchdogWriteReservePerDay: WATCHDOG_WRITE_RESERVE,
           nonAlarmWriteCapPerDay: NON_ALARM_WRITE_CAP, nonAlarmWritesToday: this.runtime.nonAlarmWrites,
           plannedDoWritesPerDay: 54_080,
           internalAnalysisP99RedlineMs: 25, topLevelCpuP99RedlineMs: 8, assumedRuntimePollSeconds: 15,
           plannedForegroundDoRequestsPerDay: 5_760, plannedCronWatchdogsPerDay: 1_440, plannedTotalDoRequestsPerDay: 50_400,
-          maxOpenPositions: MAX_OPEN_POSITIONS, plannedMaxD1BilledWritesPerDay: 4_800 } });
+          maxOpenPositions: null, realtimeCapacity: PORTFOLIO_REALTIME_CAPACITY, plannedMaxD1BilledWritesPerDay: 4_800 } });
     }
     if (path === "/owner-status" && request.method === "GET") {
       await this.ensureAlarm();

@@ -62,10 +62,11 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(page, /viewScroll\.current\[view\] = window\.scrollY/);
   assert.match(page, /市场状态竞技场/);
   assert.match(page, /48个策略单元/);
-  assert.match(page, /趋势、震荡\/压缩、异动/);
-  assert.match(page, /影子候选记录/);
+  assert.match(page, /趋势、震荡、压缩和异动候选/);
+  assert.match(page, /有效影子/);
+  assert.match(page, /观察影子/);
   assert.match(page, /1000 U模拟账户交易记录/);
-  assert.match(page, /唯一模拟账户/);
+  assert.match(page, /唯一模拟合约账户/);
   assert.match(page, /开启实盘复制/);
   assert.doesNotMatch(page, /双模拟账本|独立策略模拟/);
   assert.doesNotMatch(page, /组合风险预算|目标 \+150 U|双向反应实验 V1|盈利与亏损研究|旧方案归档|账户日志/);
@@ -118,21 +119,20 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
   assert.match(worker, /completeTrades\.length > item\.report\.trades\.length/);
 });
 
-test("market-regime arena is bounded, cost-aware, adaptive, and is the sole LIVE order source", async () => {
+test("V4 adaptive shadow arena is bounded, cost-aware, and is the sole LIVE order source", async () => {
   const [arena, regime, worker, page, migration] = await Promise.all([
     read("lib/strategy-arena.ts"), read("lib/market-regime.ts"), read("worker/index-clean.ts"), read("app/page.tsx"),
     read("drizzle/0035_strategy_arena_fresh_start.sql"),
   ]);
   assert.match(arena, /STRATEGY_CATALOG/);
-  assert.match(arena, /PROBATION_MIN_EVENTS = 4/);
-  assert.match(arena, /VERIFIED_PAPER_EVENTS = 8/);
-  assert.match(arena, /VERIFIED_PAPER_SYMBOLS = 2/);
-  assert.match(arena, /VERIFIED_PROFIT_FACTOR = 1\.15/);
-  assert.match(arena, /PAPER_DEMOTION_LOSSES = 2/);
-  assert.match(arena, /ARENA_FRICTION_RATE = 0\.0012/);
+  assert.match(arena, /PROMOTION_WIN_STREAK = 3/);
+  assert.match(arena, /PROMOTION_RECENT_WINDOW = 6/);
+  assert.match(arena, /PAPER_DEMOTION_LOSSES = 3/);
+  assert.match(arena, /ARENA_FRICTION_RATE = 0\.0014/);
   assert.match(arena, /ARENA_MAX_COST_SHARE = 0\.25/);
-  assert.match(arena, /PORTFOLIO_MAX_PROBATION_OPEN = 1/);
-  assert.match(arena, /PROBATION_RISK_MULTIPLIER = 1 \/ 3/);
+  assert.match(arena, /PORTFOLIO_REALTIME_CAPACITY = 10/);
+  assert.match(arena, /recentObservations/);
+  assert.match(arena, /cutoverPending/);
   assert.match(arena, /sizePaperPosition/);
   assert.match(arena, /selectSafeLeverage/);
   assert.match(arena, /contracts/);
@@ -152,10 +152,12 @@ test("market-regime arena is bounded, cost-aware, adaptive, and is the sole LIVE
   assert.match(worker, /mirrorNotionalFraction: trade\.notional \/ Math\.max\(trade\.accountEquityAtOpen/);
   assert.match(worker, /strategyArena: normalizeStrategyArena\(saved\.strategyArena\)/);
   assert.match(worker, /resetStrategyArenaAccount/);
-  assert.match(page, /4个独立事件可小仓试用/);
-  assert.match(page, /verifiedEvents \?\? 8/);
+  assert.match(page, /最新3笔有效影子连胜/);
+  assert.match(page, /观察影子/);
+  assert.match(page, /动态风险/);
   assert.match(page, /重置1000 U模拟资金/);
-  assert.match(page, /连亏 \$\{strategy\.consecutivePaperLosses\}\/\$\{rules\.demotionLosses\}/);
+  assert.match(worker, /SCAN_UNIVERSE_SIZE = 30/);
+  assert.match(worker, /maxOpenPositions: null/);
   assert.match(migration, /DELETE FROM `paper_events`/);
   assert.match(migration, /DELETE FROM `paper_positions`/);
   assert.match(migration, /DELETE FROM `paper_plans`/);
@@ -164,8 +166,8 @@ test("market-regime arena is bounded, cost-aware, adaptive, and is the sole LIVE
 
 test("legacy sizing and portfolio mirroring both retain bounded account risk", async () => {
   const [core, live] = await Promise.all([read("lib/liquidity-core.ts"), read("lib/gate-live.ts")]);
-  assert.match(core, /MIN_SINGLE_TRADE_RISK_RATE = 0\.005/);
-  assert.match(core, /MAX_SINGLE_TRADE_RISK_RATE = 0\.01/);
+  assert.match(core, /MIN_SINGLE_TRADE_RISK_RATE = 0\.01/);
+  assert.match(core, /MAX_SINGLE_TRADE_RISK_RATE = 0\.02/);
   assert.match(core, /PORTFOLIO_RISK_CAP = 0\.10/);
   assert.match(core, /CORRELATED_DIRECTION_RISK_CAP = 0\.065/);
   assert.match(core, /DYNAMIC_PROTECTION_MIN_CONFIRMED_R = 1\.5/);

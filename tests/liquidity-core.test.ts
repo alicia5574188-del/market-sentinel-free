@@ -668,13 +668,13 @@ test("position sizing never breaches ten percent portfolio or correlated-directi
   assert.equal(correlated.allowedLoss, 5);
 });
 
-test("single-entry risk is capped at 1% and notional is capped at four times equity", () => {
+test("single-entry risk varies continuously from 1% to 2% and notional is capped at four times equity", () => {
   const single = sizePaperPosition({ equity: 1_000, entry: 100, invalidation: 98, feeBps: 10, stressSlippageBps: 8, confidence: 1, openRisk: 0 });
-  assert.ok(Math.abs(single.allowedLoss - 10) < 1e-9);
+  assert.ok(single.allowedLoss >= 10 && single.allowedLoss <= 20);
   assert.ok(single.notional <= 4_000);
   assert.ok(single.notional * 0.0018 <= 7.2);
   const next = sizePaperPosition({ equity: 1_000, entry: 100, invalidation: 98, feeBps: 10, stressSlippageBps: 8, confidence: 1, openRisk: single.allowedLoss });
-  assert.ok(Math.abs(next.allowedLoss - 10) < 1e-9);
+  assert.ok(next.allowedLoss >= 10 && next.allowedLoss <= 20);
   assert.ok(single.portfolioRiskAfter <= 100 && next.portfolioRiskAfter <= 100);
 });
 

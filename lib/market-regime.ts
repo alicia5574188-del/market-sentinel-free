@@ -148,7 +148,6 @@ function regimeCandidate(profile: MarketProfile, now: number): MarketRegimeCandi
   let channel: CandidateChannel;
   let side = profile.side;
   let score = 0;
-  let bucketMs = 5 * 60_000;
   if (profile.regime === "TREND") {
     channel = "TREND";
     score = profile.trendEfficiency * 70 + clamp(Math.abs(profile.trendRate) / 0.004, 0, 1) * 18 + liquidScore;
@@ -156,15 +155,13 @@ function regimeCandidate(profile: MarketProfile, now: number): MarketRegimeCandi
     channel = "RANGE";
     side = profile.rangePosition <= 0.2 ? "LONG" : "SHORT";
     score = (1 - profile.trendEfficiency) * 58 + Math.abs(profile.rangePosition - 0.5) * 55 + liquidScore;
-    bucketMs = 3 * 60_000;
   } else if (profile.regime === "COMPRESSION") {
     channel = "COMPRESSION";
     score = clamp(1 - profile.volatilityRatio, 0, 1) * 70 + profile.trendEfficiency * 18 + liquidScore;
-    bucketMs = 10 * 60_000;
   } else return null;
-  const firstSeenAt = Math.floor(now / bucketMs) * bucketMs;
+  const firstSeenAt = profile.regimeSince;
   return {
-    id: `${profile.symbol}:${channel}:${firstSeenAt}`, symbol: profile.symbol, channel, regime: profile.regime, side,
+    id: `${profile.symbol}:${channel}:${side}:${firstSeenAt}`, symbol: profile.symbol, channel, regime: profile.regime, side,
     score: clamp(score, 0, 100), referencePrice: profile.last, moveRate: finite((profile.last - profile.slowPrice) / Math.max(profile.slowPrice, 1e-9)),
     trendRate: profile.trendRate, trendEfficiency: profile.trendEfficiency, volatilityRatio: profile.volatilityRatio,
     rangePosition: profile.rangePosition, volume24hUsd: profile.volume24hUsd, fundingRate: profile.fundingRate,
