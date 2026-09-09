@@ -32,12 +32,16 @@ type ArenaTradeContext = { channel: CandidateChannel; regime: RegimeKind; anomal
   entryStyle: EntryStyle; exitProfile: ExitProfile; candidateScore: number; trendRate: number; trendEfficiency: number;
   volatilityRatio: number; rangePosition: number; openInterestChangeRate: number; volume24hUsd: number; fundingRate: number;
   alignedFlow: number; confirmation: number;
-  fakeoutRisk: number; rangeId: string | null; modeledCostRate: number };
+  fakeoutRisk: number; rangeId: string | null; modeledCostRate: number; spreadRate: number; bidDepthUsd: number; askDepthUsd: number;
+  structureSource: "ROUTE" | "RANGE" | "IMPULSE"; grossRewardRate: number; structuralStopRate: number;
+  netRewardRisk: number; costShare: number; empiricalExpectedReturnRate: number; empiricalProfitFactor: number; empiricalEvents: number };
 type ArenaTrade = { id: string; strategyId: string; strategyName: string; family: StrategyFamily; lane: TradeLane; eventId: string;
   symbol: string; side: Side; status: "OPEN" | "CLOSED"; openedAt: number; closedAt: number | null; entryPrice: number;
-  stopPrice: number; targetPrice: number; exitPrice: number | null; outcome: "TARGET" | "STOP" | "TIMEOUT" | null;
+  stopPrice: number; targetPrice: number; exitPrice: number | null; outcome: "TARGET" | "STOP" | "TIMEOUT" | "RESET" | null;
   grossReturnRate: number | null; netReturnRate: number | null; netPnl: number | null; notional: number;
-  maxFavorableRate: number; maxAdverseRate: number; lastPrice: number; selectedForPortfolio: boolean; reason: string; context: ArenaTradeContext };
+  maxFavorableRate: number; maxAdverseRate: number; lastPrice: number; selectedForPortfolio: boolean; reason: string;
+  context: ArenaTradeContext; admissionTier: "PROBATION" | "NORMAL" | null; plannedRisk: number; contracts: number;
+  quantoMultiplier: number; leverage: number; margin: number; accountEquityAtOpen: number };
 type StrategyScore = { id: string; name: string; family: StrategyFamily; channel: CandidateChannel; description: string;
   entryStyle: EntryStyle; exitProfile: ExitProfile; lane: StrategyLane;
   shadowResolved: number; shadowWins: number; shadowNetReturnRate: number; paperResolved: number; paperWins: number;
@@ -45,13 +49,21 @@ type StrategyScore = { id: string; name: string; family: StrategyFamily; channel
   stageEvents: string[]; stageSymbols: string[];
   transitions: number; lastTransitionAt: number | null };
 type StrategyTransition = { id: string; strategyId: string; strategyName: string; from: StrategyLane; to: StrategyLane; at: number; reason: string };
-type StrategyArena = { version: 2; startedAt: number; catalogSize: number; playbookCount: number; shadowCount: number;
+type PerformanceEvidence = { events: number; wins: number; netReturnRate: number; meanReturnRate: number;
+  conservativeReturnRate: number; profitFactor: number; regimeEvents: number };
+type PlaybookEvidence = { id: string; name: string; family: StrategyFamily; channel: CandidateChannel; description: string; evidence: PerformanceEvidence };
+type PortfolioCycleArchive = { number: number; ruleVersion: string; startedAt: number; endedAt: number; startingEquity: number;
+  endingEquity: number; resolved: number; wins: number; grossPnl: number; costs: number; reason: string };
+type StrategyArena = { version: 3; startedAt: number; catalogSize: number; playbookCount: number; shadowCount: number;
   trialCount: number; verifiedCount: number; paperCount: number; openShadow: ArenaTrade[]; openPaper: ArenaTrade[];
   portfolioOpen: ArenaTrade[]; portfolioEquity: number; portfolioResolved: number; portfolioWins: number;
   portfolioGrossPnl: number; portfolioCosts: number; strategies: StrategyScore[]; recentShadow: ArenaTrade[];
-  recentPaper: ArenaTrade[]; recentPortfolio: ArenaTrade[]; transitions: StrategyTransition[];
-  rules: { trialPromotionWins: number; verifiedEvents: number; verifiedSymbols: number; verifiedProfitFactor: number;
-    demotionLosses: number; frictionFloorRate: number; maxHoldMs: number } };
+  recentPaper: ArenaTrade[]; recentPortfolio: ArenaTrade[]; transitions: StrategyTransition[]; playbooks: PlaybookEvidence[];
+  portfolioCycle: number; portfolioCycleStartedAt: number; archivedPortfolioCycles: PortfolioCycleArchive[];
+  admissionRejects: Record<string, number>;
+  rules: { probationEvents: number; verifiedEvents: number; verifiedSymbols: number; probationProfitFactor: number;
+    verifiedProfitFactor: number; demotionLosses: number; frictionFloorRate: number; minNetRewardRisk: number;
+    maxCostShare: number; probationRiskMultiplier: number; maxProbationOpen: number; maxHoldMs: number } };
 type RegimeCandidate = { id: string; symbol: string; channel: CandidateChannel; regime: RegimeKind; side: Side; score: number;
   referencePrice: number; moveRate: number; trendRate: number; trendEfficiency: number; volatilityRatio: number;
   rangePosition: number; volume24hUsd: number; openInterestChangeRate: number; confirmations: number; firstSeenAt: number;
@@ -61,7 +73,7 @@ type MarketRegimes = { version: 1; lastUpdatedAt: number | null; tracked: number
 type Runtime = {
   version: string; mode: "PAPER"; state: string; stale: boolean; generatedAt: number; lastSuccessAt: number | null; lastError: string | null; symbols: string[]; equity: number; dailyStartEquity?: number;
   decisions: Record<string, Decision | null>; routes: Record<string, LiquidityRoute[]>; plans: Record<string, Plan | null>; positions: Record<string, Position | null>; authorityReady: boolean;
-  evidence: Record<string, { midpoint: number; observedAt: number; warmup: number; fresh: boolean; ancillaryFresh: boolean; entryReady?: boolean; optionalFresh?: boolean; recoveryFreshCount?: number; suspensionReason?: string | null; topLong: Zone | null; topShort: Zone | null; absorption: number; range15m: RangeStructure | null }>;
+  evidence: Record<string, { midpoint: number; bestBid?: number; bestAsk?: number; observedAt: number; warmup: number; fresh: boolean; ancillaryFresh: boolean; entryReady?: boolean; optionalFresh?: boolean; recoveryFreshCount?: number; suspensionReason?: string | null; topLong: Zone | null; topShort: Zone | null; absorption: number; range15m: RangeStructure | null }>;
   entryAssessments?: Record<string, EntryAssessment | null>;
   feedFailures?: Record<string, { count: number; retryAt: number; suspendedSince?: number | null; totalFailures?: number; recoveries?: number; lastFailureAt?: number | null; lastError?: string | null; maxObservedLagMs?: number }>;
   limits: { maxOpenPositions: number; warmupSnapshots?: number; loopMs?: number; radarMs?: number; scannedMarkets?: number; maxAncillaryConcurrency?: number };
@@ -104,6 +116,9 @@ export default function Home() {
   const [showLogin, setShowLogin] = useState(false);
   const [liveBusy, setLiveBusy] = useState(false);
   const [liveActionError, setLiveActionError] = useState<string | null>(null);
+  const [paperResetBusy, setPaperResetBusy] = useState(false);
+  const [paperResetNotice, setPaperResetNotice] = useState<string | null>(null);
+  const [paperResetError, setPaperResetError] = useState<string | null>(null);
   const tabScroll = useRef<Record<Tab, number>>({ brain: 0, orders: 0, live: 0, history: 0, settings: 0 });
   const selectTab = (next: Tab) => {
     if (next === tab) return;
@@ -166,6 +181,20 @@ export default function Home() {
     else if (liveEnabled) void setLiveMode(false);
     else if (window.confirm("确认开启实盘？开启后只复制此刻以后由1000 U模拟账户新开的订单，不会追单复制当前已有模拟持仓。")) void setLiveMode(true);
   };
+  const resetPaperAccount = async () => {
+    if (!auth.authenticated) { setShowLogin(true); return; }
+    if (liveEnabled) { setPaperResetError("请先关闭实盘复制，再重置模拟资金。"); return; }
+    if (!window.confirm("确认结束当前1000 U模拟账户周期并重置为1000 U？当前模拟持仓会按最新可成交价格结算，策略研究样本会保留。")) return;
+    setPaperResetBusy(true); setPaperResetNotice(null); setPaperResetError(null);
+    try {
+      const response = await fetch("/api/paper/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: "RESET" }) });
+      const payload = await response.json() as { error?: string; strategyArena?: StrategyArena };
+      if (!response.ok || !payload.strategyArena) throw new Error(payload.error || "重置失败");
+      setRuntime((current) => current ? { ...current, strategyArena: payload.strategyArena } : current);
+      setPaperResetNotice("当前账户已归档并重置为1000 U；影子策略样本已保留，实盘仍关闭。");
+    } catch (failure) { setPaperResetError(failure instanceof Error ? failure.message : "重置失败"); }
+    finally { setPaperResetBusy(false); }
+  };
 
   const responseFresh = runtime != null && clock - receivedAt < RUNTIME_DISPLAY_TTL_MS && clock - runtime.generatedAt < RUNTIME_DISPLAY_TTL_MS;
   const healthy = runtimeReady(runtime, responseFresh);
@@ -187,6 +216,7 @@ export default function Home() {
     (groups[key] ??= []).push(strategy);
     return groups;
   }, {}));
+  const playbookById = new Map((arena?.playbooks ?? []).map((playbook) => [playbook.id, playbook]));
   const feedDiagnostics = runtime?.symbols.map((symbol) => runtime.feedFailures?.[symbol]).filter(Boolean) ?? [];
   const activeFeedSuspensions = feedDiagnostics.filter((feed) => feed?.suspendedSince != null).length;
   const totalFeedFailures = feedDiagnostics.reduce((sum, feed) => sum + (feed?.totalFailures ?? 0), 0);
@@ -202,13 +232,13 @@ export default function Home() {
     </header>
 
     {tab === "brain" && <>
-      <section className="brain-hero"><div><p className="eyebrow">唯一模拟账户</p><h1>{headline}</h1><p className="hero-detail">影子策略只负责筛选 · 选中的下一次机会直接进入同一个1000 U账户 · 实盘开启后只复制这个账户</p></div><div className="decision-badge"><small>当前权益</small><strong>{num(portfolioAccountEquity, 2)}</strong><span>USDT</span></div></section>
+      <section className="brain-hero"><div><p className="eyebrow">唯一模拟合约账户 · 第{arena?.portfolioCycle ?? 1}轮</p><h1>{headline}</h1><p className="hero-detail">4个独立事件可小仓试用 · 8个以上达标后正常仓位 · 没有正期望时允许空仓 · 实盘只复制这个账户</p></div><div className="decision-badge"><small>当前权益</small><strong>{num(portfolioAccountEquity, 2)}</strong><span>USDT</span></div></section>
 
       <section className="summary four">
         <article><small>模拟账户盈亏</small><strong className={portfolioPnl >= 0 ? "positive" : "negative"}>{signed(portfolioPnl)} U</strong><p>{signed(portfolioPnl / INITIAL_EQUITY * 100)}% · 已含当前持仓完整成本</p></article>
         <article><small>已完成交易</small><strong>{arena?.portfolioResolved ?? 0}</strong><p>盈利 {arena?.portfolioWins ?? 0} 笔 · 胜率 {num((arena?.portfolioResolved ?? 0) ? (arena?.portfolioWins ?? 0) / (arena?.portfolioResolved ?? 1) * 100 : 0, 1)}%</p></article>
         <article><small>累计交易成本</small><strong>{num(arena?.portfolioCosts ?? 0, 2)} U</strong><p>毛盈亏 {signed(arena?.portfolioGrossPnl ?? 0)} U</p></article>
-        <article><small>当前持仓</small><strong>{portfolioOpen.length} / 3</strong><p>同一币同一机会只执行一个策略</p></article>
+        <article><small>当前持仓</small><strong>{portfolioOpen.length} / 3</strong><p>最多1个小仓挑战者，其余为正常仓位</p></article>
       </section>
       {(!responseFresh || error) && runtime && <p className="notice">手机页面更新延迟，下面保留最近一次后台状态；服务器仍独立运行，不会因此停止判断或开模拟单。</p>}{runtime?.lastError && <p className="notice">{runtime.lastError.startsWith("D1") ? `历史镜像稍后重试，不影响行情判断和开仓：${runtime.lastError}` : `系统正在自动恢复：${runtime.lastError}`}</p>}
     </>}
@@ -225,10 +255,10 @@ export default function Home() {
       </article>)}{!regimes?.candidates.length && <p>正在积累全市场状态基线；预热完成后会同时产生趋势、震荡、压缩和异动候选。</p>}</div>
     </section>
 
-    <section className="playbook-list" hidden={tab !== "brain"}><div className="section-heading"><div><h2>内部策略筛选</h2><p>下面只决定哪些策略有资格给1000 U账户提供下一笔订单，本身不是账户交易。</p></div><span>{arena?.trialCount ?? 0} 试用 · {arena?.verifiedCount ?? 0} 稳定</span></div>{strategyGroups.length ? strategyGroups.map((strategies) => <PlaybookGroup key={strategies[0].id.split(":")[0]} strategies={strategies} rules={arena!.rules} />) : <div className="empty">正在读取48个策略单元…</div>}</section>
+    <section className="playbook-list" hidden={tab !== "brain"}><div className="section-heading"><div><h2>内部策略筛选</h2><p>同一行情事件在每套基础打法中只算1个独立样本；48个变体并行研究，但不会把重复变体假装成48份证据。</p></div><span>{arena?.trialCount ?? 0} 试用 · {arena?.verifiedCount ?? 0} 正常</span></div>{strategyGroups.length ? strategyGroups.map((strategies) => { const id = strategies[0].id.split(":")[0]; return <PlaybookGroup key={id} strategies={strategies} evidence={playbookById.get(id)?.evidence} rules={arena!.rules} />; }) : <div className="empty">正在读取48个策略单元…</div>}</section>
 
     <section className="shadow-log" hidden={tab !== "brain"}><div className="section-heading"><div><h2>影子候选记录</h2><p>每笔都按真实后续价格结算并扣除完整成本；这是晋级判断的原始记录。</p></div><span>{arena?.recentShadow.length ?? 0} 笔</span></div>{!arena?.recentShadow.length ? <div className="empty"><b>等待首批影子结果</b><p>策略满足各自条件后会在这里留下记录。</p></div> : <div className="history-table">{arena.recentShadow.slice(0, 30).map((trade) => <ArenaTradeRecord key={trade.id} trade={trade} />)}</div>}</section>
-    {!!arena?.transitions.length && <section className="shadow-log" hidden={tab !== "brain"}><div className="section-heading"><div><h2>策略升降级记录</h2><p>首次净盈利进入试用模拟，连续亏损2笔退回；稳定模拟另需跨事件和跨币验证。</p></div><span>{arena.transitions.length} 次</span></div><div className="transition-list">{arena.transitions.slice(0, 20).map((item) => <article key={item.id}><div><b>{item.strategyName}</b><small>{time(item.at)}</small></div><strong>{laneLabel(item.from)} → {laneLabel(item.to)}</strong><p>{item.reason}</p></article>)}</div></section>}
+    {!!arena?.transitions.length && <section className="shadow-log" hidden={tab !== "brain"}><div className="section-heading"><div><h2>策略升降级记录</h2><p>4个独立事件且成本后为正才小仓试用；达到8个事件并保持质量才转正常仓位，连亏2笔立即退回影子。</p></div><span>{arena.transitions.length} 次</span></div><div className="transition-list">{arena.transitions.slice(0, 20).map((item) => <article key={item.id}><div><b>{item.strategyName}</b><small>{time(item.at)}</small></div><strong>{laneLabel(item.from)} → {laneLabel(item.to)}</strong><p>{item.reason}</p></article>)}</div></section>}
 
     <section className="panel-list" hidden={tab !== "orders"}>
       <h2 className="order-group-title">1000 U模拟账户 <span>{num(portfolioAccountEquity, 2)} U</span></h2>
@@ -244,12 +274,15 @@ export default function Home() {
       <button className="setting-row" type="button" onClick={() => auth.authenticated ? void fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(() => { setAuth({ ...auth, authenticated: false }); setRuntime(runtime ? { ...runtime, live: undefined } : runtime); }) : setShowLogin(true)}><div><b>所有者账户</b><p>{auth.authenticated ? "安全登录有效30天；每次打开页面自动续期。" : "登录后才可以查看真实账户并操作实盘开关。"}</p></div><span className={`setting-value ${auth.authenticated ? "online" : "locked"}`}>{auth.authenticated ? "owner · 退出 ›" : "登录 ›"}</span></button>
       <button className="setting-row" type="button" disabled={liveBusy} onClick={liveControl}><div><b>实盘交易开关</b><p>{liveEnabled ? "正在按真实账户权益比例复制1000 U模拟账户的新订单；关闭会撤销待成交入场单并停止新开仓。" : "由你手动开启；只复制开启以后出现的新模拟订单，不追单复制当前持仓。"}</p></div><span className={`setting-value ${liveEnabled ? "online" : "locked"}`}>{liveBusy ? "处理中…" : liveEnabled ? "已开启 · 关闭 ›" : "已关闭 · 开启 ›"}</span></button>
       {auth.authenticated && <><Setting title="Gate 实盘账户" detail={`可用 ${num(live?.available, 2)} U · ${openLivePositions.length} 个真实持仓`} value={live?.equity != null ? `${num(live.equity, 2)} U` : "连接中"} tone={live?.credentialConfigured ? "online" : "locked"}/><Setting title="实盘执行状态" detail={friendlyLiveError(live?.lastError) || (liveEnabled ? "只复制唯一模拟账户开启后产生的订单，并按真实权益重新计算安全仓位。" : "当前不下新单；已有系统持仓仍保留止损和对账。" )} value={live?.operational ? "复制运行中" : "已关闭"} tone={live?.operational ? "online" : "locked"}/></>}
-      <Setting title="策略轮换" detail={`首笔成本后盈利进入试用模拟；连续 ${arena?.rules.demotionLosses ?? 2} 亏退回影子。稳定模拟需要 ${arena?.rules.verifiedEvents ?? 12} 个独立事件和 ${arena?.rules.verifiedSymbols ?? 4} 个币。`} value="自动" tone="online"/>
+      <Setting title="策略轮换" detail={`${arena?.rules.probationEvents ?? 4}个独立事件成本后为正才以1/3风险试用；${arena?.rules.verifiedEvents ?? 8}个以上且盈利因子、近期预期仍为正才用正常仓位；连续${arena?.rules.demotionLosses ?? 2}亏退回影子。`} value="渐进晋级" tone="online"/>
+      <Setting title="进场经济门槛" detail={`只用真实结构目标和止损；扣完整成本盈亏比至少 ${num(arena?.rules.minNetRewardRisk ?? 1.2, 2)}，成本最多占目标空间 ${num((arena?.rules.maxCostShare ?? .25) * 100, 0)}%，近期成本后预期必须为正。`} value="硬门槛" tone="online"/>
       <Setting title="模拟账户口径" detail="影子和试用记录只用于选策略；唯一1000 U账户的余额、持仓和交易记录才代表可对标的真实效果。" value="单账户" tone="online"/>
       <Setting title="数据容错" detail={`累计短时失败 ${totalFeedFailures} 次 · 自动恢复 ${totalFeedRecoveries} 次 · 最大观测延迟 ${num(maxFeedLag / 1_000, 2)} 秒`} value={activeFeedSuspensions ? `${activeFeedSuspensions}币冻结` : "正常"} tone={activeFeedSuspensions ? "locked" : "online"}/>
       <Setting title="数据覆盖" detail={`约每10秒扫描 ${regimes?.tracked ?? runtime?.limits.scannedMarkets ?? 0} 个合约并识别行情状态；趋势、震荡/压缩、异动分散使用3个两秒深度位置。影子持仓不锁位置。`} value="现有预算内" tone="online"/>
       <Setting title="页面数据" detail="交易后台按2秒循环运行；手机页面每15秒读取一次摘要。策略记录随权威检查点保存，不增加行情请求。" value="轻量" tone="online"/>
       <Setting title="系统状态" detail="交易健康只由后台权威、行情新鲜度和各币恢复状态决定；历史镜像延迟不再误报故障。" value={healthy ? "正常" : "恢复中"} tone={healthy ? "online" : "locked"}/>
+      <button className="setting-row" type="button" disabled={paperResetBusy || liveEnabled} onClick={() => void resetPaperAccount()}><div><b>重置1000 U模拟资金</b><p>按最新可成交价结算当前模拟持仓，归档本轮账户后从1000 U重新开始；影子策略研究样本不会删除，实盘开启时禁止操作。</p></div><span className="setting-value locked">{paperResetBusy ? "处理中…" : "重置 ›"}</span></button>
+      {paperResetError && <p className="form-error">{paperResetError}</p>}{paperResetNotice && <p className="form-success">{paperResetNotice}</p>}
       <p className="last-update">最近后台成功：{time(runtime?.lastSuccessAt)}{live?.lastSyncAt ? ` · 实盘核对：${time(live.lastSyncAt)}` : ""}</p>
     </section>
 
@@ -385,14 +418,12 @@ function durationText(start: number, end: number | null) {
   return minutes < 60 ? `${minutes} 分 ${seconds % 60} 秒` : `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
 }
 
-function PlaybookGroup({ strategies, rules }: { strategies: StrategyScore[]; rules: StrategyArena["rules"] }) {
+function PlaybookGroup({ strategies, evidence, rules }: { strategies: StrategyScore[]; evidence?: PerformanceEvidence; rules: StrategyArena["rules"] }) {
   const sample = strategies[0];
   const trial = strategies.filter((strategy) => strategy.lane === "TRIAL").length;
   const verified = strategies.filter((strategy) => strategy.lane === "VERIFIED").length;
-  const shadowResolved = strategies.reduce((total, strategy) => total + strategy.shadowResolved, 0);
-  const paperResolved = strategies.reduce((total, strategy) => total + strategy.paperResolved, 0);
   const baseName = sample.name.split(" · ")[0];
-  return <details className="playbook-group" open={trial + verified > 0}><summary><div><small>{channelLabel(sample.channel)} · 4个策略单元</small><h3>{baseName}</h3><p>{sample.description}</p></div><div className="playbook-counts"><span>{shadowResolved} 影子</span><b>{trial} 试用 · {verified} 稳定</b><em>{paperResolved} 模拟结果</em></div></summary><div className="strategy-grid">{strategies.map((strategy) => <StrategyCard key={strategy.id} strategy={strategy} rules={rules} />)}</div></details>;
+  return <details className="playbook-group" open={trial + verified > 0}><summary><div><small>{channelLabel(sample.channel)} · 4个执行变体</small><h3>{baseName}</h3><p>{sample.description}</p></div><div className="playbook-counts"><span>{evidence?.events ?? 0}/{rules.probationEvents} 独立事件</span><b>{trial} 试用 · {verified} 正常</b><em>成本后 {signed((evidence?.netReturnRate ?? 0) * 100)}%</em></div></summary><div className="strategy-grid">{strategies.map((strategy) => <StrategyCard key={strategy.id} strategy={strategy} rules={rules} />)}</div></details>;
 }
 
 function StrategyCard({ strategy, rules }: { strategy: StrategyScore; rules: StrategyArena["rules"] }) {
@@ -400,12 +431,12 @@ function StrategyCard({ strategy, rules }: { strategy: StrategyScore; rules: Str
   const paperRate = strategy.paperResolved ? strategy.paperWins / strategy.paperResolved : 0;
   const stageWins = strategy.stageResults.filter((value) => value > 0).length;
   const stageNet = strategy.stageResults.reduce((sum, value) => sum + value, 0);
-  return <article className={`strategy-card ${strategy.lane.toLowerCase()}`}><div className="strategy-title"><div><small>{strategy.entryStyle === "CONFIRM" ? "确认进场" : "回踩进场"} · {strategy.exitProfile === "FAST" ? "快速出场" : "结构出场"}</small><h3>{strategy.name.split(" · ").slice(1).join(" · ")}</h3></div><span>{laneLabel(strategy.lane)}</span></div><dl><div><dt>当前阶段</dt><dd>{stageWins}/{strategy.stageResults.length} 胜</dd></div><div><dt>阶段净值</dt><dd className={stageNet >= 0 ? "positive" : "negative"}>{signed(stageNet * 100)}%</dd></div><div><dt>影子样本</dt><dd>{strategy.shadowResolved} · {num(shadowRate * 100, 1)}%</dd></div><div><dt>模拟样本</dt><dd>{strategy.paperResolved} · {num(paperRate * 100, 1)}%</dd></div></dl><small className="strategy-rule">{strategy.lane === "SHADOW" ? "首笔成本后盈利即可进入试用模拟" : strategy.lane === "TRIAL" ? `独立权益 ${num(strategy.paperEquity, 2)} U · ${strategy.stageEvents.length}/${rules.verifiedEvents} 独立事件 · ${strategy.stageSymbols.length}/${rules.verifiedSymbols} 币` : `稳定模拟 · 独立权益 ${num(strategy.paperEquity, 2)} U · 连亏 ${strategy.consecutivePaperLosses}/${rules.demotionLosses}`}</small></article>;
+  return <article className={`strategy-card ${strategy.lane.toLowerCase()}`}><div className="strategy-title"><div><small>{strategy.entryStyle === "CONFIRM" ? "确认进场" : "回踩进场"} · {strategy.exitProfile === "FAST" ? "快速出场" : "结构出场"}</small><h3>{strategy.name.split(" · ").slice(1).join(" · ")}</h3></div><span>{laneLabel(strategy.lane)}</span></div><dl><div><dt>当前阶段</dt><dd>{stageWins}/{strategy.stageResults.length} 胜</dd></div><div><dt>阶段净值</dt><dd className={stageNet >= 0 ? "positive" : "negative"}>{signed(stageNet * 100)}%</dd></div><div><dt>影子样本</dt><dd>{strategy.shadowResolved} · {num(shadowRate * 100, 1)}%</dd></div><div><dt>试用样本</dt><dd>{strategy.paperResolved} · {num(paperRate * 100, 1)}%</dd></div></dl><small className="strategy-rule">{strategy.lane === "SHADOW" ? `所属打法需先完成${rules.probationEvents}个独立事件并保持成本后为正` : strategy.lane === "TRIAL" ? `1/3风险小仓 · ${strategy.stageEvents.length}/${rules.verifiedEvents} 独立事件 · 连亏 ${strategy.consecutivePaperLosses}/${rules.demotionLosses}` : `正常风险 · 独立权益 ${num(strategy.paperEquity, 2)} U · 连亏 ${strategy.consecutivePaperLosses}/${rules.demotionLosses}`}</small></article>;
 }
 
 function ArenaTradeRecord({ trade }: { trade: ArenaTrade }) {
   const result = trade.netReturnRate ?? 0;
-  return <article className="history-order"><div><span className={`side ${trade.side.toLowerCase()}`}>{trade.side === "LONG" ? "多" : "空"}</span><div><b>{trade.symbol.replace("_", "/")} · {trade.strategyName}</b><small>{time(trade.openedAt)} · {laneLabel(trade.lane)}</small></div></div><div><small>进场 / 出场</small><b>{num(trade.entryPrice, 5)} / {num(trade.exitPrice, 5)}</b></div><div><small>账户净盈亏</small><b className={result > 0 ? "positive" : "negative"}>{signed(trade.netPnl ?? 0)} U · {signed(result * 100)}%</b></div><div><small>持仓 / 结束</small><b>{durationText(trade.openedAt, trade.closedAt)} · {trade.outcome === "TARGET" ? "目标" : trade.outcome === "STOP" ? "止损" : "超时"}</b></div><details className="history-diagnostic"><summary>查看完整入场环境</summary><div><span>行情与来源<b>{regimeLabel(trade.context.regime)} · {channelLabel(trade.context.channel)}</b></span><span>判断依据<b>{trade.reason}</b></span><span>毛收益 / 完整成本<b>{signed((trade.grossReturnRate ?? 0) * 100)}% / -{num(trade.context.modeledCostRate * 100, 3)}%</b></span><span>订单仓位<b>{num(trade.notional, 2)} U</b></span><span>最大有利 / 不利<b>{signed(trade.maxFavorableRate * 100)}% / {signed(trade.maxAdverseRate * 100)}%</b></span><span>趋势效率 / 波动比<b>{num(trade.context.trendEfficiency * 100, 1)} / {num(trade.context.volatilityRatio, 2)}</b></span><span>OI变化 / 资金费率<b>{signed(trade.context.openInterestChangeRate * 100, 3)}% / {signed(trade.context.fundingRate * 100, 4)}%</b></span><span>24h成交额<b>{num(trade.context.volume24hUsd / 1_000_000, 1)} 百万 U</b></span><span>资金流 / 确认 / 假突破<b>{num(trade.context.alignedFlow, 2)} / {num(trade.context.confirmation, 2)} / {num(trade.context.fakeoutRisk, 2)}</b></span><span>止损 / 目标<b>{num(trade.stopPrice, 5)} / {num(trade.targetPrice, 5)}</b></span></div></details></article>;
+  return <article className="history-order"><div><span className={`side ${trade.side.toLowerCase()}`}>{trade.side === "LONG" ? "多" : "空"}</span><div><b>{trade.symbol.replace("_", "/")} · {trade.strategyName}</b><small>{time(trade.openedAt)} · {trade.admissionTier === "PROBATION" ? "小仓试用" : trade.admissionTier === "NORMAL" ? "正常仓位" : laneLabel(trade.lane)}</small></div></div><div><small>进场 / 出场</small><b>{num(trade.entryPrice, 5)} / {num(trade.exitPrice, 5)}</b></div><div><small>账户净盈亏</small><b className={result > 0 ? "positive" : "negative"}>{signed(trade.netPnl ?? 0)} U · {signed(result * 100)}%</b></div><div><small>持仓 / 结束</small><b>{durationText(trade.openedAt, trade.closedAt)} · {trade.outcome === "TARGET" ? "目标" : trade.outcome === "STOP" ? "止损" : trade.outcome === "RESET" ? "账户重置" : "超时"}</b></div><details className="history-diagnostic"><summary>查看完整入场环境</summary><div><span>行情与来源<b>{regimeLabel(trade.context.regime)} · {channelLabel(trade.context.channel)} · {trade.context.structureSource}</b></span><span>判断依据<b>{trade.reason}</b></span><span>扣成本盈亏比 / 成本占目标<b>{num(trade.context.netRewardRisk, 2)} / {num(trade.context.costShare * 100, 1)}%</b></span><span>入场时样本 / 保守期望<b>{trade.context.empiricalEvents}个 / {signed(trade.context.empiricalExpectedReturnRate * 100)}%</b></span><span>毛收益 / 完整成本<b>{signed((trade.grossReturnRate ?? 0) * 100)}% / -{num(trade.context.modeledCostRate * 100, 3)}%</b></span><span>合约仓位<b>{trade.contracts}张 · {num(trade.notional, 2)} U · {trade.leverage}×</b></span><span>计划风险 / 保证金<b>{num(trade.plannedRisk, 2)} U / {num(trade.margin, 2)} U</b></span><span>最大有利 / 不利<b>{signed(trade.maxFavorableRate * 100)}% / {signed(trade.maxAdverseRate * 100)}%</b></span><span>趋势效率 / 波动比<b>{num(trade.context.trendEfficiency * 100, 1)} / {num(trade.context.volatilityRatio, 2)}</b></span><span>OI变化 / 资金费率<b>{signed(trade.context.openInterestChangeRate * 100, 3)}% / {signed(trade.context.fundingRate * 100, 4)}%</b></span><span>24h成交额<b>{num(trade.context.volume24hUsd / 1_000_000, 1)} 百万 U</b></span><span>资金流 / 确认 / 假突破<b>{num(trade.context.alignedFlow, 2)} / {num(trade.context.confirmation, 2)} / {num(trade.context.fakeoutRisk, 2)}</b></span><span>止损 / 目标<b>{num(trade.stopPrice, 5)} / {num(trade.targetPrice, 5)}</b></span></div></details></article>;
 }
 
 function ArenaOpenCard({ trade, mark }: { trade: ArenaTrade; mark: number | undefined }) {
@@ -413,7 +444,7 @@ function ArenaOpenCard({ trade, mark }: { trade: ArenaTrade; mark: number | unde
   const current = mark ?? trade.lastPrice;
   const gross = current ? direction * (current - trade.entryPrice) / Math.max(trade.entryPrice, 1e-9) : 0;
   const net = gross - trade.context.modeledCostRate;
-  return <article className="order-card"><div><span className={`side ${trade.side.toLowerCase()}`}>{trade.side === "LONG" ? "多" : "空"}</span><div><h3>{trade.symbol.replace("_", "/")} · {trade.strategyName}</h3><p>{laneLabel(trade.lane)} · {regimeLabel(trade.context.regime)} · {trade.reason}</p></div></div><strong className={net >= 0 ? "positive" : "negative"}>{current ? `${signed(trade.notional * net)} U · ${signed(net * 100)}%` : "等待行情"}</strong><dl><div><dt>进场</dt><dd>{num(trade.entryPrice, 5)}</dd></div><div><dt>当前价</dt><dd>{num(current, 5)}</dd></div><div><dt>止损</dt><dd>{num(trade.stopPrice, 5)}</dd></div><div><dt>目标</dt><dd>{num(trade.targetPrice, 5)}</dd></div><div><dt>账户仓位</dt><dd>{num(trade.notional, 2)} U</dd></div></dl></article>;
+  return <article className="order-card"><div><span className={`side ${trade.side.toLowerCase()}`}>{trade.side === "LONG" ? "多" : "空"}</span><div><h3>{trade.symbol.replace("_", "/")} · {trade.strategyName}</h3><p>{trade.admissionTier === "PROBATION" ? "小仓试用" : "正常仓位"} · {regimeLabel(trade.context.regime)} · {trade.reason}</p></div></div><strong className={net >= 0 ? "positive" : "negative"}>{current ? `${signed(trade.notional * net)} U · ${signed(net * 100)}%` : "等待行情"}</strong><dl><div><dt>进场</dt><dd>{num(trade.entryPrice, 5)}</dd></div><div><dt>当前价</dt><dd>{num(current, 5)}</dd></div><div><dt>止损</dt><dd>{num(trade.stopPrice, 5)}</dd></div><div><dt>目标</dt><dd>{num(trade.targetPrice, 5)}</dd></div><div><dt>扣成本盈亏比</dt><dd>{num(trade.context.netRewardRisk, 2)}</dd></div><div><dt>合约仓位</dt><dd>{trade.contracts}张 · {num(trade.notional, 2)} U</dd></div><div><dt>杠杆 / 保证金</dt><dd>{trade.leverage}× / {num(trade.margin, 2)} U</dd></div><div><dt>计划风险</dt><dd>{num(trade.plannedRisk, 2)} U</dd></div></dl></article>;
 }
 
 function Setting({ title, detail, value, tone = "" }: { title: string; detail: string; value: string; tone?: string }) {

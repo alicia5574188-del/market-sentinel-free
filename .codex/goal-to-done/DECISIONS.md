@@ -1,5 +1,14 @@
 # Decisions
 
+## 2026-09-09 — Progressive admission for the futures simulation account
+
+- Count one base-playbook result per independent market event; its four execution variants are comparisons inside that event and never four promotion samples.
+- Four independent events with at least two wins, positive after-cost total and conservative expectation, and profit factor at least 1.0 may promote only the best observed variant to one-third-risk probation. The account reserves at most one probation slot and may stay in cash when nothing qualifies.
+- Normal size requires at least eight independent events across two symbols, positive recent after-cost expectation and profit factor at least 1.15. Two consecutive losses or a non-positive six-result stage window demotes the variant to shadow.
+- Promotion does not override execution truth: current structural geometry, net reward/risk of at least 1.2, cost no greater than 25% of target space, turnover, spread, two-sided five-level depth, positive empirical expectation, integer Gate contracts, margin and aggregate risk all remain mandatory.
+- The 1,000 U account is a USDT-perpetual simulator using contract multipliers, integer lots, dynamic leverage and structural-risk sizing. LIVE mirrors the exact account order proportionally and reuses its modeled cost before Gate lot/margin/safety validation; deployment keeps LIVE off.
+- Reset applies to the visible simulated account, archives the cycle and preserves strategy research. It is forbidden while the system has requested or active LIVE exposure.
+
 ## 2026-09-09 — one visible/executable simulation account
 
 - SHADOW/TRIAL/VERIFIED ledgers are strategy-selection research only; they must not appear as account orders or be summed as account profit.

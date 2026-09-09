@@ -45,12 +45,13 @@ test("LIVE ignores a legacy farther target and rejects an uneconomic short-term 
   assert.equal(staged.target, 100.6);
 });
 
-test("a selected 1000 U account order mirrors thirty percent of real equity without a second strategy filter", () => {
-  const selected = { ...plan("BREAKOUT", "LONG"), invalidation: 99.8, target: 100.6 };
+test("a selected account order mirrors its proportional notional only after fresh LIVE economics pass", () => {
+  const selected = { ...plan("BREAKOUT", "LONG"), invalidation: 99.8, target: 103 };
   const intent = buildLiveEntryIntent({ plan: selected, entryPrice: 100, equity: 100, available: 100,
-    openRisk: 0, quantoMultiplier: 0.01, leverageMax: 50, mirrorNotionalFraction: 0.3 });
+    openRisk: 0, quantoMultiplier: 0.01, leverageMax: 50, mirrorNotionalFraction: 0.3, modeledCostRate: 0.0012 });
   assert.equal(intent.notional, 30);
   assert.equal(intent.contracts, 30);
+  assert.ok(Math.abs(intent.plannedRisk - 0.096) < 1e-9, "LIVE must use the selected account order's modeled cost");
   assert.ok(intent.plannedRisk <= 6.5);
 });
 

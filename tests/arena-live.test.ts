@@ -9,10 +9,15 @@ const trade = (openedAt = 10_000): ArenaTrade => ({
   openedAt, closedAt: null, entryPrice: 100, stopPrice: 99.5, targetPrice: 101, exitPrice: null, outcome: null,
   grossReturnRate: null, netReturnRate: null, netPnl: null, notional: 300, maxFavorableRate: 0,
   maxAdverseRate: 0, lastPrice: 100, selectedForPortfolio: true, reason: "趋势确认",
+  admissionTier: "NORMAL", plannedRisk: 1.86, contracts: 3_000, quantoMultiplier: 0.001,
+  leverage: 3, margin: 100, accountEquityAtOpen: 1_000,
   context: { channel: "TREND", regime: "TREND", anomalyKind: null, entryStyle: "CONFIRM", exitProfile: "FAST",
     candidateScore: 70, trendRate: 0.01, trendEfficiency: 0.8, volatilityRatio: 1.2, rangePosition: 0.9,
     openInterestChangeRate: 0.01, volume24hUsd: 100_000_000, fundingRate: 0, alignedFlow: 0.2,
-    confirmation: 0.8, fakeoutRisk: 0.1, rangeId: null, modeledCostRate: 0.0018 },
+    confirmation: 0.8, fakeoutRisk: 0.1, rangeId: null, modeledCostRate: 0.0012, spreadRate: 0.0001,
+    bidDepthUsd: 1_000_000, askDepthUsd: 1_000_000,
+    structureSource: "ROUTE", grossRewardRate: 0.01, structuralStopRate: 0.005, netRewardRisk: 1.44,
+    costShare: 0.12, empiricalExpectedReturnRate: 0.001, empiricalProfitFactor: 1.3, empiricalEvents: 8 },
 });
 
 test("selected portfolio trade freezes identical LIVE direction, stop and target geometry", () => {

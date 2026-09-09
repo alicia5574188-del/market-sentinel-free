@@ -1,5 +1,13 @@
 # Status
 
+## 2026-09-09 progressive futures strategy rotation V3 — release verified locally
+
+- Authorized scope: implement the agreed progressive admission design, run the full test/build suite, push main and verify the Cloudflare release; LIVE must remain OFF.
+- Verified starting defect: V2 promotes after one shadow win, has no pre-account net-RR/empirical-expectancy gate, uses fixed 30% midpoint notional, and its reset endpoint mutates only the retired PAPER account rather than the visible strategy-arena account.
+- Implemented playbook-level independent-event evidence, four-event one-third-risk probation, eight-event normal admission, one probation slot, loss-based demotion, cash fallback, structural/economic/liquidity gates, Gate integer-contract sizing and exact simulated-order LIVE mirroring.
+- The owner reset now settles the visible V3 account at fresh executable prices, archives its cycle, returns equity to 1,000 U and preserves shadow research; it is blocked while LIVE is requested/operational or any system LIVE exposure remains.
+- Local release verification passes 173 direct tests, 15 build/architecture/migration tests, TypeScript, lint and whitespace validation. Next: push main, verify Actions/Cloudflare health, and confirm LIVE remains OFF.
+
 ## 2026-09-09 one simulation account and LIVE parity — deployed
 
 - User clarified that independent trial trades are not the product account. Only one 1,000 U portfolio simulation should be visible and later mirrored by LIVE.

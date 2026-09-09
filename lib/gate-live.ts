@@ -273,12 +273,19 @@ export function buildLiveEntryIntent(input: {
   openMargin?: number;
   entryPrice?: number;
   mirrorNotionalFraction?: number;
+  modeledCostRate?: number;
 }): LiveEntryIntent {
   const { plan } = input;
   const entryPrice = input.entryPrice ?? plan.entryTrigger;
+  const geometryLive = plan.side === "LONG" ? entryPrice > plan.invalidation && entryPrice < plan.target
+    : entryPrice < plan.invalidation && entryPrice > plan.target;
+  if (!geometryLive) throw new LiveEntrySizingError("ECONOMICS", plan.symbol,
+    `${plan.symbol} 当前价格已破坏模拟订单的止损/目标结构，本轮未挂单`);
+  const modeledCostRate = input.modeledCostRate ?? ROUND_TRIP_FRICTION_RATE;
   const confidence = plan.score / Math.max(plan.score + plan.oppositeScore, Number.EPSILON);
-  const sized = sizePaperPosition({ equity: input.equity, entry: entryPrice, invalidation: plan.invalidation, feeBps: 10,
-    stressSlippageBps: 8, confidence, openRisk: input.openRisk, sameDirectionRisk: input.sameDirectionRisk });
+  const sized = sizePaperPosition({ equity: input.equity, entry: entryPrice, invalidation: plan.invalidation,
+    feeBps: modeledCostRate * 10_000, stressSlippageBps: 0, confidence, openRisk: input.openRisk,
+    sameDirectionRisk: input.sameDirectionRisk });
   const multiplier = Math.max(input.quantoMultiplier, 1e-12);
   const maxLeverage = Math.max(1, Math.floor(input.leverageMax ?? 50));
   const contractNotional = Math.max(entryPrice * multiplier, 1e-12);
@@ -299,7 +306,7 @@ export function buildLiveEntryIntent(input: {
     invalidation: plan.invalidation, maintenanceRate: input.maintenanceRate, leverageMax: maxLeverage });
   const leverage = leverageChoice.leverage;
   const margin = leverageChoice.margin;
-  const lossRate = Math.abs(entryPrice - plan.invalidation) / Math.max(entryPrice, 1e-9) + ROUND_TRIP_FRICTION_RATE;
+  const lossRate = Math.abs(entryPrice - plan.invalidation) / Math.max(entryPrice, 1e-9) + modeledCostRate;
   const plannedRisk = notional * lossRate;
   if (input.openRisk + plannedRisk > input.equity * PORTFOLIO_RISK_CAP + 1e-8) {
     throw new LiveEntrySizingError("RISK_CAP", plan.symbol, `${plan.symbol} 最小 1 张合约将超过账户 10% 总风险，本轮未挂单`);
@@ -310,10 +317,10 @@ export function buildLiveEntryIntent(input: {
   if ((input.openMargin ?? 0) + margin > input.equity * PORTFOLIO_MARGIN_CAP + 1e-8) {
     throw new LiveEntrySizingError("MARGIN", plan.symbol, `${plan.symbol} 将超过账户 30% 挂单与持仓保证金上限，本轮未挂单`);
   }
-  if (input.mirrorNotionalFraction == null) {
-    const economics = tradeEconomics({ entry: entryPrice, target: stagedEconomicTarget(plan), lossRate, confidence, notional, equity: input.equity });
-    if (!economics.executable) throw new LiveEntrySizingError("ECONOMICS", plan.symbol, `${plan.symbol} 实盘合约取整后净利润空间不足，本轮未挂单`);
-  }
+  const economics = tradeEconomics({ entry: entryPrice, target: stagedEconomicTarget(plan), lossRate, confidence, notional,
+    equity: input.equity, frictionRate: modeledCostRate });
+  if (!economics.executable) throw new LiveEntrySizingError("ECONOMICS", plan.symbol,
+    `${plan.symbol} 实盘合约取整后扣成本盈亏比或期望不足，本轮未挂单`);
   const size = plan.side === "LONG" ? contracts : -contracts;
   const tag = shortTag("e", plan.id);
   const initial = { contract: plan.symbol, size, price: "0", tif: "ioc", text: tag, reduce_only: false };

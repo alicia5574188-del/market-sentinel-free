@@ -18,7 +18,7 @@ import { eventAlignedFlow, updateRadar, type EventEntryAssessment, type RadarBas
 import { anomalyCandidate, initialMarketRegimes, marketRegimeSummary, normalizeMarketRegimes, selectDiverseMarketPool, updateMarketRegimes,
   type MarketRegimeState } from "../lib/market-regime.ts";
 import { advanceStrategyArena, arenaSummary, initialStrategyArena, normalizeStrategyArena, observeStrategyArena,
-  PORTFOLIO_POSITION_FRACTION, type StrategyArenaState } from "../lib/strategy-arena.ts";
+  resetStrategyArenaAccount, type StrategyArenaState } from "../lib/strategy-arena.ts";
 
 const LOOP_MS = 2_000;
 const AUTHORITY_STALE_AFTER_MS = 8_000;
@@ -148,7 +148,7 @@ type RuntimeState = {
   routes: Record<string, LiquidityRoute[]>;
   plans: Record<string, PaperPlan | null>;
   positions: Record<string, PaperPosition | null>;
-  evidence: Record<string, { midpoint: number; observedAt: number; warmup: number; fresh: boolean; ancillaryFresh: boolean;
+  evidence: Record<string, { midpoint: number; bestBid?: number; bestAsk?: number; observedAt: number; warmup: number; fresh: boolean; ancillaryFresh: boolean;
     entryReady?: boolean; optionalFresh?: boolean; recoveryFreshCount?: number; suspensionReason?: string | null;
     topLong: LiquidityZone | null; topShort: LiquidityZone | null; absorption: number; range15m: RangeStructure | null }>;
   entryAssessments: Record<string, EventEntryAssessment | null>;
@@ -241,7 +241,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const strategyCutover = saved.version !== SYSTEM_VERSION;
         this.runtime = { ...initialState(), ...saved, version: SYSTEM_VERSION, symbols: saved.symbols?.length ? saved.symbols : [...DEFAULT_SYMBOLS],
           lastUniverseAt: 0, lastRadarAt: 0, radar: saved.radar ?? { scanned: 0, lastScanAt: null, candidates: [] },
-          strategyArena: strategyCutover ? initialStrategyArena() : normalizeStrategyArena(saved.strategyArena),
+          strategyArena: normalizeStrategyArena(saved.strategyArena),
           marketRegimes: strategyCutover ? initialMarketRegimes() : normalizeMarketRegimes(saved.marketRegimes),
           equity: strategyCutover ? PAPER_INITIAL_EQUITY : saved.equity,
           equityVersion: strategyCutover ? saved.equityVersion + 1 : saved.equityVersion,
@@ -391,25 +391,29 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.lastRadarAt = now;
     const locked = this.runtime.symbols.filter((symbol) => this.runtime.positions[symbol]?.status === "OPEN"
       || this.runtime.plans[symbol]?.state === "PREPARED" || this.runtime.live.positions[symbol]?.status === "OPEN"
-      || Boolean(this.runtime.live.entries[symbol] && !["FILLED", "CANCELLED"].includes(this.runtime.live.entries[symbol]!.status))
-      || Boolean(this.runtime.strategyArena.portfolioOpen[symbol]));
+      || Boolean(this.runtime.live.entries[symbol] && !["FILLED", "CANCELLED"].includes(this.runtime.live.entries[symbol]!.status)));
     const liquidFallback = rows.filter((row) => eligible.has(row.symbol)).sort((a, b) => b.volume24hUsd - a.volume24hUsd).map((row) => row.symbol);
     const next = selectDiverseMarketPool({ locked, current: this.runtime.symbols, candidates: allCandidates,
       fallback: liquidFallback, limit: MAX_OPEN_POSITIONS });
     if (next.length) this.applyRealtimeSymbols(next);
   }
 
-  private observeArena(symbol: string, midpoint: number, analyzed: ReturnType<typeof analyzeSnapshot>, now: number, spreadRate: number) {
-    this.runtime.strategyArena = advanceStrategyArena({ state: this.runtime.strategyArena, quotes: { [symbol]: midpoint }, now });
+  private observeArena(symbol: string, midpoint: number, analyzed: ReturnType<typeof analyzeSnapshot>, now: number,
+    spreadRate: number, bestBid: number, bestAsk: number, bidDepthUsd: number, askDepthUsd: number) {
+    this.runtime.strategyArena = advanceStrategyArena({ state: this.runtime.strategyArena,
+      quotes: { [symbol]: { midpoint, bestBid, bestAsk } }, now });
     const candidates = this.runtime.marketRegimes.candidates.filter((row) => row.symbol === symbol);
     const memory = this.memory[symbol];
     if (!candidates.length || !memory) return;
     for (const candidate of candidates) {
       if (candidate.channel === "ANOMALY" && candidate.confirmations < 2) continue;
       this.runtime.strategyArena = observeStrategyArena({ state: this.runtime.strategyArena, observation: {
-        candidate, midpoint, alignedFlow: eventAlignedFlow(candidate.side, memory.flow), minuteNoiseRate: memory.minuteNoiseRate,
+        candidate, midpoint, bestBid, bestAsk, alignedFlow: eventAlignedFlow(candidate.side, memory.flow), minuteNoiseRate: memory.minuteNoiseRate,
         spreadRate, range15m: analyzed.range15m, confirmationBySide: analyzed.confirmationBySide,
-        fakeoutBySide: analyzed.fakeoutBySide, routes: analyzed.routes, now,
+        fakeoutBySide: analyzed.fakeoutBySide, routes: analyzed.routes, bidDepthUsd, askDepthUsd,
+        quantoMultiplier: this.runtime.contractMeta[symbol]?.quantoMultiplier,
+        maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate,
+        leverageMax: this.runtime.contractMeta[symbol]?.leverageMax, now,
       } });
     }
   }
@@ -716,14 +720,25 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private async resetPaperAccount() {
     const now = Date.now();
     const authorityBefore = this.captureAuthority();
+    if (this.runtime.live.requestedEnabled || this.runtime.live.operational
+      || Object.values(this.runtime.live.positions).some((position) => position?.status === "OPEN")
+      || Object.values(this.runtime.live.entries).some((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status))) {
+      throw new Error("请先关闭实盘并确认 Gate 没有本系统持仓或待成交订单");
+    }
     const openPositions = Object.values(this.runtime.positions).filter((position): position is PaperPosition => position?.status === "OPEN");
-    for (const position of openPositions) {
+    const arenaPositions = Object.values(this.runtime.strategyArena.portfolioOpen);
+    for (const position of [...openPositions, ...arenaPositions]) {
       const evidence = this.runtime.evidence[position.symbol];
       if (!evidence?.fresh || now - evidence.observedAt > STALE_AFTER_MS || evidence.midpoint <= 0) {
         throw new Error(`${position.symbol} 行情不新鲜，不能用旧价格重置模拟持仓`);
       }
     }
     try {
+      this.runtime.strategyArena = resetStrategyArenaAccount({ state: this.runtime.strategyArena,
+        quotes: Object.fromEntries(arenaPositions.map((position) => {
+          const evidence = this.runtime.evidence[position.symbol]!;
+          return [position.symbol, { midpoint: evidence.midpoint, bestBid: evidence.bestBid, bestAsk: evidence.bestAsk }];
+        })), now });
       for (const position of openPositions) {
         const closed = closePaperPosition(position, now, this.runtime.evidence[position.symbol]!.midpoint, "MANUAL_PAPER_RESET");
         this.runtime.positions[position.symbol] = closed;
@@ -752,7 +767,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     } catch (error) {
       this.runtime.d1MirrorError = `D1 reset mirror pending: ${safeError(error)}`;
     }
-    return { ok: true, equity: this.runtime.equity, paperCycle: paperCycleSummary(this.runtime.paperCycle, this.runtime.equity) };
+    return { ok: true, equity: this.runtime.strategyArena.portfolioEquity,
+      strategyArena: arenaSummary(this.runtime.strategyArena), paperCycle: paperCycleSummary(this.runtime.paperCycle, this.runtime.equity) };
   }
 
   private async clearPaperHistory() {
@@ -1084,7 +1100,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           quantoMultiplier: this.runtime.contractMeta[symbol]?.quantoMultiplier ?? 1,
           maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate ?? 0.005,
           leverageMax: this.runtime.contractMeta[symbol]?.leverageMax ?? 50, openMargin: marginForNewEntries,
-          mirrorNotionalFraction: PORTFOLIO_POSITION_FRACTION });
+          mirrorNotionalFraction: trade.notional / Math.max(trade.accountEquityAtOpen, 1e-9),
+          modeledCostRate: trade.context.modeledCostRate });
       } catch (error) {
         if (!(error instanceof LiveEntrySizingError)) throw error;
         this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: error.code, reason: error.message, observedAt: now };
@@ -1304,7 +1321,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const bestBid = snapshot.bids[0]?.price ?? analyzed.midpoint;
         const bestAsk = snapshot.asks[0]?.price ?? analyzed.midpoint;
         const spreadRate = bestAsk >= bestBid ? (bestAsk - bestBid) / Math.max(analyzed.midpoint, 1e-9) : 0;
-        this.observeArena(symbol, analyzed.midpoint, analyzed, now, spreadRate);
+        this.observeArena(symbol, analyzed.midpoint, analyzed, now, spreadRate, bestBid, bestAsk,
+          snapshot.bids.slice(0, 5).reduce((total, level) => total + level.size, 0),
+          snapshot.asks.slice(0, 5).reduce((total, level) => total + level.size, 0));
       }
       const openRisk = openStressRisk(this.runtime);
       const planSide = priorPlan?.state === "PREPARED" ? priorPlan.side : undefined;
@@ -1331,7 +1350,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       this.runtime.positions[symbol] = reconciled.position;
       this.runtime.evidence[symbol] = {
-        midpoint: analyzed.midpoint, observedAt: snapshot.observedAt, warmup: Math.min(WARMUP_SNAPSHOTS, this.sessionWarmup[symbol] ?? 0),
+        midpoint: analyzed.midpoint, bestBid: snapshot.bids[0]?.price ?? analyzed.midpoint,
+        bestAsk: snapshot.asks[0]?.price ?? analyzed.midpoint,
+        observedAt: snapshot.observedAt, warmup: Math.min(WARMUP_SNAPSHOTS, this.sessionWarmup[symbol] ?? 0),
         fresh: true, ancillaryFresh, optionalFresh, entryReady,
         recoveryFreshCount: recovery.recoveryFreshCount,
         suspensionReason: !ancillaryFresh ? "关键周期结构正在刷新，禁止成交" : recovery.entryReady ? null : "已恢复第一份盘口，等待第二份新盘口确认",

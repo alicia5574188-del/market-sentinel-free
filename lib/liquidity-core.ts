@@ -1,4 +1,4 @@
-export const SYSTEM_VERSION = "market-regime-arena-v2";
+export const SYSTEM_VERSION = "market-regime-arena-v3";
 export const PORTFOLIO_RISK_CAP = 0.10;
 export const CORRELATED_DIRECTION_RISK_CAP = 0.065;
 export const STALE_AFTER_MS = 5_000;
@@ -483,9 +483,11 @@ export function selectSafeLeverage(input: {
   return { leverage, margin, marginRate: margin / Math.max(input.equity, 1e-9), liquidationSafeMax };
 }
 
-export function tradeEconomics(input: { entry: number; target: number; lossRate: number; confidence: number; notional: number; equity: number }) {
+export function tradeEconomics(input: { entry: number; target: number; lossRate: number; confidence: number; notional: number;
+  equity: number; frictionRate?: number }) {
+  const frictionRate = input.frictionRate ?? ROUND_TRIP_FRICTION_RATE;
   const rewardRate = Math.abs(input.target - input.entry) / Math.max(input.entry, 1e-9);
-  const netRewardRate = Math.max(0, rewardRate - ROUND_TRIP_FRICTION_RATE);
+  const netRewardRate = Math.max(0, rewardRate - frictionRate);
   const netRewardRisk = netRewardRate / Math.max(input.lossRate, 1e-9);
   const expectedReturnRate = input.confidence * netRewardRate - (1 - input.confidence) * input.lossRate;
   const netTargetProfit = input.notional * netRewardRate;

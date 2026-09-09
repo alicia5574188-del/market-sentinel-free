@@ -19,8 +19,8 @@ export function arenaTradePlan(trade: ArenaTrade): PaperPlan {
     confirmationScore: trade.context.confirmation, fakeoutRisk: trade.context.fakeoutRisk,
     activationDistanceRate: 1, state: "TRIGGERED", createdAt: trade.openedAt,
     expiresAt: trade.openedAt + 45 * 60_000,
-    plannedRisk: trade.notional * (Math.abs(trade.entryPrice - trade.stopPrice) / Math.max(trade.entryPrice, 1e-9) + trade.context.modeledCostRate),
-    notional: trade.notional, breakoutSignalCount: 4, realtimeSignalCount: 3,
+    plannedRisk: trade.plannedRisk, notional: trade.notional, leverage: trade.leverage, margin: trade.margin,
+    breakoutSignalCount: 4, realtimeSignalCount: 3,
   };
 }
 

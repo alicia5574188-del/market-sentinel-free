@@ -144,10 +144,15 @@ function portfolioTrade(symbol: string, openedAt: number, patch: Partial<ArenaTr
     openedAt, closedAt: null, entryPrice: 100, stopPrice: 95, targetPrice: 110, exitPrice: null, outcome: null,
     grossReturnRate: null, netReturnRate: null, netPnl: null, notional: 300, maxFavorableRate: 0,
     maxAdverseRate: 0, lastPrice: 100, selectedForPortfolio: true, reason: "趋势确认",
+    admissionTier: "NORMAL", plannedRisk: 15.36, contracts: 300, quantoMultiplier: 0.01,
+    leverage: 3, margin: 100, accountEquityAtOpen: 1_000,
     context: { channel: "TREND", regime: "TREND", anomalyKind: null, entryStyle: "CONFIRM", exitProfile: "FAST",
       candidateScore: 70, trendRate: 0.01, trendEfficiency: 0.8, volatilityRatio: 1.2, rangePosition: 0.9,
       openInterestChangeRate: 0.01, volume24hUsd: 100_000_000, fundingRate: 0, alignedFlow: 0.2,
-      confirmation: 0.8, fakeoutRisk: 0.1, rangeId: null, modeledCostRate: 0.0018 },
+      confirmation: 0.8, fakeoutRisk: 0.1, rangeId: null, modeledCostRate: 0.0012, spreadRate: 0.0001,
+      bidDepthUsd: 1_000_000, askDepthUsd: 1_000_000,
+      structureSource: "ROUTE", grossRewardRate: 0.1, structuralStopRate: 0.05, netRewardRisk: 1.93,
+      costShare: 0.012, empiricalExpectedReturnRate: 0.001, empiricalProfitFactor: 1.3, empiricalEvents: 8 },
     ...patch,
   };
 }
@@ -377,6 +382,41 @@ test("manual PAPER reset refuses to price an open position from stale evidence",
   await assert.rejects(stream.resetPaperAccount(), /行情不新鲜/);
 
   assert.deepEqual(stream.runtime, before);
+  assert.equal(storage.putCalls, 0);
+});
+
+test("manual reset archives the V3 futures account while preserving shadow research", async () => {
+  const { stream } = await makeStream();
+  const now = Date.now();
+  const strategyId = "steady_trend:confirm:fast";
+  stream.runtime.strategyArena.portfolioEquity = 980;
+  stream.runtime.strategyArena.portfolioResolved = 3;
+  stream.runtime.strategyArena.strategies[strategyId].shadowResolved = 7;
+  stream.runtime.strategyArena.portfolioOpen = { BTC_USDT: portfolioTrade("BTC_USDT", now - 10_000) };
+  stream.runtime.evidence = { BTC_USDT: { midpoint: 102, bestBid: 101.9, bestAsk: 102.1, observedAt: now,
+    warmup: 30, fresh: true, ancillaryFresh: true, topLong: null, topShort: null, absorption: 0, range15m: null } };
+
+  const result = await stream.resetPaperAccount();
+
+  assert.equal(result.ok, true);
+  assert.equal(stream.runtime.strategyArena.portfolioEquity, 1_000);
+  assert.equal(stream.runtime.strategyArena.portfolioCycle, 2);
+  assert.deepEqual(stream.runtime.strategyArena.portfolioOpen, {});
+  assert.equal(stream.runtime.strategyArena.strategies[strategyId].shadowResolved, 7);
+  assert.equal(stream.runtime.strategyArena.archivedPortfolioCycles.length, 1);
+  assert.equal(stream.runtime.strategyArena.archivedPortfolioCycles[0].resolved, 4);
+  assert.equal(stream.runtime.live.requestedEnabled, false);
+  assert.equal(stream.runtime.live.operational, false);
+});
+
+test("manual reset is blocked whenever LIVE is requested", async () => {
+  const { stream, storage } = await makeStream();
+  stream.runtime.live.requestedEnabled = true;
+  const before = structuredClone(stream.runtime.strategyArena);
+
+  await assert.rejects(stream.resetPaperAccount(), /请先关闭实盘/);
+
+  assert.deepEqual(stream.runtime.strategyArena, before);
   assert.equal(storage.putCalls, 0);
 });
 
