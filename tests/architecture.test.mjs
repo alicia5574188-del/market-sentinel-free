@@ -60,12 +60,14 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(page, /RUNTIME_DISPLAY_TTL_MS = 90_000/);
   assert.match(page, /tabScroll\.current\[tab\] = window\.scrollY/);
   assert.match(page, /viewScroll\.current\[view\] = window\.scrollY/);
-  assert.match(page, /行情状态策略竞技场 V2/);
-  assert.match(page, /catalogSize \?\? 48/);
-  assert.match(page, /异动只是四条候选通道之一/);
+  assert.match(page, /市场状态竞技场/);
+  assert.match(page, /48个策略单元/);
+  assert.match(page, /趋势、震荡\/压缩、异动/);
   assert.match(page, /影子候选记录/);
-  assert.match(page, /模拟交易记录/);
-  assert.match(page, /双模拟账本/);
+  assert.match(page, /1000 U模拟账户交易记录/);
+  assert.match(page, /唯一模拟账户/);
+  assert.match(page, /开启实盘复制/);
+  assert.doesNotMatch(page, /双模拟账本|独立策略模拟/);
   assert.doesNotMatch(page, /组合风险预算|目标 \+150 U|双向反应实验 V1|盈利与亏损研究|旧方案归档|账户日志/);
   assert.doesNotMatch(page, /fetch\("\/api\/history|fetch\("\/api\/account-logs/);
   assert.match(page, /所有者登录/);
@@ -116,7 +118,7 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
   assert.match(worker, /completeTrades\.length > item\.report\.trades\.length/);
 });
 
-test("market-regime arena is bounded, cost-aware, adaptive, and cannot reach LIVE", async () => {
+test("market-regime arena is bounded, cost-aware, adaptive, and is the sole LIVE order source", async () => {
   const [arena, regime, worker, page, migration] = await Promise.all([
     read("lib/strategy-arena.ts"), read("lib/market-regime.ts"), read("worker/index-clean.ts"), read("app/page.tsx"),
     read("drizzle/0035_strategy_arena_fresh_start.sql"),
@@ -138,6 +140,9 @@ test("market-regime arena is bounded, cost-aware, adaptive, and cannot reach LIV
   assert.match(worker, /allowOpen: false/);
   assert.match(worker, /observeStrategyArena/);
   assert.match(worker, /advanceStrategyArena/);
+  assert.match(worker, /desiredPortfolio = this\.runtime\.strategyArena\.portfolioOpen/);
+  assert.match(worker, /eligibleForLiveMirror/);
+  assert.match(worker, /mirrorNotionalFraction: PORTFOLIO_POSITION_FRACTION/);
   assert.match(worker, /strategyCutover \? initialStrategyArena\(\)/);
   assert.match(page, /首笔成本后盈利/);
   assert.match(page, /verifiedEvents \?\? 12/);
@@ -148,7 +153,7 @@ test("market-regime arena is bounded, cost-aware, adaptive, and cannot reach LIV
   assert.doesNotMatch(migration, /live_exchange_credentials/);
 });
 
-test("PAPER and LIVE share bounded sizing and meaningful net-profit economics", async () => {
+test("legacy sizing and portfolio mirroring both retain bounded account risk", async () => {
   const [core, live] = await Promise.all([read("lib/liquidity-core.ts"), read("lib/gate-live.ts")]);
   assert.match(core, /MIN_SINGLE_TRADE_RISK_RATE = 0\.005/);
   assert.match(core, /MAX_SINGLE_TRADE_RISK_RATE = 0\.01/);
@@ -161,6 +166,7 @@ test("PAPER and LIVE share bounded sizing and meaningful net-profit economics", 
   assert.match(core, /Math\.min\(riskSizedNotional, input\.equity \* MAX_NOTIONAL_TO_EQUITY\)/);
   assert.match(live, /sizePaperPosition\(/);
   assert.match(live, /tradeEconomics\(/);
+  assert.match(live, /mirrorNotionalFraction/);
 });
 
 test("cutover is credential-bound and removes legacy DOs only after v6 health", async () => {

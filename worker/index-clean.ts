@@ -3,8 +3,9 @@
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
 import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchMarketTickers, fetchRecentTrades, fetchStructureCandles } from "../lib/gate-market.ts";
-import { breakoutEntryPriceAcceptable, closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, planTriggered, PORTFOLIO_RISK_CAP, realtimeEntryConfirmed, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, updatePosition, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
+import { closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_RISK_CAP, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
 import { aggregateFourHourCandles, analyzeSnapshot, ancillarySchedule, applyFlow, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, optionalEvidenceIsFresh, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
+import { arenaTradePlan, eligibleForLiveMirror, liveMirrorExitRequired } from "../lib/arena-live.ts";
 import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem } from "../lib/paper-outbox.ts";
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
   PAPER_BANKRUPTCY_EQUITY, PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
@@ -17,7 +18,7 @@ import { eventAlignedFlow, updateRadar, type EventEntryAssessment, type RadarBas
 import { anomalyCandidate, initialMarketRegimes, marketRegimeSummary, normalizeMarketRegimes, selectDiverseMarketPool, updateMarketRegimes,
   type MarketRegimeState } from "../lib/market-regime.ts";
 import { advanceStrategyArena, arenaSummary, initialStrategyArena, normalizeStrategyArena, observeStrategyArena,
-  type StrategyArenaState } from "../lib/strategy-arena.ts";
+  PORTFOLIO_POSITION_FRACTION, type StrategyArenaState } from "../lib/strategy-arena.ts";
 
 const LOOP_MS = 2_000;
 const AUTHORITY_STALE_AFTER_MS = 8_000;
@@ -884,6 +885,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private async syncLive(now: number, initialEnable = false, forceEntryCleanup = false) {
+    const desiredPortfolio = this.runtime.strategyArena.portfolioOpen;
     const activePositions = Object.values(this.runtime.live.positions).some((position) => position?.status === "OPEN");
     const activeEntries = Object.values(this.runtime.live.entries).some((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status));
     if (!this.runtime.live.requestedEnabled && !activePositions && !activeEntries && !initialEnable && !forceEntryCleanup) return;
@@ -950,8 +952,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           entry.status = "CANCELLED";
         }
       }
-      const plan = this.runtime.plans[symbol] ?? null;
-      const shouldCancel = !this.runtime.live.requestedEnabled || !plan || plan.id !== entry.planId || plan.state === "CANCELLED"
+      const selectedTrade = desiredPortfolio[symbol] ?? null;
+      const shouldCancel = !this.runtime.live.requestedEnabled || !selectedTrade || selectedTrade.id !== entry.planId
         || now >= entry.expiresAt || !this.symbolEntryReady(symbol);
       if (shouldCancel && openOrder && entry.exchangeOrderId) await this.cancelLiveEntry(client, entry);
       else if (shouldCancel && !openOrder && entry.status !== "FILLED" && entry.missingSince != null && now - entry.missingSince >= 6_000) entry.status = "CANCELLED";
@@ -959,14 +961,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
     for (const actual of actualPositions) {
       const symbol = actual.contract ?? "";
-      if (!DEFAULT_SYMBOLS.includes(symbol)) throw new Error(`发现未纳管实盘仓位 ${symbol || "UNKNOWN"}`);
       const exchangeSize = Number(actual.size ?? 0);
       const side: Side = exchangeSize > 0 ? "LONG" : "SHORT";
       let position = this.runtime.live.positions[symbol] ?? null;
       if (!position || position.status !== "OPEN") {
         const entry = this.runtime.live.entries[symbol];
+        const selectedTrade = desiredPortfolio[symbol] ?? null;
         if (!entry || entry.side !== side || (!["SUBMITTING", "OPEN", "FILLED", "ERROR"].includes(entry.status)
           && !(entry.status === "CANCELLED" && now - entry.createdAt < 60_000))) throw new Error(`发现未纳管实盘仓位 ${symbol}`);
+        if (selectedTrade && selectedTrade.id !== entry.planId) throw new Error(`发现与模拟账户订单不一致的实盘仓位 ${symbol}`);
         const entryPrice = Number(actual.entry_price ?? entry.trigger) || entry.trigger;
         const multiplier = this.runtime.contractMeta[symbol]?.quantoMultiplier ?? 1;
         const notional = Math.abs(exchangeSize) * entryPrice * multiplier;
@@ -974,9 +977,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         position = {
           id: entry.planId, symbol, side, scenario: entry.scenario, entryAt: now, entryPrice,
           initialStop: entry.invalidation, currentStop: entry.invalidation, currentTarget: entry.target,
-          plannedRisk: notional * (Math.abs(entryPrice - entry.invalidation) / Math.max(entryPrice, 1e-9) + 0.0018),
-          notional, targetScore: entry.targetScore ?? this.runtime.plans[symbol]?.score ?? 0,
-          targetIdentity: entry.targetIdentity ?? this.runtime.plans[symbol]?.targetIdentity,
+          plannedRisk: notional * (Math.abs(entryPrice - entry.invalidation) / Math.max(entryPrice, 1e-9) + (selectedTrade?.context.modeledCostRate ?? 0.0018)),
+          notional, targetScore: entry.targetScore ?? selectedTrade?.context.candidateScore ?? 0,
+          targetIdentity: entry.targetIdentity ?? `arena:${entry.planId}`,
           routeId: entry.routeId, routeKind: entry.routeKind, targetTimeframe: entry.targetTimeframe,
           rangeBoundary: entry.rangeBoundary, rangeBuffer: entry.rangeBuffer, sweepExtreme: entry.sweepExtreme,
           reclaimSource: entry.reclaimSource, reclaimStrength: entry.reclaimStrength,
@@ -990,42 +993,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         throw new Error(`${symbol} 实盘方向与系统记录冲突`);
       }
       position.exchangeUpdatedAt = now;
-      const evidence = this.runtime.evidence[symbol];
-      if (evidence?.fresh && evidence.ancillaryFresh && !position.exitRequestedAt) {
-        const routes = this.runtime.routes[symbol] ?? [];
-        const matchingRoute = routes.filter((route) => route.side === position!.side && (route.targetIdentity === position!.targetIdentity
-          || Math.abs(route.target - position!.currentTarget) / Math.max(position!.currentTarget, 1e-9) <= 0.0015))
-          .sort((a, b) => b.score - a.score)[0];
-        const candidateTarget = position.side === "LONG" ? evidence.topLong : evidence.topShort;
-        const bestTarget = candidateTarget && (candidateTarget.identity === position.targetIdentity
-          || Math.abs(candidateTarget.price - position.currentTarget) / Math.max(position.currentTarget, 1e-9) <= 0.0015)
-          ? candidateTarget : matchingRoute ? { identity: matchingRoute.targetIdentity, side: matchingRoute.side,
-            price: matchingRoute.target, liquidity: matchingRoute.score, cascade: 0, pathCost: 1, distanceCost: 1,
-            probabilityReach: matchingRoute.confirmationScore, persistence: 1, score: matchingRoute.score,
-            source: "STOP_POOL" as const, spoofed: false } : null;
-        const oppositeTarget = position.side === "LONG" ? evidence.topShort : evidence.topLong;
-        const continuationRoute = routes.filter((route) => route.kind === "NODE_CONTINUATION" && route.side === position!.side
-          && Math.abs(route.entryTrigger - position!.currentTarget) / Math.max(position!.currentTarget, 1e-9) <= route.activationDistanceRate)
-          .sort((a, b) => b.score - a.score)[0] ?? null;
-        const updated = updatePosition(position, { now, price: evidence.midpoint, bestTarget, oppositeTarget, absorption: evidence.absorption,
-          confirmationMinute: this.memory[symbol]?.timeframeUpdatedAt.m1,
-          confirmationPrice: this.memory[symbol]?.lastCompletedMinuteClose,
-          confirmationCandle: this.memory[symbol]?.lastCompletedMinuteCandle, continuationRoute });
-        if (updated.status === "CLOSED") {
-          position = { ...position, currentStop: updated.currentStop, currentTarget: updated.currentTarget,
-            exitReason: updated.exitReason, exitRequestedAt: now };
-          await client.closePosition(symbol, liveExitTag(position.id));
-          this.runtime.live.positions[symbol] = position;
-        } else {
-          position = { ...position, currentStop: updated.currentStop, currentTarget: updated.currentTarget, targetScore: updated.targetScore,
-            targetIdentity: updated.targetIdentity, routeId: updated.routeId, routeKind: updated.routeKind,
-            targetTimeframe: updated.targetTimeframe, exitSignalMinute: updated.exitSignalMinute,
-            exitSignalCount: updated.exitSignalCount, exitSignalReason: updated.exitSignalReason,
-            stopUpdatedMinute: updated.stopUpdatedMinute, maxFavorablePrice: updated.maxFavorablePrice,
-            maxAdversePrice: updated.maxAdversePrice, rangeAcceptanceMinute: updated.rangeAcceptanceMinute,
-            rangeAcceptanceCount: updated.rangeAcceptanceCount };
-          this.runtime.live.positions[symbol] = position;
-        }
+      const selectedTrade = desiredPortfolio[symbol] ?? null;
+      if (!position.exitRequestedAt && liveMirrorExitRequired(position.id, selectedTrade)) {
+        position.exitRequestedAt = now;
+        position.exitReason = "PAPER_PORTFOLIO_EXIT";
+        await client.closePosition(symbol, liveExitTag(position.id));
+      } else if (!position.exitRequestedAt && selectedTrade) {
+        position.currentStop = selectedTrade.stopPrice;
+        position.currentTarget = selectedTrade.targetPrice;
+        position.targetScore = selectedTrade.context.candidateScore;
+        position.targetIdentity = `arena:${selectedTrade.id}`;
+        this.runtime.live.positions[symbol] = position;
       }
       if (!position.exitRequestedAt) {
         await this.ensureLiveStop(client, position, snapshot.priceOrders);
@@ -1076,25 +1054,20 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     ].reduce((sum, item) => sum + (item?.margin ?? 0), 0);
     const staged: Array<{ symbol: string; plan: PaperPlan; intent: ReturnType<typeof buildLiveEntryIntent> }> = [];
     for (const [symbol, skip] of Object.entries(this.runtime.live.entrySkips)) {
-      const plan = this.runtime.plans[symbol] ?? null;
-      if (!skip || !plan || plan.id !== skip.planId || plan.state !== "PREPARED" || now >= plan.expiresAt) delete this.runtime.live.entrySkips[symbol];
+      const trade = desiredPortfolio[symbol] ?? null;
+      if (!skip || !trade || trade.id !== skip.planId || now >= trade.openedAt + 45 * 60_000) delete this.runtime.live.entrySkips[symbol];
     }
-    for (const symbol of this.runtime.symbols) {
-      const plan = this.runtime.plans[symbol] ?? null;
-      const paperPosition = this.runtime.positions[symbol] ?? null;
-      const justTriggeredEntry = plan?.state === "TRIGGERED"
-        && paperPosition?.status === "OPEN" && paperPosition.id === plan.id
-        && paperPosition.entryAt >= (this.runtime.live.changedAt ?? now)
-        && now >= paperPosition.entryAt && now - paperPosition.entryAt <= 10_000;
-      if (!plan || (plan.state !== "PREPARED" && !justTriggeredEntry) || now >= plan.expiresAt
+    for (const trade of Object.values(desiredPortfolio)) {
+      const symbol = trade.symbol;
+      const plan = arenaTradePlan(trade);
+      const justTriggeredEntry = eligibleForLiveMirror(trade, this.runtime.live.changedAt, now);
+      if (!justTriggeredEntry || now >= plan.expiresAt
         || this.runtime.live.positions[symbol]?.status === "OPEN" || !this.symbolEntryReady(symbol)) {
         delete this.runtime.live.entrySkips[symbol];
         continue;
       }
       const midpoint = this.runtime.evidence[symbol]?.midpoint ?? 0;
-      const priceCrossed = justTriggeredEntry || planTriggered(plan, midpoint);
-      if (!priceCrossed || !realtimeEntryConfirmed(plan)
-        || (plan.marketState === "BREAKOUT" && !breakoutEntryPriceAcceptable(plan, midpoint))) continue;
+      if (!(midpoint > 0)) continue;
       const prior = this.runtime.live.entries[symbol];
       // A timed-out submission remains reserved until Gate proves it absent for
       // six seconds. Never replay the same plan while its status is ambiguous.
@@ -1110,7 +1083,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           entryPrice: midpoint,
           quantoMultiplier: this.runtime.contractMeta[symbol]?.quantoMultiplier ?? 1,
           maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate ?? 0.005,
-          leverageMax: this.runtime.contractMeta[symbol]?.leverageMax ?? 50, openMargin: marginForNewEntries });
+          leverageMax: this.runtime.contractMeta[symbol]?.leverageMax ?? 50, openMargin: marginForNewEntries,
+          mirrorNotionalFraction: PORTFOLIO_POSITION_FRACTION });
       } catch (error) {
         if (!(error instanceof LiveEntrySizingError)) throw error;
         this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: error.code, reason: error.message, observedAt: now };
@@ -1662,7 +1636,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (path === "/live-mode" && request.method === "POST") {
       const body = await request.json<{ enabled?: unknown }>().catch(() => ({} as { enabled?: unknown }));
       if (typeof body.enabled !== "boolean") return json({ error: "invalid live mode" }, 400);
-      if (body.enabled) return json({ ok: false, error: "行情状态竞技场仅运行影子与模拟验证，实盘新开仓已锁定", live: this.runtime.live }, 409);
       const result = await this.setLiveMode(body.enabled);
       return json(result, result.ok ? 200 : 409);
     }

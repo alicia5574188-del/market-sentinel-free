@@ -30,10 +30,10 @@ if [[ "${project_root}" != "${git_root}" ]] ||
 fi
 
 dist_dir="${project_root}/dist"
-case "${dist_dir}" in
-  */market-sentinel-free/dist|*/release/dist) ;;
-  *) echo "Refusing to clean an unexpected build directory." >&2; exit 70 ;;
-esac
+if [[ "$(dirname "${dist_dir}")" != "${project_root}" ]] || [[ "$(basename "${dist_dir}")" != "dist" ]]; then
+  echo "Refusing to clean an unexpected build directory." >&2
+  exit 70
+fi
 rm -rf -- "${dist_dir}"
 timeout \
   --signal=TERM \

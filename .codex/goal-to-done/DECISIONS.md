@@ -1,5 +1,12 @@
 # Decisions
 
+## 2026-09-09 — one visible/executable simulation account
+
+- SHADOW/TRIAL/VERIFIED ledgers are strategy-selection research only; they must not appear as account orders or be summed as account profit.
+- `portfolioEquity`, `portfolioOpen` and `recentPortfolio` are the sole 1,000 U PAPER account truth. One symbol/event can contribute only one selected strategy order and the account holds at most three positions.
+- LIVE mirrors only portfolio orders created after the owner enables LIVE. Enabling never backfills an already-open PAPER position; deployment never changes the switch.
+- LIVE sizing remains proportional to actual Gate equity and retains contract rounding, 10% total risk, 6.5% same-direction risk, 30% margin, economical-target, fresh-data, unmanaged-exposure and reduce-only protection checks.
+
 ## 2026-09-09 — Market state precedes strategy selection
 
 - Keep anomaly detection as one expansion/event candidate channel, not the prerequisite for every strategy. Add trend, range and compression candidate channels from bounded streaming features computed from the existing bulk ticker response.

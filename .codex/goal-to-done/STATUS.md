@@ -1,5 +1,12 @@
 # Status
 
+## 2026-09-09 one simulation account and LIVE parity — ready to deploy
+
+- User clarified that independent trial trades are not the product account. Only one 1,000 U portfolio simulation should be visible and later mirrored by LIVE.
+- The product surface now exposes one 1,000 U account with current equity, after-cost USDT PnL, completed trades, wins, gross PnL, costs, open positions, order notional and one account-only history. Isolated shadow/trial records remain explicitly internal research.
+- Authenticated owner-controlled LIVE now mirrors only portfolio orders opened after enable, preserving side, stop, target and exit. It scales the account's 30% allocation to real equity and keeps lot-size, margin, 10% total-risk, 6.5% correlated-risk and reconciliation gates. Existing simulated positions are never backfilled.
+- Verification passes 167 direct tests, 15 architecture/migration checks, TypeScript, lint, whitespace and the verified production build. Next: deploy while preserving LIVE OFF, then confirm advancing production health and the new surface.
+
 ## 2026-09-09 market-regime strategy arena V2 — deployed
 
 - Production commits `fd81127ab1176ecacd3f6b2db663954501758bc5` and slot-residency hotfix `7c1e30fe54176ca6d114e270473a51918e9e07e4` deployed successfully through GitHub Actions runs #616 and #617.

@@ -3,6 +3,7 @@ import { registerHooks } from "node:module";
 import test from "node:test";
 import { ancillaryIsFresh, ancillarySchedule, emptySymbolMemory, optionalEvidenceIsFresh } from "../lib/liquidity-runtime.ts";
 import { remainingStressRisk, STALE_AFTER_MS, type PaperPlan, type PaperPosition } from "../lib/liquidity-core.ts";
+import type { ArenaTrade } from "../lib/strategy-arena.ts";
 
 const cloudflareStub = `
   export class DurableObject {
@@ -132,6 +133,21 @@ function position(id: string, symbol: string, patch: Partial<PaperPosition> = {}
     targetScore: 1,
     targetIdentity: `BOOK:LONG:${symbol}:110`,
     status: "OPEN",
+    ...patch,
+  };
+}
+
+function portfolioTrade(symbol: string, openedAt: number, patch: Partial<ArenaTrade> = {}): ArenaTrade {
+  return {
+    id: `PORTFOLIO:${symbol}:${openedAt}`, strategyId: "steady_trend:confirm:fast", strategyName: "平稳趋势延续",
+    family: "TREND", lane: "PORTFOLIO", eventId: `${symbol}:${openedAt}`, symbol, side: "LONG", status: "OPEN",
+    openedAt, closedAt: null, entryPrice: 100, stopPrice: 95, targetPrice: 110, exitPrice: null, outcome: null,
+    grossReturnRate: null, netReturnRate: null, netPnl: null, notional: 300, maxFavorableRate: 0,
+    maxAdverseRate: 0, lastPrice: 100, selectedForPortfolio: true, reason: "趋势确认",
+    context: { channel: "TREND", regime: "TREND", anomalyKind: null, entryStyle: "CONFIRM", exitProfile: "FAST",
+      candidateScore: 70, trendRate: 0.01, trendEfficiency: 0.8, volatilityRatio: 1.2, rangePosition: 0.9,
+      openInterestChangeRate: 0.01, volume24hUsd: 100_000_000, fundingRate: 0, alignedFlow: 0.2,
+      confirmation: 0.8, fakeoutRisk: 0.1, rangeId: null, modeledCostRate: 0.0018 },
     ...patch,
   };
 }
@@ -703,15 +719,12 @@ test("status exposes bounded mirror telemetry, never the complete outage outbox"
   });
 });
 
-test("a capacity-limited plan is skipped without blocking LIVE or other affordable plans", async () => {
+test("a capacity-limited portfolio order is skipped without blocking an affordable mirror", async () => {
   const { stream } = await makeStream();
   const symbols = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];
   stream.runtime.symbols = symbols;
-  stream.runtime.plans = Object.fromEntries(symbols.map((symbol) => [symbol, {
-    ...plan(symbol), marketState: "RANGE", realtimeSignalCount: 3,
-  }]));
-  stream.runtime.contractMeta = Object.fromEntries(symbols.map((symbol) => [symbol, {
-    quantoMultiplier: 0.001, maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0,
+  stream.runtime.contractMeta = Object.fromEntries(symbols.map((symbol, index) => [symbol, {
+    quantoMultiplier: index === 0 ? 0.001 : 10, maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0,
   }]));
   stream.runtime.evidence = Object.fromEntries(symbols.map((symbol) => [symbol, {
     midpoint: 100, observedAt: Date.now(), warmup: 30, fresh: true, ancillaryFresh: true, entryReady: true,
@@ -730,20 +743,26 @@ test("a capacity-limited plan is skipped without blocking LIVE or other affordab
   };
 
   const result = await stream.setLiveMode(true);
+  const openedAt = stream.runtime.live.changedAt! + 1;
+  stream.runtime.strategyArena.portfolioOpen = Object.fromEntries(symbols.map((symbol) =>
+    [symbol, portfolioTrade(symbol, openedAt)]));
+  for (const symbol of symbols) stream.runtime.evidence[symbol].observedAt = openedAt;
+  await stream.syncLive(openedAt + 1);
 
   assert.equal(result.ok, true);
   assert.equal(stream.runtime.live.requestedEnabled, true);
   assert.equal(stream.runtime.live.operational, true);
   assert.equal(createCalls, 1, "the affordable plan must not be blocked by later capacity-limited plans");
-  assert.equal(snapshotCalls, 1);
+  assert.equal(snapshotCalls, 2);
   assert.equal(Object.values(stream.runtime.live.entrySkips).filter(Boolean).length, 2);
   assert.match(stream.runtime.live.entrySkips.ETH_USDT.reason, /本轮未挂单/);
 });
 
-test("LIVE waits through three snapshots and submits only a four-snapshot exceptional breakout", async () => {
+test("LIVE ignores existing portfolio positions and mirrors only a new post-enable account order", async () => {
   const { stream } = await makeStream();
   stream.runtime.symbols = ["BTC_USDT"];
-  stream.runtime.plans = { BTC_USDT: plan("BTC_USDT") };
+  const oldOpenedAt = Date.now() - 60_000;
+  stream.runtime.strategyArena.portfolioOpen = { BTC_USDT: portfolioTrade("BTC_USDT", oldOpenedAt) };
   stream.runtime.contractMeta = { BTC_USDT: {
     quantoMultiplier: 0.001, maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0,
   } };
@@ -760,19 +779,15 @@ test("LIVE waits through three snapshots and submits only a four-snapshot except
   assert.equal(enabled.ok, true);
   assert.equal(createCalls, 0);
 
-  const triggeredAt = stream.runtime.live.changedAt + 1;
-  stream.runtime.plans.BTC_USDT = { ...stream.runtime.plans.BTC_USDT, state: "TRIGGERED", breakoutSignalCount: 3 };
-  stream.runtime.positions.BTC_USDT = position(stream.runtime.plans.BTC_USDT.id, "BTC_USDT",
-    { entryAt: triggeredAt, entryPrice: 101.2 });
+  const triggeredAt = stream.runtime.live.changedAt! + 1;
+  stream.runtime.strategyArena.portfolioOpen.BTC_USDT = portfolioTrade("BTC_USDT", triggeredAt,
+    { id: `PORTFOLIO:BTC_USDT:${triggeredAt}`, entryPrice: 101.2, stopPrice: 98, targetPrice: 110, lastPrice: 101.2 });
   stream.runtime.evidence.BTC_USDT = { midpoint: 101.2, observedAt: triggeredAt, warmup: 30, fresh: true,
     ancillaryFresh: true, topLong: null, topShort: null, absorption: 0 };
   await stream.syncLive(triggeredAt + 1);
-  assert.equal(createCalls, 0);
-
-  stream.runtime.plans.BTC_USDT = { ...stream.runtime.plans.BTC_USDT, breakoutSignalCount: 4 };
-  await stream.syncLive(triggeredAt + 2);
   assert.equal(createCalls, 1);
   assert.equal(stream.runtime.live.entries.BTC_USDT.kind, "MARKET");
+  assert.equal(stream.runtime.live.entries.BTC_USDT.planId, `PORTFOLIO:BTC_USDT:${triggeredAt}`);
 });
 
 test("forced OFF reconciliation cancels only orphaned Market Sentinel entry tags", async () => {

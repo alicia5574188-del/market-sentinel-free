@@ -11,6 +11,7 @@ export const PAPER_DEMOTION_LOSSES = 2;
 export const ARENA_MAX_HOLD_MS = 45 * 60_000;
 export const ARENA_FRICTION_RATE = 0.0018;
 export const PORTFOLIO_MAX_OPEN = 3;
+export const PORTFOLIO_POSITION_FRACTION = 0.3;
 export const ARENA_MAX_OPEN = 240;
 export const ARENA_HISTORY_LIMIT = 240;
 
@@ -77,7 +78,8 @@ export type ArenaTransition = { id: string; strategyId: string; strategyName: st
 
 export type StrategyArenaState = {
   version: 2; startedAt: number; strategies: Record<string, StrategyScore>; open: Record<string, ArenaTrade>;
-  portfolioOpen: Record<string, ArenaTrade>; portfolioEquity: number; recentShadow: ArenaTrade[];
+  portfolioOpen: Record<string, ArenaTrade>; portfolioEquity: number; portfolioResolved: number; portfolioWins: number;
+  portfolioGrossPnl: number; portfolioCosts: number; recentShadow: ArenaTrade[];
   recentPaper: ArenaTrade[]; recentPortfolio: ArenaTrade[]; transitions: ArenaTransition[]; seenSignals: string[];
 };
 
@@ -101,6 +103,7 @@ export function initialStrategyArena(now = Date.now()): StrategyArenaState {
       consecutivePaperLosses: 0, stageResults: [], stageEvents: [], stageSymbols: [], transitions: 0, lastTransitionAt: null,
     }])),
     open: {}, portfolioOpen: {}, portfolioEquity: STRATEGY_INITIAL_EQUITY,
+    portfolioResolved: 0, portfolioWins: 0, portfolioGrossPnl: 0, portfolioCosts: 0,
     recentShadow: [], recentPaper: [], recentPortfolio: [], transitions: [], seenSignals: [],
   };
 }
@@ -108,8 +111,16 @@ export function initialStrategyArena(now = Date.now()): StrategyArenaState {
 export function normalizeStrategyArena(value: StrategyArenaState | null | undefined, now = Date.now()): StrategyArenaState {
   const fresh = initialStrategyArena(now);
   if (!value || value.version !== STRATEGY_ARENA_VERSION) return fresh;
+  const recentPortfolio = (value.recentPortfolio ?? []).slice(-ARENA_HISTORY_LIMIT);
+  const portfolioResolved = value.portfolioResolved ?? recentPortfolio.length;
+  const portfolioWins = value.portfolioWins ?? recentPortfolio.filter((trade) => (trade.netPnl ?? 0) > 0).length;
+  const portfolioGrossPnl = value.portfolioGrossPnl
+    ?? sum(recentPortfolio.map((trade) => trade.notional * (trade.grossReturnRate ?? 0)));
+  const portfolioCosts = value.portfolioCosts
+    ?? sum(recentPortfolio.map((trade) => trade.notional * trade.context.modeledCostRate));
   return {
     ...fresh, ...value,
+    portfolioResolved, portfolioWins, portfolioGrossPnl, portfolioCosts,
     strategies: Object.fromEntries(STRATEGY_CATALOG.map((definition) => {
       const prior = value.strategies?.[definition.id];
       return [definition.id, prior ? { ...fresh.strategies[definition.id], ...prior, ...definition } : fresh.strategies[definition.id]];
@@ -117,7 +128,7 @@ export function normalizeStrategyArena(value: StrategyArenaState | null | undefi
     portfolioOpen: value.portfolioOpen ?? {},
     open: Object.fromEntries(Object.entries(value.open ?? {}).slice(-ARENA_MAX_OPEN)),
     recentShadow: (value.recentShadow ?? []).slice(-ARENA_HISTORY_LIMIT), recentPaper: (value.recentPaper ?? []).slice(-ARENA_HISTORY_LIMIT),
-    recentPortfolio: (value.recentPortfolio ?? []).slice(-ARENA_HISTORY_LIMIT), transitions: (value.transitions ?? []).slice(-200),
+    recentPortfolio, transitions: (value.transitions ?? []).slice(-200),
     seenSignals: (value.seenSignals ?? []).slice(-2_000),
   };
 }
@@ -218,6 +229,10 @@ function recordClosed(state: StrategyArenaState, trade: ArenaTrade) {
   const won = value > 0;
   if (trade.lane === "PORTFOLIO") {
     state.portfolioEquity = Math.max(0.01, state.portfolioEquity + (trade.netPnl ?? 0));
+    state.portfolioResolved += 1;
+    state.portfolioWins += Number(won);
+    state.portfolioGrossPnl += trade.notional * (trade.grossReturnRate ?? 0);
+    state.portfolioCosts += trade.notional * trade.context.modeledCostRate;
     state.recentPortfolio.push(trade);
     if (state.recentPortfolio.length > ARENA_HISTORY_LIMIT) state.recentPortfolio.shift();
     return;
@@ -332,7 +347,8 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
     && !state.seenSignals.includes(portfolioSeenKey)) {
     const winner = openedSimulation.sort((left, right) => Number(right.score.lane === "VERIFIED") - Number(left.score.lane === "VERIFIED")
       || right.score.paperNetReturnRate - left.score.paperNetReturnRate || right.signal.quality - left.signal.quality)[0];
-    state.portfolioOpen[symbol] = openTrade(input.observation, winner.definition, winner.signal, "PORTFOLIO", Math.max(1, state.portfolioEquity * 0.3), true);
+    state.portfolioOpen[symbol] = openTrade(input.observation, winner.definition, winner.signal, "PORTFOLIO",
+      Math.max(1, state.portfolioEquity * PORTFOLIO_POSITION_FRACTION), true);
     state.seenSignals.push(portfolioSeenKey);
   }
   return state;
@@ -352,7 +368,8 @@ export function arenaSummary(state: StrategyArenaState) {
     paperCount: strategies.filter((strategy) => strategy.lane !== "SHADOW").length,
     openShadow: open.filter((trade) => trade.lane === "SHADOW"), openPaper: open.filter((trade) => trade.lane !== "SHADOW"),
     portfolioOpen: Object.values(state.portfolioOpen).sort((left, right) => right.openedAt - left.openedAt),
-    portfolioEquity: state.portfolioEquity, strategies,
+    portfolioEquity: state.portfolioEquity, portfolioResolved: state.portfolioResolved, portfolioWins: state.portfolioWins,
+    portfolioGrossPnl: state.portfolioGrossPnl, portfolioCosts: state.portfolioCosts, strategies,
     recentShadow: state.recentShadow.slice(-100).reverse(), recentPaper: state.recentPaper.slice(-100).reverse(),
     recentPortfolio: state.recentPortfolio.slice(-100).reverse(), transitions: state.transitions.slice(-100).reverse(),
     rules: { trialPromotionWins: TRIAL_PROMOTION_WINS, verifiedEvents: VERIFIED_PAPER_EVENTS,

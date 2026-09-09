@@ -45,6 +45,15 @@ test("LIVE ignores a legacy farther target and rejects an uneconomic short-term 
   assert.equal(staged.target, 100.6);
 });
 
+test("a selected 1000 U account order mirrors thirty percent of real equity without a second strategy filter", () => {
+  const selected = { ...plan("BREAKOUT", "LONG"), invalidation: 99.8, target: 100.6 };
+  const intent = buildLiveEntryIntent({ plan: selected, entryPrice: 100, equity: 100, available: 100,
+    openRisk: 0, quantoMultiplier: 0.01, leverageMax: 50, mirrorNotionalFraction: 0.3 });
+  assert.equal(intent.notional, 30);
+  assert.equal(intent.contracts, 30);
+  assert.ok(intent.plannedRisk <= 6.5);
+});
+
 test("a 10 U LIVE account uses Gate's one-contract lot when its actual stop risk fits total and correlated caps", () => {
   const scaled = { ...plan("BREAKOUT", "LONG"), invalidation: 99.8 };
   const intent = buildLiveEntryIntent({ plan: scaled, equity: 10, available: 5.88, openRisk: 0, quantoMultiplier: 1, leverageMax: 50 });

@@ -1,6 +1,6 @@
 # Market Regime Strategy Arena
 
-A Gate USDT perpetual market-regime and strategy-rotation research system. One `MarketStream` Durable Object remains the authority for market observations and protection of any pre-existing LIVE position. New LIVE entries are hard-locked off.
+A Gate USDT perpetual market-regime and strategy-rotation system. One `MarketStream` Durable Object is the authority for market observations, one 1,000 U simulated account, and optional owner-controlled LIVE mirroring.
 
 ## Data architecture
 
@@ -23,17 +23,19 @@ Every cell starts in `SHADOW` with an isolated ledger. A first net-profitable sh
 
 Each result freezes its market regime, candidate channel, entry and exit variant, modeled full cost, price structure, trend and volatility measurements, open-interest change, funding, turnover, flow, confirmation and fakeout readings. MFE and MAE are recorded for later diagnosis.
 
-Two simulation views are deliberately separate:
+Only one simulated account is user-facing and financially authoritative:
 
-- Isolated strategy simulation measures each promoted cell without pretending correlated signals are one account.
-- Portfolio simulation selects at most one promoted cell for the same symbol/event, holds at most three positions and sizes each at 30% of current simulated equity.
+- Internal isolated ledgers evaluate and rotate the strategy cells; they are research records, not account orders.
+- The 1,000 U account selects at most one promoted cell for the same symbol/event, holds at most three positions, sizes each at 30% of current account equity, deducts modeled full costs, and exposes its actual USDT equity and PnL.
 
 Neither ledger is a profitability promise. Promotion is an online filter; only sufficiently long, out-of-sample records can establish whether a cell has useful expectation.
 
 ## Cutover and execution boundary
 
 - `SYSTEM_VERSION=market-regime-arena-v2` discards incompatible V1 PAPER arena/checkpoint statistics at cutover. Historical V1 records are not mixed with the new experiment.
-- Gate credentials and LIVE reconciliation state are preserved. Runtime decisions remain null, the legacy PAPER executor receives `allowOpen: false`, and the LIVE enable endpoint rejects activation.
+- Gate credentials and LIVE reconciliation state are preserved. Runtime decisions remain null and the retired PAPER executor receives `allowOpen: false`.
+- LIVE starts off after deployment and can be enabled only by the authenticated owner. It mirrors only new 1,000 U account orders opened after the switch was enabled; it never backfills an already-open simulated position.
+- Direction, stop, target and exit come from the same simulated-account order. LIVE scales the account's 30% allocation to real Gate equity and can skip only for exchange lot size, available margin, total-risk, correlated-direction-risk or reconciliation safety.
 - Owner authentication, encrypted credentials, read-only Gate account visibility, reduce-only protection and system-tag-only cleanup remain available.
 - No new D1 migration is needed: V2 research state remains in the bounded Durable Object checkpoint.
 
@@ -55,4 +57,4 @@ npm run lint
 git diff --check
 ```
 
-Production releases use the GitHub-to-Cloudflare workflow and require advancing health checks with `market-regime-arena-v2` while LIVE remains forced off.
+Production releases use the GitHub-to-Cloudflare workflow and require advancing health checks with `market-regime-arena-v2`. Deployment never enables LIVE.

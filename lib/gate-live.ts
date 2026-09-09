@@ -272,6 +272,7 @@ export function buildLiveEntryIntent(input: {
   leverageMax?: number;
   openMargin?: number;
   entryPrice?: number;
+  mirrorNotionalFraction?: number;
 }): LiveEntryIntent {
   const { plan } = input;
   const entryPrice = input.entryPrice ?? plan.entryTrigger;
@@ -284,7 +285,10 @@ export function buildLiveEntryIntent(input: {
   // LIVE follows the PAPER account ratio. When that proportional amount is
   // smaller than Gate's indivisible one-contract lot, use one lot only if its
   // real loss remains inside both account-wide and correlated-direction boundaries.
-  let contracts = Math.max(1, Math.floor(sized.notional / contractNotional));
+  const requestedNotional = input.mirrorNotionalFraction == null
+    ? sized.notional
+    : input.equity * Math.max(0, Math.min(1, input.mirrorNotionalFraction));
+  let contracts = Math.max(1, Math.floor(requestedNotional / contractNotional));
   let leverageChoice = selectSafeLeverage({ notional: contracts * contractNotional, equity: input.equity,
     entry: entryPrice, invalidation: plan.invalidation, maintenanceRate: input.maintenanceRate, leverageMax: maxLeverage });
   const affordable = Math.floor(input.available * 0.95 * leverageChoice.leverage / contractNotional);
@@ -306,8 +310,10 @@ export function buildLiveEntryIntent(input: {
   if ((input.openMargin ?? 0) + margin > input.equity * PORTFOLIO_MARGIN_CAP + 1e-8) {
     throw new LiveEntrySizingError("MARGIN", plan.symbol, `${plan.symbol} 将超过账户 30% 挂单与持仓保证金上限，本轮未挂单`);
   }
-  const economics = tradeEconomics({ entry: entryPrice, target: stagedEconomicTarget(plan), lossRate, confidence, notional, equity: input.equity });
-  if (!economics.executable) throw new LiveEntrySizingError("ECONOMICS", plan.symbol, `${plan.symbol} 实盘合约取整后净利润空间不足，本轮未挂单`);
+  if (input.mirrorNotionalFraction == null) {
+    const economics = tradeEconomics({ entry: entryPrice, target: stagedEconomicTarget(plan), lossRate, confidence, notional, equity: input.equity });
+    if (!economics.executable) throw new LiveEntrySizingError("ECONOMICS", plan.symbol, `${plan.symbol} 实盘合约取整后净利润空间不足，本轮未挂单`);
+  }
   const size = plan.side === "LONG" ? contracts : -contracts;
   const tag = shortTag("e", plan.id);
   const initial = { contract: plan.symbol, size, price: "0", tif: "ioc", text: tag, reduce_only: false };
