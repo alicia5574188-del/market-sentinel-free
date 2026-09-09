@@ -2,9 +2,10 @@
 
 ## 2026-09-09 isolated radar timeout recovery — deployed
 
-- Gate bulk-ticker timeouts no longer enter global execution health or retry every two seconds. The authority preserves the last good 30-market result and backs off at 15/30/60 seconds.
+- Gate bulk-ticker timeouts no longer enter global execution health or retry every two seconds. The authority preserves the last good 30-market result and retries at most once per normal ten-second scan, so the 18-observation regime warmup is not starved by 15/30/60-second gaps.
+- Partial candidate-book failures remain isolated per symbol and no longer misreport the whole authority as recovering. A failed symbol still cannot open a trade; protected-position data loss still freezes all new entries.
 - PAPER books and any owner-controlled LIVE reconciliation run before the optional radar call. Radar data older than 30 seconds cannot produce new strategy observations or orders; existing trades continue on their independent fresh-book path.
-- The phone now renders a dedicated Chinese radar-delay notice and a successful scan clears it automatically. Normal ten-second cadence, request/write budgets, strategy rules, risk and LIVE authority are unchanged.
+- The phone renders a dedicated Chinese radar-delay notice only after the last good radar result is stale for 30 seconds; one transient timeout stays silent and a successful scan clears the notice automatically. Normal ten-second request cadence, request/write budgets, strategy rules, risk and LIVE authority are unchanged.
 - Production commit `900b289154a4f1149dce22d4be4af4986f83d285` passed GitHub Actions run #629 and the advancing Cloudflare production-health gate. Cloudflare version `30acadb0-452c-40a8-a2be-6018ecb73e89`; 30-market scanning, the 12/48 V4 catalog and 1,000 U account passed, with LIVE still OFF (`requestedEnabled=false`, `operational=false`).
 - Verification passes 179 direct tests, 15 build/architecture/migration tests, TypeScript, lint, whitespace and CI Wrangler dry-run checks.
 

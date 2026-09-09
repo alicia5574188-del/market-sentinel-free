@@ -266,6 +266,7 @@
 # 2026-09-09 — Bulk radar failure is optional degradation, never execution failure
 
 - The two-second authority must process current PAPER books and any LIVE reconciliation before attempting the optional ten-second whole-market ticker scan.
-- A bulk radar failure retains the last successful 30-market snapshot and retries at 15, 30, then at most 60 seconds. Failed attempts do not update success time, do not enter global `lastError`, and do not increase the normal request cadence.
+- A bulk radar failure retains the last successful 30-market snapshot and retries at most once per normal ten-second scan. The earlier 15/30/60-second backoff was removed because it could starve the 18-observation regime warmup and repeatedly reset profiles after five-minute gaps. Failed attempts do not update success time, do not enter global `lastError`, and do not increase the normal request cadence.
+- A partial failure among ordinary candidate-market books stays in per-symbol diagnostics. It degrades the whole authority only when no market snapshot succeeds or protected-position data is unavailable; every failed symbol remains individually blocked from new entries.
 - Radar candidates older than 30 seconds cannot create new strategy observations, effective shadows, or simulated orders. Existing PAPER/LIVE positions continue to use only their independent fresh bid/ask path.
-- The phone may show a dedicated Chinese radar-delay notice, but a Gate timeout must not be presented as a whole-system recovery fault. One successful scan clears the failure state automatically.
+- The phone shows the dedicated Chinese radar-delay notice only once the last successful scan is over 30 seconds old; a single transient timeout is silent. One successful scan clears the failure state automatically.

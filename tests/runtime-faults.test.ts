@@ -118,7 +118,7 @@ async function makeStream(checkpoint?: unknown) {
   return makeStreamFromStorage(new FakeStorage(checkpoint));
 }
 
-test("radar timeout preserves the last good scan and backs off without contaminating execution health", () => {
+test("radar timeout preserves the last good scan and retries once per normal scan without contaminating execution health", () => {
   const candidate = { id: "BTC:1", symbol: "BTC_USDT", side: "LONG", strength: 2, moveRate: 0.01,
     movementMultiple: 2, volume24hUsd: 1_000_000, confirmations: 2, firstSeenAt: 1, observedAt: 1,
     kind: "NEW_MONEY" };
@@ -130,18 +130,18 @@ test("radar timeout preserves the last good scan and backs off without contamina
   assert.equal(first.lastScanAt, 1_000);
   assert.deepEqual(first.candidates, [candidate]);
   assert.equal(first.consecutiveFailures, 1);
-  assert.equal(first.retryAt, 26_000);
-  assert.equal(radarAttemptDue(first, 25_999), false);
-  assert.equal(radarAttemptDue(first, 26_000), true);
+  assert.equal(first.retryAt, 21_000);
+  assert.equal(radarAttemptDue(first, 20_999), false);
+  assert.equal(radarAttemptDue(first, 21_000), true);
 
-  const second = failedRadarRuntime(first, 26_000, new Error("timeout again"));
-  const third = failedRadarRuntime(second, 56_000, new Error("timeout again"));
-  const fourth = failedRadarRuntime(third, 116_000, new Error("timeout again"));
-  assert.equal(second.retryAt, 56_000);
-  assert.equal(third.retryAt, 116_000);
-  assert.equal(fourth.retryAt, 176_000, "backoff must cap at sixty seconds");
+  const second = failedRadarRuntime(first, 21_000, new Error("timeout again"));
+  const third = failedRadarRuntime(second, 31_000, new Error("timeout again"));
+  const fourth = failedRadarRuntime(third, 41_000, new Error("timeout again"));
+  assert.equal(second.retryAt, 31_000);
+  assert.equal(third.retryAt, 41_000);
+  assert.equal(fourth.retryAt, 51_000, "failures must not starve the eighteen-sample regime warmup");
 
-  const recovered = successfulRadarRuntime(fourth, 176_000, 30, [candidate]);
+  const recovered = successfulRadarRuntime(fourth, 51_000, 30, [candidate]);
   assert.equal(recovered.consecutiveFailures, 0);
   assert.equal(recovered.retryAt, null);
   assert.equal(recovered.lastError, null);

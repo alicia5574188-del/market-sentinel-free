@@ -29,8 +29,6 @@ const HEARTBEAT_MS = 30_000;
 const UNIVERSE_MS = 10 * 60_000;
 const RADAR_MS = 10_000;
 const RADAR_ENTRY_STALE_MS = 30_000;
-const RADAR_RETRY_MIN_MS = 15_000;
-const RADAR_RETRY_MAX_MS = 60_000;
 const WARMUP_SNAPSHOTS = 4;
 const MAX_ANCILLARY_CONCURRENCY = 2;
 const MAX_OPEN_POSITIONS = PORTFOLIO_REALTIME_CAPACITY;
@@ -180,8 +178,8 @@ function emptyRadarRuntime(): RadarRuntime {
   return { scanned: 0, lastScanAt: null, lastAttemptAt: null, consecutiveFailures: 0, retryAt: null, lastError: null, candidates: [] };
 }
 
-export function radarRetryDelay(consecutiveFailures: number) {
-  return Math.min(RADAR_RETRY_MAX_MS, RADAR_RETRY_MIN_MS * 2 ** Math.max(0, consecutiveFailures - 1));
+export function radarRetryDelay() {
+  return RADAR_MS;
 }
 
 export function radarCandidateExecutionAllowed(lastScanAt: number | null, now: number) {
@@ -196,7 +194,7 @@ export function radarAttemptDue(radar: RadarRuntime, now: number) {
 export function failedRadarRuntime(radar: RadarRuntime, failedAt: number, error: unknown): RadarRuntime {
   const consecutiveFailures = radar.consecutiveFailures + 1;
   return { ...radar, lastAttemptAt: failedAt, consecutiveFailures,
-    retryAt: failedAt + radarRetryDelay(consecutiveFailures), lastError: safeError(error) };
+    retryAt: failedAt + radarRetryDelay(), lastError: safeError(error) };
 }
 
 export function successfulRadarRuntime(radar: RadarRuntime, now: number, scanned: number, candidates: RadarCandidate[]): RadarRuntime {
@@ -1656,11 +1654,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           && memory.timeframeUpdatedAt.h1 > 0 && memory.timeframeUpdatedAt.h4 > 0;
       });
       this.runtime.state = !this.authorityReady ? "RECOVERY_REQUIRED" : successes === 0 ? "RECONNECTING"
-        : successes !== this.runtime.symbols.length ? "DEGRADED"
-          : this.runtime.riskBreach ? "DEGRADED" : realtimeReadiness.actionableMarkets > 0 && realtimeReadiness.protectedMarketsReady ? "LIVE"
+        : this.runtime.riskBreach || !realtimeReadiness.protectedMarketsReady ? "DEGRADED"
+          : realtimeReadiness.actionableMarkets > 0 ? "LIVE"
             : allWarm && allMeta && ancillaryStarted ? "DEGRADED" : "WARMING";
       const recoveringMarkets = this.runtime.symbols.filter((symbol) => !this.symbolEntryReady(symbol)).length;
-      const feedError = successes !== this.runtime.symbols.length ? `${this.runtime.symbols.length - successes} market snapshots unavailable; retrying`
+      const feedError = successes === 0 ? `${this.runtime.symbols.length} market snapshots unavailable; retrying`
         : !realtimeReadiness.protectedMarketsReady ? "protected position data unavailable; new entries frozen"
           : realtimeReadiness.actionableMarkets === 0 ? `${recoveringMarkets} realtime markets warming; entries blocked`
             : !allMeta && realtimeReadiness.protectedMarkets > 0 ? "protected contract metadata unavailable" : null;

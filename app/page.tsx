@@ -202,6 +202,8 @@ export default function Home() {
   const responseFresh = runtime != null && clock - receivedAt < RUNTIME_DISPLAY_TTL_MS && clock - runtime.generatedAt < RUNTIME_DISPLAY_TTL_MS;
   const healthy = runtimeReady(runtime, responseFresh);
   const authorityOperational = runtime != null && runtime.authorityReady && !runtime.stale;
+  const radarDelayed = runtime?.radar?.lastError != null
+    && (runtime.radar.lastScanAt == null || clock - runtime.radar.lastScanAt > 30_000);
   const arena = runtime?.strategyArena;
   const openShadow = arena?.openShadow ?? [];
   const portfolioOpen = arena?.portfolioOpen ?? [];
@@ -248,7 +250,7 @@ export default function Home() {
         <article><small>当前持仓</small><strong>{portfolioOpen.length}</strong><p>动态数量 · 总风险≤100 U · 同向≤65 U</p></article>
       </section>
       {(!responseFresh || error) && runtime && <p className="notice">手机页面更新延迟，下面保留最近一次后台状态；服务器仍独立运行，不会因此停止判断或开模拟单。</p>}
-      {runtime?.radar?.lastError && <p className="notice">30币雷达本轮超时，已隔离并退避重试；持仓盘口仍优先更新，旧雷达不会触发新订单。</p>}
+      {radarDelayed && <p className="notice">30币雷达连续超时，正在按10秒节奏恢复；持仓盘口仍优先更新，旧雷达不会触发新订单。</p>}
       {runtime?.lastError && <p className="notice">{runtime.lastError.startsWith("D1") ? `历史镜像稍后重试，不影响行情判断和开仓：${runtime.lastError}` : `系统正在自动恢复：${runtime.lastError}`}</p>}
     </>}
 

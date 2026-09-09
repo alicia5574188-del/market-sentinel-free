@@ -28,6 +28,8 @@ test("runtime uses bounded futures REST snapshots, no continuous WebSocket", asy
   assert.ok(alarm.indexOf("processBooks") < alarm.indexOf("fetchMarketTickers"), "position books must run before the bulk radar");
   assert.ok(alarm.indexOf("syncLive") < alarm.indexOf("fetchMarketTickers"), "LIVE reconciliation must run before the bulk radar");
   assert.doesNotMatch(alarm, /lastError = `radar:/, "a radar timeout must not become a global execution fault");
+  assert.doesNotMatch(alarm, /successes !== this\.runtime\.symbols\.length \? "DEGRADED"/, "partial candidate-book loss must not degrade the whole authority");
+  assert.match(worker, /successes === 0 \? `\$\{this\.runtime\.symbols\.length\} market snapshots unavailable/);
   assert.match(worker, /radarCandidateExecutionAllowed\(this\.runtime\.radar\.lastScanAt, now\)/);
   assert.match(worker, /maxSubrequestsPerAlarm: 32/);
   assert.match(worker, /now - this\.runtime\.lastStopCheckpointAt < 60_000/);
