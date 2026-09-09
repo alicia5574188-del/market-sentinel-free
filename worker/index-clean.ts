@@ -15,7 +15,7 @@ import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type Gat
 import { credentialMetadata } from "../lib/gate-readonly.ts";
 import { clearOwnerSessionCookie, createOwnerSession, ownerAuthConfigured, ownerPasswordMatches, ownerSessionCookie, sameOriginMutation, verifyOwnerSession } from "../lib/owner-auth.ts";
 import { eventAlignedFlow, updateRadar, type EventEntryAssessment, type RadarBaseline, type RadarCandidate } from "../lib/market-radar.ts";
-import { anomalyCandidate, initialMarketRegimes, marketRegimeSummary, normalizeMarketRegimes, selectDiverseMarketPool, updateMarketRegimes,
+import { anomalyCandidate, initialMarketRegimes, marketRegimeSummary, normalizeMarketRegimes, residentCandleCandidate, selectDiverseMarketPool, updateMarketRegimes,
   type MarketRegimeState } from "../lib/market-regime.ts";
 import { advanceStrategyArena, applyStrategySleepStates, arenaSummary, initialStrategyArena, normalizeStrategyArena, observeStrategyArena,
   PORTFOLIO_REALTIME_CAPACITY, resetStrategyArenaAccount, type StrategyArenaState } from "../lib/strategy-arena.ts";
@@ -440,9 +440,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     spreadRate: number, bestBid: number, bestAsk: number, bidDepthUsd: number, askDepthUsd: number) {
     this.runtime.strategyArena = advanceStrategyArena({ state: this.runtime.strategyArena,
       quotes: { [symbol]: { midpoint, bestBid, bestAsk } }, now });
-    if (!radarCandidateExecutionAllowed(this.runtime.radar.lastScanAt, now)) return;
-    const candidates = this.runtime.marketRegimes.candidates.filter((row) => row.symbol === symbol);
     const memory = this.memory[symbol];
+    const contract = this.contractCatalog.get(symbol);
+    if (!memory || !contract) return;
+    const candle = residentCandleCandidate({ symbol, candles: memory.recentCompletedMinuteCandles,
+      volume24hUsd: contract.volume24hUsd, fundingRate: contract.fundingRate, now });
+    const candidates = radarCandidateExecutionAllowed(this.runtime.radar.lastScanAt, now)
+      ? this.runtime.marketRegimes.candidates.filter((row) => row.symbol === symbol) : [];
+    if (candle && !candidates.some((row) => row.channel === candle.candidate.channel)) candidates.push(candle.candidate);
     if (!candidates.length || !memory) return;
     for (const candidate of candidates) {
       if (candidate.channel === "ANOMALY" && candidate.confirmations < 2) continue;
@@ -450,6 +455,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         candidate, midpoint, bestBid, bestAsk, alignedFlow: eventAlignedFlow(candidate.side, memory.flow), minuteNoiseRate: memory.minuteNoiseRate,
         spreadRate, range15m: analyzed.range15m, confirmationBySide: analyzed.confirmationBySide,
         fakeoutBySide: analyzed.fakeoutBySide, routes: analyzed.routes, bidDepthUsd, askDepthUsd,
+        candleStructure: candle?.structure ?? null,
         quantoMultiplier: this.runtime.contractMeta[symbol]?.quantoMultiplier,
         maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate, completedMinuteAt: memory.timeframeUpdatedAt.m1,
         leverageMax: this.runtime.contractMeta[symbol]?.leverageMax, now, dataFresh: true,
@@ -473,21 +479,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private priorityMinuteSymbols(now: number) {
     const completedMinute = Math.floor(now / 60_000) * 60_000;
-    const radarFresh = radarCandidateExecutionAllowed(this.runtime.radar.lastScanAt, now);
-    return this.runtime.symbols.filter((symbol) => {
-      const plan = this.runtime.plans[symbol];
-      const eventCandidate = radarFresh && this.runtime.marketRegimes.candidates.some((row) => row.symbol === symbol);
-      return (eventCandidate || plan?.state === "PREPARED" && plan.marketState === "BREAKOUT")
-        && (this.memory[symbol]?.timeframeUpdatedAt.m1 ?? 0) < completedMinute;
-    });
+    return this.runtime.symbols.filter((symbol) => (this.memory[symbol]?.timeframeUpdatedAt.m1 ?? 0) < completedMinute);
   }
 
   private criticalEvidenceFresh(symbol: string, now: number) {
     const memory = this.memory[symbol] ?? emptySymbolMemory();
-    const needsMinute = radarCandidateExecutionAllowed(this.runtime.radar.lastScanAt, now)
-      && this.runtime.marketRegimes.candidates.some((row) => row.symbol === symbol)
-      || this.runtime.plans[symbol]?.state === "PREPARED" || this.runtime.positions[symbol]?.status === "OPEN";
-    return !needsMinute || now - memory.timeframeUpdatedAt.m1 <= 3 * 60_000;
+    return now - memory.timeframeUpdatedAt.m1 <= 3 * 60_000;
   }
 
   private async updateAncillary(now: number) {

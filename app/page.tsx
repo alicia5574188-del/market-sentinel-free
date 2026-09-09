@@ -250,14 +250,14 @@ export default function Home() {
         <article><small>当前持仓</small><strong>{portfolioOpen.length}</strong><p>动态数量 · 总风险≤100 U · 同向≤65 U</p></article>
       </section>
       {(!responseFresh || error) && runtime && <p className="notice">手机页面更新延迟，下面保留最近一次后台状态；服务器仍独立运行，不会因此停止判断或开模拟单。</p>}
-      {radarDelayed && <p className="notice">30币雷达连续超时，正在按10秒节奏恢复；持仓盘口仍优先更新，旧雷达不会触发新订单。</p>}
+      {radarDelayed && <p className="notice">30币发现层连续超时，正在按10秒节奏恢复；稳定核心池仍用完整5分钟K线和新鲜盘口持续验证，旧雷达不会触发新订单。</p>}
       {runtime?.lastError && <p className="notice">{runtime.lastError.startsWith("D1") ? `历史镜像稍后重试，不影响行情判断和开仓：${runtime.lastError}` : `系统正在自动恢复：${runtime.lastError}`}</p>}
     </>}
 
     <nav className="tabs">{([['brain', '模拟账户'], ['orders', `持仓 ${portfolioOpen.length || ''}`], ['live', `实盘 ${openLivePositions.length + openLiveEntries.length || ''}`], ['history', '交易记录'], ['settings', '设置']] as const).map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => selectTab(key)}>{label}</button>)}</nav>
 
     <section className="radar-board" hidden={tab !== "brain"}>
-      <div className="radar-board-head"><div><small>30币市场状态引擎</small><b>10秒扫描30个Gate USDT永续，最多10个位置进行2秒盘口与结构验证</b></div><span>{time(regimes?.lastUpdatedAt)}</span></div>
+      <div className="radar-board-head"><div><small>30币机会发现层</small><b>10秒扫描30个Gate USDT永续；6个稳定核心位持续积累完整5分钟结构，另4个位跟踪新机会</b></div><span>{time(regimes?.lastUpdatedAt)}</span></div>
       <div className="regime-strip">{(["TREND", "RANGE", "COMPRESSION", "EXPANSION", "UNCERTAIN"] as RegimeKind[]).map((kind) => <article key={kind}><small>{regimeLabel(kind)}</small><strong>{regimes?.counts[kind] ?? 0}</strong></article>)}</div>
       <div className="radar-candidates">{regimes?.candidates.slice(0, 9).map((item) => <article key={`${item.id}:${item.channel}`}>
         <div><b>{item.symbol.replace("_", "/")}</b><small>{channelLabel(item.channel)}</small></div>
@@ -266,7 +266,7 @@ export default function Home() {
       </article>)}{!regimes?.candidates.length && <p>正在积累全市场状态基线；预热完成后会同时产生趋势、震荡、压缩和异动候选。</p>}</div>
     </section>
 
-    <section className="playbook-list" hidden={tab !== "brain"}><div className="section-heading"><div><h2>V4策略状态</h2><p>12种打法、48个真实不同变体持续影子验证；观察影子不计成绩，有效影子才参与滚动启用。</p></div><span>{arena?.activeCount ?? 0} 启用 · {arena?.sleepingCount ?? 0} 休眠</span></div>{strategyGroups.length ? strategyGroups.map((strategies) => { const id = strategies[0].id.split(":")[0]; return <PlaybookGroup key={id} strategies={strategies} evidence={playbookById.get(id)?.evidence} rules={arena!.rules} />; }) : <div className="empty">正在读取48个策略单元…</div>}</section>
+    <section className="playbook-list" hidden={tab !== "brain"}><div className="section-heading"><div><h2>V4.1策略状态</h2><p>12种基础打法按独立事件滚动晋级，48个真实不同变体负责具体进出场；未启用策略持续影子验证，不因行情缺席休眠。</p></div><span>{arena?.activeCount ?? 0} 启用 · {arena?.sleepingCount ?? 0} 休眠</span></div>{strategyGroups.length ? strategyGroups.map((strategies) => { const id = strategies[0].id.split(":")[0]; return <PlaybookGroup key={id} strategies={strategies} evidence={playbookById.get(id)?.evidence} rules={arena!.rules} />; }) : <div className="empty">正在读取48个策略单元…</div>}</section>
 
     <section className="shadow-log" hidden={tab !== "brain"}><div className="section-heading"><div><h2>有效影子</h2><p>路线、价格、结构、成本、深度和合约信息全部合格；只有这些结果参与启用。</p></div><span>{arena?.recentShadow.length ?? 0} 笔</span></div>{!arena?.recentShadow.length ? <div className="empty"><b>等待首批有效影子结果</b></div> : <div className="history-table">{arena.recentShadow.slice(0, 30).map((trade) => <ArenaTradeRecord key={trade.id} trade={trade} />)}</div>}</section>
     <section className="shadow-log" hidden={tab !== "brain"}><div className="section-heading"><div><h2>观察影子</h2><p>信号出现但尚不能真实进场，只保存阻断原因，不计算晋级盈亏。</p></div><span>{arena?.observationShadow.length ?? 0} 条</span></div><div className="transition-list">{arena?.observationShadow.slice(0, 20).map((item) => <article key={item.id}><div><b>{item.symbol.replace("_", "/")} · {item.strategyName}</b><small>{time(item.observedAt)}</small></div><p>{item.blocker}</p></article>)}</div></section>
@@ -291,7 +291,7 @@ export default function Home() {
       <Setting title="动态风险" detail={`每笔风险随环境和成绩在${num((arena?.rules.singleTradeRiskMin ?? .01) * 100, 0)}%～${num((arena?.rules.singleTradeRiskMax ?? .02) * 100, 0)}%连续调整；总风险≤10%、同向≤6.5%、保证金≤30%、名义仓位≤4倍权益。`} value="10～20 U" tone="online"/>
       <Setting title="模拟账户口径" detail="观察影子不计分，有效影子用于选策略；唯一1000 U账户的余额、持仓和交易记录才代表可对标的真实效果。" value="单账户" tone="online"/>
       <Setting title="数据容错" detail={`累计短时失败 ${totalFeedFailures} 次 · 自动恢复 ${totalFeedRecoveries} 次 · 最大观测延迟 ${num(maxFeedLag / 1_000, 2)} 秒`} value={activeFeedSuspensions ? `${activeFeedSuspensions}币冻结` : "正常"} tone={activeFeedSuspensions ? "locked" : "online"}/>
-      <Setting title="数据覆盖" detail={`约每10秒扫描 ${runtime?.limits.scanUniverse ?? 30} 个合约并识别行情状态；持仓优先，最多${runtime?.limits.realtimeCapacity ?? 10}个两秒深度位置。数据能力不足时停止新增。`} value="30币 / 10精细" tone="online"/>
+      <Setting title="数据覆盖" detail={`约每10秒尝试扫描 ${runtime?.limits.scanUniverse ?? 30} 个合约发现机会；10个两秒深度位置中保留6个稳定核心位，发现层延迟时核心位仍用完整5分钟K线继续验证。旧数据永不执行。`} value="6稳定 / 4机会" tone="online"/>
       <Setting title="页面数据" detail="交易后台按2秒循环运行；手机页面每15秒读取一次摘要。策略记录随权威检查点保存，不增加行情请求。" value="轻量" tone="online"/>
       <Setting title="系统状态" detail="交易健康只由后台权威、行情新鲜度和各币恢复状态决定；历史镜像延迟不再误报故障。" value={healthy ? "正常" : "恢复中"} tone={healthy ? "online" : "locked"}/>
       <button className="setting-row" type="button" disabled={paperResetBusy || liveEnabled} onClick={() => void resetPaperAccount()}><div><b>重置1000 U模拟资金</b><p>按最新可成交价结算当前模拟持仓，归档本轮账户后从1000 U重新开始；影子策略研究样本不会删除，实盘开启时禁止操作。</p></div><span className="setting-value locked">{paperResetBusy ? "处理中…" : "重置 ›"}</span></button>

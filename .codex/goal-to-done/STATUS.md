@@ -1,5 +1,15 @@
 # Status
 
+## In progress — 2026-09-09 data-continuous V4.1
+
+- Confirmed production can keep two-second books alive while the optional thirty-contract bulk radar repeatedly times out, but the prior arena incorrectly returned before observing any strategy when that radar snapshot exceeded thirty seconds.
+- Confirmed realtime-pool rotation deletes in-memory candle/flow history for evicted symbols, and forty-eight per-variant promotion ledgers dilute the one-result-per-event sample across four variants of the same base playbook.
+- Implementing a stable six-symbol completed-candle core plus four opportunity slots, local completed-five-minute candidates/structure, playbook-level rolling promotion/demotion, and sleep only for already-enabled playbooks.
+- LIVE must remain OFF. No stale radar candidate or stale bid/ask may open or close an order.
+- Implementation complete: stale radar is isolated from resident completed-five-minute observations; six stable liquid residents survive candidate churn; all ten resident one-minute feeds are refreshed after each completed minute; unproven playbooks remain in SHADOW; base-playbook promotion/demotion controls four distinct execution variants; enabled PAPER competition no longer starves unproven shadow learning.
+- Verification passed: 184 direct tests, 15 architecture/migration tests, production build, TypeScript typecheck, ESLint and whitespace validation. The integration suite explicitly opens one effective shadow from completed five-minute structure while the bulk radar has no fresh snapshot, and separately proves stale radar data cannot authorize an order.
+- Next: publish the verified tree to GitHub `main`, wait for the Cloudflare workflow, then confirm advancing production authority, 1,000 U account, 30/10 coverage, 12/48 catalog, bounded risk and LIVE OFF.
+
 ## 2026-09-09 radar recovery correction — deployed
 
 - The initial exponential radar backoff was confirmed to starve the 18-observation regime warmup during intermittent Gate timeouts. Recovery now retries at most once per normal ten-second scan, and the larger all-market ticker payload gets a dedicated four-second timeout only after position books and LIVE reconciliation.

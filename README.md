@@ -2,12 +2,20 @@
 
 A Gate USDT perpetual market-regime and progressive strategy-rotation system. One `MarketStream` Durable Object is authoritative for market observations, the 1,000 U simulated futures account, and optional owner-controlled LIVE mirroring.
 
+## Data-continuous V4.1
+
+- The thirty-contract bulk ticker is now an optional opportunity-discovery layer, not a global strategy switch. A stale radar snapshot can never authorize an order, while six stable liquid residents continue from fresh two-sided books and contiguous completed one-minute candles aggregated locally into completed five-minute structure.
+- The ten-symbol realtime pool is split into six stable core positions and four opportunity positions. Protected exposure remains first priority, and ordinary candidate churn no longer erases the core candle/flow history.
+- The rolling three-win or positive-six rule is evaluated across the twelve base playbooks. Their forty-eight confirm/retest and fast/structure variants remain genuinely different execution geometries, while each market event contributes at most one effective-shadow result.
+- Only an already-enabled playbook sleeps when its compatible market channel is absent. Unproven playbooks remain in SHADOW, and an actual compatible completed-five-minute candidate wakes an enabled playbook even while bulk discovery is recovering.
+- Every effective-shadow, PAPER and future LIVE entry still requires fresh executable bid/ask, complete contract metadata, integer Gate contracts, sufficient depth, full modeled costs, a stop outside normal noise, and at least the configured net reward/risk. LIVE remains owner-controlled and defaults OFF.
+
 ## Data architecture
 
 - Every 10 seconds, the bulk futures-ticker request scans the 30 most liquid eligible Gate USDT perpetuals. Its four-second timeout is isolated from the two-second position-book timeout and runs only after position management. It maintains compact profiles for trend, range, compression and anomaly/expansion.
-- Position books and owner-controlled LIVE reconciliation run before the optional bulk scan. A failed bulk scan preserves the last good radar snapshot, retries at most once per normal ten-second scan, never becomes a global execution fault, and cannot authorize new strategy observations once that snapshot is older than 30 seconds. Partial candidate-book loss remains isolated per symbol and does not misreport the whole authority as recovering.
+- Position books and owner-controlled LIVE reconciliation run before the optional bulk scan. A failed bulk scan preserves the last good display snapshot, retries at most once per normal ten-second scan, never becomes a global execution fault, and cannot authorize a new order once that snapshot is older than 30 seconds. The stable core may still create a new observation from its own completed five-minute structure and fresh book. Partial candidate-book loss remains isolated per symbol and does not misreport the whole authority as recovering.
 - The bulk scan uses price, turnover, funding and open interest. A profile needs 18 observations and three confirmations before a regime change is accepted.
-- Up to ten priority symbols receive the two-second order book plus rotating completed 1m/15m/1h data, locally aggregated 4h structure, signed trades, open interest, funding and liquidation observations. Open PAPER/LIVE positions and effective-shadow trades retain priority; new candidates compete for remaining capacity.
+- Up to ten priority symbols receive the two-second order book plus rotating completed 1m/15m/1h data, locally aggregated 4h structure, signed trades, open interest, funding and liquidation observations. Open PAPER/LIVE positions and effective-shadow trades retain priority; six liquid core residents keep their history and new candidates compete for four opportunity positions.
 - No additional market request, alarm cadence, per-snapshot D1 write or request budget was introduced.
 
 ## Adaptive shadow strategy arena V4
@@ -21,10 +29,10 @@ The catalog contains 48 bounded strategy variants: 12 interpretable playbooks ×
 
 All variants keep running in shadow. Incomplete routes are observation shadows and never score. Only signals that pass fresh executable bid/ask, unmissed entry location, structure/noise stop, full-cost target, depth, liquidity and Gate contract checks become effective shadows.
 
-- The latest three independent effective shadows all winning, or the latest six producing positive after-cost total return, activates a strategy.
+- The latest three independent effective shadows all winning, or the latest six producing positive after-cost total return, activates the base playbook and makes its four distinct execution variants selectable.
 - Activation admits only the next new valid signal; completed winners are never backfilled.
-- The latest three simulated orders all losing, or the latest six no longer positive after costs, stops new account entries and returns the strategy to shadow. A demoted strategy needs new effective-shadow results before it can reactivate.
-- A strategy whose market environment is absent sleeps without recording a loss or deleting its rolling results.
+- The latest three simulated orders all losing, or the latest six no longer positive after costs, stops new account entries and returns the whole base playbook to shadow. A demoted playbook needs new effective-shadow results before it can reactivate.
+- Only an enabled playbook whose market environment is absent sleeps without recording a loss or deleting its rolling results. Unproven playbooks remain in shadow.
 
 Every result freezes its regime, candidate channel, entry/exit variant, executable bid/ask, modeled cost, structure source, net reward/risk, depth, spread, trend/volatility, open-interest change, funding, turnover, flow, confirmation, fakeout, MFE and MAE.
 

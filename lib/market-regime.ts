@@ -1,4 +1,5 @@
 import type { RadarCandidate, RadarTicker } from "./market-radar.ts";
+import type { CompletedMinuteCandle } from "./liquidity-core.ts";
 
 export const MARKET_REGIME_VERSION = 1;
 export const MARKET_REGIME_MIN_SAMPLES = 18;
@@ -64,8 +65,116 @@ export type MarketRegimeState = {
   lastUpdatedAt: number | null;
 };
 
+export type CompletedFiveMinuteCandle = CompletedMinuteCandle & { completedAt: number };
+export type ResidentCandleStructure = {
+  id: string;
+  observedAt: number;
+  lower: number;
+  upper: number;
+  midpoint: number;
+  recentLower: number;
+  recentUpper: number;
+};
+
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 const finite = (value: number, fallback = 0) => Number.isFinite(value) ? value : fallback;
+const candlePriceBin = (price: number) => Math.round(Math.log(Math.max(price, 1e-12)) / Math.log(1.0025));
+
+export function completedFiveMinuteCandles(candles: CompletedMinuteCandle[]) {
+  const unique = [...new Map(candles.filter((row) => [row.time, row.open, row.high, row.low, row.close].every(Number.isFinite)
+      && row.open > 0 && row.close > 0 && row.high >= row.low && row.low > 0)
+    .map((row) => [row.time, row])).values()].sort((left, right) => left.time - right.time);
+  const groups = new Map<number, CompletedMinuteCandle[]>();
+  for (const row of unique) {
+    const bucket = Math.floor(row.time / 300) * 300;
+    const group = groups.get(bucket) ?? [];
+    group.push(row);
+    groups.set(bucket, group);
+  }
+  return [...groups.entries()].sort((left, right) => left[0] - right[0]).flatMap(([bucket, rows]) => {
+    const ordered = rows.sort((left, right) => left.time - right.time);
+    const complete = ordered.length === 5 && ordered.every((row, index) => row.time === bucket + index * 60);
+    if (!complete) return [];
+    return [{ time: bucket, open: ordered[0].open, high: Math.max(...ordered.map((row) => row.high)),
+      low: Math.min(...ordered.map((row) => row.low)), close: ordered.at(-1)!.close,
+      completedAt: (bucket + 300) * 1_000 } satisfies CompletedFiveMinuteCandle];
+  });
+}
+
+export function residentCandleCandidate(input: {
+  symbol: string;
+  candles: CompletedMinuteCandle[];
+  volume24hUsd: number;
+  fundingRate: number;
+  now: number;
+}) {
+  const rows = completedFiveMinuteCandles(input.candles).slice(-12);
+  if (rows.length < 6 || input.volume24hUsd <= 0) return null;
+  const latest = rows.at(-1)!;
+  if (input.now < latest.completedAt || input.now - latest.completedAt > 11 * 60_000) return null;
+  const closes = rows.map((row) => row.close);
+  const path = closes.slice(1).reduce((total, close, index) => total + Math.abs(close - closes[index]), 0);
+  const trendRate = (latest.close - rows[0].open) / Math.max(rows[0].open, 1e-9);
+  const trendEfficiency = clamp(Math.abs(latest.close - rows[0].open) / Math.max(path, latest.close * 0.0002), 0, 1);
+  const ranges = rows.map((row) => (row.high - row.low) / Math.max(row.open, 1e-9));
+  const recentVolatility = sum(ranges.slice(-3)) / 3;
+  const priorRows = ranges.slice(-6, -3);
+  const priorVolatility = sum(priorRows) / Math.max(1, priorRows.length);
+  const volatilityRatio = clamp(recentVolatility / Math.max(priorVolatility, 0.00005), 0, 5);
+  const lower = Math.min(...rows.map((row) => row.low));
+  const upper = Math.max(...rows.map((row) => row.high));
+  const width = Math.max(upper - lower, latest.close * 0.0002);
+  const rangePosition = clamp((latest.close - lower) / width, 0, 1);
+  const lastMove = (latest.close - latest.open) / Math.max(latest.open, 1e-9);
+  let channel: CandidateChannel;
+  let regime: MarketRegimeKind;
+  let side: "LONG" | "SHORT" = trendRate >= 0 ? "LONG" : "SHORT";
+  let score: number;
+  if (volatilityRatio >= 1.55 && Math.abs(lastMove) >= 0.0025) {
+    channel = "ANOMALY"; regime = "EXPANSION"; side = lastMove >= 0 ? "LONG" : "SHORT";
+    score = 58 + clamp((volatilityRatio - 1.55) / 1.5, 0, 1) * 22 + clamp(Math.abs(lastMove) / 0.01, 0, 1) * 20;
+  } else if (volatilityRatio <= 0.72) {
+    channel = "COMPRESSION"; regime = "COMPRESSION";
+    score = 55 + clamp((0.72 - volatilityRatio) / 0.5, 0, 1) * 28 + trendEfficiency * 12;
+  } else if (trendEfficiency >= 0.52 && Math.abs(trendRate) >= 0.0035) {
+    channel = "TREND"; regime = "TREND";
+    score = 52 + trendEfficiency * 30 + clamp(Math.abs(trendRate) / 0.02, 0, 1) * 18;
+  } else if (trendEfficiency <= 0.5 && (rangePosition <= 0.28 || rangePosition >= 0.72)) {
+    channel = "RANGE"; regime = "RANGE"; side = rangePosition <= 0.28 ? "LONG" : "SHORT";
+    score = 52 + (1 - trendEfficiency) * 24 + Math.abs(rangePosition - 0.5) * 36;
+  } else return null;
+  const recent = rows.slice(-3);
+  const recentLower = Math.min(...recent.map((row) => row.low));
+  const recentUpper = Math.max(...recent.map((row) => row.high));
+  let lifecycle = `${candlePriceBin(lower)}:${candlePriceBin(upper)}`;
+  if (channel === "ANOMALY") lifecycle += `:${latest.completedAt}`;
+  if (channel === "RANGE") {
+    const edgeCutoff = side === "LONG" ? lower + width * 0.3 : upper - width * 0.3;
+    let edgeStartedAt = latest.completedAt;
+    for (let index = rows.length - 1; index >= 0; index -= 1) {
+      const stillAtEdge = side === "LONG" ? rows[index].close <= edgeCutoff : rows[index].close >= edgeCutoff;
+      if (!stillAtEdge) break;
+      edgeStartedAt = rows[index].completedAt;
+    }
+    lifecycle += `:${edgeStartedAt}`;
+  }
+  const firstSeenAt = rows[0].completedAt;
+  const candidate: MarketRegimeCandidate = {
+    id: `${input.symbol}:CANDLE5M:${channel}:${side}:${lifecycle}`, symbol: input.symbol, channel, regime, side,
+    score: clamp(score, 0, 100), referencePrice: channel === "ANOMALY" ? latest.open : latest.close,
+    moveRate: channel === "ANOMALY" ? lastMove : trendRate, trendRate, trendEfficiency, volatilityRatio, rangePosition,
+    volume24hUsd: input.volume24hUsd, fundingRate: input.fundingRate, openInterestChangeRate: 0,
+    confirmations: 2, firstSeenAt, observedAt: latest.completedAt,
+    anomalyKind: channel === "ANOMALY" ? "PRICE_SHOCK" : null,
+  };
+  const structure: ResidentCandleStructure = { id: `${input.symbol}:5m:${lifecycle}`, observedAt: latest.completedAt,
+    lower, upper, midpoint: (lower + upper) / 2, recentLower, recentUpper };
+  return { candidate, structure };
+}
+
+function sum(values: number[]) {
+  return values.reduce((total, value) => total + value, 0);
+}
 
 export function initialMarketRegimes(): MarketRegimeState {
   return { version: MARKET_REGIME_VERSION, profiles: {}, candidates: [], lastUpdatedAt: null };
@@ -221,6 +330,16 @@ export function selectDiverseMarketPool(input: {
 }) {
   const bySymbol = new Map(input.candidates.map((candidate) => [candidate.symbol, candidate]));
   const output = [...new Set(input.locked)].slice(0, input.limit);
+  const liquid = new Set(input.fallback);
+  const stableCoreTarget = Math.min(6, input.limit);
+  for (const symbol of input.current) {
+    if (output.length >= stableCoreTarget) break;
+    if (liquid.has(symbol) && !output.includes(symbol)) output.push(symbol);
+  }
+  for (const symbol of input.fallback) {
+    if (output.length >= stableCoreTarget) break;
+    if (!output.includes(symbol)) output.push(symbol);
+  }
   const usedGroups = new Set(output.map((symbol) => bySymbol.get(symbol)).filter(Boolean).map((candidate) => channelGroup(candidate!.channel)));
   const availableGroups = new Set(input.candidates.map((candidate) => channelGroup(candidate.channel)));
   const add = (symbol: string, requireNewGroup = true) => {

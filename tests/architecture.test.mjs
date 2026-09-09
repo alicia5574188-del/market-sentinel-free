@@ -34,6 +34,8 @@ test("runtime uses bounded futures REST snapshots, no continuous WebSocket", asy
   assert.doesNotMatch(alarm, /successes !== this\.runtime\.symbols\.length \? "DEGRADED"/, "partial candidate-book loss must not degrade the whole authority");
   assert.match(worker, /successes === 0 \? `\$\{this\.runtime\.symbols\.length\} market snapshots unavailable/);
   assert.match(worker, /radarCandidateExecutionAllowed\(this\.runtime\.radar\.lastScanAt, now\)/);
+  assert.match(worker, /residentCandleCandidate/);
+  assert.doesNotMatch(worker, /if \(!radarCandidateExecutionAllowed\(this\.runtime\.radar\.lastScanAt, now\)\) return/);
   assert.match(worker, /maxSubrequestsPerAlarm: 32/);
   assert.match(worker, /now - this\.runtime\.lastStopCheckpointAt < 60_000/);
 });

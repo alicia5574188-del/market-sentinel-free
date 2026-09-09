@@ -106,6 +106,8 @@ test("observation shadow is separate and never counts toward promotion", () => {
 test("latest three independent effective shadow wins activate only the next signal", () => {
   let state = qualify();
   assert.equal(state.strategies[strategyId].lane, "ACTIVE");
+  assert.equal(Object.values(state.strategies).filter((row) => row.id.startsWith("anomaly_follow:") && row.enabled).length, 4,
+    "promotion belongs to the base playbook while its four geometries remain selectable");
   assert.equal(Object.keys(state.portfolioOpen).length, 0, "completed winners are never backfilled");
   state = openEvent(state, 20, 120_000);
   assert.equal(state.portfolioOpen.BTC_USDT.strategyId, strategyId);
@@ -135,6 +137,27 @@ test("latest three simulation losses demote the strategy", () => {
   assert.equal(state.strategies[strategyId].lane, "SHADOW");
   assert.equal(state.strategies[strategyId].enabled, false);
   assert.equal(state.strategies[strategyId].paperResults.length, 3);
+  assert.equal(Object.values(state.strategies).filter((row) => row.id.startsWith("anomaly_follow:") && row.enabled).length, 0);
+});
+
+test("unproven playbooks remain in shadow instead of sleeping when their channel is absent", () => {
+  const state = applyStrategySleepStates(initialStrategyArena(1), new Set(["RANGE"]), 100_000);
+  assert.equal(Object.values(state.strategies).filter((row) => row.lane === "SLEEPING").length, 0);
+  assert.equal(Object.values(state.strategies).filter((row) => row.lane === "SHADOW").length, 48);
+});
+
+test("completed five-minute structure can create a valid shadow route without radar route geometry", () => {
+  const input = observation(1, 10_000);
+  input.candidate = { ...input.candidate, id: "BTC_USDT:CANDLE5M:TREND:LONG:1", channel: "TREND", regime: "TREND",
+    trendEfficiency: 0.8, trendRate: 0.01, rangePosition: 0.9, anomalyKind: null };
+  input.routes = [];
+  input.range15m = null;
+  input.candleStructure = { id: "BTC_USDT:5m:1", observedAt: 10_000, lower: 98, upper: 101.2,
+    midpoint: 99.6, recentLower: 99.2, recentUpper: 101.2 };
+  const state = observeStrategyArena({ state: initialStrategyArena(1), observation: input });
+  const trade = Object.values(state.open)[0];
+  assert.ok(trade);
+  assert.equal(trade.context.structureSource, "CANDLE_5M");
 });
 
 test("sleep preserves rolling results and wakes to its prior enabled state", () => {

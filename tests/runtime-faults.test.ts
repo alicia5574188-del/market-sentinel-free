@@ -153,6 +153,29 @@ test("stale radar can never authorize a new strategy observation", () => {
   assert.equal(radarCandidateExecutionAllowed(69_999, 100_000), false);
 });
 
+test("stale bulk radar does not interrupt completed-five-minute shadow evaluation in the stable core", async () => {
+  const { stream } = await makeStream();
+  const now = 3_600_000;
+  const memory = emptySymbolMemory();
+  memory.recentCompletedMinuteCandles = Array.from({ length: 60 }, (_, index) => ({
+    time: index * 60, open: 100 + index * 0.08, high: 100.12 + index * 0.08,
+    low: 99.96 + index * 0.08, close: 100.08 + index * 0.08,
+  }));
+  memory.timeframeUpdatedAt.m1 = now;
+  memory.minuteNoiseRate = 0.001;
+  stream.memory.BTC_USDT = memory;
+  stream.contractCatalog = new Map([["BTC_USDT", { symbol: "BTC_USDT", tickSize: 0.01, quantoMultiplier: 0.001,
+    maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0.0001, last: 104.8, volume24hUsd: 1_000_000_000 }]]);
+  stream.runtime.symbols = ["BTC_USDT"];
+  stream.runtime.contractMeta.BTC_USDT = { quantoMultiplier: 0.001, maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0.0001 };
+  stream.runtime.radar.lastScanAt = null;
+  stream.observeArena("BTC_USDT", 104.8, { midpoint: 104.8, zones: [], bands: [], absorption: 0.7, decision: null,
+    routes: [], range15m: null, confirmationBySide: { LONG: 0.8, SHORT: 0.1 },
+    fakeoutBySide: { LONG: 0.2, SHORT: 0.8 } }, now, 0.0002, 104.79, 104.81, 1_000_000, 1_000_000);
+  assert.equal(Object.keys(stream.runtime.strategyArena.open).length, 1);
+  assert.equal((Object.values(stream.runtime.strategyArena.open)[0] as ArenaTrade).context.structureSource, "CANDLE_5M");
+});
+
 function position(id: string, symbol: string, patch: Partial<PaperPosition> = {}): PaperPosition {
   return {
     id,

@@ -1,5 +1,13 @@
 # Decisions
 
+## 2026-09-09 — Data capability defines the strategy layer
+
+- The thirty-contract ticker radar is a best-effort discovery layer. Its failure may delay discovery of a new opportunity symbol, but may not pause completed-candle evaluation for the stable realtime core.
+- Reserve six of ten realtime positions for stable liquid residents and use the remaining capacity for current trend/range/compression/anomaly candidates. Protected exposure remains first priority.
+- Derive fallback market state and structure only from a contiguous suffix of completed official one-minute futures candles aggregated locally into complete five-minute bars. Combine it with current executable bid/ask and current contract metadata; never carry a stale radar price into execution.
+- Treat twelve base playbooks as the promotion authority. Their four confirm/retest and fast/structure variants remain different execution choices inside one event, while one event contributes at most one effective-shadow result.
+- Sleep is meaningful only for an enabled playbook whose channel is absent. A playbook that has not yet qualified stays in SHADOW so an unrelated market regime cannot stop its evidence accumulation.
+
 ## 2026-09-09 — Progressive admission for the futures simulation account
 
 - Count one base-playbook result per independent market event; its four execution variants are comparisons inside that event and never four promotion samples.

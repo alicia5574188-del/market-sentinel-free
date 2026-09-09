@@ -1,6 +1,6 @@
 import { CORRELATED_DIRECTION_RISK_CAP, MIN_NET_REWARD_RISK, PORTFOLIO_MARGIN_CAP, PORTFOLIO_RISK_CAP,
   selectSafeLeverage, sizePaperPosition, type LiquidityRoute, type RangeStructure, type Side } from "./liquidity-core.ts";
-import type { CandidateChannel, MarketRegimeCandidate, MarketRegimeKind } from "./market-regime.ts";
+import type { CandidateChannel, MarketRegimeCandidate, MarketRegimeKind, ResidentCandleStructure } from "./market-regime.ts";
 
 export const STRATEGY_ARENA_VERSION = 4;
 export const STRATEGY_INITIAL_EQUITY = 1_000;
@@ -60,7 +60,7 @@ export type ArenaTradeContext = {
   trendEfficiency: number; volatilityRatio: number; rangePosition: number; openInterestChangeRate: number;
   volume24hUsd: number; fundingRate: number; alignedFlow: number; confirmation: number; fakeoutRisk: number;
   rangeId: string | null; modeledCostRate: number; spreadRate: number; bidDepthUsd: number; askDepthUsd: number;
-  structureSource: "ROUTE" | "RANGE" | "IMPULSE";
+  structureSource: "ROUTE" | "RANGE" | "CANDLE_5M" | "IMPULSE";
   grossRewardRate: number; structuralStopRate: number; netRewardRisk: number; costShare: number;
   empiricalExpectedReturnRate: number; empiricalProfitFactor: number; empiricalEvents: number;
   entryTrigger?: number; feeSlippageRate?: number; fundingCostRate?: number; maxHoldMs?: number; noProgressMs?: number;
@@ -114,6 +114,7 @@ export type ArenaObservation = {
   bidDepthUsd?: number; askDepthUsd?: number; quantoMultiplier?: number; maintenanceRate?: number; leverageMax?: number; now: number;
   dataFresh?: boolean; contractReady?: boolean; managementCapacity?: boolean;
   completedMinuteAt?: number;
+  candleStructure?: ResidentCandleStructure | null;
 };
 
 type Signal = { strategyId: string; side: Side; entryTrigger: number; stopPrice: number; targetPrice: number; quality: number; reason: string;
@@ -170,7 +171,7 @@ export function normalizeStrategyArena(value: StrategyArenaState | null | undefi
       archivedPortfolioTrades: (prior.archivedPortfolioTrades ?? []).slice(-ARENA_HISTORY_LIMIT),
       archivedPortfolioCycles: (prior.archivedPortfolioCycles ?? []).slice(-12), cutoverPending: true };
   }
-  return { ...fresh, ...value,
+  const normalized = { ...fresh, ...value,
     strategies: Object.fromEntries(STRATEGY_CATALOG.map((definition) => {
       const prior = value.strategies?.[definition.id];
       return [definition.id, prior ? { ...freshStrategy(definition), ...prior, ...definition,
@@ -185,6 +186,8 @@ export function normalizeStrategyArena(value: StrategyArenaState | null | undefi
     seenSignals: (value.seenSignals ?? []).slice(-2_000), archivedPortfolioCycles: (value.archivedPortfolioCycles ?? []).slice(-12),
     admissionRejects: value.admissionRejects ?? {}, recentObservations: (value.recentObservations ?? []).slice(-ARENA_HISTORY_LIMIT),
     cutoverPending: Boolean(value.cutoverPending) };
+  for (const playbook of PLAYBOOKS) promotePlaybook(normalized, playbook.id, now);
+  return normalized;
 }
 
 const directionalRangePosition = (candidate: MarketRegimeCandidate) => candidate.side === "LONG" ? candidate.rangePosition : 1 - candidate.rangePosition;
@@ -272,6 +275,23 @@ function structuralGeometry(input: ArenaObservation, definition: StrategyDefinit
     if (direction * (entry - stopPrice) > 0 && direction * (targetPrice - entry) > 0)
       return { entryTrigger: definition.entryStyle === "RETEST" ? side === "LONG" ? range.lower : range.upper : entry,
         stopPrice, targetPrice, structureSource: "RANGE" as const, executable: true };
+  }
+  const candle = input.candleStructure;
+  if (candle) {
+    const buffer = Math.max(entry * Math.max(input.minuteNoiseRate * 1.15, 0.0014), (candle.upper - candle.lower) * 0.035);
+    const stopPrice = side === "LONG" ? candle.recentLower - buffer : candle.recentUpper + buffer;
+    const risk = direction * (entry - stopPrice);
+    if (risk > 0) {
+      const rangeTarget = definition.exitProfile === "FAST" ? candle.midpoint : side === "LONG" ? candle.upper : candle.lower;
+      const extension = definition.exitProfile === "FAST" ? risk * 1.9 : Math.max(risk * 2.7, (candle.upper - candle.lower) * 0.7);
+      const targetPrice = definition.family === "RANGE" || definition.family === "REVERSAL"
+        ? rangeTarget : entry + direction * extension;
+      const retestDistance = Math.min(risk * 0.35, entry * 0.0025);
+      if (direction * (targetPrice - entry) > 0) return {
+        entryTrigger: definition.entryStyle === "RETEST" ? entry - direction * retestDistance : entry,
+        stopPrice, targetPrice, structureSource: "CANDLE_5M" as const, executable: true,
+      };
+    }
   }
   if (definition.channel === "ANOMALY") {
     const impulse = direction * (entry - input.candidate.referencePrice);
@@ -380,11 +400,14 @@ function updatePlaybookResult(state: StrategyArenaState, trade: ArenaTrade) {
   if (rows.length > 24) rows.splice(0, rows.length - 24);
 }
 
-function promoteVariant(state: StrategyArenaState, score: StrategyScore, now: number) {
-  if (score.enabled || score.lane === "SLEEPING") return;
-  const afterDemotion = uniqueResults(score.recentResults).filter((row) => score.demotedAt == null || row.resolvedAt > score.demotedAt);
-  const reason = rollingQualified(afterDemotion.map((row) => row.netPnl));
-  if (reason) transition(state, score, "ACTIVE", now, reason);
+function promotePlaybook(state: StrategyArenaState, playbookId: string, now: number) {
+  const scores = Object.values(state.strategies).filter((score) => baseId(score.id) === playbookId);
+  if (!scores.length || scores.every((score) => score.enabled)) return;
+  const demotedAt = Math.max(0, ...scores.map((score) => score.demotedAt ?? 0));
+  const results = (state.playbookResults[playbookId] ?? []).filter((row) => row.resolvedAt > demotedAt);
+  const reason = rollingQualified(results.map((row) => row.netReturnRate));
+  if (!reason) return;
+  for (const score of scores) transition(state, score, "ACTIVE", now, `基础策略${reason}；四个执行变体共同启用`);
 }
 
 function recordClosed(state: StrategyArenaState, trade: ArenaTrade) {
@@ -402,15 +425,19 @@ function recordClosed(state: StrategyArenaState, trade: ArenaTrade) {
         channel: trade.context.channel, netReturnRate: value, netPnl: trade.netPnl ?? 0, won, resolvedAt: trade.closedAt ?? trade.openedAt };
       score.paperResults = [...score.paperResults.filter((row) => row.eventId !== result.eventId), result].slice(-24);
       score.paperResolved += 1; score.paperWins += Number(won); score.paperNetReturnRate += value;
-      const last3 = score.paperResults.slice(-PAPER_DEMOTION_LOSSES);
-      const last6 = score.paperResults.slice(-PAPER_RECENT_WINDOW);
-      const reason = last3.length === PAPER_DEMOTION_LOSSES && last3.every((row) => row.netPnl < 0)
-        ? "最新3笔模拟订单连续亏损"
-        : last6.length === PAPER_RECENT_WINDOW && sum(last6.map((row) => row.netPnl)) <= 0
+      const playbookId = baseId(trade.strategyId);
+      const playbookPaper = uniqueEventTrades(state.recentPortfolio.filter((row) => baseId(row.strategyId) === playbookId));
+      const last3 = playbookPaper.slice(-PAPER_DEMOTION_LOSSES);
+      const last6 = playbookPaper.slice(-PAPER_RECENT_WINDOW);
+      const reason = last3.length === PAPER_DEMOTION_LOSSES && last3.every((row) => (row.netPnl ?? 0) < 0)
+        ? "基础策略最新3笔模拟订单连续亏损"
+        : last6.length === PAPER_RECENT_WINDOW && sum(last6.map((row) => row.netPnl ?? 0)) <= 0
           ? "最新6笔模拟订单成本后总收益不再为正" : null;
-      if (reason && score.enabled) {
-        score.enabled = false; score.demotedAt = result.resolvedAt;
-        transition(state, score, "SHADOW", result.resolvedAt, `${reason}，退回影子并等待新的有效结果`);
+      if (reason) {
+        for (const sibling of Object.values(state.strategies).filter((row) => baseId(row.id) === playbookId && row.enabled)) {
+          sibling.enabled = false; sibling.demotedAt = result.resolvedAt;
+          transition(state, sibling, "SHADOW", result.resolvedAt, `${reason}，基础策略退回影子并等待新的有效结果`);
+        }
       }
     }
     return;
@@ -425,7 +452,7 @@ function recordClosed(state: StrategyArenaState, trade: ArenaTrade) {
   if (trade.lane === "EFFECTIVE_SHADOW") {
     score.shadowResolved += 1; score.shadowWins += Number(won); score.shadowNetReturnRate += value;
     state.recentShadow.push(trade); if (state.recentShadow.length > ARENA_HISTORY_LIMIT) state.recentShadow.shift();
-    promoteVariant(state, score, trade.closedAt ?? Date.now()); return;
+    promotePlaybook(state, baseId(score.id), trade.closedAt ?? Date.now()); return;
   }
 }
 
@@ -492,7 +519,7 @@ function tradeContext(input: ArenaObservation, definition: StrategyDefinition, s
     volatilityRatio: input.candidate.volatilityRatio, rangePosition: input.candidate.rangePosition,
     openInterestChangeRate: input.candidate.openInterestChangeRate, volume24hUsd: input.candidate.volume24hUsd,
     fundingRate: input.candidate.fundingRate, alignedFlow: sideFlow, confirmation: input.confirmationBySide[signal.side] ?? 0,
-    fakeoutRisk: input.fakeoutBySide[signal.side] ?? 1, rangeId: input.range15m?.id ?? null,
+    fakeoutRisk: input.fakeoutBySide[signal.side] ?? 1, rangeId: input.range15m?.id ?? input.candleStructure?.id ?? null,
     spreadRate: input.spreadRate, bidDepthUsd: input.bidDepthUsd ?? 0, askDepthUsd: input.askDepthUsd ?? 0,
     structureSource: signal.structureSource, ...economics,
     empiricalExpectedReturnRate: sample.conservativeReturnRate, empiricalProfitFactor: sample.profitFactor, empiricalEvents: sample.events,
@@ -601,11 +628,20 @@ function effectiveShadowBlocker(input: ArenaObservation, signal: Signal, sizing:
 }
 
 export function applyStrategySleepStates(state: StrategyArenaState, availableChannels: Set<CandidateChannel>, now: number) {
-  for (const score of Object.values(state.strategies)) {
-    const matching = availableChannels.has(score.channel);
-    if (!matching && score.lane !== "SLEEPING") transition(state, score, "SLEEPING", now, "当前市场环境不匹配，休眠且保留最近成绩");
-    else if (matching && score.lane === "SLEEPING") transition(state, score, score.enabled ? "ACTIVE" : "SHADOW", now,
-      score.enabled ? "适用市场环境重新出现，恢复启用" : "适用市场环境重新出现，继续影子验证");
+  for (const playbook of PLAYBOOKS) {
+    const scores = Object.values(state.strategies).filter((score) => baseId(score.id) === playbook.id);
+    const enabled = scores.some((score) => score.enabled);
+    const matching = availableChannels.has(playbook.channel);
+    for (const score of scores) {
+      if (!enabled) {
+        score.enabled = false;
+        if (score.lane !== "SHADOW") transition(state, score, "SHADOW", now, "尚未启用，持续影子验证且不因行情缺席休眠");
+      } else if (!matching && score.lane !== "SLEEPING") {
+        transition(state, score, "SLEEPING", now, "当前市场环境不匹配，休眠且保留最近成绩");
+      } else if (matching && score.lane !== "ACTIVE") {
+        transition(state, score, "ACTIVE", now, "适用市场环境重新出现，恢复启用");
+      }
+    }
   }
   return state;
 }
@@ -614,7 +650,13 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
   const current = { midpoint: input.observation.midpoint, bestBid: input.observation.bestBid, bestAsk: input.observation.bestAsk,
     completedMinuteAt: input.observation.completedMinuteAt };
   const state = advanceStrategyArena({ state: input.state, quotes: { [input.observation.candidate.symbol]: current }, now: input.observation.now });
-  const promoted: Array<{ signal: Signal; definition: StrategyDefinition; score: StrategyScore }> = [];
+  const compatible = Object.values(state.strategies).filter((score) => score.channel === input.observation.candidate.channel);
+  if (compatible.some((score) => score.enabled)) {
+    for (const score of compatible) {
+      if (score.enabled && score.lane === "SLEEPING") transition(state, score, "ACTIVE", input.observation.now,
+        "完整5分钟结构出现适用行情，恢复启用");
+    }
+  }
   const generatedSignals = signals(input.observation);
   const recordObservation = (definition: StrategyDefinition, blocker: string) => {
     const id = `observation:${definition.id}:${input.observation.candidate.id}`;
@@ -659,7 +701,13 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
     .sort((left, right) => strategyPerformance(right.score, input.observation.candidate.regime).conservativeReturnRate
       - strategyPerformance(left.score, input.observation.candidate.regime).conservativeReturnRate
       || right.signal.quality - left.signal.quality || left.definition.id.localeCompare(right.definition.id));
-  const winner = active[0] ?? executable[eventIndex(input.observation.candidate.id, executable.length)];
+  const learning = executable.filter((row) => !row.score.enabled && row.score.lane === "SHADOW")
+    .sort((left, right) => playbookPerformance(state, baseId(left.score.id)).events - playbookPerformance(state, baseId(right.score.id)).events
+      || left.definition.id.localeCompare(right.definition.id));
+  const learningPool = learning.length ? learning.filter((row) => playbookPerformance(state, baseId(row.score.id)).events
+    === playbookPerformance(state, baseId(learning[0].score.id)).events) : [];
+  const winner = learningPool[eventIndex(input.observation.candidate.id, learningPool.length)] ?? active[0]
+    ?? executable[eventIndex(input.observation.candidate.id, executable.length)];
   if (winner) {
     const openKey = `${winner.signal.strategyId}:${input.observation.candidate.symbol}`;
     state.open[openKey] = openTrade(input.observation, winner.definition, winner.signal, "EFFECTIVE_SHADOW", winner.sizing, false);
@@ -667,12 +715,11 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
     while (state.seenSignals.length > 2_000) state.seenSignals.shift();
     for (const row of executable.filter((item) => item.signal.strategyId !== winner.signal.strategyId))
       recordObservation(row.definition, `同一市场事件已由${winner.definition.name}执行有效影子，本变体仅观察`);
-    if (winner.score.enabled && winner.score.lane === "ACTIVE") promoted.push(winner);
   }
   const symbol = input.observation.candidate.symbol;
   const portfolioSeenKey = `portfolio:${input.observation.candidate.id}`;
-  if (promoted.length && !state.portfolioOpen[symbol] && !state.seenSignals.includes(portfolioSeenKey)) {
-    const candidates = promoted.map((row) => ({ ...row, admission: portfolioAdmission(state, input.observation, row.signal, row.score) }))
+  if (active.length && !state.portfolioOpen[symbol] && !state.seenSignals.includes(portfolioSeenKey)) {
+    const candidates = active.map((row) => ({ ...row, admission: portfolioAdmission(state, input.observation, row.signal, row.score) }))
       .filter((row) => row.admission)
       .sort((a, b) => b.admission!.sample.conservativeReturnRate - a.admission!.sample.conservativeReturnRate
         || b.admission!.sample.profitFactor - a.admission!.sample.profitFactor || b.signal.quality - a.signal.quality);
