@@ -1,11 +1,12 @@
 # Status
 
-## 2026-09-09 adaptive shadow strategy arena V4 — locally verified
+## 2026-09-09 adaptive shadow strategy arena V4 — deployed
 
 - Authorized scope: implement the final V4 plan, verify, push `main`, deploy through Cloudflare and prove LIVE remains OFF.
 - Work is based on the latest remote V3 release rather than overwriting its twenty newer commits; the prior standalone V4 attempt is retained on `v4-local-implementation` only as a backup.
 - V4 state, shadow separation, rolling activation/deactivation, regime sleep, 12/48 catalog, dynamic 1%–2% risk, 30-market scan, ten-symbol management capacity, full-cost settlement and fresh-price V3 cutover are implemented.
-- Verification passes 173 direct tests, 15 build/architecture/migration tests, TypeScript, lint, whitespace checks and Wrangler production-package dry-run. Next: commit, update `main` without overwriting any newer remote work, and verify the Cloudflare release and LIVE-off state.
+- Effective-shadow event arbitration now permits only one executable variant per symbol/event; sibling variants remain observation records, historical duplicate cards are collapsed in summaries, and a defensive close-time guard prevents duplicate scoring.
+- Production commit `e241743a77789e4d42e75ecdf06c5f1773686135` deployed successfully through Actions run #626. Verification passes 176 direct tests, 15 build/architecture/migration tests, TypeScript, lint, whitespace and advancing production health. Cloudflare version `ff9e788e-feb3-4b91-8978-8201a4de909b`; LIVE remains OFF.
 
 ## 2026-09-09 progressive futures strategy rotation V3 — deployed
 
