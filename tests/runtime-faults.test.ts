@@ -551,6 +551,35 @@ test("at-least-once duplicate alarm does not reprocess a slot or add another ala
   assert.equal(storage.setAlarmCalls, 1, "43,200 alarm writes/day is a hard bound only if duplicates do not re-arm");
 });
 
+test("candidate rotation stays operational while new slots warm and no protected exposure is stale", async (t) => {
+  const { stream } = await makeStream();
+  const now = 1_800_000_210_000;
+  t.mock.method(Date, "now", () => now);
+  stream.runtime.lastUniverseAt = now;
+  stream.runtime.lastRadarAt = now;
+  stream.runtime.symbols = ["READY_USDT", "WARMING_USDT"];
+  stream.runtime.contractMeta = {
+    READY_USDT: { quantoMultiplier: 1, maintenanceRate: 0.005, leverageMax: 20, fundingRate: 0 },
+    WARMING_USDT: { quantoMultiplier: 1, maintenanceRate: 0.005, leverageMax: 20, fundingRate: 0 },
+  };
+  stream.sessionWarmup.READY_USDT = 4;
+  stream.sessionWarmup.WARMING_USDT = 1;
+  stream.runtime.evidence = {
+    READY_USDT: { midpoint: 100, bestBid: 99.99, bestAsk: 100.01, observedAt: now, warmup: 4,
+      fresh: true, ancillaryFresh: true, entryReady: true, topLong: null, topShort: null, absorption: 0, range15m: null },
+    WARMING_USDT: { midpoint: 50, bestBid: 49.99, bestAsk: 50.01, observedAt: now, warmup: 1,
+      fresh: true, ancillaryFresh: false, entryReady: false, topLong: null, topShort: null, absorption: 0, range15m: null },
+  };
+  stream.processBooks = async () => ({ successes: 2, requests: 2, criticalChanged: false });
+  stream.updateAncillary = async () => 0;
+
+  await stream.alarm();
+
+  assert.equal(stream.runtime.state, "LIVE");
+  assert.equal(stream.runtime.lastError, null);
+  assert.equal(stream.runtime.evidence.WARMING_USDT.entryReady, false, "warming slot must remain unable to trade");
+});
+
 test("delayed at-least-once retry crossing a 2s slot repairs the chain without reprocessing", async (t) => {
   const { stream, storage } = await makeStream();
   let now = 1_800_000_220_000;

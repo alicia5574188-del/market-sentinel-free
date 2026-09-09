@@ -1593,8 +1593,18 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.runtime.lastSuccessAt = successes > 0 ? now : this.runtime.lastSuccessAt;
       const allWarm = this.runtime.symbols.every((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS);
       const allMeta = this.runtime.symbols.every((symbol) => this.runtime.contractMeta[symbol] != null);
-      const allAncillary = this.runtime.symbols.every((symbol) => this.criticalEvidenceFresh(symbol, now));
-      const allEntryReady = this.runtime.symbols.every((symbol) => this.symbolEntryReady(symbol));
+      const protectedSymbols = new Set([
+        ...Object.values(this.runtime.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
+        ...Object.values(this.runtime.plans).flatMap((plan) => plan?.state === "PREPARED" ? [plan.symbol] : []),
+        ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
+        ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status) ? [entry.symbol] : []),
+        ...Object.values(this.runtime.strategyArena.portfolioOpen).map((position) => position.symbol),
+      ]);
+      const actionableMarkets = this.runtime.symbols.filter((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS
+        && this.runtime.contractMeta[symbol] != null && this.symbolEntryReady(symbol)).length;
+      const protectedMarketsReady = [...protectedSymbols].every((symbol) => this.runtime.symbols.includes(symbol)
+        && (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS && this.runtime.contractMeta[symbol] != null
+        && this.symbolEntryReady(symbol));
       const ancillaryStarted = this.runtime.symbols.every((symbol) => {
         const memory = this.memory[symbol];
         return memory && memory.timeframeUpdatedAt.m1 > 0 && memory.timeframeUpdatedAt.m15 > 0
@@ -1602,11 +1612,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       });
       this.runtime.state = !this.authorityReady ? "RECOVERY_REQUIRED" : successes === 0 ? "RECONNECTING"
         : successes !== this.runtime.symbols.length ? "DEGRADED"
-          : this.runtime.riskBreach ? "DEGRADED" : allWarm && allMeta && allAncillary && allEntryReady ? "LIVE" : allWarm && allMeta && ancillaryStarted ? "DEGRADED" : "WARMING";
+          : this.runtime.riskBreach ? "DEGRADED" : actionableMarkets > 0 && protectedMarketsReady ? "LIVE"
+            : allWarm && allMeta && ancillaryStarted ? "DEGRADED" : "WARMING";
       const recoveringMarkets = this.runtime.symbols.filter((symbol) => !this.symbolEntryReady(symbol)).length;
       const feedError = successes !== this.runtime.symbols.length ? `${this.runtime.symbols.length - successes} market snapshots unavailable; retrying`
-        : recoveringMarkets > 0 ? `${recoveringMarkets} market feeds recovering; plans frozen`
-          : !allMeta ? "contract metadata unavailable" : !allAncillary && ancillaryStarted ? "critical structure evidence stale; entries blocked" : null;
+        : !protectedMarketsReady ? "protected position data unavailable; new entries frozen"
+          : actionableMarkets === 0 ? `${recoveringMarkets} realtime markets warming; entries blocked`
+            : !allMeta && protectedSymbols.size > 0 ? "protected contract metadata unavailable" : null;
       this.runtime.lastError = (this.runtime.riskBreach ? "portfolio stress risk exceeds 10%; new entries blocked" : feedError) ?? this.runtime.d1MirrorError;
     } catch (error) {
       this.runtime.state = "RECONNECTING";
