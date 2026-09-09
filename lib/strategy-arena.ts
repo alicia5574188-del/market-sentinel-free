@@ -329,7 +329,7 @@ function signals(input: ArenaObservation): Signal[] {
       output.push({ strategyId: definition.id, side: base.side, ...geometry,
         maxHoldMs: (definition.exitProfile === "FAST" ? hold.noProgress : hold.max) * 60_000,
         noProgressMs: hold.noProgress * 60_000,
-        quality: clamp(base.quality * 0.6 + (input.confirmationBySide[base.side] ?? 0) * 0.25 + Math.max(0, sideFlow) * 0.15, 0, 1),
+        quality: clamp(base.quality * 0.72 + (input.confirmationBySide[base.side] ?? 0) * 0.28, 0, 1),
         reason: base.reason });
     }
   }
