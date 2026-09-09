@@ -1,13 +1,13 @@
 # Status
 
-## 2026-09-09 market-regime strategy arena V2 — locally verified, deploying
+## 2026-09-09 market-regime strategy arena V2 — deployed
 
-- Authorized for direct production deployment after verification.
+- Production commits `fd81127ab1176ecacd3f6b2db663954501758bc5` and slot-residency hotfix `7c1e30fe54176ca6d114e270473a51918e9e07e4` deployed successfully through GitHub Actions runs #616 and #617.
 - Implemented bounded streaming market-state profiles, four candidate channels, three-group deep-slot diversification, forty-eight contextual strategy cells, trial/verified rotation, isolated and portfolio simulation, full frozen context records and the new operator surface.
 - Reuses the existing all-market ten-second ticker, three-symbol two-second books and rotating detail; no cadence, market request or D1-write expansion was made. Shadow positions settle from the bulk ticker and no longer lock deep slots.
-- Verification passes 162 direct tests, 15 architecture/migration checks, TypeScript, lint, whitespace and the verified production build.
-- Next: publish the reviewed commit through the GitHub-to-Cloudflare workflow and verify advancing production state.
-- LIVE remains hard-locked OFF.
+- Verification passes 163 direct tests, 15 architecture/migration checks, TypeScript, lint, whitespace, the verified production build, CI and Cloudflare advancing-health gates.
+- Production reports `market-regime-arena-v2`, 129/129 warmed market profiles across all five regimes, 48 strategy cells from 12 playbooks, active shadow/trial/portfolio records, three fully warmed deep-analysis slots and no runtime error.
+- LIVE remains hard-locked OFF (`requestedEnabled=false`, `operational=false`).
 
 ## 2026-09-09 strategy arena — deployed
 
