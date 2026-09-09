@@ -74,25 +74,24 @@ test("confirmation/retest and fast/structure variants freeze different locations
   assert.equal(new Set(variants.map((trade) => trade.targetPrice)).size, 2);
 });
 
-test("one market event creates and scores only one effective shadow trade", () => {
+test("one market event creates at most one effective shadow per genuinely different base playbook", () => {
   const first = openEvent(initialStrategyArena(1), 1, 10_000);
-  assert.equal(Object.keys(first.open).length, 1);
-  assert.ok(first.recentObservations.some((row) => row.blocker.includes("同一市场事件已由")));
+  assert.ok(Object.keys(first.open).length > 1);
+  assert.equal(new Set(Object.values(first.open).map((trade) => trade.strategyId.split(":")[0])).size, Object.keys(first.open).length);
+  assert.ok(first.recentObservations.some((row) => row.blocker.includes("同一基础策略和市场事件")));
   const repeated = openEvent(first, 1, 10_001);
-  assert.equal(Object.keys(repeated.open).length, 1);
+  assert.equal(Object.keys(repeated.open).length, Object.keys(first.open).length);
   const closed = settleEvent(repeated, 20_000, true);
-  assert.equal(closed.recentShadow.length, 1);
-  assert.equal(Object.values(closed.strategies).reduce((total, score) => total + score.shadowResolved, 0), 1);
+  assert.equal(closed.recentShadow.length, Object.keys(first.open).length);
+  assert.equal(Object.values(closed.strategies).reduce((total, score) => total + score.shadowResolved, 0), Object.keys(first.open).length);
 });
 
-test("a new event id cannot overlap an existing effective shadow on the same symbol", () => {
+test("a new event id cannot overlap an existing effective shadow for the same symbol and base playbook", () => {
   const first = openEvent(initialStrategyArena(1), 1, 10_000);
-  const existing = Object.values(first.open)[0];
   const second = openEvent(first, 2, 10_001);
-  assert.equal(Object.keys(second.open).length, 1);
-  assert.equal(Object.values(second.open)[0].id, existing.id);
+  assert.equal(Object.keys(second.open).length, Object.keys(first.open).length);
   assert.ok(second.recentObservations.some((row) => row.eventId.endsWith(":2")
-    && row.blocker.includes("同币种已有") && row.blocker.includes("仅观察")));
+    && row.blocker.includes("基础策略已有有效影子持仓") && row.blocker.includes("仅观察")));
 });
 
 test("observation shadow is separate and never counts toward promotion", () => {
@@ -112,6 +111,20 @@ test("latest three independent effective shadow wins activate only the next sign
   state = openEvent(state, 20, 120_000);
   assert.equal(state.portfolioOpen.BTC_USDT.strategyId, strategyId);
   assert.equal(state.portfolioOpen.BTC_USDT.admissionTier, "NORMAL");
+  assert.ok(state.portfolioOpen.BTC_USDT.attributedStrategyIds?.includes(strategyId));
+  assert.equal(new Set(state.portfolioOpen.BTC_USDT.attributedStrategyIds?.map((id) => id.split(":")[0])).size,
+    state.portfolioOpen.BTC_USDT.attributedStrategyIds?.length);
+});
+
+test("three wins outside the 24-hour cadence window remain research-only", () => {
+  let state = initialStrategyArena(1);
+  let eventStart = 700;
+  for (let index = 0; index < PROMOTION_WIN_STREAK; index += 1) {
+    const opened = openForStrategy(state, strategyId, eventStart, 10_000 + index * 13 * 60 * 60_000);
+    state = settleEvent(opened.state, opened.now + 10_000, true);
+    eventStart = opened.event + 1;
+  }
+  assert.equal(state.strategies[strategyId].lane, "SHADOW");
 });
 
 test("a low-win-rate variant can activate from a positive latest-six window", () => {
@@ -160,18 +173,18 @@ test("completed five-minute structure can create a valid shadow route without ra
   assert.equal(trade.context.structureSource, "CANDLE_5M");
 });
 
-test("sleep preserves rolling results and wakes to its prior enabled state", () => {
+test("missing channels never sleep or erase an enabled strategy", () => {
   let state = qualify();
   const before = structuredClone(state.strategies[strategyId].recentResults);
   state = applyStrategySleepStates(state, new Set(["RANGE"]), 100_000);
-  assert.equal(state.strategies[strategyId].lane, "SLEEPING");
+  assert.equal(state.strategies[strategyId].lane, "ACTIVE");
   assert.deepEqual(state.strategies[strategyId].recentResults, before);
   state = applyStrategySleepStates(state, new Set(["ANOMALY"]), 110_000);
   assert.equal(state.strategies[strategyId].lane, "ACTIVE");
 });
 
 test("effective shadow uses bid/ask, integer contracts, frozen exits and complete costs", () => {
-  let state = openEvent(initialStrategyArena(1), 1, 10_000);
+  let state = openForStrategy(initialStrategyArena(1), strategyId, 1, 10_000).state;
   const trade = state.open[`${strategyId}:BTC_USDT`];
   assert.equal(trade.entryPrice, 101.01);
   assert.ok(Number.isInteger(trade.contracts) && trade.contracts > 0);

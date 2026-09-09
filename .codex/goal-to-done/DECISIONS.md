@@ -1,3 +1,14 @@
+# V4.2 decisions — 2026-09-09
+
+- The bulk ticker is a liquidity-universe selector only.
+- Completed 5-minute Gate OHLCV is the durable strategy source; 15m/30m/1h structure is derived rather than fetched as a hard prerequisite.
+- One effective-shadow result is allowed per base playbook/event. Different base playbooks may learn from the same symbol/event.
+- Same-direction enabled playbooks share one simulated contract order and each receives attribution; opposing signals are arbitrated.
+- Promotion must complete inside 24h/72h cadence windows. Rare signals remain research-only and cannot stall the system.
+- SLEEPING is retained only for checkpoint compatibility; runtime transitions are SHADOW/ACTIVE.
+- D1 runtime telemetry is written every five minutes, pruned after 14 days, and exposed read-only at /api/strategy-logs.
+- Release resets the V4.2 strategy ledger and 1,000 U simulated cycle. LIVE remains forced OFF on restart and deployment.
+
 # Decisions
 
 ## 2026-09-09 — Data capability defines the strategy layer

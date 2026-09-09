@@ -33,3 +33,15 @@ export const paperEvents = sqliteTable("paper_events", {
   id: text("id").primaryKey(), symbol: text("symbol").notNull(), eventType: text("event_type").notNull(),
   observedAt: integer("observed_at").notNull(), payloadJson: text("payload_json").notNull().default("{}"),
 }, (table) => [index("paper_events_time_idx").on(table.observedAt)]);
+
+export const strategyRuntimeLog = sqliteTable("strategy_runtime_log", {
+  id: text("id").primaryKey(), observedAt: integer("observed_at").notNull(), version: text("version").notNull(),
+  scannedMarkets: integer("scanned_markets").notNull(), stableMarkets: integer("stable_markets").notNull(),
+  realtimeMarkets: integer("realtime_markets").notNull(), regimeCountsJson: text("regime_counts_json").notNull().default("{}"),
+  strategyMetricsJson: text("strategy_metrics_json").notNull().default("[]"), shadowOpen: integer("shadow_open").notNull(),
+  shadowResolved: integer("shadow_resolved").notNull(), activeStrategies: integer("active_strategies").notNull(),
+  portfolioOpen: integer("portfolio_open").notNull(), portfolioEquity: real("portfolio_equity").notNull(),
+  portfolioResolved: integer("portfolio_resolved").notNull(), portfolioNetPnl: real("portfolio_net_pnl").notNull(),
+  strategyCandleError: text("strategy_candle_error"), authorityState: text("authority_state").notNull(),
+  liveRequested: integer("live_requested").notNull().default(0), liveOperational: integer("live_operational").notNull().default(0),
+}, (table) => [index("strategy_runtime_log_time_idx").on(table.observedAt)]);

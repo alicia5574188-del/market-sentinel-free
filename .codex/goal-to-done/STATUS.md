@@ -1,3 +1,10 @@
+# In progress — 2026-09-09 V4.2 completed-candle multi-strategy
+
+- Implementation prepared: 30-liquid-contract selection, rotating completed-5m strategy data, cross-environment playbooks, per-base event deduplication, merged same-direction portfolio attribution, cadence-limited promotion and no runtime sleep.
+- Added a bounded 5-minute/14-day D1 strategy runtime log and read-only review endpoint.
+- Next: GitHub CI is the verification and deployment gate because the local executor disconnected after the first direct test pass exposed only expected old-assumption test failures.
+- LIVE must remain OFF.
+
 # Status
 
 ## Done — 2026-09-09 data-continuous V4.1

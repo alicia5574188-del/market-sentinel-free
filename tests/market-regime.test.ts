@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { anomalyCandidate, completedFiveMinuteCandles, initialMarketRegimes, residentCandleCandidate, selectDiverseMarketPool, updateMarketRegimes,
+import { anomalyCandidate, completedCandleStrategyCandidate, completedFiveMinuteCandles, initialMarketRegimes, residentCandleCandidate, selectDiverseMarketPool, updateMarketRegimes,
   type MarketRegimeCandidate } from "../lib/market-regime.ts";
 import type { RadarTicker } from "../lib/market-radar.ts";
 
@@ -85,4 +85,15 @@ test("resident fallback uses only contiguous completed one-minute candles to bui
   assert.ok(result?.structure.upper && result.structure.upper > result.structure.lower);
   const gapped = candles.filter((row) => row.time !== 1_500);
   assert.equal(completedFiveMinuteCandles(gapped).length, 11, "an incomplete five-minute bucket must be discarded");
+});
+
+
+test("completed five-minute OHLCV classifies a liquid market without optional high-frequency feeds", () => {
+  const candles = Array.from({ length: 24 }, (_, index) => ({ time: index * 300, open: 100 + index * 0.12,
+    high: 100.2 + index * 0.12, low: 99.9 + index * 0.12, close: 100.12 + index * 0.12, volume: 1_000 }));
+  const result = completedCandleStrategyCandidate({ symbol: "BTC_USDT", candles, volume24hUsd: 1_000_000_000,
+    fundingRate: 0.0001, now: (candles.at(-1)!.time + 300) * 1_000 });
+  assert.equal(result?.candidate.channel, "TREND");
+  assert.equal(result?.candidate.anomalyKind, null);
+  assert.equal(result?.candidate.openInterestChangeRate, 0);
 });

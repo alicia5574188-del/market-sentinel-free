@@ -2,10 +2,12 @@ import { CORRELATED_DIRECTION_RISK_CAP, MIN_NET_REWARD_RISK, PORTFOLIO_MARGIN_CA
   selectSafeLeverage, sizePaperPosition, type LiquidityRoute, type RangeStructure, type Side } from "./liquidity-core.ts";
 import type { CandidateChannel, MarketRegimeCandidate, MarketRegimeKind, ResidentCandleStructure } from "./market-regime.ts";
 
-export const STRATEGY_ARENA_VERSION = 4;
+export const STRATEGY_ARENA_VERSION = 5;
 export const STRATEGY_INITIAL_EQUITY = 1_000;
 export const PROMOTION_WIN_STREAK = 3;
 export const PROMOTION_RECENT_WINDOW = 6;
+export const PROMOTION_THREE_MAX_SPAN_MS = 24 * 60 * 60_000;
+export const PROMOTION_SIX_MAX_SPAN_MS = 72 * 60 * 60_000;
 export const PAPER_DEMOTION_LOSSES = 3;
 export const PAPER_RECENT_WINDOW = 6;
 export const PERFORMANCE_WINDOW = 6;
@@ -29,18 +31,18 @@ export type AdmissionTier = "NORMAL";
 type Playbook = { id: string; name: string; family: StrategyFamily; channel: CandidateChannel; description: string };
 
 export const PLAYBOOKS: Playbook[] = [
-  { id: "anomaly_follow", name: "异动延续", family: "FAST", channel: "ANOMALY", description: "异动确认且资金未明显反向时延续。" },
+  { id: "anomaly_follow", name: "完成K线扩张延续", family: "FAST", channel: "ANOMALY", description: "已完成5分钟宽幅K线保持方向时延续。" },
   { id: "compression_break", name: "压缩释放", family: "FAST", channel: "COMPRESSION", description: "波幅压缩后出现方向释放。" },
   { id: "steady_trend", name: "趋势延续", family: "TREND", channel: "TREND", description: "方向效率稳定且未明显回撤时顺势。" },
   { id: "shallow_trend_pullback", name: "趋势浅回撤", family: "TREND", channel: "TREND", description: "趋势内浅回撤后恢复同向。" },
   { id: "deep_trend_reclaim", name: "趋势深回撤", family: "TREND", channel: "TREND", description: "趋势深回撤后重新收复并顺势。" },
   { id: "compression_retest", name: "突破回踩", family: "TREND", channel: "COMPRESSION", description: "突破后回踩守住再延续。" },
-  { id: "anomaly_pullback", name: "异动回撤延续", family: "TREND", channel: "ANOMALY", description: "异动后的受控回撤再次顺势。" },
+  { id: "anomaly_pullback", name: "扩张回撤延续", family: "TREND", channel: "ANOMALY", description: "完成K线扩张后的受控回撤再次顺势。" },
   { id: "range_edge", name: "区间边缘", family: "RANGE", channel: "RANGE", description: "低效率震荡接近边缘时回到中枢。" },
   { id: "range_sweep_reclaim", name: "扫区间后收回", family: "RANGE", channel: "RANGE", description: "扫过区间边缘并重新收回。" },
   { id: "range_failed_break", name: "区间假突破", family: "REVERSAL", channel: "RANGE", description: "突破未被接受后反向回归。" },
   { id: "compression_failed", name: "压缩假突破", family: "REVERSAL", channel: "COMPRESSION", description: "压缩首次释放失败后反向。" },
-  { id: "anomaly_fade", name: "异动衰竭反转", family: "REVERSAL", channel: "ANOMALY", description: "异动回吐且流量支持消失时反向。" },
+  { id: "anomaly_fade", name: "扩张衰竭反转", family: "REVERSAL", channel: "ANOMALY", description: "完成K线扩张回吐并出现失败确认时反向。" },
 ];
 
 export type StrategyDefinition = Playbook & { entryStyle: EntryStyle; exitProfile: ExitProfile };
@@ -75,6 +77,7 @@ export type ArenaTrade = {
   reason: string; context: ArenaTradeContext; admissionTier: AdmissionTier | null; plannedRisk: number;
   contracts: number; quantoMultiplier: number; leverage: number; margin: number; accountEquityAtOpen: number;
   lastSoftEvidenceAt?: number | null;
+  attributedStrategyIds?: string[];
 };
 
 export type StrategyResult = { eventId: string; symbol: string; regime: MarketRegimeKind; channel: CandidateChannel;
@@ -95,7 +98,7 @@ export type PortfolioCycleArchive = { number: number; ruleVersion: string; start
   startingEquity: number; endingEquity: number; resolved: number; wins: number; grossPnl: number; costs: number; reason: string };
 
 export type StrategyArenaState = {
-  version: 4; startedAt: number; strategies: Record<string, StrategyScore>; playbookResults: Record<string, PlaybookEventResult[]>;
+  version: 5; startedAt: number; strategies: Record<string, StrategyScore>; playbookResults: Record<string, PlaybookEventResult[]>;
   open: Record<string, ArenaTrade>; portfolioOpen: Record<string, ArenaTrade>; portfolioEquity: number;
   portfolioResolved: number; portfolioWins: number; portfolioGrossPnl: number; portfolioCosts: number;
   portfolioCycle: number; portfolioCycleStartedAt: number; archivedPortfolioCycles: PortfolioCycleArchive[];
@@ -205,26 +208,30 @@ function basePlaybooks(input: ArenaObservation) {
   const position = directionalRangePosition(candidate);
   const retrace = anomalyRetrace(candidate, input.midpoint);
   const output: Array<{ playbookId: string; side: Side; reason: string; quality: number; retestReady: boolean }> = [];
-  const add = (id: string, side: Side, reason: string, quality: number, retestReady = false) =>
-    output.push({ playbookId: id, side, reason, quality: clamp(quality, 0, 1), retestReady });
+  const add = (id: string, side: Side, reason: string, quality: number, retestReady = false) => {
+    if (!output.some((row) => row.playbookId === id && row.side === side))
+      output.push({ playbookId: id, side, reason, quality: clamp(quality, 0, 1), retestReady });
+  };
   if (candidate.channel === "TREND") {
-    if (candidate.trendEfficiency >= 0.55 && position >= 0.72 && input.alignedFlow >= -0.12)
-      add("steady_trend", candidate.side, "平稳趋势效率稳定且资金未明显反向", candidate.trendEfficiency);
-    if (position >= 0.48 && position < 0.78 && input.alignedFlow >= -0.05)
-      add("shallow_trend_pullback", candidate.side, "趋势浅回撤后重新获得同向支持", (candidate.trendEfficiency + position) / 2, true);
-    if (position >= 0.25 && position < 0.55 && input.alignedFlow >= 0.08)
-      add("deep_trend_reclaim", candidate.side, "趋势深回撤后主动资金重新同向", (candidate.trendEfficiency + input.alignedFlow) / 2, true);
+    if (candidate.trendEfficiency >= 0.5 && position >= 0.68)
+      add("steady_trend", candidate.side, "完成K线趋势效率稳定且方向保持", candidate.trendEfficiency);
+    if (position >= 0.45 && position < 0.8)
+      add("shallow_trend_pullback", candidate.side, "趋势浅回撤后完成K线重新同向", (candidate.trendEfficiency + position) / 2, true);
+    if (position >= 0.22 && position < 0.58 && confirmation >= 0.48)
+      add("deep_trend_reclaim", candidate.side, "趋势深回撤后重新收复结构", (candidate.trendEfficiency + confirmation) / 2, true);
+    if (fakeout >= 0.7) add("range_failed_break", opposite(candidate.side), "趋势环境内的边界突破失败交叉验证", fakeout, true);
   }
   if (candidate.channel === "RANGE") {
-    if (input.alignedFlow >= -0.18) add("range_edge", candidate.side, "低效率震荡到达区间边缘", 1 - candidate.trendEfficiency, true);
+    add("range_edge", candidate.side, "低效率震荡到达区间边缘", 1 - candidate.trendEfficiency, true);
     const edgeRoute = input.routes.some((route) => route.kind === "EDGE_REJECTION" && route.side === candidate.side);
     if (edgeRoute || fakeout >= 0.56) add("range_sweep_reclaim", candidate.side, "区间边缘扫过后重新收回", Math.max(fakeout, 0.58), true);
     const failed = input.routes.some((route) => route.kind === "FAILED_BREAKOUT_REVERSAL" && route.side === candidate.side);
     if (failed || fakeout >= 0.68) add("range_failed_break", candidate.side, "区间突破未被接受并反向", Math.max(fakeout, 0.68), true);
+    if (confirmation >= 0.72 && fakeout <= 0.28)
+      add("compression_break", candidate.side, "区间内方向确认增强，交叉验证释放策略", confirmation);
   }
   if (candidate.channel === "COMPRESSION") {
-    if (confirmation >= 0.58 && input.alignedFlow >= 0.08)
-      add("compression_break", candidate.side, "压缩后盘口确认方向释放", (confirmation + input.alignedFlow) / 2);
+    if (confirmation >= 0.52) add("compression_break", candidate.side, "压缩后完成K线结构确认方向释放", confirmation);
     const retest = input.routes.some((route) => route.kind === "BREAKOUT_RETEST" && route.side === candidate.side);
     if (retest) add("compression_retest", candidate.side, "压缩突破后回踩原边界守住", confirmation, true);
     const reverse = opposite(candidate.side);
@@ -232,12 +239,14 @@ function basePlaybooks(input: ArenaObservation) {
       add("compression_failed", reverse, "压缩首次突破失败并反向", fakeout, true);
   }
   if (candidate.channel === "ANOMALY") {
-    if (candidate.confirmations >= 2 && retrace <= 0.25 && retrace >= -0.15 && input.alignedFlow >= -0.12)
-      add("anomaly_follow", candidate.side, "异动确认且尚未明显回吐", clamp(candidate.score / 100, 0, 1), true);
-    if (retrace >= 0.15 && retrace <= 0.58 && input.alignedFlow >= -0.05)
-      add("anomaly_pullback", candidate.side, "异动后受控回撤再次顺势", clamp(1 - retrace / 2, 0, 1), true);
-    if ((retrace >= 0.3 && input.alignedFlow <= 0.05) || fakeout >= 0.7)
-      add("anomaly_fade", opposite(candidate.side), "异动回吐且资金支持消失", Math.max(retrace / 2, fakeout), true);
+    if (candidate.confirmations >= 2 && retrace <= 0.25 && retrace >= -0.15)
+      add("anomaly_follow", candidate.side, "完成5分钟扩张K线确认且尚未明显回吐", clamp(candidate.score / 100, 0, 1), true);
+    if (retrace >= 0.15 && retrace <= 0.58)
+      add("anomaly_pullback", candidate.side, "完成K线扩张后受控回撤再次顺势", clamp(1 - retrace / 2, 0, 1), true);
+    if (retrace >= 0.3 || fakeout >= 0.7)
+      add("anomaly_fade", opposite(candidate.side), "完成K线扩张回吐并出现失败确认", Math.max(retrace / 2, fakeout), true);
+    if (candidate.trendEfficiency >= 0.62)
+      add("steady_trend", candidate.side, "扩张环境内保持高趋势效率，交叉验证趋势延续", candidate.trendEfficiency);
   }
   return output;
 }
@@ -307,10 +316,9 @@ function signals(input: ArenaObservation): Signal[] {
   const output: Signal[] = [];
   for (const base of basePlaybooks(input)) {
     for (const definition of STRATEGY_CATALOG.filter((item) => item.id.startsWith(`${base.playbookId}:`))) {
-      const sideFlow = base.side === input.candidate.side ? input.alignedFlow : -input.alignedFlow;
       const routeRetest = input.routes.some((route) => route.side === base.side
         && ["BREAKOUT_RETEST", "EDGE_REJECTION", "FAILED_BREAKOUT_REVERSAL"].includes(route.kind));
-      const ready = definition.entryStyle === "CONFIRM" ? (input.confirmationBySide[base.side] ?? 0) >= 0.48 || sideFlow >= 0.12
+      const ready = definition.entryStyle === "CONFIRM" ? (input.confirmationBySide[base.side] ?? 0) >= 0.48
         : routeRetest || base.retestReady;
       const fakeout = input.fakeoutBySide[base.side] ?? 1;
       const geometry = structuralGeometry(input, definition, base.side);
@@ -371,7 +379,10 @@ function eventIndex(eventId: string, size: number) {
 }
 function uniqueEventTrades(trades: ArenaTrade[]) {
   const seen = new Set<string>();
-  return trades.filter((trade) => !seen.has(trade.eventId) && Boolean(seen.add(trade.eventId)));
+  return trades.filter((trade) => {
+    const key = `${trade.eventId}:${baseId(trade.strategyId)}`;
+    return !seen.has(key) && Boolean(seen.add(key));
+  });
 }
 
 export function playbookPerformance(state: StrategyArenaState, id: string, currentRegime?: MarketRegimeKind) {
@@ -380,11 +391,15 @@ export function playbookPerformance(state: StrategyArenaState, id: string, curre
 function strategyPerformance(score: StrategyScore, currentRegime?: MarketRegimeKind) {
   return evidence(uniqueResults(score.recentResults), currentRegime);
 }
-const rollingQualified = (values: number[]) => {
-  const latest3 = values.slice(-PROMOTION_WIN_STREAK);
-  if (latest3.length === PROMOTION_WIN_STREAK && latest3.every((value) => value > 0)) return "最新3笔独立有效影子订单连续盈利";
-  const latest6 = values.slice(-PROMOTION_RECENT_WINDOW);
-  return latest6.length === PROMOTION_RECENT_WINDOW && sum(latest6) > 0 ? "最新6笔独立有效影子订单成本后总收益为正" : null;
+const rollingQualified = (results: Array<{ netReturnRate: number; resolvedAt: number }>) => {
+  const latest3 = results.slice(-PROMOTION_WIN_STREAK);
+  if (latest3.length === PROMOTION_WIN_STREAK && latest3.every((row) => row.netReturnRate > 0)
+    && latest3.at(-1)!.resolvedAt - latest3[0].resolvedAt <= PROMOTION_THREE_MAX_SPAN_MS)
+    return "最新3笔独立有效影子订单在24小时内连续盈利";
+  const latest6 = results.slice(-PROMOTION_RECENT_WINDOW);
+  return latest6.length === PROMOTION_RECENT_WINDOW && sum(latest6.map((row) => row.netReturnRate)) > 0
+    && latest6.at(-1)!.resolvedAt - latest6[0].resolvedAt <= PROMOTION_SIX_MAX_SPAN_MS
+    ? "最新6笔独立有效影子订单在72小时内成本后总收益为正" : null;
 };
 
 function updatePlaybookResult(state: StrategyArenaState, trade: ArenaTrade) {
@@ -405,7 +420,7 @@ function promotePlaybook(state: StrategyArenaState, playbookId: string, now: num
   if (!scores.length || scores.every((score) => score.enabled)) return;
   const demotedAt = Math.max(0, ...scores.map((score) => score.demotedAt ?? 0));
   const results = (state.playbookResults[playbookId] ?? []).filter((row) => row.resolvedAt > demotedAt);
-  const reason = rollingQualified(results.map((row) => row.netReturnRate));
+  const reason = rollingQualified(results);
   if (!reason) return;
   for (const score of scores) transition(state, score, "ACTIVE", now, `基础策略${reason}；四个执行变体共同启用`);
 }
@@ -419,14 +434,22 @@ function recordClosed(state: StrategyArenaState, trade: ArenaTrade) {
     state.portfolioGrossPnl += trade.notional * (trade.grossReturnRate ?? 0);
     state.portfolioCosts += trade.notional * (trade.context.modeledCostRate + (trade.context.fundingCostRate ?? 0));
     state.recentPortfolio.push(trade); if (state.recentPortfolio.length > ARENA_HISTORY_LIMIT) state.recentPortfolio.shift();
-    const score = state.cutoverPending ? undefined : state.strategies[trade.strategyId];
-    if (score) {
+    const attributedIds = state.cutoverPending ? [] : trade.attributedStrategyIds?.length
+      ? [...new Set(trade.attributedStrategyIds)] : [trade.strategyId];
+    const affectedPlaybooks = new Set<string>();
+    for (const strategyId of attributedIds) {
+      const score = state.strategies[strategyId];
+      if (!score) continue;
       const result: StrategyResult = { eventId: trade.eventId, symbol: trade.symbol, regime: trade.context.regime,
         channel: trade.context.channel, netReturnRate: value, netPnl: trade.netPnl ?? 0, won, resolvedAt: trade.closedAt ?? trade.openedAt };
       score.paperResults = [...score.paperResults.filter((row) => row.eventId !== result.eventId), result].slice(-24);
       score.paperResolved += 1; score.paperWins += Number(won); score.paperNetReturnRate += value;
-      const playbookId = baseId(trade.strategyId);
-      const playbookPaper = uniqueEventTrades(state.recentPortfolio.filter((row) => baseId(row.strategyId) === playbookId));
+      affectedPlaybooks.add(baseId(strategyId));
+    }
+    for (const playbookId of affectedPlaybooks) {
+      const playbookPaper = uniqueEventTrades(state.recentPortfolio.filter((row) =>
+        (row.attributedStrategyIds?.length ? row.attributedStrategyIds : [row.strategyId])
+          .some((strategyId) => baseId(strategyId) === playbookId)));
       const last3 = playbookPaper.slice(-PAPER_DEMOTION_LOSSES);
       const last6 = playbookPaper.slice(-PAPER_RECENT_WINDOW);
       const reason = last3.length === PAPER_DEMOTION_LOSSES && last3.every((row) => (row.netPnl ?? 0) < 0)
@@ -435,14 +458,15 @@ function recordClosed(state: StrategyArenaState, trade: ArenaTrade) {
           ? "最新6笔模拟订单成本后总收益不再为正" : null;
       if (reason) {
         for (const sibling of Object.values(state.strategies).filter((row) => baseId(row.id) === playbookId && row.enabled)) {
-          sibling.enabled = false; sibling.demotedAt = result.resolvedAt;
-          transition(state, sibling, "SHADOW", result.resolvedAt, `${reason}，基础策略退回影子并等待新的有效结果`);
+          const resolvedAt = trade.closedAt ?? trade.openedAt;
+          sibling.enabled = false; sibling.demotedAt = resolvedAt;
+          transition(state, sibling, "SHADOW", resolvedAt, `${reason}，基础策略退回影子并等待新的有效结果`);
         }
       }
     }
     return;
   }
-  if (state.recentShadow.some((row) => row.eventId === trade.eventId)) return;
+  if (state.recentShadow.some((row) => row.eventId === trade.eventId && baseId(row.strategyId) === baseId(trade.strategyId))) return;
   const score = state.strategies[trade.strategyId];
   if (!score) return;
   const result: StrategyResult = { eventId: trade.eventId, symbol: trade.symbol, regime: trade.context.regime,
@@ -529,7 +553,7 @@ function tradeContext(input: ArenaObservation, definition: StrategyDefinition, s
 type TradeSizing = { notional: number; plannedRisk: number; contracts: number; quantoMultiplier: number; leverage: number;
   margin: number; accountEquityAtOpen: number; admissionTier: AdmissionTier | null };
 function openTrade(input: ArenaObservation, definition: StrategyDefinition, signal: Signal, lane: TradeLane,
-  sizing: TradeSizing, selectedForPortfolio: boolean, sample?: PerformanceEvidence) {
+  sizing: TradeSizing, selectedForPortfolio: boolean, sample?: PerformanceEvidence, attributedStrategyIds?: string[]) {
   const entryPrice = executableEntry(input, signal.side);
   return { id: `${lane}:${definition.id}:${input.candidate.id}:${input.now}`, strategyId: definition.id,
     strategyName: definition.name, family: definition.family, lane, eventId: input.candidate.id, symbol: input.candidate.symbol,
@@ -537,7 +561,7 @@ function openTrade(input: ArenaObservation, definition: StrategyDefinition, sign
     stopPrice: signal.stopPrice, targetPrice: signal.targetPrice, exitPrice: null, outcome: null,
     grossReturnRate: null, netReturnRate: null, netPnl: null,
     maxFavorableRate: 0, maxAdverseRate: 0, lastPrice: entryPrice, selectedForPortfolio, reason: signal.reason,
-    lastSoftEvidenceAt: null,
+    lastSoftEvidenceAt: null, attributedStrategyIds,
     context: tradeContext(input, definition, signal, sample), ...sizing } satisfies ArenaTrade;
 }
 const openRisk = (state: StrategyArenaState, side?: Side) => Object.values(state.portfolioOpen)
@@ -627,20 +651,15 @@ function effectiveShadowBlocker(input: ArenaObservation, signal: Signal, sizing:
                       ? "盘口双边深度不足" : null;
 }
 
-export function applyStrategySleepStates(state: StrategyArenaState, availableChannels: Set<CandidateChannel>, now: number) {
+export function applyStrategySleepStates(state: StrategyArenaState, _availableChannels: Set<CandidateChannel>, now: number) {
   for (const playbook of PLAYBOOKS) {
     const scores = Object.values(state.strategies).filter((score) => baseId(score.id) === playbook.id);
     const enabled = scores.some((score) => score.enabled);
-    const matching = availableChannels.has(playbook.channel);
     for (const score of scores) {
       if (!enabled) {
         score.enabled = false;
-        if (score.lane !== "SHADOW") transition(state, score, "SHADOW", now, "尚未启用，持续影子验证且不因行情缺席休眠");
-      } else if (!matching && score.lane !== "SLEEPING") {
-        transition(state, score, "SLEEPING", now, "当前市场环境不匹配，休眠且保留最近成绩");
-      } else if (matching && score.lane !== "ACTIVE") {
-        transition(state, score, "ACTIVE", now, "适用市场环境重新出现，恢复启用");
-      }
+        if (score.lane !== "SHADOW") transition(state, score, "SHADOW", now, "尚未启用，持续跨币种和市场环境影子验证");
+      } else if (score.lane !== "ACTIVE") transition(state, score, "ACTIVE", now, "基础策略保持启用；市场缺席只代表当前没有信号");
     }
   }
   return state;
@@ -650,14 +669,15 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
   const current = { midpoint: input.observation.midpoint, bestBid: input.observation.bestBid, bestAsk: input.observation.bestAsk,
     completedMinuteAt: input.observation.completedMinuteAt };
   const state = advanceStrategyArena({ state: input.state, quotes: { [input.observation.candidate.symbol]: current }, now: input.observation.now });
-  const compatible = Object.values(state.strategies).filter((score) => score.channel === input.observation.candidate.channel);
+  const generatedSignals = signals(input.observation);
+  const generatedIds = new Set(generatedSignals.map((signal) => signal.strategyId));
+  const compatible = Object.values(state.strategies).filter((score) => generatedIds.has(score.id));
   if (compatible.some((score) => score.enabled)) {
     for (const score of compatible) {
       if (score.enabled && score.lane === "SLEEPING") transition(state, score, "ACTIVE", input.observation.now,
         "完整5分钟结构出现适用行情，恢复启用");
     }
   }
-  const generatedSignals = signals(input.observation);
   const recordObservation = (definition: StrategyDefinition, blocker: string) => {
     const id = `observation:${definition.id}:${input.observation.candidate.id}`;
     if (state.recentObservations.some((row) => row.id === id)) return;
@@ -670,24 +690,23 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
     if (!generatedSignals.some((signal) => signal.strategyId === definition.id))
       recordObservation(definition, "当前环境内尚未形成完整且可执行的触发路线");
   }
-  const effectiveEventKey = `effective:${input.observation.candidate.id}`;
-  const legacyEventSuffix = `:${input.observation.candidate.id}`;
-  const eventAlreadyExecuted = state.seenSignals.includes(effectiveEventKey)
-    || state.seenSignals.some((key) => !key.startsWith("portfolio:") && key.endsWith(legacyEventSuffix))
-    || Object.values(state.open).some((trade) => trade.eventId === input.observation.candidate.id)
-    || state.recentShadow.some((trade) => trade.eventId === input.observation.candidate.id);
-  const overlappingSymbolTrade = Object.values(state.open).find((trade) =>
-    trade.lane === "EFFECTIVE_SHADOW" && trade.symbol === input.observation.candidate.symbol);
   const executable: Array<{ signal: Signal; definition: StrategyDefinition; score: StrategyScore; sizing: TradeSizing }> = [];
   for (const signal of generatedSignals) {
     const score = state.strategies[signal.strategyId]; const definition = STRATEGY_CATALOG.find((row) => row.id === signal.strategyId);
     if (!score || !definition) continue;
-    if (overlappingSymbolTrade) {
-      recordObservation(definition, `同币种已有${overlappingSymbolTrade.strategyName}有效影子持仓，本信号仅观察`);
+    const playbookId = baseId(signal.strategyId);
+    const overlappingPlaybookTrade = Object.values(state.open).find((trade) => trade.lane === "EFFECTIVE_SHADOW"
+      && trade.symbol === input.observation.candidate.symbol && baseId(trade.strategyId) === playbookId);
+    if (overlappingPlaybookTrade) {
+      recordObservation(definition, `同币种的${overlappingPlaybookTrade.strategyName}基础策略已有有效影子持仓，本信号仅观察`);
       continue;
     }
+    const effectiveEventKey = `effective:${playbookId}:${input.observation.candidate.id}`;
     const signalKey = `${signal.strategyId}:${input.observation.candidate.id}`;
     const openKey = `${signal.strategyId}:${input.observation.candidate.symbol}`;
+    const eventAlreadyExecuted = state.seenSignals.includes(effectiveEventKey)
+      || Object.values(state.open).some((trade) => trade.eventId === input.observation.candidate.id && baseId(trade.strategyId) === playbookId)
+      || state.recentShadow.some((trade) => trade.eventId === input.observation.candidate.id && baseId(trade.strategyId) === playbookId);
     if (eventAlreadyExecuted || state.seenSignals.includes(signalKey) || state.open[openKey] || Object.keys(state.open).length >= ARENA_MAX_OPEN) continue;
     const virtual = effectiveShadowSizing(input.observation, signal);
     const blocker = effectiveShadowBlocker(input.observation, signal, virtual);
@@ -701,32 +720,44 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
     .sort((left, right) => strategyPerformance(right.score, input.observation.candidate.regime).conservativeReturnRate
       - strategyPerformance(left.score, input.observation.candidate.regime).conservativeReturnRate
       || right.signal.quality - left.signal.quality || left.definition.id.localeCompare(right.definition.id));
-  const learning = executable.filter((row) => !row.score.enabled && row.score.lane === "SHADOW")
-    .sort((left, right) => playbookPerformance(state, baseId(left.score.id)).events - playbookPerformance(state, baseId(right.score.id)).events
-      || left.definition.id.localeCompare(right.definition.id));
-  const learningPool = learning.length ? learning.filter((row) => playbookPerformance(state, baseId(row.score.id)).events
-    === playbookPerformance(state, baseId(learning[0].score.id)).events) : [];
-  const winner = learningPool[eventIndex(input.observation.candidate.id, learningPool.length)] ?? active[0]
-    ?? executable[eventIndex(input.observation.candidate.id, executable.length)];
-  if (winner) {
+  const byPlaybook = new Map<string, typeof executable>();
+  for (const row of executable) {
+    const id = baseId(row.signal.strategyId);
+    byPlaybook.set(id, [...(byPlaybook.get(id) ?? []), row]);
+  }
+  for (const [playbookId, rows] of byPlaybook) {
+    if (Object.keys(state.open).length >= ARENA_MAX_OPEN) break;
+    const learningPool = [...rows].sort((left, right) => left.definition.id.localeCompare(right.definition.id));
+    const winner = learningPool[eventIndex(`${input.observation.candidate.id}:${playbookId}`, learningPool.length)];
+    if (!winner) continue;
     const openKey = `${winner.signal.strategyId}:${input.observation.candidate.symbol}`;
     state.open[openKey] = openTrade(input.observation, winner.definition, winner.signal, "EFFECTIVE_SHADOW", winner.sizing, false);
-    state.seenSignals.push(effectiveEventKey, `${winner.signal.strategyId}:${input.observation.candidate.id}`);
+    state.seenSignals.push(`effective:${playbookId}:${input.observation.candidate.id}`, `${winner.signal.strategyId}:${input.observation.candidate.id}`);
     while (state.seenSignals.length > 2_000) state.seenSignals.shift();
-    for (const row of executable.filter((item) => item.signal.strategyId !== winner.signal.strategyId))
-      recordObservation(row.definition, `同一市场事件已由${winner.definition.name}执行有效影子，本变体仅观察`);
+    for (const row of rows.filter((item) => item.signal.strategyId !== winner.signal.strategyId))
+      recordObservation(row.definition, `同一基础策略和市场事件已由${winner.definition.name}执行有效影子，本变体仅观察`);
   }
   const symbol = input.observation.candidate.symbol;
   const portfolioSeenKey = `portfolio:${input.observation.candidate.id}`;
   if (active.length && !state.portfolioOpen[symbol] && !state.seenSignals.includes(portfolioSeenKey)) {
-    const candidates = active.map((row) => ({ ...row, admission: portfolioAdmission(state, input.observation, row.signal, row.score) }))
+    const activeByPlaybook = new Map<string, typeof active>();
+    for (const row of active) {
+      const id = baseId(row.signal.strategyId);
+      activeByPlaybook.set(id, [...(activeByPlaybook.get(id) ?? []), row]);
+    }
+    const representatives = [...activeByPlaybook.values()].map((rows) => [...rows].sort((left, right) =>
+      strategyPerformance(right.score, input.observation.candidate.regime).conservativeReturnRate
+        - strategyPerformance(left.score, input.observation.candidate.regime).conservativeReturnRate
+      || right.signal.quality - left.signal.quality || left.definition.id.localeCompare(right.definition.id))[0]);
+    const candidates = representatives.map((row) => ({ ...row, admission: portfolioAdmission(state, input.observation, row.signal, row.score) }))
       .filter((row) => row.admission)
       .sort((a, b) => b.admission!.sample.conservativeReturnRate - a.admission!.sample.conservativeReturnRate
         || b.admission!.sample.profitFactor - a.admission!.sample.profitFactor || b.signal.quality - a.signal.quality);
     const winner = candidates[0];
     if (winner?.admission) {
+      const attributedStrategyIds = candidates.filter((row) => row.signal.side === winner.signal.side).map((row) => row.signal.strategyId);
       state.portfolioOpen[symbol] = openTrade(input.observation, winner.definition, winner.signal, "PORTFOLIO",
-        winner.admission.sizing, true, winner.admission.sample); state.seenSignals.push(portfolioSeenKey);
+        winner.admission.sizing, true, winner.admission.sample, attributedStrategyIds); state.seenSignals.push(portfolioSeenKey);
     }
   }
   return state;
@@ -734,7 +765,7 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
 
 export function resetStrategyArenaAccount(input: { state: StrategyArenaState; quotes: Record<string, ArenaQuote>; now: number; reason?: string }) {
   const state = normalizeStrategyArena(input.state, input.now);
-  const archivedRuleVersion = state.cutoverPending ? "v3" : `v${STRATEGY_ARENA_VERSION}`;
+  const archivedRuleVersion = state.cutoverPending ? "legacy" : `v${STRATEGY_ARENA_VERSION}`;
   for (const [symbol, trade] of Object.entries(state.portfolioOpen)) {
     const raw = input.quotes[symbol]; if (!raw || !(raw.midpoint > 0)) throw new Error(`${symbol} 行情不新鲜，不能用旧价格重置模拟持仓`);
     const current = quote(raw, input.now); const exitPrice = trade.side === "LONG" ? current.bestBid : current.bestAsk;

@@ -1,3 +1,11 @@
+# Active goal — V4.2 completed-candle multi-strategy overnight run
+
+- Select 30 liquid Gate USDT perpetuals by turnover; strategy discovery must not depend on anomaly or high-frequency optional feeds.
+- Derive strategy environments from continuously obtainable completed 5-minute OHLCV and require fresh books only at execution.
+- Allow many symbols per strategy and many distinct base strategies per symbol/event, while merging same-direction simulated execution into one economic order.
+- Require promotion evidence to resolve at useful cadence: 3 wins within 24h or positive latest 6 within 72h; no signal is not sleep.
+- Persist bounded five-minute runtime telemetry for overnight review, deploy through main, and keep LIVE explicitly OFF.
+
 # Goal
 
 ## Active upgrade — 2026-09-09 data-continuous strategy arena V4.1

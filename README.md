@@ -2,21 +2,22 @@
 
 A Gate USDT perpetual market-regime and progressive strategy-rotation system. One `MarketStream` Durable Object is authoritative for market observations, the 1,000 U simulated futures account, and optional owner-controlled LIVE mirroring.
 
-## Data-continuous V4.1
+## Completed-candle multi-strategy V4.2
 
-- The thirty-contract bulk ticker is now an optional opportunity-discovery layer, not a global strategy switch. A stale radar snapshot can never authorize an order, while six stable liquid residents continue from fresh two-sided books and contiguous completed one-minute candles aggregated locally into completed five-minute structure.
-- The ten-symbol realtime pool is split into six stable core positions and four opportunity positions. Protected exposure remains first priority, and ordinary candidate churn no longer erases the core candle/flow history.
-- The rolling three-win or positive-six rule is evaluated across the twelve base playbooks. Their forty-eight confirm/retest and fast/structure variants remain genuinely different execution geometries, while each market event contributes at most one effective-shadow result.
-- Only an already-enabled playbook sleeps when its compatible market channel is absent. Unproven playbooks remain in SHADOW, and an actual compatible completed-five-minute candidate wakes an enabled playbook even while bulk discovery is recovering.
-- Every effective-shadow, PAPER and future LIVE entry still requires fresh executable bid/ask, complete contract metadata, integer Gate contracts, sufficient depth, full modeled costs, a stop outside normal noise, and at least the configured net reward/risk. LIVE remains owner-controlled and defaults OFF.
+- The first pass ranks eligible Gate USDT perpetuals by 24-hour turnover and forms a thirty-contract liquid universe. It does not decide trades or depend on anomaly feeds.
+- One completed 5-minute candle series is refreshed every ten seconds, covering the full universe in about five minutes. Trend, range, compression and expansion are derived from those durable candles; missing optional high-frequency data cannot create a strategy-data gap.
+- Each market event may test several genuinely different base playbooks. One symbol can serve several playbooks and one playbook can serve several symbols. Only one execution variant per base playbook/event contributes a shadow result.
+- Promotion requires three wins resolved within 24 hours or six after-cost results with positive total return resolved within 72 hours. Strategies too infrequent to form those windows stay research-only and never block higher-cadence strategies.
+- Absence of a signal is not a strategy state. Enabled playbooks remain enabled until the reverse simulated-account loss rule demotes them.
+- Several enabled same-direction playbooks may be attributed to one simulated Gate position. This preserves learning without duplicating economically identical orders.
+- Every executable order still requires fresh bid/ask, contract metadata, integer Gate contracts, depth, full costs, a noise-safe stop and sufficient net reward/risk. LIVE remains owner-controlled and defaults OFF.
 
 ## Data architecture
 
-- Every 10 seconds, the bulk futures-ticker request scans the 30 most liquid eligible Gate USDT perpetuals. Its four-second timeout is isolated from the two-second position-book timeout and runs only after position management. It maintains compact profiles for trend, range, compression and anomaly/expansion.
+- Every 10 seconds, the bulk futures-ticker request selects the 30 most liquid eligible Gate USDT perpetuals. Its timeout is isolated from position management.
 - Position books and owner-controlled LIVE reconciliation run before the optional bulk scan. A failed bulk scan preserves the last good display snapshot, retries at most once per normal ten-second scan, never becomes a global execution fault, and cannot authorize a new order once that snapshot is older than 30 seconds. The stable core may still create a new observation from its own completed five-minute structure and fresh book. Partial candidate-book loss remains isolated per symbol and does not misreport the whole authority as recovering.
-- The bulk scan uses price, turnover, funding and open interest. A profile needs 18 observations and three confirmations before a regime change is accepted.
-- Up to ten priority symbols receive the two-second order book plus rotating completed 1m/15m/1h data, locally aggregated 4h structure, signed trades, open interest, funding and liquidation observations. Open PAPER/LIVE positions and effective-shadow trades retain priority; six liquid core residents keep their history and new candidates compete for four opportunity positions.
-- No additional market request, alarm cadence, per-snapshot D1 write or request budget was introduced.
+- The strategy layer uses completed 5-minute OHLCV as its stable source and locally derives structure. Up to ten priority symbols receive the fresh two-second order book required for executable validation; protected positions always retain priority.
+- A bounded D1 runtime sample is written every five minutes and retained for 14 days. It records data coverage, strategy cadence/results, shadow activity, simulated equity and LIVE-off state without writing per market snapshot.
 
 ## Adaptive shadow strategy arena V4
 
@@ -29,10 +30,10 @@ The catalog contains 48 bounded strategy variants: 12 interpretable playbooks ×
 
 All variants keep running in shadow. Incomplete routes are observation shadows and never score. Only signals that pass fresh executable bid/ask, unmissed entry location, structure/noise stop, full-cost target, depth, liquidity and Gate contract checks become effective shadows.
 
-- The latest three independent effective shadows all winning, or the latest six producing positive after-cost total return, activates the base playbook and makes its four distinct execution variants selectable.
+- The latest three independent effective shadows all winning within 24 hours, or the latest six producing positive after-cost total return within 72 hours, activates the base playbook and makes its four distinct execution variants selectable.
 - Activation admits only the next new valid signal; completed winners are never backfilled.
 - The latest three simulated orders all losing, or the latest six no longer positive after costs, stops new account entries and returns the whole base playbook to shadow. A demoted playbook needs new effective-shadow results before it can reactivate.
-- Only an enabled playbook whose market environment is absent sleeps without recording a loss or deleting its rolling results. Unproven playbooks remain in shadow.
+- Missing market opportunities produce no state transition and no synthetic loss. Enabled playbooks remain active until the explicit demotion rule fires.
 
 Every result freezes its regime, candidate channel, entry/exit variant, executable bid/ask, modeled cost, structure source, net reward/risk, depth, spread, trend/volatility, open-interest change, funding, turnover, flow, confirmation, fakeout, MFE and MAE.
 
@@ -52,7 +53,7 @@ The owner-only reset closes open simulated positions at fresh executable prices,
 
 ## LIVE boundary
 
-- `SYSTEM_VERSION=adaptive-shadow-v4` archives V3 research, settles V3 account exposure only from fresh executable bid/ask, archives the cycle and starts V4 at 1,000 U.
+- `SYSTEM_VERSION=completed-candle-multi-strategy-v4.2` archives V3 research, settles V3 account exposure only from fresh executable bid/ask, archives the cycle and starts V4 at 1,000 U.
 - Gate credentials and LIVE reconciliation state are preserved. Deployment never turns LIVE on.
 - LIVE can be enabled only by the authenticated owner. It mirrors only new simulated-account orders opened after enablement and never backfills an existing simulated position.
 - Direction, structural stop, target, proportional notional and modeled cost come from the exact simulated-account order. The real order is rechecked for current price geometry, integer Gate lot size, margin, account-wide risk, correlated-direction risk and after-cost economics.
@@ -65,7 +66,7 @@ The owner-only reset closes open simulated positions at fresh executable prices,
 - 43,200 two-second alarm requests and alarm writes per day.
 - 8,000 non-alarm DO write cap plus 2,880 watchdog reserve: 54,080 planned DO writes/day.
 - 5,760 foreground requests at one continuous 15-second page poll plus 1,440 watchdog requests: 50,400 planned DO requests/day.
-- D1 billed writes remain capped at 4,800/day. The arena does not write every strategy observation to D1.
+- D1 billed writes remain capped at 4,800/day. The five-minute strategy log adds at most 576 billed writes/day including retention pruning.
 
 ## Verification
 
@@ -77,4 +78,4 @@ npm run lint
 git diff --check
 ```
 
-Production releases use the GitHub-to-Cloudflare workflow and require advancing health checks with `adaptive-shadow-v4`, 30-market scanning, the 12/48 catalog, V4 risk limits, 1,000 U cutover equity and LIVE explicitly OFF.
+Production releases use the GitHub-to-Cloudflare workflow and require advancing health checks with `completed-candle-multi-strategy-v4.2`, 30-market scanning, the 12/48 catalog, V4 risk limits, 1,000 U cutover equity and LIVE explicitly OFF.

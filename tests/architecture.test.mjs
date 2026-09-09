@@ -33,8 +33,9 @@ test("runtime uses bounded futures REST snapshots, no continuous WebSocket", asy
   assert.doesNotMatch(alarm, /lastError = `radar:/, "a radar timeout must not become a global execution fault");
   assert.doesNotMatch(alarm, /successes !== this\.runtime\.symbols\.length \? "DEGRADED"/, "partial candidate-book loss must not degrade the whole authority");
   assert.match(worker, /successes === 0 \? `\$\{this\.runtime\.symbols\.length\} market snapshots unavailable/);
-  assert.match(worker, /radarCandidateExecutionAllowed\(this\.runtime\.radar\.lastScanAt, now\)/);
+  assert.match(worker, /completedCandleStrategyCandidate/);
   assert.match(worker, /residentCandleCandidate/);
+  assert.doesNotMatch(worker, /alignedFlow: eventAlignedFlow/);
   assert.doesNotMatch(worker, /if \(!radarCandidateExecutionAllowed\(this\.runtime\.radar\.lastScanAt, now\)\) return/);
   assert.match(worker, /maxSubrequestsPerAlarm: 32/);
   assert.match(worker, /now - this\.runtime\.lastStopCheckpointAt < 60_000/);
@@ -74,7 +75,7 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(page, /viewScroll\.current\[view\] = window\.scrollY/);
   assert.match(page, /市场状态竞技场/);
   assert.match(page, /48个策略单元/);
-  assert.match(page, /趋势、震荡、压缩和异动候选/);
+  assert.match(page, /不依赖高频异动、逐笔成交或持仓量数据/);
   assert.match(page, /有效影子/);
   assert.match(page, /观察影子/);
   assert.match(page, /1000 U模拟账户交易记录/);
@@ -164,7 +165,7 @@ test("V4 adaptive shadow arena is bounded, cost-aware, and is the sole LIVE orde
   assert.match(worker, /mirrorNotionalFraction: trade\.notional \/ Math\.max\(trade\.accountEquityAtOpen/);
   assert.match(worker, /strategyArena: normalizeStrategyArena\(saved\.strategyArena\)/);
   assert.match(worker, /resetStrategyArenaAccount/);
-  assert.match(page, /最新3笔有效影子连胜/);
+  assert.match(page, /24小时内3笔有效影子连胜/);
   assert.match(page, /观察影子/);
   assert.match(page, /动态风险/);
   assert.match(page, /重置1000 U模拟资金/);

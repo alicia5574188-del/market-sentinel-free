@@ -1,7 +1,7 @@
 import type { RadarCandidate, RadarTicker } from "./market-radar.ts";
 import type { CompletedMinuteCandle } from "./liquidity-core.ts";
 
-export const MARKET_REGIME_VERSION = 1;
+export const MARKET_REGIME_VERSION = 2;
 export const MARKET_REGIME_MIN_SAMPLES = 18;
 
 export type MarketRegimeKind = "TREND" | "RANGE" | "COMPRESSION" | "EXPANSION" | "UNCERTAIN";
@@ -59,7 +59,7 @@ export type MarketRegimeCandidate = {
 };
 
 export type MarketRegimeState = {
-  version: 1;
+  version: 2;
   profiles: Record<string, MarketProfile>;
   candidates: MarketRegimeCandidate[];
   lastUpdatedAt: number | null;
@@ -168,6 +168,64 @@ export function residentCandleCandidate(input: {
     anomalyKind: channel === "ANOMALY" ? "PRICE_SHOCK" : null,
   };
   const structure: ResidentCandleStructure = { id: `${input.symbol}:5m:${lifecycle}`, observedAt: latest.completedAt,
+    lower, upper, midpoint: (lower + upper) / 2, recentLower, recentUpper };
+  return { candidate, structure };
+}
+
+export function completedCandleStrategyCandidate(input: {
+  symbol: string;
+  candles: Array<{ time: number; open: number; high: number; low: number; close: number; volume?: number }>;
+  volume24hUsd: number;
+  fundingRate: number;
+  now: number;
+}) {
+  const rows = [...input.candles].sort((left, right) => left.time - right.time).slice(-24);
+  if (rows.length < 12 || input.volume24hUsd <= 0) return null;
+  const latest = rows.at(-1)!;
+  const latestCompletedAt = (latest.time + 300) * 1_000;
+  if (input.now < latestCompletedAt || input.now - latestCompletedAt > 11 * 60_000) return null;
+  const closes = rows.map((row) => row.close);
+  const path = closes.slice(1).reduce((total, close, index) => total + Math.abs(close - closes[index]), 0);
+  const trendRate = (latest.close - rows[0].open) / Math.max(rows[0].open, 1e-9);
+  const trendEfficiency = clamp(Math.abs(latest.close - rows[0].open) / Math.max(path, latest.close * 0.0002), 0, 1);
+  const ranges = rows.map((row) => (row.high - row.low) / Math.max(row.open, 1e-9));
+  const recentVolatility = sum(ranges.slice(-4)) / 4;
+  const priorVolatility = sum(ranges.slice(-12, -4)) / 8;
+  const volatilityRatio = clamp(recentVolatility / Math.max(priorVolatility, 0.00005), 0, 5);
+  const lower = Math.min(...rows.map((row) => row.low));
+  const upper = Math.max(...rows.map((row) => row.high));
+  const width = Math.max(upper - lower, latest.close * 0.0002);
+  const rangePosition = clamp((latest.close - lower) / width, 0, 1);
+  const lastMove = (latest.close - latest.open) / Math.max(latest.open, 1e-9);
+  let channel: CandidateChannel;
+  let regime: MarketRegimeKind;
+  let side: "LONG" | "SHORT" = trendRate >= 0 ? "LONG" : "SHORT";
+  let score: number;
+  if (volatilityRatio <= 0.76) {
+    channel = "COMPRESSION"; regime = "COMPRESSION";
+    score = 56 + clamp((0.76 - volatilityRatio) / 0.5, 0, 1) * 28 + trendEfficiency * 12;
+  } else if (volatilityRatio >= 1.42 && Math.abs(lastMove) >= 0.0018) {
+    channel = "ANOMALY"; regime = "EXPANSION"; side = lastMove >= 0 ? "LONG" : "SHORT";
+    score = 58 + clamp((volatilityRatio - 1.42) / 1.5, 0, 1) * 22 + clamp(Math.abs(lastMove) / 0.01, 0, 1) * 20;
+  } else if (trendEfficiency >= 0.46 && Math.abs(trendRate) >= 0.0025) {
+    channel = "TREND"; regime = "TREND";
+    score = 54 + trendEfficiency * 30 + clamp(Math.abs(trendRate) / 0.02, 0, 1) * 16;
+  } else {
+    channel = "RANGE"; regime = "RANGE"; side = rangePosition <= 0.5 ? "LONG" : "SHORT";
+    score = 52 + (1 - trendEfficiency) * 24 + Math.abs(rangePosition - 0.5) * 36;
+  }
+  const recent = rows.slice(-4);
+  const recentLower = Math.min(...recent.map((row) => row.low));
+  const recentUpper = Math.max(...recent.map((row) => row.high));
+  const lifecycle = `${latestCompletedAt}:${candlePriceBin(lower)}:${candlePriceBin(upper)}`;
+  const candidate: MarketRegimeCandidate = {
+    id: `${input.symbol}:CANDLE5M:${channel}:${side}:${lifecycle}`, symbol: input.symbol, channel, regime, side,
+    score: clamp(score, 0, 100), referencePrice: channel === "ANOMALY" ? latest.open : latest.close,
+    moveRate: channel === "ANOMALY" ? lastMove : trendRate, trendRate, trendEfficiency, volatilityRatio, rangePosition,
+    volume24hUsd: input.volume24hUsd, fundingRate: input.fundingRate, openInterestChangeRate: 0,
+    confirmations: 2, firstSeenAt: latestCompletedAt, observedAt: latestCompletedAt, anomalyKind: null,
+  };
+  const structure: ResidentCandleStructure = { id: `${input.symbol}:5m:${lifecycle}`, observedAt: latestCompletedAt,
     lower, upper, midpoint: (lower + upper) / 2, recentLower, recentUpper };
   return { candidate, structure };
 }

@@ -858,8 +858,8 @@ test("health status is compact while retaining every release gate", async () => 
   const response = await stream.fetch(new Request("https://market-stream/health-status"));
   const status = await response.json();
 
-  assert.equal(status.version, "adaptive-shadow-v4");
-  assert.equal(status.strategyArena.version, 4);
+  assert.equal(status.version, "completed-candle-multi-strategy-v4.2");
+  assert.equal(status.strategyArena.version, 5);
   assert.equal(status.strategyArena.playbookCount, 12);
   assert.equal(status.strategyArena.catalogSize, 48);
   assert.equal(status.strategyArena.portfolioEquity, 1_000);
