@@ -225,14 +225,15 @@ export function selectDiverseMarketPool(input: {
   const bySymbol = new Map(input.candidates.map((candidate) => [candidate.symbol, candidate]));
   const output = [...new Set(input.locked)].slice(0, input.limit);
   const usedGroups = new Set(output.map((symbol) => bySymbol.get(symbol)).filter(Boolean).map((candidate) => channelGroup(candidate!.channel)));
-  const add = (symbol: string) => {
+  const availableGroups = new Set(input.candidates.map((candidate) => channelGroup(candidate.channel)));
+  const add = (symbol: string, requireNewGroup = true) => {
     if (output.length >= input.limit || output.includes(symbol)) return;
     const candidate = bySymbol.get(symbol);
-    if (candidate && usedGroups.has(channelGroup(candidate.channel))) return;
+    if (requireNewGroup && candidate && usedGroups.has(channelGroup(candidate.channel))) return;
     output.push(symbol);
     if (candidate) usedGroups.add(channelGroup(candidate.channel));
   };
-  input.current.filter((symbol) => bySymbol.has(symbol)).forEach(add);
+  input.current.filter((symbol) => bySymbol.has(symbol)).forEach((symbol) => add(symbol, availableGroups.size > 1));
   for (const group of ["TREND", "ROTATION", "EVENT"]) {
     const row = input.candidates.find((candidate) => channelGroup(candidate.channel) === group && !output.includes(candidate.symbol));
     if (row) add(row.symbol);

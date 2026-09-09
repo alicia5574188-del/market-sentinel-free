@@ -40,6 +40,18 @@ test("three deep-analysis slots diversify trend, rotation and event candidates",
   assert.deepEqual(new Set(selected), new Set(["T1_USDT", "R_USDT", "A_USDT"]));
 });
 
+test("single-channel warmup preserves all current residents instead of churning deep slots", () => {
+  const row = (symbol: string, score: number): MarketRegimeCandidate => ({
+    id: `${symbol}:1`, symbol, channel: "ANOMALY", regime: "EXPANSION", side: "LONG", score,
+    referencePrice: 100, moveRate: 0.01, trendRate: 0.01, trendEfficiency: 0.8, volatilityRatio: 2,
+    rangePosition: 1, volume24hUsd: 100_000_000, fundingRate: 0, openInterestChangeRate: 0,
+    confirmations: 3, firstSeenAt: 1, observedAt: 2, anomalyKind: "PRICE_SHOCK",
+  });
+  const candidates = [row("NEW_USDT", 100), row("A_USDT", 90), row("B_USDT", 80), row("C_USDT", 70)];
+  const selected = selectDiverseMarketPool({ locked: [], current: ["A_USDT", "B_USDT", "C_USDT"], candidates, fallback: [], limit: 3 });
+  assert.deepEqual(selected, ["A_USDT", "B_USDT", "C_USDT"]);
+});
+
 test("locked portfolio exposure keeps its slot while shadow observations do not enter this API", () => {
   const selected = selectDiverseMarketPool({ locked: ["LOCKED_USDT"], current: [], candidates: [],
     fallback: ["BTC_USDT", "ETH_USDT", "SOL_USDT"], limit: 3 });
