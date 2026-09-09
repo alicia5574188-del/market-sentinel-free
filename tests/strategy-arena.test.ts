@@ -85,6 +85,16 @@ test("one market event creates and scores only one effective shadow trade", () =
   assert.equal(Object.values(closed.strategies).reduce((total, score) => total + score.shadowResolved, 0), 1);
 });
 
+test("a new event id cannot overlap an existing effective shadow on the same symbol", () => {
+  const first = openEvent(initialStrategyArena(1), 1, 10_000);
+  const existing = Object.values(first.open)[0];
+  const second = openEvent(first, 2, 10_001);
+  assert.equal(Object.keys(second.open).length, 1);
+  assert.equal(Object.values(second.open)[0].id, existing.id);
+  assert.ok(second.recentObservations.some((row) => row.eventId.endsWith(":2")
+    && row.blocker.includes("同币种已有") && row.blocker.includes("仅观察")));
+});
+
 test("observation shadow is separate and never counts toward promotion", () => {
   const thin = observation(1, 10_000); thin.bidDepthUsd = 100; thin.askDepthUsd = 100;
   const state = observeStrategyArena({ state: initialStrategyArena(1), observation: thin });

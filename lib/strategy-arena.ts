@@ -634,10 +634,16 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
     || state.seenSignals.some((key) => !key.startsWith("portfolio:") && key.endsWith(legacyEventSuffix))
     || Object.values(state.open).some((trade) => trade.eventId === input.observation.candidate.id)
     || state.recentShadow.some((trade) => trade.eventId === input.observation.candidate.id);
+  const overlappingSymbolTrade = Object.values(state.open).find((trade) =>
+    trade.lane === "EFFECTIVE_SHADOW" && trade.symbol === input.observation.candidate.symbol);
   const executable: Array<{ signal: Signal; definition: StrategyDefinition; score: StrategyScore; sizing: TradeSizing }> = [];
   for (const signal of generatedSignals) {
     const score = state.strategies[signal.strategyId]; const definition = STRATEGY_CATALOG.find((row) => row.id === signal.strategyId);
     if (!score || !definition) continue;
+    if (overlappingSymbolTrade) {
+      recordObservation(definition, `同币种已有${overlappingSymbolTrade.strategyName}有效影子持仓，本信号仅观察`);
+      continue;
+    }
     const signalKey = `${signal.strategyId}:${input.observation.candidate.id}`;
     const openKey = `${signal.strategyId}:${input.observation.candidate.symbol}`;
     if (eventAlreadyExecuted || state.seenSignals.includes(signalKey) || state.open[openKey] || Object.keys(state.open).length >= ARENA_MAX_OPEN) continue;
