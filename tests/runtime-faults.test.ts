@@ -788,6 +788,31 @@ test("status exposes bounded mirror telemetry, never the complete outage outbox"
   });
 });
 
+test("health status is compact while retaining every release gate", async () => {
+  const { stream } = await makeStream();
+  const now = Date.now();
+  stream.runtime.lastSuccessAt = now;
+  stream.runtime.lastHeartbeatAt = now;
+  stream.runtime.state = "LIVE";
+  stream.runtime.radar.scanned = 30;
+
+  const response = await stream.fetch(new Request("https://market-stream/health-status"));
+  const status = await response.json();
+
+  assert.equal(status.version, "adaptive-shadow-v4");
+  assert.equal(status.strategyArena.version, 4);
+  assert.equal(status.strategyArena.playbookCount, 12);
+  assert.equal(status.strategyArena.catalogSize, 48);
+  assert.equal(status.strategyArena.portfolioEquity, 1_000);
+  assert.equal(status.limits.scanUniverse, 30);
+  assert.equal(status.limits.realtimeCapacity, 10);
+  assert.equal(status.liveMode.requestedEnabled, false);
+  assert.equal(status.liveMode.operational, false);
+  assert.equal(status.evidence, undefined);
+  assert.equal(status.strategyArena.strategies, undefined);
+  assert.ok(JSON.stringify(status).length < 5_000);
+});
+
 test("a capacity-limited portfolio order is skipped without blocking an affordable mirror", async () => {
   const { stream } = await makeStream();
   const symbols = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];

@@ -1644,6 +1644,55 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       return json({ ok: true, stale, nextAlarmAt: await this.ctx.storage.getAlarm() });
     }
+    if (path === "/health-status") {
+      await this.ensureAlarm();
+      const stale = !this.authorityReady || this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > AUTHORITY_STALE_AFTER_MS;
+      const effectiveState = !this.authorityReady ? "RECOVERY_REQUIRED" : stale ? "RECONNECTING" : this.runtime.state;
+      const strategies = Object.values(this.runtime.strategyArena.strategies);
+      const regimes = marketRegimeSummary(this.runtime.marketRegimes);
+      return json({
+        version: this.runtime.version,
+        mode: this.runtime.mode,
+        state: effectiveState,
+        stale,
+        lastError: this.runtime.lastError,
+        lastSuccessAt: this.runtime.lastSuccessAt,
+        lastHeartbeatAt: this.runtime.lastHeartbeatAt,
+        symbols: this.runtime.symbols,
+        liveMode: { requestedEnabled: this.runtime.live.requestedEnabled, operational: this.runtime.live.operational },
+        strategyArena: {
+          version: this.runtime.strategyArena.version,
+          playbookCount: 12,
+          catalogSize: strategies.length,
+          shadowCount: strategies.filter((row) => row.lane === "SHADOW").length,
+          activeCount: strategies.filter((row) => row.lane === "ACTIVE").length,
+          sleepingCount: strategies.filter((row) => row.lane === "SLEEPING").length,
+          portfolioEquity: this.runtime.strategyArena.portfolioEquity,
+          portfolioOpen: Object.keys(this.runtime.strategyArena.portfolioOpen).length,
+          observationShadow: this.runtime.strategyArena.recentObservations.length,
+          effectiveShadowOpen: Object.keys(this.runtime.strategyArena.open).length,
+          cutoverPending: this.runtime.strategyArena.cutoverPending,
+          rules: {
+            singleTradeRiskMin: 0.01,
+            singleTradeRiskMax: 0.02,
+            portfolioRiskCap: PORTFOLIO_RISK_CAP,
+            correlatedRiskCap: CORRELATED_DIRECTION_RISK_CAP,
+            marginCap: 0.30,
+            maxNotionalMultiple: 4,
+          },
+        },
+        marketRegimes: { tracked: regimes.tracked, warmed: regimes.warmed, counts: regimes.counts },
+        limits: {
+          markets: this.runtime.symbols.length,
+          scannedMarkets: this.runtime.radar.scanned,
+          scanUniverse: SCAN_UNIVERSE_SIZE,
+          realtimeCapacity: PORTFOLIO_REALTIME_CAPACITY,
+          plannedDoWritesPerDay: 54_080,
+          plannedTotalDoRequestsPerDay: 50_400,
+          plannedMaxD1BilledWritesPerDay: 4_800,
+        },
+      });
+    }
     if (path === "/status" || path === "/owner-runtime") {
       await this.ensureAlarm();
       const { outbox, live, paperCycle, bankruptcyOutbox, strategyArena, marketRegimes, ...publicRuntime } = this.runtime;
@@ -1875,7 +1924,7 @@ const worker = {
     if (isAsset(url.pathname)) return env.ASSETS.fetch(request);
     if (url.pathname === "/__health") {
       const started = performance.now();
-      const response = await runtimeStatus(env, false);
+      const response = await env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/health-status");
       const runtime = await response.json<Record<string, unknown>>();
       const live = runtimeReady(runtime as RuntimeHealthShape);
       return json({ ok: response.ok && live, ready: live, version: SYSTEM_VERSION, mode: "PAPER", runtime, topLevelCpuMs: performance.now() - started }, live ? 200 : 503);
