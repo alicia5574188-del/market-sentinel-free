@@ -4,7 +4,8 @@
 
 - The initial exponential radar backoff was confirmed to starve the 18-observation regime warmup during intermittent Gate timeouts. Recovery now retries at most once per normal ten-second scan, and the larger all-market ticker payload gets a dedicated four-second timeout only after position books and LIVE reconciliation.
 - Partial ordinary-candidate book failures remain individually fail-closed but no longer make the whole authority report recovery. The phone shows a radar warning only after the last good scan is stale for 30 seconds.
-- Production correction commit and Cloudflare version are recorded after the release gate below; LIVE remains OFF throughout.
+- Production commit `361b4e72be2ad4608c29ce1f5f95daef1ae15b94` passed GitHub Actions run #631 and its advancing Cloudflare health gate. Cloudflare version `05710381-07a0-4a51-8313-e18f3b6cecad`; the gate proved fresh `LIVE` runtime state, no global error, 1,000 U equity, 30/10 data capacity, 12/48 catalog, and LIVE still OFF (`requestedEnabled=false`, `operational=false`).
+- Rendered production checks after deployment stayed `后台运行中` with no transport, global-recovery, or radar warning. Radar time advanced from 23:39 to 23:42 and fresh anomaly candidates changed from XAG/DOGE/VVV/HYPE/DOT to AKE/牛来/PONS; 12 anomaly variants woke while the 30 statistical regime profiles continued their honest 18-sample warmup.
 
 ## 2026-09-09 isolated radar timeout recovery — deployed
 
