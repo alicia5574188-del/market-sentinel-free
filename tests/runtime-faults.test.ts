@@ -25,7 +25,8 @@ registerHooks({
 });
 
 const runtimeWorkerSpecifier = "../worker/index-clean.ts?runtime-fault-suite";
-const { MarketStream } = await import(runtimeWorkerSpecifier);
+const { MarketStream, failedRadarRuntime, radarAttemptDue, radarCandidateExecutionAllowed,
+  successfulRadarRuntime } = await import(runtimeWorkerSpecifier);
 
 class FakeStorage {
   values = new Map<string, unknown>();
@@ -116,6 +117,41 @@ async function makeStreamFromStorage(storage: FakeStorage) {
 async function makeStream(checkpoint?: unknown) {
   return makeStreamFromStorage(new FakeStorage(checkpoint));
 }
+
+test("radar timeout preserves the last good scan and backs off without contaminating execution health", () => {
+  const candidate = { id: "BTC:1", symbol: "BTC_USDT", side: "LONG", strength: 2, moveRate: 0.01,
+    movementMultiple: 2, volume24hUsd: 1_000_000, confirmations: 2, firstSeenAt: 1, observedAt: 1,
+    kind: "NEW_MONEY" };
+  const healthy = { scanned: 30, lastScanAt: 1_000, lastAttemptAt: 1_000, consecutiveFailures: 0,
+    retryAt: null, lastError: null, candidates: [candidate] };
+  const first = failedRadarRuntime(healthy, 11_000, new Error("The operation was aborted due to timeout"));
+
+  assert.equal(first.scanned, 30);
+  assert.equal(first.lastScanAt, 1_000);
+  assert.deepEqual(first.candidates, [candidate]);
+  assert.equal(first.consecutiveFailures, 1);
+  assert.equal(first.retryAt, 26_000);
+  assert.equal(radarAttemptDue(first, 25_999), false);
+  assert.equal(radarAttemptDue(first, 26_000), true);
+
+  const second = failedRadarRuntime(first, 26_000, new Error("timeout again"));
+  const third = failedRadarRuntime(second, 56_000, new Error("timeout again"));
+  const fourth = failedRadarRuntime(third, 116_000, new Error("timeout again"));
+  assert.equal(second.retryAt, 56_000);
+  assert.equal(third.retryAt, 116_000);
+  assert.equal(fourth.retryAt, 176_000, "backoff must cap at sixty seconds");
+
+  const recovered = successfulRadarRuntime(fourth, 176_000, 30, [candidate]);
+  assert.equal(recovered.consecutiveFailures, 0);
+  assert.equal(recovered.retryAt, null);
+  assert.equal(recovered.lastError, null);
+});
+
+test("stale radar can never authorize a new strategy observation", () => {
+  assert.equal(radarCandidateExecutionAllowed(null, 100_000), false);
+  assert.equal(radarCandidateExecutionAllowed(70_000, 100_000), true);
+  assert.equal(radarCandidateExecutionAllowed(69_999, 100_000), false);
+});
 
 function position(id: string, symbol: string, patch: Partial<PaperPosition> = {}): PaperPosition {
   return {

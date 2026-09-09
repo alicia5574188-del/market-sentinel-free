@@ -28,6 +28,9 @@ const FEED_RECOVERY_CONFIRMATIONS = 2;
 const HEARTBEAT_MS = 30_000;
 const UNIVERSE_MS = 10 * 60_000;
 const RADAR_MS = 10_000;
+const RADAR_ENTRY_STALE_MS = 30_000;
+const RADAR_RETRY_MIN_MS = 15_000;
+const RADAR_RETRY_MAX_MS = 60_000;
 const WARMUP_SNAPSHOTS = 4;
 const MAX_ANCILLARY_CONCURRENCY = 2;
 const MAX_OPEN_POSITIONS = PORTFOLIO_REALTIME_CAPACITY;
@@ -155,7 +158,8 @@ type RuntimeState = {
   entryAssessments: Record<string, EventEntryAssessment | null>;
   strategyArena: StrategyArenaState;
   marketRegimes: MarketRegimeState;
-  radar: { scanned: number; lastScanAt: number | null; candidates: RadarCandidate[] };
+  radar: { scanned: number; lastScanAt: number | null; lastAttemptAt: number | null; consecutiveFailures: number;
+    retryAt: number | null; lastError: string | null; candidates: RadarCandidate[] };
   analysisMs: number[];
   equity: number;
   outbox: PositionOutboxItem[];
@@ -170,6 +174,35 @@ const day = (now = Date.now()) => new Intl.DateTimeFormat("en-CA", { timeZone: "
 const safeError = (error: unknown) => error instanceof Error ? error.message.slice(0, 240) : "unknown error";
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { "Cache-Control": "no-store" } });
 
+type RadarRuntime = RuntimeState["radar"];
+
+function emptyRadarRuntime(): RadarRuntime {
+  return { scanned: 0, lastScanAt: null, lastAttemptAt: null, consecutiveFailures: 0, retryAt: null, lastError: null, candidates: [] };
+}
+
+export function radarRetryDelay(consecutiveFailures: number) {
+  return Math.min(RADAR_RETRY_MAX_MS, RADAR_RETRY_MIN_MS * 2 ** Math.max(0, consecutiveFailures - 1));
+}
+
+export function radarCandidateExecutionAllowed(lastScanAt: number | null, now: number) {
+  return lastScanAt != null && now - lastScanAt <= RADAR_ENTRY_STALE_MS;
+}
+
+export function radarAttemptDue(radar: RadarRuntime, now: number) {
+  if (radar.retryAt != null && now < radar.retryAt) return false;
+  return radar.lastScanAt == null || now - radar.lastScanAt >= RADAR_MS;
+}
+
+export function failedRadarRuntime(radar: RadarRuntime, failedAt: number, error: unknown): RadarRuntime {
+  const consecutiveFailures = radar.consecutiveFailures + 1;
+  return { ...radar, lastAttemptAt: failedAt, consecutiveFailures,
+    retryAt: failedAt + radarRetryDelay(consecutiveFailures), lastError: safeError(error) };
+}
+
+export function successfulRadarRuntime(radar: RadarRuntime, now: number, scanned: number, candidates: RadarCandidate[]): RadarRuntime {
+  return { ...radar, scanned, lastScanAt: now, lastAttemptAt: now, consecutiveFailures: 0, retryAt: null, lastError: null, candidates };
+}
+
 function initialState(): RuntimeState {
   return {
     version: SYSTEM_VERSION, authoritySchemaVersion: AUTHORITY_SCHEMA_VERSION, mode: "PAPER", state: "STARTING", symbols: DEFAULT_SYMBOLS,
@@ -178,7 +211,7 @@ function initialState(): RuntimeState {
     lastError: null, d1MirrorError: null, riskBreach: false, tickSize: Object.fromEntries(DEFAULT_SYMBOLS.map((symbol) => [symbol, 0.0001])), contractMeta: {},
     decisions: {}, routes: {}, plans: {}, positions: {}, evidence: {}, entryAssessments: {},
     strategyArena: initialStrategyArena(), marketRegimes: initialMarketRegimes(), analysisMs: [], equity: PAPER_INITIAL_EQUITY, outbox: [],
-    radar: { scanned: 0, lastScanAt: null, candidates: [] }, paperCycle: startPaperCycle(Date.now()), bankruptcyOutbox: [], live: initialLiveState(),
+    radar: emptyRadarRuntime(), paperCycle: startPaperCycle(Date.now()), bankruptcyOutbox: [], live: initialLiveState(),
   };
 }
 
@@ -241,7 +274,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if (saved?.authoritySchemaVersion === AUTHORITY_SCHEMA_VERSION) {
         const strategyCutover = saved.version !== SYSTEM_VERSION;
         this.runtime = { ...initialState(), ...saved, version: SYSTEM_VERSION, symbols: saved.symbols?.length ? saved.symbols : [...DEFAULT_SYMBOLS],
-          lastUniverseAt: 0, lastRadarAt: 0, radar: saved.radar ?? { scanned: 0, lastScanAt: null, candidates: [] },
+          lastUniverseAt: 0, lastRadarAt: 0,
+          radar: { ...emptyRadarRuntime(), ...(saved.radar ?? {}), candidates: saved.radar?.candidates ?? [] },
           strategyArena: normalizeStrategyArena(saved.strategyArena),
           marketRegimes: strategyCutover ? initialMarketRegimes() : normalizeMarketRegimes(saved.marketRegimes),
           equity: strategyCutover ? PAPER_INITIAL_EQUITY : saved.equity,
@@ -385,7 +419,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const universe = new Set(universeRows.map((row) => row.symbol));
     const radar = updateRadar(this.radarBaselines, universeRows, universe, now);
     this.radarBaselines = radar.baselines;
-    this.runtime.radar = { scanned: radar.scanned, lastScanAt: now, candidates: radar.candidates };
+    this.runtime.radar = successfulRadarRuntime(this.runtime.radar, now, radar.scanned, radar.candidates);
     const regimes = updateMarketRegimes({ state: this.runtime.marketRegimes, rows: universeRows, eligible: universe, now });
     const allCandidates = [...regimes.candidates, ...radar.candidates.map(anomalyCandidate)]
       .sort((left, right) => right.score - left.score).slice(0, 36);
@@ -408,6 +442,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     spreadRate: number, bestBid: number, bestAsk: number, bidDepthUsd: number, askDepthUsd: number) {
     this.runtime.strategyArena = advanceStrategyArena({ state: this.runtime.strategyArena,
       quotes: { [symbol]: { midpoint, bestBid, bestAsk } }, now });
+    if (!radarCandidateExecutionAllowed(this.runtime.radar.lastScanAt, now)) return;
     const candidates = this.runtime.marketRegimes.candidates.filter((row) => row.symbol === symbol);
     const memory = this.memory[symbol];
     if (!candidates.length || !memory) return;
@@ -440,9 +475,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private priorityMinuteSymbols(now: number) {
     const completedMinute = Math.floor(now / 60_000) * 60_000;
+    const radarFresh = radarCandidateExecutionAllowed(this.runtime.radar.lastScanAt, now);
     return this.runtime.symbols.filter((symbol) => {
       const plan = this.runtime.plans[symbol];
-      const eventCandidate = this.runtime.marketRegimes.candidates.some((row) => row.symbol === symbol);
+      const eventCandidate = radarFresh && this.runtime.marketRegimes.candidates.some((row) => row.symbol === symbol);
       return (eventCandidate || plan?.state === "PREPARED" && plan.marketState === "BREAKOUT")
         && (this.memory[symbol]?.timeframeUpdatedAt.m1 ?? 0) < completedMinute;
     });
@@ -450,7 +486,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private criticalEvidenceFresh(symbol: string, now: number) {
     const memory = this.memory[symbol] ?? emptySymbolMemory();
-    const needsMinute = this.runtime.marketRegimes.candidates.some((row) => row.symbol === symbol)
+    const needsMinute = radarCandidateExecutionAllowed(this.runtime.radar.lastScanAt, now)
+      && this.runtime.marketRegimes.candidates.some((row) => row.symbol === symbol)
       || this.runtime.plans[symbol]?.state === "PREPARED" || this.runtime.positions[symbol]?.status === "OPEN";
     return !needsMinute || now - memory.timeframeUpdatedAt.m1 <= 3 * 60_000;
   }
@@ -1567,12 +1604,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         try { this.refreshUniverse(now, await fetchActiveContracts()); }
         catch (error) { this.runtime.lastError = `universe: ${safeError(error)}`; }
       }
-      const radarDue = now - this.runtime.lastRadarAt >= RADAR_MS;
-      if (radarDue) {
-        subrequests += 1;
-        try { this.refreshRadar(now, await fetchMarketTickers()); }
-        catch (error) { this.runtime.lastError = `radar: ${safeError(error)}`; }
-      }
       const cycleSymbols = [...this.runtime.symbols];
       // Use the actual invocation time for exchange freshness. The slot is
       // only an idempotency key; its floor can be almost two seconds behind a
@@ -1606,6 +1637,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         } finally {
           subrequests += Math.max(0, (this.liveClient?.requestCount ?? liveRequestsBefore) - liveRequestsBefore);
         }
+      }
+      const radarDue = radarAttemptDue(this.runtime.radar, now);
+      if (radarDue) {
+        subrequests += 1;
+        this.runtime.radar.lastAttemptAt = Date.now();
+        try { this.refreshRadar(Date.now(), await fetchMarketTickers()); }
+        catch (error) { this.runtime.radar = failedRadarRuntime(this.runtime.radar, Date.now(), error); }
       }
       this.runtime.lastAlarmAt = now;
       this.runtime.lastSuccessAt = successes > 0 ? now : this.runtime.lastSuccessAt;
@@ -1689,6 +1727,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             marginCap: 0.30,
             maxNotionalMultiple: 4,
           },
+        },
+        radar: {
+          scanned: this.runtime.radar.scanned,
+          lastScanAt: this.runtime.radar.lastScanAt,
+          lastAttemptAt: this.runtime.radar.lastAttemptAt,
+          consecutiveFailures: this.runtime.radar.consecutiveFailures,
+          retryAt: this.runtime.radar.retryAt,
+          entryFresh: radarCandidateExecutionAllowed(this.runtime.radar.lastScanAt, Date.now()),
         },
         marketRegimes: { tracked: regimes.tracked, warmed: regimes.warmed, counts: regimes.counts },
         limits: {

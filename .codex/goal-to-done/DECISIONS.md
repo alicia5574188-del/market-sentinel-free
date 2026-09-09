@@ -262,3 +262,10 @@
 - The unified account has no product-level three-position quota. Each entry risks continuously 1%–2% of current equity; admission is bounded by 10% total stop risk, 6.5% same-direction risk, 30% margin, 4× total notional, one symbol/event winner and ten actively manageable symbols.
 - The 10-second scan is limited to the thirty most liquid eligible Gate USDT perpetuals. PAPER/LIVE and effective-shadow exposure retain deep-data priority; stale or insufficient management capacity blocks only new entries and never executes an old-price exit.
 - V3 account exposure survives restart until every open symbol has a fresh executable quote, then it is settled and archived. V4 starts at 1,000 U with fresh effective-shadow evidence; old trade/cycle history remains available. LIVE is forced OFF across the cutover.
+
+# 2026-09-09 — Bulk radar failure is optional degradation, never execution failure
+
+- The two-second authority must process current PAPER books and any LIVE reconciliation before attempting the optional ten-second whole-market ticker scan.
+- A bulk radar failure retains the last successful 30-market snapshot and retries at 15, 30, then at most 60 seconds. Failed attempts do not update success time, do not enter global `lastError`, and do not increase the normal request cadence.
+- Radar candidates older than 30 seconds cannot create new strategy observations, effective shadows, or simulated orders. Existing PAPER/LIVE positions continue to use only their independent fresh bid/ask path.
+- The phone may show a dedicated Chinese radar-delay notice, but a Gate timeout must not be presented as a whole-system recovery fault. One successful scan clears the failure state automatically.

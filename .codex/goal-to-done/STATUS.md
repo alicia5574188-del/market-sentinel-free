@@ -1,5 +1,12 @@
 # Status
 
+## 2026-09-09 isolated radar timeout recovery — locally verified
+
+- Gate bulk-ticker timeouts no longer enter global execution health or retry every two seconds. The authority preserves the last good 30-market result and backs off at 15/30/60 seconds.
+- PAPER books and any owner-controlled LIVE reconciliation run before the optional radar call. Radar data older than 30 seconds cannot produce new strategy observations or orders; existing trades continue on their independent fresh-book path.
+- The phone now renders a dedicated Chinese radar-delay notice and a successful scan clears it automatically. Normal ten-second cadence, request/write budgets, strategy rules, risk and LIVE authority are unchanged.
+- Verification passes 179 direct tests, 15 build/architecture/migration tests, TypeScript, lint and whitespace checks. Next: commit, push `main`, verify GitHub/Cloudflare production health and prove LIVE remains OFF.
+
 ## 2026-09-09 adaptive shadow strategy arena V4 — deployed
 
 - Authorized scope: implement the final V4 plan, verify, push `main`, deploy through Cloudflare and prove LIVE remains OFF.

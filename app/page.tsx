@@ -80,7 +80,8 @@ type Runtime = {
   feedFailures?: Record<string, { count: number; retryAt: number; suspendedSince?: number | null; totalFailures?: number; recoveries?: number; lastFailureAt?: number | null; lastError?: string | null; maxObservedLagMs?: number }>;
   limits: { maxOpenPositions: number | null; realtimeCapacity?: number; scanUniverse?: number; warmupSnapshots?: number; loopMs?: number; radarMs?: number; scannedMarkets?: number; maxAncillaryConcurrency?: number };
   liveMode: { requestedEnabled: boolean; operational: boolean };
-  radar?: { scanned: number; lastScanAt: number | null; candidates: RadarCandidate[] };
+  radar?: { scanned: number; lastScanAt: number | null; lastAttemptAt?: number | null; consecutiveFailures?: number;
+    retryAt?: number | null; lastError?: string | null; candidates: RadarCandidate[] };
   marketRegimes?: MarketRegimes;
   strategyArena?: StrategyArena;
   live?: LiveRuntime;
@@ -246,7 +247,9 @@ export default function Home() {
         <article><small>累计交易成本</small><strong>{num(arena?.portfolioCosts ?? 0, 2)} U</strong><p>毛盈亏 {signed(arena?.portfolioGrossPnl ?? 0)} U</p></article>
         <article><small>当前持仓</small><strong>{portfolioOpen.length}</strong><p>动态数量 · 总风险≤100 U · 同向≤65 U</p></article>
       </section>
-      {(!responseFresh || error) && runtime && <p className="notice">手机页面更新延迟，下面保留最近一次后台状态；服务器仍独立运行，不会因此停止判断或开模拟单。</p>}{runtime?.lastError && <p className="notice">{runtime.lastError.startsWith("D1") ? `历史镜像稍后重试，不影响行情判断和开仓：${runtime.lastError}` : `系统正在自动恢复：${runtime.lastError}`}</p>}
+      {(!responseFresh || error) && runtime && <p className="notice">手机页面更新延迟，下面保留最近一次后台状态；服务器仍独立运行，不会因此停止判断或开模拟单。</p>}
+      {runtime?.radar?.lastError && <p className="notice">30币雷达本轮超时，已隔离并退避重试；持仓盘口仍优先更新，旧雷达不会触发新订单。</p>}
+      {runtime?.lastError && <p className="notice">{runtime.lastError.startsWith("D1") ? `历史镜像稍后重试，不影响行情判断和开仓：${runtime.lastError}` : `系统正在自动恢复：${runtime.lastError}`}</p>}
     </>}
 
     <nav className="tabs">{([['brain', '模拟账户'], ['orders', `持仓 ${portfolioOpen.length || ''}`], ['live', `实盘 ${openLivePositions.length + openLiveEntries.length || ''}`], ['history', '交易记录'], ['settings', '设置']] as const).map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => selectTab(key)}>{label}</button>)}</nav>
