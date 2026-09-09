@@ -26,7 +26,7 @@ test("runtime uses bounded futures REST snapshots, no continuous WebSocket", asy
   assert.match(worker, /plannedMaxD1BilledWritesPerDay: 4_800/);
   assert.match(worker, /RADAR_MS = 10_000/);
   assert.match(worker, /await fetchMarketTickers\(\)/);
-  assert.match(worker, /radar\.candidates/);
+  assert.match(worker, /stableCandidates/);
   const alarm = worker.slice(worker.indexOf("async alarm("), worker.indexOf("async fetch(request"));
   assert.ok(alarm.indexOf("processBooks") < alarm.indexOf("fetchMarketTickers"), "position books must run before the bulk radar");
   assert.ok(alarm.indexOf("syncLive") < alarm.indexOf("fetchMarketTickers"), "LIVE reconciliation must run before the bulk radar");
