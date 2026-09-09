@@ -522,8 +522,8 @@ jobs:
             code="$(curl -sS --max-time 8 -o "$RUNNER_TEMP/v6-health.json" -w '%{http_code}' \
               "$WORKER_BASE_URL/__health" || true)"
             if [[ "$code" == "200" ]] && jq -e '
-              .ok == true and .version == "strategy-arena-v1" and .mode == "PAPER" and
-              .runtime.version == "strategy-arena-v1" and .runtime.mode == "PAPER" and
+              .ok == true and .version == "market-regime-arena-v2" and .mode == "PAPER" and
+              .runtime.version == "market-regime-arena-v2" and .runtime.mode == "PAPER" and
               .runtime.state == "LIVE" and .runtime.stale == false and .runtime.lastError == null and
               (.runtime.lastSuccessAt | type == "number") and
               ((now * 1000 - .runtime.lastSuccessAt) < 10000) and
@@ -581,7 +581,7 @@ jobs:
             code="$(curl -sS --max-time 8 -o "$RUNNER_TEMP/restart-health.json" -w '%{http_code}' \
               "$WORKER_BASE_URL/__health" || true)"
             if [[ "$code" == "200" ]] && jq -e '
-              .ok == true and .version == "strategy-arena-v1" and .mode == "PAPER" and
+              .ok == true and .version == "market-regime-arena-v2" and .mode == "PAPER" and
               .runtime.state == "LIVE" and .runtime.stale == false and .runtime.lastError == null and
               ((now * 1000 - .runtime.lastSuccessAt) < 10000) and
               .runtime.limits.plannedTotalDoRequestsPerDay < 55000 and
@@ -830,8 +830,8 @@ jobs:
             code="$(curl -sS --max-time 8 -o "$RUNNER_TEMP/final-health.json" -w '%{http_code}' \
               "$WORKER_BASE_URL/__health" || true)"
             if [[ "$code" == "200" ]] && jq -e '
-              .ok == true and .version == "strategy-arena-v1" and .mode == "PAPER" and
-              .runtime.version == "strategy-arena-v1" and .runtime.mode == "PAPER" and
+              .ok == true and .version == "market-regime-arena-v2" and .mode == "PAPER" and
+              .runtime.version == "market-regime-arena-v2" and .runtime.mode == "PAPER" and
               .runtime.state == "LIVE" and .runtime.stale == false and .runtime.lastError == null and
               ((now * 1000 - .runtime.lastSuccessAt) < 10000) and
               .runtime.limits.plannedTotalDoRequestsPerDay < 55000 and
@@ -1002,7 +1002,7 @@ jobs:
             code="$(curl -sS --max-time 8 -o "$RUNNER_TEMP/main-health.json" -w '%{http_code}' \
               "$WORKER_BASE_URL/__health" || true)"
             if [[ "$code" == "200" ]] && jq -e '
-              .ok == true and .version == "strategy-arena-v1" and .mode == "PAPER" and
+              .ok == true and .version == "market-regime-arena-v2" and .mode == "PAPER" and
               .runtime.state == "LIVE" and .runtime.stale == false and .runtime.lastError == null and
               ((now * 1000 - .runtime.lastSuccessAt) < 10000) and
               .runtime.limits.plannedTotalDoRequestsPerDay < 55000 and
@@ -1021,7 +1021,7 @@ jobs:
           page_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/main-page.html" -w '%{http_code}' \
             "$WORKER_BASE_URL/" || true)"
           [[ "$page_code" == "200" ]]
-          grep -Fq '资金异动雷达' "$RUNNER_TEMP/main-page.html"
+          grep -Fq '市场状态竞技场' "$RUNNER_TEMP/main-page.html"
           curl -fsS --max-time 15 "$WORKER_BASE_URL/api/history" \
             > "$RUNNER_TEMP/main-history.json"
           jq -e '.items | type == "array"' "$RUNNER_TEMP/main-history.json" >/dev/null
@@ -1085,8 +1085,8 @@ jobs:
           sleep 8
           curl -fsS --max-time 8 "$WORKER_BASE_URL/__health" > "$RUNNER_TEMP/monitor-health-2.json"
           jq -e '
-            .ok == true and .version == "strategy-arena-v1" and .mode == "PAPER" and
-            .runtime.version == "strategy-arena-v1" and .runtime.mode == "PAPER" and
+            .ok == true and .version == "market-regime-arena-v2" and .mode == "PAPER" and
+            .runtime.version == "market-regime-arena-v2" and .runtime.mode == "PAPER" and
             .runtime.state == "LIVE" and .runtime.stale == false and .runtime.lastError == null and
             ((now * 1000 - .runtime.lastSuccessAt) < 10000) and
             .runtime.limits.plannedTotalDoRequestsPerDay < 55000 and
@@ -1100,7 +1100,7 @@ jobs:
           page_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/monitor-page.html" -w '%{http_code}' \
             "$WORKER_BASE_URL/" || true)"
           [[ "$page_code" == "200" ]]
-          grep -Fq '资金异动雷达' "$RUNNER_TEMP/monitor-page.html"
+          grep -Fq '市场状态竞技场' "$RUNNER_TEMP/monitor-page.html"
           curl -fsS --max-time 15 "$WORKER_BASE_URL/api/history" \
             > "$RUNNER_TEMP/monitor-history.json"
           jq -e '.items | type == "array"' "$RUNNER_TEMP/monitor-history.json" >/dev/null

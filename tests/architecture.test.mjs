@@ -60,11 +60,12 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(page, /RUNTIME_DISPLAY_TTL_MS = 90_000/);
   assert.match(page, /tabScroll\.current\[tab\] = window\.scrollY/);
   assert.match(page, /viewScroll\.current\[view\] = window\.scrollY/);
-  assert.match(page, /策略竞技场 V1/);
+  assert.match(page, /行情状态策略竞技场 V2/);
+  assert.match(page, /catalogSize \?\? 48/);
+  assert.match(page, /异动只是四条候选通道之一/);
   assert.match(page, /影子候选记录/);
   assert.match(page, /模拟交易记录/);
-  assert.match(page, /独立模拟账本/);
-  assert.match(page, /旧版本记录已经清空/);
+  assert.match(page, /双模拟账本/);
   assert.doesNotMatch(page, /组合风险预算|目标 \+150 U|双向反应实验 V1|盈利与亏损研究|旧方案归档|账户日志/);
   assert.doesNotMatch(page, /fetch\("\/api\/history|fetch\("\/api\/account-logs/);
   assert.match(page, /所有者登录/);
@@ -115,26 +116,31 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
   assert.match(worker, /completeTrades\.length > item\.report\.trades\.length/);
 });
 
-test("strategy arena is bounded, cost-aware, adaptive, and cannot reach LIVE", async () => {
-  const [arena, worker, page, migration] = await Promise.all([
-    read("lib/strategy-arena.ts"), read("worker/index-clean.ts"), read("app/page.tsx"),
+test("market-regime arena is bounded, cost-aware, adaptive, and cannot reach LIVE", async () => {
+  const [arena, regime, worker, page, migration] = await Promise.all([
+    read("lib/strategy-arena.ts"), read("lib/market-regime.ts"), read("worker/index-clean.ts"), read("app/page.tsx"),
     read("drizzle/0035_strategy_arena_fresh_start.sql"),
   ]);
   assert.match(arena, /STRATEGY_CATALOG/);
-  assert.match(arena, /SHADOW_PROMOTION_SAMPLE = 6/);
-  assert.match(arena, /SHADOW_PROMOTION_WINS = 4/);
+  assert.match(arena, /TRIAL_PROMOTION_WINS = 1/);
+  assert.match(arena, /VERIFIED_PAPER_EVENTS = 12/);
+  assert.match(arena, /VERIFIED_PAPER_SYMBOLS = 4/);
+  assert.match(arena, /VERIFIED_PROFIT_FACTOR = 1\.1/);
   assert.match(arena, /PAPER_DEMOTION_LOSSES = 2/);
   assert.match(arena, /ARENA_FRICTION_RATE = 0\.0018/);
-  assert.match(arena, /recentShadow\.length > 400/);
-  assert.match(arena, /recentPaper\.length > 400/);
-  assert.match(arena, /seenSignals\.length > 1_000/);
+  assert.match(arena, /ARENA_MAX_OPEN = 240/);
+  assert.match(arena, /ARENA_HISTORY_LIMIT = 240/);
+  assert.match(arena, /seenSignals\.length > 2_000/);
+  assert.match(regime, /MARKET_REGIME_MIN_SAMPLES = 18/);
+  assert.match(regime, /selectDiverseMarketPool/);
   assert.doesNotMatch(arena, /fetch\(|DB\.prepare|D1Database|GateLiveClient|reconcilePaper/);
   assert.match(worker, /const decision: Decision \| null = null/);
   assert.match(worker, /allowOpen: false/);
   assert.match(worker, /observeStrategyArena/);
   assert.match(worker, /advanceStrategyArena/);
   assert.match(worker, /strategyCutover \? initialStrategyArena\(\)/);
-  assert.match(page, /最近.*笔至少.*胜且净收益为正/);
+  assert.match(page, /首笔成本后盈利/);
+  assert.match(page, /verifiedEvents \?\? 12/);
   assert.match(page, /模拟.*连亏/);
   assert.match(migration, /DELETE FROM `paper_events`/);
   assert.match(migration, /DELETE FROM `paper_positions`/);

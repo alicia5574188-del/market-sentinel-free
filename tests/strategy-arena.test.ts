@@ -1,95 +1,95 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { advanceStrategyArena, ARENA_FRICTION_RATE, initialStrategyArena, observeStrategyArena,
-  PAPER_DEMOTION_LOSSES, SHADOW_PROMOTION_SAMPLE, STRATEGY_CATALOG, type ArenaObservation,
+  PAPER_DEMOTION_LOSSES, STRATEGY_CATALOG, VERIFIED_PAPER_EVENTS, type ArenaObservation,
   type StrategyArenaState } from "../lib/strategy-arena.ts";
 
-function observation(event: number, now: number): ArenaObservation {
+const strategyId = "anomaly_follow:confirm:fast";
+
+function observation(event: number, now: number, symbol = "BTC_USDT"): ArenaObservation {
   return {
     candidate: {
-      id: `BTC_USDT:${event}`,
-      symbol: "BTC_USDT",
-      side: "LONG",
-      strength: 70,
-      moveRate: 0.01,
-      movementMultiple: 4,
-      volume24hUsd: 1_000_000_000,
-      confirmations: 3,
-      firstSeenAt: now - 20_000,
-      observedAt: now,
-      kind: "PRICE_SHOCK",
-      openInterestChangeRate: 0,
-      referencePrice: 100,
+      id: `${symbol}:ANOMALY:${event}`, symbol, channel: "ANOMALY", regime: "EXPANSION", side: "LONG", score: 70,
+      referencePrice: 100, moveRate: 0.01, trendRate: 0.005, trendEfficiency: 0.7, volatilityRatio: 2,
+      rangePosition: 1, volume24hUsd: 1_000_000_000, fundingRate: 0, openInterestChangeRate: 0,
+      confirmations: 3, firstSeenAt: now - 20_000, observedAt: now, anomalyKind: "PRICE_SHOCK",
     },
-    midpoint: 101,
-    alignedFlow: 0.4,
-    minuteNoiseRate: 0.003,
-    range15m: null,
-    confirmationBySide: { LONG: 0.8, SHORT: 0.1 },
-    fakeoutBySide: { LONG: 0.2, SHORT: 0.8 },
-    routes: [],
-    now,
+    midpoint: 101, alignedFlow: 0.4, minuteNoiseRate: 0.003, spreadRate: 0.0001, range15m: null,
+    confirmationBySide: { LONG: 0.8, SHORT: 0.1 }, fakeoutBySide: { LONG: 0.2, SHORT: 0.8 }, routes: [], now,
   };
 }
 
-function openImpulse(state: StrategyArenaState, event: number, now: number) {
-  return observeStrategyArena({ state, observation: observation(event, now) });
+function openSignal(state: StrategyArenaState, event: number, now: number, symbol = "BTC_USDT") {
+  return observeStrategyArena({ state, observation: observation(event, now, symbol) });
 }
 
-function closeImpulse(state: StrategyArenaState, now: number, winner: boolean) {
-  const trade = state.open["impulse_follow:BTC_USDT"];
+function closeSignal(state: StrategyArenaState, now: number, winner: boolean, symbol = "BTC_USDT") {
+  const trade = state.open[`${strategyId}:${symbol}`];
   assert.ok(trade);
-  return advanceStrategyArena({ state, quotes: { BTC_USDT: winner ? trade.targetPrice : trade.stopPrice }, now });
+  return advanceStrategyArena({ state, quotes: { [symbol]: winner ? trade.targetPrice : trade.stopPrice }, now });
 }
 
-test("catalog contains every strategy family supported by the existing market data", () => {
-  assert.equal(STRATEGY_CATALOG.length, 10);
-  assert.deepEqual(new Set(STRATEGY_CATALOG.map((item) => item.family)),
-    new Set(["MOMENTUM", "PULLBACK", "ORDER_FLOW", "STRUCTURE", "MEAN_REVERSION"]));
+test("catalog contains 12 playbooks expanded into 48 contextual strategy cells", () => {
+  assert.equal(STRATEGY_CATALOG.length, 48);
+  assert.equal(new Set(STRATEGY_CATALOG.map((item) => item.id.split(":")[0])).size, 12);
+  assert.deepEqual(new Set(STRATEGY_CATALOG.map((item) => item.family)), new Set(["TREND", "RANGE", "COMPRESSION", "EVENT"]));
 });
 
-test("a single lucky shadow win cannot promote a strategy", () => {
+test("the first after-cost shadow win promotes only to trial simulation", () => {
   let state = initialStrategyArena(1);
-  state = openImpulse(state, 1, 10_000);
-  state = closeImpulse(state, 20_000, true);
-  assert.equal(state.strategies.impulse_follow.lane, "SHADOW");
-  assert.equal(state.strategies.impulse_follow.shadowResolved, 1);
-  assert.ok(state.strategies.impulse_follow.shadowNetReturnRate > 0);
+  state = openSignal(state, 1, 10_000);
+  state = closeSignal(state, 20_000, true);
+  assert.equal(state.strategies[strategyId].lane, "TRIAL");
+  assert.equal(state.strategies[strategyId].shadowResolved, 1);
+  assert.equal(state.transitions.at(-1)?.to, "TRIAL");
 });
 
-test("six profitable after-cost observations promote, then two paper losses demote", () => {
+test("two consecutive trial losses demote and a new shadow win reactivates", () => {
   let state = initialStrategyArena(1);
-  for (let index = 0; index < SHADOW_PROMOTION_SAMPLE; index += 1) {
-    state = openImpulse(state, index, 10_000 + index * 30_000);
-    state = closeImpulse(state, 20_000 + index * 30_000, true);
-  }
-  assert.equal(state.strategies.impulse_follow.lane, "PAPER");
-  assert.equal(state.strategies.impulse_follow.shadowWins, SHADOW_PROMOTION_SAMPLE);
-  assert.equal(state.transitions.at(-1)?.to, "PAPER");
-
+  state = closeSignal(openSignal(state, 1, 10_000), 20_000, true);
   for (let index = 0; index < PAPER_DEMOTION_LOSSES; index += 1) {
-    state = openImpulse(state, 100 + index, 300_000 + index * 30_000);
-    assert.equal(state.open["impulse_follow:BTC_USDT"].lane, "PAPER");
-    state = closeImpulse(state, 310_000 + index * 30_000, false);
+    state = openSignal(state, 10 + index, 30_000 + index * 30_000);
+    assert.equal(state.open[`${strategyId}:BTC_USDT`].lane, "TRIAL");
+    state = closeSignal(state, 40_000 + index * 30_000, false);
   }
-  const score = state.strategies.impulse_follow;
-  assert.equal(score.lane, "SHADOW");
-  assert.equal(score.paperResolved, 2);
-  assert.equal(score.transitions, 2);
-  assert.equal(state.transitions.at(-1)?.reason, "模拟连续亏损2笔");
-  assert.equal(state.recentPaper.filter((item) => item.strategyId === "impulse_follow").length, 2);
-  assert.ok(score.paperEquity < 1_000);
+  assert.equal(state.strategies[strategyId].lane, "SHADOW");
+  assert.equal(state.strategies[strategyId].paperResolved, 2);
+  state = closeSignal(openSignal(state, 20, 100_000), 110_000, true);
+  assert.equal(state.strategies[strategyId].lane, "TRIAL");
 });
 
-test("one event can open each eligible strategy only once and costs are included", () => {
+test("verified simulation requires twelve distinct events across four symbols", () => {
   let state = initialStrategyArena(1);
-  state = openImpulse(state, 1, 10_000);
-  const count = Object.keys(state.open).length;
-  state = openImpulse(state, 1, 12_000);
-  assert.equal(Object.keys(state.open).length, count);
-  const trade = state.open["impulse_follow:BTC_USDT"];
+  state = closeSignal(openSignal(state, 1, 10_000), 20_000, true);
+  for (let index = 0; index < VERIFIED_PAPER_EVENTS; index += 1) {
+    const symbol = [`BTC_USDT`, `ETH_USDT`, `SOL_USDT`, `SUI_USDT`][index % 4];
+    state = openSignal(state, 100 + index, 30_000 + index * 30_000, symbol);
+    state = closeSignal(state, 40_000 + index * 30_000, true, symbol);
+  }
+  assert.equal(state.strategies[strategyId].lane, "VERIFIED");
+});
+
+test("isolated strategy simulation and non-duplicating portfolio simulation stay separate", () => {
+  let state = initialStrategyArena(1);
+  state = closeSignal(openSignal(state, 1, 10_000), 20_000, true);
+  state = openSignal(state, 2, 30_000);
+  assert.ok(Object.values(state.open).some((trade) => trade.lane === "TRIAL"));
+  assert.equal(Object.keys(state.portfolioOpen).length, 1);
+  const count = Object.keys(state.portfolioOpen).length;
+  state = openSignal(state, 2, 32_000);
+  assert.equal(Object.keys(state.portfolioOpen).length, count);
+});
+
+test("records freeze regime context, path excursion and conservative modeled cost", () => {
+  let state = initialStrategyArena(1);
+  state = openSignal(state, 1, 10_000);
+  const trade = state.open[`${strategyId}:BTC_USDT`];
+  assert.equal(trade.context.channel, "ANOMALY");
+  assert.equal(trade.context.regime, "EXPANSION");
+  assert.ok(trade.context.modeledCostRate >= ARENA_FRICTION_RATE);
   state = advanceStrategyArena({ state, quotes: { BTC_USDT: trade.targetPrice }, now: 20_000 });
-  const closed = state.recentShadow.find((item) => item.strategyId === "impulse_follow");
+  const closed = state.recentShadow.find((item) => item.strategyId === strategyId);
   assert.ok(closed);
+  assert.ok(closed.maxFavorableRate > 0);
   assert.equal(Number((closed.grossReturnRate! - closed.netReturnRate!).toFixed(8)), ARENA_FRICTION_RATE);
 });

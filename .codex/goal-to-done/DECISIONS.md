@@ -1,5 +1,13 @@
 # Decisions
 
+## 2026-09-09 — Market state precedes strategy selection
+
+- Keep anomaly detection as one expansion/event candidate channel, not the prerequisite for every strategy. Add trend, range and compression candidate channels from bounded streaming features computed from the existing bulk ticker response.
+- Preserve exactly three two-second deep-analysis slots and the existing request/write budgets. Reserve diversity across candidate channels, rotate observation-only symbols, and never let SHADOW trades lock a slot; only the non-duplicating portfolio simulation or protected legacy/LIVE exposure may lock one.
+- Define forty-eight cells as twelve explainable playbooks times two entry styles times two exit profiles. A first after-cost SHADOW win earns only a trial simulation label; two consecutive trial losses demote it. Verified simulation requires distinct events/symbols and positive after-cost quality so one coin or duplicated event cannot qualify a strategy.
+- Run isolated strategy simulations for comparison and a separate portfolio simulation that takes at most one strategy per symbol/event. Do not add duplicated isolated results together as account profit.
+- Freeze regime, candidate channel, entry style, exit profile, cost, flow, structure, volatility and trend context on every observation. Reset incompatible V1 arena statistics at cutover, preserve credentials and reconciliation state, and keep LIVE forced OFF.
+
 ## 2026-09-09 — Win/loss attribution must freeze features and candidates before validation
 
 - Keep the paired reaction lab unchanged as the sample generator. The outcome researcher is a separate pure module that reads completed shadow routes and has no exchange, D1, PAPER, LIVE or automatic strategy-mutation authority.

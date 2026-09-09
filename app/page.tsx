@@ -21,21 +21,42 @@ type LiveEntrySkip = { planId: string; symbol: string; code: "MIN_CONTRACT" | "M
 type LiveRuntime = { requestedEnabled: boolean; operational: boolean; changedAt: number | null; lastSyncAt: number | null; lastError: string | null; equity: number | null; available: number | null; credentialConfigured: boolean; entries: Record<string, LiveEntry | null>; positions: Record<string, LivePosition | null>; entrySkips: Record<string, LiveEntrySkip | null> };
 type RadarCandidate = { id: string; symbol: string; side: Side; strength: number; moveRate: number; movementMultiple: number; volume24hUsd: number; confirmations: number; firstSeenAt: number; observedAt: number; kind: "NEW_MONEY" | "SQUEEZE" | "LIQUIDATION" | "PRICE_SHOCK" };
 type EntryAssessment = { accepted: boolean; blocker: string | null; alignedFlow: number; spreadBps: number; extensionRate: number; costShare: number; conservativeWinRate: number; expectedReturnRate: number; qualityScore: number; qualityRequired: number; qualityEvidence: string[] };
-type StrategyFamily = "MOMENTUM" | "PULLBACK" | "ORDER_FLOW" | "STRUCTURE" | "MEAN_REVERSION";
-type StrategyLane = "SHADOW" | "PAPER";
-type ArenaTrade = { id: string; strategyId: string; strategyName: string; family: StrategyFamily; lane: StrategyLane; eventId: string;
+type StrategyFamily = "TREND" | "RANGE" | "COMPRESSION" | "EVENT";
+type StrategyLane = "SHADOW" | "TRIAL" | "VERIFIED";
+type TradeLane = StrategyLane | "PORTFOLIO";
+type CandidateChannel = "TREND" | "RANGE" | "COMPRESSION" | "ANOMALY";
+type RegimeKind = "TREND" | "RANGE" | "COMPRESSION" | "EXPANSION" | "UNCERTAIN";
+type EntryStyle = "CONFIRM" | "RETEST";
+type ExitProfile = "FAST" | "STRUCTURE";
+type ArenaTradeContext = { channel: CandidateChannel; regime: RegimeKind; anomalyKind: RadarCandidate["kind"] | null;
+  entryStyle: EntryStyle; exitProfile: ExitProfile; candidateScore: number; trendRate: number; trendEfficiency: number;
+  volatilityRatio: number; rangePosition: number; openInterestChangeRate: number; volume24hUsd: number; fundingRate: number;
+  alignedFlow: number; confirmation: number;
+  fakeoutRisk: number; rangeId: string | null; modeledCostRate: number };
+type ArenaTrade = { id: string; strategyId: string; strategyName: string; family: StrategyFamily; lane: TradeLane; eventId: string;
   symbol: string; side: Side; status: "OPEN" | "CLOSED"; openedAt: number; closedAt: number | null; entryPrice: number;
   stopPrice: number; targetPrice: number; exitPrice: number | null; outcome: "TARGET" | "STOP" | "TIMEOUT" | null;
-  grossReturnRate: number | null; netReturnRate: number | null; netPnl: number | null; reason: string };
-type StrategyScore = { id: string; name: string; family: StrategyFamily; description: string; lane: StrategyLane;
+  grossReturnRate: number | null; netReturnRate: number | null; netPnl: number | null; notional: number;
+  maxFavorableRate: number; maxAdverseRate: number; lastPrice: number; selectedForPortfolio: boolean; reason: string; context: ArenaTradeContext };
+type StrategyScore = { id: string; name: string; family: StrategyFamily; channel: CandidateChannel; description: string;
+  entryStyle: EntryStyle; exitProfile: ExitProfile; lane: StrategyLane;
   shadowResolved: number; shadowWins: number; shadowNetReturnRate: number; paperResolved: number; paperWins: number;
   paperNetReturnRate: number; paperEquity: number; consecutivePaperLosses: number; stageResults: number[];
+  stageEvents: string[]; stageSymbols: string[];
   transitions: number; lastTransitionAt: number | null };
 type StrategyTransition = { id: string; strategyId: string; strategyName: string; from: StrategyLane; to: StrategyLane; at: number; reason: string };
-type StrategyArena = { version: 1; startedAt: number; catalogSize: number; shadowCount: number; paperCount: number;
-  openShadow: ArenaTrade[]; openPaper: ArenaTrade[]; strategies: StrategyScore[]; recentShadow: ArenaTrade[];
-  recentPaper: ArenaTrade[]; transitions: StrategyTransition[]; rules: { promotionSample: number; promotionWins: number;
-    demotionLosses: number; frictionRate: number; maxHoldMs: number } };
+type StrategyArena = { version: 2; startedAt: number; catalogSize: number; playbookCount: number; shadowCount: number;
+  trialCount: number; verifiedCount: number; paperCount: number; openShadow: ArenaTrade[]; openPaper: ArenaTrade[];
+  portfolioOpen: ArenaTrade[]; portfolioEquity: number; strategies: StrategyScore[]; recentShadow: ArenaTrade[];
+  recentPaper: ArenaTrade[]; recentPortfolio: ArenaTrade[]; transitions: StrategyTransition[];
+  rules: { trialPromotionWins: number; verifiedEvents: number; verifiedSymbols: number; verifiedProfitFactor: number;
+    demotionLosses: number; frictionFloorRate: number; maxHoldMs: number } };
+type RegimeCandidate = { id: string; symbol: string; channel: CandidateChannel; regime: RegimeKind; side: Side; score: number;
+  referencePrice: number; moveRate: number; trendRate: number; trendEfficiency: number; volatilityRatio: number;
+  rangePosition: number; volume24hUsd: number; openInterestChangeRate: number; confirmations: number; firstSeenAt: number;
+  observedAt: number; anomalyKind: RadarCandidate["kind"] | null };
+type MarketRegimes = { version: 1; lastUpdatedAt: number | null; tracked: number; warmed: number;
+  counts: Record<RegimeKind, number>; candidates: RegimeCandidate[] };
 type Runtime = {
   version: string; mode: "PAPER"; state: string; stale: boolean; generatedAt: number; lastSuccessAt: number | null; lastError: string | null; symbols: string[]; equity: number; dailyStartEquity?: number;
   decisions: Record<string, Decision | null>; routes: Record<string, LiquidityRoute[]>; plans: Record<string, Plan | null>; positions: Record<string, Position | null>; authorityReady: boolean;
@@ -45,6 +66,7 @@ type Runtime = {
   limits: { maxOpenPositions: number; warmupSnapshots?: number; loopMs?: number; radarMs?: number; scannedMarkets?: number; maxAncillaryConcurrency?: number };
   liveMode: { requestedEnabled: boolean; operational: boolean };
   radar?: { scanned: number; lastScanAt: number | null; candidates: RadarCandidate[] };
+  marketRegimes?: MarketRegimes;
   strategyArena?: StrategyArena;
   live?: LiveRuntime;
 };
@@ -62,7 +84,9 @@ const stateText: Record<string, string> = { BREAKOUT: "突破", REVERSAL: "反�
 const num = (value: number | null | undefined, digits = 3) => Number.isFinite(value) ? Number(value).toLocaleString("zh-CN", { maximumFractionDigits: digits }) : "—";
 const signed = (value: number, digits = 2) => `${value >= 0 ? "+" : ""}${num(value, digits)}`;
 const time = (value: number | null | undefined) => value ? new Date(value).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : "—";
-const impulseText = (side: Side) => side === "LONG" ? "向上异动" : "向下异动";
+const regimeLabel = (kind: RegimeKind) => ({ TREND: "趋势", RANGE: "震荡", COMPRESSION: "压缩", EXPANSION: "扩张/异动", UNCERTAIN: "不明确" })[kind];
+const channelLabel = (channel: CandidateChannel) => ({ TREND: "平稳趋势", RANGE: "区间边缘", COMPRESSION: "波动压缩", ANOMALY: "异动事件" })[channel];
+const laneLabel = (lane: StrategyLane | "PORTFOLIO") => ({ SHADOW: "影子候选", TRIAL: "试用模拟", VERIFIED: "稳定模拟", PORTFOLIO: "组合模拟" })[lane];
 const displayLeverage = (notional: number, equity: number) => [1, 2, 3, 5, 10, 20, 30, 40, 50].find((value) => notional / value <= equity * .12) ?? 50;
 const friendlyLiveError = (value: string | null | undefined) => !value ? null
   : value.includes("AUTO_INVALID_PARAM_TRIGGER_EXPIRATION")
@@ -148,62 +172,78 @@ export default function Home() {
   const openShadow = arena?.openShadow ?? [];
   const openPaper = arena?.openPaper ?? [];
   const paperHistory = arena?.recentPaper ?? [];
+  const portfolioOpen = arena?.portfolioOpen ?? [];
+  const portfolioHistory = arena?.recentPortfolio ?? [];
+  const regimes = runtime?.marketRegimes;
+  const strategyGroups = Object.values((arena?.strategies ?? []).reduce<Record<string, StrategyScore[]>>((groups, strategy) => {
+    const key = strategy.id.split(":")[0];
+    (groups[key] ??= []).push(strategy);
+    return groups;
+  }, {}));
   const feedDiagnostics = runtime?.symbols.map((symbol) => runtime.feedFailures?.[symbol]).filter(Boolean) ?? [];
   const activeFeedSuspensions = feedDiagnostics.filter((feed) => feed?.suspendedSince != null).length;
   const totalFeedFailures = feedDiagnostics.reduce((sum, feed) => sum + (feed?.totalFailures ?? 0), 0);
   const totalFeedRecoveries = feedDiagnostics.reduce((sum, feed) => sum + (feed?.recoveries ?? 0), 0);
   const maxFeedLag = feedDiagnostics.reduce((max, feed) => Math.max(max, feed?.maxObservedLagMs ?? 0), 0);
-  const headline = !authorityOperational ? "行情正在恢复，策略池暂停" : openPaper.length
-    ? `${arena?.paperCount ?? 0} 个策略正在模拟验证` : openShadow.length ? `${openShadow.length} 个影子候选正在观察` : "扫描行情，等待策略触发";
+  const headline = !authorityOperational ? "行情正在恢复，策略池暂停" : portfolioOpen.length
+    ? `${portfolioOpen.length} 笔可执行组合模拟正在运行` : openPaper.length
+      ? `${arena?.paperCount ?? 0} 个策略正在试用或稳定模拟` : openShadow.length ? `${openShadow.length} 个影子候选正在观察` : "识别全市场状态，等待策略触发";
 
   return <main>
     <header className="topbar">
-      <div className="brand"><span className="brand-mark">异</span><div><p>资金异动雷达</p><small>Gate 全市场短线系统</small></div></div>
+      <div className="brand"><span className="brand-mark">态</span><div><p>市场状态竞技场</p><small>Gate 全市场短线系统</small></div></div>
       <div role="status" className={`health ${healthy ? "" : "bad"}`}><span />{healthy ? "后台运行中" : error ? "页面连接中断" : runtime?.stale ? "行情重连中" : runtime ? stateText[runtime.state] ?? runtime.state : "正在连接"}</div>
     </header>
 
     {tab === "brain" && <>
-      <section className="brain-hero"><div><p className="eyebrow">策略竞技场 V1</p><h1>{headline}</h1><p className="hero-detail">现有数据完整支持 {arena?.catalogSize ?? 10} 个策略 · 影子候选先扣除 0.18% 成本验证 · LIVE 保持关闭</p></div><div className="decision-badge"><small>策略总数</small><strong>{arena?.catalogSize ?? 10}</strong><span>五类方法</span></div></section>
+      <section className="brain-hero"><div><p className="eyebrow">行情状态策略竞技场 V2</p><h1>{headline}</h1><p className="hero-detail">异动只是四条候选通道之一 · {arena?.playbookCount ?? 12} 套打法扩展为 {arena?.catalogSize ?? 48} 个策略单元 · LIVE 保持关闭</p></div><div className="decision-badge"><small>策略单元</small><strong>{arena?.catalogSize ?? 48}</strong><span>12套打法</span></div></section>
 
       <section className="summary four">
-        <article><small>影子候选策略</small><strong>{arena?.shadowCount ?? 10}</strong><p>{openShadow.length} 笔影子观察中</p></article>
-        <article><small>模拟验证策略</small><strong>{arena?.paperCount ?? 0}</strong><p>{openPaper.length} 笔独立模拟中</p></article>
-        <article><small>晋级门槛</small><strong>{arena ? `${arena.rules.promotionWins}/${arena.rules.promotionSample}` : "4/6"}</strong><p>短窗口成本后净收益必须为正</p></article>
-        <article><small>降级规则</small><strong>{arena?.rules.demotionLosses ?? 2} 连亏</strong><p>或最近 6 笔成本后净收益转负</p></article>
+        <article><small>全市场状态</small><strong>{regimes?.warmed ?? 0}/{regimes?.tracked ?? runtime?.limits.scannedMarkets ?? 0}</strong><p>已完成状态预热 / 正在跟踪</p></article>
+        <article><small>影子候选</small><strong>{arena?.shadowCount ?? 48}</strong><p>{openShadow.length} 笔影子观察中</p></article>
+        <article><small>试用 / 稳定模拟</small><strong>{arena?.trialCount ?? 0} / {arena?.verifiedCount ?? 0}</strong><p>{openPaper.length} 笔独立策略模拟中</p></article>
+        <article><small>可执行组合</small><strong>{num(arena?.portfolioEquity ?? 1_000, 2)} U</strong><p>{portfolioOpen.length} 笔，不重复计算同一机会</p></article>
       </section>
       {(!responseFresh || error) && runtime && <p className="notice">手机页面更新延迟，下面保留最近一次后台状态；服务器仍独立运行，不会因此停止判断或开模拟单。</p>}{runtime?.lastError && <p className="notice">{runtime.lastError.startsWith("D1") ? `历史镜像稍后重试，不影响行情判断和开仓：${runtime.lastError}` : `系统正在自动恢复：${runtime.lastError}`}</p>}
     </>}
 
-    <nav className="tabs">{([['brain', '策略池'], ['orders', `模拟 ${openPaper.length || ''}`], ['live', `实盘 ${openLivePositions.length + openLiveEntries.length || ''}`], ['history', '交易记录'], ['settings', '设置']] as const).map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => selectTab(key)}>{label}</button>)}</nav>
+    <nav className="tabs">{([['brain', '市场状态'], ['orders', `模拟 ${portfolioOpen.length || openPaper.length || ''}`], ['live', `实盘 ${openLivePositions.length + openLiveEntries.length || ''}`], ['history', '交易记录'], ['settings', '设置']] as const).map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => selectTab(key)}>{label}</button>)}</nav>
 
     <section className="radar-board" hidden={tab !== "brain"}>
-      <div className="radar-board-head"><div><small>事件触发器</small><b>异动只负责选样本，不再直接决定交易方向</b></div><span>{time(runtime?.radar?.lastScanAt)}</span></div>
-      <div className="radar-candidates">{runtime?.radar?.candidates.slice(0, 6).map((item) => <article key={item.id}>
-        <div><b>{item.symbol.replace("_", "/")}</b><small>{item.kind === "NEW_MONEY" ? "新增资金" : item.kind === "SQUEEZE" ? "空头挤压" : item.kind === "LIQUIDATION" ? "多头出清" : "价格异动"}</small></div>
-        <strong className={item.side === "LONG" ? "positive" : "negative"}>{impulseText(item.side)}</strong>
-        <span>强度 {num(item.strength, 0)} · {item.confirmations}轮 · 同时交给全部适用策略判断</span>
-      </article>)}{!runtime?.radar?.candidates.length && <p>正在扫描所有 Gate USDT 永续合约；出现样本后由所有数据条件满足的策略独立判断。</p>}</div>
+      <div className="radar-board-head"><div><small>全市场状态引擎</small><b>10秒轻扫描全市场，3个位置进行2秒盘口与结构验证</b></div><span>{time(regimes?.lastUpdatedAt)}</span></div>
+      <div className="regime-strip">{(["TREND", "RANGE", "COMPRESSION", "EXPANSION", "UNCERTAIN"] as RegimeKind[]).map((kind) => <article key={kind}><small>{regimeLabel(kind)}</small><strong>{regimes?.counts[kind] ?? 0}</strong></article>)}</div>
+      <div className="radar-candidates">{regimes?.candidates.slice(0, 9).map((item) => <article key={`${item.id}:${item.channel}`}>
+        <div><b>{item.symbol.replace("_", "/")}</b><small>{channelLabel(item.channel)}</small></div>
+        <strong className={item.side === "LONG" ? "positive" : "negative"}>{item.side === "LONG" ? "偏多" : "偏空"}</strong>
+        <span>{regimeLabel(item.regime)} · 评分 {num(item.score, 0)} · {item.confirmations}轮</span>
+      </article>)}{!regimes?.candidates.length && <p>正在积累全市场状态基线；预热完成后会同时产生趋势、震荡、压缩和异动候选。</p>}</div>
     </section>
 
-    <section className="strategy-grid" hidden={tab !== "brain"}>{arena?.strategies.map((strategy) => <StrategyCard key={strategy.id} strategy={strategy} rules={arena.rules} />) ?? <div className="empty">正在读取策略池…</div>}</section>
+    <section className="playbook-list" hidden={tab !== "brain"}>{strategyGroups.length ? strategyGroups.map((strategies) => <PlaybookGroup key={strategies[0].id.split(":")[0]} strategies={strategies} rules={arena!.rules} />) : <div className="empty">正在读取48个策略单元…</div>}</section>
 
     <section className="shadow-log" hidden={tab !== "brain"}><div className="section-heading"><div><h2>影子候选记录</h2><p>每笔都按真实后续价格结算并扣除完整成本；这是晋级判断的原始记录。</p></div><span>{arena?.recentShadow.length ?? 0} 笔</span></div>{!arena?.recentShadow.length ? <div className="empty"><b>等待首批影子结果</b><p>策略满足各自条件后会在这里留下记录。</p></div> : <div className="history-table">{arena.recentShadow.slice(0, 30).map((trade) => <ArenaTradeRecord key={trade.id} trade={trade} />)}</div>}</section>
-    {!!arena?.transitions.length && <section className="shadow-log" hidden={tab !== "brain"}><div className="section-heading"><div><h2>策略升降级记录</h2><p>每次晋级或退回影子候选都保留原因。</p></div><span>{arena.transitions.length} 次</span></div><div className="transition-list">{arena.transitions.slice(0, 20).map((item) => <article key={item.id}><div><b>{item.strategyName}</b><small>{time(item.at)}</small></div><strong>{item.from === "SHADOW" ? "影子候选 → 模拟验证" : "模拟验证 → 影子候选"}</strong><p>{item.reason}</p></article>)}</div></section>}
+    {!!arena?.transitions.length && <section className="shadow-log" hidden={tab !== "brain"}><div className="section-heading"><div><h2>策略升降级记录</h2><p>首次净盈利进入试用模拟，连续亏损2笔退回；稳定模拟另需跨事件和跨币验证。</p></div><span>{arena.transitions.length} 次</span></div><div className="transition-list">{arena.transitions.slice(0, 20).map((item) => <article key={item.id}><div><b>{item.strategyName}</b><small>{time(item.at)}</small></div><strong>{laneLabel(item.from)} → {laneLabel(item.to)}</strong><p>{item.reason}</p></article>)}</div></section>}
 
-    <section className="panel-list" hidden={tab !== "orders"}>{!openPaper.length && <div className="empty"><b>当前没有模拟订单</b><p>影子策略达到晋级门槛后，下一次信号才进入独立模拟账本。</p></div>}{openPaper.map((trade) => <ArenaOpenCard key={trade.id} trade={trade} mark={runtime?.evidence[trade.symbol]?.midpoint} />)}</section>
+    <section className="panel-list" hidden={tab !== "orders"}>
+      {!!portfolioOpen.length && <h2 className="order-group-title">可执行组合模拟 <span>{num(arena?.portfolioEquity, 2)} U</span></h2>}
+      {portfolioOpen.map((trade) => <ArenaOpenCard key={trade.id} trade={trade} mark={runtime?.evidence[trade.symbol]?.midpoint} />)}
+      {!!openPaper.length && <h2 className="order-group-title">独立策略模拟 <span>{openPaper.length} 笔</span></h2>}
+      {openPaper.map((trade) => <ArenaOpenCard key={trade.id} trade={trade} mark={runtime?.evidence[trade.symbol]?.midpoint} />)}
+      {!portfolioOpen.length && !openPaper.length && <div className="empty"><b>当前没有模拟订单</b><p>任一影子单首次实现成本后盈利，该策略单元的下一个信号就进入试用模拟。</p></div>}
+    </section>
 
     <div hidden={tab !== "live"}><LiveCenter auth={auth} runtime={runtime} live={live} liveEnabled={liveEnabled} liveBusy={liveBusy} liveActionError={liveActionError} positions={openLivePositions} entries={openLiveEntries} skips={liveEntrySkips} onLogin={() => setShowLogin(true)} onToggle={liveControl} onCleanup={() => void setLiveMode(false)} /></div>
 
-    <section className="history-panel" hidden={tab !== "history"}><div className="section-heading"><div><h2>模拟交易记录</h2><p>这里只保留新策略池晋级后的模拟成交；旧版本记录已经清空。</p></div><span>{paperHistory.length} 笔已结束</span></div>{!paperHistory.length ? <div className="empty"><b>还没有模拟交易记录</b><p>策略晋级并完成第一笔模拟交易后会自动出现。</p></div> : <div className="history-table">{paperHistory.map((trade) => <ArenaTradeRecord key={trade.id} trade={trade} />)}</div>}</section>
+    <section className="history-panel" hidden={tab !== "history"}><div className="section-heading"><div><h2>模拟交易记录</h2><p>组合模拟不重复同一币同一机会；独立模拟用于比较策略，不相加冒充账户收益。</p></div><span>{portfolioHistory.length} 组合 · {paperHistory.length} 独立</span></div>{!portfolioHistory.length && !paperHistory.length ? <div className="empty"><b>还没有模拟交易记录</b><p>策略单元进入试用模拟并完成交易后会自动出现。</p></div> : <><div className="history-table">{portfolioHistory.map((trade) => <ArenaTradeRecord key={trade.id} trade={trade} />)}</div><div className="history-table secondary-history">{paperHistory.map((trade) => <ArenaTradeRecord key={trade.id} trade={trade} />)}</div></>}</section>
 
     <section className="settings-panel" hidden={tab !== "settings"}>
       <button className="setting-row" type="button" onClick={() => auth.authenticated ? void fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(() => { setAuth({ ...auth, authenticated: false }); setRuntime(runtime ? { ...runtime, live: undefined } : runtime); }) : setShowLogin(true)}><div><b>所有者账户</b><p>{auth.authenticated ? "安全登录有效30天；每次打开页面自动续期。" : "登录后才可以查看真实账户并操作实盘开关。"}</p></div><span className={`setting-value ${auth.authenticated ? "online" : "locked"}`}>{auth.authenticated ? "owner · 退出 ›" : "登录 ›"}</span></button>
-      <button className="setting-row" type="button" disabled={liveBusy || !liveEnabled} onClick={liveControl}><div><b>实盘交易开关</b><p>{liveEnabled ? "建议立即关闭；策略竞技场不会产生新实盘仓位。" : "保持关闭。策略池当前只运行影子和独立模拟验证。"}</p></div><span className="setting-value locked">{liveBusy ? "处理中…" : liveEnabled ? "关闭 ›" : "研究锁定"}</span></button>
-      {auth.authenticated && <><Setting title="Gate 实盘账户" detail={`可用 ${num(live?.available, 2)} U · ${openLivePositions.length} 个真实持仓`} value={live?.equity != null ? `${num(live.equity, 2)} U` : "连接中"} tone={live?.credentialConfigured ? "online" : "locked"}/><Setting title="实盘执行状态" detail={friendlyLiveError(live?.lastError) || "策略竞技场没有实盘下单权限；既有真实仓位仍保留保护和对账。"} value={live?.operational ? "仅保护旧仓" : liveEnabled ? "无新单权限" : "已关闭"} tone="locked"/></>}
-      <Setting title="策略轮换" detail={`影子最近 ${arena?.rules.promotionSample ?? 6} 笔至少 ${arena?.rules.promotionWins ?? 4} 胜且成本后为正才晋级；模拟连续 ${arena?.rules.demotionLosses ?? 2} 亏立即退回。`} value="自动" tone="online"/>
-      <Setting title="独立记账" detail="每个策略以独立 1,000 U 账本验证，同一行情下互不挤占、互不抵消，避免组合掩盖单策略真实效果。" value="隔离"/>
+      <button className="setting-row" type="button" disabled={liveBusy || !liveEnabled} onClick={liveControl}><div><b>实盘交易开关</b><p>{liveEnabled ? "建议立即关闭；行情状态竞技场不会产生新实盘仓位。" : "保持关闭。策略池当前只运行影子和模拟验证。"}</p></div><span className="setting-value locked">{liveBusy ? "处理中…" : liveEnabled ? "关闭 ›" : "研究锁定"}</span></button>
+      {auth.authenticated && <><Setting title="Gate 实盘账户" detail={`可用 ${num(live?.available, 2)} U · ${openLivePositions.length} 个真实持仓`} value={live?.equity != null ? `${num(live.equity, 2)} U` : "连接中"} tone={live?.credentialConfigured ? "online" : "locked"}/><Setting title="实盘执行状态" detail={friendlyLiveError(live?.lastError) || "行情状态竞技场没有实盘下单权限；既有真实仓位仍保留保护和对账。"} value={live?.operational ? "仅保护旧仓" : liveEnabled ? "无新单权限" : "已关闭"} tone="locked"/></>}
+      <Setting title="策略轮换" detail={`首笔成本后盈利进入试用模拟；连续 ${arena?.rules.demotionLosses ?? 2} 亏退回影子。稳定模拟需要 ${arena?.rules.verifiedEvents ?? 12} 个独立事件和 ${arena?.rules.verifiedSymbols ?? 4} 个币。`} value="自动" tone="online"/>
+      <Setting title="双模拟账本" detail="48个单元各自独立验证；可执行组合对同一币同一机会只选一个策略，防止重复利润。" value="隔离 + 组合"/>
       <Setting title="数据容错" detail={`累计短时失败 ${totalFeedFailures} 次 · 自动恢复 ${totalFeedRecoveries} 次 · 最大观测延迟 ${num(maxFeedLag / 1_000, 2)} 秒`} value={activeFeedSuspensions ? `${activeFeedSuspensions}币冻结` : "正常"} tone={activeFeedSuspensions ? "locked" : "online"}/>
-      <Setting title="数据覆盖" detail={`约每10秒扫描 ${runtime?.radar?.scanned ?? runtime?.limits.scannedMarkets ?? 0} 个可交易合约；只让最强3个候选进入2秒盘口与分批结构/资金流确认。全市场不是逐笔全量订阅。`} value="分层实时" tone="online"/>
+      <Setting title="数据覆盖" detail={`约每10秒扫描 ${regimes?.tracked ?? runtime?.limits.scannedMarkets ?? 0} 个合约并识别行情状态；趋势、震荡/压缩、异动分散使用3个两秒深度位置。影子持仓不锁位置。`} value="现有预算内" tone="online"/>
       <Setting title="页面数据" detail="交易后台按2秒循环运行；手机页面每15秒读取一次摘要。策略记录随权威检查点保存，不增加行情请求。" value="轻量" tone="online"/>
       <Setting title="系统状态" detail="交易健康只由后台权威、行情新鲜度和各币恢复状态决定；历史镜像延迟不再误报故障。" value={healthy ? "正常" : "恢复中"} tone={healthy ? "online" : "locked"}/>
       <p className="last-update">最近后台成功：{time(runtime?.lastSuccessAt)}{live?.lastSyncAt ? ` · 实盘核对：${time(live.lastSyncAt)}` : ""}</p>
@@ -296,13 +336,13 @@ function LiveCenter({ auth, runtime, live, liveEnabled, liveBusy, liveActionErro
   return <section className="live-center">
     <div className="live-subnav">{([['account', '实盘账户'], ['orders', `实盘订单 ${positions.length + entries.length || ''}`], ['api', 'API 管理']] as const).map(([key, label]) => <button type="button" key={key} className={view === key ? "active" : ""} onClick={() => selectView(key)}>{label}</button>)}</div>
     {view === "account" && <>
-      <section className="live-status-card"><div><small>Gate 实盘状态</small><h2>{liveEnabled ? "等待关闭旧实盘状态" : "实盘已关闭 · 研究锁定"}</h2><p>{readableLiveError || (liveEnabled ? "策略竞技场不会开新仓；请关闭实盘状态" : "账户功能保留，策略竞技场没有实盘权限")}</p></div><div className="live-actions"><button type="button" disabled={liveBusy || !credential?.configured || liveEnabled} className="danger-outline" onClick={onCleanup}>撤销系统遗留挂单</button><button type="button" disabled={liveBusy || !credential?.configured || !liveEnabled} className="danger-action" onClick={onToggle}>{liveBusy ? "正在与 Gate 核对…" : liveEnabled ? "关闭实盘并撤单" : "研究版禁止开启"}</button></div></section>
+      <section className="live-status-card"><div><small>Gate 实盘状态</small><h2>{liveEnabled ? "等待关闭旧实盘状态" : "实盘已关闭 · 研究锁定"}</h2><p>{readableLiveError || (liveEnabled ? "行情状态竞技场不会开新仓；请关闭实盘状态" : "账户功能保留，行情状态竞技场没有实盘权限")}</p></div><div className="live-actions"><button type="button" disabled={liveBusy || !credential?.configured || liveEnabled} className="danger-outline" onClick={onCleanup}>撤销系统遗留挂单</button><button type="button" disabled={liveBusy || !credential?.configured || !liveEnabled} className="danger-action" onClick={onToggle}>{liveBusy ? "正在与 Gate 核对…" : liveEnabled ? "关闭实盘并撤单" : "研究版禁止开启"}</button></div></section>
       {liveActionError && <p className="form-error">{liveActionError}</p>}
       {!liveEnabled && <p className="cleanup-help">如果 Gate 仍显示以前由本系统创建的挂单，点“撤销系统遗留挂单”。只撤销带本系统标签的入场单，不会撤销你的手工订单。</p>}
       <section className="summary four live-summary"><article><small>真实账户权益</small><strong>{num(live?.equity, 2)} U</strong><p>{connectionText}</p></article><article><small>可用保证金</small><strong>{num(live?.available, 2)} U</strong><p>Gate 返回的可用余额</p></article><article><small>持仓浮盈亏</small><strong className={liveFloating >= 0 ? "positive" : "negative"}>{signed(liveFloating)} U</strong><p>{positions.length} 个真实持仓</p></article><article><small>已计划风险</small><strong>{num(liveRisk, 2)} U</strong><p>保证金约 {num(occupiedMargin, 2)} U · 总上限 10%</p></article></section>
       <div className="live-facts"><Setting title="API 状态" detail={credential?.configured ? `密钥 ${credential.keyHint ?? "已加密"} · ${time(credential.lastVerifiedAt)}` : "进入 API 管理保存或更换"} value={credential?.configured ? "已验证" : "未配置"} tone={credential?.configured ? "online" : "locked"}/><Setting title="最近账户核对" detail="页面关闭后后台仍按策略运行。" value={time(live?.lastSyncAt)} tone={live?.lastSyncAt ? "online" : "locked"}/></div>
     </>}
-    {view === "orders" && <section className="panel-list live-orders">{!positions.length && !entries.length && !skips.length && <div className="empty"><b>当前没有实盘订单</b><p>策略竞技场只运行影子与模拟验证，不会向 Gate 提交新订单。</p></div>}{skips.map((skip) => <article className="live-skip-card" key={`live-skip:${skip.symbol}:${skip.planId}`}><div><small>{skip.symbol.replace("_", "/")}</small><h3>旧计划未成交</h3></div><p>{skip.reason}</p><span>已停止新计划，记录仅作历史核对。</span></article>)}{positions.map((position) => { const evidence = runtime?.evidence[position.symbol]; const protection = position.stopPrice ?? position.currentStop; return <OrderCard key={`live:${position.symbol}`} symbol={position.symbol} side={position.side} label="实盘持仓" state={position.scenario} notional={position.notional} equity={live?.equity ?? INITIAL_EQUITY} mode="LIVE" leverage={position.leverage} margin={position.margin} positionView={{ entryAt: position.entryAt, entryPrice: position.entryPrice, stopPrice: protection, targetPrice: position.currentTarget, markPrice: evidence?.midpoint, markAt: evidence?.observedAt, fresh: Boolean(evidence?.fresh) }} values={[["真实进场", position.entryPrice], ["原始止损", position.initialStop], ["交易所保护位", protection], ["动态目标", position.currentTarget], ["实际计划风险", position.plannedRisk]]} />; })}{entries.map((entry) => <OrderCard key={`live:${entry.symbol}:entry`} symbol={entry.symbol} side={entry.side} label={entry.status === "ERROR" ? "异常待核对" : "旧单待清理"} state={entry.scenario} notional={entry.notional} equity={live?.equity ?? INITIAL_EQUITY} mode="LIVE" leverage={entry.leverage} margin={entry.margin} note={friendlyLiveError(entry.lastError) ?? undefined} values={[["原进场参考", entry.trigger], ["结构止损", entry.invalidation], ["动态目标", entry.target], ["实际计划风险", entry.plannedRisk]]} />)}</section>}
+    {view === "orders" && <section className="panel-list live-orders">{!positions.length && !entries.length && !skips.length && <div className="empty"><b>当前没有实盘订单</b><p>行情状态竞技场只运行影子与模拟验证，不会向 Gate 提交新订单。</p></div>}{skips.map((skip) => <article className="live-skip-card" key={`live-skip:${skip.symbol}:${skip.planId}`}><div><small>{skip.symbol.replace("_", "/")}</small><h3>旧计划未成交</h3></div><p>{skip.reason}</p><span>已停止新计划，记录仅作历史核对。</span></article>)}{positions.map((position) => { const evidence = runtime?.evidence[position.symbol]; const protection = position.stopPrice ?? position.currentStop; return <OrderCard key={`live:${position.symbol}`} symbol={position.symbol} side={position.side} label="实盘持仓" state={position.scenario} notional={position.notional} equity={live?.equity ?? INITIAL_EQUITY} mode="LIVE" leverage={position.leverage} margin={position.margin} positionView={{ entryAt: position.entryAt, entryPrice: position.entryPrice, stopPrice: protection, targetPrice: position.currentTarget, markPrice: evidence?.midpoint, markAt: evidence?.observedAt, fresh: Boolean(evidence?.fresh) }} values={[["真实进场", position.entryPrice], ["原始止损", position.initialStop], ["交易所保护位", protection], ["动态目标", position.currentTarget], ["实际计划风险", position.plannedRisk]]} />; })}{entries.map((entry) => <OrderCard key={`live:${entry.symbol}:entry`} symbol={entry.symbol} side={entry.side} label={entry.status === "ERROR" ? "异常待核对" : "旧单待清理"} state={entry.scenario} notional={entry.notional} equity={live?.equity ?? INITIAL_EQUITY} mode="LIVE" leverage={entry.leverage} margin={entry.margin} note={friendlyLiveError(entry.lastError) ?? undefined} values={[["原进场参考", entry.trigger], ["结构止损", entry.invalidation], ["动态目标", entry.target], ["实际计划风险", entry.plannedRisk]]} />)}</section>}
     {view === "api" && <section className="credential-panel"><div className="section-heading"><div><h2>Gate 实盘 API</h2><p>新 API 验证成功后会加密覆盖旧 API，页面永远不回显 Secret。</p></div><span className={credential?.configured ? "positive" : "negative"}>{credential?.configured ? "已保存" : "未保存"}</span></div><div className="credential-current"><div><small>当前 API</small><b>{credential?.keyHint ?? "尚未配置"}</b><p>{credential?.configured ? `最后验证 ${time(credential.lastVerifiedAt)} · Gate 实盘` : "填写下方两项后保存"}</p></div>{credential?.configured && <button className="danger-outline" type="button" disabled={credentialBusy || liveEnabled || positions.length > 0 || entries.length > 0} onClick={() => void deleteCredential()}>删除 API</button>}</div><form className="credential-form" onSubmit={saveCredential}><label><span>API Key</span><input value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" spellCheck={false} placeholder="填写新的 Gate API Key" /></label><label><span>API Secret</span><input type="password" value={apiSecret} onChange={(event) => setApiSecret(event.target.value)} autoComplete="new-password" spellCheck={false} placeholder="填写新的 Gate API Secret" /></label><p className="credential-help">只使用 Gate USDT 永续合约读取与交易权限；不要开启提现权限。保存 API 不会开启实盘。API 过期时直接验证并覆盖；只有 Gate 已无持仓和挂单时才允许删除。</p>{liveEnabled && <p className="form-error">请先关闭实盘开关，才可以更换或删除 API。</p>}{credentialError && <p className="form-error">{credentialError}</p>}{credentialNotice && <p className="form-success">{credentialNotice}</p>}{verification && <p className="credential-check">已核对：权益 {num(verification.equity, 2)} U · 持仓 {verification.positions} · 普通挂单 {verification.orders} · 条件单 {verification.conditionalOrders}</p>}<button className="primary-action" type="submit" disabled={credentialBusy || liveEnabled || apiKey.trim().length < 8 || apiSecret.trim().length < 8}>{credentialBusy ? "正在验证 Gate…" : credential?.configured ? "验证并更换 API" : "验证并保存 API"}</button></form></section>}
   </section>;
 }
@@ -341,23 +381,34 @@ function durationText(start: number, end: number | null) {
   return minutes < 60 ? `${minutes} 分 ${seconds % 60} 秒` : `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
 }
 
+function PlaybookGroup({ strategies, rules }: { strategies: StrategyScore[]; rules: StrategyArena["rules"] }) {
+  const sample = strategies[0];
+  const trial = strategies.filter((strategy) => strategy.lane === "TRIAL").length;
+  const verified = strategies.filter((strategy) => strategy.lane === "VERIFIED").length;
+  const shadowResolved = strategies.reduce((total, strategy) => total + strategy.shadowResolved, 0);
+  const paperResolved = strategies.reduce((total, strategy) => total + strategy.paperResolved, 0);
+  const baseName = sample.name.split(" · ")[0];
+  return <details className="playbook-group" open={trial + verified > 0}><summary><div><small>{channelLabel(sample.channel)} · 4个策略单元</small><h3>{baseName}</h3><p>{sample.description}</p></div><div className="playbook-counts"><span>{shadowResolved} 影子</span><b>{trial} 试用 · {verified} 稳定</b><em>{paperResolved} 模拟结果</em></div></summary><div className="strategy-grid">{strategies.map((strategy) => <StrategyCard key={strategy.id} strategy={strategy} rules={rules} />)}</div></details>;
+}
+
 function StrategyCard({ strategy, rules }: { strategy: StrategyScore; rules: StrategyArena["rules"] }) {
   const shadowRate = strategy.shadowResolved ? strategy.shadowWins / strategy.shadowResolved : 0;
   const paperRate = strategy.paperResolved ? strategy.paperWins / strategy.paperResolved : 0;
   const stageWins = strategy.stageResults.filter((value) => value > 0).length;
   const stageNet = strategy.stageResults.reduce((sum, value) => sum + value, 0);
-  return <article className={`strategy-card ${strategy.lane.toLowerCase()}`}><div className="strategy-title"><div><small>{strategy.family.replace("_", " ")}</small><h3>{strategy.name}</h3></div><span>{strategy.lane === "PAPER" ? "模拟验证" : "影子候选"}</span></div><p>{strategy.description}</p><dl><div><dt>当前窗口</dt><dd>{stageWins}/{strategy.stageResults.length} 胜</dd></div><div><dt>窗口净值</dt><dd className={stageNet >= 0 ? "positive" : "negative"}>{signed(stageNet * 100)}%</dd></div><div><dt>影子总样本</dt><dd>{strategy.shadowResolved} · {num(shadowRate * 100, 1)}%</dd></div><div><dt>模拟总样本</dt><dd>{strategy.paperResolved} · {num(paperRate * 100, 1)}%</dd></div></dl><small className="strategy-rule">{strategy.lane === "SHADOW" ? `晋级：最近${rules.promotionSample}笔至少${rules.promotionWins}胜且净收益为正` : `独立权益 ${num(strategy.paperEquity, 2)} U · 连亏 ${strategy.consecutivePaperLosses}/${rules.demotionLosses}`}</small></article>;
+  return <article className={`strategy-card ${strategy.lane.toLowerCase()}`}><div className="strategy-title"><div><small>{strategy.entryStyle === "CONFIRM" ? "确认进场" : "回踩进场"} · {strategy.exitProfile === "FAST" ? "快速出场" : "结构出场"}</small><h3>{strategy.name.split(" · ").slice(1).join(" · ")}</h3></div><span>{laneLabel(strategy.lane)}</span></div><dl><div><dt>当前阶段</dt><dd>{stageWins}/{strategy.stageResults.length} 胜</dd></div><div><dt>阶段净值</dt><dd className={stageNet >= 0 ? "positive" : "negative"}>{signed(stageNet * 100)}%</dd></div><div><dt>影子样本</dt><dd>{strategy.shadowResolved} · {num(shadowRate * 100, 1)}%</dd></div><div><dt>模拟样本</dt><dd>{strategy.paperResolved} · {num(paperRate * 100, 1)}%</dd></div></dl><small className="strategy-rule">{strategy.lane === "SHADOW" ? "首笔成本后盈利即可进入试用模拟" : strategy.lane === "TRIAL" ? `独立权益 ${num(strategy.paperEquity, 2)} U · ${strategy.stageEvents.length}/${rules.verifiedEvents} 独立事件 · ${strategy.stageSymbols.length}/${rules.verifiedSymbols} 币` : `稳定模拟 · 独立权益 ${num(strategy.paperEquity, 2)} U · 连亏 ${strategy.consecutivePaperLosses}/${rules.demotionLosses}`}</small></article>;
 }
 
 function ArenaTradeRecord({ trade }: { trade: ArenaTrade }) {
   const result = trade.netReturnRate ?? 0;
-  return <article className="history-order"><div><span className={`side ${trade.side.toLowerCase()}`}>{trade.side === "LONG" ? "多" : "空"}</span><div><b>{trade.symbol.replace("_", "/")} · {trade.strategyName}</b><small>{time(trade.openedAt)} · {trade.lane === "PAPER" ? "模拟验证" : "影子候选"}</small></div></div><div><small>进场 / 出场</small><b>{num(trade.entryPrice, 5)} / {num(trade.exitPrice, 5)}</b></div><div><small>成本后结果</small><b className={result > 0 ? "positive" : "negative"}>{signed(result * 100)}%</b></div><div><small>持仓 / 结束</small><b>{durationText(trade.openedAt, trade.closedAt)} · {trade.outcome === "TARGET" ? "目标" : trade.outcome === "STOP" ? "止损" : "超时"}</b></div><details className="history-diagnostic"><summary>查看策略数据</summary><div><span>判断依据<b>{trade.reason}</b></span><span>毛收益率<b>{signed((trade.grossReturnRate ?? 0) * 100)}%</b></span><span>完整成本<b className="negative">-0.18%</b></span><span>止损 / 目标<b>{num(trade.stopPrice, 5)} / {num(trade.targetPrice, 5)}</b></span></div></details></article>;
+  return <article className="history-order"><div><span className={`side ${trade.side.toLowerCase()}`}>{trade.side === "LONG" ? "多" : "空"}</span><div><b>{trade.symbol.replace("_", "/")} · {trade.strategyName}</b><small>{time(trade.openedAt)} · {laneLabel(trade.lane)}</small></div></div><div><small>进场 / 出场</small><b>{num(trade.entryPrice, 5)} / {num(trade.exitPrice, 5)}</b></div><div><small>成本后结果</small><b className={result > 0 ? "positive" : "negative"}>{signed(result * 100)}%</b></div><div><small>持仓 / 结束</small><b>{durationText(trade.openedAt, trade.closedAt)} · {trade.outcome === "TARGET" ? "目标" : trade.outcome === "STOP" ? "止损" : "超时"}</b></div><details className="history-diagnostic"><summary>查看完整入场环境</summary><div><span>行情与来源<b>{regimeLabel(trade.context.regime)} · {channelLabel(trade.context.channel)}</b></span><span>判断依据<b>{trade.reason}</b></span><span>毛收益 / 完整成本<b>{signed((trade.grossReturnRate ?? 0) * 100)}% / -{num(trade.context.modeledCostRate * 100, 3)}%</b></span><span>最大有利 / 不利<b>{signed(trade.maxFavorableRate * 100)}% / {signed(trade.maxAdverseRate * 100)}%</b></span><span>趋势效率 / 波动比<b>{num(trade.context.trendEfficiency * 100, 1)} / {num(trade.context.volatilityRatio, 2)}</b></span><span>OI变化 / 资金费率<b>{signed(trade.context.openInterestChangeRate * 100, 3)}% / {signed(trade.context.fundingRate * 100, 4)}%</b></span><span>24h成交额<b>{num(trade.context.volume24hUsd / 1_000_000, 1)} 百万 U</b></span><span>资金流 / 确认 / 假突破<b>{num(trade.context.alignedFlow, 2)} / {num(trade.context.confirmation, 2)} / {num(trade.context.fakeoutRisk, 2)}</b></span><span>止损 / 目标<b>{num(trade.stopPrice, 5)} / {num(trade.targetPrice, 5)}</b></span></div></details></article>;
 }
 
 function ArenaOpenCard({ trade, mark }: { trade: ArenaTrade; mark: number | undefined }) {
   const direction = trade.side === "LONG" ? 1 : -1;
-  const gross = mark ? direction * (mark - trade.entryPrice) / Math.max(trade.entryPrice, 1e-9) : 0;
-  return <article className="order-card"><div><span className={`side ${trade.side.toLowerCase()}`}>{trade.side === "LONG" ? "多" : "空"}</span><div><h3>{trade.symbol.replace("_", "/")} · {trade.strategyName}</h3><p>独立模拟账本 · {trade.reason}</p></div></div><strong className={gross >= 0 ? "positive" : "negative"}>{mark ? `${signed((gross - .0018) * 100)}%` : "等待行情"}</strong><dl><div><dt>进场</dt><dd>{num(trade.entryPrice, 5)}</dd></div><div><dt>当前价</dt><dd>{num(mark, 5)}</dd></div><div><dt>止损</dt><dd>{num(trade.stopPrice, 5)}</dd></div><div><dt>目标</dt><dd>{num(trade.targetPrice, 5)}</dd></div></dl></article>;
+  const current = mark ?? trade.lastPrice;
+  const gross = current ? direction * (current - trade.entryPrice) / Math.max(trade.entryPrice, 1e-9) : 0;
+  return <article className="order-card"><div><span className={`side ${trade.side.toLowerCase()}`}>{trade.side === "LONG" ? "多" : "空"}</span><div><h3>{trade.symbol.replace("_", "/")} · {trade.strategyName}</h3><p>{laneLabel(trade.lane)} · {regimeLabel(trade.context.regime)} · {trade.reason}</p></div></div><strong className={gross >= trade.context.modeledCostRate ? "positive" : "negative"}>{current ? `${signed((gross - trade.context.modeledCostRate) * 100)}%` : "等待行情"}</strong><dl><div><dt>进场</dt><dd>{num(trade.entryPrice, 5)}</dd></div><div><dt>当前价</dt><dd>{num(current, 5)}</dd></div><div><dt>止损</dt><dd>{num(trade.stopPrice, 5)}</dd></div><div><dt>目标</dt><dd>{num(trade.targetPrice, 5)}</dd></div></dl></article>;
 }
 
 function Setting({ title, detail, value, tone = "" }: { title: string; detail: string; value: string; tone?: string }) {

@@ -1,5 +1,14 @@
 # Status
 
+## 2026-09-09 market-regime strategy arena V2 — locally verified, deploying
+
+- Authorized for direct production deployment after verification.
+- Implemented bounded streaming market-state profiles, four candidate channels, three-group deep-slot diversification, forty-eight contextual strategy cells, trial/verified rotation, isolated and portfolio simulation, full frozen context records and the new operator surface.
+- Reuses the existing all-market ten-second ticker, three-symbol two-second books and rotating detail; no cadence, market request or D1-write expansion was made. Shadow positions settle from the bulk ticker and no longer lock deep slots.
+- Verification passes 162 direct tests, 15 architecture/migration checks, TypeScript, lint, whitespace and the verified production build.
+- Next: publish the reviewed commit through the GitHub-to-Cloudflare workflow and verify advancing production state.
+- LIVE remains hard-locked OFF.
+
 ## 2026-09-09 strategy arena — deployed
 
 Production commit `1becf7241f321e6b702e28f88a46bcecf8e9f791` is deployed. The authority reports `strategy-arena-v1`, ready LIVE runtime health, advancing fresh data, no runtime or D1 mirror error, ten data-supported strategies in SHADOW and zero strategies prematurely promoted. Direct production inspection observed the new arena resolving seven after-cost shadow results while continuing three live shadow observations. The fresh-start migration cleared retired PAPER history and account logs; Gate credentials were excluded from the migration. The operator surface now contains Strategy Pool, Simulation, LIVE, Trade Records and Settings, with the prior simulated target, shared combination-risk presentation and retired review panels removed. Owner-controlled Gate LIVE remains hard-locked OFF (`requestedEnabled=false`, `operational=false`). Verification passed 156 direct tests, 15 architecture/migration checks, TypeScript, lint, whitespace, production build, API health, data advancement and browser rendering.
