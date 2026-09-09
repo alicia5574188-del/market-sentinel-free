@@ -1,12 +1,8 @@
 # Status
 
-## 2026-09-09 strategy arena — implementation in verification
+## 2026-09-09 strategy arena — deployed
 
-- Added ten data-supported strategies across momentum, pullback, order-flow, structure and mean-reversion families.
-- Added isolated SHADOW/PAPER ledgers, rolling promotion, two-loss/rolling-negative demotion, bounded result logs and transition audit.
-- Replaced the operator surface with Strategy Pool, Simulation, LIVE, Trade Records and Settings; removed old review panels, daily simulated target and combination-risk presentation.
-- Added a user-authorized fresh-start migration deleting retired PAPER plans/positions/events while preserving the Gate credential table.
-- LIVE stays hard-locked OFF. Direct tests, lint and typecheck pass; architecture, migration, production build and deployment verification are in progress.
+Production commit `1becf7241f321e6b702e28f88a46bcecf8e9f791` is deployed. The authority reports `strategy-arena-v1`, ready LIVE runtime health, advancing fresh data, no runtime or D1 mirror error, ten data-supported strategies in SHADOW and zero strategies prematurely promoted. Direct production inspection observed the new arena resolving seven after-cost shadow results while continuing three live shadow observations. The fresh-start migration cleared retired PAPER history and account logs; Gate credentials were excluded from the migration. The operator surface now contains Strategy Pool, Simulation, LIVE, Trade Records and Settings, with the prior simulated target, shared combination-risk presentation and retired review panels removed. Owner-controlled Gate LIVE remains hard-locked OFF (`requestedEnabled=false`, `operational=false`). Verification passed 156 direct tests, 15 architecture/migration checks, TypeScript, lint, whitespace, production build, API health, data advancement and browser rendering.
 
 Production commit `4bab0e10205a8797f0298184dddf961749d8d3c9` is deployed with the independent win/loss attribution researcher. Direct production inspection showed 135 scanned futures, three then four active paired experiments, completed experiments advancing from 231 to 232, changing candidates/prices, a healthy background status, the new `胜负研究` review page starting truthfully at zero fully captured samples, and the settings-page LIVE research lock. New routes freeze complete pre-outcome event, liquidity and trigger context; the first 100 complete routes are discovery-only, qualifying conditions freeze before route 101, and later samples grade those unchanged candidates. Path diagnostics remain separate from entry evidence. The duplicate cost statistic is replaced by net-profit win rate plus stalled/timeout counts. No Gate request, D1 write, PAPER/LIVE opening path, automatic strategy mutation, credential or risk boundary changed. Verification passed 152 direct tests, 16 architecture/migration checks, TypeScript, lint, whitespace and production build.
 

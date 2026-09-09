@@ -1,6 +1,6 @@
 # Goal
 
-## Active upgrade — 2026-09-09 strategy arena
+## Completed upgrade — 2026-09-09 strategy arena
 
 Replace the retired paired experiment with a bounded multi-strategy arena using only data already collected by the authority. Run every supported strategy in an isolated SHADOW ledger, promote only after a rolling six-result window has at least four after-cost wins and positive net return, then route future signals to that strategy's isolated PAPER ledger. Demote after two consecutive PAPER losses or a non-positive six-trade PAPER window. Preserve a bounded shadow record, PAPER trade record and transition audit. Delete the retired PAPER database history and checkpoint account state at cutover without touching Gate credentials or LIVE reconciliation. Remove the simulated daily target, shared combination-risk presentation and every old review panel except new PAPER trade records. Keep LIVE hard-locked OFF.
 
