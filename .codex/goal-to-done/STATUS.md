@@ -1,9 +1,10 @@
-# In progress — 2026-09-09 V4.2 completed-candle multi-strategy
+# Done — 2026-09-09 V4.2 completed-candle multi-strategy
 
-- Implementation prepared: 30-liquid-contract selection, rotating completed-5m strategy data, cross-environment playbooks, per-base event deduplication, merged same-direction portfolio attribution, cadence-limited promotion and no runtime sleep.
-- Added a bounded 5-minute/14-day D1 strategy runtime log and read-only review endpoint.
-- Next: GitHub CI is the verification and deployment gate because the local executor disconnected after the first direct test pass exposed only expected old-assumption test failures.
-- LIVE must remain OFF.
+- Implemented 30-liquid-contract selection, rotating completed-5m strategy data, cross-environment playbooks, per-base event deduplication, merged same-direction portfolio attribution, cadence-limited promotion and no runtime sleep.
+- Added the bounded 5-minute/14-day D1 strategy runtime log and read-only /api/strategy-logs endpoint.
+- GitHub Actions run #636 passed repository tests, build, typecheck, lint, D1 migration, Cloudflare deployment and advancing production-health checks.
+- Production code commit: f12a93afb625c64e8005e7dc1ac28d727b2978a5. Cloudflare version: e85fb4bc-3699-4305-8907-6990172ae52e.
+- Production acceptance confirmed 1,000 U simulated equity, 30-market liquidity universe, 10 realtime slots, 12/48 strategy catalog, bounded V4 risk and LIVE requested/operational both false.
 
 # Status
 
