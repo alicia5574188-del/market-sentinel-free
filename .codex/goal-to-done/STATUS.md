@@ -1,6 +1,6 @@
 # Status
 
-## In progress — 2026-09-09 data-continuous V4.1
+## Done — 2026-09-09 data-continuous V4.1
 
 - Confirmed production can keep two-second books alive while the optional thirty-contract bulk radar repeatedly times out, but the prior arena incorrectly returned before observing any strategy when that radar snapshot exceeded thirty seconds.
 - Confirmed realtime-pool rotation deletes in-memory candle/flow history for evicted symbols, and forty-eight per-variant promotion ledgers dilute the one-result-per-event sample across four variants of the same base playbook.
@@ -8,7 +8,8 @@
 - LIVE must remain OFF. No stale radar candidate or stale bid/ask may open or close an order.
 - Implementation complete: stale radar is isolated from resident completed-five-minute observations; six stable liquid residents survive candidate churn; all ten resident one-minute feeds are refreshed after each completed minute; unproven playbooks remain in SHADOW; base-playbook promotion/demotion controls four distinct execution variants; enabled PAPER competition no longer starves unproven shadow learning.
 - Verification passed: 184 direct tests, 15 architecture/migration tests, production build, TypeScript typecheck, ESLint and whitespace validation. The integration suite explicitly opens one effective shadow from completed five-minute structure while the bulk radar has no fresh snapshot, and separately proves stale radar data cannot authorize an order.
-- Next: publish the verified tree to GitHub `main`, wait for the Cloudflare workflow, then confirm advancing production authority, 1,000 U account, 30/10 coverage, 12/48 catalog, bounded risk and LIVE OFF.
+- Production code commit `5866ab95e0037d06583108ac5d6ecbd4d3296cd7` passed GitHub Actions run #632, including repository verification, Cloudflare deployment and advancing production-health acceptance. Cloudflare version `a9cea6a7-1533-4203-98af-a147cadd9aec`.
+- Independent rendered production checks showed `后台运行中`, the V4.1 surface, 1,000 U equity, 30-contract discovery, six stable/four opportunity capacity, twelve playbooks/four variants each, zero unproven strategies sleeping, current observation activity and an open effective shadow under management. Settings showed normal data tolerance, 1%–2% per-order risk, 10%/6.5%/30%/4× hard caps, and LIVE explicitly `已关闭`.
 
 ## 2026-09-09 radar recovery correction — deployed
 
