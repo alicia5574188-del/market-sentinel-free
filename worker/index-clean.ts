@@ -1242,6 +1242,24 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return Boolean(evidence?.fresh && evidence.ancillaryFresh && evidence.entryReady !== false);
   }
 
+  private realtimeReadiness() {
+    const protectedSymbols = new Set([
+      ...Object.values(this.runtime.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
+      ...Object.values(this.runtime.plans).flatMap((plan) => plan?.state === "PREPARED" ? [plan.symbol] : []),
+      ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
+      ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status) ? [entry.symbol] : []),
+      ...Object.values(this.runtime.strategyArena.portfolioOpen).map((position) => position.symbol),
+    ]);
+    const actionableMarkets = this.runtime.symbols.filter((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS
+      && this.runtime.contractMeta[symbol] != null && this.symbolEntryReady(symbol)).length;
+    const protectedMarketsReady = [...protectedSymbols].every((symbol) => this.runtime.symbols.includes(symbol)
+      && (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS && this.runtime.contractMeta[symbol] != null
+      && this.symbolEntryReady(symbol));
+    return { capacity: PORTFOLIO_REALTIME_CAPACITY, actionableMarkets,
+      warmingMarkets: Math.max(0, this.runtime.symbols.length - actionableMarkets),
+      protectedMarkets: protectedSymbols.size, protectedMarketsReady };
+  }
+
   private async processBooks(now: number, cycleSymbols = [...this.runtime.symbols]) {
     const authorityBefore = this.captureAuthority();
     const dueSymbols = cycleSymbols.filter((symbol) => (this.runtime.feedFailures[symbol]?.retryAt ?? 0) <= now);
@@ -1593,18 +1611,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.runtime.lastSuccessAt = successes > 0 ? now : this.runtime.lastSuccessAt;
       const allWarm = this.runtime.symbols.every((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS);
       const allMeta = this.runtime.symbols.every((symbol) => this.runtime.contractMeta[symbol] != null);
-      const protectedSymbols = new Set([
-        ...Object.values(this.runtime.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
-        ...Object.values(this.runtime.plans).flatMap((plan) => plan?.state === "PREPARED" ? [plan.symbol] : []),
-        ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
-        ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status) ? [entry.symbol] : []),
-        ...Object.values(this.runtime.strategyArena.portfolioOpen).map((position) => position.symbol),
-      ]);
-      const actionableMarkets = this.runtime.symbols.filter((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS
-        && this.runtime.contractMeta[symbol] != null && this.symbolEntryReady(symbol)).length;
-      const protectedMarketsReady = [...protectedSymbols].every((symbol) => this.runtime.symbols.includes(symbol)
-        && (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS && this.runtime.contractMeta[symbol] != null
-        && this.symbolEntryReady(symbol));
+      const realtimeReadiness = this.realtimeReadiness();
       const ancillaryStarted = this.runtime.symbols.every((symbol) => {
         const memory = this.memory[symbol];
         return memory && memory.timeframeUpdatedAt.m1 > 0 && memory.timeframeUpdatedAt.m15 > 0
@@ -1612,13 +1619,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       });
       this.runtime.state = !this.authorityReady ? "RECOVERY_REQUIRED" : successes === 0 ? "RECONNECTING"
         : successes !== this.runtime.symbols.length ? "DEGRADED"
-          : this.runtime.riskBreach ? "DEGRADED" : actionableMarkets > 0 && protectedMarketsReady ? "LIVE"
+          : this.runtime.riskBreach ? "DEGRADED" : realtimeReadiness.actionableMarkets > 0 && realtimeReadiness.protectedMarketsReady ? "LIVE"
             : allWarm && allMeta && ancillaryStarted ? "DEGRADED" : "WARMING";
       const recoveringMarkets = this.runtime.symbols.filter((symbol) => !this.symbolEntryReady(symbol)).length;
       const feedError = successes !== this.runtime.symbols.length ? `${this.runtime.symbols.length - successes} market snapshots unavailable; retrying`
-        : !protectedMarketsReady ? "protected position data unavailable; new entries frozen"
-          : actionableMarkets === 0 ? `${recoveringMarkets} realtime markets warming; entries blocked`
-            : !allMeta && protectedSymbols.size > 0 ? "protected contract metadata unavailable" : null;
+        : !realtimeReadiness.protectedMarketsReady ? "protected position data unavailable; new entries frozen"
+          : realtimeReadiness.actionableMarkets === 0 ? `${recoveringMarkets} realtime markets warming; entries blocked`
+            : !allMeta && realtimeReadiness.protectedMarkets > 0 ? "protected contract metadata unavailable" : null;
       this.runtime.lastError = (this.runtime.riskBreach ? "portfolio stress risk exceeds 10%; new entries blocked" : feedError) ?? this.runtime.d1MirrorError;
     } catch (error) {
       this.runtime.state = "RECONNECTING";
@@ -1658,7 +1665,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         lastError: this.runtime.lastError,
         lastSuccessAt: this.runtime.lastSuccessAt,
         lastHeartbeatAt: this.runtime.lastHeartbeatAt,
+        authorityReady: this.authorityReady,
         symbols: this.runtime.symbols,
+        realtimeReadiness: this.realtimeReadiness(),
         liveMode: { requestedEnabled: this.runtime.live.requestedEnabled, operational: this.runtime.live.operational },
         strategyArena: {
           version: this.runtime.strategyArena.version,
@@ -1702,7 +1711,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         strategyArena: arenaSummary(strategyArena), marketRegimes: marketRegimeSummary(marketRegimes),
         ...(path === "/owner-runtime" ? { live } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length + bankruptcyOutbox.length,
         oldestOutboxAgeMs: outbox.length ? Math.max(0, Date.now() - (outbox[0].position.exitAt ?? outbox[0].position.entryAt)) : 0,
-        authorityReady: this.authorityReady, generatedAt: Date.now(), state: effectiveState, stale,
+        authorityReady: this.authorityReady, realtimeReadiness: this.realtimeReadiness(), generatedAt: Date.now(), state: effectiveState, stale,
         analysisP99Ms: percentile99(this.runtime.analysisMs), limits: { loopMs: LOOP_MS, markets: this.runtime.symbols.length, scannedMarkets: this.runtime.radar.scanned, scanUniverse: SCAN_UNIVERSE_SIZE, radarMs: RADAR_MS, warmupSnapshots: WARMUP_SNAPSHOTS,
           maxAncillaryConcurrency: MAX_ANCILLARY_CONCURRENCY, maxSubrequestsPerAlarm: 32, plannedAlarmRequestsPerDay: 43_200,
           plannedAlarmWritesPerDay: 43_200, watchdogWriteReservePerDay: WATCHDOG_WRITE_RESERVE,
