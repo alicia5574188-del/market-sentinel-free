@@ -36,10 +36,21 @@ function settleEvent(state: StrategyArenaState, now: number, winner: boolean, sy
   return advanceStrategyArena({ state, quotes: { [symbol]: { midpoint: price, bestBid: price, bestAsk: price + 0.01, fresh: true } }, now });
 }
 
+function openForStrategy(state: StrategyArenaState, wanted: string, eventStart: number, now: number, symbol = "BTC_USDT") {
+  for (let offset = 0; offset < 100; offset += 1) {
+    const candidate = openEvent(structuredClone(state), eventStart + offset, now + offset, symbol);
+    if (Object.values(candidate.open).some((trade) => trade.strategyId === wanted))
+      return { state: candidate, event: eventStart + offset, now: now + offset };
+  }
+  throw new Error(`no event selected ${wanted}`);
+}
+
 function qualify(state = initialStrategyArena(1), start = 10_000) {
+  let eventStart = 1;
   for (let index = 0; index < PROMOTION_WIN_STREAK; index += 1) {
-    state = openEvent(state, index + 1, start + index * 20_000);
-    state = settleEvent(state, start + index * 20_000 + 10_000, true);
+    const opened = openForStrategy(state, strategyId, eventStart, start + index * 20_000);
+    state = settleEvent(opened.state, opened.now + 10_000, true);
+    eventStart = opened.event + 1;
   }
   return state;
 }
@@ -51,11 +62,27 @@ test("V4 keeps 12 playbooks and 48 genuinely distinct execution variants", () =>
 });
 
 test("confirmation/retest and fast/structure variants freeze different locations or targets", () => {
-  const state = openEvent(initialStrategyArena(1), 1, 10_000);
-  const variants = Object.values(state.open).filter((trade) => trade.strategyId.startsWith("anomaly_follow:"));
+  const byStrategy = new Map();
+  for (let event = 1; event <= 40; event += 1) {
+    const state = openEvent(initialStrategyArena(1), event, 10_000 + event);
+    for (const trade of Object.values(state.open).filter((row) => row.strategyId.startsWith("anomaly_follow:")))
+      byStrategy.set(trade.strategyId, trade);
+  }
+  const variants = [...byStrategy.values()];
   assert.equal(variants.length, 4);
   assert.equal(new Set(variants.map((trade) => trade.context.entryTrigger)).size, 2);
   assert.equal(new Set(variants.map((trade) => trade.targetPrice)).size, 2);
+});
+
+test("one market event creates and scores only one effective shadow trade", () => {
+  const first = openEvent(initialStrategyArena(1), 1, 10_000);
+  assert.equal(Object.keys(first.open).length, 1);
+  assert.ok(first.recentObservations.some((row) => row.blocker.includes("同一市场事件已由")));
+  const repeated = openEvent(first, 1, 10_001);
+  assert.equal(Object.keys(repeated.open).length, 1);
+  const closed = settleEvent(repeated, 20_000, true);
+  assert.equal(closed.recentShadow.length, 1);
+  assert.equal(Object.values(closed.strategies).reduce((total, score) => total + score.shadowResolved, 0), 1);
 });
 
 test("observation shadow is separate and never counts toward promotion", () => {
@@ -78,9 +105,11 @@ test("latest three independent effective shadow wins activate only the next sign
 test("a low-win-rate variant can activate from a positive latest-six window", () => {
   let state = initialStrategyArena(1);
   const outcomes = [true, false, true, false, true, true];
+  let eventStart = 300;
   for (let index = 0; index < outcomes.length; index += 1) {
-    state = openEvent(state, 300 + index, 200_000 + index * 20_000);
-    state = settleEvent(state, 210_000 + index * 20_000, outcomes[index]);
+    const opened = openForStrategy(state, strategyId, eventStart, 200_000 + index * 20_000);
+    state = settleEvent(opened.state, opened.now + 10_000, outcomes[index]);
+    eventStart = opened.event + 1;
   }
   assert.equal(state.strategies[strategyId].lane, "ACTIVE");
   assert.match(state.strategies[strategyId].lastTransitionReason, /最新6笔/);

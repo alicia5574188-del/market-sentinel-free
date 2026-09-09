@@ -344,6 +344,15 @@ function uniqueResults(results: StrategyResult[]) {
   return [...results].sort((a, b) => b.resolvedAt - a.resolvedAt).filter((row) => !seen.has(row.eventId) && Boolean(seen.add(row.eventId)))
     .slice(0, PERFORMANCE_WINDOW).reverse();
 }
+function eventIndex(eventId: string, size: number) {
+  let hash = 0;
+  for (const character of eventId) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  return size ? hash % size : 0;
+}
+function uniqueEventTrades(trades: ArenaTrade[]) {
+  const seen = new Set<string>();
+  return trades.filter((trade) => !seen.has(trade.eventId) && Boolean(seen.add(trade.eventId)));
+}
 
 export function playbookPerformance(state: StrategyArenaState, id: string, currentRegime?: MarketRegimeKind) {
   return evidence((state.playbookResults[id] ?? []).map((row) => ({ netReturnRate: row.netReturnRate, regime: row.regime })), currentRegime);
@@ -406,6 +415,7 @@ function recordClosed(state: StrategyArenaState, trade: ArenaTrade) {
     }
     return;
   }
+  if (state.recentShadow.some((row) => row.eventId === trade.eventId)) return;
   const score = state.strategies[trade.strategyId];
   if (!score) return;
   const result: StrategyResult = { eventId: trade.eventId, symbol: trade.symbol, regime: trade.context.regime,
@@ -618,21 +628,40 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
     if (!generatedSignals.some((signal) => signal.strategyId === definition.id))
       recordObservation(definition, "当前环境内尚未形成完整且可执行的触发路线");
   }
+  const effectiveEventKey = `effective:${input.observation.candidate.id}`;
+  const legacyEventSuffix = `:${input.observation.candidate.id}`;
+  const eventAlreadyExecuted = state.seenSignals.includes(effectiveEventKey)
+    || state.seenSignals.some((key) => !key.startsWith("portfolio:") && key.endsWith(legacyEventSuffix))
+    || Object.values(state.open).some((trade) => trade.eventId === input.observation.candidate.id)
+    || state.recentShadow.some((trade) => trade.eventId === input.observation.candidate.id);
+  const executable: Array<{ signal: Signal; definition: StrategyDefinition; score: StrategyScore; sizing: TradeSizing }> = [];
   for (const signal of generatedSignals) {
     const score = state.strategies[signal.strategyId]; const definition = STRATEGY_CATALOG.find((row) => row.id === signal.strategyId);
     if (!score || !definition) continue;
     const signalKey = `${signal.strategyId}:${input.observation.candidate.id}`;
     const openKey = `${signal.strategyId}:${input.observation.candidate.symbol}`;
-    if (state.seenSignals.includes(signalKey) || state.open[openKey] || Object.keys(state.open).length >= ARENA_MAX_OPEN) continue;
+    if (eventAlreadyExecuted || state.seenSignals.includes(signalKey) || state.open[openKey] || Object.keys(state.open).length >= ARENA_MAX_OPEN) continue;
     const virtual = effectiveShadowSizing(input.observation, signal);
     const blocker = effectiveShadowBlocker(input.observation, signal, virtual);
     if (blocker || !virtual) {
       recordObservation(definition, blocker ?? "当前路线不能真实执行");
       continue;
     }
-    state.open[openKey] = openTrade(input.observation, definition, signal, "EFFECTIVE_SHADOW", virtual, false);
-    state.seenSignals.push(signalKey); if (state.seenSignals.length > 2_000) state.seenSignals.shift();
-    if (score.enabled && score.lane === "ACTIVE") promoted.push({ signal, definition, score });
+    executable.push({ signal, definition, score, sizing: virtual });
+  }
+  const active = executable.filter((row) => row.score.enabled && row.score.lane === "ACTIVE")
+    .sort((left, right) => strategyPerformance(right.score, input.observation.candidate.regime).conservativeReturnRate
+      - strategyPerformance(left.score, input.observation.candidate.regime).conservativeReturnRate
+      || right.signal.quality - left.signal.quality || left.definition.id.localeCompare(right.definition.id));
+  const winner = active[0] ?? executable[eventIndex(input.observation.candidate.id, executable.length)];
+  if (winner) {
+    const openKey = `${winner.signal.strategyId}:${input.observation.candidate.symbol}`;
+    state.open[openKey] = openTrade(input.observation, winner.definition, winner.signal, "EFFECTIVE_SHADOW", winner.sizing, false);
+    state.seenSignals.push(effectiveEventKey, `${winner.signal.strategyId}:${input.observation.candidate.id}`);
+    while (state.seenSignals.length > 2_000) state.seenSignals.shift();
+    for (const row of executable.filter((item) => item.signal.strategyId !== winner.signal.strategyId))
+      recordObservation(row.definition, `同一市场事件已由${winner.definition.name}执行有效影子，本变体仅观察`);
+    if (winner.score.enabled && winner.score.lane === "ACTIVE") promoted.push(winner);
   }
   const symbol = input.observation.candidate.symbol;
   const portfolioSeenKey = `portfolio:${input.observation.candidate.id}`;
@@ -676,7 +705,7 @@ export function arenaSummary(state: StrategyArenaState) {
     const rank = (lane: StrategyLane) => lane === "ACTIVE" ? 2 : lane === "SLEEPING" ? 1 : 0;
     return rank(b.lane) - rank(a.lane) || strategyPerformance(b).conservativeReturnRate - strategyPerformance(a).conservativeReturnRate;
   });
-  const open = Object.values(state.open).sort((a, b) => b.openedAt - a.openedAt);
+  const open = uniqueEventTrades(Object.values(state.open).sort((a, b) => b.openedAt - a.openedAt));
   return { version: state.version, startedAt: state.startedAt, catalogSize: STRATEGY_CATALOG.length, playbookCount: PLAYBOOKS.length,
     portfolioCycle: state.portfolioCycle, portfolioCycleStartedAt: state.portfolioCycleStartedAt,
     archivedPortfolioCycles: state.archivedPortfolioCycles.slice(-12).reverse(),
@@ -690,7 +719,7 @@ export function arenaSummary(state: StrategyArenaState) {
     portfolioEquity: state.portfolioEquity, portfolioResolved: state.portfolioResolved, portfolioWins: state.portfolioWins,
     portfolioGrossPnl: state.portfolioGrossPnl, portfolioCosts: state.portfolioCosts, strategies,
     playbooks: PLAYBOOKS.map((row) => ({ ...row, evidence: playbookPerformance(state, row.id) })),
-    recentShadow: state.recentShadow.slice(-100).reverse(), recentPaper: state.recentPaper.slice(-100).reverse(),
+    recentShadow: uniqueEventTrades(state.recentShadow.slice(-100).reverse()), recentPaper: state.recentPaper.slice(-100).reverse(),
     recentPortfolio: state.recentPortfolio.slice(-100).reverse(), archivedPortfolioTrades: state.archivedPortfolioTrades.slice(-100).reverse(),
     transitions: state.transitions.slice(-100).reverse(),
     admissionRejects: state.admissionRejects, cutoverPending: state.cutoverPending,
