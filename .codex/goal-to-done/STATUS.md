@@ -1,8 +1,9 @@
-# Active — 2026-09-10 direct countertrend activation
+# Done — 2026-09-10 direct countertrend activation
 
 - Confirmed the redundant gate: six normal effective shadows already had to prove at least three stops, negative normal gross/net, and positive fully modeled reverse net; the implementation then opened separate reverse shadows and demanded another three wins or positive six before account eligibility.
 - Implemented immediate countertrend enablement from that six-trade proof while retaining current-signal execution economics, next-signal-only entry, ongoing normal/reverse shadows and reverse PAPER demotion.
-- Local verification passed 193 direct tests, 15 architecture/migration tests, production build, TypeScript, ESLint and whitespace checks. GitHub/Cloudflare deployment and production acceptance remain pending.
+- Local verification passed 193 direct tests, 15 architecture/migration tests, production build, TypeScript, ESLint and whitespace checks.
+- Production code commit `5ac21ef65ad1de5d79466f440c9d867b2e066035` passed GitHub Actions run #642 and its advancing production-health gate. Cloudflare version `24a195c3-d001-4bb7-a665-4412e645b117` reported V4.4, fresh `LIVE` runtime state, no global error, 1,000 U equity, 30/10 data capacity, 12/48 strategy catalog, 1%–2% order risk, 10%/6.5% portfolio caps and LIVE explicitly OFF (`requestedEnabled=false`, `operational=false`).
 
 # Done — 2026-09-10 truthful runtime health status
 
