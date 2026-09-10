@@ -345,3 +345,11 @@
 
 - The public client and owner-only route must both use `RESET_PAPER`. A source-contract test guards this literal so a UI refactor cannot silently make reset unusable again.
 - Reset authorization remains owner session + same-origin JSON + LIVE fully off. The operation uses fresh executable prices, archives the account cycle and preserves shadow research; deployment itself never invokes reset.
+# 2026-09-10 — V5 authority is conditional expectancy, not strategy promotion
+
+- The twelve playbooks remain bounded raw hypothesis generators for compatibility and continuous counterfactual research; they are no longer PAPER authority. A unified controller groups them into materially distinct profit mechanisms and selects by current-state similarity-weighted, walk-forward, fully costed evidence.
+- Normal and opposite directions are evaluated as independent mechanisms. A losing normal route never proves that swapping its stop and target is profitable.
+- Holding horizon is selected from completed-candle path evidence. Generic `TIMEOUT` is replaced for V5 entries by explicit thesis/edge-decay semantics; legacy open positions keep their frozen V4 management.
+- The account's aspirational daily objective is +10%, used only to rank positive-expectancy capacity. It cannot create trades, raise risk caps or weaken data/execution gates.
+- Older analogous paths select the horizon; the newest 30% of the analogous paths are held out and must independently confirm positive after-cost expectancy. PAPER then freezes that exact validated direction, stop rate, target rate and horizon.
+- Approved adaptive routes outrank research-only candidates for scarce fresh-book capacity. The existing five-minute D1 log records each route's samples, confirmation return, expectancy, profit factor, target reach, opportunity rate, score and rejection reason without adding a write.

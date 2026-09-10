@@ -1,3 +1,11 @@
+# Active goal — state-conditioned positive-expectancy V5
+
+- Replace V4's fixed 3/6 promotion authority, mirrored countertrend and fixed family timeouts with one state-conditioned controller that selects an independently defined mechanism, side, executable geometry and empirically supported holding horizon by conservative after-cost expectancy.
+- Use only the existing completed Gate futures candles for broad research and the existing fresh bid/ask/depth path for final execution. Add no high-frequency feed, no second polling loop and no per-snapshot D1 writes.
+- Keep every executable shadow and blocked-signal counterfactual running while PAPER executes only the best currently supported route. The 10% daily account return is an internal portfolio optimization objective, never a quota, UI promise or reason to bypass safety.
+- Preserve the evolved 1,000 U PAPER account, current positions with frozen geometry, history, owner reset, credentials, authentication, contract sizing, all risk caps and owner-controlled LIVE OFF state. Do not add or delete database tables.
+- Verify direct tests, build, architecture/migration tests, typecheck, lint, whitespace and production health before release through GitHub `main`.
+
 # Completed UI correction — symmetric normal/reverse evidence
 
 - Display normal and reverse strategy evidence identically: each side shows its latest three outcomes and latest-six after-cost total return.

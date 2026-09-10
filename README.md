@@ -1,14 +1,15 @@
-# Adaptive Shadow Strategy Arena V4
+# State-conditioned Positive-Expectancy Controller V5
 
 A Gate USDT perpetual market-regime and progressive strategy-rotation system. One `MarketStream` Durable Object is authoritative for market observations, the 1,000 U simulated futures account, and optional owner-controlled LIVE mirroring.
 
-## Adaptive-target, independently validated countertrend V4.4
+## V5 authority
 
 - The first pass ranks eligible Gate USDT perpetuals by 24-hour turnover and forms a thirty-contract liquid universe. It does not decide trades or depend on anomaly feeds.
 - One completed 5-minute candle series is refreshed every ten seconds, covering the full universe in about five minutes. Trend, range, compression and expansion are derived from those durable candles; missing optional high-frequency data cannot create a strategy-data gap.
-- Each market event may test several genuinely different base playbooks. One symbol can serve several playbooks and one playbook can serve several symbols. Only one execution variant per base playbook/event contributes a shadow result.
-- Promotion requires three wins resolved within 24 hours or six after-cost results with positive total return resolved within 72 hours. Strategies too infrequent to form those windows stay research-only and never block higher-cadence strategies.
-- Absence of a signal is not a strategy state. Enabled playbooks remain enabled until the reverse simulated-account loss rule demotes them.
+- Each market event may test several hypotheses. One symbol can serve several mechanisms and one mechanism can serve several symbols; economically identical orders are still merged.
+- Every refreshed 120-candle completed-5m series runs a chronological walk-forward over six materially different profit mechanisms and independently proposed long/short routes. The controller compares 10/20/30/45/60-minute horizons without lookahead and treats same-candle stop/target ambiguity as stop-first.
+- PAPER authority requires at least eight similar paths, positive conservative after-cost expectation, profit factor at least 1.05, sufficient target reachability and no single oversized winner dominating the evidence. V4 three/six and mirrored-reverse records remain bounded research history but no longer authorize V5 PAPER.
+- The aspirational 10% daily return is an internal portfolio objective used only to rank already-positive capacity. It is not a quota, display promise or permission to bypass risk and data gates.
 - Several enabled same-direction playbooks may be attributed to one simulated Gate position. This preserves learning without duplicating economically identical orders.
 - Every executable order still requires fresh bid/ask, contract metadata, integer Gate contracts, depth, full costs, a noise-safe stop and sufficient net reward/risk. LIVE remains owner-controlled and defaults OFF.
 
@@ -19,7 +20,7 @@ A Gate USDT perpetual market-regime and progressive strategy-rotation system. On
 - The strategy layer uses completed 5-minute OHLCV as its stable source and locally derives structure. Up to ten priority symbols receive the fresh two-second order book required for executable validation; protected positions always retain priority.
 - A bounded D1 runtime sample is written every five minutes and retained for 14 days. It records data coverage, strategy cadence/results, shadow activity, simulated equity and LIVE-off state without writing per market snapshot.
 
-## Adaptive shadow strategy arena V4
+## Continuous hypothesis research retained from V4
 
 The catalog contains 48 bounded strategy variants: 12 interpretable playbooks × two entry styles (`CONFIRM`/`RETEST`) × two exit profiles (`FAST`/`STRUCTURE`).
 
@@ -30,20 +31,18 @@ The catalog contains 48 bounded strategy variants: 12 interpretable playbooks ×
 
 All variants keep running in shadow. Incomplete routes are observation shadows and never score. Only signals that pass fresh executable bid/ask, unmissed entry location, structure/noise stop, full-cost target, depth, liquidity and Gate contract checks become effective shadows.
 
-- Normal effective shadows never stop, including after a countertrend route activates. A countertrend route is a separate competitor, not a replacement or a retroactive trade.
-- Countertrend activation uses either the exact normal variant's latest three independent effective-shadow losses or a negative after-cost total across its latest six. Replaying the same selected window in the opposite direction must remain positive after complete modeled costs. That proof enables the countertrend route immediately for the next valid signal; it does not wait for a second reverse-shadow promotion window. A current reverse geometry requiring more than an 85% break-even win rate is still rejected.
-- The 1,000 U account chooses the strongest after-cost direction for a symbol/event and never opens the normal and countertrend routes against each other.
+- Effective shadows never stop after a route enters PAPER. Normal and opposite directions are independent hypotheses; V5 never creates the opposite path by swapping the original stop and target.
+- The 1,000 U account chooses the highest conservative state-conditioned objective among executable routes for a symbol/event and never hedges against itself.
 - Frozen targets are capped by the exit profile's after-cost reward/risk and prior reachable excursion, but never relaxed below the 1.2 net reward/risk floor. The original structural target remains recorded for diagnosis.
-- The latest three independent effective shadows all winning within 24 hours, or the latest six producing positive after-cost total return within 72 hours, activates only the exact execution variant that produced those results.
-- Activation admits only the next new valid signal; completed winners are never backfilled.
-- The latest three attributed simulated orders all losing, or the latest six no longer positive after costs, stops new account entries and returns that exact execution variant to shadow. A demoted variant needs new independent effective-shadow results before it can reactivate.
+- The old latest-three/latest-six fields remain review-only compatibility evidence. They cannot activate, reverse or deactivate a V5 route.
+- A V5 decision admits only the current new executable signal; historical winners are never backfilled.
 - Missing market opportunities produce no state transition and no synthetic loss. Enabled playbooks remain active until the explicit demotion rule fires.
 
 Every result freezes its regime, candidate channel, entry/exit variant, executable bid/ask, modeled cost, structure source, net reward/risk, depth, spread, trend/volatility, open-interest change, funding, turnover, flow, confirmation, fakeout, MFE and MAE.
 
 ## Simulated futures account
 
-The 1,000 U account records only strategies that passed promotion and immutable execution gates:
+The 1,000 U account records only routes that passed state-conditioned expectancy and immutable execution gates:
 
 - structural stop and target must still be valid at the executable price;
 - net reward/risk must be at least 1.2 after modeled full cost;
@@ -51,18 +50,18 @@ The 1,000 U account records only strategies that passed promotion and immutable 
 - 24-hour turnover, spread and both sides of first-five-level depth must pass liquidity limits;
 - the exact execution variant's recent conservative expectation must exceed the complete modeled cost.
 
-Position size uses Gate's contract multiplier and integer contract lots. Risk targets 10–20 U and a portfolio order is rejected when the remaining risk or margin capacity cannot support at least 10 U; the simulator never opens a one-contract dust substitute. Dynamic position count is bounded by 10% total stop risk, 6.5% same-direction risk, 30% margin, 4× total notional and the ten-symbol management capacity. Fees, executable spread, conservative slippage and applicable funding are deducted. Each confirmation/retest and fast/structure variant earns promotion and demotion evidence independently; correlated cross-symbol results from the same completed-five-minute market lifecycle count once per variant.
+Position size uses Gate's contract multiplier and integer contract lots. Risk targets 10–20 U and a portfolio order is rejected when the remaining risk or margin capacity cannot support at least 10 U; the simulator never opens a one-contract dust substitute. Dynamic position count is bounded by 10% total stop risk, 6.5% same-direction risk, 30% margin, 4× total notional and the ten-symbol management capacity. Fees, executable spread, conservative slippage and applicable funding are deducted. Research variants continue to collect bounded evidence; correlated cross-symbol results from the same completed-five-minute market lifecycle count once per variant.
 
 The owner-only reset closes open simulated positions at fresh executable prices, archives the completed account cycle, resets visible equity to 1,000 U, and preserves all shadow research. Reset is rejected while LIVE is enabled or any system LIVE position/order remains.
 
 ## LIVE boundary
 
-- `SYSTEM_VERSION=adaptive-target-countertrend-v4.4` preserves compatible normal shadow evidence, uses attainable frozen targets, and activates fully costed countertrend proof from either a three-loss streak or a negative six-result window before the next valid 1,000 U account signal.
+- `SYSTEM_VERSION=state-conditioned-expectancy-v5` preserves the evolved account and frozen open positions while replacing V4 promotion authority with completed-candle state-conditioned expectancy.
 - Gate credentials and LIVE reconciliation state are preserved. Deployment never turns LIVE on.
 - LIVE can be enabled only by the authenticated owner. It mirrors only new simulated-account orders opened after enablement and never backfills an existing simulated position.
 - Direction, structural stop, target, proportional notional and modeled cost come from the exact simulated-account order. The real order is rechecked for current price geometry, integer Gate lot size, margin, account-wide risk, correlated-direction risk and after-cost economics.
 - Owner authentication, encrypted credentials, read-only account visibility, reduce-only protection and system-tag-only cleanup remain unchanged.
-- Old account trades and cycle summaries remain available for comparison; V4 scoring starts from new effective shadows in the bounded Durable Object checkpoint.
+- Old account trades, cycle summaries and V4 shadow records remain available for comparison. They do not authorize V5 entries.
 
 ## Bounded operation
 
@@ -82,4 +81,4 @@ npm run lint
 git diff --check
 ```
 
-Production releases use the GitHub-to-Cloudflare workflow and require advancing health checks with `adaptive-target-countertrend-v4.4`, 30-market scanning, the 12/48 catalog, V4.4 risk limits, 1,000 U equity and LIVE explicitly OFF.
+Production releases use the GitHub-to-Cloudflare workflow and require advancing health checks with `state-conditioned-expectancy-v5`, completed-candle policy version 1, 30-market scanning, the retained 12/48 research catalog, unchanged account/risk limits and LIVE explicitly OFF.

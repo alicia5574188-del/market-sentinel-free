@@ -532,6 +532,27 @@ test("restart preserves committed OPEN authority, cancels PREPARED work and warm
   assert.equal(stream.authorityView.positions.BTC_USDT.status, "OPEN");
 });
 
+test("V4.4 to V5 cutover preserves the evolved account and completed-candle state", async () => {
+  const seed = await makeStream();
+  const saved = structuredClone(seed.stream.runtime);
+  saved.version = "adaptive-target-countertrend-v4.4";
+  saved.strategyArena.portfolioEquity = 963.25;
+  saved.strategyArena.portfolioResolved = 11;
+  saved.marketRegimes.lastUpdatedAt = 123_456;
+  saved.equity = 812;
+  saved.equityVersion = 7;
+
+  const { stream } = await makeStream(saved);
+  assert.equal(stream.runtime.version, "state-conditioned-expectancy-v5");
+  assert.equal(stream.runtime.strategyArena.portfolioEquity, 963.25);
+  assert.equal(stream.runtime.strategyArena.portfolioResolved, 11);
+  assert.equal(stream.runtime.marketRegimes.lastUpdatedAt, 123_456);
+  assert.equal(stream.runtime.equity, 812);
+  assert.equal(stream.runtime.equityVersion, 7);
+  assert.equal(stream.runtime.live.requestedEnabled, false);
+  assert.equal(stream.runtime.live.operational, false);
+});
+
 test("unknown authority schema stays fail-closed and alarm never overwrites its checkpoint", async (t) => {
   const seed = await makeStream();
   const incompatible = { ...structuredClone(seed.stream.runtime), authoritySchemaVersion: 999 };
@@ -883,13 +904,17 @@ test("health status is compact while retaining every release gate", async () => 
   const response = await stream.fetch(new Request("https://market-stream/health-status"));
   const status = await response.json();
 
-  assert.equal(status.version, "adaptive-target-countertrend-v4.4");
+  assert.equal(status.version, "state-conditioned-expectancy-v5");
   assert.equal(status.strategyArena.version, 6);
   assert.equal(status.strategyArena.playbookCount, 12);
   assert.equal(status.strategyArena.catalogSize, 48);
   assert.equal(status.strategyArena.portfolioEquity, 1_000);
   assert.equal(status.strategyArena.rules.minimumPortfolioRiskUsdt, 10);
   assert.equal(status.strategyArena.rules.empiricalCostFloorRate, 0.0014);
+  assert.equal(status.strategyArena.rules.authorityWindowPriority, "STATE_CONDITIONED_EXPECTANCY");
+  assert.equal(status.strategyArena.rules.adaptivePolicyVersion, 1);
+  assert.equal(status.strategyArena.rules.adaptiveMinimumAnalogSamples, 8);
+  assert.equal(status.strategyArena.rules.dailyObjectiveIsQuota, false);
   assert.equal(status.limits.scanUniverse, 30);
   assert.equal(status.limits.realtimeCapacity, 10);
   assert.equal(status.liveMode.requestedEnabled, false);

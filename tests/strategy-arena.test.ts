@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { advanceStrategyArena, applyStrategySleepStates, ARENA_FRICTION_RATE, initialStrategyArena,
+import { advanceStrategyArena, advanceStrategyShadowsFromCompletedCandle, applyStrategySleepStates, ARENA_FRICTION_RATE, initialStrategyArena,
   normalizeStrategyArena, observeStrategyArena, PROMOTION_WIN_STREAK, resetStrategyArenaAccount,
   STRATEGY_CATALOG, type ArenaObservation, type StrategyArenaState } from "../lib/strategy-arena.ts";
 
@@ -150,6 +150,46 @@ test("observation shadow is separate and never counts toward promotion", () => {
   assert.equal(Object.keys(state.open).length, 0);
   assert.ok(state.recentObservations.length > 0);
   assert.equal(state.strategies[strategyId].shadowResolved, 0);
+});
+
+test("V5 completed-candle policy is PAPER authority and does not create a mirrored reverse", () => {
+  const input = observation(90, 100_000);
+  input.candidate.id = "BTC_USDT:CANDLE5M:ANOMALY:LONG:100000";
+  input.candidate.adaptivePolicy = { version: 1, generatedAt: 100_000, candleCount: 120,
+    objectiveDailyReturnRate: 0.10, currentState: [0.5, 0.7, 0.5, 0.8, 0.4], recommendations: [{
+      mechanism: "BREAKOUT_ACCEPTANCE", side: "LONG", horizonMinutes: 30, samples: 16, wins: 10,
+      netExpectationRate: 0.003, conservativeNetReturnRate: 0.0015, profitFactor: 1.4,
+      targetReachRate: 0.5, largestWinShare: 0.2, stopRate: 0.004, targetRate: 0.01,
+      reachableRate: 0.015, opportunityRatePerDay: 3, objectiveScore: 0.018, approved: true,
+      reason: "相似状态样本外路径支持成本后正期望",
+    }] };
+  const state = observeStrategyArena({ state: initialStrategyArena(1), observation: input });
+  const portfolio = state.portfolioOpen.BTC_USDT;
+  assert.ok(portfolio, "an approved state-conditioned route does not wait for legacy 3/6 promotion");
+  assert.equal(portfolio.context.adaptivePolicyVersion, 1);
+  assert.equal(portfolio.context.adaptiveHorizonMinutes, 30);
+  assert.equal(portfolio.context.maxHoldMs, 30 * 60_000);
+  assert.ok(Math.abs(portfolio.stopPrice - portfolio.entryPrice * 0.996) < 1e-9);
+  assert.ok(Math.abs(portfolio.targetPrice - portfolio.entryPrice * 1.01) < 1e-9,
+    "PAPER must freeze the exact geometry evaluated by the adaptive policy");
+  assert.equal(Object.values(state.open).some((trade) => trade.orientation === "REVERSE"), false,
+    "V5 directions are independent and never created by swapping the original stop and target");
+});
+
+test("V5 keeps shadow research running when conservative after-cost expectation is not positive", () => {
+  const input = observation(91, 100_000);
+  input.candidate.id = "BTC_USDT:CANDLE5M:ANOMALY:LONG:100001";
+  input.candidate.adaptivePolicy = { version: 1, generatedAt: 100_000, candleCount: 120,
+    objectiveDailyReturnRate: 0.10, currentState: [0.5, 0.7, 0.5, 0.8, 0.4], recommendations: [{
+      mechanism: "BREAKOUT_ACCEPTANCE", side: "LONG", horizonMinutes: 20, samples: 12, wins: 5,
+      netExpectationRate: -0.0002, conservativeNetReturnRate: -0.001, profitFactor: 0.9,
+      targetReachRate: 0.4, largestWinShare: 0.3, stopRate: 0.003, targetRate: 0.006,
+      reachableRate: 0.015, opportunityRatePerDay: 3, objectiveScore: -0.01, approved: false,
+      reason: "相似状态完整成本后的保守期望不为正",
+    }] };
+  const state = observeStrategyArena({ state: initialStrategyArena(1), observation: input });
+  assert.ok(Object.keys(state.open).length > 0, "research shadows continue independently of PAPER authority");
+  assert.equal(state.portfolioOpen.BTC_USDT, undefined);
 });
 
 test("latest three independent effective shadow wins activate only future signals and PAPER clones its exact shadow", () => {
@@ -315,6 +355,19 @@ test("stale prices cannot close and soft exits require a new completed minute", 
     midpoint: 101, bestBid: 101, bestAsk: 101.01, observedAt: 9 * 60_000, fresh: true, completedMinuteAt: 8 * 60_000,
   } }, now: 9 * 60_000 });
   assert.ok(Object.keys(state.open).length < count);
+});
+
+test("all-market completed candles settle research shadows conservatively without occupying a realtime slot", () => {
+  const state = openEvent(initialStrategyArena(1), 1, 10_000);
+  const trades = Object.values(state.open);
+  assert.ok(trades.length > 0);
+  const low = Math.min(...trades.map((trade) => trade.stopPrice)) - 1;
+  const high = Math.max(...trades.map((trade) => trade.targetPrice)) + 1;
+  const advanced = advanceStrategyShadowsFromCompletedCandle({ state, symbol: "BTC_USDT",
+    candle: { low, high, close: 101, completedAt: 5 * 60_000 } });
+  assert.equal(Object.keys(advanced.open).length, 0);
+  assert.ok(advanced.recentShadow.every((trade) => trade.outcome === "STOP"),
+    "same completed candle touching both levels must use stop-first research accounting");
 });
 
 test("account reset uses executable quotes, archives the cycle and starts at 1000 U", () => {

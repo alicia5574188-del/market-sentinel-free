@@ -1,4 +1,4 @@
-export const SYSTEM_VERSION = "adaptive-target-countertrend-v4.4";
+export const SYSTEM_VERSION = "state-conditioned-expectancy-v5";
 export const PORTFOLIO_RISK_CAP = 0.10;
 export const CORRELATED_DIRECTION_RISK_CAP = 0.065;
 export const STALE_AFTER_MS = 5_000;

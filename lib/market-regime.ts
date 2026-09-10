@@ -1,5 +1,6 @@
 import type { RadarCandidate, RadarTicker } from "./market-radar.ts";
 import type { CompletedMinuteCandle } from "./liquidity-core.ts";
+import { buildAdaptivePolicySnapshot, type AdaptivePolicySnapshot } from "./adaptive-policy.ts";
 
 export const MARKET_REGIME_VERSION = 2;
 export const MARKET_REGIME_MIN_SAMPLES = 18;
@@ -56,6 +57,7 @@ export type MarketRegimeCandidate = {
   firstSeenAt: number;
   observedAt: number;
   anomalyKind: RadarCandidate["kind"] | null;
+  adaptivePolicy?: AdaptivePolicySnapshot | null;
 };
 
 export type MarketRegimeState = {
@@ -179,7 +181,8 @@ export function completedCandleStrategyCandidate(input: {
   fundingRate: number;
   now: number;
 }) {
-  const rows = [...input.candles].sort((left, right) => left.time - right.time).slice(-24);
+  const allRows = [...input.candles].sort((left, right) => left.time - right.time).slice(-120);
+  const rows = allRows.slice(-24);
   if (rows.length < 12 || input.volume24hUsd <= 0) return null;
   const latest = rows.at(-1)!;
   const latestCompletedAt = (latest.time + 300) * 1_000;
@@ -218,12 +221,19 @@ export function completedCandleStrategyCandidate(input: {
   const recentLower = Math.min(...recent.map((row) => row.low));
   const recentUpper = Math.max(...recent.map((row) => row.high));
   const lifecycle = `${latestCompletedAt}:${candlePriceBin(lower)}:${candlePriceBin(upper)}`;
+  const adaptivePolicy = buildAdaptivePolicySnapshot(allRows, latestCompletedAt);
+  const bestApprovedObjective = Math.max(0, ...(adaptivePolicy?.recommendations
+    .filter((row) => row.approved).map((row) => row.objectiveScore) ?? []));
+  // A route with independently confirmed positive expectancy must win scarce fresh-book capacity over research-only ranks.
+  const executionPriorityScore = bestApprovedObjective > 0
+    ? 90 + clamp(bestApprovedObjective * 100, 0, 10) : score;
   const candidate: MarketRegimeCandidate = {
     id: `${input.symbol}:CANDLE5M:${channel}:${side}:${lifecycle}`, symbol: input.symbol, channel, regime, side,
-    score: clamp(score, 0, 100), referencePrice: channel === "ANOMALY" ? latest.open : latest.close,
+    score: clamp(executionPriorityScore, 0, 100), referencePrice: channel === "ANOMALY" ? latest.open : latest.close,
     moveRate: channel === "ANOMALY" ? lastMove : trendRate, trendRate, trendEfficiency, volatilityRatio, rangePosition,
     volume24hUsd: input.volume24hUsd, fundingRate: input.fundingRate, openInterestChangeRate: 0,
     confirmations: 2, firstSeenAt: latestCompletedAt, observedAt: latestCompletedAt, anomalyKind: null,
+    adaptivePolicy,
   };
   const structure: ResidentCandleStructure = { id: `${input.symbol}:5m:${lifecycle}`, observedAt: latestCompletedAt,
     lower, upper, midpoint: (lower + upper) / 2, recentLower, recentUpper };

@@ -75,7 +75,8 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(page, /tabScroll\.current\[tab\] = window\.scrollY/);
   assert.match(page, /viewScroll\.current\[view\] = window\.scrollY/);
   assert.match(page, /市场状态竞技场/);
-  assert.match(page, /48个策略单元/);
+  assert.match(page, /V5 状态条件正期望/);
+  assert.match(page, /不再由3连胜、6单或镜像反向直接晋级/);
   assert.match(page, /不依赖高频异动、逐笔成交或持仓量数据/);
   assert.match(page, /有效影子/);
   assert.match(page, /观察影子/);
@@ -133,9 +134,10 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
   assert.match(worker, /completeTrades\.length > item\.report\.trades\.length/);
 });
 
-test("V4 adaptive shadow arena is bounded, cost-aware, and is the sole LIVE order source", async () => {
-  const [arena, regime, worker, page, migration] = await Promise.all([
-    read("lib/strategy-arena.ts"), read("lib/market-regime.ts"), read("worker/index-clean.ts"), read("app/page.tsx"),
+test("V5 state-conditioned expectancy controller is bounded, cost-aware, and is the sole LIVE order source", async () => {
+  const [arena, adaptive, regime, worker, page, migration] = await Promise.all([
+    read("lib/strategy-arena.ts"), read("lib/adaptive-policy.ts"), read("lib/market-regime.ts"),
+    read("worker/index-clean.ts"), read("app/page.tsx"),
     read("drizzle/0035_strategy_arena_fresh_start.sql"),
   ]);
   assert.match(arena, /STRATEGY_CATALOG/);
@@ -169,12 +171,12 @@ test("V4 adaptive shadow arena is bounded, cost-aware, and is the sole LIVE orde
   assert.match(worker, /resetStrategyArenaAccount/);
   assert.match(worker, /minimumPortfolioRiskUsdt: MIN_PORTFOLIO_TRADE_RISK_USDT/);
   assert.match(worker, /empiricalCostFloorRate: ARENA_FRICTION_RATE/);
-  assert.match(page, /最新6笔成本后结果优先/);
-  assert.match(page, /模拟结果只用于复盘/);
-  assert.match(page, /正常最近.*6笔总收益/);
-  assert.match(page, /反向最近.*6笔总收益/);
-  assert.match(page, /正常与反向影子持续运行/);
-  assert.match(page, /6笔优先 · 单向启用/);
+  assert.match(adaptive, /ADAPTIVE_MIN_ANALOG_SAMPLES = 8/);
+  assert.match(adaptive, /ADAPTIVE_HORIZONS_MINUTES = \[10, 20, 30, 45, 60\]/);
+  assert.match(adaptive, /Same-candle ambiguity is deliberately stop-first/);
+  assert.match(arena, /STATE_CONDITIONED_EXPECTANCY/);
+  assert.match(page, /完成K线走查决定当前机制、方向和持仓周期/);
+  assert.match(page, /完整成本后的保守期望/);
   assert.match(arena, /shadowAuthorityDecision/);
   assert.match(arena, /cloneShadowForPortfolio/);
   assert.match(arena, /mutuallyExclusiveOrientation: true/);
@@ -182,7 +184,7 @@ test("V4 adaptive shadow arena is bounded, cost-aware, and is the sole LIVE orde
   assert.match(arena, /reverseQualificationResults/);
   assert.match(arena, /REVERSE_LOSS_STREAK = 3/);
   assert.match(page, /观察影子/);
-  assert.match(page, /不足6笔才用3连胜或3连亏/);
+  assert.match(page, /不再由3连胜、6单或镜像反向直接晋级/);
   assert.match(page, /runtimeBackendOperational\(runtime\)/);
   assert.match(page, /页面摘要延迟，交易后台继续独立运行/);
   assert.match(page, /动态风险/);

@@ -1,6 +1,8 @@
 import { CORRELATED_DIRECTION_RISK_CAP, MIN_NET_REWARD_RISK, PORTFOLIO_MARGIN_CAP, PORTFOLIO_RISK_CAP,
   selectSafeLeverage, sizePaperPosition, type LiquidityRoute, type RangeStructure, type Side } from "./liquidity-core.ts";
 import type { CandidateChannel, MarketRegimeCandidate, MarketRegimeKind, ResidentCandleStructure } from "./market-regime.ts";
+import { ADAPTIVE_DAILY_OBJECTIVE_RATE, ADAPTIVE_MIN_ANALOG_SAMPLES, adaptiveMechanismForPlaybook,
+  type AdaptivePolicyRecommendation } from "./adaptive-policy.ts";
 
 export const STRATEGY_ARENA_VERSION = 6;
 export const STRATEGY_INITIAL_EQUITY = 1_000;
@@ -30,7 +32,7 @@ export type StrategyOrientation = "NORMAL" | "REVERSE";
 export type StrategyFamily = "FAST" | "TREND" | "RANGE" | "REVERSAL";
 export type EntryStyle = "CONFIRM" | "RETEST";
 export type ExitProfile = "FAST" | "STRUCTURE";
-export type ArenaOutcome = "TARGET" | "STOP" | "TIMEOUT" | "RESET";
+export type ArenaOutcome = "TARGET" | "STOP" | "TIMEOUT" | "THESIS_INVALID" | "EDGE_DECAY" | "RESET";
 export type AdmissionTier = "NORMAL";
 
 type Playbook = { id: string; name: string; family: StrategyFamily; channel: CandidateChannel; description: string };
@@ -72,6 +74,9 @@ export type ArenaTradeContext = {
   empiricalExpectedReturnRate: number; empiricalProfitFactor: number; empiricalEvents: number;
   originalTargetPrice?: number; targetAdapted?: boolean; targetEvidenceEvents?: number;
   entryTrigger?: number; feeSlippageRate?: number; fundingCostRate?: number; maxHoldMs?: number; noProgressMs?: number;
+  adaptivePolicyVersion?: number; adaptiveMechanism?: string; adaptiveApproved?: boolean; adaptiveReason?: string;
+  adaptiveHorizonMinutes?: number; adaptiveSamples?: number; adaptiveExpectationRate?: number;
+  adaptiveConservativeRate?: number; adaptiveObjectiveScore?: number; adaptiveTargetReachRate?: number;
 };
 
 export type ArenaTrade = {
@@ -134,7 +139,8 @@ export type ArenaObservation = {
 
 type Signal = { strategyId: string; side: Side; entryTrigger: number; stopPrice: number; targetPrice: number; quality: number; reason: string;
   orientation?: StrategyOrientation; originalTargetPrice?: number; targetAdapted?: boolean; targetEvidenceEvents?: number;
-  structureSource: ArenaTradeContext["structureSource"]; maxHoldMs: number; noProgressMs: number; executable: boolean };
+  structureSource: ArenaTradeContext["structureSource"]; maxHoldMs: number; noProgressMs: number; executable: boolean;
+  adaptivePolicy?: AdaptivePolicyRecommendation | null };
 const opposite = (side: Side): Side => side === "LONG" ? "SHORT" : "LONG";
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
@@ -270,6 +276,16 @@ function basePlaybooks(input: ArenaObservation) {
     if (candidate.trendEfficiency >= 0.62)
       add("steady_trend", candidate.side, "扩张环境内保持高趋势效率，交叉验证趋势延续", candidate.trendEfficiency);
   }
+  const representative: Record<string, string> = {
+    RANGE_ROTATION: "range_edge", COMPRESSION_EXPANSION: "compression_break",
+    FAILED_AUCTION: "range_failed_break", PULLBACK_RECOVERY: "shallow_trend_pullback",
+    MOMENTUM_CONTINUATION: "steady_trend", BREAKOUT_ACCEPTANCE: "anomaly_follow",
+  };
+  for (const policy of candidate.adaptivePolicy?.recommendations ?? []) {
+    const playbookId = representative[policy.mechanism];
+    if (playbookId) add(playbookId, policy.side, `V5独立盈利机制：${policy.reason}`,
+      clamp(0.55 + Math.max(0, policy.conservativeNetReturnRate) * 40, 0.55, 0.95), true);
+  }
   return output;
 }
 
@@ -334,31 +350,50 @@ function structuralGeometry(input: ArenaObservation, definition: StrategyDefinit
   return null;
 }
 
+function adaptiveGeometry(input: ArenaObservation, policy: AdaptivePolicyRecommendation,
+  fallback: ReturnType<typeof structuralGeometry>) {
+  const entry = executableEntry(input, policy.side);
+  const sign = policy.side === "LONG" ? 1 : -1;
+  return { entryTrigger: entry, stopPrice: entry * (1 - sign * policy.stopRate),
+    targetPrice: entry * (1 + sign * policy.targetRate),
+    structureSource: fallback?.structureSource ?? "CANDLE_5M" as ArenaTradeContext["structureSource"],
+    executable: fallback?.executable ?? true };
+}
+
 function signals(input: ArenaObservation): Signal[] {
   const output: Signal[] = [];
   for (const base of basePlaybooks(input)) {
     for (const definition of STRATEGY_CATALOG.filter((item) => item.id.startsWith(`${base.playbookId}:`))) {
+      const mechanism = adaptiveMechanismForPlaybook(base.playbookId);
+      const adaptivePolicy = input.candidate.adaptivePolicy?.recommendations
+        .find((row) => row.mechanism === mechanism && row.side === base.side) ?? null;
       const routeRetest = input.routes.some((route) => route.side === base.side
         && ["BREAKOUT_RETEST", "EDGE_REJECTION", "FAILED_BREAKOUT_REVERSAL"].includes(route.kind));
-      const ready = definition.entryStyle === "CONFIRM" ? (input.confirmationBySide[base.side] ?? 0) >= 0.48
-        : routeRetest || base.retestReady;
+      const ready = adaptivePolicy ? true : definition.entryStyle === "CONFIRM"
+        ? (input.confirmationBySide[base.side] ?? 0) >= 0.48 : routeRetest || base.retestReady;
       const fakeout = input.fakeoutBySide[base.side] ?? 1;
-      const geometry = structuralGeometry(input, definition, base.side);
-      if (!ready || !geometry || fakeout > 0.82 && !base.playbookId.includes("failed") && !base.playbookId.includes("fade")) continue;
+      const structural = structuralGeometry(input, definition, base.side);
+      const geometry = adaptivePolicy ? adaptiveGeometry(input, adaptivePolicy, structural) : structural;
+      if (!ready || !geometry || !adaptivePolicy
+        && fakeout > 0.82 && !base.playbookId.includes("failed") && !base.playbookId.includes("fade")) continue;
       const hold = definition.family === "FAST" ? { max: 15, noProgress: 8 }
         : definition.family === "RANGE" ? { max: 30, noProgress: 15 }
           : definition.family === "REVERSAL" ? { max: 30, noProgress: 10 } : { max: 60, noProgress: 30 };
+      const adaptiveHorizon = adaptivePolicy?.horizonMinutes;
       output.push({ strategyId: definition.id, side: base.side, ...geometry,
-        maxHoldMs: (definition.exitProfile === "FAST" ? hold.noProgress : hold.max) * 60_000,
-        noProgressMs: hold.noProgress * 60_000,
+        maxHoldMs: (adaptiveHorizon ?? (definition.exitProfile === "FAST" ? hold.noProgress : hold.max)) * 60_000,
+        noProgressMs: (adaptiveHorizon ? Math.max(10, Math.round(adaptiveHorizon * 0.6)) : hold.noProgress) * 60_000,
         quality: clamp(base.quality * 0.72 + (input.confirmationBySide[base.side] ?? 0) * 0.28, 0, 1),
-        reason: base.reason });
+        reason: adaptivePolicy ? `${base.reason}；V5选择${adaptiveHorizon}分钟状态持仓窗口` : base.reason,
+        adaptivePolicy });
     }
   }
   return output;
 }
 
 function attainableTarget(state: StrategyArenaState, input: ArenaObservation, signal: Signal, definition: StrategyDefinition): Signal {
+  if (signal.adaptivePolicy) return { ...signal, orientation: "NORMAL", originalTargetPrice: signal.targetPrice,
+    targetAdapted: false, targetEvidenceEvents: signal.adaptivePolicy.samples };
   const entry = executableEntry(input, signal.side);
   const direction = signal.side === "LONG" ? 1 : -1;
   const originalDistanceRate = direction * (signal.targetPrice - entry) / Math.max(entry, 1e-9);
@@ -369,8 +404,13 @@ function attainableTarget(state: StrategyArenaState, input: ArenaObservation, si
   const profileCap = ARENA_FRICTION_RATE + desiredNetRr * (stopRate + ARENA_FRICTION_RATE);
   const prior = independentShadowTrades(state, signal.strategyId, "NORMAL");
   const favorable = prior.map((trade) => trade.maxFavorableRate).filter((value) => value > 0).sort((a, b) => a - b);
-  const empirical = favorable.length >= 3 ? favorable[Math.floor((favorable.length - 1) * 0.6)] * 0.9 : Number.POSITIVE_INFINITY;
-  const reachableCap = Math.max(economicFloor, Math.min(profileCap, empirical));
+  const empirical = favorable.length >= 3
+    ? favorable[Math.floor((favorable.length - 1) * 0.6)] * 0.9 : Number.POSITIVE_INFINITY;
+  if (empirical < economicFloor) return { ...signal, orientation: "NORMAL", executable: false,
+    originalTargetPrice: signal.targetPrice, targetAdapted: false,
+    targetEvidenceEvents: prior.length,
+    reason: `${signal.reason}；历史可达空间不足以覆盖完整成本和结构风险` };
+  const reachableCap = Math.min(profileCap, empirical);
   const selectedDistanceRate = Math.min(originalDistanceRate, reachableCap);
   const targetPrice = entry * (1 + direction * selectedDistanceRate);
   return { ...signal, orientation: "NORMAL", originalTargetPrice: signal.targetPrice,
@@ -383,7 +423,7 @@ function reversedSignal(input: ArenaObservation, signal: Signal): Signal {
   const side = opposite(signal.side);
   return { ...signal, side, orientation: "REVERSE", entryTrigger: executableEntry(input, side),
     stopPrice: signal.targetPrice, targetPrice: signal.stopPrice, originalTargetPrice: signal.stopPrice,
-    targetAdapted: false, reason: `反向验证：${signal.reason}` };
+    targetAdapted: false, adaptivePolicy: null, reason: `V4兼容反向验证：${signal.reason}` };
 }
 
 function transition(state: StrategyArenaState, score: StrategyScore, to: StrategyLane, now: number, reason: string) {
@@ -657,7 +697,9 @@ function advanceBook(state: StrategyArenaState, book: Record<string, ArenaTrade>
       && trade.maxFavorableRate < riskRate * 0.35 && move < riskRate * 0.15;
     const timedOut = softEvidence && age >= (trade.context.maxHoldMs ?? 60 * 60_000);
     if (!stopped && !targeted && !noProgress && !timedOut) continue;
-    const outcome: ArenaOutcome = stopped ? "STOP" : targeted ? "TARGET" : "TIMEOUT";
+    const adaptive = trade.context.adaptivePolicyVersion != null;
+    const outcome: ArenaOutcome = stopped ? "STOP" : targeted ? "TARGET"
+      : noProgress && adaptive ? "THESIS_INVALID" : timedOut && adaptive ? "EDGE_DECAY" : "TIMEOUT";
     const exitPrice = price;
     delete book[id]; recordClosed(state, closeTrade(trade, exitPrice, outcome, now));
   }
@@ -665,6 +707,38 @@ function advanceBook(state: StrategyArenaState, book: Record<string, ArenaTrade>
 export function advanceStrategyArena(input: { state: StrategyArenaState; quotes: Record<string, number | ArenaQuote>; now: number }) {
   const state = normalizeStrategyArena(input.state, input.now);
   advanceBook(state, state.open, input.quotes, input.now); advanceBook(state, state.portfolioOpen, input.quotes, input.now); return state;
+}
+
+export function advanceStrategyShadowsFromCompletedCandle(input: { state: StrategyArenaState; symbol: string;
+  candle: { high: number; low: number; close: number; completedAt: number } }) {
+  const state = normalizeStrategyArena(input.state, input.candle.completedAt);
+  for (const [id, trade] of Object.entries(state.open)) {
+    if (trade.symbol !== input.symbol || input.candle.completedAt <= trade.openedAt) continue;
+    const sign = trade.side === "LONG" ? 1 : -1;
+    const favorable = trade.side === "LONG" ? (input.candle.high - trade.entryPrice) / trade.entryPrice
+      : (trade.entryPrice - input.candle.low) / trade.entryPrice;
+    const adverse = trade.side === "LONG" ? (input.candle.low - trade.entryPrice) / trade.entryPrice
+      : (trade.entryPrice - input.candle.high) / trade.entryPrice;
+    trade.maxFavorableRate = Math.max(trade.maxFavorableRate, favorable);
+    trade.maxAdverseRate = Math.min(trade.maxAdverseRate, adverse);
+    trade.lastPrice = input.candle.close;
+    const stopped = trade.side === "LONG" ? input.candle.low <= trade.stopPrice : input.candle.high >= trade.stopPrice;
+    const targeted = trade.side === "LONG" ? input.candle.high >= trade.targetPrice : input.candle.low <= trade.targetPrice;
+    const age = input.candle.completedAt - trade.openedAt;
+    const riskRate = Math.max(Math.abs(trade.entryPrice - trade.stopPrice) / trade.entryPrice, 1e-9);
+    const closeMove = sign * (input.candle.close - trade.entryPrice) / trade.entryPrice;
+    const noProgress = age >= (trade.context.noProgressMs ?? 30 * 60_000)
+      && trade.maxFavorableRate < riskRate * 0.35 && closeMove < riskRate * 0.15;
+    const expired = age >= (trade.context.maxHoldMs ?? 60 * 60_000);
+    if (!stopped && !targeted && !noProgress && !expired) continue;
+    const adaptive = trade.context.adaptivePolicyVersion != null;
+    // A completed candle that contains both levels is deliberately settled stop-first.
+    const outcome: ArenaOutcome = stopped ? "STOP" : targeted ? "TARGET"
+      : noProgress && adaptive ? "THESIS_INVALID" : expired && adaptive ? "EDGE_DECAY" : "TIMEOUT";
+    const exitPrice = stopped ? trade.stopPrice : targeted ? trade.targetPrice : input.candle.close;
+    delete state.open[id]; recordClosed(state, closeTrade(trade, exitPrice, outcome, input.candle.completedAt));
+  }
+  return state;
 }
 
 function geometryEconomics(input: ArenaObservation, signal: Signal) {
@@ -692,7 +766,15 @@ function tradeContext(input: ArenaObservation, definition: StrategyDefinition, s
     entryTrigger: signal.entryTrigger, feeSlippageRate: ARENA_FRICTION_RATE, fundingCostRate: 0,
     originalTargetPrice: signal.originalTargetPrice, targetAdapted: signal.targetAdapted,
     targetEvidenceEvents: signal.targetEvidenceEvents,
-    maxHoldMs: signal.maxHoldMs, noProgressMs: signal.noProgressMs };
+    maxHoldMs: signal.maxHoldMs, noProgressMs: signal.noProgressMs,
+    adaptivePolicyVersion: signal.adaptivePolicy ? input.candidate.adaptivePolicy?.version : undefined,
+    adaptiveMechanism: signal.adaptivePolicy?.mechanism, adaptiveApproved: signal.adaptivePolicy?.approved,
+    adaptiveReason: signal.adaptivePolicy?.reason, adaptiveHorizonMinutes: signal.adaptivePolicy?.horizonMinutes,
+    adaptiveSamples: signal.adaptivePolicy?.samples,
+    adaptiveExpectationRate: signal.adaptivePolicy?.netExpectationRate,
+    adaptiveConservativeRate: signal.adaptivePolicy?.conservativeNetReturnRate,
+    adaptiveObjectiveScore: signal.adaptivePolicy?.objectiveScore,
+    adaptiveTargetReachRate: signal.adaptivePolicy?.targetReachRate };
 }
 type TradeSizing = { notional: number; plannedRisk: number; contracts: number; quantoMultiplier: number; leverage: number;
   margin: number; accountEquityAtOpen: number; admissionTier: AdmissionTier | null };
@@ -753,9 +835,13 @@ function portfolioSizing(state: StrategyArenaState, input: ArenaObservation, sig
 function portfolioAdmission(state: StrategyArenaState, input: ArenaObservation, signal: Signal, score: StrategyScore,
   orientation: StrategyOrientation = "NORMAL") {
   const economics = geometryEconomics(input, signal);
+  const adaptive = signal.adaptivePolicy;
   const own = orientation === "REVERSE" ? reverseQualificationPerformance(score, input.candidate.regime) : strategyPerformance(score, input.candidate.regime);
-  const sample = own;
-  const enabled = orientation === "REVERSE" ? score.reverseEnabled : score.enabled;
+  const sample = adaptive ? { events: adaptive.samples, wins: adaptive.wins,
+    netReturnRate: adaptive.netExpectationRate * adaptive.samples, meanReturnRate: adaptive.netExpectationRate,
+    conservativeReturnRate: adaptive.conservativeNetReturnRate, profitFactor: adaptive.profitFactor,
+    regimeEvents: adaptive.samples } : own;
+  const enabled = adaptive ? adaptive.approved : orientation === "REVERSE" ? score.reverseEnabled : score.enabled;
   const reverseBreakEvenRate = (economics.structuralStopRate + ARENA_FRICTION_RATE)
     / Math.max(economics.structuralStopRate + economics.grossRewardRate, 1e-9);
   const economicGeometry = orientation === "REVERSE"
@@ -764,10 +850,14 @@ function portfolioAdmission(state: StrategyArenaState, input: ArenaObservation, 
     : economics.netRewardRisk >= MIN_NET_REWARD_RISK && economics.costShare <= ARENA_MAX_COST_SHARE;
   const validStructure = signal.side === "LONG" ? economics.entryPrice > signal.stopPrice && economics.entryPrice < signal.targetPrice
     : economics.entryPrice < signal.stopPrice && economics.entryPrice > signal.targetPrice;
+  const v5Candidate = input.candidate.id.includes(":CANDLE5M:");
   const blocker = input.dataFresh === false ? "STALE" : input.contractReady === false ? "CONTRACT"
     : input.managementCapacity === false ? "DATA_CAPACITY" : !validStructure ? "STRUCTURE" : input.candidate.volume24hUsd < ARENA_MIN_VOLUME_24H_USD ? "LIQUIDITY"
     : input.spreadRate > ARENA_MAX_SPREAD_RATE ? "SPREAD" : !economicGeometry ? "NET_ECONOMICS"
-      : !enabled ? "INACTIVE" : null;
+      : v5Candidate && !adaptive ? "STATE_MISMATCH"
+        : adaptive && (!adaptive.approved || adaptive.samples < ADAPTIVE_MIN_ANALOG_SAMPLES
+          || adaptive.conservativeNetReturnRate <= 0) ? "EXPECTANCY"
+          : !enabled ? "INACTIVE" : null;
   if (blocker) { state.admissionRejects[blocker] = (state.admissionRejects[blocker] ?? 0) + 1; return null; }
   const sizing = portfolioSizing(state, input, signal);
   if (!sizing) { state.admissionRejects.SIZING = (state.admissionRejects.SIZING ?? 0) + 1; return null; }
@@ -905,6 +995,9 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
       `${row.signal.strategyId}:${input.observation.candidate.id}`);
     opened.push({ ...row, orientation: "NORMAL", shadow });
 
+    // V5 directions are emitted and validated independently by the completed-candle policy.
+    // The mirrored V4 route is retained only for legacy/non-policy observations.
+    if (input.observation.candidate.adaptivePolicy) continue;
     const reverse = reversedSignal(input.observation, row.signal);
     const reverseKey = `reverse:${row.signal.strategyId}:${input.observation.candidate.symbol}`;
     const reverseSeenKey = `effective:reverse:${row.signal.strategyId}:${input.observation.candidate.id}`;
@@ -924,13 +1017,15 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
   while (state.seenSignals.length > 2_000) state.seenSignals.shift();
   const symbol = input.observation.candidate.symbol;
   const portfolioSeenKey = `portfolio:${input.observation.candidate.id}`;
-  const active = opened.filter((row) => row.orientation === "NORMAL"
-    ? row.score.enabled && row.score.lane === "ACTIVE" : row.score.reverseEnabled);
+  const active = opened.filter((row) => row.signal.adaptivePolicy
+    ? row.orientation === "NORMAL" && row.signal.adaptivePolicy.approved
+    : row.orientation === "NORMAL" ? row.score.enabled && row.score.lane === "ACTIVE" : row.score.reverseEnabled);
   if (active.length && !state.portfolioOpen[symbol] && !state.seenSignals.includes(portfolioSeenKey)) {
     const candidates = active.map((row) => ({ ...row,
       admission: portfolioAdmission(state, input.observation, row.signal, row.score, row.orientation) }))
       .filter((row) => row.admission)
-      .sort((a, b) => b.admission!.sample.conservativeReturnRate - a.admission!.sample.conservativeReturnRate
+      .sort((a, b) => (b.signal.adaptivePolicy?.objectiveScore ?? 0) - (a.signal.adaptivePolicy?.objectiveScore ?? 0)
+        || b.admission!.sample.conservativeReturnRate - a.admission!.sample.conservativeReturnRate
         || b.admission!.sample.profitFactor - a.admission!.sample.profitFactor || b.signal.quality - a.signal.quality);
     const winner = candidates[0];
     if (winner?.admission) {
@@ -998,8 +1093,11 @@ export function arenaSummary(state: StrategyArenaState) {
       minimumPortfolioRiskUsdt: MIN_PORTFOLIO_TRADE_RISK_USDT, empiricalCostFloorRate: ARENA_FRICTION_RATE,
       reverseTriggerWindow: REVERSE_TRIGGER_WINDOW, reverseLossStreak: REVERSE_LOSS_STREAK,
       reverseMaxBreakEvenRate: REVERSE_MAX_BREAK_EVEN_RATE,
-      authorityWindowPriority: "LATEST_SIX_THEN_THREE", paperEvaluation: false,
+      authorityWindowPriority: "STATE_CONDITIONED_EXPECTANCY", paperEvaluation: false,
       mutuallyExclusiveOrientation: true, exactShadowClone: true,
-      normalShadowAlwaysOn: true, reverseShadowAlwaysOn: true, fastTargetNetRewardRisk: FAST_TARGET_NET_RR,
-      structureTargetNetRewardRisk: STRUCTURE_TARGET_NET_RR } };
+      normalShadowAlwaysOn: true, reverseShadowAlwaysOn: false, independentDirections: true,
+      fastTargetNetRewardRisk: FAST_TARGET_NET_RR,
+      structureTargetNetRewardRisk: STRUCTURE_TARGET_NET_RR,
+      adaptivePolicyVersion: 1, adaptiveMinimumAnalogSamples: ADAPTIVE_MIN_ANALOG_SAMPLES,
+      dailyObjectiveRate: ADAPTIVE_DAILY_OBJECTIVE_RATE, dailyObjectiveIsQuota: false } };
 }
