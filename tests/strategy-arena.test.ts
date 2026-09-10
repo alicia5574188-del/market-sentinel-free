@@ -67,7 +67,7 @@ function qualify(state = initialStrategyArena(1), start = 10_000) {
   return state;
 }
 
-test("V4.3 keeps 12 playbooks and 48 genuinely distinct execution variants", () => {
+test("V4.4 keeps 12 playbooks and 48 genuinely distinct execution variants", () => {
   assert.equal(STRATEGY_CATALOG.length, 48);
   assert.equal(new Set(STRATEGY_CATALOG.map((item) => item.id.split(":")[0])).size, 12);
   assert.equal(new Set(STRATEGY_CATALOG.map((item) => `${item.id}:${item.entryStyle}:${item.exitProfile}`)).size, 48);
@@ -269,4 +269,47 @@ test("account reset uses executable quotes, archives the cycle and starts at 100
   assert.equal(state.portfolioEquity, 1_000);
   assert.deepEqual(state.portfolioOpen, {});
   assert.equal(state.archivedPortfolioCycles.length, 1);
+});
+
+test("V4.4 freezes a materially closer target while retaining full-cost economics", () => {
+  const structureId = "anomaly_follow:confirm:structure";
+  const opened = openForStrategy(initialStrategyArena(1), structureId, 1, 10_000).state;
+  const trade = opened.open[`${structureId}:BTC_USDT`];
+  assert.ok(trade.context.targetAdapted);
+  assert.ok((trade.context.originalTargetPrice ?? 0) > trade.targetPrice);
+  assert.ok(trade.context.netRewardRisk >= 1.2);
+  assert.equal(trade.context.targetEvidenceEvents, 0);
+});
+
+test("countertrend earns its own promotion while the normal effective shadow never stops", () => {
+  let state = initialStrategyArena(1);
+  let eventStart = 2_000;
+  let now = 1_000_000;
+  for (let index = 0; index < 6; index += 1) {
+    const opened = openForStrategy(state, strategyId, eventStart, now);
+    state = settleEvent(opened.state, opened.now + 10_000, false);
+    eventStart = opened.event + 1; now += 20_000;
+  }
+  assert.equal(state.strategies[strategyId].reverseEnabled, false, "normal losses only authorize prospective reverse shadow");
+
+  for (let index = 0; index < 3; index += 1) {
+    const opened = openForStrategy(state, strategyId, eventStart, now);
+    const pair = Object.values(opened.state.open).filter((trade) => trade.strategyId === strategyId);
+    assert.equal(pair.filter((trade) => (trade.orientation ?? "NORMAL") === "NORMAL").length, 1);
+    const reverse = pair.find((trade) => trade.orientation === "REVERSE");
+    assert.ok(reverse, "eligible inverse route opens beside, not instead of, the normal shadow");
+    const price = reverse.targetPrice - 0.01;
+    state = advanceStrategyArena({ state: opened.state,
+      quotes: { BTC_USDT: { midpoint: price, bestBid: price, bestAsk: price, fresh: true } }, now: opened.now + 10_000 });
+    eventStart = opened.event + 1; now += 20_000;
+  }
+  assert.equal(state.strategies[strategyId].reverseEnabled, true);
+  assert.equal(state.strategies[strategyId].reverseRecentResults.length, 3);
+
+  const next = openForStrategy(state, strategyId, eventStart, now).state;
+  assert.ok(Object.values(next.open).some((trade) => trade.strategyId === strategyId
+    && (trade.orientation ?? "NORMAL") === "NORMAL"), "normal effective shadow remains continuous after inverse promotion");
+  assert.equal(Object.keys(next.portfolioOpen).length, 1, "one account selects one direction and never self-hedges");
+  assert.equal(next.portfolioOpen.BTC_USDT.orientation, "REVERSE");
+  assert.equal(next.portfolioOpen.BTC_USDT.side, "SHORT");
 });

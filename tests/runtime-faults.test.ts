@@ -858,7 +858,7 @@ test("health status is compact while retaining every release gate", async () => 
   const response = await stream.fetch(new Request("https://market-stream/health-status"));
   const status = await response.json();
 
-  assert.equal(status.version, "cost-gated-risk-consistent-v4.3");
+  assert.equal(status.version, "adaptive-target-countertrend-v4.4");
   assert.equal(status.strategyArena.version, 6);
   assert.equal(status.strategyArena.playbookCount, 12);
   assert.equal(status.strategyArena.catalogSize, 48);

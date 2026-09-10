@@ -19,6 +19,7 @@ import { completedCandleStrategyCandidate, initialMarketRegimes, marketRegimeSum
   type MarketRegimeCandidate, type MarketRegimeState, type ResidentCandleStructure } from "../lib/market-regime.ts";
 import { advanceStrategyArena, applyStrategySleepStates, arenaSummary, initialStrategyArena, normalizeStrategyArena, observeStrategyArena,
   ARENA_FRICTION_RATE, MIN_PORTFOLIO_TRADE_RISK_USDT, PORTFOLIO_REALTIME_CAPACITY, resetStrategyArenaAccount,
+  REVERSE_MAX_BREAK_EVEN_RATE, REVERSE_STOP_MINIMUM, REVERSE_TRIGGER_WINDOW,
   STRATEGY_INITIAL_EQUITY, type StrategyArenaState } from "../lib/strategy-arena.ts";
 
 const LOOP_MS = 2_000;
@@ -485,7 +486,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         latest3: results.slice(-3).map((row) => row.netReturnRate),
         latest6Net: results.slice(-6).reduce((total, row) => total + row.netReturnRate, 0),
         active: Object.values(this.runtime.strategyArena.strategies)
-          .some((strategy) => strategy.id.startsWith(`${playbook.id}:`) && strategy.enabled) };
+          .some((strategy) => strategy.id.startsWith(`${playbook.id}:`) && strategy.enabled),
+        reverseActive: Object.values(this.runtime.strategyArena.strategies)
+          .some((strategy) => strategy.id.startsWith(`${playbook.id}:`) && strategy.reverseEnabled),
+        reverseShadowEvents: Object.values(this.runtime.strategyArena.strategies)
+          .filter((strategy) => strategy.id.startsWith(`${playbook.id}:`))
+          .reduce((total, strategy) => total + strategy.reverseRecentResults.length, 0) };
     });
     try {
       await this.env.DB.batch([
@@ -544,7 +550,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         quotes: Object.fromEntries(positions.map((position) => [position.symbol, {
           midpoint: this.runtime.evidence[position.symbol]!.midpoint, bestBid: this.runtime.evidence[position.symbol]!.bestBid,
           bestAsk: this.runtime.evidence[position.symbol]!.bestAsk, observedAt: this.runtime.evidence[position.symbol]!.observedAt, fresh: true,
-        }])), now, reason: "V4.3切换：以新鲜可成交价格结算并归档上一模拟周期" });
+        }])), now, reason: "V4.4切换：以新鲜可成交价格结算并归档上一模拟周期" });
     }
   }
 
@@ -1781,6 +1787,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           catalogSize: strategies.length,
           shadowCount: strategies.filter((row) => row.lane === "SHADOW").length,
           activeCount: strategies.filter((row) => row.lane === "ACTIVE").length,
+          reverseActiveCount: strategies.filter((row) => row.reverseEnabled).length,
           sleepingCount: strategies.filter((row) => row.lane === "SLEEPING").length,
           portfolioEquity: this.runtime.strategyArena.portfolioEquity,
           portfolioOpen: Object.keys(this.runtime.strategyArena.portfolioOpen).length,
@@ -1796,6 +1803,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             correlatedRiskCap: CORRELATED_DIRECTION_RISK_CAP,
             marginCap: 0.30,
             maxNotionalMultiple: 4,
+            reverseTriggerWindow: REVERSE_TRIGGER_WINDOW,
+            reverseStopMinimum: REVERSE_STOP_MINIMUM,
+            reverseMaxBreakEvenRate: REVERSE_MAX_BREAK_EVEN_RATE,
+            normalShadowAlwaysOn: true,
           },
         },
         radar: {
