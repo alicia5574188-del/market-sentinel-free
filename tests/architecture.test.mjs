@@ -171,6 +171,9 @@ test("V4 adaptive shadow arena is bounded, cost-aware, and is the sole LIVE orde
   assert.match(worker, /empiricalCostFloorRate: ARENA_FRICTION_RATE/);
   assert.match(page, /最新6笔成本后结果优先/);
   assert.match(page, /模拟结果只用于复盘/);
+  assert.match(page, /正常最近.*6笔总收益/);
+  assert.match(page, /反向最近.*6笔总收益/);
+  assert.match(page, /正常与反向影子持续运行/);
   assert.match(page, /6笔优先 · 单向启用/);
   assert.match(arena, /shadowAuthorityDecision/);
   assert.match(arena, /cloneShadowForPortfolio/);

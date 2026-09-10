@@ -1,3 +1,9 @@
+# Completed UI correction — symmetric normal/reverse evidence
+
+- Display normal and reverse strategy evidence identically: each side shows its latest three outcomes and latest-six after-cost total return.
+- State the current authority decision and reason directly; keep PAPER result counts as review-only information.
+- Do not change strategy authority, account state, risk, market-data behavior or LIVE. Verify fully and release through GitHub `main`.
+
 # Completed hotfix — restore the owner PAPER reset
 
 - Make the phone reset request use the exact confirmation token required by the authenticated backend route.

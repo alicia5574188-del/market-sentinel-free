@@ -1,3 +1,10 @@
+# Done — 2026-09-10 symmetric normal/reverse evidence
+
+- Screenshot confirmed the page showed normal latest-six total return but replaced the reverse total with only a win/loss sequence. Four losses and two wins cannot establish whether the fully costed reverse total is positive or negative.
+- Each strategy card now shows identical normal/reverse latest-three outcomes and latest-six after-cost totals, followed by the current authority reason and review-only PAPER counts.
+- Trading authority, evidence, account state, risk and LIVE remain unchanged.
+- Local verification passed 197 direct tests, 16 architecture/migration tests, TypeScript, ESLint, the production build and whitespace validation.
+
 # Done — 2026-09-10 PAPER reset confirmation hotfix
 
 - Confirmed the regression: the phone sent `confirm: "RESET"`, while the owner-only backend route has always required `confirm: "RESET_PAPER"`; every tap therefore returned `确认参数无效` before reaching account reset logic.

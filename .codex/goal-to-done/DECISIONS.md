@@ -1,3 +1,9 @@
+# Evidence-display decision — 2026-09-10
+
+- A win/loss sequence is not a substitute for total after-cost return: two larger wins can outweigh four smaller losses, so the UI must show the exact aggregate used by authority.
+- Normal and reverse evidence use the same labels, sample counts, latest-three sequence and latest-six total-return format.
+- PAPER counts remain visible only as review data. They do not share a score cell with shadow qualification and do not influence enablement.
+
 # V4.3 decisions — 2026-09-10
 
 - Treat the first observed positive overnight gross result as a regression boundary: this correction does not change signal direction, frozen stop/target geometry or exit timing. Future market PnL cannot be guaranteed, but mechanical truth fixes must not silently redesign the strategy again.
