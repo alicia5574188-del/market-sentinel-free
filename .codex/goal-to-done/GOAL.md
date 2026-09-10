@@ -1,4 +1,4 @@
-# Active goal — correct countertrend OR activation
+# Completed goal — correct countertrend OR activation
 
 - Treat the normal route's latest three independent effective-shadow losses OR its latest six independent effective-shadow total loss as alternative countertrend evidence.
 - For the qualifying window, require the fully costed reversed counterfactual to remain positive, then enable the countertrend for the next new valid signal without another promotion stage.

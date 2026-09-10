@@ -1,8 +1,9 @@
-# Active — 2026-09-10 countertrend OR activation correction
+# Done — 2026-09-10 countertrend OR activation correction
 
 - User clarified the intended reverse evidence is symmetric with the existing rolling rules: latest three independent normal losses OR a negative latest-six normal total, not six trades containing three stops.
 - Confirmed production implemented only the six-trade path and additionally required three stop outcomes. Replaced it with the intended three-loss OR negative-six predicate, preserved the fully costed reverse-profit proof, and exposed honest 3/3 and n/6 sample counts.
-- Local verification passed 194 direct tests, 15 architecture/migration tests, production build, TypeScript, ESLint and whitespace checks. GitHub/Cloudflare deployment and production acceptance remain pending.
+- Local verification passed 194 direct tests, 15 architecture/migration tests, production build, TypeScript, ESLint and whitespace checks.
+- Production code commit `59256c98edb006659fd9d33275ad35b3fc5ec6bb` passed GitHub Actions run #643 and its advancing production-health gate. Cloudflare version `5418c7c5-861b-40e8-bd8b-7287c33e8454` reported V4.4, fresh authority, no global error, 1,000 U equity, 30/10 data capacity, 12/48 catalog, bounded risk and LIVE explicitly OFF (`requestedEnabled=false`, `operational=false`).
 
 # Done — 2026-09-10 direct countertrend activation
 
