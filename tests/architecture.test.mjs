@@ -77,6 +77,8 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(page, /tabScroll\.current\[tab\] = window\.scrollY/);
   assert.match(page, /viewScroll\.current\[view\] = window\.scrollY/);
   assert.match(page, /自适应状态路线/);
+  assert.match(layout, /V6自适应状态路线 · PAPER/);
+  assert.doesNotMatch(layout, /V4自适应影子策略/);
   assert.match(page, /V6 · GENERATED STATE ROUTES/);
   assert.match(page, /旧12策略没有开仓权/);
   assert.match(page, /V6决策流程/);
@@ -224,7 +226,7 @@ test("legacy sizing and portfolio mirroring both retain bounded account risk", a
 
 test("cutover is credential-bound and removes legacy DOs only after v6 health", async () => {
   const workflow = await read(".github/workflows/sentinel-v2-ci.yml");
-  assert.match(workflow, /grep -Fq '自适应状态路线'/);
+  assert.equal((workflow.match(/grep -Fq '自适应状态路线'/g) ?? []).length, 2);
   assert.match(workflow, /id,exchange,environment,ciphertext,iv,crypto_version,key_hint,gate_user_id,owner_account_id,permission_summary_json,status,last_verified_at,last_error,created_at,updated_at/);
   assert.match(workflow, /index\.prepare\.js/);
   assert.match(workflow, /class RetiredDurableObject extends DurableObject/);

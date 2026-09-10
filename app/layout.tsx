@@ -4,9 +4,9 @@ import "./globals.css";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "V4自适应影子策略 · PAPER",
-  description: "30币市场状态、滚动影子验证与动态风险的Gate永续合约模拟系统",
-  applicationName: "V4自适应影子策略",
+  title: "V6自适应状态路线 · PAPER",
+  description: "30币流动性筛选、完整K线状态路线与真实合约参数的Gate永续模拟系统",
+  applicationName: "V6自适应状态路线",
   manifest: "/manifest.webmanifest",
 };
 
