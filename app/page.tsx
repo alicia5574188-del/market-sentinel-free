@@ -71,11 +71,13 @@ type StrategyArena = { version: 6; startedAt: number; catalogSize: number; playb
   recentPaper: ArenaTrade[]; recentPortfolio: ArenaTrade[]; archivedPortfolioTrades: ArenaTrade[]; transitions: StrategyTransition[]; playbooks: PlaybookEvidence[];
   portfolioCycle: number; portfolioCycleStartedAt: number; archivedPortfolioCycles: PortfolioCycleArchive[];
   admissionRejects: Record<string, number>; observationShadow: Array<{ id: string; strategyName: string; symbol: string; observedAt: number; blocker: string }>;
-  rules: { promotionWinStreak: number; promotionWindow: number; demotionLosses: number; frictionFloorRate: number; minNetRewardRisk: number;
+  rules: { promotionWinStreak: number; promotionWindow: number; frictionFloorRate: number; minNetRewardRisk: number;
     maxCostShare: number; singleTradeRiskMin: number; singleTradeRiskMax: number; portfolioRiskCap: number;
     correlatedRiskCap: number; marginCap: number; maxNotionalMultiple: number; realtimeCapacity: number;
     minimumPortfolioRiskUsdt: number; empiricalCostFloorRate: number; reverseTriggerWindow?: number; reverseLossStreak?: number;
-    reverseMaxBreakEvenRate?: number; normalShadowAlwaysOn?: boolean; fastTargetNetRewardRisk?: number; structureTargetNetRewardRisk?: number } };
+    reverseMaxBreakEvenRate?: number; authorityWindowPriority?: "LATEST_SIX_THEN_THREE"; paperEvaluation?: boolean;
+    mutuallyExclusiveOrientation?: boolean; exactShadowClone?: boolean; normalShadowAlwaysOn?: boolean;
+    reverseShadowAlwaysOn?: boolean; fastTargetNetRewardRisk?: number; structureTargetNetRewardRisk?: number } };
 type RegimeCandidate = { id: string; symbol: string; channel: CandidateChannel; regime: RegimeKind; side: Side; score: number;
   referencePrice: number; moveRate: number; trendRate: number; trendEfficiency: number; volatilityRatio: number;
   rangePosition: number; volume24hUsd: number; openInterestChangeRate: number; confirmations: number; firstSeenAt: number;
@@ -257,7 +259,7 @@ export default function Home() {
     </header>
 
     {tab === "brain" && <>
-      <section className="brain-hero"><div><p className="eyebrow">V4.4 双向验证 · 唯一模拟合约账户 · 第{arena?.portfolioCycle ?? 1}轮</p><h1>{headline}</h1><p className="hero-detail">正常3连亏或最近6单总亏损，反向成本后盈利即直接启用；双向影子持续运行</p></div><div className="decision-badge"><small>当前权益</small><strong>{num(portfolioAccountEquity, 2)}</strong><span>USDT</span></div></section>
+      <section className="brain-hero"><div><p className="eyebrow">V4.4 影子权威 · 唯一模拟合约账户 · 第{arena?.portfolioCycle ?? 1}轮</p><h1>{headline}</h1><p className="hero-detail">最新6笔成本后结果优先；不足6笔才看最新3笔，正常与反向只会启用一边</p></div><div className="decision-badge"><small>当前权益</small><strong>{num(portfolioAccountEquity, 2)}</strong><span>USDT</span></div></section>
 
       <section className="summary four">
         <article><small>模拟账户盈亏</small><strong className={portfolioPnl >= 0 ? "positive" : "negative"}>{signed(portfolioPnl)} U</strong><p>{signed(portfolioPnl / INITIAL_EQUITY * 100)}% · 已含当前持仓完整成本</p></article>
@@ -282,7 +284,7 @@ export default function Home() {
       </article>)}{!regimes?.candidates.length && <p>正在轮询30币完整5分钟K线；不依赖高频异动、逐笔成交或持仓量数据。</p>}</div>
     </section>
 
-    <section className="playbook-list" hidden={tab !== "brain"}><div className="section-heading"><div><h2>V4.4策略状态</h2><p>正常策略永远持续影子；正常3连亏或最近6笔总亏损，且反向扣完整成本仍盈利时，反向直接启用下一次新信号，无需二次晋级。</p></div><span>{arena?.activeCount ?? 0} 正向启用 · {arena?.reverseActiveCount ?? 0} 反向启用</span></div>{strategyGroups.length ? strategyGroups.map((strategies) => { const id = strategies[0].id.split(":")[0]; return <PlaybookGroup key={id} strategies={strategies} evidence={playbookById.get(id)?.evidence} rules={arena!.rules} />; }) : <div className="empty">正在读取48个策略单元…</div>}</section>
+    <section className="playbook-list" hidden={tab !== "brain"}><div className="section-heading"><div><h2>V4.4策略状态</h2><p>每个真实不同的正常与反向变体始终运行有效影子；最新6笔优先决定唯一方向，不足6笔才用3连胜或3连亏。模拟结果只用于复盘，不会二次淘汰策略。</p></div><span>{arena?.activeCount ?? 0} 正向启用 · {arena?.reverseActiveCount ?? 0} 反向启用</span></div>{strategyGroups.length ? strategyGroups.map((strategies) => { const id = strategies[0].id.split(":")[0]; return <PlaybookGroup key={id} strategies={strategies} evidence={playbookById.get(id)?.evidence} rules={arena!.rules} />; }) : <div className="empty">正在读取48个策略单元…</div>}</section>
 
     <section className="shadow-log" hidden={tab !== "brain"}><div className="section-heading"><div><h2>有效影子</h2><p>路线、价格、结构、成本、深度和合约信息全部合格；只有这些结果参与启用。</p></div><span>{arena?.recentShadow.length ?? 0} 笔</span></div>{!arena?.recentShadow.length ? <div className="empty"><b>等待首批有效影子结果</b></div> : <div className="history-table">{arena.recentShadow.slice(0, 30).map((trade) => <ArenaTradeRecord key={trade.id} trade={trade} />)}</div>}</section>
     <section className="shadow-log" hidden={tab !== "brain"}><div className="section-heading"><div><h2>观察影子</h2><p>信号出现但尚不能真实进场，只保存阻断原因，不计算晋级盈亏。</p></div><span>{arena?.observationShadow.length ?? 0} 条</span></div><div className="transition-list">{arena?.observationShadow.slice(0, 20).map((item) => <article key={item.id}><div><b>{item.symbol.replace("_", "/")} · {item.strategyName}</b><small>{time(item.observedAt)}</small></div><p>{item.blocker}</p></article>)}</div></section>
@@ -303,7 +305,7 @@ export default function Home() {
       <button className="setting-row" type="button" onClick={() => auth.authenticated ? void fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(() => { setAuth({ ...auth, authenticated: false }); setRuntime(runtime ? { ...runtime, live: undefined } : runtime); }) : setShowLogin(true)}><div><b>所有者账户</b><p>{auth.authenticated ? "安全登录有效30天；每次打开页面自动续期。" : "登录后才可以查看真实账户并操作实盘开关。"}</p></div><span className={`setting-value ${auth.authenticated ? "online" : "locked"}`}>{auth.authenticated ? "owner · 退出 ›" : "登录 ›"}</span></button>
       <button className="setting-row" type="button" disabled={liveBusy} onClick={liveControl}><div><b>实盘交易开关</b><p>{liveEnabled ? "正在按真实账户权益比例复制1000 U模拟账户的新订单；关闭会撤销待成交入场单并停止新开仓。" : "由你手动开启；只复制开启以后出现的新模拟订单，不追单复制当前持仓。"}</p></div><span className={`setting-value ${liveEnabled ? "online" : "locked"}`}>{liveBusy ? "处理中…" : liveEnabled ? "已开启 · 关闭 ›" : "已关闭 · 开启 ›"}</span></button>
       {auth.authenticated && <><Setting title="Gate 实盘账户" detail={`可用 ${num(live?.available, 2)} U · ${openLivePositions.length} 个真实持仓`} value={live?.equity != null ? `${num(live.equity, 2)} U` : "连接中"} tone={live?.credentialConfigured ? "online" : "locked"}/><Setting title="实盘执行状态" detail={friendlyLiveError(live?.lastError) || (liveEnabled ? "只复制唯一模拟账户开启后产生的订单，并按真实权益重新计算安全仓位。" : "当前不下新单；已有系统持仓仍保留止损和对账。" )} value={live?.operational ? "复制运行中" : "已关闭"} tone={live?.operational ? "online" : "locked"}/></>}
-      <Setting title="策略轮换" detail={`正常变体使用24小时最新${arena?.rules.promotionWinStreak ?? 3}笔连胜或72小时最新${arena?.rules.promotionWindow ?? 6}笔成本后盈利晋级；正常影子3连亏或最近6笔成本后总亏损，且对应反向测算扣完整成本为正时，反向直接启用下一次新信号。正常与反向影子都不停止。`} value="反向直接启用" tone="online"/>
+      <Setting title="影子权威轮换" detail={`优先检查72小时最新${arena?.rules.promotionWindow ?? 6}笔：成本后为正只启用正常，正常为负且同窗反向成本后为正只启用反向；不足6笔才检查24小时${arena?.rules.promotionWinStreak ?? 3}连胜/连亏。每次有效影子结算即重算，模拟成绩不参与开关。`} value="6笔优先 · 单向启用" tone="online"/>
       <Setting title="进场经济门槛" detail={`只用真实结构目标和止损；扣完整成本盈亏比至少 ${num(arena?.rules.minNetRewardRisk ?? 1.2, 2)}，成本最多占目标空间 ${num((arena?.rules.maxCostShare ?? .25) * 100, 0)}%，近期保守期望必须高于完整成本。`} value="成本优势" tone="online"/>
       <Setting title="动态风险" detail={`每笔目标风险为10～20 U；组合容量不足${num(arena?.rules.minimumPortfolioRiskUsdt ?? 10, 0)} U时跳过，不再缩成灰尘单。总风险≤10%、同向≤6.5%、保证金≤30%、名义仓位≤4倍权益。`} value="拒绝灰尘单" tone="online"/>
       <Setting title="模拟账户口径" detail="观察影子不计分，有效影子用于选策略；唯一1000 U账户的余额、持仓和交易记录才代表可对标的真实效果。" value="单账户" tone="online"/>
@@ -463,7 +465,8 @@ function StrategyCard({ strategy, rules }: { strategy: StrategyScore; rules: Str
   const last6Net = shadow.reduce((sum, value) => sum + value.netReturnRate, 0);
   const reverseQualification = (strategy.reverseQualificationResults ?? []).slice(-rules.promotionWindow);
   const reversePaper = (strategy.reversePaperResults ?? []).slice(-rules.promotionWindow);
-  return <article className={`strategy-card ${strategy.lane.toLowerCase()}`}><div className="strategy-title"><div><small>{strategy.entryStyle === "CONFIRM" ? "确认进场" : "回踩进场"} · {strategy.exitProfile === "FAST" ? "快速出场" : "结构出场"}</small><h3>{strategy.name.split(" · ").slice(1).join(" · ")}</h3></div><span>{laneLabel(strategy.lane)} / {strategy.reverseEnabled ? "反向启用" : "反向观察"}</span></div><dl><div><dt>正常最近{last3.length}/3笔</dt><dd>{last3.map((row) => row.netReturnRate > 0 ? "赢" : "亏").join(" · ") || "—"}</dd></div><div><dt>正常样本{shadow.length}/6笔</dt><dd className={last6Net >= 0 ? "positive" : "negative"}>{signed(last6Net * 100)}%</dd></div><div><dt>反向{reverseQualification.length}单测算</dt><dd>{reverseQualification.map((row) => row.netReturnRate > 0 ? "赢" : "亏").join(" · ") || "—"}</dd></div><div><dt>反向影子 / 正反模拟</dt><dd>{strategy.reverseShadowResolved ?? 0} / {paper.length} · {reversePaper.length}</dd></div></dl><small className="strategy-rule">{strategy.lastTransitionReason}<br />{strategy.reverseLastTransitionReason}</small></article>;
+  const authority = strategy.reverseEnabled ? "反向启用" : strategy.enabled ? "正常启用" : "影子验证";
+  return <article className={`strategy-card ${strategy.lane.toLowerCase()}`}><div className="strategy-title"><div><small>{strategy.entryStyle === "CONFIRM" ? "确认进场" : "回踩进场"} · {strategy.exitProfile === "FAST" ? "快速出场" : "结构出场"}</small><h3>{strategy.name.split(" · ").slice(1).join(" · ")}</h3></div><span>{authority}</span></div><dl><div><dt>正常最近{last3.length}/3笔</dt><dd>{last3.map((row) => row.netReturnRate > 0 ? "赢" : "亏").join(" · ") || "—"}</dd></div><div><dt>正常窗口{shadow.length}/6笔</dt><dd className={last6Net >= 0 ? "positive" : "negative"}>{signed(last6Net * 100)}%</dd></div><div><dt>同窗反向{reverseQualification.length}/6笔</dt><dd>{reverseQualification.map((row) => row.netReturnRate > 0 ? "赢" : "亏").join(" · ") || "—"}</dd></div><div><dt>正常 / 反向模拟</dt><dd>{paper.length} / {reversePaper.length}</dd></div></dl><small className="strategy-rule">双向有效影子持续运行；当前权威：{authority}<br />{strategy.reverseEnabled ? strategy.reverseLastTransitionReason : strategy.lastTransitionReason}</small></article>;
 }
 
 function ArenaTradeRecord({ trade }: { trade: ArenaTrade }) {

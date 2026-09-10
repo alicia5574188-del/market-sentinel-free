@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { advanceStrategyArena, applyStrategySleepStates, ARENA_FRICTION_RATE, initialStrategyArena,
-  normalizeStrategyArena, observeStrategyArena, PAPER_DEMOTION_LOSSES, PROMOTION_WIN_STREAK, resetStrategyArenaAccount,
+  normalizeStrategyArena, observeStrategyArena, PROMOTION_WIN_STREAK, resetStrategyArenaAccount,
   STRATEGY_CATALOG, type ArenaObservation, type StrategyArenaState } from "../lib/strategy-arena.ts";
 
 const strategyId = "anomaly_follow:confirm:fast";
@@ -67,6 +67,39 @@ function qualify(state = initialStrategyArena(1), start = 10_000) {
   return state;
 }
 
+function sixEventState() {
+  let state = initialStrategyArena(1);
+  for (let event = 1; event <= 6; event += 1) {
+    state = openEvent(state, 5_000 + event, 300_000 + event * 20_000);
+    state = settleEvent(state, 310_000 + event * 20_000, true);
+  }
+  return state;
+}
+
+function rewriteVariantWindow(state: StrategyArenaState, netReturns: number[]) {
+  const trades = state.recentShadow.filter((trade) => trade.strategyId === strategyId
+    && (trade.orientation ?? "NORMAL") === "NORMAL").slice(-netReturns.length);
+  assert.equal(trades.length, netReturns.length);
+  for (const [index, trade] of trades.entries()) {
+    const funding = trade.context.fundingCostRate ?? 0;
+    trade.netReturnRate = netReturns[index];
+    trade.grossReturnRate = netReturns[index] + trade.context.modeledCostRate + funding;
+    trade.netPnl = trade.notional * netReturns[index];
+    const result = state.strategies[strategyId].recentResults.find((row) => row.eventId === trade.eventId);
+    assert.ok(result); result.netReturnRate = netReturns[index]; result.netPnl = trade.netPnl; result.won = netReturns[index] > 0;
+    const reverseTrade = state.recentShadow.find((row) => row.strategyId === strategyId && row.eventId === trade.eventId
+      && row.orientation === "REVERSE");
+    const reverseResult = state.strategies[strategyId].reverseRecentResults.find((row) => row.eventId === trade.eventId);
+    assert.ok(reverseTrade && reverseResult);
+    reverseTrade.netReturnRate = -(trade.grossReturnRate ?? 0) - trade.context.modeledCostRate
+      - (trade.context.fundingCostRate ?? 0) - trade.context.spreadRate * 2;
+    reverseTrade.netPnl = reverseTrade.notional * reverseTrade.netReturnRate;
+    reverseResult.netReturnRate = reverseTrade.netReturnRate; reverseResult.netPnl = reverseTrade.netPnl;
+    reverseResult.won = reverseTrade.netReturnRate > 0;
+  }
+  return normalizeStrategyArena(state, trades.at(-1)!.closedAt ?? 1_000_000);
+}
+
 test("V4.4 keeps 12 playbooks and 48 genuinely distinct execution variants", () => {
   assert.equal(STRATEGY_CATALOG.length, 48);
   assert.equal(new Set(STRATEGY_CATALOG.map((item) => item.id.split(":")[0])).size, 12);
@@ -77,33 +110,38 @@ test("confirmation/retest and fast/structure variants freeze different locations
   const byStrategy = new Map();
   for (let event = 1; event <= 40; event += 1) {
     const state = openEvent(initialStrategyArena(1), event, 10_000 + event);
-    for (const trade of Object.values(state.open).filter((row) => row.strategyId.startsWith("anomaly_follow:")))
+    for (const trade of Object.values(state.open).filter((row) => row.strategyId.startsWith("anomaly_follow:")
+      && (row.orientation ?? "NORMAL") === "NORMAL"))
       byStrategy.set(trade.strategyId, trade);
   }
-  const variants = [...byStrategy.values()];
+  const variants = [...byStrategy.values()].filter((trade) => (trade.orientation ?? "NORMAL") === "NORMAL");
   assert.equal(variants.length, 4);
   assert.equal(new Set(variants.map((trade) => trade.context.entryTrigger)).size, 2);
   assert.equal(new Set(variants.map((trade) => trade.targetPrice)).size, 2);
 });
 
-test("one market event creates at most one effective shadow per genuinely different base playbook", () => {
+test("one market event runs every genuinely different variant while exact geometry is counted once", () => {
   const first = openEvent(initialStrategyArena(1), 1, 10_000);
-  assert.ok(Object.keys(first.open).length > 1);
-  assert.equal(new Set(Object.values(first.open).map((trade) => trade.strategyId.split(":")[0])).size, Object.keys(first.open).length);
-  assert.ok(first.recentObservations.some((row) => row.blocker.includes("同一基础策略和市场事件")));
+  const normal = Object.values(first.open).filter((trade) => (trade.orientation ?? "NORMAL") === "NORMAL"
+    && trade.strategyId.startsWith("anomaly_follow:"));
+  assert.equal(normal.length, 4, "all four distinct entry/exit variants learn from the event instead of one random variant");
+  assert.equal(new Set(normal.map((trade) => trade.strategyId)).size, normal.length);
+  assert.equal(new Set(normal.map((trade) => `${trade.side}:${trade.context.entryTrigger}:${trade.stopPrice}:${trade.targetPrice}`)).size,
+    normal.length, "only genuinely different frozen routes receive separate score identities");
   const repeated = openEvent(first, 1, 10_001);
   assert.equal(Object.keys(repeated.open).length, Object.keys(first.open).length);
   const closed = settleEvent(repeated, 20_000, true);
   assert.equal(closed.recentShadow.length, Object.keys(first.open).length);
-  assert.equal(Object.values(closed.strategies).reduce((total, score) => total + score.shadowResolved, 0), Object.keys(first.open).length);
+  assert.equal(Object.values(closed.strategies).reduce((total, score) => total + score.shadowResolved + score.reverseShadowResolved, 0),
+    Object.keys(first.open).length);
 });
 
-test("a new event id cannot overlap an existing effective shadow for the same symbol and base playbook", () => {
+test("a new event id cannot overlap an existing effective shadow for the same symbol and exact variant", () => {
   const first = openEvent(initialStrategyArena(1), 1, 10_000);
   const second = openEvent(first, 2, 10_001);
   assert.equal(Object.keys(second.open).length, Object.keys(first.open).length);
   assert.ok(second.recentObservations.some((row) => row.eventId.endsWith(":2")
-    && row.blocker.includes("基础策略已有有效影子持仓") && row.blocker.includes("仅观察")));
+    && row.blocker.includes("这个执行变体已有有效影子持仓") && row.blocker.includes("仅观察")));
 });
 
 test("observation shadow is separate and never counts toward promotion", () => {
@@ -114,18 +152,24 @@ test("observation shadow is separate and never counts toward promotion", () => {
   assert.equal(state.strategies[strategyId].shadowResolved, 0);
 });
 
-test("latest three independent effective shadow wins activate only the next signal", () => {
+test("latest three independent effective shadow wins activate only future signals and PAPER clones its exact shadow", () => {
   let state = qualify();
   assert.equal(state.strategies[strategyId].lane, "ACTIVE");
-  assert.equal(Object.values(state.strategies).filter((row) => row.id.startsWith("anomaly_follow:") && row.enabled).length, 1,
-    "only the execution variant that produced the evidence is promoted");
+  assert.equal(Object.values(state.strategies).filter((row) => row.id.startsWith("anomaly_follow:") && row.enabled).length, 4,
+    "all genuinely distinct variants collect the same event cadence without random starvation");
   assert.equal(Object.keys(state.portfolioOpen).length, 0, "completed winners are never backfilled");
   state = openEvent(state, 20, 120_000);
-  assert.equal(state.portfolioOpen.BTC_USDT.strategyId, strategyId);
-  assert.equal(state.portfolioOpen.BTC_USDT.admissionTier, "NORMAL");
-  assert.ok(state.portfolioOpen.BTC_USDT.attributedStrategyIds?.includes(strategyId));
-  assert.equal(new Set(state.portfolioOpen.BTC_USDT.attributedStrategyIds?.map((id) => id.split(":")[0])).size,
-    state.portfolioOpen.BTC_USDT.attributedStrategyIds?.length);
+  const paper = state.portfolioOpen.BTC_USDT;
+  assert.ok(paper);
+  const shadow = Object.values(state.open).find((trade) => trade.strategyId === paper.strategyId
+    && (trade.orientation ?? "NORMAL") === (paper.orientation ?? "NORMAL"));
+  assert.ok(shadow, "the selected PAPER order must exist as a same-event effective shadow");
+  for (const key of ["eventId", "strategyId", "orientation", "side", "openedAt", "entryPrice", "stopPrice", "targetPrice",
+    "notional", "plannedRisk", "contracts", "quantoMultiplier", "leverage", "margin"] as const)
+    assert.equal(paper[key], shadow[key], `${key} must be copied from the exact effective shadow`);
+  assert.equal(paper.context.maxHoldMs, shadow.context.maxHoldMs);
+  assert.equal(paper.context.noProgressMs, shadow.context.noProgressMs);
+  assert.deepEqual(paper.attributedStrategyIds, [paper.orientation === "REVERSE" ? `reverse|${paper.strategyId}` : paper.strategyId]);
 });
 
 test("correlated cross-symbol results in the same five-minute lifecycle count only once", () => {
@@ -140,7 +184,7 @@ test("correlated cross-symbol results in the same five-minute lifecycle count on
   assert.equal(state.strategies[strategyId].enabled, false);
 });
 
-test("an active variant cannot enter the portfolio when its conservative edge does not cover modeled cost", () => {
+test("after-cost shadow qualification is not charged a second empirical cost gate", () => {
   const state = qualify();
   for (const score of Object.values(state.strategies)) {
     if (score.id === strategyId) continue;
@@ -152,8 +196,8 @@ test("an active variant cannot enter the portfolio when its conservative edge do
     ...row, netReturnRate: ARENA_FRICTION_RATE / 2, netPnl: 1, won: true,
   }));
   const opened = openForStrategy(state, strategyId, 1_100, 200_000);
-  assert.equal(opened.state.portfolioOpen.BTC_USDT, undefined);
-  assert.ok((opened.state.admissionRejects.EMPIRICAL_COST ?? 0) > 0);
+  assert.ok(opened.state.portfolioOpen.BTC_USDT);
+  assert.equal(opened.state.admissionRejects.EMPIRICAL_COST, undefined);
 });
 
 test("remaining portfolio capacity below 10 U planned risk is skipped instead of creating a dust trade", () => {
@@ -189,17 +233,28 @@ test("a low-win-rate variant can activate from a positive latest-six window", ()
   assert.match(state.strategies[strategyId].lastTransitionReason, /最新6笔/);
 });
 
-test("latest three simulation losses demote the strategy", () => {
-  let state = qualify();
-  for (let index = 0; index < PAPER_DEMOTION_LOSSES; index += 1) {
-    const symbol = index % 2 ? "ETH_USDT" : "BTC_USDT";
-    state = openEvent(state, 30 + index, 120_000 + index * 20_000, symbol);
-    state = settleEvent(state, 130_000 + index * 20_000, false, symbol);
-  }
-  assert.equal(state.strategies[strategyId].lane, "SHADOW");
+test("a positive latest-six window outranks a latest-three loss streak and keeps only NORMAL enabled", () => {
+  const state = rewriteVariantWindow(sixEventState(), [0.02, 0.02, 0.02, -0.005, -0.005, -0.005]);
+  assert.equal(state.strategies[strategyId].enabled, true);
+  assert.equal(state.strategies[strategyId].reverseEnabled, false);
+  assert.match(state.strategies[strategyId].lastTransitionReason, /6笔窗口优先/);
+});
+
+test("a negative latest-six window outranks a latest-three win streak and keeps only REVERSE enabled", () => {
+  const state = rewriteVariantWindow(sixEventState(), [-0.02, -0.02, -0.02, 0.004, 0.004, 0.004]);
   assert.equal(state.strategies[strategyId].enabled, false);
+  assert.equal(state.strategies[strategyId].reverseEnabled, true);
+  assert.match(state.strategies[strategyId].reverseLastTransitionReason, /6笔窗口优先/);
+});
+
+test("PAPER losses are performance records and never override qualified shadow authority", () => {
+  let state = qualify();
+  state.strategies[strategyId].paperResults = [1, 2, 3].map((event) => ({ eventId: `paper:${event}`, symbol: "BTC_USDT",
+    regime: "EXPANSION", channel: "ANOMALY", netReturnRate: -0.01, netPnl: -10, won: false, resolvedAt: 100_000 + event }));
+  state = normalizeStrategyArena(state, 200_000);
+  assert.equal(state.strategies[strategyId].lane, "ACTIVE");
+  assert.equal(state.strategies[strategyId].enabled, true);
   assert.equal(state.strategies[strategyId].paperResults.length, 3);
-  assert.equal(Object.values(state.strategies).filter((row) => row.id.startsWith("anomaly_follow:") && row.enabled).length, 0);
 });
 
 test("unproven playbooks remain in shadow instead of sleeping when their channel is absent", () => {
@@ -294,8 +349,11 @@ test("three consecutive normal shadow losses directly activate the profitable co
     JSON.stringify(state.strategies[strategyId].recentResults));
   assert.equal(state.strategies[strategyId].reverseQualificationResults.length, 3,
     "the same three losing normal paths are the fully costed reverse qualification sample");
-  assert.equal(state.strategies[strategyId].reverseRecentResults.length, 0,
-    "direct activation must not relabel modeled paths as completed reverse shadows");
+  assert.equal(state.strategies[strategyId].reverseRecentResults.length, 3,
+    "the genuinely executable paired reverse shadow keeps running independently of activation");
+  assert.deepEqual(state.strategies[strategyId].reverseQualificationResults.map((row) => [row.eventId, row.netReturnRate]),
+    state.strategies[strategyId].reverseRecentResults.map((row) => [row.eventId, row.netReturnRate]),
+    "actual paired reverse fills replace the legacy counterfactual whenever both are available");
 
   const next = openForStrategy(state, strategyId, eventStart, now).state;
   assert.ok(Object.values(next.open).some((trade) => trade.strategyId === strategyId
@@ -327,6 +385,15 @@ test("a negative six-result normal window activates reverse without a three-loss
     trade.netPnl = trade.notional * trade.netReturnRate;
     const result = state.strategies[strategyId].recentResults.find((row) => row.eventId === trade.eventId);
     if (result) { result.netReturnRate = trade.netReturnRate; result.netPnl = trade.netPnl; result.won = trade.netReturnRate > 0; }
+    const reverseTrade = state.recentShadow.find((row) => row.strategyId === strategyId && row.eventId === trade.eventId
+      && row.orientation === "REVERSE");
+    const reverseResult = state.strategies[strategyId].reverseRecentResults.find((row) => row.eventId === trade.eventId);
+    assert.ok(reverseTrade && reverseResult);
+    reverseTrade.netReturnRate = -grossReturnRate - trade.context.modeledCostRate
+      - (trade.context.fundingCostRate ?? 0) - trade.context.spreadRate * 2;
+    reverseTrade.netPnl = reverseTrade.notional * reverseTrade.netReturnRate;
+    reverseResult.netReturnRate = reverseTrade.netReturnRate; reverseResult.netPnl = reverseTrade.netPnl;
+    reverseResult.won = reverseTrade.netReturnRate > 0;
   }
   state = normalizeStrategyArena(state, now);
   assert.equal(state.strategies[strategyId].reverseEnabled, true,

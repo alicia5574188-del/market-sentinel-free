@@ -1,3 +1,11 @@
+# Active goal — shadow-authoritative mutually exclusive execution
+
+- Make the exact variant's rolling effective-shadow evidence the sole authority for future PAPER eligibility. A complete latest-six after-cost window outranks either three-result streak; three wins/losses are only the fallback before a valid six-result window exists.
+- Allow exactly one enabled orientation per variant. Positive-six selects normal; negative-six selects reverse only when the fully costed opposite path is positive. Re-evaluate after every normal effective-shadow close and never use PAPER results to promote, demote or latch an obsolete direction.
+- Keep every genuinely distinct normal and reverse shadow executable path running after activation. Stop randomly starving three of four variants, while still collapsing genuinely identical frozen geometry and correlated lifecycle results.
+- A future PAPER order must be cloned from an effective shadow opened in that exact event, with the same strategy identity, orientation, entry, stop, target, holding rules, cost context and accepted account sizing. Preserve fresh bid/ask, Gate integer contracts, depth, structural economics and all portfolio caps; keep LIVE OFF.
+- Update the operator wording and regression tests, deploy only through GitHub `main`, and verify advancing Cloudflare health plus LIVE explicitly OFF.
+
 # Completed goal — page delay must never impersonate a backend trading halt
 
 - Separate the phone's `/api/runtime` transport freshness from the MarketStream authority's own fresh/stale and protection state.

@@ -172,8 +172,10 @@ test("stale bulk radar does not interrupt completed-five-minute shadow evaluatio
   stream.observeArena("BTC_USDT", 104.8, { midpoint: 104.8, zones: [], bands: [], absorption: 0.7, decision: null,
     routes: [], range15m: null, confirmationBySide: { LONG: 0.8, SHORT: 0.1 },
     fakeoutBySide: { LONG: 0.2, SHORT: 0.8 } }, now, 0.0002, 104.79, 104.81, 1_000_000, 1_000_000);
-  assert.equal(Object.keys(stream.runtime.strategyArena.open).length, 1);
-  assert.equal((Object.values(stream.runtime.strategyArena.open)[0] as ArenaTrade).context.structureSource, "CANDLE_5M");
+  const opened = Object.values(stream.runtime.strategyArena.open) as ArenaTrade[];
+  assert.equal(opened.length, 4, "all executable, genuinely distinct stable-candle variants keep learning when bulk radar is stale");
+  assert.ok(opened.every((trade) => trade.context.structureSource === "CANDLE_5M"));
+  assert.equal(new Set(opened.map((trade) => `${trade.strategyId}:${trade.orientation ?? "NORMAL"}`)).size, opened.length);
 });
 
 function position(id: string, symbol: string, patch: Partial<PaperPosition> = {}): PaperPosition {

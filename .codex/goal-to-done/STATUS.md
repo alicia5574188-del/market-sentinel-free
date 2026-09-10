@@ -1,3 +1,12 @@
+# Active — 2026-09-10 shadow-authoritative execution correction
+
+- User approved the reviewed correction: latest-six has priority, normal/reverse cannot both remain enabled, shadow evidence alone controls future PAPER eligibility, and an admitted PAPER order must be the exact current-event effective-shadow trade rather than a separately reconstructed candidate.
+- Confirmed source defects: three-streak is checked before six-total; normal and reverse booleans latch independently; PAPER results demote separately; normal after-cost evidence is compared against cost a second time; one of four variants is pseudo-randomly sampled per playbook/event; and one winner's PAPER result can be attributed to other same-side strategies with different geometry.
+- Implemented a single shadow-authority decision: a valid latest-six window is evaluated first; the three-result streak is only a fallback. Normal/reverse are reconciled as mutually exclusive after every effective-shadow close, and PAPER results are retained only for account-performance review.
+- Every executable, genuinely distinct variant now opens a normal shadow plus an independently executable reverse shadow. Exact duplicate frozen geometry is collapsed. A future PAPER order is admitted only from the exact same-event shadow and copies its strategy/orientation, entry, stop, target, hold rules, cost context and accepted sizing; unrelated same-side scores receive no result attribution.
+- Removed the second empirical cost gate while preserving current route economics, fresh bid/ask, Gate integer lots, depth, 10–20 U risk and all account caps. Updated the page and five-minute runtime log to report six-first shadow authority and one enabled direction.
+- Local verification passes 23 focused arena tests, the corrected stable-core integration, TypeScript, ESLint, the production build and 16 architecture/migration tests. Full direct-suite recheck and production deployment remain; LIVE must remain OFF and no account reset or historical deletion is authorized.
+
 # Done — 2026-09-10 page-delay/backend-halt separation
 
 - Screenshot showed 29/30 completed-candle coverage and a recent backend success, while the phone simultaneously displayed `页面数据延迟` and the contradictory headline `模拟账户暂停新开仓`.

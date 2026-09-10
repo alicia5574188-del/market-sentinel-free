@@ -319,6 +319,12 @@
 - The exact normal variant's latest six independent effective-shadow paths are sufficient reverse evidence when they contain at least three stops, normal gross and net totals are negative, and replaying the opposite direction with swapped stop/target remains positive after complete modeled costs.
 - Passing that proof enables the countertrend route for the next new executable signal. A second three-win or positive-six reverse-shadow promotion window is redundant and forbidden.
 - Normal and reverse shadows continue after activation. Current-signal geometry, cost, depth, freshness, Gate lot sizing and portfolio limits still apply; reverse PAPER results alone control later reverse demotion.
+# 2026-09-10 — Effective shadow is the only strategy authority
+
+- A valid latest-six independent effective-shadow window is authoritative and is evaluated before either latest-three streak. Positive after-cost six selects normal; negative six may select reverse only when the same frozen paths remain positive after full reverse cost. Before six valid results exist, three wins or three losses provide the corresponding early decision.
+- Normal and reverse are mutually exclusive states and refresh after every normal effective-shadow close. PAPER outcomes remain account-performance evidence only and cannot independently promote, demote, or preserve an orientation that current shadow evidence no longer supports.
+- All genuinely distinct executable variants continue in shadow. A PAPER order may originate only from an effective shadow opened in the same event and copies that exact frozen route and accepted account sizing; results are attributed only to that exact strategy/orientation. Execution freshness, contract, depth, cost geometry and portfolio limits remain mandatory.
+
 # 2026-09-10 — Phone transport age is never trading authority
 
 - `/api/runtime` freshness describes only whether the phone has received a recent summary. It may alter the page status label and warning color, but it cannot determine or describe MarketStream's order authority.

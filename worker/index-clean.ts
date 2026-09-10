@@ -489,6 +489,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           .some((strategy) => strategy.id.startsWith(`${playbook.id}:`) && strategy.enabled),
         reverseActive: Object.values(this.runtime.strategyArena.strategies)
           .some((strategy) => strategy.id.startsWith(`${playbook.id}:`) && strategy.reverseEnabled),
+        authority: Object.values(this.runtime.strategyArena.strategies)
+          .some((strategy) => strategy.id.startsWith(`${playbook.id}:`) && strategy.reverseEnabled) ? "REVERSE"
+          : Object.values(this.runtime.strategyArena.strategies)
+            .some((strategy) => strategy.id.startsWith(`${playbook.id}:`) && strategy.enabled) ? "NORMAL" : "SHADOW",
+        paperAuthority: "SHADOW",
+        normalShadowEvents: Object.values(this.runtime.strategyArena.strategies)
+          .filter((strategy) => strategy.id.startsWith(`${playbook.id}:`))
+          .reduce((total, strategy) => total + strategy.recentResults.length, 0),
         reverseShadowEvents: Object.values(this.runtime.strategyArena.strategies)
           .filter((strategy) => strategy.id.startsWith(`${playbook.id}:`))
           .reduce((total, strategy) => total + strategy.reverseRecentResults.length, 0) };
@@ -1804,7 +1812,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             reverseTriggerWindow: REVERSE_TRIGGER_WINDOW,
             reverseLossStreak: REVERSE_LOSS_STREAK,
             reverseMaxBreakEvenRate: REVERSE_MAX_BREAK_EVEN_RATE,
+            authorityWindowPriority: "LATEST_SIX_THEN_THREE",
+            paperEvaluation: false,
+            mutuallyExclusiveOrientation: true,
+            exactShadowClone: true,
             normalShadowAlwaysOn: true,
+            reverseShadowAlwaysOn: true,
           },
         },
         radar: {
