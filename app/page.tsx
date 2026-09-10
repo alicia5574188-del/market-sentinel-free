@@ -204,7 +204,7 @@ export default function Home() {
     if (!window.confirm("确认结束当前1000 U模拟账户周期并重置为1000 U？当前模拟持仓会按最新可成交价格结算，策略研究样本会保留。")) return;
     setPaperResetBusy(true); setPaperResetNotice(null); setPaperResetError(null);
     try {
-      const response = await fetch("/api/paper/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: "RESET" }) });
+      const response = await fetch("/api/paper/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: "RESET_PAPER" }) });
       const payload = await response.json() as { error?: string; strategyArena?: StrategyArena };
       if (!response.ok || !payload.strategyArena) throw new Error(payload.error || "重置失败");
       setRuntime((current) => current ? { ...current, strategyArena: payload.strategyArena } : current);

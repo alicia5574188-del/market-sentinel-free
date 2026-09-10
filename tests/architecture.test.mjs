@@ -184,6 +184,7 @@ test("V4 adaptive shadow arena is bounded, cost-aware, and is the sole LIVE orde
   assert.match(page, /页面摘要延迟，交易后台继续独立运行/);
   assert.match(page, /动态风险/);
   assert.match(page, /重置1000 U模拟资金/);
+  assert.match(page, /confirm: "RESET_PAPER"/);
   assert.match(worker, /SCAN_UNIVERSE_SIZE = 30/);
   assert.match(worker, /maxOpenPositions: null/);
   assert.match(migration, /DELETE FROM `paper_events`/);

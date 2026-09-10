@@ -335,3 +335,7 @@
 - A countertrend candidate may qualify from either the exact normal variant's latest three independent losses or a negative total across its latest six independent results.
 - Qualification still requires the reversed path over the selected window to be positive after full modeled cost. This prevents fee-only normal losses from being mislabeled as profitable reversals and is execution evidence, not a second promotion stage.
 - Existing compatible V4.4 shadows are eligible immediately; only a prior countertrend PAPER demotion requires newer normal evidence.
+# 2026-09-10 — Owner reset confirmation is one exact contract
+
+- The public client and owner-only route must both use `RESET_PAPER`. A source-contract test guards this literal so a UI refactor cannot silently make reset unusable again.
+- Reset authorization remains owner session + same-origin JSON + LIVE fully off. The operation uses fresh executable prices, archives the account cycle and preserves shadow research; deployment itself never invokes reset.

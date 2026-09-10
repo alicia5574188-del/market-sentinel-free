@@ -1,3 +1,8 @@
+# Active — 2026-09-10 PAPER reset confirmation hotfix
+
+- Confirmed the regression: the phone sent `confirm: "RESET"`, while the owner-only backend route has always required `confirm: "RESET_PAPER"`; every tap therefore returned `确认参数无效` before reaching account reset logic.
+- Correcting only the client confirmation token and adding a source-contract regression test. No account reset, position settlement, history deletion or LIVE change is part of deployment.
+
 # Done — 2026-09-10 shadow-authoritative execution correction
 
 - User approved the reviewed correction: latest-six has priority, normal/reverse cannot both remain enabled, shadow evidence alone controls future PAPER eligibility, and an admitted PAPER order must be the exact current-event effective-shadow trade rather than a separately reconstructed candidate.

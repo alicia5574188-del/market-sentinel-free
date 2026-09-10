@@ -1,3 +1,9 @@
+# Active hotfix — restore the owner PAPER reset
+
+- Make the phone reset request use the exact confirmation token required by the authenticated backend route.
+- Preserve fresh-price settlement, cycle archival, all shadow evidence/history and LIVE-off protection; do not reset the account during deployment.
+- Add regression coverage, deploy through GitHub `main`, and verify production health with LIVE still OFF.
+
 # Completed goal — shadow-authoritative mutually exclusive execution
 
 - Make the exact variant's rolling effective-shadow evidence the sole authority for future PAPER eligibility. A complete latest-six after-cost window outranks either three-result streak; three wins/losses are only the fallback before a valid six-result window exists.
