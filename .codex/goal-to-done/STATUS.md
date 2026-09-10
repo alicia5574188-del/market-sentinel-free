@@ -1,3 +1,9 @@
+# Active — 2026-09-10 truthful runtime health status
+
+- Reproduced the persistent false recovery display in source: `runtimeReady` required state `LIVE`, exactly ten symbols, and at least one actionable market, while the page translated every non-D1 `lastError` into a whole-system recovery warning.
+- Implemented separate authority-operational, release-ready, display-label, and operator-notice semantics. `DEGRADED` with fresh authority and protected markets remains operational; zero actionable markets is no longer a global error.
+- Genuine stale authority, complete book loss, protected-position data loss, checkpoint failure and risk protection remain explicit and fail closed. Targeted direct tests pass; full verification and production deployment remain pending.
+
 # Done — 2026-09-10 V4.3 simulator truth and risk correction
 
 - Overnight V4.2 inspection found 27 completed account trades: gross `+9.403327 U`, modeled costs `66.049704 U`, net `-56.646377 U`; 11 trades carried less than 10 U planned risk and five carried less than 1 U. The account admitted trades even when the frozen empirical conservative expectation did not cover modeled cost.

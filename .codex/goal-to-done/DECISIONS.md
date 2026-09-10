@@ -307,3 +307,9 @@
 - Scratch absolute paths and linked worktrees are temporary. If a saved worktree points to a deleted scratch Git directory, make one fresh shallow clone of the source-of-truth repository instead of probing unrelated folders.
 - If local Git push lacks credentials, use the connected GitHub Git Data API once: read current `main`, create changed blobs/tree/commit, and fast-forward `main`. Do not retry the same unauthenticated CLI push.
 - Production truth comes from the matching GitHub Actions run, deploy-job log, Cloudflare version ID, and its advancing `/__health` gate. Direct Chrome navigation to public JSON endpoints can be blocked by the client and is not a valid failure signal; inspect the rendered production page only for UI state.
+
+# 2026-09-10 — Runtime health is not opportunity availability
+
+- A current authority can be operational while individual candidate markets warm, rotate, or temporarily have no entry-ready setup. Those conditions may block the affected new orders but are not a whole-system recovery event.
+- The operator badge reports recovery only for stale/absent authority, reconnecting state or required checkpoint recovery. Optional mirrors and isolated market retries are warnings; risk and protected-position blocks get their own truthful messages.
+- `/__health` accepts an operational `DEGRADED` authority only when protected markets are ready. `WARMING` remains unready for release gates, and stale prices, complete snapshot loss and protected-market loss remain fail closed.

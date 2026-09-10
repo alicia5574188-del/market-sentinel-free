@@ -1732,11 +1732,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         : this.runtime.riskBreach || !realtimeReadiness.protectedMarketsReady ? "DEGRADED"
           : realtimeReadiness.actionableMarkets > 0 ? "LIVE"
             : allWarm && allMeta && ancillaryStarted ? "DEGRADED" : "WARMING";
-      const recoveringMarkets = this.runtime.symbols.filter((symbol) => !this.symbolEntryReady(symbol)).length;
       const feedError = successes === 0 ? `${this.runtime.symbols.length} market snapshots unavailable; retrying`
         : !realtimeReadiness.protectedMarketsReady ? "protected position data unavailable; new entries frozen"
-          : realtimeReadiness.actionableMarkets === 0 ? `${recoveringMarkets} realtime markets warming; entries blocked`
-            : !allMeta && realtimeReadiness.protectedMarkets > 0 ? "protected contract metadata unavailable" : null;
+          : !allMeta && realtimeReadiness.protectedMarkets > 0 ? "protected contract metadata unavailable" : null;
       this.runtime.lastError = (this.runtime.riskBreach ? "portfolio stress risk exceeds 10%; new entries blocked" : feedError) ?? this.runtime.d1MirrorError;
       await this.maybeWriteStrategyRuntimeLog(Date.now());
     } catch (error) {

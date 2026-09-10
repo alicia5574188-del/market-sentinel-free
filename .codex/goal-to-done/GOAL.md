@@ -1,4 +1,11 @@
-# Active goal — V4.3 truthful, risk-consistent simulator
+# Active goal — truthful permanent runtime health status
+
+- Stop reporting the entire system as recovering when the authority is current and only individual markets are warming or no market is presently entry-ready.
+- Keep stale-price, protected-position, risk and checkpoint fail-closed behavior unchanged.
+- Separate page transport age, backend authority liveness, protected-market safety, and current entry opportunity in both code and tests.
+- Deploy through GitHub `main`, verify advancing production health, and keep LIVE explicitly OFF.
+
+# Prior goal — V4.3 truthful, risk-consistent simulator
 
 - Preserve the V4.2 completed-candle signal direction, target and exit behavior that produced positive overnight gross PnL; correct only account admission, sizing, evidence independence and display truth.
 - Promote and demote each of the 48 genuinely different execution variants from its own rolling evidence. Correlated cross-symbol results from the same completed-five-minute lifecycle count once per variant.

@@ -639,6 +639,29 @@ test("candidate rotation stays operational while new slots warm and no protected
   assert.equal(stream.runtime.evidence.WARMING_USDT.entryReady, false, "warming slot must remain unable to trade");
 });
 
+test("an empty entry-ready set is diagnostic and never becomes a global recovery error", async (t) => {
+  const { stream } = await makeStream();
+  const now = 1_800_000_215_000;
+  t.mock.method(Date, "now", () => now);
+  stream.runtime.lastUniverseAt = now;
+  stream.runtime.symbols = ["WARMING_USDT"];
+  stream.runtime.contractMeta = {
+    WARMING_USDT: { quantoMultiplier: 1, maintenanceRate: 0.005, leverageMax: 20, fundingRate: 0 },
+  };
+  stream.sessionWarmup.WARMING_USDT = 4;
+  stream.runtime.evidence = {
+    WARMING_USDT: { midpoint: 50, bestBid: 49.99, bestAsk: 50.01, observedAt: now, warmup: 4,
+      fresh: true, ancillaryFresh: false, entryReady: false, topLong: null, topShort: null, absorption: 0, range15m: null },
+  };
+  stream.processBooks = async () => ({ successes: 1, requests: 1, criticalChanged: false });
+  stream.updateAncillary = async () => 0;
+
+  await stream.alarm();
+
+  assert.equal(stream.runtime.state, "WARMING");
+  assert.equal(stream.runtime.lastError, null, "normal data preparation must not claim the authority is recovering");
+});
+
 test("delayed at-least-once retry crossing a 2s slot repairs the chain without reprocessing", async (t) => {
   const { stream, storage } = await makeStream();
   let now = 1_800_000_220_000;

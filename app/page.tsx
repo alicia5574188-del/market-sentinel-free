@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { directionalReturnRate, marginReturnRate, unrealizedPnl } from "../lib/position-metrics.ts";
-import { runtimeReady } from "../lib/runtime-health.ts";
+import { runtimeAuthorityOperational, runtimeNotice, runtimeStatusLabel } from "../lib/runtime-health.ts";
 
 type Side = "LONG" | "SHORT";
 type MarketState = "BREAKOUT" | "REVERSAL" | "RANGE";
@@ -107,7 +107,7 @@ type PositionView = { entryAt?: number; entryPrice: number; stopPrice: number; t
 const INITIAL_EQUITY = 1_000;
 const RUNTIME_REQUEST_TIMEOUT_MS = 30_000;
 const RUNTIME_DISPLAY_TTL_MS = 90_000;
-const stateText: Record<string, string> = { BREAKOUT: "突破", REVERSAL: "反转", RANGE: "震荡", LIVE: "运行中", WARMING: "预热中", DEGRADED: "部分数据恢复中", RECONNECTING: "重新连接中", RECOVERY_REQUIRED: "需要恢复", STARTING: "启动中" };
+const stateText: Record<string, string> = { BREAKOUT: "突破", REVERSAL: "反转", RANGE: "震荡" };
 const num = (value: number | null | undefined, digits = 3) => Number.isFinite(value) ? Number(value).toLocaleString("zh-CN", { maximumFractionDigits: digits }) : "—";
 const signed = (value: number, digits = 2) => `${value >= 0 ? "+" : ""}${num(value, digits === 2 && Math.abs(value) > 0 && Math.abs(value) < .01 ? 4 : digits)}`;
 const time = (value: number | null | undefined) => value ? new Date(value).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : "—";
@@ -211,8 +211,9 @@ export default function Home() {
   };
 
   const responseFresh = runtime != null && clock - receivedAt < RUNTIME_DISPLAY_TTL_MS && clock - runtime.generatedAt < RUNTIME_DISPLAY_TTL_MS;
-  const healthy = runtimeReady(runtime, responseFresh);
-  const authorityOperational = runtime != null && runtime.authorityReady && !runtime.stale;
+  const authorityOperational = runtimeAuthorityOperational(runtime, responseFresh);
+  const healthLabel = runtimeStatusLabel(runtime, responseFresh, Boolean(error));
+  const healthNotice = runtimeNotice(runtime);
   const radarDelayed = runtime?.radar?.lastError != null
     && (runtime.radar.lastScanAt == null || clock - runtime.radar.lastScanAt > 30_000);
   const arena = runtime?.strategyArena;
@@ -249,7 +250,7 @@ export default function Home() {
   return <main>
     <header className="topbar">
       <div className="brand"><span className="brand-mark">态</span><div><p>市场状态竞技场</p><small>Gate 全市场短线系统</small></div></div>
-      <div role="status" className={`health ${healthy ? "" : "bad"}`}><span />{healthy ? "后台运行中" : error ? "页面连接中断" : runtime?.stale ? "行情重连中" : runtime ? stateText[runtime.state] ?? runtime.state : "正在连接"}</div>
+      <div role="status" className={`health ${authorityOperational && !error ? "" : "bad"}`}><span />{healthLabel}</div>
     </header>
 
     {tab === "brain" && <>
@@ -263,7 +264,7 @@ export default function Home() {
       </section>
       {(!responseFresh || error) && runtime && <p className="notice">手机页面更新延迟，下面保留最近一次后台状态；服务器仍独立运行，不会因此停止判断或开模拟单。</p>}
       {radarDelayed && <p className="notice">30币流动性池刷新延迟，正在按10秒节奏恢复；已完成5分钟K线会保留，旧数据不会触发新订单。</p>}
-      {runtime?.lastError && <p className="notice">{runtime.lastError.startsWith("D1") ? `历史镜像稍后重试，不影响行情判断和开仓：${runtime.lastError}` : `系统正在自动恢复：${runtime.lastError}`}</p>}
+      {healthNotice && <p className="notice">{healthNotice}</p>}
     </>}
 
     <nav className="tabs">{([['brain', '模拟账户'], ['orders', `持仓 ${portfolioOpen.length || ''}`], ['live', `实盘 ${openLivePositions.length + openLiveEntries.length || ''}`], ['history', '交易记录'], ['settings', '设置']] as const).map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => selectTab(key)}>{label}</button>)}</nav>
@@ -307,7 +308,7 @@ export default function Home() {
       <Setting title="数据覆盖" detail={`按成交额筛选 ${runtime?.strategyData?.liquidMarkets ?? runtime?.limits.scanUniverse ?? 30} 个合约；已获得 ${runtime?.strategyData?.stableMarkets ?? 0} 个完整5分钟结构，约5分钟轮询一遍；新鲜盘口只负责最终可执行验证。`} value={`${runtime?.strategyData?.stableMarkets ?? 0}/30 完整K线`} tone="online"/>
       <Setting title="运行日志" detail="每5分钟保存一次策略频率、最新结果、持仓、权益、数据覆盖和LIVE状态；保留14天，供隔夜复盘。" value={time(runtime?.strategyData?.lastRuntimeLogAt)} tone={runtime?.strategyData?.logError ? "locked" : "online"}/>
       <Setting title="页面数据" detail="交易后台按2秒循环运行；手机页面每15秒读取一次摘要。策略记录随权威检查点保存，不增加行情请求。" value="轻量" tone="online"/>
-      <Setting title="系统状态" detail="交易健康只由后台权威、行情新鲜度和各币恢复状态决定；历史镜像延迟不再误报故障。" value={healthy ? "正常" : "恢复中"} tone={healthy ? "online" : "locked"}/>
+      <Setting title="系统状态" detail="系统运行、页面连接和当前可开仓市场分别判断；个别币预热或暂时没有机会不再误报为全局恢复。" value={healthLabel} tone={authorityOperational && !error ? "online" : "locked"}/>
       <button className="setting-row" type="button" disabled={paperResetBusy || liveEnabled} onClick={() => void resetPaperAccount()}><div><b>重置1000 U模拟资金</b><p>按最新可成交价结算当前模拟持仓，归档本轮账户后从1000 U重新开始；影子策略研究样本不会删除，实盘开启时禁止操作。</p></div><span className="setting-value locked">{paperResetBusy ? "处理中…" : "重置 ›"}</span></button>
       {paperResetError && <p className="form-error">{paperResetError}</p>}{paperResetNotice && <p className="form-success">{paperResetNotice}</p>}
       <p className="last-update">最近后台成功：{time(runtime?.lastSuccessAt)}{live?.lastSyncAt ? ` · 实盘核对：${time(live.lastSyncAt)}` : ""}</p>
