@@ -1,9 +1,10 @@
-# In progress — 2026-09-11 recovered runtime-truth and LIVE-off UI correction
+# Done — 2026-09-11 recovered runtime-truth and LIVE-off UI correction
 
 - Recovered the unfinished task from the stalled conversation after verifying that its previous turn stopped before repository inspection.
 - The page now waits for a verified runtime snapshot instead of rendering plausible zero/default values. When LIVE is off, the public LIVE badge and navigation entry disappear, and authenticated owner maintenance is separated from hidden real-account/order panels.
 - The LIVE switch remains owner-controlled on the LIVE page; Settings no longer duplicates real-account data or the switch. Trading authority, PAPER state/history, credentials and backend LIVE state are untouched.
-- Local verification passed 191 direct tests, 16 architecture/migration tests, TypeScript, ESLint, the production build, Wrangler deploy dry-run and whitespace validation. Production release and advancing-health acceptance are pending.
+- Local verification passed 191 direct tests, 16 architecture/migration tests, TypeScript, ESLint, the production build, Wrangler deploy dry-run and whitespace validation. PR #183 passed the non-production verification run #656 and merged as `97f5c2f0ffba1d3d90e00e1ea4311ed78e70171f`; production run #658 passed build, deployment and advancing-health acceptance.
+- Production returned `generated-state-routes-v6`, PAPER mode, advancing `lastSuccessAt`, 30-market scanning and an unchanged evolved account at 992.1413 U while its open PAPER positions advanced naturally from one to two during the repair. LIVE remained explicitly OFF (`requestedEnabled=false`, `operational=false`); no reset, settlement, credential mutation or history deletion occurred.
 
 # Done — 2026-09-11 quiet mobile transport and V6 decision console
 

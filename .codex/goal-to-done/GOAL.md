@@ -1,4 +1,4 @@
-# Active UI correction — verified runtime truth and owner-only LIVE surface
+# Completed UI correction — verified runtime truth and owner-only LIVE surface
 
 - Before the first verified `/api/runtime` response, show an explicit connection state instead of fabricated 1,000 U, zero-order, zero-route or thirty-market values. After a verified snapshot exists, keep that last truth visible across ordinary phone transport retries.
 - While LIVE is off, remove LIVE badges and the public LIVE navigation entry. Real account and real-order panels must remain unrendered; only an authenticated owner may see the activation, tagged-order cleanup and API-management controls needed to enable or maintain LIVE safely.
