@@ -1,4 +1,11 @@
-# Active UI correction — quiet mobile transport and V6 decision console
+# Active UI correction — verified runtime truth and owner-only LIVE surface
+
+- Before the first verified `/api/runtime` response, show an explicit connection state instead of fabricated 1,000 U, zero-order, zero-route or thirty-market values. After a verified snapshot exists, keep that last truth visible across ordinary phone transport retries.
+- While LIVE is off, remove LIVE badges and the public LIVE navigation entry. Real account and real-order panels must remain unrendered; only an authenticated owner may see the activation, tagged-order cleanup and API-management controls needed to enable or maintain LIVE safely.
+- Keep the owner-controlled LIVE switch on the LIVE page, not Settings. Enabling LIVE may reveal account/order views; disabling it hides them again after reconciliation.
+- Change presentation only. Preserve V6 trading authority, the evolved PAPER account, open PAPER positions, history, research, reset behavior, credentials, risk controls and LIVE OFF state. Verify locally and through advancing production health on GitHub `main`.
+
+# Completed UI correction — quiet mobile transport and V6 decision console
 
 - Never show routine phone-summary age or retry latency as a warning. Keep the last verified snapshot visible, retry the lightweight runtime summary promptly on focus/online recovery, and reserve visible warnings for genuine backend authority or protected-position failures.
 - Replace the inherited strategy-arena dashboard hierarchy with a V6 decision console: account outcome first, then the actual liquidity → completed-candle → approved-route → PAPER flow, followed by current routes, market-state coverage and secondary shadow research.

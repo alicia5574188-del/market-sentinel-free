@@ -75,7 +75,7 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(page, /window\.addEventListener\("pageshow", resume\)/);
   assert.match(page, /window\.addEventListener\("online", resume\)/);
   assert.match(page, /tabScroll\.current\[tab\] = window\.scrollY/);
-  assert.match(page, /viewScroll\.current\[view\] = window\.scrollY/);
+  assert.match(page, /viewScroll\.current\[activeView\] = window\.scrollY/);
   assert.match(page, /自适应状态路线/);
   assert.match(layout, /V6自适应状态路线 · PAPER/);
   assert.doesNotMatch(layout, /V4自适应影子策略/);
@@ -83,6 +83,14 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(page, /旧12策略没有开仓权/);
   assert.match(page, /V6决策流程/);
   assert.match(page, /当前有效路线/);
+  assert.match(page, /const hasRuntimeSnapshot = Boolean\(runtime && arena\)/);
+  assert.match(page, /收到真实运行快照后再显示账户、持仓、路线和市场数量/);
+  assert.match(page, /收到后台真实快照前不显示“0笔”/);
+  assert.match(page, /const showLiveCenter = auth\.authenticated \|\| liveEnabled/);
+  assert.match(page, /if \(showLiveCenter\) navigationTabs\.push/);
+  assert.match(page, /liveEnabled && activeView === "orders"/);
+  assert.match(page, /实盘数据保持隐藏/);
+  assert.doesNotMatch(page, /className="live-off">LIVE OFF/);
   assert.doesNotMatch(page, /手机页面更新延迟|页面摘要延迟|页面数据延迟/);
   assert.match(page, /不依赖高频异动、逐笔成交或持仓量数据/);
   assert.match(page, /有效影子/);

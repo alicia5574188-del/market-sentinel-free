@@ -1,8 +1,15 @@
-# In progress — 2026-09-11 quiet mobile transport and V6 decision console
+# In progress — 2026-09-11 recovered runtime-truth and LIVE-off UI correction
+
+- Recovered the unfinished task from the stalled conversation after verifying that its previous turn stopped before repository inspection.
+- The page now waits for a verified runtime snapshot instead of rendering plausible zero/default values. When LIVE is off, the public LIVE badge and navigation entry disappear, and authenticated owner maintenance is separated from hidden real-account/order panels.
+- The LIVE switch remains owner-controlled on the LIVE page; Settings no longer duplicates real-account data or the switch. Trading authority, PAPER state/history, credentials and backend LIVE state are untouched.
+- Local verification passed 191 direct tests, 16 architecture/migration tests, TypeScript, ESLint, the production build, Wrangler deploy dry-run and whitespace validation. Production release and advancing-health acceptance are pending.
+
+# Done — 2026-09-11 quiet mobile transport and V6 decision console
 
 - Removed routine phone-summary and liquidity-pool delay banners from the decision page. The last verified runtime remains visible while a 12-second bounded read retries after three seconds; focus, online and pageshow events request an immediate refresh.
 - Rebuilt the main hierarchy around the actual V6 flow: one PAPER account, liquidity coverage, completed-candle state, approved routes, account execution, market-state map and secondary shadow research. The prior arena branding and tan active navigation are gone.
-- Trading authority, strategy generation, PAPER state/history, reset, risk controls and LIVE remain unchanged. Local verification passed 191 direct tests, 16 architecture/migration tests, TypeScript, ESLint, the production build and whitespace validation. The first deploy uploaded successfully but its page smoke assertion still expected the retired arena title; the assertion is corrected and production acceptance is pending.
+- Trading authority, strategy generation, PAPER state/history, reset, risk controls and LIVE remain unchanged. Local verification passed 191 direct tests, 16 architecture/migration tests, TypeScript, ESLint, the production build and whitespace validation. After correcting both deploy and monitor page-title assertions, commit `7a00c2ac144bbe03f084a146904b6b5087c0319b` passed GitHub Actions run #655 and advancing production health; LIVE remained explicitly OFF.
 
 # Done — 2026-09-10 generated state-route V6
 
