@@ -1,8 +1,9 @@
-# Active — 2026-09-10 truthful runtime health status
+# Done — 2026-09-10 truthful runtime health status
 
 - Reproduced the persistent false recovery display in source: `runtimeReady` required state `LIVE`, exactly ten symbols, and at least one actionable market, while the page translated every non-D1 `lastError` into a whole-system recovery warning.
 - Implemented separate authority-operational, release-ready, display-label, and operator-notice semantics. `DEGRADED` with fresh authority and protected markets remains operational; zero actionable markets is no longer a global error.
-- Genuine stale authority, complete book loss, protected-position data loss, checkpoint failure and risk protection remain explicit and fail closed. Targeted direct tests pass; full verification and production deployment remain pending.
+- Genuine stale authority, complete book loss, protected-position data loss, checkpoint failure and risk protection remain explicit and fail closed. Verification passed 193 direct tests, 15 architecture/migration tests, production build, TypeScript, ESLint and whitespace checks.
+- Production code commit `b1e68cdca2ca24e5ec4dd13a4714cc2c13bfc945` passed GitHub Actions run #641 and its advancing Cloudflare health gate. Cloudflare version `74441ebf-c1ba-4be7-9541-897a06da73c0` reported V4.4, `LIVE` runtime state, no global error, 1,000 U equity, 30/10 data capacity, 12/48 strategy catalog and LIVE explicitly OFF (`requestedEnabled=false`, `operational=false`).
 
 # Done — 2026-09-10 V4.3 simulator truth and risk correction
 

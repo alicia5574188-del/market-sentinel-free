@@ -1,4 +1,4 @@
-# Active goal — truthful permanent runtime health status
+# Completed goal — truthful permanent runtime health status
 
 - Stop reporting the entire system as recovering when the authority is current and only individual markets are warming or no market is presently entry-ready.
 - Keep stale-price, protected-position, risk and checkpoint fail-closed behavior unchanged.
