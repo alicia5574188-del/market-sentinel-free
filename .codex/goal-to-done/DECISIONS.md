@@ -313,3 +313,9 @@
 - A current authority can be operational while individual candidate markets warm, rotate, or temporarily have no entry-ready setup. Those conditions may block the affected new orders but are not a whole-system recovery event.
 - The operator badge reports recovery only for stale/absent authority, reconnecting state or required checkpoint recovery. Optional mirrors and isolated market retries are warnings; risk and protected-position blocks get their own truthful messages.
 - `/__health` accepts an operational `DEGRADED` authority only when protected markets are ready. `WARMING` remains unready for release gates, and stale prices, complete snapshot loss and protected-market loss remain fail closed.
+
+# 2026-09-10 — Six normal outcomes are the reverse promotion sample
+
+- The exact normal variant's latest six independent effective-shadow paths are sufficient reverse evidence when they contain at least three stops, normal gross and net totals are negative, and replaying the opposite direction with swapped stop/target remains positive after complete modeled costs.
+- Passing that proof enables the countertrend route for the next new executable signal. A second three-win or positive-six reverse-shadow promotion window is redundant and forbidden.
+- Normal and reverse shadows continue after activation. Current-signal geometry, cost, depth, freshness, Gate lot sizing and portfolio limits still apply; reverse PAPER results alone control later reverse demotion.

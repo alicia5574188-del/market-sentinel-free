@@ -170,7 +170,11 @@ test("V4 adaptive shadow arena is bounded, cost-aware, and is the sole LIVE orde
   assert.match(worker, /resetStrategyArenaAccount/);
   assert.match(worker, /minimumPortfolioRiskUsdt: MIN_PORTFOLIO_TRADE_RISK_USDT/);
   assert.match(worker, /empiricalCostFloorRate: ARENA_FRICTION_RATE/);
-  assert.match(page, /每个执行变体独立使用24小时最新/);
+  assert.match(page, /正常变体使用24小时最新/);
+  assert.match(page, /反向直接启用下一次新信号/);
+  assert.match(page, /不再二次等待晋级/);
+  assert.match(arena, /enableReverseFromNormalProof/);
+  assert.match(arena, /reverseQualificationResults/);
   assert.match(page, /观察影子/);
   assert.match(page, /动态风险/);
   assert.match(page, /重置1000 U模拟资金/);

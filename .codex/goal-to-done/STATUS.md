@@ -1,3 +1,9 @@
+# Active — 2026-09-10 direct countertrend activation
+
+- Confirmed the redundant gate: six normal effective shadows already had to prove at least three stops, negative normal gross/net, and positive fully modeled reverse net; the implementation then opened separate reverse shadows and demanded another three wins or positive six before account eligibility.
+- Implemented immediate countertrend enablement from that six-trade proof while retaining current-signal execution economics, next-signal-only entry, ongoing normal/reverse shadows and reverse PAPER demotion.
+- Local verification passed 193 direct tests, 15 architecture/migration tests, production build, TypeScript, ESLint and whitespace checks. GitHub/Cloudflare deployment and production acceptance remain pending.
+
 # Done — 2026-09-10 truthful runtime health status
 
 - Reproduced the persistent false recovery display in source: `runtimeReady` required state `LIVE`, exactly ten symbols, and at least one actionable market, while the page translated every non-D1 `lastError` into a whole-system recovery warning.

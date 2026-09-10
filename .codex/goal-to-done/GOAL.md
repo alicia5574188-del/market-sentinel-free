@@ -1,3 +1,10 @@
+# Active goal — direct countertrend activation from six-trade proof
+
+- When an exact normal variant's latest six independent effective shadows are net losing and contain at least three stops, use those same realized paths to calculate the fully costed reversed result.
+- If that reversed six-trade result is positive, enable the countertrend route immediately for the next valid signal; do not require another three-win or six-trade reverse-shadow promotion window.
+- Keep normal and reverse shadows running continuously. Keep fresh execution, geometry, cost, liquidity, integer-contract and portfolio safety gates unchanged.
+- Preserve reverse PAPER demotion, the 1,000 U account, all existing evidence, and owner-controlled LIVE OFF through deployment.
+
 # Completed goal — truthful permanent runtime health status
 
 - Stop reporting the entire system as recovering when the authority is current and only individual markets are warming or no market is presently entry-ready.

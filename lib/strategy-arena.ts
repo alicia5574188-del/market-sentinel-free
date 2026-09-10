@@ -98,6 +98,7 @@ export type StrategyScore = StrategyDefinition & {
   recentResults: StrategyResult[]; transitions: number; lastTransitionAt: number | null;
   paperResults: StrategyResult[]; demotedAt: number | null; lastTransitionReason: string;
   reverseEnabled: boolean; reverseRecentResults: StrategyResult[]; reversePaperResults: StrategyResult[];
+  reverseQualificationResults: StrategyResult[];
   reverseShadowResolved: number; reverseShadowWins: number; reverseShadowNetReturnRate: number;
   reversePaperResolved: number; reversePaperWins: number; reversePaperNetReturnRate: number;
   reverseDemotedAt: number | null; reverseLastTransitionAt: number | null; reverseLastTransitionReason: string;
@@ -147,7 +148,7 @@ function freshStrategy(definition: StrategyDefinition): StrategyScore {
     paperResolved: 0, paperWins: 0, paperNetReturnRate: 0, paperEquity: STRATEGY_INITIAL_EQUITY,
     consecutivePaperLosses: 0, stageResults: [], stageEvents: [], stageSymbols: [], recentResults: [],
     paperResults: [], demotedAt: null, transitions: 0, lastTransitionAt: null, lastTransitionReason: "V4启动：等待新的有效影子结果",
-    reverseEnabled: false, reverseRecentResults: [], reversePaperResults: [], reverseShadowResolved: 0,
+    reverseEnabled: false, reverseRecentResults: [], reversePaperResults: [], reverseQualificationResults: [], reverseShadowResolved: 0,
     reverseShadowWins: 0, reverseShadowNetReturnRate: 0, reversePaperResolved: 0, reversePaperWins: 0,
     reversePaperNetReturnRate: 0, reverseDemotedAt: null, reverseLastTransitionAt: null,
     reverseLastTransitionReason: "反向路线尚未满足最近6笔逆向经济性验证" };
@@ -198,6 +199,7 @@ export function normalizeStrategyArena(value: StrategyArenaState | null | undefi
       return [definition.id, prior ? { ...freshStrategy(definition), ...prior, ...definition,
         recentResults: (prior.recentResults ?? []).slice(-24), paperResults: (prior.paperResults ?? []).slice(-24),
         reverseRecentResults: (prior.reverseRecentResults ?? []).slice(-24),
+        reverseQualificationResults: (prior.reverseQualificationResults ?? []).slice(-REVERSE_TRIGGER_WINDOW),
         reversePaperResults: (prior.reversePaperResults ?? []).slice(-24) } : freshStrategy(definition)];
     })),
     playbookResults: Object.fromEntries(PLAYBOOKS.map((playbook) => [playbook.id,
@@ -209,7 +211,10 @@ export function normalizeStrategyArena(value: StrategyArenaState | null | undefi
     seenSignals: (value.seenSignals ?? []).slice(-2_000), archivedPortfolioCycles: (value.archivedPortfolioCycles ?? []).slice(-12),
     admissionRejects: value.admissionRejects ?? {}, recentObservations: (value.recentObservations ?? []).slice(-ARENA_HISTORY_LIMIT),
     cutoverPending: Boolean(value.cutoverPending) };
-  for (const score of Object.values(normalized.strategies)) { promoteStrategy(normalized, score, now); promoteReverse(score, now); }
+  for (const score of Object.values(normalized.strategies)) {
+    promoteStrategy(normalized, score, now);
+    enableReverseFromNormalProof(normalized, score, now);
+  }
   return normalized;
 }
 
@@ -459,8 +464,8 @@ export function playbookPerformance(state: StrategyArenaState, id: string, curre
 function strategyPerformance(score: StrategyScore, currentRegime?: MarketRegimeKind) {
   return evidence(uniqueResults(score.recentResults), currentRegime);
 }
-function reversePerformance(score: StrategyScore, currentRegime?: MarketRegimeKind) {
-  return evidence(uniqueResults(score.reverseRecentResults), currentRegime);
+function reverseQualificationPerformance(score: StrategyScore, currentRegime?: MarketRegimeKind) {
+  return evidence(uniqueResults(score.reverseQualificationResults), currentRegime);
 }
 const rollingQualified = (results: Array<{ netReturnRate: number; resolvedAt: number }>) => {
   const latest3 = results.slice(-PROMOTION_WIN_STREAK);
@@ -494,15 +499,6 @@ function promoteStrategy(state: StrategyArenaState, score: StrategyScore, now: n
   transition(state, score, "ACTIVE", now, `${reason}；只启用这个已验证执行变体`);
 }
 
-function promoteReverse(score: StrategyScore, now: number) {
-  if (score.reverseEnabled) return;
-  const results = uniqueResults(score.reverseRecentResults.filter((row) => row.resolvedAt > (score.reverseDemotedAt ?? 0)));
-  const reason = rollingQualified(results);
-  if (!reason) return;
-  score.reverseEnabled = true; score.reverseLastTransitionAt = now;
-  score.reverseLastTransitionReason = `${reason}；反向路线只参与下一次新信号，正常影子继续运行`;
-}
-
 const attributionId = (strategyId: string, orientation: StrategyOrientation) => orientation === "REVERSE" ? `reverse|${strategyId}` : strategyId;
 const parseAttribution = (value: string) => value.startsWith("reverse|")
   ? { strategyId: value.slice("reverse|".length), orientation: "REVERSE" as const }
@@ -515,10 +511,26 @@ function reverseEligibility(state: StrategyArenaState, score: StrategyScore) {
   const stops = normal.filter((trade) => trade.outcome === "STOP").length;
   const gross = sum(normal.map((trade) => trade.grossReturnRate ?? 0));
   const net = sum(normal.map((trade) => trade.netReturnRate ?? 0));
-  const modeledReverseNet = sum(normal.map((trade) => -(trade.grossReturnRate ?? 0)
-    - trade.context.modeledCostRate - (trade.context.fundingCostRate ?? 0) - trade.context.spreadRate));
+  const results = normal.map((trade) => {
+    const netReturnRate = -(trade.grossReturnRate ?? 0) - trade.context.modeledCostRate
+      - (trade.context.fundingCostRate ?? 0) - trade.context.spreadRate;
+    return { eventId: trade.eventId, symbol: trade.symbol, regime: trade.context.regime, channel: trade.context.channel,
+      netReturnRate, netPnl: trade.notional * netReturnRate, won: netReturnRate > 0,
+      resolvedAt: trade.closedAt ?? trade.openedAt } satisfies StrategyResult;
+  });
+  const modeledReverseNet = sum(results.map((row) => row.netReturnRate));
   return stops >= REVERSE_STOP_MINIMUM && gross < 0 && net < 0 && modeledReverseNet > 0
-    ? { events: normal.length, stops, modeledReverseNet } : null;
+    ? { events: normal.length, stops, modeledReverseNet, results } : null;
+}
+
+function enableReverseFromNormalProof(state: StrategyArenaState, score: StrategyScore, now: number) {
+  const reverseCase = reverseEligibility(state, score);
+  if (!reverseCase) return;
+  score.reverseQualificationResults = reverseCase.results;
+  if (score.reverseEnabled) return;
+  score.reverseEnabled = true;
+  score.reverseLastTransitionAt = now;
+  score.reverseLastTransitionReason = `最近${reverseCase.events}笔正常影子含${reverseCase.stops}次止损，反向成本后测算${(reverseCase.modeledReverseNet * 100).toFixed(2)}%；反向路线已直接启用，只参与下一次新信号`;
 }
 
 function recordClosed(state: StrategyArenaState, trade: ArenaTrade) {
@@ -554,7 +566,7 @@ function recordClosed(state: StrategyArenaState, trade: ArenaTrade) {
           ? "最新6笔模拟订单成本后总收益不再为正" : null;
       if (reason && orientation === "REVERSE" && score.reverseEnabled) {
         const resolvedAt = trade.closedAt ?? trade.openedAt;
-        score.reverseEnabled = false; score.reverseDemotedAt = resolvedAt; score.reverseLastTransitionAt = resolvedAt;
+        score.reverseEnabled = false; score.reverseQualificationResults = []; score.reverseDemotedAt = resolvedAt; score.reverseLastTransitionAt = resolvedAt;
         score.reverseLastTransitionReason = `${reason}，反向路线退回影子；正常路线的影子验证不停止`;
       } else if (reason && orientation === "NORMAL" && score.enabled) {
         const resolvedAt = trade.closedAt ?? trade.openedAt;
@@ -581,8 +593,10 @@ function recordClosed(state: StrategyArenaState, trade: ArenaTrade) {
       updatePlaybookResult(state, trade);
     }
     state.recentShadow.push(trade); if (state.recentShadow.length > ARENA_HISTORY_LIMIT) state.recentShadow.shift();
-    if (orientation === "REVERSE") promoteReverse(score, trade.closedAt ?? Date.now());
-    else promoteStrategy(state, score, trade.closedAt ?? Date.now());
+    if (orientation === "NORMAL") {
+      promoteStrategy(state, score, trade.closedAt ?? Date.now());
+      enableReverseFromNormalProof(state, score, trade.closedAt ?? Date.now());
+    }
     return;
   }
 }
@@ -710,7 +724,7 @@ function portfolioSizing(state: StrategyArenaState, input: ArenaObservation, sig
 function portfolioAdmission(state: StrategyArenaState, input: ArenaObservation, signal: Signal, score: StrategyScore,
   orientation: StrategyOrientation = "NORMAL") {
   const economics = geometryEconomics(input, signal);
-  const own = orientation === "REVERSE" ? reversePerformance(score, input.candidate.regime) : strategyPerformance(score, input.candidate.regime);
+  const own = orientation === "REVERSE" ? reverseQualificationPerformance(score, input.candidate.regime) : strategyPerformance(score, input.candidate.regime);
   const sample = own;
   const enabled = orientation === "REVERSE" ? score.reverseEnabled : score.enabled;
   const reverseBreakEvenRate = (economics.structuralStopRate + ARENA_FRICTION_RATE)
@@ -725,8 +739,8 @@ function portfolioAdmission(state: StrategyArenaState, input: ArenaObservation, 
     : input.managementCapacity === false ? "DATA_CAPACITY" : !validStructure ? "STRUCTURE" : input.candidate.volume24hUsd < ARENA_MIN_VOLUME_24H_USD ? "LIQUIDITY"
     : input.spreadRate > ARENA_MAX_SPREAD_RATE ? "SPREAD" : !economicGeometry ? "NET_ECONOMICS"
       : !enabled ? "INACTIVE"
-        : sample.events < PROMOTION_WIN_STREAK ? "EMPIRICAL_SAMPLE"
-          : sample.conservativeReturnRate <= economics.modeledCostRate ? "EMPIRICAL_COST" : null;
+        : orientation === "NORMAL" && sample.events < PROMOTION_WIN_STREAK ? "EMPIRICAL_SAMPLE"
+          : orientation === "NORMAL" && sample.conservativeReturnRate <= economics.modeledCostRate ? "EMPIRICAL_COST" : null;
   if (blocker) { state.admissionRejects[blocker] = (state.admissionRejects[blocker] ?? 0) + 1; return null; }
   const sizing = portfolioSizing(state, input, signal);
   if (!sizing) { state.admissionRejects.SIZING = (state.admissionRejects.SIZING ?? 0) + 1; return null; }
@@ -820,6 +834,7 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
   for (const signal of generatedSignals) {
     const score = state.strategies[signal.strategyId]; const definition = STRATEGY_CATALOG.find((row) => row.id === signal.strategyId);
     if (!score || !definition) continue;
+    enableReverseFromNormalProof(state, score, input.observation.now);
     const playbookId = baseId(signal.strategyId);
     const overlappingPlaybookTrade = Object.values(state.open).find((trade) => trade.lane === "EFFECTIVE_SHADOW"
       && tradeOrientation(trade) === "NORMAL"
@@ -869,8 +884,7 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
       if (reverseSizing && !reverseBlocker) {
         state.open[reverseKey] = openTrade(input.observation, winner.definition, reverse, "EFFECTIVE_SHADOW", reverseSizing, false);
         state.seenSignals.push(reverseSeenKey);
-        winner.score.reverseLastTransitionReason = `最近${reverseCase.events}笔正常影子含${reverseCase.stops}次止损，反向成本后测算${(reverseCase.modeledReverseNet * 100).toFixed(2)}%；开始独立反向影子`;
-        winner.score.reverseLastTransitionAt = input.observation.now;
+        if (!winner.score.reverseEnabled) enableReverseFromNormalProof(state, winner.score, input.observation.now);
       } else if (reverseBlocker) recordObservation(winner.definition, `反向路线仅观察：${reverseBlocker}`);
     }
     while (state.seenSignals.length > 2_000) state.seenSignals.shift();
@@ -897,9 +911,9 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
       activeByPlaybook.set(id, [...(activeByPlaybook.get(id) ?? []), row]);
     }
     const representatives = [...activeByPlaybook.values()].map((rows) => [...rows].sort((left, right) =>
-      (right.orientation === "REVERSE" ? reversePerformance(right.score, input.observation.candidate.regime)
+      (right.orientation === "REVERSE" ? reverseQualificationPerformance(right.score, input.observation.candidate.regime)
         : strategyPerformance(right.score, input.observation.candidate.regime)).conservativeReturnRate
-        - (left.orientation === "REVERSE" ? reversePerformance(left.score, input.observation.candidate.regime)
+        - (left.orientation === "REVERSE" ? reverseQualificationPerformance(left.score, input.observation.candidate.regime)
           : strategyPerformance(left.score, input.observation.candidate.regime)).conservativeReturnRate
       || right.signal.quality - left.signal.quality || left.definition.id.localeCompare(right.definition.id))[0]);
     const candidates = representatives.map((row) => ({ ...row,
@@ -946,7 +960,8 @@ export function arenaSummary(state: StrategyArenaState) {
   });
   const strategySummaries = strategies.map((score) => ({ ...score,
     recentResults: uniqueResults(score.recentResults), paperResults: uniqueResults(score.paperResults),
-    reverseRecentResults: uniqueResults(score.reverseRecentResults), reversePaperResults: uniqueResults(score.reversePaperResults) }));
+    reverseRecentResults: uniqueResults(score.reverseRecentResults), reversePaperResults: uniqueResults(score.reversePaperResults),
+    reverseQualificationResults: uniqueResults(score.reverseQualificationResults) }));
   const open = uniqueEventTrades(Object.values(state.open).sort((a, b) => b.openedAt - a.openedAt));
   return { version: state.version, startedAt: state.startedAt, catalogSize: STRATEGY_CATALOG.length, playbookCount: PLAYBOOKS.length,
     portfolioCycle: state.portfolioCycle, portfolioCycleStartedAt: state.portfolioCycleStartedAt,
