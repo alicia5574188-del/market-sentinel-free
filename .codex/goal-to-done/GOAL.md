@@ -1,4 +1,4 @@
-# Active goal — shadow-authoritative mutually exclusive execution
+# Completed goal — shadow-authoritative mutually exclusive execution
 
 - Make the exact variant's rolling effective-shadow evidence the sole authority for future PAPER eligibility. A complete latest-six after-cost window outranks either three-result streak; three wins/losses are only the fallback before a valid six-result window exists.
 - Allow exactly one enabled orientation per variant. Positive-six selects normal; negative-six selects reverse only when the fully costed opposite path is positive. Re-evaluate after every normal effective-shadow close and never use PAPER results to promote, demote or latch an obsolete direction.
