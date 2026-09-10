@@ -1,9 +1,10 @@
-# Active — 2026-09-10 page-delay/backend-halt separation
+# Done — 2026-09-10 page-delay/backend-halt separation
 
 - Screenshot showed 29/30 completed-candle coverage and a recent backend success, while the phone simultaneously displayed `页面数据延迟` and the contradictory headline `模拟账户暂停新开仓`.
 - Root cause confirmed in the client: the same `responseFresh` flag was used both for page transport status and backend authority status. The public page is read-only, so this could not stop MarketStream; it was a false halt message.
 - Implemented an explicit last-known backend authority predicate. A delayed phone summary now says the trading backend continues independently; only the backend's own unhealthy state can produce the new-entry halt headline.
-- Local verification passed 195 direct tests, 15 architecture/migration tests, production build, TypeScript, ESLint and whitespace checks. GitHub/Cloudflare deployment and production acceptance remain pending.
+- Local verification passed 195 direct tests, 15 architecture/migration tests, production build, TypeScript, ESLint and whitespace checks. The follow-up release guard also prevents ordinary deployments from requiring an evolved PAPER account to remain exactly 1,000 U.
+- Production commits `b7156cc74d47942bcf48a626dc7104691714a7e0` and `2e029d72a35220098fdb55a6d21cb712b031a690` passed GitHub Actions run #646 and its advancing production-health gate. Cloudflare version `a5090773-fcee-4201-b673-26339a83ce3d` reported V4.4, PAPER mode, fresh authority, a valid positive evolved portfolio equity, 30/10 data capacity, 12/48 catalog and LIVE explicitly OFF (`requestedEnabled=false`, `operational=false`).
 
 # Done — 2026-09-10 countertrend OR activation correction
 

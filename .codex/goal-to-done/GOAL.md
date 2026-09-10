@@ -1,4 +1,4 @@
-# Active goal — page delay must never impersonate a backend trading halt
+# Completed goal — page delay must never impersonate a backend trading halt
 
 - Separate the phone's `/api/runtime` transport freshness from the MarketStream authority's own fresh/stale and protection state.
 - A delayed phone summary may show that the page is delayed, but must never claim the simulated account stopped opening orders when the last backend authority state is operational.
