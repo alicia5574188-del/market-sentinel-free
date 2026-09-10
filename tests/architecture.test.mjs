@@ -167,6 +167,8 @@ test("V4 adaptive shadow arena is bounded, cost-aware, and is the sole LIVE orde
   assert.match(worker, /mirrorNotionalFraction: trade\.notional \/ Math\.max\(trade\.accountEquityAtOpen/);
   assert.match(worker, /strategyArena: normalizeStrategyArena\(saved\.strategyArena\)/);
   assert.match(worker, /resetStrategyArenaAccount/);
+  assert.match(worker, /minimumPortfolioRiskUsdt: MIN_PORTFOLIO_TRADE_RISK_USDT/);
+  assert.match(worker, /empiricalCostFloorRate: ARENA_FRICTION_RATE/);
   assert.match(page, /每个执行变体独立使用24小时最新/);
   assert.match(page, /观察影子/);
   assert.match(page, /动态风险/);

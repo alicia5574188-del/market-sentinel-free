@@ -863,6 +863,8 @@ test("health status is compact while retaining every release gate", async () => 
   assert.equal(status.strategyArena.playbookCount, 12);
   assert.equal(status.strategyArena.catalogSize, 48);
   assert.equal(status.strategyArena.portfolioEquity, 1_000);
+  assert.equal(status.strategyArena.rules.minimumPortfolioRiskUsdt, 10);
+  assert.equal(status.strategyArena.rules.empiricalCostFloorRate, 0.0014);
   assert.equal(status.limits.scanUniverse, 30);
   assert.equal(status.limits.realtimeCapacity, 10);
   assert.equal(status.liveMode.requestedEnabled, false);

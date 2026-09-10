@@ -18,7 +18,8 @@ import { type EventEntryAssessment, type RadarCandidate } from "../lib/market-ra
 import { completedCandleStrategyCandidate, initialMarketRegimes, marketRegimeSummary, normalizeMarketRegimes, residentCandleCandidate, selectDiverseMarketPool, updateMarketRegimes,
   type MarketRegimeCandidate, type MarketRegimeState, type ResidentCandleStructure } from "../lib/market-regime.ts";
 import { advanceStrategyArena, applyStrategySleepStates, arenaSummary, initialStrategyArena, normalizeStrategyArena, observeStrategyArena,
-  PORTFOLIO_REALTIME_CAPACITY, resetStrategyArenaAccount, STRATEGY_INITIAL_EQUITY, type StrategyArenaState } from "../lib/strategy-arena.ts";
+  ARENA_FRICTION_RATE, MIN_PORTFOLIO_TRADE_RISK_USDT, PORTFOLIO_REALTIME_CAPACITY, resetStrategyArenaAccount,
+  STRATEGY_INITIAL_EQUITY, type StrategyArenaState } from "../lib/strategy-arena.ts";
 
 const LOOP_MS = 2_000;
 const AUTHORITY_STALE_AFTER_MS = 8_000;
@@ -1789,6 +1790,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           rules: {
             singleTradeRiskMin: 0.01,
             singleTradeRiskMax: 0.02,
+            minimumPortfolioRiskUsdt: MIN_PORTFOLIO_TRADE_RISK_USDT,
+            empiricalCostFloorRate: ARENA_FRICTION_RATE,
             portfolioRiskCap: PORTFOLIO_RISK_CAP,
             correlatedRiskCap: CORRELATED_DIRECTION_RISK_CAP,
             marginCap: 0.30,
