@@ -2,7 +2,7 @@
 
 - Removed routine phone-summary and liquidity-pool delay banners from the decision page. The last verified runtime remains visible while a 12-second bounded read retries after three seconds; focus, online and pageshow events request an immediate refresh.
 - Rebuilt the main hierarchy around the actual V6 flow: one PAPER account, liquidity coverage, completed-candle state, approved routes, account execution, market-state map and secondary shadow research. The prior arena branding and tan active navigation are gone.
-- Trading authority, strategy generation, PAPER state/history, reset, risk controls and LIVE remain unchanged. Local verification passed 191 direct tests, 16 architecture/migration tests, TypeScript, ESLint, the production build and whitespace validation. Production release and phone rendering acceptance are pending.
+- Trading authority, strategy generation, PAPER state/history, reset, risk controls and LIVE remain unchanged. Local verification passed 191 direct tests, 16 architecture/migration tests, TypeScript, ESLint, the production build and whitespace validation. The first deploy uploaded successfully but its page smoke assertion still expected the retired arena title; the assertion is corrected and production acceptance is pending.
 
 # Done — 2026-09-10 generated state-route V6
 

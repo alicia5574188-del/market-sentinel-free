@@ -1052,7 +1052,7 @@ jobs:
           page_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/main-page.html" -w '%{http_code}' \
             "$WORKER_BASE_URL/" || true)"
           [[ "$page_code" == "200" ]]
-          grep -Fq '市场状态竞技场' "$RUNNER_TEMP/main-page.html"
+          grep -Fq '自适应状态路线' "$RUNNER_TEMP/main-page.html"
           curl -fsS --max-time 15 "$WORKER_BASE_URL/api/history" \
             > "$RUNNER_TEMP/main-history.json"
           jq -e '.items | type == "array"' "$RUNNER_TEMP/main-history.json" >/dev/null
