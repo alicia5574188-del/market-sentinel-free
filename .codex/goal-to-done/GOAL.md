@@ -1,4 +1,13 @@
-# Active goal — state-conditioned positive-expectancy V5
+# Active goal — generated state-route authority V6
+
+- Remove the twelve legacy playbooks and forty-eight variants from every executable path. They remain only inside archived trades and prior-cycle records.
+- Generate independent long/short route hypotheses directly from completed Gate futures candle state, then select entry geometry, stop, target and 10–60 minute horizon through chronological after-cost walk-forward evidence.
+- Keep the scan limited to liquidity selection. PAPER may open only by cloning a currently executable generated-state shadow; no legacy signal, 3/6 promotion, mirrored reverse or strategy-name mapping may authorize a trade.
+- Favor useful daily opportunity cadence only inside positive conservative expectancy. Never force a trade or present daily profit as guaranteed.
+- On release, settle any existing PAPER position from fresh bid/ask, archive the old cycle and start a new 1,000 U cycle. Preserve old trades, research records, credentials, authentication and all risk controls; keep LIVE explicitly OFF.
+- Replace the old strategy-arena UI with current generated route evidence and separate current-cycle history from archived cycles. Verify locally and through advancing production health on GitHub `main`.
+
+# Prior goal — state-conditioned positive-expectancy V5
 
 - Replace V4's fixed 3/6 promotion authority, mirrored countertrend and fixed family timeouts with one state-conditioned controller that selects an independently defined mechanism, side, executable geometry and empirically supported holding horizon by conservative after-cost expectancy.
 - Use only the existing completed Gate futures candles for broad research and the existing fresh bid/ask/depth path for final execution. Add no high-frequency feed, no second polling loop and no per-snapshot D1 writes.

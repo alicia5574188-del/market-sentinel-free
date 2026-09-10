@@ -75,12 +75,12 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(page, /tabScroll\.current\[tab\] = window\.scrollY/);
   assert.match(page, /viewScroll\.current\[view\] = window\.scrollY/);
   assert.match(page, /市场状态竞技场/);
-  assert.match(page, /V5 状态条件正期望/);
-  assert.match(page, /不再由3连胜、6单或镜像反向直接晋级/);
+  assert.match(page, /V6 状态路径生成器/);
+  assert.match(page, /旧12策略不再拥有开仓权/);
   assert.match(page, /不依赖高频异动、逐笔成交或持仓量数据/);
   assert.match(page, /有效影子/);
   assert.match(page, /观察影子/);
-  assert.match(page, /1000 U模拟账户交易记录/);
+  assert.match(page, /当前模拟周期/);
   assert.match(page, /唯一模拟合约账户/);
   assert.match(page, /开启实盘复制/);
   assert.doesNotMatch(page, /双模拟账本|独立策略模拟/);
@@ -134,15 +134,17 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
   assert.match(worker, /completeTrades\.length > item\.report\.trades\.length/);
 });
 
-test("V5 state-conditioned expectancy controller is bounded, cost-aware, and is the sole LIVE order source", async () => {
+test("V6 generated state-route controller is bounded, cost-aware, and is the sole LIVE order source", async () => {
   const [arena, adaptive, regime, worker, page, migration] = await Promise.all([
     read("lib/strategy-arena.ts"), read("lib/adaptive-policy.ts"), read("lib/market-regime.ts"),
     read("worker/index-clean.ts"), read("app/page.tsx"),
     read("drizzle/0035_strategy_arena_fresh_start.sql"),
   ]);
   assert.match(arena, /STRATEGY_CATALOG/);
-  assert.match(arena, /PROMOTION_WIN_STREAK = 3/);
-  assert.match(arena, /PROMOTION_RECENT_WINDOW = 6/);
+  assert.match(arena, /STRATEGY_ARENA_VERSION = 7/);
+  assert.match(arena, /name: "低效边界回归"/);
+  assert.match(arena, /name: "边界有效接受"/);
+  assert.doesNotMatch(arena, /adaptiveMechanismForPlaybook/);
   assert.match(arena, /ARENA_FRICTION_RATE = 0\.0014/);
   assert.match(arena, /ARENA_MAX_COST_SHARE = 0\.25/);
   assert.match(arena, /PORTFOLIO_REALTIME_CAPACITY = 10/);
@@ -174,17 +176,17 @@ test("V5 state-conditioned expectancy controller is bounded, cost-aware, and is 
   assert.match(adaptive, /ADAPTIVE_MIN_ANALOG_SAMPLES = 8/);
   assert.match(adaptive, /ADAPTIVE_HORIZONS_MINUTES = \[10, 20, 30, 45, 60\]/);
   assert.match(adaptive, /Same-candle ambiguity is deliberately stop-first/);
-  assert.match(arena, /STATE_CONDITIONED_EXPECTANCY/);
-  assert.match(page, /完成K线走查决定当前机制、方向和持仓周期/);
-  assert.match(page, /完整成本后的保守期望/);
-  assert.match(arena, /shadowAuthorityDecision/);
+  assert.match(arena, /CURRENT_STATE_WALK_FORWARD/);
+  assert.match(page, /系统直接生成多空进场、止损、目标和持仓周期/);
+  assert.match(page, /保守成本后期望/);
   assert.match(arena, /cloneShadowForPortfolio/);
-  assert.match(arena, /mutuallyExclusiveOrientation: true/);
   assert.match(arena, /paperEvaluation: false/);
-  assert.match(arena, /reverseQualificationResults/);
-  assert.match(arena, /REVERSE_LOSS_STREAK = 3/);
+  assert.match(arena, /generatedRouteAuthority: true/);
+  assert.match(arena, /legacyStrategyAuthority: false/);
   assert.match(page, /观察影子/);
-  assert.match(page, /不再由3连胜、6单或镜像反向直接晋级/);
+  assert.match(page, /旧策略、3\/6晋级和镜像反向均不能产生新模拟订单/);
+  assert.match(page, /当前模拟周期/);
+  assert.match(page, /历史归档/);
   assert.match(page, /runtimeBackendOperational\(runtime\)/);
   assert.match(page, /页面摘要延迟，交易后台继续独立运行/);
   assert.match(page, /动态风险/);

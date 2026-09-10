@@ -1,10 +1,10 @@
 import { CORRELATED_DIRECTION_RISK_CAP, MIN_NET_REWARD_RISK, PORTFOLIO_MARGIN_CAP, PORTFOLIO_RISK_CAP,
   selectSafeLeverage, sizePaperPosition, type LiquidityRoute, type RangeStructure, type Side } from "./liquidity-core.ts";
 import type { CandidateChannel, MarketRegimeCandidate, MarketRegimeKind, ResidentCandleStructure } from "./market-regime.ts";
-import { ADAPTIVE_DAILY_OBJECTIVE_RATE, ADAPTIVE_MIN_ANALOG_SAMPLES, adaptiveMechanismForPlaybook,
-  type AdaptivePolicyRecommendation } from "./adaptive-policy.ts";
+import { ADAPTIVE_DAILY_OBJECTIVE_RATE, ADAPTIVE_MIN_ANALOG_SAMPLES, ADAPTIVE_POLICY_VERSION,
+  type AdaptiveMechanism, type AdaptivePolicyRecommendation } from "./adaptive-policy.ts";
 
-export const STRATEGY_ARENA_VERSION = 6;
+export const STRATEGY_ARENA_VERSION = 7;
 export const STRATEGY_INITIAL_EQUITY = 1_000;
 export const PROMOTION_WIN_STREAK = 3;
 export const PROMOTION_RECENT_WINDOW = 6;
@@ -35,33 +35,28 @@ export type ExitProfile = "FAST" | "STRUCTURE";
 export type ArenaOutcome = "TARGET" | "STOP" | "TIMEOUT" | "THESIS_INVALID" | "EDGE_DECAY" | "RESET";
 export type AdmissionTier = "NORMAL";
 
-type Playbook = { id: string; name: string; family: StrategyFamily; channel: CandidateChannel; description: string };
+type Playbook = { id: string; name: string; family: StrategyFamily; channel: CandidateChannel;
+  mechanism: AdaptiveMechanism; description: string };
 
 export const PLAYBOOKS: Playbook[] = [
-  { id: "anomaly_follow", name: "完成K线扩张延续", family: "FAST", channel: "ANOMALY", description: "已完成5分钟宽幅K线保持方向时延续。" },
-  { id: "compression_break", name: "压缩释放", family: "FAST", channel: "COMPRESSION", description: "波幅压缩后出现方向释放。" },
-  { id: "steady_trend", name: "趋势延续", family: "TREND", channel: "TREND", description: "方向效率稳定且未明显回撤时顺势。" },
-  { id: "shallow_trend_pullback", name: "趋势浅回撤", family: "TREND", channel: "TREND", description: "趋势内浅回撤后恢复同向。" },
-  { id: "deep_trend_reclaim", name: "趋势深回撤", family: "TREND", channel: "TREND", description: "趋势深回撤后重新收复并顺势。" },
-  { id: "compression_retest", name: "突破回踩", family: "TREND", channel: "COMPRESSION", description: "突破后回踩守住再延续。" },
-  { id: "anomaly_pullback", name: "扩张回撤延续", family: "TREND", channel: "ANOMALY", description: "完成K线扩张后的受控回撤再次顺势。" },
-  { id: "range_edge", name: "区间边缘", family: "RANGE", channel: "RANGE", description: "低效率震荡接近边缘时回到中枢。" },
-  { id: "range_sweep_reclaim", name: "扫区间后收回", family: "RANGE", channel: "RANGE", description: "扫过区间边缘并重新收回。" },
-  { id: "range_failed_break", name: "区间假突破", family: "REVERSAL", channel: "RANGE", description: "突破未被接受后反向回归。" },
-  { id: "compression_failed", name: "压缩假突破", family: "REVERSAL", channel: "COMPRESSION", description: "压缩首次释放失败后反向。" },
-  { id: "anomaly_fade", name: "扩张衰竭反转", family: "REVERSAL", channel: "ANOMALY", description: "完成K线扩张回吐并出现失败确认时反向。" },
+  { id: "density_return", name: "低效边界回归", family: "RANGE", channel: "RANGE", mechanism: "RANGE_ROTATION",
+    description: "路径效率低且价格偏离成交密集区时，验证回到状态中枢的完整收益路径。" },
+  { id: "volatility_transition", name: "波动状态跃迁", family: "FAST", channel: "COMPRESSION", mechanism: "COMPRESSION_EXPANSION",
+    description: "短期波幅相对基线发生跃迁时，同时验证释放方向与可承受持仓窗口。" },
+  { id: "acceptance_failure", name: "边界接受失败", family: "REVERSAL", channel: "RANGE", mechanism: "FAILED_AUCTION",
+    description: "价格探索局部边界后未能在边界外收盘接受，验证返回原价值区的路径。" },
+  { id: "path_recovery", name: "路径恢复", family: "TREND", channel: "TREND", mechanism: "PULLBACK_RECOVERY",
+    description: "主路径保持效率、短期逆向移动衰减后，验证原方向恢复的路径。" },
+  { id: "directional_persistence", name: "方向持续性", family: "TREND", channel: "TREND", mechanism: "MOMENTUM_CONTINUATION",
+    description: "连续收盘位移相对总路径保持高效率时，验证惯性还能覆盖完整成本的距离。" },
+  { id: "boundary_acceptance", name: "边界有效接受", family: "FAST", channel: "ANOMALY", mechanism: "BREAKOUT_ACCEPTANCE",
+    description: "收盘越过局部边界且回撤未否定接受时，验证边界外继续发现价格的路径。" },
 ];
 
 export type StrategyDefinition = Playbook & { entryStyle: EntryStyle; exitProfile: ExitProfile };
-const entryLabel = (style: EntryStyle) => style === "CONFIRM" ? "确认" : "回踩";
-const exitLabel = (profile: ExitProfile) => profile === "FAST" ? "快速" : "结构";
-
-export const STRATEGY_CATALOG: StrategyDefinition[] = PLAYBOOKS.flatMap((playbook) =>
-  (["CONFIRM", "RETEST"] as EntryStyle[]).flatMap((entryStyle) =>
-    (["FAST", "STRUCTURE"] as ExitProfile[]).map((exitProfile) => ({
-      ...playbook, id: `${playbook.id}:${entryStyle.toLowerCase()}:${exitProfile.toLowerCase()}`,
-      name: `${playbook.name} · ${entryLabel(entryStyle)} · ${exitLabel(exitProfile)}`, entryStyle, exitProfile,
-    }))));
+export const STRATEGY_CATALOG: StrategyDefinition[] = PLAYBOOKS.map((playbook) => ({
+  ...playbook, entryStyle: "CONFIRM", exitProfile: "STRUCTURE",
+}));
 
 export type ArenaTradeContext = {
   channel: CandidateChannel; regime: MarketRegimeKind; anomalyKind: MarketRegimeCandidate["anomalyKind"];
@@ -115,7 +110,7 @@ export type PortfolioCycleArchive = { number: number; ruleVersion: string; start
   startingEquity: number; endingEquity: number; resolved: number; wins: number; grossPnl: number; costs: number; reason: string };
 
 export type StrategyArenaState = {
-  version: 6; startedAt: number; strategies: Record<string, StrategyScore>; playbookResults: Record<string, PlaybookEventResult[]>;
+  version: 7; startedAt: number; strategies: Record<string, StrategyScore>; playbookResults: Record<string, PlaybookEventResult[]>;
   open: Record<string, ArenaTrade>; portfolioOpen: Record<string, ArenaTrade>; portfolioEquity: number;
   portfolioResolved: number; portfolioWins: number; portfolioGrossPnl: number; portfolioCosts: number;
   portfolioCycle: number; portfolioCycleStartedAt: number; archivedPortfolioCycles: PortfolioCycleArchive[];
@@ -141,7 +136,6 @@ type Signal = { strategyId: string; side: Side; entryTrigger: number; stopPrice:
   orientation?: StrategyOrientation; originalTargetPrice?: number; targetAdapted?: boolean; targetEvidenceEvents?: number;
   structureSource: ArenaTradeContext["structureSource"]; maxHoldMs: number; noProgressMs: number; executable: boolean;
   adaptivePolicy?: AdaptivePolicyRecommendation | null };
-const opposite = (side: Side): Side => side === "LONG" ? "SHORT" : "LONG";
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
 const baseId = (strategyId: string) => strategyId.split(":")[0];
@@ -151,11 +145,11 @@ function freshStrategy(definition: StrategyDefinition): StrategyScore {
   return { ...definition, lane: "SHADOW", enabled: false, shadowResolved: 0, shadowWins: 0, shadowNetReturnRate: 0,
     paperResolved: 0, paperWins: 0, paperNetReturnRate: 0, paperEquity: STRATEGY_INITIAL_EQUITY,
     consecutivePaperLosses: 0, stageResults: [], stageEvents: [], stageSymbols: [], recentResults: [],
-    paperResults: [], demotedAt: null, transitions: 0, lastTransitionAt: null, lastTransitionReason: "V4启动：等待新的有效影子结果",
+    paperResults: [], demotedAt: null, transitions: 0, lastTransitionAt: null, lastTransitionReason: "状态路径持续影子研究；不使用固定晋级规则",
     reverseEnabled: false, reverseRecentResults: [], reversePaperResults: [], reverseQualificationResults: [], reverseShadowResolved: 0,
     reverseShadowWins: 0, reverseShadowNetReturnRate: 0, reversePaperResolved: 0, reversePaperWins: 0,
     reversePaperNetReturnRate: 0, reverseDemotedAt: null, reverseLastTransitionAt: null,
-    reverseLastTransitionReason: "影子权威尚未选择反向路线；正常与反向影子持续运行" };
+    reverseLastTransitionReason: "旧版镜像反向已退出交易权威" };
 }
 
 export function initialStrategyArena(now = Date.now()): StrategyArenaState {
@@ -171,7 +165,7 @@ export function initialStrategyArena(now = Date.now()): StrategyArenaState {
 function legacyArchive(value: unknown, now: number): PortfolioCycleArchive[] {
   const old = value as Partial<StrategyArenaState> | null | undefined;
   if (!old || Number(old.portfolioResolved ?? 0) === 0 && Number(old.portfolioEquity ?? STRATEGY_INITIAL_EQUITY) === STRATEGY_INITIAL_EQUITY) return [];
-  return [{ number: 1, ruleVersion: `v${String((old as { version?: number }).version ?? "legacy")}`,
+  return [{ number: Number(old.portfolioCycle ?? 1), ruleVersion: `v${String((old as { version?: number }).version ?? "legacy")}`,
     startedAt: Number(old.startedAt ?? now), endedAt: now, startingEquity: STRATEGY_INITIAL_EQUITY,
     endingEquity: Number(old.portfolioEquity ?? STRATEGY_INITIAL_EQUITY), resolved: Number(old.portfolioResolved ?? 0),
     wins: Number(old.portfolioWins ?? 0), grossPnl: Number(old.portfolioGrossPnl ?? 0), costs: Number(old.portfolioCosts ?? 0),
@@ -184,7 +178,9 @@ export function normalizeStrategyArena(value: StrategyArenaState | null | undefi
   if (Number((value as { version?: number }).version) !== STRATEGY_ARENA_VERSION) {
     const prior = value as unknown as Partial<StrategyArenaState>;
     const portfolioOpen = prior.portfolioOpen ?? {};
-    if (!Object.keys(portfolioOpen).length) return { ...fresh, archivedPortfolioCycles: [
+    if (!Object.keys(portfolioOpen).length) return { ...fresh,
+      portfolioCycle: Number(prior.portfolioCycle ?? 1) + 1, portfolioCycleStartedAt: now,
+      archivedPortfolioCycles: [
       ...(prior.archivedPortfolioCycles ?? []), ...legacyArchive(value, now),
     ].slice(-12), archivedPortfolioTrades: [
       ...(prior.archivedPortfolioTrades ?? []), ...(prior.recentPortfolio ?? []),
@@ -215,215 +211,40 @@ export function normalizeStrategyArena(value: StrategyArenaState | null | undefi
     seenSignals: (value.seenSignals ?? []).slice(-2_000), archivedPortfolioCycles: (value.archivedPortfolioCycles ?? []).slice(-12),
     admissionRejects: value.admissionRejects ?? {}, recentObservations: (value.recentObservations ?? []).slice(-ARENA_HISTORY_LIMIT),
     cutoverPending: Boolean(value.cutoverPending) };
-  for (const score of Object.values(normalized.strategies)) {
-    refreshShadowAuthority(normalized, score, now);
-  }
   return normalized;
-}
-
-const directionalRangePosition = (candidate: MarketRegimeCandidate) => candidate.side === "LONG" ? candidate.rangePosition : 1 - candidate.rangePosition;
-function anomalyRetrace(candidate: MarketRegimeCandidate, midpoint: number) {
-  const direction = candidate.side === "LONG" ? 1 : -1;
-  const impulse = Math.max(Math.abs(candidate.moveRate), 0.0001);
-  const extension = direction * (midpoint - candidate.referencePrice) / Math.max(candidate.referencePrice, 1e-9);
-  return clamp(1 - extension / impulse, -0.5, 2);
-}
-
-function basePlaybooks(input: ArenaObservation) {
-  const candidate = input.candidate;
-  const confirmation = input.confirmationBySide[candidate.side] ?? 0;
-  const fakeout = input.fakeoutBySide[candidate.side] ?? 1;
-  const position = directionalRangePosition(candidate);
-  const retrace = anomalyRetrace(candidate, input.midpoint);
-  const output: Array<{ playbookId: string; side: Side; reason: string; quality: number; retestReady: boolean }> = [];
-  const add = (id: string, side: Side, reason: string, quality: number, retestReady = false) => {
-    if (!output.some((row) => row.playbookId === id && row.side === side))
-      output.push({ playbookId: id, side, reason, quality: clamp(quality, 0, 1), retestReady });
-  };
-  if (candidate.channel === "TREND") {
-    if (candidate.trendEfficiency >= 0.5 && position >= 0.68)
-      add("steady_trend", candidate.side, "完成K线趋势效率稳定且方向保持", candidate.trendEfficiency);
-    if (position >= 0.45 && position < 0.8)
-      add("shallow_trend_pullback", candidate.side, "趋势浅回撤后完成K线重新同向", (candidate.trendEfficiency + position) / 2, true);
-    if (position >= 0.22 && position < 0.58 && confirmation >= 0.48)
-      add("deep_trend_reclaim", candidate.side, "趋势深回撤后重新收复结构", (candidate.trendEfficiency + confirmation) / 2, true);
-    if (fakeout >= 0.7) add("range_failed_break", opposite(candidate.side), "趋势环境内的边界突破失败交叉验证", fakeout, true);
-  }
-  if (candidate.channel === "RANGE") {
-    add("range_edge", candidate.side, "低效率震荡到达区间边缘", 1 - candidate.trendEfficiency, true);
-    const edgeRoute = input.routes.some((route) => route.kind === "EDGE_REJECTION" && route.side === candidate.side);
-    if (edgeRoute || fakeout >= 0.56) add("range_sweep_reclaim", candidate.side, "区间边缘扫过后重新收回", Math.max(fakeout, 0.58), true);
-    const failed = input.routes.some((route) => route.kind === "FAILED_BREAKOUT_REVERSAL" && route.side === candidate.side);
-    if (failed || fakeout >= 0.68) add("range_failed_break", candidate.side, "区间突破未被接受并反向", Math.max(fakeout, 0.68), true);
-    if (confirmation >= 0.72 && fakeout <= 0.28)
-      add("compression_break", candidate.side, "区间内方向确认增强，交叉验证释放策略", confirmation);
-  }
-  if (candidate.channel === "COMPRESSION") {
-    if (confirmation >= 0.52) add("compression_break", candidate.side, "压缩后完成K线结构确认方向释放", confirmation);
-    const retest = input.routes.some((route) => route.kind === "BREAKOUT_RETEST" && route.side === candidate.side);
-    if (retest) add("compression_retest", candidate.side, "压缩突破后回踩原边界守住", confirmation, true);
-    const reverse = opposite(candidate.side);
-    if (fakeout >= 0.68 || input.routes.some((route) => route.kind === "FAILED_BREAKOUT_REVERSAL" && route.side === reverse))
-      add("compression_failed", reverse, "压缩首次突破失败并反向", fakeout, true);
-  }
-  if (candidate.channel === "ANOMALY") {
-    if (candidate.confirmations >= 2 && retrace <= 0.25 && retrace >= -0.15)
-      add("anomaly_follow", candidate.side, "完成5分钟扩张K线确认且尚未明显回吐", clamp(candidate.score / 100, 0, 1), true);
-    if (retrace >= 0.15 && retrace <= 0.58)
-      add("anomaly_pullback", candidate.side, "完成K线扩张后受控回撤再次顺势", clamp(1 - retrace / 2, 0, 1), true);
-    if (retrace >= 0.3 || fakeout >= 0.7)
-      add("anomaly_fade", opposite(candidate.side), "完成K线扩张回吐并出现失败确认", Math.max(retrace / 2, fakeout), true);
-    if (candidate.trendEfficiency >= 0.62)
-      add("steady_trend", candidate.side, "扩张环境内保持高趋势效率，交叉验证趋势延续", candidate.trendEfficiency);
-  }
-  const representative: Record<string, string> = {
-    RANGE_ROTATION: "range_edge", COMPRESSION_EXPANSION: "compression_break",
-    FAILED_AUCTION: "range_failed_break", PULLBACK_RECOVERY: "shallow_trend_pullback",
-    MOMENTUM_CONTINUATION: "steady_trend", BREAKOUT_ACCEPTANCE: "anomaly_follow",
-  };
-  for (const policy of candidate.adaptivePolicy?.recommendations ?? []) {
-    const playbookId = representative[policy.mechanism];
-    if (playbookId) add(playbookId, policy.side, `V5独立盈利机制：${policy.reason}`,
-      clamp(0.55 + Math.max(0, policy.conservativeNetReturnRate) * 40, 0.55, 0.95), true);
-  }
-  return output;
 }
 
 function executableEntry(input: ArenaObservation, side: Side) {
   return side === "LONG" ? input.bestAsk ?? input.midpoint : input.bestBid ?? input.midpoint;
 }
 
-function preferredRoute(input: ArenaObservation, definition: StrategyDefinition, side: Side) {
-  const kinds = definition.family === "RANGE" ? ["EDGE_REJECTION", "FAILED_BREAKOUT_REVERSAL"]
-    : definition.entryStyle === "RETEST" ? ["BREAKOUT_RETEST", "EDGE_REJECTION", "FAILED_BREAKOUT_REVERSAL", "LOCAL_BREAKOUT"]
-      : ["LOCAL_BREAKOUT", "INTERNAL_ROTATION", "NODE_CONTINUATION"];
-  return input.routes.filter((route) => route.side === side && kinds.includes(route.kind))
-    .sort((left, right) => Number(right.executableNow) - Number(left.executableNow) || right.score - left.score)[0] ?? null;
-}
-
-function structuralGeometry(input: ArenaObservation, definition: StrategyDefinition, side: Side) {
-  const entry = executableEntry(input, side);
-  const direction = side === "LONG" ? 1 : -1;
-  const route = preferredRoute(input, definition, side);
-  if (route && direction * (entry - route.invalidation) > 0 && direction * (route.target - entry) > 0) {
-    const risk = Math.abs(entry - route.invalidation);
-    const entryTrigger = definition.entryStyle === "RETEST" ? route.entryTrigger : entry;
-    const structuralDistance = direction * (route.target - entry);
-    const fastDistance = Math.min(structuralDistance, Math.max(entry * ARENA_FRICTION_RATE + risk * 1.8, entry * 0.0028));
-    return { entryTrigger, stopPrice: route.invalidation,
-      targetPrice: entry + direction * (definition.exitProfile === "FAST" ? fastDistance : structuralDistance),
-      structureSource: "ROUTE" as const, executable: route.executableNow };
-  }
-  const range = input.range15m;
-  if (range) {
-    const buffer = Math.max(entry * clamp(input.minuteNoiseRate * 0.45, 0.0008, 0.003), Math.abs(range.upper - range.lower) * 0.04);
-    const stopPrice = side === "LONG" ? range.lower - buffer : range.upper + buffer;
-    const targetPrice = definition.exitProfile === "FAST" ? range.midpoint : side === "LONG" ? range.upper : range.lower;
-    if (direction * (entry - stopPrice) > 0 && direction * (targetPrice - entry) > 0)
-      return { entryTrigger: definition.entryStyle === "RETEST" ? side === "LONG" ? range.lower : range.upper : entry,
-        stopPrice, targetPrice, structureSource: "RANGE" as const, executable: true };
-  }
-  const candle = input.candleStructure;
-  if (candle) {
-    const buffer = Math.max(entry * Math.max(input.minuteNoiseRate * 1.15, 0.0014), (candle.upper - candle.lower) * 0.035);
-    const stopPrice = side === "LONG" ? candle.recentLower - buffer : candle.recentUpper + buffer;
-    const risk = direction * (entry - stopPrice);
-    if (risk > 0) {
-      const rangeTarget = definition.exitProfile === "FAST" ? candle.midpoint : side === "LONG" ? candle.upper : candle.lower;
-      const extension = definition.exitProfile === "FAST" ? risk * 1.9 : Math.max(risk * 2.7, (candle.upper - candle.lower) * 0.7);
-      const targetPrice = definition.family === "RANGE" || definition.family === "REVERSAL"
-        ? rangeTarget : entry + direction * extension;
-      const retestDistance = Math.min(risk * 0.35, entry * 0.0025);
-      if (direction * (targetPrice - entry) > 0) return {
-        entryTrigger: definition.entryStyle === "RETEST" ? entry - direction * retestDistance : entry,
-        stopPrice, targetPrice, structureSource: "CANDLE_5M" as const, executable: true,
-      };
-    }
-  }
-  if (definition.channel === "ANOMALY") {
-    const impulse = direction * (entry - input.candidate.referencePrice);
-    if (impulse > entry * 0.001) return { entryTrigger: definition.entryStyle === "RETEST" ? entry - direction * impulse * 0.22 : entry,
-      stopPrice: input.candidate.referencePrice,
-      targetPrice: entry + direction * impulse * (definition.exitProfile === "FAST" ? 0.55 : 0.9),
-      structureSource: "IMPULSE" as const, executable: input.candidate.confirmations >= 2 };
-  }
-  return null;
-}
-
-function adaptiveGeometry(input: ArenaObservation, policy: AdaptivePolicyRecommendation,
-  fallback: ReturnType<typeof structuralGeometry>) {
+function generatedGeometry(input: ArenaObservation, policy: AdaptivePolicyRecommendation) {
   const entry = executableEntry(input, policy.side);
   const sign = policy.side === "LONG" ? 1 : -1;
   return { entryTrigger: entry, stopPrice: entry * (1 - sign * policy.stopRate),
     targetPrice: entry * (1 + sign * policy.targetRate),
-    structureSource: fallback?.structureSource ?? "CANDLE_5M" as ArenaTradeContext["structureSource"],
-    executable: fallback?.executable ?? true };
+    structureSource: "CANDLE_5M" as ArenaTradeContext["structureSource"], executable: true };
 }
 
 function signals(input: ArenaObservation): Signal[] {
-  const output: Signal[] = [];
-  for (const base of basePlaybooks(input)) {
-    for (const definition of STRATEGY_CATALOG.filter((item) => item.id.startsWith(`${base.playbookId}:`))) {
-      const mechanism = adaptiveMechanismForPlaybook(base.playbookId);
-      const adaptivePolicy = input.candidate.adaptivePolicy?.recommendations
-        .find((row) => row.mechanism === mechanism && row.side === base.side) ?? null;
-      const routeRetest = input.routes.some((route) => route.side === base.side
-        && ["BREAKOUT_RETEST", "EDGE_REJECTION", "FAILED_BREAKOUT_REVERSAL"].includes(route.kind));
-      const ready = adaptivePolicy ? true : definition.entryStyle === "CONFIRM"
-        ? (input.confirmationBySide[base.side] ?? 0) >= 0.48 : routeRetest || base.retestReady;
-      const fakeout = input.fakeoutBySide[base.side] ?? 1;
-      const structural = structuralGeometry(input, definition, base.side);
-      const geometry = adaptivePolicy ? adaptiveGeometry(input, adaptivePolicy, structural) : structural;
-      if (!ready || !geometry || !adaptivePolicy
-        && fakeout > 0.82 && !base.playbookId.includes("failed") && !base.playbookId.includes("fade")) continue;
-      const hold = definition.family === "FAST" ? { max: 15, noProgress: 8 }
-        : definition.family === "RANGE" ? { max: 30, noProgress: 15 }
-          : definition.family === "REVERSAL" ? { max: 30, noProgress: 10 } : { max: 60, noProgress: 30 };
-      const adaptiveHorizon = adaptivePolicy?.horizonMinutes;
-      output.push({ strategyId: definition.id, side: base.side, ...geometry,
-        maxHoldMs: (adaptiveHorizon ?? (definition.exitProfile === "FAST" ? hold.noProgress : hold.max)) * 60_000,
-        noProgressMs: (adaptiveHorizon ? Math.max(10, Math.round(adaptiveHorizon * 0.6)) : hold.noProgress) * 60_000,
-        quality: clamp(base.quality * 0.72 + (input.confirmationBySide[base.side] ?? 0) * 0.28, 0, 1),
-        reason: adaptivePolicy ? `${base.reason}；V5选择${adaptiveHorizon}分钟状态持仓窗口` : base.reason,
-        adaptivePolicy });
-    }
-  }
-  return output;
+  if (!input.candidate.id.includes(":CANDLE5M:") || !input.candidate.adaptivePolicy) return [];
+  return input.candidate.adaptivePolicy.recommendations.flatMap((policy) => {
+    const definition = STRATEGY_CATALOG.find((item) => item.mechanism === policy.mechanism);
+    if (!definition) return [];
+    const quality = clamp(0.5 + Math.max(0, policy.conservativeNetReturnRate) * 60
+      + Math.min(policy.profitFactor, 2) * 0.08 + Math.min(policy.opportunityRatePerDay, 8) * 0.01, 0.5, 0.95);
+    return [{ strategyId: definition.id, side: policy.side, ...generatedGeometry(input, policy),
+      maxHoldMs: policy.horizonMinutes * 60_000,
+      noProgressMs: Math.max(10, Math.round(policy.horizonMinutes * 0.6)) * 60_000,
+      quality, reason: `状态路径直接生成：${definition.description}；${policy.reason}`,
+      adaptivePolicy: policy }];
+  });
 }
 
 function attainableTarget(state: StrategyArenaState, input: ArenaObservation, signal: Signal, definition: StrategyDefinition): Signal {
-  if (signal.adaptivePolicy) return { ...signal, orientation: "NORMAL", originalTargetPrice: signal.targetPrice,
-    targetAdapted: false, targetEvidenceEvents: signal.adaptivePolicy.samples };
-  const entry = executableEntry(input, signal.side);
-  const direction = signal.side === "LONG" ? 1 : -1;
-  const originalDistanceRate = direction * (signal.targetPrice - entry) / Math.max(entry, 1e-9);
-  const stopRate = Math.abs(entry - signal.stopPrice) / Math.max(entry, 1e-9);
-  if (!(originalDistanceRate > 0) || !(stopRate > 0)) return { ...signal, orientation: "NORMAL" };
-  const desiredNetRr = definition.exitProfile === "FAST" ? FAST_TARGET_NET_RR : STRUCTURE_TARGET_NET_RR;
-  const economicFloor = ARENA_FRICTION_RATE + MIN_NET_REWARD_RISK * (stopRate + ARENA_FRICTION_RATE);
-  const profileCap = ARENA_FRICTION_RATE + desiredNetRr * (stopRate + ARENA_FRICTION_RATE);
-  const prior = independentShadowTrades(state, signal.strategyId, "NORMAL");
-  const favorable = prior.map((trade) => trade.maxFavorableRate).filter((value) => value > 0).sort((a, b) => a - b);
-  const empirical = favorable.length >= 3
-    ? favorable[Math.floor((favorable.length - 1) * 0.6)] * 0.9 : Number.POSITIVE_INFINITY;
-  if (empirical < economicFloor) return { ...signal, orientation: "NORMAL", executable: false,
-    originalTargetPrice: signal.targetPrice, targetAdapted: false,
-    targetEvidenceEvents: prior.length,
-    reason: `${signal.reason}；历史可达空间不足以覆盖完整成本和结构风险` };
-  const reachableCap = Math.min(profileCap, empirical);
-  const selectedDistanceRate = Math.min(originalDistanceRate, reachableCap);
-  const targetPrice = entry * (1 + direction * selectedDistanceRate);
+  void state; void input; void definition;
   return { ...signal, orientation: "NORMAL", originalTargetPrice: signal.targetPrice,
-    targetPrice, targetAdapted: selectedDistanceRate + 1e-12 < originalDistanceRate,
-    targetEvidenceEvents: prior.length,
-    reason: selectedDistanceRate + 1e-12 < originalDistanceRate ? `${signal.reason}；目标按完整成本与历史可达性收敛` : signal.reason };
-}
-
-function reversedSignal(input: ArenaObservation, signal: Signal): Signal {
-  const side = opposite(signal.side);
-  return { ...signal, side, orientation: "REVERSE", entryTrigger: executableEntry(input, side),
-    stopPrice: signal.targetPrice, targetPrice: signal.stopPrice, originalTargetPrice: signal.stopPrice,
-    targetAdapted: false, adaptivePolicy: null, reason: `V4兼容反向验证：${signal.reason}` };
+    targetAdapted: false, targetEvidenceEvents: signal.adaptivePolicy?.samples ?? 0 };
 }
 
 function transition(state: StrategyArenaState, score: StrategyScore, to: StrategyLane, now: number, reason: string) {
@@ -498,9 +319,6 @@ export function playbookPerformance(state: StrategyArenaState, id: string, curre
 }
 function strategyPerformance(score: StrategyScore, currentRegime?: MarketRegimeKind) {
   return evidence(uniqueResults(score.recentResults), currentRegime);
-}
-function reverseQualificationPerformance(score: StrategyScore, currentRegime?: MarketRegimeKind) {
-  return evidence(uniqueResults(score.reverseQualificationResults), currentRegime);
 }
 type ShadowAuthorityDecision = { orientation: StrategyOrientation; reason: string; sample: StrategyResult[];
   reverseResults: StrategyResult[] };
@@ -650,14 +468,20 @@ function recordClosed(state: StrategyArenaState, trade: ArenaTrade) {
       score.reverseShadowResolved += 1; score.reverseShadowWins += Number(won); score.reverseShadowNetReturnRate += value;
     } else {
       score.recentResults = [...score.recentResults.filter((row) => row.eventId !== result.eventId), result].slice(-24);
-      const reverseResult = fullyCostedReverseResult(trade);
-      score.reverseQualificationResults = [...score.reverseQualificationResults.filter((row) => row.eventId !== result.eventId), reverseResult]
-        .slice(-PROMOTION_RECENT_WINDOW);
+      if (trade.context.adaptivePolicyVersion == null) {
+        const reverseResult = fullyCostedReverseResult(trade);
+        score.reverseQualificationResults = [...score.reverseQualificationResults.filter((row) => row.eventId !== result.eventId), reverseResult]
+          .slice(-PROMOTION_RECENT_WINDOW);
+      }
       score.shadowResolved += 1; score.shadowWins += Number(won); score.shadowNetReturnRate += value;
       updatePlaybookResult(state, trade);
     }
     state.recentShadow.push(trade); if (state.recentShadow.length > ARENA_HISTORY_LIMIT) state.recentShadow.shift();
-    refreshShadowAuthority(state, score, trade.closedAt ?? Date.now());
+    if (trade.context.adaptivePolicyVersion == null) refreshShadowAuthority(state, score, trade.closedAt ?? Date.now());
+    else {
+      score.enabled = false; score.reverseEnabled = false; score.lane = "SHADOW";
+      score.lastTransitionReason = "当前完成K线状态走查直接决定模拟资格；影子结果仅用于复盘，不触发固定晋级";
+    }
     return;
   }
 }
@@ -832,32 +656,22 @@ function portfolioSizing(state: StrategyArenaState, input: ArenaObservation, sig
     accountEquityAtOpen: state.portfolioEquity, admissionTier: "NORMAL" } satisfies TradeSizing;
 }
 
-function portfolioAdmission(state: StrategyArenaState, input: ArenaObservation, signal: Signal, score: StrategyScore,
-  orientation: StrategyOrientation = "NORMAL") {
+function portfolioAdmission(state: StrategyArenaState, input: ArenaObservation, signal: Signal) {
   const economics = geometryEconomics(input, signal);
   const adaptive = signal.adaptivePolicy;
-  const own = orientation === "REVERSE" ? reverseQualificationPerformance(score, input.candidate.regime) : strategyPerformance(score, input.candidate.regime);
-  const sample = adaptive ? { events: adaptive.samples, wins: adaptive.wins,
+  if (!adaptive) return null;
+  const sample = { events: adaptive.samples, wins: adaptive.wins,
     netReturnRate: adaptive.netExpectationRate * adaptive.samples, meanReturnRate: adaptive.netExpectationRate,
     conservativeReturnRate: adaptive.conservativeNetReturnRate, profitFactor: adaptive.profitFactor,
-    regimeEvents: adaptive.samples } : own;
-  const enabled = adaptive ? adaptive.approved : orientation === "REVERSE" ? score.reverseEnabled : score.enabled;
-  const reverseBreakEvenRate = (economics.structuralStopRate + ARENA_FRICTION_RATE)
-    / Math.max(economics.structuralStopRate + economics.grossRewardRate, 1e-9);
-  const economicGeometry = orientation === "REVERSE"
-    ? economics.grossRewardRate > ARENA_FRICTION_RATE * 2 && economics.costShare <= 0.5
-      && reverseBreakEvenRate <= REVERSE_MAX_BREAK_EVEN_RATE
-    : economics.netRewardRisk >= MIN_NET_REWARD_RISK && economics.costShare <= ARENA_MAX_COST_SHARE;
+    regimeEvents: adaptive.samples };
+  const economicGeometry = economics.netRewardRisk >= MIN_NET_REWARD_RISK && economics.costShare <= ARENA_MAX_COST_SHARE;
   const validStructure = signal.side === "LONG" ? economics.entryPrice > signal.stopPrice && economics.entryPrice < signal.targetPrice
     : economics.entryPrice < signal.stopPrice && economics.entryPrice > signal.targetPrice;
-  const v5Candidate = input.candidate.id.includes(":CANDLE5M:");
   const blocker = input.dataFresh === false ? "STALE" : input.contractReady === false ? "CONTRACT"
     : input.managementCapacity === false ? "DATA_CAPACITY" : !validStructure ? "STRUCTURE" : input.candidate.volume24hUsd < ARENA_MIN_VOLUME_24H_USD ? "LIQUIDITY"
     : input.spreadRate > ARENA_MAX_SPREAD_RATE ? "SPREAD" : !economicGeometry ? "NET_ECONOMICS"
-      : v5Candidate && !adaptive ? "STATE_MISMATCH"
-        : adaptive && (!adaptive.approved || adaptive.samples < ADAPTIVE_MIN_ANALOG_SAMPLES
-          || adaptive.conservativeNetReturnRate <= 0) ? "EXPECTANCY"
-          : !enabled ? "INACTIVE" : null;
+      : !adaptive.approved || adaptive.samples < ADAPTIVE_MIN_ANALOG_SAMPLES
+        || adaptive.conservativeNetReturnRate <= 0 ? "EXPECTANCY" : null;
   if (blocker) { state.admissionRejects[blocker] = (state.admissionRejects[blocker] ?? 0) + 1; return null; }
   const sizing = portfolioSizing(state, input, signal);
   if (!sizing) { state.admissionRejects.SIZING = (state.admissionRejects.SIZING ?? 0) + 1; return null; }
@@ -889,12 +703,7 @@ function effectiveShadowBlocker(input: ArenaObservation, signal: Signal, sizing:
   const distanceFromTrigger = Math.abs(economics.entryPrice - signal.entryTrigger);
   const triggerTolerance = Math.max(Math.abs(economics.entryPrice - signal.stopPrice) * 0.65, economics.entryPrice * 0.0008);
   const stopOutsideNoise = economics.structuralStopRate >= Math.max(ARENA_FRICTION_RATE, input.minuteNoiseRate * 1.1);
-  const reverseBreakEvenRate = (economics.structuralStopRate + ARENA_FRICTION_RATE)
-    / Math.max(economics.structuralStopRate + economics.grossRewardRate, 1e-9);
-  const economicGeometry = signal.orientation === "REVERSE"
-    ? economics.grossRewardRate > ARENA_FRICTION_RATE * 2 && economics.costShare <= 0.5
-      && reverseBreakEvenRate <= REVERSE_MAX_BREAK_EVEN_RATE
-    : economics.netRewardRisk >= MIN_NET_REWARD_RISK && economics.costShare <= ARENA_MAX_COST_SHARE;
+  const economicGeometry = economics.netRewardRisk >= MIN_NET_REWARD_RISK && economics.costShare <= ARENA_MAX_COST_SHARE;
   return input.dataFresh === false || input.bestBid == null || input.bestAsk == null ? "买一卖一或关键市场数据不新鲜"
     : input.contractReady === false || !(input.quantoMultiplier && input.quantoMultiplier > 0) ? "Gate合约信息不完整"
       : input.candidate.volume24hUsd < ARENA_MIN_VOLUME_24H_USD ? "24小时成交额不足"
@@ -910,11 +719,8 @@ function effectiveShadowBlocker(input: ArenaObservation, signal: Signal, sizing:
 
 export function applyStrategySleepStates(state: StrategyArenaState, _availableChannels: Set<CandidateChannel>, now: number) {
   for (const score of Object.values(state.strategies)) {
-    if (!score.enabled) {
-      if (score.lane !== "SHADOW") transition(state, score, "SHADOW", now, "尚未启用，持续跨币种和市场环境影子验证");
-    } else if (score.lane !== "ACTIVE") {
-      transition(state, score, "ACTIVE", now, "已验证执行变体保持启用；市场缺席只代表当前没有信号");
-    }
+    score.enabled = false; score.reverseEnabled = false;
+    if (score.lane !== "SHADOW") transition(state, score, "SHADOW", now, "状态路径由当前走查结果直接授权，不保留旧策略启用状态");
   }
   return state;
 }
@@ -927,14 +733,6 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
     const definition = STRATEGY_CATALOG.find((row) => row.id === signal.strategyId)!;
     return attainableTarget(state, input.observation, signal, definition);
   });
-  const generatedIds = new Set(generatedSignals.map((signal) => signal.strategyId));
-  const compatible = Object.values(state.strategies).filter((score) => generatedIds.has(score.id));
-  if (compatible.some((score) => score.enabled)) {
-    for (const score of compatible) {
-      if (score.enabled && score.lane === "SLEEPING") transition(state, score, "ACTIVE", input.observation.now,
-        "完整5分钟结构出现适用行情，恢复启用");
-    }
-  }
   const recordObservation = (definition: StrategyDefinition, blocker: string) => {
     const id = `observation:${definition.id}:${input.observation.candidate.id}`;
     if (state.recentObservations.some((row) => row.id === id)) return;
@@ -995,34 +793,14 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
       `${row.signal.strategyId}:${input.observation.candidate.id}`);
     opened.push({ ...row, orientation: "NORMAL", shadow });
 
-    // V5 directions are emitted and validated independently by the completed-candle policy.
-    // The mirrored V4 route is retained only for legacy/non-policy observations.
-    if (input.observation.candidate.adaptivePolicy) continue;
-    const reverse = reversedSignal(input.observation, row.signal);
-    const reverseKey = `reverse:${row.signal.strategyId}:${input.observation.candidate.symbol}`;
-    const reverseSeenKey = `effective:reverse:${row.signal.strategyId}:${input.observation.candidate.id}`;
-    const reverseGeometry = `${playbookId}:${geometryIdentity(reverse)}`;
-    if (!state.open[reverseKey] && !state.seenSignals.includes(reverseSeenKey)
-      && !distinctGeometry.has(reverseGeometry) && Object.keys(state.open).length < ARENA_MAX_OPEN) {
-      const reverseSizing = effectiveShadowSizing(input.observation, reverse);
-      const reverseBlocker = effectiveShadowBlocker(input.observation, reverse, reverseSizing);
-      if (reverseSizing && !reverseBlocker) {
-        distinctGeometry.add(reverseGeometry);
-        const reverseShadow = openTrade(input.observation, row.definition, reverse, "EFFECTIVE_SHADOW", reverseSizing, false);
-        state.open[reverseKey] = reverseShadow; state.seenSignals.push(reverseSeenKey);
-        opened.push({ ...row, signal: reverse, sizing: reverseSizing, orientation: "REVERSE", shadow: reverseShadow });
-      } else if (reverseBlocker) recordObservation(row.definition, `反向路线仅观察：${reverseBlocker}`);
-    }
   }
   while (state.seenSignals.length > 2_000) state.seenSignals.shift();
   const symbol = input.observation.candidate.symbol;
   const portfolioSeenKey = `portfolio:${input.observation.candidate.id}`;
-  const active = opened.filter((row) => row.signal.adaptivePolicy
-    ? row.orientation === "NORMAL" && row.signal.adaptivePolicy.approved
-    : row.orientation === "NORMAL" ? row.score.enabled && row.score.lane === "ACTIVE" : row.score.reverseEnabled);
+  const active = opened.filter((row) => row.orientation === "NORMAL" && row.signal.adaptivePolicy?.approved);
   if (active.length && !state.portfolioOpen[symbol] && !state.seenSignals.includes(portfolioSeenKey)) {
     const candidates = active.map((row) => ({ ...row,
-      admission: portfolioAdmission(state, input.observation, row.signal, row.score, row.orientation) }))
+      admission: portfolioAdmission(state, input.observation, row.signal) }))
       .filter((row) => row.admission)
       .sort((a, b) => (b.signal.adaptivePolicy?.objectiveScore ?? 0) - (a.signal.adaptivePolicy?.objectiveScore ?? 0)
         || b.admission!.sample.conservativeReturnRate - a.admission!.sample.conservativeReturnRate
@@ -1085,19 +863,14 @@ export function arenaSummary(state: StrategyArenaState) {
     recentPortfolio: state.recentPortfolio.slice(-100).reverse(), archivedPortfolioTrades: state.archivedPortfolioTrades.slice(-100).reverse(),
     transitions: state.transitions.slice(-100).reverse(),
     admissionRejects: state.admissionRejects, cutoverPending: state.cutoverPending,
-    rules: { promotionWinStreak: PROMOTION_WIN_STREAK, promotionWindow: PROMOTION_RECENT_WINDOW,
+    rules: { generatedRouteAuthority: true, legacyStrategyAuthority: false, paperCycleResetOnCutover: true,
       frictionFloorRate: ARENA_FRICTION_RATE, minNetRewardRisk: MIN_NET_REWARD_RISK,
       maxCostShare: ARENA_MAX_COST_SHARE, singleTradeRiskMin: 0.01, singleTradeRiskMax: 0.02,
       portfolioRiskCap: PORTFOLIO_RISK_CAP, correlatedRiskCap: CORRELATED_DIRECTION_RISK_CAP,
       marginCap: PORTFOLIO_MARGIN_CAP, maxNotionalMultiple: 4, realtimeCapacity: PORTFOLIO_REALTIME_CAPACITY,
       minimumPortfolioRiskUsdt: MIN_PORTFOLIO_TRADE_RISK_USDT, empiricalCostFloorRate: ARENA_FRICTION_RATE,
-      reverseTriggerWindow: REVERSE_TRIGGER_WINDOW, reverseLossStreak: REVERSE_LOSS_STREAK,
-      reverseMaxBreakEvenRate: REVERSE_MAX_BREAK_EVEN_RATE,
-      authorityWindowPriority: "STATE_CONDITIONED_EXPECTANCY", paperEvaluation: false,
-      mutuallyExclusiveOrientation: true, exactShadowClone: true,
-      normalShadowAlwaysOn: true, reverseShadowAlwaysOn: false, independentDirections: true,
-      fastTargetNetRewardRisk: FAST_TARGET_NET_RR,
-      structureTargetNetRewardRisk: STRUCTURE_TARGET_NET_RR,
-      adaptivePolicyVersion: 1, adaptiveMinimumAnalogSamples: ADAPTIVE_MIN_ANALOG_SAMPLES,
+      authorityWindowPriority: "CURRENT_STATE_WALK_FORWARD", paperEvaluation: false,
+      exactShadowClone: true, normalShadowAlwaysOn: true,
+      adaptivePolicyVersion: ADAPTIVE_POLICY_VERSION, adaptiveMinimumAnalogSamples: ADAPTIVE_MIN_ANALOG_SAMPLES,
       dailyObjectiveRate: ADAPTIVE_DAILY_OBJECTIVE_RATE, dailyObjectiveIsQuota: false } };
 }

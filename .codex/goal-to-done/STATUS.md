@@ -1,3 +1,10 @@
+# In progress — 2026-09-10 generated state-route V6
+
+- Removed the old 12-playbook/48-variant catalog from signal generation and replaced it with six state-derived mechanisms that can coexist on the same completed candle.
+- PAPER now uses only current completed-candle walk-forward recommendations and clones the exact executable shadow. Old 3/6 promotion and mirrored reverse evidence is archive-only.
+- Added seven-dimensional state matching, valid-horizon-first selection, current/archived account presentation and V6 cutover archival/reset semantics.
+- Local focused tests, TypeScript, ESLint and production build have passed. Full direct verification and production release are pending.
+
 # Done — 2026-09-10 symmetric normal/reverse evidence
 
 - Screenshot confirmed the page showed normal latest-six total return but replaced the reverse total with only a win/loss sequence. Four losses and two wins cannot establish whether the fully costed reverse total is positive or negative.

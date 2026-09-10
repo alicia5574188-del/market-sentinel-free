@@ -27,6 +27,14 @@ type TradeLane = "EFFECTIVE_SHADOW" | "PORTFOLIO";
 type StrategyOrientation = "NORMAL" | "REVERSE";
 type CandidateChannel = "TREND" | "RANGE" | "COMPRESSION" | "ANOMALY";
 type RegimeKind = "TREND" | "RANGE" | "COMPRESSION" | "EXPANSION" | "UNCERTAIN";
+type AdaptiveMechanism = "RANGE_ROTATION" | "COMPRESSION_EXPANSION" | "FAILED_AUCTION"
+  | "PULLBACK_RECOVERY" | "MOMENTUM_CONTINUATION" | "BREAKOUT_ACCEPTANCE";
+type AdaptiveRecommendation = { mechanism: AdaptiveMechanism; side: Side; horizonMinutes: number; samples: number;
+  wins: number; netExpectationRate: number; conservativeNetReturnRate: number; profitFactor: number;
+  targetReachRate: number; opportunityRatePerDay: number; objectiveScore: number; stopRate: number; targetRate: number;
+  approved: boolean; reason: string };
+type AdaptivePolicy = { version: number; generatedAt: number; candleCount: number; objectiveDailyReturnRate: number;
+  currentState: number[]; recommendations: AdaptiveRecommendation[] };
 type EntryStyle = "CONFIRM" | "RETEST";
 type ExitProfile = "FAST" | "STRUCTURE";
 type ArenaTradeContext = { channel: CandidateChannel; regime: RegimeKind; anomalyKind: RadarCandidate["kind"] | null;
@@ -67,7 +75,7 @@ type PerformanceEvidence = { events: number; wins: number; netReturnRate: number
 type PlaybookEvidence = { id: string; name: string; family: StrategyFamily; channel: CandidateChannel; description: string; evidence: PerformanceEvidence };
 type PortfolioCycleArchive = { number: number; ruleVersion: string; startedAt: number; endedAt: number; startingEquity: number;
   endingEquity: number; resolved: number; wins: number; grossPnl: number; costs: number; reason: string };
-type StrategyArena = { version: 6; startedAt: number; catalogSize: number; playbookCount: number; shadowCount: number;
+type StrategyArena = { version: 7; startedAt: number; catalogSize: number; playbookCount: number; shadowCount: number;
   reverseActiveCount?: number;
   activeCount: number; sleepingCount: number; trialCount: number; verifiedCount: number; paperCount: number; openShadow: ArenaTrade[]; openPaper: ArenaTrade[];
   portfolioOpen: ArenaTrade[]; portfolioEquity: number; portfolioResolved: number; portfolioWins: number;
@@ -75,19 +83,20 @@ type StrategyArena = { version: 6; startedAt: number; catalogSize: number; playb
   recentPaper: ArenaTrade[]; recentPortfolio: ArenaTrade[]; archivedPortfolioTrades: ArenaTrade[]; transitions: StrategyTransition[]; playbooks: PlaybookEvidence[];
   portfolioCycle: number; portfolioCycleStartedAt: number; archivedPortfolioCycles: PortfolioCycleArchive[];
   admissionRejects: Record<string, number>; observationShadow: Array<{ id: string; strategyName: string; symbol: string; observedAt: number; blocker: string }>;
-  rules: { promotionWinStreak: number; promotionWindow: number; frictionFloorRate: number; minNetRewardRisk: number;
+  rules: { frictionFloorRate: number; minNetRewardRisk: number;
     maxCostShare: number; singleTradeRiskMin: number; singleTradeRiskMax: number; portfolioRiskCap: number;
     correlatedRiskCap: number; marginCap: number; maxNotionalMultiple: number; realtimeCapacity: number;
     minimumPortfolioRiskUsdt: number; empiricalCostFloorRate: number; reverseTriggerWindow?: number; reverseLossStreak?: number;
-    reverseMaxBreakEvenRate?: number; authorityWindowPriority?: "LATEST_SIX_THEN_THREE" | "STATE_CONDITIONED_EXPECTANCY"; paperEvaluation?: boolean;
+    reverseMaxBreakEvenRate?: number; authorityWindowPriority?: "LATEST_SIX_THEN_THREE" | "STATE_CONDITIONED_EXPECTANCY" | "CURRENT_STATE_WALK_FORWARD"; paperEvaluation?: boolean;
     mutuallyExclusiveOrientation?: boolean; exactShadowClone?: boolean; normalShadowAlwaysOn?: boolean;
     reverseShadowAlwaysOn?: boolean; fastTargetNetRewardRisk?: number; structureTargetNetRewardRisk?: number;
-    independentDirections?: boolean; adaptivePolicyVersion?: number; adaptiveMinimumAnalogSamples?: number;
+    independentDirections?: boolean; generatedRouteAuthority?: boolean; legacyStrategyAuthority?: boolean;
+    paperCycleResetOnCutover?: boolean; adaptivePolicyVersion?: number; adaptiveMinimumAnalogSamples?: number;
     dailyObjectiveRate?: number; dailyObjectiveIsQuota?: boolean } };
 type RegimeCandidate = { id: string; symbol: string; channel: CandidateChannel; regime: RegimeKind; side: Side; score: number;
   referencePrice: number; moveRate: number; trendRate: number; trendEfficiency: number; volatilityRatio: number;
   rangePosition: number; volume24hUsd: number; openInterestChangeRate: number; confirmations: number; firstSeenAt: number;
-  observedAt: number; anomalyKind: RadarCandidate["kind"] | null };
+  observedAt: number; anomalyKind: RadarCandidate["kind"] | null; adaptivePolicy?: AdaptivePolicy | null };
 type MarketRegimes = { version: 2; lastUpdatedAt: number | null; tracked: number; warmed: number;
   counts: Record<RegimeKind, number>; candidates: RegimeCandidate[] };
 type Runtime = {
@@ -123,6 +132,10 @@ const signed = (value: number, digits = 2) => `${value >= 0 ? "+" : ""}${num(val
 const time = (value: number | null | undefined) => value ? new Date(value).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : "—";
 const regimeLabel = (kind: RegimeKind) => ({ TREND: "趋势", RANGE: "震荡", COMPRESSION: "压缩", EXPANSION: "波幅扩张", UNCERTAIN: "不明确" })[kind];
 const channelLabel = (channel: CandidateChannel) => ({ TREND: "平稳趋势", RANGE: "区间边缘", COMPRESSION: "波动压缩", ANOMALY: "完成K线扩张" })[channel];
+const mechanismLabel = (mechanism: AdaptiveMechanism | string | undefined) => ({
+  RANGE_ROTATION: "低效边界回归", COMPRESSION_EXPANSION: "波动状态跃迁", FAILED_AUCTION: "边界接受失败",
+  PULLBACK_RECOVERY: "路径恢复", MOMENTUM_CONTINUATION: "方向持续性", BREAKOUT_ACCEPTANCE: "边界有效接受",
+}[mechanism ?? ""] ?? mechanism ?? "状态路径");
 const laneLabel = (lane: StrategyLane | TradeLane) => ({ SHADOW: "影子验证", ACTIVE: "已启用", SLEEPING: "休眠", EFFECTIVE_SHADOW: "有效影子", PORTFOLIO: "1000 U模拟账户" })[lane];
 const displayLeverage = (notional: number, equity: number) => [1, 2, 3, 5, 10, 20, 30, 40, 50].find((value) => notional / value <= equity * .12) ?? 50;
 const friendlyLiveError = (value: string | null | undefined) => !value ? null
@@ -230,7 +243,9 @@ export default function Home() {
   const arena = runtime?.strategyArena;
   const openShadow = arena?.openShadow ?? [];
   const portfolioOpen = arena?.portfolioOpen ?? [];
-  const portfolioHistory = [...(arena?.recentPortfolio ?? []), ...(arena?.archivedPortfolioTrades ?? [])]
+  const currentPortfolioHistory = [...(arena?.recentPortfolio ?? [])]
+    .sort((left, right) => (right.closedAt ?? right.openedAt) - (left.closedAt ?? left.openedAt));
+  const archivedPortfolioHistory = [...(arena?.archivedPortfolioTrades ?? [])]
     .sort((left, right) => (right.closedAt ?? right.openedAt) - (left.closedAt ?? left.openedAt));
   const portfolioFloating = portfolioOpen.reduce((sum, trade) => {
     const market = runtime?.evidence[trade.symbol];
@@ -244,12 +259,10 @@ export default function Home() {
   const portfolioAccountEquity = (arena?.portfolioEquity ?? INITIAL_EQUITY) + portfolioFloating;
   const portfolioPnl = portfolioAccountEquity - INITIAL_EQUITY;
   const regimes = runtime?.marketRegimes;
-  const strategyGroups = Object.values((arena?.strategies ?? []).reduce<Record<string, StrategyScore[]>>((groups, strategy) => {
-    const key = strategy.id.split(":")[0];
-    (groups[key] ??= []).push(strategy);
-    return groups;
-  }, {}));
-  const playbookById = new Map((arena?.playbooks ?? []).map((playbook) => [playbook.id, playbook]));
+  const generatedRoutes = (regimes?.candidates ?? []).flatMap((candidate) =>
+    (candidate.adaptivePolicy?.recommendations ?? []).map((policy) => ({ candidate, policy })))
+    .sort((left, right) => Number(right.policy.approved) - Number(left.policy.approved)
+      || right.policy.objectiveScore - left.policy.objectiveScore);
   const feedDiagnostics = runtime?.symbols.map((symbol) => runtime.feedFailures?.[symbol]).filter(Boolean) ?? [];
   const activeFeedSuspensions = feedDiagnostics.filter((feed) => feed?.suspendedSince != null).length;
   const totalFeedFailures = feedDiagnostics.reduce((sum, feed) => sum + (feed?.totalFailures ?? 0), 0);
@@ -266,7 +279,7 @@ export default function Home() {
     </header>
 
     {tab === "brain" && <>
-      <section className="brain-hero"><div><p className="eyebrow">V5 状态条件正期望 · 唯一模拟合约账户 · 第{arena?.portfolioCycle ?? 1}轮</p><h1>{headline}</h1><p className="hero-detail">完成K线走查决定当前机制、方向和持仓周期；新鲜盘口只负责最终真实执行验证</p></div><div className="decision-badge"><small>当前权益</small><strong>{num(portfolioAccountEquity, 2)}</strong><span>USDT</span></div></section>
+      <section className="brain-hero"><div><p className="eyebrow">V6 状态路径生成器 · 唯一模拟合约账户 · 第{arena?.portfolioCycle ?? 1}轮</p><h1>{headline}</h1><p className="hero-detail">系统直接生成多空进场、止损、目标和持仓周期；旧12策略不再拥有开仓权</p></div><div className="decision-badge"><small>当前权益</small><strong>{num(portfolioAccountEquity, 2)}</strong><span>USDT</span></div></section>
 
       <section className="summary four">
         <article><small>模拟账户盈亏</small><strong className={portfolioPnl >= 0 ? "positive" : "negative"}>{signed(portfolioPnl)} U</strong><p>{signed(portfolioPnl / INITIAL_EQUITY * 100)}% · 已含当前持仓完整成本</p></article>
@@ -291,11 +304,11 @@ export default function Home() {
       </article>)}{!regimes?.candidates.length && <p>正在轮询30币完整5分钟K线；不依赖高频异动、逐笔成交或持仓量数据。</p>}</div>
     </section>
 
-    <section className="playbook-list" hidden={tab !== "brain"}><div className="section-heading"><div><h2>V5策略研究池</h2><p>原有信号只作为持续研究假设；模拟账户由六类独立盈利机制在相似历史状态中的完整成本后保守期望决定，不再由3连胜、6单或镜像反向直接晋级。</p></div><span>{runtime?.strategyData?.approvedPolicyRoutes ?? 0} 条当前路线通过正期望验证</span></div>{strategyGroups.length ? strategyGroups.map((strategies) => { const id = strategies[0].id.split(":")[0]; return <PlaybookGroup key={id} strategies={strategies} evidence={playbookById.get(id)?.evidence} rules={arena!.rules} />; }) : <div className="empty">正在读取持续影子研究样本…</div>}</section>
+    <section className="playbook-list" hidden={tab !== "brain"}><div className="section-heading"><div><h2>当前状态生成路径</h2><p>每个币独立生成多种多空参数组合；只有当前相似状态完整成本后仍为正的路径，才可复制进模拟账户。</p></div><span>{runtime?.strategyData?.approvedPolicyRoutes ?? 0} 条当前路线通过验证</span></div>{generatedRoutes.length ? <div className="strategy-grid">{generatedRoutes.slice(0, 24).map(({ candidate, policy }) => <article className="strategy-card" key={`${candidate.id}:${policy.mechanism}:${policy.side}`}><div className="strategy-title"><div><small>{candidate.symbol.replace("_", "/")} · {regimeLabel(candidate.regime)}</small><h3>{mechanismLabel(policy.mechanism)}</h3></div><span className={policy.approved ? "positive" : ""}>{policy.approved ? "可执行" : "影子研究"}</span></div><dl><div><dt>方向 / 持仓窗口</dt><dd>{policy.side === "LONG" ? "多" : "空"} · {policy.horizonMinutes}分钟</dd></div><div><dt>相似样本 / 胜率</dt><dd>{policy.samples}笔 · {num(policy.samples ? policy.wins / policy.samples * 100 : 0, 1)}%</dd></div><div><dt>保守成本后期望</dt><dd className={policy.conservativeNetReturnRate > 0 ? "positive" : "negative"}>{signed(policy.conservativeNetReturnRate * 100)}%</dd></div><div><dt>盈亏因子 / 目标到达</dt><dd>{num(policy.profitFactor, 2)} · {num(policy.targetReachRate * 100, 1)}%</dd></div></dl><small className="strategy-rule">{policy.reason}</small></article>)}</div> : <div className="empty">正在用完整5分钟K线生成第一批状态路径…</div>}</section>
 
     <section className="shadow-log" hidden={tab !== "brain"}><div className="section-heading"><div><h2>有效影子</h2><p>路线、价格、结构、成本、深度和合约信息全部合格；只有这些结果参与启用。</p></div><span>{arena?.recentShadow.length ?? 0} 笔</span></div>{!arena?.recentShadow.length ? <div className="empty"><b>等待首批有效影子结果</b></div> : <div className="history-table">{arena.recentShadow.slice(0, 30).map((trade) => <ArenaTradeRecord key={trade.id} trade={trade} />)}</div>}</section>
     <section className="shadow-log" hidden={tab !== "brain"}><div className="section-heading"><div><h2>观察影子</h2><p>信号出现但尚不能真实进场，只保存阻断原因，不计算晋级盈亏。</p></div><span>{arena?.observationShadow.length ?? 0} 条</span></div><div className="transition-list">{arena?.observationShadow.slice(0, 20).map((item) => <article key={item.id}><div><b>{item.symbol.replace("_", "/")} · {item.strategyName}</b><small>{time(item.observedAt)}</small></div><p>{item.blocker}</p></article>)}</div></section>
-    {!!arena?.transitions.length && <section className="shadow-log" hidden={tab !== "brain"}><div className="section-heading"><div><h2>旧规则状态记录</h2><p>保留用于复盘，不再拥有V5模拟开仓权威；V5只看当前状态下的保守净期望。</p></div><span>{arena.transitions.length} 次</span></div><div className="transition-list">{arena.transitions.slice(0, 20).map((item) => <article key={item.id}><div><b>{item.strategyName}</b><small>{time(item.at)}</small></div><strong>{laneLabel(item.from)} → {laneLabel(item.to)}</strong><p>{item.reason}</p></article>)}</div></section>}
+    {!!arena?.transitions.length && <section className="shadow-log" hidden={tab !== "brain"}><div className="section-heading"><div><h2>归档规则记录</h2><p>仅供复盘；旧策略、3/6晋级和镜像反向均不能产生新模拟订单。</p></div><span>{arena.transitions.length} 次</span></div><div className="transition-list">{arena.transitions.slice(0, 20).map((item) => <article key={item.id}><div><b>{item.strategyName}</b><small>{time(item.at)}</small></div><strong>{laneLabel(item.from)} → {laneLabel(item.to)}</strong><p>{item.reason}</p></article>)}</div></section>}
 
     <section className="panel-list" hidden={tab !== "orders"}>
       <h2 className="order-group-title">1000 U模拟账户 <span>{num(portfolioAccountEquity, 2)} U</span></h2>
@@ -306,13 +319,14 @@ export default function Home() {
 
     <div hidden={tab !== "live"}><LiveCenter auth={auth} runtime={runtime} live={live} liveEnabled={liveEnabled} liveBusy={liveBusy} liveActionError={liveActionError} positions={openLivePositions} entries={openLiveEntries} skips={liveEntrySkips} onLogin={() => setShowLogin(true)} onToggle={liveControl} onCleanup={() => void setLiveMode(false)} /></div>
 
-    <section className="history-panel" hidden={tab !== "history"}><div className="section-heading"><div><h2>1000 U模拟账户交易记录</h2><p>这里只记录真正计入账户余额的订单；内部策略筛选单不会混进来。</p></div><span>累计 {arena?.portfolioResolved ?? 0} 笔</span></div>{!portfolioHistory.length ? <div className="empty"><b>还没有已完成订单</b><p>当前持仓结算后会出现在这里。</p></div> : <div className="history-table">{portfolioHistory.map((trade) => <ArenaTradeRecord key={trade.id} trade={trade} />)}</div>}</section>
+    <section className="history-panel" hidden={tab !== "history"}><div className="section-heading"><div><h2>当前模拟周期</h2><p>只统计本轮真正计入1000 U账户的订单。</p></div><span>{arena?.portfolioResolved ?? 0} 笔</span></div>{!currentPortfolioHistory.length ? <div className="empty"><b>本轮还没有已完成订单</b><p>当前持仓结算后会出现在这里。</p></div> : <div className="history-table">{currentPortfolioHistory.map((trade) => <ArenaTradeRecord key={trade.id} trade={trade} />)}</div>}</section>
+    <section className="history-panel" hidden={tab !== "history"}><div className="section-heading"><div><h2>历史归档</h2><p>旧版本和已重置周期只用于对照，不计入当前权益、胜率或策略授权。</p></div><span>{arena?.archivedPortfolioCycles.length ?? 0} 个周期</span></div>{!archivedPortfolioHistory.length ? <div className="empty"><b>暂无历史归档订单</b></div> : <div className="history-table">{archivedPortfolioHistory.map((trade) => <ArenaTradeRecord key={`archive:${trade.id}`} trade={trade} />)}</div>}</section>
 
     <section className="settings-panel" hidden={tab !== "settings"}>
       <button className="setting-row" type="button" onClick={() => auth.authenticated ? void fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(() => { setAuth({ ...auth, authenticated: false }); setRuntime(runtime ? { ...runtime, live: undefined } : runtime); }) : setShowLogin(true)}><div><b>所有者账户</b><p>{auth.authenticated ? "安全登录有效30天；每次打开页面自动续期。" : "登录后才可以查看真实账户并操作实盘开关。"}</p></div><span className={`setting-value ${auth.authenticated ? "online" : "locked"}`}>{auth.authenticated ? "owner · 退出 ›" : "登录 ›"}</span></button>
       <button className="setting-row" type="button" disabled={liveBusy} onClick={liveControl}><div><b>实盘交易开关</b><p>{liveEnabled ? "正在按真实账户权益比例复制1000 U模拟账户的新订单；关闭会撤销待成交入场单并停止新开仓。" : "由你手动开启；只复制开启以后出现的新模拟订单，不追单复制当前持仓。"}</p></div><span className={`setting-value ${liveEnabled ? "online" : "locked"}`}>{liveBusy ? "处理中…" : liveEnabled ? "已开启 · 关闭 ›" : "已关闭 · 开启 ›"}</span></button>
       {auth.authenticated && <><Setting title="Gate 实盘账户" detail={`可用 ${num(live?.available, 2)} U · ${openLivePositions.length} 个真实持仓`} value={live?.equity != null ? `${num(live.equity, 2)} U` : "连接中"} tone={live?.credentialConfigured ? "online" : "locked"}/><Setting title="实盘执行状态" detail={friendlyLiveError(live?.lastError) || (liveEnabled ? "只复制唯一模拟账户开启后产生的订单，并按真实权益重新计算安全仓位。" : "当前不下新单；已有系统持仓仍保留止损和对账。" )} value={live?.operational ? "复制运行中" : "已关闭"} tone={live?.operational ? "online" : "locked"}/></>}
-      <Setting title="状态条件正期望" detail={`每条路线至少使用${arena?.rules.adaptiveMinimumAnalogSamples ?? 8}个相似的已完成K线路径，分别比较方向和10～60分钟持仓窗口；完整成本后的保守期望、盈亏因子和目标到达率全部合格才可进入模拟。`} value="V5权威" tone="online"/>
+      <Setting title="状态路径权威" detail={`每条路线至少使用${arena?.rules.adaptiveMinimumAnalogSamples ?? 8}个相似的已完成K线路径，直接比较多空方向、止损、目标和10～60分钟持仓窗口；旧12策略没有开仓权。`} value="V6唯一权威" tone="online"/>
       <Setting title="进场经济门槛" detail={`只用真实结构目标和止损；扣完整成本盈亏比至少 ${num(arena?.rules.minNetRewardRisk ?? 1.2, 2)}，成本最多占目标空间 ${num((arena?.rules.maxCostShare ?? .25) * 100, 0)}%，近期保守期望必须高于完整成本。`} value="成本优势" tone="online"/>
       <Setting title="动态风险" detail={`每笔目标风险为10～20 U；组合容量不足${num(arena?.rules.minimumPortfolioRiskUsdt ?? 10, 0)} U时跳过，不再缩成灰尘单。总风险≤10%、同向≤6.5%、保证金≤30%、名义仓位≤4倍权益。`} value="拒绝灰尘单" tone="online"/>
       <Setting title="模拟账户口径" detail="观察影子不计分，有效影子用于选策略；唯一1000 U账户的余额、持仓和交易记录才代表可对标的真实效果。" value="单账户" tone="online"/>
@@ -458,29 +472,13 @@ function durationText(start: number, end: number | null) {
   return minutes < 60 ? `${minutes} 分 ${seconds % 60} 秒` : `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
 }
 
-function PlaybookGroup({ strategies, evidence, rules }: { strategies: StrategyScore[]; evidence?: PerformanceEvidence; rules: StrategyArena["rules"] }) {
-  const sample = strategies[0];
-  const baseName = sample.name.split(" · ")[0];
-  return <details className="playbook-group"><summary><div><small>{channelLabel(sample.channel)} · 4个持续研究变体</small><h3>{baseName}</h3><p>{sample.description}</p></div><div className="playbook-counts"><span>最近 {Math.min(evidence?.events ?? 0, rules.promotionWindow)} 个独立事件</span><b>研究样本</b><em>成本后 {signed((evidence?.netReturnRate ?? 0) * 100)}%</em></div></summary><div className="strategy-grid">{strategies.map((strategy) => <StrategyCard key={strategy.id} strategy={strategy} rules={rules} />)}</div></details>;
-}
-
-function StrategyCard({ strategy, rules }: { strategy: StrategyScore; rules: StrategyArena["rules"] }) {
-  const shadow = (strategy.recentResults ?? []).slice(-rules.promotionWindow);
-  const last3 = shadow.slice(-rules.promotionWinStreak);
-  const last6Net = shadow.reduce((sum, value) => sum + value.netReturnRate, 0);
-  const reverseQualification = (strategy.reverseQualificationResults ?? []).slice(-rules.promotionWindow);
-  const reverseLast3 = reverseQualification.slice(-rules.promotionWinStreak);
-  const reverseLast6Net = reverseQualification.reduce((sum, value) => sum + value.netReturnRate, 0);
-  return <article className="strategy-card"><div className="strategy-title"><div><small>{strategy.entryStyle === "CONFIRM" ? "确认进场" : "回踩进场"} · {strategy.exitProfile === "FAST" ? "快速出场" : "结构出场"}</small><h3>{strategy.name.split(" · ").slice(1).join(" · ")}</h3></div><span>持续影子</span></div><dl><div><dt>正常影子近{last3.length}/3笔</dt><dd>{last3.map((row) => row.netReturnRate > 0 ? "赢" : "亏").join(" · ") || "—"}</dd></div><div><dt>正常影子近{shadow.length}/6笔</dt><dd className={last6Net > 0 ? "positive" : "negative"}>{signed(last6Net * 100)}%</dd></div><div><dt>旧反向对照近{reverseLast3.length}/3笔</dt><dd>{reverseLast3.map((row) => row.netReturnRate > 0 ? "赢" : "亏").join(" · ") || "—"}</dd></div><div><dt>旧反向对照近{reverseQualification.length}/6笔</dt><dd className={reverseLast6Net > 0 ? "positive" : "negative"}>{signed(reverseLast6Net * 100)}%</dd></div></dl><small className="strategy-rule">这些结果只作为研究记录，不直接控制模拟开仓；V5会按当前市场状态重新验证方向、目标和持仓周期。</small></article>;
-}
-
 function ArenaTradeRecord({ trade }: { trade: ArenaTrade }) {
   const result = (trade.netPnl ?? 0) / Math.max(trade.accountEquityAtOpen, 1e-9);
-  const orientation = trade.orientation === "REVERSE" ? "反向" : "正常";
+  const orientation = trade.context.adaptivePolicyVersion ? "状态生成" : trade.orientation === "REVERSE" ? "旧版反向" : "旧版";
   const exitLabel = trade.outcome === "TARGET" ? "目标" : trade.outcome === "STOP" ? "止损"
     : trade.outcome === "THESIS_INVALID" ? "逻辑失效" : trade.outcome === "EDGE_DECAY" ? "优势衰减"
       : trade.outcome === "RESET" ? "账户重置" : "旧版超时/无进展";
-  return <article className="history-order"><div><span className={`side ${trade.side.toLowerCase()}`}>{trade.side === "LONG" ? "多" : "空"}</span><div><b>{trade.symbol.replace("_", "/")} · {trade.strategyName}</b><small>{time(trade.openedAt)} · {orientation}{trade.admissionTier === "NORMAL" ? "动态风险模拟" : laneLabel(trade.lane)}</small></div></div><div><small>进场 / 出场</small><b>{num(trade.entryPrice, 5)} / {num(trade.exitPrice, 5)}</b></div><div><small>账户净盈亏</small><b className={result > 0 ? "positive" : "negative"}>{signed(trade.netPnl ?? 0)} U · {signed(result * 100)}%</b></div><div><small>持仓 / 结束</small><b>{durationText(trade.openedAt, trade.closedAt)} · {exitLabel}</b></div><details className="history-diagnostic"><summary>查看完整入场环境</summary><div><span>行情与来源<b>{regimeLabel(trade.context.regime)} · {channelLabel(trade.context.channel)} · {trade.context.structureSource}</b></span><span>判断依据<b>{trade.reason}</b></span>{trade.context.adaptivePolicyVersion && <><span>V5盈利机制 / 持仓窗口<b>{trade.context.adaptiveMechanism} · {trade.context.adaptiveHorizonMinutes}分钟</b></span><span>相似样本 / 保守净期望<b>{trade.context.adaptiveSamples}个 / {signed((trade.context.adaptiveConservativeRate ?? 0) * 100)}%</b></span><span>目标到达率 / 选择原因<b>{num((trade.context.adaptiveTargetReachRate ?? 0) * 100, 1)}% · {trade.context.adaptiveReason}</b></span></>}<span>扣成本盈亏比 / 成本占目标<b>{num(trade.context.netRewardRisk, 2)} / {num(trade.context.costShare * 100, 1)}%</b></span><span>入场时样本 / 保守期望<b>{trade.context.empiricalEvents}个 / {signed(trade.context.empiricalExpectedReturnRate * 100)}%</b></span><span>毛收益 / 完整成本<b>{signed((trade.grossReturnRate ?? 0) * 100)}% / -{num(((trade.context.modeledCostRate ?? 0) + (trade.context.fundingCostRate ?? 0)) * 100, 3)}%</b></span><span>合约仓位<b>{trade.contracts}张 · {num(trade.notional, 2)} U · {trade.leverage}×</b></span><span>计划风险 / 保证金<b>{num(trade.plannedRisk, 2)} U / {num(trade.margin, 2)} U</b></span><span>最大有利 / 不利<b>{signed(trade.maxFavorableRate * 100)}% / {signed(trade.maxAdverseRate * 100)}%</b></span><span>趋势效率 / 波动比<b>{num(trade.context.trendEfficiency * 100, 1)} / {num(trade.context.volatilityRatio, 2)}</b></span><span>OI变化 / 资金费率<b>{signed(trade.context.openInterestChangeRate * 100, 3)}% / {signed(trade.context.fundingRate * 100, 4) + "%"}</b></span><span>24h成交额<b>{num(trade.context.volume24hUsd / 1_000_000, 1)} 百万 U</b></span><span>资金流 / 确认 / 假突破<b>{num(trade.context.alignedFlow, 2)} / {num(trade.context.confirmation, 2)} / {num(trade.context.fakeoutRisk, 2)}</b></span><span>止损 / 目标<b>{num(trade.stopPrice, 5)} / {num(trade.targetPrice, 5)}</b></span>{trade.context.targetAdapted && <span>原目标 / 自适应目标<b>{num(trade.context.originalTargetPrice, 5)} / {num(trade.targetPrice, 5)}</b></span>}</div></details></article>;
+  return <article className="history-order"><div><span className={`side ${trade.side.toLowerCase()}`}>{trade.side === "LONG" ? "多" : "空"}</span><div><b>{trade.symbol.replace("_", "/")} · {trade.strategyName}</b><small>{time(trade.openedAt)} · {orientation}{trade.admissionTier === "NORMAL" ? "动态风险模拟" : laneLabel(trade.lane)}</small></div></div><div><small>进场 / 出场</small><b>{num(trade.entryPrice, 5)} / {num(trade.exitPrice, 5)}</b></div><div><small>账户净盈亏</small><b className={result > 0 ? "positive" : "negative"}>{signed(trade.netPnl ?? 0)} U · {signed(result * 100)}%</b></div><div><small>持仓 / 结束</small><b>{durationText(trade.openedAt, trade.closedAt)} · {exitLabel}</b></div><details className="history-diagnostic"><summary>查看完整入场环境</summary><div><span>行情与来源<b>{regimeLabel(trade.context.regime)} · {channelLabel(trade.context.channel)} · {trade.context.structureSource}</b></span><span>判断依据<b>{trade.reason}</b></span>{trade.context.adaptivePolicyVersion && <><span>状态机制 / 持仓窗口<b>{mechanismLabel(trade.context.adaptiveMechanism)} · {trade.context.adaptiveHorizonMinutes}分钟</b></span><span>相似样本 / 保守净期望<b>{trade.context.adaptiveSamples}个 / {signed((trade.context.adaptiveConservativeRate ?? 0) * 100)}%</b></span><span>目标到达率 / 选择原因<b>{num((trade.context.adaptiveTargetReachRate ?? 0) * 100, 1)}% · {trade.context.adaptiveReason}</b></span></>}<span>扣成本盈亏比 / 成本占目标<b>{num(trade.context.netRewardRisk, 2)} / {num(trade.context.costShare * 100, 1)}%</b></span><span>入场时样本 / 保守期望<b>{trade.context.empiricalEvents}个 / {signed(trade.context.empiricalExpectedReturnRate * 100)}%</b></span><span>毛收益 / 完整成本<b>{signed((trade.grossReturnRate ?? 0) * 100)}% / -{num(((trade.context.modeledCostRate ?? 0) + (trade.context.fundingCostRate ?? 0)) * 100, 3)}%</b></span><span>合约仓位<b>{trade.contracts}张 · {num(trade.notional, 2)} U · {trade.leverage}×</b></span><span>计划风险 / 保证金<b>{num(trade.plannedRisk, 2)} U / {num(trade.margin, 2)} U</b></span><span>最大有利 / 不利<b>{signed(trade.maxFavorableRate * 100)}% / {signed(trade.maxAdverseRate * 100)}%</b></span><span>趋势效率 / 波动比<b>{num(trade.context.trendEfficiency * 100, 1)} / {num(trade.context.volatilityRatio, 2)}</b></span><span>OI变化 / 资金费率<b>{signed(trade.context.openInterestChangeRate * 100, 3)}% / {signed(trade.context.fundingRate * 100, 4) + "%"}</b></span><span>24h成交额<b>{num(trade.context.volume24hUsd / 1_000_000, 1)} 百万 U</b></span><span>资金流 / 确认 / 假突破<b>{num(trade.context.alignedFlow, 2)} / {num(trade.context.confirmation, 2)} / {num(trade.context.fakeoutRisk, 2)}</b></span><span>止损 / 目标<b>{num(trade.stopPrice, 5)} / {num(trade.targetPrice, 5)}</b></span>{trade.context.targetAdapted && <span>原目标 / 自适应目标<b>{num(trade.context.originalTargetPrice, 5)} / {num(trade.targetPrice, 5)}</b></span>}</div></details></article>;
 }
 
 function ArenaOpenCard({ trade, mark }: { trade: ArenaTrade; mark: number | undefined }) {
@@ -488,7 +486,7 @@ function ArenaOpenCard({ trade, mark }: { trade: ArenaTrade; mark: number | unde
   const current = mark ?? trade.lastPrice;
   const gross = current ? direction * (current - trade.entryPrice) / Math.max(trade.entryPrice, 1e-9) : 0;
   const net = gross - trade.context.modeledCostRate;
-  return <article className="order-card"><div><span className={`side ${trade.side.toLowerCase()}`}>{trade.side === "LONG" ? "多" : "空"}</span><div><h3>{trade.symbol.replace("_", "/")} · {trade.strategyName}</h3><p>{trade.orientation === "REVERSE" ? "反向策略" : "正常策略"} · {trade.attributedStrategyIds?.length ? `${trade.attributedStrategyIds.length}个同方向策略合并执行` : "动态风险仓位"} · {regimeLabel(trade.context.regime)} · {trade.reason}</p></div></div><strong className={net >= 0 ? "positive" : "negative"}>{current ? `${signed(trade.notional * net)} U · ${signed(net * 100)}%` : "等待行情"}</strong><dl><div><dt>进场</dt><dd>{num(trade.entryPrice, 5)}</dd></div><div><dt>当前价</dt><dd>{num(current, 5)}</dd></div><div><dt>止损</dt><dd>{num(trade.stopPrice, 5)}</dd></div><div><dt>目标</dt><dd>{num(trade.targetPrice, 5)}</dd></div><div><dt>扣成本盈亏比</dt><dd>{num(trade.context.netRewardRisk, 2)}</dd></div><div><dt>合约仓位</dt><dd>{trade.contracts}张 · {num(trade.notional, 2)} U</dd></div><div><dt>杠杆 / 保证金</dt><dd>{trade.leverage}× / {num(trade.margin, 2)} U</dd></div><div><dt>计划风险</dt><dd>{num(trade.plannedRisk, 2)} U</dd></div></dl></article>;
+  return <article className="order-card"><div><span className={`side ${trade.side.toLowerCase()}`}>{trade.side === "LONG" ? "多" : "空"}</span><div><h3>{trade.symbol.replace("_", "/")} · {trade.strategyName}</h3><p>{trade.context.adaptivePolicyVersion ? "状态生成路径" : "旧版归档路径"} · {trade.attributedStrategyIds?.length ? `${trade.attributedStrategyIds.length}个同方向路径合并执行` : "动态风险仓位"} · {regimeLabel(trade.context.regime)} · {trade.reason}</p></div></div><strong className={net >= 0 ? "positive" : "negative"}>{current ? `${signed(trade.notional * net)} U · ${signed(net * 100)}%` : "等待行情"}</strong><dl><div><dt>进场</dt><dd>{num(trade.entryPrice, 5)}</dd></div><div><dt>当前价</dt><dd>{num(current, 5)}</dd></div><div><dt>止损</dt><dd>{num(trade.stopPrice, 5)}</dd></div><div><dt>目标</dt><dd>{num(trade.targetPrice, 5)}</dd></div><div><dt>扣成本盈亏比</dt><dd>{num(trade.context.netRewardRisk, 2)}</dd></div><div><dt>合约仓位</dt><dd>{trade.contracts}张 · {num(trade.notional, 2)} U</dd></div><div><dt>杠杆 / 保证金</dt><dd>{trade.leverage}× / {num(trade.margin, 2)} U</dd></div><div><dt>计划风险</dt><dd>{num(trade.plannedRisk, 2)} U</dd></div></dl></article>;
 }
 
 function Setting({ title, detail, value, tone = "" }: { title: string; detail: string; value: string; tone?: string }) {

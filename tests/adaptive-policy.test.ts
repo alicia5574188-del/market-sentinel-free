@@ -10,7 +10,11 @@ test("completed-candle walk-forward selects a positive after-cost horizon withou
   });
   const snapshot = buildAdaptivePolicySnapshot(candles, 1_000_000);
   assert.ok(snapshot);
+  assert.equal(snapshot.version, 2);
+  assert.equal(snapshot.currentState.length, 7);
   assert.equal(snapshot.objectiveDailyReturnRate, ADAPTIVE_DAILY_OBJECTIVE_RATE);
+  assert.ok(snapshot.recommendations.length >= 2,
+    "one completed-candle state may compare several independent path hypotheses");
   const continuation = snapshot.recommendations.find((row) => row.side === "LONG"
     && ["MOMENTUM_CONTINUATION", "BREAKOUT_ACCEPTANCE"].includes(row.mechanism));
   assert.ok(continuation);

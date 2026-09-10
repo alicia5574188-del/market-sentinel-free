@@ -1,3 +1,12 @@
+# V6 generated-state authority decision — 2026-09-10
+
+- Liquidity ranking selects the thirty contracts; it does not choose direction or strategy. Completed five-minute OHLCV generates the state-path hypotheses, and fresh bid/ask/depth validates only the final executable order.
+- The six mechanisms are independent path constructions, not names mapped back to the old twelve playbooks. Several mechanisms and both directions may be researched for one state; exact duplicate geometry is still collapsed.
+- A currently approved chronological walk-forward result is PAPER authority. Eligible horizons outrank failed horizons before objective-score comparison, so an invalid high discovery score cannot hide another valid 10/20/30/45/60-minute route.
+- The old 3/6 and mirrored-reverse code may remain only for reading legacy records; it cannot generate, activate or size a V6 order. PAPER output is cloned from the exact generated effective shadow.
+- Daily positive return is an optimization objective, never a guarantee. Opportunity cadence may be improved only by testing more current hypotheses and valid horizons, not by forcing trades or weakening freshness, full-cost, target-reach, lot-size or portfolio-risk gates.
+- V6 is an explicit account boundary: archive/reset the old PAPER cycle at fresh executable prices, start at 1,000 U, preserve historical orders and research, and keep LIVE requested and operational states false.
+
 # Evidence-display decision — 2026-09-10
 
 - A win/loss sequence is not a substitute for total after-cost return: two larger wins can outweigh four smaller losses, so the UI must show the exact aggregate used by authority.

@@ -19,7 +19,6 @@ import { completedCandleStrategyCandidate, initialMarketRegimes, marketRegimeSum
   type MarketRegimeCandidate, type MarketRegimeState, type ResidentCandleStructure } from "../lib/market-regime.ts";
 import { advanceStrategyArena, advanceStrategyShadowsFromCompletedCandle, applyStrategySleepStates, arenaSummary, initialStrategyArena, normalizeStrategyArena, observeStrategyArena,
   ARENA_FRICTION_RATE, MIN_PORTFOLIO_TRADE_RISK_USDT, PORTFOLIO_REALTIME_CAPACITY, resetStrategyArenaAccount,
-  REVERSE_LOSS_STREAK, REVERSE_MAX_BREAK_EVEN_RATE, REVERSE_TRIGGER_WINDOW,
   STRATEGY_INITIAL_EQUITY, type StrategyArenaState } from "../lib/strategy-arena.ts";
 import { ADAPTIVE_DAILY_OBJECTIVE_RATE, ADAPTIVE_MIN_ANALOG_SAMPLES, ADAPTIVE_POLICY_VERSION } from "../lib/adaptive-policy.ts";
 
@@ -485,28 +484,18 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.lastStrategyLogAt = now;
     const summary = arenaSummary(this.runtime.strategyArena);
     const counts = marketRegimeSummary(this.runtime.marketRegimes).counts;
-    const legacyMetrics = summary.playbooks.map((playbook) => {
+    const mechanismMetrics = summary.playbooks.map((playbook) => {
       const results = this.runtime.strategyArena.playbookResults[playbook.id] ?? [];
-      return { kind: "LEGACY_PLAYBOOK", id: playbook.id,
+      return { kind: "GENERATED_MECHANISM", id: playbook.id,
         events24h: results.filter((row) => now - row.resolvedAt <= 24 * 60 * 60_000).length,
         events72h: results.filter((row) => now - row.resolvedAt <= 72 * 60 * 60_000).length,
         latest3: results.slice(-3).map((row) => row.netReturnRate),
         latest6Net: results.slice(-6).reduce((total, row) => total + row.netReturnRate, 0),
-        active: Object.values(this.runtime.strategyArena.strategies)
-          .some((strategy) => strategy.id.startsWith(`${playbook.id}:`) && strategy.enabled),
-        reverseActive: Object.values(this.runtime.strategyArena.strategies)
-          .some((strategy) => strategy.id.startsWith(`${playbook.id}:`) && strategy.reverseEnabled),
-        authority: Object.values(this.runtime.strategyArena.strategies)
-          .some((strategy) => strategy.id.startsWith(`${playbook.id}:`) && strategy.reverseEnabled) ? "REVERSE"
-          : Object.values(this.runtime.strategyArena.strategies)
-            .some((strategy) => strategy.id.startsWith(`${playbook.id}:`) && strategy.enabled) ? "NORMAL" : "SHADOW",
-        paperAuthority: "SHADOW",
+        authority: "CURRENT_STATE_WALK_FORWARD",
+        paperAuthority: "POLICY",
         normalShadowEvents: Object.values(this.runtime.strategyArena.strategies)
-          .filter((strategy) => strategy.id.startsWith(`${playbook.id}:`))
-          .reduce((total, strategy) => total + strategy.recentResults.length, 0),
-        reverseShadowEvents: Object.values(this.runtime.strategyArena.strategies)
-          .filter((strategy) => strategy.id.startsWith(`${playbook.id}:`))
-          .reduce((total, strategy) => total + strategy.reverseRecentResults.length, 0) };
+          .filter((strategy) => strategy.id === playbook.id)
+          .reduce((total, strategy) => total + strategy.recentResults.length, 0) };
     });
     const policyMetrics = Object.values(this.runtime.stableCandidates).flatMap((candidate) =>
       (candidate.adaptivePolicy?.recommendations ?? []).map((policy) => ({
@@ -521,7 +510,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         opportunityRatePerDay: policy.opportunityRatePerDay, objectiveScore: policy.objectiveScore,
         approved: policy.approved, reason: policy.reason,
       })));
-    const metrics = [...policyMetrics, ...legacyMetrics];
+    const metrics = [...policyMetrics, ...mechanismMetrics];
     try {
       await this.env.DB.batch([
         this.env.DB.prepare(`INSERT OR REPLACE INTO strategy_runtime_log
@@ -579,7 +568,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         quotes: Object.fromEntries(positions.map((position) => [position.symbol, {
           midpoint: this.runtime.evidence[position.symbol]!.midpoint, bestBid: this.runtime.evidence[position.symbol]!.bestBid,
           bestAsk: this.runtime.evidence[position.symbol]!.bestAsk, observedAt: this.runtime.evidence[position.symbol]!.observedAt, fresh: true,
-        }])), now, reason: "V4.4切换：以新鲜可成交价格结算并归档上一模拟周期" });
+        }])), now, reason: "V6状态路径切换：以新鲜可成交价格结算并归档上一模拟周期" });
     }
   }
 
@@ -1812,7 +1801,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         liveMode: { requestedEnabled: this.runtime.live.requestedEnabled, operational: this.runtime.live.operational },
         strategyArena: {
           version: this.runtime.strategyArena.version,
-          playbookCount: 12,
+          playbookCount: 6,
           catalogSize: strategies.length,
           shadowCount: strategies.filter((row) => row.lane === "SHADOW").length,
           activeCount: strategies.filter((row) => row.lane === "ACTIVE").length,
@@ -1832,16 +1821,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             correlatedRiskCap: CORRELATED_DIRECTION_RISK_CAP,
             marginCap: 0.30,
             maxNotionalMultiple: 4,
-            reverseTriggerWindow: REVERSE_TRIGGER_WINDOW,
-            reverseLossStreak: REVERSE_LOSS_STREAK,
-            reverseMaxBreakEvenRate: REVERSE_MAX_BREAK_EVEN_RATE,
-            authorityWindowPriority: "STATE_CONDITIONED_EXPECTANCY",
+            authorityWindowPriority: "CURRENT_STATE_WALK_FORWARD",
             paperEvaluation: false,
-            mutuallyExclusiveOrientation: true,
             exactShadowClone: true,
             normalShadowAlwaysOn: true,
-            reverseShadowAlwaysOn: false,
             independentDirections: true,
+            generatedRouteAuthority: true,
+            legacyStrategyAuthority: false,
+            paperCycleResetOnCutover: true,
             adaptivePolicyVersion: ADAPTIVE_POLICY_VERSION,
             adaptiveMinimumAnalogSamples: ADAPTIVE_MIN_ANALOG_SAMPLES,
             dailyObjectiveRate: ADAPTIVE_DAILY_OBJECTIVE_RATE,

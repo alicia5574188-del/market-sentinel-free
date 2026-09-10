@@ -1,4 +1,4 @@
-export const ADAPTIVE_POLICY_VERSION = 1;
+export const ADAPTIVE_POLICY_VERSION = 2;
 export const ADAPTIVE_DAILY_OBJECTIVE_RATE = 0.10;
 export const ADAPTIVE_MIN_ANALOG_SAMPLES = 8;
 export const ADAPTIVE_HORIZONS_MINUTES = [10, 20, 30, 45, 60] as const;
@@ -40,7 +40,7 @@ export type AdaptivePolicyRecommendation = {
 };
 
 export type AdaptivePolicySnapshot = {
-  version: 1;
+  version: 2;
   generatedAt: number;
   candleCount: number;
   objectiveDailyReturnRate: number;
@@ -53,6 +53,8 @@ type Feature = {
   trendRate: number;
   efficiency: number;
   volatilityRatio: number;
+  volumeRatio: number;
+  closeLocation: number;
   position: number;
   lastMove: number;
   averageRangeRate: number;
@@ -86,9 +88,16 @@ function featureAt(rows: AdaptiveCandle[], index: number): Feature | null {
   const position = clamp((window.at(-1)!.close - lower) / Math.max(upper - lower, window.at(-1)!.close * 0.0002), 0, 1);
   const latest = window.at(-1)!;
   const lastMove = (latest.close - latest.open) / Math.max(latest.open, 1e-9);
-  return { trendRate, efficiency, volatilityRatio, position, lastMove, averageRangeRate: mean(ranges.slice(-6)),
+  const volumes = window.map((row) => Math.max(0, row.volume ?? 0));
+  const recentVolume = mean(volumes.slice(-4));
+  const priorVolume = mean(volumes.slice(-16, -4));
+  const volumeRatio = priorVolume > 0 ? clamp(recentVolume / priorVolume, 0, 4) : 1;
+  const closeLocation = clamp((latest.close - latest.low) / Math.max(latest.high - latest.low, latest.close * 0.00005), 0, 1);
+  return { trendRate, efficiency, volatilityRatio, volumeRatio, closeLocation, position, lastMove,
+    averageRangeRate: mean(ranges.slice(-6)),
     vector: [clamp(trendRate / 0.02, -1, 1), efficiency, clamp(Math.log(Math.max(volatilityRatio, 0.1)), -1.5, 1.5) / 1.5,
-      position * 2 - 1, clamp(lastMove / 0.012, -1, 1)] };
+      position * 2 - 1, clamp(lastMove / 0.012, -1, 1),
+      clamp(Math.log(Math.max(volumeRatio, 0.1)), -1.5, 1.5) / 1.5, closeLocation * 2 - 1] };
 }
 
 function triggersAt(rows: AdaptiveCandle[], index: number): Trigger[] {
@@ -115,24 +124,32 @@ function triggersAt(rows: AdaptiveCandle[], index: number): Trigger[] {
       output.push({ mechanism, side, stopRate, targetRate, feature,
         observedAt: current.time });
   };
-  if (feature.efficiency <= 0.5 && feature.position <= 0.3) add("RANGE_ROTATION", "LONG", 1.35, priorLow);
-  if (feature.efficiency <= 0.5 && feature.position >= 0.7) add("RANGE_ROTATION", "SHORT", 1.35, priorHigh);
-  if (compression <= 0.78 && Math.abs(feature.lastMove) >= Math.max(0.0012, feature.averageRangeRate * 0.55))
+  // These are independent path hypotheses derived from state variables. Several may coexist on one candle;
+  // the walk-forward evidence, not a fixed market-to-strategy lookup, decides which one is executable.
+  if (feature.efficiency <= 0.72 && feature.position <= 0.42) add("RANGE_ROTATION", "LONG", 1.35, priorLow);
+  if (feature.efficiency <= 0.72 && feature.position >= 0.58) add("RANGE_ROTATION", "SHORT", 1.35, priorHigh);
+  if (compression <= 1.05 && Math.abs(feature.lastMove) >= Math.max(0.0008, feature.averageRangeRate * 0.28))
     add("COMPRESSION_EXPANSION", feature.lastMove >= 0 ? "LONG" : "SHORT", 1.8,
       feature.lastMove >= 0 ? Math.min(...prior.slice(-4).map((row) => row.low))
         : Math.max(...prior.slice(-4).map((row) => row.high)));
-  if (current.high > priorHigh && current.close < priorHigh && current.close < current.open)
+  const upperRejection = current.high > priorHigh && current.close < priorHigh
+    || feature.position >= 0.72 && feature.closeLocation <= 0.42 && current.close < current.open;
+  const lowerRejection = current.low < priorLow && current.close > priorLow
+    || feature.position <= 0.28 && feature.closeLocation >= 0.58 && current.close > current.open;
+  if (upperRejection)
     add("FAILED_AUCTION", "SHORT", 1.55, current.high);
-  if (current.low < priorLow && current.close > priorLow && current.close > current.open)
+  if (lowerRejection)
     add("FAILED_AUCTION", "LONG", 1.55, current.low);
   const trendSide: AdaptiveSide = feature.trendRate >= 0 ? "LONG" : "SHORT";
   const priorMove = (previous.close - previous.open) / Math.max(previous.open, 1e-9);
-  if (feature.efficiency >= 0.38 && Math.abs(feature.trendRate) >= 0.0025
+  if (feature.efficiency >= 0.22 && Math.abs(feature.trendRate) >= 0.0015
     && direction(trendSide) * priorMove < 0 && direction(trendSide) * feature.lastMove > 0)
     add("PULLBACK_RECOVERY", trendSide, 1.65, trendSide === "LONG"
       ? Math.min(current.low, previous.low) : Math.max(current.high, previous.high));
-  if (feature.efficiency >= 0.54 && Math.abs(feature.trendRate) >= 0.0035
-    && direction(trendSide) * feature.lastMove > 0) add("MOMENTUM_CONTINUATION", trendSide, 1.85,
+  if (feature.efficiency >= 0.32 && Math.abs(feature.trendRate) >= 0.002
+    && (direction(trendSide) * feature.lastMove > 0
+      || (trendSide === "LONG" ? feature.closeLocation >= 0.68 : feature.closeLocation <= 0.32)))
+    add("MOMENTUM_CONTINUATION", trendSide, 1.85,
       trendSide === "LONG" ? Math.min(current.low, previous.low) : Math.max(current.high, previous.high));
   if (current.close > priorHigh && current.close > current.open)
     add("BREAKOUT_ACCEPTANCE", "LONG", 2, Math.min(current.low, priorHigh));
@@ -212,14 +229,17 @@ function recommendation(current: Trigger, outcomes: Outcome[], candleCount: numb
     const riskScaledNotional = clamp(0.015 / Math.max(current.stopRate + FRICTION_RATE, 1e-9), 0, 4);
     const selectionScore = discoveryConservative * riskScaledNotional * opportunitiesPerDay;
     const objectiveScore = Math.min(conservative, confirmationConservative) * riskScaledNotional * opportunitiesPerDay;
+    const eligible = selected.length >= ADAPTIVE_MIN_ANALOG_SAMPLES && conservative > 0
+      && confirmation.length >= 3 && confirmationConservative > 0
+      && profitFactor >= 1.05 && targetReachRate >= 0.3 && largestWinShare <= 0.55;
     return { horizonMinutes, samples: selected.length, wins, expected, conservative, profitFactor, targetReachRate,
-      largestWinShare, reachableRate, opportunitiesPerDay, objectiveScore, selectionScore,
+      largestWinShare, reachableRate, opportunitiesPerDay, objectiveScore, selectionScore, eligible,
       discoverySamples: discovery.length, confirmationSamples: confirmation.length, confirmationExpected,
       confirmationConservative };
-  }).sort((a, b) => b.selectionScore - a.selectionScore || b.conservative - a.conservative)[0];
-  const approved = byHorizon.samples >= ADAPTIVE_MIN_ANALOG_SAMPLES && byHorizon.conservative > 0
-    && byHorizon.confirmationSamples >= 3 && byHorizon.confirmationConservative > 0
-    && byHorizon.profitFactor >= 1.05 && byHorizon.targetReachRate >= 0.3 && byHorizon.largestWinShare <= 0.55;
+  }).sort((a, b) => Number(b.eligible) - Number(a.eligible)
+    || (b.eligible ? b.objectiveScore - a.objectiveScore : b.selectionScore - a.selectionScore)
+    || b.conservative - a.conservative)[0];
+  const approved = byHorizon.eligible;
   const reason = byHorizon.samples < ADAPTIVE_MIN_ANALOG_SAMPLES ? `相似历史样本不足 ${byHorizon.samples}/${ADAPTIVE_MIN_ANALOG_SAMPLES}`
     : byHorizon.conservative <= 0 ? "相似状态完整成本后的保守期望不为正"
       : byHorizon.confirmationSamples < 3 ? "最近独立确认样本不足"
@@ -258,13 +278,4 @@ export function buildAdaptivePolicySnapshot(candles: AdaptiveCandle[], generated
   return { version: ADAPTIVE_POLICY_VERSION, generatedAt, candleCount: rows.length,
     objectiveDailyReturnRate: ADAPTIVE_DAILY_OBJECTIVE_RATE, currentState: currentFeature.vector,
     recommendations: current.map((trigger) => recommendation(trigger, outcomes, rows.length)) };
-}
-
-export function adaptiveMechanismForPlaybook(playbookId: string): AdaptiveMechanism {
-  if (["range_edge", "range_sweep_reclaim"].includes(playbookId)) return "RANGE_ROTATION";
-  if (["compression_break", "compression_retest"].includes(playbookId)) return "COMPRESSION_EXPANSION";
-  if (["range_failed_break", "compression_failed", "anomaly_fade"].includes(playbookId)) return "FAILED_AUCTION";
-  if (["shallow_trend_pullback", "deep_trend_reclaim", "anomaly_pullback"].includes(playbookId)) return "PULLBACK_RECOVERY";
-  if (playbookId === "steady_trend") return "MOMENTUM_CONTINUATION";
-  return "BREAKOUT_ACCEPTANCE";
 }
