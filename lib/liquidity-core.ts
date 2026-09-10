@@ -1,4 +1,4 @@
-export const SYSTEM_VERSION = "completed-candle-multi-strategy-v4.2";
+export const SYSTEM_VERSION = "cost-gated-risk-consistent-v4.3";
 export const PORTFOLIO_RISK_CAP = 0.10;
 export const CORRELATED_DIRECTION_RISK_CAP = 0.065;
 export const STALE_AFTER_MS = 5_000;

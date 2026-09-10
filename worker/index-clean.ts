@@ -543,7 +543,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         quotes: Object.fromEntries(positions.map((position) => [position.symbol, {
           midpoint: this.runtime.evidence[position.symbol]!.midpoint, bestBid: this.runtime.evidence[position.symbol]!.bestBid,
           bestAsk: this.runtime.evidence[position.symbol]!.bestAsk, observedAt: this.runtime.evidence[position.symbol]!.observedAt, fresh: true,
-        }])), now, reason: "V4切换：以新鲜可成交价格结算并归档V3模拟周期" });
+        }])), now, reason: "V4.3切换：以新鲜可成交价格结算并归档上一模拟周期" });
     }
   }
 

@@ -1,3 +1,13 @@
+# V4.3 decisions — 2026-09-10
+
+- Treat the first observed positive overnight gross result as a regression boundary: this correction does not change signal direction, frozen stop/target geometry or exit timing. Future market PnL cannot be guaranteed, but mechanical truth fixes must not silently redesign the strategy again.
+- An enabled base playbook does not prove all four geometries. Confirmation/retest and fast/structure variants promote and demote independently; only the exact variant's own latest evidence authorizes an account order.
+- Results from different symbols inside the same completed-five-minute regime lifecycle are correlated and count once per exact variant. This prevents one broad market move from manufacturing a three-win promotion.
+- Positive rolling total is sufficient for shadow promotion, but account admission is stricter: at least three independent samples and the exact variant's conservative after-cost expectation must exceed the complete modeled cost. The frozen V4.2 replay retained five trades in roughly seven hours, with gross `+8.98 U`, costs `8.14 U` and net `+0.84 U`; this is a diagnostic replay, not a promise of future return.
+- Position size still targets a continuous 10–20 U planned loss with Gate multiplier and integer contracts. If aggregate risk, same-direction risk, margin or notional capacity clamps the result below 10 U, skip the order instead of recording a one-contract dust trade.
+- Simulated equity and open PnL use executable exit-side prices. Closed trade percentage means net PnL divided by account equity at entry, while position return, notional, contracts, leverage, margin and planned risk remain separately visible.
+- V4.3 is a fresh evidence/account boundary. Settle any previous open simulated exposure only from fresh bid/ask, archive it, reset to 1,000 U and keep deployment/LIVE authority unchanged and OFF.
+
 # V4.2 decisions — 2026-09-09
 
 - The bulk ticker is a liquidity-universe selector only.

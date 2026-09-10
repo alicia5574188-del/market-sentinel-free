@@ -152,6 +152,8 @@ test("V4 adaptive shadow arena is bounded, cost-aware, and is the sole LIVE orde
   assert.match(arena, /quantoMultiplier/);
   assert.match(arena, /ARENA_MAX_OPEN = 240/);
   assert.match(arena, /ARENA_HISTORY_LIMIT = 240/);
+  assert.match(arena, /MIN_PORTFOLIO_TRADE_RISK_USDT = 10/);
+  assert.match(arena, /EMPIRICAL_COST/);
   assert.match(arena, /seenSignals\.length > 2_000/);
   assert.match(regime, /MARKET_REGIME_MIN_SAMPLES = 18/);
   assert.match(regime, /selectDiverseMarketPool/);
@@ -165,7 +167,7 @@ test("V4 adaptive shadow arena is bounded, cost-aware, and is the sole LIVE orde
   assert.match(worker, /mirrorNotionalFraction: trade\.notional \/ Math\.max\(trade\.accountEquityAtOpen/);
   assert.match(worker, /strategyArena: normalizeStrategyArena\(saved\.strategyArena\)/);
   assert.match(worker, /resetStrategyArenaAccount/);
-  assert.match(page, /24小时内3笔有效影子连胜/);
+  assert.match(page, /每个执行变体独立使用24小时最新/);
   assert.match(page, /观察影子/);
   assert.match(page, /动态风险/);
   assert.match(page, /重置1000 U模拟资金/);

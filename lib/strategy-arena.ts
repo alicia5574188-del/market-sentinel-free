@@ -2,7 +2,7 @@ import { CORRELATED_DIRECTION_RISK_CAP, MIN_NET_REWARD_RISK, PORTFOLIO_MARGIN_CA
   selectSafeLeverage, sizePaperPosition, type LiquidityRoute, type RangeStructure, type Side } from "./liquidity-core.ts";
 import type { CandidateChannel, MarketRegimeCandidate, MarketRegimeKind, ResidentCandleStructure } from "./market-regime.ts";
 
-export const STRATEGY_ARENA_VERSION = 5;
+export const STRATEGY_ARENA_VERSION = 6;
 export const STRATEGY_INITIAL_EQUITY = 1_000;
 export const PROMOTION_WIN_STREAK = 3;
 export const PROMOTION_RECENT_WINDOW = 6;
@@ -16,6 +16,7 @@ export const ARENA_MAX_SPREAD_RATE = 0.0012;
 export const ARENA_MIN_VOLUME_24H_USD = 10_000_000;
 export const ARENA_MAX_COST_SHARE = 0.25;
 export const ARENA_QUOTE_STALE_MS = 5_000;
+export const MIN_PORTFOLIO_TRADE_RISK_USDT = 10;
 export const PORTFOLIO_REALTIME_CAPACITY = 10;
 export const ARENA_MAX_OPEN = 240;
 export const ARENA_HISTORY_LIMIT = 240;
@@ -98,7 +99,7 @@ export type PortfolioCycleArchive = { number: number; ruleVersion: string; start
   startingEquity: number; endingEquity: number; resolved: number; wins: number; grossPnl: number; costs: number; reason: string };
 
 export type StrategyArenaState = {
-  version: 5; startedAt: number; strategies: Record<string, StrategyScore>; playbookResults: Record<string, PlaybookEventResult[]>;
+  version: 6; startedAt: number; strategies: Record<string, StrategyScore>; playbookResults: Record<string, PlaybookEventResult[]>;
   open: Record<string, ArenaTrade>; portfolioOpen: Record<string, ArenaTrade>; portfolioEquity: number;
   portfolioResolved: number; portfolioWins: number; portfolioGrossPnl: number; portfolioCosts: number;
   portfolioCycle: number; portfolioCycleStartedAt: number; archivedPortfolioCycles: PortfolioCycleArchive[];
@@ -189,7 +190,7 @@ export function normalizeStrategyArena(value: StrategyArenaState | null | undefi
     seenSignals: (value.seenSignals ?? []).slice(-2_000), archivedPortfolioCycles: (value.archivedPortfolioCycles ?? []).slice(-12),
     admissionRejects: value.admissionRejects ?? {}, recentObservations: (value.recentObservations ?? []).slice(-ARENA_HISTORY_LIMIT),
     cutoverPending: Boolean(value.cutoverPending) };
-  for (const playbook of PLAYBOOKS) promotePlaybook(normalized, playbook.id, now);
+  for (const score of Object.values(normalized.strategies)) promoteStrategy(normalized, score, now);
   return normalized;
 }
 
@@ -367,10 +368,22 @@ function evidence(values: Array<{ netReturnRate: number; regime: MarketRegimeKin
     regimeEvents: regimeRows.length };
 }
 
-function uniqueResults(results: StrategyResult[]) {
-  const seen = new Set<string>();
-  return [...results].sort((a, b) => b.resolvedAt - a.resolvedAt).filter((row) => !seen.has(row.eventId) && Boolean(seen.add(row.eventId)))
+function lifecycleKey(row: { eventId: string; regime: MarketRegimeKind }) {
+  const eventAt = Number(row.eventId.match(/:(\d{13})(?=:|$)/)?.[1]);
+  return Number.isFinite(eventAt) ? `${regimeGroup(row.regime)}:${Math.floor(eventAt / (5 * 60_000))}` : row.eventId;
+}
+function uniqueLifecycleResults<T extends { eventId: string; regime: MarketRegimeKind; resolvedAt: number }>(results: T[]) {
+  const seenEvents = new Set<string>();
+  const seenLifecycles = new Set<string>();
+  return [...results].sort((a, b) => b.resolvedAt - a.resolvedAt).filter((row) => {
+    const lifecycle = lifecycleKey(row);
+    if (seenEvents.has(row.eventId) || seenLifecycles.has(lifecycle)) return false;
+    seenEvents.add(row.eventId); seenLifecycles.add(lifecycle); return true;
+  })
     .slice(0, PERFORMANCE_WINDOW).reverse();
+}
+function uniqueResults(results: StrategyResult[]) {
+  return uniqueLifecycleResults(results);
 }
 function eventIndex(eventId: string, size: number) {
   let hash = 0;
@@ -386,7 +399,8 @@ function uniqueEventTrades(trades: ArenaTrade[]) {
 }
 
 export function playbookPerformance(state: StrategyArenaState, id: string, currentRegime?: MarketRegimeKind) {
-  return evidence((state.playbookResults[id] ?? []).map((row) => ({ netReturnRate: row.netReturnRate, regime: row.regime })), currentRegime);
+  return evidence(uniqueLifecycleResults(state.playbookResults[id] ?? [])
+    .map((row) => ({ netReturnRate: row.netReturnRate, regime: row.regime })), currentRegime);
 }
 function strategyPerformance(score: StrategyScore, currentRegime?: MarketRegimeKind) {
   return evidence(uniqueResults(score.recentResults), currentRegime);
@@ -415,14 +429,12 @@ function updatePlaybookResult(state: StrategyArenaState, trade: ArenaTrade) {
   if (rows.length > 24) rows.splice(0, rows.length - 24);
 }
 
-function promotePlaybook(state: StrategyArenaState, playbookId: string, now: number) {
-  const scores = Object.values(state.strategies).filter((score) => baseId(score.id) === playbookId);
-  if (!scores.length || scores.every((score) => score.enabled)) return;
-  const demotedAt = Math.max(0, ...scores.map((score) => score.demotedAt ?? 0));
-  const results = (state.playbookResults[playbookId] ?? []).filter((row) => row.resolvedAt > demotedAt);
+function promoteStrategy(state: StrategyArenaState, score: StrategyScore, now: number) {
+  if (score.enabled) return;
+  const results = uniqueResults(score.recentResults.filter((row) => row.resolvedAt > (score.demotedAt ?? 0)));
   const reason = rollingQualified(results);
   if (!reason) return;
-  for (const score of scores) transition(state, score, "ACTIVE", now, `基础策略${reason}；四个执行变体共同启用`);
+  transition(state, score, "ACTIVE", now, `${reason}；只启用这个已验证执行变体`);
 }
 
 function recordClosed(state: StrategyArenaState, trade: ArenaTrade) {
@@ -436,7 +448,6 @@ function recordClosed(state: StrategyArenaState, trade: ArenaTrade) {
     state.recentPortfolio.push(trade); if (state.recentPortfolio.length > ARENA_HISTORY_LIMIT) state.recentPortfolio.shift();
     const attributedIds = state.cutoverPending ? [] : trade.attributedStrategyIds?.length
       ? [...new Set(trade.attributedStrategyIds)] : [trade.strategyId];
-    const affectedPlaybooks = new Set<string>();
     for (const strategyId of attributedIds) {
       const score = state.strategies[strategyId];
       if (!score) continue;
@@ -444,24 +455,17 @@ function recordClosed(state: StrategyArenaState, trade: ArenaTrade) {
         channel: trade.context.channel, netReturnRate: value, netPnl: trade.netPnl ?? 0, won, resolvedAt: trade.closedAt ?? trade.openedAt };
       score.paperResults = [...score.paperResults.filter((row) => row.eventId !== result.eventId), result].slice(-24);
       score.paperResolved += 1; score.paperWins += Number(won); score.paperNetReturnRate += value;
-      affectedPlaybooks.add(baseId(strategyId));
-    }
-    for (const playbookId of affectedPlaybooks) {
-      const playbookPaper = uniqueEventTrades(state.recentPortfolio.filter((row) =>
-        (row.attributedStrategyIds?.length ? row.attributedStrategyIds : [row.strategyId])
-          .some((strategyId) => baseId(strategyId) === playbookId)));
-      const last3 = playbookPaper.slice(-PAPER_DEMOTION_LOSSES);
-      const last6 = playbookPaper.slice(-PAPER_RECENT_WINDOW);
-      const reason = last3.length === PAPER_DEMOTION_LOSSES && last3.every((row) => (row.netPnl ?? 0) < 0)
+      const independentPaper = uniqueResults(score.paperResults);
+      const last3 = independentPaper.slice(-PAPER_DEMOTION_LOSSES);
+      const last6 = independentPaper.slice(-PAPER_RECENT_WINDOW);
+      const reason = last3.length === PAPER_DEMOTION_LOSSES && last3.every((row) => row.netPnl < 0)
         ? "基础策略最新3笔模拟订单连续亏损"
-        : last6.length === PAPER_RECENT_WINDOW && sum(last6.map((row) => row.netPnl ?? 0)) <= 0
+        : last6.length === PAPER_RECENT_WINDOW && sum(last6.map((row) => row.netPnl)) <= 0
           ? "最新6笔模拟订单成本后总收益不再为正" : null;
-      if (reason) {
-        for (const sibling of Object.values(state.strategies).filter((row) => baseId(row.id) === playbookId && row.enabled)) {
-          const resolvedAt = trade.closedAt ?? trade.openedAt;
-          sibling.enabled = false; sibling.demotedAt = resolvedAt;
-          transition(state, sibling, "SHADOW", resolvedAt, `${reason}，基础策略退回影子并等待新的有效结果`);
-        }
+      if (reason && score.enabled) {
+        const resolvedAt = trade.closedAt ?? trade.openedAt;
+        score.enabled = false; score.demotedAt = resolvedAt;
+        transition(state, score, "SHADOW", resolvedAt, `${reason}，这个执行变体退回影子并等待新的有效结果`);
       }
     }
     return;
@@ -476,7 +480,7 @@ function recordClosed(state: StrategyArenaState, trade: ArenaTrade) {
   if (trade.lane === "EFFECTIVE_SHADOW") {
     score.shadowResolved += 1; score.shadowWins += Number(won); score.shadowNetReturnRate += value;
     state.recentShadow.push(trade); if (state.recentShadow.length > ARENA_HISTORY_LIMIT) state.recentShadow.shift();
-    promotePlaybook(state, baseId(score.id), trade.closedAt ?? Date.now()); return;
+    promoteStrategy(state, score, trade.closedAt ?? Date.now()); return;
   }
 }
 
@@ -589,7 +593,8 @@ function portfolioSizing(state: StrategyArenaState, input: ArenaObservation, sig
   leverage = selectSafeLeverage({ notional, equity: state.portfolioEquity, entry: economics.entryPrice,
     invalidation: signal.stopPrice, maintenanceRate: input.maintenanceRate, leverageMax: input.leverageMax });
   const plannedRisk = notional * (economics.structuralStopRate + ARENA_FRICTION_RATE);
-  if (openRisk(state) + plannedRisk > state.portfolioEquity * PORTFOLIO_RISK_CAP + 1e-8
+  if (plannedRisk + 1e-8 < MIN_PORTFOLIO_TRADE_RISK_USDT
+    || openRisk(state) + plannedRisk > state.portfolioEquity * PORTFOLIO_RISK_CAP + 1e-8
     || openRisk(state, signal.side) + plannedRisk > state.portfolioEquity * CORRELATED_DIRECTION_RISK_CAP + 1e-8
     || usedMargin + leverage.margin > state.portfolioEquity * PORTFOLIO_MARGIN_CAP + 1e-8) return null;
   return { notional, plannedRisk, contracts, quantoMultiplier: multiplier, leverage: leverage.leverage, margin: leverage.margin,
@@ -605,7 +610,9 @@ function portfolioAdmission(state: StrategyArenaState, input: ArenaObservation, 
   const blocker = input.dataFresh === false ? "STALE" : input.contractReady === false ? "CONTRACT"
     : input.managementCapacity === false ? "DATA_CAPACITY" : !validStructure ? "STRUCTURE" : input.candidate.volume24hUsd < ARENA_MIN_VOLUME_24H_USD ? "LIQUIDITY"
     : input.spreadRate > ARENA_MAX_SPREAD_RATE ? "SPREAD" : economics.netRewardRisk < MIN_NET_REWARD_RISK ? "NET_RR"
-      : economics.costShare > ARENA_MAX_COST_SHARE ? "COST_SHARE" : !score.enabled ? "INACTIVE" : null;
+      : economics.costShare > ARENA_MAX_COST_SHARE ? "COST_SHARE" : !score.enabled ? "INACTIVE"
+        : sample.events < PROMOTION_WIN_STREAK ? "EMPIRICAL_SAMPLE"
+          : sample.conservativeReturnRate <= economics.modeledCostRate ? "EMPIRICAL_COST" : null;
   if (blocker) { state.admissionRejects[blocker] = (state.admissionRejects[blocker] ?? 0) + 1; return null; }
   const sizing = portfolioSizing(state, input, signal);
   if (!sizing) { state.admissionRejects.SIZING = (state.admissionRejects.SIZING ?? 0) + 1; return null; }
@@ -652,14 +659,11 @@ function effectiveShadowBlocker(input: ArenaObservation, signal: Signal, sizing:
 }
 
 export function applyStrategySleepStates(state: StrategyArenaState, _availableChannels: Set<CandidateChannel>, now: number) {
-  for (const playbook of PLAYBOOKS) {
-    const scores = Object.values(state.strategies).filter((score) => baseId(score.id) === playbook.id);
-    const enabled = scores.some((score) => score.enabled);
-    for (const score of scores) {
-      if (!enabled) {
-        score.enabled = false;
-        if (score.lane !== "SHADOW") transition(state, score, "SHADOW", now, "尚未启用，持续跨币种和市场环境影子验证");
-      } else if (score.lane !== "ACTIVE") transition(state, score, "ACTIVE", now, "基础策略保持启用；市场缺席只代表当前没有信号");
+  for (const score of Object.values(state.strategies)) {
+    if (!score.enabled) {
+      if (score.lane !== "SHADOW") transition(state, score, "SHADOW", now, "尚未启用，持续跨币种和市场环境影子验证");
+    } else if (score.lane !== "ACTIVE") {
+      transition(state, score, "ACTIVE", now, "已验证执行变体保持启用；市场缺席只代表当前没有信号");
     }
   }
   return state;
@@ -789,6 +793,8 @@ export function arenaSummary(state: StrategyArenaState) {
     const rank = (lane: StrategyLane) => lane === "ACTIVE" ? 2 : lane === "SLEEPING" ? 1 : 0;
     return rank(b.lane) - rank(a.lane) || strategyPerformance(b).conservativeReturnRate - strategyPerformance(a).conservativeReturnRate;
   });
+  const strategySummaries = strategies.map((score) => ({ ...score,
+    recentResults: uniqueResults(score.recentResults), paperResults: uniqueResults(score.paperResults) }));
   const open = uniqueEventTrades(Object.values(state.open).sort((a, b) => b.openedAt - a.openedAt));
   return { version: state.version, startedAt: state.startedAt, catalogSize: STRATEGY_CATALOG.length, playbookCount: PLAYBOOKS.length,
     portfolioCycle: state.portfolioCycle, portfolioCycleStartedAt: state.portfolioCycleStartedAt,
@@ -801,7 +807,7 @@ export function arenaSummary(state: StrategyArenaState) {
     openShadow: open, openPaper: [], observationShadow: state.recentObservations.slice(-100).reverse(),
     portfolioOpen: Object.values(state.portfolioOpen).sort((a, b) => b.openedAt - a.openedAt),
     portfolioEquity: state.portfolioEquity, portfolioResolved: state.portfolioResolved, portfolioWins: state.portfolioWins,
-    portfolioGrossPnl: state.portfolioGrossPnl, portfolioCosts: state.portfolioCosts, strategies,
+    portfolioGrossPnl: state.portfolioGrossPnl, portfolioCosts: state.portfolioCosts, strategies: strategySummaries,
     playbooks: PLAYBOOKS.map((row) => ({ ...row, evidence: playbookPerformance(state, row.id) })),
     recentShadow: uniqueEventTrades(state.recentShadow.slice(-100).reverse()), recentPaper: state.recentPaper.slice(-100).reverse(),
     recentPortfolio: state.recentPortfolio.slice(-100).reverse(), archivedPortfolioTrades: state.archivedPortfolioTrades.slice(-100).reverse(),
@@ -811,5 +817,6 @@ export function arenaSummary(state: StrategyArenaState) {
       demotionLosses: PAPER_DEMOTION_LOSSES, frictionFloorRate: ARENA_FRICTION_RATE, minNetRewardRisk: MIN_NET_REWARD_RISK,
       maxCostShare: ARENA_MAX_COST_SHARE, singleTradeRiskMin: 0.01, singleTradeRiskMax: 0.02,
       portfolioRiskCap: PORTFOLIO_RISK_CAP, correlatedRiskCap: CORRELATED_DIRECTION_RISK_CAP,
-      marginCap: PORTFOLIO_MARGIN_CAP, maxNotionalMultiple: 4, realtimeCapacity: PORTFOLIO_REALTIME_CAPACITY } };
+      marginCap: PORTFOLIO_MARGIN_CAP, maxNotionalMultiple: 4, realtimeCapacity: PORTFOLIO_REALTIME_CAPACITY,
+      minimumPortfolioRiskUsdt: MIN_PORTFOLIO_TRADE_RISK_USDT, empiricalCostFloorRate: ARENA_FRICTION_RATE } };
 }

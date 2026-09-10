@@ -1,4 +1,12 @@
-# Active goal — V4.2 completed-candle multi-strategy overnight run
+# Active goal — V4.3 truthful, risk-consistent simulator
+
+- Preserve the V4.2 completed-candle signal direction, target and exit behavior that produced positive overnight gross PnL; correct only account admission, sizing, evidence independence and display truth.
+- Promote and demote each of the 48 genuinely different execution variants from its own rolling evidence. Correlated cross-symbol results from the same completed-five-minute lifecycle count once per variant.
+- Require the exact variant's conservative recent after-cost edge to exceed full modeled cost before its next signal may enter the 1,000 U account.
+- Reject a portfolio order when current integer-contract, margin, notional or aggregate-risk capacity cannot support at least 10 U planned loss; never create a dust substitute.
+- Mark open positions from executable bid/ask and show closed percentage against account equity. Archive the prior cycle at fresh executable prices, reset V4.3 to 1,000 U, deploy through `main`, and keep LIVE explicitly OFF.
+
+# Prior goal — V4.2 completed-candle multi-strategy overnight run
 
 - Select 30 liquid Gate USDT perpetuals by turnover; strategy discovery must not depend on anomaly or high-frequency optional feeds.
 - Derive strategy environments from continuously obtainable completed 5-minute OHLCV and require fresh books only at execution.

@@ -2,7 +2,7 @@
 
 A Gate USDT perpetual market-regime and progressive strategy-rotation system. One `MarketStream` Durable Object is authoritative for market observations, the 1,000 U simulated futures account, and optional owner-controlled LIVE mirroring.
 
-## Completed-candle multi-strategy V4.2
+## Cost-gated, risk-consistent multi-strategy V4.3
 
 - The first pass ranks eligible Gate USDT perpetuals by 24-hour turnover and forms a thirty-contract liquid universe. It does not decide trades or depend on anomaly feeds.
 - One completed 5-minute candle series is refreshed every ten seconds, covering the full universe in about five minutes. Trend, range, compression and expansion are derived from those durable candles; missing optional high-frequency data cannot create a strategy-data gap.
@@ -30,9 +30,9 @@ The catalog contains 48 bounded strategy variants: 12 interpretable playbooks ×
 
 All variants keep running in shadow. Incomplete routes are observation shadows and never score. Only signals that pass fresh executable bid/ask, unmissed entry location, structure/noise stop, full-cost target, depth, liquidity and Gate contract checks become effective shadows.
 
-- The latest three independent effective shadows all winning within 24 hours, or the latest six producing positive after-cost total return within 72 hours, activates the base playbook and makes its four distinct execution variants selectable.
+- The latest three independent effective shadows all winning within 24 hours, or the latest six producing positive after-cost total return within 72 hours, activates only the exact execution variant that produced those results.
 - Activation admits only the next new valid signal; completed winners are never backfilled.
-- The latest three simulated orders all losing, or the latest six no longer positive after costs, stops new account entries and returns the whole base playbook to shadow. A demoted playbook needs new effective-shadow results before it can reactivate.
+- The latest three attributed simulated orders all losing, or the latest six no longer positive after costs, stops new account entries and returns that exact execution variant to shadow. A demoted variant needs new independent effective-shadow results before it can reactivate.
 - Missing market opportunities produce no state transition and no synthetic loss. Enabled playbooks remain active until the explicit demotion rule fires.
 
 Every result freezes its regime, candidate channel, entry/exit variant, executable bid/ask, modeled cost, structure source, net reward/risk, depth, spread, trend/volatility, open-interest change, funding, turnover, flow, confirmation, fakeout, MFE and MAE.
@@ -45,15 +45,15 @@ The 1,000 U account records only strategies that passed promotion and immutable 
 - net reward/risk must be at least 1.2 after modeled full cost;
 - modeled cost may consume at most 25% of target space;
 - 24-hour turnover, spread and both sides of first-five-level depth must pass liquidity limits;
-- recent empirical after-cost expectation must be positive.
+- the exact execution variant's recent conservative expectation must exceed the complete modeled cost.
 
-Position size uses Gate's contract multiplier and integer contract lots. Risk varies continuously from 1% to 2% of equity (10–20 U at the initial balance). Dynamic position count is bounded by 10% total stop risk, 6.5% same-direction risk, 30% margin, 4× total notional and the ten-symbol management capacity. Fees, executable spread, conservative slippage and applicable funding are deducted.
+Position size uses Gate's contract multiplier and integer contract lots. Risk targets 10–20 U and a portfolio order is rejected when the remaining risk or margin capacity cannot support at least 10 U; the simulator never opens a one-contract dust substitute. Dynamic position count is bounded by 10% total stop risk, 6.5% same-direction risk, 30% margin, 4× total notional and the ten-symbol management capacity. Fees, executable spread, conservative slippage and applicable funding are deducted. Each confirmation/retest and fast/structure variant earns promotion and demotion evidence independently; correlated cross-symbol results from the same completed-five-minute market lifecycle count once per variant.
 
 The owner-only reset closes open simulated positions at fresh executable prices, archives the completed account cycle, resets visible equity to 1,000 U, and preserves all shadow research. Reset is rejected while LIVE is enabled or any system LIVE position/order remains.
 
 ## LIVE boundary
 
-- `SYSTEM_VERSION=completed-candle-multi-strategy-v4.2` archives V3 research, settles V3 account exposure only from fresh executable bid/ask, archives the cycle and starts V4 at 1,000 U.
+- `SYSTEM_VERSION=cost-gated-risk-consistent-v4.3` archives the prior simulator cycle, settles prior exposure only from fresh executable bid/ask, and starts the corrected account at 1,000 U.
 - Gate credentials and LIVE reconciliation state are preserved. Deployment never turns LIVE on.
 - LIVE can be enabled only by the authenticated owner. It mirrors only new simulated-account orders opened after enablement and never backfills an existing simulated position.
 - Direction, structural stop, target, proportional notional and modeled cost come from the exact simulated-account order. The real order is rechecked for current price geometry, integer Gate lot size, margin, account-wide risk, correlated-direction risk and after-cost economics.
@@ -78,4 +78,4 @@ npm run lint
 git diff --check
 ```
 
-Production releases use the GitHub-to-Cloudflare workflow and require advancing health checks with `completed-candle-multi-strategy-v4.2`, 30-market scanning, the 12/48 catalog, V4 risk limits, 1,000 U cutover equity and LIVE explicitly OFF.
+Production releases use the GitHub-to-Cloudflare workflow and require advancing health checks with `cost-gated-risk-consistent-v4.3`, 30-market scanning, the 12/48 catalog, V4.3 risk limits, 1,000 U cutover equity and LIVE explicitly OFF.

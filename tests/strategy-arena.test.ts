@@ -45,6 +45,18 @@ function openForStrategy(state: StrategyArenaState, wanted: string, eventStart: 
   throw new Error(`no event selected ${wanted}`);
 }
 
+function openForStrategyAtLifecycle(state: StrategyArenaState, wanted: string, lifecycleAt: number,
+  eventStart: number, now: number, symbol: string) {
+  for (let offset = 0; offset < 100; offset += 1) {
+    const input = observation(eventStart + offset, now + offset, symbol);
+    input.candidate.id = `${symbol}:CANDLE5M:EXPANSION:LONG:${lifecycleAt}:${eventStart + offset}`;
+    const candidate = observeStrategyArena({ state: structuredClone(state), observation: input });
+    if (Object.values(candidate.open).some((trade) => trade.strategyId === wanted))
+      return { state: candidate, now: now + offset };
+  }
+  throw new Error(`no lifecycle event selected ${wanted}`);
+}
+
 function qualify(state = initialStrategyArena(1), start = 10_000) {
   let eventStart = 1;
   for (let index = 0; index < PROMOTION_WIN_STREAK; index += 1) {
@@ -55,7 +67,7 @@ function qualify(state = initialStrategyArena(1), start = 10_000) {
   return state;
 }
 
-test("V4 keeps 12 playbooks and 48 genuinely distinct execution variants", () => {
+test("V4.3 keeps 12 playbooks and 48 genuinely distinct execution variants", () => {
   assert.equal(STRATEGY_CATALOG.length, 48);
   assert.equal(new Set(STRATEGY_CATALOG.map((item) => item.id.split(":")[0])).size, 12);
   assert.equal(new Set(STRATEGY_CATALOG.map((item) => `${item.id}:${item.entryStyle}:${item.exitProfile}`)).size, 48);
@@ -105,8 +117,8 @@ test("observation shadow is separate and never counts toward promotion", () => {
 test("latest three independent effective shadow wins activate only the next signal", () => {
   let state = qualify();
   assert.equal(state.strategies[strategyId].lane, "ACTIVE");
-  assert.equal(Object.values(state.strategies).filter((row) => row.id.startsWith("anomaly_follow:") && row.enabled).length, 4,
-    "promotion belongs to the base playbook while its four geometries remain selectable");
+  assert.equal(Object.values(state.strategies).filter((row) => row.id.startsWith("anomaly_follow:") && row.enabled).length, 1,
+    "only the execution variant that produced the evidence is promoted");
   assert.equal(Object.keys(state.portfolioOpen).length, 0, "completed winners are never backfilled");
   state = openEvent(state, 20, 120_000);
   assert.equal(state.portfolioOpen.BTC_USDT.strategyId, strategyId);
@@ -114,6 +126,43 @@ test("latest three independent effective shadow wins activate only the next sign
   assert.ok(state.portfolioOpen.BTC_USDT.attributedStrategyIds?.includes(strategyId));
   assert.equal(new Set(state.portfolioOpen.BTC_USDT.attributedStrategyIds?.map((id) => id.split(":")[0])).size,
     state.portfolioOpen.BTC_USDT.attributedStrategyIds?.length);
+});
+
+test("correlated cross-symbol results in the same five-minute lifecycle count only once", () => {
+  let state = initialStrategyArena(1);
+  const lifecycleAt = 1_757_500_000_000;
+  for (const [index, symbol] of ["BTC_USDT", "ETH_USDT", "SOL_USDT"].entries()) {
+    const opened = openForStrategyAtLifecycle(state, strategyId, lifecycleAt, 900 + index * 100,
+      100_000 + index * 20_000, symbol);
+    state = settleEvent(opened.state, opened.now + 10_000, true, symbol);
+  }
+  assert.equal(state.strategies[strategyId].lane, "SHADOW");
+  assert.equal(state.strategies[strategyId].enabled, false);
+});
+
+test("an active variant cannot enter the portfolio when its conservative edge does not cover modeled cost", () => {
+  const state = qualify();
+  for (const score of Object.values(state.strategies)) {
+    if (score.id === strategyId) continue;
+    score.enabled = false;
+    score.lane = "SHADOW";
+    score.recentResults = [];
+  }
+  state.strategies[strategyId].recentResults = state.strategies[strategyId].recentResults.map((row) => ({
+    ...row, netReturnRate: ARENA_FRICTION_RATE / 2, netPnl: 1, won: true,
+  }));
+  const opened = openForStrategy(state, strategyId, 1_100, 200_000);
+  assert.equal(opened.state.portfolioOpen.BTC_USDT, undefined);
+  assert.ok((opened.state.admissionRejects.EMPIRICAL_COST ?? 0) > 0);
+});
+
+test("remaining portfolio capacity below 10 U planned risk is skipped instead of creating a dust trade", () => {
+  const state = openEvent(qualify(), 20, 120_000);
+  assert.ok(state.portfolioOpen.BTC_USDT);
+  state.portfolioOpen.BTC_USDT.margin = state.portfolioEquity * 0.2999;
+  const opened = openForStrategy(state, strategyId, 1_300, 220_000, "ETH_USDT");
+  assert.equal(opened.state.portfolioOpen.ETH_USDT, undefined);
+  assert.ok((opened.state.admissionRejects.SIZING ?? 0) > 0);
 });
 
 test("three wins outside the 24-hour cadence window remain research-only", () => {

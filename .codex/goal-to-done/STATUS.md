@@ -1,3 +1,11 @@
+# Ready to deploy — 2026-09-10 V4.3 simulator truth and risk correction
+
+- Overnight V4.2 inspection found 27 completed account trades: gross `+9.403327 U`, modeled costs `66.049704 U`, net `-56.646377 U`; 11 trades carried less than 10 U planned risk and five carried less than 1 U. The account admitted trades even when the frozen empirical conservative expectation did not cover modeled cost.
+- The accepted correction preserves completed-candle signal direction, frozen target/stop and timeout behavior. It makes promotion/demotion exact-variant-specific, collapses correlated cross-symbol results from the same five-minute lifecycle, requires conservative recent edge above modeled full cost, and rejects any capacity-clamped portfolio order below 10 U planned risk.
+- The UI now marks open positions at executable bid/ask, reports a closed trade's percentage against account equity, shows sub-cent PnL without rounding it to zero, and exposes the new admission/risk rules.
+- V4.3 version cutover archives the prior simulated cycle using fresh executable prices and starts a new 1,000 U cycle; strategy evidence restarts under the corrected rules. LIVE remains OFF and cannot be enabled by deployment.
+- Verification passed: 189 direct tests, 15 architecture/migration tests, production build, TypeScript typecheck, ESLint and whitespace validation. Deployment is pending the `main` release workflow and production acceptance.
+
 # Done — 2026-09-09 V4.2 completed-candle multi-strategy
 
 - Implemented 30-liquid-contract selection, rotating completed-5m strategy data, cross-environment playbooks, per-base event deduplication, merged same-direction portfolio attribution, cadence-limited promotion and no runtime sleep.
