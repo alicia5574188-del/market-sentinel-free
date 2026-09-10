@@ -1018,7 +1018,9 @@ jobs:
               ((now * 1000 - .runtime.lastSuccessAt) < 10000) and
               .runtime.liveMode.requestedEnabled == false and .runtime.liveMode.operational == false and
               .runtime.strategyArena.version == 6 and .runtime.strategyArena.playbookCount == 12 and
-              .runtime.strategyArena.catalogSize == 48 and .runtime.strategyArena.portfolioEquity == 1000 and
+              .runtime.strategyArena.catalogSize == 48 and
+              (.runtime.strategyArena.portfolioEquity | type) == "number" and
+              .runtime.strategyArena.portfolioEquity > 0 and
               .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 10 and
               .runtime.strategyArena.rules.singleTradeRiskMin == 0.01 and
               .runtime.strategyArena.rules.singleTradeRiskMax == 0.02 and

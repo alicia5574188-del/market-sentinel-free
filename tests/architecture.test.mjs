@@ -232,3 +232,11 @@ test("cutover is credential-bound and removes legacy DOs only after v6 health", 
   assert.ok(workflow.indexOf("Deploy reviewed final v7") < workflow.indexOf("0033 D1 purge last"));
   assert.match(workflow, /tables_csv/);
 });
+
+test("ordinary production deploy accepts evolved paper equity", async () => {
+  const workflow = await read(".github/workflows/sentinel-v2-ci.yml");
+  const ordinaryDeploy = workflow.slice(workflow.lastIndexOf("- name: Verify advancing production health"));
+  assert.match(ordinaryDeploy, /\(\.runtime\.strategyArena\.portfolioEquity \| type\) == "number"/);
+  assert.match(ordinaryDeploy, /\.runtime\.strategyArena\.portfolioEquity > 0/);
+  assert.doesNotMatch(ordinaryDeploy, /portfolioEquity == 1000/);
+});
