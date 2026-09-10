@@ -1,4 +1,11 @@
-# Active goal — generated state-route authority V6
+# Active UI correction — quiet mobile transport and V6 decision console
+
+- Never show routine phone-summary age or retry latency as a warning. Keep the last verified snapshot visible, retry the lightweight runtime summary promptly on focus/online recovery, and reserve visible warnings for genuine backend authority or protected-position failures.
+- Replace the inherited strategy-arena dashboard hierarchy with a V6 decision console: account outcome first, then the actual liquidity → completed-candle → approved-route → PAPER flow, followed by current routes, market-state coverage and secondary shadow research.
+- Change presentation only. Preserve the generated-state trading authority, current PAPER cycle/history, reset behavior, risk/cost controls, authentication and owner-controlled LIVE OFF state.
+- Verify locally and through advancing production health on GitHub `main`.
+
+# Completed goal — generated state-route authority V6
 
 - Remove the twelve legacy playbooks and forty-eight variants from every executable path. They remain only inside archived trades and prior-cycle records.
 - Generate independent long/short route hypotheses directly from completed Gate futures candle state, then select entry geometry, stop, target and 10–60 minute horizon through chronological after-cost walk-forward evidence.

@@ -1,3 +1,9 @@
+# V6 decision-console decision — 2026-09-11
+
+- Phone transport age is presentation noise, not trading authority. Once a verified snapshot exists, ordinary read failure is silent and automatically retried; only genuine MarketStream authority, protected-position or risk failures deserve a visible warning.
+- The main page follows the actual V6 authority order and prioritizes account truth plus current approved routes. Market-state distribution and shadow research remain visible as evidence but do not visually impersonate the trading authority.
+- The UI refresh change reads only the existing lightweight runtime summary and never adds market-data requests or D1 writes.
+
 # V6 generated-state authority decision — 2026-09-10
 
 - Liquidity ranking selects the thirty contracts; it does not choose direction or strategy. Completed five-minute OHLCV generates the state-path hypotheses, and fresh bid/ask/depth validates only the final executable order.

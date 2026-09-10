@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { directionalReturnRate, marginReturnRate, unrealizedPnl } from "../lib/position-metrics.ts";
-import { runtimeAuthorityOperational, runtimeBackendOperational, runtimeNotice, runtimeStatusLabel } from "../lib/runtime-health.ts";
+import { runtimeBackendOperational, runtimeNotice, runtimeStatusLabel } from "../lib/runtime-health.ts";
 
 type Side = "LONG" | "SHORT";
 type MarketState = "BREAKOUT" | "REVERSAL" | "RANGE";
@@ -124,8 +124,9 @@ type LiveView = "account" | "orders" | "api";
 type PositionView = { entryAt?: number; entryPrice: number; stopPrice: number; targetPrice: number; markPrice?: number; markAt?: number; fresh: boolean };
 
 const INITIAL_EQUITY = 1_000;
-const RUNTIME_REQUEST_TIMEOUT_MS = 30_000;
-const RUNTIME_DISPLAY_TTL_MS = 90_000;
+const RUNTIME_REQUEST_TIMEOUT_MS = 12_000;
+const RUNTIME_REFRESH_MS = 10_000;
+const RUNTIME_RETRY_MS = 3_000;
 const stateText: Record<string, string> = { BREAKOUT: "突破", REVERSAL: "反转", RANGE: "震荡" };
 const num = (value: number | null | undefined, digits = 3) => Number.isFinite(value) ? Number(value).toLocaleString("zh-CN", { maximumFractionDigits: digits }) : "—";
 const signed = (value: number, digits = 2) => `${value >= 0 ? "+" : ""}${num(value, digits === 2 && Math.abs(value) > 0 && Math.abs(value) < .01 ? 4 : digits)}`;
@@ -145,7 +146,6 @@ const friendlyLiveError = (value: string | null | undefined) => !value ? null
 
 export default function Home() {
   const [runtime, setRuntime] = useState<Runtime | null>(null);
-  const [receivedAt, setReceivedAt] = useState(0);
   const [clock, setClock] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("brain");
@@ -170,23 +170,45 @@ export default function Home() {
   useEffect(() => {
     let active = true, inFlight = false;
     let controller: AbortController | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
     const read = async () => {
-      if (!active || document.hidden || inFlight) return;
+      if (!active || document.hidden || inFlight) return true;
       setClock(Date.now()); inFlight = true; controller = new AbortController();
       const timeout = setTimeout(() => controller?.abort(), RUNTIME_REQUEST_TIMEOUT_MS);
       try {
         const response = await fetch("/api/runtime", { cache: "no-store", signal: controller.signal });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const value = await response.json() as Runtime;
-        if (active) { setRuntime(value); setReceivedAt(Date.now()); setError(null); }
-      } catch (failure) { if (active) setError(failure instanceof Error ? failure.message : "读取失败"); }
+        if (active) { setRuntime(value); setError(null); }
+        return true;
+      } catch (failure) {
+        if (active) setError(failure instanceof Error ? failure.message : "读取失败");
+        return false;
+      }
       finally { clearTimeout(timeout); inFlight = false; controller = null; }
     };
-    const visibility = () => { if (!document.hidden) void read(); else controller?.abort(); };
-    void read();
-    const timer = setInterval(read, 15_000);
-    document.addEventListener("visibilitychange", visibility);
-    return () => { active = false; controller?.abort(); clearInterval(timer); document.removeEventListener("visibilitychange", visibility); };
+    const cycle = async () => {
+      const succeeded = await read();
+      if (active && !document.hidden) timer = setTimeout(cycle, succeeded ? RUNTIME_REFRESH_MS : RUNTIME_RETRY_MS);
+    };
+    const resume = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      if (document.hidden) { controller?.abort(); return; }
+      if (!inFlight) void cycle();
+    };
+    void cycle();
+    document.addEventListener("visibilitychange", resume);
+    window.addEventListener("focus", resume);
+    window.addEventListener("online", resume);
+    window.addEventListener("pageshow", resume);
+    return () => {
+      active = false; controller?.abort(); if (timer) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", resume);
+      window.removeEventListener("focus", resume);
+      window.removeEventListener("online", resume);
+      window.removeEventListener("pageshow", resume);
+    };
   }, []);
 
   useEffect(() => {
@@ -233,13 +255,9 @@ export default function Home() {
     finally { setPaperResetBusy(false); }
   };
 
-  const responseFresh = runtime != null && clock - receivedAt < RUNTIME_DISPLAY_TTL_MS && clock - runtime.generatedAt < RUNTIME_DISPLAY_TTL_MS;
   const backendOperational = runtimeBackendOperational(runtime);
-  const pageAndBackendOperational = runtimeAuthorityOperational(runtime, responseFresh);
-  const healthLabel = runtimeStatusLabel(runtime, responseFresh, Boolean(error));
+  const healthLabel = runtimeStatusLabel(runtime, true, runtime == null && Boolean(error));
   const healthNotice = runtimeNotice(runtime);
-  const radarDelayed = runtime?.radar?.lastError != null
-    && (runtime.radar.lastScanAt == null || clock - runtime.radar.lastScanAt > 30_000);
   const arena = runtime?.strategyArena;
   const openShadow = arena?.openShadow ?? [];
   const portfolioOpen = arena?.portfolioOpen ?? [];
@@ -268,18 +286,17 @@ export default function Home() {
   const totalFeedFailures = feedDiagnostics.reduce((sum, feed) => sum + (feed?.totalFailures ?? 0), 0);
   const totalFeedRecoveries = feedDiagnostics.reduce((sum, feed) => sum + (feed?.recoveries ?? 0), 0);
   const maxFeedLag = feedDiagnostics.reduce((max, feed) => Math.max(max, feed?.maxObservedLagMs ?? 0), 0);
-  const headline = !backendOperational ? "后台行情正在恢复，模拟账户暂停新开仓" : !responseFresh
-    ? "页面摘要延迟，交易后台继续独立运行" : portfolioOpen.length
+  const headline = !backendOperational ? "后台行情正在恢复，模拟账户暂停新开仓" : portfolioOpen.length
       ? `1000 U模拟账户持有 ${portfolioOpen.length} 笔订单` : openShadow.length ? "策略池正在筛选下一笔模拟订单" : "识别全市场状态，等待策略触发";
 
   return <main>
     <header className="topbar">
-      <div className="brand"><span className="brand-mark">态</span><div><p>市场状态竞技场</p><small>Gate 全市场短线系统</small></div></div>
-      <div role="status" className={`health ${pageAndBackendOperational && !error ? "" : "bad"}`}><span />{healthLabel}</div>
+      <div className="brand"><span className="brand-mark">V6</span><div><p>自适应状态路线</p><small>Gate USDT 永续 · 模拟决策系统</small></div></div>
+      <div role="status" className={`health ${backendOperational ? "" : "bad"}`}><span />{healthLabel}</div>
     </header>
 
     {tab === "brain" && <>
-      <section className="brain-hero"><div><p className="eyebrow">V6 状态路径生成器 · 唯一模拟合约账户 · 第{arena?.portfolioCycle ?? 1}轮</p><h1>{headline}</h1><p className="hero-detail">系统直接生成多空进场、止损、目标和持仓周期；旧12策略不再拥有开仓权</p></div><div className="decision-badge"><small>当前权益</small><strong>{num(portfolioAccountEquity, 2)}</strong><span>USDT</span></div></section>
+      <section className="brain-hero v6-console"><div className="hero-copy"><div className="hero-meta"><span>唯一模拟合约账户</span><span>第{arena?.portfolioCycle ?? 1}轮</span><span className="live-off">LIVE OFF</span></div><p className="eyebrow">V6 · GENERATED STATE ROUTES</p><h1>{headline}</h1><p className="hero-detail">系统直接生成多空进场、止损、目标和持仓周期；完整5分钟状态负责产生路线，新鲜盘口只负责最后成交，旧12策略没有开仓权。</p></div><div className="decision-badge"><small>账户权益</small><strong>{num(portfolioAccountEquity, 2)}</strong><span>USDT</span><em className={portfolioPnl >= 0 ? "positive" : "negative"}>{signed(portfolioPnl)} U</em></div></section>
 
       <section className="summary four">
         <article><small>模拟账户盈亏</small><strong className={portfolioPnl >= 0 ? "positive" : "negative"}>{signed(portfolioPnl)} U</strong><p>{signed(portfolioPnl / INITIAL_EQUITY * 100)}% · 已含当前持仓完整成本</p></article>
@@ -287,15 +304,22 @@ export default function Home() {
         <article><small>累计交易成本</small><strong>{num(arena?.portfolioCosts ?? 0, 2)} U</strong><p>毛盈亏 {signed(arena?.portfolioGrossPnl ?? 0)} U</p></article>
         <article><small>当前持仓</small><strong>{portfolioOpen.length}</strong><p>动态数量 · 总风险≤100 U · 同向≤65 U</p></article>
       </section>
-      {(!responseFresh || error) && runtime && <p className="notice">手机页面更新延迟，下面保留最近一次后台状态；服务器仍独立运行，不会因此停止判断或开模拟单。</p>}
-      {radarDelayed && <p className="notice">30币流动性池刷新延迟，正在按10秒节奏恢复；已完成5分钟K线会保留，旧数据不会触发新订单。</p>}
+      <section className="decision-flow" aria-label="V6决策流程">
+        <article><small>流动性筛选</small><strong>{runtime?.strategyData?.liquidMarkets ?? runtime?.limits.scanUniverse ?? 30}<span>/30</span></strong><p>Gate永续成交额</p></article>
+        <i aria-hidden="true">→</i>
+        <article><small>状态样本</small><strong>{runtime?.strategyData?.stableMarkets ?? 0}<span>/30</span></strong><p>完整5分钟K线</p></article>
+        <i aria-hidden="true">→</i>
+        <article><small>当前有效路线</small><strong>{runtime?.strategyData?.approvedPolicyRoutes ?? 0}</strong><p>成本后期望为正</p></article>
+        <i aria-hidden="true">→</i>
+        <article><small>账户执行</small><strong>{portfolioOpen.length}</strong><p>真实合约模拟持仓</p></article>
+      </section>
       {healthNotice && <p className="notice">{healthNotice}</p>}
     </>}
 
-    <nav className="tabs">{([['brain', '模拟账户'], ['orders', `持仓 ${portfolioOpen.length || ''}`], ['live', `实盘 ${openLivePositions.length + openLiveEntries.length || ''}`], ['history', '交易记录'], ['settings', '设置']] as const).map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => selectTab(key)}>{label}</button>)}</nav>
+    <nav className="tabs">{([['brain', '决策台'], ['orders', `持仓 ${portfolioOpen.length || ''}`], ['live', `实盘 ${openLivePositions.length + openLiveEntries.length || ''}`], ['history', '记录'], ['settings', '设置']] as const).map(([key, label]) => <button key={key} type="button" aria-current={tab === key ? "page" : undefined} className={tab === key ? "active" : ""} onClick={() => selectTab(key)}>{label}</button>)}</nav>
 
     <section className="radar-board" hidden={tab !== "brain"}>
-      <div className="radar-board-head"><div><small>30币流动性池</small><b>先按Gate USDT永续成交额筛选30币，再轮询已完成5分钟K线；最多10币接受新鲜盘口执行验证</b></div><span>{time(regimes?.lastUpdatedAt)}</span></div>
+      <div className="radar-board-head"><div><small>市场状态地图</small><b>30个高流动性永续合约 · 完整5分钟K线状态分布</b></div><span>更新 {time(regimes?.lastUpdatedAt)}</span></div>
       <div className="regime-strip">{(["TREND", "RANGE", "COMPRESSION", "EXPANSION", "UNCERTAIN"] as RegimeKind[]).map((kind) => <article key={kind}><small>{regimeLabel(kind)}</small><strong>{regimes?.counts[kind] ?? 0}</strong></article>)}</div>
       <div className="radar-candidates">{regimes?.candidates.slice(0, 9).map((item) => <article key={`${item.id}:${item.channel}`}>
         <div><b>{item.symbol.replace("_", "/")}</b><small>{channelLabel(item.channel)}</small></div>
@@ -304,7 +328,7 @@ export default function Home() {
       </article>)}{!regimes?.candidates.length && <p>正在轮询30币完整5分钟K线；不依赖高频异动、逐笔成交或持仓量数据。</p>}</div>
     </section>
 
-    <section className="playbook-list" hidden={tab !== "brain"}><div className="section-heading"><div><h2>当前状态生成路径</h2><p>每个币独立生成多种多空参数组合；只有当前相似状态完整成本后仍为正的路径，才可复制进模拟账户。</p></div><span>{runtime?.strategyData?.approvedPolicyRoutes ?? 0} 条当前路线通过验证</span></div>{generatedRoutes.length ? <div className="strategy-grid">{generatedRoutes.slice(0, 24).map(({ candidate, policy }) => <article className="strategy-card" key={`${candidate.id}:${policy.mechanism}:${policy.side}`}><div className="strategy-title"><div><small>{candidate.symbol.replace("_", "/")} · {regimeLabel(candidate.regime)}</small><h3>{mechanismLabel(policy.mechanism)}</h3></div><span className={policy.approved ? "positive" : ""}>{policy.approved ? "可执行" : "影子研究"}</span></div><dl><div><dt>方向 / 持仓窗口</dt><dd>{policy.side === "LONG" ? "多" : "空"} · {policy.horizonMinutes}分钟</dd></div><div><dt>相似样本 / 胜率</dt><dd>{policy.samples}笔 · {num(policy.samples ? policy.wins / policy.samples * 100 : 0, 1)}%</dd></div><div><dt>保守成本后期望</dt><dd className={policy.conservativeNetReturnRate > 0 ? "positive" : "negative"}>{signed(policy.conservativeNetReturnRate * 100)}%</dd></div><div><dt>盈亏因子 / 目标到达</dt><dd>{num(policy.profitFactor, 2)} · {num(policy.targetReachRate * 100, 1)}%</dd></div></dl><small className="strategy-rule">{policy.reason}</small></article>)}</div> : <div className="empty">正在用完整5分钟K线生成第一批状态路径…</div>}</section>
+    <section className="playbook-list route-console" hidden={tab !== "brain"}><div className="section-heading"><div><small className="section-kicker">CURRENT ROUTES</small><h2>当前路线</h2><p>按当前状态直接比较方向、结构、成本和持仓时间；绿色路线才有资格进入模拟账户。</p></div><span>{runtime?.strategyData?.approvedPolicyRoutes ?? 0} 条通过</span></div>{generatedRoutes.length ? <div className="strategy-grid">{generatedRoutes.slice(0, 24).map(({ candidate, policy }) => <article className={`strategy-card ${policy.approved ? "route-approved" : ""}`} key={`${candidate.id}:${policy.mechanism}:${policy.side}`}><div className="strategy-title"><div><small>{candidate.symbol.replace("_", "/")} · {regimeLabel(candidate.regime)}</small><h3>{mechanismLabel(policy.mechanism)}</h3></div><span>{policy.approved ? "可执行" : "研究中"}</span></div><dl><div><dt>方向 / 持仓</dt><dd>{policy.side === "LONG" ? "做多" : "做空"} · {policy.horizonMinutes}分钟</dd></div><div><dt>样本 / 胜率</dt><dd>{policy.samples}笔 · {num(policy.samples ? policy.wins / policy.samples * 100 : 0, 1)}%</dd></div><div><dt>保守成本后期望</dt><dd className={policy.conservativeNetReturnRate > 0 ? "positive" : "negative"}>{signed(policy.conservativeNetReturnRate * 100)}%</dd></div><div><dt>目标到达 / 日机会</dt><dd>{num(policy.targetReachRate * 100, 1)}% · {num(policy.opportunityRatePerDay, 1)}</dd></div></dl><small className="strategy-rule">{policy.reason}</small></article>)}</div> : <div className="empty">正在用完整5分钟K线生成第一批状态路径…</div>}</section>
 
     <section className="shadow-log" hidden={tab !== "brain"}><div className="section-heading"><div><h2>有效影子</h2><p>路线、价格、结构、成本、深度和合约信息全部合格；只有这些结果参与启用。</p></div><span>{arena?.recentShadow.length ?? 0} 笔</span></div>{!arena?.recentShadow.length ? <div className="empty"><b>等待首批有效影子结果</b></div> : <div className="history-table">{arena.recentShadow.slice(0, 30).map((trade) => <ArenaTradeRecord key={trade.id} trade={trade} />)}</div>}</section>
     <section className="shadow-log" hidden={tab !== "brain"}><div className="section-heading"><div><h2>观察影子</h2><p>信号出现但尚不能真实进场，只保存阻断原因，不计算晋级盈亏。</p></div><span>{arena?.observationShadow.length ?? 0} 条</span></div><div className="transition-list">{arena?.observationShadow.slice(0, 20).map((item) => <article key={item.id}><div><b>{item.symbol.replace("_", "/")} · {item.strategyName}</b><small>{time(item.observedAt)}</small></div><p>{item.blocker}</p></article>)}</div></section>
@@ -333,8 +357,8 @@ export default function Home() {
       <Setting title="数据容错" detail={`累计短时失败 ${totalFeedFailures} 次 · 自动恢复 ${totalFeedRecoveries} 次 · 最大观测延迟 ${num(maxFeedLag / 1_000, 2)} 秒`} value={activeFeedSuspensions ? `${activeFeedSuspensions}币冻结` : "正常"} tone={activeFeedSuspensions ? "locked" : "online"}/>
       <Setting title="数据覆盖" detail={`按成交额筛选 ${runtime?.strategyData?.liquidMarkets ?? runtime?.limits.scanUniverse ?? 30} 个合约；已获得 ${runtime?.strategyData?.stableMarkets ?? 0} 个完整5分钟结构，其中 ${runtime?.strategyData?.adaptivePolicyMarkets ?? 0} 个已完成本地走查；新鲜盘口只负责最终可执行验证。`} value={`${runtime?.strategyData?.stableMarkets ?? 0}/30 完整K线`} tone="online"/>
       <Setting title="运行日志" detail="每5分钟保存一次策略频率、最新结果、持仓、权益、数据覆盖和LIVE状态；保留14天，供隔夜复盘。" value={time(runtime?.strategyData?.lastRuntimeLogAt)} tone={runtime?.strategyData?.logError ? "locked" : "online"}/>
-      <Setting title="页面数据" detail="交易后台按2秒循环运行；手机页面每15秒读取一次摘要。策略记录随权威检查点保存，不增加行情请求。" value="轻量" tone="online"/>
-      <Setting title="系统状态" detail="系统运行、页面连接和当前可开仓市场分别判断；手机页面延迟不会再显示为后台停单，个别币缺数据只隔离该币。" value={healthLabel} tone={pageAndBackendOperational && !error ? "online" : "locked"}/>
+      <Setting title="页面数据" detail="交易后台按2秒循环运行；手机页面每10秒读取轻量摘要，失败后3秒重试，重新打开页面或恢复网络时立即同步。" value="自动同步" tone="online"/>
+      <Setting title="系统状态" detail="只显示交易后台真实状态；普通手机网络波动会静默保留最近结果并自动重连，个别币缺数据只隔离该币。" value={healthLabel} tone={backendOperational ? "online" : "locked"}/>
       <button className="setting-row" type="button" disabled={paperResetBusy || liveEnabled} onClick={() => void resetPaperAccount()}><div><b>重置1000 U模拟资金</b><p>按最新可成交价结算当前模拟持仓，归档本轮账户后从1000 U重新开始；影子策略研究样本不会删除，实盘开启时禁止操作。</p></div><span className="setting-value locked">{paperResetBusy ? "处理中…" : "重置 ›"}</span></button>
       {paperResetError && <p className="form-error">{paperResetError}</p>}{paperResetNotice && <p className="form-success">{paperResetNotice}</p>}
       <p className="last-update">最近后台成功：{time(runtime?.lastSuccessAt)}{live?.lastSyncAt ? ` · 实盘核对：${time(live.lastSyncAt)}` : ""}</p>
