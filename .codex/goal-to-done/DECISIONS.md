@@ -1,3 +1,9 @@
+# Runtime-truth and LIVE-off presentation decision — 2026-09-11
+
+- A missing first runtime response is absence of evidence, not a 1,000 U account with zero trades and thirty ready markets. The page renders a connection state until a verified snapshot arrives, then preserves that snapshot during ordinary retryable phone failures.
+- LIVE off is the public privacy boundary: no public badge, navigation entry, real balance, real order or real execution panel is rendered. An authenticated owner still gets the minimum activation, tagged-order cleanup and credential controls required to manage the switch safely.
+- Settings contains simulation/system controls only. The owner-controlled LIVE switch and Gate maintenance stay in the authenticated LIVE center, and real account/order views appear only while LIVE is enabled.
+
 # V6 decision-console decision — 2026-09-11
 
 - Phone transport age is presentation noise, not trading authority. Once a verified snapshot exists, ordinary read failure is silent and automatically retried; only genuine MarketStream authority, protected-position or risk failures deserve a visible warning.
