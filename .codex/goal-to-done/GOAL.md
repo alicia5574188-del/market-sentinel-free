@@ -1,4 +1,4 @@
-# Active hotfix — restore the owner PAPER reset
+# Completed hotfix — restore the owner PAPER reset
 
 - Make the phone reset request use the exact confirmation token required by the authenticated backend route.
 - Preserve fresh-price settlement, cycle archival, all shadow evidence/history and LIVE-off protection; do not reset the account during deployment.

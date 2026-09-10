@@ -1,7 +1,8 @@
-# Active — 2026-09-10 PAPER reset confirmation hotfix
+# Done — 2026-09-10 PAPER reset confirmation hotfix
 
 - Confirmed the regression: the phone sent `confirm: "RESET"`, while the owner-only backend route has always required `confirm: "RESET_PAPER"`; every tap therefore returned `确认参数无效` before reaching account reset logic.
-- Correcting only the client confirmation token and adding a source-contract regression test. No account reset, position settlement, history deletion or LIVE change is part of deployment.
+- Corrected only the client confirmation token and added a source-contract regression test. Local verification passed 197 direct tests, 16 architecture/migration tests, TypeScript, ESLint, production build and whitespace validation.
+- Production commit `50690deac6e871f4ea103002e994da509abb1071` passed GitHub Actions run #648 and the advancing health gate. Cloudflare version `1e762599-5254-4c35-a43a-b2694113e2b4`; LIVE remained explicitly OFF. Deployment did not invoke reset, settle positions or delete history.
 
 # Done — 2026-09-10 shadow-authoritative execution correction
 
