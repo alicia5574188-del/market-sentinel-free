@@ -1,3 +1,10 @@
+# Active goal — page delay must never impersonate a backend trading halt
+
+- Separate the phone's `/api/runtime` transport freshness from the MarketStream authority's own fresh/stale and protection state.
+- A delayed phone summary may show that the page is delayed, but must never claim the simulated account stopped opening orders when the last backend authority state is operational.
+- Keep genuine authority staleness, protected-position data loss, risk protection and per-symbol executable-book checks fail closed. Missing one of thirty completed-candle markets must remain isolated to that market.
+- Add regression coverage, deploy through `main`, verify advancing production health and keep LIVE explicitly OFF.
+
 # Completed goal — correct countertrend OR activation
 
 - Treat the normal route's latest three independent effective-shadow losses OR its latest six independent effective-shadow total loss as alternative countertrend evidence.

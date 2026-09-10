@@ -1,3 +1,10 @@
+# Active — 2026-09-10 page-delay/backend-halt separation
+
+- Screenshot showed 29/30 completed-candle coverage and a recent backend success, while the phone simultaneously displayed `页面数据延迟` and the contradictory headline `模拟账户暂停新开仓`.
+- Root cause confirmed in the client: the same `responseFresh` flag was used both for page transport status and backend authority status. The public page is read-only, so this could not stop MarketStream; it was a false halt message.
+- Implemented an explicit last-known backend authority predicate. A delayed phone summary now says the trading backend continues independently; only the backend's own unhealthy state can produce the new-entry halt headline.
+- Local verification passed 195 direct tests, 15 architecture/migration tests, production build, TypeScript, ESLint and whitespace checks. GitHub/Cloudflare deployment and production acceptance remain pending.
+
 # Done — 2026-09-10 countertrend OR activation correction
 
 - User clarified the intended reverse evidence is symmetric with the existing rolling rules: latest three independent normal losses OR a negative latest-six normal total, not six trades containing three stops.

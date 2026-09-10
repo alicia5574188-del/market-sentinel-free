@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { runtimeAuthorityOperational, runtimeNotice, runtimeReady, runtimeStatusLabel, type RuntimeHealthShape } from "../lib/runtime-health.ts";
+import { runtimeAuthorityOperational, runtimeBackendOperational, runtimeNotice, runtimeReady, runtimeStatusLabel,
+  type RuntimeHealthShape } from "../lib/runtime-health.ts";
 
 const symbols = Array.from({ length: 10 }, (_, index) => `S${index}`);
 const live = (): RuntimeHealthShape => ({ state: "LIVE", stale: false, authorityReady: true, lastError: null,
@@ -38,4 +39,12 @@ test("operator status reserves recovery wording for genuine authority failure", 
   const warming = { ...live(), state: "WARMING", realtimeReadiness: { capacity: 10, actionableMarkets: 0, protectedMarketsReady: true } };
   assert.equal(runtimeAuthorityOperational(warming), true);
   assert.equal(runtimeStatusLabel(warming), "后台运行中 · 数据预热");
+});
+
+test("phone transport delay never changes the last known backend trading authority", () => {
+  assert.equal(runtimeBackendOperational(live()), true);
+  assert.equal(runtimeAuthorityOperational(live(), false), false, "the page may truthfully report delayed transport");
+  assert.equal(runtimeBackendOperational(live()), true, "a read-only page delay cannot stop or describe backend order authority");
+  assert.equal(runtimeBackendOperational({ ...live(), stale: true }), false);
+  assert.equal(runtimeBackendOperational({ ...live(), state: "RECONNECTING" }), false);
 });

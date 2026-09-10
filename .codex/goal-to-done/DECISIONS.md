@@ -319,6 +319,11 @@
 - The exact normal variant's latest six independent effective-shadow paths are sufficient reverse evidence when they contain at least three stops, normal gross and net totals are negative, and replaying the opposite direction with swapped stop/target remains positive after complete modeled costs.
 - Passing that proof enables the countertrend route for the next new executable signal. A second three-win or positive-six reverse-shadow promotion window is redundant and forbidden.
 - Normal and reverse shadows continue after activation. Current-signal geometry, cost, depth, freshness, Gate lot sizing and portfolio limits still apply; reverse PAPER results alone control later reverse demotion.
+# 2026-09-10 — Phone transport age is never trading authority
+
+- `/api/runtime` freshness describes only whether the phone has received a recent summary. It may alter the page status label and warning color, but it cannot determine or describe MarketStream's order authority.
+- MarketStream's own `state`, `stale`, `authorityReady` and protected-market readiness remain the backend truth. A genuine backend failure may still stop new entries; 29/30 completed-candle coverage or a delayed phone poll may not stop the other usable markets.
+
 # 2026-09-10 — Countertrend evidence uses alternative rolling windows
 
 - A countertrend candidate may qualify from either the exact normal variant's latest three independent losses or a negative total across its latest six independent results.

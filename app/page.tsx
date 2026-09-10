@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { directionalReturnRate, marginReturnRate, unrealizedPnl } from "../lib/position-metrics.ts";
-import { runtimeAuthorityOperational, runtimeNotice, runtimeStatusLabel } from "../lib/runtime-health.ts";
+import { runtimeAuthorityOperational, runtimeBackendOperational, runtimeNotice, runtimeStatusLabel } from "../lib/runtime-health.ts";
 
 type Side = "LONG" | "SHORT";
 type MarketState = "BREAKOUT" | "REVERSAL" | "RANGE";
@@ -212,7 +212,8 @@ export default function Home() {
   };
 
   const responseFresh = runtime != null && clock - receivedAt < RUNTIME_DISPLAY_TTL_MS && clock - runtime.generatedAt < RUNTIME_DISPLAY_TTL_MS;
-  const authorityOperational = runtimeAuthorityOperational(runtime, responseFresh);
+  const backendOperational = runtimeBackendOperational(runtime);
+  const pageAndBackendOperational = runtimeAuthorityOperational(runtime, responseFresh);
   const healthLabel = runtimeStatusLabel(runtime, responseFresh, Boolean(error));
   const healthNotice = runtimeNotice(runtime);
   const radarDelayed = runtime?.radar?.lastError != null
@@ -245,13 +246,14 @@ export default function Home() {
   const totalFeedFailures = feedDiagnostics.reduce((sum, feed) => sum + (feed?.totalFailures ?? 0), 0);
   const totalFeedRecoveries = feedDiagnostics.reduce((sum, feed) => sum + (feed?.recoveries ?? 0), 0);
   const maxFeedLag = feedDiagnostics.reduce((max, feed) => Math.max(max, feed?.maxObservedLagMs ?? 0), 0);
-  const headline = !authorityOperational ? "行情正在恢复，模拟账户暂停新开仓" : portfolioOpen.length
-    ? `1000 U模拟账户持有 ${portfolioOpen.length} 笔订单` : openShadow.length ? "策略池正在筛选下一笔模拟订单" : "识别全市场状态，等待策略触发";
+  const headline = !backendOperational ? "后台行情正在恢复，模拟账户暂停新开仓" : !responseFresh
+    ? "页面摘要延迟，交易后台继续独立运行" : portfolioOpen.length
+      ? `1000 U模拟账户持有 ${portfolioOpen.length} 笔订单` : openShadow.length ? "策略池正在筛选下一笔模拟订单" : "识别全市场状态，等待策略触发";
 
   return <main>
     <header className="topbar">
       <div className="brand"><span className="brand-mark">态</span><div><p>市场状态竞技场</p><small>Gate 全市场短线系统</small></div></div>
-      <div role="status" className={`health ${authorityOperational && !error ? "" : "bad"}`}><span />{healthLabel}</div>
+      <div role="status" className={`health ${pageAndBackendOperational && !error ? "" : "bad"}`}><span />{healthLabel}</div>
     </header>
 
     {tab === "brain" && <>
@@ -309,7 +311,7 @@ export default function Home() {
       <Setting title="数据覆盖" detail={`按成交额筛选 ${runtime?.strategyData?.liquidMarkets ?? runtime?.limits.scanUniverse ?? 30} 个合约；已获得 ${runtime?.strategyData?.stableMarkets ?? 0} 个完整5分钟结构，约5分钟轮询一遍；新鲜盘口只负责最终可执行验证。`} value={`${runtime?.strategyData?.stableMarkets ?? 0}/30 完整K线`} tone="online"/>
       <Setting title="运行日志" detail="每5分钟保存一次策略频率、最新结果、持仓、权益、数据覆盖和LIVE状态；保留14天，供隔夜复盘。" value={time(runtime?.strategyData?.lastRuntimeLogAt)} tone={runtime?.strategyData?.logError ? "locked" : "online"}/>
       <Setting title="页面数据" detail="交易后台按2秒循环运行；手机页面每15秒读取一次摘要。策略记录随权威检查点保存，不增加行情请求。" value="轻量" tone="online"/>
-      <Setting title="系统状态" detail="系统运行、页面连接和当前可开仓市场分别判断；个别币预热或暂时没有机会不再误报为全局恢复。" value={healthLabel} tone={authorityOperational && !error ? "online" : "locked"}/>
+      <Setting title="系统状态" detail="系统运行、页面连接和当前可开仓市场分别判断；手机页面延迟不会再显示为后台停单，个别币缺数据只隔离该币。" value={healthLabel} tone={pageAndBackendOperational && !error ? "online" : "locked"}/>
       <button className="setting-row" type="button" disabled={paperResetBusy || liveEnabled} onClick={() => void resetPaperAccount()}><div><b>重置1000 U模拟资金</b><p>按最新可成交价结算当前模拟持仓，归档本轮账户后从1000 U重新开始；影子策略研究样本不会删除，实盘开启时禁止操作。</p></div><span className="setting-value locked">{paperResetBusy ? "处理中…" : "重置 ›"}</span></button>
       {paperResetError && <p className="form-error">{paperResetError}</p>}{paperResetNotice && <p className="form-success">{paperResetNotice}</p>}
       <p className="last-update">最近后台成功：{time(runtime?.lastSuccessAt)}{live?.lastSyncAt ? ` · 实盘核对：${time(live.lastSyncAt)}` : ""}</p>

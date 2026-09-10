@@ -10,9 +10,13 @@ export type RuntimeHealthShape = {
 
 const OPERATIONAL_STATES = new Set(["LIVE", "DEGRADED", "WARMING"]);
 
-export function runtimeAuthorityOperational(runtime: RuntimeHealthShape | null, transportFresh = true) {
-  return Boolean(runtime && transportFresh && runtime.stale === false && runtime.authorityReady === true
+export function runtimeBackendOperational(runtime: RuntimeHealthShape | null) {
+  return Boolean(runtime && runtime.stale === false && runtime.authorityReady === true
     && OPERATIONAL_STATES.has(runtime.state ?? ""));
+}
+
+export function runtimeAuthorityOperational(runtime: RuntimeHealthShape | null, transportFresh = true) {
+  return transportFresh && runtimeBackendOperational(runtime);
 }
 
 export function runtimeReady(runtime: RuntimeHealthShape | null, transportFresh = true) {
