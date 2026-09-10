@@ -1,3 +1,9 @@
+# Active — 2026-09-10 countertrend OR activation correction
+
+- User clarified the intended reverse evidence is symmetric with the existing rolling rules: latest three independent normal losses OR a negative latest-six normal total, not six trades containing three stops.
+- Confirmed production implemented only the six-trade path and additionally required three stop outcomes. Replaced it with the intended three-loss OR negative-six predicate, preserved the fully costed reverse-profit proof, and exposed honest 3/3 and n/6 sample counts.
+- Local verification passed 194 direct tests, 15 architecture/migration tests, production build, TypeScript, ESLint and whitespace checks. GitHub/Cloudflare deployment and production acceptance remain pending.
+
 # Done — 2026-09-10 direct countertrend activation
 
 - Confirmed the redundant gate: six normal effective shadows already had to prove at least three stops, negative normal gross/net, and positive fully modeled reverse net; the implementation then opened separate reverse shadows and demanded another three wins or positive six before account eligibility.

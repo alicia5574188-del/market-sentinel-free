@@ -1115,7 +1115,7 @@ jobs:
             .runtime.strategyArena.rules.minimumPortfolioRiskUsdt == 10 and
             .runtime.strategyArena.rules.empiricalCostFloorRate == 0.0014 and
             .runtime.strategyArena.rules.reverseTriggerWindow == 6 and
-            .runtime.strategyArena.rules.reverseStopMinimum == 3 and
+            .runtime.strategyArena.rules.reverseLossStreak == 3 and
             .runtime.strategyArena.rules.reverseMaxBreakEvenRate == 0.85 and
             .runtime.strategyArena.rules.normalShadowAlwaysOn == true and
             .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 10 and

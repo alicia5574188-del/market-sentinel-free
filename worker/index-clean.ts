@@ -19,7 +19,7 @@ import { completedCandleStrategyCandidate, initialMarketRegimes, marketRegimeSum
   type MarketRegimeCandidate, type MarketRegimeState, type ResidentCandleStructure } from "../lib/market-regime.ts";
 import { advanceStrategyArena, applyStrategySleepStates, arenaSummary, initialStrategyArena, normalizeStrategyArena, observeStrategyArena,
   ARENA_FRICTION_RATE, MIN_PORTFOLIO_TRADE_RISK_USDT, PORTFOLIO_REALTIME_CAPACITY, resetStrategyArenaAccount,
-  REVERSE_MAX_BREAK_EVEN_RATE, REVERSE_STOP_MINIMUM, REVERSE_TRIGGER_WINDOW,
+  REVERSE_LOSS_STREAK, REVERSE_MAX_BREAK_EVEN_RATE, REVERSE_TRIGGER_WINDOW,
   STRATEGY_INITIAL_EQUITY, type StrategyArenaState } from "../lib/strategy-arena.ts";
 
 const LOOP_MS = 2_000;
@@ -1802,7 +1802,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             marginCap: 0.30,
             maxNotionalMultiple: 4,
             reverseTriggerWindow: REVERSE_TRIGGER_WINDOW,
-            reverseStopMinimum: REVERSE_STOP_MINIMUM,
+            reverseLossStreak: REVERSE_LOSS_STREAK,
             reverseMaxBreakEvenRate: REVERSE_MAX_BREAK_EVEN_RATE,
             normalShadowAlwaysOn: true,
           },

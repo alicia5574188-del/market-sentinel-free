@@ -21,7 +21,7 @@ export const PORTFOLIO_REALTIME_CAPACITY = 10;
 export const ARENA_MAX_OPEN = 240;
 export const ARENA_HISTORY_LIMIT = 240;
 export const REVERSE_TRIGGER_WINDOW = 6;
-export const REVERSE_STOP_MINIMUM = 3;
+export const REVERSE_LOSS_STREAK = 3;
 export const REVERSE_MAX_BREAK_EVEN_RATE = 0.85;
 export const FAST_TARGET_NET_RR = 1.35;
 export const STRUCTURE_TARGET_NET_RR = 1.6;
@@ -151,7 +151,7 @@ function freshStrategy(definition: StrategyDefinition): StrategyScore {
     reverseEnabled: false, reverseRecentResults: [], reversePaperResults: [], reverseQualificationResults: [], reverseShadowResolved: 0,
     reverseShadowWins: 0, reverseShadowNetReturnRate: 0, reversePaperResolved: 0, reversePaperWins: 0,
     reversePaperNetReturnRate: 0, reverseDemotedAt: null, reverseLastTransitionAt: null,
-    reverseLastTransitionReason: "反向路线尚未满足最近6笔逆向经济性验证" };
+    reverseLastTransitionReason: "反向路线尚未满足3连亏或最近6笔亏损的逆向经济性验证" };
 }
 
 export function initialStrategyArena(now = Date.now()): StrategyArenaState {
@@ -505,22 +505,32 @@ const parseAttribution = (value: string) => value.startsWith("reverse|")
   : { strategyId: value, orientation: "NORMAL" as const };
 
 function reverseEligibility(state: StrategyArenaState, score: StrategyScore) {
-  const normal = independentShadowTrades(state, score.id, "NORMAL").slice(-REVERSE_TRIGGER_WINDOW);
-  if (normal.length < REVERSE_TRIGGER_WINDOW) return null;
-  if (score.reverseDemotedAt != null && (normal.at(-1)?.closedAt ?? 0) <= score.reverseDemotedAt) return null;
-  const stops = normal.filter((trade) => trade.outcome === "STOP").length;
-  const gross = sum(normal.map((trade) => trade.grossReturnRate ?? 0));
-  const net = sum(normal.map((trade) => trade.netReturnRate ?? 0));
-  const results = normal.map((trade) => {
+  const normal = independentShadowTrades(state, score.id, "NORMAL")
+    .filter((trade) => (trade.closedAt ?? trade.openedAt) > (score.reverseDemotedAt ?? 0));
+  const reversedResults = (window: typeof normal) => window.map((trade) => {
     const netReturnRate = -(trade.grossReturnRate ?? 0) - trade.context.modeledCostRate
       - (trade.context.fundingCostRate ?? 0) - trade.context.spreadRate;
     return { eventId: trade.eventId, symbol: trade.symbol, regime: trade.context.regime, channel: trade.context.channel,
       netReturnRate, netPnl: trade.notional * netReturnRate, won: netReturnRate > 0,
       resolvedAt: trade.closedAt ?? trade.openedAt } satisfies StrategyResult;
   });
-  const modeledReverseNet = sum(results.map((row) => row.netReturnRate));
-  return stops >= REVERSE_STOP_MINIMUM && gross < 0 && net < 0 && modeledReverseNet > 0
-    ? { events: normal.length, stops, modeledReverseNet, results } : null;
+  const candidates = [
+    { window: normal.slice(-REVERSE_LOSS_STREAK), required: REVERSE_LOSS_STREAK,
+      qualifies: (rows: typeof normal) => rows.every((trade) => (trade.netReturnRate ?? 0) < 0)
+        && (rows.at(-1)?.closedAt ?? 0) - (rows[0]?.closedAt ?? 0) <= PROMOTION_THREE_MAX_SPAN_MS,
+      reason: `最新${REVERSE_LOSS_STREAK}笔正常影子连续亏损` },
+    { window: normal.slice(-REVERSE_TRIGGER_WINDOW), required: REVERSE_TRIGGER_WINDOW,
+      qualifies: (rows: typeof normal) => sum(rows.map((trade) => trade.netReturnRate ?? 0)) < 0
+        && (rows.at(-1)?.closedAt ?? 0) - (rows[0]?.closedAt ?? 0) <= PROMOTION_SIX_MAX_SPAN_MS,
+      reason: `最新${REVERSE_TRIGGER_WINDOW}笔正常影子成本后总收益为负` },
+  ];
+  for (const candidate of candidates) {
+    if (candidate.window.length !== candidate.required || !candidate.qualifies(candidate.window)) continue;
+    const results = reversedResults(candidate.window);
+    const modeledReverseNet = sum(results.map((row) => row.netReturnRate));
+    if (modeledReverseNet > 0) return { events: candidate.window.length, modeledReverseNet, results, reason: candidate.reason };
+  }
+  return null;
 }
 
 function enableReverseFromNormalProof(state: StrategyArenaState, score: StrategyScore, now: number) {
@@ -530,7 +540,7 @@ function enableReverseFromNormalProof(state: StrategyArenaState, score: Strategy
   if (score.reverseEnabled) return;
   score.reverseEnabled = true;
   score.reverseLastTransitionAt = now;
-  score.reverseLastTransitionReason = `最近${reverseCase.events}笔正常影子含${reverseCase.stops}次止损，反向成本后测算${(reverseCase.modeledReverseNet * 100).toFixed(2)}%；反向路线已直接启用，只参与下一次新信号`;
+  score.reverseLastTransitionReason = `${reverseCase.reason}，反向成本后测算${(reverseCase.modeledReverseNet * 100).toFixed(2)}%；反向路线已直接启用，只参与下一次新信号`;
 }
 
 function recordClosed(state: StrategyArenaState, trade: ArenaTrade) {
@@ -987,7 +997,7 @@ export function arenaSummary(state: StrategyArenaState) {
       portfolioRiskCap: PORTFOLIO_RISK_CAP, correlatedRiskCap: CORRELATED_DIRECTION_RISK_CAP,
       marginCap: PORTFOLIO_MARGIN_CAP, maxNotionalMultiple: 4, realtimeCapacity: PORTFOLIO_REALTIME_CAPACITY,
       minimumPortfolioRiskUsdt: MIN_PORTFOLIO_TRADE_RISK_USDT, empiricalCostFloorRate: ARENA_FRICTION_RATE,
-      reverseTriggerWindow: REVERSE_TRIGGER_WINDOW, reverseStopMinimum: REVERSE_STOP_MINIMUM,
+      reverseTriggerWindow: REVERSE_TRIGGER_WINDOW, reverseLossStreak: REVERSE_LOSS_STREAK,
       reverseMaxBreakEvenRate: REVERSE_MAX_BREAK_EVEN_RATE,
       normalShadowAlwaysOn: true, fastTargetNetRewardRisk: FAST_TARGET_NET_RR,
       structureTargetNetRewardRisk: STRUCTURE_TARGET_NET_RR } };

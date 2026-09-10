@@ -31,7 +31,7 @@ The catalog contains 48 bounded strategy variants: 12 interpretable playbooks ×
 All variants keep running in shadow. Incomplete routes are observation shadows and never score. Only signals that pass fresh executable bid/ask, unmissed entry location, structure/noise stop, full-cost target, depth, liquidity and Gate contract checks become effective shadows.
 
 - Normal effective shadows never stop, including after a countertrend route activates. A countertrend route is a separate competitor, not a replacement or a retroactive trade.
-- Countertrend activation uses the exact normal variant's latest six independent effective shadows when they contain at least three hard stops, both gross and after-cost totals are negative, and replaying the opposite direction remains positive after complete modeled costs. That six-trade proof enables the countertrend route immediately for the next valid signal; it does not wait for a second reverse-shadow promotion window. A current reverse geometry requiring more than an 85% break-even win rate is still rejected.
+- Countertrend activation uses either the exact normal variant's latest three independent effective-shadow losses or a negative after-cost total across its latest six. Replaying the same selected window in the opposite direction must remain positive after complete modeled costs. That proof enables the countertrend route immediately for the next valid signal; it does not wait for a second reverse-shadow promotion window. A current reverse geometry requiring more than an 85% break-even win rate is still rejected.
 - The 1,000 U account chooses the strongest after-cost direction for a symbol/event and never opens the normal and countertrend routes against each other.
 - Frozen targets are capped by the exit profile's after-cost reward/risk and prior reachable excursion, but never relaxed below the 1.2 net reward/risk floor. The original structural target remains recorded for diagnosis.
 - The latest three independent effective shadows all winning within 24 hours, or the latest six producing positive after-cost total return within 72 hours, activates only the exact execution variant that produced those results.
@@ -57,7 +57,7 @@ The owner-only reset closes open simulated positions at fresh executable prices,
 
 ## LIVE boundary
 
-- `SYSTEM_VERSION=adaptive-target-countertrend-v4.4` preserves compatible normal shadow evidence, uses attainable frozen targets, and validates countertrend routes independently before they can enter the 1,000 U account.
+- `SYSTEM_VERSION=adaptive-target-countertrend-v4.4` preserves compatible normal shadow evidence, uses attainable frozen targets, and activates fully costed countertrend proof from either a three-loss streak or a negative six-result window before the next valid 1,000 U account signal.
 - Gate credentials and LIVE reconciliation state are preserved. Deployment never turns LIVE on.
 - LIVE can be enabled only by the authenticated owner. It mirrors only new simulated-account orders opened after enablement and never backfills an existing simulated position.
 - Direction, structural stop, target, proportional notional and modeled cost come from the exact simulated-account order. The real order is rechecked for current price geometry, integer Gate lot size, margin, account-wide risk, correlated-direction risk and after-cost economics.

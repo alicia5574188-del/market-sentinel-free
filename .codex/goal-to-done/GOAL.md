@@ -1,3 +1,10 @@
+# Active goal — correct countertrend OR activation
+
+- Treat the normal route's latest three independent effective-shadow losses OR its latest six independent effective-shadow total loss as alternative countertrend evidence.
+- For the qualifying window, require the fully costed reversed counterfactual to remain positive, then enable the countertrend for the next new valid signal without another promotion stage.
+- Reuse compatible pre-release V4.4 evidence, show the actual sample count instead of implying that a partial window already contains six trades, and keep both shadow directions running.
+- Preserve current execution, cost, Gate contract, portfolio-risk, demotion and owner-controlled LIVE-OFF protections; deploy only after complete verification.
+
 # Completed goal — direct countertrend activation from six-trade proof
 
 - When an exact normal variant's latest six independent effective shadows are net losing and contain at least three stops, use those same realized paths to calculate the fully costed reversed result.

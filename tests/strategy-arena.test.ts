@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { advanceStrategyArena, applyStrategySleepStates, ARENA_FRICTION_RATE, initialStrategyArena,
-  observeStrategyArena, PAPER_DEMOTION_LOSSES, PROMOTION_WIN_STREAK, resetStrategyArenaAccount,
+  normalizeStrategyArena, observeStrategyArena, PAPER_DEMOTION_LOSSES, PROMOTION_WIN_STREAK, resetStrategyArenaAccount,
   STRATEGY_CATALOG, type ArenaObservation, type StrategyArenaState } from "../lib/strategy-arena.ts";
 
 const strategyId = "anomaly_follow:confirm:fast";
@@ -281,18 +281,19 @@ test("V4.4 freezes a materially closer target while retaining full-cost economic
   assert.equal(trade.context.targetEvidenceEvents, 0);
 });
 
-test("six losing normal shadows directly activate the profitable countertrend for the next signal", () => {
+test("three consecutive normal shadow losses directly activate the profitable countertrend", () => {
   let state = initialStrategyArena(1);
   let eventStart = 2_000;
   let now = 1_000_000;
-  for (let index = 0; index < 6; index += 1) {
+  for (let index = 0; index < 3; index += 1) {
     const opened = openForStrategy(state, strategyId, eventStart, now);
     state = settleEvent(opened.state, opened.now + 10_000, false);
     eventStart = opened.event + 1; now += 20_000;
   }
-  assert.equal(state.strategies[strategyId].reverseEnabled, true);
-  assert.equal(state.strategies[strategyId].reverseQualificationResults.length, 6,
-    "the same six normal paths are the fully costed reverse qualification sample");
+  assert.equal(state.strategies[strategyId].reverseEnabled, true,
+    JSON.stringify(state.strategies[strategyId].recentResults));
+  assert.equal(state.strategies[strategyId].reverseQualificationResults.length, 3,
+    "the same three losing normal paths are the fully costed reverse qualification sample");
   assert.equal(state.strategies[strategyId].reverseRecentResults.length, 0,
     "direct activation must not relabel modeled paths as completed reverse shadows");
 
@@ -304,4 +305,32 @@ test("six losing normal shadows directly activate the profitable countertrend fo
   assert.equal(Object.keys(next.portfolioOpen).length, 1, "one account selects one direction and never self-hedges");
   assert.equal(next.portfolioOpen.BTC_USDT.orientation, "REVERSE");
   assert.equal(next.portfolioOpen.BTC_USDT.side, "SHORT");
+});
+
+test("a negative six-result normal window activates reverse without a three-loss streak", () => {
+  let state = initialStrategyArena(1);
+  let eventStart = 3_000;
+  let now = 2_000_000;
+  for (const winner of [false, false, true, false, false, true]) {
+    const opened = openForStrategy(state, strategyId, eventStart, now);
+    state = settleEvent(opened.state, opened.now + 10_000, winner);
+    eventStart = opened.event + 1; now += 20_000;
+  }
+  const trades = state.recentShadow.filter((trade) => trade.strategyId === strategyId).slice(-6);
+  assert.equal(trades.length, 6);
+  for (let index = 0; index < trades.length; index += 1) {
+    const trade = trades[index];
+    const grossReturnRate = index === 2 || index === 5 ? 0.002 : -0.01;
+    const cost = trade.context.modeledCostRate + (trade.context.fundingCostRate ?? 0) + trade.context.spreadRate;
+    trade.grossReturnRate = grossReturnRate;
+    trade.netReturnRate = grossReturnRate - cost;
+    trade.netPnl = trade.notional * trade.netReturnRate;
+    const result = state.strategies[strategyId].recentResults.find((row) => row.eventId === trade.eventId);
+    if (result) { result.netReturnRate = trade.netReturnRate; result.netPnl = trade.netPnl; result.won = trade.netReturnRate > 0; }
+  }
+  state = normalizeStrategyArena(state, now);
+  assert.equal(state.strategies[strategyId].reverseEnabled, true,
+    JSON.stringify(state.strategies[strategyId].recentResults));
+  assert.equal(state.strategies[strategyId].reverseQualificationResults.length, 6);
+  assert.match(state.strategies[strategyId].reverseLastTransitionReason, /最新6笔正常影子成本后总收益为负/);
 });
