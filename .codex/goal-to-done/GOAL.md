@@ -1,3 +1,13 @@
+# Active goal — close the remaining V11 opportunity gaps with two verified original strategies
+
+- Production evidence must identify why a volatile three-hour window produced no new PAPER entry after two correctly exited positions; distinguish missing route geometry from data, execution, cost, strategy-authority and portfolio blockers.
+- Research persistent-direction, low-volatility/rotation and multi-scale phase mechanisms, but add exactly two completed-five-minute mechanisms only if their own after-cost chronological evidence passes. Rejected trend, compression or quiet-range candidates must not enter production merely to increase the catalog.
+- The accepted mechanisms must add useful non-overlapping opportunities beyond the existing `竭转` geometry and retain distinct identities, parameters, exits and route blockers in PAPER.
+- A new mechanism may receive initial PAPER authority only after causal next-bar replay over the current liquid Gate universe is positive after 0.14% round-trip friction and 0.025% adverse entry in both chronological train and held-out segments, with useful event coverage. A failed candidate remains research-only and does not count as delivered coverage.
+- Preserve the existing 1,000 U account, positions, history, compound sizing, uncapped profit-arm exits, fresh bid/ask and Gate contract/depth/economic gates, two-second protected-market loop, data-recovery architecture, owner credentials and proportional LIVE copying. Do not reset the account and keep LIVE explicitly OFF.
+- Update backend route checks and the operator page so the two new mechanisms, their intended side, reason and exact blocker are visible without adding raw debug noise. Add no new market request, high-frequency dependency, D1 table or per-snapshot write.
+- Verify research acceptance, direct tests, all-regime tests, build, architecture/migrations, TypeScript, ESLint, whitespace and Cloudflare dry-run; release only through reviewed GitHub `main`, then prove advancing production health, preserved account state and LIVE requested/operational both OFF.
+
 # Completed correction — keep execution authority advancing through Gate degradation
 
 - A failed staggered subset may not be labeled as all ten resident markets unavailable or demote a recently advancing authority. Only actual authority expiry or a failed protected position/route may become a trading block.

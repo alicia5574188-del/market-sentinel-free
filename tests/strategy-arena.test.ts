@@ -10,7 +10,7 @@ function observation(now = 2_000_000): ArenaObservation {
       trendEfficiency: 0.7, volatilityRatio: 1.5, rangePosition: 0.9, volume24hUsd: 2_000_000_000,
       fundingRate: 0, openInterestChangeRate: 0, confirmations: 2, firstSeenAt: now, observedAt: now,
       anomalyKind: null, adaptivePolicy: null, extremeSequence: null, dominantEnvironment: "EXHAUSTION",
-      allRegimeRoutes: [{ version: 2, strategyId: "exhaustion_turn", strategyName: "竭转", environment: "EXHAUSTION",
+      allRegimeRoutes: [{ version: 3, strategyId: "exhaustion_turn", strategyName: "竭转", environment: "EXHAUSTION",
         side: "SHORT", score: 90, triggerPrice: 100, invalidationPrice: 102, profitArmPrice: 97,
         maxHoldMinutes: 120, noProgressMinutes: 35, structureId: `turn:${now}`, reason: "推进枯竭" }] },
     midpoint: 100, bestBid: 99.99, bestAsk: 100.01, alignedFlow: 0, minuteNoiseRate: 0.002,
@@ -24,14 +24,16 @@ function observation(now = 2_000_000): ArenaObservation {
 const result = (index: number, value: number): StrategyResult => ({ eventId: `event:${index}`, symbol: `S${index}_USDT`,
   regime: "TREND", channel: "TREND", netReturnRate: value, netPnl: value * 1_000, won: value > 0, resolvedAt: index * 1_000 });
 
-test("V11 owns four original environment strategies and starts only validated routes", () => {
-  assert.deepEqual(STRATEGY_CATALOG.map((row) => row.name), ["势承", "衡返", "压跃", "竭转"]);
+test("V12 owns six original strategies and starts only validated routes", () => {
+  assert.deepEqual(STRATEGY_CATALOG.map((row) => row.name), ["势承", "衡返", "压跃", "竭转", "脉折", "缓续"]);
   const state = initialStrategyArena(1);
-  assert.equal(state.version, 11);
+  assert.equal(state.version, 12);
   assert.equal(state.strategies.momentum_carry.enabled, true);
   assert.equal(state.strategies.exhaustion_turn.enabled, true);
   assert.equal(state.strategies.balance_return.enabled, false);
   assert.equal(state.strategies.pressure_release.enabled, false);
+  assert.equal(state.strategies.pulse_fold.enabled, true);
+  assert.equal(state.strategies.slow_carry.enabled, true);
 });
 
 test("crowded apparent exhaustion routes through 势承 and opens paired shadows plus one account trade", () => {
@@ -49,10 +51,48 @@ test("neutral isolated exhaustion routes through 竭转", () => {
   assert.equal(state.portfolioOpen.BTC_USDT?.side, "SHORT");
 });
 
+test("脉折 owns both neutral reversal and crowded continuation decisions", () => {
+  const neutral = observation();
+  neutral.candidate.allRegimeRoutes = [{ ...neutral.candidate.allRegimeRoutes![0], strategyId: "pulse_fold",
+    strategyName: "脉折", structureId: "pulse:neutral" }];
+  neutral.globalBreadth = 0.5; neutral.globalMedianMove = 0.0002;
+  let state = observeStrategyArena({ state: initialStrategyArena(1), observation: neutral });
+  assert.equal(state.portfolioOpen.BTC_USDT?.strategyId, "pulse_fold");
+  assert.equal(state.portfolioOpen.BTC_USDT?.side, "SHORT");
+
+  const crowded = observation(3_000_000);
+  crowded.candidate.allRegimeRoutes = [{ ...crowded.candidate.allRegimeRoutes![0], strategyId: "pulse_fold",
+    strategyName: "脉折", structureId: "pulse:crowded", continuationInvalidationPrice: 98,
+    continuationProfitArmPrice: 103.6, continuationMaxHoldMinutes: 200, continuationNoProgressMinutes: 50 }];
+  state = observeStrategyArena({ state: initialStrategyArena(1), observation: crowded });
+  assert.equal(state.portfolioOpen.BTC_USDT?.strategyId, "pulse_fold");
+  assert.equal(state.portfolioOpen.BTC_USDT?.side, "LONG");
+  assert.equal(state.portfolioOpen.BTC_USDT?.stopPrice, 98);
+  assert.equal(state.portfolioOpen.BTC_USDT?.context.maxHoldMs, 200 * 60_000);
+});
+
+test("缓续 executes only when broad-market crowding confirms the original direction", () => {
+  const neutral = observation();
+  neutral.candidate.allRegimeRoutes = [{ ...neutral.candidate.allRegimeRoutes![0], strategyId: "slow_carry",
+    strategyName: "缓续", structureId: "slow:neutral", continuationInvalidationPrice: 98,
+    continuationProfitArmPrice: 103.6, continuationMaxHoldMinutes: 210, continuationNoProgressMinutes: 50 }];
+  neutral.globalBreadth = 0.5; neutral.globalMedianMove = 0.0002;
+  let state = observeStrategyArena({ state: initialStrategyArena(1), observation: neutral });
+  assert.equal(state.portfolioOpen.BTC_USDT, undefined);
+
+  const crowded = observation(3_000_000);
+  crowded.candidate.allRegimeRoutes = [{ ...crowded.candidate.allRegimeRoutes![0], strategyId: "slow_carry",
+    strategyName: "缓续", structureId: "slow:crowded", continuationInvalidationPrice: 98,
+    continuationProfitArmPrice: 103.6, continuationMaxHoldMinutes: 210, continuationNoProgressMinutes: 50 }];
+  state = observeStrategyArena({ state: initialStrategyArena(1), observation: crowded });
+  assert.equal(state.portfolioOpen.BTC_USDT?.strategyId, "slow_carry");
+  assert.equal(state.portfolioOpen.BTC_USDT?.side, "LONG");
+});
+
 test("range double reclaim stays paired-shadow until current polarity evidence activates it", () => {
   const input = observation();
   input.candidate.channel = "RANGE"; input.candidate.regime = "RANGE";
-  input.candidate.allRegimeRoutes = [{ version: 2, strategyId: "balance_return", strategyName: "衡返", environment: "RANGE",
+  input.candidate.allRegimeRoutes = [{ version: 3, strategyId: "balance_return", strategyName: "衡返", environment: "RANGE",
     side: "LONG", score: 86, triggerPrice: 100, invalidationPrice: 98, profitArmPrice: 103.6,
     maxHoldMinutes: 150, noProgressMinutes: 40, structureId: `double-reclaim:${input.now}`, reason: "同一外沿双拒绝并收回" }];
   input.globalBreadth = 0.5; input.globalMedianMove = 0.0002;
@@ -138,13 +178,26 @@ test("completed candle resolves an initial stop before a same-candle profit arm"
   assert.ok(state.recentShadow.some((row) => row.outcome === "STOP"));
 });
 
-test("a prior account is archived when V11 normalizes and reset preserves shadow research", () => {
+test("a pre-V11 account is archived and reset preserves shadow research", () => {
   const old = initialStrategyArena(1) as unknown as Record<string, unknown>;
   old.version = 9; old.portfolioResolved = 4; old.portfolioEquity = 940;
   const state = normalizeStrategyArena(old as unknown as StrategyArenaState, 10_000);
-  assert.equal(state.version, 11); assert.equal(state.portfolioEquity, 1_000);
+  assert.equal(state.version, 12); assert.equal(state.portfolioEquity, 1_000);
   assert.equal(state.archivedPortfolioCycles.at(-1)?.resolved, 4);
   state.strategies.momentum_carry.shadowResolved = 7;
   const reset = resetStrategyArenaAccount({ state, quotes: {}, now: 20_000 });
   assert.equal(reset.strategies.momentum_carry.shadowResolved, 7);
+});
+
+test("V11 to V12 migration preserves account, positions, and history while adding both routes", () => {
+  const seeded = observeStrategyArena({ state: initialStrategyArena(1), observation: observation() });
+  const openId = seeded.portfolioOpen.BTC_USDT.id;
+  const old = seeded as unknown as Record<string, unknown>;
+  old.version = 11; old.portfolioEquity = 991.25; old.portfolioResolved = 2;
+  old.recentPortfolio = [{ id: "kept" }];
+  const state = normalizeStrategyArena(old as unknown as StrategyArenaState, 10_000);
+  assert.equal(state.version, 12); assert.equal(state.portfolioEquity, 991.25); assert.equal(state.portfolioResolved, 2);
+  assert.equal(state.portfolioOpen.BTC_USDT.id, openId);
+  assert.equal(state.recentPortfolio[0]?.id, "kept");
+  assert.equal(state.strategies.pulse_fold.enabled, true); assert.equal(state.strategies.slow_carry.enabled, true);
 });

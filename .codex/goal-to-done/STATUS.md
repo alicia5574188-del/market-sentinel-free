@@ -1,3 +1,14 @@
+# In progress — 2026-09-11 V12 opportunity-gap completion
+
+- Production inspection at 01:36 CST found a healthy, non-stale authority: 30/30 liquid markets had retained completed-five-minute paths, all ten realtime slots were actionable, no protected-market/data/path error existed, and LIVE remained OFF. The no-entry interval is therefore not a Gate-data outage.
+- The 1,000 U account is at 991.2390 U after two correctly thesis-invalidated `势承` longs in UNI and TRUMP. Three hours later there were only two routed markets; the only checking route, SAMSUNG `衡返` short, failed net economics. The other displayed markets remained `FORMING` because current V11 only executes exhaustion-derived continuation/reversal, while balance is shadow-gated and compression is disabled.
+- Active work: replay two distinct original gap mechanisms on current 30-day Gate five-minute data, then implement only candidates that pass causal train/held-out after-cost acceptance. No production or LIVE mutation has occurred.
+- Rejected eight candidate families that could not stay positive after costs across chronological segments, including direct trend pullback/resumption, quiet rotation/drift, broad-market catch-up, impulse recoil, compression retest and quiet sweep. None entered runtime authority.
+- The first local frozen sample tentatively accepted a generic slow fold, but the PR's newly fetched 30-day sample reduced its middle fold to PF 0.93, so it was removed before merge. The latest sample accepts `脉折` (32 segments, market-context direction) at 126/147 train/held-out events and PF 1.60/1.18; folds are 1.61/1.15/1.37. It accepts `缓续` (36 segments, crowded continuation only) at 47/60 events and PF 1.62/1.66; folds are 2.01/1.45/1.68.
+- `脉折` produced 178 event identities absent from current `竭转`; `缓续` produced 75, and `缓续` retained 44 events absent from `脉折`. `脉折` uses neutral reversal or crowded continuation with separate frozen geometry; `缓续` rejects neutral reversal and executes only the slower crowded continuation source.
+- Implemented engine v3 / arena v12 with six mechanisms, exact backend route checks and same-event account arbitration. V11→V12 normalization preserves the 991.2390 U account, positions, resolved count and history while adding fresh `脉折`/`缓续` states; LIVE copying and data recovery are unchanged and LIVE remains OFF.
+- Verification in progress: TypeScript, 205 direct tests, four all-regime tests, 17 architecture/migration tests, production build, ESLint and whitespace currently pass. Awaiting reviewed GitHub release and production acceptance.
+
 # Done — 2026-09-11 non-blocking execution authority correction
 
 - Follow-up production observation exposed a remaining once-per-minute false global block: a staggered subset could record zero successes, but the health publisher labeled it as all ten resident snapshots unavailable. The count described the pool, not the attempted failures.

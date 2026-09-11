@@ -21,7 +21,7 @@ import { advanceStrategyArena, advanceStrategyShadowsFromCompletedCandle, applyS
   ARENA_FRICTION_RATE, MAX_PORTFOLIO_POSITIONS, MIN_PORTFOLIO_TRADE_RISK_USDT, PORTFOLIO_REALTIME_CAPACITY, resetStrategyArenaAccount,
   POLARITY_MAX_SPAN_MS, POLARITY_STREAK, SAME_STRATEGY_SYMBOL_COOLDOWN_MS,
   STRATEGY_INITIAL_EQUITY, type StrategyArenaState } from "../lib/strategy-arena.ts";
-import { ALL_REGIME_ENGINE_VERSION, ALL_REGIME_SYSTEM_NAME } from "../lib/all-regime-engine.ts";
+import { ALL_REGIME_ENGINE_VERSION, ALL_REGIME_SYSTEM_NAME, allRegimePaperApproved } from "../lib/all-regime-engine.ts";
 
 const LOOP_MS = 2_000;
 const AUTHORITY_STALE_AFTER_MS = 8_000;
@@ -60,7 +60,7 @@ function broadMarketContext(candidates: Record<string, MarketRegimeCandidate>, n
 
 function approvedRouteScore(candidate: MarketRegimeCandidate) {
   return Math.max(-1, ...(candidate.allRegimeRoutes ?? [])
-    .filter((route) => route.strategyId === "exhaustion_turn")
+    .filter((route) => allRegimePaperApproved(route.strategyId))
     .map((route) => route.score));
 }
 
@@ -1922,7 +1922,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         liveMode: { requestedEnabled: this.runtime.live.requestedEnabled, operational: this.runtime.live.operational },
         strategyArena: {
           version: this.runtime.strategyArena.version,
-          playbookCount: 4,
+          playbookCount: 6,
           catalogSize: strategies.length,
           shadowCount: strategies.filter((row) => row.lane === "SHADOW").length,
           activeCount: strategies.filter((row) => row.lane === "ACTIVE").length,
@@ -1952,7 +1952,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             strategyName: ALL_REGIME_SYSTEM_NAME,
             generatedRouteAuthority: false,
             legacyStrategyAuthority: false,
-            paperCycleResetOnCutover: true,
+            paperCycleResetOnCutover: false,
             allRegimeVersion: ALL_REGIME_ENGINE_VERSION,
             streakLength: POLARITY_STREAK,
             streakMaxSpanMs: POLARITY_MAX_SPAN_MS,

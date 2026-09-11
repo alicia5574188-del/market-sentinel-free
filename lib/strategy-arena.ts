@@ -4,7 +4,7 @@ import type { CandidateChannel, MarketRegimeCandidate, MarketRegimeKind, Residen
 import { ALL_REGIME_ENGINE_VERSION, ALL_REGIME_OFFLINE_VALIDATION, ALL_REGIME_STRATEGIES, ALL_REGIME_SYSTEM_NAME,
   type AllRegimeEnvironment } from "./all-regime-engine.ts";
 
-export const STRATEGY_ARENA_VERSION = 11;
+export const STRATEGY_ARENA_VERSION = 12;
 export const STRATEGY_INITIAL_EQUITY = 1_000;
 export const PROMOTION_WIN_STREAK = 3;
 export const PROMOTION_RECENT_WINDOW = 6;
@@ -115,7 +115,7 @@ export type RouteCheck = { id: string; eventId: string; strategyId: string; stra
   side: Side | null; environment: AllRegimeEnvironment | null; score: number; reason: string | null };
 
 export type StrategyArenaState = {
-  version: 11; startedAt: number; strategies: Record<string, StrategyScore>; playbookResults: Record<string, PlaybookEventResult[]>;
+  version: 12; startedAt: number; strategies: Record<string, StrategyScore>; playbookResults: Record<string, PlaybookEventResult[]>;
   open: Record<string, ArenaTrade>; portfolioOpen: Record<string, ArenaTrade>; portfolioEquity: number;
   portfolioResolved: number; portfolioWins: number; portfolioGrossPnl: number; portfolioCosts: number;
   portfolioCycle: number; portfolioCycleStartedAt: number; archivedPortfolioCycles: PortfolioCycleArchive[];
@@ -186,7 +186,8 @@ function legacyArchive(value: unknown, now: number): PortfolioCycleArchive[] {
 export function normalizeStrategyArena(value: StrategyArenaState | null | undefined, now = Date.now()): StrategyArenaState {
   const fresh = initialStrategyArena(now);
   if (!value) return fresh;
-  if (Number((value as { version?: number }).version) !== STRATEGY_ARENA_VERSION) {
+  const savedVersion = Number((value as { version?: number }).version);
+  if (savedVersion !== STRATEGY_ARENA_VERSION && savedVersion !== 11) {
     const prior = value as unknown as Partial<StrategyArenaState>;
     const portfolioOpen = prior.portfolioOpen ?? {};
     if (!Object.keys(portfolioOpen).length) return { ...fresh,
@@ -204,7 +205,7 @@ export function normalizeStrategyArena(value: StrategyArenaState | null | undefi
       archivedPortfolioTrades: (prior.archivedPortfolioTrades ?? []).slice(-ARENA_HISTORY_LIMIT),
       archivedPortfolioCycles: (prior.archivedPortfolioCycles ?? []).slice(-12), cutoverPending: true };
   }
-  const normalized = { ...fresh, ...value,
+  const normalized = { ...fresh, ...value, version: 12 as const,
     strategies: Object.fromEntries(STRATEGY_CATALOG.map((definition) => {
       const prior = value.strategies?.[definition.id];
       return [definition.id, prior ? { ...freshStrategy(definition), ...prior, ...definition,
@@ -236,6 +237,10 @@ function signals(input: ArenaObservation): Signal[] {
   return (input.candidate.allRegimeRoutes ?? []).flatMap((route): Signal[] => {
     let strategyId = route.strategyId;
     let side = route.side;
+    let stopPrice = route.invalidationPrice;
+    let targetPrice = route.profitArmPrice;
+    let maxHoldMinutes = route.maxHoldMinutes;
+    let noProgressMinutes = route.noProgressMinutes;
     let reason = `${route.strategyName}：${route.reason}`;
     // Direct breakout chasing was negative after full costs. Trend authority is
     // granted only when an apparent exhaustion occurs inside a still-crowded
@@ -249,7 +254,7 @@ function signals(input: ArenaObservation): Signal[] {
       if (breadth < 0.4 || breadth > 0.6 || Math.abs(medianMove) > 0.0012) return [];
       reason = `衡返·双拒：${route.reason} 全市场方向中性，允许向平衡重心回归。`;
     }
-    if (route.strategyId === "exhaustion_turn") {
+    if (route.strategyId === "exhaustion_turn" || route.strategyId === "pulse_fold" || route.strategyId === "slow_carry") {
       if ((input.globalMarkets ?? 0) < 12) return [];
       const breadth = input.globalBreadth ?? 0.5;
       const medianMove = input.globalMedianMove ?? 0;
@@ -257,19 +262,27 @@ function signals(input: ArenaObservation): Signal[] {
       const opposed = routeLong ? breadth <= 0.38 && medianMove <= -0.0012 : breadth >= 0.62 && medianMove >= 0.0012;
       const neutral = breadth >= 0.38 && breadth <= 0.62 && Math.abs(medianMove) < 0.0012;
       if (!opposed && !neutral) return [];
-      if (opposed) {
+      if (route.strategyId === "slow_carry" && !opposed) return [];
+      if (opposed && route.strategyId === "exhaustion_turn") {
         strategyId = "momentum_carry";
         side = route.side === "LONG" ? "SHORT" : "LONG";
         reason = `势承：全市场${Math.round(breadth * 100)}%同向，单币表面衰竭未获群体确认，继续主方向。`;
-      } else reason = `竭转：全市场方向中性，单币推进枯竭并完成反向收复。`;
+      } else if (opposed) {
+        side = route.side === "LONG" ? "SHORT" : "LONG";
+        stopPrice = route.continuationInvalidationPrice ?? stopPrice;
+        targetPrice = route.continuationProfitArmPrice ?? targetPrice;
+        maxHoldMinutes = route.continuationMaxHoldMinutes ?? maxHoldMinutes;
+        noProgressMinutes = route.continuationNoProgressMinutes ?? noProgressMinutes;
+        reason = `${route.strategyName}·顺潮：全市场${Math.round(breadth * 100)}%仍沿原方向，局部失速没有群体确认，沿主潮继续。`;
+      } else reason = `${route.strategyName}·折返：全市场方向中性，单币推进衰退并完成反向收复。`;
     }
     const sign = side === "LONG" ? 1 : -1;
-    const riskRate = Math.abs(route.triggerPrice - route.invalidationPrice) / route.triggerPrice;
-    const armRate = Math.abs(route.profitArmPrice - route.triggerPrice) / route.triggerPrice;
+    const riskRate = Math.abs(route.triggerPrice - stopPrice) / route.triggerPrice;
+    const armRate = Math.abs(targetPrice - route.triggerPrice) / route.triggerPrice;
     return [{ strategyId, side, entryTrigger: route.triggerPrice,
       stopPrice: route.triggerPrice * (1 - sign * riskRate), targetPrice: route.triggerPrice * (1 + sign * armRate),
       structureSource: "CANDLE_5M", executable: true, branch: route.environment,
-      maxHoldMs: route.maxHoldMinutes * 60_000, noProgressMs: route.noProgressMinutes * 60_000,
+      maxHoldMs: maxHoldMinutes * 60_000, noProgressMs: noProgressMinutes * 60_000,
       quality: clamp(route.score / 100, 0.5, 0.98), reason }];
   });
 }
@@ -848,10 +861,14 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
       state.portfolioOpen[symbol] = cloneShadowForPortfolio(winner.shadow, winner.decision.admission.sizing, winner.decision.admission.sample);
       state.seenSignals.push(portfolioSeenKey);
       setRouteCheck(winner.definition, winner.signal, "OPEN", "模拟账户已成交并进入实时保护");
-    } else if (assessed[0]?.decision.blocker) {
-      const blocker = admissionBlockerText(assessed[0].decision.blocker);
-      setRouteCheck(assessed[0].definition, assessed[0].signal, "BLOCKED", blocker);
-      recordObservation(assessed[0].definition, `已形成${assessed[0].signal.side === "LONG" ? "做多" : "做空"}路线；最终阻塞：${blocker}`);
+      for (const row of assessed.filter((item) => item !== winner)) setRouteCheck(row.definition, row.signal, "BLOCKED",
+        `同币同完成段由${winner.definition.name}的账户优先级接管`);
+    } else {
+      for (const row of assessed.filter((item) => item.decision.blocker)) {
+        const blocker = admissionBlockerText(row.decision.blocker!);
+        setRouteCheck(row.definition, row.signal, "BLOCKED", blocker);
+        recordObservation(row.definition, `已形成${row.signal.side === "LONG" ? "做多" : "做空"}路线；最终阻塞：${blocker}`);
+      }
     }
   } else if (opened.length && !active.length) {
     setRouteCheck(opened[0].definition, opened[0].signal, "BLOCKED", "策略方向尚未获得当前连续胜负状态授权");
@@ -917,7 +934,7 @@ export function arenaSummary(state: StrategyArenaState) {
     currentRouteChecks: Object.values(state.currentRouteChecks).sort((left, right) => right.observedAt - left.observedAt).slice(0, 30),
     cutoverPending: state.cutoverPending,
     rules: { extremeSequenceAuthority: false, strategyName: ALL_REGIME_SYSTEM_NAME,
-      generatedRouteAuthority: false, legacyStrategyAuthority: false, paperCycleResetOnCutover: true,
+      generatedRouteAuthority: false, legacyStrategyAuthority: false, paperCycleResetOnCutover: false,
       frictionFloorRate: ARENA_FRICTION_RATE, minNetRewardRisk: MIN_NET_REWARD_RISK,
       maxCostShare: ARENA_MAX_COST_SHARE, singleTradeRiskMin: 0.01, singleTradeRiskMax: 0.02,
       portfolioRiskCap: PORTFOLIO_RISK_CAP, correlatedRiskCap: CORRELATED_DIRECTION_RISK_CAP,

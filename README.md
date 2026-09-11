@@ -1,17 +1,19 @@
-# All-Regime Compound V11 · 全境·复利引擎
+# All-Regime Compound V12 · 全境·复利引擎
 
 Gate USDT perpetual PAPER authority for a single compounding 1,000 U account. LIVE remains owner-controlled, default OFF and fail-closed.
 
 ## Decision authority
 
-V11 scans the thirty most liquid eligible contracts, builds only continuous completed 5-minute paths and separates environment recognition, route formation and account admission:
+V12 scans the thirty most liquid eligible contracts, builds only continuous completed 5-minute paths and separates environment recognition, route formation and account admission. Six original mechanisms cover four environment classes:
 
 - `势承·逆竭`: when broad-market direction is crowded, apparent single-symbol exhaustion that lacks broad confirmation continues with the crowd.
 - `竭转·孤返`: when broad-market direction is neutral, a single-symbol path reverses only after progress collapses and a completed segment reclaims the opposite direction.
+- `脉折·相位`: a 32-segment medium path measures the gap between total displacement and the latest six-segment contribution; neutral breadth permits the completed reversal while crowded breadth continues with the broad direction.
+- `缓续·顺潮`: a less orderly 36-segment path fills slower opportunities only when synchronized broad-market direction confirms continuation; its neutral reversal branch is explicitly rejected.
 - `衡返·双拒`: in a broad neutral market, a low-efficiency range must cross its center repeatedly, reject the same edge at least twice and reclaim it on a completed segment. Its latest chronological fold is negative, so it remains paired normal/reverse shadow research until current results select a polarity.
 - Direct momentum chasing and direct compression breakout remain observation-only: their after-cost train/held-out evidence is negative.
 
-Every executable event runs exact normal and reverse shadows after full friction. The two currently approved exhaustion-derived branches start in their validated direction. Three normal wins select normal; three normal losses select reverse only when those same three fully costed mirror trades all won. Mixed results retain the last authorized orientation. A disabled family can regain PAPER authority only through this current paired evidence.
+Every executable event runs exact normal and reverse shadows after full friction. The four approved route families start in their validated direction. Three normal wins select normal; three normal losses select reverse only when those same three fully costed mirror trades all won. Mixed results retain the last authorized orientation. A disabled family can regain PAPER authority only through this current paired evidence.
 
 The profit arm does not cap profit. It starts dynamic protection; structural invalidation, no-progress and maximum-hold exits remain active.
 
@@ -24,6 +26,8 @@ The profit arm does not cap profit. It starts dynamic protection; structural inv
 | 势承·逆竭 | 48 events, PF 1.80, +16.11% summed return | 50 events, PF 1.71, +23.98% |
 | 衡返·双拒（影子） | 31 events, PF 1.16, +4.14% | 22 events, PF 1.42, +8.86%; latest fold PF 0.67, PAPER off |
 | 竭转·孤返 | 103 events, PF 0.98, -0.81% | 86 events, PF 1.39, +15.85% |
+| 脉折·相位 | 126 events, PF 1.60 | 147 events, PF 1.18; three folds PF 1.61/1.15/1.37 |
+| 缓续·顺潮 | 47 events, PF 1.62 | 60 events, PF 1.66; three folds PF 2.01/1.45/1.68 |
 
 These are historical simulations, not a promise of daily profit. PAPER is the forward test.
 
@@ -53,4 +57,4 @@ npm run build
 npx wrangler deploy --dry-run --config dist/server/wrangler.json
 ```
 
-Production releases only from GitHub `main`. The release gate requires `all-regime-compound-v2`, arena version 11, four environment owners, backend route-check truth, thirty-market scanning, advancing authority health and LIVE explicitly OFF.
+Production releases only from GitHub `main`. The release gate requires `all-regime-compound-v2`, arena version 12, six route mechanisms, backend route-check truth, thirty-market scanning, advancing authority health and LIVE explicitly OFF. The V11→V12 migration preserves the current account, positions and trade history while adding the two new strategy states.
