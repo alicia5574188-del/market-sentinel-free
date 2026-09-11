@@ -286,7 +286,7 @@ PAPER and LIVE must use one shared proportional sizing policy: adaptive 1.5%–3
 ## Completed hotfix — 2026-09-09 isolated radar timeout recovery
 
 Permanently isolate Gate bulk-ticker timeouts from the two-second execution authority. Process PAPER position books and any owner-controlled LIVE reconciliation before the optional 30-market radar request; preserve the last good radar snapshot, retry at most once per normal ten-second scan, and block stale radar candidates from creating strategy observations or new orders after 30 seconds. Partial candidate-book failures remain symbol-local instead of becoming a whole-system recovery fault. Expose a separate plain-language radar warning only after the last successful radar result is stale. Keep request budgets, strategy/risk rules and owner-controlled LIVE state unchanged. Verify locally, release only through GitHub `main`, confirm advancing Cloudflare production health, and prove LIVE remains OFF.
-# Active correction — truthful holdings and exact LIVE mirroring
+# Completed correction — truthful holdings and exact LIVE mirroring
 
 - Show each PAPER position's actual notional, leverage, occupied margin, planned risk and margin return without changing the market-data authority or strategy geometry.
 - Remove the arbitrary three-position admission/rank cap. Continue to admit only positions that fit fresh executable data, integer Gate contracts, 10% total structural risk, 6.5% same-direction risk, 30% margin and the ten-market management surface.

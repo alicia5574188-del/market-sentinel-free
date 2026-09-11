@@ -352,11 +352,12 @@ Commit `8528f11965fe3ae17d404f2cb636f63e198c2160` deployed successfully in GitHu
 - The 30-market/10-second completed-candle rotation, fresh bid/ask/depth execution gate, 10–20 U sizing, portfolio caps, evolved account/reset/history and owner-controlled LIVE-OFF boundary are retained. Existing five-minute D1 logging now includes adaptive route diagnostics without another write.
 - Local verification passed 204 direct tests, 16 architecture/migration tests, production build, TypeScript, ESLint and whitespace validation.
 - Production commit `a9adfa9e3b98ab6db65d91dc987da1f5c9bbb4c5` passed GitHub Actions run #651, including its advancing Cloudflare health gate. Cloudflare version `664571df-12cc-418e-9dcd-4b4ac71e74b1` reported V5 PAPER authority, positive evolved account equity, 30-market scan, ten realtime positions, bounded risk/request/write budgets and LIVE explicitly OFF (`requestedEnabled=false`, `operational=false`). The one-time cutover was skipped, so deployment did not reset the account or delete history.
-# In progress — 2026-09-11 holdings and LIVE parity correction
+# Done — 2026-09-11 holdings and LIVE parity correction
 
 - Confirmed the V11 position payload already retains notional, leverage, margin, planned risk and opening equity; only the V11 holdings card omitted them.
 - Confirmed the visible “持仓 2” is the current count, while PAPER admission still had an unintended three-position/rank cap.
 - Confirmed LIVE entry sizing uses `live equity × (PAPER notional / PAPER opening equity)` before Gate integer-contract rounding and actual risk/margin checks.
 - Found two parity gaps: the LIVE protector followed the PAPER original stop instead of its raised active stop, and exhaustion/reversal trades were labeled as breakout in the LIVE view.
 - The bounded patch is complete. Targeted parity/admission tests pass; the full direct suite passes 203 tests, all-regime tests pass 3, architecture/migration passes 17, and TypeScript, ESLint, production build and whitespace validation pass. Local Wrangler dry-run could not start because this workspace blocks its network/auth probe; the identical GitHub review gate remains required before merge.
-- Active work: publish the reviewed source through a coding branch and PR, let GitHub repeat replay/dry-run gates, merge to `main`, then verify advancing production health with LIVE OFF.
+- PR #192 run #685 repeated and passed the complete review suite, including the causal all-regime replay and V11 after-cost evidence gate. Main run #686 rebuilt, deployed Cloudflare version `5e5ab69a-46c9-4000-a386-5080c11b1cff`, and passed advancing production-health acceptance with fresh authority, no runtime error, `maxPortfolioPositions=null`, and LIVE requested/operational both OFF.
+- The release did not reset or settle the PAPER account, clear history, alter credentials, change public-data cadence, expand the ten-market real-time surface or enable LIVE.
