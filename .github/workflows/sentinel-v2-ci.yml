@@ -79,7 +79,7 @@ jobs:
         run: npm run research:v12
 
       - name: Preserve bounded replay dataset for review
-        if: github.event_name == 'pull_request'
+        if: ${{ github.event_name == 'pull_request' && always() }}
         uses: actions/upload-artifact@v4
         with:
           name: all-regime-candles-${{ github.event.pull_request.head.sha }}
