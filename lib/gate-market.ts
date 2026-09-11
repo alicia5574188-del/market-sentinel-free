@@ -6,6 +6,7 @@ const GATE_BULK_TICKER_TIMEOUT_MS = 4_000;
 const GATE_RESILIENT_TIMEOUT_MS = 5_000;
 const GATE_RATE_LIMIT_BACKOFF_MS = 10_000;
 const endpointBackoffUntil = new Map<string, number>();
+const endpointPreferredBase = new Map<string, number>();
 
 export class GatePublicError extends Error {
   readonly status: number;
@@ -30,32 +31,42 @@ function responseRetryAt(response: Response, now: number) {
 
 async function gatePublic<T>(path: string, timeoutMs = GATE_PUBLIC_TIMEOUT_MS, attempts = 1): Promise<T> {
   const key = endpointKey(path);
-  const blockedUntil = endpointBackoffUntil.get(key) ?? 0;
-  if (Date.now() < blockedUntil) throw new GatePublicError("Gate public shared backoff", 429, blockedUntil);
+  const start = endpointPreferredBase.get(key) ?? 0;
   let lastError: unknown = null;
-  for (let attempt = 0; attempt < Math.max(1, attempts); attempt += 1) {
+  let earliestRetryAt: number | null = null;
+  for (let attempt = 0; attempt < Math.min(BASES.length, Math.max(1, attempts)); attempt += 1) {
+    const baseIndex = (start + attempt) % BASES.length;
+    const base = BASES[baseIndex];
+    const hostKey = `${base}:${key}`;
+    const blockedUntil = endpointBackoffUntil.get(hostKey) ?? 0;
+    if (Date.now() < blockedUntil) {
+      earliestRetryAt = earliestRetryAt == null ? blockedUntil : Math.min(earliestRetryAt, blockedUntil);
+      lastError = new GatePublicError("Gate public host backoff", 429, blockedUntil);
+      continue;
+    }
     try {
-      const response = await fetch(`${BASES[attempt % BASES.length]}${path}`, {
+      const response = await fetch(`${base}${path}`, {
         headers: { Accept: "application/json", "X-Gate-Size-Decimal": "1" },
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok) {
         const retryAt = responseRetryAt(response, Date.now());
-        if (response.status === 429) endpointBackoffUntil.set(key, retryAt);
+        if (response.status === 429) endpointBackoffUntil.set(hostKey, retryAt);
         const error = new GatePublicError(`Gate public ${response.status}`, response.status, retryAt);
-        if (response.status === 429 || response.status < 500 || attempt + 1 >= attempts) throw error;
+        if ((response.status < 500 && response.status !== 429) || attempt + 1 >= attempts) throw error;
         lastError = error;
         continue;
       }
-      endpointBackoffUntil.delete(key);
+      endpointBackoffUntil.delete(hostKey);
+      endpointPreferredBase.set(key, baseIndex);
       return await response.json() as T;
     } catch (error) {
       lastError = error;
-      if (error instanceof GatePublicError && (error.status === 429 || error.status < 500)) throw error;
+      if (error instanceof GatePublicError && error.status < 500 && error.status !== 429) throw error;
       if (attempt + 1 >= attempts) throw error;
     }
   }
-  throw lastError ?? new Error(`Gate public request failed: ${key}`);
+  throw lastError ?? new GatePublicError("Gate public hosts are backing off", 429, earliestRetryAt);
 }
 
 type GateBook = {
@@ -74,7 +85,7 @@ function levels(rows: GateBook["asks"]): BookLevel[] {
 }
 
 export async function fetchFuturesBook(symbol: string, tickSize = 0.0001, quantoMultiplier = 1): Promise<BookSnapshot> {
-  const book = await gatePublic<GateBook>(`/futures/usdt/order_book?contract=${encodeURIComponent(symbol)}&limit=50&with_id=true`);
+  const book = await gatePublic<GateBook>(`/futures/usdt/order_book?contract=${encodeURIComponent(symbol)}&limit=50&with_id=true`, GATE_PUBLIC_TIMEOUT_MS, 2);
   const toNotional = (row: BookLevel) => ({ ...row, size: row.size * row.price * Math.max(quantoMultiplier, 1e-12) });
   const bids = levels(book.bids).map(toNotional).sort((a, b) => b.price - a.price);
   const asks = levels(book.asks).map(toNotional).sort((a, b) => a.price - b.price);

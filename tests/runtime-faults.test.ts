@@ -94,6 +94,8 @@ class FakeContext {
     this.ready = Promise.resolve().then(callback);
     return this.ready;
   }
+
+  waitUntil(task: Promise<unknown>) { void task; }
 }
 
 class FakeD1 {
@@ -126,6 +128,7 @@ async function makeStreamFromStorage(storage: FakeStorage) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const stream = new MarketStream(ctx as never, env as never) as any;
   await ctx.ready;
+  stream.launchOptionalWork = () => undefined;
   return { stream, storage, ctx, db };
 }
 
@@ -673,6 +676,27 @@ test("at-least-once duplicate alarm does not reprocess a slot or add another ala
 
   assert.equal(stream.runtime.alarmCount, processed, "same UTC 2s slot must be idempotent");
   assert.equal(storage.setAlarmCalls, 1, "43,200 alarm writes/day is a hard bound only if duplicates do not re-arm");
+});
+
+test("a slow optional refresh cannot hold the executable-book alarm open", async (t) => {
+  const { stream } = await makeStream();
+  const now = 1_800_000_205_000;
+  t.mock.method(Date, "now", () => now);
+  stream.runtime.lastUniverseAt = now;
+  stream.runtime.lastRadarAt = now;
+  stream.runtime.symbols = ["A", "B", "C", "D"];
+  stream.processBooks = async () => ({ successes: 4, requests: 4, criticalChanged: false });
+  stream.updateAncillary = async () => await new Promise<number>(() => undefined);
+  delete stream.launchOptionalWork;
+
+  const outcome = await Promise.race([
+    stream.alarm().then(() => "completed"),
+    new Promise<string>((resolve) => setTimeout(() => resolve("timed-out"), 50)),
+  ]);
+
+  assert.equal(outcome, "completed");
+  assert.equal(stream.runtime.lastSuccessAt, now);
+  assert.equal(stream.runtime.alarmCount, 1);
 });
 
 test("candidate rotation stays operational while new slots warm and no protected exposure is stale", async (t) => {

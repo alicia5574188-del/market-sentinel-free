@@ -319,6 +319,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private authorityReady = true;
   private authorityView = { positions: {} as RuntimeState["positions"], equity: 1_000, equityVersion: 0 };
   private liveClient: GateLiveClient | null = null;
+  private optionalWork: Promise<void> | null = null;
 
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
@@ -1760,6 +1761,60 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.lastHeartbeatAt = now;
   }
 
+  private publishCriticalHealth(observedAt: number, successes: number) {
+    this.runtime.lastAlarmAt = observedAt;
+    this.runtime.lastSuccessAt = successes > 0 ? observedAt : this.runtime.lastSuccessAt;
+    const allWarm = this.runtime.symbols.every((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS);
+    const allMeta = this.runtime.symbols.every((symbol) => this.runtime.contractMeta[symbol] != null);
+    const realtimeReadiness = this.realtimeReadiness();
+    const ancillaryStarted = this.runtime.symbols.every((symbol) => {
+      const memory = this.memory[symbol];
+      return memory && memory.timeframeUpdatedAt.m1 > 0 && memory.timeframeUpdatedAt.m15 > 0
+        && memory.timeframeUpdatedAt.h1 > 0 && memory.timeframeUpdatedAt.h4 > 0;
+    });
+    this.runtime.state = !this.authorityReady ? "RECOVERY_REQUIRED" : successes === 0 ? "RECONNECTING"
+      : this.runtime.riskBreach || !realtimeReadiness.protectedMarketsReady ? "DEGRADED"
+        : realtimeReadiness.actionableMarkets > 0 ? "LIVE"
+          : allWarm && allMeta && ancillaryStarted ? "DEGRADED" : "WARMING";
+    const feedError = successes === 0 ? `${this.runtime.symbols.length} market snapshots unavailable; retrying`
+      : !realtimeReadiness.protectedMarketsReady ? "protected position data unavailable; new entries frozen"
+        : !allMeta && realtimeReadiness.protectedMarkets > 0 ? "protected contract metadata unavailable" : null;
+    this.runtime.lastError = (this.runtime.riskBreach ? "portfolio stress risk exceeds 10%; new entries blocked" : feedError)
+      ?? this.runtime.d1MirrorError;
+  }
+
+  private launchOptionalWork(now: number, universeDue: boolean) {
+    if (this.optionalWork) return;
+    const task = (async () => {
+      let subrequests = 0;
+      if (universeDue) {
+        subrequests += 2;
+        try { this.refreshUniverse(Date.now(), await fetchActiveContracts()); }
+        catch (error) { this.runtime.lastError = `universe: ${safeError(error)}`; }
+      } else subrequests += await this.updateAncillary(now);
+      const radarDue = radarAttemptDue(this.runtime.radar, Date.now());
+      if (radarDue) {
+        subrequests += 1;
+        this.runtime.radar.lastAttemptAt = Date.now();
+        try { this.refreshRadar(Date.now(), await fetchMarketTickers()); }
+        catch (error) { this.runtime.radar = failedRadarRuntime(this.runtime.radar, Date.now(), error); }
+      }
+      subrequests += await this.refreshStrategyCandle(Date.now());
+      await this.maybeWriteStrategyRuntimeLog(Date.now());
+      this.runtime.subrequestCount += subrequests;
+      this.runtime.maxSubrequestsInAlarm = Math.max(this.runtime.maxSubrequestsInAlarm, subrequests);
+    })().catch((error) => {
+      // Optional analysis may retry on its own cadence, but it cannot demote a
+      // fresh executable-book authority or break the two-second alarm chain.
+      this.runtime.strategyLogError = `optional: ${safeError(error)}`;
+    });
+    this.optionalWork = task;
+    const tracked = task.finally(() => {
+      if (this.optionalWork === task) this.optionalWork = null;
+    });
+    this.ctx.waitUntil(tracked);
+  }
+
   async alarm(info?: { isRetry?: boolean; retryCount?: number }) {
     const now = Date.now();
     if (info?.isRetry) {
@@ -1793,31 +1848,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     let subrequests = 0;
     try {
       const universeDue = now - this.runtime.lastUniverseAt >= UNIVERSE_MS;
-      if (universeDue) {
-        subrequests += 2;
-        try { this.refreshUniverse(now, await fetchActiveContracts()); }
-        catch (error) { this.runtime.lastError = `universe: ${safeError(error)}`; }
-      }
       const cycleSymbols = this.cycleBookSymbols(now, [...this.runtime.symbols]);
-      // Use the actual invocation time for exchange freshness. The slot is
-      // only an idempotency key; its floor can be almost two seconds behind a
-      // fresh Gate snapshot and must never be used as the freshness clock.
-      let books: Awaited<ReturnType<MarketStream["processBooks"]>>;
-      if (universeDue) {
-        books = await this.processBooks(now, cycleSymbols);
-      } else if (this.priorityMinuteSymbols(now).length) {
-        // A confirmed breakout must consume the newly completed official 1m
-        // candle in the same decision pass. Fetch that candle before books;
-        // otherwise LIVE could act one loop before PAPER sees the same proof.
-        subrequests += await this.updateAncillary(now);
-        books = await this.processBooks(now, cycleSymbols);
-      } else {
-        const [bookResult, ancillary] = await Promise.all([this.processBooks(now, cycleSymbols), this.updateAncillary(now)]);
-        books = bookResult;
-        subrequests += ancillary;
-      }
+      // The fresh executable book is the critical clock. Completed-candle,
+      // universe, radar and research logging run under one non-overlapping
+      // background task and can no longer delay the next protection/entry pass.
+      const books = await this.processBooks(now, cycleSymbols);
       const successes = books.successes;
       subrequests += books.requests;
+      this.publishCriticalHealth(Date.now(), successes);
       const liveNeedsSync = this.runtime.live.requestedEnabled
         || Object.values(this.runtime.live.entries).some((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status))
         || Object.values(this.runtime.live.positions).some((position) => position?.status === "OPEN");
@@ -1832,41 +1870,16 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           subrequests += Math.max(0, (this.liveClient?.requestCount ?? liveRequestsBefore) - liveRequestsBefore);
         }
       }
-      const radarDue = radarAttemptDue(this.runtime.radar, now);
-      if (radarDue) {
-        subrequests += 1;
-        this.runtime.radar.lastAttemptAt = Date.now();
-        try { this.refreshRadar(Date.now(), await fetchMarketTickers()); }
-        catch (error) { this.runtime.radar = failedRadarRuntime(this.runtime.radar, Date.now(), error); }
-      }
-      subrequests += await this.refreshStrategyCandle(Date.now());
-      this.runtime.lastAlarmAt = now;
-      this.runtime.lastSuccessAt = successes > 0 ? now : this.runtime.lastSuccessAt;
-      const allWarm = this.runtime.symbols.every((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS);
-      const allMeta = this.runtime.symbols.every((symbol) => this.runtime.contractMeta[symbol] != null);
-      const realtimeReadiness = this.realtimeReadiness();
-      const ancillaryStarted = this.runtime.symbols.every((symbol) => {
-        const memory = this.memory[symbol];
-        return memory && memory.timeframeUpdatedAt.m1 > 0 && memory.timeframeUpdatedAt.m15 > 0
-          && memory.timeframeUpdatedAt.h1 > 0 && memory.timeframeUpdatedAt.h4 > 0;
-      });
-      this.runtime.state = !this.authorityReady ? "RECOVERY_REQUIRED" : successes === 0 ? "RECONNECTING"
-        : this.runtime.riskBreach || !realtimeReadiness.protectedMarketsReady ? "DEGRADED"
-          : realtimeReadiness.actionableMarkets > 0 ? "LIVE"
-            : allWarm && allMeta && ancillaryStarted ? "DEGRADED" : "WARMING";
-      const feedError = successes === 0 ? `${this.runtime.symbols.length} market snapshots unavailable; retrying`
-        : !realtimeReadiness.protectedMarketsReady ? "protected position data unavailable; new entries frozen"
-          : !allMeta && realtimeReadiness.protectedMarkets > 0 ? "protected contract metadata unavailable" : null;
-      this.runtime.lastError = (this.runtime.riskBreach ? "portfolio stress risk exceeds 10%; new entries blocked" : feedError) ?? this.runtime.d1MirrorError;
-      await this.maybeWriteStrategyRuntimeLog(Date.now());
+      this.launchOptionalWork(now, universeDue);
     } catch (error) {
       this.runtime.state = "RECONNECTING";
       this.runtime.lastError = safeError(error);
     } finally {
-      this.runtime.lastAlarmAt = now;
+      const finishedAt = Date.now();
+      this.runtime.lastAlarmAt = finishedAt;
       this.runtime.subrequestCount += subrequests;
       this.runtime.maxSubrequestsInAlarm = Math.max(this.runtime.maxSubrequestsInAlarm, subrequests);
-      try { await this.saveCheckpoint(now); } catch (error) { this.runtime.lastError = `checkpoint: ${safeError(error)}`; }
+      try { await this.saveCheckpoint(finishedAt); } catch (error) { this.runtime.lastError = `checkpoint: ${safeError(error)}`; }
     }
   }
 

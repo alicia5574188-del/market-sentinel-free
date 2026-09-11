@@ -1,3 +1,10 @@
+# In progress — 2026-09-11 non-blocking execution authority correction
+
+- New screenshot proved a genuine recurring authority pause after the prior release: 30/30 completed paths and zero path faults were retained, while the last critical book success and heartbeat stopped advancing. At that snapshot there were six environment candidates but zero routes in execution checking, so no particular step-4 order was cancelled; the pause could still make a future route miss its entry window.
+- Root defects corrected locally: Gate 429 backoff is now isolated by official host and order books fail over to the other host; universe/radar/candle/research reads run as one non-overlapping background task and no longer hold the executable-book alarm; critical health publishes immediately after fresh books.
+- The page no longer collapses every authority pause to step 1. It displays the retained decision stage, says whether execution routes are retained, and states that recovery rechecks the latest bid/ask before any order.
+- Targeted acceptance currently passes 53 architecture/Gate/runtime tests plus TypeScript. Full direct tests, build, lint, dry-run, remote PR and advancing production acceptance remain.
+
 # Done — 2026-09-11 Gate recovery and current-evidence coverage
 
 - Root cause separated: bulk scan timeout and per-contract candle 429 were recoverable public-endpoint faults; zero orders occurred because six environment candidates produced zero account-authorized routes, not because the whole feed stopped.

@@ -1,3 +1,11 @@
+# Active correction — keep execution authority advancing through Gate degradation
+
+- A Gate 429, timeout or slow optional analysis request must not stall the two-second executable-book and position-protection alarm chain.
+- Treat Gate's two official futures hosts independently: one host's endpoint backoff may not disable the other host, and a critical order-book read must fail over before the affected market is suspended.
+- Preserve the latest completed-candle paths, environment candidates and route-check state during a transient authority pause. Never create an order from an old price; resume by checking the retained route against a newly verified bid/ask.
+- The decision page must show the actual retained decision stage. A data pause is an overlay on that stage, not a fabricated reset to step 1, and it must say whether any execution route was present.
+- Preserve the 1,000 U account, history, credentials, strategy authority and LIVE explicitly OFF. Verify the alarm separation, host failover, UI truth and advancing production health before marking complete.
+
 # Completed goal — eliminate avoidable Gate degradation and close verified coverage gaps
 
 - Stop polling completed-five-minute data as if it changed every ten seconds. Schedule each contract once per newly closed five-minute bar, preserve the last verified continuous path during transient read failures, and keep route/position books at the existing two-second protection cadence.
