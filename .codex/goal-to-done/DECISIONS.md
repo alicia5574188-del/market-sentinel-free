@@ -1,3 +1,10 @@
+# Final V11 correction decision — 2026-09-11
+
+- V10 is an all-environment classifier but not an all-environment trading authority. Native trend signals are suppressed, range and compression remain observation-only, and both approved names originate from the same exhaustion event. Correct the architecture rather than relaxing its final execution gates.
+- Treat the latest 30-day/20-market PR replay as the baseline: held-out PF 1.15 and 50% profitable active days are insufficient evidence for the user's daily-positive objective, while the native crowded-direction branch at PF 1.02 is too close to friction to present as robust.
+- A short external-data failure cannot be eliminated absolutely. Reduce its incidence and opportunity impact by keeping two-second books only for prepared routes/open positions and slowing ordinary watch markets whose decision source changes only on completed five-minute candles. Measure recent failure rate and interruption duration rather than presenting an unbounded lifetime count.
+- “Execution candidate” means the backend arena actually accepted the current route for final checks. The UI may not infer this only from candle geometry; it must expose the backend's exact authorization and blocker truth.
+
 # Operator-runtime transparency decision — 2026-09-11
 
 - “Remove unnecessary data” means remove engineering diagnostics, not operational truth. The main page must always answer whether data is advancing, how long V10 has run, which pipeline step is active, what happens next and whether any current fault blocks trading.

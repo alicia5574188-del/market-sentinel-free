@@ -1,3 +1,11 @@
+# In progress — 2026-09-11 final executable all-environment upgrade
+
+- Production observation at 18:39 CST: fresh one-second authority, 29/30 completed paths, six candidates and zero PAPER routes. At 18:41 all 30 paths were ready and a PONS/USDT short `势承` route reached execution checks, yet no order opened. The three-hour no-trade period is primarily an authorization/coverage bottleneck, not a global data outage.
+- V10 source confirms native `momentum_carry` signals are discarded; `衡返` and `压跃` are observation-only; only `exhaustion_turn` can become PAPER, either as neutral `竭转` or reversed crowded-direction `势承`. The four-owner UI therefore overstates executable coverage.
+- PR #186's latest causal replay produced 213 held-out account trades, PF 1.15, 1,000→1,043.31 U, 9.23% maximum drawdown and only 50% profitable active days. `势承` alone was PF 1.02, so V10 is mildly positive but not robust enough for the stated objective.
+- V10 accumulated 349 per-symbol book failures in about 2h58m while remaining fresh; with ten two-second realtime books this is roughly 0.65% of theoretical attempts. The system recovers safely, but the polling design and lifetime counter make recurring short failures both frequent and poorly explained.
+- Next: capture the exact replay dataset, research native environment routes without threshold-only curve fitting, then implement only cross-phase-positive mechanisms plus route/position-aware polling and explicit rejection telemetry.
+
 # Done — 2026-09-11 operator runtime transparency correction
 
 - The screenshot contains a verified green runtime snapshot, but the simplified V10 page hides `lastSuccessAt`, completed-candle progress, active pipeline stage, candidate markets and blockers. It therefore cannot distinguish healthy waiting from a stuck feed.

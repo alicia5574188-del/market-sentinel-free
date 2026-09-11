@@ -68,6 +68,15 @@ jobs:
           RESEARCH_SYMBOLS: "20"
         run: npm run research:all-regime
 
+      - name: Preserve bounded replay dataset for review
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: all-regime-candles-${{ github.event.pull_request.head.sha }}
+          path: /tmp/all-regime-candles.json
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Require the reviewed two-phase Durable Object migration
         working-directory: release
         run: |

@@ -1,3 +1,11 @@
+# Active goal — final executable all-environment upgrade
+
+- Replace V10's misleading “four environments observed, only exhaustion-derived routes can trade” behavior with an honest V11 authority whose native trend, range, compression and exhaustion mechanisms are independently replayed and may trade only when their own chronological held-out after-cost evidence is positive.
+- Prefer useful opportunity coverage and account compounding after positive edge is established. Do not manufacture orders by loosening freshness, structure, cost, executable-price, contract, depth or portfolio protections, and do not promise daily profit.
+- Record the complete decision funnel for every current route: environment detection, PAPER authorization, real-time execution check and the exact latest blocker. Display rolling data reliability, affected market, cause and longest/current interruption instead of an alarming lifetime failure total without a denominator.
+- Reduce avoidable Gate REST pressure using route/position-aware polling while preserving two-second management for prepared or open exposure. Use only the existing completed 5-minute futures data and current Cloudflare/Gate constraints; add no per-snapshot D1 writes.
+- Preserve the 1,000 U account, current-equity compounding, all history and credentials, fresh-price cutover behavior, owner-only controls and LIVE explicitly OFF. Verify causally, release once through GitHub `main`, and require advancing production health.
+
 # Completed correction — operator-visible runtime and analysis progress
 
 - Keep the V10 strategy and execution authority unchanged, but make the decision page distinguish healthy waiting from stalled data without requiring engineering knowledge.
