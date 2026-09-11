@@ -1,4 +1,4 @@
-# Active correction — regime-first strategy selection on the current V6 code
+# Completed correction — regime-first strategy selection on the current V6 code
 
 - Use the existing six generated mechanisms, completed-five-minute state, walk-forward policy, fresh Gate futures execution and account infrastructure. Do not add a research collector or redesign the page.
 - Make current market environment the first strategy selector. Only compatible mechanisms may be ranked; a strategy's profitability in another environment cannot authorize the current trade.

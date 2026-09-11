@@ -1,10 +1,11 @@
-# In progress — 2026-09-11 regime-first strategy routing correction
+# Done — 2026-09-11 regime-first strategy routing correction
 
 - Production evidence at inspection time: V6 had closed 24 PAPER trades, won 7 and reduced strategy-account equity to 860.1533 U. The low-efficiency boundary-return strategy accounted for 21 trades and -88.7415 U, while appearing under RANGE, COMPRESSION and EXPANSION.
 - Root cause is in the existing V6 route generator: it maps every adaptive recommendation to a strategy but never requires that strategy's declared market channel to equal the current completed-candle channel. The later objective ranking therefore chooses a numerically strong but environment-incompatible strategy.
 - The unused prospective-only collector has been removed before release. The correction keeps the current six mechanisms and inserts the missing first selector: current completed-candle market channel, then after-cost walk-forward ranking only among compatible strategies.
 - Strategy arena version advances from 7 to 8 so the losing pre-correction PAPER cycle is settled at fresh executable quotes, archived, and restarted at 1,000 U. History is preserved and LIVE remains owner-controlled and OFF.
-- Verification passes 192 direct tests, 16 architecture/migration tests, the production build, TypeScript, ESLint, Wrangler dry-run and whitespace validation. Production release and advancing-health acceptance are next.
+- Verification passed 192 direct tests, 16 architecture/migration tests, the production build, TypeScript, ESLint, Wrangler dry-run and whitespace validation. Remote commit `c8011bc778b179356176d4972f1718a565dcf3cc` passed GitHub Actions run #661 and its advancing Cloudflare health gate; Cloudflare version `446dee7b-92d5-45d3-9a26-5468cadb286a` is live.
+- Production reports arena version 8, fresh advancing authority, 30 liquid markets, cycle 6 reset to 1,000 U, and one new PAPER route: TAO_USDT low-efficiency boundary return in matching RANGE/RANGE state. The prior cycle was archived at 877.5954 U after 26 resolved trades and 8 wins. LIVE remains explicitly OFF (`requestedEnabled=false`, `operational=false`).
 
 # Analysis complete — 2026-09-11 relative-strength and strong-breakout candidates rejected
 
