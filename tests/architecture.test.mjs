@@ -199,6 +199,7 @@ test("V11 verified-route engine is causal, selective, cost-aware, and the sole L
   assert.match(worker, /advanceStrategyArena/);
   assert.match(worker, /desiredPortfolio = this\.runtime\.strategyArena\.portfolioOpen/);
   assert.match(worker, /eligibleForLiveMirror/);
+  assert.match(worker, /position\.currentStop = arenaProtectionStop\(selectedTrade\)/);
   assert.match(worker, /mirrorNotionalFraction: trade\.notional \/ Math\.max\(trade\.accountEquityAtOpen/);
   assert.match(worker, /strategyArena: normalizeStrategyArena\(saved\.strategyArena\)/);
   assert.match(worker, /resetStrategyArenaAccount/);
@@ -207,6 +208,8 @@ test("V11 verified-route engine is causal, selective, cost-aware, and the sole L
   assert.match(arena, /POLARITY_STREAK = 3/);
   assert.match(arena, /reversed\.every\(\(row\) => row\.netReturnRate > 0\)/);
   assert.match(arena, /profitArmIsExit: false/);
+  assert.doesNotMatch(arena, /Object\.keys\(state\.portfolioOpen\)\.length >= MAX_PORTFOLIO_POSITIONS/);
+  assert.doesNotMatch(arena, /globalOpportunityRank \?\? 1\) > MAX_PORTFOLIO_POSITIONS/);
   assert.match(arena, /RUNNER_EXIT/);
   assert.match(page, /盈利启动后只抬保护，不封顶/);
   assert.match(arena, /cloneShadowForPortfolio/);

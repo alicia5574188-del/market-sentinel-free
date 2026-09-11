@@ -170,10 +170,20 @@ function portfolio(candidateTrades, from, to) {
     for (const rawTrade of group) {
       const trade = polarityTrade(rawTrade, candidateTrades);
       if (!trade) continue;
-      if (open.length >= 3 || open.some((row) => row.symbol === trade.symbol)
-        || open.filter((row) => row.side === trade.side).length >= 3) continue;
+      if (open.some((row) => row.symbol === trade.symbol)) continue;
       const multiple = Math.min(0.5, 0.02 / Math.max(trade.riskRate + FRICTION, 0.005));
-      const sized = { ...trade, equityAtOpen: equity, notional: equity * multiple, netPnl: equity * multiple * trade.netReturnRate };
+      const notional = equity * multiple;
+      const plannedRisk = notional * (trade.riskRate + FRICTION);
+      const leverage = Math.max(1, Math.ceil(notional / Math.max(equity * 0.1, 1e-9)));
+      const margin = notional / leverage;
+      const openRisk = open.reduce((total, row) => total + row.plannedRisk, 0);
+      const sameDirectionRisk = open.filter((row) => row.side === trade.side)
+        .reduce((total, row) => total + row.plannedRisk, 0);
+      const openMargin = open.reduce((total, row) => total + row.margin, 0);
+      if (openRisk + plannedRisk > equity * 0.10 || sameDirectionRisk + plannedRisk > equity * 0.065
+        || openMargin + margin > equity * 0.30) continue;
+      const sized = { ...trade, equityAtOpen: equity, notional, plannedRisk, leverage, margin,
+        netPnl: notional * trade.netReturnRate };
       selected.push(sized); open.push(sized);
     }
   }

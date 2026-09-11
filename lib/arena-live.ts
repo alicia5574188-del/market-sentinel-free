@@ -5,8 +5,12 @@ export const LIVE_MIRROR_ENTRY_WINDOW_MS = 10_000;
 
 export function arenaScenario(trade: ArenaTrade): MarketState {
   if (trade.family === "RANGE") return "RANGE";
-  if (trade.strategyId.includes("failed") || trade.strategyId.includes("fade")) return "REVERSAL";
+  if (trade.family === "REVERSAL" || trade.strategyId.includes("failed") || trade.strategyId.includes("fade")) return "REVERSAL";
   return "BREAKOUT";
+}
+
+export function arenaProtectionStop(trade: ArenaTrade) {
+  return trade.activeStopPrice ?? trade.stopPrice;
 }
 
 export function arenaTradePlan(trade: ArenaTrade): PaperPlan {

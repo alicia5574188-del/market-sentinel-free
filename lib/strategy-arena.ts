@@ -18,7 +18,7 @@ export const ARENA_MAX_COST_SHARE = 0.25;
 export const ARENA_QUOTE_STALE_MS = 5_000;
 export const MIN_PORTFOLIO_TRADE_RISK_USDT = 10;
 export const PORTFOLIO_REALTIME_CAPACITY = 10;
-export const MAX_PORTFOLIO_POSITIONS = 3;
+export const MAX_PORTFOLIO_POSITIONS = null;
 export const ARENA_MAX_OPEN = 240;
 export const ARENA_HISTORY_LIMIT = 240;
 export const REVERSE_TRIGGER_WINDOW = 6;
@@ -681,10 +681,8 @@ function portfolioAdmission(state: StrategyArenaState, input: ArenaObservation, 
   const blocker = input.dataFresh === false ? "STALE" : input.contractReady === false ? "CONTRACT"
     : input.managementCapacity === false ? "DATA_CAPACITY" : !validStructure ? "STRUCTURE" : input.candidate.volume24hUsd < ARENA_MIN_VOLUME_24H_USD ? "LIQUIDITY"
     : input.spreadRate > ARENA_MAX_SPREAD_RATE ? "SPREAD" : !economicGeometry ? "NET_ECONOMICS"
-      : Object.keys(state.portfolioOpen).length >= MAX_PORTFOLIO_POSITIONS ? "POSITION_CAP"
-        : (input.globalOpportunityRank ?? 1) > MAX_PORTFOLIO_POSITIONS ? "GLOBAL_RANK"
-          : inSameBranchCooldown ? "SYMBOL_COOLDOWN"
-            : null;
+      : inSameBranchCooldown ? "SYMBOL_COOLDOWN"
+        : null;
   if (blocker) { state.admissionRejects[blocker] = (state.admissionRejects[blocker] ?? 0) + 1;
     return { admission: null, blocker }; }
   const sizing = portfolioSizing(state, input, signal);
@@ -701,7 +699,6 @@ const admissionBlockerText = (blocker: string) => ({
   STALE: "盘口或关键周期数据不新鲜", CONTRACT: "Gate合约信息不完整", DATA_CAPACITY: "持仓保护市场尚未全部具备新鲜盘口",
   STRUCTURE: "进场、止损和盈利臂的方向关系无效", LIQUIDITY: "24小时成交额低于账户执行下限",
   SPREAD: "真实买一卖一价差超过成本上限", NET_ECONOMICS: "扣除手续费与滑点后的盈亏结构不足",
-  POSITION_CAP: "账户已达到同时持仓上限", GLOBAL_RANK: "当前机会排序未进入账户前三",
   SYMBOL_COOLDOWN: "同币同分支刚完成交易，正在避免重复追单", SIZING: "Gate整数张数或账户风险额度不足",
   DEPTH: "盘口双边深度不足以承载计划仓位",
 }[blocker] ?? blocker);

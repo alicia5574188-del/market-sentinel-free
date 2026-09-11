@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { arenaScenario, arenaTradePlan, eligibleForLiveMirror, liveMirrorExitRequired } from "../lib/arena-live.ts";
+import { arenaProtectionStop, arenaScenario, arenaTradePlan, eligibleForLiveMirror, liveMirrorExitRequired } from "../lib/arena-live.ts";
 import type { ArenaTrade } from "../lib/strategy-arena.ts";
 
 const trade = (openedAt = 10_000): ArenaTrade => ({
@@ -30,6 +30,17 @@ test("selected portfolio trade freezes identical LIVE direction, stop and target
   assert.equal(plan.invalidation, selected.stopPrice);
   assert.equal(plan.target, selected.targetPrice);
   assert.equal(plan.state, "TRIGGERED");
+});
+
+test("LIVE preserves reversal identity and follows the PAPER active protection stop", () => {
+  const selected = trade(10_000);
+  selected.family = "REVERSAL";
+  selected.strategyId = "exhaustion_turn";
+  selected.activeStopPrice = 100.4;
+  selected.profitArmedAt = 10_500;
+  assert.equal(arenaScenario(selected), "REVERSAL");
+  assert.equal(arenaProtectionStop(selected), 100.4);
+  assert.equal(arenaProtectionStop({ ...selected, activeStopPrice: undefined }), selected.stopPrice);
 });
 
 test("LIVE never backfills a portfolio trade opened before the owner enabled it", () => {
