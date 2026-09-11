@@ -47,6 +47,22 @@ test("completed candles retry once on the official futures host and support boun
   } finally { globalThis.fetch = prior; }
 });
 
+test("a 429 on one Gate host does not back off the independent futures host", async () => {
+  const prior = globalThis.fetch;
+  const urls: string[] = [];
+  globalThis.fetch = async (input) => {
+    urls.push(String(input));
+    if (urls.length === 1) return new Response("rate limited", { status: 429, headers: { "retry-after": "10" } });
+    return Response.json({ id: 71, update: Date.now(), bids: [{ p: "99", s: "2" }], asks: [{ p: "101", s: "2" }] });
+  };
+  try {
+    const book = await fetchFuturesBook("RATE_LIMIT_USDT", 0.1, 0.01);
+    assert.equal(book.sequence, 71);
+    assert.equal(urls.length, 2);
+    assert.notEqual(new URL(urls[0]).host, new URL(urls[1]).host);
+  } finally { globalThis.fetch = prior; }
+});
+
 test("active universe exposes every liquid trading USDT future to the radar", async () => {
   const prior = globalThis.fetch;
   globalThis.fetch = async (input) => {

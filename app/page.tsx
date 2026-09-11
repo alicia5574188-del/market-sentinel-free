@@ -351,8 +351,9 @@ export default function Home() {
   const degradedPathMarkets = runtime?.strategyData?.degradedMarkets ?? 0;
   const blockingPathMarkets = runtime?.strategyData?.blockingMarkets ?? 0;
   const radarBlocking = Boolean(runtime?.radar?.consecutiveFailures && stableMarkets < 12);
+  const latestFeedFailure = runtime?.feedQuality?.lastError;
   const currentIssues = [
-    !backendOperational ? runtime?.lastError ?? "行情权威未达到可交易状态" : null,
+    !backendOperational ? runtime?.lastError ?? latestFeedFailure ?? "行情权威未达到可交易状态" : null,
     radarBlocking ? `全市场扫描未达到最低覆盖：${runtime?.radar?.lastError ?? "等待重试"}` : null,
     blockingPathMarkets ? `有 ${blockingPathMarkets} 个市场的保留路径也已过期：${runtime?.strategyData?.candleError ?? "等待恢复"}` : null,
     error ? `当前页面连接重试中：${error}` : null,
@@ -362,7 +363,7 @@ export default function Home() {
   const feedAttempts = runtime?.feedQuality?.attempts ?? 0;
   const feedFailuresInWindow = runtime?.feedQuality?.failures ?? 0;
   const feedSuccessRate = feedAttempts ? (feedAttempts - feedFailuresInWindow) / feedAttempts * 100 : null;
-  const activePipelineStep = !backendOperational ? 1 : stableMarkets < 12 || !latestCandleAt ? 2
+  const activePipelineStep = stableMarkets < 12 || !latestCandleAt ? 2
     : portfolioOpen.length ? 5 : currentRoutes.length ? 4 : 3;
   const pipeline = [
     { title: "接收行情", detail: `最近成功 ${ageText(runtime?.lastSuccessAt, now)}` },
@@ -371,12 +372,15 @@ export default function Home() {
     { title: "执行检查", detail: `${currentRoutes.length} 条路线由后台确认通过或正在核对` },
     { title: "持仓管理", detail: `${portfolioOpen.length} 笔持仓实时保护` },
   ];
-  const nextAction = activePipelineStep === 1 ? "恢复新鲜行情后重新进入路径计算"
+  const nextAction = !backendOperational
+    ? currentRoutes.length ? `已保留 ${currentRoutes.length} 条路线；新鲜盘口恢复后从第4步重新核对，符合原进场区才成交`
+      : `5分钟路径与环境候选未清空；新鲜盘口恢复后从第${activePipelineStep}步继续`
     : activePipelineStep === 2 ? "补齐连续5分钟数据并建立全市场背景"
       : activePipelineStep === 3 ? "下一根5分钟K线完成后重算环境与策略"
         : activePipelineStep === 4 ? "每2秒核对盘口、成本、合约数量与仓位后决定是否成交"
           : "每2秒检查止损、盈利臂和移动保护";
-  const nextEta = activePipelineStep >= 4 ? "实时循环（约每2秒）" : waitText(Math.max(0, nextFiveMinuteAt - now));
+  const nextEta = !backendOperational ? "自动重试（约每2秒）"
+    : activePipelineStep >= 4 ? "实时循环（约每2秒）" : waitText(Math.max(0, nextFiveMinuteAt - now));
   const todayKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(clock || runtime?.generatedAt || 0);
   const todayRealized = currentPortfolioHistory.filter((trade) => trade.closedAt
     && new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(trade.closedAt) === todayKey)
@@ -384,7 +388,7 @@ export default function Home() {
   const todayPnl = arena ? todayRealized + portfolioFloating : null;
   const todayStartEquity = arena ? Math.max(0.01, arena.portfolioEquity - todayRealized) : null;
   const todayPnlRate = todayPnl == null || todayStartEquity == null ? null : todayPnl / todayStartEquity * 100;
-  const headline = !backendOperational ? "后台行情正在恢复，模拟账户暂停新开仓" : portfolioOpen.length
+  const headline = !backendOperational ? `行情恢复中；决策保留在第${activePipelineStep}步` : portfolioOpen.length
       ? `当前持有 ${portfolioOpen.length} 笔模拟订单` : leadRoute ? `${leadRoute.strategyName}正在接管${leadRoute.symbol.replace("_", "/")}`
         : leadCandidate && leadOwner ? `${leadOwner}正在分析${leadCandidate.symbol.replace("_", "/")}，尚未形成下单路线`
           : "正在建立全市场环境，暂未形成下单路线";
@@ -414,12 +418,12 @@ export default function Home() {
       <section className={`operator-runtime ${currentIssues.length ? "has-issue" : ""}`}>
         <div className="operator-runtime-head"><div><small>实时运行状态</small><h2>{backendOperational ? "数据持续推进，系统运行正常" : "系统正在恢复关键数据"}</h2><p>这张卡只反映后台真实快照，不用“等待触发”掩盖数据问题。</p></div><span>{runtime?.lastSuccessAt ? `更新于 ${ageText(runtime.lastSuccessAt, now)}` : "尚无成功快照"}</span></div>
         <div className="runtime-facts">
-          <article><small>本版本已运行</small><strong>{runtimeDurationText(arena?.startedAt ? now - arena.startedAt : null)}</strong><p>第{num(arena?.portfolioCycle, 0)}轮账户运行 {runtimeDurationText(arena?.portfolioCycleStartedAt ? now - arena.portfolioCycleStartedAt : null)}</p></article>
-          <article><small>当前步骤</small><strong>{activePipelineStep}/5 · {pipeline[activePipelineStep - 1].title}</strong><p>{pipeline[activePipelineStep - 1].detail}</p></article>
+          <article><small>策略账户已运行</small><strong>{runtimeDurationText(arena?.startedAt ? now - arena.startedAt : null)}</strong><p>第{num(arena?.portfolioCycle, 0)}轮账户运行 {runtimeDurationText(arena?.portfolioCycleStartedAt ? now - arena.portfolioCycleStartedAt : null)}</p></article>
+          <article><small>{backendOperational ? "当前步骤" : "暂停位置"}</small><strong>{activePipelineStep}/5 · {pipeline[activePipelineStep - 1].title}</strong><p>{backendOperational ? pipeline[activePipelineStep - 1].detail : currentRoutes.length ? "执行路线保留，尚未创建订单" : "没有已进入执行检查的路线被取消"}</p></article>
           <article><small>下一步准备</small><strong>{nextEta}</strong><p>{nextAction}</p></article>
           <article><small>交易阻塞</small><strong className={currentIssues.length ? "negative" : "positive"}>{currentIssues.length ? `${currentIssues.length} 项` : "当前无阻塞"}</strong><p>{currentIssues[0] ?? (feedSuccessRate == null ? "正在建立一小时数据质量窗口" : `近一小时盘口成功率 ${num(feedSuccessRate, 2)}% · ${feedFailuresInWindow}/${feedAttempts} 次短错`)}</p></article>
         </div>
-        <div className="runtime-pipeline">{pipeline.map((step, index) => { const number = index + 1; const state = number < activePipelineStep ? "done" : number === activePipelineStep ? "active" : "waiting"; return <article className={state} key={step.title}><i>{state === "done" ? "✓" : number}</i><div><b>{step.title}</b><small>{step.detail}</small></div><span>{state === "done" ? "已完成" : state === "active" ? "进行中" : "待进入"}</span></article>; })}</div>
+        <div className="runtime-pipeline">{pipeline.map((step, index) => { const number = index + 1; const state = !backendOperational && number === 1 ? "paused" : number < activePipelineStep ? "done" : number === activePipelineStep ? "active" : "waiting"; return <article className={state} key={step.title}><i>{state === "done" ? "✓" : number}</i><div><b>{step.title}</b><small>{step.detail}</small></div><span>{state === "done" ? "已完成" : state === "paused" ? "恢复中" : state === "active" ? backendOperational ? "进行中" : "暂停点" : "待进入"}</span></article>; })}</div>
         {currentIssues.length > 1 && <div className="runtime-issues"><b>当前问题明细</b>{currentIssues.map((issue) => <p key={issue}>{issue}</p>)}</div>}
         <footer>最近心跳 {ageText(runtime?.lastHeartbeatAt, now)} · 最近30币扫描 {ageText(runtime?.radar?.lastScanAt, now)} · 可用路径 {stableMarkets}/{runtime?.strategyData?.liquidMarkets ?? 30} · 路径短错 {degradedPathMarkets}（有效快照保留） · 累计恢复 {totalRecoveries}/{totalFeedFailures} · 快照时间 {time(runtime?.generatedAt)}</footer>
       </section>

@@ -28,8 +28,8 @@ test("runtime uses bounded futures REST snapshots, no continuous WebSocket", asy
   assert.match(worker, /await fetchMarketTickers\(\)/);
   assert.match(worker, /stableCandidates/);
   const alarm = worker.slice(worker.indexOf("async alarm("), worker.indexOf("async fetch(request"));
-  assert.ok(alarm.indexOf("processBooks") < alarm.indexOf("fetchMarketTickers"), "position books must run before the bulk radar");
-  assert.ok(alarm.indexOf("syncLive") < alarm.indexOf("fetchMarketTickers"), "LIVE reconciliation must run before the bulk radar");
+  assert.ok(alarm.indexOf("processBooks") < alarm.indexOf("launchOptionalWork"), "position books must run before optional market work is launched");
+  assert.ok(alarm.indexOf("syncLive") < alarm.indexOf("launchOptionalWork"), "LIVE reconciliation must run before optional market work is launched");
   assert.doesNotMatch(alarm, /lastError = `radar:/, "a radar timeout must not become a global execution fault");
   assert.doesNotMatch(alarm, /successes !== this\.runtime\.symbols\.length \? "DEGRADED"/, "partial candidate-book loss must not degrade the whole authority");
   assert.doesNotMatch(alarm, /actionableMarkets === 0 \? `\$\{recoveringMarkets\} realtime markets warming/, "a temporarily empty entry-ready set must not become a global error");
@@ -83,8 +83,8 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(page, /势承·逆竭与竭转·孤返/);
   assert.match(page, /今日净收益/);
   assert.match(page, /实时运行状态/);
-  assert.match(page, /本版本已运行/);
-  assert.match(page, /当前步骤/);
+  assert.match(page, /策略账户已运行/);
+  assert.match(page, /暂停位置/);
   assert.match(page, /下一步准备/);
   assert.match(page, /系统此刻在分析什么/);
   assert.match(page, /为什么分析/);
@@ -134,7 +134,7 @@ test("at-least-once alarm and independent feed recovery are explicit", async () 
   assert.match(worker, /\[2_000, 4_000, 8_000, 16_000, 30_000\]/);
   assert.match(worker, /GatePublicError/);
   assert.match(worker, /alarm < Date\.now\(\) - 6_000/);
-  assert.ok(worker.indexOf("setAlarm(next)") < worker.indexOf("saveCheckpoint(now)"));
+  assert.ok(worker.indexOf("setAlarm(prearmed)") < worker.indexOf("saveCheckpoint(finishedAt)"));
   assert.match(worker, /this\.processBooks\(now, cycleSymbols\)/);
   assert.doesNotMatch(worker, /this\.processBooks\(slot \* LOOP_MS/);
   assert.match(worker, /usableSnapshot\(snapshot, Math\.max\(now, Date\.now\(\)\)/);
@@ -145,9 +145,10 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
   assert.doesNotMatch(worker, /loadEquity|hydrateOpenPositions/);
   assert.match(worker, /if \(criticalChanged \|\| openedThisCycle\)/);
   assert.ok(worker.indexOf("saveCheckpoint(now, true)") < worker.indexOf("await this.drainOutbox(now)"));
-  assert.match(worker, /Promise\.all\(\[this\.processBooks\(now, cycleSymbols\), this\.updateAncillary\(now\)\]\)/);
-  assert.match(worker, /this\.priorityMinuteSymbols\(now\)\.length[\s\S]*await this\.updateAncillary\(now\);[\s\S]*await this\.processBooks\(now, cycleSymbols\)/);
-  assert.ok(worker.indexOf("await fetchActiveContracts()") < worker.indexOf("let books:"));
+  assert.match(worker, /const books = await this\.processBooks\(now, cycleSymbols\)/);
+  assert.ok(worker.indexOf("this.publishCriticalHealth(Date.now(), successes)") < worker.indexOf("this.launchOptionalWork(now, universeDue)"));
+  assert.doesNotMatch(worker.slice(worker.indexOf("async alarm("), worker.indexOf("async fetch(request")), /await this\.launchOptionalWork/);
+  assert.match(worker, /this\.ctx\.waitUntil\(tracked\)/);
   assert.match(worker, /runtimeCache.*expiresAt/s);
   assert.match(worker, /this\.runtime\.d1Writes \+ billedWrites > 4_800/);
   assert.doesNotMatch(worker, /review-entry:|review-exit:/);
