@@ -1,3 +1,12 @@
+# 极序·镜转 V9 decision — 2026-09-11
+
+- `极序·镜转` is this system's single named PAPER authority. It does not claim that generic momentum or reversal concepts have never existed; its two-path event definition, paired-shadow evidence contract, polarity switch and runner execution are designed together for this account.
+- `裂变` requires a completed five-minute close beyond a twelve-bar boundary with retained close location, range expansion, body, path efficiency, displacement and non-collapsed volume. Its base side follows the release. `回卷` requires a completed-bar boundary sweep, close back inside, rejection wick, range expansion and non-collapsed volume. Its base side follows the reclaim.
+- Every valid event runs both normal and mirrored reverse shadows with frozen, symmetric geometry. Exactly the latest three independent events within 24 hours decide polarity: three positive normal results select `顺极`; three negative normal results select `逆极` only if the matching reverse results are all positive. Zero and mixed results select cash. PAPER outcomes never authorize the direction.
+- The polarity decision applies only to the next new extreme event and never reverses an open position. A closed symbol/branch has a thirty-minute cooldown. Current extremes are ranked globally and only ranks one through three are admission-eligible; the account still may open fewer because structural risk, same-direction risk, margin, notional, lot size or depth fails.
+- A path's target is a profit-arm threshold rather than a fixed take-profit. After activation, moving protection locks at least modeled cost plus 0.35R and retains 55% of larger favorable movement; profit has no fixed upper cap. Initial stop, no-progress timeout before activation and four-to-six-hour edge decay remain mandatory.
+- V9 is a clean PAPER account boundary. V8 positions are settled only from fresh executable bid/ask, the cycle is archived, and the new cycle starts at 1,000 U. Deployment cannot enable LIVE.
+
 # 2026-09-11 — Market state selects the strategy family before expectancy ranks it
 
 - The first trading objective is not signal count or the 10% daily aspiration. It is selecting the strategy designed for the current completed-candle market environment.

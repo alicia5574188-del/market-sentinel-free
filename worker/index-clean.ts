@@ -18,9 +18,10 @@ import { type EventEntryAssessment, type RadarCandidate } from "../lib/market-ra
 import { completedCandleStrategyCandidate, initialMarketRegimes, marketRegimeSummary, normalizeMarketRegimes, residentCandleCandidate, selectDiverseMarketPool, updateMarketRegimes,
   type MarketRegimeCandidate, type MarketRegimeState, type ResidentCandleStructure } from "../lib/market-regime.ts";
 import { advanceStrategyArena, advanceStrategyShadowsFromCompletedCandle, applyStrategySleepStates, arenaSummary, initialStrategyArena, normalizeStrategyArena, observeStrategyArena,
-  ARENA_FRICTION_RATE, MIN_PORTFOLIO_TRADE_RISK_USDT, PORTFOLIO_REALTIME_CAPACITY, resetStrategyArenaAccount,
+  ARENA_FRICTION_RATE, MAX_PORTFOLIO_POSITIONS, MIN_PORTFOLIO_TRADE_RISK_USDT, PORTFOLIO_REALTIME_CAPACITY, resetStrategyArenaAccount,
   STRATEGY_INITIAL_EQUITY, type StrategyArenaState } from "../lib/strategy-arena.ts";
-import { ADAPTIVE_DAILY_OBJECTIVE_RATE, ADAPTIVE_MIN_ANALOG_SAMPLES, ADAPTIVE_POLICY_VERSION } from "../lib/adaptive-policy.ts";
+import { EXTREME_SEQUENCE_NAME, EXTREME_SEQUENCE_STREAK, EXTREME_SEQUENCE_STREAK_MAX_SPAN_MS,
+  EXTREME_SEQUENCE_SYMBOL_COOLDOWN_MS, EXTREME_SEQUENCE_VERSION } from "../lib/extreme-sequence-mirror.ts";
 
 const LOOP_MS = 2_000;
 const AUTHORITY_STALE_AFTER_MS = 8_000;
@@ -491,26 +492,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         events72h: results.filter((row) => now - row.resolvedAt <= 72 * 60 * 60_000).length,
         latest3: results.slice(-3).map((row) => row.netReturnRate),
         latest6Net: results.slice(-6).reduce((total, row) => total + row.netReturnRate, 0),
-        authority: "CURRENT_STATE_WALK_FORWARD",
-        paperAuthority: "POLICY",
+        authority: "EXTREME_STREAK_POLARITY",
+        paperAuthority: "THREE_WINS_OR_THREE_LOSSES_WITH_REVERSE_PROOF",
         normalShadowEvents: Object.values(this.runtime.strategyArena.strategies)
           .filter((strategy) => strategy.id === playbook.id)
           .reduce((total, strategy) => total + strategy.recentResults.length, 0) };
     });
-    const policyMetrics = Object.values(this.runtime.stableCandidates).flatMap((candidate) =>
-      (candidate.adaptivePolicy?.recommendations ?? []).map((policy) => ({
-        kind: "ADAPTIVE_ROUTE", symbol: candidate.symbol, observedAt: candidate.observedAt,
-        mechanism: policy.mechanism, side: policy.side, horizonMinutes: policy.horizonMinutes,
-        samples: policy.samples, discoverySamples: policy.discoverySamples,
-        confirmationSamples: policy.confirmationSamples,
-        netExpectationRate: policy.netExpectationRate,
-        conservativeNetReturnRate: policy.conservativeNetReturnRate,
-        confirmationNetReturnRate: policy.confirmationNetReturnRate,
-        profitFactor: policy.profitFactor, targetReachRate: policy.targetReachRate,
-        opportunityRatePerDay: policy.opportunityRatePerDay, objectiveScore: policy.objectiveScore,
-        approved: policy.approved, reason: policy.reason,
-      })));
-    const metrics = [...policyMetrics, ...mechanismMetrics];
+    const extremeMetrics = Object.values(this.runtime.stableCandidates).flatMap((candidate) => candidate.extremeSequence ? [{
+      kind: "EXTREME_SEQUENCE", symbol: candidate.symbol, observedAt: candidate.observedAt,
+      branch: candidate.extremeSequence.branch, baseSide: candidate.extremeSequence.baseSide,
+      score: candidate.extremeSequence.score, structureId: candidate.extremeSequence.structureId,
+      reason: candidate.extremeSequence.reason,
+    }] : []);
+    const metrics = [...extremeMetrics, ...mechanismMetrics];
     try {
       await this.env.DB.batch([
         this.env.DB.prepare(`INSERT OR REPLACE INTO strategy_runtime_log
@@ -545,6 +539,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const stable = this.runtime.stableCandidates[symbol];
     const candidates = stable && now - stable.observedAt <= 11 * 60_000 ? [stable] : candle ? [candle.candidate] : [];
     if (!candidates.length || !memory) return;
+    const rankedExtreme = [...new Map([...Object.values(this.runtime.stableCandidates), ...candidates]
+      .map((row) => [row.symbol, row])).values()]
+      .filter((row) => row.extremeSequence != null && now - row.observedAt <= 11 * 60_000)
+      .sort((left, right) => (right.extremeSequence?.score ?? 0) - (left.extremeSequence?.score ?? 0)
+        || right.observedAt - left.observedAt || left.symbol.localeCompare(right.symbol));
     for (const candidate of candidates) {
       this.runtime.strategyArena = observeStrategyArena({ state: this.runtime.strategyArena, observation: {
         candidate, midpoint, bestBid, bestAsk, alignedFlow: 0, minuteNoiseRate: memory.minuteNoiseRate,
@@ -555,6 +554,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate, completedMinuteAt: memory.timeframeUpdatedAt.m1,
         leverageMax: this.runtime.contractMeta[symbol]?.leverageMax, now, dataFresh: true,
         contractReady: this.runtime.contractMeta[symbol] != null,
+        globalOpportunityRank: Math.max(1, rankedExtreme.findIndex((row) => row.symbol === candidate.symbol) + 1),
+        globalOpportunityCount: rankedExtreme.length,
         managementCapacity: Object.keys(this.runtime.strategyArena.portfolioOpen)
           .every((openSymbol) => this.runtime.symbols.includes(openSymbol) && this.runtime.evidence[openSymbol]?.fresh !== false),
       } });
@@ -564,11 +565,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if (positions.every((position) => {
         const evidence = this.runtime.evidence[position.symbol];
         return evidence?.fresh && now - evidence.observedAt <= STALE_AFTER_MS && evidence.bestBid != null && evidence.bestAsk != null;
-      })) this.runtime.strategyArena = resetStrategyArenaAccount({ state: this.runtime.strategyArena,
+        })) this.runtime.strategyArena = resetStrategyArenaAccount({ state: this.runtime.strategyArena,
         quotes: Object.fromEntries(positions.map((position) => [position.symbol, {
           midpoint: this.runtime.evidence[position.symbol]!.midpoint, bestBid: this.runtime.evidence[position.symbol]!.bestBid,
           bestAsk: this.runtime.evidence[position.symbol]!.bestAsk, observedAt: this.runtime.evidence[position.symbol]!.observedAt, fresh: true,
-        }])), now, reason: "V6状态路径切换：以新鲜可成交价格结算并归档上一模拟周期" });
+        }])), now, reason: "极序·镜转切换：以新鲜可成交价格结算并归档上一模拟周期" });
     }
   }
 
@@ -1785,8 +1786,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const effectiveState = !this.authorityReady ? "RECOVERY_REQUIRED" : stale ? "RECONNECTING" : this.runtime.state;
       const strategies = Object.values(this.runtime.strategyArena.strategies);
       const regimes = marketRegimeSummary(this.runtime.marketRegimes);
-      const policyCandidates = Object.values(this.runtime.stableCandidates)
-        .flatMap((candidate) => candidate.adaptivePolicy?.recommendations ?? []);
+      const extremeCandidates = Object.values(this.runtime.stableCandidates)
+        .filter((candidate) => candidate.extremeSequence != null);
       return json({
         version: this.runtime.version,
         mode: this.runtime.mode,
@@ -1801,7 +1802,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         liveMode: { requestedEnabled: this.runtime.live.requestedEnabled, operational: this.runtime.live.operational },
         strategyArena: {
           version: this.runtime.strategyArena.version,
-          playbookCount: 6,
+          playbookCount: 1,
           catalogSize: strategies.length,
           shadowCount: strategies.filter((row) => row.lane === "SHADOW").length,
           activeCount: strategies.filter((row) => row.lane === "ACTIVE").length,
@@ -1821,17 +1822,23 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             correlatedRiskCap: CORRELATED_DIRECTION_RISK_CAP,
             marginCap: 0.30,
             maxNotionalMultiple: 4,
-            authorityWindowPriority: "CURRENT_STATE_WALK_FORWARD",
+            authorityWindowPriority: "EXTREME_STREAK_POLARITY",
             paperEvaluation: false,
             exactShadowClone: true,
             normalShadowAlwaysOn: true,
             independentDirections: true,
-            generatedRouteAuthority: true,
+            extremeSequenceAuthority: true,
+            strategyName: EXTREME_SEQUENCE_NAME,
+            generatedRouteAuthority: false,
             legacyStrategyAuthority: false,
             paperCycleResetOnCutover: true,
-            adaptivePolicyVersion: ADAPTIVE_POLICY_VERSION,
-            adaptiveMinimumAnalogSamples: ADAPTIVE_MIN_ANALOG_SAMPLES,
-            dailyObjectiveRate: ADAPTIVE_DAILY_OBJECTIVE_RATE,
+            extremeSequenceVersion: EXTREME_SEQUENCE_VERSION,
+            streakLength: EXTREME_SEQUENCE_STREAK,
+            streakMaxSpanMs: EXTREME_SEQUENCE_STREAK_MAX_SPAN_MS,
+            sameBranchSymbolCooldownMs: EXTREME_SEQUENCE_SYMBOL_COOLDOWN_MS,
+            maxPortfolioPositions: MAX_PORTFOLIO_POSITIONS,
+            profitArmIsExit: false,
+            dailyObjectiveRate: 0.10,
             dailyObjectiveIsQuota: false,
           },
         },
@@ -1846,9 +1853,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         strategyData: {
           liquidMarkets: this.runtime.liquidUniverse.length,
           stableMarkets: Object.keys(this.runtime.stableCandidates).length,
-          adaptivePolicyMarkets: Object.values(this.runtime.stableCandidates)
-            .filter((candidate) => candidate.adaptivePolicy != null).length,
-          approvedPolicyRoutes: policyCandidates.filter((row) => row.approved).length,
+          extremeSequenceMarkets: extremeCandidates.length,
+          polarityReady: strategies.some((row) => row.enabled || row.reverseEnabled),
           lastCompletedCandleAt: this.runtime.lastStrategyCandleAt,
           lastRuntimeLogAt: this.runtime.lastStrategyLogAt,
           candleError: this.runtime.strategyCandleError,
@@ -1875,9 +1881,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       return json({ ...publicRuntime, ...this.authorityView, paperCycle: paperCycleSummary(paperCycle, this.authorityView.equity),
         strategyArena: arenaSummary(strategyArena), marketRegimes: marketRegimeSummary(marketRegimes),
         strategyData: { liquidMarkets: liquidUniverse.length, stableMarkets: Object.keys(stableCandidates).length,
-          adaptivePolicyMarkets: Object.values(stableCandidates).filter((candidate) => candidate.adaptivePolicy != null).length,
-          approvedPolicyRoutes: Object.values(stableCandidates)
-            .flatMap((candidate) => candidate.adaptivePolicy?.recommendations ?? []).filter((row) => row.approved).length,
+          extremeSequenceMarkets: Object.values(stableCandidates).filter((candidate) => candidate.extremeSequence != null).length,
+          polarityReady: Object.values(strategyArena.strategies).some((row) => row.enabled || row.reverseEnabled),
           lastCompletedCandleAt: Math.max(0, ...Object.values(stableStructures).map((row) => row.observedAt)),
           lastRuntimeLogAt: publicRuntime.lastStrategyLogAt,
           candleError: publicRuntime.strategyCandleError, logError: publicRuntime.strategyLogError },

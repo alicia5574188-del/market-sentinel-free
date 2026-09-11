@@ -76,13 +76,13 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(page, /window\.addEventListener\("online", resume\)/);
   assert.match(page, /tabScroll\.current\[tab\] = window\.scrollY/);
   assert.match(page, /viewScroll\.current\[activeView\] = window\.scrollY/);
-  assert.match(page, /自适应状态路线/);
-  assert.match(layout, /V6自适应状态路线 · PAPER/);
+  assert.match(page, /极序·镜转/);
+  assert.match(layout, /V9极序·镜转 · PAPER/);
   assert.doesNotMatch(layout, /V4自适应影子策略/);
-  assert.match(page, /V6 · GENERATED STATE ROUTES/);
-  assert.match(page, /旧12策略没有开仓权/);
-  assert.match(page, /V6决策流程/);
-  assert.match(page, /当前有效路线/);
+  assert.match(page, /V9 · EXTREME SEQUENCE MIRROR/);
+  assert.match(page, /连续3胜顺着做/);
+  assert.match(page, /V9决策流程/);
+  assert.match(page, /极序事件/);
   assert.match(page, /const hasRuntimeSnapshot = Boolean\(runtime && arena\)/);
   assert.match(page, /收到真实运行快照后再显示账户、持仓、路线和市场数量/);
   assert.match(page, /收到后台真实快照前不显示“0笔”/);
@@ -149,17 +149,18 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
   assert.match(worker, /completeTrades\.length > item\.report\.trades\.length/);
 });
 
-test("V6 generated state-route controller is bounded, cost-aware, and is the sole LIVE order source", async () => {
-  const [arena, adaptive, regime, worker, page, migration] = await Promise.all([
-    read("lib/strategy-arena.ts"), read("lib/adaptive-policy.ts"), read("lib/market-regime.ts"),
+test("V9 extreme-sequence mirror is bounded, cost-aware, and is the sole LIVE order source", async () => {
+  const [arena, extreme, regime, worker, page, migration] = await Promise.all([
+    read("lib/strategy-arena.ts"), read("lib/extreme-sequence-mirror.ts"), read("lib/market-regime.ts"),
     read("worker/index-clean.ts"), read("app/page.tsx"),
     read("drizzle/0035_strategy_arena_fresh_start.sql"),
   ]);
   assert.match(arena, /STRATEGY_CATALOG/);
-  assert.match(arena, /STRATEGY_ARENA_VERSION = 8/);
-  assert.match(arena, /definition\.channel !== input\.candidate\.channel/);
-  assert.match(arena, /name: "低效边界回归"/);
-  assert.match(arena, /name: "边界有效接受"/);
+  assert.match(arena, /STRATEGY_ARENA_VERSION = 9/);
+  assert.match(arena, /name: EXTREME_SEQUENCE_NAME/);
+  assert.match(extreme, /EXTREME_SEQUENCE_NAME = "极序·镜转"/);
+  assert.match(extreme, /branch: "FISSION"/);
+  assert.match(extreme, /branch: "SNAPBACK"/);
   assert.doesNotMatch(arena, /adaptiveMechanismForPlaybook/);
   assert.match(arena, /ARENA_FRICTION_RATE = 0\.0014/);
   assert.match(arena, /ARENA_MAX_COST_SHARE = 0\.25/);
@@ -189,18 +190,19 @@ test("V6 generated state-route controller is bounded, cost-aware, and is the sol
   assert.match(worker, /resetStrategyArenaAccount/);
   assert.match(worker, /minimumPortfolioRiskUsdt: MIN_PORTFOLIO_TRADE_RISK_USDT/);
   assert.match(worker, /empiricalCostFloorRate: ARENA_FRICTION_RATE/);
-  assert.match(adaptive, /ADAPTIVE_MIN_ANALOG_SAMPLES = 8/);
-  assert.match(adaptive, /ADAPTIVE_HORIZONS_MINUTES = \[10, 20, 30, 45, 60\]/);
-  assert.match(adaptive, /Same-candle ambiguity is deliberately stop-first/);
-  assert.match(arena, /CURRENT_STATE_WALK_FORWARD/);
-  assert.match(page, /系统直接生成多空进场、止损、目标和持仓周期/);
-  assert.match(page, /保守成本后期望/);
+  assert.match(extreme, /EXTREME_SEQUENCE_STREAK = 3/);
+  assert.match(arena, /EXTREME_STREAK_POLARITY/);
+  assert.match(arena, /profitArmIsExit: false/);
+  assert.match(arena, /RUNNER_EXIT/);
+  assert.match(page, /盈利启动位只启动保护，不封顶止盈/);
+  assert.match(page, /混合结果保持空仓/);
   assert.match(arena, /cloneShadowForPortfolio/);
   assert.match(arena, /paperEvaluation: false/);
-  assert.match(arena, /generatedRouteAuthority: true/);
+  assert.match(arena, /extremeSequenceAuthority: true/);
+  assert.match(arena, /generatedRouteAuthority: false/);
   assert.match(arena, /legacyStrategyAuthority: false/);
   assert.match(page, /观察影子/);
-  assert.match(page, /旧策略、3\/6晋级和镜像反向均不能产生新模拟订单/);
+  assert.match(page, /顺极与逆极互斥/);
   assert.match(page, /当前模拟周期/);
   assert.match(page, /历史归档/);
   assert.match(page, /runtimeBackendOperational\(runtime\)/);
@@ -233,10 +235,10 @@ test("legacy sizing and portfolio mirroring both retain bounded account risk", a
   assert.match(live, /mirrorNotionalFraction/);
 });
 
-test("cutover is credential-bound and removes legacy DOs only after v6 health", async () => {
+test("cutover is credential-bound and removes legacy DOs only after v9 health", async () => {
   const workflow = await read(".github/workflows/sentinel-v2-ci.yml");
-  assert.equal((workflow.match(/\.runtime\.strategyArena\.version == 8/g) ?? []).length, 2);
-  assert.equal((workflow.match(/grep -Fq '自适应状态路线'/g) ?? []).length, 2);
+  assert.equal((workflow.match(/\.runtime\.strategyArena\.version == 9/g) ?? []).length, 2);
+  assert.equal((workflow.match(/grep -Fq '极序·镜转'/g) ?? []).length, 2);
   assert.match(workflow, /id,exchange,environment,ciphertext,iv,crypto_version,key_hint,gate_user_id,owner_account_id,permission_summary_json,status,last_verified_at,last_error,created_at,updated_at/);
   assert.match(workflow, /index\.prepare\.js/);
   assert.match(workflow, /class RetiredDurableObject extends DurableObject/);

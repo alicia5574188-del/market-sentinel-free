@@ -1,6 +1,7 @@
 import type { RadarCandidate, RadarTicker } from "./market-radar.ts";
 import type { CompletedMinuteCandle } from "./liquidity-core.ts";
-import { buildAdaptivePolicySnapshot, type AdaptivePolicySnapshot } from "./adaptive-policy.ts";
+import { detectExtremeSequencePath, type ExtremeSequencePath } from "./extreme-sequence-mirror.ts";
+import type { AdaptivePolicySnapshot } from "./adaptive-policy.ts";
 
 export const MARKET_REGIME_VERSION = 2;
 export const MARKET_REGIME_MIN_SAMPLES = 18;
@@ -58,6 +59,7 @@ export type MarketRegimeCandidate = {
   observedAt: number;
   anomalyKind: RadarCandidate["kind"] | null;
   adaptivePolicy?: AdaptivePolicySnapshot | null;
+  extremeSequence?: ExtremeSequencePath | null;
 };
 
 export type MarketRegimeState = {
@@ -110,7 +112,7 @@ export function residentCandleCandidate(input: {
   fundingRate: number;
   now: number;
 }) {
-  const rows = completedFiveMinuteCandles(input.candles).slice(-12);
+  const rows = completedFiveMinuteCandles(input.candles).slice(-24);
   if (rows.length < 6 || input.volume24hUsd <= 0) return null;
   const latest = rows.at(-1)!;
   if (input.now < latest.completedAt || input.now - latest.completedAt > 11 * 60_000) return null;
@@ -161,13 +163,18 @@ export function residentCandleCandidate(input: {
     lifecycle += `:${edgeStartedAt}`;
   }
   const firstSeenAt = rows[0].completedAt;
+  const extremeSequence = detectExtremeSequencePath(rows);
+  if (extremeSequence) {
+    channel = "ANOMALY"; regime = extremeSequence.branch === "FISSION" ? "EXPANSION" : "RANGE";
+    side = extremeSequence.baseSide; score = extremeSequence.score;
+  }
   const candidate: MarketRegimeCandidate = {
     id: `${input.symbol}:CANDLE5M:${channel}:${side}:${lifecycle}`, symbol: input.symbol, channel, regime, side,
     score: clamp(score, 0, 100), referencePrice: channel === "ANOMALY" ? latest.open : latest.close,
     moveRate: channel === "ANOMALY" ? lastMove : trendRate, trendRate, trendEfficiency, volatilityRatio, rangePosition,
     volume24hUsd: input.volume24hUsd, fundingRate: input.fundingRate, openInterestChangeRate: 0,
     confirmations: 2, firstSeenAt, observedAt: latest.completedAt,
-    anomalyKind: channel === "ANOMALY" ? "PRICE_SHOCK" : null,
+    anomalyKind: channel === "ANOMALY" ? "PRICE_SHOCK" : null, extremeSequence,
   };
   const structure: ResidentCandleStructure = { id: `${input.symbol}:5m:${lifecycle}`, observedAt: latest.completedAt,
     lower, upper, midpoint: (lower + upper) / 2, recentLower, recentUpper };
@@ -221,19 +228,20 @@ export function completedCandleStrategyCandidate(input: {
   const recentLower = Math.min(...recent.map((row) => row.low));
   const recentUpper = Math.max(...recent.map((row) => row.high));
   const lifecycle = `${latestCompletedAt}:${candlePriceBin(lower)}:${candlePriceBin(upper)}`;
-  const adaptivePolicy = buildAdaptivePolicySnapshot(allRows, latestCompletedAt);
-  const bestApprovedObjective = Math.max(0, ...(adaptivePolicy?.recommendations
-    .filter((row) => row.approved).map((row) => row.objectiveScore) ?? []));
-  // A route with independently confirmed positive expectancy must win scarce fresh-book capacity over research-only ranks.
-  const executionPriorityScore = bestApprovedObjective > 0
-    ? 90 + clamp(bestApprovedObjective * 100, 0, 10) : score;
+  const extremeSequence = detectExtremeSequencePath(allRows);
+  if (extremeSequence) {
+    channel = "ANOMALY"; regime = extremeSequence.branch === "FISSION" ? "EXPANSION" : "RANGE";
+    side = extremeSequence.baseSide; score = extremeSequence.score;
+  }
+  // Only an actual 极序·镜转 extreme receives scarce fresh-book priority.
+  const executionPriorityScore = extremeSequence ? 90 + clamp(extremeSequence.score - 68, 0, 10) : score;
   const candidate: MarketRegimeCandidate = {
     id: `${input.symbol}:CANDLE5M:${channel}:${side}:${lifecycle}`, symbol: input.symbol, channel, regime, side,
     score: clamp(executionPriorityScore, 0, 100), referencePrice: channel === "ANOMALY" ? latest.open : latest.close,
     moveRate: channel === "ANOMALY" ? lastMove : trendRate, trendRate, trendEfficiency, volatilityRatio, rangePosition,
     volume24hUsd: input.volume24hUsd, fundingRate: input.fundingRate, openInterestChangeRate: 0,
     confirmations: 2, firstSeenAt: latestCompletedAt, observedAt: latestCompletedAt, anomalyKind: null,
-    adaptivePolicy,
+    adaptivePolicy: null, extremeSequence,
   };
   const structure: ResidentCandleStructure = { id: `${input.symbol}:5m:${lifecycle}`, observedAt: latestCompletedAt,
     lower, upper, midpoint: (lower + upper) / 2, recentLower, recentUpper };

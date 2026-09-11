@@ -1,3 +1,11 @@
+# Active goal — original extreme-sequence polarity strategy V9
+
+- Replace V8 generated-route PAPER authority with one custom strategy named `极序·镜转`, designed for two completed-candle extremes: retained boundary displacement (`裂变`) and failed boundary sweep/reclaim (`回卷`).
+- Run exact paired normal/reverse shadows for every executable event. The latest three independent normal wins authorize the next event in the base direction; three normal losses authorize the reverse direction only when the same three reverse shadows all won after full modeled cost. Mixed or older-than-24-hour sequences stay in cash.
+- Select globally across the current thirty-contract liquid universe, rank current extremes before admission, allow at most the top three and prevent immediate same-symbol/same-branch recycling. Do not create a trade-count quota.
+- Treat the economic target as a profit arm: once reached, activate a moving protection and leave upside uncapped; retain structural stop, time decay, full cost, fresh bid/ask, Gate contract, depth and portfolio-risk gates.
+- Archive/reset the V8 PAPER cycle through the existing fresh-quote version cutover, preserve all history and credentials, keep LIVE explicitly OFF, verify completely, and release through GitHub `main`.
+
 # Completed correction — regime-first strategy selection on the current V6 code
 
 - Use the existing six generated mechanisms, completed-five-minute state, walk-forward policy, fresh Gate futures execution and account infrastructure. Do not add a research collector or redesign the page.

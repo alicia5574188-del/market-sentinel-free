@@ -1,3 +1,10 @@
+# In progress — 2026-09-11 original 极序·镜转 V9 release
+
+- The V8 production review found two consecutive TAO stops and an immediate third TAO entry. The implementation evaluated symbols independently, had no post-close cooldown, and had no true current-opportunity global admission rank.
+- Implemented the single `极序·镜转` authority with `裂变` and `回卷` completed-candle paths, paired costed shadows, exact three-result polarity, top-three global eligibility, thirty-minute same-branch cooldown, maximum three positions and an uncapped profit-arm runner.
+- V9 cutover semantics archive the old cycle and restart at 1,000 U only after fresh executable quotes. LIVE settings remain owner-controlled and OFF.
+- Local verification passes 195 direct tests, 16 architecture/migration tests, the production build, TypeScript, ESLint, whitespace validation and a Cloudflare deploy dry-run. Release and advancing production health remain pending.
+
 # Done — 2026-09-11 regime-first strategy routing correction
 
 - Production evidence at inspection time: V6 had closed 24 PAPER trades, won 7 and reduced strategy-account equity to 860.1533 U. The low-efficiency boundary-return strategy accounted for 21 trades and -88.7415 U, while appearing under RANGE, COMPRESSION and EXPANSION.
