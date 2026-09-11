@@ -1,11 +1,11 @@
-# In progress — 2026-09-11 non-blocking execution authority correction
+# Done — 2026-09-11 non-blocking execution authority correction
 
 - Follow-up production observation exposed a remaining once-per-minute false global block: a staggered subset could record zero successes, but the health publisher labeled it as all ten resident snapshots unavailable. The count described the pool, not the attempted failures.
 - Health now preserves a recently advancing authority through an isolated subset miss. It enters global reconnect only after the last successful executable snapshot truly exceeds the eight-second freshness limit; protected positions/routes still freeze immediately and visibly.
 - New screenshot proved a genuine recurring authority pause after the prior release: 30/30 completed paths and zero path faults were retained, while the last critical book success and heartbeat stopped advancing. At that snapshot there were six environment candidates but zero routes in execution checking, so no particular step-4 order was cancelled; the pause could still make a future route miss its entry window.
 - Root defects corrected locally: Gate 429 backoff is now isolated by official host and order books fail over to the other host; universe/radar/candle/research reads run as one non-overlapping background task and no longer hold the executable-book alarm; critical health publishes immediately after fresh books.
 - The page no longer collapses every authority pause to step 1. It displays the retained decision stage, says whether execution routes are retained, and states that recovery rechecks the latest bid/ask before any order.
-- Local acceptance passes 201 direct tests, 3 all-regime tests, 17 architecture/migration tests, TypeScript, ESLint, production build, whitespace validation and Cloudflare dry-run. Remote PR and cross-minute advancing production acceptance remain.
+- Local acceptance passed 201 direct tests, 3 all-regime tests, 17 architecture/migration tests, TypeScript, ESLint, production build, whitespace validation and Cloudflare dry-run. PR #190 run #682 repeated every review gate; main run #683 deployed version `8e45df7e-3ac3-4e42-bb7a-cfb74672e5d9` from commit `3f19de00fae6be2b1461f2073c3ff8f6bea5afdf`.\n- Production then advanced across five consecutive minute boundaries: book attempts rose from 2,269 to 3,092, rolling failures stayed at 11, retained paths stayed 30/30, two PAPER positions remained under step-5 protection and no global recovery state appeared. LIVE requested/operational remained OFF.
 
 # Done — 2026-09-11 Gate recovery and current-evidence coverage
 
