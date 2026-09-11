@@ -1,4 +1,12 @@
-# Active goal — final executable all-environment upgrade
+# Active goal — eliminate avoidable Gate degradation and close verified coverage gaps
+
+- Stop polling completed-five-minute data as if it changed every ten seconds. Schedule each contract once per newly closed five-minute bar, preserve the last verified continuous path during transient read failures, and keep route/position books at the existing two-second protection cadence.
+- Treat Gate public 429 and timeout handling as one endpoint-aware system: bounded read retry, shared backoff from Gate response headers, official futures-host failover, and status that distinguishes a fresh retained snapshot from a genuinely blocking outage. Do not route public market data through the owner's trading credential.
+- Measure acceptance with repeatable failure/recovery tests and production health: no request storm, no stale-price entry/exit, no loss of completed paths from one transient failure, and LIVE requested/operational explicitly OFF.
+- Increase opportunity coverage only with original completed-candle mechanisms that add distinct payoff geometry and pass chronological train/held-out replay after 0.14% friction plus adverse entry. Do not enable a strategy merely to create orders, do not revive rejected direct breakout chasing, and keep every final execution/economic/portfolio gate.
+- Preserve the current 1,000 U PAPER cycle, positions, history, credentials and one `MarketStream` authority. Release once through a reviewed PR and GitHub `main` after direct tests, research gates, build, lint, typecheck, dry-run and advancing production health pass.
+
+# Completed goal — final executable all-environment upgrade
 
 - Replace V10's misleading “four environments observed, only exhaustion-derived routes can trade” behavior with an honest V11 authority whose native trend, range, compression and exhaustion mechanisms are independently replayed and may trade only when their own chronological held-out after-cost evidence is positive.
 - Prefer useful opportunity coverage and account compounding after positive edge is established. Do not manufacture orders by loosening freshness, structure, cost, executable-price, contract, depth or portfolio protections, and do not promise daily profit.

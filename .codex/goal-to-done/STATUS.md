@@ -1,3 +1,11 @@
+# Ready for release — 2026-09-11 Gate recovery and current-evidence coverage
+
+- Root cause separated: bulk scan timeout and per-contract candle 429 were recoverable public-endpoint faults; zero orders occurred because six environment candidates produced zero account-authorized routes, not because the whole feed stopped.
+- Public data now uses endpoint-shared 429 backoff, one retry across Gate's two official futures REST hosts, a one-minute bulk radar, completed-bar scheduling and four-row incremental merge into retained continuous paths. Short faults are visible as retained-path quality diagnostics; only an expired retained path blocks the affected market.
+- The proposed broader `衡返` coverage was rejected after its latest chronological fold fell to PF 0.79; strict `衡返` latest fold was PF 0.67 and is now paired-shadow only. The executable exhaustion family retained PF 1.35/1.40/1.37 across three chronological folds; current three-result polarity can later reactivate or reverse a shadow family.
+- Local verification passed 198 direct tests, 3 all-regime tests, 17 architecture/migration tests, TypeScript, ESLint, production build, whitespace validation, frozen-data replay and Cloudflare dry-run. PAPER account/history/credentials are preserved and LIVE remains OFF.
+- Next: upload the reviewed changes to a branch, pass GitHub CI, merge to `main`, then verify advancing production paths and LIVE requested/operational both false.
+
 # Done — 2026-09-11 V11 verified-route authority
 
 - Frozen 30-day/20-market next-bar research charged 0.14% round-trip friction and 0.025% adverse entry. `势承·逆竭` produced train/held-out PF 1.80/1.71, `衡返·双拒` 1.16/1.42, and `竭转·孤返` 0.98/1.39. Direct trend chasing and both direct/failed compression release remained negative and have no PAPER authority.

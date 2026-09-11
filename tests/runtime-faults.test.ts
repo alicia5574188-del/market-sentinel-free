@@ -27,7 +27,21 @@ registerHooks({
 
 const runtimeWorkerSpecifier = "../worker/index-clean.ts?runtime-fault-suite";
 const { MarketStream, failedRadarRuntime, radarAttemptDue, radarCandidateExecutionAllowed,
-  successfulRadarRuntime } = await import(runtimeWorkerSpecifier);
+  successfulRadarRuntime, latestCompletedStrategyCandleAt, mergeStrategyCandlePath } = await import(runtimeWorkerSpecifier);
+
+test("the strategy candle clock waits for Gate publication grace and advances once per closed bar", () => {
+  const boundary = 1_800_000;
+  assert.equal(latestCompletedStrategyCandleAt(boundary + 7_999), boundary - 300_000);
+  assert.equal(latestCompletedStrategyCandleAt(boundary + 8_000), boundary);
+});
+
+test("incremental strategy candles merge without gaps and retain the latest continuous suffix", () => {
+  const row = (time: number, close: number) => ({ time, open: close, high: close + 1, low: close - 1, close, volume: 1 });
+  assert.deepEqual(mergeStrategyCandlePath([row(0, 1), row(300, 2), row(600, 3)],
+    [row(600, 30), row(900, 4)]).map((item: ReturnType<typeof row>) => [item.time, item.close]), [[0, 1], [300, 2], [600, 30], [900, 4]]);
+  assert.deepEqual(mergeStrategyCandlePath([row(0, 1), row(300, 2)], [row(900, 4)])
+    .map((item: ReturnType<typeof row>) => item.time), [900]);
+});
 
 class FakeStorage {
   values = new Map<string, unknown>();
@@ -119,6 +133,18 @@ async function makeStream(checkpoint?: unknown) {
   return makeStreamFromStorage(new FakeStorage(checkpoint));
 }
 
+test("a transient strategy-candle failure keeps a fresh retained path and only blocks after expiry", async () => {
+  const { stream } = await makeStream();
+  const now = 100_000_000;
+  stream.runtime.strategyCandleFailures.BTC_USDT = { count: 3, lastFailureAt: now, retryAt: now + 10_000,
+    lastError: "Gate public 429" };
+  stream.runtime.stableStructures.BTC_USDT = { id: "BTC:5m", observedAt: now - 5 * 60_000,
+    lower: 90, upper: 110, midpoint: 100, recentLower: 95, recentUpper: 105 };
+  assert.equal(stream.blockingStrategyCandleError(now), null);
+  stream.runtime.stableStructures.BTC_USDT.observedAt = now - 12 * 60_000;
+  assert.match(stream.blockingStrategyCandleError(now), /BTC_USDT: Gate public 429/);
+});
+
 test("radar timeout preserves the last good scan and retries once per normal scan without contaminating execution health", () => {
   const candidate = { id: "BTC:1", symbol: "BTC_USDT", side: "LONG", strength: 2, moveRate: 0.01,
     movementMultiple: 2, volume24hUsd: 1_000_000, confirmations: 2, firstSeenAt: 1, observedAt: 1,
@@ -131,18 +157,18 @@ test("radar timeout preserves the last good scan and retries once per normal sca
   assert.equal(first.lastScanAt, 1_000);
   assert.deepEqual(first.candidates, [candidate]);
   assert.equal(first.consecutiveFailures, 1);
-  assert.equal(first.retryAt, 21_000);
-  assert.equal(radarAttemptDue(first, 20_999), false);
-  assert.equal(radarAttemptDue(first, 21_000), true);
+  assert.equal(first.retryAt, 71_000);
+  assert.equal(radarAttemptDue(first, 70_999), false);
+  assert.equal(radarAttemptDue(first, 71_000), true);
 
-  const second = failedRadarRuntime(first, 21_000, new Error("timeout again"));
-  const third = failedRadarRuntime(second, 31_000, new Error("timeout again"));
-  const fourth = failedRadarRuntime(third, 41_000, new Error("timeout again"));
-  assert.equal(second.retryAt, 31_000);
-  assert.equal(third.retryAt, 41_000);
-  assert.equal(fourth.retryAt, 51_000, "failures must not starve the eighteen-sample regime warmup");
+  const second = failedRadarRuntime(first, 71_000, new Error("timeout again"));
+  const third = failedRadarRuntime(second, 131_000, new Error("timeout again"));
+  const fourth = failedRadarRuntime(third, 191_000, new Error("timeout again"));
+  assert.equal(second.retryAt, 131_000);
+  assert.equal(third.retryAt, 191_000);
+  assert.equal(fourth.retryAt, 251_000, "failures retry once per bounded minute scan");
 
-  const recovered = successfulRadarRuntime(fourth, 51_000, 30, [candidate]);
+  const recovered = successfulRadarRuntime(fourth, 251_000, 30, [candidate]);
   assert.equal(recovered.consecutiveFailures, 0);
   assert.equal(recovered.retryAt, null);
   assert.equal(recovered.lastError, null);
@@ -150,8 +176,8 @@ test("radar timeout preserves the last good scan and retries once per normal sca
 
 test("stale radar can never authorize a new strategy observation", () => {
   assert.equal(radarCandidateExecutionAllowed(null, 100_000), false);
-  assert.equal(radarCandidateExecutionAllowed(70_000, 100_000), true);
-  assert.equal(radarCandidateExecutionAllowed(69_999, 100_000), false);
+  assert.equal(radarCandidateExecutionAllowed(1_000, 151_000), true);
+  assert.equal(radarCandidateExecutionAllowed(1_000, 151_001), false);
 });
 
 test("completed-five-minute state stays available but cannot trade without broad-market context", async () => {

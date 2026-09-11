@@ -33,7 +33,8 @@ export const ALL_REGIME_OFFLINE_VALIDATION = {
   momentum_carry: { branchName: "势承·逆竭", trainEvents: 48, trainProfitFactor: 1.80,
     validationEvents: 50, validationProfitFactor: 1.71, validationWinRate: 0.38, paperApproved: true },
   balance_return: { branchName: "衡返·双拒", trainEvents: 31, trainProfitFactor: 1.16,
-    validationEvents: 22, validationProfitFactor: 1.42, validationWinRate: 0.409, paperApproved: true },
+    validationEvents: 22, validationProfitFactor: 1.42, validationWinRate: 0.409,
+    recentFoldEvents: 16, recentFoldProfitFactor: 0.67, paperApproved: false },
   exhaustion_turn: { branchName: "竭转·孤返", trainEvents: 103, trainProfitFactor: 0.98,
     validationEvents: 86, validationProfitFactor: 1.39, validationWinRate: 0.36, paperApproved: true },
   pressure_release: { branchName: "压跃·共振", trainEvents: 55, trainProfitFactor: 0.90,
@@ -81,11 +82,14 @@ function momentumCarry(rows: AllRegimeCandle[], unit: number): AllRegimeRoute | 
   return valid(route) ? route : null;
 }
 
-function balanceReturn(rows: AllRegimeCandle[]): AllRegimeRoute | null {
-  const base = rows.slice(-66);
+type BalanceGeometry = { kind: "strict" | "broad"; window: number; recent: number; efficiency: number; width: number;
+  crossings: number; edge: number; stopPad: number; armR: number; maxHoldMinutes: number; noProgressMinutes: number };
+
+function balanceReturnGeometry(rows: AllRegimeCandle[], config: BalanceGeometry): AllRegimeRoute | null {
+  const base = rows.slice(-config.window);
   const latest = base.at(-1)!;
-  const recent = base.slice(-5);
-  const prior = base.slice(0, -5);
+  const recent = base.slice(-config.recent);
+  const prior = base.slice(0, -config.recent);
   const unit = median(prior.slice(-36).map((row) => row.high - row.low));
   const lower = Math.min(...prior.map((row) => row.low));
   const upper = Math.max(...prior.map((row) => row.high));
@@ -93,9 +97,9 @@ function balanceReturn(rows: AllRegimeCandle[]): AllRegimeRoute | null {
   const efficiency = pathEfficiency(prior);
   const center = (lower + upper) / 2;
   const crossings = prior.slice(1).filter((row, index) => (row.close >= center) !== (prior[index].close >= center)).length;
-  if (efficiency > 0.22 || width < unit * 7 || crossings < 4) return null;
-  const lowerBand = lower + width * 0.18;
-  const upperBand = upper - width * 0.18;
+  if (efficiency > config.efficiency || width < unit * config.width || crossings < config.crossings) return null;
+  const lowerBand = lower + width * config.edge;
+  const upperBand = upper - width * config.edge;
   const lowTouches = recent.filter((row) => row.low <= lowerBand).length;
   const highTouches = recent.filter((row) => row.high >= upperBand).length;
   const longReclaim = lowTouches >= 2 && recent.at(-2)!.close <= lowerBand && latest.close > lowerBand && latest.close > latest.open;
@@ -104,16 +108,22 @@ function balanceReturn(rows: AllRegimeCandle[]): AllRegimeRoute | null {
   const side: Side = longReclaim ? "LONG" : "SHORT";
   const sign = side === "LONG" ? 1 : -1;
   const edge = side === "LONG" ? Math.min(...recent.map((row) => row.low)) : Math.max(...recent.map((row) => row.high));
-  const stop = edge - sign * unit * 0.4;
+  const stop = edge - sign * unit * config.stopPad;
   const risk = Math.abs(latest.close - stop);
-  const structuralArm = latest.close + sign * risk * 1.8;
+  const structuralArm = latest.close + sign * risk * config.armR;
   const arm = side === "LONG" ? Math.min(center, structuralArm) : Math.max(center, structuralArm);
   const route: AllRegimeRoute = { version: 2, strategyId: "balance_return", strategyName: "衡返", environment: "RANGE", side,
-    score: clamp(66 + (0.22 - efficiency) * 60 + clamp(crossings / 8, 0, 1) * 12, 0, 97),
-    triggerPrice: latest.close, invalidationPrice: stop, profitArmPrice: arm, maxHoldMinutes: 150, noProgressMinutes: 40,
-    structureId: `double-reclaim:${side}:${priceBin(lower)}:${priceBin(upper)}:${latest.time}`,
-    reason: `低效平衡路径穿越重心${crossings}次，同一外沿至少两次拒绝后由最新完成段收回。` };
+    score: clamp(66 + (config.efficiency - efficiency) * 60 + clamp(crossings / 8, 0, 1) * 12, 0, 97),
+    triggerPrice: latest.close, invalidationPrice: stop, profitArmPrice: arm,
+    structureId: `double-reclaim:${config.kind}:${side}:${priceBin(lower)}:${priceBin(upper)}:${latest.time}`,
+    reason: `${config.kind === "strict" ? "严谨" : "扩展"}平衡路径穿越重心${crossings}次，同一外沿至少两次拒绝后由最新完成段收回。`,
+    maxHoldMinutes: config.maxHoldMinutes, noProgressMinutes: config.noProgressMinutes };
   return valid(route) ? route : null;
+}
+
+function balanceReturn(rows: AllRegimeCandle[]): AllRegimeRoute | null {
+  return balanceReturnGeometry(rows, { kind: "strict", window: 66, recent: 5, efficiency: 0.22, width: 7,
+    crossings: 4, edge: 0.18, stopPad: 0.4, armR: 1.8, maxHoldMinutes: 150, noProgressMinutes: 40 });
 }
 
 function pressureRelease(rows: AllRegimeCandle[], unit: number): AllRegimeRoute | null {

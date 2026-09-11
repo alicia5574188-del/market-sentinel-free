@@ -239,7 +239,8 @@ function signals(input: ArenaObservation): Signal[] {
     let reason = `${route.strategyName}：${route.reason}`;
     // Direct breakout chasing was negative after full costs. Trend authority is
     // granted only when an apparent exhaustion occurs inside a still-crowded
-    // broad move; range authority uses its independently validated double reclaim.
+    // broad move. Range routes continue as paired normal/reverse shadows until
+    // current results establish the permitted polarity.
     if (route.strategyId === "momentum_carry" || route.strategyId === "pressure_release") return [];
     if (route.strategyId === "balance_return") {
       if ((input.globalMarkets ?? 0) < 12) return [];

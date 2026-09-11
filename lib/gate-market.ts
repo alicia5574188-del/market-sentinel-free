@@ -1,8 +1,11 @@
 import type { BookLevel, BookSnapshot } from "./liquidity-core.ts";
 
-const BASE = "https://api.gateio.ws/api/v4";
+const BASES = ["https://api.gateio.ws/api/v4", "https://fx-api.gateio.ws/api/v4"] as const;
 const GATE_PUBLIC_TIMEOUT_MS = 2_000;
 const GATE_BULK_TICKER_TIMEOUT_MS = 4_000;
+const GATE_RESILIENT_TIMEOUT_MS = 5_000;
+const GATE_RATE_LIMIT_BACKOFF_MS = 10_000;
+const endpointBackoffUntil = new Map<string, number>();
 
 export class GatePublicError extends Error {
   readonly status: number;
@@ -14,18 +17,45 @@ export class GatePublicError extends Error {
   }
 }
 
-async function gatePublic<T>(path: string, timeoutMs = GATE_PUBLIC_TIMEOUT_MS): Promise<T> {
-  const response = await fetch(`${BASE}${path}`, {
-    headers: { Accept: "application/json", "X-Gate-Size-Decimal": "1" },
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!response.ok) {
-    const retryAfter = Number(response.headers.get("retry-after") ?? 0);
-    const reset = Number(response.headers.get("x-gate-ratelimit-reset-timestamp") ?? 0);
-    const retryAt = reset > 0 ? (reset < 1e12 ? reset * 1_000 : reset) : retryAfter > 0 ? Date.now() + retryAfter * 1_000 : null;
-    throw new GatePublicError(`Gate public ${response.status}`, response.status, retryAt);
+function endpointKey(path: string) {
+  return path.split("?", 1)[0];
+}
+
+function responseRetryAt(response: Response, now: number) {
+  const retryAfter = Number(response.headers.get("retry-after") ?? 0);
+  const reset = Number(response.headers.get("x-gate-ratelimit-reset-timestamp") ?? 0);
+  return reset > 0 ? (reset < 1e12 ? reset * 1_000 : reset)
+    : retryAfter > 0 ? now + retryAfter * 1_000 : now + GATE_RATE_LIMIT_BACKOFF_MS;
+}
+
+async function gatePublic<T>(path: string, timeoutMs = GATE_PUBLIC_TIMEOUT_MS, attempts = 1): Promise<T> {
+  const key = endpointKey(path);
+  const blockedUntil = endpointBackoffUntil.get(key) ?? 0;
+  if (Date.now() < blockedUntil) throw new GatePublicError("Gate public shared backoff", 429, blockedUntil);
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < Math.max(1, attempts); attempt += 1) {
+    try {
+      const response = await fetch(`${BASES[attempt % BASES.length]}${path}`, {
+        headers: { Accept: "application/json", "X-Gate-Size-Decimal": "1" },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!response.ok) {
+        const retryAt = responseRetryAt(response, Date.now());
+        if (response.status === 429) endpointBackoffUntil.set(key, retryAt);
+        const error = new GatePublicError(`Gate public ${response.status}`, response.status, retryAt);
+        if (response.status === 429 || response.status < 500 || attempt + 1 >= attempts) throw error;
+        lastError = error;
+        continue;
+      }
+      endpointBackoffUntil.delete(key);
+      return await response.json() as T;
+    } catch (error) {
+      lastError = error;
+      if (error instanceof GatePublicError && (error.status === 429 || error.status < 500)) throw error;
+      if (attempt + 1 >= attempts) throw error;
+    }
   }
-  return await response.json() as T;
+  throw lastError ?? new Error(`Gate public request failed: ${key}`);
 }
 
 type GateBook = {
@@ -87,8 +117,8 @@ export type GateContract = {
 
 export async function fetchActiveContracts() {
   const [rows, contracts] = await Promise.all([
-    gatePublic<GateTicker[]>("/futures/usdt/tickers"),
-    gatePublic<GateContract[]>("/futures/usdt/contracts"),
+    gatePublic<GateTicker[]>("/futures/usdt/tickers", GATE_RESILIENT_TIMEOUT_MS, 2),
+    gatePublic<GateContract[]>("/futures/usdt/contracts", GATE_RESILIENT_TIMEOUT_MS, 2),
   ]);
   const available = new Map(contracts
     .filter((contract) => !contract.in_delisting && (!contract.status || contract.status === "trading"))
@@ -112,7 +142,7 @@ export async function fetchActiveContracts() {
 }
 
 export async function fetchMarketTickers() {
-  const rows = await gatePublic<GateTicker[]>("/futures/usdt/tickers", GATE_BULK_TICKER_TIMEOUT_MS);
+  const rows = await gatePublic<GateTicker[]>("/futures/usdt/tickers", GATE_BULK_TICKER_TIMEOUT_MS, 2);
   return rows.map((row) => ({
     symbol: row.contract ?? "",
     last: Number(row.last ?? 0),
@@ -146,9 +176,12 @@ export async function fetchContractStats(symbol: string) {
 export type GateCandle = { time: number; volume: number; close: number; high: number; low: number; open: number };
 type GateCandleRow = { t?: number; v?: string | number; c?: string | number; h?: string | number; l?: string | number; o?: string | number };
 
-export async function fetchStructureCandles(symbol: string, interval: "1m" | "5m" | "15m" | "1h") {
+export async function fetchStructureCandles(symbol: string, interval: "1m" | "5m" | "15m" | "1h", limit = 120) {
+  const boundedLimit = Math.max(2, Math.min(120, Math.floor(limit)));
   const rows = await gatePublic<GateCandleRow[]>(
-    `/futures/usdt/candlesticks?contract=${encodeURIComponent(symbol)}&interval=${interval}&limit=120`,
+    `/futures/usdt/candlesticks?contract=${encodeURIComponent(symbol)}&interval=${interval}&limit=${boundedLimit}`,
+    GATE_RESILIENT_TIMEOUT_MS,
+    2,
   );
   const intervalSeconds = interval === "1m" ? 60 : interval === "5m" ? 300 : interval === "15m" ? 900 : 3_600;
   const completedBefore = Math.floor(Date.now() / 1_000 / intervalSeconds) * intervalSeconds;
