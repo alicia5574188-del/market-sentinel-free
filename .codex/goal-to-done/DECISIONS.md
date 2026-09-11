@@ -1,3 +1,17 @@
+# All-regime compounding decision — 2026-09-11
+
+- Historical evidence is allowed to disable a named environment owner. `衡返` and `压跃` continue classifying and shadowing their environments but cannot spend PAPER equity until a later independent validation passes; the page must not imply otherwise.
+- PAPER authority is frozen to two cross-phase-positive mechanisms: `势承` continues a crowded broad-market direction when a single symbol only appears exhausted, while `竭转` reverses isolated exhaustion only when broad-market direction is neutral.
+- Use at most 0.5× current equity notional per position instead of inversely levering narrow stops. This preserved route expectancy in account replay; structural-risk, correlation, margin and liquidation limits remain hard ceilings.
+- Polarity is persistent state, not repeated amnesia: three wins select normal; three losses may select reverse only with matching reverse wins plus twelve-sample positive reverse mean and PF≥2.5; mixed results retain the last authorized direction.
+- The main page is an operator surface, not a research notebook. Show equity/today PnL, current environment and owner, open PAPER orders and full account trades; keep shadows, diagnostics and transition internals backend-only.
+
+- The system objective is environment-appropriate positive edge and compound equity, not a single universal signal, trade-count quota or generic risk-score stack. Market classification must precede strategy selection, while strategy profitability is measured only inside the environment it is designed to trade.
+- Replace V9 rather than extend it. Maintain separate evidence for directional continuation, balanced rotation, compression release and directional exhaustion; never pool unrelated branches or symbols into one global three-result polarity.
+- “Always covered” means every current environment has a strategy owner continuously evaluating it. It cannot honestly mean forced permanent exposure: when every route's after-cost expectation is non-positive or opposing routes conflict, cash is the only non-negative decision.
+- Compounding uses current PAPER equity for each new position and optimizes time-ordered log-equity growth plus profitable-day coverage. Fixed 1,000 U is the starting capital, not a permanently fixed sizing base.
+- Generic risk scoring must not select the strategy. Mandatory execution truth remains: fresh executable futures prices, structural invalidation, contract/lot validity, no stale-price closes, no liquidation path, bounded account exposure, and explicit owner-only LIVE OFF.
+
 # 极序·镜转 V9 decision — 2026-09-11
 
 - `极序·镜转` is this system's single named PAPER authority. It does not claim that generic momentum or reversal concepts have never existed; its two-path event definition, paired-shadow evidence contract, polarity switch and runner execution are designed together for this account.

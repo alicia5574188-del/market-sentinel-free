@@ -2,6 +2,7 @@ import type { RadarCandidate, RadarTicker } from "./market-radar.ts";
 import type { CompletedMinuteCandle } from "./liquidity-core.ts";
 import { detectExtremeSequencePath, type ExtremeSequencePath } from "./extreme-sequence-mirror.ts";
 import type { AdaptivePolicySnapshot } from "./adaptive-policy.ts";
+import { detectAllRegimeRoutes, dominantAllRegimeEnvironment, type AllRegimeEnvironment, type AllRegimeRoute } from "./all-regime-engine.ts";
 
 export const MARKET_REGIME_VERSION = 2;
 export const MARKET_REGIME_MIN_SAMPLES = 18;
@@ -48,6 +49,7 @@ export type MarketRegimeCandidate = {
   referencePrice: number;
   moveRate: number;
   trendRate: number;
+  broadMoveRate?: number;
   trendEfficiency: number;
   volatilityRatio: number;
   rangePosition: number;
@@ -60,6 +62,8 @@ export type MarketRegimeCandidate = {
   anomalyKind: RadarCandidate["kind"] | null;
   adaptivePolicy?: AdaptivePolicySnapshot | null;
   extremeSequence?: ExtremeSequencePath | null;
+  allRegimeRoutes?: AllRegimeRoute[];
+  dominantEnvironment?: AllRegimeEnvironment | null;
 };
 
 export type MarketRegimeState = {
@@ -119,6 +123,8 @@ export function residentCandleCandidate(input: {
   const closes = rows.map((row) => row.close);
   const path = closes.slice(1).reduce((total, close, index) => total + Math.abs(close - closes[index]), 0);
   const trendRate = (latest.close - rows[0].open) / Math.max(rows[0].open, 1e-9);
+  const broadMoveRate = rows.length >= 7
+    ? (latest.close - rows.at(-7)!.close) / Math.max(rows.at(-7)!.close, 1e-9) : trendRate;
   const trendEfficiency = clamp(Math.abs(latest.close - rows[0].open) / Math.max(path, latest.close * 0.0002), 0, 1);
   const ranges = rows.map((row) => (row.high - row.low) / Math.max(row.open, 1e-9));
   const recentVolatility = sum(ranges.slice(-3)) / 3;
@@ -171,7 +177,7 @@ export function residentCandleCandidate(input: {
   const candidate: MarketRegimeCandidate = {
     id: `${input.symbol}:CANDLE5M:${channel}:${side}:${lifecycle}`, symbol: input.symbol, channel, regime, side,
     score: clamp(score, 0, 100), referencePrice: channel === "ANOMALY" ? latest.open : latest.close,
-    moveRate: channel === "ANOMALY" ? lastMove : trendRate, trendRate, trendEfficiency, volatilityRatio, rangePosition,
+    moveRate: channel === "ANOMALY" ? lastMove : trendRate, trendRate, broadMoveRate, trendEfficiency, volatilityRatio, rangePosition,
     volume24hUsd: input.volume24hUsd, fundingRate: input.fundingRate, openInterestChangeRate: 0,
     confirmations: 2, firstSeenAt, observedAt: latest.completedAt,
     anomalyKind: channel === "ANOMALY" ? "PRICE_SHOCK" : null, extremeSequence,
@@ -197,6 +203,7 @@ export function completedCandleStrategyCandidate(input: {
   const closes = rows.map((row) => row.close);
   const path = closes.slice(1).reduce((total, close, index) => total + Math.abs(close - closes[index]), 0);
   const trendRate = (latest.close - rows[0].open) / Math.max(rows[0].open, 1e-9);
+  const broadMoveRate = (latest.close - rows.at(-7)!.close) / Math.max(rows.at(-7)!.close, 1e-9);
   const trendEfficiency = clamp(Math.abs(latest.close - rows[0].open) / Math.max(path, latest.close * 0.0002), 0, 1);
   const ranges = rows.map((row) => (row.high - row.low) / Math.max(row.open, 1e-9));
   const recentVolatility = sum(ranges.slice(-4)) / 4;
@@ -229,19 +236,28 @@ export function completedCandleStrategyCandidate(input: {
   const recentUpper = Math.max(...recent.map((row) => row.high));
   const lifecycle = `${latestCompletedAt}:${candlePriceBin(lower)}:${candlePriceBin(upper)}`;
   const extremeSequence = detectExtremeSequencePath(allRows);
-  if (extremeSequence) {
-    channel = "ANOMALY"; regime = extremeSequence.branch === "FISSION" ? "EXPANSION" : "RANGE";
-    side = extremeSequence.baseSide; score = extremeSequence.score;
+  const allRegimeRoutes = detectAllRegimeRoutes(allRows);
+  const dominantEnvironment = dominantAllRegimeEnvironment(allRows);
+  // Only the exhaustion structure has passed the two-phase cost-inclusive replay.
+  // Give that route execution priority while retaining the other routes as observation-only diagnostics.
+  const approvedRoute = allRegimeRoutes.find((route) => route.strategyId === "exhaustion_turn");
+  const primary = approvedRoute ?? allRegimeRoutes[0];
+  if (primary) {
+    channel = primary.environment === "TREND" ? "TREND" : primary.environment === "RANGE" ? "RANGE"
+      : primary.environment === "COMPRESSION" ? "COMPRESSION" : "ANOMALY";
+    regime = primary.environment === "TREND" ? "TREND" : primary.environment === "RANGE" ? "RANGE"
+      : primary.environment === "COMPRESSION" ? "COMPRESSION" : "EXPANSION";
+    side = primary.side; score = primary.score;
   }
-  // Only an actual 极序·镜转 extreme receives scarce fresh-book priority.
-  const executionPriorityScore = extremeSequence ? 90 + clamp(extremeSequence.score - 68, 0, 10) : score;
+  // A completed, environment-owned route receives scarce fresh-book priority.
+  const executionPriorityScore = approvedRoute ? 90 + clamp(approvedRoute.score - 60, 0, 10) : Math.min(score, 75);
   const candidate: MarketRegimeCandidate = {
     id: `${input.symbol}:CANDLE5M:${channel}:${side}:${lifecycle}`, symbol: input.symbol, channel, regime, side,
     score: clamp(executionPriorityScore, 0, 100), referencePrice: channel === "ANOMALY" ? latest.open : latest.close,
-    moveRate: channel === "ANOMALY" ? lastMove : trendRate, trendRate, trendEfficiency, volatilityRatio, rangePosition,
+    moveRate: channel === "ANOMALY" ? lastMove : trendRate, trendRate, broadMoveRate, trendEfficiency, volatilityRatio, rangePosition,
     volume24hUsd: input.volume24hUsd, fundingRate: input.fundingRate, openInterestChangeRate: 0,
     confirmations: 2, firstSeenAt: latestCompletedAt, observedAt: latestCompletedAt, anomalyKind: null,
-    adaptivePolicy: null, extremeSequence,
+    adaptivePolicy: null, extremeSequence, allRegimeRoutes, dominantEnvironment,
   };
   const structure: ResidentCandleStructure = { id: `${input.symbol}:5m:${lifecycle}`, observedAt: latestCompletedAt,
     lower, upper, midpoint: (lower + upper) / 2, recentLower, recentUpper };

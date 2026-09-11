@@ -96,4 +96,7 @@ test("completed five-minute OHLCV classifies a liquid market without optional hi
   assert.equal(result?.candidate.channel, "TREND");
   assert.equal(result?.candidate.anomalyKind, null);
   assert.equal(result?.candidate.openInterestChangeRate, 0);
+  const expectedThirtyMinuteMove = candles.at(-1)!.close / candles.at(-7)!.close - 1;
+  assert.ok(Math.abs((result?.candidate.broadMoveRate ?? 0) - expectedThirtyMinuteMove) < 1e-12,
+    "broad-market context must use the same six-bar/30-minute window as acceptance replay");
 });

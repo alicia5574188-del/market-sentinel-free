@@ -1,3 +1,13 @@
+# Active goal — all-regime positive-edge compounding system
+
+- Replace V9's single extreme-event authority with a project-specific strategy system that continuously classifies the current completed-candle market environment and routes each opportunity to the strategy designed for that environment.
+- Create several original path mechanisms for directional continuation, balanced rotation, compression release and directional exhaustion. Do not restore the retired named playbooks, indicator templates or global cross-environment win/loss streak.
+- Every market state must have an active strategy owner and the thirty-contract universe must remain under continuous evaluation. PAPER may trade only a route whose own same-environment, causal, after-cost evidence is positive; same-side agreement merges and strong opposite disagreement waits.
+- Optimize causal account-level log-equity growth and profitable-day coverage on the 1,000 U PAPER account. Reinvest current equity after every close. A daily positive return is the objective, not a guarantee or a reason to manufacture a negative-expectancy trade.
+- Profit logic comes before risk optimization, but retain non-negotiable stale-data, executable-price, structural-stop, liquidation and LIVE-isolation protections. LIVE remains OFF and deployment never enables it.
+- Build a reproducible Gate futures 5-minute replay, validate every mechanism separately and as a routed portfolio, implement only evidence-supported routes in the current code, then verify and release once rather than patching V9 incrementally.
+- Simplify the operator page to equity/today PnL, current environment/owning strategy, open positions and complete account trades; keep research diagnostics in the backend instead of the main page.
+
 # Completed goal — original extreme-sequence polarity strategy V9
 
 - Replace V8 generated-route PAPER authority with one custom strategy named `极序·镜转`, designed for two completed-candle extremes: retained boundary displacement (`裂变`) and failed boundary sweep/reclaim (`回卷`).

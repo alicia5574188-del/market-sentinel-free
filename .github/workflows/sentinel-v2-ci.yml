@@ -52,12 +52,21 @@ jobs:
         working-directory: release
         run: |
           set -euo pipefail
+          npm run test:all-regime
           npm run test:direct
           npm test
           npm run typecheck
           npm run lint
           git diff --check
           npx wrangler deploy --dry-run --config dist/server/wrangler.json
+
+      - name: Causal all-regime replay
+        if: github.event_name == 'pull_request'
+        working-directory: release
+        env:
+          RESEARCH_DAYS: "30"
+          RESEARCH_SYMBOLS: "20"
+        run: npm run research:all-regime
 
       - name: Require the reviewed two-phase Durable Object migration
         working-directory: release
@@ -1013,12 +1022,12 @@ jobs:
             code="$(curl -sS --max-time 8 -o "$RUNNER_TEMP/main-health.json" -w '%{http_code}' \
               "$WORKER_BASE_URL/__health" || true)"
             if [[ "$code" == "200" ]] && jq -e '
-              .ok == true and .version == "extreme-sequence-mirror-v1" and .mode == "PAPER" and
+              .ok == true and .version == "all-regime-compound-v1" and .mode == "PAPER" and
               .runtime.state == "LIVE" and .runtime.stale == false and .runtime.lastError == null and
               ((now * 1000 - .runtime.lastSuccessAt) < 10000) and
               .runtime.liveMode.requestedEnabled == false and .runtime.liveMode.operational == false and
-              .runtime.strategyArena.version == 9 and .runtime.strategyArena.playbookCount == 1 and
-              .runtime.strategyArena.catalogSize == 1 and
+              .runtime.strategyArena.version == 10 and .runtime.strategyArena.playbookCount == 4 and
+              .runtime.strategyArena.catalogSize == 4 and
               (.runtime.strategyArena.portfolioEquity | type) == "number" and
               .runtime.strategyArena.portfolioEquity > 0 and
               .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 10 and
@@ -1026,9 +1035,10 @@ jobs:
               .runtime.strategyArena.rules.singleTradeRiskMax == 0.02 and
               .runtime.strategyArena.rules.minimumPortfolioRiskUsdt == 10 and
               .runtime.strategyArena.rules.empiricalCostFloorRate == 0.0014 and
-              .runtime.strategyArena.rules.authorityWindowPriority == "EXTREME_STREAK_POLARITY" and
-              .runtime.strategyArena.rules.extremeSequenceAuthority == true and
-              .runtime.strategyArena.rules.strategyName == "极序·镜转" and
+              .runtime.strategyArena.rules.authorityWindowPriority == "STATE_CONDITIONED_EXPECTANCY" and
+              .runtime.strategyArena.rules.extremeSequenceAuthority == false and
+              .runtime.strategyArena.rules.strategyName == "全境·复利引擎" and
+              .runtime.strategyArena.rules.maxNotionalMultiple == 1.5 and
               .runtime.strategyArena.rules.generatedRouteAuthority == false and
               .runtime.strategyArena.rules.legacyStrategyAuthority == false and
               .runtime.strategyArena.rules.paperCycleResetOnCutover == true and
@@ -1055,7 +1065,7 @@ jobs:
           page_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/main-page.html" -w '%{http_code}' \
             "$WORKER_BASE_URL/" || true)"
           [[ "$page_code" == "200" ]]
-          grep -Fq '极序·镜转' "$RUNNER_TEMP/main-page.html"
+          grep -Fq '全境·复利引擎' "$RUNNER_TEMP/main-page.html"
           curl -fsS --max-time 15 "$WORKER_BASE_URL/api/history" \
             > "$RUNNER_TEMP/main-history.json"
           jq -e '.items | type == "array"' "$RUNNER_TEMP/main-history.json" >/dev/null
@@ -1119,22 +1129,23 @@ jobs:
           sleep 8
           curl -fsS --max-time 8 "$WORKER_BASE_URL/__health" > "$RUNNER_TEMP/monitor-health-2.json"
           jq -e '
-            .ok == true and .version == "extreme-sequence-mirror-v1" and .mode == "PAPER" and
-            .runtime.version == "extreme-sequence-mirror-v1" and .runtime.mode == "PAPER" and
+            .ok == true and .version == "all-regime-compound-v1" and .mode == "PAPER" and
+            .runtime.version == "all-regime-compound-v1" and .runtime.mode == "PAPER" and
             .runtime.state == "LIVE" and .runtime.stale == false and .runtime.lastError == null and
             ((now * 1000 - .runtime.lastSuccessAt) < 10000) and
             .runtime.liveMode.requestedEnabled == false and .runtime.liveMode.operational == false and
-            .runtime.strategyArena.version == 9 and .runtime.strategyArena.playbookCount == 1 and
-            .runtime.strategyArena.catalogSize == 1 and
+            .runtime.strategyArena.version == 10 and .runtime.strategyArena.playbookCount == 4 and
+            .runtime.strategyArena.catalogSize == 4 and
             .runtime.strategyArena.rules.minimumPortfolioRiskUsdt == 10 and
             .runtime.strategyArena.rules.empiricalCostFloorRate == 0.0014 and
             .runtime.strategyArena.rules.normalShadowAlwaysOn == true and
-            .runtime.strategyArena.rules.extremeSequenceAuthority == true and
-            .runtime.strategyArena.rules.strategyName == "极序·镜转" and
+            .runtime.strategyArena.rules.extremeSequenceAuthority == false and
+            .runtime.strategyArena.rules.strategyName == "全境·复利引擎" and
+            .runtime.strategyArena.rules.maxNotionalMultiple == 1.5 and
             .runtime.strategyArena.rules.generatedRouteAuthority == false and
             .runtime.strategyArena.rules.legacyStrategyAuthority == false and
             .runtime.strategyArena.rules.paperCycleResetOnCutover == true and
-            .runtime.strategyArena.rules.authorityWindowPriority == "EXTREME_STREAK_POLARITY" and
+            .runtime.strategyArena.rules.authorityWindowPriority == "STATE_CONDITIONED_EXPECTANCY" and
             .runtime.strategyArena.rules.streakLength == 3 and
             .runtime.strategyArena.rules.maxPortfolioPositions == 3 and
             .runtime.strategyArena.rules.profitArmIsExit == false and
@@ -1151,7 +1162,7 @@ jobs:
           page_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/monitor-page.html" -w '%{http_code}' \
             "$WORKER_BASE_URL/" || true)"
           [[ "$page_code" == "200" ]]
-          grep -Fq '极序·镜转' "$RUNNER_TEMP/monitor-page.html"
+          grep -Fq '全境·复利引擎' "$RUNNER_TEMP/monitor-page.html"
           curl -fsS --max-time 15 "$WORKER_BASE_URL/api/history" \
             > "$RUNNER_TEMP/monitor-history.json"
           jq -e '.items | type == "array"' "$RUNNER_TEMP/monitor-history.json" >/dev/null
