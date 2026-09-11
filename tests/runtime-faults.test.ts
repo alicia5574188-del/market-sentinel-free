@@ -547,7 +547,7 @@ test("V6 cutover archives the old PAPER cycle and starts a fresh generated-route
   const seed = await makeStream();
   const saved = structuredClone(seed.stream.runtime);
   saved.version = "state-conditioned-expectancy-v5";
-  (saved.strategyArena as { version: number }).version = 6;
+  (saved.strategyArena as { version: number }).version = 7;
   saved.strategyArena.portfolioCycle = 3;
   saved.strategyArena.portfolioEquity = 963.25;
   saved.strategyArena.portfolioResolved = 11;
@@ -557,7 +557,7 @@ test("V6 cutover archives the old PAPER cycle and starts a fresh generated-route
 
   const { stream } = await makeStream(saved);
   assert.equal(stream.runtime.version, "generated-state-routes-v6");
-  assert.equal(stream.runtime.strategyArena.version, 7);
+  assert.equal(stream.runtime.strategyArena.version, 8);
   assert.equal(stream.runtime.strategyArena.portfolioCycle, 4);
   assert.equal(stream.runtime.strategyArena.portfolioEquity, 1_000);
   assert.equal(stream.runtime.strategyArena.portfolioResolved, 0);
@@ -921,7 +921,7 @@ test("health status is compact while retaining every release gate", async () => 
   const status = await response.json();
 
   assert.equal(status.version, "generated-state-routes-v6");
-  assert.equal(status.strategyArena.version, 7);
+  assert.equal(status.strategyArena.version, 8);
   assert.equal(status.strategyArena.playbookCount, 6);
   assert.equal(status.strategyArena.catalogSize, 6);
   assert.equal(status.strategyArena.portfolioEquity, 1_000);

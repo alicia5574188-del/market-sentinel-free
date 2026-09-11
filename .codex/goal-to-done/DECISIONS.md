@@ -1,3 +1,23 @@
+# 2026-09-11 — Market state selects the strategy family before expectancy ranks it
+
+- The first trading objective is not signal count or the 10% daily aspiration. It is selecting the strategy designed for the current completed-candle market environment.
+- V6 production proved that walk-forward profitability alone is insufficient: low-efficiency boundary return traded in RANGE, COMPRESSION and EXPANSION because the route generator did not enforce its own strategy-channel declaration.
+- Require exact channel compatibility before an adaptive route may create an effective shadow or PAPER candidate: RANGE admits boundary return and failed acceptance; COMPRESSION admits volatility transition; TREND admits path recovery and directional persistence; EXPANSION admits valid boundary acceptance.
+- Only after compatibility may the existing chronological, fully costed walk-forward evidence rank competing routes. Data freshness, structural economics, depth, Gate integer contracts and all portfolio limits remain later mandatory gates.
+- Archive and reset the losing pre-correction strategy-account cycle through the existing fresh-quote version cutover. Preserve its history and keep LIVE explicitly OFF.
+
+# 2026-09-11 — Relative strength and strong breakout are not deployment candidates
+
+- Reject the tested relative-strength pullback and strong-breakout mechanisms. A marginal full-window profit factor is insufficient when the earlier half is negative and ordinary cost or execution stress reverses the result.
+- Do not use global three-win/positive-six activation to rescue a weak underlying mechanism. On the strongest breakout path it reduced profit factor from 1.05 to 0.75 because evidence arrived after the favorable regime and stayed enabled into reversal.
+- The next research stage must add genuinely new contemporaneous information or a different payoff mechanism; it may not continue threshold-searching the rejected candle-only families. PAPER implementation remains blocked until one frozen candidate is positive in both time halves, remains positive under modeled cost and adverse execution, and produces a useful opportunity rate.
+
+# 2026-09-11 — Short-window qualification cannot prove a strategy edge
+
+- Reject the false-auction reversal candidate despite its positive 7.85-day result. A clean 63-day causal replay made both halves negative, and the result remained negative on mature contracts and after logically motivated range/retest entry changes.
+- Three consecutive wins or a positive latest-six window may be an execution admission rule only after the underlying mechanism has independent long-window evidence. Across many symbol+side streams, the rule otherwise selects ordinary lucky streaks and expands trading after warmup without preserving expectancy.
+- Future strategy candidates must pass a minimum multi-regime historical window with next-bar executable entry, fully modeled friction, time-ordered qualification, account concurrency and symbol cooldown before PAPER implementation. Frequency is evaluated only after positive expectancy; a short sample meeting the daily objective is not sufficient.
+
 # Runtime-truth and LIVE-off presentation decision — 2026-09-11
 
 - A missing first runtime response is absence of evidence, not a 1,000 U account with zero trades and thirty ready markets. The page renders a connection state until a verified snapshot arrives, then preserves that snapshot during ordinary retryable phone failures.

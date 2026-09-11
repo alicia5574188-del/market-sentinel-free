@@ -1,3 +1,27 @@
+# In progress — 2026-09-11 regime-first strategy routing correction
+
+- Production evidence at inspection time: V6 had closed 24 PAPER trades, won 7 and reduced strategy-account equity to 860.1533 U. The low-efficiency boundary-return strategy accounted for 21 trades and -88.7415 U, while appearing under RANGE, COMPRESSION and EXPANSION.
+- Root cause is in the existing V6 route generator: it maps every adaptive recommendation to a strategy but never requires that strategy's declared market channel to equal the current completed-candle channel. The later objective ranking therefore chooses a numerically strong but environment-incompatible strategy.
+- The unused prospective-only collector has been removed before release. The correction keeps the current six mechanisms and inserts the missing first selector: current completed-candle market channel, then after-cost walk-forward ranking only among compatible strategies.
+- Strategy arena version advances from 7 to 8 so the losing pre-correction PAPER cycle is settled at fresh executable quotes, archived, and restarted at 1,000 U. History is preserved and LIVE remains owner-controlled and OFF.
+- Verification passes 192 direct tests, 16 architecture/migration tests, the production build, TypeScript, ESLint, Wrangler dry-run and whitespace validation. Production release and advancing-health acceptance are next.
+
+# Analysis complete — 2026-09-11 relative-strength and strong-breakout candidates rejected
+
+- Tested a separate cross-sectional mechanism on 26 mature contracts: 4h/12h relative strength, one-hour pullback, completed-15m resumption and next-bar entry. The 100 U/12h path produced 129 trades, 1.55/day, -1.60 U expectancy and 0.93 profit factor; the 150 U/24h path produced 115 trades, 1.38/day, -1.10 U expectancy and 0.96 profit factor.
+- Long leaders and short laggards alternated by sample half. A causal market-median direction gate did not stabilize them; its 150 U path fell to 0.79 profit factor.
+- Tested a rare strong-breakout mechanism requiring cross-sectional leadership/weakness, a completed 4h extreme break, large candle body, range expansion, volume expansion and market-direction alignment. The 150 U/24h path was only marginally positive overall (175 trades, +1.44 U expectancy, 1.05 profit factor, +3.02 U/day), but its first half was negative and either 18 bps cost or 5 bps adverse execution made the full result negative.
+- Applying the user's 3-win/positive-six rule to one global breakout identity made selection worse: 85 admitted trades, -8.05 U expectancy and 0.75 profit factor, with both halves negative. The rule lagged regime changes and did not create an edge.
+- No tested candidate meets simultaneous positive train/validation, cost/slippage robustness, useful frequency and the daily objective. No production strategy, PAPER account, history, deployment or LIVE state was changed.
+
+# Analysis complete — 2026-09-11 false-auction candidate rejected
+
+- Re-tested the proposed false-auction reversal with a strict causal entry at the next completed 15-minute bar, 50 U maximum modeled loss including cost, 100 U net target, twelve-hour maximum research horizon, symbol+side rolling qualification, two concurrent positions and a four-hour same-symbol cooldown.
+- Expanded the evidence from the initial 7.85-day common window to 63 days of paginated Gate 15-minute history for the current thirty-contract liquid universe. Twenty-six contracts had at least thirty days of history; mature-only results agreed with the full universe.
+- The long-window baseline produced 508 account trades (8.06/day), 23.62% wins, -2.83 U expectancy, 0.85 profit factor and -22.83 U/day. Both halves were negative. Five-basis-point adverse execution and higher cost worsened it.
+- A low-trend-efficiency gate, a completed boundary-retest confirmation and a passive boundary retest all remained negative. The best of those rejected alternatives was still below one profit factor and negative in the second half.
+- The earlier positive short-window result was a cold-start selection artifact: only a few symbol+side streams had time to qualify after lucky early streaks. As history accumulated, many more streams qualified and the supposed edge disappeared. No strategy, account, history, deployment or LIVE state was changed.
+
 # Done — 2026-09-11 recovered runtime-truth and LIVE-off UI correction
 
 - Recovered the unfinished task from the stalled conversation after verifying that its previous turn stopped before repository inspection.

@@ -4,7 +4,7 @@ import type { CandidateChannel, MarketRegimeCandidate, MarketRegimeKind, Residen
 import { ADAPTIVE_DAILY_OBJECTIVE_RATE, ADAPTIVE_MIN_ANALOG_SAMPLES, ADAPTIVE_POLICY_VERSION,
   type AdaptiveMechanism, type AdaptivePolicyRecommendation } from "./adaptive-policy.ts";
 
-export const STRATEGY_ARENA_VERSION = 7;
+export const STRATEGY_ARENA_VERSION = 8;
 export const STRATEGY_INITIAL_EQUITY = 1_000;
 export const PROMOTION_WIN_STREAK = 3;
 export const PROMOTION_RECENT_WINDOW = 6;
@@ -110,7 +110,7 @@ export type PortfolioCycleArchive = { number: number; ruleVersion: string; start
   startingEquity: number; endingEquity: number; resolved: number; wins: number; grossPnl: number; costs: number; reason: string };
 
 export type StrategyArenaState = {
-  version: 7; startedAt: number; strategies: Record<string, StrategyScore>; playbookResults: Record<string, PlaybookEventResult[]>;
+  version: 8; startedAt: number; strategies: Record<string, StrategyScore>; playbookResults: Record<string, PlaybookEventResult[]>;
   open: Record<string, ArenaTrade>; portfolioOpen: Record<string, ArenaTrade>; portfolioEquity: number;
   portfolioResolved: number; portfolioWins: number; portfolioGrossPnl: number; portfolioCosts: number;
   portfolioCycle: number; portfolioCycleStartedAt: number; archivedPortfolioCycles: PortfolioCycleArchive[];
@@ -230,7 +230,10 @@ function signals(input: ArenaObservation): Signal[] {
   if (!input.candidate.id.includes(":CANDLE5M:") || !input.candidate.adaptivePolicy) return [];
   return input.candidate.adaptivePolicy.recommendations.flatMap((policy) => {
     const definition = STRATEGY_CATALOG.find((item) => item.mechanism === policy.mechanism);
-    if (!definition) return [];
+    // A profitable mechanism in another regime is not evidence for the current market.
+    // The current completed-candle channel is the first selector; walk-forward evidence
+    // may rank only the strategies designed for that channel.
+    if (!definition || definition.channel !== input.candidate.channel) return [];
     const quality = clamp(0.5 + Math.max(0, policy.conservativeNetReturnRate) * 60
       + Math.min(policy.profitFactor, 2) * 0.08 + Math.min(policy.opportunityRatePerDay, 8) * 0.01, 0.5, 0.95);
     return [{ strategyId: definition.id, side: policy.side, ...generatedGeometry(input, policy),

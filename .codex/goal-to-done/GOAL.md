@@ -1,3 +1,10 @@
+# Active correction — regime-first strategy selection on the current V6 code
+
+- Use the existing six generated mechanisms, completed-five-minute state, walk-forward policy, fresh Gate futures execution and account infrastructure. Do not add a research collector or redesign the page.
+- Make current market environment the first strategy selector. Only compatible mechanisms may be ranked; a strategy's profitability in another environment cannot authorize the current trade.
+- Preserve every execution, cost, data, margin, risk, credential and owner-only LIVE control. Archive the losing pre-correction strategy-account cycle at fresh quotes and restart it at 1,000 U without deleting history.
+- Verify locally, release through GitHub `main`, confirm advancing production authority and keep LIVE OFF.
+
 # Completed UI correction — verified runtime truth and owner-only LIVE surface
 
 - Before the first verified `/api/runtime` response, show an explicit connection state instead of fabricated 1,000 U, zero-order, zero-route or thirty-market values. After a verified snapshot exists, keep that last truth visible across ordinary phone transport retries.

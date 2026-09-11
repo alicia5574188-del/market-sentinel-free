@@ -8,6 +8,7 @@ A Gate USDT perpetual market-state system. One `MarketStream` Durable Object is 
 - Completed 5-minute OHLCV is the stable strategy source. One symbol is refreshed every ten seconds, so the full universe is covered in about five minutes without requiring tick history, trades or open interest.
 - Each completed-candle state can generate several independent long/short paths. One coin may research several mechanisms and one mechanism may serve several coins.
 - Six generated mechanisms replace the old 12-playbook/48-variant execution catalog: low-efficiency boundary return, volatility transition, failed boundary acceptance, path recovery, directional persistence and valid boundary acceptance.
+- The completed-candle market channel is the first execution selector: range mechanisms may run only in RANGE, compression release only in COMPRESSION, trend mechanisms only in TREND, and accepted breakout only in EXPANSION. A mechanism's profit in another environment cannot authorize the current trade.
 - For each current path, chronological walk-forward compares 10/20/30/45/60-minute horizons. Selection uses old samples and requires recent independent confirmation; it never uses future candles.
 - PAPER authority belongs only to the current state-path recommendation. The old three/six promotion and mirrored reverse rules are archive-only and cannot open orders.
 - PAPER requires at least eight similar paths, positive conservative return after full cost, profit factor at least 1.05, sufficient target reachability and no single winner dominating the result.

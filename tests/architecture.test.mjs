@@ -156,7 +156,8 @@ test("V6 generated state-route controller is bounded, cost-aware, and is the sol
     read("drizzle/0035_strategy_arena_fresh_start.sql"),
   ]);
   assert.match(arena, /STRATEGY_CATALOG/);
-  assert.match(arena, /STRATEGY_ARENA_VERSION = 7/);
+  assert.match(arena, /STRATEGY_ARENA_VERSION = 8/);
+  assert.match(arena, /definition\.channel !== input\.candidate\.channel/);
   assert.match(arena, /name: "低效边界回归"/);
   assert.match(arena, /name: "边界有效接受"/);
   assert.doesNotMatch(arena, /adaptiveMechanismForPlaybook/);

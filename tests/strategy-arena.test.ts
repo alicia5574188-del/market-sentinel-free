@@ -79,16 +79,31 @@ test("approved state route enters PAPER as an exact clone of its shadow", () => 
   assert.equal(paper.context.noProgressMs, 18 * 60_000);
 });
 
-test("one coin can research several generated paths while PAPER selects the best objective", () => {
+test("the current market state excludes strategies designed for other environments", () => {
   const policies = [
     recommendation({ mechanism: "RANGE_ROTATION", side: "SHORT", objectiveScore: 0.011 }),
     recommendation({ mechanism: "MOMENTUM_CONTINUATION", objectiveScore: 0.015 }),
     recommendation({ mechanism: "BREAKOUT_ACCEPTANCE", objectiveScore: 0.021 }),
   ];
   const state = open(initialStrategyArena(1), 4, 100_000, policies);
-  assert.equal(Object.keys(state.open).length, 3);
+  assert.equal(Object.keys(state.open).length, 1);
   assert.equal(Object.keys(state.portfolioOpen).length, 1);
   assert.equal(state.portfolioOpen.BTC_USDT.strategyId, "boundary_acceptance");
+});
+
+test("PAPER compares only compatible strategies and selects the best current-state objective", () => {
+  const input = observation(41, 100_000, [
+    recommendation({ mechanism: "RANGE_ROTATION", side: "SHORT", objectiveScore: 0.011 }),
+    recommendation({ mechanism: "FAILED_AUCTION", side: "SHORT", objectiveScore: 0.027 }),
+    recommendation({ mechanism: "BREAKOUT_ACCEPTANCE", side: "LONG", objectiveScore: 0.2 }),
+  ]);
+  input.candidate.id = "BTC_USDT:CANDLE5M:RANGE:SHORT:41";
+  input.candidate.channel = "RANGE";
+  input.candidate.regime = "RANGE";
+  input.candidate.side = "SHORT";
+  const state = observeStrategyArena({ state: initialStrategyArena(1), observation: input });
+  assert.equal(Object.keys(state.open).length, 2);
+  assert.equal(state.portfolioOpen.BTC_USDT.strategyId, "acceptance_failure");
 });
 
 test("stale data and insufficient depth stay observation-only", () => {
@@ -157,12 +172,12 @@ test("account reset archives current cycle, uses fresh quotes and preserves rese
   assert.equal(Object.keys(state.open).length, shadowCount);
 });
 
-test("V6 cutover archives a flat legacy cycle and starts a fresh 1000 U cycle", () => {
+test("V6 route correction archives a flat prior cycle and starts a fresh 1000 U cycle", () => {
   const old = initialStrategyArena(1);
-  (old as unknown as { version: number }).version = 6; old.portfolioCycle = 3; old.portfolioEquity = 895; old.portfolioResolved = 36;
+  (old as unknown as { version: number }).version = 7; old.portfolioCycle = 3; old.portfolioEquity = 895; old.portfolioResolved = 36;
   old.portfolioWins = 10; old.portfolioGrossPnl = -25; old.portfolioCosts = 80;
   const state = normalizeStrategyArena(old as unknown as StrategyArenaState, 200_000);
-  assert.equal(state.version, 7);
+  assert.equal(state.version, 8);
   assert.equal(state.portfolioCycle, 4);
   assert.equal(state.portfolioEquity, 1_000);
   assert.equal(state.portfolioResolved, 0);
