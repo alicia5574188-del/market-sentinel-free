@@ -1017,7 +1017,7 @@ jobs:
               .runtime.state == "LIVE" and .runtime.stale == false and .runtime.lastError == null and
               ((now * 1000 - .runtime.lastSuccessAt) < 10000) and
               .runtime.liveMode.requestedEnabled == false and .runtime.liveMode.operational == false and
-              .runtime.strategyArena.version == 7 and .runtime.strategyArena.playbookCount == 6 and
+              .runtime.strategyArena.version == 8 and .runtime.strategyArena.playbookCount == 6 and
               .runtime.strategyArena.catalogSize == 6 and
               (.runtime.strategyArena.portfolioEquity | type) == "number" and
               .runtime.strategyArena.portfolioEquity > 0 and
@@ -1121,7 +1121,7 @@ jobs:
             .runtime.state == "LIVE" and .runtime.stale == false and .runtime.lastError == null and
             ((now * 1000 - .runtime.lastSuccessAt) < 10000) and
             .runtime.liveMode.requestedEnabled == false and .runtime.liveMode.operational == false and
-            .runtime.strategyArena.version == 7 and .runtime.strategyArena.playbookCount == 6 and
+            .runtime.strategyArena.version == 8 and .runtime.strategyArena.playbookCount == 6 and
             .runtime.strategyArena.catalogSize == 6 and
             .runtime.strategyArena.rules.minimumPortfolioRiskUsdt == 10 and
             .runtime.strategyArena.rules.empiricalCostFloorRate == 0.0014 and
