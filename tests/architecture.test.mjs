@@ -33,7 +33,9 @@ test("runtime uses bounded futures REST snapshots, no continuous WebSocket", asy
   assert.doesNotMatch(alarm, /lastError = `radar:/, "a radar timeout must not become a global execution fault");
   assert.doesNotMatch(alarm, /successes !== this\.runtime\.symbols\.length \? "DEGRADED"/, "partial candidate-book loss must not degrade the whole authority");
   assert.doesNotMatch(alarm, /actionableMarkets === 0 \? `\$\{recoveringMarkets\} realtime markets warming/, "a temporarily empty entry-ready set must not become a global error");
-  assert.match(worker, /successes === 0 \? `\$\{this\.runtime\.symbols\.length\} market snapshots unavailable/);
+  assert.doesNotMatch(worker, /successes === 0 \? `\$\{this\.runtime\.symbols\.length\} market snapshots unavailable/,
+    "a failed staggered subset must never impersonate a full resident-pool outage");
+  assert.match(worker, /authorityStale[\s\S]*scheduled market snapshots unavailable; executable freshness expired/);
   assert.match(worker, /completedCandleStrategyCandidate/);
   assert.match(worker, /residentCandleCandidate/);
   assert.doesNotMatch(worker, /alignedFlow: eventAlignedFlow/);
@@ -146,7 +148,7 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
   assert.match(worker, /if \(criticalChanged \|\| openedThisCycle\)/);
   assert.ok(worker.indexOf("saveCheckpoint(now, true)") < worker.indexOf("await this.drainOutbox(now)"));
   assert.match(worker, /const books = await this\.processBooks\(now, cycleSymbols\)/);
-  assert.ok(worker.indexOf("this.publishCriticalHealth(Date.now(), successes)") < worker.indexOf("this.launchOptionalWork(now, universeDue)"));
+  assert.ok(worker.indexOf("this.publishCriticalHealth(Date.now(), books)") < worker.indexOf("this.launchOptionalWork(now, universeDue)"));
   assert.doesNotMatch(worker.slice(worker.indexOf("async alarm("), worker.indexOf("async fetch(request")), /await this\.launchOptionalWork/);
   assert.match(worker, /this\.ctx\.waitUntil\(tracked\)/);
   assert.match(worker, /runtimeCache.*expiresAt/s);

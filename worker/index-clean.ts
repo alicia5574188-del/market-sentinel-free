@@ -1761,9 +1761,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.lastHeartbeatAt = now;
   }
 
-  private publishCriticalHealth(observedAt: number, successes: number) {
+  private publishCriticalHealth(observedAt: number, books: { successes: number; requests: number }) {
     this.runtime.lastAlarmAt = observedAt;
-    this.runtime.lastSuccessAt = successes > 0 ? observedAt : this.runtime.lastSuccessAt;
+    this.runtime.lastSuccessAt = books.successes > 0 ? observedAt : this.runtime.lastSuccessAt;
     const allWarm = this.runtime.symbols.every((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS);
     const allMeta = this.runtime.symbols.every((symbol) => this.runtime.contractMeta[symbol] != null);
     const realtimeReadiness = this.realtimeReadiness();
@@ -1772,12 +1772,16 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       return memory && memory.timeframeUpdatedAt.m1 > 0 && memory.timeframeUpdatedAt.m15 > 0
         && memory.timeframeUpdatedAt.h1 > 0 && memory.timeframeUpdatedAt.h4 > 0;
     });
-    this.runtime.state = !this.authorityReady ? "RECOVERY_REQUIRED" : successes === 0 ? "RECONNECTING"
-      : this.runtime.riskBreach || !realtimeReadiness.protectedMarketsReady ? "DEGRADED"
+    const authorityStale = this.runtime.lastSuccessAt == null
+      || observedAt - this.runtime.lastSuccessAt > AUTHORITY_STALE_AFTER_MS;
+    this.runtime.state = !this.authorityReady ? "RECOVERY_REQUIRED"
+      : authorityStale ? "RECONNECTING"
+        : this.runtime.riskBreach || !realtimeReadiness.protectedMarketsReady ? "DEGRADED"
         : realtimeReadiness.actionableMarkets > 0 ? "LIVE"
           : allWarm && allMeta && ancillaryStarted ? "DEGRADED" : "WARMING";
-    const feedError = successes === 0 ? `${this.runtime.symbols.length} market snapshots unavailable; retrying`
-      : !realtimeReadiness.protectedMarketsReady ? "protected position data unavailable; new entries frozen"
+    const feedError = authorityStale
+      ? `${books.requests || this.runtime.symbols.length} scheduled market snapshots unavailable; executable freshness expired`
+      : !realtimeReadiness.protectedMarketsReady ? "protected position or route data unavailable; new entries frozen"
         : !allMeta && realtimeReadiness.protectedMarkets > 0 ? "protected contract metadata unavailable" : null;
     this.runtime.lastError = (this.runtime.riskBreach ? "portfolio stress risk exceeds 10%; new entries blocked" : feedError)
       ?? this.runtime.d1MirrorError;
@@ -1853,9 +1857,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // universe, radar and research logging run under one non-overlapping
       // background task and can no longer delay the next protection/entry pass.
       const books = await this.processBooks(now, cycleSymbols);
-      const successes = books.successes;
       subrequests += books.requests;
-      this.publishCriticalHealth(Date.now(), successes);
+      this.publishCriticalHealth(Date.now(), books);
       const liveNeedsSync = this.runtime.live.requestedEnabled
         || Object.values(this.runtime.live.entries).some((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status))
         || Object.values(this.runtime.live.positions).some((position) => position?.status === "OPEN");
