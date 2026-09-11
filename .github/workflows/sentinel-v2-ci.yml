@@ -68,10 +68,15 @@ jobs:
           RESEARCH_SYMBOLS: "20"
         run: npm run research:all-regime
 
-      - name: Require V11 account-authorized routes to retain after-cost evidence
+      - name: Require V11 baseline routes to retain after-cost evidence
         if: github.event_name == 'pull_request'
         working-directory: release
         run: npm run research:v11
+
+      - name: Require V12 gap routes to retain after-cost evidence
+        if: github.event_name == 'pull_request'
+        working-directory: release
+        run: npm run research:v12
 
       - name: Preserve bounded replay dataset for review
         if: github.event_name == 'pull_request'
@@ -1040,8 +1045,8 @@ jobs:
               .runtime.state == "LIVE" and .runtime.stale == false and .runtime.lastError == null and
               ((now * 1000 - .runtime.lastSuccessAt) < 10000) and
               .runtime.liveMode.requestedEnabled == false and .runtime.liveMode.operational == false and
-              .runtime.strategyArena.version == 11 and .runtime.strategyArena.playbookCount == 4 and
-              .runtime.strategyArena.catalogSize == 4 and
+              .runtime.strategyArena.version == 12 and .runtime.strategyArena.playbookCount == 6 and
+              .runtime.strategyArena.catalogSize == 6 and
               (.runtime.strategyArena.routeCheckCount | type) == "number" and
               (.runtime.feedQuality.attempts | type) == "number" and
               (.runtime.strategyArena.portfolioEquity | type) == "number" and
@@ -1057,7 +1062,7 @@ jobs:
               .runtime.strategyArena.rules.maxNotionalMultiple == 1.5 and
               .runtime.strategyArena.rules.generatedRouteAuthority == false and
               .runtime.strategyArena.rules.legacyStrategyAuthority == false and
-              .runtime.strategyArena.rules.paperCycleResetOnCutover == true and
+              .runtime.strategyArena.rules.paperCycleResetOnCutover == false and
               .runtime.strategyArena.rules.streakLength == 3 and
               .runtime.strategyArena.rules.maxPortfolioPositions == null and
               .runtime.strategyArena.rules.profitArmIsExit == false and
@@ -1150,8 +1155,8 @@ jobs:
             .runtime.state == "LIVE" and .runtime.stale == false and .runtime.lastError == null and
             ((now * 1000 - .runtime.lastSuccessAt) < 10000) and
             .runtime.liveMode.requestedEnabled == false and .runtime.liveMode.operational == false and
-            .runtime.strategyArena.version == 11 and .runtime.strategyArena.playbookCount == 4 and
-            .runtime.strategyArena.catalogSize == 4 and
+            .runtime.strategyArena.version == 12 and .runtime.strategyArena.playbookCount == 6 and
+            .runtime.strategyArena.catalogSize == 6 and
             (.runtime.strategyArena.routeCheckCount | type) == "number" and
             (.runtime.feedQuality.attempts | type) == "number" and
             .runtime.strategyArena.rules.minimumPortfolioRiskUsdt == 10 and
@@ -1162,7 +1167,7 @@ jobs:
             .runtime.strategyArena.rules.maxNotionalMultiple == 1.5 and
             .runtime.strategyArena.rules.generatedRouteAuthority == false and
             .runtime.strategyArena.rules.legacyStrategyAuthority == false and
-            .runtime.strategyArena.rules.paperCycleResetOnCutover == true and
+            .runtime.strategyArena.rules.paperCycleResetOnCutover == false and
             .runtime.strategyArena.rules.authorityWindowPriority == "STATE_CONDITIONED_EXPECTANCY" and
             .runtime.strategyArena.rules.streakLength == 3 and
             .runtime.strategyArena.rules.maxPortfolioPositions == null and

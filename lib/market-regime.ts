@@ -2,7 +2,7 @@ import type { RadarCandidate, RadarTicker } from "./market-radar.ts";
 import type { CompletedMinuteCandle } from "./liquidity-core.ts";
 import { detectExtremeSequencePath, type ExtremeSequencePath } from "./extreme-sequence-mirror.ts";
 import type { AdaptivePolicySnapshot } from "./adaptive-policy.ts";
-import { detectAllRegimeRoutes, dominantAllRegimeEnvironment, type AllRegimeEnvironment, type AllRegimeRoute } from "./all-regime-engine.ts";
+import { allRegimePaperApproved, detectAllRegimeRoutes, dominantAllRegimeEnvironment, type AllRegimeEnvironment, type AllRegimeRoute } from "./all-regime-engine.ts";
 
 export const MARKET_REGIME_VERSION = 2;
 export const MARKET_REGIME_MIN_SAMPLES = 18;
@@ -238,10 +238,10 @@ export function completedCandleStrategyCandidate(input: {
   const extremeSequence = detectExtremeSequencePath(allRows);
   const allRegimeRoutes = detectAllRegimeRoutes(allRows);
   const dominantEnvironment = dominantAllRegimeEnvironment(allRows);
-  // Exhaustion-derived reversal/continuation is the only family that remained
-  // positive in all three chronological folds. Give it scarce fresh-book
-  // priority while retaining the other routes as observation-only diagnostics.
-  const approvedRoute = allRegimeRoutes.find((route) => route.strategyId === "exhaustion_turn");
+  // Only routes that remained positive after costs in every chronological fold
+  // receive scarce fresh-book priority; rejected route families stay visible as
+  // diagnostics without becoming account authority.
+  const approvedRoute = allRegimeRoutes.find((route) => allRegimePaperApproved(route.strategyId));
   const primary = approvedRoute ?? allRegimeRoutes[0];
   if (primary) {
     channel = primary.environment === "TREND" ? "TREND" : primary.environment === "RANGE" ? "RANGE"

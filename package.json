@@ -8,6 +8,7 @@
     "test:all-regime": "node --experimental-strip-types --test tests/all-regime-engine.test.ts",
     "research:all-regime": "node --experimental-strip-types scripts/research-all-regime.mjs",
     "research:v11": "node scripts/research-v11.mjs",
+    "research:v12": "node scripts/research-v12.mjs",
     "test:direct": "node --experimental-strip-types --test tests/extreme-sequence-mirror.test.ts tests/adaptive-policy.test.ts tests/liquidity-core.test.ts tests/market-radar.test.ts tests/market-regime.test.ts tests/arena-live.test.ts tests/rejection-audit.test.ts tests/reaction-lab.test.ts tests/outcome-research.test.ts tests/strategy-arena.test.ts tests/paper-cycle.test.ts tests/gate-market.test.ts tests/runtime-health.test.ts tests/runtime-faults.test.ts tests/credential-vault.test.ts tests/owner-auth.test.ts tests/gate-live.test.ts tests/position-metrics.test.ts",
     "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vite",
     "build": "bash scripts/build-verified.sh",
@@ -20,5 +21,5 @@
   "dependencies": { "drizzle-orm": "0.45.2", "next": "16.2.6", "react": "19.2.6", "react-dom": "19.2.6" },
   "devDependencies": { "@cloudflare/vite-plugin": "1.37.1", "@cloudflare/workers-types": "^4.20260702.1", "@tailwindcss/postcss": "4.2.1", "@types/node": "22.19.19", "@types/react": "19.2.14", "@types/react-dom": "19.2.3", "@vitejs/plugin-react": "6.0.2", "@vitejs/plugin-rsc": "0.5.26", "drizzle-kit": "0.31.10", "eslint": "9.39.4", "eslint-config-next": "16.2.6", "react-server-dom-webpack": "19.2.6", "tailwindcss": "4.2.1", "typescript": "5.9.3", "vinext": "0.0.50", "vite": "8.0.13", "wrangler": "4.92.0" },
   "type": "module",
-  "displayName": "All-Regime Compound V11"
+  "displayName": "All-Regime Compound V12"
 }

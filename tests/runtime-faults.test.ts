@@ -586,7 +586,7 @@ test("all-regime cutover archives the old PAPER cycle and starts a fresh account
 
   const { stream } = await makeStream(saved);
   assert.equal(stream.runtime.version, "all-regime-compound-v2");
-  assert.equal(stream.runtime.strategyArena.version, 11);
+  assert.equal(stream.runtime.strategyArena.version, 12);
   assert.equal(stream.runtime.strategyArena.portfolioCycle, 4);
   assert.equal(stream.runtime.strategyArena.portfolioEquity, 1_000);
   assert.equal(stream.runtime.strategyArena.portfolioResolved, 0);
@@ -997,18 +997,18 @@ test("health status is compact while retaining every release gate", async () => 
   const status = await response.json();
 
   assert.equal(status.version, "all-regime-compound-v2");
-  assert.equal(status.strategyArena.version, 11);
-  assert.equal(status.strategyArena.playbookCount, 4);
-  assert.equal(status.strategyArena.catalogSize, 4);
+  assert.equal(status.strategyArena.version, 12);
+  assert.equal(status.strategyArena.playbookCount, 6);
+  assert.equal(status.strategyArena.catalogSize, 6);
   assert.equal(status.strategyArena.portfolioEquity, 1_000);
   assert.equal(status.strategyArena.rules.minimumPortfolioRiskUsdt, 10);
   assert.equal(status.strategyArena.rules.empiricalCostFloorRate, 0.0014);
   assert.equal(status.strategyArena.rules.authorityWindowPriority, "STATE_CONDITIONED_EXPECTANCY");
-  assert.equal(status.strategyArena.rules.allRegimeVersion, 2);
+  assert.equal(status.strategyArena.rules.allRegimeVersion, 3);
   assert.equal(status.strategyArena.rules.extremeSequenceAuthority, false);
   assert.equal(status.strategyArena.rules.generatedRouteAuthority, false);
   assert.equal(status.strategyArena.rules.legacyStrategyAuthority, false);
-  assert.equal(status.strategyArena.rules.paperCycleResetOnCutover, true);
+  assert.equal(status.strategyArena.rules.paperCycleResetOnCutover, false);
   assert.equal(status.strategyArena.rules.streakLength, 3);
   assert.equal(status.strategyArena.rules.profitArmIsExit, false);
   assert.equal(status.strategyArena.rules.dailyObjectiveIsQuota, false);
