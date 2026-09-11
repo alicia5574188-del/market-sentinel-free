@@ -1,10 +1,10 @@
 import { CORRELATED_DIRECTION_RISK_CAP, MIN_NET_REWARD_RISK, PORTFOLIO_MARGIN_CAP, PORTFOLIO_RISK_CAP,
   selectSafeLeverage, sizePaperPosition, type LiquidityRoute, type RangeStructure, type Side } from "./liquidity-core.ts";
 import type { CandidateChannel, MarketRegimeCandidate, MarketRegimeKind, ResidentCandleStructure } from "./market-regime.ts";
-import { ALL_REGIME_ENGINE_VERSION, ALL_REGIME_STRATEGIES, ALL_REGIME_SYSTEM_NAME,
+import { ALL_REGIME_ENGINE_VERSION, ALL_REGIME_OFFLINE_VALIDATION, ALL_REGIME_STRATEGIES, ALL_REGIME_SYSTEM_NAME,
   type AllRegimeEnvironment } from "./all-regime-engine.ts";
 
-export const STRATEGY_ARENA_VERSION = 10;
+export const STRATEGY_ARENA_VERSION = 11;
 export const STRATEGY_INITIAL_EQUITY = 1_000;
 export const PROMOTION_WIN_STREAK = 3;
 export const PROMOTION_RECENT_WINDOW = 6;
@@ -110,9 +110,12 @@ export type PerformanceEvidence = { events: number; wins: number; netReturnRate:
 export type ArenaTransition = { id: string; strategyId: string; strategyName: string; from: StrategyLane; to: StrategyLane; at: number; reason: string };
 export type PortfolioCycleArchive = { number: number; ruleVersion: string; startedAt: number; endedAt: number;
   startingEquity: number; endingEquity: number; resolved: number; wins: number; grossPnl: number; costs: number; reason: string };
+export type RouteCheck = { id: string; eventId: string; strategyId: string; strategyName: string; symbol: string;
+  observedAt: number; status: "FORMING" | "CHECKING" | "BLOCKED" | "OPEN"; blocker: string | null;
+  side: Side | null; environment: AllRegimeEnvironment | null; score: number; reason: string | null };
 
 export type StrategyArenaState = {
-  version: 10; startedAt: number; strategies: Record<string, StrategyScore>; playbookResults: Record<string, PlaybookEventResult[]>;
+  version: 11; startedAt: number; strategies: Record<string, StrategyScore>; playbookResults: Record<string, PlaybookEventResult[]>;
   open: Record<string, ArenaTrade>; portfolioOpen: Record<string, ArenaTrade>; portfolioEquity: number;
   portfolioResolved: number; portfolioWins: number; portfolioGrossPnl: number; portfolioCosts: number;
   portfolioCycle: number; portfolioCycleStartedAt: number; archivedPortfolioCycles: PortfolioCycleArchive[];
@@ -120,6 +123,7 @@ export type StrategyArenaState = {
   archivedPortfolioTrades: ArenaTrade[];
   transitions: ArenaTransition[]; seenSignals: string[]; admissionRejects: Record<string, number>;
   recentObservations: Array<{ id: string; eventId: string; strategyId: string; strategyName: string; symbol: string; observedAt: number; blocker: string }>;
+  currentRouteChecks: Record<string, RouteCheck>;
   lastPortfolioCloses: Record<string, { closedAt: number; branch: AllRegimeEnvironment | null; eventId: string }>;
   cutoverPending: boolean;
 };
@@ -147,7 +151,7 @@ const baseId = (strategyId: string) => strategyId.split(":")[0];
 const regimeGroup = (regime: MarketRegimeKind) => regime === "TREND" || regime === "EXPANSION" ? "DIRECTIONAL" : regime;
 
 function freshStrategy(definition: StrategyDefinition): StrategyScore {
-  const offlineApproved = definition.id === "momentum_carry" || definition.id === "exhaustion_turn";
+  const offlineApproved = ALL_REGIME_OFFLINE_VALIDATION[definition.id as keyof typeof ALL_REGIME_OFFLINE_VALIDATION].paperApproved;
   return { ...definition, lane: offlineApproved ? "ACTIVE" : "SHADOW", enabled: offlineApproved, shadowResolved: 0, shadowWins: 0, shadowNetReturnRate: 0,
     paperResolved: 0, paperWins: 0, paperNetReturnRate: 0, paperEquity: STRATEGY_INITIAL_EQUITY,
     consecutivePaperLosses: 0, stageResults: [], stageEvents: [], stageSymbols: [], recentResults: [],
@@ -166,7 +170,7 @@ export function initialStrategyArena(now = Date.now()): StrategyArenaState {
     portfolioEquity: STRATEGY_INITIAL_EQUITY, portfolioResolved: 0, portfolioWins: 0, portfolioGrossPnl: 0,
     portfolioCosts: 0, portfolioCycle: 1, portfolioCycleStartedAt: now, archivedPortfolioCycles: [],
     recentShadow: [], recentPaper: [], recentPortfolio: [], archivedPortfolioTrades: [], transitions: [], seenSignals: [], admissionRejects: {},
-    recentObservations: [], lastPortfolioCloses: {}, cutoverPending: false };
+    recentObservations: [], currentRouteChecks: {}, lastPortfolioCloses: {}, cutoverPending: false };
 }
 
 function legacyArchive(value: unknown, now: number): PortfolioCycleArchive[] {
@@ -217,6 +221,7 @@ export function normalizeStrategyArena(value: StrategyArenaState | null | undefi
     archivedPortfolioTrades: (value.archivedPortfolioTrades ?? []).slice(-ARENA_HISTORY_LIMIT), transitions: (value.transitions ?? []).slice(-200),
     seenSignals: (value.seenSignals ?? []).slice(-2_000), archivedPortfolioCycles: (value.archivedPortfolioCycles ?? []).slice(-12),
     admissionRejects: value.admissionRejects ?? {}, recentObservations: (value.recentObservations ?? []).slice(-ARENA_HISTORY_LIMIT),
+    currentRouteChecks: value.currentRouteChecks ?? {},
     lastPortfolioCloses: value.lastPortfolioCloses ?? {},
     cutoverPending: Boolean(value.cutoverPending) };
   return normalized;
@@ -232,7 +237,17 @@ function signals(input: ArenaObservation): Signal[] {
     let strategyId = route.strategyId;
     let side = route.side;
     let reason = `${route.strategyName}：${route.reason}`;
-    if (route.strategyId === "momentum_carry") return [];
+    // Direct breakout chasing was negative after full costs. Trend authority is
+    // granted only when an apparent exhaustion occurs inside a still-crowded
+    // broad move; range authority uses its independently validated double reclaim.
+    if (route.strategyId === "momentum_carry" || route.strategyId === "pressure_release") return [];
+    if (route.strategyId === "balance_return") {
+      if ((input.globalMarkets ?? 0) < 12) return [];
+      const breadth = input.globalBreadth ?? 0.5;
+      const medianMove = input.globalMedianMove ?? 0;
+      if (breadth < 0.4 || breadth > 0.6 || Math.abs(medianMove) > 0.0012) return [];
+      reason = `衡返·双拒：${route.reason} 全市场方向中性，允许向平衡重心回归。`;
+    }
     if (route.strategyId === "exhaustion_turn") {
       if ((input.globalMarkets ?? 0) < 12) return [];
       const breadth = input.globalBreadth ?? 0.5;
@@ -360,8 +375,8 @@ function shadowAuthorityDecision(score: StrategyScore): ShadowAuthorityDecision 
   const reversed = reverseRowsFor(latest3, score);
   const reverseEvidence = evidence(uniqueResults(score.reverseRecentResults));
   return latest3.every((row) => row.netReturnRate < 0) && reversed.length === latest3.length
-    && reversed.every((row) => row.netReturnRate > 0) && reverseEvidence.events >= 12
-    && reverseEvidence.meanReturnRate > 0 && reverseEvidence.profitFactor >= 2.5
+    && reversed.every((row) => row.netReturnRate > 0)
+    && reverseEvidence.meanReturnRate > 0 && reverseEvidence.profitFactor > 1
     ? { orientation: "REVERSE",
       reason: "最新3个正常影子连续亏损，且同事件的3个镜像影子均在完整成本后盈利",
       sample: latest3, reverseResults: reversed } : null;
@@ -381,7 +396,7 @@ function updatePlaybookResult(state: StrategyArenaState, trade: ArenaTrade) {
 }
 
 function refreshShadowAuthority(state: StrategyArenaState, score: StrategyScore, now: number) {
-  if (score.id !== "momentum_carry" && score.id !== "exhaustion_turn") return;
+  if (score.id === "pressure_release") return;
   const decision = shadowAuthorityDecision(score);
   if (!decision && uniqueResults(score.recentResults).length < POLARITY_STREAK) return;
   if (decision?.orientation === "NORMAL") {
@@ -669,14 +684,26 @@ function portfolioAdmission(state: StrategyArenaState, input: ArenaObservation, 
         : (input.globalOpportunityRank ?? 1) > MAX_PORTFOLIO_POSITIONS ? "GLOBAL_RANK"
           : inSameBranchCooldown ? "SYMBOL_COOLDOWN"
             : null;
-  if (blocker) { state.admissionRejects[blocker] = (state.admissionRejects[blocker] ?? 0) + 1; return null; }
+  if (blocker) { state.admissionRejects[blocker] = (state.admissionRejects[blocker] ?? 0) + 1;
+    return { admission: null, blocker }; }
   const sizing = portfolioSizing(state, input, signal);
-  if (!sizing) { state.admissionRejects.SIZING = (state.admissionRejects.SIZING ?? 0) + 1; return null; }
+  if (!sizing) { state.admissionRejects.SIZING = (state.admissionRejects.SIZING ?? 0) + 1;
+    return { admission: null, blocker: "SIZING" }; }
   if (Math.min(input.bidDepthUsd ?? 0, input.askDepthUsd ?? 0) < Math.max(10_000, sizing.notional * 5)) {
-    state.admissionRejects.DEPTH = (state.admissionRejects.DEPTH ?? 0) + 1; return null;
+    state.admissionRejects.DEPTH = (state.admissionRejects.DEPTH ?? 0) + 1;
+    return { admission: null, blocker: "DEPTH" };
   }
-  return { tier: "NORMAL" as const, sample, sizing };
+  return { admission: { tier: "NORMAL" as const, sample, sizing }, blocker: null };
 }
+
+const admissionBlockerText = (blocker: string) => ({
+  STALE: "盘口或关键周期数据不新鲜", CONTRACT: "Gate合约信息不完整", DATA_CAPACITY: "持仓保护市场尚未全部具备新鲜盘口",
+  STRUCTURE: "进场、止损和盈利臂的方向关系无效", LIQUIDITY: "24小时成交额低于账户执行下限",
+  SPREAD: "真实买一卖一价差超过成本上限", NET_ECONOMICS: "扣除手续费与滑点后的盈亏结构不足",
+  POSITION_CAP: "账户已达到同时持仓上限", GLOBAL_RANK: "当前机会排序未进入账户前三",
+  SYMBOL_COOLDOWN: "同币同分支刚完成交易，正在避免重复追单", SIZING: "Gate整数张数或账户风险额度不足",
+  DEPTH: "盘口双边深度不足以承载计划仓位",
+}[blocker] ?? blocker);
 
 function effectiveShadowSizing(input: ArenaObservation, signal: Signal) {
   const economics = geometryEconomics(input, signal);
@@ -727,26 +754,44 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
     const definition = STRATEGY_CATALOG.find((row) => row.id === signal.strategyId)!;
     return attainableTarget(state, input.observation, signal, definition);
   });
+  const setRouteCheck = (definition: StrategyDefinition, signal: Signal | null, status: RouteCheck["status"], blocker: string | null) => {
+    const key = `${input.observation.candidate.symbol}:${definition.id}`;
+    state.currentRouteChecks[key] = { id: key, eventId: input.observation.candidate.id, strategyId: definition.id,
+      strategyName: definition.name, symbol: input.observation.candidate.symbol, observedAt: input.observation.now,
+      status, blocker, side: signal?.side ?? null, environment: signal?.branch ?? null,
+      score: signal ? Math.round(signal.quality * 100) : input.observation.candidate.score,
+      reason: signal?.reason ?? null };
+  };
   const recordObservation = (definition: StrategyDefinition, blocker: string) => {
     const id = `observation:${definition.id}:${input.observation.candidate.id}`;
-    if (state.recentObservations.some((row) => row.id === id)) return;
+    const prior = state.recentObservations.find((row) => row.id === id);
+    if (prior) { prior.blocker = blocker; prior.observedAt = input.observation.now; return; }
     state.recentObservations.push({ id, eventId: input.observation.candidate.id,
       strategyId: definition.id, strategyName: definition.name, symbol: input.observation.candidate.symbol,
       observedAt: input.observation.now, blocker });
     state.recentObservations = state.recentObservations.slice(-ARENA_HISTORY_LIMIT);
   };
   for (const definition of STRATEGY_CATALOG.filter((row) => row.channel === input.observation.candidate.channel)) {
-    if (!generatedSignals.some((signal) => signal.strategyId === definition.id))
+    if (!generatedSignals.some((signal) => signal.strategyId === definition.id)) {
+      setRouteCheck(definition, null, "FORMING", "当前完整5分钟路径尚未形成获准执行的进场结构");
       recordObservation(definition, "当前环境内尚未形成完整且可执行的触发路线");
+    }
   }
   const executable: Array<{ signal: Signal; definition: StrategyDefinition; score: StrategyScore; sizing: TradeSizing }> = [];
   for (const normalSignal of generatedSignals) {
     const score = state.strategies[normalSignal.strategyId]; const definition = STRATEGY_CATALOG.find((row) => row.id === normalSignal.strategyId);
     if (!score || !definition) continue;
+    setRouteCheck(definition, normalSignal, "CHECKING", "路线已形成，正在核对实时盘口、成本和账户容量");
+    const portfolioTrade = state.portfolioOpen[input.observation.candidate.symbol];
+    if (portfolioTrade?.eventId === input.observation.candidate.id && portfolioTrade.strategyId === normalSignal.strategyId) {
+      setRouteCheck(definition, { ...normalSignal, side: portfolioTrade.side, reason: portfolioTrade.reason }, "OPEN", "模拟账户已成交并进入实时保护");
+      continue;
+    }
     const overlappingVariantTrade = Object.values(state.open).find((trade) => trade.lane === "EFFECTIVE_SHADOW"
       && tradeOrientation(trade) === "NORMAL" && trade.symbol === input.observation.candidate.symbol
       && trade.strategyId === normalSignal.strategyId);
     if (overlappingVariantTrade) {
+      setRouteCheck(definition, normalSignal, "BLOCKED", "同币同策略的上一条路线仍在完整生命周期内");
       recordObservation(definition, "同币种的同环境路线仍在完整生命周期内，本次不重复建立影子");
       continue;
     }
@@ -759,10 +804,16 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
           && trade.eventId === input.observation.candidate.id && trade.strategyId === signal.strategyId)
         || state.recentShadow.some((trade) => tradeOrientation(trade) === orientation
           && trade.eventId === input.observation.candidate.id && trade.strategyId === signal.strategyId);
-      if (eventAlreadyExecuted || state.open[openKey] || Object.keys(state.open).length >= ARENA_MAX_OPEN) continue;
+      if (eventAlreadyExecuted || state.open[openKey] || Object.keys(state.open).length >= ARENA_MAX_OPEN) {
+        if (orientation === "NORMAL") setRouteCheck(definition, signal, "BLOCKED",
+          eventAlreadyExecuted ? "本完成段已经执行过，不重复追单" : state.open[openKey]
+            ? "同币同策略路线仍在完整生命周期内" : "影子生命周期容量已满");
+        continue;
+      }
       const virtual = effectiveShadowSizing(input.observation, signal);
       const blocker = effectiveShadowBlocker(input.observation, signal, virtual);
       if (blocker || !virtual) {
+        if (orientation === "NORMAL") setRouteCheck(definition, signal, "BLOCKED", blocker ?? "当前路线不能真实执行");
         recordObservation(definition, blocker ?? "当前环境路线不能真实执行");
         continue;
       }
@@ -779,27 +830,38 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
     state.open[openKey] = shadow;
     state.seenSignals.push(`effective:${orientation.toLowerCase()}:${row.signal.strategyId}:${input.observation.candidate.id}`);
     opened.push({ ...row, orientation, shadow });
+    if (orientation === "NORMAL") setRouteCheck(row.definition, row.signal, "CHECKING", "盘口与成本检查已通过，正在核对账户准入");
   }
   while (state.seenSignals.length > 2_000) state.seenSignals.shift();
   const symbol = input.observation.candidate.symbol;
   const portfolioSeenKey = `portfolio:${input.observation.candidate.id}`;
   const active = opened.filter((row) => row.orientation === "NORMAL" ? row.score.enabled : row.score.reverseEnabled);
   if (active.length && !state.portfolioOpen[symbol] && !state.seenSignals.includes(portfolioSeenKey)) {
-    const candidates = active.map((row) => ({ ...row,
-      admission: portfolioAdmission(state, input.observation, row.signal, row.score) }))
-      .filter((row) => row.admission)
-      .sort((a, b) => b.admission!.sample.conservativeReturnRate - a.admission!.sample.conservativeReturnRate
-        || b.admission!.sample.profitFactor - a.admission!.sample.profitFactor || b.signal.quality - a.signal.quality);
+    const assessed = active.map((row) => ({ ...row,
+      decision: portfolioAdmission(state, input.observation, row.signal, row.score) }));
+    const candidates = assessed.filter((row) => row.decision.admission)
+      .sort((a, b) => b.decision.admission!.sample.conservativeReturnRate - a.decision.admission!.sample.conservativeReturnRate
+        || b.decision.admission!.sample.profitFactor - a.decision.admission!.sample.profitFactor || b.signal.quality - a.signal.quality);
     const winner = candidates[0];
-    if (winner?.admission) {
+    if (winner?.decision.admission) {
       const polarity = winner.orientation === "REVERSE" ? winner.score.reverseRecentResults : winner.score.recentResults;
       winner.shadow.context.polarityEvidence = uniqueResults(polarity).slice(-POLARITY_STREAK)
         .map((row) => row.netReturnRate);
-      state.portfolioOpen[symbol] = cloneShadowForPortfolio(winner.shadow, winner.admission.sizing, winner.admission.sample);
+      state.portfolioOpen[symbol] = cloneShadowForPortfolio(winner.shadow, winner.decision.admission.sizing, winner.decision.admission.sample);
       state.seenSignals.push(portfolioSeenKey);
+      setRouteCheck(winner.definition, winner.signal, "OPEN", "模拟账户已成交并进入实时保护");
+    } else if (assessed[0]?.decision.blocker) {
+      const blocker = admissionBlockerText(assessed[0].decision.blocker);
+      setRouteCheck(assessed[0].definition, assessed[0].signal, "BLOCKED", blocker);
+      recordObservation(assessed[0].definition, `已形成${assessed[0].signal.side === "LONG" ? "做多" : "做空"}路线；最终阻塞：${blocker}`);
     }
   } else if (opened.length && !active.length) {
+    setRouteCheck(opened[0].definition, opened[0].signal, "BLOCKED", "策略方向尚未获得当前连续胜负状态授权");
     recordObservation(opened[0].definition, "双向影子继续运行；尚未形成连续3胜的顺极或连续3败且镜像全胜的逆极");
+  } else if (opened.length && state.portfolioOpen[symbol]) {
+    setRouteCheck(opened[0].definition, opened[0].signal, "BLOCKED", "该币已有账户持仓，当前路线仅继续影子观察");
+  } else if (opened.length && state.seenSignals.includes(portfolioSeenKey)) {
+    setRouteCheck(opened[0].definition, opened[0].signal, "BLOCKED", "本完成段已经完成账户准入判断，不重复追单");
   }
   return state;
 }
@@ -849,10 +911,13 @@ export function arenaSummary(state: StrategyArenaState) {
     portfolioEquity: state.portfolioEquity, portfolioResolved: state.portfolioResolved, portfolioWins: state.portfolioWins,
     portfolioGrossPnl: state.portfolioGrossPnl, portfolioCosts: state.portfolioCosts, strategies: strategySummaries,
     playbooks: PLAYBOOKS.map((row) => ({ ...row, evidence: playbookPerformance(state, row.id) })),
+    offlineValidation: ALL_REGIME_OFFLINE_VALIDATION,
     recentShadow: uniqueEventTrades(state.recentShadow.slice(-100).reverse()), recentPaper: state.recentPaper.slice(-100).reverse(),
     recentPortfolio: state.recentPortfolio.slice(-100).reverse(), archivedPortfolioTrades: state.archivedPortfolioTrades.slice(-100).reverse(),
     transitions: state.transitions.slice(-100).reverse(),
-    admissionRejects: state.admissionRejects, cutoverPending: state.cutoverPending,
+    admissionRejects: state.admissionRejects,
+    currentRouteChecks: Object.values(state.currentRouteChecks).sort((left, right) => right.observedAt - left.observedAt).slice(0, 30),
+    cutoverPending: state.cutoverPending,
     rules: { extremeSequenceAuthority: false, strategyName: ALL_REGIME_SYSTEM_NAME,
       generatedRouteAuthority: false, legacyStrategyAuthority: false, paperCycleResetOnCutover: true,
       frictionFloorRate: ARENA_FRICTION_RATE, minNetRewardRisk: MIN_NET_REWARD_RISK,

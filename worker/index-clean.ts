@@ -28,6 +28,8 @@ const AUTHORITY_STALE_AFTER_MS = 8_000;
 const FEED_HARD_FAILURE_COUNT = 4;
 const FEED_HARD_FAILURE_MS = 15_000;
 const FEED_RECOVERY_CONFIRMATIONS = 2;
+const FEED_QUALITY_WINDOW_MS = 60 * 60_000;
+const BACKGROUND_BOOK_INTERVALS = 5;
 const HEARTBEAT_MS = 30_000;
 const UNIVERSE_MS = 10 * 60_000;
 const RADAR_MS = 10_000;
@@ -55,7 +57,9 @@ function broadMarketContext(candidates: Record<string, MarketRegimeCandidate>, n
 }
 
 function approvedRouteScore(candidate: MarketRegimeCandidate) {
-  return candidate.allRegimeRoutes?.find((route) => route.strategyId === "exhaustion_turn")?.score ?? -1;
+  return Math.max(-1, ...(candidate.allRegimeRoutes ?? [])
+    .filter((route) => route.strategyId === "exhaustion_turn" || route.strategyId === "balance_return")
+    .map((route) => route.score));
 }
 
 export interface CloudflareEnv {
@@ -162,6 +166,8 @@ type RuntimeState = {
   feedFailures: Record<string, { count: number; retryAt: number; suspendedSince?: number | null; lastFreshAt?: number;
     recoveryFreshCount?: number; totalFailures?: number; recoveries?: number; lastFailureAt?: number | null;
     lastError?: string | null; maxObservedLagMs?: number }>;
+  feedQuality: { windowStartedAt: number; attempts: number; failures: number; recoveries: number;
+    lastFailureAt: number | null; lastFailureSymbol: string | null; lastError: string | null };
   lastError: string | null;
   d1MirrorError: string | null;
   riskBreach: boolean;
@@ -234,6 +240,8 @@ function initialState(): RuntimeState {
     lastAlarmAt: null, lastSuccessAt: null, lastHeartbeatAt: null, lastStopCheckpointAt: null, nextAlarmAt: null, lastUniverseAt: 0, lastRadarAt: 0,
     lastStrategyCandleAt: 0, lastStrategyLogAt: 0,
     utcDay: day(), dailyStartEquity: PAPER_INITIAL_EQUITY, alarmCount: 0, d1Writes: 0, nonAlarmWrites: 0, d1RetryAt: 0, d1FailureCount: 0, equityVersion: 0, ancillaryCursor: 0, subrequestCount: 0, maxSubrequestsInAlarm: 0, sequenceRebuilds: 0, lastProcessedSlot: -1, feedFailures: {},
+    feedQuality: { windowStartedAt: Date.now(), attempts: 0, failures: 0, recoveries: 0,
+      lastFailureAt: null, lastFailureSymbol: null, lastError: null },
     lastError: null, d1MirrorError: null, riskBreach: false, tickSize: Object.fromEntries(DEFAULT_SYMBOLS.map((symbol) => [symbol, 0.0001])), contractMeta: {},
     decisions: {}, routes: {}, plans: {}, positions: {}, evidence: {}, entryAssessments: {},
     strategyArena: initialStrategyArena(), marketRegimes: initialMarketRegimes(), liquidUniverse: [], stableCandidates: {}, stableStructures: {},
@@ -1377,7 +1385,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       lastError: entryReady ? null : "等待第二次新鲜盘口确认",
       maxObservedLagMs: Math.max(prior.maxObservedLagMs ?? 0, Math.max(0, now - observedAt)),
     };
-    return { entryReady, recoveryFreshCount };
+    return { entryReady, recoveryFreshCount, recovered };
   }
 
   private symbolEntryReady(symbol: string) {
@@ -1403,9 +1411,26 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       protectedMarkets: protectedSymbols.size, protectedMarketsReady };
   }
 
+  private cycleBookSymbols(now: number, symbols: string[]) {
+    const protectedSymbols = new Set([
+      ...Object.values(this.runtime.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
+      ...Object.values(this.runtime.plans).flatMap((plan) => plan?.state === "PREPARED" ? [plan.symbol] : []),
+      ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
+      ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status) ? [entry.symbol] : []),
+      ...Object.values(this.runtime.strategyArena.portfolioOpen).map((position) => position.symbol),
+      ...Object.values(this.runtime.stableCandidates).filter((candidate) => approvedRouteScore(candidate) >= 0)
+        .map((candidate) => candidate.symbol),
+    ]);
+    const slot = Math.floor(now / LOOP_MS) % BACKGROUND_BOOK_INTERVALS;
+    const bucket = (symbol: string) => [...symbol].reduce((sum, char) => sum + char.charCodeAt(0), 0) % BACKGROUND_BOOK_INTERVALS;
+    return symbols.filter((symbol) => protectedSymbols.has(symbol) || (this.sessionWarmup[symbol] ?? 0) < WARMUP_SNAPSHOTS
+      || bucket(symbol) === slot);
+  }
+
   private async processBooks(now: number, cycleSymbols = [...this.runtime.symbols]) {
     const authorityBefore = this.captureAuthority();
     const dueSymbols = cycleSymbols.filter((symbol) => (this.runtime.feedFailures[symbol]?.retryAt ?? 0) <= now);
+    this.runtime.feedQuality.attempts += dueSymbols.length;
     const rows = await Promise.allSettled(dueSymbols.map(async (symbol) => ({
       symbol, snapshot: await fetchFuturesBook(symbol, this.runtime.tickSize[symbol] ?? 0.0001, this.runtime.contractMeta[symbol]?.quantoMultiplier ?? 1),
     })));
@@ -1422,7 +1447,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const count = Math.min(5, prior + 1);
         const backoff = [2_000, 4_000, 8_000, 16_000, 30_000][count - 1];
         const gateRetry = result.reason instanceof GatePublicError ? result.reason.retryAt : null;
-        criticalChanged = this.suspendSymbol(attemptedSymbol, now, safeError(result.reason), Math.max(now + backoff, gateRetry ?? 0)) || criticalChanged;
+        const error = safeError(result.reason);
+        this.runtime.feedQuality.failures += 1; this.runtime.feedQuality.lastFailureAt = now;
+        this.runtime.feedQuality.lastFailureSymbol = attemptedSymbol; this.runtime.feedQuality.lastError = error;
+        criticalChanged = this.suspendSymbol(attemptedSymbol, now, error, Math.max(now + backoff, gateRetry ?? 0)) || criticalChanged;
         continue;
       }
       const { symbol, snapshot } = result.value;
@@ -1463,6 +1491,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         }
       }
       const recovery = this.acceptFreshSymbol(symbol, now, snapshot.observedAt, progressed);
+      if (recovery.recovered) this.runtime.feedQuality.recoveries += 1;
       if (validation.fresh && !validation.sequenceFault && progressed) {
         successes += 1;
       }
@@ -1700,6 +1729,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (slot <= this.runtime.lastProcessedSlot) return;
     this.runtime.lastProcessedSlot = slot;
     this.resetDailyCounters(now);
+    if (now - this.runtime.feedQuality.windowStartedAt >= FEED_QUALITY_WINDOW_MS) {
+      this.runtime.feedQuality = { windowStartedAt: now, attempts: 0, failures: 0, recoveries: 0,
+        lastFailureAt: this.runtime.feedQuality.lastFailureAt, lastFailureSymbol: this.runtime.feedQuality.lastFailureSymbol,
+        lastError: this.runtime.feedQuality.lastError };
+    }
     this.runtime.lastAlarmAt = now;
     this.runtime.alarmCount += 1;
     let subrequests = 0;
@@ -1710,7 +1744,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         try { this.refreshUniverse(now, await fetchActiveContracts()); }
         catch (error) { this.runtime.lastError = `universe: ${safeError(error)}`; }
       }
-      const cycleSymbols = [...this.runtime.symbols];
+      const cycleSymbols = this.cycleBookSymbols(now, [...this.runtime.symbols]);
       // Use the actual invocation time for exchange freshness. The slot is
       // only an idempotency key; its floor can be almost two seconds behind a
       // fresh Gate snapshot and must never be used as the freshness clock.
@@ -1827,6 +1861,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           portfolioEquity: this.runtime.strategyArena.portfolioEquity,
           portfolioOpen: Object.keys(this.runtime.strategyArena.portfolioOpen).length,
           observationShadow: this.runtime.strategyArena.recentObservations.length,
+          routeCheckCount: Object.keys(this.runtime.strategyArena.currentRouteChecks).length,
           effectiveShadowOpen: Object.keys(this.runtime.strategyArena.open).length,
           cutoverPending: this.runtime.strategyArena.cutoverPending,
           rules: {
@@ -1856,7 +1891,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             profitArmIsExit: false,
             dailyObjectiveRate: 0.10,
             dailyObjectiveIsQuota: false,
-            reverseProfitFactorRequired: 2.5,
+            reverseSameEventWinsRequired: POLARITY_STREAK,
           },
         },
         radar: {
@@ -1880,6 +1915,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           candleError: this.runtime.strategyCandleError,
           logError: this.runtime.strategyLogError,
         },
+        feedQuality: this.runtime.feedQuality,
         marketRegimes: { tracked: regimes.tracked, warmed: regimes.warmed, counts: regimes.counts },
         limits: {
           markets: this.runtime.symbols.length,
