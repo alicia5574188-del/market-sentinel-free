@@ -1,3 +1,11 @@
+# Active correction — operator-visible runtime and analysis progress
+
+- Keep the V10 strategy and execution authority unchanged, but make the decision page distinguish healthy waiting from stalled data without requiring engineering knowledge.
+- Show verified runtime age, V10/cycle running duration, current pipeline step, completed steps, next action, and the estimated time to the next scheduled decision point. Surface current and recovered faults plainly.
+- Show the markets currently being analyzed, why each market is in view, its detected environment and owning strategy, whether PAPER is considering long/short/no trade, the exact blocker or rationale, and an honest held-out reference win rate only for validated executable routes.
+- Do not restore raw shadow logs, transition dumps, legacy diagnostics, internal risk tables or invented probabilities. Preserve every V10 strategy, account, credential, risk, history and LIVE-off boundary.
+- Verify locally, release through GitHub `main`, confirm advancing production health and keep LIVE explicitly OFF.
+
 # Completed goal — all-regime positive-edge compounding system
 
 - Replace V9's single extreme-event authority with a project-specific strategy system that continuously classifies the current completed-candle market environment and routes each opportunity to the strategy designed for that environment.

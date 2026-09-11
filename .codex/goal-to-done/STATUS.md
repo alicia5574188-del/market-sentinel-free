@@ -1,3 +1,9 @@
+# In progress — 2026-09-11 operator runtime transparency correction
+
+- The screenshot contains a verified green runtime snapshot, but the simplified V10 page hides `lastSuccessAt`, completed-candle progress, active pipeline stage, candidate markets and blockers. It therefore cannot distinguish healthy waiting from a stuck feed.
+- Implemented an operator-readable runtime card and current-analysis board from fields already returned by `/api/runtime`; no market requests, write cadence or trading authority changed.
+- Local acceptance passed 193 direct tests, 3 all-regime tests, 16 architecture/migration tests, TypeScript, ESLint, two production builds, whitespace validation and a Cloudflare dry-run. GitHub release and advancing production health confirmation remain pending.
+
 # Done — 2026-09-11 all-regime compounding redesign
 
 - User rejected V9 because one extreme-event strategy cannot represent an all-market adaptive system and because code-conformance tests did not establish opportunity coverage or positive expectancy.

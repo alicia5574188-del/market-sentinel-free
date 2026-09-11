@@ -36,7 +36,7 @@ These are historical simulations, not a promise of daily profit. PAPER is the fo
 
 ## Operator page
 
-The public page shows account equity, today's net result, current environment, owning strategy, PAPER positions and complete account trade records. Shadow samples, raw diagnostics, internal route transitions and legacy research remain backend-only. Owner authentication reveals LIVE controls and credentials; public runtime never returns secrets.
+The public page shows account equity, today's net result, current environment, owning strategy, PAPER positions and complete account trade records. Its operator runtime card exposes snapshot age, version/cycle uptime, the active five-step pipeline stage, next action and next scheduled decision time, plus current and recovered faults. The analysis board explains the highest-priority completed-candle markets, liquidity-selection reason, environment owner, intended direction or explicit no-trade state, route rationale/blocker and observation time. Only validated executable routes show a held-out same-route win rate, clearly labeled as historical reference rather than a current-trade probability. Shadow samples, raw diagnostics, internal route transitions and legacy research remain backend-only. Owner authentication reveals LIVE controls and credentials; public runtime never returns secrets.
 
 ## Verification and release
 
