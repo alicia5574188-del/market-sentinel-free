@@ -82,7 +82,15 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(page, /V10 · ALL-REGIME COMPOUND/);
   assert.match(page, /势承处理方向延续/);
   assert.match(page, /今日净收益/);
-  assert.match(page, /当前策略接管/);
+  assert.match(page, /实时运行状态/);
+  assert.match(page, /本版本已运行/);
+  assert.match(page, /当前步骤/);
+  assert.match(page, /下一步准备/);
+  assert.match(page, /系统此刻在分析什么/);
+  assert.match(page, /为什么分析/);
+  assert.match(page, /同类历史胜率/);
+  assert.match(page, /不是本单保证/);
+  assert.match(page, /已经准备下单的路线/);
   assert.match(page, /const hasRuntimeSnapshot = Boolean\(runtime && arena\)/);
   assert.match(page, /收到真实运行快照后再显示账户、持仓、路线和市场数量/);
   assert.match(page, /收到后台真实快照前不显示“0笔”/);
@@ -94,6 +102,7 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.doesNotMatch(page, /手机页面更新延迟|页面摘要延迟|页面数据延迟/);
   assert.doesNotMatch(page, />有效影子</);
   assert.doesNotMatch(page, />观察影子</);
+  assert.doesNotMatch(page, /预计成功率/);
   assert.match(page, /当前模拟周期/);
   assert.match(page, /唯一模拟合约账户/);
   assert.match(page, /开启实盘复制/);

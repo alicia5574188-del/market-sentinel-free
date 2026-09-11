@@ -27,6 +27,10 @@ type TradeLane = "EFFECTIVE_SHADOW" | "PORTFOLIO";
 type StrategyOrientation = "NORMAL" | "REVERSE";
 type CandidateChannel = "TREND" | "RANGE" | "COMPRESSION" | "ANOMALY";
 type RegimeKind = "TREND" | "RANGE" | "COMPRESSION" | "EXPANSION" | "UNCERTAIN";
+type AllRegimeEnvironment = "TREND" | "RANGE" | "COMPRESSION" | "EXHAUSTION";
+type AllRegimeRoute = { version: number; strategyId: string; strategyName: string; environment: AllRegimeEnvironment;
+  side: Side; score: number; triggerPrice: number; invalidationPrice: number; profitArmPrice: number;
+  maxHoldMinutes: number; noProgressMinutes: number; structureId: string; reason: string };
 type AdaptiveMechanism = "RANGE_ROTATION" | "COMPRESSION_EXPANSION" | "FAILED_AUCTION"
   | "PULLBACK_RECOVERY" | "MOMENTUM_CONTINUATION" | "BREAKOUT_ACCEPTANCE";
 type AdaptiveRecommendation = { mechanism: AdaptiveMechanism; side: Side; horizonMinutes: number; samples: number;
@@ -105,15 +109,14 @@ type RegimeCandidate = { id: string; symbol: string; channel: CandidateChannel; 
   extremeSequence?: { version: number; branch: "FISSION" | "SNAPBACK"; baseSide: Side; score: number;
     triggerPrice: number; invalidationPrice: number; profitArmPrice: number; maxHoldMinutes: number;
     noProgressMinutes: number; structureId: string; reason: string } | null;
-  dominantEnvironment?: "TREND" | "RANGE" | "COMPRESSION" | "EXHAUSTION" | null;
-  allRegimeRoutes?: Array<{ version: number; strategyId: string; strategyName: string;
-    environment: "TREND" | "RANGE" | "COMPRESSION" | "EXHAUSTION"; side: Side; score: number;
-    triggerPrice: number; invalidationPrice: number; profitArmPrice: number; maxHoldMinutes: number;
-    noProgressMinutes: number; structureId: string; reason: string }> };
+  dominantEnvironment?: AllRegimeEnvironment | null;
+  allRegimeRoutes?: AllRegimeRoute[] };
 type MarketRegimes = { version: 2; lastUpdatedAt: number | null; tracked: number; warmed: number;
   counts: Record<RegimeKind, number>; candidates: RegimeCandidate[] };
 type Runtime = {
-  version: string; mode: "PAPER"; state: string; stale: boolean; generatedAt: number; lastSuccessAt: number | null; lastError: string | null; symbols: string[]; equity: number; dailyStartEquity?: number;
+  version: string; mode: "PAPER"; state: string; stale: boolean; generatedAt: number; lastSuccessAt: number | null;
+  lastHeartbeatAt?: number | null; lastAlarmAt?: number | null; nextAlarmAt?: number | null;
+  lastError: string | null; symbols: string[]; equity: number; dailyStartEquity?: number;
   decisions: Record<string, Decision | null>; routes: Record<string, LiquidityRoute[]>; plans: Record<string, Plan | null>; positions: Record<string, Position | null>; authorityReady: boolean;
   evidence: Record<string, { midpoint: number; bestBid?: number; bestAsk?: number; observedAt: number; warmup: number; fresh: boolean; ancillaryFresh: boolean; entryReady?: boolean; optionalFresh?: boolean; recoveryFreshCount?: number; suspensionReason?: string | null; topLong: Zone | null; topShort: Zone | null; absorption: number; range15m: RangeStructure | null }>;
   entryAssessments?: Record<string, EntryAssessment | null>;
@@ -152,6 +155,30 @@ const time = (value: number | null | undefined) => value ? new Date(value).toLoc
 const environmentLabel = (kind: "TREND" | "RANGE" | "COMPRESSION" | "EXHAUSTION" | undefined) => (Object.assign({} as Record<string, string>, {
   TREND: "方向延续", RANGE: "平衡震荡", COMPRESSION: "波动压缩", EXHAUSTION: "方向衰竭",
 }))[kind ?? ""] ?? "等待完整环境";
+const environmentOwner: Record<AllRegimeEnvironment, string> = {
+  TREND: "势承", RANGE: "衡返", COMPRESSION: "压跃", EXHAUSTION: "竭转",
+};
+const runtimeDurationText = (milliseconds: number | null | undefined) => {
+  if (milliseconds == null || milliseconds < 0 || !Number.isFinite(milliseconds)) return "—";
+  const minutes = Math.floor(milliseconds / 60_000);
+  const days = Math.floor(minutes / 1_440);
+  const hours = Math.floor(minutes % 1_440 / 60);
+  const rest = minutes % 60;
+  return days ? `${days}天${hours}小时` : hours ? `${hours}小时${rest}分` : `${Math.max(0, rest)}分钟`;
+};
+const ageText = (timestamp: number | null | undefined, now: number) => {
+  if (!timestamp || !now) return "—";
+  const seconds = Math.max(0, Math.floor((now - timestamp) / 1_000));
+  if (seconds < 60) return `${seconds}秒前`;
+  if (seconds < 3_600) return `${Math.floor(seconds / 60)}分钟前`;
+  return `${Math.floor(seconds / 3_600)}小时前`;
+};
+const waitText = (milliseconds: number) => milliseconds < 60_000
+  ? `约${Math.max(10, Math.ceil(milliseconds / 10_000) * 10)}秒`
+  : `约${Math.ceil(milliseconds / 60_000)}分钟`;
+const candidateEnvironment = (candidate: RegimeCandidate): AllRegimeEnvironment => candidate.dominantEnvironment
+  ?? candidate.allRegimeRoutes?.[0]?.environment
+  ?? (candidate.channel === "ANOMALY" ? "EXHAUSTION" : candidate.channel);
 const displayLeverage = (notional: number, equity: number) => [1, 2, 3, 5, 10, 20, 30, 40, 50].find((value) => notional / value <= equity * .12) ?? 50;
 const friendlyLiveError = (value: string | null | undefined) => !value ? null
   : value.includes("AUTO_INVALID_PARAM_TRIGGER_EXPIRATION")
@@ -296,26 +323,67 @@ export default function Home() {
   const marketBreadth = runtime?.strategyData?.marketBreadth ?? 0.5;
   const marketMedianMove = runtime?.strategyData?.marketMedianMove ?? 0;
   const marketContextReady = (runtime?.strategyData?.marketContextMarkets ?? 0) >= 12;
-  const currentRoutes = (regimes?.candidates ?? []).flatMap((candidate) => (candidate.allRegimeRoutes ?? [])
-    .filter((route) => route.strategyId === "exhaustion_turn")
-    .flatMap((route) => {
-      if (!marketContextReady) return [];
-      const opposed = route.side === "LONG"
-        ? marketBreadth <= 0.38 && marketMedianMove <= -0.0012
-        : marketBreadth >= 0.62 && marketMedianMove >= 0.0012;
-      const neutral = marketBreadth >= 0.38 && marketBreadth <= 0.62 && Math.abs(marketMedianMove) < 0.0012;
-      if (!opposed && !neutral) return [];
-      return [{ ...route, symbol: candidate.symbol, observedAt: candidate.observedAt,
-        strategyId: opposed ? "momentum_carry" : "exhaustion_turn",
-        strategyName: opposed ? "势承" : "竭转",
-        side: opposed ? (route.side === "LONG" ? "SHORT" as const : "LONG" as const) : route.side,
-        environment: opposed ? "TREND" as const : "EXHAUSTION" as const,
-        reason: opposed
-          ? `全市场${Math.round(marketBreadth * 100)}%同向，单币表面衰竭未获群体确认，继续主方向。`
-          : "全市场方向中性，单币推进枯竭并完成反向收复。" }];
-    }))
+  const authorityRouteFor = (candidate: RegimeCandidate) => {
+    const route = candidate.allRegimeRoutes?.find((row) => row.strategyId === "exhaustion_turn");
+    if (!route || !marketContextReady) return null;
+    const opposed = route.side === "LONG"
+      ? marketBreadth <= 0.38 && marketMedianMove <= -0.0012
+      : marketBreadth >= 0.62 && marketMedianMove >= 0.0012;
+    const neutral = marketBreadth >= 0.38 && marketBreadth <= 0.62 && Math.abs(marketMedianMove) < 0.0012;
+    if (!opposed && !neutral) return null;
+    return { ...route, symbol: candidate.symbol, observedAt: candidate.observedAt,
+      strategyId: opposed ? "momentum_carry" : "exhaustion_turn",
+      strategyName: opposed ? "势承" : "竭转",
+      side: opposed ? (route.side === "LONG" ? "SHORT" as const : "LONG" as const) : route.side,
+      environment: opposed ? "TREND" as const : "EXHAUSTION" as const,
+      reason: opposed
+        ? `全市场${Math.round(marketBreadth * 100)}%同向，单币表面衰竭未获群体确认，继续主方向。`
+        : "全市场方向中性，单币推进枯竭并完成反向收复。" };
+  };
+  const currentRoutes = (regimes?.candidates ?? []).flatMap((candidate) => {
+    const route = authorityRouteFor(candidate);
+    return route ? [route] : [];
+  })
     .sort((left, right) => right.score - left.score || right.observedAt - left.observedAt);
   const leadRoute = currentRoutes[0];
+  const analysisCandidates = [...(regimes?.candidates ?? [])].sort((left, right) => {
+    const leftActive = authorityRouteFor(left) ? 1 : 0;
+    const rightActive = authorityRouteFor(right) ? 1 : 0;
+    return rightActive - leftActive || right.score - left.score || right.observedAt - left.observedAt;
+  }).slice(0, 6);
+  const leadCandidate = analysisCandidates[0];
+  const leadEnvironment = leadRoute?.environment ?? (leadCandidate ? candidateEnvironment(leadCandidate) : undefined);
+  const leadOwner = leadRoute?.strategyName ?? (leadEnvironment ? environmentOwner[leadEnvironment] : null);
+  const now = clock || runtime?.generatedAt || 0;
+  const stableMarkets = runtime?.strategyData?.stableMarkets ?? 0;
+  const latestCandleAt = runtime?.strategyData?.lastCompletedCandleAt ?? 0;
+  const nextFiveMinuteAt = (Math.floor(now / 300_000) + 1) * 300_000;
+  const feedFaults = Object.entries(runtime?.feedFailures ?? {}).filter(([, fault]) => (fault.count ?? 0) > 0);
+  const currentIssues = [
+    !backendOperational ? runtime?.lastError ?? "行情权威未达到可交易状态" : null,
+    runtime?.radar?.consecutiveFailures ? `30币扫描失败${runtime.radar.consecutiveFailures}次：${runtime.radar.lastError ?? "等待重试"}` : null,
+    runtime?.strategyData?.candleError ? `5分钟路径：${runtime.strategyData.candleError}` : null,
+    runtime?.strategyData?.logError ? `记录写入：${runtime.strategyData.logError}` : null,
+    feedFaults.length ? `${feedFaults.map(([symbol]) => symbol.replace("_", "/")).slice(0, 3).join("、")} 行情正在恢复` : null,
+    error ? `当前页面连接重试中：${error}` : null,
+  ].filter((value): value is string => Boolean(value));
+  const totalFeedFailures = Object.values(runtime?.feedFailures ?? {}).reduce((sum, fault) => sum + (fault.totalFailures ?? 0), 0);
+  const totalRecoveries = Object.values(runtime?.feedFailures ?? {}).reduce((sum, fault) => sum + (fault.recoveries ?? 0), 0);
+  const activePipelineStep = !backendOperational ? 1 : stableMarkets < 12 || !latestCandleAt ? 2
+    : portfolioOpen.length ? 5 : currentRoutes.length ? 4 : 3;
+  const pipeline = [
+    { title: "接收行情", detail: `最近成功 ${ageText(runtime?.lastSuccessAt, now)}` },
+    { title: "更新路径", detail: `${stableMarkets}/${runtime?.strategyData?.liquidMarkets ?? 30} 币完成5分钟路径` },
+    { title: "匹配环境", detail: `${analysisCandidates.length} 个重点候选正在解释` },
+    { title: "执行检查", detail: `${currentRoutes.length} 条路线具备PAPER权限` },
+    { title: "持仓管理", detail: `${portfolioOpen.length} 笔持仓实时保护` },
+  ];
+  const nextAction = activePipelineStep === 1 ? "恢复新鲜行情后重新进入路径计算"
+    : activePipelineStep === 2 ? "补齐连续5分钟数据并建立全市场背景"
+      : activePipelineStep === 3 ? "下一根5分钟K线完成后重算环境与策略"
+        : activePipelineStep === 4 ? "每2秒核对盘口、成本、合约数量与仓位后决定是否成交"
+          : "每2秒检查止损、盈利臂和移动保护";
+  const nextEta = activePipelineStep >= 4 ? "实时循环（约每2秒）" : waitText(Math.max(0, nextFiveMinuteAt - now));
   const todayKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(clock || runtime?.generatedAt || 0);
   const todayRealized = currentPortfolioHistory.filter((trade) => trade.closedAt
     && new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(trade.closedAt) === todayKey)
@@ -325,7 +393,8 @@ export default function Home() {
   const todayPnlRate = todayPnl == null || todayStartEquity == null ? null : todayPnl / todayStartEquity * 100;
   const headline = !backendOperational ? "后台行情正在恢复，模拟账户暂停新开仓" : portfolioOpen.length
       ? `当前持有 ${portfolioOpen.length} 笔模拟订单` : leadRoute ? `${leadRoute.strategyName}正在接管${leadRoute.symbol.replace("_", "/")}`
-        : "四种环境都有策略接管，等待完成段触发";
+        : leadCandidate && leadOwner ? `${leadOwner}正在分析${leadCandidate.symbol.replace("_", "/")}，尚未形成下单路线`
+          : "正在建立全市场环境，暂未形成下单路线";
   const navigationTabs: [Tab, string][] = [["brain", "决策台"], ["orders", `持仓 ${hasRuntimeSnapshot && portfolioOpen.length ? portfolioOpen.length : ""}`]];
   if (showLiveCenter) navigationTabs.push(["live", `实盘 ${openLivePositions.length + openLiveEntries.length || ""}`]);
   navigationTabs.push(["history", "记录"], ["settings", "设置"]);
@@ -343,16 +412,53 @@ export default function Home() {
 
       <section className="summary four">
         <article><small>今日净收益</small><strong className={todayPnl == null ? "" : todayPnl >= 0 ? "positive" : "negative"}>{signed(todayPnl)} U</strong><p>{signed(todayPnlRate)}% · 已含持仓成本</p></article>
-        <article><small>当前主环境</small><strong>{environmentLabel(leadRoute?.environment)}</strong><p>{leadRoute ? leadRoute.symbol.replace("_", "/") : "30币持续判断"}</p></article>
-        <article><small>接管策略</small><strong>{leadRoute?.strategyName ?? "等待触发"}</strong><p>{leadRoute ? `${leadRoute.side === "LONG" ? "偏多" : "偏空"} · 强度 ${num(leadRoute.score, 0)}` : "不制造负期望订单"}</p></article>
+        <article><small>当前主环境</small><strong>{environmentLabel(leadEnvironment)}</strong><p>{leadRoute?.symbol.replace("_", "/") ?? leadCandidate?.symbol.replace("_", "/") ?? "等待连续路径"}</p></article>
+        <article><small>接管策略</small><strong>{leadOwner ?? "等待环境"}</strong><p>{leadRoute ? `${leadRoute.side === "LONG" ? "偏多" : "偏空"} · 强度 ${num(leadRoute.score, 0)}` : "正在分析，尚未准备下单"}</p></article>
         <article><small>当前持仓</small><strong>{portfolioOpen.length}</strong><p>已完成 {arena?.portfolioResolved ?? "—"} 笔</p></article>
       </section>
       {healthNotice && <p className="notice">{healthNotice}</p>}
+
+      <section className={`operator-runtime ${currentIssues.length ? "has-issue" : ""}`}>
+        <div className="operator-runtime-head"><div><small>实时运行状态</small><h2>{backendOperational ? "数据持续推进，系统运行正常" : "系统正在恢复关键数据"}</h2><p>这张卡只反映后台真实快照，不用“等待触发”掩盖数据问题。</p></div><span>{runtime?.lastSuccessAt ? `更新于 ${ageText(runtime.lastSuccessAt, now)}` : "尚无成功快照"}</span></div>
+        <div className="runtime-facts">
+          <article><small>本版本已运行</small><strong>{runtimeDurationText(arena?.startedAt ? now - arena.startedAt : null)}</strong><p>第{num(arena?.portfolioCycle, 0)}轮账户运行 {runtimeDurationText(arena?.portfolioCycleStartedAt ? now - arena.portfolioCycleStartedAt : null)}</p></article>
+          <article><small>当前步骤</small><strong>{activePipelineStep}/5 · {pipeline[activePipelineStep - 1].title}</strong><p>{pipeline[activePipelineStep - 1].detail}</p></article>
+          <article><small>下一步准备</small><strong>{nextEta}</strong><p>{nextAction}</p></article>
+          <article><small>运行问题</small><strong className={currentIssues.length ? "negative" : "positive"}>{currentIssues.length ? `${currentIssues.length} 项` : "当前无阻塞"}</strong><p>{currentIssues[0] ?? (totalFeedFailures ? `累计短暂异常 ${totalFeedFailures} 次，已恢复 ${totalRecoveries} 次` : "本轮未记录行情故障")}</p></article>
+        </div>
+        <div className="runtime-pipeline">{pipeline.map((step, index) => { const number = index + 1; const state = number < activePipelineStep ? "done" : number === activePipelineStep ? "active" : "waiting"; return <article className={state} key={step.title}><i>{state === "done" ? "✓" : number}</i><div><b>{step.title}</b><small>{step.detail}</small></div><span>{state === "done" ? "已完成" : state === "active" ? "进行中" : "待进入"}</span></article>; })}</div>
+        {currentIssues.length > 1 && <div className="runtime-issues"><b>当前问题明细</b>{currentIssues.map((issue) => <p key={issue}>{issue}</p>)}</div>}
+        <footer>最近心跳 {ageText(runtime?.lastHeartbeatAt, now)} · 最近30币扫描 {ageText(runtime?.radar?.lastScanAt, now)} · 最近完成K线 {ageText(latestCandleAt, now)} · 快照时间 {time(runtime?.generatedAt)}</footer>
+      </section>
     </>}
 
     <nav className="tabs" style={{ gridTemplateColumns: `repeat(${navigationTabs.length}, 1fr)` }}>{navigationTabs.map(([key, label]) => <button key={key} type="button" aria-current={activeTab === key ? "page" : undefined} className={activeTab === key ? "active" : ""} onClick={() => selectTab(key)}>{label}</button>)}</nav>
 
-    {hasRuntimeSnapshot && <section className="playbook-list route-console" hidden={activeTab !== "brain"}><div className="section-heading"><div><h2>当前策略接管</h2><p>只展示真正具备 PAPER 下单权的市场；内部样本和诊断不占页面。</p></div><span>{currentRoutes.length} 条</span></div>{currentRoutes.length ? <div className="strategy-grid">{currentRoutes.slice(0, 6).map((route) => <article className="strategy-card route-approved" key={`${route.symbol}:${route.structureId}`}><div className="strategy-title"><div><small>{route.symbol.replace("_", "/")} · {environmentLabel(route.environment)}</small><h3>{route.strategyName}</h3></div><span className={route.side === "LONG" ? "positive" : "negative"}>{route.side === "LONG" ? "做多" : "做空"}</span></div><small className="strategy-rule">{route.reason}</small></article>)}</div> : <div className="empty"><b>全市场持续扫描中</b><p>当前没有通过完整进场条件的路线；系统不会为了显示订单强行成交。</p></div>}</section>}
+    {hasRuntimeSnapshot && <section className="analysis-board" hidden={activeTab !== "brain"}>
+      <div className="section-heading"><div><h2>系统此刻在分析什么</h2><p>展示当前优先市场、选择原因、策略判断和真实阻塞，不展示内部调试流水。</p></div><span>{analysisCandidates.length}/{runtime?.strategyData?.liquidMarkets ?? 30} 个重点</span></div>
+      {analysisCandidates.length ? <div className="analysis-grid">{analysisCandidates.map((candidate) => {
+        const authority = authorityRouteFor(candidate);
+        const primary = candidate.allRegimeRoutes?.find((route) => route.strategyId === "exhaustion_turn") ?? candidate.allRegimeRoutes?.[0];
+        const environment = candidateEnvironment(candidate);
+        const owner = authority?.strategyName ?? environmentOwner[environment];
+        const referenceWinRate = authority?.strategyId === "momentum_carry" ? 35.6 : authority?.strategyId === "exhaustion_turn" ? 37.2 : null;
+        const state = authority ? "执行候选" : primary ? primary.strategyId === "exhaustion_turn" ? "等待全市场确认" : "仅观察" : "结构形成中";
+        const action = authority ? (authority.side === "LONG" ? "准备做多" : "准备做空") : "暂不下单";
+        const rationale = authority?.reason ?? (primary?.strategyId === "exhaustion_turn"
+          ? `${primary.reason} 但当前全市场方向不满足势承或竭转的授权条件。`
+          : primary ? `${primary.reason} 该路线尚未通过双阶段成本验证，只用于观察。`
+            : `已识别${environmentLabel(environment)}，但进场、失效和盈利臂尚未同时完整。`);
+        return <article className={authority ? "actionable" : "watching"} key={candidate.id}>
+          <div className="analysis-title"><div><small>{candidate.symbol.replace("_", "/")} · {environmentLabel(environment)}</small><h3>{owner}</h3></div><span>{state}</span></div>
+          <p className="analysis-why">为什么分析：位于高流动性合约池，24小时成交额约 {num(candidate.volume24hUsd / 1_000_000, 0)}M U，最新完整5分钟路径进入当前优先序列。</p>
+          <p className="analysis-reason">{rationale}</p>
+          <dl><div><dt>准备方向</dt><dd className={authority ? authority.side === "LONG" ? "positive" : "negative" : ""}>{action}</dd></div><div><dt>结构强度</dt><dd>{num(primary?.score ?? candidate.score, 0)}/100</dd></div><div><dt>同类历史胜率</dt><dd>{referenceWinRate == null ? "未获授权" : `${referenceWinRate}%`}</dd></div><div><dt>最近分析</dt><dd>{ageText(candidate.observedAt, now)}</dd></div></dl>
+          {referenceWinRate != null && <small className="probability-note">这是留出段同类路线胜率，不是本单保证；系统依靠盈亏幅度而非高胜率获利。</small>}
+        </article>;
+      })}</div> : <div className="empty"><b>正在建立连续5分钟路径</b><p>当前已有 {stableMarkets} 个市场具备路径；下一次环境重算 {waitText(Math.max(0, nextFiveMinuteAt - now))}。</p></div>}
+    </section>}
+
+    {hasRuntimeSnapshot && <section className="playbook-list route-console" hidden={activeTab !== "brain"}><div className="section-heading"><div><h2>已经准备下单的路线</h2><p>这里只展示真正具备 PAPER 下单权且正在通过盘口检查的市场。</p></div><span>{currentRoutes.length} 条</span></div>{currentRoutes.length ? <div className="strategy-grid">{currentRoutes.slice(0, 6).map((route) => <article className="strategy-card route-approved" key={`${route.symbol}:${route.structureId}`}><div className="strategy-title"><div><small>{route.symbol.replace("_", "/")} · {environmentLabel(route.environment)}</small><h3>{route.strategyName}</h3></div><span className={route.side === "LONG" ? "positive" : "negative"}>{route.side === "LONG" ? "做多" : "做空"}</span></div><small className="strategy-rule">{route.reason}</small></article>)}</div> : <div className="empty"><b>目前没有准备下单的路线</b><p>上方仍会显示系统正在分析的市场，以及每个市场为什么还不下单。</p></div>}</section>}
 
     <section className="panel-list" hidden={activeTab !== "orders"}>
       {hasRuntimeSnapshot ? <><h2 className="order-group-title">1000 U模拟账户 <span>{num(portfolioAccountEquity, 2)} U</span></h2>

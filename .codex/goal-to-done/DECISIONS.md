@@ -1,3 +1,10 @@
+# Operator-runtime transparency decision — 2026-09-11
+
+- “Remove unnecessary data” means remove engineering diagnostics, not operational truth. The main page must always answer whether data is advancing, how long V10 has run, which pipeline step is active, what happens next and whether any current fault blocks trading.
+- Current market analysis is actionable operator information. Show the top completed-candle candidates with selection reason, environment owner, intended direction or explicit no-trade state, route rationale/blocker and observation time.
+- Do not present route score as probability. Only validated `势承` and `竭转` may show their held-out same-route win rates (35.6% and 37.2%), explicitly labeled as historical reference rather than a forecast for the current trade. Observation-only owners show no estimated probability.
+- Derive the page from existing runtime summary fields. This correction adds no Gate requests, Durable Object cadence, D1 writes or strategy authority.
+
 # All-regime compounding decision — 2026-09-11
 
 - Historical evidence is allowed to disable a named environment owner. `衡返` and `压跃` continue classifying and shadowing their environments but cannot spend PAPER equity until a later independent validation passes; the page must not imply otherwise.
