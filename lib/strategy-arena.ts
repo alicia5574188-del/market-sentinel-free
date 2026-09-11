@@ -254,7 +254,7 @@ function signals(input: ArenaObservation): Signal[] {
       if (breadth < 0.4 || breadth > 0.6 || Math.abs(medianMove) > 0.0012) return [];
       reason = `衡返·双拒：${route.reason} 全市场方向中性，允许向平衡重心回归。`;
     }
-    if (route.strategyId === "exhaustion_turn" || route.strategyId === "pulse_fold" || route.strategyId === "slow_fold") {
+    if (route.strategyId === "exhaustion_turn" || route.strategyId === "pulse_fold" || route.strategyId === "slow_carry") {
       if ((input.globalMarkets ?? 0) < 12) return [];
       const breadth = input.globalBreadth ?? 0.5;
       const medianMove = input.globalMedianMove ?? 0;
@@ -262,6 +262,7 @@ function signals(input: ArenaObservation): Signal[] {
       const opposed = routeLong ? breadth <= 0.38 && medianMove <= -0.0012 : breadth >= 0.62 && medianMove >= 0.0012;
       const neutral = breadth >= 0.38 && breadth <= 0.62 && Math.abs(medianMove) < 0.0012;
       if (!opposed && !neutral) return [];
+      if (route.strategyId === "slow_carry" && !opposed) return [];
       if (opposed && route.strategyId === "exhaustion_turn") {
         strategyId = "momentum_carry";
         side = route.side === "LONG" ? "SHORT" : "LONG";

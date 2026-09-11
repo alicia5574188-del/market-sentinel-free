@@ -305,6 +305,7 @@ function phaseTurn(rows, context, config) {
   const crowded = side === "LONG" ? context.breadth <= config.crowdedLow && context.medianMove <= -config.crowdedMove
     : context.breadth >= 1 - config.crowdedLow && context.medianMove >= config.crowdedMove;
   if (!neutral && !crowded) return null;
+  if (config.contextMode === "NEUTRAL" && !neutral || config.contextMode === "CROWDED" && !crowded) return null;
   if (crowded) side = side === "LONG" ? "SHORT" : "LONG";
   const sign = signFor(side);
   const reversalSide = side === (direction > 0 ? "SHORT" : "LONG");
@@ -481,10 +482,14 @@ const phase = evaluate("相折", phaseTurn, [
   { name: "缓折", window: 36, late: 6, efficiency: .36, displacement: 4.8, progress: .25, neutralLow: .38, neutralHigh: .62, neutralMove: .0012, crowdedLow: .38, crowdedMove: .0012, stopPad: .32, continuationStop: 1.05, neutralArmR: 1.8, crowdedArmR: 1.8, neutralMaxBars: 30, crowdedMaxBars: 42, neutralNoProgressBars: 8, crowdedNoProgressBars: 10 },
   { name: "缓折", window: 42, late: 7, efficiency: .32, displacement: 5.2, progress: .28, neutralLow: .38, neutralHigh: .62, neutralMove: .0012, crowdedLow: .38, crowdedMove: .0012, stopPad: .35, continuationStop: 1.1, neutralArmR: 1.9, crowdedArmR: 1.9, neutralMaxBars: 36, crowdedMaxBars: 48, neutralNoProgressBars: 9, crowdedNoProgressBars: 12 },
   { name: "中折", window: 24, late: 4, efficiency: .42, displacement: 4.0, progress: .22, neutralLow: .38, neutralHigh: .62, neutralMove: .0012, crowdedLow: .38, crowdedMove: .0012, stopPad: .30, continuationStop: 1.0, neutralArmR: 1.75, crowdedArmR: 1.75, neutralMaxBars: 22, crowdedMaxBars: 32, neutralNoProgressBars: 6, crowdedNoProgressBars: 8 },
-  { name: "中折", window: 32, late: 6, efficiency: .40, displacement: 4.6, progress: .24, neutralLow: .38, neutralHigh: .62, neutralMove: .0012, crowdedLow: .38, crowdedMove: .0012, stopPad: .30, continuationStop: 1.0, neutralArmR: 1.8, crowdedArmR: 1.8, neutralMaxBars: 28, crowdedMaxBars: 40, neutralNoProgressBars: 7, crowdedNoProgressBars: 10 },
+  { name: "脉折", window: 32, late: 6, efficiency: .40, displacement: 4.6, progress: .24, neutralLow: .38, neutralHigh: .62, neutralMove: .0012, crowdedLow: .38, crowdedMove: .0012, stopPad: .30, continuationStop: 1.0, neutralArmR: 1.8, crowdedArmR: 1.8, neutralMaxBars: 28, crowdedMaxBars: 40, neutralNoProgressBars: 7, crowdedNoProgressBars: 10 },
+  { name: "孤折", contextMode: "NEUTRAL", window: 32, late: 6, efficiency: .40, displacement: 4.6, progress: .24, neutralLow: .38, neutralHigh: .62, neutralMove: .0012, crowdedLow: .38, crowdedMove: .0012, stopPad: .30, continuationStop: 1.0, neutralArmR: 1.8, crowdedArmR: 1.8, neutralMaxBars: 28, crowdedMaxBars: 40, neutralNoProgressBars: 7, crowdedNoProgressBars: 10 },
+  { name: "潮续", contextMode: "CROWDED", window: 32, late: 6, efficiency: .40, displacement: 4.6, progress: .24, neutralLow: .38, neutralHigh: .62, neutralMove: .0012, crowdedLow: .38, crowdedMove: .0012, stopPad: .30, continuationStop: 1.0, neutralArmR: 1.8, crowdedArmR: 1.8, neutralMaxBars: 28, crowdedMaxBars: 40, neutralNoProgressBars: 7, crowdedNoProgressBars: 10 },
+  { name: "缓返", contextMode: "NEUTRAL", window: 36, late: 6, efficiency: .36, displacement: 4.8, progress: .25, neutralLow: .38, neutralHigh: .62, neutralMove: .0012, crowdedLow: .38, crowdedMove: .0012, stopPad: .32, continuationStop: 1.05, neutralArmR: 1.8, crowdedArmR: 1.8, neutralMaxBars: 30, crowdedMaxBars: 42, neutralNoProgressBars: 8, crowdedNoProgressBars: 10 },
+  { name: "缓续", contextMode: "CROWDED", window: 36, late: 6, efficiency: .36, displacement: 4.8, progress: .25, neutralLow: .38, neutralHigh: .62, neutralMove: .0012, crowdedLow: .38, crowdedMove: .0012, stopPad: .32, continuationStop: 1.05, neutralArmR: 1.8, crowdedArmR: 1.8, neutralMaxBars: 30, crowdedMaxBars: 42, neutralNoProgressBars: 8, crowdedNoProgressBars: 10 },
 ]);
 
-const acceptedPhase = [5, 2].map((index) => phase.find((row) => row.index === index));
+const acceptedPhase = [5, 9].map((index) => phase.find((row) => row.index === index));
 const tradeKey = (trade) => `${trade.symbol}:${trade.side}:${trade.openedAt}`;
 const currentExhaustion = { name: "竭转", window: 28, late: 5, efficiency: .42, displacement: 4.4, progress: .24,
   neutralLow: .38, neutralHigh: .62, neutralMove: .0012, crowdedLow: .38, crowdedMove: .0012,

@@ -169,7 +169,7 @@ test("V12 verified-route engine is causal, selective, cost-aware, and the sole L
   assert.match(arena, /STRATEGY_CATALOG/);
   assert.match(arena, /STRATEGY_ARENA_VERSION = 12/);
   assert.match(allRegime, /ALL_REGIME_SYSTEM_NAME = "全境·复利引擎"/);
-  for (const name of ["势承", "衡返", "压跃", "竭转", "脉折", "缓折"]) assert.match(allRegime, new RegExp(name));
+  for (const name of ["势承", "衡返", "压跃", "竭转", "脉折", "缓续"]) assert.match(allRegime, new RegExp(name));
   assert.match(allRegime, /detectAllRegimeRoutes/);
   assert.doesNotMatch(arena, /adaptiveMechanismForPlaybook/);
   assert.match(arena, /ARENA_FRICTION_RATE = 0\.0014/);

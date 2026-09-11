@@ -4,13 +4,13 @@ export const ALL_REGIME_ENGINE_VERSION = 3;
 export const ALL_REGIME_SYSTEM_NAME = "全境·复利引擎";
 
 export type AllRegimeStrategyId = "momentum_carry" | "balance_return" | "pressure_release" | "exhaustion_turn"
-  | "pulse_fold" | "slow_fold";
+  | "pulse_fold" | "slow_carry";
 export type AllRegimeEnvironment = "TREND" | "RANGE" | "COMPRESSION" | "EXHAUSTION";
 export type AllRegimeCandle = { time: number; open: number; high: number; low: number; close: number; volume?: number };
 export type AllRegimeRoute = {
   version: 3;
   strategyId: AllRegimeStrategyId;
-  strategyName: "势承" | "衡返" | "压跃" | "竭转" | "脉折" | "缓折";
+  strategyName: "势承" | "衡返" | "压跃" | "竭转" | "脉折" | "缓续";
   environment: AllRegimeEnvironment;
   side: Side;
   score: number;
@@ -33,7 +33,7 @@ export const ALL_REGIME_STRATEGIES = [
   { id: "pressure_release", name: "压跃", environment: "COMPRESSION", description: "路径振幅持续收束后，只跟随首次带有实体与范围扩张的释放。" },
   { id: "exhaustion_turn", name: "竭转", environment: "EXHAUSTION", description: "价格继续创新极值但推进效率枯竭，反向收复后切换方向。" },
   { id: "pulse_fold", name: "脉折", environment: "EXHAUSTION", description: "中周期脉冲推进失去效率后，以市场拥挤度决定顺潮延续或反向折返。" },
-  { id: "slow_fold", name: "缓折", environment: "EXHAUSTION", description: "较慢路径持续位移但末段贡献衰退后，以市场拥挤度决定延续或折返。" },
+  { id: "slow_carry", name: "缓续", environment: "EXHAUSTION", description: "较慢路径局部失速但全市场仍拥挤于原方向时，只沿主潮继续，不抢反转。" },
 ] as const;
 
 export const ALL_REGIME_OFFLINE_VALIDATION = {
@@ -46,12 +46,12 @@ export const ALL_REGIME_OFFLINE_VALIDATION = {
     validationEvents: 86, validationProfitFactor: 1.39, validationWinRate: 0.36, paperApproved: true },
   pressure_release: { branchName: "压跃·共振", trainEvents: 55, trainProfitFactor: 0.90,
     validationEvents: 60, validationProfitFactor: 0.63, validationWinRate: 0.267, paperApproved: false },
-  pulse_fold: { branchName: "脉折·相位", trainEvents: 128, trainProfitFactor: 1.66,
-    validationEvents: 123, validationProfitFactor: 1.75, validationWinRate: 0.374,
-    recentFoldEvents: 98, recentFoldProfitFactor: 1.65, paperApproved: true },
-  slow_fold: { branchName: "缓折·相位", trainEvents: 141, trainProfitFactor: 1.13,
-    validationEvents: 138, validationProfitFactor: 1.64, validationWinRate: 0.362,
-    recentFoldEvents: 113, recentFoldProfitFactor: 1.82, paperApproved: true },
+  pulse_fold: { branchName: "脉折·相位", trainEvents: 126, trainProfitFactor: 1.60,
+    validationEvents: 147, validationProfitFactor: 1.18, validationWinRate: 0.313,
+    recentFoldEvents: 112, recentFoldProfitFactor: 1.37, paperApproved: true },
+  slow_carry: { branchName: "缓续·顺潮", trainEvents: 47, trainProfitFactor: 1.62,
+    validationEvents: 60, validationProfitFactor: 1.66, validationWinRate: 0.383,
+    recentFoldEvents: 48, recentFoldProfitFactor: 1.68, paperApproved: true },
 } as const;
 
 export const allRegimePaperApproved = (strategyId: AllRegimeStrategyId) =>
@@ -198,9 +198,9 @@ function exhaustionTurn(rows: AllRegimeCandle[], unit: number): AllRegimeRoute |
   return valid(route) ? route : null;
 }
 
-type PhaseFoldGeometry = { id: "pulse_fold" | "slow_fold"; name: "脉折" | "缓折"; window: number; late: number;
+type PhaseFoldGeometry = { id: "pulse_fold" | "slow_carry"; name: "脉折" | "缓续"; window: number; late: number;
   efficiency: number; displacement: number; progress: number; maxHoldMinutes: number; noProgressMinutes: number;
-  continuationMaxHoldMinutes: number; continuationNoProgressMinutes: number };
+  stopPad: number; continuationStop: number; continuationMaxHoldMinutes: number; continuationNoProgressMinutes: number };
 
 function phaseFold(rows: AllRegimeCandle[], unit: number, config: PhaseFoldGeometry): AllRegimeRoute | null {
   const base = rows.slice(-config.window);
@@ -223,10 +223,11 @@ function phaseFold(rows: AllRegimeCandle[], unit: number, config: PhaseFoldGeome
     || progressRatio >= config.progress || !reversal || !newExtreme) return null;
   const side: Side = direction > 0 ? "SHORT" : "LONG";
   const sign = side === "LONG" ? 1 : -1;
-  const stop = extreme - sign * unit * 0.3;
+  const stop = extreme - sign * unit * config.stopPad;
   const risk = Math.abs(latest.close - stop);
   const continuationSign = -sign;
-  const continuationStop = latest.close - continuationSign * Math.max(Math.abs(latest.close - extreme), unit);
+  const continuationStop = latest.close - continuationSign
+    * Math.max(Math.abs(latest.close - extreme), unit) * config.continuationStop;
   const continuationRisk = Math.abs(latest.close - continuationStop);
   const route: AllRegimeRoute = { version: 3, strategyId: config.id, strategyName: config.name,
     environment: "EXHAUSTION", side,
@@ -252,10 +253,10 @@ export function detectAllRegimeRoutes(candles: AllRegimeCandle[]) {
   if (!(unit > 0)) return [];
   return [phaseFold(rows, unit, { id: "pulse_fold", name: "脉折", window: 32, late: 6, efficiency: 0.4,
     displacement: 4.6, progress: 0.24, maxHoldMinutes: 140, noProgressMinutes: 35,
-    continuationMaxHoldMinutes: 200, continuationNoProgressMinutes: 50 }),
-  phaseFold(rows, unit, { id: "slow_fold", name: "缓折", window: 36, late: 6, efficiency: 0.36,
+    stopPad: 0.3, continuationStop: 1, continuationMaxHoldMinutes: 200, continuationNoProgressMinutes: 50 }),
+  phaseFold(rows, unit, { id: "slow_carry", name: "缓续", window: 36, late: 6, efficiency: 0.36,
     displacement: 4.8, progress: 0.25, maxHoldMinutes: 150, noProgressMinutes: 40,
-    continuationMaxHoldMinutes: 210, continuationNoProgressMinutes: 50 }),
+    stopPad: 0.32, continuationStop: 1.05, continuationMaxHoldMinutes: 210, continuationNoProgressMinutes: 50 }),
   pressureRelease(rows, unit), exhaustionTurn(rows, unit), momentumCarry(rows, unit), balanceReturn(rows)]
     .filter((route): route is AllRegimeRoute => route != null).sort((left, right) => right.score - left.score);
 }
