@@ -1,4 +1,4 @@
-# Active goal — original extreme-sequence polarity strategy V9
+# Completed goal — original extreme-sequence polarity strategy V9
 
 - Replace V8 generated-route PAPER authority with one custom strategy named `极序·镜转`, designed for two completed-candle extremes: retained boundary displacement (`裂变`) and failed boundary sweep/reclaim (`回卷`).
 - Run exact paired normal/reverse shadows for every executable event. The latest three independent normal wins authorize the next event in the base direction; three normal losses authorize the reverse direction only when the same three reverse shadows all won after full modeled cost. Mixed or older-than-24-hour sequences stay in cash.

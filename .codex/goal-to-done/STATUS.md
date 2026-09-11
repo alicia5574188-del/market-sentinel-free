@@ -1,9 +1,10 @@
-# In progress — 2026-09-11 original 极序·镜转 V9 release
+# Done — 2026-09-11 original 极序·镜转 V9 release
 
 - The V8 production review found two consecutive TAO stops and an immediate third TAO entry. The implementation evaluated symbols independently, had no post-close cooldown, and had no true current-opportunity global admission rank.
 - Implemented the single `极序·镜转` authority with `裂变` and `回卷` completed-candle paths, paired costed shadows, exact three-result polarity, top-three global eligibility, thirty-minute same-branch cooldown, maximum three positions and an uncapped profit-arm runner.
 - V9 cutover semantics archive the old cycle and restart at 1,000 U only after fresh executable quotes. LIVE settings remain owner-controlled and OFF.
-- Local verification passes 195 direct tests, 16 architecture/migration tests, the production build, TypeScript, ESLint, whitespace validation and a Cloudflare deploy dry-run. Release and advancing production health remain pending.
+- Local verification passed 195 direct tests, 16 architecture/migration tests, the production build, TypeScript, ESLint, whitespace validation and a Cloudflare deploy dry-run.
+- Remote commit `14b566e59ac6a162beb8c4092b4abc76d4bda6f3` passed GitHub Actions run #662. The workflow deployed the final config and its production gate confirmed advancing V9 health, the single `极序·镜转` authority and LIVE explicitly OFF.
 
 # Done — 2026-09-11 regime-first strategy routing correction
 
