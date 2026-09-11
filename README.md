@@ -8,10 +8,10 @@ V11 scans the thirty most liquid eligible contracts, builds only continuous comp
 
 - `势承·逆竭`: when broad-market direction is crowded, apparent single-symbol exhaustion that lacks broad confirmation continues with the crowd.
 - `竭转·孤返`: when broad-market direction is neutral, a single-symbol path reverses only after progress collapses and a completed segment reclaims the opposite direction.
-- `衡返·双拒`: in a broad neutral market, a low-efficiency range must cross its center repeatedly, reject the same edge at least twice and reclaim it on a completed segment.
+- `衡返·双拒`: in a broad neutral market, a low-efficiency range must cross its center repeatedly, reject the same edge at least twice and reclaim it on a completed segment. Its latest chronological fold is negative, so it remains paired normal/reverse shadow research until current results select a polarity.
 - Direct momentum chasing and direct compression breakout remain observation-only: their after-cost train/held-out evidence is negative.
 
-Every executable event runs exact normal and reverse shadows after full friction. The three approved branches start in their validated direction. Three normal wins select normal; three normal losses select reverse only when those same three fully costed mirror trades all won. Mixed results retain the last authorized orientation.
+Every executable event runs exact normal and reverse shadows after full friction. The two currently approved exhaustion-derived branches start in their validated direction. Three normal wins select normal; three normal losses select reverse only when those same three fully costed mirror trades all won. Mixed results retain the last authorized orientation. A disabled family can regain PAPER authority only through this current paired evidence.
 
 The profit arm does not cap profit. It starts dynamic protection; structural invalidation, no-progress and maximum-hold exits remain active.
 
@@ -22,7 +22,7 @@ The profit arm does not cap profit. It starts dynamic protection; structural inv
 | Route | First half | Held-out half |
 | --- | ---: | ---: |
 | 势承·逆竭 | 48 events, PF 1.80, +16.11% summed return | 50 events, PF 1.71, +23.98% |
-| 衡返·双拒 | 31 events, PF 1.16, +4.14% | 22 events, PF 1.42, +8.86% |
+| 衡返·双拒（影子） | 31 events, PF 1.16, +4.14% | 22 events, PF 1.42, +8.86%; latest fold PF 0.67, PAPER off |
 | 竭转·孤返 | 103 events, PF 0.98, -0.81% | 86 events, PF 1.39, +15.85% |
 
 These are historical simulations, not a promise of daily profit. PAPER is the forward test.
@@ -37,7 +37,9 @@ These are historical simulations, not a promise of daily profit. PAPER is the fo
 
 ## Operator page
 
-The public page shows account equity, today's net result, current environment, owning strategy, PAPER positions and complete account trade records. Route status, direction and the final blocker come from backend admission state; the page never reconstructs authority from candles. The runtime card reports a rolling one-hour book success rate and only promotes repeated failures to a visible current issue. Protected positions and formed routes poll every two seconds; background residents are staggered to reduce avoidable public REST failures without slowing position protection.
+The public page shows account equity, today's net result, current environment, owning strategy, PAPER positions and complete account trade records. Route status, direction and the final blocker come from backend admission state; the page never reconstructs authority from candles. The runtime card reports a rolling one-hour book success rate and separates recovered short faults from actual trading blockers.
+
+Gate public reads use endpoint-wide rate-limit backoff plus the two official futures REST hosts. The thirty-market radar runs once per minute. Completed 5-minute paths update only after a new bar closes, then use four-row incremental reads and merge into the retained continuous 120-row path. A timeout or 429 keeps that path available; only repeated failure after the retained path exceeds eleven minutes blocks the affected market. Protected positions and formed routes retain fresh-book priority. Trading API credentials are never attached to these public reads.
 
 ## Verification and release
 

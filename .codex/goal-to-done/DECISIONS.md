@@ -1,3 +1,10 @@
+# Gate recovery and evidence-gated coverage decision — 2026-09-11
+
+- The observed 429 and timeout are public Gate endpoint degradation, not proof that the full market-data authority stopped. A trading API key cannot convert public ticker/candle/book calls into private UID quota and must not be attached to public reads.
+- Use both official Gate futures REST hosts for one bounded retry on network/5xx failure, share 429 backoff by endpoint, reduce the bulk radar to one request per minute, and request completed 5-minute paths only after a new bar closes. Merge four-row incremental reads into a retained continuous path; a transient failure is diagnostic, and becomes a trading blocker only when the retained path also exceeds eleven minutes.
+- Do not deploy the proposed broader `衡返` geometry. It improved the two-half result to PF 1.26/1.59 but its three chronological folds were 1.35/2.09/0.79; both strict and broad variants were negative in the latest fold (0.67/0.70). `衡返` therefore returns to paired-shadow status and can regain PAPER authority only after current three-event polarity evidence.
+- Retain `势承·逆竭` and `竭转·孤返` as the executable family. Their combined three chronological folds held PF 1.35/1.40/1.37 after 0.14% friction and adverse next-bar entry; the direct trend, compression and newly explored divergence/rejoin/pullback mechanisms remain rejected. Coverage comes from thirty reliable paths plus current polarity, not extra strategy names or forced orders.
+
 # Final V11 correction decision — 2026-09-11
 
 - V10 is an all-environment classifier but not an all-environment trading authority. Native trend signals are suppressed, range and compression remain observation-only, and both approved names originate from the same exhaustion event. Correct the architecture rather than relaxing its final execution gates.

@@ -30,7 +30,7 @@ test("V11 owns four original environment strategies and starts only validated ro
   assert.equal(state.version, 11);
   assert.equal(state.strategies.momentum_carry.enabled, true);
   assert.equal(state.strategies.exhaustion_turn.enabled, true);
-  assert.equal(state.strategies.balance_return.enabled, true);
+  assert.equal(state.strategies.balance_return.enabled, false);
   assert.equal(state.strategies.pressure_release.enabled, false);
 });
 
@@ -49,7 +49,7 @@ test("neutral isolated exhaustion routes through 竭转", () => {
   assert.equal(state.portfolioOpen.BTC_USDT?.side, "SHORT");
 });
 
-test("validated broad-neutral double reclaim routes through 衡返", () => {
+test("range double reclaim stays paired-shadow until current polarity evidence activates it", () => {
   const input = observation();
   input.candidate.channel = "RANGE"; input.candidate.regime = "RANGE";
   input.candidate.allRegimeRoutes = [{ version: 2, strategyId: "balance_return", strategyName: "衡返", environment: "RANGE",
@@ -57,8 +57,13 @@ test("validated broad-neutral double reclaim routes through 衡返", () => {
     maxHoldMinutes: 150, noProgressMinutes: 40, structureId: `double-reclaim:${input.now}`, reason: "同一外沿双拒绝并收回" }];
   input.globalBreadth = 0.5; input.globalMedianMove = 0.0002;
   const state = observeStrategyArena({ state: initialStrategyArena(1), observation: input });
-  assert.equal(state.portfolioOpen.BTC_USDT?.strategyId, "balance_return");
-  assert.equal(state.currentRouteChecks["BTC_USDT:balance_return"]?.status, "OPEN");
+  assert.equal(Object.keys(state.open).length, 2);
+  assert.equal(state.portfolioOpen.BTC_USDT, undefined);
+  assert.equal(state.currentRouteChecks["BTC_USDT:balance_return"]?.status, "BLOCKED");
+  state.strategies.balance_return.recentResults = [result(1, 0.01), result(2, 0.008), result(3, 0.012)]
+    .map((row) => ({ ...row, regime: "RANGE" as const, channel: "RANGE" as const }));
+  applyStrategySleepStates(state, new Set(["RANGE"]), 4_000);
+  assert.equal(state.strategies.balance_return.enabled, true);
 });
 
 test("fewer than twelve synchronized markets cannot authorize a new route", () => {

@@ -238,8 +238,9 @@ export function completedCandleStrategyCandidate(input: {
   const extremeSequence = detectExtremeSequencePath(allRows);
   const allRegimeRoutes = detectAllRegimeRoutes(allRows);
   const dominantEnvironment = dominantAllRegimeEnvironment(allRows);
-  // Only the exhaustion structure has passed the two-phase cost-inclusive replay.
-  // Give that route execution priority while retaining the other routes as observation-only diagnostics.
+  // Exhaustion-derived reversal/continuation is the only family that remained
+  // positive in all three chronological folds. Give it scarce fresh-book
+  // priority while retaining the other routes as observation-only diagnostics.
   const approvedRoute = allRegimeRoutes.find((route) => route.strategyId === "exhaustion_turn");
   const primary = approvedRoute ?? allRegimeRoutes[0];
   if (primary) {

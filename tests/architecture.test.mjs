@@ -16,7 +16,7 @@ test("runtime uses bounded futures REST snapshots, no continuous WebSocket", asy
   assert.match(gate, /volume_24h_settle/);
   assert.match(gate, /GATE_PUBLIC_TIMEOUT_MS = 2_000/);
   assert.match(gate, /GATE_BULK_TICKER_TIMEOUT_MS = 4_000/);
-  assert.match(gate, /gatePublic<GateTicker\[\]>\("\/futures\/usdt\/tickers", GATE_BULK_TICKER_TIMEOUT_MS\)/);
+  assert.match(gate, /gatePublic<GateTicker\[\]>\("\/futures\/usdt\/tickers", GATE_BULK_TICKER_TIMEOUT_MS, 2\)/);
   assert.match(gate, /\/futures\/usdt\/candlesticks/);
   assert.doesNotMatch(worker + gate, /new WebSocket|futures\.order_book_update/);
   assert.match(worker, /MAX_ANCILLARY_CONCURRENCY = 2/);
@@ -24,7 +24,7 @@ test("runtime uses bounded futures REST snapshots, no continuous WebSocket", asy
   assert.match(worker, /plannedDoWritesPerDay: 54_080/);
   assert.match(worker, /NON_ALARM_WRITE_CAP = 8_000/);
   assert.match(worker, /plannedMaxD1BilledWritesPerDay: 4_800/);
-  assert.match(worker, /RADAR_MS = 10_000/);
+  assert.match(worker, /RADAR_MS = 60_000/);
   assert.match(worker, /await fetchMarketTickers\(\)/);
   assert.match(worker, /stableCandidates/);
   const alarm = worker.slice(worker.indexOf("async alarm("), worker.indexOf("async fetch(request"));
@@ -80,7 +80,7 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(layout, /V11全境·复利引擎 · PAPER/);
   assert.doesNotMatch(layout, /V4自适应影子策略/);
   assert.match(page, /V11 · VERIFIED ROUTE AUTHORITY/);
-  assert.match(page, /势承·逆竭、衡返·双拒、竭转·孤返/);
+  assert.match(page, /势承·逆竭与竭转·孤返/);
   assert.match(page, /今日净收益/);
   assert.match(page, /实时运行状态/);
   assert.match(page, /本版本已运行/);
@@ -226,6 +226,21 @@ test("V11 verified-route engine is causal, selective, cost-aware, and the sole L
   assert.match(migration, /DELETE FROM `paper_positions`/);
   assert.match(migration, /DELETE FROM `paper_plans`/);
   assert.doesNotMatch(migration, /live_exchange_credentials/);
+});
+
+test("Gate degradation is endpoint-aware, incremental, and only blocking after retained paths expire", async () => {
+  const [gate, worker, page] = await Promise.all([
+    read("lib/gate-market.ts"), read("worker/index-clean.ts"), read("app/page.tsx"),
+  ]);
+  assert.match(gate, /https:\/\/fx-api\.gateio\.ws\/api\/v4/);
+  assert.match(gate, /endpointBackoffUntil/);
+  assert.match(gate, /x-gate-ratelimit-reset-timestamp/);
+  assert.match(worker, /const RADAR_MS = 60_000/);
+  assert.match(worker, /prior\.length >= 100 \? 4 : 120/);
+  assert.match(worker, /mergeStrategyCandlePath/);
+  assert.match(worker, /STRATEGY_CANDLE_STALE_MS = 11 \* 60_000/);
+  assert.match(page, /路径短错 \{degradedPathMarkets\}（有效快照保留）/);
+  assert.doesNotMatch(gate, /apiSecret|apiKey|KEY|SIGN/);
 });
 
 test("legacy sizing and portfolio mirroring both retain bounded account risk", async () => {

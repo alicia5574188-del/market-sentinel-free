@@ -32,8 +32,10 @@ const FEED_QUALITY_WINDOW_MS = 60 * 60_000;
 const BACKGROUND_BOOK_INTERVALS = 5;
 const HEARTBEAT_MS = 30_000;
 const UNIVERSE_MS = 10 * 60_000;
-const RADAR_MS = 10_000;
-const RADAR_ENTRY_STALE_MS = 30_000;
+const RADAR_MS = 60_000;
+const RADAR_ENTRY_STALE_MS = 150_000;
+const STRATEGY_CANDLE_GRACE_MS = 8_000;
+const STRATEGY_CANDLE_STALE_MS = 11 * 60_000;
 const STRATEGY_LOG_MS = 5 * 60_000;
 const STRATEGY_LOG_RETENTION_MS = 14 * 24 * 60 * 60_000;
 const WARMUP_SNAPSHOTS = 4;
@@ -58,7 +60,7 @@ function broadMarketContext(candidates: Record<string, MarketRegimeCandidate>, n
 
 function approvedRouteScore(candidate: MarketRegimeCandidate) {
   return Math.max(-1, ...(candidate.allRegimeRoutes ?? [])
-    .filter((route) => route.strategyId === "exhaustion_turn" || route.strategyId === "balance_return")
+    .filter((route) => route.strategyId === "exhaustion_turn")
     .map((route) => route.score));
 }
 
@@ -188,6 +190,7 @@ type RuntimeState = {
   stableStructures: Record<string, ResidentCandleStructure>;
   strategyCandleCursor: number;
   strategyCandleError: string | null;
+  strategyCandleFailures: Record<string, { count: number; lastFailureAt: number; retryAt: number; lastError: string }>;
   strategyLogError: string | null;
   radar: { scanned: number; lastScanAt: number | null; lastAttemptAt: number | null; consecutiveFailures: number;
     retryAt: number | null; lastError: string | null; candidates: RadarCandidate[] };
@@ -234,6 +237,21 @@ export function successfulRadarRuntime(radar: RadarRuntime, now: number, scanned
   return { ...radar, scanned, lastScanAt: now, lastAttemptAt: now, consecutiveFailures: 0, retryAt: null, lastError: null, candidates };
 }
 
+export function latestCompletedStrategyCandleAt(now: number) {
+  return Math.floor(Math.max(0, now - STRATEGY_CANDLE_GRACE_MS) / 300_000) * 300_000;
+}
+
+export function mergeStrategyCandlePath(
+  prior: Awaited<ReturnType<typeof fetchStructureCandles>>,
+  incoming: Awaited<ReturnType<typeof fetchStructureCandles>>,
+) {
+  const rows = [...new Map([...prior, ...incoming].map((row) => [row.time, row])).values()]
+    .sort((left, right) => left.time - right.time).slice(-120);
+  let start = rows.length ? rows.length - 1 : 0;
+  while (start > 0 && rows[start].time - rows[start - 1].time === 300) start -= 1;
+  return rows.slice(start);
+}
+
 function initialState(): RuntimeState {
   return {
     version: SYSTEM_VERSION, authoritySchemaVersion: AUTHORITY_SCHEMA_VERSION, mode: "PAPER", state: "STARTING", symbols: DEFAULT_SYMBOLS,
@@ -245,7 +263,7 @@ function initialState(): RuntimeState {
     lastError: null, d1MirrorError: null, riskBreach: false, tickSize: Object.fromEntries(DEFAULT_SYMBOLS.map((symbol) => [symbol, 0.0001])), contractMeta: {},
     decisions: {}, routes: {}, plans: {}, positions: {}, evidence: {}, entryAssessments: {},
     strategyArena: initialStrategyArena(), marketRegimes: initialMarketRegimes(), liquidUniverse: [], stableCandidates: {}, stableStructures: {},
-    strategyCandleCursor: 0, strategyCandleError: null, strategyLogError: null, analysisMs: [], equity: PAPER_INITIAL_EQUITY, outbox: [],
+    strategyCandleCursor: 0, strategyCandleError: null, strategyCandleFailures: {}, strategyLogError: null, analysisMs: [], equity: PAPER_INITIAL_EQUITY, outbox: [],
     radar: emptyRadarRuntime(), paperCycle: startPaperCycle(Date.now()), bankruptcyOutbox: [], live: initialLiveState(),
   };
 }
@@ -295,6 +313,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private runtime = initialState();
   private memory: Record<string, SymbolMemory> = {};
   private structureCandles: Record<string, Partial<Record<"1m" | "15m" | "1h" | "4h", Awaited<ReturnType<typeof fetchStructureCandles>>>>> = {};
+  private strategyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private sessionWarmup: Record<string, number> = {};
   private contractCatalog = new Map<string, Awaited<ReturnType<typeof fetchActiveContracts>>[number]>();
   private authorityReady = true;
@@ -439,10 +458,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     for (const symbol of new Set([...Object.keys(this.memory), ...Object.keys(this.sessionWarmup), ...Object.keys(this.runtime.decisions), ...Object.keys(this.runtime.routes),
       ...Object.keys(this.runtime.plans), ...Object.keys(this.runtime.positions), ...Object.keys(this.runtime.evidence), ...Object.keys(this.runtime.entryAssessments),
-      ...Object.keys(this.runtime.feedFailures), ...Object.keys(this.runtime.tickSize), ...Object.keys(this.runtime.contractMeta)])) {
+      ...Object.keys(this.runtime.feedFailures), ...Object.keys(this.runtime.strategyCandleFailures), ...Object.keys(this.strategyCandles),
+      ...Object.keys(this.runtime.tickSize), ...Object.keys(this.runtime.contractMeta)])) {
       if (next.includes(symbol)) continue;
       delete this.memory[symbol]; delete this.sessionWarmup[symbol]; delete this.runtime.decisions[symbol]; delete this.runtime.routes[symbol]; delete this.runtime.plans[symbol];
       delete this.runtime.positions[symbol]; delete this.runtime.evidence[symbol]; delete this.runtime.entryAssessments[symbol]; delete this.runtime.feedFailures[symbol];
+      delete this.runtime.strategyCandleFailures[symbol]; delete this.strategyCandles[symbol];
       delete this.runtime.tickSize[symbol]; delete this.runtime.contractMeta[symbol];
     }
   }
@@ -456,9 +477,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.radar = successfulRadarRuntime(this.runtime.radar, now, universeRows.length, []);
     const regimes = updateMarketRegimes({ state: this.runtime.marketRegimes, rows: universeRows, eligible: universe, now });
     this.runtime.stableCandidates = Object.fromEntries(Object.entries(this.runtime.stableCandidates)
-      .filter(([symbol, candidate]) => universe.has(symbol) && now - candidate.observedAt <= 11 * 60_000));
+      .filter(([symbol, candidate]) => universe.has(symbol) && now - candidate.observedAt <= STRATEGY_CANDLE_STALE_MS));
     this.runtime.stableStructures = Object.fromEntries(Object.entries(this.runtime.stableStructures)
-      .filter(([symbol, structure]) => universe.has(symbol) && now - structure.observedAt <= 11 * 60_000));
+      .filter(([symbol, structure]) => universe.has(symbol) && now - structure.observedAt <= STRATEGY_CANDLE_STALE_MS));
     const stable = Object.values(this.runtime.stableCandidates).sort((left, right) => right.score - left.score);
     this.runtime.marketRegimes = { ...regimes, candidates: stable };
     this.runtime.strategyArena = applyStrategySleepStates(this.runtime.strategyArena, new Set(stable.map((candidate) => candidate.channel)), now);
@@ -473,18 +494,45 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (next.length) this.applyRealtimeSymbols(next);
   }
 
+  private blockingStrategyCandleError(now: number) {
+    return Object.entries(this.runtime.strategyCandleFailures).flatMap(([symbol, failure]) => {
+      const retainedAt = this.runtime.stableStructures[symbol]?.observedAt ?? 0;
+      return failure.count >= 2 && now - retainedAt > STRATEGY_CANDLE_STALE_MS
+        ? [`${symbol}: ${failure.lastError}`] : [];
+    })[0] ?? null;
+  }
+
   private async refreshStrategyCandle(now: number) {
-    if (!this.runtime.liquidUniverse.length || now - this.runtime.lastStrategyCandleAt < RADAR_MS) return 0;
-    this.runtime.lastStrategyCandleAt = now;
-    const symbol = this.runtime.liquidUniverse[this.runtime.strategyCandleCursor % this.runtime.liquidUniverse.length];
-    this.runtime.strategyCandleCursor = (this.runtime.strategyCandleCursor + 1) % Math.max(1, this.runtime.liquidUniverse.length);
+    if (!this.runtime.liquidUniverse.length) return 0;
+    const targetCompletedAt = latestCompletedStrategyCandleAt(now);
+    const size = this.runtime.liquidUniverse.length;
+    let selectedIndex = -1;
+    for (let offset = 0; offset < size; offset += 1) {
+      const index = (this.runtime.strategyCandleCursor + offset) % size;
+      const symbol = this.runtime.liquidUniverse[index];
+      const retainedAt = this.runtime.stableStructures[symbol]?.observedAt ?? 0;
+      const retryAt = this.runtime.strategyCandleFailures[symbol]?.retryAt ?? 0;
+      if (retainedAt < targetCompletedAt && retryAt <= now) { selectedIndex = index; break; }
+    }
+    if (selectedIndex < 0) return 0;
+    const symbol = this.runtime.liquidUniverse[selectedIndex];
+    this.runtime.strategyCandleCursor = (selectedIndex + 1) % size;
     const contract = this.contractCatalog.get(symbol);
     if (!contract) return 0;
     try {
-      const candles = await fetchStructureCandles(symbol, "5m");
+      const prior = this.strategyCandles[symbol] ?? [];
+      const incoming = await fetchStructureCandles(symbol, "5m", prior.length >= 100 ? 4 : 120);
+      const candles = mergeStrategyCandlePath(prior, incoming);
+      const latest = candles.at(-1);
+      const completedAt = latest ? (latest.time + 300) * 1_000 : 0;
+      if (completedAt < targetCompletedAt) {
+        this.runtime.strategyCandleFailures[symbol] = { count: 0, lastFailureAt: now,
+          retryAt: now + 5_000, lastError: "等待Gate发布最新完整5分钟K线" };
+        return 1;
+      }
+      this.strategyCandles[symbol] = candles;
       const result = completedCandleStrategyCandidate({ symbol, candles, volume24hUsd: contract.volume24hUsd,
         fundingRate: contract.fundingRate, now: Date.now() });
-      const latest = candles.at(-1);
       if (latest) this.runtime.strategyArena = advanceStrategyShadowsFromCompletedCandle({
         state: this.runtime.strategyArena, symbol, candle: { high: latest.high, low: latest.low, close: latest.close,
           completedAt: (latest.time + 300) * 1_000 },
@@ -495,9 +543,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         this.runtime.marketRegimes = { ...this.runtime.marketRegimes,
           candidates: Object.values(this.runtime.stableCandidates).sort((left, right) => right.score - left.score) };
       }
-      this.runtime.strategyCandleError = null;
+      delete this.runtime.strategyCandleFailures[symbol];
+      this.runtime.lastStrategyCandleAt = now;
+      this.runtime.strategyCandleError = this.blockingStrategyCandleError(now);
     } catch (error) {
-      this.runtime.strategyCandleError = `${symbol}: ${safeError(error)}`;
+      const prior = this.runtime.strategyCandleFailures[symbol];
+      const retryAt = error instanceof GatePublicError && error.retryAt ? Math.max(now + 2_000, error.retryAt) : now + 10_000;
+      this.runtime.strategyCandleFailures[symbol] = { count: (prior?.count ?? 0) + 1,
+        lastFailureAt: now, retryAt, lastError: safeError(error) };
+      this.runtime.strategyCandleError = this.blockingStrategyCandleError(now);
     }
     return 1;
   }
@@ -558,12 +612,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const candle = residentCandleCandidate({ symbol, candles: memory.recentCompletedMinuteCandles,
       volume24hUsd: contract.volume24hUsd, fundingRate: contract.fundingRate, now });
     const stable = this.runtime.stableCandidates[symbol];
-    const candidates = stable && now - stable.observedAt <= 11 * 60_000 ? [stable] : candle ? [candle.candidate] : [];
+    const candidates = stable && now - stable.observedAt <= STRATEGY_CANDLE_STALE_MS ? [stable] : candle ? [candle.candidate] : [];
     if (!candidates.length || !memory) return;
     const marketContext = broadMarketContext(this.runtime.stableCandidates, now);
     const rankedRoutes = [...new Map([...Object.values(this.runtime.stableCandidates), ...candidates]
       .map((row) => [row.symbol, row])).values()]
-      .filter((row) => approvedRouteScore(row) >= 0 && now - row.observedAt <= 11 * 60_000)
+      .filter((row) => approvedRouteScore(row) >= 0 && now - row.observedAt <= STRATEGY_CANDLE_STALE_MS)
       .sort((left, right) => approvedRouteScore(right) - approvedRouteScore(left)
         || right.observedAt - left.observedAt || left.symbol.localeCompare(right.symbol));
     for (const candidate of candidates) {
@@ -1912,6 +1966,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           polarityReady: strategies.some((row) => row.enabled || row.reverseEnabled),
           lastCompletedCandleAt: this.runtime.lastStrategyCandleAt,
           lastRuntimeLogAt: this.runtime.lastStrategyLogAt,
+          degradedMarkets: Object.values(this.runtime.strategyCandleFailures).filter((failure) => failure.count > 0).length,
+          blockingMarkets: Object.entries(this.runtime.strategyCandleFailures).filter(([symbol, failure]) => failure.count >= 2
+            && Date.now() - (this.runtime.stableStructures[symbol]?.observedAt ?? 0) > STRATEGY_CANDLE_STALE_MS).length,
           candleError: this.runtime.strategyCandleError,
           logError: this.runtime.strategyLogError,
         },
@@ -1931,7 +1988,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (path === "/status" || path === "/owner-runtime") {
       await this.ensureAlarm();
       const { outbox, live, paperCycle, bankruptcyOutbox, strategyArena, marketRegimes, stableCandidates, stableStructures,
-        liquidUniverse, ...publicRuntime } = this.runtime;
+        liquidUniverse, strategyCandleFailures, ...publicRuntime } = this.runtime;
       const stale = !this.authorityReady || this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > AUTHORITY_STALE_AFTER_MS;
       const effectiveState = !this.authorityReady ? "RECOVERY_REQUIRED" : stale ? "RECONNECTING" : this.runtime.state;
       const marketContext = broadMarketContext(stableCandidates, Date.now());
@@ -1944,6 +2001,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           polarityReady: Object.values(strategyArena.strategies).some((row) => row.enabled || row.reverseEnabled),
           lastCompletedCandleAt: Math.max(0, ...Object.values(stableStructures).map((row) => row.observedAt)),
           lastRuntimeLogAt: publicRuntime.lastStrategyLogAt,
+          degradedMarkets: Object.values(strategyCandleFailures).filter((failure) => failure.count > 0).length,
+          blockingMarkets: Object.entries(strategyCandleFailures).filter(([symbol, failure]) => failure.count >= 2
+            && Date.now() - (stableStructures[symbol]?.observedAt ?? 0) > STRATEGY_CANDLE_STALE_MS).length,
           candleError: publicRuntime.strategyCandleError, logError: publicRuntime.strategyLogError },
         ...(path === "/owner-runtime" ? { live } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length + bankruptcyOutbox.length,
         oldestOutboxAgeMs: outbox.length ? Math.max(0, Date.now() - (outbox[0].position.exitAt ?? outbox[0].position.entryAt)) : 0,

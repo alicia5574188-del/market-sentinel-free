@@ -196,6 +196,13 @@ function exhaustionReclaim(rows, context, config) {
     crowded ? config.crowdedNoProgressBars : config.neutralNoProgressBars);
 }
 
+function balanceCoverage(rows, context) {
+  return balanceDoubleReclaim(rows, context,
+    { window: 66, recent: 5, breadthLow: .40, breadthHigh: .60, marketMove: .0012, efficiency: .22, width: 7, crossings: 4, edge: .18, touches: 2, stopPad: .4, armR: 1.8, maxBars: 30, noProgressBars: 8 })
+    ?? balanceDoubleReclaim(rows, context,
+      { window: 54, recent: 4, breadthLow: .38, breadthHigh: .62, marketMove: .0015, efficiency: .26, width: 6, crossings: 3, edge: .20, touches: 2, stopPad: .3, armR: 2, maxBars: 24, noProgressBars: 7 });
+}
+
 function resolveTrade(symbol, rows, index, signal) {
   if (index + 1 >= rows.length) return null;
   const sign = signFor(signal.side);
@@ -325,25 +332,46 @@ const rejectedCompression = evaluate("压跃·共振", compressionPulse, [
 const exhaustion = evaluate("衰竭双路", exhaustionReclaim, [
   { window: 28, late: 5, efficiency: .42, displacement: 4.4, progress: .24, neutralLow: .38, neutralHigh: .62, neutralMove: .0012, crowdedLow: .38, crowdedMove: .0012, stopPad: .3, continuationStop: 1, neutralArmR: 1.75, crowdedArmR: 1.75, neutralMaxBars: 24, crowdedMaxBars: 36, neutralNoProgressBars: 7, crowdedNoProgressBars: 9 },
 ]);
+const expandedRange = evaluate("衡返·双证覆盖", balanceCoverage, [{}]);
 
 const selectedRange = range.find((row) => row.index === 1);
+const rangeSpanMs = raw.days * 86_400_000 / 3;
+const foldMetrics = (trades) => [0, 1, 2].map((index) => metrics(trades.filter((trade) => {
+  const foldStart = from * 1_000 + rangeSpanMs * index;
+  return trade.openedAt >= foldStart && trade.openedAt < foldStart + rangeSpanMs;
+})));
+const rangeFolds = foldMetrics(expandedRange[0].trades);
+const strictRangeFolds = foldMetrics(range.find((row) => row.index === 1).trades);
+const broadRangeFolds = foldMetrics(range.find((row) => row.index === 0).trades);
 const exhaustionTrades = exhaustion[0]?.trades ?? [];
+const exhaustionFolds = foldMetrics(exhaustionTrades);
+const carryFolds = foldMetrics(exhaustionTrades.filter((trade) => trade.strategy === "势承·逆竭"));
+const turnFolds = foldMetrics(exhaustionTrades.filter((trade) => trade.strategy === "竭转·孤返"));
 const branchMetric = (name, beforeSplit) => metrics(exhaustionTrades.filter((row) => row.strategy === name
   && (beforeSplit ? row.openedAt < split : row.openedAt >= split)));
 const carryTrain = branchMetric("势承·逆竭", true);
 const carryValidation = branchMetric("势承·逆竭", false);
 const turnValidation = branchMetric("竭转·孤返", false);
+console.table(rangeFolds.map((fold, index) => ({ fold: index + 1, trades: fold.trades, pf: fold.pf.toFixed(2),
+  net: (fold.net * 100).toFixed(2), win: (fold.winRate * 100).toFixed(1) })));
+console.table([{ geometry: "strict", folds: strictRangeFolds.map((fold) => `${fold.trades}@${fold.pf.toFixed(2)}`).join(" / ") },
+  { geometry: "broad", folds: broadRangeFolds.map((fold) => `${fold.trades}@${fold.pf.toFixed(2)}`).join(" / ") }]);
+console.table([{ route: "exhaustion-combined", folds: exhaustionFolds.map((fold) => `${fold.trades}@${fold.pf.toFixed(2)}`).join(" / ") },
+  { route: "carry", folds: carryFolds.map((fold) => `${fold.trades}@${fold.pf.toFixed(2)}`).join(" / ") },
+  { route: "turn", folds: turnFolds.map((fold) => `${fold.trades}@${fold.pf.toFixed(2)}`).join(" / ") }]);
 const acceptance = raw.days >= 30 && symbols.length >= 20
   && selectedRange?.train.pf > 1 && selectedRange.validation.pf > 1
+  && exhaustionFolds.every((fold) => fold.trades >= 20 && fold.pf > 1)
   && carryTrain.pf > 1 && carryValidation.pf > 1 && turnValidation.pf > 1
   && exhaustion[0]?.train.pf > 1 && exhaustion[0].validation.pf > 1;
 if (!acceptance) {
   throw new Error("V11 route acceptance failed: an account-authorized branch lost its after-cost evidence");
 }
-console.log(`V11_ACCEPTANCE_PASS rangePF=${selectedRange.train.pf.toFixed(2)}/${selectedRange.validation.pf.toFixed(2)} carryPF=${carryTrain.pf.toFixed(2)}/${carryValidation.pf.toFixed(2)} turnValidationPF=${turnValidation.pf.toFixed(2)}`);
+console.log(`V11_ACCEPTANCE_PASS exhaustionFoldPF=${exhaustionFolds.map((fold) => fold.pf.toFixed(2)).join("/")} carryPF=${carryTrain.pf.toFixed(2)}/${carryValidation.pf.toFixed(2)} turnValidationPF=${turnValidation.pf.toFixed(2)} rangeRecentPF=${strictRangeFolds.at(-1).pf.toFixed(2)} rangePaper=OFF`);
 
 const compact = (rows) => rows.map((row) => ({ name: row.name, index: row.index, config: row.config,
   train: row.train, validation: row.validation }));
 console.log(`V11_RESEARCH_JSON=${JSON.stringify({ generatedAt: new Date().toISOString(), days: raw.days, symbols,
   splitAt: new Date(split).toISOString(), trend: compact(trend), range: compact(range),
-  compression: compact(compression), rejectedCompression: compact(rejectedCompression), exhaustion: compact(exhaustion) })}`);
+  compression: compact(compression), rejectedCompression: compact(rejectedCompression), exhaustion: compact(exhaustion),
+  expandedRange: compact(expandedRange), rangeFolds })}`);

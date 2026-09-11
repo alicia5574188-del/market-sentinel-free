@@ -29,6 +29,24 @@ test("Gate candle objects exclude unfinished rows, deduplicate, and retain only 
   });
 });
 
+test("completed candles retry once on the official futures host and support bounded incremental reads", async () => {
+  const prior = globalThis.fetch;
+  const urls: string[] = [];
+  const completed = Math.floor(Date.now() / 300_000) * 300 - 300;
+  globalThis.fetch = async (input) => {
+    urls.push(String(input));
+    if (urls.length === 1) throw new DOMException("timed out", "TimeoutError");
+    return Response.json([{ t: completed, v: "1", o: "100", h: "102", l: "99", c: "101" }]);
+  };
+  try {
+    const rows = await fetchStructureCandles("BTC_USDT", "5m", 4);
+    assert.equal(rows.length, 1);
+    assert.match(urls[0], /^https:\/\/api\.gateio\.ws\/api\/v4\//);
+    assert.match(urls[1], /^https:\/\/fx-api\.gateio\.ws\/api\/v4\//);
+    assert.ok(urls.every((url) => url.includes("limit=4")));
+  } finally { globalThis.fetch = prior; }
+});
+
 test("active universe exposes every liquid trading USDT future to the radar", async () => {
   const prior = globalThis.fetch;
   globalThis.fetch = async (input) => {
