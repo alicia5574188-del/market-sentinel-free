@@ -82,7 +82,7 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(layout, /V12全境·复利引擎 · PAPER/);
   assert.doesNotMatch(layout, /V4自适应影子策略/);
   assert.match(page, /V12 · VERIFIED ROUTE AUTHORITY/);
-  assert.match(page, /脉折补中周期快速失速/);
+  assert.match(page, /脉折处理中周期失速/);
   assert.match(page, /今日净收益/);
   assert.match(page, /实时运行状态/);
   assert.match(page, /策略账户已运行/);
