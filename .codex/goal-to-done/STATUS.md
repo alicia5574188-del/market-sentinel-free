@@ -1,11 +1,12 @@
-# Ready for release — 2026-09-11 V11 verified-route authority
+# Done — 2026-09-11 V11 verified-route authority
 
 - Frozen 30-day/20-market next-bar research charged 0.14% round-trip friction and 0.025% adverse entry. `势承·逆竭` produced train/held-out PF 1.80/1.71, `衡返·双拒` 1.16/1.42, and `竭转·孤返` 0.98/1.39. Direct trend chasing and both direct/failed compression release remained negative and have no PAPER authority.
 - Implemented the strict 66-segment, repeated-center-crossing, same-edge double-reclaim geometry for `衡返·双拒`; enabled only under synchronized broad-market neutrality. `势承` remains the crowded-direction interpretation of an apparent single-symbol exhaustion; `竭转` remains the neutral-market reversal.
 - Replaced client-inferred execution candidates with backend `currentRouteChecks`: each candidate now reports forming/checking/blocked/open, intended side, actual strategy, reason and final admission blocker. Offline validation references also come from the backend.
 - Protected positions and structurally approved routes keep two-second books. Ordinary resident markets are deterministically staggered across five intervals. A rolling one-hour attempts/failures/recoveries window replaces the misleading lifetime anomaly headline; one short failure remains recorded but is not promoted as a current system incident.
 - Three consecutive normal losses switch only when the exact same three fully costed reverse shadows all won; three wins keep normal. Mixed evidence preserves the last authorized polarity.
-- Local verification passed 194 direct tests, 3 all-regime tests, 16 architecture/migration tests, TypeScript, ESLint, the production build, whitespace validation, frozen-data replay and Cloudflare dry-run. LIVE remains default OFF. Next: commit to PR #187, pass remote gates, merge and verify advancing production.
+- Local verification passed 194 direct tests, 3 all-regime tests, 16 architecture/migration tests, TypeScript, ESLint, the production build, whitespace validation, frozen-data replay and Cloudflare dry-run. PR #187 run #675 repeated all release gates, including the new account-authorized route evidence check.
+- Squash commit `81ddf81e5d1bb393d34226857dd8f598e13084dc` reached `main`. Production run #676 deployed Cloudflare version `5aa896cb-5186-4c63-816f-86e43b16c0f3`; its advancing health gate confirmed fresh `all-regime-compound-v2`, arena 11, backend route checks, rolling feed quality, positive PAPER equity and LIVE requested/operational both OFF.
 
 # Superseded analysis — 2026-09-11 final executable all-environment upgrade
 
