@@ -68,6 +68,11 @@ jobs:
           RESEARCH_SYMBOLS: "20"
         run: npm run research:all-regime
 
+      - name: Require V11 account-authorized routes to retain after-cost evidence
+        if: github.event_name == 'pull_request'
+        working-directory: release
+        run: npm run research:v11
+
       - name: Preserve bounded replay dataset for review
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4

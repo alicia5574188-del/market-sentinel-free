@@ -189,6 +189,7 @@ test("V11 verified-route engine is causal, selective, cost-aware, and the sole L
   assert.doesNotMatch(arena, /fetch\(|DB\.prepare|D1Database|GateLiveClient|reconcilePaper/);
   assert.match(worker, /const decision: Decision \| null = null/);
   assert.match(worker, /cycleBookSymbols/);
+  assert.match(worker, /approvedRouteScore/);
   assert.match(worker, /feedQuality/);
   assert.match(worker, /allowOpen: false/);
   assert.match(worker, /observeStrategyArena/);
@@ -247,6 +248,8 @@ test("cutover is credential-bound and removes legacy DOs only after v11 health",
   const workflow = await read(".github/workflows/sentinel-v2-ci.yml");
   assert.equal((workflow.match(/\.runtime\.strategyArena\.version == 11/g) ?? []).length, 2);
   assert.equal((workflow.match(/grep -Fq '全境·复利引擎'/g) ?? []).length, 2);
+  assert.match(workflow, /Require V11 account-authorized routes to retain after-cost evidence/);
+  assert.ok(workflow.indexOf("research:all-regime") < workflow.indexOf("research:v11"));
   assert.match(workflow, /id,exchange,environment,ciphertext,iv,crypto_version,key_hint,gate_user_id,owner_account_id,permission_summary_json,status,last_verified_at,last_error,created_at,updated_at/);
   assert.match(workflow, /index\.prepare\.js/);
   assert.match(workflow, /class RetiredDurableObject extends DurableObject/);

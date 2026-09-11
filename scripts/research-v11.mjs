@@ -326,6 +326,22 @@ const exhaustion = evaluate("衰竭双路", exhaustionReclaim, [
   { window: 28, late: 5, efficiency: .42, displacement: 4.4, progress: .24, neutralLow: .38, neutralHigh: .62, neutralMove: .0012, crowdedLow: .38, crowdedMove: .0012, stopPad: .3, continuationStop: 1, neutralArmR: 1.75, crowdedArmR: 1.75, neutralMaxBars: 24, crowdedMaxBars: 36, neutralNoProgressBars: 7, crowdedNoProgressBars: 9 },
 ]);
 
+const selectedRange = range.find((row) => row.index === 1);
+const exhaustionTrades = exhaustion[0]?.trades ?? [];
+const branchMetric = (name, beforeSplit) => metrics(exhaustionTrades.filter((row) => row.strategy === name
+  && (beforeSplit ? row.openedAt < split : row.openedAt >= split)));
+const carryTrain = branchMetric("势承·逆竭", true);
+const carryValidation = branchMetric("势承·逆竭", false);
+const turnValidation = branchMetric("竭转·孤返", false);
+const acceptance = raw.days >= 30 && symbols.length >= 20
+  && selectedRange?.train.pf > 1 && selectedRange.validation.pf > 1
+  && carryTrain.pf > 1 && carryValidation.pf > 1 && turnValidation.pf > 1
+  && exhaustion[0]?.train.pf > 1 && exhaustion[0].validation.pf > 1;
+if (!acceptance) {
+  throw new Error("V11 route acceptance failed: an account-authorized branch lost its after-cost evidence");
+}
+console.log(`V11_ACCEPTANCE_PASS rangePF=${selectedRange.train.pf.toFixed(2)}/${selectedRange.validation.pf.toFixed(2)} carryPF=${carryTrain.pf.toFixed(2)}/${carryValidation.pf.toFixed(2)} turnValidationPF=${turnValidation.pf.toFixed(2)}`);
+
 const compact = (rows) => rows.map((row) => ({ name: row.name, index: row.index, config: row.config,
   train: row.train, validation: row.validation }));
 console.log(`V11_RESEARCH_JSON=${JSON.stringify({ generatedAt: new Date().toISOString(), days: raw.days, symbols,
