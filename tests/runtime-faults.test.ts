@@ -699,6 +699,32 @@ test("a slow optional refresh cannot hold the executable-book alarm open", async
   assert.equal(stream.runtime.alarmCount, 1);
 });
 
+test("one failed staggered book batch does not impersonate a ten-market outage", async (t) => {
+  const { stream } = await makeStream();
+  const now = 1_800_000_207_000;
+  t.mock.method(Date, "now", () => now);
+  stream.runtime.symbols = ["READY_USDT"];
+  stream.runtime.lastSuccessAt = now - 2_000;
+  stream.runtime.contractMeta.READY_USDT = {
+    quantoMultiplier: 1, maintenanceRate: 0.005, leverageMax: 20, fundingRate: 0,
+  };
+  stream.sessionWarmup.READY_USDT = 4;
+  stream.runtime.evidence.READY_USDT = {
+    midpoint: 100, bestBid: 99.99, bestAsk: 100.01, observedAt: now - 2_000, warmup: 4,
+    fresh: true, ancillaryFresh: true, entryReady: true, topLong: null, topShort: null,
+    absorption: 0, range15m: null,
+  };
+
+  stream.publishCriticalHealth(now, { successes: 0, requests: 1 });
+
+  assert.equal(stream.runtime.state, "LIVE", "a recent valid market remains authoritative after an isolated batch miss");
+  assert.equal(stream.runtime.lastError, null, "isolated misses stay in rolling feed diagnostics instead of becoming a global blocker");
+
+  stream.publishCriticalHealth(now + 9_000, { successes: 0, requests: 1 });
+  assert.equal(stream.runtime.state, "RECONNECTING", "the authority still fails closed once all fresh data truly expires");
+  assert.match(stream.runtime.lastError, /^1 scheduled market snapshot/);
+});
+
 test("candidate rotation stays operational while new slots warm and no protected exposure is stale", async (t) => {
   const { stream } = await makeStream();
   const now = 1_800_000_210_000;

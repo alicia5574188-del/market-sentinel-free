@@ -129,6 +129,8 @@ type Runtime = {
   feedFailures?: Record<string, { count: number; retryAt: number; suspendedSince?: number | null; totalFailures?: number; recoveries?: number; lastFailureAt?: number | null; lastError?: string | null; maxObservedLagMs?: number }>;
   feedQuality?: { windowStartedAt: number; attempts: number; failures: number; recoveries: number;
     lastFailureAt: number | null; lastFailureSymbol: string | null; lastError: string | null };
+  realtimeReadiness?: { capacity: number; actionableMarkets: number; warmingMarkets: number;
+    protectedMarkets: number; protectedMarketsReady: boolean };
   limits: { maxOpenPositions: number | null; realtimeCapacity?: number; scanUniverse?: number; warmupSnapshots?: number; loopMs?: number; radarMs?: number; scannedMarkets?: number; maxAncillaryConcurrency?: number };
   liveMode: { requestedEnabled: boolean; operational: boolean };
   radar?: { scanned: number; lastScanAt: number | null; lastAttemptAt?: number | null; consecutiveFailures?: number;
@@ -308,6 +310,7 @@ export default function Home() {
   };
 
   const backendOperational = runtimeBackendOperational(runtime);
+  const protectedExecutionBlocked = runtime?.realtimeReadiness?.protectedMarketsReady === false;
   const healthLabel = runtimeStatusLabel(runtime, true, runtime == null && Boolean(error));
   const healthNotice = runtimeNotice(runtime);
   const arena = runtime?.strategyArena;
@@ -353,7 +356,8 @@ export default function Home() {
   const radarBlocking = Boolean(runtime?.radar?.consecutiveFailures && stableMarkets < 12);
   const latestFeedFailure = runtime?.feedQuality?.lastError;
   const currentIssues = [
-    !backendOperational ? runtime?.lastError ?? latestFeedFailure ?? "行情权威未达到可交易状态" : null,
+    !backendOperational ? runtime?.lastError ?? latestFeedFailure ?? "行情权威未达到可交易状态"
+      : protectedExecutionBlocked ? runtime?.lastError ?? "持仓或执行路线正在等待新鲜盘口" : null,
     radarBlocking ? `全市场扫描未达到最低覆盖：${runtime?.radar?.lastError ?? "等待重试"}` : null,
     blockingPathMarkets ? `有 ${blockingPathMarkets} 个市场的保留路径也已过期：${runtime?.strategyData?.candleError ?? "等待恢复"}` : null,
     error ? `当前页面连接重试中：${error}` : null,
@@ -416,7 +420,7 @@ export default function Home() {
       {healthNotice && <p className="notice">{healthNotice}</p>}
 
       <section className={`operator-runtime ${currentIssues.length ? "has-issue" : ""}`}>
-        <div className="operator-runtime-head"><div><small>实时运行状态</small><h2>{backendOperational ? "数据持续推进，系统运行正常" : "系统正在恢复关键数据"}</h2><p>这张卡只反映后台真实快照，不用“等待触发”掩盖数据问题。</p></div><span>{runtime?.lastSuccessAt ? `更新于 ${ageText(runtime.lastSuccessAt, now)}` : "尚无成功快照"}</span></div>
+        <div className="operator-runtime-head"><div><small>实时运行状态</small><h2>{!backendOperational ? "系统正在恢复关键数据" : protectedExecutionBlocked ? "执行路线行情正在恢复" : "数据持续推进，系统运行正常"}</h2><p>这张卡只反映后台真实快照，不用“等待触发”掩盖数据问题。</p></div><span>{runtime?.lastSuccessAt ? `更新于 ${ageText(runtime.lastSuccessAt, now)}` : "尚无成功快照"}</span></div>
         <div className="runtime-facts">
           <article><small>策略账户已运行</small><strong>{runtimeDurationText(arena?.startedAt ? now - arena.startedAt : null)}</strong><p>第{num(arena?.portfolioCycle, 0)}轮账户运行 {runtimeDurationText(arena?.portfolioCycleStartedAt ? now - arena.portfolioCycleStartedAt : null)}</p></article>
           <article><small>{backendOperational ? "当前步骤" : "暂停位置"}</small><strong>{activePipelineStep}/5 · {pipeline[activePipelineStep - 1].title}</strong><p>{backendOperational ? pipeline[activePipelineStep - 1].detail : currentRoutes.length ? "执行路线保留，尚未创建订单" : "没有已进入执行检查的路线被取消"}</p></article>

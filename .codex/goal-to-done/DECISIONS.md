@@ -443,3 +443,8 @@
 - A 429 belongs to one Gate host and endpoint, not to every official host for that endpoint. The second official futures host remains immediately eligible, and executable order-book reads try it before suspending the affected market. Owner trading credentials remain excluded from public data reads because signing the same public REST data would not create an independent market-data authority.
 - The Durable Object alarm re-arms first, completes executable books and publishes critical health before launching universe, ancillary candle, bulk radar and research-log work. Only one optional task may run at once; delayed optional work is skipped rather than queued, so it cannot hold the next two-second protection/entry pass.
 - A transient data pause overlays the retained strategy stage. Completed paths, environment candidates and current route checks stay visible; recovery uses a newly verified bid/ask and may proceed only if the retained route is still inside its original executable geometry. No old-price order is permitted.
+
+# 2026-09-11 — Staggered subset misses are not global outages
+
+- Resident markets are intentionally staggered, so `zero successes` in one alarm describes only that alarm's scheduled subset. It must never be expanded to the ten-market pool or reset global authority while another executable snapshot remains within the eight-second freshness window.
+- Isolated subset misses remain visible in rolling feed quality and per-market readiness. Global reconnect is reserved for actual authority expiry; a failed protected position or formed execution route remains an immediate exposure-specific trading block.

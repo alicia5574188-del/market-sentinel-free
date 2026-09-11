@@ -1,5 +1,6 @@
 # Active correction — keep execution authority advancing through Gate degradation
 
+- A failed staggered subset may not be labeled as all ten resident markets unavailable or demote a recently advancing authority. Only actual authority expiry or a failed protected position/route may become a trading block.
 - A Gate 429, timeout or slow optional analysis request must not stall the two-second executable-book and position-protection alarm chain.
 - Treat Gate's two official futures hosts independently: one host's endpoint backoff may not disable the other host, and a critical order-book read must fail over before the affected market is suspended.
 - Preserve the latest completed-candle paths, environment candidates and route-check state during a transient authority pause. Never create an order from an old price; resume by checking the retained route against a newly verified bid/ask.
