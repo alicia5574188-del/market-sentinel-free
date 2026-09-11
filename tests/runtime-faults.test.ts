@@ -556,8 +556,8 @@ test("all-regime cutover archives the old PAPER cycle and starts a fresh account
   saved.equityVersion = 7;
 
   const { stream } = await makeStream(saved);
-  assert.equal(stream.runtime.version, "all-regime-compound-v1");
-  assert.equal(stream.runtime.strategyArena.version, 10);
+  assert.equal(stream.runtime.version, "all-regime-compound-v2");
+  assert.equal(stream.runtime.strategyArena.version, 11);
   assert.equal(stream.runtime.strategyArena.portfolioCycle, 4);
   assert.equal(stream.runtime.strategyArena.portfolioEquity, 1_000);
   assert.equal(stream.runtime.strategyArena.portfolioResolved, 0);
@@ -920,15 +920,15 @@ test("health status is compact while retaining every release gate", async () => 
   const response = await stream.fetch(new Request("https://market-stream/health-status"));
   const status = await response.json();
 
-  assert.equal(status.version, "all-regime-compound-v1");
-  assert.equal(status.strategyArena.version, 10);
+  assert.equal(status.version, "all-regime-compound-v2");
+  assert.equal(status.strategyArena.version, 11);
   assert.equal(status.strategyArena.playbookCount, 4);
   assert.equal(status.strategyArena.catalogSize, 4);
   assert.equal(status.strategyArena.portfolioEquity, 1_000);
   assert.equal(status.strategyArena.rules.minimumPortfolioRiskUsdt, 10);
   assert.equal(status.strategyArena.rules.empiricalCostFloorRate, 0.0014);
   assert.equal(status.strategyArena.rules.authorityWindowPriority, "STATE_CONDITIONED_EXPECTANCY");
-  assert.equal(status.strategyArena.rules.allRegimeVersion, 1);
+  assert.equal(status.strategyArena.rules.allRegimeVersion, 2);
   assert.equal(status.strategyArena.rules.extremeSequenceAuthority, false);
   assert.equal(status.strategyArena.rules.generatedRouteAuthority, false);
   assert.equal(status.strategyArena.rules.legacyStrategyAuthority, false);

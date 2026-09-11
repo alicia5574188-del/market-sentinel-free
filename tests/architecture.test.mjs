@@ -77,10 +77,10 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(page, /tabScroll\.current\[tab\] = window\.scrollY/);
   assert.match(page, /viewScroll\.current\[activeView\] = window\.scrollY/);
   assert.match(page, /全境·复利引擎/);
-  assert.match(layout, /V10全境·复利引擎 · PAPER/);
+  assert.match(layout, /V11全境·复利引擎 · PAPER/);
   assert.doesNotMatch(layout, /V4自适应影子策略/);
-  assert.match(page, /V10 · ALL-REGIME COMPOUND/);
-  assert.match(page, /势承处理方向延续/);
+  assert.match(page, /V11 · VERIFIED ROUTE AUTHORITY/);
+  assert.match(page, /势承·逆竭、衡返·双拒、竭转·孤返/);
   assert.match(page, /今日净收益/);
   assert.match(page, /实时运行状态/);
   assert.match(page, /本版本已运行/);
@@ -88,9 +88,9 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(page, /下一步准备/);
   assert.match(page, /系统此刻在分析什么/);
   assert.match(page, /为什么分析/);
-  assert.match(page, /同类历史胜率/);
+  assert.match(page, /同类留出胜率/);
   assert.match(page, /不是本单保证/);
-  assert.match(page, /已经准备下单的路线/);
+  assert.match(page, /后台确认的执行路线/);
   assert.match(page, /const hasRuntimeSnapshot = Boolean\(runtime && arena\)/);
   assert.match(page, /收到真实运行快照后再显示账户、持仓、路线和市场数量/);
   assert.match(page, /收到后台真实快照前不显示“0笔”/);
@@ -157,14 +157,14 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
   assert.match(worker, /completeTrades\.length > item\.report\.trades\.length/);
 });
 
-test("V10 all-regime compound engine is causal, selective, cost-aware, and the sole LIVE order source", async () => {
+test("V11 verified-route engine is causal, selective, cost-aware, and the sole LIVE order source", async () => {
   const [arena, allRegime, regime, worker, page, migration] = await Promise.all([
     read("lib/strategy-arena.ts"), read("lib/all-regime-engine.ts"), read("lib/market-regime.ts"),
     read("worker/index-clean.ts"), read("app/page.tsx"),
     read("drizzle/0035_strategy_arena_fresh_start.sql"),
   ]);
   assert.match(arena, /STRATEGY_CATALOG/);
-  assert.match(arena, /STRATEGY_ARENA_VERSION = 10/);
+  assert.match(arena, /STRATEGY_ARENA_VERSION = 11/);
   assert.match(allRegime, /ALL_REGIME_SYSTEM_NAME = "全境·复利引擎"/);
   for (const name of ["势承", "衡返", "压跃", "竭转"]) assert.match(allRegime, new RegExp(name));
   assert.match(allRegime, /detectAllRegimeRoutes/);
@@ -173,6 +173,7 @@ test("V10 all-regime compound engine is causal, selective, cost-aware, and the s
   assert.match(arena, /ARENA_MAX_COST_SHARE = 0\.25/);
   assert.match(arena, /PORTFOLIO_REALTIME_CAPACITY = 10/);
   assert.match(arena, /recentObservations/);
+  assert.match(arena, /currentRouteChecks/);
   assert.match(arena, /cutoverPending/);
   assert.match(arena, /sizePaperPosition/);
   assert.match(arena, /selectSafeLeverage/);
@@ -187,6 +188,8 @@ test("V10 all-regime compound engine is causal, selective, cost-aware, and the s
   assert.match(regime, /selectDiverseMarketPool/);
   assert.doesNotMatch(arena, /fetch\(|DB\.prepare|D1Database|GateLiveClient|reconcilePaper/);
   assert.match(worker, /const decision: Decision \| null = null/);
+  assert.match(worker, /cycleBookSymbols/);
+  assert.match(worker, /feedQuality/);
   assert.match(worker, /allowOpen: false/);
   assert.match(worker, /observeStrategyArena/);
   assert.match(worker, /advanceStrategyArena/);
@@ -198,7 +201,7 @@ test("V10 all-regime compound engine is causal, selective, cost-aware, and the s
   assert.match(worker, /minimumPortfolioRiskUsdt: MIN_PORTFOLIO_TRADE_RISK_USDT/);
   assert.match(worker, /empiricalCostFloorRate: ARENA_FRICTION_RATE/);
   assert.match(arena, /POLARITY_STREAK = 3/);
-  assert.match(arena, /profitFactor >= 2\.5/);
+  assert.match(arena, /reversed\.every\(\(row\) => row\.netReturnRate > 0\)/);
   assert.match(arena, /profitArmIsExit: false/);
   assert.match(arena, /RUNNER_EXIT/);
   assert.match(page, /盈利启动后只抬保护，不封顶/);
@@ -240,9 +243,9 @@ test("legacy sizing and portfolio mirroring both retain bounded account risk", a
   assert.match(live, /mirrorNotionalFraction/);
 });
 
-test("cutover is credential-bound and removes legacy DOs only after v10 health", async () => {
+test("cutover is credential-bound and removes legacy DOs only after v11 health", async () => {
   const workflow = await read(".github/workflows/sentinel-v2-ci.yml");
-  assert.equal((workflow.match(/\.runtime\.strategyArena\.version == 10/g) ?? []).length, 2);
+  assert.equal((workflow.match(/\.runtime\.strategyArena\.version == 11/g) ?? []).length, 2);
   assert.equal((workflow.match(/grep -Fq '全境·复利引擎'/g) ?? []).length, 2);
   assert.match(workflow, /id,exchange,environment,ciphertext,iv,crypto_version,key_hint,gate_user_id,owner_account_id,permission_summary_json,status,last_verified_at,last_error,created_at,updated_at/);
   assert.match(workflow, /index\.prepare\.js/);

@@ -10,7 +10,7 @@ function observation(now = 2_000_000): ArenaObservation {
       trendEfficiency: 0.7, volatilityRatio: 1.5, rangePosition: 0.9, volume24hUsd: 2_000_000_000,
       fundingRate: 0, openInterestChangeRate: 0, confirmations: 2, firstSeenAt: now, observedAt: now,
       anomalyKind: null, adaptivePolicy: null, extremeSequence: null, dominantEnvironment: "EXHAUSTION",
-      allRegimeRoutes: [{ version: 1, strategyId: "exhaustion_turn", strategyName: "竭转", environment: "EXHAUSTION",
+      allRegimeRoutes: [{ version: 2, strategyId: "exhaustion_turn", strategyName: "竭转", environment: "EXHAUSTION",
         side: "SHORT", score: 90, triggerPrice: 100, invalidationPrice: 102, profitArmPrice: 97,
         maxHoldMinutes: 120, noProgressMinutes: 35, structureId: `turn:${now}`, reason: "推进枯竭" }] },
     midpoint: 100, bestBid: 99.99, bestAsk: 100.01, alignedFlow: 0, minuteNoiseRate: 0.002,
@@ -24,13 +24,13 @@ function observation(now = 2_000_000): ArenaObservation {
 const result = (index: number, value: number): StrategyResult => ({ eventId: `event:${index}`, symbol: `S${index}_USDT`,
   regime: "TREND", channel: "TREND", netReturnRate: value, netPnl: value * 1_000, won: value > 0, resolvedAt: index * 1_000 });
 
-test("V10 owns four original environment strategies and starts only validated routes", () => {
+test("V11 owns four original environment strategies and starts only validated routes", () => {
   assert.deepEqual(STRATEGY_CATALOG.map((row) => row.name), ["势承", "衡返", "压跃", "竭转"]);
   const state = initialStrategyArena(1);
-  assert.equal(state.version, 10);
+  assert.equal(state.version, 11);
   assert.equal(state.strategies.momentum_carry.enabled, true);
   assert.equal(state.strategies.exhaustion_turn.enabled, true);
-  assert.equal(state.strategies.balance_return.enabled, false);
+  assert.equal(state.strategies.balance_return.enabled, true);
   assert.equal(state.strategies.pressure_release.enabled, false);
 });
 
@@ -49,6 +49,18 @@ test("neutral isolated exhaustion routes through 竭转", () => {
   assert.equal(state.portfolioOpen.BTC_USDT?.side, "SHORT");
 });
 
+test("validated broad-neutral double reclaim routes through 衡返", () => {
+  const input = observation();
+  input.candidate.channel = "RANGE"; input.candidate.regime = "RANGE";
+  input.candidate.allRegimeRoutes = [{ version: 2, strategyId: "balance_return", strategyName: "衡返", environment: "RANGE",
+    side: "LONG", score: 86, triggerPrice: 100, invalidationPrice: 98, profitArmPrice: 103.6,
+    maxHoldMinutes: 150, noProgressMinutes: 40, structureId: `double-reclaim:${input.now}`, reason: "同一外沿双拒绝并收回" }];
+  input.globalBreadth = 0.5; input.globalMedianMove = 0.0002;
+  const state = observeStrategyArena({ state: initialStrategyArena(1), observation: input });
+  assert.equal(state.portfolioOpen.BTC_USDT?.strategyId, "balance_return");
+  assert.equal(state.currentRouteChecks["BTC_USDT:balance_return"]?.status, "OPEN");
+});
+
 test("fewer than twelve synchronized markets cannot authorize a new route", () => {
   const input = observation(); input.globalMarkets = 8;
   const state = observeStrategyArena({ state: initialStrategyArena(1), observation: input });
@@ -65,10 +77,10 @@ test("three wins select normal while mixed results retain the last orientation",
   assert.equal(score.enabled, true); assert.equal(score.reverseEnabled, false);
 });
 
-test("three losses switch only after twelve positive reverse samples", () => {
+test("three losses switch when the same three fully costed reverse shadows all win", () => {
   const state = initialStrategyArena(1); const score = state.strategies.momentum_carry;
-  score.recentResults = Array.from({ length: 12 }, (_, index) => result(index + 1, index >= 9 ? -0.01 : 0.002));
-  score.reverseRecentResults = Array.from({ length: 12 }, (_, index) => result(index + 1, 0.006));
+  score.recentResults = Array.from({ length: 3 }, (_, index) => result(index + 1, -0.01));
+  score.reverseRecentResults = Array.from({ length: 3 }, (_, index) => result(index + 1, 0.006));
   applyStrategySleepStates(state, new Set(["TREND"]), 20_000);
   assert.equal(score.enabled, false); assert.equal(score.reverseEnabled, true);
 });
@@ -78,6 +90,8 @@ test("stale execution data remains observation-only", () => {
   const state = observeStrategyArena({ state: initialStrategyArena(1), observation: input });
   assert.equal(Object.keys(state.open).length, 0);
   assert.ok(state.recentObservations.some((row) => row.blocker.includes("不新鲜")));
+  assert.equal(state.currentRouteChecks["BTC_USDT:momentum_carry"]?.status, "BLOCKED");
+  assert.match(state.currentRouteChecks["BTC_USDT:momentum_carry"]?.blocker ?? "", /不新鲜/);
 });
 
 test("profit arm starts a runner and a later protection closes it", () => {
@@ -102,11 +116,11 @@ test("completed candle resolves an initial stop before a same-candle profit arm"
   assert.ok(state.recentShadow.some((row) => row.outcome === "STOP"));
 });
 
-test("V9 account is archived when V10 normalizes and reset preserves shadow research", () => {
+test("a prior account is archived when V11 normalizes and reset preserves shadow research", () => {
   const old = initialStrategyArena(1) as unknown as Record<string, unknown>;
   old.version = 9; old.portfolioResolved = 4; old.portfolioEquity = 940;
   const state = normalizeStrategyArena(old as unknown as StrategyArenaState, 10_000);
-  assert.equal(state.version, 10); assert.equal(state.portfolioEquity, 1_000);
+  assert.equal(state.version, 11); assert.equal(state.portfolioEquity, 1_000);
   assert.equal(state.archivedPortfolioCycles.at(-1)?.resolved, 4);
   state.strategies.momentum_carry.shadowResolved = 7;
   const reset = resetStrategyArenaAccount({ state, quotes: {}, now: 20_000 });

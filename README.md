@@ -1,28 +1,29 @@
-# All-Regime Compound V10 · 全境·复利引擎
+# All-Regime Compound V11 · 全境·复利引擎
 
 Gate USDT perpetual PAPER authority for a single compounding 1,000 U account. LIVE remains owner-controlled, default OFF and fail-closed.
 
 ## Decision authority
 
-V10 scans the thirty most liquid eligible contracts, builds only continuous completed 5-minute paths and separates environment ownership from entry timing:
+V11 scans the thirty most liquid eligible contracts, builds only continuous completed 5-minute paths and separates environment recognition, route formation and account admission:
 
-- `势承`: when broad-market direction is crowded, an apparent single-symbol exhaustion that lacks broad confirmation is treated as continuation, not a guessed top or bottom.
-- `竭转`: when broad-market direction is neutral, a single-symbol path may reverse only after progress collapses and a completed segment reclaims the opposite direction.
-- `衡返` and `压跃`: retain range and compression ownership plus paired research, but have no PAPER authority because the frozen thirty-day replay was not positive in both chronological halves.
+- `势承·逆竭`: when broad-market direction is crowded, apparent single-symbol exhaustion that lacks broad confirmation continues with the crowd.
+- `竭转·孤返`: when broad-market direction is neutral, a single-symbol path reverses only after progress collapses and a completed segment reclaims the opposite direction.
+- `衡返·双拒`: in a broad neutral market, a low-efficiency range must cross its center repeatedly, reject the same edge at least twice and reclaim it on a completed segment.
+- Direct momentum chasing and direct compression breakout remain observation-only: their after-cost train/held-out evidence is negative.
 
-Every executable event runs exact normal and reverse shadows after full friction. The two approved routes start in their validated direction. Three normal wins select normal; three normal losses may select reverse only when the same events won in reverse and the latest twelve reverse samples have positive mean with profit factor at least 2.5. Mixed results retain the last authorized orientation.
+Every executable event runs exact normal and reverse shadows after full friction. The three approved branches start in their validated direction. Three normal wins select normal; three normal losses select reverse only when those same three fully costed mirror trades all won. Mixed results retain the last authorized orientation.
 
 The profit arm does not cap profit. It starts dynamic protection; structural invalidation, no-progress and maximum-hold exits remain active.
 
 ## Evidence contract
 
-`npm run research:all-regime` downloads completed Gate futures 5-minute candles and performs next-bar, chronological replay with 0.14% round-trip friction and 0.025% entry slippage. The frozen thirty-day, twenty-market acceptance run produced:
+`node scripts/research-v11.mjs` consumes the frozen CI dataset and performs next-bar, chronological replay with 0.14% round-trip friction and 0.025% entry slippage. The frozen thirty-day, twenty-market route study produced:
 
 | Route | First half | Held-out half |
 | --- | ---: | ---: |
-| 势承 base events | PF 2.11, +23.20% summed event return | PF 1.19, +6.72% |
-| 竭转 base events | PF 1.13, +11.53% summed event return | PF 1.04, +3.51% |
-| Routed account at 0.5× per position | 207 trades, 1,000 → 1,045.16 U, 6.27% max drawdown | 214 trades, 1,000 → 1,046.72 U, 9.23% max drawdown |
+| 势承·逆竭 | 48 events, PF 1.80, +16.11% summed return | 50 events, PF 1.71, +23.98% |
+| 衡返·双拒 | 31 events, PF 1.16, +4.14% | 22 events, PF 1.42, +8.86% |
+| 竭转·孤返 | 103 events, PF 0.98, -0.81% | 86 events, PF 1.39, +15.85% |
 
 These are historical simulations, not a promise of daily profit. PAPER is the forward test.
 
@@ -36,7 +37,7 @@ These are historical simulations, not a promise of daily profit. PAPER is the fo
 
 ## Operator page
 
-The public page shows account equity, today's net result, current environment, owning strategy, PAPER positions and complete account trade records. Its operator runtime card exposes snapshot age, version/cycle uptime, the active five-step pipeline stage, next action and next scheduled decision time, plus current and recovered faults. The analysis board explains the highest-priority completed-candle markets, liquidity-selection reason, environment owner, intended direction or explicit no-trade state, route rationale/blocker and observation time. Only validated executable routes show a held-out same-route win rate, clearly labeled as historical reference rather than a current-trade probability. Shadow samples, raw diagnostics, internal route transitions and legacy research remain backend-only. Owner authentication reveals LIVE controls and credentials; public runtime never returns secrets.
+The public page shows account equity, today's net result, current environment, owning strategy, PAPER positions and complete account trade records. Route status, direction and the final blocker come from backend admission state; the page never reconstructs authority from candles. The runtime card reports a rolling one-hour book success rate and only promotes repeated failures to a visible current issue. Protected positions and formed routes poll every two seconds; background residents are staggered to reduce avoidable public REST failures without slowing position protection.
 
 ## Verification and release
 
@@ -50,4 +51,4 @@ npm run build
 npx wrangler deploy --dry-run --config dist/server/wrangler.json
 ```
 
-Production releases only from GitHub `main`. The release gate requires `all-regime-compound-v1`, arena version 10, four environment owners, thirty-market scanning, advancing authority health and LIVE explicitly OFF.
+Production releases only from GitHub `main`. The release gate requires `all-regime-compound-v2`, arena version 11, four environment owners, backend route-check truth, thirty-market scanning, advancing authority health and LIVE explicitly OFF.

@@ -1,13 +1,13 @@
 import type { Side } from "./liquidity-core.ts";
 
-export const ALL_REGIME_ENGINE_VERSION = 1;
+export const ALL_REGIME_ENGINE_VERSION = 2;
 export const ALL_REGIME_SYSTEM_NAME = "全境·复利引擎";
 
 export type AllRegimeStrategyId = "momentum_carry" | "balance_return" | "pressure_release" | "exhaustion_turn";
 export type AllRegimeEnvironment = "TREND" | "RANGE" | "COMPRESSION" | "EXHAUSTION";
 export type AllRegimeCandle = { time: number; open: number; high: number; low: number; close: number; volume?: number };
 export type AllRegimeRoute = {
-  version: 1;
+  version: 2;
   strategyId: AllRegimeStrategyId;
   strategyName: "势承" | "衡返" | "压跃" | "竭转";
   environment: AllRegimeEnvironment;
@@ -28,6 +28,17 @@ export const ALL_REGIME_STRATEGIES = [
   { id: "pressure_release", name: "压跃", environment: "COMPRESSION", description: "路径振幅持续收束后，只跟随首次带有实体与范围扩张的释放。" },
   { id: "exhaustion_turn", name: "竭转", environment: "EXHAUSTION", description: "价格继续创新极值但推进效率枯竭，反向收复后切换方向。" },
 ] as const;
+
+export const ALL_REGIME_OFFLINE_VALIDATION = {
+  momentum_carry: { branchName: "势承·逆竭", trainEvents: 48, trainProfitFactor: 1.80,
+    validationEvents: 50, validationProfitFactor: 1.71, validationWinRate: 0.38, paperApproved: true },
+  balance_return: { branchName: "衡返·双拒", trainEvents: 31, trainProfitFactor: 1.16,
+    validationEvents: 22, validationProfitFactor: 1.42, validationWinRate: 0.409, paperApproved: true },
+  exhaustion_turn: { branchName: "竭转·孤返", trainEvents: 103, trainProfitFactor: 0.98,
+    validationEvents: 86, validationProfitFactor: 1.39, validationWinRate: 0.36, paperApproved: true },
+  pressure_release: { branchName: "压跃·共振", trainEvents: 55, trainProfitFactor: 0.90,
+    validationEvents: 60, validationProfitFactor: 0.63, validationWinRate: 0.267, paperApproved: false },
+} as const;
 
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 const median = (values: number[]) => {
@@ -62,7 +73,7 @@ function momentumCarry(rows: AllRegimeCandle[], unit: number): AllRegimeRoute | 
   const pauseExtreme = direction > 0 ? Math.min(...pause.map((row) => row.low)) : Math.max(...pause.map((row) => row.high));
   const stop = direction > 0 ? Math.min(pauseExtreme, latest.close - unit * 1.15) : Math.max(pauseExtreme, latest.close + unit * 1.15);
   const risk = Math.abs(latest.close - stop);
-  const route: AllRegimeRoute = { version: 1, strategyId: "momentum_carry", strategyName: "势承", environment: "TREND", side,
+  const route: AllRegimeRoute = { version: 2, strategyId: "momentum_carry", strategyName: "势承", environment: "TREND", side,
     score: clamp(58 + efficiency * 32 + clamp(displacement / Math.max(unit * 12, 1e-9), 0, 1) * 10, 0, 98),
     triggerPrice: latest.close, invalidationPrice: stop, profitArmPrice: latest.close + direction * risk * 1.8,
     maxHoldMinutes: 180, noProgressMinutes: 45, structureId: `carry:${side}:${priceBin(pauseExtreme)}:${latest.time}`,
@@ -70,33 +81,38 @@ function momentumCarry(rows: AllRegimeCandle[], unit: number): AllRegimeRoute | 
   return valid(route) ? route : null;
 }
 
-function balanceReturn(rows: AllRegimeCandle[], unit: number): AllRegimeRoute | null {
-  const base = rows.slice(-36);
+function balanceReturn(rows: AllRegimeCandle[]): AllRegimeRoute | null {
+  const base = rows.slice(-66);
   const latest = base.at(-1)!;
-  const prior = base.slice(0, -2);
+  const recent = base.slice(-5);
+  const prior = base.slice(0, -5);
+  const unit = median(prior.slice(-36).map((row) => row.high - row.low));
   const lower = Math.min(...prior.map((row) => row.low));
   const upper = Math.max(...prior.map((row) => row.high));
   const width = upper - lower;
   const efficiency = pathEfficiency(prior);
-  if (efficiency > 0.34 || width < unit * 5.2) return null;
-  const lowerBand = lower + width * 0.2;
-  const upperBand = upper - width * 0.2;
-  const recent = base.slice(-2);
-  const longReclaim = Math.min(...recent.map((row) => row.low)) <= lowerBand && latest.close > lowerBand && latest.close > latest.open;
-  const shortReclaim = Math.max(...recent.map((row) => row.high)) >= upperBand && latest.close < upperBand && latest.close < latest.open;
-  if (!longReclaim && !shortReclaim) return null;
+  const center = (lower + upper) / 2;
+  const crossings = prior.slice(1).filter((row, index) => (row.close >= center) !== (prior[index].close >= center)).length;
+  if (efficiency > 0.22 || width < unit * 7 || crossings < 4) return null;
+  const lowerBand = lower + width * 0.18;
+  const upperBand = upper - width * 0.18;
+  const lowTouches = recent.filter((row) => row.low <= lowerBand).length;
+  const highTouches = recent.filter((row) => row.high >= upperBand).length;
+  const longReclaim = lowTouches >= 2 && recent.at(-2)!.close <= lowerBand && latest.close > lowerBand && latest.close > latest.open;
+  const shortReclaim = highTouches >= 2 && recent.at(-2)!.close >= upperBand && latest.close < upperBand && latest.close < latest.open;
+  if (longReclaim === shortReclaim) return null;
   const side: Side = longReclaim ? "LONG" : "SHORT";
   const sign = side === "LONG" ? 1 : -1;
   const edge = side === "LONG" ? Math.min(...recent.map((row) => row.low)) : Math.max(...recent.map((row) => row.high));
-  const stop = edge - sign * unit * 0.35;
-  const midpoint = (lower + upper) / 2;
-  const arm = side === "LONG" ? Math.max(midpoint, latest.close + Math.abs(latest.close - stop) * 1.55)
-    : Math.min(midpoint, latest.close - Math.abs(latest.close - stop) * 1.55);
-  const route: AllRegimeRoute = { version: 1, strategyId: "balance_return", strategyName: "衡返", environment: "RANGE", side,
-    score: clamp(62 + (0.34 - efficiency) * 55 + clamp(width / Math.max(unit * 12, 1e-9), 0, 1) * 14, 0, 97),
+  const stop = edge - sign * unit * 0.4;
+  const risk = Math.abs(latest.close - stop);
+  const structuralArm = latest.close + sign * risk * 1.8;
+  const arm = side === "LONG" ? Math.min(center, structuralArm) : Math.max(center, structuralArm);
+  const route: AllRegimeRoute = { version: 2, strategyId: "balance_return", strategyName: "衡返", environment: "RANGE", side,
+    score: clamp(66 + (0.22 - efficiency) * 60 + clamp(crossings / 8, 0, 1) * 12, 0, 97),
     triggerPrice: latest.close, invalidationPrice: stop, profitArmPrice: arm, maxHoldMinutes: 150, noProgressMinutes: 40,
-    structureId: `balance:${side}:${priceBin(lower)}:${priceBin(upper)}:${latest.time}`,
-    reason: `平衡路径效率${Math.round(efficiency * 100)}%，外沿压力被完成段收回，向重心旋转。` };
+    structureId: `double-reclaim:${side}:${priceBin(lower)}:${priceBin(upper)}:${latest.time}`,
+    reason: `低效平衡路径穿越重心${crossings}次，同一外沿至少两次拒绝后由最新完成段收回。` };
   return valid(route) ? route : null;
 }
 
@@ -119,7 +135,7 @@ function pressureRelease(rows: AllRegimeCandle[], unit: number): AllRegimeRoute 
   const inner = side === "LONG" ? Math.max(lower, upper - boxUnit * 1.15) : Math.min(upper, lower + boxUnit * 1.15);
   const stop = side === "LONG" ? Math.min(inner, latest.close - unit * 1.05) : Math.max(inner, latest.close + unit * 1.05);
   const risk = Math.abs(latest.close - stop);
-  const route: AllRegimeRoute = { version: 1, strategyId: "pressure_release", strategyName: "压跃", environment: "COMPRESSION", side,
+  const route: AllRegimeRoute = { version: 2, strategyId: "pressure_release", strategyName: "压跃", environment: "COMPRESSION", side,
     score: clamp(64 + clamp((priorUnit / Math.max(boxUnit, 1e-9) - 1) * 28, 0, 20) + clamp(body / Math.max(boxUnit, 1e-9), 0, 2) * 7, 0, 98),
     triggerPrice: latest.close, invalidationPrice: stop, profitArmPrice: latest.close + sign * risk * 1.9,
     maxHoldMinutes: 210, noProgressMinutes: 55, structureId: `release:${side}:${priceBin(lower)}:${priceBin(upper)}:${latest.time}`,
@@ -148,7 +164,7 @@ function exhaustionTurn(rows: AllRegimeCandle[], unit: number): AllRegimeRoute |
   const extreme = direction > 0 ? Math.max(...late.map((row) => row.high)) : Math.min(...late.map((row) => row.low));
   const stop = extreme - sign * unit * 0.3;
   const risk = Math.abs(latest.close - stop);
-  const route: AllRegimeRoute = { version: 1, strategyId: "exhaustion_turn", strategyName: "竭转", environment: "EXHAUSTION", side,
+  const route: AllRegimeRoute = { version: 2, strategyId: "exhaustion_turn", strategyName: "竭转", environment: "EXHAUSTION", side,
     score: clamp(62 + (0.24 - progressRatio) * 55 + clamp(displacement / Math.max(unit * 12, 1e-9), 0, 1) * 12, 0, 97),
     triggerPrice: latest.close, invalidationPrice: stop, profitArmPrice: latest.close + sign * risk * 1.75,
     maxHoldMinutes: 120, noProgressMinutes: 35, structureId: `turn:${side}:${priceBin(extreme)}:${latest.time}`,
@@ -163,7 +179,7 @@ export function detectAllRegimeRoutes(candles: AllRegimeCandle[]) {
   if (rows.length < 50) return [];
   const unit = median(rows.slice(-48).map((row) => row.high - row.low));
   if (!(unit > 0)) return [];
-  return [pressureRelease(rows, unit), exhaustionTurn(rows, unit), momentumCarry(rows, unit), balanceReturn(rows, unit)]
+  return [pressureRelease(rows, unit), exhaustionTurn(rows, unit), momentumCarry(rows, unit), balanceReturn(rows)]
     .filter((route): route is AllRegimeRoute => route != null).sort((left, right) => right.score - left.score);
 }
 
