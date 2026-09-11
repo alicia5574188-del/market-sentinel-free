@@ -1,8 +1,9 @@
-# In progress — 2026-09-11 operator runtime transparency correction
+# Done — 2026-09-11 operator runtime transparency correction
 
 - The screenshot contains a verified green runtime snapshot, but the simplified V10 page hides `lastSuccessAt`, completed-candle progress, active pipeline stage, candidate markets and blockers. It therefore cannot distinguish healthy waiting from a stuck feed.
 - Implemented an operator-readable runtime card and current-analysis board from fields already returned by `/api/runtime`; no market requests, write cadence or trading authority changed.
-- Local acceptance passed 193 direct tests, 3 all-regime tests, 16 architecture/migration tests, TypeScript, ESLint, two production builds, whitespace validation and a Cloudflare dry-run. GitHub release and advancing production health confirmation remain pending.
+- Local acceptance passed 193 direct tests, 3 all-regime tests, 16 architecture/migration tests, TypeScript, ESLint, two production builds, whitespace validation and a Cloudflare dry-run. PR #186 run #670 repeated the full verification and causal replay.
+- Main commit `73dd0709e8b2c5b29dcd5a7025d4d7f1f4abbdba` passed production run #671. Its advancing health gate confirmed fresh PAPER authority, V10/four-strategy identity, positive account equity, public-secret isolation and LIVE explicitly OFF. Cloudflare version `16ef2b32-5e03-4dfc-a746-44ef8d6a4793` is live.
 
 # Done — 2026-09-11 all-regime compounding redesign
 

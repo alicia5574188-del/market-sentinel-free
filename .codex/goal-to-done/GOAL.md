@@ -1,4 +1,4 @@
-# Active correction — operator-visible runtime and analysis progress
+# Completed correction — operator-visible runtime and analysis progress
 
 - Keep the V10 strategy and execution authority unchanged, but make the decision page distinguish healthy waiting from stalled data without requiring engineering knowledge.
 - Show verified runtime age, V10/cycle running duration, current pipeline step, completed steps, next action, and the estimated time to the next scheduled decision point. Surface current and recovered faults plainly.
