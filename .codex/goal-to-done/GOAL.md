@@ -1,4 +1,4 @@
-# Active goal — eliminate avoidable Gate degradation and close verified coverage gaps
+# Completed goal — eliminate avoidable Gate degradation and close verified coverage gaps
 
 - Stop polling completed-five-minute data as if it changed every ten seconds. Schedule each contract once per newly closed five-minute bar, preserve the last verified continuous path during transient read failures, and keep route/position books at the existing two-second protection cadence.
 - Treat Gate public 429 and timeout handling as one endpoint-aware system: bounded read retry, shared backoff from Gate response headers, official futures-host failover, and status that distinguishes a fresh retained snapshot from a genuinely blocking outage. Do not route public market data through the owner's trading credential.

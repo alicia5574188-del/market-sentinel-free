@@ -1,10 +1,10 @@
-# Ready for release — 2026-09-11 Gate recovery and current-evidence coverage
+# Done — 2026-09-11 Gate recovery and current-evidence coverage
 
 - Root cause separated: bulk scan timeout and per-contract candle 429 were recoverable public-endpoint faults; zero orders occurred because six environment candidates produced zero account-authorized routes, not because the whole feed stopped.
 - Public data now uses endpoint-shared 429 backoff, one retry across Gate's two official futures REST hosts, a one-minute bulk radar, completed-bar scheduling and four-row incremental merge into retained continuous paths. Short faults are visible as retained-path quality diagnostics; only an expired retained path blocks the affected market.
 - The proposed broader `衡返` coverage was rejected after its latest chronological fold fell to PF 0.79; strict `衡返` latest fold was PF 0.67 and is now paired-shadow only. The executable exhaustion family retained PF 1.35/1.40/1.37 across three chronological folds; current three-result polarity can later reactivate or reverse a shadow family.
 - Local verification passed 198 direct tests, 3 all-regime tests, 17 architecture/migration tests, TypeScript, ESLint, production build, whitespace validation, frozen-data replay and Cloudflare dry-run. PAPER account/history/credentials are preserved and LIVE remains OFF.
-- Next: upload the reviewed changes to a branch, pass GitHub CI, merge to `main`, then verify advancing production paths and LIVE requested/operational both false.
+- PR #188 passed remote run #678 and merged as `12bd93172592f8c2913fb0a7e1c4e6d59da2f602`. Production run #679 deployed Cloudflare version `37edd9a3-b1c5-48d5-b85e-25b9729f9c5b`; its health gate observed multiple advancing fresh snapshots, positive PAPER equity, retained history endpoints, and LIVE requested/operational both false.
 
 # Done — 2026-09-11 V11 verified-route authority
 
