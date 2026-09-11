@@ -1,4 +1,4 @@
-# Active goal — all-regime positive-edge compounding system
+# Completed goal — all-regime positive-edge compounding system
 
 - Replace V9's single extreme-event authority with a project-specific strategy system that continuously classifies the current completed-candle market environment and routes each opportunity to the strategy designed for that environment.
 - Create several original path mechanisms for directional continuation, balanced rotation, compression release and directional exhaustion. Do not restore the retired named playbooks, indicator templates or global cross-environment win/loss streak.
