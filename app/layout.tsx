@@ -4,9 +4,9 @@ import "./globals.css";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "V9极序·镜转 · PAPER",
+  title: "V10全境·复利引擎 · PAPER",
   description: "全市场极端序列识别、连续极性切换与真实合约参数的Gate永续模拟系统",
-  applicationName: "V9极序·镜转",
+  applicationName: "V10全境·复利引擎",
   manifest: "/manifest.webmanifest",
 };
 

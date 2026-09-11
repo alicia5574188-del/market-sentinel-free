@@ -1,57 +1,53 @@
-# Extreme Sequence Mirror V9 · 极序·镜转
+# All-Regime Compound V10 · 全境·复利引擎
 
-A Gate USDT perpetual market-state system. One `MarketStream` Durable Object is authoritative for market observations, the 1,000 U simulated futures account, and optional owner-controlled LIVE mirroring.
+Gate USDT perpetual PAPER authority for a single compounding 1,000 U account. LIVE remains owner-controlled, default OFF and fail-closed.
 
-## V9 authority
+## Decision authority
 
-- The first pass ranks eligible Gate USDT perpetuals by 24-hour turnover and keeps a thirty-contract liquid universe. It does not decide trades.
-- Completed 5-minute OHLCV is the stable strategy source. One symbol is refreshed every ten seconds, so the full universe is covered in about five minutes without requiring tick history, trades or open interest.
-- `极序·镜转` is the only strategy with PAPER authority. It recognizes two completed-candle extremes: retained boundary displacement (`FISSION`, 裂变) and failed boundary sweep/reclaim (`SNAPBACK`, 回卷).
-- Every valid event opens paired normal and reverse effective shadows with mirrored geometry and identical cost assumptions.
-- Exactly the latest three independent, cost-after shadow outcomes set the next-event polarity. Three normal wins authorize `NORMAL` (顺极). Three normal losses authorize `REVERSE` (逆极) only when the matching three reverse shadows all won. Mixed or stale sequences authorize no PAPER order.
-- Polarity affects only a new event; it never reverses an existing position. A symbol and branch cool down for thirty minutes after close.
-- Current extreme candidates are ranked globally before admission. The account can hold at most three positions, with the existing risk, direction, margin and notional caps applied.
-- The 10% daily return figure remains an aspirational objective, not a quota or guarantee. No trade is forced when the polarity is unresolved or market structure is ordinary.
+V10 scans the thirty most liquid eligible contracts, builds only continuous completed 5-minute paths and separates environment ownership from entry timing:
 
-## Exit and risk
+- `势承`: when broad-market direction is crowded, an apparent single-symbol exhaustion that lacks broad confirmation is treated as continuation, not a guessed top or bottom.
+- `竭转`: when broad-market direction is neutral, a single-symbol path may reverse only after progress collapses and a completed segment reclaims the opposite direction.
+- `衡返` and `压跃`: retain range and compression ownership plus paired research, but have no PAPER authority because the frozen thirty-day replay was not positive in both chronological halves.
 
-- Every effective shadow requires fresh bid/ask, complete Gate contract metadata, integer contracts, enough two-sided depth and turnover, a stop outside ordinary five-minute noise, and an economic profit-arm distance after fees, spread and slippage.
-- Reaching the profit arm does not close the position. It starts a moving protection that locks at least costs plus 0.35R and follows favorable movement, allowing an uncapped runner.
-- The original structural stop remains hard protection until the arm is reached. Same-candle stop/arm ambiguity is settled protection-first; stale prices cannot open or close a simulated or LIVE position.
-- Before profit activation, no-progress expiry can close a trade. The full four-to-six-hour edge-decay horizon remains a hard maximum.
-- Planned risk per order is 10–20 U. The portfolio is bounded by 10% total stop risk, 6.5% same-direction risk, 30% margin, 4× total notional, three open positions and ten-symbol real-time management capacity.
-- Funding is included when applicable. LIVE remains OFF unless the authenticated owner explicitly enables it, and deployment never enables LIVE.
+Every executable event runs exact normal and reverse shadows after full friction. The two approved routes start in their validated direction. Three normal wins select normal; three normal losses may select reverse only when the same events won in reverse and the latest twelve reverse samples have positive mean with profit factor at least 2.5. Mixed results retain the last authorized orientation.
 
-## Data continuity
+The profit arm does not cap profit. It starts dynamic protection; structural invalidation, no-progress and maximum-hold exits remain active.
 
-- The ten-second liquidity scan and the completed-candle strategy refresh are independent. A failed optional bulk scan preserves the last display snapshot but cannot authorize a new order after it becomes stale.
-- Position books and LIVE reconciliation run before optional market work. Held symbols retain real-time priority.
-- Strategy analysis uses only completed five-minute candles plus a fresh final bid/ask validation.
-- A bounded D1 runtime sample is saved every five minutes and retained for fourteen days for review. There are no per-snapshot D1 writes.
+## Evidence contract
 
-## Account cycles and cutover
+`npm run research:all-regime` downloads completed Gate futures 5-minute candles and performs next-bar, chronological replay with 0.14% round-trip friction and 0.025% entry slippage. The frozen thirty-day, twenty-market acceptance run produced:
 
-- V9 archives the preceding PAPER cycle and starts the `极序·镜转` cycle at 1,000 U. If an old PAPER position exists, cutover waits for a fresh executable quote, settles it, archives the cycle and then resets.
-- Old orders and cycle summaries remain available as historical evidence but do not affect current equity, statistics or polarity authorization.
-- Effective shadow pairs continue independently of whether a polarity currently qualifies for PAPER.
-- Owner reset follows the same rule: close at fresh executable prices, archive the current cycle, start at 1,000 U and preserve research shadows. It is rejected while LIVE is enabled or a system LIVE order/position exists.
+| Route | First half | Held-out half |
+| --- | ---: | ---: |
+| 势承 base events | PF 2.11, +23.20% summed event return | PF 1.19, +6.72% |
+| 竭转 base events | PF 1.13, +11.53% summed event return | PF 1.04, +3.51% |
+| Routed account at 0.5× per position | 207 trades, 1,000 → 1,045.16 U, 6.27% max drawdown | 214 trades, 1,000 → 1,046.72 U, 9.23% max drawdown |
 
-## Bounded operation
+These are historical simulations, not a promise of daily profit. PAPER is the forward test.
 
-- Effective-shadow trades and histories are bounded at 240; transitions at 200; signal deduplication keys at 2,000.
-- 43,200 two-second alarm requests and alarm writes per day.
-- 8,000 non-alarm DO write cap plus 2,880 watchdog reserve: 54,080 planned DO writes/day.
-- 5,760 foreground requests at one continuous 15-second page poll plus 1,440 watchdog requests: 50,400 planned DO requests/day.
-- D1 billed writes remain capped at 4,800/day. The five-minute strategy log adds at most 576 billed writes/day including retention pruning.
+## Account and execution
 
-## Verification
+- One account, current-equity compounding, at most three positions and at most 0.5× equity notional per position.
+- Full modeled friction, fresh bid/ask, executable depth, Gate integer contracts and structural stops are mandatory.
+- Aggregate structural risk remains at most 10%; same-direction structural risk remains at most 6.5%.
+- Stale or incomplete data cannot open or close on an old price.
+- Same symbol has one active portfolio trade; same-side agreement merges and strong opposing routes wait.
+
+## Operator page
+
+The public page shows account equity, today's net result, current environment, owning strategy, PAPER positions and complete account trade records. Shadow samples, raw diagnostics, internal route transitions and legacy research remain backend-only. Owner authentication reveals LIVE controls and credentials; public runtime never returns secrets.
+
+## Verification and release
 
 ```bash
+npm run test:all-regime
 npm run test:direct
 npm test
 npm run typecheck
 npm run lint
-git diff --check
+npm run build
+npx wrangler deploy --dry-run --config dist/server/wrangler.json
 ```
 
-Production releases use the GitHub-to-Cloudflare workflow and require advancing health checks with `extreme-sequence-mirror-v1`, arena version 9, the single `极序·镜转` authority, 30-market scanning, unchanged account/risk limits and LIVE explicitly OFF.
+Production releases only from GitHub `main`. The release gate requires `all-regime-compound-v1`, arena version 10, four environment owners, thirty-market scanning, advancing authority health and LIVE explicitly OFF.

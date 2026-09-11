@@ -154,7 +154,7 @@ test("stale radar can never authorize a new strategy observation", () => {
   assert.equal(radarCandidateExecutionAllowed(69_999, 100_000), false);
 });
 
-test("stale bulk radar does not interrupt 极序 completed-five-minute routes in the stable core", async () => {
+test("completed-five-minute state stays available but cannot trade without broad-market context", async () => {
   const { stream } = await makeStream();
   const now = 100_000_000;
   const memory = emptySymbolMemory();
@@ -170,25 +170,23 @@ test("stale bulk radar does not interrupt 极序 completed-five-minute routes in
   stream.runtime.symbols = ["BTC_USDT"];
   stream.runtime.contractMeta.BTC_USDT = { quantoMultiplier: 0.001, maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0.0001 };
   stream.runtime.radar.lastScanAt = null;
-  const fiveMinuteCandles = Array.from({ length: 24 }, (_, index) => {
+  const fiveMinuteCandles = Array.from({ length: 60 }, (_, index) => {
     const open = 104 + index * 0.025;
     if (index === 23) return { time: now / 1_000 - 300, open: 104.55, high: 105.1,
       low: 104.5, close: 104.95, volume: 1_500 };
-    return { time: now / 1_000 - (24 - index) * 300, open, high: open + 0.14,
+    return { time: now / 1_000 - (60 - index) * 300, open, high: open + 0.14,
       low: open - 0.12, close: open + 0.02, volume: 1_000 };
   });
   const stable = completedCandleStrategyCandidate({ symbol: "BTC_USDT", candles: fiveMinuteCandles,
     volume24hUsd: 1_000_000_000, fundingRate: 0.0001, now });
-  assert.ok(stable?.candidate.extremeSequence);
+  assert.ok(stable?.candidate);
   stream.runtime.stableCandidates.BTC_USDT = stable.candidate;
   stream.runtime.stableStructures.BTC_USDT = stable.structure;
   stream.observeArena("BTC_USDT", 104.8, { midpoint: 104.8, zones: [], bands: [], absorption: 0.7, decision: null,
     routes: [], range15m: null, confirmationBySide: { LONG: 0.8, SHORT: 0.1 },
     fakeoutBySide: { LONG: 0.2, SHORT: 0.8 } }, now, 0.0002, 104.79, 104.81, 1_000_000, 1_000_000);
   const opened = Object.values(stream.runtime.strategyArena.open) as ArenaTrade[];
-  assert.equal(opened.length, 2, "paired 极序 shadows keep learning when bulk radar is stale");
-  assert.ok(opened.every((trade) => trade.context.structureSource === "CANDLE_5M"));
-  assert.equal(new Set(opened.map((trade) => `${trade.strategyId}:${trade.orientation ?? "NORMAL"}`)).size, opened.length);
+  assert.equal(opened.length, 0, "one-symbol state cannot impersonate the required broad-market environment");
 });
 
 function position(id: string, symbol: string, patch: Partial<PaperPosition> = {}): PaperPosition {
@@ -459,10 +457,10 @@ test("manual PAPER reset refuses to price an open position from stale evidence",
   assert.equal(storage.putCalls, 0);
 });
 
-test("manual reset archives the old futures account while preserving 极序 research", async () => {
+test("manual reset archives the old futures account while preserving all-regime research", async () => {
   const { stream } = await makeStream();
   const now = Date.now();
-  const strategyId = "extreme_sequence_mirror";
+  const strategyId = "momentum_carry";
   stream.runtime.strategyArena.portfolioEquity = 980;
   stream.runtime.strategyArena.portfolioResolved = 3;
   stream.runtime.strategyArena.strategies[strategyId].shadowResolved = 7;
@@ -545,7 +543,7 @@ test("restart preserves committed OPEN authority, cancels PREPARED work and warm
   assert.equal(stream.authorityView.positions.BTC_USDT.status, "OPEN");
 });
 
-test("极序 cutover archives the old PAPER cycle and starts a fresh account", async () => {
+test("all-regime cutover archives the old PAPER cycle and starts a fresh account", async () => {
   const seed = await makeStream();
   const saved = structuredClone(seed.stream.runtime);
   saved.version = "state-conditioned-expectancy-v5";
@@ -558,8 +556,8 @@ test("极序 cutover archives the old PAPER cycle and starts a fresh account", a
   saved.equityVersion = 7;
 
   const { stream } = await makeStream(saved);
-  assert.equal(stream.runtime.version, "extreme-sequence-mirror-v1");
-  assert.equal(stream.runtime.strategyArena.version, 9);
+  assert.equal(stream.runtime.version, "all-regime-compound-v1");
+  assert.equal(stream.runtime.strategyArena.version, 10);
   assert.equal(stream.runtime.strategyArena.portfolioCycle, 4);
   assert.equal(stream.runtime.strategyArena.portfolioEquity, 1_000);
   assert.equal(stream.runtime.strategyArena.portfolioResolved, 0);
@@ -922,16 +920,16 @@ test("health status is compact while retaining every release gate", async () => 
   const response = await stream.fetch(new Request("https://market-stream/health-status"));
   const status = await response.json();
 
-  assert.equal(status.version, "extreme-sequence-mirror-v1");
-  assert.equal(status.strategyArena.version, 9);
-  assert.equal(status.strategyArena.playbookCount, 1);
-  assert.equal(status.strategyArena.catalogSize, 1);
+  assert.equal(status.version, "all-regime-compound-v1");
+  assert.equal(status.strategyArena.version, 10);
+  assert.equal(status.strategyArena.playbookCount, 4);
+  assert.equal(status.strategyArena.catalogSize, 4);
   assert.equal(status.strategyArena.portfolioEquity, 1_000);
   assert.equal(status.strategyArena.rules.minimumPortfolioRiskUsdt, 10);
   assert.equal(status.strategyArena.rules.empiricalCostFloorRate, 0.0014);
-  assert.equal(status.strategyArena.rules.authorityWindowPriority, "EXTREME_STREAK_POLARITY");
-  assert.equal(status.strategyArena.rules.extremeSequenceVersion, 1);
-  assert.equal(status.strategyArena.rules.extremeSequenceAuthority, true);
+  assert.equal(status.strategyArena.rules.authorityWindowPriority, "STATE_CONDITIONED_EXPECTANCY");
+  assert.equal(status.strategyArena.rules.allRegimeVersion, 1);
+  assert.equal(status.strategyArena.rules.extremeSequenceAuthority, false);
   assert.equal(status.strategyArena.rules.generatedRouteAuthority, false);
   assert.equal(status.strategyArena.rules.legacyStrategyAuthority, false);
   assert.equal(status.strategyArena.rules.paperCycleResetOnCutover, true);

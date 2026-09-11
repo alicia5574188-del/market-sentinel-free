@@ -1,4 +1,4 @@
-export const SYSTEM_VERSION = "extreme-sequence-mirror-v1";
+export const SYSTEM_VERSION = "all-regime-compound-v1";
 export const PORTFOLIO_RISK_CAP = 0.10;
 export const CORRELATED_DIRECTION_RISK_CAP = 0.065;
 export const STALE_AFTER_MS = 5_000;
