@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-const DATASET = process.env.RESEARCH_DATASET ?? "/tmp/v11-replay/all-regime-candles.json";
+const DATASET = process.env.RESEARCH_DATASET ?? "/tmp/all-regime-candles.json";
 const FRICTION = 0.0014;
 const ENTRY_SLIPPAGE = 0.00025;
 const raw = JSON.parse(readFileSync(DATASET, "utf8"));
