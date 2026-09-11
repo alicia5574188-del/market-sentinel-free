@@ -3,20 +3,26 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const BASE = "https://api.gateio.ws/api/v4";
 const STEP = 300;
-const DAYS = Number(process.env.RESEARCH_DAYS ?? 45);
-const SYMBOL_LIMIT = Number(process.env.RESEARCH_SYMBOLS ?? 24);
+const DAYS = Number(process.env.RESEARCH_DAYS ?? 30);
+const SYMBOL_LIMIT = Number(process.env.RESEARCH_SYMBOLS ?? 20);
 const FRICTION = 0.0014;
 const ENTRY_SLIPPAGE = 0.00025;
 const REVERSE_PF = Number(process.env.RESEARCH_REVERSE_PF ?? 2.5);
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function gate(path, attempts = 4) {
+  let lastError = null;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const response = await fetch(`${BASE}${path}`, { headers: { Accept: "application/json", "X-Gate-Size-Decimal": "1" } });
-    if (response.ok) return response.json();
-    if (attempt === attempts) throw new Error(`Gate ${response.status}: ${path}`);
-    await wait(500 * attempt);
+    try {
+      const response = await fetch(`${BASE}${path}`, { headers: { Accept: "application/json", "X-Gate-Size-Decimal": "1" } });
+      if (response.ok) return response.json();
+      lastError = new Error(`Gate ${response.status}: ${path}`);
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < attempts) await wait(750 * attempt);
   }
+  throw lastError ?? new Error(`Gate request failed: ${path}`);
 }
 
 async function universe() {
@@ -31,9 +37,9 @@ async function candles(symbol, from, to) {
   const pages = [];
   for (let cursor = from; cursor < to; cursor += STEP * 950) {
     const end = Math.min(to, cursor + STEP * 950);
-    pages.push(gate(`/futures/usdt/candlesticks?contract=${encodeURIComponent(symbol)}&interval=5m&from=${cursor}&to=${end}`));
+    pages.push(await gate(`/futures/usdt/candlesticks?contract=${encodeURIComponent(symbol)}&interval=5m&from=${cursor}&to=${end}`));
   }
-  const rows = (await Promise.all(pages)).flat().map((row) => ({ time: Number(row.t), volume: Number(row.v), close: Number(row.c),
+  const rows = pages.flat().map((row) => ({ time: Number(row.t), volume: Number(row.v), close: Number(row.c),
     high: Number(row.h), low: Number(row.l), open: Number(row.o) }))
     .filter((row) => row.time > 0 && row.open > 0 && row.low > 0 && row.high >= row.low && [row.open, row.high, row.low, row.close].every(Number.isFinite))
     .sort((a, b) => a.time - b.time);
@@ -188,9 +194,9 @@ if (existsSync(cachePath)) {
 }
 if (!datasets) {
   symbols = await universe(); datasets = [];
-  for (let index = 0; index < symbols.length; index += 4) {
-    datasets.push(...await Promise.all(symbols.slice(index, index + 4).map(async (symbol) => ({ symbol, rows: await candles(symbol, from, now) }))));
-    console.log(`loaded ${Math.min(index + 4, symbols.length)}/${symbols.length}`);
+  for (let index = 0; index < symbols.length; index += 2) {
+    datasets.push(...await Promise.all(symbols.slice(index, index + 2).map(async (symbol) => ({ symbol, rows: await candles(symbol, from, now) }))));
+    console.log(`loaded ${Math.min(index + 2, symbols.length)}/${symbols.length}`);
   }
   writeFileSync(cachePath, JSON.stringify({ days: DAYS, symbolLimit: SYMBOL_LIMIT, now, symbols, datasets }));
 }

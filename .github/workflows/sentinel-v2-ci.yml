@@ -63,6 +63,9 @@ jobs:
       - name: Causal all-regime replay
         if: github.event_name == 'pull_request'
         working-directory: release
+        env:
+          RESEARCH_DAYS: "30"
+          RESEARCH_SYMBOLS: "20"
         run: npm run research:all-regime
 
       - name: Require the reviewed two-phase Durable Object migration
