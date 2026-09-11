@@ -1,10 +1,11 @@
-# In progress — 2026-09-11 all-regime compounding redesign
+# Done — 2026-09-11 all-regime compounding redesign
 
 - User rejected V9 because one extreme-event strategy cannot represent an all-market adaptive system and because code-conformance tests did not establish opportunity coverage or positive expectancy.
 - Implemented `全境·复利引擎` with four original environment owners: `势承`, `衡返`, `压跃`, and `竭转`. Every route uses completed 5-minute path geometry; broad-market breadth precedes single-symbol strategy routing.
 - A strict next-bar replay on thirty days and twenty high-liquidity contracts charged 0.14% round-trip friction plus 0.025% entry slippage. Ordinary trend, range, and compression routes failed and remain observation-only. Two routes were positive in both chronological halves: crowded-direction `势承` (PF 2.11 / 1.19) and neutral-market `竭转` (PF 1.13 / 1.04).
 - The final 0.5×-notional, maximum-three-position account replay produced 207 / 214 trades and 1,000→1,045.16 / 1,000→1,046.72 U in the first / held-out half, with 6.27% / 9.23% maximum drawdown. A reverse switch now additionally requires twelve positive reverse samples and PF≥2.5; mixed results retain the prior orientation.
-- Production authority, V10 page simplification, version cutover, release gates and tests are implemented. Full verification and production release remain pending; LIVE remains OFF.
+- Local acceptance passed 193 direct tests, 3 all-regime engine tests, 16 architecture/migration tests, TypeScript, ESLint, the production build, whitespace validation and a Cloudflare dry-run. PR #185 run #668 repeated the full suite plus the frozen 30-day/20-market causal replay.
+- Main commit `3b609ae1327c6c40c4c22f3760375cd276ecb33b` passed production run #669. The advancing health gate confirmed `all-regime-compound-v1`, arena 10, the four-strategy catalog, positive account equity and LIVE explicitly OFF. Cloudflare version `4664b243-092e-4f05-8731-a8eb9dda2c6c` is live.
 
 # Done — 2026-09-11 original 极序·镜转 V9 release
 
