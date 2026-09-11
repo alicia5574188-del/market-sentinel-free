@@ -99,6 +99,23 @@ test("stale execution data remains observation-only", () => {
   assert.match(state.currentRouteChecks["BTC_USDT:momentum_carry"]?.blocker ?? "", /不新鲜/);
 });
 
+test("a fourth account trade is admitted when risk, margin and data capacity still fit", () => {
+  const state = observeStrategyArena({ state: initialStrategyArena(1), observation: observation(2_000_000) });
+  const template = state.portfolioOpen.BTC_USDT;
+  delete state.portfolioOpen.BTC_USDT;
+  for (const symbol of ["AAA_USDT", "BBB_USDT", "CCC_USDT"]) {
+    state.portfolioOpen[symbol] = { ...template, id: `PORTFOLIO:${symbol}`, symbol,
+      plannedRisk: 1, notional: 10, margin: 1 };
+  }
+  const input = observation(3_000_000);
+  input.candidate.id = "UNI_USDT:CANDLE5M:ANOMALY:SHORT:3000000";
+  input.candidate.symbol = "UNI_USDT";
+  input.candidate.allRegimeRoutes![0] = { ...input.candidate.allRegimeRoutes![0], structureId: "turn:3000000" };
+  input.globalOpportunityRank = 7;
+  const admitted = observeStrategyArena({ state, observation: input });
+  assert.ok(admitted.portfolioOpen.UNI_USDT, "position count and global rank must not override available account capacity");
+});
+
 test("profit arm starts a runner and a later protection closes it", () => {
   let state = observeStrategyArena({ state: initialStrategyArena(1), observation: observation() });
   const trade = state.portfolioOpen.BTC_USDT;

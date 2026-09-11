@@ -1059,7 +1059,7 @@ jobs:
               .runtime.strategyArena.rules.legacyStrategyAuthority == false and
               .runtime.strategyArena.rules.paperCycleResetOnCutover == true and
               .runtime.strategyArena.rules.streakLength == 3 and
-              .runtime.strategyArena.rules.maxPortfolioPositions == 3 and
+              .runtime.strategyArena.rules.maxPortfolioPositions == null and
               .runtime.strategyArena.rules.profitArmIsExit == false and
               .runtime.strategyArena.rules.dailyObjectiveRate == 0.10 and
               .runtime.strategyArena.rules.dailyObjectiveIsQuota == false and
@@ -1165,7 +1165,7 @@ jobs:
             .runtime.strategyArena.rules.paperCycleResetOnCutover == true and
             .runtime.strategyArena.rules.authorityWindowPriority == "STATE_CONDITIONED_EXPECTANCY" and
             .runtime.strategyArena.rules.streakLength == 3 and
-            .runtime.strategyArena.rules.maxPortfolioPositions == 3 and
+            .runtime.strategyArena.rules.maxPortfolioPositions == null and
             .runtime.strategyArena.rules.profitArmIsExit == false and
             .runtime.strategyArena.rules.dailyObjectiveIsQuota == false and
             .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 10 and

@@ -448,3 +448,9 @@
 
 - Resident markets are intentionally staggered, so `zero successes` in one alarm describes only that alarm's scheduled subset. It must never be expanded to the ten-market pool or reset global authority while another executable snapshot remains within the eight-second freshness window.
 - Isolated subset misses remain visible in rolling feed quality and per-market readiness. Global reconnect is reserved for actual authority expiry; a failed protected position or formed execution route remains an immediate exposure-specific trading block.
+# 2026-09-11 — Position count is an outcome, not an admission rule
+
+- Remove the fixed three-position and top-three-rank vetoes. Simultaneous positions are determined by current executable data plus the unchanged 10% portfolio risk, 6.5% same-direction risk, 30% margin, integer-contract, depth and one-position-per-symbol rules.
+- The ten-symbol real-time surface remains a physical management boundary, not a promised ten-position target. It is not expanded in this correction because doing so would change the repaired Gate request cadence.
+- LIVE uses the selected PAPER trade's notional-to-opening-equity fraction against actual Gate equity. Exchange lot rounding may make the realized fraction differ slightly; failure to fit actual funds, risk or economics skips that LIVE entry and leaves PAPER unchanged.
+- “Exact strategy copy” includes the latest PAPER active protection stop, not only its original structural stop. Strategy family mapping must also preserve reversal/range/trend identity in the LIVE record.

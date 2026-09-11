@@ -106,7 +106,7 @@ type StrategyArena = { version: 11; startedAt: number; catalogSize: number; play
     independentDirections?: boolean; generatedRouteAuthority?: boolean; legacyStrategyAuthority?: boolean;
     paperCycleResetOnCutover?: boolean; adaptivePolicyVersion?: number; adaptiveMinimumAnalogSamples?: number;
     extremeSequenceAuthority?: boolean; strategyName?: string; extremeSequenceVersion?: number; streakLength?: number;
-    streakMaxSpanMs?: number; sameBranchSymbolCooldownMs?: number; maxPortfolioPositions?: number; profitArmIsExit?: boolean;
+    streakMaxSpanMs?: number; sameBranchSymbolCooldownMs?: number; maxPortfolioPositions?: number | null; profitArmIsExit?: boolean;
     dailyObjectiveRate?: number; dailyObjectiveIsQuota?: boolean; reverseSameEventWinsRequired?: number } };
 type RegimeCandidate = { id: string; symbol: string; channel: CandidateChannel; regime: RegimeKind; side: Side; score: number;
   referencePrice: number; moveRate: number; trendRate: number; trendEfficiency: number; volatilityRatio: number;
@@ -639,8 +639,10 @@ function ArenaOpenCard({ trade, mark }: { trade: ArenaTrade; mark: number | unde
   const current = mark ?? trade.lastPrice;
   const gross = current ? direction * (current - trade.entryPrice) / Math.max(trade.entryPrice, 1e-9) : 0;
   const net = gross - trade.context.modeledCostRate;
+  const netPnl = trade.notional * net;
+  const marginReturn = trade.margin > 0 ? netPnl / trade.margin : 0;
   const orientation = trade.orientation === "REVERSE" ? "反向" : "正向";
-  return <article className="order-card"><div><span className={`side ${trade.side.toLowerCase()}`}>{trade.side === "LONG" ? "多" : "空"}</span><div><h3>{trade.symbol.replace("_", "/")} · {trade.strategyName}</h3><p>{environmentLabel(trade.context.allRegimeEnvironment)} · {orientation} · {trade.reason}</p></div></div><strong className={net >= 0 ? "positive" : "negative"}>{current ? `${signed(trade.notional * net)} U · ${signed(net * 100)}%` : "等待行情"}</strong><dl><div><dt>进场</dt><dd>{num(trade.entryPrice, 5)}</dd></div><div><dt>当前价</dt><dd>{num(current, 5)}</dd></div><div><dt>{trade.profitArmedAt ? "移动保护" : "结构止损"}</dt><dd>{num(trade.activeStopPrice ?? trade.stopPrice, 5)}</dd></div><div><dt>盈利启动位</dt><dd>{num(trade.targetPrice, 5)} · 不封顶</dd></div></dl></article>;
+  return <article className="order-card"><div><span className={`side ${trade.side.toLowerCase()}`}>{trade.side === "LONG" ? "多" : "空"}</span><div><h3>{trade.symbol.replace("_", "/")} · {trade.strategyName}</h3><p>{environmentLabel(trade.context.allRegimeEnvironment)} · {orientation} · {trade.reason}</p></div></div><strong className={net >= 0 ? "positive" : "negative"}>{current ? `${signed(netPnl)} U · ${signed(net * 100)}%` : "等待行情"}</strong><dl><div><dt>进场</dt><dd>{num(trade.entryPrice, 5)}</dd></div><div><dt>当前价</dt><dd>{num(current, 5)}</dd></div><div><dt>{trade.profitArmedAt ? "移动保护" : "结构止损"}</dt><dd>{num(trade.activeStopPrice ?? trade.stopPrice, 5)}</dd></div><div><dt>盈利启动位</dt><dd>{num(trade.targetPrice, 5)} · 不封顶</dd></div><div><dt>合约名义价值</dt><dd>{num(trade.notional, 2)} U</dd></div><div><dt>模拟杠杆</dt><dd>{trade.leverage}×</dd></div><div><dt>占用保证金</dt><dd>{num(trade.margin, 2)} U</dd></div><div><dt>保证金净收益率</dt><dd className={marginReturn >= 0 ? "positive" : "negative"}>{current ? `${signed(marginReturn * 100)}%` : "—"}</dd></div><div><dt>计划最大风险</dt><dd>{num(trade.plannedRisk, 2)} U</dd></div></dl></article>;
 }
 
 function Setting({ title, detail, value, tone = "" }: { title: string; detail: string; value: string; tone?: string }) {
