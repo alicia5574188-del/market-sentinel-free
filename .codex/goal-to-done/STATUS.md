@@ -1,3 +1,9 @@
+# In progress — 2026-09-12 collapsed PAPER history archive
+
+- Confirmed the Records tab currently renders every archived PAPER order immediately beneath the current-cycle and blocked-candidate sections.
+- Changing only the client presentation: the archive will default closed, show cycle/order counts, and instantiate old order rows only after an explicit operator action.
+- Trading authority, runtime payload, account state, history, credentials and LIVE controls remain unchanged.
+
 # Done — 2026-09-12 LIVE continuity and candidate audit
 
 - Root causes reproduced in source: every Durable Object restart overwrote saved LIVE intent with `requestedEnabled=false`; any symbol-level leverage/entry exception escaped the staging loop into `setLiveMode`, which disabled and cleaned up the whole LIVE runtime; the phone UI hid its order view whenever LIVE was OFF and filtered closed positions out.

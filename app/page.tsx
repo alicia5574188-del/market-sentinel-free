@@ -216,6 +216,7 @@ export default function Home() {
   const [paperResetBusy, setPaperResetBusy] = useState(false);
   const [paperResetNotice, setPaperResetNotice] = useState<string | null>(null);
   const [paperResetError, setPaperResetError] = useState<string | null>(null);
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const tabScroll = useRef<Record<Tab, number>>({ brain: 0, orders: 0, live: 0, history: 0, settings: 0 });
   const selectTab = (next: Tab) => {
     if (next === tab) return;
@@ -487,7 +488,14 @@ export default function Home() {
 
     <section className="history-panel" hidden={activeTab !== "history"}>{hasRuntimeSnapshot ? <><div className="section-heading"><div><h2>当前模拟周期</h2><p>只统计本轮真正计入1000 U账户的订单。</p></div><span>{arena?.portfolioResolved ?? "—"} 笔</span></div>{!currentPortfolioHistory.length ? <div className="empty"><b>本轮还没有已完成订单</b><p>当前持仓结算后会出现在这里。</p></div> : <div className="history-table">{currentPortfolioHistory.map((trade) => <ArenaTradeRecord key={trade.id} trade={trade} />)}</div>}</> : <div className="empty"><b>正在读取模拟交易记录</b><p>收到后台真实快照前不显示空记录。</p></div>}</section>
     {hasRuntimeSnapshot && <section className="history-panel" hidden={activeTab !== "history"}><div className="section-heading"><div><h2>未成交候选</h2><p>只记录已经形成方向与进场结构、但在执行、授权或账户准入阶段被阻止的候选；尚未形成路线的不算订单。</p></div><span>{blockedCandidates.length} 条</span></div>{!blockedCandidates.length ? <div className="empty"><b>暂无已形成但被阻止的候选</b><p>以后每个最终阻止原因都会保留在这里。</p></div> : <div className="candidate-audit">{blockedCandidates.map((candidate) => <article key={candidate.id}><div><small>{time(candidate.blockedAt)} · {candidate.stage}</small><b>{candidate.symbol.replace("_", "/")} · {candidate.strategyName}</b></div><span className={`side ${candidate.side.toLowerCase()}`}>{candidate.side === "LONG" ? "多" : "空"}</span><dl><div><dt>进场</dt><dd>{num(candidate.entryPrice, 5)}</dd></div><div><dt>止损</dt><dd>{num(candidate.stopPrice, 5)}</dd></div><div><dt>盈利臂</dt><dd>{num(candidate.targetPrice, 5)}</dd></div></dl><p><b>{candidate.code}</b> · {candidate.reason}</p></article>)}</div>}</section>}
-    {hasRuntimeSnapshot && <section className="history-panel" hidden={activeTab !== "history"}><div className="section-heading"><div><h2>历史归档</h2><p>旧版本和已重置周期只用于对照，不计入当前权益、胜率或策略授权。</p></div><span>{arena?.archivedPortfolioCycles.length ?? "—"} 个周期</span></div>{!archivedPortfolioHistory.length ? <div className="empty"><b>暂无历史归档订单</b></div> : <div className="history-table">{archivedPortfolioHistory.map((trade) => <ArenaTradeRecord key={`archive:${trade.id}`} trade={trade} />)}</div>}</section>}
+    {hasRuntimeSnapshot && <section className="history-archive" hidden={activeTab !== "history"}>
+      <button className="archive-toggle" type="button" aria-expanded={archiveOpen} onClick={() => setArchiveOpen((open) => !open)}>
+        <div><h2>历史归档</h2><p>旧版本和已重置周期已收起保存，不计入当前权益、胜率或策略授权。</p></div>
+        <span>{arena?.archivedPortfolioCycles.length ?? "—"} 个周期 · {archivedPortfolioHistory.length} 笔</span>
+        <strong>{archiveOpen ? "收起归档 ↑" : "查看归档 ›"}</strong>
+      </button>
+      {archiveOpen && <div className="archive-content">{!archivedPortfolioHistory.length ? <div className="empty"><b>暂无历史归档订单</b></div> : <div className="history-table">{archivedPortfolioHistory.map((trade) => <ArenaTradeRecord key={`archive:${trade.id}`} trade={trade} />)}</div>}</div>}
+    </section>}
 
     <section className="settings-panel" hidden={activeTab !== "settings"}>
       <button className="setting-row" type="button" onClick={() => auth.authenticated ? void fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(() => { setAuth({ ...auth, authenticated: false }); setRuntime(runtime ? { ...runtime, live: undefined } : runtime); setTab("settings"); }) : setShowLogin(true)}><div><b>所有者账户</b><p>{auth.authenticated ? "安全登录有效30天；每次打开页面自动续期。实盘配置只在所有者登录后的实盘页显示。" : "登录后才会显示实盘入口；公开页面只显示模拟系统。"}</p></div><span className={`setting-value ${auth.authenticated ? "online" : "locked"}`}>{auth.authenticated ? "owner · 退出 ›" : "登录 ›"}</span></button>

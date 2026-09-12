@@ -125,6 +125,12 @@
 
 # Decisions
 
+## 2026-09-12 — Archived PAPER orders are opt-in detail
+
+- The Records tab keeps the current PAPER cycle and prospective blocked-candidate audit visible because they describe the active system.
+- Prior cycles remain preserved but collapse into a single archive entry by default. Archived trade components are created only while that entry is open, so old records no longer dominate the page or its mobile DOM.
+- Opening or closing the archive is presentation state only and cannot mutate stored trades, cycle summaries, PAPER equity or LIVE state.
+
 ## 2026-09-12 — Depth is a size cap, not a fixed eligibility threshold
 
 - Strategy qualification does not depend on whether the simulated account contains 1,000 U or another amount. Capital enters only after a route has formed, when the executable number of Gate contracts is calculated.

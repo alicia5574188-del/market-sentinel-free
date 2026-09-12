@@ -226,6 +226,10 @@ test("V12 verified-route engine is causal, selective, cost-aware, and the sole L
   assert.doesNotMatch(page, />观察影子</);
   assert.match(page, /当前模拟周期/);
   assert.match(page, /历史归档/);
+  assert.match(page, /const \[archiveOpen, setArchiveOpen\] = useState\(false\)/);
+  assert.match(page, /className="archive-toggle" type="button" aria-expanded=\{archiveOpen\}/);
+  assert.match(page, /\{archiveOpen && <div className="archive-content">/);
+  assert.match(page, /查看归档 ›/);
   assert.match(page, /runtimeBackendOperational\(runtime\)/);
   assert.match(page, /RUNTIME_RETRY_MS = 3_000/);
   assert.doesNotMatch(page, /页面摘要延迟，交易后台继续独立运行/);
