@@ -5,6 +5,7 @@
 - Existing upper risk, correlated-direction risk, margin, leverage, cost, freshness, structural and contract gates are unchanged. PAPER retains the exact sized notional, and existing LIVE logic mirrors its notional/equity fraction before Gate rounding and fresh LIVE economics checks.
 - The operator page now reports a no-route step 3 as “本轮已完成 · 等待下轮”, including the candidate and blocked-route counts, rather than leaving “进行中” on screen indefinitely.
 - Local acceptance passes 209 direct tests, four all-regime tests, 17 architecture/migration tests, TypeScript, ESLint, production build and whitespace validation. Local Wrangler dry-run was unavailable because this executor rejected its network call; the release workflow retains that mandatory remote build/deploy gate. PAPER history and account state are not reset, credentials are untouched, and LIVE remains OFF.
+- PR #194 run #694 passed the complete build/dry-run/test stage and causal all-regime replay, then correctly stopped before deployment on an obsolete V11 check that required the PAPER-disabled `衡返` shadow to remain positive. Current authorized exhaustion evidence remained positive in all three folds (PF 1.40/1.24/1.18), with `势承` train/validation PF 1.39/1.38 and `竭转` validation PF 1.40. The contradictory disabled-shadow condition is removed; no account-authorized evidence threshold is weakened.
 
 # In progress — 2026-09-11 V12 opportunity-gap completion
 

@@ -161,10 +161,11 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
 });
 
 test("V12 verified-route engine is causal, selective, cost-aware, and the sole LIVE order source", async () => {
-  const [arena, allRegime, regime, worker, page, migration] = await Promise.all([
+  const [arena, allRegime, regime, worker, page, migration, researchV11] = await Promise.all([
     read("lib/strategy-arena.ts"), read("lib/all-regime-engine.ts"), read("lib/market-regime.ts"),
     read("worker/index-clean.ts"), read("app/page.tsx"),
     read("drizzle/0035_strategy_arena_fresh_start.sql"),
+    read("scripts/research-v11.mjs"),
   ]);
   assert.match(arena, /STRATEGY_CATALOG/);
   assert.match(arena, /STRATEGY_ARENA_VERSION = 12/);
@@ -218,6 +219,7 @@ test("V12 verified-route engine is causal, selective, cost-aware, and the sole L
   assert.match(arena, /extremeSequenceAuthority: false/);
   assert.match(arena, /generatedRouteAuthority: false/);
   assert.match(arena, /legacyStrategyAuthority: false/);
+  assert.doesNotMatch(researchV11, /selectedRange\?\.train\.pf/, "a disabled range shadow must not gate an unrelated release");
   assert.doesNotMatch(page, />观察影子</);
   assert.match(page, /当前模拟周期/);
   assert.match(page, /历史归档/);

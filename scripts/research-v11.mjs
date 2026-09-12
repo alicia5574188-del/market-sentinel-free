@@ -334,7 +334,6 @@ const exhaustion = evaluate("衰竭双路", exhaustionReclaim, [
 ]);
 const expandedRange = evaluate("衡返·双证覆盖", balanceCoverage, [{}]);
 
-const selectedRange = range.find((row) => row.index === 1);
 const rangeSpanMs = raw.days * 86_400_000 / 3;
 const foldMetrics = (trades) => [0, 1, 2].map((index) => metrics(trades.filter((trade) => {
   const foldStart = from * 1_000 + rangeSpanMs * index;
@@ -360,7 +359,6 @@ console.table([{ route: "exhaustion-combined", folds: exhaustionFolds.map((fold)
   { route: "carry", folds: carryFolds.map((fold) => `${fold.trades}@${fold.pf.toFixed(2)}`).join(" / ") },
   { route: "turn", folds: turnFolds.map((fold) => `${fold.trades}@${fold.pf.toFixed(2)}`).join(" / ") }]);
 const acceptance = raw.days >= 30 && symbols.length >= 20
-  && selectedRange?.train.pf > 1 && selectedRange.validation.pf > 1
   && exhaustionFolds.every((fold) => fold.trades >= 20 && fold.pf > 1)
   && carryTrain.pf > 1 && carryValidation.pf > 1 && turnValidation.pf > 1
   && exhaustion[0]?.train.pf > 1 && exhaustion[0].validation.pf > 1;

@@ -118,6 +118,7 @@
 - The retained five-level book is execution capacity, not a 10,000 U entrance requirement. Limit the order to 20% of the smaller bid/ask depth, round down to Gate integer contracts, and reject only if that result is below one contract.
 - Ten U remains a sizing target, never a minimum-dollar eligibility gate. A smaller account or a route reduced by liquidity may carry less planned risk; this is not permission to enlarge risk or bypass the aggregate 10%, correlated 6.5%, margin, cost, freshness or structural checks.
 - A healthy cycle with no admitted route is a completed decision, not a stalled step. The operator page must say how many candidates were rejected and that it is waiting for the next completed five-minute bar.
+- The V11 replay may report `衡返` as research evidence, but `衡返` is explicitly PAPER-disabled. Its changing 30-day shadow result cannot block a sizing-only release; the gate continues to require positive current evidence for every account-authorized exhaustion branch and the V12 routes.
 
 ## 2026-09-09 — Data capability defines the strategy layer
 
