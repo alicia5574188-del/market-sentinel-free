@@ -1,3 +1,11 @@
+# Release candidate — 2026-09-12 LIVE continuity and candidate audit
+
+- Root causes reproduced in source: every Durable Object restart overwrote saved LIVE intent with `requestedEnabled=false`; any symbol-level leverage/entry exception escaped the staging loop into `setLiveMode`, which disabled and cleaned up the whole LIVE runtime; the phone UI hid its order view whenever LIVE was OFF and filtered closed positions out.
+- LIVE intent now survives deployment while `operational` remains false until fresh Gate reconciliation. Definitive per-symbol leverage/entry failures become retained skips and later staged symbols continue; ambiguous entry responses reserve their risk, reconcile for six seconds and cannot replay the same PAPER plan.
+- Protective-stop timeouts now reconcile the deterministic tag for six seconds instead of causing an immediate false exit. Explicit Gate rejection or confirmed missing protection still uses the fail-closed reduce-only market exit and records the exact stage/label.
+- Added bounded checkpoint-only LIVE audit and blocked PAPER candidate audit. The owner can view current/closed real positions, fills, exits, skips and safety incidents even while LIVE is OFF; Trade Records shows only formed candidates with direction and entry/stop/target plus terminal execution/authority/account blocker.
+- Local acceptance currently passes 218 direct tests plus the new exact LIVE regressions (62 focused), four all-regime tests, 17 architecture/migration tests, TypeScript, ESLint, production build, Wrangler dry-run and whitespace validation. Release through reviewed GitHub `main` and production verification are pending.
+
 # Done — 2026-09-12 meaningful PAPER notional admission
 
 - Production opened a 龙虾 `脉折` short at 0.115 with a 0.14307075 structural stop. The 24.41% stop plus modeled cost reduced risk-sized notional to 69 U and forced 1× leverage; proportional 10 U LIVE copying could not afford Gate's one-contract lot.

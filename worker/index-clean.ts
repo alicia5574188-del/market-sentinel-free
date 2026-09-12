@@ -118,6 +118,18 @@ type LivePosition = PaperPosition & {
   exchangeUpdatedAt: number;
 };
 
+type LiveEntrySkipCode = LiveEntrySizingCode | "LEVERAGE_REJECTED" | "ENTRY_REJECTED" | "SUBMISSION_UNCONFIRMED";
+type LiveAuditEvent = {
+  id: string;
+  observedAt: number;
+  symbol: string | null;
+  planId: string | null;
+  stage: "LEVERAGE" | "ENTRY_SUBMIT" | "ENTRY_FILLED" | "STOP_CREATE" | "STOP_UPDATE" | "EXIT_REQUEST" | "POSITION_CLOSED" | "LIVE_CONTROL";
+  level: "INFO" | "SKIPPED" | "RECOVERING" | "FORCED_EXIT" | "LIVE_STOPPED";
+  reason: string;
+  gateLabel: string | null;
+};
+
 type LiveRuntime = {
   requestedEnabled: boolean;
   operational: boolean;
@@ -129,12 +141,27 @@ type LiveRuntime = {
   credentialConfigured: boolean;
   entries: Record<string, LiveEntry | null>;
   positions: Record<string, LivePosition | null>;
-  entrySkips: Record<string, { planId: string; symbol: string; code: LiveEntrySizingCode; reason: string; observedAt: number } | null>;
+  entrySkips: Record<string, { planId: string; symbol: string; code: LiveEntrySkipCode; reason: string; observedAt: number } | null>;
+  auditEvents: LiveAuditEvent[];
 };
 
 function initialLiveState(): LiveRuntime {
   return { requestedEnabled: false, operational: false, changedAt: null, lastSyncAt: null, lastError: null,
-    equity: null, available: null, credentialConfigured: false, entries: {}, positions: {}, entrySkips: {} };
+    equity: null, available: null, credentialConfigured: false, entries: {}, positions: {}, entrySkips: {}, auditEvents: [] };
+}
+
+function gateLabelFromError(error: unknown) {
+  const match = safeError(error).match(/Gate\s+\d{3}(?:\s+([A-Z][A-Z0-9_]+))?/);
+  return match?.[1] ?? null;
+}
+
+function definitiveGateRejection(error: unknown) {
+  const status = Number(safeError(error).match(/Gate\s+(\d{3})/)?.[1] ?? 0);
+  return status >= 400 && status < 500 && ![408, 409, 425, 429].includes(status);
+}
+
+function liveFailureRequiresOff(error: unknown) {
+  return /未纳管|与模拟账户订单不一致|方向与系统记录冲突|撤单未确认|系统挂单未撤销/.test(safeError(error));
 }
 
 type RuntimeState = {
@@ -344,7 +371,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           bankruptcyOutbox: strategyCutover ? [] : saved.bankruptcyOutbox ?? [],
           live: { ...initialLiveState(), ...(saved.live ?? {}), entries: saved.live?.entries ?? {},
             positions: saved.live?.positions ?? {}, entrySkips: saved.live?.entrySkips ?? {},
-            requestedEnabled: false, operational: false }, analysisMs: [], state: "WARMING" };
+            auditEvents: saved.live?.auditEvents ?? [], requestedEnabled: Boolean(saved.live?.requestedEnabled),
+            operational: false }, analysisMs: [], state: "WARMING" };
         delete (this.runtime as unknown as Record<string, unknown>).rejectionAudit;
         delete (this.runtime as unknown as Record<string, unknown>).reactionLab;
         delete (this.runtime as unknown as Record<string, unknown>).outcomeResearch;
@@ -1021,10 +1049,27 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return { ok: true, paperCycle: paperCycleSummary(this.runtime.paperCycle, this.runtime.equity) };
   }
 
+  private recordLiveAudit(input: Omit<LiveAuditEvent, "id" | "gateLabel"> & { error?: unknown; gateLabel?: string | null }) {
+    const event: LiveAuditEvent = {
+      id: `live:${input.observedAt}:${input.stage}:${input.symbol ?? "ACCOUNT"}:${input.planId ?? "none"}`,
+      observedAt: input.observedAt,
+      symbol: input.symbol,
+      planId: input.planId,
+      stage: input.stage,
+      level: input.level,
+      reason: input.reason.slice(0, 240),
+      gateLabel: input.gateLabel ?? gateLabelFromError(input.error),
+    };
+    const existing = this.runtime.live.auditEvents.findIndex((row) => row.id === event.id);
+    if (existing >= 0) this.runtime.live.auditEvents[existing] = event;
+    else this.runtime.live.auditEvents.push(event);
+    this.runtime.live.auditEvents = this.runtime.live.auditEvents.slice(-100);
+  }
+
   private liveOpenRisk() {
     const positionRisk = Object.values(this.runtime.live.positions).reduce((sum, position) => sum + (position?.status === "OPEN"
       ? remainingStressRisk(position, this.runtime.evidence[position.symbol]?.midpoint ?? position.entryPrice) : 0), 0);
-    const pendingRisk = Object.values(this.runtime.live.entries).reduce((sum, entry) => sum + (entry && ["SUBMITTING", "OPEN"].includes(entry.status)
+    const pendingRisk = Object.values(this.runtime.live.entries).reduce((sum, entry) => sum + (entry && ["SUBMITTING", "OPEN", "ERROR"].includes(entry.status)
       ? entry.plannedRisk : 0), 0);
     return positionRisk + pendingRisk;
   }
@@ -1033,7 +1078,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const positionRisk = Object.values(this.runtime.live.positions).reduce((sum, position) => sum + (position?.status === "OPEN" && position.side === side
       ? remainingStressRisk(position, this.runtime.evidence[position.symbol]?.midpoint ?? position.entryPrice) : 0), 0);
     const pendingRisk = Object.values(this.runtime.live.entries).reduce((sum, entry) => sum + (entry && entry.side === side
-      && ["SUBMITTING", "OPEN"].includes(entry.status) ? entry.plannedRisk : 0), 0);
+      && ["SUBMITTING", "OPEN", "ERROR"].includes(entry.status) ? entry.plannedRisk : 0), 0);
     return positionRisk + pendingRisk;
   }
 
@@ -1064,15 +1109,37 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         position.stopPrice = stop.price;
         return;
       } catch (error) {
+        if (!definitiveGateRejection(error)) {
+          this.recordLiveAudit({ observedAt: Date.now(), symbol: position.symbol, planId: position.id,
+            stage: "STOP_UPDATE", level: "RECOVERING",
+            reason: `结构止损更新结果暂不明确，原保护单保持有效并等待下一轮核对：${safeError(error)}`, error });
+          throw new Error(`结构止损更新结果暂不明确，保留原保护并核对：${safeError(error)}`);
+        }
+        const failedAt = Date.now();
+        this.recordLiveAudit({ observedAt: failedAt, symbol: position.symbol, planId: position.id,
+          stage: "STOP_UPDATE", level: "FORCED_EXIT",
+          reason: `结构止损更新失败，系统已请求市价退出：${safeError(error)}`, error });
         if (!position.exitRequestedAt) {
-          position.exitRequestedAt = Date.now();
+          position.exitRequestedAt = failedAt;
           position.exitReason = "PROTECTIVE_STOP_UPDATE_FAILED";
           await client.closePosition(position.symbol, liveExitTag(position.id));
         }
         throw new Error(`结构止损更新失败，已请求市价退出：${safeError(error)}`);
       }
     }
-    if (position.stopTag && position.stopSubmittingAt && Date.now() - position.stopSubmittingAt < 6_000) return;
+    if (position.stopTag && position.stopSubmittingAt) {
+      if (Date.now() - position.stopSubmittingAt < 6_000) return;
+      const failedAt = Date.now();
+      this.recordLiveAudit({ observedAt: failedAt, symbol: position.symbol, planId: position.id,
+        stage: "STOP_CREATE", level: "FORCED_EXIT",
+        reason: `Gate 在止损提交后6秒内仍未返回带标签 ${position.stopTag} 的保护单，已请求市价退出` });
+      if (!position.exitRequestedAt) {
+        position.exitRequestedAt = failedAt;
+        position.exitReason = "PROTECTIVE_STOP_CREATE_UNCONFIRMED";
+        await client.closePosition(position.symbol, liveExitTag(position.id));
+      }
+      throw new Error("结构止损提交6秒后仍未确认，已请求市价退出");
+    }
     position.stopTag = stop.tag;
     position.stopPrice = stop.price;
     position.stopSubmittingAt = Date.now();
@@ -1082,8 +1149,18 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       position.stopOrderId = nextStopId;
       position.stopSubmittingAt = null;
     } catch (error) {
+      if (!definitiveGateRejection(error)) {
+        this.recordLiveAudit({ observedAt: Date.now(), symbol: position.symbol, planId: position.id,
+          stage: "STOP_CREATE", level: "RECOVERING",
+          reason: `结构止损提交结果暂不明确；保留标签并核对6秒，不重复挂单也不立即误平仓：${safeError(error)}`, error });
+        throw new Error(`结构止损提交结果暂不明确，正在按标签核对：${safeError(error)}`);
+      }
+      const failedAt = Date.now();
+      this.recordLiveAudit({ observedAt: failedAt, symbol: position.symbol, planId: position.id,
+        stage: "STOP_CREATE", level: "FORCED_EXIT",
+        reason: `结构止损挂单失败，系统已请求市价退出：${safeError(error)}`, error });
       if (!position.exitRequestedAt) {
-        position.exitRequestedAt = Date.now();
+        position.exitRequestedAt = failedAt;
         position.exitReason = "PROTECTIVE_STOP_CREATE_FAILED";
         await client.closePosition(position.symbol, liveExitTag(position.id));
       }
@@ -1189,9 +1266,21 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         if (inspected) {
           entry.exchangeOrderId = liveOrderId(inspected) ?? entry.exchangeOrderId;
           entry.status = liveEntryDisposition(inspected, entry.kind);
-          entry.lastError = entry.status === "ERROR" ? `Gate 挂单执行失败：${inspected.finish_as ?? inspected.status ?? "unknown"}` : null;
+          if (entry.status === "ERROR") {
+            const reason = `Gate 挂单执行失败：${inspected.finish_as ?? inspected.status ?? "unknown"}`;
+            entry.status = "CANCELLED";
+            entry.lastError = reason;
+            this.runtime.live.entrySkips[symbol] = { planId: entry.planId, symbol, code: "ENTRY_REJECTED", reason, observedAt: now };
+            this.recordLiveAudit({ observedAt: now, symbol, planId: entry.planId, stage: "ENTRY_SUBMIT",
+              level: "SKIPPED", reason });
+          } else entry.lastError = null;
         } else if (now - entry.missingSince >= 6_000) {
           entry.status = "CANCELLED";
+          const reason = `Gate 在提交后6秒内未返回订单 ${entry.tag}，本计划不自动重放，避免重复开仓`;
+          entry.lastError = reason;
+          this.runtime.live.entrySkips[symbol] = { planId: entry.planId, symbol, code: "SUBMISSION_UNCONFIRMED", reason, observedAt: now };
+          this.recordLiveAudit({ observedAt: now, symbol, planId: entry.planId, stage: "ENTRY_SUBMIT",
+            level: "SKIPPED", reason });
         }
       }
       const selectedTrade = desiredPortfolio[symbol] ?? null;
@@ -1231,6 +1320,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         this.runtime.live.positions[symbol] = position;
         entry.status = "FILLED";
         entry.missingSince = null;
+        this.recordLiveAudit({ observedAt: now, symbol, planId: entry.planId, stage: "ENTRY_FILLED", level: "INFO",
+          reason: `Gate 已确认实盘持仓，成交名义价值 ${notional.toFixed(4)} USDT，杠杆 ${leverage}×` });
       } else if (position.side !== side) {
         throw new Error(`${symbol} 实盘方向与系统记录冲突`);
       }
@@ -1239,6 +1330,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if (!position.exitRequestedAt && liveMirrorExitRequired(position.id, selectedTrade)) {
         position.exitRequestedAt = now;
         position.exitReason = "PAPER_PORTFOLIO_EXIT";
+        this.recordLiveAudit({ observedAt: now, symbol, planId: position.id, stage: "EXIT_REQUEST", level: "INFO",
+          reason: "1000 U模拟账户已退出该计划，实盘按同一生命周期请求市价平仓" });
         await client.closePosition(symbol, liveExitTag(position.id));
       } else if (!position.exitRequestedAt && selectedTrade) {
         position.currentStop = arenaProtectionStop(selectedTrade);
@@ -1253,6 +1346,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           || this.liveDirectionalRisk(position.side) > equity * CORRELATED_DIRECTION_RISK_CAP + 1e-8) {
           position.exitRequestedAt = now;
           position.exitReason = "RISK_CAP_AFTER_FILL";
+          this.recordLiveAudit({ observedAt: now, symbol, planId: position.id, stage: "EXIT_REQUEST", level: "FORCED_EXIT",
+            reason: "实盘成交后的实际结构风险超过账户或同方向风险上限，已请求市价退出" });
           await client.closePosition(symbol, liveExitTag(position.id));
         }
       } else if (now - position.exitRequestedAt >= 6_000) {
@@ -1272,6 +1367,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.runtime.live.positions[symbol] = { ...position, status: "CLOSED", exitAt: now,
         exitPrice: this.runtime.evidence[symbol]?.midpoint ?? position.entryPrice,
         exitReason: position.exitReason ?? "EXCHANGE_FLAT", stopOrderId: null, stopTag: null, stopPrice: null, stopSubmittingAt: null };
+      this.recordLiveAudit({ observedAt: now, symbol, planId: position.id, stage: "POSITION_CLOSED", level: "INFO",
+        reason: `Gate 已确认仓位归零；退出原因 ${position.exitReason ?? "EXCHANGE_FLAT"}` });
     }
 
     if (!this.runtime.live.requestedEnabled) {
@@ -1282,8 +1379,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     if (unknownOrders.length) throw new Error("Gate 存在未纳管挂单；已停止新开仓");
 
-    this.runtime.live.operational = true;
-    this.runtime.live.lastError = null;
+    let recoveringSubmission = Object.values(this.runtime.live.entries)
+      .find((entry) => entry && ["SUBMITTING", "ERROR"].includes(entry.status)) ?? null;
+    const recoveringStop = Object.values(this.runtime.live.positions)
+      .find((position) => position?.status === "OPEN" && position.stopSubmittingAt && !position.stopOrderId) ?? null;
+    this.runtime.live.operational = !recoveringSubmission && !recoveringStop;
+    this.runtime.live.lastError = recoveringSubmission
+      ? recoveringSubmission.lastError ?? `${recoveringSubmission.symbol} 的实盘提交正在与 Gate 核对`
+      : recoveringStop ? `${recoveringStop.symbol} 的结构止损正在按订单标签核对` : null;
     let availableForNewEntries = available;
     let riskForNewEntries = this.liveOpenRisk();
     const directionRiskForNewEntries: Record<Side, number> = {
@@ -1292,7 +1395,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     };
     let marginForNewEntries = [
       ...Object.values(this.runtime.live.positions).filter((position) => position?.status === "OPEN"),
-      ...Object.values(this.runtime.live.entries).filter((entry) => entry && ["SUBMITTING", "OPEN"].includes(entry.status)),
+      ...Object.values(this.runtime.live.entries).filter((entry) => entry && ["SUBMITTING", "OPEN", "ERROR"].includes(entry.status)),
     ].reduce((sum, item) => sum + (item?.margin ?? 0), 0);
     const staged: Array<{ symbol: string; plan: PaperPlan; intent: ReturnType<typeof buildLiveEntryIntent> }> = [];
     for (const [symbol, skip] of Object.entries(this.runtime.live.entrySkips)) {
@@ -1310,6 +1413,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       const midpoint = this.runtime.evidence[symbol]?.midpoint ?? 0;
       if (!(midpoint > 0)) continue;
+      const retainedSkip = this.runtime.live.entrySkips[symbol];
+      if (retainedSkip?.planId === plan.id) continue;
       const prior = this.runtime.live.entries[symbol];
       // A timed-out submission remains reserved until Gate proves it absent for
       // six seconds. Never replay the same plan while its status is ambiguous.
@@ -1355,14 +1460,45 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.runtime.live.entries[symbol] = entry;
       await this.saveCheckpoint(now, true);
       try {
-        await client.setLeverage(symbol, intent.leverage);
-        entry.exchangeOrderId = await client.createEntry(intent);
-        entry.status = "OPEN";
+        try {
+          await client.setLeverage(symbol, intent.leverage);
+        } catch (error) {
+          const reason = `Gate 未接受 ${symbol} 的 ${intent.leverage}× 杠杆，本计划已跳过：${safeError(error)}`;
+          entry.status = "CANCELLED";
+          entry.lastError = reason;
+          this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: "LEVERAGE_REJECTED", reason, observedAt: now };
+          this.recordLiveAudit({ observedAt: now, symbol, planId: plan.id, stage: "LEVERAGE", level: "SKIPPED", reason, error });
+          continue;
+        }
+        try {
+          entry.exchangeOrderId = await client.createEntry(intent);
+          entry.status = "OPEN";
+        } catch (error) {
+          const reason = `Gate 实盘入场提交失败：${safeError(error)}`;
+          entry.lastError = reason;
+          if (definitiveGateRejection(error)) {
+            entry.status = "CANCELLED";
+            this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: "ENTRY_REJECTED", reason, observedAt: now };
+            this.recordLiveAudit({ observedAt: now, symbol, planId: plan.id, stage: "ENTRY_SUBMIT", level: "SKIPPED", reason, error });
+          } else {
+            entry.status = "ERROR";
+            entry.missingSince = now;
+            recoveringSubmission = entry;
+            this.recordLiveAudit({ observedAt: now, symbol, planId: plan.id, stage: "ENTRY_SUBMIT", level: "RECOVERING",
+              reason: `${reason}；结果不明确，保留风险额度并按订单标签核对，不自动重复提交`, error });
+          }
+        }
       } catch (error) {
         entry.status = "ERROR";
         entry.lastError = safeError(error);
         throw error;
       }
+    }
+    if (recoveringSubmission || recoveringStop) {
+      this.runtime.live.operational = false;
+      this.runtime.live.lastError = recoveringSubmission
+        ? recoveringSubmission.lastError ?? `${recoveringSubmission.symbol} 的实盘提交正在与 Gate 核对`
+        : `${recoveringStop!.symbol} 的结构止损正在按订单标签核对`;
     }
   }
 
@@ -1373,17 +1509,24 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.live.lastError = null;
     try {
       await this.syncLive(Date.now(), enabled, !enabled);
+      this.recordLiveAudit({ observedAt: Date.now(), symbol: null, planId: null, stage: "LIVE_CONTROL", level: "INFO",
+        reason: enabled ? "所有者已开启实盘复制；后续部署与可恢复的单币故障不会改写此选择" : "所有者已关闭实盘复制并请求撤销系统入场挂单" });
       await this.saveCheckpoint(Date.now(), true);
       return { ok: true, live: this.runtime.live };
     } catch (error) {
       let cleanupError: string | null = null;
-      if (enabled) {
+      const forceOff = enabled && liveFailureRequiresOff(error);
+      if (forceOff) {
         this.runtime.live.requestedEnabled = false;
         try { await this.syncLive(Date.now(), false, true); }
         catch (cleanupFailure) { cleanupError = safeError(cleanupFailure); }
       }
       this.runtime.live.operational = false;
       this.runtime.live.lastError = cleanupError ? `${safeError(error)}；撤单核对失败：${cleanupError}` : safeError(error);
+      this.recordLiveAudit({ observedAt: Date.now(), symbol: null, planId: null, stage: "LIVE_CONTROL",
+        level: forceOff ? "LIVE_STOPPED" : "RECOVERING",
+        reason: forceOff ? `检测到账户级纳管冲突，实盘选择已安全关闭：${this.runtime.live.lastError}`
+          : `实盘选择保持${this.runtime.live.requestedEnabled ? "开启" : "关闭"}，等待后台恢复核对：${this.runtime.live.lastError}`, error });
       await this.saveCheckpoint(Date.now(), true).catch(() => undefined);
       return { ok: false, error: this.runtime.live.lastError, live: this.runtime.live };
     }
@@ -1867,8 +2010,16 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         try {
           await this.syncLive(Date.now());
         } catch (error) {
+          const message = safeError(error);
+          const forceOff = liveFailureRequiresOff(error);
+          const shouldRecord = this.runtime.live.lastError !== message || this.runtime.live.operational || forceOff;
+          if (forceOff) this.runtime.live.requestedEnabled = false;
           this.runtime.live.operational = false;
-          this.runtime.live.lastError = safeError(error);
+          this.runtime.live.lastError = message;
+          if (shouldRecord) this.recordLiveAudit({ observedAt: Date.now(), symbol: null, planId: null,
+            stage: "LIVE_CONTROL", level: forceOff ? "LIVE_STOPPED" : "RECOVERING",
+            reason: forceOff ? `检测到账户级纳管冲突，实盘选择已安全关闭：${message}`
+              : `实盘核对暂时失败，所有者开关选择保持不变：${message}`, error });
         } finally {
           subrequests += Math.max(0, (this.liveClient?.requestCount ?? liveRequestsBefore) - liveRequestsBefore);
         }

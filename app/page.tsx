@@ -17,8 +17,11 @@ type RangeStructure = RangeBand & { child?: RangeBand | null };
 type Position = { side: Side; scenario: MarketState; status: "OPEN" | "CLOSED"; entryAt?: number; entryPrice: number; initialStop: number; currentStop: number; currentTarget: number; targetIdentity?: string; plannedRisk: number; notional: number; routeId?: string; routeKind?: RouteKind; rangeBoundary?: number; rangeBuffer?: number; sweepExtreme?: number; reclaimStrength?: number; rangeAcceptanceCount?: number; exitAt?: number; exitPrice?: number; realizedPnl?: number; exitReason?: string; exitSignalCount?: number; exitSignalReason?: string };
 type LiveEntry = { planId: string; symbol: string; side: Side; scenario: MarketState; kind: "PRICE_TRIGGER" | "LIMIT" | "MARKET"; status: string; trigger: number; invalidation: number; target: number; plannedRisk: number; notional: number; leverage: number; margin: number; lastError: string | null };
 type LivePosition = Position & { id: string; symbol: string; exchangeSize: number; leverage: number; margin: number; stopPrice: number | null; exitRequestedAt: number | null };
-type LiveEntrySkip = { planId: string; symbol: string; code: "MIN_CONTRACT" | "MARGIN" | "RISK_CAP" | "ECONOMICS"; reason: string; observedAt: number };
-type LiveRuntime = { requestedEnabled: boolean; operational: boolean; changedAt: number | null; lastSyncAt: number | null; lastError: string | null; equity: number | null; available: number | null; credentialConfigured: boolean; entries: Record<string, LiveEntry | null>; positions: Record<string, LivePosition | null>; entrySkips: Record<string, LiveEntrySkip | null> };
+type LiveEntrySkip = { planId: string; symbol: string; code: "MIN_CONTRACT" | "MARGIN" | "RISK_CAP" | "ECONOMICS" | "LEVERAGE_REJECTED" | "ENTRY_REJECTED" | "SUBMISSION_UNCONFIRMED"; reason: string; observedAt: number };
+type LiveAuditEvent = { id: string; observedAt: number; symbol: string | null; planId: string | null;
+  stage: "LEVERAGE" | "ENTRY_SUBMIT" | "ENTRY_FILLED" | "STOP_CREATE" | "STOP_UPDATE" | "EXIT_REQUEST" | "POSITION_CLOSED" | "LIVE_CONTROL";
+  level: "INFO" | "SKIPPED" | "RECOVERING" | "FORCED_EXIT" | "LIVE_STOPPED"; reason: string; gateLabel: string | null };
+type LiveRuntime = { requestedEnabled: boolean; operational: boolean; changedAt: number | null; lastSyncAt: number | null; lastError: string | null; equity: number | null; available: number | null; credentialConfigured: boolean; entries: Record<string, LiveEntry | null>; positions: Record<string, LivePosition | null>; entrySkips: Record<string, LiveEntrySkip | null>; auditEvents: LiveAuditEvent[] };
 type RadarCandidate = { id: string; symbol: string; side: Side; strength: number; moveRate: number; movementMultiple: number; volume24hUsd: number; confirmations: number; firstSeenAt: number; observedAt: number; kind: "NEW_MONEY" | "SQUEEZE" | "LIQUIDATION" | "PRICE_SHOCK" };
 type EntryAssessment = { accepted: boolean; blocker: string | null; alignedFlow: number; spreadBps: number; extensionRate: number; costShare: number; conservativeWinRate: number; expectedReturnRate: number; qualityScore: number; qualityRequired: number; qualityEvidence: string[] };
 type StrategyFamily = "FAST" | "TREND" | "RANGE" | "REVERSAL" | "POLAR";
@@ -85,6 +88,10 @@ type PortfolioCycleArchive = { number: number; ruleVersion: string; startedAt: n
 type RouteCheck = { id: string; eventId: string; strategyId: string; strategyName: string; symbol: string; observedAt: number;
   status: "FORMING" | "CHECKING" | "BLOCKED" | "OPEN"; blocker: string | null; side: Side | null;
   environment: AllRegimeEnvironment | null; score: number; reason: string | null };
+type BlockedCandidate = { id: string; eventId: string; strategyId: string; strategyName: string; symbol: string;
+  blockedAt: number; side: Side; orientation: StrategyOrientation; environment: AllRegimeEnvironment;
+  entryPrice: number; stopPrice: number; targetPrice: number; score: number;
+  stage: "EXECUTION" | "AUTHORITY" | "ACCOUNT"; code: string; reason: string };
 type StrategyArena = { version: 12; startedAt: number; catalogSize: number; playbookCount: number; shadowCount: number;
   reverseActiveCount?: number;
   activeCount: number; sleepingCount: number; trialCount: number; verifiedCount: number; paperCount: number; openShadow: ArenaTrade[]; openPaper: ArenaTrade[];
@@ -93,6 +100,7 @@ type StrategyArena = { version: 12; startedAt: number; catalogSize: number; play
   recentPaper: ArenaTrade[]; recentPortfolio: ArenaTrade[]; archivedPortfolioTrades: ArenaTrade[]; transitions: StrategyTransition[]; playbooks: PlaybookEvidence[];
   portfolioCycle: number; portfolioCycleStartedAt: number; archivedPortfolioCycles: PortfolioCycleArchive[];
   admissionRejects: Record<string, number>; observationShadow: Array<{ id: string; strategyName: string; symbol: string; observedAt: number; blocker: string }>;
+  blockedCandidates: BlockedCandidate[];
   currentRouteChecks: RouteCheck[];
   offlineValidation: Record<string, { branchName: string; trainEvents: number; trainProfitFactor: number;
     validationEvents: number; validationProfitFactor: number; validationWinRate: number; paperApproved: boolean }>;
@@ -287,12 +295,14 @@ export default function Home() {
   const showLiveCenter = auth.authenticated || liveEnabled;
   const activeTab: Tab = tab === "live" && !showLiveCenter ? "settings" : tab;
   const openLivePositions = Object.values(live?.positions ?? {}).filter((position): position is LivePosition => position?.status === "OPEN");
+  const closedLivePositions = Object.values(live?.positions ?? {}).filter((position): position is LivePosition => position?.status === "CLOSED")
+    .sort((left, right) => (right.exitAt ?? 0) - (left.exitAt ?? 0));
   const openLiveEntries = Object.values(live?.entries ?? {}).filter((entry): entry is LiveEntry => Boolean(entry && !["FILLED", "CANCELLED"].includes(entry.status)));
   const liveEntrySkips = Object.values(live?.entrySkips ?? {}).filter((skip): skip is LiveEntrySkip => Boolean(skip));
   const liveControl = () => {
     if (!auth.authenticated) setShowLogin(true);
     else if (liveEnabled) void setLiveMode(false);
-    else if (window.confirm("确认开启实盘？开启后只复制此刻以后由1000 U模拟账户新开的订单，不会追单复制当前已有模拟持仓。")) void setLiveMode(true);
+    else if (window.confirm("确认开启实盘？系统会先核对 Gate，并按当前1000 U模拟账户持仓及后续新订单安全缩放复制；当前持仓也可能立即产生实盘订单。")) void setLiveMode(true);
   };
   const resetPaperAccount = async () => {
     if (!auth.authenticated) { setShowLogin(true); return; }
@@ -315,6 +325,7 @@ export default function Home() {
   const healthNotice = runtimeNotice(runtime);
   const arena = runtime?.strategyArena;
   const portfolioOpen = arena?.portfolioOpen ?? [];
+  const blockedCandidates = arena?.blockedCandidates ?? [];
   const currentPortfolioHistory = [...(arena?.recentPortfolio ?? [])]
     .sort((left, right) => (right.closedAt ?? right.openedAt) - (left.closedAt ?? left.openedAt));
   const archivedPortfolioHistory = [...(arena?.archivedPortfolioTrades ?? [])]
@@ -472,9 +483,10 @@ export default function Home() {
       {!portfolioOpen.length && <div className="empty"><b>当前没有模拟订单</b><p>对应环境的策略仍在接管；完成进场结构后才会成交。</p></div>}</> : <div className="empty"><b>正在读取模拟持仓</b><p>收到后台真实快照前不显示“0笔”。</p></div>}
     </section>
 
-    {showLiveCenter && <div hidden={activeTab !== "live"}><LiveCenter auth={auth} runtime={runtime} live={live} liveEnabled={liveEnabled} liveBusy={liveBusy} liveActionError={liveActionError} positions={openLivePositions} entries={openLiveEntries} skips={liveEntrySkips} onLogin={() => setShowLogin(true)} onToggle={liveControl} onCleanup={() => void setLiveMode(false)} /></div>}
+    {showLiveCenter && <div hidden={activeTab !== "live"}><LiveCenter auth={auth} runtime={runtime} live={live} liveEnabled={liveEnabled} liveBusy={liveBusy} liveActionError={liveActionError} positions={openLivePositions} closedPositions={closedLivePositions} entries={openLiveEntries} skips={liveEntrySkips} onLogin={() => setShowLogin(true)} onToggle={liveControl} onCleanup={() => void setLiveMode(false)} /></div>}
 
     <section className="history-panel" hidden={activeTab !== "history"}>{hasRuntimeSnapshot ? <><div className="section-heading"><div><h2>当前模拟周期</h2><p>只统计本轮真正计入1000 U账户的订单。</p></div><span>{arena?.portfolioResolved ?? "—"} 笔</span></div>{!currentPortfolioHistory.length ? <div className="empty"><b>本轮还没有已完成订单</b><p>当前持仓结算后会出现在这里。</p></div> : <div className="history-table">{currentPortfolioHistory.map((trade) => <ArenaTradeRecord key={trade.id} trade={trade} />)}</div>}</> : <div className="empty"><b>正在读取模拟交易记录</b><p>收到后台真实快照前不显示空记录。</p></div>}</section>
+    {hasRuntimeSnapshot && <section className="history-panel" hidden={activeTab !== "history"}><div className="section-heading"><div><h2>未成交候选</h2><p>只记录已经形成方向与进场结构、但在执行、授权或账户准入阶段被阻止的候选；尚未形成路线的不算订单。</p></div><span>{blockedCandidates.length} 条</span></div>{!blockedCandidates.length ? <div className="empty"><b>暂无已形成但被阻止的候选</b><p>以后每个最终阻止原因都会保留在这里。</p></div> : <div className="candidate-audit">{blockedCandidates.map((candidate) => <article key={candidate.id}><div><small>{time(candidate.blockedAt)} · {candidate.stage}</small><b>{candidate.symbol.replace("_", "/")} · {candidate.strategyName}</b></div><span className={`side ${candidate.side.toLowerCase()}`}>{candidate.side === "LONG" ? "多" : "空"}</span><dl><div><dt>进场</dt><dd>{num(candidate.entryPrice, 5)}</dd></div><div><dt>止损</dt><dd>{num(candidate.stopPrice, 5)}</dd></div><div><dt>盈利臂</dt><dd>{num(candidate.targetPrice, 5)}</dd></div></dl><p><b>{candidate.code}</b> · {candidate.reason}</p></article>)}</div>}</section>}
     {hasRuntimeSnapshot && <section className="history-panel" hidden={activeTab !== "history"}><div className="section-heading"><div><h2>历史归档</h2><p>旧版本和已重置周期只用于对照，不计入当前权益、胜率或策略授权。</p></div><span>{arena?.archivedPortfolioCycles.length ?? "—"} 个周期</span></div>{!archivedPortfolioHistory.length ? <div className="empty"><b>暂无历史归档订单</b></div> : <div className="history-table">{archivedPortfolioHistory.map((trade) => <ArenaTradeRecord key={`archive:${trade.id}`} trade={trade} />)}</div>}</section>}
 
     <section className="settings-panel" hidden={activeTab !== "settings"}>
@@ -494,7 +506,7 @@ export default function Home() {
   </main>;
 }
 
-function LiveCenter({ auth, runtime, live, liveEnabled, liveBusy, liveActionError, positions, entries, skips, onLogin, onToggle, onCleanup }: {
+function LiveCenter({ auth, runtime, live, liveEnabled, liveBusy, liveActionError, positions, closedPositions, entries, skips, onLogin, onToggle, onCleanup }: {
   auth: AuthSession;
   runtime: Runtime | null;
   live: LiveRuntime | undefined;
@@ -502,6 +514,7 @@ function LiveCenter({ auth, runtime, live, liveEnabled, liveBusy, liveActionErro
   liveBusy: boolean;
   liveActionError: string | null;
   positions: LivePosition[];
+  closedPositions: LivePosition[];
   entries: LiveEntry[];
   skips: LiveEntrySkip[];
   onLogin: () => void;
@@ -509,7 +522,7 @@ function LiveCenter({ auth, runtime, live, liveEnabled, liveBusy, liveActionErro
   onCleanup: () => void;
 }) {
   const [view, setView] = useState<LiveView>("account");
-  const activeView: LiveView = !liveEnabled && view === "orders" ? "account" : view;
+  const activeView: LiveView = view;
   const viewScroll = useRef<Record<LiveView, number>>({ account: 0, orders: 0, api: 0 });
   const [credential, setCredential] = useState<CredentialStatus | null>(null);
   const [apiKey, setApiKey] = useState("");
@@ -574,14 +587,14 @@ function LiveCenter({ auth, runtime, live, liveEnabled, liveBusy, liveActionErro
   }, 0);
   const readableLiveError = friendlyLiveError(live?.lastError);
   const connectionText = !credential?.configured ? "未保存 API" : readableLiveError ? "连接异常" : live?.lastSyncAt ? "已连接 Gate" : "等待首次核对";
-  const liveViews: [LiveView, string][] = liveEnabled
-    ? [["account", "实盘账户"], ["orders", `实盘订单 ${positions.length + entries.length || ""}`], ["api", "API 管理"]]
-    : [["account", "开启实盘"], ["api", "API 管理"]];
+  const auditEvents = [...(live?.auditEvents ?? [])].sort((left, right) => right.observedAt - left.observedAt);
+  const liveViews: [LiveView, string][] = [["account", liveEnabled ? "实盘账户" : "开启实盘"],
+    ["orders", `实盘记录 ${positions.length + closedPositions.length + entries.length + auditEvents.length || ""}`], ["api", "API 管理"]];
 
   return <section className="live-center">
     <div className="live-subnav">{liveViews.map(([key, label]) => <button type="button" key={key} className={activeView === key ? "active" : ""} onClick={() => selectView(key)}>{label}</button>)}</div>
     {activeView === "account" && <>
-      <section className="live-status-card"><div><small>实盘交易开关</small><h2>{liveEnabled ? "实盘复制已开启" : "实盘数据保持隐藏"}</h2><p>{readableLiveError || (liveEnabled ? "只复制开启后由1000 U模拟账户新开的订单；方向、止损、目标和出场保持一致，仓位按真实权益安全缩放。" : "当前不会向 Gate 提交新订单。只有你在这里确认开启后，真实账户和订单页面才会显示。")}</p></div><div className="live-actions"><button type="button" disabled={liveBusy || !credential?.configured || liveEnabled} className="danger-outline" onClick={onCleanup}>撤销系统遗留挂单</button><button type="button" disabled={liveBusy || !credential?.configured} className={liveEnabled ? "danger-action" : "primary-action"} onClick={onToggle}>{liveBusy ? "正在与 Gate 核对…" : liveEnabled ? "关闭实盘并撤单" : "开启实盘复制"}</button></div></section>
+      <section className="live-status-card"><div><small>实盘交易开关</small><h2>{liveEnabled ? live?.operational ? "实盘复制已开启" : "实盘已请求开启 · 正在恢复核对" : "实盘复制已关闭"}</h2><p>{readableLiveError || (liveEnabled ? "当前模拟持仓与后续新订单都会按真实权益安全缩放；单币拒单只跳过该币，部署不会改写你的开关选择。" : "当前不会向 Gate 提交新订单；历史实盘记录仍可在“实盘记录”查看。")}</p></div><div className="live-actions"><button type="button" disabled={liveBusy || !credential?.configured || liveEnabled} className="danger-outline" onClick={onCleanup}>撤销系统遗留挂单</button><button type="button" disabled={liveBusy || !credential?.configured} className={liveEnabled ? "danger-action" : "primary-action"} onClick={onToggle}>{liveBusy ? "正在与 Gate 核对…" : liveEnabled ? "关闭实盘并撤单" : "开启实盘复制"}</button></div></section>
       {liveActionError && <p className="form-error">{liveActionError}</p>}
       {!liveEnabled && <p className="cleanup-help">如果 Gate 仍显示以前由本系统创建的挂单，点“撤销系统遗留挂单”。只撤销带本系统标签的入场单，不会撤销你的手工订单。</p>}
       {liveEnabled && <>
@@ -589,7 +602,7 @@ function LiveCenter({ auth, runtime, live, liveEnabled, liveBusy, liveActionErro
       <div className="live-facts"><Setting title="API 状态" detail={credential?.configured ? `密钥 ${credential.keyHint ?? "已加密"} · ${time(credential.lastVerifiedAt)}` : "进入 API 管理保存或更换"} value={credential?.configured ? "已验证" : "未配置"} tone={credential?.configured ? "online" : "locked"}/><Setting title="最近账户核对" detail="页面关闭后后台仍按策略运行。" value={time(live?.lastSyncAt)} tone={live?.lastSyncAt ? "online" : "locked"}/></div>
       </>}
     </>}
-    {liveEnabled && activeView === "orders" && <section className="panel-list live-orders">{!positions.length && !entries.length && !skips.length && <div className="empty"><b>当前没有实盘订单</b><p>等待1000 U模拟账户产生下一笔新订单。</p></div>}{skips.map((skip) => <article className="live-skip-card" key={`live-skip:${skip.symbol}:${skip.planId}`}><div><small>{skip.symbol.replace("_", "/")}</small><h3>模拟信号未能实盘成交</h3></div><p>{skip.reason}</p><span>安全条件不满足，本次实盘跳过，不影响模拟账户继续记录。</span></article>)}{positions.map((position) => { const evidence = runtime?.evidence[position.symbol]; const protection = position.stopPrice ?? position.currentStop; return <OrderCard key={`live:${position.symbol}`} symbol={position.symbol} side={position.side} label="实盘复制持仓" state={position.scenario} notional={position.notional} equity={live?.equity ?? INITIAL_EQUITY} mode="LIVE" leverage={position.leverage} margin={position.margin} positionView={{ entryAt: position.entryAt, entryPrice: position.entryPrice, stopPrice: protection, targetPrice: position.currentTarget, markPrice: evidence?.midpoint, markAt: evidence?.observedAt, fresh: Boolean(evidence?.fresh) }} values={[["真实进场", position.entryPrice], ["模拟止损", position.initialStop], ["交易所保护位", protection], ["模拟目标", position.currentTarget], ["实际计划风险", position.plannedRisk]]} />; })}{entries.map((entry) => <OrderCard key={`live:${entry.symbol}:entry`} symbol={entry.symbol} side={entry.side} label={entry.status === "ERROR" ? "异常待核对" : "模拟订单复制中"} state={entry.scenario} notional={entry.notional} equity={live?.equity ?? INITIAL_EQUITY} mode="LIVE" leverage={entry.leverage} margin={entry.margin} note={friendlyLiveError(entry.lastError) ?? undefined} values={[["模拟进场参考", entry.trigger], ["模拟止损", entry.invalidation], ["模拟目标", entry.target], ["实际计划风险", entry.plannedRisk]]} />)}</section>}
+    {activeView === "orders" && <section className="panel-list live-orders">{!positions.length && !closedPositions.length && !entries.length && !skips.length && !auditEvents.length && <div className="empty"><b>尚无实盘记录</b><p>实盘成交、退出、拒单和自动保护原因都会保留在这里，关闭实盘后仍可查看。</p></div>}{skips.map((skip) => <article className="live-skip-card" key={`live-skip:${skip.symbol}:${skip.planId}`}><div><small>{skip.symbol.replace("_", "/")} · {skip.code}</small><h3>模拟信号未能实盘成交</h3></div><p>{skip.reason}</p><span>本计划已明确跳过，不会反复提交，也不影响其他币继续核对。</span></article>)}{positions.map((position) => { const evidence = runtime?.evidence[position.symbol]; const protection = position.stopPrice ?? position.currentStop; return <OrderCard key={`live:${position.symbol}`} symbol={position.symbol} side={position.side} label="实盘复制持仓" state={position.scenario} notional={position.notional} equity={live?.equity ?? INITIAL_EQUITY} mode="LIVE" leverage={position.leverage} margin={position.margin} positionView={{ entryAt: position.entryAt, entryPrice: position.entryPrice, stopPrice: protection, targetPrice: position.currentTarget, markPrice: evidence?.midpoint, markAt: evidence?.observedAt, fresh: Boolean(evidence?.fresh) }} values={[["真实进场", position.entryPrice], ["模拟止损", position.initialStop], ["交易所保护位", protection], ["模拟目标", position.currentTarget], ["实际计划风险", position.plannedRisk]]} />; })}{closedPositions.map((position) => <article className="live-audit-card info" key={`live-closed:${position.symbol}:${position.id}`}><div><small>{time(position.entryAt)} → {time(position.exitAt)} · POSITION_HISTORY</small><h3>{position.symbol.replace("_", "/")} · 已平实盘</h3></div><strong>CLOSED</strong><p>方向 {position.side === "LONG" ? "做多" : "做空"} · 进场 {num(position.entryPrice, 5)} · 退出 {num(position.exitPrice, 5)} · 名义价值 {num(position.notional, 4)} U · 原因 {position.exitReason ?? "EXCHANGE_FLAT"}</p></article>)}{entries.map((entry) => <OrderCard key={`live:${entry.symbol}:entry`} symbol={entry.symbol} side={entry.side} label={entry.status === "ERROR" ? "异常待核对" : "模拟订单复制中"} state={entry.scenario} notional={entry.notional} equity={live?.equity ?? INITIAL_EQUITY} mode="LIVE" leverage={entry.leverage} margin={entry.margin} note={friendlyLiveError(entry.lastError) ?? undefined} values={[["模拟进场参考", entry.trigger], ["模拟止损", entry.invalidation], ["模拟目标", entry.target], ["实际计划风险", entry.plannedRisk]]} />)}{auditEvents.map((event) => <article className={`live-audit-card ${event.level.toLowerCase()}`} key={event.id}><div><small>{time(event.observedAt)} · {event.stage}{event.gateLabel ? ` · Gate ${event.gateLabel}` : ""}</small><h3>{event.symbol ? event.symbol.replace("_", "/") : "实盘控制"}</h3></div><strong>{event.level}</strong><p>{event.reason}</p></article>)}</section>}
     {activeView === "api" && <section className="credential-panel"><div className="section-heading"><div><h2>Gate 实盘 API</h2><p>新 API 验证成功后会加密覆盖旧 API，页面永远不回显 Secret。</p></div><span className={credential?.configured ? "positive" : "negative"}>{credential?.configured ? "已保存" : "未保存"}</span></div><div className="credential-current"><div><small>当前 API</small><b>{credential?.keyHint ?? "尚未配置"}</b><p>{credential?.configured ? `最后验证 ${time(credential.lastVerifiedAt)} · Gate 实盘` : "填写下方两项后保存"}</p></div>{credential?.configured && <button className="danger-outline" type="button" disabled={credentialBusy || liveEnabled || positions.length > 0 || entries.length > 0} onClick={() => void deleteCredential()}>删除 API</button>}</div><form className="credential-form" onSubmit={saveCredential}><label><span>API Key</span><input value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" spellCheck={false} placeholder="填写新的 Gate API Key" /></label><label><span>API Secret</span><input type="password" value={apiSecret} onChange={(event) => setApiSecret(event.target.value)} autoComplete="new-password" spellCheck={false} placeholder="填写新的 Gate API Secret" /></label><p className="credential-help">只使用 Gate USDT 永续合约读取与交易权限；不要开启提现权限。保存 API 不会开启实盘。API 过期时直接验证并覆盖；只有 Gate 已无持仓和挂单时才允许删除。</p>{liveEnabled && <p className="form-error">请先关闭实盘开关，才可以更换或删除 API。</p>}{credentialError && <p className="form-error">{credentialError}</p>}{credentialNotice && <p className="form-success">{credentialNotice}</p>}{verification && <p className="credential-check">已核对：权益 {num(verification.equity, 2)} U · 持仓 {verification.positions} · 普通挂单 {verification.orders} · 条件单 {verification.conditionalOrders}</p>}<button className="primary-action" type="submit" disabled={credentialBusy || liveEnabled || apiKey.trim().length < 8 || apiSecret.trim().length < 8}>{credentialBusy ? "正在验证 Gate…" : credential?.configured ? "验证并更换 API" : "验证并保存 API"}</button></form></section>}
   </section>;
 }

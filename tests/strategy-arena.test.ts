@@ -100,6 +100,8 @@ test("range double reclaim stays paired-shadow until current polarity evidence a
   assert.equal(Object.keys(state.open).length, 2);
   assert.equal(state.portfolioOpen.BTC_USDT, undefined);
   assert.equal(state.currentRouteChecks["BTC_USDT:balance_return"]?.status, "BLOCKED");
+  assert.equal(state.blockedCandidates.at(-1)?.code, "POLARITY_NOT_AUTHORIZED");
+  assert.equal(state.blockedCandidates.at(-1)?.stage, "AUTHORITY");
   state.strategies.balance_return.recentResults = [result(1, 0.01), result(2, 0.008), result(3, 0.012)]
     .map((row) => ({ ...row, regime: "RANGE" as const, channel: "RANGE" as const }));
   applyStrategySleepStates(state, new Set(["RANGE"]), 4_000);
@@ -137,6 +139,9 @@ test("stale execution data remains observation-only", () => {
   assert.ok(state.recentObservations.some((row) => row.blocker.includes("不新鲜")));
   assert.equal(state.currentRouteChecks["BTC_USDT:momentum_carry"]?.status, "BLOCKED");
   assert.match(state.currentRouteChecks["BTC_USDT:momentum_carry"]?.blocker ?? "", /不新鲜/);
+  assert.equal(state.blockedCandidates.length, 1, "only an authorized formed route enters the blocked-candidate audit");
+  assert.equal(state.blockedCandidates[0].stage, "EXECUTION");
+  assert.equal(state.blockedCandidates[0].side, "LONG");
 });
 
 test("valid small-account routes are not haircut by transient five-level book depth", () => {
@@ -176,6 +181,8 @@ test("the observed 龙虾 24.41% stop is rejected instead of opening a 69 U PAPE
   assert.equal(state.portfolioOpen.龙虾_USDT, undefined);
   assert.equal(state.admissionRejects.MEANINGFUL_SIZE, 1);
   assert.match(state.currentRouteChecks["龙虾_USDT:pulse_fold"]?.blocker ?? "", /名义价值低于账户权益1倍/);
+  assert.equal(state.blockedCandidates.at(-1)?.code, "MEANINGFUL_SIZE");
+  assert.equal(state.blockedCandidates.at(-1)?.stage, "ACCOUNT");
 });
 
 test("depth rejects a route only when one Gate contract cannot fit", () => {

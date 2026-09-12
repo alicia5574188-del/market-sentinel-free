@@ -114,6 +114,10 @@ export type PortfolioCycleArchive = { number: number; ruleVersion: string; start
 export type RouteCheck = { id: string; eventId: string; strategyId: string; strategyName: string; symbol: string;
   observedAt: number; status: "FORMING" | "CHECKING" | "BLOCKED" | "OPEN"; blocker: string | null;
   side: Side | null; environment: AllRegimeEnvironment | null; score: number; reason: string | null };
+export type BlockedCandidate = { id: string; eventId: string; strategyId: string; strategyName: string; symbol: string;
+  blockedAt: number; side: Side; orientation: StrategyOrientation; environment: AllRegimeEnvironment;
+  entryPrice: number; stopPrice: number; targetPrice: number; score: number;
+  stage: "EXECUTION" | "AUTHORITY" | "ACCOUNT"; code: string; reason: string };
 
 export type StrategyArenaState = {
   version: 12; startedAt: number; strategies: Record<string, StrategyScore>; playbookResults: Record<string, PlaybookEventResult[]>;
@@ -124,6 +128,7 @@ export type StrategyArenaState = {
   archivedPortfolioTrades: ArenaTrade[];
   transitions: ArenaTransition[]; seenSignals: string[]; admissionRejects: Record<string, number>;
   recentObservations: Array<{ id: string; eventId: string; strategyId: string; strategyName: string; symbol: string; observedAt: number; blocker: string }>;
+  blockedCandidates: BlockedCandidate[];
   currentRouteChecks: Record<string, RouteCheck>;
   lastPortfolioCloses: Record<string, { closedAt: number; branch: AllRegimeEnvironment | null; eventId: string }>;
   cutoverPending: boolean;
@@ -171,7 +176,7 @@ export function initialStrategyArena(now = Date.now()): StrategyArenaState {
     portfolioEquity: STRATEGY_INITIAL_EQUITY, portfolioResolved: 0, portfolioWins: 0, portfolioGrossPnl: 0,
     portfolioCosts: 0, portfolioCycle: 1, portfolioCycleStartedAt: now, archivedPortfolioCycles: [],
     recentShadow: [], recentPaper: [], recentPortfolio: [], archivedPortfolioTrades: [], transitions: [], seenSignals: [], admissionRejects: {},
-    recentObservations: [], currentRouteChecks: {}, lastPortfolioCloses: {}, cutoverPending: false };
+    recentObservations: [], blockedCandidates: [], currentRouteChecks: {}, lastPortfolioCloses: {}, cutoverPending: false };
 }
 
 function legacyArchive(value: unknown, now: number): PortfolioCycleArchive[] {
@@ -223,6 +228,7 @@ export function normalizeStrategyArena(value: StrategyArenaState | null | undefi
     archivedPortfolioTrades: (value.archivedPortfolioTrades ?? []).slice(-ARENA_HISTORY_LIMIT), transitions: (value.transitions ?? []).slice(-200),
     seenSignals: (value.seenSignals ?? []).slice(-2_000), archivedPortfolioCycles: (value.archivedPortfolioCycles ?? []).slice(-12),
     admissionRejects: value.admissionRejects ?? {}, recentObservations: (value.recentObservations ?? []).slice(-ARENA_HISTORY_LIMIT),
+    blockedCandidates: (value.blockedCandidates ?? []).slice(-ARENA_HISTORY_LIMIT),
     currentRouteChecks: value.currentRouteChecks ?? {},
     lastPortfolioCloses: value.lastPortfolioCloses ?? {},
     cutoverPending: Boolean(value.cutoverPending) };
@@ -804,6 +810,20 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
       observedAt: input.observation.now, blocker });
     state.recentObservations = state.recentObservations.slice(-ARENA_HISTORY_LIMIT);
   };
+  const recordBlockedCandidate = (definition: StrategyDefinition, signal: Signal,
+    stage: BlockedCandidate["stage"], code: string, reason: string) => {
+    const orientation = signal.orientation ?? "NORMAL";
+    const id = `blocked:${definition.id}:${orientation}:${input.observation.candidate.id}`;
+    const candidate: BlockedCandidate = { id, eventId: input.observation.candidate.id,
+      strategyId: definition.id, strategyName: definition.name, symbol: input.observation.candidate.symbol,
+      blockedAt: input.observation.now, side: signal.side, orientation, environment: signal.branch,
+      entryPrice: executableEntry(input.observation, signal.side), stopPrice: signal.stopPrice,
+      targetPrice: signal.targetPrice, score: Math.round(signal.quality * 100), stage, code, reason };
+    const prior = state.blockedCandidates.findIndex((row) => row.id === id);
+    if (prior >= 0) state.blockedCandidates[prior] = candidate;
+    else state.blockedCandidates.push(candidate);
+    state.blockedCandidates = state.blockedCandidates.slice(-ARENA_HISTORY_LIMIT);
+  };
   for (const definition of STRATEGY_CATALOG.filter((row) => row.channel === input.observation.candidate.channel)) {
     if (!generatedSignals.some((signal) => signal.strategyId === definition.id)) {
       setRouteCheck(definition, null, "FORMING", "当前完整5分钟路径尚未形成获准执行的进场结构");
@@ -826,6 +846,8 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
     if (overlappingVariantTrade) {
       setRouteCheck(definition, normalSignal, "BLOCKED", "同币同策略的上一条路线仍在完整生命周期内");
       recordObservation(definition, "同币种的同环境路线仍在完整生命周期内，本次不重复建立影子");
+      if (score.enabled) recordBlockedCandidate(definition, normalSignal, "ACCOUNT", "DUPLICATE_LIFECYCLE",
+        "同币同策略的上一条路线仍在完整生命周期内");
       continue;
     }
     for (const signal of [normalSignal, mirroredSignal(input.observation, normalSignal)]) {
@@ -838,9 +860,13 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
         || state.recentShadow.some((trade) => tradeOrientation(trade) === orientation
           && trade.eventId === input.observation.candidate.id && trade.strategyId === signal.strategyId);
       if (eventAlreadyExecuted || state.open[openKey] || Object.keys(state.open).length >= ARENA_MAX_OPEN) {
-        if (orientation === "NORMAL") setRouteCheck(definition, signal, "BLOCKED",
-          eventAlreadyExecuted ? "本完成段已经执行过，不重复追单" : state.open[openKey]
-            ? "同币同策略路线仍在完整生命周期内" : "影子生命周期容量已满");
+        const reason = eventAlreadyExecuted ? "本完成段已经执行过，不重复追单" : state.open[openKey]
+          ? "同币同策略路线仍在完整生命周期内" : "影子生命周期容量已满";
+        if (orientation === "NORMAL") setRouteCheck(definition, signal, "BLOCKED", reason);
+        if ((orientation === "NORMAL" && score.enabled) || (orientation === "REVERSE" && score.reverseEnabled)) {
+          recordBlockedCandidate(definition, signal, "ACCOUNT", eventAlreadyExecuted ? "EVENT_ALREADY_HANDLED"
+            : state.open[openKey] ? "DUPLICATE_LIFECYCLE" : "SHADOW_CAPACITY", reason);
+        }
         continue;
       }
       const virtual = effectiveShadowSizing(input.observation, signal);
@@ -848,6 +874,9 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
       if (blocker || !virtual) {
         if (orientation === "NORMAL") setRouteCheck(definition, signal, "BLOCKED", blocker ?? "当前路线不能真实执行");
         recordObservation(definition, blocker ?? "当前环境路线不能真实执行");
+        if ((orientation === "NORMAL" && score.enabled) || (orientation === "REVERSE" && score.reverseEnabled)) {
+          recordBlockedCandidate(definition, signal, "EXECUTION", "EXECUTION_CHECK", blocker ?? "当前路线不能真实执行");
+        }
         continue;
       }
       executable.push({ signal, definition, score, sizing: virtual });
@@ -883,18 +912,24 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
       state.portfolioOpen[symbol] = cloneShadowForPortfolio(winner.shadow, winner.decision.admission.sizing, winner.decision.admission.sample);
       state.seenSignals.push(portfolioSeenKey);
       setRouteCheck(winner.definition, winner.signal, "OPEN", "模拟账户已成交并进入实时保护");
-      for (const row of assessed.filter((item) => item !== winner)) setRouteCheck(row.definition, row.signal, "BLOCKED",
-        `同币同完成段由${winner.definition.name}的账户优先级接管`);
+      for (const row of assessed.filter((item) => item !== winner)) {
+        const reason = `同币同完成段由${winner.definition.name}的账户优先级接管`;
+        setRouteCheck(row.definition, row.signal, "BLOCKED", reason);
+        recordBlockedCandidate(row.definition, row.signal, "ACCOUNT", "ACCOUNT_PRIORITY", reason);
+      }
     } else {
       for (const row of assessed.filter((item) => item.decision.blocker)) {
         const blocker = admissionBlockerText(row.decision.blocker!);
         setRouteCheck(row.definition, row.signal, "BLOCKED", blocker);
         recordObservation(row.definition, `已形成${row.signal.side === "LONG" ? "做多" : "做空"}路线；最终阻塞：${blocker}`);
+        recordBlockedCandidate(row.definition, row.signal, "ACCOUNT", row.decision.blocker!, blocker);
       }
     }
   } else if (opened.length && !active.length) {
     setRouteCheck(opened[0].definition, opened[0].signal, "BLOCKED", "策略方向尚未获得当前连续胜负状态授权");
     recordObservation(opened[0].definition, "双向影子继续运行；尚未形成连续3胜的顺极或连续3败且镜像全胜的逆极");
+    recordBlockedCandidate(opened[0].definition, opened[0].signal, "AUTHORITY", "POLARITY_NOT_AUTHORIZED",
+      "路线已通过执行检查，但策略方向尚未获得当前连续胜负状态授权");
   } else if (opened.length && state.portfolioOpen[symbol]) {
     setRouteCheck(opened[0].definition, opened[0].signal, "BLOCKED", "该币已有账户持仓，当前路线仅继续影子观察");
   } else if (opened.length && state.seenSignals.includes(portfolioSeenKey)) {
@@ -944,6 +979,7 @@ export function arenaSummary(state: StrategyArenaState) {
     trialCount: 0, verifiedCount: strategies.filter((row) => row.lane === "ACTIVE").length,
     paperCount: strategies.filter((row) => row.enabled || row.reverseEnabled).length,
     openShadow: open, openPaper: [], observationShadow: state.recentObservations.slice(-100).reverse(),
+    blockedCandidates: state.blockedCandidates.slice(-100).reverse(),
     portfolioOpen: Object.values(state.portfolioOpen).sort((a, b) => b.openedAt - a.openedAt),
     portfolioEquity: state.portfolioEquity, portfolioResolved: state.portfolioResolved, portfolioWins: state.portfolioWins,
     portfolioGrossPnl: state.portfolioGrossPnl, portfolioCosts: state.portfolioCosts, strategies: strategySummaries,
