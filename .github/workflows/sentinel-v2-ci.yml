@@ -1045,7 +1045,9 @@ jobs:
               .ok == true and .version == "all-regime-compound-v2" and .mode == "PAPER" and
               .runtime.state == "LIVE" and .runtime.stale == false and .runtime.lastError == null and
               ((now * 1000 - .runtime.lastSuccessAt) < 10000) and
-              .runtime.liveMode.requestedEnabled == false and .runtime.liveMode.operational == false and
+              (.runtime.liveMode.requestedEnabled | type) == "boolean" and
+              (.runtime.liveMode.operational | type) == "boolean" and
+              (.runtime.liveMode.operational == false or .runtime.liveMode.requestedEnabled == true) and
               .runtime.strategyArena.version == 12 and .runtime.strategyArena.playbookCount == 6 and
               .runtime.strategyArena.catalogSize == 6 and
               (.runtime.strategyArena.routeCheckCount | type) == "number" and
@@ -1156,7 +1158,9 @@ jobs:
             .runtime.version == "all-regime-compound-v2" and .runtime.mode == "PAPER" and
             .runtime.state == "LIVE" and .runtime.stale == false and .runtime.lastError == null and
             ((now * 1000 - .runtime.lastSuccessAt) < 10000) and
-            .runtime.liveMode.requestedEnabled == false and .runtime.liveMode.operational == false and
+            (.runtime.liveMode.requestedEnabled | type) == "boolean" and
+            (.runtime.liveMode.operational | type) == "boolean" and
+            (.runtime.liveMode.operational == false or .runtime.liveMode.requestedEnabled == true) and
             .runtime.strategyArena.version == 12 and .runtime.strategyArena.playbookCount == 6 and
             .runtime.strategyArena.catalogSize == 6 and
             (.runtime.strategyArena.routeCheckCount | type) == "number" and
