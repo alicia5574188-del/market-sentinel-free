@@ -43,11 +43,12 @@ test("LIVE preserves reversal identity and follows the PAPER active protection s
   assert.equal(arenaProtectionStop({ ...selected, activeStopPrice: undefined }), selected.stopPrice);
 });
 
-test("LIVE never backfills a portfolio trade opened before the owner enabled it", () => {
+test("LIVE continuously mirrors every currently open PAPER portfolio trade while owner-enabled", () => {
   const selected = trade(10_000);
-  assert.equal(eligibleForLiveMirror(selected, 10_001, 10_002), false);
-  assert.equal(eligibleForLiveMirror(selected, 9_999, 10_005), true);
-  assert.equal(eligibleForLiveMirror(selected, 9_999, 20_001), false);
+  assert.equal(eligibleForLiveMirror(selected, 10_001, 10_002), true, "enabling LIVE backfills an already-open PAPER holding");
+  assert.equal(eligibleForLiveMirror(selected, 9_999, 20_001), true, "an open PAPER holding remains eligible after the old ten-second window");
+  assert.equal(eligibleForLiveMirror({ ...selected, status: "CLOSED" }, 9_999, 20_001), false);
+  assert.equal(eligibleForLiveMirror(selected, null, 20_001), false);
 });
 
 test("LIVE exits when the one PAPER account closes or replaces its selected trade", () => {

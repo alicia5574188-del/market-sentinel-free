@@ -1061,7 +1061,33 @@ test("a capacity-limited portfolio order is skipped without blocking an affordab
   assert.match(stream.runtime.live.entrySkips.ETH_USDT.reason, /本轮未挂单/);
 });
 
-test("LIVE ignores existing portfolio positions and mirrors only a new post-enable account order", async () => {
+test("LIVE backfills an existing open PAPER portfolio position when the owner enables LIVE", async () => {
+  const { stream } = await makeStream();
+  stream.runtime.symbols = ["BTC_USDT"];
+  const oldOpenedAt = Date.now() - 60_000;
+  stream.runtime.strategyArena.portfolioOpen = { BTC_USDT: portfolioTrade("BTC_USDT", oldOpenedAt) };
+  stream.runtime.contractMeta = { BTC_USDT: {
+    quantoMultiplier: 0.001, maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0,
+  } };
+  stream.runtime.evidence.BTC_USDT = { midpoint: 100, observedAt: Date.now(), warmup: 30, fresh: true,
+    ancillaryFresh: true, entryReady: true, topLong: null, topShort: null, absorption: 0 };
+  let createCalls = 0;
+  stream.liveClient = {
+    requestCount: 0,
+    snapshot: async () => ({ account: { total: "1000", available: "1000", in_dual_mode: false },
+      positions: [], orders: [], priceOrders: [], checkedAt: Date.now() }),
+    createEntry: async () => { createCalls += 1; return "paper-backfill"; },
+    setLeverage: async () => undefined,
+  };
+
+  const enabled = await stream.setLiveMode(true);
+  assert.equal(enabled.ok, true);
+  assert.equal(createCalls, 1, "an already-open PAPER position must be represented in LIVE when LIVE is enabled");
+  assert.equal(stream.runtime.live.entries.BTC_USDT.kind, "MARKET");
+  assert.equal(stream.runtime.live.entries.BTC_USDT.planId, `PORTFOLIO:BTC_USDT:${oldOpenedAt}`);
+});
+
+test("an open PAPER holding retries its first LIVE copy after fresh data returns beyond ten seconds", async () => {
   const { stream } = await makeStream();
   stream.runtime.symbols = ["BTC_USDT"];
   const oldOpenedAt = Date.now() - 60_000;
@@ -1074,23 +1100,20 @@ test("LIVE ignores existing portfolio positions and mirrors only a new post-enab
     requestCount: 0,
     snapshot: async () => ({ account: { total: "1000", available: "1000", in_dual_mode: false },
       positions: [], orders: [], priceOrders: [], checkedAt: Date.now() }),
-    createEntry: async () => { createCalls += 1; return "confirmed-breakout"; },
+    createEntry: async () => { createCalls += 1; return "delayed-paper-backfill"; },
     setLeverage: async () => undefined,
   };
 
   const enabled = await stream.setLiveMode(true);
   assert.equal(enabled.ok, true);
-  assert.equal(createCalls, 0);
+  assert.equal(createCalls, 0, "missing fresh execution data must still fail closed");
 
-  const triggeredAt = stream.runtime.live.changedAt! + 1;
-  stream.runtime.strategyArena.portfolioOpen.BTC_USDT = portfolioTrade("BTC_USDT", triggeredAt,
-    { id: `PORTFOLIO:BTC_USDT:${triggeredAt}`, entryPrice: 101.2, stopPrice: 98, targetPrice: 110, lastPrice: 101.2 });
-  stream.runtime.evidence.BTC_USDT = { midpoint: 101.2, observedAt: triggeredAt, warmup: 30, fresh: true,
-    ancillaryFresh: true, topLong: null, topShort: null, absorption: 0 };
-  await stream.syncLive(triggeredAt + 1);
-  assert.equal(createCalls, 1);
-  assert.equal(stream.runtime.live.entries.BTC_USDT.kind, "MARKET");
-  assert.equal(stream.runtime.live.entries.BTC_USDT.planId, `PORTFOLIO:BTC_USDT:${triggeredAt}`);
+  const recoveredAt = stream.runtime.live.changedAt! + 60_000;
+  stream.runtime.evidence.BTC_USDT = { midpoint: 100, observedAt: recoveredAt, warmup: 30, fresh: true,
+    ancillaryFresh: true, entryReady: true, topLong: null, topShort: null, absorption: 0 };
+  await stream.syncLive(recoveredAt);
+  assert.equal(createCalls, 1, "fresh recovery must not be blocked by the retired ten-second entry window");
+  assert.equal(stream.runtime.live.entries.BTC_USDT.planId, `PORTFOLIO:BTC_USDT:${oldOpenedAt}`);
 });
 
 test("forced OFF reconciliation cancels only orphaned Market Sentinel entry tags", async () => {

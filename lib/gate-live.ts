@@ -1,5 +1,5 @@
 import { decryptGateCredentials, type EncryptedGateCredentials, type GateCredentials } from "./credential-vault.ts";
-import { CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_MARGIN_CAP, PORTFOLIO_RISK_CAP, ROUND_TRIP_FRICTION_RATE, selectSafeLeverage, sizePaperPosition, stagedEconomicTarget, tradeEconomics, type PaperPlan, type Side } from "./liquidity-core.ts";
+import { CORRELATED_DIRECTION_RISK_CAP, MAX_NOTIONAL_TO_EQUITY, PORTFOLIO_MARGIN_CAP, PORTFOLIO_RISK_CAP, ROUND_TRIP_FRICTION_RATE, selectSafeLeverage, sizePaperPosition, stagedEconomicTarget, tradeEconomics, type PaperPlan, type Side } from "./liquidity-core.ts";
 
 const encoder = new TextEncoder();
 const GATE_TRIGGER_DAY_SECONDS = 86_400;
@@ -294,7 +294,7 @@ export function buildLiveEntryIntent(input: {
   // real loss remains inside both account-wide and correlated-direction boundaries.
   const requestedNotional = input.mirrorNotionalFraction == null
     ? sized.notional
-    : input.equity * Math.max(0, Math.min(1, input.mirrorNotionalFraction));
+    : input.equity * Math.max(0, Math.min(MAX_NOTIONAL_TO_EQUITY, input.mirrorNotionalFraction));
   let contracts = Math.max(1, Math.floor(requestedNotional / contractNotional));
   let leverageChoice = selectSafeLeverage({ notional: contracts * contractNotional, equity: input.equity,
     entry: entryPrice, invalidation: plan.invalidation, maintenanceRate: input.maintenanceRate, leverageMax: maxLeverage });

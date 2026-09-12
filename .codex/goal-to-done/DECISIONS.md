@@ -120,6 +120,12 @@
 - A healthy cycle with no admitted route is a completed decision, not a stalled step. The operator page must say how many candidates were rejected and that it is waiting for the next completed five-minute bar.
 - The V11 replay may report `衡返` as research evidence, but `衡返` is explicitly PAPER-disabled. Its changing 30-day shadow result cannot block a sizing-only release; the gate continues to require positive current evidence for every account-authorized exhaustion branch and the V12 routes.
 
+## 2026-09-12 — PAPER notional and LIVE representation follow the account, not a timer
+
+- The 0.5× per-position ceiling and 20% five-level-depth haircut conflict with the derivatives account's structural-risk sizing and can reduce an otherwise valid 1,000 U PAPER order to economically immaterial exposure. Retain the existing 4× total notional ceiling and every risk/margin/economics gate; use book depth only to prove at least one Gate contract is executable.
+- LIVE is the owner-enabled proportional representation of the PAPER account, not a separate signal subscriber. An open PAPER trade remains eligible for its first LIVE entry even when it predates enable or fresh execution data arrives more than ten seconds after the PAPER open.
+- A PAPER notional fraction may exceed 1× equity and must remain the same fraction on LIVE up to the shared 4× ceiling. Gate lot rounding and actual LIVE risk, margin, liquidation and economics checks remain authoritative and may explicitly skip an infeasible copy.
+
 ## 2026-09-09 — Data capability defines the strategy layer
 
 - The thirty-contract ticker radar is a best-effort discovery layer. Its failure may delay discovery of a new opportunity symbol, but may not pause completed-candle evaluation for the stable realtime core.

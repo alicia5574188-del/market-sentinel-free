@@ -55,6 +55,15 @@ test("a selected account order mirrors its proportional notional only after fres
   assert.ok(intent.plannedRisk <= 6.5);
 });
 
+test("LIVE preserves leveraged PAPER notional as the same equity fraction", () => {
+  const selected = { ...plan("BREAKOUT", "LONG"), invalidation: 99.8, target: 103 };
+  const intent = buildLiveEntryIntent({ plan: selected, entryPrice: 100, equity: 10, available: 10,
+    openRisk: 0, quantoMultiplier: 0.01, leverageMax: 50, mirrorNotionalFraction: 3,
+    modeledCostRate: 0.0012 });
+  assert.equal(intent.notional, 30, "a 3000 U PAPER order on 1000 U must become 30 U on a 10 U LIVE account");
+  assert.equal(intent.contracts, 30);
+});
+
 test("a 10 U LIVE account uses Gate's one-contract lot when its actual stop risk fits total and correlated caps", () => {
   const scaled = { ...plan("BREAKOUT", "LONG"), invalidation: 99.8 };
   const intent = buildLiveEntryIntent({ plan: scaled, equity: 10, available: 5.88, openRisk: 0, quantoMultiplier: 1, leverageMax: 50 });
