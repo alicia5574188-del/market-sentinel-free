@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ALL_REGIME_STRATEGIES, detectAllRegimeRoutes, dominantAllRegimeEnvironment } from "../lib/all-regime-engine.ts";
+import { ALL_REGIME_STRATEGIES, allRegimePaperApproved, detectAllRegimeRoutes,
+  dominantAllRegimeEnvironment } from "../lib/all-regime-engine.ts";
 
 const candle = (index: number, close: number, spread = 1) => ({
   time: index * 300, open: close - 0.2, high: close + spread / 2, low: close - spread / 2, close,
@@ -9,6 +10,10 @@ const candle = (index: number, close: number, spread = 1) => ({
 test("the system owns six state-conditioned mechanisms across three structural route classes", () => {
   assert.deepEqual(ALL_REGIME_STRATEGIES.map((row) => row.name), ["势承", "潮补", "静移", "冲衡", "脉折", "潮接"]);
   assert.equal(new Set(ALL_REGIME_STRATEGIES.map((row) => row.environment)).size, 3);
+});
+
+test("an unknown persisted strategy key fails closed instead of stopping the runtime", () => {
+  assert.equal(allRegimePaperApproved("retired_strategy"), false);
 });
 
 test("a completed impulse rejection creates the causal 冲衡 route", () => {

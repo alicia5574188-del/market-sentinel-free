@@ -54,8 +54,9 @@ export const ALL_REGIME_OFFLINE_VALIDATION = {
     validationEvents: 57, validationProfitFactor: 1.60, validationWinRate: 0.44, paperApproved: true },
 } as const;
 
-export const allRegimePaperApproved = (strategyId: AllRegimeStrategyId) =>
-  ALL_REGIME_OFFLINE_VALIDATION[strategyId].paperApproved;
+export const allRegimePaperApproved = (strategyId: string) => Boolean(
+  (ALL_REGIME_OFFLINE_VALIDATION as Partial<Record<string, { paperApproved: boolean }>>)[strategyId]?.paperApproved,
+);
 
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 const median = (values: number[]) => {

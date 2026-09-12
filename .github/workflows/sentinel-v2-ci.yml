@@ -1091,7 +1091,20 @@ jobs:
             fi
             sleep 5
           done
-          (( advancing >= 2 ))
+          if (( advancing < 2 )); then
+            jq -c '{
+              ok, version, mode,
+              runtime: {
+                version: .runtime.version, mode: .runtime.mode, state: .runtime.state,
+                stale: .runtime.stale, authorityReady: .runtime.authorityReady,
+                lastError: .runtime.lastError, lastSuccessAt: .runtime.lastSuccessAt,
+                lastAlarmAt: .runtime.lastAlarmAt, liveMode: .runtime.liveMode,
+                strategyArenaVersion: .runtime.strategyArena.version,
+                portfolioEquity: .runtime.strategyArena.portfolioEquity
+              }
+            }' "$RUNNER_TEMP/main-health.json"
+            exit 1
+          fi
 
           page_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/main-page.html" -w '%{http_code}' \
             "$WORKER_BASE_URL/" || true)"
