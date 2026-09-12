@@ -184,7 +184,7 @@ test("V12 verified-route engine is causal, selective, cost-aware, and the sole L
   assert.match(arena, /quantoMultiplier/);
   assert.match(arena, /ARENA_MAX_OPEN = 240/);
   assert.match(arena, /ARENA_HISTORY_LIMIT = 240/);
-  assert.match(arena, /MIN_PORTFOLIO_TRADE_RISK_USDT = 10/);
+  assert.match(arena, /PORTFOLIO_TRADE_RISK_TARGET_USDT = 10/);
   assert.doesNotMatch(arena, /EMPIRICAL_COST/);
   assert.match(arena, /seenSignals\.length > 2_000/);
   assert.match(regime, /MARKET_REGIME_MIN_SAMPLES = 18/);
@@ -203,7 +203,8 @@ test("V12 verified-route engine is causal, selective, cost-aware, and the sole L
   assert.match(worker, /mirrorNotionalFraction: trade\.notional \/ Math\.max\(trade\.accountEquityAtOpen/);
   assert.match(worker, /strategyArena: normalizeStrategyArena\(saved\.strategyArena\)/);
   assert.match(worker, /resetStrategyArenaAccount/);
-  assert.match(worker, /minimumPortfolioRiskUsdt: MIN_PORTFOLIO_TRADE_RISK_USDT/);
+  assert.match(worker, /minimumPortfolioRiskUsdt: 0/);
+  assert.match(worker, /targetPortfolioRiskUsdt: PORTFOLIO_TRADE_RISK_TARGET_USDT/);
   assert.match(worker, /empiricalCostFloorRate: ARENA_FRICTION_RATE/);
   assert.match(arena, /POLARITY_STREAK = 3/);
   assert.match(arena, /reversed\.every\(\(row\) => row\.netReturnRate > 0\)/);

@@ -112,6 +112,13 @@
 
 # Decisions
 
+## 2026-09-12 — Depth is a size cap, not a fixed eligibility threshold
+
+- Strategy qualification does not depend on whether the simulated account contains 1,000 U or another amount. Capital enters only after a route has formed, when the executable number of Gate contracts is calculated.
+- The retained five-level book is execution capacity, not a 10,000 U entrance requirement. Limit the order to 20% of the smaller bid/ask depth, round down to Gate integer contracts, and reject only if that result is below one contract.
+- Ten U remains a sizing target, never a minimum-dollar eligibility gate. A smaller account or a route reduced by liquidity may carry less planned risk; this is not permission to enlarge risk or bypass the aggregate 10%, correlated 6.5%, margin, cost, freshness or structural checks.
+- A healthy cycle with no admitted route is a completed decision, not a stalled step. The operator page must say how many candidates were rejected and that it is waiting for the next completed five-minute bar.
+
 ## 2026-09-09 — Data capability defines the strategy layer
 
 - The thirty-contract ticker radar is a best-effort discovery layer. Its failure may delay discovery of a new opportunity symbol, but may not pause completed-candle evaluation for the stable realtime core.

@@ -139,6 +139,34 @@ test("stale execution data remains observation-only", () => {
   assert.match(state.currentRouteChecks["BTC_USDT:momentum_carry"]?.blocker ?? "", /不新鲜/);
 });
 
+test("valid routes shrink to current book capacity instead of requiring a fixed 10,000 U floor", () => {
+  const input = observation(); input.bidDepthUsd = 500; input.askDepthUsd = 600;
+  const state = observeStrategyArena({ state: initialStrategyArena(1), observation: input });
+  const paper = state.portfolioOpen.BTC_USDT;
+  assert.ok(paper, "a valid route should trade when the book can hold at least one Gate contract");
+  assert.ok(paper.notional <= 500 * 0.2 + 1e-8);
+  assert.equal(paper.contracts, Math.floor(paper.notional / (paper.entryPrice * paper.quantoMultiplier)));
+  const shadow = Object.values(state.open)[0];
+  assert.ok(shadow.notional <= 500 * 0.2 + 1e-8, "shadow and PAPER use the same market-capacity rule");
+});
+
+test("account equity changes order size but does not impose a minimum-dollar entry gate", () => {
+  const state = initialStrategyArena(1); state.portfolioEquity = 500;
+  const observed = observeStrategyArena({ state, observation: observation() });
+  const paper = observed.portfolioOpen.BTC_USDT;
+  assert.ok(paper, "the same valid market route should remain eligible at lower equity");
+  assert.ok(paper.notional <= 250 + 1e-8);
+  assert.ok(paper.plannedRisk < 10, "10 U is a sizing target, not an order-eligibility minimum");
+});
+
+test("depth rejects a route only when one Gate contract cannot fit", () => {
+  const input = observation(); input.bidDepthUsd = 0.4; input.askDepthUsd = 0.5;
+  const state = observeStrategyArena({ state: initialStrategyArena(1), observation: input });
+  assert.equal(state.portfolioOpen.BTC_USDT, undefined);
+  assert.equal(Object.keys(state.open).length, 0);
+  assert.match(state.currentRouteChecks["BTC_USDT:momentum_carry"]?.blocker ?? "", /一张Gate合约/);
+});
+
 test("a fourth account trade is admitted when risk, margin and data capacity still fit", () => {
   const state = observeStrategyArena({ state: initialStrategyArena(1), observation: observation(2_000_000) });
   const template = state.portfolioOpen.BTC_USDT;

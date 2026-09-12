@@ -1001,7 +1001,8 @@ test("health status is compact while retaining every release gate", async () => 
   assert.equal(status.strategyArena.playbookCount, 6);
   assert.equal(status.strategyArena.catalogSize, 6);
   assert.equal(status.strategyArena.portfolioEquity, 1_000);
-  assert.equal(status.strategyArena.rules.minimumPortfolioRiskUsdt, 10);
+  assert.equal(status.strategyArena.rules.minimumPortfolioRiskUsdt, 0);
+  assert.equal(status.strategyArena.rules.targetPortfolioRiskUsdt, 10);
   assert.equal(status.strategyArena.rules.empiricalCostFloorRate, 0.0014);
   assert.equal(status.strategyArena.rules.authorityWindowPriority, "STATE_CONDITIONED_EXPECTANCY");
   assert.equal(status.strategyArena.rules.allRegimeVersion, 3);

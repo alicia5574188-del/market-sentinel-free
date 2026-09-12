@@ -16,7 +16,8 @@ export const ARENA_MAX_SPREAD_RATE = 0.0012;
 export const ARENA_MIN_VOLUME_24H_USD = 10_000_000;
 export const ARENA_MAX_COST_SHARE = 0.25;
 export const ARENA_QUOTE_STALE_MS = 5_000;
-export const MIN_PORTFOLIO_TRADE_RISK_USDT = 10;
+export const PORTFOLIO_TRADE_RISK_TARGET_USDT = 10;
+export const DEPTH_CAPACITY_SHARE = 0.2;
 export const PORTFOLIO_REALTIME_CAPACITY = 10;
 export const MAX_PORTFOLIO_POSITIONS = null;
 export const ARENA_MAX_OPEN = 240;
@@ -626,6 +627,24 @@ function tradeContext(input: ArenaObservation, definition: StrategyDefinition, s
 }
 type TradeSizing = { notional: number; plannedRisk: number; contracts: number; quantoMultiplier: number; leverage: number;
   margin: number; accountEquityAtOpen: number; admissionTier: AdmissionTier | null };
+
+function depthAdjustedSizing(input: ArenaObservation, signal: Signal, sizing: TradeSizing) {
+  const economics = geometryEconomics(input, signal);
+  const contractNotional = economics.entryPrice * sizing.quantoMultiplier;
+  const smallerBookSide = Math.min(input.bidDepthUsd ?? 0, input.askDepthUsd ?? 0);
+  const depthContracts = contractNotional > 0
+    ? Math.floor(smallerBookSide * DEPTH_CAPACITY_SHARE / contractNotional)
+    : 0;
+  const contracts = Math.min(sizing.contracts, depthContracts);
+  if (contracts < 1) return null;
+  if (contracts === sizing.contracts) return sizing;
+  const notional = contracts * contractNotional;
+  const leverage = selectSafeLeverage({ notional, equity: sizing.accountEquityAtOpen, entry: economics.entryPrice,
+    invalidation: signal.stopPrice, maintenanceRate: input.maintenanceRate, leverageMax: input.leverageMax });
+  return { ...sizing, contracts, notional,
+    plannedRisk: notional * (economics.structuralStopRate + ARENA_FRICTION_RATE),
+    leverage: leverage.leverage, margin: leverage.margin } satisfies TradeSizing;
+}
 function openTrade(input: ArenaObservation, definition: StrategyDefinition, signal: Signal, lane: TradeLane,
   sizing: TradeSizing, selectedForPortfolio: boolean, sample?: PerformanceEvidence, attributedStrategyIds?: string[]) {
   const entryPrice = executableEntry(input, signal.side);
@@ -672,8 +691,7 @@ function portfolioSizing(state: StrategyArenaState, input: ArenaObservation, sig
   leverage = selectSafeLeverage({ notional, equity: state.portfolioEquity, entry: economics.entryPrice,
     invalidation: signal.stopPrice, maintenanceRate: input.maintenanceRate, leverageMax: input.leverageMax });
   const plannedRisk = notional * (economics.structuralStopRate + ARENA_FRICTION_RATE);
-  if (plannedRisk + 1e-8 < MIN_PORTFOLIO_TRADE_RISK_USDT
-    || openRisk(state) + plannedRisk > state.portfolioEquity * PORTFOLIO_RISK_CAP + 1e-8
+  if (openRisk(state) + plannedRisk > state.portfolioEquity * PORTFOLIO_RISK_CAP + 1e-8
     || openRisk(state, signal.side) + plannedRisk > state.portfolioEquity * CORRELATED_DIRECTION_RISK_CAP + 1e-8
     || usedMargin + leverage.margin > state.portfolioEquity * PORTFOLIO_MARGIN_CAP + 1e-8) return null;
   return { notional, plannedRisk, contracts, quantoMultiplier: multiplier, leverage: leverage.leverage, margin: leverage.margin,
@@ -698,10 +716,11 @@ function portfolioAdmission(state: StrategyArenaState, input: ArenaObservation, 
         : null;
   if (blocker) { state.admissionRejects[blocker] = (state.admissionRejects[blocker] ?? 0) + 1;
     return { admission: null, blocker }; }
-  const sizing = portfolioSizing(state, input, signal);
-  if (!sizing) { state.admissionRejects.SIZING = (state.admissionRejects.SIZING ?? 0) + 1;
+  const accountSizing = portfolioSizing(state, input, signal);
+  if (!accountSizing) { state.admissionRejects.SIZING = (state.admissionRejects.SIZING ?? 0) + 1;
     return { admission: null, blocker: "SIZING" }; }
-  if (Math.min(input.bidDepthUsd ?? 0, input.askDepthUsd ?? 0) < Math.max(10_000, sizing.notional * 5)) {
+  const sizing = depthAdjustedSizing(input, signal, accountSizing);
+  if (!sizing) {
     state.admissionRejects.DEPTH = (state.admissionRejects.DEPTH ?? 0) + 1;
     return { admission: null, blocker: "DEPTH" };
   }
@@ -713,7 +732,7 @@ const admissionBlockerText = (blocker: string) => ({
   STRUCTURE: "进场、止损和盈利臂的方向关系无效", LIQUIDITY: "24小时成交额低于账户执行下限",
   SPREAD: "真实买一卖一价差超过成本上限", NET_ECONOMICS: "扣除手续费与滑点后的盈亏结构不足",
   SYMBOL_COOLDOWN: "同币同分支刚完成交易，正在避免重复追单", SIZING: "Gate整数张数或账户风险额度不足",
-  DEPTH: "盘口双边深度不足以承载计划仓位",
+  DEPTH: "盘口容量连一张Gate合约都无法承载",
 }[blocker] ?? blocker);
 
 function effectiveShadowSizing(input: ArenaObservation, signal: Signal) {
@@ -728,9 +747,10 @@ function effectiveShadowSizing(input: ArenaObservation, signal: Signal) {
   const notional = contracts * contractNotional;
   const leverage = selectSafeLeverage({ notional, equity: STRATEGY_INITIAL_EQUITY, entry: economics.entryPrice,
     invalidation: signal.stopPrice, maintenanceRate: input.maintenanceRate, leverageMax: input.leverageMax });
-  return { notional, plannedRisk: notional * (economics.structuralStopRate + ARENA_FRICTION_RATE), contracts,
+  const sizing = { notional, plannedRisk: notional * (economics.structuralStopRate + ARENA_FRICTION_RATE), contracts,
     quantoMultiplier: multiplier, leverage: leverage.leverage, margin: leverage.margin,
     accountEquityAtOpen: STRATEGY_INITIAL_EQUITY, admissionTier: null } satisfies TradeSizing;
+  return depthAdjustedSizing(input, signal, sizing);
 }
 
 function effectiveShadowBlocker(input: ArenaObservation, signal: Signal, sizing: TradeSizing | null) {
@@ -747,9 +767,7 @@ function effectiveShadowBlocker(input: ArenaObservation, signal: Signal, sizing:
             : distanceFromTrigger > triggerTolerance ? "已经错过冻结的进场位置"
             : !stopOutsideNoise ? "止损仍位于正常分钟噪声内"
               : !economicGeometry ? "目标扣完整成本后不具备可执行经济性"
-                  : !sizing ? "Gate整数张数无法建立合格影子仓位"
-                    : Math.min(input.bidDepthUsd ?? 0, input.askDepthUsd ?? 0) < Math.max(10_000, sizing.notional * 5)
-                      ? "盘口双边深度不足" : null;
+                  : !sizing ? "盘口容量连一张Gate合约都无法承载" : null;
 }
 
 export function applyStrategySleepStates(state: StrategyArenaState, _availableChannels: Set<CandidateChannel>, now: number) {
@@ -940,7 +958,8 @@ export function arenaSummary(state: StrategyArenaState) {
       portfolioRiskCap: PORTFOLIO_RISK_CAP, correlatedRiskCap: CORRELATED_DIRECTION_RISK_CAP,
       marginCap: PORTFOLIO_MARGIN_CAP, maxNotionalMultiple: 1.5, realtimeCapacity: PORTFOLIO_REALTIME_CAPACITY,
       maxPortfolioPositions: MAX_PORTFOLIO_POSITIONS,
-      minimumPortfolioRiskUsdt: MIN_PORTFOLIO_TRADE_RISK_USDT, empiricalCostFloorRate: ARENA_FRICTION_RATE,
+      minimumPortfolioRiskUsdt: 0, targetPortfolioRiskUsdt: PORTFOLIO_TRADE_RISK_TARGET_USDT,
+      empiricalCostFloorRate: ARENA_FRICTION_RATE,
       authorityWindowPriority: "STATE_CONDITIONED_EXPECTANCY", paperEvaluation: true,
       exactShadowClone: true, normalShadowAlwaysOn: true, reverseShadowAlwaysOn: true,
       streakLength: POLARITY_STREAK, streakMaxSpanMs: POLARITY_MAX_SPAN_MS,
