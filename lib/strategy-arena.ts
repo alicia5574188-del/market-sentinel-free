@@ -2,6 +2,7 @@ import { CORRELATED_DIRECTION_RISK_CAP, MAX_NOTIONAL_TO_EQUITY, MIN_NET_REWARD_R
   selectSafeLeverage, sizePaperPosition, type LiquidityRoute, type RangeStructure, type Side } from "./liquidity-core.ts";
 import type { CandidateChannel, MarketRegimeCandidate, MarketRegimeKind, ResidentCandleStructure } from "./market-regime.ts";
 import { ALL_REGIME_ENGINE_VERSION, ALL_REGIME_OFFLINE_VALIDATION, ALL_REGIME_STRATEGIES, ALL_REGIME_SYSTEM_NAME,
+  allRegimePaperApproved,
   type AllRegimeEnvironment } from "./all-regime-engine.ts";
 import { classifyMarketState } from "./strategy-coverage.ts";
 import { MARKET_PHASE_AUTHORITY, routeMarketApproved } from "./strategy-coverage-policy.ts";
@@ -159,7 +160,7 @@ const baseId = (strategyId: string) => strategyId.split(":")[0];
 const regimeGroup = (regime: MarketRegimeKind) => regime === "TREND" || regime === "EXPANSION" ? "DIRECTIONAL" : regime;
 
 function freshStrategy(definition: StrategyDefinition): StrategyScore {
-  const offlineApproved = ALL_REGIME_OFFLINE_VALIDATION[definition.id as keyof typeof ALL_REGIME_OFFLINE_VALIDATION].paperApproved;
+  const offlineApproved = allRegimePaperApproved(definition.id);
   return { ...definition, lane: offlineApproved ? "ACTIVE" : "SHADOW", enabled: offlineApproved, shadowResolved: 0, shadowWins: 0, shadowNetReturnRate: 0,
     paperResolved: 0, paperWins: 0, paperNetReturnRate: 0, paperEquity: STRATEGY_INITIAL_EQUITY,
     consecutivePaperLosses: 0, stageResults: [], stageEvents: [], stageSymbols: [], recentResults: [],
