@@ -1,3 +1,12 @@
+# Release candidate — 2026-09-12 market-scaled execution sizing
+
+- Root cause confirmed from production state and source: route qualification completed normally, but both shadow and PAPER admission required the smaller five-level Gate book side to exceed `max(10,000 U, 5 × planned notional)`. The fixed 10,000 U term dominated a roughly 500 U account order and falsely rejected liquid contracts.
+- Removed the fixed floor. A valid route is now capped to 20% of the smaller current book side, rounded down to Gate integer contracts, and rejected only if one contract cannot fit. The 10 U risk value is a sizing target rather than a minimum-dollar eligibility gate, so account equity changes order size but not strategy validity.
+- Existing upper risk, correlated-direction risk, margin, leverage, cost, freshness, structural and contract gates are unchanged. PAPER retains the exact sized notional, and existing LIVE logic mirrors its notional/equity fraction before Gate rounding and fresh LIVE economics checks.
+- The operator page now reports a no-route step 3 as “本轮已完成 · 等待下轮”, including the candidate and blocked-route counts, rather than leaving “进行中” on screen indefinitely.
+- Local acceptance passes 209 direct tests, four all-regime tests, 17 architecture/migration tests, TypeScript, ESLint, production build and whitespace validation. Local Wrangler dry-run was unavailable because this executor rejected its network call; the release workflow retains that mandatory remote build/deploy gate. PAPER history and account state are not reset, credentials are untouched, and LIVE remains OFF.
+- PR #194 run #694 passed the complete build/dry-run/test stage and causal all-regime replay, then correctly stopped before deployment on an obsolete V11 check that required the PAPER-disabled `衡返` shadow to remain positive. Current authorized exhaustion evidence remained positive in all three folds (PF 1.40/1.24/1.18), with `势承` train/validation PF 1.39/1.38 and `竭转` validation PF 1.40. The contradictory disabled-shadow condition is removed; no account-authorized evidence threshold is weakened.
+
 # In progress — 2026-09-11 V12 opportunity-gap completion
 
 - Production inspection at 01:36 CST found a healthy, non-stale authority: 30/30 liquid markets had retained completed-five-minute paths, all ten realtime slots were actionable, no protected-market/data/path error existed, and LIVE remained OFF. The no-entry interval is therefore not a Gate-data outage.

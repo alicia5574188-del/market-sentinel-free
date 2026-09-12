@@ -302,3 +302,10 @@ Permanently isolate Gate bulk-ticker timeouts from the two-second execution auth
 - Remove the arbitrary three-position admission/rank cap. Continue to admit only positions that fit fresh executable data, integer Gate contracts, 10% total structural risk, 6.5% same-direction risk, 30% margin and the ten-market management surface.
 - Make LIVE copy every new post-enable V11 portfolio order's strategy identity, side, structural/profit geometry, proportional notional and subsequent active protection stop. Gate lot rounding and actual account safety checks remain mandatory and must be shown as an explicit skip rather than silently changing the trade.
 - Preserve the running PAPER account, positions, history and credentials. Do not touch the repaired public-data cadence or Gate failover path; keep LIVE explicitly owner-controlled and OFF through release.
+# Correction — market-scaled depth sizing and honest cycle status
+
+- Remove the fixed 10,000 U order-book floor that rejects otherwise valid routes independently of the intended order size.
+- Keep signal and strategy qualification independent from account capital; after a route qualifies, cap PAPER size to at most one fifth of the smaller top-five book side and reject only when even one Gate contract cannot fit.
+- Preserve all freshness, cost, structural, contract, risk, margin, account-history and owner-controlled LIVE-OFF behavior. LIVE continues to mirror the exact PAPER notional fraction with Gate integer rounding.
+- Show a completed no-route decision cycle as waiting for the next completed five-minute bar instead of presenting step 3 as a permanently running operation.
+- Release only after focused sizing/parity tests, the full repository verification suite, PR review and production health checks pass.

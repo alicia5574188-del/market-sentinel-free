@@ -618,7 +618,8 @@ jobs:
               .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 10 and
               .runtime.strategyArena.rules.singleTradeRiskMin == 0.01 and
               .runtime.strategyArena.rules.singleTradeRiskMax == 0.02 and
-              .runtime.strategyArena.rules.minimumPortfolioRiskUsdt == 10 and
+              .runtime.strategyArena.rules.minimumPortfolioRiskUsdt == 0 and
+              .runtime.strategyArena.rules.targetPortfolioRiskUsdt == 10 and
               .runtime.strategyArena.rules.empiricalCostFloorRate == 0.0014 and
               .runtime.strategyArena.rules.portfolioRiskCap == 0.10 and
               .runtime.strategyArena.rules.correlatedRiskCap == 0.065 and
@@ -1054,7 +1055,8 @@ jobs:
               .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 10 and
               .runtime.strategyArena.rules.singleTradeRiskMin == 0.01 and
               .runtime.strategyArena.rules.singleTradeRiskMax == 0.02 and
-              .runtime.strategyArena.rules.minimumPortfolioRiskUsdt == 10 and
+              .runtime.strategyArena.rules.minimumPortfolioRiskUsdt == 0 and
+              .runtime.strategyArena.rules.targetPortfolioRiskUsdt == 10 and
               .runtime.strategyArena.rules.empiricalCostFloorRate == 0.0014 and
               .runtime.strategyArena.rules.authorityWindowPriority == "STATE_CONDITIONED_EXPECTANCY" and
               .runtime.strategyArena.rules.extremeSequenceAuthority == false and
@@ -1159,7 +1161,8 @@ jobs:
             .runtime.strategyArena.catalogSize == 6 and
             (.runtime.strategyArena.routeCheckCount | type) == "number" and
             (.runtime.feedQuality.attempts | type) == "number" and
-            .runtime.strategyArena.rules.minimumPortfolioRiskUsdt == 10 and
+            .runtime.strategyArena.rules.minimumPortfolioRiskUsdt == 0 and
+            .runtime.strategyArena.rules.targetPortfolioRiskUsdt == 10 and
             .runtime.strategyArena.rules.empiricalCostFloorRate == 0.0014 and
             .runtime.strategyArena.rules.normalShadowAlwaysOn == true and
             .runtime.strategyArena.rules.extremeSequenceAuthority == false and
