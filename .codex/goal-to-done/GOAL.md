@@ -1,4 +1,11 @@
-# Active goal — close the remaining V11 opportunity gaps with two verified original strategies
+# Active correction — keep LIVE protection prices executable and lifecycle-aligned with PAPER
+
+- Correct the observed owner-enabled LIVE failure where Gate positions opened and immediately flattened while the same two PAPER positions remained open.
+- Preserve the exact PAPER direction, lifecycle and proportional notional. Convert only the LIVE protective stop onto Gate's contract price grid, rounding outward so exchange protection can never exit earlier merely because of tick normalization.
+- Retain close-only/reduce-only protection, fresh-price checks, real account risk/margin caps, owner-only controls and the current user-controlled LIVE state. Do not reset PAPER, delete history, rotate credentials or alter strategy signals.
+- Verify the exact observed BNB `736.135` / `0.05` and ZEC `1123.721` / `0.01` cases, the complete test/build/lint/dry-run suite, reviewed GitHub main release and advancing production health.
+
+# Completed goal — close the remaining V11 opportunity gaps with two verified original strategies
 
 - Production evidence must identify why a volatile three-hour window produced no new PAPER entry after two correctly exited positions; distinguish missing route geometry from data, execution, cost, strategy-authority and portfolio blockers.
 - Research persistent-direction, low-volatility/rotation and multi-scale phase mechanisms, but add exactly two completed-five-minute mechanisms only if their own after-cost chronological evidence passes. Rejected trend, compression or quiet-range candidates must not enter production merely to increase the catalog.

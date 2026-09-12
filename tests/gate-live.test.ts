@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, LiveEntrySizingError, liveEntryDisposition, liveOrderId } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, LiveEntrySizingError, liveEntryDisposition, liveOrderId, liveStopPriceForTick } from "../lib/gate-live.ts";
 import type { PaperPlan } from "../lib/liquidity-core.ts";
 
 function plan(marketState: PaperPlan["marketState"], side: PaperPlan["side"]): PaperPlan {
@@ -104,6 +104,20 @@ test("protective stop is close-only and cannot reverse the account", () => {
   assert.equal(trigger.rule, 2);
   assert.equal(trigger.price, "99");
   assert.equal((stop.body.trigger as { expiration: number }).expiration, 86_400 * 30);
+});
+
+test("LIVE protective stops align outward to Gate's contract tick without exiting before PAPER", () => {
+  assert.equal(liveStopPriceForTick("SHORT", 736.135, 0.05), 736.15);
+  assert.equal(liveStopPriceForTick("LONG", 1123.721, 0.01), 1123.72);
+
+  const short = buildLiveStopIntent({ id: "bnb", symbol: "BNB_USDT", side: "SHORT", currentStop: 736.135 }, 0.05);
+  const long = buildLiveStopIntent({ id: "zec", symbol: "ZEC_USDT", side: "LONG", currentStop: 1123.721 }, 0.01);
+  assert.equal((short.body.trigger as { price: string }).price, "736.15");
+  assert.equal((long.body.trigger as { price: string }).price, "1123.72");
+  assert.equal(short.price % 0.05 < 1e-9 || 0.05 - short.price % 0.05 < 1e-9, true);
+  assert.equal(long.price % 0.01 < 1e-9 || 0.01 - long.price % 0.01 < 1e-9, true);
+  assert.ok(short.price >= 736.135);
+  assert.ok(long.price <= 1123.721);
 });
 
 test("terminal Gate orders are classified without ever replaying a successful entry", () => {

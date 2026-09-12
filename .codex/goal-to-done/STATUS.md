@@ -1,3 +1,9 @@
+# In progress — 2026-09-12 LIVE protective-stop tick alignment
+
+- Production at 12:10 CST reported two still-open PAPER holdings: BNB short with stop `736.135` and ZEC long with stop `1123.721`; LIVE remained owner-enabled/operational but Gate was flat and equity had fallen from 10 U to 9.97 U.
+- Gate currently publishes `order_price_round=0.05` for BNB and `0.01` for ZEC. Both PAPER stop values are off-grid. The LIVE entry market order can fill, but the subsequent Gate protective price order rejects the raw stop; current fail-closed handling then requests an immediate reduce-only market exit. This explains both the lifecycle divergence and the fee-sized balance change.
+- Implemented exchange-only outward tick normalization: long stops round down and short stops round up by no more than one tick. PAPER geometry, lifecycle and sizing are unchanged. Exact BNB/ZEC regressions, 212 direct tests, four all-regime tests, 17 architecture/migration tests, TypeScript, ESLint, production build, Cloudflare dry-run and whitespace validation all pass. Next: reviewed release after user authorization.
+
 # Done — 2026-09-12 meaningful sizing and continuous LIVE parity
 
 - Recovered the interrupted Quant5 branch and confirmed its automation stopped on a stale architecture assertion before creating the source commit or PR.

@@ -1056,11 +1056,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       position.stopSubmittingAt = null;
     }
     const tick = this.runtime.tickSize[position.symbol] ?? position.currentStop * 1e-8;
-    if (position.stopOrderId && position.stopPrice != null && Math.abs(position.stopPrice - position.currentStop) < tick * 0.5) return;
+    const stop = buildLiveStopIntent(position, tick);
+    if (position.stopOrderId && position.stopPrice != null && Math.abs(position.stopPrice - stop.price) < tick * 0.5) return;
     if (position.stopOrderId) {
       try {
-        await client.amendStop(position.stopOrderId, position.currentStop);
-        position.stopPrice = position.currentStop;
+        await client.amendStop(position.stopOrderId, stop.price);
+        position.stopPrice = stop.price;
         return;
       } catch (error) {
         if (!position.exitRequestedAt) {
@@ -1072,9 +1073,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
     }
     if (position.stopTag && position.stopSubmittingAt && Date.now() - position.stopSubmittingAt < 6_000) return;
-    const stop = buildLiveStopIntent(position);
     position.stopTag = stop.tag;
-    position.stopPrice = position.currentStop;
+    position.stopPrice = stop.price;
     position.stopSubmittingAt = Date.now();
     await this.saveCheckpoint(Date.now(), true);
     try {
