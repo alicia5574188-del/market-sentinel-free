@@ -452,3 +452,9 @@ Commit `8528f11965fe3ae17d404f2cb636f63e198c2160` deployed successfully in GitHu
 - Implemented a pure causal state-cell ledger with discovery/held-out metrics, full-cost results, symbol/time-concentration guards, accepted masks and explicit uncovered cells. Targeted tests pass with TypeScript.
 - Replayed the latest CI artifact only as a diagnostic because its 20-market sample contains stocks/metals/energy. It proves the old global-average method hides large state gaps; it is not release evidence.
 - Next: run the same research on a newly generated crypto-only PR dataset, freeze only its held-out-positive masks, wire the resulting combination into PAPER authority, then complete all verification and production release without changing LIVE.
+# In progress — 2026-09-12 immediate native stop and rejected sizing increase
+
+- Started from current GitHub `main` on `codex/triple-sizing-immediate-native-stop`; no account, credential, history or LIVE-state mutation has been made.
+- Moving the existing verified Gate `price_orders` close-only/reduce-only stop submission into the same execution pass immediately after confirmed entry submission; no unverified Gate order schema is being introduced.
+- Production-equivalent 3× replay failed decisively: the tested variants produced roughly 34%–58% maximum drawdown and at least one losing chronological segment. A fixed 1.5× notional replay (3× the old 0.5× research size) also failed the training profitability gate at 991.10 U / PF 1.03. Sizing remains unchanged rather than deploying a known-losing configuration.
+- Local verification passes: six all-regime tests, the frozen 30-day/20-crypto-market research gate (train PF 1.31 / 10.29% max drawdown; held-out PF 1.59 / 9.88% max drawdown), 229 direct tests, TypeScript, ESLint, production build, 17 architecture/migration tests, Wrangler dry-run and whitespace validation. Reviewed GitHub release is pending.
