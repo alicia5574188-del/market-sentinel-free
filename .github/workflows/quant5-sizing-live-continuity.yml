@@ -61,8 +61,7 @@ jobs:
           )
 
           # LIVE is an account mirror: while owner-enabled, every currently open PAPER portfolio trade
-          # remains eligible to be represented in LIVE. This also allows recovery after an exchange-side
-          # protective close while PAPER is still open, instead of silently diverging to zero holdings.
+          # remains eligible to be represented in LIVE, including positions already open when LIVE is enabled.
           replace_once(
               "lib/arena-live.ts",
               "export function eligibleForLiveMirror(trade: ArenaTrade, liveEnabledAt: number | null, now: number) {\n  return liveEnabledAt != null && trade.openedAt >= liveEnabledAt && now >= trade.openedAt\n    && now - trade.openedAt <= LIVE_MIRROR_ENTRY_WINDOW_MS;\n}",
@@ -90,6 +89,17 @@ jobs:
               "  assert.ok(paper.notional <= 250 + 1e-8);",
               "  assert.ok(paper.notional > 250, \"risk sizing may use derivatives notional above the old 0.5x-equity ceiling\");",
           )
+          replace_once(
+              "tests/strategy-arena.test.ts",
+              "  const input = observation(); input.bidDepthUsd = 0.4; input.askDepthUsd = 0.5;",
+              "  const input = observation(); input.bidDepthUsd = 0.05; input.askDepthUsd = 0.08;",
+          )
+
+          replace_once(
+              "tests/runtime-faults.test.ts",
+              "test(\"LIVE ignores existing portfolio positions and mirrors only a new post-enable account order\", async () => {\n  const { stream } = await makeStream();\n  stream.runtime.symbols = [\"BTC_USDT\"];\n  const oldOpenedAt = Date.now() - 60_000;\n  stream.runtime.strategyArena.portfolioOpen = { BTC_USDT: portfolioTrade(\"BTC_USDT\", oldOpenedAt) };\n  stream.runtime.contractMeta = { BTC_USDT: {\n    quantoMultiplier: 0.001, maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0,\n  } };\n  let createCalls = 0;\n  stream.liveClient = {\n    requestCount: 0,\n    snapshot: async () => ({ account: { total: \"1000\", available: \"1000\", in_dual_mode: false },\n      positions: [], orders: [], priceOrders: [], checkedAt: Date.now() }),\n    createEntry: async () => { createCalls += 1; return \"confirmed-breakout\"; },\n    setLeverage: async () => undefined,\n  };\n\n  const enabled = await stream.setLiveMode(true);\n  assert.equal(enabled.ok, true);\n  assert.equal(createCalls, 0);\n\n  const triggeredAt = stream.runtime.live.changedAt! + 1;\n  stream.runtime.strategyArena.portfolioOpen.BTC_USDT = portfolioTrade(\"BTC_USDT\", triggeredAt,\n    { id: `PORTFOLIO:BTC_USDT:${triggeredAt}`, entryPrice: 101.2, stopPrice: 98, targetPrice: 110, lastPrice: 101.2 });\n  stream.runtime.evidence.BTC_USDT = { midpoint: 101.2, observedAt: triggeredAt, warmup: 30, fresh: true,\n    ancillaryFresh: true, topLong: null, topShort: null, absorption: 0 };\n  await stream.syncLive(triggeredAt + 1);\n  assert.equal(createCalls, 1);\n  assert.equal(stream.runtime.live.entries.BTC_USDT.kind, \"MARKET\");\n  assert.equal(stream.runtime.live.entries.BTC_USDT.planId, `PORTFOLIO:BTC_USDT:${triggeredAt}`);\n});",
+              "test(\"LIVE backfills an existing open PAPER portfolio position when the owner enables LIVE\", async () => {\n  const { stream } = await makeStream();\n  stream.runtime.symbols = [\"BTC_USDT\"];\n  const oldOpenedAt = Date.now() - 60_000;\n  stream.runtime.strategyArena.portfolioOpen = { BTC_USDT: portfolioTrade(\"BTC_USDT\", oldOpenedAt) };\n  stream.runtime.contractMeta = { BTC_USDT: {\n    quantoMultiplier: 0.001, maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0,\n  } };\n  stream.runtime.evidence.BTC_USDT = { midpoint: 100, observedAt: Date.now(), warmup: 30, fresh: true,\n    ancillaryFresh: true, entryReady: true, topLong: null, topShort: null, absorption: 0 };\n  let createCalls = 0;\n  stream.liveClient = {\n    requestCount: 0,\n    snapshot: async () => ({ account: { total: \"1000\", available: \"1000\", in_dual_mode: false },\n      positions: [], orders: [], priceOrders: [], checkedAt: Date.now() }),\n    createEntry: async () => { createCalls += 1; return \"paper-backfill\"; },\n    setLeverage: async () => undefined,\n  };\n\n  const enabled = await stream.setLiveMode(true);\n  assert.equal(enabled.ok, true);\n  assert.equal(createCalls, 1, \"an already-open PAPER position must be represented in LIVE when LIVE is enabled\");\n  assert.equal(stream.runtime.live.entries.BTC_USDT.kind, \"MARKET\");\n  assert.equal(stream.runtime.live.entries.BTC_USDT.planId, `PORTFOLIO:BTC_USDT:${oldOpenedAt}`);\n});",
+          )
 
       - run: npm ci
       - run: npm run test:direct
@@ -101,7 +111,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add lib/strategy-arena.ts lib/arena-live.ts worker/index-clean.ts tests/strategy-arena.test.ts tests/arena-live.test.ts
+          git add lib/strategy-arena.ts lib/arena-live.ts worker/index-clean.ts tests/strategy-arena.test.ts tests/arena-live.test.ts tests/runtime-faults.test.ts
+          git rm .github/workflows/quant5-sizing-live-continuity.yml
           git diff --cached --check
           git commit -m "Fix meaningful PAPER sizing and continuous LIVE mirroring"
           git push origin HEAD:codex/v12-sizing-live-continuity
