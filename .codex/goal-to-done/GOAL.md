@@ -1,4 +1,11 @@
-# Active goal — unified PAPER/LIVE trade lifecycle display
+# Active goal — immediate native LIVE protection
+
+- Submit the already proven Gate native close-only/reduce-only price-order stop immediately after Gate confirms entry submission, in the same execution pass rather than waiting for the next alarm.
+- Reject the requested 3× sizing release if a production-equivalent replay loses money or exceeds the existing acceptance drawdown; do not use the old fixed-0.5× report as evidence for current sizing.
+- Preserve the user's PAPER history, current positions, credentials and owner-controlled LIVE switch. Never enable or disable LIVE during release.
+- Verify all direct/architecture/research/build/lint/type checks, release through reviewed GitHub `main`, and prove advancing production health.
+
+# Completed goal — unified PAPER/LIVE trade lifecycle display
 
 - Change presentation only. Keep the user's completed PAPER reset, current positions/history, strategy authority, Gate orders, credentials and owner-controlled LIVE state untouched.
 - Render open LIVE positions with the same card hierarchy and field treatment as open PAPER positions, while retaining truthful LIVE-only leverage, margin and exchange-protection details.

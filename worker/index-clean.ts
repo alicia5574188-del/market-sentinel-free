@@ -102,6 +102,11 @@ type LiveEntry = {
   plannedRisk: number;
   leverage: number;
   margin: number;
+  stopOrderId: string | null;
+  stopTag: string | null;
+  stopPrice: number | null;
+  stopSubmittingAt: number | null;
+  protectionExitRequestedAt: number | null;
   missingSince: number | null;
   lastError: string | null;
 };
@@ -1085,8 +1090,49 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private async cancelLiveEntry(client: GateLiveClient, entry: LiveEntry) {
     if (entry.status === "FILLED" || entry.status === "CANCELLED") return;
     if (entry.exchangeOrderId) await client.cancelOrder(entry.kind, entry.exchangeOrderId);
+    if (entry.stopOrderId) await client.cancelOrder("PRICE_TRIGGER", entry.stopOrderId);
     entry.status = "CANCELLED";
+    entry.stopOrderId = null;
+    entry.stopTag = null;
+    entry.stopPrice = null;
+    entry.stopSubmittingAt = null;
     entry.lastError = null;
+  }
+
+  private liveEntryStopIntent(entry: LiveEntry) {
+    const tick = this.runtime.tickSize[entry.symbol] ?? entry.invalidation * 1e-8;
+    return buildLiveStopIntent({ id: entry.planId, symbol: entry.symbol, side: entry.side,
+      currentStop: entry.invalidation }, tick);
+  }
+
+  private async createImmediateLiveStop(client: GateLiveClient, entry: LiveEntry) {
+    const stop = this.liveEntryStopIntent(entry);
+    entry.stopTag = stop.tag;
+    entry.stopPrice = stop.price;
+    entry.stopSubmittingAt = Date.now();
+    try {
+      entry.stopOrderId = await client.createStop(stop);
+      entry.stopSubmittingAt = null;
+      this.recordLiveAudit({ observedAt: Date.now(), symbol: entry.symbol, planId: entry.planId,
+        stage: "STOP_CREATE", level: "INFO",
+        reason: `Gate 确认入场后已在同一次执行中提交原生减仓止损 ${stop.price}` });
+    } catch (error) {
+      if (!definitiveGateRejection(error)) {
+        entry.lastError = `原生止损提交结果暂不明确，正在按标签核对：${safeError(error)}`;
+        this.recordLiveAudit({ observedAt: Date.now(), symbol: entry.symbol, planId: entry.planId,
+          stage: "STOP_CREATE", level: "RECOVERING",
+          reason: `${entry.lastError}；不重复挂单，6秒内不能确认则退出`, error });
+        return;
+      }
+      const failedAt = Date.now();
+      entry.protectionExitRequestedAt = failedAt;
+      entry.stopSubmittingAt = null;
+      entry.status = "ERROR";
+      entry.lastError = `原生止损挂单失败，系统已请求市价退出：${safeError(error)}`;
+      this.recordLiveAudit({ observedAt: failedAt, symbol: entry.symbol, planId: entry.planId,
+        stage: "STOP_CREATE", level: "FORCED_EXIT", reason: entry.lastError, error });
+      await client.closePosition(entry.symbol, liveExitTag(entry.planId));
+    }
   }
 
   private async ensureLiveStop(client: GateLiveClient, position: LivePosition, openPriceOrders: Awaited<ReturnType<GateLiveClient["snapshot"]>>["priceOrders"]) {
@@ -1211,7 +1257,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const client = await this.gateLive();
     let snapshot = await client.snapshot();
     const knownTags = new Set([
-      ...Object.values(this.runtime.live.entries).flatMap((entry) => entry?.tag && !["FILLED", "CANCELLED"].includes(entry.status) ? [entry.tag] : []),
+      ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status)
+        ? [entry.tag, entry.stopTag ?? this.liveEntryStopIntent(entry).tag] : []),
       ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" && position.stopTag ? [position.stopTag] : []),
     ]);
     const trackedEntryIds = new Set(Object.values(this.runtime.live.entries)
@@ -1305,6 +1352,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const multiplier = this.runtime.contractMeta[symbol]?.quantoMultiplier ?? 1;
         const notional = Math.abs(exchangeSize) * entryPrice * multiplier;
         const leverage = Math.max(1, Number(actual.leverage ?? entry.leverage) || entry.leverage);
+        const expectedStop = this.liveEntryStopIntent(entry);
+        const recoveredStop = snapshot.priceOrders.find((order) => liveOrderTag(order) === (entry.stopTag ?? expectedStop.tag));
         position = {
           id: entry.planId, symbol, side, scenario: entry.scenario, entryAt: now, entryPrice,
           initialStop: entry.invalidation, currentStop: entry.invalidation, currentTarget: entry.target,
@@ -1315,7 +1364,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           rangeBoundary: entry.rangeBoundary, rangeBuffer: entry.rangeBuffer, sweepExtreme: entry.sweepExtreme,
           reclaimSource: entry.reclaimSource, reclaimStrength: entry.reclaimStrength,
           status: "OPEN", exchangeSize: Math.abs(exchangeSize), leverage, margin: notional / leverage,
-          stopOrderId: null, stopTag: null, stopPrice: null, stopSubmittingAt: null, exitRequestedAt: null, exchangeUpdatedAt: now,
+          stopOrderId: entry.stopOrderId ?? (recoveredStop ? liveOrderId(recoveredStop) : null),
+          stopTag: entry.stopTag ?? expectedStop.tag, stopPrice: entry.stopPrice ?? expectedStop.price,
+          stopSubmittingAt: entry.stopSubmittingAt ?? null, exitRequestedAt: entry.protectionExitRequestedAt ?? null,
+          exchangeUpdatedAt: now,
         };
         this.runtime.live.positions[symbol] = position;
         entry.status = "FILLED";
@@ -1383,10 +1435,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       .find((entry) => entry && ["SUBMITTING", "ERROR"].includes(entry.status)) ?? null;
     const recoveringStop = Object.values(this.runtime.live.positions)
       .find((position) => position?.status === "OPEN" && position.stopSubmittingAt && !position.stopOrderId) ?? null;
-    this.runtime.live.operational = !recoveringSubmission && !recoveringStop;
+    let recoveringEntryStop = Object.values(this.runtime.live.entries)
+      .find((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status)
+        && entry.stopSubmittingAt && !entry.stopOrderId) ?? null;
+    this.runtime.live.operational = !recoveringSubmission && !recoveringStop && !recoveringEntryStop;
     this.runtime.live.lastError = recoveringSubmission
       ? recoveringSubmission.lastError ?? `${recoveringSubmission.symbol} 的实盘提交正在与 Gate 核对`
-      : recoveringStop ? `${recoveringStop.symbol} 的结构止损正在按订单标签核对` : null;
+      : recoveringStop ? `${recoveringStop.symbol} 的结构止损正在按订单标签核对`
+        : recoveringEntryStop ? `${recoveringEntryStop.symbol} 的初始止损正在按订单标签核对` : null;
     let availableForNewEntries = available;
     let riskForNewEntries = this.liveOpenRisk();
     const directionRiskForNewEntries: Record<Side, number> = {
@@ -1455,6 +1511,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         reclaimSource: plan.reclaimSource, reclaimStrength: plan.reclaimStrength,
         size: intent.size, contracts: intent.contracts,
         notional: intent.notional, plannedRisk: intent.plannedRisk, leverage: intent.leverage, margin: intent.margin,
+        stopOrderId: null, stopTag: null, stopPrice: null, stopSubmittingAt: null, protectionExitRequestedAt: null,
         missingSince: null, lastError: null,
       };
       this.runtime.live.entries[symbol] = entry;
@@ -1473,6 +1530,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         try {
           entry.exchangeOrderId = await client.createEntry(intent);
           entry.status = "OPEN";
+          await this.createImmediateLiveStop(client, entry);
+          if (!entry.stopOrderId) {
+            if (entry.protectionExitRequestedAt) recoveringSubmission = entry;
+            else recoveringEntryStop = entry;
+            break;
+          }
         } catch (error) {
           const reason = `Gate 实盘入场提交失败：${safeError(error)}`;
           entry.lastError = reason;
@@ -1494,11 +1557,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         throw error;
       }
     }
-    if (recoveringSubmission || recoveringStop) {
+    if (recoveringSubmission || recoveringStop || recoveringEntryStop) {
       this.runtime.live.operational = false;
       this.runtime.live.lastError = recoveringSubmission
         ? recoveringSubmission.lastError ?? `${recoveringSubmission.symbol} 的实盘提交正在与 Gate 核对`
-        : `${recoveringStop!.symbol} 的结构止损正在按订单标签核对`;
+        : recoveringStop ? `${recoveringStop.symbol} 的结构止损正在按订单标签核对`
+          : `${recoveringEntryStop!.symbol} 的初始止损正在按订单标签核对`;
     }
   }
 
