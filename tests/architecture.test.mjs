@@ -229,6 +229,7 @@ test("V12 verified-route engine is causal, selective, cost-aware, and the sole L
   assert.doesNotMatch(arena, /state\.portfolioEquity \* 0\.5/);
   assert.match(arena, /state\.portfolioEquity \* MAX_NOTIONAL_TO_EQUITY/);
   assert.match(gateLive, /Math\.min\(MAX_NOTIONAL_TO_EQUITY, input\.mirrorNotionalFraction\)/);
+  assert.match(worker, /maxNotionalMultiple: MAX_NOTIONAL_TO_EQUITY/);
   assert.match(page, /重置1000 U模拟资金/);
   assert.match(page, /confirm: "RESET_PAPER"/);
   assert.match(worker, /SCAN_UNIVERSE_SIZE = 30/);
