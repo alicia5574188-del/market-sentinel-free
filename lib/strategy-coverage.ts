@@ -11,6 +11,8 @@ export type MarketStateFeatures = {
   marketMedianMove: number;
 };
 
+export type MarketStateCandle = { open: number; high: number; low: number; close: number };
+
 export type MarketStateCell = {
   key: string;
   phase: MarketPhase;
@@ -89,6 +91,30 @@ const DEFAULT_THRESHOLDS: CoverageThresholds = {
 
 const finite = (value: number, fallback = 0) => Number.isFinite(value) ? value : fallback;
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
+const median = (values: number[]) => {
+  if (!values.length) return 0;
+  const ordered = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(ordered.length / 2);
+  return ordered.length % 2 ? ordered[middle] : (ordered[middle - 1] + ordered[middle]) / 2;
+};
+
+export function deriveMarketStateFeatures(candles: MarketStateCandle[], marketBreadth: number, marketMedianMove: number): MarketStateFeatures | null {
+  const rows = candles.slice(-120);
+  if (rows.length < 48) return null;
+  const latest = rows.at(-1)!;
+  const trend = rows.slice(-24);
+  const location = rows.slice(-48);
+  const travel = trend.slice(1).reduce((total, row, index) => total + Math.abs(row.close - trend[index].close), 0);
+  const recentRange = median(rows.slice(-6).map((row) => row.high - row.low));
+  const priorRange = median(rows.slice(-30, -6).map((row) => row.high - row.low));
+  const lower = Math.min(...location.map((row) => row.low));
+  const upper = Math.max(...location.map((row) => row.high));
+  return { trendRate: latest.close / trend[0].open - 1,
+    trendEfficiency: Math.abs(latest.close - trend[0].open) / Math.max(travel, latest.close * 1e-7),
+    volatilityRatio: recentRange / Math.max(priorRange, latest.close * 1e-9),
+    rangePosition: (latest.close - lower) / Math.max(upper - lower, latest.close * 1e-9),
+    marketBreadth, marketMedianMove };
+}
 
 /** Classifies only information available at signal time. Trade outcome fields are deliberately absent. */
 export function classifyMarketState(features: MarketStateFeatures): MarketStateCell {
@@ -185,4 +211,3 @@ export function buildStrategyCoverageReport(trades: CoverageTrade[], splitAt: nu
     });
   return { splitAt, thresholds, knownCells, acceptedCells, gaps, cells, phases };
 }
-

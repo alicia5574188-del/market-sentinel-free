@@ -1005,7 +1005,7 @@ test("health status is compact while retaining every release gate", async () => 
   assert.equal(status.strategyArena.rules.targetPortfolioRiskUsdt, 10);
   assert.equal(status.strategyArena.rules.empiricalCostFloorRate, 0.0014);
   assert.equal(status.strategyArena.rules.authorityWindowPriority, "STATE_CONDITIONED_EXPECTANCY");
-  assert.equal(status.strategyArena.rules.allRegimeVersion, 3);
+  assert.equal(status.strategyArena.rules.allRegimeVersion, 4);
   assert.equal(status.strategyArena.rules.extremeSequenceAuthority, false);
   assert.equal(status.strategyArena.rules.generatedRouteAuthority, false);
   assert.equal(status.strategyArena.rules.legacyStrategyAuthority, false);

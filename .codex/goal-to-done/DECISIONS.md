@@ -508,3 +508,9 @@
 - A strategy is judged inside an entry-time state cell formed from completed-candle trend efficiency, normalized volatility, range location and synchronized crypto-market breadth. Exit path, MFE, MAE and outcome cannot participate in classification.
 - The discovery half freezes candidate state cells. The held-out half must remain positive after 0.14% friction and 0.025% adverse next-bar entry, span multiple crypto symbols and profitable time buckets, or the cell remains an explicit gap.
 - Global profit factor cannot authorize a route in every environment. Historically validated state cells may enter PAPER directly while all variants keep collecting shadow evidence for later drift/demotion. Deployment never changes owner LIVE intent or resets account/history.
+
+# 2026-09-12 — Full-regime authority may intentionally be cash
+
+- “Cover every market phase” means every phase has a validated action, not that every phase must create an order. Compression, expansion, orderly trend and balanced rotation require at least one mechanism that is positive in both chronological halves after full modeled costs; transition/noise is `WAIT` until a mechanism proves otherwise.
+- PAPER authority is the intersection of a mechanism trigger and its frozen profitable state cell. Aggregate strategy PF, an attractive single fold or the inverse direction cannot authorize unrelated cells.
+- The clean runtime-equivalent replay replaces the polluted V11 baseline release gate. Five mechanisms pass exact state-conditioned authority; `势承` stays paired-shadow only because its apparent edge is time-concentrated. This is a reversible authority change and does not reset the current PAPER cycle or modify LIVE intent.

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildStrategyCoverageReport, classifyMarketState, type CoverageTrade, type MarketStateFeatures } from "../lib/strategy-coverage.ts";
+import { buildStrategyCoverageReport, classifyMarketState, deriveMarketStateFeatures, type CoverageTrade, type MarketStateFeatures } from "../lib/strategy-coverage.ts";
 
 const compression: MarketStateFeatures = { trendRate: 0.001, trendEfficiency: 0.35, volatilityRatio: 0.7,
   rangePosition: 0.5, marketBreadth: 0.5, marketMedianMove: 0 };
@@ -16,6 +16,16 @@ function rows(strategyId: string, state: MarketStateFeatures, returns: number[],
 test("market state classification is causal and independent of trade outcome", () => {
   assert.deepEqual(classifyMarketState(compression), { key: "COMPRESSION:MIXED:CENTER", phase: "COMPRESSION", crowding: "MIXED", location: "CENTER" });
   assert.equal(classifyMarketState({ ...expansion, rangePosition: 0.9 }).key, "EXPANSION:MIXED:HIGH_EDGE");
+});
+
+test("research and runtime can derive the same state features from one completed-candle path", () => {
+  const candles = Array.from({ length: 48 }, (_, index) => ({ open: 100 + index, high: 101.2 + index,
+    low: 99.8 + index, close: 100.8 + index }));
+  const features = deriveMarketStateFeatures(candles, 0.7, 0.002);
+  assert.ok(features);
+  assert.equal(features.marketBreadth, 0.7);
+  assert.equal(features.marketMedianMove, 0.002);
+  assert.ok(features.trendEfficiency > 0.9);
 });
 
 test("coverage accepts a strategy only in its held-out-positive state and leaves a negative state as a gap", () => {
@@ -45,4 +55,3 @@ test("coverage rejects a one-symbol or one-period result even when its profit fa
   assert.ok(result?.blockers.includes("SYMBOL_CONCENTRATION"));
   assert.ok(result?.blockers.includes("TIME_CONCENTRATION"));
 });
-

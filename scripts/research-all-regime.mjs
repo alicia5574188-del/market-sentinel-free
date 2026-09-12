@@ -1,5 +1,7 @@
-import { detectAllRegimeRoutes } from "../lib/all-regime-engine.ts";
+import { ALL_REGIME_STRATEGIES, allRegimePaperApproved, detectAllRegimeRoutes } from "../lib/all-regime-engine.ts";
 import { isCryptoContractType } from "../lib/contract-universe.ts";
+import { buildStrategyCoverageReport, deriveMarketStateFeatures } from "../lib/strategy-coverage.ts";
+import { MARKET_PHASE_AUTHORITY, routeMarketApproved } from "../lib/strategy-coverage-policy.ts";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const BASE = "https://api.gateio.ws/api/v4";
@@ -9,6 +11,7 @@ const SYMBOL_LIMIT = Number(process.env.RESEARCH_SYMBOLS ?? 20);
 const FRICTION = 0.0014;
 const ENTRY_SLIPPAGE = 0.00025;
 const REVERSE_PF = Number(process.env.RESEARCH_REVERSE_PF ?? 2.5);
+const UNIVERSE_POLICY = "gate-crypto-contract-type-v1";
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function gate(path, attempts = 4) {
@@ -106,7 +109,13 @@ function generate(symbol, rows) {
       const trade = resolveTrade(symbol, rows, index, route);
       const reverse = resolveTrade(symbol, rows, index, route, true);
       if (!trade || !reverse) continue;
-      trades.push(trade); reverseTrades.push(reverse); busyUntil.set(route.strategyId, trade.closedAt / 1000);
+      const context = marketContext.get(rows[index].time);
+      if (!context || context.markets < 12) continue;
+      const state = context && deriveMarketStateFeatures(rows.slice(index - 119, index + 1), context.breadth, context.medianMove);
+      if (!state) continue;
+      trades.push({ ...trade, state, routeContext: { strategyId: route.strategyId, side: route.side,
+        sourceDirection: route.sourceDirection, localMoveRate: route.localMoveRate } });
+      reverseTrades.push({ ...reverse, state }); busyUntil.set(route.strategyId, trade.closedAt / 1000);
     }
   }
   return { trades, reverseTrades };
@@ -193,14 +202,17 @@ function portfolio(candidateTrades, from, to) {
   return { ...metrics(selected), startEquity: 1_000, endEquity: equity, maxDrawdown };
 }
 
-const now = Math.floor(Date.now() / 1000 / STEP) * STEP;
-const from = now - DAYS * 86_400;
+let now = Math.floor(Date.now() / 1000 / STEP) * STEP;
+let from = now - DAYS * 86_400;
 const cachePath = "/tmp/all-regime-candles.json";
 let symbols;
 let datasets;
 if (existsSync(cachePath)) {
   const cached = JSON.parse(readFileSync(cachePath, "utf8"));
-  if (cached.days === DAYS && cached.symbolLimit === SYMBOL_LIMIT && now - cached.now <= STEP * 2) {
+  const frozenCache = process.env.RESEARCH_FROZEN_CACHE === "1";
+  if (cached.days === DAYS && cached.symbolLimit === SYMBOL_LIMIT && cached.universePolicy === UNIVERSE_POLICY
+    && (frozenCache || now - cached.now <= STEP * 2)) {
+    if (frozenCache) { now = cached.now; from = now - DAYS * 86_400; }
     ({ symbols, datasets } = cached); console.log(`loaded ${symbols.length}/${symbols.length} from bounded local cache`);
   }
 }
@@ -210,7 +222,8 @@ if (!datasets) {
     datasets.push(...await Promise.all(symbols.slice(index, index + 2).map(async (symbol) => ({ symbol, rows: await candles(symbol, from, now) }))));
     console.log(`loaded ${Math.min(index + 2, symbols.length)}/${symbols.length}`);
   }
-  writeFileSync(cachePath, JSON.stringify({ days: DAYS, symbolLimit: SYMBOL_LIMIT, now, symbols, datasets }));
+  writeFileSync(cachePath, JSON.stringify({ days: DAYS, symbolLimit: SYMBOL_LIMIT, universePolicy: UNIVERSE_POLICY,
+    now, symbols, datasets }));
 }
 const marketMoves = new Map();
 for (const { rows } of datasets) for (let index = 6; index < rows.length; index += 1) {
@@ -237,7 +250,7 @@ const generated = datasets.flatMap(({ symbol, rows }) => {
   return result.trades.map((trade, index) => ({ ...trade, reverseResult: result.reverseTrades[index] }));
 }).map((trade) => ({ ...trade, marketClass: marketClass(trade), symbolRank: symbols.indexOf(trade.symbol) }));
 const split = from * 1000 + (now - from) * 500;
-const ids = ["momentum_carry", "balance_return", "pressure_release", "exhaustion_turn"];
+const ids = ALL_REGIME_STRATEGIES.map((strategy) => strategy.id);
 const byStrategy = Object.fromEntries(ids.map((id) => {
   const rows = generated.filter((row) => row.strategyId === id);
   return [id, { train: metrics(rows.filter((row) => row.openedAt < split)), validation: metrics(rows.filter((row) => row.openedAt >= split)),
@@ -254,19 +267,18 @@ const byStrategy = Object.fromEntries(ids.map((id) => {
       validation: metrics(rows.filter((row) => row.openedAt >= split && row.score >= minimum)),
     }])) }];
 }));
-const approvedGenerated = generated.flatMap((row) => {
-  if (row.strategyId !== "exhaustion_turn") return [];
-  if (row.marketClass === "OPPOSED") return [{ ...row.reverseResult, strategyId: "momentum_carry", strategyName: "势承",
-    marketClass: row.marketClass, reverseResult: { ...row, strategyId: "momentum_carry", strategyName: "势承" } }];
-  if (row.marketClass === "NEUTRAL") return [{ ...row, strategyName: "竭转" }];
-  return [];
-});
-const byApprovedRoute = {
-  momentum_carry: { train: metrics(approvedGenerated.filter((row) => row.strategyId === "momentum_carry" && row.openedAt < split)),
-    validation: metrics(approvedGenerated.filter((row) => row.strategyId === "momentum_carry" && row.openedAt >= split)) },
-  exhaustion_turn: { train: metrics(approvedGenerated.filter((row) => row.strategyId === "exhaustion_turn" && row.openedAt < split)),
-    validation: metrics(approvedGenerated.filter((row) => row.strategyId === "exhaustion_turn" && row.openedAt >= split)) },
-};
+const approvedGenerated = generated.filter((row) => allRegimePaperApproved(row.strategyId)
+  && routeMarketApproved(row.routeContext, row.state));
+const byApprovedRoute = Object.fromEntries(ids.map((id) => [id, {
+  train: metrics(approvedGenerated.filter((row) => row.strategyId === id && row.openedAt < split)),
+  validation: metrics(approvedGenerated.filter((row) => row.strategyId === id && row.openedAt >= split)),
+}]));
+const coverage = buildStrategyCoverageReport(generated, split, { discoveryTrades: 12, validationTrades: 8,
+  discoveryProfitFactor: 1.05, validationProfitFactor: 1, validationSymbols: 2, validationPositivePeriods: 2,
+  knownDiscoveryOpportunities: 20, knownValidationOpportunities: 12, periodMs: 5 * 86_400_000 });
+const approvedCoverage = buildStrategyCoverageReport(approvedGenerated, split, { discoveryTrades: 12, validationTrades: 8,
+  discoveryProfitFactor: 1.05, validationProfitFactor: 1, validationSymbols: 2, validationPositivePeriods: 2,
+  knownDiscoveryOpportunities: 12, knownValidationOpportunities: 8, periodMs: 5 * 86_400_000 });
 const approvedBySymbol = Object.fromEntries(symbols.map((symbol) => [symbol, {
   train: metrics(approvedGenerated.filter((row) => row.symbol === symbol && row.openedAt < split)),
   validation: metrics(approvedGenerated.filter((row) => row.symbol === symbol && row.openedAt >= split)),
@@ -275,10 +287,37 @@ const trainPortfolio = portfolio(approvedGenerated, from * 1000, split);
 const validationPortfolio = portfolio(approvedGenerated, split, now * 1000);
 const summary = { generatedAt: new Date().toISOString(), days: DAYS, symbols, frictionRate: FRICTION, entrySlippageRate: ENTRY_SLIPPAGE,
   splitAt: new Date(split).toISOString(), signals: generated.length, approvedSignals: approvedGenerated.length,
-  byStrategy, byApprovedRoute, approvedBySymbol, trainPortfolio, validationPortfolio };
+  byStrategy, byApprovedRoute, approvedBySymbol, trainPortfolio, validationPortfolio,
+  coverage: { knownCells: coverage.knownCells, acceptedCells: coverage.acceptedCells, gaps: coverage.gaps, phases: coverage.phases },
+  approvedCoverage: { knownCells: approvedCoverage.knownCells, cells: approvedCoverage.cells,
+    acceptedCells: approvedCoverage.acceptedCells, gaps: approvedCoverage.gaps, phases: approvedCoverage.phases } };
 console.table(Object.entries(byStrategy).map(([strategy, value]) => ({ strategy, trainTrades: value.train.trades,
   trainPF: value.train.profitFactor.toFixed(2), validationTrades: value.validation.trades,
   validationWin: `${(value.validation.winRate * 100).toFixed(1)}%`, validationPF: value.validation.profitFactor.toFixed(2),
   validationNet: `${(value.validation.netReturnRate * 100).toFixed(2)}%` })));
+console.table(Object.entries(byApprovedRoute).map(([strategy, value]) => ({ strategy,
+  trainTrades: value.train.trades, trainPF: value.train.profitFactor.toFixed(2),
+  validationTrades: value.validation.trades, validationPF: value.validation.profitFactor.toFixed(2) })));
+console.log(`portfolio train: ${trainPortfolio.trades} trades, PF ${trainPortfolio.profitFactor.toFixed(2)}, equity ${trainPortfolio.endEquity.toFixed(2)}, maxDD ${(trainPortfolio.maxDrawdown * 100).toFixed(2)}%`);
 console.log(`portfolio validation: ${validationPortfolio.trades} trades, PF ${validationPortfolio.profitFactor.toFixed(2)}, equity ${validationPortfolio.endEquity.toFixed(2)}, maxDD ${(validationPortfolio.maxDrawdown * 100).toFixed(2)}%`);
 console.log(`ALL_REGIME_RESEARCH_JSON=${JSON.stringify(summary)}`);
+const activeStrategyIds = ids.filter((id) => allRegimePaperApproved(id));
+const weakRoutes = activeStrategyIds.filter((id) => {
+  const result = byApprovedRoute[id];
+  return result.train.trades < 12 || result.validation.trades < 8
+    || result.train.netReturnRate <= 0 || result.validation.netReturnRate <= 0
+    || result.train.profitFactor <= 1 || result.validation.profitFactor <= 1;
+});
+const missingTradePhases = Object.entries(MARKET_PHASE_AUTHORITY)
+  .filter(([, authority]) => authority === "TRADE")
+  .map(([phase]) => phase)
+  .filter((phase) => !approvedCoverage.acceptedCells.some((cell) => cell.state.phase === phase));
+if (weakRoutes.length) throw new Error(`active routes failed held-out gate: ${weakRoutes.join(",")}`);
+if (missingTradePhases.length) throw new Error(`active route coverage missing phases: ${missingTradePhases.join(",")}`);
+if (MARKET_PHASE_AUTHORITY.TRANSITION !== "WAIT") throw new Error("transition must remain capital-preservation WAIT");
+if (trainPortfolio.trades < 100 || validationPortfolio.trades < 100
+  || trainPortfolio.profitFactor < 1.05 || validationPortfolio.profitFactor < 1.05
+  || trainPortfolio.endEquity <= 1_000 || validationPortfolio.endEquity <= 1_000
+  || trainPortfolio.maxDrawdown > 0.35 || validationPortfolio.maxDrawdown > 0.35) {
+  throw new Error("state-conditioned portfolio failed after-cost held-out gate");
+}

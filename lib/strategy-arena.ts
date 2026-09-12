@@ -3,6 +3,8 @@ import { CORRELATED_DIRECTION_RISK_CAP, MAX_NOTIONAL_TO_EQUITY, MIN_NET_REWARD_R
 import type { CandidateChannel, MarketRegimeCandidate, MarketRegimeKind, ResidentCandleStructure } from "./market-regime.ts";
 import { ALL_REGIME_ENGINE_VERSION, ALL_REGIME_OFFLINE_VALIDATION, ALL_REGIME_STRATEGIES, ALL_REGIME_SYSTEM_NAME,
   type AllRegimeEnvironment } from "./all-regime-engine.ts";
+import { classifyMarketState } from "./strategy-coverage.ts";
+import { MARKET_PHASE_AUTHORITY, routeMarketApproved } from "./strategy-coverage-policy.ts";
 
 export const STRATEGY_ARENA_VERSION = 12;
 export const STRATEGY_INITIAL_EQUITY = 1_000;
@@ -241,48 +243,24 @@ function executableEntry(input: ArenaObservation, side: Side) {
 
 function signals(input: ArenaObservation): Signal[] {
   if (!input.candidate.id.includes(":CANDLE5M:")) return [];
+  if ((input.globalMarkets ?? 0) < 12) return [];
+  const breadth = input.globalBreadth ?? 0.5;
+  const medianMove = input.globalMedianMove ?? 0;
+  const state = classifyMarketState({ trendRate: input.candidate.trendRate,
+    trendEfficiency: input.candidate.trendEfficiency, volatilityRatio: input.candidate.volatilityRatio,
+    rangePosition: input.candidate.rangePosition, marketBreadth: breadth, marketMedianMove: medianMove });
+  if (MARKET_PHASE_AUTHORITY[state.phase] === "WAIT") return [];
   return (input.candidate.allRegimeRoutes ?? []).flatMap((route): Signal[] => {
-    let strategyId = route.strategyId;
-    let side = route.side;
-    let stopPrice = route.invalidationPrice;
-    let targetPrice = route.profitArmPrice;
-    let maxHoldMinutes = route.maxHoldMinutes;
-    let noProgressMinutes = route.noProgressMinutes;
-    let reason = `${route.strategyName}：${route.reason}`;
-    // Direct breakout chasing was negative after full costs. Trend authority is
-    // granted only when an apparent exhaustion occurs inside a still-crowded
-    // broad move. Range routes continue as paired normal/reverse shadows until
-    // current results establish the permitted polarity.
-    if (route.strategyId === "momentum_carry" || route.strategyId === "pressure_release") return [];
-    if (route.strategyId === "balance_return") {
-      if ((input.globalMarkets ?? 0) < 12) return [];
-      const breadth = input.globalBreadth ?? 0.5;
-      const medianMove = input.globalMedianMove ?? 0;
-      if (breadth < 0.4 || breadth > 0.6 || Math.abs(medianMove) > 0.0012) return [];
-      reason = `衡返·双拒：${route.reason} 全市场方向中性，允许向平衡重心回归。`;
-    }
-    if (route.strategyId === "exhaustion_turn" || route.strategyId === "pulse_fold" || route.strategyId === "slow_carry") {
-      if ((input.globalMarkets ?? 0) < 12) return [];
-      const breadth = input.globalBreadth ?? 0.5;
-      const medianMove = input.globalMedianMove ?? 0;
-      const routeLong = route.side === "LONG";
-      const opposed = routeLong ? breadth <= 0.38 && medianMove <= -0.0012 : breadth >= 0.62 && medianMove >= 0.0012;
-      const neutral = breadth >= 0.38 && breadth <= 0.62 && Math.abs(medianMove) < 0.0012;
-      if (!opposed && !neutral) return [];
-      if (route.strategyId === "slow_carry" && !opposed) return [];
-      if (opposed && route.strategyId === "exhaustion_turn") {
-        strategyId = "momentum_carry";
-        side = route.side === "LONG" ? "SHORT" : "LONG";
-        reason = `势承：全市场${Math.round(breadth * 100)}%同向，单币表面衰竭未获群体确认，继续主方向。`;
-      } else if (opposed) {
-        side = route.side === "LONG" ? "SHORT" : "LONG";
-        stopPrice = route.continuationInvalidationPrice ?? stopPrice;
-        targetPrice = route.continuationProfitArmPrice ?? targetPrice;
-        maxHoldMinutes = route.continuationMaxHoldMinutes ?? maxHoldMinutes;
-        noProgressMinutes = route.continuationNoProgressMinutes ?? noProgressMinutes;
-        reason = `${route.strategyName}·顺潮：全市场${Math.round(breadth * 100)}%仍沿原方向，局部失速没有群体确认，沿主潮继续。`;
-      } else reason = `${route.strategyName}·折返：全市场方向中性，单币推进衰退并完成反向收复。`;
-    }
+    const strategyId = route.strategyId;
+    const side = route.side;
+    const stopPrice = route.invalidationPrice;
+    const targetPrice = route.profitArmPrice;
+    const maxHoldMinutes = route.maxHoldMinutes;
+    const noProgressMinutes = route.noProgressMinutes;
+    if (!routeMarketApproved(route, { trendRate: input.candidate.trendRate,
+      trendEfficiency: input.candidate.trendEfficiency, volatilityRatio: input.candidate.volatilityRatio,
+      rangePosition: input.candidate.rangePosition, marketBreadth: breadth, marketMedianMove: medianMove })) return [];
+    const reason = `${route.strategyName}·${state.phase}：${route.reason} 该入场状态格已通过纯加密历史前后段成本后验证。`;
     const sign = side === "LONG" ? 1 : -1;
     const riskRate = Math.abs(route.triggerPrice - stopPrice) / route.triggerPrice;
     const armRate = Math.abs(targetPrice - route.triggerPrice) / route.triggerPrice;
@@ -417,7 +395,6 @@ function updatePlaybookResult(state: StrategyArenaState, trade: ArenaTrade) {
 }
 
 function refreshShadowAuthority(state: StrategyArenaState, score: StrategyScore, now: number) {
-  if (score.id === "pressure_release") return;
   const decision = shadowAuthorityDecision(score);
   if (!decision && uniqueResults(score.recentResults).length < POLARITY_STREAK) return;
   if (decision?.orientation === "NORMAL") {

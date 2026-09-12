@@ -5,14 +5,15 @@ import { advanceStrategyArena, advanceStrategyShadowsFromCompletedCandle, applyS
   STRATEGY_CATALOG, type ArenaObservation, type StrategyArenaState, type StrategyResult } from "../lib/strategy-arena.ts";
 
 function observation(now = 2_000_000): ArenaObservation {
-  return { candidate: { id: `BTC_USDT:CANDLE5M:ANOMALY:SHORT:${now}`, symbol: "BTC_USDT", channel: "ANOMALY",
-      regime: "EXPANSION", side: "SHORT", score: 90, referencePrice: 100, moveRate: 0.01, trendRate: 0.01,
+  return { candidate: { id: `BTC_USDT:CANDLE5M:TREND:LONG:${now}`, symbol: "BTC_USDT", channel: "TREND",
+      regime: "EXPANSION", side: "LONG", score: 90, referencePrice: 100, moveRate: 0.01, trendRate: 0.01,
       trendEfficiency: 0.7, volatilityRatio: 1.5, rangePosition: 0.9, volume24hUsd: 2_000_000_000,
       fundingRate: 0, openInterestChangeRate: 0, confirmations: 2, firstSeenAt: now, observedAt: now,
-      anomalyKind: null, adaptivePolicy: null, extremeSequence: null, dominantEnvironment: "EXHAUSTION",
-      allRegimeRoutes: [{ version: 3, strategyId: "exhaustion_turn", strategyName: "竭转", environment: "EXHAUSTION",
-        side: "SHORT", score: 90, triggerPrice: 100, invalidationPrice: 101, profitArmPrice: 97,
-        maxHoldMinutes: 120, noProgressMinutes: 35, structureId: `turn:${now}`, reason: "推进枯竭" }] },
+      anomalyKind: null, adaptivePolicy: null, extremeSequence: null, dominantEnvironment: "TREND",
+      allRegimeRoutes: [{ version: 4, strategyId: "tide_relay", strategyName: "潮接", environment: "TREND",
+        side: "LONG", score: 90, triggerPrice: 100, invalidationPrice: 99, profitArmPrice: 103,
+        maxHoldMinutes: 120, noProgressMinutes: 30, structureId: `relay:${now}`, sourceDirection: 1,
+        researchVariant: "tide_relay:2", reason: "主潮扰动后重新接回" }] },
     midpoint: 100, bestBid: 99.99, bestAsk: 100.01, alignedFlow: 0, minuteNoiseRate: 0.002,
     spreadRate: 0.0002, range15m: null, confirmationBySide: { LONG: 0.8, SHORT: 0.8 },
     fakeoutBySide: { LONG: 0.1, SHORT: 0.1 }, routes: [], bidDepthUsd: 1_000_000, askDepthUsd: 1_000_000,
@@ -24,88 +25,83 @@ function observation(now = 2_000_000): ArenaObservation {
 const result = (index: number, value: number): StrategyResult => ({ eventId: `event:${index}`, symbol: `S${index}_USDT`,
   regime: "TREND", channel: "TREND", netReturnRate: value, netPnl: value * 1_000, won: value > 0, resolvedAt: index * 1_000 });
 
-test("V12 owns six original strategies and starts only validated routes", () => {
-  assert.deepEqual(STRATEGY_CATALOG.map((row) => row.name), ["势承", "衡返", "压跃", "竭转", "脉折", "缓续"]);
+test("V12 owns six state-conditioned mechanisms and starts only validated routes", () => {
+  assert.deepEqual(STRATEGY_CATALOG.map((row) => row.name), ["势承", "潮补", "静移", "冲衡", "脉折", "潮接"]);
   const state = initialStrategyArena(1);
   assert.equal(state.version, 12);
-  assert.equal(state.strategies.momentum_carry.enabled, true);
-  assert.equal(state.strategies.exhaustion_turn.enabled, true);
-  assert.equal(state.strategies.balance_return.enabled, false);
-  assert.equal(state.strategies.pressure_release.enabled, false);
-  assert.equal(state.strategies.pulse_fold.enabled, true);
-  assert.equal(state.strategies.slow_carry.enabled, true);
+  assert.equal(state.strategies.momentum_carry.enabled, false);
+  assert.equal(state.strategies.tide_catchup.enabled, true);
+  assert.equal(state.strategies.quiet_drift.enabled, true);
+  assert.equal(state.strategies.impulse_recoil.enabled, true);
+  assert.equal(state.strategies.impulse_fold.enabled, true);
+  assert.equal(state.strategies.tide_relay.enabled, true);
 });
 
-test("crowded apparent exhaustion routes through 势承 and opens paired shadows plus one account trade", () => {
+test("validated broad expansion routes through 潮接 and opens paired shadows plus one account trade", () => {
   const state = observeStrategyArena({ state: initialStrategyArena(1), observation: observation() });
   assert.equal(Object.keys(state.open).length, 2);
   const paper = state.portfolioOpen.BTC_USDT;
-  assert.ok(paper); assert.equal(paper.strategyId, "momentum_carry");
-  assert.equal(paper.strategyName, "势承"); assert.equal(paper.side, "LONG");
+  assert.ok(paper); assert.equal(paper.strategyId, "tide_relay");
+  assert.equal(paper.strategyName, "潮接"); assert.equal(paper.side, "LONG");
 });
 
-test("neutral isolated exhaustion routes through 竭转", () => {
+test("transition state is explicit capital-preservation WAIT", () => {
   const input = observation(); input.globalBreadth = 0.5; input.globalMedianMove = 0.0002;
+  input.candidate.trendRate = 0.001; input.candidate.trendEfficiency = 0.35;
+  input.candidate.volatilityRatio = 1; input.candidate.rangePosition = 0.5;
   const state = observeStrategyArena({ state: initialStrategyArena(1), observation: input });
-  assert.equal(state.portfolioOpen.BTC_USDT?.strategyId, "exhaustion_turn");
+  assert.equal(state.portfolioOpen.BTC_USDT, undefined);
+  assert.equal(Object.keys(state.open).length, 0);
+});
+
+test("脉折 trades only its validated broad-down rotation cell", () => {
+  const blocked = observation();
+  blocked.candidate.allRegimeRoutes = [{ ...blocked.candidate.allRegimeRoutes![0], strategyId: "impulse_fold",
+    strategyName: "脉折", environment: "EXHAUSTION", side: "SHORT", invalidationPrice: 101,
+    profitArmPrice: 97, structureId: "fold:blocked", sourceDirection: 1 }];
+  assert.equal(observeStrategyArena({ state: initialStrategyArena(1), observation: blocked }).portfolioOpen.BTC_USDT, undefined);
+
+  const accepted = observation(3_000_000);
+  accepted.candidate.trendRate = 0.001; accepted.candidate.trendEfficiency = 0.2;
+  accepted.candidate.volatilityRatio = 1; accepted.candidate.rangePosition = 0.5;
+  accepted.globalBreadth = 0.2; accepted.globalMedianMove = -0.01;
+  accepted.candidate.allRegimeRoutes = [{ ...blocked.candidate.allRegimeRoutes![0], structureId: "fold:accepted" }];
+  const state = observeStrategyArena({ state: initialStrategyArena(1), observation: accepted });
+  assert.equal(state.portfolioOpen.BTC_USDT?.strategyId, "impulse_fold");
   assert.equal(state.portfolioOpen.BTC_USDT?.side, "SHORT");
 });
 
-test("脉折 owns both neutral reversal and crowded continuation decisions", () => {
+test("潮补 executes only when a broad-market tide leaves sufficient relative lag", () => {
   const neutral = observation();
-  neutral.candidate.allRegimeRoutes = [{ ...neutral.candidate.allRegimeRoutes![0], strategyId: "pulse_fold",
-    strategyName: "脉折", structureId: "pulse:neutral" }];
-  neutral.globalBreadth = 0.5; neutral.globalMedianMove = 0.0002;
-  let state = observeStrategyArena({ state: initialStrategyArena(1), observation: neutral });
-  assert.equal(state.portfolioOpen.BTC_USDT?.strategyId, "pulse_fold");
-  assert.equal(state.portfolioOpen.BTC_USDT?.side, "SHORT");
-
-  const crowded = observation(3_000_000);
-  crowded.candidate.allRegimeRoutes = [{ ...crowded.candidate.allRegimeRoutes![0], strategyId: "pulse_fold",
-    strategyName: "脉折", structureId: "pulse:crowded", continuationInvalidationPrice: 99,
-    continuationProfitArmPrice: 103.6, continuationMaxHoldMinutes: 200, continuationNoProgressMinutes: 50 }];
-  state = observeStrategyArena({ state: initialStrategyArena(1), observation: crowded });
-  assert.equal(state.portfolioOpen.BTC_USDT?.strategyId, "pulse_fold");
-  assert.equal(state.portfolioOpen.BTC_USDT?.side, "LONG");
-  assert.equal(state.portfolioOpen.BTC_USDT?.stopPrice, 99);
-  assert.equal(state.portfolioOpen.BTC_USDT?.context.maxHoldMs, 200 * 60_000);
-});
-
-test("缓续 executes only when broad-market crowding confirms the original direction", () => {
-  const neutral = observation();
-  neutral.candidate.allRegimeRoutes = [{ ...neutral.candidate.allRegimeRoutes![0], strategyId: "slow_carry",
-    strategyName: "缓续", structureId: "slow:neutral", continuationInvalidationPrice: 99,
-    continuationProfitArmPrice: 103.6, continuationMaxHoldMinutes: 210, continuationNoProgressMinutes: 50 }];
+  neutral.candidate.volatilityRatio = 0.7; neutral.candidate.rangePosition = 0.2;
+  neutral.candidate.allRegimeRoutes = [{ ...neutral.candidate.allRegimeRoutes![0], strategyId: "tide_catchup",
+    strategyName: "潮补", structureId: "catchup:neutral", localMoveRate: -0.001 }];
   neutral.globalBreadth = 0.5; neutral.globalMedianMove = 0.0002;
   let state = observeStrategyArena({ state: initialStrategyArena(1), observation: neutral });
   assert.equal(state.portfolioOpen.BTC_USDT, undefined);
 
   const crowded = observation(3_000_000);
-  crowded.candidate.allRegimeRoutes = [{ ...crowded.candidate.allRegimeRoutes![0], strategyId: "slow_carry",
-    strategyName: "缓续", structureId: "slow:crowded", continuationInvalidationPrice: 99,
-    continuationProfitArmPrice: 103.6, continuationMaxHoldMinutes: 210, continuationNoProgressMinutes: 50 }];
+  crowded.candidate.volatilityRatio = 0.7; crowded.candidate.rangePosition = 0.2;
+  crowded.candidate.allRegimeRoutes = [{ ...neutral.candidate.allRegimeRoutes![0], structureId: "catchup:crowded" }];
   state = observeStrategyArena({ state: initialStrategyArena(1), observation: crowded });
-  assert.equal(state.portfolioOpen.BTC_USDT?.strategyId, "slow_carry");
+  assert.equal(state.portfolioOpen.BTC_USDT?.strategyId, "tide_catchup");
   assert.equal(state.portfolioOpen.BTC_USDT?.side, "LONG");
 });
 
-test("range double reclaim stays paired-shadow until current polarity evidence activates it", () => {
+test("historically validated 冲衡 enters PAPER only in its accepted rotation cell", () => {
   const input = observation();
-  input.candidate.channel = "RANGE"; input.candidate.regime = "RANGE";
-  input.candidate.allRegimeRoutes = [{ version: 3, strategyId: "balance_return", strategyName: "衡返", environment: "RANGE",
-    side: "LONG", score: 86, triggerPrice: 100, invalidationPrice: 98, profitArmPrice: 103.6,
-    maxHoldMinutes: 150, noProgressMinutes: 40, structureId: `double-reclaim:${input.now}`, reason: "同一外沿双拒绝并收回" }];
+  input.candidate.channel = "ANOMALY"; input.candidate.regime = "RANGE";
+  input.candidate.trendRate = 0.001; input.candidate.trendEfficiency = 0.2;
+  input.candidate.volatilityRatio = 1; input.candidate.rangePosition = 0.5;
+  input.candidate.allRegimeRoutes = [{ version: 4, strategyId: "impulse_recoil", strategyName: "冲衡", environment: "EXHAUSTION",
+    side: "SHORT", score: 86, triggerPrice: 100, invalidationPrice: 101, profitArmPrice: 98,
+    maxHoldMinutes: 100, noProgressMinutes: 25, structureId: `recoil:${input.now}`, sourceDirection: 1,
+    researchVariant: "impulse_recoil:0", reason: "孤立脉冲回收" }];
   input.globalBreadth = 0.5; input.globalMedianMove = 0.0002;
   const state = observeStrategyArena({ state: initialStrategyArena(1), observation: input });
   assert.equal(Object.keys(state.open).length, 2);
-  assert.equal(state.portfolioOpen.BTC_USDT, undefined);
-  assert.equal(state.currentRouteChecks["BTC_USDT:balance_return"]?.status, "BLOCKED");
-  assert.equal(state.blockedCandidates.at(-1)?.code, "POLARITY_NOT_AUTHORIZED");
-  assert.equal(state.blockedCandidates.at(-1)?.stage, "AUTHORITY");
-  state.strategies.balance_return.recentResults = [result(1, 0.01), result(2, 0.008), result(3, 0.012)]
-    .map((row) => ({ ...row, regime: "RANGE" as const, channel: "RANGE" as const }));
-  applyStrategySleepStates(state, new Set(["RANGE"]), 4_000);
-  assert.equal(state.strategies.balance_return.enabled, true);
+  assert.equal(state.portfolioOpen.BTC_USDT?.strategyId, "impulse_recoil");
+  assert.equal(state.portfolioOpen.BTC_USDT?.side, "SHORT");
 });
 
 test("fewer than twelve synchronized markets cannot authorize a new route", () => {
@@ -137,8 +133,8 @@ test("stale execution data remains observation-only", () => {
   const state = observeStrategyArena({ state: initialStrategyArena(1), observation: input });
   assert.equal(Object.keys(state.open).length, 0);
   assert.ok(state.recentObservations.some((row) => row.blocker.includes("不新鲜")));
-  assert.equal(state.currentRouteChecks["BTC_USDT:momentum_carry"]?.status, "BLOCKED");
-  assert.match(state.currentRouteChecks["BTC_USDT:momentum_carry"]?.blocker ?? "", /不新鲜/);
+  assert.equal(state.currentRouteChecks["BTC_USDT:tide_relay"]?.status, "BLOCKED");
+  assert.match(state.currentRouteChecks["BTC_USDT:tide_relay"]?.blocker ?? "", /不新鲜/);
   assert.equal(state.blockedCandidates.length, 1, "only an authorized formed route enters the blocked-candidate audit");
   assert.equal(state.blockedCandidates[0].stage, "EXECUTION");
   assert.equal(state.blockedCandidates[0].side, "LONG");
@@ -169,18 +165,20 @@ test("the observed 龙虾 24.41% stop is rejected instead of opening a 69 U PAPE
   const input = observation();
   input.candidate = { ...input.candidate,
     id: "龙虾_USDT:CANDLE5M:ANOMALY:SHORT:1789188300000:-957:-781", symbol: "龙虾_USDT",
-    referencePrice: 0.115, allRegimeRoutes: [{ version: 3, strategyId: "pulse_fold", strategyName: "脉折",
+    referencePrice: 0.115, trendRate: 0.001, trendEfficiency: 0.2, volatilityRatio: 1, rangePosition: 0.5,
+    allRegimeRoutes: [{ version: 4, strategyId: "impulse_fold", strategyName: "脉折",
       environment: "EXHAUSTION", side: "SHORT", score: 90, triggerPrice: 0.115,
       invalidationPrice: 0.14307075, profitArmPrice: 0.07229305, maxHoldMinutes: 140,
-      noProgressMinutes: 35, structureId: "pulse_fold:SHORT:-957:1789188300000", reason: "推进衰退并反向收复" }] };
+      noProgressMinutes: 35, structureId: "impulse_fold:SHORT:-957:1789188300000", sourceDirection: 1,
+      researchVariant: "impulse_fold:0", reason: "推进衰退并反向收复" }] };
   input.midpoint = 0.115; input.bestBid = 0.115; input.bestAsk = 0.115001;
   input.spreadRate = (input.bestAsk - input.bestBid) / input.midpoint;
   input.quantoMultiplier = 100; input.maintenanceRate = 0.08; input.leverageMax = 10;
-  input.globalBreadth = 0.5; input.globalMedianMove = 0.0002;
+  input.globalBreadth = 0.2; input.globalMedianMove = -0.01;
   const state = observeStrategyArena({ state: initialStrategyArena(1), observation: input });
   assert.equal(state.portfolioOpen.龙虾_USDT, undefined);
   assert.equal(state.admissionRejects.MEANINGFUL_SIZE, 1);
-  assert.match(state.currentRouteChecks["龙虾_USDT:pulse_fold"]?.blocker ?? "", /名义价值低于账户权益1倍/);
+  assert.match(state.currentRouteChecks["龙虾_USDT:impulse_fold"]?.blocker ?? "", /名义价值低于账户权益1倍/);
   assert.equal(state.blockedCandidates.at(-1)?.code, "MEANINGFUL_SIZE");
   assert.equal(state.blockedCandidates.at(-1)?.stage, "ACCOUNT");
 });
@@ -190,7 +188,7 @@ test("depth rejects a route only when one Gate contract cannot fit", () => {
   const state = observeStrategyArena({ state: initialStrategyArena(1), observation: input });
   assert.equal(state.portfolioOpen.BTC_USDT, undefined);
   assert.equal(Object.keys(state.open).length, 0);
-  assert.match(state.currentRouteChecks["BTC_USDT:momentum_carry"]?.blocker ?? "", /一张Gate合约/);
+  assert.match(state.currentRouteChecks["BTC_USDT:tide_relay"]?.blocker ?? "", /一张Gate合约/);
 });
 
 test("a fourth account trade is admitted when risk, margin and data capacity still fit", () => {
@@ -243,7 +241,7 @@ test("a pre-V11 account is archived and reset preserves shadow research", () => 
   assert.equal(reset.strategies.momentum_carry.shadowResolved, 7);
 });
 
-test("V11 to V12 migration preserves account, positions, and history while adding both routes", () => {
+test("V11 to V12 migration preserves account, positions, and history while adding the new mechanisms", () => {
   const seeded = observeStrategyArena({ state: initialStrategyArena(1), observation: observation() });
   const openId = seeded.portfolioOpen.BTC_USDT.id;
   const old = seeded as unknown as Record<string, unknown>;
@@ -253,5 +251,6 @@ test("V11 to V12 migration preserves account, positions, and history while addin
   assert.equal(state.version, 12); assert.equal(state.portfolioEquity, 991.25); assert.equal(state.portfolioResolved, 2);
   assert.equal(state.portfolioOpen.BTC_USDT.id, openId);
   assert.equal(state.recentPortfolio[0]?.id, "kept");
-  assert.equal(state.strategies.pulse_fold.enabled, true); assert.equal(state.strategies.slow_carry.enabled, true);
+  assert.equal(state.strategies.impulse_fold.enabled, true); assert.equal(state.strategies.tide_relay.enabled, true);
+  assert.equal(state.strategies.impulse_recoil.enabled, true);
 });

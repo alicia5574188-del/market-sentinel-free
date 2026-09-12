@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import { buildStrategyCoverageReport } from "../lib/strategy-coverage.ts";
+import { buildStrategyCoverageReport, deriveMarketStateFeatures } from "../lib/strategy-coverage.ts";
+import { MARKET_PHASE_AUTHORITY } from "../lib/strategy-coverage-policy.ts";
 
 const DATASET = process.env.RESEARCH_DATASET ?? "/tmp/all-regime-candles.json";
 const FRICTION = 0.0014;
@@ -17,24 +18,6 @@ const median = (values) => {
 };
 const efficiency = (rows) => Math.abs(rows.at(-1).close - rows[0].open)
   / Math.max(rows.slice(1).reduce((total, row, index) => total + Math.abs(row.close - rows[index].close), 0), rows.at(-1).close * 1e-7);
-
-function stateAt(rows, context) {
-  const latest = rows.at(-1);
-  const trend = rows.slice(-24);
-  const location = rows.slice(-48);
-  const recentRanges = rows.slice(-6).map((row) => row.high - row.low);
-  const priorRanges = rows.slice(-30, -6).map((row) => row.high - row.low);
-  const lower = Math.min(...location.map((row) => row.low));
-  const upper = Math.max(...location.map((row) => row.high));
-  return {
-    trendRate: latest.close / trend[0].open - 1,
-    trendEfficiency: efficiency(trend),
-    volatilityRatio: median(recentRanges) / Math.max(median(priorRanges), latest.close * 1e-9),
-    rangePosition: (latest.close - lower) / Math.max(upper - lower, latest.close * 1e-9),
-    marketBreadth: context.breadth,
-    marketMedianMove: context.medianMove,
-  };
-}
 
 const marketMoves = new Map();
 for (const { rows } of datasets) for (let index = 6; index < rows.length; index += 1) {
@@ -403,7 +386,9 @@ function generate(detector, config) {
       if (!signal || !economics(rows, index, signal)) continue;
       const trade = resolve(rows, index, signal);
       if (!trade) continue;
-      trades.push({ ...trade, symbol, side: signal.side, state: stateAt(rows.slice(index - 119, index + 1), context) });
+      const state = deriveMarketStateFeatures(rows.slice(index - 119, index + 1), context.breadth, context.medianMove);
+      if (!state) continue;
+      trades.push({ ...trade, symbol, side: signal.side, state });
       busyUntil = trade.closedAt / 1_000;
     }
   }
@@ -531,7 +516,7 @@ const phaseOverlap = acceptedPhase.map((row, index) => {
 });
 console.table(phaseOverlap);
 
-const accepted = acceptedPhase.map((row) => row && row.train.trades >= 30 && row.validation.trades >= 30
+const legacyPhaseCandidates = acceptedPhase.map((row) => row && row.train.trades >= 30 && row.validation.trades >= 30
   && row.train.pf > 1 && row.validation.pf > 1 && row.folds.every((fold) => fold.trades >= 12 && fold.pf > 1)
   && phaseOverlap.find((item) => item.name === row.config.name)?.uniqueAgainstOther >= 30
   && phaseOverlap.find((item) => item.name === row.config.name)?.uniqueAgainstCurrent >= 30 ? row : null);
@@ -547,6 +532,12 @@ if (coverage.gaps.length) console.table(coverage.gaps.map((gap) => ({ state: gap
   discovery: gap.discoveryOpportunities, validation: gap.validationOpportunities })));
 const coverageSummary = { splitAt: coverage.splitAt, thresholds: coverage.thresholds, knownCells: coverage.knownCells,
   acceptedCells: coverage.acceptedCells, gaps: coverage.gaps, phases: coverage.phases };
+const selectedVariants = new Set(["tide_relay:2", "tide_catchup:2", "quiet_drift:2", "impulse_recoil:0", "impulse_fold:0"]);
+const selectedCoverage = coverage.acceptedCells.filter((cell) => selectedVariants.has(cell.strategyId));
+const requiredTradePhases = Object.entries(MARKET_PHASE_AUTHORITY)
+  .filter(([, authority]) => authority === "TRADE").map(([phase]) => phase);
+const missingTradePhases = requiredTradePhases.filter((phase) => !selectedCoverage.some((cell) => cell.state.phase === phase));
 console.log(`V12_RESEARCH_JSON=${JSON.stringify({ rejectedFamilies: { tide, orbit, catchup, drift, recoil, hold, fold, sweep },
-  phase, phaseOverlap, accepted, coverage: coverageSummary })}`);
-if (accepted.filter(Boolean).length < 2) throw new Error("V12 candidate acceptance failed");
+  phase, phaseOverlap, legacyPhaseCandidates, selectedCoverage, coverage: coverageSummary })}`);
+if (MARKET_PHASE_AUTHORITY.TRANSITION !== "WAIT") throw new Error("transition must remain capital-preservation WAIT");
+if (missingTradePhases.length) throw new Error(`selected candidate coverage missing phases: ${missingTradePhases.join(",")}`);

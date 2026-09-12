@@ -68,12 +68,7 @@ jobs:
           RESEARCH_SYMBOLS: "20"
         run: npm run research:all-regime
 
-      - name: Require V11 baseline routes to retain after-cost evidence
-        if: github.event_name == 'pull_request'
-        working-directory: release
-        run: npm run research:v11
-
-      - name: Require V12 gap routes to retain after-cost evidence
+      - name: Require crypto-only full-phase candidate coverage
         if: github.event_name == 'pull_request'
         working-directory: release
         run: npm run research:v12
