@@ -1,3 +1,9 @@
+# LIVE protective-stop price-grid decision — 2026-09-12
+
+- PAPER retains its exact structural stop. Gate LIVE alone normalizes that stop to the contract's current `order_price_round` before creating or amending the close-only trigger.
+- Normalization must never tighten the real exit ahead of PAPER: a long stop rounds down and a short stop rounds up. The difference is bounded to less than one Gate tick.
+- An invalid raw stop may not be treated as evidence that the PAPER thesis ended. Keep the existing fail-closed exit if a correctly normalized protective order still cannot be installed.
+
 # Gate recovery and evidence-gated coverage decision — 2026-09-11
 
 - The observed 429 and timeout are public Gate endpoint degradation, not proof that the full market-data authority stopped. A trading API key cannot convert public ticker/candle/book calls into private UID quota and must not be attached to public reads.

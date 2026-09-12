@@ -63,6 +63,7 @@ export type LiveEntryIntent = {
 
 export type LiveStopIntent = {
   tag: string;
+  price: number;
   body: Record<string, unknown>;
 };
 
@@ -329,13 +330,31 @@ export function buildLiveEntryIntent(input: {
   return { kind, tag, size, contracts, notional, plannedRisk, leverage, margin, body };
 }
 
-export function buildLiveStopIntent(position: { id: string; symbol: string; side: Side; currentStop: number }) {
-  const tag = shortTag("s", `${position.id}:${position.currentStop.toPrecision(12)}`);
+function tickDecimals(tickSize: number) {
+  const text = tickSize.toString().toLowerCase();
+  if (text.includes("e-")) return Math.min(12, Number(text.split("e-")[1]) || 0);
+  return Math.min(12, text.split(".")[1]?.length ?? 0);
+}
+
+export function liveStopPriceForTick(side: Side, currentStop: number, tickSize?: number) {
+  if (!(currentStop > 0) || !(tickSize && tickSize > 0)) return currentStop;
+  const units = currentStop / tickSize;
+  // Never tighten the exchange stop beyond PAPER merely to satisfy Gate's
+  // price grid: longs round down and shorts round up by at most one tick.
+  const roundedUnits = side === "LONG" ? Math.floor(units + 1e-9) : Math.ceil(units - 1e-9);
+  return Number((roundedUnits * tickSize).toFixed(tickDecimals(tickSize)));
+}
+
+export function buildLiveStopIntent(position: { id: string; symbol: string; side: Side; currentStop: number }, tickSize?: number) {
+  const price = liveStopPriceForTick(position.side, position.currentStop, tickSize);
+  const priceText = tickSize && tickSize > 0 ? price.toFixed(tickDecimals(tickSize)) : String(price);
+  const tag = shortTag("s", `${position.id}:${price.toPrecision(12)}`);
   return {
     tag,
+    price,
     body: {
       initial: { contract: position.symbol, size: 0, price: "0", tif: "ioc", close: true, reduce_only: true, text: tag },
-      trigger: { strategy_type: 0, price_type: 0, price: String(position.currentStop), rule: position.side === "LONG" ? 2 : 1, expiration: GATE_TRIGGER_DAY_SECONDS * GATE_TRIGGER_MAX_DAYS },
+      trigger: { strategy_type: 0, price_type: 0, price: priceText, rule: position.side === "LONG" ? 2 : 1, expiration: GATE_TRIGGER_DAY_SECONDS * GATE_TRIGGER_MAX_DAYS },
     },
   } satisfies LiveStopIntent;
 }

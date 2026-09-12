@@ -230,6 +230,8 @@ test("V12 verified-route engine is causal, selective, cost-aware, and the sole L
   assert.match(arena, /state\.portfolioEquity \* MAX_NOTIONAL_TO_EQUITY/);
   assert.match(gateLive, /Math\.min\(MAX_NOTIONAL_TO_EQUITY, input\.mirrorNotionalFraction\)/);
   assert.match(worker, /maxNotionalMultiple: MAX_NOTIONAL_TO_EQUITY/);
+  assert.match(worker, /buildLiveStopIntent\(position, tick\)/);
+  assert.match(gateLive, /side === "LONG" \? Math\.floor\(units \+ 1e-9\) : Math\.ceil\(units - 1e-9\)/);
   assert.match(page, /重置1000 U模拟资金/);
   assert.match(page, /confirm: "RESET_PAPER"/);
   assert.match(worker, /SCAN_UNIVERSE_SIZE = 30/);
