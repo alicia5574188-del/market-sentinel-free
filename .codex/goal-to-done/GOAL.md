@@ -1,4 +1,4 @@
-# Active UI correction — keep prior PAPER cycles inside a collapsed archive
+# Completed UI correction — keep prior PAPER cycles inside a collapsed archive
 
 - Keep the current PAPER cycle and blocked-candidate audit immediately visible on the Records tab.
 - Replace the always-expanded legacy order list with one compact History Archive entry that shows only archived cycle and order counts by default.

@@ -1,8 +1,10 @@
-# In progress — 2026-09-12 collapsed PAPER history archive
+# Done — 2026-09-12 collapsed PAPER history archive
 
-- Confirmed the Records tab currently renders every archived PAPER order immediately beneath the current-cycle and blocked-candidate sections.
-- Changing only the client presentation: the archive will default closed, show cycle/order counts, and instantiate old order rows only after an explicit operator action.
-- Trading authority, runtime payload, account state, history, credentials and LIVE controls remain unchanged.
+- Replaced the Records tab's always-expanded legacy list with one compact archive control. Current-cycle trades and blocked candidates remain directly visible.
+- The archive defaults closed and reports only its cycle/order totals. Archived trade components are instantiated only while the operator explicitly opens it, then removed again when closed; no stored history is deleted or changed.
+- Local acceptance passed 218 direct tests, four all-regime tests, 17 architecture/migration tests, TypeScript, ESLint, production build, Cloudflare dry-run and whitespace validation.
+- PR #201 passed review run #711 and squash-merged as `7e0758805592afe57cdaa1bfccd4592b5cb00692`. Main run #712 deployed Cloudflare version `10e4efe0-e236-4418-a65f-362eb054d266` and passed advancing production health.
+- Production UI verification found 12 archived cycles and 100 archived orders: closed state rendered zero old rows, opening rendered all 100, and closing again returned to zero. The blocked-candidate section remained visible. Trading authority, PAPER/LIVE state, credentials and runtime persistence were unchanged.
 
 # Done — 2026-09-12 LIVE continuity and candidate audit
 
