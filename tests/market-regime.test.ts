@@ -89,7 +89,7 @@ test("resident fallback uses only contiguous completed one-minute candles to bui
 
 
 test("completed five-minute OHLCV classifies a liquid market without optional high-frequency feeds", () => {
-  const candles = Array.from({ length: 24 }, (_, index) => ({ time: index * 300, open: 100 + index * 0.12,
+  const candles = Array.from({ length: 60 }, (_, index) => ({ time: index * 300, open: 100 + index * 0.12,
     high: 100.2 + index * 0.12, low: 99.9 + index * 0.12, close: 100.12 + index * 0.12, volume: 1_000 }));
   const result = completedCandleStrategyCandidate({ symbol: "BTC_USDT", candles, volume24hUsd: 1_000_000_000,
     fundingRate: 0.0001, now: (candles.at(-1)!.time + 300) * 1_000 });

@@ -4,30 +4,31 @@ Gate USDT perpetual PAPER authority for a single compounding 1,000 U account. LI
 
 ## Decision authority
 
-V12 scans the thirty most liquid eligible contracts, builds only continuous completed 5-minute paths and separates environment recognition, route formation and account admission. Six original mechanisms cover four environment classes:
+V12 scans the thirty most liquid eligible **crypto** USDT perpetuals, builds only continuous completed 5-minute paths and separates state recognition, route formation and account admission. Unknown or stock/commodity-style contract types fail closed before ranking. Six mechanisms are researched, but only four have PAPER authority and only inside state cells that remained profitable in two adjacent frozen samples:
 
-- `势承·逆竭`: when broad-market direction is crowded, apparent single-symbol exhaustion that lacks broad confirmation continues with the crowd.
-- `竭转·孤返`: when broad-market direction is neutral, a single-symbol path reverses only after progress collapses and a completed segment reclaims the opposite direction.
-- `脉折·相位`: a 32-segment medium path measures the gap between total displacement and the latest six-segment contribution; neutral breadth permits the completed reversal while crowded breadth continues with the broad direction.
-- `缓续·顺潮`: a less orderly 36-segment path fills slower opportunities only when synchronized broad-market direction confirms continuation; its neutral reversal branch is explicitly rejected.
-- `衡返·双拒`: in a broad neutral market, a low-efficiency range must cross its center repeatedly, reject the same edge at least twice and reclaim it on a completed segment. Its latest chronological fold is negative, so it remains paired normal/reverse shadow research until current results select a polarity.
-- Direct momentum chasing and direct compression breakout remain observation-only: their after-cost train/held-out evidence is negative.
+- `潮补`: broad-up compression at the low edge, plus broad-down orderly trend at the high edge while the contract lags the market move.
+- `静移`: mixed-market compression or balanced rotation through the center with a completed directional migration.
+- `潮接`: broad-up expansion at the high edge after a completed pullback and resume.
+- `冲衡`: broad-up expansion at the high edge after an isolated impulse is reclaimed, complementing `潮接` rather than duplicating its pattern.
+- `脉折`: paired shadow-only because the profitable cell moved when the sample advanced.
+- `势承`: paired shadow-only because its positive aggregate result is concentrated in too few time windows.
 
-Every executable event runs exact normal and reverse shadows after full friction. The four approved route families start in their validated direction. Three normal wins select normal; three normal losses select reverse only when those same three fully costed mirror trades all won. Mixed results retain the last authorized orientation. A disabled family can regain PAPER authority only through this current paired evidence.
+Compression, expansion, orderly trend and balanced rotation each have at least one held-out-positive mechanism. Transition/noise has no stable after-cost edge in the frozen study, so its explicit strategy is capital preservation (`WAIT`) instead of forcing a trade. Every authorized event also runs exact normal and reverse shadows after full friction. Three normal wins retain/select normal; three normal losses select reverse only when those same three fully costed mirror trades all won. Mixed results retain the last authorized orientation.
 
 The profit arm does not cap profit. It starts dynamic protection; structural invalidation, no-progress and maximum-hold exits remain active.
 
 ## Evidence contract
 
-`node scripts/research-v11.mjs` consumes the frozen CI dataset and performs next-bar, chronological replay with 0.14% round-trip friction and 0.025% entry slippage. The frozen thirty-day, twenty-market route study produced:
+`npm run research:all-regime` consumes or builds the frozen CI dataset and performs next-bar, chronological replay with 0.14% round-trip friction and 0.025% entry slippage. The frozen thirty-day, twenty-crypto-market route study produced:
 
 | Route | First half | Held-out half |
 | --- | ---: | ---: |
-| 势承·逆竭 | 48 events, PF 1.80, +16.11% summed return | 50 events, PF 1.71, +23.98% |
-| 衡返·双拒（影子） | 31 events, PF 1.16, +4.14% | 22 events, PF 1.42, +8.86%; latest fold PF 0.67, PAPER off |
-| 竭转·孤返 | 103 events, PF 0.98, -0.81% | 86 events, PF 1.39, +15.85% |
-| 脉折·相位 | 126 events, PF 1.60 | 147 events, PF 1.18; three folds PF 1.61/1.15/1.37 |
-| 缓续·顺潮 | 47 events, PF 1.62 | 60 events, PF 1.66; three folds PF 2.01/1.45/1.68 |
+| 潮补·压缩/有序趋势 | 71 events, PF 1.70 | 37 events, PF 1.92 |
+| 静移·压缩/平衡轮动 | 65 events, PF 1.49 | 66 events, PF 1.45 |
+| 冲衡·扩张普涨高位 | 67 events, PF 1.79 | 31 events, PF 1.08 |
+| 潮接·扩张普涨高位 | 68 events, PF 1.37 | 57 events, PF 1.60 |
+
+With the same account constraints and non-overlapping lifecycles, the latest routed portfolio selected 220 first-half trades at PF 1.46 (1,000 → 1,287 U, 10.2% max drawdown) and 174 held-out trades at PF 1.55 (1,000 → 1,316 U, 11.9% max drawdown). The immediately adjacent frozen sample also passed (PF 1.31/1.59). The observed latest cadence is about thirteen trades per day across twenty sampled markets; it is not a quota or forecast.
 
 These are historical simulations, not a promise of daily profit. PAPER is the forward test.
 
@@ -57,4 +58,4 @@ npm run build
 npx wrangler deploy --dry-run --config dist/server/wrangler.json
 ```
 
-Production releases only from GitHub `main`. The release gate requires `all-regime-compound-v2`, arena version 12, six route mechanisms, backend route-check truth, thirty-market scanning and advancing authority health. LIVE defaults OFF for a new account, but a deployment preserves the owner's saved requested state and starts non-operational until the first fresh Gate reconciliation; recoverable single-symbol rejection cannot rewrite that choice. The V11→V12 migration preserves the current account, positions and trade history while adding the two new strategy states.
+Production releases only from GitHub `main`. The release gate requires `all-regime-compound-v2`, arena version 12, crypto-only causal replay, profitable discovery and held-out portfolios, four tradable phase authorities plus transition `WAIT`, backend route-check truth, thirty-market scanning and advancing authority health. LIVE defaults OFF for a new account, but deployment preserves the owner's saved requested state and starts non-operational until the first fresh Gate reconciliation; recoverable single-symbol rejection cannot rewrite that choice. Existing PAPER account equity, positions and history are preserved.

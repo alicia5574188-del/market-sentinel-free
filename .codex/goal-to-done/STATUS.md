@@ -1,3 +1,13 @@
+# Release candidate — 2026-09-12 data-derived full-market coverage
+
+- Gate universe selection now filters on `contract_type` before volume ranking. Explicit crypto/digital-asset types and the Gate-compatible blank type remain eligible; every unknown non-empty, stock, index, metal, commodity or other TradFi type fails closed in both runtime and replay.
+- Replaced the prior polluted V11 evidence with a clean thirty-day/twenty-crypto-contract causal dataset. Runtime and research derive the same completed-candle state features and map every route to phase, synchronized crypto breadth and range location before outcome is known.
+- Six mechanisms remain available. Four receive PAPER authority only in cells positive across two adjacent frozen samples: `潮补` for compression/orderly decline, `静移` for compression/balanced rotation, and `潮接`/`冲衡` as complementary expansion patterns. `势承` and `脉折` are shadow-only because their gains are time-concentrated or their profitable state moved; transition/noise is explicit capital-preservation `WAIT`.
+- The exact runtime detector, next-bar entry, 0.14% friction, 0.025% adverse entry, non-overlap lifecycle and state gate are now replayed together. Release acceptance requires every active mechanism and both routed portfolios to remain positive after costs, all four tradable phases to retain an accepted cell, and drawdown to remain under 35%.
+- Runtime-parity replay passes on two adjacent clean samples. Latest: first half 220 trades, PF 1.46, 1,000→1,287 U and 10.2% drawdown; held-out half 174 trades, PF 1.55, 1,000→1,316 U and 11.9% drawdown. Prior adjacent sample: 233/180 trades and PF 1.31/1.59. All four active mechanisms and all six authorized cells remain positive in both halves.
+- Local acceptance passes 227/227 direct tests, five all-regime tests, 17 architecture/migration tests, TypeScript, ESLint, production build, causal candidate research, gated runtime replay, whitespace and Cloudflare dry-run. Reviewed PR update, merge, deployment and production health are in progress. Existing PAPER equity, positions/history, credentials and owner LIVE intent remain untouched.
+- PR #203 run #714 correctly stopped when the newly advanced sample made the old `脉折` cell negative and exposed replay/online exit-parity drift. The follow-up does not weaken a threshold: it makes replay exits identical to runtime, demotes `脉折` to shadow, and freezes only the six cells positive on both adjacent samples.
+
 # Done — 2026-09-12 collapsed PAPER history archive
 
 - Replaced the Records tab's always-expanded legacy list with one compact archive control. Current-cycle trades and blocked candidates remain directly visible.
@@ -427,3 +437,9 @@ Commit `8528f11965fe3ae17d404f2cb636f63e198c2160` deployed successfully in GitHu
 - The bounded patch is complete. Targeted parity/admission tests pass; the full direct suite passes 203 tests, all-regime tests pass 3, architecture/migration passes 17, and TypeScript, ESLint, production build and whitespace validation pass. Local Wrangler dry-run could not start because this workspace blocks its network/auth probe; the identical GitHub review gate remains required before merge.
 - PR #192 run #685 repeated and passed the complete review suite, including the causal all-regime replay and V11 after-cost evidence gate. Main run #686 rebuilt, deployed Cloudflare version `5e5ab69a-46c9-4000-a386-5080c11b1cff`, and passed advancing production-health acceptance with fresh authority, no runtime error, `maxPortfolioPositions=null`, and LIVE requested/operational both OFF.
 - The release did not reset or settle the PAPER account, clear history, alter credentials, change public-data cadence, expand the ten-market real-time surface or enable LIVE.
+## Active — 2026-09-12 full-market strategy coverage
+
+- Implemented Gate classification filtering in runtime and historical-universe selection. Non-crypto and unknown non-empty contract classes are excluded before liquidity ranking.
+- Implemented a pure causal state-cell ledger with discovery/held-out metrics, full-cost results, symbol/time-concentration guards, accepted masks and explicit uncovered cells. Targeted tests pass with TypeScript.
+- Replayed the latest CI artifact only as a diagnostic because its 20-market sample contains stocks/metals/energy. It proves the old global-average method hides large state gaps; it is not release evidence.
+- Next: run the same research on a newly generated crypto-only PR dataset, freeze only its held-out-positive masks, wire the resulting combination into PAPER authority, then complete all verification and production release without changing LIVE.

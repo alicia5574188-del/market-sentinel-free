@@ -1,4 +1,5 @@
 import type { BookLevel, BookSnapshot } from "./liquidity-core.ts";
+import { isCryptoContractType } from "./contract-universe.ts";
 
 const BASES = ["https://api.gateio.ws/api/v4", "https://fx-api.gateio.ws/api/v4"] as const;
 const GATE_PUBLIC_TIMEOUT_MS = 2_000;
@@ -118,6 +119,7 @@ export type GateTicker = {
 
 export type GateContract = {
   name?: string;
+  contract_type?: string;
   in_delisting?: boolean;
   status?: string;
   order_price_round?: string;
@@ -132,7 +134,8 @@ export async function fetchActiveContracts() {
     gatePublic<GateContract[]>("/futures/usdt/contracts", GATE_RESILIENT_TIMEOUT_MS, 2),
   ]);
   const available = new Map(contracts
-    .filter((contract) => !contract.in_delisting && (!contract.status || contract.status === "trading"))
+    .filter((contract) => !contract.in_delisting && (!contract.status || contract.status === "trading")
+      && isCryptoContractType(contract.contract_type))
     .map((contract) => [contract.name ?? "", Number(contract.order_price_round ?? 0.0001)]));
   return rows
     .filter((row) => available.has(row.contract ?? "") && Number(row.last ?? 0) > 0)

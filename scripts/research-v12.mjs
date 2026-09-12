@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs";
+import { buildStrategyCoverageReport, deriveMarketStateFeatures } from "../lib/strategy-coverage.ts";
+import { MARKET_PHASE_AUTHORITY, STRATEGY_STATE_AUTHORITY } from "../lib/strategy-coverage-policy.ts";
 
 const DATASET = process.env.RESEARCH_DATASET ?? "/tmp/all-regime-candles.json";
 const FRICTION = 0.0014;
@@ -384,7 +386,9 @@ function generate(detector, config) {
       if (!signal || !economics(rows, index, signal)) continue;
       const trade = resolve(rows, index, signal);
       if (!trade) continue;
-      trades.push({ ...trade, symbol, side: signal.side });
+      const state = deriveMarketStateFeatures(rows.slice(index - 119, index + 1), context.breadth, context.medianMove);
+      if (!state) continue;
+      trades.push({ ...trade, symbol, side: signal.side, state });
       busyUntil = trade.closedAt / 1_000;
     }
   }
@@ -398,9 +402,16 @@ function metrics(trades) {
     net: trades.reduce((sum, row) => sum + row.netReturnRate, 0), pf: loss ? gain / loss : gain ? 99 : 0 };
 }
 
+const coverageTrades = [];
+const familyIds = { "潮接": "tide_relay", "静旋": "quiet_orbit", "潮补": "tide_catchup", "静移": "quiet_drift",
+  "冲衡": "impulse_recoil", "隙续": "compression_hold", "脉折": "impulse_fold", "静扫": "quiet_sweep", "相折": "phase_turn" };
+
 function evaluate(name, detector, variants) {
   const results = variants.map((config, index) => {
     const trades = generate(detector, config);
+    const strategyId = `${familyIds[name]}:${index}`;
+    coverageTrades.push(...trades.map((trade) => ({ ...trade, strategyId,
+      strategyName: config.name ? `${config.name}·${index}` : `${name}·${index}` })));
     const folds = [0, 1, 2].map((fold) => metrics(trades.filter((trade) => trade.openedAt >= fromMs + fold * spanMs
       && trade.openedAt < fromMs + (fold + 1) * spanMs)));
     const train = metrics(trades.filter((trade) => trade.openedAt < fromMs + spanMs * 1.5));
@@ -505,10 +516,29 @@ const phaseOverlap = acceptedPhase.map((row, index) => {
 });
 console.table(phaseOverlap);
 
-const accepted = acceptedPhase.map((row) => row && row.train.trades >= 30 && row.validation.trades >= 30
+const legacyPhaseCandidates = acceptedPhase.map((row) => row && row.train.trades >= 30 && row.validation.trades >= 30
   && row.train.pf > 1 && row.validation.pf > 1 && row.folds.every((fold) => fold.trades >= 12 && fold.pf > 1)
   && phaseOverlap.find((item) => item.name === row.config.name)?.uniqueAgainstOther >= 30
   && phaseOverlap.find((item) => item.name === row.config.name)?.uniqueAgainstCurrent >= 30 ? row : null);
+const splitAt = fromMs + spanMs * 1.5;
+const coverage = buildStrategyCoverageReport(coverageTrades, splitAt, {
+  discoveryTrades: 12, validationTrades: 8, discoveryProfitFactor: 1.05, validationProfitFactor: 1,
+  validationSymbols: 2, validationPositivePeriods: 2, knownDiscoveryOpportunities: 20,
+  knownValidationOpportunities: 12, periodMs: 5 * 86_400_000,
+});
+console.table(coverage.phases.map((row) => ({ phase: row.phase, knownCells: row.knownCells,
+  coveredCells: row.coveredCells, coverage: `${(row.coverageRate * 100).toFixed(0)}%`, strategies: row.strategyIds.join(",") })));
+if (coverage.gaps.length) console.table(coverage.gaps.map((gap) => ({ state: gap.state.key,
+  discovery: gap.discoveryOpportunities, validation: gap.validationOpportunities })));
+const coverageSummary = { splitAt: coverage.splitAt, thresholds: coverage.thresholds, knownCells: coverage.knownCells,
+  acceptedCells: coverage.acceptedCells, gaps: coverage.gaps, phases: coverage.phases };
+const selectedVariants = new Set(["tide_relay:2", "tide_catchup:2", "quiet_drift:2", "impulse_recoil:0"]);
+const selectedCoverage = coverage.acceptedCells.filter((cell) => selectedVariants.has(cell.strategyId)
+  && STRATEGY_STATE_AUTHORITY[cell.strategyId.split(":")[0]]?.includes(cell.state.key));
+const requiredTradePhases = Object.entries(MARKET_PHASE_AUTHORITY)
+  .filter(([, authority]) => authority === "TRADE").map(([phase]) => phase);
+const missingTradePhases = requiredTradePhases.filter((phase) => !selectedCoverage.some((cell) => cell.state.phase === phase));
 console.log(`V12_RESEARCH_JSON=${JSON.stringify({ rejectedFamilies: { tide, orbit, catchup, drift, recoil, hold, fold, sweep },
-  phase, phaseOverlap, accepted })}`);
-if (accepted.filter(Boolean).length < 2) throw new Error("V12 candidate acceptance failed");
+  phase, phaseOverlap, legacyPhaseCandidates, selectedCoverage, coverage: coverageSummary })}`);
+if (MARKET_PHASE_AUTHORITY.TRANSITION !== "WAIT") throw new Error("transition must remain capital-preservation WAIT");
+if (missingTradePhases.length) throw new Error(`selected candidate coverage missing phases: ${missingTradePhases.join(",")}`);

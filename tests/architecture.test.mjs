@@ -81,8 +81,8 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(page, /全境·复利引擎/);
   assert.match(layout, /V12全境·复利引擎 · PAPER/);
   assert.doesNotMatch(layout, /V4自适应影子策略/);
-  assert.match(page, /V12 · VERIFIED ROUTE AUTHORITY/);
-  assert.match(page, /脉折处理中周期失速/);
+  assert.match(page, /V12 · VERIFIED STATE AUTHORITY/);
+  assert.match(page, /转换噪声期没有稳定成本后优势/);
   assert.match(page, /今日净收益/);
   assert.match(page, /实时运行状态/);
   assert.match(page, /策略账户已运行/);
@@ -164,16 +164,16 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
 });
 
 test("V12 verified-route engine is causal, selective, cost-aware, and the sole LIVE order source", async () => {
-  const [arena, allRegime, regime, gateLive, worker, page, migration, researchV11] = await Promise.all([
+  const [arena, allRegime, regime, gateLive, worker, page, migration, coveragePolicy] = await Promise.all([
     read("lib/strategy-arena.ts"), read("lib/all-regime-engine.ts"), read("lib/market-regime.ts"),
     read("lib/gate-live.ts"), read("worker/index-clean.ts"), read("app/page.tsx"),
     read("drizzle/0035_strategy_arena_fresh_start.sql"),
-    read("scripts/research-v11.mjs"),
+    read("lib/strategy-coverage-policy.ts"),
   ]);
   assert.match(arena, /STRATEGY_CATALOG/);
   assert.match(arena, /STRATEGY_ARENA_VERSION = 12/);
   assert.match(allRegime, /ALL_REGIME_SYSTEM_NAME = "全境·复利引擎"/);
-  for (const name of ["势承", "衡返", "压跃", "竭转", "脉折", "缓续"]) assert.match(allRegime, new RegExp(name));
+  for (const name of ["势承", "潮补", "静移", "冲衡", "脉折", "潮接"]) assert.match(allRegime, new RegExp(name));
   assert.match(allRegime, /detectAllRegimeRoutes/);
   assert.doesNotMatch(arena, /adaptiveMechanismForPlaybook/);
   assert.match(arena, /ARENA_FRICTION_RATE = 0\.0014/);
@@ -222,7 +222,8 @@ test("V12 verified-route engine is causal, selective, cost-aware, and the sole L
   assert.match(arena, /extremeSequenceAuthority: false/);
   assert.match(arena, /generatedRouteAuthority: false/);
   assert.match(arena, /legacyStrategyAuthority: false/);
-  assert.doesNotMatch(researchV11, /selectedRange\?\.train\.pf/, "a disabled range shadow must not gate an unrelated release");
+  assert.match(coveragePolicy, /TRANSITION: "WAIT"/);
+  assert.match(coveragePolicy, /ORDERLY_TREND:BROAD_DOWN:HIGH_EDGE/);
   assert.doesNotMatch(page, />观察影子</);
   assert.match(page, /当前模拟周期/);
   assert.match(page, /历史归档/);
@@ -286,9 +287,9 @@ test("cutover is credential-bound and removes legacy DOs only after v11 health",
   const workflow = await read(".github/workflows/sentinel-v2-ci.yml");
   assert.equal((workflow.match(/\.runtime\.strategyArena\.version == 12/g) ?? []).length, 2);
   assert.equal((workflow.match(/grep -Fq '全境·复利引擎'/g) ?? []).length, 2);
-  assert.match(workflow, /Require V12 gap routes to retain after-cost evidence/);
-  assert.ok(workflow.indexOf("research:all-regime") < workflow.indexOf("research:v11"));
-  assert.ok(workflow.indexOf("research:v11") < workflow.indexOf("research:v12"));
+  assert.match(workflow, /Require crypto-only full-phase candidate coverage/);
+  assert.ok(workflow.indexOf("research:all-regime") < workflow.indexOf("research:v12"));
+  assert.doesNotMatch(workflow, /run: npm run research:v11/);
   assert.match(workflow, /id,exchange,environment,ciphertext,iv,crypto_version,key_hint,gate_user_id,owner_account_id,permission_summary_json,status,last_verified_at,last_error,created_at,updated_at/);
   assert.match(workflow, /index\.prepare\.js/);
   assert.match(workflow, /class RetiredDurableObject extends DurableObject/);

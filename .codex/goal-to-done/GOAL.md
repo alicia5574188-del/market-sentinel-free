@@ -1,3 +1,12 @@
+# Active goal — data-derived full-market strategy coverage
+
+- Restrict the ranked Gate USDT perpetual universe to genuine crypto assets before volume ranking; stock, ETF, index, commodity and other TradFi perpetuals must not consume the thirty-market scan, market-breadth context, realtime capacity, PAPER or LIVE paths.
+- Replace the fixed environment-to-strategy assumption with an auditable historical coverage study. Replay every candidate mechanism causally on completed Gate five-minute candles, charge the existing 0.14% round-trip friction and 0.025% adverse entry, retain wins and losses, and map each mechanism's positive after-cost coverage across chronological market-state segments.
+- Judge the strategy set by the union of independently validated coverage rather than by a fixed catalog size. Every known tradable state must have at least one held-out positive mechanism; important states should have complementary continuation and failure/reversal coverage. An unvalidated state remains an explicit research gap and cannot receive fabricated PAPER authority.
+- Derive applicability from pre-entry features and profitable-versus-losing coverage, then freeze those conditions before held-out and walk-forward verification. No post-entry MFE/MAE or future state may leak into selection.
+- Historically accepted mechanisms may enter the 1,000 U PAPER account directly; paired shadows continue in parallel for drift detection and demotion rather than acting as an unnecessary initial probation. Preserve the current account, positions, history, sizing, risk/cost/freshness gates, credentials and owner-controlled LIVE choice throughout release.
+- Expose honest backend coverage/remaining-gap truth without turning every market state into a trade quota. Verify research, direct/all-regime/architecture tests, TypeScript, ESLint, build, whitespace and Cloudflare dry-run; release only through a reviewed PR and GitHub `main`, then prove advancing production health and unchanged LIVE intent.
+
 # Completed UI correction — keep prior PAPER cycles inside a collapsed archive
 
 - Keep the current PAPER cycle and blocked-candidate audit immediately visible on the Records tab.
