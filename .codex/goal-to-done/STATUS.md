@@ -1,10 +1,12 @@
-# Release candidate — 2026-09-12 LIVE continuity and candidate audit
+# Done — 2026-09-12 LIVE continuity and candidate audit
 
 - Root causes reproduced in source: every Durable Object restart overwrote saved LIVE intent with `requestedEnabled=false`; any symbol-level leverage/entry exception escaped the staging loop into `setLiveMode`, which disabled and cleaned up the whole LIVE runtime; the phone UI hid its order view whenever LIVE was OFF and filtered closed positions out.
 - LIVE intent now survives deployment while `operational` remains false until fresh Gate reconciliation. Definitive per-symbol leverage/entry failures become retained skips and later staged symbols continue; ambiguous entry responses reserve their risk, reconcile for six seconds and cannot replay the same PAPER plan.
 - Protective-stop timeouts now reconcile the deterministic tag for six seconds instead of causing an immediate false exit. Explicit Gate rejection or confirmed missing protection still uses the fail-closed reduce-only market exit and records the exact stage/label.
 - Added bounded checkpoint-only LIVE audit and blocked PAPER candidate audit. The owner can view current/closed real positions, fills, exits, skips and safety incidents even while LIVE is OFF; Trade Records shows only formed candidates with direction and entry/stop/target plus terminal execution/authority/account blocker.
-- Local acceptance currently passes 218 direct tests plus the new exact LIVE regressions (62 focused), four all-regime tests, 17 architecture/migration tests, TypeScript, ESLint, production build, Wrangler dry-run and whitespace validation. Release through reviewed GitHub `main` and production verification are pending.
+- Local acceptance passed 218 direct tests plus the new exact LIVE regressions (62 focused), four all-regime tests, 17 architecture/migration tests, TypeScript, ESLint, production build, Wrangler dry-run and whitespace validation.
+- PR #199 passed review run #707 and squash-merged as `2fdb9289a52db897b896ab7b900334b485df29d6`; main run #708 deployed the runtime correction. Follow-up PR #200 corrected the obsolete release/monitor gate that still required LIVE to be forcibly OFF, passed run #709 and squash-merged as `56ec5bc6bb6a92fa61ab4dc349551518ead37de2`.
+- Main run #710 deployed Cloudflare version `c7c38053-ebe0-425c-b1e3-88ef8a9fc15a` and passed advancing production health. Independent snapshots advanced from `1789220907923` to `1789220929928`, remained ready/non-stale with no runtime error, 30/30 retained paths and 10/10 actionable markets. The PAPER account remained unchanged at 974.44352288 U with no open position; LIVE's saved owner choice was OFF and remained OFF. The new blocked-candidate list starts empty and records only future formed-and-blocked routes rather than inventing historical candidates.
 
 # Done — 2026-09-12 meaningful PAPER notional admission
 

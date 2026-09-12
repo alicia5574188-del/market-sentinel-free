@@ -1,4 +1,4 @@
-# Active correction — preserve LIVE after per-symbol failure and retain blocked-candidate evidence
+# Completed correction — preserve LIVE after per-symbol failure and retain blocked-candidate evidence
 
 - Reproduce the owner-observed LIVE incident in which one Gate position opened and flattened in the same instant, then LIVE disabled itself while PAPER continued independently. Distinguish an exchange-protection/submission defect from an affordable per-symbol representation skip using source and production evidence.
 - A failure or infeasible copy for one PAPER symbol must become an auditable per-symbol LIVE skip unless an exchange mutation is ambiguous or leaves unmanaged exposure. Only a genuine account-wide safety incident may force LIVE off; every forced shutdown must retain its exact stage, Gate label and reconciliation outcome for the owner.
