@@ -1,3 +1,10 @@
+# Active UI correction — keep prior PAPER cycles inside a collapsed archive
+
+- Keep the current PAPER cycle and blocked-candidate audit immediately visible on the Records tab.
+- Replace the always-expanded legacy order list with one compact History Archive entry that shows only archived cycle and order counts by default.
+- Create and display archived order rows only after the operator explicitly opens the archive; allow it to be closed again without deleting or changing any history.
+- Preserve trading authority, PAPER/LIVE state, credentials, account history and every backend persistence boundary. Verify the UI contract, tests, build, reviewed GitHub main release and production rendering.
+
 # Completed correction — preserve LIVE after per-symbol failure and retain blocked-candidate evidence
 
 - Reproduce the owner-observed LIVE incident in which one Gate position opened and flattened in the same instant, then LIVE disabled itself while PAPER continued independently. Distinguish an exchange-protection/submission defect from an affordable per-symbol representation skip using source and production evidence.
