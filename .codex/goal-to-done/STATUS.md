@@ -1,7 +1,11 @@
-# In progress — 2026-09-12 meaningful PAPER notional admission
+# Done — 2026-09-12 meaningful PAPER notional admission
 
 - Production opened a 龙虾 `脉折` short at 0.115 with a 0.14307075 structural stop. The 24.41% stop plus modeled cost reduced risk-sized notional to 69 U and forced 1× leverage; proportional 10 U LIVE copying could not afford Gate's one-contract lot.
-- Root cause is an admission gap, not the removed book haircut: the system bounds risk and maximum notional but previously had no minimum economically meaningful account notional. Active work rejects a new PAPER route unless risk-safe integer-contract sizing retains at least 1× current equity; it never enlarges a wide-stop order past risk limits and does not alter existing positions.
+- Root cause was an admission gap, not the removed book haircut: the system bounded risk and maximum notional but had no minimum economically meaningful account notional. The release rejects a new PAPER route unless risk-safe integer-contract sizing retains at least 1× current equity; it never enlarges a wide-stop order past risk limits or alters existing positions.
+- Implemented the 1× current-equity minimum after structural-risk sizing, Gate contract rounding, remaining 4× notional capacity and the 30% margin cap. Exact 龙虾 regression and 213 direct tests, four all-regime tests, 17 architecture/migration tests, TypeScript, ESLint, production build, Wrangler dry-run and whitespace validation pass.
+- PR #198 review run #703 passed the complete suite plus the 30-day/20-market causal replay and V11/V12 evidence gates, then squash-merged as `13413341ce1fb42b52b807eb82f226461e54343f`.
+- Main run #704 deployed Cloudflare version `0aab96df-2510-4eb9-b48e-c4d027665c57`. Health advanced from `1789189620455` to `1789189636466`, stayed ready/non-stale with no runtime error, and exposed the 1× minimum-notional rule.
+- Deployment forced LIVE requested/operational both OFF. PAPER cycle 4 and the existing 69 U 龙虾 position remained unchanged; the release did not reset the account, settle an existing position, delete history or modify credentials.
 
 # Done — 2026-09-12 LIVE protective-stop tick alignment
 

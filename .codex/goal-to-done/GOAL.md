@@ -1,4 +1,4 @@
-# Active correction — reject risk-safe orders whose size is economically meaningless
+# Completed correction — reject risk-safe orders whose size is economically meaningless
 
 - A 1,000 U PAPER account may open a new route only when the structural-risk calculation, Gate integer-contract rounding, portfolio capacity and margin limits still support at least 1× current account equity in contract notional.
 - Never force a wide-stop route up to the minimum size. If it cannot meet the meaningful-notional floor within existing risk limits, keep it in research and report the blocker instead of opening a tiny PAPER position.
