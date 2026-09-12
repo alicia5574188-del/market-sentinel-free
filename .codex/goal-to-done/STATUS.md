@@ -1,8 +1,11 @@
-# In progress — 2026-09-12 LIVE protective-stop tick alignment
+# Done — 2026-09-12 LIVE protective-stop tick alignment
 
 - Production at 12:10 CST reported two still-open PAPER holdings: BNB short with stop `736.135` and ZEC long with stop `1123.721`; LIVE remained owner-enabled/operational but Gate was flat and equity had fallen from 10 U to 9.97 U.
 - Gate currently publishes `order_price_round=0.05` for BNB and `0.01` for ZEC. Both PAPER stop values are off-grid. The LIVE entry market order can fill, but the subsequent Gate protective price order rejects the raw stop; current fail-closed handling then requests an immediate reduce-only market exit. This explains both the lifecycle divergence and the fee-sized balance change.
-- Implemented exchange-only outward tick normalization: long stops round down and short stops round up by no more than one tick. PAPER geometry, lifecycle and sizing are unchanged. Exact BNB/ZEC regressions, 212 direct tests, four all-regime tests, 17 architecture/migration tests, TypeScript, ESLint, production build, Cloudflare dry-run and whitespace validation all pass. Next: reviewed release after user authorization.
+- Implemented exchange-only outward tick normalization: long stops round down and short stops round up by no more than one tick. PAPER geometry, lifecycle and sizing are unchanged. Exact BNB/ZEC regressions, 212 direct tests, four all-regime tests, 17 architecture/migration tests, TypeScript, ESLint, production build, Cloudflare dry-run and whitespace validation all pass.
+- PR #197 review run #701 repeated the complete verification and passed. It squash-merged to `main` as `d99e409bb3f134c48e0a423a89270c200d18ade3`.
+- Main run #702 deployed Cloudflare version `4acfa0bb-7240-4b46-a0fd-2b8c51d08210` and passed the advancing production-health gate. Independent health snapshots advanced from `1789187974452` to `1789187990452`, remained ready/non-stale with no runtime error and reported the 4× notional ceiling.
+- Deployment correctly forced LIVE requested/operational both OFF. PAPER cycle 3 remained at 1,000 U with the exact original BNB/ZEC position IDs, open times, directions, notionals, active stops and targets; history and credentials were not reset or changed.
 
 # Done — 2026-09-12 meaningful sizing and continuous LIVE parity
 
