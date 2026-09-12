@@ -33,7 +33,7 @@ These are historical simulations, not a promise of daily profit. PAPER is the fo
 
 ## Account and execution
 
-- One account with current-equity compounding. Position notional is set by structural risk and may use derivatives exposure up to the existing 4× account-wide ceiling; there is no separate 0.5× per-position ceiling or fixed position-count veto. Executable data capacity, 10% total risk, 6.5% same-direction risk and 30% total margin determine concurrency.
+- One account with current-equity compounding. Position notional is set by structural risk and may use derivatives exposure up to the existing 4× account-wide ceiling; there is no separate 0.5× per-position ceiling or fixed position-count veto. A new PAPER route must still support at least 1× current-equity notional without exceeding structural-risk, directional-risk or margin limits; an exceptionally wide stop is rejected instead of being opened as a meaningless tiny position. Executable data capacity, 10% total risk, 6.5% same-direction risk and 30% total margin determine concurrency.
 - Full modeled friction, fresh bid/ask, executable depth, Gate integer contracts and structural stops are mandatory. LIVE protective stops use Gate's current contract tick and round outward only, so price-grid normalization cannot close ahead of PAPER.
 - Aggregate structural risk remains at most 10%; same-direction structural risk remains at most 6.5%.
 - Stale or incomplete data cannot open or close on an old price.

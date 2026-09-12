@@ -17,6 +17,7 @@ export const ARENA_MIN_VOLUME_24H_USD = 10_000_000;
 export const ARENA_MAX_COST_SHARE = 0.25;
 export const ARENA_QUOTE_STALE_MS = 5_000;
 export const PORTFOLIO_TRADE_RISK_TARGET_USDT = 10;
+export const MIN_PORTFOLIO_NOTIONAL_TO_EQUITY = 1;
 export const PORTFOLIO_REALTIME_CAPACITY = 10;
 export const MAX_PORTFOLIO_POSITIONS = null;
 export const ARENA_MAX_OPEN = 240;
@@ -626,6 +627,7 @@ function tradeContext(input: ArenaObservation, definition: StrategyDefinition, s
 }
 type TradeSizing = { notional: number; plannedRisk: number; contracts: number; quantoMultiplier: number; leverage: number;
   margin: number; accountEquityAtOpen: number; admissionTier: AdmissionTier | null };
+type PortfolioSizingResult = { sizing: TradeSizing | null; blocker: "MEANINGFUL_SIZE" | "SIZING" | null };
 
 function depthAdjustedSizing(input: ArenaObservation, signal: Signal, sizing: TradeSizing) {
   const economics = geometryEconomics(input, signal);
@@ -661,7 +663,7 @@ function cloneShadowForPortfolio(shadow: ArenaTrade, sizing: TradeSizing, sample
 const openRisk = (state: StrategyArenaState, side?: Side) => Object.values(state.portfolioOpen)
   .filter((trade) => !side || trade.side === side).reduce((total, trade) => total + trade.plannedRisk, 0);
 
-function portfolioSizing(state: StrategyArenaState, input: ArenaObservation, signal: Signal) {
+function portfolioSizing(state: StrategyArenaState, input: ArenaObservation, signal: Signal): PortfolioSizingResult {
   const economics = geometryEconomics(input, signal);
   const sized = sizePaperPosition({ equity: state.portfolioEquity, entry: economics.entryPrice, invalidation: signal.stopPrice,
     feeBps: ARENA_FRICTION_RATE * 10_000, stressSlippageBps: 0, confidence: clamp(0.5 + signal.quality * 0.35, 0.5, 0.85),
@@ -671,23 +673,31 @@ function portfolioSizing(state: StrategyArenaState, input: ArenaObservation, sig
   const usedNotional = Object.values(state.portfolioOpen).reduce((total, trade) => total + trade.notional, 0);
   const remainingNotional = Math.max(0, state.portfolioEquity * MAX_NOTIONAL_TO_EQUITY - usedNotional);
   let contracts = Math.floor(Math.min(sized.notional, remainingNotional) / Math.max(contractNotional, 1e-12));
-  if (contracts < 1) return null;
+  if (contracts < 1) return { sizing: null, blocker: "SIZING" };
   let notional = contracts * contractNotional;
+  if (notional + 1e-8 < state.portfolioEquity * MIN_PORTFOLIO_NOTIONAL_TO_EQUITY) {
+    return { sizing: null, blocker: "MEANINGFUL_SIZE" };
+  }
   let leverage = selectSafeLeverage({ notional, equity: state.portfolioEquity, entry: economics.entryPrice,
     invalidation: signal.stopPrice, maintenanceRate: input.maintenanceRate, leverageMax: input.leverageMax });
   const usedMargin = Object.values(state.portfolioOpen).reduce((total, trade) => total + trade.margin, 0);
   contracts = Math.min(contracts, Math.floor(Math.max(0, state.portfolioEquity * PORTFOLIO_MARGIN_CAP - usedMargin)
     * leverage.leverage / Math.max(contractNotional, 1e-12)));
-  if (contracts < 1) return null;
+  if (contracts < 1) return { sizing: null, blocker: "SIZING" };
   notional = contracts * contractNotional;
+  if (notional + 1e-8 < state.portfolioEquity * MIN_PORTFOLIO_NOTIONAL_TO_EQUITY) {
+    return { sizing: null, blocker: "MEANINGFUL_SIZE" };
+  }
   leverage = selectSafeLeverage({ notional, equity: state.portfolioEquity, entry: economics.entryPrice,
     invalidation: signal.stopPrice, maintenanceRate: input.maintenanceRate, leverageMax: input.leverageMax });
   const plannedRisk = notional * (economics.structuralStopRate + ARENA_FRICTION_RATE);
   if (openRisk(state) + plannedRisk > state.portfolioEquity * PORTFOLIO_RISK_CAP + 1e-8
     || openRisk(state, signal.side) + plannedRisk > state.portfolioEquity * CORRELATED_DIRECTION_RISK_CAP + 1e-8
-    || usedMargin + leverage.margin > state.portfolioEquity * PORTFOLIO_MARGIN_CAP + 1e-8) return null;
-  return { notional, plannedRisk, contracts, quantoMultiplier: multiplier, leverage: leverage.leverage, margin: leverage.margin,
-    accountEquityAtOpen: state.portfolioEquity, admissionTier: "NORMAL" } satisfies TradeSizing;
+    || usedMargin + leverage.margin > state.portfolioEquity * PORTFOLIO_MARGIN_CAP + 1e-8) {
+    return { sizing: null, blocker: "SIZING" };
+  }
+  return { sizing: { notional, plannedRisk, contracts, quantoMultiplier: multiplier, leverage: leverage.leverage,
+    margin: leverage.margin, accountEquityAtOpen: state.portfolioEquity, admissionTier: "NORMAL" }, blocker: null };
 }
 
 function portfolioAdmission(state: StrategyArenaState, input: ArenaObservation, signal: Signal, score: StrategyScore) {
@@ -709,9 +719,10 @@ function portfolioAdmission(state: StrategyArenaState, input: ArenaObservation, 
   if (blocker) { state.admissionRejects[blocker] = (state.admissionRejects[blocker] ?? 0) + 1;
     return { admission: null, blocker }; }
   const accountSizing = portfolioSizing(state, input, signal);
-  if (!accountSizing) { state.admissionRejects.SIZING = (state.admissionRejects.SIZING ?? 0) + 1;
-    return { admission: null, blocker: "SIZING" }; }
-  const sizing = depthAdjustedSizing(input, signal, accountSizing);
+  if (!accountSizing.sizing) { const sizingBlocker = accountSizing.blocker ?? "SIZING";
+    state.admissionRejects[sizingBlocker] = (state.admissionRejects[sizingBlocker] ?? 0) + 1;
+    return { admission: null, blocker: sizingBlocker }; }
+  const sizing = depthAdjustedSizing(input, signal, accountSizing.sizing);
   if (!sizing) {
     state.admissionRejects.DEPTH = (state.admissionRejects.DEPTH ?? 0) + 1;
     return { admission: null, blocker: "DEPTH" };
@@ -724,6 +735,7 @@ const admissionBlockerText = (blocker: string) => ({
   STRUCTURE: "进场、止损和盈利臂的方向关系无效", LIQUIDITY: "24小时成交额低于账户执行下限",
   SPREAD: "真实买一卖一价差超过成本上限", NET_ECONOMICS: "扣除手续费与滑点后的盈亏结构不足",
   SYMBOL_COOLDOWN: "同币同分支刚完成交易，正在避免重复追单", SIZING: "Gate整数张数或账户风险额度不足",
+  MEANINGFUL_SIZE: "结构止损过宽或剩余额度不足，按风险计算的名义价值低于账户权益1倍",
   DEPTH: "盘口容量连一张Gate合约都无法承载",
 }[blocker] ?? blocker);
 

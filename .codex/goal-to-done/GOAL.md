@@ -1,4 +1,11 @@
-# Active correction — keep LIVE protection prices executable and lifecycle-aligned with PAPER
+# Active correction — reject risk-safe orders whose size is economically meaningless
+
+- A 1,000 U PAPER account may open a new route only when the structural-risk calculation, Gate integer-contract rounding, portfolio capacity and margin limits still support at least 1× current account equity in contract notional.
+- Never force a wide-stop route up to the minimum size. If it cannot meet the meaningful-notional floor within existing risk limits, keep it in research and report the blocker instead of opening a tiny PAPER position.
+- Preserve current PAPER positions and history, proportional LIVE copying, the 4× ceiling, 10% total risk, 6.5% same-direction risk, 30% margin cap and owner-controlled LIVE state. Do not reset or settle the account.
+- Verify the exact observed 龙虾 0.115 entry / 0.14307075 stop / 69 U outcome, full tests and replay, reviewed GitHub main release and advancing production health.
+
+# Completed correction — keep LIVE protection prices executable and lifecycle-aligned with PAPER
 
 - Correct the observed owner-enabled LIVE failure where Gate positions opened and immediately flattened while the same two PAPER positions remained open.
 - Preserve the exact PAPER direction, lifecycle and proportional notional. Convert only the LIVE protective stop onto Gate's contract price grid, rounding outward so exchange protection can never exit earlier merely because of tick normalization.

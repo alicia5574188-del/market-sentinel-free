@@ -1,3 +1,8 @@
+# In progress — 2026-09-12 meaningful PAPER notional admission
+
+- Production opened a 龙虾 `脉折` short at 0.115 with a 0.14307075 structural stop. The 24.41% stop plus modeled cost reduced risk-sized notional to 69 U and forced 1× leverage; proportional 10 U LIVE copying could not afford Gate's one-contract lot.
+- Root cause is an admission gap, not the removed book haircut: the system bounds risk and maximum notional but previously had no minimum economically meaningful account notional. Active work rejects a new PAPER route unless risk-safe integer-contract sizing retains at least 1× current equity; it never enlarges a wide-stop order past risk limits and does not alter existing positions.
+
 # Done — 2026-09-12 LIVE protective-stop tick alignment
 
 - Production at 12:10 CST reported two still-open PAPER holdings: BNB short with stop `736.135` and ZEC long with stop `1123.721`; LIVE remained owner-enabled/operational but Gate was flat and equity had fallen from 10 U to 9.97 U.
