@@ -42,16 +42,16 @@ export const ALL_REGIME_STRATEGIES = [
 export const ALL_REGIME_OFFLINE_VALIDATION = {
   momentum_carry: { branchName: "势承·时间集中待验证", trainEvents: 108, trainProfitFactor: 1.91,
     validationEvents: 96, validationProfitFactor: 1.34, validationWinRate: 0.40, paperApproved: false },
-  tide_catchup: { branchName: "潮补·压缩普涨低位", trainEvents: 54, trainProfitFactor: 1.75,
-    validationEvents: 31, validationProfitFactor: 1.46, validationWinRate: 0.35, paperApproved: true },
-  quiet_drift: { branchName: "静移·压缩混合中位", trainEvents: 53, trainProfitFactor: 1.23,
-    validationEvents: 47, validationProfitFactor: 1.51, validationWinRate: 0.36, paperApproved: true },
-  impulse_recoil: { branchName: "冲衡·轮动混合中位", trainEvents: 17, trainProfitFactor: 1.99,
-    validationEvents: 29, validationProfitFactor: 1.36, validationWinRate: 0.34, paperApproved: true },
-  impulse_fold: { branchName: "脉折·轮动普跌中位", trainEvents: 20, trainProfitFactor: 1.43,
-    validationEvents: 14, validationProfitFactor: 2.08, validationWinRate: 0.43, paperApproved: true },
-  tide_relay: { branchName: "潮接·扩张普涨/有序混合高位", trainEvents: 87, trainProfitFactor: 1.26,
-    validationEvents: 67, validationProfitFactor: 1.85, validationWinRate: 0.40, paperApproved: true },
+  tide_catchup: { branchName: "潮补·压缩普涨低位/有序普跌高位", trainEvents: 71, trainProfitFactor: 1.70,
+    validationEvents: 37, validationProfitFactor: 1.92, validationWinRate: 0.32, paperApproved: true },
+  quiet_drift: { branchName: "静移·压缩/轮动混合中位", trainEvents: 65, trainProfitFactor: 1.49,
+    validationEvents: 66, validationProfitFactor: 1.45, validationWinRate: 0.35, paperApproved: true },
+  impulse_recoil: { branchName: "冲衡·扩张普涨高位", trainEvents: 67, trainProfitFactor: 1.79,
+    validationEvents: 31, validationProfitFactor: 1.08, validationWinRate: 0.39, paperApproved: true },
+  impulse_fold: { branchName: "脉折·样本状态漂移待验证", trainEvents: 18, trainProfitFactor: 1.20,
+    validationEvents: 18, validationProfitFactor: 1.12, validationWinRate: 0.39, paperApproved: false },
+  tide_relay: { branchName: "潮接·扩张普涨高位", trainEvents: 68, trainProfitFactor: 1.37,
+    validationEvents: 57, validationProfitFactor: 1.60, validationWinRate: 0.44, paperApproved: true },
 } as const;
 
 export const allRegimePaperApproved = (strategyId: AllRegimeStrategyId) =>

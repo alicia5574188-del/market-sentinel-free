@@ -4,14 +4,14 @@ Gate USDT perpetual PAPER authority for a single compounding 1,000 U account. LI
 
 ## Decision authority
 
-V12 scans the thirty most liquid eligible **crypto** USDT perpetuals, builds only continuous completed 5-minute paths and separates state recognition, route formation and account admission. Unknown or stock/commodity-style contract types fail closed before ranking. Six mechanisms are researched, but only five have PAPER authority and only inside their frozen profitable state cells:
+V12 scans the thirty most liquid eligible **crypto** USDT perpetuals, builds only continuous completed 5-minute paths and separates state recognition, route formation and account admission. Unknown or stock/commodity-style contract types fail closed before ranking. Six mechanisms are researched, but only four have PAPER authority and only inside state cells that remained profitable in two adjacent frozen samples:
 
-- `潮补`: broad-up compression while the contract remains at the low edge and lags the market tide.
-- `静移`: neutral-market compression with a completed directional migration through the center.
-- `潮接`: broad-up expansion at the high edge, or an orderly mixed-market trend at the high edge, after a completed pullback and resume.
-- `冲衡`: balanced, broad-neutral center rotation after an isolated impulse is reclaimed.
-- `脉折`: balanced broad-down center rotation after a local upward extreme fails.
-- `势承`: retained as paired shadow research because its positive aggregate result is concentrated in too few time windows; it has no PAPER state authority.
+- `潮补`: broad-up compression at the low edge, plus broad-down orderly trend at the high edge while the contract lags the market move.
+- `静移`: mixed-market compression or balanced rotation through the center with a completed directional migration.
+- `潮接`: broad-up expansion at the high edge after a completed pullback and resume.
+- `冲衡`: broad-up expansion at the high edge after an isolated impulse is reclaimed, complementing `潮接` rather than duplicating its pattern.
+- `脉折`: paired shadow-only because the profitable cell moved when the sample advanced.
+- `势承`: paired shadow-only because its positive aggregate result is concentrated in too few time windows.
 
 Compression, expansion, orderly trend and balanced rotation each have at least one held-out-positive mechanism. Transition/noise has no stable after-cost edge in the frozen study, so its explicit strategy is capital preservation (`WAIT`) instead of forcing a trade. Every authorized event also runs exact normal and reverse shadows after full friction. Three normal wins retain/select normal; three normal losses select reverse only when those same three fully costed mirror trades all won. Mixed results retain the last authorized orientation.
 
@@ -23,13 +23,12 @@ The profit arm does not cap profit. It starts dynamic protection; structural inv
 
 | Route | First half | Held-out half |
 | --- | ---: | ---: |
-| 潮补·压缩普涨低位 | 54 events, PF 1.75 | 31 events, PF 1.46 |
-| 静移·压缩混合中位 | 53 events, PF 1.23 | 47 events, PF 1.51 |
-| 冲衡·轮动混合中位 | 17 events, PF 1.99 | 29 events, PF 1.36 |
-| 脉折·轮动普跌中位 | 20 events, PF 1.43 | 14 events, PF 2.08 |
-| 潮接·扩张普涨/有序混合高位 | 87 events, PF 1.26 | 67 events, PF 1.85 |
+| 潮补·压缩/有序趋势 | 71 events, PF 1.70 | 37 events, PF 1.92 |
+| 静移·压缩/平衡轮动 | 65 events, PF 1.49 | 66 events, PF 1.45 |
+| 冲衡·扩张普涨高位 | 67 events, PF 1.79 | 31 events, PF 1.08 |
+| 潮接·扩张普涨高位 | 68 events, PF 1.37 | 57 events, PF 1.60 |
 
-With the same account constraints and non-overlapping lifecycles, the routed portfolio selected 194 first-half trades at PF 1.42 (1,000 → 1,251 U, 6.4% max drawdown) and 177 held-out trades at PF 1.46 (1,000 → 1,236 U, 11.9% max drawdown). The observed cadence is about twelve trades per day across twenty sampled markets; it is not a quota or forecast.
+With the same account constraints and non-overlapping lifecycles, the latest routed portfolio selected 220 first-half trades at PF 1.46 (1,000 → 1,287 U, 10.2% max drawdown) and 174 held-out trades at PF 1.55 (1,000 → 1,316 U, 11.9% max drawdown). The immediately adjacent frozen sample also passed (PF 1.31/1.59). The observed latest cadence is about thirteen trades per day across twenty sampled markets; it is not a quota or forecast.
 
 These are historical simulations, not a promise of daily profit. PAPER is the forward test.
 

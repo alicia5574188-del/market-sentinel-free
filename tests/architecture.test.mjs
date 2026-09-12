@@ -223,7 +223,7 @@ test("V12 verified-route engine is causal, selective, cost-aware, and the sole L
   assert.match(arena, /generatedRouteAuthority: false/);
   assert.match(arena, /legacyStrategyAuthority: false/);
   assert.match(coveragePolicy, /TRANSITION: "WAIT"/);
-  assert.match(coveragePolicy, /ORDERLY_TREND:MIXED:HIGH_EDGE/);
+  assert.match(coveragePolicy, /ORDERLY_TREND:BROAD_DOWN:HIGH_EDGE/);
   assert.doesNotMatch(page, />观察影子</);
   assert.match(page, /当前模拟周期/);
   assert.match(page, /历史归档/);

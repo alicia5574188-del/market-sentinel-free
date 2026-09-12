@@ -195,6 +195,7 @@ export function normalizeStrategyArena(value: StrategyArenaState | null | undefi
   const fresh = initialStrategyArena(now);
   if (!value) return fresh;
   const savedVersion = Number((value as { version?: number }).version);
+  const migratingIntoV12 = savedVersion === 11;
   if (savedVersion !== STRATEGY_ARENA_VERSION && savedVersion !== 11) {
     const prior = value as unknown as Partial<StrategyArenaState>;
     const portfolioOpen = prior.portfolioOpen ?? {};
@@ -216,7 +217,10 @@ export function normalizeStrategyArena(value: StrategyArenaState | null | undefi
   const normalized = { ...fresh, ...value, version: 12 as const,
     strategies: Object.fromEntries(STRATEGY_CATALOG.map((definition) => {
       const prior = value.strategies?.[definition.id];
-      return [definition.id, prior ? { ...freshStrategy(definition), ...prior, ...definition,
+      const baseline = freshStrategy(definition);
+      return [definition.id, prior ? { ...baseline, ...prior, ...definition,
+        ...(migratingIntoV12 ? { lane: baseline.lane, enabled: baseline.enabled,
+          lastTransitionReason: baseline.lastTransitionReason } : {}),
         recentResults: (prior.recentResults ?? []).slice(-24), paperResults: (prior.paperResults ?? []).slice(-24),
         reverseRecentResults: (prior.reverseRecentResults ?? []).slice(-24),
         reverseQualificationResults: (prior.reverseQualificationResults ?? []).slice(-REVERSE_TRIGGER_WINDOW),

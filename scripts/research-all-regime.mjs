@@ -76,10 +76,14 @@ function resolveTrade(symbol, rows, signalIndex, route, reverse = false) {
     if (stopHit) { exit = activeStop; outcome = armed ? "RUNNER_EXIT" : "STOP"; }
     else if (armHit) armed = true;
     if (exit == null && armed) {
-      const protectedMove = Math.max(risk * 0.18, (bestFavorable - risk) * 0.52);
-      activeStop = side === "LONG" ? Math.max(activeStop, entry + protectedMove) : Math.min(activeStop, entry - protectedMove);
+      const giveback = Math.max(risk, bestFavorable * 0.45);
+      const protectedMove = Math.max(entry * FRICTION + risk * 0.35, bestFavorable - giveback);
+      activeStop = side === "LONG" ? Math.max(activeStop, entry + protectedMove)
+        : Math.min(activeStop, entry - protectedMove);
     }
-    if (exit == null && !armed && offset >= noProgressBars && bestFavorable < risk * 0.4) { exit = row.close; outcome = "NO_PROGRESS"; }
+    const currentMove = sign * (row.close - entry);
+    if (exit == null && !armed && offset >= noProgressBars && bestFavorable < risk * 0.35
+      && currentMove < risk * 0.15) { exit = row.close; outcome = "NO_PROGRESS"; }
     if (exit == null && offset === maxBars) { exit = row.close; outcome = "TIMEOUT"; }
     if (exit != null) {
       const gross = sign * (exit - entry) / entry;
@@ -96,7 +100,7 @@ function generate(symbol, rows) {
   const trades = [];
   const reverseTrades = [];
   const busyUntil = new Map();
-  for (let index = 119; index < rows.length - 1; index += 1) {
+  for (let index = 120; index < rows.length - 1; index += 1) {
     for (const route of detectAllRegimeRoutes(rows.slice(index - 119, index + 1))) {
       if ((busyUntil.get(route.strategyId) ?? 0) >= rows[index + 1].time) continue;
       const nextOpen = rows[index + 1].open;
@@ -104,7 +108,8 @@ function generate(symbol, rows) {
       const stopRate = Math.abs(nextOpen - route.invalidationPrice) / nextOpen;
       const rewardRate = Math.abs(route.profitArmPrice - nextOpen) / nextOpen;
       const netRewardRisk = (rewardRate - FRICTION) / Math.max(stopRate + FRICTION, 1e-9);
-      if (entryExtension > stopRate * 0.5 || stopRate < FRICTION || FRICTION / Math.max(rewardRate, 1e-9) > 0.25
+      if (entryExtension > Math.max(stopRate * 0.65, 0.0008) || stopRate < FRICTION
+        || FRICTION / Math.max(rewardRate, 1e-9) > 0.25
         || netRewardRisk < 1.2) continue;
       const trade = resolveTrade(symbol, rows, index, route);
       const reverse = resolveTrade(symbol, rows, index, route, true);
@@ -204,7 +209,7 @@ function portfolio(candidateTrades, from, to) {
 
 let now = Math.floor(Date.now() / 1000 / STEP) * STEP;
 let from = now - DAYS * 86_400;
-const cachePath = "/tmp/all-regime-candles.json";
+const cachePath = process.env.RESEARCH_DATASET ?? "/tmp/all-regime-candles.json";
 let symbols;
 let datasets;
 if (existsSync(cachePath)) {

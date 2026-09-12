@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { buildStrategyCoverageReport, deriveMarketStateFeatures } from "../lib/strategy-coverage.ts";
-import { MARKET_PHASE_AUTHORITY } from "../lib/strategy-coverage-policy.ts";
+import { MARKET_PHASE_AUTHORITY, STRATEGY_STATE_AUTHORITY } from "../lib/strategy-coverage-policy.ts";
 
 const DATASET = process.env.RESEARCH_DATASET ?? "/tmp/all-regime-candles.json";
 const FRICTION = 0.0014;
@@ -532,8 +532,9 @@ if (coverage.gaps.length) console.table(coverage.gaps.map((gap) => ({ state: gap
   discovery: gap.discoveryOpportunities, validation: gap.validationOpportunities })));
 const coverageSummary = { splitAt: coverage.splitAt, thresholds: coverage.thresholds, knownCells: coverage.knownCells,
   acceptedCells: coverage.acceptedCells, gaps: coverage.gaps, phases: coverage.phases };
-const selectedVariants = new Set(["tide_relay:2", "tide_catchup:2", "quiet_drift:2", "impulse_recoil:0", "impulse_fold:0"]);
-const selectedCoverage = coverage.acceptedCells.filter((cell) => selectedVariants.has(cell.strategyId));
+const selectedVariants = new Set(["tide_relay:2", "tide_catchup:2", "quiet_drift:2", "impulse_recoil:0"]);
+const selectedCoverage = coverage.acceptedCells.filter((cell) => selectedVariants.has(cell.strategyId)
+  && STRATEGY_STATE_AUTHORITY[cell.strategyId.split(":")[0]]?.includes(cell.state.key));
 const requiredTradePhases = Object.entries(MARKET_PHASE_AUTHORITY)
   .filter(([, authority]) => authority === "TRADE").map(([phase]) => phase);
 const missingTradePhases = requiredTradePhases.filter((phase) => !selectedCoverage.some((cell) => cell.state.phase === phase));

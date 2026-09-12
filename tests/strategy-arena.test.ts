@@ -25,7 +25,7 @@ function observation(now = 2_000_000): ArenaObservation {
 const result = (index: number, value: number): StrategyResult => ({ eventId: `event:${index}`, symbol: `S${index}_USDT`,
   regime: "TREND", channel: "TREND", netReturnRate: value, netPnl: value * 1_000, won: value > 0, resolvedAt: index * 1_000 });
 
-test("V12 owns six state-conditioned mechanisms and starts only validated routes", () => {
+test("V12 owns six state-conditioned mechanisms and starts only stable validated routes", () => {
   assert.deepEqual(STRATEGY_CATALOG.map((row) => row.name), ["势承", "潮补", "静移", "冲衡", "脉折", "潮接"]);
   const state = initialStrategyArena(1);
   assert.equal(state.version, 12);
@@ -33,7 +33,7 @@ test("V12 owns six state-conditioned mechanisms and starts only validated routes
   assert.equal(state.strategies.tide_catchup.enabled, true);
   assert.equal(state.strategies.quiet_drift.enabled, true);
   assert.equal(state.strategies.impulse_recoil.enabled, true);
-  assert.equal(state.strategies.impulse_fold.enabled, true);
+  assert.equal(state.strategies.impulse_fold.enabled, false);
   assert.equal(state.strategies.tide_relay.enabled, true);
 });
 
@@ -54,7 +54,7 @@ test("transition state is explicit capital-preservation WAIT", () => {
   assert.equal(Object.keys(state.open).length, 0);
 });
 
-test("脉折 trades only its validated broad-down rotation cell", () => {
+test("脉折 remains paired shadow-only after its discovery window drifted negative", () => {
   const blocked = observation();
   blocked.candidate.allRegimeRoutes = [{ ...blocked.candidate.allRegimeRoutes![0], strategyId: "impulse_fold",
     strategyName: "脉折", environment: "EXHAUSTION", side: "SHORT", invalidationPrice: 101,
@@ -63,12 +63,13 @@ test("脉折 trades only its validated broad-down rotation cell", () => {
 
   const accepted = observation(3_000_000);
   accepted.candidate.trendRate = 0.001; accepted.candidate.trendEfficiency = 0.2;
-  accepted.candidate.volatilityRatio = 1; accepted.candidate.rangePosition = 0.5;
-  accepted.globalBreadth = 0.2; accepted.globalMedianMove = -0.01;
+  accepted.candidate.volatilityRatio = 1; accepted.candidate.rangePosition = 0.9;
+  accepted.globalBreadth = 0.5; accepted.globalMedianMove = 0;
   accepted.candidate.allRegimeRoutes = [{ ...blocked.candidate.allRegimeRoutes![0], structureId: "fold:accepted" }];
   const state = observeStrategyArena({ state: initialStrategyArena(1), observation: accepted });
-  assert.equal(state.portfolioOpen.BTC_USDT?.strategyId, "impulse_fold");
-  assert.equal(state.portfolioOpen.BTC_USDT?.side, "SHORT");
+  assert.equal(state.portfolioOpen.BTC_USDT, undefined);
+  assert.equal(Object.keys(state.open).length, 2);
+  assert.ok(Object.values(state.open).every((trade) => trade.strategyId === "impulse_fold"));
 });
 
 test("潮补 executes only when a broad-market tide leaves sufficient relative lag", () => {
@@ -88,16 +89,16 @@ test("潮补 executes only when a broad-market tide leaves sufficient relative l
   assert.equal(state.portfolioOpen.BTC_USDT?.side, "LONG");
 });
 
-test("historically validated 冲衡 enters PAPER only in its accepted rotation cell", () => {
+test("historically validated 冲衡 enters PAPER only in its accepted broad expansion cell", () => {
   const input = observation();
   input.candidate.channel = "ANOMALY"; input.candidate.regime = "RANGE";
   input.candidate.trendRate = 0.001; input.candidate.trendEfficiency = 0.2;
-  input.candidate.volatilityRatio = 1; input.candidate.rangePosition = 0.5;
+  input.candidate.volatilityRatio = 1.5; input.candidate.rangePosition = 0.9;
   input.candidate.allRegimeRoutes = [{ version: 4, strategyId: "impulse_recoil", strategyName: "冲衡", environment: "EXHAUSTION",
     side: "SHORT", score: 86, triggerPrice: 100, invalidationPrice: 101, profitArmPrice: 98,
     maxHoldMinutes: 100, noProgressMinutes: 25, structureId: `recoil:${input.now}`, sourceDirection: 1,
     researchVariant: "impulse_recoil:0", reason: "孤立脉冲回收" }];
-  input.globalBreadth = 0.5; input.globalMedianMove = 0.0002;
+  input.globalBreadth = 0.8; input.globalMedianMove = 0.01;
   const state = observeStrategyArena({ state: initialStrategyArena(1), observation: input });
   assert.equal(Object.keys(state.open).length, 2);
   assert.equal(state.portfolioOpen.BTC_USDT?.strategyId, "impulse_recoil");
@@ -165,20 +166,20 @@ test("the observed 龙虾 24.41% stop is rejected instead of opening a 69 U PAPE
   const input = observation();
   input.candidate = { ...input.candidate,
     id: "龙虾_USDT:CANDLE5M:ANOMALY:SHORT:1789188300000:-957:-781", symbol: "龙虾_USDT",
-    referencePrice: 0.115, trendRate: 0.001, trendEfficiency: 0.2, volatilityRatio: 1, rangePosition: 0.5,
-    allRegimeRoutes: [{ version: 4, strategyId: "impulse_fold", strategyName: "脉折",
+    referencePrice: 0.115, trendRate: 0.001, trendEfficiency: 0.2, volatilityRatio: 1.5, rangePosition: 0.9,
+    allRegimeRoutes: [{ version: 4, strategyId: "impulse_recoil", strategyName: "冲衡",
       environment: "EXHAUSTION", side: "SHORT", score: 90, triggerPrice: 0.115,
       invalidationPrice: 0.14307075, profitArmPrice: 0.07229305, maxHoldMinutes: 140,
-      noProgressMinutes: 35, structureId: "impulse_fold:SHORT:-957:1789188300000", sourceDirection: 1,
-      researchVariant: "impulse_fold:0", reason: "推进衰退并反向收复" }] };
+      noProgressMinutes: 35, structureId: "impulse_recoil:SHORT:-957:1789188300000", sourceDirection: 1,
+      researchVariant: "impulse_recoil:0", reason: "孤立脉冲被反向收复" }] };
   input.midpoint = 0.115; input.bestBid = 0.115; input.bestAsk = 0.115001;
   input.spreadRate = (input.bestAsk - input.bestBid) / input.midpoint;
   input.quantoMultiplier = 100; input.maintenanceRate = 0.08; input.leverageMax = 10;
-  input.globalBreadth = 0.2; input.globalMedianMove = -0.01;
+  input.globalBreadth = 0.8; input.globalMedianMove = 0.01;
   const state = observeStrategyArena({ state: initialStrategyArena(1), observation: input });
   assert.equal(state.portfolioOpen.龙虾_USDT, undefined);
   assert.equal(state.admissionRejects.MEANINGFUL_SIZE, 1);
-  assert.match(state.currentRouteChecks["龙虾_USDT:impulse_fold"]?.blocker ?? "", /名义价值低于账户权益1倍/);
+  assert.match(state.currentRouteChecks["龙虾_USDT:impulse_recoil"]?.blocker ?? "", /名义价值低于账户权益1倍/);
   assert.equal(state.blockedCandidates.at(-1)?.code, "MEANINGFUL_SIZE");
   assert.equal(state.blockedCandidates.at(-1)?.stage, "ACCOUNT");
 });
@@ -241,7 +242,7 @@ test("a pre-V11 account is archived and reset preserves shadow research", () => 
   assert.equal(reset.strategies.momentum_carry.shadowResolved, 7);
 });
 
-test("V11 to V12 migration preserves account, positions, and history while adding the new mechanisms", () => {
+test("V11 to V12 migration preserves account, positions, and history while applying frozen authority", () => {
   const seeded = observeStrategyArena({ state: initialStrategyArena(1), observation: observation() });
   const openId = seeded.portfolioOpen.BTC_USDT.id;
   const old = seeded as unknown as Record<string, unknown>;
@@ -251,6 +252,6 @@ test("V11 to V12 migration preserves account, positions, and history while addin
   assert.equal(state.version, 12); assert.equal(state.portfolioEquity, 991.25); assert.equal(state.portfolioResolved, 2);
   assert.equal(state.portfolioOpen.BTC_USDT.id, openId);
   assert.equal(state.recentPortfolio[0]?.id, "kept");
-  assert.equal(state.strategies.impulse_fold.enabled, true); assert.equal(state.strategies.tide_relay.enabled, true);
+  assert.equal(state.strategies.impulse_fold.enabled, false); assert.equal(state.strategies.tide_relay.enabled, true);
   assert.equal(state.strategies.impulse_recoil.enabled, true);
 });

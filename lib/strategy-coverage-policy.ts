@@ -3,11 +3,11 @@ import { classifyMarketState, type MarketPhase, type MarketStateCell, type Marke
 
 export const STRATEGY_STATE_AUTHORITY: Partial<Record<AllRegimeStrategyId, readonly string[]>> = {
   momentum_carry: [],
-  tide_catchup: ["COMPRESSION:BROAD_UP:LOW_EDGE"],
-  quiet_drift: ["COMPRESSION:MIXED:CENTER"],
-  impulse_recoil: ["BALANCED_ROTATION:MIXED:CENTER"],
-  impulse_fold: ["BALANCED_ROTATION:BROAD_DOWN:CENTER"],
-  tide_relay: ["EXPANSION:BROAD_UP:HIGH_EDGE", "ORDERLY_TREND:MIXED:HIGH_EDGE"],
+  tide_catchup: ["COMPRESSION:BROAD_UP:LOW_EDGE", "ORDERLY_TREND:BROAD_DOWN:HIGH_EDGE"],
+  quiet_drift: ["COMPRESSION:MIXED:CENTER", "BALANCED_ROTATION:MIXED:CENTER"],
+  impulse_recoil: ["EXPANSION:BROAD_UP:HIGH_EDGE"],
+  impulse_fold: ["BALANCED_ROTATION:MIXED:HIGH_EDGE"],
+  tide_relay: ["EXPANSION:BROAD_UP:HIGH_EDGE"],
 };
 
 export const MARKET_PHASE_AUTHORITY: Record<MarketPhase, "TRADE" | "WAIT"> = {
@@ -35,8 +35,7 @@ export function routeMarketApproved(route: { strategyId: AllRegimeStrategyId; si
     return (direction > 0 ? broadUp : broadDown)
       && direction * (medianMove - (route.localMoveRate ?? 0)) >= 0.003;
   }
-  if (route.strategyId === "tide_relay") return state.key === "ORDERLY_TREND:MIXED:HIGH_EDGE"
-    || (route.side === "LONG" ? broadUp : broadDown);
+  if (route.strategyId === "tide_relay") return route.side === "LONG" ? broadUp : broadDown;
   if (route.strategyId === "quiet_drift") return Math.abs(medianMove) <= 0.0018;
   if (route.strategyId === "impulse_recoil") return true;
   if (route.strategyId === "impulse_fold") {
