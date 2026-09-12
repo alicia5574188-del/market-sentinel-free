@@ -1,0 +1,107 @@
+name: Quant5 sizing and LIVE continuity patch
+
+on:
+  push:
+    branches:
+      - codex/v12-sizing-live-continuity
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/v12-sizing-live-continuity
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply Quant5 continuity patch
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected exactly one match, got {count}: {old[:100]!r}")
+              p.write_text(text.replace(old, new, 1))
+
+          # A 1000 U derivatives account must be sized by structural risk/margin,
+          # not by an arbitrary 0.5x-equity notional ceiling or 20% top-five-book haircut.
+          replace_once(
+              "lib/strategy-arena.ts",
+              "export const DEPTH_CAPACITY_SHARE = 0.2;",
+              "export const DEPTH_CAPACITY_SHARE = 1; // compatibility surface; depth no longer haircuts a small account's valid risk-sized order",
+          )
+          replace_once(
+              "lib/strategy-arena.ts",
+              "  let contracts = Math.floor(Math.min(sized.notional, state.portfolioEquity * 0.5, remainingNotional) / Math.max(contractNotional, 1e-12));",
+              "  let contracts = Math.floor(Math.min(sized.notional, remainingNotional) / Math.max(contractNotional, 1e-12));",
+          )
+          replace_once(
+              "lib/strategy-arena.ts",
+              "  const depthContracts = contractNotional > 0\n    ? Math.floor(smallerBookSide * DEPTH_CAPACITY_SHARE / contractNotional)\n    : 0;\n  const contracts = Math.min(sizing.contracts, depthContracts);\n  if (contracts < 1) return null;\n  if (contracts === sizing.contracts) return sizing;\n  const notional = contracts * contractNotional;\n  const leverage = selectSafeLeverage({ notional, equity: sizing.accountEquityAtOpen, entry: economics.entryPrice,\n    invalidation: signal.stopPrice, maintenanceRate: input.maintenanceRate, leverageMax: input.leverageMax });\n  return { ...sizing, contracts, notional,\n    plannedRisk: notional * (economics.structuralStopRate + ARENA_FRICTION_RATE),\n    leverage: leverage.leverage, margin: leverage.margin } satisfies TradeSizing;",
+              "  // Five-level depth is only a sanity check that the contract is executable at all.\n  // Do not scale a small risk-sized derivatives order down to an arbitrary fraction of a transient book snapshot.\n  if (!(contractNotional > 0) || smallerBookSide + 1e-8 < contractNotional) return null;\n  return sizing;",
+          )
+          replace_once(
+              "lib/strategy-arena.ts",
+              "      marginCap: PORTFOLIO_MARGIN_CAP, maxNotionalMultiple: 1.5, realtimeCapacity: PORTFOLIO_REALTIME_CAPACITY,",
+              "      marginCap: PORTFOLIO_MARGIN_CAP, maxNotionalMultiple: 4, realtimeCapacity: PORTFOLIO_REALTIME_CAPACITY,",
+          )
+
+          # LIVE is an account mirror: while owner-enabled, every currently open PAPER portfolio trade
+          # remains eligible to be represented in LIVE. This also allows recovery after an exchange-side
+          # protective close while PAPER is still open, instead of silently diverging to zero holdings.
+          replace_once(
+              "lib/arena-live.ts",
+              "export function eligibleForLiveMirror(trade: ArenaTrade, liveEnabledAt: number | null, now: number) {\n  return liveEnabledAt != null && trade.openedAt >= liveEnabledAt && now >= trade.openedAt\n    && now - trade.openedAt <= LIVE_MIRROR_ENTRY_WINDOW_MS;\n}",
+              "export function eligibleForLiveMirror(trade: ArenaTrade, liveEnabledAt: number | null, now: number) {\n  return liveEnabledAt != null && trade.status === \"OPEN\" && now >= trade.openedAt;\n}",
+          )
+          replace_once(
+              "worker/index-clean.ts",
+              "      if (!justTriggeredEntry || now >= plan.expiresAt\n        || this.runtime.live.positions[symbol]?.status === \"OPEN\" || !this.symbolEntryReady(symbol)) {",
+              "      if (!justTriggeredEntry\n        || this.runtime.live.positions[symbol]?.status === \"OPEN\" || !this.symbolEntryReady(symbol)) {",
+          )
+
+          replace_once(
+              "tests/arena-live.test.ts",
+              "test(\"LIVE never backfills a portfolio trade opened before the owner enabled it\", () => {\n  const selected = trade(10_000);\n  assert.equal(eligibleForLiveMirror(selected, 10_001, 10_002), false);\n  assert.equal(eligibleForLiveMirror(selected, 9_999, 10_005), true);\n  assert.equal(eligibleForLiveMirror(selected, 9_999, 20_001), false);\n});",
+              "test(\"LIVE continuously mirrors every currently open PAPER portfolio trade while owner-enabled\", () => {\n  const selected = trade(10_000);\n  assert.equal(eligibleForLiveMirror(selected, 10_001, 10_002), true, \"enabling LIVE backfills an already-open PAPER holding\");\n  assert.equal(eligibleForLiveMirror(selected, 9_999, 20_001), true, \"an open PAPER holding remains eligible after the old ten-second window\");\n  assert.equal(eligibleForLiveMirror({ ...selected, status: \"CLOSED\" }, 9_999, 20_001), false);\n  assert.equal(eligibleForLiveMirror(selected, null, 20_001), false);\n});",
+          )
+
+          replace_once(
+              "tests/strategy-arena.test.ts",
+              "test(\"valid routes shrink to current book capacity instead of requiring a fixed 10,000 U floor\", () => {\n  const input = observation(); input.bidDepthUsd = 500; input.askDepthUsd = 600;\n  const state = observeStrategyArena({ state: initialStrategyArena(1), observation: input });\n  const paper = state.portfolioOpen.BTC_USDT;\n  assert.ok(paper, \"a valid route should trade when the book can hold at least one Gate contract\");\n  assert.ok(paper.notional <= 500 * 0.2 + 1e-8);\n  assert.equal(paper.contracts, Math.floor(paper.notional / (paper.entryPrice * paper.quantoMultiplier)));\n  const shadow = Object.values(state.open)[0];\n  assert.ok(shadow.notional <= 500 * 0.2 + 1e-8, \"shadow and PAPER use the same market-capacity rule\");\n});",
+              "test(\"valid small-account routes are not haircut by transient five-level book depth\", () => {\n  const input = observation(); input.bidDepthUsd = 500; input.askDepthUsd = 600;\n  const state = observeStrategyArena({ state: initialStrategyArena(1), observation: input });\n  const paper = state.portfolioOpen.BTC_USDT;\n  assert.ok(paper, \"a valid route should trade when the book can hold at least one Gate contract\");\n  assert.ok(paper.notional > 100, \"the old 20% depth haircut must not compress a 1000 U derivatives account to a token order\");\n  assert.equal(paper.contracts, Math.floor(paper.notional / (paper.entryPrice * paper.quantoMultiplier)));\n  const shadow = Object.values(state.open)[0];\n  assert.ok(shadow.notional > 100, \"shadow and PAPER use the same non-haircut execution rule\");\n});",
+          )
+          replace_once(
+              "tests/strategy-arena.test.ts",
+              "  assert.ok(paper.notional <= 250 + 1e-8);",
+              "  assert.ok(paper.notional > 250, \"risk sizing may use derivatives notional above the old 0.5x-equity ceiling\");",
+          )
+
+      - run: npm ci
+      - run: npm run test:direct
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+      - name: Commit verified patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/strategy-arena.ts lib/arena-live.ts worker/index-clean.ts tests/strategy-arena.test.ts tests/arena-live.test.ts
+          git diff --cached --check
+          git commit -m "Fix meaningful PAPER sizing and continuous LIVE mirroring"
+          git push origin HEAD:codex/v12-sizing-live-continuity
