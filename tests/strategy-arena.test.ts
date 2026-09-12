@@ -11,7 +11,7 @@ function observation(now = 2_000_000): ArenaObservation {
       fundingRate: 0, openInterestChangeRate: 0, confirmations: 2, firstSeenAt: now, observedAt: now,
       anomalyKind: null, adaptivePolicy: null, extremeSequence: null, dominantEnvironment: "EXHAUSTION",
       allRegimeRoutes: [{ version: 3, strategyId: "exhaustion_turn", strategyName: "竭转", environment: "EXHAUSTION",
-        side: "SHORT", score: 90, triggerPrice: 100, invalidationPrice: 102, profitArmPrice: 97,
+        side: "SHORT", score: 90, triggerPrice: 100, invalidationPrice: 101, profitArmPrice: 97,
         maxHoldMinutes: 120, noProgressMinutes: 35, structureId: `turn:${now}`, reason: "推进枯竭" }] },
     midpoint: 100, bestBid: 99.99, bestAsk: 100.01, alignedFlow: 0, minuteNoiseRate: 0.002,
     spreadRate: 0.0002, range15m: null, confirmationBySide: { LONG: 0.8, SHORT: 0.8 },
@@ -62,19 +62,19 @@ test("脉折 owns both neutral reversal and crowded continuation decisions", () 
 
   const crowded = observation(3_000_000);
   crowded.candidate.allRegimeRoutes = [{ ...crowded.candidate.allRegimeRoutes![0], strategyId: "pulse_fold",
-    strategyName: "脉折", structureId: "pulse:crowded", continuationInvalidationPrice: 98,
+    strategyName: "脉折", structureId: "pulse:crowded", continuationInvalidationPrice: 99,
     continuationProfitArmPrice: 103.6, continuationMaxHoldMinutes: 200, continuationNoProgressMinutes: 50 }];
   state = observeStrategyArena({ state: initialStrategyArena(1), observation: crowded });
   assert.equal(state.portfolioOpen.BTC_USDT?.strategyId, "pulse_fold");
   assert.equal(state.portfolioOpen.BTC_USDT?.side, "LONG");
-  assert.equal(state.portfolioOpen.BTC_USDT?.stopPrice, 98);
+  assert.equal(state.portfolioOpen.BTC_USDT?.stopPrice, 99);
   assert.equal(state.portfolioOpen.BTC_USDT?.context.maxHoldMs, 200 * 60_000);
 });
 
 test("缓续 executes only when broad-market crowding confirms the original direction", () => {
   const neutral = observation();
   neutral.candidate.allRegimeRoutes = [{ ...neutral.candidate.allRegimeRoutes![0], strategyId: "slow_carry",
-    strategyName: "缓续", structureId: "slow:neutral", continuationInvalidationPrice: 98,
+    strategyName: "缓续", structureId: "slow:neutral", continuationInvalidationPrice: 99,
     continuationProfitArmPrice: 103.6, continuationMaxHoldMinutes: 210, continuationNoProgressMinutes: 50 }];
   neutral.globalBreadth = 0.5; neutral.globalMedianMove = 0.0002;
   let state = observeStrategyArena({ state: initialStrategyArena(1), observation: neutral });
@@ -82,7 +82,7 @@ test("缓续 executes only when broad-market crowding confirms the original dire
 
   const crowded = observation(3_000_000);
   crowded.candidate.allRegimeRoutes = [{ ...crowded.candidate.allRegimeRoutes![0], strategyId: "slow_carry",
-    strategyName: "缓续", structureId: "slow:crowded", continuationInvalidationPrice: 98,
+    strategyName: "缓续", structureId: "slow:crowded", continuationInvalidationPrice: 99,
     continuationProfitArmPrice: 103.6, continuationMaxHoldMinutes: 210, continuationNoProgressMinutes: 50 }];
   state = observeStrategyArena({ state: initialStrategyArena(1), observation: crowded });
   assert.equal(state.portfolioOpen.BTC_USDT?.strategyId, "slow_carry");
@@ -150,14 +150,32 @@ test("valid small-account routes are not haircut by transient five-level book de
   assert.ok(shadow.notional > 500, "shadow and PAPER use the same non-haircut execution rule");
 });
 
-test("account equity changes order size but does not impose a minimum-dollar entry gate", () => {
+test("account equity scales the meaningful-notional floor proportionally", () => {
   const state = initialStrategyArena(1); state.portfolioEquity = 500;
   const observed = observeStrategyArena({ state, observation: observation() });
   const paper = observed.portfolioOpen.BTC_USDT;
   assert.ok(paper, "the same valid market route should remain eligible at lower equity");
-  assert.ok(paper.notional > 250, "risk sizing may use derivatives notional above the old 0.5x-equity ceiling");
+  assert.ok(paper.notional >= 500, "a new account order must retain at least 1x current-equity notional");
   assert.ok(paper.notional <= 500 * 4 + 1e-8);
   assert.ok(paper.plannedRisk < 10, "10 U is a sizing target, not an order-eligibility minimum");
+});
+
+test("the observed 龙虾 24.41% stop is rejected instead of opening a 69 U PAPER position", () => {
+  const input = observation();
+  input.candidate = { ...input.candidate,
+    id: "龙虾_USDT:CANDLE5M:ANOMALY:SHORT:1789188300000:-957:-781", symbol: "龙虾_USDT",
+    referencePrice: 0.115, allRegimeRoutes: [{ version: 3, strategyId: "pulse_fold", strategyName: "脉折",
+      environment: "EXHAUSTION", side: "SHORT", score: 90, triggerPrice: 0.115,
+      invalidationPrice: 0.14307075, profitArmPrice: 0.07229305, maxHoldMinutes: 140,
+      noProgressMinutes: 35, structureId: "pulse_fold:SHORT:-957:1789188300000", reason: "推进衰退并反向收复" }] };
+  input.midpoint = 0.115; input.bestBid = 0.115; input.bestAsk = 0.115001;
+  input.spreadRate = (input.bestAsk - input.bestBid) / input.midpoint;
+  input.quantoMultiplier = 100; input.maintenanceRate = 0.08; input.leverageMax = 10;
+  input.globalBreadth = 0.5; input.globalMedianMove = 0.0002;
+  const state = observeStrategyArena({ state: initialStrategyArena(1), observation: input });
+  assert.equal(state.portfolioOpen.龙虾_USDT, undefined);
+  assert.equal(state.admissionRejects.MEANINGFUL_SIZE, 1);
+  assert.match(state.currentRouteChecks["龙虾_USDT:pulse_fold"]?.blocker ?? "", /名义价值低于账户权益1倍/);
 });
 
 test("depth rejects a route only when one Gate contract cannot fit", () => {
