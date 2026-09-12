@@ -1061,7 +1061,7 @@ jobs:
               .runtime.strategyArena.rules.authorityWindowPriority == "STATE_CONDITIONED_EXPECTANCY" and
               .runtime.strategyArena.rules.extremeSequenceAuthority == false and
               .runtime.strategyArena.rules.strategyName == "全境·复利引擎" and
-              .runtime.strategyArena.rules.maxNotionalMultiple == 1.5 and
+              .runtime.strategyArena.rules.maxNotionalMultiple == 4 and
               .runtime.strategyArena.rules.generatedRouteAuthority == false and
               .runtime.strategyArena.rules.legacyStrategyAuthority == false and
               .runtime.strategyArena.rules.paperCycleResetOnCutover == false and
@@ -1167,7 +1167,7 @@ jobs:
             .runtime.strategyArena.rules.normalShadowAlwaysOn == true and
             .runtime.strategyArena.rules.extremeSequenceAuthority == false and
             .runtime.strategyArena.rules.strategyName == "全境·复利引擎" and
-            .runtime.strategyArena.rules.maxNotionalMultiple == 1.5 and
+            .runtime.strategyArena.rules.maxNotionalMultiple == 4 and
             .runtime.strategyArena.rules.generatedRouteAuthority == false and
             .runtime.strategyArena.rules.legacyStrategyAuthority == false and
             .runtime.strategyArena.rules.paperCycleResetOnCutover == false and
