@@ -161,9 +161,9 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
 });
 
 test("V12 verified-route engine is causal, selective, cost-aware, and the sole LIVE order source", async () => {
-  const [arena, allRegime, regime, worker, page, migration, researchV11] = await Promise.all([
+  const [arena, allRegime, regime, gateLive, worker, page, migration, researchV11] = await Promise.all([
     read("lib/strategy-arena.ts"), read("lib/all-regime-engine.ts"), read("lib/market-regime.ts"),
-    read("worker/index-clean.ts"), read("app/page.tsx"),
+    read("lib/gate-live.ts"), read("worker/index-clean.ts"), read("app/page.tsx"),
     read("drizzle/0035_strategy_arena_fresh_start.sql"),
     read("scripts/research-v11.mjs"),
   ]);
@@ -226,7 +226,9 @@ test("V12 verified-route engine is causal, selective, cost-aware, and the sole L
   assert.match(page, /runtimeBackendOperational\(runtime\)/);
   assert.match(page, /RUNTIME_RETRY_MS = 3_000/);
   assert.doesNotMatch(page, /页面摘要延迟，交易后台继续独立运行/);
-  assert.match(arena, /state\.portfolioEquity \* 0\.5/);
+  assert.doesNotMatch(arena, /state\.portfolioEquity \* 0\.5/);
+  assert.match(arena, /state\.portfolioEquity \* MAX_NOTIONAL_TO_EQUITY/);
+  assert.match(gateLive, /Math\.min\(MAX_NOTIONAL_TO_EQUITY, input\.mirrorNotionalFraction\)/);
   assert.match(page, /重置1000 U模拟资金/);
   assert.match(page, /confirm: "RESET_PAPER"/);
   assert.match(worker, /SCAN_UNIVERSE_SIZE = 30/);

@@ -33,7 +33,7 @@ These are historical simulations, not a promise of daily profit. PAPER is the fo
 
 ## Account and execution
 
-- One account, current-equity compounding and at most 0.5× equity notional per position. There is no fixed position-count veto; executable data capacity, 10% total risk, 6.5% same-direction risk and 30% total margin determine concurrency.
+- One account with current-equity compounding. Position notional is set by structural risk and may use derivatives exposure up to the existing 4× account-wide ceiling; there is no separate 0.5× per-position ceiling or fixed position-count veto. Executable data capacity, 10% total risk, 6.5% same-direction risk and 30% total margin determine concurrency.
 - Full modeled friction, fresh bid/ask, executable depth, Gate integer contracts and structural stops are mandatory.
 - Aggregate structural risk remains at most 10%; same-direction structural risk remains at most 6.5%.
 - Stale or incomplete data cannot open or close on an old price.

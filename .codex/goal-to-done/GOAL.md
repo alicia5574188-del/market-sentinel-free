@@ -309,3 +309,10 @@ Permanently isolate Gate bulk-ticker timeouts from the two-second execution auth
 - Preserve all freshness, cost, structural, contract, risk, margin, account-history and owner-controlled LIVE-OFF behavior. LIVE continues to mirror the exact PAPER notional fraction with Gate integer rounding.
 - Show a completed no-route decision cycle as waiting for the next completed five-minute bar instead of presenting step 3 as a permanently running operation.
 - Release only after focused sizing/parity tests, the full repository verification suite, PR review and production health checks pass.
+
+# Active correction — meaningful derivatives sizing and continuous LIVE account parity
+
+- Remove the accidental 0.5×-equity per-position ceiling and the 20% transient five-level-book haircut. Size an admitted route from structural risk, then keep the existing 4× total notional, 10% total risk, 6.5% same-direction risk, 30% margin, contract, cost and freshness boundaries.
+- While the owner keeps LIVE enabled, allow every still-open PAPER portfolio trade to receive its one corresponding LIVE entry, including a trade already open before enable or a fresh-data retry that occurs after the former ten-second window.
+- Preserve leveraged notional proportionally: a 3,000 U PAPER order opened on 1,000 U maps to 30 U when actual LIVE equity is 10 U, subject to Gate integer lots and the LIVE account's real risk, margin, liquidation and economics checks.
+- Do not reset PAPER, delete history, alter credentials or enable LIVE during release. Release through a reviewed PR and `main`, then verify advancing production health and LIVE requested/operational both OFF.

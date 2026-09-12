@@ -139,15 +139,15 @@ test("stale execution data remains observation-only", () => {
   assert.match(state.currentRouteChecks["BTC_USDT:momentum_carry"]?.blocker ?? "", /不新鲜/);
 });
 
-test("valid routes shrink to current book capacity instead of requiring a fixed 10,000 U floor", () => {
+test("valid small-account routes are not haircut by transient five-level book depth", () => {
   const input = observation(); input.bidDepthUsd = 500; input.askDepthUsd = 600;
   const state = observeStrategyArena({ state: initialStrategyArena(1), observation: input });
   const paper = state.portfolioOpen.BTC_USDT;
   assert.ok(paper, "a valid route should trade when the book can hold at least one Gate contract");
-  assert.ok(paper.notional <= 500 * 0.2 + 1e-8);
+  assert.ok(paper.notional > 500, "the old 20% book haircut and 0.5x-equity ceiling must not compress a valid derivatives order");
   assert.equal(paper.contracts, Math.floor(paper.notional / (paper.entryPrice * paper.quantoMultiplier)));
   const shadow = Object.values(state.open)[0];
-  assert.ok(shadow.notional <= 500 * 0.2 + 1e-8, "shadow and PAPER use the same market-capacity rule");
+  assert.ok(shadow.notional > 500, "shadow and PAPER use the same non-haircut execution rule");
 });
 
 test("account equity changes order size but does not impose a minimum-dollar entry gate", () => {
@@ -155,12 +155,13 @@ test("account equity changes order size but does not impose a minimum-dollar ent
   const observed = observeStrategyArena({ state, observation: observation() });
   const paper = observed.portfolioOpen.BTC_USDT;
   assert.ok(paper, "the same valid market route should remain eligible at lower equity");
-  assert.ok(paper.notional <= 250 + 1e-8);
+  assert.ok(paper.notional > 250, "risk sizing may use derivatives notional above the old 0.5x-equity ceiling");
+  assert.ok(paper.notional <= 500 * 4 + 1e-8);
   assert.ok(paper.plannedRisk < 10, "10 U is a sizing target, not an order-eligibility minimum");
 });
 
 test("depth rejects a route only when one Gate contract cannot fit", () => {
-  const input = observation(); input.bidDepthUsd = 0.4; input.askDepthUsd = 0.5;
+  const input = observation(); input.bidDepthUsd = 0.05; input.askDepthUsd = 0.08;
   const state = observeStrategyArena({ state: initialStrategyArena(1), observation: input });
   assert.equal(state.portfolioOpen.BTC_USDT, undefined);
   assert.equal(Object.keys(state.open).length, 0);

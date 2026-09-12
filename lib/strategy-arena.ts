@@ -1,4 +1,4 @@
-import { CORRELATED_DIRECTION_RISK_CAP, MIN_NET_REWARD_RISK, PORTFOLIO_MARGIN_CAP, PORTFOLIO_RISK_CAP,
+import { CORRELATED_DIRECTION_RISK_CAP, MAX_NOTIONAL_TO_EQUITY, MIN_NET_REWARD_RISK, PORTFOLIO_MARGIN_CAP, PORTFOLIO_RISK_CAP,
   selectSafeLeverage, sizePaperPosition, type LiquidityRoute, type RangeStructure, type Side } from "./liquidity-core.ts";
 import type { CandidateChannel, MarketRegimeCandidate, MarketRegimeKind, ResidentCandleStructure } from "./market-regime.ts";
 import { ALL_REGIME_ENGINE_VERSION, ALL_REGIME_OFFLINE_VALIDATION, ALL_REGIME_STRATEGIES, ALL_REGIME_SYSTEM_NAME,
@@ -17,7 +17,6 @@ export const ARENA_MIN_VOLUME_24H_USD = 10_000_000;
 export const ARENA_MAX_COST_SHARE = 0.25;
 export const ARENA_QUOTE_STALE_MS = 5_000;
 export const PORTFOLIO_TRADE_RISK_TARGET_USDT = 10;
-export const DEPTH_CAPACITY_SHARE = 0.2;
 export const PORTFOLIO_REALTIME_CAPACITY = 10;
 export const MAX_PORTFOLIO_POSITIONS = null;
 export const ARENA_MAX_OPEN = 240;
@@ -632,18 +631,11 @@ function depthAdjustedSizing(input: ArenaObservation, signal: Signal, sizing: Tr
   const economics = geometryEconomics(input, signal);
   const contractNotional = economics.entryPrice * sizing.quantoMultiplier;
   const smallerBookSide = Math.min(input.bidDepthUsd ?? 0, input.askDepthUsd ?? 0);
-  const depthContracts = contractNotional > 0
-    ? Math.floor(smallerBookSide * DEPTH_CAPACITY_SHARE / contractNotional)
-    : 0;
-  const contracts = Math.min(sizing.contracts, depthContracts);
-  if (contracts < 1) return null;
-  if (contracts === sizing.contracts) return sizing;
-  const notional = contracts * contractNotional;
-  const leverage = selectSafeLeverage({ notional, equity: sizing.accountEquityAtOpen, entry: economics.entryPrice,
-    invalidation: signal.stopPrice, maintenanceRate: input.maintenanceRate, leverageMax: input.leverageMax });
-  return { ...sizing, contracts, notional,
-    plannedRisk: notional * (economics.structuralStopRate + ARENA_FRICTION_RATE),
-    leverage: leverage.leverage, margin: leverage.margin } satisfies TradeSizing;
+  // The retained book proves that this contract is executable; it must not
+  // haircut a small, risk-sized derivatives account to an arbitrary percentage
+  // of one transient five-level snapshot.
+  if (!(contractNotional > 0) || smallerBookSide + 1e-8 < contractNotional) return null;
+  return sizing;
 }
 function openTrade(input: ArenaObservation, definition: StrategyDefinition, signal: Signal, lane: TradeLane,
   sizing: TradeSizing, selectedForPortfolio: boolean, sample?: PerformanceEvidence, attributedStrategyIds?: string[]) {
@@ -677,8 +669,8 @@ function portfolioSizing(state: StrategyArenaState, input: ArenaObservation, sig
   const multiplier = Math.max(input.quantoMultiplier ?? 1, 1e-12);
   const contractNotional = economics.entryPrice * multiplier;
   const usedNotional = Object.values(state.portfolioOpen).reduce((total, trade) => total + trade.notional, 0);
-  const remainingNotional = Math.max(0, state.portfolioEquity * 4 - usedNotional);
-  let contracts = Math.floor(Math.min(sized.notional, state.portfolioEquity * 0.5, remainingNotional) / Math.max(contractNotional, 1e-12));
+  const remainingNotional = Math.max(0, state.portfolioEquity * MAX_NOTIONAL_TO_EQUITY - usedNotional);
+  let contracts = Math.floor(Math.min(sized.notional, remainingNotional) / Math.max(contractNotional, 1e-12));
   if (contracts < 1) return null;
   let notional = contracts * contractNotional;
   let leverage = selectSafeLeverage({ notional, equity: state.portfolioEquity, entry: economics.entryPrice,
@@ -956,7 +948,7 @@ export function arenaSummary(state: StrategyArenaState) {
       frictionFloorRate: ARENA_FRICTION_RATE, minNetRewardRisk: MIN_NET_REWARD_RISK,
       maxCostShare: ARENA_MAX_COST_SHARE, singleTradeRiskMin: 0.01, singleTradeRiskMax: 0.02,
       portfolioRiskCap: PORTFOLIO_RISK_CAP, correlatedRiskCap: CORRELATED_DIRECTION_RISK_CAP,
-      marginCap: PORTFOLIO_MARGIN_CAP, maxNotionalMultiple: 1.5, realtimeCapacity: PORTFOLIO_REALTIME_CAPACITY,
+      marginCap: PORTFOLIO_MARGIN_CAP, maxNotionalMultiple: MAX_NOTIONAL_TO_EQUITY, realtimeCapacity: PORTFOLIO_REALTIME_CAPACITY,
       maxPortfolioPositions: MAX_PORTFOLIO_POSITIONS,
       minimumPortfolioRiskUsdt: 0, targetPortfolioRiskUsdt: PORTFOLIO_TRADE_RISK_TARGET_USDT,
       empiricalCostFloorRate: ARENA_FRICTION_RATE,

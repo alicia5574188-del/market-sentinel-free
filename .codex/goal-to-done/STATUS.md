@@ -1,3 +1,11 @@
+# In progress — 2026-09-12 meaningful sizing and continuous LIVE parity
+
+- Recovered the interrupted Quant5 branch and confirmed its automation stopped on a stale architecture assertion before creating the source commit or PR.
+- Confirmed two sizing clamps remained after PR #194: each PAPER position was capped to 0.5× equity and then cut to 20% of one transient five-level book. Confirmed LIVE also truncated any PAPER notional/equity fraction above 1×, breaking the required 1,000 U PAPER to 10 U LIVE proportional scale.
+- Confirmed the continuity defect: `eligibleForLiveMirror` rejected every PAPER holding opened before LIVE enable and permanently expired all new-copy eligibility after ten seconds. This directly explains an enabled LIVE account having no position while PAPER holdings remain open.
+- Implemented structural-risk PAPER sizing under the existing 4× account ceiling, one-contract book executability, full proportional LIVE scaling up to 4×, and continuous first-entry eligibility for every still-open PAPER holding. A fresh-data recovery regression proves the first LIVE copy still occurs sixty seconds after enable instead of expiring after ten seconds.
+- Local acceptance passes 211 direct tests, four all-regime tests, 17 architecture/migration tests, TypeScript, ESLint, the production build, Cloudflare dry-run and whitespace validation. PAPER state/history/credentials remain untouched and LIVE remains OFF. Next: create the reviewed PR, merge `main`, and verify the production deployment and advancing LIVE-off health gate.
+
 # Release candidate — 2026-09-12 market-scaled execution sizing
 
 - Root cause confirmed from production state and source: route qualification completed normally, but both shadow and PAPER admission required the smaller five-level Gate book side to exceed `max(10,000 U, 5 × planned notional)`. The fixed 10,000 U term dominated a roughly 500 U account order and falsely rejected liquid contracts.

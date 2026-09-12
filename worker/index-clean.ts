@@ -1303,7 +1303,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const symbol = trade.symbol;
       const plan = arenaTradePlan(trade);
       const justTriggeredEntry = eligibleForLiveMirror(trade, this.runtime.live.changedAt, now);
-      if (!justTriggeredEntry || now >= plan.expiresAt
+      if (!justTriggeredEntry
         || this.runtime.live.positions[symbol]?.status === "OPEN" || !this.symbolEntryReady(symbol)) {
         delete this.runtime.live.entrySkips[symbol];
         continue;
