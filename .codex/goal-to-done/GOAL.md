@@ -1,3 +1,11 @@
+# Active correction — preserve LIVE after per-symbol failure and retain blocked-candidate evidence
+
+- Reproduce the owner-observed LIVE incident in which one Gate position opened and flattened in the same instant, then LIVE disabled itself while PAPER continued independently. Distinguish an exchange-protection/submission defect from an affordable per-symbol representation skip using source and production evidence.
+- A failure or infeasible copy for one PAPER symbol must become an auditable per-symbol LIVE skip unless an exchange mutation is ambiguous or leaves unmanaged exposure. Only a genuine account-wide safety incident may force LIVE off; every forced shutdown must retain its exact stage, Gate label and reconciliation outcome for the owner.
+- Add a bounded operator module for prospective PAPER candidates that formed far enough to be considered but did not open. Retain event time, symbol, strategy, side, frozen entry/stop/target when available, terminal stage, exact blocker and whether sizing, economics, authority, freshness, duplication or capacity caused it. Do not add per-snapshot D1 writes or imply that early FORMING observations were orders.
+- Preserve current PAPER equity, positions, history, shadow authority, credentials, data cadence, risk limits and the user's current LIVE switch choice. Do not reset the account, enable or disable LIVE during deployment, or loosen entry rules merely to manufacture more trades.
+- Verify exact same-second LIVE failure handling, nonfatal per-symbol continuation, persistent owner-visible incident history, bounded blocked-candidate history, direct/full tests, build, architecture/migrations, TypeScript, ESLint, whitespace, reviewed GitHub main release and advancing production health.
+
 # Completed correction — reject risk-safe orders whose size is economically meaningless
 
 - A 1,000 U PAPER account may open a new route only when the structural-risk calculation, Gate integer-contract rounding, portfolio capacity and margin limits still support at least 1× current account equity in contract notional.

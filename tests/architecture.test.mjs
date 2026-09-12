@@ -98,8 +98,11 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(page, /收到后台真实快照前不显示“0笔”/);
   assert.match(page, /const showLiveCenter = auth\.authenticated \|\| liveEnabled/);
   assert.match(page, /if \(showLiveCenter\) navigationTabs\.push/);
-  assert.match(page, /liveEnabled && activeView === "orders"/);
-  assert.match(page, /实盘数据保持隐藏/);
+  assert.match(page, /activeView === "orders"/);
+  assert.doesNotMatch(page, /liveEnabled && activeView === "orders"/);
+  assert.match(page, /历史实盘记录仍可在“实盘记录”查看/);
+  assert.match(page, /未成交候选/);
+  assert.match(page, /auditEvents/);
   assert.doesNotMatch(page, /className="live-off">LIVE OFF/);
   assert.doesNotMatch(page, /手机页面更新延迟|页面摘要延迟|页面数据延迟/);
   assert.doesNotMatch(page, />有效影子</);

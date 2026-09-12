@@ -981,7 +981,7 @@ test("status exposes bounded mirror telemetry, never the complete outage outbox"
   const owner = await (await stream.fetch(new Request("https://market-stream/owner-runtime"))).json() as Record<string, unknown>;
   assert.deepEqual(owner.live, {
     requestedEnabled: false, operational: false, changedAt: null, lastSyncAt: null, lastError: null,
-    equity: null, available: null, credentialConfigured: false, entries: {}, positions: {}, entrySkips: {},
+    equity: null, available: null, credentialConfigured: false, entries: {}, positions: {}, entrySkips: {}, auditEvents: [],
   });
 });
 
@@ -1154,4 +1154,143 @@ test("forced OFF reconciliation fails unless Gate confirms system orders are gon
 
   await assert.rejects(() => stream.syncLive(Date.now(), false, true), /仍有 1 张系统挂单未撤销/);
   assert.equal(snapshotCalls, 3, "cleanup must re-read Gate after both cancellation attempts");
+});
+
+test("a deployment restart preserves the owner's LIVE choice but requires fresh reconciliation", async () => {
+  const seed = await makeStream();
+  const saved = structuredClone(seed.stream.runtime);
+  saved.live.requestedEnabled = true;
+  saved.live.operational = true;
+  saved.live.changedAt = 1_800_000_000_000;
+  saved.live.auditEvents = [{ id: "live:1", observedAt: 1, symbol: null, planId: null,
+    stage: "LIVE_CONTROL", level: "INFO", reason: "owner enabled", gateLabel: null }];
+
+  const { stream } = await makeStream(saved);
+
+  assert.equal(stream.runtime.live.requestedEnabled, true, "source deployment must not silently turn LIVE off");
+  assert.equal(stream.runtime.live.operational, false, "a restarted instance must reconcile Gate before claiming operational");
+  assert.equal(stream.runtime.live.changedAt, saved.live.changedAt);
+  assert.equal(stream.runtime.live.auditEvents.length, 1);
+});
+
+test("one symbol leverage rejection is retained as a skip and does not stop another LIVE order", async () => {
+  const { stream } = await makeStream();
+  const now = Date.now();
+  const symbols = ["BTC_USDT", "ETH_USDT"];
+  stream.runtime.symbols = symbols;
+  stream.runtime.contractMeta = Object.fromEntries(symbols.map((symbol) => [symbol, {
+    quantoMultiplier: 0.001, maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0,
+  }]));
+  stream.runtime.evidence = Object.fromEntries(symbols.map((symbol) => [symbol, {
+    midpoint: 100, observedAt: now, warmup: 30, fresh: true, ancillaryFresh: true, entryReady: true,
+    topLong: null, topShort: null, absorption: 0, range15m: null,
+  }]));
+  const created: string[] = [];
+  stream.liveClient = {
+    requestCount: 0,
+    snapshot: async () => ({ account: { total: "1000", available: "1000", in_dual_mode: false },
+      positions: [], orders: [], priceOrders: [], checkedAt: Date.now() }),
+    setLeverage: async (symbol: string) => { if (symbol === "BTC_USDT") throw new Error("Gate 400 INVALID_LEVERAGE: rejected"); },
+    createEntry: async (intent: { body: { contract?: string } }) => { created.push(String(intent.body.contract)); return "accepted"; },
+  };
+
+  assert.equal((await stream.setLiveMode(true)).ok, true);
+  const openedAt = stream.runtime.live.changedAt + 1;
+  stream.runtime.strategyArena.portfolioOpen = Object.fromEntries(symbols.map((symbol) => [symbol, portfolioTrade(symbol, openedAt)]));
+  for (const symbol of symbols) stream.runtime.evidence[symbol].observedAt = openedAt;
+  await stream.syncLive(openedAt + 1);
+
+  assert.deepEqual(created, ["ETH_USDT"]);
+  assert.equal(stream.runtime.live.requestedEnabled, true);
+  assert.equal(stream.runtime.live.operational, true);
+  assert.equal(stream.runtime.live.entrySkips.BTC_USDT.code, "LEVERAGE_REJECTED");
+  assert.equal(stream.runtime.live.auditEvents.at(-1)?.stage, "LEVERAGE");
+});
+
+test("an ambiguous entry response is reconciled once and never blindly replayed", async () => {
+  const { stream } = await makeStream();
+  const now = Date.now();
+  stream.runtime.symbols = ["BTC_USDT"];
+  stream.runtime.contractMeta.BTC_USDT = { quantoMultiplier: 0.001, maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0 };
+  stream.runtime.evidence.BTC_USDT = { midpoint: 100, observedAt: now, warmup: 30, fresh: true,
+    ancillaryFresh: true, entryReady: true, topLong: null, topShort: null, absorption: 0 };
+  let createCalls = 0;
+  stream.liveClient = {
+    requestCount: 0,
+    snapshot: async () => ({ account: { total: "1000", available: "1000", in_dual_mode: false },
+      positions: [], orders: [], priceOrders: [], checkedAt: Date.now() }),
+    setLeverage: async () => undefined,
+    createEntry: async () => { createCalls += 1; throw new Error("network timeout after submit"); },
+    inspectEntry: async () => null,
+  };
+
+  await stream.setLiveMode(true);
+  const openedAt = stream.runtime.live.changedAt + 1;
+  stream.runtime.strategyArena.portfolioOpen.BTC_USDT = portfolioTrade("BTC_USDT", openedAt);
+  stream.runtime.evidence.BTC_USDT.observedAt = openedAt;
+  await stream.syncLive(openedAt + 1);
+  assert.equal(stream.runtime.live.entries.BTC_USDT.status, "ERROR");
+  assert.equal(stream.runtime.live.operational, false);
+  assert.equal(stream.runtime.live.requestedEnabled, true);
+
+  await stream.syncLive(openedAt + 7_001);
+  assert.equal(stream.runtime.live.entries.BTC_USDT.status, "CANCELLED");
+  assert.equal(stream.runtime.live.entrySkips.BTC_USDT.code, "SUBMISSION_UNCONFIRMED");
+  assert.equal(stream.runtime.live.operational, true);
+  assert.equal(createCalls, 1, "an unconfirmed mutation must never be repeated for the same PAPER plan");
+});
+
+test("an ambiguous stop response is reconciled by tag instead of closing a fresh fill immediately", async () => {
+  const { stream } = await makeStream();
+  const now = Date.now();
+  stream.runtime.symbols = ["BTC_USDT"];
+  stream.runtime.tickSize.BTC_USDT = 0.01;
+  stream.runtime.contractMeta.BTC_USDT = { quantoMultiplier: 0.001, maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0 };
+  stream.runtime.evidence.BTC_USDT = { midpoint: 100, observedAt: now, warmup: 30, fresh: true,
+    ancillaryFresh: true, entryReady: true, topLong: null, topShort: null, absorption: 0 };
+  let actualPosition = false;
+  let confirmedStopTag: string | null = null;
+  let closeCalls = 0;
+  stream.liveClient = {
+    requestCount: 0,
+    snapshot: async () => ({ account: { total: "1000", available: "1000", in_dual_mode: false },
+      positions: actualPosition ? [{ contract: "BTC_USDT", size: "1", entry_price: "100", leverage: "10" }] : [],
+      orders: [], priceOrders: confirmedStopTag ? [{ id_string: "stop-confirmed", initial: { text: confirmedStopTag } }] : [],
+      checkedAt: Date.now() }),
+    setLeverage: async () => undefined,
+    createEntry: async () => "entry-accepted",
+    inspectEntry: async () => ({ id_string: "entry-accepted", finish_as: "filled" }),
+    createStop: async () => { throw new Error("network timeout after stop submit"); },
+    closePosition: async () => { closeCalls += 1; return "close"; },
+  };
+
+  await stream.setLiveMode(true);
+  const openedAt = stream.runtime.live.changedAt + 1;
+  stream.runtime.strategyArena.portfolioOpen.BTC_USDT = portfolioTrade("BTC_USDT", openedAt);
+  stream.runtime.evidence.BTC_USDT.observedAt = openedAt;
+  await stream.syncLive(openedAt + 1);
+  actualPosition = true;
+  await assert.rejects(stream.syncLive(openedAt + 2), /正在按标签核对/);
+
+  assert.equal(closeCalls, 0, "a timeout is not proof that Gate rejected the stop");
+  assert.equal(stream.runtime.live.positions.BTC_USDT.exitRequestedAt, null);
+  assert.equal(stream.runtime.live.auditEvents.at(-1)?.level, "RECOVERING");
+
+  confirmedStopTag = stream.runtime.live.positions.BTC_USDT.stopTag;
+  await stream.syncLive(openedAt + 2_002);
+  assert.equal(stream.runtime.live.positions.BTC_USDT.stopOrderId, "stop-confirmed");
+  assert.equal(stream.runtime.live.operational, true);
+  assert.equal(closeCalls, 0);
+});
+
+test("a temporary initial Gate outage keeps the owner's requested LIVE state visible", async () => {
+  const { stream } = await makeStream();
+  stream.liveClient = { requestCount: 0, snapshot: async () => { throw new Error("Gate snapshot timeout"); } };
+
+  const result = await stream.setLiveMode(true);
+
+  assert.equal(result.ok, false);
+  assert.equal(stream.runtime.live.requestedEnabled, true);
+  assert.equal(stream.runtime.live.operational, false);
+  assert.equal(stream.runtime.live.auditEvents.at(-1)?.level, "RECOVERING");
 });

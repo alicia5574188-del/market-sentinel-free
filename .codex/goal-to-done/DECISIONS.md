@@ -1,3 +1,10 @@
+# LIVE intent, mutation reconciliation and blocked-candidate decision — 2026-09-12
+
+- A deployment may never rewrite an owner's persisted `requestedEnabled` choice. A restarted Durable Object reports `operational=false` until a fresh Gate reconciliation succeeds; only an account-level unmanaged-order, unmanaged-position or direction/identity conflict may force the requested switch OFF.
+- A per-symbol leverage rejection or definitive entry rejection is an auditable skip for that PAPER plan and cannot stop other affordable symbols. An ambiguous entry response reserves risk, reconciles by the deterministic system tag for six seconds and is never blindly replayed.
+- A timeout after protective-stop submission is not proof that Gate rejected the stop. Reconcile the deterministic stop tag for six seconds before exiting; a definitive Gate rejection or confirmed absence after the bounded window still triggers the existing reduce-only market exit.
+- Retain a bounded owner-only LIVE audit with confirmed fills, exits, Gate labels and control incidents. Retain a separate bounded PAPER candidate audit only after direction and frozen geometry exist; ordinary FORMING observations are not candidate orders. Both live in the Durable Object checkpoint and add no per-snapshot D1 writes.
+
 # LIVE protective-stop price-grid decision — 2026-09-12
 
 - PAPER retains its exact structural stop. Gate LIVE alone normalizes that stop to the contract's current `order_price_round` before creating or amending the close-only trigger.
