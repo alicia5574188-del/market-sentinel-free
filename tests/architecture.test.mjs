@@ -101,6 +101,12 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(page, /activeView === "orders"/);
   assert.doesNotMatch(page, /liveEnabled && activeView === "orders"/);
   assert.match(page, /历史实盘记录仍可在“实盘记录”查看/);
+  assert.match(page, /function TradeLifecycleRecord/);
+  assert.match(page, /function LiveOpenCard/);
+  assert.match(page, /function LiveTradeRecord/);
+  assert.match(page, /second: "2-digit"/);
+  for (const lifecycleLabel of ["进场时间", "出场时间", "持仓时长"]) assert.match(page, new RegExp(lifecycleLabel));
+  assert.match(css, /live-trade-history/);
   assert.match(page, /未成交候选/);
   assert.match(page, /auditEvents/);
   assert.doesNotMatch(page, /className="live-off">LIVE OFF/);

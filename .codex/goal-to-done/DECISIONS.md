@@ -1,3 +1,9 @@
+# Unified PAPER/LIVE lifecycle display decision — 2026-09-12
+
+- PAPER and LIVE trade records share one lifecycle presentation contract: symbol/side identity, entry price and exact entry time, exit price and exact exit time, holding duration, outcome and account-specific summary.
+- Open PAPER and LIVE holdings share the same card hierarchy and lifecycle fields. LIVE-only facts such as Gate protection, actual leverage and actual margin remain visible, but do not require a separate visual language.
+- A display release may not rewrite or reset account state, strategy authority, Gate orders, credentials or owner LIVE intent. The already-completed PAPER reset is accepted as production state and is not repeated.
+
 # LIVE intent, mutation reconciliation and blocked-candidate decision — 2026-09-12
 
 - A deployment may never rewrite an owner's persisted `requestedEnabled` choice. A restarted Durable Object reports `operational=false` until a fresh Gate reconciliation succeeds; only an account-level unmanaged-order, unmanaged-position or direction/identity conflict may force the requested switch OFF.
