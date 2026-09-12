@@ -115,14 +115,25 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          body="$(curl -sS --max-time 15 "$WORKER_BASE_URL/api/runtime" || true)"
+          body="$(curl -sS --max-time 15 "$WORKER_BASE_URL/__health" || true)"
           if jq -e . >/dev/null 2>&1 <<<"$body"; then
             jq -c '{
-              version, mode, state, stale, authorityReady, lastError,
-              lastSuccessAt, lastAlarmAt, symbols, feedFailures,
-              evidence: ((.evidence // {}) | with_entries(.value |= {
-                fresh, ancillaryFresh, warmup, observedAt
-              }))
+              ok, version, mode,
+              runtime: {
+                version: .runtime.version, mode: .runtime.mode, state: .runtime.state,
+                stale: .runtime.stale, authorityReady: .runtime.authorityReady,
+                lastError: .runtime.lastError, lastSuccessAt: .runtime.lastSuccessAt,
+                lastAlarmAt: .runtime.lastAlarmAt, liveMode: .runtime.liveMode,
+                strategyArena: {
+                  version: .runtime.strategyArena.version,
+                  playbookCount: .runtime.strategyArena.playbookCount,
+                  catalogSize: .runtime.strategyArena.catalogSize,
+                  portfolioEquity: .runtime.strategyArena.portfolioEquity,
+                  rules: .runtime.strategyArena.rules
+                },
+                feedAttempts: .runtime.feedQuality.attempts,
+                limits: .runtime.limits
+              }
             }' <<<"$body"
           else
             echo '{"runtimeSnapshot":"unavailable"}'
