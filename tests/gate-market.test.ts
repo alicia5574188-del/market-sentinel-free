@@ -63,7 +63,7 @@ test("a 429 on one Gate host does not back off the independent futures host", as
   } finally { globalThis.fetch = prior; }
 });
 
-test("active universe exposes every liquid trading USDT future to the radar", async () => {
+test("active universe exposes only liquid crypto USDT futures to the radar", async () => {
   const prior = globalThis.fetch;
   globalThis.fetch = async (input) => {
     const url = String(input);
@@ -73,8 +73,17 @@ test("active universe exposes every liquid trading USDT future to the radar", as
       { contract: "BTC_USDT", last: "80000", volume_24h_settle: "800000000", funding_rate: "0.0002" },
       { contract: "ETH_USDT", last: "2500", volume_24h_settle: "600000000", funding_rate: "0.0003" },
       { contract: "BNB_USDT", last: "900", volume_24h_settle: "888888888" },
+      { contract: "XAU_USDT", last: "3600", volume_24h_settle: "9999999999" },
+      { contract: "SAMSUNG_USDT", last: "80", volume_24h_settle: "9999999998" },
+      { contract: "MYSTERY_USDT", last: "2", volume_24h_settle: "9999999997" },
     ]);
-    return Response.json(["ZEC_USDT", "SOL_USDT", "BTC_USDT", "ETH_USDT", "BNB_USDT"].map((name) => ({ name, status: "trading", order_price_round: "0.1", quanto_multiplier: "0.01", maintenance_rate: "0.005" })));
+    return Response.json([
+      ...["ZEC_USDT", "SOL_USDT", "BTC_USDT", "ETH_USDT"].map((name) => ({ name, status: "trading", order_price_round: "0.1", quanto_multiplier: "0.01", maintenance_rate: "0.005" })),
+      { name: "BNB_USDT", status: "trading", contract_type: "cryptocurrency", order_price_round: "0.1" },
+      { name: "XAU_USDT", status: "trading", contract_type: "metals", order_price_round: "0.1" },
+      { name: "SAMSUNG_USDT", status: "trading", contract_type: "stocks", order_price_round: "0.1" },
+      { name: "MYSTERY_USDT", status: "trading", contract_type: "new_external_class", order_price_round: "0.1" },
+    ]);
   };
   try {
     assert.deepEqual((await fetchActiveContracts()).map((item) => item.symbol), ["ZEC_USDT", "BNB_USDT", "BTC_USDT", "ETH_USDT", "SOL_USDT"]);

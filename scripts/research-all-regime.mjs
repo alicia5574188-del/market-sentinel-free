@@ -1,4 +1,5 @@
 import { detectAllRegimeRoutes } from "../lib/all-regime-engine.ts";
+import { isCryptoContractType } from "../lib/contract-universe.ts";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const BASE = "https://api.gateio.ws/api/v4";
@@ -27,7 +28,8 @@ async function gate(path, attempts = 4) {
 
 async function universe() {
   const [tickers, contracts] = await Promise.all([gate("/futures/usdt/tickers"), gate("/futures/usdt/contracts")]);
-  const active = new Set(contracts.filter((row) => !row.in_delisting && (!row.status || row.status === "trading")).map((row) => row.name));
+  const active = new Set(contracts.filter((row) => !row.in_delisting && (!row.status || row.status === "trading")
+    && isCryptoContractType(row.contract_type)).map((row) => row.name));
   return tickers.filter((row) => active.has(row.contract) && row.contract?.endsWith("_USDT") && Number(row.last) > 0)
     .sort((a, b) => Number(b.volume_24h_usd ?? b.volume_24h_settle ?? 0) - Number(a.volume_24h_usd ?? a.volume_24h_settle ?? 0))
     .slice(0, SYMBOL_LIMIT).map((row) => row.contract);

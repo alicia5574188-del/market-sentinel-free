@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { buildStrategyCoverageReport } from "../lib/strategy-coverage.ts";
 
 const DATASET = process.env.RESEARCH_DATASET ?? "/tmp/all-regime-candles.json";
 const FRICTION = 0.0014;
@@ -16,6 +17,24 @@ const median = (values) => {
 };
 const efficiency = (rows) => Math.abs(rows.at(-1).close - rows[0].open)
   / Math.max(rows.slice(1).reduce((total, row, index) => total + Math.abs(row.close - rows[index].close), 0), rows.at(-1).close * 1e-7);
+
+function stateAt(rows, context) {
+  const latest = rows.at(-1);
+  const trend = rows.slice(-24);
+  const location = rows.slice(-48);
+  const recentRanges = rows.slice(-6).map((row) => row.high - row.low);
+  const priorRanges = rows.slice(-30, -6).map((row) => row.high - row.low);
+  const lower = Math.min(...location.map((row) => row.low));
+  const upper = Math.max(...location.map((row) => row.high));
+  return {
+    trendRate: latest.close / trend[0].open - 1,
+    trendEfficiency: efficiency(trend),
+    volatilityRatio: median(recentRanges) / Math.max(median(priorRanges), latest.close * 1e-9),
+    rangePosition: (latest.close - lower) / Math.max(upper - lower, latest.close * 1e-9),
+    marketBreadth: context.breadth,
+    marketMedianMove: context.medianMove,
+  };
+}
 
 const marketMoves = new Map();
 for (const { rows } of datasets) for (let index = 6; index < rows.length; index += 1) {
@@ -384,7 +403,7 @@ function generate(detector, config) {
       if (!signal || !economics(rows, index, signal)) continue;
       const trade = resolve(rows, index, signal);
       if (!trade) continue;
-      trades.push({ ...trade, symbol, side: signal.side });
+      trades.push({ ...trade, symbol, side: signal.side, state: stateAt(rows.slice(index - 119, index + 1), context) });
       busyUntil = trade.closedAt / 1_000;
     }
   }
@@ -398,9 +417,16 @@ function metrics(trades) {
     net: trades.reduce((sum, row) => sum + row.netReturnRate, 0), pf: loss ? gain / loss : gain ? 99 : 0 };
 }
 
+const coverageTrades = [];
+const familyIds = { "潮接": "tide_relay", "静旋": "quiet_orbit", "潮补": "tide_catchup", "静移": "quiet_drift",
+  "冲衡": "impulse_recoil", "隙续": "compression_hold", "脉折": "impulse_fold", "静扫": "quiet_sweep", "相折": "phase_turn" };
+
 function evaluate(name, detector, variants) {
   const results = variants.map((config, index) => {
     const trades = generate(detector, config);
+    const strategyId = `${familyIds[name]}:${index}`;
+    coverageTrades.push(...trades.map((trade) => ({ ...trade, strategyId,
+      strategyName: config.name ? `${config.name}·${index}` : `${name}·${index}` })));
     const folds = [0, 1, 2].map((fold) => metrics(trades.filter((trade) => trade.openedAt >= fromMs + fold * spanMs
       && trade.openedAt < fromMs + (fold + 1) * spanMs)));
     const train = metrics(trades.filter((trade) => trade.openedAt < fromMs + spanMs * 1.5));
@@ -509,6 +535,18 @@ const accepted = acceptedPhase.map((row) => row && row.train.trades >= 30 && row
   && row.train.pf > 1 && row.validation.pf > 1 && row.folds.every((fold) => fold.trades >= 12 && fold.pf > 1)
   && phaseOverlap.find((item) => item.name === row.config.name)?.uniqueAgainstOther >= 30
   && phaseOverlap.find((item) => item.name === row.config.name)?.uniqueAgainstCurrent >= 30 ? row : null);
+const splitAt = fromMs + spanMs * 1.5;
+const coverage = buildStrategyCoverageReport(coverageTrades, splitAt, {
+  discoveryTrades: 12, validationTrades: 8, discoveryProfitFactor: 1.05, validationProfitFactor: 1,
+  validationSymbols: 2, validationPositivePeriods: 2, knownDiscoveryOpportunities: 20,
+  knownValidationOpportunities: 12, periodMs: 5 * 86_400_000,
+});
+console.table(coverage.phases.map((row) => ({ phase: row.phase, knownCells: row.knownCells,
+  coveredCells: row.coveredCells, coverage: `${(row.coverageRate * 100).toFixed(0)}%`, strategies: row.strategyIds.join(",") })));
+if (coverage.gaps.length) console.table(coverage.gaps.map((gap) => ({ state: gap.state.key,
+  discovery: gap.discoveryOpportunities, validation: gap.validationOpportunities })));
+const coverageSummary = { splitAt: coverage.splitAt, thresholds: coverage.thresholds, knownCells: coverage.knownCells,
+  acceptedCells: coverage.acceptedCells, gaps: coverage.gaps, phases: coverage.phases };
 console.log(`V12_RESEARCH_JSON=${JSON.stringify({ rejectedFamilies: { tide, orbit, catchup, drift, recoil, hold, fold, sweep },
-  phase, phaseOverlap, accepted })}`);
+  phase, phaseOverlap, accepted, coverage: coverageSummary })}`);
 if (accepted.filter(Boolean).length < 2) throw new Error("V12 candidate acceptance failed");

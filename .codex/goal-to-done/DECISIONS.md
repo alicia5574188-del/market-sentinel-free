@@ -501,3 +501,10 @@
 - Removing arbitrary book and 0.5× haircuts does not mean every structurally valid route belongs in the account. The observed 龙虾 route had a 24.41% stop, so the existing 1%–2% risk target correctly produced only 69 U notional and 1× safe leverage; scaling it up would violate risk limits.
 - A new PAPER account trade must retain at least 1× current account equity in Gate-rounded notional after structural-risk sizing, remaining 4× portfolio capacity and the 30% margin cap. If it cannot, admission reports `MEANINGFUL_SIZE`; the system never raises notional through the risk boundary.
 - The minimum is proportional to current equity, so compounding remains intact. Effective shadows may continue measuring the route, but current positions are frozen and are never resized or closed by this admission change.
+
+# 2026-09-12 — Full coverage is a causal state map, not global strategy averages
+
+- Gate `contract_type` is the universe authority. Blank and explicit crypto classifications are eligible; stocks, metals, indices, forex, commodities and every unknown non-empty classification fail closed before volume ranking and historical sampling.
+- A strategy is judged inside an entry-time state cell formed from completed-candle trend efficiency, normalized volatility, range location and synchronized crypto-market breadth. Exit path, MFE, MAE and outcome cannot participate in classification.
+- The discovery half freezes candidate state cells. The held-out half must remain positive after 0.14% friction and 0.025% adverse next-bar entry, span multiple crypto symbols and profitable time buckets, or the cell remains an explicit gap.
+- Global profit factor cannot authorize a route in every environment. Historically validated state cells may enter PAPER directly while all variants keep collecting shadow evidence for later drift/demotion. Deployment never changes owner LIVE intent or resets account/history.

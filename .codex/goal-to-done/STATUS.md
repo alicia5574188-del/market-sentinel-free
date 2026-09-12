@@ -1,3 +1,10 @@
+# In progress — 2026-09-12 data-derived full-market coverage
+
+- User corrected the research objective: do not optimize for a fixed number of surviving strategies. Discover each mechanism's profitable time/state coverage from historical wins and losses, then iteratively add complementary mechanisms until their held-out-positive union covers every known tradable market state.
+- Confirmed current gaps before editing: active runtime authority is concentrated in trend/exhaustion-derived routes; `balance_return` is paired-shadow only after a negative recent fold; `pressure_release` is removed before even opening a shadow and cannot promote. The current promotion path implements only the three-event polarity rule, not the previously requested six-independent-event positive-sum alternative.
+- Confirmed `fetchActiveContracts` accepts every active Gate USDT-settled future by volume and has no crypto/TradFi classification. Current production priorities therefore include SAMSUNG, XAU and XAG and mix their moves into crypto breadth and scarce realtime capacity.
+- Active work: implement a futures-only crypto classifier, a causal chronological coverage report with explicit state gaps, and evidence-backed runtime authority. Preserve the evolved PAPER account and owner LIVE intent; no deployment or external mutation has occurred yet.
+
 # Done — 2026-09-12 collapsed PAPER history archive
 
 - Replaced the Records tab's always-expanded legacy list with one compact archive control. Current-cycle trades and blocked candidates remain directly visible.
@@ -427,3 +434,9 @@ Commit `8528f11965fe3ae17d404f2cb636f63e198c2160` deployed successfully in GitHu
 - The bounded patch is complete. Targeted parity/admission tests pass; the full direct suite passes 203 tests, all-regime tests pass 3, architecture/migration passes 17, and TypeScript, ESLint, production build and whitespace validation pass. Local Wrangler dry-run could not start because this workspace blocks its network/auth probe; the identical GitHub review gate remains required before merge.
 - PR #192 run #685 repeated and passed the complete review suite, including the causal all-regime replay and V11 after-cost evidence gate. Main run #686 rebuilt, deployed Cloudflare version `5e5ab69a-46c9-4000-a386-5080c11b1cff`, and passed advancing production-health acceptance with fresh authority, no runtime error, `maxPortfolioPositions=null`, and LIVE requested/operational both OFF.
 - The release did not reset or settle the PAPER account, clear history, alter credentials, change public-data cadence, expand the ten-market real-time surface or enable LIVE.
+## Active — 2026-09-12 full-market strategy coverage
+
+- Implemented Gate classification filtering in runtime and historical-universe selection. Non-crypto and unknown non-empty contract classes are excluded before liquidity ranking.
+- Implemented a pure causal state-cell ledger with discovery/held-out metrics, full-cost results, symbol/time-concentration guards, accepted masks and explicit uncovered cells. Targeted tests pass with TypeScript.
+- Replayed the latest CI artifact only as a diagnostic because its 20-market sample contains stocks/metals/energy. It proves the old global-average method hides large state gaps; it is not release evidence.
+- Next: run the same research on a newly generated crypto-only PR dataset, freeze only its held-out-positive masks, wire the resulting combination into PAPER authority, then complete all verification and production release without changing LIVE.
