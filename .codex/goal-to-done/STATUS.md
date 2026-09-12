@@ -1,3 +1,11 @@
+# Release candidate — 2026-09-12 unified PAPER/LIVE lifecycle display
+
+- The user completed the PAPER reset before this change. This release changes only `app/page.tsx`, presentation CSS and UI-contract assertions; no strategy, sizing, account, Gate mutation, persistence or LIVE-control code changed.
+- Open PAPER and LIVE holdings now use the same trade-card hierarchy. Both show entry time to the second, explicit open exit state and elapsed holding time; LIVE retains its truthful Gate protection, leverage, margin, planned risk and market timestamp fields.
+- Closed PAPER and LIVE positions now use one shared lifecycle record structure with exact entry/exit timestamps and holding duration. The collapsed historical archive remains collapsed by default.
+- Local acceptance passed 228 direct tests, six all-regime tests, 17 architecture/migration tests, TypeScript, ESLint, production build, whitespace validation and Cloudflare dry-run.
+- Next: push the isolated UI branch, pass reviewed PR CI, squash-merge to `main`, deploy and verify advancing production health without changing the reset account or owner LIVE intent.
+
 # Release candidate — 2026-09-12 data-derived full-market coverage
 
 - Gate universe selection now filters on `contract_type` before volume ranking. Explicit crypto/digital-asset types and the Gate-compatible blank type remain eligible; every unknown non-empty, stock, index, metal, commodity or other TradFi type fails closed in both runtime and replay.

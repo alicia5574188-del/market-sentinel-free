@@ -1,4 +1,12 @@
-# Active goal — data-derived full-market strategy coverage
+# Active goal — unified PAPER/LIVE trade lifecycle display
+
+- Change presentation only. Keep the user's completed PAPER reset, current positions/history, strategy authority, Gate orders, credentials and owner-controlled LIVE state untouched.
+- Render open LIVE positions with the same card hierarchy and field treatment as open PAPER positions, while retaining truthful LIVE-only leverage, margin and exchange-protection details.
+- Render closed LIVE positions with the same lifecycle-record structure as closed PAPER trades.
+- Show exact entry time, exact exit time and holding duration for both PAPER and LIVE. Open positions must show their entry time, an explicit open exit state and elapsed holding time.
+- Preserve the collapsed historical archive and every backend API/persistence boundary. Verify UI contracts, tests, TypeScript, ESLint, production build, whitespace, reviewed GitHub main release and advancing production health.
+
+# Completed goal — data-derived full-market strategy coverage
 
 - Restrict the ranked Gate USDT perpetual universe to genuine crypto assets before volume ranking; stock, ETF, index, commodity and other TradFi perpetuals must not consume the thirty-market scan, market-breadth context, realtime capacity, PAPER or LIVE paths.
 - Replace the fixed environment-to-strategy assumption with an auditable historical coverage study. Replay every candidate mechanism causally on completed Gate five-minute candles, charge the existing 0.14% round-trip friction and 0.025% adverse entry, retain wins and losses, and map each mechanism's positive after-cost coverage across chronological market-state segments.
