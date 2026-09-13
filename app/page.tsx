@@ -118,7 +118,8 @@ type StrategyArena = { version: number; systemName?: string; initialEquity?: num
     extremeSequenceAuthority?: boolean; strategyName?: string; extremeSequenceVersion?: number; streakLength?: number;
     streakMaxSpanMs?: number; sameBranchSymbolCooldownMs?: number; maxPortfolioPositions?: number | null; profitArmIsExit?: boolean;
     dailyObjectiveRate?: number; dailyObjectiveIsQuota?: boolean; reverseSameEventWinsRequired?: number;
-    dualIndependentEngines?: boolean; engineInitialEquity?: number; canonicalInitialEquity?: number; engineCanonicalWeight?: number;
+    dualIndependentEngines?: boolean; engineInitialEquity?: number; canonicalReferenceEquity?: number;
+    engineOrderCopyRate?: number; canonicalCapitalAgnostic?: boolean;
     sameSymbolCrossEngineAllowed?: boolean; liveSource?: string };
   engines?: Array<{ id: "CURRENT_V5" | "PREVIOUS_V4"; name: string; strategyVersion: string;
     initialEquity: number; portfolioEquity: number; portfolioOpen: ArenaTrade[]; portfolioResolved: number;
@@ -326,7 +327,7 @@ export default function Home() {
       const payload = await response.json() as { error?: string; strategyArena?: StrategyArena };
       if (!response.ok || !payload.strategyArena) throw new Error(payload.error || "重置失败");
       setRuntime((current) => current ? { ...current, strategyArena: payload.strategyArena } : current);
-      setPaperResetNotice("两套独立账户均已归档并分别重置为1000 U；唯一PAPER权益恢复为1000 U，实盘仍关闭。");
+      setPaperResetNotice("两套独立账户均已归档并分别重置为1000 U；唯一PAPER已同步清空并重新汇总，实盘仍关闭。");
     } catch (failure) { setPaperResetError(failure instanceof Error ? failure.message : "重置失败"); }
     finally { setPaperResetBusy(false); }
   };
@@ -439,11 +440,11 @@ export default function Home() {
     {activeTab === "brain" && !hasRuntimeSnapshot && <section className="empty snapshot-wait"><b>{error ? "正在重新连接交易后台" : "正在读取交易后台"}</b><p>收到真实运行快照后再显示两套独立账户、合并持仓、路线和市场数量；连接前不使用占位数据冒充当前状态。</p></section>}
 
     {activeTab === "brain" && hasRuntimeSnapshot && <>
-      <section className="brain-hero v6-console"><div className="hero-copy"><div className="hero-meta"><span>唯一 1000 U PAPER</span><span>2 × 1000 U 独立决策</span>{liveEnabled && <span style={{ borderColor: "#3c876f", color: "var(--green)" }}>LIVE ON</span>}</div><p className="eyebrow">CURRENT V5 + PREVIOUS V4 · INDEPENDENT</p><h1>{headline}</h1><p className="hero-detail">当前上线版与上一版各自扫描、决策、风控、开仓和平仓，各自只使用自己的1000 U虚拟权益；同一个币可以同时持仓，方向也可以相反。两本虚拟账各按50%映射进唯一1000 U PAPER，增加信号覆盖但不把统一账户风险翻倍；实盘只复制这个PAPER的逐币净仓。V5固定目标到价结算，V4盈利臂启动后抬保护并保留上行空间。</p></div><div className="decision-badge"><small>唯一 PAPER 权益</small><strong>{num(portfolioAccountEquity, 2)}</strong><span>USDT</span><em className={portfolioPnl == null ? "" : portfolioPnl >= 0 ? "positive" : "negative"}>{signed(portfolioPnl)} U</em></div></section>
+      <section className="brain-hero v6-console"><div className="hero-copy"><div className="hero-meta"><span>唯一执行 PAPER</span><span>2 × 1000 U 独立决策</span>{liveEnabled && <span style={{ borderColor: "#3c876f", color: "var(--green)" }}>LIVE ON</span>}</div><p className="eyebrow">CURRENT V5 + PREVIOUS V4 · INDEPENDENT</p><h1>{headline}</h1><p className="hero-detail">当前上线版与上一版各自扫描、决策、风控、开仓和平仓，各自只使用自己的1000 U虚拟权益；同一个币可以同时持仓，方向也可以相反。两套系统的每笔订单都按100%原始仓位复制进唯一PAPER，唯一PAPER不按自己的金额再次缩放、拦截或改写订单；同向仓位相加，反向逻辑腿分别保留并只在实盘单向持仓边界按币种净额执行。V5固定目标到价结算，V4盈利臂启动后抬保护并保留上行空间。</p></div><div className="decision-badge"><small>唯一 PAPER 合并显示</small><strong>{num(portfolioAccountEquity, 2)}</strong><span>USDT</span><em className={portfolioPnl == null ? "" : portfolioPnl >= 0 ? "positive" : "negative"}>{signed(portfolioPnl)} U</em></div></section>
 
       <section className="summary four">
         {engineAccounts.map((engine) => <article key={engine.id}><small>{engine.name} · 独立1000 U</small><strong>{num(engine.markedEquity, 2)} U</strong><p>{engine.portfolioOpen.length} 笔持仓 · 已完成 {engine.portfolioResolved} 笔</p></article>)}
-        <article><small>唯一 PAPER 映射</small><strong>50% + 50%</strong><p>两套轨迹不回写、不互相占位</p></article>
+        <article><small>唯一 PAPER 复制</small><strong>100% + 100%</strong><p>不按唯一账户金额缩放或拦截</p></article>
         <article><small>LIVE 复制源</small><strong>逐币净仓</strong><p>只读取唯一 PAPER，不读取策略决策</p></article>
       </section>
 
@@ -500,7 +501,7 @@ export default function Home() {
     {hasRuntimeSnapshot && <section className="playbook-list route-console" hidden={activeTab !== "brain"}><div className="section-heading"><div><h2>后台确认的执行路线</h2><p>两套引擎分别判断；这里只展示各自已通过或正在进行最终核对的路线。</p></div><span>{currentRoutes.length} 条</span></div>{currentRoutes.length ? <div className="strategy-grid">{currentRoutes.slice(0, 6).map((route) => <article className="strategy-card route-approved" key={route.id}><div className="strategy-title"><div><small>{route.engineName ?? "当前上线版 V5"} · {route.symbol.replace("_", "/")} · {environmentLabel(route.environment ?? undefined)}</small><h3>{route.strategyName}</h3></div><span className={route.side === "LONG" ? "positive" : "negative"}>{route.side === "LONG" ? "做多" : "做空"}</span></div><small className="strategy-rule">{route.reason}{route.blocker ? `；${route.blocker}` : ""}</small></article>)}</div> : <div className="empty"><b>目前没有后台确认的执行路线</b><p>上方逐币显示本轮形成到哪一步，以及最后一个真实阻塞原因。</p></div>}</section>}
 
     <section className="panel-list" hidden={activeTab !== "orders"}>
-      {hasRuntimeSnapshot ? <><h2 className="order-group-title">唯一 1000 U PAPER（双引擎各映射50%） <span>{num(portfolioAccountEquity, 2)} U</span></h2>
+      {hasRuntimeSnapshot ? <><h2 className="order-group-title">唯一执行 PAPER（双引擎订单各100%复制） <span>{num(portfolioAccountEquity, 2)} U</span></h2>
       {portfolioOpen.map((trade) => { const market = runtime?.evidence[trade.symbol]; return <ArenaOpenCard key={trade.id} trade={trade}
         mark={(trade.side === "LONG" ? market?.bestBid : market?.bestAsk) ?? trade.lastPrice} now={clock || runtime?.generatedAt || trade.openedAt} />; })}
       {!portfolioOpen.length && <div className="empty"><b>当前没有模拟订单</b><p>对应环境的策略仍在接管；完成进场结构后才会成交。</p></div>}</> : <div className="empty"><b>正在读取模拟持仓</b><p>收到后台真实快照前不显示“0笔”。</p></div>}
@@ -526,7 +527,7 @@ export default function Home() {
       <Setting title="策略系统" detail="当前上线版V5与上一版V4完全独立运行；各自拥有1000 U、独立策略状态与风险额度，同币种互不占位。" value="双引擎" tone="online"/>
       <Setting title="市场覆盖" detail={`持续扫描 ${runtime?.strategyData?.liquidMarkets ?? runtime?.limits.scanUniverse ?? 30} 个高流动性永续合约，${runtime?.strategyData?.stableMarkets ?? 0} 个已具备完整5分钟路径；“形成结构”与“后台准入”分开统计。`} value={`${runtime?.strategyData?.stableMarkets ?? 0}/30`} tone="online"/>
       <Setting title="系统状态" detail="只显示交易后台真实状态；普通手机网络波动会静默保留最近结果并自动重连，个别币缺数据只隔离该币。" value={healthLabel} tone={backendOperational ? "online" : "locked"}/>
-      <button className="setting-row" type="button" disabled={paperResetBusy || liveEnabled} onClick={() => void resetPaperAccount()}><div><b>重置两套1000 U虚拟资金</b><p>按最新可成交价分别结算并归档两套账户；随后各自从1000 U重新开始，唯一PAPER恢复为1000 U。实盘开启时禁止操作。</p></div><span className="setting-value locked">{paperResetBusy ? "处理中…" : "重置 ›"}</span></button>
+      <button className="setting-row" type="button" disabled={paperResetBusy || liveEnabled} onClick={() => void resetPaperAccount()}><div><b>重置两套1000 U虚拟资金</b><p>按最新可成交价分别结算并归档两套账户；随后各自从1000 U重新开始，唯一PAPER只重新汇总两套订单，不参与资金风控。实盘开启时禁止操作。</p></div><span className="setting-value locked">{paperResetBusy ? "处理中…" : "重置 ›"}</span></button>
       {paperResetError && <p className="form-error">{paperResetError}</p>}{paperResetNotice && <p className="form-success">{paperResetNotice}</p>}
       <p className="last-update">最近后台成功：{time(runtime?.lastSuccessAt)}{live?.lastSyncAt ? ` · 实盘核对：${time(live.lastSyncAt)}` : ""}</p>
       </>}

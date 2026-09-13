@@ -1074,8 +1074,9 @@ jobs:
               .runtime.strategyArena.rules.correlatedRiskCap == 0.065 and
               .runtime.strategyArena.rules.dualIndependentEngines == true and
               .runtime.strategyArena.rules.engineInitialEquity == 1000 and
-              .runtime.strategyArena.rules.canonicalInitialEquity == 1000 and
-              .runtime.strategyArena.rules.engineCanonicalWeight == 0.5 and
+              .runtime.strategyArena.rules.canonicalReferenceEquity == 1000 and
+              .runtime.strategyArena.rules.engineOrderCopyRate == 1 and
+              .runtime.strategyArena.rules.canonicalCapitalAgnostic == true and
               .runtime.strategyArena.rules.sameSymbolCrossEngineAllowed == true and
               .runtime.strategyArena.rules.liveSource == "CANONICAL_PAPER_NET" and
               .runtime.limits.plannedTotalDoRequestsPerDay < 55000 and
@@ -1203,8 +1204,9 @@ jobs:
             .runtime.strategyArena.rules.dailyObjectiveIsQuota == false and
             .runtime.strategyArena.rules.dualIndependentEngines == true and
             .runtime.strategyArena.rules.engineInitialEquity == 1000 and
-            .runtime.strategyArena.rules.canonicalInitialEquity == 1000 and
-            .runtime.strategyArena.rules.engineCanonicalWeight == 0.5 and
+            .runtime.strategyArena.rules.canonicalReferenceEquity == 1000 and
+            .runtime.strategyArena.rules.engineOrderCopyRate == 1 and
+            .runtime.strategyArena.rules.canonicalCapitalAgnostic == true and
             .runtime.strategyArena.rules.sameSymbolCrossEngineAllowed == true and
             .runtime.strategyArena.rules.liveSource == "CANONICAL_PAPER_NET" and
             .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 10 and

@@ -83,6 +83,8 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.doesNotMatch(layout, /V4自适应影子策略/);
   assert.match(page, /CURRENT V5 \+ PREVIOUS V4 · INDEPENDENT/);
   assert.match(page, /各自扫描、决策、风控、开仓和平仓/);
+  assert.match(page, /100% \+ 100%/);
+  assert.match(page, /不按唯一账户金额缩放或拦截/);
   assert.match(page, /今日净收益/);
   assert.match(page, /实时运行状态/);
   assert.match(page, /策略账户已运行/);
@@ -115,7 +117,7 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.doesNotMatch(page, />观察影子</);
   assert.doesNotMatch(page, /预计成功率/);
   assert.match(page, /当前模拟周期/);
-  assert.match(page, /唯一 1000 U PAPER/);
+  assert.match(page, /唯一执行 PAPER/);
   assert.match(page, /开启实盘复制/);
   assert.doesNotMatch(page, /双模拟账本|独立策略模拟/);
   assert.doesNotMatch(page, /组合风险预算|目标 \+150 U|双向反应实验 V1|盈利与亏损研究|旧方案归档|账户日志/);
@@ -188,7 +190,9 @@ test("both frozen engines are causal and isolated while canonical PAPER is the s
   assert.match(previousArena, /STRATEGY_INITIAL_EQUITY = 1_000/);
   assert.match(previousArena, /previous-strategy-coverage-policy\.ts/);
   assert.match(previousCoveragePolicy, /tide_catchup: \["COMPRESSION:BROAD_UP:LOW_EDGE"/);
-  assert.match(dualPaper, /ENGINE_CANONICAL_WEIGHT = 0\.5/);
+  assert.match(dualPaper, /ENGINE_ORDER_COPY_RATE = 1/);
+  assert.match(dualPaper, /canonicalCapitalAgnostic: true/);
+  assert.doesNotMatch(dualPaper, /ENGINE_CANONICAL_WEIGHT|0\.5/);
   assert.match(dualPaper, /canonicalPaperOpen/);
   assert.match(dualPaper, /canonicalLivePortfolio/);
   assert.doesNotMatch(arena, /adaptiveMechanismForPlaybook/);
@@ -309,6 +313,8 @@ test("cutover is credential-bound and removes legacy DOs only after v11 health",
   assert.equal((workflow.match(/\.runtime\.strategyArena\.playbookCount == 11/g) ?? []).length, 2);
   assert.equal((workflow.match(/\.runtime\.strategyArena\.catalogSize == 11/g) ?? []).length, 2);
   assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.dualIndependentEngines == true/g) ?? []).length, 2);
+  assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.engineOrderCopyRate == 1/g) ?? []).length, 2);
+  assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.canonicalCapitalAgnostic == true/g) ?? []).length, 2);
   assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.liveSource == "CANONICAL_PAPER_NET"/g) ?? []).length, 2);
   assert.equal((workflow.match(/grep -Fq '双引擎独立账户'/g) ?? []).length, 2);
   assert.match(workflow, /Verify frozen V5 route authority/);
