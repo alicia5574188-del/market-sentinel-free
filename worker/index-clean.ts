@@ -17,11 +17,22 @@ import { clearOwnerSessionCookie, createOwnerSession, ownerAuthConfigured, owner
 import { type EventEntryAssessment, type RadarCandidate } from "../lib/market-radar.ts";
 import { completedCandleStrategyCandidate, initialMarketRegimes, marketRegimeSummary, normalizeMarketRegimes, residentCandleCandidate, selectDiverseMarketPool, updateMarketRegimes,
   type MarketRegimeCandidate, type MarketRegimeState, type ResidentCandleStructure } from "../lib/market-regime.ts";
-import { advanceStrategyArena, advanceStrategyShadowsFromCompletedCandle, applyStrategySleepStates, arenaSummary, initialStrategyArena, normalizeStrategyArena, observeStrategyArena,
+import { advanceStrategyArena, advanceStrategyShadowsFromCompletedCandle, applyStrategySleepStates, initialStrategyArena, normalizeStrategyArena, observeStrategyArena,
   ARENA_FRICTION_RATE, MAX_PORTFOLIO_POSITIONS, MIN_PORTFOLIO_NOTIONAL_TO_EQUITY, PORTFOLIO_TRADE_RISK_TARGET_USDT, PORTFOLIO_REALTIME_CAPACITY, resetStrategyArenaAccount,
   POLARITY_MAX_SPAN_MS, POLARITY_STREAK, SAME_STRATEGY_SYMBOL_COOLDOWN_MS,
-  STRATEGY_INITIAL_EQUITY, type StrategyArenaState } from "../lib/strategy-arena.ts";
+  type StrategyArenaState } from "../lib/strategy-arena.ts";
 import { ALL_REGIME_ENGINE_VERSION, ALL_REGIME_SYSTEM_NAME, allRegimePaperApproved } from "../lib/all-regime-engine.ts";
+import { allRegimePaperApproved as previousAllRegimePaperApproved } from "../lib/previous-all-regime-engine.ts";
+import { canonicalLivePortfolio, canonicalPaperOpen, canonicalPaperSummary } from "../lib/dual-paper.ts";
+import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
+import { advanceStrategyArena as advancePreviousStrategyArena,
+  advanceStrategyShadowsFromCompletedCandle as advancePreviousStrategyShadowsFromCompletedCandle,
+  applyStrategySleepStates as applyPreviousStrategySleepStates,
+  initialStrategyArena as initialPreviousStrategyArena,
+  normalizeStrategyArena as normalizePreviousStrategyArena,
+  observeStrategyArena as observePreviousStrategyArena,
+  resetStrategyArenaAccount as resetPreviousStrategyArenaAccount,
+  type StrategyArenaState as PreviousStrategyArenaState } from "../lib/previous-strategy-arena.ts";
 
 const LOOP_MS = 2_000;
 const AUTHORITY_STALE_AFTER_MS = 8_000;
@@ -48,7 +59,8 @@ const WATCHDOG_WRITE_RESERVE = 2_880;
 const AUTHORITY_SCHEMA_VERSION = 1;
 const DEFAULT_SYMBOLS = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];
 
-function broadMarketContext(candidates: Record<string, MarketRegimeCandidate>, now: number) {
+function broadMarketContext(candidates: Record<string, { symbol: string; observedAt: number; broadMoveRate?: number;
+  trendRate: number; move4hRate?: number; move24hRate?: number }>, now: number) {
   const fresh = Object.values(candidates).filter((row) => now - row.observedAt <= 11 * 60_000);
   const moves = fresh
     .map((row) => row.broadMoveRate ?? row.trendRate).filter(Number.isFinite).sort((left, right) => left - right);
@@ -72,6 +84,12 @@ function broadMarketContext(candidates: Record<string, MarketRegimeCandidate>, n
 function approvedRouteScore(candidate: MarketRegimeCandidate) {
   return Math.max(-1, ...(candidate.allRegimeRoutes ?? [])
     .filter((route) => allRegimePaperApproved(route.strategyId))
+    .map((route) => route.score));
+}
+
+function previousApprovedRouteScore(candidate: PreviousMarketRegimeCandidate) {
+  return Math.max(-1, ...(candidate.allRegimeRoutes ?? [])
+    .filter((route) => previousAllRegimePaperApproved(route.strategyId))
     .map((route) => route.score));
 }
 
@@ -227,10 +245,13 @@ type RuntimeState = {
     topLong: LiquidityZone | null; topShort: LiquidityZone | null; absorption: number; range15m: RangeStructure | null }>;
   entryAssessments: Record<string, EventEntryAssessment | null>;
   strategyArena: StrategyArenaState;
+  previousStrategyArena: PreviousStrategyArenaState;
   marketRegimes: MarketRegimeState;
   liquidUniverse: string[];
   stableCandidates: Record<string, MarketRegimeCandidate>;
+  previousStableCandidates: Record<string, PreviousMarketRegimeCandidate>;
   stableStructures: Record<string, ResidentCandleStructure>;
+  previousStableStructures: Record<string, ResidentCandleStructure>;
   strategyCandleCursor: number;
   strategyCandleError: string | null;
   strategyCandleFailures: Record<string, { count: number; lastFailureAt: number; retryAt: number; lastError: string }>;
@@ -305,7 +326,9 @@ function initialState(): RuntimeState {
       lastFailureAt: null, lastFailureSymbol: null, lastError: null },
     lastError: null, d1MirrorError: null, riskBreach: false, tickSize: Object.fromEntries(DEFAULT_SYMBOLS.map((symbol) => [symbol, 0.0001])), contractMeta: {},
     decisions: {}, routes: {}, plans: {}, positions: {}, evidence: {}, entryAssessments: {},
-    strategyArena: initialStrategyArena(), marketRegimes: initialMarketRegimes(), liquidUniverse: [], stableCandidates: {}, stableStructures: {},
+    strategyArena: initialStrategyArena(), previousStrategyArena: initialPreviousStrategyArena(),
+    marketRegimes: initialMarketRegimes(), liquidUniverse: [], stableCandidates: {}, previousStableCandidates: {},
+    stableStructures: {}, previousStableStructures: {},
     strategyCandleCursor: 0, strategyCandleError: null, strategyCandleFailures: {}, strategyLogError: null, analysisMs: [], equity: PAPER_INITIAL_EQUITY, outbox: [],
     radar: emptyRadarRuntime(), paperCycle: startPaperCycle(Date.now()), bankruptcyOutbox: [], live: initialLiveState(),
   };
@@ -375,6 +398,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           lastUniverseAt: 0, lastRadarAt: 0,
           radar: { ...emptyRadarRuntime(), ...(saved.radar ?? {}), candidates: saved.radar?.candidates ?? [] },
           strategyArena: normalizeStrategyArena(saved.strategyArena),
+          previousStrategyArena: normalizePreviousStrategyArena(saved.previousStrategyArena),
+          previousStableCandidates: saved.previousStableCandidates ?? {},
+          previousStableStructures: saved.previousStableStructures ?? {},
           marketRegimes: strategyCutover ? initialMarketRegimes() : normalizeMarketRegimes(saved.marketRegimes),
           equity: strategyCutover ? PAPER_INITIAL_EQUITY : saved.equity,
           equityVersion: strategyCutover ? saved.equityVersion + 1 : saved.equityVersion,
@@ -422,7 +448,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       evidence: this.runtime.evidence, entryAssessments: this.runtime.entryAssessments,
       equity: this.runtime.equity, equityVersion: this.runtime.equityVersion,
       outbox: this.runtime.outbox, paperCycle: this.runtime.paperCycle, bankruptcyOutbox: this.runtime.bankruptcyOutbox,
-      strategyArena: this.runtime.strategyArena, marketRegimes: this.runtime.marketRegimes,
+      strategyArena: this.runtime.strategyArena, previousStrategyArena: this.runtime.previousStrategyArena,
+      previousStableCandidates: this.runtime.previousStableCandidates,
+      previousStableStructures: this.runtime.previousStableStructures, marketRegimes: this.runtime.marketRegimes,
       lastStopCheckpointAt: this.runtime.lastStopCheckpointAt, riskBreach: this.runtime.riskBreach });
   }
 
@@ -439,6 +467,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.paperCycle = authority.paperCycle;
     this.runtime.bankruptcyOutbox = authority.bankruptcyOutbox;
     this.runtime.strategyArena = authority.strategyArena;
+    this.runtime.previousStrategyArena = authority.previousStrategyArena;
+    this.runtime.previousStableCandidates = authority.previousStableCandidates;
+    this.runtime.previousStableStructures = authority.previousStableStructures;
     this.runtime.marketRegimes = authority.marketRegimes;
     this.runtime.lastStopCheckpointAt = authority.lastStopCheckpointAt;
     this.runtime.riskBreach = authority.riskBreach;
@@ -523,18 +554,30 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const regimes = updateMarketRegimes({ state: this.runtime.marketRegimes, rows: universeRows, eligible: universe, now });
     this.runtime.stableCandidates = Object.fromEntries(Object.entries(this.runtime.stableCandidates)
       .filter(([symbol, candidate]) => universe.has(symbol) && now - candidate.observedAt <= STRATEGY_CANDLE_STALE_MS));
+    this.runtime.previousStableCandidates = Object.fromEntries(Object.entries(this.runtime.previousStableCandidates)
+      .filter(([symbol, candidate]) => universe.has(symbol) && now - candidate.observedAt <= STRATEGY_CANDLE_STALE_MS));
     this.runtime.stableStructures = Object.fromEntries(Object.entries(this.runtime.stableStructures)
       .filter(([symbol, structure]) => universe.has(symbol) && now - structure.observedAt <= STRATEGY_CANDLE_STALE_MS));
+    this.runtime.previousStableStructures = Object.fromEntries(Object.entries(this.runtime.previousStableStructures)
+      .filter(([symbol, structure]) => universe.has(symbol) && now - structure.observedAt <= STRATEGY_CANDLE_STALE_MS));
     const stable = Object.values(this.runtime.stableCandidates).sort((left, right) => right.score - left.score);
+    const previousForPool = Object.values(this.runtime.previousStableCandidates).map((candidate) => ({
+      ...candidate, allRegimeRoutes: [],
+    })) as MarketRegimeCandidate[];
+    const poolCandidates = [...new Map([...stable, ...previousForPool]
+      .sort((left, right) => right.score - left.score).map((candidate) => [candidate.symbol, candidate])).values()];
     this.runtime.marketRegimes = { ...regimes, candidates: stable };
     this.runtime.strategyArena = applyStrategySleepStates(this.runtime.strategyArena, new Set(stable.map((candidate) => candidate.channel)), now);
+    this.runtime.previousStrategyArena = applyPreviousStrategySleepStates(this.runtime.previousStrategyArena,
+      new Set(Object.values(this.runtime.previousStableCandidates).map((candidate) => candidate.channel)), now);
     this.runtime.lastRadarAt = now;
     const locked = this.runtime.symbols.filter((symbol) => this.runtime.positions[symbol]?.status === "OPEN"
       || this.runtime.plans[symbol]?.state === "PREPARED" || this.runtime.live.positions[symbol]?.status === "OPEN"
       || this.runtime.strategyArena.portfolioOpen[symbol]
+      || this.runtime.previousStrategyArena.portfolioOpen[symbol]
       || Boolean(this.runtime.live.entries[symbol] && !["FILLED", "CANCELLED"].includes(this.runtime.live.entries[symbol]!.status)));
     const liquidFallback = universeRows.map((row) => row.symbol);
-    const next = selectDiverseMarketPool({ locked, current: this.runtime.symbols, candidates: stable,
+    const next = selectDiverseMarketPool({ locked, current: this.runtime.symbols, candidates: poolCandidates,
       fallback: liquidFallback, limit: PORTFOLIO_REALTIME_CAPACITY });
     if (next.length) this.applyRealtimeSymbols(next);
   }
@@ -578,8 +621,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.strategyCandles[symbol] = candles;
       const result = completedCandleStrategyCandidate({ symbol, candles, volume24hUsd: contract.volume24hUsd,
         fundingRate: contract.fundingRate, now: Date.now() });
+      const previousResult = previousCompletedCandleStrategyCandidate({ symbol, candles, volume24hUsd: contract.volume24hUsd,
+        fundingRate: contract.fundingRate, now: Date.now() });
       if (latest) this.runtime.strategyArena = advanceStrategyShadowsFromCompletedCandle({
         state: this.runtime.strategyArena, symbol, candle: { high: latest.high, low: latest.low, close: latest.close,
+          completedAt: (latest.time + 300) * 1_000 },
+      });
+      if (latest) this.runtime.previousStrategyArena = advancePreviousStrategyShadowsFromCompletedCandle({
+        state: this.runtime.previousStrategyArena, symbol, candle: { high: latest.high, low: latest.low, close: latest.close,
           completedAt: (latest.time + 300) * 1_000 },
       });
       if (result) {
@@ -587,6 +636,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         this.runtime.stableStructures[symbol] = result.structure;
         this.runtime.marketRegimes = { ...this.runtime.marketRegimes,
           candidates: Object.values(this.runtime.stableCandidates).sort((left, right) => right.score - left.score) };
+      }
+      if (previousResult) {
+        this.runtime.previousStableCandidates[symbol] = previousResult.candidate;
+        this.runtime.previousStableStructures[symbol] = previousResult.structure;
       }
       delete this.runtime.strategyCandleFailures[symbol];
       this.runtime.lastStrategyCandleAt = now;
@@ -604,27 +657,36 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private async maybeWriteStrategyRuntimeLog(now: number) {
     if (now - this.runtime.lastStrategyLogAt < STRATEGY_LOG_MS || this.runtime.d1Writes + 2 > 4_800) return;
     this.runtime.lastStrategyLogAt = now;
-    const summary = arenaSummary(this.runtime.strategyArena);
+    const summary = canonicalPaperSummary({ current: this.runtime.strategyArena, previous: this.runtime.previousStrategyArena });
     const counts = marketRegimeSummary(this.runtime.marketRegimes).counts;
-    const mechanismMetrics = summary.playbooks.map((playbook) => {
-      const results = this.runtime.strategyArena.playbookResults[playbook.id] ?? [];
-      return { kind: "GENERATED_MECHANISM", id: playbook.id,
-        events24h: results.filter((row) => now - row.resolvedAt <= 24 * 60 * 60_000).length,
-        events72h: results.filter((row) => now - row.resolvedAt <= 72 * 60 * 60_000).length,
-        latest3: results.slice(-3).map((row) => row.netReturnRate),
-        latest6Net: results.slice(-6).reduce((total, row) => total + row.netReturnRate, 0),
-        authority: "CURRENT_ENVIRONMENT_ROUTE",
-        paperAuthority: "OFFLINE_VALIDATED_THEN_LIVE_POLARITY",
-        normalShadowEvents: Object.values(this.runtime.strategyArena.strategies)
-          .filter((strategy) => strategy.id === playbook.id)
-          .reduce((total, strategy) => total + strategy.recentResults.length, 0) };
+    const mechanismMetrics = summary.engines.flatMap((engine) => {
+      const engineState = engine.id === "CURRENT_V5" ? this.runtime.strategyArena : this.runtime.previousStrategyArena;
+      return engine.playbooks.map((playbook) => {
+        const results = engineState.playbookResults[playbook.id] ?? [];
+        return { kind: "GENERATED_MECHANISM", engineId: engine.id, id: playbook.id,
+          events24h: results.filter((row) => now - row.resolvedAt <= 24 * 60 * 60_000).length,
+          events72h: results.filter((row) => now - row.resolvedAt <= 72 * 60 * 60_000).length,
+          latest3: results.slice(-3).map((row) => row.netReturnRate),
+          latest6Net: results.slice(-6).reduce((total, row) => total + row.netReturnRate, 0),
+          authority: "ENGINE_LOCAL_ENVIRONMENT_ROUTE",
+          paperAuthority: "ENGINE_LOCAL_OFFLINE_VALIDATION_AND_POLARITY",
+          normalShadowEvents: Object.values(engineState.strategies)
+            .filter((strategy) => strategy.id === playbook.id)
+            .reduce((total, strategy) => total + strategy.recentResults.length, 0) };
+      });
     });
     const routeMetrics = Object.values(this.runtime.stableCandidates).flatMap((candidate) => (candidate.allRegimeRoutes ?? []).map((route) => ({
-      kind: "ALL_REGIME_ROUTE", symbol: candidate.symbol, observedAt: candidate.observedAt,
+      kind: "ALL_REGIME_ROUTE", engineId: "CURRENT_V5", symbol: candidate.symbol, observedAt: candidate.observedAt,
       environment: route.environment, strategyId: route.strategyId, side: route.side,
       score: route.score, structureId: route.structureId, reason: route.reason,
     })));
-    const metrics = [...routeMetrics, ...mechanismMetrics];
+    const previousRouteMetrics = Object.values(this.runtime.previousStableCandidates)
+      .flatMap((candidate) => (candidate.allRegimeRoutes ?? []).map((route) => ({
+        kind: "ALL_REGIME_ROUTE", engineId: "PREVIOUS_V4", symbol: candidate.symbol, observedAt: candidate.observedAt,
+        environment: route.environment, strategyId: route.strategyId, side: route.side,
+        score: route.score, structureId: route.structureId, reason: route.reason,
+      })));
+    const metrics = [...routeMetrics, ...previousRouteMetrics, ...mechanismMetrics];
     try {
       await this.env.DB.batch([
         this.env.DB.prepare(`INSERT OR REPLACE INTO strategy_runtime_log
@@ -634,9 +696,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
           `strategy-runtime:${Math.floor(now / STRATEGY_LOG_MS)}`, now, this.runtime.version, this.runtime.radar.scanned,
           Object.keys(this.runtime.stableCandidates).length, this.runtime.symbols.length, JSON.stringify(counts), JSON.stringify(metrics),
-          Object.keys(this.runtime.strategyArena.open).length, this.runtime.strategyArena.recentShadow.length, summary.activeCount,
-          Object.keys(this.runtime.strategyArena.portfolioOpen).length, this.runtime.strategyArena.portfolioEquity,
-          this.runtime.strategyArena.portfolioResolved, this.runtime.strategyArena.portfolioEquity - STRATEGY_INITIAL_EQUITY,
+          Object.keys(this.runtime.strategyArena.open).length + Object.keys(this.runtime.previousStrategyArena.open).length,
+          this.runtime.strategyArena.recentShadow.length + this.runtime.previousStrategyArena.recentShadow.length, summary.activeCount,
+          canonicalPaperOpen({ current: this.runtime.strategyArena, previous: this.runtime.previousStrategyArena }).length,
+          summary.portfolioEquity, summary.portfolioResolved, summary.portfolioEquity - summary.initialEquity,
           this.runtime.strategyCandleError, this.runtime.state, Number(this.runtime.live.requestedEnabled), Number(this.runtime.live.operational)),
         this.env.DB.prepare("DELETE FROM strategy_runtime_log WHERE observed_at<?").bind(now - STRATEGY_LOG_RETENTION_MS),
       ]);
@@ -651,6 +714,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     spreadRate: number, bestBid: number, bestAsk: number, bidDepthUsd: number, askDepthUsd: number) {
     this.runtime.strategyArena = advanceStrategyArena({ state: this.runtime.strategyArena,
       quotes: { [symbol]: { midpoint, bestBid, bestAsk } }, now });
+    this.runtime.previousStrategyArena = advancePreviousStrategyArena({ state: this.runtime.previousStrategyArena,
+      quotes: { [symbol]: { midpoint, bestBid, bestAsk } }, now });
     const memory = this.memory[symbol];
     const contract = this.contractCatalog.get(symbol);
     if (!memory || !contract) return;
@@ -658,7 +723,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       volume24hUsd: contract.volume24hUsd, fundingRate: contract.fundingRate, now });
     const stable = this.runtime.stableCandidates[symbol];
     const candidates = stable && now - stable.observedAt <= STRATEGY_CANDLE_STALE_MS ? [stable] : candle ? [candle.candidate] : [];
-    if (!candidates.length || !memory) return;
     const marketContext = broadMarketContext(this.runtime.stableCandidates, now);
     const rankedRoutes = [...new Map([...Object.values(this.runtime.stableCandidates), ...candidates]
       .map((row) => [row.symbol, row])).values()]
@@ -685,6 +749,31 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           .every((openSymbol) => this.runtime.symbols.includes(openSymbol) && this.runtime.evidence[openSymbol]?.fresh !== false),
       } });
     }
+    const previousStable = this.runtime.previousStableCandidates[symbol];
+    const previousCandidates = previousStable && now - previousStable.observedAt <= STRATEGY_CANDLE_STALE_MS
+      ? [previousStable] : [];
+    const previousMarketContext = broadMarketContext(this.runtime.previousStableCandidates, now);
+    const previousRankedRoutes = Object.values(this.runtime.previousStableCandidates)
+      .filter((row) => previousApprovedRouteScore(row) >= 0 && now - row.observedAt <= STRATEGY_CANDLE_STALE_MS)
+      .sort((left, right) => previousApprovedRouteScore(right) - previousApprovedRouteScore(left)
+        || right.observedAt - left.observedAt || left.symbol.localeCompare(right.symbol));
+    for (const candidate of previousCandidates) {
+      this.runtime.previousStrategyArena = observePreviousStrategyArena({ state: this.runtime.previousStrategyArena, observation: {
+        candidate, midpoint, bestBid, bestAsk, alignedFlow: 0, minuteNoiseRate: memory.minuteNoiseRate,
+        spreadRate, range15m: analyzed.range15m, confirmationBySide: analyzed.confirmationBySide,
+        fakeoutBySide: analyzed.fakeoutBySide, routes: analyzed.routes, bidDepthUsd, askDepthUsd,
+        candleStructure: this.runtime.previousStableStructures[symbol] ?? null,
+        quantoMultiplier: this.runtime.contractMeta[symbol]?.quantoMultiplier,
+        maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate, completedMinuteAt: memory.timeframeUpdatedAt.m1,
+        leverageMax: this.runtime.contractMeta[symbol]?.leverageMax, now, dataFresh: true,
+        globalBreadth: previousMarketContext.breadth, globalMedianMove: previousMarketContext.medianMove,
+        globalMarkets: previousMarketContext.markets, contractReady: this.runtime.contractMeta[symbol] != null,
+        globalOpportunityRank: Math.max(1, previousRankedRoutes.findIndex((row) => row.symbol === candidate.symbol) + 1),
+        globalOpportunityCount: previousRankedRoutes.length,
+        managementCapacity: Object.keys(this.runtime.previousStrategyArena.portfolioOpen)
+          .every((openSymbol) => this.runtime.symbols.includes(openSymbol) && this.runtime.evidence[openSymbol]?.fresh !== false),
+      } });
+    }
     if (this.runtime.strategyArena.cutoverPending) {
       const positions = Object.values(this.runtime.strategyArena.portfolioOpen);
       if (positions.every((position) => {
@@ -695,6 +784,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           midpoint: this.runtime.evidence[position.symbol]!.midpoint, bestBid: this.runtime.evidence[position.symbol]!.bestBid,
           bestAsk: this.runtime.evidence[position.symbol]!.bestAsk, observedAt: this.runtime.evidence[position.symbol]!.observedAt, fresh: true,
         }])), now, reason: "全境·复利引擎切换：以新鲜可成交价格结算并归档上一模拟周期" });
+    }
+    if (this.runtime.previousStrategyArena.cutoverPending) {
+      const positions = Object.values(this.runtime.previousStrategyArena.portfolioOpen);
+      if (positions.every((position) => {
+        const evidence = this.runtime.evidence[position.symbol];
+        return evidence?.fresh && now - evidence.observedAt <= STALE_AFTER_MS && evidence.bestBid != null && evidence.bestAsk != null;
+      })) this.runtime.previousStrategyArena = resetPreviousStrategyArenaAccount({ state: this.runtime.previousStrategyArena,
+        quotes: Object.fromEntries(positions.map((position) => [position.symbol, {
+          midpoint: this.runtime.evidence[position.symbol]!.midpoint, bestBid: this.runtime.evidence[position.symbol]!.bestBid,
+          bestAsk: this.runtime.evidence[position.symbol]!.bestAsk, observedAt: this.runtime.evidence[position.symbol]!.observedAt, fresh: true,
+        }])), now, reason: "上一版独立引擎迁移：以新鲜可成交价格结算并归档旧周期" });
     }
   }
 
@@ -999,8 +1099,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       throw new Error("请先关闭实盘并确认 Gate 没有本系统持仓或待成交订单");
     }
     const openPositions = Object.values(this.runtime.positions).filter((position): position is PaperPosition => position?.status === "OPEN");
-    const arenaPositions = Object.values(this.runtime.strategyArena.portfolioOpen);
-    for (const position of [...openPositions, ...arenaPositions]) {
+    const currentArenaPositions = Object.values(this.runtime.strategyArena.portfolioOpen);
+    const previousArenaPositions = Object.values(this.runtime.previousStrategyArena.portfolioOpen);
+    for (const position of [...openPositions, ...currentArenaPositions, ...previousArenaPositions]) {
       const evidence = this.runtime.evidence[position.symbol];
       if (!evidence?.fresh || now - evidence.observedAt > STALE_AFTER_MS || evidence.midpoint <= 0) {
         throw new Error(`${position.symbol} 行情不新鲜，不能用旧价格重置模拟持仓`);
@@ -1008,7 +1109,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     try {
       this.runtime.strategyArena = resetStrategyArenaAccount({ state: this.runtime.strategyArena,
-        quotes: Object.fromEntries(arenaPositions.map((position) => {
+        quotes: Object.fromEntries(currentArenaPositions.map((position) => {
+          const evidence = this.runtime.evidence[position.symbol]!;
+          return [position.symbol, { midpoint: evidence.midpoint, bestBid: evidence.bestBid, bestAsk: evidence.bestAsk }];
+        })), now });
+      this.runtime.previousStrategyArena = resetPreviousStrategyArenaAccount({ state: this.runtime.previousStrategyArena,
+        quotes: Object.fromEntries(previousArenaPositions.map((position) => {
           const evidence = this.runtime.evidence[position.symbol]!;
           return [position.symbol, { midpoint: evidence.midpoint, bestBid: evidence.bestBid, bestAsk: evidence.bestAsk }];
         })), now });
@@ -1040,8 +1146,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     } catch (error) {
       this.runtime.d1MirrorError = `D1 reset mirror pending: ${safeError(error)}`;
     }
-    return { ok: true, equity: this.runtime.strategyArena.portfolioEquity,
-      strategyArena: arenaSummary(this.runtime.strategyArena), paperCycle: paperCycleSummary(this.runtime.paperCycle, this.runtime.equity) };
+    const strategyArena = canonicalPaperSummary({ current: this.runtime.strategyArena, previous: this.runtime.previousStrategyArena });
+    return { ok: true, equity: strategyArena.portfolioEquity,
+      strategyArena, paperCycle: paperCycleSummary(this.runtime.paperCycle, this.runtime.equity) };
   }
 
   private async clearPaperHistory() {
@@ -1264,7 +1371,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private async syncLive(now: number, initialEnable = false, forceEntryCleanup = false) {
-    const desiredPortfolio = this.runtime.strategyArena.portfolioOpen;
+    const desiredPortfolio = canonicalLivePortfolio({ current: this.runtime.strategyArena,
+      previous: this.runtime.previousStrategyArena });
     const activePositions = Object.values(this.runtime.live.positions).some((position) => position?.status === "OPEN");
     const activeEntries = Object.values(this.runtime.live.entries).some((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status));
     if (!this.runtime.live.requestedEnabled && !activePositions && !activeEntries && !initialEnable && !forceEntryCleanup) return;
@@ -1676,6 +1784,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
       ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status) ? [entry.symbol] : []),
       ...Object.values(this.runtime.strategyArena.portfolioOpen).map((position) => position.symbol),
+      ...Object.values(this.runtime.previousStrategyArena.portfolioOpen).map((position) => position.symbol),
     ]);
     const actionableMarkets = this.runtime.symbols.filter((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS
       && this.runtime.contractMeta[symbol] != null && this.symbolEntryReady(symbol)).length;
@@ -1694,7 +1803,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
       ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status) ? [entry.symbol] : []),
       ...Object.values(this.runtime.strategyArena.portfolioOpen).map((position) => position.symbol),
+      ...Object.values(this.runtime.previousStrategyArena.portfolioOpen).map((position) => position.symbol),
       ...Object.values(this.runtime.stableCandidates).filter((candidate) => approvedRouteScore(candidate) >= 0)
+        .map((candidate) => candidate.symbol),
+      ...Object.values(this.runtime.previousStableCandidates).filter((candidate) => previousApprovedRouteScore(candidate) >= 0)
         .map((candidate) => candidate.symbol),
     ]);
     const slot = Math.floor(now / LOOP_MS) % BACKGROUND_BOOK_INTERVALS;
@@ -2132,11 +2244,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       await this.ensureAlarm();
       const stale = !this.authorityReady || this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > AUTHORITY_STALE_AFTER_MS;
       const effectiveState = !this.authorityReady ? "RECOVERY_REQUIRED" : stale ? "RECONNECTING" : this.runtime.state;
-      const strategies = Object.values(this.runtime.strategyArena.strategies);
+      const strategies = [...Object.values(this.runtime.strategyArena.strategies),
+        ...Object.values(this.runtime.previousStrategyArena.strategies)];
+      const canonical = canonicalPaperSummary({ current: this.runtime.strategyArena, previous: this.runtime.previousStrategyArena });
       const regimes = marketRegimeSummary(this.runtime.marketRegimes);
       const marketContext = broadMarketContext(this.runtime.stableCandidates, Date.now());
-      const routedCandidates = Object.values(this.runtime.stableCandidates)
-        .filter((candidate) => candidate.allRegimeRoutes?.length);
+      const routedMarkets = new Set([
+        ...Object.values(this.runtime.stableCandidates).filter((candidate) => candidate.allRegimeRoutes?.length)
+          .map((candidate) => candidate.symbol),
+        ...Object.values(this.runtime.previousStableCandidates).filter((candidate) => candidate.allRegimeRoutes?.length)
+          .map((candidate) => candidate.symbol),
+      ]);
       return json({
         version: this.runtime.version,
         mode: this.runtime.mode,
@@ -2150,19 +2268,22 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         realtimeReadiness: this.realtimeReadiness(),
         liveMode: { requestedEnabled: this.runtime.live.requestedEnabled, operational: this.runtime.live.operational },
         strategyArena: {
-          version: this.runtime.strategyArena.version,
-          playbookCount: 5,
+          version: canonical.version,
+          playbookCount: canonical.playbookCount,
           catalogSize: strategies.length,
           shadowCount: strategies.filter((row) => row.lane === "SHADOW").length,
           activeCount: strategies.filter((row) => row.lane === "ACTIVE").length,
           reverseActiveCount: strategies.filter((row) => row.reverseEnabled).length,
           sleepingCount: strategies.filter((row) => row.lane === "SLEEPING").length,
-          portfolioEquity: this.runtime.strategyArena.portfolioEquity,
-          portfolioOpen: Object.keys(this.runtime.strategyArena.portfolioOpen).length,
-          observationShadow: this.runtime.strategyArena.recentObservations.length,
-          routeCheckCount: Object.keys(this.runtime.strategyArena.currentRouteChecks).length,
-          effectiveShadowOpen: Object.keys(this.runtime.strategyArena.open).length,
-          cutoverPending: this.runtime.strategyArena.cutoverPending,
+          portfolioEquity: canonical.portfolioEquity,
+          portfolioOpen: canonical.portfolioOpen.length,
+          observationShadow: this.runtime.strategyArena.recentObservations.length + this.runtime.previousStrategyArena.recentObservations.length,
+          routeCheckCount: Object.keys(this.runtime.strategyArena.currentRouteChecks).length
+            + Object.keys(this.runtime.previousStrategyArena.currentRouteChecks).length,
+          effectiveShadowOpen: Object.keys(this.runtime.strategyArena.open).length + Object.keys(this.runtime.previousStrategyArena.open).length,
+          cutoverPending: this.runtime.strategyArena.cutoverPending || this.runtime.previousStrategyArena.cutoverPending,
+          engines: canonical.engines.map((engine) => ({ id: engine.id, name: engine.name,
+            portfolioEquity: engine.portfolioEquity, portfolioOpen: engine.portfolioOpen.length })),
           rules: {
             singleTradeRiskMin: 0.03,
             singleTradeRiskMax: 0.03,
@@ -2193,6 +2314,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             dailyObjectiveRate: 0.10,
             dailyObjectiveIsQuota: false,
             reverseSameEventWinsRequired: POLARITY_STREAK,
+            dualIndependentEngines: true,
+            engineInitialEquity: 1_000,
+            canonicalInitialEquity: 1_000,
+            engineCanonicalWeight: 0.5,
+            sameSymbolCrossEngineAllowed: true,
+            liveSource: "CANONICAL_PAPER_NET",
           },
         },
         radar: {
@@ -2206,7 +2333,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         strategyData: {
           liquidMarkets: this.runtime.liquidUniverse.length,
           stableMarkets: Object.keys(this.runtime.stableCandidates).length,
-          routedMarkets: routedCandidates.length,
+          routedMarkets: routedMarkets.size,
           marketBreadth: marketContext.breadth,
           marketMedianMove: marketContext.medianMove,
           marketContextMarkets: marketContext.markets,
@@ -2234,19 +2361,27 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     if (path === "/status" || path === "/owner-runtime") {
       await this.ensureAlarm();
-      const { outbox, live, paperCycle, bankruptcyOutbox, strategyArena, marketRegimes, stableCandidates, stableStructures,
+      const { outbox, live, paperCycle, bankruptcyOutbox, strategyArena, previousStrategyArena, marketRegimes,
+        stableCandidates, previousStableCandidates, stableStructures, previousStableStructures,
         liquidUniverse, strategyCandleFailures, ...publicRuntime } = this.runtime;
       const stale = !this.authorityReady || this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > AUTHORITY_STALE_AFTER_MS;
       const effectiveState = !this.authorityReady ? "RECOVERY_REQUIRED" : stale ? "RECONNECTING" : this.runtime.state;
       const marketContext = broadMarketContext(stableCandidates, Date.now());
+      const routedMarketCount = new Set([
+        ...Object.values(stableCandidates).filter((candidate) => candidate.allRegimeRoutes?.length).map((candidate) => candidate.symbol),
+        ...Object.values(previousStableCandidates).filter((candidate) => candidate.allRegimeRoutes?.length).map((candidate) => candidate.symbol),
+      ]).size;
       return json({ ...publicRuntime, ...this.authorityView, paperCycle: paperCycleSummary(paperCycle, this.authorityView.equity),
-        strategyArena: arenaSummary(strategyArena), marketRegimes: marketRegimeSummary(marketRegimes),
+        strategyArena: canonicalPaperSummary({ current: strategyArena, previous: previousStrategyArena }),
+        marketRegimes: marketRegimeSummary(marketRegimes),
         strategyData: { liquidMarkets: liquidUniverse.length, stableMarkets: Object.keys(stableCandidates).length,
-          routedMarkets: Object.values(stableCandidates).filter((candidate) => candidate.allRegimeRoutes?.length).length,
+          routedMarkets: routedMarketCount,
           marketBreadth: marketContext.breadth, marketMedianMove: marketContext.medianMove,
           marketContextMarkets: marketContext.markets,
-          polarityReady: Object.values(strategyArena.strategies).some((row) => row.enabled || row.reverseEnabled),
-          lastCompletedCandleAt: Math.max(0, ...Object.values(stableStructures).map((row) => row.observedAt)),
+          polarityReady: [...Object.values(strategyArena.strategies), ...Object.values(previousStrategyArena.strategies)]
+            .some((row) => row.enabled || row.reverseEnabled),
+          lastCompletedCandleAt: Math.max(0, ...Object.values(stableStructures).map((row) => row.observedAt),
+            ...Object.values(previousStableStructures).map((row) => row.observedAt)),
           lastRuntimeLogAt: publicRuntime.lastStrategyLogAt,
           degradedMarkets: Object.values(strategyCandleFailures).filter((failure) => failure.count > 0).length,
           blockingMarkets: Object.entries(strategyCandleFailures).filter(([symbol, failure]) => failure.count >= 2

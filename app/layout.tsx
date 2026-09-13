@@ -4,9 +4,9 @@ import "./globals.css";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "V12全境·复利引擎 · PAPER",
-  description: "全市场环境识别、成本后路线验证与后台真值阻塞的Gate永续模拟系统",
-  applicationName: "V12全境·复利引擎",
+  title: "双引擎独立账户 · PAPER",
+  description: "当前版与上一版各自使用独立1000U虚拟账户，汇总至唯一PAPER并由实盘净额复制",
+  applicationName: "双引擎独立账户",
   manifest: "/manifest.webmanifest",
 };
 

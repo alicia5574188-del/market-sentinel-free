@@ -494,6 +494,12 @@ test("manual reset archives the old futures account while preserving all-regime 
   stream.runtime.strategyArena.portfolioResolved = 3;
   stream.runtime.strategyArena.strategies[strategyId].shadowResolved = 7;
   stream.runtime.strategyArena.portfolioOpen = { BTC_USDT: portfolioTrade("BTC_USDT", now - 10_000) };
+  stream.runtime.previousStrategyArena.portfolioEquity = 1_020;
+  stream.runtime.previousStrategyArena.portfolioResolved = 2;
+  stream.runtime.previousStrategyArena.portfolioOpen = { BTC_USDT: {
+    ...portfolioTrade("BTC_USDT", now - 9_000), id: "PREVIOUS:BTC", strategyId: "slow_carry",
+    side: "SHORT", stopPrice: 103, activeStopPrice: 103, targetPrice: 97,
+  } } as never;
   stream.runtime.evidence = { BTC_USDT: { midpoint: 102, bestBid: 101.9, bestAsk: 102.1, observedAt: now,
     warmup: 30, fresh: true, ancillaryFresh: true, topLong: null, topShort: null, absorption: 0, range15m: null } };
 
@@ -506,6 +512,11 @@ test("manual reset archives the old futures account while preserving all-regime 
   assert.equal(stream.runtime.strategyArena.strategies[strategyId].shadowResolved, 7);
   assert.equal(stream.runtime.strategyArena.archivedPortfolioCycles.length, 1);
   assert.equal(stream.runtime.strategyArena.archivedPortfolioCycles[0].resolved, 4);
+  assert.equal(stream.runtime.previousStrategyArena.portfolioEquity, 1_000);
+  assert.equal(stream.runtime.previousStrategyArena.portfolioCycle, 2);
+  assert.deepEqual(stream.runtime.previousStrategyArena.portfolioOpen, {});
+  assert.equal(stream.runtime.previousStrategyArena.archivedPortfolioCycles[0].resolved, 3);
+  assert.equal(result.strategyArena.portfolioEquity, 1_000);
   assert.equal(stream.runtime.live.requestedEnabled, false);
   assert.equal(stream.runtime.live.operational, false);
 });
@@ -570,6 +581,25 @@ test("restart preserves committed OPEN authority, cancels PREPARED work and warm
   assert.equal(stream.runtime.outbox.length, 1);
   assert.equal(stream.sessionWarmup.BTC_USDT, 0);
   assert.equal(stream.authorityView.positions.BTC_USDT.status, "OPEN");
+});
+
+test("a pre-dual-engine checkpoint preserves the online account and creates a separate fresh previous-version account", async () => {
+  const seed = await makeStream();
+  const saved = structuredClone(seed.stream.runtime) as Record<string, unknown>;
+  const current = (saved.strategyArena as typeof seed.stream.runtime.strategyArena);
+  current.portfolioEquity = 1_037.5;
+  current.portfolioResolved = 4;
+  current.portfolioOpen = { BTC_USDT: portfolioTrade("BTC_USDT", Date.now() - 30_000) };
+  delete saved.previousStrategyArena;
+  delete saved.previousStableCandidates;
+
+  const { stream } = await makeStream(saved);
+  assert.equal(stream.runtime.strategyArena.portfolioEquity, 1_037.5);
+  assert.equal(stream.runtime.strategyArena.portfolioResolved, 4);
+  assert.ok(stream.runtime.strategyArena.portfolioOpen.BTC_USDT);
+  assert.equal(stream.runtime.previousStrategyArena.portfolioEquity, 1_000);
+  assert.equal(stream.runtime.previousStrategyArena.portfolioResolved, 0);
+  assert.deepEqual(stream.runtime.previousStrategyArena.portfolioOpen, {});
 });
 
 test("all-regime cutover archives the old PAPER cycle and starts a fresh account", async () => {
@@ -998,9 +1028,14 @@ test("health status is compact while retaining every release gate", async () => 
 
   assert.equal(status.version, "all-regime-compound-v2");
   assert.equal(status.strategyArena.version, 12);
-  assert.equal(status.strategyArena.playbookCount, 5);
-  assert.equal(status.strategyArena.catalogSize, 5);
+  assert.equal(status.strategyArena.playbookCount, 11);
+  assert.equal(status.strategyArena.catalogSize, 11);
   assert.equal(status.strategyArena.portfolioEquity, 1_000);
+  assert.equal(status.strategyArena.engines.length, 2);
+  assert.equal(status.strategyArena.rules.dualIndependentEngines, true);
+  assert.equal(status.strategyArena.rules.sameSymbolCrossEngineAllowed, true);
+  assert.equal(status.strategyArena.rules.engineCanonicalWeight, 0.5);
+  assert.equal(status.strategyArena.rules.liveSource, "CANONICAL_PAPER_NET");
   assert.equal(status.strategyArena.rules.minimumPortfolioRiskUsdt, 0);
   assert.equal(status.strategyArena.rules.targetPortfolioRiskUsdt, 30);
   assert.equal(status.strategyArena.rules.empiricalCostFloorRate, 0.0014);
@@ -1089,7 +1124,8 @@ test("LIVE backfills an existing open PAPER portfolio position when the owner en
   assert.deepEqual(mutationOrder, ["LEVERAGE", "ENTRY", "STOP"],
     "the native stop must be submitted immediately after the confirmed entry in the same sync pass");
   assert.equal(stream.runtime.live.entries.BTC_USDT.kind, "MARKET");
-  assert.equal(stream.runtime.live.entries.BTC_USDT.planId, `PORTFOLIO:BTC_USDT:${oldOpenedAt}`);
+  assert.equal(stream.runtime.live.entries.BTC_USDT.planId, `PORTFOLIO:BTC_USDT:${oldOpenedAt}`,
+    "a lone pre-existing V4 leg keeps its lifecycle identity through migration");
 });
 
 test("an open PAPER holding retries its first LIVE copy after fresh data returns beyond ten seconds", async () => {
