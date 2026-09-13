@@ -489,7 +489,7 @@ test("manual PAPER reset refuses to price an open position from stale evidence",
 test("manual reset archives the old futures account while preserving all-regime research", async () => {
   const { stream } = await makeStream();
   const now = Date.now();
-  const strategyId = "momentum_carry";
+  const strategyId = "bull_pullback";
   stream.runtime.strategyArena.portfolioEquity = 980;
   stream.runtime.strategyArena.portfolioResolved = 3;
   stream.runtime.strategyArena.strategies[strategyId].shadowResolved = 7;
@@ -998,20 +998,20 @@ test("health status is compact while retaining every release gate", async () => 
 
   assert.equal(status.version, "all-regime-compound-v2");
   assert.equal(status.strategyArena.version, 12);
-  assert.equal(status.strategyArena.playbookCount, 6);
-  assert.equal(status.strategyArena.catalogSize, 6);
+  assert.equal(status.strategyArena.playbookCount, 5);
+  assert.equal(status.strategyArena.catalogSize, 5);
   assert.equal(status.strategyArena.portfolioEquity, 1_000);
   assert.equal(status.strategyArena.rules.minimumPortfolioRiskUsdt, 0);
-  assert.equal(status.strategyArena.rules.targetPortfolioRiskUsdt, 10);
+  assert.equal(status.strategyArena.rules.targetPortfolioRiskUsdt, 30);
   assert.equal(status.strategyArena.rules.empiricalCostFloorRate, 0.0014);
   assert.equal(status.strategyArena.rules.authorityWindowPriority, "STATE_CONDITIONED_EXPECTANCY");
-  assert.equal(status.strategyArena.rules.allRegimeVersion, 4);
+  assert.equal(status.strategyArena.rules.allRegimeVersion, 5);
   assert.equal(status.strategyArena.rules.extremeSequenceAuthority, false);
   assert.equal(status.strategyArena.rules.generatedRouteAuthority, false);
   assert.equal(status.strategyArena.rules.legacyStrategyAuthority, false);
   assert.equal(status.strategyArena.rules.paperCycleResetOnCutover, false);
   assert.equal(status.strategyArena.rules.streakLength, 3);
-  assert.equal(status.strategyArena.rules.profitArmIsExit, false);
+  assert.equal(status.strategyArena.rules.profitArmIsExit, true);
   assert.equal(status.strategyArena.rules.dailyObjectiveIsQuota, false);
   assert.equal(status.limits.scanUniverse, 30);
   assert.equal(status.limits.realtimeCapacity, 10);

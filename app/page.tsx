@@ -178,7 +178,7 @@ const environmentLabel = (kind: "TREND" | "RANGE" | "COMPRESSION" | "EXHAUSTION"
   TREND: "方向延续", RANGE: "平衡震荡", COMPRESSION: "波动压缩", EXHAUSTION: "方向衰竭",
 }))[kind ?? ""] ?? "等待完整环境";
 const environmentOwner: Record<AllRegimeEnvironment, string> = {
-  TREND: "潮接 / 潮补", RANGE: "冲衡 / 脉折", COMPRESSION: "静移 / 潮补", EXHAUSTION: "冲衡 / 脉折",
+  TREND: "渠破 / 势回 / 牛接", RANGE: "界返", COMPRESSION: "熊缩", EXHAUSTION: "等待验证路线",
 };
 const runtimeDurationText = (milliseconds: number | null | undefined) => {
   if (milliseconds == null || milliseconds < 0 || !Number.isFinite(milliseconds)) return "—";
@@ -428,7 +428,7 @@ export default function Home() {
     {activeTab === "brain" && !hasRuntimeSnapshot && <section className="empty snapshot-wait"><b>{error ? "正在重新连接交易后台" : "正在读取交易后台"}</b><p>收到真实运行快照后再显示账户、持仓、路线和市场数量；连接前不会用 1000 U、0 笔或 30 币占位冒充当前状态。</p></section>}
 
     {activeTab === "brain" && hasRuntimeSnapshot && <>
-      <section className="brain-hero v6-console"><div className="hero-copy"><div className="hero-meta"><span>唯一模拟合约账户</span><span>第{num(arena?.portfolioCycle, 0)}轮</span>{liveEnabled && <span style={{ borderColor: "#3c876f", color: "var(--green)" }}>LIVE ON</span>}</div><p className="eyebrow">V12 · VERIFIED STATE AUTHORITY</p><h1>{headline}</h1><p className="hero-detail">四种执行机制只在各自历史获利阶段工作：潮补处理压缩与有序下行，静移处理压缩和平衡轮动，潮接与冲衡互补处理扩张。转换噪声期没有稳定成本后优势，系统主动等待；势承与脉折因时间集中或样本漂移保留影子研究。盈利启动后只抬保护，不封顶。</p></div><div className="decision-badge"><small>账户权益</small><strong>{num(portfolioAccountEquity, 2)}</strong><span>USDT</span><em className={portfolioPnl == null ? "" : portfolioPnl >= 0 ? "positive" : "negative"}>{signed(portfolioPnl)} U</em></div></section>
+      <section className="brain-hero v6-console"><div className="hero-copy"><div className="hero-meta"><span>唯一模拟合约账户</span><span>第{num(arena?.portfolioCycle, 0)}轮</span>{liveEnabled && <span style={{ borderColor: "#3c876f", color: "var(--green)" }}>LIVE ON</span>}</div><p className="eyebrow">V12 · VERIFIED STATE AUTHORITY</p><h1>{headline}</h1><p className="hero-detail">五种执行机制按历史盈利环境接管：界返处理强势日线中的区间回收，渠破处理中性偏弱破位，势回处理温和普跌回踩，熊缩与牛接只在主流币压缩释放窗口工作。每个策略与每个方向同时最多一仓，固定目标到价结算。</p></div><div className="decision-badge"><small>账户权益</small><strong>{num(portfolioAccountEquity, 2)}</strong><span>USDT</span><em className={portfolioPnl == null ? "" : portfolioPnl >= 0 ? "positive" : "negative"}>{signed(portfolioPnl)} U</em></div></section>
 
       <section className="summary four">
         <article><small>今日净收益</small><strong className={todayPnl == null ? "" : todayPnl >= 0 ? "positive" : "negative"}>{signed(todayPnl)} U</strong><p>{signed(todayPnlRate)}% · 已含持仓成本</p></article>
@@ -504,7 +504,7 @@ export default function Home() {
       <button className="setting-row" type="button" onClick={() => auth.authenticated ? void fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(() => { setAuth({ ...auth, authenticated: false }); setRuntime(runtime ? { ...runtime, live: undefined } : runtime); setTab("settings"); }) : setShowLogin(true)}><div><b>所有者账户</b><p>{auth.authenticated ? "安全登录有效30天；每次打开页面自动续期。实盘配置只在所有者登录后的实盘页显示。" : "登录后才会显示实盘入口；公开页面只显示模拟系统。"}</p></div><span className={`setting-value ${auth.authenticated ? "online" : "locked"}`}>{auth.authenticated ? "owner · 退出 ›" : "登录 ›"}</span></button>
       {!hasRuntimeSnapshot && <div className="empty"><b>正在读取系统设置</b><p>真实运行快照返回后再显示策略、风险和数据覆盖。</p></div>}
       {hasRuntimeSnapshot && <>
-      <Setting title="策略系统" detail="压缩、扩张、有序趋势和平衡轮动分别由通过前后段成本后验证的机制接管；转换噪声期明确等待。六种机制中四种具备PAPER权限，势承与脉折只做影子研究。" value="4执行 · 2影子" tone="online"/>
+      <Setting title="策略系统" detail="界返、渠破、势回、熊缩和牛接均只在跨市场前后段成本后为正的环境执行；未命中冻结环境时明确等待。" value="5执行" tone="online"/>
       <Setting title="市场覆盖" detail={`持续扫描 ${runtime?.strategyData?.liquidMarkets ?? runtime?.limits.scanUniverse ?? 30} 个高流动性永续合约，${runtime?.strategyData?.stableMarkets ?? 0} 个已具备完整5分钟路径；“形成结构”与“后台准入”分开统计。`} value={`${runtime?.strategyData?.stableMarkets ?? 0}/30`} tone="online"/>
       <Setting title="系统状态" detail="只显示交易后台真实状态；普通手机网络波动会静默保留最近结果并自动重连，个别币缺数据只隔离该币。" value={healthLabel} tone={backendOperational ? "online" : "locked"}/>
       <button className="setting-row" type="button" disabled={paperResetBusy || liveEnabled} onClick={() => void resetPaperAccount()}><div><b>重置1000 U模拟资金</b><p>按最新可成交价结算当前模拟持仓，归档本轮账户后从1000 U重新开始；影子策略研究样本不会删除，实盘开启时禁止操作。</p></div><span className="setting-value locked">{paperResetBusy ? "处理中…" : "重置 ›"}</span></button>
@@ -721,7 +721,7 @@ function ArenaOpenCard({ trade, mark, now }: { trade: ArenaTrade; mark: number |
   const metrics: OpenTradeMetric[] = [
     { label: "进场", value: num(trade.entryPrice, 5) }, { label: "当前价", value: num(current, 5) },
     { label: trade.profitArmedAt ? "移动保护" : "结构止损", value: num(trade.activeStopPrice ?? trade.stopPrice, 5) },
-    { label: "盈利启动位", value: `${num(trade.targetPrice, 5)} · 不封顶` },
+    { label: "固定止盈位", value: `${num(trade.targetPrice, 5)} · 到价结算` },
     { label: "合约名义价值", value: `${num(trade.notional, 2)} U` }, { label: "模拟杠杆", value: `${trade.leverage}×` },
     { label: "占用保证金", value: `${num(trade.margin, 2)} U` },
     { label: "保证金净收益率", value: current ? `${signed(marginReturn * 100)}%` : "—", tone: marginReturn >= 0 ? "positive" : "negative" },
@@ -744,7 +744,7 @@ function LiveOpenCard({ position, mark, markAt, fresh, now }: {
   const protection = position.stopPrice ?? position.currentStop;
   const metrics: OpenTradeMetric[] = [
     { label: "进场", value: num(position.entryPrice, 5) }, { label: "当前价", value: num(current, 5) },
-    { label: "交易所保护位", value: num(protection, 5) }, { label: "盈利启动位", value: `${num(position.currentTarget, 5)} · 不封顶` },
+    { label: "交易所保护位", value: num(protection, 5) }, { label: "固定止盈位", value: `${num(position.currentTarget, 5)} · 到价结算` },
     { label: "合约名义价值", value: `${num(position.notional, 2)} U` }, { label: "真实杠杆", value: `${position.leverage}×` },
     { label: "实际保证金", value: `${num(position.margin, 2)} U` },
     { label: "保证金收益率", value: marginReturn == null ? "—" : `${signed(marginReturn * 100)}%`, tone: marginReturn == null ? "" : marginReturn >= 0 ? "positive" : "negative" },

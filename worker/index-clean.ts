@@ -49,12 +49,23 @@ const AUTHORITY_SCHEMA_VERSION = 1;
 const DEFAULT_SYMBOLS = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];
 
 function broadMarketContext(candidates: Record<string, MarketRegimeCandidate>, now: number) {
-  const moves = Object.values(candidates).filter((row) => now - row.observedAt <= 11 * 60_000)
+  const fresh = Object.values(candidates).filter((row) => now - row.observedAt <= 11 * 60_000);
+  const moves = fresh
     .map((row) => row.broadMoveRate ?? row.trendRate).filter(Number.isFinite).sort((left, right) => left - right);
+  const moves4h = fresh.map((row) => row.move4hRate).filter((value): value is number => Number.isFinite(value)).sort((a, b) => a - b);
+  const moves24h = fresh.map((row) => row.move24hRate).filter((value): value is number => Number.isFinite(value)).sort((a, b) => a - b);
+  const middle = (values: number[]) => values.length % 2 ? values[Math.floor(values.length / 2)]
+    : (values[values.length / 2 - 1] + values[values.length / 2]) / 2;
   return {
     breadth: moves.length ? moves.filter((value) => value > 0).length / moves.length : 0.5,
     medianMove: moves.length ? moves[Math.floor(moves.length / 2)] : 0,
     markets: moves.length,
+    breadth4h: moves4h.length ? moves4h.filter((value) => value > 0).length / moves4h.length : 0.5,
+    medianMove4h: moves4h.length ? middle(moves4h) : 0,
+    breadth24h: moves24h.length ? moves24h.filter((value) => value > 0).length / moves24h.length : 0.5,
+    medianMove24h: moves24h.length ? middle(moves24h) : 0,
+    btcMove24h: fresh.find((row) => row.symbol === "BTC_USDT")?.move24hRate ?? 0,
+    regimeMarkets: Math.min(moves4h.length, moves24h.length),
   };
 }
 
@@ -278,7 +289,7 @@ export function mergeStrategyCandlePath(
   incoming: Awaited<ReturnType<typeof fetchStructureCandles>>,
 ) {
   const rows = [...new Map([...prior, ...incoming].map((row) => [row.time, row])).values()]
-    .sort((left, right) => left.time - right.time).slice(-120);
+    .sort((left, right) => left.time - right.time).slice(-360);
   let start = rows.length ? rows.length - 1 : 0;
   while (start > 0 && rows[start].time - rows[start - 1].time === 300) start -= 1;
   return rows.slice(start);
@@ -555,7 +566,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (!contract) return 0;
     try {
       const prior = this.strategyCandles[symbol] ?? [];
-      const incoming = await fetchStructureCandles(symbol, "5m", prior.length >= 100 ? 4 : 120);
+      const incoming = await fetchStructureCandles(symbol, "5m", prior.length >= 324 ? 4 : 360);
       const candles = mergeStrategyCandlePath(prior, incoming);
       const latest = candles.at(-1);
       const completedAt = latest ? (latest.time + 300) * 1_000 : 0;
@@ -664,6 +675,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate, completedMinuteAt: memory.timeframeUpdatedAt.m1,
         leverageMax: this.runtime.contractMeta[symbol]?.leverageMax, now, dataFresh: true,
         globalBreadth: marketContext.breadth, globalMedianMove: marketContext.medianMove, globalMarkets: marketContext.markets,
+        marketBreadth4h: marketContext.breadth4h, marketMedianMove4h: marketContext.medianMove4h,
+        marketBreadth24h: marketContext.breadth24h, marketMedianMove24h: marketContext.medianMove24h,
+        btcMove24h: marketContext.btcMove24h, regimeMarkets: marketContext.regimeMarkets,
         contractReady: this.runtime.contractMeta[symbol] != null,
         globalOpportunityRank: Math.max(1, rankedRoutes.findIndex((row) => row.symbol === candidate.symbol) + 1),
         globalOpportunityCount: rankedRoutes.length,
@@ -2137,7 +2151,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         liveMode: { requestedEnabled: this.runtime.live.requestedEnabled, operational: this.runtime.live.operational },
         strategyArena: {
           version: this.runtime.strategyArena.version,
-          playbookCount: 6,
+          playbookCount: 5,
           catalogSize: strategies.length,
           shadowCount: strategies.filter((row) => row.lane === "SHADOW").length,
           activeCount: strategies.filter((row) => row.lane === "ACTIVE").length,
@@ -2150,8 +2164,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           effectiveShadowOpen: Object.keys(this.runtime.strategyArena.open).length,
           cutoverPending: this.runtime.strategyArena.cutoverPending,
           rules: {
-            singleTradeRiskMin: 0.01,
-            singleTradeRiskMax: 0.02,
+            singleTradeRiskMin: 0.03,
+            singleTradeRiskMax: 0.03,
             minimumPortfolioRiskUsdt: 0,
             targetPortfolioRiskUsdt: PORTFOLIO_TRADE_RISK_TARGET_USDT,
             minimumNotionalMultiple: MIN_PORTFOLIO_NOTIONAL_TO_EQUITY,
@@ -2175,7 +2189,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             streakMaxSpanMs: POLARITY_MAX_SPAN_MS,
             sameBranchSymbolCooldownMs: SAME_STRATEGY_SYMBOL_COOLDOWN_MS,
             maxPortfolioPositions: MAX_PORTFOLIO_POSITIONS,
-            profitArmIsExit: false,
+            profitArmIsExit: true,
             dailyObjectiveRate: 0.10,
             dailyObjectiveIsQuota: false,
             reverseSameEventWinsRequired: POLARITY_STREAK,
