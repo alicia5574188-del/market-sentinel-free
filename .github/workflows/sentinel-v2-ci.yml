@@ -1042,8 +1042,12 @@ jobs:
               (.runtime.liveMode.requestedEnabled | type) == "boolean" and
               (.runtime.liveMode.operational | type) == "boolean" and
               (.runtime.liveMode.operational == false or .runtime.liveMode.requestedEnabled == true) and
-              .runtime.strategyArena.version == 12 and .runtime.strategyArena.playbookCount == 5 and
-              .runtime.strategyArena.catalogSize == 5 and
+              .runtime.strategyArena.version == 12 and .runtime.strategyArena.playbookCount == 11 and
+              .runtime.strategyArena.catalogSize == 11 and
+              (.runtime.strategyArena.engines | length) == 2 and
+              ([.runtime.strategyArena.engines[].id] | sort) == ["CURRENT_V5", "PREVIOUS_V4"] and
+              (all(.runtime.strategyArena.engines[];
+                (.portfolioEquity | type) == "number" and .portfolioEquity > 0)) and
               (.runtime.strategyArena.routeCheckCount | type) == "number" and
               (.runtime.feedQuality.attempts | type) == "number" and
               (.runtime.strategyArena.portfolioEquity | type) == "number" and
@@ -1068,6 +1072,12 @@ jobs:
               .runtime.strategyArena.rules.dailyObjectiveIsQuota == false and
               .runtime.strategyArena.rules.portfolioRiskCap == 0.10 and
               .runtime.strategyArena.rules.correlatedRiskCap == 0.065 and
+              .runtime.strategyArena.rules.dualIndependentEngines == true and
+              .runtime.strategyArena.rules.engineInitialEquity == 1000 and
+              .runtime.strategyArena.rules.canonicalInitialEquity == 1000 and
+              .runtime.strategyArena.rules.engineCanonicalWeight == 0.5 and
+              .runtime.strategyArena.rules.sameSymbolCrossEngineAllowed == true and
+              .runtime.strategyArena.rules.liveSource == "CANONICAL_PAPER_NET" and
               .runtime.limits.plannedTotalDoRequestsPerDay < 55000 and
               .runtime.limits.plannedDoWritesPerDay < 55000 and
               .runtime.limits.plannedMaxD1BilledWritesPerDay < 5000
@@ -1097,7 +1107,7 @@ jobs:
           page_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/main-page.html" -w '%{http_code}' \
             "$WORKER_BASE_URL/" || true)"
           [[ "$page_code" == "200" ]]
-          grep -Fq '全境·复利引擎' "$RUNNER_TEMP/main-page.html"
+          grep -Fq '双引擎独立账户' "$RUNNER_TEMP/main-page.html"
           curl -fsS --max-time 15 "$WORKER_BASE_URL/api/history" \
             > "$RUNNER_TEMP/main-history.json"
           jq -e '.items | type == "array"' "$RUNNER_TEMP/main-history.json" >/dev/null
@@ -1168,8 +1178,12 @@ jobs:
             (.runtime.liveMode.requestedEnabled | type) == "boolean" and
             (.runtime.liveMode.operational | type) == "boolean" and
             (.runtime.liveMode.operational == false or .runtime.liveMode.requestedEnabled == true) and
-            .runtime.strategyArena.version == 12 and .runtime.strategyArena.playbookCount == 5 and
-            .runtime.strategyArena.catalogSize == 5 and
+            .runtime.strategyArena.version == 12 and .runtime.strategyArena.playbookCount == 11 and
+            .runtime.strategyArena.catalogSize == 11 and
+            (.runtime.strategyArena.engines | length) == 2 and
+            ([.runtime.strategyArena.engines[].id] | sort) == ["CURRENT_V5", "PREVIOUS_V4"] and
+            (all(.runtime.strategyArena.engines[];
+              (.portfolioEquity | type) == "number" and .portfolioEquity > 0)) and
             (.runtime.strategyArena.routeCheckCount | type) == "number" and
             (.runtime.feedQuality.attempts | type) == "number" and
             .runtime.strategyArena.rules.minimumPortfolioRiskUsdt == 0 and
@@ -1187,6 +1201,12 @@ jobs:
             .runtime.strategyArena.rules.maxPortfolioPositions == null and
             .runtime.strategyArena.rules.profitArmIsExit == true and
             .runtime.strategyArena.rules.dailyObjectiveIsQuota == false and
+            .runtime.strategyArena.rules.dualIndependentEngines == true and
+            .runtime.strategyArena.rules.engineInitialEquity == 1000 and
+            .runtime.strategyArena.rules.canonicalInitialEquity == 1000 and
+            .runtime.strategyArena.rules.engineCanonicalWeight == 0.5 and
+            .runtime.strategyArena.rules.sameSymbolCrossEngineAllowed == true and
+            .runtime.strategyArena.rules.liveSource == "CANONICAL_PAPER_NET" and
             .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 10 and
             .runtime.limits.plannedTotalDoRequestsPerDay < 55000 and
             .runtime.limits.plannedDoWritesPerDay < 55000 and
@@ -1199,7 +1219,7 @@ jobs:
           page_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/monitor-page.html" -w '%{http_code}' \
             "$WORKER_BASE_URL/" || true)"
           [[ "$page_code" == "200" ]]
-          grep -Fq '全境·复利引擎' "$RUNNER_TEMP/monitor-page.html"
+          grep -Fq '双引擎独立账户' "$RUNNER_TEMP/monitor-page.html"
           curl -fsS --max-time 15 "$WORKER_BASE_URL/api/history" \
             > "$RUNNER_TEMP/monitor-history.json"
           jq -e '.items | type == "array"' "$RUNNER_TEMP/monitor-history.json" >/dev/null
