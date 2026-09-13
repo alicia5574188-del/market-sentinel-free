@@ -1,6 +1,6 @@
 # Dual Independent All-Regime Engines · 双引擎独立账户
 
-Gate USDT perpetual PAPER authority combining the current V5 engine and its immediately previous V4 engine. Each engine runs a fully independent hypothetical 1,000 U ledger. Their trades map at fixed 50% weights into one canonical 1,000 U PAPER account; LIVE copies only that canonical account. LIVE remains owner-controlled, default OFF and fail-closed.
+Gate USDT perpetual PAPER authority combining the current V5 engine and its immediately previous V4 engine. Each engine runs a fully independent hypothetical 1,000 U ledger. One canonical PAPER execution view copies 100% of every order produced by both engines without applying its own capital, sizing or risk gate; LIVE reads only that canonical net exposure. LIVE remains owner-controlled, default OFF and fail-closed.
 
 ## Decision authority
 
@@ -31,11 +31,11 @@ These are historical simulations, not a promise of daily profit. PAPER is the fo
 
 ## Account and execution
 
-- Two hypothetical accounts compound from 1,000 U independently. The canonical 1,000 U PAPER account receives 50% of each engine trade and never feeds an admission result back into either engine. Because each virtual ledger independently respects 10% total risk, 6.5% same-direction risk and 30% margin, the fixed-weight canonical sum respects the same limits.
+- Two hypothetical accounts compound from 1,000 U independently. The canonical PAPER execution view receives 100% of each engine order. It has no independent capital limit, position-sizing calculation, margin budget or portfolio-risk veto and never feeds an execution result back into either engine.
 - The canonical PAPER ledger preserves both same-symbol logical legs. Gate single-position LIVE execution receives their signed net exposure per contract. When the contributing logical-leg set changes, LIVE closes the prior managed net and reconciles the new net; it never sends separate strategy decisions directly to Gate.
 - In each engine, position notional is set by its own frozen structural-risk rules. Current V5 targets 3% of its own equity per accepted trade; previous V4 retains its 1%–2% sizing. Both retain the 4× account-wide ceiling, and an exceptionally wide stop is rejected inside that engine instead of becoming a meaningless tiny position.
 - Full modeled friction, fresh bid/ask, executable depth, Gate integer contracts and structural stops are mandatory. Immediately after Gate confirms an entry submission, the same execution pass submits the existing native close-only/reduce-only price-order stop; reconciliation then owns and updates that order. LIVE protective stops use Gate's current contract tick and round outward only, so price-grid normalization cannot close ahead of PAPER.
-- Aggregate structural risk remains at most 10%; same-direction structural risk remains at most 6.5%.
+- Each hypothetical engine independently retains its 10% aggregate and 6.5% same-direction risk ceilings. The canonical PAPER view applies no second combined-account cap; actual Gate LIVE execution retains its existing real-account safety checks.
 - Stale or incomplete data cannot open or close on an old price.
 - Same symbol has at most one active trade inside each engine, but cross-engine same-symbol and opposite-direction positions are explicitly allowed.
 

@@ -1034,7 +1034,8 @@ test("health status is compact while retaining every release gate", async () => 
   assert.equal(status.strategyArena.engines.length, 2);
   assert.equal(status.strategyArena.rules.dualIndependentEngines, true);
   assert.equal(status.strategyArena.rules.sameSymbolCrossEngineAllowed, true);
-  assert.equal(status.strategyArena.rules.engineCanonicalWeight, 0.5);
+  assert.equal(status.strategyArena.rules.engineOrderCopyRate, 1);
+  assert.equal(status.strategyArena.rules.canonicalCapitalAgnostic, true);
   assert.equal(status.strategyArena.rules.liveSource, "CANONICAL_PAPER_NET");
   assert.equal(status.strategyArena.rules.minimumPortfolioRiskUsdt, 0);
   assert.equal(status.strategyArena.rules.targetPortfolioRiskUsdt, 30);

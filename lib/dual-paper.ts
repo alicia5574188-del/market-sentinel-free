@@ -3,10 +3,10 @@ import { arenaSummary as currentArenaSummary, type ArenaTrade, type StrategyAren
 import { arenaSummary as previousArenaSummary, type ArenaTrade as PreviousArenaTrade,
   type StrategyArenaState as PreviousStrategyArenaState } from "./previous-strategy-arena.ts";
 
-export const DUAL_PAPER_VERSION = 1;
+export const DUAL_PAPER_VERSION = 2;
 export const ENGINE_INITIAL_EQUITY = 1_000;
-export const CANONICAL_PAPER_INITIAL_EQUITY = 1_000;
-export const ENGINE_CANONICAL_WEIGHT = 0.5;
+export const CANONICAL_PAPER_REFERENCE_EQUITY = 1_000;
+export const ENGINE_ORDER_COPY_RATE = 1;
 
 export type StrategyEngineId = "CURRENT_V5" | "PREVIOUS_V4";
 export type EngineTaggedTrade = ArenaTrade & {
@@ -25,31 +25,31 @@ const ENGINE_META: Record<StrategyEngineId, { name: string; strategyVersion: str
   PREVIOUS_V4: { name: "上一版 V4", strategyVersion: "V4" },
 };
 
-function taggedTrade(engineId: StrategyEngineId, value: ArenaTrade | PreviousArenaTrade, accountScale = 1): EngineTaggedTrade {
+function taggedTrade(engineId: StrategyEngineId, value: ArenaTrade | PreviousArenaTrade, copyRate = 1): EngineTaggedTrade {
   const trade = value as ArenaTrade;
   return { ...trade, id: `${engineId}:${trade.id}`, eventId: `${engineId}:${trade.eventId}`,
-    notional: trade.notional * accountScale, plannedRisk: trade.plannedRisk * accountScale,
-    contracts: trade.contracts * accountScale, margin: trade.margin * accountScale,
-    netPnl: trade.netPnl == null ? null : trade.netPnl * accountScale,
-    accountEquityAtOpen: accountScale === 1 ? trade.accountEquityAtOpen : CANONICAL_PAPER_INITIAL_EQUITY,
+    notional: trade.notional * copyRate, plannedRisk: trade.plannedRisk * copyRate,
+    contracts: trade.contracts * copyRate, margin: trade.margin * copyRate,
+    netPnl: trade.netPnl == null ? null : trade.netPnl * copyRate,
+    accountEquityAtOpen: copyRate === 1 ? trade.accountEquityAtOpen : CANONICAL_PAPER_REFERENCE_EQUITY,
     engineId, engineName: ENGINE_META[engineId].name, engineTradeId: trade.id };
 }
 
-function taggedTrades(engineId: StrategyEngineId, values: Array<ArenaTrade | PreviousArenaTrade>, accountScale = 1) {
-  return values.map((trade) => taggedTrade(engineId, trade, accountScale));
+function taggedTrades(engineId: StrategyEngineId, values: Array<ArenaTrade | PreviousArenaTrade>, copyRate = 1) {
+  return values.map((trade) => taggedTrade(engineId, trade, copyRate));
 }
 
 export function canonicalPaperOpen(accounts: DualPaperAccounts) {
   return [
-    ...taggedTrades("CURRENT_V5", Object.values(accounts.current.portfolioOpen), ENGINE_CANONICAL_WEIGHT),
-    ...taggedTrades("PREVIOUS_V4", Object.values(accounts.previous.portfolioOpen), ENGINE_CANONICAL_WEIGHT),
+    ...taggedTrades("CURRENT_V5", Object.values(accounts.current.portfolioOpen), ENGINE_ORDER_COPY_RATE),
+    ...taggedTrades("PREVIOUS_V4", Object.values(accounts.previous.portfolioOpen), ENGINE_ORDER_COPY_RATE),
   ].sort((left, right) => right.openedAt - left.openedAt);
 }
 
 export function canonicalPaperEquity(accounts: DualPaperAccounts) {
-  return CANONICAL_PAPER_INITIAL_EQUITY
-    + (accounts.current.portfolioEquity - ENGINE_INITIAL_EQUITY) * ENGINE_CANONICAL_WEIGHT
-    + (accounts.previous.portfolioEquity - ENGINE_INITIAL_EQUITY) * ENGINE_CANONICAL_WEIGHT;
+  return CANONICAL_PAPER_REFERENCE_EQUITY
+    + (accounts.current.portfolioEquity - ENGINE_INITIAL_EQUITY) * ENGINE_ORDER_COPY_RATE
+    + (accounts.previous.portfolioEquity - ENGINE_INITIAL_EQUITY) * ENGINE_ORDER_COPY_RATE;
 }
 
 function taggedRows<T extends { id: string }>(engineId: StrategyEngineId, values: T[]) {
@@ -71,20 +71,20 @@ export function canonicalPaperSummary(accounts: DualPaperAccounts) {
     version: current.version,
     dualPaperVersion: DUAL_PAPER_VERSION,
     systemName: "双引擎独立账户",
-    initialEquity: CANONICAL_PAPER_INITIAL_EQUITY,
+    initialEquity: CANONICAL_PAPER_REFERENCE_EQUITY,
     portfolioEquity: canonicalPaperEquity(accounts),
     portfolioResolved: current.portfolioResolved + previous.portfolioResolved,
     portfolioWins: current.portfolioWins + previous.portfolioWins,
-    portfolioGrossPnl: (current.portfolioGrossPnl + previous.portfolioGrossPnl) * ENGINE_CANONICAL_WEIGHT,
-    portfolioCosts: (current.portfolioCosts + previous.portfolioCosts) * ENGINE_CANONICAL_WEIGHT,
+    portfolioGrossPnl: (current.portfolioGrossPnl + previous.portfolioGrossPnl) * ENGINE_ORDER_COPY_RATE,
+    portfolioCosts: (current.portfolioCosts + previous.portfolioCosts) * ENGINE_ORDER_COPY_RATE,
     portfolioOpen: canonicalPaperOpen(accounts),
     recentPortfolio: [
-      ...taggedTrades("CURRENT_V5", current.recentPortfolio, ENGINE_CANONICAL_WEIGHT),
-      ...taggedTrades("PREVIOUS_V4", previous.recentPortfolio, ENGINE_CANONICAL_WEIGHT),
+      ...taggedTrades("CURRENT_V5", current.recentPortfolio, ENGINE_ORDER_COPY_RATE),
+      ...taggedTrades("PREVIOUS_V4", previous.recentPortfolio, ENGINE_ORDER_COPY_RATE),
     ].sort((left, right) => (right.closedAt ?? right.openedAt) - (left.closedAt ?? left.openedAt)).slice(0, 200),
     archivedPortfolioTrades: [
-      ...taggedTrades("CURRENT_V5", current.archivedPortfolioTrades, ENGINE_CANONICAL_WEIGHT),
-      ...taggedTrades("PREVIOUS_V4", previous.archivedPortfolioTrades, ENGINE_CANONICAL_WEIGHT),
+      ...taggedTrades("CURRENT_V5", current.archivedPortfolioTrades, ENGINE_ORDER_COPY_RATE),
+      ...taggedTrades("PREVIOUS_V4", previous.archivedPortfolioTrades, ENGINE_ORDER_COPY_RATE),
     ].sort((left, right) => (right.closedAt ?? right.openedAt) - (left.closedAt ?? left.openedAt)).slice(0, 200),
     openShadow: [
       ...taggedTrades("CURRENT_V5", current.openShadow),
@@ -128,8 +128,9 @@ export function canonicalPaperSummary(accounts: DualPaperAccounts) {
     verifiedCount: current.verifiedCount + previous.verifiedCount,
     engines: engineSummaries,
     rules: { ...current.rules, dualIndependentEngines: true, engineInitialEquity: ENGINE_INITIAL_EQUITY,
-      canonicalInitialEquity: CANONICAL_PAPER_INITIAL_EQUITY, sameSymbolCrossEngineAllowed: true,
-      engineCanonicalWeight: ENGINE_CANONICAL_WEIGHT, liveSource: "CANONICAL_PAPER_NET" },
+      canonicalReferenceEquity: CANONICAL_PAPER_REFERENCE_EQUITY, sameSymbolCrossEngineAllowed: true,
+      engineOrderCopyRate: ENGINE_ORDER_COPY_RATE, canonicalCapitalAgnostic: true,
+      liveSource: "CANONICAL_PAPER_NET" },
   };
 }
 
@@ -155,14 +156,14 @@ function closestTarget(side: Side, trades: EngineTaggedTrade[]) {
 }
 
 /**
- * Gate runs in single-position mode. The canonical PAPER account keeps every
- * logical leg, while LIVE receives one deterministic net position per symbol.
+ * The canonical PAPER execution mirror copies every engine order at 100% and
+ * keeps every logical leg without applying its own capital or risk gate. Gate
+ * runs in single-position mode, so LIVE receives one deterministic net position per symbol.
  * A changed constituent set changes the synthetic id, making the existing
  * reconciliation close and reopen the new net instead of silently retaining
  * stale size or direction.
  */
 export function canonicalLivePortfolio(accounts: DualPaperAccounts) {
-  const canonicalEquity = canonicalPaperEquity(accounts);
   const bySymbol = Object.groupBy(canonicalPaperOpen(accounts), (trade) => trade.symbol);
   const output: Record<string, ArenaTrade> = {};
   for (const [symbol, all] of Object.entries(bySymbol)) {
@@ -205,7 +206,7 @@ export function canonicalLivePortfolio(accounts: DualPaperAccounts) {
       contracts,
       leverage,
       margin: notional / leverage,
-      accountEquityAtOpen: canonicalEquity,
+      accountEquityAtOpen: CANONICAL_PAPER_REFERENCE_EQUITY,
       reason: `唯一PAPER净额；逻辑腿 ${trades.length} 笔（当前版 ${trades.filter((trade) => trade.engineId === "CURRENT_V5").length}，上一版 ${trades.filter((trade) => trade.engineId === "PREVIOUS_V4").length}）`,
       context: { ...anchor.context, modeledCostRate, structuralStopRate: Math.abs(entryPrice - stopPrice) / Math.max(entryPrice, 1e-9) },
     };
