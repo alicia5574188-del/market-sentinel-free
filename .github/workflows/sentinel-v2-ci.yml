@@ -60,27 +60,15 @@ jobs:
           git diff --check
           npx wrangler deploy --dry-run --config dist/server/wrangler.json
 
-      - name: Causal all-regime replay
+      - name: Verify frozen V5 route authority
         if: github.event_name == 'pull_request'
         working-directory: release
-        env:
-          RESEARCH_DAYS: "30"
-          RESEARCH_SYMBOLS: "20"
-        run: npm run research:all-regime
+        run: npm run test:all-regime
 
-      - name: Require crypto-only full-phase candidate coverage
+      - name: Require crypto-only V5 architecture
         if: github.event_name == 'pull_request'
         working-directory: release
-        run: npm run research:v12
-
-      - name: Preserve bounded replay dataset for review
-        if: ${{ github.event_name == 'pull_request' && always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: all-regime-candles-${{ github.event.pull_request.head.sha }}
-          path: /tmp/all-regime-candles.json
-          if-no-files-found: error
-          retention-days: 1
+        run: node --test tests/architecture.test.mjs
 
       - name: Require the reviewed two-phase Durable Object migration
         working-directory: release
@@ -1054,17 +1042,17 @@ jobs:
               (.runtime.liveMode.requestedEnabled | type) == "boolean" and
               (.runtime.liveMode.operational | type) == "boolean" and
               (.runtime.liveMode.operational == false or .runtime.liveMode.requestedEnabled == true) and
-              .runtime.strategyArena.version == 12 and .runtime.strategyArena.playbookCount == 6 and
-              .runtime.strategyArena.catalogSize == 6 and
+              .runtime.strategyArena.version == 12 and .runtime.strategyArena.playbookCount == 5 and
+              .runtime.strategyArena.catalogSize == 5 and
               (.runtime.strategyArena.routeCheckCount | type) == "number" and
               (.runtime.feedQuality.attempts | type) == "number" and
               (.runtime.strategyArena.portfolioEquity | type) == "number" and
               .runtime.strategyArena.portfolioEquity > 0 and
               .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 10 and
-              .runtime.strategyArena.rules.singleTradeRiskMin == 0.01 and
-              .runtime.strategyArena.rules.singleTradeRiskMax == 0.02 and
+              .runtime.strategyArena.rules.singleTradeRiskMin == 0.03 and
+              .runtime.strategyArena.rules.singleTradeRiskMax == 0.03 and
               .runtime.strategyArena.rules.minimumPortfolioRiskUsdt == 0 and
-              .runtime.strategyArena.rules.targetPortfolioRiskUsdt == 10 and
+              .runtime.strategyArena.rules.targetPortfolioRiskUsdt == 30 and
               .runtime.strategyArena.rules.empiricalCostFloorRate == 0.0014 and
               .runtime.strategyArena.rules.authorityWindowPriority == "STATE_CONDITIONED_EXPECTANCY" and
               .runtime.strategyArena.rules.extremeSequenceAuthority == false and
@@ -1075,7 +1063,7 @@ jobs:
               .runtime.strategyArena.rules.paperCycleResetOnCutover == false and
               .runtime.strategyArena.rules.streakLength == 3 and
               .runtime.strategyArena.rules.maxPortfolioPositions == null and
-              .runtime.strategyArena.rules.profitArmIsExit == false and
+              .runtime.strategyArena.rules.profitArmIsExit == true and
               .runtime.strategyArena.rules.dailyObjectiveRate == 0.10 and
               .runtime.strategyArena.rules.dailyObjectiveIsQuota == false and
               .runtime.strategyArena.rules.portfolioRiskCap == 0.10 and
@@ -1180,12 +1168,12 @@ jobs:
             (.runtime.liveMode.requestedEnabled | type) == "boolean" and
             (.runtime.liveMode.operational | type) == "boolean" and
             (.runtime.liveMode.operational == false or .runtime.liveMode.requestedEnabled == true) and
-            .runtime.strategyArena.version == 12 and .runtime.strategyArena.playbookCount == 6 and
-            .runtime.strategyArena.catalogSize == 6 and
+            .runtime.strategyArena.version == 12 and .runtime.strategyArena.playbookCount == 5 and
+            .runtime.strategyArena.catalogSize == 5 and
             (.runtime.strategyArena.routeCheckCount | type) == "number" and
             (.runtime.feedQuality.attempts | type) == "number" and
             .runtime.strategyArena.rules.minimumPortfolioRiskUsdt == 0 and
-            .runtime.strategyArena.rules.targetPortfolioRiskUsdt == 10 and
+            .runtime.strategyArena.rules.targetPortfolioRiskUsdt == 30 and
             .runtime.strategyArena.rules.empiricalCostFloorRate == 0.0014 and
             .runtime.strategyArena.rules.normalShadowAlwaysOn == true and
             .runtime.strategyArena.rules.extremeSequenceAuthority == false and
@@ -1197,7 +1185,7 @@ jobs:
             .runtime.strategyArena.rules.authorityWindowPriority == "STATE_CONDITIONED_EXPECTANCY" and
             .runtime.strategyArena.rules.streakLength == 3 and
             .runtime.strategyArena.rules.maxPortfolioPositions == null and
-            .runtime.strategyArena.rules.profitArmIsExit == false and
+            .runtime.strategyArena.rules.profitArmIsExit == true and
             .runtime.strategyArena.rules.dailyObjectiveIsQuota == false and
             .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 10 and
             .runtime.limits.plannedTotalDoRequestsPerDay < 55000 and

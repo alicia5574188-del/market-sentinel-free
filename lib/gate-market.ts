@@ -191,7 +191,7 @@ export type GateCandle = { time: number; volume: number; close: number; high: nu
 type GateCandleRow = { t?: number; v?: string | number; c?: string | number; h?: string | number; l?: string | number; o?: string | number };
 
 export async function fetchStructureCandles(symbol: string, interval: "1m" | "5m" | "15m" | "1h", limit = 120) {
-  const boundedLimit = Math.max(2, Math.min(120, Math.floor(limit)));
+  const boundedLimit = Math.max(2, Math.min(400, Math.floor(limit)));
   const rows = await gatePublic<GateCandleRow[]>(
     `/futures/usdt/candlesticks?contract=${encodeURIComponent(symbol)}&interval=${interval}&limit=${boundedLimit}`,
     GATE_RESILIENT_TIMEOUT_MS,

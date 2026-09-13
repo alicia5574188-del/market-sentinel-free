@@ -51,6 +51,8 @@ export type MarketRegimeCandidate = {
   moveRate: number;
   trendRate: number;
   broadMoveRate?: number;
+  move4hRate?: number;
+  move24hRate?: number;
   trendEfficiency: number;
   volatilityRatio: number;
   rangePosition: number;
@@ -195,7 +197,7 @@ export function completedCandleStrategyCandidate(input: {
   fundingRate: number;
   now: number;
 }) {
-  const allRows = [...input.candles].sort((left, right) => left.time - right.time).slice(-120);
+  const allRows = [...input.candles].sort((left, right) => left.time - right.time).slice(-360);
   const rows = allRows.slice(-24);
   if (rows.length < 12 || input.volume24hUsd <= 0) return null;
   const latest = rows.at(-1)!;
@@ -233,8 +235,8 @@ export function completedCandleStrategyCandidate(input: {
   const recentUpper = Math.max(...recent.map((row) => row.high));
   const lifecycle = `${latestCompletedAt}:${candlePriceBin(lower)}:${candlePriceBin(upper)}`;
   const extremeSequence = detectExtremeSequencePath(allRows);
-  const allRegimeRoutes = detectAllRegimeRoutes(allRows);
-  const dominantEnvironment = dominantAllRegimeEnvironment(allRows);
+  const allRegimeRoutes = detectAllRegimeRoutes(allRows, input.symbol);
+  const dominantEnvironment = dominantAllRegimeEnvironment(allRows, input.symbol);
   // Only routes that remained positive after costs in every chronological fold
   // receive scarce fresh-book priority; rejected route families stay visible as
   // diagnostics without becoming account authority.
@@ -252,7 +254,10 @@ export function completedCandleStrategyCandidate(input: {
   const candidate: MarketRegimeCandidate = {
     id: `${input.symbol}:CANDLE5M:${channel}:${side}:${lifecycle}`, symbol: input.symbol, channel, regime, side,
     score: clamp(executionPriorityScore, 0, 100), referencePrice: channel === "ANOMALY" ? latest.open : latest.close,
-    moveRate: channel === "ANOMALY" ? lastMove : trendRate, trendRate, broadMoveRate, trendEfficiency, volatilityRatio, rangePosition,
+    moveRate: channel === "ANOMALY" ? lastMove : trendRate, trendRate, broadMoveRate,
+    move4hRate: allRows.length >= 49 ? latest.close / allRows.at(-49)!.close - 1 : undefined,
+    move24hRate: allRows.length >= 289 ? latest.close / allRows.at(-289)!.close - 1 : undefined,
+    trendEfficiency, volatilityRatio, rangePosition,
     volume24hUsd: input.volume24hUsd, fundingRate: input.fundingRate, openInterestChangeRate: 0,
     confirmations: 2, firstSeenAt: latestCompletedAt, observedAt: latestCompletedAt, anomalyKind: null,
     adaptivePolicy: null, extremeSequence, allRegimeRoutes, dominantEnvironment,

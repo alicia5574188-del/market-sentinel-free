@@ -5,7 +5,7 @@ import { ALL_REGIME_ENGINE_VERSION, ALL_REGIME_OFFLINE_VALIDATION, ALL_REGIME_ST
   allRegimePaperApproved,
   type AllRegimeEnvironment } from "./all-regime-engine.ts";
 import { classifyMarketState } from "./strategy-coverage.ts";
-import { MARKET_PHASE_AUTHORITY, routeMarketApproved } from "./strategy-coverage-policy.ts";
+import { routeMarketApproved } from "./strategy-coverage-policy.ts";
 
 export const STRATEGY_ARENA_VERSION = 12;
 export const STRATEGY_INITIAL_EQUITY = 1_000;
@@ -19,7 +19,8 @@ export const ARENA_MAX_SPREAD_RATE = 0.0012;
 export const ARENA_MIN_VOLUME_24H_USD = 10_000_000;
 export const ARENA_MAX_COST_SHARE = 0.25;
 export const ARENA_QUOTE_STALE_MS = 5_000;
-export const PORTFOLIO_TRADE_RISK_TARGET_USDT = 10;
+export const PORTFOLIO_TRADE_RISK_TARGET_USDT = 30;
+export const PORTFOLIO_TRADE_RISK_RATE = 0.03;
 export const MIN_PORTFOLIO_NOTIONAL_TO_EQUITY = 1;
 export const PORTFOLIO_REALTIME_CAPACITY = 10;
 export const MAX_PORTFOLIO_POSITIONS = null;
@@ -134,6 +135,7 @@ export type StrategyArenaState = {
   blockedCandidates: BlockedCandidate[];
   currentRouteChecks: Record<string, RouteCheck>;
   lastPortfolioCloses: Record<string, { closedAt: number; branch: AllRegimeEnvironment | null; eventId: string }>;
+  lastRouteSignals: Record<string, { eventId: string; observedAt: number }>;
   cutoverPending: boolean;
 };
 
@@ -148,12 +150,14 @@ export type ArenaObservation = {
   completedMinuteAt?: number;
   candleStructure?: ResidentCandleStructure | null;
   globalBreadth?: number; globalMedianMove?: number; globalMarkets?: number;
+  marketBreadth4h?: number; marketMedianMove4h?: number; marketBreadth24h?: number;
+  marketMedianMove24h?: number; btcMove24h?: number; regimeMarkets?: number;
 };
 
 type Signal = { strategyId: string; side: Side; entryTrigger: number; stopPrice: number; targetPrice: number; quality: number; reason: string;
   orientation?: StrategyOrientation; originalTargetPrice?: number; targetAdapted?: boolean; targetEvidenceEvents?: number;
   structureSource: ArenaTradeContext["structureSource"]; maxHoldMs: number; noProgressMs: number; executable: boolean;
-  branch: AllRegimeEnvironment };
+  branch: AllRegimeEnvironment; hardTarget?: boolean };
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
 const baseId = (strategyId: string) => strategyId.split(":")[0];
@@ -179,7 +183,7 @@ export function initialStrategyArena(now = Date.now()): StrategyArenaState {
     portfolioEquity: STRATEGY_INITIAL_EQUITY, portfolioResolved: 0, portfolioWins: 0, portfolioGrossPnl: 0,
     portfolioCosts: 0, portfolioCycle: 1, portfolioCycleStartedAt: now, archivedPortfolioCycles: [],
     recentShadow: [], recentPaper: [], recentPortfolio: [], archivedPortfolioTrades: [], transitions: [], seenSignals: [], admissionRejects: {},
-    recentObservations: [], blockedCandidates: [], currentRouteChecks: {}, lastPortfolioCloses: {}, cutoverPending: false };
+    recentObservations: [], blockedCandidates: [], currentRouteChecks: {}, lastPortfolioCloses: {}, lastRouteSignals: {}, cutoverPending: false };
 }
 
 function legacyArchive(value: unknown, now: number): PortfolioCycleArchive[] {
@@ -238,6 +242,7 @@ export function normalizeStrategyArena(value: StrategyArenaState | null | undefi
     blockedCandidates: (value.blockedCandidates ?? []).slice(-ARENA_HISTORY_LIMIT),
     currentRouteChecks: value.currentRouteChecks ?? {},
     lastPortfolioCloses: value.lastPortfolioCloses ?? {},
+    lastRouteSignals: value.lastRouteSignals ?? {},
     cutoverPending: Boolean(value.cutoverPending) };
   return normalized;
 }
@@ -254,7 +259,6 @@ function signals(input: ArenaObservation): Signal[] {
   const state = classifyMarketState({ trendRate: input.candidate.trendRate,
     trendEfficiency: input.candidate.trendEfficiency, volatilityRatio: input.candidate.volatilityRatio,
     rangePosition: input.candidate.rangePosition, marketBreadth: breadth, marketMedianMove: medianMove });
-  if (MARKET_PHASE_AUTHORITY[state.phase] === "WAIT") return [];
   return (input.candidate.allRegimeRoutes ?? []).flatMap((route): Signal[] => {
     const strategyId = route.strategyId;
     const side = route.side;
@@ -264,7 +268,10 @@ function signals(input: ArenaObservation): Signal[] {
     const noProgressMinutes = route.noProgressMinutes;
     if (!routeMarketApproved(route, { trendRate: input.candidate.trendRate,
       trendEfficiency: input.candidate.trendEfficiency, volatilityRatio: input.candidate.volatilityRatio,
-      rangePosition: input.candidate.rangePosition, marketBreadth: breadth, marketMedianMove: medianMove })) return [];
+      rangePosition: input.candidate.rangePosition, marketBreadth: breadth, marketMedianMove: medianMove,
+      marketBreadth4h: input.marketBreadth4h, marketMedianMove4h: input.marketMedianMove4h,
+      marketBreadth24h: input.marketBreadth24h, marketMedianMove24h: input.marketMedianMove24h,
+      btcMove24h: input.btcMove24h, regimeMarkets: input.regimeMarkets })) return [];
     const reason = `${route.strategyName}·${state.phase}：${route.reason} 该入场状态格已通过纯加密历史前后段成本后验证。`;
     const sign = side === "LONG" ? 1 : -1;
     const riskRate = Math.abs(route.triggerPrice - stopPrice) / route.triggerPrice;
@@ -273,7 +280,7 @@ function signals(input: ArenaObservation): Signal[] {
       stopPrice: route.triggerPrice * (1 - sign * riskRate), targetPrice: route.triggerPrice * (1 + sign * armRate),
       structureSource: "CANDLE_5M", executable: true, branch: route.environment,
       maxHoldMs: maxHoldMinutes * 60_000, noProgressMs: noProgressMinutes * 60_000,
-      quality: clamp(route.score / 100, 0.5, 0.98), reason }];
+      quality: clamp(route.score / 100, 0.5, 0.98), hardTarget: route.hardTarget, reason }];
   });
 }
 
@@ -531,6 +538,10 @@ function advanceBook(state: StrategyArenaState, book: Record<string, ArenaTrade>
         trade.profitArmedAt == null ? "STOP" : "RUNNER_EXIT", now));
       continue;
     }
+    if (targeted && trade.context.profitArmIsNotExit === false) {
+      delete book[id]; recordClosed(state, closeTrade(trade, trade.targetPrice, "TARGET", now));
+      continue;
+    }
     if (targeted && trade.profitArmedAt == null) trade.profitArmedAt = now;
     updateRunnerProtection(trade);
     if (!noProgress && !timedOut) continue;
@@ -572,6 +583,10 @@ export function advanceStrategyShadowsFromCompletedCandle(input: { state: Strate
         trade.profitArmedAt == null ? "STOP" : "RUNNER_EXIT", input.candle.completedAt));
       continue;
     }
+    if (targeted && trade.context.profitArmIsNotExit === false) {
+      delete state.open[id]; recordClosed(state, closeTrade(trade, trade.targetPrice, "TARGET", input.candle.completedAt));
+      continue;
+    }
     if (targeted && trade.profitArmedAt == null) trade.profitArmedAt = input.candle.completedAt;
     updateRunnerProtection(trade);
     if (!noProgress && !expired) continue;
@@ -611,7 +626,7 @@ function tradeContext(input: ArenaObservation, definition: StrategyDefinition, s
     targetEvidenceEvents: signal.targetEvidenceEvents,
     maxHoldMs: signal.maxHoldMs, noProgressMs: signal.noProgressMs,
     allRegimeVersion: ALL_REGIME_ENGINE_VERSION, allRegimeEnvironment: signal.branch,
-    polarityAtEntry: signal.orientation ?? "NORMAL", polarityEvidence: [], profitArmIsNotExit: true };
+    polarityAtEntry: signal.orientation ?? "NORMAL", polarityEvidence: [], profitArmIsNotExit: !signal.hardTarget };
 }
 type TradeSizing = { notional: number; plannedRisk: number; contracts: number; quantoMultiplier: number; leverage: number;
   margin: number; accountEquityAtOpen: number; admissionTier: AdmissionTier | null };
@@ -653,9 +668,14 @@ const openRisk = (state: StrategyArenaState, side?: Side) => Object.values(state
 
 function portfolioSizing(state: StrategyArenaState, input: ArenaObservation, signal: Signal): PortfolioSizingResult {
   const economics = geometryEconomics(input, signal);
-  const sized = sizePaperPosition({ equity: state.portfolioEquity, entry: economics.entryPrice, invalidation: signal.stopPrice,
+  const baseline = sizePaperPosition({ equity: state.portfolioEquity, entry: economics.entryPrice, invalidation: signal.stopPrice,
     feeBps: ARENA_FRICTION_RATE * 10_000, stressSlippageBps: 0, confidence: clamp(0.5 + signal.quality * 0.35, 0.5, 0.85),
     openRisk: openRisk(state), sameDirectionRisk: openRisk(state, signal.side) });
+  const desiredLoss = Math.min(state.portfolioEquity * PORTFOLIO_TRADE_RISK_RATE,
+    state.portfolioEquity * PORTFOLIO_RISK_CAP - openRisk(state),
+    state.portfolioEquity * CORRELATED_DIRECTION_RISK_CAP - openRisk(state, signal.side));
+  const sized = { ...baseline, notional: Math.min(state.portfolioEquity * MAX_NOTIONAL_TO_EQUITY,
+    Math.max(0, desiredLoss) / Math.max(baseline.lossRate, 1e-9)) };
   const multiplier = Math.max(input.quantoMultiplier ?? 1, 1e-12);
   const contractNotional = economics.entryPrice * multiplier;
   const usedNotional = Object.values(state.portfolioOpen).reduce((total, trade) => total + trade.notional, 0);
@@ -696,6 +716,8 @@ function portfolioAdmission(state: StrategyArenaState, input: ArenaObservation, 
   const lastClose = state.lastPortfolioCloses[input.candidate.symbol];
   const inSameBranchCooldown = lastClose && lastClose.branch === signal.branch
     && input.now - lastClose.closedAt < SAME_STRATEGY_SYMBOL_COOLDOWN_MS;
+  const strategyOccupied = Object.values(state.portfolioOpen).some((trade) => trade.strategyId === signal.strategyId);
+  const directionOccupied = Object.values(state.portfolioOpen).some((trade) => trade.side === signal.side);
   const economicGeometry = economics.netRewardRisk >= MIN_NET_REWARD_RISK && economics.costShare <= ARENA_MAX_COST_SHARE;
   const validStructure = signal.side === "LONG" ? economics.entryPrice > signal.stopPrice && economics.entryPrice < signal.targetPrice
     : economics.entryPrice < signal.stopPrice && economics.entryPrice > signal.targetPrice;
@@ -703,6 +725,8 @@ function portfolioAdmission(state: StrategyArenaState, input: ArenaObservation, 
     : input.managementCapacity === false ? "DATA_CAPACITY" : !validStructure ? "STRUCTURE" : input.candidate.volume24hUsd < ARENA_MIN_VOLUME_24H_USD ? "LIQUIDITY"
     : input.spreadRate > ARENA_MAX_SPREAD_RATE ? "SPREAD" : !economicGeometry ? "NET_ECONOMICS"
       : inSameBranchCooldown ? "SYMBOL_COOLDOWN"
+        : strategyOccupied ? "STRATEGY_CAPACITY"
+          : directionOccupied ? "DIRECTION_CAPACITY"
         : null;
   if (blocker) { state.admissionRejects[blocker] = (state.admissionRejects[blocker] ?? 0) + 1;
     return { admission: null, blocker }; }
@@ -817,6 +841,20 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
     const score = state.strategies[normalSignal.strategyId]; const definition = STRATEGY_CATALOG.find((row) => row.id === normalSignal.strategyId);
     if (!score || !definition) continue;
     setRouteCheck(definition, normalSignal, "CHECKING", "路线已形成，正在核对实时盘口、成本和账户容量");
+    const routeSignalKey = `${input.observation.candidate.symbol}:${normalSignal.strategyId}`;
+    const priorRouteSignal = state.lastRouteSignals[routeSignalKey];
+    const routeCooldownMs = normalSignal.strategyId === "range_reentry" ? 120 * 60_000 : 240 * 60_000;
+    if (priorRouteSignal && priorRouteSignal.eventId !== input.observation.candidate.id
+      && input.observation.now - priorRouteSignal.observedAt < routeCooldownMs) {
+      setRouteCheck(definition, normalSignal, "BLOCKED", "同币同策略仍在历史验证采用的信号冷却期内");
+      recordObservation(definition, "同币同策略仍在历史验证采用的信号冷却期内");
+      if (score.enabled) recordBlockedCandidate(definition, normalSignal, "AUTHORITY", "ROUTE_COOLDOWN",
+        "同币同策略仍在历史验证采用的信号冷却期内");
+      continue;
+    }
+    if (priorRouteSignal?.eventId !== input.observation.candidate.id) {
+      state.lastRouteSignals[routeSignalKey] = { eventId: input.observation.candidate.id, observedAt: input.observation.now };
+    }
     const portfolioTrade = state.portfolioOpen[input.observation.candidate.symbol];
     if (portfolioTrade?.eventId === input.observation.candidate.id && portfolioTrade.strategyId === normalSignal.strategyId) {
       setRouteCheck(definition, { ...normalSignal, side: portfolioTrade.side, reason: portfolioTrade.reason }, "OPEN", "模拟账户已成交并进入实时保护");
@@ -976,7 +1014,7 @@ export function arenaSummary(state: StrategyArenaState) {
     rules: { extremeSequenceAuthority: false, strategyName: ALL_REGIME_SYSTEM_NAME,
       generatedRouteAuthority: false, legacyStrategyAuthority: false, paperCycleResetOnCutover: false,
       frictionFloorRate: ARENA_FRICTION_RATE, minNetRewardRisk: MIN_NET_REWARD_RISK,
-      maxCostShare: ARENA_MAX_COST_SHARE, singleTradeRiskMin: 0.01, singleTradeRiskMax: 0.02,
+      maxCostShare: ARENA_MAX_COST_SHARE, singleTradeRiskMin: PORTFOLIO_TRADE_RISK_RATE, singleTradeRiskMax: PORTFOLIO_TRADE_RISK_RATE,
       portfolioRiskCap: PORTFOLIO_RISK_CAP, correlatedRiskCap: CORRELATED_DIRECTION_RISK_CAP,
       marginCap: PORTFOLIO_MARGIN_CAP, maxNotionalMultiple: MAX_NOTIONAL_TO_EQUITY, realtimeCapacity: PORTFOLIO_REALTIME_CAPACITY,
       maxPortfolioPositions: MAX_PORTFOLIO_POSITIONS,
@@ -986,5 +1024,5 @@ export function arenaSummary(state: StrategyArenaState) {
       exactShadowClone: true, normalShadowAlwaysOn: true, reverseShadowAlwaysOn: true,
       streakLength: POLARITY_STREAK, streakMaxSpanMs: POLARITY_MAX_SPAN_MS,
       sameBranchSymbolCooldownMs: SAME_STRATEGY_SYMBOL_COOLDOWN_MS,
-      profitArmIsExit: false, dailyObjectiveRate: 0.10, dailyObjectiveIsQuota: false } };
+      profitArmIsExit: true, dailyObjectiveRate: 0.10, dailyObjectiveIsQuota: false } };
 }
