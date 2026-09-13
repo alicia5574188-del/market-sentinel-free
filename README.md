@@ -1,10 +1,12 @@
-# All-Regime Compound V12 · 全境·复利引擎
+# Dual Independent All-Regime Engines · 双引擎独立账户
 
-Gate USDT perpetual PAPER authority for a single compounding 1,000 U account. LIVE remains owner-controlled, default OFF and fail-closed.
+Gate USDT perpetual PAPER authority combining the current V5 engine and its immediately previous V4 engine. Each engine runs a fully independent hypothetical 1,000 U ledger. Their trades map at fixed 50% weights into one canonical 1,000 U PAPER account; LIVE copies only that canonical account. LIVE remains owner-controlled, default OFF and fail-closed.
 
 ## Decision authority
 
-V12 scans the thirty most liquid eligible **crypto** USDT perpetuals, builds continuous completed 5-minute paths and separates route formation, frozen market-environment authority and account admission. Unknown or stock/commodity-style contract types fail closed before ranking. Five V5 mechanisms have PAPER authority only in cross-market cells that stayed profitable in chronological train and held-out samples:
+Both frozen engines scan the thirty most liquid eligible **crypto** USDT perpetuals from the same verified market stream and build only continuous completed 5-minute paths. Candidate state, strategy authority, risk, sizing, positions, closes and performance remain separate. A position in one engine cannot block, resize, close, promote or demote the other; both engines may hold the same contract simultaneously in the same or opposite direction.
+
+The current V5 engine builds a trailing 360-candle path and separates route formation, frozen cross-market authority and account admission. Unknown or stock/commodity-style contract types fail closed before ranking. Its five mechanisms have PAPER authority only in cells that stayed profitable in chronological train and held-out samples:
 
 - `界返`: range-lower-band re-entry during a strong daily market with a four-hour pullback.
 - `渠破`: 48-bar downside channel break in a neutral-to-weak daily market.
@@ -29,11 +31,13 @@ These are historical simulations, not a promise of daily profit. PAPER is the fo
 
 ## Account and execution
 
-- One account with current-equity compounding. Each accepted trade targets 3% of current equity at its stop, subject to the existing 4× notional ceiling, 10% total risk, 6.5% same-direction risk and 30% total margin. An exceptionally wide stop that cannot sustain at least 1× equity notional is rejected instead of becoming a meaningless tiny position.
+- Two hypothetical accounts compound from 1,000 U independently. The canonical 1,000 U PAPER account receives 50% of each engine trade and never feeds an admission result back into either engine. Because each virtual ledger independently respects 10% total risk, 6.5% same-direction risk and 30% margin, the fixed-weight canonical sum respects the same limits.
+- The canonical PAPER ledger preserves both same-symbol logical legs. Gate single-position LIVE execution receives their signed net exposure per contract. When the contributing logical-leg set changes, LIVE closes the prior managed net and reconciles the new net; it never sends separate strategy decisions directly to Gate.
+- In each engine, position notional is set by its own frozen structural-risk rules. Current V5 targets 3% of its own equity per accepted trade; previous V4 retains its 1%–2% sizing. Both retain the 4× account-wide ceiling, and an exceptionally wide stop is rejected inside that engine instead of becoming a meaningless tiny position.
 - Full modeled friction, fresh bid/ask, executable depth, Gate integer contracts and structural stops are mandatory. Immediately after Gate confirms an entry submission, the same execution pass submits the existing native close-only/reduce-only price-order stop; reconciliation then owns and updates that order. LIVE protective stops use Gate's current contract tick and round outward only, so price-grid normalization cannot close ahead of PAPER.
 - Aggregate structural risk remains at most 10%; same-direction structural risk remains at most 6.5%.
 - Stale or incomplete data cannot open or close on an old price.
-- Same symbol has one active portfolio trade; same-side agreement merges and strong opposing routes wait.
+- Same symbol has at most one active trade inside each engine, but cross-engine same-symbol and opposite-direction positions are explicitly allowed.
 
 ## Operator page
 

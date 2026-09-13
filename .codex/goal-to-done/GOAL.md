@@ -1,4 +1,14 @@
-# Active goal — immediate native LIVE protection
+# Active goal — two independent strategy engines, one PAPER account
+
+- Run the current production all-regime V5 strategy and its immediately previous all-regime V4 snapshot (both use the V12 arena ledger) as two fully independent engines. Each engine owns a separate hypothetical 1,000 U account, strategy state, decisions, position sizing, risk limits, open positions, closes and performance trajectory.
+- Neither engine may inspect, veto, promote, demote, resize, close or reverse the other. The same contract may be open in both engines at the same time, in the same or opposite direction, without symbol-level deduplication between engines.
+- Copy every engine-approved logical trade into one canonical 1,000 U PAPER account at a fixed 50% weight per engine, preserving engine/strategy attribution and independent frozen geometry. This mapping may scale shared-account exposure but must never write back into either hypothetical engine ledger. The canonical account is the only simulated account presented as executable account truth.
+- Gate LIVE mirrors only the canonical PAPER account proportionally to actual Gate equity. It must not mirror either hypothetical account separately or infer strategy decisions from LIVE state. Preserve owner-only control and the current LIVE choice; deployment must never enable or disable LIVE.
+- Keep one `MarketStream`, one market-data scan and existing request/write budgets. Share verified market data and exchange execution infrastructure only; engine decisions and risk ledgers remain isolated.
+- Preserve the existing PAPER account, open positions, history, credentials and native protective stops through migration. Add explicit regression coverage for two same-symbol logical positions, opposite-direction independence, separate 1,000 U risk sizing, canonical PAPER aggregation and LIVE mirroring from canonical truth only.
+- Verify all direct, architecture/migration, research, TypeScript, ESLint, build, whitespace and Cloudflare dry-run checks before a reviewed PR. Do not merge or deploy until the dual-engine migration is causally safe.
+
+# Completed goal — immediate native LIVE protection
 
 - Submit the already proven Gate native close-only/reduce-only price-order stop immediately after Gate confirms entry submission, in the same execution pass rather than waiting for the next alarm.
 - Reject the requested 3× sizing release if a production-equivalent replay loses money or exceeds the existing acceptance drawdown; do not use the old fixed-0.5× report as evidence for current sizing.

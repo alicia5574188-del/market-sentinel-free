@@ -526,3 +526,10 @@
 - Stability is the user's primary objective, so retain the current 1%–2% per-entry target, 1× meaningful floor, 4× notional ceiling and the 10%/6.5%/30% hard account limits. Do not deploy a configuration already rejected by causal replay.
 - Use the already proven Gate `/futures/usdt/price_orders` close-only/reduce-only protection route. Submit it synchronously immediately after the exchange confirms the market-entry request, then retain the existing tag-based reconciliation and fail-closed exit logic.
 - Do not introduce Gate's newer unverified attached-TP/SL order fields in this release. Do not change credentials, PAPER history or the owner's LIVE switch.
+# Dual independent engine aggregation decision — 2026-09-13
+
+- “Current plus previous” is resolved at release time, not at the start of coding. GitHub `main` moved to all-regime V5 while the first draft was being built, so the releasable pair is current V5 plus immediately previous V4. A V4+V3 candidate would be a production rollback and is forbidden.
+- Each engine owns a separate hypothetical 1,000 U account and all strategy authority below it. They may independently hold the same symbol in the same or opposite direction; shared market-data transport and execution infrastructure cannot become a shared admission, sizing or exit decision.
+- The executable PAPER account remains one 1,000 U account. It maps each independent engine at a fixed 50% weight, preserves both logical legs for attribution and nets only at the Gate single-position LIVE boundary. This aggregate is read-only with respect to both engine trajectories.
+- A pre-dual checkpoint is interpreted as the current V5 ledger and is preserved byte-for-byte through current normalization; V4 starts as a fresh 1,000 U ledger. A lone existing V5 LIVE plan keeps its lifecycle identity during migration so deployment cannot manufacture a close/reopen solely from the new aggregation layer.
+- Deployment preserves the owner's persisted LIVE choice. The verified pre-release production state was LIVE requested false and operational false; release code does not call the LIVE mutation endpoint.
