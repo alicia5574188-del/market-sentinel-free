@@ -1,0 +1,92 @@
+{
+  "decision": "FORWARD_SHADOW_REQUIRED",
+  "productionReplaced": false,
+  "dataset": {
+    "days": 30,
+    "symbols": 20,
+    "sha256": "e8b776f4fea9fb56ae241bdae1385b2fa783815e22e4337d78b102e4705916ca"
+  },
+  "baseline": {
+    "trades": 273,
+    "netPnl": -106.08448635028523,
+    "profitFactor": 0.9568552007146467,
+    "maxDrawdown": 0.4501908975224356
+  },
+  "candidate": {
+    "id": "evidence-pf1-1.2",
+    "rules": {
+      "warmupShadowEvents": 12,
+      "normalAuthority": "latest 6 net positive with PF >= 1.0 and latest 12 net positive with PF >= 1.2",
+      "reverseAuthority": "same paired windows require normal loss and reverse profit",
+      "cashOtherwise": true,
+      "maximumPositionNotionalMultiple": 0.5,
+      "minimumPositionNotionalMultiple": 0.25,
+      "dailyLossCapRate": 0.02,
+      "dailyProfitLockRate": 0.03,
+      "highVolatilityStopChanged": false,
+      "entryAuthorityLoosened": false
+    },
+    "discovery": {
+      "trades": 62,
+      "netPnl": 260.90243131049226,
+      "profitFactor": 2.48735253101392,
+      "maxDrawdown": 0.02422141905319184,
+      "fiveDayPnl": [0, 191.1352856056584, 69.76714570483392]
+    },
+    "heldout": {
+      "trades": 56,
+      "netPnl": 95.73926384339924,
+      "profitFactor": 1.3437422522853268,
+      "maxDrawdown": 0.05897163213413228,
+      "fiveDayPnl": [-58.93201626013224, 143.51391690209732, 11.157363201434112]
+    },
+    "full": {
+      "trades": 118,
+      "netPnl": 356.6416951538915,
+      "profitFactor": 1.7856677757801005,
+      "maxDrawdown": 0.06985798385872892,
+      "largestPositiveSymbolShare": 0.29822928339390037
+    },
+    "higherCost": {
+      "netPnl": 303.22593530249554,
+      "profitFactor": 1.6278029629469477,
+      "maxDrawdown": 0.0774324245546294
+    },
+    "doubleAdverseEntry": {
+      "trades": 116,
+      "netPnl": 231.36888157895714,
+      "profitFactor": 1.4844354972904863,
+      "maxDrawdown": 0.10061758817344303
+    },
+    "dailyStability": {
+      "activeDays": 21,
+      "positiveActiveDays": 12,
+      "positiveActiveDayRate": 0.5714285714285714,
+      "averageActiveDayPnl": 16.982937864471022,
+      "medianActiveDayPnl": 2.6700614382894834,
+      "worstDayPnl": -48.77563622349013,
+      "bestDayPnl": 103.51496765714548,
+      "minimumRollingFiveDayPnl": -62.523310766057826,
+      "minimumRollingTenDayPnl": -43.58208400856329
+    },
+    "blockBootstrap": {
+      "samples": 10000,
+      "blockDays": 3,
+      "positiveMonthProbability": 0.9815,
+      "monthlyPnlP10": 119.76558863434163,
+      "monthlyPnlMedian": 349.3083519935575,
+      "monthlyPnlP90": 648.6483487263158,
+      "drawdownMedian": 0.05736688130505424,
+      "drawdownP90": 0.09444432684006554
+    }
+  },
+  "limitations": [
+    "Gate rejected the adjacent earlier 30-day five-minute window, so no second independent month was available.",
+    "Historical two-second bid/ask paths, one-minute candles, depth and funding were unavailable; the replay uses next-five-minute adverse entry, stop-first candle ordering, estimated minute noise, ample depth and zero funding.",
+    "One held-out five-day block and one rolling ten-day window remained negative."
+  ],
+  "replacementGate": {
+    "passed": false,
+    "reason": "The candidate is materially better and passes discovery, held-out, cost, adverse-entry, drawdown and concentration gates, but a second independent month is unavailable and the strict rolling-window stability gate remains negative."
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "status": "FORWARD_SHADOW_CANDIDATE_ONLY",
+  "productionChanged": false,
+  "candidate": "macro-six-hourly-0.15-0.04-7-0.5-0.12-2.2-72",
+  "strategy": {
+    "decisionCadence": "six-hourly",
+    "direction": "30-day absolute trend",
+    "confirmation": "7-day return aligned and at least 4%; cross-market median aligned; at least 50% breadth",
+    "entry": "completed-candle 7-day breakout; next-candle open",
+    "stop": "max(12%, 8x median hourly range), capped at 25%",
+    "target": "2.2R",
+    "maximumHold": "72 hours",
+    "riskPerTrade": "1.5% of the candidate's own hypothetical equity",
+    "sizing": "reduce notional as stop width expands; 0.05x-0.50x equity allowed",
+    "portfolio": "maximum 3 open, maximum 2 same-side, 10% total risk, 6.5% same-side risk"
+  },
+  "longHorizonEvidence": {
+    "source": "Gate official monthly USDT-perpetual 1h archives",
+    "datasetSha256": "ef055b4c157ac8a21bb42c0dce00b725e8bdccd60ac776b466f1ab6a7dc089be",
+    "period": "2023-01 through 2026-08",
+    "months": 44,
+    "contracts": 12,
+    "candles": 385617,
+    "split": {
+      "discovery": "2023-01 through 2025-06 (30 months)",
+      "validation": "2025-07 through 2026-02 (8 months)",
+      "finalEvaluation": "2026-03 through 2026-08 (6 months)"
+    },
+    "discovery": {
+      "trades": 124,
+      "netPnlU": 199.90362238052762,
+      "profitFactor": 1.5718695618743683,
+      "maxDrawdown": 0.06480014950639527,
+      "positiveActiveMonths": "17/28"
+    },
+    "validation": {
+      "trades": 46,
+      "netPnlU": 44.877199931297255,
+      "profitFactor": 1.2996480588332464,
+      "maxDrawdown": 0.05869759794415843,
+      "positiveActiveMonths": "4/8"
+    },
+    "finalEvaluation": {
+      "trades": 20,
+      "netPnlU": 36.473521091684795,
+      "profitFactor": 1.7238674909371536,
+      "maxDrawdown": 0.02576828981686333,
+      "positiveActiveMonths": "2/5"
+    },
+    "full": {
+      "trades": 190,
+      "netPnlU": 281.25434340350967,
+      "profitFactor": 1.5116367032523987,
+      "maxDrawdown": 0.06480014950639527,
+      "positiveActiveMonths": "23/41",
+      "largestPositiveSymbolShare": 0.26918006386141263,
+      "sixMonthBlockPnlU": [-42.6038386099451, 64.58704952993699, 11.751050961762594, 120.32591288735648, 45.8434476114167, 57.00109508658837, 12.122131232459694]
+    },
+    "stress": {
+      "higherFrictionFullNetPnlU": 261.85037884451174,
+      "higherFrictionFullProfitFactor": 1.472819924483288,
+      "doubledAdverseEntryFullNetPnlU": 275.79048258689016,
+      "doubledAdverseEntryFullProfitFactor": 1.5007302639129458
+    }
+  },
+  "fiveMinuteExecutionCheck": {
+    "signalSource": "Gate official 1h archives",
+    "executionSource": "Gate official 5m archives",
+    "signalDatasetSha256": "ef055b4c157ac8a21bb42c0dce00b725e8bdccd60ac776b466f1ab6a7dc089be",
+    "executionDatasetSha256": "0da10bcfc9644cd8028381c1e325ef5c2a95adbed742f220ea3f90f7fe924feb",
+    "period": "2025-09 through 2026-08",
+    "trades": 49,
+    "netPnlU": 75.5086230203371,
+    "profitFactor": 1.6725335295609038,
+    "maxDrawdown": 0.045471238170715,
+    "positiveActiveMonths": "5/11",
+    "higherFriction": {
+      "netPnlU": 70.95126207268558,
+      "profitFactor": 1.6270759834082902,
+      "maxDrawdown": 0.04590195270759405
+    },
+    "doubledAdverseEntry": {
+      "netPnlU": 74.27493360830341,
+      "profitFactor": 1.6589194022265337,
+      "maxDrawdown": 0.04566890124063507
+    }
+  },
+  "selectionIntegrity": {
+    "discoveryQualifiedConfigurations": 3,
+    "note": "This candidate was the lower-concentration second discovery-qualified configuration and was compared after out-of-sample results were visible. Those periods are evidence but are no longer claimed as an untouched blind test.",
+    "remainingRequirement": "Run the frozen candidate prospectively in shadow without changing V4 or V5 before any replacement decision."
+  },
+  "limitations": [
+    "Historical funding and order-book depth are unavailable; modeled round-trip friction and adverse entry are charged instead.",
+    "The strategy is profitable over the full sample and both later segments, but only 23 of 41 active months are positive; it is not a promise of daily or monthly profit.",
+    "No production route, PAPER ledger, LIVE state, credentials, positions or history was changed."
+  ]
+}
