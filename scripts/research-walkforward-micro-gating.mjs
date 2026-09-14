@@ -13,7 +13,6 @@ const sum=a=>a.reduce((x,y)=>x+y,0),median=a=>{const b=[...a].sort((x,y)=>x-y);r
 const ret=(r,i,k)=>r[i].close/r[i-k].close-1,days=(a,b)=>(b-a)/DAY;
 const session=h=>h<7?"ASIA":h<13?"EU":h<21?"US":"LATE";
 
-// 30-minute event clock: same representative event library used by the fast screen.
 const events=[];
 for(let i=288;i<n-24;i+=6){
   const time=raw.datasets[0].rows[i].time,s=[];
@@ -65,17 +64,19 @@ function schedule(model){
   }
   return{trades:out,selectionLog};
 }
-function simulate(model){const scheduled=schedule(model),uniq=[...new Map(scheduled.trades.map(t=>[`${t.time}:${t.symbol}:${t.family}`,t])).values()].sort((a,b)=>a.time-b.time);let eq=1000,peak=1000,dd=0;const active=[],accepted=[];
-  for(const t of uniq){for(let i=active.length-1;i>=0;i--)if(active[i].until<=t.time)active.splice(i,1);if(active.some(x=>x.symbol===t.symbol)||active.length>=10)continue;const pnl=eq*.10*t.ret;eq=Math.max(1,eq+pnl);peak=Math.max(peak,eq);dd=Math.max(dd,(peak-eq)/peak);accepted.push({...t,pnl});active.push({symbol:t.symbol,until:t.time+t.hold*300});}
-  const stressAccepted=accepted.map(t=>({...t,pnl:null,stressRet:t.ret-DELTA}));
-  function pm(a,b,stress=false){const x=(stress?stressAccepted:accepted).filter(z=>z.time>=a&&z.time<b);let gp=0,gl=0,net=0,w=0,e=1000;for(const z of x){const r=stress?z.stressRet:z.ret,p=e*.10*r;e=Math.max(1,e+p);net+=p;if(p>0){gp+=p;w++;}else gl-=p;}return{trades:x.length,tradesPerDay:x.length/Math.max(days(a,b),1),netPnl:net,pf:gl?gp/gl:gp>0?99:0,win:x.length?w/x.length:0};}
-  return{model,endEquity:eq,netPnl:eq-1000,maxDrawdown:dd,train:pm(commonTrainStart,trainEnd),test:pm(trainEnd,raw.now),full:pm(commonTrainStart,raw.now),stressTrain:pm(commonTrainStart,trainEnd,true),stressTest:pm(trainEnd,raw.now,true),selectionLog:scheduled.selectionLog};}
+function simulate(model){
+  const scheduled=schedule(model),uniq=[...new Map(scheduled.trades.map(t=>[`${t.time}:${t.symbol}:${t.family}`,t])).values()].sort((a,b)=>a.time-b.time);const active=[],accepted=[];
+  for(const t of uniq){for(let i=active.length-1;i>=0;i--)if(active[i].until<=t.time)active.splice(i,1);if(active.some(x=>x.symbol===t.symbol)||active.length>=10)continue;accepted.push(t);active.push({symbol:t.symbol,until:t.time+t.hold*300});}
+  function pm(a,b,delta=0){const x=accepted.filter(z=>z.time>=a&&z.time<b);let gp=0,gl=0,net=0,w=0,e=1000,peak=1000,dd=0;for(const z of x){const r=z.ret-delta,p=e*.10*r;e=Math.max(1,e+p);net+=p;peak=Math.max(peak,e);dd=Math.max(dd,(peak-e)/Math.max(peak,1e-9));if(p>0){gp+=p;w++;}else gl-=p;}return{trades:x.length,tradesPerDay:x.length/Math.max(days(a,b),1),netPnl:net,pf:gl?gp/gl:gp>0?99:0,win:x.length?w/x.length:0,endEquity:e,maxDrawdown:dd};}
+  const train=pm(commonTrainStart,trainEnd),test=pm(trainEnd,raw.now),full=pm(commonTrainStart,raw.now),stressTrain=pm(commonTrainStart,trainEnd,DELTA),stressTest=pm(trainEnd,raw.now,DELTA);
+  return{model,endEquity:full.endEquity,netPnl:full.netPnl,maxDrawdown:full.maxDrawdown,train,test,full,stressTrain,stressTest,selectionLog:scheduled.selectionLog};
+}
 
 const results=gateModels.map(simulate);
-const trainQualified=results.filter(r=>r.train.trades>=100&&r.train.netPnl>0&&r.train.pf>=1.05&&r.stressTrain.netPnl>0&&r.stressTrain.pf>=1.0&&r.maxDrawdown<=.20);
+const trainQualified=results.filter(r=>r.train.trades>=100&&r.train.netPnl>0&&r.train.pf>=1.05&&r.stressTrain.netPnl>0&&r.stressTrain.pf>=1.0&&r.train.maxDrawdown<=.20);
 const rank=r=>(Math.min(r.train.tradesPerDay/15,1.2)+.25)*Math.log(Math.max(r.train.pf,1))*Math.log1p(Math.max(r.train.netPnl,0));
-(trainQualified.length?trainQualified:results).sort((a,b)=>rank(b)-rank(a));const chosen=(trainQualified.length?trainQualified:results)[0];
-const gates={trainQualified:trainQualified.length>0,frequency:chosen.test.tradesPerDay>=15,testPositive:chosen.test.netPnl>0&&chosen.test.pf>=1.05,drawdown:chosen.maxDrawdown<=.12,stressTest:chosen.stressTest.netPnl>0&&chosen.stressTest.pf>=1.0};
-const summaryResults=results.map(r=>({model:r.model,train:r.train,test:r.test,stressTrain:r.stressTrain,stressTest:r.stressTest,maxDrawdown:r.maxDrawdown,netPnl:r.netPnl})).sort((a,b)=>(b.train.tradesPerDay*Math.log(Math.max(b.train.pf,1)))-(a.train.tradesPerDay*Math.log(Math.max(a.train.pf,1))));
+const pool=trainQualified.length?trainQualified:results;pool.sort((a,b)=>rank(b)-rank(a));const chosen=pool[0];
+const gates={trainQualified:trainQualified.length>0,frequency:chosen.test.tradesPerDay>=15,testPositive:chosen.test.netPnl>0&&chosen.test.pf>=1.05,drawdown:chosen.test.maxDrawdown<=.12&&chosen.full.maxDrawdown<=.12,stressTest:chosen.stressTest.netPnl>0&&chosen.stressTest.pf>=1.0};
+const summaryResults=results.map(r=>({model:r.model,train:r.train,test:r.test,stressTrain:r.stressTrain,stressTest:r.stressTest,full:r.full,netPnl:r.netPnl})).sort((a,b)=>(b.train.tradesPerDay*Math.log(Math.max(b.train.pf,1)))-(a.train.tradesPerDay*Math.log(Math.max(a.train.pf,1))));
 const report={generatedAt:new Date().toISOString(),datasetSha256:raw.sha256,months:raw.months,symbols:syms,eventRows:events.length,candidateCount:configs.length,gateModelCount:gateModels.length,commonTrainStart,trainEnd,friction:FRICTION,stressFriction:STRESS,chosen:{...chosen,selectionLog:chosen.selectionLog},gates,targetMet:Object.values(gates).every(Boolean),results:summaryResults};
-writeFileSync(OUTPUT,JSON.stringify(report,null,2)+"\n");console.log("WALKFORWARD_MICRO_RESULT="+JSON.stringify({targetMet:report.targetMet,trainQualified:trainQualified.length,chosen:{model:chosen.model,train:chosen.train,test:chosen.test,stressTrain:chosen.stressTrain,stressTest:chosen.stressTest,dd:chosen.maxDrawdown,net:chosen.netPnl},gates,top:summaryResults.slice(0,10)},null,2));
+writeFileSync(OUTPUT,JSON.stringify(report,null,2)+"\n");console.log("WALKFORWARD_MICRO_RESULT="+JSON.stringify({targetMet:report.targetMet,trainQualified:trainQualified.length,chosen:{model:chosen.model,train:chosen.train,test:chosen.test,stressTrain:chosen.stressTrain,stressTest:chosen.stressTest,full:chosen.full},gates,top:summaryResults.slice(0,10)},null,2));
