@@ -1,0 +1,45 @@
+name: FBR Volatility Bucket Frontier
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-fbr-volatility-buckets.mjs"
+      - ".github/workflows/fbr-volatility-buckets.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Fetch expanded 12-month Gate 5m universe
+        env:
+          RESEARCH_INTERVAL: 5m
+          RESEARCH_DATASET: /tmp/gate-history-expanded-12m.json
+          RESEARCH_MONTHS: 202509,202510,202511,202512,202601,202602,202603,202604,202605,202606,202607,202608
+          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT,SUI_USDT,UNI_USDT,DOT_USDT,ZEC_USDT,STORJ_USDT,LSK_USDT,TRX_USDT,ETC_USDT,FIL_USDT,ATOM_USDT,NEAR_USDT,AAVE_USDT,XLM_USDT,HBAR_USDT,ICP_USDT,XMR_USDT,ARB_USDT,OP_USDT,APT_USDT,PEPE_USDT,CRV_USDT,COMP_USDT,EOS_USDT,ALGO_USDT,SAND_USDT,MANA_USDT,GALA_USDT,DYDX_USDT,WLD_USDT,TON_USDT,NOT_USDT,SEI_USDT,INJ_USDT,RUNE_USDT,FET_USDT,IMX_USDT,JASMY_USDT,SHIB_USDT,FTM_USDT
+          RESEARCH_MIN_CONTRACTS: 19
+          RESEARCH_MIN_MONTH_COVERAGE: 0.98
+          RESEARCH_CONCURRENCY: 16
+        run: node scripts/fetch-gate-history.mjs
+      - name: Run discovery-frozen volatility bucket frontier
+        env:
+          RESEARCH_DATASET: /tmp/gate-history-expanded-12m.json
+          RESEARCH_OUTPUT: /tmp/fbr-volatility-buckets.json
+        run: node scripts/research-fbr-volatility-buckets.mjs
+      - name: Print result
+        run: jq '{grouping:.grouping.groups,grid,eligible,frozen,diverse,full,diverseResults,note}' /tmp/fbr-volatility-buckets.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fbr-volatility-buckets
+          path: /tmp/fbr-volatility-buckets.json
+          retention-days: 7
