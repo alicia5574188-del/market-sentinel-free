@@ -1050,6 +1050,9 @@ jobs:
               (all(.runtime.strategyArena.engines[];
                 (.portfolioEquity | type) == "number" and .portfolioEquity > 0)) and
               (.runtime.strategyArena.routeCheckCount | type) == "number" and
+              (.runtime.strategyArena.formingRouteCount | type) == "number" and
+              (.runtime.strategyArena.blockedRouteCount | type) == "number" and
+              (.runtime.strategyArena.openRouteCount | type) == "number" and
               (.runtime.feedQuality.attempts | type) == "number" and
               (.runtime.strategyArena.portfolioEquity | type) == "number" and
               .runtime.strategyArena.portfolioEquity > 0 and
@@ -1142,6 +1145,15 @@ jobs:
             > "$RUNNER_TEMP/main-public-runtime.json"
           jq -e '(.live == null) and (.liveMode.requestedEnabled | type == "boolean") and (.liveMode.operational | type == "boolean")' \
             "$RUNNER_TEMP/main-public-runtime.json" >/dev/null
+          jq -c '{version, mode, runtime: {state: .runtime.state, stale: .runtime.stale,
+            liveMode: .runtime.liveMode, currentContext: .runtime.strategyArena.currentContext,
+            routeCheckCount: .runtime.strategyArena.routeCheckCount,
+            formingRouteCount: .runtime.strategyArena.formingRouteCount,
+            blockedRouteCount: .runtime.strategyArena.blockedRouteCount,
+            openRouteCount: .runtime.strategyArena.openRouteCount,
+            stableMarkets: .runtime.strategyData.stableMarkets,
+            marketContextMarkets: .runtime.strategyData.marketContextMarkets}}' \
+            "$RUNNER_TEMP/main-health.json"
 
   monitor:
     # Main deploy already performs the same D1, page and advancing-health
@@ -1202,6 +1214,9 @@ jobs:
             (all(.runtime.strategyArena.engines[];
               (.portfolioEquity | type) == "number" and .portfolioEquity > 0)) and
             (.runtime.strategyArena.routeCheckCount | type) == "number" and
+            (.runtime.strategyArena.formingRouteCount | type) == "number" and
+            (.runtime.strategyArena.blockedRouteCount | type) == "number" and
+            (.runtime.strategyArena.openRouteCount | type) == "number" and
             (.runtime.feedQuality.attempts | type) == "number" and
             .runtime.strategyArena.rules.minimumPortfolioRiskUsdt == 0 and
             .runtime.strategyArena.rules.targetPortfolioRiskUsdt == 15 and
@@ -1248,6 +1263,15 @@ jobs:
           first="$(jq -er '.runtime.lastSuccessAt' "$RUNNER_TEMP/monitor-health-1.json")"
           second="$(jq -er '.runtime.lastSuccessAt' "$RUNNER_TEMP/monitor-health-2.json")"
           (( second > first ))
+          jq -c '{version, mode, runtime: {state: .runtime.state, stale: .runtime.stale,
+            liveMode: .runtime.liveMode, currentContext: .runtime.strategyArena.currentContext,
+            routeCheckCount: .runtime.strategyArena.routeCheckCount,
+            formingRouteCount: .runtime.strategyArena.formingRouteCount,
+            blockedRouteCount: .runtime.strategyArena.blockedRouteCount,
+            openRouteCount: .runtime.strategyArena.openRouteCount,
+            stableMarkets: .runtime.strategyData.stableMarkets,
+            marketContextMarkets: .runtime.strategyData.marketContextMarkets}}' \
+            "$RUNNER_TEMP/monitor-health-2.json"
 
           page_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/monitor-page.html" -w '%{http_code}' \
             "$WORKER_BASE_URL/" || true)"

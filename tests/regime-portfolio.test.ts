@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canonicalPaperOpen, initialCanonicalPaperState, reconcileCanonicalPaper } from "../lib/dual-paper.ts";
+import { canonicalPaperOpen, canonicalPaperSummary, initialCanonicalPaperState, reconcileCanonicalPaper } from "../lib/dual-paper.ts";
 import { initialStrategyArena, type ArenaTrade } from "../lib/strategy-arena.ts";
 import { initialStrategyArena as initialPreviousStrategyArena } from "../lib/previous-strategy-arena.ts";
 import { classifyRegime, evaluateRegimePortfolio, initialRegimePortfolio, REGIME_STRATEGIES,
-  REGIME_SYSTEMS, type RegimeContractMeta } from "../lib/regime-portfolio.ts";
+  normalizeRegimePortfolio, REGIME_SYSTEMS, type RegimeContractMeta } from "../lib/regime-portfolio.ts";
 
 test("five exhaustive regimes use the frozen direct strategy catalog without shadow authorization", () => {
   assert.deepEqual(REGIME_SYSTEMS, ["SHOCK_TRANSITION", "COMPRESSION", "DIRECTIONAL_TREND",
@@ -32,6 +32,17 @@ test("market classification is mutually exclusive and always returns one owning 
   assert.equal(classifyRegime({ ...common, median24: .005, breadth24: .5, compression: 1 }), "BALANCED_ROTATION");
 });
 
+test("the route-audit migration reevaluates once without resetting any system account", () => {
+  const legacy = initialRegimePortfolio(1);
+  legacy.accounts.COMPRESSION.equity = 1_234;
+  legacy.lastEvaluatedHour = 99;
+  delete legacy.auditVersion;
+  const migrated = normalizeRegimePortfolio(legacy, 2);
+  assert.equal(migrated.accounts.COMPRESSION.equity, 1_234);
+  assert.equal(migrated.lastEvaluatedHour, null);
+  assert.equal(migrated.auditVersion, 1);
+});
+
 function shockPath() {
   return Array.from({ length: 721 }, (_, index) => {
     const close = index <= 696 ? 100 : index <= 714 ? 100 - (index - 696) * (10 / 18) : 90 + (index - 714) * (1.2 / 6);
@@ -54,6 +65,35 @@ test("720-hour synchronized evidence directly opens risk-capped orders and never
   assert.equal(Object.keys(state.accounts.SHOCK_TRANSITION.open).length, 4,
     "the independent 6.5% same-side cap admits four 1.5%-risk trades");
   assert.equal(state.routeChecks.filter((row) => row.status === "OPEN").length, 4);
+  assert.ok(state.routeChecks.some((row) => row.status === "BLOCKED" && row.blocker === "RISK_CAP"));
+  const accounts = { current: initialStrategyArena(1), previous: initialPreviousStrategyArena(1), regime: state };
+  const summary = canonicalPaperSummary(accounts, initialCanonicalPaperState(1));
+  assert.ok(summary.blockedCandidates.length > 0, "formed regime signals must reach the candidate audit");
+  assert.equal(summary.blockedCandidates[0].stage, "ACCOUNT");
+  assert.ok(summary.blockedCandidates[0].entryPrice! > 0);
+  assert.equal(state.lastEvaluatedHour, 720 * 3_600_000);
+});
+
+function balancedPath(direction: 1 | -1) {
+  return Array.from({ length: 721 }, (_, index) => ({
+    time: index * 3_600,
+    ...(() => { const close = 100 * (1 + direction * .001 * index / 720);
+      return { open: close, high: close * 1.001, low: close * .999, close, volume: 100 }; })(),
+  }));
+}
+
+test("an evaluated hour exposes the nearest frozen conditions without granting order authority", () => {
+  const symbols = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "BNB_USDT", "DOGE_USDT", "ADA_USDT", "LINK_USDT"];
+  const hourly = Object.fromEntries(symbols.map((symbol, index) => [symbol, balancedPath(index < 4 ? -1 : 1)]));
+  const state = evaluateRegimePortfolio({ state: initialRegimePortfolio(1), hourly, quotes: {}, contracts: {},
+    now: 721 * 3_600_000 });
+  assert.equal(state.currentContext?.regime, "BALANCED_ROTATION");
+  assert.equal(Object.keys(state.accounts.BALANCED_ROTATION.open).length, 0);
+  assert.equal(state.routeChecks.length, 10);
+  assert.ok(state.routeChecks.every((row) => row.status === "FORMING"));
+  assert.ok(state.routeChecks.every((row) => row.score >= 0 && row.score < 100));
+  assert.match(state.routeChecks[0].reason, /满足 \d+\/\d+ 项冻结条件；待满足/);
+  assert.ok(state.routeChecks.every((row) => row.entryPrice == null && row.stopPrice == null && row.targetPrice == null));
   assert.equal(state.lastEvaluatedHour, 720 * 3_600_000);
 });
 

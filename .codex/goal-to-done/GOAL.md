@@ -1,3 +1,10 @@
+# Active correction — truthful candidate visibility
+
+- Repair the five-system summary so every fully formed signal blocked by execution or account admission reaches the canonical PAPER candidate audit; never hard-code the audit to an empty list.
+- For every completed hourly evaluation with no order, retain the closest current-domain frozen strategies with exact passed/missing condition diagnostics. These `FORMING` observations explain waiting and can never create, authorize or resize an order.
+- Keep the frozen 12-strategy authority, risk caps, account state, credentials, settings and owner-selected LIVE state unchanged. Do not revive the higher-frequency V4/V5 paths because their current evidence is negative.
+- Verify the behavior locally, release through reviewed `main`, and prove production exposes forming/blocked/open truth while LIVE remains unchanged.
+
 # Active correction — immediate persistent hourly readiness
 
 - Fetch 722 hourly rows on a cold path so removing Gate's unfinished current hour still leaves the 721 completed observations required for a causal 720-hour return. Do not wait for the next hour boundary.

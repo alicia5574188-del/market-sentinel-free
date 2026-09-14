@@ -1,3 +1,11 @@
+# Release candidate — 2026-09-14 truthful candidate visibility
+
+- Production monitoring confirms 11/11 hourly paths, synchronized market context, fresh runtime state and no hourly fetch failures. The lack of visible candidates is not a cold-start data failure.
+- Root cause confirmed in source: `canonicalPaperSummary()` hard-coded `blockedCandidates: []`, and the five-system evaluator emitted route checks only after a full strategy signal. Consequently the UI could show neither blocked five-system signals nor honest near-trigger progress.
+- Implementing two separate audit layers: complete signals rejected by execution/account rules retain `BLOCKED` status and geometry when available; incomplete strategies retain `FORMING` status with exact passed/missing frozen conditions and no order authority.
+- The frozen 44-month portfolio produced 1,821 trades (about 1.36/day overall and 0.85/day in the final six months). V4/V5 higher-frequency replays were negative, so this correction does not loosen gates or restore those engines.
+- Local verification, reviewed PR, main deployment and production/LIVE-state checks remain.
+
 # Release candidate — 2026-09-14 immediate persistent hourly readiness
 
 - Root cause confirmed: Gate includes the unfinished current 1h bar, while the runtime requested only 721 and correctly filtered that bar, leaving 720 completed observations. The classifier requires 721 observations for a causal 720-hour return, so a fresh deployment could wait until the next hour.

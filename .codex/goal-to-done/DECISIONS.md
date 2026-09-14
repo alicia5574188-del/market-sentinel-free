@@ -1,3 +1,11 @@
+# Candidate visibility decision — 2026-09-14
+
+- Distinguish three truths: `FORMING` means an incomplete frozen condition set and has no order authority; `BLOCKED` means the full directional signal formed but failed execution/account admission; `OPEN` means the independent system account admitted the trade.
+- Rank current-hour `FORMING` observations only by the fraction of that strategy's exact boolean conditions already satisfied. Display every missing metric and threshold; the score is progress, not probability, expected return or permission.
+- Keep only the current hour's top ten forming observations and at most 24 hours of formed route history inside the existing bounded checkpoint. This adds no market requests and no D1 writes.
+- The portfolio's observed low frequency is real. Do not manufacture activity by weakening gates or restoring V4/V5; any added strategy requires a combined chronological, after-cost portfolio replay before receiving authority.
+- Deployment must preserve the owner's persisted LIVE choice exactly.
+
 # Immediate hourly-readiness decision — 2026-09-14
 
 - A causal 720-hour return requires 721 completed hourly observations. Because Gate may include the current unfinished bar in its limit, cold preload requests 722 and still filters unfinished data rather than weakening causality.

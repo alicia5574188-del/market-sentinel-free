@@ -92,8 +92,8 @@ type RouteCheck = { id: string; eventId: string; strategyId: string; strategyNam
   environment: AllRegimeEnvironment | RegimeSystemId | null; score: number; reason: string | null;
   engineId?: RegimeSystemId | "CURRENT_V5" | "PREVIOUS_V4"; engineName?: string };
 type BlockedCandidate = { id: string; eventId: string; strategyId: string; strategyName: string; symbol: string;
-  blockedAt: number; side: Side; orientation: StrategyOrientation; environment: AllRegimeEnvironment;
-  entryPrice: number; stopPrice: number; targetPrice: number; score: number;
+  blockedAt: number; side: Side; orientation: StrategyOrientation; environment: AllRegimeEnvironment | RegimeSystemId;
+  entryPrice: number | null; stopPrice: number | null; targetPrice: number | null; score: number;
   stage: "EXECUTION" | "AUTHORITY" | "ACCOUNT"; code: string; reason: string };
 type StrategyArena = { version: number; systemName?: string; initialEquity?: number; startedAt: number; catalogSize: number; playbookCount: number; shadowCount: number;
   warmMarkets?: number; lastEvaluatedHour?: number | null; currentContext?: { regime: RegimeSystemId; at: number; markets: number } | null;
@@ -364,6 +364,8 @@ export default function Home() {
   const currentRoutes = routeChecks.filter((row) => row.status === "OPEN" || row.status === "CHECKING")
     .sort((left, right) => right.score - left.score || right.observedAt - left.observedAt);
   const blockedRoutes = routeChecks.filter((row) => row.status === "BLOCKED");
+  const formingRoutes = routeChecks.filter((row) => row.status === "FORMING")
+    .sort((left, right) => right.score - left.score || right.observedAt - left.observedAt);
   const leadRoute = currentRoutes[0];
   const leadEnvironment = currentRegime ?? leadRoute?.environment ?? undefined;
   const leadOwner = leadRoute?.strategyName ?? currentSystem?.name ?? null;
@@ -399,8 +401,8 @@ export default function Home() {
     { title: "接收行情", detail: `最近成功 ${ageText(runtime?.lastSuccessAt, now)}` },
     { title: "更新环境", detail: `${stableMarkets}/11 币完成720小时路径` },
     { title: "系统归属", detail: awaitingNextCycle
-      ? `当前行情域已完成本轮判断，${blockedRoutes.length} 条信号未通过执行条件`
-      : `${routeChecks.length} 条冻结策略信号正在判断` },
+      ? `本轮已判断；${formingRoutes.length} 条接近触发观察，${blockedRoutes.length} 条成形信号被拦截`
+      : `${currentRoutes.length + blockedRoutes.length} 条成形信号正在判断` },
     { title: "执行检查", detail: `${currentRoutes.length} 条路线由后台确认通过或正在核对` },
     { title: "持仓管理", detail: `${portfolioOpen.length} 笔持仓实时保护` },
   ];
@@ -483,6 +485,8 @@ export default function Home() {
 
     {hasRuntimeSnapshot && <section className="playbook-list route-console" hidden={activeTab !== "brain"}><div className="section-heading"><div><h2>当前行情域直接信号</h2><p>只展示冻结策略在当前行情域形成的真实信号；没有影子授权阶段。</p></div><span>{currentRoutes.length} 条</span></div>{currentRoutes.length ? <div className="strategy-grid">{currentRoutes.slice(0, 6).map((route) => <article className="strategy-card route-approved" key={route.id}><div className="strategy-title"><div><small>{route.engineName ?? "行情系统"} · {route.symbol.replace("_", "/")} · {environmentLabel(route.environment ?? undefined)}</small><h3>{route.strategyName}</h3></div><span className={route.side === "LONG" ? "positive" : "negative"}>{route.side === "LONG" ? "做多" : "做空"}</span></div><small className="strategy-rule">{route.reason}{route.blocker ? `；${route.blocker}` : ""}</small></article>)}</div> : <div className="empty"><b>当前行情域没有冻结策略信号</b><p>这代表本小时正确等待，不会用影子订单试探市场。</p></div>}</section>}
 
+    {hasRuntimeSnapshot && <section className="playbook-list route-console" hidden={activeTab !== "brain"}><div className="section-heading"><div><h2>当前最接近触发</h2><p>按冻结条件满足比例排序，仅用于解释等待原因；不生成订单，也不改变下单权限。</p></div><span>{formingRoutes.length} 条</span></div>{formingRoutes.length ? <div className="strategy-grid">{formingRoutes.slice(0, 8).map((route) => <article className="strategy-card" key={`forming:${route.id}`}><div className="strategy-title"><div><small>{route.engineName ?? "行情系统"} · {route.symbol.replace("_", "/")} · {environmentLabel(route.environment ?? undefined)}</small><h3>{route.strategyName}</h3></div><span>{route.score}%</span></div><small className="strategy-rule">{route.side ? `观察方向：${route.side === "LONG" ? "做多" : "做空"}；` : "方向尚未确定；"}{route.reason}</small></article>)}</div> : <div className="empty"><b>等待下一次完整小时判断</b><p>小时路径完成后会列出最接近冻结触发条件的观察项。</p></div>}</section>}
+
     <section className="panel-list" hidden={activeTab !== "orders"}>
       {hasRuntimeSnapshot ? <><h2 className="order-group-title">唯一执行 PAPER（五系统订单各100%复制） <span>{num(portfolioAccountEquity, 2)} U</span></h2>
       {portfolioOpen.map((trade) => { const market = runtime?.evidence[trade.symbol]; return <ArenaOpenCard key={trade.id} trade={trade}
@@ -493,7 +497,7 @@ export default function Home() {
     {showLiveCenter && <div hidden={activeTab !== "live"}><LiveCenter auth={auth} runtime={runtime} live={live} liveEnabled={liveEnabled} liveBusy={liveBusy} liveActionError={liveActionError} positions={openLivePositions} closedPositions={closedLivePositions} entries={openLiveEntries} skips={liveEntrySkips} now={clock || runtime?.generatedAt || 0} onLogin={() => setShowLogin(true)} onToggle={liveControl} onCleanup={() => void setLiveMode(false)} /></div>}
 
     <section className="history-panel" hidden={activeTab !== "history"}>{hasRuntimeSnapshot ? <><div className="section-heading"><div><h2>当前模拟周期</h2><p>合并展示五个独立1000 U账户真正成交的订单，每笔保留来源系统。</p></div><span>{arena?.portfolioResolved ?? "—"} 笔</span></div>{!currentPortfolioHistory.length ? <div className="empty"><b>本轮还没有已完成订单</b><p>当前持仓结算后会出现在这里。</p></div> : <div className="history-table">{currentPortfolioHistory.map((trade) => <ArenaTradeRecord key={trade.id} trade={trade} />)}</div>}</> : <div className="empty"><b>正在读取模拟交易记录</b><p>收到后台真实快照前不显示空记录。</p></div>}</section>
-    {hasRuntimeSnapshot && <section className="history-panel" hidden={activeTab !== "history"}><div className="section-heading"><div><h2>未成交候选</h2><p>只记录已经形成方向与进场结构、但在执行、授权或账户准入阶段被阻止的候选；尚未形成路线的不算订单。</p></div><span>{blockedCandidates.length} 条</span></div>{!blockedCandidates.length ? <div className="empty"><b>暂无已形成但被阻止的候选</b><p>以后每个最终阻止原因都会保留在这里。</p></div> : <div className="candidate-audit">{blockedCandidates.map((candidate) => <article key={candidate.id}><div><small>{time(candidate.blockedAt)} · {candidate.stage}</small><b>{candidate.symbol.replace("_", "/")} · {candidate.strategyName}</b></div><span className={`side ${candidate.side.toLowerCase()}`}>{candidate.side === "LONG" ? "多" : "空"}</span><dl><div><dt>进场</dt><dd>{num(candidate.entryPrice, 5)}</dd></div><div><dt>止损</dt><dd>{num(candidate.stopPrice, 5)}</dd></div><div><dt>盈利臂</dt><dd>{num(candidate.targetPrice, 5)}</dd></div></dl><p><b>{candidate.code}</b> · {candidate.reason}</p></article>)}</div>}</section>}
+    {hasRuntimeSnapshot && <section className="history-panel" hidden={activeTab !== "history"}><div className="section-heading"><div><h2>未成交候选</h2><p>只记录已经形成方向信号、但在执行或账户准入阶段被阻止的候选；接近触发观察不算订单。</p></div><span>{blockedCandidates.length} 条</span></div>{!blockedCandidates.length ? <div className="empty"><b>暂无已形成但被阻止的候选</b><p>{formingRoutes.length ? `当前另有 ${formingRoutes.length} 条接近触发观察，尚未形成订单结构。` : "以后每个最终阻止原因都会保留在这里。"}</p></div> : <div className="candidate-audit">{blockedCandidates.map((candidate) => <article key={candidate.id}><div><small>{time(candidate.blockedAt)} · {candidate.stage}</small><b>{candidate.symbol.replace("_", "/")} · {candidate.strategyName}</b></div><span className={`side ${candidate.side.toLowerCase()}`}>{candidate.side === "LONG" ? "多" : "空"}</span><dl><div><dt>进场</dt><dd>{num(candidate.entryPrice, 5)}</dd></div><div><dt>止损</dt><dd>{num(candidate.stopPrice, 5)}</dd></div><div><dt>盈利臂</dt><dd>{num(candidate.targetPrice, 5)}</dd></div></dl><p><b>{candidate.code}</b> · {candidate.reason}</p></article>)}</div>}</section>}
     {hasRuntimeSnapshot && <section className="history-archive" hidden={activeTab !== "history"}>
       <button className="archive-toggle" type="button" aria-expanded={archiveOpen} onClick={() => setArchiveOpen((open) => !open)}>
         <div><h2>历史归档</h2><p>旧版本和已重置周期已收起保存，不计入当前权益、胜率或策略授权。</p></div>

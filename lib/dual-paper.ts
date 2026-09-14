@@ -166,6 +166,28 @@ export function canonicalPaperOpen(accounts: DualPaperAccounts, state: Canonical
   }).sort((left, right) => right.openedAt - left.openedAt);
 }
 
+const REGIME_BLOCK_REASON: Record<string, string> = {
+  STALE_QUOTE: "实时盘口缺失或超过8秒，禁止使用小时收盘价冒充可成交价",
+  CONTRACT: "缺少Gate永续合约规格，不能计算真实合约数量",
+  SPREAD: "实时买卖价差超过0.12%，执行成本不合格",
+  MIN_CONTRACT: "按当前权益与风险计算后不足一张Gate合约",
+  SYMBOL_OCCUPIED: "该独立系统账户已持有同币订单",
+  COOLDOWN: "同币同策略仍在24小时冷却期",
+  MIN_NOTIONAL: "风险约束下的名义仓位低于最低有效比例",
+  RISK_CAP: "新订单会超过账户10%总风险或6.5%同向风险上限",
+};
+
+function regimeBlockedCandidates(routeChecks: RegimePortfolioState["routeChecks"]) {
+  return routeChecks.filter((row) => row.status === "BLOCKED" && row.side != null).slice(0, 100).map((row) => ({
+    id: row.id, eventId: row.eventId, strategyId: row.strategyId, strategyName: row.strategyName, symbol: row.symbol,
+    blockedAt: row.observedAt, side: row.side!, orientation: "NORMAL" as const, environment: row.environment,
+    entryPrice: row.entryPrice, stopPrice: row.stopPrice, targetPrice: row.targetPrice, score: row.score,
+    stage: (["STALE_QUOTE", "CONTRACT", "SPREAD", "MIN_CONTRACT"].includes(row.blocker ?? "")
+      ? "EXECUTION" : "ACCOUNT") as "EXECUTION" | "ACCOUNT",
+    code: row.blocker ?? "UNKNOWN", reason: REGIME_BLOCK_REASON[row.blocker ?? ""] ?? "路线未通过最终准入检查",
+  }));
+}
+
 export function canonicalPaperSummary(accounts: DualPaperAccounts, state: CanonicalPaperState) {
   const current = currentArenaSummary(accounts.current);
   const previous = previousArenaSummary(accounts.previous);
@@ -189,7 +211,7 @@ export function canonicalPaperSummary(accounts: DualPaperAccounts, state: Canoni
     portfolioOpen: canonicalPaperOpen(accounts, state),
     recentPortfolio: state.recent,
     archivedPortfolioTrades: state.archived,
-    openShadow: [], recentShadow: [], observationShadow: [], blockedCandidates: [],
+    openShadow: [], recentShadow: [], observationShadow: [], blockedCandidates: regimeBlockedCandidates(regime.currentRouteChecks),
     strategies: regime.systems.flatMap((system) => system.strategies.map((row) => ({ ...row, engineId: system.id,
       engineName: system.name }))),
     playbooks: [], transitions: [], currentRouteChecks: regime.currentRouteChecks,

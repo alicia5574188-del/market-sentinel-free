@@ -3,6 +3,7 @@ import type { GateCandle } from "./gate-market.ts";
 import type { ArenaQuote, ArenaTrade, ArenaTradeContext, StrategyFamily } from "./strategy-arena.ts";
 
 export const REGIME_PORTFOLIO_VERSION = 1;
+export const REGIME_ROUTE_AUDIT_VERSION = 1 as const;
 export const REGIME_ACCOUNT_INITIAL_EQUITY = 1_000;
 export const REGIME_HOURLY_REQUIRED_CANDLES = 721;
 export const REGIME_FRICTION_RATE = 0.0014;
@@ -61,13 +62,14 @@ export type RegimeContext = { at: number; regime: RegimeSystemId; median24: numb
   breadth24: number; breadth7: number; breadth30: number; compression: number; markets: number };
 
 export type RegimePortfolioState = {
-  version: 1; startedAt: number; lastEvaluatedHour: number | null; currentContext: RegimeContext | null;
+  version: 1; auditVersion?: 1; startedAt: number; lastEvaluatedHour: number | null; currentContext: RegimeContext | null;
   warmMarkets: number; accounts: Record<RegimeSystemId, RegimeAccountState>; routeChecks: RegimeRouteCheck[];
 };
 
 export type RegimeRouteCheck = { id: string; eventId: string; strategyId: string; strategyName: string; symbol: string;
-  observedAt: number; status: "BLOCKED" | "OPEN"; blocker: string | null; side: Side; environment: RegimeSystemId;
-  score: number; reason: string; engineId: RegimeSystemId; engineName: string };
+  observedAt: number; status: "FORMING" | "BLOCKED" | "OPEN"; blocker: string | null; side: Side | null;
+  environment: RegimeSystemId; score: number; reason: string; engineId: RegimeSystemId; engineName: string;
+  entryPrice: number | null; stopPrice: number | null; targetPrice: number | null };
 
 export type RegimeContractMeta = { quantoMultiplier: number; maintenanceRate: number; leverageMax: number; fundingRate?: number; volume24hUsd?: number };
 
@@ -76,17 +78,22 @@ const account = (id: RegimeSystemId, now: number): RegimeAccountState => ({ id, 
   cooldowns: {}, admissionRejects: {} });
 
 export function initialRegimePortfolio(now = Date.now()): RegimePortfolioState {
-  return { version: REGIME_PORTFOLIO_VERSION, startedAt: now, lastEvaluatedHour: null, currentContext: null,
+  return { version: REGIME_PORTFOLIO_VERSION, auditVersion: REGIME_ROUTE_AUDIT_VERSION,
+    startedAt: now, lastEvaluatedHour: null, currentContext: null,
     warmMarkets: 0, accounts: Object.fromEntries(REGIME_SYSTEMS.map((id) => [id, account(id, now)])) as Record<RegimeSystemId, RegimeAccountState>,
     routeChecks: [] };
 }
 
-export function normalizeRegimePortfolio(value: RegimePortfolioState | null | undefined, now = Date.now()) {
+export function normalizeRegimePortfolio(value: RegimePortfolioState | null | undefined, now = Date.now()): RegimePortfolioState {
   const fresh = initialRegimePortfolio(now);
   if (!value || value.version !== REGIME_PORTFOLIO_VERSION) return fresh;
-  return { ...fresh, ...value, accounts: Object.fromEntries(REGIME_SYSTEMS.map((id) => [id, {
+  return { ...fresh, ...value, auditVersion: REGIME_ROUTE_AUDIT_VERSION,
+    lastEvaluatedHour: value.auditVersion === REGIME_ROUTE_AUDIT_VERSION ? value.lastEvaluatedHour : null,
+    accounts: Object.fromEntries(REGIME_SYSTEMS.map((id) => [id, {
     ...fresh.accounts[id], ...(value.accounts?.[id] ?? {}), id,
-  }])) as Record<RegimeSystemId, RegimeAccountState> };
+  }])) as Record<RegimeSystemId, RegimeAccountState>, routeChecks: (value.routeChecks ?? []).map((row) => ({
+    ...row, entryPrice: row.entryPrice ?? null, stopPrice: row.stopPrice ?? null, targetPrice: row.targetPrice ?? null,
+  })) };
 }
 
 const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
@@ -113,6 +120,8 @@ type Feature = { symbol: string; current: GateCandle; r1: number; r6: number; r2
   atr6: number; compression: number; volumeBurst: number; high24: number; low24: number; high7d: number; low7d: number;
   relative24: number; relative7: number; context: RegimeContext };
 type FoundSignal = { direction: 1 | -1; strength: number };
+type SignalReadiness = { direction: 1 | -1 | null; score: number; reason: string };
+type TradeGeometry = { entryPrice: number; stopPrice: number; targetPrice: number; stopRate: number; targetRate: number };
 
 function synchronizedFeatures(paths: Record<string, GateCandle[]>) {
   const eligible = Object.entries(paths).filter(([, rows]) => rows.length >= REGIME_HOURLY_REQUIRED_CANDLES);
@@ -208,6 +217,101 @@ function signal(config: RegimeStrategy, f: Feature): FoundSignal | null {
   return null;
 }
 
+function percent(value: number) {
+  return `${(value * 100).toFixed(2)}%`;
+}
+
+function readiness(config: RegimeStrategy, f: Feature): SignalReadiness {
+  const p = config.params;
+  let direction: 1 | -1 | null = null;
+  let checks: Array<[boolean, string]> = [];
+  if (config.tactic === "ALIGNED_DOWNSHOCK_REVERSAL") {
+    direction = 1;
+    checks = [[f.context.median24 < 0, `市场24h中位数需<0（当前${percent(f.context.median24)}）`],
+      [f.context.median30 < 0, `市场30d中位数需<0（当前${percent(f.context.median30)}）`],
+      [f.r24 <= -p.symbol24, `币种24h需≤-${percent(p.symbol24)}（当前${percent(f.r24)}）`],
+      [f.r6 >= p.rebound6, `6h反弹需≥${percent(p.rebound6)}（当前${percent(f.r6)}）`]];
+  } else if (config.tactic === "COUNTER_DOWNSHOCK_SURVIVOR") {
+    direction = 1;
+    checks = [[f.context.median24 < 0, `市场24h中位数需<0（当前${percent(f.context.median24)}）`],
+      [f.context.median30 > 0, `市场30d中位数需>0（当前${percent(f.context.median30)}）`],
+      [f.relative24 >= p.relative24, `24h相对强度需≥${percent(p.relative24)}（当前${percent(f.relative24)}）`],
+      [f.r6 >= p.rebound6, `6h反弹需≥${percent(p.rebound6)}（当前${percent(f.r6)}）`]];
+  } else if (config.tactic === "FALSE_RELEASE") {
+    const highFail = f.current.high > f.high24 && f.current.close < f.high24 * (1 - p.reclaim);
+    const lowFail = f.current.low < f.low24 && f.current.close > f.low24 * (1 + p.reclaim);
+    direction = highFail ? -1 : lowFail ? 1 : f.current.high > f.high24 ? -1 : f.current.low < f.low24 ? 1 : null;
+    checks = [[f.volumeBurst >= p.volume, `6h量能倍数需≥${p.volume.toFixed(2)}（当前${f.volumeBurst.toFixed(2)}）`],
+      [highFail !== lowFail, `需出现且仅出现一侧24h假突破回收（当前${highFail ? "上沿回收" : lowFail ? "下沿回收" : "未回收"}）`]];
+  } else if (config.tactic === "QUIET_PULLBACK_RESUME" || config.tactic === "RELATIVE_PULLBACK_RESUME") {
+    const relativeDirection = sign(f.relative7);
+    direction = relativeDirection === 0 ? null : relativeDirection;
+    const pullback = (direction ?? 0) * f.r24;
+    checks = [[direction != null, `7d相对方向需明确（当前${percent(f.relative7)}）`],
+      [Math.abs(f.relative7) >= p.relative7, `7d相对强度绝对值需≥${percent(p.relative7)}（当前${percent(Math.abs(f.relative7))}）`],
+      [pullback <= -p.pullbackMin, `24h回撤需≥${percent(p.pullbackMin)}（当前${percent(-pullback)}）`],
+      [pullback >= -p.pullbackMax, `24h回撤需≤${percent(p.pullbackMax)}（当前${percent(-pullback)}）`],
+      [(direction ?? 0) * f.r6 >= p.resume6, `6h恢复需≥${percent(p.resume6)}（当前${percent((direction ?? 0) * f.r6)}）`]];
+  } else if (config.tactic === "BEAR_MARKET_REBOUND") {
+    direction = 1;
+    checks = [[f.context.median30 < 0, `市场30d中位数需<0（当前${percent(f.context.median30)}）`],
+      [f.r24 <= -p.drop24, `币种24h需≤-${percent(p.drop24)}（当前${percent(f.r24)}）`],
+      [f.r6 >= p.rebound6, `6h反弹需≥${percent(p.rebound6)}（当前${percent(f.r6)}）`]];
+  } else if (config.tactic === "BULL_RELATIVE_MOMENTUM") {
+    const relativeDirection = sign(f.relative7);
+    direction = relativeDirection === 0 ? null : relativeDirection;
+    checks = [[f.context.median30 > 0, `市场30d中位数需>0（当前${percent(f.context.median30)}）`],
+      [direction != null, `7d相对方向需明确（当前${percent(f.relative7)}）`],
+      [Math.abs(f.relative7) >= p.relative7, `7d相对强度绝对值需≥${percent(p.relative7)}（当前${percent(Math.abs(f.relative7))}）`],
+      [(direction ?? 0) * f.relative24 >= p.confirm24, `24h同向确认需≥${percent(p.confirm24)}（当前${percent((direction ?? 0) * f.relative24)}）`]];
+  } else if (config.tactic === "BEAR_BREAKDOWN_TRAIL") {
+    direction = -1;
+    checks = [[f.context.median30 < 0, `市场30d中位数需<0（当前${percent(f.context.median30)}）`],
+      [f.r30d <= -p.symbol30, `币种30d需≤-${percent(p.symbol30)}（当前${percent(f.r30d)}）`],
+      [f.context.breadth30 <= p.breadth, `30d上涨广度需≤${percent(p.breadth)}（当前${percent(f.context.breadth30)}）`],
+      [f.current.close < f.low7d, `收盘需跌破7d低点（当前${f.current.close.toFixed(5)} / ${f.low7d.toFixed(5)}）`]];
+  } else if (config.tactic === "BEAR_DEFENSIVE_RELATIVE") {
+    direction = 1;
+    checks = [[f.context.median30 < 0, `市场30d中位数需<0（当前${percent(f.context.median30)}）`],
+      [-f.relative7 >= p.relative7, `7d防守相对强度需≥${percent(p.relative7)}（当前${percent(-f.relative7)}）`],
+      [-f.r6 >= p.confirm6, `6h确认需≥${percent(p.confirm6)}（当前${percent(-f.r6)}）`]];
+  } else if (config.tactic === "REFINED_BREADTH_CONTINUATION") {
+    const marketDirection = sign(f.context.median24);
+    direction = marketDirection === 0 ? null : marketDirection;
+    const boundary = direction === 1 ? f.high24 : f.low24;
+    checks = [[direction != null, `市场24h方向需明确（当前${percent(f.context.median24)}）`],
+      [direction != null && sign(f.r24) === direction, `币种24h需与市场同向（当前${percent(f.r24)}）`],
+      [Math.abs(f.r24) >= p.symbol24, `币种24h幅度需≥${percent(p.symbol24)}（当前${percent(Math.abs(f.r24))}）`],
+      [(direction ?? 0) * f.r6 >= p.impulse6, `6h同向脉冲需≥${percent(p.impulse6)}（当前${percent((direction ?? 0) * f.r6)}）`],
+      [direction != null && direction * (f.current.close / boundary - 1) >= 0, `收盘需越过24h边界（当前${f.current.close.toFixed(5)} / ${boundary.toFixed(5)}）`]];
+  } else if (config.tactic === "EXPANSION_DEFENDER") {
+    const marketDirection = sign(f.context.median24);
+    direction = marketDirection ? -marketDirection as 1 | -1 : null;
+    checks = [[marketDirection !== 0, `市场24h方向需明确（当前${percent(f.context.median24)}）`],
+      [(direction ?? 0) * f.relative24 >= p.relative24, `逆市场24h相对强度需≥${percent(p.relative24)}（当前${percent((direction ?? 0) * f.relative24)}）`],
+      [(direction ?? 0) * f.r6 >= p.resume6, `6h恢复需≥${percent(p.resume6)}（当前${percent((direction ?? 0) * f.r6)}）`]];
+  } else if (config.tactic === "SHORT_HORIZON_REVERSAL") {
+    const original = sign(f.relative24);
+    direction = original ? -original as 1 | -1 : null;
+    checks = [[original !== 0, `24h相对方向需明确（当前${percent(f.relative24)}）`],
+      [Math.abs(f.relative24) >= p.relative24, `24h相对偏离需≥${percent(p.relative24)}（当前${percent(Math.abs(f.relative24))}）`],
+      [(direction ?? 0) * f.r6 >= p.reversal6, `6h反转需≥${percent(p.reversal6)}（当前${percent((direction ?? 0) * f.r6)}）`]];
+  }
+  const passed = checks.filter(([ok]) => ok).length;
+  const missing = checks.filter(([ok]) => !ok).map(([, label]) => label);
+  return { direction, score: checks.length ? Math.round(passed / checks.length * 100) : 0,
+    reason: `满足 ${passed}/${checks.length} 项冻结条件${missing.length ? `；待满足：${missing.join("；")}` : ""}` };
+}
+
+function tradeGeometry(config: RegimeStrategy, feature: Feature, found: FoundSignal, marketPrice: number): TradeGeometry {
+  const entryPrice = marketPrice * (1 + found.direction * REGIME_ENTRY_SLIPPAGE_RATE);
+  const stopRate = Math.min(.20, Math.max(config.stopFloor, config.stopAtr * feature.atr6));
+  const stopPrice = entryPrice * (1 - found.direction * stopRate);
+  const targetRate = config.exitModel === "TRAIL" ? Math.min(.8, Math.max(stopRate * 10, .5))
+    : Math.max(stopRate * (config.rewardRisk ?? 1.5), REGIME_FRICTION_RATE * 2.2);
+  return { entryPrice, stopPrice, targetPrice: entryPrice * (1 + found.direction * targetRate), stopRate, targetRate };
+}
+
 function quotePrice(quote: ArenaQuote | undefined, side: Side, now: number) {
   if (!quote || quote.fresh === false || quote.observedAt == null || now - quote.observedAt > 8_000) return null;
   const value = side === "LONG" ? quote.bestAsk : quote.bestBid;
@@ -223,30 +327,26 @@ function block(account: RegimeAccountState, code: string) {
 }
 
 function makeTrade(config: RegimeStrategy, feature: Feature, found: FoundSignal, account: RegimeAccountState,
-  quote: ArenaQuote, meta: RegimeContractMeta, now: number): { trade: ArenaTrade | null; blocker: string | null } {
+  quote: ArenaQuote, meta: RegimeContractMeta, now: number): { trade: ArenaTrade | null; blocker: string | null; geometry: TradeGeometry | null } {
   const side: Side = found.direction > 0 ? "LONG" : "SHORT";
   const marketPrice = quotePrice(quote, side, now);
-  if (!marketPrice) return { trade: null, blocker: block(account, "STALE_QUOTE") };
-  if (account.open[feature.symbol]) return { trade: null, blocker: block(account, "SYMBOL_OCCUPIED") };
-  if ((account.cooldowns[`${config.id}:${feature.symbol}`] ?? 0) > now) return { trade: null, blocker: block(account, "COOLDOWN") };
+  if (!marketPrice) return { trade: null, blocker: block(account, "STALE_QUOTE"), geometry: null };
+  const geometry = tradeGeometry(config, feature, found, marketPrice);
+  if (account.open[feature.symbol]) return { trade: null, blocker: block(account, "SYMBOL_OCCUPIED"), geometry };
+  if ((account.cooldowns[`${config.id}:${feature.symbol}`] ?? 0) > now) return { trade: null, blocker: block(account, "COOLDOWN"), geometry };
   const spread = quote.bestBid && quote.bestAsk ? (quote.bestAsk - quote.bestBid) / Math.max(marketPrice, 1e-9) : Infinity;
-  if (spread > .0012) return { trade: null, blocker: block(account, "SPREAD") };
+  if (spread > .0012) return { trade: null, blocker: block(account, "SPREAD"), geometry };
   const multiplier = Math.max(meta.quantoMultiplier, 1e-12);
-  const entryPrice = marketPrice * (1 + found.direction * REGIME_ENTRY_SLIPPAGE_RATE);
-  const stopRate = Math.min(.20, Math.max(config.stopFloor, config.stopAtr * feature.atr6));
+  const { entryPrice, stopPrice, targetPrice, stopRate, targetRate } = geometry;
   const notionalMultiple = Math.min(.5, .015 / Math.max(stopRate + REGIME_FRICTION_RATE, 1e-9));
-  if (notionalMultiple < .05) return { trade: null, blocker: block(account, "MIN_NOTIONAL") };
+  if (notionalMultiple < .05) return { trade: null, blocker: block(account, "MIN_NOTIONAL"), geometry };
   const contractNotional = entryPrice * multiplier;
   const contracts = Math.floor(account.equity * notionalMultiple / contractNotional);
-  if (contracts < 1) return { trade: null, blocker: block(account, "MIN_CONTRACT") };
+  if (contracts < 1) return { trade: null, blocker: block(account, "MIN_CONTRACT"), geometry };
   const notional = contracts * contractNotional;
   const plannedRisk = notional * (stopRate + REGIME_FRICTION_RATE);
   if (openRisk(account) + plannedRisk > account.equity * .10 + 1e-8
-    || openRisk(account, side) + plannedRisk > account.equity * .065 + 1e-8) return { trade: null, blocker: block(account, "RISK_CAP") };
-  const stopPrice = entryPrice * (1 - found.direction * stopRate);
-  const targetRate = config.exitModel === "TRAIL" ? Math.min(.8, Math.max(stopRate * 10, .5))
-    : Math.max(stopRate * (config.rewardRisk ?? 1.5), REGIME_FRICTION_RATE * 2.2);
-  const targetPrice = entryPrice * (1 + found.direction * targetRate);
+    || openRisk(account, side) + plannedRisk > account.equity * .065 + 1e-8) return { trade: null, blocker: block(account, "RISK_CAP"), geometry };
   const leverage = selectSafeLeverage({ notional, equity: account.equity, entry: entryPrice, invalidation: stopPrice,
     maintenanceRate: meta.maintenanceRate, leverageMax: meta.leverageMax });
   const context: ArenaTradeContext = { channel: config.system === "COMPRESSION" ? "COMPRESSION" : config.system === "BALANCED_ROTATION" ? "RANGE"
@@ -264,7 +364,7 @@ function makeTrade(config: RegimeStrategy, feature: Feature, found: FoundSignal,
     maxHoldMs: config.maxHoldHours * 3_600_000, noProgressMs: config.maxHoldHours * 3_600_000,
     profitArmIsNotExit: config.exitModel === "TRAIL" };
   const eventId = `${config.system}:${feature.context.at}:${feature.symbol}:${config.id}`;
-  return { blocker: null, trade: { id: `REGIME:${eventId}`, strategyId: config.id, strategyName: config.name,
+  return { blocker: null, geometry, trade: { id: `REGIME:${eventId}`, strategyId: config.id, strategyName: config.name,
     family: config.family, lane: "PORTFOLIO", eventId, symbol: feature.symbol, side, status: "OPEN", openedAt: now,
     closedAt: null, entryPrice, stopPrice, targetPrice, exitPrice: null, outcome: null, grossReturnRate: null,
     netReturnRate: null, netPnl: null, notional, maxFavorableRate: 0, maxAdverseRate: 0, lastPrice: entryPrice,
@@ -331,13 +431,19 @@ export function evaluateRegimePortfolio(input: { state: RegimePortfolioState; ho
   const candidates = synchronized.features.flatMap((feature) => strategies.flatMap((config) => {
     const found = signal(config, feature); return found ? [{ feature, config, found }] : [];
   })).sort((left, right) => right.found.strength - left.found.strength || left.config.id.localeCompare(right.config.id));
+  const forming = synchronized.features.flatMap((feature) => strategies.flatMap((config) => {
+    if (signal(config, feature)) return [];
+    return [{ feature, config, readiness: readiness(config, feature) }];
+  })).sort((left, right) => right.readiness.score - left.readiness.score || left.config.id.localeCompare(right.config.id));
   const checks: RegimeRouteCheck[] = [];
   let transientBlock = false;
   for (const candidate of candidates) {
     const meta = input.contracts[candidate.feature.symbol]; const quote = input.quotes[candidate.feature.symbol];
     const side: Side = candidate.found.direction > 0 ? "LONG" : "SHORT";
+    const fallbackPrice = quote ? quotePrice(quote, side, input.now) : null;
     const result = meta && quote ? makeTrade(candidate.config, candidate.feature, candidate.found, accountState, quote, meta, input.now)
-      : { trade: null, blocker: block(accountState, !meta ? "CONTRACT" : "STALE_QUOTE") };
+      : { trade: null, blocker: block(accountState, !meta ? "CONTRACT" : "STALE_QUOTE"),
+        geometry: fallbackPrice ? tradeGeometry(candidate.config, candidate.feature, candidate.found, fallbackPrice) : null };
     if (result.trade) accountState.open[result.trade.symbol] = result.trade;
     if (result.blocker === "STALE_QUOTE" || result.blocker === "CONTRACT") transientBlock = true;
     const name = REGIME_SYSTEM_META[candidate.config.system].name;
@@ -346,10 +452,19 @@ export function evaluateRegimePortfolio(input: { state: RegimePortfolioState; ho
       strategyName: candidate.config.name, symbol: candidate.feature.symbol, observedAt: input.now,
       status: result.trade ? "OPEN" : "BLOCKED", blocker: result.blocker, side, environment: candidate.config.system,
       score: Math.round(candidate.found.strength * 1_000), reason: `${name}已识别${candidate.config.name}信号`,
-      engineId: candidate.config.system, engineName: name });
+      engineId: candidate.config.system, engineName: name, entryPrice: result.geometry?.entryPrice ?? null,
+      stopPrice: result.geometry?.stopPrice ?? null, targetPrice: result.geometry?.targetPrice ?? null });
   }
   if (!transientBlock) state.lastEvaluatedHour = synchronized.context.at;
-  state.routeChecks = [...checks, ...state.routeChecks.filter((row) => input.now - row.observedAt < 24 * 3_600_000)].slice(0, 200);
+  const formingChecks: RegimeRouteCheck[] = forming.slice(0, 10).map(({ feature, config, readiness: row }) => ({
+    id: `${feature.context.at}:${config.id}:${feature.symbol}`, eventId: `${config.system}:${feature.context.at}`,
+    strategyId: config.id, strategyName: config.name, symbol: feature.symbol, observedAt: input.now, status: "FORMING",
+    blocker: null, side: row.direction == null ? null : row.direction > 0 ? "LONG" : "SHORT", environment: config.system,
+    score: row.score, reason: row.reason, engineId: config.system, engineName: REGIME_SYSTEM_META[config.system].name,
+    entryPrice: null, stopPrice: null, targetPrice: null,
+  }));
+  const historical = state.routeChecks.filter((row) => row.status !== "FORMING" && input.now - row.observedAt < 24 * 3_600_000);
+  state.routeChecks = [...new Map([...checks, ...formingChecks, ...historical].map((row) => [row.id, row])).values()].slice(0, 200);
   return state;
 }
 
