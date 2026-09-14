@@ -6,6 +6,7 @@ export type RuntimeHealthShape = {
   symbols?: string[];
   evidence?: Record<string, { fresh?: boolean; ancillaryFresh?: boolean; entryReady?: boolean }>;
   realtimeReadiness?: { capacity?: number; actionableMarkets?: number; protectedMarketsReady?: boolean };
+  strategyData?: { stableMarkets?: number; lastCompletedCandleAt?: number; hourlyPathFailures?: number };
 };
 
 const OPERATIONAL_STATES = new Set(["LIVE", "DEGRADED", "WARMING"]);
@@ -31,6 +32,10 @@ export function runtimeStatusLabel(runtime: RuntimeHealthShape | null, transport
   if (runtime.stale || runtime.state === "RECONNECTING") return "行情重连中";
   if (!runtime.authorityReady || runtime.state === "RECOVERY_REQUIRED") return "需要恢复";
   if (runtime.state === "WARMING") return "后台运行中 · 数据预热";
+  if (runtime.strategyData
+    && ((runtime.strategyData.stableMarkets ?? 0) < 8 || !(runtime.strategyData.lastCompletedCandleAt ?? 0))) {
+    return "后台运行中 · 策略路径预热";
+  }
   if (runtime.realtimeReadiness?.protectedMarketsReady === false) return "后台运行中 · 新仓冻结";
   return "后台运行中";
 }

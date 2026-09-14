@@ -1053,6 +1053,13 @@ jobs:
               (.runtime.feedQuality.attempts | type) == "number" and
               (.runtime.strategyArena.portfolioEquity | type) == "number" and
               .runtime.strategyArena.portfolioEquity > 0 and
+              .runtime.strategyData.stableMarkets == 11 and
+              .runtime.strategyData.hourlyRequiredCandles == 721 and
+              .runtime.strategyData.hourlyPathFailures == 0 and
+              .runtime.strategyData.hourlyPathError == null and
+              .runtime.strategyData.polarityReady == true and
+              .runtime.strategyData.lastCompletedCandleAt > 0 and
+              .runtime.strategyData.marketContextMarkets >= 8 and
               .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 11 and
               .runtime.strategyArena.rules.singleTradeRiskMin == 0.015 and
               .runtime.strategyArena.rules.singleTradeRiskMax == 0.015 and
@@ -1226,6 +1233,13 @@ jobs:
             .runtime.strategyArena.rules.canonicalCapitalAgnostic == false and
             .runtime.strategyArena.rules.sameSymbolCrossEngineAllowed == true and
             .runtime.strategyArena.rules.liveSource == "CANONICAL_PAPER_NORMALIZED_NET" and
+            .runtime.strategyData.stableMarkets == 11 and
+            .runtime.strategyData.hourlyRequiredCandles == 721 and
+            .runtime.strategyData.hourlyPathFailures == 0 and
+            .runtime.strategyData.hourlyPathError == null and
+            .runtime.strategyData.polarityReady == true and
+            .runtime.strategyData.lastCompletedCandleAt > 0 and
+            .runtime.strategyData.marketContextMarkets >= 8 and
             .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 11 and
             .runtime.limits.plannedTotalDoRequestsPerDay < 55000 and
             .runtime.limits.plannedDoWritesPerDay < 55000 and

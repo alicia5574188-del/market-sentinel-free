@@ -4,6 +4,7 @@ import type { ArenaQuote, ArenaTrade, ArenaTradeContext, StrategyFamily } from "
 
 export const REGIME_PORTFOLIO_VERSION = 1;
 export const REGIME_ACCOUNT_INITIAL_EQUITY = 1_000;
+export const REGIME_HOURLY_REQUIRED_CANDLES = 721;
 export const REGIME_FRICTION_RATE = 0.0014;
 export const REGIME_ENTRY_SLIPPAGE_RATE = 0.00025;
 export const REGIME_UNIVERSE = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "BNB_USDT", "DOGE_USDT",
@@ -114,7 +115,7 @@ type Feature = { symbol: string; current: GateCandle; r1: number; r6: number; r2
 type FoundSignal = { direction: 1 | -1; strength: number };
 
 function synchronizedFeatures(paths: Record<string, GateCandle[]>) {
-  const eligible = Object.entries(paths).filter(([, rows]) => rows.length >= 721);
+  const eligible = Object.entries(paths).filter(([, rows]) => rows.length >= REGIME_HOURLY_REQUIRED_CANDLES);
   if (eligible.length < 8) return null;
   const commonTime = Math.min(...eligible.map(([, rows]) => rows.at(-1)!.time));
   const rows: Omit<Feature, "relative24" | "relative7" | "context">[] = [];
@@ -322,7 +323,7 @@ export function evaluateRegimePortfolio(input: { state: RegimePortfolioState; ho
   quotes: Record<string, ArenaQuote>; contracts: Record<string, RegimeContractMeta>; now: number }) {
   const state = advanceRegimePortfolio({ state: input.state, quotes: input.quotes, now: input.now });
   const synchronized = synchronizedFeatures(input.hourly);
-  state.warmMarkets = Object.values(input.hourly).filter((rows) => rows.length >= 721).length;
+  state.warmMarkets = Object.values(input.hourly).filter((rows) => rows.length >= REGIME_HOURLY_REQUIRED_CANDLES).length;
   if (!synchronized || state.lastEvaluatedHour === synchronized.context.at) return state;
   state.currentContext = synchronized.context;
   const accountState = state.accounts[synchronized.context.regime];

@@ -1,3 +1,10 @@
+# Active correction — immediate persistent hourly readiness
+
+- Fetch 722 hourly rows on a cold path so removing Gate's unfinished current hour still leaves the 721 completed observations required for a causal 720-hour return. Do not wait for the next hour boundary.
+- Persist each completed 721-row market path outside the bounded checkpoint and restore all paths on Durable Object startup. A deploy or process restart must not return readiness to 0/11.
+- Retry fetch or storage faults after ten seconds, expose the exact fault as a new-entry blocker, and require 11/11 paths plus synchronized context in the production health gate.
+- Keep strategy definitions, independent accounts, canonical PAPER, settings, credentials and owner-controlled LIVE intent unchanged.
+
 # Active correction — 10,000 U canonical compounding mirror
 
 - Keep all five regime systems on isolated 1,000 U hypothetical accounts and preserve their independent decision, sizing, risk and lifecycle trajectories.

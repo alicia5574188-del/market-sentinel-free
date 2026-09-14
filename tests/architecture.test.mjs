@@ -21,7 +21,7 @@ test("runtime uses bounded futures REST snapshots, no continuous WebSocket", asy
   assert.doesNotMatch(worker + gate, /new WebSocket|futures\.order_book_update/);
   assert.match(worker, /MAX_ANCILLARY_CONCURRENCY = 2/);
   assert.match(worker, /plannedTotalDoRequestsPerDay: 50_400/);
-  assert.match(worker, /plannedDoWritesPerDay: 54_080/);
+  assert.match(worker, /plannedDoWritesPerDay: 54_344/);
   assert.match(worker, /NON_ALARM_WRITE_CAP = 8_000/);
   assert.match(worker, /plannedMaxD1BilledWritesPerDay: 4_800/);
   assert.match(worker, /RADAR_MS = 60_000/);
@@ -204,7 +204,10 @@ test("five frozen regime systems are causal and isolated while canonical PAPER i
   assert.match(regimePortfolio, /REGIME_STRATEGIES/);
   assert.match(regimePortfolio, /riskRate|\.015/);
   assert.match(regimePortfolio, /classifyRegime/);
-  assert.match(regimePortfolio, /rows\.length >= 721/);
+  assert.match(regimePortfolio, /REGIME_HOURLY_REQUIRED_CANDLES = 721/);
+  assert.match(regimePortfolio, /rows\.length >= REGIME_HOURLY_REQUIRED_CANDLES/);
+  assert.match(worker, /REGIME_HOURLY_REQUIRED_CANDLES \+ 1/);
+  assert.match(worker, /regime-hourly:/);
   assert.doesNotMatch(regimePortfolio, /PROMOTION|shadowResolved|recentResults/);
   assert.match(arena, /recentObservations/);
   assert.match(arena, /currentRouteChecks/);

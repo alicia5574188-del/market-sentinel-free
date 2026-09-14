@@ -1,3 +1,10 @@
+# Immediate hourly-readiness decision — 2026-09-14
+
+- A causal 720-hour return requires 721 completed hourly observations. Because Gate may include the current unfinished bar in its limit, cold preload requests 722 and still filters unfinished data rather than weakening causality.
+- Path readiness depends on both length and latest completed timestamp. A current timestamp with only 720 observations is incomplete and must retry rather than wait for the next hour.
+- Persist hourly paths per symbol outside the main checkpoint so their size does not threaten checkpoint limits and a deployment can restore readiness without network backfill. Budget 264 additional Durable Object writes per day, keeping the published total at 54,344 below the 55,000 redline.
+- Hourly fetch/storage failure is an explicit strategy-entry blocker, not a hidden optional-analysis warning. Production success requires every fixed market path and synchronized context to be ready. Existing positions remain managed independently of this entry-readiness gate.
+
 # Stable V4 replacement decision — 2026-09-13
 
 - The current deployed V4 fails the production-source thirty-day replay and cannot inherit the old fixed-0.5x profit claim. Its route logic may remain as a baseline, but its current account authority is not evidence of stable positive expectancy.

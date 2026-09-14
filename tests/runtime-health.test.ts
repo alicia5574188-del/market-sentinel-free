@@ -39,6 +39,10 @@ test("operator status reserves recovery wording for genuine authority failure", 
   const warming = { ...live(), state: "WARMING", realtimeReadiness: { capacity: 10, actionableMarkets: 0, protectedMarketsReady: true } };
   assert.equal(runtimeAuthorityOperational(warming), true);
   assert.equal(runtimeStatusLabel(warming), "后台运行中 · 数据预热");
+
+  const strategyWarming = { ...live(), strategyData: { stableMarkets: 0, lastCompletedCandleAt: 0, hourlyPathFailures: 0 } };
+  assert.equal(runtimeAuthorityOperational(strategyWarming), true);
+  assert.equal(runtimeStatusLabel(strategyWarming), "后台运行中 · 策略路径预热");
 });
 
 test("phone transport delay never changes the last known backend trading authority", () => {

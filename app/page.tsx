@@ -160,6 +160,7 @@ type Runtime = {
   strategyData?: { liquidMarkets: number; stableMarkets: number; adaptivePolicyMarkets?: number; approvedPolicyRoutes?: number;
     extremeSequenceMarkets?: number; routedMarkets?: number; polarityReady?: boolean;
     marketBreadth?: number; marketMedianMove?: number; marketContextMarkets?: number;
+    hourlyRequiredCandles?: number; hourlyPathFailures?: number; hourlyPathError?: string | null;
     degradedMarkets?: number; blockingMarkets?: number;
     lastCompletedCandleAt: number; lastRuntimeLogAt: number;
     candleError: string | null; logError: string | null };
@@ -372,9 +373,14 @@ export default function Home() {
   const nextHourAt = (Math.floor(now / 3_600_000) + 1) * 3_600_000;
   const degradedPathMarkets = runtime?.strategyData?.degradedMarkets ?? 0;
   const blockingPathMarkets = runtime?.strategyData?.blockingMarkets ?? 0;
+  const hourlyPathFailures = runtime?.strategyData?.hourlyPathFailures ?? 0;
+  const hourlyPathError = runtime?.strategyData?.hourlyPathError;
+  const strategyPathBlocked = stableMarkets < 8 || !latestCandleAt;
   const radarBlocking = Boolean(runtime?.radar?.consecutiveFailures && stableMarkets < 12);
   const latestFeedFailure = runtime?.feedQuality?.lastError;
   const currentIssues = [
+    hourlyPathFailures ? hourlyPathError ?? `${hourlyPathFailures} 个720小时路径正在重试` : null,
+    strategyPathBlocked ? `策略开仓条件尚未就绪：${stableMarkets}/11 个市场具备完整720小时路径，至少需要8个` : null,
     !backendOperational ? runtime?.lastError ?? latestFeedFailure ?? "行情权威未达到可交易状态"
       : protectedExecutionBlocked ? runtime?.lastError ?? "持仓或执行路线正在等待新鲜盘口" : null,
     radarBlocking ? `全市场扫描未达到最低覆盖：${runtime?.radar?.lastError ?? "等待重试"}` : null,
@@ -401,12 +407,14 @@ export default function Home() {
   const nextAction = !backendOperational
     ? currentRoutes.length ? `已保留 ${currentRoutes.length} 条路线；新鲜盘口恢复后从第4步重新核对，符合原进场区才成交`
       : `720小时行情上下文未清空；新鲜盘口恢复后从第${activePipelineStep}步继续`
-    : activePipelineStep === 2 ? "补齐720小时数据并建立跨市场背景"
+    : activePipelineStep === 2 ? "直接补齐721根完整小时K线并建立跨市场背景，不等待下一整点"
       : activePipelineStep === 3 ? "下一根1小时K线完成后重算行情归属与冻结策略"
         : activePipelineStep === 4 ? "每2秒核对盘口、成本、合约数量与仓位后决定是否成交"
           : "每2秒检查止损、盈利臂和移动保护";
   const nextEta = !backendOperational ? "自动重试（约每2秒）"
-    : activePipelineStep >= 4 ? "实时循环（约每2秒）" : waitText(Math.max(0, nextHourAt - now));
+    : activePipelineStep >= 4 ? "实时循环（约每2秒）"
+      : activePipelineStep === 2 ? hourlyPathFailures ? "约10秒后重试" : "首次加载通常不超过1分钟"
+        : waitText(Math.max(0, nextHourAt - now));
   const todayKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(clock || runtime?.generatedAt || 0);
   const todayRealized = currentPortfolioHistory.filter((trade) => trade.closedAt
     && new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(trade.closedAt) === todayKey)
@@ -448,7 +456,7 @@ export default function Home() {
       {healthNotice && <p className="notice">{healthNotice}</p>}
 
       <section className={`operator-runtime ${currentIssues.length ? "has-issue" : ""}`}>
-        <div className="operator-runtime-head"><div><small>实时运行状态</small><h2>{!backendOperational ? "系统正在恢复关键数据" : protectedExecutionBlocked ? "执行路线行情正在恢复" : "数据持续推进，系统运行正常"}</h2><p>这张卡只反映后台真实快照，不用“等待触发”掩盖数据问题。</p></div><span>{runtime?.lastSuccessAt ? `更新于 ${ageText(runtime.lastSuccessAt, now)}` : "尚无成功快照"}</span></div>
+        <div className="operator-runtime-head"><div><small>实时运行状态</small><h2>{!backendOperational ? "系统正在恢复关键数据" : strategyPathBlocked ? "策略路径尚未就绪，当前禁止新开仓" : protectedExecutionBlocked ? "执行路线行情正在恢复" : "数据持续推进，系统运行正常"}</h2><p>这张卡只反映后台真实快照，不用“等待触发”掩盖数据问题。</p></div><span>{runtime?.lastSuccessAt ? `更新于 ${ageText(runtime.lastSuccessAt, now)}` : "尚无成功快照"}</span></div>
         <div className="runtime-facts">
           <article><small>策略账户已运行</small><strong>{runtimeDurationText(arena?.startedAt ? now - arena.startedAt : null)}</strong><p>第{num(arena?.portfolioCycle, 0)}轮账户运行 {runtimeDurationText(arena?.portfolioCycleStartedAt ? now - arena.portfolioCycleStartedAt : null)}</p></article>
           <article><small>{!backendOperational ? "暂停位置" : awaitingNextCycle ? "当前循环" : "当前步骤"}</small><strong>{awaitingNextCycle ? "本轮已完成 · 等待下轮" : `${activePipelineStep}/5 · ${pipeline[activePipelineStep - 1].title}`}</strong><p>{backendOperational ? pipeline[activePipelineStep - 1].detail : currentRoutes.length ? "执行路线保留，尚未创建订单" : "没有已进入执行检查的路线被取消"}</p></article>
@@ -457,7 +465,7 @@ export default function Home() {
         </div>
         <div className="runtime-pipeline">{pipeline.map((step, index) => { const number = index + 1; const state = !backendOperational && number === 1 ? "paused" : number < activePipelineStep ? "done" : number === activePipelineStep ? "active" : "waiting"; return <article className={state} key={step.title}><i>{state === "done" ? "✓" : number}</i><div><b>{step.title}</b><small>{step.detail}</small></div><span>{state === "done" ? "已完成" : state === "paused" ? "恢复中" : state === "active" ? awaitingNextCycle ? "等待下轮" : backendOperational ? "进行中" : "暂停点" : "待进入"}</span></article>; })}</div>
         {currentIssues.length > 1 && <div className="runtime-issues"><b>当前问题明细</b>{currentIssues.map((issue) => <p key={issue}>{issue}</p>)}</div>}
-        <footer>最近心跳 {ageText(runtime?.lastHeartbeatAt, now)} · 最近全市场扫描 {ageText(runtime?.radar?.lastScanAt, now)} · 720小时路径 {stableMarkets}/11 · 路径短错 {degradedPathMarkets}（有效快照保留） · 累计恢复 {totalRecoveries}/{totalFeedFailures} · 快照时间 {time(runtime?.generatedAt)}</footer>
+        <footer>最近心跳 {ageText(runtime?.lastHeartbeatAt, now)} · 最近全市场扫描 {ageText(runtime?.radar?.lastScanAt, now)} · 720小时路径 {stableMarkets}/11 · 小时路径重试 {hourlyPathFailures} · 5分钟路径短错 {degradedPathMarkets}（有效快照保留） · 累计恢复 {totalRecoveries}/{totalFeedFailures} · 快照时间 {time(runtime?.generatedAt)}</footer>
       </section>
     </>}
 
