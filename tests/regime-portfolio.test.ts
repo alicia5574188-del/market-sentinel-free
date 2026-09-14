@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canonicalPaperOpen } from "../lib/dual-paper.ts";
+import { canonicalPaperOpen, initialCanonicalPaperState, reconcileCanonicalPaper } from "../lib/dual-paper.ts";
 import { initialStrategyArena, type ArenaTrade } from "../lib/strategy-arena.ts";
 import { initialStrategyArena as initialPreviousStrategyArena } from "../lib/previous-strategy-arena.ts";
 import { classifyRegime, evaluateRegimePortfolio, initialRegimePortfolio, REGIME_STRATEGIES,
@@ -72,12 +72,14 @@ function sampleTrade(id: string): ArenaTrade {
       costShare: .014, empiricalExpectedReturnRate: 0, empiricalProfitFactor: 0, empiricalEvents: 0 } };
 }
 
-test("canonical PAPER retains the same symbol in multiple regime accounts at 100% size", () => {
+test("canonical PAPER retains the same symbol in multiple regime accounts at the same equity fraction", () => {
   const regime = initialRegimePortfolio(1);
   regime.accounts.SHOCK_TRANSITION.open.BTC_USDT = sampleTrade("one");
   regime.accounts.BALANCED_ROTATION.open.BTC_USDT = sampleTrade("two");
-  const logical = canonicalPaperOpen({ current: initialStrategyArena(1), previous: initialPreviousStrategyArena(1), regime });
+  const accounts = { current: initialStrategyArena(1), previous: initialPreviousStrategyArena(1), regime };
+  const canonical = reconcileCanonicalPaper({ state: initialCanonicalPaperState(1), accounts, now: 2 }).state;
+  const logical = canonicalPaperOpen(accounts, canonical);
   assert.equal(logical.length, 2);
   assert.deepEqual(logical.map((row) => row.engineId).sort(), ["BALANCED_ROTATION", "SHOCK_TRANSITION"]);
-  assert.equal(logical.reduce((total, row) => total + row.contracts, 0), 4_000);
+  assert.equal(logical.reduce((total, row) => total + row.contracts, 0), 40_000);
 });

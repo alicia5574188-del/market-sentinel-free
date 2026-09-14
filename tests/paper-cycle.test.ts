@@ -51,6 +51,6 @@ test("bankruptcy report is a detailed permanent analysis package", () => {
 test("current cycle summary exposes only aggregate state", () => {
   const summary = paperCycleSummary(startPaperCycle(1_000, 889, 1), 850);
   assert.deepEqual({ ...summary, drawdownRate: 0 }, { number: 1, startedAt: 1_000, startingEquity: 889, currentEquity: 850,
-    bankruptcyLine: 300, peakEquity: 889, trades: 0, drawdownRate: 0 });
+    bankruptcyLine: 3_000, peakEquity: 889, trades: 0, drawdownRate: 0 });
   assert.ok(Math.abs(summary.drawdownRate - 39 / 889) < 1e-12);
 });

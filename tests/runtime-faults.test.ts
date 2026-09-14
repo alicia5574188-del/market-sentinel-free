@@ -422,13 +422,14 @@ test("a frozen plan needs two advancing fresh books to re-arm and persistent fai
   assert.equal(stream.runtime.feedFailures.BTC_USDT.count, 4);
 });
 
-test("a bankrupt PAPER cycle is archived before a fresh 1000 U cycle starts", async () => {
+test("a bankrupt PAPER cycle is archived before a fresh 10000 U cycle starts", async () => {
   const { stream, db } = await makeStream();
   const now = 1_800_000_075_000;
   stream.runtime.symbols = ["BTC_USDT"];
   stream.runtime.tickSize = { BTC_USDT: 0.1 };
   stream.runtime.contractMeta = { BTC_USDT: { quantoMultiplier: 1, maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0 } };
   stream.runtime.equity = 290;
+  stream.runtime.canonicalPaper.equity = 290;
   stream.runtime.paperCycle = { number: 4, startedAt: now - 86_400_000, startingEquity: 1_000, peakEquity: 1_050, trades: [] };
   stream.memory.BTC_USDT = emptySymbolMemory();
   stream.sessionWarmup.BTC_USDT = 0;
@@ -437,9 +438,9 @@ test("a bankrupt PAPER cycle is archived before a fresh 1000 U cycle starts", as
     await stream.processBooks(now, ["BTC_USDT"]);
   });
 
-  assert.equal(stream.runtime.equity, 1_000);
+  assert.equal(stream.runtime.equity, 10_000);
   assert.equal(stream.runtime.paperCycle.number, 5);
-  assert.equal(stream.runtime.paperCycle.startingEquity, 1_000);
+  assert.equal(stream.runtime.paperCycle.startingEquity, 10_000);
   assert.equal(stream.runtime.bankruptcyOutbox.length, 0, "successful D1 archive drains only after the authority checkpoint");
   const archive = db.statements.flat().find((statement) => statement.args.includes("PAPER_BANKRUPTCY"));
   assert.ok(archive);
@@ -448,7 +449,7 @@ test("a bankrupt PAPER cycle is archived before a fresh 1000 U cycle starts", as
   assert.equal(payload.endingEquity, 290);
 });
 
-test("manual PAPER reset closes only PAPER positions at a fresh price and starts a 1000 U cycle", async () => {
+test("manual PAPER reset closes only PAPER positions at a fresh price and starts a 10000 U cycle", async () => {
   const { stream } = await makeStream();
   const now = Date.now();
   const open = position("manual-reset", "BTC_USDT");
@@ -465,7 +466,7 @@ test("manual PAPER reset closes only PAPER positions at a fresh price and starts
   const result = await stream.resetPaperAccount();
 
   assert.equal(result.ok, true);
-  assert.equal(stream.runtime.equity, 1_000);
+  assert.equal(stream.runtime.equity, 10_000);
   assert.equal(stream.runtime.paperCycle.number, 4);
   assert.deepEqual(stream.runtime.positions, {});
   assert.deepEqual(stream.runtime.plans, {});
@@ -516,7 +517,7 @@ test("manual reset archives the old futures account while preserving all-regime 
   assert.equal(stream.runtime.previousStrategyArena.portfolioCycle, 2);
   assert.deepEqual(stream.runtime.previousStrategyArena.portfolioOpen, {});
   assert.equal(stream.runtime.previousStrategyArena.archivedPortfolioCycles[0].resolved, 3);
-  assert.equal(result.strategyArena.portfolioEquity, 1_000);
+  assert.equal(result.strategyArena.portfolioEquity, 10_000);
   assert.equal(stream.runtime.live.requestedEnabled, false);
   assert.equal(stream.runtime.live.operational, false);
 });
@@ -566,6 +567,7 @@ test("restart preserves committed OPEN authority, cancels PREPARED work and warm
   saved.positions = { BTC_USDT: open };
   saved.plans = { BTC_USDT: plan("BTC_USDT") };
   saved.equity = 876.5;
+  saved.canonicalPaper.equity = 876.5;
   saved.equityVersion = 9;
   saved.outbox = [{ key: "restart:9", position: open, equity: 876.5, equityVersion: 9 }];
   saved.contractMeta = { BTC_USDT: { quantoMultiplier: 0.0001, maintenanceRate: 0.005, fundingRate: 0 } };
@@ -602,6 +604,33 @@ test("a pre-dual-engine checkpoint preserves the online account and creates a se
   assert.deepEqual(stream.runtime.previousStrategyArena.portfolioOpen, {});
 });
 
+test("v2 to v3 migration preserves all five source accounts and starts the proportional 10000 U mirror", async () => {
+  const seed = await makeStream();
+  const saved = structuredClone(seed.stream.runtime);
+  const openedAt = Date.now() - 30_000;
+  const source = portfolioTrade("BTC_USDT", openedAt, { notional: 220, contracts: 220,
+    plannedRisk: 11, margin: 73.3333333333, accountEquityAtOpen: 1_100 });
+  saved.version = "all-regime-compound-v2";
+  saved.regimePortfolio.accounts.BALANCED_ROTATION.equity = 1_100;
+  saved.regimePortfolio.accounts.BALANCED_ROTATION.open.BTC_USDT = source;
+  saved.live.requestedEnabled = true;
+  saved.live.operational = true;
+
+  const { stream } = await makeStream(saved);
+  const copy = Object.values(stream.runtime.canonicalPaper.open)[0] as {
+    trade: { notional: number }; accountEquityAtOpen: number;
+  };
+  assert.equal(stream.runtime.version, "all-regime-compound-v3");
+  assert.equal(stream.runtime.regimePortfolio.accounts.BALANCED_ROTATION.equity, 1_100);
+  assert.equal(stream.runtime.regimePortfolio.accounts.BALANCED_ROTATION.open.BTC_USDT.id, source.id);
+  assert.equal(stream.runtime.canonicalPaper.equity, 10_000);
+  assert.equal(stream.runtime.dailyStartEquity, 10_000);
+  assert.ok(Math.abs(copy.trade.notional - 2_000) < 1e-9);
+  assert.equal(copy.accountEquityAtOpen, 10_000);
+  assert.equal(stream.runtime.live.requestedEnabled, true);
+  assert.equal(stream.runtime.live.operational, false);
+});
+
 test("all-regime cutover archives the old PAPER cycle and starts a fresh account", async () => {
   const seed = await makeStream();
   const saved = structuredClone(seed.stream.runtime);
@@ -615,14 +644,14 @@ test("all-regime cutover archives the old PAPER cycle and starts a fresh account
   saved.equityVersion = 7;
 
   const { stream } = await makeStream(saved);
-  assert.equal(stream.runtime.version, "all-regime-compound-v2");
+  assert.equal(stream.runtime.version, "all-regime-compound-v3");
   assert.equal(stream.runtime.strategyArena.version, 12);
   assert.equal(stream.runtime.strategyArena.portfolioCycle, 4);
   assert.equal(stream.runtime.strategyArena.portfolioEquity, 1_000);
   assert.equal(stream.runtime.strategyArena.portfolioResolved, 0);
   assert.equal(stream.runtime.strategyArena.archivedPortfolioCycles.at(-1)?.number, 3);
   assert.equal(stream.runtime.marketRegimes.lastUpdatedAt, null);
-  assert.equal(stream.runtime.equity, 1_000);
+  assert.equal(stream.runtime.equity, 10_000);
   assert.equal(stream.runtime.equityVersion, 8);
   assert.equal(stream.runtime.live.requestedEnabled, false);
   assert.equal(stream.runtime.live.operational, false);
@@ -904,8 +933,8 @@ test("mark-to-market drawdown rebalances the weakest PAPER risk back under ten p
   const { stream } = await makeStream();
   const now = 1_800_000_400_000;
   const stop = 86.112;
-  const weak = position("weak", "BTC_USDT", { currentStop: stop, initialStop: stop, targetScore: 1 });
-  const strong = position("strong", "ETH_USDT", { currentStop: stop, initialStop: stop, targetScore: 2 });
+  const weak = position("weak", "BTC_USDT", { currentStop: stop, initialStop: stop, targetScore: 1, notional: 5_000 });
+  const strong = position("strong", "ETH_USDT", { currentStop: stop, initialStop: stop, targetScore: 2, notional: 5_000 });
   stream.runtime.symbols = ["BTC_USDT", "ETH_USDT"];
   stream.runtime.tickSize = { BTC_USDT: 0.1, ETH_USDT: 0.1 };
   stream.runtime.contractMeta = {
@@ -913,6 +942,8 @@ test("mark-to-market drawdown rebalances the weakest PAPER risk back under ten p
     ETH_USDT: { quantoMultiplier: 1, maintenanceRate: 0.005, fundingRate: 0 },
   };
   stream.runtime.positions = { BTC_USDT: weak, ETH_USDT: strong };
+  stream.runtime.equity = 5_000;
+  stream.runtime.canonicalPaper.equity = 5_000;
   stream.runtime.evidence = {
     BTC_USDT: { midpoint: 90, observedAt: now, warmup: 0, fresh: true, ancillaryFresh: false, topLong: null, topShort: null, absorption: 0 },
     ETH_USDT: { midpoint: 90, observedAt: now, warmup: 0, fresh: true, ancillaryFresh: false, topLong: null, topShort: null, absorption: 0 },
@@ -1026,18 +1057,21 @@ test("health status is compact while retaining every release gate", async () => 
   const response = await stream.fetch(new Request("https://market-stream/health-status"));
   const status = await response.json();
 
-  assert.equal(status.version, "all-regime-compound-v2");
+  assert.equal(status.version, "all-regime-compound-v3");
   assert.equal(status.strategyArena.version, 1);
   assert.equal(status.strategyArena.playbookCount, 12);
   assert.equal(status.strategyArena.catalogSize, 12);
-  assert.equal(status.strategyArena.portfolioEquity, 1_000);
+  assert.equal(status.strategyArena.portfolioEquity, 10_000);
   assert.equal(status.strategyArena.engines.length, 5);
   assert.equal(status.strategyArena.rules.dualIndependentEngines, false);
   assert.equal(status.strategyArena.rules.independentSystemCount, 5);
   assert.equal(status.strategyArena.rules.sameSymbolCrossEngineAllowed, true);
-  assert.equal(status.strategyArena.rules.engineOrderCopyRate, 1);
-  assert.equal(status.strategyArena.rules.canonicalCapitalAgnostic, true);
-  assert.equal(status.strategyArena.rules.liveSource, "CANONICAL_PAPER_NET");
+  assert.equal(status.strategyArena.rules.canonicalReferenceEquity, 10_000);
+  assert.equal(status.strategyArena.rules.canonicalCopySizing, "SOURCE_EQUITY_FRACTION");
+  assert.equal(status.strategyArena.rules.canonicalEntryScaleFrozen, true);
+  assert.equal(status.strategyArena.rules.canonicalAdmissionGate, false);
+  assert.equal(status.strategyArena.rules.canonicalCapitalAgnostic, false);
+  assert.equal(status.strategyArena.rules.liveSource, "CANONICAL_PAPER_NORMALIZED_NET");
   assert.equal(status.strategyArena.rules.minimumPortfolioRiskUsdt, 0);
   assert.equal(status.strategyArena.rules.targetPortfolioRiskUsdt, 15);
   assert.equal(status.strategyArena.rules.empiricalCostFloorRate, 0.0014);

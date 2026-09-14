@@ -144,6 +144,13 @@
 - D1 runtime telemetry is written every five minutes, pruned after 14 days, and exposed read-only at /api/strategy-logs.
 - Release resets the V4.2 strategy ledger and 1,000 U simulated cycle. LIVE remains forced OFF on restart and deployment.
 
+# 2026-09-14 — Canonical PAPER copies normalized exposure and compounds independently
+
+- The five source systems remain independent 1,000 U accounts. Their account equity is the sizing denominator and canonical PAPER never writes back to them.
+- Canonical PAPER begins at 10,000 U. For each newly observed source order, `source notional / source equity at open` is applied to one canonical-equity snapshot shared by that reconciliation batch.
+- The resulting per-order scale and canonical equity-at-open are immutable for the position lifecycle. Realized scaled PnL changes canonical equity only after close and affects only later entries.
+- Same-symbol PAPER legs remain distinct. LIVE nets signed exposure fractions by symbol and applies the result to current Gate equity through the existing owner-controlled mirror.
+
 # Decisions
 
 ## 2026-09-14 — Shadow authorization is permanently forbidden
