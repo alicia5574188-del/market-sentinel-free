@@ -3,7 +3,9 @@ import test from "node:test";
 import { canonicalPaperOpen, canonicalPaperSummary, initialCanonicalPaperState, reconcileCanonicalPaper } from "../lib/dual-paper.ts";
 import { initialStrategyArena, type ArenaTrade } from "../lib/strategy-arena.ts";
 import { initialStrategyArena as initialPreviousStrategyArena } from "../lib/previous-strategy-arena.ts";
-import { classifyRegime, evaluateRegimePortfolio, initialRegimePortfolio, REGIME_STRATEGIES,
+import { classifyRegime, evaluateRegimePortfolio, initialRegimePortfolio, REGIME_EXECUTION_UNIVERSE,
+  REGIME_SATELLITE_ACCOUNT_RISK_CAP, REGIME_SATELLITE_DIRECTION_RISK_CAP, REGIME_SATELLITE_TRADE_RISK_RATE,
+  REGIME_SATELLITE_UNIVERSE, REGIME_STRATEGIES, REGIME_UNIVERSE,
   normalizeRegimePortfolio, REGIME_SYSTEMS, type RegimeContractMeta } from "../lib/regime-portfolio.ts";
 
 test("five exhaustive regimes use the frozen direct strategy catalog without shadow authorization", () => {
@@ -122,4 +124,30 @@ test("canonical PAPER retains the same symbol in multiple regime accounts at the
   assert.equal(logical.length, 2);
   assert.deepEqual(logical.map((row) => row.engineId).sort(), ["BALANCED_ROTATION", "SHOCK_TRANSITION"]);
   assert.equal(logical.reduce((total, row) => total + row.contracts, 0), 40_000);
+});
+
+
+test("V1.1 keeps the frozen 11-market context and adds only SUI/UNI as satellite execution symbols", () => {
+  assert.equal(REGIME_UNIVERSE.length, 11);
+  assert.deepEqual(REGIME_SATELLITE_UNIVERSE, ["SUI_USDT", "UNI_USDT"]);
+  assert.equal(REGIME_EXECUTION_UNIVERSE.length, 13);
+  assert.equal(REGIME_SATELLITE_TRADE_RISK_RATE, .005);
+  assert.equal(REGIME_SATELLITE_ACCOUNT_RISK_CAP, .02);
+  assert.equal(REGIME_SATELLITE_DIRECTION_RISK_CAP, .015);
+
+  const core = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "BNB_USDT", "DOGE_USDT", "ADA_USDT", "LINK_USDT"];
+  const hourly = Object.fromEntries([
+    ...core.map((symbol) => [symbol, shockPath()] as const),
+    ["SUI_USDT", balancedPath(1)], ["UNI_USDT", balancedPath(1)],
+  ]);
+  const now = 721 * 3_600_000;
+  const quotes = Object.fromEntries(Object.keys(hourly).map((symbol) => [symbol,
+    { midpoint: 91.2, bestBid: 91.19, bestAsk: 91.21, observedAt: now, fresh: true, completedMinuteAt: now }]));
+  const meta: RegimeContractMeta = { quantoMultiplier: .001, maintenanceRate: .005, leverageMax: 50,
+    fundingRate: 0, volume24hUsd: 1_000_000_000 };
+  const contracts = Object.fromEntries(Object.keys(hourly).map((symbol) => [symbol, meta]));
+  const state = evaluateRegimePortfolio({ state: initialRegimePortfolio(1), hourly, quotes, contracts, now });
+  assert.equal(state.currentContext?.markets, 8, "satellites must never change core breadth/median sample size");
+  assert.equal(state.currentContext?.regime, "SHOCK_TRANSITION");
+  assert.equal(state.warmMarkets, 8, "warmMarkets reports core context readiness only");
 });
