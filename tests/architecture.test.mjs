@@ -313,16 +313,19 @@ test("legacy sizing and portfolio mirroring both retain bounded account risk", a
   assert.match(live, /mirrorNotionalFraction/);
 });
 
-test("cutover is credential-bound and removes legacy DOs only after v11 health", async () => {
+test("cutover remains credential-bound and production gates enforce five direct systems", async () => {
   const workflow = await read(".github/workflows/sentinel-v2-ci.yml");
-  assert.equal((workflow.match(/\.runtime\.strategyArena\.version == 12/g) ?? []).length, 2);
-  assert.equal((workflow.match(/\.runtime\.strategyArena\.playbookCount == 11/g) ?? []).length, 2);
-  assert.equal((workflow.match(/\.runtime\.strategyArena\.catalogSize == 11/g) ?? []).length, 2);
-  assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.dualIndependentEngines == true/g) ?? []).length, 2);
+  assert.equal((workflow.match(/\.runtime\.strategyArena\.version == 1 and \.runtime\.strategyArena\.playbookCount == 12/g) ?? []).length, 2);
+  assert.equal((workflow.match(/\.runtime\.strategyArena\.catalogSize == 12/g) ?? []).length, 2);
+  assert.equal((workflow.match(/\.runtime\.strategyArena\.shadowCount == 0/g) ?? []).length, 2);
+  assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.shadowExecution == false/g) ?? []).length, 2);
+  assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.outcomeBasedPromotion == false/g) ?? []).length, 2);
+  assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.dualIndependentEngines == false/g) ?? []).length, 2);
+  assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.independentSystemCount == 5/g) ?? []).length, 2);
   assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.engineOrderCopyRate == 1/g) ?? []).length, 2);
   assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.canonicalCapitalAgnostic == true/g) ?? []).length, 2);
   assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.liveSource == "CANONICAL_PAPER_NET"/g) ?? []).length, 2);
-  assert.equal((workflow.match(/grep -Fq '双引擎独立账户'/g) ?? []).length, 2);
+  assert.equal((workflow.match(/grep -Fq '五行情·独立账户'/g) ?? []).length, 2);
   assert.match(workflow, /Verify frozen V5 route authority/);
   assert.match(workflow, /Require crypto-only V5 architecture/);
   assert.doesNotMatch(workflow, /run: npm run research:v11/);
