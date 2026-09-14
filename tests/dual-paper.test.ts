@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CANONICAL_PAPER_REFERENCE_EQUITY, ENGINE_ORDER_COPY_RATE, canonicalLivePortfolio,
-  canonicalPaperOpen, canonicalPaperSummary } from "../lib/dual-paper.ts";
+import { CANONICAL_PAPER_REFERENCE_EQUITY, canonicalLivePortfolio, canonicalPaperOpen, canonicalPaperSummary,
+  initialCanonicalPaperState, reconcileCanonicalPaper, type CanonicalPaperState } from "../lib/dual-paper.ts";
 import { initialStrategyArena, STRATEGY_CATALOG as CURRENT_CATALOG, type ArenaTrade } from "../lib/strategy-arena.ts";
 import { initialStrategyArena as initialPreviousStrategyArena,
   STRATEGY_CATALOG as PREVIOUS_CATALOG } from "../lib/previous-strategy-arena.ts";
@@ -11,7 +11,8 @@ import { initialRegimePortfolio } from "../lib/regime-portfolio.ts";
 const accounts = (current = initialStrategyArena(1), previous = initialPreviousStrategyArena(1)) =>
   ({ current, previous, regime: initialRegimePortfolio(1) });
 
-function trade(id: string, side: "LONG" | "SHORT", contracts: number, notional: number): ArenaTrade {
+function trade(id: string, side: "LONG" | "SHORT", contracts: number, notional: number,
+  accountEquityAtOpen = 1_000): ArenaTrade {
   return {
     id, strategyId: id.includes("previous") ? "tide_relay" : "range_reentry", strategyName: id,
     family: "TREND", lane: "PORTFOLIO", eventId: `event:${id}`, symbol: "BTC_USDT", side, status: "OPEN",
@@ -20,7 +21,7 @@ function trade(id: string, side: "LONG" | "SHORT", contracts: number, notional: 
     exitPrice: null, outcome: null, grossReturnRate: null, netReturnRate: null, netPnl: null,
     notional, maxFavorableRate: 0, maxAdverseRate: 0, lastPrice: 100, selectedForPortfolio: true,
     reason: id, admissionTier: "NORMAL", plannedRisk: notional * 0.0214, contracts,
-    quantoMultiplier: 0.001, leverage: 2, margin: notional / 2, accountEquityAtOpen: 1_000,
+    quantoMultiplier: 0.001, leverage: 2, margin: notional / 2, accountEquityAtOpen,
     context: { channel: "TREND", regime: "TREND", anomalyKind: null, entryStyle: "CONFIRM", exitProfile: "STRUCTURE",
       candidateScore: 80, trendRate: 0.01, trendEfficiency: 0.8, volatilityRatio: 1.2, rangePosition: 0.8,
       openInterestChangeRate: 0, volume24hUsd: 1_000_000_000, fundingRate: 0, alignedFlow: 0,
@@ -31,22 +32,23 @@ function trade(id: string, side: "LONG" | "SHORT", contracts: number, notional: 
   };
 }
 
-test("two strategy engines retain separate 1000 U ledgers while canonical PAPER reports their full combined result", () => {
-  const current = initialStrategyArena(1);
-  const previous = initialPreviousStrategyArena(1);
-  current.portfolioEquity = 1_075;
-  previous.portfolioEquity = 940;
-  const summary = canonicalPaperSummary(accounts(current, previous));
+function reconcile(value: ReturnType<typeof accounts>, state: CanonicalPaperState = initialCanonicalPaperState(1), now = 3_000) {
+  return reconcileCanonicalPaper({ state, accounts: value, now }).state;
+}
 
-  assert.equal(CANONICAL_PAPER_REFERENCE_EQUITY, 1_000);
-  assert.equal(ENGINE_ORDER_COPY_RATE, 1);
-  assert.equal(summary.dualPaperVersion, 3);
-  assert.equal(summary.portfolioEquity, 1_015);
-  assert.equal(summary.initialEquity, 1_000);
+test("five systems retain separate 1000 U ledgers while the canonical PAPER starts at 10000 U", () => {
+  const value = accounts();
+  const state = reconcile(value);
+  const summary = canonicalPaperSummary(value, state);
+
+  assert.equal(CANONICAL_PAPER_REFERENCE_EQUITY, 10_000);
+  assert.equal(summary.dualPaperVersion, 4);
+  assert.equal(summary.portfolioEquity, 10_000);
+  assert.equal(summary.initialEquity, 10_000);
   assert.equal(summary.engines.length, 5);
   assert.ok(summary.engines.every((engine) => engine.portfolioEquity === 1_000));
-  assert.equal(current.portfolioEquity, 1_075);
-  assert.equal(previous.portfolioEquity, 940);
+  assert.equal(summary.rules.canonicalCopySizing, "SOURCE_EQUITY_FRACTION");
+  assert.equal(summary.rules.canonicalEntryScaleFrozen, true);
 });
 
 test("the online and previous strategy catalogs stay frozen as two distinct decision systems", () => {
@@ -76,35 +78,37 @@ test("the previous engine builds its own frozen V4 route from the shared candle 
   assert.equal(result?.candidate.allRegimeRoutes?.[0].strategyId, "momentum_carry");
 });
 
-test("same symbol can remain open in both engines without either ledger suppressing the other", () => {
+test("same symbol remains independent and each source fraction is copied against 10000 U", () => {
   const current = initialStrategyArena(1);
   const previous = initialPreviousStrategyArena(1);
   current.portfolioOpen.BTC_USDT = trade("current", "LONG", 2_000, 200);
   previous.portfolioOpen.BTC_USDT = trade("previous", "LONG", 3_000, 300) as never;
+  const value = accounts(current, previous);
+  const state = reconcile(value);
 
-  const logical = canonicalPaperOpen(accounts(current, previous));
-  const live = canonicalLivePortfolio(accounts(current, previous));
-  assert.equal(logical.length, 2, "canonical PAPER must preserve both logical trades");
+  const logical = canonicalPaperOpen(value, state);
+  const live = canonicalLivePortfolio(value, state);
+  assert.equal(logical.length, 2);
   assert.deepEqual(logical.map((row) => row.engineId).sort(), ["CURRENT_V5", "PREVIOUS_V4"]);
-  assert.equal(Object.keys(current.portfolioOpen).length, 1);
-  assert.equal(Object.keys(previous.portfolioOpen).length, 1);
-  assert.equal(logical[0].contracts + logical[1].contracts, 5_000,
-    "canonical PAPER must copy both engine orders without reducing either one");
-  assert.equal(live.BTC_USDT.contracts, 5_000, "single-mode LIVE mirrors the canonical full-size net contracts");
-  assert.equal(live.BTC_USDT.notional, 500);
-  assert.equal(live.BTC_USDT.accountEquityAtOpen, 1_000);
+  assert.equal(logical[0].contracts + logical[1].contracts, 50_000);
+  assert.equal(logical.reduce((sum, row) => sum + row.notional, 0), 5_000);
+  assert.equal(live.BTC_USDT.contracts, 50_000);
+  assert.equal(live.BTC_USDT.notional, 5_000);
+  assert.equal(live.BTC_USDT.accountEquityAtOpen, 10_000);
+  assert.equal(current.portfolioOpen.BTC_USDT.contracts, 2_000);
+  assert.equal(previous.portfolioOpen.BTC_USDT.contracts, 3_000);
 });
 
-test("a lone current-version leg keeps its legacy LIVE lifecycle id during migration", () => {
+test("a lone current-version leg keeps its legacy LIVE lifecycle id", () => {
   const current = initialStrategyArena(1);
-  const previous = initialPreviousStrategyArena(1);
   current.portfolioOpen.BTC_USDT = trade("current-live-id", "LONG", 2_000, 200);
-  const live = canonicalLivePortfolio(accounts(current, previous));
+  const value = accounts(current);
+  const live = canonicalLivePortfolio(value, reconcile(value));
   assert.equal(live.BTC_USDT.id, "current-live-id");
-  assert.equal(live.BTC_USDT.notional, 200, "a lone order must reach canonical PAPER at its complete engine size");
+  assert.equal(live.BTC_USDT.notional, 2_000);
 });
 
-test("canonical PAPER copies 100% from each engine without applying a third capital or risk gate", () => {
+test("canonical PAPER applies no third risk gate while scaling every order fraction", () => {
   const current = initialStrategyArena(1);
   const previous = initialPreviousStrategyArena(1);
   const currentTrade = trade("current", "LONG", 4_000, 400);
@@ -113,41 +117,86 @@ test("canonical PAPER copies 100% from each engine without applying a third capi
   previousTrade.plannedRisk = 65;
   current.portfolioOpen.BTC_USDT = currentTrade;
   previous.portfolioOpen.BTC_USDT = previousTrade as never;
+  const value = accounts(current, previous);
 
-  const logical = canonicalPaperOpen(accounts(current, previous));
-  assert.equal(logical.reduce((sum, row) => sum + row.plannedRisk, 0), 130);
-  assert.equal(logical.reduce((sum, row) => sum + row.margin, 0), 400);
-  assert.deepEqual(logical.map((row) => row.contracts).sort((left, right) => left - right), [4_000, 4_000]);
+  const logical = canonicalPaperOpen(value, reconcile(value));
+  assert.equal(logical.reduce((sum, row) => sum + row.plannedRisk, 0), 1_300);
+  assert.equal(logical.reduce((sum, row) => sum + row.margin, 0), 4_000);
+  assert.deepEqual(logical.map((row) => row.contracts).sort((left, right) => left - right), [40_000, 40_000]);
   assert.equal(current.portfolioOpen.BTC_USDT.plannedRisk, 65);
   assert.equal(previous.portfolioOpen.BTC_USDT.plannedRisk, 65);
 });
 
-test("opposite same-symbol decisions coexist logically and only their net reaches LIVE", () => {
+test("opposite same-symbol decisions coexist logically and LIVE receives normalized net only", () => {
   const current = initialStrategyArena(1);
   const previous = initialPreviousStrategyArena(1);
   current.portfolioOpen.BTC_USDT = trade("current", "LONG", 5_000, 500);
   previous.portfolioOpen.BTC_USDT = trade("previous", "SHORT", 2_000, 200) as never;
+  const value = accounts(current, previous);
+  let state = reconcile(value);
 
-  assert.equal(canonicalPaperOpen(accounts(current, previous)).length, 2);
-  const live = canonicalLivePortfolio(accounts(current, previous));
+  assert.equal(canonicalPaperOpen(value, state).length, 2);
+  const live = canonicalLivePortfolio(value, state);
   assert.equal(live.BTC_USDT.side, "LONG");
-  assert.equal(live.BTC_USDT.contracts, 3_000);
+  assert.equal(live.BTC_USDT.notional, 3_000);
+  assert.equal(live.BTC_USDT.contracts, 30_000);
 
   previous.portfolioOpen.BTC_USDT = trade("previous", "SHORT", 5_000, 500) as never;
-  assert.deepEqual(canonicalLivePortfolio(accounts(current, previous)), {}, "equal opposite legs remain in PAPER but need no Gate exposure");
-  assert.equal(canonicalPaperOpen(accounts(current, previous)).length, 2);
+  state = reconcile(value, initialCanonicalPaperState(1));
+  assert.deepEqual(canonicalLivePortfolio(value, state), {});
+  assert.equal(canonicalPaperOpen(value, state).length, 2);
 });
 
-test("canonical aggregation never writes back into either engine trajectory", () => {
+test("a closed copy compounds canonical equity and later orders use the new frozen snapshot", () => {
+  const current = initialStrategyArena(1);
+  const value = accounts(current);
+  current.portfolioOpen.BTC_USDT = trade("first", "LONG", 5_000, 500);
+  let state = reconcile(value);
+  assert.equal(canonicalPaperOpen(value, state)[0].notional, 5_000);
+
+  const closed = { ...current.portfolioOpen.BTC_USDT, status: "CLOSED" as const, closedAt: 4_000,
+    exitPrice: 106, outcome: "TARGET" as const, grossReturnRate: .06, netReturnRate: .05, netPnl: 50 };
+  current.portfolioOpen = {};
+  current.recentPortfolio = [closed];
+  state = reconcile(value, state, 4_001);
+  assert.equal(state.equity, 10_500);
+  assert.equal(state.recent[0].netPnl, 500);
+
+  current.portfolioOpen.BTC_USDT = trade("second", "LONG", 5_250, 525, 1_050);
+  state = reconcile(value, state, 5_000);
+  const second = canonicalPaperOpen(value, state)[0];
+  assert.equal(second.notional, 5_250);
+  assert.equal(second.accountEquityAtOpen, 10_500);
+});
+
+test("an existing copy never resizes when another trade changes canonical equity", () => {
+  const current = initialStrategyArena(1);
+  const previous = initialPreviousStrategyArena(1);
+  current.portfolioOpen.BTC_USDT = trade("current", "LONG", 2_000, 200);
+  const value = accounts(current, previous);
+  let state = reconcile(value);
+  const frozen = canonicalPaperOpen(value, state)[0];
+
+  previous.portfolioOpen.BTC_USDT = trade("previous", "LONG", 3_000, 300) as never;
+  state.equity = 12_000;
+  state = reconcile(value, state, 4_000);
+  const logical = canonicalPaperOpen(value, state);
+  assert.equal(logical.find((row) => row.engineTradeId === "current")?.notional, frozen.notional);
+  assert.equal(logical.find((row) => row.engineTradeId === "previous")?.notional, 3_600);
+});
+
+test("canonical aggregation never writes back into any source trajectory", () => {
   const current = initialStrategyArena(1);
   const previous = initialPreviousStrategyArena(1);
   current.portfolioOpen.BTC_USDT = trade("current", "LONG", 2_000, 200);
   previous.portfolioOpen.BTC_USDT = trade("previous", "SHORT", 1_000, 100) as never;
+  const value = accounts(current, previous);
   const currentBefore = structuredClone(current);
   const previousBefore = structuredClone(previous);
+  const state = reconcile(value);
 
-  canonicalPaperSummary(accounts(current, previous));
-  canonicalLivePortfolio(accounts(current, previous));
+  canonicalPaperSummary(value, state);
+  canonicalLivePortfolio(value, state);
 
   assert.deepEqual(current, currentBefore);
   assert.deepEqual(previous, previousBefore);
