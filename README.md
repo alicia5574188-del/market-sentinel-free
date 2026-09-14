@@ -1,54 +1,52 @@
-# Dual Independent All-Regime Engines · 双引擎独立账户
+# Five Regime Systems · 五行情独立账户
 
-Gate USDT perpetual PAPER authority combining the current V5 engine and its immediately previous V4 engine. Each engine runs a fully independent hypothetical 1,000 U ledger. One canonical PAPER execution view copies 100% of every order produced by both engines without applying its own capital, sizing or risk gate; LIVE reads only that canonical net exposure. LIVE remains owner-controlled, default OFF and fail-closed.
+Gate USDT 永续合约交易系统。系统先用固定 11 个高流动性市场的连续 720 小时数据，把当前市场归入一个且仅一个行情域，再由该域内冻结的策略组合直接决定是否下单。
 
-## Decision authority
+## 生产结构
 
-Both frozen engines scan the thirty most liquid eligible **crypto** USDT perpetuals from the same verified market stream and build only continuous completed 5-minute paths. Candidate state, strategy authority, risk, sizing, positions, closes and performance remain separate. A position in one engine cannot block, resize, close, promote or demote the other; both engines may hold the same contract simultaneously in the same or opposite direction.
+- `SHOCK_TRANSITION`：冲击转折，2 条策略。
+- `COMPRESSION`：波动压缩，2 条策略。
+- `DIRECTIONAL_TREND`：方向趋势，4 条策略。
+- `NON_TREND_EXPANSION`：非趋势扩张，2 条策略。
+- `BALANCED_ROTATION`：平衡轮动，2 条策略。
+- 每个系统拥有独立的 1,000 U 假想账户、权益、仓位、冷却与 10%/6.5% 风险额度。
+- 行情域互斥且穷尽；当前域只控制新信号。旧域已建立的仓位继续由所属系统独立管理，因此同一币可跨系统同时持仓或方向相反。
+- 冻结策略在当前行情域直接执行；没有影子订单、3 连胜、近 6 笔、30 天滚动授权或基于结果的方向切换。
+- 唯一 PAPER 账户复制每个系统订单的 100% 原始张数，不按自身金额再次缩放、拦截或改写。
+- Gate 单向持仓模式只在 LIVE 边界逐币净额执行；各系统逻辑腿仍分别保留。
 
-The current V5 engine builds a trailing 360-candle path and separates route formation, frozen cross-market authority and account admission. Unknown or stock/commodity-style contract types fail closed before ranking. Its five mechanisms have PAPER authority only in cells that stayed profitable in chronological train and held-out samples:
+旧 V4/V5 不再产生新候选。部署时已有的 V4/V5 PAPER 持仓保留原止损、目标与生命周期，只作为退役排空层自然退出，避免部署突然改写现有 LIVE 仓位。
 
-- `界返`: range-lower-band re-entry during a strong daily market with a four-hour pullback.
-- `渠破`: 48-bar downside channel break in a neutral-to-weak daily market.
-- `势回`: asset uptrend pullback recovery during a mild broad-market decline.
-- `熊缩`: main-asset volatility squeeze release during a broad decline.
-- `牛接`: main-asset volatility squeeze release during a strong daily market pullback.
+## 冻结证据
 
-Every mechanism uses completed-candle signals, current executable-price economics, a fixed stop and a fixed target. A formed signal is spaced by the same two/four-hour cooldown used in research. The account admits at most one open trade per mechanism and one per direction; every authorized event also runs exact normal and reverse shadows after full friction.
+生产策略来自 `research-results/regime-system-portfolios-2026-09-14.json`，信号使用 44 个月 Gate 1h 数据，执行使用对应的 5m 数据。
 
-## Evidence contract
+| 指标 | 结果 |
+| --- | ---: |
+| 44 个月净收益 | +2,862.90 U |
+| 最大回撤 | 5.12% |
+| 活跃月份中盈利月份 | 29 / 42 |
+| 发现段 | +1,559.56 U / 1,311 笔 |
+| 验证段 | +1,019.75 U / 355 笔 |
+| 评估段 | +283.59 U / 155 笔 |
+| 高成本评估段 | +212.09 U |
+| 双倍不利进场评估段 | +267.64 U |
 
-The final implementation was replayed directly from its trailing 360-candle runtime path on independent Binance 90-day and Gate 35-day crypto-only datasets. Under a 0.22% stress cost, 3% current-equity risk, one position per strategy and one per direction, the held-out results were:
+这只是历史回放，不承诺未来收益。本次上线从新数据开始自然前向验证；策略参数不会根据新订单输赢自动改变。
 
-| Dataset | Held-out trades | Profit factor | Net PnL from 1,000 U | Max drawdown |
-| --- | ---: | ---: | ---: | ---: |
-| Binance 90-day | 41 | 1.18 | +79.14 U | 9.34% |
-| Gate 35-day | 18 | 1.66 | +122.83 U | 6.52% |
+## 风险与数据
 
-The corresponding full-period stress replays were PF 1.71 with 9.34% drawdown on Binance and PF 1.76 with 6.52% drawdown on Gate. Sparse periods remain valid waiting states rather than a trade quota.
+- 单笔目标风险为所属系统当前权益的 1.5%，名义价值最多 0.5 倍权益、最少 0.05 倍。
+- 每个系统总风险不超过 10%，同方向风险不超过 6.5%。
+- 同系统同币只允许一个仓位；同策略同币平仓后冷却 24 小时。
+- 完整往返摩擦按 0.14% 建模；使用新鲜 bid/ask、Gate 整数张数和真实合约乘数。
+- 至少 8 个市场具备同步、无断口的 721 根完整 1h K 线才允许判定；数据不够或盘口失鲜时禁止开单。
+- LIVE 继续保留原所有者登录、AES-GCM/HKDF 凭据、开关选择、实盘风险缩放、保护止损和故障闭锁。部署和登录不会自动开启或关闭 LIVE。
 
-These are historical simulations, not a promise of daily profit. PAPER is the forward test.
-
-## Account and execution
-
-- Two hypothetical accounts compound from 1,000 U independently. The canonical PAPER execution view receives 100% of each engine order. It has no independent capital limit, position-sizing calculation, margin budget or portfolio-risk veto and never feeds an execution result back into either engine.
-- The canonical PAPER ledger preserves both same-symbol logical legs. Gate single-position LIVE execution receives their signed net exposure per contract. When the contributing logical-leg set changes, LIVE closes the prior managed net and reconciles the new net; it never sends separate strategy decisions directly to Gate.
-- In each engine, position notional is set by its own frozen structural-risk rules. Current V5 targets 3% of its own equity per accepted trade; previous V4 retains its 1%–2% sizing. Both retain the 4× account-wide ceiling, and an exceptionally wide stop is rejected inside that engine instead of becoming a meaningless tiny position.
-- Full modeled friction, fresh bid/ask, executable depth, Gate integer contracts and structural stops are mandatory. Immediately after Gate confirms an entry submission, the same execution pass submits the existing native close-only/reduce-only price-order stop; reconciliation then owns and updates that order. LIVE protective stops use Gate's current contract tick and round outward only, so price-grid normalization cannot close ahead of PAPER.
-- Each hypothetical engine independently retains its 10% aggregate and 6.5% same-direction risk ceilings. The canonical PAPER view applies no second combined-account cap; actual Gate LIVE execution retains its existing real-account safety checks.
-- Stale or incomplete data cannot open or close on an old price.
-- Same symbol has at most one active trade inside each engine, but cross-engine same-symbol and opposite-direction positions are explicitly allowed.
-
-## Operator page
-
-The public page shows account equity, today's net result, current environment, owning strategy, PAPER positions and complete account trade records. Route status, direction and the final blocker come from backend admission state; the page never reconstructs authority from candles. Formed candidates that fail execution, strategy authority or account admission are retained in a bounded blocked-candidate audit; early route formation noise is not mislabeled as an order. The owner-only LIVE timeline remains visible after shutdown and records confirmed fills, exits, Gate rejection labels and safety actions.
-
-Gate public reads use per-host endpoint backoff across the two official futures REST hosts: a timeout, 5xx or 429 on one host immediately fails over without putting the other host into backoff. Fresh executable books remain inside the two-second authority alarm, while the thirty-market radar, completed-candle refresh, universe refresh and research logging run as one non-overlapping background task and cannot hold the next protection/entry pass. Resident books are staggered; one scheduled subset miss stays in per-market feed diagnostics and cannot impersonate a whole-pool outage. Global recovery begins only after executable freshness actually expires, while a failed protected position or formed route freezes that exposure alone. Completed 5-minute paths update only after a new bar closes, then use four-row incremental reads and merge into the retained continuous 360-row path. A timeout or 429 keeps that path available; only repeated failure after the retained path exceeds eleven minutes blocks the affected market. Protected positions and formed routes retain fresh-book priority. Trading API credentials are never attached to these public reads.
-
-## Verification and release
+## 验证与发布
 
 ```bash
-npm run test:all-regime
+npm run research:regime-systems
 npm run test:direct
 npm test
 npm run typecheck
@@ -57,4 +55,4 @@ npm run build
 npx wrangler deploy --dry-run --config dist/server/wrangler.json
 ```
 
-Production releases only from GitHub `main`. The release gate requires `all-regime-compound-v2`, arena version 12, V5 route authority, backend route-check truth, thirty-market scanning and advancing authority health. LIVE defaults OFF for a new account, but deployment preserves the owner's saved requested state and starts non-operational until the first fresh Gate reconciliation; recoverable single-symbol rejection cannot rewrite that choice. Existing PAPER account equity, positions and history are preserved.
+生产只能从 GitHub `main` 发布。
