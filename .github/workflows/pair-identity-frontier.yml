@@ -1,0 +1,45 @@
+name: Pair Identity Frequency Frontier
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-pair-identity-frontier.mjs"
+      - ".github/workflows/pair-identity-frontier.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Fetch 12-month Gate 5m universe
+        env:
+          RESEARCH_INTERVAL: 5m
+          RESEARCH_DATASET: /tmp/gate-history-hf-12m.json
+          RESEARCH_MONTHS: 202509,202510,202511,202512,202601,202602,202603,202604,202605,202606,202607,202608
+          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT,SUI_USDT,UNI_USDT,DOT_USDT,ZEC_USDT,STORJ_USDT,LSK_USDT
+          RESEARCH_MIN_CONTRACTS: 12
+          RESEARCH_MIN_MONTH_COVERAGE: 0.98
+          RESEARCH_CONCURRENCY: 12
+        run: node scripts/fetch-gate-history.mjs
+      - name: Scan pair-identity frequency frontier
+        env:
+          RESEARCH_DATASET: /tmp/gate-history-hf-12m.json
+          RESEARCH_OUTPUT: /tmp/pair-identity-frontier.json
+        run: node scripts/research-pair-identity-frontier.mjs
+      - name: Print result
+        run: jq . /tmp/pair-identity-frontier.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pair-identity-frontier
+          path: /tmp/pair-identity-frontier.json
+          retention-days: 7
