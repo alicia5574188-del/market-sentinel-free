@@ -5,6 +5,7 @@
 - Implementing two separate audit layers: complete signals rejected by execution/account rules retain `BLOCKED` status and geometry when available; incomplete strategies retain `FORMING` status with exact passed/missing frozen conditions and no order authority.
 - The frozen 44-month portfolio produced 1,821 trades (about 1.36/day overall and 0.85/day in the final six months). V4/V5 higher-frequency replays were negative, so this correction does not loosen gates or restore those engines.
 - Local verification, reviewed PR, main deployment and production/LIVE-state checks remain.
+- PR #215 passed the full GitHub review and merged to `main` as `f02b9514`. Connector-created main commits did not emit a push workflow and the connector exposes no workflow-dispatch action; production remains on the prior build. The only remaining action is a manual `Run workflow` on `main`, followed by the already-instrumented production/LIVE checks.
 
 # Release candidate — 2026-09-14 immediate persistent hourly readiness
 
