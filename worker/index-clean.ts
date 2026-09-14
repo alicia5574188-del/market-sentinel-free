@@ -22,7 +22,9 @@ import { advanceStrategyArena, initialStrategyArena, normalizeStrategyArena, obs
   type StrategyArenaState } from "../lib/strategy-arena.ts";
 import { ALL_REGIME_ENGINE_VERSION, allRegimePaperApproved } from "../lib/all-regime-engine.ts";
 import { allRegimePaperApproved as previousAllRegimePaperApproved } from "../lib/previous-all-regime-engine.ts";
-import { canonicalLivePortfolio, canonicalPaperOpen, canonicalPaperSummary } from "../lib/dual-paper.ts";
+import { CANONICAL_PAPER_REFERENCE_EQUITY, canonicalLivePortfolio, canonicalPaperOpen, canonicalPaperSummary,
+  initialCanonicalPaperState, normalizeCanonicalPaperState, reconcileCanonicalPaper,
+  type CanonicalPaperState } from "../lib/dual-paper.ts";
 import { advanceRegimePortfolio, evaluateRegimePortfolio, initialRegimePortfolio, normalizeRegimePortfolio,
   REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE, resetRegimePortfolio,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
@@ -247,6 +249,7 @@ type RuntimeState = {
   strategyArena: StrategyArenaState;
   previousStrategyArena: PreviousStrategyArenaState;
   regimePortfolio: RegimePortfolioState;
+  canonicalPaper: CanonicalPaperState;
   marketRegimes: MarketRegimeState;
   liquidUniverse: string[];
   stableCandidates: Record<string, MarketRegimeCandidate>;
@@ -328,6 +331,7 @@ function initialState(): RuntimeState {
     lastError: null, d1MirrorError: null, riskBreach: false, tickSize: Object.fromEntries(DEFAULT_SYMBOLS.map((symbol) => [symbol, 0.0001])), contractMeta: {},
     decisions: {}, routes: {}, plans: {}, positions: {}, evidence: {}, entryAssessments: {},
     strategyArena: initialStrategyArena(), previousStrategyArena: initialPreviousStrategyArena(), regimePortfolio: initialRegimePortfolio(),
+    canonicalPaper: initialCanonicalPaperState(),
     marketRegimes: initialMarketRegimes(), liquidUniverse: [], stableCandidates: {}, previousStableCandidates: {},
     stableStructures: {}, previousStableStructures: {},
     strategyCandleCursor: 0, strategyCandleError: null, strategyCandleFailures: {}, strategyLogError: null, analysisMs: [], equity: PAPER_INITIAL_EQUITY, outbox: [],
@@ -397,7 +401,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private sessionWarmup: Record<string, number> = {};
   private contractCatalog = new Map<string, Awaited<ReturnType<typeof fetchActiveContracts>>[number]>();
   private authorityReady = true;
-  private authorityView = { positions: {} as RuntimeState["positions"], equity: 1_000, equityVersion: 0 };
+  private authorityView = { positions: {} as RuntimeState["positions"], equity: CANONICAL_PAPER_REFERENCE_EQUITY, equityVersion: 0 };
   private liveClient: GateLiveClient | null = null;
   private optionalWork: Promise<void> | null = null;
 
@@ -414,10 +418,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           strategyArena: retiredCurrentArena(saved.strategyArena),
           previousStrategyArena: retiredPreviousArena(saved.previousStrategyArena),
           regimePortfolio: normalizeRegimePortfolio(saved.regimePortfolio),
+          canonicalPaper: strategyCutover ? initialCanonicalPaperState(Date.now())
+            : normalizeCanonicalPaperState(saved.canonicalPaper, Date.now()),
           previousStableCandidates: saved.previousStableCandidates ?? {},
           previousStableStructures: saved.previousStableStructures ?? {},
           marketRegimes: strategyCutover ? initialMarketRegimes() : normalizeMarketRegimes(saved.marketRegimes),
           equity: strategyCutover ? PAPER_INITIAL_EQUITY : saved.equity,
+          dailyStartEquity: strategyCutover ? PAPER_INITIAL_EQUITY : saved.dailyStartEquity,
           equityVersion: strategyCutover ? saved.equityVersion + 1 : saved.equityVersion,
           decisions: strategyCutover ? {} : saved.decisions,
           routes: strategyCutover ? {} : saved.routes,
@@ -430,6 +437,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             positions: saved.live?.positions ?? {}, entrySkips: saved.live?.entrySkips ?? {},
             auditEvents: saved.live?.auditEvents ?? [], requestedEnabled: Boolean(saved.live?.requestedEnabled),
             operational: false }, analysisMs: [], state: "WARMING" };
+        const canonical = reconcileCanonicalPaper({ state: this.runtime.canonicalPaper,
+          accounts: { current: this.runtime.strategyArena, previous: this.runtime.previousStrategyArena,
+            regime: this.runtime.regimePortfolio }, now: Date.now() });
+        this.runtime.canonicalPaper = canonical.state;
+        this.runtime.equity = canonical.state.equity;
         delete (this.runtime as unknown as Record<string, unknown>).rejectionAudit;
         delete (this.runtime as unknown as Record<string, unknown>).reactionLab;
         delete (this.runtime as unknown as Record<string, unknown>).outcomeResearch;
@@ -464,7 +476,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       equity: this.runtime.equity, equityVersion: this.runtime.equityVersion,
       outbox: this.runtime.outbox, paperCycle: this.runtime.paperCycle, bankruptcyOutbox: this.runtime.bankruptcyOutbox,
       strategyArena: this.runtime.strategyArena, previousStrategyArena: this.runtime.previousStrategyArena,
-      regimePortfolio: this.runtime.regimePortfolio,
+      regimePortfolio: this.runtime.regimePortfolio, canonicalPaper: this.runtime.canonicalPaper,
       previousStableCandidates: this.runtime.previousStableCandidates,
       previousStableStructures: this.runtime.previousStableStructures, marketRegimes: this.runtime.marketRegimes,
       lastStopCheckpointAt: this.runtime.lastStopCheckpointAt, riskBreach: this.runtime.riskBreach });
@@ -485,6 +497,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.strategyArena = authority.strategyArena;
     this.runtime.previousStrategyArena = authority.previousStrategyArena;
     this.runtime.regimePortfolio = authority.regimePortfolio;
+    this.runtime.canonicalPaper = authority.canonicalPaper;
     this.runtime.previousStableCandidates = authority.previousStableCandidates;
     this.runtime.previousStableStructures = authority.previousStableStructures;
     this.runtime.marketRegimes = authority.marketRegimes;
@@ -683,6 +696,20 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }]));
   }
 
+  private reconcileCanonicalMirror(now: number) {
+    const priorEquity = this.runtime.canonicalPaper.equity;
+    const result = reconcileCanonicalPaper({ state: this.runtime.canonicalPaper,
+      accounts: { current: this.runtime.strategyArena, previous: this.runtime.previousStrategyArena,
+        regime: this.runtime.regimePortfolio }, now });
+    this.runtime.canonicalPaper = result.state;
+    this.runtime.equity = result.state.equity;
+    if (result.state.equity !== priorEquity) {
+      this.runtime.equityVersion += 1;
+      this.runtime.paperCycle.peakEquity = Math.max(this.runtime.paperCycle.peakEquity, result.state.equity);
+    }
+    return result.changed;
+  }
+
   private evaluateRegimeNow(now: number) {
     this.runtime.regimePortfolio = evaluateRegimePortfolio({ state: this.runtime.regimePortfolio,
       hourly: this.regimeHourly, quotes: this.regimeQuotes(now), contracts: this.regimeContracts(), now });
@@ -707,7 +734,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (now - this.runtime.lastStrategyLogAt < STRATEGY_LOG_MS || this.runtime.d1Writes + 2 > 4_800) return;
     this.runtime.lastStrategyLogAt = now;
     const summary = canonicalPaperSummary({ current: this.runtime.strategyArena, previous: this.runtime.previousStrategyArena,
-      regime: this.runtime.regimePortfolio });
+      regime: this.runtime.regimePortfolio }, this.runtime.canonicalPaper);
     const counts = marketRegimeSummary(this.runtime.marketRegimes).counts;
     const mechanismMetrics = REGIME_STRATEGIES.map((item) => ({ kind: "FROZEN_REGIME_STRATEGY",
       engineId: item.system, id: item.id, tactic: item.tactic, authority: "CURRENT_REGIME_DIRECT",
@@ -724,7 +751,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           Object.keys(this.runtime.stableCandidates).length, this.runtime.symbols.length, JSON.stringify(counts), JSON.stringify(metrics),
           0, 0, summary.activeCount,
           canonicalPaperOpen({ current: this.runtime.strategyArena, previous: this.runtime.previousStrategyArena,
-            regime: this.runtime.regimePortfolio }).length,
+            regime: this.runtime.regimePortfolio }, this.runtime.canonicalPaper).length,
           summary.portfolioEquity, summary.portfolioResolved, summary.portfolioEquity - summary.initialEquity,
           this.runtime.strategyCandleError, this.runtime.state, Number(this.runtime.live.requestedEnabled), Number(this.runtime.live.operational)),
         this.env.DB.prepare("DELETE FROM strategy_runtime_log WHERE observed_at<?").bind(now - STRATEGY_LOG_RETENTION_MS),
@@ -1159,6 +1186,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         this.runtime.positions[position.symbol] = closed;
         this.queueTransition(closed, position);
       }
+      this.runtime.canonicalPaper = initialCanonicalPaperState(now);
       this.runtime.equity = PAPER_INITIAL_EQUITY;
       this.runtime.equityVersion += 1;
       this.runtime.paperCycle = startPaperCycle(now, PAPER_INITIAL_EQUITY, this.runtime.paperCycle.number + 1);
@@ -1183,7 +1211,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.runtime.d1MirrorError = `D1 reset mirror pending: ${safeError(error)}`;
     }
     const strategyArena = canonicalPaperSummary({ current: this.runtime.strategyArena, previous: this.runtime.previousStrategyArena,
-      regime: this.runtime.regimePortfolio });
+      regime: this.runtime.regimePortfolio }, this.runtime.canonicalPaper);
     return { ok: true, equity: strategyArena.portfolioEquity,
       strategyArena, paperCycle: paperCycleSummary(this.runtime.paperCycle, this.runtime.equity) };
   }
@@ -1408,8 +1436,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private async syncLive(now: number, initialEnable = false, forceEntryCleanup = false) {
+    // Owner actions and optional hourly evaluation can arrive between two book
+    // loops. Reconcile first so LIVE can never observe an unregistered source leg.
+    this.reconcileCanonicalMirror(now);
     const desiredPortfolio = canonicalLivePortfolio({ current: this.runtime.strategyArena,
-      previous: this.runtime.previousStrategyArena, regime: this.runtime.regimePortfolio });
+      previous: this.runtime.previousStrategyArena, regime: this.runtime.regimePortfolio }, this.runtime.canonicalPaper);
     const activePositions = Object.values(this.runtime.live.positions).some((position) => position?.status === "OPEN");
     const activeEntries = Object.values(this.runtime.live.entries).some((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status));
     if (!this.runtime.live.requestedEnabled && !activePositions && !activeEntries && !initialEnable && !forceEntryCleanup) return;
@@ -2015,6 +2046,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const feed = this.runtime.feedFailures[symbol];
       criticalChanged = this.suspendSymbol(symbol, now, feed?.lastError ?? "等待 Gate 重试", feed?.retryAt ?? now + LOOP_MS, false) || criticalChanged;
     }
+    // Source systems remain authoritative. This mirror only records their
+    // transitions and never participates in source admission or protection.
+    criticalChanged = this.reconcileCanonicalMirror(now) || criticalChanged;
     // A realized loss can shrink the 10% cap. Reduce weakest fresh PAPER exposure before considering any new entry.
     for (const candidate of Object.values(this.runtime.positions)
       .filter((position): position is PaperPosition => position?.status === "OPEN")
@@ -2058,6 +2092,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           this.runtime.equityVersion = nextVersion;
         }
         const nextCycleNumber = this.runtime.paperCycle.number + 1;
+        this.runtime.canonicalPaper = initialCanonicalPaperState(now);
         this.runtime.equity = PAPER_INITIAL_EQUITY;
         this.runtime.paperCycle = startPaperCycle(now, PAPER_INITIAL_EQUITY, nextCycleNumber);
         this.runtime.positions = {};
@@ -2292,7 +2327,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const effectiveState = !this.authorityReady ? "RECOVERY_REQUIRED" : stale ? "RECONNECTING" : this.runtime.state;
       const strategies = REGIME_STRATEGIES;
       const canonical = canonicalPaperSummary({ current: this.runtime.strategyArena, previous: this.runtime.previousStrategyArena,
-        regime: this.runtime.regimePortfolio });
+        regime: this.runtime.regimePortfolio }, this.runtime.canonicalPaper);
       const regimes = marketRegimeSummary(this.runtime.marketRegimes);
       return json({
         version: this.runtime.version,
@@ -2354,11 +2389,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             dualIndependentEngines: false,
             independentSystemCount: REGIME_SYSTEMS.length,
             engineInitialEquity: 1_000,
-            canonicalReferenceEquity: 1_000,
-            engineOrderCopyRate: 1,
-            canonicalCapitalAgnostic: true,
+            canonicalReferenceEquity: CANONICAL_PAPER_REFERENCE_EQUITY,
+            canonicalCopySizing: "SOURCE_EQUITY_FRACTION",
+            canonicalEntryScaleFrozen: true,
+            canonicalAdmissionGate: false,
+            canonicalCapitalAgnostic: false,
             sameSymbolCrossEngineAllowed: true,
-            liveSource: "CANONICAL_PAPER_NET",
+            liveSource: "CANONICAL_PAPER_NORMALIZED_NET",
           },
         },
         radar: {
@@ -2400,7 +2437,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     if (path === "/status" || path === "/owner-runtime") {
       await this.ensureAlarm();
-      const { outbox, live, paperCycle, bankruptcyOutbox, strategyArena, previousStrategyArena, regimePortfolio, marketRegimes,
+      const { outbox, live, paperCycle, bankruptcyOutbox, strategyArena, previousStrategyArena, regimePortfolio, canonicalPaper, marketRegimes,
         stableCandidates: _stableCandidates, previousStableCandidates: _previousStableCandidates, stableStructures,
         previousStableStructures: _previousStableStructures, liquidUniverse: _liquidUniverse,
         strategyCandleFailures, ...publicRuntime } = this.runtime;
@@ -2408,7 +2445,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const stale = !this.authorityReady || this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > AUTHORITY_STALE_AFTER_MS;
       const effectiveState = !this.authorityReady ? "RECOVERY_REQUIRED" : stale ? "RECONNECTING" : this.runtime.state;
       return json({ ...publicRuntime, ...this.authorityView, paperCycle: paperCycleSummary(paperCycle, this.authorityView.equity),
-        strategyArena: canonicalPaperSummary({ current: strategyArena, previous: previousStrategyArena, regime: regimePortfolio }),
+        strategyArena: canonicalPaperSummary({ current: strategyArena, previous: previousStrategyArena, regime: regimePortfolio }, canonicalPaper),
         marketRegimes: marketRegimeSummary(marketRegimes),
         strategyData: { liquidMarkets: REGIME_UNIVERSE.length, stableMarkets: regimePortfolio.warmMarkets,
           routedMarkets: new Set(regimePortfolio.routeChecks.map((row) => row.symbol)).size,
