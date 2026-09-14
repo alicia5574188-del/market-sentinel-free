@@ -7,7 +7,9 @@ on:
     branches: [main]
   workflow_dispatch:
   schedule:
-    - cron: "17 */6 * * *"
+    # Temporary self-trigger: connector-authored main updates do not emit a
+    # push workflow. Restore the six-hour monitor after this release lands.
+    - cron: "*/5 * * * *"
 
 # This proposal is intentionally safe to review as a standalone file. The one-time
 # cutover runs only when this workflow is manually dispatched on the exact release
@@ -979,7 +981,7 @@ jobs:
   # the one-time cutover has already produced the exact minimal table set; this
   # prevents an accidental merge from using migrations apply as the first purge.
   deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: always() && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule') && (needs.verify.result == 'success' || github.event_name == 'schedule')
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 20
