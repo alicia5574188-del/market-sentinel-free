@@ -94,6 +94,8 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(page, /当前接管/);
   assert.match(page, /720小时路径/);
   assert.match(page, /当前行情域直接信号/);
+  assert.match(page, /当前最接近触发/);
+  assert.match(page, /不生成订单，也不改变下单权限/);
   assert.match(page, /const hasRuntimeSnapshot = Boolean\(runtime && arena\)/);
   assert.match(page, /收到真实运行快照后再显示五个独立账户、合并持仓、行情归属和市场数量/);
   assert.match(page, /收到后台真实快照前不显示“0笔”/);
@@ -195,6 +197,8 @@ test("five frozen regime systems are causal and isolated while canonical PAPER i
   assert.match(dualPaper, /canonicalAdmissionGate: false/);
   assert.match(dualPaper, /canonicalCapitalAgnostic: false/);
   assert.match(dualPaper, /canonicalPaperOpen/);
+  assert.match(dualPaper, /blockedCandidates: regimeBlockedCandidates/);
+  assert.doesNotMatch(dualPaper, /blockedCandidates: \[\]/);
   assert.match(dualPaper, /canonicalLivePortfolio/);
   assert.doesNotMatch(arena, /adaptiveMechanismForPlaybook/);
   assert.match(arena, /ARENA_FRICTION_RATE = 0\.0014/);
@@ -206,6 +210,8 @@ test("five frozen regime systems are causal and isolated while canonical PAPER i
   assert.match(regimePortfolio, /classifyRegime/);
   assert.match(regimePortfolio, /REGIME_HOURLY_REQUIRED_CANDLES = 721/);
   assert.match(regimePortfolio, /rows\.length >= REGIME_HOURLY_REQUIRED_CANDLES/);
+  assert.match(regimePortfolio, /status: "FORMING"/);
+  assert.match(worker, /formingRouteCount/);
   assert.match(worker, /REGIME_HOURLY_REQUIRED_CANDLES \+ 1/);
   assert.match(worker, /regime-hourly:/);
   assert.doesNotMatch(regimePortfolio, /PROMOTION|shadowResolved|recentResults/);
