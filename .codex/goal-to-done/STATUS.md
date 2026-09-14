@@ -1,3 +1,11 @@
+# Release candidate — 2026-09-14 immediate persistent hourly readiness
+
+- Root cause confirmed: Gate includes the unfinished current 1h bar, while the runtime requested only 721 and correctly filtered that bar, leaving 720 completed observations. The classifier requires 721 observations for a causal 720-hour return, so a fresh deployment could wait until the next hour.
+- Cold paths now request 722 rows, validate and retain only a continuous 721-row completed suffix. A path is refreshed when it is short even if its latest timestamp is current.
+- Each ready market path is stored independently under `regime-hourly:<symbol>` and restored on process startup; a deployment no longer discards the 11-market readiness cache. Fetch and storage failures retry after ten seconds and are published as explicit new-entry blockers.
+- UI and production health no longer treat an advancing two-second feed as sufficient strategy readiness. Release health requires 11/11 paths, no hourly-path error, a completed strategy candle and at least eight synchronized context markets.
+- Local acceptance passes 265 direct tests, 17 architecture/migration tests, TypeScript, ESLint, production build, frozen 44-month research reproduction, whitespace checks and Cloudflare dry-run. Settings, credentials, PAPER trajectories and owner-controlled LIVE intent are unchanged; PR, merge and production deploy remain.
+
 # Forward-validation candidate — 2026-09-14 direct five-domain portfolio
 
 - Permanently removed the 30-day result window, three-consecutive-win/latest-six-positive authorization, pending shadow ledger and outcome-quality arbitration from `research-regime-system-portfolios.mjs`. Runtime eligibility in this research path is now only current causal domain, current frozen strategy signal, per-system cooldown and the independent system account's risk capacity.
