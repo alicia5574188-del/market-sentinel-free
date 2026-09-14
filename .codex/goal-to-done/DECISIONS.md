@@ -1,3 +1,18 @@
+# Stable V4 replacement decision — 2026-09-13
+
+- The current deployed V4 fails the production-source thirty-day replay and cannot inherit the old fixed-0.5x profit claim. Its route logic may remain as a baseline, but its current account authority is not evidence of stable positive expectancy.
+- Reject high-volatility stop widening as the primary repair. The stable candidate keeps original entry/stop/target geometry and instead removes stale authorization: twelve current shadow samples warm the strategy, both latest-six and latest-twelve after-cost evidence must remain positive, weak/mixed evidence returns to cash, and reverse authority requires paired profitable reverse evidence.
+- Bound the candidate to 0.5x equity per position with a 0.25x meaningful minimum. A -2% realized daily loss stops new account entries for that UTC day; +3% realized locks the day's gain. Both controls leave shadows running so the strategy can regain evidence without corrupting its learning trajectory.
+- The candidate passes discovery, untouched held-out, higher-cost, doubled-adverse-entry, drawdown, concentration and majority-five-day gates. It does not pass the strict all-rolling-ten-day gate, and Gate no longer serves the adjacent older thirty-day five-minute sample. Mark it `FORWARD_SHADOW_REQUIRED`; do not replace production or claim stable long-run profit yet.
+
+# V4 volatility-sizing decision — 2026-09-13
+
+- A high-volatility low-margin mode is a prospective strategy version, not an invisible V4 patch. Wider stops change path outcomes, and allowing sub-1x notional changes account admission; both must earn new chronological after-cost evidence before replacement.
+- Lower margin alone does not reduce loss. The valid transformation is wider structural stop plus lower notional, with planned loss and the 10% total-risk, 6.5% same-direction-risk and 30% margin ceilings unchanged. Leverage is only collateral efficiency and cannot be credited as risk reduction.
+- Do not relax `POLARITY_NOT_AUTHORIZED` or `DUPLICATE_LIFECYCLE` in this study. The former is V4's direction authorization; the latter prevents correlated copies of one same-symbol/same-strategy lifecycle. Relaxing either changes the entry distribution and requires a separate new-strategy study.
+- The tested high-volatility candidates reduced some held-out drawdowns but made discovery and full-month profit worse, so none may replace production. A global 0.5x cap showed small held-out/full-month profit but failed discovery profitability and concentration gates; it remains research-only.
+- Keep the current V4 and its accumulated trajectory intact. A future replacement requires an exact current-arena replay with positive discovery and untouched held-out segments, higher-cost stress survival, bounded symbol concentration and no material drawdown regression; one hindsight AKE path is not an optimization label.
+
 # Unified PAPER/LIVE lifecycle display decision — 2026-09-12
 
 - PAPER and LIVE trade records share one lifecycle presentation contract: symbol/side identity, entry price and exact entry time, exit price and exact exit time, holding duration, outcome and account-specific summary.
@@ -130,6 +145,14 @@
 - Release resets the V4.2 strategy ledger and 1,000 U simulated cycle. LIVE remains forced OFF on restart and deployment.
 
 # Decisions
+
+## 2026-09-14 — Shadow authorization is permanently forbidden
+
+- Current market structure selects exactly one owning system before any strategy evaluates a signal. A frozen strategy in that system either produces a current signal or waits; no hypothetical result stream may promote, demote, authorize, expire or reverse it.
+- Three consecutive wins, latest-six net profit, thirty-day evidence validity and every equivalent rolling outcome gate are forbidden in successor research and execution. They react after the profitable phase and can authorize a real order only after the state that produced the evidence has changed.
+- Offline historical outcomes remain valid only for chronological discovery, validation, stress testing and rejection of a frozen system. They cannot become a runtime input.
+- Each system owns an isolated hypothetical 1,000 U ledger, positions, cooldown and risk budget. Cross-system same-symbol or opposite-side positions are valid. The canonical PAPER view copies every admitted system order at 100% without capital-based scaling or rejection; LIVE remains only the proportional exchange representation of that canonical truth.
+- The five-domain candidate may be called forward-validation-ready only because every system independently passes the frozen historical gates. Since the final six months were inspected during development, only genuinely new future data can supply release evidence.
 
 ## 2026-09-12 — Archived PAPER orders are opt-in detail
 
@@ -533,3 +556,26 @@
 - Correction from the owner: the executable PAPER layer is a capital-agnostic copy view, not a third 1,000 U risk account. It copies every independent-engine order at 100% of that engine's contracts/notional, preserves both logical legs for attribution and nets only at the Gate single-position LIVE boundary. It never scales, blocks or rewrites an engine order and remains read-only with respect to both trajectories.
 - A pre-dual checkpoint is interpreted as the current V5 ledger and is preserved byte-for-byte through current normalization; V4 starts as a fresh 1,000 U ledger. A lone existing V5 LIVE plan keeps its lifecycle identity during migration so deployment cannot manufacture a close/reopen solely from the new aggregation layer.
 - Deployment preserves the owner's persisted LIVE choice. The verified pre-release production state was LIVE requested false and operational false; release code does not call the LIVE mutation endpoint.
+
+# 2026-09-14 — Wide stops require genuinely small notional, not larger account loss
+
+- The deployed 1x meaningful-notional admission rule is part of V4's frozen trajectory and remains unchanged. A successor may implement the owner's high-volatility proposal only as a new strategy version with its own evidence and hypothetical ledger.
+- For the candidate, planned loss is fixed at 1.5% of its own equity. A 12%-25% stop therefore reduces notional to roughly 0.05x-0.12x when necessary; leverage or margin labels cannot substitute for this risk calculation.
+- The recent twelve-month wide-stop V4 derivative is rejected because its 30-month discovery history is negative. The new macro candidate uses 30-day/7-day trend plus seven-day breakout to avoid treating every short-term impulse as the same edge.
+- A profitable aggregate backtest is necessary but not sufficient for replacement. Because later-period comparisons influenced candidate review and monthly returns remain clustered, this candidate is forward-shadow only. Existing V4/V5 authority and all production state remain unchanged until fresh prospective evidence passes a separately frozen gate.
+# 2026-09-14 — Engine count is unbounded; evidence, not version labels, controls membership
+
+- V4 and V5 have no protected place in the future portfolio. A system remains only if its own independent 1,000 U trajectory passes its evidence gates; failure means drain existing frozen positions and remove fresh-entry authority at cutover.
+- A phase specialist is not required to trade or win in months where its phase is absent. Component admission instead requires fixed sample-rate floors, positive discovery expectancy, bounded drawdown/concentration, positive chronological validation and evaluation, and positive higher-cost/adverse-entry stress. Monthly stability and cross-engine correlation are then judged again at portfolio level.
+- Research signals use completed hourly candles aggregated from the exact official 5m archive. At most three missing hours may be flat-filled in the signal layer and are explicitly counted. Entry, stop/target ordering, trailing protection and exit always use the original unfilled 5m path; a real execution gap cannot be fabricated.
+- A result that passes the eleven-symbol long horizon but fails the current thirteen-symbol universe is shadow-only. The two short components and bull-leader candidate therefore do not replace production yet, despite attractive long-horizon totals.
+- Full coverage permits `WAIT` when a phase has no validated engine. It never permits a failing engine to consume order/risk quota merely to make the registry look complete.
+- No production mutation, GitHub push, merge or deployment is authorized by a research result alone. LIVE remains owner-controlled and unchanged.
+
+# 2026-09-14 — Systems own domains; portfolios own tactics
+
+- A system is the independent 1,000 U account attached to one mutually exclusive causal market domain. Individual entry rules are tactics inside that system, not separate systems and not separate accounts.
+- Direction is not a sufficient system boundary. Bull and bear trends share the `DIRECTIONAL_TREND` domain while using asymmetric bull, bear, breakout, relative-momentum and defensive tactics; every other snapshot is owned by exactly one of shock/transition, compression, non-trend expansion or balanced rotation.
+- Old wins expire after 30 days before applying three-consecutive-wins or latest-six-net-positive authority. This duration was frozen because it beat 60 and 90 days on discovery baseline profit, higher-cost profit and profitable-month count; later evaluation performance did not choose the duration.
+- Do not require every specialist to win in every chronological subperiod. Admission requires each full-history system to remain positive at baseline and higher cost with controlled drawdown/concentration, while the aggregate of all independent accounts must be positive in discovery, validation and evaluation under baseline, higher-cost and adverse-entry runs. This preserves genuine diversification without allowing a lifetime-losing system into the portfolio.
+- The historical aggregate is only a forward-shadow candidate because iterative diagnostics have consumed the final evaluation period. Freeze the state map, tactic set, 30-day memory and cost gates now. New data must be collected prospectively before any V4/V5 replacement, source publication, merge or deployment decision.
