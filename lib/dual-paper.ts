@@ -2,13 +2,15 @@ import type { Side } from "./liquidity-core.ts";
 import { arenaSummary as currentArenaSummary, type ArenaTrade, type StrategyArenaState } from "./strategy-arena.ts";
 import { arenaSummary as previousArenaSummary, type ArenaTrade as PreviousArenaTrade,
   type StrategyArenaState as PreviousStrategyArenaState } from "./previous-strategy-arena.ts";
+import { REGIME_ACCOUNT_INITIAL_EQUITY, REGIME_SYSTEM_META, REGIME_SYSTEMS, regimePortfolioSummary,
+  type RegimePortfolioState, type RegimeSystemId } from "./regime-portfolio.ts";
 
-export const DUAL_PAPER_VERSION = 2;
+export const DUAL_PAPER_VERSION = 3;
 export const ENGINE_INITIAL_EQUITY = 1_000;
 export const CANONICAL_PAPER_REFERENCE_EQUITY = 1_000;
 export const ENGINE_ORDER_COPY_RATE = 1;
 
-export type StrategyEngineId = "CURRENT_V5" | "PREVIOUS_V4";
+export type StrategyEngineId = RegimeSystemId | "CURRENT_V5" | "PREVIOUS_V4";
 export type EngineTaggedTrade = ArenaTrade & {
   engineId: StrategyEngineId;
   engineName: string;
@@ -18,11 +20,14 @@ export type EngineTaggedTrade = ArenaTrade & {
 export type DualPaperAccounts = {
   current: StrategyArenaState;
   previous: PreviousStrategyArenaState;
+  regime: RegimePortfolioState;
 };
 
 const ENGINE_META: Record<StrategyEngineId, { name: string; strategyVersion: string }> = {
   CURRENT_V5: { name: "当前上线版 V5", strategyVersion: "V5" },
   PREVIOUS_V4: { name: "上一版 V4", strategyVersion: "V4" },
+  ...Object.fromEntries(REGIME_SYSTEMS.map((id) => [id, { name: REGIME_SYSTEM_META[id].name,
+    strategyVersion: "REGIME-1" }])) as Record<RegimeSystemId, { name: string; strategyVersion: string }>,
 };
 
 function taggedTrade(engineId: StrategyEngineId, value: ArenaTrade | PreviousArenaTrade, copyRate = 1): EngineTaggedTrade {
@@ -41,6 +46,7 @@ function taggedTrades(engineId: StrategyEngineId, values: Array<ArenaTrade | Pre
 
 export function canonicalPaperOpen(accounts: DualPaperAccounts) {
   return [
+    ...REGIME_SYSTEMS.flatMap((id) => taggedTrades(id, Object.values(accounts.regime.accounts[id].open), ENGINE_ORDER_COPY_RATE)),
     ...taggedTrades("CURRENT_V5", Object.values(accounts.current.portfolioOpen), ENGINE_ORDER_COPY_RATE),
     ...taggedTrades("PREVIOUS_V4", Object.values(accounts.previous.portfolioOpen), ENGINE_ORDER_COPY_RATE),
   ].sort((left, right) => right.openedAt - left.openedAt);
@@ -48,89 +54,70 @@ export function canonicalPaperOpen(accounts: DualPaperAccounts) {
 
 export function canonicalPaperEquity(accounts: DualPaperAccounts) {
   return CANONICAL_PAPER_REFERENCE_EQUITY
+    + REGIME_SYSTEMS.reduce((total, id) => total + accounts.regime.accounts[id].equity - REGIME_ACCOUNT_INITIAL_EQUITY, 0)
     + (accounts.current.portfolioEquity - ENGINE_INITIAL_EQUITY) * ENGINE_ORDER_COPY_RATE
     + (accounts.previous.portfolioEquity - ENGINE_INITIAL_EQUITY) * ENGINE_ORDER_COPY_RATE;
-}
-
-function taggedRows<T extends { id: string }>(engineId: StrategyEngineId, values: T[]) {
-  return values.map((value) => ({ ...value, id: `${engineId}:${value.id}`, engineId,
-    engineName: ENGINE_META[engineId].name }));
 }
 
 export function canonicalPaperSummary(accounts: DualPaperAccounts) {
   const current = currentArenaSummary(accounts.current);
   const previous = previousArenaSummary(accounts.previous);
-  const engineSummaries = [
-    { id: "CURRENT_V5" as const, name: ENGINE_META.CURRENT_V5.name, strategyVersion: "V5", initialEquity: ENGINE_INITIAL_EQUITY,
-      ...current },
-    { id: "PREVIOUS_V4" as const, name: ENGINE_META.PREVIOUS_V4.name, strategyVersion: "V4", initialEquity: ENGINE_INITIAL_EQUITY,
-      ...previous },
-  ];
+  const regime = regimePortfolioSummary(accounts.regime);
+  const engineSummaries = regime.systems.map((system) => ({ ...system, strategyVersion: "REGIME-1",
+    offlineValidation: {} }));
+  const regimeRecent = regime.systems.flatMap((system) => taggedTrades(system.id, system.recentPortfolio));
+  const regimeArchived = regime.systems.flatMap((system) => taggedTrades(system.id, system.archivedPortfolioTrades));
   return {
     ...current,
-    version: current.version,
+    version: regime.version,
     dualPaperVersion: DUAL_PAPER_VERSION,
-    systemName: "双引擎独立账户",
+    systemName: "五行情独立账户组合",
+    currentContext: regime.currentContext,
+    warmMarkets: regime.warmMarkets,
+    lastEvaluatedHour: regime.lastEvaluatedHour,
     initialEquity: CANONICAL_PAPER_REFERENCE_EQUITY,
     portfolioEquity: canonicalPaperEquity(accounts),
-    portfolioResolved: current.portfolioResolved + previous.portfolioResolved,
-    portfolioWins: current.portfolioWins + previous.portfolioWins,
-    portfolioGrossPnl: (current.portfolioGrossPnl + previous.portfolioGrossPnl) * ENGINE_ORDER_COPY_RATE,
-    portfolioCosts: (current.portfolioCosts + previous.portfolioCosts) * ENGINE_ORDER_COPY_RATE,
+    portfolioResolved: current.portfolioResolved + previous.portfolioResolved + regime.systems.reduce((sum, row) => sum + row.portfolioResolved, 0),
+    portfolioWins: current.portfolioWins + previous.portfolioWins + regime.systems.reduce((sum, row) => sum + row.portfolioWins, 0),
+    portfolioGrossPnl: (current.portfolioGrossPnl + previous.portfolioGrossPnl) * ENGINE_ORDER_COPY_RATE
+      + regime.systems.reduce((sum, row) => sum + row.portfolioGrossPnl, 0),
+    portfolioCosts: (current.portfolioCosts + previous.portfolioCosts) * ENGINE_ORDER_COPY_RATE
+      + regime.systems.reduce((sum, row) => sum + row.portfolioCosts, 0),
     portfolioOpen: canonicalPaperOpen(accounts),
     recentPortfolio: [
+      ...regimeRecent,
       ...taggedTrades("CURRENT_V5", current.recentPortfolio, ENGINE_ORDER_COPY_RATE),
       ...taggedTrades("PREVIOUS_V4", previous.recentPortfolio, ENGINE_ORDER_COPY_RATE),
     ].sort((left, right) => (right.closedAt ?? right.openedAt) - (left.closedAt ?? left.openedAt)).slice(0, 200),
     archivedPortfolioTrades: [
+      ...regimeArchived,
       ...taggedTrades("CURRENT_V5", current.archivedPortfolioTrades, ENGINE_ORDER_COPY_RATE),
       ...taggedTrades("PREVIOUS_V4", previous.archivedPortfolioTrades, ENGINE_ORDER_COPY_RATE),
     ].sort((left, right) => (right.closedAt ?? right.openedAt) - (left.closedAt ?? left.openedAt)).slice(0, 200),
-    openShadow: [
-      ...taggedTrades("CURRENT_V5", current.openShadow),
-      ...taggedTrades("PREVIOUS_V4", previous.openShadow),
-    ].sort((left, right) => right.openedAt - left.openedAt),
-    recentShadow: [
-      ...taggedTrades("CURRENT_V5", current.recentShadow),
-      ...taggedTrades("PREVIOUS_V4", previous.recentShadow),
-    ].sort((left, right) => (right.closedAt ?? right.openedAt) - (left.closedAt ?? left.openedAt)).slice(0, 200),
-    strategies: [
-      ...taggedRows("CURRENT_V5", current.strategies),
-      ...taggedRows("PREVIOUS_V4", previous.strategies),
-    ],
-    playbooks: [
-      ...taggedRows("CURRENT_V5", current.playbooks),
-      ...taggedRows("PREVIOUS_V4", previous.playbooks),
-    ],
-    transitions: [
-      ...taggedRows("CURRENT_V5", current.transitions),
-      ...taggedRows("PREVIOUS_V4", previous.transitions),
-    ].sort((left, right) => right.at - left.at).slice(0, 200),
-    observationShadow: [
-      ...taggedRows("CURRENT_V5", current.observationShadow),
-      ...taggedRows("PREVIOUS_V4", previous.observationShadow),
-    ].sort((left, right) => right.observedAt - left.observedAt).slice(0, 200),
-    blockedCandidates: [
-      ...taggedRows("CURRENT_V5", current.blockedCandidates),
-      ...taggedRows("PREVIOUS_V4", previous.blockedCandidates),
-    ].sort((left, right) => right.blockedAt - left.blockedAt).slice(0, 200),
-    currentRouteChecks: [
-      ...taggedRows("CURRENT_V5", current.currentRouteChecks),
-      ...taggedRows("PREVIOUS_V4", previous.currentRouteChecks),
-    ].sort((left, right) => right.observedAt - left.observedAt).slice(0, 60),
-    shadowCount: current.shadowCount + previous.shadowCount,
-    activeCount: current.activeCount + previous.activeCount,
-    reverseActiveCount: current.reverseActiveCount + previous.reverseActiveCount,
-    sleepingCount: current.sleepingCount + previous.sleepingCount,
-    catalogSize: current.catalogSize + previous.catalogSize,
-    playbookCount: current.playbookCount + previous.playbookCount,
-    paperCount: current.paperCount + previous.paperCount,
-    verifiedCount: current.verifiedCount + previous.verifiedCount,
+    openShadow: [], recentShadow: [], observationShadow: [], blockedCandidates: [],
+    strategies: regime.systems.flatMap((system) => system.strategies.map((row) => ({ ...row, engineId: system.id,
+      engineName: system.name }))),
+    playbooks: [], transitions: [], currentRouteChecks: regime.currentRouteChecks,
+    shadowCount: 0,
+    activeCount: regime.systems.reduce((sum, row) => sum + row.strategies.length, 0),
+    reverseActiveCount: 0,
+    sleepingCount: 0,
+    catalogSize: regime.systems.reduce((sum, row) => sum + row.strategies.length, 0),
+    playbookCount: regime.systems.reduce((sum, row) => sum + row.strategies.length, 0),
+    paperCount: regime.systems.reduce((sum, row) => sum + row.strategies.length, 0),
+    verifiedCount: regime.systems.reduce((sum, row) => sum + row.strategies.length, 0),
     engines: engineSummaries,
-    rules: { ...current.rules, dualIndependentEngines: true, engineInitialEquity: ENGINE_INITIAL_EQUITY,
+    retiredEngines: [
+      { id: "CURRENT_V5" as const, name: ENGINE_META.CURRENT_V5.name, portfolioEquity: current.portfolioEquity,
+        portfolioOpen: current.portfolioOpen, portfolioResolved: current.portfolioResolved },
+      { id: "PREVIOUS_V4" as const, name: ENGINE_META.PREVIOUS_V4.name, portfolioEquity: previous.portfolioEquity,
+        portfolioOpen: previous.portfolioOpen, portfolioResolved: previous.portfolioResolved },
+    ],
+    rules: { ...current.rules, ...regime.rules, dualIndependentEngines: false, independentSystemCount: REGIME_SYSTEMS.length,
+      engineInitialEquity: ENGINE_INITIAL_EQUITY,
       canonicalReferenceEquity: CANONICAL_PAPER_REFERENCE_EQUITY, sameSymbolCrossEngineAllowed: true,
       engineOrderCopyRate: ENGINE_ORDER_COPY_RATE, canonicalCapitalAgnostic: true,
-      liveSource: "CANONICAL_PAPER_NET" },
+      liveSource: "CANONICAL_PAPER_NET", legacyEnginesOpenDrainOnly: true },
   };
 }
 
@@ -193,8 +180,8 @@ export function canonicalLivePortfolio(accounts: DualPaperAccounts) {
       ...anchor,
       id: syntheticId,
       eventId: `CANONICAL:${stableHash(constituentKey)}`,
-      strategyId: "dual_engine_net",
-      strategyName: "双引擎净额",
+      strategyId: "regime_system_net",
+      strategyName: "五行情系统净额",
       side,
       openedAt: Math.max(...trades.map((trade) => trade.openedAt)),
       entryPrice,
@@ -207,7 +194,7 @@ export function canonicalLivePortfolio(accounts: DualPaperAccounts) {
       leverage,
       margin: notional / leverage,
       accountEquityAtOpen: CANONICAL_PAPER_REFERENCE_EQUITY,
-      reason: `唯一PAPER净额；逻辑腿 ${trades.length} 笔（当前版 ${trades.filter((trade) => trade.engineId === "CURRENT_V5").length}，上一版 ${trades.filter((trade) => trade.engineId === "PREVIOUS_V4").length}）`,
+      reason: `唯一PAPER净额；逻辑腿 ${trades.length} 笔，全部按各系统原始张数100%复制`,
       context: { ...anchor.context, modeledCostRate, structuralStopRate: Math.abs(entryPrice - stopPrice) / Math.max(entryPrice, 1e-9) },
     };
   }

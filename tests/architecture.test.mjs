@@ -66,7 +66,7 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(worker, /encryptGateCredentials/);
   assert.match(worker, /sameOriginMutation\(request\)/);
   assert.match(worker, /if \(!await ownerAuthenticated\(request, env\)\) return json\(\{ error: "请先登录" \}, 401\)/);
-  assert.match(worker, /strategyArena: canonicalPaperSummary\(\{ current: strategyArena, previous: previousStrategyArena \}\)/);
+  assert.match(worker, /strategyArena: canonicalPaperSummary\(\{ current: strategyArena, previous: previousStrategyArena, regime: regimePortfolio \}\)/);
   assert.match(worker, /requestedEnabled: false, operational: false/);
   assert.match(live, /reduce_only: true/);
   assert.match(live, /credentials\.environment !== "live"/);
@@ -78,25 +78,24 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(page, /window\.addEventListener\("online", resume\)/);
   assert.match(page, /tabScroll\.current\[tab\] = window\.scrollY/);
   assert.match(page, /viewScroll\.current\[activeView\] = window\.scrollY/);
-  assert.match(page, /双引擎·独立账户/);
-  assert.match(layout, /双引擎独立账户 · PAPER/);
+  assert.match(page, /五行情·独立账户/);
+  assert.match(layout, /五行情独立账户 · PAPER/);
   assert.doesNotMatch(layout, /V4自适应影子策略/);
-  assert.match(page, /CURRENT V5 \+ PREVIOUS V4 · INDEPENDENT/);
-  assert.match(page, /各自扫描、决策、风控、开仓和平仓/);
-  assert.match(page, /100% \+ 100%/);
+  assert.match(page, /FIVE REGIME SYSTEMS · DIRECT AUTHORITY/);
+  assert.match(page, /没有影子订单、连胜授权或近6笔门槛/);
+  assert.match(page, /5 路 × 100%/);
   assert.match(page, /不按唯一账户金额缩放或拦截/);
   assert.match(page, /今日净收益/);
   assert.match(page, /实时运行状态/);
   assert.match(page, /策略账户已运行/);
   assert.match(page, /暂停位置/);
   assert.match(page, /下一步准备/);
-  assert.match(page, /系统此刻在分析什么/);
-  assert.match(page, /为什么分析/);
-  assert.match(page, /同类留出胜率/);
-  assert.match(page, /不是本单保证/);
-  assert.match(page, /后台确认的执行路线/);
+  assert.match(page, /五个系统的行情分工/);
+  assert.match(page, /当前接管/);
+  assert.match(page, /720小时路径/);
+  assert.match(page, /当前行情域直接信号/);
   assert.match(page, /const hasRuntimeSnapshot = Boolean\(runtime && arena\)/);
-  assert.match(page, /收到真实运行快照后再显示两套独立账户、合并持仓、路线和市场数量/);
+  assert.match(page, /收到真实运行快照后再显示五个独立账户、合并持仓、行情归属和市场数量/);
   assert.match(page, /收到后台真实快照前不显示“0笔”/);
   assert.match(page, /const showLiveCenter = auth\.authenticated \|\| liveEnabled/);
   assert.match(page, /if \(showLiveCenter\) navigationTabs\.push/);
@@ -171,11 +170,11 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
   assert.match(worker, /completeTrades\.length > item\.report\.trades\.length/);
 });
 
-test("both frozen engines are causal and isolated while canonical PAPER is the sole LIVE order source", async () => {
-  const [arena, previousArena, allRegime, previousAllRegime, dualPaper, regime, gateLive, worker, page, migration,
+test("five frozen regime systems are causal and isolated while canonical PAPER is the sole LIVE order source", async () => {
+  const [arena, previousArena, allRegime, previousAllRegime, dualPaper, regime, regimePortfolio, gateLive, worker, page, migration,
     coveragePolicy, previousCoveragePolicy] = await Promise.all([
     read("lib/strategy-arena.ts"), read("lib/previous-strategy-arena.ts"), read("lib/all-regime-engine.ts"),
-    read("lib/previous-all-regime-engine.ts"), read("lib/dual-paper.ts"), read("lib/market-regime.ts"),
+    read("lib/previous-all-regime-engine.ts"), read("lib/dual-paper.ts"), read("lib/market-regime.ts"), read("lib/regime-portfolio.ts"),
     read("lib/gate-live.ts"), read("worker/index-clean.ts"), read("app/page.tsx"),
     read("drizzle/0035_strategy_arena_fresh_start.sql"),
     read("lib/strategy-coverage-policy.ts"),
@@ -198,7 +197,13 @@ test("both frozen engines are causal and isolated while canonical PAPER is the s
   assert.doesNotMatch(arena, /adaptiveMechanismForPlaybook/);
   assert.match(arena, /ARENA_FRICTION_RATE = 0\.0014/);
   assert.match(arena, /ARENA_MAX_COST_SHARE = 0\.25/);
-  assert.match(arena, /PORTFOLIO_REALTIME_CAPACITY = 10/);
+  assert.match(arena, /PORTFOLIO_REALTIME_CAPACITY = 11/);
+  assert.match(regimePortfolio, /REGIME_ACCOUNT_INITIAL_EQUITY = 1_000/);
+  assert.match(regimePortfolio, /REGIME_STRATEGIES/);
+  assert.match(regimePortfolio, /riskRate|\.015/);
+  assert.match(regimePortfolio, /classifyRegime/);
+  assert.match(regimePortfolio, /rows\.length >= 721/);
+  assert.doesNotMatch(regimePortfolio, /PROMOTION|shadowResolved|recentResults/);
   assert.match(arena, /recentObservations/);
   assert.match(arena, /currentRouteChecks/);
   assert.match(arena, /cutoverPending/);
@@ -220,17 +225,18 @@ test("both frozen engines are causal and isolated while canonical PAPER is the s
   assert.match(worker, /approvedRouteScore/);
   assert.match(worker, /feedQuality/);
   assert.match(worker, /allowOpen: false/);
-  assert.match(worker, /observeStrategyArena/);
+  assert.match(worker, /V4\/V5 are retired/);
+  assert.match(worker, /advanceRegimePortfolio/);
   assert.match(worker, /advanceStrategyArena/);
   assert.match(worker, /desiredPortfolio = canonicalLivePortfolio/);
-  assert.match(worker, /previousStrategyArena: normalizePreviousStrategyArena/);
+  assert.match(worker, /previousStrategyArena: retiredPreviousArena/);
   assert.match(worker, /eligibleForLiveMirror/);
   assert.match(worker, /position\.currentStop = arenaProtectionStop\(selectedTrade\)/);
   assert.match(worker, /mirrorNotionalFraction: trade\.notional \/ Math\.max\(trade\.accountEquityAtOpen/);
-  assert.match(worker, /strategyArena: normalizeStrategyArena\(saved\.strategyArena\)/);
+  assert.match(worker, /strategyArena: retiredCurrentArena\(saved\.strategyArena\)/);
   assert.match(worker, /resetStrategyArenaAccount/);
   assert.match(worker, /minimumPortfolioRiskUsdt: 0/);
-  assert.match(worker, /targetPortfolioRiskUsdt: PORTFOLIO_TRADE_RISK_TARGET_USDT/);
+  assert.match(worker, /targetPortfolioRiskUsdt: 15/);
   assert.match(worker, /empiricalCostFloorRate: ARENA_FRICTION_RATE/);
   assert.match(arena, /POLARITY_STREAK = 3/);
   assert.match(arena, /reversed\.every\(\(row\) => row\.netReturnRate > 0\)/);
@@ -238,7 +244,7 @@ test("both frozen engines are causal and isolated while canonical PAPER is the s
   assert.doesNotMatch(arena, /Object\.keys\(state\.portfolioOpen\)\.length >= MAX_PORTFOLIO_POSITIONS/);
   assert.doesNotMatch(arena, /globalOpportunityRank \?\? 1\) > MAX_PORTFOLIO_POSITIONS/);
   assert.match(arena, /RUNNER_EXIT/);
-  assert.match(page, /V5固定目标到价结算，V4盈利臂启动后抬保护/);
+  assert.match(page, /当前市场先被归入唯一行情域/);
   assert.match(arena, /cloneShadowForPortfolio/);
   assert.match(arena, /paperEvaluation: true/);
   assert.match(arena, /extremeSequenceAuthority: false/);
@@ -262,11 +268,11 @@ test("both frozen engines are causal and isolated while canonical PAPER is the s
   assert.match(arena, /state\.portfolioEquity \* MIN_PORTFOLIO_NOTIONAL_TO_EQUITY/);
   assert.match(arena, /MEANINGFUL_SIZE/);
   assert.match(gateLive, /Math\.min\(MAX_NOTIONAL_TO_EQUITY, input\.mirrorNotionalFraction\)/);
-  assert.match(worker, /maxNotionalMultiple: MAX_NOTIONAL_TO_EQUITY/);
+  assert.match(worker, /maxNotionalMultiple: 0\.5/);
   assert.match(worker, /buildLiveStopIntent\(position, tick\)/);
   assert.match(worker, /entry\.exchangeOrderId = await client\.createEntry\(intent\);[\s\S]{0,160}await this\.createImmediateLiveStop\(client, entry\)/);
   assert.match(gateLive, /side === "LONG" \? Math\.floor\(units \+ 1e-9\) : Math\.ceil\(units - 1e-9\)/);
-  assert.match(page, /重置两套1000 U虚拟资金/);
+  assert.match(page, /重置五个1000 U虚拟资金/);
   assert.match(page, /confirm: "RESET_PAPER"/);
   assert.match(worker, /SCAN_UNIVERSE_SIZE = 30/);
   assert.match(worker, /maxOpenPositions: null/);

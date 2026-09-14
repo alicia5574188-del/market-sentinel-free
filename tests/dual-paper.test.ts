@@ -6,6 +6,10 @@ import { initialStrategyArena, STRATEGY_CATALOG as CURRENT_CATALOG, type ArenaTr
 import { initialStrategyArena as initialPreviousStrategyArena,
   STRATEGY_CATALOG as PREVIOUS_CATALOG } from "../lib/previous-strategy-arena.ts";
 import { previousCompletedCandleStrategyCandidate } from "../lib/previous-market-regime.ts";
+import { initialRegimePortfolio } from "../lib/regime-portfolio.ts";
+
+const accounts = (current = initialStrategyArena(1), previous = initialPreviousStrategyArena(1)) =>
+  ({ current, previous, regime: initialRegimePortfolio(1) });
 
 function trade(id: string, side: "LONG" | "SHORT", contracts: number, notional: number): ArenaTrade {
   return {
@@ -32,15 +36,15 @@ test("two strategy engines retain separate 1000 U ledgers while canonical PAPER 
   const previous = initialPreviousStrategyArena(1);
   current.portfolioEquity = 1_075;
   previous.portfolioEquity = 940;
-  const summary = canonicalPaperSummary({ current, previous });
+  const summary = canonicalPaperSummary(accounts(current, previous));
 
   assert.equal(CANONICAL_PAPER_REFERENCE_EQUITY, 1_000);
   assert.equal(ENGINE_ORDER_COPY_RATE, 1);
-  assert.equal(summary.dualPaperVersion, 2);
+  assert.equal(summary.dualPaperVersion, 3);
   assert.equal(summary.portfolioEquity, 1_015);
   assert.equal(summary.initialEquity, 1_000);
-  assert.equal(summary.engines[0].portfolioEquity, 1_075);
-  assert.equal(summary.engines[1].portfolioEquity, 940);
+  assert.equal(summary.engines.length, 5);
+  assert.ok(summary.engines.every((engine) => engine.portfolioEquity === 1_000));
   assert.equal(current.portfolioEquity, 1_075);
   assert.equal(previous.portfolioEquity, 940);
 });
@@ -78,8 +82,8 @@ test("same symbol can remain open in both engines without either ledger suppress
   current.portfolioOpen.BTC_USDT = trade("current", "LONG", 2_000, 200);
   previous.portfolioOpen.BTC_USDT = trade("previous", "LONG", 3_000, 300) as never;
 
-  const logical = canonicalPaperOpen({ current, previous });
-  const live = canonicalLivePortfolio({ current, previous });
+  const logical = canonicalPaperOpen(accounts(current, previous));
+  const live = canonicalLivePortfolio(accounts(current, previous));
   assert.equal(logical.length, 2, "canonical PAPER must preserve both logical trades");
   assert.deepEqual(logical.map((row) => row.engineId).sort(), ["CURRENT_V5", "PREVIOUS_V4"]);
   assert.equal(Object.keys(current.portfolioOpen).length, 1);
@@ -95,7 +99,7 @@ test("a lone current-version leg keeps its legacy LIVE lifecycle id during migra
   const current = initialStrategyArena(1);
   const previous = initialPreviousStrategyArena(1);
   current.portfolioOpen.BTC_USDT = trade("current-live-id", "LONG", 2_000, 200);
-  const live = canonicalLivePortfolio({ current, previous });
+  const live = canonicalLivePortfolio(accounts(current, previous));
   assert.equal(live.BTC_USDT.id, "current-live-id");
   assert.equal(live.BTC_USDT.notional, 200, "a lone order must reach canonical PAPER at its complete engine size");
 });
@@ -110,7 +114,7 @@ test("canonical PAPER copies 100% from each engine without applying a third capi
   current.portfolioOpen.BTC_USDT = currentTrade;
   previous.portfolioOpen.BTC_USDT = previousTrade as never;
 
-  const logical = canonicalPaperOpen({ current, previous });
+  const logical = canonicalPaperOpen(accounts(current, previous));
   assert.equal(logical.reduce((sum, row) => sum + row.plannedRisk, 0), 130);
   assert.equal(logical.reduce((sum, row) => sum + row.margin, 0), 400);
   assert.deepEqual(logical.map((row) => row.contracts).sort((left, right) => left - right), [4_000, 4_000]);
@@ -124,14 +128,14 @@ test("opposite same-symbol decisions coexist logically and only their net reache
   current.portfolioOpen.BTC_USDT = trade("current", "LONG", 5_000, 500);
   previous.portfolioOpen.BTC_USDT = trade("previous", "SHORT", 2_000, 200) as never;
 
-  assert.equal(canonicalPaperOpen({ current, previous }).length, 2);
-  const live = canonicalLivePortfolio({ current, previous });
+  assert.equal(canonicalPaperOpen(accounts(current, previous)).length, 2);
+  const live = canonicalLivePortfolio(accounts(current, previous));
   assert.equal(live.BTC_USDT.side, "LONG");
   assert.equal(live.BTC_USDT.contracts, 3_000);
 
   previous.portfolioOpen.BTC_USDT = trade("previous", "SHORT", 5_000, 500) as never;
-  assert.deepEqual(canonicalLivePortfolio({ current, previous }), {}, "equal opposite legs remain in PAPER but need no Gate exposure");
-  assert.equal(canonicalPaperOpen({ current, previous }).length, 2);
+  assert.deepEqual(canonicalLivePortfolio(accounts(current, previous)), {}, "equal opposite legs remain in PAPER but need no Gate exposure");
+  assert.equal(canonicalPaperOpen(accounts(current, previous)).length, 2);
 });
 
 test("canonical aggregation never writes back into either engine trajectory", () => {
@@ -142,8 +146,8 @@ test("canonical aggregation never writes back into either engine trajectory", ()
   const currentBefore = structuredClone(current);
   const previousBefore = structuredClone(previous);
 
-  canonicalPaperSummary({ current, previous });
-  canonicalLivePortfolio({ current, previous });
+  canonicalPaperSummary(accounts(current, previous));
+  canonicalLivePortfolio(accounts(current, previous));
 
   assert.deepEqual(current, currentBefore);
   assert.deepEqual(previous, previousBefore);

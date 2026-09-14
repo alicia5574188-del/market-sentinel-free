@@ -151,6 +151,12 @@ export type ArenaObservation = {
   globalBreadth?: number; globalMedianMove?: number; globalMarkets?: number;
 };
 
+export type ArenaSizingPolicy = {
+  minimumNotionalMultiple?: number;
+  maximumPositionNotionalMultiple?: number;
+  singleTradeRiskRateCap?: number;
+};
+
 type Signal = { strategyId: string; side: Side; entryTrigger: number; stopPrice: number; targetPrice: number; quality: number; reason: string;
   orientation?: StrategyOrientation; originalTargetPrice?: number; targetAdapted?: boolean; targetEvidenceEvents?: number;
   structureSource: ArenaTradeContext["structureSource"]; maxHoldMs: number; noProgressMs: number; executable: boolean;
@@ -652,7 +658,8 @@ function cloneShadowForPortfolio(shadow: ArenaTrade, sizing: TradeSizing, sample
 const openRisk = (state: StrategyArenaState, side?: Side) => Object.values(state.portfolioOpen)
   .filter((trade) => !side || trade.side === side).reduce((total, trade) => total + trade.plannedRisk, 0);
 
-function portfolioSizing(state: StrategyArenaState, input: ArenaObservation, signal: Signal): PortfolioSizingResult {
+function portfolioSizing(state: StrategyArenaState, input: ArenaObservation, signal: Signal,
+  policy?: ArenaSizingPolicy): PortfolioSizingResult {
   const economics = geometryEconomics(input, signal);
   const sized = sizePaperPosition({ equity: state.portfolioEquity, entry: economics.entryPrice, invalidation: signal.stopPrice,
     feeBps: ARENA_FRICTION_RATE * 10_000, stressSlippageBps: 0, confidence: clamp(0.5 + signal.quality * 0.35, 0.5, 0.85),
@@ -661,10 +668,17 @@ function portfolioSizing(state: StrategyArenaState, input: ArenaObservation, sig
   const contractNotional = economics.entryPrice * multiplier;
   const usedNotional = Object.values(state.portfolioOpen).reduce((total, trade) => total + trade.notional, 0);
   const remainingNotional = Math.max(0, state.portfolioEquity * MAX_NOTIONAL_TO_EQUITY - usedNotional);
-  let contracts = Math.floor(Math.min(sized.notional, remainingNotional) / Math.max(contractNotional, 1e-12));
+  const policyNotionalCap = policy?.maximumPositionNotionalMultiple == null ? Infinity
+    : state.portfolioEquity * Math.max(0, policy.maximumPositionNotionalMultiple);
+  const policyRiskCap = policy?.singleTradeRiskRateCap == null ? Infinity
+    : state.portfolioEquity * Math.max(0, policy.singleTradeRiskRateCap)
+      / Math.max(economics.structuralStopRate + ARENA_FRICTION_RATE, 1e-12);
+  let contracts = Math.floor(Math.min(sized.notional, remainingNotional, policyNotionalCap, policyRiskCap)
+    / Math.max(contractNotional, 1e-12));
   if (contracts < 1) return { sizing: null, blocker: "SIZING" };
   let notional = contracts * contractNotional;
-  if (notional + 1e-8 < state.portfolioEquity * MIN_PORTFOLIO_NOTIONAL_TO_EQUITY) {
+  const minimumNotionalMultiple = policy?.minimumNotionalMultiple ?? MIN_PORTFOLIO_NOTIONAL_TO_EQUITY;
+  if (notional + 1e-8 < state.portfolioEquity * minimumNotionalMultiple) {
     return { sizing: null, blocker: "MEANINGFUL_SIZE" };
   }
   let leverage = selectSafeLeverage({ notional, equity: state.portfolioEquity, entry: economics.entryPrice,
@@ -674,7 +688,7 @@ function portfolioSizing(state: StrategyArenaState, input: ArenaObservation, sig
     * leverage.leverage / Math.max(contractNotional, 1e-12)));
   if (contracts < 1) return { sizing: null, blocker: "SIZING" };
   notional = contracts * contractNotional;
-  if (notional + 1e-8 < state.portfolioEquity * MIN_PORTFOLIO_NOTIONAL_TO_EQUITY) {
+  if (notional + 1e-8 < state.portfolioEquity * minimumNotionalMultiple) {
     return { sizing: null, blocker: "MEANINGFUL_SIZE" };
   }
   leverage = selectSafeLeverage({ notional, equity: state.portfolioEquity, entry: economics.entryPrice,
@@ -689,7 +703,8 @@ function portfolioSizing(state: StrategyArenaState, input: ArenaObservation, sig
     margin: leverage.margin, accountEquityAtOpen: state.portfolioEquity, admissionTier: "NORMAL" }, blocker: null };
 }
 
-function portfolioAdmission(state: StrategyArenaState, input: ArenaObservation, signal: Signal, score: StrategyScore) {
+function portfolioAdmission(state: StrategyArenaState, input: ArenaObservation, signal: Signal, score: StrategyScore,
+  policy?: ArenaSizingPolicy) {
   const economics = geometryEconomics(input, signal);
   const source = signal.orientation === "REVERSE" ? score.reverseRecentResults : score.recentResults;
   const streak = uniqueResults(source).slice(-POLARITY_STREAK);
@@ -707,7 +722,7 @@ function portfolioAdmission(state: StrategyArenaState, input: ArenaObservation, 
         : null;
   if (blocker) { state.admissionRejects[blocker] = (state.admissionRejects[blocker] ?? 0) + 1;
     return { admission: null, blocker }; }
-  const accountSizing = portfolioSizing(state, input, signal);
+  const accountSizing = portfolioSizing(state, input, signal, policy);
   if (!accountSizing.sizing) { const sizingBlocker = accountSizing.blocker ?? "SIZING";
     state.admissionRejects[sizingBlocker] = (state.admissionRejects[sizingBlocker] ?? 0) + 1;
     return { admission: null, blocker: sizingBlocker }; }
@@ -768,7 +783,8 @@ export function applyStrategySleepStates(state: StrategyArenaState, _availableCh
   return state;
 }
 
-export function observeStrategyArena(input: { state: StrategyArenaState; observation: ArenaObservation }) {
+export function observeStrategyArena(input: { state: StrategyArenaState; observation: ArenaObservation;
+  sizingPolicy?: ArenaSizingPolicy }) {
   const current = { midpoint: input.observation.midpoint, bestBid: input.observation.bestBid, bestAsk: input.observation.bestAsk,
     completedMinuteAt: input.observation.completedMinuteAt };
   const state = advanceStrategyArena({ state: input.state, quotes: { [input.observation.candidate.symbol]: current }, now: input.observation.now });
@@ -883,7 +899,7 @@ export function observeStrategyArena(input: { state: StrategyArenaState; observa
   const active = opened.filter((row) => row.orientation === "NORMAL" ? row.score.enabled : row.score.reverseEnabled);
   if (active.length && !state.portfolioOpen[symbol] && !state.seenSignals.includes(portfolioSeenKey)) {
     const assessed = active.map((row) => ({ ...row,
-      decision: portfolioAdmission(state, input.observation, row.signal, row.score) }));
+      decision: portfolioAdmission(state, input.observation, row.signal, row.score, input.sizingPolicy) }));
     const candidates = assessed.filter((row) => row.decision.admission)
       .sort((a, b) => b.decision.admission!.sample.conservativeReturnRate - a.decision.admission!.sample.conservativeReturnRate
         || b.decision.admission!.sample.profitFactor - a.decision.admission!.sample.profitFactor || b.signal.quality - a.signal.quality);

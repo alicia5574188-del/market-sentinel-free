@@ -1,0 +1,330 @@
+{
+  "generatedAt": "2026-09-13T21:18:21.740Z",
+  "decision": "NO_PRODUCTION_CUTOVER_FORWARD_SHADOW_REQUIRED",
+  "objective": "Maximize defensible monthly after-cost profit by adding independent phase-specialist engines; uncovered phases remain WAIT.",
+  "executionContract": {
+    "engineLedger": "Every engine owns an independent hypothetical 1000U account, decisions, risk, positions and lifecycle.",
+    "canonicalPaper": "Copy 100% of every approved engine order; do not resize or reject based on canonical account equity.",
+    "sameSymbol": "Different engines may hold the same contract simultaneously and retain separate legs.",
+    "live": "Owner-controlled Gate LIVE remains an execution sink with exchange-level safety only; no transfers."
+  },
+  "productionAudit": {
+    "v5": {
+      "status": "V5_NOT_STABLE_ENOUGH_TO_FIX",
+      "dataset": "0da10bcfc9644cd8028381c1e325ef5c2a95adbed742f220ea3f90f7fe924feb",
+      "candidates": 1055,
+      "acceptedStrategyPhases": [],
+      "independent1000U": {
+        "endEquity": 582.4632106004157,
+        "netPnlU": -417.53678939958434,
+        "profitFactor": 0.8496828573291729,
+        "maxDrawdown": 0.661010577308952,
+        "positiveActiveMonths": "4/12"
+      },
+      "conclusion": "No V5 strategy/phase pair was positive in discovery, validation and evaluation; V5 owns no fixed phase."
+    },
+    "v4": {
+      "status": "FAILED_TWELVE_MONTH_PRODUCTION_PARITY",
+      "independent1000U": {
+        "trades": 163,
+        "netPnlU": -75.85360978716639,
+        "profitFactor": 0.7969311803379558,
+        "maxDrawdown": 0.15378194630470024,
+        "positiveActiveMonths": "5/10"
+      },
+      "stress": {
+        "trades": 163,
+        "netPnlU": -134.51303754331045,
+        "profitFactor": 0.6748818200858006,
+        "maxDrawdown": 0.19023318649454518,
+        "positiveActiveMonths": "3/10"
+      },
+      "segments": {
+        "discovery": {
+          "trades": 93,
+          "netPnlU": -149.82058541010147,
+          "profitFactor": 0.3990768171755539,
+          "maxDrawdown": 0.149820585410101,
+          "positiveActiveMonths": "0/5"
+        },
+        "validation": {
+          "trades": 11,
+          "netPnlU": 5.825780705598973,
+          "profitFactor": 1.3070635400478083,
+          "maxDrawdown": 0.007510285295601967,
+          "positiveActiveMonths": "2/2"
+        },
+        "finalEvaluation": {
+          "trades": 59,
+          "netPnlU": 68.14119491733615,
+          "profitFactor": 1.647443535808945,
+          "maxDrawdown": 0.03061532218934666,
+          "positiveActiveMonths": "3/3"
+        }
+      },
+      "conclusion": "The current V4 authority profile is recent-regime positive but negative over the full twelve months."
+    }
+  },
+  "phaseRegistry": [
+    {
+      "phase": "MACRO_DIRECTIONAL_BREAKOUT",
+      "owner": "macro-six-hourly",
+      "status": "FORWARD_SHADOW_ONLY",
+      "evidence": {
+        "config": "macro-six-hourly-0.15-0.04-7-0.5-0.12-2.2-72",
+        "discovery": {
+          "trades": 124,
+          "netPnlU": 199.90362238052762,
+          "profitFactor": 1.5718695618743683,
+          "maxDrawdown": 0.06480014950639527,
+          "positiveActiveMonths": "17/28"
+        },
+        "validation": {
+          "trades": 46,
+          "netPnlU": 44.877199931297255,
+          "profitFactor": 1.2996480588332464,
+          "maxDrawdown": 0.05869759794415843,
+          "positiveActiveMonths": "4/8"
+        },
+        "finalEvaluation": {
+          "trades": 20,
+          "netPnlU": 36.473521091684795,
+          "profitFactor": 1.7238674909371536,
+          "maxDrawdown": 0.02576828981686333,
+          "positiveActiveMonths": "2/5"
+        },
+        "full": {
+          "trades": 190,
+          "netPnlU": 281.25434340350967,
+          "profitFactor": 1.5116367032523987,
+          "maxDrawdown": 0.06480014950639527,
+          "positiveActiveMonths": "23/41"
+        },
+        "stressGates": {
+          "higherCost": false,
+          "doubledAdverseEntry": false
+        },
+        "concentration": 0.26918006386141263
+      },
+      "blockers": [
+        "Only 23/41 active months positive.",
+        "Final evaluation has only 2/5 positive active months.",
+        "Later-period cost gates fail.",
+        "The later periods are no longer an untouched blind set."
+      ]
+    },
+    {
+      "phase": "POST_COMPRESSION_VOLUME_BREAKOUT",
+      "owner": "compression-hourly",
+      "status": "FORWARD_SHADOW_ONLY",
+      "evidence": {
+        "config": "compression-0.55-1.4-3-1.5",
+        "discovery": {
+          "trades": 57,
+          "netPnlU": 104.43969615708271,
+          "profitFactor": 1.4279562932022534,
+          "maxDrawdown": 0.05468853047576419,
+          "positiveActiveMonths": "16/27"
+        },
+        "validation": {
+          "trades": 14,
+          "netPnlU": 121.81758170605039,
+          "profitFactor": 3.3675970101209325,
+          "maxDrawdown": 0.03996026739020445,
+          "positiveActiveMonths": "5/7"
+        },
+        "finalEvaluation": {
+          "trades": 9,
+          "netPnlU": 56.528630169487755,
+          "profitFactor": 3.0093319906615807,
+          "maxDrawdown": 0.016552101716715464,
+          "positiveActiveMonths": "4/6"
+        },
+        "full": {
+          "trades": 80,
+          "netPnlU": 282.7859080326208,
+          "profitFactor": 1.8737994223904584,
+          "maxDrawdown": 0.05468853047576419,
+          "positiveActiveMonths": "25/40"
+        },
+        "stressGates": {
+          "higherCost": true,
+          "doubledAdverseEntry": true
+        },
+        "concentration": 0.40962002754385374
+      },
+      "blockers": [
+        "Largest positive-symbol share 41.0% exceeds the 35% cap.",
+        "The later periods are no longer an untouched blind set."
+      ]
+    },
+    {
+      "phase": "PANIC_REVERSAL",
+      "owner": null,
+      "status": "WAIT",
+      "evidence": {
+        "config": "panic-reversal-0.08-0.8-0.05-0.008-1.2",
+        "discovery": {
+          "trades": 83,
+          "netPnlU": 169.86064514055116,
+          "profitFactor": 1.6998866260000964,
+          "maxDrawdown": 0.05257361345893565,
+          "positiveActiveMonths": "12/19"
+        },
+        "validation": {
+          "trades": 24,
+          "netPnlU": 122.86098382662061,
+          "profitFactor": 4.131085721049718,
+          "maxDrawdown": 0.03345485919214149,
+          "positiveActiveMonths": "5/6"
+        },
+        "finalEvaluation": {
+          "trades": 7,
+          "netPnlU": -18.4101576515354,
+          "profitFactor": 0.624518249885486,
+          "maxDrawdown": 0.04761379819917398,
+          "positiveActiveMonths": "1/2"
+        },
+        "full": {
+          "trades": 114,
+          "netPnlU": 274.3114713156363,
+          "profitFactor": 1.828817599866703,
+          "maxDrawdown": 0.05257361345893565,
+          "positiveActiveMonths": "18/27"
+        },
+        "stressGates": {
+          "higherCost": false,
+          "doubledAdverseEntry": false
+        },
+        "concentration": 0.3539629667875366
+      },
+      "blockers": [
+        "Selected discovery candidate lost money in final evaluation.",
+        "Higher-cost and adverse-entry later gates fail."
+      ]
+    },
+    {
+      "phase": "MACRO_TREND_PULLBACK",
+      "owner": null,
+      "status": "WAIT",
+      "blockers": [
+        "No discovery configuration passed."
+      ]
+    },
+    {
+      "phase": "BALANCED_RANGE_REVERSION",
+      "owner": null,
+      "status": "WAIT",
+      "blockers": [
+        "No discovery configuration passed."
+      ]
+    },
+    {
+      "phase": "VOLATILITY_EXPANSION_CONTINUATION",
+      "owner": null,
+      "status": "WAIT",
+      "blockers": [
+        "No discovery configuration passed."
+      ]
+    },
+    {
+      "phase": "TRANSITION_OR_UNCERTAIN",
+      "owner": null,
+      "status": "WAIT",
+      "blockers": [
+        "No causal stable edge; capital preservation is the strategy."
+      ]
+    }
+  ],
+  "shadowPortfolioIllustration": {
+    "warning": "Illustration only: both candidates were selected after later-period inspection and are not release-qualified.",
+    "hypotheticalAccounts": 2,
+    "startingCapitalU": 2000,
+    "recentTwelveMonthNetPnlU": 242.29706388872316,
+    "averageMonthlyNetPnlU": 20.19142199072693,
+    "positiveMonths": 10,
+    "monthlyPnlCorrelation": -0.45644100380300395,
+    "monthly": [
+      {
+        "month": "202509",
+        "macroTrendU": -7.100490044454858,
+        "compressionBreakU": 4.686852028223051,
+        "combinedU": -2.4136380162318076
+      },
+      {
+        "month": "202510",
+        "macroTrendU": 52.89405588795284,
+        "compressionBreakU": 11.02414233983981,
+        "combinedU": 63.91819822779265
+      },
+      {
+        "month": "202511",
+        "macroTrendU": 38.8802095306398,
+        "compressionBreakU": -9.224188286943459,
+        "combinedU": 29.656021243696344
+      },
+      {
+        "month": "202512",
+        "macroTrendU": -16.515469321873887,
+        "compressionBreakU": 19.21317046445137,
+        "combinedU": 2.6977011425774826
+      },
+      {
+        "month": "202601",
+        "macroTrendU": 2.8083684922182615,
+        "compressionBreakU": 0,
+        "combinedU": 2.8083684922182615
+      },
+      {
+        "month": "202602",
+        "macroTrendU": -14.932263647509375,
+        "compressionBreakU": 67.56052518500707,
+        "combinedU": 52.62826153749769
+      },
+      {
+        "month": "202603",
+        "macroTrendU": 0,
+        "compressionBreakU": 29.42654088656533,
+        "combinedU": 29.42654088656533
+      },
+      {
+        "month": "202604",
+        "macroTrendU": -7.314521618052925,
+        "compressionBreakU": 7.507861555235703,
+        "combinedU": 0.19333993718277753
+      },
+      {
+        "month": "202605",
+        "macroTrendU": -9.119547374454955,
+        "compressionBreakU": 30.83994877826757,
+        "combinedU": 21.720401403812616
+      },
+      {
+        "month": "202606",
+        "macroTrendU": 40.680095380258685,
+        "compressionBreakU": 6.536379438641124,
+        "combinedU": 47.21647481889981
+      },
+      {
+        "month": "202607",
+        "macroTrendU": -9.254464004881422,
+        "compressionBreakU": -0.40634823658367125,
+        "combinedU": -9.660812241465093
+      },
+      {
+        "month": "202608",
+        "macroTrendU": 21.481958708815426,
+        "compressionBreakU": -17.375752252638307,
+        "combinedU": 4.106206456177119
+      }
+    ]
+  },
+  "admissionPolicy": {
+    "discovery": "Minimum sample, positive net, PF >= 1.15, bounded drawdown, majority positive active months and broad symbol support.",
+    "laterSegments": "Positive after costs in validation and final evaluation, including higher friction and doubled adverse entry.",
+    "incrementalPortfolio": "Must add net profit or reduce drawdown/return correlation without changing another engine's ledger.",
+    "release": "Freeze parameters, then pass prospective forward shadow because all available historical later periods have been viewed.",
+    "gaps": "A gap is WAIT, never a forced order."
+  },
+  "productionChanged": false
+}
