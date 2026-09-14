@@ -121,7 +121,8 @@ type StrategyArena = { version: number; systemName?: string; initialEquity?: num
     streakMaxSpanMs?: number; sameBranchSymbolCooldownMs?: number; maxPortfolioPositions?: number | null; profitArmIsExit?: boolean;
     dailyObjectiveRate?: number; dailyObjectiveIsQuota?: boolean; reverseSameEventWinsRequired?: number;
     dualIndependentEngines?: boolean; engineInitialEquity?: number; canonicalReferenceEquity?: number;
-    engineOrderCopyRate?: number; canonicalCapitalAgnostic?: boolean;
+    engineOrderCopyRate?: number; canonicalCopySizing?: string; canonicalEntryScaleFrozen?: boolean;
+    canonicalAdmissionGate?: boolean; canonicalCapitalAgnostic?: boolean;
     sameSymbolCrossEngineAllowed?: boolean; liveSource?: string };
   engines?: Array<{ id: RegimeSystemId; name: string; description?: string; strategyVersion: string;
     initialEquity: number; portfolioEquity: number; portfolioOpen: ArenaTrade[]; portfolioResolved: number;
