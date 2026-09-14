@@ -1,0 +1,50 @@
+name: Regime Satellite Release Bootstrap
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/apply-regime-satellite-release.mjs"
+      - ".github/workflows/regime-satellite-release-bootstrap.yml"
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  build-release:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout release branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Apply exact production patch
+        run: node scripts/apply-regime-satellite-release.mjs
+      - name: Verify production code
+        run: |
+          set -euo pipefail
+          npm run test:all-regime
+          npm run test:direct
+          npm test
+          npm run typecheck
+          npm run lint
+          git diff --check
+      - name: Commit verified release files
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "Release Regime Core Satellite V1.1"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
