@@ -1042,37 +1042,43 @@ jobs:
               (.runtime.liveMode.requestedEnabled | type) == "boolean" and
               (.runtime.liveMode.operational | type) == "boolean" and
               (.runtime.liveMode.operational == false or .runtime.liveMode.requestedEnabled == true) and
-              .runtime.strategyArena.version == 12 and .runtime.strategyArena.playbookCount == 11 and
-              .runtime.strategyArena.catalogSize == 11 and
-              (.runtime.strategyArena.engines | length) == 2 and
-              ([.runtime.strategyArena.engines[].id] | sort) == ["CURRENT_V5", "PREVIOUS_V4"] and
+              .runtime.strategyArena.version == 1 and .runtime.strategyArena.playbookCount == 12 and
+              .runtime.strategyArena.catalogSize == 12 and
+              .runtime.strategyArena.shadowCount == 0 and .runtime.strategyArena.activeCount == 12 and
+              (.runtime.strategyArena.engines | length) == 5 and
+              ([.runtime.strategyArena.engines[].id] | sort) == ["BALANCED_ROTATION", "COMPRESSION", "DIRECTIONAL_TREND", "NON_TREND_EXPANSION", "SHOCK_TRANSITION"] and
               (all(.runtime.strategyArena.engines[];
                 (.portfolioEquity | type) == "number" and .portfolioEquity > 0)) and
               (.runtime.strategyArena.routeCheckCount | type) == "number" and
               (.runtime.feedQuality.attempts | type) == "number" and
               (.runtime.strategyArena.portfolioEquity | type) == "number" and
               .runtime.strategyArena.portfolioEquity > 0 and
-              .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 10 and
-              .runtime.strategyArena.rules.singleTradeRiskMin == 0.03 and
-              .runtime.strategyArena.rules.singleTradeRiskMax == 0.03 and
+              .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 11 and
+              .runtime.strategyArena.rules.singleTradeRiskMin == 0.015 and
+              .runtime.strategyArena.rules.singleTradeRiskMax == 0.015 and
               .runtime.strategyArena.rules.minimumPortfolioRiskUsdt == 0 and
-              .runtime.strategyArena.rules.targetPortfolioRiskUsdt == 30 and
+              .runtime.strategyArena.rules.targetPortfolioRiskUsdt == 15 and
+              .runtime.strategyArena.rules.minimumNotionalMultiple == 0.05 and
               .runtime.strategyArena.rules.empiricalCostFloorRate == 0.0014 and
-              .runtime.strategyArena.rules.authorityWindowPriority == "STATE_CONDITIONED_EXPECTANCY" and
+              .runtime.strategyArena.rules.authorityWindowPriority == "CURRENT_REGIME_DIRECT" and
               .runtime.strategyArena.rules.extremeSequenceAuthority == false and
-              .runtime.strategyArena.rules.strategyName == "全境·复利引擎" and
-              .runtime.strategyArena.rules.maxNotionalMultiple == 4 and
+              .runtime.strategyArena.rules.strategyName == "五行情独立账户组合" and
+              .runtime.strategyArena.rules.maxNotionalMultiple == 0.5 and
               .runtime.strategyArena.rules.generatedRouteAuthority == false and
               .runtime.strategyArena.rules.legacyStrategyAuthority == false and
               .runtime.strategyArena.rules.paperCycleResetOnCutover == false and
-              .runtime.strategyArena.rules.streakLength == 3 and
+              .runtime.strategyArena.rules.normalShadowAlwaysOn == false and
+              .runtime.strategyArena.rules.shadowExecution == false and
+              .runtime.strategyArena.rules.outcomeBasedPromotion == false and
+              (.runtime.strategyArena.rules | has("streakLength") | not) and
               .runtime.strategyArena.rules.maxPortfolioPositions == null and
               .runtime.strategyArena.rules.profitArmIsExit == true and
               .runtime.strategyArena.rules.dailyObjectiveRate == 0.10 and
               .runtime.strategyArena.rules.dailyObjectiveIsQuota == false and
               .runtime.strategyArena.rules.portfolioRiskCap == 0.10 and
               .runtime.strategyArena.rules.correlatedRiskCap == 0.065 and
-              .runtime.strategyArena.rules.dualIndependentEngines == true and
+              .runtime.strategyArena.rules.dualIndependentEngines == false and
+              .runtime.strategyArena.rules.independentSystemCount == 5 and
               .runtime.strategyArena.rules.engineInitialEquity == 1000 and
               .runtime.strategyArena.rules.canonicalReferenceEquity == 1000 and
               .runtime.strategyArena.rules.engineOrderCopyRate == 1 and
@@ -1108,7 +1114,7 @@ jobs:
           page_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/main-page.html" -w '%{http_code}' \
             "$WORKER_BASE_URL/" || true)"
           [[ "$page_code" == "200" ]]
-          grep -Fq '双引擎独立账户' "$RUNNER_TEMP/main-page.html"
+          grep -Fq '五行情·独立账户' "$RUNNER_TEMP/main-page.html"
           curl -fsS --max-time 15 "$WORKER_BASE_URL/api/history" \
             > "$RUNNER_TEMP/main-history.json"
           jq -e '.items | type == "array"' "$RUNNER_TEMP/main-history.json" >/dev/null
@@ -1179,37 +1185,44 @@ jobs:
             (.runtime.liveMode.requestedEnabled | type) == "boolean" and
             (.runtime.liveMode.operational | type) == "boolean" and
             (.runtime.liveMode.operational == false or .runtime.liveMode.requestedEnabled == true) and
-            .runtime.strategyArena.version == 12 and .runtime.strategyArena.playbookCount == 11 and
-            .runtime.strategyArena.catalogSize == 11 and
-            (.runtime.strategyArena.engines | length) == 2 and
-            ([.runtime.strategyArena.engines[].id] | sort) == ["CURRENT_V5", "PREVIOUS_V4"] and
+            .runtime.strategyArena.version == 1 and .runtime.strategyArena.playbookCount == 12 and
+            .runtime.strategyArena.catalogSize == 12 and
+            .runtime.strategyArena.shadowCount == 0 and .runtime.strategyArena.activeCount == 12 and
+            (.runtime.strategyArena.engines | length) == 5 and
+            ([.runtime.strategyArena.engines[].id] | sort) == ["BALANCED_ROTATION", "COMPRESSION", "DIRECTIONAL_TREND", "NON_TREND_EXPANSION", "SHOCK_TRANSITION"] and
             (all(.runtime.strategyArena.engines[];
               (.portfolioEquity | type) == "number" and .portfolioEquity > 0)) and
             (.runtime.strategyArena.routeCheckCount | type) == "number" and
             (.runtime.feedQuality.attempts | type) == "number" and
             .runtime.strategyArena.rules.minimumPortfolioRiskUsdt == 0 and
-            .runtime.strategyArena.rules.targetPortfolioRiskUsdt == 30 and
+            .runtime.strategyArena.rules.targetPortfolioRiskUsdt == 15 and
+            .runtime.strategyArena.rules.singleTradeRiskMin == 0.015 and
+            .runtime.strategyArena.rules.singleTradeRiskMax == 0.015 and
+            .runtime.strategyArena.rules.minimumNotionalMultiple == 0.05 and
             .runtime.strategyArena.rules.empiricalCostFloorRate == 0.0014 and
-            .runtime.strategyArena.rules.normalShadowAlwaysOn == true and
+            .runtime.strategyArena.rules.normalShadowAlwaysOn == false and
+            .runtime.strategyArena.rules.shadowExecution == false and
+            .runtime.strategyArena.rules.outcomeBasedPromotion == false and
             .runtime.strategyArena.rules.extremeSequenceAuthority == false and
-            .runtime.strategyArena.rules.strategyName == "全境·复利引擎" and
-            .runtime.strategyArena.rules.maxNotionalMultiple == 4 and
+            .runtime.strategyArena.rules.strategyName == "五行情独立账户组合" and
+            .runtime.strategyArena.rules.maxNotionalMultiple == 0.5 and
             .runtime.strategyArena.rules.generatedRouteAuthority == false and
             .runtime.strategyArena.rules.legacyStrategyAuthority == false and
             .runtime.strategyArena.rules.paperCycleResetOnCutover == false and
-            .runtime.strategyArena.rules.authorityWindowPriority == "STATE_CONDITIONED_EXPECTANCY" and
-            .runtime.strategyArena.rules.streakLength == 3 and
+            .runtime.strategyArena.rules.authorityWindowPriority == "CURRENT_REGIME_DIRECT" and
+            (.runtime.strategyArena.rules | has("streakLength") | not) and
             .runtime.strategyArena.rules.maxPortfolioPositions == null and
             .runtime.strategyArena.rules.profitArmIsExit == true and
             .runtime.strategyArena.rules.dailyObjectiveIsQuota == false and
-            .runtime.strategyArena.rules.dualIndependentEngines == true and
+            .runtime.strategyArena.rules.dualIndependentEngines == false and
+            .runtime.strategyArena.rules.independentSystemCount == 5 and
             .runtime.strategyArena.rules.engineInitialEquity == 1000 and
             .runtime.strategyArena.rules.canonicalReferenceEquity == 1000 and
             .runtime.strategyArena.rules.engineOrderCopyRate == 1 and
             .runtime.strategyArena.rules.canonicalCapitalAgnostic == true and
             .runtime.strategyArena.rules.sameSymbolCrossEngineAllowed == true and
             .runtime.strategyArena.rules.liveSource == "CANONICAL_PAPER_NET" and
-            .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 10 and
+            .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 11 and
             .runtime.limits.plannedTotalDoRequestsPerDay < 55000 and
             .runtime.limits.plannedDoWritesPerDay < 55000 and
             .runtime.limits.plannedMaxD1BilledWritesPerDay < 5000
@@ -1221,7 +1234,7 @@ jobs:
           page_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/monitor-page.html" -w '%{http_code}' \
             "$WORKER_BASE_URL/" || true)"
           [[ "$page_code" == "200" ]]
-          grep -Fq '双引擎独立账户' "$RUNNER_TEMP/monitor-page.html"
+          grep -Fq '五行情·独立账户' "$RUNNER_TEMP/monitor-page.html"
           curl -fsS --max-time 15 "$WORKER_BASE_URL/api/history" \
             > "$RUNNER_TEMP/monitor-history.json"
           jq -e '.items | type == "array"' "$RUNNER_TEMP/monitor-history.json" >/dev/null
