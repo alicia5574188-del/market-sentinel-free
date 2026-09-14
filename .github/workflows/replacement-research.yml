@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "scripts/research-replacement-augment.mjs"
+      - "scripts/research-residual-microcells.mjs"
       - ".github/workflows/replacement-research.yml"
   workflow_dispatch:
 
@@ -43,7 +44,7 @@ jobs:
           RESEARCH_OUTPUT: /tmp/gate-history-44m-from5m-1h.json
         run: node scripts/aggregate-gate-history.mjs
 
-      - name: Run discovery-only augmentation search and held-out evaluation
+      - name: Reproduce current five-regime baseline and test hourly augmentation
         env:
           RESEARCH_SIGNAL_DATASET: /tmp/gate-history-44m-from5m-1h.json
           RESEARCH_EXECUTION_DATASET: /tmp/gate-history-44m-5m.json
@@ -51,9 +52,18 @@ jobs:
           REPLACEMENT_OUTPUT: /tmp/replacement-augment.json
         run: node scripts/research-replacement-augment.mjs
 
-      - name: Print replacement decision
+      - name: Run discovery-only 5m residual micro-regime research
+        env:
+          RESEARCH_DATASET: /tmp/gate-history-44m-5m.json
+          RESIDUAL_OUTPUT: /tmp/residual-microcells.json
+        run: node --experimental-strip-types scripts/research-residual-microcells.mjs
+
+      - name: Print replacement decisions
         run: |
-          jq '{replacementCandidate,replacementGates,baseline:{evaluationTradesPerDay:.baseline.evaluationTradesPerDay,stats:.baseline.stats.evaluation},augmented:{evaluationTradesPerDay:.augmented.evaluationTradesPerDay,stats:.augmented.stats.evaluation},systemSearch:[.systemSearch[]|{system,extras:[.discoverySelectedExtras[]|{id,tactic,validation,evaluation}]}]}' /tmp/replacement-augment.json
+          echo '=== HOURLY AUGMENT ==='
+          jq '{replacementCandidate,replacementGates,baseline:{evaluationTradesPerDay:.baseline.evaluationTradesPerDay,stats:.baseline.stats.evaluation},augmented:{evaluationTradesPerDay:.augmented.evaluationTradesPerDay,stats:.augmented.stats.evaluation}}' /tmp/replacement-augment.json
+          echo '=== 5M RESIDUAL ==='
+          jq '{replacementLayerCandidate,rawCandidates,qualifiedCellCount,chosenCells,residualEvaluationTradesPerDay,combinedLogicalEvaluationTradesPerDayWithCurrentBaseline,gates,validation:.portfolios.validation,evaluation:.portfolios.evaluation}' /tmp/residual-microcells.json
 
       - name: Upload full research outputs
         uses: actions/upload-artifact@v4
@@ -62,5 +72,6 @@ jobs:
           path: |
             /tmp/replacement-augment.json
             /tmp/regime-baseline-reproduction.json
+            /tmp/residual-microcells.json
           if-no-files-found: error
           retention-days: 7
