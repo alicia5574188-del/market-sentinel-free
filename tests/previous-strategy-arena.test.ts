@@ -152,6 +152,15 @@ test("valid small-account routes are not haircut by transient five-level book de
   assert.ok(shadow.notional > 500, "shadow and PAPER use the same non-haircut execution rule");
 });
 
+test("an explicit research sizing policy can cap account notional without changing the production default", () => {
+  const production = observeStrategyArena({ state: initialStrategyArena(1), observation: observation() });
+  const researched = observeStrategyArena({ state: initialStrategyArena(1), observation: observation(),
+    sizingPolicy: { maximumPositionNotionalMultiple: 0.5, minimumNotionalMultiple: 0.25 } });
+  assert.ok(production.portfolioOpen.BTC_USDT.notional > 500);
+  assert.ok(researched.portfolioOpen.BTC_USDT.notional >= 250);
+  assert.ok(researched.portfolioOpen.BTC_USDT.notional <= 500 + 1e-8);
+});
+
 test("account equity scales the meaningful-notional floor proportionally", () => {
   const state = initialStrategyArena(1); state.portfolioEquity = 500;
   const observed = observeStrategyArena({ state, observation: observation() });
