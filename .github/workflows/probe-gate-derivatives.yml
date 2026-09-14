@@ -1,0 +1,25 @@
+name: Probe Gate Derivative History
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research/replacement-engine-scan-20260914
+    paths:
+      - 'scripts/probe-gate-derivatives.mjs'
+      - '.github/workflows/probe-gate-derivatives.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Probe public derivative history endpoints
+        run: node scripts/probe-gate-derivatives.mjs
