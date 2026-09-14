@@ -26,7 +26,7 @@ import { CANONICAL_PAPER_REFERENCE_EQUITY, canonicalLivePortfolio, canonicalPape
   initialCanonicalPaperState, normalizeCanonicalPaperState, reconcileCanonicalPaper,
   type CanonicalPaperState } from "../lib/dual-paper.ts";
 import { advanceRegimePortfolio, evaluateRegimePortfolio, initialRegimePortfolio, normalizeRegimePortfolio,
-  REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE, resetRegimePortfolio,
+  REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE, resetRegimePortfolio,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
 import { advanceStrategyArena as advancePreviousStrategyArena,
@@ -60,6 +60,8 @@ const NON_ALARM_WRITE_CAP = 8_000;
 const WATCHDOG_WRITE_RESERVE = 2_880;
 const AUTHORITY_SCHEMA_VERSION = 1;
 const DEFAULT_SYMBOLS = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];
+const REGIME_HOURLY_STORAGE_PREFIX = "regime-hourly:";
+const REGIME_HOURLY_RETRY_MS = 10_000;
 
 function broadMarketContext(candidates: Record<string, { symbol: string; observedAt: number; broadMoveRate?: number;
   trendRate: number; move4hRate?: number; move24hRate?: number }>, now: number) {
@@ -259,6 +261,8 @@ type RuntimeState = {
   strategyCandleCursor: number;
   strategyCandleError: string | null;
   strategyCandleFailures: Record<string, { count: number; lastFailureAt: number; retryAt: number; lastError: string }>;
+  regimeHourlyFailures: Record<string, { count: number; lastFailureAt: number; retryAt: number;
+    stage: "FETCH" | "STORAGE"; lastError: string }>;
   strategyLogError: string | null;
   radar: { scanned: number; lastScanAt: number | null; lastAttemptAt: number | null; consecutiveFailures: number;
     retryAt: number | null; lastError: string | null; candidates: RadarCandidate[] };
@@ -271,6 +275,7 @@ type RuntimeState = {
 };
 
 type Checkpoint = Omit<RuntimeState, "analysisMs">;
+type RegimeHourlyPath = Awaited<ReturnType<typeof fetchStructureCandles>>;
 
 const day = (now = Date.now()) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(now));
 const safeError = (error: unknown) => error instanceof Error ? error.message.slice(0, 240) : "unknown error";
@@ -320,6 +325,33 @@ export function mergeStrategyCandlePath(
   return rows.slice(start);
 }
 
+export function regimeHourlyFetchLimit(priorLength: number) {
+  // Gate includes the still-forming hourly candle in the requested limit. Ask
+  // for one extra row so filtering it still leaves 721 completed observations
+  // for a causal 720-hour return on the very first pass.
+  return priorLength >= REGIME_HOURLY_REQUIRED_CANDLES ? 4 : REGIME_HOURLY_REQUIRED_CANDLES + 1;
+}
+
+export function regimeHourlyNeedsRefresh(rows: RegimeHourlyPath | undefined, targetCompletedTime: number) {
+  return (rows?.length ?? 0) < REGIME_HOURLY_REQUIRED_CANDLES
+    || (rows?.at(-1)?.time ?? 0) < targetCompletedTime;
+}
+
+export function mergeRegimeHourlyPath(prior: RegimeHourlyPath, incoming: RegimeHourlyPath) {
+  const rows = [...new Map([...prior, ...incoming]
+    .filter((row) => row && [row.time, row.volume, row.close, row.high, row.low, row.open].every(Number.isFinite)
+      && row.time >= 0 && row.close > 0 && row.high >= row.low && row.volume >= 0)
+    .map((row) => [row.time, row])).values()]
+    .sort((left, right) => left.time - right.time).slice(-REGIME_HOURLY_REQUIRED_CANDLES);
+  let start = rows.length ? rows.length - 1 : 0;
+  while (start > 0 && rows[start].time - rows[start - 1].time === 3_600) start -= 1;
+  return rows.slice(start);
+}
+
+function regimeHourlyStorageKey(symbol: string) {
+  return `${REGIME_HOURLY_STORAGE_PREFIX}${symbol}`;
+}
+
 function initialState(): RuntimeState {
   return {
     version: SYSTEM_VERSION, authoritySchemaVersion: AUTHORITY_SCHEMA_VERSION, mode: "PAPER", state: "STARTING", symbols: DEFAULT_SYMBOLS,
@@ -334,7 +366,8 @@ function initialState(): RuntimeState {
     canonicalPaper: initialCanonicalPaperState(),
     marketRegimes: initialMarketRegimes(), liquidUniverse: [], stableCandidates: {}, previousStableCandidates: {},
     stableStructures: {}, previousStableStructures: {},
-    strategyCandleCursor: 0, strategyCandleError: null, strategyCandleFailures: {}, strategyLogError: null, analysisMs: [], equity: PAPER_INITIAL_EQUITY, outbox: [],
+    strategyCandleCursor: 0, strategyCandleError: null, strategyCandleFailures: {}, regimeHourlyFailures: {},
+    strategyLogError: null, analysisMs: [], equity: PAPER_INITIAL_EQUITY, outbox: [],
     radar: emptyRadarRuntime(), paperCycle: startPaperCycle(Date.now()), bankruptcyOutbox: [], live: initialLiveState(),
   };
 }
@@ -397,7 +430,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private memory: Record<string, SymbolMemory> = {};
   private structureCandles: Record<string, Partial<Record<"1m" | "15m" | "1h" | "4h", Awaited<ReturnType<typeof fetchStructureCandles>>>>> = {};
   private strategyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
-  private regimeHourly: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
+  private regimeHourly: Record<string, RegimeHourlyPath> = {};
   private sessionWarmup: Record<string, number> = {};
   private contractCatalog = new Map<string, Awaited<ReturnType<typeof fetchActiveContracts>>[number]>();
   private authorityReady = true;
@@ -465,6 +498,25 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         this.authorityReady = false;
         this.runtime.state = "RECOVERY_REQUIRED";
         this.runtime.lastError = "authority checkpoint version mismatch; manual migration required";
+      }
+      if (this.authorityReady) {
+        const loaded = await Promise.all(REGIME_UNIVERSE.map(async (symbol) => {
+          try {
+            return [symbol, await ctx.storage.get<RegimeHourlyPath>(regimeHourlyStorageKey(symbol))] as const;
+          } catch (error) {
+            const prior = this.runtime.regimeHourlyFailures[symbol];
+            this.runtime.regimeHourlyFailures[symbol] = { count: (prior?.count ?? 0) + 1,
+              lastFailureAt: Date.now(), retryAt: Date.now() + REGIME_HOURLY_RETRY_MS,
+              stage: "STORAGE", lastError: `读取720小时路径失败：${safeError(error)}` };
+            return [symbol, undefined] as const;
+          }
+        }));
+        for (const [symbol, rows] of loaded) {
+          const path = mergeRegimeHourlyPath([], rows ?? []);
+          if (path.length) this.regimeHourly[symbol] = path;
+        }
+        this.runtime.regimePortfolio.warmMarkets = Object.values(this.regimeHourly)
+          .filter((rows) => rows.length >= REGIME_HOURLY_REQUIRED_CANDLES).length;
       }
       this.publishAuthority();
     });
@@ -717,15 +769,62 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private async refreshRegimeHourly(now: number) {
     const target = Math.floor(now / 3_600_000) * 3_600 - 3_600;
-    const symbol = REGIME_UNIVERSE.find((item) => (this.regimeHourly[item]?.at(-1)?.time ?? 0) < target);
-    if (!symbol || !this.contractCatalog.has(symbol)) { this.evaluateRegimeNow(now); return 0; }
+    const storageRetry = REGIME_UNIVERSE.find((item) => {
+      const failure = this.runtime.regimeHourlyFailures[item];
+      return failure?.stage === "STORAGE" && failure.retryAt <= now
+        && (this.regimeHourly[item]?.length ?? 0) >= REGIME_HOURLY_REQUIRED_CANDLES;
+    });
+    if (storageRetry) {
+      try {
+        await this.ctx.storage.put(regimeHourlyStorageKey(storageRetry), this.regimeHourly[storageRetry]);
+        delete this.runtime.regimeHourlyFailures[storageRetry];
+      } catch (error) {
+        const prior = this.runtime.regimeHourlyFailures[storageRetry];
+        this.runtime.regimeHourlyFailures[storageRetry] = { count: (prior?.count ?? 0) + 1,
+          lastFailureAt: now, retryAt: now + REGIME_HOURLY_RETRY_MS,
+          stage: "STORAGE", lastError: `保存720小时路径失败：${safeError(error)}` };
+      }
+      this.evaluateRegimeNow(now);
+      return 0;
+    }
+    const symbol = REGIME_UNIVERSE.find((item) => {
+      if (!this.contractCatalog.has(item)) return false;
+      const rows = this.regimeHourly[item] ?? [];
+      const failure = this.runtime.regimeHourlyFailures[item];
+      const fetchReady = failure?.stage !== "FETCH" || failure.retryAt <= now;
+      return fetchReady && regimeHourlyNeedsRefresh(rows, target);
+    });
+    if (!symbol) { this.evaluateRegimeNow(now); return 0; }
     const prior = this.regimeHourly[symbol] ?? [];
-    const incoming = await fetchStructureCandles(symbol, "1h", prior.length >= 721 ? 4 : 721);
-    const rows = [...new Map([...prior, ...incoming].map((row) => [row.time, row])).values()]
-      .sort((left, right) => left.time - right.time).slice(-721);
-    let start = rows.length ? rows.length - 1 : 0;
-    while (start > 0 && rows[start].time - rows[start - 1].time === 3_600) start -= 1;
-    this.regimeHourly[symbol] = rows.slice(start);
+    try {
+      const fetchLimit = regimeHourlyFetchLimit(prior.length);
+      const incoming = await fetchStructureCandles(symbol, "1h", fetchLimit);
+      const rows = mergeRegimeHourlyPath(prior, incoming);
+      this.regimeHourly[symbol] = rows;
+      if (rows.length < REGIME_HOURLY_REQUIRED_CANDLES) {
+        const failure = this.runtime.regimeHourlyFailures[symbol];
+        this.runtime.regimeHourlyFailures[symbol] = { count: (failure?.count ?? 0) + 1,
+          lastFailureAt: now, retryAt: now + REGIME_HOURLY_RETRY_MS, stage: "FETCH",
+          lastError: `720小时连续路径不足：仅收到${rows.length}/${REGIME_HOURLY_REQUIRED_CANDLES}根完整K线` };
+        this.evaluateRegimeNow(now);
+        return 1;
+      }
+      try {
+        await this.ctx.storage.put(regimeHourlyStorageKey(symbol), rows);
+        delete this.runtime.regimeHourlyFailures[symbol];
+      } catch (error) {
+        const failure = this.runtime.regimeHourlyFailures[symbol];
+        this.runtime.regimeHourlyFailures[symbol] = { count: (failure?.count ?? 0) + 1,
+          lastFailureAt: now, retryAt: now + REGIME_HOURLY_RETRY_MS,
+          stage: "STORAGE", lastError: `保存720小时路径失败：${safeError(error)}` };
+      }
+    } catch (error) {
+      const failure = this.runtime.regimeHourlyFailures[symbol];
+      const retryAt = error instanceof GatePublicError && error.retryAt
+        ? Math.max(now + 2_000, error.retryAt) : now + REGIME_HOURLY_RETRY_MS;
+      this.runtime.regimeHourlyFailures[symbol] = { count: (failure?.count ?? 0) + 1,
+        lastFailureAt: now, retryAt, stage: "FETCH", lastError: `补齐720小时路径失败：${safeError(error)}` };
+    }
     this.evaluateRegimeNow(now);
     return 1;
   }
@@ -2409,6 +2508,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         strategyData: {
           liquidMarkets: REGIME_UNIVERSE.length,
           stableMarkets: this.runtime.regimePortfolio.warmMarkets,
+          hourlyRequiredCandles: REGIME_HOURLY_REQUIRED_CANDLES,
+          hourlyPathFailures: Object.keys(this.runtime.regimeHourlyFailures).length,
+          hourlyPathError: Object.values(this.runtime.regimeHourlyFailures)
+            .sort((left, right) => right.lastFailureAt - left.lastFailureAt)[0]?.lastError ?? null,
           routedMarkets: new Set(this.runtime.regimePortfolio.routeChecks.map((row) => row.symbol)).size,
           marketBreadth: this.runtime.regimePortfolio.currentContext?.breadth24 ?? 0,
           marketMedianMove: this.runtime.regimePortfolio.currentContext?.median24 ?? 0,
@@ -2429,7 +2532,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           scannedMarkets: this.runtime.radar.scanned,
           scanUniverse: SCAN_UNIVERSE_SIZE,
           realtimeCapacity: PORTFOLIO_REALTIME_CAPACITY,
-          plannedDoWritesPerDay: 54_080,
+          plannedDoWritesPerDay: 54_344,
           plannedTotalDoRequestsPerDay: 50_400,
           plannedMaxD1BilledWritesPerDay: 4_800,
         },
@@ -2448,6 +2551,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         strategyArena: canonicalPaperSummary({ current: strategyArena, previous: previousStrategyArena, regime: regimePortfolio }, canonicalPaper),
         marketRegimes: marketRegimeSummary(marketRegimes),
         strategyData: { liquidMarkets: REGIME_UNIVERSE.length, stableMarkets: regimePortfolio.warmMarkets,
+          hourlyRequiredCandles: REGIME_HOURLY_REQUIRED_CANDLES,
+          hourlyPathFailures: Object.keys(publicRuntime.regimeHourlyFailures).length,
+          hourlyPathError: Object.values(publicRuntime.regimeHourlyFailures)
+            .sort((left, right) => right.lastFailureAt - left.lastFailureAt)[0]?.lastError ?? null,
           routedMarkets: new Set(regimePortfolio.routeChecks.map((row) => row.symbol)).size,
           marketBreadth: regimePortfolio.currentContext?.breadth24 ?? 0,
           marketMedianMove: regimePortfolio.currentContext?.median24 ?? 0,
@@ -2466,7 +2573,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           maxAncillaryConcurrency: MAX_ANCILLARY_CONCURRENCY, maxSubrequestsPerAlarm: 32, plannedAlarmRequestsPerDay: 43_200,
           plannedAlarmWritesPerDay: 43_200, watchdogWriteReservePerDay: WATCHDOG_WRITE_RESERVE,
           nonAlarmWriteCapPerDay: NON_ALARM_WRITE_CAP, nonAlarmWritesToday: this.runtime.nonAlarmWrites,
-          plannedDoWritesPerDay: 54_080,
+          plannedDoWritesPerDay: 54_344,
           internalAnalysisP99RedlineMs: 25, topLevelCpuP99RedlineMs: 8, assumedRuntimePollSeconds: 15,
           plannedForegroundDoRequestsPerDay: 5_760, plannedCronWatchdogsPerDay: 1_440, plannedTotalDoRequestsPerDay: 50_400,
           maxOpenPositions: null, realtimeCapacity: PORTFOLIO_REALTIME_CAPACITY, plannedMaxD1BilledWritesPerDay: 4_800 } });
