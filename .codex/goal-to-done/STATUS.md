@@ -289,6 +289,13 @@
 - Production code commit: f12a93afb625c64e8005e7dc1ac28d727b2978a5. Cloudflare version: e85fb4bc-3699-4305-8907-6990172ae52e.
 - Production acceptance confirmed 1,000 U simulated equity, 30-market liquidity universe, 10 realtime slots, 12/48 strategy catalog, bounded V4 risk and LIVE requested/operational both false.
 
+# 2026-09-14 — Canonical 10,000 U proportional compounding correction in progress
+
+- Implemented a persisted canonical copy ledger with a 10,000 U initial balance.
+- New source orders copy their source notional/equity fraction; each entry scale is frozen and closed PnL compounds subsequent canonical orders.
+- LIVE now consumes normalized per-symbol net exposure, retaining source-system independence and actual-account scaling.
+- Historical evidence rerun, 263 direct tests, 17 architecture/migration tests, typecheck, lint, production build, whitespace validation and Cloudflare dry-run all pass. Reviewed PR deployment remains.
+
 # Status
 
 ## Done — 2026-09-09 data-continuous V4.1

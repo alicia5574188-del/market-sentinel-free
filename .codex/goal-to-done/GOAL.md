@@ -1,3 +1,10 @@
+# Active correction — 10,000 U canonical compounding mirror
+
+- Keep all five regime systems on isolated 1,000 U hypothetical accounts and preserve their independent decision, sizing, risk and lifecycle trajectories.
+- Start the sole canonical PAPER account at 10,000 U. Copy each admitted source order's notional-to-source-equity fraction against canonical equity, freeze that scale for the position lifecycle, and compound only future orders after realized canonical PnL.
+- Preserve same-symbol logical legs. Give Gate single-position LIVE only their normalized per-symbol net fraction so actual Gate equity, not any fixed 1,000 U amount, determines LIVE notional.
+- Preserve settings, owner authentication, credentials and the current user-controlled LIVE choice. Verify through reviewed main and production health before completion.
+
 # Active research correction — direct regime ownership without shadow authorization
 
 - Permanently remove shadow strategy promotion, demotion, three-win, latest-six-profit and rolling evidence-expiry rules from the successor architecture. Historical outcomes may evaluate a frozen candidate offline, but may never decide whether a current live signal is allowed to trade.
