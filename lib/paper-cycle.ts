@@ -1,6 +1,6 @@
 import { ROUND_TRIP_FRICTION_RATE, type PaperPosition } from "./liquidity-core.ts";
 
-export const PAPER_INITIAL_EQUITY = 1_000;
+export const PAPER_INITIAL_EQUITY = 10_000;
 export const PAPER_BANKRUPTCY_EQUITY = PAPER_INITIAL_EQUITY * 0.3;
 export const MAX_CYCLE_TRADES = 250;
 
