@@ -27,7 +27,8 @@ registerHooks({
 
 const runtimeWorkerSpecifier = "../worker/index-clean.ts?runtime-fault-suite";
 const { MarketStream, failedRadarRuntime, radarAttemptDue, radarCandidateExecutionAllowed,
-  successfulRadarRuntime, latestCompletedStrategyCandleAt, mergeStrategyCandlePath } = await import(runtimeWorkerSpecifier);
+  successfulRadarRuntime, latestCompletedStrategyCandleAt, mergeStrategyCandlePath,
+  mergeRegimeHourlyPath, regimeHourlyNeedsRefresh } = await import(runtimeWorkerSpecifier);
 
 test("the strategy candle clock waits for Gate publication grace and advances once per closed bar", () => {
   const boundary = 1_800_000;
@@ -135,6 +136,54 @@ async function makeStreamFromStorage(storage: FakeStorage) {
 async function makeStream(checkpoint?: unknown) {
   return makeStreamFromStorage(new FakeStorage(checkpoint));
 }
+
+function gateHourlyRows(currentHour: number, completedCount: number) {
+  return Array.from({ length: completedCount + 1 }, (_, index) => {
+    const time = currentHour - (completedCount - index) * 3_600;
+    return { t: time, v: "100", o: "100", h: "101", l: "99", c: "100" };
+  });
+}
+
+test("cold regime preload requests one extra row, becomes ready immediately, and survives restart", async () => {
+  const { stream, storage } = await makeStream();
+  const currentHour = Math.floor(Date.now() / 3_600_000) * 3_600;
+  const now = currentHour * 1_000 + 10 * 60_000;
+  stream.contractCatalog = new Map([["BTC_USDT", { symbol: "BTC_USDT", tickSize: 0.1,
+    quantoMultiplier: 0.001, maintenanceRate: 0.005, leverageMax: 50, fundingRate: 0,
+    last: 100, volume24hUsd: 1_000_000_000 }]]);
+  const original = globalThis.fetch;
+  let requestedLimit = 0;
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+    requestedLimit = Number(url.searchParams.get("limit"));
+    return Response.json(gateHourlyRows(currentHour, 721));
+  }) as typeof fetch;
+  try { await stream.refreshRegimeHourly(now); }
+  finally { globalThis.fetch = original; }
+
+  assert.equal(requestedLimit, 722, "the unfinished current hour must not consume one of 721 completed rows");
+  assert.equal(stream.regimeHourly.BTC_USDT.length, 721);
+  assert.equal(stream.runtime.regimePortfolio.warmMarkets, 1);
+  assert.equal(stream.runtime.regimeHourlyFailures.BTC_USDT, undefined);
+  assert.equal((storage.values.get("regime-hourly:BTC_USDT") as unknown[]).length, 721);
+
+  const restarted = await makeStreamFromStorage(storage);
+  assert.equal(restarted.stream.regimeHourly.BTC_USDT.length, 721);
+  assert.equal(restarted.stream.runtime.regimePortfolio.warmMarkets, 1,
+    "a process restart must not restart the hourly wait from zero");
+});
+
+test("a fresh but short hourly suffix remains retryable instead of stalling until the next hour", () => {
+  const target = 1_000 * 3_600;
+  const row = (time: number) => ({ time, open: 100, high: 101, low: 99, close: 100, volume: 1 });
+  const short = Array.from({ length: 720 }, (_, index) => row(target - (719 - index) * 3_600));
+  assert.equal(short.at(-1)?.time, target);
+  assert.equal(regimeHourlyNeedsRefresh(short, target), true,
+    "a current last timestamp cannot hide an incomplete 720-hour path");
+  const complete = mergeRegimeHourlyPath([row(target - 720 * 3_600)], short);
+  assert.equal(complete.length, 721);
+  assert.equal(regimeHourlyNeedsRefresh(complete, target), false);
+});
 
 test("a transient strategy-candle failure keeps a fresh retained path and only blocks after expiry", async () => {
   const { stream } = await makeStream();
@@ -701,8 +750,9 @@ test("24h Free-plan budget stays below every published daily cap", () => {
   const foreground = 86_400 / 15;
   const nonAlarmWriteCap = 8_000;
   const watchdogWorstWrites = cronWatchdogs * 2;
+  const regimeHourlyPathWrites = 11 * 24;
   const doRequests = alarms + cronWatchdogs + foreground;
-  const doWrites = alarms + nonAlarmWriteCap + watchdogWorstWrites;
+  const doWrites = alarms + nonAlarmWriteCap + watchdogWorstWrites + regimeHourlyPathWrites;
   const gateBookRequests = alarms * 4;
   const universeCycles = 24 * 60 / 5;
   const ancillaryCycles = alarms - universeCycles;
@@ -710,7 +760,7 @@ test("24h Free-plan budget stays below every published daily cap", () => {
 
   assert.equal(alarms, 43_200);
   assert.equal(doRequests, 50_400);
-  assert.equal(doWrites, 54_080);
+  assert.equal(doWrites, 54_344);
   assert.equal(gateRequests, 259_200);
   assert.ok(doRequests < 100_000);
   assert.ok(doWrites < 100_000);
