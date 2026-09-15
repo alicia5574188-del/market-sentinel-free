@@ -1,0 +1,31 @@
+name: Binance Gate Basis Fair Value Passive Research
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/research-binance-gate-basis-fair-value-passive.py'
+      - '.github/workflows/binance-gate-basis-fair-value-passive.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax check
+        run: python3 -m py_compile scripts/research-binance-gate-basis-fair-value-passive.py
+      - name: Run basis-normalized fair-value passive screen
+        env:
+          RESEARCH_OUTPUT: /tmp/binance-gate-basis-fair-value-passive.json
+        run: python3 scripts/research-binance-gate-basis-fair-value-passive.py
+      - name: Print result
+        run: jq '{research,objective,decision,protocol,validPreHours,invalidPreHours,preQualifiedConfigs,evaluationOpened,evaluationSurvivors,topDiagnostics,sha256}' /tmp/binance-gate-basis-fair-value-passive.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binance-gate-basis-fair-value-passive
+          path: /tmp/binance-gate-basis-fair-value-passive.json
+          retention-days: 7
