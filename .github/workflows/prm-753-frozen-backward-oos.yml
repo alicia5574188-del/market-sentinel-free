@@ -1,0 +1,45 @@
+name: PRM 753 Frozen Backward OOS
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/research-prm-753-frozen-backward-oos.mjs'
+      - '.github/workflows/prm-753-frozen-backward-oos.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Syntax check
+        run: node --check scripts/research-prm-753-frozen-backward-oos.mjs
+      - name: Fetch earlier Gate 1h futures prices
+        env:
+          RESEARCH_INTERVAL: 1h
+          RESEARCH_DATASET: /tmp/gate-prm-backward-13m.json
+          RESEARCH_MONTHS: 202308,202309,202310,202311,202312,202401,202402,202403,202404,202405,202406,202407,202408
+          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT,SUI_USDT,UNI_USDT,FIL_USDT,AAVE_USDT,ARB_USDT,APT_USDT,PEPE_USDT,WLD_USDT
+          RESEARCH_MIN_CONTRACTS: 15
+          RESEARCH_MIN_MONTH_COVERAGE: 0.98
+          RESEARCH_CONCURRENCY: 16
+        run: node scripts/fetch-gate-history.mjs
+      - name: Run exact frozen PRM-753 backward OOS
+        env:
+          RESEARCH_DATASET: /tmp/gate-prm-backward-13m.json
+          RESEARCH_OUTPUT: /tmp/prm-753-frozen-backward-oos.json
+        run: node scripts/research-prm-753-frozen-backward-oos.mjs
+      - name: Print result
+        run: jq '{research,decision,data,period,frozenRule,protocol,result,note}' /tmp/prm-753-frozen-backward-oos.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prm-753-frozen-backward-oos
+          path: /tmp/prm-753-frozen-backward-oos.json
+          retention-days: 7
