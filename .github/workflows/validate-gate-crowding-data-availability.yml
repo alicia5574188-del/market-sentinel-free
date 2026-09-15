@@ -1,0 +1,34 @@
+name: Validate Gate Crowding Data Availability
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-gate-crowding-data-availability.mjs"
+      - ".github/workflows/validate-gate-crowding-data-availability.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Audit public Gate crowding-data history
+        env:
+          RESEARCH_OUTPUT: /tmp/gate-crowding-data-availability.json
+          RESEARCH_FROM: 1672531200
+          RESEARCH_TO: 1788220800
+          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT
+        run: node scripts/research-gate-crowding-data-availability.mjs
+      - name: Print compact result
+        run: jq '{decision,range,summary,perSymbol}' /tmp/gate-crowding-data-availability.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gate-crowding-data-availability
+          path: /tmp/gate-crowding-data-availability.json
+          retention-days: 7
