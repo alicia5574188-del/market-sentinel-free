@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - 'scripts/research-slow-maker-feasibility.mjs'
+      - 'scripts/debug-slow-maker-sol-202607.mjs'
       - '.github/workflows/slow-maker-feasibility.yml'
       - 'worker/index-clean.ts'
       - 'lib/gate-market.ts'
@@ -22,7 +23,11 @@ jobs:
         with:
           node-version: 22.16.0
       - name: Syntax check
-        run: node --check scripts/research-slow-maker-feasibility.mjs
+        run: |
+          node --check scripts/research-slow-maker-feasibility.mjs
+          node --check scripts/debug-slow-maker-sol-202607.mjs
+      - name: Diagnose 2026 SOL orderbook crossing
+        run: node scripts/debug-slow-maker-sol-202607.mjs
       - name: Run slow maker feasibility audit
         env:
           RESEARCH_OUTPUT: /tmp/slow-maker-feasibility.json
