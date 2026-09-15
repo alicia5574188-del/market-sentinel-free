@@ -1,0 +1,52 @@
+name: Positive Edge Turnover Portfolio Research
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/research-positive-edge-turnover-portfolio.mjs'
+      - '.github/workflows/positive-edge-turnover-portfolio.yml'
+      - 'scripts/fetch-gate-history.mjs'
+      - 'research-results/regime-system-portfolios-2026-09-14.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Syntax check
+        run: node --check scripts/research-positive-edge-turnover-portfolio.mjs
+      - name: Fetch 24-month Gate 1h futures prices
+        env:
+          RESEARCH_INTERVAL: 1h
+          RESEARCH_DATASET: /tmp/gate-price-24m.json
+          RESEARCH_MONTHS: 202409,202410,202411,202412,202501,202502,202503,202504,202505,202506,202507,202508,202509,202510,202511,202512,202601,202602,202603,202604,202605,202606,202607,202608
+          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT,SUI_USDT,UNI_USDT,FIL_USDT,AAVE_USDT,ARB_USDT,APT_USDT,PEPE_USDT,WLD_USDT
+          RESEARCH_MIN_CONTRACTS: '19'
+          RESEARCH_MIN_MONTH_COVERAGE: '0.98'
+          RESEARCH_CONCURRENCY: '16'
+        run: node scripts/fetch-gate-history.mjs
+      - name: Run positive-edge turnover portfolio inventory
+        env:
+          RESEARCH_DATASET: /tmp/gate-price-24m.json
+          RESEARCH_OUTPUT: /tmp/positive-edge-turnover-portfolio.json
+        run: node scripts/research-positive-edge-turnover-portfolio.mjs
+      - name: Print result
+        run: >-
+          jq '{research,objective,data,protocol,
+          inventory:{rsbCrossEraCount:.inventory.rsbCrossEraCount,componentEvidence:.inventory.componentEvidence,regimeCoreProxy:.inventory.regimeCoreProxy,satelliteEvidence:.inventory.satelliteEvidence,correlations:.inventory.correlations},
+          portfolioSearch:{variants:.portfolioSearch.variants,floorVariants:.portfolioSearch.floorVariants,target5xCount:.portfolioSearch.target5xCount,lowestRisk5x:.portfolioSearch.lowestRisk5x,bestUnder20pctDd:.portfolioSearch.bestUnder20pctDd,bestUnder30pctDd:.portfolioSearch.bestUnder30pctDd,bestUnder50pctDd:.portfolioSearch.bestUnder50pctDd,closestTo5x:.portfolioSearch.closestTo5x,evaluation:.portfolioSearch.evaluation},limitations}'
+          /tmp/positive-edge-turnover-portfolio.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: positive-edge-turnover-portfolio
+          path: /tmp/positive-edge-turnover-portfolio.json
+          retention-days: 7
