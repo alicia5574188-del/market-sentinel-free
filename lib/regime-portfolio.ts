@@ -10,6 +10,13 @@ export const REGIME_FRICTION_RATE = 0.0014;
 export const REGIME_ENTRY_SLIPPAGE_RATE = 0.00025;
 export const REGIME_UNIVERSE = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "BNB_USDT", "DOGE_USDT",
   "ADA_USDT", "LINK_USDT", "LTC_USDT", "AVAX_USDT", "BCH_USDT"] as const;
+export const REGIME_SATELLITE_UNIVERSE = ["SUI_USDT", "UNI_USDT"] as const;
+export const REGIME_EXECUTION_UNIVERSE = [...REGIME_UNIVERSE, ...REGIME_SATELLITE_UNIVERSE] as const;
+export const REGIME_SATELLITE_TRADE_RISK_RATE = .005;
+export const REGIME_SATELLITE_ACCOUNT_RISK_CAP = .02;
+export const REGIME_SATELLITE_DIRECTION_RISK_CAP = .015;
+const REGIME_CORE_SET = new Set<string>(REGIME_UNIVERSE);
+const REGIME_SATELLITE_SET = new Set<string>(REGIME_SATELLITE_UNIVERSE);
 
 export type RegimeSystemId = "SHOCK_TRANSITION" | "COMPRESSION" | "DIRECTIONAL_TREND"
   | "NON_TREND_EXPANSION" | "BALANCED_ROTATION";
@@ -125,8 +132,9 @@ type TradeGeometry = { entryPrice: number; stopPrice: number; targetPrice: numbe
 
 function synchronizedFeatures(paths: Record<string, GateCandle[]>) {
   const eligible = Object.entries(paths).filter(([, rows]) => rows.length >= REGIME_HOURLY_REQUIRED_CANDLES);
-  if (eligible.length < 8) return null;
-  const commonTime = Math.min(...eligible.map(([, rows]) => rows.at(-1)!.time));
+  const contextEligible = eligible.filter(([symbol]) => REGIME_CORE_SET.has(symbol));
+  if (contextEligible.length < 8) return null;
+  const commonTime = Math.min(...contextEligible.map(([, rows]) => rows.at(-1)!.time));
   const rows: Omit<Feature, "relative24" | "relative7" | "context">[] = [];
   for (const [symbol, path] of eligible) {
     const index = path.findIndex((row) => row.time === commonTime);
@@ -146,12 +154,13 @@ function synchronizedFeatures(paths: Record<string, GateCandle[]>) {
       low24: Math.min(...prior24.map((row) => row.low)), high7d: Math.max(...prior7.map((row) => row.high)),
       low7d: Math.min(...prior7.map((row) => row.low)) });
   }
-  if (rows.length < 8) return null;
-  const base = { median24: median(rows.map((row) => row.r24)), median7: median(rows.map((row) => row.r7d)),
-    median30: median(rows.map((row) => row.r30d)), breadth24: rows.filter((row) => row.r24 > 0).length / rows.length,
-    breadth7: rows.filter((row) => row.r7d > 0).length / rows.length,
-    breadth30: rows.filter((row) => row.r30d > 0).length / rows.length,
-    compression: median(rows.map((row) => row.compression)), markets: rows.length };
+  const contextRows = rows.filter((row) => REGIME_CORE_SET.has(row.symbol));
+  if (contextRows.length < 8) return null;
+  const base = { median24: median(contextRows.map((row) => row.r24)), median7: median(contextRows.map((row) => row.r7d)),
+    median30: median(contextRows.map((row) => row.r30d)), breadth24: contextRows.filter((row) => row.r24 > 0).length / contextRows.length,
+    breadth7: contextRows.filter((row) => row.r7d > 0).length / contextRows.length,
+    breadth30: contextRows.filter((row) => row.r30d > 0).length / contextRows.length,
+    compression: median(contextRows.map((row) => row.compression)), markets: contextRows.length };
   const context: RegimeContext = { ...base, at: commonTime * 1_000, regime: classifyRegime(base) };
   return { context, features: rows.map((row) => ({ ...row, relative24: row.r24 - context.median24,
     relative7: row.r7d - context.median7, context })) as Feature[] };
@@ -338,13 +347,26 @@ function makeTrade(config: RegimeStrategy, feature: Feature, found: FoundSignal,
   if (spread > .0012) return { trade: null, blocker: block(account, "SPREAD"), geometry };
   const multiplier = Math.max(meta.quantoMultiplier, 1e-12);
   const { entryPrice, stopPrice, targetPrice, stopRate, targetRate } = geometry;
-  const notionalMultiple = Math.min(.5, .015 / Math.max(stopRate + REGIME_FRICTION_RATE, 1e-9));
+  const satellite = REGIME_SATELLITE_SET.has(feature.symbol);
+  const tradeRiskRate = satellite ? REGIME_SATELLITE_TRADE_RISK_RATE : .015;
+  const notionalMultiple = Math.min(satellite ? .20 : .5,
+    tradeRiskRate / Math.max(stopRate + REGIME_FRICTION_RATE, 1e-9));
   if (notionalMultiple < .05) return { trade: null, blocker: block(account, "MIN_NOTIONAL"), geometry };
   const contractNotional = entryPrice * multiplier;
   const contracts = Math.floor(account.equity * notionalMultiple / contractNotional);
   if (contracts < 1) return { trade: null, blocker: block(account, "MIN_CONTRACT"), geometry };
   const notional = contracts * contractNotional;
   const plannedRisk = notional * (stopRate + REGIME_FRICTION_RATE);
+  if (satellite) {
+    const satelliteOpen = Object.values(account.open).filter((row) => REGIME_SATELLITE_SET.has(row.symbol));
+    const satelliteRisk = satelliteOpen.reduce((total, row) => total + row.plannedRisk, 0);
+    const satelliteSideRisk = satelliteOpen.filter((row) => row.side === side)
+      .reduce((total, row) => total + row.plannedRisk, 0);
+    if (satelliteRisk + plannedRisk > account.equity * REGIME_SATELLITE_ACCOUNT_RISK_CAP + 1e-8
+      || satelliteSideRisk + plannedRisk > account.equity * REGIME_SATELLITE_DIRECTION_RISK_CAP + 1e-8) {
+      return { trade: null, blocker: block(account, "SATELLITE_RISK_CAP"), geometry };
+    }
+  }
   if (openRisk(account) + plannedRisk > account.equity * .10 + 1e-8
     || openRisk(account, side) + plannedRisk > account.equity * .065 + 1e-8) return { trade: null, blocker: block(account, "RISK_CAP"), geometry };
   const leverage = selectSafeLeverage({ notional, equity: account.equity, entry: entryPrice, invalidation: stopPrice,
@@ -423,14 +445,16 @@ export function evaluateRegimePortfolio(input: { state: RegimePortfolioState; ho
   quotes: Record<string, ArenaQuote>; contracts: Record<string, RegimeContractMeta>; now: number }) {
   const state = advanceRegimePortfolio({ state: input.state, quotes: input.quotes, now: input.now });
   const synchronized = synchronizedFeatures(input.hourly);
-  state.warmMarkets = Object.values(input.hourly).filter((rows) => rows.length >= REGIME_HOURLY_REQUIRED_CANDLES).length;
+  state.warmMarkets = REGIME_UNIVERSE.filter((symbol) => (input.hourly[symbol]?.length ?? 0) >= REGIME_HOURLY_REQUIRED_CANDLES).length;
   if (!synchronized || state.lastEvaluatedHour === synchronized.context.at) return state;
   state.currentContext = synchronized.context;
   const accountState = state.accounts[synchronized.context.regime];
   const strategies = REGIME_STRATEGIES.filter((row) => row.system === synchronized.context.regime);
   const candidates = synchronized.features.flatMap((feature) => strategies.flatMap((config) => {
     const found = signal(config, feature); return found ? [{ feature, config, found }] : [];
-  })).sort((left, right) => right.found.strength - left.found.strength || left.config.id.localeCompare(right.config.id));
+  })).sort((left, right) => Number(REGIME_SATELLITE_SET.has(left.feature.symbol))
+    - Number(REGIME_SATELLITE_SET.has(right.feature.symbol))
+    || right.found.strength - left.found.strength || left.config.id.localeCompare(right.config.id));
   const forming = synchronized.features.flatMap((feature) => strategies.flatMap((config) => {
     if (signal(config, feature)) return [];
     return [{ feature, config, readiness: readiness(config, feature) }];
@@ -496,5 +520,9 @@ export function regimePortfolioSummary(state: RegimePortfolioState) {
       strategies: REGIME_STRATEGIES.filter((row) => row.system === id).map((row) => ({ ...row, lane: "ACTIVE", enabled: true })) })),
     currentRouteChecks: normalized.routeChecks, rules: { outcomeBasedPromotion: false, shadowExecution: false,
       perSystemInitialEquity: REGIME_ACCOUNT_INITIAL_EQUITY, mutuallyExclusiveRegimes: true, exhaustiveRegimeCoverage: true,
-      singleTradeRiskRate: .015, portfolioRiskCap: .10, correlatedRiskCap: .065, orderCopyRate: 1 } };
+      singleTradeRiskRate: .015, portfolioRiskCap: .10, correlatedRiskCap: .065, orderCopyRate: 1,
+      coreUniverse: [...REGIME_UNIVERSE], satelliteUniverse: [...REGIME_SATELLITE_UNIVERSE],
+      satelliteTradeRiskRate: REGIME_SATELLITE_TRADE_RISK_RATE,
+      satelliteAccountRiskCap: REGIME_SATELLITE_ACCOUNT_RISK_CAP,
+      satelliteCorrelatedRiskCap: REGIME_SATELLITE_DIRECTION_RISK_CAP } };
 }

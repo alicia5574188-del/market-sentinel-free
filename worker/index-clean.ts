@@ -26,7 +26,7 @@ import { CANONICAL_PAPER_REFERENCE_EQUITY, canonicalLivePortfolio, canonicalPape
   initialCanonicalPaperState, normalizeCanonicalPaperState, reconcileCanonicalPaper,
   type CanonicalPaperState } from "../lib/dual-paper.ts";
 import { advanceRegimePortfolio, evaluateRegimePortfolio, initialRegimePortfolio, normalizeRegimePortfolio,
-  REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE, resetRegimePortfolio,
+  REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE, resetRegimePortfolio,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
 import { advanceStrategyArena as advancePreviousStrategyArena,
@@ -500,7 +500,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         this.runtime.lastError = "authority checkpoint version mismatch; manual migration required";
       }
       if (this.authorityReady) {
-        const loaded = await Promise.all(REGIME_UNIVERSE.map(async (symbol) => {
+        const loaded = await Promise.all(REGIME_EXECUTION_UNIVERSE.map(async (symbol) => {
           try {
             return [symbol, await ctx.storage.get<RegimeHourlyPath>(regimeHourlyStorageKey(symbol))] as const;
           } catch (error) {
@@ -515,8 +515,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           const path = mergeRegimeHourlyPath([], rows ?? []);
           if (path.length) this.regimeHourly[symbol] = path;
         }
-        this.runtime.regimePortfolio.warmMarkets = Object.values(this.regimeHourly)
-          .filter((rows) => rows.length >= REGIME_HOURLY_REQUIRED_CANDLES).length;
+        this.runtime.regimePortfolio.warmMarkets = REGIME_UNIVERSE
+          .filter((symbol) => (this.regimeHourly[symbol]?.length ?? 0) >= REGIME_HOURLY_REQUIRED_CANDLES).length;
       }
       this.publishAuthority();
     });
@@ -650,7 +650,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       .sort((left, right) => right.score - left.score).map((candidate) => [candidate.symbol, candidate])).values()];
     this.runtime.marketRegimes = { ...regimes, candidates: stable };
     this.runtime.lastRadarAt = now;
-    const researchUniverse = REGIME_UNIVERSE.filter((symbol) => universe.has(symbol));
+    const researchUniverse = REGIME_EXECUTION_UNIVERSE.filter((symbol) => universe.has(symbol));
     // Existing PAPER/LIVE exposure always owns a realtime slot. Research symbols
     // fill only the remaining capacity, so a cutover cannot orphan protection.
     const protectedLocked = [...new Set([
@@ -769,7 +769,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private async refreshRegimeHourly(now: number) {
     const target = Math.floor(now / 3_600_000) * 3_600 - 3_600;
-    const storageRetry = REGIME_UNIVERSE.find((item) => {
+    const storageRetry = REGIME_EXECUTION_UNIVERSE.find((item) => {
       const failure = this.runtime.regimeHourlyFailures[item];
       return failure?.stage === "STORAGE" && failure.retryAt <= now
         && (this.regimeHourly[item]?.length ?? 0) >= REGIME_HOURLY_REQUIRED_CANDLES;
@@ -787,7 +787,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.evaluateRegimeNow(now);
       return 0;
     }
-    const symbol = REGIME_UNIVERSE.find((item) => {
+    const symbol = REGIME_EXECUTION_UNIVERSE.find((item) => {
       if (!this.contractCatalog.has(item)) return false;
       const rows = this.regimeHourly[item] ?? [];
       const failure = this.runtime.regimeHourlyFailures[item];
