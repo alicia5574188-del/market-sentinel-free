@@ -46,7 +46,7 @@ for(const ctx of contexts){
     const robustScore=magnitude/ctx.scale;
     if(robustScore<1.8 || runnerGap<0.002) continue;
     const prevRanked=[...ctx.rows].sort((a,b)=>direction*(b.prevRel4-a.prevRel4));
-    const prevTop=prevRanked[0], prevSecond=prevRanked[1];
+    const prevTop=prevRanked[0];
     const prevGapSame=direction*f.prevRel4-Math.max(...ctx.rows.filter(x=>x.symbol!==f.symbol).map(x=>direction*x.prevRel4));
     const e={
       time:ctx.time,ctx,f,direction,sideClass:direction>0?'UP_LEADER':'DOWN_LAGGARD',magnitude,runnerGap,robustScore,
@@ -123,4 +123,4 @@ const heldOutChecks=candidates.map(c=>({
 }));
 const result={research:'anomaly-exhaustion-trajectory',canonical:{signalSha256:raw.sha256,months:raw.months.length,symbols:raw.symbols},eventDefinition:{special:'most positive and most negative relative-4h member each hour; |relative4|>=1.2%, robustScore>=1.8, gap to runner-up>=0.2%',note:'selection finds unusual coins only; tags describe their relationship trajectory and do not assume trade direction'},thresholds:{relativeBreak:-0.001,marketSame:0.0005,anomalyShrink:-0.001,absoluteTurn:-0.001},events:events.length,discoveryCandidates:candidates,heldOutChecks,study:{discovery,validation,evaluation},protocolNote:'UP_LEADER and DOWN_LAGGARD are separated a priori because the user hypothesis specifically concerns asymmetric exhaustion of the strongest riser; no validation/evaluation outcome was used to define the tags.'};
 writeFileSync(OUTPUT,JSON.stringify(result,null,2));
-console.log(JSON.stringify({events:result.events,discoveryCandidates,heldOutChecks,focus:{discovery:{FIRST_BREAK_SHRINK_MARKET_SAME:discovery.FIRST_BREAK_SHRINK_MARKET_SAME,ABS_TURN_SHRINK_MARKET_SAME:discovery.ABS_TURN_SHRINK_MARKET_SAME},validation:{FIRST_BREAK_SHRINK_MARKET_SAME:validation.FIRST_BREAK_SHRINK_MARKET_SAME,ABS_TURN_SHRINK_MARKET_SAME:validation.ABS_TURN_SHRINK_MARKET_SAME},evaluation:{FIRST_BREAK_SHRINK_MARKET_SAME:evaluation.FIRST_BREAK_SHRINK_MARKET_SAME,ABS_TURN_SHRINK_MARKET_SAME:evaluation.ABS_TURN_SHRINK_MARKET_SAME}}},null,2));
+console.log(JSON.stringify({events:result.events,discoveryCandidates:result.discoveryCandidates,heldOutChecks:result.heldOutChecks,focus:{discovery:{FIRST_BREAK_SHRINK_MARKET_SAME:discovery.FIRST_BREAK_SHRINK_MARKET_SAME,ABS_TURN_SHRINK_MARKET_SAME:discovery.ABS_TURN_SHRINK_MARKET_SAME},validation:{FIRST_BREAK_SHRINK_MARKET_SAME:validation.FIRST_BREAK_SHRINK_MARKET_SAME,ABS_TURN_SHRINK_MARKET_SAME:validation.ABS_TURN_SHRINK_MARKET_SAME},evaluation:{FIRST_BREAK_SHRINK_MARKET_SAME:evaluation.FIRST_BREAK_SHRINK_MARKET_SAME,ABS_TURN_SHRINK_MARKET_SAME:evaluation.ABS_TURN_SHRINK_MARKET_SAME}}},null,2));
