@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'scripts/research-wide-passive-fill-markout.mjs'
+      - 'scripts/postprocess-wide-passive-fill-markout.mjs'
       - '.github/workflows/wide-passive-fill-markout.yml'
   workflow_dispatch:
 
@@ -20,13 +21,20 @@ jobs:
         with:
           node-version: 22.16.0
       - name: Syntax check
-        run: node --check scripts/research-wide-passive-fill-markout.mjs
-      - name: Run wide-passive fill/markout screen
+        run: |
+          node --check scripts/research-wide-passive-fill-markout.mjs
+          node --check scripts/postprocess-wide-passive-fill-markout.mjs
+      - name: Run wide-passive fill/markout raw screen
         env:
-          RESEARCH_OUTPUT: /tmp/wide-passive-fill-markout.json
+          RESEARCH_OUTPUT: /tmp/wide-passive-fill-markout-raw.json
         run: node scripts/research-wide-passive-fill-markout.mjs
+      - name: Apply independently audited hour quality gate
+        env:
+          RESEARCH_RAW_OUTPUT: /tmp/wide-passive-fill-markout-raw.json
+          RESEARCH_OUTPUT: /tmp/wide-passive-fill-markout.json
+        run: node scripts/postprocess-wide-passive-fill-markout.mjs
       - name: Print result
-        run: jq '{research,decision,protocol,validHours,invalidHours,preQualifiedOffsetsBps,evaluationOpened,evaluation,eraAggregates,sha256}' /tmp/wide-passive-fill-markout.json
+        run: jq '{research,decision,protocol,validHours,invalidHours,preQualifiedOffsetsBps,evaluationOpened,evaluation,evaluationSurvivors,eraAggregates,sha256}' /tmp/wide-passive-fill-markout.json
       - uses: actions/upload-artifact@v4
         with:
           name: wide-passive-fill-markout
