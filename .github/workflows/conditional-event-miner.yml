@@ -1,0 +1,52 @@
+name: Conditional Event Frequency Research
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research/replacement-engine-scan-20260914
+    paths:
+      - 'scripts/research-conditional-event-miner.mjs'
+      - '.github/workflows/conditional-event-miner.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  conditional-event-study:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      RESEARCH_DATASET: /tmp/gate-history-frequency-raw-12m.json
+      NORMALIZED_RESEARCH_DATASET: /tmp/gate-history-frequency-aligned-12m.json
+      EVENT_MINER_OUTPUT: /tmp/conditional-event-miner.json
+      RESEARCH_MONTHS: 202509,202510,202511,202512,202601,202602,202603,202604,202605,202606,202607,202608
+      RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT,SUI_USDT,UNI_USDT,DOT_USDT,TRX_USDT,TON_USDT,ETC_USDT,AAVE_USDT,NEAR_USDT,ICP_USDT,FIL_USDT,ATOM_USDT,ARB_USDT,OP_USDT,INJ_USDT,HBAR_USDT,XLM_USDT,ALGO_USDT,PEPE_USDT,WIF_USDT,APT_USDT,SEI_USDT,TIA_USDT,CRV_USDT,LDO_USDT,GRT_USDT,FET_USDT,SHIB_USDT
+      RESEARCH_INTERVAL: 5m
+      RESEARCH_MIN_CONTRACTS: 18
+      RESEARCH_MIN_MONTH_COVERAGE: 0.98
+      RESEARCH_CONCURRENCY: 8
+      NODE_OPTIONS: --max-old-space-size=6144
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Fetch 12-month Gate 5m high-coverage universe
+        run: node scripts/fetch-gate-history.mjs
+      - name: Align sparse high-coverage archives to the 5m clock
+        env:
+          RESEARCH_DATASET: ${{ env.RESEARCH_DATASET }}
+          NORMALIZED_RESEARCH_DATASET: ${{ env.NORMALIZED_RESEARCH_DATASET }}
+        run: node scripts/normalize-frequency-dataset.mjs
+      - name: Mine conditional high-frequency events
+        env:
+          RESEARCH_DATASET: ${{ env.NORMALIZED_RESEARCH_DATASET }}
+        run: node scripts/research-conditional-event-miner.mjs
+      - name: Upload conditional event report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conditional-event-frequency-research
+          path: /tmp/conditional-event-miner.json
+          if-no-files-found: warn

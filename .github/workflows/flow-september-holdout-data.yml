@@ -1,0 +1,51 @@
+name: Gate September Holdout Data
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research/replacement-engine-scan-20260914
+    paths:
+      - "scripts/fetch-gate-recent-price.mjs"
+      - ".github/workflows/flow-september-holdout-data.yml"
+
+jobs:
+  september-holdout:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      RECENT_PRICE_DATASET: /tmp/gate-price-5m-202609.json
+      FLOW_DATASET: /tmp/gate-flow-5m-202609.json
+      RECENT_FROM: 1788220800
+      FLOW_FROM: 1788220800
+      RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT,SUI_USDT,UNI_USDT,AAVE_USDT,FIL_USDT,ARB_USDT,PEPE_USDT,APT_USDT
+      RESEARCH_INTERVAL: 5m
+      FLOW_INTERVAL: 5m
+      FLOW_PAGE_LIMIT: 2000
+      FLOW_CONCURRENCY: 3
+      RESEARCH_CONCURRENCY: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Freeze completed 5m endpoint
+        shell: bash
+        run: |
+          END=$(( $(date +%s) / 300 * 300 ))
+          echo "RECENT_TO=$END" >> "$GITHUB_ENV"
+          echo "FLOW_TO=$END" >> "$GITHUB_ENV"
+          echo "holdout endpoint=$END"
+      - name: Fetch September completed 5m prices
+        run: node scripts/fetch-gate-recent-price.mjs
+      - name: Fetch September 5m flow history
+        run: node scripts/fetch-gate-flow-history.mjs
+      - name: Upload untouched September holdout
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-flow-september-holdout
+          path: |
+            /tmp/gate-price-5m-202609.json
+            /tmp/gate-flow-5m-202609.json
+          if-no-files-found: error
+          retention-days: 7

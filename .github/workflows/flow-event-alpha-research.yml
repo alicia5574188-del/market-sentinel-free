@@ -1,0 +1,56 @@
+name: Gate Flow Walk Forward Research
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research/replacement-engine-scan-20260914
+    paths:
+      - 'scripts/fetch-gate-flow-history.mjs'
+      - 'scripts/research-flow-event-alpha.mjs'
+      - 'scripts/research-flow-walkforward.mjs'
+      - '.github/workflows/flow-event-alpha-research.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  flow-walkforward-study:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PRICE_DATASET: /tmp/gate-price-5m-202604-202608.json
+      FLOW_DATASET: /tmp/gate-flow-5m-202604-202608.json
+      FLOW_WALK_OUTPUT: /tmp/flow-walkforward.json
+      RESEARCH_MONTHS: 202604,202605,202606,202607,202608
+      RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT,SUI_USDT,UNI_USDT,AAVE_USDT,FIL_USDT,ARB_USDT,PEPE_USDT,APT_USDT
+      RESEARCH_INTERVAL: 5m
+      RESEARCH_MIN_CONTRACTS: 18
+      RESEARCH_MIN_MONTH_COVERAGE: 0.98
+      RESEARCH_CONCURRENCY: 6
+      FLOW_FROM: '1775001600'
+      FLOW_TO: '1788220800'
+      FLOW_INTERVAL: 5m
+      FLOW_PAGE_LIMIT: 2000
+      FLOW_CONCURRENCY: 3
+      NODE_OPTIONS: --max-old-space-size=6144
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Fetch matching five-month Gate 5m price archive
+        env:
+          RESEARCH_DATASET: ${{ env.PRICE_DATASET }}
+        run: node scripts/fetch-gate-history.mjs
+      - name: Fetch five-month Gate 5m flow archive
+        run: node scripts/fetch-gate-flow-history.mjs
+      - name: Run no-lookahead flow walk-forward research
+        run: node scripts/research-flow-walkforward.mjs
+      - name: Upload flow walk-forward report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flow-walkforward-research
+          path: /tmp/flow-walkforward.json
+          if-no-files-found: warn

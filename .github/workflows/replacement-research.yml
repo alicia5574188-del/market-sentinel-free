@@ -1,0 +1,77 @@
+name: Replacement Engine Research
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-replacement-augment.mjs"
+      - "scripts/research-residual-microcells.mjs"
+      - ".github/workflows/replacement-research.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout research revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+
+      - name: Fetch frozen 44-month Gate 5m dataset
+        env:
+          RESEARCH_INTERVAL: 5m
+          RESEARCH_DATASET: /tmp/gate-history-44m-5m.json
+          RESEARCH_MONTHS: 202301,202302,202303,202304,202305,202306,202307,202308,202309,202310,202311,202312,202401,202402,202403,202404,202405,202406,202407,202408,202409,202410,202411,202412,202501,202502,202503,202504,202505,202506,202507,202508,202509,202510,202511,202512,202601,202602,202603,202604,202605,202606,202607,202608
+          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT
+          RESEARCH_MIN_CONTRACTS: 11
+          RESEARCH_MIN_MONTH_COVERAGE: 0.70
+          RESEARCH_CONCURRENCY: 12
+        run: node scripts/fetch-gate-history.mjs
+
+      - name: Build causal hourly signal dataset from same 5m archive
+        env:
+          RESEARCH_DATASET: /tmp/gate-history-44m-5m.json
+          RESEARCH_OUTPUT: /tmp/gate-history-44m-from5m-1h.json
+        run: node scripts/aggregate-gate-history.mjs
+
+      - name: Reproduce current five-regime baseline and test hourly augmentation
+        env:
+          RESEARCH_SIGNAL_DATASET: /tmp/gate-history-44m-from5m-1h.json
+          RESEARCH_EXECUTION_DATASET: /tmp/gate-history-44m-5m.json
+          RESEARCH_OUTPUT: /tmp/regime-baseline-reproduction.json
+          REPLACEMENT_OUTPUT: /tmp/replacement-augment.json
+        run: node scripts/research-replacement-augment.mjs
+
+      - name: Run discovery-only 5m residual micro-regime research
+        env:
+          RESEARCH_DATASET: /tmp/gate-history-44m-5m.json
+          RESIDUAL_OUTPUT: /tmp/residual-microcells.json
+        run: node --experimental-strip-types scripts/research-residual-microcells.mjs
+
+      - name: Print replacement decisions
+        run: |
+          echo '=== HOURLY AUGMENT ==='
+          jq '{replacementCandidate,replacementGates,baseline:{evaluationTradesPerDay:.baseline.evaluationTradesPerDay,stats:.baseline.stats.evaluation},augmented:{evaluationTradesPerDay:.augmented.evaluationTradesPerDay,stats:.augmented.stats.evaluation}}' /tmp/replacement-augment.json
+          echo '=== 5M RESIDUAL ==='
+          jq '{replacementLayerCandidate,rawCandidates,qualifiedCellCount,chosenCells,residualEvaluationTradesPerDay,combinedLogicalEvaluationTradesPerDayWithCurrentBaseline,gates,validation:.portfolios.validation,evaluation:.portfolios.evaluation}' /tmp/residual-microcells.json
+
+      - name: Upload full research outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: replacement-engine-research
+          path: |
+            /tmp/replacement-augment.json
+            /tmp/regime-baseline-reproduction.json
+            /tmp/residual-microcells.json
+          if-no-files-found: error
+          retention-days: 7

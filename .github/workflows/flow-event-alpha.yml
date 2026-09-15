@@ -1,0 +1,56 @@
+name: Gate Flow Event Alpha Research
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research/replacement-engine-scan-20260914
+    paths:
+      - "scripts/fetch-gate-flow-history.mjs"
+      - "scripts/research-flow-event-alpha.mjs"
+      - "scripts/research-flow-factor-rank.mjs"
+      - ".github/workflows/flow-event-alpha.yml"
+
+jobs:
+  flow-event-alpha:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PRICE_DATASET: /tmp/gate-price-5m-202604-202608.json
+      FLOW_DATASET: /tmp/gate-flow-5m-202604-202608.json
+      FLOW_RESEARCH_OUTPUT: /tmp/flow-event-alpha.json
+      FLOW_FACTOR_OUTPUT: /tmp/flow-factor-rank.json
+      RESEARCH_DATASET: /tmp/gate-price-5m-202604-202608.json
+      RESEARCH_MONTHS: 202604,202605,202606,202607,202608
+      RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT,SUI_USDT,UNI_USDT,AAVE_USDT,FIL_USDT,ARB_USDT,PEPE_USDT,APT_USDT
+      RESEARCH_INTERVAL: 5m
+      RESEARCH_MIN_CONTRACTS: 15
+      RESEARCH_MIN_MONTH_COVERAGE: 0.98
+      RESEARCH_CONCURRENCY: 8
+      FLOW_FROM: 1775001600
+      FLOW_TO: 1788220800
+      FLOW_INTERVAL: 5m
+      FLOW_PAGE_LIMIT: 2000
+      FLOW_CONCURRENCY: 3
+      NODE_OPTIONS: --max-old-space-size=6144
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Fetch Apr-Aug 2026 Gate 5m prices
+        run: node scripts/fetch-gate-history.mjs
+      - name: Fetch Apr-Aug 2026 Gate 5m flow history
+        run: node scripts/fetch-gate-flow-history.mjs
+      - name: Research OI taker liquidation threshold events
+        run: node scripts/research-flow-event-alpha.mjs
+      - name: Research cross-sectional flow factors
+        run: node scripts/research-flow-factor-rank.mjs
+      - name: Upload flow research
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-flow-research
+          path: |
+            /tmp/flow-event-alpha.json
+            /tmp/flow-factor-rank.json
+          if-no-files-found: error

@@ -1,0 +1,46 @@
+name: Cross Sectional Residual Research
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-cross-sectional-residual.mjs"
+      - ".github/workflows/cross-sectional-residual.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Fetch frozen 44-month Gate 5m dataset
+        env:
+          RESEARCH_INTERVAL: 5m
+          RESEARCH_DATASET: /tmp/gate-history-44m-5m.json
+          RESEARCH_MONTHS: 202301,202302,202303,202304,202305,202306,202307,202308,202309,202310,202311,202312,202401,202402,202403,202404,202405,202406,202407,202408,202409,202410,202411,202412,202501,202502,202503,202504,202505,202506,202507,202508,202509,202510,202511,202512,202601,202602,202603,202604,202605,202606,202607,202608
+          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT
+          RESEARCH_MIN_CONTRACTS: 11
+          RESEARCH_MIN_MONTH_COVERAGE: 0.70
+          RESEARCH_CONCURRENCY: 12
+        run: node scripts/fetch-gate-history.mjs
+      - name: Run frozen discovery-selected cross-sectional research
+        env:
+          RESEARCH_DATASET: /tmp/gate-history-44m-5m.json
+          CROSS_SECTION_OUTPUT: /tmp/cross-sectional-residual.json
+        run: node scripts/research-cross-sectional-residual.mjs
+      - name: Print decision
+        run: jq '{replacementCandidate,selected,combined,evaluationTradesPerDay,logicalCombinedWithFiveRegimePerDay,gates,top:[.audit[:12][]|{config,pass,discovery,validation,evaluation}]}' /tmp/cross-sectional-residual.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cross-sectional-residual-research
+          path: /tmp/cross-sectional-residual.json
+          retention-days: 7

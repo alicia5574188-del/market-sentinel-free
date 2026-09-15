@@ -1,0 +1,52 @@
+import { readFileSync, writeFileSync } from "node:fs";
+
+const PRICE_INPUT=process.env.RESEARCH_DATASET??"/tmp/gate-history-frequency-aligned-12m.json";
+const STATS_INPUT=process.env.STATS_DATASET??"/tmp/gate-contract-stats-4h.json";
+const OUTPUT=process.env.STATS_RESEARCH_OUTPUT??"/tmp/contract-stats-frequency-research.json";
+const priceRaw=JSON.parse(readFileSync(PRICE_INPUT,"utf8")),statsRaw=JSON.parse(readFileSync(STATS_INPUT,"utf8"));
+if(priceRaw.interval!=="5m"||statsRaw.interval!=="4h")throw new Error("Expected 5m price + 4h contract stats");
+const FRICTION=.0014,STRESS=.0022,SLIP=.00025,DAY=86400000,STEP4=4*3600,STEP8=8*3600;
+const START=statsRaw.from*1000,END=statsRaw.to*1000,TRAIN_END=Date.UTC(2026,6,1);
+const sum=xs=>xs.reduce((a,b)=>a+b,0),mean=xs=>xs.length?sum(xs)/xs.length:0;
+const stdev=xs=>{const m=mean(xs);return Math.sqrt(mean(xs.map(x=>(x-m)**2)));};
+const monthKey=ms=>new Date(ms).toISOString().slice(0,7).replace("-","");
+const price=new Map(priceRaw.datasets.map(d=>[d.symbol,d.rows]));
+const usable=statsRaw.datasets.filter(d=>d.coverage>=.90&&price.has(d.symbol));
+const SYMBOLS=usable.map(d=>d.symbol);if(SYMBOLS.length<8)throw new Error(`Need >=8 stats-covered symbols, got ${SYMBOLS.length}`);
+const stats=new Map(usable.map(d=>[d.symbol,d.rows])),statsIndex=new Map(usable.map(d=>[d.symbol,new Map(d.rows.map((r,i)=>[r.time,i]))]));
+const priceIndex=new Map();for(const s of SYMBOLS){const m=new Map();for(let i=0;i<price.get(s).length;i++)m.set(price.get(s)[i].time,i);priceIndex.set(s,m);}
+const safeLog=x=>Math.log(Math.max(x,1e-9));
+const pct=(a,b)=>b>0?a/b-1:0;
+
+const FAMILIES=["FUNDING_CARRY","FUNDING_OI_CROWD","OI_PRICE_CONFIRM","OI_PRICE_DIVERGENCE","CROWD_CONTRA","TAKER_CONT","TAKER_CONTRA","LIQ_REVERSAL","DELEVER_REVERSAL","COMPOSITE_CONTRA","COMPOSITE_TREND"];
+const CONFIGS=[];for(const family of FAMILIES)for(const legs of [3,4])CONFIGS.push({id:`stats-${family.toLowerCase()}-n${legs}`,family,legs});
+
+function feature(symbol,t){const rows=stats.get(symbol),i=statsIndex.get(symbol).get(t);if(i==null||i<18)return null;const a=rows[i],p2=rows[i-2],p6=rows[i-6],p18=rows[i-18];if(!p2||!p6||!p18)return null;
+  const oi8=pct(a.open_interest_usd,p2.open_interest_usd),oi24=pct(a.open_interest_usd,p6.open_interest_usd),oi72=pct(a.open_interest_usd,p18.open_interest_usd);
+  const r8=pct(a.mark_price,p2.mark_price),r24=pct(a.mark_price,p6.mark_price),r72=pct(a.mark_price,p18.mark_price);
+  const taker=(a.long_taker_size-a.short_taker_size)/Math.max(a.long_taker_size+a.short_taker_size,1);
+  const liq=(a.long_liq_usd-a.short_liq_usd)/Math.max(a.long_liq_usd+a.short_liq_usd+Math.abs(a.open_interest_usd)*1e-6,1);
+  return{symbol,t,entryT:t+STEP4,funding:a.last_funding_rate,oi8,oi24,oi72,r8,r24,r72,taker,lsr:safeLog(a.lsr_account),topLsr:safeLog(a.top_lsr_size),topAcct:safeLog(a.top_lsr_account),userLsr:safeLog((a.long_users+1)/(a.short_users+1)),liq};}
+function crossZ(fs,key){const xs=fs.map(f=>f[key]),m=mean(xs),sd=stdev(xs);for(const f of fs)f[`z_${key}`]=sd>1e-12?(f[key]-m)/sd:0;}
+function score(c,f){const q=k=>f[`z_${k}`]??0;
+  if(c.family==="FUNDING_CARRY")return-q("funding");
+  if(c.family==="FUNDING_OI_CROWD")return-q("funding")+.35*Math.sign(-q("funding"))*Math.max(q("oi24"),0);
+  if(c.family==="OI_PRICE_CONFIRM")return q("r24")+.55*q("oi24")+.15*q("taker");
+  if(c.family==="OI_PRICE_DIVERGENCE")return q("r24")-.75*q("oi24");
+  if(c.family==="CROWD_CONTRA")return-.55*q("topLsr")-.30*q("lsr")-.25*q("funding")-.15*q("userLsr");
+  if(c.family==="TAKER_CONT")return q("taker")+.35*q("r8")+.15*q("oi8");
+  if(c.family==="TAKER_CONTRA")return-q("taker")-.25*q("r8");
+  if(c.family==="LIQ_REVERSAL")return q("liq")-.35*q("r8");
+  if(c.family==="DELEVER_REVERSAL")return-q("r24")-.55*q("oi24")-.15*q("taker");
+  if(c.family==="COMPOSITE_CONTRA")return-.35*q("funding")-.25*q("topLsr")-.20*q("lsr")-.20*q("r8")-.15*q("taker")+.15*q("liq");
+  if(c.family==="COMPOSITE_TREND")return .35*q("r24")+.30*q("oi24")+.25*q("taker")-.10*q("funding");
+  return 0;}
+function legTrade(symbol,direction,entryT,friction=FRICTION,slippage=SLIP){const rows=price.get(symbol),idx=priceIndex.get(symbol).get(entryT);if(idx==null)return null;const exitIdx=priceIndex.get(symbol).get(entryT+STEP8);if(exitIdx==null)return null;const entry=rows[idx].open*(1+direction*slippage),stopRate=.04,stop=entry*(1-direction*stopRate);let exit=rows[exitIdx].open,outcome="TIME";for(let k=idx+1;k<=exitIdx;k++){const p=rows[k].open;if(direction>0?p<=stop:p>=stop){exit=stop;outcome="STOP";break;}}const gross=direction*(exit-entry)/entry,net=gross-friction;return{symbol,direction,openedAt:entryT*1000,closedAt:(entryT+STEP8)*1000,entry,exit,stopRate,grossReturn:gross,netReturn:net,outcome};}
+
+const timeline=[...new Set(usable.flatMap(d=>d.rows.map(r=>r.time)))].sort((a,b)=>a-b).filter(t=>t%STEP8===0);
+function simulate(c,{friction=FRICTION,slippage=SLIP}={}){let equity=1000,peak=1000,maxDD=0,baskets=0;const trades=[],monthly=new Map();for(const t of timeline){const fs=SYMBOLS.map(s=>feature(s,t)).filter(Boolean);if(fs.length<2*c.legs)continue;for(const k of ["funding","oi8","oi24","oi72","r8","r24","r72","taker","lsr","topLsr","topAcct","userLsr","liq"])crossZ(fs,k);const ranked=fs.map(f=>({...f,alpha:score(c,f)})).sort((a,b)=>a.alpha-b.alpha),picks=[...ranked.slice(-c.legs).map(x=>[x.symbol,1,x.alpha]),...ranked.slice(0,c.legs).map(x=>[x.symbol,-1,x.alpha])];const notional0=equity/(2*c.legs),batch=[];for(const [s,d,a] of picks){const tr=legTrade(s,d,t+STEP4,friction,slippage);if(tr)batch.push({...tr,alpha:a,configId:c.id,notional:notional0,plannedRisk:notional0*(.04+friction),netPnl:notional0*tr.netReturn});}if(batch.length!==2*c.legs)continue;const total=sum(batch.map(x=>x.plannedRisk)),lr=sum(batch.filter(x=>x.direction>0).map(x=>x.plannedRisk)),sr=sum(batch.filter(x=>x.direction<0).map(x=>x.plannedRisk));const scale=Math.min(1,equity*.10/Math.max(total,1e-9),equity*.065/Math.max(lr,1e-9),equity*.065/Math.max(sr,1e-9));const pnl=sum(batch.map(tr=>{tr.notional*=scale;tr.plannedRisk*=scale;tr.netPnl=tr.notional*tr.netReturn;trades.push(tr);const m=monthKey(tr.closedAt);monthly.set(m,(monthly.get(m)??0)+tr.netPnl);return tr.netPnl;}));equity=Math.max(.01,equity+pnl);peak=Math.max(peak,equity);maxDD=Math.max(maxDD,(peak-equity)/Math.max(peak,1e-9));baskets++;}
+  const period=(a,b)=>{const xs=trades.filter(t=>t.openedAt>=a&&t.openedAt<b),g=sum(xs.filter(t=>t.netPnl>0).map(t=>t.netPnl)),l=Math.abs(sum(xs.filter(t=>t.netPnl<=0).map(t=>t.netPnl)));return{trades:xs.length,tradesPerDay:xs.length/((b-a)/DAY),netPnl:sum(xs.map(t=>t.netPnl)),profitFactor:l?g/l:g?99:0,winRate:xs.length?xs.filter(t=>t.netPnl>0).length/xs.length:0};};const g=sum(trades.filter(t=>t.netPnl>0).map(t=>t.netPnl)),l=Math.abs(sum(trades.filter(t=>t.netPnl<=0).map(t=>t.netPnl)));return{config:c,baskets,trades:trades.length,tradesPerDay:trades.length/((END-START)/DAY),netPnl:equity-1000,endEquity:equity,profitFactor:l?g/l:g?99:0,winRate:trades.length?trades.filter(t=>t.netPnl>0).length/trades.length:0,maxDrawdown:maxDD,monthly:Object.fromEntries([...monthly].sort()),train:period(START,TRAIN_END),test:period(TRAIN_END,END)};}
+
+const audit=[],base=new Map(),foldEdges=[START,START+(TRAIN_END-START)/3,START+2*(TRAIN_END-START)/3,TRAIN_END];for(const c of CONFIGS){const r=simulate(c);base.set(c.id,r);const folds=[];for(let i=0;i<3;i++){const a=foldEdges[i],b=foldEdges[i+1],xs={trades:0,netPnl:0,profitFactor:0};const tempTrades=[];for(const [m,v] of Object.entries(r.monthly)){const ms=Date.parse(m.slice(0,4)+"-"+m.slice(4)+"-01T00:00:00Z");if(ms>=a&&ms<b)tempTrades.push(v);}xs.netPnl=sum(tempTrades);folds.push(xs);}const stable=folds.filter(x=>x.netPnl>0).length>=2&&r.train.netPnl>0&&r.train.profitFactor>=1.05&&r.train.tradesPerDay>=15;const score=stable?(r.train.profitFactor-1)*Math.sqrt(r.train.trades):0;audit.push({config:c,train:r.train,test:r.test,folds,stable,score,full:{trades:r.trades,tradesPerDay:r.tradesPerDay,netPnl:r.netPnl,profitFactor:r.profitFactor,maxDrawdown:r.maxDrawdown}});}
+const eligible=audit.filter(x=>x.stable).sort((a,b)=>b.score-a.score),chosen=eligible[0]?.config??null,best=chosen?base.get(chosen.id):null,stress=chosen?simulate(chosen,{friction:STRESS}):null,adverse=chosen?simulate(chosen,{slippage:SLIP*2}):null;const gates=best?{frequency:best.tradesPerDay>=15,pf:best.profitFactor>=1.10,drawdown:best.maxDrawdown<=.08,train:best.train.netPnl>0&&best.train.profitFactor>=1.05,test:best.test.netPnl>0&&best.test.profitFactor>=1.05,stress:stress.netPnl>0&&stress.profitFactor>=1.02,adverse:adverse.netPnl>0&&adverse.profitFactor>=1.02}:{};
+const report={generatedAt:new Date().toISOString(),dataset:{source:statsRaw.source,from:statsRaw.from,to:statsRaw.to,usable:SYMBOLS,coverage:Object.fromEntries(usable.map(d=>[d.symbol,d.coverage]))},architecture:{type:"Gate-native derivatives-stat cross-sectional long-short",features:["funding","OI change","taker imbalance","account crowding","top-trader crowding","liquidation imbalance","mark-price returns"],frequency:"3/4 long + equal shorts every 8h; 3+3 structurally targets ~18 trades/day",antiLeakage:"4h stats timestamp t is acted on only at t+4h",risk:"shared 1000U, 1x gross before scaling, <=10% total planned stop risk, <=6.5% same-side",cost:"0.14% round-trip friction + 0.025% adverse entry; 0.22% stress; funding cashflow excluded from PnL",selection:"Mar20-Jun30 train, Jul-Aug untouched test"},audit,chosen:chosen?.id??null,best,stress,adverse,gates,targetMet:Object.keys(gates).length>0&&Object.values(gates).every(Boolean)};writeFileSync(OUTPUT,JSON.stringify(report,null,2)+"\n");console.log("CONTRACT_STATS_FREQUENCY_RESULT="+JSON.stringify({targetMet:report.targetMet,symbols:SYMBOLS.length,chosen:report.chosen,best:best&&{trades:best.trades,tradesPerDay:best.tradesPerDay,net:best.netPnl,pf:best.profitFactor,dd:best.maxDrawdown,train:best.train,test:best.test},stress:stress&&{net:stress.netPnl,pf:stress.profitFactor,dd:stress.maxDrawdown},adverse:adverse&&{net:adverse.netPnl,pf:adverse.profitFactor,dd:adverse.maxDrawdown},top:audit.sort((a,b)=>b.score-a.score||b.train.profitFactor-a.train.profitFactor).slice(0,12).map(x=>({id:x.config.id,stable:x.stable,score:x.score,train:x.train,test:x.test,full:x.full,folds:x.folds})),gates},null,2));

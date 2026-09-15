@@ -1,0 +1,54 @@
+name: Premium Frequency Research
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research/replacement-engine-scan-20260914
+    paths:
+      - 'scripts/fetch-gate-premium-history.mjs'
+      - 'scripts/research-premium-frequency.mjs'
+      - '.github/workflows/premium-frequency-research.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  premium-frequency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      RESEARCH_DATASET: /tmp/gate-history-frequency-raw-12m.json
+      NORMALIZED_RESEARCH_DATASET: /tmp/gate-history-frequency-aligned-12m.json
+      PREMIUM_DATASET: /tmp/gate-premium-8h-12m.json
+      PREMIUM_RESEARCH_OUTPUT: /tmp/premium-frequency-research.json
+      RESEARCH_MONTHS: 202509,202510,202511,202512,202601,202602,202603,202604,202605,202606,202607,202608
+      RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT,SUI_USDT,UNI_USDT,AAVE_USDT,FIL_USDT,ARB_USDT,PEPE_USDT,APT_USDT
+      PREMIUM_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT,SUI_USDT,UNI_USDT,AAVE_USDT,FIL_USDT,ARB_USDT,PEPE_USDT,APT_USDT
+      RESEARCH_INTERVAL: 5m
+      RESEARCH_MIN_CONTRACTS: 18
+      RESEARCH_MIN_MONTH_COVERAGE: 0.98
+      RESEARCH_CONCURRENCY: 8
+      NODE_OPTIONS: --max-old-space-size=6144
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Fetch 12-month Gate 5m execution prices
+        run: node scripts/fetch-gate-history.mjs
+      - name: Align sparse high-coverage price archives
+        run: node scripts/normalize-frequency-dataset.mjs
+      - name: Fetch Gate 8h premium-index history
+        run: node scripts/fetch-gate-premium-history.mjs
+      - name: Run premium-index frequency study
+        env:
+          RESEARCH_DATASET: /tmp/gate-history-frequency-aligned-12m.json
+        run: node scripts/research-premium-frequency.mjs
+      - name: Upload premium research report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: premium-frequency-research
+          path: /tmp/premium-frequency-research.json
+          if-no-files-found: warn
