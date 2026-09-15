@@ -1,0 +1,35 @@
+name: Gate Anchor Data Audit
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/research-gate-anchor-data-audit.mjs'
+      - '.github/workflows/gate-anchor-data-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Syntax check
+        run: node --check scripts/research-gate-anchor-data-audit.mjs
+      - name: Audit Gate trade mark index premium history
+        env:
+          RESEARCH_OUTPUT: /tmp/gate-anchor-data-audit.json
+        run: node scripts/research-gate-anchor-data-audit.mjs
+      - name: Print result
+        run: jq '{research,objective,decision,premiumDecision,diagnostics,sha256,probes,minuteProbes}' /tmp/gate-anchor-data-audit.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gate-anchor-data-audit
+          path: /tmp/gate-anchor-data-audit.json
+          retention-days: 7
