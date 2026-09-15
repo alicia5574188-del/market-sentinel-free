@@ -25,9 +25,12 @@ function gaps(rows) {
 }
 async function getJson(path) {
   let last;
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      const r = await fetch(`${BASE}${path}`, { headers: { Accept: "application/json", "User-Agent": "market-sentinel-research" } });
+      const r = await fetch(`${BASE}${path}`, {
+        headers: { Accept: "application/json", "User-Agent": "market-sentinel-research" },
+        signal: AbortSignal.timeout(8_000),
+      });
       const text = await r.text();
       if (!r.ok) throw new Error(`HTTP ${r.status}: ${text.slice(0, 240)}`);
       const value = JSON.parse(text);
@@ -35,15 +38,15 @@ async function getJson(path) {
       return value;
     } catch (error) {
       last = error;
-      await sleep(350 * (attempt + 1));
+      await sleep(300 * (attempt + 1));
     }
   }
   throw last;
 }
-async function series(kind, symbol, from, to) {
-  if (kind === "premium") return getJson(`/futures/usdt/premium_index?contract=${symbol}&from=${from}&to=${to}&interval=${INTERVAL}`);
+async function series(kind, symbol, from, to, interval = INTERVAL) {
+  if (kind === "premium") return getJson(`/futures/usdt/premium_index?contract=${symbol}&from=${from}&to=${to}&interval=${interval}`);
   const contract = kind === "trade" ? symbol : `${kind}_${symbol}`;
-  return getJson(`/futures/usdt/candlesticks?contract=${contract}&from=${from}&to=${to}&interval=${INTERVAL}`);
+  return getJson(`/futures/usdt/candlesticks?contract=${contract}&from=${from}&to=${to}&interval=${interval}`);
 }
 function mapClose(rows) { return new Map(rows.map((r) => [Number(r.t), Number(r.c)]).filter(([, c]) => Number.isFinite(c))); }
 
@@ -54,10 +57,10 @@ for (const date of WINDOWS) {
   for (const symbol of SYMBOLS) {
     const row = { date, symbol, from, to, interval: INTERVAL, expected: EXPECTED, errors: {} };
     const data = {};
-    for (const kind of ["trade", "mark", "index", "premium"]) {
-      try { data[kind] = await series(kind, symbol, from, to); }
-      catch (error) { data[kind] = []; row.errors[kind] = String(error?.message ?? error); }
-      await sleep(120);
+    const settled = await Promise.allSettled(["trade", "mark", "index", "premium"].map((kind) => series(kind, symbol, from, to)));
+    for (const [i, kind] of ["trade", "mark", "index", "premium"].entries()) {
+      if (settled[i].status === "fulfilled") data[kind] = settled[i].value;
+      else { data[kind] = []; row.errors[kind] = String(settled[i].reason?.message ?? settled[i].reason); }
     }
     for (const kind of ["trade", "mark", "index", "premium"]) {
       row[`${kind}Count`] = data[kind].length;
@@ -82,24 +85,19 @@ for (const date of WINDOWS) {
     row.anchorCorePass = row.tradeCoverage >= .98 && row.markCoverage >= .98 && row.indexCoverage >= .98 && row.anchorAlignment >= .98;
     row.premiumPass = row.premiumCoverage >= .98 && row.premiumAlignment >= .98;
     probes.push(row);
+    await sleep(100);
   }
 }
 
-// 1m granularity audit on the oldest and newest eras for the two most liquid contracts.
 const minuteProbes = [];
 for (const date of ["2023-09-15", "2026-06-15"]) {
-  const from = epoch(date), to = from + 3_600 - 60; // one hour, 60 points
+  const from = epoch(date), to = from + 3_600 - 60;
   for (const symbol of ["BTC_USDT", "ETH_USDT"]) {
     const rec = { date, symbol, expected: 60 };
-    for (const kind of ["trade", "mark", "index", "premium"]) {
-      try {
-        const path = kind === "premium"
-          ? `/futures/usdt/premium_index?contract=${symbol}&from=${from}&to=${to}&interval=1m`
-          : `/futures/usdt/candlesticks?contract=${kind === "trade" ? symbol : `${kind}_${symbol}`}&from=${from}&to=${to}&interval=1m`;
-        const rows = await getJson(path);
-        rec[`${kind}Count`] = rows.length;
-      } catch (error) { rec[`${kind}Count`] = 0; rec[`${kind}Error`] = String(error?.message ?? error); }
-      await sleep(120);
+    const settled = await Promise.allSettled(["trade", "mark", "index", "premium"].map((kind) => series(kind, symbol, from, to, "1m")));
+    for (const [i, kind] of ["trade", "mark", "index", "premium"].entries()) {
+      if (settled[i].status === "fulfilled") rec[`${kind}Count`] = settled[i].value.length;
+      else { rec[`${kind}Count`] = 0; rec[`${kind}Error`] = String(settled[i].reason?.message ?? settled[i].reason); }
     }
     rec.pass = ["trade","mark","index","premium"].every((k) => rec[`${k}Count`] >= 59);
     minuteProbes.push(rec);
