@@ -1,0 +1,52 @@
+name: Current Regime PRM Turnover Research
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/research-current-regime-prm-turnover.mjs'
+      - '.github/workflows/current-regime-prm-turnover.yml'
+      - 'lib/regime-portfolio.ts'
+      - 'lib/liquidity-core.ts'
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Syntax check
+        run: node --check scripts/research-current-regime-prm-turnover.mjs
+      - name: Fetch 13-month Gate 5m futures prices
+        env:
+          RESEARCH_INTERVAL: 5m
+          RESEARCH_DATASET: /tmp/gate-5m-13m.json
+          RESEARCH_MONTHS: 202508,202509,202510,202511,202512,202601,202602,202603,202604,202605,202606,202607,202608
+          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT,SUI_USDT,UNI_USDT,FIL_USDT,AAVE_USDT,ARB_USDT,APT_USDT,PEPE_USDT,WLD_USDT
+          RESEARCH_MIN_CONTRACTS: 19
+          RESEARCH_MIN_MONTH_COVERAGE: 0.98
+          RESEARCH_CONCURRENCY: 16
+        run: node scripts/fetch-gate-history.mjs
+      - name: Aggregate 5m to 1h
+        env:
+          RESEARCH_DATASET: /tmp/gate-5m-13m.json
+          RESEARCH_OUTPUT: /tmp/gate-1h-13m.json
+        run: node scripts/aggregate-gate-history.mjs
+      - name: Run current regime plus PRM turnover replay
+        env:
+          RESEARCH_5M_DATASET: /tmp/gate-5m-13m.json
+          RESEARCH_1H_DATASET: /tmp/gate-1h-13m.json
+          RESEARCH_OUTPUT: /tmp/current-regime-prm-turnover.json
+        run: node --experimental-strip-types scripts/research-current-regime-prm-turnover.mjs
+      - name: Print result
+        run: jq '{research,objective,data,protocol,periods,regimeInventory,regimeOnly,prmOne,search,limitations}' /tmp/current-regime-prm-turnover.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: current-regime-prm-turnover
+          path: /tmp/current-regime-prm-turnover.json
+          retention-days: 7
