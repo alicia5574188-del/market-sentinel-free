@@ -1,59 +1,14 @@
 name: Single Symbol Frozen Backward Replay
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "scripts/research-single-symbol-frozen-replay.mjs"
-      - "research/frozen-single-symbol-exhaustion.json"
-      - ".github/workflows/single-symbol-frozen-backward.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   research:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - profile: strict12
-            min_contracts: 12
-            min_coverage: 0.98
-          - profile: relaxed19
-            min_contracts: 19
-            min_coverage: 0.92
     runs-on: ubuntu-latest
-    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.16.0
-      - name: Syntax check
-        run: node --check scripts/research-single-symbol-frozen-replay.mjs
-      - name: Fetch untouched earlier 12-month Gate 5m universe
-        env:
-          RESEARCH_INTERVAL: 5m
-          RESEARCH_DATASET: /tmp/gate-history-backward-${{ matrix.profile }}.json
-          RESEARCH_MONTHS: 202409,202410,202411,202412,202501,202502,202503,202504,202505,202506,202507,202508
-          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT,SUI_USDT,UNI_USDT,FIL_USDT,AAVE_USDT,ARB_USDT,APT_USDT,PEPE_USDT,WLD_USDT
-          RESEARCH_MIN_CONTRACTS: ${{ matrix.min_contracts }}
-          RESEARCH_MIN_MONTH_COVERAGE: ${{ matrix.min_coverage }}
-          RESEARCH_CONCURRENCY: 16
-        run: node scripts/fetch-gate-history.mjs
-      - name: Run frozen backward OOS replay
-        env:
-          RESEARCH_DATASET: /tmp/gate-history-backward-${{ matrix.profile }}.json
-          RESEARCH_CONFIG: research/frozen-single-symbol-exhaustion.json
-          RESEARCH_OUTPUT: /tmp/single-symbol-frozen-backward-${{ matrix.profile }}.json
-        run: node scripts/research-single-symbol-frozen-replay.mjs
-      - name: Print result
-        run: jq '{period,universe,frozenLaneCount,presentLaneCount,raw,unique,overlapRate,monthly,quarters,bySymbol,note}' /tmp/single-symbol-frozen-backward-${{ matrix.profile }}.json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: single-symbol-frozen-backward-${{ matrix.profile }}
-          path: /tmp/single-symbol-frozen-backward-${{ matrix.profile }}.json
-          retention-days: 7
+      - run: node --check scripts/research-single-symbol-frozen-replay.mjs
