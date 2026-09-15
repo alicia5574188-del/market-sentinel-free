@@ -1,0 +1,46 @@
+name: Leader Lag Cross Era
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'scripts/research-leader-lag-cross-era.mjs'
+      - 'scripts/fetch-gate-history.mjs'
+      - '.github/workflows/leader-lag-cross-era.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Syntax check
+        run: node --check scripts/research-leader-lag-cross-era.mjs
+      - name: Fetch 24-month Gate 1h futures prices
+        env:
+          RESEARCH_INTERVAL: 1h
+          RESEARCH_DATASET: /tmp/gate-price-24m.json
+          RESEARCH_MONTHS: 202409,202410,202411,202412,202501,202502,202503,202504,202505,202506,202507,202508,202509,202510,202511,202512,202601,202602,202603,202604,202605,202606,202607,202608
+          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT,SUI_USDT,UNI_USDT,FIL_USDT,AAVE_USDT,ARB_USDT,APT_USDT,PEPE_USDT,WLD_USDT
+          RESEARCH_MIN_CONTRACTS: '15'
+          RESEARCH_MIN_MONTH_COVERAGE: '0.98'
+          RESEARCH_CONCURRENCY: '16'
+        run: node scripts/fetch-gate-history.mjs
+      - name: Run leader lag cross-era frontier
+        env:
+          RESEARCH_DATASET: /tmp/gate-price-24m.json
+          RESEARCH_OUTPUT: /tmp/leader-lag-cross-era.json
+        run: node scripts/research-leader-lag-cross-era.mjs
+      - name: Print result
+        run: jq '{periods,symbols,grid,diagnostics,eligible,targetFrequencyQualified,frozen,results,evaluationRobust,evaluationTarget,topNear:(.topNear[:12]),topEligible:(.topEligible[:12]),topTargetFrequency:(.topTargetFrequency[:12]),note}' /tmp/leader-lag-cross-era.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: leader-lag-cross-era
+          path: /tmp/leader-lag-cross-era.json
+          retention-days: 7
