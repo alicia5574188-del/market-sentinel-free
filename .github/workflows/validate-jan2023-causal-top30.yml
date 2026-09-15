@@ -1,0 +1,115 @@
+name: Validate Jan 2023 Causal Top30
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/validate-jan2023-causal-top30.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Select Jan 2023 top30 causally by estimated quote notional
+        run: |
+          cat > /tmp/select-cohort.mjs <<'EOF'
+          import { gunzipSync } from 'node:zlib';
+          import { mkdirSync, writeFileSync } from 'node:fs';
+          mkdirSync('/tmp/jan-cache',{recursive:true});
+          const month='202301';
+          const listUrl='https://gateio-public-data.s3.amazonaws.com/?list-type=2&prefix=futures_usdt%2Fcandlesticks_5m%2F202301%2F&max-keys=1000';
+          const xml=await (await fetch(listUrl)).text();
+          const symbols=[...new Set([...xml.matchAll(/<Key>futures_usdt\/candlesticks_5m\/202301\/([^/<]+_USDT)-202301\.csv\.gz<\/Key>/g)].map(m=>m[1]))];
+          const contracts=[]; let offset=0;
+          for(;;){const u=`https://api.gateio.ws/api/v4/futures/usdt/contracts_all?limit=1000&offset=${offset}`;const r=await fetch(u);if(!r.ok)throw new Error(`contracts_all ${r.status}`);const a=await r.json();contracts.push(...a);if(a.length<1000)break;offset+=a.length;}
+          const mult=new Map(contracts.map(x=>[x.name,Number(x.quanto_multiplier)]));
+          const excluded=new Set(['DEFI_USDT','EXCH_USDT','PRIV_USDT','XAUG_USDT']);
+          const rows=[];let cursor=0;
+          async function worker(){while(cursor<symbols.length){const sym=symbols[cursor++];if(excluded.has(sym))continue;const qm=mult.get(sym);if(!(qm>0))continue;const url=`https://download.gatedata.org/futures_usdt/candlesticks_5m/202301/${sym}-202301.csv.gz`;try{const r=await fetch(url);if(!r.ok)continue;const b=Buffer.from(await r.arrayBuffer());writeFileSync(`/tmp/jan-cache/${sym}.gz`,b);const text=gunzipSync(b).toString('utf8').trim();let q=0,n=0;for(const line of text.split('\n')){const [t,v,c]=line.split(',').map(Number);if(t>0&&v>=0&&c>0){q+=v*qm*c;n++;}}if(n>=7000)rows.push({symbol:sym,quoteNotional:q,rows:n,quantoMultiplier:qm});}catch{}}}
+          await Promise.all(Array.from({length:16},worker));
+          rows.sort((a,b)=>b.quoteNotional-a.quoteNotional);
+          const top30=rows.slice(0,30);
+          writeFileSync('/tmp/jan2023-top30.json',JSON.stringify({selectionMonth:month,listedSymbols:symbols.length,eligibleRanked:rows.length,excluded:[...excluded],top30},null,2));
+          console.log(JSON.stringify({listed:symbols.length,ranked:rows.length,top30:top30.map(x=>x.symbol)},null,2));
+          EOF
+          node /tmp/select-cohort.mjs
+      - name: Build sparse 44-month top30 dataset without survivor filtering
+        run: |
+          cat > /tmp/build-sparse.mjs <<'EOF'
+          import { createHash } from 'node:crypto';
+          import { gunzipSync } from 'node:zlib';
+          import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+          const cohort=JSON.parse(readFileSync('/tmp/jan2023-top30.json','utf8')).top30.map(x=>x.symbol);
+          const months=[];for(let y=2023,m=1;y<2026||m<=8;){months.push(`${y}${String(m).padStart(2,'0')}`);m++;if(m===13){m=1;y++;}}
+          const monthStart=m=>Date.UTC(+m.slice(0,4),+m.slice(4,6)-1,1)/1000;
+          const nextMonth=m=>Date.UTC(+m.slice(0,4),+m.slice(4,6),1)/1000;
+          const expected=m=>(nextMonth(m)-monthStart(m))/300;
+          const store=new Map(cohort.map(s=>[s,[]]));const coverage=new Map(cohort.map(s=>[s,[]]));
+          const tasks=cohort.flatMap(symbol=>months.map(month=>({symbol,month})));let cursor=0;
+          async function worker(){while(cursor<tasks.length){const {symbol,month}=tasks[cursor++];try{let b;if(month==='202301'&&existsSync(`/tmp/jan-cache/${symbol}.gz`))b=readFileSync(`/tmp/jan-cache/${symbol}.gz`);else{const r=await fetch(`https://download.gatedata.org/futures_usdt/candlesticks_5m/${month}/${symbol}-${month}.csv.gz`);if(!r.ok)continue;b=Buffer.from(await r.arrayBuffer());}const text=gunzipSync(b).toString('utf8').trim();const rows=text.split('\n').flatMap(line=>{const [time,volume,close,high,low,open]=line.split(',').map(Number);return time>0&&open>0&&low>0&&high>=low&&[volume,close,high,low,open].every(Number.isFinite)?[{time,volume,close,high,low,open}]:[];});if(rows.length<expected(month)*0.70)continue;store.get(symbol).push(...rows);coverage.get(symbol).push(month);}catch{}}}
+          await Promise.all(Array.from({length:16},worker));
+          const datasets=cohort.map(symbol=>({symbol,rows:store.get(symbol).sort((a,b)=>a.time-b.time),gaps:0,coverage:coverage.get(symbol).length/months.length}));
+          const activeByMonth=Object.fromEntries(months.map(m=>[m,cohort.filter(s=>coverage.get(s).includes(m)).length]));
+          const source='gate-official-monthly-futures-usdt-candlesticks-5m-jan2023-causal-top30-v1';const from=monthStart(months[0]),now=nextMonth(months.at(-1));
+          const canonical=JSON.stringify({source,months,from,now,symbols:cohort,datasets});const sha256=createHash('sha256').update(canonical).digest('hex');
+          writeFileSync('/tmp/top30-44m-5m.json',JSON.stringify({source,interval:'5m',stepSeconds:300,months,days:(now-from)/86400,from,now,symbols:cohort,requestedSymbols:cohort,symbolLimit:cohort.length,universePolicy:'jan2023-top30-estimated-quote-notional-no-survivor-filter',minimumMonthlyCoverage:0.70,activeByMonth,sha256,datasets}));
+          console.log(JSON.stringify({symbols:cohort,activeByMonth,rows:Object.fromEntries(datasets.map(d=>[d.symbol,d.rows.length])),sha256},null,2));
+          EOF
+          node --max-old-space-size=6144 /tmp/build-sparse.mjs
+      - name: Fetch core11 control dataset
+        env:
+          RESEARCH_INTERVAL: 5m
+          RESEARCH_DATASET: /tmp/core11-44m-5m.json
+          RESEARCH_MONTHS: 202301,202302,202303,202304,202305,202306,202307,202308,202309,202310,202311,202312,202401,202402,202403,202404,202405,202406,202407,202408,202409,202410,202411,202412,202501,202502,202503,202504,202505,202506,202507,202508,202509,202510,202511,202512,202601,202602,202603,202604,202605,202606,202607,202608
+          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT
+          RESEARCH_MIN_CONTRACTS: 11
+          RESEARCH_MIN_MONTH_COVERAGE: 0.70
+          RESEARCH_CONCURRENCY: 16
+        run: node scripts/fetch-gate-history.mjs
+      - name: Fetch and patch frozen selector-quality audit
+        run: |
+          git fetch origin research/v12-44m-frozen-audit --depth=1
+          git show FETCH_HEAD:scripts/research-specialness-selector-quality.mjs > /tmp/selector.mjs
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('/tmp/selector.mjs').read_text()
+          p=p.replace("if(raw.interval!=='5m'||raw.months.length!==44||raw.symbols.length!==11)throw new Error('Requires frozen 44m / 11-symbol canonical 5m dataset');","if(raw.interval!=='5m'||raw.months.length!==44||raw.symbols.length<9)throw new Error('Requires frozen 44m / >=9-symbol 5m dataset');")
+          p=p.replace("const fromMs=raw.from*1000,toMs=raw.now*1000,discoveryEnd=monthStart(raw.months[30]),validationEnd=monthStart(raw.months[38]);","const fromMs=monthStart(raw.months[1]),toMs=raw.now*1000,discoveryEnd=monthStart(raw.months[31]),validationEnd=monthStart(raw.months[39]);")
+          Path('/tmp/selector-causal.mjs').write_text(p)
+          PY
+      - name: Run identical selector audit on core11 and causal top30
+        run: |
+          RESEARCH_DATASET=/tmp/core11-44m-5m.json RESEARCH_OUTPUT=/tmp/core11-selector.json node --max-old-space-size=6144 /tmp/selector-causal.mjs > /tmp/core11.log
+          RESEARCH_DATASET=/tmp/top30-44m-5m.json RESEARCH_OUTPUT=/tmp/top30-selector.json node --max-old-space-size=6144 /tmp/selector-causal.mjs > /tmp/top30.log
+      - name: Compare held-out selector quality and frequency
+        run: |
+          python3 - <<'PY'
+          import json
+          c=json.load(open('/tmp/core11-selector.json'));t=json.load(open('/tmp/top30-selector.json'));cohort=json.load(open('/tmp/jan2023-top30.json'));raw=json.load(open('/tmp/top30-44m-5m.json'))
+          def fam(r,f):
+            return {'accepted':f in r.get('accepted',[]),'discovery':r['study']['discovery'][f]['2h'],'validation':r['study']['validation'][f]['2h'],'evaluation':r['study']['evaluation'][f]['2h'],'eventsPerDay':{'discovery':r['study']['discovery'][f]['eventsPerDay'],'validation':r['study']['validation'][f]['eventsPerDay'],'evaluation':r['study']['evaluation'][f]['eventsPerDay']}}
+          out={'research':'jan2023-causal-top30-specialness','selection':cohort,'activeByMonth':raw['activeByMonth'],'core11':{f:fam(c,f) for f in ['PRICE1','PRICE4']},'top30':{f:fam(t,f) for f in ['PRICE1','PRICE4']}}
+          supported=[]
+          for f in ['PRICE1','PRICE4']:
+            x=out['top30'][f]
+            if x['accepted'] and all(x[p]['meanExcursionRatio']>1.10 and x[p]['meanExcessExcursion']>0 for p in ['discovery','validation','evaluation']): supported.append(f)
+          out['supportedFamilies']=supported;out['decision']='CAUSAL_TOP30_SPECIALNESS_SUPPORTED' if supported else 'NO_CAUSAL_TOP30_SUPPORT'
+          json.dump(out,open('/tmp/jan2023-causal-top30-result.json','w'),indent=2)
+          print(json.dumps({'decision':out['decision'],'top30':[x['symbol'] for x in cohort['top30']],'activeByMonth':raw['activeByMonth'],'core11':out['core11'],'top30Result':out['top30']},indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jan2023-causal-top30-specialness
+          path: |
+            /tmp/jan2023-causal-top30-result.json
+            /tmp/jan2023-top30.json
+            /tmp/core11-selector.json
+            /tmp/top30-selector.json
+          retention-days: 7
