@@ -280,7 +280,7 @@ const symbolPortability = Object.fromEntries(SYMBOLS.map((symbol) => {
   const everyEraWide4Six = rows.length === ERAS.length && rows.every((r) => r.stableWide["4bp_6000ms"].timeFraction >= 0.001);
   const everyEraWide8Six = rows.length === ERAS.length && rows.every((r) => r.stableWide["8bp_6000ms"].timeFraction >= 0.001);
   const medianBestStateMs = median(rows.map((r) => r.bestQuoteStateMs.p50));
-  return { everyEraWide4Six, everyEraWide8Six, medianBestStateMs };
+  return [symbol, { everyEraWide4Six, everyEraWide8Six, medianBestStateMs }];
 }));
 const atTouchPortable = Object.values(symbolPortability).some((x) => x.everyEraWide4Six);
 const fastMakerCompatible = reconstructionPass && Object.values(symbolPortability).some((x) => x.medianBestStateMs >= Math.max(2_000, runtime.loopMs ?? 2_000));
