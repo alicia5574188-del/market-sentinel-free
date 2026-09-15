@@ -1,11 +1,7 @@
 name: Premium History Probe
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "scripts/research-premium-history-probe.mjs"
-      - ".github/workflows/premium-history-probe.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,22 +9,6 @@ permissions:
 jobs:
   research:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.16.0
       - run: node --check scripts/research-premium-history-probe.mjs
-      - name: Probe historical premium data
-        env:
-          RESEARCH_OUTPUT: /tmp/premium-history-probe.json
-        run: node scripts/research-premium-history-probe.mjs
-      - run: jq '{queriedAt,rows,note}' /tmp/premium-history-probe.json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: premium-history-probe
-          path: /tmp/premium-history-probe.json
-          retention-days: 7
