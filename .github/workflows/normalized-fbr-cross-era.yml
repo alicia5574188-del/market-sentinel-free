@@ -1,11 +1,7 @@
 name: Normalized FBR Cross Era
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "scripts/research-normalized-fbr-cross-era.mjs"
-      - ".github/workflows/normalized-fbr-cross-era.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,46 +9,6 @@ permissions:
 jobs:
   research:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.16.0
-      - name: Syntax check
-        run: node --check scripts/research-normalized-fbr-cross-era.mjs
-      - name: Fetch earlier 12-month Gate 5m universe
-        env:
-          RESEARCH_INTERVAL: 5m
-          RESEARCH_DATASET: /tmp/fbr-old.json
-          RESEARCH_MONTHS: 202409,202410,202411,202412,202501,202502,202503,202504,202505,202506,202507,202508
-          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT,SUI_USDT,UNI_USDT,FIL_USDT,AAVE_USDT,ARB_USDT,APT_USDT,PEPE_USDT,WLD_USDT
-          RESEARCH_MIN_CONTRACTS: 19
-          RESEARCH_MIN_MONTH_COVERAGE: 0.92
-          RESEARCH_CONCURRENCY: 16
-        run: node scripts/fetch-gate-history.mjs
-      - name: Fetch current 12-month Gate 5m universe
-        env:
-          RESEARCH_INTERVAL: 5m
-          RESEARCH_DATASET: /tmp/fbr-cur.json
-          RESEARCH_MONTHS: 202509,202510,202511,202512,202601,202602,202603,202604,202605,202606,202607,202608
-          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT,SUI_USDT,UNI_USDT,DOT_USDT,ZEC_USDT,STORJ_USDT,LSK_USDT,TRX_USDT,ETC_USDT,FIL_USDT,ATOM_USDT,NEAR_USDT,AAVE_USDT,XLM_USDT,HBAR_USDT,ICP_USDT,XMR_USDT,ARB_USDT,OP_USDT,APT_USDT,PEPE_USDT,CRV_USDT,COMP_USDT,EOS_USDT,ALGO_USDT,SAND_USDT,MANA_USDT,GALA_USDT,DYDX_USDT,WLD_USDT,TON_USDT,NOT_USDT,SEI_USDT,INJ_USDT,RUNE_USDT,FET_USDT,IMX_USDT,JASMY_USDT,SHIB_USDT,FTM_USDT
-          RESEARCH_MIN_CONTRACTS: 19
-          RESEARCH_MIN_MONTH_COVERAGE: 0.98
-          RESEARCH_CONCURRENCY: 16
-        run: node scripts/fetch-gate-history.mjs
-      - name: Run normalized FBR cross-era frontier
-        env:
-          RESEARCH_OLD: /tmp/fbr-old.json
-          RESEARCH_CUR: /tmp/fbr-cur.json
-          RESEARCH_OUTPUT: /tmp/normalized-fbr-cross-era.json
-        run: node scripts/research-normalized-fbr-cross-era.mjs
-      - name: Print result
-        run: jq '{oldPeriod,currentPeriod,grid,eligible,frozen,results,evaluationRobust,evaluationRobustResults,note}' /tmp/normalized-fbr-cross-era.json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: normalized-fbr-cross-era
-          path: /tmp/normalized-fbr-cross-era.json
-          retention-days: 7
+      - run: node --check scripts/research-normalized-fbr-cross-era.mjs
