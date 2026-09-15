@@ -1,11 +1,7 @@
 name: Contract Stats History Probe
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "scripts/research-contract-stats-probe.mjs"
-      - ".github/workflows/contract-stats-probe.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,24 +9,6 @@ permissions:
 jobs:
   research:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.16.0
-      - name: Syntax check
-        run: node --check scripts/research-contract-stats-probe.mjs
-      - name: Probe historical contract statistics
-        env:
-          RESEARCH_OUTPUT: /tmp/contract-stats-probe.json
-        run: node scripts/research-contract-stats-probe.mjs
-      - name: Print result
-        run: jq '{queriedAt,rows,note}' /tmp/contract-stats-probe.json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: contract-stats-probe
-          path: /tmp/contract-stats-probe.json
-          retention-days: 7
+      - run: node --check scripts/research-contract-stats-probe.mjs
