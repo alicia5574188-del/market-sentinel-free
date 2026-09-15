@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "source": "exact copy of later-period expanded FBR rank-depth discovery+validation frozen rank1-3 lanes; no backward-period selection",
+  "lanes": [
+    {"id":"R2_EITHER_HIGH_200_20","rank":2,"condition":"EITHER_HIGH_200","look":20,"hold":600,"disp":0.005},
+    {"id":"R1_LOSER_HIGH_150_45","rank":1,"condition":"LOSER_HIGH_150","look":45,"hold":600,"disp":0.006},
+    {"id":"R1_US_90","rank":1,"condition":"US","look":90,"hold":720,"disp":0.008},
+    {"id":"R2_LOSER_HIGH_150_30","rank":2,"condition":"LOSER_HIGH_150","look":30,"hold":600,"disp":0.006},
+    {"id":"R2_WINNER_HIGH_150_20","rank":2,"condition":"WINNER_HIGH_150","look":20,"hold":600,"disp":0.005},
+    {"id":"R1_EITHER_HIGH_200_15","rank":1,"condition":"EITHER_HIGH_200","look":15,"hold":600,"disp":0.004},
+    {"id":"R1_BOTH_HIGH_150_15","rank":1,"condition":"BOTH_HIGH_150","look":15,"hold":600,"disp":0.004},
+    {"id":"R1_ALL_30","rank":1,"condition":"ALL","look":30,"hold":720,"disp":0.006},
+    {"id":"R1_ASIA_45","rank":1,"condition":"ASIA","look":45,"hold":600,"disp":0.005},
+    {"id":"R1_WEEKDAY_30","rank":1,"condition":"WEEKDAY","look":30,"hold":480,"disp":0.006},
+    {"id":"R2_US_15","rank":2,"condition":"US","look":15,"hold":600,"disp":0.004},
+    {"id":"R3_US_15","rank":3,"condition":"US","look":15,"hold":480,"disp":0.004},
+    {"id":"R1_WEEKEND_HIGH200_30","rank":1,"condition":"WEEKEND_HIGH200","look":30,"hold":600,"disp":0.004}
+  ]
+}
