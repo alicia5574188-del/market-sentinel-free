@@ -9,96 +9,44 @@ permissions:
 jobs:
   active-research:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 3
       - uses: actions/setup-node@v4
         with:
           node-version: 22.16.0
-      - name: Fetch canonical 44-month Gate 5m core universe
-        env:
-          RESEARCH_INTERVAL: 5m
-          RESEARCH_DATASET: /tmp/gate-history-router-44m-5m.json
-          RESEARCH_MONTHS: 202301,202302,202303,202304,202305,202306,202307,202308,202309,202310,202311,202312,202401,202402,202403,202404,202405,202406,202407,202408,202409,202410,202411,202412,202501,202502,202503,202504,202505,202506,202507,202508,202509,202510,202511,202512,202601,202602,202603,202604,202605,202606,202607,202608
-          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT
-          RESEARCH_MIN_CONTRACTS: 11
-          RESEARCH_MIN_MONTH_COVERAGE: 0.70
-          RESEARCH_CONCURRENCY: 16
-        run: node scripts/fetch-gate-history.mjs
-      - name: Aggregate canonical 1h signal dataset
-        env:
-          RESEARCH_DATASET: /tmp/gate-history-router-44m-5m.json
-          RESEARCH_OUTPUT: /tmp/gate-history-router-44m-1h.json
-          RESEARCH_MAX_FILL_HOURS: 3
-        run: node scripts/aggregate-gate-history.mjs
-      - name: Assert canonical hashes
+      - name: Probe archive indexes and current Gate catalog
         run: |
-          test "$(jq -r .sha256 /tmp/gate-history-router-44m-5m.json)" = "9e5fd7d06eeee420d60318bee72de3b16e7e877247102a2b505453ab0b8a4522"
-          test "$(jq -r .sha256 /tmp/gate-history-router-44m-1h.json)" = "185bd97b968f96373bef6a174c8258d8ad5606a0d1ed824eaa2cc1ace1efa053"
-      - name: Export exact frozen hourly regime ownership and context
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          s=Path('scripts/research-regime-system-portfolios.mjs').read_text()
-          marker='const common = { riskRate: 0.015, notionalMultiple: 0.5, minNotionalMultiple: 0.05,'
-          hook=r'''
-          const routeStateMap = [];
-          const routeSeen = new Set();
-          for (const row of observations) {
-            if (routeSeen.has(row.time)) continue;
-            routeSeen.add(row.time);
-            routeStateMap.push({ time: row.time, system: row.system, context: row.context });
+          cat > /tmp/probe.mjs <<'EOF'
+          import { writeFileSync } from 'node:fs';
+          const months=['202301','202401','202501','202601','202608'];
+          const archives=[];
+          for(const month of months){
+            const url=`https://download.gatedata.org/futures_usdt/candlesticks_5m/${month}/`;
+            try{
+              const r=await fetch(url);
+              const text=await r.text();
+              const symbols=[...text.matchAll(/([A-Z0-9_]+_USDT)-\d{6}\.csv\.gz/g)].map(m=>m[1]);
+              archives.push({month,status:r.status,contentType:r.headers.get('content-type'),length:text.length,symbolCount:new Set(symbols).size,symbols:[...new Set(symbols)].sort().slice(0,200),head:text.slice(0,500)});
+            }catch(error){archives.push({month,error:String(error)});}
           }
-          writeFileSync('/tmp/regime-state-map.json', JSON.stringify({ states: routeStateMap }));
-          process.exit(0);
-          '''
-          if marker not in s: raise SystemExit('state marker not found')
-          Path('/tmp/regime-state-only.mjs').write_text(s.replace(marker,hook+'\n'+marker,1))
-          PY
-      - name: Build hourly state map
-        env:
-          RESEARCH_SIGNAL_DATASET: /tmp/gate-history-router-44m-1h.json
-          RESEARCH_EXECUTION_DATASET: /tmp/gate-history-router-44m-5m.json
-          RESEARCH_OUTPUT: /tmp/unused.json
-        run: node /tmp/regime-state-only.mjs
-      - name: Recover validated router and add regime-cadence cells
-        run: |
-          git show HEAD^^:.github/workflows/anomaly-clean-lab.yml > /tmp/router-source.yml
-          python - <<'PY'
-          from pathlib import Path
-          text=Path('/tmp/router-source.yml').read_text()
-          start="cat > /tmp/anomaly-router.mjs <<'EOF'\n"
-          a=text.index(start)+len(start)
-          b=text.index("\n          EOF",a)
-          js=text[a:b]
-          js='\n'.join(line[10:] if line.startswith('          ') else line for line in js.splitlines())+'\n'
-          old="function portfolio(selector,friction=0.0014,slippage=0.00025){const rows=candidates.filter(x=>selector==='P1'?x.p1:selector==='P4'?x.p4:(x.p1||x.p4)).sort((a,b)=>a.openedAt-b.openedAt||b.specialScore-a.specialScore||b.strength-a.strength);"
-          new="function portfolio(key,friction=0.0014,slippage=0.00025){const [selector,cadenceText,state]=key.split(':'),cadence=Number(cadenceText);const rows=candidates.filter(x=>(selector==='P1'?x.p1:selector==='P4'?x.p4:(x.p1||x.p4))&&Math.floor(x.openedAt/1000)%cadence===0&&x.system===state).sort((a,b)=>a.openedAt-b.openedAt||b.specialScore-a.specialScore||b.strength-a.strength);"
-          if old not in js: raise SystemExit('portfolio marker not found')
-          js=js.replace(old,new,1)
-          old2="const selectors=['P1','P4','UNION'],scenarios={base:[0.0014,0.00025],stress:[0.0022,0.00025],adverse:[0.0014,0.0005]},results={},accounts={};"
-          new2="const routeStates=['SHOCK_TRANSITION','COMPRESSION','DIRECTIONAL_TREND','NON_TREND_EXPANSION','BALANCED_ROTATION'];const selectors=['P1','P4','UNION'].flatMap(s=>[900,1800,3600].flatMap(c=>routeStates.map(st=>`${s}:${c}:${st}`))),scenarios={base:[0.0014,0.00025],stress:[0.0022,0.00025],adverse:[0.0014,0.0005]},results={},accounts={};"
-          if old2 not in js: raise SystemExit('selector marker not found')
-          js=js.replace(old2,new2,1)
-          oldq="const discoveryQualified=selectors.map(sel=>{const r=results[sel],d=r.base.discovery,ds=r.stress.discovery,da=r.adverse.discovery,foldRows=folds.map(([a,b])=>metrics(accounts[sel].base,monthStart(raw.months[a]),monthStart(raw.months[b])));const ok=d.tradesPerDay>=1.5&&d.netPnl>0&&d.profitFactor>=1.08&&d.activeMonths>=20&&d.positiveMonths>=Math.ceil(d.activeMonths*0.55)&&d.maxDrawdown<=0.20&&ds.netPnl>0&&ds.profitFactor>=1&&da.netPnl>0&&da.profitFactor>=1&&foldRows.filter(x=>x.netPnl>0).length>=2&&foldRows.at(-1).netPnl>0;const score=ok?d.tradesPerDay*Math.log(Math.max(d.profitFactor,1))*d.positiveMonths/Math.max(d.activeMonths,1):null;return{selector:sel,ok,score,folds:foldRows.map(x=>({trades:x.trades,pnl:x.netPnl,pf:x.profitFactor}))};}).filter(x=>x.ok).sort((a,b)=>b.score-a.score);"
-          newq="const discoveryQualified=selectors.map(sel=>{const r=results[sel],d=r.base.discovery,ds=r.stress.discovery,da=r.adverse.discovery,foldRows=folds.map(([a,b])=>metrics(accounts[sel].base,monthStart(raw.months[a]),monthStart(raw.months[b])));const ok=d.trades>=45&&d.netPnl>0&&d.profitFactor>=1.10&&d.activeMonths>=14&&d.positiveMonths>=Math.ceil(d.activeMonths*0.50)&&d.maxDrawdown<=0.20&&ds.netPnl>0&&ds.profitFactor>=1&&da.netPnl>0&&da.profitFactor>=1&&foldRows.filter(x=>x.netPnl>0).length>=2&&foldRows.at(-1).netPnl>0;const score=ok?Math.log(Math.max(d.profitFactor,1))*Math.sqrt(d.trades):null;return{selector:sel,ok,score,folds:foldRows.map(x=>({trades:x.trades,pnl:x.netPnl,pf:x.profitFactor}))};}).filter(x=>x.ok).sort((a,b)=>b.score-a.score);"
-          if oldq not in js: raise SystemExit('qualification marker not found')
-          js=js.replace(oldq,newq,1)
-          js=js.replace("const selected=discoveryQualified[0]?.selector??null;let heldOut=null,decision='NO_RELEASE';if(selected){const r=results[selected];const pass=(x,min,pf)=>x.trades>=min&&x.netPnl>0&&x.profitFactor>=pf&&x.maxDrawdown<=0.20;heldOut={validationPass:pass(r.base.validation,50,1.03)&&pass(r.stress.validation,50,1)&&pass(r.adverse.validation,50,1),evaluationPass:pass(r.base.evaluation,30,1.03)&&pass(r.stress.evaluation,30,1)&&pass(r.adverse.evaluation,30,1)};if(heldOut.validationPass&&heldOut.evaluationPass)decision='FORWARD_CANDIDATE';}","const selected=discoveryQualified[0]?.selector??null;let heldOut=null,decision='NO_RELEASE';if(selected){const r=results[selected];const pass=(x,min,pf)=>x.trades>=min&&x.netPnl>0&&x.profitFactor>=pf&&x.maxDrawdown<=0.20;heldOut={validationPass:pass(r.base.validation,8,1.03)&&pass(r.stress.validation,8,1)&&pass(r.adverse.validation,8,1),evaluationPass:pass(r.base.evaluation,6,1.03)&&pass(r.stress.evaluation,6,1)&&pass(r.adverse.evaluation,6,1)};if(heldOut.validationPass&&heldOut.evaluationPass)decision='FORWARD_CANDIDATE';}")
-          js=js.replace("research:'5m-anomaly-routed-regime-system'","research:'regime-specific-anomaly-cadence-audit'")
-          js=js.replace("premise:'keep frozen hourly regime ownership and frozen selected tactics; use repaired 1h regime context for long-history parity while scanning validated PRICE1/PRICE4 special candidates on completed 5m bars'","premise:'choose selector, cadence and owning market state only from discovery; keep all frozen tactic parameters unchanged and verify the selected cell on held-out validation/evaluation'")
-          js=js.replace("protocolNote:'No strategy parameter is tuned. Long-horizon regime context comes from the canonical aggregated 1h dataset; raw 5m data supplies specialness, current-symbol returns and execution. The router is an independent sixth system; production/PAPER/LIVE are unchanged.'","protocolNote:'Discovery may select one preregistered selector x 15m/30m/60m cadence x regime cell. No tactic parameter is changed. Validation/evaluation are pass-fail only; production/PAPER/LIVE remain unchanged.'")
-          Path('/tmp/anomaly-state-cadence.mjs').write_text(js)
-          PY
-      - name: Run regime-cadence cell audit
-        run: node /tmp/anomaly-state-cadence.mjs
-      - name: Print compact result
-        run: jq '{decision,selected,heldOut,discoveryQualified,summary:(.results|with_entries(select(.value.base.discovery.trades>0)|.value={D:.value.base.discovery,V:.value.base.validation,E:.value.base.evaluation,SV:.value.stress.validation,SE:.value.stress.evaluation}))}' /tmp/anomaly-router-result.json
+          let current={};
+          try{
+            const [cr,tr]=await Promise.all([
+              fetch('https://api.gateio.ws/api/v4/futures/usdt/contracts'),
+              fetch('https://api.gateio.ws/api/v4/futures/usdt/tickers')]);
+            const contracts=await cr.json(),tickers=await tr.json();
+            current={contractStatus:cr.status,tickerStatus:tr.status,contractCount:Array.isArray(contracts)?contracts.length:0,tickerCount:Array.isArray(tickers)?tickers.length:0,
+              sampleContracts:Array.isArray(contracts)?contracts.slice(0,5):contracts,
+              topByVolume:Array.isArray(tickers)?tickers.map(x=>({contract:x.contract,volume_24h_usd:Number(x.volume_24h_usd??0)})).sort((a,b)=>b.volume_24h_usd-a.volume_24h_usd).slice(0,40):[]};
+          }catch(error){current={error:String(error)};}
+          const out={archives,current};writeFileSync('/tmp/archive-probe.json',JSON.stringify(out,null,2));console.log(JSON.stringify(out,null,2));
+          EOF
+          node /tmp/probe.mjs
       - uses: actions/upload-artifact@v4
         with:
-          name: anomaly-regime-cadence-cells-44m
-          path: /tmp/anomaly-router-result.json
-          retention-days: 7
+          name: gate-archive-universe-probe
+          path: /tmp/archive-probe.json
+          retention-days: 3
