@@ -1,0 +1,44 @@
+name: Audit Positive Mother Strategies
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/audit-positive-mother-strategies.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Extract robust all-period-positive strategy mothers
+        run: |
+          jq '{
+            generatedAt: now | todate,
+            source: "research-results/regime-system-portfolios-2026-09-14.json",
+            robust: [
+              .crossPeriodAudit[]
+              | select(.allPeriodsPositive == true)
+              | select(.stressDiscovery.netPnl > 0 and .stressValidation.netPnl > 0 and .stressRecent.netPnl > 0)
+              | {
+                  id, system, tactic,
+                  totalTrades: (.discovery.trades + .validation.trades + .recent.trades),
+                  base: {discovery, validation, recent},
+                  stress: {discovery: .stressDiscovery, validation: .stressValidation, recent: .stressRecent},
+                  discoveryFolds,
+                  stressDiscoveryFolds
+                }
+            ] | sort_by(-.totalTrades)
+          }' research-results/regime-system-portfolios-2026-09-14.json > /tmp/positive-mother-audit.json
+      - name: Print ranked result
+        run: jq '{count:(.robust|length), robust:(.robust|map({id,system,tactic,totalTrades,base:{discovery:.base.discovery,validation:.base.validation,recent:.base.recent},stress:{validation:.stress.validation,recent:.stress.recent}}))}' /tmp/positive-mother-audit.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: positive-mother-audit
+          path: /tmp/positive-mother-audit.json
+          retention-days: 7
