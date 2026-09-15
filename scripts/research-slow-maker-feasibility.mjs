@@ -18,6 +18,8 @@ const STABILITY_MS = [2_000, 6_000, 30_000];
 const VIP0_MAKER_ONE_WAY_BPS_REFERENCE = 2;
 const VIP0_MAKER_ROUND_TRIP_BPS_REFERENCE = 4;
 const STRESS_MAKER_ROUND_TRIP_BPS_REFERENCE = 8;
+const MIN_VALID_BOOK_SECONDS = 3_000;
+const MAX_CROSSED_GROUP_RATIO = 0.005;
 
 function numericConst(text, name) {
   const match = text.match(new RegExp(`const\\s+${name}\\s*=\\s*([0-9_]+)`));
@@ -107,6 +109,10 @@ async function analyzeHour(symbol, ymdh) {
   let prevAsk = null;
   let prevSpread = null;
   let validBookTimeMs = 0;
+  let lastUpdateEndId = null;
+  let sequenceGapCount = 0;
+  let sequenceBackwards = 0;
+  const sequenceGapExamples = [];
   const spreadWeights = [];
   const spreadTimeMs = Object.fromEntries(SPREAD_THRESHOLDS_BPS.map((x) => [x, 0]));
   let stateStart = null;
@@ -205,11 +211,25 @@ async function analyzeHour(symbol, ymdh) {
     const action = parts[1];
     const price = Number(parts[2]);
     const size = Number(parts[3]);
+    const beginId = Number(parts[4]);
+    const merged = Number(parts[5] ?? 1);
     if (![ts, price, size].every(Number.isFinite) || !(price > 0) || !["set", "make", "take"].includes(action)) continue;
     lineCount += 1;
     if (lastTs != null && ts < lastTs) outOfOrder += 1;
     firstTs ??= ts;
     lastTs = ts;
+    if (action !== "set" && Number.isFinite(beginId) && beginId > 0) {
+      const count = Number.isFinite(merged) && merged > 0 ? Math.floor(merged) : 1;
+      if (lastUpdateEndId != null) {
+        const expected = lastUpdateEndId + 1;
+        if (beginId < expected) sequenceBackwards += 1;
+        else if (beginId > expected) {
+          sequenceGapCount += 1;
+          if (sequenceGapExamples.length < 5) sequenceGapExamples.push({ expected, beginId, merged: count, ts });
+        }
+      }
+      lastUpdateEndId = beginId + count - 1;
+    }
     if (currentTs == null) currentTs = ts;
     if (ts !== currentTs) {
       flushGroup();
@@ -236,7 +256,7 @@ async function analyzeHour(symbol, ymdh) {
   }
   return {
     symbol, ymdh, url, compressedBytes, lineCount, groupCount, outOfOrder, missingTake, bidSign,
-    firstTs, lastTs, validGroups, crossedGroups,
+    firstTs, lastTs, validGroups, crossedGroups, sequenceGapCount, sequenceBackwards, sequenceGapExamples,
     crossedGroupRatio: groupCount ? crossedGroups / groupCount : 1,
     validBookSeconds: validBookTimeMs / 1000,
     spreadBps: {
@@ -266,7 +286,7 @@ for (const era of ERAS) {
     try {
       const row = await analyzeHour(symbol, era.ymdh);
       records.push({ era: era.label, ok: true, ...row });
-      console.log(`maker-audit ${era.label} ${symbol}: spread p50=${row.spreadBps.p50?.toFixed(3)}bp state p50=${row.bestQuoteStateMs.p50?.toFixed(0)}ms wide4/6s=${(row.stableWide["4bp_6000ms"].timeFraction * 100).toFixed(3)}%`);
+      console.log(`maker-audit ${era.label} ${symbol}: spread p50=${row.spreadBps.p50?.toFixed(3)}bp state p50=${row.bestQuoteStateMs.p50?.toFixed(0)}ms wide4/6s=${(row.stableWide["4bp_6000ms"].timeFraction * 100).toFixed(3)}% crossed=${(row.crossedGroupRatio * 100).toFixed(3)}% seqGap=${row.sequenceGapCount}`);
     } catch (error) {
       records.push({ era: era.label, symbol, ymdh: era.ymdh, ok: false, error: String(error?.stack ?? error) });
       console.error(`maker-audit ${era.label} ${symbol} failed:`, error);
@@ -274,20 +294,42 @@ for (const era of ERAS) {
   }
 }
 
-const reconstructionPass = records.length === ERAS.length * SYMBOLS.length && records.every((r) => r.ok && r.validBookSeconds >= 3_000 && r.crossedGroupRatio <= 0.005 && r.outOfOrder === 0);
+function hourQualityPass(r) {
+  return r.ok && r.validBookSeconds >= MIN_VALID_BOOK_SECONDS && r.crossedGroupRatio <= MAX_CROSSED_GROUP_RATIO
+    && r.outOfOrder === 0 && r.sequenceGapCount === 0 && r.sequenceBackwards === 0;
+}
+
+const validRecords = records.filter(hourQualityPass);
+const invalidRecords = records.filter((r) => !hourQualityPass(r));
+const totalHours = ERAS.length * SYMBOLS.length;
+const reconstructionCoverage = validRecords.length / totalHours;
+const reconstructionPass = invalidRecords.length === 0;
+const archiveQualityDecision = reconstructionPass ? "ALL_SAMPLED_HOURS_RECONSTRUCT_CLEANLY"
+  : reconstructionCoverage >= 0.8 ? "ARCHIVE_USABLE_WITH_HOUR_QUALITY_GATING"
+    : "ARCHIVE_RECONSTRUCTION_INSUFFICIENT";
+
 const symbolPortability = Object.fromEntries(SYMBOLS.map((symbol) => {
-  const rows = records.filter((r) => r.ok && r.symbol === symbol);
-  const everyEraWide4Six = rows.length === ERAS.length && rows.every((r) => r.stableWide["4bp_6000ms"].timeFraction >= 0.001);
-  const everyEraWide8Six = rows.length === ERAS.length && rows.every((r) => r.stableWide["8bp_6000ms"].timeFraction >= 0.001);
+  const rows = validRecords.filter((r) => r.symbol === symbol);
+  const hasKnownWide4Failure = rows.some((r) => r.stableWide["4bp_6000ms"].timeFraction < 0.001);
+  const hasKnownWide8Failure = rows.some((r) => r.stableWide["8bp_6000ms"].timeFraction < 0.001);
+  const allEraWide4SixProven = rows.length === ERAS.length && rows.every((r) => r.stableWide["4bp_6000ms"].timeFraction >= 0.001);
+  const allEraWide8SixProven = rows.length === ERAS.length && rows.every((r) => r.stableWide["8bp_6000ms"].timeFraction >= 0.001);
   const medianBestStateMs = median(rows.map((r) => r.bestQuoteStateMs.p50));
-  return [symbol, { everyEraWide4Six, everyEraWide8Six, medianBestStateMs }];
+  const maxStableWide4SixPct = Math.max(0, ...rows.map((r) => r.stableWide["4bp_6000ms"].timeFraction * 100));
+  return [symbol, { validEraCount: rows.length, hasKnownWide4Failure, hasKnownWide8Failure,
+    allEraWide4SixProven, allEraWide8SixProven, medianBestStateMs, maxStableWide4SixPct }];
 }));
-const atTouchPortable = Object.values(symbolPortability).some((x) => x.everyEraWide4Six);
-const fastMakerCompatible = reconstructionPass && Object.values(symbolPortability).some((x) => x.medianBestStateMs >= Math.max(2_000, runtime.loopMs ?? 2_000));
-const atTouchDecision = !reconstructionPass ? "BOOK_RECONSTRUCTION_INSUFFICIENT"
-  : atTouchPortable && fastMakerCompatible ? "AT_TOUCH_MAKER_WORTH_FILL_TEST"
-    : "AT_TOUCH_MAKER_NOT_MATCHED_TO_CURRENT_LATENCY";
-const widePassiveDecision = reconstructionPass ? "WIDE_PASSIVE_BOOK_DATA_USABLE_FOR_FILL_AND_MARKOUT_TEST" : "WIDE_PASSIVE_DATA_INSUFFICIENT";
+
+const atTouchPortabilityRejected = Object.values(symbolPortability).every((x) => x.hasKnownWide4Failure);
+const latencyMatchedWideEvidence = validRecords.some((r) => r.stableWide["4bp_6000ms"].timeFraction >= 0.001
+  && r.bestQuoteStateMs.p50 >= Math.max(2_000, runtime.loopMs ?? 2_000));
+const atTouchDecision = atTouchPortabilityRejected
+  ? "AT_TOUCH_MAKER_REJECTED_NOT_PORTABLE_ACROSS_ERAS"
+  : archiveQualityDecision === "ARCHIVE_RECONSTRUCTION_INSUFFICIENT" ? "AT_TOUCH_DECISION_BLOCKED_BY_ARCHIVE_QUALITY"
+    : latencyMatchedWideEvidence ? "AT_TOUCH_MAKER_WORTH_FILL_TEST" : "AT_TOUCH_MAKER_NOT_MATCHED_TO_CURRENT_LATENCY";
+const widePassiveDecision = archiveQualityDecision === "ARCHIVE_RECONSTRUCTION_INSUFFICIENT"
+  ? "WIDE_PASSIVE_DATA_INSUFFICIENT"
+  : "WIDE_PASSIVE_BOOK_DATA_USABLE_WITH_HOUR_QUALITY_GATING";
 
 const outputCore = {
   research: "slow-maker-feasibility-v1",
@@ -296,21 +338,30 @@ const outputCore = {
     symbols: SYMBOLS,
     eras: ERAS,
     archive: "official Gate futures_usdt/orderbooks hourly logs; full snapshot then 100ms-merged take/make updates",
+    archiveSemantics: "set initializes full depth; signed futures size identifies side; make adds size, take removes size; begin-id plus merged count is checked for update continuity",
     sample: "one UTC hour per symbol in each separated era; structural feasibility audit, not a profitability backtest",
     spreadThresholdsBps: SPREAD_THRESHOLDS_BPS,
     quoteStabilityMs: STABILITY_MS,
+    hourQuality: { minValidBookSeconds: MIN_VALID_BOOK_SECONDS, maxCrossedGroupRatio: MAX_CROSSED_GROUP_RATIO, requireOrderedTimestamps: true, requireContinuousUpdateIds: true },
     makerFeeReference: { vip0OneWayBps: VIP0_MAKER_ONE_WAY_BPS_REFERENCE, vip0RoundTripBps: VIP0_MAKER_ROUND_TRIP_BPS_REFERENCE, stressRoundTripHurdleBps: STRESS_MAKER_ROUND_TRIP_BPS_REFERENCE, note: "reference hurdle only; live account fee must be queried before execution" },
     runtimeSource: "main worker/index-clean.ts + lib/gate-market.ts",
   },
   runtime,
   reconstructionPass,
+  reconstructionCoverage,
+  archiveQualityDecision,
+  validHours: validRecords.length,
+  invalidHours: invalidRecords.map((r) => ({ era: r.era, symbol: r.symbol, ymdh: r.ymdh, validBookSeconds: r.validBookSeconds ?? null,
+    crossedGroupRatio: r.crossedGroupRatio ?? null, sequenceGapCount: r.sequenceGapCount ?? null, sequenceBackwards: r.sequenceBackwards ?? null, error: r.error ?? null })),
+  atTouchPortabilityRejected,
+  latencyMatchedWideEvidence,
   atTouchDecision,
   widePassiveDecision,
   symbolPortability,
   records,
-  interpretation: "Sub-second queue competition is rejected if best-quote states turn over faster than the current executable control loop. A pass for wide-passive only means the 100ms historical book is sufficient for a later conservative back-of-queue fill/adverse-selection model; it does not claim profitability.",
+  interpretation: "A bad archive hour is quarantined rather than allowed to poison the whole study. At-touch maker is still rejected if every symbol has at least one clean sampled era with effectively no >=4bp spread state lasting >=6s. Wide-passive archive usability is a data-quality statement only and does not claim fills, positive markout, or profitability.",
 };
 const sha256 = createHash("sha256").update(JSON.stringify(outputCore)).digest("hex");
 const output = { ...outputCore, sha256, generatedAt: new Date().toISOString() };
 writeFileSync(OUTPUT, `${JSON.stringify(output, null, 2)}\n`);
-console.log(`SLOW_MAKER_FEASIBILITY=${JSON.stringify({ reconstructionPass, atTouchDecision, widePassiveDecision, runtime, symbolPortability, summary: records.map((r) => r.ok ? ({ era: r.era, symbol: r.symbol, p50SpreadBps: r.spreadBps.p50, p90SpreadBps: r.spreadBps.p90, p50BestStateMs: r.bestQuoteStateMs.p50, stableWide4SixPct: r.stableWide["4bp_6000ms"].timeFraction * 100, stableWide8SixPct: r.stableWide["8bp_6000ms"].timeFraction * 100, crossedGroupRatio: r.crossedGroupRatio, validBookSeconds: r.validBookSeconds }) : r), sha256 })}`);
+console.log(`SLOW_MAKER_FEASIBILITY=${JSON.stringify({ reconstructionPass, reconstructionCoverage, archiveQualityDecision, validHours: validRecords.length, invalidHours: outputCore.invalidHours, atTouchPortabilityRejected, latencyMatchedWideEvidence, atTouchDecision, widePassiveDecision, runtime, symbolPortability, summary: records.map((r) => r.ok ? ({ era: r.era, symbol: r.symbol, qualityPass: hourQualityPass(r), p50SpreadBps: r.spreadBps.p50, p90SpreadBps: r.spreadBps.p90, p50BestStateMs: r.bestQuoteStateMs.p50, stableWide4SixPct: r.stableWide["4bp_6000ms"].timeFraction * 100, stableWide8SixPct: r.stableWide["8bp_6000ms"].timeFraction * 100, crossedGroupRatio: r.crossedGroupRatio, validBookSeconds: r.validBookSeconds, sequenceGapCount: r.sequenceGapCount, sequenceBackwards: r.sequenceBackwards }) : r), sha256 })}`);
