@@ -12,7 +12,7 @@ const priceData=new Map(PRICES.datasets.map(d=>[d.symbol,d.rows])),fundData=new 
 const syms=[...priceData.keys()].filter(s=>fundData.has(s)),priceMap=new Map(syms.map(s=>[s,new Map(priceData.get(s).map(r=>[r.time,r]))])),fundMap=new Map(syms.map(s=>[s,new Map(fundData.get(s).map(r=>[r.bucket,r.rate]))]));
 if(syms.length<12)throw new Error(`Only ${syms.length} aligned symbols`);
 const OLD_FROM=Date.UTC(2024,8,1)/1000,OLD_TO=Date.UTC(2025,8,1)/1000,CUR_FROM=OLD_TO,TRAIN_TO=Date.UTC(2026,5,1)/1000,EVAL_TO=Date.UTC(2026,8,1)/1000;
-const allBuckets=[...new Set(syms.flatMap(s=>fundData.get(s).rows.map(r=>r.bucket)))].sort((a,b)=>a-b).filter(t=>t>=OLD_FROM&&t<EVAL_TO);
+const allBuckets=[...new Set(syms.flatMap(s=>fundData.get(s).map(r=>r.bucket)))].sort((a,b)=>a-b).filter(t=>t>=OLD_FROM&&t<EVAL_TO);
 const monthKey=t=>{const d=new Date(t*1000);return`${d.getUTCFullYear()}${String(d.getUTCMonth()+1).padStart(2,'0')}`};
 const filterOk=(id,f)=>id==='ALL'||(id==='OPPOSITE'&&f.low<0&&f.high>0)||(id==='LOW_NEG'&&f.low<0)||(id==='HIGH_POS'&&f.high>0)||(id==='SPREAD_10'&&f.spread>=.0001)||(id==='SPREAD_20'&&f.spread>=.0002)||(id==='SPREAD_40'&&f.spread>=.0004)||(id==='ROBUST_1'&&f.robust>=1)||(id==='ROBUST_2'&&f.robust>=2);
 function signalAt(bucket,win){const x=[];for(const s of syms){const fm=fundMap.get(s),vals=[];let good=true;for(let j=0;j<win;j++){const v=fm.get(bucket-j*FSTEP);if(!Number.isFinite(v)){good=false;break;}vals.push(v);}if(!good)continue;const entry=priceMap.get(s).get(bucket+3600);if(!entry?.open)continue;x.push({symbol:s,score:sum(vals)/vals.length});}if(x.length<12)return null;x.sort((a,b)=>a.score-b.score);const center=med(x.map(z=>z.score)),scale=med(x.map(z=>Math.abs(z.score-center)))||1e-8;return{x,center,scale};}
