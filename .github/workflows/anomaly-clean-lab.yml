@@ -20,7 +20,7 @@ jobs:
       - name: Fetch canonical 44-month Gate 5m core universe
         env:
           RESEARCH_INTERVAL: 5m
-          RESEARCH_DATASET: /tmp/gate-history-route-44m-5m.json
+          RESEARCH_DATASET: /tmp/gate-history-router-44m-5m.json
           RESEARCH_MONTHS: 202301,202302,202303,202304,202305,202306,202307,202308,202309,202310,202311,202312,202401,202402,202403,202404,202405,202406,202407,202408,202409,202410,202411,202412,202501,202502,202503,202504,202505,202506,202507,202508,202509,202510,202511,202512,202601,202602,202603,202604,202605,202606,202607,202608
           RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT
           RESEARCH_MIN_CONTRACTS: 11
@@ -29,141 +29,110 @@ jobs:
         run: node scripts/fetch-gate-history.mjs
       - name: Aggregate canonical 1h signal dataset
         env:
-          RESEARCH_DATASET: /tmp/gate-history-route-44m-5m.json
-          RESEARCH_OUTPUT: /tmp/gate-history-route-44m-1h.json
+          RESEARCH_DATASET: /tmp/gate-history-router-44m-5m.json
+          RESEARCH_OUTPUT: /tmp/gate-history-router-44m-1h.json
           RESEARCH_MAX_FILL_HOURS: 3
         run: node scripts/aggregate-gate-history.mjs
       - name: Assert canonical hashes
         run: |
-          test "$(jq -r .sha256 /tmp/gate-history-route-44m-5m.json)" = "9e5fd7d06eeee420d60318bee72de3b16e7e877247102a2b505453ab0b8a4522"
-          test "$(jq -r .sha256 /tmp/gate-history-route-44m-1h.json)" = "185bd97b968f96373bef6a174c8258d8ad5606a0d1ed824eaa2cc1ace1efa053"
-      - name: Prepare frozen regime engine with research export hook
+          test "$(jq -r .sha256 /tmp/gate-history-router-44m-5m.json)" = "9e5fd7d06eeee420d60318bee72de3b16e7e877247102a2b505453ab0b8a4522"
+          test "$(jq -r .sha256 /tmp/gate-history-router-44m-1h.json)" = "185bd97b968f96373bef6a174c8258d8ad5606a0d1ed824eaa2cc1ace1efa053"
+      - name: Export exact frozen hourly regime ownership
         run: |
           python - <<'PY'
           from pathlib import Path
-          p=Path('scripts/research-regime-system-portfolios.mjs')
-          s=p.read_text()
-          marker='const report = { generatedAt: new Date().toISOString(),'
+          s=Path('scripts/research-regime-system-portfolios.mjs').read_text()
+          marker='const common = { riskRate: 0.015, notionalMultiple: 0.5, minNotionalMultiple: 0.05,'
           if marker not in s:
-              raise SystemExit('report marker not found')
+              raise SystemExit('state marker not found')
           hook=r'''
-          function routeRelax(config, factor, suffix) {
-            const row = { ...config, id: `${config.id}__${suffix}` };
-            for (const key of ["relative7","relative24","confirm24","confirm6","symbol24","symbol30","volume","resume6","reversal6","rebound6","impulse6","drop24","pullbackMin","sweep","reclaim"]) {
-              if (Number.isFinite(row[key]) && row[key] > 0) row[key] *= factor;
-            }
-            if (Number.isFinite(row.pullbackMax) && row.pullbackMax > 0) row.pullbackMax *= (2 - factor);
-            if (Number.isFinite(row.breadth) && row.breadth > 0.5) row.breadth = 0.5 + (row.breadth - 0.5) * factor;
-            if (Number.isFinite(row.edge) && row.edge > 0) row.edge = Math.min(0.49, row.edge * (2 - factor));
-            return row;
-          }
-          const slimConfig = (c) => ({ id:c.id, tactic:c.tactic, system:c.system, riskRate:c.riskRate,
-            notionalMultiple:c.notionalMultiple, minNotionalMultiple:c.minNotionalMultiple, cooldownHours:c.cooldownHours });
-          const routeSystems = candidateSystems.map((system) => {
-            const baseConfigs = system.selectedStrategies;
-            const relax10 = baseConfigs.map((c) => routeRelax(c, 0.90, "RELAX10"));
-            const relax20 = baseConfigs.map((c) => routeRelax(c, 0.80, "RELAX20"));
-            return { system:system.system,
-              configs:[...baseConfigs,...relax10,...relax20].map(slimConfig),
-              baseline:baseConfigs.flatMap((c) => rawTrades(c, toMs)),
-              relax10:relax10.flatMap((c) => rawTrades(c, toMs)),
-              relax20:relax20.flatMap((c) => rawTrades(c, toMs)),
-              expected:{ discovery:{trades:system.discovery.trades,netPnl:system.discovery.netPnl,profitFactor:system.discovery.profitFactor},
-                validation:{trades:system.validation.trades,netPnl:system.validation.netPnl,profitFactor:system.validation.profitFactor},
-                evaluation:{trades:system.evaluation.trades,netPnl:system.evaluation.netPnl,profitFactor:system.evaluation.profitFactor} } };
-          });
-          writeFileSync('/tmp/anomaly-route-export.json', JSON.stringify({ months:signalRaw.months, fromMs, toMs, discoveryEnd, validationEnd, systems:routeSystems }));
+          const routeStateMap = [...new Map(observations.map((row) => [row.time, row.system]))]
+            .map(([time, system]) => ({ time, system }));
+          writeFileSync('/tmp/regime-state-map.json', JSON.stringify({ states: routeStateMap }));
+          process.exit(0);
           '''
-          s=s.replace(marker,hook+'\n'+marker,1)
-          Path('/tmp/regime-route-base.mjs').write_text(s)
+          Path('/tmp/regime-state-only.mjs').write_text(s.replace(marker,hook+'\n'+marker,1))
           PY
-      - name: Run frozen regime engine and export candidate trades
+      - name: Build hourly state map
         env:
-          RESEARCH_SIGNAL_DATASET: /tmp/gate-history-route-44m-1h.json
-          RESEARCH_EXECUTION_DATASET: /tmp/gate-history-route-44m-5m.json
-          RESEARCH_OUTPUT: /tmp/regime-route-base-report.json
-        run: node /tmp/regime-route-base.mjs
-      - name: Run anomaly-routed regime audit
+          RESEARCH_SIGNAL_DATASET: /tmp/gate-history-router-44m-1h.json
+          RESEARCH_EXECUTION_DATASET: /tmp/gate-history-router-44m-5m.json
+          RESEARCH_OUTPUT: /tmp/unused.json
+        run: node /tmp/regime-state-only.mjs
+      - name: Run 5m anomaly-routed regime system audit
         run: |
-          cat > /tmp/anomaly-route-audit.mjs <<'EOF'
+          cat > /tmp/anomaly-router.mjs <<'EOF'
           import { readFileSync, writeFileSync } from 'node:fs';
-          const raw=JSON.parse(readFileSync('/tmp/gate-history-route-44m-5m.json','utf8'));
-          const exp=JSON.parse(readFileSync('/tmp/anomaly-route-export.json','utf8'));
+          const raw=JSON.parse(readFileSync('/tmp/gate-history-router-44m-5m.json','utf8'));
+          const stateRaw=JSON.parse(readFileSync('/tmp/regime-state-map.json','utf8'));
+          const baseReport=JSON.parse(readFileSync('research-results/regime-system-portfolios-2026-09-14.json','utf8'));
+          if(raw.interval!=='5m'||raw.months.length!==44||raw.symbols.length!==11)throw new Error('requires frozen 44m/11-symbol 5m dataset');
           const sum=xs=>xs.reduce((a,b)=>a+b,0);
           const median=xs=>{if(!xs.length)return 0;const ys=[...xs].sort((a,b)=>a-b),m=Math.floor(ys.length/2);return ys.length%2?ys[m]:(ys[m-1]+ys[m])/2;};
+          const sign=x=>x>0?1:x<0?-1:0;
           const monthStart=m=>Date.UTC(Number(m.slice(0,4)),Number(m.slice(4,6))-1,1);
-          const lowerBound=(rows,t)=>{let lo=0,hi=rows.length;while(lo<hi){const m=Math.floor((lo+hi)/2);if(rows[m].time<t)lo=m+1;else hi=m;}return lo;};
-          const bySymbol=new Map(raw.datasets.map(d=>[d.symbol,d.rows]));
-          const specialCache=new Map();
-          function specialAt(openedAt){
-            const signalTime=Math.floor(openedAt/1000)-300;
-            if(specialCache.has(signalTime))return specialCache.get(signalTime);
+          const fromMs=raw.from*1000,toMs=raw.now*1000,discoveryEnd=monthStart(raw.months[30]),validationEnd=monthStart(raw.months[38]);
+          const stateByTime=new Map(stateRaw.states.map(x=>[x.time,x.system]));
+          const configs=baseReport.systems.flatMap(s=>(s.accepted?s.selectedStrategies:[]));
+          if(configs.length!==12)throw new Error(`expected 12 frozen selected strategies, got ${configs.length}`);
+          const configById=new Map(configs.map(c=>[c.id,c]));
+          const bySystem=new Map();for(const c of configs){const a=bySystem.get(c.system)??[];a.push(c);bySystem.set(c.system,a);}
+          function gapPrefix(rows){const p=new Int32Array(rows.length);for(let i=1;i<rows.length;i++)p[i]=p[i-1]+Number(rows[i].time!==rows[i-1].time+300);return p;}
+          function volumePrefix(rows){const p=new Float64Array(rows.length+1);for(let i=0;i<rows.length;i++)p[i+1]=p[i]+rows[i].volume;return p;}
+          function rollingPrev(rows,window,key,wantMax){const out=new Float64Array(rows.length);out.fill(NaN);let q=[],head=0;for(let i=0;i<rows.length;i++){const j=i-1;if(j>=0){const v=rows[j][key];while(q.length>head){const lv=rows[q[q.length-1]][key];if(wantMax?lv>v:lv<v)break;q.pop();}q.push(j);}while(q.length>head&&q[head]<i-window)head++;if(i>=window&&q.length>head)out[i]=rows[q[head]][key];if(head>4096&&head*2>q.length){q=q.slice(head);head=0;}}return out;}
+          const data=raw.datasets.map(d=>({symbol:d.symbol,rows:d.rows,pointer:0,gaps:gapPrefix(d.rows),vol:volumePrefix(d.rows),high24:rollingPrev(d.rows,288,'high',true),low24:rollingPrev(d.rows,288,'low',false),high7d:rollingPrev(d.rows,2016,'high',true),low7d:rollingPrev(d.rows,2016,'low',false)}));
+          const dataBySymbol=new Map(data.map(d=>[d.symbol,d]));
+          const master=data.find(d=>d.symbol==='BTC_USDT')??data[0];
+          const sliceSum=(p,a,b)=>p[b+1]-p[a];
+          function atr6(d,i){const rs=[];for(let h=0;h<6;h++){const a=i-(h+1)*12+1,b=i-h*12;if(a<0)return 0;let hi=-Infinity,lo=Infinity;for(let k=a;k<=b;k++){hi=Math.max(hi,d.rows[k].high);lo=Math.min(lo,d.rows[k].low);}rs.push((hi-lo)/Math.max(d.rows[b].close,1e-12));}return median(rs);}
+          function signal(config,f){
+            if(f.system!==config.system)return null;
+            if(config.tactic.startsWith('BULL_')||config.tactic.startsWith('BEAR_')){const bull=config.tactic.startsWith('BULL_');if((bull&&f.context.median30<=0)||(!bull&&f.context.median30>=0))return null;return signal({...config,tactic:config.tactic.slice(5)},f);}
+            if(config.tactic==='BREAKDOWN_TRAIL'){if(f.r30d>-config.symbol30||f.context.breadth30>config.breadth||f.current.close>=f.low7d)return null;return{direction:-1,strength:-f.r30d+(1-f.context.breadth30)*0.02};}
+            if(config.tactic==='RELATIVE_MOMENTUM'){const d=sign(f.relative7);if(!d||Math.abs(f.relative7)<config.relative7||d*f.relative24<config.confirm24)return null;return{direction:d,strength:Math.abs(f.relative7)+d*f.relative24};}
+            if(config.tactic==='DEFENSIVE_RELATIVE'){const md=sign(f.context.median30),d=-md;if(!d||d*f.relative7<config.relative7||d*f.r6<config.confirm6)return null;return{direction:d,strength:d*f.relative7+d*f.r6};}
+            if(config.tactic==='MARKET_REBOUND'){if(f.r24>-config.drop24||f.r6<config.rebound6)return null;return{direction:1,strength:-f.r24+f.r6};}
+            if(config.tactic==='ALIGNED_DOWNSHOCK_REVERSAL'){if(f.context.median24>=0||f.context.median30>=0||f.r24>-config.symbol24||f.r6<config.rebound6)return null;return{direction:1,strength:-f.r24+f.r6};}
+            if(config.tactic==='COUNTER_DOWNSHOCK_SURVIVOR'){if(f.context.median24>=0||f.context.median30<=0||f.relative24<config.relative24||f.r6<config.rebound6)return null;return{direction:1,strength:f.relative24+f.r6};}
+            if(config.tactic==='FALSE_RELEASE'){if(f.volumeBurst<config.volume)return null;const hf=f.current.high>f.high24*(1+(config.sweep??0))&&f.current.close<f.high24*(1-(config.reclaim??0));const lf=f.current.low<f.low24*(1-(config.sweep??0))&&f.current.close>f.low24*(1+(config.reclaim??0));if(hf===lf)return null;return{direction:hf?-1:1,strength:f.volumeBurst+Math.abs(f.r1)};}
+            if(config.tactic==='QUIET_PULLBACK_RESUME'||config.tactic==='RELATIVE_PULLBACK_RESUME'){const d=sign(f.relative7),pb=d*f.r24;if(!d||Math.abs(f.relative7)<config.relative7||pb>-config.pullbackMin||pb<-config.pullbackMax||d*f.r6<config.resume6)return null;return{direction:d,strength:Math.abs(f.relative7)+Math.abs(f.r24)+d*f.r6};}
+            if(config.tactic==='REFINED_BREADTH_CONTINUATION'){const d=sign(f.context.median24),boundary=d>0?f.high24:f.low24;if(!d||sign(f.r24)!==d||Math.abs(f.r24)<config.symbol24||d*f.r6<config.impulse6||d*(f.current.close/boundary-1)<0)return null;return{direction:d,strength:Math.abs(f.r24)+d*f.r6};}
+            if(config.tactic==='EXPANSION_DEFENDER'){const md=sign(f.context.median24),d=-md;if(!md||d*f.relative24<config.relative24||d*f.r6<config.resume6)return null;return{direction:d,strength:d*f.relative24+d*f.r6};}
+            if(config.tactic==='SHORT_HORIZON_REVERSAL'){const o=sign(f.relative24),d=-o;if(!o||Math.abs(f.relative24)<config.relative24||d*f.r6<config.reversal6)return null;return{direction:d,strength:Math.abs(f.relative24)+d*f.r6};}
+            return null;
+          }
+          const candidates=[];let synchronizedBars=0,specialBars=0;
+          for(let mi=8640;mi<master.rows.length-2;mi++){
+            const time=master.rows[mi].time,entryTime=time+300,stateTime=Math.floor(entryTime/3600)*3600-3600,system=stateByTime.get(stateTime);if(!system)continue;
             const xs=[];
-            for(const [symbol,rows] of bySymbol){
-              const i=lowerBound(rows,signalTime);
-              if(rows[i]?.time!==signalTime||i<48||rows[i-12]?.time!==signalTime-3600||rows[i-48]?.time!==signalTime-14400)continue;
-              xs.push({symbol,r1:rows[i].close/rows[i-12].close-1,r4:rows[i].close/rows[i-48].close-1});
-            }
-            if(xs.length<9){specialCache.set(signalTime,new Map());return specialCache.get(signalTime);}
-            const m1=median(xs.map(x=>x.r1)),m4=median(xs.map(x=>x.r4));
-            for(const x of xs){x.rel1=x.r1-m1;x.rel4=x.r4-m4;}
-            const s1=Math.max(0.001,median(xs.map(x=>Math.abs(x.rel1)))),s4=Math.max(0.001,median(xs.map(x=>Math.abs(x.rel4))));
-            const p1=[...xs].sort((a,b)=>Math.abs(b.rel1)-Math.abs(a.rel1))[0];
-            const p4=[...xs].sort((a,b)=>Math.abs(b.rel4)-Math.abs(a.rel4))[0];
-            const out=new Map(xs.map(x=>[x.symbol,{p1:x.symbol===p1.symbol&&Math.abs(x.rel1)>=0.006&&Math.abs(x.rel1)/s1>=1.8,
-              p4:x.symbol===p4.symbol&&Math.abs(x.rel4)>=0.012&&Math.abs(x.rel4)/s4>=1.8,
-              score:Math.max(Math.abs(x.rel1)/s1,Math.abs(x.rel4)/s4),rel1:x.rel1,rel4:x.rel4}]));
-            specialCache.set(signalTime,out);return out;
+            for(const d of data){while(d.pointer<d.rows.length&&d.rows[d.pointer].time<time)d.pointer++;const i=d.pointer;if(i>=d.rows.length||d.rows[i].time!==time||i<8640||d.gaps[i]!==d.gaps[i-8640]||d.rows[i+1]?.time!==entryTime)continue;const c=d.rows[i].close;xs.push({symbol:d.symbol,d,index:i,current:d.rows[i],r1:c/d.rows[i-12].close-1,r4:c/d.rows[i-48].close-1,r6:c/d.rows[i-72].close-1,r24:c/d.rows[i-288].close-1,r7d:c/d.rows[i-2016].close-1,r30d:c/d.rows[i-8640].close-1});}
+            if(xs.length<9)continue;synchronizedBars++;
+            const context={median1:median(xs.map(x=>x.r1)),median4:median(xs.map(x=>x.r4)),median24:median(xs.map(x=>x.r24)),median7:median(xs.map(x=>x.r7d)),median30:median(xs.map(x=>x.r30d)),breadth24:xs.filter(x=>x.r24>0).length/xs.length,breadth7:xs.filter(x=>x.r7d>0).length/xs.length,breadth30:xs.filter(x=>x.r30d>0).length/xs.length};
+            for(const x of xs){x.relative1=x.r1-context.median1;x.relative4=x.r4-context.median4;x.relative24=x.r24-context.median24;x.relative7=x.r7d-context.median7;x.context=context;x.system=system;}
+            const s1=Math.max(0.001,median(xs.map(x=>Math.abs(x.relative1)))),s4=Math.max(0.001,median(xs.map(x=>Math.abs(x.relative4))));
+            const p1=[...xs].sort((a,b)=>Math.abs(b.relative1)-Math.abs(a.relative1))[0],p4=[...xs].sort((a,b)=>Math.abs(b.relative4)-Math.abs(a.relative4))[0];
+            const p1ok=Math.abs(p1.relative1)>=0.006&&Math.abs(p1.relative1)/s1>=1.8,p4ok=Math.abs(p4.relative4)>=0.012&&Math.abs(p4.relative4)/s4>=1.8;
+            const specials=new Map();if(p1ok)specials.set(p1.symbol,{p1:true,p4:false,score:Math.abs(p1.relative1)/s1});if(p4ok){const old=specials.get(p4.symbol)??{p1:false,p4:false,score:0};specials.set(p4.symbol,{...old,p4:true,score:Math.max(old.score,Math.abs(p4.relative4)/s4)});}if(!specials.size)continue;specialBars++;
+            for(const [symbol,flag] of specials){const f=xs.find(x=>x.symbol===symbol),d=f.d,i=f.index;f.high24=d.high24[i];f.low24=d.low24[i];f.high7d=d.high7d[i];f.low7d=d.low7d[i];const recent=sliceSum(d.vol,i-71,i),base=sliceSum(d.vol,i-575,i-72);f.volumeBurst=(recent/72)/Math.max(base/504,1e-12);for(const config of bySystem.get(system)??[]){const found=signal(config,f);if(!found)continue;const a6=atr6(d,i),stopRate=Math.min(config.stopCap,Math.max(config.stopFloor,config.stopAtr*a6));candidates.push({strategyId:config.id,tactic:config.tactic,system,symbol,index:i,openedAt:entryTime*1000,direction:found.direction,side:found.direction>0?'LONG':'SHORT',strength:found.strength,stopRate,p1:flag.p1,p4:flag.p4,specialScore:flag.score});}}
           }
-          const rootId=id=>id.replace(/__(RELAX10|RELAX20)$/,'');
-          const configMap=new Map(exp.systems.flatMap(s=>s.configs).map(c=>[c.id,c]));
-          function annotate(rows,source){return rows.map(t=>{const sp=specialAt(t.openedAt).get(t.symbol)??{p1:false,p4:false,score:0};return{...t,source,rootId:rootId(t.strategyId),specialP1:sp.p1,specialP4:sp.p4,specialUnion:sp.p1||sp.p4,specialScore:sp.score};});}
-          function buildRows(pack,variant){
-            const base=annotate(pack.baseline,'BASE');
-            if(variant.relax===0)return base;
-            const extra=annotate(variant.relax===10?pack.relax10:pack.relax20,`RELAX${variant.relax}`).filter(t=>t.specialUnion);
-            const seen=new Map();
-            for(const t of base)seen.set(`${t.rootId}|${t.symbol}|${t.openedAt}|${t.side}`,t);
-            for(const t of extra){const k=`${t.rootId}|${t.symbol}|${t.openedAt}|${t.side}`;if(!seen.has(k))seen.set(k,t);}
-            return [...seen.values()];
-          }
-          function replay(pack,variant,scenario='base'){
-            let equity=1000,peak=equity,maxDrawdown=0;const open=[],accepted=[],cooldown=new Map();
-            const rows=buildRows(pack,variant).sort((a,b)=>a.openedAt-b.openedAt||b.strength-a.strength);
-            const settle=time=>{for(const t of open.filter(x=>x.closedAt<=time).sort((a,b)=>a.closedAt-b.closedAt)){equity+=t.netPnl;peak=Math.max(peak,equity);maxDrawdown=Math.max(maxDrawdown,(peak-equity)/peak);open.splice(open.indexOf(t),1);const c=configMap.get(t.strategyId);cooldown.set(`${t.rootId}:${t.symbol}`,t.closedAt+(c?.cooldownHours??24)*3600000);}};
-            for(let i=0;i<rows.length;){const openedAt=rows[i].openedAt;settle(openedAt);const same=[];while(i<rows.length&&rows[i].openedAt===openedAt)same.push(rows[i++]);
-              same.sort((a,b)=>variant.priority?(Number(b.specialUnion)-Number(a.specialUnion)||b.specialScore-a.specialScore||b.strength-a.strength):(b.strength-a.strength));
-              for(const t of same){const c=configMap.get(t.strategyId);if(!c||equity<=100||open.some(x=>x.symbol===t.symbol)||(cooldown.get(`${t.rootId}:${t.symbol}`)??0)>t.openedAt)continue;
-                const sameSide=open.filter(x=>x.side===t.side);const friction=scenario==='stress'?0.0022:0.0014;const penalty=scenario==='stress'?0.0008:scenario==='adverse'?0.00025:0;
-                const multiple=Math.min(c.notionalMultiple,c.riskRate/Math.max(t.stopRate+friction,1e-9));if(multiple<c.minNotionalMultiple)continue;const notional=equity*multiple,plannedRisk=notional*(t.stopRate+friction);
-                if(sum(open.map(x=>x.plannedRisk))+plannedRisk>equity*0.10||sum(sameSide.map(x=>x.plannedRisk))+plannedRisk>equity*0.065)continue;
-                const at={...t,notional,plannedRisk,netPnl:notional*(t.netReturnRate-penalty)};open.push(at);accepted.push(at);
-              }}settle(Infinity);return{trades:accepted,endEquity:equity,maxDrawdown};
-          }
-          function period(account,start,end,startEq=1000){const rows=account.trades.filter(t=>t.openedAt>=start&&t.openedAt<end),g=rows.filter(t=>t.netPnl>0),l=rows.filter(t=>t.netPnl<=0);let eq=startEq,pk=eq,dd=0;for(const t of [...rows].sort((a,b)=>a.closedAt-b.closedAt)){eq+=t.netPnl;pk=Math.max(pk,eq);dd=Math.max(dd,(pk-eq)/Math.max(pk,1e-9));}return{trades:rows.length,tradesPerDay:rows.length/Math.max(1,(end-start)/86400000),netPnl:sum(rows.map(t=>t.netPnl)),profitFactor:l.length?sum(g.map(t=>t.netPnl))/Math.abs(sum(l.map(t=>t.netPnl))):g.length?99:0,maxDrawdown:dd};}
-          function combined(variant,scenario){const accounts=exp.systems.map(p=>({system:p.system,account:replay(p,variant,scenario)}));const trades=accounts.flatMap(x=>x.account.trades.map(t=>({...t,systemOwner:x.system}))).sort((a,b)=>a.closedAt-b.closedAt);return{accounts,trades};}
-          function combinedPeriod(row,start,end){const rows=row.trades.filter(t=>t.openedAt>=start&&t.openedAt<end),g=rows.filter(t=>t.netPnl>0),l=rows.filter(t=>t.netPnl<=0);let eq=5000,pk=eq,dd=0;for(const t of [...rows].sort((a,b)=>a.closedAt-b.closedAt)){eq+=t.netPnl;pk=Math.max(pk,eq);dd=Math.max(dd,(pk-eq)/Math.max(pk,1e-9));}return{trades:rows.length,tradesPerDay:rows.length/Math.max(1,(end-start)/86400000),netPnl:sum(rows.map(t=>t.netPnl)),profitFactor:l.length?sum(g.map(t=>t.netPnl))/Math.abs(sum(l.map(t=>t.netPnl))):g.length?99:0,maxDrawdown:dd,positiveSystems:row.accounts.filter(x=>period(x.account,start,end).netPnl>0).length};}
-          const variants=[{id:'BASE',relax:0,priority:false},{id:'PRIORITY',relax:0,priority:true},{id:'RELAX10',relax:10,priority:false},{id:'RELAX10_PRIORITY',relax:10,priority:true},{id:'RELAX20',relax:20,priority:false},{id:'RELAX20_PRIORITY',relax:20,priority:true}];
-          const scenarios=['base','stress','adverse'];
-          const results={};
-          for(const v of variants){results[v.id]={variant:v};for(const sc of scenarios){const c=combined(v,sc);results[v.id][sc]={discovery:combinedPeriod(c,exp.fromMs,exp.discoveryEnd),validation:combinedPeriod(c,exp.discoveryEnd,exp.validationEnd),evaluation:combinedPeriod(c,exp.validationEnd,exp.toMs),full:combinedPeriod(c,exp.fromMs,exp.toMs)};}}
-          const base=results.BASE.base.discovery;
-          const discoveryQualified=variants.filter(v=>v.relax>0).map(v=>{const r=results[v.id],d=r.base.discovery,ds=r.stress.discovery,da=r.adverse.discovery;const uplift=d.trades/Math.max(base.trades,1)-1;const ok=uplift>=0.10&&d.netPnl>=base.netPnl*0.95&&d.profitFactor>=Math.max(1.05,base.profitFactor*0.90)&&d.maxDrawdown<=Math.max(0.20,base.maxDrawdown*1.25)&&d.positiveSystems>=4&&ds.netPnl>0&&ds.profitFactor>=1&&da.netPnl>0&&da.profitFactor>=1;const score=ok?uplift*2+Math.log(Math.max(d.profitFactor,1)):null;return{id:v.id,ok,uplift,score};}).filter(x=>x.ok).sort((a,b)=>b.score-a.score);
-          const selected=discoveryQualified[0]?.id??null;
-          let heldOut=null,decision='NO_RELEASE';
-          if(selected){const r=results[selected],b=results.BASE;const gate=(x,s)=>x.trades>0&&x.netPnl>0&&x.profitFactor>=(s?1:1.03)&&x.maxDrawdown<=0.20;const valU=r.base.validation.trades/Math.max(b.base.validation.trades,1)-1,evalU=r.base.evaluation.trades/Math.max(b.base.evaluation.trades,1)-1;heldOut={validationUplift:valU,evaluationUplift:evalU,validationPass:valU>=0.05&&gate(r.base.validation,false)&&gate(r.stress.validation,true)&&gate(r.adverse.validation,true),evaluationPass:evalU>=0.05&&gate(r.base.evaluation,false)&&gate(r.stress.evaluation,true)&&gate(r.adverse.evaluation,true)};if(heldOut.validationPass&&heldOut.evaluationPass)decision='FORWARD_CANDIDATE';}
-          const parity=Object.fromEntries(exp.systems.map(p=>{const a=replay(p,{id:'BASE',relax:0,priority:false},'base');return[p.system,{expected:p.expected,actual:{discovery:period(a,exp.fromMs,exp.discoveryEnd),validation:period(a,exp.discoveryEnd,exp.validationEnd),evaluation:period(a,exp.validationEnd,exp.toMs)}}];}));
-          const out={research:'anomaly-routed-regime-engine',selector:'validated PRICE1 or PRICE4 top cross-sectional outlier at the last completed 5m bar',variants,protocol:'relax 10% or 20% only for extra signals on current special coins; select one candidate using discovery only; validation/evaluation are pass-fail',parity,results,discoveryQualified,selected,heldOut,decision,stressNote:'quick audit approximates higher friction by subtracting 8bp and using 22bp in sizing; doubled-entry adverse is approximated by an additional 2.5bp return penalty. Exact stress replay is required if a candidate survives.'};
-          writeFileSync('/tmp/anomaly-route-result.json',JSON.stringify(out,null,2));
-          console.log(JSON.stringify({decision,selected,heldOut,discoveryQualified,summary:Object.fromEntries(Object.entries(results).map(([k,v])=>[k,{discovery:v.base.discovery,validation:v.base.validation,evaluation:v.base.evaluation,stressValidation:v.stress.validation,stressEvaluation:v.stress.evaluation}]))},null,2));
+          function resolve(sig,friction,slippage){const config=configById.get(sig.strategyId),d=dataBySymbol.get(sig.symbol),rows=d.rows,idx=sig.index+1;if(rows[idx]?.time*1000!==sig.openedAt)return null;const dir=sig.direction,entry=rows[idx].open*(1+dir*slippage),stopRate=sig.stopRate,trail=config.exitModel==='TRAIL',targetRate=trail?null:Math.max(stopRate*config.rewardRisk,friction*2.2),origStop=entry*(1-dir*stopRate),target=trail?null:entry*(1+dir*targetRate);let activeStop=origStop,extreme=entry,exit=entry,closedAt=rows[idx].time*1000,outcome='DATA_GAP';const maxBars=config.maxHoldHours*12;for(let o=0;o<maxBars&&idx+o<rows.length;o++){const c=rows[idx+o];if(o&&c.time!==rows[idx+o-1].time+300){exit=rows[idx+o-1].close;closedAt=rows[idx+o-1].time*1000;break;}const stopped=dir>0?c.low<=activeStop:c.high>=activeStop,targeted=!trail&&(dir>0?c.high>=target:c.low<=target);if(stopped||targeted){exit=stopped?activeStop:target;closedAt=c.time*1000;outcome=stopped?(activeStop===origStop?'STOP':'TRAIL'):'TARGET';break;}if(trail){extreme=dir>0?Math.max(extreme,c.high):Math.min(extreme,c.low);const cand=extreme*(1-dir*stopRate*config.trailScale);activeStop=dir>0?Math.max(activeStop,cand):Math.min(activeStop,cand);}exit=c.close;closedAt=c.time*1000;outcome=o===maxBars-1?'TIMEOUT':outcome;}const gross=dir*(exit-entry)/entry;return{...sig,entry,stop:origStop,target,friction,closedAt,outcome,netReturnRate:gross-friction};}
+          function portfolio(selector,friction=0.0014,slippage=0.00025){const rows=candidates.filter(x=>selector==='P1'?x.p1:selector==='P4'?x.p4:(x.p1||x.p4)).sort((a,b)=>a.openedAt-b.openedAt||b.specialScore-a.specialScore||b.strength-a.strength);let equity=1000,peak=equity,maxDrawdown=0;const open=[],accepted=[],cooldown=new Map();const settle=time=>{for(const t of open.filter(x=>x.closedAt<=time).sort((a,b)=>a.closedAt-b.closedAt)){equity+=t.netPnl;peak=Math.max(peak,equity);maxDrawdown=Math.max(maxDrawdown,(peak-equity)/peak);open.splice(open.indexOf(t),1);cooldown.set(`${t.strategyId}:${t.symbol}`,t.closedAt+configById.get(t.strategyId).cooldownHours*3600000);}};for(let i=0;i<rows.length;){const openedAt=rows[i].openedAt;settle(openedAt);const same=[];while(i<rows.length&&rows[i].openedAt===openedAt)same.push(rows[i++]);same.sort((a,b)=>b.specialScore-a.specialScore||b.strength-a.strength);for(const sig of same){const config=configById.get(sig.strategyId);if(equity<=100||open.some(x=>x.symbol===sig.symbol)||(cooldown.get(`${sig.strategyId}:${sig.symbol}`)??0)>sig.openedAt)continue;const sameSide=open.filter(x=>x.side===sig.side),multiple=Math.min(config.notionalMultiple,config.riskRate/Math.max(sig.stopRate+friction,1e-9));if(multiple<config.minNotionalMultiple)continue;const notional=equity*multiple,plannedRisk=notional*(sig.stopRate+friction);if(sum(open.map(x=>x.plannedRisk))+plannedRisk>equity*0.10||sum(sameSide.map(x=>x.plannedRisk))+plannedRisk>equity*0.065)continue;const t=resolve(sig,friction,slippage);if(!t)continue;const at={...t,notional,plannedRisk,netPnl:notional*t.netReturnRate};open.push(at);accepted.push(at);}}settle(Infinity);return{trades:accepted,endEquity:equity,maxDrawdown};}
+          function metrics(account,start,end){const rows=account.trades.filter(t=>t.openedAt>=start&&t.openedAt<end),g=rows.filter(t=>t.netPnl>0),l=rows.filter(t=>t.netPnl<=0);let eq=1000,pk=eq,dd=0;for(const t of [...rows].sort((a,b)=>a.closedAt-b.closedAt)){eq+=t.netPnl;pk=Math.max(pk,eq);dd=Math.max(dd,(pk-eq)/Math.max(pk,1e-9));}const monthly=raw.months.flatMap(m=>{const s=monthStart(m),e=Date.UTC(Number(m.slice(0,4)),Number(m.slice(4,6)),1);if(s<start||e>end)return[];const xs=rows.filter(t=>t.openedAt>=s&&t.openedAt<e);return[{month:m,trades:xs.length,pnl:sum(xs.map(t=>t.netPnl))}];});const byState=Object.fromEntries([...new Set(rows.map(t=>t.system))].map(s=>[s,{trades:rows.filter(t=>t.system===s).length,pnl:sum(rows.filter(t=>t.system===s).map(t=>t.netPnl))}]));return{trades:rows.length,tradesPerDay:rows.length/Math.max(1,(end-start)/86400000),netPnl:sum(rows.map(t=>t.netPnl)),profitFactor:l.length?sum(g.map(t=>t.netPnl))/Math.abs(sum(l.map(t=>t.netPnl))):g.length?99:0,maxDrawdown:dd,activeMonths:monthly.filter(x=>x.trades).length,positiveMonths:monthly.filter(x=>x.pnl>0).length,monthly,byState};}
+          const selectors=['P1','P4','UNION'],scenarios={base:[0.0014,0.00025],stress:[0.0022,0.00025],adverse:[0.0014,0.0005]},results={};
+          for(const sel of selectors){results[sel]={};for(const [name,[fr,sl]] of Object.entries(scenarios)){const a=portfolio(sel,fr,sl);results[sel][name]={discovery:metrics(a,fromMs,discoveryEnd),validation:metrics(a,discoveryEnd,validationEnd),evaluation:metrics(a,validationEnd,toMs),full:metrics(a,fromMs,toMs)};}}
+          const folds=[[0,10],[10,20],[20,30]];
+          const discoveryQualified=selectors.map(sel=>{const r=results[sel],d=r.base.discovery,ds=r.stress.discovery,da=r.adverse.discovery,foldRows=folds.map(([a,b])=>{const acc=portfolio(sel,0.0014,0.00025);return metrics(acc,monthStart(raw.months[a]),monthStart(raw.months[b]));});const ok=d.tradesPerDay>=1.5&&d.netPnl>0&&d.profitFactor>=1.08&&d.activeMonths>=20&&d.positiveMonths>=Math.ceil(d.activeMonths*0.55)&&d.maxDrawdown<=0.20&&ds.netPnl>0&&ds.profitFactor>=1&&da.netPnl>0&&da.profitFactor>=1&&foldRows.filter(x=>x.netPnl>0).length>=2&&foldRows.at(-1).netPnl>0;const score=ok?d.tradesPerDay*Math.log(Math.max(d.profitFactor,1))*d.positiveMonths/Math.max(d.activeMonths,1):null;return{selector:sel,ok,score,folds:foldRows.map(x=>({trades:x.trades,pnl:x.netPnl,pf:x.profitFactor}))};}).filter(x=>x.ok).sort((a,b)=>b.score-a.score);
+          const selected=discoveryQualified[0]?.selector??null;let heldOut=null,decision='NO_RELEASE';if(selected){const r=results[selected];const pass=(x,min,pf)=>x.trades>=min&&x.netPnl>0&&x.profitFactor>=pf&&x.maxDrawdown<=0.20;heldOut={validationPass:pass(r.base.validation,50,1.03)&&pass(r.stress.validation,50,1)&&pass(r.adverse.validation,50,1),evaluationPass:pass(r.base.evaluation,30,1.03)&&pass(r.stress.evaluation,30,1)&&pass(r.adverse.evaluation,30,1)};if(heldOut.validationPass&&heldOut.evaluationPass)decision='FORWARD_CANDIDATE';}
+          const baseline={full:baseReport.candidateCombined.base,discovery:baseReport.candidateCombined.base.discovery,validation:baseReport.candidateCombined.base.validation,evaluation:baseReport.candidateCombined.base.evaluation};
+          const out={research:'5m-anomaly-routed-regime-system',premise:'keep frozen hourly regime ownership and frozen selected tactics; scan the validated PRICE1/PRICE4 special candidates every completed 5m bar and let only the owning regime tactics choose direction',canonical:{sha256:raw.sha256,months:raw.months.length,symbols:raw.symbols},synchronizedBars,specialBars,candidateSignals:candidates.length,selectors,results,discoveryQualified,selected,heldOut,decision,baseline,protocolNote:'No strategy parameter is tuned. P1/P4 specialness thresholds are inherited from the prior 44m selector audit. The router is evaluated as an independent sixth system; production/PAPER/LIVE are unchanged.'};
+          writeFileSync('/tmp/anomaly-router-result.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify({decision,selected,heldOut,synchronizedBars,specialBars,candidateSignals:candidates.length,discoveryQualified,summary:Object.fromEntries(selectors.map(s=>[s,{D:results[s].base.discovery,V:results[s].base.validation,E:results[s].base.evaluation,stressV:results[s].stress.validation,stressE:results[s].stress.evaluation}]))},null,2));
           EOF
-          node /tmp/anomaly-route-audit.mjs
+          node /tmp/anomaly-router.mjs
       - name: Print compact result
-        run: jq '{decision,selected,heldOut,discoveryQualified,summary:(.results|with_entries(.value={discovery:.value.base.discovery,validation:.value.base.validation,evaluation:.value.base.evaluation,stressValidation:.value.stress.validation,stressEvaluation:.value.stress.evaluation}))}' /tmp/anomaly-route-result.json
+        run: jq '{decision,selected,heldOut,synchronizedBars,specialBars,candidateSignals,discoveryQualified,summary:(.results|with_entries(.value={discovery:.value.base.discovery,validation:.value.base.validation,evaluation:.value.base.evaluation,stressValidation:.value.stress.validation,stressEvaluation:.value.stress.evaluation}))}' /tmp/anomaly-router-result.json
       - uses: actions/upload-artifact@v4
         with:
-          name: anomaly-routed-regime-engine-44m
-          path: |
-            /tmp/anomaly-route-result.json
-            /tmp/regime-route-base-report.json
+          name: anomaly-5m-router-44m
+          path: /tmp/anomaly-router-result.json
           retention-days: 7
