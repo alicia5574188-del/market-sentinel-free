@@ -28,7 +28,7 @@ jobs:
           const xml=await (await fetch(listUrl)).text();
           const symbols=[...new Set([...xml.matchAll(/<Key>futures_usdt\/candlesticks_5m\/202301\/([^/<]+_USDT)-202301\.csv\.gz<\/Key>/g)].map(m=>m[1]))];
           const contracts=[]; let offset=0;
-          for(;;){const u=`https://api.gateio.ws/api/v4/futures/usdt/contracts_all?limit=1000&offset=${offset}`;const r=await fetch(u);if(!r.ok)throw new Error(`contracts_all ${r.status}`);const a=await r.json();contracts.push(...a);if(a.length<1000)break;offset+=a.length;}
+          for(;;){const u=`https://api.gateio.ws/api/v4/futures/usdt/contracts_all?limit=100&offset=${offset}`;const r=await fetch(u);if(!r.ok)throw new Error(`contracts_all ${r.status}`);const a=await r.json();contracts.push(...a);if(a.length<100)break;offset+=a.length;}
           const mult=new Map(contracts.map(x=>[x.name,Number(x.quanto_multiplier)]));
           const excluded=new Set(['DEFI_USDT','EXCH_USDT','PRIV_USDT','XAUG_USDT']);
           const rows=[];let cursor=0;
