@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
 const sourcePath = process.env.V12_SOURCE ?? "scripts/research-v12.mjs";
-const generatedPath = "/tmp/research-v12-frozen-generated.mjs";
+const generatedPath = "scripts/.research-v12-frozen-generated.mjs";
 const outputPath = process.env.RESEARCH_OUTPUT ?? "/tmp/v12-frozen-audit.json";
 const friction = Number(process.env.RESEARCH_FRICTION ?? 0.0014);
 const entrySlippage = Number(process.env.RESEARCH_ENTRY_SLIPPAGE ?? 0.00025);
