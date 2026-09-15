@@ -15,7 +15,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.16.0
-      - name: Probe S3-style prefix listings
+      - name: Probe direct S3 monthly prefixes
         run: |
           cat > /tmp/probe.mjs <<'EOF'
           import { writeFileSync } from 'node:fs';
@@ -23,19 +23,19 @@ jobs:
           const out=[];
           for(const month of months){
             const prefix=`futures_usdt/candlesticks_5m/${month}/`;
-            const urls=[
-              `https://download.gatedata.org/?list-type=2&prefix=${encodeURIComponent(prefix)}&max-keys=1000`,
-              `https://download.gatedata.org/?prefix=${encodeURIComponent(prefix)}&max-keys=1000`,
-            ];
-            const tries=[];
-            for(const url of urls){try{const r=await fetch(url);const text=await r.text();const keys=[...text.matchAll(/<Key>([^<]+)<\/Key>/g)].map(m=>m[1]);const syms=[...new Set(keys.map(k=>k.match(/\/([A-Za-z0-9_\u0080-\uffff]+_USDT)-\d{6}\.csv\.gz$/)?.[1]).filter(Boolean))];tries.push({url,status:r.status,type:r.headers.get('content-type'),length:text.length,keyCount:keys.length,symbolCount:syms.length,symbols:syms.slice(0,100),isTruncated:/<IsTruncated>true<\/IsTruncated>/.test(text),next:text.match(/<NextContinuationToken>([^<]+)<\/NextContinuationToken>/)?.[1]??null,head:text.slice(0,300)});}catch(e){tries.push({url,error:String(e)});}}
-            out.push({month,tries});
+            const url=`https://gateio-public-data.s3.amazonaws.com/?list-type=2&prefix=${encodeURIComponent(prefix)}&max-keys=1000`;
+            try{
+              const r=await fetch(url),text=await r.text();
+              const keys=[...text.matchAll(/<Key>([^<]+)<\/Key>/g)].map(m=>m[1]);
+              const syms=[...new Set(keys.map(k=>k.match(/\/([^/]+_USDT)-\d{6}\.csv\.gz$/)?.[1]).filter(Boolean))];
+              out.push({month,url,status:r.status,type:r.headers.get('content-type'),length:text.length,keyCount:keys.length,symbolCount:syms.length,symbols:syms.sort(),prefixReturned:text.match(/<Prefix>([^<]*)<\/Prefix>/)?.[1]??null,isTruncated:/<IsTruncated>true<\/IsTruncated>/.test(text),next:text.match(/<NextContinuationToken>([^<]+)<\/NextContinuationToken>/)?.[1]??null,head:text.slice(0,300)});
+            }catch(e){out.push({month,error:String(e)});}
           }
-          writeFileSync('/tmp/prefix-probe.json',JSON.stringify(out,null,2));console.log(JSON.stringify(out,null,2));
+          writeFileSync('/tmp/direct-prefix-probe.json',JSON.stringify(out,null,2));console.log(JSON.stringify(out,null,2));
           EOF
           node /tmp/probe.mjs
       - uses: actions/upload-artifact@v4
         with:
-          name: gate-prefix-probe
-          path: /tmp/prefix-probe.json
+          name: gate-direct-prefix-probe
+          path: /tmp/direct-prefix-probe.json
           retention-days: 3
