@@ -16,10 +16,7 @@ async function fetchBuf(url){for(let a=0;a<5;a++){try{const r=await fetch(url);i
 async function five(symbol,month){
   const p=`${CACHE}/${encodeURIComponent(symbol)}-${month}.gz`;let b=existsSync(p)?readFileSync(p):null;
   if(!b){b=await fetchBuf(`https://download.gatedata.org/futures_usdt/candlesticks_5m/${month}/${encodeURIComponent(symbol)}-${month}.csv.gz`);if(!b)return [];writeFileSync(p,b)}
-  try{
-    const rows=gunzipSync(b).toString('utf8').trim().split('\n').flatMap(line=>{const [time,volume,close,high,low,open]=line.split(',').map(Number);return time>0&&open>0&&low>0&&high>=low?[{time,volume,close,high,low,open}]:[]}).sort((a,b)=>a.time-b.time);
-    return rows.length>=exp(month)*.5?rows:[];
-  }catch{return []}
+  try{const rows=gunzipSync(b).toString('utf8').trim().split('\n').flatMap(line=>{const [time,volume,close,high,low,open]=line.split(',').map(Number);return time>0&&open>0&&low>0&&high>=low?[{time,volume,close,high,low,open}]:[]}).sort((a,b)=>a.time-b.time);return rows.length>=exp(month)*.5?rows:[]}catch{return []}
 }
 function hourly(rows){const out=[];let b=null;for(const r of rows){const t=Math.floor(r.time/H)*H;if(!b||b.time!==t){if(b?.samples>=10)out.push(b);b={time:t,open:r.open,high:r.high,low:r.low,close:r.close,samples:1}}else{b.high=Math.max(b.high,r.high);b.low=Math.min(b.low,r.low);b.close=r.close;b.samples++}}if(b?.samples>=10)out.push(b);return out}
 function lb(rows,t){let l=0,h=rows.length;while(l<h){const q=(l+h)>>1;if(rows[q].time<t)l=q+1;else h=q}return l}
@@ -49,7 +46,7 @@ for(const month of MONTHS){
   }
 }
 candidates.sort((a,b)=>a.t-b.t||a.rank-b.rank);const last=new Map(),events=[];
-for(const e of candidates){const lastT=last.get(e.symbol)??-Infinity;if(e.t-lastT<4*H)continue;last.set(e.symbol,e.t);events.push(e)}
+for(const e of candidates){const key=`${e.rank}|${e.symbol}`,lastT=last.get(key)??-Infinity;if(e.t-lastT<4*H)continue;last.set(key,e.t);events.push(e)}
 
 function makeTrade(e,friction,slip){const rows=raw.get(`${e.month}|${e.symbol}`)||[],entryTime=e.t+H,bi=lb(rows,entryTime),xi=bi+23;if(rows[bi]?.time!==entryTime||!rows[xi])return null;for(let i=bi+1;i<=xi;i++)if(rows[i].time!==rows[i-1].time+300)return null;const entry=rows[bi].open*(1+slip),exit=rows[xi].close,gross=(exit-entry)/entry;return {...e,entryTime,exitTime:rows[xi].time+300,gross,net:gross-friction}}
 const trades=[];for(const e of events)for(const scenario of ['base','stress','adverse']){const friction=scenario==='stress'?STRESS:BASE,slip=scenario==='adverse'?ADV:SLIP,xx=makeTrade(e,friction,slip);if(xx)trades.push({...xx,scenario})}
