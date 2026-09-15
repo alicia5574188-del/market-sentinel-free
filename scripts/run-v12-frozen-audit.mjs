@@ -11,6 +11,12 @@ const minContextMarkets = Number(process.env.RESEARCH_MIN_CONTEXT_MARKETS ?? 12)
 let source = readFileSync(sourcePath, "utf8");
 source = source.replace("const FRICTION = 0.0014;", `const FRICTION = ${JSON.stringify(friction)};`)
   .replace("const ENTRY_SLIPPAGE = 0.00025;", `const ENTRY_SLIPPAGE = ${JSON.stringify(entrySlippage)};`)
+  .replace("for (const { rows } of datasets) for (let index = 6; index < rows.length; index += 1) {",
+    `for (const { rows } of datasets) for (let index = 6; index < rows.length; index += 1) {\n  if (rows[index].time - rows[index - 6].time !== 1_800) continue;`)
+  .replace("for (let index = 120; index < rows.length - 1; index += 1) {",
+    `for (let index = 120; index < rows.length - 1; index += 1) {\n      if (rows[index].time - rows[index - 119].time !== 35_700 || rows[index + 1].time !== rows[index].time + 300) continue;`)
+  .replace("const row = rows[index + offset];",
+    `const row = rows[index + offset];\n    if (row.time !== rows[index + offset - 1].time + 300) return null;`)
   .replace("if (!context || context.markets < 12) continue;",
     `if (!context || context.markets < ${JSON.stringify(minContextMarkets)}) continue;`)
   .replace("const results = variants.map((config, index) => {", `const frozenIndex = ({\"潮接\":2,\"潮补\":2,\"静移\":2,\"冲衡\":0})[name];\n  if (frozenIndex == null) return [];\n  const results = variants.map((config, index) => ({ config, index })).filter((row) => row.index === frozenIndex).map(({ config, index }) => {`);
