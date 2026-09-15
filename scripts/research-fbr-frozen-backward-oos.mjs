@@ -31,7 +31,7 @@ const data = new Map(raw.datasets.map((d) => [d.symbol, [...d.rows].sort((a, b) 
 const syms = [...data.keys()];
 if (syms.length < 15) throw new Error(`Only ${syms.length} usable symbols`);
 const idx = new Map([...data].map(([s, r]) => [s, new Map(r.map((x, i) => [x.time, i]))]));
-const times = [...new Set(raw.datasets.flatMap((d) => d.rows.map((x) => x.time))]
+const times = [...new Set(raw.datasets.flatMap((d) => d.rows.map((x) => x.time)))]
   .sort((a, b) => a - b)
   .filter((t) => t >= FROM && t < TO && t % 300 === 0);
 
