@@ -1,0 +1,115 @@
+name: Validate Specialness Exit Geometry
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/validate-specialness-exit-geometry.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Fetch canonical 44-month Gate 5m core universe
+        env:
+          RESEARCH_INTERVAL: 5m
+          RESEARCH_DATASET: /tmp/gate-44m-5m.json
+          RESEARCH_MONTHS: 202301,202302,202303,202304,202305,202306,202307,202308,202309,202310,202311,202312,202401,202402,202403,202404,202405,202406,202407,202408,202409,202410,202411,202412,202501,202502,202503,202504,202505,202506,202507,202508,202509,202510,202511,202512,202601,202602,202603,202604,202605,202606,202607,202608
+          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT
+          RESEARCH_MIN_CONTRACTS: 11
+          RESEARCH_MIN_MONTH_COVERAGE: 0.70
+          RESEARCH_CONCURRENCY: 16
+        run: node scripts/fetch-gate-history.mjs
+      - name: Aggregate canonical 1h signal dataset
+        env:
+          RESEARCH_DATASET: /tmp/gate-44m-5m.json
+          RESEARCH_OUTPUT: /tmp/gate-44m-1h.json
+          RESEARCH_MAX_FILL_HOURS: 3
+        run: node scripts/aggregate-gate-history.mjs
+      - name: Assert canonical hashes
+        run: |
+          test "$(jq -r .sha256 /tmp/gate-44m-5m.json)" = "9e5fd7d06eeee420d60318bee72de3b16e7e877247102a2b505453ab0b8a4522"
+          test "$(jq -r .sha256 /tmp/gate-44m-1h.json)" = "185bd97b968f96373bef6a174c8258d8ad5606a0d1ed824eaa2cc1ace1efa053"
+      - name: Build specialness-aware research variant
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('scripts/research-regime-system-portfolios.mjs').read_text()
+          p=p.replace('const ENTRY_SLIPPAGE = 0.00025;', 'const ENTRY_SLIPPAGE = 0.00025;\nconst SPECIAL_EXIT_SCALE = Number(process.env.SPECIAL_EXIT_SCALE ?? 1);')
+          p=p.replace('const context = { median24: median(values("r24")), median7: median(values("r7d")), median30: median(values("r30d")),', 'const context = { median1: median(values("r1")), median24: median(values("r24")), median7: median(values("r7d")), median30: median(values("r30d")),')
+          old='''  const system = classify(context); stateCounts[system] += 1;\n  for (const f of rows) observations.push({ ...f, time, context,\n    relative24: f.r24 - context.median24, relative7: f.r7d - context.median7, system });'''
+          new='''  const system = classify(context); stateCounts[system] += 1;\n  const rel1 = rows.map((row) => row.r1 - context.median1);\n  const rel1Scale = Math.max(0.001, median(rel1.map((value) => Math.abs(value))));\n  const topSpecial = [...rows].sort((left, right) => Math.abs(right.r1 - context.median1) - Math.abs(left.r1 - context.median1))[0];\n  for (const f of rows) {\n    const relative1 = f.r1 - context.median1;\n    const special = f.symbol === topSpecial?.symbol && Math.abs(relative1) >= 0.006 && Math.abs(relative1) / rel1Scale >= 1.8;\n    observations.push({ ...f, time, context, relative1, special,\n      relative24: f.r24 - context.median24, relative7: f.r7d - context.median7, system });\n  }'''
+          if old not in p: raise SystemExit('observation patch anchor not found')
+          p=p.replace(old,new)
+          old2='''  const stopRate = Math.min(config.stopCap, Math.max(config.stopFloor, config.stopAtr * f.atr6));'''
+          new2='''  const specialScale = f.special ? SPECIAL_EXIT_SCALE : 1;\n  const stopRate = Math.min(config.stopCap, Math.max(config.stopFloor, config.stopAtr * f.atr6) * specialScale);'''
+          if old2 not in p: raise SystemExit('exit patch anchor not found')
+          p=p.replace(old2,new2)
+          Path('/tmp/special-exit-geometry.mjs').write_text(p)
+          PY
+      - name: Run coarse geometry variants
+        env:
+          RESEARCH_SIGNAL_DATASET: /tmp/gate-44m-1h.json
+          RESEARCH_EXECUTION_DATASET: /tmp/gate-44m-5m.json
+        run: |
+          for scale in 1 1.25 1.5; do
+            SPECIAL_EXIT_SCALE=$scale RESEARCH_OUTPUT=/tmp/report-$scale.json node /tmp/special-exit-geometry.mjs > /tmp/log-$scale.txt
+          done
+      - name: Compare discovery then held-out periods
+        run: |
+          python3 - <<'PY'
+          import json
+          scales=['1','1.25','1.5']
+          reports={s:json.load(open(f'/tmp/report-{s}.json')) for s in scales}
+          def snap(r):
+            c=r['candidateCombined']
+            return {
+              'base': {k:c['base'][k] for k in ['netPnlU','maxDrawdown','positiveMonths','activeMonths','discovery','validation','evaluation']},
+              'stress': {k:c['higherCost'][k] for k in ['netPnlU','maxDrawdown','positiveMonths','activeMonths','discovery','validation','evaluation']},
+              'adverse': {k:c['doubledAdverseEntry'][k] for k in ['netPnlU','maxDrawdown','positiveMonths','activeMonths','discovery','validation','evaluation']},
+              'systems':[{'system':x['system'],'accepted':x['accepted'],'discovery':x.get('discovery'),'validation':x.get('validation'),'evaluation':x.get('evaluation')} for x in r['systems']],
+            }
+          summary={s:snap(r) for s,r in reports.items()}
+          b=summary['1']['base']
+          candidates=[]
+          for s in ['1.25','1.5']:
+            x=summary[s]['base']
+            discovery_improves=x['discovery']['netPnl']>b['discovery']['netPnl'] and x['maxDrawdown']<=b['maxDrawdown']*1.25
+            if discovery_improves:
+              candidates.append((x['discovery']['netPnl'],s))
+          selected=max(candidates)[1] if candidates else None
+          held=None
+          decision='NO_DISCOVERY_IMPROVEMENT'
+          if selected:
+            x=summary[selected]
+            held={
+              'validationPositive':x['base']['validation']['netPnl']>0,
+              'evaluationPositive':x['base']['evaluation']['netPnl']>0,
+              'stressValidationPositive':x['stress']['validation']['netPnl']>0,
+              'stressEvaluationPositive':x['stress']['evaluation']['netPnl']>0,
+              'adverseValidationPositive':x['adverse']['validation']['netPnl']>0,
+              'adverseEvaluationPositive':x['adverse']['evaluation']['netPnl']>0,
+              'validationVsBaseline':x['base']['validation']['netPnl']/b['validation']['netPnl'],
+              'evaluationVsBaseline':x['base']['evaluation']['netPnl']/b['evaluation']['netPnl'],
+            }
+            decision='FORWARD_CANDIDATE' if all(held[k] for k in ['validationPositive','evaluationPositive','stressValidationPositive','stressEvaluationPositive','adverseValidationPositive','adverseEvaluationPositive']) and held['validationVsBaseline']>=0.9 and held['evaluationVsBaseline']>=0.9 else 'NO_RELEASE'
+          out={'research':'specialness-exit-geometry','premise':'direction remains frozen five-regime logic; only PRICE1 top-special signals receive wider stop/target/trailing distance at equal risk sizing','scales':summary,'selectedByDiscovery':selected,'heldOut':held,'decision':decision}
+          json.dump(out,open('/tmp/specialness-exit-geometry.json','w'),indent=2)
+          print(json.dumps({'selectedByDiscovery':selected,'heldOut':held,'decision':decision,'summary':{s:{'discovery':summary[s]['base']['discovery'],'validation':summary[s]['base']['validation'],'evaluation':summary[s]['base']['evaluation'],'fullPnl':summary[s]['base']['netPnlU'],'dd':summary[s]['base']['maxDrawdown']} for s in scales}},indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: specialness-exit-geometry-44m
+          path: |
+            /tmp/specialness-exit-geometry.json
+            /tmp/report-1.json
+            /tmp/report-1.25.json
+            /tmp/report-1.5.json
+          retention-days: 7
