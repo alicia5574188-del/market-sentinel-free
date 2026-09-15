@@ -40,31 +40,39 @@ const monthKeys = (from, to) => {
   return out;
 };
 const rangeSum = (prefix, from, to) => to < from ? 0 : prefix[to + 1] - prefix[from];
+const nanArray = (length) => {
+  const out = new Float64Array(length);
+  out.fill(Number.NaN);
+  return out;
+};
 
 const symbols = DATA.datasets.map((d) => d.symbol);
 if (symbols.length < 15) throw new Error(`Only ${symbols.length} symbols; need >=15`);
-const rowMap = new Map();
-const features = [];
 
+// Memory-bounded representation: each symbol keeps its original hourly rows plus compact
+// typed feature arrays. We deliberately do NOT cache per-config signal/event objects.
+const series = [];
+let featureRows = 0;
 for (const dataset of DATA.datasets) {
   const rows = [...dataset.rows].sort((a, b) => a.time - b.time);
-  rowMap.set(dataset.symbol, new Map(rows.map((r) => [r.time, r])));
   const n = rows.length;
-  const rets = new Float64Array(n);
+  const rets = nanArray(n);
   for (let i = 1; i < n; i += 1) {
-    if (rows[i].time !== rows[i - 1].time + HOUR || !(rows[i - 1].close > 0) || !(rows[i].close > 0)) {
-      rets[i] = Number.NaN;
-    } else rets[i] = rows[i].close / rows[i - 1].close - 1;
+    if (rows[i].time !== rows[i - 1].time + HOUR || !(rows[i - 1].close > 0) || !(rows[i].close > 0)) continue;
+    rets[i] = rows[i].close / rows[i - 1].close - 1;
   }
+
   const prefix = new Float64Array(n + 1);
   const prefixSq = new Float64Array(n + 1);
   const invalidPrefix = new Uint32Array(n + 1);
   for (let i = 0; i < n; i += 1) {
-    const v = Number.isFinite(rets[i]) ? rets[i] : 0;
+    const valid = Number.isFinite(rets[i]);
+    const v = valid ? rets[i] : 0;
     prefix[i + 1] = prefix[i] + v;
     prefixSq[i + 1] = prefixSq[i] + v * v;
-    invalidPrefix[i + 1] = invalidPrefix[i] + Number(!Number.isFinite(rets[i]));
+    invalidPrefix[i + 1] = invalidPrefix[i] + Number(!valid);
   }
+
   const xyPrefixes = new Map();
   for (const lag of LAGS) {
     const xy = new Float64Array(n + 1);
@@ -76,20 +84,26 @@ for (const dataset of DATA.datasets) {
     xyPrefixes.set(lag, xy);
   }
 
+  const impulses = new Map(IMPULSE_LOOKS.map((look) => [look, nanArray(n)]));
+  const corrs = new Map();
+  for (const window of STATE_WINDOWS) for (const lag of LAGS) corrs.set(`${window}:${lag}`, nanArray(n));
+
   const warm = Math.max(...STATE_WINDOWS) + Math.max(...LAGS) + 2;
   for (let i = warm; i < n; i += 1) {
     const row = rows[i];
     if (row.time < OLD_FROM || row.time >= EVAL_TO || !(row.close > 0)) continue;
-    const impulses = {};
+
     let impulsesOk = true;
     for (const look of IMPULSE_LOOKS) {
       const anchor = rows[i - look];
-      if (!anchor || anchor.time !== row.time - look * HOUR || !(anchor.close > 0)) { impulsesOk = false; break; }
-      impulses[look] = row.close / anchor.close - 1;
+      if (!anchor || anchor.time !== row.time - look * HOUR || !(anchor.close > 0)) {
+        impulsesOk = false;
+        break;
+      }
+      impulses.get(look)[i] = row.close / anchor.close - 1;
     }
     if (!impulsesOk) continue;
 
-    const autocorrs = {};
     let anyCorr = false;
     for (const window of STATE_WINDOWS) for (const lag of LAGS) {
       const xFrom = i - window + 1;
@@ -111,81 +125,69 @@ for (const dataset of DATA.datasets) {
       if (!(denom > 0)) continue;
       const corr = (sxy - sx * sy / window) / denom;
       if (!Number.isFinite(corr)) continue;
-      autocorrs[`${window}:${lag}`] = Math.max(-1, Math.min(1, corr));
+      corrs.get(`${window}:${lag}`)[i] = Math.max(-1, Math.min(1, corr));
       anyCorr = true;
     }
-    if (!anyCorr) continue;
-    features.push({ symbol: dataset.symbol, signalAt: row.time, impulses, autocorrs });
+    if (anyCorr) featureRows += 1;
   }
-}
-features.sort((a, b) => a.signalAt - b.signalAt || a.symbol.localeCompare(b.symbol));
 
-function legReturn(symbol, direction, entryAt, exitAt, slip) {
-  const rm = rowMap.get(symbol);
-  const entry0 = rm.get(entryAt)?.open;
-  const exit = rm.get(exitAt)?.open;
+  series.push({ symbol: dataset.symbol, rows, impulses, corrs, warm });
+}
+
+function legReturn(entry0, exit, direction, slip) {
   if (![entry0, exit].every((v) => Number.isFinite(v) && v > 0)) return null;
   const entry = direction > 0 ? entry0 * (1 + slip) : entry0 * (1 - slip);
   return direction > 0 ? exit / entry - 1 : 1 - exit / entry;
 }
 
-const signalCache = new Map();
-function signalsFor(config) {
-  const key = `${config.stateWindow}:${config.lag}:${config.impulseLook}:${config.impulseThreshold}:${config.autocorrThreshold}`;
-  if (signalCache.has(key)) return signalCache.get(key);
+// Evaluate exactly one config at a time. Event rows are released after its statistics are
+// computed, so the research frontier cannot grow memory with the number of configs.
+function eventsFor(config, until) {
+  const out = [];
   const corrKey = `${config.stateWindow}:${config.lag}`;
-  const out = [];
-  for (const x of features) {
-    const impulse = x.impulses[config.impulseLook];
-    const corr = x.autocorrs[corrKey];
-    if (!Number.isFinite(impulse) || !Number.isFinite(corr)) continue;
-    if (Math.abs(impulse) < config.impulseThreshold || Math.abs(corr) < config.autocorrThreshold) continue;
-    const direction = Math.sign(impulse) * (corr >= 0 ? 1 : -1);
-    if (!direction) continue;
-    out.push({ ...x, impulse, corr, direction });
-  }
-  signalCache.set(key, out);
-  return out;
-}
+  for (const s of series) {
+    const { rows, warm } = s;
+    const impulseArray = s.impulses.get(config.impulseLook);
+    const corrArray = s.corrs.get(corrKey);
+    let busyUntil = 0;
+    for (let i = warm; i < rows.length; i += 1) {
+      const signalAt = rows[i].time;
+      if (signalAt < OLD_FROM) continue;
+      if (signalAt >= until) break;
+      const impulse = impulseArray[i];
+      const corr = corrArray[i];
+      if (!Number.isFinite(impulse) || !Number.isFinite(corr)) continue;
+      if (Math.abs(impulse) < config.impulseThreshold || Math.abs(corr) < config.autocorrThreshold) continue;
+      const direction = Math.sign(impulse) * (corr >= 0 ? 1 : -1);
+      if (!direction) continue;
 
-const eventCache = new Map();
-function events(config, until = TRAIN_TO) {
-  const key = `${config.id}:${until}`;
-  if (eventCache.has(key)) return eventCache.get(key);
-  const out = [];
-  const busy = new Map();
-  for (const x of signalsFor(config)) {
-    if (x.signalAt >= until) continue;
-    const entryAt = x.signalAt + HOUR;
-    const exitAt = entryAt + config.hold * HOUR;
-    if (exitAt > until) continue;
-    if ((busy.get(x.symbol) ?? 0) > entryAt) continue;
-    const gross = legReturn(x.symbol, x.direction, entryAt, exitAt, ENTRY_SLIP);
-    const adverseGross = legReturn(x.symbol, x.direction, entryAt, exitAt, ADVERSE_SLIP);
-    if (![gross, adverseGross].every(Number.isFinite)) continue;
-    out.push({
-      symbol: x.symbol,
-      signalAt: x.signalAt,
-      entryAt,
-      exitAt,
-      direction: x.direction,
-      impulse: x.impulse,
-      corr: x.corr,
-      stateWindow: config.stateWindow,
-      lag: config.lag,
-      impulseLook: config.impulseLook,
-      impulseThreshold: config.impulseThreshold,
-      autocorrThreshold: config.autocorrThreshold,
-      hold: config.hold,
-      gross,
-      base: gross - BASE_COST,
-      stress: gross - STRESS_COST,
-      adverse: adverseGross - BASE_COST,
-      month: monthKey(entryAt),
-    });
-    busy.set(x.symbol, exitAt);
+      const entryAt = signalAt + HOUR;
+      const exitAt = entryAt + config.hold * HOUR;
+      if (exitAt > until) continue;
+      if (busyUntil > entryAt) continue;
+      const entryIndex = i + 1;
+      const exitIndex = entryIndex + config.hold;
+      if (exitIndex >= rows.length) continue;
+      const entryRow = rows[entryIndex];
+      const exitRow = rows[exitIndex];
+      if (entryRow.time !== entryAt || exitRow.time !== exitAt) continue;
+
+      const gross = legReturn(entryRow.open, exitRow.open, direction, ENTRY_SLIP);
+      const adverseGross = legReturn(entryRow.open, exitRow.open, direction, ADVERSE_SLIP);
+      if (![gross, adverseGross].every(Number.isFinite)) continue;
+      out.push({
+        symbol: s.symbol,
+        entryAt,
+        exitAt,
+        gross,
+        base: gross - BASE_COST,
+        stress: gross - STRESS_COST,
+        adverse: adverseGross - BASE_COST,
+        month: monthKey(entryAt),
+      });
+      busyUntil = exitAt;
+    }
   }
-  eventCache.set(key, out);
   return out;
 }
 
@@ -230,7 +232,7 @@ let id = 0;
 for (const stateWindow of STATE_WINDOWS) for (const lag of LAGS) for (const impulseLook of IMPULSE_LOOKS)
 for (const impulseThreshold of IMPULSE_THRESHOLDS) for (const autocorrThreshold of AUTOCORR_THRESHOLDS) for (const hold of HOLDS) {
   const c = { id: `ACS-${id++}`, stateWindow, lag, impulseLook, impulseThreshold, autocorrThreshold, hold };
-  const ev = events(c, TRAIN_TO);
+  const ev = eventsFor(c, TRAIN_TO);
   const oldStress = stats(ev, OLD_FROM, OLD_TO, 'stress');
   const oldAdverse = stats(ev, OLD_FROM, OLD_TO, 'adverse');
   const currentStress = stats(ev, CURRENT_FROM, TRAIN_TO, 'stress');
@@ -286,7 +288,7 @@ const groupSummary = (field, values) => Object.fromEntries(values.map((value) =>
 let frozen = null;
 if (robust.length) {
   const selected = robust[0];
-  const fullEvents = events(selected.c, EVAL_TO);
+  const fullEvents = eventsFor(selected.c, EVAL_TO);
   frozen = {
     selectedByDiscoveryOnly: selected.c,
     discoveryScore: selected.score,
@@ -306,8 +308,8 @@ if (robust.length) {
 
 const diagnostics = {
   symbols: symbols.length,
-  featureRows: features.length,
-  signalCaches: signalCache.size,
+  featureRows,
+  implementation: 'typed-features-streaming-configs-v2',
   configs: candidates.length,
   diagnosticPool: diagnosticPool.length,
   oldStressPositive: diagnosticPool.filter((x) => x.oldStress.net > 0).length,
@@ -357,6 +359,7 @@ console.log(`AUTOCORR_SWITCH=${JSON.stringify({
   research: output.research,
   symbols: diagnostics.symbols,
   featureRows: diagnostics.featureRows,
+  implementation: diagnostics.implementation,
   configs: diagnostics.configs,
   diagnosticPool: diagnostics.diagnosticPool,
   oldStressPositive: diagnostics.oldStressPositive,
