@@ -1,0 +1,36 @@
+name: Funding History Probe
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-funding-history-probe.mjs"
+      - ".github/workflows/funding-history-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Syntax check
+        run: node --check scripts/research-funding-history-probe.mjs
+      - name: Probe Gate funding history
+        env:
+          RESEARCH_OUTPUT: /tmp/funding-history-probe.json
+        run: node scripts/research-funding-history-probe.mjs
+      - name: Print result
+        run: jq '{queriedAt,symbols,common,rows,note}' /tmp/funding-history-probe.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: funding-history-probe
+          path: /tmp/funding-history-probe.json
+          retention-days: 7
