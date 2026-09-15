@@ -38,31 +38,40 @@ const sign = (x) => x > 0 ? 1 : x < 0 ? -1 : 0;
 const monthStart = (month) => Date.UTC(Number(month.slice(0, 4)), Number(month.slice(4, 6)) - 1, 1);
 const discoveryEnd = monthStart(raw.months[30]);
 const validationEnd = monthStart(raw.months[38]);
-const fromMs = monthStart(raw.months[0]);
-const toMs = Date.UTC(Number(raw.months.at(-1).slice(0, 4)), Number(raw.months.at(-1).slice(4, 6)), 1)
-  + new Date(Date.UTC(Number(raw.months.at(-1).slice(0, 4)), Number(raw.months.at(-1).slice(4, 6)), 0)).getUTCDate() * 86_400_000;
+const fromMs = raw.from * 1000;
+const toMs = raw.now * 1000;
 
 function aggregate1h(rows) {
-  const out = [];
+  const result = [];
   let bucket = null;
   for (const row of rows) {
-    const hour = Math.floor(row.time / 3600) * 3600;
-    if (!bucket || bucket.time !== hour) {
-      if (bucket?.count === 12 && bucket.firstTime === bucket.time && bucket.lastTime === bucket.time + 3300) {
-        out.push({ time: bucket.time, open: bucket.open, high: bucket.high, low: bucket.low, close: bucket.close, volume: bucket.volume });
-      }
-      bucket = { time: hour, firstTime: row.time, lastTime: row.time, count: 1,
-        open: row.open, high: row.high, low: row.low, close: row.close, volume: row.volume };
+    const time = Math.floor(row.time / 3600) * 3600;
+    if (!bucket || bucket.time !== time) {
+      if (bucket?.samples >= 10) result.push(bucket);
+      bucket = { time, open: row.open, high: row.high, low: row.low, close: row.close,
+        volume: row.volume, samples: 1 };
     } else {
-      bucket.count += 1; bucket.lastTime = row.time;
-      bucket.high = Math.max(bucket.high, row.high); bucket.low = Math.min(bucket.low, row.low);
-      bucket.close = row.close; bucket.volume += row.volume;
+      bucket.high = Math.max(bucket.high, row.high);
+      bucket.low = Math.min(bucket.low, row.low);
+      bucket.close = row.close;
+      bucket.volume += row.volume;
+      bucket.samples += 1;
     }
   }
-  if (bucket?.count === 12 && bucket.firstTime === bucket.time && bucket.lastTime === bucket.time + 3300) {
-    out.push({ time: bucket.time, open: bucket.open, high: bucket.high, low: bucket.low, close: bucket.close, volume: bucket.volume });
+  if (bucket?.samples >= 10) result.push(bucket);
+  const filled = [];
+  for (const row of result) {
+    const previous = filled.at(-1);
+    const missing = previous ? (row.time - previous.time) / 3600 - 1 : 0;
+    if (previous && missing > 0 && missing <= 3) {
+      for (let offset = 1; offset <= missing; offset += 1) {
+        filled.push({ time: previous.time + offset * 3600, open: previous.close, high: previous.close,
+          low: previous.close, close: previous.close, volume: 0, samples: 0, synthetic: true });
+      }
+    }
+    filled.push(row);
   }
-  return out;
+  return filled;
 }
 
 const executionBySymbol = new Map(raw.datasets.map((d) => [d.symbol, d.rows]));
@@ -214,7 +223,7 @@ function portfolio(trades) {
     const openedAt = trades[i].openedAt; settle(openedAt);
     const simultaneous = [];
     while (i < trades.length && trades[i].openedAt === openedAt) simultaneous.push(trades[i++]);
-    for (const trade of simultaneous.sort((a, b) => b.strength - a.strength || a.symbol.localeCompare(b.symbol))) {
+    for (const trade of simultaneous.sort((a, b) => b.strength - a.strength || a.strategyId.localeCompare(b.strategyId))) {
       if (equity <= 100 || open.some((t) => t.symbol === trade.symbol) || (cooldown.get(trade.symbol) ?? 0) > trade.openedAt) continue;
       const sameSide = open.filter((t) => t.side === trade.side);
       const multiple = Math.min(CONFIG.notionalMultiple, CONFIG.riskRate / Math.max(trade.stopRate + trade.friction, 1e-9));
