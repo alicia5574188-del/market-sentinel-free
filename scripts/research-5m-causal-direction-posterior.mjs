@@ -166,10 +166,7 @@ for (const symbol of symbols) {
   }
 }
 
-const baseCache = new Map();
-function baseEvents(c) {
-  const k = `${featureKey(c.volLook, c.histHours, c.transition, c.preLook)}:${c.holdBars}`;
-  if (baseCache.has(k)) return baseCache.get(k);
+function buildBaseEvents(c) {
   const src = featureMap.get(featureKey(c.volLook, c.histHours, c.transition, c.preLook)) ?? [];
   const out = [];
   for (const x of src) {
@@ -194,7 +191,6 @@ function baseEvents(c) {
     });
   }
   out.sort((a, b) => a.signalAt - b.signalAt || a.symbol.localeCompare(b.symbol));
-  baseCache.set(k, out);
   return out;
 }
 
@@ -206,12 +202,7 @@ function scopeKey(x, scope) {
   return x.symbol;
 }
 
-const scoreCache = new Map();
-function scoredEvents(c) {
-  const baseKey = `${featureKey(c.volLook, c.histHours, c.transition, c.preLook)}:${c.holdBars}`;
-  const cacheKey = `${baseKey}:${c.memoryHours}:${c.scope}`;
-  if (scoreCache.has(cacheKey)) return scoreCache.get(cacheKey);
-  const base = baseEvents(c);
+function tradeVariants(base, memoryHours, scope) {
   const buckets = new Map();
   let maturePtr = 0;
   const getBucket = (key) => {
@@ -228,54 +219,46 @@ function scoredEvents(c) {
       bucket.head = 0;
     }
   };
-  const out = [];
+  const variants = new Map(MIN_ABS_SCORES.map((threshold) => [threshold, {
+    rows: [], busy: new Map(), lastMode: null, flips: 0, followCount: 0, fadeCount: 0,
+  }]));
+
   for (const x of base) {
     while (maturePtr < base.length && base[maturePtr].exitAt <= x.signalAt) {
       const m = base[maturePtr++];
-      const key = scopeKey(m, c.scope);
-      const b = getBucket(key);
+      const b = getBucket(scopeKey(m, scope));
       b.rows.push([m.exitAt, m.followGross]);
       b.sum += m.followGross;
     }
-    const b = getBucket(scopeKey(x, c.scope));
-    purge(b, x.signalAt - c.memoryHours * HOUR);
+    const b = getBucket(scopeKey(x, scope));
+    purge(b, x.signalAt - memoryHours * HOUR);
     const count = b.rows.length - b.head;
-    const score = count >= MIN_SAMPLES[c.scope] ? b.sum / count : null;
-    out.push({ ...x, posteriorCount: count, posteriorScore: score });
-  }
-  scoreCache.set(cacheKey, out);
-  return out;
-}
-
-function tradesFor(c) {
-  const busy = new Map();
-  const out = [];
-  let lastMode = null;
-  let flips = 0;
-  let followCount = 0;
-  let fadeCount = 0;
-  for (const x of scoredEvents(c)) {
-    const score = x.posteriorScore;
-    if (!Number.isFinite(score) || Math.abs(score) < c.minAbsScore || score === 0) continue;
-    const mode = score > 0 ? 'FOLLOW' : 'FADE';
-    const direction = mode === 'FOLLOW' ? x.baseDir : -x.baseDir;
-    if ((busy.get(x.symbol) ?? 0) > x.entryAt) continue;
+    if (count < MIN_SAMPLES[scope]) continue;
+    const posteriorScore = b.sum / count;
+    if (!Number.isFinite(posteriorScore) || posteriorScore === 0) continue;
+    const mode = posteriorScore > 0 ? 'FOLLOW' : 'FADE';
     const gross = mode === 'FOLLOW' ? x.followGross : x.fadeGross;
     const adverseGross = mode === 'FOLLOW' ? x.followAdverseGross : x.fadeAdverseGross;
-    out.push({
-      ...x,
-      mode,
-      direction,
-      gross,
-      stress: gross - STRESS_RT_COST,
-      adverse: adverseGross - BASE_RT_COST,
-    });
-    if (lastMode && lastMode !== mode) flips += 1;
-    lastMode = mode;
-    if (mode === 'FOLLOW') followCount += 1; else fadeCount += 1;
-    busy.set(x.symbol, x.exitAt);
+
+    for (const threshold of MIN_ABS_SCORES) {
+      if (Math.abs(posteriorScore) < threshold) continue;
+      const v = variants.get(threshold);
+      if ((v.busy.get(x.symbol) ?? 0) > x.entryAt) continue;
+      v.rows.push({
+        symbol: x.symbol,
+        entryAt: x.entryAt,
+        exitAt: x.exitAt,
+        month: x.month,
+        stress: gross - STRESS_RT_COST,
+        adverse: adverseGross - BASE_RT_COST,
+      });
+      if (v.lastMode && v.lastMode !== mode) v.flips += 1;
+      v.lastMode = mode;
+      if (mode === 'FOLLOW') v.followCount += 1; else v.fadeCount += 1;
+      v.busy.set(x.symbol, x.exitAt);
+    }
   }
-  return { rows: out, flips, followCount, fadeCount };
+  return variants;
 }
 
 function stats(rows, from, to, field = 'stress') {
@@ -327,54 +310,60 @@ function scaledPath(rows, from, to, field, size) {
 const candidates = [];
 let id = 0;
 for (const volLook of VOL_LOOKS) for (const histHours of HIST_HOURS) for (const transition of TRANSITIONS)
-for (const preLook of PRE_LOOKS) for (const holdBars of HOLDS) for (const memoryHours of MEMORY_HOURS)
-for (const scope of SCOPES) for (const minAbsScore of MIN_ABS_SCORES) {
-  const c = { id: `CDP5-${id++}`, volLook, histHours, transition, preLook, holdBars, memoryHours, scope, minAbsScore };
-  const traded = tradesFor(c);
-  const rows = traded.rows;
-  const discovery = { stress: stats(rows, DISC_FROM, DISC_TO, 'stress'), adverse: stats(rows, DISC_FROM, DISC_TO, 'adverse') };
-  const validation = { stress: stats(rows, DISC_TO, VAL_TO, 'stress'), adverse: stats(rows, DISC_TO, VAL_TO, 'adverse') };
-  const sampleEnough = discovery.stress.events >= 120 && validation.stress.events >= 60;
-  const bothStressPositive = discovery.stress.net >= 0 && validation.stress.net >= 0;
-  const bothAdversePositive = discovery.adverse.net >= 0 && validation.adverse.net >= 0;
-  const edgeFloor = sampleEnough && bothStressPositive && bothAdversePositive;
-  const minFreq = Math.min(discovery.stress.eventsPerDay, validation.stress.eventsPerDay);
-  const requiredSizeFor5x = minFreq > 0 ? 5 / (2 * minFreq) : null;
-  const maxConc = Math.max(maxConcurrency(rows, DISC_FROM, DISC_TO), maxConcurrency(rows, DISC_TO, VAL_TO));
-  const requiredGrossFor5x = requiredSizeFor5x == null ? null : requiredSizeFor5x * maxConc;
-  const fiveXPaths = requiredSizeFor5x == null ? null : {
-    discovery: scaledPath(rows, DISC_FROM, DISC_TO, 'stress', requiredSizeFor5x),
-    validation: scaledPath(rows, DISC_TO, VAL_TO, 'stress', requiredSizeFor5x),
-    discoveryAdverse: scaledPath(rows, DISC_FROM, DISC_TO, 'adverse', requiredSizeFor5x),
-    validationAdverse: scaledPath(rows, DISC_TO, VAL_TO, 'adverse', requiredSizeFor5x),
-  };
-  const viable5x = edgeFloor && requiredGrossFor5x != null && requiredGrossFor5x <= 2.5
-    && Object.values(fiveXPaths).every((x) => x.survived);
-  const minAvg = Math.min(discovery.stress.avgNet, validation.stress.avgNet);
-  const minPf = Math.min(discovery.stress.pf, validation.stress.pf);
-  const score = (Math.max(-0.01, minAvg) + 0.01) * Math.sqrt(Math.max(0.01, minFreq))
-    * Math.max(0.1, minPf) / Math.max(0.25, requiredGrossFor5x ?? 9);
-  candidates.push({
-    c,
-    discovery,
-    validation,
-    sampleEnough,
-    bothStressPositive,
-    bothAdversePositive,
-    edgeFloor,
-    minFreq,
-    requiredSizeFor5x,
-    maxConcurrency: maxConc,
-    requiredGrossFor5x,
-    fiveXPaths,
-    viable5x,
-    adaptation: {
-      followShare: rows.length ? traded.followCount / rows.length : 0,
-      fadeShare: rows.length ? traded.fadeCount / rows.length : 0,
-      modeFlips: traded.flips,
-    },
-    score,
-  });
+for (const preLook of PRE_LOOKS) for (const holdBars of HOLDS) {
+  const baseConfig = { volLook, histHours, transition, preLook, holdBars };
+  const base = buildBaseEvents(baseConfig);
+  for (const memoryHours of MEMORY_HOURS) for (const scope of SCOPES) {
+    const variants = tradeVariants(base, memoryHours, scope);
+    for (const minAbsScore of MIN_ABS_SCORES) {
+      const v = variants.get(minAbsScore);
+      const rows = v.rows;
+      const c = { id: `CDP5-${id++}`, ...baseConfig, memoryHours, scope, minAbsScore };
+      const discovery = { stress: stats(rows, DISC_FROM, DISC_TO, 'stress'), adverse: stats(rows, DISC_FROM, DISC_TO, 'adverse') };
+      const validation = { stress: stats(rows, DISC_TO, VAL_TO, 'stress'), adverse: stats(rows, DISC_TO, VAL_TO, 'adverse') };
+      const sampleEnough = discovery.stress.events >= 120 && validation.stress.events >= 60;
+      const bothStressPositive = discovery.stress.net >= 0 && validation.stress.net >= 0;
+      const bothAdversePositive = discovery.adverse.net >= 0 && validation.adverse.net >= 0;
+      const edgeFloor = sampleEnough && bothStressPositive && bothAdversePositive;
+      const minFreq = Math.min(discovery.stress.eventsPerDay, validation.stress.eventsPerDay);
+      const requiredSizeFor5x = minFreq > 0 ? 5 / (2 * minFreq) : null;
+      const maxConc = Math.max(maxConcurrency(rows, DISC_FROM, DISC_TO), maxConcurrency(rows, DISC_TO, VAL_TO));
+      const requiredGrossFor5x = requiredSizeFor5x == null ? null : requiredSizeFor5x * maxConc;
+      const fiveXPaths = requiredSizeFor5x == null ? null : {
+        discovery: scaledPath(rows, DISC_FROM, DISC_TO, 'stress', requiredSizeFor5x),
+        validation: scaledPath(rows, DISC_TO, VAL_TO, 'stress', requiredSizeFor5x),
+        discoveryAdverse: scaledPath(rows, DISC_FROM, DISC_TO, 'adverse', requiredSizeFor5x),
+        validationAdverse: scaledPath(rows, DISC_TO, VAL_TO, 'adverse', requiredSizeFor5x),
+      };
+      const viable5x = edgeFloor && requiredGrossFor5x != null && requiredGrossFor5x <= 2.5
+        && Object.values(fiveXPaths).every((x) => x.survived);
+      const minAvg = Math.min(discovery.stress.avgNet, validation.stress.avgNet);
+      const minPf = Math.min(discovery.stress.pf, validation.stress.pf);
+      const score = (Math.max(-0.01, minAvg) + 0.01) * Math.sqrt(Math.max(0.01, minFreq))
+        * Math.max(0.1, minPf) / Math.max(0.25, requiredGrossFor5x ?? 9);
+      candidates.push({
+        c,
+        discovery,
+        validation,
+        sampleEnough,
+        bothStressPositive,
+        bothAdversePositive,
+        edgeFloor,
+        minFreq,
+        requiredSizeFor5x,
+        maxConcurrency: maxConc,
+        requiredGrossFor5x,
+        fiveXPaths,
+        viable5x,
+        adaptation: {
+          followShare: rows.length ? v.followCount / rows.length : 0,
+          fadeShare: rows.length ? v.fadeCount / rows.length : 0,
+          modeFlips: v.flips,
+        },
+        score,
+      });
+    }
+  }
 }
 
 const diagnosticPool = candidates.filter((x) => x.sampleEnough);
@@ -383,10 +372,14 @@ const viable = candidates.filter((x) => x.viable5x).sort((a, b) => b.score - a.s
 const topNear = [...diagnosticPool].sort((a, b) => b.score - a.score).slice(0, 30);
 const selected = viable[0] ?? edge[0] ?? null;
 
+function rebuildSelectedRows(c) {
+  const base = buildBaseEvents(c);
+  return tradeVariants(base, c.memoryHours, c.scope).get(c.minAbsScore).rows;
+}
+
 let evaluation = null;
 if (selected) {
-  const traded = tradesFor(selected.c);
-  const rows = traded.rows;
+  const rows = rebuildSelectedRows(selected.c);
   const stress = stats(rows, VAL_TO, EVAL_TO, 'stress');
   const adverse = stats(rows, VAL_TO, EVAL_TO, 'adverse');
   const size = selected.requiredSizeFor5x;
