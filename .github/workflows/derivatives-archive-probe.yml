@@ -1,11 +1,7 @@
 name: Derivatives Archive Probe
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "scripts/research-derivatives-archive-probe.mjs"
-      - ".github/workflows/derivatives-archive-probe.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,22 +9,6 @@ permissions:
 jobs:
   research:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.16.0
       - run: node --check scripts/research-derivatives-archive-probe.mjs
-      - name: Probe Gate derivatives archives
-        env:
-          RESEARCH_OUTPUT: /tmp/derivatives-archive-probe.json
-        run: node scripts/research-derivatives-archive-probe.mjs
-      - run: jq '{queriedAt,rows,note}' /tmp/derivatives-archive-probe.json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: derivatives-archive-probe
-          path: /tmp/derivatives-archive-probe.json
-          retention-days: 7
