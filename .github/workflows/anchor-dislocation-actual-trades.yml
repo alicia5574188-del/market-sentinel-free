@@ -1,0 +1,35 @@
+name: Anchor Dislocation Actual Trades
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/research-anchor-dislocation-actual-trades.mjs'
+      - '.github/workflows/anchor-dislocation-actual-trades.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Syntax check
+        run: node --check scripts/research-anchor-dislocation-actual-trades.mjs
+      - name: Run actual-trade anchor dislocation screen
+        env:
+          RESEARCH_OUTPUT: /tmp/anchor-dislocation-actual-trades.json
+          RESEARCH_DATA_DIR: /tmp/anchor-dislocation-actual-trades
+        run: node scripts/research-anchor-dislocation-actual-trades.mjs
+      - name: Print result
+        run: jq '{research,decision,protocol,counts,frozen,evaluation,diagnostics,archiveMeta,sha256,topQualified:(.topQualified[:5]),topDiagnostics:(.topDiagnostics[:5])}' /tmp/anchor-dislocation-actual-trades.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: anchor-dislocation-actual-trades
+          path: /tmp/anchor-dislocation-actual-trades.json
+          retention-days: 7
