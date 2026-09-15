@@ -25,7 +25,27 @@ let cur=0;const raw=new Map();async function worker(){while(cur<todo.length){con
 const hr=new Map();for(const [k,v] of raw)if(v.length)hr.set(k,hourly(v));
 
 const all=[];
-for(const month of MONTHS){const syms=U[month].filter(s=>hr.has(`${month}|${s}`)),maps=new Map(syms.map(s=>[s,new Map(hr.get(`${month}|${s}`).map(r=>[r.time,r]))]));for(let t=ms(month)+4*H;t<nx(month)-9*H;t+=H){const hour=new Date(t*1000).getUTCHours();if(hour<16||hour>23)continue;const obs=[];for(const symbol of syms){const p=maps.get(symbol),c=p.get(t),p1=p.get(t-H),p2=p.get(t-2*H),p4=p.get(t-4*H);if(!c||!p1||!p2||!p4)continue;obs.push({symbol,r1:c.close/p1.close-1,prev1:p1.close/p2.close-1,r4:c.close/p4.close-1})}if(obs.length<Math.max(12,Math.ceil(syms.length*.6)))continue;const med4=median(obs.map(x=>x.r4)),mad=median(obs.map(x=>Math.abs(x.r4-med4)))||1e-9,scale=1.4826*mad,med1=median(obs.map(x=>x.r1));for(const x of obs){x.rel4=x.r4-med4;x.z4=x.rel4/scale}const srt=[...obs].sort((a,b)=>a.rel4-b.rel4),x=srt[0],second=srt[1],z=-x.z4,gap=second.rel4-x.rel4;if(z<2||gap<GAP)continue;const directional1=-x.r1, directionalPrev1=-x.prev1, q75=quantile(obs.map(o=>-o.r1),.75);const persistence=directional1>0&&directional1>=q75;const signFlip=directional1<0,decel=directional1<directionalPrev1,rankFade=x.r1>=med1,exhaustion=signFlip||(decel&&rankFade);all.push({month,split:split(month),t,hour,symbol:x.symbol,z4:z,gap4:gap,r1:x.r1,prev1:x.prev1,marketR1:med1,marketR4:med4,dispersion4:scale,persistence,exhaustion})}}
+for(const month of MONTHS){
+  const syms=U[month].filter(s=>hr.has(`${month}|${s}`));
+  const maps=new Map(syms.map(s=>[s,new Map(hr.get(`${month}|${s}`).map(r=>[r.time,r]))]));
+  for(let t=ms(month)+4*H;t<nx(month)-9*H;t+=H){
+    const hour=new Date(t*1000).getUTCHours();if(hour<16||hour>23)continue;
+    const obs=[];
+    for(const symbol of syms){
+      const p=maps.get(symbol),c=p.get(t),p1=p.get(t-H),p2=p.get(t-2*H),p4=p.get(t-4*H);
+      if(!c||!p1||!p2||!p4)continue;
+      obs.push({symbol,r1:c.close/p1.close-1,prev1:p1.close/p2.close-1,r4:c.close/p4.close-1});
+    }
+    if(obs.length<Math.max(12,Math.ceil(syms.length*.6)))continue;
+    const med4=median(obs.map(x=>x.r4)),mad=median(obs.map(x=>Math.abs(x.r4-med4)))||1e-9,scale=1.4826*mad,med1=median(obs.map(x=>x.r1));
+    for(const x of obs){x.rel4=x.r4-med4;x.z4=x.rel4/scale}
+    const srt=[...obs].sort((a,b)=>a.rel4-b.rel4),x=srt[0],second=srt[1],z=-x.z4,gap=second.rel4-x.rel4;
+    if(z<2||gap<GAP)continue;
+    const directional1=-x.r1,directionalPrev1=-x.prev1,q75=quantile(obs.map(o=>-o.r1),.75);
+    const persistence=directional1>0&&directional1>=q75;
+    const signFlip=directional1<0,decel=directional1<directionalPrev1,rankFade=x.r1>=med1,exhaustion=signFlip||(decel&&rankFade);
+    all.push({month,split:split(month),t,hour,symbol:x.symbol,z4:z,gap4:gap,r1:x.r1,prev1:x.prev1,marketR1:med1,marketR4:med4,dispersion4:scale,persistence,exhaustion});
+  }
 }
 all.sort((a,b)=>a.t-b.t);const last=new Map(),events=[];for(const e of all){const lastT=last.get(e.symbol)??-Infinity;if(e.t-lastT<4*H)continue;last.set(e.symbol,e.t);events.push(e)}
 
