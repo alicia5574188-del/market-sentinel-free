@@ -17,52 +17,50 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.16.0
-      - name: Select Jan 2023 top30 causally by estimated quote notional
+      - name: Select Jan 2023 top30 using Jan 2023 historical quote volume only
         run: |
           cat > /tmp/select-cohort.mjs <<'EOF'
-          import { gunzipSync } from 'node:zlib';
-          import { mkdirSync, writeFileSync } from 'node:fs';
-          mkdirSync('/tmp/jan-cache',{recursive:true});
-          const month='202301';
+          import { writeFileSync } from 'node:fs';
           const listUrl='https://gateio-public-data.s3.amazonaws.com/?list-type=2&prefix=futures_usdt%2Fcandlesticks_5m%2F202301%2F&max-keys=1000';
           const xml=await (await fetch(listUrl)).text();
           const symbols=[...new Set([...xml.matchAll(/<Key>futures_usdt\/candlesticks_5m\/202301\/([^/<]+_USDT)-202301\.csv\.gz<\/Key>/g)].map(m=>m[1]))];
-          const contracts=[]; let offset=0;
-          for(;;){const u=`https://api.gateio.ws/api/v4/futures/usdt/contracts_all?limit=100&offset=${offset}`;const r=await fetch(u);if(!r.ok)throw new Error(`contracts_all ${r.status}`);const a=await r.json();contracts.push(...a);if(a.length<100)break;offset+=a.length;}
-          const mult=new Map(contracts.map(x=>[x.name,Number(x.quanto_multiplier)]));
           const excluded=new Set(['DEFI_USDT','EXCH_USDT','PRIV_USDT','XAUG_USDT']);
-          const rows=[];let cursor=0;
-          async function worker(){while(cursor<symbols.length){const sym=symbols[cursor++];if(excluded.has(sym))continue;const qm=mult.get(sym);if(!(qm>0))continue;const url=`https://download.gatedata.org/futures_usdt/candlesticks_5m/202301/${sym}-202301.csv.gz`;try{const r=await fetch(url);if(!r.ok)continue;const b=Buffer.from(await r.arrayBuffer());writeFileSync(`/tmp/jan-cache/${sym}.gz`,b);const text=gunzipSync(b).toString('utf8').trim();let q=0,n=0;for(const line of text.split('\n')){const [t,v,c]=line.split(',').map(Number);if(t>0&&v>=0&&c>0){q+=v*qm*c;n++;}}if(n>=7000)rows.push({symbol:sym,quoteNotional:q,rows:n,quantoMultiplier:qm});}catch{}}}
-          await Promise.all(Array.from({length:16},worker));
-          rows.sort((a,b)=>b.quoteNotional-a.quoteNotional);
-          const top30=rows.slice(0,30);
-          writeFileSync('/tmp/jan2023-top30.json',JSON.stringify({selectionMonth:month,listedSymbols:symbols.length,eligibleRanked:rows.length,excluded:[...excluded],top30},null,2));
-          console.log(JSON.stringify({listed:symbols.length,ranked:rows.length,top30:top30.map(x=>x.symbol)},null,2));
+          const from=Date.UTC(2023,0,1)/1000,to=Date.UTC(2023,1,1)/1000,ranked=[];let cursor=0;
+          const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+          async function one(sym){for(let attempt=0;attempt<3;attempt++){try{const u=new URL('https://api.gateio.ws/api/v4/futures/usdt/candlesticks');u.searchParams.set('contract',sym);u.searchParams.set('from',String(from));u.searchParams.set('to',String(to));u.searchParams.set('interval','1d');const r=await fetch(u);if(r.status===429){await sleep(700*(attempt+1));continue;}if(!r.ok)return;const a=await r.json();const q=a.reduce((s,x)=>s+Number(x.sum??0),0);if(a.length>=20&&q>0)ranked.push({symbol:sym,quoteVolume:q,days:a.length});return;}catch{await sleep(300*(attempt+1));}}}
+          async function worker(){while(cursor<symbols.length){const sym=symbols[cursor++];if(!excluded.has(sym))await one(sym);}}
+          await Promise.all(Array.from({length:8},worker));
+          ranked.sort((a,b)=>b.quoteVolume-a.quoteVolume);
+          if(ranked.length<30)throw new Error(`Only ${ranked.length} Jan-2023 symbols returned historical quote volume; need >=30`);
+          const top30=ranked.slice(0,30);
+          writeFileSync('/tmp/jan2023-top30.json',JSON.stringify({selectionMonth:'202301',method:'Gate REST historical 1d candlestick sum quote volume; no post-Jan information',listedSymbols:symbols.length,rankedSymbols:ranked.length,excluded:[...excluded],top30},null,2));
+          console.log(JSON.stringify({listed:symbols.length,ranked:ranked.length,top30:top30.map(x=>[x.symbol,Math.round(x.quoteVolume)])},null,2));
           EOF
           node /tmp/select-cohort.mjs
-      - name: Build sparse 44-month top30 dataset without survivor filtering
+      - name: Build sparse top30 history and audit PRICE1/PRICE4 specialness in memory
         run: |
-          cat > /tmp/build-sparse.mjs <<'EOF'
-          import { createHash } from 'node:crypto';
+          cat > /tmp/top30-audit.mjs <<'EOF'
           import { gunzipSync } from 'node:zlib';
-          import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+          import { readFileSync,writeFileSync } from 'node:fs';
           const cohort=JSON.parse(readFileSync('/tmp/jan2023-top30.json','utf8')).top30.map(x=>x.symbol);
           const months=[];for(let y=2023,m=1;y<2026||m<=8;){months.push(`${y}${String(m).padStart(2,'0')}`);m++;if(m===13){m=1;y++;}}
-          const monthStart=m=>Date.UTC(+m.slice(0,4),+m.slice(4,6)-1,1)/1000;
-          const nextMonth=m=>Date.UTC(+m.slice(0,4),+m.slice(4,6),1)/1000;
-          const expected=m=>(nextMonth(m)-monthStart(m))/300;
-          const store=new Map(cohort.map(s=>[s,[]]));const coverage=new Map(cohort.map(s=>[s,[]]));
-          const tasks=cohort.flatMap(symbol=>months.map(month=>({symbol,month})));let cursor=0;
-          async function worker(){while(cursor<tasks.length){const {symbol,month}=tasks[cursor++];try{let b;if(month==='202301'&&existsSync(`/tmp/jan-cache/${symbol}.gz`))b=readFileSync(`/tmp/jan-cache/${symbol}.gz`);else{const r=await fetch(`https://download.gatedata.org/futures_usdt/candlesticks_5m/${month}/${symbol}-${month}.csv.gz`);if(!r.ok)continue;b=Buffer.from(await r.arrayBuffer());}const text=gunzipSync(b).toString('utf8').trim();const rows=text.split('\n').flatMap(line=>{const [time,volume,close,high,low,open]=line.split(',').map(Number);return time>0&&open>0&&low>0&&high>=low&&[volume,close,high,low,open].every(Number.isFinite)?[{time,volume,close,high,low,open}]:[];});if(rows.length<expected(month)*0.70)continue;store.get(symbol).push(...rows);coverage.get(symbol).push(month);}catch{}}}
+          const monthStart=m=>Date.UTC(+m.slice(0,4),+m.slice(4,6)-1,1),nextMonth=m=>Date.UTC(+m.slice(0,4),+m.slice(4,6),1),expected=m=>(nextMonth(m)-monthStart(m))/300000;
+          const store=new Map(cohort.map(s=>[s,[]])),coverage=new Map(cohort.map(s=>[s,[]]));const tasks=cohort.flatMap(symbol=>months.map(month=>({symbol,month})));let cursor=0;
+          async function worker(){while(cursor<tasks.length){const {symbol,month}=tasks[cursor++];try{const r=await fetch(`https://download.gatedata.org/futures_usdt/candlesticks_5m/${month}/${symbol}-${month}.csv.gz`);if(!r.ok)continue;const text=gunzipSync(Buffer.from(await r.arrayBuffer())).toString('utf8').trim();const rows=text.split('\n').flatMap(line=>{const [time,volume,close,high,low,open]=line.split(',').map(Number);return time>0&&open>0&&low>0&&high>=low&&[volume,close,high,low,open].every(Number.isFinite)?[{time,volume,close,high,low,open}]:[];});if(rows.length<expected(month)*0.70)continue;store.get(symbol).push(...rows);coverage.get(symbol).push(month);}catch{}}}
           await Promise.all(Array.from({length:16},worker));
-          const datasets=cohort.map(symbol=>({symbol,rows:store.get(symbol).sort((a,b)=>a.time-b.time),gaps:0,coverage:coverage.get(symbol).length/months.length}));
-          const activeByMonth=Object.fromEntries(months.map(m=>[m,cohort.filter(s=>coverage.get(s).includes(m)).length]));
-          const source='gate-official-monthly-futures-usdt-candlesticks-5m-jan2023-causal-top30-v1';const from=monthStart(months[0]),now=nextMonth(months.at(-1));
-          const canonical=JSON.stringify({source,months,from,now,symbols:cohort,datasets});const sha256=createHash('sha256').update(canonical).digest('hex');
-          writeFileSync('/tmp/top30-44m-5m.json',JSON.stringify({source,interval:'5m',stepSeconds:300,months,days:(now-from)/86400,from,now,symbols:cohort,requestedSymbols:cohort,symbolLimit:cohort.length,universePolicy:'jan2023-top30-estimated-quote-notional-no-survivor-filter',minimumMonthlyCoverage:0.70,activeByMonth,sha256,datasets}));
-          console.log(JSON.stringify({symbols:cohort,activeByMonth,rows:Object.fromEntries(datasets.map(d=>[d.symbol,d.rows.length])),sha256},null,2));
+          const sum=xs=>xs.reduce((a,b)=>a+b,0),mean=xs=>xs.length?sum(xs)/xs.length:0,median=xs=>{if(!xs.length)return 0;const a=[...xs].sort((x,y)=>x-y),m=Math.floor(a.length/2);return a.length%2?a[m]:(a[m-1]+a[m])/2;};
+          function gp(rows){const p=[0];for(let i=1;i<rows.length;i++)p.push(p.at(-1)+Number(rows[i].time!==rows[i-1].time+300));return p;}
+          const ds=cohort.map(symbol=>{const rows=store.get(symbol).sort((a,b)=>a.time-b.time);return{symbol,rows,pointer:0,gaps:gp(rows)}});const valid=(d,i,b)=>i>=b&&d.gaps[i]===d.gaps[i-b];
+          const families=['PRICE1','PRICE4'],last=new Map(families.map(f=>[f,{symbol:null,time:null,active:false}])),events=[];const master=ds.find(d=>d.symbol==='BTC_USDT')??ds[0];
+          for(let mi=288;mi<master.rows.length-60;mi++){const time=master.rows[mi].time,rows=[];for(const d of ds){while(d.pointer<d.rows.length&&d.rows[d.pointer].time<time)d.pointer++;const i=d.pointer;if(i>=d.rows.length||d.rows[i].time!==time||!valid(d,i,60))continue;const r=d.rows[i];rows.push({symbol:d.symbol,rows:d.rows,index:i,r1:r.close/d.rows[i-12].close-1,r4:r.close/d.rows[i-48].close-1});}if(rows.length<9)continue;const m1=median(rows.map(x=>x.r1)),m4=median(rows.map(x=>x.r4));const es=rows.map(x=>({...x,rel1:x.r1-m1,rel4:x.r4-m4})),s1=Math.max(.001,median(es.map(x=>Math.abs(x.rel1)))),s4=Math.max(.001,median(es.map(x=>Math.abs(x.rel4))));for(const f of families){let x;if(f==='PRICE1'){x=[...es].sort((a,b)=>Math.abs(b.rel1)-Math.abs(a.rel1))[0];if(!(x&&Math.abs(x.rel1)>=.006&&Math.abs(x.rel1)/s1>=1.8))x=null;}else{x=[...es].sort((a,b)=>Math.abs(b.rel4)-Math.abs(a.rel4))[0];if(!(x&&Math.abs(x.rel4)>=.012&&Math.abs(x.rel4)/s4>=1.8))x=null;}const l=last.get(f);if(!x){last.set(f,{symbol:null,time,active:false});continue;}const continuing=l.active&&l.symbol===x.symbol&&l.time===time-300;if(!continuing)events.push({family:f,time,symbol:x.symbol,f:x,ctx:es});last.set(f,{symbol:x.symbol,time,active:true});}}
+          function future(ev,bars){const r=ev.f.rows,i=ev.f.index,j=i+bars;if(j>=r.length||r[j].time!==r[i].time+bars*300)return null;for(let k=i+1;k<=j;k++)if(r[k].time!==r[k-1].time+300)return null;const start=r[i].close;let ex=0;for(let k=i+1;k<=j;k++)ex=Math.max(ex,Math.abs(r[k].high/start-1),Math.abs(r[k].low/start-1));const peers=[];for(const p of ev.ctx){const pr=p.rows,pi=p.index,pj=pi+bars;if(pj>=pr.length||pr[pj].time!==pr[pi].time+bars*300)continue;let ok=true;for(let k=pi+1;k<=pj;k++)if(pr[k].time!==pr[k-1].time+300){ok=false;break;}if(!ok)continue;const ps=pr[pi].close;let pe=0;for(let k=pi+1;k<=pj;k++)pe=Math.max(pe,Math.abs(pr[k].high/ps-1),Math.abs(pr[k].low/ps-1));peers.push(pe);}if(peers.length<9)return null;const pm=median(peers);return{excessExcursion:ex-pm,excursionRatio:ex/Math.max(pm,1e-9)};}
+          const mk=ms=>{const d=new Date(ms);return`${d.getUTCFullYear()}${String(d.getUTCMonth()+1).padStart(2,'0')}`;};
+          function summarize(xs,start,end){const out={events:xs.length,eventsPerDay:xs.length/Math.max(1,(end-start)/86400000)};for(const [lab,b] of [['30m',6],['1h',12],['2h',24],['4h',48]]){const z=xs.map(e=>({e,x:future(e,b)})).filter(q=>q.x),mm=new Map();for(const q of z){const k=mk(q.e.time*1000),a=mm.get(k)??[];a.push(q.x.excessExcursion);mm.set(k,a);}const ms=[...mm.values()].map(mean);out[lab]={samples:z.length,meanExcessExcursion:mean(z.map(q=>q.x.excessExcursion)),meanExcursionRatio:mean(z.map(q=>q.x.excursionRatio)),activeMonths:ms.length,positiveExcessExcursionMonths:ms.filter(v=>v>0).length};}return out;}
+          const from=monthStart(months[1]),dEnd=monthStart(months[31]),vEnd=monthStart(months[39]),to=nextMonth(months.at(-1));function study(a,b){return Object.fromEntries(families.map(f=>[f,summarize(events.filter(e=>e.family===f&&e.time*1000>=a&&e.time*1000<b),a,b)]));}
+          const discovery=study(from,dEnd),validation=study(dEnd,vEnd),evaluation=study(vEnd,to);function q(s){const hs=['30m','1h','2h','4h'].map(k=>s[k]);return s.events>=150&&hs.filter(x=>x.meanExcessExcursion>0).length>=3&&s['2h'].meanExcursionRatio>=1.10&&s['2h'].activeMonths>=18&&s['2h'].positiveExcessExcursionMonths>=Math.ceil(s['2h'].activeMonths*.55);}const qualified=families.filter(f=>q(discovery[f]));const accepted=qualified.filter(f=>validation[f]['2h'].meanExcessExcursion>0&&validation[f]['2h'].meanExcursionRatio>1.05&&evaluation[f]['2h'].meanExcessExcursion>0&&evaluation[f]['2h'].meanExcursionRatio>1.05);
+          const activeByMonth=Object.fromEntries(months.map(m=>[m,cohort.filter(s=>coverage.get(s).includes(m)).length]));const result={research:'jan2023-causal-top30-selector',symbols:cohort,activeByMonth,eventCounts:Object.fromEntries(families.map(f=>[f,events.filter(e=>e.family===f).length])),study:{discovery,validation,evaluation},qualified,accepted};writeFileSync('/tmp/top30-selector.json',JSON.stringify(result,null,2));console.log(JSON.stringify({symbols:cohort,activeByMonth,qualified,accepted,study:result.study},null,2));
           EOF
-          node --max-old-space-size=6144 /tmp/build-sparse.mjs
+          node --max-old-space-size=6144 /tmp/top30-audit.mjs
       - name: Fetch core11 control dataset
         env:
           RESEARCH_INTERVAL: 5m
@@ -73,36 +71,23 @@ jobs:
           RESEARCH_MIN_MONTH_COVERAGE: 0.70
           RESEARCH_CONCURRENCY: 16
         run: node scripts/fetch-gate-history.mjs
-      - name: Fetch and patch frozen selector-quality audit
+      - name: Run same split on core11 control
         run: |
           git fetch origin research/v12-44m-frozen-audit --depth=1
           git show FETCH_HEAD:scripts/research-specialness-selector-quality.mjs > /tmp/selector.mjs
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('/tmp/selector.mjs').read_text()
-          p=p.replace("if(raw.interval!=='5m'||raw.months.length!==44||raw.symbols.length!==11)throw new Error('Requires frozen 44m / 11-symbol canonical 5m dataset');","if(raw.interval!=='5m'||raw.months.length!==44||raw.symbols.length<9)throw new Error('Requires frozen 44m / >=9-symbol 5m dataset');")
-          p=p.replace("const fromMs=raw.from*1000,toMs=raw.now*1000,discoveryEnd=monthStart(raw.months[30]),validationEnd=monthStart(raw.months[38]);","const fromMs=monthStart(raw.months[1]),toMs=raw.now*1000,discoveryEnd=monthStart(raw.months[31]),validationEnd=monthStart(raw.months[39]);")
-          Path('/tmp/selector-causal.mjs').write_text(p)
+          p=Path('/tmp/selector.mjs').read_text().replace("const fromMs=raw.from*1000,toMs=raw.now*1000,discoveryEnd=monthStart(raw.months[30]),validationEnd=monthStart(raw.months[38]);","const fromMs=monthStart(raw.months[1]),toMs=raw.now*1000,discoveryEnd=monthStart(raw.months[31]),validationEnd=monthStart(raw.months[39]);")
+          Path('/tmp/selector-control.mjs').write_text(p)
           PY
-      - name: Run identical selector audit on core11 and causal top30
-        run: |
-          RESEARCH_DATASET=/tmp/core11-44m-5m.json RESEARCH_OUTPUT=/tmp/core11-selector.json node --max-old-space-size=6144 /tmp/selector-causal.mjs > /tmp/core11.log
-          RESEARCH_DATASET=/tmp/top30-44m-5m.json RESEARCH_OUTPUT=/tmp/top30-selector.json node --max-old-space-size=6144 /tmp/selector-causal.mjs > /tmp/top30.log
-      - name: Compare held-out selector quality and frequency
+          RESEARCH_DATASET=/tmp/core11-44m-5m.json RESEARCH_OUTPUT=/tmp/core11-selector.json node --max-old-space-size=6144 /tmp/selector-control.mjs > /tmp/core11.log
+      - name: Compare held-out quality and frequency
         run: |
           python3 - <<'PY'
           import json
-          c=json.load(open('/tmp/core11-selector.json'));t=json.load(open('/tmp/top30-selector.json'));cohort=json.load(open('/tmp/jan2023-top30.json'));raw=json.load(open('/tmp/top30-44m-5m.json'))
-          def fam(r,f):
-            return {'accepted':f in r.get('accepted',[]),'discovery':r['study']['discovery'][f]['2h'],'validation':r['study']['validation'][f]['2h'],'evaluation':r['study']['evaluation'][f]['2h'],'eventsPerDay':{'discovery':r['study']['discovery'][f]['eventsPerDay'],'validation':r['study']['validation'][f]['eventsPerDay'],'evaluation':r['study']['evaluation'][f]['eventsPerDay']}}
-          out={'research':'jan2023-causal-top30-specialness','selection':cohort,'activeByMonth':raw['activeByMonth'],'core11':{f:fam(c,f) for f in ['PRICE1','PRICE4']},'top30':{f:fam(t,f) for f in ['PRICE1','PRICE4']}}
-          supported=[]
-          for f in ['PRICE1','PRICE4']:
-            x=out['top30'][f]
-            if x['accepted'] and all(x[p]['meanExcursionRatio']>1.10 and x[p]['meanExcessExcursion']>0 for p in ['discovery','validation','evaluation']): supported.append(f)
-          out['supportedFamilies']=supported;out['decision']='CAUSAL_TOP30_SPECIALNESS_SUPPORTED' if supported else 'NO_CAUSAL_TOP30_SUPPORT'
-          json.dump(out,open('/tmp/jan2023-causal-top30-result.json','w'),indent=2)
-          print(json.dumps({'decision':out['decision'],'top30':[x['symbol'] for x in cohort['top30']],'activeByMonth':raw['activeByMonth'],'core11':out['core11'],'top30Result':out['top30']},indent=2))
+          c=json.load(open('/tmp/core11-selector.json'));t=json.load(open('/tmp/top30-selector.json'));cohort=json.load(open('/tmp/jan2023-top30.json'))
+          def fam(r,f): return {'accepted':f in r.get('accepted',[]),'discovery':r['study']['discovery'][f]['2h'],'validation':r['study']['validation'][f]['2h'],'evaluation':r['study']['evaluation'][f]['2h'],'eventsPerDay':{p:r['study'][p][f]['eventsPerDay'] for p in ['discovery','validation','evaluation']}}
+          out={'research':'jan2023-causal-top30-specialness','selection':cohort,'activeByMonth':t['activeByMonth'],'core11':{f:fam(c,f) for f in ['PRICE1','PRICE4']},'top30':{f:fam(t,f) for f in ['PRICE1','PRICE4']},'supportedFamilies':t['accepted']};out['decision']='CAUSAL_TOP30_SPECIALNESS_SUPPORTED' if t['accepted'] else 'NO_CAUSAL_TOP30_SUPPORT';json.dump(out,open('/tmp/jan2023-causal-top30-result.json','w'),indent=2);print(json.dumps(out,indent=2))
           PY
       - uses: actions/upload-artifact@v4
         with:
