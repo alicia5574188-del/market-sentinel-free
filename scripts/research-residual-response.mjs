@@ -60,7 +60,7 @@ function resolve(feature, side, config) {
     lastTime += STEP;
   }
   if (exit == null) {
-    const row = rows[index + config.maxHoldBars]; if (!row || row.time !== lastTime) return null;
+    const row = rows[index + config.maxHoldBars]; if (!row) return null;
     exit = row.close; closedAt = row.time;
   }
   const gross = sign * (exit / entry - 1); const netReturnRate = gross - FRICTION;
