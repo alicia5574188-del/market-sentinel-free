@@ -1,0 +1,32 @@
+name: Validate Special Coin 5m Execution
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-special-coin-execution.mjs"
+      - ".github/workflows/validate-special-coin-execution.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Run frozen special coin execution audit
+        run: node --max-old-space-size=4096 scripts/research-special-coin-execution.mjs
+      - name: Print focused summary
+        run: |
+          jq '{decision,activeByMonth,gates,families:{A:.families.A_MIDDAY_LEADER_CONT.FIXED_4H.base,BImmediate:.families.B_LATE_LEADER_REV.IMMEDIATE_4H.base,BStructure:.families.B_LATE_LEADER_REV.STRUCTURE_4H.base,C:.families.C_LATE_LOSER_REV.FIXED_4H.base}}' /tmp/special-coin-execution.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: special-coin-5m-execution
+          path: |
+            /tmp/special-coin-execution.json
+            /tmp/special-coin-execution-trades.json
+          retention-days: 7
