@@ -1,11 +1,7 @@
 name: Expanded FBR Rank Depth
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "scripts/research-expanded-fbr-rank-depth.mjs"
-      - ".github/workflows/expanded-fbr-rank-depth.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -16,8 +12,6 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22.16.0
@@ -38,8 +32,6 @@ jobs:
           RESEARCH_DATASET: /tmp/gate-history-expanded-12m.json
           RESEARCH_OUTPUT: /tmp/expanded-fbr-rank-depth.json
         run: node scripts/research-expanded-fbr-rank-depth.mjs
-      - name: Print result
-        run: jq '{universe,grid,eligible,frozen,diverse,full,diverseResults,rankSummary,evaluationRobust,evaluationRobustResults,note}' /tmp/expanded-fbr-rank-depth.json
       - uses: actions/upload-artifact@v4
         with:
           name: expanded-fbr-rank-depth
