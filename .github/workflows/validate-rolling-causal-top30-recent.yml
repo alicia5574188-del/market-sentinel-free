@@ -24,6 +24,16 @@ jobs:
           import re
           p=Path('scripts/research-rolling-causal-top30-regime.mjs').read_text()
           p=p.replace("const TRADE_MONTHS=[]; for(let y=2023,m=2;y<2026||m<=8;){TRADE_MONTHS.push(`${y}${String(m).padStart(2,'0')}`);m++;if(m===13){m=1;y++;}}","const TRADE_MONTHS=[]; for(let y=2025,m=7;y<2026||m<=8;){TRADE_MONTHS.push(`${y}${String(m).padStart(2,'0')}`);m++;if(m===13){m=1;y++;}}")
+          # Use Gate contract_type to remove stock/ETF/index/FX/commodity futures, including delisted metadata.
+          marker="async function listMonthSymbols(month){"
+          inject=r'''const contractTypeByName=new Map();
+          for(let offset=0;;offset+=100){const a=await fetchJson(`https://api.gateio.ws/api/v4/futures/usdt/contracts_all?limit=100&offset=${offset}`);if(!Array.isArray(a))throw new Error('contracts_all unavailable');for(const x of a)contractTypeByName.set(x.name,String(x.contract_type||''));if(a.length<100)break;}
+          const NONCRYPTO_TYPE=/stock|metal|indice|index|forex|commodit|tradfi|etf/i;
+          const isCryptoStrict=s=>isCrypto(s)&&!NONCRYPTO_TYPE.test(contractTypeByName.get(s)||'');
+          async function listMonthSymbols(month){'''
+          if marker not in p: raise SystemExit('list marker missing')
+          p=p.replace(marker,inject,1).replace('].map(x=>x[1]).filter(isCrypto))];','].map(x=>x[1]).filter(isCryptoStrict))];',1)
+          # Batch daily history; each monthly rank still uses only its previous-month slice.
           repl=r'''const dailyHistoryCache=new Map();
           async function dailyHistory(symbol){
             if(!dailyHistoryCache.has(symbol))dailyHistoryCache.set(symbol,(async()=>{
@@ -39,7 +49,11 @@ jobs:
           const rankMonths='''
           p,n=re.subn(r"async function quoteVolume\(symbol,month\)\{.*?\}\n\nconst rankMonths=",repl,p,count=1,flags=re.S)
           if n!=1: raise SystemExit(f'quote patch failed {n}')
-          # Keep original chronological boundaries: empty discovery, then validation/evaluation.
+          # Allow this external-symbol holdout to run on only validation/evaluation months.
+          anchor="let src=readFileSync('scripts/research-regime-system-portfolios.mjs','utf8');"
+          replacement=anchor+"\nsrc=src.replace('if (signalRaw.months.length < 39) throw new Error(\\\"Requires at least 39 chronological months\\\");','');\nsrc=src.replace('const monthStart = (month) => Date.UTC(Number(month.slice(0, 4)), Number(month.slice(4, 6)) - 1, 1);','const monthStart = (month) => month ? Date.UTC(Number(month.slice(0, 4)), Number(month.slice(4, 6)) - 1, 1) : 0;');"
+          if anchor not in p: raise SystemExit('source anchor missing')
+          p=p.replace(anchor,replacement,1)
           p=p.replace("const D0=Date.UTC(2023,1,1)","const D0=Date.UTC(2025,6,1)")
           Path('/tmp/rolling-recent.mjs').write_text(p)
           PY
