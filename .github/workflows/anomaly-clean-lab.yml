@@ -14,7 +14,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 2
+          fetch-depth: 3
       - uses: actions/setup-node@v4
         with:
           node-version: 22.16.0
@@ -64,37 +64,41 @@ jobs:
           RESEARCH_EXECUTION_DATASET: /tmp/gate-history-router-44m-5m.json
           RESEARCH_OUTPUT: /tmp/unused.json
         run: node /tmp/regime-state-only.mjs
-      - name: Recover validated router and add cadence layer
+      - name: Recover validated router and add regime-cadence cells
         run: |
-          git show HEAD^:.github/workflows/anomaly-clean-lab.yml > /tmp/previous-lab.yml
+          git show HEAD^^:.github/workflows/anomaly-clean-lab.yml > /tmp/router-source.yml
           python - <<'PY'
           from pathlib import Path
-          text=Path('/tmp/previous-lab.yml').read_text()
+          text=Path('/tmp/router-source.yml').read_text()
           start="cat > /tmp/anomaly-router.mjs <<'EOF'\n"
           a=text.index(start)+len(start)
           b=text.index("\n          EOF",a)
           js=text[a:b]
           js='\n'.join(line[10:] if line.startswith('          ') else line for line in js.splitlines())+'\n'
           old="function portfolio(selector,friction=0.0014,slippage=0.00025){const rows=candidates.filter(x=>selector==='P1'?x.p1:selector==='P4'?x.p4:(x.p1||x.p4)).sort((a,b)=>a.openedAt-b.openedAt||b.specialScore-a.specialScore||b.strength-a.strength);"
-          new="function portfolio(key,friction=0.0014,slippage=0.00025){const [selector,cadenceText]=key.split('_'),cadence=Number(cadenceText);const rows=candidates.filter(x=>(selector==='P1'?x.p1:selector==='P4'?x.p4:(x.p1||x.p4))&&Math.floor(x.openedAt/1000)%cadence===0).sort((a,b)=>a.openedAt-b.openedAt||b.specialScore-a.specialScore||b.strength-a.strength);"
+          new="function portfolio(key,friction=0.0014,slippage=0.00025){const [selector,cadenceText,state]=key.split(':'),cadence=Number(cadenceText);const rows=candidates.filter(x=>(selector==='P1'?x.p1:selector==='P4'?x.p4:(x.p1||x.p4))&&Math.floor(x.openedAt/1000)%cadence===0&&x.system===state).sort((a,b)=>a.openedAt-b.openedAt||b.specialScore-a.specialScore||b.strength-a.strength);"
           if old not in js: raise SystemExit('portfolio marker not found')
           js=js.replace(old,new,1)
           old2="const selectors=['P1','P4','UNION'],scenarios={base:[0.0014,0.00025],stress:[0.0022,0.00025],adverse:[0.0014,0.0005]},results={},accounts={};"
-          new2="const selectors=['P1_900','P4_900','UNION_900','P1_1800','P4_1800','UNION_1800','P1_3600','P4_3600','UNION_3600'],scenarios={base:[0.0014,0.00025],stress:[0.0022,0.00025],adverse:[0.0014,0.0005]},results={},accounts={};"
+          new2="const routeStates=['SHOCK_TRANSITION','COMPRESSION','DIRECTIONAL_TREND','NON_TREND_EXPANSION','BALANCED_ROTATION'];const selectors=['P1','P4','UNION'].flatMap(s=>[900,1800,3600].flatMap(c=>routeStates.map(st=>`${s}:${c}:${st}`))),scenarios={base:[0.0014,0.00025],stress:[0.0022,0.00025],adverse:[0.0014,0.0005]},results={},accounts={};"
           if old2 not in js: raise SystemExit('selector marker not found')
           js=js.replace(old2,new2,1)
-          js=js.replace("d.tradesPerDay>=1.5","d.tradesPerDay>=0.35")
-          js=js.replace("research:'5m-anomaly-routed-regime-system'","research:'cadence-anomaly-routed-regime-system'")
-          js=js.replace("premise:'keep frozen hourly regime ownership and frozen selected tactics; use repaired 1h regime context for long-history parity while scanning validated PRICE1/PRICE4 special candidates on completed 5m bars'","premise:'keep frozen hourly regime ownership, frozen selected tactics and validated PRICE1/PRICE4 specialness; compare the identical candidate stream at 15m, 30m and 60m admission boundaries'")
-          js=js.replace("protocolNote:'No strategy parameter is tuned. Long-horizon regime context comes from the canonical aggregated 1h dataset; raw 5m data supplies specialness, current-symbol returns and execution. The router is an independent sixth system; production/PAPER/LIVE are unchanged.'","protocolNote:'No strategy parameter or specialness threshold is tuned. Discovery selects among preregistered 15m/30m/60m cadence and P1/P4/union variants; validation/evaluation are pass-fail. The router remains an independent sixth system; production/PAPER/LIVE are unchanged.'")
-          Path('/tmp/anomaly-cadence-router.mjs').write_text(js)
+          oldq="const discoveryQualified=selectors.map(sel=>{const r=results[sel],d=r.base.discovery,ds=r.stress.discovery,da=r.adverse.discovery,foldRows=folds.map(([a,b])=>metrics(accounts[sel].base,monthStart(raw.months[a]),monthStart(raw.months[b])));const ok=d.tradesPerDay>=1.5&&d.netPnl>0&&d.profitFactor>=1.08&&d.activeMonths>=20&&d.positiveMonths>=Math.ceil(d.activeMonths*0.55)&&d.maxDrawdown<=0.20&&ds.netPnl>0&&ds.profitFactor>=1&&da.netPnl>0&&da.profitFactor>=1&&foldRows.filter(x=>x.netPnl>0).length>=2&&foldRows.at(-1).netPnl>0;const score=ok?d.tradesPerDay*Math.log(Math.max(d.profitFactor,1))*d.positiveMonths/Math.max(d.activeMonths,1):null;return{selector:sel,ok,score,folds:foldRows.map(x=>({trades:x.trades,pnl:x.netPnl,pf:x.profitFactor}))};}).filter(x=>x.ok).sort((a,b)=>b.score-a.score);"
+          newq="const discoveryQualified=selectors.map(sel=>{const r=results[sel],d=r.base.discovery,ds=r.stress.discovery,da=r.adverse.discovery,foldRows=folds.map(([a,b])=>metrics(accounts[sel].base,monthStart(raw.months[a]),monthStart(raw.months[b])));const ok=d.trades>=45&&d.netPnl>0&&d.profitFactor>=1.10&&d.activeMonths>=14&&d.positiveMonths>=Math.ceil(d.activeMonths*0.50)&&d.maxDrawdown<=0.20&&ds.netPnl>0&&ds.profitFactor>=1&&da.netPnl>0&&da.profitFactor>=1&&foldRows.filter(x=>x.netPnl>0).length>=2&&foldRows.at(-1).netPnl>0;const score=ok?Math.log(Math.max(d.profitFactor,1))*Math.sqrt(d.trades):null;return{selector:sel,ok,score,folds:foldRows.map(x=>({trades:x.trades,pnl:x.netPnl,pf:x.profitFactor}))};}).filter(x=>x.ok).sort((a,b)=>b.score-a.score);"
+          if oldq not in js: raise SystemExit('qualification marker not found')
+          js=js.replace(oldq,newq,1)
+          js=js.replace("const selected=discoveryQualified[0]?.selector??null;let heldOut=null,decision='NO_RELEASE';if(selected){const r=results[selected];const pass=(x,min,pf)=>x.trades>=min&&x.netPnl>0&&x.profitFactor>=pf&&x.maxDrawdown<=0.20;heldOut={validationPass:pass(r.base.validation,50,1.03)&&pass(r.stress.validation,50,1)&&pass(r.adverse.validation,50,1),evaluationPass:pass(r.base.evaluation,30,1.03)&&pass(r.stress.evaluation,30,1)&&pass(r.adverse.evaluation,30,1)};if(heldOut.validationPass&&heldOut.evaluationPass)decision='FORWARD_CANDIDATE';}","const selected=discoveryQualified[0]?.selector??null;let heldOut=null,decision='NO_RELEASE';if(selected){const r=results[selected];const pass=(x,min,pf)=>x.trades>=min&&x.netPnl>0&&x.profitFactor>=pf&&x.maxDrawdown<=0.20;heldOut={validationPass:pass(r.base.validation,8,1.03)&&pass(r.stress.validation,8,1)&&pass(r.adverse.validation,8,1),evaluationPass:pass(r.base.evaluation,6,1.03)&&pass(r.stress.evaluation,6,1)&&pass(r.adverse.evaluation,6,1)};if(heldOut.validationPass&&heldOut.evaluationPass)decision='FORWARD_CANDIDATE';}")
+          js=js.replace("research:'5m-anomaly-routed-regime-system'","research:'regime-specific-anomaly-cadence-audit'")
+          js=js.replace("premise:'keep frozen hourly regime ownership and frozen selected tactics; use repaired 1h regime context for long-history parity while scanning validated PRICE1/PRICE4 special candidates on completed 5m bars'","premise:'choose selector, cadence and owning market state only from discovery; keep all frozen tactic parameters unchanged and verify the selected cell on held-out validation/evaluation'")
+          js=js.replace("protocolNote:'No strategy parameter is tuned. Long-horizon regime context comes from the canonical aggregated 1h dataset; raw 5m data supplies specialness, current-symbol returns and execution. The router is an independent sixth system; production/PAPER/LIVE are unchanged.'","protocolNote:'Discovery may select one preregistered selector x 15m/30m/60m cadence x regime cell. No tactic parameter is changed. Validation/evaluation are pass-fail only; production/PAPER/LIVE remain unchanged.'")
+          Path('/tmp/anomaly-state-cadence.mjs').write_text(js)
           PY
-      - name: Run cadence audit
-        run: node /tmp/anomaly-cadence-router.mjs
+      - name: Run regime-cadence cell audit
+        run: node /tmp/anomaly-state-cadence.mjs
       - name: Print compact result
-        run: jq '{decision,selected,heldOut,synchronizedBars,specialBars,candidateSignals,discoveryQualified,summary:(.results|with_entries(.value={discovery:.value.base.discovery,validation:.value.base.validation,evaluation:.value.base.evaluation,stressValidation:.value.stress.validation,stressEvaluation:.value.stress.evaluation}))}' /tmp/anomaly-router-result.json
+        run: jq '{decision,selected,heldOut,discoveryQualified,summary:(.results|with_entries(select(.value.base.discovery.trades>0)|.value={D:.value.base.discovery,V:.value.base.validation,E:.value.base.evaluation,SV:.value.stress.validation,SE:.value.stress.evaluation}))}' /tmp/anomaly-router-result.json
       - uses: actions/upload-artifact@v4
         with:
-          name: anomaly-cadence-router-44m
+          name: anomaly-regime-cadence-cells-44m
           path: /tmp/anomaly-router-result.json
           retention-days: 7
