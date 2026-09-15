@@ -10,6 +10,8 @@ const minContextMarkets = Number(process.env.RESEARCH_MIN_CONTEXT_MARKETS ?? 12)
 
 let source = readFileSync(sourcePath, "utf8");
 source = source.replace('import { readFileSync } from "node:fs";', 'import { readFileSync, writeFileSync } from "node:fs";')
+  .replace('import { buildStrategyCoverageReport, deriveMarketStateFeatures } from "../lib/strategy-coverage.ts";',
+    'import { buildStrategyCoverageReport, classifyMarketState, deriveMarketStateFeatures } from "../lib/strategy-coverage.ts";')
   .replace("const FRICTION = 0.0014;", `const FRICTION = ${JSON.stringify(friction)};`)
   .replace("const ENTRY_SLIPPAGE = 0.00025;", `const ENTRY_SLIPPAGE = ${JSON.stringify(entrySlippage)};`)
   .replace("for (const { rows } of datasets) for (let index = 6; index < rows.length; index += 1) {",
@@ -27,7 +29,14 @@ if (tailAt < 0) throw new Error("Unable to locate V12 research tail");
 source = source.slice(0, tailAt);
 source += `
 const frozenIds = new Set(["tide_relay:2", "tide_catchup:2", "quiet_drift:2", "impulse_recoil:0"]);
-const frozenTrades = coverageTrades.filter((row) => frozenIds.has(row.strategyId));
+const frozenAuthority = {
+  "tide_catchup:2": ["COMPRESSION:BROAD_UP:LOW_EDGE", "ORDERLY_TREND:BROAD_DOWN:HIGH_EDGE"],
+  "quiet_drift:2": ["COMPRESSION:MIXED:CENTER", "BALANCED_ROTATION:MIXED:CENTER"],
+  "impulse_recoil:0": ["EXPANSION:BROAD_UP:HIGH_EDGE"],
+  "tide_relay:2": ["EXPANSION:BROAD_UP:HIGH_EDGE"],
+};
+const frozenTrades = coverageTrades.filter((row) => frozenIds.has(row.strategyId)
+  && frozenAuthority[row.strategyId]?.includes(classifyMarketState(row.state).key));
 const monthStart = (month) => Date.UTC(Number(month.slice(0, 4)), Number(month.slice(4, 6)) - 1, 1);
 const nextMonth = (month) => Date.UTC(Number(month.slice(0, 4)), Number(month.slice(4, 6)), 1);
 const monthKey = (ms) => new Date(ms).toISOString().slice(0, 7).replace("-", "");
@@ -35,18 +44,19 @@ const sum = (values) => values.reduce((total, value) => total + value, 0);
 function details(rows) {
   const gain = sum(rows.filter((row) => row.netReturnRate > 0).map((row) => row.netReturnRate));
   const loss = Math.abs(sum(rows.filter((row) => row.netReturnRate <= 0).map((row) => row.netReturnRate)));
-  const monthly = new Map(); const bySymbol = new Map(); const bySide = new Map();
+  const monthly = new Map(); const bySymbol = new Map(); const bySide = new Map(); const byState = new Map();
   for (const row of rows) {
-    const month = monthKey(row.openedAt);
+    const month = monthKey(row.openedAt); const stateKey = classifyMarketState(row.state).key;
     monthly.set(month, (monthly.get(month) ?? 0) + row.netReturnRate);
     bySymbol.set(row.symbol, (bySymbol.get(row.symbol) ?? 0) + row.netReturnRate);
     bySide.set(row.side, (bySide.get(row.side) ?? 0) + row.netReturnRate);
+    byState.set(stateKey, (byState.get(stateKey) ?? 0) + row.netReturnRate);
   }
   return { trades: rows.length, winRate: rows.length ? rows.filter((row) => row.netReturnRate > 0).length / rows.length : 0,
     netReturnSum: sum(rows.map((row) => row.netReturnRate)), profitFactor: loss ? gain / loss : gain ? 99 : 0,
     activeMonths: monthly.size, positiveMonths: [...monthly.values()].filter((value) => value > 0).length,
     monthly: Object.fromEntries([...monthly].sort()), bySymbol: Object.fromEntries([...bySymbol].sort()),
-    bySide: Object.fromEntries([...bySide].sort()) };
+    bySide: Object.fromEntries([...bySide].sort()), byState: Object.fromEntries([...byState].sort()) };
 }
 const from = monthStart(raw.months[0]); const to = nextMonth(raw.months.at(-1));
 const discoveryEnd = raw.months.length >= 39 ? monthStart(raw.months[30]) : from + (to - from) * .5;
@@ -64,7 +74,7 @@ for (const row of frozenTrades) {
 const report = { generatedAt: new Date().toISOString(), dataset: { source: raw.source, sha256: raw.sha256,
   months: raw.months, symbols: raw.symbols, rows: raw.datasets.reduce((total, row) => total + row.rows.length, 0),
   minContextMarkets: ${JSON.stringify(minContextMarkets)} }, scenario: { friction: FRICTION, entrySlippage: ENTRY_SLIPPAGE },
-  frozenStrategyIds: [...frozenIds], byFamily, combined,
+  frozenStrategyIds: [...frozenIds], frozenAuthority, byFamily, combined,
   exactCrossFamilyOverlapEvents: [...eventGroups.values()].filter((ids) => ids.size > 1).length,
   uniqueEventIdentities: eventGroups.size,
   tradesPerDayFull: frozenTrades.length / ((to - from) / 86400000),
