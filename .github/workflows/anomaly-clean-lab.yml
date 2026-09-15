@@ -14,6 +14,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
       - uses: actions/setup-node@v4
         with:
           node-version: 22.16.0
@@ -43,8 +44,6 @@ jobs:
           from pathlib import Path
           s=Path('scripts/research-regime-system-portfolios.mjs').read_text()
           marker='const common = { riskRate: 0.015, notionalMultiple: 0.5, minNotionalMultiple: 0.05,'
-          if marker not in s:
-              raise SystemExit('state marker not found')
           hook=r'''
           const routeStateMap = [];
           const routeSeen = new Set();
@@ -56,6 +55,7 @@ jobs:
           writeFileSync('/tmp/regime-state-map.json', JSON.stringify({ states: routeStateMap }));
           process.exit(0);
           '''
+          if marker not in s: raise SystemExit('state marker not found')
           Path('/tmp/regime-state-only.mjs').write_text(s.replace(marker,hook+'\n'+marker,1))
           PY
       - name: Build hourly state map
@@ -64,81 +64,37 @@ jobs:
           RESEARCH_EXECUTION_DATASET: /tmp/gate-history-router-44m-5m.json
           RESEARCH_OUTPUT: /tmp/unused.json
         run: node /tmp/regime-state-only.mjs
-      - name: Run 5m anomaly-routed regime system audit
+      - name: Recover validated router and add cadence layer
         run: |
-          cat > /tmp/anomaly-router.mjs <<'EOF'
-          import { readFileSync, writeFileSync } from 'node:fs';
-          const raw=JSON.parse(readFileSync('/tmp/gate-history-router-44m-5m.json','utf8'));
-          const stateRaw=JSON.parse(readFileSync('/tmp/regime-state-map.json','utf8'));
-          const baseReport=JSON.parse(readFileSync('research-results/regime-system-portfolios-2026-09-14.json','utf8'));
-          if(raw.interval!=='5m'||raw.months.length!==44||raw.symbols.length!==11)throw new Error('requires frozen 44m/11-symbol 5m dataset');
-          const sum=xs=>xs.reduce((a,b)=>a+b,0);
-          const median=xs=>{if(!xs.length)return 0;const ys=[...xs].sort((a,b)=>a-b),m=Math.floor(ys.length/2);return ys.length%2?ys[m]:(ys[m-1]+ys[m])/2;};
-          const sign=x=>x>0?1:x<0?-1:0;
-          const monthStart=m=>Date.UTC(Number(m.slice(0,4)),Number(m.slice(4,6))-1,1);
-          const fromMs=raw.from*1000,toMs=raw.now*1000,discoveryEnd=monthStart(raw.months[30]),validationEnd=monthStart(raw.months[38]);
-          const stateByTime=new Map(stateRaw.states.map(x=>[x.time,x]));
-          const configs=baseReport.systems.flatMap(s=>(s.accepted?s.selectedStrategies:[]));
-          if(configs.length!==12)throw new Error(`expected 12 frozen selected strategies, got ${configs.length}`);
-          const configById=new Map(configs.map(c=>[c.id,c]));
-          const bySystem=new Map();for(const c of configs){const a=bySystem.get(c.system)??[];a.push(c);bySystem.set(c.system,a);}
-          function lowerBound(rows,t,lo=0,hi=rows.length){while(lo<hi){const m=Math.floor((lo+hi)/2);if(rows[m].time<t)lo=m+1;else hi=m;}return lo;}
-          function volumePrefix(rows){const p=new Float64Array(rows.length+1);for(let i=0;i<rows.length;i++)p[i+1]=p[i]+rows[i].volume;return p;}
-          function rollingPrevTime(rows,windowSec,key,wantMax){const out=new Float64Array(rows.length);out.fill(NaN);let q=[],head=0;for(let i=0;i<rows.length;i++){const j=i-1;if(j>=0){const v=rows[j][key];while(q.length>head){const lv=rows[q[q.length-1]][key];if(wantMax?lv>v:lv<v)break;q.pop();}q.push(j);}const cutoff=rows[i].time-windowSec;while(q.length>head&&rows[q[head]].time<cutoff)head++;if(q.length>head)out[i]=rows[q[head]][key];if(head>4096&&head*2>q.length){q=q.slice(head);head=0;}}return out;}
-          const data=raw.datasets.map(d=>({symbol:d.symbol,rows:d.rows,pointer:0,vol:volumePrefix(d.rows),high24:rollingPrevTime(d.rows,86400,'high',true),low24:rollingPrevTime(d.rows,86400,'low',false),high7d:rollingPrevTime(d.rows,604800,'high',true),low7d:rollingPrevTime(d.rows,604800,'low',false)}));
-          const dataBySymbol=new Map(data.map(d=>[d.symbol,d]));
-          const master=data.find(d=>d.symbol==='BTC_USDT')??data[0];
-          function localIndex(rows,i,target,maxBack){let lo=Math.max(0,i-maxBack),hi=i+1;while(lo<hi){const m=Math.floor((lo+hi)/2);if(rows[m].time<target)lo=m+1;else hi=m;}return rows[lo]?.time===target?lo:-1;}
-          function exactReturn(d,i,seconds){const target=d.rows[i].time-seconds,j=lowerBound(d.rows,target);return d.rows[j]?.time===target?d.rows[i].close/d.rows[j].close-1:null;}
-          function avgVolume(d,start,end){const a=lowerBound(d.rows,start),b=lowerBound(d.rows,end+300);if(b<=a)return 0;return(d.vol[b]-d.vol[a])/(b-a);}
-          function atr6(d,i){const t=d.rows[i].time,rs=[];for(let h=0;h<6;h++){const end=t-h*3600,start=end-3600+300,a=lowerBound(d.rows,start),b=lowerBound(d.rows,end+300);if(b-a<10)continue;let hi=-Infinity,lo=Infinity;for(let k=a;k<b;k++){hi=Math.max(hi,d.rows[k].high);lo=Math.min(lo,d.rows[k].low);}rs.push((hi-lo)/Math.max(d.rows[b-1].close,1e-12));}return rs.length>=4?median(rs):0;}
-          function signal(config,f){
-            if(f.system!==config.system)return null;
-            if(config.tactic.startsWith('BULL_')||config.tactic.startsWith('BEAR_')){const bull=config.tactic.startsWith('BULL_');if((bull&&f.context.median30<=0)||(!bull&&f.context.median30>=0))return null;return signal({...config,tactic:config.tactic.slice(5)},f);}
-            if(config.tactic==='BREAKDOWN_TRAIL'){if(f.r30d>-config.symbol30||f.context.breadth30>config.breadth||f.current.close>=f.low7d)return null;return{direction:-1,strength:-f.r30d+(1-f.context.breadth30)*0.02};}
-            if(config.tactic==='RELATIVE_MOMENTUM'){const d=sign(f.relative7);if(!d||Math.abs(f.relative7)<config.relative7||d*f.relative24<config.confirm24)return null;return{direction:d,strength:Math.abs(f.relative7)+d*f.relative24};}
-            if(config.tactic==='DEFENSIVE_RELATIVE'){const md=sign(f.context.median30),d=-md;if(!d||d*f.relative7<config.relative7||d*f.r6<config.confirm6)return null;return{direction:d,strength:d*f.relative7+d*f.r6};}
-            if(config.tactic==='MARKET_REBOUND'){if(f.r24>-config.drop24||f.r6<config.rebound6)return null;return{direction:1,strength:-f.r24+f.r6};}
-            if(config.tactic==='ALIGNED_DOWNSHOCK_REVERSAL'){if(f.context.median24>=0||f.context.median30>=0||f.r24>-config.symbol24||f.r6<config.rebound6)return null;return{direction:1,strength:-f.r24+f.r6};}
-            if(config.tactic==='COUNTER_DOWNSHOCK_SURVIVOR'){if(f.context.median24>=0||f.context.median30<=0||f.relative24<config.relative24||f.r6<config.rebound6)return null;return{direction:1,strength:f.relative24+f.r6};}
-            if(config.tactic==='FALSE_RELEASE'){if(f.volumeBurst<config.volume)return null;const hf=f.current.high>f.high24*(1+(config.sweep??0))&&f.current.close<f.high24*(1-(config.reclaim??0));const lf=f.current.low<f.low24*(1-(config.sweep??0))&&f.current.close>f.low24*(1+(config.reclaim??0));if(hf===lf)return null;return{direction:hf?-1:1,strength:f.volumeBurst+Math.abs(f.r1)};}
-            if(config.tactic==='QUIET_PULLBACK_RESUME'||config.tactic==='RELATIVE_PULLBACK_RESUME'){const d=sign(f.relative7),pb=d*f.r24;if(!d||Math.abs(f.relative7)<config.relative7||pb>-config.pullbackMin||pb<-config.pullbackMax||d*f.r6<config.resume6)return null;return{direction:d,strength:Math.abs(f.relative7)+Math.abs(f.r24)+d*f.r6};}
-            if(config.tactic==='REFINED_BREADTH_CONTINUATION'){const d=sign(f.context.median24),boundary=d>0?f.high24:f.low24;if(!d||sign(f.r24)!==d||Math.abs(f.r24)<config.symbol24||d*f.r6<config.impulse6||d*(f.current.close/boundary-1)<0)return null;return{direction:d,strength:Math.abs(f.r24)+d*f.r6};}
-            if(config.tactic==='EXPANSION_DEFENDER'){const md=sign(f.context.median24),d=-md;if(!md||d*f.relative24<config.relative24||d*f.r6<config.resume6)return null;return{direction:d,strength:d*f.relative24+d*f.r6};}
-            if(config.tactic==='SHORT_HORIZON_REVERSAL'){const o=sign(f.relative24),d=-o;if(!o||Math.abs(f.relative24)<config.relative24||d*f.r6<config.reversal6)return null;return{direction:d,strength:Math.abs(f.relative24)+d*f.r6};}
-            return null;
-          }
-          const candidates=[];let synchronizedBars=0,specialBars=0;
-          for(let mi=48;mi<master.rows.length-2;mi++){
-            const time=master.rows[mi].time,entryTime=time+300,stateTime=Math.floor(entryTime/3600)*3600-3600,state=stateByTime.get(stateTime);if(!state)continue;
-            const xs=[];
-            for(const d of data){while(d.pointer<d.rows.length&&d.rows[d.pointer].time<time)d.pointer++;const i=d.pointer;if(i>=d.rows.length||d.rows[i].time!==time||d.rows[i+1]?.time!==entryTime)continue;const j1=localIndex(d.rows,i,time-3600,30),j4=localIndex(d.rows,i,time-14400,100);if(j1<0||j4<0)continue;const c=d.rows[i].close;xs.push({symbol:d.symbol,d,index:i,current:d.rows[i],r1:c/d.rows[j1].close-1,r4:c/d.rows[j4].close-1});}
-            if(xs.length<9)continue;synchronizedBars++;
-            const m1=median(xs.map(x=>x.r1)),m4=median(xs.map(x=>x.r4));for(const x of xs){x.relative1=x.r1-m1;x.relative4=x.r4-m4;}
-            const s1=Math.max(0.001,median(xs.map(x=>Math.abs(x.relative1)))),s4=Math.max(0.001,median(xs.map(x=>Math.abs(x.relative4))));
-            const p1=[...xs].sort((a,b)=>Math.abs(b.relative1)-Math.abs(a.relative1))[0],p4=[...xs].sort((a,b)=>Math.abs(b.relative4)-Math.abs(a.relative4))[0];
-            const p1ok=Math.abs(p1.relative1)>=0.006&&Math.abs(p1.relative1)/s1>=1.8,p4ok=Math.abs(p4.relative4)>=0.012&&Math.abs(p4.relative4)/s4>=1.8;
-            const specials=new Map();if(p1ok)specials.set(p1.symbol,{p1:true,p4:false,score:Math.abs(p1.relative1)/s1});if(p4ok){const old=specials.get(p4.symbol)??{p1:false,p4:false,score:0};specials.set(p4.symbol,{...old,p4:true,score:Math.max(old.score,Math.abs(p4.relative4)/s4)});}if(!specials.size)continue;specialBars++;
-            for(const [symbol,flag] of specials){const f0=xs.find(x=>x.symbol===symbol),d=f0.d,i=f0.index,r6=exactReturn(d,i,21600),r24=exactReturn(d,i,86400),r7=exactReturn(d,i,604800),r30=exactReturn(d,i,2592000);if([r6,r24,r7,r30].some(v=>v===null))continue;const f={...f0,r6,r24,r7d:r7,r30d:r30,relative24:r24-state.context.median24,relative7:r7-state.context.median7,context:state.context,system:state.system,high24:d.high24[i],low24:d.low24[i],high7d:d.high7d[i],low7d:d.low7d[i]};const recent=avgVolume(d,time-21600+300,time),base=avgVolume(d,time-172800+300,time-21600);f.volumeBurst=recent/Math.max(base,1e-12);for(const config of bySystem.get(state.system)??[]){const found=signal(config,f);if(!found)continue;const a6=atr6(d,i),stopRate=Math.min(config.stopCap,Math.max(config.stopFloor,config.stopAtr*a6));candidates.push({strategyId:config.id,tactic:config.tactic,system:state.system,symbol,index:i,openedAt:entryTime*1000,direction:found.direction,side:found.direction>0?'LONG':'SHORT',strength:found.strength,stopRate,p1:flag.p1,p4:flag.p4,specialScore:flag.score});}}
-          }
-          function resolve(sig,friction,slippage){const config=configById.get(sig.strategyId),d=dataBySymbol.get(sig.symbol),rows=d.rows,idx=sig.index+1;if(rows[idx]?.time*1000!==sig.openedAt)return null;const dir=sig.direction,entry=rows[idx].open*(1+dir*slippage),stopRate=sig.stopRate,trail=config.exitModel==='TRAIL',targetRate=trail?null:Math.max(stopRate*config.rewardRisk,friction*2.2),origStop=entry*(1-dir*stopRate),target=trail?null:entry*(1+dir*targetRate);let activeStop=origStop,extreme=entry,exit=entry,closedAt=rows[idx].time*1000,outcome='DATA_GAP';const maxBars=config.maxHoldHours*12;for(let o=0;o<maxBars&&idx+o<rows.length;o++){const c=rows[idx+o];if(o&&c.time!==rows[idx+o-1].time+300){exit=rows[idx+o-1].close;closedAt=rows[idx+o-1].time*1000;break;}const stopped=dir>0?c.low<=activeStop:c.high>=activeStop,targeted=!trail&&(dir>0?c.high>=target:c.low<=target);if(stopped||targeted){exit=stopped?activeStop:target;closedAt=c.time*1000;outcome=stopped?(activeStop===origStop?'STOP':'TRAIL'):'TARGET';break;}if(trail){extreme=dir>0?Math.max(extreme,c.high):Math.min(extreme,c.low);const cand=extreme*(1-dir*stopRate*config.trailScale);activeStop=dir>0?Math.max(activeStop,cand):Math.min(activeStop,cand);}exit=c.close;closedAt=c.time*1000;outcome=o===maxBars-1?'TIMEOUT':outcome;}const gross=dir*(exit-entry)/entry;return{...sig,entry,stop:origStop,target,friction,closedAt,outcome,netReturnRate:gross-friction};}
-          function portfolio(selector,friction=0.0014,slippage=0.00025){const rows=candidates.filter(x=>selector==='P1'?x.p1:selector==='P4'?x.p4:(x.p1||x.p4)).sort((a,b)=>a.openedAt-b.openedAt||b.specialScore-a.specialScore||b.strength-a.strength);let equity=1000,peak=equity,maxDrawdown=0;const open=[],accepted=[],cooldown=new Map();const settle=time=>{for(const t of open.filter(x=>x.closedAt<=time).sort((a,b)=>a.closedAt-b.closedAt)){equity+=t.netPnl;peak=Math.max(peak,equity);maxDrawdown=Math.max(maxDrawdown,(peak-equity)/peak);open.splice(open.indexOf(t),1);cooldown.set(`${t.strategyId}:${t.symbol}`,t.closedAt+configById.get(t.strategyId).cooldownHours*3600000);}};for(let i=0;i<rows.length;){const openedAt=rows[i].openedAt;settle(openedAt);const same=[];while(i<rows.length&&rows[i].openedAt===openedAt)same.push(rows[i++]);same.sort((a,b)=>b.specialScore-a.specialScore||b.strength-a.strength);for(const sig of same){const config=configById.get(sig.strategyId);if(equity<=100||open.some(x=>x.symbol===sig.symbol)||(cooldown.get(`${sig.strategyId}:${sig.symbol}`)??0)>sig.openedAt)continue;const sameSide=open.filter(x=>x.side===sig.side),multiple=Math.min(config.notionalMultiple,config.riskRate/Math.max(sig.stopRate+friction,1e-9));if(multiple<config.minNotionalMultiple)continue;const notional=equity*multiple,plannedRisk=notional*(sig.stopRate+friction);if(sum(open.map(x=>x.plannedRisk))+plannedRisk>equity*0.10||sum(sameSide.map(x=>x.plannedRisk))+plannedRisk>equity*0.065)continue;const t=resolve(sig,friction,slippage);if(!t)continue;const at={...t,notional,plannedRisk,netPnl:notional*t.netReturnRate};open.push(at);accepted.push(at);}}settle(Infinity);return{trades:accepted,endEquity:equity,maxDrawdown};}
-          function metrics(account,start,end){const rows=account.trades.filter(t=>t.openedAt>=start&&t.openedAt<end),g=rows.filter(t=>t.netPnl>0),l=rows.filter(t=>t.netPnl<=0);let eq=1000,pk=eq,dd=0;for(const t of [...rows].sort((a,b)=>a.closedAt-b.closedAt)){eq+=t.netPnl;pk=Math.max(pk,eq);dd=Math.max(dd,(pk-eq)/Math.max(pk,1e-9));}const monthly=raw.months.flatMap(m=>{const s=monthStart(m),e=Date.UTC(Number(m.slice(0,4)),Number(m.slice(4,6)),1);if(s<start||e>end)return[];const xs=rows.filter(t=>t.openedAt>=s&&t.openedAt<e);return[{month:m,trades:xs.length,pnl:sum(xs.map(t=>t.netPnl))}];});const byState=Object.fromEntries([...new Set(rows.map(t=>t.system))].map(s=>[s,{trades:rows.filter(t=>t.system===s).length,pnl:sum(rows.filter(t=>t.system===s).map(t=>t.netPnl))}]));return{trades:rows.length,tradesPerDay:rows.length/Math.max(1,(end-start)/86400000),netPnl:sum(rows.map(t=>t.netPnl)),profitFactor:l.length?sum(g.map(t=>t.netPnl))/Math.abs(sum(l.map(t=>t.netPnl))):g.length?99:0,maxDrawdown:dd,activeMonths:monthly.filter(x=>x.trades).length,positiveMonths:monthly.filter(x=>x.pnl>0).length,monthly,byState};}
-          const selectors=['P1','P4','UNION'],scenarios={base:[0.0014,0.00025],stress:[0.0022,0.00025],adverse:[0.0014,0.0005]},results={},accounts={};
-          for(const sel of selectors){results[sel]={};accounts[sel]={};for(const [name,[fr,sl]] of Object.entries(scenarios)){const a=portfolio(sel,fr,sl);accounts[sel][name]=a;results[sel][name]={discovery:metrics(a,fromMs,discoveryEnd),validation:metrics(a,discoveryEnd,validationEnd),evaluation:metrics(a,validationEnd,toMs),full:metrics(a,fromMs,toMs)};}}
-          const folds=[[0,10],[10,20],[20,30]];
-          const discoveryQualified=selectors.map(sel=>{const r=results[sel],d=r.base.discovery,ds=r.stress.discovery,da=r.adverse.discovery,foldRows=folds.map(([a,b])=>metrics(accounts[sel].base,monthStart(raw.months[a]),monthStart(raw.months[b])));const ok=d.tradesPerDay>=1.5&&d.netPnl>0&&d.profitFactor>=1.08&&d.activeMonths>=20&&d.positiveMonths>=Math.ceil(d.activeMonths*0.55)&&d.maxDrawdown<=0.20&&ds.netPnl>0&&ds.profitFactor>=1&&da.netPnl>0&&da.profitFactor>=1&&foldRows.filter(x=>x.netPnl>0).length>=2&&foldRows.at(-1).netPnl>0;const score=ok?d.tradesPerDay*Math.log(Math.max(d.profitFactor,1))*d.positiveMonths/Math.max(d.activeMonths,1):null;return{selector:sel,ok,score,folds:foldRows.map(x=>({trades:x.trades,pnl:x.netPnl,pf:x.profitFactor}))};}).filter(x=>x.ok).sort((a,b)=>b.score-a.score);
-          const selected=discoveryQualified[0]?.selector??null;let heldOut=null,decision='NO_RELEASE';if(selected){const r=results[selected];const pass=(x,min,pf)=>x.trades>=min&&x.netPnl>0&&x.profitFactor>=pf&&x.maxDrawdown<=0.20;heldOut={validationPass:pass(r.base.validation,50,1.03)&&pass(r.stress.validation,50,1)&&pass(r.adverse.validation,50,1),evaluationPass:pass(r.base.evaluation,30,1.03)&&pass(r.stress.evaluation,30,1)&&pass(r.adverse.evaluation,30,1)};if(heldOut.validationPass&&heldOut.evaluationPass)decision='FORWARD_CANDIDATE';}
-          const baseline={full:baseReport.candidateCombined.base,discovery:baseReport.candidateCombined.base.discovery,validation:baseReport.candidateCombined.base.validation,evaluation:baseReport.candidateCombined.base.evaluation};
-          const out={research:'5m-anomaly-routed-regime-system',premise:'keep frozen hourly regime ownership and frozen selected tactics; use repaired 1h regime context for long-history parity while scanning validated PRICE1/PRICE4 special candidates on completed 5m bars',canonical:{sha256:raw.sha256,months:raw.months.length,symbols:raw.symbols},synchronizedBars,specialBars,candidateSignals:candidates.length,selectors,results,discoveryQualified,selected,heldOut,decision,baseline,protocolNote:'No strategy parameter is tuned. Long-horizon regime context comes from the canonical aggregated 1h dataset; raw 5m data supplies specialness, current-symbol returns and execution. The router is an independent sixth system; production/PAPER/LIVE are unchanged.'};
-          writeFileSync('/tmp/anomaly-router-result.json',JSON.stringify(out,null,2));
-          console.log(JSON.stringify({decision,selected,heldOut,synchronizedBars,specialBars,candidateSignals:candidates.length,discoveryQualified,summary:Object.fromEntries(selectors.map(s=>[s,{D:results[s].base.discovery,V:results[s].base.validation,E:results[s].base.evaluation,stressV:results[s].stress.validation,stressE:results[s].stress.evaluation}]))},null,2));
-          EOF
-          node /tmp/anomaly-router.mjs
+          git show HEAD^:.github/workflows/anomaly-clean-lab.yml > /tmp/previous-lab.yml
+          python - <<'PY'
+          from pathlib import Path
+          text=Path('/tmp/previous-lab.yml').read_text()
+          start="cat > /tmp/anomaly-router.mjs <<'EOF'\n"
+          a=text.index(start)+len(start)
+          b=text.index("\n          EOF",a)
+          js=text[a:b]
+          js='\n'.join(line[10:] if line.startswith('          ') else line for line in js.splitlines())+'\n'
+          old="function portfolio(selector,friction=0.0014,slippage=0.00025){const rows=candidates.filter(x=>selector==='P1'?x.p1:selector==='P4'?x.p4:(x.p1||x.p4)).sort((a,b)=>a.openedAt-b.openedAt||b.specialScore-a.specialScore||b.strength-a.strength);"
+          new="function portfolio(key,friction=0.0014,slippage=0.00025){const [selector,cadenceText]=key.split('_'),cadence=Number(cadenceText);const rows=candidates.filter(x=>(selector==='P1'?x.p1:selector==='P4'?x.p4:(x.p1||x.p4))&&Math.floor(x.openedAt/1000)%cadence===0).sort((a,b)=>a.openedAt-b.openedAt||b.specialScore-a.specialScore||b.strength-a.strength);"
+          if old not in js: raise SystemExit('portfolio marker not found')
+          js=js.replace(old,new,1)
+          old2="const selectors=['P1','P4','UNION'],scenarios={base:[0.0014,0.00025],stress:[0.0022,0.00025],adverse:[0.0014,0.0005]},results={},accounts={};"
+          new2="const selectors=['P1_900','P4_900','UNION_900','P1_1800','P4_1800','UNION_1800','P1_3600','P4_3600','UNION_3600'],scenarios={base:[0.0014,0.00025],stress:[0.0022,0.00025],adverse:[0.0014,0.0005]},results={},accounts={};"
+          if old2 not in js: raise SystemExit('selector marker not found')
+          js=js.replace(old2,new2,1)
+          js=js.replace("d.tradesPerDay>=1.5","d.tradesPerDay>=0.35")
+          js=js.replace("research:'5m-anomaly-routed-regime-system'","research:'cadence-anomaly-routed-regime-system'")
+          js=js.replace("premise:'keep frozen hourly regime ownership and frozen selected tactics; use repaired 1h regime context for long-history parity while scanning validated PRICE1/PRICE4 special candidates on completed 5m bars'","premise:'keep frozen hourly regime ownership, frozen selected tactics and validated PRICE1/PRICE4 specialness; compare the identical candidate stream at 15m, 30m and 60m admission boundaries'")
+          js=js.replace("protocolNote:'No strategy parameter is tuned. Long-horizon regime context comes from the canonical aggregated 1h dataset; raw 5m data supplies specialness, current-symbol returns and execution. The router is an independent sixth system; production/PAPER/LIVE are unchanged.'","protocolNote:'No strategy parameter or specialness threshold is tuned. Discovery selects among preregistered 15m/30m/60m cadence and P1/P4/union variants; validation/evaluation are pass-fail. The router remains an independent sixth system; production/PAPER/LIVE are unchanged.'")
+          Path('/tmp/anomaly-cadence-router.mjs').write_text(js)
+          PY
+      - name: Run cadence audit
+        run: node /tmp/anomaly-cadence-router.mjs
       - name: Print compact result
         run: jq '{decision,selected,heldOut,synchronizedBars,specialBars,candidateSignals,discoveryQualified,summary:(.results|with_entries(.value={discovery:.value.base.discovery,validation:.value.base.validation,evaluation:.value.base.evaluation,stressValidation:.value.stress.validation,stressEvaluation:.value.stress.evaluation}))}' /tmp/anomaly-router-result.json
       - uses: actions/upload-artifact@v4
         with:
-          name: anomaly-5m-router-44m
+          name: anomaly-cadence-router-44m
           path: /tmp/anomaly-router-result.json
           retention-days: 7
