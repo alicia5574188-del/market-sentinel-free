@@ -9,7 +9,8 @@ const entrySlippage = Number(process.env.RESEARCH_ENTRY_SLIPPAGE ?? 0.00025);
 const minContextMarkets = Number(process.env.RESEARCH_MIN_CONTEXT_MARKETS ?? 12);
 
 let source = readFileSync(sourcePath, "utf8");
-source = source.replace("const FRICTION = 0.0014;", `const FRICTION = ${JSON.stringify(friction)};`)
+source = source.replace('import { readFileSync } from "node:fs";', 'import { readFileSync, writeFileSync } from "node:fs";')
+  .replace("const FRICTION = 0.0014;", `const FRICTION = ${JSON.stringify(friction)};`)
   .replace("const ENTRY_SLIPPAGE = 0.00025;", `const ENTRY_SLIPPAGE = ${JSON.stringify(entrySlippage)};`)
   .replace("for (const { rows } of datasets) for (let index = 6; index < rows.length; index += 1) {",
     `for (const { rows } of datasets) for (let index = 6; index < rows.length; index += 1) {\n  if (rows[index].time - rows[index - 6].time !== 1_800) continue;`)
