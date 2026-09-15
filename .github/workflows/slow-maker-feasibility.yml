@@ -5,7 +5,6 @@ on:
   pull_request:
     paths:
       - 'scripts/research-slow-maker-feasibility.mjs'
-      - 'scripts/debug-slow-maker-sol-202607.mjs'
       - '.github/workflows/slow-maker-feasibility.yml'
       - 'worker/index-clean.ts'
       - 'lib/gate-market.ts'
@@ -23,17 +22,13 @@ jobs:
         with:
           node-version: 22.16.0
       - name: Syntax check
-        run: |
-          node --check scripts/research-slow-maker-feasibility.mjs
-          node --check scripts/debug-slow-maker-sol-202607.mjs
-      - name: Diagnose 2026 SOL orderbook crossing
-        run: node scripts/debug-slow-maker-sol-202607.mjs
+        run: node --check scripts/research-slow-maker-feasibility.mjs
       - name: Run slow maker feasibility audit
         env:
           RESEARCH_OUTPUT: /tmp/slow-maker-feasibility.json
         run: node scripts/research-slow-maker-feasibility.mjs
       - name: Print result
-        run: jq '{research,objective,protocol,runtime,reconstructionPass,atTouchDecision,widePassiveDecision,symbolPortability,sha256,summary:(.records|map(if .ok then {era,symbol,p50SpreadBps:.spreadBps.p50,p90SpreadBps:.spreadBps.p90,p50BestStateMs:.bestQuoteStateMs.p50,stableWide4SixPct:(.stableWide["4bp_6000ms"].timeFraction*100),stableWide8SixPct:(.stableWide["8bp_6000ms"].timeFraction*100),crossedGroupRatio,validBookSeconds} else {era,symbol,error} end))}' /tmp/slow-maker-feasibility.json
+        run: jq '{research,objective,protocol,runtime,reconstructionPass,reconstructionCoverage,archiveQualityDecision,validHours,invalidHours,atTouchPortabilityRejected,latencyMatchedWideEvidence,atTouchDecision,widePassiveDecision,symbolPortability,sha256,summary:(.records|map(if .ok then {era,symbol,qualityPass:((.validBookSeconds>=3000) and (.crossedGroupRatio<=0.005) and (.outOfOrder==0) and (.sequenceGapCount==0) and (.sequenceBackwards==0)),p50SpreadBps:.spreadBps.p50,p90SpreadBps:.spreadBps.p90,p50BestStateMs:.bestQuoteStateMs.p50,stableWide4SixPct:(.stableWide["4bp_6000ms"].timeFraction*100),stableWide8SixPct:(.stableWide["8bp_6000ms"].timeFraction*100),crossedGroupRatio,validBookSeconds,sequenceGapCount,sequenceBackwards} else {era,symbol,error} end))}' /tmp/slow-maker-feasibility.json
       - uses: actions/upload-artifact@v4
         with:
           name: slow-maker-feasibility
