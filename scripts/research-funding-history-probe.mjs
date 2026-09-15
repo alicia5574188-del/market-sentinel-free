@@ -1,0 +1,11 @@
+import { writeFileSync } from 'node:fs';
+
+const OUT=process.env.RESEARCH_OUTPUT??'/tmp/funding-history-probe.json';
+const symbols=(process.env.RESEARCH_SYMBOLS??'BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT,SUI_USDT,UNI_USDT,FIL_USDT,AAVE_USDT,ARB_USDT,APT_USDT,PEPE_USDT,WLD_USDT').split(',').filter(Boolean);
+const base='https://api.gateio.ws/api/v4/futures/usdt';
+async function getJson(url){for(let n=0;n<4;n++){const r=await fetch(url,{headers:{Accept:'application/json'}});if(r.ok)return r.json();if(r.status===429||r.status>=500){await new Promise(res=>setTimeout(res,500*(n+1)));continue;}throw new Error(`${r.status} ${await r.text()}`);}throw new Error(`failed ${url}`);}
+const rows=[];
+for(const symbol of symbols){const [hist,contract]=await Promise.all([getJson(`${base}/funding_rate?contract=${encodeURIComponent(symbol)}&limit=1000`),getJson(`${base}/contracts/${encodeURIComponent(symbol)}`)]);const data=(Array.isArray(hist)?hist:[]).map(x=>({t:Number(x.t),r:Number(x.r)})).filter(x=>Number.isFinite(x.t)&&Number.isFinite(x.r)).sort((a,b)=>a.t-b.t),gaps=[];for(let i=1;i<data.length;i++)gaps.push(data[i].t-data[i-1].t);const mode=gaps.length?[...new Set(gaps)].map(v=>[v,gaps.filter(x=>x===v).length]).sort((a,b)=>b[1]-a[1])[0][0]:null;rows.push({symbol,count:data.length,first:data[0]?.t??null,last:data.at(-1)?.t??null,spanDays:data.length?(data.at(-1).t-data[0].t)/86400:0,modeGapSeconds:mode,currentFundingInterval:Number(contract?.funding_interval??0)||null,currentFundingRate:Number(contract?.funding_rate??NaN),minRate:data.length?Math.min(...data.map(x=>x.r)):null,maxRate:data.length?Math.max(...data.map(x=>x.r)):null,meanAbsRate:data.length?data.reduce((a,x)=>a+Math.abs(x.r),0)/data.length:null});}
+const commonFirst=Math.max(...rows.filter(x=>x.first).map(x=>x.first)),commonLast=Math.min(...rows.filter(x=>x.last).map(x=>x.last));
+const report={queriedAt:Math.floor(Date.now()/1000),symbols:rows.length,common:{first:commonFirst,last:commonLast,spanDays:(commonLast-commonFirst)/86400},rows,note:'Public Gate futures funding_rate history probe using limit=1000. No authentication or trading actions.'};
+writeFileSync(OUT,JSON.stringify(report,null,2)+'\n');console.log('FUNDING_PROBE='+JSON.stringify(report));

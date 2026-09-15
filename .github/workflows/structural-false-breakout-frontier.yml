@@ -1,0 +1,14 @@
+name: Structural False Breakout Frontier
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: node --check scripts/research-structural-false-breakout-frontier.mjs

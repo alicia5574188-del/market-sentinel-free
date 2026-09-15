@@ -1,0 +1,14 @@
+name: FBR Adaptive Exit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: node --check scripts/research-fbr-adaptive-exit.mjs
