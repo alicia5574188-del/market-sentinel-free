@@ -1,0 +1,40 @@
+name: Validate Frozen Regime Causal Top30 Fast
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/validate-frozen-regime-causal-top30-fast.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Build parallel-load research runner
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('scripts/research-frozen-regime-causal-top30.mjs').read_text()
+          old="const activeByMonth=Object.fromEntries(MONTHS.map(m=>[m,0])); const signalDatasets=[]; const executionCounts={};\nfor(const symbol of COHORT){const all=[];const covered=[];for(const month of MONTHS){const rows=await getMonth(symbol,month);if(!rows)continue;all.push(...rows);covered.push(month);activeByMonth[month]++;}all.sort((a,b)=>a.time-b.time);writeFileSync(`${EXEC_DIR}/${symbol}.json`,JSON.stringify(all));executionCounts[symbol]=all.length;const hourly=aggregate(all);let gaps=0;for(let i=1;i<hourly.length;i++)gaps+=Number(hourly[i].time!==hourly[i-1].time+3600);signalDatasets.push({symbol,rows:hourly,gaps,syntheticHours:hourly.filter(r=>r.synthetic).length,coverage:covered.length/MONTHS.length});console.log(`built ${symbol}: ${covered.length}/${MONTHS.length} months, ${all.length} 5m, ${hourly.length} 1h`);}\n"
+          new="const activeByMonth=Object.fromEntries(MONTHS.map(m=>[m,0])); const signalDatasets=[]; const executionCounts={};\nconst monthRows=new Map(COHORT.map(s=>[s,new Map()])); const tasks=COHORT.flatMap(symbol=>MONTHS.map(month=>({symbol,month}))); let cursor=0;\nasync function worker(){while(cursor<tasks.length){const {symbol,month}=tasks[cursor++];const rows=await getMonth(symbol,month);if(rows)monthRows.get(symbol).set(month,rows);}}\nawait Promise.all(Array.from({length:16},worker));\nfor(const symbol of COHORT){const all=[];const covered=[];for(const month of MONTHS){const rows=monthRows.get(symbol).get(month);if(!rows)continue;all.push(...rows);covered.push(month);activeByMonth[month]++;}all.sort((a,b)=>a.time-b.time);writeFileSync(`${EXEC_DIR}/${symbol}.json`,JSON.stringify(all));executionCounts[symbol]=all.length;const hourly=aggregate(all);let gaps=0;for(let i=1;i<hourly.length;i++)gaps+=Number(hourly[i].time!==hourly[i-1].time+3600);signalDatasets.push({symbol,rows:hourly,gaps,syntheticHours:hourly.filter(r=>r.synthetic).length,coverage:covered.length/MONTHS.length});console.log(`built ${symbol}: ${covered.length}/${MONTHS.length} months, ${all.length} 5m, ${hourly.length} 1h`);}\n"
+          if old not in p: raise SystemExit('parallel patch anchor missing')
+          Path('/tmp/frozen-regime-fast.mjs').write_text(p.replace(old,new))
+          PY
+      - name: Run frozen external-symbol audit
+        run: node --max-old-space-size=6144 /tmp/frozen-regime-fast.mjs
+      - name: Print summary
+        run: jq '{decision,systems,combined:{external:.combined.external.base,core11Baseline:.combined.core11Baseline.base}}' /tmp/frozen-regime-top30-summary.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frozen-regime-causal-top30-fast
+          path: |
+            /tmp/frozen-regime-top30-summary.json
+            /tmp/frozen-regime-top30-result.json
+          retention-days: 7
