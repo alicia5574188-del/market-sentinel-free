@@ -1,0 +1,33 @@
+name: Validate Capitulation Rank Expansion
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-capitulation-rank-expansion.mjs"
+      - ".github/workflows/validate-capitulation-rank-expansion.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Check syntax
+        run: node --check scripts/research-capitulation-rank-expansion.mjs
+      - name: Run frozen rank expansion audit
+        run: node --max-old-space-size=4096 scripts/research-capitulation-rank-expansion.mjs
+      - name: Print result
+        run: jq '{decision,events,rankGates,aggregate}' /tmp/capitulation-rank-expansion.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: capitulation-rank-expansion
+          path: |
+            /tmp/capitulation-rank-expansion.json
+            /tmp/capitulation-rank-expansion-trades.json
+          retention-days: 7
