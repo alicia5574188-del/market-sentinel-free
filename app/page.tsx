@@ -3,6 +3,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { directionalReturnRate, marginReturnRate, unrealizedPnl } from "../lib/position-metrics.ts";
 import { runtimeBackendOperational, runtimeNotice, runtimeStatusLabel } from "../lib/runtime-health.ts";
+import ForwardDashboard from "./forward-dashboard.tsx";
+import type { forwardSummary } from "../lib/forward-relations.ts";
 
 type Side = "LONG" | "SHORT";
 type MarketState = "BREAKOUT" | "REVERSAL" | "RANGE";
@@ -140,6 +142,8 @@ type RegimeCandidate = { id: string; symbol: string; channel: CandidateChannel; 
 type MarketRegimes = { version: 2; lastUpdatedAt: number | null; tracked: number; warmed: number;
   counts: Record<RegimeKind, number>; candidates: RegimeCandidate[] };
 type Runtime = {
+  forward?: ReturnType<typeof forwardSummary>;
+  legacyRetired?: boolean;
   version: string; mode: "PAPER"; state: string; stale: boolean; generatedAt: number; lastSuccessAt: number | null;
   lastHeartbeatAt?: number | null; lastAlarmAt?: number | null; nextAlarmAt?: number | null;
   lastError: string | null; symbols: string[]; equity: number; dailyStartEquity?: number;
@@ -229,6 +233,7 @@ export default function Home() {
   const [paperResetNotice, setPaperResetNotice] = useState<string | null>(null);
   const [paperResetError, setPaperResetError] = useState<string | null>(null);
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const [legacyConsole, setLegacyConsole] = useState(false);
   const tabScroll = useRef<Record<Tab, number>>({ brain: 0, orders: 0, live: 0, history: 0, settings: 0 });
   const selectTab = (next: Tab) => {
     if (next === tab) return;
@@ -432,7 +437,12 @@ export default function Home() {
   if (showLiveCenter) navigationTabs.push(["live", `实盘 ${openLivePositions.length + openLiveEntries.length || ""}`]);
   navigationTabs.push(["history", "记录"], ["settings", "设置"]);
 
+  if (!legacyConsole) return <ForwardDashboard data={runtime?.forward?.startedAt ? runtime.forward : null}
+    healthy={backendOperational} feedAt={runtime?.lastSuccessAt ?? null}
+    error={runtime?.forward?.storage?.error ?? error} onLegacy={() => { setLegacyConsole(true); setTab("history"); window.scrollTo(0,0); }} />;
+
   return <main>
+    <button className="fr-return" onClick={() => { setLegacyConsole(false); window.scrollTo(0,0); }}>← 返回关系引擎 · 本页是退役账户与原有实盘管理，旧策略已停止新开仓</button>
     <header className="topbar">
       <div className="brand"><span className="brand-mark">5×</span><div><p>五行情·独立账户</p><small>全行情互补组合 · 唯一 PAPER</small></div></div>
       <div role="status" className={`health ${backendOperational ? "" : "bad"}`}><span />{healthLabel}</div>

@@ -16,6 +16,9 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    define: {
+      __FORWARD_BUILD_SHA__: JSON.stringify(process.env.GITHUB_SHA ?? "local-verification"),
+    },
     server: {
       host: "0.0.0.0",
       allowedHosts: ["terminal.local"],

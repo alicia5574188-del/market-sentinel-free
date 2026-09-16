@@ -29,6 +29,10 @@ import { advanceRegimePortfolio, evaluateRegimePortfolio, initialRegimePortfolio
   REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE, resetRegimePortfolio,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
+import { advanceForward, forwardSummary, forwardWatchSymbols, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
+import { readForwardStore, prepareForwardWrite, FORWARD_STORAGE } from "../lib/forward-store.ts";
+declare const __FORWARD_BUILD_SHA__: string;
+const FORWARD_BUILD_SHA = typeof __FORWARD_BUILD_SHA__ === "string" ? __FORWARD_BUILD_SHA__ : "local-verification";
 import { advanceStrategyArena as advancePreviousStrategyArena,
   initialStrategyArena as initialPreviousStrategyArena,
   normalizeStrategyArena as normalizePreviousStrategyArena,
@@ -437,6 +441,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private authorityView = { positions: {} as RuntimeState["positions"], equity: CANONICAL_PAPER_REFERENCE_EQUITY, equityVersion: 0 };
   private liveClient: GateLiveClient | null = null;
   private optionalWork: Promise<void> | null = null;
+  private forwardState: ForwardState | null = null;
+  private forwardError: string | null = null;
+  private forwardBusy = false;
+  private forwardLastAttemptAt = 0;
 
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
@@ -518,6 +526,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         this.runtime.regimePortfolio.warmMarkets = REGIME_UNIVERSE
           .filter((symbol) => (this.regimeHourly[symbol]?.length ?? 0) >= REGIME_HOURLY_REQUIRED_CANDLES).length;
       }
+      try { this.forwardState = await readForwardStore(ctx.storage, Date.now()); }
+      catch (error) { this.forwardError = safeError(error); }
       this.publishAuthority();
     });
   }
@@ -621,7 +631,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if (next.includes(symbol)) continue;
       delete this.memory[symbol]; delete this.sessionWarmup[symbol]; delete this.runtime.decisions[symbol]; delete this.runtime.routes[symbol]; delete this.runtime.plans[symbol];
       delete this.runtime.positions[symbol]; delete this.runtime.evidence[symbol]; delete this.runtime.entryAssessments[symbol]; delete this.runtime.feedFailures[symbol];
-      delete this.runtime.strategyCandleFailures[symbol]; delete this.strategyCandles[symbol];
+      // Five-minute learning paths are independent of the small realtime book pool.
+      // Keep a Top30 path when its symbol leaves a realtime slot.
+      if (!this.runtime.liquidUniverse.includes(symbol)) {
+        delete this.runtime.strategyCandleFailures[symbol]; delete this.strategyCandles[symbol];
+      }
       delete this.runtime.tickSize[symbol]; delete this.runtime.contractMeta[symbol];
     }
   }
@@ -661,8 +675,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ...Object.values(this.runtime.strategyArena.portfolioOpen).map((position) => position.symbol),
       ...Object.values(this.runtime.previousStrategyArena.portfolioOpen).map((position) => position.symbol),
       ...REGIME_SYSTEMS.flatMap((id) => Object.values(this.runtime.regimePortfolio.accounts[id].open).map((position) => position.symbol)),
+      ...(this.forwardState?.positions.map((position) => position.symbol) ?? []),
     ])];
-    const locked = [...new Set([...protectedLocked, ...researchUniverse])];
+    const forwardWatched = this.forwardState ? forwardWatchSymbols(this.forwardState, now) : [];
+    const locked = [...new Set([...protectedLocked, ...forwardWatched, ...researchUniverse])];
     const liquidFallback = [...researchUniverse, ...universeRows.map((row) => row.symbol)];
     const next = selectDiverseMarketPool({ locked, current: this.runtime.symbols, candidates: poolCandidates,
       fallback: liquidFallback, limit: PORTFOLIO_REALTIME_CAPACITY });
@@ -738,6 +754,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       && now - row.observedAt <= STALE_AFTER_MS && row.bestBid != null && row.bestAsk != null
       ? [[symbol, { midpoint: row.midpoint, bestBid: row.bestBid, bestAsk: row.bestAsk,
         observedAt: row.observedAt, fresh: true,
+        entryReady: row.entryReady === true,
         completedMinuteAt: this.strategyCandles[symbol]?.at(-1)
           ? (this.strategyCandles[symbol].at(-1)!.time + 300) * 1_000 : undefined }]] : []));
   }
@@ -764,7 +781,37 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private evaluateRegimeNow(now: number) {
     this.runtime.regimePortfolio = evaluateRegimePortfolio({ state: this.runtime.regimePortfolio,
-      hourly: this.regimeHourly, quotes: this.regimeQuotes(now), contracts: this.regimeContracts(), now });
+      hourly: this.regimeHourly, quotes: this.regimeQuotes(now), contracts: this.regimeContracts(), now, allowNewEntries: false });
+  }
+
+  private forwardView(now = Date.now()) {
+    return this.forwardState ? { ...forwardSummary(this.forwardState, this.regimeQuotes(now), now),
+      storage: { ...this.forwardState.storage, error: this.forwardError } }
+      : { version: FORWARD_VERSION, mode: "RECOVERY_REQUIRED", liveEligible: false, storage: { error: this.forwardError } };
+  }
+
+  private async advanceForwardNow(now: number) {
+    if (this.forwardBusy || now - this.forwardLastAttemptAt < 10_000) return;
+    this.forwardLastAttemptAt = now;
+    this.forwardBusy = true;
+    try {
+      if (!this.forwardState) this.forwardState = await readForwardStore(this.ctx.storage, now);
+      const previous = this.forwardState;
+      const next = advanceForward({ state: previous, now, paths: this.strategyCandles,
+        quotes: this.regimeQuotes(now), contracts: this.regimeContracts() });
+      if (next.changed || !previous.storage.persistedAt) {
+        next.state.storage = { persistedAt: now, error: null };
+        const prepared = await prepareForwardWrite(previous.storage.persistedAt ? previous : null, next.state, now);
+        // All extra persistence consumes the existing non-alarm write reserve.
+        if (this.runtime.nonAlarmWrites + prepared.writes + 64 > NON_ALARM_WRITE_CAP) throw new Error("前向写入预算不足；保留原账户，不提交未持久化订单");
+        await this.ctx.storage.transaction(async transaction => { await transaction.put(prepared.entries); });
+        this.runtime.nonAlarmWrites += prepared.writes;
+      }
+      // A PAPER fill/rule update becomes visible only after its atomic commit.
+      this.forwardState = next.state;
+      this.forwardError = null;
+    } catch (error) { this.forwardError = safeError(error); }
+    finally { this.forwardBusy = false; }
   }
 
   private async refreshRegimeHourly(now: number) {
@@ -1953,6 +2000,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ...Object.values(this.runtime.strategyArena.portfolioOpen).map((position) => position.symbol),
       ...Object.values(this.runtime.previousStrategyArena.portfolioOpen).map((position) => position.symbol),
       ...REGIME_SYSTEMS.flatMap((id) => Object.values(this.runtime.regimePortfolio.accounts[id].open).map((position) => position.symbol)),
+      ...(this.forwardState?.positions.map((position) => position.symbol) ?? []),
     ]);
     const actionableMarkets = this.runtime.symbols.filter((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS
       && this.runtime.contractMeta[symbol] != null && this.symbolEntryReady(symbol)).length;
@@ -1973,6 +2021,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ...Object.values(this.runtime.strategyArena.portfolioOpen).map((position) => position.symbol),
       ...Object.values(this.runtime.previousStrategyArena.portfolioOpen).map((position) => position.symbol),
       ...REGIME_SYSTEMS.flatMap((id) => Object.values(this.runtime.regimePortfolio.accounts[id].open).map((position) => position.symbol)),
+      ...(this.forwardState?.positions.map((position) => position.symbol) ?? []),
       ...Object.values(this.runtime.stableCandidates).filter((candidate) => approvedRouteScore(candidate) >= 0)
         .map((candidate) => candidate.symbol),
       ...Object.values(this.runtime.previousStableCandidates).filter((candidate) => previousApprovedRouteScore(candidate) >= 0)
@@ -2303,6 +2352,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (this.optionalWork) return;
     const task = (async () => {
       let subrequests = 0;
+      // Generated rules have PAPER-only authority. No path enters canonicalLivePortfolio.
+      await this.advanceForwardNow(Date.now());
       if (universeDue) {
         subrequests += 2;
         try { this.refreshUniverse(Date.now(), await fetchActiveContracts()); }
@@ -2317,6 +2368,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       subrequests += await this.refreshStrategyCandle(Date.now());
       subrequests += await this.refreshRegimeHourly(Date.now());
+      await this.advanceForwardNow(Date.now());
       await this.maybeWriteStrategyRuntimeLog(Date.now());
       this.runtime.subrequestCount += subrequests;
       this.runtime.maxSubrequestsInAlarm = Math.max(this.runtime.maxSubrequestsInAlarm, subrequests);
@@ -2410,6 +2462,22 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   async fetch(request: Request) {
     const url = new URL(request.url);
     const path = url.pathname;
+    if (path === "/forward-export" && request.method === "GET") {
+      await this.ensureAlarm();
+      return json({ exportedAt: Date.now(), forward: this.forwardView(),
+        measurements: this.forwardState?.samples ?? [],
+        archiveEndpoint: "/api/forward/archive", completeness: "当前快照与滚动样本；完整不可变记录按archive接口分页读取" });
+    }
+    if (path === "/forward-archive" && request.method === "GET") {
+      const prefix = `${FORWARD_STORAGE}archive:`;
+      const cursor = url.searchParams.get("cursor");
+      if (cursor && (!cursor.startsWith(prefix) || cursor.length > 150)) return json({ error: "invalid cursor" }, 400);
+      const rows = await this.ctx.storage.list({ prefix, limit: 26, ...(cursor ? { startAfter: cursor } : {}) });
+      const entries = [...rows.entries()]; const hasMore = entries.length > 25;
+      const page = entries.slice(0, 25);
+      return json({ items: page.map(([key, value]) => ({ key, value })), nextCursor: hasMore ? page.at(-1)?.[0] ?? null : null,
+        immutable: true, generatedAt: Date.now() });
+    }
     if (path === "/watchdog") {
       const stale = this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > AUTHORITY_STALE_AFTER_MS;
       const alarm = await this.ctx.storage.getAlarm();
@@ -2430,6 +2498,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const regimes = marketRegimeSummary(this.runtime.marketRegimes);
       return json({
         version: this.runtime.version,
+        buildSha: FORWARD_BUILD_SHA,
+        forward: this.forwardView(),
+        legacyRetired: true,
         mode: this.runtime.mode,
         state: effectiveState,
         stale,
@@ -2445,7 +2516,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           playbookCount: canonical.playbookCount,
           catalogSize: strategies.length,
           shadowCount: 0,
-          activeCount: strategies.length,
+          activeCount: 0,
           reverseActiveCount: 0,
           sleepingCount: 0,
           portfolioEquity: canonical.portfolioEquity,
@@ -2551,6 +2622,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const stale = !this.authorityReady || this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > AUTHORITY_STALE_AFTER_MS;
       const effectiveState = !this.authorityReady ? "RECOVERY_REQUIRED" : stale ? "RECONNECTING" : this.runtime.state;
       return json({ ...publicRuntime, ...this.authorityView, paperCycle: paperCycleSummary(paperCycle, this.authorityView.equity),
+        buildSha: FORWARD_BUILD_SHA,
+        forward: this.forwardView(), legacyRetired: true,
         strategyArena: canonicalPaperSummary({ current: strategyArena, previous: previousStrategyArena, regime: regimePortfolio }, canonicalPaper),
         marketRegimes: marketRegimeSummary(marketRegimes),
         strategyData: { liquidMarkets: REGIME_UNIVERSE.length, stableMarkets: regimePortfolio.warmMarkets,
@@ -2824,6 +2897,8 @@ const worker = {
       return json({ ok: response.ok && live, ready: live, version: SYSTEM_VERSION, mode: "PAPER", runtime, topLevelCpuMs: performance.now() - started }, live ? 200 : 503);
     }
     if (url.pathname === "/api/runtime" && request.method === "GET") return runtimeStatus(env, true, await ownerAuthenticated(request, env));
+    if (url.pathname === "/api/forward/export" && request.method === "GET") return env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/forward-export");
+    if (url.pathname === "/api/forward/archive" && request.method === "GET") return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/forward-archive${url.search}`);
     if (url.pathname === "/api/history" && request.method === "GET") return paperHistory(url, env);
     if (url.pathname === "/api/account-logs" && request.method === "GET") return accountLogs(env);
     if (url.pathname === "/api/strategy-logs" && request.method === "GET") return strategyRuntimeLogs(url, env);

@@ -1,3 +1,9 @@
+# Release candidate — forward relation engine / 2026-09-16
+
+Implementation and mobile/desktop UI are complete in PR #293. New module reads the existing real market feed, stores only new forward response measurements, generates auditable bounded rules and controls a separate PAPER ledger. Old frozen regimes are retired from new entry. No new rule can reach the existing Gate LIVE order source.
+
+Local tests passed (292 direct tests including 24 forward tests, 17 architecture/migration tests, typecheck, lint, build and Cloudflare dry-run). Browser component checks passed at 320/393/1440 pixels across all five tabs, without JS errors, horizontal overflow or dialogs. Reviewed main deployment and advancing-production checks remain until their CI records are attached to the PR. No historical profitability result is claimed. Never interpret this candidate heading as deployment completion.
+
 # Release candidate — 2026-09-14 truthful candidate visibility
 
 - Production monitoring confirms 11/11 hourly paths, synchronized market context, fresh runtime state and no hourly fetch failures. The lack of visible candidates is not a cold-start data failure.
