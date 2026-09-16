@@ -1,0 +1,22 @@
+name: Validate Gate 5m Contract Stats Probe
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-contract-stats-5m-probe.mjs"
+      - ".github/workflows/validate-contract-stats-5m-probe.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - run: node --check scripts/research-contract-stats-5m-probe.mjs
+      - run: node scripts/research-contract-stats-5m-probe.mjs
