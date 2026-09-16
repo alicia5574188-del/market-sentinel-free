@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { advanceForward, initialForward, normalizeForward, frameFromCandles, synthesizeRules, conditionMatches,
   forwardEquity, freshQuote, forwardSummary, FORWARD_VERSION, BAR_MS, type ForwardState, type Measurement, type Rule, type Candle } from "../lib/forward-relations.ts";
 import { readForwardStore, prepareForwardWrite, FORWARD_STORAGE } from "../lib/forward-store.ts";
+import { EVIDENCE_POLICY, familyKey } from "../lib/forward-evidence.ts";
 
 const T=1_790_000_100_000, START=Math.floor(T/BAR_MS)*BAR_MS;
 function candles(end:number,n=50,drift=.0001):Candle[]{return Array.from({length:n},(_,i)=>{
@@ -11,10 +12,13 @@ function candles(end:number,n=50,drift=.0001):Candle[]{return Array.from({length
 function measurements(sign=1):Measurement[]{return Array.from({length:20},(_,k)=>Array.from({length:8},(_,j)=>{
   const x=j%2?1:-1,at=START+(k+1)*15*60_000;return{symbol:`S${j}`,at,seenAt:at+1000,price:100,x:[x,0,0,0,0,0,0,0],
     horizon:15,endAt:at+15*60_000,availableAt:at+15*60_000+1000,response:sign*x*.015,up:sign*x>0?.025:.002,down:sign*x<0?.025:.002};})).flat();}
-function rule(now:number):Rule{return{id:"fr-test",signature:"test",parentId:null,version:1,createdAt:now-1000,expiresAt:now+DAY,
+function rule(now:number):Rule{const r:Rule={id:"fr-test",signature:"test",parentId:null,version:1,createdAt:now-1000,expiresAt:now+DAY,
   status:"EXPERIMENTAL",conditions:[{feature:0,op:"GE",threshold:-99}],side:"LONG",horizon:60,stopRate:.02,armRate:.015,givebackRate:.007,
   exitMode:"REACTION_DECAY",samples:50,trainGroups:6,checkGroups:4,estimatedNetRate:.01,priorResponse:.01,recentResponse:.012,standardError:.001,
-  reason:"synthetic functional fixture, never a market result",mutation:"CREATE",grammar:"test",liveEligible:false};}
+  reason:"synthetic functional fixture, never a market result",mutation:"CREATE",grammar:"test",liveEligible:false};
+  r.evidence={policy:EVIDENCE_POLICY,scope:"CROSS_ASSET",symbols:["BTC_USDT"],sourceKey:"fixture",family:familyKey(r),cap:.03,
+    rawNet:.01,costRate:.0022,quality:1,worstWithoutSymbol:.02,
+    calibration:{groups:0,effectiveGroups:0,penalty:0,meanResidual:0,meanNet:0,latestAt:0,sourceKey:"fixture"}};return r;}
 const DAY=86400000;
 const quote=(now:number,price=100)=>({bestBid:price,bestAsk:price+.01,observedAt:now,fresh:true});
 function opened(){const now=START+10*BAR_MS,s=initialForward(START);s.lastFitAt=now;s.rules=[rule(now)];

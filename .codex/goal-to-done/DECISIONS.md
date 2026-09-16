@@ -1,3 +1,7 @@
+# Forward evidence calibration / 2026-09-17
+
+The inspected first forward window justifies correcting pooled-outlier transfer, absent execution calibration and repeated exposure, not claiming a profitable successor. Use `research/FORWARD_EVIDENCE_REPAIR.md` as current specification. Separate algorithm `evidence-calibration-v1.1` from unchanged storage schema `forward-relations-v1.0`; preserve account/ledger and immutable original trade rules. Actual closed-PAPER outcomes influence NEW decisions; calibration never rewrites settled PnL. No shadow promotion, no loss-triggered direction reversal, no generated-rule LIVE bridge, no new network data dependency or D1 writes. Larger archive packets split into numbered parts in the same atomic write. Old UI-only byte freezes for the two explicitly modified PAPER modules are replaced by semantic/continuity tests; all Worker/LIVE/auth/canonical/deploy checks stay intact.
+
 # Readability and native LIVE integration — 2026-09-16
 
 - Replace the low-contrast light palette and 8–11px labels with dark high-contrast panels, 16–17px body/input text and a 14px minimum label size. Main navigation includes 实盘 directly.

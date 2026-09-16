@@ -1,3 +1,7 @@
+# Active correction — forward evidence and execution feedback / 2026-09-17
+
+User explicitly authorizes thinking through defects/side effects, then implementing and deploying a targeted PAPER repair. Scope and acceptance: `research/FORWARD_EVIDENCE_REPAIR.md`. Do not turn off all15-minute trading, blacklist volatile coins, revive old failed strategies or promise monthly doubling. Preserve old losses/account identity/learning and original open-position protection; LIVE and authentication authority remain unchanged.
+
 # Active UI correction — dark readable native LIVE / 2026-09-16
 
 User requests dark theme, larger text, removal of the old-page entry and an integrated new-design real-account page with owner-only switch control. Implement and deploy through the established reviewed-main path. This is not permission to enable LIVE or alter the generated-rule trading authority. Preserve all account and learning state.

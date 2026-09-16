@@ -2,6 +2,9 @@
  * No legacy strategy import, exchange write, historical outcome preload or dynamic code evaluation.
  * Measurements are market observations, never shadow orders or synthetic fills.
  */
+import { EVIDENCE_POLICY, blankDiagnostics, collectFeedback, entryEconomics, executionCalibration, familyKey, inspectCondition,
+  ruleApplies, type Feedback, type Evidence, type Candidate, type EvidenceDiagnostics } from "./forward-evidence.ts";
+// The storage schema stays v1.0 so an algorithm upgrade cannot reset the ledger.
 export const FORWARD_VERSION = "forward-relations-v1.0";
 export const FORWARD_GRAMMAR = "conditional-response-conjunction-v1";
 export const BAR_MS = 300_000;
@@ -22,14 +25,16 @@ export type Rule = { id: string; signature: string; parentId: string | null; ver
   stopRate: number; armRate: number; givebackRate: number; exitMode: "HORIZON" | "REACTION_DECAY";
   samples: number; trainGroups: number; checkGroups: number; estimatedNetRate: number; priorResponse: number | null;
   recentResponse: number; standardError: number; reason: string; mutation: "CREATE" | "REVISE" | "RECALL";
-  grammar: string; liveEligible: false };
+  grammar: string; liveEligible: false; evidence?: Evidence };
 export type Trade = { id: string; symbol: string; side: "LONG" | "SHORT"; rule: Rule; openedAt: number; closedAt: number | null;
   status: "OPEN" | "CLOSED"; entryPrice: number; exitPrice: number | null; quantity: number; contracts: number;
   quantoMultiplier: number; notional: number; leverage: number; margin: number; plannedRisk: number; stopPrice: number;
   armPrice: number; favorable: number; adverse: number; lastPrice: number; lastQuoteAt: number; entryFee: number;
   exitFee: number; fundingAllowance: number; grossPnl: number | null; netPnl: number | null; exitReason: string | null;
-  relationFailureBars: number; lastRelationBar: number; execution: "REAL_QUOTE_PAPER_MODEL"; liveEligible: false };
-export type AuditEvent = { id: string; at: number; kind: "START" | "RULE" | "DORMANT" | "ENTRY" | "EXIT" | "PROTECTION" | "DATA_GAP" | "FIT";
+  relationFailureBars: number; lastRelationBar: number; execution: "REAL_QUOTE_PAPER_MODEL"; liveEligible: false;
+  forecast?: { policy:string; family:string; signalAt:number; signalPrice:number; baseNetRate:number;
+    calibratedNetRate:number; remainingNetRate:number; quality:number } };
+export type AuditEvent = { id: string; at: number; kind: "START" | "RULE" | "DORMANT" | "ENTRY" | "EXIT" | "PROTECTION" | "DATA_GAP" | "FIT" | "UPGRADE";
   subject: string; reason: string; detail?: Record<string, string | number | null> };
 export type Daily = { day: string; firstAt: number; lastAt: number; startEquity: number; endEquity: number; exactBoundary: boolean };
 export type ForwardState = { version: string; startedAt: number; revision: number; lastCycleAt: number; lastFitAt: number;
@@ -39,7 +44,11 @@ export type ForwardState = { version: string; startedAt: number; revision: numbe
   samples: Measurement[]; rules: Rule[]; positions: Trade[]; history: Trade[]; events: AuditEvent[]; daily: Daily[];
   lastBars: Record<string, number>; lastEntryBars: Record<string, number>; latestReason: string;
   fitDiagnostics: { tested: number; qualified: number; trainGroups: number; checkGroups: number; latestAt: number };
-  selectedSymbols: string[]; storage: { persistedAt: number; error: string | null }; liveEligible: false };
+  selectedSymbols: string[]; storage: { persistedAt: number; error: string | null }; liveEligible: false;
+  policyVersion?:string; feedback?:Feedback[]; evidenceDiagnostics?:EvidenceDiagnostics;
+  entryDiagnostics?:{at:number;matched:number;opened:number;reasons:Record<string,number>};
+  relationEntries?:Record<string,number>;
+  policyUpgrade?:{at:number;from:string;to:string;equity:number;stalePositions:number;balance:number;resolved:number;positionIds:string[]} };
 
 const mean = (v: number[]) => v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
 const clip = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
@@ -55,7 +64,7 @@ export function initialForward(now:number):ForwardState {
   const s:ForwardState={version:FORWARD_VERSION,startedAt:now,revision:0,lastCycleAt:0,lastFitAt:0,lastQuoteCycleAt:0,
     balance:1000,initialEquity:1000,peakEquity:1000,maxDrawdown:0,resolved:0,wins:0,grossPnl:0,fees:0,fundingAllowance:0,turnover:0,
     observations:0,measured:0,invalidated:0,frames:{},pending:{},samples:[],rules:[],positions:[],history:[],events:[],daily:[],
-    lastBars:{},lastEntryBars:{},latestReason:"启动真实行情前向实验；旧K线只计算特征，不回填学习收益或模拟订单。",
+    lastBars:{},lastEntryBars:{},policyVersion:EVIDENCE_POLICY,feedback:[],relationEntries:{},latestReason:"启动真实行情前向实验；旧K线只计算特征，不回填学习收益或模拟订单。",
     fitDiagnostics:{tested:0,qualified:0,trainGroups:0,checkGroups:0,latestAt:0},selectedSymbols:[],storage:{persistedAt:0,error:null},liveEligible:false};
   event(s,now,"START",FORWARD_VERSION,s.latestReason);return s;
 }
@@ -63,6 +72,7 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
   if(!v)return initialForward(now);
   if(v.version!==FORWARD_VERSION||!finite(v.balance)||!Array.isArray(v.positions)||!Array.isArray(v.samples)||!Array.isArray(v.rules)||v.liveEligible!==false)
     throw new Error("前向账户存储格式异常；保留原数据，禁止自动重置");
+  if(v.policyVersion&&v.policyVersion!==EVIDENCE_POLICY)throw new Error("未知前向算法版本，拒绝降级或重置");
   return v;
 }
 export function frameFromCandles(symbol:string,rows:Candle[],now:number):Frame|null {
@@ -80,62 +90,81 @@ export function frameFromCandles(symbol:string,rows:Candle[],now:number):Frame|n
 export function conditionMatches(x:number[],conditions:Condition[]) {
   return conditions.every(c=>finite(x[c.feature])&&(c.op==="GE"?x[c.feature]>=c.threshold:x[c.feature]<=c.threshold));
 }
-function clustered(rows:Measurement[],sign:number) {
-  const groups=new Map<number,number[]>();for(const r of rows){const k=Math.floor(r.at/(r.horizon*60_000)),a=groups.get(k)??[];a.push(sign*r.response);groups.set(k,a);}
-  const values=[...groups.values()].map(mean),m=mean(values),se=values.length>1?Math.sqrt(values.reduce((a,v)=>a+(v-m)**2,0)/(values.length-1)/values.length):Infinity;
-  return{mean:m,se,groups:values.length};
-}
-function ruleCandidate(rows:Measurement[],conditions:Condition[],horizon:number) {
-  const ordered=[...rows].sort((a,b)=>a.at-b.at),boundary=ordered[Math.floor(ordered.length*.6)]?.at??0;
-  const train=ordered.filter(r=>r.endAt<=boundary&&conditionMatches(r.x,conditions)),check=ordered.filter(r=>r.at>=boundary&&conditionMatches(r.x,conditions));
-  const a=clustered(train,1),sign=a.mean>=0?1:-1,b=clustered(check,sign),aa=clustered(train,sign);
-  if(train.length<12||check.length<8||aa.groups<3||b.groups<2)return null;
-  const net=Math.min(aa.mean,b.mean)-COST_FLOOR-.5*Math.max(aa.se,b.se);if(!(net>0))return null;
-  const selected=[...train,...check],favorable=selected.map(r=>sign>0?r.up:r.down),adverse=selected.map(r=>sign>0?r.down:r.up);
-  const stopRate=clip(quantile(adverse,.8)*1.15,.003,.10),armRate=Math.max(COST_FLOOR*2,quantile(favorable,.6));
-  const givebackRate=clip(quantile(selected.map((r,i)=>Math.max(0,favorable[i]-sign*r.response)),.6),.0025,Math.max(.0025,armRate*.8));
-  return{conditions,side:(sign>0?"LONG":"SHORT") as Rule["side"],horizon,stopRate,armRate,givebackRate,
-    exitMode:(mean(favorable)>Math.max(.0001,mean(selected.map(r=>sign*r.response)))*1.7?"REACTION_DECAY":"HORIZON") as Rule["exitMode"],
-    samples:selected.length,trainGroups:aa.groups,checkGroups:b.groups,estimatedNetRate:net,priorResponse:sign*aa.mean,
-    recentResponse:sign*b.mean,standardError:Math.max(aa.se,b.se)};
-}
 export function synthesizeRules(s:ForwardState,now:number) {
-  const candidates:NonNullable<ReturnType<typeof ruleCandidate>>[]=[];let tested=0,trainGroups=0,checkGroups=0;
+  const candidates:Candidate[]=[],diagnostics=blankDiagnostics();let trainGroups=0,checkGroups=0;
+  s.feedback=collectFeedback(s.feedback??[],s.history,now);
+  const rank=(a:Candidate,b:Candidate)=>b.estimatedNetRate/(b.stopRate+b.evidence.costRate)-a.estimatedNetRate/(a.stopRate+a.evidence.costRate);
   for(const h of HORIZONS){
-    const rows=s.samples.filter(r=>r.horizon===h&&r.availableAt<=now&&r.endAt<=now&&r.at>=s.startedAt);if(rows.length<36||Math.max(...rows.map(r=>r.endAt))<now-h*60_000-BAR_MS)continue;
-    const split=[...rows].sort((a,b)=>a.at-b.at)[Math.floor(rows.length*.6)].at,discovery=rows.filter(r=>r.endAt<=split);
-    trainGroups=Math.max(trainGroups,clustered(discovery,1).groups);checkGroups=Math.max(checkGroups,clustered(rows.filter(r=>r.at>=split),1).groups);
-    const stumps:NonNullable<ReturnType<typeof ruleCandidate>>[]=[];
-    for(let f=0;f<FEATURES.length;f++)for(const p of[1/3,2/3])for(const op of["GE","LE"] as const){
-      const threshold=Math.round(quantile(discovery.map(r=>r.x[f]),p)*100)/100;tested++;
-      const c=ruleCandidate(rows,[{feature:f,op,threshold}],h);if(c)stumps.push(c);
+    const rows=s.samples.filter(r=>r.horizon===h&&r.availableAt<=now&&r.endAt<=now&&r.at>=s.startedAt);
+    if(rows.length<8||Math.max(...rows.map(r=>r.endAt))<now-h*60_000-BAR_MS)continue;
+    const generate=(pool:Measurement[],symbol?:string)=>{
+      const ordered=[...pool].sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol));
+      const split=ordered[Math.floor(ordered.length*.6)]?.at??0,discovery=ordered.filter(r=>r.endAt<=split);
+      trainGroups=Math.max(trainGroups,new Set(discovery.map(r=>Math.floor(r.at/(h*60000)))).size);
+      checkGroups=Math.max(checkGroups,new Set(ordered.filter(r=>r.at>=split).map(r=>Math.floor(r.at/(h*60000)))).size);
+      if(discovery.length<(symbol?3:12))return [];
+      const stumps:Candidate[]=[],seen=new Set<string>();
+      const assess=(conditions:Condition[])=>inspectCondition({rows:ordered,conditions,horizon:h,now,feedback:s.feedback??[],scopeSymbol:symbol},diagnostics);
+      for(let f=0;f<FEATURES.length;f++)for(const p of[1/3,2/3])for(const op of["GE","LE"] as const){
+        const threshold=Math.round(quantile(discovery.map(r=>r.x[f]),p)*100)/100,key=`${f}:${op}:${threshold}`;
+        if(seen.has(key))continue;seen.add(key);
+        const c=assess([{feature:f,op,threshold}]);if(c)stumps.push(c);
+      }
+      const top=[...stumps].sort(rank).slice(0,3),combined=[...stumps];
+      for(let i=0;i<top.length;i++)for(let j=i+1;j<top.length;j++){
+        if(top[i].conditions[0].feature===top[j].conditions[0].feature)continue;
+        const c=assess([...top[i].conditions,...top[j].conditions].sort((a,b)=>a.feature-b.feature));if(c)combined.push(c);
+      }
+      return combined.sort(rank);
+    };
+    const shared=generate(rows),kept=new Set<string>();
+    for(const c of shared){if(kept.has(c.evidence.family))continue;kept.add(c.evidence.family);candidates.push(c);if(kept.size>=2)break;}
+    // Single-coin evidence is not banned and is never exported to other coins.
+    // Scope uses that coin's own chronological discovery/check split.
+    const local:Candidate[]=[];
+    const ordered=[...rows].sort((a,b)=>a.at-b.at),discoveryEnd=ordered[Math.floor(rows.length*.6)]?.at??0;
+    // Nominate at most TWO local markets using only earlier observations. Do
+    // not test all 30 and keep whichever happens to win the later check set.
+    // This trades some opportunity coverage for bounded search/CPU variance.
+    const nominees=[...new Set(rows.map(r=>r.symbol))].map(symbol=>{
+      const early=rows.filter(r=>r.symbol===symbol&&r.endAt<=discoveryEnd);
+      return {symbol,count:early.length,score:Math.abs(quantile(early.map(r=>r.response),.5))};
+    }).filter(a=>a.count>=3).sort((a,b)=>b.score-a.score||a.symbol.localeCompare(b.symbol)).slice(0,2);
+    for(const {symbol:sym} of nominees){
+      const own=rows.filter(r=>r.symbol===sym);if(own.length<8)continue;
+      const best=generate(own,sym)[0];if(best)local.push(best);
     }
-    stumps.sort((a,b)=>b.estimatedNetRate-a.estimatedNetRate);const top=stumps.slice(0,3),pool=[...stumps];
-    for(let i=0;i<top.length;i++)for(let j=i+1;j<top.length;j++){
-      if(top[i].conditions[0].feature===top[j].conditions[0].feature)continue;tested++;
-      const c=ruleCandidate(rows,[...top[i].conditions,...top[j].conditions],h);if(c)pool.push(c);
-    }
-    const kept=new Set<string>();for(const c of pool.sort((a,b)=>b.estimatedNetRate-a.estimatedNetRate)){
-      const key=`${c.side}:${c.conditions.map(a=>a.feature).sort().join()}`;if(kept.has(key))continue;kept.add(key);candidates.push(c);if(kept.size>=2)break;
-    }
+    if(local.length)candidates.push(local.sort(rank)[0]);
   }
-  s.lastFitAt=now;s.fitDiagnostics={tested,qualified:candidates.length,trainGroups,checkGroups,latestAt:now};
+  s.lastFitAt=now;
   const previous=s.rules.filter(r=>r.status==="EXPERIMENTAL");for(const r of previous)r.status="DORMANT";
   for(const c of candidates){
-    const signature=hash(JSON.stringify([c.conditions,c.side,c.horizon,c.exitMode]));
-    const parent=s.rules.find(r=>r.signature===signature)??previous.find(r=>r.horizon===c.horizon&&r.conditions[0].feature===c.conditions[0].feature);
-    const mutation=parent?(parent.signature===signature&&!previous.includes(parent)?"RECALL":"REVISE"):"CREATE";
-    const text=c.conditions.map(k=>`${FEATURES[k.feature]}${k.op==="GE"?"≥":"≤"}${k.threshold}`).join(" 且 "),old=parent?.recentResponse??null;
-    const reason=`${text} 后${c.horizon}分钟反应${old==null?"形成新证据":`由${(old*100).toFixed(3)}%更新`}${old==null?"为":"至"}${(c.recentResponse*100).toFixed(3)}%；生成${c.side==="LONG"?"多":"空"}向实验，退出采用${c.exitMode==="REACTION_DECAY"?"回吐保护":"反应期限"}。估计不是胜率或盈利保证。`;
+    const signature=hash(JSON.stringify([c.conditions,c.side,c.horizon,c.exitMode,c.evidence.scope,c.evidence.scope==="SINGLE_ASSET"?c.evidence.symbols[0]:null]));
+    const exact=s.rules.find(r=>r.signature===signature&&r.evidence?.policy===EVIDENCE_POLICY);
+    // Unchanged measurements and executions are not a new revision or a fresh
+    // lease. Otherwise a stale signal could be kept alive indefinitely.
+    if(exact?.evidence?.sourceKey===c.evidence.sourceKey){
+      if(exact.expiresAt>now)exact.status="EXPERIMENTAL";else diagnostics.expired++;
+      continue;
+    }
+    const parent=exact??previous.find(r=>familyKey(r)===c.evidence.family&&r.evidence?.scope===c.evidence.scope
+      &&(c.evidence.scope!=="SINGLE_ASSET"||r.evidence.symbols[0]===c.evidence.symbols[0]));
+    const mutation=parent?(exact&&!previous.includes(parent)?"RECALL":"REVISE"):"CREATE";
+    const text=c.conditions.map(k=>`${FEATURES[k.feature]}${k.op==="GE"?"≥":"≤"}${k.threshold}`).join(" 且 ");
+    const scope=c.evidence.scope==="SINGLE_ASSET"?`仅${c.evidence.symbols[0]}`:`适用${c.evidence.symbols.length}币，逐币剔除复核通过`;
+    const reason=`${text} 后${c.horizon}分钟${scope}；${c.side==="LONG"?"多":"空"}向净反应估计${(c.estimatedNetRate*100).toFixed(3)}%，已含${c.evidence.calibration.groups}个成交时间组的偏差校准。退出采用${c.exitMode==="REACTION_DECAY"?"回吐保护":"反应期限"}；不是胜率或盈利保证。`;
     const r:Rule={...c,id:`fr-${s.startedAt}-${s.revision+1}`,signature,parentId:parent?.id??null,version:(parent?.version??0)+1,
       createdAt:now,expiresAt:now+Math.max(60,c.horizon*2)*60_000,status:"EXPERIMENTAL",reason,mutation,grammar:FORWARD_GRAMMAR,liveEligible:false};
-    s.rules.unshift(r);event(s,now,"RULE",r.id,reason,{mutation,oldResponse:old,newResponse:r.recentResponse,netEstimate:r.estimatedNetRate,samples:r.samples});
+    s.rules.unshift(r);event(s,now,"RULE",r.id,reason,{mutation,rawNet:c.evidence.rawNet,penalty:c.evidence.calibration.penalty,
+      netEstimate:r.estimatedNetRate,samples:r.samples,scope:c.evidence.scope});
   }
-  for(const r of previous)if(!candidates.some(c=>c.horizon===r.horizon&&c.conditions[0].feature===r.conditions[0].feature))
-    event(s,now,"DORMANT",r.id,"新样本不再支持原规则的成本后反应；停止它的新开仓，不把失效直接当成反向机会。");
-  s.rules=s.rules.slice(0,48);s.latestReason=candidates.length?`生成${candidates.length}条实验规则，等待条件与新鲜买卖价同时成立。`
-    :`尚无足够的成本后条件反应：检验${tested}种表达，前段${trainGroups}、后段${checkGroups}个时间组；不会为制造交易强制入场。`;
-  event(s,now,"FIT",FORWARD_GRAMMAR,s.latestReason,{tested,qualified:candidates.length,trainGroups,checkGroups});
+  for(const r of previous)if(r.status==="DORMANT"&&!candidates.some(c=>c.evidence.family===familyKey(r)))
+    event(s,now,"DORMANT",r.id,"当前适用性、集中度或成交偏差校准不再支持该规则；继续观察市场，不把失败直接反向。");
+  s.rules=s.rules.slice(0,48);const active=s.rules.filter(r=>r.status==="EXPERIMENTAL").length;
+  s.fitDiagnostics={tested:diagnostics.tested,qualified:active,trainGroups,checkGroups,latestAt:now};s.evidenceDiagnostics=diagnostics;
+  s.latestReason=active?`${active}条适用范围明确的实验规则，按当前可成交价格、成交偏差和同关系风险筛选。`
+    :`当前无可执行净优势：集中度拒绝${diagnostics.concentrationRejected}，成本/不确定性拒绝${diagnostics.costRejected}，成交校准拒绝${diagnostics.calibrationRejected}；数据观测继续，不强制开单。`;
+  event(s,now,"FIT",EVIDENCE_POLICY,s.latestReason,{tested:diagnostics.tested,qualified:active,trainGroups,checkGroups});
 }
 function ingest(s:ForwardState,paths:Record<string,Candle[]>,now:number){
   const frames=Object.entries(paths).flatMap(([sym,rows])=>{const f=frameFromCandles(sym,rows,now);return f&&now-f.at<=180_000?[f]:[];});
@@ -187,7 +216,7 @@ function manage(s:ForwardState,quotes:Record<string,Quote>,now:number){
     const px=exitPrice(t,q),d=direction(t.side),r=d*(px/t.entryPrice-1);t.lastPrice=px;t.lastQuoteAt=q.observedAt;
     if(t.favorable<t.rule.armRate&&r>=t.rule.armRate)event(s,now,"PROTECTION",t.id,"已观测有利反应触及生成的保护启动点；保存状态，原始止损不放宽。",{favorable:r,armRate:t.rule.armRate});
     t.favorable=Math.max(t.favorable,r);t.adverse=Math.max(t.adverse,-r);const f=s.frames[t.symbol];
-    if(f&&f.at>t.lastRelationBar){const contrary=s.rules.some(a=>a.status==="EXPERIMENTAL"&&a.expiresAt>now&&a.side!==t.side&&a.horizon===t.rule.horizon&&conditionMatches(f.x,a.conditions));
+    if(f&&f.at>t.lastRelationBar){const contrary=s.rules.some(a=>a.status==="EXPERIMENTAL"&&a.expiresAt>now&&a.side!==t.side&&a.horizon===t.rule.horizon&&ruleApplies(a,t.symbol)&&conditionMatches(f.x,a.conditions));
       t.relationFailureBars=contrary?t.relationFailureBars+1:0;t.lastRelationBar=f.at;}
     const elapsed=now-t.openedAt,reason=r<=-t.rule.stopRate?"保护止损：当前可执行价触及原始风险边界"
       :elapsed>=t.rule.horizon*60_000?"反应期限结束：按生成规则退出"
@@ -198,51 +227,101 @@ function manage(s:ForwardState,quotes:Record<string,Quote>,now:number){
 }
 function openTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number){
   const candidates=Object.values(s.frames).flatMap(f=>s.rules.filter(r=>r.status==="EXPERIMENTAL"&&r.createdAt<=now&&r.expiresAt>now
-    &&f.at>=s.startedAt&&now-f.at<=11*60_000&&conditionMatches(f.x,r.conditions)).map(r=>({f,r}))).sort((a,b)=>b.r.estimatedNetRate-a.r.estimatedNetRate);
-  let blocker="";
+    &&f.at>=s.startedAt&&now-f.at<=11*60_000&&conditionMatches(f.x,r.conditions)).map(r=>({f,r}))).sort((a,b)=>
+      b.r.estimatedNetRate/(b.r.stopRate+COST_FLOOR)-a.r.estimatedNetRate/(a.r.stopRate+COST_FLOOR)||a.f.symbol.localeCompare(b.f.symbol));
+  let blocker="";const diagnostics={at:now,matched:candidates.length,opened:0,reasons:{} as Record<string,number>};
+  s.entryDiagnostics=diagnostics;s.relationEntries??={};
+  const reject=(reason:string)=>{blocker=reason;diagnostics.reasons[reason]=(diagnostics.reasons[reason]??0)+1;};
   for(const{f,r}of candidates){
     if(s.positions.some(t=>t.symbol===f.symbol)||(s.lastEntryBars[f.symbol]??0)>=f.at)continue;
-    const q=quotes[f.symbol],meta=contracts[f.symbol];if(!freshQuote(q,now)||q.entryReady===false){blocker="匹配规则等待新鲜、顺序核对完成的买卖盘口，不按旧K线补成交。";continue;}
-    if(!meta||!finite(meta.quantoMultiplier)||meta.quantoMultiplier<=0||!finite(meta.leverageMax)||meta.leverageMax<1||!finite(meta.maintenanceRate)){blocker="等待合约乘数和杠杆元数据";continue;}
-    const marked=forwardEquity(s,quotes,now),equity=marked.equity;if(equity<=0){blocker="净值不足，不自动充值或重置";break;}
-    if(marked.stalePositions){blocker="已有持仓估值过期，暂停新增风险";break;}
-    const spread=(q.bestAsk-q.bestBid)/((q.bestAsk+q.bestBid)/2);if(spread>.0015||r.estimatedNetRate<spread){blocker="价差已吃掉估计净优势";continue;}
+    if(!ruleApplies(r,f.symbol)){reject("当前币没有该关系的适用证据，禁止套用其他币的异动");continue;}
+    const family=familyKey(r),episodeKey=`${f.symbol}:${family}`;
+    if((s.relationEntries[episodeKey]??0)>now){reject("同币同关系的反应周期尚未结束，版本变化不重置重复入场限制");continue;}
+    const q=quotes[f.symbol],meta=contracts[f.symbol];if(!freshQuote(q,now)||q.entryReady===false){reject("等待新鲜、顺序核对完成的买卖盘口，不补过去成交");continue;}
+    if(!meta||!finite(meta.quantoMultiplier)||meta.quantoMultiplier<=0||!finite(meta.leverageMax)||meta.leverageMax<1||!finite(meta.maintenanceRate)){reject("等待合约乘数和杠杆元数据");continue;}
+    const marked=forwardEquity(s,quotes,now),equity=marked.equity;if(equity<=0){reject("净值不足，不自动充值或重置");break;}
+    if(marked.stalePositions){reject("已有持仓估值过期，暂停新增风险");break;}
+    const spread=(q.bestAsk-q.bestBid)/((q.bestAsk+q.bestBid)/2);if(spread>.0015){reject("当前买卖价差过大");continue;}
+    const calibration=executionCalibration(s.feedback??[],family,r.evidence!.symbols,now);
+    const calibratedNet=r.evidence!.rawNet-calibration.penalty;
+    if(calibratedNet<=0){reject("最新成交偏差已抵消该关系的净优势");continue;}
     const d=direction(r.side),price=(r.side==="LONG"?q.bestAsk:q.bestBid)*(1+d*PAPER_COST.slippageRate);
-    if(d*(price/f.price-1)>r.estimatedNetRate+COST_FLOOR){blocker="预期反应在可成交之前已发生；不追补过去的机会";continue;}
+    const economics=entryEconomics({...r,estimatedNetRate:calibratedNet},f.price,price,spread);
+    if(economics.contextInvalid){reject("入场前价格已明显偏离原观察条件，不把下跌自动当成便宜机会");continue;}
+    if(economics.remaining<=0){reject("价差及入场前已发生的价格推进吃掉剩余优势");continue;}
     const gross=s.positions.reduce((a,t)=>a+t.notional,0),risk=s.positions.reduce((a,t)=>a+t.plannedRisk,0),same=s.positions.filter(t=>t.side===r.side).reduce((a,t)=>a+t.plannedRisk,0);
-    const budget=Math.min(equity*.015,equity*.10-risk,equity*.065-same),wanted=Math.max(0,Math.min(equity*1.5,equity*4-gross,budget/(r.stopRate+COST_FLOOR)));
-    const count=Math.floor(wanted/(price*meta.quantoMultiplier));if(count<Math.max(1,meta.minContracts??1)){blocker="风险额度或最小张数不足";continue;}
+    // Same-side same-horizon rules are a conservative correlated bucket, not
+    // claimed to be a learned covariance model. Existing exposure is not closed.
+    const related=s.positions.filter(t=>t.side===r.side&&t.rule.horizon===r.horizon).reduce((a,t)=>a+t.plannedRisk,0);
+    const quality=Math.min(r.evidence!.quality,economics.quality),targetRisk=equity*.015*quality;
+    const lossRate=r.stopRate+Math.max(COST_FLOOR,r.evidence!.costRate)+spread;
+    const desired=Math.min(equity*1.5,targetRisk/lossRate);
+    const immediateExit=(r.side==="LONG"?q.bestBid:q.bestAsk)*(1-d*PAPER_COST.slippageRate);
+    const immediateCost=Math.max(r.evidence!.costRate,PAPER_COST.feeRate*(1+immediateExit/price)+d*(1-immediateExit/price));
+    // Reserve the new leg's entry-to-exit marking cost before allocating risk;
+    // otherwise a nominal 3% cap already exceeds 3% immediately after opening.
+    const wanted=Math.max(0,Math.min(desired,(equity*4-gross)/(1+4*immediateCost),
+      targetRisk/(lossRate+.015*quality*immediateCost),
+      (equity*.10-risk)/(lossRate+.10*immediateCost),
+      (equity*.065-same)/(lossRate+.065*immediateCost),
+      (equity*.03-related)/(lossRate+.03*immediateCost)));
+    if(wanted<equity*.05||wanted<desired*.25){reject("同向同期限风险预算或有效仓位不足，不填碎片订单");continue;}
+    const count=Math.floor(wanted/(price*meta.quantoMultiplier));if(count<Math.max(1,meta.minContracts??1)){reject("风险额度或最小张数不足");continue;}
     const quantity=count*meta.quantoMultiplier,notional=quantity*price;
+    if(notional<equity*.05||notional<desired*.25){reject("整数张数后只剩碎片仓位，跳过而不放大风险");continue;}
     const leverage=Math.max(1,Math.min(meta.leverageMax,Math.ceil(notional/(equity*.2)),Math.floor(.8/(r.stopRate+meta.maintenanceRate+COST_FLOOR)))),margin=notional/leverage;
-    if(s.positions.reduce((a,t)=>a+t.margin,0)+margin>equity*.75){blocker="模拟可用保证金不足";continue;}
+    if(s.positions.reduce((a,t)=>a+t.margin,0)+margin>equity*.75){reject("模拟可用保证金不足");continue;}
     const t:Trade={id:`ft-${s.startedAt}-${s.revision+1}`,symbol:f.symbol,side:r.side,rule:structuredClone(r),openedAt:now,closedAt:null,status:"OPEN",
       entryPrice:price,exitPrice:null,quantity,contracts:count,quantoMultiplier:meta.quantoMultiplier,notional,leverage,margin,
-      plannedRisk:notional*(r.stopRate+COST_FLOOR),stopPrice:price*(1-d*r.stopRate),armPrice:price*(1+d*r.armRate),favorable:0,adverse:0,
+      plannedRisk:notional*lossRate,stopPrice:price*(1-d*r.stopRate),armPrice:price*(1+d*r.armRate),favorable:0,adverse:0,
       lastPrice:price,lastQuoteAt:q.observedAt,entryFee:notional*PAPER_COST.feeRate,exitFee:0,fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,
-      relationFailureBars:0,lastRelationBar:f.at,execution:"REAL_QUOTE_PAPER_MODEL",liveEligible:false};
+      relationFailureBars:0,lastRelationBar:f.at,execution:"REAL_QUOTE_PAPER_MODEL",liveEligible:false,
+      forecast:{policy:EVIDENCE_POLICY,family,signalAt:f.at,signalPrice:f.price,baseNetRate:economics.remaining+calibration.penalty,
+        calibratedNetRate:calibratedNet,remainingNetRate:economics.remaining,quality}};
     s.balance-=t.entryFee;s.fees+=t.entryFee;s.turnover+=notional;s.positions.push(t);s.lastEntryBars[f.symbol]=f.at;
-    event(s,now,"ENTRY",t.id,`${f.symbol}按规则${r.id}使用新鲜买卖价模拟成交；不是Gate实盘成交。`,{ruleId:r.id,notional,contracts:count});
+    s.relationEntries[episodeKey]=now+r.horizon*60000;diagnostics.opened++;
+    event(s,now,"ENTRY",t.id,`${f.symbol}按适用规则${r.id}使用新鲜买卖价模拟成交；不是Gate实盘成交。`,
+      {ruleId:r.id,notional,contracts:count,remainingNet:economics.remaining,calibrationPenalty:calibration.penalty,quality});
   }
+  for(const[key,until]of Object.entries(s.relationEntries))if(until<now)delete s.relationEntries[key];
   if(blocker)s.latestReason=blocker;else if(s.positions.length)s.latestReason=`管理${s.positions.length}笔前向模拟持仓；原始保护止损不会放宽。`;
 }
 export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;quotes:Record<string,Quote>;contracts:Record<string,Contract>}){
   const{now,paths,quotes,contracts}=input,s=structuredClone(input.state),before=s.revision;
+  const upgraded=s.policyVersion!==EVIDENCE_POLICY;
+  if(upgraded){
+    if(s.policyVersion)throw new Error("未知算法版本，禁止自动覆盖");
+    const mark=forwardEquity(s,quotes,now);
+    s.policyUpgrade={at:now,from:"legacy-forward-v1.0",to:EVIDENCE_POLICY,equity:mark.equity,stalePositions:mark.stalePositions,
+      balance:s.balance,resolved:s.resolved,positionIds:s.positions.map(t=>t.id)};
+    s.policyVersion=EVIDENCE_POLICY;s.lastFitAt=0;s.relationEntries??={};
+    for(const r of s.rules)r.status="DORMANT";
+    for(const t of [...s.history,...s.positions])s.relationEntries[`${t.symbol}:${familyKey(t.rule)}`]=Math.max(
+      s.relationEntries[`${t.symbol}:${familyKey(t.rule)}`]??0,t.openedAt+t.rule.horizon*60000);
+    event(s,now,"UPGRADE",EVIDENCE_POLICY,"升级关系适用性、真实模拟成交偏差及同关系风险；本金、亏损、历史和原持仓保护保持连续。",
+      {equity:mark.equity,resolved:s.resolved,open:s.positions.length});
+  }
   // Wait for a bounded Top30 refresh after the completed 5-minute boundary.
-  const dataDue=!s.lastCycleAt||Math.floor((now-90_000)/BAR_MS)>Math.floor((s.lastCycleAt-90_000)/BAR_MS);
+  const dataDue=upgraded||!s.lastCycleAt||Math.floor((now-90_000)/BAR_MS)>Math.floor((s.lastCycleAt-90_000)/BAR_MS);
+  // Exits at currently executable prices happen first. Their now-known results
+  // can calibrate NEW entries immediately; no future closure enters learning.
+  manage(s,quotes,now);s.feedback=collectFeedback(s.feedback??[],s.history,now);
   if(dataDue){ingest(s,paths,now);s.lastCycleAt=now;if(now-s.lastFitAt>=15*60_000)synthesizeRules(s,now);
     for(const r of s.rules)if(r.status==="EXPERIMENTAL"&&r.expiresAt<=now){r.status="DORMANT";event(s,now,"DORMANT",r.id,"证据过期，停止新开仓，等待新反应。");}}
-  manage(s,quotes,now);if(dataDue)openTrades(s,quotes,contracts,now);const marked=forwardEquity(s,quotes,now);
+  if(dataDue)openTrades(s,quotes,contracts,now);const marked=forwardEquity(s,quotes,now);
   if(!marked.stalePositions){s.peakEquity=Math.max(s.peakEquity,marked.equity);s.maxDrawdown=Math.max(s.maxDrawdown,1-marked.equity/Math.max(s.peakEquity,1e-9));}
   if(dataDue){const k=dayKey(now),a=s.daily.find(d=>d.day===k);if(a){a.endEquity=marked.equity;a.lastAt=now;}else s.daily.push({day:k,firstAt:now,lastAt:now,startEquity:s.daily.at(-1)?.endEquity??s.initialEquity,endEquity:marked.equity,exactBoundary:false});s.daily=s.daily.slice(-400);}
   s.lastQuoteCycleAt=now;return{state:s,changed:dataDue||s.revision!==before};
 }
 export function forwardWatchSymbols(s:ForwardState,now:number){
-  const matched=Object.values(s.frames).filter(f=>now-f.at<11*60_000&&s.rules.some(r=>r.status==="EXPERIMENTAL"&&r.expiresAt>now&&conditionMatches(f.x,r.conditions)));
+  const matched=Object.values(s.frames).filter(f=>now-f.at<11*60_000&&s.rules.some(r=>r.status==="EXPERIMENTAL"&&r.expiresAt>now&&ruleApplies(r,f.symbol)&&conditionMatches(f.x,r.conditions)));
   return[...new Set([...s.positions.map(p=>p.symbol),...matched.map(f=>f.symbol)])];
 }
 export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:number){
   const marked=forwardEquity(s,quotes,now),count=Object.fromEntries(HORIZONS.map(h=>[h,s.samples.filter(r=>r.horizon===h).length]));
   return{version:s.version,grammar:FORWARD_GRAMMAR,mode:"REAL_FEED_PAPER",liveEligible:false,startedAt:s.startedAt,updatedAt:s.lastQuoteCycleAt,
+    policyVersion:s.policyVersion??"legacy-forward-v1.0",policyUpgrade:s.policyUpgrade??null,
+    evidenceDiagnostics:s.evidenceDiagnostics??null,entryDiagnostics:s.entryDiagnostics??null,feedbackCount:s.feedback?.length??0,
     lastCycleAt:s.lastCycleAt,lastFitAt:s.lastFitAt,revision:s.revision,initialEquity:s.initialEquity,balance:s.balance,...marked,
     targetEquity:s.initialEquity*2,netPnl:marked.equity-s.initialEquity,maxDrawdown:s.maxDrawdown,resolved:s.resolved,wins:s.wins,grossPnl:s.grossPnl,
     fees:s.fees,fundingAllowance:s.fundingAllowance,turnover:s.turnover,observations:s.observations,measured:s.measured,invalidated:s.invalidated,
@@ -251,6 +330,6 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     nextCycleAt:s.lastCycleAt?(Math.floor((s.lastCycleAt-90_000)/BAR_MS)+1)*BAR_MS+90_000:now,cost:PAPER_COST,
     boundaries:{scope:"PAPER_ONLY",grammar:"最多两个连续特征条件；方向、期限、止损和回吐退出由新市场反应生成",historyBackfill:false,
       sampleMeaning:"市场条件与后来反应；不是影子订单或连胜晋级",accounting:"新鲜买卖价模拟成交；净值包含退出费用与资金占位",
-      risk:"单笔目标风险1.5%，总风险10%，同向6.5%，总名义额4倍；这是初始实验预算，不是最佳仓位结论",
+      risk:"单笔风险上限1.5%随净优势可信程度缩放，总风险10%，同向6.5%，同向同期限3%，总名义额4倍；碎片仓位跳过，不是最佳仓位结论",
       validation:"前向实验未证明盈利或月翻倍；多重规则筛选存在估计偏差",liquidation:"当前盘口保护，不冒充交易所标记价格强平复现"}};
 }

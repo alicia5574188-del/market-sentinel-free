@@ -1,3 +1,15 @@
+# 当前算法修正：关系证据与成交校准 v1.1
+
+算法标识 `evidence-calibration-v1.1`，持久化格式仍为 `forward-relations-v1.0`。**沿用原账户、亏损、学习记录和持仓，不重置成1,000U。** 月复利翻倍仍是尚未验证的目标，新规则仍只执行PAPER。
+
+跨币规则增加单币影响限制与逐币剔除复核，并检查当前币是否有适用证据；自身持续有效的单币关系只用于自身。实际已平仓模拟净收益按同一时间组校准预测误差，近似阈值/版本变化不能清掉失败记录；反馈有收缩和时间衰减，不使用连胜晋级。新开仓按剩余净优势与不确定性分配风险，保留原总额度，增加同向同期限3%风险桶、同关系周期去重、碎片仓位跳过及入场前价格偏移检查。规则原始止损不因后续学习而放宽。
+
+`/api/runtime.forward`新增 `policyVersion`、`policyUpgrade`、`evidenceDiagnostics`、`entryDiagnostics` 和 `feedbackCount`。规则的 `evidence`显示适用市场、独立时间组、校准扣减及证据摘要；这些不是胜率。完整成交反馈在不可变归档中，正常快照仍是滚动样本。极大归档批次使用 `archivePart`/`archiveParts`分片；使用原有`nextCursor`读取所有页并按时间与revision归组，不遗漏后续part。
+
+权衡、初始算法常量、验收与局限见 `research/FORWARD_EVIDENCE_REPAIR.md`。修正会减少错误的跨币推广和重复风险，**也可能减少交易、错过机会或继续亏损；功能测试不等于盈利证明。** 数据源、Worker调用节奏、D1、实盘开关及权限未改变。
+
+---
+
 # Dark readable UI and native LIVE console — 2026-09-16
 
 Default navigation is now **总览 / 规则 / 模拟 / 实盘 / 演变 / 系统**. The entire surface is dark, body text is 16–17px and the smallest UI labels are 14px. There is no legacy-page launcher or alternate console.
