@@ -1,0 +1,27 @@
+name: Forward Public Receipt
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/forward-public-receipt.yml']
+permissions:
+  contents: read
+jobs:
+  receipt:
+    if: github.head_ref == 'verify/forward-production-20260916'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Read public state only
+        run: |
+          set -euo pipefail
+          mkdir -p receipt
+          curl -fsS --retry 2 --max-time 20 'https://market-sentinel-free.alicia5574188.workers.dev/api/runtime' > receipt/runtime.json
+          curl -fsS --retry 2 --max-time 20 'https://market-sentinel-free.alicia5574188.workers.dev/__health' > receipt/health.json
+          curl -fsS --retry 2 --max-time 20 'https://market-sentinel-free.alicia5574188.workers.dev/api/forward/archive' > receipt/archive.json
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > receipt/time.txt
+          jq '{buildSha,legacyRetired,liveMode,forward:(.forward|{version,startedAt,updatedAt,lastCycleAt,marketCount,observations,measured,pending,rules,positions,resolved,equity,storage,latestReason}),legacy:{equity:.strategyArena.portfolioEquity,resolved:.strategyArena.portfolioResolved,openCount:(.strategyArena.portfolioOpen|length)}}' receipt/runtime.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forward-public-receipt-${{ github.run_id }}
+          path: receipt/
+          retention-days: 7
