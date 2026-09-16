@@ -1,3 +1,7 @@
+# UI release candidate — dark readable native LIVE / 2026-09-16
+
+Implementation complete locally: redesigned dark typography and native six-tab navigation; owner-only account, positions, history and API controls integrated without the legacy renderer. 300 direct tests and 17 architecture/migration tests pass locally. Offline browser component fixtures cover 320/393/768/1440px, all six tabs, login without enabling, inline ON cancellation/confirmation, failed OFF, confirmed OFF and logout privacy; 28 checks pass with no dialogs, script errors or overflow. These are offline fixtures, not real account mutations. Final exact-head CI, deployment and read-only production receipt still pending at this snapshot.
+
 # Release candidate — forward relation engine / 2026-09-16
 
 Implementation and mobile/desktop UI are complete in PR #293. New module reads the existing real market feed, stores only new forward response measurements, generates auditable bounded rules and controls a separate PAPER ledger. Old frozen regimes are retired from new entry. No new rule can reach the existing Gate LIVE order source.

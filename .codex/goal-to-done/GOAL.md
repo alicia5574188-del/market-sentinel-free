@@ -1,3 +1,7 @@
+# Active UI correction — dark readable native LIVE / 2026-09-16
+
+User requests dark theme, larger text, removal of the old-page entry and an integrated new-design real-account page with owner-only switch control. Implement and deploy through the established reviewed-main path. This is not permission to enable LIVE or alter the generated-rule trading authority. Preserve all account and learning state.
+
 # Active release — forward market-relation generation / 2026-09-16
 
 The user explicitly authorizes direct implementation, major UI replacement and main deployment using the already working path. No further historical-profit search is a prerequisite. Run real market data through a PAPER-only generated-rule system and retain forward evidence for later optimization. Net monthly doubling is a goal, not a release claim. Earlier fixed-authority/turnover goals below are historical, not current requirements.
