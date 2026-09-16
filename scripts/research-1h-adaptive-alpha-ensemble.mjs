@@ -3,9 +3,10 @@ import { gunzipSync } from 'node:zlib';
 
 const SYMBOLS=['BTC_USDT','ETH_USDT','SOL_USDT','XRP_USDT','DOGE_USDT','ADA_USDT','BNB_USDT','SUI_USDT','AVAX_USDT','LINK_USDT','LTC_USDT','BCH_USDT','AAVE_USDT','UNI_USDT','ARB_USDT','FIL_USDT','PEPE_USDT','ENA_USDT'];
 const H=3600,DAY=86400;
-const START=Date.UTC(2024,0,1)/1000, SIGNAL_START=Date.UTC(2025,0,1)/1000, END=Date.UTC(2026,8,1)/1000;
+const START=Date.UTC(2024,0,1)/1000, MODEL_START=Date.UTC(2024,6,1)/1000, SIGNAL_START=Date.UTC(2025,0,1)/1000, END=Date.UTC(2026,8,1)/1000;
 const BASE_COST=.00165,STRESS_COST=.00270,MAX_GROSS=1.5,DAILY_ENTRY_BUDGET=3.0;
 const TRAIN_DAYS=180,TRAIN_STEP_HOURS=3,RIDGE_RATIO=.10;
+const META_WINDOWS=[30,60,90],META_SHRINK=1000;
 const HORIZONS=[12,24,48];
 const PRED_FLOORS=[0,.001,.002,.003,.004,.006];
 const FRACS=[.05,.075,.10],MAX_PER_HOUR=[1,2,3];
@@ -164,24 +165,41 @@ function fitForDay(d,h){
 }
 const dot=(a,b)=>a.reduce((s,x,i)=>s+x*b[i],0);
 
-const candidates=[],modelDays=[];
+const candidates=[],modelDays=[],metaDailyStats=new Map();
+function zeroMeta(){return {n:0,pp:0,py:0};}
+function updateMeta(s,pred,y){s.n++;s.pp+=pred*pred;s.py+=pred*y;}
+function metaFactor(d,h){
+  const lagDays=Math.ceil((23+h)/24),end=addDays(d,-lagDays),vals=[];
+  for(const w of META_WINDOWS){
+    const start=addDays(end,-w+1);let n=0,pp=0,py=0;
+    for(let ts=dayTs(start),z=dayTs(end);ts<=z;ts+=DAY){const k=new Date(ts*1000).toISOString().slice(0,10),m=metaDailyStats.get(k)?.[h];if(m){n+=m.n;pp+=m.pp;py+=m.py;}}
+    if(n>=500&&pp>1e-12){const slope=py/pp,shrink=n/(n+META_SHRINK);vals.push(clamp(slope*shrink,-3,3));}
+  }
+  return vals.length?median(vals):0;
+}
 for(const [d,obs] of [...obsByDay].sort((a,b)=>a[0].localeCompare(b[0]))){
-  if(dayTs(d)<SIGNAL_START)continue;
+  if(dayTs(d)<MODEL_START)continue;
   const models=Object.fromEntries(HORIZONS.map(h=>[h,fitForDay(d,h)]));
-  modelDays.push({day:d,models:Object.fromEntries(HORIZONS.map(h=>[h,{n:models[h].n,start:models[h].start,end:models[h].end,lambda:models[h].lambda??null,ok:!!models[h].beta}]))});
   if(HORIZONS.some(h=>!models[h].beta))continue;
+  const factors=Object.fromEntries(HORIZONS.map(h=>[h,metaFactor(d,h)]));
+  modelDays.push({day:d,factors,models:Object.fromEntries(HORIZONS.map(h=>[h,{n:models[h].n,start:models[h].start,end:models[h].end,lambda:models[h].lambda??null,ok:!!models[h].beta}]))});
+  const dayMeta=Object.fromEntries(HORIZONS.map(h=>[h,zeroMeta()]));
   for(const o of obs){
     const pm=maps.get(o.symbol),entry=pm?.get(o.time+H);if(!entry)continue;
-    let best=null;
+    const hour=new Date(o.time*1000).getUTCHours();let best=null;
     for(const h of HORIZONS){
       const exit=pm?.get(o.time+h*H);if(!exit)continue;
-      const pred=clamp(dot(models[h].beta,o.vec),-.12,.12),dir=sign(pred);if(!dir)continue;
-      const gross=dir*(exit.close/entry.open-1),predAbs=Math.abs(pred),edge=predAbs-BASE_COST;
-      const c={symbol:o.symbol,signalTime:o.time,entryTime:o.time+H,exitTime:o.time+(h+1)*H,horizon:h,dir,pred,predAbs,edge,gross};
+      const rawReturn=exit.close/entry.open-1,pred=clamp(dot(models[h].beta,o.vec),-.12,.12);
+      if(hour%TRAIN_STEP_HOURS===0&&Number.isFinite(pred)&&Number.isFinite(rawReturn))updateMeta(dayMeta[h],pred,rawReturn);
+      if(dayTs(d)<SIGNAL_START||!Number.isFinite(pred)||!Number.isFinite(rawReturn))continue;
+      const factor=factors[h],calPred=clamp(pred*factor,-.12,.12),dir=sign(calPred);if(!dir)continue;
+      const gross=dir*rawReturn,predAbs=Math.abs(calPred),edge=predAbs-BASE_COST;
+      const c={symbol:o.symbol,signalTime:o.time,entryTime:o.time+H,exitTime:o.time+(h+1)*H,horizon:h,dir,basePred:pred,metaFactor:factor,pred:calPred,predAbs,edge,gross};
       if(!best||c.edge>best.edge||(c.edge===best.edge&&c.horizon<best.horizon))best=c;
     }
     if(best)candidates.push(best);
   }
+  metaDailyStats.set(d,dayMeta);
 }
 candidates.sort((a,b)=>a.entryTime-b.entryTime||b.predAbs-a.predAbs);
 
@@ -224,10 +242,10 @@ function pareto(rows){const out=[];for(const a of rows){if(rows.some(b=>b!==a&&b
 const report={
   decision:target?'ADAPTIVE_ALPHA_CALIBRATION_TARGET_FOUND':'ADAPTIVE_ALPHA_NO_5PCT_CALIBRATION',authority:'RESEARCH_ONLY_NO_DEPLOYMENT',
   goal:'maximize practical trade frequency while targeting >=5% monthly net after realistic costs at portfolio level',
-  method:'Gate official 1h OHLCV. Causal 180-day ridge ensemble learns direction from multi-timescale momentum, reversal, range, volume, volatility, market and relative-strength features. Model chooses 12h/24h/48h horizon per opportunity by predicted after-cost edge. 2025 selects portfolio policy; 2026 Jan-Aug is fixed validation.',
+  method:'Gate official 1h OHLCV. Causal 180-day ridge ensemble learns base direction from multi-timescale momentum, reversal, range, volume, volatility, market and relative-strength features. A second causal meta-calibration layer uses only previously settled 30d/60d/90d prediction-vs-outcome slopes to keep or invert direction and rescale conviction. Calibrated 12h/24h/48h horizons compete per opportunity. 2025 selects portfolio policy; 2026 Jan-Aug is fixed validation.',
   cost:{base:BASE_COST,stress:STRESS_COST},
   data:{start:new Date(START*1000).toISOString(),signalStart:new Date(SIGNAL_START*1000).toISOString(),end:new Date(END*1000).toISOString(),activeSymbols,source:{venue:'Gate',dataset:'official historical downloads',market:'futures_usdt',interval:'1h',urlPattern:`${ARCHIVE_BASE}/YYYYMM/SYMBOL-YYYYMM.csv.gz`},archiveDiagnostics},
-  model:{featureNames:FEATURE_NAMES,rollingTrainDays:TRAIN_DAYS,trainSampleStepHours:TRAIN_STEP_HOURS,ridgeRatio:RIDGE_RATIO,horizons:HORIZONS,modelDays:modelDays.length},
+  model:{featureNames:FEATURE_NAMES,rollingTrainDays:TRAIN_DAYS,trainSampleStepHours:TRAIN_STEP_HOURS,ridgeRatio:RIDGE_RATIO,horizons:HORIZONS,metaWindows:META_WINDOWS,metaShrink:META_SHRINK,modelDays:modelDays.length,metaFactorSummary:Object.fromEntries(HORIZONS.map(h=>{const a=modelDays.filter(x=>dayTs(x.day)>=SIGNAL_START).map(x=>x.factors[h]).filter(Number.isFinite);return [h,{mean:mean(a),median:median(a),positive:a.filter(x=>x>0).length,negative:a.filter(x=>x<0).length,zero:a.filter(x=>x===0).length}];}))},
   candidateCount:candidates.length,raw:{calibration:rawSummary(CAL_MONTHS),blind:rawSummary(BLIND_MONTHS)},
   calibrationMonths:CAL_MONTHS,blindMonths:BLIND_MONTHS,policyCount:policies.length,feasibleCount:feasible.length,
   target:enrich(target),bestReturn:enrich(bestReturn),bestFrequencyPositive:enrich(bestFrequencyPositive),paretoFrontier:pareto(evaluated)
