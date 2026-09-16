@@ -1,0 +1,34 @@
+name: Validate Dynamic Pair Divergence
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-dynamic-pair-divergence.mjs"
+      - ".github/workflows/validate-dynamic-pair-divergence.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Check syntax
+        run: node --check scripts/research-dynamic-pair-divergence.mjs
+      - name: Run dynamic pair divergence audit
+        run: node --max-old-space-size=4096 scripts/research-dynamic-pair-divergence.mjs
+      - name: Print focused result
+        run: jq '{decision,candidateCounts,selection,accepted,combined}' /tmp/dynamic-pair-divergence.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dynamic-pair-divergence
+          path: |
+            /tmp/dynamic-pair-divergence.json
+            /tmp/dynamic-pair-divergence-candidates.json
+            /tmp/dynamic-pair-divergence-trades.json
+          retention-days: 7
