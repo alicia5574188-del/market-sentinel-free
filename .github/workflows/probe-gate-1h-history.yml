@@ -39,13 +39,17 @@ jobs:
               return {label,from,to,status:null,ok:false,count:null,error:String(e)};
             }
           }
-          const out=[];
-          for(const c of cases) out.push(await one(...c));
-          writeFileSync('/tmp/gate-1h-probe.json',JSON.stringify({generatedAt:new Date().toISOString(),results:out},null,2));
-          console.log(JSON.stringify(out,null,2));
+          (async()=>{
+            const out=[];
+            for(const c of cases) out.push(await one(...c));
+            writeFileSync('/tmp/gate-1h-probe.json',JSON.stringify({generatedAt:new Date().toISOString(),results:out},null,2));
+            console.log(JSON.stringify(out,null,2));
+          })().catch(e=>{console.error(e);process.exitCode=1;});
           NODE
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: gate-1h-history-probe
           path: /tmp/gate-1h-probe.json
+          if-no-files-found: error
           retention-days: 7
