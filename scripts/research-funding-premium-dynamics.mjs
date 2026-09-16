@@ -40,7 +40,7 @@ for(const month of MONTHS){
     const medP=median(obs.map(x=>x.premium)),madP=median(obs.map(x=>Math.abs(x.premium-medP)))||1e-12,scaleP=1.4826*madP,impact75=quantile(obs.map(x=>x.impact),.75);
     for(const x of obs){const z=(x.premium-medP)/scaleP,dir=Math.sign(z);if(!dir||Math.abs(z)<2)continue;const align=Math.sign(x.funding)===dir,accel=dir*x.dp>0&&dir*x.df>=0,decel=dir*x.dp<0&&dir*x.df<=0,stress=x.impact>=impact75;if(!align)continue;
       const states=['BASE'];if(accel)states.push('ACCEL');if(decel)states.push('DECEL');if(accel&&stress)states.push('ACCEL_STRESS');if(decel&&stress)states.push('DECEL_STRESS');
-      for(const state of states)candidates.push({month,split:sp,t,symbol,state,dir,zPremium:z,premium:x.premium,funding:x.funding,deltaPremium30:x.dp,deltaFunding30:x.df,impact:x.impact,impact75,mark:x.now.mark,index:x.now.index});
+      for(const state of states)candidates.push({month,split:sp,t,symbol:x.symbol,state,dir,zPremium:z,premium:x.premium,funding:x.funding,deltaPremium30:x.dp,deltaFunding30:x.df,impact:x.impact,impact75,mark:x.now.mark,index:x.now.index});
     }
   }
   const familyFor={BASE:['CONT','REV'],ACCEL:['CONT'],DECEL:['REV'],ACCEL_STRESS:['CONT'],DECEL_STRESS:['REV']};
