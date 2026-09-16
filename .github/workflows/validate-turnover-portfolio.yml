@@ -1,0 +1,31 @@
+name: Validate 5x Turnover Portfolio
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-turnover-portfolio.mjs"
+      - ".github/workflows/validate-turnover-portfolio.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Check syntax
+        run: node --check scripts/research-turnover-portfolio.mjs
+      - name: Run turnover portfolio research
+        run: node --max-old-space-size=4096 scripts/research-turnover-portfolio.mjs
+      - name: Print focused result
+        run: jq '{decision,target,costModel,data,candidateCount,configCount,discoveryFeasibleCount,validationPassCount,selected,accepted}' /tmp/turnover-portfolio-report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turnover-portfolio-report
+          path: /tmp/turnover-portfolio-report.json
+          retention-days: 7
