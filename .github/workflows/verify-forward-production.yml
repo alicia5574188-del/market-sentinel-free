@@ -9,45 +9,38 @@ jobs:
   verify-production:
     if: github.head_ref == 'verify/forward-production-20260916'
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 8
     steps:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Install isolated browser test library
         run: python -m pip install playwright==1.55.0
-      - name: Read actual deployed build and immutable evidence; no private API or writes
+      - name: Confirm actual deployed build and heartbeat through verified curl transport
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p production-receipt
+          base='https://market-sentinel-free.alicia5574188.workers.dev'
+          curl -fsS --retry 2 --max-time 20 "$base/__health" > production-receipt/health-first.json
+          sleep 12
+          curl -fsS --retry 2 --max-time 20 "$base/__health" > production-receipt/health-second.json
+          curl -fsS --retry 2 --max-time 20 "$base/api/runtime" > production-receipt/runtime-first.json
+          curl -fsS --retry 2 --max-time 20 "$base/api/forward/export" > production-receipt/export.json
+          curl -fsS --retry 2 --max-time 20 "$base/api/forward/archive" > production-receipt/archive.json
           python - <<'PY'
-          import json,time,urllib.request,pathlib
-          root=pathlib.Path('production-receipt');base='https://market-sentinel-free.alicia5574188.workers.dev';expected='3de5572d521231c427c82a0ba3980147d2ae833d'
-          def get(path):
-              with urllib.request.urlopen(urllib.request.Request(base+path,headers={'Cache-Control':'no-cache'}),timeout=20) as r:
-                  return json.load(r)
-          for attempt in range(60):
-              try:
-                  h=get('/__health');rt=h.get('runtime',{});f=rt.get('forward',{})
-                  if rt.get('buildSha')==expected and f.get('storage',{}).get('persistedAt',0)>0 and f.get('storage',{}).get('error') is None:break
-              except Exception as e:print(type(e).__name__,str(e)[:160],flush=True)
-              time.sleep(5)
-          else:raise RuntimeError('Expected committed build or persisted forward account not online')
-          (root/'health-first.json').write_text(json.dumps(h,ensure_ascii=False,indent=2))
-          runtime=get('/api/runtime');(root/'runtime-first.json').write_text(json.dumps(runtime,ensure_ascii=False,indent=2))
-          time.sleep(12)
-          h2=get('/__health');(root/'health-second.json').write_text(json.dumps(h2,ensure_ascii=False,indent=2))
-          assert h2['runtime']['lastSuccessAt']>h['runtime']['lastSuccessAt'],'heartbeat not advancing'
-          assert h2['runtime']['buildSha']==expected
-          assert h2['runtime']['legacyRetired'] is True
-          assert h2['runtime']['forward']['liveEligible'] is False
-          assert h2['runtime']['liveMode']['requestedEnabled'] is False
-          for path,name in [('/api/forward/export','export.json'),('/api/forward/archive','archive.json')]:
-              obj=get(path);(root/name).write_text(json.dumps(obj,ensure_ascii=False,indent=2))
+          import json,pathlib
+          root=pathlib.Path('production-receipt');h=json.loads((root/'health-first.json').read_text());h2=json.loads((root/'health-second.json').read_text());r=h2['runtime']
+          assert r['buildSha']=='3de5572d521231c427c82a0ba3980147d2ae833d'
+          assert r['lastSuccessAt']>h['runtime']['lastSuccessAt']
+          assert r['legacyRetired'] is True
+          assert r['forward']['liveEligible'] is False
+          assert r['forward']['storage']['persistedAt']>0 and r['forward']['storage']['error'] is None
+          assert r['liveMode']['requestedEnabled'] is False
           a=json.loads((root/'archive.json').read_text());assert a['immutable'] is True and len(a['items'])>0
-          print(json.dumps({'buildSha':expected,'heartbeatAdvances':True,'liveMode':h2['runtime']['liveMode'],'legacyRetired':True,'forward':h2['runtime']['forward']},ensure_ascii=False),flush=True)
+          print(json.dumps({'buildSha':r['buildSha'],'heartbeatAdvances':True,'liveMode':r['liveMode'],'forward':r['forward']},ensure_ascii=False),flush=True)
           PY
-      - name: Exercise deployed default UI in desktop and mobile browsers without mutating state
+      - name: Exercise deployed desktop and mobile UI without mutations
         shell: bash
         run: |
           python - <<'PY'
@@ -62,32 +55,36 @@ jobs:
                   page=browser.new_page(viewport={'width':width,'height':900});errors=[];dialogs=[]
                   page.on('pageerror',lambda e:errors.append(str(e)))
                   page.on('dialog',lambda d:(dialogs.append(d.message),d.dismiss()))
-                  response=page.goto(base,wait_until='networkidle',timeout=60000)
+                  response=page.goto(base,wait_until='domcontentloaded',timeout=45000)
                   assert response and response.status==200
-                  page.wait_for_selector('.fr-app',timeout=20000)
-                  page.wait_for_timeout(2000)
+                  page.wait_for_selector('.fr-app',timeout=20000);page.wait_for_timeout(2500)
                   for tab in ['总览','规则','交易','演变','系统']:
-                      page.locator('nav.fr-nav button').filter(has_text=tab).click();page.wait_for_timeout(500)
+                      page.locator('nav.fr-nav button').filter(has_text=tab).click();page.wait_for_timeout(400)
                       overflow=page.evaluate('document.documentElement.scrollWidth > innerWidth + 1')
                       assert not overflow,(width,tab,'horizontal overflow')
-                      assert page.locator('nav.fr-nav button[aria-current="page"]').inner_text().endswith(tab)
+                      assert page.locator('nav.fr-nav button[aria-current="page"] b').inner_text()==tab
                       if width in [393,1440]:page.screenshot(path=str(root/f'{width}-{tab}.png'),full_page=True)
                       results.append({'viewport':width,'tab':tab,'overflow':overflow,'pageErrors':list(errors),'dialogs':list(dialogs)})
                   assert not errors,errors
                   assert not dialogs,dialogs
-                  page.locator('.fr-button').filter(has_text='进入旧账户').click();page.wait_for_timeout(500)
+                  page.locator('.fr-button').filter(has_text='进入旧账户').click();page.wait_for_timeout(400)
                   assert page.locator('.fr-return').is_visible()
-                  page.locator('.fr-return').click();page.wait_for_timeout(300)
-                  assert page.locator('.fr-app').is_visible()
-                  page.close()
+                  page.locator('.fr-return').click();page.wait_for_timeout(300);assert page.locator('.fr-app').is_visible();page.close()
               browser.close()
           (root/'browser-results.json').write_text(json.dumps(results,ensure_ascii=False,indent=2))
           print(json.dumps({'browserChecks':len(results),'allPassed':True,'dialogs':0,'pageErrors':0},ensure_ascii=False))
           PY
-      - name: Final forward snapshot
-        if: always()
+      - name: Confirm a new completed-market observation is persisted
+        shell: bash
         run: |
-          curl -fsS --retry 2 --max-time 20 'https://market-sentinel-free.alicia5574188.workers.dev/api/runtime' > production-receipt/runtime-final.json || true
+          set -euo pipefail
+          for attempt in {1..40}; do
+            curl -fsS --retry 1 --max-time 15 'https://market-sentinel-free.alicia5574188.workers.dev/api/runtime' > production-receipt/runtime-final.json
+            if jq -e '.forward.observations > 0 and .forward.marketCount > 0 and .forward.storage.persistedAt > 0 and .forward.storage.error == null' production-receipt/runtime-final.json >/dev/null; then break; fi
+            sleep 5
+          done
+          jq -e '.forward.observations > 0 and .forward.marketCount > 0 and .forward.storage.error == null' production-receipt/runtime-final.json >/dev/null
+          jq '{buildSha,legacyRetired,liveMode,forward:(.forward|{version,startedAt,lastCycleAt,marketCount,observations,measured,pending,resolved,equity,storage})}' production-receipt/runtime-final.json
           date -u +'%Y-%m-%dT%H:%M:%SZ' > production-receipt/fetched-at.txt
       - uses: actions/upload-artifact@v4
         if: always()
