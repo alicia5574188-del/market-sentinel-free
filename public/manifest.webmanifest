@@ -3,7 +3,7 @@
   "short_name": "关系引擎",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f3f4f0",
-  "theme_color": "#f3f4f0",
+  "background_color": "#0b111a",
+  "theme_color": "#0b111a",
   "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
 }

@@ -54,90 +54,50 @@ test("only one new DO is bound and all legacy DO storage is explicitly deleted",
   for (const name of ["PositionMonitor", "MarketScanner", "LiveTradingCoordinator", "MarketScannerV2", "HTE31MarketScanner", "HTE31TradeManager", "HistoricalArchive"]) assert.ok(retire.deleted_classes.includes(name));
 });
 
-test("owner-authenticated live API stays isolated while the strategy arena UI is explicit", async () => {
-  const [worker, page, layout, css, live, auth, positionMetrics] = await Promise.all([
-    read("worker/index-clean.ts"), read("app/page.tsx"), read("app/layout.tsx"), read("app/globals.css"),
-    read("lib/gate-live.ts"), read("lib/owner-auth.ts"), read("lib/position-metrics.ts"),
+test("native dark LIVE console retains owner authentication and isolates financial authority", async () => {
+  const [worker, page, dashboard, consoleUi, ui, layout, css, live, auth] = await Promise.all([
+    read("worker/index-clean.ts"), read("app/page.tsx"), read("app/forward-dashboard.tsx"), read("app/live-console.tsx"),
+    read("lib/operator-ui.ts"), read("app/layout.tsx"), read("app/forward-dashboard.css"), read("lib/gate-live.ts"), read("lib/owner-auth.ts"),
   ]);
-  assert.match(worker, /return handler\.fetch\(request, env, ctx\)/);
   assert.match(worker, /url\.pathname === "\/api\/auth\/login" && request\.method === "POST"/);
   assert.match(worker, /url\.pathname === "\/api\/live\/mode" && request\.method === "POST"/);
-  assert.match(worker, /url\.pathname === "\/api\/live\/credentials"/);
-  assert.match(worker, /encryptGateCredentials/);
   assert.match(worker, /sameOriginMutation\(request\)/);
   assert.match(worker, /if \(!await ownerAuthenticated\(request, env\)\) return json\(\{ error: "请先登录" \}, 401\)/);
-  assert.match(worker, /strategyArena: canonicalPaperSummary\(\{ current: strategyArena, previous: previousStrategyArena, regime: regimePortfolio \}, canonicalPaper\)/);
-  assert.match(worker, /requestedEnabled: false, operational: false/);
+  assert.match(worker, /encryptGateCredentials/);
+  assert.match(worker, /desiredPortfolio = canonicalLivePortfolio/);
+  assert.match(worker, /allowNewEntries: false/);
   assert.match(live, /reduce_only: true/);
-  assert.match(live, /credentials\.environment !== "live"/);
   assert.match(auth, /HttpOnly; Secure; SameSite=Strict/);
-  assert.match(page, /RUNTIME_REQUEST_TIMEOUT_MS = 12_000/);
-  assert.match(page, /RUNTIME_REFRESH_MS = 10_000/);
-  assert.match(page, /RUNTIME_RETRY_MS = 3_000/);
-  assert.match(page, /window\.addEventListener\("pageshow", resume\)/);
-  assert.match(page, /window\.addEventListener\("online", resume\)/);
-  assert.match(page, /tabScroll\.current\[tab\] = window\.scrollY/);
-  assert.match(page, /viewScroll\.current\[activeView\] = window\.scrollY/);
-  assert.match(page, /五行情·独立账户/);
+  for (const [name, ms] of [["RUNTIME_REQUEST_TIMEOUT_MS","12_000"],["RUNTIME_REFRESH_MS","10_000"],["RUNTIME_RETRY_MS","3_000"]])
+    assert.match(page,new RegExp(`${name} = ${ms}`));
+  assert.match(page, /window\.addEventListener\("pageshow",\s*resume\)/);
+  assert.match(page, /window\.addEventListener\("online",\s*resume\)/);
+  assert.match(page, /requestEpoch===epoch\.current/);
+  assert.match(page, /live:undefined/);
+  assert.match(dashboard, /scroll\.current\[tab\]=window\.scrollY/);
+  assert.match(dashboard, /\["live","◈","实盘"\]/);
+  assert.match(page, /livePanel=\{<LiveConsole/);
+  assert.doesNotMatch(page+dashboard+consoleUi, /legacyConsole|onLegacy|fr-return|进入旧账户|window\.(confirm|alert|prompt)|role="dialog"/);
+  assert.match(consoleUi, /role="switch"/);
+  assert.match(consoleUi, /disabled=\{!canControl/);
+  assert.match(consoleUi, /if\(!canControl/);
+  assert.match(consoleUi, /setConfirmEnable\(true\)/);
+  assert.match(consoleUi, /onClick=\{\(\)=>setMode\(true\)\}/);
+  assert.match(consoleUi, /submitting\.current/);
+  assert.match(consoleUi, /onLive\(result\.live\)/);
+  assert.match(ui, /credentials: "same-origin"/);
+  assert.doesNotMatch(ui+page+consoleUi, /localStorage|sessionStorage|console\.log/);
+  for(const label of ["实盘账户权益","所有者密码","API 管理","进场时间","出场时间","持仓时长","已平仓实盘记录"])
+    assert.ok(consoleUi.includes(label));
+  assert.match(consoleUi, /新规则目前仍只在模拟运行/);
   assert.match(layout, /哨兵 · 关系引擎/);
-  assert.doesNotMatch(layout, /V4自适应影子策略/);
-  assert.match(page, /FIVE REGIME SYSTEMS · DIRECT AUTHORITY/);
-  assert.match(page, /没有影子订单、连胜授权或近6笔门槛/);
-  assert.match(page, /5 路 × 100%/);
-  assert.match(page, /不按唯一账户金额缩放或拦截/);
-  assert.match(page, /今日净收益/);
-  assert.match(page, /实时运行状态/);
-  assert.match(page, /策略账户已运行/);
-  assert.match(page, /暂停位置/);
-  assert.match(page, /下一步准备/);
-  assert.match(page, /五个系统的行情分工/);
-  assert.match(page, /当前接管/);
-  assert.match(page, /720小时路径/);
-  assert.match(page, /当前行情域直接信号/);
-  assert.match(page, /当前最接近触发/);
-  assert.match(page, /不生成订单，也不改变下单权限/);
-  assert.match(page, /const hasRuntimeSnapshot = Boolean\(runtime && arena\)/);
-  assert.match(page, /收到真实运行快照后再显示五个独立账户、合并持仓、行情归属和市场数量/);
-  assert.match(page, /收到后台真实快照前不显示“0笔”/);
-  assert.match(page, /const showLiveCenter = auth\.authenticated \|\| liveEnabled/);
-  assert.match(page, /if \(showLiveCenter\) navigationTabs\.push/);
-  assert.match(page, /activeView === "orders"/);
-  assert.doesNotMatch(page, /liveEnabled && activeView === "orders"/);
-  assert.match(page, /历史实盘记录仍可在“实盘记录”查看/);
-  assert.match(page, /function TradeLifecycleRecord/);
-  assert.match(page, /function LiveOpenCard/);
-  assert.match(page, /function LiveTradeRecord/);
-  assert.match(page, /second: "2-digit"/);
-  for (const lifecycleLabel of ["进场时间", "出场时间", "持仓时长"]) assert.match(page, new RegExp(lifecycleLabel));
-  assert.match(css, /live-trade-history/);
-  assert.match(page, /未成交候选/);
-  assert.match(page, /auditEvents/);
-  assert.doesNotMatch(page, /className="live-off">LIVE OFF/);
-  assert.doesNotMatch(page, /手机页面更新延迟|页面摘要延迟|页面数据延迟/);
-  assert.doesNotMatch(page, />有效影子</);
-  assert.doesNotMatch(page, />观察影子</);
-  assert.doesNotMatch(page, /预计成功率/);
-  assert.match(page, /当前模拟周期/);
-  assert.match(page, /唯一执行 PAPER/);
-  assert.match(page, /开启实盘复制/);
-  assert.doesNotMatch(page, /双模拟账本|独立策略模拟/);
-  assert.doesNotMatch(page, /组合风险预算|目标 \+150 U|双向反应实验 V1|盈利与亏损研究|旧方案归档|账户日志/);
-  assert.doesNotMatch(page, /fetch\("\/api\/history|fetch\("\/api\/account-logs/);
-  assert.match(page, /所有者登录/);
-  assert.match(page, /实盘交易开关/);
-  assert.match(page, /撤销系统遗留挂单/);
-  assert.match(page, /实盘账户/);
-  assert.match(page, /实盘订单/);
-  assert.match(page, /API 管理/);
-  assert.match(page, /AbortController/);
-  assert.match(page, /document\.hidden/);
-  assert.match(css, /position:fixed!important/);
-  assert.match(css, /strategy-grid/);
-  assert.match(positionMetrics, /export function unrealizedPnl/);
-  assert.match(positionMetrics, /export function marginReturnRate/);
-  assert.doesNotMatch(layout, /requireChatGPTUser|redirect|signin-with-chatgpt/);
-  assert.equal(await read("app/chatgpt-auth.ts").then(() => false, () => true), true);
-  assert.equal(await read("lib/auth-paths.ts").then(() => false, () => true), true);
+  assert.match(layout, /themeColor: "#0b111a"/);
+  const fontSizes=[...css.matchAll(/font-size:\s*(\d+)px/g)].map(v=>Number(v[1]));
+  assert.ok(fontSizes.length>40&&Math.min(...fontSizes)>=14);
+  assert.match(css, /grid-template-columns:repeat\(6,minmax\(0,1fr\)\)/);
+  assert.match(css, /\.fr-form input\{[^}]*font-size:17px/);
+  assert.doesNotMatch(page, /\/api\/paper\/reset|\/api\/history|\/api\/account-logs/);
+  assert.doesNotMatch(layout, /requireChatGPTUser|signin-with-chatgpt/);
 });
 
 test("at-least-once alarm and independent feed recovery are explicit", async () => {
@@ -255,7 +215,6 @@ test("five frozen regime systems are causal and isolated while canonical PAPER i
   assert.doesNotMatch(arena, /Object\.keys\(state\.portfolioOpen\)\.length >= MAX_PORTFOLIO_POSITIONS/);
   assert.doesNotMatch(arena, /globalOpportunityRank \?\? 1\) > MAX_PORTFOLIO_POSITIONS/);
   assert.match(arena, /RUNNER_EXIT/);
-  assert.match(page, /当前市场先被归入唯一行情域/);
   assert.match(arena, /cloneShadowForPortfolio/);
   assert.match(arena, /paperEvaluation: true/);
   assert.match(arena, /extremeSequenceAuthority: false/);
@@ -265,12 +224,6 @@ test("five frozen regime systems are causal and isolated while canonical PAPER i
   assert.match(coveragePolicy, /breadth24h >= \.71/);
   assert.match(coveragePolicy, /regimeMarkets \?\? 0\) < 12/);
   assert.doesNotMatch(page, />观察影子</);
-  assert.match(page, /当前模拟周期/);
-  assert.match(page, /历史归档/);
-  assert.match(page, /const \[archiveOpen, setArchiveOpen\] = useState\(false\)/);
-  assert.match(page, /className="archive-toggle" type="button" aria-expanded=\{archiveOpen\}/);
-  assert.match(page, /\{archiveOpen && <div className="archive-content">/);
-  assert.match(page, /查看归档 ›/);
   assert.match(page, /runtimeBackendOperational\(runtime\)/);
   assert.match(page, /RUNTIME_RETRY_MS = 3_000/);
   assert.doesNotMatch(page, /页面摘要延迟，交易后台继续独立运行/);
@@ -283,8 +236,6 @@ test("five frozen regime systems are causal and isolated while canonical PAPER i
   assert.match(worker, /buildLiveStopIntent\(position, tick\)/);
   assert.match(worker, /entry\.exchangeOrderId = await client\.createEntry\(intent\);[\s\S]{0,160}await this\.createImmediateLiveStop\(client, entry\)/);
   assert.match(gateLive, /side === "LONG" \? Math\.floor\(units \+ 1e-9\) : Math\.ceil\(units - 1e-9\)/);
-  assert.match(page, /重置五个1000 U虚拟资金/);
-  assert.match(page, /confirm: "RESET_PAPER"/);
   assert.match(worker, /SCAN_UNIVERSE_SIZE = 30/);
   assert.match(worker, /maxOpenPositions: null/);
   assert.match(migration, /DELETE FROM `paper_events`/);
@@ -294,8 +245,8 @@ test("five frozen regime systems are causal and isolated while canonical PAPER i
 });
 
 test("Gate degradation is endpoint-aware, incremental, and only blocking after retained paths expire", async () => {
-  const [gate, worker, page] = await Promise.all([
-    read("lib/gate-market.ts"), read("worker/index-clean.ts"), read("app/page.tsx"),
+  const [gate, worker] = await Promise.all([
+    read("lib/gate-market.ts"), read("worker/index-clean.ts"),
   ]);
   assert.match(gate, /https:\/\/fx-api\.gateio\.ws\/api\/v4/);
   assert.match(gate, /endpointBackoffUntil/);
@@ -304,7 +255,6 @@ test("Gate degradation is endpoint-aware, incremental, and only blocking after r
   assert.match(worker, /prior\.length >= 324 \? 4 : 360/);
   assert.match(worker, /mergeStrategyCandlePath/);
   assert.match(worker, /STRATEGY_CANDLE_STALE_MS = 11 \* 60_000/);
-  assert.match(page, /路径短错 \{degradedPathMarkets\}（有效快照保留）/);
   assert.doesNotMatch(gate, /apiSecret|apiKey|KEY|SIGN/);
 });
 

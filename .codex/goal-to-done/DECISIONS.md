@@ -1,3 +1,11 @@
+# Readability and native LIVE integration — 2026-09-16
+
+- Replace the low-contrast light palette and 8–11px labels with dark high-contrast panels, 16–17px body/input text and a 14px minimum label size. Main navigation includes 实盘 directly.
+- Remove the old console renderer and entry; retain existing server-side accounts/history. Use the existing owner session and credential endpoints inside the redesigned page, with no automatic login modal.
+- All state-changing calls require an explicit user action and the original server authorization. Never enable LIVE during login, API save, navigation, tests or deployment. Use inline confirmation for ON, immediate user OFF, and no automatic mutation retries.
+- A UI upgrade does not connect experimental generated PAPER rules to Gate. Make the existing execution scope visible instead of implying unsupported copying.
+- Freeze all engine/execution/authentication/persistence/workflow authority source hashes in a regression test.
+
 # Forward implementation decision — 2026-09-16
 
 - User's latest request replaces historical-profit research with real-feed forward operation and a major default UI rebuild. Generate condition/response rules within a bounded grammar; do not promise unconstrained algorithm invention or month doubling.

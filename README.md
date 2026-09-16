@@ -1,3 +1,13 @@
+# Dark readable UI and native LIVE console — 2026-09-16
+
+Default navigation is now **总览 / 规则 / 模拟 / 实盘 / 演变 / 系统**. The entire surface is dark, body text is 16–17px and the smallest UI labels are 14px. There is no legacy-page launcher or alternate console.
+
+The native LIVE page preserves the existing owner account, Gate credentials and owner-only server endpoints. Login and logout never toggle LIVE. Enabling requires an explicit inline confirmation (no browser dialog); OFF and system-order cleanup use the existing server action. Account balances, positions, closed records and API management use the same new design. Unknown balances remain unknown; stale quotes never produce invented zero PnL.
+
+This is a UI/session integration only. All trading engines, forward storage, real-money execution, risk, credentials and authorization source files remain byte-identical to the deployed base, asserted by `tests/ui-authority-baseline.json`. New forward-generated rules remain PAPER-only. User switch control is not a new strategy-to-Gate bridge.
+
+`tests/operator-ui.test.ts` covers current-side PnL, missing values, one-shot owner requests and frozen authority hashes. Private snapshots are invalidated on login/logout and stale in-flight responses cannot restore them.
+
 # 哨兵 · 关系引擎 — 真实行情前向实验
 
 当前版本：`forward-relations-v1.0`。**真实 Gate USDT 永续行情 + 独立 1,000 USDT PAPER 账户**。这是功能上线，不是已经证明盈利或月复利翻倍。新规则绝不进入 Gate 私有下单路径。
@@ -13,7 +23,7 @@
 
 ## 页面与数据
 
-新版默认五页：**总览 / 规则 / 交易 / 演变 / 系统**。启动时明确显示数据积累，不预置规则、图表或成功订单。旧账户与所有者管理由“系统”页进入；原凭据、LIVE开关选择、历史和已有仓位保护不改。旧五行情系统不再新开仓，旧账户不是新实验成绩的一部分。
+新版默认六页：**总览 / 规则 / 模拟 / 实盘 / 演变 / 系统**。启动时明确显示数据积累，不预置规则、图表或成功订单。所有者与实盘管理直接由“实盘”页进入；旧页面入口已移除；原凭据、LIVE开关选择、历史和已有仓位保护不改。旧五行情系统不再新开仓，旧账户不是新实验成绩的一部分。
 
 学习状态、账户和去重信息使用校验分片原子持久化。规则与成交必须保存成功才发布；失败不自动清空本金。全部新样本、规则版本、成交和账户路径另外写入不可变归档，供后续分析和受测的软件优化。页面展示滚动记录，完整内容分页读取：
 

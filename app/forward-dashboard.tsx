@@ -1,17 +1,17 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { FEATURES, type Rule, type Trade, type forwardSummary } from "../lib/forward-relations.ts";
 type View = ReturnType<typeof forwardSummary>;
-type Tab = "overview" | "relations" | "orders" | "journal" | "settings";
+type Tab = "overview" | "relations" | "orders" | "live" | "journal" | "settings";
 const fmt = (v: number | null | undefined, digits=2) => typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:digits,maximumFractionDigits:digits}):"—";
 const signed = (v: number | null | undefined, digits=2) => typeof v==="number"?`${v>=0?"+":""}${fmt(v,digits)}`:"—";
 const time = (v?:number|null) => v?new Date(v).toLocaleString("zh-CN",{timeZone:"Asia/Vientiane",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}):"—";
 const condition = (r:Rule) => r.conditions.map(c=>`${FEATURES[c.feature]} ${c.op==="GE"?"≥":"≤"} ${fmt(c.threshold)}`).join(" ＋ ");
 
-export default function ForwardDashboard({data,healthy,feedAt,error,onLegacy}:{data:View|null;healthy:boolean;feedAt:number|null;error:string|null;onLegacy:()=>void}) {
+export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,liveEnabled}:{data:View|null;healthy:boolean;feedAt:number|null;error:string|null;livePanel:ReactNode;liveEnabled:boolean}) {
   const [tab,setTab]=useState<Tab>("overview"),[now,setNow]=useState(0),[showDormant,setShowDormant]=useState(false);
-  const scroll=useRef<Record<Tab,number>>({overview:0,relations:0,orders:0,journal:0,settings:0});
+  const scroll=useRef<Record<Tab,number>>({overview:0,relations:0,orders:0,live:0,journal:0,settings:0});
   useEffect(()=>{const id=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(id);},[]);
   useLayoutEffect(()=>{window.scrollTo({top:scroll.current[tab],behavior:"auto"});},[tab]);
   const select=(next:Tab)=>{scroll.current[tab]=window.scrollY;setTab(next);};
@@ -20,10 +20,10 @@ export default function ForwardDashboard({data,healthy,feedAt,error,onLegacy}:{d
   const stage=!data||!healthy?0:!data.measured?1:!active.length?2:data.positions.length?4:3;
   const stages=["接入行情","观察反应","生成规则","匹配机会","执行复盘"];
   const title=!data?"正在连接前向实验":!healthy?"行情连接恢复中":data.positions.length?"交易正在接受市场检验":active.length?"新的交易规则已生成":"先观察变化，再形成交易办法";
-  const nav:[Tab,string,string][]=[["overview","◉","总览"],["relations","⌘","规则"],["orders","⇄","交易"],["journal","≋","演变"],["settings","⊙","系统"]];
-  return <main className="fr-app">
+  const nav:[Tab,string,string][]=[["overview","◉","总览"],["relations","⌘","规则"],["orders","⇄","模拟"],["live","◈","实盘"],["journal","≋","演变"],["settings","⊙","系统"]];
+  return <main className="fr-app" data-ui-version="dark-live-v1">
     <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · 关系引擎</b><small>FORWARD LAB / 01</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
-    <div className="fr-subhead"><span>Gate USDT 永续 · 真实行情 / 模拟交易</span><span>LIVE 隔离</span></div>
+    <div className="fr-subhead"><span>Gate USDT 永续 · 关系引擎</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
 
     {tab==="overview"&&<>
       <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">市场在变化，规则随证据更新</span><h1>{title}</h1><p>{data?.latestReason??"读取已持久化的账户、规则和观测记录；连接前不显示虚构成交或收益。"}</p><div className="fr-hero-tags"><span>前向运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>无历史收益回填</span><span>新规则仅模拟</span></div></div>
@@ -55,7 +55,9 @@ export default function ForwardDashboard({data,healthy,feedAt,error,onLegacy}:{d
 
     {tab==="settings"&&<><PageTitle eyebrow="OPERATIONAL BOUNDARIES" title="运行设置与边界" text="本轮直接上线功能验证，不用历史收益门槛阻止前向运行；也不把实验上线等同于已有盈利能力。"/>
       <section className="fr-section"><Setting title="当前主系统" value={data?.version??"读取中"} text="旧策略已停止新开仓；已有旧仓位、历史账户、凭据与保护逻辑保留。"/><Setting title="月度研究目标" value="本金 × 2" text="以新账户实际净值检验，含浮动盈亏和成本。允许未达标，不制造成功记录。"/><Setting title="规则自动适应" value="在线运行" text="每5分钟整理新观测，按新完成的反应更新规则。固定语法不是无限自编程；需要新增表达能力时再进行受测的软件更新。"/><Setting title="执行权限" value="仅模拟" text="新生成规则与Gate下单路径物理分开，实盘开关不会因登录、部署或学习结果而开启。"/><Setting title="初始实验风险预算" value="权益随动" text={data?.boundaries.risk??"读取中"}/><Setting title="成本口径" value="显式假设" text={data?.cost.assumption??"读取中"}/><Setting title="连续性" value="持久化" text="重启恢复学习状态和账户。写入失败不提交新订单，不重置本金掩盖亏损。"/></section>
-      <section className="fr-section"><div className="fr-section-head"><div><h2>旧账户与所有者管理</h2><p>旧版只作归档与剩余仓位管理，不再产生新策略订单。</p></div></div><button className="fr-button" onClick={onLegacy}>进入旧账户 / 实盘管理 ↗</button></section></>}
+      <section className="fr-section"><div className="fr-section-head"><div><h2>所有者与实盘管理</h2><p>实盘账户、API和开关已整合到新版实盘页，沿用原有所有者权限。</p></div></div><button className="fr-button" onClick={()=>select("live")}>打开实盘控制台 ↗</button><p className="fr-note">历史账户记录保留在后台。本次只更新界面，不重置账户或学习状态。</p></section></>}
+
+    <div hidden={tab!=="live"}>{livePanel}</div>
 
     {(error||data?.storage.error)&&<aside className="fr-error" role="status"><b>运行提示</b><p>{data?.storage.error??error}</p><small>保留最近数据；不会把未保存的交易发布为已成交。</small></aside>}
     <footer className="fr-footer"><span>行情心跳 {time(feedAt)}</span><span>{data?.version??"FORWARD LAB"} · Asia/Vientiane</span></footer>
