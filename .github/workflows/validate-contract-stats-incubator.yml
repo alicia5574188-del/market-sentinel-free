@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "scripts/research-contract-stats-incubator.mjs"
+      - "scripts/research-contract-stats-crosssection.mjs"
       - ".github/workflows/validate-contract-stats-incubator.yml"
 permissions:
   contents: read
@@ -20,20 +21,26 @@ jobs:
         with:
           node-version: 22.16.0
       - name: Check syntax
-        run: node --check scripts/research-contract-stats-incubator.mjs
-      - name: Run contract stats incubator
+        run: |
+          node --check scripts/research-contract-stats-incubator.mjs
+          node --check scripts/research-contract-stats-crosssection.mjs
+      - name: Run absolute contract stats incubator
         run: node --max-old-space-size=4096 scripts/research-contract-stats-incubator.mjs
-      - name: Print focused result
+      - name: Print absolute diagnostics
         run: |
           jq '{decision,authority,data,splits,eventCount,eligibleCount,accepted,watch}' /tmp/contract-stats-incubator.json
           echo '--- eligible after discovery+validation ---'
           jq '.all | map(select(.eligible))' /tmp/contract-stats-incubator.json
-          echo '--- top train-stress candidates ---'
-          jq '.all | sort_by(-(.train.stress.meanNet // -999)) | .[:8] | map({family,horizon,eligible,train,evaluation:.splits.evaluation,holdout:.splits.holdout})' /tmp/contract-stats-incubator.json
+      - name: Run cross-sectional contract stats incubator
+        run: node --max-old-space-size=4096 scripts/research-contract-stats-crosssection.mjs
+      - name: Print cross-sectional diagnostics
+        run: jq '{decision,authority,splits,eventCount,eligibleCount,accepted,watch,near}' /tmp/contract-stats-crosssection.json
       - uses: actions/upload-artifact@v4
         with:
           name: contract-stats-incubator
           path: |
             /tmp/contract-stats-incubator.json
             /tmp/contract-stats-incubator-trades.json
+            /tmp/contract-stats-crosssection.json
+            /tmp/contract-stats-crosssection-trades.json
           retention-days: 7
