@@ -1,0 +1,111 @@
+name: Verify Calibration Production Read Only
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/verify-calibration-production.yml']
+permissions:
+  contents: read
+jobs:
+  receipt:
+    if: github.head_ref == 'verify/evidence-calibration-20260917'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Wait for reviewed main and saved non-reset policy through verified curl transport
+        run: |
+          set -euo pipefail
+          mkdir -p calibration-receipt
+          base='https://market-sentinel-free.alicia5574188.workers.dev'
+          for attempt in {1..60}; do
+            curl -fsS --retry 1 --max-time 15 "$base/__health" > calibration-receipt/health-first.json
+            if jq -e '.runtime.buildSha == "c43bf1de31f6742f37308d04b5f288e5bbc5b1ff" and .runtime.forward.policyVersion == "evidence-calibration-v1.1" and .runtime.forward.storage.error == null and .runtime.forward.storage.persistedAt > 0' calibration-receipt/health-first.json >/dev/null; then break; fi
+            sleep 5
+          done
+          jq -e '.runtime.buildSha == "c43bf1de31f6742f37308d04b5f288e5bbc5b1ff" and .runtime.forward.policyVersion == "evidence-calibration-v1.1" and .runtime.forward.storage.error == null' calibration-receipt/health-first.json >/dev/null
+          curl -fsS --retry 2 --max-time 20 "$base/api/forward/export" > calibration-receipt/export-first.json
+          sleep 12
+          curl -fsS --retry 2 --max-time 20 "$base/__health" > calibration-receipt/health-second.json
+          python - <<'PY'
+          import json,pathlib
+          root=pathlib.Path('calibration-receipt');h=json.loads((root/'health-first.json').read_text());h2=json.loads((root/'health-second.json').read_text());r=h2['runtime'];f=r['forward']
+          assert r['buildSha']=='c43bf1de31f6742f37308d04b5f288e5bbc5b1ff'
+          assert r['lastSuccessAt']>h['runtime']['lastSuccessAt']
+          assert r['liveMode']['requestedEnabled'] is False
+          assert f['liveEligible'] is False and r['legacyRetired'] is True
+          assert f['startedAt']==1789556791436 and f['initialEquity']==1000
+          assert f['policyUpgrade']['to']=='evidence-calibration-v1.1'
+          assert f['policyUpgrade']['resolved']>=51 and f['policyUpgrade']['balance']<1000
+          assert f['resolved']>=f['policyUpgrade']['resolved'] and f['feedbackCount']>0
+          assert f['storage']['error'] is None
+          for rule in f['rules']:
+              if rule['status']=='EXPERIMENTAL':
+                  assert rule['evidence']['policy']=='evidence-calibration-v1.1'
+                  assert len(rule['evidence']['symbols'])>0
+                  if rule['evidence']['scope']=='SINGLE_ASSET':assert len(rule['evidence']['symbols'])==1
+          history=f['history']
+          if len(history)==f['resolved']:
+              expected=1000+sum(t['netPnl'] for t in history)-sum(t['entryFee'] for t in f['positions'])
+              assert abs(expected-f['balance'])<1e-6,(expected,f['balance'])
+          original=next((t for t in history if t['id']=='ft-1789556791436-40'),None)
+          if original is not None:
+              assert abs(original['netPnl']-(-3.4474551585331015))<1e-10
+              assert original['quantity']==.62 and original['entryPrice']==2393.4082025000002
+          print(json.dumps({'buildSha':r['buildSha'],'heartbeatAdvances':True,'liveMode':r['liveMode'],'policy':f['policyVersion'],'upgrade':f['policyUpgrade'],'equity':f['equity'],'balance':f['balance'],'resolved':f['resolved'],'positions':len(f['positions']),'feedbackCount':f['feedbackCount'],'evidenceDiagnostics':f['evidenceDiagnostics']},ensure_ascii=False))
+          PY
+      - name: Install browser checker
+        run: python -m pip install playwright==1.55.0
+      - name: Verify deployed dark six-tab UI with no login or account mutations
+        run: |
+          python - <<'PY'
+          import pathlib,json,shutil
+          from playwright.sync_api import sync_playwright
+          root=pathlib.Path('calibration-receipt');checks=[];url='https://market-sentinel-free.alicia5574188.workers.dev'
+          chrome=shutil.which('google-chrome') or shutil.which('chromium') or shutil.which('chromium-browser');assert chrome
+          with sync_playwright() as p:
+              browser=p.chromium.launch(executable_path=chrome,headless=True,args=['--no-sandbox'])
+              for width in [320,393,768,1440]:
+                  page=browser.new_page(viewport={'width':width,'height':900});errors=[];dialogs=[];mutations=[]
+                  page.on('pageerror',lambda e:errors.append(str(e)))
+                  page.on('dialog',lambda d:(dialogs.append(d.message),d.dismiss()))
+                  page.on('request',lambda r:mutations.append(r.url) if r.method not in ['GET','HEAD','OPTIONS'] and r.url.startswith(url) else None)
+                  response=page.goto(url,wait_until='domcontentloaded',timeout=45000);assert response.status==200
+                  page.wait_for_selector('.fr-app',timeout=20000);page.wait_for_timeout(3000)
+                  assert page.get_by_text('evidence-calibration-v1.1',exact=True).first.is_visible()
+                  for tab in ['总览','规则','模拟','实盘','演变','系统']:
+                      page.locator('nav.fr-nav button').filter(has_text=tab).click();page.wait_for_timeout(400)
+                      assert not page.evaluate('document.documentElement.scrollWidth>innerWidth+1'),(width,tab)
+                      if tab=='规则':assert page.get_by_text('关系与成交校准',exact=True).is_visible()
+                      if width in [393,1440] and tab in ['规则','总览']:page.screenshot(path=str(root/f'{width}-{tab}.png'),full_page=True)
+                      checks.append({'width':width,'tab':tab,'overflow':False})
+                  assert not errors,errors
+                  assert not dialogs,dialogs
+                  assert not mutations,mutations
+                  page.close()
+              browser.close()
+          (root/'browser-results.json').write_text(json.dumps({'actualProduction':True,'checks':checks,'pageErrors':[],'dialogs':[],'productionMutations':[]},ensure_ascii=False,indent=2))
+          PY
+      - name: Verify another five-minute cycle commits successfully and retain current archives
+        run: |
+          set -euo pipefail
+          base='https://market-sentinel-free.alicia5574188.workers.dev'
+          first="$(jq -r '.runtime.forward.lastCycleAt' calibration-receipt/health-first.json)"
+          for attempt in {1..45}; do
+            curl -fsS --retry 1 --max-time 15 "$base/api/runtime" > calibration-receipt/runtime-final.json
+            if jq -e --argjson first "$first" '.forward.lastCycleAt > $first and .forward.storage.persistedAt >= .forward.lastCycleAt and .forward.storage.error == null' calibration-receipt/runtime-final.json >/dev/null; then break; fi
+            sleep 8
+          done
+          jq -e --argjson first "$first" '.forward.lastCycleAt > $first and .forward.storage.error == null and .forward.startedAt == 1789556791436 and .forward.policyVersion == "evidence-calibration-v1.1"' calibration-receipt/runtime-final.json >/dev/null
+          curl -fsS --retry 2 --max-time 20 "$base/api/forward/export" > calibration-receipt/export-final.json
+          curl -fsS --retry 2 --max-time 20 "$base/api/forward/archive" > calibration-receipt/archive-first-page.json
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > calibration-receipt/fetched-at.txt
+          jq '{buildSha,liveMode,forward:(.forward|{policyVersion,startedAt,policyUpgrade,lastCycleAt,lastFitAt,marketCount,observations,measured,resolved,feedbackCount,equity,balance,storage,latestReason,entryDiagnostics})}' calibration-receipt/runtime-final.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: calibration-production-${{ github.run_id }}
+          path: calibration-receipt/
+          retention-days: 7
+          if-no-files-found: error
