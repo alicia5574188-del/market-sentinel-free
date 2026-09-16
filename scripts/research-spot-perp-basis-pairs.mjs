@@ -22,27 +22,56 @@ const std = (a) => {
 };
 const monthKey = (t) => new Date(t * 1000).toISOString().slice(0, 7).replace('-', '');
 
-async function fetchSpotMonth(symbol, month, tries = 5) {
-  const url = `https://download.gatedata.org/spot/candlesticks_5m/${month}/${symbol}-${month}.csv.gz`;
+function parseSpotCsv(buf) {
+  const text = gunzipSync(buf).toString('utf8');
+  return text.split(/\r?\n/).filter(Boolean).flatMap((line) => {
+    const p = line.trim().split(',');
+    const time = Number(p[0]); const close = Number(p[2]); const open = Number(p[5]);
+    return time > 0 && close > 0 && open > 0 ? [{ time, open, close }] : [];
+  });
+}
+
+async function fetchArchive(url, tries = 5) {
   let last;
   for (let i = 0; i < tries; i += 1) {
     try {
-      const r = await fetch(url);
-      if (r.status === 404) return [];
+      const r = await fetch(url, { headers: { Accept: 'application/octet-stream' } });
+      if (r.status === 404) return null;
       const buf = Buffer.from(await r.arrayBuffer());
-      if (r.ok) {
-        const text = gunzipSync(buf).toString('utf8');
-        return text.split(/\r?\n/).filter(Boolean).flatMap((line) => {
-          const p = line.trim().split(',');
-          const time = Number(p[0]); const close = Number(p[2]); const open = Number(p[5]);
-          return time > 0 && close > 0 && open > 0 ? [{ time, open, close }] : [];
-        });
-      }
-      last = new Error(`${r.status} ${url}`);
+      if (r.ok) return buf;
+      last = new Error(`${r.status} ${url} ${buf.toString('utf8').slice(0, 180)}`);
+      if (r.status < 500 && r.status !== 429) break;
     } catch (e) { last = e; }
     await sleep(250 * (i + 1));
   }
   throw last ?? new Error(url);
+}
+
+function daysInMonth(month) {
+  const y = Number(month.slice(0, 4)); const m = Number(month.slice(4, 6));
+  return new Date(Date.UTC(y, m, 0)).getUTCDate();
+}
+
+async function fetchSpotMonth(symbol, month) {
+  const base = `https://download.gatedata.org/spot/candlesticks_5m/${month}`;
+  const monthlyUrl = `${base}/${symbol}-${month}.csv.gz`;
+  const monthly = await fetchArchive(monthlyUrl);
+  if (monthly) {
+    const rows = parseSpotCsv(monthly);
+    console.log(`spot-archive ${symbol} ${month} monthly ${rows.length}`);
+    return rows;
+  }
+
+  const rows = []; let files = 0;
+  for (let d = 1; d <= daysInMonth(month); d += 1) {
+    const day = String(d).padStart(2, '0');
+    const url = `${base}/${symbol}-${month}${day}.csv.gz`;
+    const buf = await fetchArchive(url);
+    if (!buf) continue;
+    rows.push(...parseSpotCsv(buf)); files += 1;
+  }
+  console.log(`spot-archive ${symbol} ${month} dailyFiles=${files} rows=${rows.length}`);
+  return rows;
 }
 
 const symbols = raw.datasets.map((d) => d.symbol);
@@ -65,19 +94,16 @@ const futuresMaps = new Map(raw.datasets.map((d) => [d.symbol, new Map(d.rows.ma
 const spotMaps = new Map([...spotRows].map(([s, rows]) => [s, new Map(rows.map((r) => [r.time, r]))]));
 const reference = raw.datasets.find((d) => d.symbol === 'BTC_USDT') ?? raw.datasets[0];
 const times = reference.rows.map((r) => Number(r.time));
-const timeIndex = new Map(times.map((t, i) => [t, i]));
 
 const activeSymbols = symbols.filter((symbol) => {
   const f = futuresBySymbol.get(symbol) ?? [];
   const s = spotRows.get(symbol) ?? [];
   if (f.length < times.length * 0.90 || s.length < times.length * 0.90) return false;
-  const sm = spotMaps.get(symbol);
-  const fm = futuresMaps.get(symbol);
-  let hits = 0;
-  for (let i = 0; i < times.length; i += Math.max(1, Math.floor(times.length / 1000))) {
-    if (sm.has(times[i]) && fm.has(times[i])) hits += 1;
-  }
-  return hits >= 850;
+  const sm = spotMaps.get(symbol); const fm = futuresMaps.get(symbol);
+  let hits = 0; let tests = 0;
+  const step = Math.max(1, Math.floor(times.length / 1000));
+  for (let i = 0; i < times.length; i += step) { tests += 1; if (sm.has(times[i]) && fm.has(times[i])) hits += 1; }
+  return hits / Math.max(tests, 1) >= 0.85;
 });
 if (activeSymbols.length < MIN_ACTIVE) throw new Error(`only ${activeSymbols.length} active spot/perp symbols`);
 
@@ -223,8 +249,8 @@ const report = {
   passes,
   hypothesis: 'trade only perpetuals: long contracts unusually cheap versus their own Gate spot and short contracts unusually rich versus their own Gate spot; equal-gross cross-sectional pair seeks basis normalization rather than outright market direction',
   data: { months: raw.months, futuresSymbols: symbols, activeSymbols, futuresSha256: raw.sha256,
-    spotSource: 'https://download.gatedata.org/spot/candlesticks_5m/YYYYMM/SYMBOL-YYYYMM.csv.gz' },
-  split: { discovery: raw.months.slice(0,6), validation: raw.months.slice(6,9), evaluation: raw.months.slice(9) },
+    spotSource: 'Gate historical spot candlesticks_5m archive; monthly path first, daily-file fallback on 404' },
+  split: { discovery: raw.months.slice(0, 6), validation: raw.months.slice(6, 9), evaluation: raw.months.slice(9) },
   protocol: { completed5mOnly: true, entry: 'next 5m futures open', onePairAtATime: true, sideGross: SIDE_GROSS,
     cost: { base: BASE_COST, stress: STRESS_COST, adverse: ADVERSE_COST },
     grid: { lookbacks: LOOKBACKS, holds: HOLDS, depths: DEPTHS, z: ZS, cadences: CADENCES, count: configs.length },
