@@ -1,3 +1,13 @@
+# Forward implementation decision — 2026-09-16
+
+- User's latest request replaces historical-profit research with real-feed forward operation and a major default UI rebuild. Generate condition/response rules within a bounded grammar; do not promise unconstrained algorithm invention or month doubling.
+- Keep the core version identifier unchanged because old constructor cutover uses it as a migration trigger. Version the new module separately and expose exact build SHA; do not reset legacy accounts during a presentation release.
+- New rules run a separate 1000U PAPER ledger and are physically absent from canonicalLivePortfolio. Owner intent, credentials and existing stops are preserved. Old regimes get allowNewEntries=false.
+- Market measurements mature only from post-start future bars and are not shadow trades. Entry/exit costs, rule revisions, missing data and all genuine simulated transactions persist atomically and are archived for later audits.
+- Maintain Top30 five-minute learning paths independent of rotating real-time book slots; prioritize open-position books. Persist in 80KiB digest-verified chunks plus immutable per-cycle archives using the existing non-alarm write reserve, no new D1 table or data purge.
+- Default UI is real-data-only. Empty/unready states show missing evidence, not fake opportunities. Existing owner/LIVE controls remain accessible in legacy management with no automatic login prompt.
+- Existing GitHub scheduled path deploys only when online buildSha differs from main; exact same-build jobs skip redeployment.
+
 # Candidate visibility decision — 2026-09-14
 
 - Distinguish three truths: `FORMING` means an incomplete frozen condition set and has no order authority; `BLOCKED` means the full directional signal formed but failed execution/account admission; `OPEN` means the independent system account admitted the trade.

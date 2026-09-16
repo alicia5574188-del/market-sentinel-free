@@ -1,3 +1,13 @@
+# Active release — forward market-relation generation / 2026-09-16
+
+The user explicitly authorizes direct implementation, major UI replacement and main deployment using the already working path. No further historical-profit search is a prerequisite. Run real market data through a PAPER-only generated-rule system and retain forward evidence for later optimization. Net monthly doubling is a goal, not a release claim. Earlier fixed-authority/turnover goals below are historical, not current requirements.
+
+- Stop all old frozen-regime new entries; preserve old account history, open-position protection, credentials and exact owner LIVE intent.
+- Create a separate 1,000U forward experiment, collect only post-start condition/response pairs, generate bounded conditions/directions/exit logic with immutable versions, and execute only with fresh validated quotes and integer lots.
+- No historical losing-strategy replay or resurrection, no shadow promotion, no autonomous Gate orders, no arbitrary self-modifying code.
+- Make process, uncertainty, cost assumptions, rule changes and realized/unrealized results visible in a new five-tab mobile UI.
+- Functional causality, accounting, serialization, stale/duplicate protection, browser layout and release checks precede main merge. Historical return metrics are not invented.
+
 # Active correction — truthful candidate visibility
 
 - Repair the five-system summary so every fully formed signal blocked by execution or account admission reaches the canonical PAPER candidate audit; never hard-code the audit to an empty list.

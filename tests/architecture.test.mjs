@@ -79,7 +79,7 @@ test("owner-authenticated live API stays isolated while the strategy arena UI is
   assert.match(page, /tabScroll\.current\[tab\] = window\.scrollY/);
   assert.match(page, /viewScroll\.current\[activeView\] = window\.scrollY/);
   assert.match(page, /五行情·独立账户/);
-  assert.match(layout, /五行情独立账户 · PAPER/);
+  assert.match(layout, /哨兵 · 关系引擎/);
   assert.doesNotMatch(layout, /V4自适应影子策略/);
   assert.match(page, /FIVE REGIME SYSTEMS · DIRECT AUTHORITY/);
   assert.match(page, /没有影子订单、连胜授权或近6笔门槛/);
@@ -339,7 +339,10 @@ test("cutover remains credential-bound and production gates enforce five direct 
   assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.canonicalAdmissionGate == false/g) ?? []).length, 2);
   assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.canonicalCapitalAgnostic == false/g) ?? []).length, 2);
   assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.liveSource == "CANONICAL_PAPER_NORMALIZED_NET"/g) ?? []).length, 2);
-  assert.equal((workflow.match(/grep -Fq '五行情·独立账户'/g) ?? []).length, 2);
+  assert.equal((workflow.match(/grep -Fq '哨兵 · 关系引擎'/g) ?? []).length, 2);
+  assert.match(workflow, /deployment-plan/);
+  assert.match(workflow, /runtime\.forward\.liveEligible == false/);
+  assert.match(workflow, /runtime\.legacyRetired == true/);
   assert.match(workflow, /Verify frozen V5 route authority/);
   assert.match(workflow, /Require crypto-only V5 architecture/);
   assert.doesNotMatch(workflow, /run: npm run research:v11/);

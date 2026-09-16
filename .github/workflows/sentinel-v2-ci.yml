@@ -7,8 +7,8 @@ on:
     branches: [main]
   workflow_dispatch:
   schedule:
-    # Temporary self-trigger: connector-authored main updates do not emit a
-    # push workflow. Restore the six-hour monitor after this release lands.
+    # Connector-authored main merges may not emit push. The read-only
+    # deployment-plan skips already deployed commits; no repeated redeploy.
     - cron: "*/5 * * * *"
 
 # This proposal is intentionally safe to review as a standalone file. The one-time
@@ -980,9 +980,30 @@ jobs:
   # A main push is deliberately boring and idempotent. It is allowed only after
   # the one-time cutover has already produced the exact minimal table set; this
   # prevents an accidental merge from using migrations apply as the first purge.
+  deployment-plan:
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      required: ${{ steps.plan.outputs.required }}
+    steps:
+      - id: plan
+        name: Skip an already deployed exact main commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(curl -sS --max-time 15 "$WORKER_BASE_URL/__health" || true)"
+          deployed="$(jq -r '.runtime.buildSha // empty' <<<"$body" 2>/dev/null || true)"
+          if [[ "$deployed" == "$GITHUB_SHA" ]]; then
+            echo "required=false" >> "$GITHUB_OUTPUT"
+            echo "Exact main commit already deployed; skipping redundant rebuild/redeploy."
+          else
+            echo "required=true" >> "$GITHUB_OUTPUT"
+          fi
+
   deploy:
-    if: always() && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule') && (needs.verify.result == 'success' || github.event_name == 'schedule')
-    needs: verify
+    if: always() && needs.deployment-plan.outputs.required == 'true' && github.ref == 'refs/heads/main' && (needs.verify.result == 'success' || github.event_name == 'schedule')
+    needs: [verify, deployment-plan]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -999,6 +1020,14 @@ jobs:
           node-version: 22.16.0
           cache: npm
           cache-dependency-path: release/package-lock.json
+      - name: Require the current main head and retain owner intent
+        working-directory: release
+        run: |
+          set -euo pipefail
+          current="$(git ls-remote origin refs/heads/main | cut -f1)"
+          [[ "$current" == "$GITHUB_SHA" ]]
+          curl -fsS --retry 2 --max-time 20 "$WORKER_BASE_URL/__health" > "$RUNNER_TEMP/owner-intent-before.json"
+          jq -e '(.runtime.liveMode.requestedEnabled | type) == "boolean"' "$RUNNER_TEMP/owner-intent-before.json" >/dev/null
       - working-directory: release
         run: npm ci
       - working-directory: release
@@ -1046,7 +1075,12 @@ jobs:
               (.runtime.liveMode.operational == false or .runtime.liveMode.requestedEnabled == true) and
               .runtime.strategyArena.version == 1 and .runtime.strategyArena.playbookCount == 12 and
               .runtime.strategyArena.catalogSize == 12 and
-              .runtime.strategyArena.shadowCount == 0 and .runtime.strategyArena.activeCount == 12 and
+              .runtime.strategyArena.shadowCount == 0 and .runtime.strategyArena.activeCount == 0 and
+              .runtime.legacyRetired == true and
+              .runtime.forward.version == "forward-relations-v1.0" and
+              .runtime.forward.liveEligible == false and
+              .runtime.forward.storage.persistedAt > 0 and
+              .runtime.forward.storage.error == null and
               (.runtime.strategyArena.engines | length) == 5 and
               ([.runtime.strategyArena.engines[].id] | sort) == ["BALANCED_ROTATION", "COMPRESSION", "DIRECTIONAL_TREND", "NON_TREND_EXPANSION", "SHOCK_TRANSITION"] and
               (all(.runtime.strategyArena.engines[];
@@ -1128,7 +1162,16 @@ jobs:
           page_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/main-page.html" -w '%{http_code}' \
             "$WORKER_BASE_URL/" || true)"
           [[ "$page_code" == "200" ]]
-          grep -Fq '五行情·独立账户' "$RUNNER_TEMP/main-page.html"
+          grep -Fq '哨兵 · 关系引擎' "$RUNNER_TEMP/main-page.html"
+          jq -e --arg sha "$GITHUB_SHA" '.runtime.buildSha == $sha' "$RUNNER_TEMP/main-health.json" >/dev/null
+          before="$(jq -r '.runtime.liveMode.requestedEnabled' "$RUNNER_TEMP/owner-intent-before.json")"
+          after="$(jq -r '.runtime.liveMode.requestedEnabled' "$RUNNER_TEMP/main-health.json")"
+          [[ "$before" == "$after" ]]
+          curl -fsS --retry 2 --max-time 20 "$WORKER_BASE_URL/api/forward/export" > "$RUNNER_TEMP/forward-export.json"
+          jq -e '.forward.liveEligible == false and .forward.storage.error == null and .forward.storage.persistedAt > 0' "$RUNNER_TEMP/forward-export.json" >/dev/null
+          curl -fsS --retry 2 --max-time 20 "$WORKER_BASE_URL/api/forward/archive" > "$RUNNER_TEMP/forward-archive.json"
+          jq -e '.immutable == true and (.items | length) > 0' "$RUNNER_TEMP/forward-archive.json" >/dev/null
+          echo "Forward PAPER is persisted; exact main build and unchanged owner LIVE intent verified."
           curl -fsS --max-time 15 "$WORKER_BASE_URL/api/history" \
             > "$RUNNER_TEMP/main-history.json"
           jq -e '.items | type == "array"' "$RUNNER_TEMP/main-history.json" >/dev/null
@@ -1210,7 +1253,12 @@ jobs:
             (.runtime.liveMode.operational == false or .runtime.liveMode.requestedEnabled == true) and
             .runtime.strategyArena.version == 1 and .runtime.strategyArena.playbookCount == 12 and
             .runtime.strategyArena.catalogSize == 12 and
-            .runtime.strategyArena.shadowCount == 0 and .runtime.strategyArena.activeCount == 12 and
+            .runtime.strategyArena.shadowCount == 0 and .runtime.strategyArena.activeCount == 0 and
+              .runtime.legacyRetired == true and
+              .runtime.forward.version == "forward-relations-v1.0" and
+              .runtime.forward.liveEligible == false and
+              .runtime.forward.storage.persistedAt > 0 and
+              .runtime.forward.storage.error == null and
             (.runtime.strategyArena.engines | length) == 5 and
             ([.runtime.strategyArena.engines[].id] | sort) == ["BALANCED_ROTATION", "COMPRESSION", "DIRECTIONAL_TREND", "NON_TREND_EXPANSION", "SHOCK_TRANSITION"] and
             (all(.runtime.strategyArena.engines[];
@@ -1278,7 +1326,7 @@ jobs:
           page_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/monitor-page.html" -w '%{http_code}' \
             "$WORKER_BASE_URL/" || true)"
           [[ "$page_code" == "200" ]]
-          grep -Fq '五行情·独立账户' "$RUNNER_TEMP/monitor-page.html"
+          grep -Fq '哨兵 · 关系引擎' "$RUNNER_TEMP/monitor-page.html"
           curl -fsS --max-time 15 "$WORKER_BASE_URL/api/history" \
             > "$RUNNER_TEMP/monitor-history.json"
           jq -e '.items | type == "array"' "$RUNNER_TEMP/monitor-history.json" >/dev/null

@@ -1,9 +1,9 @@
 {
-  "name": "五行情独立账户",
-  "short_name": "五行情",
+  "name": "哨兵关系引擎",
+  "short_name": "关系引擎",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0d100e",
-  "theme_color": "#0d100e",
+  "background_color": "#f3f4f0",
+  "theme_color": "#f3f4f0",
   "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
 }

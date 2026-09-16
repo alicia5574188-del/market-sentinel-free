@@ -442,12 +442,17 @@ export function advanceRegimePortfolio(input: { state: RegimePortfolioState; quo
 }
 
 export function evaluateRegimePortfolio(input: { state: RegimePortfolioState; hourly: Record<string, GateCandle[]>;
-  quotes: Record<string, ArenaQuote>; contracts: Record<string, RegimeContractMeta>; now: number }) {
+  quotes: Record<string, ArenaQuote>; contracts: Record<string, RegimeContractMeta>; now: number; allowNewEntries?: boolean }) {
   const state = advanceRegimePortfolio({ state: input.state, quotes: input.quotes, now: input.now });
   const synchronized = synchronizedFeatures(input.hourly);
   state.warmMarkets = REGIME_UNIVERSE.filter((symbol) => (input.hourly[symbol]?.length ?? 0) >= REGIME_HOURLY_REQUIRED_CANDLES).length;
   if (!synchronized || state.lastEvaluatedHour === synchronized.context.at) return state;
   state.currentContext = synchronized.context;
+  if (input.allowNewEntries === false) {
+    state.lastEvaluatedHour = synchronized.context.at;
+    state.routeChecks = [];
+    return state;
+  }
   const accountState = state.accounts[synchronized.context.regime];
   const strategies = REGIME_STRATEGIES.filter((row) => row.system === synchronized.context.regime);
   const candidates = synchronized.features.flatMap((feature) => strategies.flatMap((config) => {
