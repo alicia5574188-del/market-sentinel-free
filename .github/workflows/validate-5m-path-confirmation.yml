@@ -23,7 +23,7 @@ jobs:
       - name: Run 5m path confirmation study
         run: node --max-old-space-size=4096 scripts/research-5m-path-confirmation.mjs
       - name: Print focused result
-        run: jq '{decision,authority,goal,periods,cost,shockCount,pathEventCount,candidateCount,eligibleSleeveCount,eligibleSleeves,nearMiss,evaluation,promising}' /tmp/5m-path-confirmation-report.json
+        run: jq '{decision,authority,goal,periods,cost,shockCount,pathEventCount,candidateCount,eligibleSleeveCount,eligibleSleeves,nearMiss,nearMissEvaluation,evaluation,promising}' /tmp/5m-path-confirmation-report.json
       - uses: actions/upload-artifact@v4
         with:
           name: 5m-path-confirmation-report
