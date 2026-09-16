@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - 'scripts/research-spot-perp-basis-pairs-rest.mjs'
+      - 'scripts/research-spot-perp-basis-pairs.mjs'
       - 'scripts/fetch-gate-history.mjs'
       - '.github/workflows/research-spot-perp-basis-pairs.yml'
 
@@ -23,7 +23,7 @@ jobs:
         with:
           node-version: 22.16.0
       - name: Syntax check
-        run: node --check scripts/research-spot-perp-basis-pairs-rest.mjs
+        run: node --check scripts/research-spot-perp-basis-pairs.mjs
       - name: Fetch Gate futures 5m history
         env:
           RESEARCH_INTERVAL: 5m
@@ -38,7 +38,7 @@ jobs:
         env:
           RESEARCH_DATASET: /tmp/gate-history-basis-5m.json
           RESEARCH_OUTPUT: /tmp/spot-perp-basis-pairs.json
-        run: node --max-old-space-size=6144 scripts/research-spot-perp-basis-pairs-rest.mjs
+        run: node --max-old-space-size=6144 scripts/research-spot-perp-basis-pairs.mjs
       - name: Print compact result
         if: always()
         run: |
