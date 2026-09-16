@@ -4,6 +4,7 @@ on:
     branches: [main]
     paths:
       - "scripts/research-5m-path-confirmation.mjs"
+      - "scripts/research-5m-path-nearmiss-eval.mjs"
       - ".github/workflows/validate-5m-path-confirmation.yml"
 permissions:
   contents: read
@@ -18,12 +19,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.16.0
-      - name: Check syntax
-        run: node --check scripts/research-5m-path-confirmation.mjs
-      - name: Run 5m path confirmation study
-        run: node --max-old-space-size=4096 scripts/research-5m-path-confirmation.mjs
+      - name: Check syntax and patch anchors
+        run: |
+          node --check scripts/research-5m-path-confirmation.mjs
+          node --check scripts/research-5m-path-nearmiss-eval.mjs
+          PATCH_ONLY=1 node scripts/research-5m-path-nearmiss-eval.mjs
+          node --check /tmp/research-5m-path-confirmation-nearmiss-runtime.mjs
+      - name: Run frozen near-miss blind evaluation
+        run: node --max-old-space-size=4096 scripts/research-5m-path-nearmiss-eval.mjs
       - name: Print focused result
-        run: jq '{decision,authority,goal,periods,cost,shockCount,pathEventCount,candidateCount,eligibleSleeveCount,eligibleSleeves,nearMiss,nearMissEvaluation,evaluation,promising}' /tmp/5m-path-confirmation-report.json
+        run: jq '{decision,authority,goal,periods,cost,shockCount,pathEventCount,candidateCount,eligibleSleeveCount,nearMiss,nearMissEvaluation,evaluation}' /tmp/5m-path-confirmation-report.json
       - uses: actions/upload-artifact@v4
         with:
           name: 5m-path-confirmation-report
