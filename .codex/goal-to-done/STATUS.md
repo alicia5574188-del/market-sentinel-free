@@ -1,3 +1,7 @@
+# Evidence calibration candidate / 2026-09-17
+
+Implemented bounded cross-asset influence checks, separate own-symbol applicability, actual closed-PAPER forecast-error calibration, unchanged-evidence deduplication, repeated/correlated risk budget, marked-cost-aware sizing and non-reset policy upgrade. Native dark UI exposes scope, rejection reasons and upgrade baseline. See `research/FORWARD_EVIDENCE_REPAIR.md` for explicit drawbacks and limits. Functional tests and exact-head CI/production receipt determine release completion; this entry itself is not a deployment or profitability claim.
+
 # UI release candidate — dark readable native LIVE / 2026-09-16
 
 Implementation complete locally: redesigned dark typography and native six-tab navigation; owner-only account, positions, history and API controls integrated without the legacy renderer. 300 direct tests and 17 architecture/migration tests pass locally. Offline browser component fixtures cover 320/393/768/1440px, all six tabs, login without enabling, inline ON cancellation/confirmation, failed OFF, confirmed OFF and logout privacy; 28 checks pass with no dialogs, script errors or overflow. These are offline fixtures, not real account mutations. Final exact-head CI, deployment and read-only production receipt still pending at this snapshot.
