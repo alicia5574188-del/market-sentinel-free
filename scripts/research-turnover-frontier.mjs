@@ -26,8 +26,8 @@ function summarize(walk,key){
 
 for(const budget of budgets){
   const tmp=`/tmp/adaptive-frontier-${String(budget).replace('.','_')}.mjs`;
-  const patched=source.replace('ENTRY_BUDGET=2.5,MAX_EXPOSURE=1.5',`ENTRY_BUDGET=${budget},MAX_EXPOSURE=1.5`);
-  if(patched===source)throw new Error('ENTRY_BUDGET patch failed');
+  const patched=budget===2.5?source:source.replace('ENTRY_BUDGET=2.5,MAX_EXPOSURE=1.5',`ENTRY_BUDGET=${budget},MAX_EXPOSURE=1.5`);
+  if(budget!==2.5&&patched===source)throw new Error('ENTRY_BUDGET patch failed');
   writeFileSync(tmp,patched);
   execFileSync(process.execPath,['--max-old-space-size=4096',tmp],{cwd:process.cwd(),stdio:['ignore','pipe','inherit'],maxBuffer:64*1024*1024});
   const report=JSON.parse(readFileSync('/tmp/turnover-adaptive-router-report.json','utf8'));
