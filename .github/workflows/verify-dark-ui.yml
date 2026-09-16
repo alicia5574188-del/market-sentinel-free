@@ -1,0 +1,106 @@
+name: Verify Dark LIVE UI Production
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/verify-dark-ui.yml']
+permissions:
+  contents: read
+jobs:
+  receipt:
+    if: github.head_ref == 'verify/dark-live-ui-20260916'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Wait for exact main deployment using confirmed curl transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p receipt
+          base='https://market-sentinel-free.alicia5574188.workers.dev'
+          for attempt in {1..50}; do
+            curl -fsS --retry 1 --max-time 15 "$base/__health" > receipt/health-first.json
+            if jq -e '.runtime.buildSha == "860a45648abaceefbd3910925e72d20da3adaf50" and .runtime.forward.storage.error == null and .runtime.forward.storage.persistedAt > 0' receipt/health-first.json >/dev/null; then break; fi
+            sleep 5
+          done
+          jq -e '.runtime.buildSha == "860a45648abaceefbd3910925e72d20da3adaf50"' receipt/health-first.json >/dev/null
+          sleep 12
+          curl -fsS --retry 2 --max-time 20 "$base/__health" > receipt/health-second.json
+          curl -fsS --retry 2 --max-time 20 "$base/api/runtime" > receipt/runtime.json
+          curl -fsS --retry 2 --max-time 20 "$base/api/auth/session" > receipt/session.json
+          curl -sS --max-time 20 -o receipt/unauthorized-credentials.json -w '%{http_code}' "$base/api/live/credentials" > receipt/credential-http.txt
+          python - <<'PY'
+          import json,pathlib
+          p=pathlib.Path('receipt');a=json.loads((p/'health-first.json').read_text());b=json.loads((p/'health-second.json').read_text());r=json.loads((p/'runtime.json').read_text());f=r['forward']
+          assert b['runtime']['lastSuccessAt']>a['runtime']['lastSuccessAt']
+          assert r['buildSha']=='860a45648abaceefbd3910925e72d20da3adaf50'
+          assert f['startedAt']==1789556791436,'Forward account reset'
+          assert f['initialEquity']==1000 and f['observations']>=90
+          assert f['storage']['error'] is None and f['liveEligible'] is False
+          assert r['liveMode']['requestedEnabled'] is False
+          assert r.get('live') is None,'Private LIVE data exposed publicly'
+          assert (p/'credential-http.txt').read_text().strip()=='401'
+          session=json.loads((p/'session.json').read_text());assert session['configured'] is True and session['authenticated'] is False
+          assert abs(r['strategyArena']['portfolioEquity']-9859.603155626792)<1e-8
+          summary={'buildSha':r['buildSha'],'heartbeatAdvances':True,'liveMode':r['liveMode'],'forward':{k:f.get(k) for k in ['startedAt','initialEquity','equity','observations','measured','resolved','storage']},'privateDataNotPublic':True,'legacyEquityPreserved':True}
+          (p/'verified-summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2));print(json.dumps(summary,ensure_ascii=False))
+          PY
+      - name: Install isolated browser checker
+        run: python -m pip install playwright==1.55.0
+      - name: Check actual public UI at mobile, tablet and desktop widths without account mutations
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json,pathlib,shutil
+          from playwright.sync_api import sync_playwright
+          out=pathlib.Path('receipt');rows=[];base='https://market-sentinel-free.alicia5574188.workers.dev'
+          chrome=shutil.which('google-chrome') or shutil.which('chromium') or shutil.which('chromium-browser');assert chrome
+          with sync_playwright() as p:
+              browser=p.chromium.launch(executable_path=chrome,headless=True,args=['--no-sandbox'])
+              for width in [320,393,768,1440]:
+                  page=browser.new_page(viewport={'width':width,'height':900});errors=[];dialogs=[];mutations=[]
+                  page.on('pageerror',lambda e:errors.append(str(e)))
+                  page.on('dialog',lambda d:(dialogs.append(d.message),d.dismiss()))
+                  page.on('request',lambda r:mutations.append(r.method+' '+r.url) if '/api/' in r.url and r.method not in ['GET','HEAD','OPTIONS'] else None)
+                  response=page.goto(base,wait_until='domcontentloaded',timeout=45000);assert response and response.status==200
+                  page.wait_for_selector('[data-ui-version="dark-live-v1"]',timeout=20000);page.wait_for_timeout(2500)
+                  assert page.evaluate('getComputedStyle(document.body).backgroundColor')=='rgb(11, 17, 26)'
+                  assert page.locator('.fr-return').count()==0
+                  assert page.get_by_text('进入旧账户 / 实盘管理',exact=False).count()==0
+                  for tab in ['总览','规则','模拟','实盘','演变','系统']:
+                      page.locator('nav.fr-nav button').filter(has_text=tab).click();page.wait_for_timeout(350)
+                      assert page.locator('nav.fr-nav button[aria-current="page"] b').inner_text()==tab
+                      metrics=page.evaluate('''() => {
+                          let sizes=[];const w=document.createTreeWalker(document.querySelector('.fr-app'),NodeFilter.SHOW_TEXT);
+                          while(w.nextNode()){const n=w.currentNode,e=n.parentElement;if(!n.textContent.trim()||!e||['SCRIPT','STYLE'].includes(e.tagName))continue;
+                              if(!e.getClientRects().length||getComputedStyle(e).visibility==='hidden')continue;sizes.push(parseFloat(getComputedStyle(e).fontSize));}
+                          return {minTextPx:Math.min(...sizes),overflow:document.documentElement.scrollWidth>innerWidth+1};
+                      }''')
+                      assert metrics['minTextPx']>=14,(width,tab,metrics)
+                      assert not metrics['overflow'],(width,tab,metrics)
+                      if tab=='实盘':
+                          assert page.locator('[data-testid="native-live-console"]').is_visible()
+                          assert page.get_by_role('switch',name='实盘交易开关').is_disabled()
+                          assert page.locator('.fr-owner-login').is_visible()
+                      if width in [393,1440] and tab in ['总览','实盘']:page.screenshot(path=str(out/f'{width}-{tab}.png'),full_page=True)
+                      rows.append({'width':width,'tab':tab,**metrics})
+                  assert not errors,errors;assert not dialogs,dialogs;assert not mutations,mutations
+                  page.close()
+              browser.close()
+          report={'checks':rows,'allPassed':True,'dialogs':0,'pageErrors':0,'productionMutations':0,'ownerSwitchRequiresAuthentication':True}
+          (out/'browser-results.json').write_text(json.dumps(report,ensure_ascii=False,indent=2));print(json.dumps(report,ensure_ascii=False))
+          PY
+      - name: Save final unchanged switch state
+        if: always()
+        run: |
+          curl -fsS --retry 1 --max-time 15 'https://market-sentinel-free.alicia5574188.workers.dev/__health' > receipt/health-final.json || true
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > receipt/fetched-at.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dark-live-ui-production-${{ github.run_id }}
+          path: receipt/
+          retention-days: 7
+          if-no-files-found: error
