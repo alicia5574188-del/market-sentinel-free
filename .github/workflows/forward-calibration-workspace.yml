@@ -1,0 +1,30 @@
+name: Forward Calibration Workspace
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/forward-calibration-workspace.yml']
+permissions:
+  contents: read
+jobs:
+  workspace:
+    if: github.head_ref == 'fix/forward-evidence-calibration'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Export credential-free source and read-only current PAPER state
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/calibration-workspace
+          git archive HEAD -o /tmp/calibration-workspace/source.tar
+          curl -fsS --retry 2 --max-time 20 'https://market-sentinel-free.alicia5574188.workers.dev/api/forward/export' > /tmp/calibration-workspace/export-before.json
+          curl -fsS --retry 2 --max-time 20 'https://market-sentinel-free.alicia5574188.workers.dev/__health' > /tmp/calibration-workspace/health-before.json
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > /tmp/calibration-workspace/time.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: calibration-workspace-${{ github.run_id }}
+          path: /tmp/calibration-workspace/
+          retention-days: 7
