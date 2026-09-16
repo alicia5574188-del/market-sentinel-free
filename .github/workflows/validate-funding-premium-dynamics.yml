@@ -20,6 +20,15 @@ jobs:
           node-version: 22.16.0
       - name: Check syntax
         run: node --check scripts/research-funding-premium-dynamics.mjs
+      - name: Disable oversized raw-trade serialization
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('scripts/research-funding-premium-dynamics.mjs')
+          s=p.read_text()
+          s=s.replace("writeFileSync('/tmp/funding-premium-dynamics-trades.json',JSON.stringify(allTrades));","")
+          p.write_text(s)
+          PY
       - name: Run funding premium dynamics audit
         run: node --max-old-space-size=4096 scripts/research-funding-premium-dynamics.mjs
       - name: Print focused result
@@ -27,7 +36,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: funding-premium-dynamics
-          path: |
-            /tmp/funding-premium-dynamics.json
-            /tmp/funding-premium-dynamics-trades.json
+          path: /tmp/funding-premium-dynamics.json
           retention-days: 7
