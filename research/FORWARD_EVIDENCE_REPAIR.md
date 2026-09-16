@@ -1,0 +1,28 @@
+# Forward evidence repair — 2026-09-17
+
+User authorizes deployment of targeted fixes after considering expected benefit, failure modes and continuity. Monthly compounding to 2x remains an unproven research objective. This release does not change LIVE authority, credentials, account identity or the dark/native LIVE UI.
+
+## Why a change is warranted
+
+User-provided forward snapshot exportedAt1789599435917 contains48 closed and4 open PAPER orders, equity943.9077694430488. Exact closed-ledger accounting:15m14 orders net-53.98125765451608;60m34 orders net+1.683064697429895. Those are observed outcomes, not proof that deleting one layer yields the other layer's same future account path. The original pooled60m condition feature1<=-0.49 can change from positive to negative when one BULLA observation is removed. No permanent symbol/horizon blacklist or parameter-profit search is justified by that one segment.
+
+## Frozen mechanism changes
+
+1. Influence-bounded, time/symbol-balanced condition statistics; cross-market evidence must remain positive after removing each constituent and preserve time support. A shared rule cannot apply to an unseen or contradicting symbol. Single-coin rules remain possible but apply only to that coin. At most two local coins per horizon are nominated from EARLIER observations; only one local candidate is retained, avoiding an unbounded30-coin rule sweep. Threshold/exit grammar remains bounded and multi-comparison selection bias still exists.
+2. Actually CLOSED PAPER net outcomes calibrate forecast error by stable condition family, not mutable rule id. Same-time correlated copies form one group. Feedback is a192-row/24-hour bounded buffer, shrunk with four prior groups and6-hour decay; positive past PnL does not boost leverage. Known old outcomes seed feedback only, never new trades or fake training profits. Calibration affects ranking and fresh entry acceptance immediately; it does not claim to reconstruct a counterfactual optimal exit.
+3. Entry checks deduct favorable price movement since the observation and current spread. Large adverse movement invalidates context rather than manufacturing a bargain. Net-edge-to-cost/uncertainty scales risk up to the existing1.5% ceiling. The existing10% total/6.5% same-side/4x gross maxima remain; a conservative3% same-side/same-horizon bucket restrains repeated common exposure. This is a risk proxy, not a learned correlation model. Minimum notional5% equity and minimum25% of intended allocation remove residue orders; integer lots never round risk upward. Entry marking costs are reserved when sizing caps.
+4. Identical evidence cannot mint another rule version or extend its lifetime. Changing thresholds/version cannot reset a same-symbol/family entry window. New observation/feedback is needed for a new rule-evidence revision. Evidence continues while entry is rejected; no shadow streak/promotion or forced direction reversal.
+5. Keep storage schema/version/prefix v1 unchanged; record a separate evidence-calibration-v1.1 policy marker and upgrade equity/resolved/open-position baseline. No balance reset, history deletion, historical relabeling or widening of existing stops. Existing positions retain original rules. Feedback/source digests are bounded; oversized archive batches are partitioned without dropping rows and remain in the same atomic commit. Worker cadence, provider calls, D1 and LIVE modules remain byte-identical.
+
+## Side effects and limits considered BEFORE release
+
+- Robustness can miss a genuine early single-event opportunity; own-coin evidence is a limited alternative, not a guarantee of coverage. Trade count will probably decrease; no daily count forecast is claimed.
+- A real regime change can make old negative execution residuals irrelevant. Shrinkage, bounded lookback and decay avoid permanent lockout; strong new evidence can overcome it. Some lag and false rejection remain.
+- Group risk can restrict two genuinely different ideas with the same side/horizon. This deliberate conservative proxy can reduce both gains and losses. It does not force-close existing positions.
+- More observations do not guarantee better rules. A few groups and repeated expression selection remain susceptible to noise. Single-asset nomination and fixed search budget limit, but do not eliminate, overfitting.
+- Correcting these defects does not demonstrate positive expected net return or monthly doubling. The supplied snapshots are regression fixtures already inspected, NOT blind data or a profitable counterfactual replay.
+- Fees/slippage/funding stay explicit PAPER assumptions; no claim of Gate fill parity or exchange-liquidation reconstruction. LIVE intent remains with owner and is never enabled by this deployment.
+
+## Acceptance
+
+Functional tests cover both long/short common relationships, valid local relationships, outlier rejection, non-applicable symbols, future/duplicate data, correlated feedback, negative-residual correction and decay, no fee double count, stale/sequence quote handling, threshold-independent repeat suppression, marked-risk caps, meaningful lots, unchanged-evidence dedup, known-loss migration, frozen old positions, restart/serialization and large immutable archive packets. Performance is measured with bounded datasets; no extra provider request or per-snapshot D1 write is introduced. Final production health/receipt is required after reviewed-main deployment.

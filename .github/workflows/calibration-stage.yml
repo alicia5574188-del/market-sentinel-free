@@ -1,0 +1,89 @@
+name: Verify Forward Calibration Release
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/calibration-edit-core.py'
+      - 'scripts/calibration-edit-other.py'
+      - '.github/workflows/calibration-stage.yml'
+permissions:
+  contents: write
+jobs:
+  stage:
+    if: github.head_ref == 'fix/forward-evidence-calibration' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Apply exact checksum-guarded tested changes
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/calibration-verification
+          python scripts/calibration-edit-core.py
+          python scripts/calibration-edit-other.py
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          expected={
+            'lib/forward-evidence.ts':'d97207cfb0994cd499e1e1480c5ad8613ab31b52b6593333372015a6df169c3b',
+            'tests/forward-evidence.test.ts':'5a37d7962ff8faba8df93f9bc52002067b21101f282500a5d894b053bdbb38b8',
+            'research/FORWARD_EVIDENCE_REPAIR.md':'c81adb6e61ee2217598828bda4827f8477115d0c452cbc9a130bb238eaff8d1e'}
+          for name,digest in expected.items():
+              p=Path(name);raw=p.read_bytes()
+              candidates=[raw,raw[:-1] if raw.endswith(b'\n') else raw]
+              result=next((v for v in candidates if hashlib.sha256(v).hexdigest()==digest),None)
+              assert result is not None, 'Source mismatch: '+name
+              p.write_bytes(result)
+              print('verified',name,digest)
+          PY
+      - name: Remove temporary transport only
+        run: git rm scripts/calibration-edit-core.py scripts/calibration-edit-other.py .github/workflows/calibration-stage.yml .github/workflows/forward-calibration-workspace.yml
+      - name: Independently verify causality, accounting, existing protection and release
+        run: |
+          set -euo pipefail
+          npm ci 2>&1 | tee /tmp/calibration-verification/install.log
+          npm run test:direct 2>&1 | tee /tmp/calibration-verification/direct.log
+          npm test 2>&1 | tee /tmp/calibration-verification/build-tests.log
+          npm run typecheck 2>&1 | tee /tmp/calibration-verification/typecheck.log
+          npm run lint 2>&1 | tee /tmp/calibration-verification/lint.log
+          npx wrangler deploy --dry-run --config dist/server/wrangler.json 2>&1 | tee /tmp/calibration-verification/dry-run.log
+          git diff --check
+          git add -A
+          git diff --cached --check
+      - name: Save verified content objects only; no ref movement or deployment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs=require('fs'),cp=require('child_process'),crypto=require('crypto');
+            const {owner,repo}=context.repo;
+            const parent=context.payload.pull_request.head.sha,branch=context.payload.pull_request.head.ref;
+            const current=await github.rest.repos.getBranch({owner,repo,branch});
+            if(current.data.commit.sha!==parent)throw new Error('Head changed during verification');
+            const base=await github.rest.git.getCommit({owner,repo,commit_sha:parent});
+            const paths=cp.execFileSync('git',['diff','--cached','--name-only','-z']).toString().split('\0').filter(Boolean);
+            const tree=[],hashes={};
+            for(const path of paths){
+              if(!fs.existsSync(path)){tree.push({path,mode:'100644',type:'blob',sha:null});continue;}
+              const bytes=fs.readFileSync(path);
+              const blob=await github.rest.git.createBlob({owner,repo,content:bytes.toString('base64'),encoding:'base64'});
+              const expected=crypto.createHash('sha1').update(Buffer.concat([Buffer.from('blob '+bytes.length+'\0'),bytes])).digest('hex');
+              if(blob.data.sha!==expected)throw new Error('Blob mismatch: '+path);
+              tree.push({path,mode:'100644',type:'blob',sha:blob.data.sha});
+              hashes[path]=crypto.createHash('sha256').update(bytes).digest('hex');
+            }
+            const result={parent,baseTree:base.data.tree.sha,tree,hashes,runId:context.runId,branchUnchanged:true,productionUnchanged:true};
+            fs.writeFileSync('/tmp/calibration-verification/verified-tree-elements.json',JSON.stringify(result,null,2));
+            console.log(JSON.stringify(result));
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: calibration-verified-${{ github.run_id }}
+          path: /tmp/calibration-verification/
+          retention-days: 7
+          if-no-files-found: error
