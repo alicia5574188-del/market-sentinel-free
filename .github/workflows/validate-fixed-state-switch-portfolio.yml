@@ -1,0 +1,33 @@
+name: Validate Fixed State Switch Portfolio
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-fixed-state-switch-portfolio.mjs"
+      - ".github/workflows/validate-fixed-state-switch-portfolio.yml"
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Check syntax
+        run: node --check scripts/research-fixed-state-switch-portfolio.mjs
+      - name: Run fixed state-switch portfolio
+        run: node scripts/research-fixed-state-switch-portfolio.mjs
+      - name: Print focused result
+        if: always()
+        run: |
+          test -f /tmp/fixed-state-switch-portfolio-report.json && node -e "const r=require('/tmp/fixed-state-switch-portfolio-report.json'); console.log(JSON.stringify({decision:r.decision,activeSymbols:r.data?.activeSymbols?.length,candidateCount:r.candidateCount,calibration:r.calibration&&{avgMonthReturn:r.calibration.avgMonthReturn,positiveMonths:r.calibration.positiveMonths,monthsAtLeast5pct:r.calibration.monthsAtLeast5pct,avgTradesPerDay:r.calibration.avgTradesPerDay,totalCompounded:r.calibration.totalCompounded,maxDD:r.calibration.maxDD},validation:r.validation&&{avgMonthReturn:r.validation.avgMonthReturn,positiveMonths:r.validation.positiveMonths,monthsAtLeast5pct:r.validation.monthsAtLeast5pct,avgTradesPerDay:r.validation.avgTradesPerDay,totalCompounded:r.validation.totalCompounded,maxDD:r.validation.maxDD},validationStress:r.validationStress&&{avgMonthReturn:r.validationStress.avgMonthReturn,positiveMonths:r.validationStress.positiveMonths,totalCompounded:r.validationStress.totalCompounded,maxDD:r.validationStress.maxDD}},null,2))" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fixed-state-switch-portfolio-report
+          path: /tmp/fixed-state-switch-portfolio-report.json
+          if-no-files-found: warn
+          retention-days: 7
