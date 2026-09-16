@@ -1,4 +1,5 @@
 name: Validate Contract Stats Incubator
+# Research-only validation; never grants deployment authority.
 on:
   pull_request:
     branches: [main]
