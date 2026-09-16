@@ -1,0 +1,31 @@
+name: Validate 5m Online State Ranker
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-5m-online-state-ranker.mjs"
+      - ".github/workflows/validate-5m-online-state-ranker.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Check syntax
+        run: node --check scripts/research-5m-online-state-ranker.mjs
+      - name: Run daily-refit online ranker
+        run: node --max-old-space-size=4096 scripts/research-5m-online-state-ranker.mjs
+      - name: Print focused result
+        run: jq '{decision,authority,goal,period,cost,features,experts,policyCount,featureRows,evalDays,selectionCounts,base:{totalReturn:.base.totalReturn,maxDD:.base.maxDD,trades:.base.trades,avgTradesPerDay:.base.avgTradesPerDay,avgDailyTwoWayTurnover:.base.avgDailyTwoWayTurnover,daysAtLeast4_5x:.base.daysAtLeast4_5x,zeroTradeDays:.base.zeroTradeDays,meanTradeNet:.base.meanTradeNet,pf:.base.pf,fullMonths:.base.fullMonths,avgFullMonthReturn:.base.avgFullMonthReturn,monthsAtLeast5pct:.base.monthsAtLeast5pct,positiveFullMonths:.base.positiveFullMonths,monthly:.base.monthly},stress:{totalReturn:.stress.totalReturn,maxDD:.stress.maxDD,meanTradeNet:.stress.meanTradeNet,pf:.stress.pf,avgFullMonthReturn:.stress.avgFullMonthReturn,monthly:.stress.monthly},meetsTarget,promising}' /tmp/5m-online-state-ranker-report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 5m-online-state-ranker-report
+          path: /tmp/5m-online-state-ranker-report.json
+          retention-days: 7
