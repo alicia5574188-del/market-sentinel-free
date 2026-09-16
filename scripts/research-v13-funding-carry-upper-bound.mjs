@@ -10,10 +10,12 @@ if (symbols.length < 8 || months.length < 9) throw new Error("insufficient candl
 
 const BASE_COST = 0.00165;
 const STRESS_COST = 0.0027;
-const SIDE_GROSS = 5 / 12; // with three funding windows/day => 5x two-way turnover/day
+const SIDE_GROSS = 5 / 12; // three settlement windows/day => ~5x two-way turnover/day
 const minMarkets = Math.max(8, Math.ceil(symbols.length * 0.7));
 const candleMaps = new Map(datasets.map((dataset) => [dataset.symbol,
   new Map(dataset.rows.map((row) => [Number(row.time), Number(row.open)]))]));
+const normalizeSeconds = (time) => time > 1e12 ? time / 1000 : time;
+const fundingSlot = (time) => Math.round(normalizeSeconds(time) / 300) * 300;
 
 async function fetchFunding(symbol, month) {
   const url = `https://download.gatedata.org/futures_usdt/funding_applies/${month}/${symbol}-${month}.csv.gz`;
@@ -23,8 +25,8 @@ async function fetchFunding(symbol, month) {
   if (!text) return [];
   return text.split("\n").flatMap((line) => {
     const [timeRaw, rateRaw] = line.trim().split(",");
-    const time = Number(timeRaw); const rate = Number(rateRaw);
-    return Number.isFinite(time) && Number.isFinite(rate) ? [{ time: Math.floor(time), rate }] : [];
+    const rawTime = Number(timeRaw); const rate = Number(rateRaw);
+    return Number.isFinite(rawTime) && Number.isFinite(rate) ? [{ time: fundingSlot(rawTime), rate }] : [];
   });
 }
 
@@ -37,7 +39,7 @@ for (const symbol of symbols) {
         const bySymbol = fundingByTime.get(row.time) ?? new Map();
         bySymbol.set(symbol, row.rate); fundingByTime.set(row.time, bySymbol);
       }
-      console.log(`funding ${symbol} ${month} ok`);
+      console.log(`funding ${symbol} ${month} ${rows.length}`);
     } catch (error) {
       console.log(`funding ${symbol} ${month} skip ${error.message ?? error}`);
     }
@@ -57,17 +59,17 @@ const splits = {
 };
 const monthKey = (time) => new Date(time * 1000).toISOString().slice(0, 7).replace("-", "");
 const openAt = (symbol, time) => candleMaps.get(symbol)?.get(time) ?? NaN;
-const sign = (side) => side === "LONG" ? 1 : -1;
+const eventsByMonth = Object.fromEntries(months.map((month) => [month, events.filter(([time]) => monthKey(time) === month).length]));
 
 function simulate(config, selectedMonths, cost) {
   let equity = 1000; let peak = equity; let maxDD = 0; let wins = 0;
   let grossWin = 0; let grossLoss = 0; let trades = 0; let turnover = 0;
-  let fundingComponent = 0; let priceComponent = 0; let costComponent = 0;
+  let fundingComponent = 0; let priceComponent = 0; let costComponent = 0; let missingCandleEvents = 0;
   const monthly = new Map();
-  const firstTime = events.find(([t]) => selectedMonths.has(monthKey(t)))?.[0];
-  const lastTime = [...events].reverse().find(([t]) => selectedMonths.has(monthKey(t)))?.[0];
-  for (const [time, ratesMap] of events) {
-    const mk = monthKey(time); if (!selectedMonths.has(mk)) continue;
+  const scopedEvents = events.filter(([t]) => selectedMonths.has(monthKey(t)));
+  const firstTime = scopedEvents[0]?.[0]; const lastTime = scopedEvents.at(-1)?.[0];
+  for (const [time, ratesMap] of scopedEvents) {
+    const mk = monthKey(time);
     const ranked = [...ratesMap.entries()].sort((a, b) => a[1] - b[1]);
     if (ranked.length < config.depth * 2) continue;
     const lows = ranked.slice(0, config.depth);
@@ -75,6 +77,9 @@ function simulate(config, selectedMonths, cost) {
     const lowMean = lows.reduce((s, x) => s + x[1], 0) / lows.length;
     const highMean = highs.reduce((s, x) => s + x[1], 0) / highs.length;
     if ((highMean - lowMean) * 10_000 < config.minSpreadBp) continue;
+    // Funding timestamps can contain exchange-side second offsets. Archive rows are
+    // clustered to the nearest completed 5m settlement slot above, so these are
+    // genuine candle opens before/after that settlement slot.
     const entryTime = time - config.preMinutes * 60;
     const exitTime = time + config.postMinutes * 60;
     const legs = [
@@ -92,7 +97,7 @@ function simulate(config, selectedMonths, cost) {
       eventFunding += weight * fundingRet;
       eventReturn += weight * (priceRet + fundingRet - cost);
     }
-    if (!valid) continue;
+    if (!valid) { missingCandleEvents += 1; continue; }
     const before = equity; const pnl = before * eventReturn; equity += pnl;
     trades += 1; turnover += 4 * SIDE_GROSS;
     fundingComponent += eventFunding; priceComponent += eventPrice; costComponent += 2 * SIDE_GROSS * cost;
@@ -105,7 +110,7 @@ function simulate(config, selectedMonths, cost) {
   const monthRows = [...monthly.entries()].map(([month, row]) => ({ month, return: row.end / row.start - 1, trades: row.trades,
     turnoverPerDay: row.turnover / Math.max(1, Number(new Date(Date.UTC(Number(month.slice(0,4)), Number(month.slice(4,6)), 0)).getUTCDate())) }));
   const avgMonth = monthRows.length ? monthRows.reduce((s, x) => s + x.return, 0) / monthRows.length : -1;
-  return { trades, days: Number(days.toFixed(2)), eventsPerDay: Number((trades / days).toFixed(3)),
+  return { trades, missingCandleEvents, days: Number(days.toFixed(2)), eventsPerDay: Number((trades / days).toFixed(3)),
     turnoverPerDay: Number((turnover / days).toFixed(3)), returnPct: Number(((equity / 1000 - 1) * 100).toFixed(3)),
     avgMonthPct: Number((avgMonth * 100).toFixed(3)), positiveMonths: monthRows.filter((x) => x.return > 0).length,
     months: monthRows.length, winRatePct: trades ? Number((wins / trades * 100).toFixed(2)) : 0,
@@ -144,7 +149,7 @@ const result = {
   research: "V13_FUNDING_CARRY_ORACLE_UPPER_BOUND",
   importantBias: "Uses the ACTUAL funding rate applied at settlement to choose the long/short pair before settlement. This is intentionally impossible foresight and therefore an optimistic economic upper bound, not a causal strategy.",
   source: { candles: raw.source, candleSha256: raw.sha256, funding: "Gate official futures_usdt/funding_applies monthly archive" },
-  symbols, months, synchronizedFundingEvents: events.length,
+  symbols, months, synchronizedFundingEvents: events.length, eventsByMonth,
   assumptions: { sideGrossFraction: SIDE_GROSS, grossExposureDuringWindow: 2 * SIDE_GROSS,
     twoWayTurnoverPerFundingEvent: 4 * SIDE_GROSS, baseRoundTripCostPerLeg: BASE_COST,
     stressRoundTripCostPerLeg: STRESS_COST, targetTurnoverPerDay: 5 },
