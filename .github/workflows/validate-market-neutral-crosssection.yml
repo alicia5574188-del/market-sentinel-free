@@ -1,0 +1,31 @@
+name: Validate Market Neutral Cross Section
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-market-neutral-crosssection.mjs"
+      - ".github/workflows/validate-market-neutral-crosssection.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Check syntax
+        run: node --check scripts/research-market-neutral-crosssection.mjs
+      - name: Run beta-neutral cross-sectional research
+        run: node --max-old-space-size=4096 scripts/research-market-neutral-crosssection.mjs
+      - name: Print focused result
+        run: jq '{decision,goal,target,method,cost,universePolicy,configCount,summary,walkForward,usable}' /tmp/market-neutral-crosssection-report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: market-neutral-crosssection-report
+          path: /tmp/market-neutral-crosssection-report.json
+          retention-days: 7
