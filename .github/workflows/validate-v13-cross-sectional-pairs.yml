@@ -1,0 +1,32 @@
+name: Validate V13 Cross Sectional Pairs
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-v13-cross-sectional-pairs.mjs"
+      - "scripts/fetch-gate-history.mjs"
+      - ".github/workflows/validate-v13-cross-sectional-pairs.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Fetch Gate official 5m history
+        run: RESEARCH_DATASET=/tmp/gate-history-v13.json node scripts/fetch-gate-history.mjs
+      - name: Run V13 cross-sectional pair research
+        run: RESEARCH_DATASET=/tmp/gate-history-v13.json node scripts/research-v13-cross-sectional-pairs.mjs | tee /tmp/v13-pair-result.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v13-cross-sectional-pair-result
+          path: /tmp/v13-pair-result.txt
+          if-no-files-found: warn
+          retention-days: 7
