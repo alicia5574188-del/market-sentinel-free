@@ -1,0 +1,51 @@
+name: Probe Gate 1h History
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/probe-gate-1h-history.yml"
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Probe Gate 1h historical windows
+        shell: bash
+        run: |
+          node <<'NODE'
+          const { writeFileSync } = require('node:fs');
+          const BASE='https://api.gateio.ws/api/v4';
+          const H=3600;
+          const cases=[
+            ['2025-05', Date.UTC(2025,4,1)/1000, Date.UTC(2025,4,30)/1000-1],
+            ['2025-12', Date.UTC(2025,11,1)/1000, Date.UTC(2025,11,30)/1000-1],
+            ['2026-01', Date.UTC(2026,0,1)/1000, Date.UTC(2026,0,30)/1000-1],
+            ['2026-08', Date.UTC(2026,7,1)/1000, Date.UTC(2026,7,30)/1000-1],
+            ['recent-700h', Math.floor(Date.now()/1000)-700*H, Math.floor(Date.now()/1000)-1],
+          ];
+          async function one(label,from,to){
+            const url=`${BASE}/futures/usdt/candlesticks?contract=BTC_USDT&interval=1h&from=${from}&to=${to}`;
+            try {
+              const r=await fetch(url,{headers:{Accept:'application/json','X-Gate-Size-Decimal':'1'}});
+              const text=await r.text();
+              let body; try{body=JSON.parse(text)}catch{body=text}
+              return {label,from,to,hours:(to-from+1)/H,status:r.status,ok:r.ok,count:Array.isArray(body)?body.length:null,first:Array.isArray(body)&&body.length?(body[0]?.t??body[0]?.[0]??null):null,last:Array.isArray(body)&&body.length?(body.at(-1)?.t??body.at(-1)?.[0]??null):null,error:r.ok?null:body};
+            } catch(e) {
+              return {label,from,to,status:null,ok:false,count:null,error:String(e)};
+            }
+          }
+          const out=[];
+          for(const c of cases) out.push(await one(...c));
+          writeFileSync('/tmp/gate-1h-probe.json',JSON.stringify({generatedAt:new Date().toISOString(),results:out},null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gate-1h-history-probe
+          path: /tmp/gate-1h-probe.json
+          retention-days: 7
