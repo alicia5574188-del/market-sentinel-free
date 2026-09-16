@@ -1,0 +1,33 @@
+name: Validate Contract Stats Incubator
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-contract-stats-incubator.mjs"
+      - ".github/workflows/validate-contract-stats-incubator.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Check syntax
+        run: node --check scripts/research-contract-stats-incubator.mjs
+      - name: Run contract stats incubator
+        run: node --max-old-space-size=4096 scripts/research-contract-stats-incubator.mjs
+      - name: Print focused result
+        run: jq '{decision,authority,data,splits,eventCount,eligibleCount,accepted,watch}' /tmp/contract-stats-incubator.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: contract-stats-incubator
+          path: |
+            /tmp/contract-stats-incubator.json
+            /tmp/contract-stats-incubator-trades.json
+          retention-days: 7
