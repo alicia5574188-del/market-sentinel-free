@@ -1,0 +1,71 @@
+name: Verify LIVE Session Decimal PnL
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/live-session-stage.yml'
+      - 'scripts/live-session-apply.py'
+      - 'scripts/live-session-transfer-*.b64'
+permissions:
+  contents: write
+jobs:
+  stage:
+    if: github.head_ref == 'fix/live-session-decimal-pnl' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Apply verified source diff and remove temporary transfer files
+        run: |
+          python scripts/live-session-apply.py
+          git rm --ignore-unmatch scripts/live-session-transfer-1.b64 scripts/live-session-transfer-2.b64 scripts/live-session-apply.py .github/workflows/live-session-stage.yml .github/workflows/live-session-workspace.yml
+      - name: Test actual Worker with FakeGate only and verify unchanged strategy authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/live-session-verified
+          npm ci 2>&1 | tee /tmp/live-session-verified/install.log
+          npm run test:direct 2>&1 | tee /tmp/live-session-verified/direct.log
+          npm test 2>&1 | tee /tmp/live-session-verified/build-test.log
+          npm run typecheck 2>&1 | tee /tmp/live-session-verified/typecheck.log
+          npm run lint 2>&1 | tee /tmp/live-session-verified/lint.log
+          npx wrangler deploy --dry-run --config dist/server/wrangler.json 2>&1 | tee /tmp/live-session-verified/dry-run.log
+          git diff --check
+          git add -A
+          git diff --cached --check
+      - name: Public owner intent receipt only; never assume OFF or mutate
+        run: |
+          curl -fsS --retry 2 --max-time 20 'https://market-sentinel-free.alicia5574188.workers.dev/__health' > /tmp/live-session-verified/owner-before.json
+          jq '{build:.runtime.buildSha,owner:.runtime.liveMode}' /tmp/live-session-verified/owner-before.json
+      - name: Store verified blobs, not branch or production updates
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs=require('fs'),cp=require('child_process'),crypto=require('crypto');
+            const {owner,repo}=context.repo,parent=context.payload.pull_request.head.sha,branch=context.payload.pull_request.head.ref;
+            const current=await github.rest.repos.getBranch({owner,repo,branch});
+            if(current.data.commit.sha!==parent)throw new Error('Head changed during verification');
+            const base=await github.rest.git.getCommit({owner,repo,commit_sha:parent});
+            const names=cp.execFileSync('git',['diff','--cached','--name-only','-z']).toString().split('\0').filter(Boolean),tree=[],sha256={};
+            for(const path of names){
+              if(!fs.existsSync(path)){tree.push({path,mode:'100644',type:'blob',sha:null});continue;}
+              const bytes=fs.readFileSync(path),blob=await github.rest.git.createBlob({owner,repo,content:bytes.toString('base64'),encoding:'base64'});
+              const expected=crypto.createHash('sha1').update(Buffer.concat([Buffer.from('blob '+bytes.length+'\0'),bytes])).digest('hex');
+              if(blob.data.sha!==expected)throw new Error('Blob mismatch: '+path);
+              tree.push({path,mode:'100644',type:'blob',sha:blob.data.sha});sha256[path]=crypto.createHash('sha256').update(bytes).digest('hex');
+            }
+            const result={parent,baseTree:base.data.tree.sha,tree,sha256,runId:context.runId,branchRefUnchanged:true,productionUnchanged:true};
+            fs.writeFileSync('/tmp/live-session-verified/verified-tree.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result));
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-session-verified-${{ github.run_id }}
+          path: /tmp/live-session-verified/
+          retention-days: 7
+          if-no-files-found: warn
