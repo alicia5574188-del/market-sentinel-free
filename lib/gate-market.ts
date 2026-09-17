@@ -126,6 +126,10 @@ export type GateContract = {
   quanto_multiplier?: string;
   maintenance_rate?: string;
   leverage_max?: string;
+  enable_decimal?: boolean;
+  order_size_min?: string | number;
+  order_size_max?: string | number;
+  market_order_size_max?: string | number;
 };
 
 export async function fetchActiveContracts() {
@@ -148,6 +152,10 @@ export async function fetchActiveContracts() {
         quantoMultiplier: Number(contract?.quanto_multiplier ?? 1),
         maintenanceRate: Number(contract?.maintenance_rate ?? 0.005),
         leverageMax: Number(contract?.leverage_max ?? 50),
+        enableDecimal: typeof contract?.enable_decimal === "boolean" ? contract.enable_decimal : undefined,
+        orderSizeMin: contract?.order_size_min == null ? undefined : String(contract.order_size_min),
+        orderSizeMax: contract?.order_size_max == null ? undefined : String(contract.order_size_max),
+        marketOrderSizeMax: contract?.market_order_size_max == null ? undefined : String(contract.market_order_size_max),
         fundingRate: Number(row.funding_rate ?? 0),
         last: Number(row.last ?? 0),
         volume24hUsd: Number(row.volume_24h_usd ?? row.volume_24h_settle ?? 0),

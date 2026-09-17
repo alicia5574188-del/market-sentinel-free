@@ -203,7 +203,8 @@ test("retired systems remain isolated; only current PAPER can create new LIVE en
   assert.match(worker, /desiredPortfolio\s*=\s*this\.liveDesiredPortfolio/);
   assert.match(worker, /if\(!trade\.forwardSource\)continue/);
   assert.match(worker, /previousStrategyArena: retiredPreviousArena/);
-  assert.match(worker, /eligibleForLiveMirror/);
+  assert.match(worker, /sourceAfterEnable/);
+  assert.doesNotMatch(worker, /eligibleForLiveMirror/);
   assert.match(worker, /position\.currentStop = position\.parity\?lifecycle!\.trade!\.stopPrice:arenaProtectionStop/);
   assert.match(worker, /buildProportionalMirror\(\{source:trade\.forwardSource/);
   assert.match(worker, /strategyArena: retiredCurrentArena\(saved\.strategyArena\)/);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { OperatorRequestError, operatorRequest, numberText as num, signedText as signed, operatorTime as time,
+import { OperatorRequestError, operatorRequest, numberText as num, signedText as signed, operatorTime as time, contractText,
   holdingTime, livePositionMark, type AuthSession, type CredentialStatus, type CredentialVerification,
   type LivePosition, type LiveRuntime, type OperatorRuntime } from "../lib/operator-ui.ts";
 
@@ -87,13 +87,15 @@ export default function LiveConsole({auth,runtime,onSession,onLive,onRefresh}:Pr
         aria-checked={enabled} disabled={!canControl||Boolean(busy)||(!enabled&&!credential?.configured)}
         onClick={()=>enabled?setMode(false):setConfirmEnable(true)}><span/><b>{busy==="mode"?"核对中":enabled?"开启":"关闭"}</b></button>
       {confirmEnable&&auth?.authenticated&&!enabled&&<div className="fr-inline-confirm" role="group" aria-label="确认开启实盘">
-        <h3>确认开启当前模拟账户的实盘复制？</h3><p>开启后会复制当前仍有效的模拟持仓，并跟随后续开平仓；不会补开历史已平仓订单。按两账户权益比例分配资金，沿用源单杠杆和退出决定。真实成交价、费用和时间以Gate回报为准。</p>
+        <h3>确认仅跟随开启后新产生的模拟单？</h3><p>本次开启前已存在的模拟持仓不会补开。之后的新模拟单按两账户权益比例复制，沿用杠杆和退出决定。关闭再开启会建立新的跟随起点；实际数量、成交价和费用以Gate回报为准。</p>
         <div className="fr-action-row"><button className="fr-button" type="button" disabled={!canEnable} onClick={()=>setMode(true)}>确认开启实盘</button>
           <button className="fr-button secondary" type="button" disabled={Boolean(busy)} onClick={()=>setConfirmEnable(false)}>暂不开启</button></div></div>}
     </section>
     <div className="fr-live-source"><span aria-hidden="true">ⓘ</span><p><b>当前复制源：</b>当前新版模拟账户，不是旧版组合。订单ID、完整规则、保护价格和退出决定逐单关联；仅资金规模按权益比例换算。最小张数、拒单、部分成交或报价差异会明确显示，不冒充百分百成交。</p></div>
     <section className="fr-section"><div className="fr-section-head"><h2>模拟—实盘复制一致性</h2><span>{mirror?.connected?"当前源已接入":"等待源状态"}</span></div>
-      <div className="fr-three"><div><small>当前模拟源单</small><b>{num(mirror?.sourceCount,0)}</b></div><div><small>已核对对应持仓</small><b>{num(mirror?.copiedCount,0)}</b></div><div><small>待交易所确认</small><b>{num(mirror?.pendingCount,0)}</b></div></div>
+      <div className="fr-three"><div><small>当前模拟持仓</small><b>{num(mirror?.sourceCount,0)}</b></div><div><small>开启后可跟随源单</small><b>{num(mirror?.eligibleSourceCount,0)}</b></div><div><small>已核对实际持仓</small><b>{num(mirror?.copiedCount,0)}</b></div></div>
+      <div className="fr-three"><div><small>开启前旧单不跟随</small><b>{num(mirror?.excludedSourceCount,0)}</b></div><div><small>低于真实最低量</small><b>{num(mirror?.minimumSizeBlockedCount,0)}</b></div><div><small>待交易所确认</small><b>{num(mirror?.pendingCount,0)}</b></div></div>
+      <p className="fr-note">跟随起点 {time(mirror?.enabledAt)}。不补旧单；已有 {num(mirror?.managedBeforeEnableCount,0)} 笔实盘原仓继续管理。因此模拟总持仓数不一定等于实盘数；对开启后的订单逐单显示已复制、未成交或偏差，不用总数冒充完整复制。</p>
       <p className="fr-note">关闭时不新开仓并撤销系统入场挂单；已有仓位继续跟随源单退出并保留保护单。部署、登录、规则更新及暂时故障不会改变你的开关选择。</p>
       {auth?.authenticated&&mirror?.rows.filter(r=>r.status!=="COPIED").map(r=><p className="fr-note" key={r.sourceId}>{r.symbol} · {r.reason??r.status}</p>)}
     </section>
@@ -112,7 +114,7 @@ export default function LiveConsole({auth,runtime,onSession,onLive,onRefresh}:Pr
       {section==="account"&&<>
         <section className="fr-stats"><LiveStat title="实盘账户权益" value={`${num(live?.equity)} U`} detail="Gate余额＋已核对持仓浮盈"/>
           <LiveStat title="可用保证金" value={`${num(live?.available)} U`} detail="不以模拟本金替代"/>
-          <LiveStat title="持仓浮动盈亏" value={`${signed(floating)} U`} detail="新鲜退出报价估值，未扣平仓费用"/>
+          <LiveStat title="持仓浮动盈亏" value={`${signed(floating)} U`} detail={marks.some(m=>!m.fresh)?"Gate最近回报（等待更新）；不是最终净收益":"Gate持仓实际回报；不是最终净收益"}/>
           <LiveStat title="当前持仓" value={live?`${positions.length} 笔`:"—"} detail={`待执行 ${live?entries.length:"—"} 笔`}/></section>
         <section className="fr-section"><div className="fr-section-head"><h2>连接与权限</h2><button type="button" className="fr-text-button" onClick={onRefresh}>刷新状态 ↻</button></div>
           <div className="fr-setting"><div><h3>API 状态</h3><p>{credential?.keyHint??"密钥内容不会回显"}</p></div><b>{credential?credential.configured?"已保存":"未配置":"读取中"}</b></div>
@@ -133,7 +135,7 @@ export default function LiveConsole({auth,runtime,onSession,onLive,onRefresh}:Pr
         <section className="fr-section"><div className="fr-section-head"><h2>已平仓实盘记录</h2><span>关闭开关后仍可查看</span></div>
           {closed.length?<div className="fr-rule-grid">{closed.map(p=><LivePositionCard key={p.id} position={p} runtime={runtime} now={clock}/>)}</div>:<LiveEmpty title={live?"暂无已平仓实盘记录":"正在读取实盘记录"} text="仅展示服务器返回的真实账户记录，不拼接模拟成绩。"/>}</section>
         <section className="fr-section"><h2>执行与保护记录</h2><div className="fr-journal">{audits.map(e=><article key={e.id}><time>{time(e.observedAt)}</time><div><b>{e.symbol?.replace("_"," / ")??"实盘控制"} · {e.stage}</b><p>{e.reason}</p></div></article>)}</div>
-          {Object.values(live?.entrySkips??{}).map(e=>e&&<div key={e.planId} className="fr-error"><b>{e.symbol} · 未成交</b><p>{e.reason}</p></div>)}
+          {Object.values(live?.entrySkips??{}).map(e=>e&&<div key={e.planId} className="fr-error"><b>{e.symbol} · 未成交</b><p>{e.reason}</p>{e.sizing&&<p>比例目标 {contractText(e.sizing.targetContracts)} 张 / {num(e.sizing.targetNotional,4)} U；交易所最低 {contractText(e.sizing.minimumContracts)} 张 / {num(e.sizing.minimumNotional,4)} U。仅满足此单最低量所需实盘净值约 {num(e.sizing.requiredLiveEquity,4)} U，另需可用保证金；不会擅自补大。</p>}</div>)}
           {!audits.length&&<p className="fr-note">暂无执行事件。开仓、退出、拒单和保护原因会按实际记录显示。</p>}</section>
       </>}
       {section==="api"&&<section className="fr-section"><div className="fr-section-head"><div><small>API 管理</small><h2>Gate合约连接</h2></div><span>{credential?.configured?"已加密保存":"尚未配置"}</span></div>
@@ -157,11 +159,12 @@ function LiveEmpty({title,text}:{title:string;text:string}){return<div className
 function LivePositionCard({position:p,runtime,now}:{position:LivePosition;runtime:OperatorRuntime|null;now:number}){
   const open=p.status==="OPEN",mark=livePositionMark(p,runtime,now),pnl=open?mark.pnl:p.realizedPnl;
   return<article className="fr-trade"><header><div><small>{open?"持仓中":"已平仓"} · {p.side==="LONG"?"多单":"空单"}</small><h3>{p.symbol.replace("_"," / ")}</h3></div><strong className={pnl==null?"":pnl>=0?"fr-positive":"fr-negative"}>{signed(pnl)} U</strong></header>
-    <p className="fr-trade-rule">{open?mark.fresh?"按可执行侧报价估值，未扣平仓费用":"当前报价未就绪，不用入场价冒充最新盈亏":p.actualExitPriceVerified===false?"Gate确认已平仓，真实成交价/净收益待核对，不用模拟结果代替":"服务器记录；缺失的真实净收益不以模拟盈亏代替"}</p>
+    <p className="fr-trade-rule">{open?mark.pnl==null?"等待Gate持仓浮盈回报，不用模拟价或入场价代替":`${mark.fresh?"Gate实际浮盈浮亏":"Gate最近浮盈回报，正在更新"} · ${time(mark.at)}；不是扣除全部费用后的最终净收益`:p.actualExitPriceVerified===false?"Gate确认已平仓，真实成交价/净收益待核对，不用模拟结果代替":"服务器记录；缺失的真实净收益不以模拟盈亏代替"}</p>
+    {open&&<p className={mark.rate==null?"fr-note":mark.rate>=0?"fr-positive":"fr-negative"}>浮盈 / Gate保证金：{signed(mark.rate==null?null:mark.rate*100)}%{mark.margin==null?"（保证金回报缺失，不猜测百分比）":""}</p>}
     {p.parity&&<p className="fr-note">源单 {p.parity.sourceId} · 规则 {p.parity.sourceRuleId}<br/>固定比例 {num(p.parity.ratio,6)} · 目标名义额 {num(p.parity.targetNotional)} U · 源单杠杆 {num(p.parity.sourceLeverage,0)}×<br/>张数取整差额 {num(p.parity.roundingNotional,4)} U{p.parity.discrepancy?` · ${p.parity.discrepancy}`:""}</p>}
-    <dl><Pair label="入场价格" value={num(p.entryPrice,5)}/><Pair label={open?"最新退出报价":"出场价格"} value={num(open?mark.price:p.exitPrice,5)}/>
+    <dl><Pair label="入场价格" value={num(p.entryPrice,5)}/><Pair label={open?"Gate标记价格":"出场价格"} value={num(open?mark.price:p.exitPrice,5)}/>
       <Pair label="保护止损" value={num(p.stopPrice??p.currentStop,5)}/><Pair label="名义金额" value={`${num(p.notional)} U`}/>
-      <Pair label="实际保证金 / 杠杆" value={`${num(p.margin)} U / ${num(p.leverage,0)}×`}/><Pair label="张数" value={num(Math.abs(p.exchangeSize),0)}/>
+      <Pair label="保证金 / 杠杆" value={`${num(open?mark.margin:p.margin)} U / ${num(p.leverage,0)}×`}/><Pair label="实际合约数量" value={contractText(Math.abs(p.exchangeSize))}/>
       <Pair label="进场时间" value={time(p.entryAt)}/><Pair label="出场时间" value={open?"持仓中":time(p.exitAt)}/>
       <Pair label="持仓时长" value={holdingTime(p.entryAt,open?now:p.exitAt??0)}/></dl>
     {p.exitReason&&<p className="fr-trade-reason">退出原因：{p.exitReason}</p>}

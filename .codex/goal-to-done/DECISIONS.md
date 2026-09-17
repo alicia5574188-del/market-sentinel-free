@@ -1,3 +1,11 @@
+# LIVE session/size/PnL design — 2026-09-18
+
+- User explicitly rejects copying already-open PAPER positions on enable; durable time/account/ID activation replaces the previous catch-up policy. Repeated ON preserves it, OFF-to-ON starts another; existing bound real holdings are never abandoned.
+- Exact public contract metadata proves SOL allows0.1 and ZEC remains1 at capture. Minimum is used conservatively as quantity quantum; no invented step or silent risk enlargement. Decimal private API header, partial exposure and serialization must change together.
+- Gate native unrealised_pnl, actual margin basis and timestamps flow through Worker to cards. Missing is not zero; stale real values not replaced by simulated marks.
+- Compare only post-enable eligible sources with copies, while preserving pre-existing managed holdings and reporting real minimum restrictions. Equal all-PAPER/all-LIVE totals is not a valid invariant after explicitly excluding old sources.
+- Owner is ON in captured public runtime. Preserve owner intent; verification performs no owner login, mode mutation or private Gate test. Full design/limits in research/LIVE_SESSION_DECIMAL_PNL.md.
+
 # Permanent current-PAPER LIVE parity — 2026-09-17
 
 The owner explicitly requires EVERY future version to mirror its current visible PAPER orders to LIVE when, and only when, the owner enables. Read `LIVE_MIRROR_CONTRACT.md` first. Earlier PAPER-only-routing/canonical-LIVE restrictions below are superseded. The simulator still has no private keys; the owner-enabled adapter mirrors persisted source identities, full rules and lifecycle with frozen proportional capital/same requested leverage. Do not change strategy or reset accounts to add this bridge. Errors pause execution, never override the owner's switch. Unknown fills and exchange differences remain visible. `test:live-parity` and production current-source metadata are mandatory release gates. This session must leave actual LIVE intent unchanged and perform no private Gate trades.

@@ -96,6 +96,18 @@ test("one bulk ticker request returns the complete low-cost radar surface", asyn
   });
 });
 
+test("contract metadata carries actual decimal support and min/max quantity without integer coercion",async()=>{
+  const previous=globalThis.fetch;const headers:Headers[]=[];
+  globalThis.fetch=async(input,init)=>{headers.push(new Headers(init?.headers));return Response.json(String(input).endsWith('/tickers')
+    ?[{contract:"SOL_USDT",last:"100",volume_24h_usd:"100000"}]
+    :[{name:"SOL_USDT",status:"trading",quanto_multiplier:"1",order_price_round:"0.01",enable_decimal:true,
+      order_size_min:"0.1",order_size_max:"300000",market_order_size_max:"100000"}]);};
+  try{const [m]=await fetchActiveContracts();assert.equal(m.enableDecimal,true);assert.equal(m.orderSizeMin,"0.1");
+    assert.equal(m.orderSizeMax,"300000");assert.equal(m.marketOrderSizeMax,"100000");
+    for(const h of headers)assert.equal(h.get("X-Gate-Size-Decimal"),"1");
+  }finally{globalThis.fetch=previous;}
+});
+
 test("Gate stats use contract_stats and liquidations retain signed order_size", async () => {
   await withFetch([{ time: 1, open_interest: "123.5" }], async () => assert.equal(Number((await fetchContractStats("X_USDT"))?.open_interest), 123.5));
   await withFetch([{ time: 1, order_size: "-7", size: "999", fill_price: "100" }], async () => assert.equal(Number((await fetchLiquidations("X_USDT"))[0].order_size), -7));

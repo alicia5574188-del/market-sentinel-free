@@ -318,14 +318,17 @@ function portfolioTrade(symbol: string, openedAt: number, patch: Partial<ArenaTr
 // Explicit test-fixture migration: production must NOT adapt retired sources.
 // These lifecycle fault tests now feed the current PAPER shape and fresh books.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function currentForwardFixture(stream:any,values:ArenaTrade[]) {
-  stream.forwardState=initialForward(Date.now()-120000);
+async function currentForwardFixture(stream:any,values:ArenaTrade[]) {
+  // A test source created after enable must keep the SAME account identity.
+  // Advance the real test clock past the one-millisecond creation boundary.
+  await new Promise(resolve=>setTimeout(resolve,3));
+  stream.forwardState=initialForward(stream.forwardState?.startedAt??Date.now()-120000);
   stream.forwardState.storage={persistedAt:Date.now(),error:null};
   stream.forwardState.positions=values.map(t=>{
     const multiplier=stream.runtime.contractMeta[t.symbol]?.quantoMultiplier??t.quantoMultiplier;
     const count=Math.max(1,Math.floor(t.notional/(t.entryPrice*multiplier)));
     const notional=count*multiplier*t.entryPrice;
-    return {id:t.id,symbol:t.symbol,side:t.side,openedAt:Math.min(Date.now()-1,t.openedAt),closedAt:null,status:"OPEN",
+    return {id:t.id,symbol:t.symbol,side:t.side,openedAt:t.openedAt,closedAt:null,status:"OPEN",
       entryPrice:t.entryPrice,exitPrice:null,quantity:count*multiplier,contracts:count,quantoMultiplier:multiplier,
       notional,leverage:t.leverage,margin:notional/t.leverage,plannedRisk:t.plannedRisk,stopPrice:t.stopPrice,
       armPrice:t.targetPrice,favorable:0,adverse:0,lastPrice:t.entryPrice,lastQuoteAt:Date.now(),entryFee:0,exitFee:0,
@@ -336,6 +339,8 @@ function currentForwardFixture(stream:any,values:ArenaTrade[]) {
         armRate:.1,givebackRate:.01,exitMode:"HORIZON",samples:0,trainGroups:0,checkGroups:0,estimatedNetRate:0,
         priorResponse:null,recentResponse:0,standardError:0,reason:"functional fixture",mutation:"CREATE",grammar:"fixture",liveEligible:false}} satisfies Trade;
   });
+  for(const meta of Object.values(stream.runtime.contractMeta) as Array<Record<string,unknown>>)
+    Object.assign(meta,{enableDecimal:false,orderSizeMin:"1",orderSizeMax:"10000000"});
   for(const q of Object.values(stream.runtime.evidence) as Array<{midpoint:number;bestBid?:number;bestAsk?:number;observedAt:number}>){
     q.bestBid=q.midpoint;q.bestAsk=q.midpoint;q.observedAt=Date.now();
   }
@@ -1211,7 +1216,7 @@ test("a capacity-limited portfolio order is skipped without blocking an affordab
   stream.runtime.strategyArena.portfolioOpen = Object.fromEntries(symbols.map((symbol) =>
     [symbol, portfolioTrade(symbol, openedAt)]));
   for (const symbol of symbols) stream.runtime.evidence[symbol].observedAt = openedAt;
-  currentForwardFixture(stream,Object.values(stream.runtime.strategyArena.portfolioOpen));
+  await currentForwardFixture(stream,Object.values(stream.runtime.strategyArena.portfolioOpen));
   await stream.syncLive(openedAt + 1);
 
   assert.equal(result.ok, true);
@@ -1223,7 +1228,7 @@ test("a capacity-limited portfolio order is skipped without blocking an affordab
   assert.match(stream.runtime.live.entrySkips.ETH_USDT.reason, /未完成复制/);
 });
 
-test("LIVE backfills an existing open PAPER portfolio position when the owner enables LIVE", async () => {
+test("LIVE excludes an existing PAPER position when owner enables, without an exchange mutation", async () => {
   const { stream } = await makeStream();
   stream.runtime.symbols = ["BTC_USDT"];
   const oldOpenedAt = Date.now() - 60_000;
@@ -1244,15 +1249,13 @@ test("LIVE backfills an existing open PAPER portfolio position when the owner en
     setLeverage: async () => { mutationOrder.push("LEVERAGE"); },
   };
 
-  currentForwardFixture(stream,Object.values(stream.runtime.strategyArena.portfolioOpen));
+  await currentForwardFixture(stream,Object.values(stream.runtime.strategyArena.portfolioOpen));
   const enabled = await stream.setLiveMode(true);
   assert.equal(enabled.ok, true);
-  assert.equal(createCalls, 1, "an already-open PAPER position must be represented in LIVE when LIVE is enabled");
-  assert.deepEqual(mutationOrder, ["LEVERAGE", "ENTRY", "STOP"],
-    "the native stop must be submitted immediately after the confirmed entry in the same sync pass");
-  assert.equal(stream.runtime.live.entries.BTC_USDT.kind, "MARKET");
-  assert.equal(stream.runtime.live.entries.BTC_USDT.planId, `PORTFOLIO:BTC_USDT:${oldOpenedAt}`,
-    "a current PAPER source keeps its original lifecycle identity");
+  assert.equal(createCalls,0,"pre-enable source must not backfill");
+  assert.deepEqual(mutationOrder,[]);
+  assert.equal(stream.runtime.live.entries.BTC_USDT,undefined);
+  assert.equal(stream.forwardState.positions[0].id,`PORTFOLIO:BTC_USDT:${oldOpenedAt}`);
 });
 
 test("an open PAPER holding retries its first LIVE copy after fresh data returns beyond ten seconds", async () => {
@@ -1273,19 +1276,21 @@ test("an open PAPER holding retries its first LIVE copy after fresh data returns
     setLeverage: async () => undefined,
   };
 
-  currentForwardFixture(stream,Object.values(stream.runtime.strategyArena.portfolioOpen));
   const enabled = await stream.setLiveMode(true);
   assert.equal(enabled.ok, true);
   assert.equal(createCalls, 0, "missing fresh execution data must still fail closed");
+  const sourceOpenedAt=stream.runtime.live.changedAt!+1;
+  stream.runtime.strategyArena.portfolioOpen.BTC_USDT=portfolioTrade("BTC_USDT",sourceOpenedAt);
+  await currentForwardFixture(stream,Object.values(stream.runtime.strategyArena.portfolioOpen));
 
   const recoveredAt = stream.runtime.live.changedAt! + 60_000;
   stream.runtime.evidence.BTC_USDT = { midpoint: 100, observedAt: recoveredAt, warmup: 30, fresh: true,
     ancillaryFresh: true, entryReady: true, topLong: null, topShort: null, absorption: 0 };
   stream.runtime.evidence.BTC_USDT.bestBid=100;stream.runtime.evidence.BTC_USDT.bestAsk=100;
-  stream.runtime.evidence.BTC_USDT.observedAt=Date.now();
-  await stream.syncLive(Date.now());
+  const oldNow=Date.now;Date.now=()=>recoveredAt;
+  try{await stream.syncLive(recoveredAt);}finally{Date.now=oldNow;}
   assert.equal(createCalls, 1, "fresh recovery must not be blocked by the retired ten-second entry window");
-  assert.equal(stream.runtime.live.entries.BTC_USDT.planId, `PORTFOLIO:BTC_USDT:${oldOpenedAt}`);
+  assert.equal(stream.runtime.live.entries.BTC_USDT.planId, `PORTFOLIO:BTC_USDT:${sourceOpenedAt}`);
 });
 
 test("forced OFF reconciliation cancels only orphaned Market Sentinel entry tags", async () => {
@@ -1371,7 +1376,7 @@ test("one symbol leverage rejection is retained as a skip and does not stop anot
   const openedAt = stream.runtime.live.changedAt + 1;
   stream.runtime.strategyArena.portfolioOpen = Object.fromEntries(symbols.map((symbol) => [symbol, portfolioTrade(symbol, openedAt)]));
   for (const symbol of symbols) stream.runtime.evidence[symbol].observedAt = openedAt;
-  currentForwardFixture(stream,Object.values(stream.runtime.strategyArena.portfolioOpen));
+  await currentForwardFixture(stream,Object.values(stream.runtime.strategyArena.portfolioOpen));
   await stream.syncLive(openedAt + 1);
 
   assert.deepEqual(created, ["ETH_USDT"]);
@@ -1403,7 +1408,7 @@ test("an ambiguous entry response is reconciled once and never blindly replayed"
   const openedAt = stream.runtime.live.changedAt + 1;
   stream.runtime.strategyArena.portfolioOpen.BTC_USDT = portfolioTrade("BTC_USDT", openedAt);
   stream.runtime.evidence.BTC_USDT.observedAt = openedAt;
-  currentForwardFixture(stream,Object.values(stream.runtime.strategyArena.portfolioOpen));
+  await currentForwardFixture(stream,Object.values(stream.runtime.strategyArena.portfolioOpen));
   await stream.syncLive(openedAt + 1);
   assert.equal(stream.runtime.live.entries.BTC_USDT.status, "ERROR");
   assert.equal(stream.runtime.live.operational, false);
@@ -1445,7 +1450,7 @@ test("an ambiguous stop response is reconciled by tag instead of closing a fresh
   const openedAt = stream.runtime.live.changedAt + 1;
   stream.runtime.strategyArena.portfolioOpen.BTC_USDT = portfolioTrade("BTC_USDT", openedAt);
   stream.runtime.evidence.BTC_USDT.observedAt = openedAt;
-  currentForwardFixture(stream,Object.values(stream.runtime.strategyArena.portfolioOpen));
+  await currentForwardFixture(stream,Object.values(stream.runtime.strategyArena.portfolioOpen));
   await stream.syncLive(openedAt + 1);
   actualPosition = true;
   await stream.syncLive(openedAt + 2);
@@ -1488,7 +1493,7 @@ test("a definitive immediate-stop rejection requests one fail-closed exit and pa
   stream.runtime.strategyArena.portfolioOpen = Object.fromEntries(symbols.map((symbol) => [symbol, portfolioTrade(symbol, openedAt)]));
   for (const symbol of symbols) stream.runtime.evidence[symbol].observedAt = openedAt;
 
-  currentForwardFixture(stream,Object.values(stream.runtime.strategyArena.portfolioOpen));
+  await currentForwardFixture(stream,Object.values(stream.runtime.strategyArena.portfolioOpen));
   await stream.syncLive(openedAt + 1);
 
   assert.deepEqual(entries, ["BTC_USDT"]);

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { numberText, signedText, holdingTime, livePositionMark, operatorRequest, OperatorRequestError,
+import { numberText, signedText, holdingTime, livePositionMark, operatorRequest, OperatorRequestError, contractText,
   type LivePosition, type OperatorRuntime } from "../lib/operator-ui.ts";
 
 const position={id:"t",symbol:"BTC_USDT",side:"LONG",status:"OPEN",entryPrice:100,notional:1000} as LivePosition;
@@ -12,14 +12,21 @@ test("unknown and invalid real balances never become zero",()=>{
   for(const value of [undefined,null,NaN,Infinity])assert.equal(numberText(value),"—");
   assert.equal(signedText(null),"—");assert.equal(numberText(0),"0.00");
 });
-test("LIVE PnL uses the executable bid for a long, ask for a short",()=>{
-  assert.ok(Math.abs(livePositionMark(position,runtime,101_000).pnl!-10)<1e-9);
-  assert.ok(Math.abs(livePositionMark({...position,side:"SHORT"},runtime,101_000).pnl!+20)<1e-9);
+test("LIVE PnL uses Gate's actual signed value, never public bid/ask or PAPER profit",()=>{
+  const p={...position,exchangeUnrealisedPnl:-1.25,exchangeMarkPrice:100.1,exchangePnlMargin:5,exchangePnlAt:100000};
+  assert.equal(livePositionMark(p,runtime,101000).pnl,-1.25);
+  assert.equal(livePositionMark({...p,side:"SHORT"},null,101000).pnl,-1.25);
+  assert.equal(livePositionMark(p,null,101000).rate,-.25);
 });
-test("stale, missing and future quotes do not produce invented zero LIVE PnL",()=>{
-  assert.equal(livePositionMark(position,runtime,116_000).pnl,null);
-  assert.equal(livePositionMark(position,runtime,90_000).pnl,null);
-  assert.equal(livePositionMark(position,null,101_000).pnl,null);
+test("stale exchange PnL is timestamped, missing/future exchange values stay unknown",()=>{
+  const p={...position,exchangeUnrealisedPnl:0,exchangePnlAt:100000};
+  assert.equal(livePositionMark(p,runtime,150000).pnl,0);assert.equal(livePositionMark(p,runtime,150000).fresh,false);
+  assert.equal(livePositionMark(position,runtime,101000).pnl,null);
+  assert.equal(livePositionMark(p,runtime,90000).pnl,null);
+  assert.equal(livePositionMark(p,runtime,101000).rate,null);
+});
+test("decimal real holdings are never displayed as zero contracts",()=>{
+  assert.equal(contractText(.1),"0.1");assert.equal(contractText(.00001),"0.00001");assert.equal(contractText(2),"2");
 });
 test("holding duration never becomes negative or a fake historical timestamp",()=>{
   assert.equal(holdingTime(undefined,1000),"—");assert.equal(holdingTime(2000,1000),"0分钟");
