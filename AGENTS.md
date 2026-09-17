@@ -1,3 +1,7 @@
+# Permanent current-PAPER LIVE parity — 2026-09-17
+
+The owner explicitly requires EVERY future version to mirror its current visible PAPER orders to LIVE when, and only when, the owner enables. Read `LIVE_MIRROR_CONTRACT.md` first. Earlier PAPER-only-routing/canonical-LIVE restrictions below are superseded. The simulator still has no private keys; the owner-enabled adapter mirrors persisted source identities, full rules and lifecycle with frozen proportional capital/same requested leverage. Do not change strategy or reset accounts to add this bridge. Errors pause execution, never override the owner's switch. Unknown fills and exchange differences remain visible. `test:live-parity` and production current-source metadata are mandatory release gates. This session must leave actual LIVE intent unchanged and perform no private Gate trades.
+
 # Current participation authority — 2026-09-17
 
 The user authorizes restoring the active forward baseline's opportunity breadth with targeted execution/cost corrections. Current specification: `research/FORWARD_PARTICIPATION_REPAIR.md`. Reject no-trade-as-success. Keep PAPER-only authority, continuous accounts/losses, original position geometry, owner LIVE intent, native dark UI, existing Worker and deployment paths. Algorithm marker is participation-execution-v1.2; storage schema stays v1.0. Earlier v1.1 hard-unanimity gates below are superseded only as documented.
