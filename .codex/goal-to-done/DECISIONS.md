@@ -1,3 +1,7 @@
+# Permanent current-PAPER LIVE parity — 2026-09-17
+
+The owner explicitly requires EVERY future version to mirror its current visible PAPER orders to LIVE when, and only when, the owner enables. Read `LIVE_MIRROR_CONTRACT.md` first. Earlier PAPER-only-routing/canonical-LIVE restrictions below are superseded. The simulator still has no private keys; the owner-enabled adapter mirrors persisted source identities, full rules and lifecycle with frozen proportional capital/same requested leverage. Do not change strategy or reset accounts to add this bridge. Errors pause execution, never override the owner's switch. Unknown fills and exchange differences remain visible. `test:live-parity` and production current-source metadata are mandatory release gates. This session must leave actual LIVE intent unchanged and perform no private Gate trades.
+
 # Participation-first targeted repair — 2026-09-17
 
 The user explicitly retains the active first-forward version as a useful baseline. Replace v1.1 universal concentration/individual-positive/feedback vetoes with visible confidence and bounded risk scoring; this knowingly retains uncertain PAPER hypotheses, not proven edges. Keep raw-after-modeled-cost discovery, execution safety and total/individual risk caps. Correct missed-quote timing and cost-inconsistent giveback separately. Full account remains continuous; preserve previous upgrade boundary. Details and tradeoffs in `research/FORWARD_PARTICIPATION_REPAIR.md`.

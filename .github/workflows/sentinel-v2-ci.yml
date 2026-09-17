@@ -50,6 +50,10 @@ jobs:
         working-directory: release
         run: npm ci
 
+      - name: Require current PAPER source and owner-only LIVE parity on every release
+        working-directory: release
+        run: npm run test:live-parity
+
       - name: Test, build, lint and dry-run
         working-directory: release
         run: |
@@ -1079,6 +1083,11 @@ jobs:
               .runtime.legacyRetired == true and
               .runtime.forward.version == "forward-relations-v1.0" and
               .runtime.forward.liveEligible == false and
+              .runtime.liveMirror.version == "current-paper-live-parity-v1" and
+              .runtime.liveMirror.source == "CURRENT_FORWARD_ACCOUNT" and
+              .runtime.liveMirror.connected == true and
+              .runtime.liveMirror.ownerControlled == true and
+              .runtime.liveMirror.exactFillsGuaranteed == false and
               .runtime.forward.storage.persistedAt > 0 and
               .runtime.forward.storage.error == null and
               (.runtime.strategyArena.engines | length) == 5 and
@@ -1257,6 +1266,11 @@ jobs:
               .runtime.legacyRetired == true and
               .runtime.forward.version == "forward-relations-v1.0" and
               .runtime.forward.liveEligible == false and
+              .runtime.liveMirror.version == "current-paper-live-parity-v1" and
+              .runtime.liveMirror.source == "CURRENT_FORWARD_ACCOUNT" and
+              .runtime.liveMirror.connected == true and
+              .runtime.liveMirror.ownerControlled == true and
+              .runtime.liveMirror.exactFillsGuaranteed == false and
               .runtime.forward.storage.persistedAt > 0 and
               .runtime.forward.storage.error == null and
             (.runtime.strategyArena.engines | length) == 5 and

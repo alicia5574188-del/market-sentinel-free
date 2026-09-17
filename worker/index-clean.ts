@@ -10,7 +10,7 @@ import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
   PAPER_BANKRUPTCY_EQUITY, PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
-import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, gateMarkedEquity, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
 import { credentialMetadata } from "../lib/gate-readonly.ts";
 import { clearOwnerSessionCookie, createOwnerSession, ownerAuthConfigured, ownerPasswordMatches, ownerSessionCookie, sameOriginMutation, verifyOwnerSession } from "../lib/owner-auth.ts";
@@ -29,8 +29,10 @@ import { advanceRegimePortfolio, evaluateRegimePortfolio, initialRegimePortfolio
   REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE, resetRegimePortfolio,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
-import { advanceForward, forwardSummary, forwardWatchSymbols, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
+import { advanceForward, forwardSummary, forwardEquity, freshQuote, forwardWatchSymbols, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { readForwardStore, prepareForwardWrite, FORWARD_STORAGE } from "../lib/forward-store.ts";
+import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwardMirrorSources,
+  sourceLifecycle, mirrorSourceFresh, mirrorCoverage, type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
 declare const __FORWARD_BUILD_SHA__: string;
 const FORWARD_BUILD_SHA = typeof __FORWARD_BUILD_SHA__ === "string" ? __FORWARD_BUILD_SHA__ : "local-verification";
 import { advanceStrategyArena as advancePreviousStrategyArena,
@@ -119,6 +121,8 @@ type LiveEntry = {
   tag: string;
   exchangeOrderId: string | null;
   createdAt: number;
+  marketSubmittedAt?: number;
+  submissionResolved?: boolean;
   expiresAt: number;
   trigger: number;
   invalidation: number;
@@ -146,6 +150,8 @@ type LiveEntry = {
   protectionExitRequestedAt: number | null;
   missingSince: number | null;
   lastError: string | null;
+  parity?: MirrorReceipt;
+  mirrorSourceId?: string;
 };
 
 type LivePosition = PaperPosition & {
@@ -158,6 +164,10 @@ type LivePosition = PaperPosition & {
   stopSubmittingAt: number | null;
   exitRequestedAt: number | null;
   exchangeUpdatedAt: number;
+  parity?: MirrorReceipt;
+  exitOrderId?: string | null;
+  actualExitPriceVerified?: boolean;
+  mirrorSourceId?: string;
 };
 
 type LiveEntrySkipCode = LiveEntrySizingCode | "LEVERAGE_REJECTED" | "ENTRY_REJECTED" | "SUBMISSION_UNCONFIRMED";
@@ -445,6 +455,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private forwardError: string | null = null;
   private forwardBusy = false;
   private forwardLastAttemptAt = 0;
+  private liveSyncWork: Promise<void> | null = null;
+  private liveJournal = new Map<string, unknown>();
+  private liveHistory: LivePosition[] = [];
+  private liveBindingError: string | null = null;
+  private mirrorClosures = new Map<string,ForwardState["history"][number]>();
 
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
@@ -528,6 +543,27 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       try { this.forwardState = await readForwardStore(ctx.storage, Date.now()); }
       catch (error) { this.forwardError = safeError(error); }
+      // Owner intent has its own durable record. Background checkpoints and
+      // deployments cannot replace a later OFF with an earlier in-flight ON.
+      const intent=await ctx.storage.get<{enabled:boolean;changedAt:number}>(`${LIVE_PARITY_PREFIX}owner-intent`);
+      if(intent){this.runtime.live.requestedEnabled=intent.enabled;this.runtime.live.changedAt=intent.changedAt;}
+      try {
+        const ids=new Set([...Object.values(this.runtime.live.entries).flatMap(e=>e?.mirrorSourceId?[e.mirrorSourceId]:[]),
+          ...Object.values(this.runtime.live.positions).flatMap(p=>p?.mirrorSourceId?[p.mirrorSourceId]:[])]);
+        for(const id of ids){
+          const binding=await ctx.storage.get<MirrorBinding>(`${LIVE_PARITY_PREFIX}binding:${id}`);
+          if(!binding||binding.version!==LIVE_PARITY_VERSION||binding.receipt.sourceId!==id)
+            throw new Error(`复制映射 ${id} 缺失，禁止重复下单或重新分配比例`);
+          const entry=Object.values(this.runtime.live.entries).find(e=>e?.planId===id);
+          const pos=Object.values(this.runtime.live.positions).find(p=>p?.id===id);
+          if(entry)entry.parity=structuredClone(binding.receipt);
+          if(pos)pos.parity=structuredClone(binding.receipt);
+          const sourceClosed=await ctx.storage.get<ForwardState["history"][number]>(`${LIVE_PARITY_PREFIX}source-close:${id}`);
+          if(sourceClosed?.status==="CLOSED"&&sourceClosed.id===id)this.mirrorClosures.set(id,sourceClosed);
+        }
+        const rows=await ctx.storage.list<{position:LivePosition}>({prefix:`${LIVE_PARITY_PREFIX}closed:`,reverse:true,limit:40});
+        this.liveHistory=[...rows.values()].map(row=>row.position);
+      } catch(error){this.liveBindingError=safeError(error);}
       this.publishAuthority();
     });
   }
@@ -786,8 +822,57 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private forwardView(now = Date.now()) {
     return this.forwardState ? { ...forwardSummary(this.forwardState, this.regimeQuotes(now), now),
+      liveMirror: this.liveMirrorView(),
       storage: { ...this.forwardState.storage, error: this.forwardError } }
       : { version: FORWARD_VERSION, mode: "RECOVERY_REQUIRED", liveEligible: false, storage: { error: this.forwardError } };
+  }
+
+  private forwardHealth() {
+    const s=this.forwardState;
+    return {version:FORWARD_VERSION,policyVersion:s?.policyVersion??null,liveEligible:false,
+      startedAt:s?.startedAt??null,lastCycleAt:s?.lastCycleAt??null,resolved:s?.resolved??0,openCount:s?.positions.length??0,
+      storage:{persistedAt:s?.storage.persistedAt??0,error:this.forwardError}};
+  }
+
+  private liveMirrorView() {
+    return mirrorCoverage(this.forwardState,this.runtime.live,this.forwardError??this.liveBindingError);
+  }
+
+  private liveDesiredPortfolio(now:number):Record<string,MirrorSourceTrade> {
+    if(!this.forwardState)throw new Error("当前模拟账户尚未恢复，禁止退回旧实盘复制源");
+    const marked=forwardEquity(this.forwardState,this.regimeQuotes(now),now);
+    const desired=forwardMirrorSources(this.forwardState,marked.equity);
+    // Only already-owned legacy exposure may drain through its original
+    // lifecycle. It can never become a source of new orders after an upgrade.
+    const legacy=canonicalLivePortfolio({current:this.runtime.strategyArena,previous:this.runtime.previousStrategyArena,
+      regime:this.runtime.regimePortfolio},this.runtime.canonicalPaper);
+    for(const symbol of new Set([...Object.keys(this.runtime.live.positions),...Object.keys(this.runtime.live.entries)])){
+      const p=this.runtime.live.positions[symbol],e=this.runtime.live.entries[symbol];
+      const id=p?.status==="OPEN"?p.id:e&&["OPEN","SUBMITTING","ERROR"].includes(e.status)?e.planId:null;
+      if(id&&!(p?.status==="OPEN"?p.mirrorSourceId:e?.mirrorSourceId)){
+        if(legacy[symbol]?.id===id)desired[symbol]=legacy[symbol];else delete desired[symbol];
+      }
+    }
+    return desired;
+  }
+
+  private currentMirrorSource(id:string) {
+    const current=sourceLifecycle(this.forwardState,id),closed=this.mirrorClosures.get(id);
+    return current.status==="UNKNOWN"&&closed?{status:"CLOSED" as const,trade:closed}:current;
+  }
+
+  private mirrorQuoteReady(symbol:string,now=Date.now()) {
+    const q=this.runtime.evidence[symbol];
+    return !!q && q.entryReady===true && freshQuote({bestBid:q.bestBid??0,bestAsk:q.bestAsk??0,
+      observedAt:q.observedAt,fresh:q.fresh},now);
+  }
+
+  private async queueLiveBinding(entry:LiveEntry) {
+    if(!entry.parity)return;
+    const key=`${LIVE_PARITY_PREFIX}binding:${entry.planId}`;
+    const existing=(this.liveJournal.get(key) as MirrorBinding|undefined)??await this.ctx.storage.get<MirrorBinding>(key);
+    if(!existing)throw new Error("完整模拟源单映射缺失，拒绝提交交易");
+    this.liveJournal.set(key,{...existing,receipt:structuredClone(entry.parity)});
   }
 
   private async advanceForwardNow(now: number) {
@@ -802,10 +887,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
         const prepared = await prepareForwardWrite(previous.storage.persistedAt ? previous : null, next.state, now);
+        // Retain authoritative parent exits even when the hot PAPER history
+        // rotates while Gate is unreachable. This is one write per bound exit,
+        // in the same atomic commit, not a new strategy/account or per-tick log.
+        const bound=new Set([...Object.values(this.runtime.live.entries).flatMap(e=>e?.mirrorSourceId?[e.mirrorSourceId]:[]),
+          ...Object.values(this.runtime.live.positions).flatMap(p=>p?.mirrorSourceId?[p.mirrorSourceId]:[])]);
+        const closures=next.state.history.filter(t=>bound.has(t.id)&&!this.mirrorClosures.has(t.id));
+        for(const t of closures)prepared.entries[`${LIVE_PARITY_PREFIX}source-close:${t.id}`]=structuredClone(t);
+        prepared.writes+=closures.length;
         // All extra persistence consumes the existing non-alarm write reserve.
         if (this.runtime.nonAlarmWrites + prepared.writes + 64 > NON_ALARM_WRITE_CAP) throw new Error("前向写入预算不足；保留原账户，不提交未持久化订单");
         await this.ctx.storage.transaction(async transaction => { await transaction.put(prepared.entries); });
         this.runtime.nonAlarmWrites += prepared.writes;
+        for(const t of closures)this.mirrorClosures.set(t.id,structuredClone(t));
       }
       // A PAPER fill/rule update becomes visible only after its atomic commit.
       this.forwardState = next.state;
@@ -1219,7 +1313,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (credentials.environment !== "live") throw new Error("这里只接受 Gate 实盘 API");
     const candidate = new GateLiveClient(credentials);
     const snapshot = await candidate.snapshot();
-    const equity = Number(snapshot.account.total);
+    const equity = gateMarkedEquity(snapshot);
     const available = Number(snapshot.account.available);
     if (snapshot.account.total == null || snapshot.account.available == null || !Number.isFinite(equity) || equity < 0 || !Number.isFinite(available) || available < 0) {
       throw new Error("Gate 合约账户权益不可用");
@@ -1403,6 +1497,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.live.auditEvents = this.runtime.live.auditEvents.slice(-100);
   }
 
+  private liveEntryAwaitingReconcile(entry: LiveEntry | null | undefined) {
+    if(!entry?.parity || entry.marketSubmittedAt == null) return false;
+    if(this.runtime.live.positions[entry.symbol]?.id === entry.planId) return false;
+    return entry.status === "FILLED" || (entry.status === "CANCELLED" && !entry.submissionResolved);
+  }
+
+  private liveNeedsSync() {
+    return this.runtime.live.requestedEnabled
+      || Object.values(this.runtime.live.entries).some(entry => entry &&
+        (!["FILLED","CANCELLED"].includes(entry.status) || this.liveEntryAwaitingReconcile(entry)))
+      || Object.values(this.runtime.live.positions).some(position => position?.status === "OPEN");
+  }
+
   private liveOpenRisk() {
     const positionRisk = Object.values(this.runtime.live.positions).reduce((sum, position) => sum + (position?.status === "OPEN"
       ? remainingStressRisk(position, this.runtime.evidence[position.symbol]?.midpoint ?? position.entryPrice) : 0), 0);
@@ -1581,15 +1688,30 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return current;
   }
 
-  private async syncLive(now: number, initialEnable = false, forceEntryCleanup = false) {
+  private async syncLive(now:number,initialEnable=false,forceEntryCleanup=false) {
+    if(this.liveSyncWork){
+      if(!initialEnable&&!forceEntryCleanup)return this.liveSyncWork;
+      await this.liveSyncWork.catch(()=>undefined);
+    }
+    const work=this.syncLiveOnce(Date.now(),initialEnable,forceEntryCleanup);
+    this.liveSyncWork=work;
+    try { await work; } finally { if(this.liveSyncWork===work)this.liveSyncWork=null; }
+  }
+
+  private async syncLiveOnce(now: number, initialEnable = false, forceEntryCleanup = false) {
     // Owner actions and optional hourly evaluation can arrive between two book
     // loops. Reconcile first so LIVE can never observe an unregistered source leg.
     this.reconcileCanonicalMirror(now);
-    const desiredPortfolio = canonicalLivePortfolio({ current: this.runtime.strategyArena,
-      previous: this.runtime.previousStrategyArena, regime: this.runtime.regimePortfolio }, this.runtime.canonicalPaper);
     const activePositions = Object.values(this.runtime.live.positions).some((position) => position?.status === "OPEN");
-    const activeEntries = Object.values(this.runtime.live.entries).some((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status));
+    const activeEntries = Object.values(this.runtime.live.entries).some((entry) => entry &&
+      (!["FILLED", "CANCELLED"].includes(entry.status) || this.liveEntryAwaitingReconcile(entry)));
     if (!this.runtime.live.requestedEnabled && !activePositions && !activeEntries && !initialEnable && !forceEntryCleanup) return;
+    let sourceError=this.liveBindingError??this.forwardError;
+    let desiredPortfolio:Record<string,MirrorSourceTrade>={};
+    try { desiredPortfolio=this.liveDesiredPortfolio(now); }
+    catch(error){sourceError=safeError(error);}
+    // A missing source blocks additions, not the owner's OFF cleanup or native
+    // protection of an already-mapped position.
     const client = await this.gateLive();
     let snapshot = await client.snapshot();
     const knownTags = new Set([
@@ -1605,18 +1727,21 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (forceEntryCleanup) {
       for (const entry of Object.values(this.runtime.live.entries)) {
         if (!entry || ["FILLED", "CANCELLED"].includes(entry.status)) continue;
-        entry.status = "CANCELLED";
+        const actual=snapshot.positions.find(p=>p.contract===entry.symbol&&Number(p.size??0)!==0
+          &&Math.sign(Number(p.size))===(entry.side==="LONG"?1:-1));
+        entry.status = actual?"FILLED":"CANCELLED";
         entry.missingSince = null;
         entry.lastError = null;
       }
     }
-    const equity = Number(snapshot.account.total ?? 0);
+    let accountError:string|null=null,equity=0;
+    try { equity=gateMarkedEquity(snapshot); }catch(error){accountError=safeError(error);}
     const available = Number(snapshot.account.available ?? 0);
-    if (!(equity > 0) || !(available >= 0)) throw new Error("Gate 合约账户权益不可用");
+    if (!(equity > 0) || !(available >= 0)||!Number.isFinite(available))accountError??="Gate 合约账户权益不可用";
     if (snapshot.account.in_dual_mode === true || ["dual", "dual_plus"].includes(String(snapshot.account.position_mode ?? "").toLowerCase())) {
       throw new Error("Gate 当前不是单向持仓模式");
     }
-    this.runtime.live.equity = equity;
+    this.runtime.live.equity = accountError?null:equity;
     this.runtime.live.available = available;
     this.runtime.live.lastSyncAt = now;
 
@@ -1630,14 +1755,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const entry = this.runtime.live.entries[symbol];
       return !(position?.status === "OPEN" && position.side === side)
         && !(entry?.side === side && (["SUBMITTING", "OPEN", "FILLED", "ERROR"].includes(entry.status)
-          || (entry.status === "CANCELLED" && now - entry.createdAt < 60_000)));
+          || (entry.status === "CANCELLED" && (now - entry.createdAt < 60_000 || this.liveEntryAwaitingReconcile(entry)))));
     });
     if (initialEnable && (unknownOrders.length || unmanagedPositions.length)) {
-      throw new Error("Gate 已有未纳管仓位或挂单；为避免冲突，实盘未开启");
+      throw new Error("Gate 已有未纳管仓位或挂单；执行暂停，所有者的开启选择保留");
     }
 
     for (const [symbol, entry] of Object.entries(this.runtime.live.entries)) {
-      if (!entry || entry.status === "FILLED" || entry.status === "CANCELLED") continue;
+      if (!entry || entry.status === "FILLED" || (entry.status === "CANCELLED" && !this.liveEntryAwaitingReconcile(entry))) continue;
       const openOrder = exchangeOrders.find((order) => liveOrderTag(order) === entry.tag);
       if (openOrder) {
         entry.status = "OPEN";
@@ -1649,6 +1774,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         if (inspected) {
           entry.exchangeOrderId = liveOrderId(inspected) ?? entry.exchangeOrderId;
           entry.status = liveEntryDisposition(inspected, entry.kind);
+          if(entry.parity && ["FILLED","CANCELLED"].includes(entry.status)) entry.submissionResolved=true;
           if (entry.status === "ERROR") {
             const reason = `Gate 挂单执行失败：${inspected.finish_as ?? inspected.status ?? "unknown"}`;
             entry.status = "CANCELLED";
@@ -1668,7 +1794,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       const selectedTrade = desiredPortfolio[symbol] ?? null;
       const shouldCancel = !this.runtime.live.requestedEnabled || !selectedTrade || selectedTrade.id !== entry.planId
-        || now >= entry.expiresAt || !this.symbolEntryReady(symbol);
+        || now >= entry.expiresAt || !(entry.parity?this.mirrorQuoteReady(symbol):this.symbolEntryReady(symbol));
       if (shouldCancel && openOrder && entry.exchangeOrderId) await this.cancelLiveEntry(client, entry);
       else if (shouldCancel && !openOrder && entry.status !== "FILLED" && entry.missingSince != null && now - entry.missingSince >= 6_000) entry.status = "CANCELLED";
     }
@@ -1683,7 +1809,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const selectedTrade = desiredPortfolio[symbol] ?? null;
         if (!entry || entry.side !== side || (!["SUBMITTING", "OPEN", "FILLED", "ERROR"].includes(entry.status)
           && !(entry.status === "CANCELLED" && now - entry.createdAt < 60_000))) throw new Error(`发现未纳管实盘仓位 ${symbol}`);
-        if (selectedTrade && selectedTrade.id !== entry.planId) throw new Error(`发现与模拟账户订单不一致的实盘仓位 ${symbol}`);
+        // A completed source can be replaced before an in-flight market order
+        // returns. Reconcile the reserved OLD parent first, then close it; never
+        // relabel that fill as the replacement or abandon its protection.
+        if (!entry.parity && selectedTrade && selectedTrade.id !== entry.planId) throw new Error(`发现与模拟账户订单不一致的实盘仓位 ${symbol}`);
         const entryPrice = Number(actual.entry_price ?? entry.trigger) || entry.trigger;
         const multiplier = this.runtime.contractMeta[symbol]?.quantoMultiplier ?? 1;
         const notional = Math.abs(exchangeSize) * entryPrice * multiplier;
@@ -1704,9 +1833,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           stopTag: entry.stopTag ?? expectedStop.tag, stopPrice: entry.stopPrice ?? expectedStop.price,
           stopSubmittingAt: entry.stopSubmittingAt ?? null, exitRequestedAt: entry.protectionExitRequestedAt ?? null,
           exchangeUpdatedAt: now,
+          ...(entry.parity?{parity:structuredClone(entry.parity),mirrorSourceId:entry.planId}:{}),
         };
         this.runtime.live.positions[symbol] = position;
         entry.status = "FILLED";
+        entry.submissionResolved=true;
         entry.missingSince = null;
         this.recordLiveAudit({ observedAt: now, symbol, planId: entry.planId, stage: "ENTRY_FILLED", level: "INFO",
           reason: `Gate 已确认实盘持仓，成交名义价值 ${notional.toFixed(4)} USDT，杠杆 ${leverage}×` });
@@ -1714,33 +1845,54 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         throw new Error(`${symbol} 实盘方向与系统记录冲突`);
       }
       position.exchangeUpdatedAt = now;
+      // Track partial IOC executions and exchange-side reductions explicitly.
+      if(position.parity){
+        const receipt=position.parity;
+        receipt.filledContracts=Math.abs(exchangeSize);
+        receipt.discrepancy=Math.abs(exchangeSize)!==receipt.roundedContracts
+          ?`交易所实际${Math.abs(exchangeSize)}张，源单比例目标${receipt.roundedContracts}张；未声称完整复制`:null;
+        const px=Number(actual.entry_price);
+        if(Number.isFinite(px)&&px>0)position.entryPrice=px;
+        position.exchangeSize=Math.abs(exchangeSize);
+        position.notional=position.exchangeSize*position.entryPrice*(this.runtime.contractMeta[symbol]?.quantoMultiplier??0);
+        position.leverage=Math.max(1,Number(actual.leverage)||receipt.sourceLeverage);
+        position.margin=position.notional/position.leverage;
+        if(position.leverage!==receipt.sourceLeverage)receipt.discrepancy=`交易所杠杆${position.leverage}×与源单${receipt.sourceLeverage}×不同`;
+      }
       const selectedTrade = desiredPortfolio[symbol] ?? null;
-      if (!position.exitRequestedAt && liveMirrorExitRequired(position.id, selectedTrade)) {
+      const lifecycle=position.parity?this.currentMirrorSource(position.id):null;
+      const sourceClosed=lifecycle?.status==="CLOSED";
+      if(position.parity&&sourceClosed){
+        position.parity.sourceClosedAt=lifecycle.trade.closedAt;
+        position.parity.sourceExitReason=lifecycle.trade.exitReason;
+      }
+      if (!position.exitRequestedAt && (position.parity?sourceClosed:liveMirrorExitRequired(position.id, selectedTrade))) {
         position.exitRequestedAt = now;
-        position.exitReason = "PAPER_PORTFOLIO_EXIT";
+        position.exitReason = sourceClosed?lifecycle!.trade!.exitReason??"PAPER_SOURCE_EXIT":"PAPER_PORTFOLIO_EXIT";
         this.recordLiveAudit({ observedAt: now, symbol, planId: position.id, stage: "EXIT_REQUEST", level: "INFO",
-          reason: "1000 U模拟账户已退出该计划，实盘按同一生命周期请求市价平仓" });
-        await client.closePosition(symbol, liveExitTag(position.id));
-      } else if (!position.exitRequestedAt && selectedTrade) {
-        position.currentStop = arenaProtectionStop(selectedTrade);
-        position.currentTarget = selectedTrade.targetPrice;
-        position.targetScore = selectedTrade.context.candidateScore;
-        position.targetIdentity = `arena:${selectedTrade.id}`;
+          reason: `模拟源单 ${position.id} 已退出，实盘跟随同一决定：${position.exitReason}` });
+        await this.saveCheckpoint(Date.now(),true);
+        position.exitOrderId=await client.closePosition(symbol, liveExitTag(position.id));
+      } else if (!position.exitRequestedAt && (position.parity?lifecycle?.status==="OPEN":selectedTrade)) {
+        position.currentStop = position.parity?lifecycle!.trade!.stopPrice:arenaProtectionStop(selectedTrade!);
+        position.currentTarget = position.parity?lifecycle!.trade!.armPrice:selectedTrade!.targetPrice;
+        position.targetScore = selectedTrade?.context.candidateScore??0;
+        position.targetIdentity = position.parity?`forward:${position.id}`:`arena:${selectedTrade!.id}`;
         this.runtime.live.positions[symbol] = position;
       }
       if (!position.exitRequestedAt) {
         await this.ensureLiveStop(client, position, snapshot.priceOrders);
-        if (this.liveOpenRisk() > equity * PORTFOLIO_RISK_CAP + 1e-8
-          || this.liveDirectionalRisk(position.side) > equity * CORRELATED_DIRECTION_RISK_CAP + 1e-8) {
+        if (!position.parity && !accountError && (this.liveOpenRisk() > equity * PORTFOLIO_RISK_CAP + 1e-8
+          || this.liveDirectionalRisk(position.side) > equity * CORRELATED_DIRECTION_RISK_CAP + 1e-8)) {
           position.exitRequestedAt = now;
           position.exitReason = "RISK_CAP_AFTER_FILL";
           this.recordLiveAudit({ observedAt: now, symbol, planId: position.id, stage: "EXIT_REQUEST", level: "FORCED_EXIT",
             reason: "实盘成交后的实际结构风险超过账户或同方向风险上限，已请求市价退出" });
-          await client.closePosition(symbol, liveExitTag(position.id));
+          position.exitOrderId=await client.closePosition(symbol, liveExitTag(position.id));
         }
       } else if (now - position.exitRequestedAt >= 6_000) {
         position.exitRequestedAt = now;
-        await client.closePosition(symbol, liveExitTag(position.id));
+        position.exitOrderId=await client.closePosition(symbol, liveExitTag(position.id));
       }
     }
 
@@ -1748,15 +1900,46 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if (!position || position.status !== "OPEN") continue;
       const actual = actualPositions.find((row) => row.contract === symbol && Number(row.size ?? 0) !== 0);
       if (actual) continue;
+      // Actual exit price must come from a verified exchange execution. Never
+      // substitute a PAPER price, fresh midpoint or fabricated realized PnL.
+      let verifiedExit:GateLiveOrder|null=null;
+      if(position.parity){
+        try {
+          verifiedExit=await client.inspectEntry("MARKET",symbol,liveExitTag(position.id),position.exitOrderId??null);
+          if(!verifiedExit&&position.stopOrderId){
+            const stop=await client.inspectEntry("PRICE_TRIGGER",symbol,position.stopTag??"",position.stopOrderId);
+            if(stop?.trade_id&&String(stop.trade_id)!=="0")
+              verifiedExit=await client.inspectEntry("MARKET",symbol,"",String(stop.trade_id));
+          }
+        } catch(error){
+          this.recordLiveAudit({observedAt:now,symbol,planId:position.id,stage:"POSITION_CLOSED",level:"RECOVERING",
+            reason:`交易所仓位已归零，成交价尚待核对，不以模拟价代替：${safeError(error)}`});
+        }
+      }
       const stopId = position.stopOrderId ?? (position.stopTag
         ? liveOrderId(snapshot.priceOrders.find((order) => liveOrderTag(order) === position.stopTag) ?? {})
         : null);
       if (stopId) await client.cancelOrder("PRICE_TRIGGER", stopId);
-      this.runtime.live.positions[symbol] = { ...position, status: "CLOSED", exitAt: now,
-        exitPrice: this.runtime.evidence[symbol]?.midpoint ?? position.entryPrice,
+      const verifiedPrice=Number(verifiedExit?.fill_price),verified=Number.isFinite(verifiedPrice)&&verifiedPrice>0;
+      const closed:LivePosition = { ...position, status: "CLOSED", exitAt: now,
+        exitPrice: position.parity?(verified?verifiedPrice:undefined):this.runtime.evidence[symbol]?.midpoint??position.entryPrice,
+        actualExitPriceVerified:position.parity?verified:undefined,
         exitReason: position.exitReason ?? "EXCHANGE_FLAT", stopOrderId: null, stopTag: null, stopPrice: null, stopSubmittingAt: null };
+      if(closed.parity){
+        closed.parity={...closed.parity,actualExitPriceVerified:verified,actualExitOrderId:verifiedExit?liveOrderId(verifiedExit):position.exitOrderId??null};
+        const lifecycle=this.currentMirrorSource(position.id);
+        const key=`${LIVE_PARITY_PREFIX}binding:${position.id}`;
+        const binding=(this.liveJournal.get(key) as MirrorBinding|undefined)??await this.ctx.storage.get<MirrorBinding>(key);
+        if(binding)this.liveJournal.set(key,{...binding,receipt:closed.parity,
+          ...(lifecycle.status==="CLOSED"?{sourceAtClose:structuredClone(lifecycle.trade)}:{}),actual:closed});
+        this.liveJournal.set(`${LIVE_PARITY_PREFIX}closed:${String(now).padStart(16,"0")}:${position.id}`,
+          {version:LIVE_PARITY_VERSION,position:closed});
+      }
+      this.runtime.live.positions[symbol]=closed;
       this.recordLiveAudit({ observedAt: now, symbol, planId: position.id, stage: "POSITION_CLOSED", level: "INFO",
         reason: `Gate 已确认仓位归零；退出原因 ${position.exitReason ?? "EXCHANGE_FLAT"}` });
+      await this.saveCheckpoint(Date.now(),true);
+      this.liveHistory=[closed,...this.liveHistory.filter(p=>p.id!==closed.id)].slice(0,40);
     }
 
     if (!this.runtime.live.requestedEnabled) {
@@ -1766,9 +1949,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       return;
     }
     if (unknownOrders.length) throw new Error("Gate 存在未纳管挂单；已停止新开仓");
+    if(unmanagedPositions.length)throw new Error("Gate 存在未纳管仓位；停止新增复制，保留已纳管保护");
+    if(sourceError)throw new Error(`当前模拟复制源尚待恢复：${sourceError}`);
+    if(accountError)throw new Error(accountError);
+    if(this.forwardError)throw new Error(`模拟状态尚未成功保存：${this.forwardError}；不复制未持久化决定`);
 
     let recoveringSubmission = Object.values(this.runtime.live.entries)
-      .find((entry) => entry && ["SUBMITTING", "ERROR"].includes(entry.status)) ?? null;
+      .find((entry) => entry && (["SUBMITTING", "ERROR"].includes(entry.status) || this.liveEntryAwaitingReconcile(entry))) ?? null;
     const recoveringStop = Object.values(this.runtime.live.positions)
       .find((position) => position?.status === "OPEN" && position.stopSubmittingAt && !position.stopOrderId) ?? null;
     let recoveringEntryStop = Object.values(this.runtime.live.entries)
@@ -1779,6 +1966,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ? recoveringSubmission.lastError ?? `${recoveringSubmission.symbol} 的实盘提交正在与 Gate 核对`
       : recoveringStop ? `${recoveringStop.symbol} 的结构止损正在按订单标签核对`
         : recoveringEntryStop ? `${recoveringEntryStop.symbol} 的初始止损正在按订单标签核对` : null;
+    if(recoveringSubmission || recoveringStop || recoveringEntryStop) return;
     let availableForNewEntries = available;
     let riskForNewEntries = this.liveOpenRisk();
     const directionRiskForNewEntries: Record<Side, number> = {
@@ -1789,55 +1977,75 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ...Object.values(this.runtime.live.positions).filter((position) => position?.status === "OPEN"),
       ...Object.values(this.runtime.live.entries).filter((entry) => entry && ["SUBMITTING", "OPEN", "ERROR"].includes(entry.status)),
     ].reduce((sum, item) => sum + (item?.margin ?? 0), 0);
-    const staged: Array<{ symbol: string; plan: PaperPlan; intent: ReturnType<typeof buildLiveEntryIntent> }> = [];
+    let notionalForNewEntries=[...Object.values(this.runtime.live.positions).filter(p=>p?.status==="OPEN"),
+      ...Object.values(this.runtime.live.entries).filter(e=>e&&["SUBMITTING","OPEN","ERROR"].includes(e.status))]
+      .reduce((n,p)=>n+(p?.notional??0),0);
+    const paperMark=forwardEquity(this.forwardState!,this.regimeQuotes(Date.now()),Date.now());
+    const staged: Array<{ symbol: string; plan: PaperPlan; intent: ReturnType<typeof buildLiveEntryIntent>;binding?:MirrorBinding }> = [];
     for (const [symbol, skip] of Object.entries(this.runtime.live.entrySkips)) {
       const trade = desiredPortfolio[symbol] ?? null;
       if (!skip || !trade || trade.id !== skip.planId || now >= trade.openedAt + 45 * 60_000) delete this.runtime.live.entrySkips[symbol];
     }
     for (const trade of Object.values(desiredPortfolio)) {
       const symbol = trade.symbol;
-      const plan = arenaTradePlan(trade);
+      if(!trade.forwardSource)continue; // Legacy sources only drain existing exposure.
+      const plan = { ...arenaTradePlan(trade), expiresAt:trade.openedAt+trade.forwardSource.rule.horizon*60_000 };
       const justTriggeredEntry = eligibleForLiveMirror(trade, this.runtime.live.changedAt, now);
       if (!justTriggeredEntry
-        || this.runtime.live.positions[symbol]?.status === "OPEN" || !this.symbolEntryReady(symbol)) {
-        delete this.runtime.live.entrySkips[symbol];
+        || this.runtime.live.positions[symbol]?.status === "OPEN" || !this.mirrorQuoteReady(symbol)) {
+        if(this.runtime.live.positions[symbol]?.id!==trade.id)
+          this.runtime.live.entrySkips[symbol]={planId:trade.id,symbol,code:"ECONOMICS",reason:"等待源单对应的空闲持仓槽和新鲜可执行盘口",observedAt:now};
         continue;
       }
       const midpoint = this.runtime.evidence[symbol]?.midpoint ?? 0;
       if (!(midpoint > 0)) continue;
       const retainedSkip = this.runtime.live.entrySkips[symbol];
-      if (retainedSkip?.planId === plan.id) continue;
+      if (retainedSkip?.planId === plan.id && ["LEVERAGE_REJECTED","ENTRY_REJECTED","SUBMISSION_UNCONFIRMED"].includes(retainedSkip.code)
+        && now-retainedSkip.observedAt<60_000) continue;
       const prior = this.runtime.live.entries[symbol];
-      // A timed-out submission remains reserved until Gate proves it absent for
-      // six seconds. Never replay the same plan while its status is ambiguous.
-      if (prior && prior.planId === plan.id && prior.status !== "CANCELLED") {
-        delete this.runtime.live.entrySkips[symbol];
+      if(this.liveEntryAwaitingReconcile(prior)) {
+        this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"SUBMISSION_UNCONFIRMED",
+          reason:"此前源单的提交尚待交易所确认，保留原身份和保护，不覆盖为新源单",observedAt:now};
+        continue;
+      }
+      // Once a market request may have crossed the network boundary, absence
+      // from a later snapshot is NOT permission to submit the parent again.
+      if (prior && prior.planId === plan.id && (prior.status !== "CANCELLED"||prior.marketSubmittedAt!=null)) {
+        if(prior.status==="CANCELLED"||prior.status==="ERROR")
+          this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"SUBMISSION_UNCONFIRMED",
+            reason:prior.lastError??"该源单已提交过，等待成交核对，不自动重放",observedAt:now};
         continue;
       }
       if (prior && !["FILLED", "CANCELLED"].includes(prior.status)) await this.cancelLiveEntry(client, prior);
       let intent: ReturnType<typeof buildLiveEntryIntent>;
+      let binding:MirrorBinding|undefined;
       try {
-        intent = buildLiveEntryIntent({ plan, equity, available: availableForNewEntries, openRisk: riskForNewEntries,
-          sameDirectionRisk: directionRiskForNewEntries[plan.side],
-          entryPrice: midpoint,
-          quantoMultiplier: this.runtime.contractMeta[symbol]?.quantoMultiplier ?? 1,
-          maintenanceRate: this.runtime.contractMeta[symbol]?.maintenanceRate ?? 0.005,
-          leverageMax: this.runtime.contractMeta[symbol]?.leverageMax ?? 50, openMargin: marginForNewEntries,
-          mirrorNotionalFraction: trade.notional / Math.max(trade.accountEquityAtOpen, 1e-9),
-          modeledCostRate: trade.context.modeledCostRate });
+        if(paperMark.stalePositions)throw new LiveEntrySizingError("ECONOMICS",symbol,"模拟账户当前估值不完整，不能确定复制比例");
+        const quote=this.runtime.evidence[symbol];
+        const result=buildProportionalMirror({source:trade.forwardSource,sourceEquity:paperMark.equity,equity,
+          available:availableForNewEntries,openRisk:riskForNewEntries,sameDirectionRisk:directionRiskForNewEntries[plan.side],
+          entryPrice:plan.side==="LONG"?quote?.bestAsk??0:quote?.bestBid??0,
+          quantoMultiplier:this.runtime.contractMeta[symbol]?.quantoMultiplier??0,
+          leverageMax:this.runtime.contractMeta[symbol]?.leverageMax??0,maintenanceRate:this.runtime.contractMeta[symbol]?.maintenanceRate??0.005,
+          openMargin:marginForNewEntries,openNotional:notionalForNewEntries,now:Date.now(),policy:this.forwardState!.policyVersion??this.forwardState!.version});
+        intent=result.intent;binding=result.binding;
       } catch (error) {
         if (!(error instanceof LiveEntrySizingError)) throw error;
         this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: error.code, reason: error.message, observedAt: now };
         continue;
       }
       delete this.runtime.live.entrySkips[symbol];
-      availableForNewEntries = Math.max(0, availableForNewEntries - intent.margin);
+      availableForNewEntries = Math.max(0, availableForNewEntries - intent.margin-intent.notional*.0007);
       riskForNewEntries += intent.plannedRisk;
       directionRiskForNewEntries[plan.side] += intent.plannedRisk;
       marginForNewEntries += intent.margin;
-      staged.push({ symbol, plan, intent });
+      notionalForNewEntries += intent.notional;
+      staged.push({ symbol, plan, intent, binding });
+      if(staged.length>=2)break; // Bound private requests per pass, not total holdings.
     }
-    for (const { symbol, plan, intent } of staged) {
+    for (const { symbol, plan, intent, binding } of staged) {
+      if(!this.runtime.live.requestedEnabled||!this.mirrorQuoteReady(symbol)
+        ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now()))continue;
       const entry: LiveEntry = {
         planId: plan.id, symbol, side: plan.side, scenario: plan.marketState, kind: intent.kind, status: "SUBMITTING",
         tag: intent.tag, exchangeOrderId: null, createdAt: now, expiresAt: plan.expiresAt, trigger: plan.entryTrigger,
@@ -1849,10 +2057,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         notional: intent.notional, plannedRisk: intent.plannedRisk, leverage: intent.leverage, margin: intent.margin,
         stopOrderId: null, stopTag: null, stopPrice: null, stopSubmittingAt: null, protectionExitRequestedAt: null,
         missingSince: null, lastError: null,
+        ...(binding?{parity:structuredClone(binding.receipt),mirrorSourceId:plan.id}:{}),
       };
       this.runtime.live.entries[symbol] = entry;
+      if(binding)this.liveJournal.set(`${LIVE_PARITY_PREFIX}binding:${plan.id}`,binding);
       await this.saveCheckpoint(now, true);
       try {
+        if(!this.runtime.live.requestedEnabled){entry.status="CANCELLED";continue;}
         try {
           await client.setLeverage(symbol, intent.leverage);
         } catch (error) {
@@ -1864,14 +2075,37 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           continue;
         }
         try {
+          // Owner OFF or source CLOSE during leverage/network await takes
+          // precedence over the stale staged entry.
+          if(!this.runtime.live.requestedEnabled||!this.mirrorQuoteReady(symbol)
+            ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now())){
+            entry.status="CANCELLED";await this.saveCheckpoint(Date.now(),true);continue;
+          }
+          const q=this.runtime.evidence[symbol],price=entry.side==="LONG"?q?.bestAsk:q?.bestBid;
+          if(!price||(entry.side==="LONG"?price<=entry.invalidation:price>=entry.invalidation)){
+            entry.status="CANCELLED";entry.lastError="等待杠杆确认期间价格已越过源单止损，未追补旧成交";
+            this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ECONOMICS",reason:entry.lastError,observedAt:Date.now()};
+            await this.saveCheckpoint(Date.now(),true);continue;
+          }
+          entry.marketSubmittedAt=Date.now();
+          await this.saveCheckpoint(Date.now(),true);
           entry.exchangeOrderId = await client.createEntry(intent);
           entry.status = "OPEN";
+          const filled=await client.inspectEntry("MARKET",symbol,entry.tag,entry.exchangeOrderId);
+          if(filled&&liveEntryDisposition(filled,"MARKET")==="CANCELLED"){
+            entry.status="CANCELLED";entry.submissionResolved=true;entry.lastError="Gate IOC零成交；未完成复制，不冒充成功";
+            this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ENTRY_REJECTED",reason:entry.lastError,observedAt:Date.now()};
+            await this.saveCheckpoint(Date.now(),true);continue;
+          }
+          await this.saveCheckpoint(Date.now(),true);
           await this.createImmediateLiveStop(client, entry);
           if (!entry.stopOrderId) {
             if (entry.protectionExitRequestedAt) recoveringSubmission = entry;
             else recoveringEntryStop = entry;
             break;
           }
+          await this.queueLiveBinding(entry);
+          await this.saveCheckpoint(Date.now(),true);
         } catch (error) {
           const reason = `Gate 实盘入场提交失败：${safeError(error)}`;
           entry.lastError = reason;
@@ -1892,13 +2126,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         entry.lastError = safeError(error);
         throw error;
       }
+      if(entry.status==="ERROR")break; // Do not compound an unconfirmed exposure.
     }
-    if (recoveringSubmission || recoveringStop || recoveringEntryStop) {
+    if (recoveringSubmission || recoveringEntryStop) {
       this.runtime.live.operational = false;
       this.runtime.live.lastError = recoveringSubmission
         ? recoveringSubmission.lastError ?? `${recoveringSubmission.symbol} 的实盘提交正在与 Gate 核对`
-        : recoveringStop ? `${recoveringStop.symbol} 的结构止损正在按订单标签核对`
-          : `${recoveringEntryStop!.symbol} 的初始止损正在按订单标签核对`;
+        : `${recoveringEntryStop!.symbol} 的初始止损正在按订单标签核对`;
     }
   }
 
@@ -1908,25 +2142,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.live.changedAt = Date.now();
     this.runtime.live.lastError = null;
     try {
+      await this.ctx.storage.put(`${LIVE_PARITY_PREFIX}owner-intent`,{enabled,changedAt:this.runtime.live.changedAt});
+      await this.saveCheckpoint(Date.now(),true);
       await this.syncLive(Date.now(), enabled, !enabled);
       this.recordLiveAudit({ observedAt: Date.now(), symbol: null, planId: null, stage: "LIVE_CONTROL", level: "INFO",
         reason: enabled ? "所有者已开启实盘复制；后续部署与可恢复的单币故障不会改写此选择" : "所有者已关闭实盘复制并请求撤销系统入场挂单" });
       await this.saveCheckpoint(Date.now(), true);
       return { ok: true, live: this.runtime.live };
     } catch (error) {
-      let cleanupError: string | null = null;
-      const forceOff = enabled && liveFailureRequiresOff(error);
-      if (forceOff) {
-        this.runtime.live.requestedEnabled = false;
-        try { await this.syncLive(Date.now(), false, true); }
-        catch (cleanupFailure) { cleanupError = safeError(cleanupFailure); }
-      }
       this.runtime.live.operational = false;
-      this.runtime.live.lastError = cleanupError ? `${safeError(error)}；撤单核对失败：${cleanupError}` : safeError(error);
+      this.runtime.live.lastError = safeError(error);
       this.recordLiveAudit({ observedAt: Date.now(), symbol: null, planId: null, stage: "LIVE_CONTROL",
-        level: forceOff ? "LIVE_STOPPED" : "RECOVERING",
-        reason: forceOff ? `检测到账户级纳管冲突，实盘选择已安全关闭：${this.runtime.live.lastError}`
-          : `实盘选择保持${this.runtime.live.requestedEnabled ? "开启" : "关闭"}，等待后台恢复核对：${this.runtime.live.lastError}`, error });
+        level: "RECOVERING",
+        reason: `实盘选择保持${this.runtime.live.requestedEnabled ? "开启" : "关闭"}，执行已暂停等待核对：${this.runtime.live.lastError}`, error });
       await this.saveCheckpoint(Date.now(), true).catch(() => undefined);
       return { ok: false, error: this.runtime.live.lastError, live: this.runtime.live };
     }
@@ -2312,13 +2540,27 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private async saveCheckpoint(now: number, force = false) {
     if (!force && this.runtime.lastHeartbeatAt != null && now - this.runtime.lastHeartbeatAt < HEARTBEAT_MS) return;
     const openCount = Object.values(this.runtime.positions).filter((position) => position?.status === "OPEN").length;
-    if (this.runtime.nonAlarmWrites + 1 + openCount > NON_ALARM_WRITE_CAP) {
+    const journal=new Map(this.liveJournal);
+    const writes=1+journal.size;
+    if (this.runtime.nonAlarmWrites + writes + openCount > NON_ALARM_WRITE_CAP) {
       if (force) throw new Error("Durable Object non-alarm write reserve reached");
       return;
     }
-    const checkpoint = { ...this.runtime, analysisMs: [], nonAlarmWrites: this.runtime.nonAlarmWrites + 1, lastHeartbeatAt: now };
-    await this.ctx.storage.put("checkpoint", checkpoint);
-    this.runtime.nonAlarmWrites += 1;
+    // Full immutable source snapshots live outside the bounded hot checkpoint.
+    // A binding and its entry reservation commit atomically BEFORE a Gate call.
+    const compact=<T extends {parity?:MirrorReceipt}>(value:T|null)=>{
+      if(!value)return value;
+      const {parity,...rest}=value;void parity;return rest;
+    };
+    const checkpoint = { ...this.runtime, live:{...this.runtime.live,
+      entries:Object.fromEntries(Object.entries(this.runtime.live.entries).map(([k,e])=>[k,compact(e)])),
+      positions:Object.fromEntries(Object.entries(this.runtime.live.positions).map(([k,p])=>[k,compact(p)]))},
+      analysisMs: [], nonAlarmWrites: this.runtime.nonAlarmWrites + writes, lastHeartbeatAt: now };
+    await this.ctx.storage.transaction(async transaction=>{
+      await transaction.put({checkpoint,...Object.fromEntries(journal)});
+    });
+    for(const[key,value]of journal)if(this.liveJournal.get(key)===value)this.liveJournal.delete(key);
+    this.runtime.nonAlarmWrites += writes;
     this.runtime.lastHeartbeatAt = now;
   }
 
@@ -2352,7 +2594,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (this.optionalWork) return;
     const task = (async () => {
       let subrequests = 0;
-      // Generated rules have PAPER-only authority. No path enters canonicalLivePortfolio.
+      // PAPER is the strategy authority. The owner-controlled LIVE adapter
+      // mirrors only these persisted decisions; the generator has no keys.
       await this.advanceForwardNow(Date.now());
       if (universeDue) {
         subrequests += 2;
@@ -2424,23 +2667,20 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const books = await this.processBooks(now, cycleSymbols);
       subrequests += books.requests;
       this.publishCriticalHealth(Date.now(), books);
-      const liveNeedsSync = this.runtime.live.requestedEnabled
-        || Object.values(this.runtime.live.entries).some((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status))
-        || Object.values(this.runtime.live.positions).some((position) => position?.status === "OPEN");
+      const liveNeedsSync = this.liveNeedsSync();
       if (liveNeedsSync) {
         const liveRequestsBefore = this.liveClient?.requestCount ?? 0;
         try {
           await this.syncLive(Date.now());
         } catch (error) {
           const message = safeError(error);
-          const forceOff = liveFailureRequiresOff(error);
-          const shouldRecord = this.runtime.live.lastError !== message || this.runtime.live.operational || forceOff;
-          if (forceOff) this.runtime.live.requestedEnabled = false;
+          const blocked=liveFailureRequiresOff(error);
+          const shouldRecord = this.runtime.live.lastError !== message || this.runtime.live.operational;
           this.runtime.live.operational = false;
           this.runtime.live.lastError = message;
           if (shouldRecord) this.recordLiveAudit({ observedAt: Date.now(), symbol: null, planId: null,
-            stage: "LIVE_CONTROL", level: forceOff ? "LIVE_STOPPED" : "RECOVERING",
-            reason: forceOff ? `检测到账户级纳管冲突，实盘选择已安全关闭：${message}`
+            stage: "LIVE_CONTROL", level: "RECOVERING",
+            reason: blocked ? `账户纳管冲突，执行暂停但不改写所有者开关：${message}`
               : `实盘核对暂时失败，所有者开关选择保持不变：${message}`, error });
         } finally {
           subrequests += Math.max(0, (this.liveClient?.requestCount ?? liveRequestsBefore) - liveRequestsBefore);
@@ -2462,6 +2702,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   async fetch(request: Request) {
     const url = new URL(request.url);
     const path = url.pathname;
+    if(path==="/owner-live-source"&&request.method==="GET"){
+      const id=url.searchParams.get("id");
+      if(!id||id.length>200||/[\u0000-\u001f]/.test(id))return json({error:"invalid source id"},400);
+      const binding=await this.ctx.storage.get<MirrorBinding>(`${LIVE_PARITY_PREFIX}binding:${id}`);
+      if(!binding)return json({error:"尚无已提交的复制映射",source:this.currentMirrorSource(id)},404);
+      const actual=Object.values(this.runtime.live.positions).find(p=>p?.id===id)??binding.actual;
+      return json({...binding,currentSource:this.currentMirrorSource(id),actual});
+    }
     if (path === "/forward-export" && request.method === "GET") {
       await this.ensureAlarm();
       return json({ exportedAt: Date.now(), forward: this.forwardView(),
@@ -2499,7 +2747,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       return json({
         version: this.runtime.version,
         buildSha: FORWARD_BUILD_SHA,
-        forward: this.forwardView(),
+        liveMirror: {...this.liveMirrorView(),rows:undefined},
+        forward: this.forwardHealth(),
         legacyRetired: true,
         mode: this.runtime.mode,
         state: effectiveState,
@@ -2642,7 +2891,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           blockingMarkets: Object.entries(strategyCandleFailures).filter(([symbol, failure]) => failure.count >= 2
             && Date.now() - (stableStructures[symbol]?.observedAt ?? 0) > STRATEGY_CANDLE_STALE_MS).length,
           candleError: publicRuntime.strategyCandleError, logError: publicRuntime.strategyLogError },
-        ...(path === "/owner-runtime" ? { live } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length + bankruptcyOutbox.length,
+        liveMirror: this.liveMirrorView(),
+        ...(path === "/owner-runtime" ? { live:{...live,history:this.liveHistory,mirror:this.liveMirrorView()} } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length + bankruptcyOutbox.length,
         oldestOutboxAgeMs: outbox.length ? Math.max(0, Date.now() - (outbox[0].position.exitAt ?? outbox[0].position.entryAt)) : 0,
         authorityReady: this.authorityReady, realtimeReadiness: this.realtimeReadiness(), generatedAt: Date.now(), state: effectiveState, stale,
         analysisP99Ms: percentile99(this.runtime.analysisMs), limits: { loopMs: LOOP_MS, markets: this.runtime.symbols.length, scannedMarkets: this.runtime.radar.scanned, scanUniverse: SCAN_UNIVERSE_SIZE, radarMs: RADAR_MS, warmupSnapshots: WARMUP_SNAPSHOTS,
@@ -2656,7 +2906,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     if (path === "/owner-status" && request.method === "GET") {
       await this.ensureAlarm();
-      return json({ live: this.runtime.live, generatedAt: Date.now() });
+      return json({ live:{...this.runtime.live,history:this.liveHistory,mirror:this.liveMirrorView()}, generatedAt: Date.now() });
     }
     if (path === "/credential-status" && request.method === "GET") {
       return json({ credential: await credentialMetadata(this.env.DB) });
@@ -2836,6 +3086,11 @@ async function ownerLiveStatus(request: Request, env: CloudflareEnv) {
   return env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/owner-status");
 }
 
+async function ownerLiveSource(request: Request, env: CloudflareEnv) {
+  if (!await ownerAuthenticated(request, env)) return json({ error: "请先登录" }, 401);
+  return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/owner-live-source${new URL(request.url).search}`);
+}
+
 async function ownerLiveMode(request: Request, env: CloudflareEnv) {
   if (!sameOriginMutation(request)) return json({ error: "请求来源验证失败" }, 403);
   if (!await ownerAuthenticated(request, env)) return json({ error: "请先登录" }, 401);
@@ -2906,6 +3161,7 @@ const worker = {
     if (url.pathname === "/api/auth/login" && request.method === "POST") return ownerLogin(request, env);
     if (url.pathname === "/api/auth/logout" && request.method === "POST") return ownerLogout(request);
     if (url.pathname === "/api/live/status" && request.method === "GET") return ownerLiveStatus(request, env);
+    if (url.pathname === "/api/live/source" && request.method === "GET") return ownerLiveSource(request, env);
     if (url.pathname === "/api/live/mode" && request.method === "POST") return ownerLiveMode(request, env);
     if (url.pathname === "/api/live/credentials" && ["GET", "PUT", "DELETE"].includes(request.method)) return ownerLiveCredentials(request, env);
     if (url.pathname === "/api/paper/reset" && request.method === "POST") return ownerPaperAction(request, env, "RESET");

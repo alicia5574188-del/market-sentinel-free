@@ -44,7 +44,7 @@ test("network failure is not interpreted as confirmed OFF or a successful API sa
   try{await assert.rejects(()=>operatorRequest("/api/live/mode","POST",{enabled:false}),/network unavailable/);assert.equal(calls,1);}
   finally{globalThis.fetch=original;}
 });
-test("Worker, LIVE execution, authentication and deployment remain byte-identical to the UI release",()=>{
+test("protected PAPER/authentication sources remain unchanged by the LIVE adapter release",()=>{
   const frozen=JSON.parse(readFileSync(new URL("./ui-authority-baseline.json",import.meta.url),"utf8")) as Record<string,string>;
   for(const[path,sha]of Object.entries(frozen))assert.equal(createHash("sha256").update(readFileSync(new URL(`../${path}`,import.meta.url))).digest("hex"),sha,path);
 });

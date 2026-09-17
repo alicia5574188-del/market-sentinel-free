@@ -133,9 +133,9 @@ test("missing chunk or tampering refuses recovery rather than inventing a new ba
 test("version is explicit and live authority stays absent in API summary",()=>{
   const s=opened(),v=forwardSummary(s,{},START+DAY);assert.equal(v.version,FORWARD_VERSION);assert.equal(v.liveEligible,false);assert.equal(v.boundaries.historyBackfill,false);
 });
-test("integration preserves old account but retires its new entries and isolates new LIVE authority",()=>{
+test("integration retires old entries; pure PAPER has no keys and owner adapter consumes persisted decisions",()=>{
   const worker=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8"),core=readFileSync(new URL("../lib/forward-relations.ts",import.meta.url),"utf8");
-  assert.match(worker,/allowNewEntries: false/);assert.match(worker,/desiredPortfolio = canonicalLivePortfolio/);
+  assert.match(worker,/allowNewEntries: false/);assert.match(worker,/desiredPortfolio\s*=\s*this\.liveDesiredPortfolio/);
   assert.doesNotMatch(core,/GateLiveClient|createEntry\(|fetch\(|eval\(|new Function/);
   assert.match(worker,/await this\.ctx\.storage\.transaction/);assert.match(worker,/forwardState\?\.positions\.map/);
 });

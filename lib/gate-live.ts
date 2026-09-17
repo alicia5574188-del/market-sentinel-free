@@ -14,6 +14,7 @@ export type GateLiveAccount = {
   unrealised_pnl?: string | number;
   in_dual_mode?: boolean;
   position_mode?: string;
+  margin_mode?: number;
 };
 
 export type GateLivePosition = {
@@ -38,6 +39,7 @@ export type GateLiveOrder = {
   trade_id?: string | number;
   close?: boolean;
   reduce_only?: boolean;
+  create_time?: number; finish_time?: number | string;
   initial?: { contract?: string; text?: string; size?: string | number; price?: string; close?: boolean; reduce_only?: boolean };
 };
 
@@ -48,6 +50,22 @@ export type GateLiveSnapshot = {
   priceOrders: GateLiveOrder[];
   checkedAt: number;
 };
+
+/** Gate classic futures `total` is wallet balance, not marked equity.
+ * Never compare it directly with a PAPER balance including open PnL. Unified
+ * cross-currency collateral needs its own adapter; do not guess its equity.
+ */
+export function gateMarkedEquity(snapshot:GateLiveSnapshot) {
+  const a=snapshot.account;
+  if(a.margin_mode!=null&&a.margin_mode!==0)throw new Error("当前Gate统一保证金模式尚无相同净值适配，停止新增复制，不更改账户模式");
+  const balance=Number(a.total),explicit=a.unrealised_pnl!=null;
+  const held=snapshot.positions.filter(p=>Number(p.size??0)!==0);
+  if(a.total==null||!Number.isFinite(balance))throw new Error("Gate余额缺失，不能确定实盘复制权益");
+  if(!explicit&&held.some(p=>p.unrealised_pnl==null))throw new Error("Gate持仓浮盈缺失，不能用余额假装完整净值");
+  const pnl=explicit?Number(a.unrealised_pnl):held.reduce((sum,p)=>sum+Number(p.unrealised_pnl),0);
+  if(!Number.isFinite(pnl)||!Number.isFinite(balance+pnl))throw new Error("Gate浮盈无效，不能确定复制净值");
+  return balance+pnl;
+}
 
 export type LiveEntryIntent = {
   kind: "PRICE_TRIGGER" | "LIMIT" | "MARKET";
@@ -257,7 +275,10 @@ export function liveEntryDisposition(order: GateLiveOrder, kind: "PRICE_TRIGGER"
     if (["cancelled", "expired"].includes(order.finish_as ?? "")) return "CANCELLED" as const;
     return "ERROR" as const;
   }
-  if (order.finish_as === "filled") return "FILLED" as const;
+  // IOC may finish with a nonzero partial execution. Treat that as exposure,
+  // not a cancelled no-fill order which could then be replayed.
+  if (order.finish_as === "filled" || (order.size != null && order.left != null
+    && Math.abs(Number(order.size)) > Math.abs(Number(order.left)))) return "FILLED" as const;
   if (order.status === "finished") return "CANCELLED" as const;
   return "ERROR" as const;
 }
@@ -362,3 +383,5 @@ export function buildLiveStopIntent(position: { id: string; symbol: string; side
 export function liveExitTag(positionId: string) {
   return shortTag("x", positionId);
 }
+
+export function liveEntryTag(positionId: string) { return shortTag("e", positionId); }

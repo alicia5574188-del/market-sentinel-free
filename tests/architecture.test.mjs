@@ -64,7 +64,7 @@ test("native dark LIVE console retains owner authentication and isolates financi
   assert.match(worker, /sameOriginMutation\(request\)/);
   assert.match(worker, /if \(!await ownerAuthenticated\(request, env\)\) return json\(\{ error: "请先登录" \}, 401\)/);
   assert.match(worker, /encryptGateCredentials/);
-  assert.match(worker, /desiredPortfolio = canonicalLivePortfolio/);
+  assert.match(worker, /desiredPortfolio\s*=\s*this\.liveDesiredPortfolio/);
   assert.match(worker, /allowNewEntries: false/);
   assert.match(live, /reduce_only: true/);
   assert.match(auth, /HttpOnly; Secure; SameSite=Strict/);
@@ -89,7 +89,8 @@ test("native dark LIVE console retains owner authentication and isolates financi
   assert.doesNotMatch(ui+page+consoleUi, /localStorage|sessionStorage|console\.log/);
   for(const label of ["实盘账户权益","所有者密码","API 管理","进场时间","出场时间","持仓时长","已平仓实盘记录"])
     assert.ok(consoleUi.includes(label));
-  assert.match(consoleUi, /新规则目前仍只在模拟运行/);
+  assert.match(consoleUi, /当前新版模拟账户，不是旧版组合/);
+  assert.match(consoleUi, /仅资金规模按权益比例换算/);
   assert.match(layout, /哨兵 · 关系引擎/);
   assert.match(layout, /themeColor: "#0b111a"/);
   const fontSizes=[...css.matchAll(/font-size:\s*(\d+)px/g)].map(v=>Number(v[1]));
@@ -132,7 +133,7 @@ test("DO is PAPER authority while D1 is a bounded outbox mirror", async () => {
   assert.match(worker, /completeTrades\.length > item\.report\.trades\.length/);
 });
 
-test("five frozen regime systems are causal and isolated while canonical PAPER is the sole LIVE order source", async () => {
+test("retired systems remain isolated; only current PAPER can create new LIVE entries", async () => {
   const [arena, previousArena, allRegime, previousAllRegime, dualPaper, regime, regimePortfolio, gateLive, worker, page, migration,
     coveragePolicy, previousCoveragePolicy] = await Promise.all([
     read("lib/strategy-arena.ts"), read("lib/previous-strategy-arena.ts"), read("lib/all-regime-engine.ts"),
@@ -199,11 +200,12 @@ test("five frozen regime systems are causal and isolated while canonical PAPER i
   assert.match(worker, /V4\/V5 are retired/);
   assert.match(worker, /advanceRegimePortfolio/);
   assert.match(worker, /advanceStrategyArena/);
-  assert.match(worker, /desiredPortfolio = canonicalLivePortfolio/);
+  assert.match(worker, /desiredPortfolio\s*=\s*this\.liveDesiredPortfolio/);
+  assert.match(worker, /if\(!trade\.forwardSource\)continue/);
   assert.match(worker, /previousStrategyArena: retiredPreviousArena/);
   assert.match(worker, /eligibleForLiveMirror/);
-  assert.match(worker, /position\.currentStop = arenaProtectionStop\(selectedTrade\)/);
-  assert.match(worker, /mirrorNotionalFraction: trade\.notional \/ Math\.max\(trade\.accountEquityAtOpen/);
+  assert.match(worker, /position\.currentStop = position\.parity\?lifecycle!\.trade!\.stopPrice:arenaProtectionStop/);
+  assert.match(worker, /buildProportionalMirror\(\{source:trade\.forwardSource/);
   assert.match(worker, /strategyArena: retiredCurrentArena\(saved\.strategyArena\)/);
   assert.match(worker, /resetStrategyArenaAccount/);
   assert.match(worker, /minimumPortfolioRiskUsdt: 0/);
@@ -234,7 +236,7 @@ test("five frozen regime systems are causal and isolated while canonical PAPER i
   assert.match(gateLive, /Math\.min\(MAX_NOTIONAL_TO_EQUITY, input\.mirrorNotionalFraction\)/);
   assert.match(worker, /maxNotionalMultiple: 0\.5/);
   assert.match(worker, /buildLiveStopIntent\(position, tick\)/);
-  assert.match(worker, /entry\.exchangeOrderId = await client\.createEntry\(intent\);[\s\S]{0,160}await this\.createImmediateLiveStop\(client, entry\)/);
+  assert.match(worker, /entry\.exchangeOrderId = await client\.createEntry\(intent\);[\s\S]{0,1600}await this\.createImmediateLiveStop\(client, entry\)/);
   assert.match(gateLive, /side === "LONG" \? Math\.floor\(units \+ 1e-9\) : Math\.ceil\(units - 1e-9\)/);
   assert.match(worker, /SCAN_UNIVERSE_SIZE = 30/);
   assert.match(worker, /maxOpenPositions: null/);

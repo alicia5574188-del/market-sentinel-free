@@ -3,6 +3,7 @@ import { registerHooks } from "node:module";
 import test from "node:test";
 import { ancillaryIsFresh, ancillarySchedule, emptySymbolMemory, optionalEvidenceIsFresh } from "../lib/liquidity-runtime.ts";
 import { remainingStressRisk, STALE_AFTER_MS, type PaperPlan, type PaperPosition } from "../lib/liquidity-core.ts";
+import { initialForward, type Trade } from "../lib/forward-relations.ts";
 import type { ArenaTrade } from "../lib/strategy-arena.ts";
 import { completedCandleStrategyCandidate } from "../lib/market-regime.ts";
 
@@ -63,15 +64,22 @@ class FakeStorage {
     return value === undefined ? undefined : structuredClone(value) as T;
   }
 
-  async put(key: string, value: unknown) {
+  async put(key: string | Record<string,unknown>, value?: unknown) {
     this.putCalls += 1;
     if (this.failPuts > 0) {
       this.failPuts -= 1;
       throw new Error("injected Durable Object storage failure");
     }
-    this.values.set(key, structuredClone(value));
+    for(const[k,v]of typeof key==="string"?[[key,value]]:Object.entries(key))this.values.set(k as string,structuredClone(v));
   }
 
+  async transaction<T>(fn:(storage:FakeStorage)=>Promise<T>){
+    const saved=new Map(this.values);try{return await fn(this);}catch(error){this.values=saved;throw error;}
+  }
+  async list<T>(options:{prefix:string;limit?:number;reverse?:boolean}){
+    const rows=[...this.values].filter(([k])=>k.startsWith(options.prefix)).sort(([a],[b])=>a.localeCompare(b));
+    if(options.reverse)rows.reverse();return new Map(rows.slice(0,options.limit??Infinity)) as Map<string,T>;
+  }
   async getAlarm() { return this.alarm; }
 
   async setAlarm(value: number) {
@@ -305,6 +313,33 @@ function portfolioTrade(symbol: string, openedAt: number, patch: Partial<ArenaTr
       costShare: 0.012, empiricalExpectedReturnRate: 0.001, empiricalProfitFactor: 1.3, empiricalEvents: 8 },
     ...patch,
   };
+}
+
+// Explicit test-fixture migration: production must NOT adapt retired sources.
+// These lifecycle fault tests now feed the current PAPER shape and fresh books.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function currentForwardFixture(stream:any,values:ArenaTrade[]) {
+  stream.forwardState=initialForward(Date.now()-120000);
+  stream.forwardState.storage={persistedAt:Date.now(),error:null};
+  stream.forwardState.positions=values.map(t=>{
+    const multiplier=stream.runtime.contractMeta[t.symbol]?.quantoMultiplier??t.quantoMultiplier;
+    const count=Math.max(1,Math.floor(t.notional/(t.entryPrice*multiplier)));
+    const notional=count*multiplier*t.entryPrice;
+    return {id:t.id,symbol:t.symbol,side:t.side,openedAt:Math.min(Date.now()-1,t.openedAt),closedAt:null,status:"OPEN",
+      entryPrice:t.entryPrice,exitPrice:null,quantity:count*multiplier,contracts:count,quantoMultiplier:multiplier,
+      notional,leverage:t.leverage,margin:notional/t.leverage,plannedRisk:t.plannedRisk,stopPrice:t.stopPrice,
+      armPrice:t.targetPrice,favorable:0,adverse:0,lastPrice:t.entryPrice,lastQuoteAt:Date.now(),entryFee:0,exitFee:0,
+      fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,relationFailureBars:0,lastRelationBar:0,
+      execution:"REAL_QUOTE_PAPER_MODEL",liveEligible:false,
+      rule:{id:t.strategyId,signature:t.id,parentId:null,version:1,createdAt:t.openedAt-1000,expiresAt:Date.now()+3600000,
+        status:"EXPERIMENTAL",conditions:[],side:t.side,horizon:60,stopRate:Math.abs(t.entryPrice-t.stopPrice)/t.entryPrice,
+        armRate:.1,givebackRate:.01,exitMode:"HORIZON",samples:0,trainGroups:0,checkGroups:0,estimatedNetRate:0,
+        priorResponse:null,recentResponse:0,standardError:0,reason:"functional fixture",mutation:"CREATE",grammar:"fixture",liveEligible:false}} satisfies Trade;
+  });
+  for(const q of Object.values(stream.runtime.evidence) as Array<{midpoint:number;bestBid?:number;bestAsk?:number;observedAt:number}>){
+    q.bestBid=q.midpoint;q.bestAsk=q.midpoint;q.observedAt=Date.now();
+  }
+  if(stream.liveClient)stream.liveClient.inspectEntry??=async()=>({status:"finished",finish_as:"filled"});
 }
 
 function plan(symbol: string): PaperPlan {
@@ -1090,7 +1125,9 @@ test("status exposes bounded mirror telemetry, never the complete outage outbox"
   assert.ok(text.length < 200_000);
 
   const owner = await (await stream.fetch(new Request("https://market-stream/owner-runtime"))).json() as Record<string, unknown>;
-  assert.deepEqual(owner.live, {
+  const {history,mirror,...owned}=owner.live as Record<string,unknown>;
+  assert.deepEqual(history,[]);assert.equal((mirror as {source:string}).source,"CURRENT_FORWARD_ACCOUNT");
+  assert.deepEqual(owned, {
     requestedEnabled: false, operational: false, changedAt: null, lastSyncAt: null, lastError: null,
     equity: null, available: null, credentialConfigured: false, entries: {}, positions: {}, entrySkips: {}, auditEvents: [],
   });
@@ -1140,7 +1177,9 @@ test("health status is compact while retaining every release gate", async () => 
   assert.equal(status.liveMode.operational, false);
   assert.equal(status.evidence, undefined);
   assert.equal(status.strategyArena.strategies, undefined);
-  assert.ok(JSON.stringify(status).length < 5_000);
+  assert.ok(JSON.stringify(status).length < 7_000);
+  assert.equal(status.liveMirror.source,"CURRENT_FORWARD_ACCOUNT");
+  assert.equal(status.forward.history,undefined);assert.equal(status.forward.rules,undefined);
 });
 
 test("a capacity-limited portfolio order is skipped without blocking an affordable mirror", async () => {
@@ -1160,7 +1199,7 @@ test("a capacity-limited portfolio order is skipped without blocking an affordab
     requestCount: 0,
     snapshot: async () => {
       snapshotCalls += 1;
-      return { account: { total: "1000", available: "100", in_dual_mode: false }, positions: [], orders: [], priceOrders: [], checkedAt: Date.now() };
+      return { account: { total: "1000", unrealised_pnl:"0", available: "105", in_dual_mode: false }, positions: [], orders: [], priceOrders: [], checkedAt: Date.now() };
     },
     createEntry: async () => { createCalls += 1; return "should-not-exist"; },
     createStop: async () => "protected",
@@ -1172,6 +1211,7 @@ test("a capacity-limited portfolio order is skipped without blocking an affordab
   stream.runtime.strategyArena.portfolioOpen = Object.fromEntries(symbols.map((symbol) =>
     [symbol, portfolioTrade(symbol, openedAt)]));
   for (const symbol of symbols) stream.runtime.evidence[symbol].observedAt = openedAt;
+  currentForwardFixture(stream,Object.values(stream.runtime.strategyArena.portfolioOpen));
   await stream.syncLive(openedAt + 1);
 
   assert.equal(result.ok, true);
@@ -1180,7 +1220,7 @@ test("a capacity-limited portfolio order is skipped without blocking an affordab
   assert.equal(createCalls, 1, "the affordable plan must not be blocked by later capacity-limited plans");
   assert.equal(snapshotCalls, 2);
   assert.equal(Object.values(stream.runtime.live.entrySkips).filter(Boolean).length, 2);
-  assert.match(stream.runtime.live.entrySkips.ETH_USDT.reason, /本轮未挂单/);
+  assert.match(stream.runtime.live.entrySkips.ETH_USDT.reason, /未完成复制/);
 });
 
 test("LIVE backfills an existing open PAPER portfolio position when the owner enables LIVE", async () => {
@@ -1197,13 +1237,14 @@ test("LIVE backfills an existing open PAPER portfolio position when the owner en
   const mutationOrder: string[] = [];
   stream.liveClient = {
     requestCount: 0,
-    snapshot: async () => ({ account: { total: "1000", available: "1000", in_dual_mode: false },
+    snapshot: async () => ({ account: { total: "1000", unrealised_pnl:"0", available: "1000", in_dual_mode: false },
       positions: [], orders: [], priceOrders: [], checkedAt: Date.now() }),
     createEntry: async () => { createCalls += 1; mutationOrder.push("ENTRY"); return "paper-backfill"; },
     createStop: async () => { mutationOrder.push("STOP"); return "paper-backfill-stop"; },
     setLeverage: async () => { mutationOrder.push("LEVERAGE"); },
   };
 
+  currentForwardFixture(stream,Object.values(stream.runtime.strategyArena.portfolioOpen));
   const enabled = await stream.setLiveMode(true);
   assert.equal(enabled.ok, true);
   assert.equal(createCalls, 1, "an already-open PAPER position must be represented in LIVE when LIVE is enabled");
@@ -1211,7 +1252,7 @@ test("LIVE backfills an existing open PAPER portfolio position when the owner en
     "the native stop must be submitted immediately after the confirmed entry in the same sync pass");
   assert.equal(stream.runtime.live.entries.BTC_USDT.kind, "MARKET");
   assert.equal(stream.runtime.live.entries.BTC_USDT.planId, `PORTFOLIO:BTC_USDT:${oldOpenedAt}`,
-    "a lone pre-existing V4 leg keeps its lifecycle identity through migration");
+    "a current PAPER source keeps its original lifecycle identity");
 });
 
 test("an open PAPER holding retries its first LIVE copy after fresh data returns beyond ten seconds", async () => {
@@ -1225,13 +1266,14 @@ test("an open PAPER holding retries its first LIVE copy after fresh data returns
   let createCalls = 0;
   stream.liveClient = {
     requestCount: 0,
-    snapshot: async () => ({ account: { total: "1000", available: "1000", in_dual_mode: false },
+    snapshot: async () => ({ account: { total: "1000", unrealised_pnl:"0", available: "1000", in_dual_mode: false },
       positions: [], orders: [], priceOrders: [], checkedAt: Date.now() }),
     createEntry: async () => { createCalls += 1; return "delayed-paper-backfill"; },
     createStop: async () => "delayed-paper-backfill-stop",
     setLeverage: async () => undefined,
   };
 
+  currentForwardFixture(stream,Object.values(stream.runtime.strategyArena.portfolioOpen));
   const enabled = await stream.setLiveMode(true);
   assert.equal(enabled.ok, true);
   assert.equal(createCalls, 0, "missing fresh execution data must still fail closed");
@@ -1239,7 +1281,9 @@ test("an open PAPER holding retries its first LIVE copy after fresh data returns
   const recoveredAt = stream.runtime.live.changedAt! + 60_000;
   stream.runtime.evidence.BTC_USDT = { midpoint: 100, observedAt: recoveredAt, warmup: 30, fresh: true,
     ancillaryFresh: true, entryReady: true, topLong: null, topShort: null, absorption: 0 };
-  await stream.syncLive(recoveredAt);
+  stream.runtime.evidence.BTC_USDT.bestBid=100;stream.runtime.evidence.BTC_USDT.bestAsk=100;
+  stream.runtime.evidence.BTC_USDT.observedAt=Date.now();
+  await stream.syncLive(Date.now());
   assert.equal(createCalls, 1, "fresh recovery must not be blocked by the retired ten-second entry window");
   assert.equal(stream.runtime.live.entries.BTC_USDT.planId, `PORTFOLIO:BTC_USDT:${oldOpenedAt}`);
 });
@@ -1252,7 +1296,7 @@ test("forced OFF reconciliation cancels only orphaned Market Sentinel entry tags
     requestCount: 0,
     snapshot: async () => {
       snapshotCalls += 1;
-      return { account: { total: "1000", available: "1000", in_dual_mode: false }, positions: [],
+      return { account: { total: "1000", unrealised_pnl:"0", available: "1000", in_dual_mode: false }, positions: [],
         orders: snapshotCalls === 1 ? [
           { id_string: "101", text: "t-ms-e-stale" },
           { id_string: "102", text: "manual-order" },
@@ -1274,7 +1318,7 @@ test("forced OFF reconciliation fails unless Gate confirms system orders are gon
     requestCount: 0,
     snapshot: async () => {
       snapshotCalls += 1;
-      return { account: { total: "1000", available: "1000", in_dual_mode: false }, positions: [],
+      return { account: { total: "1000", unrealised_pnl:"0", available: "1000", in_dual_mode: false }, positions: [],
         orders: [{ id_string: "9223372036854775807", text: "t-ms-e-stuck" }], priceOrders: [], checkedAt: Date.now() };
     },
     cancelOrder: async () => undefined,
@@ -1316,7 +1360,7 @@ test("one symbol leverage rejection is retained as a skip and does not stop anot
   const created: string[] = [];
   stream.liveClient = {
     requestCount: 0,
-    snapshot: async () => ({ account: { total: "1000", available: "1000", in_dual_mode: false },
+    snapshot: async () => ({ account: { total: "1000", unrealised_pnl:"0", available: "1000", in_dual_mode: false },
       positions: [], orders: [], priceOrders: [], checkedAt: Date.now() }),
     setLeverage: async (symbol: string) => { if (symbol === "BTC_USDT") throw new Error("Gate 400 INVALID_LEVERAGE: rejected"); },
     createEntry: async (intent: { body: { contract?: string } }) => { created.push(String(intent.body.contract)); return "accepted"; },
@@ -1327,6 +1371,7 @@ test("one symbol leverage rejection is retained as a skip and does not stop anot
   const openedAt = stream.runtime.live.changedAt + 1;
   stream.runtime.strategyArena.portfolioOpen = Object.fromEntries(symbols.map((symbol) => [symbol, portfolioTrade(symbol, openedAt)]));
   for (const symbol of symbols) stream.runtime.evidence[symbol].observedAt = openedAt;
+  currentForwardFixture(stream,Object.values(stream.runtime.strategyArena.portfolioOpen));
   await stream.syncLive(openedAt + 1);
 
   assert.deepEqual(created, ["ETH_USDT"]);
@@ -1347,7 +1392,7 @@ test("an ambiguous entry response is reconciled once and never blindly replayed"
   let createCalls = 0;
   stream.liveClient = {
     requestCount: 0,
-    snapshot: async () => ({ account: { total: "1000", available: "1000", in_dual_mode: false },
+    snapshot: async () => ({ account: { total: "1000", unrealised_pnl:"0", available: "1000", in_dual_mode: false },
       positions: [], orders: [], priceOrders: [], checkedAt: Date.now() }),
     setLeverage: async () => undefined,
     createEntry: async () => { createCalls += 1; throw new Error("network timeout after submit"); },
@@ -1358,15 +1403,17 @@ test("an ambiguous entry response is reconciled once and never blindly replayed"
   const openedAt = stream.runtime.live.changedAt + 1;
   stream.runtime.strategyArena.portfolioOpen.BTC_USDT = portfolioTrade("BTC_USDT", openedAt);
   stream.runtime.evidence.BTC_USDT.observedAt = openedAt;
+  currentForwardFixture(stream,Object.values(stream.runtime.strategyArena.portfolioOpen));
   await stream.syncLive(openedAt + 1);
   assert.equal(stream.runtime.live.entries.BTC_USDT.status, "ERROR");
   assert.equal(stream.runtime.live.operational, false);
   assert.equal(stream.runtime.live.requestedEnabled, true);
 
-  await stream.syncLive(openedAt + 7_001);
+  const realNow=Date.now;Date.now=()=>openedAt+7_001;
+  try{await stream.syncLive(openedAt+7_001);}finally{Date.now=realNow;}
   assert.equal(stream.runtime.live.entries.BTC_USDT.status, "CANCELLED");
   assert.equal(stream.runtime.live.entrySkips.BTC_USDT.code, "SUBMISSION_UNCONFIRMED");
-  assert.equal(stream.runtime.live.operational, true);
+  assert.equal(stream.runtime.live.operational, false, "unknown submission is not proven flat after six seconds");
   assert.equal(createCalls, 1, "an unconfirmed mutation must never be repeated for the same PAPER plan");
 });
 
@@ -1383,7 +1430,7 @@ test("an ambiguous stop response is reconciled by tag instead of closing a fresh
   let closeCalls = 0;
   stream.liveClient = {
     requestCount: 0,
-    snapshot: async () => ({ account: { total: "1000", available: "1000", in_dual_mode: false },
+    snapshot: async () => ({ account: { total: "1000", unrealised_pnl:"0", available: "1000", in_dual_mode: false },
       positions: actualPosition ? [{ contract: "BTC_USDT", size: "1", entry_price: "100", leverage: "10" }] : [],
       orders: [], priceOrders: confirmedStopTag ? [{ id_string: "stop-confirmed", initial: { text: confirmedStopTag } }] : [],
       checkedAt: Date.now() }),
@@ -1398,6 +1445,7 @@ test("an ambiguous stop response is reconciled by tag instead of closing a fresh
   const openedAt = stream.runtime.live.changedAt + 1;
   stream.runtime.strategyArena.portfolioOpen.BTC_USDT = portfolioTrade("BTC_USDT", openedAt);
   stream.runtime.evidence.BTC_USDT.observedAt = openedAt;
+  currentForwardFixture(stream,Object.values(stream.runtime.strategyArena.portfolioOpen));
   await stream.syncLive(openedAt + 1);
   actualPosition = true;
   await stream.syncLive(openedAt + 2);
@@ -1428,7 +1476,7 @@ test("a definitive immediate-stop rejection requests one fail-closed exit and pa
   const exits: string[] = [];
   stream.liveClient = {
     requestCount: 0,
-    snapshot: async () => ({ account: { total: "1000", available: "1000", in_dual_mode: false },
+    snapshot: async () => ({ account: { total: "1000", unrealised_pnl:"0", available: "1000", in_dual_mode: false },
       positions: [], orders: [], priceOrders: [], checkedAt: Date.now() }),
     setLeverage: async () => undefined,
     createEntry: async (intent: { body: { contract?: string } }) => { entries.push(String(intent.body.contract)); return "entry"; },
@@ -1440,6 +1488,7 @@ test("a definitive immediate-stop rejection requests one fail-closed exit and pa
   stream.runtime.strategyArena.portfolioOpen = Object.fromEntries(symbols.map((symbol) => [symbol, portfolioTrade(symbol, openedAt)]));
   for (const symbol of symbols) stream.runtime.evidence[symbol].observedAt = openedAt;
 
+  currentForwardFixture(stream,Object.values(stream.runtime.strategyArena.portfolioOpen));
   await stream.syncLive(openedAt + 1);
 
   assert.deepEqual(entries, ["BTC_USDT"]);

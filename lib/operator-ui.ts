@@ -1,6 +1,7 @@
 /** UI contracts only. No strategy, credentials storage, or exchange execution. */
 import type { forwardSummary } from "./forward-relations.ts";
 import type { RuntimeHealthShape } from "./runtime-health.ts";
+import type { MirrorReceipt, mirrorCoverage } from "./live-parity.ts";
 export type AuthSession = { configured: boolean; authenticated: boolean; username: string };
 export type LivePosition = {
   id: string; symbol: string; side: "LONG" | "SHORT"; status: "OPEN" | "CLOSED";
@@ -8,18 +9,21 @@ export type LivePosition = {
   notional: number; plannedRisk: number; leverage: number; margin: number;
   exchangeSize: number; stopPrice: number | null; currentStop: number;
   currentTarget: number; realizedPnl?: number; exitReason?: string;
+  parity?: MirrorReceipt; actualExitPriceVerified?: boolean;
 };
 export type LiveEntry = { planId: string; symbol: string; side: "LONG" | "SHORT"; status: string;
   trigger: number; invalidation: number; target: number; notional: number; plannedRisk: number;
-  leverage: number; margin: number; lastError: string | null };
+  leverage: number; margin: number; lastError: string | null; parity?:MirrorReceipt };
 export type LiveRuntime = { requestedEnabled: boolean; operational: boolean; changedAt: number | null;
   lastSyncAt: number | null; lastError: string | null; equity: number | null; available: number | null;
   credentialConfigured: boolean; positions: Record<string, LivePosition | null>; entries: Record<string, LiveEntry | null>;
+  history?:LivePosition[]; mirror?:ReturnType<typeof mirrorCoverage>;
   entrySkips: Record<string, { planId: string; symbol: string; code: string; reason: string; observedAt: number } | null>;
   auditEvents: { id: string; observedAt: number; symbol: string | null; stage: string;
     level: string; reason: string; gateLabel: string | null }[] };
 export type OperatorRuntime = RuntimeHealthShape & { generatedAt: number; lastSuccessAt: number | null; buildSha?: string;
   forward?: ReturnType<typeof forwardSummary>; legacyRetired?: boolean;
+  liveMirror?:ReturnType<typeof mirrorCoverage>;
   liveMode: { requestedEnabled: boolean; operational: boolean }; live?: LiveRuntime;
   evidence: Record<string, { bestBid?: number; bestAsk?: number; midpoint?: number; observedAt: number; fresh: boolean }> };
 export type CredentialStatus = { configured: boolean; environment: string | null; keyHint: string | null;

@@ -28,7 +28,9 @@ export default function LiveConsole({auth,runtime,onSession,onLive,onRefresh}:Pr
   const live=auth?.authenticated?runtime?.live:undefined;
   const enabled=live?.requestedEnabled??runtime?.liveMode?.requestedEnabled??false;
   const positions=Object.values(live?.positions??{}).filter((p):p is LivePosition=>p?.status==="OPEN");
-  const closed=Object.values(live?.positions??{}).filter((p):p is LivePosition=>p?.status==="CLOSED").sort((a,b)=>(b.exitAt??0)-(a.exitAt??0));
+  const closed=[...new Map([...(live?.history??[]),...Object.values(live?.positions??{}).filter((p):p is LivePosition=>p?.status==="CLOSED")]
+    .map(p=>[p.id,p])).values()].sort((a,b)=>(b.exitAt??0)-(a.exitAt??0));
+  const mirror=live?.mirror??runtime?.liveMirror;
   const entries=Object.values(live?.entries??{}).filter(e=>e&&!["FILLED","CANCELLED","FINISHED","REJECTED"].includes(e.status));
   const canControl=Boolean(auth?.authenticated&&live&&runtime);
   const canEnable=canControl&&Boolean(credential?.configured)&&!busy;
@@ -85,11 +87,16 @@ export default function LiveConsole({auth,runtime,onSession,onLive,onRefresh}:Pr
         aria-checked={enabled} disabled={!canControl||Boolean(busy)||(!enabled&&!credential?.configured)}
         onClick={()=>enabled?setMode(false):setConfirmEnable(true)}><span/><b>{busy==="mode"?"核对中":enabled?"开启":"关闭"}</b></button>
       {confirmEnable&&auth?.authenticated&&!enabled&&<div className="fr-inline-confirm" role="group" aria-label="确认开启实盘">
-        <h3>确认开启现有实盘执行连接？</h3><p>可能立即核对和管理已有实盘订单。关系引擎的新规则目前仍只在模拟运行，本次开关不会把它们自动接入实盘。</p>
+        <h3>确认开启当前模拟账户的实盘复制？</h3><p>开启后会复制当前仍有效的模拟持仓，并跟随后续开平仓；不会补开历史已平仓订单。按两账户权益比例分配资金，沿用源单杠杆和退出决定。真实成交价、费用和时间以Gate回报为准。</p>
         <div className="fr-action-row"><button className="fr-button" type="button" disabled={!canEnable} onClick={()=>setMode(true)}>确认开启实盘</button>
           <button className="fr-button secondary" type="button" disabled={Boolean(busy)} onClick={()=>setConfirmEnable(false)}>暂不开启</button></div></div>}
     </section>
-    <div className="fr-live-source"><span aria-hidden="true">ⓘ</span><p><b>当前执行范围：</b>这里接入现有Gate账户与所有者开关。关系引擎生成的规则仍是模拟交易，没有在这次页面更新中接入实盘复制。</p></div>
+    <div className="fr-live-source"><span aria-hidden="true">ⓘ</span><p><b>当前复制源：</b>当前新版模拟账户，不是旧版组合。订单ID、完整规则、保护价格和退出决定逐单关联；仅资金规模按权益比例换算。最小张数、拒单、部分成交或报价差异会明确显示，不冒充百分百成交。</p></div>
+    <section className="fr-section"><div className="fr-section-head"><h2>模拟—实盘复制一致性</h2><span>{mirror?.connected?"当前源已接入":"等待源状态"}</span></div>
+      <div className="fr-three"><div><small>当前模拟源单</small><b>{num(mirror?.sourceCount,0)}</b></div><div><small>已核对对应持仓</small><b>{num(mirror?.copiedCount,0)}</b></div><div><small>待交易所确认</small><b>{num(mirror?.pendingCount,0)}</b></div></div>
+      <p className="fr-note">关闭时不新开仓并撤销系统入场挂单；已有仓位继续跟随源单退出并保留保护单。部署、登录、规则更新及暂时故障不会改变你的开关选择。</p>
+      {auth?.authenticated&&mirror?.rows.filter(r=>r.status!=="COPIED").map(r=><p className="fr-note" key={r.sourceId}>{r.symbol} · {r.reason??r.status}</p>)}
+    </section>
     {error&&<div className="fr-error" role="alert"><b>操作未完成</b><p>{error}</p></div>}
     {notice&&<div className="fr-notice" role="status">{notice}</div>}
     {!auth?.authenticated?<section className="fr-section fr-owner-login"><div className="fr-section-head"><div><small>所有者权限</small><h2>在本页登录</h2></div><span>无弹窗</span></div>
@@ -103,7 +110,7 @@ export default function LiveConsole({auth,runtime,onSession,onLive,onRefresh}:Pr
       <nav className="fr-live-tabs" aria-label="实盘子导航">{tabs.map(([id,title])=><button type="button" key={id} aria-current={section===id?"page":undefined}
         className={section===id?"selected":""} onClick={()=>setSection(id)}>{title}</button>)}</nav>
       {section==="account"&&<>
-        <section className="fr-stats"><LiveStat title="实盘账户权益" value={`${num(live?.equity)} U`} detail="Gate最近核对余额"/>
+        <section className="fr-stats"><LiveStat title="实盘账户权益" value={`${num(live?.equity)} U`} detail="Gate余额＋已核对持仓浮盈"/>
           <LiveStat title="可用保证金" value={`${num(live?.available)} U`} detail="不以模拟本金替代"/>
           <LiveStat title="持仓浮动盈亏" value={`${signed(floating)} U`} detail="新鲜退出报价估值，未扣平仓费用"/>
           <LiveStat title="当前持仓" value={live?`${positions.length} 笔`:"—"} detail={`待执行 ${live?entries.length:"—"} 笔`}/></section>
@@ -120,7 +127,7 @@ export default function LiveConsole({auth,runtime,onSession,onLive,onRefresh}:Pr
           <div className="fr-rule-grid">{positions.map(p=><LivePositionCard key={p.id} position={p} runtime={runtime} now={clock}/>)}
             {entries.map(e=>e&&<article className="fr-trade" key={e.planId}><header><h3>{e.symbol.replace("_"," / ")}</h3><span>{e.side==="LONG"?"多单":"空单"} · 待执行</span></header>
               <dl><Pair label="触发价格" value={num(e.trigger,5)}/><Pair label="保护价格" value={num(e.invalidation,5)}/><Pair label="名义金额" value={`${num(e.notional)} U`}/><Pair label="保证金 / 杠杆" value={`${num(e.margin)} U / ${num(e.leverage,0)}×`}/></dl>
-              <p className="fr-note">{e.lastError??`服务器状态：${e.status}`}</p></article>)}</div>}
+              <p className="fr-note">{e.lastError??`服务器状态：${e.status}`}</p>{e.parity&&<p className="fr-note">源单 {e.parity.sourceId} · 固定复制比例 {num(e.parity.ratio,6)}</p>}</article>)}</div>}
       </section>}
       {section==="history"&&<>
         <section className="fr-section"><div className="fr-section-head"><h2>已平仓实盘记录</h2><span>关闭开关后仍可查看</span></div>
@@ -150,11 +157,13 @@ function LiveEmpty({title,text}:{title:string;text:string}){return<div className
 function LivePositionCard({position:p,runtime,now}:{position:LivePosition;runtime:OperatorRuntime|null;now:number}){
   const open=p.status==="OPEN",mark=livePositionMark(p,runtime,now),pnl=open?mark.pnl:p.realizedPnl;
   return<article className="fr-trade"><header><div><small>{open?"持仓中":"已平仓"} · {p.side==="LONG"?"多单":"空单"}</small><h3>{p.symbol.replace("_"," / ")}</h3></div><strong className={pnl==null?"":pnl>=0?"fr-positive":"fr-negative"}>{signed(pnl)} U</strong></header>
-    <p className="fr-trade-rule">{open?mark.fresh?"按可执行侧报价估值，未扣平仓费用":"当前报价未就绪，不用入场价冒充最新盈亏":"服务器记录的已实现盈亏"}</p>
+    <p className="fr-trade-rule">{open?mark.fresh?"按可执行侧报价估值，未扣平仓费用":"当前报价未就绪，不用入场价冒充最新盈亏":p.actualExitPriceVerified===false?"Gate确认已平仓，真实成交价/净收益待核对，不用模拟结果代替":"服务器记录；缺失的真实净收益不以模拟盈亏代替"}</p>
+    {p.parity&&<p className="fr-note">源单 {p.parity.sourceId} · 规则 {p.parity.sourceRuleId}<br/>固定比例 {num(p.parity.ratio,6)} · 目标名义额 {num(p.parity.targetNotional)} U · 源单杠杆 {num(p.parity.sourceLeverage,0)}×<br/>张数取整差额 {num(p.parity.roundingNotional,4)} U{p.parity.discrepancy?` · ${p.parity.discrepancy}`:""}</p>}
     <dl><Pair label="入场价格" value={num(p.entryPrice,5)}/><Pair label={open?"最新退出报价":"出场价格"} value={num(open?mark.price:p.exitPrice,5)}/>
       <Pair label="保护止损" value={num(p.stopPrice??p.currentStop,5)}/><Pair label="名义金额" value={`${num(p.notional)} U`}/>
       <Pair label="实际保证金 / 杠杆" value={`${num(p.margin)} U / ${num(p.leverage,0)}×`}/><Pair label="张数" value={num(Math.abs(p.exchangeSize),0)}/>
       <Pair label="进场时间" value={time(p.entryAt)}/><Pair label="出场时间" value={open?"持仓中":time(p.exitAt)}/>
       <Pair label="持仓时长" value={holdingTime(p.entryAt,open?now:p.exitAt??0)}/></dl>
-    {p.exitReason&&<p className="fr-trade-reason">退出原因：{p.exitReason}</p>}</article>;
+    {p.exitReason&&<p className="fr-trade-reason">退出原因：{p.exitReason}</p>}
+    {p.parity&&<a className="fr-text-button" href={`/api/live/source?id=${encodeURIComponent(p.parity.sourceId)}`} target="_blank" rel="noreferrer">查看完整模拟源单与复制映射 ↗</a>}</article>;
 }
