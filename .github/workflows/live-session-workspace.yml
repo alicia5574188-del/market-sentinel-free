@@ -1,0 +1,35 @@
+name: Live Session Workspace Read Only
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/live-session-workspace.yml']
+permissions:
+  contents: read
+jobs:
+  capture:
+    if: github.head_ref == 'fix/live-session-decimal-pnl'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Public GET evidence only, no owner login or private exchange requests
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/live-session-workspace
+          git archive HEAD -o /tmp/live-session-workspace/source.tar
+          base='https://market-sentinel-free.alicia5574188.workers.dev'
+          curl -fsS --retry 2 --max-time 20 "$base/__health" > /tmp/live-session-workspace/health-before.json
+          curl -fsS --retry 2 --max-time 20 "$base/api/runtime" > /tmp/live-session-workspace/runtime-before.json
+          curl -fsS --retry 2 --max-time 20 "$base/api/forward/export" > /tmp/live-session-workspace/export-before.json
+          curl -fsS --retry 2 --max-time 20 -H 'X-Gate-Size-Decimal: 1' 'https://api.gateio.ws/api/v4/futures/usdt/contracts' > /tmp/live-session-workspace/contracts.json
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > /tmp/live-session-workspace/time.txt
+          jq '{owner:.runtime.liveMode,build:.runtime.buildSha,mirror:.runtime.liveMirror}' /tmp/live-session-workspace/health-before.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-session-workspace-${{ github.run_id }}
+          path: /tmp/live-session-workspace/
+          retention-days: 7
