@@ -1,0 +1,116 @@
+name: Participation Production Receipt Read Only
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/participation-production-receipt.yml']
+permissions:
+  contents: read
+jobs:
+  receipt:
+    if: github.head_ref == 'verify/participation-20260917'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Wait for reviewed main through established public curl transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p participation-receipt
+          base='https://market-sentinel-free.alicia5574188.workers.dev'
+          ready=0
+          for attempt in {1..70}; do
+            code="$(curl -sS --max-time 15 -o participation-receipt/health-first.json -w '%{http_code}' "$base/__health" || true)"
+            if [[ "$code" == 200 ]] && jq -e '.runtime.buildSha == "145295afd180a2e479b8a6d3da695ac973709ad7" and .runtime.forward.policyVersion == "participation-execution-v1.2" and .runtime.forward.storage.error == null and .runtime.forward.storage.persistedAt > 0' participation-receipt/health-first.json >/dev/null; then ready=1;break; fi
+            sleep 5
+          done
+          [[ "$ready" == 1 ]]
+          curl -fsS --retry 3 --max-time 20 "$base/api/forward/export" > participation-receipt/export-first.json
+          curl -fsS --retry 3 --max-time 20 "$base/api/runtime" > participation-receipt/runtime-first.json
+          sleep 12
+          curl -fsS --retry 3 --max-time 20 "$base/__health" > participation-receipt/health-second.json
+          python - <<'PY'
+          import json,pathlib,hashlib
+          root=pathlib.Path('participation-receipt');h=json.loads((root/'health-first.json').read_text());h2=json.loads((root/'health-second.json').read_text());r=h2['runtime'];f=json.loads((root/'export-first.json').read_text())['forward']
+          assert r['buildSha']=='145295afd180a2e479b8a6d3da695ac973709ad7'
+          assert r['lastSuccessAt']>h['runtime']['lastSuccessAt']
+          assert r['liveMode']==h['runtime']['liveMode']
+          assert f['liveEligible'] is False and r['legacyRetired'] is True
+          assert f['startedAt']==1789556791436 and f['initialEquity']==1000
+          assert f['policyUpgrade']['from']=='evidence-calibration-v1.1'
+          assert f['policyUpgrade']['to']=='participation-execution-v1.2'
+          assert f['policyUpgrade']['resolved']>=61 and f['policyUpgrade']['balance']<1000
+          assert any(x['at']==1789603024105 and x['to']=='evidence-calibration-v1.1' for x in f['policyUpgrades'])
+          assert f['storage']['error'] is None
+          history=f['history'];old=[t for t in history if t['openedAt']<1789603024105]
+          if len(old)==61:
+              hashes={t['id']:hashlib.sha256(json.dumps(t,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest() for t in old}
+              assert hashlib.sha256(json.dumps(hashes,sort_keys=True,separators=(',',':')).encode()).hexdigest()=='2ec1c43a977f1c44104212cfffb0139a4a4e06e5f25ae62e006e5d0385bb3da5'
+          if len(history)==f['resolved']:
+              expected=1000+sum(t['netPnl'] for t in history)-sum(t['entryFee'] for t in f['positions'])
+              assert abs(expected-f['balance'])<1e-6,(expected,f['balance'])
+          for t in f['positions']+history:
+              if t.get('forecast',{}).get('policy')=='participation-execution-v1.2':
+                  assert t['openedAt']>=f['policyUpgrade']['at']
+                  assert t['notional']>=t['forecast']['sizingEquity']*.05-1e-6
+                  assert t['liveEligible'] is False
+          print(json.dumps({'buildSha':r['buildSha'],'heartbeatAdvances':True,'liveMode':r['liveMode'],'policy':f['policyVersion'],'upgrade':f['policyUpgrade'],'oldClosedObjectsInCurrentWindow':len(old),'equity':f['equity'],'participation':f['participation']},ensure_ascii=False))
+          PY
+      - name: Install isolated browser checker
+        run: python -m pip install playwright==1.55.0
+      - name: Read deployed native dark UI at four widths; no login or account changes
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json,pathlib,shutil
+          from playwright.sync_api import sync_playwright
+          root=pathlib.Path('participation-receipt');results=[];base='https://market-sentinel-free.alicia5574188.workers.dev'
+          chrome=shutil.which('google-chrome') or shutil.which('chromium') or shutil.which('chromium-browser');assert chrome
+          with sync_playwright() as p:
+              b=p.chromium.launch(executable_path=chrome,headless=True,args=['--no-sandbox'])
+              for w in [320,393,768,1440]:
+                  page=b.new_page(viewport={'width':w,'height':900});errors=[];dialogs=[]
+                  page.on('pageerror',lambda e:errors.append(str(e)))
+                  page.on('dialog',lambda d:(dialogs.append(d.message),d.dismiss()))
+                  response=page.goto(base,wait_until='domcontentloaded',timeout=45000);assert response and response.status==200
+                  page.wait_for_selector('.fr-app[data-ui-version="dark-live-v1"]',timeout=20000);page.wait_for_timeout(1800)
+                  assert page.locator('.fr-return').count()==0
+                  for name in ['总览','规则','模拟','实盘','演变','系统']:
+                      page.locator('nav.fr-nav button').filter(has_text=name).click();page.wait_for_timeout(400)
+                      assert page.locator('nav.fr-nav button[aria-current="page"] b').inner_text()==name
+                      overflow=page.evaluate('document.documentElement.scrollWidth>innerWidth+1');assert not overflow,(w,name)
+                      assert not errors,errors;assert not dialogs,dialogs
+                      if name=='总览':assert page.get_by_text('机会与执行',exact=True).is_visible()
+                      if w in [393,1440] and name in ['总览','规则','模拟','系统']:page.screenshot(path=str(root/f'{w}-{name}.png'),full_page=True)
+                      results.append({'width':w,'tab':name,'overflow':overflow,'pageErrors':list(errors),'dialogs':list(dialogs)})
+                  assert 'participation-execution-v1.2' in page.locator('main').inner_text()
+                  page.close()
+              b.close()
+          (root/'browser-results.json').write_text(json.dumps(results,ensure_ascii=False,indent=2));print('24 actual production tab/viewport checks passed')
+          PY
+      - name: Observe a subsequent saved cycle and genuine activity; never force an order
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='https://market-sentinel-free.alicia5574188.workers.dev'
+          first="$(jq -r '.forward.lastCycleAt' participation-receipt/export-first.json)"
+          for attempt in {1..65}; do
+            code="$(curl -sS --max-time 15 -o participation-receipt/export-final.json -w '%{http_code}' "$base/api/forward/export" || true)"
+            if [[ "$code" == 200 ]] && jq -e --argjson first "$first" '.forward.lastCycleAt > $first and .forward.storage.persistedAt >= .forward.lastCycleAt and .forward.storage.error == null and .forward.participation.opened > 0' participation-receipt/export-final.json >/dev/null;then break;fi
+            sleep 5
+          done
+          jq -e --argjson first "$first" '.forward.lastCycleAt > $first and .forward.storage.persistedAt >= .forward.lastCycleAt and .forward.storage.error == null' participation-receipt/export-final.json >/dev/null
+          curl -fsS --retry 3 --max-time 20 "$base/__health" > participation-receipt/health-final.json
+          curl -fsS --retry 3 --max-time 20 "$base/api/forward/archive" > participation-receipt/archive-first-page.json
+          jq '{exportedAt,forward:(.forward|{policyVersion,policyUpgrade,policyUpgrades,startedAt,equity,balance,resolved,positions,participation,entryDiagnostics,quoteRetries,lastCycleAt,storage})}' participation-receipt/export-final.json > participation-receipt/summary.json
+          cat participation-receipt/summary.json
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > participation-receipt/fetched-at.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: participation-production-${{ github.run_id }}
+          path: participation-receipt/
+          retention-days: 7
+          if-no-files-found: error
