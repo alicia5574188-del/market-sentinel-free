@@ -1,3 +1,7 @@
+# Participation repair candidate — 2026-09-17
+
+49-recorded-cutoff diagnostic retains526of528active-baseline hypotheses, versus10for strictv1.1; not fills or profit. Implemented bounded quote retry, cost-aware new-rule giveback, hypothesis/confidence separation, shared existing capital and non-reset v1.2 migration.354direct tests including78forward tests pass locally. Build/type/lint/dry-run and actual production receipt determine completion; this heading is not a deployment claim.
+
 # Evidence calibration candidate / 2026-09-17
 
 Implemented bounded cross-asset influence checks, separate own-symbol applicability, actual closed-PAPER forecast-error calibration, unchanged-evidence deduplication, repeated/correlated risk budget, marked-cost-aware sizing and non-reset policy upgrade. Native dark UI exposes scope, rejection reasons and upgrade baseline. See `research/FORWARD_EVIDENCE_REPAIR.md` for explicit drawbacks and limits. Functional tests and exact-head CI/production receipt determine release completion; this entry itself is not a deployment or profitability claim.

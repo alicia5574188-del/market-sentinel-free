@@ -1,3 +1,7 @@
+# Active participation correction — 2026-09-17
+
+Preserve the user-approved active forward system's candidate breadth while correcting execution timing and cost geometry. Do not improve loss statistics by eliminating participation. Implement only the documented changes in `research/FORWARD_PARTICIPATION_REPAIR.md`; authorize reviewed-main deployment after tests and check actual production. No forced trades, shadow promotion, account reset, LIVE bridge or switch action.
+
 # Active correction — forward evidence and execution feedback / 2026-09-17
 
 User explicitly authorizes thinking through defects/side effects, then implementing and deploying a targeted PAPER repair. Scope and acceptance: `research/FORWARD_EVIDENCE_REPAIR.md`. Do not turn off all15-minute trading, blacklist volatile coins, revive old failed strategies or promise monthly doubling. Preserve old losses/account identity/learning and original open-position protection; LIVE and authentication authority remain unchanged.

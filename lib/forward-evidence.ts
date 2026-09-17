@@ -4,7 +4,8 @@
  */
 import type { Condition, Measurement, Rule, Trade } from "./forward-relations.ts";
 
-export const EVIDENCE_POLICY = "evidence-calibration-v1.1";
+export const EVIDENCE_POLICY = "participation-execution-v1.2";
+export const PREVIOUS_POLICY = "evidence-calibration-v1.1";
 const HOUR = 3_600_000;
 const mean = (a: number[]) => a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0;
 const clip = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
@@ -25,15 +26,17 @@ export type Calibration = { groups:number; effectiveGroups:number; penalty:numbe
   meanNet:number; latestAt:number; sourceKey:string };
 export type Evidence = { policy:string; scope:"CROSS_ASSET"|"SINGLE_ASSET"; symbols:string[];
   sourceKey:string; family:string; cap:number; rawNet:number; costRate:number; quality:number;
-  worstWithoutSymbol:number|null; calibration:Calibration };
+  worstWithoutSymbol:number|null; calibration:Calibration;
+  boundedNet?:number; calibratedNet?:number; uncertain?:boolean; warnings?:string[] };
 export type Candidate = { conditions:Condition[]; side:Rule["side"]; horizon:number; stopRate:number;
   armRate:number; givebackRate:number; exitMode:Rule["exitMode"]; samples:number; trainGroups:number;
   checkGroups:number; estimatedNetRate:number; priorResponse:number; recentResponse:number;
   standardError:number; evidence:Evidence };
 export type EvidenceDiagnostics = { tested:number; qualified:number; insufficient:number; costRejected:number;
-  concentrationRejected:number; calibrationRejected:number; applicabilityRejected:number; expired:number };
+  concentrationRejected:number; calibrationRejected:number; applicabilityRejected:number; expired:number;
+  concentrationWarnings?:number; calibrationWarnings?:number };
 export function blankDiagnostics():EvidenceDiagnostics { return {tested:0,qualified:0,insufficient:0,costRejected:0,
-  concentrationRejected:0,calibrationRejected:0,applicabilityRejected:0,expired:0}; }
+  concentrationRejected:0,calibrationRejected:0,applicabilityRejected:0,expired:0,concentrationWarnings:0,calibrationWarnings:0}; }
 
 export function feedbackFromTrade(t:Trade):Feedback|null {
   if(t.status!=="CLOSED"||t.closedAt==null||t.netPnl==null||!Number.isFinite(t.netPnl)||!(t.notional>0))return null;
@@ -86,6 +89,15 @@ function stats(rows:Measurement[],sign:number,cap:number) {
   const values=[...time.values()].map(cell=>mean([...cell.values()].map(mean))),m=mean(values);
   return {mean:m,groups:values.length,se:values.length>1?Math.sqrt(values.reduce((s,v)=>s+(v-m)**2,0)/(values.length-1)/values.length):Infinity};
 }
+// Discovery and confidence are distinct. The raw estimate reproduces the
+// active baseline's hypothesis test; it is NOT a confidence bound or proof of
+// transferable edge. Bounded statistics below score how much to trust it.
+export function evidenceQuality(rawNet:number,boundedNet:number,se:number,cost:number,penalty:number) {
+  return .5 + .5 * clip((Math.min(rawNet,boundedNet)-penalty)/(cost+se),0,1);
+}
+export function costAwareGiveback(armRate:number,givebackRate:number,cost:number) {
+  return Math.min(givebackRate,Math.max(0,armRate-cost*1.25));
+}
 export function inspectCondition(input:{rows:Measurement[];conditions:Condition[];horizon:number;now:number;
   feedback:Feedback[];scopeSymbol?:string},diagnostics:EvidenceDiagnostics):Candidate|null {
   const {conditions,horizon,now,feedback,scopeSymbol}=input;diagnostics.tested++;
@@ -95,44 +107,45 @@ export function inspectCondition(input:{rows:Measurement[];conditions:Condition[
   const train=ordered.filter(r=>r.endAt<=boundary&&eligible(r)),check=ordered.filter(r=>r.at>=boundary&&eligible(r));
   // Clip influence with a scale determined by earlier responses only.
   const cap=Math.min(.1,Math.max(modeledCost(horizon)*2,4*q(train.map(r=>Math.abs(r.response)),.5)));
-  const initial=stats(train,1,cap),sign=initial.mean>=0?1:-1,a=stats(train,sign,cap),b=stats(check,sign,cap);
+  const initial=stats(train,1,Infinity),sign=initial.mean>=0?1:-1;
+  const a=stats(train,sign,Infinity),b=stats(check,sign,Infinity);
+  const boundedA=stats(train,sign,cap),boundedB=stats(check,sign,cap);
   if(train.length<(scopeSymbol?3:12)||check.length<(scopeSymbol?2:8)||a.groups<3||b.groups<2){diagnostics.insufficient++;return null;}
   const selected=[...train,...check],symbols=[...new Set(selected.map(r=>r.symbol))].sort();
-  const se=Math.max(a.se,b.se),cost=modeledCost(horizon);
-  let lower=Math.min(a.mean,b.mean),worstWithoutSymbol:number|null=null;
+  const se=.5*Math.max(a.se,b.se),cost=modeledCost(horizon);
+  const rawNet=Math.min(a.mean,b.mean)-cost-se;
+  if(!(rawNet>0)){diagnostics.costRejected++;return null;}
+  const boundedNet=Math.min(boundedA.mean,boundedB.mean)-cost-.5*Math.max(boundedA.se,boundedB.se);
+  let worstWithoutSymbol:number|null=null;
+  const warnings:string[]=[];
   if(!scopeSymbol){
     if(symbols.length<3){diagnostics.insufficient++;return null;}
-    // A cross-asset edge must survive removing ANY one constituent. Statistics
-    // are still computed from the original selected cohort, never cherry-picked
-    // after excluding losing coins. An idiosyncratic edge may only trade itself.
+    // Sensitivity is retained as evidence, not a chain of unanimity vetoes.
+    // Unknown transferability is explicitly an experimental pooled hypothesis.
     const leave=symbols.map(sym=>{
       const x=stats(train.filter(r=>r.symbol!==sym),sign,cap),y=stats(check.filter(r=>r.symbol!==sym),sign,cap);
       return x.groups>=3&&y.groups>=2?Math.min(x.mean,y.mean):-Infinity;
     });
-    worstWithoutSymbol=Math.min(...leave);
-    if(worstWithoutSymbol-cost-se<=0){diagnostics.concentrationRejected++;return null;}
-    lower=Math.min(lower,worstWithoutSymbol);
+    const worst=Math.min(...leave);worstWithoutSymbol=Number.isFinite(worst)?worst:null;
+    if(worst-cost-se<=0){diagnostics.concentrationWarnings=(diagnostics.concentrationWarnings??0)+1;warnings.push("跨币反应依赖少数样本，作为待验证假设而非通用优势");}
   }
-  const rawNet=lower-cost-se;
-  if(!(rawNet>0)){diagnostics.costRejected++;return null;}
-  const applicable=scopeSymbol?[scopeSymbol]:symbols.filter(sym=>{
-    const x=train.filter(r=>r.symbol===sym),y=check.filter(r=>r.symbol===sym);
-    return x.length>=1&&y.length>=1&&x.length+y.length>=3&&stats(x,sign,cap).mean>0&&stats(y,sign,cap).mean>0;
-  });
+  const applicable=scopeSymbol?[scopeSymbol]:[...new Set(ordered.map(r=>r.symbol))].sort();
   if(!applicable.length){diagnostics.applicabilityRejected++;return null;}
   const side:Rule["side"]=sign>0?"LONG":"SHORT",family=familyKey({horizon,side,conditions});
   const calibration=executionCalibration(feedback,family,applicable,now),net=rawNet-calibration.penalty;
-  if(!(net>0)){diagnostics.calibrationRejected++;return null;}
+  if(net<=0){diagnostics.calibrationWarnings=(diagnostics.calibrationWarnings??0)+1;warnings.push("实际成交校准为非正，保留实验候选但降低排序与风险，不标作已证实盈利");}
+  if(boundedNet<=0)warnings.push("稳健估计尚未支持成本后优势");
   const adverse=selected.map(r=>sign>0?r.down:r.up),favorable=selected.map(r=>sign>0?r.up:r.down);
   const stopRate=clip(q(adverse,.8)*1.15,.003,.10),armRate=Math.max(cost*2,q(favorable,.6));
-  const givebackRate=clip(q(selected.map((r,i)=>Math.max(0,favorable[i]-sign*r.response)),.6),.0025,Math.max(.0025,armRate*.8));
+  const givebackRate=costAwareGiveback(armRate,clip(q(selected.map((r,i)=>Math.max(0,favorable[i]-sign*r.response)),.6),.0025,Math.max(.0025,armRate*.8)),cost);
   const exitMode:Rule["exitMode"]=mean(favorable)>Math.max(.0001,mean(selected.map(r=>sign*r.response)))*1.7?"REACTION_DECAY":"HORIZON";
-  const sourceKey=evidenceHash(JSON.stringify([scopeSymbol??"CROSS",conditions,selected.map(r=>[r.symbol,r.at,r.response,r.up,r.down]),calibration.sourceKey]));
+  const sourceKey=evidenceHash(JSON.stringify([scopeSymbol??"CROSS",applicable,conditions,selected.map(r=>[r.symbol,r.at,r.response,r.up,r.down]),calibration.sourceKey]));
   diagnostics.qualified++;
   return {conditions,side,horizon,stopRate,armRate,givebackRate,exitMode,samples:selected.length,
-    trainGroups:a.groups,checkGroups:b.groups,estimatedNetRate:net,priorResponse:sign*a.mean,recentResponse:sign*b.mean,standardError:se,
+    trainGroups:a.groups,checkGroups:b.groups,estimatedNetRate:rawNet,priorResponse:sign*a.mean,recentResponse:sign*b.mean,standardError:se,
     evidence:{policy:EVIDENCE_POLICY,scope:scopeSymbol?"SINGLE_ASSET":"CROSS_ASSET",symbols:applicable,sourceKey,family,cap,
-      rawNet,costRate:cost,quality:clip(net/(cost+se),0,1),worstWithoutSymbol,calibration}};
+      rawNet,boundedNet,calibratedNet:net,uncertain:warnings.length>0,warnings,costRate:cost,
+      quality:evidenceQuality(rawNet,boundedNet,se,cost,calibration.penalty),worstWithoutSymbol,calibration}};
 }
 export function ruleApplies(r:Rule,symbol:string) { return r.evidence?.policy===EVIDENCE_POLICY&&r.evidence.symbols.includes(symbol); }
 export function entryEconomics(r:Rule,signalPrice:number,entryPrice:number,spread:number) {
@@ -141,5 +154,5 @@ export function entryEconomics(r:Rule,signalPrice:number,entryPrice:number,sprea
   // Unfavourable movement is not a free better forecast: do not boost it.
   const contextInvalid=move < -Math.max(cost,r.stopRate*.5);
   const remaining=contextInvalid?0:r.estimatedNetRate-Math.max(0,move)-spread;
-  return {remaining,contextInvalid,quality:clip(remaining/(cost+r.standardError),0,1)};
+  return {remaining,contextInvalid,quality:remaining>0?.5+.5*clip(remaining/(cost+r.standardError),0,1):0};
 }

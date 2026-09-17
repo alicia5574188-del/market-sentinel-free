@@ -40,11 +40,14 @@ test("ordinary shared positive relation survives robustness checks; not a no-tra
 test("ordinary shared negative relation can generate a SHORT without loss-triggered reversal",()=>{
   const {candidate:c}=inspect(rows(()=>-.006));assert.ok(c);assert.equal(c.side,"SHORT");assert.equal(c.evidence.calibration.groups,0);
 });
-test("one enormous coin rally cannot create a shared LONG over losing peers",()=>{
-  const {candidate:c}=inspect(rows((_k,j)=>j===0?.5:-.004));assert.ok(!c||c.side!=="LONG");
+test("outlier-supported hypothesis cannot be presented or sized as a robust shared edge",()=>{
+  const {candidate:c}=inspect(rows((_k,j)=>j===0?.5:-.004));assert.ok(c);
+  assert.equal(c.evidence.uncertain,true);assert.ok(c.evidence.boundedNet!<0);assert.equal(c.evidence.quality,.5);
+  assert.ok(c.evidence.warnings!.length>0);
 });
-test("a concentrated positive mean that fails removing one symbol is explicitly rejected",()=>{
-  const {candidate:c,diagnostics:d}=inspect(rows((_k,j)=>j===0?.03:.0001,4));assert.equal(c,null);assert.ok(d.concentrationRejected>0||d.costRejected>0);
+test("concentration diagnostic reduces confidence without erasing a PAPER hypothesis",()=>{
+  const {candidate:c,diagnostics:d}=inspect(rows((_k,j)=>j===0?.03:.0001,4));assert.ok(c);
+  assert.ok(d.concentrationWarnings!>0);assert.equal(d.concentrationRejected,0);assert.equal(c.evidence.quality,.5);
 });
 test("persistent single-symbol relation remains usable but has no authority on other coins",()=>{
   const data=rows(()=>.012,1);const {candidate:c}=inspect(data,"S0");assert.ok(c);
@@ -89,10 +92,11 @@ test("future closures and incompatible scope cannot contaminate present feedback
   const now=START+HOUR,f=feedback("one",now+1);assert.equal(executionCalibration([f],f.family,["S0"],now).groups,0);
   assert.equal(executionCalibration([f],f.family,["OTHER"],now+1).groups,0);
 });
-test("actual negative outcomes lower a still-positive gross relation's net estimate",()=>{
+test("negative execution calibration remains visible and reduces confidence instead of resetting participation",()=>{
   const data=rows(()=>.004),now=Math.max(...data.map(r=>r.availableAt))+1;
   const bad=Array.from({length:6},(_,i)=>feedback(`loss${i}`,now-(i+1)*15*60000));
-  const result=inspectCondition({rows:data,conditions,horizon:15,now,feedback:bad},blankDiagnostics());assert.equal(result,null);
+  const result=inspectCondition({rows:data,conditions,horizon:15,now,feedback:bad},blankDiagnostics());assert.ok(result);
+  assert.ok(result.evidence.calibratedNet!<0);assert.equal(result.evidence.quality,.5);assert.equal(result.evidence.uncertain,true);
 });
 test("fees are not subtracted again by the residual calibrator",()=>{
   const now=START+HOUR,f=feedback("equal",now);f.realizedNet=f.predictedNet;f.costRate=.02;
@@ -112,20 +116,22 @@ test("a weak expected edge does not receive the strong edge's full 1.5% risk",()
   const m=market(now,["S0"]),a=advanceForward({state:strong,now,...m}).state,b=advanceForward({state:weak,now,...m}).state;
   assert.equal(a.positions.length,1);assert.equal(b.positions.length,1);assert.ok(b.positions[0].notional<a.positions[0].notional);
 });
-test("shared same-direction same-horizon budget includes new-leg marking costs",()=>{
+test("same-horizon opportunities share existing directional risk instead of a separate 3% veto",()=>{
   const now=START+BAR_MS*10,m=market(now),s=advanceForward({state:freshState(now),now,...m}).state;
-  const eq=forwardEquity(s,m.quotes,now).equity;assert.equal(s.positions.length,2);assert.ok(s.positions.reduce((a,t)=>a+t.plannedRisk,0)<=eq*.03+1e-8);
+  const eq=forwardEquity(s,m.quotes,now).equity;assert.equal(s.positions.length,4);assert.ok(s.positions.reduce((a,t)=>a+t.plannedRisk,0)<=eq*.065+1e-8);
+  assert.ok(s.positions.every(t=>t.plannedRisk<=t.forecast!.sizingEquity!*.015+1e-8));
 });
 test("tiny remaining allocation is skipped rather than creating dust orders",()=>{
-  const now=START+BAR_MS*10,m=market(now),s=advanceForward({state:freshState(now),now,...m}).state;
-  assert.ok(s.positions.every(t=>t.notional>=s.balance*.05));assert.ok(Object.keys(s.entryDiagnostics!.reasons).some(k=>k.includes("仓位")));
+  const now=START+BAR_MS*10,m=market(now),seed=freshState(now);seed.rules[0].stopRate=100;
+  const s=advanceForward({state:seed,now,...m}).state;
+  assert.equal(s.positions.length,0);assert.ok(Object.keys(s.entryDiagnostics!.reasons).some(k=>k.includes("仓位")));
 });
-test("closed order cannot reopen same symbol and family before original horizon by changing version",()=>{
+test("new completed observation may re-enter a family after closure without waiting full old horizon",()=>{
   const now=START+BAR_MS*10,m=market(now,["S0"]);let s=advanceForward({state:freshState(now),now,...m}).state;
   s=advanceForward({state:s,now:now+BAR_MS,...market(now+BAR_MS,["S0"],90)}).state;assert.equal(s.positions.length,0);
   s.rules=[fixtureRule(now+BAR_MS,["S0"])];s.lastFitAt=now+BAR_MS;s.rules[0].version=99;
   s=advanceForward({state:s,now:now+2*BAR_MS,...market(now+2*BAR_MS,["S0"])}).state;
-  assert.equal(s.positions.length,0);assert.ok(Object.keys(s.entryDiagnostics!.reasons).some(k=>k.includes("周期尚未结束")));
+  assert.equal(s.positions.length,1);assert.equal(s.positions[0].openedAt,now+2*BAR_MS);
 });
 test("identical evidence and no new closed trades do not mint versions",()=>{
   const s=initialForward(START);s.samples=rows();const now=Math.max(...s.samples.map(r=>r.availableAt))+1;
