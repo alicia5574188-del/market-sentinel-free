@@ -1,3 +1,7 @@
+# Active LIVE correction — 2026-09-18
+
+User requests new-orders-only enable, native Gate floating PnL, and contract-specific fractional minimum execution. Supersede only earlier catch-up semantics; maintain current PAPER source identity/proportional sizing/source leverage and owner-exclusive switch. Preserve already-bound real holdings, open protective orders, PAPER participation strategy and history. Use public metadata and fake-Gate tests, not real-money tests or owner actions. Correct falsely blocked fractional lots, expose genuinely below-minimum orders without forced enlargement. Complete tested main-only deployment and truthful production receipt.
+
 # Permanent current-PAPER LIVE parity — 2026-09-17
 
 The owner explicitly requires EVERY future version to mirror its current visible PAPER orders to LIVE when, and only when, the owner enables. Read `LIVE_MIRROR_CONTRACT.md` first. Earlier PAPER-only-routing/canonical-LIVE restrictions below are superseded. The simulator still has no private keys; the owner-enabled adapter mirrors persisted source identities, full rules and lifecycle with frozen proportional capital/same requested leverage. Do not change strategy or reset accounts to add this bridge. Errors pause execution, never override the owner's switch. Unknown fills and exchange differences remain visible. `test:live-parity` and production current-source metadata are mandatory release gates. This session must leave actual LIVE intent unchanged and perform no private Gate trades.

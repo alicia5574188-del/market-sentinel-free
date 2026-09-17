@@ -5,12 +5,14 @@ import handler from "vinext/server/app-router-entry";
 import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchMarketTickers, fetchRecentTrades, fetchStructureCandles } from "../lib/gate-market.ts";
 import { closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_RISK_CAP, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
 import { aggregateFourHourCandles, analyzeSnapshot, ancillarySchedule, applyFlow, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, optionalEvidenceIsFresh, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
-import { arenaProtectionStop, arenaTradePlan, eligibleForLiveMirror, liveMirrorExitRequired } from "../lib/arena-live.ts";
+import { arenaProtectionStop, arenaTradePlan, liveMirrorExitRequired } from "../lib/arena-live.ts";
 import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem } from "../lib/paper-outbox.ts";
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
   PAPER_BANKRUPTCY_EQUITY, PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
-import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, gateMarkedEquity, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, gateMarkedEquity, gatePositionValuation, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
+import { LIVE_SESSION_VERSION, startLiveSession, sourceAfterEnable, sameLiveSession, type LiveSession } from "../lib/live-session.ts";
+import type { GateSizeRules, SizeDiagnostic } from "../lib/gate-quantity.ts";
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
 import { credentialMetadata } from "../lib/gate-readonly.ts";
 import { clearOwnerSessionCookie, createOwnerSession, ownerAuthConfigured, ownerPasswordMatches, ownerSessionCookie, sameOriginMutation, verifyOwnerSession } from "../lib/owner-auth.ts";
@@ -154,7 +156,7 @@ type LiveEntry = {
   mirrorSourceId?: string;
 };
 
-type LivePosition = PaperPosition & {
+type LivePosition = PaperPosition & Partial<ReturnType<typeof gatePositionValuation>> & {
   exchangeSize: number;
   leverage: number;
   margin: number;
@@ -186,6 +188,7 @@ type LiveRuntime = {
   requestedEnabled: boolean;
   operational: boolean;
   changedAt: number | null;
+  activation?: LiveSession | null;
   lastSyncAt: number | null;
   lastError: string | null;
   equity: number | null;
@@ -193,7 +196,7 @@ type LiveRuntime = {
   credentialConfigured: boolean;
   entries: Record<string, LiveEntry | null>;
   positions: Record<string, LivePosition | null>;
-  entrySkips: Record<string, { planId: string; symbol: string; code: LiveEntrySkipCode; reason: string; observedAt: number } | null>;
+  entrySkips: Record<string, { planId: string; symbol: string; code: LiveEntrySkipCode; reason: string; observedAt: number; sizing?: SizeDiagnostic } | null>;
   auditEvents: LiveAuditEvent[];
 };
 
@@ -253,7 +256,7 @@ type RuntimeState = {
   d1MirrorError: string | null;
   riskBreach: boolean;
   tickSize: Record<string, number>;
-  contractMeta: Record<string, { quantoMultiplier: number; maintenanceRate: number; leverageMax: number; fundingRate: number }>;
+  contractMeta: Record<string, { quantoMultiplier: number; maintenanceRate: number; leverageMax: number; fundingRate: number } & GateSizeRules>;
   decisions: Record<string, Decision | null>;
   routes: Record<string, LiquidityRoute[]>;
   plans: Record<string, PaperPlan | null>;
@@ -545,8 +548,21 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       catch (error) { this.forwardError = safeError(error); }
       // Owner intent has its own durable record. Background checkpoints and
       // deployments cannot replace a later OFF with an earlier in-flight ON.
-      const intent=await ctx.storage.get<{enabled:boolean;changedAt:number}>(`${LIVE_PARITY_PREFIX}owner-intent`);
-      if(intent){this.runtime.live.requestedEnabled=intent.enabled;this.runtime.live.changedAt=intent.changedAt;}
+      const intent=await ctx.storage.get<{enabled:boolean;changedAt:number;activation?:LiveSession|null}>(`${LIVE_PARITY_PREFIX}owner-intent`);
+      if(intent){this.runtime.live.requestedEnabled=intent.enabled;this.runtime.live.changedAt=intent.changedAt;
+        this.runtime.live.activation=intent.activation??null;}
+      if(this.runtime.live.requestedEnabled&&!this.runtime.live.activation){
+        // One-time rule migration: protect already-bound real positions, but do
+        // not catch up any as-yet-unsubmitted position present at deployment.
+        const activation=startLiveSession(Date.now(),this.forwardState,true);
+        await ctx.storage.put(`${LIVE_PARITY_PREFIX}owner-intent`,{enabled:true,changedAt:this.runtime.live.changedAt,activation});
+        this.runtime.live.activation=activation;this.runtime.nonAlarmWrites++;
+      }
+      if(this.runtime.live.activation&&this.runtime.live.activation.version!==LIVE_SESSION_VERSION)
+        this.liveBindingError="实盘开启会话版本不兼容，停止新增复制，不改写所有者开关";
+      // Populate size metadata with the existing universe job immediately;
+      // do not wait ten minutes or add per-symbol/private network requests.
+      if(Object.values(this.runtime.contractMeta).some(m=>typeof m.enableDecimal!=="boolean"||!m.orderSizeMin))this.runtime.lastUniverseAt=0;
       try {
         const ids=new Set([...Object.values(this.runtime.live.entries).flatMap(e=>e?.mirrorSourceId?[e.mirrorSourceId]:[]),
           ...Object.values(this.runtime.live.positions).flatMap(p=>p?.mirrorSourceId?[p.mirrorSourceId]:[])]);
@@ -639,7 +655,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (!row) return;
     this.runtime.tickSize[symbol] = row.tickSize;
     this.runtime.contractMeta[symbol] = { quantoMultiplier: row.quantoMultiplier, maintenanceRate: row.maintenanceRate,
-      leverageMax: row.leverageMax, fundingRate: row.fundingRate };
+      leverageMax: row.leverageMax, fundingRate: row.fundingRate,
+      enableDecimal:row.enableDecimal,orderSizeMin:row.orderSizeMin,orderSizeMax:row.orderSizeMax,marketOrderSizeMax:row.marketOrderSizeMax };
     if (this.memory[symbol]) this.memory[symbol].flow.funding = row.fundingRate;
   }
 
@@ -1794,6 +1811,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       const selectedTrade = desiredPortfolio[symbol] ?? null;
       const shouldCancel = !this.runtime.live.requestedEnabled || !selectedTrade || selectedTrade.id !== entry.planId
+        || (entry.parity&&selectedTrade.forwardSource&&!sourceAfterEnable(selectedTrade.forwardSource,this.runtime.live.activation,this.forwardState?.startedAt??0))
         || now >= entry.expiresAt || !(entry.parity?this.mirrorQuoteReady(symbol):this.symbolEntryReady(symbol));
       if (shouldCancel && openOrder && entry.exchangeOrderId) await this.cancelLiveEntry(client, entry);
       else if (shouldCancel && !openOrder && entry.status !== "FILLED" && entry.missingSince != null && now - entry.missingSince >= 6_000) entry.status = "CANCELLED";
@@ -1845,6 +1863,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         throw new Error(`${symbol} 实盘方向与系统记录冲突`);
       }
       position.exchangeUpdatedAt = now;
+      Object.assign(position,gatePositionValuation(actual,snapshot.checkedAt));
       // Track partial IOC executions and exchange-side reductions explicitly.
       if(position.parity){
         const receipt=position.parity;
@@ -1856,7 +1875,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         position.exchangeSize=Math.abs(exchangeSize);
         position.notional=position.exchangeSize*position.entryPrice*(this.runtime.contractMeta[symbol]?.quantoMultiplier??0);
         position.leverage=Math.max(1,Number(actual.leverage)||receipt.sourceLeverage);
-        position.margin=position.notional/position.leverage;
+        const reportedMargin=position.exchangeMargin??position.exchangeInitialMargin;
+        position.margin=reportedMargin!=null&&reportedMargin>0?reportedMargin:position.notional/position.leverage;
         if(position.leverage!==receipt.sourceLeverage)receipt.discrepancy=`交易所杠杆${position.leverage}×与源单${receipt.sourceLeverage}×不同`;
       }
       const selectedTrade = desiredPortfolio[symbol] ?? null;
@@ -1981,7 +2001,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ...Object.values(this.runtime.live.entries).filter(e=>e&&["SUBMITTING","OPEN","ERROR"].includes(e.status))]
       .reduce((n,p)=>n+(p?.notional??0),0);
     const paperMark=forwardEquity(this.forwardState!,this.regimeQuotes(Date.now()),Date.now());
-    const staged: Array<{ symbol: string; plan: PaperPlan; intent: ReturnType<typeof buildLiveEntryIntent>;binding?:MirrorBinding }> = [];
+    const staged: Array<{ symbol: string; plan: PaperPlan; intent: ReturnType<typeof buildLiveEntryIntent>;binding?:MirrorBinding;activation:LiveSession|null }> = [];
     for (const [symbol, skip] of Object.entries(this.runtime.live.entrySkips)) {
       const trade = desiredPortfolio[symbol] ?? null;
       if (!skip || !trade || trade.id !== skip.planId || now >= trade.openedAt + 45 * 60_000) delete this.runtime.live.entrySkips[symbol];
@@ -1990,11 +2010,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const symbol = trade.symbol;
       if(!trade.forwardSource)continue; // Legacy sources only drain existing exposure.
       const plan = { ...arenaTradePlan(trade), expiresAt:trade.openedAt+trade.forwardSource.rule.horizon*60_000 };
-      const justTriggeredEntry = eligibleForLiveMirror(trade, this.runtime.live.changedAt, now);
+      const justTriggeredEntry = sourceAfterEnable(trade.forwardSource,this.runtime.live.activation,this.forwardState!.startedAt);
       if (!justTriggeredEntry
         || this.runtime.live.positions[symbol]?.status === "OPEN" || !this.mirrorQuoteReady(symbol)) {
         if(this.runtime.live.positions[symbol]?.id!==trade.id)
-          this.runtime.live.entrySkips[symbol]={planId:trade.id,symbol,code:"ECONOMICS",reason:"等待源单对应的空闲持仓槽和新鲜可执行盘口",observedAt:now};
+          this.runtime.live.entrySkips[symbol]={planId:trade.id,symbol,code:"ECONOMICS",
+            reason:!justTriggeredEntry?"此单在本次开启前已存在，不补开；仅跟随开启后新模拟单":"等待源单对应的空闲持仓槽和新鲜可执行盘口",observedAt:now};
         continue;
       }
       const midpoint = this.runtime.evidence[symbol]?.midpoint ?? 0;
@@ -2027,11 +2048,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           entryPrice:plan.side==="LONG"?quote?.bestAsk??0:quote?.bestBid??0,
           quantoMultiplier:this.runtime.contractMeta[symbol]?.quantoMultiplier??0,
           leverageMax:this.runtime.contractMeta[symbol]?.leverageMax??0,maintenanceRate:this.runtime.contractMeta[symbol]?.maintenanceRate??0.005,
-          openMargin:marginForNewEntries,openNotional:notionalForNewEntries,now:Date.now(),policy:this.forwardState!.policyVersion??this.forwardState!.version});
+          openMargin:marginForNewEntries,openNotional:notionalForNewEntries,now:Date.now(),policy:this.forwardState!.policyVersion??this.forwardState!.version,
+          sizeRules:this.runtime.contractMeta[symbol],activationAt:this.runtime.live.activation?.enabledAt});
         intent=result.intent;binding=result.binding;
       } catch (error) {
         if (!(error instanceof LiveEntrySizingError)) throw error;
-        this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: error.code, reason: error.message, observedAt: now };
+        this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: error.code, reason: error.message, observedAt: now,sizing:error.sizing };
         continue;
       }
       delete this.runtime.live.entrySkips[symbol];
@@ -2040,11 +2062,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       directionRiskForNewEntries[plan.side] += intent.plannedRisk;
       marginForNewEntries += intent.margin;
       notionalForNewEntries += intent.notional;
-      staged.push({ symbol, plan, intent, binding });
+      staged.push({ symbol, plan, intent, binding,activation:structuredClone(this.runtime.live.activation??null) });
       if(staged.length>=2)break; // Bound private requests per pass, not total holdings.
     }
-    for (const { symbol, plan, intent, binding } of staged) {
+    for (const { symbol, plan, intent, binding,activation } of staged) {
       if(!this.runtime.live.requestedEnabled||!this.mirrorQuoteReady(symbol)
+        ||!sameLiveSession(activation,this.runtime.live.activation)
+        ||!sourceAfterEnable(binding!.sourceAtCopy,this.runtime.live.activation,this.forwardState!.startedAt)
         ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now()))continue;
       const entry: LiveEntry = {
         planId: plan.id, symbol, side: plan.side, scenario: plan.marketState, kind: intent.kind, status: "SUBMITTING",
@@ -2063,7 +2087,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(binding)this.liveJournal.set(`${LIVE_PARITY_PREFIX}binding:${plan.id}`,binding);
       await this.saveCheckpoint(now, true);
       try {
-        if(!this.runtime.live.requestedEnabled){entry.status="CANCELLED";continue;}
+        if(!this.runtime.live.requestedEnabled||!sameLiveSession(activation,this.runtime.live.activation)){entry.status="CANCELLED";continue;}
         try {
           await client.setLeverage(symbol, intent.leverage);
         } catch (error) {
@@ -2078,6 +2102,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           // Owner OFF or source CLOSE during leverage/network await takes
           // precedence over the stale staged entry.
           if(!this.runtime.live.requestedEnabled||!this.mirrorQuoteReady(symbol)
+            ||!sameLiveSession(activation,this.runtime.live.activation)
+            ||!sourceAfterEnable(binding!.sourceAtCopy,this.runtime.live.activation,this.forwardState!.startedAt)
             ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now())){
             entry.status="CANCELLED";await this.saveCheckpoint(Date.now(),true);continue;
           }
@@ -2137,16 +2163,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private async setLiveMode(enabled: boolean) {
+    const wasEnabled=this.runtime.live.requestedEnabled;
+    const changedAt=Date.now();
+    if(enabled&&!wasEnabled)this.runtime.live.activation=startLiveSession(changedAt,this.forwardState);
     this.runtime.live.requestedEnabled = enabled;
     if (!enabled) this.runtime.live.operational = false;
-    this.runtime.live.changedAt = Date.now();
+    if(wasEnabled!==enabled||this.runtime.live.changedAt==null)this.runtime.live.changedAt = changedAt;
     this.runtime.live.lastError = null;
     try {
-      await this.ctx.storage.put(`${LIVE_PARITY_PREFIX}owner-intent`,{enabled,changedAt:this.runtime.live.changedAt});
+      await this.ctx.storage.put(`${LIVE_PARITY_PREFIX}owner-intent`,{enabled,changedAt:this.runtime.live.changedAt,activation:this.runtime.live.activation??null});
       await this.saveCheckpoint(Date.now(),true);
       await this.syncLive(Date.now(), enabled, !enabled);
       this.recordLiveAudit({ observedAt: Date.now(), symbol: null, planId: null, stage: "LIVE_CONTROL", level: "INFO",
-        reason: enabled ? "所有者已开启实盘复制；后续部署与可恢复的单币故障不会改写此选择" : "所有者已关闭实盘复制并请求撤销系统入场挂单" });
+        reason: enabled ? "所有者已开启，仅复制本次开启后新产生的模拟单；开启前已有单不补开，重复开启不重置起点" : "所有者已关闭实盘复制并请求撤销系统入场挂单" });
       await this.saveCheckpoint(Date.now(), true);
       return { ok: true, live: this.runtime.live };
     } catch (error) {

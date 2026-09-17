@@ -4,7 +4,9 @@ import { register } from "node:module";
 import { LIVE_PARITY_PREFIX, LIVE_PARITY_VERSION, forwardMirrorSources, buildProportionalMirror,
   mirrorCoverage, sourceLifecycle, type MirrorBinding } from "../lib/live-parity.ts";
 import { initialForward, type Trade, type ForwardState } from "../lib/forward-relations.ts";
-import { gateMarkedEquity, liveEntryDisposition, liveExitTag, type GateLiveAccount, type GateLiveOrder, type LiveEntryIntent, type LiveStopIntent } from "../lib/gate-live.ts";
+import { gateMarkedEquity, gatePositionValuation, liveEntryDisposition, liveExitTag, type GateLiveAccount, type GateLiveOrder, type GateLivePosition, type LiveEntryIntent, type LiveStopIntent, LiveEntrySizingError, GateLiveClient } from "../lib/gate-live.ts";
+import { quantizeMirrorNotional } from "../lib/gate-quantity.ts";
+import { startLiveSession, sourceAfterEnable, LIVE_SESSION_VERSION, type LiveSession } from "../lib/live-session.ts";
 import { prepareForwardWrite } from "../lib/forward-store.ts";
 import { readFileSync } from "node:fs";
 register("./worker-test-loader.mjs",import.meta.url);
@@ -25,7 +27,7 @@ function trade(id="ft-fixture-1",symbol="BTC_USDT",side:"LONG"|"SHORT"="LONG"):T
 }
 function request(t=trade()){return {source:t,sourceEquity:1000,equity:100,available:100,entryPrice:100,
   quantoMultiplier:.001,leverageMax:20,maintenanceRate:.005,openRisk:0,sameDirectionRisk:0,openMargin:0,
-  openNotional:0,now:T,policy:"any-current-or-future-policy"};}
+  openNotional:0,now:T,policy:"any-current-or-future-policy",sizeRules:{enableDecimal:false,orderSizeMin:"1",orderSizeMax:"10000000"}};}
 
 test("source identity and ALL strategy/order fields are retained without netting",()=>{
   const s=initialForward(T-100000);s.positions=[trade(),trade("ft-2","SOL_USDT","SHORT")];
@@ -50,7 +52,7 @@ test("the PAPER arm price is not a hard target or a second economic admission mo
   assert.ok(r.intent.notional<=20);assert.equal(r.binding.receipt.sourceDeadline,i.source.openedAt+3600000);
 });
 test("round down within one lot, never enlarge a tiny account to one oversized contract",()=>{
-  const i=request();i.equity=.001;i.available=.001;assert.throws(()=>buildProportionalMirror(i),/不足一张/);
+  const i=request();i.equity=.001;i.available=.001;assert.throws(()=>buildProportionalMirror(i),/真实最小数量/);
   const j=request();j.equity=99.9;const r=buildProportionalMirror(j);assert.ok(r.binding.receipt.roundingNotional>=0);
   assert.ok(r.binding.receipt.roundingNotional<.1+1e-9);
 });
@@ -69,6 +71,55 @@ test("partial IOC is exposure even when finish_as says ioc",()=>{
 });
 test("unknown lifecycle is not a close decision",()=>{
   const s=initialForward(T);assert.equal(sourceLifecycle(s,"missing").status,"UNKNOWN");
+});
+
+test("decimal supported quantity below one contract preserves the exact proportional target",()=>{
+  const t=trade();t.quantoMultiplier=1;t.contracts=2;
+  const r=buildProportionalMirror({...request(t),quantoMultiplier:1,sizeRules:{enableDecimal:true,orderSizeMin:"0.1",orderSizeMax:"100"}});
+  assert.equal(r.intent.contracts,.2);assert.equal(r.intent.body.size,"0.2");assert.equal(r.intent.notional,20);
+  assert.equal(r.intent.margin,10);assert.equal(r.intent.leverage,2);assert.equal(r.binding.receipt.quantityQuantum,"0.1");
+});
+test("short decimal sizes, zero IOC and partial fills preserve the sign and residual",()=>{
+  const t=trade("short","SOL_USDT","SHORT");t.quantoMultiplier=1;t.contracts=2;
+  const r=buildProportionalMirror({...request(t),quantoMultiplier:1,sizeRules:{enableDecimal:true,orderSizeMin:"0.1"}});
+  assert.equal(r.intent.body.size,"-0.2");
+  assert.equal(liveEntryDisposition({status:"finished",finish_as:"ioc",size:"-0.2",left:"-0.1"},"MARKET"),"FILLED");
+  assert.equal(liveEntryDisposition({status:"finished",finish_as:"ioc",size:"-0.2",left:"-0.2"},"MARKET"),"CANCELLED");
+});
+test("exact decimal quantization never floors 2.3/0.1 to 22 units or enlarges a subminimum",()=>{
+  const spec={enableDecimal:true,orderSizeMin:"0.1"};
+  assert.equal(quantizeMirrorNotional(2.3,1,1,spec).quantityText,"2.3");
+  assert.equal(quantizeMirrorNotional(.099999999,1,1,spec).quantity,0);
+  assert.equal(quantizeMirrorNotional(3e-8,1,1,{enableDecimal:true,orderSizeMin:"0.00000001"}).quantityText,"0.00000003");
+});
+test("genuine minimum blockage gives numeric required equity without rounding up",()=>{
+  const t=trade();t.quantoMultiplier=1;t.contracts=2;
+  assert.throws(()=>buildProportionalMirror({...request(t),equity:10,available:10,quantoMultiplier:1,
+    sizeRules:{enableDecimal:false,orderSizeMin:"1"}}),e=>{
+    assert.ok(e instanceof LiveEntrySizingError);assert.equal(e.code,"MIN_CONTRACT");
+    assert.equal(e.sizing!.requiredLiveEquity,500);assert.equal(e.sizing!.targetContracts,.02);
+    assert.equal(e.sizing!.minimumContracts,1);return true;
+  });
+});
+test("absent, contradictory and zero size metadata never silently defaults to one",()=>{
+  for(const spec of[{}, {enableDecimal:false,orderSizeMin:"0.1"},{enableDecimal:true,orderSizeMin:"0"}])
+    assert.throws(()=>quantizeMirrorNotional(10,100,1,spec));
+  assert.throws(()=>quantizeMirrorNotional(100,1,1,{enableDecimal:false,orderSizeMin:"1",marketOrderSizeMax:"50"}),/最大/);
+});
+test("Gate PnL parsing preserves losses/zero, handles actual-margin basis and missing values",()=>{
+  const a=gatePositionValuation({unrealised_pnl:"-2.5",mark_price:"98",margin:"10",initial_margin:"5"},T);
+  assert.equal(a.exchangeUnrealisedPnl,-2.5);assert.equal(a.exchangePnlMargin,10);assert.equal(a.exchangeMarkPrice,98);
+  assert.equal(gatePositionValuation({unrealised_pnl:"0",initial_margin:"4"},T).exchangePnlMargin,4);
+  const unknown=gatePositionValuation({unrealised_pnl:"",mark_price:"NaN",margin:"0"},T);
+  assert.equal(unknown.exchangeUnrealisedPnl,null);assert.equal(unknown.exchangePnlMargin,null);
+});
+test("every private Gate request opts into decimal quantity responses",async()=>{
+  const real=globalThis.fetch,requests:Request[]=[];
+  globalThis.fetch=async(input,init)=>{const req=new Request(input,init);requests.push(req);
+    return Response.json(req.url.includes('/accounts')?{total:"100",unrealised_pnl:"0"}:[]);};
+  try{await new GateLiveClient({apiKey:"test-key-never-live",apiSecret:"test-secret-never-live",environment:"testnet"}).snapshot();
+    assert.equal(requests.length,4);for(const r of requests)assert.equal(r.headers.get("X-Gate-Size-Decimal"),"1");
+  }finally{globalThis.fetch=real;}
 });
 test("owner OFF coverage does not report zero live positions as copied",()=>{
   const s=initialForward(T);s.positions=[trade()];
@@ -93,7 +144,7 @@ class Memory {
 class FakeGate {
   account:GateLiveAccount={total:100,available:100,unrealised_pnl:0,in_dual_mode:false};
   requestCount=0;placed:LiveEntryIntent[]=[];leverages:number[]=[];stops:GateLiveOrder[]=[];
-  orders=new Map<string,GateLiveOrder>();holdings:Record<string,{contract:string;size:number;entry_price:number;leverage:number}>={};
+  orders=new Map<string,GateLiveOrder>();holdings:Record<string,GateLivePosition>={};
   closeTags:string[]=[];onLeverage:(()=>Promise<void>)|null=null;onCreate:(()=>Promise<void>)|null=null;
   failSnapshot=false;partial=false;zero=false;ambiguous=false;omitExit=false;counter=1;
   async snapshot(){this.requestCount++;if(this.failSnapshot)throw new Error("injected Gate outage");
@@ -117,8 +168,8 @@ type Harness={runtime:{live:Record<string,unknown>;[key:string]:unknown};forward
   liveHistory:unknown[];forwardError:string|null;liveBindingError:string|null;
   syncLive(now:number,enable?:boolean,off?:boolean):Promise<void>;setLiveMode(v:boolean):Promise<{ok:boolean}>;
   saveCheckpoint(now:number,force?:boolean):Promise<void>;liveDesiredPortfolio(now:number):Record<string,unknown>};
-type LiveTest={requestedEnabled:boolean;changedAt:number|null;operational:boolean;entries:Record<string,{planId:string;status:string;parity?:MirrorBinding["receipt"]}>;
-  positions:Record<string,{id:string;status:string;entryPrice:number;exitPrice?:number;parity?:MirrorBinding["receipt"];exitReason?:string}>;entrySkips:Record<string,{reason:string}>};
+type LiveTest={requestedEnabled:boolean;changedAt:number|null;activation?:LiveSession;operational:boolean;entries:Record<string,{planId:string;status:string;parity?:MirrorBinding["receipt"]}>;
+  positions:Record<string,{id:string;status:string;entryPrice:number;exitPrice?:number;parity?:MirrorBinding["receipt"];exitReason?:string;exchangeSize?:number}&Partial<ReturnType<typeof gatePositionValuation>>>;entrySkips:Record<string,{reason:string}>};
 function live(h:Harness){return h.runtime.live as unknown as LiveTest;}
 async function harness(store=new Memory(),gate=new FakeGate()) {
   let ready:Promise<unknown>=Promise.resolve();
@@ -128,12 +179,109 @@ async function harness(store=new Memory(),gate=new FakeGate()) {
   const h=stream as unknown as Harness;h.liveClient=gate;h.forwardState=initialForward(T-300000);
   h.forwardState.positions=[trade()];h.forwardState.storage={persistedAt:T,error:null};
   h.runtime.symbols=["BTC_USDT"];h.runtime.tickSize={BTC_USDT:.01};
-  h.runtime.contractMeta={BTC_USDT:{quantoMultiplier:.001,leverageMax:20,maintenanceRate:.005,fundingRate:0}};
+  h.runtime.contractMeta={BTC_USDT:{quantoMultiplier:.001,leverageMax:20,maintenanceRate:.005,fundingRate:0,enableDecimal:false,orderSizeMin:"1",orderSizeMax:"10000000"}};
   h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:T,fresh:true,entryReady:true}};
   return {h,store,gate,stream};
 }
 async function clock<T>(fn:()=>Promise<T>){const old=Date.now,fetch=globalThis.fetch;Date.now=()=>T;
   globalThis.fetch=async()=>{throw new Error("REAL NETWORK FORBIDDEN IN LIVE TEST");};try{return await fn();}finally{Date.now=old;globalThis.fetch=fetch;}}
+
+// Legacy lifecycle/failure tests now create their source AFTER owner enable.
+// Direct enable tests below exercise exclusion separately; no fence is bypassed.
+async function enableNew(h:Harness) {
+  const oldNow=Date.now,sources=h.forwardState.positions;h.forwardState.positions=[];
+  let result:{ok:boolean};
+  try{Date.now=()=>T-120000;result=await h.setLiveMode(true);}
+  finally{Date.now=oldNow;h.forwardState.positions=sources;}
+  if(result.ok)await h.syncLive(T);
+  return result;
+}
+
+test("actual owner enable excludes all already-open sources without resetting PAPER",()=>clock(async()=>{
+  const {h,gate}=await harness(),before=structuredClone(h.forwardState);
+  assert.equal((await h.setLiveMode(true)).ok,true);await h.syncLive(T);
+  assert.equal(gate.placed.length,0);assert.deepEqual(h.forwardState,before);
+  assert.equal(live(h).requestedEnabled,true);assert.equal(live(h).activation!.enabledAt,T);
+  assert.ok(live(h).activation!.excludedSourceIds.includes(before.positions[0].id));
+}));
+test("a NEW source after enable copies, repeated ON does not move its eligibility boundary",()=>clock(async()=>{
+  const {h,gate}=await harness();await h.setLiveMode(true);
+  const epoch=structuredClone(live(h).activation),oldNow=Date.now;Date.now=()=>T+100;
+  try{h.forwardState.positions=[{...trade("new-after-enable"),openedAt:T+50}];
+    await h.setLiveMode(true);await h.syncLive(T+100);
+    assert.equal(gate.placed.length,1);assert.deepEqual(live(h).activation,epoch);
+    assert.equal(live(h).positions.BTC_USDT.id,"new-after-enable");
+  }finally{Date.now=oldNow;}
+}));
+test("source stamped exactly at activation is excluded conservatively",()=>{
+  const state=initialForward(T-1000),a=startLiveSession(T,state);
+  assert.equal(sourceAfterEnable({id:"same-ms",openedAt:T},a,state.startedAt),false);
+  assert.equal(sourceAfterEnable({id:"later",openedAt:T+1},a,state.startedAt),true);
+  assert.equal(sourceAfterEnable({id:"later",openedAt:T+1},a,state.startedAt+1),false);
+});
+test("OFF then ON excludes intervening unbound sources but retains already-owned protection",()=>clock(async()=>{
+  const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);const original=live(h).positions.BTC_USDT.id;
+  await h.setLiveMode(false);h.forwardState.positions.push(trade("off-window","SOL_USDT"));
+  await h.setLiveMode(true);await h.syncLive(T);
+  assert.equal(gate.placed.length,1);assert.equal(live(h).positions.BTC_USDT.id,original);
+  assert.ok(gate.stops.length>0);assert.equal(gate.closeTags.length,0);
+  assert.ok(live(h).activation!.excludedSourceIds.includes("off-window"));
+}));
+test("owner activation fence persists across restart without changing timestamp",()=>clock(async()=>{
+  const {h,store,gate}=await harness();await h.setLiveMode(true);await h.saveCheckpoint(T,true);
+  const fp=await prepareForwardWrite(null,h.forwardState,T);await store.put(fp.entries);
+  const epoch=structuredClone(live(h).activation),restored=await harness(store,gate);
+  assert.deepEqual(live(restored.h).activation,epoch);await restored.h.syncLive(T);assert.equal(gate.placed.length,0);
+}));
+test("OFF and re-enable during leverage await invalidate the old staged session",()=>clock(async()=>{
+  const {h,gate}=await harness();let off:Promise<unknown>|undefined,on:Promise<unknown>|undefined;
+  gate.onLeverage=async()=>{off=h.setLiveMode(false);on=h.setLiveMode(true);};
+  await enableNew(h);await off;await on;
+  assert.equal(gate.placed.length,0);assert.equal(live(h).requestedEnabled,true);
+  assert.ok(live(h).activation!.excludedSourceIds.includes("ft-fixture-1"));
+}));
+test("one-time migration while owner ON starts new-only fence and does not enable/disable or replay",()=>clock(async()=>{
+  const {h,store,gate}=await harness();await store.put((await prepareForwardWrite(null,h.forwardState,T)).entries);
+  await store.put(`${LIVE_PARITY_PREFIX}owner-intent`,{enabled:true,changedAt:T-500000});
+  const a=await harness(store,gate);assert.equal(live(a.h).requestedEnabled,true);
+  assert.equal(live(a.h).activation!.migration,true);assert.equal(live(a.h).changedAt,T-500000);
+  await a.h.syncLive(T);assert.equal(gate.placed.length,0);
+  const b=await harness(store,gate);assert.deepEqual(live(b.h).activation,live(a.h).activation);
+}));
+test("actual Worker retains decimal holdings, Gate unrealized PnL and closes the exact parent",()=>clock(async()=>{
+  const {h,gate}=await harness();const t=h.forwardState.positions[0];t.quantoMultiplier=1;t.contracts=2;
+  h.runtime.contractMeta={BTC_USDT:{quantoMultiplier:1,maintenanceRate:.005,leverageMax:20,fundingRate:0,enableDecimal:true,orderSizeMin:"0.1",orderSizeMax:"1000"}};
+  await enableNew(h);assert.equal(gate.placed[0].body.size,"0.2");
+  Object.assign(gate.holdings.BTC_USDT,{size:"0.1",unrealised_pnl:"-0.125",mark_price:"98.75",margin:"5",initial_margin:"5"});
+  await h.syncLive(T);const p=live(h).positions.BTC_USDT;
+  assert.equal(p.exchangeSize,.1);assert.equal(p.exchangeUnrealisedPnl,-.125);assert.equal(p.exchangePnlMargin,5);
+  assert.match(p.parity!.discrepancy!,/0.1/);assert.equal(gate.placed.length,1);
+  t.status="CLOSED";t.closedAt=T;t.exitReason="source exits";h.forwardState.positions=[];h.forwardState.history=[t];
+  await h.syncLive(T);await h.syncLive(T);assert.equal(gate.closeTags.length,1);assert.equal(live(h).positions.BTC_USDT.status,"CLOSED");
+}));
+test("missing later PnL field clears stale native value, not fake-zero or public-price replacement",()=>clock(async()=>{
+  const {h,gate}=await harness();await enableNew(h);gate.holdings.BTC_USDT.unrealised_pnl="2";await h.syncLive(T);
+  assert.equal(live(h).positions.BTC_USDT.exchangeUnrealisedPnl,2);
+  delete gate.holdings.BTC_USDT.unrealised_pnl;await h.syncLive(T);assert.equal(live(h).positions.BTC_USDT.exchangeUnrealisedPnl,null);
+}));
+test("sub-one holding remains protected and native PnL survives checkpoint recovery",()=>clock(async()=>{
+  const {h,gate,store}=await harness();await enableNew(h);Object.assign(gate.holdings.BTC_USDT,{size:"0.1",unrealised_pnl:"0.005",margin:"0.01"});
+  await h.syncLive(T);await h.saveCheckpoint(T,true);await store.put((await prepareForwardWrite(null,h.forwardState,T)).entries);
+  const recovered=await harness(store,gate);await recovered.h.syncLive(T);
+  assert.equal(live(recovered.h).positions.BTC_USDT.exchangeSize,.1);
+  assert.equal(live(recovered.h).positions.BTC_USDT.exchangeUnrealisedPnl,.005);
+  assert.equal(gate.placed.length,1);assert.ok(gate.stops.length>0);
+}));
+test("coverage partitions pre-enable exclusions, true minimum blocks and partial real copies",()=>{
+  const s=initialForward(T-300000),old=trade(),small={...trade("small","SOL_USDT"),openedAt:T+1},partial={...trade("partial","ETH_USDT"),openedAt:T+1};
+  s.positions=[old];const activation=startLiveSession(T,s);s.positions=[old,small,partial];
+  const receipt=buildProportionalMirror(request()).binding.receipt;receipt.discrepancy="partial";
+  const c=mirrorCoverage(s,{requestedEnabled:true,activation,positions:{ETH_USDT:{id:partial.id,status:"OPEN",parity:receipt}},entries:{},
+    entrySkips:{SOL_USDT:{planId:small.id,code:"MIN_CONTRACT",reason:"below min"}}},null);
+  assert.equal(c.sourceCount,3);assert.equal(c.eligibleSourceCount,2);assert.equal(c.excludedSourceCount,1);
+  assert.equal(c.minimumSizeBlockedCount,1);assert.equal(c.copiedCount,1);assert.equal(c.deviationCount,1);
+  assert.equal(c.newOrdersOnly,true);assert.equal(c.executionPolicy,LIVE_SESSION_VERSION);
+});
 
 test("real Worker sync does not read credentials or submit any order while owner OFF",()=>clock(async()=>{
   const {h,gate}=await harness();await h.syncLive(T);assert.equal(gate.requestCount,0);assert.equal(gate.placed.length,0);assert.equal(live(h).requestedEnabled,false);
@@ -143,13 +291,13 @@ test("real owner-enable path routes current source, freezes binding before submi
     assert.ok(store.data.has(`${LIVE_PARITY_PREFIX}binding:ft-fixture-1`));
     assert.ok(store.data.has("checkpoint"));
   };
-  const result=await h.setLiveMode(true);assert.equal(result.ok,true);assert.equal(gate.placed.length,1);
+  const result=await enableNew(h);assert.equal(result.ok,true);assert.equal(gate.placed.length,1);
   await h.syncLive(T);await h.syncLive(T);assert.equal(gate.placed.length,1);
   const p=live(h).positions.BTC_USDT;assert.equal(p.id,"ft-fixture-1");assert.equal(p.parity!.sourceRuleId,"fr-fixture-1");
   assert.equal(gate.leverages[0],2);assert.ok(gate.stops.length>0);
 }));
 test("real Worker follows source CLOSE reason, not an independently restarted holding timer",()=>clock(async()=>{
-  const {h,gate}=await harness();await h.setLiveMode(true);await h.syncLive(T);
+  const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);
   const t=h.forwardState.positions[0];t.status="CLOSED";t.closedAt=T;t.exitReason="反应回吐：源单退出";
   h.forwardState.history=[t];h.forwardState.positions=[];
   await h.syncLive(T);await h.syncLive(T);
@@ -157,57 +305,57 @@ test("real Worker follows source CLOSE reason, not an independently restarted ho
   assert.equal(live(h).positions.BTC_USDT.exitReason,t.exitReason);assert.equal(live(h).positions.BTC_USDT.exitPrice,100.4);
 }));
 test("missing source is a recovery case, not evidence to close an otherwise protected real position",()=>clock(async()=>{
-  const {h,gate}=await harness();await h.setLiveMode(true);await h.syncLive(T);
+  const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);
   h.forwardState.positions=[];h.forwardState.history=[];await h.syncLive(T);assert.equal(gate.closeTags.length,0);
 }));
 test("arming or source rule re-synthesis does not prematurely close an existing real holding",()=>clock(async()=>{
-  const {h,gate}=await harness();await h.setLiveMode(true);await h.syncLive(T);
+  const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);
   h.forwardState.positions[0].favorable=.03;h.forwardState.rules=[];await h.syncLive(T);
   assert.equal(gate.closeTags.length,0);assert.equal(live(h).positions.BTC_USDT.status,"OPEN");
 }));
 test("owner OFF during leverage request prevents the already-staged market entry",()=>clock(async()=>{
   const {h,gate}=await harness();let off:Promise<unknown>|undefined;
-  gate.onLeverage=async()=>{off=h.setLiveMode(false);};await h.setLiveMode(true);await off;
+  gate.onLeverage=async()=>{off=h.setLiveMode(false);};await enableNew(h);await off;
   assert.equal(gate.placed.length,0);assert.equal(live(h).requestedEnabled,false);
 }));
 test("source closure during leverage request cancels the stale entry without opening",()=>clock(async()=>{
-  const {h,gate}=await harness();gate.onLeverage=async()=>{h.forwardState.positions=[];};await h.setLiveMode(true);
+  const {h,gate}=await harness();gate.onLeverage=async()=>{h.forwardState.positions=[];};await enableNew(h);
   assert.equal(gate.placed.length,0);
 }));
 test("temporary Gate faults never rewrite owner switch intent",()=>clock(async()=>{
-  const {h,gate}=await harness();gate.failSnapshot=true;const r=await h.setLiveMode(true);
+  const {h,gate}=await harness();gate.failSnapshot=true;const r=await enableNew(h);
   assert.equal(r.ok,false);assert.equal(live(h).requestedEnabled,true);assert.equal(live(h).operational,false);
 }));
 test("storage failure prevents private entry calls and successful copies",()=>clock(async()=>{
-  const {h,gate,store}=await harness();store.fail=true;const r=await h.setLiveMode(true);
+  const {h,gate,store}=await harness();store.fail=true;const r=await enableNew(h);
   assert.equal(r.ok,false);assert.equal(gate.placed.length,0);
 }));
 test("partial execution is adopted and shown as a deviation, not repeated as a full new entry",()=>clock(async()=>{
-  const {h,gate}=await harness();gate.partial=true;await h.setLiveMode(true);await h.syncLive(T);await h.syncLive(T);
+  const {h,gate}=await harness();gate.partial=true;await enableNew(h);await h.syncLive(T);await h.syncLive(T);
   assert.equal(gate.placed.length,1);assert.match(live(h).positions.BTC_USDT.parity!.discrepancy!,/实际/);
 }));
 test("zero-fill IOC cannot produce a fictitious filled position",()=>clock(async()=>{
-  const {h,gate}=await harness();gate.zero=true;await h.setLiveMode(true);await h.syncLive(T);
+  const {h,gate}=await harness();gate.zero=true;await enableNew(h);await h.syncLive(T);
   assert.equal(Object.keys(live(h).positions).length,0);assert.equal(gate.stops.length,0);assert.equal(gate.placed.length,1);
 }));
 test("ambiguous submission reserves identity and is not retried into a duplicate",()=>clock(async()=>{
-  const {h,gate}=await harness();gate.ambiguous=true;await h.setLiveMode(true);await h.syncLive(T);await h.syncLive(T);
+  const {h,gate}=await harness();gate.ambiguous=true;await enableNew(h);await h.syncLive(T);await h.syncLive(T);
   assert.equal(gate.placed.length,1);assert.equal(live(h).entries.BTC_USDT.status,"ERROR");
 }));
 test("missing exchange exit response is not replaced by source/midpoint price",()=>clock(async()=>{
-  const {h,gate}=await harness();gate.omitExit=true;await h.setLiveMode(true);await h.syncLive(T);
+  const {h,gate}=await harness();gate.omitExit=true;await enableNew(h);await h.syncLive(T);
   const t=h.forwardState.positions[0];t.status="CLOSED";t.closedAt=T;t.exitReason="期限到达";h.forwardState.history=[t];h.forwardState.positions=[];
   await h.syncLive(T);await h.syncLive(T);assert.equal(live(h).positions.BTC_USDT.exitPrice,undefined);
 }));
 test("restart restores source binding and later owner OFF instead of replaying old ON checkpoint",()=>clock(async()=>{
-  const {h,store,gate}=await harness();await h.setLiveMode(true);await h.syncLive(T);await h.saveCheckpoint(T,true);
+  const {h,store,gate}=await harness();await enableNew(h);await h.syncLive(T);await h.saveCheckpoint(T,true);
   const fp=await prepareForwardWrite(null,h.forwardState,T);await store.put(fp.entries);
   await store.put(`${LIVE_PARITY_PREFIX}owner-intent`,{enabled:false,changedAt:T+1});
   const {h:r}=await harness(store,gate);assert.equal(live(r).requestedEnabled,false);
   assert.equal(live(r).positions.BTC_USDT.parity!.sourceId,"ft-fixture-1");await r.syncLive(T);assert.equal(gate.placed.length,1);
 }));
 test("archived real records survive the next same-symbol parent and source details are owner-only",()=>clock(async()=>{
-  const {h,stream,gate}=await harness();await h.setLiveMode(true);await h.syncLive(T);
+  const {h,stream,gate}=await harness();await enableNew(h);await h.syncLive(T);
   const t=h.forwardState.positions[0];t.status="CLOSED";t.closedAt=T;t.exitReason="源单完成";h.forwardState.history=[t];h.forwardState.positions=[];
   await h.syncLive(T);await h.syncLive(T);assert.equal(h.liveHistory.length,1);
   h.forwardState.positions=[trade("ft-fixture-2")];await h.syncLive(T);assert.equal(gate.placed.length,2);assert.equal(h.liveHistory.length,1);
@@ -238,27 +386,27 @@ test("duplicate-source coverage fails visibly instead of claiming an exact conne
   assert.equal(c.connected,false);assert.equal(c.instructionParity,false);assert.match(c.error!,/净额/);
 });
 test("owner OFF still protects a mapped actual holding when forward source recovery fails",()=>clock(async()=>{
-  const {h,gate}=await harness();await h.setLiveMode(true);await h.syncLive(T);
+  const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);
   h.forwardState=null as unknown as ForwardState;h.forwardError="injected source recovery";
   const r=await h.setLiveMode(false);assert.equal(r.ok,true);assert.equal(live(h).requestedEnabled,false);
   assert.equal(gate.closeTags.length,0);assert.ok(gate.stops.length>0);assert.equal(gate.placed.length,1);
 }));
 test("OFF does not abandon a delayed already-filled entry older than one minute",()=>clock(async()=>{
-  const {h,gate}=await harness();await h.setLiveMode(true);
+  const {h,gate}=await harness();await enableNew(h);
   const entry=live(h).entries.BTC_USDT as unknown as {createdAt:number;status:string};entry.createdAt=T-120000;
   assert.equal(Object.keys(live(h).positions).length,0);
   await h.setLiveMode(false);assert.equal(live(h).positions.BTC_USDT.status,"OPEN");assert.ok(gate.stops.length>0);
 }));
 test("known price crossing original stop during leverage await cannot open then immediately close",()=>clock(async()=>{
   const {h,gate}=await harness();gate.onLeverage=async()=>{h.runtime.evidence={BTC_USDT:{midpoint:98,bestBid:98,bestAsk:98,observedAt:T,fresh:true,entryReady:true}};};
-  await h.setLiveMode(true);assert.equal(gate.placed.length,0);assert.match(live(h).entries.BTC_USDT.status,/CANCELLED/);
+  await enableNew(h);assert.equal(gate.placed.length,0);assert.match(live(h).entries.BTC_USDT.status,/CANCELLED/);
 }));
 test("unified collateral rejection does not change owner intent or remove native protection",()=>clock(async()=>{
-  const {h,gate}=await harness();await h.setLiveMode(true);await h.syncLive(T);gate.account.margin_mode=2;
+  const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);gate.account.margin_mode=2;
   await assert.rejects(()=>h.syncLive(T),/统一保证金/);assert.equal(live(h).requestedEnabled,true);assert.ok(gate.stops.length>0);
 }));
 test("closed source is durably retained beyond the rolling PAPER history",()=>clock(async()=>{
-  const {h,gate,store}=await harness();await h.setLiveMode(true);await h.syncLive(T);
+  const {h,gate,store}=await harness();await enableNew(h);await h.syncLive(T);
   const later=T+3600000;h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:later,fresh:true,entryReady:true}};
   await (h as unknown as {advanceForwardNow(n:number):Promise<void>}).advanceForwardNow(later);
   const key=`${LIVE_PARITY_PREFIX}source-close:ft-fixture-1`;
@@ -272,15 +420,15 @@ test("closed source is durably retained beyond the rolling PAPER history",()=>cl
 test("all current source orders copy across bounded passes without the retired two-position cap",()=>clock(async()=>{
   const {h,gate}=await harness();const symbols=["BTC_USDT","ETH_USDT","SOL_USDT","DOGE_USDT"];
   h.forwardState.positions=symbols.map((symbol,i)=>trade(`ft-many-${i}`,symbol,i%2?"SHORT":"LONG"));
-  h.runtime.contractMeta=Object.fromEntries(symbols.map(symbol=>[symbol,{quantoMultiplier:.001,leverageMax:20,maintenanceRate:.005,fundingRate:0}]));
+  h.runtime.contractMeta=Object.fromEntries(symbols.map(symbol=>[symbol,{quantoMultiplier:.001,leverageMax:20,maintenanceRate:.005,fundingRate:0,enableDecimal:false,orderSizeMin:"1",orderSizeMax:"10000000"}]));
   h.runtime.evidence=Object.fromEntries(symbols.map(symbol=>[symbol,{midpoint:100,bestBid:100,bestAsk:100,observedAt:T,fresh:true,entryReady:true}]));
-  await h.setLiveMode(true);await h.syncLive(T);await h.syncLive(T);await h.syncLive(T);
+  await enableNew(h);await h.syncLive(T);await h.syncLive(T);await h.syncLive(T);
   assert.equal(gate.placed.length,4);assert.equal(Object.keys(live(h).positions).length,4);
   assert.deepEqual(Object.values(live(h).positions).map(p=>p.id).sort(),h.forwardState.positions.map(p=>p.id).sort());
   for(const p of Object.values(live(h).positions))assert.ok(p.parity!.ratio>0);
 }));
 test("ambiguous market submission cannot be replayed after the old six-second and minute timers",()=>clock(async()=>{
-  const {h,gate}=await harness();gate.ambiguous=true;await h.setLiveMode(true);
+  const {h,gate}=await harness();gate.ambiguous=true;await enableNew(h);
   const realNow=Date.now;Date.now=()=>T+120000;
   try {
     h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:Date.now(),fresh:true,entryReady:true}};
@@ -295,13 +443,15 @@ test("new arbitrary rule metadata survives the adapter and immutable source bind
 test("the permanent contract and parity suite cannot be omitted by the default release workflow",()=>{
   const pkg=JSON.parse(readFileSync(new URL("../package.json",import.meta.url),"utf8"));
   const ci=readFileSync(new URL("../.github/workflows/sentinel-v2-ci.yml",import.meta.url),"utf8");
+  assert.equal((ci.match(/\.runtime\.liveMirror\.newOrdersOnly == true/g)??[]).length,2);
+  assert.equal((ci.match(/\.runtime\.liveMirror\.executionPolicy == "new-orders-decimal-pnl-v1"/g)??[]).length,2);
   assert.ok(pkg.scripts.test.includes("test:live-parity"));assert.ok(pkg.scripts["test:direct"].includes("live-parity.test.ts"));
   assert.match(ci,/run: npm run test:live-parity/);assert.equal((ci.match(/liveMirror.source == "CURRENT_FORWARD_ACCOUNT"/g)??[]).length,2);
   assert.match(readFileSync(new URL("../AGENTS.md",import.meta.url),"utf8"),/LIVE_MIRROR_CONTRACT.md/);
 });
 
 test("owner OFF continues reconciling an uncertain submission until a late verified fill is protected and source-closed",()=>clock(async()=>{
-  const {h,gate}=await harness();gate.ambiguous=true;await h.setLiveMode(true);await h.setLiveMode(false);
+  const {h,gate}=await harness();gate.ambiguous=true;await enableNew(h);await h.setLiveMode(false);
   const scheduler=h as unknown as {liveNeedsSync():boolean};assert.equal(scheduler.liveNeedsSync(),true);
   assert.match(readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8"),/const liveNeedsSync = this.liveNeedsSync\(\)/);
   const original=Date.now;Date.now=()=>T+120000;
@@ -319,7 +469,7 @@ test("owner OFF continues reconciling an uncertain submission until a late verif
   }finally{Date.now=original;}
 }));
 test("an unconfirmed old parent cannot be overwritten by a new same-coin source after a minute",()=>clock(async()=>{
-  const {h,gate}=await harness();gate.ambiguous=true;await h.setLiveMode(true);
+  const {h,gate}=await harness();gate.ambiguous=true;await enableNew(h);
   const original=Date.now;Date.now=()=>T+120000;
   try{
     await h.syncLive(Date.now());h.forwardState.positions=[trade("replacement-parent")];

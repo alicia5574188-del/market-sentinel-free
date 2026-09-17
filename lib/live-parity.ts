@@ -6,6 +6,8 @@
 import type { ArenaTrade } from "./strategy-arena.ts";
 import { type ForwardState, type Trade, PAPER_COST } from "./forward-relations.ts";
 import { LiveEntrySizingError, liveEntryTag, type LiveEntryIntent } from "./gate-live.ts";
+import { quantizeMirrorNotional, type GateSizeRules, type SizeDiagnostic } from "./gate-quantity.ts";
+import { LIVE_SESSION_VERSION, sourceAfterEnable, type LiveSession } from "./live-session.ts";
 
 export const LIVE_PARITY_VERSION = "current-paper-live-parity-v1";
 export const LIVE_PARITY_SOURCE = "CURRENT_FORWARD_ACCOUNT";
@@ -23,6 +25,8 @@ export type MirrorReceipt = {
   sourceClosedAt?: number | null; sourceExitReason?: string | null;
   actualExitOrderId?: string | null; actualExitPriceVerified?: boolean;
   discrepancy?: string | null;
+  quantityText?: string; minimumContracts?: number; quantityQuantum?: string;
+  supportsDecimalContracts?: boolean; activationAt?: number;
 };
 export type MirrorBinding = { version: typeof LIVE_PARITY_VERSION; sourceAtCopy: Trade;
   receipt: MirrorReceipt; sourceAtClose?: Trade; actual?: unknown };
@@ -32,7 +36,7 @@ export function validateMirrorSource(t: Trade) {
   if (!t || !t.id || !t.symbol || !["LONG", "SHORT"].includes(t.side)
     || t.status !== "OPEN" || !t.rule?.id || !positive(t.openedAt)
     || ![t.entryPrice,t.stopPrice,t.armPrice,t.notional,t.margin,t.quantity,t.quantoMultiplier,t.leverage,t.rule.horizon].every(positive)
-    || !Number.isSafeInteger(t.contracts) || t.contracts < 1
+    || !positive(t.contracts) || t.contracts > Number.MAX_SAFE_INTEGER
     || Math.abs(t.notional-t.quantity*t.entryPrice) > Math.max(1,t.notional)*1e-7
     || Math.abs(t.quantity-t.contracts*t.quantoMultiplier) > Math.max(1,t.quantity)*1e-7
     || Math.abs(t.margin*t.leverage-t.notional) > Math.max(1,t.notional)*1e-7)
@@ -85,10 +89,11 @@ export function mirrorSourceFresh(t: Trade | undefined, id: string, now: number)
 
 export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;equity:number;available:number;
   entryPrice:number;quantoMultiplier:number;leverageMax:number;maintenanceRate:number;openRisk:number;
-  sameDirectionRisk:number;openMargin:number;openNotional:number;now:number;policy:string}): {intent:LiveEntryIntent;binding:MirrorBinding} {
+  sameDirectionRisk:number;openMargin:number;openNotional:number;now:number;policy:string;
+  sizeRules?: GateSizeRules; activationAt?: number}): {intent:LiveEntryIntent;binding:MirrorBinding} {
   const t=input.source;validateMirrorSource(t);
-  const fail=(code:"MIN_CONTRACT"|"MARGIN"|"RISK_CAP"|"ECONOMICS",message:string):never=>{
-    throw new LiveEntrySizingError(code,t.symbol,`${t.symbol} ${message}；源单 ${t.id} 未完成复制，不冒充已成交`);
+  const fail=(code:"MIN_CONTRACT"|"CONTRACT_SPEC"|"MARGIN"|"RISK_CAP"|"ECONOMICS",message:string,sizing?:SizeDiagnostic):never=>{
+    throw new LiveEntrySizingError(code,t.symbol,`${t.symbol} ${message}；源单 ${t.id} 未完成复制，不冒充已成交`,sizing);
   };
   if (!mirrorSourceFresh(t,t.id,input.now))fail("ECONOMICS","源单已结束或期限已到，不补过期订单");
   if (![input.sourceEquity,input.equity,input.entryPrice,input.quantoMultiplier,input.leverageMax].every(positive)
@@ -100,10 +105,14 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
   if (direction*(input.entryPrice-t.stopPrice)<=0)fail("ECONOMICS","当前价已越过源单止损，不开即平");
   const ratio=input.equity/input.sourceEquity,targetNotional=t.notional*ratio,targetMargin=t.margin*ratio;
   const one=input.entryPrice*input.quantoMultiplier,requestedContracts=targetNotional/one;
-  // Never round up a sub-lot small account to an oversized one-lot trade.
-  const contracts=Math.floor(requestedContracts+1e-10);
-  if (contracts<1)fail("MIN_CONTRACT","按比例不足一张，不提高杠杆或放大名义额凑单");
-  if (!Number.isSafeInteger(contracts))fail("ECONOMICS","张数超出安全整数范围");
+  let sized: ReturnType<typeof quantizeMirrorNotional>;
+  try { sized=quantizeMirrorNotional(targetNotional,input.entryPrice,input.quantoMultiplier,input.sizeRules??{}); }
+  catch(error){return fail("CONTRACT_SPEC",error instanceof Error?error.message:"数量规格无效");}
+  const contracts=sized.quantity;
+  if (!(contracts>0))fail("MIN_CONTRACT","按比例低于该合约真实最小数量；不放大资金或伪造复制",{
+    targetContracts:requestedContracts,minimumContracts:sized.minimum,quantityQuantum:sized.quantum,
+    supportsDecimals:sized.supportsDecimals,targetNotional,minimumNotional:sized.minimumNotional,
+    minimumMargin:sized.minimumNotional/t.leverage,requiredLiveEquity:input.sourceEquity*sized.minimumNotional/t.notional});
   const notional=contracts*one,leverage=t.leverage,margin=notional/leverage;
   const cost=2*(PAPER_COST.feeRate+PAPER_COST.slippageRate)+PAPER_COST.fundingAllowancePerDay*t.rule.horizon/1440;
   const plannedRisk=notional*(Math.abs(input.entryPrice-t.stopPrice)/input.entryPrice+cost);
@@ -120,14 +129,16 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
     sourceExitMode:t.rule.exitMode,sourceGivebackRate:t.rule.givebackRate,
     sourceNotional:t.notional,sourceMargin:t.margin,sourceLeverage:t.leverage,
     copiedAt:input.now,sourceEquity:input.sourceEquity,liveEquity:input.equity,ratio,targetNotional,targetMargin,
-    requestedContracts,roundedContracts:contracts,roundingNotional:Math.max(0,targetNotional-notional),discrepancy:null};
+    requestedContracts,roundedContracts:contracts,roundingNotional:Math.max(0,targetNotional-notional),discrepancy:null,
+    quantityText:sized.quantityText,minimumContracts:sized.minimum,quantityQuantum:sized.quantum,
+    supportsDecimalContracts:sized.supportsDecimals,activationAt:input.activationAt};
   return {intent:{kind:"MARKET",tag,size,contracts,notional,plannedRisk,leverage,margin,
-    body:{contract:t.symbol,size:String(size),price:"0",tif:"ioc",text:tag,reduce_only:false}},
+    body:{contract:t.symbol,size:`${direction<0?"-":""}${sized.quantityText}`,price:"0",tif:"ioc",text:tag,reduce_only:false}},
     binding:{version:LIVE_PARITY_VERSION,sourceAtCopy:structuredClone(t),receipt}};
 }
 
-export function mirrorCoverage(state:ForwardState|null,live:{requestedEnabled:boolean;positions:Record<string,{id:string;status:string;parity?:MirrorReceipt}|null>;
-  entries:Record<string,{planId:string;status:string;parity?:MirrorReceipt}|null>;entrySkips:Record<string,{planId:string;reason:string}|null>},error:string|null) {
+export function mirrorCoverage(state:ForwardState|null,live:{requestedEnabled:boolean;activation?:LiveSession|null;positions:Record<string,{id:string;status:string;parity?:MirrorReceipt;exchangeUnrealisedPnl?:number|null;exchangePnlAt?:number|null}|null>;
+  entries:Record<string,{planId:string;status:string;parity?:MirrorReceipt}|null>;entrySkips:Record<string,{planId:string;reason:string;code?:string}|null>},error:string|null) {
   const sources=state?.positions??[];
   let sourceError=error;
   try { if(state)forwardMirrorSources(state,Math.max(1,state.balance)); }
@@ -136,10 +147,23 @@ export function mirrorCoverage(state:ForwardState|null,live:{requestedEnabled:bo
     const p=live.positions[t.symbol],e=live.entries[t.symbol],skip=live.entrySkips[t.symbol];
     const copied=p?.status==="OPEN"&&p.id===t.id;
     const pending=e?.planId===t.id&&["SUBMITTING","OPEN","ERROR"].includes(e.status);
-    return {sourceId:t.id,symbol:t.symbol,status:copied?(p?.parity?.discrepancy?"DEVIATION":"COPIED"):pending?"PENDING":!live.requestedEnabled?"OWNER_OFF":"WAITING",
-      reason:copied?p?.parity?.discrepancy??null:skip?.planId===t.id?skip.reason:sourceError??(!live.requestedEnabled?"等待所有者开启":"等待当前报价、账户与交易所确认")};
+    const eligible=live.requestedEnabled&&sourceAfterEnable(t,live.activation,state!.startedAt);
+    const status=copied?(p?.parity?.discrepancy?"DEVIATION":"COPIED"):pending?"PENDING":!live.requestedEnabled?"OWNER_OFF":!eligible?"EXCLUDED_BEFORE_ENABLE"
+      :skip?.planId===t.id?(skip.code==="MIN_CONTRACT"?"BLOCKED_MIN_SIZE":"BLOCKED"):"WAITING";
+    return {sourceId:t.id,symbol:t.symbol,eligible,status,
+      reason:copied?p?.parity?.discrepancy??null:status==="EXCLUDED_BEFORE_ENABLE"?"开启前或本次接入前已有的模拟持仓，不补开"
+        :skip?.planId===t.id?skip.reason:sourceError??(!live.requestedEnabled?"等待所有者开启；此前持仓不会补开":"等待当前报价、账户与交易所确认")};
   });
+  const actual=Object.values(live.positions).filter(p=>p?.status==="OPEN");
+  const valued=actual.filter(p=>typeof p?.exchangeUnrealisedPnl==="number"&&Number.isFinite(p.exchangeUnrealisedPnl)&&!!p.exchangePnlAt);
   return {version:LIVE_PARITY_VERSION,source:LIVE_PARITY_SOURCE,connected:!!state&&!sourceError,ownerControlled:true,
-    instructionParity:!sourceError,exactFillsGuaranteed:false,sourceCount:sources.length,copiedCount:rows.filter(r=>r.status==="COPIED").length,
-    pendingCount:rows.filter(r=>r.status==="PENDING").length,rows,error:sourceError};
+    instructionParity:!sourceError,exactFillsGuaranteed:false,sourceCount:sources.length,copiedCount:rows.filter(r=>["COPIED","DEVIATION"].includes(r.status)).length,
+    pendingCount:rows.filter(r=>r.status==="PENDING").length,rows,error:sourceError,
+    executionPolicy:LIVE_SESSION_VERSION,newOrdersOnly:true,enabledAt:live.activation?.enabledAt??null,
+    eligibleSourceCount:rows.filter(r=>r.eligible).length,excludedSourceCount:rows.filter(r=>r.status==="EXCLUDED_BEFORE_ENABLE").length,
+    managedBeforeEnableCount:rows.filter(r=>!r.eligible&&["COPIED","DEVIATION"].includes(r.status)).length,
+    minimumSizeBlockedCount:rows.filter(r=>r.status==="BLOCKED_MIN_SIZE").length,
+    blockedCount:rows.filter(r=>r.status.startsWith("BLOCKED")).length,deviationCount:rows.filter(r=>r.status==="DEVIATION").length,
+    actualLiveHoldingCount:actual.length,exchangePnlHoldingCount:valued.length,
+    lastExchangePnlAt:valued.length?Math.max(...valued.map(p=>p!.exchangePnlAt!)):null};
 }

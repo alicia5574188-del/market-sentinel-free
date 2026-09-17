@@ -1,5 +1,6 @@
 import { decryptGateCredentials, type EncryptedGateCredentials, type GateCredentials } from "./credential-vault.ts";
 import { CORRELATED_DIRECTION_RISK_CAP, MAX_NOTIONAL_TO_EQUITY, PORTFOLIO_MARGIN_CAP, PORTFOLIO_RISK_CAP, ROUND_TRIP_FRICTION_RATE, selectSafeLeverage, sizePaperPosition, stagedEconomicTarget, tradeEconomics, type PaperPlan, type Side } from "./liquidity-core.ts";
+import type { SizeDiagnostic } from "./gate-quantity.ts";
 
 const encoder = new TextEncoder();
 const GATE_TRIGGER_DAY_SECONDS = 86_400;
@@ -24,7 +25,22 @@ export type GateLivePosition = {
   leverage?: string | number;
   value?: string | number;
   unrealised_pnl?: string | number;
+  mark_price?: string | number;
+  margin?: string | number;
+  initial_margin?: string | number;
 };
+
+/** Exchange values only; never substitute the PAPER or public quote estimate. */
+export function gatePositionValuation(position: GateLivePosition, checkedAt: number) {
+  const finite = (v: unknown) => v !== null && v !== undefined && String(v).trim() !== "" && Number.isFinite(Number(v)) ? Number(v) : null;
+  const pnl = finite(position.unrealised_pnl), price = finite(position.mark_price);
+  const margin = finite(position.margin), initial = finite(position.initial_margin);
+  const basis = margin != null && margin > 0 ? margin : initial != null && initial > 0 ? initial : null;
+  return { exchangeUnrealisedPnl: pnl, exchangeMarkPrice: price != null && price > 0 ? price : null,
+    exchangeMargin: margin, exchangeInitialMargin: initial, exchangePnlMargin: basis,
+    exchangePnlMarginSource: basis == null ? null : margin != null && margin > 0 ? "margin" as const : "initial_margin" as const,
+    exchangePnlAt: Number.isFinite(checkedAt) && checkedAt > 0 ? checkedAt : null };
+}
 
 export type GateLiveOrder = {
   id?: string | number;
@@ -85,17 +101,19 @@ export type LiveStopIntent = {
   body: Record<string, unknown>;
 };
 
-export type LiveEntrySizingCode = "MIN_CONTRACT" | "MARGIN" | "RISK_CAP" | "ECONOMICS";
+export type LiveEntrySizingCode = "MIN_CONTRACT" | "CONTRACT_SPEC" | "MARGIN" | "RISK_CAP" | "ECONOMICS";
 
 export class LiveEntrySizingError extends Error {
   readonly code: LiveEntrySizingCode;
   readonly symbol: string;
+  readonly sizing?: SizeDiagnostic;
 
-  constructor(code: LiveEntrySizingCode, symbol: string, message: string) {
+  constructor(code: LiveEntrySizingCode, symbol: string, message: string, sizing?: SizeDiagnostic) {
     super(message);
     this.name = "LiveEntrySizingError";
     this.code = code;
     this.symbol = symbol;
+    this.sizing = sizing;
   }
 }
 
@@ -156,6 +174,7 @@ export class GateLiveClient {
         Timestamp: timestamp,
         SIGN: await signature(this.credentials.apiSecret, method, signedPath, query, body, timestamp),
         "X-Gate-Exptime": String(Date.now() + 5_000),
+        "X-Gate-Size-Decimal": "1",
       },
       body: body || undefined,
       signal: AbortSignal.timeout(6_000),

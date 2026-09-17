@@ -2,8 +2,11 @@
 import type { forwardSummary } from "./forward-relations.ts";
 import type { RuntimeHealthShape } from "./runtime-health.ts";
 import type { MirrorReceipt, mirrorCoverage } from "./live-parity.ts";
+import type { gatePositionValuation } from "./gate-live.ts";
+import type { LiveSession } from "./live-session.ts";
+import type { SizeDiagnostic } from "./gate-quantity.ts";
 export type AuthSession = { configured: boolean; authenticated: boolean; username: string };
-export type LivePosition = {
+export type LivePosition = Partial<ReturnType<typeof gatePositionValuation>> & {
   id: string; symbol: string; side: "LONG" | "SHORT"; status: "OPEN" | "CLOSED";
   entryAt?: number; exitAt?: number; entryPrice: number; exitPrice?: number;
   notional: number; plannedRisk: number; leverage: number; margin: number;
@@ -15,10 +18,11 @@ export type LiveEntry = { planId: string; symbol: string; side: "LONG" | "SHORT"
   trigger: number; invalidation: number; target: number; notional: number; plannedRisk: number;
   leverage: number; margin: number; lastError: string | null; parity?:MirrorReceipt };
 export type LiveRuntime = { requestedEnabled: boolean; operational: boolean; changedAt: number | null;
+  activation?: LiveSession | null;
   lastSyncAt: number | null; lastError: string | null; equity: number | null; available: number | null;
   credentialConfigured: boolean; positions: Record<string, LivePosition | null>; entries: Record<string, LiveEntry | null>;
   history?:LivePosition[]; mirror?:ReturnType<typeof mirrorCoverage>;
-  entrySkips: Record<string, { planId: string; symbol: string; code: string; reason: string; observedAt: number } | null>;
+  entrySkips: Record<string, { planId: string; symbol: string; code: string; reason: string; observedAt: number; sizing?: SizeDiagnostic } | null>;
   auditEvents: { id: string; observedAt: number; symbol: string | null; stage: string;
     level: string; reason: string; gateLabel: string | null }[] };
 export type OperatorRuntime = RuntimeHealthShape & { generatedAt: number; lastSuccessAt: number | null; buildSha?: string;
@@ -35,6 +39,8 @@ export const numberText = (value: number | null | undefined, digits=2) =>
     ? value.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits }) : "—";
 export const signedText = (value: number | null | undefined, digits=2) =>
   typeof value === "number" && Number.isFinite(value) ? `${value >= 0 ? "+" : ""}${numberText(value,digits)}` : "—";
+export const contractText = (value: number | null | undefined) => typeof value === "number" && Number.isFinite(value)
+  ? value.toLocaleString("en-US",{minimumFractionDigits:0,maximumFractionDigits:12}) : "—";
 export const operatorTime = (value?: number | null) => value ? new Date(value).toLocaleString("zh-CN", {
   timeZone: "Asia/Vientiane", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
 }) : "—";
@@ -44,12 +50,14 @@ export function holdingTime(start: number | undefined, end: number) {
   return minutes >= 60 ? `${Math.floor(minutes/60)}小时${minutes%60}分` : `${minutes}分钟`;
 }
 export function livePositionMark(position: LivePosition, runtime: OperatorRuntime | null, now: number) {
-  const quote = runtime?.evidence[position.symbol], price = position.side === "LONG" ? quote?.bestBid : quote?.bestAsk;
-  const fresh = Boolean(quote?.fresh && price && Number.isFinite(price) && price > 0
-    && Number.isFinite(position.entryPrice) && position.entryPrice > 0 && Number.isFinite(position.notional)
-    && now >= quote.observedAt && now-quote.observedAt <= 15_000);
-  return { fresh, price: fresh ? price : null, pnl: fresh && price
-    ? (position.side === "LONG" ? 1 : -1)*position.notional*(price/position.entryPrice-1) : null };
+  // Keep the last REAL exchange valuation with a timestamp when stale.
+  // Public market data and PAPER prices never substitute for Gate's PnL.
+  const at=position.exchangePnlAt??null, pnl=position.exchangeUnrealisedPnl;
+  const known=typeof pnl==="number"&&Number.isFinite(pnl)&&at!=null&&at>0&&at<=now;
+  const fresh=known&&now-at!<=30_000&&!runtime?.live?.lastError;
+  const basis=position.exchangePnlMargin;
+  return { fresh, at, price:known?position.exchangeMarkPrice??null:null,pnl:known?pnl:null,
+    margin:basis??null,rate:known&&basis!=null&&basis>0?pnl/basis:null };
 }
 export class OperatorRequestError extends Error {
   status: number;

@@ -1,3 +1,7 @@
+# Candidate — new-orders-decimal-pnl-v1 / 2026-09-18
+
+Implemented durable new-only activation with old-holding protection, complete fractional contract sizing/reconciliation and native floating PnL. Local415direct tests including59parity tests pass; final architecture/build/type/lint/remote CI/production receipt still required. This heading is not a deployment claim. No PAPER tuning/reset, no owner switch or private real-money test. True exchange minimum remains a visible execution constraint, not silently oversized.
+
 # Current-PAPER LIVE adapter candidate — 2026-09-17
 
 Implementation and fake-Gate actual-Worker tests are being verified in PR302. Production has NOT been changed by this status entry. Preserve participation-execution-v1.2, all account identity/history and owner intent. Completion requires exact-head CI, main deployment and public production receipt. No real-money trade is used to test this release. Permanent acceptance contract: LIVE_MIRROR_CONTRACT.md.
