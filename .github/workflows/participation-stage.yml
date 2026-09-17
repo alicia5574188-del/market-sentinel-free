@@ -1,0 +1,74 @@
+name: Verify Participation Release
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/participation-apply-release.py'
+      - '.github/workflows/participation-stage.yml'
+permissions:
+  contents: write
+jobs:
+  stage:
+    if: github.head_ref == 'fix/forward-participation' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Apply exact checksummed locally verified changes
+        run: |
+          echo '43f3a7a981cf51b51921bc6e49621b977ef3a338d1aef11814cc8585ff536d37  scripts/participation-apply-release.py' | sha256sum -c -
+          python scripts/participation-apply-release.py
+      - name: Remove temporary transport and capture workflow
+        run: git rm --ignore-unmatch scripts/participation-apply-release.py .github/workflows/participation-stage.yml .github/workflows/participation-workspace.yml
+      - name: Verify participation, current-quote execution, protection and account continuity
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/participation-verification
+          npm ci 2>&1 | tee /tmp/participation-verification/install.log
+          npm run test:direct 2>&1 | tee /tmp/participation-verification/direct.log
+          npm test 2>&1 | tee /tmp/participation-verification/test-build.log
+          npm run typecheck 2>&1 | tee /tmp/participation-verification/typecheck.log
+          npm run lint 2>&1 | tee /tmp/participation-verification/lint.log
+          npx wrangler deploy --dry-run --config dist/server/wrangler.json 2>&1 | tee /tmp/participation-verification/dry-run.log
+          git diff --check
+          git add -A
+          git diff --cached --check
+      - name: Store verified blobs only; connector controls authorized tree and branch writes
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs=require('fs'),cp=require('child_process'),crypto=require('crypto');
+            const {owner,repo}=context.repo;
+            const parent=context.payload.pull_request.head.sha;
+            const branch=context.payload.pull_request.head.ref;
+            const current=await github.rest.repos.getBranch({owner,repo,branch});
+            if(current.data.commit.sha!==parent)throw new Error('Head changed during verification');
+            const base=await github.rest.git.getCommit({owner,repo,commit_sha:parent});
+            const names=cp.execFileSync('git',['diff','--cached','--name-only','-z']).toString().split('\0').filter(Boolean);
+            const tree=[],sha256={};
+            for(const path of names){
+              if(!fs.existsSync(path)){tree.push({path,mode:'100644',type:'blob',sha:null});continue;}
+              const bytes=fs.readFileSync(path);
+              const blob=await github.rest.git.createBlob({owner,repo,content:bytes.toString('base64'),encoding:'base64'});
+              const expected=crypto.createHash('sha1').update(Buffer.concat([Buffer.from('blob '+bytes.length+'\0'),bytes])).digest('hex');
+              if(blob.data.sha!==expected)throw new Error('Blob digest mismatch: '+path);
+              tree.push({path,mode:'100644',type:'blob',sha:blob.data.sha});
+              sha256[path]=crypto.createHash('sha256').update(bytes).digest('hex');
+            }
+            const evidence={parent,baseTree:base.data.tree.sha,tree,sha256,runId:context.runId,branchRefUnchanged:true,productionUnchanged:true};
+            fs.writeFileSync('/tmp/participation-verification/verified-tree-elements.json',JSON.stringify(evidence,null,2));
+            console.log('VERIFIED_TREE_ELEMENTS='+JSON.stringify(evidence));
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: participation-verified-${{ github.run_id }}
+          path: /tmp/participation-verification/
+          retention-days: 7
+          if-no-files-found: warn
