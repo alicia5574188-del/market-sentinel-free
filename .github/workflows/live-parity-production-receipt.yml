@@ -1,0 +1,128 @@
+name: Current PAPER LIVE Parity Production Receipt
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/live-parity-production-receipt.yml']
+permissions:
+  contents: read
+jobs:
+  receipt:
+    if: github.head_ref == 'verify/live-parity-20260917'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Wait for exact reviewed main via public endpoints only
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p parity-receipt
+          base='https://market-sentinel-free.alicia5574188.workers.dev'
+          ready=0
+          for attempt in {1..80}; do
+            code="$(curl -sS --max-time 15 -o parity-receipt/health-first.json -w '%{http_code}' "$base/__health" || true)"
+            if [[ "$code" == 200 ]] && jq -e '.runtime.buildSha == "de3f0e5548f028781ee8d672aecf86fdbf60f67e" and .runtime.liveMirror.version == "current-paper-live-parity-v1" and .runtime.liveMirror.source == "CURRENT_FORWARD_ACCOUNT" and .runtime.liveMirror.connected == true and .runtime.forward.storage.error == null' parity-receipt/health-first.json >/dev/null;then ready=1;break;fi
+            sleep 5
+          done
+          [[ "$ready" == 1 ]]
+          curl -fsS --retry 2 --max-time 20 "$base/api/runtime" > parity-receipt/runtime-first.json
+          curl -fsS --retry 2 --max-time 20 "$base/api/forward/export" > parity-receipt/export-first.json
+          code="$(curl -sS --max-time 20 -o parity-receipt/unauthorized-source.json -w '%{http_code}' "$base/api/live/source?id=verification-no-auth")"
+          [[ "$code" == 401 ]]
+          echo "$code" > parity-receipt/unauthorized-source-status.txt
+          sleep 12
+          curl -fsS --retry 2 --max-time 20 "$base/__health" > parity-receipt/health-second.json
+          python - <<'PY'
+          import json,pathlib
+          p=pathlib.Path('parity-receipt');h=json.loads((p/'health-first.json').read_text());h2=json.loads((p/'health-second.json').read_text());r=json.loads((p/'runtime-first.json').read_text());f=r['forward'];m=r['liveMirror']
+          assert h2['runtime']['lastSuccessAt']>h['runtime']['lastSuccessAt']
+          assert r['buildSha']=='de3f0e5548f028781ee8d672aecf86fdbf60f67e'
+          assert r['liveMode']['requestedEnabled'] is False and r['liveMode']['operational'] is False
+          assert h2['runtime']['liveMode']['requestedEnabled'] is False
+          assert m['source']=='CURRENT_FORWARD_ACCOUNT' and m['version']=='current-paper-live-parity-v1'
+          assert m['connected'] is True and m['ownerControlled'] is True and m['instructionParity'] is True
+          assert m['exactFillsGuaranteed'] is False and m['copiedCount']==0
+          assert m['sourceCount']==len(f['positions'])
+          assert {x['sourceId'] for x in m['rows']}=={x['id'] for x in f['positions']}
+          assert all(x['status']=='OWNER_OFF' for x in m['rows'])
+          assert f['startedAt']==1789556791436 and f['initialEquity']==1000
+          assert f['policyVersion']=='participation-execution-v1.2' and f['resolved']>=72
+          assert f['storage']['error'] is None and f['storage']['persistedAt']>0
+          assert 'live' not in r,'private snapshot leaked to anonymous runtime'
+          print(json.dumps({'buildSha':r['buildSha'],'liveMirror':m,'owner':r['liveMode'],'startedAt':f['startedAt'],'resolved':f['resolved'],'balance':f['balance'],'equity':f['equity'],'privateSourceHTTP':401},ensure_ascii=False))
+          PY
+      - name: Retain complete public PAPER archives for local continuity reconciliation
+        run: |
+          python - <<'PY'
+          import json,pathlib,subprocess,urllib.parse
+          root=pathlib.Path('parity-receipt');cursor=None;items=[];complete=False
+          for i in range(80):
+              url='https://market-sentinel-free.alicia5574188.workers.dev/api/forward/archive'
+              if cursor:url+='?'+urllib.parse.urlencode({'cursor':cursor})
+              raw=subprocess.check_output(['curl','-fsS','--retry','2','--max-time','20',url])
+              page=json.loads(raw);assert page['immutable'] is True;items+=page['items'];cursor=page['nextCursor']
+              if cursor is None:complete=True;break
+          (root/'archives.json').write_text(json.dumps({'items':items,'complete':complete,'nextCursor':cursor},ensure_ascii=False))
+          print(json.dumps({'archivePackets':len(items),'complete':complete}))
+          PY
+      - name: Install isolated browser verifier
+        run: python -m pip install playwright==1.55.0
+      - name: Exercise actual deployed six-tab UI without login, switches or private API calls
+        run: |
+          python - <<'PY'
+          import json,pathlib,shutil
+          from playwright.sync_api import sync_playwright
+          root=pathlib.Path('parity-receipt');checks=[];base='https://market-sentinel-free.alicia5574188.workers.dev'
+          chrome=shutil.which('google-chrome') or shutil.which('chromium') or shutil.which('chromium-browser');assert chrome
+          with sync_playwright() as p:
+              b=p.chromium.launch(executable_path=chrome,headless=True,args=['--no-sandbox'])
+              for w in [320,393,768,1440]:
+                  page=b.new_page(viewport={'width':w,'height':900});errors=[];dialogs=[];writes=[]
+                  page.on('pageerror',lambda e:errors.append(str(e)))
+                  page.on('dialog',lambda d:(dialogs.append(d.message),d.dismiss()))
+                  page.on('request',lambda r:writes.append(r.url) if r.method not in ['GET','HEAD','OPTIONS'] else None)
+                  response=page.goto(base,wait_until='domcontentloaded',timeout=45000);assert response and response.status==200
+                  page.wait_for_selector('.fr-app[data-ui-version="dark-live-v1"]',timeout=20000);page.wait_for_timeout(1800)
+                  for name in ['总览','规则','模拟','实盘','演变','系统']:
+                      page.locator('nav.fr-nav button').filter(has_text=name).click();page.wait_for_timeout(400)
+                      assert page.locator('nav.fr-nav button[aria-current="page"] b').inner_text()==name
+                      overflow=page.evaluate('document.documentElement.scrollWidth>innerWidth+1');assert not overflow,(w,name)
+                      assert not errors,errors;assert not dialogs,dialogs;assert not writes,writes
+                      if name=='实盘':
+                          assert page.get_by_text('模拟—实盘复制一致性',exact=True).is_visible()
+                          assert page.get_by_text('当前源已接入',exact=True).is_visible()
+                          assert page.locator('.fr-owner-login').is_visible()
+                          assert '当前新版模拟账户，不是旧版组合' in page.locator('main').inner_text()
+                      if w in [393,1440] and name in ['总览','实盘','系统']:page.screenshot(path=str(root/f'{w}-{name}.png'),full_page=True)
+                      checks.append({'width':w,'tab':name,'overflow':overflow,'pageErrors':list(errors),'dialogs':list(dialogs),'writes':list(writes)})
+                  assert page.locator('.fr-return').count()==0;page.close()
+              b.close()
+          (root/'browser-results.json').write_text(json.dumps(checks,ensure_ascii=False,indent=2))
+          print('24 actual native dark tab/viewport checks passed; zero mutation requests')
+          PY
+      - name: Verify a subsequent persisted PAPER cycle and unchanged owner OFF
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='https://market-sentinel-free.alicia5574188.workers.dev'
+          first="$(jq -r '.forward.lastCycleAt' parity-receipt/export-first.json)"
+          for attempt in {1..65}; do
+            curl -fsS --retry 2 --max-time 20 "$base/api/runtime" > parity-receipt/runtime-final.json
+            if jq -e --argjson first "$first" '.forward.lastCycleAt > $first and .forward.storage.persistedAt >= .forward.lastCycleAt and .forward.storage.error == null' parity-receipt/runtime-final.json >/dev/null;then break;fi
+            sleep 5
+          done
+          jq -e --argjson first "$first" '.forward.lastCycleAt > $first and .forward.storage.error == null and .liveMirror.connected == true and .liveMode.requestedEnabled == false' parity-receipt/runtime-final.json >/dev/null
+          curl -fsS --retry 2 --max-time 20 "$base/api/forward/export" > parity-receipt/export-final.json
+          curl -fsS --retry 2 --max-time 20 "$base/__health" > parity-receipt/health-final.json
+          jq '{buildSha,liveMirror,liveMode,forward:(.forward|{version,policyVersion,startedAt,initialEquity,resolved,balance,equity,lastCycleAt,storage,positions:(.positions|map({id,symbol,openedAt,notional,margin,leverage}))})}' parity-receipt/runtime-final.json > parity-receipt/summary.json
+          cat parity-receipt/summary.json
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > parity-receipt/time.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-parity-production-${{ github.run_id }}
+          path: parity-receipt/
+          retention-days: 7
+          if-no-files-found: error
