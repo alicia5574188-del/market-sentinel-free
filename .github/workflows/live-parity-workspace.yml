@@ -1,0 +1,33 @@
+name: Live Parity Workspace Read Only
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/live-parity-workspace.yml']
+permissions:
+  contents: read
+jobs:
+  workspace:
+    if: github.head_ref == 'feat/forward-live-parity'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Capture public source and owner intent without private reads or mutations
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/live-parity
+          git archive HEAD -o /tmp/live-parity/source.tar
+          base='https://market-sentinel-free.alicia5574188.workers.dev'
+          curl -fsS --retry 2 --max-time 20 "$base/__health" > /tmp/live-parity/health-before.json
+          curl -fsS --retry 2 --max-time 20 "$base/api/runtime" > /tmp/live-parity/runtime-before.json
+          curl -fsS --retry 2 --max-time 20 "$base/api/forward/export" > /tmp/live-parity/export-before.json
+          jq '{buildSha,liveMode,forward:(.forward|{policyVersion,startedAt,balance,equity,resolved,liveEligible,storage})}' /tmp/live-parity/runtime-before.json
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > /tmp/live-parity/time.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: live-parity-workspace-${{ github.run_id }}
+          path: /tmp/live-parity/
+          retention-days: 7
