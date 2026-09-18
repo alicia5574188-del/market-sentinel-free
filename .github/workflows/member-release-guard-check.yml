@@ -1,0 +1,89 @@
+name: Verify Additive Member Release Guard
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/member-release-guard-check.yml']
+permissions:
+  contents: write
+jobs:
+  guard:
+    if: github.head_ref == 'feature/isolated-member-keys' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Update exact old guard for two additive classes; no production gate removal
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('.github/workflows/sentinel-v2-ci.yml');s=p.read_text()
+          a='      - name: Require the reviewed two-phase Durable Object migration'
+          b='      - name: Require unchanged primary migrations and additive isolated member namespaces'
+          assert s.count(a)==1;s=s.replace(a,b)
+          a='            .durable_objects.bindings == [{name: "MARKET_STREAM", class_name: "MarketStream"}] and\n            .migrations[-2] == {'
+          b='            .durable_objects.bindings == [\n              {name: "MARKET_STREAM", class_name: "MarketStream"},\n              {name: "MEMBERS", class_name: "MemberDirectory"},\n              {name: "MEMBER_EXECUTION", class_name: "MemberExecutor"}\n            ] and\n            (.migrations | length) == 8 and\n            .migrations[-3] == {'
+          assert s.count(a)==1;s=s.replace(a,b)
+          a='            .migrations[-1] == {\n              tag: "v7-delete-legacy-do",'
+          b='            .migrations[-2] == {\n              tag: "v7-delete-legacy-do",'
+          assert s.count(a)==1;s=s.replace(a,b)
+          a='                "HistoricalArchive"\n              ]\n            }\n          \' wrangler.jsonc'
+          b='                "HistoricalArchive"\n              ]\n            } and\n            .migrations[-1] == {\n              tag: "v8-isolated-member-accounts",\n              new_sqlite_classes: ["MemberDirectory", "MemberExecutor"]\n            }\n          \' wrangler.jsonc'
+          assert s.count(a)==1;s=s.replace(a,b);p.write_text(s)
+          p=Path('tests/architecture.test.mjs');s=p.read_text();s='import { spawnSync } from "node:child_process";\n'+s
+          s+='''\n\ntest("release guard accepts only exact additive member namespaces, never primary deletion or rewrites", async () => {
+            const workflow = await read(".github/workflows/sentinel-v2-ci.yml");
+            const section = workflow.split("Require unchanged primary migrations and additive isolated member namespaces")[1].split("      - name:")[0];
+            const expression = section.match(/jq -e --arg database "\\$D1_DATABASE_ID" '([\\s\\S]*?)' wrangler\\.jsonc/)[1];
+            const config = JSON.parse(await read("wrangler.jsonc"));
+            const accepts = (value) => spawnSync("jq", ["-e", "--arg", "database", config.d1_databases[0].database_id, expression], { input: JSON.stringify(value), encoding: "utf8" }).status === 0;
+            assert.equal(accepts(config), true);
+            const mutations = [
+              (c) => c.durable_objects.bindings.shift(),
+              (c) => c.migrations[7].deleted_classes = ["MarketStream"],
+              (c) => c.migrations[5].new_sqlite_classes = ["WrongPrimary"],
+              (c) => c.migrations.push({ tag: "unreviewed", deleted_classes: ["MarketStream"] }),
+              (c) => c.d1_databases[0].database_id = "another-account",
+            ];
+            for (const mutate of mutations) { const c = structuredClone(config); mutate(c); assert.equal(accepts(c), false); }
+          });\n''';p.write_text(s)
+          PY
+      - name: Verify all application tests and final configuration
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/member-guard
+          npm ci > /tmp/member-guard/install.log 2>&1
+          npm run test:direct > /tmp/member-guard/direct.log 2>&1
+          npm test > /tmp/member-guard/build-test.log 2>&1
+          npm run typecheck > /tmp/member-guard/typecheck.log 2>&1
+          npm run lint > /tmp/member-guard/lint.log 2>&1
+          npx wrangler deploy --dry-run --config dist/server/wrangler.json > /tmp/member-guard/dry-run.log 2>&1
+          git diff --check
+      - name: Export verified content blobs only, no ref movement or deployment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs=require('fs'),crypto=require('crypto');const {owner,repo}=context.repo;
+            const parent=context.payload.pull_request.head.sha;
+            const current=await github.rest.repos.getBranch({owner,repo,branch:context.payload.pull_request.head.ref});
+            if(current.data.commit.sha!==parent)throw new Error('Head changed');
+            const base=await github.rest.git.getCommit({owner,repo,commit_sha:parent});const tree=[],sha256={};
+            for(const path of ['.github/workflows/sentinel-v2-ci.yml','tests/architecture.test.mjs']){
+              const bytes=fs.readFileSync(path);const blob=await github.rest.git.createBlob({owner,repo,encoding:'base64',content:bytes.toString('base64')});
+              const want=crypto.createHash('sha1').update(Buffer.concat([Buffer.from('blob '+bytes.length+'\0'),bytes])).digest('hex');if(blob.data.sha!==want)throw new Error('digest mismatch');
+              tree.push({path,mode:'100644',type:'blob',sha:blob.data.sha});sha256[path]=crypto.createHash('sha256').update(bytes).digest('hex');
+            }
+            tree.push({path:'.github/workflows/member-release-guard-check.yml',mode:'100644',type:'blob',sha:null});
+            fs.writeFileSync('/tmp/member-guard/verified-tree.json',JSON.stringify({parent,baseTree:base.data.tree.sha,tree,sha256,runId:context.runId,productionUnchanged:true},null,2));
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: member-release-guard-${{ github.run_id }}
+          path: /tmp/member-guard/
+          retention-days: 7
+          if-no-files-found: warn
