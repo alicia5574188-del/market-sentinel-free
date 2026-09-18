@@ -14,6 +14,7 @@ export type LivePosition = Partial<ReturnType<typeof gatePositionValuation>> & {
   exchangeSize: number; stopPrice: number | null; currentStop: number;
   currentTarget: number; realizedPnl?: number; exitReason?: string;
   parity?: MirrorReceipt; actualExitPriceVerified?: boolean;
+  settlement?: import("./live-settlement.ts").Settlement;
 };
 export type LiveEntry = { planId: string; symbol: string; side: "LONG" | "SHORT"; status: string;
   trigger: number; invalidation: number; target: number; notional: number; plannedRisk: number;

@@ -225,6 +225,7 @@ export function memberExecutionClass(Base:typeof MarketStream) {
             liveMirror:this.liveMirrorView(),member:{id,label:this.identity.label,sharedSource:true},legacyRetired:true});
         }
         if(path==="/live-status")return json({live:await this.liveView(),generatedAt:Date.now()});
+        if(path==="/live-history"&&request.method==="GET")return json(await this.privateLiveHistory());
         if(path==="/credential-status")return json({credential:this.credentialView()});
         if(path==="/credentials"&&request.method==="PUT") {
           if(this.credentialBusy)throw new Error("API验证正在进行，请勿重复提交");

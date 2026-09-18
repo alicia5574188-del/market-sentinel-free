@@ -215,6 +215,16 @@ export class GateLiveClient {
     return result.data;
   }
 
+  /** Read-only position-cycle settlements. No order side effects or automatic retries. */
+  async positionCloseHistory(from:number,to:number,offset=0) {
+    if(![from,to,offset].every(Number.isSafeInteger)||from<0||to<from||offset<0||offset>1000)
+      throw new Error("实盘结算查询范围无效");
+    const response=await this.request<import("./live-settlement.ts").GatePositionClose[]>("GET","/futures/usdt/position_close",
+      `from=${from}&to=${to}&limit=100&offset=${offset}`);
+    if(!Array.isArray(response.data)||response.data.length>100)throw new Error("实盘结算回报格式无效");
+    return response.data;
+  }
+
   async createEntry(intent: LiveEntryIntent) {
     const path = intent.kind === "PRICE_TRIGGER" ? "/futures/usdt/price_orders" : "/futures/usdt/orders";
     const response = await this.request<GateLiveOrder>("POST", path, "", intent.body);

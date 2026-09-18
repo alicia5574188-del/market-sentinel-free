@@ -252,3 +252,18 @@ test("primary trading, main alarm, source evaluation and owner switch bodies are
   for(const [name,sha]of Object.entries(baseline.methods)){const method=main.members.find((x:any)=>x.name?.getText(tree)===name);assert.ok(method?.body,name);
     assert.equal(createHash("sha256").update(method.body.getText(tree)).digest("hex"),sha,`${name}: existing primary logic must not change`);}
 });
+
+
+test("history reader preserves authenticated member namespace and denies guests",()=>clock(async()=>{
+ const h=await harness(),a=await h.issue("A"),b=await h.issue("B");
+ const aa=await h.member(a.id),bb=await h.member(b.id);
+ aa.gate.credentials={environment:"testnet",apiKey:"synthetic-A"};bb.gate.credentials={environment:"testnet",apiKey:"synthetic-B"};
+ aa.gate.positionCloseHistory=async()=>[];bb.gate.positionCloseHistory=async()=>[];
+ aa.engine.liveHistory=[{id:"only-A",symbol:"BTC_USDT",side:"LONG",status:"CLOSED",entryPrice:100,exchangeSize:1,entryAt:now-50000,exitAt:now-10000}];
+ bb.engine.liveHistory=[{id:"only-B",symbol:"ETH_USDT",side:"LONG",status:"CLOSED",entryPrice:100,exchangeSize:1,entryAt:now-50000,exitAt:now-10000}];
+ assert.equal((await h.http("/api/live/history")).status,401);
+ const cookie=memberCookie(await issueMemberSession(ROOT,a.id,1));
+ const response=await h.http(`/api/live/history?memberId=${b.id}`,cookie);assert.equal(response.status,200);
+ const value=await response.json<any>();assert.equal(value.history[0].id,"only-A");assert.ok(!JSON.stringify(value).includes("only-B"));
+ await Promise.all(aa.c.tasks);await Promise.all(bb.c.tasks);
+}));
