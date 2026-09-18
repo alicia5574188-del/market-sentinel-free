@@ -38,6 +38,8 @@ import { advanceRegimePortfolio, evaluateRegimePortfolio, initialRegimePortfolio
 import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
 import { advanceForward, forwardSummary, forwardEquity, freshQuote, forwardWatchSymbols, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { readForwardStore, prepareForwardWrite, FORWARD_STORAGE } from "../lib/forward-store.ts";
+import { EquityReader } from "../lib/equity-reader.ts";
+import { EQUITY_CURVE_VERSION } from "../lib/equity-curve.ts";
 import { resourceDay, rollResourceDay, RESOURCE_DAY_POLICY, type ResourceCounters } from "../lib/resource-day.ts";
 import { LIVE_TURNOVER_PREFIX, LIVE_TURNOVER_VERSION, initialTurnover, validateTurnover, nextFillWindow,
   prepareTurnoverPage, turnoverView, type TurnoverState, type GateConfirmedFill } from "../lib/live-turnover.ts";
@@ -472,6 +474,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private forwardBusy = false;
   private forwardLastAttemptAt = 0;
   private forwardCompression: Awaited<ReturnType<typeof prepareForwardWrite>>["compression"] | null = null;
+  private equityReader = new EquityReader();
   protected turnoverState: TurnoverState | null = null;
   protected turnoverError: string | null = null;
   protected turnoverAccountKey: string | null = null;
@@ -2865,6 +2868,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         measurements: this.forwardState?.samples ?? [],
         archiveEndpoint: "/api/forward/archive", completeness: "当前快照与滚动样本；完整不可变记录按archive接口分页读取" });
     }
+    if (path === "/forward-equity" && request.method === "GET") {
+      const s=this.forwardState;
+      if(!s)return json({error:"净值源尚未恢复"},503);
+      try {
+        const page=await this.equityReader.read(this.ctx.storage,{startedAt:s.startedAt,initialEquity:s.initialEquity,
+          policy:s.policyVersion??"legacy",exitPolicy:s.exitPolicyUpgrade?.policy??"legacy",
+          comparableSince:Math.max(s.startedAt,s.policyUpgrade?.at??0,s.exitPolicyUpgrade?.at??0),
+          persistedAt:s.storage.persistedAt},url.searchParams.get("cursor"),Date.now());
+        return json(page);
+      }catch(error){const message=error instanceof Error?error.message:"";
+        return json({error:message==="INVALID_CURSOR"?"净值游标无效":"净值记录暂不可用；图表不控制交易"},
+          message==="INVALID_CURSOR"?400:message==="CURVE_BUSY"?429:503);}
+    }
     if (path === "/forward-archive" && request.method === "GET") {
       const prefix = `${FORWARD_STORAGE}archive:`;
       const cursor = url.searchParams.get("cursor");
@@ -3313,12 +3329,14 @@ const worker = {
       const runtime = await response.json<Record<string, unknown>>();
       const live = runtimeReady(runtime as RuntimeHealthShape);
       return json({ ok: response.ok && live, ready: live, version: SYSTEM_VERSION, mode: "PAPER", runtime,
+        equityCurve:{version:EQUITY_CURVE_VERSION,readOnly:true,automaticLive:false,defaultDays:7,source:"saved-cost-adjusted-equity"},
         records:{version:"compact-records-pnl-v1",recent:10,archive:50,settlement:"gate-close-settlement-v1"},
         members:{version:MEMBERS_VERSION,configured:!!env.MEMBERS&&!!env.MEMBER_EXECUTION,ownerOnlyIssuer:true,
           executionIsolation:true,guestProgramAccess:false},topLevelCpuMs: performance.now() - started }, live ? 200 : 503);
     }
     if (url.pathname === "/api/runtime" && request.method === "GET") return runtimeStatus(env, true, await ownerAuthenticated(request, env));
     if (url.pathname === "/api/forward/export" && request.method === "GET") return env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/forward-export");
+    if (url.pathname === "/api/forward/equity" && request.method === "GET") return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/forward-equity${url.search}`);
     if (url.pathname === "/api/forward/archive" && request.method === "GET") return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/forward-archive${url.search}`);
     if (url.pathname === "/api/history" && request.method === "GET") return paperHistory(url, env);
     if (url.pathname === "/api/account-logs" && request.method === "GET") return accountLogs(env);

@@ -1,3 +1,7 @@
+# Current goal — read-only chart/reference
+
+Deliver original-capital smooth weekly equity history and sample-aware manual LIVE reference without changing any trading source, strategy, cadence, size, exit or owner/member authority. Use existing saved archive marks only. Verify code and actual reviewed-main deployment.
+
 # Targeted protection timing — 2026-09-18
 
 The user authorizes a small change for timely profit protection and faster defense after confirmed opposite evidence, while preserving participation and stable operation. Read `research/TIMELY_PROTECTION.md`. New source orders carry `timely-protection-v1`: remove ONLY the extra five-minute giveback and fifteen-minute confirmed-relation age embargoes. Original arm/width/stop/deadline, candidate discovery and scan/refit cadence remain unchanged. Existing unmarked positions retain their original rules and timing; no retrofit of historical peaks. No equity-peak stop, daily pause, loss-triggered reversal, minimum-lot enlargement, weak-rule veto or membership/owner-control change. New ordered exits carry observed timing/overshoot audit, not invented first-crossing times. Source loss history and current primary/member LIVE parity remain intact. This explicit authorization updates only the forward-engine baseline and its new pure helper; ten original primary execution method hashes stay unchanged. No claim of lower future drawdown or profit is established by synthetic tests. Deploy only verified reviewed main and obtain a public advancing-state receipt.
