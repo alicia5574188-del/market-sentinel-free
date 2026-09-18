@@ -1,0 +1,102 @@
+name: Equity Reference Public Production Receipt
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/equity-reference-production-receipt.yml']
+permissions:
+  contents: read
+jobs:
+  receipt:
+    if: github.head_ref == 'verify/equity-reference-20260918'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: '0748a055cca8590a6608459aee3e1e1c2b270dfa'
+          persist-credentials: false
+      - name: Capture exact deployed source and public continuity only
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/equity-reference-receipt
+          git archive HEAD | gzip > /tmp/equity-reference-receipt/deployed-source.tar.gz
+          python3 - <<'PY'
+          import json,pathlib,subprocess,time,datetime,re,urllib.parse,hashlib
+          root=pathlib.Path('/tmp/equity-reference-receipt')
+          base='https://market-sentinel-free.alicia5574188.workers.dev'
+          sha='0748a055cca8590a6608459aee3e1e1c2b270dfa'
+          samples=[]
+          def get(path,name):
+              target=root/name
+              p=subprocess.run(['curl','-sS','--max-time','15','-o',str(target),'-w','%{http_code}',base+path],capture_output=True,text=True)
+              return p.stdout.strip(),target.read_bytes() if target.exists() else b''
+          def health(name):
+              code,raw=get('/__health',name)
+              try:h=json.loads(raw)
+              except (ValueError,TypeError):h={}
+              r=h.get('runtime',{});f=r.get('forward',{})
+              samples.append({'at':int(time.time()*1000),'status':code,'build':r.get('buildSha'),'state':r.get('state'),'stale':r.get('stale'),'lastError':r.get('lastError'),'lastSuccessAt':r.get('lastSuccessAt'),'lastCycleAt':f.get('lastCycleAt'),'persistedAt':f.get('storage',{}).get('persistedAt')})
+              (root/'health-observations.json').write_text(json.dumps(samples,ensure_ascii=False,indent=2))
+              ok=code=='200' and h.get('ok') is True and h.get('ready') is True and r.get('buildSha')==sha and r.get('stale') is False and r.get('lastError') is None and f.get('storage',{}).get('error') is None
+              return ok,h
+          first=None
+          for _ in range(24):
+              ok,h=health('health-first.json')
+              if ok:first=h;break
+              time.sleep(10)
+          assert first is not None,'No healthy exact-build receipt; retain observations, do not override trading or redeploy'
+          r=first['runtime'];f=r['forward'];m=r['liveMirror']
+          assert f['startedAt']==1789556791436 and f['policyVersion']=='participation-execution-v1.2'
+          assert f['exitPolicyVersion']=='timely-protection-v1'
+          assert f['version']=='forward-relations-v1.0' and f['resolved']>=247
+          assert m['source']=='CURRENT_FORWARD_ACCOUNT' and m['connected'] is True and m['newOrdersOnly'] is True and m['ownerControlled'] is True
+          assert m['enabledAt']==1789688633482
+          assert r['liveMode']=={'requestedEnabled':False,'operational':False},'Owner differs from recorded pre-release state; investigate, never toggle'
+          assert first['members']['version']=='isolated-member-keys-v1' and first['members']['ownerOnlyIssuer'] is True
+          assert first['records']['recent']==10 and first['records']['archive']==50
+          assert r['resourceAccounting']['cap']==8000
+          status,html=get('/','index.html');assert status=='200'
+          denied={}
+          for path in ['/api/forward/equity','/api/runtime']:
+              status,raw=get(path,'guest-'+path.rsplit('/',1)[-1]+'.json');denied[path]=status
+              assert status=='401',(path,status)
+          links=re.findall(r'(?:src|href)="([^"\s]+\.js(?:\?[^"\s]*)?)"',html.decode())
+          links.append('/assets/page-AdbH4b8J.js')
+          assets=[];found=False
+          for path in dict.fromkeys(links):
+              u=urllib.parse.urlparse(urllib.parse.urljoin(base,path))
+              if u.netloc!=urllib.parse.urlparse(base).netloc:continue
+              clean=u.path+('?' + u.query if u.query else '')
+              code,body=get(clean,'asset-'+str(len(assets))+'.js')
+              if code=='200':
+                  found=found or b'/api/forward/equity' in body
+                  assets.append({'path':clean,'bytes':len(body),'sha256':hashlib.sha256(body).hexdigest(),'hasEquityRoute':b'/api/forward/equity' in body})
+              if len(assets)>=16:break
+          assert found,'Published client bundle missing new chart route'
+          (root/'assets.json').write_text(json.dumps(assets,indent=2))
+          (root/'guest-status.json').write_text(json.dumps(denied,indent=2))
+          final=None
+          for _ in range(38):
+              time.sleep(10)
+              ok,h=health('health-final.json');rr=h.get('runtime',{});ff=rr.get('forward',{})
+              if ok and ff.get('lastCycleAt',0)>f['lastCycleAt'] and ff.get('storage',{}).get('persistedAt',0)>=ff['lastCycleAt']:
+                  final=h;break
+          assert final is not None,'No subsequent atomically saved five-minute cycle observed'
+          rr=final['runtime'];ff=rr['forward'];mm=rr['liveMirror']
+          assert rr['lastSuccessAt']>r['lastSuccessAt']
+          assert rr['liveMode']==r['liveMode'] and mm['enabledAt']==m['enabledAt']
+          assert ff['startedAt']==f['startedAt'] and ff['policyVersion']==f['policyVersion'] and ff['exitPolicyVersion']==f['exitPolicyVersion']
+          assert ff['resolved']>=f['resolved'] and ff['exitPolicyActivatedAt']==f['exitPolicyActivatedAt']
+          assert final['members']==first['members'] and final['records']==first['records']
+          summary={'checkedAt':int(time.time()*1000),'checkedAtVientiane':datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7))).isoformat(),'build':sha,'source':ff,'previousCycleAt':f['lastCycleAt'],'owner':rr['liveMode'],'mirror':mm,'members':final['members'],'records':final['records'],'resources':rr['resourceAccounting'],'publishedChartAssetVerified':True,'guestEndpointStatuses':denied,'privateNumericAccountViewed':False,'ownerLoginRequests':0,'ownerToggleRequests':0,'realTestOrders':0,'redeploymentsDuringReceipt':0,'profitabilityValidated':False}
+          (root/'receipt.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2))
+          print(json.dumps(summary,ensure_ascii=False))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: equity-reference-production-${{ github.run_id }}
+          path: /tmp/equity-reference-receipt/
+          retention-days: 7
+          if-no-files-found: error
