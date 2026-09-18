@@ -1,0 +1,85 @@
+name: Timely Protection Public Production Receipt
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/timely-protection-production-receipt.yml']
+permissions:
+  contents: read
+jobs:
+  receipt:
+    if: github.head_ref == 'verify/timely-protection-20260918'
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    steps:
+      - name: Wait for reviewed build and atomically saved exit-policy activation
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p timely-protection-receipt
+          base='https://market-sentinel-free.alicia5574188.workers.dev'
+          ready=0
+          for attempt in {1..42};do
+            code="$(curl -sS --max-time 12 -o timely-protection-receipt/health-first.json -w '%{http_code}' "$base/__health" || true)"
+            if [[ "$code" == 200 ]] && jq -e '.runtime.buildSha == "525dc811e59702452220586a8e507f0c710c1001" and .runtime.forward.exitPolicyVersion == "timely-protection-v1" and .runtime.forward.exitPolicyActivatedAt > 0 and .runtime.forward.storage.persistedAt >= .runtime.forward.exitPolicyActivatedAt and .runtime.forward.storage.error == null and .runtime.stale == false and .runtime.lastError == null' timely-protection-receipt/health-first.json >/dev/null;then ready=1;break;fi
+            sleep 10
+          done
+          [[ "$ready" == 1 ]]
+          python3 - <<'PY'
+          import json,pathlib
+          p=pathlib.Path('timely-protection-receipt');h=json.loads((p/'health-first.json').read_text());r=h['runtime'];f=r['forward'];m=r['liveMirror']
+          assert h['ok'] and h['ready']
+          assert f['policyVersion']=='participation-execution-v1.2' and f['startedAt']==1789556791436 and f['resolved']>=237
+          assert f['version']=='forward-relations-v1.0'
+          assert r['liveMode']=={'requestedEnabled':False,'operational':False},'Owner intent differs from pre-release; inspect, never override'
+          assert m['enabledAt']==1789688633482 and m['source']=='CURRENT_FORWARD_ACCOUNT' and m['newOrdersOnly'] is True and m['ownerControlled'] is True
+          assert f['timelyExitOpenCount']+f['inheritedExitOpenCount']==f['openCount']
+          assert h['members']=={'version':'isolated-member-keys-v1','configured':True,'ownerOnlyIssuer':True,'executionIsolation':True,'guestProgramAccess':False}
+          assert h['records']['recent']==10 and h['records']['archive']==50
+          assert r['resourceAccounting']['cap']==8000
+          print(json.dumps({'build':r['buildSha'],'source':f,'owner':r['liveMode'],'members':h['members'],'mirror':m},ensure_ascii=False))
+          PY
+      - name: Public program remains gated; no login, switch or real test orders
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='https://market-sentinel-free.alicia5574188.workers.dev'
+          curl -fsS --retry 2 --max-time 20 "$base/" > timely-protection-receipt/index.html
+          code="$(curl -sS --max-time 20 -o timely-protection-receipt/guest-runtime.json -w '%{http_code}' "$base/api/runtime")"
+          [[ "$code" == 401 ]]
+          echo "$code" > timely-protection-receipt/guest-runtime-status.txt
+      - name: Confirm subsequent five-minute cycle, persistence and original owner activation
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='https://market-sentinel-free.alicia5574188.workers.dev'
+          first="$(jq -r '.runtime.forward.lastCycleAt' timely-protection-receipt/health-first.json)"
+          ready=0
+          for attempt in {1..38};do
+            code="$(curl -sS --max-time 12 -o timely-protection-receipt/health-final.json -w '%{http_code}' "$base/__health" || true)"
+            if [[ "$code" == 200 ]] && jq -e --argjson first "$first" '.runtime.forward.lastCycleAt > $first and .runtime.forward.storage.persistedAt >= .runtime.forward.lastCycleAt and .runtime.forward.storage.error == null and .runtime.buildSha == "525dc811e59702452220586a8e507f0c710c1001"' timely-protection-receipt/health-final.json >/dev/null;then ready=1;break;fi
+            sleep 10
+          done
+          [[ "$ready" == 1 ]]
+          python3 - <<'PY'
+          import json,pathlib,time
+          p=pathlib.Path('timely-protection-receipt');a=json.loads((p/'health-first.json').read_text());b=json.loads((p/'health-final.json').read_text());r=b['runtime'];f=r['forward'];m=r['liveMirror']
+          assert b['ok'] and b['ready'] and not r['stale'] and r['lastError'] is None
+          assert r['lastSuccessAt']>a['runtime']['lastSuccessAt']
+          assert r['liveMode']==a['runtime']['liveMode']=={'requestedEnabled':False,'operational':False}
+          assert m['enabledAt']==a['runtime']['liveMirror']['enabledAt']==1789688633482
+          assert f['exitPolicyActivatedAt']==a['runtime']['forward']['exitPolicyActivatedAt']
+          assert f['exitPolicyVersion']=='timely-protection-v1' and f['policyVersion']=='participation-execution-v1.2'
+          assert f['startedAt']==1789556791436 and f['resolved']>=a['runtime']['forward']['resolved']
+          assert f['timelyExitOpenCount']+f['inheritedExitOpenCount']==f['openCount']
+          assert b['members']==a['members'] and b['records']==a['records']
+          result={'checkedAt':int(time.time()*1000),'build':r['buildSha'],'source':f,'previousCycleAt':a['runtime']['forward']['lastCycleAt'],'owner':r['liveMode'],'mirror':m,'members':b['members'],'records':b['records'],'resources':r['resourceAccounting'],'lastSuccessAt':r['lastSuccessAt'],'privateNumericAccountViewed':False,'ownerLoginRequests':0,'ownerToggleRequests':0,'realTestOrders':0,'profitabilityValidated':False}
+          (p/'receipt.json').write_text(json.dumps(result,ensure_ascii=False,indent=2));print(json.dumps(result,ensure_ascii=False))
+          PY
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > timely-protection-receipt/time.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: timely-protection-production-${{ github.run_id }}
+          path: timely-protection-receipt/
+          retention-days: 7
+          if-no-files-found: error
