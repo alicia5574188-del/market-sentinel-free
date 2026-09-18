@@ -26,9 +26,9 @@ jobs:
           curl -fsS --retry 2 --max-time 20 "$base/api/forward/export" > /tmp/live-copy-diagnostic/export-first.json
           sleep 15
           curl -fsS --retry 2 --max-time 20 "$base/api/runtime" > /tmp/live-copy-diagnostic/runtime-second.json
-          curl -fsS --retry 2 --max-time 20 "$base/__health" > /tmp/live-copy-diagnostic/health.json
+          curl -sS --max-time 20 "$base/__health" > /tmp/live-copy-diagnostic/health.json
           date -u +'%Y-%m-%dT%H:%M:%SZ' > /tmp/live-copy-diagnostic/time.txt
-          jq '{buildSha,liveMode,liveMirror,contractMeta}' /tmp/live-copy-diagnostic/runtime-second.json
+          jq '{buildSha,liveMode,liveMirror,utcDay,alarmCount,nonAlarmWrites,limits,forwardStorage:.forward.storage}' /tmp/live-copy-diagnostic/runtime-second.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
