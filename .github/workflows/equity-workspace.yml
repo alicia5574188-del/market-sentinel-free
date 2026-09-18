@@ -1,0 +1,28 @@
+name: Equity Chart Workspace
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/equity-workspace.yml']
+permissions:
+  contents: read
+jobs:
+  capture:
+    if: github.head_ref == 'feat/equity-curve-advisory'
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - run: |
+          set -euo pipefail
+          mkdir -p /tmp/equity-workspace
+          git archive HEAD -o /tmp/equity-workspace/source.tar
+          curl -fsS --retry 2 --max-time 20 'https://market-sentinel-free.alicia5574188.workers.dev/__health' > /tmp/equity-workspace/health-before.json
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > /tmp/equity-workspace/time.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: equity-workspace-${{ github.run_id }}
+          path: /tmp/equity-workspace/
+          retention-days: 7
