@@ -65,6 +65,7 @@ export async function memberRoutes(request:Request,env:CloudflareEnv):Promise<Re
     if(!m)return json({error:"请使用主账户或个人登录密钥登录"},401);
     if(!env.MEMBER_EXECUTION)return json({error:"会员执行服务尚未部署"},503);
     if(!rate(m.id))return json({error:"请求过于频繁，请稍后刷新"},429);
+    if(path==="/api/forward/equity"&&request.method==="GET")return env.MARKET_STREAM.getByName("primary").fetch(`https://market-stream/forward-equity${u.search}`);
     const internal=new Headers({"x-verified-member":m.id,"x-member-created-at":String(m.createdAt),"x-member-label":encodeURIComponent(m.label)});
     const actor=env.MEMBER_EXECUTION.getByName(`member:${m.id}`);
     const get=(p:string)=>actor.fetch(`https://member-execution${p}`,{headers:internal});
