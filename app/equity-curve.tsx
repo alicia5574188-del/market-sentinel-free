@@ -15,7 +15,7 @@ export default function EquityCurve({data,healthy,fixture}:{data:View|null;healt
   fixture?:{points:EquityPoint[];complete:boolean}}){
   const [range,setRange]=useState<Range>("7d"),[history,setHistory]=useState<History>(()=>freshHistory(data?.startedAt??0));
   const [loading,setLoading]=useState(false),[error,setError]=useState<string|null>(null),[loadBatch,setLoadBatch]=useState(0);
-  const [clock,setClock]=useState(()=>Date.now());
+  const [clock,setClock]=useState(()=>Date.now()),[oldestRequest,setOldestRequest]=useState<number|null>(null);
   const [selected,setSelected]=useState<EquityPoint|null>(null),[width,setWidth]=useState(480),[offset,setOffset]=useState(0);
   const scroll=useRef<HTMLDivElement>(null),historyRef=useRef(history),atLatest=useRef(true);
   const liveNow=data?.updatedAt??0;
@@ -28,11 +28,16 @@ export default function EquityCurve({data,healthy,fixture}:{data:View|null;healt
   useEffect(()=>{
     if(fixture||!account)return;
     let stopped=false;let resume:ReturnType<typeof setTimeout>|undefined;const controller=new AbortController();
-    const target=range==="all"?account:Math.max(account,Date.now()-7*DAY_MS);
+    const target=range==="all"?account:Math.max(account,Math.min(Date.now()-7*DAY_MS,oldestRequest??Infinity));
     const pause=()=>new Promise<void>(resolve=>setTimeout(resolve,700));
     async function page(cursor:string|null){
-      const r=await fetch(`/api/forward/equity${cursor?`?cursor=${encodeURIComponent(cursor)}`:""}`,{
-        credentials:"same-origin",cache:"no-store",signal:controller.signal});
+      let r:Response|null=null;
+      for(let attempt=0;attempt<3;attempt++){
+        r=await fetch(`/api/forward/equity${cursor?`?cursor=${encodeURIComponent(cursor)}`:""}`,{
+          credentials:"same-origin",cache:"no-store",signal:controller.signal});
+        if(r.status!==429||attempt===2)break;await pause();
+      }
+      if(!r)throw new Error("净值记录读取失败。");
       if(!r.ok)throw new Error(r.status===429?"净值记录正在分批读取，请稍后重试。":"净值历史暂时无法读取；图表不控制交易。");
       const p=await r.json() as CurvePage;
       if(p.version!==EQUITY_CURVE_VERSION||p.context.startedAt!==account||!Array.isArray(p.points))throw new Error("净值历史与当前账户不匹配。");
@@ -66,7 +71,7 @@ export default function EquityCurve({data,healthy,fixture}:{data:View|null;healt
     void load();
     const timer=setInterval(()=>{if(!stopped&&document.visibilityState==="visible")void page(null).then(p=>append(p,false)).catch(e=>{if(!stopped)setError(String(e.message??e));});},60_000);
     return()=>{stopped=true;controller.abort();clearInterval(timer);if(resume)clearTimeout(resume);};
-  },[account,range,loadBatch,fixture]);
+  },[account,range,loadBatch,fixture,oldestRequest]);
   useEffect(()=>{const timer=setInterval(()=>setClock(Date.now()),30_000);return()=>clearInterval(timer);},[]);
   useEffect(()=>{const node=scroll.current;if(!node)return;const resize=new ResizeObserver(()=>setWidth(Math.max(180,node.clientWidth)));
     resize.observe(node);setWidth(Math.max(180,node.clientWidth));return()=>resize.disconnect();},[account]);
@@ -83,12 +88,18 @@ export default function EquityCurve({data,healthy,fixture}:{data:View|null;healt
   const pad=Math.max(1,(high-low)*.14),min=low-pad,max=high+pad,y=(v:number)=>214-(v-min)/(max-min)*192;
   const x=(t:number)=>14+(t-account)/(end-account)*plot;
   const visibleStart=account+Math.max(0,offset-14)/plot*(end-account),visibleEnd=account+Math.min(plot,offset+width)/plot*(end-account);
+  useEffect(()=>{
+    if(fixture||loading||error||history.done||!history.loaded||history.coveredTo==null||atLatest.current
+      ||visibleStart>=history.coveredTo)return;
+    const timer=setTimeout(()=>setOldestRequest(old=>Math.min(old??Infinity,Math.max(account,visibleStart-DAY_MS))),300);
+    return()=>clearTimeout(timer);
+  },[fixture,loading,error,history.done,history.loaded,history.coveredTo,visibleStart,account]);
   const visible=chartPoints.filter(p=>p.at>=visibleStart&&p.at<=visibleEnd);
   const peak=visible.reduce<EquityPoint|null>((a,b)=>!a||b.equity>a.equity?b:a,null),trough=visible.reduce<EquityPoint|null>((a,b)=>!a||b.equity<a.equity?b:a,null);
   const shown=(selected&&chartPoints.find(p=>p.at===selected.at))||chartPoints.at(-1);
   const covered=fixture?.complete??(history.done||(history.coveredTo!=null&&history.coveredTo<=Math.max(account,liveNow-7*DAY_MS)));
   const reference=useMemo(()=>equityReference(all,context,Math.max(liveNow,clock),healthy&&!data?.storage.error,covered),[all,context,liveNow,clock,healthy,data?.storage.error,covered]);
-  const needsMore=!fixture&&!history.done&&(range==="all"||history.coveredTo==null||history.coveredTo>Math.max(account,liveNow-(range==="24h"?DAY_MS:7*DAY_MS)));
+  const needsMore=!fixture&&!history.done&&(range==="all"||history.coveredTo==null||history.coveredTo>Math.max(account,Math.min(liveNow-7*DAY_MS,visibleStart)));
   const pick=(e:PointerEvent<SVGSVGElement>)=>{
     const r=e.currentTarget.getBoundingClientRect(),px=(e.clientX-r.left)*canvasWidth/r.width;
     setSelected(nearestPoint(chartPoints,account+(px-14)/plot*(end-account)));
@@ -115,9 +126,9 @@ export default function EquityCurve({data,healthy,fixture}:{data:View|null;healt
       </div>
     </div>
     <div className="eq-controls"><button onClick={()=>jump(0)}>起点</button><button disabled={offset<2} onClick={()=>jump(Math.max(0,offset-width*.8))}>‹ 较早</button><button disabled={offset>=canvasWidth-width-2} onClick={()=>jump(Math.min(canvasWidth-width,offset+width*.8))}>较新 ›</button><button onClick={()=>jump(canvasWidth-width)}>最新</button></div>
-    <p className="eq-hint">左右滑动查看，轻触曲线读取原始记录。{end-account<7*DAY_MS?"运行不足7天，显示已有记录。":"默认每屏7天。"}空白处不补造；曲线仅作平滑连接，数字和建议均用原始值。</p>
+    <p className="eq-hint">左右滑动查看，轻触曲线读取原始记录。{range==="all"?"显示已加载全程。":end-account<span?"运行时间不足所选周期，显示已有记录。":canvasWidth>=20000?"长历史已压缩显示。":range==="7d"?"每屏7天。":"每屏24小时。"}空白处不补造；曲线仅作平滑连接，数字和建议均用原始值。</p>
     <div className="eq-extremes"><span>窗口记录高点 <b>{peak?number(peak.equity):"—"} U</b></span><span>窗口记录低点 <b>{trough?number(trough.equity):"—"} U</b></span></div>
-    {(loading||error||needsMore)&&<div className="eq-load" role="status"><span>{error??(loading?"正在分批读取已保存的历史…":"当前窗口历史尚未读取完整")}</span>{!loading&&<button onClick={()=>setLoadBatch(n=>n+1)}>继续加载</button>}</div>}
+    {(loading||error||needsMore)&&<div className="eq-load" role="status"><span>{error??(loading?"正在分批读取已保存的历史…":"当前窗口历史尚未读取完整")}</span>{!loading&&<button onClick={()=>{setOldestRequest(old=>Math.min(old??Infinity,Math.max(account,visibleStart-DAY_MS)));setLoadBatch(n=>n+1);}}>继续加载</button>}</div>}
     <aside className="eq-reference" data-reference-state={reference.state}><div><span className="eq-label">实盘开启参考</span><small>仅供手动判断</small></div><p>{reference.sentence}</p><details><summary>依据与限制</summary><p>{reference.detail}</p><p>观察条件：从记录高点回撤至少1%，随后30分钟净值回升至少0.2%、收回至少四分之一跌幅；同一次回撤不重复计数，未完成后续观察的不算成功。图表平滑不参与判断。</p><p>此提示不能操作实盘开关，不阻止开单，也不更改当前持仓。</p></details></aside>
   </div>;
 }
