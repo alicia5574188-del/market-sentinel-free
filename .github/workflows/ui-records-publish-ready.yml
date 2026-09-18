@@ -1,0 +1,57 @@
+name: Publish Existing Verified UI Package
+on:
+  pull_request:
+    branches: [main]
+    paths: ['scripts/ui-records-ready-*.b64', 'scripts/ui-records-apply-ready.py', '.github/workflows/ui-records-publish-ready.yml']
+permissions:
+  contents: write
+jobs:
+  verified-transfer:
+    if: github.head_ref == 'fix/clean-ui-records-pnl' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Reuse the exact already tested 23-file package
+        run: |
+          set -euo pipefail
+          python scripts/ui-records-apply-ready.py
+          git rm --ignore-unmatch scripts/ui-records-transfer-1.b64 scripts/ui-records-ready-1.b64 scripts/ui-records-ready-2.b64 scripts/ui-records-apply-ready.py .github/workflows/ui-records-publish-ready.yml .github/workflows/ui-records-workspace.yml
+          git add -A
+          git diff --cached --check
+      - name: Store verified blobs only, never update main or deploy here
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs=require('fs'),cp=require('child_process'),crypto=require('crypto');
+            const {owner,repo}=context.repo,parent=context.payload.pull_request.head.sha,branch=context.payload.pull_request.head.ref;
+            const current=await github.rest.repos.getBranch({owner,repo,branch});
+            if(current.data.commit.sha!==parent)throw new Error('Head changed during transfer');
+            const main=await github.rest.repos.getBranch({owner,repo,branch:'main'});
+            if(main.data.commit.sha!=='99c0280e572b865dc556e6991762638c19d8d454')throw new Error('Main changed; stop instead of overwriting');
+            const base=await github.rest.git.getCommit({owner,repo,commit_sha:parent});
+            const names=cp.execFileSync('git',['diff','--cached','--name-only','-z']).toString().split('\0').filter(Boolean);
+            const expected=new Map(JSON.parse(fs.readFileSync('/tmp/ui-records-publication/package-files.json','utf8')).map(x=>[x.path,x.after]));
+            const tree=[],sha256={};
+            for(const path of names){
+              if(!fs.existsSync(path)){tree.push({path,mode:'100644',type:'blob',sha:null});continue;}
+              const bytes=fs.readFileSync(path),hash=crypto.createHash('sha256').update(bytes).digest('hex');
+              if(expected.get(path)!==hash)throw new Error('Unexpected changed source: '+path);
+              const blob=await github.rest.git.createBlob({owner,repo,content:bytes.toString('base64'),encoding:'base64'});
+              const gitHash=crypto.createHash('sha1').update(Buffer.concat([Buffer.from('blob '+bytes.length+'\0'),bytes])).digest('hex');
+              if(blob.data.sha!==gitHash)throw new Error('Git blob mismatch: '+path);
+              tree.push({path,mode:'100644',type:'blob',sha:blob.data.sha});sha256[path]=hash;
+            }
+            if(Object.keys(sha256).length!==23)throw new Error('Missing source files');
+            const evidence={parent,baseTree:base.data.tree.sha,tree,sha256,runId:context.runId,sourcePackageSha256:'a760965fc00c82652fd7a3110be12ebb3ff05f00c321c97e7c9f6af6b3f1f418',productionUnchanged:true,exactHeadCiStillRequired:true};
+            fs.writeFileSync('/tmp/ui-records-publication/verified-tree.json',JSON.stringify(evidence,null,2));console.log(JSON.stringify(evidence));
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-records-publication-${{ github.run_id }}
+          path: /tmp/ui-records-publication/
+          retention-days: 7
+          if-no-files-found: warn
