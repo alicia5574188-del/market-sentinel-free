@@ -1,0 +1,139 @@
+name: Member Release Primary Stability Receipt
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/member-production-receipt.yml']
+permissions:
+  contents: read
+jobs:
+  receipt:
+    if: github.head_ref == 'verify/member-stability-20260918'
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Save actual existing primary state before member release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p member-production
+          base='https://market-sentinel-free.alicia5574188.workers.dev'
+          curl -fsS --retry 2 --max-time 20 "$base/__health" > member-production/health-before.json
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > member-production/before-time.txt
+          jq -e '.runtime.buildSha == "01b3093b9807dd3395d40271b7957e68662d53e9" and .runtime.forward.startedAt == 1789556791436 and .runtime.forward.storage.error == null' member-production/health-before.json >/dev/null
+      - name: Wait for exact reviewed member tree using only public metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='https://market-sentinel-free.alicia5574188.workers.dev'
+          ready=0
+          for attempt in {1..54};do
+            code="$(curl -sS --max-time 12 -o member-production/health-after.json -w '%{http_code}' "$base/__health" || true)"
+            if [[ "$code" == 200 ]] && jq -e '.members.version == "isolated-member-keys-v1" and .members.configured == true and .runtime.forward.storage.error == null and .runtime.state == "LIVE" and .runtime.stale == false' member-production/health-after.json >/dev/null;then ready=1;break;fi
+            sleep 10
+          done
+          [[ "$ready" == 1 ]]
+          sha="$(jq -r '.runtime.buildSha' member-production/health-after.json)"
+          curl -fsS --retry 2 --max-time 20 "https://api.github.com/repos/alicia5574188-del/market-sentinel-free/git/commits/$sha" > member-production/deployed-commit.json
+          curl -fsS --retry 2 --max-time 20 'https://api.github.com/repos/alicia5574188-del/market-sentinel-free/git/ref/heads/main' > member-production/main-ref.json
+          jq -e '.tree.sha == "7560d5b4b221a7dbe9b9f9388d0b29ed3b2e2c15"' member-production/deployed-commit.json >/dev/null
+          jq -e --arg sha "$sha" '.object.sha == $sha' member-production/main-ref.json >/dev/null
+          python - <<'PY'
+          import pathlib,json
+          p=pathlib.Path('member-production');before=json.loads((p/'health-before.json').read_text())['runtime'];full=json.loads((p/'health-after.json').read_text());after=full['runtime']
+          assert after['buildSha']!=before['buildSha']
+          assert after['forward']['startedAt']==before['forward']['startedAt']==1789556791436
+          assert after['forward']['version']==before['forward']['version']
+          assert after['forward']['policyVersion']==before['forward']['policyVersion']=='participation-execution-v1.2'
+          assert after['forward']['resolved']>=before['forward']['resolved']
+          assert after['liveMode']['requestedEnabled']==before['liveMode']['requestedEnabled']
+          assert after['liveMirror']['enabledAt']==before['liveMirror']['enabledAt']
+          assert after['liveMirror']['newOrdersOnly'] is True and after['liveMirror']['source']=='CURRENT_FORWARD_ACCOUNT'
+          assert after['lastSuccessAt']>before['lastSuccessAt'] and after['forward']['storage']['error'] is None
+          assert full['members']['ownerOnlyIssuer'] is True and full['members']['guestProgramAccess'] is False
+          print(json.dumps({'beforeBuild':before['buildSha'],'afterBuild':after['buildSha'],'ownerIntentUnchanged':True,'activationUnchanged':True,'sourceStartUnchanged':True,'sourcePolicyUnchanged':True,'membership':full['members']},ensure_ascii=False))
+          PY
+      - name: Guest and forged tenant headers must not grant program or member management access
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json,pathlib,subprocess
+          root=pathlib.Path('member-production');base='https://market-sentinel-free.alicia5574188.workers.dev';checks=[]
+          for i,(path,expected) in enumerate([('/api/runtime',401),('/api/forward/export',401),('/api/forward/archive',401),('/api/live/status',401),('/api/live/credentials',401),('/api/live/source?id=ft-unauthorized',401),('/api/members/admin',403),('/api/members/issue',403),('/api/runtime?memberId=m_'+'a'*32,401)]):
+              dest=root/f'denied-{i}.json'
+              status=subprocess.check_output(['curl','-sS','--max-time','15','-o',str(dest),'-w','%{http_code}','-H','x-verified-member: m_'+'a'*32,'-H','x-role: owner',base+path],text=True)
+              assert int(status)==expected,(path,status)
+              value=json.loads(dest.read_text());assert isinstance(value.get('error'),str)
+              checks.append({'path':path,'status':int(status),'forgedIdentityDenied':True})
+          (root/'authorization-checks.json').write_text(json.dumps(checks,ensure_ascii=False,indent=2))
+          PY
+      - name: Actual deployed guest UI at four widths, no login, key issuance or private values
+        shell: bash
+        run: |
+          python -m pip install playwright==1.55.0
+          python - <<'PY'
+          import pathlib,json,shutil
+          from playwright.sync_api import sync_playwright
+          root=pathlib.Path('member-production');chrome=shutil.which('google-chrome') or shutil.which('chromium');assert chrome
+          checks=[]
+          with sync_playwright() as p:
+              browser=p.chromium.launch(executable_path=chrome,headless=True,args=['--no-sandbox'])
+              for width in [320,393,768,1440]:
+                  page=browser.new_page(viewport={'width':width,'height':900});errors=[];dialogs=[];mutations=[]
+                  page.on('pageerror',lambda e:errors.append(str(e)))
+                  page.on('dialog',lambda d:(dialogs.append(d.message),d.dismiss()))
+                  def guard(route):
+                      if route.request.method not in ['GET','HEAD','OPTIONS']:
+                          mutations.append(route.request.method+' '+route.request.url);route.abort()
+                      else:route.continue_()
+                  page.route('**/*',guard)
+                  response=page.goto('https://market-sentinel-free.alicia5574188.workers.dev',wait_until='domcontentloaded',timeout=45000);assert response and response.status==200
+                  page.wait_for_selector('[data-access="login"]',timeout=25000)
+                  page.get_by_role('heading',name='登录密钥',exact=True).wait_for(timeout=15000)
+                  assert page.locator('nav.fr-nav').count()==0
+                  assert not page.evaluate('document.documentElement.scrollWidth>innerWidth+1')
+                  if width in [393,1440]:page.screenshot(path=str(root/f'{width}-member-login.png'),full_page=True)
+                  page.get_by_role('button',name='我是主账户所有者',exact=True).click()
+                  page.get_by_role('heading',name='主账户登录',exact=True).wait_for()
+                  assert not page.evaluate('document.documentElement.scrollWidth>innerWidth+1')
+                  page.get_by_role('button',name='使用朋友登录密钥',exact=True).click()
+                  assert not errors and not dialogs and not mutations,(errors,dialogs,mutations)
+                  checks.append({'width':width,'memberLoginGate':True,'originalOwnerLoginChoice':True,'pageErrors':errors,'dialogs':dialogs,'mutations':mutations})
+                  page.close()
+              browser.close()
+          (root/'browser-results.json').write_text(json.dumps(checks,ensure_ascii=False,indent=2))
+          PY
+      - name: Confirm primary's next saved five-minute cycle; no synthetic production member
+        shell: bash
+        run: |
+          set -euo pipefail
+          first="$(jq -r '.runtime.forward.lastCycleAt' member-production/health-after.json)"
+          ready=0
+          for attempt in {1..34};do
+            code="$(curl -sS --max-time 12 -o member-production/health-final.json -w '%{http_code}' 'https://market-sentinel-free.alicia5574188.workers.dev/__health' || true)"
+            if [[ "$code" == 200 ]] && jq -e --argjson first "$first" '.runtime.forward.lastCycleAt > $first and .runtime.forward.storage.persistedAt >= .runtime.forward.lastCycleAt and .runtime.forward.storage.error == null and .runtime.stale == false' member-production/health-final.json >/dev/null;then ready=1;break;fi
+            sleep 10
+          done
+          [[ "$ready" == 1 ]]
+          python - <<'PY'
+          import pathlib,json,time
+          p=pathlib.Path('member-production');b=json.loads((p/'health-before.json').read_text())['runtime'];f=json.loads((p/'health-final.json').read_text());r=f['runtime']
+          assert r['liveMode']['requestedEnabled']==b['liveMode']['requestedEnabled']
+          assert r['liveMirror']['enabledAt']==b['liveMirror']['enabledAt']
+          assert r['forward']['startedAt']==b['forward']['startedAt']
+          assert r['forward']['policyVersion']==b['forward']['policyVersion']
+          assert r['state']=='LIVE' and r['lastError'] is None and r['lastSuccessAt']>b['lastSuccessAt']
+          assert r['forward']['storage']['error'] is None
+          receipt={'checkedAt':int(time.time()*1000),'buildSha':r['buildSha'],'membership':f['members'],'ownerBefore':b['liveMode'],'ownerAfter':r['liveMode'],'ownerActivationBefore':b['liveMirror']['enabledAt'],'ownerActivationAfter':r['liveMirror']['enabledAt'],'forwardBefore':b['forward'],'forwardAfter':r['forward'],'liveMirror':r['liveMirror'],'resourceAccounting':r['resourceAccounting'],'realKeysIssuedByVerifier':0,'productionMemberLoginsByVerifier':0,'privateGateRequestsByVerifier':0,'ownerToggleRequests':0,'realTestOrders':0,'privateNumericAccountsViewed':False,'claim':'Additive feature, guest gates and primary continuity verified; no funded-member end-to-end or production member load benchmark claimed'}
+          (p/'receipt.json').write_text(json.dumps(receipt,ensure_ascii=False,indent=2));print(json.dumps(receipt,ensure_ascii=False))
+          PY
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > member-production/final-time.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: member-production-${{ github.run_id }}
+          path: member-production/
+          retention-days: 7
+          if-no-files-found: error
