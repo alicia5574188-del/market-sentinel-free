@@ -2,6 +2,11 @@ from pathlib import Path
 import base64,bz2,hashlib,json
 root=Path.cwd().resolve()
 packed=''.join((root/f'scripts/copy-coverage-transfer-{i}.b64').read_text().strip() for i in (1,2))
+# First transfer verification caught one inserted character. Accept only that
+# exact received payload and restore the independently verified original bytes.
+if hashlib.sha256(packed.encode()).hexdigest()=='b6ab6f80f905d45323e6b2f1e830837ac570b973e7d76e67c51ed610455e79a2':
+    assert packed[922]=='T'
+    packed=packed[:922]+packed[923:]
 assert len(packed)==24004,f'Payload length mismatch: {len(packed)}'
 assert hashlib.sha256(packed.encode()).hexdigest()=='8e47bf114690ccc15e9478f1853aeb4b3f1d769a16d941923dc92b160e3312b7','Payload hash mismatch'
 manifest=json.loads(bz2.decompress(base64.b64decode(packed,validate=True)))
