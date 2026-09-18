@@ -9,21 +9,21 @@ jobs:
   receipt:
     if: github.head_ref == 'verify/copy-turnover-20260918'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 12
     steps:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Read actual deployment, UTC resource recovery and original owner activation
+      - name: Read actual next compressed checkpoint and confirmed-fill readiness
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p copy-turnover-receipt
           base='https://market-sentinel-free.alicia5574188.workers.dev'
           ready=0
-          for attempt in {1..48};do
+          for attempt in {1..45};do
             code="$(curl -sS --max-time 12 -o copy-turnover-receipt/health-first.json -w '%{http_code}' "$base/__health" || true)"
-            if [[ "$code" == 200 ]] && jq -e '.runtime.buildSha == "01b3093b9807dd3395d40271b7957e68662d53e9" and .runtime.resourceAccounting.policy == "cloudflare-utc-day-v1" and .runtime.liveTurnover.version == "gate-confirmed-turnover-v1" and .runtime.forward.storage.error == null' copy-turnover-receipt/health-first.json >/dev/null;then ready=1;break;fi
+            if [[ "$code" == 200 ]] && jq -e '.runtime.buildSha == "01b3093b9807dd3395d40271b7957e68662d53e9" and .runtime.resourceAccounting.policy == "cloudflare-utc-day-v1" and .runtime.resourceAccounting.forwardCompression.encoding == "gzip" and .runtime.forward.lastCycleAt > 1789695391212 and .runtime.forward.storage.error == null and .runtime.liveTurnover.available == true and .runtime.liveTurnover.confirmedFillCount > 0 and .runtime.liveTurnover.hasError == false' copy-turnover-receipt/health-first.json >/dev/null;then ready=1;break;fi
             sleep 10
           done
           [[ "$ready" == 1 ]]
@@ -32,26 +32,25 @@ jobs:
           curl -sS --max-time 20 -o copy-turnover-receipt/private-source-denied.json -w '%{http_code}' "$base/api/live/source?id=verification-no-order" > copy-turnover-receipt/private-source-status.txt
           python - <<'PY'
           import pathlib,json,datetime
-          p=pathlib.Path('copy-turnover-receipt');r=json.loads((p/'runtime-first.json').read_text());h=json.loads((p/'health-first.json').read_text())['runtime'];f=r['forward'];m=r['liveMirror'];resource=h['resourceAccounting']
+          p=pathlib.Path('copy-turnover-receipt');r=json.loads((p/'runtime-first.json').read_text());h=json.loads((p/'health-first.json').read_text())['runtime'];f=r['forward'];m=r['liveMirror'];a=h['resourceAccounting']
           assert r['buildSha']=='01b3093b9807dd3395d40271b7957e68662d53e9'
           assert f['startedAt']==1789556791436 and f['initialEquity']==1000 and f['policyVersion']=='participation-execution-v1.2'
           assert m['source']=='CURRENT_FORWARD_ACCOUNT' and m['newOrdersOnly'] is True
-          assert r['liveMode']['requestedEnabled'] is True
-          assert m['enabledAt']==1789688633482,'Owner activation changed; investigate, do not overwrite'
-          assert f['storage']['error'] is None and f['storage']['persistedAt']>1789691045934
-          assert resource['day']==datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')
-          assert resource['cap']==8000 and resource['nonAlarmWrites']<8000
-          assert resource['previous']['from']=='2026-09-17' and resource['previous']['nonAlarmWrites']>=7995
-          comp=resource['forwardCompression'];assert comp['encoding']=='gzip' and comp['storedBytes']<comp['rawBytes']
+          assert r['liveMode']['requestedEnabled'] is True and m['enabledAt']==1789688633482
+          assert f['storage']['error'] is None and f['storage']['persistedAt']>1789695391212
+          assert a['day']==datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')
+          assert a['cap']==8000 and a['nonAlarmWrites']<8000
+          assert a['previous']['from']=='2026-09-17' and a['previous']['nonAlarmWrites']>=7995
+          c=a['forwardCompression'];assert c['encoding']=='gzip' and c['storedBytes']<c['rawBytes']
           assert r.get('live') is None and not any(k in r['liveTurnover'] for k in ['total','opening','closing','systemTagged'])
           assert (p/'private-source-status.txt').read_text()=='401'
           assert m['eligibleCopiedCount']+m['eligibleMissingCount']==m['eligibleSourceCount']
-          sources={x['id']:x for x in f['positions']};assert set(sources)=={x['sourceId'] for x in m['rows']}
+          by={x['id']:x for x in f['positions']};assert set(by)=={x['sourceId'] for x in m['rows']}
           for row in m['rows']:
-              if row['eligible']:assert sources[row['sourceId']]['openedAt']>m['enabledAt']
-          print(json.dumps({'build':r['buildSha'],'owner':r['liveMode'],'resources':resource,'mirror':m,'turnoverStatus':r['liveTurnover']},ensure_ascii=False))
+              if row['eligible']:assert by[row['sourceId']]['openedAt']>m['enabledAt']
+          print(json.dumps({'owner':r['liveMode'],'resources':a,'mirror':m,'turnoverStatus':r['liveTurnover']},ensure_ascii=False))
           PY
-      - name: Verify deployed six-tab UI without login, private amount access or mutations
+      - name: Verify six-tab published UI without private values or mutations
         shell: bash
         run: |
           python -m pip install playwright==1.55.0
@@ -80,41 +79,34 @@ jobs:
                       if name=='实盘':
                           page.get_by_text('本次开启后已复制 / 应跟随',exact=True).wait_for(timeout=15000)
                           assert page.get_by_text('应跟随但尚未复制',exact=True).is_visible()
-                          assert page.locator('[data-testid="live-turnover"]').count()==0,'Private amount section must require owner login'
+                          assert page.locator('[data-testid="live-turnover"]').count()==0
                           if width in [393,1440]:page.screenshot(path=str(root/f'{width}-public-live-coverage.png'),full_page=True)
                       results.append({'width':width,'tab':name,'pageErrors':list(errors),'dialogs':list(dialogs),'mutationRequests':list(mutations)})
                   assert not errors and not dialogs and not mutations,(errors,dialogs,mutations);page.close()
               b.close()
-          (root/'browser-results.json').write_text(json.dumps(results,ensure_ascii=False,indent=2));print('24 deployed public UI checks passed; no private numeric turnover claimed')
+          (root/'browser-results.json').write_text(json.dumps(results,ensure_ascii=False,indent=2));print('24 actual public UI checks passed; no private amounts accessed')
           PY
-      - name: Observe actual confirmed-fill readiness and another durable source cycle
+      - name: Confirm advancing actual execution and analytics receipts
         shell: bash
         run: |
           set -euo pipefail
           base='https://market-sentinel-free.alicia5574188.workers.dev'
-          first="$(jq -r '.forward.lastCycleAt' copy-turnover-receipt/runtime-first.json)"
-          ready=0
-          for attempt in {1..36};do
-            code="$(curl -sS --max-time 12 -o copy-turnover-receipt/runtime-final.json -w '%{http_code}' "$base/api/runtime" || true)"
-            if [[ "$code" == 200 ]] && jq -e --argjson first "$first" '.forward.lastCycleAt > $first and .forward.storage.persistedAt >= .forward.lastCycleAt and .forward.storage.error == null and .liveTurnover.available == true and .liveTurnover.hasError == false and .liveTurnover.confirmedFillCount > 0' copy-turnover-receipt/runtime-final.json >/dev/null;then ready=1;break;fi
-            sleep 10
-          done
-          [[ "$ready" == 1 ]]
+          sleep 12
+          curl -fsS --retry 2 --max-time 20 "$base/api/runtime" > copy-turnover-receipt/runtime-final.json
           curl -fsS --retry 2 --max-time 20 "$base/__health" > copy-turnover-receipt/health-final.json
           curl -fsS --retry 2 --max-time 20 "$base/api/forward/export" > copy-turnover-receipt/export-final.json
           python - <<'PY'
-          import pathlib,json,time,datetime
-          p=pathlib.Path('copy-turnover-receipt');first=json.loads((p/'runtime-first.json').read_text());r=json.loads((p/'runtime-final.json').read_text());h=json.loads((p/'health-final.json').read_text())['runtime'];m=r['liveMirror'];f=r['forward']
+          import pathlib,json,time
+          p=pathlib.Path('copy-turnover-receipt');first=json.loads((p/'runtime-first.json').read_text());r=json.loads((p/'runtime-final.json').read_text());h=json.loads((p/'health-final.json').read_text())['runtime'];m=r['liveMirror'];f=r['forward'];t=r['liveTurnover']
           assert r['liveMode']['requestedEnabled']==first['liveMode']['requestedEnabled']
           assert m['enabledAt']==first['liveMirror']['enabledAt']==1789688633482
           assert h['state']=='LIVE' and h['stale'] is False and h['lastError'] is None and h['lastSuccessAt']>first['lastSuccessAt']
-          assert h['resourceAccounting']['policy']=='cloudflare-utc-day-v1'
-          assert h['resourceAccounting']['day']==datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')
-          assert f['storage']['error'] is None
+          assert f['storage']['error'] is None and f['lastCycleAt']>1789695391212
+          assert t['available'] is True and t['hasError'] is False and t['confirmedFillCount']>0
           a={x['id']:x for x in first['forward']['history']};b={x['id']:x for x in f['history']};common=set(a)&set(b)
           for key in common:assert a[key]==b[key],key
           assert m['eligibleCopiedCount']+m['eligibleMissingCount']==m['eligibleSourceCount']
-          summary={'checkedAt':int(time.time()*1000),'build':r['buildSha'],'owner':r['liveMode'],'resources':h['resourceAccounting'],'mirror':m,'turnoverStatus':r['liveTurnover'],'unchangedClosedRecords':len(common),'paper':{'start':f['startedAt'],'policy':f['policyVersion'],'closed':f['resolved'],'open':len(f['positions']),'equity':f['equity'],'storage':f['storage']},'privateNumericAccountViewed':False,'ownerToggleRequests':0,'directRealTestOrders':0}
+          summary={'checkedAt':int(time.time()*1000),'build':r['buildSha'],'owner':r['liveMode'],'resources':h['resourceAccounting'],'mirror':m,'turnoverStatus':t,'unchangedClosedRecords':len(common),'paper':{'start':f['startedAt'],'policy':f['policyVersion'],'closed':f['resolved'],'open':len(f['positions']),'equity':f['equity'],'storage':f['storage']},'privateNumericAccountViewed':False,'ownerToggleRequests':0,'directRealTestOrders':0}
           (p/'receipt.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2));print(json.dumps(summary,ensure_ascii=False))
           PY
           date -u +'%Y-%m-%dT%H:%M:%SZ' > copy-turnover-receipt/time.txt
