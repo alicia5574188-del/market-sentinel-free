@@ -19,9 +19,10 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/equity-workspace
           git archive HEAD -o /tmp/equity-workspace/source.tar
-          curl -fsS --retry 2 --max-time 20 'https://market-sentinel-free.alicia5574188.workers.dev/__health' > /tmp/equity-workspace/health-before.json
+          curl -sS --max-time 20 -o /tmp/equity-workspace/health-before.json -w '%{http_code}' 'https://market-sentinel-free.alicia5574188.workers.dev/__health' > /tmp/equity-workspace/health-status.txt
           date -u +'%Y-%m-%dT%H:%M:%SZ' > /tmp/equity-workspace/time.txt
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: equity-workspace-${{ github.run_id }}
           path: /tmp/equity-workspace/
