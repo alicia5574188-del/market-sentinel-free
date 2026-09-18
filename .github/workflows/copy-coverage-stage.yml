@@ -1,0 +1,75 @@
+name: Verify Copy Coverage and LIVE Turnover
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/copy-coverage-stage.yml'
+      - 'scripts/copy-coverage-apply.py'
+      - 'scripts/copy-coverage-transfer-*.b64'
+permissions:
+  contents: write
+jobs:
+  stage:
+    if: github.head_ref == 'fix/live-copy-coverage' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Apply exact validated source and remove transport helpers
+        run: |
+          mkdir -p /tmp/copy-coverage-verified
+          cp scripts/copy-coverage-transfer-*.b64 /tmp/copy-coverage-verified/
+          python scripts/copy-coverage-apply.py
+          git rm --ignore-unmatch scripts/copy-coverage-transfer-1.b64 scripts/copy-coverage-transfer-2.b64 scripts/copy-coverage-apply.py .github/workflows/copy-coverage-stage.yml .github/workflows/live-copy-diagnostic.yml
+      - name: Verify actual Worker using FakeGate, immutable financial state and exact HMAC
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci 2>&1 | tee /tmp/copy-coverage-verified/install.log
+          npm run test:direct 2>&1 | tee /tmp/copy-coverage-verified/direct.log
+          npm run test:live-parity 2>&1 | tee /tmp/copy-coverage-verified/live-parity.log
+          npm test 2>&1 | tee /tmp/copy-coverage-verified/build-test.log
+          npm run typecheck 2>&1 | tee /tmp/copy-coverage-verified/typecheck.log
+          npm run lint 2>&1 | tee /tmp/copy-coverage-verified/lint.log
+          npx wrangler deploy --dry-run --config dist/server/wrangler.json 2>&1 | tee /tmp/copy-coverage-verified/dry-run.log
+          git diff --check
+          git add -A
+          git diff --cached --check
+      - name: Record public pre-existing blocker separately from functional tests
+        shell: bash
+        run: |
+          code="$(curl -sS --max-time 15 -o /tmp/copy-coverage-verified/health-before.json -w '%{http_code}' 'https://market-sentinel-free.alicia5574188.workers.dev/__health' || true)"
+          jq -n --arg code "$code" --arg at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" '{httpStatus:$code,checkedAt:$at,note:"Read-only old-production evidence; not a claim of health, and no production deployment gate weakened."}' > /tmp/copy-coverage-verified/availability.json
+          cat /tmp/copy-coverage-verified/availability.json
+      - name: Store tested content blobs, no branch or production mutation
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs=require('fs'),cp=require('child_process'),crypto=require('crypto');
+            const {owner,repo}=context.repo,parent=context.payload.pull_request.head.sha,branch=context.payload.pull_request.head.ref;
+            const current=await github.rest.repos.getBranch({owner,repo,branch});
+            if(current.data.commit.sha!==parent)throw new Error('Head changed during verification');
+            const base=await github.rest.git.getCommit({owner,repo,commit_sha:parent});
+            const names=cp.execFileSync('git',['diff','--cached','--name-only','-z']).toString().split('\0').filter(Boolean),tree=[],sha256={};
+            for(const path of names){
+              if(!fs.existsSync(path)){tree.push({path,mode:'100644',type:'blob',sha:null});continue;}
+              const bytes=fs.readFileSync(path),blob=await github.rest.git.createBlob({owner,repo,content:bytes.toString('base64'),encoding:'base64'});
+              const expected=crypto.createHash('sha1').update(Buffer.concat([Buffer.from('blob '+bytes.length+'\0'),bytes])).digest('hex');
+              if(blob.data.sha!==expected)throw new Error('Blob mismatch: '+path);
+              tree.push({path,mode:'100644',type:'blob',sha:blob.data.sha});sha256[path]=crypto.createHash('sha256').update(bytes).digest('hex');
+            }
+            const result={parent,baseTree:base.data.tree.sha,tree,sha256,runId:context.runId,branchRefUnchanged:true,productionUnchanged:true};
+            fs.writeFileSync('/tmp/copy-coverage-verified/verified-tree.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result));
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: copy-coverage-verified-${{ github.run_id }}
+          path: /tmp/copy-coverage-verified/
+          retention-days: 7
+          if-no-files-found: warn
