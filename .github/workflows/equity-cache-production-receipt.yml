@@ -1,0 +1,116 @@
+name: Equity Cache Deployed Receipt
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/equity-cache-production-receipt.yml']
+permissions:
+  contents: read
+jobs:
+  receipt:
+    if: github.head_ref == 'verify/cloudflare-quota-cache-20260919' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: '42a8382ccebc5f67db78a59debb0bf384f82cd7e'
+          persist-credentials: false
+      - name: Read SQLite storage metrics, no billing or trading mutations
+        env:
+          CF_READ_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          mkdir -p cache-production-receipt
+          git archive HEAD | gzip > cache-production-receipt/deployed-source.tar.gz
+          python3 - <<'PY'
+          import os,json,urllib.request,urllib.error,pathlib,datetime
+          root=pathlib.Path('cache-production-receipt');token=os.environ.get('CF_READ_TOKEN','');base='https://api.cloudflare.com/client/v4'
+          def read(url,payload=None):
+              headers={'Authorization':'Bearer '+token,'Accept':'application/json','Content-Type':'application/json'}
+              try:
+                  with urllib.request.urlopen(urllib.request.Request(url,data=json.dumps(payload).encode() if payload else None,headers=headers),timeout=20) as r:d=json.load(r);d['_status']=r.status;return d
+              except urllib.error.HTTPError as e:
+                  try:d=json.load(e)
+                  except Exception:d={}
+                  return {'_status':e.code,'errors':d.get('errors')}
+              except Exception as e:return {'_status':0,'errors':[{'message':type(e).__name__}]}
+          accounts=read(base+'/accounts?per_page=50');aid=None
+          for a in (accounts.get('result') or [])[:5]:
+              d=read(base+'/accounts/'+a['id']+'/workers/subdomain')
+              if (d.get('result') or {}).get('subdomain')=='alicia5574188':aid=a['id'];break
+          now=datetime.datetime.now(datetime.timezone.utc);start=now.replace(hour=0,minute=0,second=0,microsecond=0);iso=lambda x:x.isoformat().replace('+00:00','Z')
+          result={'checkedAt':iso(now),'targetIdentified':bool(aid),'readOnly':True,'billingChanges':0,'storageComplete':False}
+          if aid:
+              filt='filter:{datetime_geq:'+json.dumps(iso(start))+',datetime_lt:'+json.dumps(iso(now))+'}'
+              q='{viewer{accounts(filter:{accountTag:'+json.dumps(aid)+'}){sql:durableObjectsSqlStorageGroups(limit:100,'+filt+'){dimensions{namespaceId} max{storedBytes}} periodic:durableObjectsPeriodicGroups(limit:100,'+filt+'){dimensions{namespaceId} sum{duration rowsRead rowsWritten exceededCpuErrors exceededMemoryErrors}}}}}'
+              d=read(base+'/graphql',{'query':q});result['response']=d
+              rows=(((d.get('data') or {}).get('viewer') or {}).get('accounts') or [{}])[0]
+              if isinstance(rows.get('sql'),list) and rows['sql']:
+                  result['sqliteNamespaceCount']=len(rows['sql']);result['sqliteSumOfNamespaceDailyMaxBytes']=sum(v['max']['storedBytes'] for v in rows['sql']);result['storageComplete']=len(rows['sql'])<100 and not d.get('errors')
+          text=json.dumps(result,indent=2);assert not token or token not in text
+          (root/'sqlite-storage-audit.json').write_text(text);print(text)
+          PY
+      - name: Verify exact deployed build and preserve original source, member and owner authority
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json,pathlib,subprocess,time,re,urllib.parse,hashlib,datetime
+          root=pathlib.Path('cache-production-receipt');base='https://market-sentinel-free.alicia5574188.workers.dev';sha='42a8382ccebc5f67db78a59debb0bf384f82cd7e';samples=[]
+          def get(path,name):
+              dest=root/name;p=subprocess.run(['curl','-sS','--max-time','12','-o',str(dest),'-w','%{http_code}',base+path],capture_output=True,text=True)
+              return p.stdout.strip(),dest.read_bytes() if dest.exists() else b''
+          def health(name):
+              code,raw=get('/__health',name)
+              try:h=json.loads(raw)
+              except Exception:h={}
+              r=h.get('runtime',{});f=r.get('forward',{});samples.append({'at':int(time.time()*1000),'status':code,'build':r.get('buildSha'),'state':r.get('state'),'lastError':r.get('lastError'),'stale':r.get('stale'),'lastCycleAt':f.get('lastCycleAt'),'persistedAt':f.get('storage',{}).get('persistedAt')});(root/'observations.json').write_text(json.dumps(samples))
+              ok=code=='200' and h.get('ok') is True and h.get('ready') is True and r.get('buildSha')==sha and r.get('stale') is False and r.get('lastError') is None and f.get('storage',{}).get('error') is None
+              return ok,h
+          first=None
+          for _ in range(45):
+              ok,h=health('health-first.json')
+              if ok:first=h;break
+              time.sleep(10)
+          assert first,'No healthy exact deployed build; do not bypass trading health checks'
+          r=first['runtime'];f=r['forward'];m=r['liveMirror']
+          assert f['startedAt']==1789556791436 and f['policyVersion']=='participation-execution-v1.2' and f['exitPolicyVersion']=='timely-protection-v1'
+          assert f['exitPolicyActivatedAt']==1789736641679 and f['resolved']>=255
+          assert r['liveMode']=={'requestedEnabled':False,'operational':False},'Owner differs from pre-release; investigate, never change it'
+          assert m['enabledAt']==1789688633482 and m['connected'] and m['newOrdersOnly'] and m['ownerControlled']
+          assert first['members']['version']=='isolated-member-keys-v1' and first['members']['ownerOnlyIssuer']
+          assert first['records']['recent']==10 and first['records']['archive']==50
+          assert r['resourceAccounting']['cap']==8000
+          code,html=get('/','index.html');assert code=='200'
+          denied={}
+          for path in ['/api/runtime','/api/forward/equity','/api/forward/equity?after=invalid']:
+              code,_=get(path,'guest-'+str(len(denied))+'.json');denied[path]=code;assert code=='401'
+          queue=re.findall(r'(?:src|href)="([^"\s]+\.js(?:\?[^"\s]*)?)"',html.decode());assets=[];seen=set();found=False
+          while queue and len(seen)<20:
+              link=queue.pop(0);u=urllib.parse.urlparse(urllib.parse.urljoin(base,link))
+              if u.netloc!=urllib.parse.urlparse(base).netloc or u.path in seen:continue
+              seen.add(u.path);code,body=get(u.path,'asset-'+str(len(assets))+'.js')
+              if code!='200':continue
+              text=body.decode(errors='replace');found=found or 'incremental-session-v1' in text
+              assets.append({'path':u.path,'bytes':len(body),'sha256':hashlib.sha256(body).hexdigest(),'cacheMarker':'incremental-session-v1' in text})
+              for rel in re.findall(r'["\']([^"\'\s]+\.js)["\']',text):
+                  full=urllib.parse.urljoin(base+u.path,rel);pu=urllib.parse.urlparse(full)
+                  if pu.netloc==u.netloc:queue.append(pu.path)
+          assert found,'Published client asset lacks incremental cache marker'
+          (root/'assets.json').write_text(json.dumps(assets,indent=2));final=None
+          for _ in range(38):
+              time.sleep(10);ok,h=health('health-final.json');ff=h.get('runtime',{}).get('forward',{})
+              if ok and ff.get('lastCycleAt',0)>f['lastCycleAt'] and ff.get('storage',{}).get('persistedAt',0)>=ff['lastCycleAt']:final=h;break
+          assert final,'No subsequent healthy atomically saved cycle observed'
+          rr=final['runtime'];ff=rr['forward'];mm=rr['liveMirror']
+          assert rr['lastSuccessAt']>r['lastSuccessAt'] and rr['liveMode']==r['liveMode'] and mm['enabledAt']==m['enabledAt']
+          for k in ['startedAt','policyVersion','exitPolicyVersion','exitPolicyActivatedAt']:assert ff[k]==f[k]
+          assert final['members']==first['members'] and final['records']==first['records']
+          result={'checkedAtVientiane':datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7))).isoformat(),'build':sha,'source':ff,'previousCycleAt':f['lastCycleAt'],'owner':rr['liveMode'],'mirror':mm,'members':final['members'],'records':final['records'],'resources':rr['resourceAccounting'],'clientCacheMarkerVerified':found,'guestStatuses':denied,'privateAccountViewed':False,'ownerLoginRequests':0,'ownerToggleRequests':0,'realTestOrders':0}
+          (root/'receipt.json').write_text(json.dumps(result,ensure_ascii=False,indent=2));print(json.dumps(result,ensure_ascii=False))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: equity-cache-production-${{ github.run_id }}
+          path: cache-production-receipt/
+          retention-days: 7
+          if-no-files-found: error
