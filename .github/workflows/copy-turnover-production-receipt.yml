@@ -1,0 +1,127 @@
+name: Copy Coverage and Turnover Public Receipt
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/copy-turnover-production-receipt.yml']
+permissions:
+  contents: read
+jobs:
+  receipt:
+    if: github.head_ref == 'verify/copy-turnover-20260918'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Read actual deployment, UTC resource recovery and original owner activation
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p copy-turnover-receipt
+          base='https://market-sentinel-free.alicia5574188.workers.dev'
+          ready=0
+          for attempt in {1..48};do
+            code="$(curl -sS --max-time 12 -o copy-turnover-receipt/health-first.json -w '%{http_code}' "$base/__health" || true)"
+            if [[ "$code" == 200 ]] && jq -e '.runtime.buildSha == "01b3093b9807dd3395d40271b7957e68662d53e9" and .runtime.resourceAccounting.policy == "cloudflare-utc-day-v1" and .runtime.liveTurnover.version == "gate-confirmed-turnover-v1" and .runtime.forward.storage.error == null' copy-turnover-receipt/health-first.json >/dev/null;then ready=1;break;fi
+            sleep 10
+          done
+          [[ "$ready" == 1 ]]
+          curl -fsS --retry 2 --max-time 20 "$base/api/runtime" > copy-turnover-receipt/runtime-first.json
+          curl -fsS --retry 2 --max-time 20 "$base/api/forward/export" > copy-turnover-receipt/export-first.json
+          curl -sS --max-time 20 -o copy-turnover-receipt/private-source-denied.json -w '%{http_code}' "$base/api/live/source?id=verification-no-order" > copy-turnover-receipt/private-source-status.txt
+          python - <<'PY'
+          import pathlib,json,datetime
+          p=pathlib.Path('copy-turnover-receipt');r=json.loads((p/'runtime-first.json').read_text());h=json.loads((p/'health-first.json').read_text())['runtime'];f=r['forward'];m=r['liveMirror'];resource=h['resourceAccounting']
+          assert r['buildSha']=='01b3093b9807dd3395d40271b7957e68662d53e9'
+          assert f['startedAt']==1789556791436 and f['initialEquity']==1000 and f['policyVersion']=='participation-execution-v1.2'
+          assert m['source']=='CURRENT_FORWARD_ACCOUNT' and m['newOrdersOnly'] is True
+          assert r['liveMode']['requestedEnabled'] is True
+          assert m['enabledAt']==1789688633482,'Owner activation changed; investigate, do not overwrite'
+          assert f['storage']['error'] is None and f['storage']['persistedAt']>1789691045934
+          assert resource['day']==datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')
+          assert resource['cap']==8000 and resource['nonAlarmWrites']<8000
+          assert resource['previous']['from']=='2026-09-17' and resource['previous']['nonAlarmWrites']>=7995
+          comp=resource['forwardCompression'];assert comp['encoding']=='gzip' and comp['storedBytes']<comp['rawBytes']
+          assert r.get('live') is None and not any(k in r['liveTurnover'] for k in ['total','opening','closing','systemTagged'])
+          assert (p/'private-source-status.txt').read_text()=='401'
+          assert m['eligibleCopiedCount']+m['eligibleMissingCount']==m['eligibleSourceCount']
+          sources={x['id']:x for x in f['positions']};assert set(sources)=={x['sourceId'] for x in m['rows']}
+          for row in m['rows']:
+              if row['eligible']:assert sources[row['sourceId']]['openedAt']>m['enabledAt']
+          print(json.dumps({'build':r['buildSha'],'owner':r['liveMode'],'resources':resource,'mirror':m,'turnoverStatus':r['liveTurnover']},ensure_ascii=False))
+          PY
+      - name: Verify deployed six-tab UI without login, private amount access or mutations
+        shell: bash
+        run: |
+          python -m pip install playwright==1.55.0
+          python - <<'PY'
+          import pathlib,json,shutil
+          from playwright.sync_api import sync_playwright
+          root=pathlib.Path('copy-turnover-receipt');results=[];chrome=shutil.which('google-chrome') or shutil.which('chromium');assert chrome
+          with sync_playwright() as p:
+              b=p.chromium.launch(executable_path=chrome,headless=True,args=['--no-sandbox'])
+              for width in [320,393,768,1440]:
+                  page=b.new_page(viewport={'width':width,'height':900});errors=[];dialogs=[];mutations=[]
+                  page.on('pageerror',lambda e:errors.append(str(e)))
+                  page.on('dialog',lambda d:(dialogs.append(d.message),d.dismiss()))
+                  def guard(route):
+                      if route.request.method not in ['GET','HEAD','OPTIONS']:
+                          mutations.append(route.request.method+' '+route.request.url);route.abort()
+                      else:route.continue_()
+                  page.route('**/*',guard)
+                  response=page.goto('https://market-sentinel-free.alicia5574188.workers.dev',wait_until='domcontentloaded',timeout=45000)
+                  assert response and response.status==200
+                  page.wait_for_selector('.fr-app[data-ui-version="dark-live-v1"]',timeout=25000);page.wait_for_timeout(1500)
+                  for name in ['总览','规则','模拟','实盘','演变','系统']:
+                      page.locator('nav.fr-nav button').filter(has_text=name).click();page.wait_for_timeout(400)
+                      assert page.locator('nav.fr-nav button[aria-current="page"] b').inner_text()==name
+                      assert not page.evaluate('document.documentElement.scrollWidth>innerWidth+1'),(width,name)
+                      if name=='实盘':
+                          page.get_by_text('本次开启后已复制 / 应跟随',exact=True).wait_for(timeout=15000)
+                          assert page.get_by_text('应跟随但尚未复制',exact=True).is_visible()
+                          assert page.locator('[data-testid="live-turnover"]').count()==0,'Private amount section must require owner login'
+                          if width in [393,1440]:page.screenshot(path=str(root/f'{width}-public-live-coverage.png'),full_page=True)
+                      results.append({'width':width,'tab':name,'pageErrors':list(errors),'dialogs':list(dialogs),'mutationRequests':list(mutations)})
+                  assert not errors and not dialogs and not mutations,(errors,dialogs,mutations);page.close()
+              b.close()
+          (root/'browser-results.json').write_text(json.dumps(results,ensure_ascii=False,indent=2));print('24 deployed public UI checks passed; no private numeric turnover claimed')
+          PY
+      - name: Observe actual confirmed-fill readiness and another durable source cycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='https://market-sentinel-free.alicia5574188.workers.dev'
+          first="$(jq -r '.forward.lastCycleAt' copy-turnover-receipt/runtime-first.json)"
+          ready=0
+          for attempt in {1..36};do
+            code="$(curl -sS --max-time 12 -o copy-turnover-receipt/runtime-final.json -w '%{http_code}' "$base/api/runtime" || true)"
+            if [[ "$code" == 200 ]] && jq -e --argjson first "$first" '.forward.lastCycleAt > $first and .forward.storage.persistedAt >= .forward.lastCycleAt and .forward.storage.error == null and .liveTurnover.available == true and .liveTurnover.hasError == false and .liveTurnover.confirmedFillCount > 0' copy-turnover-receipt/runtime-final.json >/dev/null;then ready=1;break;fi
+            sleep 10
+          done
+          [[ "$ready" == 1 ]]
+          curl -fsS --retry 2 --max-time 20 "$base/__health" > copy-turnover-receipt/health-final.json
+          curl -fsS --retry 2 --max-time 20 "$base/api/forward/export" > copy-turnover-receipt/export-final.json
+          python - <<'PY'
+          import pathlib,json,time,datetime
+          p=pathlib.Path('copy-turnover-receipt');first=json.loads((p/'runtime-first.json').read_text());r=json.loads((p/'runtime-final.json').read_text());h=json.loads((p/'health-final.json').read_text())['runtime'];m=r['liveMirror'];f=r['forward']
+          assert r['liveMode']['requestedEnabled']==first['liveMode']['requestedEnabled']
+          assert m['enabledAt']==first['liveMirror']['enabledAt']==1789688633482
+          assert h['state']=='LIVE' and h['stale'] is False and h['lastError'] is None and h['lastSuccessAt']>first['lastSuccessAt']
+          assert h['resourceAccounting']['policy']=='cloudflare-utc-day-v1'
+          assert h['resourceAccounting']['day']==datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')
+          assert f['storage']['error'] is None
+          a={x['id']:x for x in first['forward']['history']};b={x['id']:x for x in f['history']};common=set(a)&set(b)
+          for key in common:assert a[key]==b[key],key
+          assert m['eligibleCopiedCount']+m['eligibleMissingCount']==m['eligibleSourceCount']
+          summary={'checkedAt':int(time.time()*1000),'build':r['buildSha'],'owner':r['liveMode'],'resources':h['resourceAccounting'],'mirror':m,'turnoverStatus':r['liveTurnover'],'unchangedClosedRecords':len(common),'paper':{'start':f['startedAt'],'policy':f['policyVersion'],'closed':f['resolved'],'open':len(f['positions']),'equity':f['equity'],'storage':f['storage']},'privateNumericAccountViewed':False,'ownerToggleRequests':0,'directRealTestOrders':0}
+          (p/'receipt.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2));print(json.dumps(summary,ensure_ascii=False))
+          PY
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > copy-turnover-receipt/time.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: copy-turnover-production-${{ github.run_id }}
+          path: copy-turnover-receipt/
+          retention-days: 7
+          if-no-files-found: error
