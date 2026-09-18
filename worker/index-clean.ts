@@ -15,6 +15,10 @@ import { LIVE_SESSION_VERSION, startLiveSession, sourceAfterEnable, sameLiveSess
 import type { GateSizeRules, SizeDiagnostic } from "../lib/gate-quantity.ts";
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
 import { credentialMetadata } from "../lib/gate-readonly.ts";
+import { MEMBERS_VERSION, digestMember, clearMemberCookie } from "../lib/member-auth.ts";
+import { MemberDirectory, type MemberFeed } from "./member-directory.ts";
+import { memberExecutionClass } from "./member-executor.ts";
+import { memberRoutes } from "./member-routes.ts";
 import { clearOwnerSessionCookie, createOwnerSession, ownerAuthConfigured, ownerPasswordMatches, ownerSessionCookie, sameOriginMutation, verifyOwnerSession } from "../lib/owner-auth.ts";
 import { type EventEntryAssessment, type RadarCandidate } from "../lib/market-radar.ts";
 import { completedCandleStrategyCandidate, initialMarketRegimes, marketRegimeSummary, normalizeMarketRegimes, residentCandleCandidate, selectDiverseMarketPool, updateMarketRegimes,
@@ -35,7 +39,7 @@ import { advanceForward, forwardSummary, forwardEquity, freshQuote, forwardWatch
 import { readForwardStore, prepareForwardWrite, FORWARD_STORAGE } from "../lib/forward-store.ts";
 import { resourceDay, rollResourceDay, RESOURCE_DAY_POLICY, type ResourceCounters } from "../lib/resource-day.ts";
 import { LIVE_TURNOVER_PREFIX, LIVE_TURNOVER_VERSION, initialTurnover, validateTurnover, nextFillWindow,
-  prepareTurnoverPage, turnoverView, type TurnoverState } from "../lib/live-turnover.ts";
+  prepareTurnoverPage, turnoverView, type TurnoverState, type GateConfirmedFill } from "../lib/live-turnover.ts";
 import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwardMirrorSources,
   sourceLifecycle, mirrorSourceFresh, mirrorCoverage, type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
 declare const __FORWARD_BUILD_SHA__: string;
@@ -112,6 +116,8 @@ export interface CloudflareEnv {
   ASSETS: Fetcher;
   DB: D1Database;
   MARKET_STREAM: DurableObjectNamespace<MarketStream>;
+  MEMBERS?: DurableObjectNamespace<MemberDirectory>;
+  MEMBER_EXECUTION?: DurableObjectNamespace;
   OWNER_ACCESS_TOKEN?: string;
   CF_VERSION_METADATA?: { id: string; tag?: string; timestamp?: string };
 }
@@ -159,7 +165,7 @@ type LiveEntry = {
   mirrorSourceId?: string;
 };
 
-type LivePosition = PaperPosition & Partial<ReturnType<typeof gatePositionValuation>> & {
+export type LivePosition = PaperPosition & Partial<ReturnType<typeof gatePositionValuation>> & {
   exchangeSize: number;
   leverage: number;
   margin: number;
@@ -449,7 +455,7 @@ function markToMarketEquity(runtime: RuntimeState) {
 }
 
 export class MarketStream extends DurableObject<CloudflareEnv> {
-  private runtime = initialState();
+  protected runtime = initialState();
   private memory: Record<string, SymbolMemory> = {};
   private structureCandles: Record<string, Partial<Record<"1m" | "15m" | "1h" | "4h", Awaited<ReturnType<typeof fetchStructureCandles>>>>> = {};
   private strategyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
@@ -458,27 +464,29 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private contractCatalog = new Map<string, Awaited<ReturnType<typeof fetchActiveContracts>>[number]>();
   private authorityReady = true;
   private authorityView = { positions: {} as RuntimeState["positions"], equity: CANONICAL_PAPER_REFERENCE_EQUITY, equityVersion: 0 };
-  private liveClient: GateLiveClient | null = null;
+  protected liveClient: GateLiveClient | null = null;
   private optionalWork: Promise<void> | null = null;
-  private forwardState: ForwardState | null = null;
-  private forwardError: string | null = null;
+  protected forwardState: ForwardState | null = null;
+  protected forwardError: string | null = null;
   private forwardBusy = false;
   private forwardLastAttemptAt = 0;
   private forwardCompression: Awaited<ReturnType<typeof prepareForwardWrite>>["compression"] | null = null;
-  private turnoverState: TurnoverState | null = null;
-  private turnoverError: string | null = null;
-  private turnoverAccountKey: string | null = null;
-  private turnoverAccountUser: string | null = null;
-  private turnoverWork: Promise<void> | null = null;
-  private turnoverAttemptAt = 0;
-  private liveSyncWork: Promise<void> | null = null;
-  private liveJournal = new Map<string, unknown>();
-  private liveHistory: LivePosition[] = [];
-  private liveBindingError: string | null = null;
-  private mirrorClosures = new Map<string,ForwardState["history"][number]>();
+  protected turnoverState: TurnoverState | null = null;
+  protected turnoverError: string | null = null;
+  protected turnoverAccountKey: string | null = null;
+  protected turnoverAccountUser: string | null = null;
+  protected turnoverWork: Promise<void> | null = null;
+  protected turnoverAttemptAt = 0;
+  protected liveSyncWork: Promise<void> | null = null;
+  protected liveJournal = new Map<string, unknown>();
+  protected liveHistory: LivePosition[] = [];
+  protected liveBindingError: string | null = null;
+  protected mirrorClosures = new Map<string,ForwardState["history"][number]>();
 
-  constructor(ctx: DurableObjectState, env: CloudflareEnv) {
+  constructor(ctx: DurableObjectState, env: CloudflareEnv, executionOnly = false) {
     super(ctx, env);
+    // A separate member namespace reuses the verified executor, never the market loop.
+    if (executionOnly) return;
     ctx.blockConcurrencyWhile(async () => {
       const saved = await ctx.storage.get<Checkpoint>("checkpoint");
       if (saved?.authoritySchemaVersion === AUTHORITY_SCHEMA_VERSION) {
@@ -655,7 +663,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
   }
 
-  private resetDailyCounters(now: number) {
+  protected resetDailyCounters(now: number) {
     if (rollResourceDay(this.runtime,now)) {
       this.runtime.dailyStartEquity = markToMarketEquity(this.runtime);
     }
@@ -819,7 +827,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return 1;
   }
 
-  private regimeQuotes(now: number) {
+  protected regimeQuotes(now: number) {
     return Object.fromEntries(Object.entries(this.runtime.evidence).flatMap(([symbol, row]) => row?.fresh
       && now - row.observedAt <= STALE_AFTER_MS && row.bestBid != null && row.bestAsk != null
       ? [[symbol, { midpoint: row.midpoint, bestBid: row.bestBid, bestAsk: row.bestAsk,
@@ -835,7 +843,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }]));
   }
 
-  private reconcileCanonicalMirror(now: number) {
+  protected reconcileCanonicalMirror(now: number) {
     const priorEquity = this.runtime.canonicalPaper.equity;
     const result = reconcileCanonicalPaper({ state: this.runtime.canonicalPaper,
       accounts: { current: this.runtime.strategyArena, previous: this.runtime.previousStrategyArena,
@@ -868,11 +876,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       storage:{persistedAt:s?.storage.persistedAt??0,error:this.forwardError}};
   }
 
-  private liveMirrorView() {
+  protected liveMirrorView() {
     return mirrorCoverage(this.forwardState,this.runtime.live,this.forwardError??this.liveBindingError);
   }
 
-  private liveDesiredPortfolio(now:number):Record<string,MirrorSourceTrade> {
+  protected liveDesiredPortfolio(now:number):Record<string,MirrorSourceTrade> {
     if(!this.forwardState)throw new Error("当前模拟账户尚未恢复，禁止退回旧实盘复制源");
     const marked=forwardEquity(this.forwardState,this.regimeQuotes(now),now);
     const desired=forwardMirrorSources(this.forwardState,marked.equity);
@@ -1327,14 +1335,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
   }
 
-  private async gateLive() {
+  protected turnoverStartsAt() { return this.forwardState!.startedAt; }
+  protected async turnoverRows(rows:GateConfirmedFill[]) { return rows; }
+
+  protected async gateLive() {
     if (!this.env.OWNER_ACCESS_TOKEN) throw new Error("所有者访问码尚未配置");
     this.liveClient ??= await loadGateLiveClient(this.env.DB, this.env.OWNER_ACCESS_TOKEN);
     this.runtime.live.credentialConfigured = true;
     return this.liveClient;
   }
 
-  private turnoverStatus() {
+  protected turnoverStatus() {
     return {version:LIVE_TURNOVER_VERSION,available:!!this.turnoverState?.lastScanAt,
       confirmedFillCount:this.turnoverState?.fills??0,lastScanAt:this.turnoverState?.lastScanAt??null,
       checkedThrough:this.turnoverState?this.turnoverState.through*1000:null,
@@ -1342,7 +1353,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       hasError:!!this.turnoverError}; // no private quantities or amounts in public status
   }
 
-  private launchTurnoverWork(now:number) {
+  protected launchTurnoverWork(now:number) {
     if(this.turnoverWork||now-this.turnoverAttemptAt<60_000||!this.liveClient||!this.forwardState)return;
     this.turnoverAttemptAt=now;
     const work=this.syncTurnover(now).catch(error=>{this.turnoverError=safeError(error);});
@@ -1360,12 +1371,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(this.turnoverAccountKey!==key){
       this.turnoverState=null;this.turnoverError=null;
       const saved=await this.ctx.storage.get<TurnoverState>(`${LIVE_TURNOVER_PREFIX}${key}:summary`);
-      this.turnoverState=saved?validateTurnover(saved):initialTurnover(this.forwardState.startedAt,now);
+      this.turnoverState=saved?validateTurnover(saved):initialTurnover(this.turnoverStartsAt(),now);
       this.turnoverAccountKey=key;
     }
     const previous=this.turnoverState!;const window=nextFillWindow(previous,now);if(!window)return;
     this.runtime.subrequestCount++;
-    const rows=await client.confirmedFills(window.from,window.to,window.offset);
+    const rows=await this.turnoverRows(await client.confirmedFills(window.from,window.to,window.offset));
     if(this.liveClient!==client)return; // credentials/account changed while reading
     const multipliers=Object.fromEntries([...this.contractCatalog].map(([symbol,m])=>[symbol,m.quantoMultiplier]));
     for(const [symbol,m]of Object.entries(this.runtime.contractMeta))multipliers[symbol]=m.quantoMultiplier;
@@ -1377,11 +1388,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(this.liveClient===client&&this.turnoverAccountKey===key){this.turnoverState=prepared.state;this.turnoverError=null;this.runtime.live.turnoverAccountKey=key;}
   }
 
-  private activeLivePositions() {
+  protected activeLivePositions() {
     return Object.values(this.runtime.live.positions).filter((position): position is LivePosition => position?.status === "OPEN");
   }
 
-  private activeLiveEntries() {
+  protected activeLiveEntries() {
     return Object.values(this.runtime.live.entries).filter((entry): entry is LiveEntry => Boolean(entry && !["FILLED", "CANCELLED"].includes(entry.status)));
   }
 
@@ -1585,7 +1596,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return entry.status === "FILLED" || (entry.status === "CANCELLED" && !entry.submissionResolved);
   }
 
-  private liveNeedsSync() {
+  protected liveNeedsSync() {
     return this.runtime.live.requestedEnabled
       || Object.values(this.runtime.live.entries).some(entry => entry &&
         (!["FILLED","CANCELLED"].includes(entry.status) || this.liveEntryAwaitingReconcile(entry)))
@@ -1770,7 +1781,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return current;
   }
 
-  private async syncLive(now:number,initialEnable=false,forceEntryCleanup=false) {
+  protected async syncLive(now:number,initialEnable=false,forceEntryCleanup=false) {
     if(this.liveSyncWork){
       if(!initialEnable&&!forceEntryCleanup)return this.liveSyncWork;
       await this.liveSyncWork.catch(()=>undefined);
@@ -2228,7 +2239,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
   }
 
-  private async setLiveMode(enabled: boolean) {
+  protected async setLiveMode(enabled: boolean) {
     const wasEnabled=this.runtime.live.requestedEnabled;
     const changedAt=Date.now();
     if(enabled&&!wasEnabled)this.runtime.live.activation=startLiveSession(changedAt,this.forwardState);
@@ -2632,7 +2643,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return { successes, requests: dueSymbols.length, criticalChanged };
   }
 
-  private async saveCheckpoint(now: number, force = false) {
+  protected async saveCheckpoint(now: number, force = false) {
     this.resetDailyCounters(now);
     if (!force && this.runtime.lastHeartbeatAt != null && now - this.runtime.lastHeartbeatAt < HEARTBEAT_MS) return;
     const openCount = Object.values(this.runtime.positions).filter((position) => position?.status === "OPEN").length;
@@ -2799,6 +2810,32 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   async fetch(request: Request) {
     const url = new URL(request.url);
     const path = url.pathname;
+    // Binding-only projections. No public route reaches these methods. They do
+    // not mutate primary state, re-arm alarms, start market work or touch Gate.
+    if(path === "/member-feed" && request.method === "GET") {
+      const s=this.forwardState,now=Date.now();
+      const sourceState=s?{version:s.version,startedAt:s.startedAt,initialEquity:s.initialEquity,balance:s.balance,
+        positions:s.positions,history:s.history,policyVersion:s.policyVersion,storage:s.storage} as ForwardState:null;
+      const view=s?forwardSummary(s,this.regimeQuotes(now),now):null;
+      const feed:MemberFeed={version:MEMBERS_VERSION,at:now,healthy:!this.forwardError&&this.authorityReady
+        &&this.runtime.lastSuccessAt!=null&&now-this.runtime.lastSuccessAt<=AUTHORITY_STALE_AFTER_MS,
+        error:this.forwardError,state:sourceState,view,metadata:this.runtime.contractMeta,ticks:this.runtime.tickSize,
+        evidence:this.runtime.evidence,ownerAccountHash:this.turnoverAccountUser?await digestMember(`gate-user:${this.turnoverAccountUser}`):null,
+        sourceStatus:{state:this.runtime.state,lastSuccessAt:this.runtime.lastSuccessAt,
+          stale:this.runtime.lastSuccessAt==null||now-this.runtime.lastSuccessAt>AUTHORITY_STALE_AFTER_MS}};
+      return json(feed);
+    }
+    if(path === "/member-closed" && request.method === "GET") {
+      const id=url.searchParams.get("id")??"",openedAt=Number(url.searchParams.get("openedAt"));
+      if(!/^ft-[a-zA-Z0-9_-]{1,100}$/.test(id)||!Number.isSafeInteger(openedAt)||openedAt<=0)return json({error:"invalid source"},400);
+      const current=sourceLifecycle(this.forwardState,id);if(current.status!=="UNKNOWN")return json({trade:current.status==="CLOSED"?current.trade:null,nextCursor:null});
+      const prefix=`${FORWARD_STORAGE}archive:`,cursor=url.searchParams.get("cursor");
+      if(cursor&&(!cursor.startsWith(prefix)||cursor.length>150))return json({error:"invalid cursor"},400);
+      const rows=await this.ctx.storage.list<{trades?:ForwardState["history"]}>({prefix,limit:32,
+        startAfter:cursor??`${prefix}${String(openedAt).padStart(16,"0")}`});
+      for(const value of rows.values()) {const trade=value.trades?.find(t=>t.id===id&&t.status==="CLOSED");if(trade)return json({trade,nextCursor:null});}
+      return json({trade:null,nextCursor:rows.size===32?[...rows.keys()].at(-1):null});
+    }
     if(path==="/owner-live-source"&&request.method==="GET"){
       const id=url.searchParams.get("id");
       if(!id||id.length>200||/[\u0000-\u001f]/.test(id))return json({error:"invalid source id"},400);
@@ -3050,6 +3087,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 }
 
+export { MemberDirectory };
+export class MemberExecutor extends memberExecutionClass(MarketStream) {}
+
 const isAsset = (pathname: string) => pathname.startsWith("/_next/") || pathname.startsWith("/assets/") || /\.[a-z0-9]{2,8}$/i.test(pathname);
 let runtimeCache: { response: string; expiresAt: number } | null = null;
 const historyCache = new Map<string, { response: string; expiresAt: number }>();
@@ -3249,12 +3289,16 @@ const worker = {
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
     const url = new URL(request.url);
     if (isAsset(url.pathname)) return env.ASSETS.fetch(request);
+    const memberResponse=await memberRoutes(request,env);
+    if(memberResponse)return memberResponse;
     if (url.pathname === "/__health") {
       const started = performance.now();
       const response = await env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/health-status");
       const runtime = await response.json<Record<string, unknown>>();
       const live = runtimeReady(runtime as RuntimeHealthShape);
-      return json({ ok: response.ok && live, ready: live, version: SYSTEM_VERSION, mode: "PAPER", runtime, topLevelCpuMs: performance.now() - started }, live ? 200 : 503);
+      return json({ ok: response.ok && live, ready: live, version: SYSTEM_VERSION, mode: "PAPER", runtime,
+        members:{version:MEMBERS_VERSION,configured:!!env.MEMBERS&&!!env.MEMBER_EXECUTION,ownerOnlyIssuer:true,
+          executionIsolation:true,guestProgramAccess:false},topLevelCpuMs: performance.now() - started }, live ? 200 : 503);
     }
     if (url.pathname === "/api/runtime" && request.method === "GET") return runtimeStatus(env, true, await ownerAuthenticated(request, env));
     if (url.pathname === "/api/forward/export" && request.method === "GET") return env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/forward-export");
@@ -3263,7 +3307,11 @@ const worker = {
     if (url.pathname === "/api/account-logs" && request.method === "GET") return accountLogs(env);
     if (url.pathname === "/api/strategy-logs" && request.method === "GET") return strategyRuntimeLogs(url, env);
     if (url.pathname === "/api/auth/session" && request.method === "GET") return authSession(request, env);
-    if (url.pathname === "/api/auth/login" && request.method === "POST") return ownerLogin(request, env);
+    if (url.pathname === "/api/auth/login" && request.method === "POST") {
+      const response=await ownerLogin(request, env);
+      if(response.ok)response.headers.append("Set-Cookie",clearMemberCookie());
+      return response;
+    }
     if (url.pathname === "/api/auth/logout" && request.method === "POST") return ownerLogout(request);
     if (url.pathname === "/api/live/status" && request.method === "GET") return ownerLiveStatus(request, env);
     if (url.pathname === "/api/live/source" && request.method === "GET") return ownerLiveSource(request, env);

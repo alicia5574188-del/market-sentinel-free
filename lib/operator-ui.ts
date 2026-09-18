@@ -6,7 +6,7 @@ import type { gatePositionValuation } from "./gate-live.ts";
 import type { LiveSession } from "./live-session.ts";
 import type { SizeDiagnostic } from "./gate-quantity.ts";
 import type { turnoverView } from "./live-turnover.ts";
-export type AuthSession = { configured: boolean; authenticated: boolean; username: string };
+export type AuthSession = { configured: boolean; authenticated: boolean; username: string; role?:"owner"|"member"|"guest"; memberId?:string };
 export type LivePosition = Partial<ReturnType<typeof gatePositionValuation>> & {
   id: string; symbol: string; side: "LONG" | "SHORT"; status: "OPEN" | "CLOSED";
   entryAt?: number; exitAt?: number; entryPrice: number; exitPrice?: number;
