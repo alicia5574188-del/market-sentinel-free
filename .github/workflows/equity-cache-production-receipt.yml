@@ -13,9 +13,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: '42a8382ccebc5f67db78a59debb0bf384f82cd7e'
+          ref: 'aed534abce99c392520f84107d6f154c3e70b01d'
           persist-credentials: false
-      - name: Read SQLite storage metrics, no billing or trading mutations
+      - name: Read SQLite storage metrics without billing or trading changes
         env:
           CF_READ_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
@@ -37,24 +37,24 @@ jobs:
           for a in (accounts.get('result') or [])[:5]:
               d=read(base+'/accounts/'+a['id']+'/workers/subdomain')
               if (d.get('result') or {}).get('subdomain')=='alicia5574188':aid=a['id'];break
-          now=datetime.datetime.now(datetime.timezone.utc);start=now.replace(hour=0,minute=0,second=0,microsecond=0);iso=lambda x:x.isoformat().replace('+00:00','Z')
-          result={'checkedAt':iso(now),'targetIdentified':bool(aid),'readOnly':True,'billingChanges':0,'storageComplete':False}
+          now=datetime.datetime.now(datetime.timezone.utc);start=now-datetime.timedelta(days=7);iso=lambda x:x.isoformat().replace('+00:00','Z')
+          result={'checkedAt':iso(now),'targetIdentified':bool(aid),'readOnly':True,'billingChanges':0,'metricScope':'sum of returned namespace seven-day maximum storage, not a billing invoice; absent namespace values remain unknown'}
           if aid:
               filt='filter:{datetime_geq:'+json.dumps(iso(start))+',datetime_lt:'+json.dumps(iso(now))+'}'
-              q='{viewer{accounts(filter:{accountTag:'+json.dumps(aid)+'}){sql:durableObjectsSqlStorageGroups(limit:100,'+filt+'){dimensions{namespaceId} max{storedBytes}} periodic:durableObjectsPeriodicGroups(limit:100,'+filt+'){dimensions{namespaceId} sum{duration rowsRead rowsWritten exceededCpuErrors exceededMemoryErrors}}}}}'
+              q='{viewer{accounts(filter:{accountTag:'+json.dumps(aid)+'}){sql:durableObjectsSqlStorageGroups(limit:100,'+filt+'){dimensions{namespaceId} max{storedBytes}}}}}'
               d=read(base+'/graphql',{'query':q});result['response']=d
               rows=(((d.get('data') or {}).get('viewer') or {}).get('accounts') or [{}])[0]
               if isinstance(rows.get('sql'),list) and rows['sql']:
-                  result['sqliteNamespaceCount']=len(rows['sql']);result['sqliteSumOfNamespaceDailyMaxBytes']=sum(v['max']['storedBytes'] for v in rows['sql']);result['storageComplete']=len(rows['sql'])<100 and not d.get('errors')
+                  result['returnedNamespaceCount']=len(rows['sql']);result['sumOfReturnedNamespaceMaxBytes']=sum(v['max']['storedBytes'] for v in rows['sql']);result['rowLimitReached']=len(rows['sql'])>=100
           text=json.dumps(result,indent=2);assert not token or token not in text
           (root/'sqlite-storage-audit.json').write_text(text);print(text)
           PY
-      - name: Verify exact deployed build and preserve original source, member and owner authority
+      - name: Verify exact healthy deployed build and unchanged original source and owner
         shell: bash
         run: |
           python3 - <<'PY'
           import json,pathlib,subprocess,time,re,urllib.parse,hashlib,datetime
-          root=pathlib.Path('cache-production-receipt');base='https://market-sentinel-free.alicia5574188.workers.dev';sha='42a8382ccebc5f67db78a59debb0bf384f82cd7e';samples=[]
+          root=pathlib.Path('cache-production-receipt');base='https://market-sentinel-free.alicia5574188.workers.dev';sha='aed534abce99c392520f84107d6f154c3e70b01d';samples=[]
           def get(path,name):
               dest=root/name;p=subprocess.run(['curl','-sS','--max-time','12','-o',str(dest),'-w','%{http_code}',base+path],capture_output=True,text=True)
               return p.stdout.strip(),dest.read_bytes() if dest.exists() else b''
