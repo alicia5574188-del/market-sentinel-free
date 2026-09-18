@@ -148,10 +148,10 @@ test("old-rule orders preserve entry, amount and stop across an idempotent non-r
   const upgraded=advanceForward({state:s,now:now+10000,paths:{},quotes:{S0:{...m.quotes.S0,observedAt:now+10000}},contracts:{}}).state;
   assert.equal(upgraded.startedAt,s.startedAt);assert.equal(upgraded.balance,s.balance);assert.equal(upgraded.positions[0].stopPrice,old.stopPrice);
   assert.equal(upgraded.positions[0].quantity,old.quantity);assert.equal(upgraded.positions[0].entryPrice,old.entryPrice);
-  assert.equal(upgraded.policyVersion,EVIDENCE_POLICY);assert.equal(upgraded.events.filter(e=>e.kind==="UPGRADE").length,1);
+  assert.equal(upgraded.policyVersion,EVIDENCE_POLICY);assert.equal(upgraded.events.filter(e=>e.kind==="UPGRADE"&&e.subject===EVIDENCE_POLICY).length,1);
   const restored=normalizeForward(JSON.parse(JSON.stringify(upgraded)) as ForwardState,now+11000);
   const second=advanceForward({state:restored,now:now+11000,paths:{},quotes:{},contracts:{}}).state;
-  assert.equal(second.events.filter(e=>e.kind==="UPGRADE").length,1);assert.deepEqual(second.policyUpgrade,upgraded.policyUpgrade);
+  assert.equal(second.events.filter(e=>e.kind==="UPGRADE"&&e.subject===EVIDENCE_POLICY).length,1);assert.deepEqual(second.policyUpgrade,upgraded.policyUpgrade);
 });
 test("loss records are preserved and legacy closed outcomes seed only feedback, never fake wins",()=>{
   const now=START+10*BAR_MS,m=market(now,["S0"]);let s=advanceForward({state:freshState(now),now,...m}).state;

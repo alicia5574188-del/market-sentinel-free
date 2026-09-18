@@ -885,6 +885,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const s=this.forwardState;
     return {version:FORWARD_VERSION,policyVersion:s?.policyVersion??null,liveEligible:false,
       startedAt:s?.startedAt??null,lastCycleAt:s?.lastCycleAt??null,resolved:s?.resolved??0,openCount:s?.positions.length??0,
+      exitPolicyVersion:s?.exitPolicyUpgrade?.policy??null,exitPolicyActivatedAt:s?.exitPolicyUpgrade?.at??null,
+      timelyExitOpenCount:s?.positions.filter(t=>!!t.exitControl&&t.exitControl.policy===s.exitPolicyUpgrade?.policy).length??0,
+      inheritedExitOpenCount:s?.positions.filter(t=>!t.exitControl).length??0,
       storage:{persistedAt:s?.storage.persistedAt??0,error:this.forwardError}};
   }
 

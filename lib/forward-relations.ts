@@ -4,6 +4,8 @@
  */
 import { EVIDENCE_POLICY, PREVIOUS_POLICY, blankDiagnostics, collectFeedback, entryEconomics, executionCalibration, evidenceQuality, familyKey, inspectCondition,
   ruleApplies, type Feedback, type Evidence, type Candidate, type EvidenceDiagnostics } from "./forward-evidence.ts";
+import { TIMELY_PROTECTION_POLICY, newExitControl, observeExitControl, protectedExitDecision, makeExitAudit,
+  type ExitControl, type ExitAudit } from "./forward-protection.ts";
 // The storage schema stays v1.0 so an algorithm upgrade cannot reset the ledger.
 export const FORWARD_VERSION = "forward-relations-v1.0";
 export const FORWARD_GRAMMAR = "conditional-response-conjunction-v1";
@@ -32,6 +34,7 @@ export type Trade = { id: string; symbol: string; side: "LONG" | "SHORT"; rule: 
   armPrice: number; favorable: number; adverse: number; lastPrice: number; lastQuoteAt: number; entryFee: number;
   exitFee: number; fundingAllowance: number; grossPnl: number | null; netPnl: number | null; exitReason: string | null;
   relationFailureBars: number; lastRelationBar: number; execution: "REAL_QUOTE_PAPER_MODEL"; liveEligible: false;
+  exitControl?: ExitControl; exitAudit?: ExitAudit;
   forecast?: { policy:string; family:string; signalAt:number; signalPrice:number; baseNetRate:number;
     calibratedNetRate:number; remainingNetRate:number; quality:number; sizingEquity?:number } };
 export type AuditEvent = { id: string; at: number; kind: "START" | "RULE" | "DORMANT" | "ENTRY" | "EXIT" | "PROTECTION" | "DATA_GAP" | "FIT" | "UPGRADE";
@@ -50,6 +53,7 @@ export type ForwardState = { version: string; startedAt: number; revision: numbe
   entryDiagnostics?:{at:number;matched:number;opened:number;reasons:Record<string,number>;retry?:boolean;queued?:number};
   quoteRetries?:QuoteRetry[];
   participation?:{since:number;cycles:number;matches:number;quoteWaits:number;retryChecks:number;retryFills:number;opened:number};
+  exitPolicyUpgrade?:{policy:string;at:number;equity:number;balance:number;resolved:number;inheritedPositionIds:string[]};
   policyUpgrades?:NonNullable<ForwardState["policyUpgrade"]>[];
   relationEntries?:Record<string,number>;
   policyUpgrade?:{at:number;from:string;to:string;equity:number;stalePositions:number;balance:number;resolved:number;positionIds:string[]} };
@@ -77,6 +81,8 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
   if(v.version!==FORWARD_VERSION||!finite(v.balance)||!Array.isArray(v.positions)||!Array.isArray(v.samples)||!Array.isArray(v.rules)||v.liveEligible!==false)
     throw new Error("前向账户存储格式异常；保留原数据，禁止自动重置");
   if(v.policyVersion&&![EVIDENCE_POLICY,PREVIOUS_POLICY].includes(v.policyVersion))throw new Error("未知前向算法版本，拒绝降级或重置");
+  if(v.exitPolicyUpgrade&&v.exitPolicyUpgrade.policy!==TIMELY_PROTECTION_POLICY)throw new Error("未知退出策略，保留原账户");
+  if(v.positions.some(t=>t.exitControl&&t.exitControl.policy!==TIMELY_PROTECTION_POLICY))throw new Error("未知持仓退出策略，保留原持仓");
   return v;
 }
 export function frameFromCandles(symbol:string,rows:Candle[],now:number):Frame|null {
@@ -217,16 +223,18 @@ function closeTrade(s:ForwardState,t:Trade,q:Quote,now:number,reason:string){
 }
 function manage(s:ForwardState,quotes:Record<string,Quote>,now:number){
   for(const t of s.positions){const q=quotes[t.symbol];if(!freshQuote(q,now))continue;
-    const px=exitPrice(t,q),d=direction(t.side),r=d*(px/t.entryPrice-1);t.lastPrice=px;t.lastQuoteAt=q.observedAt;
+    const px=exitPrice(t,q),d=direction(t.side),r=d*(px/t.entryPrice-1);
     if(t.favorable<t.rule.armRate&&r>=t.rule.armRate)event(s,now,"PROTECTION",t.id,"已观测有利反应触及生成的保护启动点；保存状态，原始止损不放宽。",{favorable:r,armRate:t.rule.armRate});
-    t.favorable=Math.max(t.favorable,r);t.adverse=Math.max(t.adverse,-r);const f=s.frames[t.symbol];
+    t.favorable=Math.max(t.favorable,r);t.adverse=Math.max(t.adverse,-r);
+    const observationGapMs=observeExitControl(t,q.observedAt,now);t.lastPrice=px;t.lastQuoteAt=q.observedAt;
+    const f=s.frames[t.symbol];
     if(f&&f.at>t.lastRelationBar){const contrary=s.rules.some(a=>a.status==="EXPERIMENTAL"&&a.expiresAt>now&&a.side!==t.side&&a.horizon===t.rule.horizon&&ruleApplies(a,t.symbol)&&conditionMatches(f.x,a.conditions));
       t.relationFailureBars=contrary?t.relationFailureBars+1:0;t.lastRelationBar=f.at;}
-    const elapsed=now-t.openedAt,reason=r<=-t.rule.stopRate?"保护止损：当前可执行价触及原始风险边界"
-      :elapsed>=t.rule.horizon*60_000?"反应期限结束：按生成规则退出"
-      :elapsed>=15*60_000&&t.relationFailureBars>=2?"关系变化：连续两根已收盘K线出现相反方向的新证据"
-      :t.rule.exitMode==="REACTION_DECAY"&&elapsed>=5*60_000&&t.favorable>=t.rule.armRate&&t.favorable-r>=t.rule.givebackRate?"反应回吐：有利波动后触发生成的回吐边界":null;
-    if(reason)closeTrade(s,t,q,now,reason);
+    const decision=protectedExitDecision(t,r,now);
+    if(decision){
+      closeTrade(s,t,q,now,decision.reason);
+      if(t.exitControl)t.exitAudit=makeExitAudit(t,decision,px,q.observedAt,now,observationGapMs);
+    }
   }s.positions=s.positions.filter(t=>t.status==="OPEN");
 }
 function openTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,retry=false){
@@ -301,6 +309,7 @@ function openTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<
       plannedRisk:notional*lossRate,stopPrice:price*(1-d*r.stopRate),armPrice:price*(1+d*r.armRate),favorable:0,adverse:0,
       lastPrice:price,lastQuoteAt:q.observedAt,entryFee:notional*PAPER_COST.feeRate,exitFee:0,fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,
       relationFailureBars:0,lastRelationBar:f.at,execution:"REAL_QUOTE_PAPER_MODEL",liveEligible:false,
+      exitControl:newExitControl(),
       forecast:{policy:EVIDENCE_POLICY,family,signalAt:f.at,signalPrice:f.price,baseNetRate:economics.remaining,
         calibratedNetRate:calibratedNet,remainingNetRate:economics.remaining,quality,sizingEquity:equity-notional*immediateCost}};
     s.balance-=t.entryFee;s.fees+=t.entryFee;s.turnover+=notional;s.positions.push(t);s.lastEntryBars[f.symbol]=f.at;
@@ -317,6 +326,12 @@ function openTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<
 }
 export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;quotes:Record<string,Quote>;contracts:Record<string,Contract>}){
   const{now,paths,quotes,contracts}=input,s=structuredClone(input.state),before=s.revision;
+  if(!s.exitPolicyUpgrade){
+    const marked=forwardEquity(s,quotes,now);
+    s.exitPolicyUpgrade={policy:TIMELY_PROTECTION_POLICY,at:now,equity:marked.equity,balance:s.balance,
+      resolved:s.resolved,inheritedPositionIds:s.positions.map(t=>t.id)};
+    event(s,now,"UPGRADE",TIMELY_PROTECTION_POLICY,"新订单的回吐与已确认关系变化不再额外等待持仓年龄；入场、保护幅度、原持仓、账户及规则学习不重置。");
+  }else if(s.exitPolicyUpgrade.policy!==TIMELY_PROTECTION_POLICY)throw new Error("未知退出策略，拒绝覆盖");
   const upgraded=s.policyVersion!==EVIDENCE_POLICY;
   if(upgraded){
     if(s.policyVersion&&s.policyVersion!==PREVIOUS_POLICY)throw new Error("未知算法版本，禁止自动覆盖");
@@ -355,6 +370,7 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
   const marked=forwardEquity(s,quotes,now),count=Object.fromEntries(HORIZONS.map(h=>[h,s.samples.filter(r=>r.horizon===h).length]));
   return{version:s.version,grammar:FORWARD_GRAMMAR,mode:"REAL_FEED_PAPER",liveEligible:false,startedAt:s.startedAt,updatedAt:s.lastQuoteCycleAt,
     policyVersion:s.policyVersion??"legacy-forward-v1.0",policyUpgrade:s.policyUpgrade??null,policyUpgrades:s.policyUpgrades??[],
+    exitPolicyVersion:TIMELY_PROTECTION_POLICY,exitPolicyUpgrade:s.exitPolicyUpgrade??null,
     participation:s.participation??null,quoteRetries:s.quoteRetries?.filter(w=>w.expiresAt>now)??[],
     evidenceDiagnostics:s.evidenceDiagnostics??null,entryDiagnostics:s.entryDiagnostics??null,feedbackCount:s.feedback?.length??0,
     lastCycleAt:s.lastCycleAt,lastFitAt:s.lastFitAt,revision:s.revision,initialEquity:s.initialEquity,balance:s.balance,...marked,
