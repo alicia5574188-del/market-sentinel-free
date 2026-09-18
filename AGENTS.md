@@ -1,3 +1,7 @@
+# Equity history cache — 2026-09-19
+
+User requests retaining history across tab changes and reducing repeated reads. Implement only authenticated browser-scoped projection caching and bounded exclusive new-archive reads; keep all strategies/cadence/financial state/owner and member execution untouched. Read research/EQUITY_CACHE_INCREMENTAL.md. Cached curves are not trading authority or proof of better returns. Preserve frozen tests and reviewed-main deployment/continuity checks.
+
 # Read-only equity chart and manual reference — 2026-09-18
 
 User authorizes observed-equity-reference-v1 only. Read research/EQUITY_CURVE_REFERENCE.md. Project actual saved archive marks from initial capital, never fabricate a historical flat balance or replace raw values by smooth interpolation. Default week/mobile history navigation. Manual LIVE timing sentence is descriptive, conditional and sample-aware, not a new strategy or automatic switch. Whole-account PAPER recoveries include old holdings unavailable to new-only LIVE. Keep all source/execution/cadence/account/member/owner authority unchanged; bounded authenticated reads, no trading writes or extra alarms. Preserve frozen tests and ordinary reviewed-main deployment/advancing-state receipt.

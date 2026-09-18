@@ -1,3 +1,7 @@
+# Equity history cache — 2026-09-19
+
+User requests retaining history across tab changes and reducing repeated reads. Implement only authenticated browser-scoped projection caching and bounded exclusive new-archive reads; keep all strategies/cadence/financial state/owner and member execution untouched. Read research/EQUITY_CACHE_INCREMENTAL.md. Cached curves are not trading authority or proof of better returns. Preserve frozen tests and reviewed-main deployment/continuity checks.
+
 # Equity/reference boundaries — 2026-09-18
 
 Use a bounded authenticated archive projection, not new per-tick writes. Smooth monotone geometry visits raw points and breaks gaps. Reference uses current-policy homogeneous unsmoothed marks and causal matured episodes; never infer accessible LIVE returns from old PAPER holdings. Only manual guidance, no automatic controls. All prior financial and execution authority remains. See research/EQUITY_CURVE_REFERENCE.md.

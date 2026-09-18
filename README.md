@@ -1,3 +1,7 @@
+# Equity history cache — 2026-09-19
+
+User requests retaining history across tab changes and reducing repeated reads. Implement only authenticated browser-scoped projection caching and bounded exclusive new-archive reads; keep all strategies/cadence/financial state/owner and member execution untouched. Read research/EQUITY_CACHE_INCREMENTAL.md. Cached curves are not trading authority or proof of better returns. Preserve frozen tests and reviewed-main deployment/continuity checks.
+
 # Equity chart and manual LIVE reference
 
 总览净值曲线从原始本金开始，默认7天，可滑动、切换24小时/全部并读取真实记录。平滑只改变画线方式，不改净值。历史缺口不补造；较早数据按需读取。新增“实盘开启参考”只读原始净值，相近记录不足会说明，不自动开关、不拦截交易。模拟旧仓位带来的反弹不是开启实盘后必得的收益。策略、持仓和权限不变。详见 research/EQUITY_CURVE_REFERENCE.md。

@@ -8,7 +8,8 @@ export type EquityPoint = { at:number; equity:number; kind:"origin"|"observed"|"
 export type CurveContext = { startedAt:number; initialEquity:number; policy:string;
   exitPolicy:string; comparableSince:number; persistedAt:number };
 export type CurvePage = { version:string; context:CurveContext; points:EquityPoint[];
-  nextCursor:string|null; scannedTo:number|null; omitted:number; scanned:number; generatedAt:number };
+  nextCursor:string|null; scannedTo:number|null; omitted:number; scanned:number; generatedAt:number;
+  newestCursor?:string|null; afterCursor?:string|null; moreAfter?:boolean };
 const valid = (n:unknown):n is number => typeof n==="number"&&Number.isFinite(n);
 type Packet = {at?:number;startedAt?:number;policyVersion?:string;
   daily?:{lastAt?:number;endEquity?:number};
