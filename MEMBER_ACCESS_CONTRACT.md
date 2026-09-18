@@ -1,3 +1,7 @@
+# Authorized source timing update — 2026-09-18
+
+The protection timing change documented in `research/TIMELY_PROTECTION.md` is an explicit exception to the original UI-only pure-source byte freeze below. Members still consume the identical source including its full exit policy; the member executor, primary execution methods, keys, seats and owner switches are unchanged. The new source→primary and source→member early-exit integration tests are mandatory.
+
 # Permanent isolated member access contract — 2026-09-18
 
 ## Scope and invariants

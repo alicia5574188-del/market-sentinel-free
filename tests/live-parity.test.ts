@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { register } from "node:module";
 import { LIVE_PARITY_PREFIX, LIVE_PARITY_VERSION, forwardMirrorSources, buildProportionalMirror,
   mirrorCoverage, sourceLifecycle, type MirrorBinding } from "../lib/live-parity.ts";
-import { initialForward, type Trade, type ForwardState } from "../lib/forward-relations.ts";
+import { advanceForward, initialForward, type Trade, type ForwardState } from "../lib/forward-relations.ts";
+import {newExitControl} from "../lib/forward-protection.ts";
 import { gateMarkedEquity, gatePositionValuation, liveEntryDisposition, liveExitTag, type GateLiveAccount, type GateLiveOrder, type GateLivePosition, type LiveEntryIntent, type LiveStopIntent, LiveEntrySizingError, GateLiveClient } from "../lib/gate-live.ts";
 import { quantizeMirrorNotional } from "../lib/gate-quantity.ts";
 import { startLiveSession, sourceAfterEnable, LIVE_SESSION_VERSION, type LiveSession } from "../lib/live-session.ts";
@@ -312,6 +313,21 @@ test("arming or source rule re-synthesis does not prematurely close an existing 
   const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);
   h.forwardState.positions[0].favorable=.03;h.forwardState.rules=[];await h.syncLive(T);
   assert.equal(gate.closeTags.length,0);assert.equal(live(h).positions.BTC_USDT.status,"OPEN");
+}));
+test("a new-policy early PAPER giveback is followed by the actual owner reconciler without five-minute delay",()=>clock(async()=>{
+  const {h,gate}=await harness();h.forwardState.positions[0].exitControl=newExitControl();
+  await enableNew(h);await h.syncLive(T);const activation=structuredClone(live(h).activation);
+  let current=T+60000;Date.now=()=>current;
+  const advance=(price:number)=>{h.forwardState=advanceForward({state:h.forwardState,now:current,paths:{},contracts:{},
+    quotes:{BTC_USDT:{bestBid:price,bestAsk:price+.01,observedAt:current,fresh:true}}}).state;};
+  advance(101);await h.syncLive(current);assert.equal(gate.closeTags.length,0);
+  current+=30000;advance(100.6);assert.equal(h.forwardState.positions.length,0);
+  assert.equal(h.forwardState.history[0].exitAudit!.trigger,"PROFIT_GIVEBACK");
+  assert.ok(current-h.forwardState.history[0].openedAt<300000);
+  await h.syncLive(current);await h.syncLive(current);
+  assert.equal(gate.closeTags.length,1);assert.equal(gate.closeTags[0],liveExitTag("ft-fixture-1"));
+  assert.equal(live(h).positions.BTC_USDT.status,"CLOSED");assert.deepEqual(live(h).activation,activation);
+  assert.equal(live(h).requestedEnabled,true);assert.equal(gate.placed.length,1);
 }));
 test("owner OFF during leverage request prevents the already-staged market entry",()=>clock(async()=>{
   const {h,gate}=await harness();let off:Promise<unknown>|undefined;

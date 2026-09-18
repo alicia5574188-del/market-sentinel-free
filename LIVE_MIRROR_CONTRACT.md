@@ -1,3 +1,7 @@
+# Protection timing addendum — 2026-09-18
+
+Every new source order includes its immutable `exitControl.policy`. Owner/member adapters must retain that full field and follow the same persisted source close; no separate live timer or take-profit shortcut. Inherited unmarked orders keep legacy timing. Only source exit timing changed; source identity, leverage, proportional size, owner activation and original exchange-native hard stops did not. See `research/TIMELY_PROTECTION.md`. A future native trailing amendment requires independent reconciliation and resource tests; this release does not pretend an off-exchange quote-driven trail is exchange-hosted.
+
 # Permanent current-PAPER / owner-LIVE contract
 
 Effective 2026-09-17, amended by the owner's 2026-09-18 NEW-ORDERS-ONLY request. This requirement applies to EVERY strategy and UI release unless the owner explicitly changes it. It supersedes prior notes prohibiting the generated-rule LIVE bridge, and the earlier backfill-on-enable behavior. The simulator remains a pure strategy authority with no keys; a separately owner-controlled execution adapter consumes its persisted orders.

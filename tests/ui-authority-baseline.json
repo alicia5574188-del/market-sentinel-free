@@ -3,8 +3,9 @@
   "lib/credential-vault.ts": "5a35cca9779d3fd92c9f26d7124c95ff7c7fa1a2cf738187dba05a0704a34a92",
   "lib/regime-portfolio.ts": "d463c8a026f60969c894b81caccbf5836b13a7f52c5a1fd79714d0ac44703aa9",
   "lib/dual-paper.ts": "bb6c35a14b7ba44a64a499d28f53d8ace3a91d912dcc1875ab56edd6e8034fa6",
-  "lib/forward-relations.ts": "e7181351e844cc1207724f7958f0a035fbc47333766aa362cfeef6826adae68f",
+  "lib/forward-relations.ts": "570b26ecfa6302c9682dbd08fc8bba5d32fc86ac5b03bdca4108a008f2e4bf4c",
   "lib/forward-evidence.ts": "d586dbee7ada97df8948c830a9ffe8582f11e85ebb3376a45235e90c8fdc3ca3",
   "lib/forward-store.ts": "8043255c9c274b6886d56ab86d077ec3dbd5a6c96ea93bb4e78739990e482715",
-  "app/forward-dashboard.css": "def01f2bf61e6c6edae0099af52877280cdc56b7e0c4006b4d76cb527818da8b"
+  "app/forward-dashboard.css": "def01f2bf61e6c6edae0099af52877280cdc56b7e0c4006b4d76cb527818da8b",
+  "lib/forward-protection.ts": "d267ff2f3b844a96bd94d5432cef35a49b304c68c389ad901227bb5166086536"
 }

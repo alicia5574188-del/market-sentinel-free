@@ -5,7 +5,8 @@ import {register} from "node:module";
 import {readFileSync} from "node:fs";
 import {createHash} from "node:crypto";
 import {Memory,FakeGate,T,trade} from "./member-fixtures.ts";
-import {initialForward} from "../lib/forward-relations.ts";
+import {advanceForward,initialForward} from "../lib/forward-relations.ts";
+import {newExitControl} from "../lib/forward-protection.ts";
 import {MEMBERS_VERSION,memberCookie,issueMemberSession,verifyMemberSession,digestMember,memberVaultRoot,encryptMemberText,decryptMemberText} from "../lib/member-auth.ts";
 import {createOwnerSession,ownerSessionCookie} from "../lib/owner-auth.ts";
 import {encryptGateCredentials,decryptGateCredentials} from "../lib/credential-vault.ts";
@@ -152,6 +153,23 @@ test("member OFF leaves held positions protected and follows the same source clo
   await h.internal(a.id,"/live-mode",{enabled:false});assert.equal(aa.gate.closeTags.length,0);assert.ok(aa.gate.stops.length>0);
   now+=10000;h.source.history=[{...t,status:"CLOSED",closedAt:now,exitReason:"original-source-exit"}];h.source.positions=[];
   await aa.engine.alarm();now+=10000;await aa.engine.alarm();assert.equal(aa.gate.closeTags.length,1);assert.equal(aa.engine.runtime.live.positions.BTC_USDT.status,"CLOSED");
+}));
+test("member inherits the same early protection source close without new strategy or switch action",()=>clock(async()=>{
+  const h=await harness(),a=await h.issue(),aa=await h.member(a.id);
+  await h.internal(a.id,"/live-mode",{enabled:true});now+=10000;
+  h.source.positions=[{...trade("ft-early-protection"),openedAt:now-5000,exitControl:newExitControl()}];
+  await aa.engine.alarm();now+=10000;await aa.engine.alarm();
+  const activation=structuredClone(aa.engine.runtime.live.activation);
+  const update=(price:number)=>{h.source=advanceForward({state:h.source,now,paths:{},contracts:{},
+    quotes:{BTC_USDT:{bestBid:price,bestAsk:price+.01,observedAt:now,fresh:true}}}).state;};
+  now+=10000;update(101);await aa.engine.alarm();assert.equal(aa.gate.closeTags.length,0);
+  now+=10000;update(100.6);assert.equal(h.source.history[0].exitAudit!.trigger,"PROFIT_GIVEBACK");
+  assert.ok(now-h.source.history[0].openedAt<300000);
+  await aa.engine.alarm();now+=10000;await aa.engine.alarm();
+  assert.equal(aa.gate.closeTags.length,1);assert.equal(aa.gate.closeTags[0],liveExitTag("ft-early-protection"));
+  assert.equal(aa.engine.runtime.live.positions.BTC_USDT.status,"CLOSED");
+  assert.equal(aa.engine.runtime.live.requestedEnabled,true);assert.deepEqual(aa.engine.runtime.live.activation,activation);
+  assert.equal(h.events.d1,0);assert.equal(aa.gate.placed.length,1);
 }));
 test("member position, key identity and original activation survive restart without a second entry",()=>clock(async()=>{
   const h=await harness(),a=await h.issue(),aa=await h.member(a.id);await h.internal(a.id,"/live-mode",{enabled:true});now+=10000;
