@@ -76,7 +76,7 @@ jobs:
         working-directory: release
         run: node --test tests/architecture.test.mjs
 
-      - name: Require the reviewed two-phase Durable Object migration
+      - name: Require unchanged primary migrations and additive isolated member namespaces
         working-directory: release
         run: |
           set -euo pipefail
@@ -87,18 +87,27 @@ jobs:
               migrations_dir: "./drizzle",
               database_id: $database
             }] and
-            .durable_objects.bindings == [{name: "MARKET_STREAM", class_name: "MarketStream"}] and
-            .migrations[-2] == {
+            .durable_objects.bindings == [
+              {name: "MARKET_STREAM", class_name: "MarketStream"},
+              {name: "MEMBERS", class_name: "MemberDirectory"},
+              {name: "MEMBER_EXECUTION", class_name: "MemberExecutor"}
+            ] and
+            (.migrations | length) == 8 and
+            .migrations[-3] == {
               tag: "v6-liquidity-three-state",
               new_sqlite_classes: ["MarketStream"]
             } and
-            .migrations[-1] == {
+            .migrations[-2] == {
               tag: "v7-delete-legacy-do",
               deleted_classes: [
                 "PositionMonitor", "MarketScanner", "LiveTradingCoordinator",
                 "MarketScannerV2", "HTE31MarketScanner", "HTE31TradeManager",
                 "HistoricalArchive"
               ]
+            } and
+            .migrations[-1] == {
+              tag: "v8-isolated-member-accounts",
+              new_sqlite_classes: ["MemberDirectory", "MemberExecutor"]
             }
           ' wrangler.jsonc >/dev/null
           ! grep -Eq 'DROP[[:space:]]+TABLE([[:space:]]+IF[[:space:]]+EXISTS)?[[:space:]]+`?live_exchange_credentials`?' \

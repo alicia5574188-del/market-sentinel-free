@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
@@ -332,4 +333,22 @@ test("ordinary production deploy accepts evolved paper equity", async () => {
   assert.match(ordinaryDeploy, /\(\.runtime\.strategyArena\.portfolioEquity \| type\) == "number"/);
   assert.match(ordinaryDeploy, /\.runtime\.strategyArena\.portfolioEquity > 0/);
   assert.doesNotMatch(ordinaryDeploy, /portfolioEquity == 1000/);
+});
+
+
+test("release guard accepts only exact additive member namespaces, never primary deletion or rewrites", async () => {
+  const workflow = await read(".github/workflows/sentinel-v2-ci.yml");
+  const section = workflow.split("Require unchanged primary migrations and additive isolated member namespaces")[1].split("      - name:")[0];
+  const expression = section.match(/jq -e --arg database "\$D1_DATABASE_ID" '([\s\S]*?)' wrangler\.jsonc/)[1];
+  const config = JSON.parse(await read("wrangler.jsonc"));
+  const accepts = (value) => spawnSync("jq", ["-e", "--arg", "database", config.d1_databases[0].database_id, expression], { input: JSON.stringify(value), encoding: "utf8" }).status === 0;
+  assert.equal(accepts(config), true);
+  const mutations = [
+    (c) => c.durable_objects.bindings.shift(),
+    (c) => c.migrations[7].deleted_classes = ["MarketStream"],
+    (c) => c.migrations[5].new_sqlite_classes = ["WrongPrimary"],
+    (c) => c.migrations.push({ tag: "unreviewed", deleted_classes: ["MarketStream"] }),
+    (c) => c.d1_databases[0].database_id = "another-account",
+  ];
+  for (const mutate of mutations) { const c = structuredClone(config); mutate(c); assert.equal(accepts(c), false); }
 });
