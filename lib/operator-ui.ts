@@ -5,6 +5,7 @@ import type { MirrorReceipt, mirrorCoverage } from "./live-parity.ts";
 import type { gatePositionValuation } from "./gate-live.ts";
 import type { LiveSession } from "./live-session.ts";
 import type { SizeDiagnostic } from "./gate-quantity.ts";
+import type { turnoverView } from "./live-turnover.ts";
 export type AuthSession = { configured: boolean; authenticated: boolean; username: string };
 export type LivePosition = Partial<ReturnType<typeof gatePositionValuation>> & {
   id: string; symbol: string; side: "LONG" | "SHORT"; status: "OPEN" | "CLOSED";
@@ -18,6 +19,7 @@ export type LiveEntry = { planId: string; symbol: string; side: "LONG" | "SHORT"
   trigger: number; invalidation: number; target: number; notional: number; plannedRisk: number;
   leverage: number; margin: number; lastError: string | null; parity?:MirrorReceipt };
 export type LiveRuntime = { requestedEnabled: boolean; operational: boolean; changedAt: number | null;
+  turnover?:ReturnType<typeof turnoverView>;
   activation?: LiveSession | null;
   lastSyncAt: number | null; lastError: string | null; equity: number | null; available: number | null;
   credentialConfigured: boolean; positions: Record<string, LivePosition | null>; entries: Record<string, LiveEntry | null>;

@@ -161,6 +161,8 @@ export function mirrorCoverage(state:ForwardState|null,live:{requestedEnabled:bo
     pendingCount:rows.filter(r=>r.status==="PENDING").length,rows,error:sourceError,
     executionPolicy:LIVE_SESSION_VERSION,newOrdersOnly:true,enabledAt:live.activation?.enabledAt??null,
     eligibleSourceCount:rows.filter(r=>r.eligible).length,excludedSourceCount:rows.filter(r=>r.status==="EXCLUDED_BEFORE_ENABLE").length,
+    eligibleCopiedCount:rows.filter(r=>r.eligible&&["COPIED","DEVIATION"].includes(r.status)).length,
+    eligibleMissingCount:rows.filter(r=>r.eligible&&!["COPIED","DEVIATION"].includes(r.status)).length,
     managedBeforeEnableCount:rows.filter(r=>!r.eligible&&["COPIED","DEVIATION"].includes(r.status)).length,
     minimumSizeBlockedCount:rows.filter(r=>r.status==="BLOCKED_MIN_SIZE").length,
     blockedCount:rows.filter(r=>r.status.startsWith("BLOCKED")).length,deviationCount:rows.filter(r=>r.status==="DEVIATION").length,

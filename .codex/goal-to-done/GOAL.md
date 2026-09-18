@@ -1,3 +1,7 @@
+# Active: LIVE coverage plus real turnover — 2026-09-18
+
+User requests completion of missing eligible copies and additionally actual LIVE turnover. Fix demonstrated Unicode signature rejection and internal UTC/write amplification errors. Preserve current strategy/frequency/account/activation/owner control. Add independently persisted confirmed-fill turnover without affecting trade protection or publishing private amounts. Existing tested main deployment, then public receipt required.
+
 # Active LIVE correction — 2026-09-18
 
 User requests new-orders-only enable, native Gate floating PnL, and contract-specific fractional minimum execution. Supersede only earlier catch-up semantics; maintain current PAPER source identity/proportional sizing/source leverage and owner-exclusive switch. Preserve already-bound real holdings, open protective orders, PAPER participation strategy and history. Use public metadata and fake-Gate tests, not real-money tests or owner actions. Correct falsely blocked fractional lots, expose genuinely below-minimum orders without forced enlargement. Complete tested main-only deployment and truthful production receipt.

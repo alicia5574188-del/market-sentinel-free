@@ -1,3 +1,7 @@
+# LIVE copy coverage and actual turnover
+
+Current execution repair keeps `new-orders-decimal-pnl-v1` and the PAPER algorithm unchanged. Unicode Gate signatures are corrected; internal write budgets roll at UTC midnight and forward state is losslessly compressed. The LIVE page separates copied/eligible/missing and adds **实盘累计成交额** from deduplicated actual Gate fills: opens, closes, total and system-tagged subset. Scope is the current Gate USDT account since the displayed original forward start, including manual fills. Numeric amounts remain owner-only, partial backfill is explicit, no estimated order value is counted. No forced one-lot enlargement or pre-enable catch-up. See `research/LIVE_COPY_COVERAGE_TURNOVER.md` for evidence, tests and boundaries.
+
 # LIVE correction: new-orders-decimal-pnl-v1
 
 **只跟随本次开启后新产生的模拟单，不补开此前已有持仓。** 关闭再开启建立新起点；重复开启、登录、刷新和重启不改变起点。升级时已经在管理的实盘仓位继续原保护与退出，不被强平；所有者开关保持原选择。

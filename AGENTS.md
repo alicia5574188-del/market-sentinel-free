@@ -1,3 +1,7 @@
+# Current copy coverage and turnover request — 2026-09-18
+
+Repair confirmed post-enable execution gaps and add owner-visible Gate confirmed-fill turnover. Read `research/LIVE_COPY_COVERAGE_TURNOVER.md`. Do not change PAPER decisions, sizing/leverage, activation fence, existing holdings or owner mode. Preserve all money/history; serialization may change only losslessly with legacy-read tests. Gate Unicode signing and UTC resource day must match official contracts. Trade analytics is independent, bounded and cannot impair protection.
+
 # Latest owner request — NEW orders, decimal lots, real PnL / 2026-09-18
 
 Read the amended `LIVE_MIRROR_CONTRACT.md`. Do not backfill PAPER positions already open when LIVE is enabled. OFF-to-ON captures a durable source-account/time/ID fence; refresh, repeated ON and deployments preserve it. Previously bound real positions still receive protection and their original source close. Every private Gate size response must enable decimals; actual contract min/max controls downward exact sizing, never silent minimum-lot enlargement. Display native position unrealised_pnl and declared margin-based percentage, with stale/unknown semantics. Current owner intent may be ON: do not turn it OFF or invoke private Gate for tests. PAPER strategy/history remains unchanged. The following older backfill wording is superseded.

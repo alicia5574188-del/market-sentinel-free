@@ -1,6 +1,7 @@
 import { decryptGateCredentials, type EncryptedGateCredentials, type GateCredentials } from "./credential-vault.ts";
 import { CORRELATED_DIRECTION_RISK_CAP, MAX_NOTIONAL_TO_EQUITY, PORTFOLIO_MARGIN_CAP, PORTFOLIO_RISK_CAP, ROUND_TRIP_FRICTION_RATE, selectSafeLeverage, sizePaperPosition, stagedEconomicTarget, tradeEconomics, type PaperPlan, type Side } from "./liquidity-core.ts";
 import type { SizeDiagnostic } from "./gate-quantity.ts";
+import type { GateConfirmedFill } from "./live-turnover.ts";
 
 const encoder = new TextEncoder();
 const GATE_TRIGGER_DAY_SECONDS = 86_400;
@@ -121,9 +122,14 @@ function hex(buffer: ArrayBuffer) {
   return Array.from(new Uint8Array(buffer), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-async function signature(secret: string, method: string, path: string, query: string, body: string, timestamp: string) {
+export async function gateRequestSignature(secret: string, method: string, path: string, query: string, body: string, timestamp: string) {
   const bodyHash = hex(await crypto.subtle.digest("SHA-512", encoder.encode(body)));
-  const payload = `${method}\n${path}\n${query}\n${bodyHash}\n${timestamp}`;
+  // Official gateapi-go signs URL.Path (decoded UTF-8) and QueryUnescape of
+  // RawQuery. Keep the *transport* escaped; decode exactly once for signing.
+  // Signing the %E9... spelling caused INVALID_SIGNATURE for Chinese symbols.
+  const canonicalPath = decodeURIComponent(path);
+  const canonicalQuery = decodeURIComponent(query.replace(/\+/g, " "));
+  const payload = `${method}\n${canonicalPath}\n${canonicalQuery}\n${bodyHash}\n${timestamp}`;
   const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-512" }, false, ["sign"]);
   return hex(await crypto.subtle.sign("HMAC", key, encoder.encode(payload)));
 }
@@ -172,7 +178,7 @@ export class GateLiveClient {
         "Content-Type": "application/json",
         KEY: this.credentials.apiKey,
         Timestamp: timestamp,
-        SIGN: await signature(this.credentials.apiSecret, method, signedPath, query, body, timestamp),
+        SIGN: await gateRequestSignature(this.credentials.apiSecret, method, signedPath, query, body, timestamp),
         "X-Gate-Exptime": String(Date.now() + 5_000),
         "X-Gate-Size-Decimal": "1",
       },
@@ -197,6 +203,16 @@ export class GateLiveClient {
   async setLeverage(symbol: string, leverage: number) {
     const query = `leverage=${encodeURIComponent(String(leverage))}`;
     await this.request("POST", `/futures/usdt/positions/${encodeURIComponent(symbol)}/leverage`, query);
+  }
+
+  /** Read-only, fixed time-window pagination; individual fills, not orders. */
+  async confirmedFills(from: number, to: number, offset: number, limit = 100): Promise<GateConfirmedFill[]> {
+    if (![from,to,offset,limit].every(Number.isSafeInteger) || from < 0 || to < from || offset < 0 || limit < 1 || limit > 100)
+      throw new Error("成交额查询范围无效");
+    const result = await this.request<GateConfirmedFill[]>("GET", "/futures/usdt/my_trades_timerange",
+      `from=${from}&to=${to}&limit=${limit}&offset=${offset}`);
+    if (!Array.isArray(result.data)) throw new Error("Gate成交记录不是有效列表");
+    return result.data;
   }
 
   async createEntry(intent: LiveEntryIntent) {
