@@ -1,0 +1,119 @@
+name: Cloudflare Quota Read Only Audit
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/cloudflare-quota-audit.yml']
+permissions:
+  contents: read
+jobs:
+  audit:
+    if: github.head_ref == 'verify/cloudflare-quota-cache-20260919' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - name: Read current public status and authorized Cloudflare usage only
+        env:
+          CF_READ_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        shell: bash
+        run: |
+          mkdir -p quota-audit
+          python3 - <<'PY'
+          import os,json,pathlib,urllib.request,urllib.error,datetime,time,re
+          out=pathlib.Path('quota-audit');token=os.environ.get('CF_READ_TOKEN','');base='https://api.cloudflare.com/client/v4';calls=[]
+          now=datetime.datetime.now(datetime.timezone.utc);today=now.replace(hour=0,minute=0,second=0,microsecond=0)
+          iso=lambda d:d.isoformat().replace('+00:00','Z')
+          def request(url,payload=None,auth=True):
+              headers={'Accept':'application/json','User-Agent':'sentinel-read-only-quota-audit'}
+              if auth:headers['Authorization']='Bearer '+token
+              body=json.dumps(payload).encode() if payload is not None else None
+              if body:headers['Content-Type']='application/json'
+              req=urllib.request.Request(url,data=body,headers=headers,method='POST' if body else 'GET')
+              try:
+                  with urllib.request.urlopen(req,timeout=20) as r:status=r.status;raw=r.read(12000000)
+              except urllib.error.HTTPError as e:status=e.code;raw=e.read(100000)
+              except Exception as e:return {'_status':0,'errors':[{'message':type(e).__name__}]}
+              try:d=json.loads(raw)
+              except Exception:d={'errors':[{'message':'Non-JSON response'}]}
+              if not isinstance(d,dict):d={'result':d}
+              d['_status']=status
+              calls.append({'endpoint':url.split('/client/v4')[-1] if auth else '/__health','status':status,'success':d.get('success'),'errors':d.get('errors')})
+              return d
+          h=request('https://market-sentinel-free.alicia5574188.workers.dev/__health',auth=False);(out/'health-before.json').write_text(json.dumps(h))
+          result={'checkedAt':iso(now),'utcDay':today.strftime('%Y-%m-%d'),'credentialPresent':bool(token),'readOnly':True,'billingChanges':0,'tradingRequests':0,'accountPlanConfirmed':False,'accountMetricsConfirmed':False}
+          accounts=request(base+'/accounts?per_page=50') if token else {}
+          selected=None
+          for a in accounts.get('result',[])[:5]:
+              sub=request(base+'/accounts/'+a['id']+'/workers/subdomain')
+              if sub.get('result',{}).get('subdomain')=='alicia5574188':selected=a['id'];break
+          result['targetAccountIdentified']=bool(selected)
+          if selected:
+              prefix=base+'/accounts/'+selected
+              settings=request(prefix+'/workers/account-settings');result['workersSettings']={'status':settings['_status'],'result':settings.get('result'),'errors':settings.get('errors')}
+              subscriptions=request(prefix+'/subscriptions')
+              result['subscriptionsReadStatus']=subscriptions['_status'];result['subscriptionErrors']=subscriptions.get('errors')
+              if subscriptions.get('success') and isinstance(subscriptions.get('result'),list):
+                  result['subscriptions']=[{k:s.get(k) for k in ['state','rate_plan','current_period_start','current_period_end']} for s in subscriptions['result']]
+                  result['accountPlanConfirmed']=True
+              ns=request(prefix+'/workers/durable_objects/namespaces?per_page=100')
+              if isinstance(ns.get('result'),list):result['namespaces']=[{k:n.get(k) for k in ['name','class','script','use_sqlite']} for n in ns['result']]
+              db=request(prefix+'/d1/database?per_page=100')
+              if isinstance(db.get('result'),list):result['databases']=[{k:d.get(k) for k in ['name','file_size','num_tables','version']} for d in db['result']]
+              def gql(query):return request(base+'/graphql',{'query':query})
+              types={}
+              def typ(name):
+                  if name not in types:
+                      d=gql('{__type(name:'+json.dumps(name)+'){name fields{name type{kind name ofType{kind name ofType{kind name}}}}}}')
+                      types[name]=d.get('data',{}).get('__type') or {'fields':[]}
+                  return types[name]
+              def named(t):
+                  while t and not t.get('name'):t=t.get('ofType')
+                  return t.get('name') if t else None
+              def field(t,n):return next((f for f in t.get('fields',[]) if f['name']==n),None)
+              root=gql('{__schema{queryType{name}}}')
+              rootname=(root.get('data',{}).get('__schema') or {}).get('queryType',{}).get('name')
+              accounttype=None
+              if rootname:
+                  viewer=field(typ(rootname),'viewer')
+                  if viewer:
+                      af=field(typ(named(viewer['type'])),'accounts')
+                      if af:accounttype=typ(named(af['type']))
+              result['introspectionAccessible']=bool(accounttype)
+              datasets=['workersInvocationsAdaptive','durableObjectsInvocationsAdaptiveGroups','durableObjectsPeriodicGroups','durableObjectsStorageGroups','d1AnalyticsAdaptiveGroups','d1StorageAdaptiveGroups']
+              windows={'previousUTCday':(today-datetime.timedelta(days=1),today),'todayUTC':(today,now)}
+              result['metrics']={}
+              if accounttype:
+                  for dataset in datasets:
+                      df=field(accounttype,dataset)
+                      if not df:result['metrics'][dataset]={'available':False,'reason':'not in accessible schema'};continue
+                      dt=typ(named(df['type']));parts=[]
+                      for agg in ['sum','max']:
+                          ff=field(dt,agg)
+                          if not ff:continue
+                          scalar=[]
+                          for sf in typ(named(ff['type'])).get('fields',[]):
+                              nt=sf['type']
+                              while nt and nt.get('kind') in ['NON_NULL','LIST']:nt=nt.get('ofType')
+                              if nt and nt.get('kind')=='SCALAR' and re.search('request|duration|wall|cpu|read|writ|row|storage|byte|error|bill|limit',sf['name'],re.I):scalar.append(sf['name'])
+                          if scalar:parts.append(agg+'{'+ ' '.join(scalar)+'}')
+                      if not parts:result['metrics'][dataset]={'available':False,'reason':'no relevant aggregate fields'};continue
+                      result['metrics'][dataset]={}
+                      for label,(lo,hi) in windows.items():
+                          q='{viewer{accounts(filter:{accountTag:'+json.dumps(selected)+'}){'+dataset+'(limit:1,filter:{datetime_geq:'+json.dumps(iso(lo))+',datetime_lt:'+json.dumps(iso(hi))+'}){'+ ' '.join(parts)+'}}}}'
+                          d=gql(q);aa=((d.get('data') or {}).get('viewer') or {}).get('accounts')
+                          value=aa[0].get(dataset) if aa else None
+                          result['metrics'][dataset][label]={'start':iso(lo),'end':iso(hi),'data':value,'errors':d.get('errors'),'httpStatus':d['_status']}
+                  result['accountMetricsConfirmed']=all(isinstance(result['metrics'].get(ds,{}).get('todayUTC',{}).get('data'),list) for ds in datasets[:4])
+              (out/'available-types.json').write_text(json.dumps(types))
+          # Never treat denied billing or analytics reads as zero usage.
+          result['calls']=calls
+          text=json.dumps(result,ensure_ascii=False,indent=2)
+          if token:assert token not in text
+          (out/'quota-audit.json').write_text(text);print(text)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cloudflare-quota-audit-${{ github.run_id }}
+          path: quota-audit/
+          retention-days: 7
+          if-no-files-found: error
