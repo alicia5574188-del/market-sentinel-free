@@ -29,7 +29,7 @@ jobs:
           new=old.replace(a,b)
           assert hashlib.sha256(new).hexdigest()=='cdcfc9e75fc25fb59516ed41ba310396274d164c167a1712c498e987f1bf7d08'
           assert new.replace(b,a)==old
-          assert b'--fail-with-body' not in b and b' -f' not in b
+          assert b.startswith(b'curl -fsS ') and b'--retry-max-time 180' in b
           p.write_bytes(new)
           import yaml
           config=yaml.safe_load(p.read_text());assert config['jobs']['deploy']['timeout-minutes']==20
