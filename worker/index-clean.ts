@@ -33,6 +33,9 @@ import { advanceRegimePortfolio, evaluateRegimePortfolio, initialRegimePortfolio
 import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
 import { advanceForward, forwardSummary, forwardEquity, freshQuote, forwardWatchSymbols, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { readForwardStore, prepareForwardWrite, FORWARD_STORAGE } from "../lib/forward-store.ts";
+import { resourceDay, rollResourceDay, RESOURCE_DAY_POLICY, type ResourceCounters } from "../lib/resource-day.ts";
+import { LIVE_TURNOVER_PREFIX, LIVE_TURNOVER_VERSION, initialTurnover, validateTurnover, nextFillWindow,
+  prepareTurnoverPage, turnoverView, type TurnoverState } from "../lib/live-turnover.ts";
 import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwardMirrorSources,
   sourceLifecycle, mirrorSourceFresh, mirrorCoverage, type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
 declare const __FORWARD_BUILD_SHA__: string;
@@ -185,6 +188,7 @@ type LiveAuditEvent = {
 };
 
 type LiveRuntime = {
+  turnoverAccountKey?: string;
   requestedEnabled: boolean;
   operational: boolean;
   changedAt: number | null;
@@ -235,6 +239,8 @@ type RuntimeState = {
   lastStrategyCandleAt: number;
   lastStrategyLogAt: number;
   utcDay: string;
+  resourceDayPolicy?: string;
+  resourceRollovers?: ResourceCounters["resourceRollovers"];
   dailyStartEquity: number;
   alarmCount: number;
   d1Writes: number;
@@ -294,7 +300,7 @@ type RuntimeState = {
 type Checkpoint = Omit<RuntimeState, "analysisMs">;
 type RegimeHourlyPath = Awaited<ReturnType<typeof fetchStructureCandles>>;
 
-const day = (now = Date.now()) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(now));
+const day = resourceDay;
 const safeError = (error: unknown) => error instanceof Error ? error.message.slice(0, 240) : "unknown error";
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { "Cache-Control": "no-store" } });
 
@@ -458,6 +464,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private forwardError: string | null = null;
   private forwardBusy = false;
   private forwardLastAttemptAt = 0;
+  private forwardCompression: Awaited<ReturnType<typeof prepareForwardWrite>>["compression"] | null = null;
+  private turnoverState: TurnoverState | null = null;
+  private turnoverError: string | null = null;
+  private turnoverAccountKey: string | null = null;
+  private turnoverAccountUser: string | null = null;
+  private turnoverWork: Promise<void> | null = null;
+  private turnoverAttemptAt = 0;
   private liveSyncWork: Promise<void> | null = null;
   private liveJournal = new Map<string, unknown>();
   private liveHistory: LivePosition[] = [];
@@ -544,6 +557,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         this.runtime.regimePortfolio.warmMarkets = REGIME_UNIVERSE
           .filter((symbol) => (this.regimeHourly[symbol]?.length ?? 0) >= REGIME_HOURLY_REQUIRED_CANDLES).length;
       }
+      this.resetDailyCounters(Date.now());
       try { this.forwardState = await readForwardStore(ctx.storage, Date.now()); }
       catch (error) { this.forwardError = safeError(error); }
       // Owner intent has its own durable record. Background checkpoints and
@@ -580,6 +594,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const rows=await ctx.storage.list<{position:LivePosition}>({prefix:`${LIVE_PARITY_PREFIX}closed:`,reverse:true,limit:40});
         this.liveHistory=[...rows.values()].map(row=>row.position);
       } catch(error){this.liveBindingError=safeError(error);}
+      // Cached cumulative amounts survive OFF and restart without a private
+      // API request. Only owner-authenticated responses can view the amounts.
+      try {
+        const key=this.runtime.live.turnoverAccountKey;
+        if(key&&/^[a-f0-9]{64}$/.test(key)){
+          const saved=await ctx.storage.get<TurnoverState>(`${LIVE_TURNOVER_PREFIX}${key}:summary`);
+          if(saved){this.turnoverState=validateTurnover(saved);this.turnoverAccountKey=key;}
+        }
+      } catch(error){this.turnoverError=safeError(error);}
       this.publishAuthority();
     });
   }
@@ -633,13 +656,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private resetDailyCounters(now: number) {
-    if (day(now) !== this.runtime.utcDay) {
-      this.runtime.utcDay = day(now);
-      this.runtime.alarmCount = 0;
-      this.runtime.d1Writes = 0;
-      this.runtime.nonAlarmWrites = 0;
-      this.runtime.subrequestCount = 0;
-      this.runtime.maxSubrequestsInAlarm = 0;
+    if (rollResourceDay(this.runtime,now)) {
       this.runtime.dailyStartEquity = markToMarketEquity(this.runtime);
     }
   }
@@ -916,6 +933,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         if (this.runtime.nonAlarmWrites + prepared.writes + 64 > NON_ALARM_WRITE_CAP) throw new Error("前向写入预算不足；保留原账户，不提交未持久化订单");
         await this.ctx.storage.transaction(async transaction => { await transaction.put(prepared.entries); });
         this.runtime.nonAlarmWrites += prepared.writes;
+        this.forwardCompression=prepared.compression;
         for(const t of closures)this.mirrorClosures.set(t.id,structuredClone(t));
       }
       // A PAPER fill/rule update becomes visible only after its atomic commit.
@@ -1316,6 +1334,49 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return this.liveClient;
   }
 
+  private turnoverStatus() {
+    return {version:LIVE_TURNOVER_VERSION,available:!!this.turnoverState?.lastScanAt,
+      confirmedFillCount:this.turnoverState?.fills??0,lastScanAt:this.turnoverState?.lastScanAt??null,
+      checkedThrough:this.turnoverState?this.turnoverState.through*1000:null,
+      catchingUp:turnoverView(this.turnoverState,this.turnoverError,Date.now()).catchingUp,
+      hasError:!!this.turnoverError}; // no private quantities or amounts in public status
+  }
+
+  private launchTurnoverWork(now:number) {
+    if(this.turnoverWork||now-this.turnoverAttemptAt<60_000||!this.liveClient||!this.forwardState)return;
+    this.turnoverAttemptAt=now;
+    const work=this.syncTurnover(now).catch(error=>{this.turnoverError=safeError(error);});
+    this.turnoverWork=work;
+    this.ctx.waitUntil(work.finally(()=>{if(this.turnoverWork===work)this.turnoverWork=null;}));
+  }
+
+  private async syncTurnover(now:number) {
+    // Independent low-frequency read-only analytics. Its failure MUST NOT
+    // block entry, protection, source close, or change requestedEnabled.
+    const client=this.liveClient;if(!client||!this.forwardState)return;
+    const identity=`${client.credentials.environment}:${this.turnoverAccountUser??client.credentials.apiKey}`;
+    const hash=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(identity));
+    const key=[...new Uint8Array(hash)].map(b=>b.toString(16).padStart(2,"0")).join("");
+    if(this.turnoverAccountKey!==key){
+      this.turnoverState=null;this.turnoverError=null;
+      const saved=await this.ctx.storage.get<TurnoverState>(`${LIVE_TURNOVER_PREFIX}${key}:summary`);
+      this.turnoverState=saved?validateTurnover(saved):initialTurnover(this.forwardState.startedAt,now);
+      this.turnoverAccountKey=key;
+    }
+    const previous=this.turnoverState!;const window=nextFillWindow(previous,now);if(!window)return;
+    this.runtime.subrequestCount++;
+    const rows=await client.confirmedFills(window.from,window.to,window.offset);
+    if(this.liveClient!==client)return; // credentials/account changed while reading
+    const multipliers=Object.fromEntries([...this.contractCatalog].map(([symbol,m])=>[symbol,m.quantoMultiplier]));
+    for(const [symbol,m]of Object.entries(this.runtime.contractMeta))multipliers[symbol]=m.quantoMultiplier;
+    const prepared=await prepareTurnoverPage({state:previous,window,rows,accountKey:key,storage:this.ctx.storage,multipliers,now});
+    this.resetDailyCounters(Date.now());
+    if(this.runtime.nonAlarmWrites+prepared.writes+256>NON_ALARM_WRITE_CAP)throw new Error("成交额保存等待资源预算，已核对金额保留；交易保护优先");
+    await this.ctx.storage.transaction(async tx=>{await tx.put(prepared.entries);});
+    this.runtime.nonAlarmWrites+=prepared.writes;
+    if(this.liveClient===client&&this.turnoverAccountKey===key){this.turnoverState=prepared.state;this.turnoverError=null;this.runtime.live.turnoverAccountKey=key;}
+  }
+
   private activeLivePositions() {
     return Object.values(this.runtime.live.positions).filter((position): position is LivePosition => position?.status === "OPEN");
   }
@@ -1370,6 +1431,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       permission_summary_json=excluded.permission_summary_json,status='verified',last_verified_at=excluded.last_verified_at,last_error=NULL,updated_at=excluded.updated_at`)
       .bind(encrypted.ciphertext, encrypted.iv, encrypted.cryptoVersion, gateKeyHint(credentials.apiKey), resolvedGateUserId, permissions, now, now, now).run();
     this.liveClient = candidate;
+    this.turnoverAccountUser=resolvedGateUserId;this.turnoverState=null;this.turnoverAccountKey=null;this.turnoverError=null;
+    delete this.runtime.live.turnoverAccountKey;
     this.runtime.live.credentialConfigured = true;
     this.runtime.live.equity = equity;
     this.runtime.live.available = available;
@@ -1394,6 +1457,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     await this.env.DB.prepare("DELETE FROM live_exchange_credentials WHERE id=1").run();
     this.liveClient = null;
+    this.turnoverAccountUser=null;this.turnoverState=null;this.turnoverAccountKey=null;this.turnoverError=null;
+    delete this.runtime.live.turnoverAccountKey;
     this.runtime.live.credentialConfigured = false;
     this.runtime.live.equity = null;
     this.runtime.live.available = null;
@@ -1731,6 +1796,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // protection of an already-mapped position.
     const client = await this.gateLive();
     let snapshot = await client.snapshot();
+    this.turnoverAccountUser=snapshot.account.user==null?null:String(snapshot.account.user);
     const knownTags = new Set([
       ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status)
         ? [entry.tag, entry.stopTag ?? this.liveEntryStopIntent(entry).tag] : []),
@@ -2567,6 +2633,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private async saveCheckpoint(now: number, force = false) {
+    this.resetDailyCounters(now);
     if (!force && this.runtime.lastHeartbeatAt != null && now - this.runtime.lastHeartbeatAt < HEARTBEAT_MS) return;
     const openCount = Object.values(this.runtime.positions).filter((position) => position?.status === "OPEN").length;
     const journal=new Map(this.liveJournal);
@@ -2716,6 +2783,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         }
       }
       this.launchOptionalWork(now, universeDue);
+      this.launchTurnoverWork(Date.now());
     } catch (error) {
       this.runtime.state = "RECONNECTING";
       this.runtime.lastError = safeError(error);
@@ -2777,6 +2845,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         version: this.runtime.version,
         buildSha: FORWARD_BUILD_SHA,
         liveMirror: {...this.liveMirrorView(),rows:undefined},
+        liveTurnover:this.turnoverStatus(),
+        resourceAccounting:{policy:RESOURCE_DAY_POLICY,day:this.runtime.utcDay,nonAlarmWrites:this.runtime.nonAlarmWrites,
+          cap:NON_ALARM_WRITE_CAP,previous:this.runtime.resourceRollovers?.at(-1)??null,forwardCompression:this.forwardCompression},
         forward: this.forwardHealth(),
         legacyRetired: true,
         mode: this.runtime.mode,
@@ -2892,6 +2963,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     if (path === "/status" || path === "/owner-runtime") {
       await this.ensureAlarm();
+      if(path==="/owner-runtime")this.launchTurnoverWork(Date.now());
       const { outbox, live, paperCycle, bankruptcyOutbox, strategyArena, previousStrategyArena, regimePortfolio, canonicalPaper, marketRegimes,
         stableCandidates: _stableCandidates, previousStableCandidates: _previousStableCandidates, stableStructures,
         previousStableStructures: _previousStableStructures, liquidUniverse: _liquidUniverse,
@@ -2921,7 +2993,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             && Date.now() - (stableStructures[symbol]?.observedAt ?? 0) > STRATEGY_CANDLE_STALE_MS).length,
           candleError: publicRuntime.strategyCandleError, logError: publicRuntime.strategyLogError },
         liveMirror: this.liveMirrorView(),
-        ...(path === "/owner-runtime" ? { live:{...live,history:this.liveHistory,mirror:this.liveMirrorView()} } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length + bankruptcyOutbox.length,
+        liveTurnover:this.turnoverStatus(),
+        ...(path === "/owner-runtime" ? { live:{...live,history:this.liveHistory,mirror:this.liveMirrorView(),
+          turnover:turnoverView(this.turnoverState,this.turnoverError,Date.now())} } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length + bankruptcyOutbox.length,
         oldestOutboxAgeMs: outbox.length ? Math.max(0, Date.now() - (outbox[0].position.exitAt ?? outbox[0].position.entryAt)) : 0,
         authorityReady: this.authorityReady, realtimeReadiness: this.realtimeReadiness(), generatedAt: Date.now(), state: effectiveState, stale,
         analysisP99Ms: percentile99(this.runtime.analysisMs), limits: { loopMs: LOOP_MS, markets: this.runtime.symbols.length, scannedMarkets: this.runtime.radar.scanned, scanUniverse: SCAN_UNIVERSE_SIZE, radarMs: RADAR_MS, warmupSnapshots: WARMUP_SNAPSHOTS,
@@ -2935,7 +3009,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     if (path === "/owner-status" && request.method === "GET") {
       await this.ensureAlarm();
-      return json({ live:{...this.runtime.live,history:this.liveHistory,mirror:this.liveMirrorView()}, generatedAt: Date.now() });
+      this.launchTurnoverWork(Date.now());
+      return json({ live:{...this.runtime.live,history:this.liveHistory,mirror:this.liveMirrorView(),
+        turnover:turnoverView(this.turnoverState,this.turnoverError,Date.now())}, generatedAt: Date.now() });
     }
     if (path === "/credential-status" && request.method === "GET") {
       return json({ credential: await credentialMetadata(this.env.DB) });

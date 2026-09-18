@@ -93,6 +93,8 @@ export default function LiveConsole({auth,runtime,onSession,onLive,onRefresh}:Pr
     </section>
     <div className="fr-live-source"><span aria-hidden="true">ⓘ</span><p><b>当前复制源：</b>当前新版模拟账户，不是旧版组合。订单ID、完整规则、保护价格和退出决定逐单关联；仅资金规模按权益比例换算。最小张数、拒单、部分成交或报价差异会明确显示，不冒充百分百成交。</p></div>
     <section className="fr-section"><div className="fr-section-head"><h2>模拟—实盘复制一致性</h2><span>{mirror?.connected?"当前源已接入":"等待源状态"}</span></div>
+      <div className="fr-three"><div><small>本次开启后已复制 / 应跟随</small><b>{num(mirror?.eligibleCopiedCount,0)} / {num(mirror?.eligibleSourceCount,0)}</b></div><div><small>应跟随但尚未复制</small><b>{num(mirror?.eligibleMissingCount,0)}</b></div><div><small>源数据或执行阻塞</small><b>{mirror?.error?"需核对":"无源阻塞"}</b></div></div>
+      {mirror?.error&&<p className="fr-error">{mirror.error}</p>}
       <div className="fr-three"><div><small>当前模拟持仓</small><b>{num(mirror?.sourceCount,0)}</b></div><div><small>开启后可跟随源单</small><b>{num(mirror?.eligibleSourceCount,0)}</b></div><div><small>已核对实际持仓</small><b>{num(mirror?.copiedCount,0)}</b></div></div>
       <div className="fr-three"><div><small>开启前旧单不跟随</small><b>{num(mirror?.excludedSourceCount,0)}</b></div><div><small>低于真实最低量</small><b>{num(mirror?.minimumSizeBlockedCount,0)}</b></div><div><small>待交易所确认</small><b>{num(mirror?.pendingCount,0)}</b></div></div>
       <p className="fr-note">跟随起点 {time(mirror?.enabledAt)}。不补旧单；已有 {num(mirror?.managedBeforeEnableCount,0)} 笔实盘原仓继续管理。因此模拟总持仓数不一定等于实盘数；对开启后的订单逐单显示已复制、未成交或偏差，不用总数冒充完整复制。</p>
@@ -116,6 +118,13 @@ export default function LiveConsole({auth,runtime,onSession,onLive,onRefresh}:Pr
           <LiveStat title="可用保证金" value={`${num(live?.available)} U`} detail="不以模拟本金替代"/>
           <LiveStat title="持仓浮动盈亏" value={`${signed(floating)} U`} detail={marks.some(m=>!m.fresh)?"Gate最近回报（等待更新）；不是最终净收益":"Gate持仓实际回报；不是最终净收益"}/>
           <LiveStat title="当前持仓" value={live?`${positions.length} 笔`:"—"} detail={`待执行 ${live?entries.length:"—"} 笔`}/></section>
+        <section className="fr-section" data-testid="live-turnover"><div className="fr-section-head"><h2>实盘累计成交额</h2><span>USDT · Gate已确认成交</span></div>
+          <div className="fr-three"><div><small>开仓＋平仓合计</small><b>{num(live?.turnover?.total)} U</b></div><div><small>开仓成交额</small><b>{num(live?.turnover?.opening)} U</b></div><div><small>平仓成交额</small><b>{num(live?.turnover?.closing)} U</b></div></div>
+          <p className="fr-note">统计自 {time(live?.turnover?.startedAt)}，按实际成交ID去重；同一Gate USDT账户含手工成交，不是模拟金额或保证金。失败、挂单和未成交部分不计入。</p>
+          <p className="fr-note">其中系统标记成交 {num(live?.turnover?.systemTagged)} U · 已核对 {num(live?.turnover?.fillCount,0)} 笔成交明细（一次订单可分多次成交）。核对至 {time(live?.turnover?.checkedThrough)}{live?.turnover?.catchingUp?" · 仍在分批核对，当前为已确认部分":""}。</p>
+          {!!live?.turnover?.unclassified&&<p className="fr-note">另有 {num(live.turnover.unclassified)} U 实际成交开平属性待核对，已计入合计，不猜测分类。</p>}
+          {live?.turnover?.error&&<p className="fr-error">成交额更新：{live.turnover.error}。保留此前数值，不影响交易保护。</p>}
+        </section>
         <section className="fr-section"><div className="fr-section-head"><h2>连接与权限</h2><button type="button" className="fr-text-button" onClick={onRefresh}>刷新状态 ↻</button></div>
           <div className="fr-setting"><div><h3>API 状态</h3><p>{credential?.keyHint??"密钥内容不会回显"}</p></div><b>{credential?credential.configured?"已保存":"未配置":"读取中"}</b></div>
           <div className="fr-setting"><div><h3>最近账户核对</h3><p>关闭状态也保留最近结果；不会伪装成实时余额。</p></div><b>{time(live?.lastSyncAt)}</b></div>

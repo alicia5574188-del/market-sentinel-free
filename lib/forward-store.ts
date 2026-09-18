@@ -1,7 +1,8 @@
 import { FORWARD_VERSION, normalizeForward, type ForwardState } from "./forward-relations.ts";
+import { gzip, gunzip, MAX_STATE_BYTES } from "./storage-codec.ts";
 
 export const FORWARD_STORAGE = "forward-relations:v1:";
-type Head = { version: string; count: number; length: number; sha256: string };
+type Head = { version: string; count: number; length: number; sha256: string; encoding?: "gzip"; rawLength?: number };
 type Reader = { get<T>(key: string): Promise<T | undefined> };
 export type Store = Reader & { put(entries: Record<string, unknown>): Promise<void>; delete(keys: string[]): Promise<number> };
 const digest = async (bytes: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as BufferSource))].map(v=>v.toString(16).padStart(2,"0")).join("");
@@ -9,20 +10,27 @@ const digest = async (bytes: Uint8Array) => [...new Uint8Array(await crypto.subt
 export async function readForwardStore(storage: Reader, now: number) {
   const head=await storage.get<Head>(`${FORWARD_STORAGE}head`);
   if(!head)return normalizeForward(null,now);
-  if(head.version!==FORWARD_VERSION||head.count<1||head.count>32||head.length<1)throw new Error("前向存储头异常，拒绝重置账户");
+  if(head.version!==FORWARD_VERSION||!Number.isSafeInteger(head.count)||head.count<1||head.count>32
+    ||!Number.isSafeInteger(head.length)||head.length<1||head.length>MAX_STATE_BYTES
+    ||(head.encoding!==undefined&&head.encoding!=="gzip"))throw new Error("前向存储头异常，拒绝重置账户");
   const chunks=await Promise.all(Array.from({length:head.count},(_,i)=>storage.get<Uint8Array>(`${FORWARD_STORAGE}chunk:${i}`)));
   const bytes=new Uint8Array(head.length);let offset=0;
   for(const chunk of chunks){if(!chunk||offset+chunk.byteLength>bytes.length)throw new Error("前向存储分片缺失");bytes.set(chunk,offset);offset+=chunk.byteLength;}
   if(offset!==bytes.length||await digest(bytes)!==head.sha256)throw new Error("前向存储校验失败，原账户不会被覆盖");
-  return normalizeForward(JSON.parse(new TextDecoder().decode(bytes)) as ForwardState,now);
+  const raw=head.encoding==="gzip"?await gunzip(bytes):bytes;
+  if(head.encoding==="gzip"&&raw.length!==head.rawLength)throw new Error("前向解压长度校验失败");
+  return normalizeForward(JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(raw)) as ForwardState,now);
 }
 
 export async function prepareForwardWrite(previous:ForwardState|null,next:ForwardState,now:number){
-  const bytes=new TextEncoder().encode(JSON.stringify(next));
-  if(bytes.length>2*1024*1024)throw new Error("前向状态超过预算；禁止丢弃账户后继续");
+  const raw=new TextEncoder().encode(JSON.stringify(next));
+  if(raw.length>MAX_STATE_BYTES)throw new Error("前向状态超过预算；禁止丢弃账户后继续");
+  const compressed=await gzip(raw),useGzip=compressed.length<raw.length;
+  const bytes=useGzip?compressed:raw;
   const entries:Record<string,unknown>={};let count=0;
   for(let offset=0;offset<bytes.length;offset+=80*1024)entries[`${FORWARD_STORAGE}chunk:${count++}`]=bytes.slice(offset,offset+80*1024);
-  entries[`${FORWARD_STORAGE}head`]={version:FORWARD_VERSION,count,length:bytes.length,sha256:await digest(bytes)} satisfies Head;
+  entries[`${FORWARD_STORAGE}head`]={version:FORWARD_VERSION,count,length:bytes.length,sha256:await digest(bytes),
+    ...(useGzip?{encoding:"gzip" as const,rawLength:raw.length}:{})} satisfies Head;
   const priorRevision=previous?.revision??0;
   const events=next.events.filter(e=>Number(e.id.split("-").at(-1))>priorRevision);
   const subjects=new Set(events.map(e=>e.subject));
@@ -66,5 +74,5 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
   for (const [key,value] of Object.entries(entries)) if (!(value instanceof Uint8Array)
     && new TextEncoder().encode(JSON.stringify(value)).length > 120*1024)
     throw new Error(`前向归档包超过单值预算：${key}`);
-  return{entries,writes:Object.keys(entries).length};
+  return{entries,writes:Object.keys(entries).length,compression:{encoding:useGzip?"gzip":"utf8",rawBytes:raw.length,storedBytes:bytes.length,chunks:count}};
 }

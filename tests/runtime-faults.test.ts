@@ -1130,7 +1130,9 @@ test("status exposes bounded mirror telemetry, never the complete outage outbox"
   assert.ok(text.length < 200_000);
 
   const owner = await (await stream.fetch(new Request("https://market-stream/owner-runtime"))).json() as Record<string, unknown>;
-  const {history,mirror,...owned}=owner.live as Record<string,unknown>;
+  const {history,mirror,turnover,...owned}=owner.live as Record<string,unknown>;
+  assert.equal((turnover as {total:null}).total,null);
+  assert.equal((body.liveTurnover as Record<string,unknown>).total,undefined);
   assert.deepEqual(history,[]);assert.equal((mirror as {source:string}).source,"CURRENT_FORWARD_ACCOUNT");
   assert.deepEqual(owned, {
     requestedEnabled: false, operational: false, changedAt: null, lastSyncAt: null, lastError: null,

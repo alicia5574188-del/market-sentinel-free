@@ -1,3 +1,7 @@
+# Candidate: copy coverage and confirmed turnover — 2026-09-18
+
+Implementation ready for exact-head verification:438direct/82parity-and-turnover tests plus17architecture tests locally pass. Unicode signing, lossless old-format-compatible state storage, UTC counters, owner-only actual turnover implemented. Account and learning untouched. Do not claim deployed or profitable from this candidate status; final CI/main/public receipt remains.
+
 # Candidate — new-orders-decimal-pnl-v1 / 2026-09-18
 
 Implemented durable new-only activation with old-holding protection, complete fractional contract sizing/reconciliation and native floating PnL. Local415direct tests including59parity tests pass; final architecture/build/type/lint/remote CI/production receipt still required. This heading is not a deployment claim. No PAPER tuning/reset, no owner switch or private real-money test. True exchange minimum remains a visible execution constraint, not silently oversized.

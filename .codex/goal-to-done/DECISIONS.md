@@ -1,3 +1,7 @@
+# Execution-only correction — 2026-09-18
+
+At captured 11PAPER/7LIVE, 3sources were deliberately pre-enable; 1eligible Chinese contract failed signature, and source state hit a stale NewYork-based internal daily write budget. Fix canonical signing, UTC rollover and lossless state compression; do not inflate lots or backfill excluded/expired parents. Confirmed-fill turnover is independent read-only analytics, with account/day dedup, exact coverage window and private amounts. Prior status/strategy/risk caps unchanged.
+
 # LIVE session/size/PnL design — 2026-09-18
 
 - User explicitly rejects copying already-open PAPER positions on enable; durable time/account/ID activation replaces the previous catch-up policy. Repeated ON preserves it, OFF-to-ON starts another; existing bound real holdings are never abandoned.
