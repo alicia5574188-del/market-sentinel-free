@@ -92,8 +92,8 @@ test("native dark LIVE console retains owner authentication and isolates financi
   assert.doesNotMatch(ui+page+consoleUi, /localStorage|sessionStorage|console\.log/);
   for(const label of ["实盘账户权益","所有者密码","API 管理","进场时间","出场时间","持仓时长","已平仓实盘记录"])
     assert.ok(consoleUi.includes(label));
-  assert.match(consoleUi, /当前新版模拟账户，不是旧版组合/);
-  assert.match(consoleUi, /仅资金规模按权益比例换算/);
+  assert.match(consoleUi, /当前模拟账户。按权益比例复制/);
+  assert.match(consoleUi, /沿用源单杠杆、保护和退出依据/);
   assert.match(layout, /哨兵 · 关系引擎/);
   assert.match(layout, /themeColor: "#0b111a"/);
   const fontSizes=[...css.matchAll(/font-size:\s*(\d+)px/g)].map(v=>Number(v[1]));

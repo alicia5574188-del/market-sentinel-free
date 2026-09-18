@@ -1,3 +1,4 @@
+import { LiveHistoryReader } from "../lib/live-history-reader.ts";
 /// <reference types="@cloudflare/workers-types" />
 
 import { DurableObject } from "cloudflare:workers";
@@ -480,6 +481,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   protected liveSyncWork: Promise<void> | null = null;
   protected liveJournal = new Map<string, unknown>();
   protected liveHistory: LivePosition[] = [];
+  private historyReader=new LiveHistoryReader<LivePosition>();
+  protected async privateLiveHistory() {
+    if(!this.liveClient&&this.runtime.live.credentialConfigured)await this.gateLive().catch(()=>undefined);
+    const client=this.liveClient;
+    const current=[...this.liveHistory,...Object.values(this.runtime.live.positions).filter((p):p is LivePosition=>p?.status==="CLOSED")];
+    this.historyReader.launch({storage:this.ctx.storage,client,current,now:Date.now(),
+      valid:()=>this.liveClient===client,
+      reserve:()=>this.runtime.nonAlarmWrites+256<NON_ALARM_WRITE_CAP,
+      committed:n=>{this.runtime.nonAlarmWrites+=n;},waitUntil:p=>this.ctx.waitUntil(p)});
+    return this.historyReader.view(current);
+  }
   protected liveBindingError: string | null = null;
   protected mirrorClosures = new Map<string,ForwardState["history"][number]>();
 
@@ -3044,6 +3056,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           plannedForegroundDoRequestsPerDay: 5_760, plannedCronWatchdogsPerDay: 1_440, plannedTotalDoRequestsPerDay: 50_400,
           maxOpenPositions: null, realtimeCapacity: PORTFOLIO_REALTIME_CAPACITY, plannedMaxD1BilledWritesPerDay: 4_800 } });
     }
+    if (path === "/live-history" && request.method === "GET") return json(await this.privateLiveHistory());
     if (path === "/owner-status" && request.method === "GET") {
       await this.ensureAlarm();
       this.launchTurnoverWork(Date.now());
@@ -3297,6 +3310,7 @@ const worker = {
       const runtime = await response.json<Record<string, unknown>>();
       const live = runtimeReady(runtime as RuntimeHealthShape);
       return json({ ok: response.ok && live, ready: live, version: SYSTEM_VERSION, mode: "PAPER", runtime,
+        records:{version:"compact-records-pnl-v1",recent:10,archive:50,settlement:"gate-close-settlement-v1"},
         members:{version:MEMBERS_VERSION,configured:!!env.MEMBERS&&!!env.MEMBER_EXECUTION,ownerOnlyIssuer:true,
           executionIsolation:true,guestProgramAccess:false},topLevelCpuMs: performance.now() - started }, live ? 200 : 503);
     }
@@ -3313,6 +3327,10 @@ const worker = {
       return response;
     }
     if (url.pathname === "/api/auth/logout" && request.method === "POST") return ownerLogout(request);
+    if (url.pathname === "/api/live/history" && request.method === "GET") {
+      if(!await ownerAuthenticated(request,env))return json({error:"请先登录"},401);
+      return env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/live-history");
+    }
     if (url.pathname === "/api/live/status" && request.method === "GET") return ownerLiveStatus(request, env);
     if (url.pathname === "/api/live/source" && request.method === "GET") return ownerLiveSource(request, env);
     if (url.pathname === "/api/live/mode" && request.method === "POST") return ownerLiveMode(request, env);

@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import "./forward-dashboard.css";
+import "./record-controls.css";
 import "./member-access.css";
 
 export const dynamic = "force-dynamic";

@@ -70,6 +70,7 @@ export async function memberRoutes(request:Request,env:CloudflareEnv):Promise<Re
     const get=(p:string)=>actor.fetch(`https://member-execution${p}`,{headers:internal});
     if(path==="/api/runtime"&&request.method==="GET")return get("/status");
     if(path==="/api/live/status"&&request.method==="GET")return get("/live-status");
+    if(path==="/api/live/history"&&request.method==="GET")return get("/live-history");
     if(path==="/api/live/source"&&request.method==="GET")return get(`/source?id=${encodeURIComponent(u.searchParams.get("id")??"")}`);
     if(path==="/api/live/credentials"&&request.method==="GET")return get("/credential-status");
     if((path==="/api/live/mode"&&request.method==="POST")||(path==="/api/live/credentials"&&["PUT","DELETE"].includes(request.method))) {
