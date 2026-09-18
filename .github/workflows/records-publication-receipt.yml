@@ -1,0 +1,119 @@
+name: Records Publication Continuity Receipt
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/records-publication-receipt.yml']
+permissions:
+  contents: read
+jobs:
+  receipt:
+    if: github.head_ref == 'verify/records-publication-resume'
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    steps:
+      - name: Capture actual stable primary before publication
+        run: |
+          set -euo pipefail
+          mkdir -p records-receipt
+          curl -fsS --retry 2 --max-time 20 'https://market-sentinel-free.alicia5574188.workers.dev/__health' > records-receipt/health-before.json
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > records-receipt/before-time.txt
+      - name: Wait for exact verified tree through ordinary main release
+        run: |
+          set -euo pipefail
+          ready=0
+          for attempt in {1..48}; do
+            code="$(curl -sS --max-time 12 -o records-receipt/health-after.json -w '%{http_code}' 'https://market-sentinel-free.alicia5574188.workers.dev/__health' || true)"
+            if [[ "$code" == 200 ]] && jq -e '.records.version == "compact-records-pnl-v1" and .records.recent == 10 and .records.archive == 50 and .runtime.forward.storage.error == null' records-receipt/health-after.json >/dev/null; then ready=1; break; fi
+            sleep 10
+          done
+          [[ "$ready" == 1 ]]
+          sha="$(jq -r '.runtime.buildSha' records-receipt/health-after.json)"
+          curl -fsS --retry 2 --max-time 15 "https://api.github.com/repos/alicia5574188-del/market-sentinel-free/git/commits/$sha" > records-receipt/deployed-commit.json
+          jq -e '.tree.sha == "ea80f478ad94e09a76db8d80596912e897dd9296"' records-receipt/deployed-commit.json >/dev/null
+          python - <<'PY'
+          import json,pathlib
+          p=pathlib.Path('records-receipt');a=json.loads((p/'health-before.json').read_text());b=json.loads((p/'health-after.json').read_text());x=a['runtime'];y=b['runtime']
+          assert x['buildSha']=='99c0280e572b865dc556e6991762638c19d8d454','Before capture is not expected baseline'
+          assert y['forward']['startedAt']==x['forward']['startedAt']==1789556791436
+          assert y['forward']['policyVersion']==x['forward']['policyVersion']=='participation-execution-v1.2'
+          assert y['liveMode']['requestedEnabled']==x['liveMode']['requestedEnabled']
+          assert y['liveMirror']['enabledAt']==x['liveMirror']['enabledAt']
+          assert y['liveMirror']['source']=='CURRENT_FORWARD_ACCOUNT' and y['liveMirror']['newOrdersOnly'] is True
+          assert b['members']==a['members']
+          assert y['resourceAccounting']['cap']==x['resourceAccounting']['cap']==8000
+          assert b['records']['settlement']=='gate-close-settlement-v1'
+          print('Exact reviewed build, unchanged primary policy/start/owner intent/activation/membership confirmed')
+          PY
+      - name: History endpoint and member administration must stay private
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json,pathlib,subprocess
+          p=pathlib.Path('records-receipt');base='https://market-sentinel-free.alicia5574188.workers.dev';results=[]
+          cases=[('/api/live/history',401,[]),('/api/live/history',401,['-H','x-role: owner','-H','x-verified-member: fake']),('/api/runtime',401,[]),('/api/members/admin',403,[])]
+          for i,(path,expected,headers) in enumerate(cases):
+              code=subprocess.check_output(['curl','-sS','--max-time','15','-o',str(p/f'denied-{i}.json'),'-w','%{http_code}',*headers,base+path],text=True)
+              assert int(code)==expected,(path,code)
+              results.append({'path':path,'status':int(code),'forged':bool(headers)})
+          (p/'access-checks.json').write_text(json.dumps(results,indent=2))
+          PY
+      - name: Actual published guest interface and entry-point assets
+        run: |
+          python -m pip install playwright==1.55.0
+          python - <<'PY'
+          import json,pathlib,shutil
+          from playwright.sync_api import sync_playwright
+          root=pathlib.Path('records-receipt');results=[];chrome=shutil.which('google-chrome') or shutil.which('chromium');assert chrome
+          with sync_playwright() as p:
+              browser=p.chromium.launch(executable_path=chrome,headless=True,args=['--no-sandbox'])
+              for width in [320,393,768,1440]:
+                  page=browser.new_page(viewport={'width':width,'height':900});errors=[];dialogs=[];writes=[]
+                  page.on('pageerror',lambda e:errors.append(str(e)))
+                  page.on('dialog',lambda d:(dialogs.append(d.message),d.dismiss()))
+                  def guard(route):
+                      if route.request.method not in ['GET','HEAD','OPTIONS']:writes.append(route.request.method);route.abort()
+                      else:route.continue_()
+                  page.route('**/*',guard)
+                  response=page.goto('https://market-sentinel-free.alicia5574188.workers.dev',wait_until='domcontentloaded',timeout=45000)
+                  assert response and response.status==200
+                  page.wait_for_selector('[data-access="login"]',timeout=20000)
+                  page.get_by_text('我是主账户所有者',exact=True).click();page.get_by_text('使用会员登录密钥',exact=True).wait_for();page.get_by_text('使用会员登录密钥',exact=True).click()
+                  assert not page.evaluate('document.documentElement.scrollWidth>innerWidth+1')
+                  assert '朋友' not in page.locator('main').inner_text()
+                  assert not errors and not dialogs and not writes,(errors,dialogs,writes)
+                  if width==393:page.screenshot(path=str(root/'393-published-login.png'),full_page=True)
+                  results.append({'width':width,'pageErrors':errors,'dialogs':dialogs,'mutationRequests':writes})
+                  page.close()
+              browser.close()
+          (root/'browser-results.json').write_text(json.dumps(results,ensure_ascii=False,indent=2))
+          PY
+      - name: Verify another saved primary cycle after release
+        run: |
+          set -euo pipefail
+          first="$(jq -r '.runtime.forward.lastCycleAt' records-receipt/health-after.json)"
+          ready=0
+          for attempt in {1..36}; do
+            code="$(curl -sS --max-time 12 -o records-receipt/health-final.json -w '%{http_code}' 'https://market-sentinel-free.alicia5574188.workers.dev/__health' || true)"
+            if [[ "$code" == 200 ]] && jq -e --argjson first "$first" '.runtime.forward.lastCycleAt > $first and .runtime.forward.storage.persistedAt >= .runtime.forward.lastCycleAt and .runtime.forward.storage.error == null' records-receipt/health-final.json >/dev/null; then ready=1;break;fi
+            sleep 10
+          done
+          [[ "$ready" == 1 ]]
+          python - <<'PY'
+          import json,pathlib,time
+          p=pathlib.Path('records-receipt');before=json.loads((p/'health-before.json').read_text());first=json.loads((p/'health-after.json').read_text());last=json.loads((p/'health-final.json').read_text());r=last['runtime'];a=before['runtime']
+          assert r['buildSha']==first['runtime']['buildSha']
+          assert r['liveMode']['requestedEnabled']==a['liveMode']['requestedEnabled'] and r['liveMirror']['enabledAt']==a['liveMirror']['enabledAt']
+          assert r['forward']['policyVersion']==a['forward']['policyVersion'] and r['forward']['startedAt']==a['forward']['startedAt']
+          assert r['state']=='LIVE' and r['stale'] is False and r['lastError'] is None
+          assert r['lastSuccessAt']>first['runtime']['lastSuccessAt']
+          receipt={'checkedAt':int(time.time()*1000),'build':r['buildSha'],'records':last['records'],'members':last['members'],'beforePrimary':{k:a[k] for k in ['forward','liveMode','liveMirror']},'afterPrimary':{k:r[k] for k in ['forward','liveMode','liveMirror']},'realLogins':0,'ownerToggleRequests':0,'realKeysIssued':0,'directGateTestOrders':0,'privateHistoricalPnlViewed':False,'fullPrivateLedgerComparison':False}
+          (p/'receipt.json').write_text(json.dumps(receipt,ensure_ascii=False,indent=2));print(json.dumps(receipt,ensure_ascii=False))
+          PY
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > records-receipt/time.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: records-production-${{ github.run_id }}
+          path: records-receipt/
+          retention-days: 7
+          if-no-files-found: error
