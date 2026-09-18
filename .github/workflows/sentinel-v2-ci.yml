@@ -1039,7 +1039,7 @@ jobs:
           set -euo pipefail
           current="$(git ls-remote origin refs/heads/main | cut -f1)"
           [[ "$current" == "$GITHUB_SHA" ]]
-          curl -fsS --retry 2 --max-time 20 "$WORKER_BASE_URL/__health" > "$RUNNER_TEMP/owner-intent-before.json"
+          curl -fsS --retry 30 --retry-delay 5 --retry-max-time 180 --max-time 20 "$WORKER_BASE_URL/__health" > "$RUNNER_TEMP/owner-intent-before.json"
           jq -e '(.runtime.liveMode.requestedEnabled | type) == "boolean"' "$RUNNER_TEMP/owner-intent-before.json" >/dev/null
       - working-directory: release
         run: npm ci
