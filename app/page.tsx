@@ -5,6 +5,7 @@ import ForwardDashboard from "./forward-dashboard.tsx";
 import LiveConsole from "./live-console.tsx";
 import { LoginGate, MemberAccess } from "./member-access.tsx";
 import { runtimeBackendOperational } from "../lib/runtime-health.ts";
+import {clearEquityBrowserCache} from "../lib/equity-cache.ts";
 import { operatorRequest, type AuthSession, type LiveRuntime, type OperatorRuntime } from "../lib/operator-ui.ts";
 
 const RUNTIME_REQUEST_TIMEOUT_MS = 12_000;
@@ -19,6 +20,7 @@ export default function Home() {
   const epoch=useRef(0);
   const reload=useCallback(() => { epoch.current++; setRefresh(v=>v+1); },[]);
   const sessionChanged=useCallback((session:AuthSession) => {
+    if(!session.authenticated)clearEquityBrowserCache();
     epoch.current++; setAuth(session);
     // Remove private snapshots immediately and invalidate any in-flight response.
     setRuntime(null);setRefresh(v=>v+1);
@@ -61,7 +63,7 @@ export default function Home() {
       window.removeEventListener("focus",resume);window.removeEventListener("online",resume);window.removeEventListener("pageshow",resume);};
   },[refresh,auth,sessionChanged]);
   if(!auth?.authenticated)return <LoginGate auth={auth} onSession={sessionChanged}/>;
-  return <ForwardDashboard data={runtime?.forward?.startedAt?runtime.forward:null}
+  return <ForwardDashboard key={auth.memberId??"owner"} cacheScope={auth.memberId??"owner"} data={runtime?.forward?.startedAt?runtime.forward:null}
     healthy={runtimeBackendOperational(runtime)} feedAt={runtime?.lastSuccessAt??null}
     error={runtime?.forward?.storage?.error??error} liveEnabled={runtime?.liveMode?.requestedEnabled??false}
     livePanel={<LiveConsole auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}

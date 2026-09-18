@@ -1,3 +1,7 @@
+# Equity history cache — 2026-09-19
+
+User requests retaining history across tab changes and reducing repeated reads. Implement only authenticated browser-scoped projection caching and bounded exclusive new-archive reads; keep all strategies/cadence/financial state/owner and member execution untouched. Read research/EQUITY_CACHE_INCREMENTAL.md. Cached curves are not trading authority or proof of better returns. Preserve frozen tests and reviewed-main deployment/continuity checks.
+
 # Current goal — read-only chart/reference
 
 Deliver original-capital smooth weekly equity history and sample-aware manual LIVE reference without changing any trading source, strategy, cadence, size, exit or owner/member authority. Use existing saved archive marks only. Verify code and actual reviewed-main deployment.

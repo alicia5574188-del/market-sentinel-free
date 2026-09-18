@@ -1,23 +1,25 @@
 "use client";
-import {useEffect,useMemo,useRef,useState,type PointerEvent} from "react";
+import {useEffect,useMemo,useRef,useState,useSyncExternalStore,type PointerEvent} from "react";
 import {DAY_MS,EQUITY_CURVE_VERSION,curveSegments,equityReference,mergeEquity,nearestPoint,smoothPath,
-  type CurveContext,type CurvePage,type EquityPoint} from "../lib/equity-curve.ts";
+  type CurveContext,type EquityPoint} from "../lib/equity-curve.ts";
 import type {forwardSummary} from "../lib/forward-relations.ts";
+import {EquityHistoryCache,EQUITY_CACHE_VERSION} from "../lib/equity-cache.ts";
 import "./equity-curve.css";
 type View=ReturnType<typeof forwardSummary>;
 const number=(v:number)=>v.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
 const stamp=(t:number)=>new Date(t).toLocaleString("zh-CN",{timeZone:"Asia/Vientiane",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false});
 type Range="24h"|"7d"|"all";
-type History={account:number;points:EquityPoint[];cursor:string|null;done:boolean;coveredTo:number|null;loaded:boolean};
-const freshHistory=(account:number):History=>({account,points:[],cursor:null,done:false,coveredTo:null,loaded:false});
-
-export default function EquityCurve({data,healthy,fixture}:{data:View|null;healthy:boolean;
-  fixture?:{points:EquityPoint[];complete:boolean}}){
-  const [range,setRange]=useState<Range>("7d"),[history,setHistory]=useState<History>(()=>freshHistory(data?.startedAt??0));
-  const [loading,setLoading]=useState(false),[error,setError]=useState<string|null>(null),[loadBatch,setLoadBatch]=useState(0);
+export default function EquityCurve({data,healthy,fixture,cache,cacheScope="owner"}:{data:View|null;healthy:boolean;
+  fixture?:{points:EquityPoint[];complete:boolean};cache?:EquityHistoryCache;cacheScope?:string}){
+  const [ownCache]=useState(()=>new EquityHistoryCache());
+  const store=cache??ownCache;
+  const history=useSyncExternalStore(store.subscribe,store.getSnapshot,store.getSnapshot);
+  const {loading,error}=history;
+  const [range,setRange]=useState<Range>("7d"),[loadBatch,setLoadBatch]=useState(0);
   const [clock,setClock]=useState(()=>Date.now()),[oldestRequest,setOldestRequest]=useState<number|null>(null);
   const [selected,setSelected]=useState<EquityPoint|null>(null),[width,setWidth]=useState(480),[offset,setOffset]=useState(0);
-  const scroll=useRef<HTMLDivElement>(null),historyRef=useRef(history),atLatest=useRef(true);
+  const scroll=useRef<HTMLDivElement>(null),atLatest=useRef(true),cycle=useRef(0);
+  useEffect(()=>{cycle.current=data?.lastCycleAt??0;},[data?.lastCycleAt]);
   const liveNow=data?.updatedAt??0;
   const context:CurveContext=useMemo(()=>({startedAt:data?.startedAt??0,initialEquity:data?.initialEquity??1000,
     policy:data?.policyVersion??"unknown",exitPolicy:data?.exitPolicyVersion??"unknown",
@@ -25,62 +27,35 @@ export default function EquityCurve({data,healthy,fixture}:{data:View|null;healt
     persistedAt:data?.storage.persistedAt??0}),[data?.startedAt,data?.initialEquity,data?.policyVersion,data?.exitPolicyVersion,
       data?.policyUpgrade?.at,data?.exitPolicyUpgrade?.at,data?.storage.persistedAt]);
   const account=context.startedAt;
+  useEffect(()=>{if(account&&!fixture)store.configure(context,cacheScope);},[store,context,cacheScope,account,fixture]);
+  useEffect(()=>()=>{if(!cache)store.cancel();},[store,cache]);
   useEffect(()=>{
     if(fixture||!account)return;
-    let stopped=false;let resume:ReturnType<typeof setTimeout>|undefined;const controller=new AbortController();
+    let stopped=false;let resume:ReturnType<typeof setTimeout>|undefined;
+    const active=()=>!stopped&&!document.hidden;
     const target=range==="all"?account:Math.max(account,Math.min(Date.now()-7*DAY_MS,oldestRequest??Infinity));
-    const pause=()=>new Promise<void>(resolve=>setTimeout(resolve,700));
-    async function page(cursor:string|null){
-      let r:Response|null=null;
-      for(let attempt=0;attempt<3;attempt++){
-        r=await fetch(`/api/forward/equity${cursor?`?cursor=${encodeURIComponent(cursor)}`:""}`,{
-          credentials:"same-origin",cache:"no-store",signal:controller.signal});
-        if(r.status!==429||attempt===2)break;await pause();
-      }
-      if(!r)throw new Error("净值记录读取失败。");
-      if(!r.ok)throw new Error(r.status===429?"净值记录正在分批读取，请稍后重试。":"净值历史暂时无法读取；图表不控制交易。");
-      const p=await r.json() as CurvePage;
-      if(p.version!==EQUITY_CURVE_VERSION||p.context.startedAt!==account||!Array.isArray(p.points))throw new Error("净值历史与当前账户不匹配。");
-      return p;
-    }
-    const append=(p:CurvePage,older:boolean)=>{
-      if(stopped)return;
-      const old=historyRef.current.account===account?historyRef.current:freshHistory(account);
-      const next={account,points:mergeEquity([...old.points,...p.points],p.context,p.generatedAt).filter(x=>x.kind==="observed"),
-        cursor:older||!old.loaded?p.nextCursor:old.cursor,done:older||!old.loaded?!p.nextCursor:old.done,
-        coveredTo:older||old.coveredTo==null?p.scannedTo:old.coveredTo,loaded:true};
-      historyRef.current=next;setHistory(next);
-    };
     async function load(){
-      setLoading(true);setError(null);
-      try{
-        if(historyRef.current.account!==account){historyRef.current=freshHistory(account);setHistory(historyRef.current);}
-        append(await page(null),false);
-        // Bound initial work. Older windows resume with the exact returned cursor.
-        for(let n=0;n<31&&!stopped;n++){
-          const h=historyRef.current;
-          if(h.done||!h.cursor||(h.coveredTo!=null&&h.coveredTo<=target))break;
-          await pause();if(stopped)break;append(await page(h.cursor),true);
-        }
-        const h=historyRef.current;
-        if(!stopped&&!h.done&&h.cursor&&(h.coveredTo==null||h.coveredTo>target))
-          resume=setTimeout(()=>setLoadBatch(n=>n+1),30_000);
-      }catch(e){if(!stopped)setError(e instanceof Error?e.message:"净值历史读取失败。");}
-      finally{if(!stopped)setLoading(false);}
+      if(!active())return;
+      if(resume){clearTimeout(resume);resume=undefined;}
+      await store.load(target,cycle.current,active);
+      const h=store.getSnapshot();
+      if(active()&&!h.error&&(store.needsHistory(target)||h.catchingUp))resume=setTimeout(()=>void load(),30_000);
     }
     void load();
-    const timer=setInterval(()=>{if(!stopped&&document.visibilityState==="visible")void page(null).then(p=>append(p,false)).catch(e=>{if(!stopped)setError(String(e.message??e));});},60_000);
-    return()=>{stopped=true;controller.abort();clearInterval(timer);if(resume)clearTimeout(resume);};
-  },[account,range,loadBatch,fixture,oldestRequest]);
+    const timer=setInterval(()=>void load(),60_000);
+    const visible=()=>{if(document.hidden){if(resume)clearTimeout(resume);}else void load();};
+    document.addEventListener("visibilitychange",visible);
+    return()=>{stopped=true;clearInterval(timer);if(resume)clearTimeout(resume);document.removeEventListener("visibilitychange",visible);};
+  },[store,account,range,loadBatch,fixture,oldestRequest,cacheScope]);
   useEffect(()=>{const timer=setInterval(()=>setClock(Date.now()),30_000);return()=>clearInterval(timer);},[]);
   useEffect(()=>{const node=scroll.current;if(!node)return;const resize=new ResizeObserver(()=>setWidth(Math.max(180,node.clientWidth)));
     resize.observe(node);setWidth(Math.max(180,node.clientWidth));return()=>resize.disconnect();},[account]);
   const recorded=useMemo(()=>fixture?.points??(history.account===account?history.points:[]),[fixture,history,account]);
-  const all=useMemo(()=>mergeEquity(recorded,context,Math.max(liveNow,context.persistedAt)),[recorded,context,liveNow]);
+  const all=useMemo(()=>mergeEquity(recorded,context,Math.max(liveNow,context.persistedAt,clock)),[recorded,context,liveNow,clock]);
   const chartPoints=useMemo(()=>{
     if(!data||!healthy||data.stalePositions||!Number.isFinite(data.equity))return all;
-    return mergeEquity([...all,{at:data.updatedAt,equity:data.equity,kind:"preview",policy:context.policy,homogeneous:false}],context,data.updatedAt);
-  },[all,data,healthy,context]);
+    return mergeEquity([...all,{at:data.updatedAt,equity:data.equity,kind:"preview",policy:context.policy,homogeneous:false}],context,Math.max(data.updatedAt,clock));
+  },[all,data,healthy,context,clock]);
   const end=Math.max(account+1,chartPoints.at(-1)?.at??account+1),span=range==="24h"?DAY_MS:range==="7d"?7*DAY_MS:Math.max(1,end-account);
   const canvasWidth=Math.min(20000,Math.max(width,width*(end-account)/span)),plot=canvasWidth-28;
   useEffect(()=>{if(atLatest.current&&scroll.current)scroll.current.scrollLeft=canvasWidth-width;},[canvasWidth,width,end,range]);
@@ -98,7 +73,7 @@ export default function EquityCurve({data,healthy,fixture}:{data:View|null;healt
   const peak=visible.reduce<EquityPoint|null>((a,b)=>!a||b.equity>a.equity?b:a,null),trough=visible.reduce<EquityPoint|null>((a,b)=>!a||b.equity<a.equity?b:a,null);
   const shown=(selected&&chartPoints.find(p=>p.at===selected.at))||chartPoints.at(-1);
   const covered=fixture?.complete??(history.done||(history.coveredTo!=null&&history.coveredTo<=Math.max(account,liveNow-7*DAY_MS)));
-  const reference=useMemo(()=>equityReference(all,context,Math.max(liveNow,clock),healthy&&!data?.storage.error,covered),[all,context,liveNow,clock,healthy,data?.storage.error,covered]);
+  const reference=useMemo(()=>equityReference(all,context,Math.max(liveNow,clock),healthy&&!data?.storage.error&&!error&&!history.catchingUp,covered),[all,context,liveNow,clock,healthy,data?.storage.error,error,history.catchingUp,covered]);
   const needsMore=!fixture&&!history.done&&(range==="all"||history.coveredTo==null||history.coveredTo>Math.max(account,Math.min(liveNow-7*DAY_MS,visibleStart)));
   const pick=(e:PointerEvent<SVGSVGElement>)=>{
     const r=e.currentTarget.getBoundingClientRect(),px=(e.clientX-r.left)*canvasWidth/r.width;
@@ -108,7 +83,7 @@ export default function EquityCurve({data,healthy,fixture}:{data:View|null;healt
   const switchRange=(r:Range)=>{atLatest.current=true;setSelected(null);setRange(r);};
   const ticks=Math.min(50,Math.max(2,Math.floor(canvasWidth/100)));
   if(!data)return <div className="eq-empty">等待真实净值记录。</div>;
-  return <div className="eq-module" data-equity-version={EQUITY_CURVE_VERSION}>
+  return <div className="eq-module" data-equity-version={EQUITY_CURVE_VERSION} data-equity-cache={EQUITY_CACHE_VERSION}>
     <div className="eq-toolbar"><div><span className="eq-label">账户净值 · USDT</span><span className="eq-start">起始 {number(context.initialEquity)} U</span></div>
       <div className="eq-ranges" role="group" aria-label="净值时间范围">{([["24h","24小时"],["7d","7天"],["all","全部"]] as const).map(([id,label])=><button key={id} aria-pressed={range===id} onClick={()=>switchRange(id)}>{label}</button>)}</div>
     </div>
@@ -126,9 +101,9 @@ export default function EquityCurve({data,healthy,fixture}:{data:View|null;healt
       </div>
     </div>
     <div className="eq-controls"><button onClick={()=>jump(0)}>起点</button><button disabled={offset<2} onClick={()=>jump(Math.max(0,offset-width*.8))}>‹ 较早</button><button disabled={offset>=canvasWidth-width-2} onClick={()=>jump(Math.min(canvasWidth-width,offset+width*.8))}>较新 ›</button><button onClick={()=>jump(canvasWidth-width)}>最新</button></div>
-    <p className="eq-hint">左右滑动查看，轻触曲线读取原始记录。{range==="all"?"显示已加载全程。":end-account<span?"运行时间不足所选周期，显示已有记录。":canvasWidth>=20000?"长历史已压缩显示。":range==="7d"?"每屏7天。":"每屏24小时。"}空白处不补造；曲线仅作平滑连接，数字和建议均用原始值。</p>
+    <p className="eq-hint">历史记录已缓存，只补充新增数据。左右滑动查看，轻触曲线读取原始记录。{range==="all"?"显示已加载全程。":end-account<span?"运行时间不足所选周期，显示已有记录。":canvasWidth>=20000?"长历史已压缩显示。":range==="7d"?"每屏7天。":"每屏24小时。"}空白处不补造；曲线仅作平滑连接，数字和建议均用原始值。</p>
     <div className="eq-extremes"><span>窗口记录高点 <b>{peak?number(peak.equity):"—"} U</b></span><span>窗口记录低点 <b>{trough?number(trough.equity):"—"} U</b></span></div>
-    {(loading||error||needsMore)&&<div className="eq-load" role="status"><span>{error??(loading?"正在分批读取已保存的历史…":"当前窗口历史尚未读取完整")}</span>{!loading&&<button onClick={()=>{setOldestRequest(old=>Math.min(old??Infinity,Math.max(account,visibleStart-DAY_MS)));setLoadBatch(n=>n+1);}}>继续加载</button>}</div>}
+    {(loading||error||needsMore)&&<div className="eq-load" role="status"><span>{error??(loading?(history.catchingUp?"正在补充新增净值，历史曲线已保留…":"正在补充尚未读取的历史…"):"当前窗口历史尚未读取完整")}</span>{!loading&&<button onClick={()=>{setOldestRequest(old=>Math.min(old??Infinity,Math.max(account,visibleStart-DAY_MS)));setLoadBatch(n=>n+1);}}>继续加载</button>}</div>}
     <aside className="eq-reference" data-reference-state={reference.state}><div><span className="eq-label">实盘开启参考</span><small>仅供手动判断</small></div><p>{reference.sentence}</p><details><summary>依据与限制</summary><p>{reference.detail}</p><p>观察条件：从记录高点回撤至少1%，随后30分钟净值回升至少0.2%、收回至少四分之一跌幅；同一次回撤不重复计数，未完成后续观察的不算成功。图表平滑不参与判断。</p><p>此提示不能操作实盘开关，不阻止开单，也不更改当前持仓。</p></details></aside>
   </div>;
 }

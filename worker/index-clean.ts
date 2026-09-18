@@ -2875,7 +2875,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const page=await this.equityReader.read(this.ctx.storage,{startedAt:s.startedAt,initialEquity:s.initialEquity,
           policy:s.policyVersion??"legacy",exitPolicy:s.exitPolicyUpgrade?.policy??"legacy",
           comparableSince:Math.max(s.startedAt,s.policyUpgrade?.at??0,s.exitPolicyUpgrade?.at??0),
-          persistedAt:s.storage.persistedAt},url.searchParams.get("cursor"),Date.now());
+          persistedAt:s.storage.persistedAt},url.searchParams.get("cursor"),Date.now(),url.searchParams.get("after"));
         return json(page);
       }catch(error){const message=error instanceof Error?error.message:"";
         return json({error:message==="INVALID_CURSOR"?"净值游标无效":"净值记录暂不可用；图表不控制交易"},

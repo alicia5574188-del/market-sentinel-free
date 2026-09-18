@@ -5,6 +5,7 @@ import { FEATURES, type Rule, type Trade, type forwardSummary } from "../lib/for
 import {recordWindows,archivePage} from "../lib/record-view.ts";
 import {ArchivePagination} from "./record-controls.tsx";
 import EquityCurve from "./equity-curve.tsx";
+import {EquityHistoryCache} from "../lib/equity-cache.ts";
 type View = ReturnType<typeof forwardSummary>;
 type Tab = "overview" | "relations" | "orders" | "live" | "journal" | "settings";
 const fmt = (v: number | null | undefined, digits=2) => typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:digits,maximumFractionDigits:digits}):"—";
@@ -12,7 +13,9 @@ const signed = (v: number | null | undefined, digits=2) => typeof v==="number"?`
 const time = (v?:number|null) => v?new Date(v).toLocaleString("zh-CN",{timeZone:"Asia/Vientiane",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}):"—";
 const condition = (r:Rule) => r.conditions.map(c=>`${FEATURES[c.feature]} ${c.op==="GE"?"≥":"≤"} ${fmt(c.threshold)}`).join(" ＋ ");
 
-export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,liveEnabled,accountPanel,memberName}:{data:View|null;healthy:boolean;feedAt:number|null;error:string|null;livePanel:ReactNode;liveEnabled:boolean;accountPanel?:ReactNode;memberName?:string}) {
+export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,liveEnabled,accountPanel,memberName,cacheScope="owner"}:{data:View|null;healthy:boolean;feedAt:number|null;error:string|null;livePanel:ReactNode;liveEnabled:boolean;accountPanel?:ReactNode;memberName?:string;cacheScope?:string}) {
+  const [equityCache]=useState(()=>new EquityHistoryCache());
+  useEffect(()=>()=>equityCache.cancel(),[equityCache]);
   const [tab,setTab]=useState<Tab>("overview"),[now,setNow]=useState(0),[showDormant,setShowDormant]=useState(false);
   const [paperTab,setPaperTab]=useState<"positions"|"history"|"archive">("positions"),[paperPage,setPaperPage]=useState(0);
   const paperRecords=recordWindows(data?.history??[],t=>t.closedAt??0),paperArchive=archivePage(paperRecords.archive,paperPage);
@@ -41,7 +44,7 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
       <div className="fr-three"><div><small>用于特征的市场</small><b>{fmt(data?.marketCount,0)} / 30</b></div><div><small>最近规则更新</small><b>{time(data?.lastFitAt)}</b></div><div><small>状态已保存</small><b>{time(data?.storage.persistedAt)}</b></div></div></section>
 
       <section className="fr-section"><div className="fr-section-head"><h2>机会与执行</h2><span>统计自 {time(data?.participation?.since)}</span></div><div className="fr-three"><div><small>匹配次数（非订单）</small><b>{fmt(data?.participation?.matches,0)}</b></div><div><small>当前等待报价</small><b>{fmt(data?.quoteRetries?.length,0)}</b></div><div><small>新开仓 / 重试成交</small><b>{fmt(data?.participation?.opened,0)} / {fmt(data?.participation?.retryFills,0)}</b></div></div><p className="fr-note">报价暂缺会在当前5分钟信号剩余窗口内重试；超时作废，不补成交，不设强制交易数。同一币同一根K线不重复开仓。</p></section>
-      <div className="fr-two"><section className="fr-section"><div className="fr-section-head"><div><small>账户结果</small><h2>净值曲线</h2></div><span>含模拟成本</span></div><EquityCurve data={data} healthy={healthy}/><div className="fr-three"><div><small>已实现价格损益</small><b>{signed(data?.grossPnl)} U</b></div><div><small>含退出成本浮盈</small><b>{signed(data?.floating)} U</b></div><div><small>已观测最大回撤</small><b>{fmt(data?data.maxDrawdown*100:null)}%</b></div></div></section>
+      <div className="fr-two"><section className="fr-section"><div className="fr-section-head"><div><small>账户结果</small><h2>净值曲线</h2></div><span>含模拟成本</span></div><EquityCurve data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/><div className="fr-three"><div><small>已实现价格损益</small><b>{signed(data?.grossPnl)} U</b></div><div><small>含退出成本浮盈</small><b>{signed(data?.floating)} U</b></div><div><small>已观测最大回撤</small><b>{fmt(data?data.maxDrawdown*100:null)}%</b></div></div></section>
       <section className="fr-section"><div className="fr-section-head"><div><small>响应样本</small><h2>观察多长时间的反应</h2></div></div><div className="fr-horizons">{[15,60,180].map(h=><div key={h}><b>{h<60?`${h} 分钟`:`${h/60} 小时`}</b><div><i style={{width:`${data?Math.min(100,(data.sampleCounts[h]??0)/384*100):0}%`}}/></div><strong>{fmt(data?.sampleCounts[h],0)}</strong></div>)}</div><p className="fr-note">样本来自已完成的市场反应，不计入交易次数。</p><button className="fr-text-button" onClick={()=>select("relations")}>查看规则如何生成 <span>↗</span></button></section></div>
       <section className="fr-section"><div className="fr-section-head"><div><small>最近变化</small><h2>每次改变都有依据</h2></div><button className="fr-text-button" onClick={()=>select("journal")}>全部记录 ↗</button></div><Journal data={data} limit={4}/></section>
     </>}

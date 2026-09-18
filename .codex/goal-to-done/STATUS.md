@@ -1,3 +1,7 @@
+# Equity history cache — 2026-09-19
+
+User requests retaining history across tab changes and reducing repeated reads. Implement only authenticated browser-scoped projection caching and bounded exclusive new-archive reads; keep all strategies/cadence/financial state/owner and member execution untouched. Read research/EQUITY_CACHE_INCREMENTAL.md. Cached curves are not trading authority or proof of better returns. Preserve frozen tests and reviewed-main deployment/continuity checks.
+
 # Equity chart/reference candidate — 2026-09-18
 
 Implementation includes real archive projection, original capital, scrollable smooth7day/24hour/all views, exact tooltips and read-only reference.33new tests plus existing suite pass locally; four-width component and emulated-touch checks pass. No real login, LIVE switch or private trading test. Exact remote verification and production receipt must complete before calling this deployed.
