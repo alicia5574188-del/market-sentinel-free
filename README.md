@@ -1,3 +1,17 @@
+# 私人登录密钥与独立会员账户
+
+主账户在「系统 → 朋友与登录密钥」生成并复制一人一把密钥。「生成下一位」只创建新账户，旧密钥继续有效，包括尚未首次登录的朋友。同一密钥只能进入同一个账户，不会生成新的使用资格；它是密码式持有凭据，转发密钥仍可能让别人进入同一账户，不能声称识别本人。
+
+朋友打开同一网址输入密钥，看到共享的当前模拟策略，但实盘API、开关、订单、浮盈亏和成交记录均隔离；默认关闭，只跟随本人开启后的新模拟单。主账户只能在会员汇总里看到备注/编号/激活状态/本程序实际成交额及截至时间，不显示朋友余额、盈亏、API或代开开关。当前主账户和稳定策略不重置、不改参数、不因会员登录重新训练。
+
+为保护当前部署，首批20个登录账户，最多2个会员实盘执行账户同时占用执行席位（主账户不计入）。已有会员持仓仍占用席位直到保护/平仓完成；新增超额请求被拒绝，已有交易不被挤出。容量是保守准入，不代表免费资源无限或保证永不延迟；更多并发需要单独验证/配置资源。
+
+会员注册与每个人的执行分别使用新增SQLite Durable Objects，主循环不遍历或等待用户；共享行情由独立目录缓存合并读取。没有会员时没有新增后台交易工作。原有owner密码、凭据加密格式、主账户开启时间以及原始10个关键交易方法保持不变。程序API现在需要登录；`/__health`继续仅供运行监测。新数据和原状态独立，旧v1-v7迁移不改，只增加v8会员命名空间。
+
+验证：`npm run test:members`、`npm run test:direct`、`npm test`、`npm run typecheck`、`npm run lint`、`npx wrangler deploy --dry-run --config dist/server/wrangler.json`。`npm run test:members:workerd`以虚构密钥启动临时本地SQLite环境检验编译后的登录/密钥/权限，不触及Gate或主源，测试专用兼容日期不改变生产。详情见`MEMBER_ACCESS_CONTRACT.md`。
+
+---
+
 # LIVE copy coverage and actual turnover
 
 Current execution repair keeps `new-orders-decimal-pnl-v1` and the PAPER algorithm unchanged. Unicode Gate signatures are corrected; internal write budgets roll at UTC midnight and forward state is losslessly compressed. The LIVE page separates copied/eligible/missing and adds **实盘累计成交额** from deduplicated actual Gate fills: opens, closes, total and system-tagged subset. Scope is the current Gate USDT account since the displayed original forward start, including manual fills. Numeric amounts remain owner-only, partial backfill is explicit, no estimated order value is counted. No forced one-lot enlargement or pre-enable catch-up. See `research/LIVE_COPY_COVERAGE_TURNOVER.md` for evidence, tests and boundaries.

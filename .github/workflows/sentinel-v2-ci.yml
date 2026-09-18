@@ -76,7 +76,7 @@ jobs:
         working-directory: release
         run: node --test tests/architecture.test.mjs
 
-      - name: Require the reviewed two-phase Durable Object migration
+      - name: Require unchanged primary migrations and additive isolated member namespaces
         working-directory: release
         run: |
           set -euo pipefail
@@ -87,18 +87,27 @@ jobs:
               migrations_dir: "./drizzle",
               database_id: $database
             }] and
-            .durable_objects.bindings == [{name: "MARKET_STREAM", class_name: "MarketStream"}] and
-            .migrations[-2] == {
+            .durable_objects.bindings == [
+              {name: "MARKET_STREAM", class_name: "MarketStream"},
+              {name: "MEMBERS", class_name: "MemberDirectory"},
+              {name: "MEMBER_EXECUTION", class_name: "MemberExecutor"}
+            ] and
+            (.migrations | length) == 8 and
+            .migrations[-3] == {
               tag: "v6-liquidity-three-state",
               new_sqlite_classes: ["MarketStream"]
             } and
-            .migrations[-1] == {
+            .migrations[-2] == {
               tag: "v7-delete-legacy-do",
               deleted_classes: [
                 "PositionMonitor", "MarketScanner", "LiveTradingCoordinator",
                 "MarketScannerV2", "HTE31MarketScanner", "HTE31TradeManager",
                 "HistoricalArchive"
               ]
+            } and
+            .migrations[-1] == {
+              tag: "v8-isolated-member-accounts",
+              new_sqlite_classes: ["MemberDirectory", "MemberExecutor"]
             }
           ' wrangler.jsonc >/dev/null
           ! grep -Eq 'DROP[[:space:]]+TABLE([[:space:]]+IF[[:space:]]+EXISTS)?[[:space:]]+`?live_exchange_credentials`?' \
@@ -1180,17 +1189,15 @@ jobs:
           before="$(jq -r '.runtime.liveMode.requestedEnabled' "$RUNNER_TEMP/owner-intent-before.json")"
           after="$(jq -r '.runtime.liveMode.requestedEnabled' "$RUNNER_TEMP/main-health.json")"
           [[ "$before" == "$after" ]]
-          curl -fsS --retry 2 --max-time 20 "$WORKER_BASE_URL/api/forward/export" > "$RUNNER_TEMP/forward-export.json"
-          jq -e '.forward.liveEligible == false and .forward.storage.error == null and .forward.storage.persistedAt > 0' "$RUNNER_TEMP/forward-export.json" >/dev/null
-          curl -fsS --retry 2 --max-time 20 "$WORKER_BASE_URL/api/forward/archive" > "$RUNNER_TEMP/forward-archive.json"
-          jq -e '.immutable == true and (.items | length) > 0' "$RUNNER_TEMP/forward-archive.json" >/dev/null
-          echo "Forward PAPER is persisted; exact main build and unchanged owner LIVE intent verified."
-          curl -fsS --max-time 15 "$WORKER_BASE_URL/api/history" \
-            > "$RUNNER_TEMP/main-history.json"
-          jq -e '.items | type == "array"' "$RUNNER_TEMP/main-history.json" >/dev/null
-          curl -fsS --max-time 15 "$WORKER_BASE_URL/api/account-logs" \
-            > "$RUNNER_TEMP/main-account-logs.json"
-          jq -e '.items | type == "array"' "$RUNNER_TEMP/main-account-logs.json" >/dev/null
+          jq -e '.members.version == "isolated-member-keys-v1" and .members.configured == true and .members.ownerOnlyIssuer == true' "$RUNNER_TEMP/main-health.json" >/dev/null
+          # Program data is now invitation-only. Preserve the SAME health,
+          # account continuity and owner-switch checks above; require guests
+          # to be denied instead of accessing the former public program API.
+          for path in /api/runtime /api/forward/export /api/forward/archive /api/history /api/account-logs; do
+            code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/guest-denied.json" -w '%{http_code}' "$WORKER_BASE_URL$path")"
+            [[ "$code" == 401 ]]
+          done
+          echo "Primary remains persisted; invitation-only program reads reject anonymous requests."
           curl -fsS --max-time 15 "$WORKER_BASE_URL/api/auth/session" \
             > "$RUNNER_TEMP/main-auth-session.json"
           jq -e '.configured == true and .authenticated == false and .username == "owner"' \
@@ -1198,11 +1205,9 @@ jobs:
           credential_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/main-credential-unauthorized.json" -w '%{http_code}' \
             "$WORKER_BASE_URL/api/live/credentials" || true)"
           [[ "$credential_code" == "401" ]]
-          jq -e '.error == "请先登录"' "$RUNNER_TEMP/main-credential-unauthorized.json" >/dev/null
-          curl -fsS --max-time 15 "$WORKER_BASE_URL/api/runtime" \
-            > "$RUNNER_TEMP/main-public-runtime.json"
-          jq -e '(.live == null) and (.liveMode.requestedEnabled | type == "boolean") and (.liveMode.operational | type == "boolean")' \
-            "$RUNNER_TEMP/main-public-runtime.json" >/dev/null
+          jq -e '(.error | type) == "string"' "$RUNNER_TEMP/main-credential-unauthorized.json" >/dev/null
+          admin_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/member-admin-denied.json" -w '%{http_code}' "$WORKER_BASE_URL/api/members/admin")"
+          [[ "$admin_code" == 403 ]]
           jq -c '{version, mode, runtime: {state: .runtime.state, stale: .runtime.stale,
             liveMode: .runtime.liveMode, currentContext: .runtime.strategyArena.currentContext,
             routeCheckCount: .runtime.strategyArena.routeCheckCount,
@@ -1349,12 +1354,11 @@ jobs:
             "$WORKER_BASE_URL/" || true)"
           [[ "$page_code" == "200" ]]
           grep -Fq '哨兵 · 关系引擎' "$RUNNER_TEMP/monitor-page.html"
-          curl -fsS --max-time 15 "$WORKER_BASE_URL/api/history" \
-            > "$RUNNER_TEMP/monitor-history.json"
-          jq -e '.items | type == "array"' "$RUNNER_TEMP/monitor-history.json" >/dev/null
-          curl -fsS --max-time 15 "$WORKER_BASE_URL/api/account-logs" \
-            > "$RUNNER_TEMP/monitor-account-logs.json"
-          jq -e '.items | type == "array"' "$RUNNER_TEMP/monitor-account-logs.json" >/dev/null
+          jq -e '.members.version == "isolated-member-keys-v1" and .members.configured == true' "$RUNNER_TEMP/monitor-health-2.json" >/dev/null
+          for path in /api/runtime /api/forward/export /api/forward/archive /api/history /api/account-logs; do
+            code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/monitor-guest-denied.json" -w '%{http_code}' "$WORKER_BASE_URL$path")"
+            [[ "$code" == 401 ]]
+          done
           credential_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/monitor-credential-unauthorized.json" -w '%{http_code}' \
             "$WORKER_BASE_URL/api/live/credentials" || true)"
           [[ "$credential_code" == "401" ]]

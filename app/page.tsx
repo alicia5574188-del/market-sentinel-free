@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import ForwardDashboard from "./forward-dashboard.tsx";
 import LiveConsole from "./live-console.tsx";
+import { LoginGate, MemberAccess } from "./member-access.tsx";
 import { runtimeBackendOperational } from "../lib/runtime-health.ts";
 import { operatorRequest, type AuthSession, type LiveRuntime, type OperatorRuntime } from "../lib/operator-ui.ts";
 
@@ -20,7 +21,7 @@ export default function Home() {
   const sessionChanged=useCallback((session:AuthSession) => {
     epoch.current++; setAuth(session);
     // Remove private snapshots immediately and invalidate any in-flight response.
-    setRuntime(current=>current?{...current,live:undefined}:null);setRefresh(v=>v+1);
+    setRuntime(null);setRefresh(v=>v+1);
   },[]);
   const liveChanged=useCallback((live:LiveRuntime) => {
     epoch.current++;
@@ -34,6 +35,7 @@ export default function Home() {
     return()=>{active=false;};
   },[sessionChanged]);
   useEffect(() => {
+    if(!auth?.authenticated)return;
     let active=true,inFlight=false,controller:AbortController|null=null;
     let timer:ReturnType<typeof setTimeout>|null=null;
     const read=async()=>{
@@ -42,6 +44,7 @@ export default function Home() {
       const timeout=setTimeout(()=>controller?.abort(),RUNTIME_REQUEST_TIMEOUT_MS);
       try{
         const response=await fetch("/api/runtime",{cache:"no-store",credentials:"same-origin",signal:controller.signal});
+        if(response.status===401){if(active&&requestEpoch===epoch.current)sessionChanged({...auth,authenticated:false});return false;}
         if(!response.ok)throw new Error(`HTTP ${response.status}`);
         const value=await response.json() as OperatorRuntime;
         if(active&&requestEpoch===epoch.current){setRuntime(value);setError(null);
@@ -57,8 +60,10 @@ export default function Home() {
     return()=>{active=false;controller?.abort();if(timer)clearTimeout(timer);document.removeEventListener("visibilitychange",resume);
       window.removeEventListener("focus",resume);window.removeEventListener("online",resume);window.removeEventListener("pageshow",resume);};
   },[refresh,auth,sessionChanged]);
+  if(!auth?.authenticated)return <LoginGate auth={auth} onSession={sessionChanged}/>;
   return <ForwardDashboard data={runtime?.forward?.startedAt?runtime.forward:null}
     healthy={runtimeBackendOperational(runtime)} feedAt={runtime?.lastSuccessAt??null}
     error={runtime?.forward?.storage?.error??error} liveEnabled={runtime?.liveMode?.requestedEnabled??false}
-    livePanel={<LiveConsole auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}/>;
+    livePanel={<LiveConsole auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}
+    accountPanel={<MemberAccess auth={auth}/>} memberName={auth.role==="member"?auth.username:undefined}/>;
 }

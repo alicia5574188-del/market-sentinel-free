@@ -1,0 +1,2 @@
+/* Access management is outside trading panels; keep the native dark typography. */
+.fr-access{max-width:720px!important;margin:0 auto;padding-top:32px!important}.fr-access h1{font-size:28px}.fr-access .fr-section{margin-top:24px}.fr-access .fr-note{margin:18px 0!important}.fr-access .fr-form{margin-top:24px}.fr-member-list{display:grid;gap:16px;margin-top:28px}.fr-member-list .fr-note{overflow-wrap:anywhere}.fr-member-list .fr-three{grid-template-columns:1fr 1fr}.fr-member-list .fr-three>div:last-child{grid-column:1/-1}.fr-member-list input{min-width:0}

@@ -1,3 +1,9 @@
+# Isolated member login keys — 2026-09-18
+
+The primary owner authorizes personal member login keys only and explicitly prioritizes the stable running system. Read `MEMBER_ACCESS_CONTRACT.md`. Do not change PAPER decisions, signal frequency, sizing, primary LIVE execution logic, owner intent/activation or history. Only the primary owner issues distinct permanent keys; new keys never revoke existing memberships, including unused keys. MemberDirectory and MemberExecutor are additive isolated namespaces; zero members must add no alarm or primary trading work. Members consume the same source and control only their own encrypted API/LIVE, default OFF. Master sees only program-attributable turnover summaries. Initial admission is20issued accounts/2active member execution seats, primary excluded, explicitly disclosed and not silently expanded. Guests now require login for program API data; health remains operational metadata. Every release runs member isolation, original parity and frozen-primary-body tests. No real-user key, member, login, Gate order or switch is created for production verification.
+
+Local candidate:34member tests,438existing direct tests,17architecture/migration tests, compiled local-workerd synthetic login smoke and48owner/member component checks passed. Exact-head remote tests and production receipt still required; this entry is NOT a deployment claim.
+
 # Candidate: copy coverage and confirmed turnover — 2026-09-18
 
 Implementation ready for exact-head verification:438direct/82parity-and-turnover tests plus17architecture tests locally pass. Unicode signing, lossless old-format-compatible state storage, UTC counters, owner-only actual turnover implemented. Account and learning untouched. Do not claim deployed or profitable from this candidate status; final CI/main/public receipt remains.

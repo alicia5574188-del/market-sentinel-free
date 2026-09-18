@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
@@ -44,11 +45,13 @@ test("runtime uses bounded futures REST snapshots, no continuous WebSocket", asy
   assert.match(worker, /now - this\.runtime\.lastStopCheckpointAt < 60_000/);
 });
 
-test("only one new DO is bound and all legacy DO storage is explicitly deleted", async () => {
+test("the original authority and retirement remain unchanged; member namespaces are additive", async () => {
   const config = JSON.parse(await read("wrangler.jsonc"));
-  assert.deepEqual(config.durable_objects.bindings, [{ name: "MARKET_STREAM", class_name: "MarketStream" }]);
-  const create = config.migrations.at(-2);
-  const retire = config.migrations.at(-1);
+  assert.deepEqual(config.durable_objects.bindings, [{ name: "MARKET_STREAM", class_name: "MarketStream" },
+    {name:"MEMBERS",class_name:"MemberDirectory"},{name:"MEMBER_EXECUTION",class_name:"MemberExecutor"}]);
+  const create = config.migrations[5];
+  const retire = config.migrations[6];
+  assert.deepEqual(config.migrations[7],{tag:"v8-isolated-member-accounts",new_sqlite_classes:["MemberDirectory","MemberExecutor"]});
   assert.deepEqual(create.new_sqlite_classes, ["MarketStream"]);
   assert.equal(create.deleted_classes, undefined);
   for (const name of ["PositionMonitor", "MarketScanner", "LiveTradingCoordinator", "MarketScannerV2", "HTE31MarketScanner", "HTE31TradeManager", "HistoricalArchive"]) assert.ok(retire.deleted_classes.includes(name));
@@ -73,7 +76,7 @@ test("native dark LIVE console retains owner authentication and isolates financi
   assert.match(page, /window\.addEventListener\("pageshow",\s*resume\)/);
   assert.match(page, /window\.addEventListener\("online",\s*resume\)/);
   assert.match(page, /requestEpoch===epoch\.current/);
-  assert.match(page, /live:undefined/);
+  assert.match(page, /setRuntime\(null\)/);
   assert.match(dashboard, /scroll\.current\[tab\]=window\.scrollY/);
   assert.match(dashboard, /\["live","◈","实盘"\]/);
   assert.match(page, /livePanel=\{<LiveConsole/);
@@ -330,4 +333,22 @@ test("ordinary production deploy accepts evolved paper equity", async () => {
   assert.match(ordinaryDeploy, /\(\.runtime\.strategyArena\.portfolioEquity \| type\) == "number"/);
   assert.match(ordinaryDeploy, /\.runtime\.strategyArena\.portfolioEquity > 0/);
   assert.doesNotMatch(ordinaryDeploy, /portfolioEquity == 1000/);
+});
+
+
+test("release guard accepts only exact additive member namespaces, never primary deletion or rewrites", async () => {
+  const workflow = await read(".github/workflows/sentinel-v2-ci.yml");
+  const section = workflow.split("Require unchanged primary migrations and additive isolated member namespaces")[1].split("      - name:")[0];
+  const expression = section.match(/jq -e --arg database "\$D1_DATABASE_ID" '([\s\S]*?)' wrangler\.jsonc/)[1];
+  const config = JSON.parse(await read("wrangler.jsonc"));
+  const accepts = (value) => spawnSync("jq", ["-e", "--arg", "database", config.d1_databases[0].database_id, expression], { input: JSON.stringify(value), encoding: "utf8" }).status === 0;
+  assert.equal(accepts(config), true);
+  const mutations = [
+    (c) => c.durable_objects.bindings.shift(),
+    (c) => c.migrations[7].deleted_classes = ["MarketStream"],
+    (c) => c.migrations[5].new_sqlite_classes = ["WrongPrimary"],
+    (c) => c.migrations.push({ tag: "unreviewed", deleted_classes: ["MarketStream"] }),
+    (c) => c.d1_databases[0].database_id = "another-account",
+  ];
+  for (const mutate of mutations) { const c = structuredClone(config); mutate(c); assert.equal(accepts(c), false); }
 });
