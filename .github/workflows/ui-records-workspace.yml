@@ -1,0 +1,30 @@
+name: UI Records Workspace
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/ui-records-workspace.yml']
+permissions:
+  contents: read
+jobs:
+  capture:
+    if: github.head_ref == 'fix/clean-ui-records-pnl'
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Export exact source and public health, no logins or private calls
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ui-records-workspace
+          git archive HEAD -o /tmp/ui-records-workspace/source.tar
+          curl -fsS --retry 2 --max-time 20 'https://market-sentinel-free.alicia5574188.workers.dev/__health' > /tmp/ui-records-workspace/health-before.json
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > /tmp/ui-records-workspace/time.txt
+          git rev-parse HEAD > /tmp/ui-records-workspace/commit.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-records-workspace-${{ github.run_id }}
+          path: /tmp/ui-records-workspace/
+          retention-days: 7
