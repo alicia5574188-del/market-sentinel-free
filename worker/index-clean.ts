@@ -485,15 +485,30 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   protected liveJournal = new Map<string, unknown>();
   protected liveHistory: LivePosition[] = [];
   private historyReader=new LiveHistoryReader<LivePosition>();
+  protected liveSettlementCurrent() {
+    return [...this.liveHistory,...Object.values(this.runtime.live.positions).filter((p):p is LivePosition=>p?.status==="CLOSED")];
+  }
+  protected liveSettlementNeedsRefresh(now=Date.now()) {
+    const current=this.liveSettlementCurrent();
+    // Background reconciliation is bounded to fresh closes. Older exceptional
+    // records remain available to the explicit history reader without keeping
+    // an otherwise-idle member executor awake forever.
+    return this.runtime.live.credentialConfigured
+      &&current.some(p=>p.status==="CLOSED"&&p.exitAt!=null&&now-p.exitAt<=30*60_000)
+      &&this.historyReader.needsRefresh(current);
+  }
   protected async privateLiveHistory() {
     if(!this.liveClient&&this.runtime.live.credentialConfigured)await this.gateLive().catch(()=>undefined);
-    const client=this.liveClient;
-    const current=[...this.liveHistory,...Object.values(this.runtime.live.positions).filter((p):p is LivePosition=>p?.status==="CLOSED")];
+    const client=this.liveClient,current=this.liveSettlementCurrent();
     this.historyReader.launch({storage:this.ctx.storage,client,current,now:Date.now(),
       valid:()=>this.liveClient===client,
       reserve:()=>this.runtime.nonAlarmWrites+256<NON_ALARM_WRITE_CAP,
       committed:n=>{this.runtime.nonAlarmWrites+=n;},waitUntil:p=>this.ctx.waitUntil(p)});
     return this.historyReader.view(current);
+  }
+  protected launchLiveSettlementBackground() {
+    if(!this.liveSettlementNeedsRefresh())return;
+    this.ctx.waitUntil(this.privateLiveHistory().then(()=>undefined).catch(()=>undefined));
   }
   protected liveBindingError: string | null = null;
   protected mirrorClosures = new Map<string,ForwardState["history"][number]>();
@@ -2721,6 +2736,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       let subrequests = 0;
       // PAPER is the strategy authority. The owner-controlled LIVE adapter
       // mirrors only these persisted decisions; the generator has no keys.
+      this.launchLiveSettlementBackground();
       await this.advanceForwardNow(Date.now());
       if (universeDue) {
         subrequests += 2;

@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { advanceForward, initialForward, normalizeForward, BAR_MS, PAPER_COST,
   type ForwardState, type Trade } from "../lib/forward-relations.ts";
 import { TIMELY_PROTECTION_POLICY, newExitControl, protectedExitDecision } from "../lib/forward-protection.ts";
+import { assessMarketTurn, MARKET_TURN_PROTECTION_VERSION } from "../lib/forward-turn-protection.ts";
 import { prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
 import { forwardMirrorSources, buildProportionalMirror } from "../lib/live-parity.ts";
 
@@ -162,4 +163,50 @@ test("rule evidence/discovery, owner and member execution bytes remain at the pr
   assert.doesNotMatch(core,/GateLiveClient|setLiveMode\(|fetch\(|client\.close/);
   assert.match(core,/if\(dataDue\)openTrades/);assert.match(core,/now-s\.lastFitAt>=15\*60_000/);
   assert.equal(normalizeForward(account(),T).initialEquity,1000);
+});
+
+function broadTurnPaths(now:number,move=-.008){
+  const completedAt=now-60000,start=(completedAt-BAR_MS)/1000;
+  return Object.fromEntries(Array.from({length:12},(_,i)=>{
+    const rows=Array.from({length:8},(_,j)=>{
+      const open=100+j*.02,small=j%2?.0005:-.0004,close=open*(1+(j===7?move:small));
+      return {time:start-(7-j)*300,open,close,high:Math.max(open,close)*1.001,low:Math.min(open,close)*.999,volume:1000+j};
+    });
+    return [`M${i}_USDT`,rows];
+  }));
+}
+test("market-turn detector is fully dormant in ordinary synchronized noise",()=>{
+  const positions=Array.from({length:4},(_,i)=>({status:"OPEN",side:"LONG" as const,plannedRisk:10}));
+  assert.equal(assessMarketTurn({paths:broadTurnPaths(T+BAR_MS,-.001),positions,equity:1000,now:T+BAR_MS}),null);
+});
+test("market-turn detector requires material directional concentration",()=>{
+  const positions=[
+    {status:"OPEN",side:"LONG" as const,plannedRisk:20},{status:"OPEN",side:"LONG" as const,plannedRisk:20},
+    {status:"OPEN",side:"SHORT" as const,plannedRisk:20},{status:"OPEN",side:"SHORT" as const,plannedRisk:20},
+  ];
+  assert.equal(assessMarketTurn({paths:broadTurnPaths(T+BAR_MS),positions,equity:1000,now:T+BAR_MS}),null);
+});
+test("severe broad completed-5m reversal cuts only vulnerable concentrated exposure",()=>{
+  const now=T+BAR_MS,s=account();
+  s.lastCycleAt=T;s.lastFitAt=now;
+  s.positions=Array.from({length:4},(_,i)=>({...position(),id:`turn-${i}`,symbol:`M${i}_USDT`,plannedRisk:10,lastQuoteAt:now-1000}));
+  s.balance=1000-s.positions.reduce((n,t)=>n+t.entryFee,0);
+  const quotes=Object.fromEntries(s.positions.map(t=>[t.symbol,{bestBid:99,bestAsk:99.01,observedAt:now,fresh:true}]));
+  const out=advanceForward({state:s,now,paths:broadTurnPaths(now),quotes,contracts:{}}).state;
+  assert.equal(out.turnProtection?.version,MARKET_TURN_PROTECTION_VERSION);
+  assert.equal(out.turnProtection?.threatenedSide,"LONG");
+  assert.ok(out.positions.length<4);assert.ok(out.positions.length>=1);
+  assert.ok(out.history.some(t=>t.exitAudit?.trigger==="MARKET_TURN"));
+  assert.ok(out.positions.reduce((n,t)=>n+t.plannedRisk,0)<=out.turnProtection!.directionalRiskRate*1000);
+});
+test("market-turn guard never auto-reverses and preserves armed winners",()=>{
+  const now=T+BAR_MS,s=account();
+  s.lastCycleAt=T;s.lastFitAt=now;
+  s.positions=Array.from({length:4},(_,i)=>({...position(),id:`armed-${i}`,symbol:`M${i}_USDT`,plannedRisk:10,
+    favorable:.03,lastQuoteAt:now-1000}));
+  s.balance=1000-s.positions.reduce((n,t)=>n+t.entryFee,0);
+  const quotes=Object.fromEntries(s.positions.map(t=>[t.symbol,{bestBid:102.6,bestAsk:102.61,observedAt:now,fresh:true}]));
+  const out=advanceForward({state:s,now,paths:broadTurnPaths(now),quotes,contracts:{}}).state;
+  assert.equal(out.turnProtection?.threatenedSide,"LONG");
+  assert.equal(out.positions.length,4);assert.ok(out.positions.every(t=>t.side==="LONG"));
 });
