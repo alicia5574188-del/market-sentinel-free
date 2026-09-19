@@ -21,7 +21,7 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
   const paperRecords=recordWindows(data?.history??[],t=>t.closedAt??0),paperArchive=archivePage(paperRecords.archive,paperPage);
   const scroll=useRef<Record<Tab,number>>({overview:0,relations:0,orders:0,live:0,journal:0,settings:0});
   useEffect(()=>{const id=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(id);},[]);
-  useLayoutEffect(()=>{window.scrollTo({top:scroll.current[tab],behavior:"auto"});},[tab]);
+  useLayoutEffect(()=>{window.scrollTo({top:tab==="live"?0:scroll.current[tab],behavior:"auto"});},[tab]);
   const select=(next:Tab)=>{scroll.current[tab]=window.scrollY;setTab(next);};
   const active=data?.rules.filter(r=>r.status==="EXPERIMENTAL")??[],dormant=data?.rules.filter(r=>r.status==="DORMANT")??[];
   const elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
