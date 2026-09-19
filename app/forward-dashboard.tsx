@@ -64,9 +64,10 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
         {paperTab==="archive"&&<ArchivePagination page={paperArchive.page} pages={paperArchive.pages} onPage={setPaperPage}/>}
       </section>}</>}
 
-    {tab==="journal"&&<><PageTitle eyebrow="AUDITABLE ADAPTATION" title="运行记录" text="查看规则变化、成交与运行异常。"/>
-      <section className="fr-section"><div className="fr-section-head"><h2>演变记录</h2><span>最近 {data?.events.length??"—"} 条</span></div><Journal data={data} limit={80}/></section>
-      <section className="fr-section"><h2>数据导出</h2><p className="fr-note">导出当前研究数据与账户快照。</p><a className="fr-button" href="/api/forward/export" download="forward-research-snapshot.json">导出当前研究快照 ↗</a></section></>}
+    {tab==="journal"&&<>
+      <section className="fr-section"><h2>数据导出</h2><p className="fr-note">导出当前研究数据与账户快照。</p><a className="fr-button" href="/api/forward/export" download="forward-research-snapshot.json">导出当前研究快照 ↗</a></section>
+      <PageTitle eyebrow="AUDITABLE ADAPTATION" title="运行记录" text="查看规则变化、成交与运行异常。"/>
+      <section className="fr-section"><div className="fr-section-head"><h2>演变记录</h2><span>最近 {data?.events.length??"—"} 条</span></div><Journal data={data} limit={80}/></section></>}
 
     {tab==="settings"&&<>{accountPanel}<PageTitle eyebrow="OPERATIONAL BOUNDARIES" title="系统设置" text="管理访问权限、实盘连接和运行设置。"/>
       <section className="fr-section"><Setting title="当前主系统" value={data?.policyVersion??data?.version??"读取中"} text="行情驱动的交易规则与执行。"/><Setting title="月度研究目标" value="本金 × 2" text="目标不代表收益承诺；净值包含浮动盈亏和模拟成本。"/><Setting title="规则自动适应" value="在线运行" text="每5分钟整理行情，按后续反应更新规则。"/><Setting title="执行权限" value="所有者实盘复制" text="模拟提供交易决策，实盘按权益比例复制；开关由账户本人控制。"/><Setting title="初始实验风险预算" value="权益随动" text={data?.boundaries.risk??"读取中"}/><Setting title="成本口径" value="显式假设" text={data?.cost.assumption??"读取中"}/><Setting title="连续性" value="持久化" text="状态保存后才提交新订单；重启恢复原账户。"/></section>
