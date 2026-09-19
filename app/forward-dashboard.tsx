@@ -17,12 +17,29 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
   const [equityCache]=useState(()=>new EquityHistoryCache());
   useEffect(()=>()=>equityCache.cancel(),[equityCache]);
   const [tab,setTab]=useState<Tab>("overview"),[now,setNow]=useState(0),[showDormant,setShowDormant]=useState(false);
+  const [exporting,setExporting]=useState(false),[exportStatus,setExportStatus]=useState<string|null>(null);
   const [paperTab,setPaperTab]=useState<"positions"|"history"|"archive">("positions"),[paperPage,setPaperPage]=useState(0);
   const paperRecords=recordWindows(data?.history??[],t=>t.closedAt??0),paperArchive=archivePage(paperRecords.archive,paperPage);
   const scroll=useRef<Record<Tab,number>>({overview:0,relations:0,orders:0,live:0,journal:0,settings:0});
   useEffect(()=>{const id=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(id);},[]);
   useLayoutEffect(()=>{window.scrollTo({top:tab==="live"?0:scroll.current[tab],behavior:"auto"});},[tab]);
   const select=(next:Tab)=>{scroll.current[tab]=window.scrollY;setTab(next);};
+  const exportSnapshot=async()=>{
+    if(exporting)return;
+    setExporting(true);setExportStatus(null);
+    try{
+      const response=await fetch("/api/forward/export",{cache:"no-store",credentials:"same-origin"});
+      if(!response.ok)throw new Error(`HTTP ${response.status}`);
+      const blob=await response.blob(),url=URL.createObjectURL(blob);
+      const anchor=document.createElement("a");
+      anchor.href=url;anchor.download=`forward-research-snapshot-${new Date().toISOString().slice(0,10)}.json`;
+      document.body.appendChild(anchor);anchor.click();anchor.remove();
+      window.setTimeout(()=>URL.revokeObjectURL(url),1000);
+      setExportStatus("已开始下载，仍停留在当前页面。");
+    }catch{
+      setExportStatus("导出失败，请重试。");
+    }finally{setExporting(false);}
+  };
   const active=data?.rules.filter(r=>r.status==="EXPERIMENTAL")??[],dormant=data?.rules.filter(r=>r.status==="DORMANT")??[];
   const elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
   const stage=!data||!healthy?0:!data.measured?1:!active.length?2:data.positions.length?4:3;
@@ -64,9 +81,10 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
         {paperTab==="archive"&&<ArchivePagination page={paperArchive.page} pages={paperArchive.pages} onPage={setPaperPage}/>}
       </section>}</>}
 
-    {tab==="journal"&&<><PageTitle eyebrow="AUDITABLE ADAPTATION" title="运行记录" text="查看规则变化、成交与运行异常。"/>
-      <section className="fr-section"><div className="fr-section-head"><h2>演变记录</h2><span>最近 {data?.events.length??"—"} 条</span></div><Journal data={data} limit={80}/></section>
-      <section className="fr-section"><h2>数据导出</h2><p className="fr-note">导出当前研究数据与账户快照。</p><a className="fr-button" href="/api/forward/export" download="forward-research-snapshot.json">导出当前研究快照 ↗</a></section></>}
+    {tab==="journal"&&<>
+      <section className="fr-section"><h2>数据导出</h2><p className="fr-note">导出当前研究数据与账户快照，不会离开当前页面。</p><button className="fr-button" type="button" onClick={exportSnapshot} disabled={exporting}>{exporting?"正在导出…":"导出当前研究快照 ↗"}</button>{exportStatus&&<p className="fr-note" role="status">{exportStatus}</p>}</section>
+      <PageTitle eyebrow="AUDITABLE ADAPTATION" title="运行记录" text="查看规则变化、成交与运行异常。"/>
+      <section className="fr-section"><div className="fr-section-head"><h2>演变记录</h2><span>最近 {data?.events.length??"—"} 条</span></div><Journal data={data} limit={80}/></section></>}
 
     {tab==="settings"&&<>{accountPanel}<PageTitle eyebrow="OPERATIONAL BOUNDARIES" title="系统设置" text="管理访问权限、实盘连接和运行设置。"/>
       <section className="fr-section"><Setting title="当前主系统" value={data?.policyVersion??data?.version??"读取中"} text="行情驱动的交易规则与执行。"/><Setting title="月度研究目标" value="本金 × 2" text="目标不代表收益承诺；净值包含浮动盈亏和模拟成本。"/><Setting title="规则自动适应" value="在线运行" text="每5分钟整理行情，按后续反应更新规则。"/><Setting title="执行权限" value="所有者实盘复制" text="模拟提供交易决策，实盘按权益比例复制；开关由账户本人控制。"/><Setting title="初始实验风险预算" value="权益随动" text={data?.boundaries.risk??"读取中"}/><Setting title="成本口径" value="显式假设" text={data?.cost.assumption??"读取中"}/><Setting title="连续性" value="持久化" text="状态保存后才提交新订单；重启恢复原账户。"/></section>
