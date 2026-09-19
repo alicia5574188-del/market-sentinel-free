@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { FEATURES, type Rule, type Trade, type forwardSummary } from "../lib/forward-relations.ts";
 import {recordWindows,archivePage} from "../lib/record-view.ts";
 import {ArchivePagination} from "./record-controls.tsx";
@@ -17,11 +17,16 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
   const [equityCache]=useState(()=>new EquityHistoryCache());
   useEffect(()=>()=>equityCache.cancel(),[equityCache]);
   const [tab,setTab]=useState<Tab>("overview"),[now,setNow]=useState(0),[showDormant,setShowDormant]=useState(false);
+  const [fontScale,setFontScale]=useState(92);
   const [exporting,setExporting]=useState(false),[exportStatus,setExportStatus]=useState<string|null>(null);
   const [paperTab,setPaperTab]=useState<"account"|"positions"|"history"|"archive">("account"),[paperPage,setPaperPage]=useState(0);
   const paperRecords=recordWindows(data?.history??[],t=>t.closedAt??0),paperArchive=archivePage(paperRecords.archive,paperPage);
   const scroll=useRef<Record<Tab,number>>({overview:0,relations:0,orders:0,live:0,journal:0,settings:0});
   useEffect(()=>{const id=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(id);},[]);
+  useEffect(()=>{let frame=0;try{const saved=Number(window.localStorage.getItem("sentinel-ui-font-scale-v1"));if(saved>=80&&saved<=110)frame=window.requestAnimationFrame(()=>setFontScale(saved));}catch{}return()=>{if(frame)window.cancelAnimationFrame(frame);};},[]);
+  const changeFontScale=(value:number)=>{const next=Math.max(80,Math.min(110,Math.round(value)));setFontScale(next);try{window.localStorage.setItem("sentinel-ui-font-scale-v1",String(next));}catch{}};
+  const fontVars:Record<string,string>={};for(let px=10;px<=50;px++)fontVars[`--fr-fs${px}`]=`${(px*fontScale/100).toFixed(2)}px`;
+  const fontStyle=fontVars as CSSProperties;
   useLayoutEffect(()=>{window.scrollTo({top:tab==="live"?0:scroll.current[tab],behavior:"auto"});},[tab]);
   const select=(next:Tab)=>{scroll.current[tab]=window.scrollY;setTab(next);};
   const exportSnapshot=async()=>{
@@ -43,11 +48,8 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
   const active=data?.rules.filter(r=>r.status==="EXPERIMENTAL")??[],dormant=data?.rules.filter(r=>r.status==="DORMANT")??[];
   const paperMargin=data?.positions.reduce((sum,t)=>sum+t.margin,0)??null;
   const elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
-  const stage=!data||!healthy?0:!data.measured?1:!active.length?2:data.positions.length?4:3;
-  const stages=["接入行情","观察反应","生成规则","匹配机会","执行复盘"];
-  const title=!data?"正在连接前向实验":!healthy?"行情连接恢复中":data.positions.length?"交易正在接受市场检验":active.length?"新的交易规则已生成":"先观察变化，再形成交易办法";
   const nav:[Tab,string,string][]=[["overview","◉","总览"],["relations","⌘","规则"],["orders","⇄","模拟"],["live","◈","实盘"],["journal","≋","演变"],["settings","⊙","系统"]];
-  return <main className="fr-app" data-ui-version="dark-live-v1" data-record-view="compact-records-pnl-v1">
+  return <main className="fr-app" style={fontStyle} data-ui-version="dark-live-v1" data-record-view="compact-records-pnl-v1">
     <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · 关系引擎</b><small>FORWARD LAB / 01</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
     <div className="fr-subhead"><span>Gate USDT 永续 · 关系引擎</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
     {memberName&&<p className="fr-note">{memberName} · 共用同一模拟策略，实盘账户独立，开关只由你控制。</p>}
@@ -117,6 +119,11 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
     {tab==="settings"&&<><PageTitle eyebrow="SYSTEM & ACCESS" title="系统" text="日常交易观察留在模拟和实盘页；这里集中放权限、API、复制诊断和运行边界。"/>
       {accountPanel}
       {liveSystemPanel}
+      <section className="fr-section fr-font-control"><div className="fr-section-head"><div><small>界面显示</small><h2>界面字号</h2></div><b>{fontScale}%</b></div>
+        <p className="fr-note">只调整这个浏览器里的页面字号，不影响交易、账户或其他设备。手机上如果觉得展开卡太挤，可以直接缩小。</p>
+        <div className="fr-font-slider-row"><span>80%</span><input aria-label="界面字号" type="range" min="80" max="110" step="1" value={fontScale} onChange={e=>changeFontScale(Number(e.target.value))}/><span>110%</span></div>
+        <div className="fr-action-row"><button className="fr-button secondary" type="button" onClick={()=>changeFontScale(92)}>推荐 92%</button><button className="fr-text-button" type="button" onClick={()=>changeFontScale(100)}>恢复 100%</button></div>
+      </section>
       <section className="fr-section"><div className="fr-section-head"><div><small>运行边界</small><h2>当前系统设置</h2></div></div>
         <Setting title="当前主系统" value={data?.policyVersion??data?.version??"读取中"} text="行情驱动的交易规则与执行。"/><Setting title="规则自动适应" value="在线运行" text="每5分钟整理行情，按后续反应更新规则。"/><Setting title="执行权限" value="模拟决策 / 实盘复制" text="模拟提供交易决定；实盘按固定比例复制并使用Gate真实成交。"/><Setting title="风险预算" value="权益随动" text={data?.boundaries.risk??"读取中"}/><Setting title="成本口径" value="显式假设" text={data?.cost.assumption??"读取中"}/><Setting title="连续性" value="持久化" text="状态保存后才提交新订单；重启恢复原账户。"/>
       </section></>}

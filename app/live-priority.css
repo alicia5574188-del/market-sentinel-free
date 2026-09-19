@@ -1,9 +1,15 @@
 .fr-live-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:4px 0 16px}
-.fr-live-heading h1{font-size:24px;line-height:1.4;margin:0}.fr-live-heading>span{font-size:14px;color:var(--fr-muted);text-align:right}
-.fr-live-summary{margin-bottom:8px!important}.fr-live-summary>article{padding:15px!important}.fr-live-summary strong{font-size:28px!important;line-height:1.3;margin:4px 0}.fr-live-summary p{display:none}
-.fr-live-check-time{font-size:14px;color:var(--fr-muted);line-height:1.7;margin:8px 0 15px!important}.fr-live-check-time a{color:#b4d9ff;text-underline-offset:3px}
+.fr-live-heading h1{font-size:24px;font-size:var(--fr-fs24,24px);line-height:1.4;margin:0}.fr-live-heading>span{font-size:14px;font-size:var(--fr-fs14,14px);color:var(--fr-muted);text-align:right}
+.fr-live-summary{margin-bottom:8px!important}.fr-live-summary>article{padding:15px!important}.fr-live-summary strong{font-size:28px;font-size:var(--fr-fs28,28px)!important;line-height:1.3;margin:4px 0}.fr-live-summary p{display:none}
+.fr-live-check-time{font-size:14px;font-size:var(--fr-fs14,14px);color:var(--fr-muted);line-height:1.7;margin:8px 0 15px!important}.fr-live-check-time a{color:#b4d9ff;text-underline-offset:3px}
 .fr-live .fr-live-record-tabs{display:flex;overflow-x:auto;gap:4px;padding:5px;margin-bottom:16px;scrollbar-width:thin}.fr-live .fr-live-record-tabs button{flex:1 0 52px;min-height:44px;padding:8px 6px;white-space:nowrap}
 .fr-live-holdings .fr-section-head{margin-bottom:12px}.fr-position-list{display:grid}.fr-position-row{border-top:1px solid var(--fr-line);padding:14px 0}.fr-position-row:first-child{border-top:0;padding-top:0}.fr-position-row:last-child{padding-bottom:0}
-.fr-position-row>summary{display:flex;justify-content:space-between;gap:12px;cursor:pointer;list-style:none;min-height:48px}.fr-position-row>summary::-webkit-details-marker{display:none}.fr-position-row>summary>span{display:grid;gap:6px;min-width:0}.fr-position-row>summary>span:last-child{text-align:right;flex-shrink:0}.fr-position-row b{font-size:17px;overflow-wrap:anywhere}.fr-position-row small{font-size:14px;color:var(--fr-muted);line-height:1.5}.fr-position-row[open]>summary{margin-bottom:14px}
-.fr-copy-details>summary{cursor:pointer;font-size:17px;font-weight:600;min-height:30px}.fr-copy-details[open]>summary{margin-bottom:18px}.fr-copy-details>.fr-section{padding:0;border:0;margin-bottom:0;background:transparent}
-@media(max-width:380px){.fr-live-heading h1{font-size:22px}.fr-live-summary>article{padding:12px!important}.fr-live-summary strong{font-size:20px!important}.fr-position-row>summary{gap:8px}.fr-position-row b{font-size:16px}}
+.fr-position-row>summary{display:flex;justify-content:space-between;gap:12px;cursor:pointer;list-style:none;min-height:48px}.fr-position-row>summary::-webkit-details-marker{display:none}.fr-position-row>summary>span{display:grid;gap:6px;min-width:0}.fr-position-row>summary>span:last-child{text-align:right;flex-shrink:0}.fr-position-row b{font-size:17px;font-size:var(--fr-fs17,17px);overflow-wrap:anywhere}.fr-position-row small{font-size:14px;font-size:var(--fr-fs14,14px);color:var(--fr-muted);line-height:1.5}.fr-position-row[open]>summary{margin-bottom:14px}
+.fr-copy-details>summary{cursor:pointer;font-size:17px;font-size:var(--fr-fs17,17px);font-weight:600;min-height:30px}.fr-copy-details[open]>summary{margin-bottom:18px}.fr-copy-details>.fr-section{padding:0;border:0;margin-bottom:0;background:transparent}
+@media(max-width:380px){.fr-live-heading h1{font-size:22px;font-size:var(--fr-fs22,22px)}.fr-live-summary>article{padding:12px!important}.fr-live-summary strong{font-size:20px;font-size:var(--fr-fs20,20px)!important}.fr-position-row>summary{gap:8px}.fr-position-row b{font-size:16px;font-size:var(--fr-fs16,16px)}}
+
+@media(max-width:520px){
+  .fr-position-row>summary{display:grid;grid-template-columns:1fr;gap:8px;min-width:0}
+  .fr-position-row>summary>span,.fr-position-row>summary>span:last-child{min-width:0;max-width:100%;text-align:left;flex-shrink:1}
+  .fr-position-row>summary>span:last-child b,.fr-position-row>summary>span:last-child small{white-space:normal;overflow-wrap:anywhere}
+}
