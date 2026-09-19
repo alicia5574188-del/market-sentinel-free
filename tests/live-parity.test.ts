@@ -26,7 +26,7 @@ function trade(id="ft-fixture-1",symbol="BTC_USDT",side:"LONG"|"SHORT"="LONG"):T
       estimatedNetRate:.002,priorResponse:.005,recentResponse:.004,standardError:.001,
       reason:"Synthetic functional source, never a trading result",mutation:"CREATE",grammar:"fixture",liveEligible:false}};
 }
-function request(t=trade()){return {source:t,sourceEquity:1000,equity:100,available:100,entryPrice:100,
+function request(t=trade()):Parameters<typeof buildProportionalMirror>[0]{return {source:t,sourceEquity:1000,equity:100,available:100,entryPrice:100,
   quantoMultiplier:.001,leverageMax:20,maintenanceRate:.005,openRisk:0,sameDirectionRisk:0,openMargin:0,
   openNotional:0,now:T,policy:"any-current-or-future-policy",sizeRules:{enableDecimal:false,orderSizeMin:"1",orderSizeMax:"10000000"}};}
 
