@@ -2136,13 +2136,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ...Object.values(this.runtime.live.entries).filter(e=>e&&["SUBMITTING","OPEN","ERROR"].includes(e.status))]
       .reduce((n,p)=>n+(p?.notional??0),0);
     const paperMark=forwardEquity(this.forwardState!,this.regimeQuotes(Date.now()),Date.now());
-    if(paperMark.stalePositions)throw new Error("模拟账户当前估值不完整，暂停新增复制但保留已有保护");
-    const activation=await this.ensureLiveSessionScale(paperMark.equity,equity,Date.now());
-    const mirrorRatio=activation?.scaleRatio??equity/paperMark.equity;
-    const expectedLiveEquity=paperMark.equity*mirrorRatio;
-    // Small execution/fee drift must not change later order membership. A large
-    // account divergence still fails closed instead of silently over-risking.
-    const liveEquityDrift=expectedLiveEquity>0?equity/expectedLiveEquity:0;
+    let mirrorRatio=this.runtime.live.activation?.scaleRatio??null;
     const staged: Array<{ symbol: string; plan: PaperPlan; intent: ReturnType<typeof buildLiveEntryIntent>;binding?:MirrorBinding;activation:LiveSession|null }> = [];
     for (const [symbol, skip] of Object.entries(this.runtime.live.entrySkips)) {
       const trade = desiredPortfolio[symbol] ?? null;
@@ -2183,6 +2177,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       let intent: ReturnType<typeof buildLiveEntryIntent>;
       let binding:MirrorBinding|undefined;
       try {
+        if(paperMark.stalePositions)throw new LiveEntrySizingError("ECONOMICS",symbol,"模拟账户当前估值不完整，不能确定复制比例");
+        if(!mirrorRatio){
+          const scaled=await this.ensureLiveSessionScale(paperMark.equity,equity,Date.now());
+          mirrorRatio=scaled?.scaleRatio??equity/paperMark.equity;
+        }
+        const expectedLiveEquity=paperMark.equity*mirrorRatio;
+        const liveEquityDrift=expectedLiveEquity>0?equity/expectedLiveEquity:0;
         if(liveEquityDrift<.85)throw new LiveEntrySizingError("ECONOMICS",symbol,
           `实盘权益已低于固定模拟比例预期的${(liveEquityDrift*100).toFixed(1)}%，暂停新增复制并保留已有保护`);
         const quote=this.runtime.evidence[symbol];
