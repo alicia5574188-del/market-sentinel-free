@@ -61,6 +61,21 @@ test("margin or leverage failure is explicit, not silent new leverage or smaller
   const i=request();i.leverageMax=1;assert.throws(()=>buildProportionalMirror(i),/杠杆/);
   const j=request();j.available=1;assert.throws(()=>buildProportionalMirror(j),/不静默缩单/);
 });
+test("source-authoritative mirror keeps fixed scale despite small live fee drift",()=>{
+  const i=request();i.equity=95;i.available=100;i.mirrorRatio=.1;i.sourceRiskAuthority=true;
+  i.openRisk=9.8;i.sameDirectionRisk=6.4;i.openMargin=74;i.openNotional=390;
+  const r=buildProportionalMirror(i);
+  assert.equal(r.binding.receipt.ratio,.1);assert.equal(r.intent.notional,20);assert.equal(r.intent.margin,10);
+});
+test("PAPER fee is not double-reserved against Gate available margin",()=>{
+  const i=request();i.available=10;i.sourceRiskAuthority=true;i.mirrorRatio=.1;
+  const r=buildProportionalMirror(i);assert.equal(r.intent.margin,10);
+});
+test("large actual entry drift still cannot hide behind source risk authority",()=>{
+  const i=request();i.entryPrice=110;i.mirrorRatio=.1;i.sourceRiskAuthority=true;
+  assert.throws(()=>buildProportionalMirror(i),/风险明显高于模拟比例|止损/);
+});
+
 test("expired, future and already stopped source cannot be backdated into LIVE",()=>{
   const i=request();i.now=i.source.openedAt+3600000;assert.throws(()=>buildProportionalMirror(i),/过期/);
   i.now=i.source.openedAt-1;assert.throws(()=>buildProportionalMirror(i));
