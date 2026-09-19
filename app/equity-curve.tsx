@@ -101,7 +101,8 @@ export default function EquityCurve({data,healthy,fixture,cache,cacheScope="owne
       </div>
     </div>
     <div className="eq-controls"><button onClick={()=>jump(0)}>起点</button><button disabled={offset<2} onClick={()=>jump(Math.max(0,offset-width*.8))}>‹ 较早</button><button disabled={offset>=canvasWidth-width-2} onClick={()=>jump(Math.min(canvasWidth-width,offset+width*.8))}>较新 ›</button><button onClick={()=>jump(canvasWidth-width)}>最新</button></div>
-    <p className="eq-hint">历史记录已缓存，只补充新增数据。左右滑动查看，轻触曲线读取原始记录。{range==="all"?"显示已加载全程。":end-account<span?"运行时间不足所选周期，显示已有记录。":canvasWidth>=20000?"长历史已压缩显示。":range==="7d"?"每屏7天。":"每屏24小时。"}空白处不补造；曲线仅作平滑连接，数字和建议均用原始值。</p>
+    <p className="eq-hint">历史保存在本机，重新打开只补新增记录。左右滑动查看，轻触曲线读取原始记录。{range==="all"?"显示已加载全程。":end-account<span?"运行时间不足所选周期，显示已有记录。":canvasWidth>=20000?"长历史已压缩显示。":range==="7d"?"每屏7天。":"每屏24小时。"}空白处不补造；曲线仅作平滑连接，数字和建议均用原始值。</p>
+    {history.cacheNotice&&<p className="eq-load" role="status">{history.cacheNotice}</p>}
     <div className="eq-extremes"><span>窗口记录高点 <b>{peak?number(peak.equity):"—"} U</b></span><span>窗口记录低点 <b>{trough?number(trough.equity):"—"} U</b></span></div>
     {(loading||error||needsMore)&&<div className="eq-load" role="status"><span>{error??(loading?(history.catchingUp?"正在补充新增净值，历史曲线已保留…":"正在补充尚未读取的历史…"):"当前窗口历史尚未读取完整")}</span>{!loading&&<button onClick={()=>{setOldestRequest(old=>Math.min(old??Infinity,Math.max(account,visibleStart-DAY_MS)));setLoadBatch(n=>n+1);}}>继续加载</button>}</div>}
     <aside className="eq-reference" data-reference-state={reference.state}><div><span className="eq-label">实盘开启参考</span><small>仅供手动判断</small></div><p>{reference.sentence}</p><details><summary>依据与限制</summary><p>{reference.detail}</p><p>观察条件：从记录高点回撤至少1%，随后30分钟净值回升至少0.2%、收回至少四分之一跌幅；同一次回撤不重复计数，未完成后续观察的不算成功。图表平滑不参与判断。</p><p>此提示不能操作实盘开关，不阻止开单，也不更改当前持仓。</p></details></aside>

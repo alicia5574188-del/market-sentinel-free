@@ -2,18 +2,23 @@ import {EQUITY_CURVE_VERSION,type CurveContext,type CurvePage,type EquityPoint} 
 
 /** Browser-only projection cache. Never imports the Worker, trading or credentials.
  * A Dashboard owns one instance; destroying a chart tab does not destroy history.
- * sessionStorage survives a reload in this tab, not logout or closing the tab. */
-export const EQUITY_CACHE_VERSION="incremental-session-v1";
+ * localStorage retains the projection across app/browser restarts. Authentication
+ * is still required before configure; no session, API key or LIVE state is stored. */
+export const EQUITY_CACHE_VERSION="incremental-persistent-v1";
+const LEGACY_VERSION="incremental-session-v1";
 const PREFIX="sentinel:equity-cache:v1:";
-const LIMIT=2_000_000,POINT_LIMIT=20_000;
+// Bound parsing of untrusted browser data, not the age/number of saved points.
+// A failed/quota-exceeded write retains the last good snapshot and its cursors.
+const LIMIT=8_000_000;
 type BrowserStorage=Pick<Storage,"getItem"|"setItem"|"removeItem"|"key"|"length">;
-type Options={fetch?:typeof fetch;now?:()=>number;pause?:()=>Promise<void>;storage?:()=>BrowserStorage|null};
+type Options={fetch?:typeof fetch;now?:()=>number;pause?:()=>Promise<void>;storage?:()=>BrowserStorage|null;legacyStorage?:()=>BrowserStorage|null};
 export type EquityHistory={account:number;points:EquityPoint[];cursor:string|null;done:boolean;
   coveredTo:number|null;loaded:boolean;newestCursor:string|null;checkedCycle:number;
-  latestAt:number;catchingUp:boolean;loading:boolean;error:string|null};
+  latestAt:number;catchingUp:boolean;loading:boolean;error:string|null;cacheNotice:string|null};
 const empty=():EquityHistory=>({account:0,points:[],cursor:null,done:false,coveredTo:null,loaded:false,
-  newestCursor:null,checkedCycle:0,latestAt:0,catchingUp:false,loading:false,error:null});
-const browserStorage=()=>{try{return typeof window==="undefined"?null:window.sessionStorage;}catch{return null;}};
+  newestCursor:null,checkedCycle:0,latestAt:0,catchingUp:false,loading:false,error:null,cacheNotice:null});
+const browserStorage=()=>{try{return typeof window==="undefined"?null:window.localStorage;}catch{return null;}};
+const legacyBrowserStorage=()=>{try{return typeof window==="undefined"?null:window.sessionStorage;}catch{return null;}};
 const cursorOK=(s:unknown):s is string=>typeof s==="string"&&/^forward-relations:v1:archive:\d{16}:\d+(?::part:\d{2})?$/.test(s);
 const finite=(n:unknown):n is number=>typeof n==="number"&&Number.isFinite(n);
 export function clearEquityBrowserCache(storage:BrowserStorage|null=browserStorage()){
@@ -24,10 +29,11 @@ export class EquityHistoryCache {
   private state=empty();private context:CurveContext|null=null;private key="";private epoch=0;
   private listeners=new Set<()=>void>();private flight:Promise<void>|null=null;private controller:AbortController|null=null;
   private lastAttempt=-Infinity;private blocked=false;
-  private request:typeof fetch;private now:()=>number;private pause:()=>Promise<void>;private storage:()=>BrowserStorage|null;
+  private request:typeof fetch;private now:()=>number;private pause:()=>Promise<void>;private storage:()=>BrowserStorage|null;private legacyStorage:()=>BrowserStorage|null;
   constructor(options:Options={}){
     this.request=options.fetch??((...args)=>fetch(...args));this.now=options.now??Date.now;
     this.pause=options.pause??(()=>new Promise(r=>setTimeout(r,700)));this.storage=options.storage??browserStorage;
+    this.legacyStorage=options.legacyStorage??legacyBrowserStorage;
   }
   getSnapshot=()=>this.state;
   subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};};
@@ -36,15 +42,20 @@ export class EquityHistoryCache {
    * strategy version: old real points must survive a read-only feature release. */
   configure(context:CurveContext,scope:string){
     const key=`${PREFIX}${encodeURIComponent(scope)}:${context.startedAt}:${context.initialEquity}`;
+    this.context=context;
     if(this.key!==key){
       this.cancel();this.key=key;this.blocked=false;this.lastAttempt=-Infinity;this.state={...empty(),account:context.startedAt};
+      // Hydrate synchronously before the chart can start its first HTTP request.
+      // Keep the stable account key; a UI release or renewed login is not a reset.
+      let migrated=false;
+      for(const [index,source] of [this.storage,this.legacyStorage].entries()){
       try{
-        const raw=this.storage()?.getItem(key);
+        const raw=source()?.getItem(key);
         if(raw&&raw.length<=LIMIT){
           const s=JSON.parse(raw);
           const validCursor=(v:unknown)=>v===null||(cursorOK(v)&&Number(v.split(":")[3])>=context.startedAt);
-          if(s.version===EQUITY_CACHE_VERSION&&s.account===context.startedAt&&s.initialEquity===context.initialEquity
-            &&Array.isArray(s.points)&&s.points.length<=POINT_LIMIT&&validCursor(s.cursor)&&validCursor(s.newestCursor)
+          if((s.version===EQUITY_CACHE_VERSION||s.version===LEGACY_VERSION)&&s.account===context.startedAt&&s.initialEquity===context.initialEquity
+            &&Array.isArray(s.points)&&validCursor(s.cursor)&&validCursor(s.newestCursor)
             &&typeof s.done==="boolean"&&typeof s.loaded==="boolean"&&typeof s.catchingUp==="boolean"
             &&finite(s.latestAt)&&s.latestAt<=this.now()&&finite(s.checkedCycle)&&s.checkedCycle<=this.now()
             &&(s.coveredTo===null||finite(s.coveredTo)&&s.coveredTo>=context.startedAt)){
@@ -57,23 +68,32 @@ export class EquityHistoryCache {
             this.state={...this.state,points,cursor:s.cursor,newestCursor:s.newestCursor,done:s.done,loaded:s.loaded,
               coveredTo:s.coveredTo,latestAt:s.latestAt,checkedCycle:s.checkedCycle,catchingUp:s.catchingUp};
             if(finite(s.lastAttempt)&&s.lastAttempt<=this.now())this.lastAttempt=s.lastAttempt;
+            migrated=index===1;break;
           }
         }
       }catch{/* Damaged, blocked or unavailable browser cache falls back to actual saved history. */}
+      }
+      // Never remove the old tab copy until the durable browser write succeeds.
+      if(migrated&&this.persist())try{this.legacyStorage()?.removeItem(key);}catch{/* Optional */}
     }
-    this.context=context;
     // Notify on configure, including after account reset; never show another account's points.
     for(const listener of this.listeners)listener();
   }
   cancel(){this.epoch++;this.controller?.abort();this.controller=null;this.flight=null;this.state={...this.state,loading:false};}
   private persist(){
-    if(!this.context||this.state.points.length>POINT_LIMIT)return;
+    if(!this.context)return false;
     try{
       const s=this.state,raw=JSON.stringify({version:EQUITY_CACHE_VERSION,account:s.account,initialEquity:this.context.initialEquity,
         points:s.points.map(p=>[p.at,p.equity,p.policy,p.homogeneous]),cursor:s.cursor,newestCursor:s.newestCursor,
         done:s.done,loaded:s.loaded,coveredTo:s.coveredTo,latestAt:s.latestAt,checkedCycle:s.checkedCycle,catchingUp:s.catchingUp,lastAttempt:this.lastAttempt});
-      if(raw.length<=LIMIT)this.storage()?.setItem(this.key,raw);
-    }catch{/* Quota/private-mode failures keep the in-memory curve; never clear server history. */}
+      const storage=this.storage();if(!storage||raw.length>LIMIT)throw new Error("Browser cache unavailable");
+      storage.setItem(this.key,raw);
+      if(this.state.cacheNotice)this.set({cacheNotice:null});
+      return true;
+    }catch{
+      this.set({cacheNotice:"本机未能保存新增曲线缓存；已有历史保留，重新打开时可能需要补读。"});
+      return false;
+    }
   }
   /** Idempotent per-tab loader. Calls made while a request is running share it.
    * An unmounted chart lets only its current GET settle, then stops. Parent logout
@@ -112,7 +132,9 @@ export class EquityHistoryCache {
         finally{clearTimeout(timeout);if(this.controller===controller)this.controller=null;}
         if(epoch!==this.epoch)return;
         if(response.status===401||response.status===403){
-          this.blocked=true;try{this.storage()?.removeItem(this.key);}catch{/* Optional */}
+          // Expired login hides the projection and stops requests, but does not
+          // delete valid history. A fresh authenticated Dashboard may restore it.
+          this.blocked=true;
           this.set({...empty(),account:s.account,error:"登录已失效，请重新登录。"});return;
         }
         if(!response.ok)throw new Error(response.status===429?"净值历史读取繁忙；保留已有曲线，稍后继续。":"新增净值暂未取得；已加载历史保留，交易不受图表影响。");

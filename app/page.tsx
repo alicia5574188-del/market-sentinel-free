@@ -5,7 +5,6 @@ import ForwardDashboard from "./forward-dashboard.tsx";
 import LiveConsole from "./live-console.tsx";
 import { LoginGate, MemberAccess } from "./member-access.tsx";
 import { runtimeBackendOperational } from "../lib/runtime-health.ts";
-import {clearEquityBrowserCache} from "../lib/equity-cache.ts";
 import { operatorRequest, type AuthSession, type LiveRuntime, type OperatorRuntime } from "../lib/operator-ui.ts";
 
 const RUNTIME_REQUEST_TIMEOUT_MS = 12_000;
@@ -20,7 +19,8 @@ export default function Home() {
   const epoch=useRef(0);
   const reload=useCallback(() => { epoch.current++; setRefresh(v=>v+1); },[]);
   const sessionChanged=useCallback((session:AuthSession) => {
-    if(!session.authenticated)clearEquityBrowserCache();
+    // Closing the app or renewing a login must not erase saved chart history.
+    // The authenticated Dashboard unmounts below; no cache is read while logged out.
     epoch.current++; setAuth(session);
     // Remove private snapshots immediately and invalidate any in-flight response.
     setRuntime(null);setRefresh(v=>v+1);
