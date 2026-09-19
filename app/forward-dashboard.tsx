@@ -16,7 +16,8 @@ const condition = (r:Rule) => r.conditions.map(c=>`${FEATURES[c.feature]} ${c.op
 export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,liveEnabled,accountPanel,memberName,cacheScope="owner"}:{data:View|null;healthy:boolean;feedAt:number|null;error:string|null;livePanel:ReactNode;liveEnabled:boolean;accountPanel?:ReactNode;memberName?:string;cacheScope?:string}) {
   const [equityCache]=useState(()=>new EquityHistoryCache());
   useEffect(()=>()=>equityCache.cancel(),[equityCache]);
-  const [tab,setTab]=useState<Tab>("overview"),[now,setNow]=useState(0),[showDormant,setShowDormant]=useState(false);\n  const [exporting,setExporting]=useState(false),[exportStatus,setExportStatus]=useState<string|null>(null);
+  const [tab,setTab]=useState<Tab>("overview"),[now,setNow]=useState(0),[showDormant,setShowDormant]=useState(false);
+  const [exporting,setExporting]=useState(false),[exportStatus,setExportStatus]=useState<string|null>(null);
   const [paperTab,setPaperTab]=useState<"positions"|"history"|"archive">("positions"),[paperPage,setPaperPage]=useState(0);
   const paperRecords=recordWindows(data?.history??[],t=>t.closedAt??0),paperArchive=archivePage(paperRecords.archive,paperPage);
   const scroll=useRef<Record<Tab,number>>({overview:0,relations:0,orders:0,live:0,journal:0,settings:0});
