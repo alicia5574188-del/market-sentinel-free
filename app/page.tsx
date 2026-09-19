@@ -66,6 +66,7 @@ export default function Home() {
   return <ForwardDashboard key={auth.memberId??"owner"} cacheScope={auth.memberId??"owner"} data={runtime?.forward?.startedAt?runtime.forward:null}
     healthy={runtimeBackendOperational(runtime)} feedAt={runtime?.lastSuccessAt??null}
     error={runtime?.forward?.storage?.error??error} liveEnabled={runtime?.liveMode?.requestedEnabled??false}
-    livePanel={<LiveConsole auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}
+    livePanel={<LiveConsole view="trade" auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}
+    liveSystemPanel={<LiveConsole view="system" auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}
     accountPanel={<MemberAccess auth={auth}/>} memberName={auth.role==="member"?auth.username:undefined}/>;
 }
