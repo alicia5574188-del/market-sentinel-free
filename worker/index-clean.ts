@@ -44,7 +44,8 @@ import { resourceDay, rollResourceDay, RESOURCE_DAY_POLICY, type ResourceCounter
 import { LIVE_TURNOVER_PREFIX, LIVE_TURNOVER_VERSION, initialTurnover, validateTurnover, nextFillWindow,
   prepareTurnoverPage, turnoverView, type TurnoverState, type GateConfirmedFill } from "../lib/live-turnover.ts";
 import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwardMirrorSources,
-  sourceLifecycle, mirrorSourceFresh, mirrorCoverage, type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
+  sourceLifecycle, mirrorSourceFresh, mirrorCoverage, liveEntryDriftGuard,
+  type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
 declare const __FORWARD_BUILD_SHA__: string;
 const FORWARD_BUILD_SHA = typeof __FORWARD_BUILD_SHA__ === "string" ? __FORWARD_BUILD_SHA__ : "local-verification";
 import { advanceStrategyArena as advancePreviousStrategyArena,
@@ -982,6 +983,22 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.forwardError = null;
     } catch (error) { this.forwardError = safeError(error); }
     finally { this.forwardBusy = false; }
+  }
+
+  private async advanceForwardAndWakeLive(now:number) {
+    const before=new Set(this.forwardState?.positions.map(t=>t.id)??[]);
+    await this.advanceForwardNow(now);
+    if(!this.runtime.live.requestedEnabled||!this.forwardState||!this.runtime.live.activation)return;
+    const hasNewEligible=this.forwardState.positions.some(t=>!before.has(t.id)
+      &&sourceAfterEnable(t,this.runtime.live.activation,this.forwardState!.startedAt));
+    if(!hasNewEligible)return;
+    try { await this.syncLive(Date.now()); }
+    catch(error){
+      this.runtime.live.operational=false;
+      this.runtime.live.lastError=`新模拟单即时复制核对失败：${safeError(error)}`;
+      this.recordLiveAudit({observedAt:Date.now(),symbol:null,planId:null,stage:"LIVE_CONTROL",level:"RECOVERING",
+        reason:this.runtime.live.lastError,error});
+    }
   }
 
   private async refreshRegimeHourly(now: number) {
@@ -1993,7 +2010,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         entry.submissionResolved=true;
         entry.missingSince = null;
         this.recordLiveAudit({ observedAt: now, symbol, planId: entry.planId, stage: "ENTRY_FILLED", level: "INFO",
-          reason: `Gate 已确认实盘持仓，成交名义价值 ${notional.toFixed(4)} USDT，杠杆 ${leverage}×` });
+          reason: `Gate 已确认实盘持仓，成交名义价值 ${notional.toFixed(4)} USDT，杠杆 ${leverage}×${entry.parity?.submitDelayMs!=null?`，源单到提交 ${entry.parity.submitDelayMs}ms`:""}` });
       } else if (position.side !== side) {
         throw new Error(`${symbol} 实盘方向与系统记录冲突`);
       }
@@ -2006,7 +2023,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         receipt.discrepancy=Math.abs(exchangeSize)!==receipt.roundedContracts
           ?`交易所实际${Math.abs(exchangeSize)}张，源单比例目标${receipt.roundedContracts}张；未声称完整复制`:null;
         const px=Number(actual.entry_price);
-        if(Number.isFinite(px)&&px>0)position.entryPrice=px;
+        if(Number.isFinite(px)&&px>0){
+          position.entryPrice=px;
+          const source=receipt.sourceEntryPrice>0?binding?.sourceAtCopy??this.currentMirrorSource(position.id).trade:null;
+          if(source){
+            const actualDrift=liveEntryDriftGuard(source,px);
+            receipt.exchangeEntryPrice=px;receipt.exchangeEntryAt=snapshot.checkedAt;
+            receipt.exchangeEntryDriftRate=actualDrift.adverse;
+          }
+        }
         position.exchangeSize=Math.abs(exchangeSize);
         position.notional=position.exchangeSize*position.entryPrice*(this.runtime.contractMeta[symbol]?.quantoMultiplier??0);
         position.leverage=Math.max(1,Number(actual.leverage)||receipt.sourceLeverage);
@@ -2194,7 +2219,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           leverageMax:this.runtime.contractMeta[symbol]?.leverageMax??0,maintenanceRate:this.runtime.contractMeta[symbol]?.maintenanceRate??0.005,
           openMargin:marginForNewEntries,openNotional:notionalForNewEntries,now:Date.now(),policy:this.forwardState!.policyVersion??this.forwardState!.version,
           sizeRules:this.runtime.contractMeta[symbol],activationAt:this.runtime.live.activation?.enabledAt,
-          mirrorRatio,sourceRiskAuthority:true});
+          mirrorRatio,sourceRiskAuthority:true,quoteObservedAt:quote?.observedAt});
         intent=result.intent;binding=result.binding;
       } catch (error) {
         if (!(error instanceof LiveEntrySizingError)) throw error;
@@ -2258,11 +2283,28 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ECONOMICS",reason:entry.lastError,observedAt:Date.now()};
             await this.saveCheckpoint(Date.now(),true);continue;
           }
-          entry.marketSubmittedAt=Date.now();
-          await this.saveCheckpoint(Date.now(),true);
+          const source=binding!.sourceAtCopy,drift=liveEntryDriftGuard(source,price);
+          if(drift.adverse>drift.allowed+1e-9){
+            entry.status="CANCELLED";
+            entry.lastError=`提交前盘口相对模拟入场不利偏差${(drift.adverse*100).toFixed(3)}%，超过动态上限${(drift.allowed*100).toFixed(3)}%，不追价`;
+            this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ECONOMICS",reason:entry.lastError,observedAt:Date.now()};
+            await this.saveCheckpoint(Date.now(),true);continue;
+          }
+          const submittedAt=Date.now();
+          if(entry.parity)Object.assign(entry.parity,{submitQuoteAt:q?.observedAt,submitQuotePrice:price,submittedAt,
+            submitDelayMs:Math.max(0,submittedAt-source.openedAt),allowedAdverseEntryDriftRate:drift.allowed,
+            adverseEntryDriftRate:drift.adverse});
+          entry.marketSubmittedAt=submittedAt;
+          await this.saveCheckpoint(submittedAt,true);
           entry.exchangeOrderId = await client.createEntry(intent);
           entry.status = "OPEN";
           const filled=await client.inspectEntry("MARKET",symbol,entry.tag,entry.exchangeOrderId);
+          const fillPrice=Number(filled?.fill_price);
+          if(entry.parity&&Number.isFinite(fillPrice)&&fillPrice>0){
+            const actualDrift=liveEntryDriftGuard(source,fillPrice);
+            Object.assign(entry.parity,{exchangeEntryPrice:fillPrice,exchangeEntryAt:Date.now(),
+              exchangeEntryDriftRate:actualDrift.adverse});
+          }
           if(filled&&liveEntryDisposition(filled,"MARKET")==="CANCELLED"){
             entry.status="CANCELLED";entry.submissionResolved=true;entry.lastError="Gate IOC零成交；未完成复制，不冒充成功";
             this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ENTRY_REJECTED",reason:entry.lastError,observedAt:Date.now()};
@@ -2772,7 +2814,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // PAPER is the strategy authority. The owner-controlled LIVE adapter
       // mirrors only these persisted decisions; the generator has no keys.
       this.launchLiveSettlementBackground();
-      await this.advanceForwardNow(Date.now());
+      await this.advanceForwardAndWakeLive(Date.now());
       if (universeDue) {
         subrequests += 2;
         try { this.refreshUniverse(Date.now(), await fetchActiveContracts()); }
@@ -2787,7 +2829,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       subrequests += await this.refreshStrategyCandle(Date.now());
       subrequests += await this.refreshRegimeHourly(Date.now());
-      await this.advanceForwardNow(Date.now());
+      await this.advanceForwardAndWakeLive(Date.now());
       await this.maybeWriteStrategyRuntimeLog(Date.now());
       this.runtime.subrequestCount += subrequests;
       this.runtime.maxSubrequestsInAlarm = Math.max(this.runtime.maxSubrequestsInAlarm, subrequests);
