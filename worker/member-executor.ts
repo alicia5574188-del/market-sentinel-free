@@ -151,16 +151,18 @@ export function memberExecutionClass(Base:typeof MarketStream) {
     }
     private async arm() {
       if(!this.identity||this.bootError)return;
-      if(this.liveNeedsSync()||this.liveSettlementNeedsRefresh()) {
-        const jitter=parseInt(this.identity.id.slice(-2),16)%4*100;
-        const at=(Math.floor(Date.now()/10000)+1)*10000+jitter;
-        const old=await this.ctx.storage.getAlarm();if(old==null||old<Date.now()-10000||old>at+10000)await this.ctx.storage.setAlarm(at);
+      const trading=this.liveNeedsSync(),settlement=this.liveSettlementNeedsRefresh();
+      if(trading||settlement) {
+        const cadence=trading?10000:60000,jitter=parseInt(this.identity.id.slice(-2),16)%4*100;
+        const at=(Math.floor(Date.now()/cadence)+1)*cadence+jitter;
+        const old=await this.ctx.storage.getAlarm();if(old==null||old<Date.now()-cadence||old>at+cadence)await this.ctx.storage.setAlarm(at);
       }
     }
     async alarm() {
-      // Always re-arm before requests. An individual Gate timeout cannot hold
-      // the primary's loop or another member's execution lock.
-      await this.ctx.storage.setAlarm((Math.floor(Date.now()/10000)+1)*10000+100);
+      // Trading stays on the existing ten-second cadence. Settlement-only
+      // actors wake once per minute and never compete with active execution.
+      const cadence=this.liveNeedsSync()?10000:60000;
+      await this.ctx.storage.setAlarm((Math.floor(Date.now()/cadence)+1)*cadence+100);
       try {await this.tick();}finally {
         if(!this.bootError&&!this.liveNeedsSync()&&!this.liveSettlementNeedsRefresh()) {await this.ctx.storage.deleteAlarm();if(this.identity)await this.directory("/seat",{enabled:false}).catch(()=>undefined);}
       }
