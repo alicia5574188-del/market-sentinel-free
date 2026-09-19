@@ -1,0 +1,31 @@
+name: Mirror Readonly Before
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/mirror-readonly-before.yml']
+permissions:
+  contents: read
+jobs:
+  before:
+    if: github.head_ref == 'feature/owner-controlled-source-mirror'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Public snapshots and exact source only; no owner session, Gate private API or switch
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/mirror-before
+          git archive HEAD -o /tmp/mirror-before/source.tar
+          curl -fsS --retry 2 --max-time 20 'https://market-sentinel-free.alicia5574188.workers.dev/__health' > /tmp/mirror-before/health.json
+          curl -fsS --retry 2 --max-time 20 'https://market-sentinel-free.alicia5574188.workers.dev/api/forward/export' > /tmp/mirror-before/export.json
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > /tmp/mirror-before/time.txt
+          jq '{buildSha:.runtime.buildSha,liveMode:.runtime.liveMode,forward:(.runtime.forward|{policyVersion,startedAt,balance,equity,resolved,storage})}' /tmp/mirror-before/health.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mirror-before-${{ github.run_id }}
+          path: /tmp/mirror-before/
+          retention-days: 7
