@@ -11,3 +11,41 @@ main.fr-app{--fr-ink:#eef4fc;--fr-muted:#b8c6d9;--fr-line:#304158;--fr-green:#71
 @media(max-width:640px){main.fr-app{padding:19px 16px 142px;font-size:16px}.fr-header{gap:12px}.fr-brand b{font-size:20px}.fr-emblem{width:40px;height:44px;font-size:27px}.fr-brand small{font-size:14px}.fr-subhead{font-size:14px;gap:7px;margin-bottom:17px}.fr-hero{grid-template-columns:1fr;gap:24px;padding:23px;border-radius:20px}.fr-hero h1{font-size:30px;line-height:1.4}.fr-hero-copy>p{font-size:16px}.fr-equity{padding:22px}.fr-equity>strong{font-size:42px}.fr-stats{gap:11px}.fr-stats>article{padding:16px;border-radius:14px}.fr-stats strong{font-size:25px}.fr-stats small,.fr-stats p{font-size:14px}.fr-section{padding:20px;border-radius:17px}.fr-section-head h2,.fr-section>h2,.fr-expand h2{font-size:22px}.fr-pipeline{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.fr-pipeline>div{padding:12px 5px;gap:9px}.fr-pipeline b{font-size:14px}.fr-three{gap:13px}.fr-three>div{padding-right:7px}.fr-three b{font-size:16px}.fr-rule-grid{grid-template-columns:1fr}.fr-rule,.fr-trade{padding:19px}.fr-page-title h1{font-size:28px}.fr-page-title p{font-size:16px}.fr-journal article{grid-template-columns:1fr;gap:8px;padding-block:22px}.fr-journal time{font-size:14px}.fr-journal p{margin-top:9px}.fr-setting{flex-wrap:wrap;gap:13px}.fr-setting>b{max-width:100%;font-size:14px}.fr-footer{flex-direction:column;font-size:14px}.fr-nav{bottom:calc(8px + env(safe-area-inset-bottom));width:calc(100% - 16px);padding:6px 4px;gap:2px;border-radius:16px}.fr-nav button{flex-direction:column;gap:7px;min-height:64px;padding:8px 2px}.fr-nav b{font-size:14px}.fr-nav button>span{font-size:24px}.fr-button{font-size:16px;margin-right:0}.fr-live-switch-panel{gap:18px}.fr-live-switch-panel h2{font-size:23px}.fr-switch{width:103px;min-height:56px}.fr-live-source{font-size:15px}.fr-live-switch-panel>.fr-inline-confirm{padding:16px}}
 @media(max-width:380px){main.fr-app{padding-inline:14px}.fr-header{align-items:flex-start}.fr-status{font-size:14px}.fr-hero,.fr-section{padding:18px}.fr-hero h1{font-size:28px}.fr-equity{padding:18px}.fr-equity>strong{font-size:38px}.fr-stats>article{padding:14px}.fr-stats strong{font-size:23px}.fr-three{grid-template-columns:1fr;gap:15px}.fr-three>div{padding-bottom:12px;border-right:0;border-bottom:1px solid var(--fr-line)}.fr-three b{font-size:17px}.fr-rule-numbers{grid-template-columns:1fr;gap:15px}.fr-rule-numbers>div{display:flex;justify-content:space-between;align-items:center;gap:15px}.fr-rule-numbers b{margin:0}.fr-trade dl{grid-template-columns:1fr}.fr-live-switch-panel{grid-template-columns:1fr}.fr-switch{justify-self:start}.fr-form input{font-size:17px}.fr-action-row .fr-button{width:100%}}
 @media(prefers-reduced-motion:reduce){.fr-app *{scroll-behavior:auto!important;animation:none!important;transition:none!important}}
+
+/* Final PAPER ↔ LIVE observation layout: same hierarchy, normalized differences, diagnostics out of the daily path. */
+.fr-account-line{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin:8px 2px 18px;color:var(--fr-muted);font-size:14px;line-height:1.6}
+.fr-account-line b{font-size:14px;font-weight:650;color:#d9e7f6}
+.fr-four{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0;margin-top:4px}
+.fr-four>div,.fr-compare-grid>div{min-width:0;padding:12px 14px;border-right:1px solid var(--fr-line)}
+.fr-four>div:last-child,.fr-compare-grid>div:nth-child(3n){border-right:0}
+.fr-four small,.fr-compare-grid small{display:block;color:var(--fr-muted);font-size:13px;line-height:1.45;margin-bottom:6px}
+.fr-four b,.fr-compare-grid b{display:block;font-size:17px;line-height:1.45;overflow-wrap:anywhere}
+.fr-diagnostic-row{display:flex;justify-content:space-between;gap:18px;padding:12px 0;border-top:1px solid var(--fr-line);font-size:14px;line-height:1.6}
+.fr-diagnostic-row b{flex:0 0 auto}.fr-diagnostic-row span{text-align:right;color:#c8d4e3}
+.fr-parity-alert{border-color:#806143;background:#2a241d}
+.fr-trade-unified>header strong{display:grid;justify-items:end;gap:3px;text-align:right}
+.fr-trade-unified>header strong small{font-size:12px;font-weight:550;color:inherit}
+.fr-compare{margin:16px 0 18px;padding:14px;border:1px solid #49657e;border-radius:12px;background:#111f2d}
+.fr-compare-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}
+.fr-compare-head b{font-size:15px;color:#e7f2ff}.fr-compare-head span{font-size:12px;color:var(--fr-muted)}
+.fr-compare-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border:1px solid var(--fr-line);border-radius:10px;overflow:hidden}
+.fr-compare-grid>div:nth-child(n+4){border-top:1px solid var(--fr-line)}
+.fr-compare-prices{display:flex;flex-wrap:wrap;gap:7px 16px;margin-top:12px;padding-top:10px;border-top:1px solid var(--fr-line);font-size:13px;line-height:1.6;color:var(--fr-muted)}
+.fr-compare-prices span{white-space:nowrap}.fr-compare-prices b{color:inherit;font-weight:650}
+.fr-live-system>.fr-live-heading{margin-top:0}
+.fr-live-system .fr-form{max-width:720px}
+@media(max-width:640px){
+  .fr-four{grid-template-columns:repeat(2,minmax(0,1fr));border:1px solid var(--fr-line);border-radius:10px;overflow:hidden}
+  .fr-four>div{border-right:1px solid var(--fr-line);border-bottom:1px solid var(--fr-line)}
+  .fr-four>div:nth-child(2n){border-right:0}.fr-four>div:nth-last-child(-n+2){border-bottom:0}
+  .fr-compare-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .fr-compare-grid>div{border-right:1px solid var(--fr-line);border-top:1px solid var(--fr-line)}
+  .fr-compare-grid>div:nth-child(2n){border-right:0}.fr-compare-grid>div:nth-child(-n+2){border-top:0}
+  .fr-diagnostic-row{display:grid;gap:5px}.fr-diagnostic-row span{text-align:left}
+  .fr-compare-prices{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px}
+}
+@media(max-width:380px){
+  .fr-compare{padding:12px}.fr-compare-grid{grid-template-columns:1fr}
+  .fr-compare-grid>div,.fr-compare-grid>div:nth-child(2n),.fr-compare-grid>div:nth-child(3n){border-right:0;border-top:1px solid var(--fr-line)}
+  .fr-compare-grid>div:first-child{border-top:0}.fr-compare-prices{grid-template-columns:1fr}
+}
