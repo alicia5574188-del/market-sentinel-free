@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      UI_SOURCE_SHA: 5a1a9664cc654883c392cea5b5e4c8595f543d81
+      UI_SOURCE_SHA: 37c411bf1081040269712b3e0e08d28ba0b24e7e
       UI_RESULTS: /tmp/live-ui-results
     steps:
       - uses: actions/checkout@v4
@@ -19,7 +19,7 @@ jobs:
           path: lab
       - uses: actions/checkout@v4
         with:
-          ref: 5a1a9664cc654883c392cea5b5e4c8595f543d81
+          ref: 37c411bf1081040269712b3e0e08d28ba0b24e7e
           path: release
           fetch-depth: 0
       - uses: actions/setup-node@v4
