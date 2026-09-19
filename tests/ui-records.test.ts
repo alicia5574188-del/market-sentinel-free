@@ -75,6 +75,12 @@ test("lazy reader saves separate cache without rewriting trade or balance",async
  const h=await readerHarness(),old=await h.storage.get("live-parity:v1:closed:0000000000000001:source-a");h.reader.launch(h.input);await Promise.all(h.tasks);
  assert.equal(h.reader.view([h.p]).history[0].realizedPnl,-.07);assert.deepEqual(await h.storage.get("live-parity:v1:closed:0000000000000001:source-a"),old);
 });
+test("pending settlement state is visible to background scheduler and clears after Gate match",async()=>{
+ const h=await readerHarness();assert.equal(h.reader.needsRefresh([h.p]),true);
+ h.reader.launch(h.input);await Promise.all(h.tasks);
+ assert.equal(h.reader.needsRefresh([h.p]),false);assert.equal(h.reader.view([h.p]).history[0].realizedPnl,-.07);
+});
+
 test("failed atomic save cannot publish newly calculated settlement",async()=>{
  const h=await readerHarness();h.storage.fail=true;h.reader.launch(h.input);await Promise.all(h.tasks);
  assert.equal(h.reader.view([h.p]).history[0].realizedPnl,undefined);assert.ok(h.reader.view([h.p]).error);
@@ -113,4 +119,12 @@ test("operational UI removes version narratives and friend terminology",()=>{
  const paths=["forward-dashboard.tsx","live-console.tsx","member-access.tsx"];
  for(const path of paths){const text=readFileSync(new URL(`../app/${path}`,import.meta.url),"utf8");assert.doesNotMatch(text,/朋友|不是选择旧策略|首版在|当前新版模拟账户|不拼接旧版|本轮直接上线|升级时间/);}
  const ui=readFileSync(new URL("../app/forward-dashboard.tsx",import.meta.url),"utf8");assert.match(ui,/paperTab==="positions"/);assert.match(ui,/paper-history/);assert.match(ui,/paper-archive/);
+});
+test("background settlement is wired independently of opening the record tab",()=>{
+ const worker=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8");
+ const members=readFileSync(new URL("../worker/member-executor.ts",import.meta.url),"utf8");
+ assert.match(worker,/launchLiveSettlementBackground\(\);/);
+ assert.match(worker,/liveSettlementNeedsRefresh\(\)/);
+ assert.match(members,/this\.launchLiveSettlementBackground\(\);/);
+ assert.match(members,/this\.liveSettlementNeedsRefresh\(\)/);
 });
