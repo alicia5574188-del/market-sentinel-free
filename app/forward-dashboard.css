@@ -18,19 +18,19 @@ main.fr-app{--fr-ink:#eef4fc;--fr-muted:#b8c6d9;--fr-line:#304158;--fr-green:#71
 .fr-four{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0;margin-top:4px}
 .fr-four>div,.fr-compare-grid>div{min-width:0;padding:12px 14px;border-right:1px solid var(--fr-line)}
 .fr-four>div:last-child,.fr-compare-grid>div:nth-child(3n){border-right:0}
-.fr-four small,.fr-compare-grid small{display:block;color:var(--fr-muted);font-size:13px;line-height:1.45;margin-bottom:6px}
+.fr-four small,.fr-compare-grid small{display:block;color:var(--fr-muted);font-size:14px;line-height:1.45;margin-bottom:6px}
 .fr-four b,.fr-compare-grid b{display:block;font-size:17px;line-height:1.45;overflow-wrap:anywhere}
 .fr-diagnostic-row{display:flex;justify-content:space-between;gap:18px;padding:12px 0;border-top:1px solid var(--fr-line);font-size:14px;line-height:1.6}
 .fr-diagnostic-row b{flex:0 0 auto}.fr-diagnostic-row span{text-align:right;color:#c8d4e3}
 .fr-parity-alert{border-color:#806143;background:#2a241d}
 .fr-trade-unified>header strong{display:grid;justify-items:end;gap:3px;text-align:right}
-.fr-trade-unified>header strong small{font-size:12px;font-weight:550;color:inherit}
+.fr-trade-unified>header strong small{font-size:14px;font-weight:550;color:inherit}
 .fr-compare{margin:16px 0 18px;padding:14px;border:1px solid #49657e;border-radius:12px;background:#111f2d}
 .fr-compare-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}
-.fr-compare-head b{font-size:15px;color:#e7f2ff}.fr-compare-head span{font-size:12px;color:var(--fr-muted)}
+.fr-compare-head b{font-size:15px;color:#e7f2ff}.fr-compare-head span{font-size:14px;color:var(--fr-muted)}
 .fr-compare-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border:1px solid var(--fr-line);border-radius:10px;overflow:hidden}
 .fr-compare-grid>div:nth-child(n+4){border-top:1px solid var(--fr-line)}
-.fr-compare-prices{display:flex;flex-wrap:wrap;gap:7px 16px;margin-top:12px;padding-top:10px;border-top:1px solid var(--fr-line);font-size:13px;line-height:1.6;color:var(--fr-muted)}
+.fr-compare-prices{display:flex;flex-wrap:wrap;gap:7px 16px;margin-top:12px;padding-top:10px;border-top:1px solid var(--fr-line);font-size:14px;line-height:1.6;color:var(--fr-muted)}
 .fr-compare-prices span{white-space:nowrap}.fr-compare-prices b{color:inherit;font-weight:650}
 .fr-live-system>.fr-live-heading{margin-top:0}
 .fr-live-system .fr-form{max-width:720px}
