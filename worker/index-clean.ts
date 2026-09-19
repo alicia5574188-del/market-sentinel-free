@@ -2025,7 +2025,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const px=Number(actual.entry_price);
         if(Number.isFinite(px)&&px>0){
           position.entryPrice=px;
-          const source=receipt.sourceEntryPrice>0?binding?.sourceAtCopy??this.currentMirrorSource(position.id).trade:null;
+          const source=receipt.sourceEntryPrice>0?this.currentMirrorSource(position.id).trade:null;
           if(source){
             const actualDrift=liveEntryDriftGuard(source,px);
             receipt.exchangeEntryPrice=px;receipt.exchangeEntryAt=snapshot.checkedAt;
