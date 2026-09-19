@@ -3,6 +3,7 @@ import "./globals.css";
 import "./forward-dashboard.css";
 import "./record-controls.css";
 import "./member-access.css";
+import "./live-priority.css";
 
 export const dynamic = "force-dynamic";
 

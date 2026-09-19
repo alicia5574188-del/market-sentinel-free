@@ -13,6 +13,8 @@ type Props = { auth: AuthSession|null; runtime: OperatorRuntime|null; onSession:
 type Section = "account" | "positions" | "history" | "archive" | "logs" | "api";
 
 export default function LiveConsole({auth,runtime,onSession,onLive,onRefresh}:Props) {
+  // A newly opened LIVE tab starts with account equity, not an old scroll offset.
+  useEffect(()=>{window.scrollTo({top:0,behavior:"auto"});},[]);
   const [section,setSection]=useState<Section>("account"),[clock,setClock]=useState(0);
   const [password,setPassword]=useState(""),[apiKey,setApiKey]=useState(""),[apiSecret,setApiSecret]=useState("");
   const [credential,setCredential]=useState<CredentialStatus|null>(null),[verification,setVerification]=useState<CredentialVerification|null>(null);
@@ -90,9 +92,37 @@ export default function LiveConsole({auth,runtime,onSession,onLive,onRefresh}:Pr
   const tabs:[Section,string][]=[["account","账户"],["positions","持仓"],["history","记录"],["archive","归档"],["logs","日志"],["api","API"]];
 
   return <div className="fr-live" data-testid="native-live-console">
-    <section className="fr-page-title"><small>GATE · 实盘控制台</small><h1>实盘由你掌控</h1>
-      <p>管理账户、持仓和交易开关。</p></section>
-    <section className="fr-section fr-live-switch-panel" aria-label="实盘交易开关">
+    <div className="fr-live-heading"><h1>实盘账户</h1><span>{auth?.username??"未登录"} · {enabled?live?.operational?"运行中":"等待核对":"已关闭"}</span></div>
+    {auth?.authenticated&&<>
+        <section className="fr-stats fr-live-summary" data-testid="live-equity-first"><LiveStat title="实盘账户权益" value={`${num(live?.equity)} U`} detail="Gate余额＋已核对持仓浮盈"/>
+          <LiveStat title="可用保证金" value={`${num(live?.available)} U`} detail="Gate可用余额"/>
+          <LiveStat title="持仓浮动盈亏" value={`${signed(floating)} U`} detail={marks.some(m=>!m.fresh)?"Gate最近回报（等待更新）；不是最终净收益":"Gate持仓实际回报；不是最终净收益"}/>
+          <LiveStat title="当前持仓" value={live?`${positions.length} 笔`:"—"} detail={`待执行 ${live?entries.length:"—"} 笔`}/></section>
+      <p className="fr-live-check-time">账户核对 {time(live?.lastSyncAt)} · <a href="#live-control" onClick={()=>setSection("account")}>管理实盘开关</a></p>
+      {live?.lastError&&<p className="fr-error" role="status">执行提示：{live.lastError}</p>}
+    </>}
+    {error&&<div className="fr-error" role="alert"><b>操作未完成</b><p>{error}</p></div>}
+    {notice&&<div className="fr-notice" role="status">{notice}</div>}
+    {!auth?.authenticated?<section className="fr-section fr-owner-login"><div className="fr-section-head"><div><small>所有者权限</small><h2>在本页登录</h2></div></div>
+      <p className="fr-note">使用本人的登录凭据访问账户。</p>
+      <form onSubmit={login} className="fr-form"><label>账户<input value="owner" readOnly autoComplete="username"/></label>
+        <label>所有者密码<input type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password" required placeholder="输入原来的所有者密码"/></label>
+        {auth?.configured===false&&<p className="fr-error">后台所有者访问码尚未配置。</p>}
+        <button className="fr-button" type="submit" disabled={Boolean(busy)||!auth||!auth.configured||password.length<16}>{busy==="login"?"验证中…":"登录所有者账户"}</button>
+      </form></section>:<>
+      <nav className="fr-live-tabs fr-live-record-tabs" aria-label="实盘子导航">{tabs.map(([id,title])=><button type="button" key={id} aria-current={section===id?"page":undefined}
+        className={section===id?"selected":""} onClick={()=>setSection(id)}>{title}</button>)}</nav>
+      {section==="account"&&<>
+        <section className="fr-section fr-live-holdings" data-testid="live-holdings-first">
+          <div className="fr-section-head"><h2>当前实盘持仓</h2><span>{live?`${positions.length} 笔`:"读取中"}</span></div>
+          {!live?<LiveEmpty title="正在读取实盘账户" text="仅显示本账户的实际持仓。"/>:!positions.length?<p className="fr-note">当前没有实盘持仓；待执行 {entries.length} 笔。</p>:
+            <div className="fr-position-list">{positions.map(p=>{const m=livePositionMark(p,runtime,clock);return <details key={p.id} className="fr-position-row"><summary>
+              <span><b>{p.symbol.replace("_"," / ")}</b><small>{p.side==="LONG"?"多单":"空单"} · {num(p.leverage,0)}× · 保证金 {num(m.margin)} U</small></span>
+              <span className={m.pnl==null?"":m.pnl>=0?"fr-positive":"fr-negative"}><b>{m.pnl==null?"待更新":`${signed(m.pnl)} U`}</b><small>{m.rate==null?"—":`${signed(m.rate*100)}%`} · 展开</small></span>
+              </summary><LivePositionCard position={p} runtime={runtime} now={clock}/></details>;})}</div>}
+          {!!entries.length&&<button type="button" className="fr-text-button" onClick={()=>setSection("positions")}>查看 {entries.length} 笔待执行挂单及完整持仓详情 →</button>}
+        </section>
+    <section id="live-control" className="fr-section fr-live-switch-panel" aria-label="实盘交易开关">
       <div><span className="fr-overline">实盘交易开关</span><h2>{!runtime?"读取开关状态…":enabled?live?.operational?"已开启 · 正在运行":"已请求开启 · 等待核对":"已关闭"}</h2>
         <p>{auth?.authenticated?"仅跟随本次开启后产生的新模拟单。":"所有者登录后可操作开关；访客不能更改。"}</p></div>
       <button type="button" className={`fr-switch ${enabled?"is-enabled":""}`} role="switch" aria-label="实盘交易开关"
@@ -103,6 +133,7 @@ export default function LiveConsole({auth,runtime,onSession,onLive,onRefresh}:Pr
         <div className="fr-action-row"><button className="fr-button" type="button" disabled={!canEnable} onClick={()=>setMode(true)}>确认开启实盘</button>
           <button className="fr-button secondary" type="button" disabled={Boolean(busy)} onClick={()=>setConfirmEnable(false)}>暂不开启</button></div></div>}
     </section>
+    <details className="fr-section fr-copy-details" data-testid="live-copy-details"><summary>复制状态与未跟随原因</summary>
     <div className="fr-live-source"><span aria-hidden="true">ⓘ</span><p><b>当前复制源：</b>当前模拟账户。按权益比例复制，沿用源单杠杆、保护和退出依据。实际成交以Gate回报为准。</p></div>
     <section className="fr-section"><div className="fr-section-head"><h2>模拟—实盘复制一致性</h2><span>{mirror?.connected?"当前源已接入":"等待源状态"}</span></div>
       <div className="fr-three"><div><small>本次开启后已复制 / 应跟随</small><b>{num(mirror?.eligibleCopiedCount,0)} / {num(mirror?.eligibleSourceCount,0)}</b></div><div><small>应跟随但尚未复制</small><b>{num(mirror?.eligibleMissingCount,0)}</b></div><div><small>源数据或执行阻塞</small><b>{mirror?.error?"需核对":"无源阻塞"}</b></div></div>
@@ -113,23 +144,8 @@ export default function LiveConsole({auth,runtime,onSession,onLive,onRefresh}:Pr
       <p className="fr-note">关闭停止新开仓并撤销系统入场挂单；已有仓位保留保护，继续跟随源单退出，不立即强平。</p>
       {auth?.authenticated&&mirror?.rows.filter(r=>r.status!=="COPIED").map(r=><p className="fr-note" key={r.sourceId}>{r.symbol} · {r.reason??r.status}</p>)}
     </section>
-    {error&&<div className="fr-error" role="alert"><b>操作未完成</b><p>{error}</p></div>}
-    {notice&&<div className="fr-notice" role="status">{notice}</div>}
-    {!auth?.authenticated?<section className="fr-section fr-owner-login"><div className="fr-section-head"><div><small>所有者权限</small><h2>在本页登录</h2></div></div>
-      <p className="fr-note">使用本人的登录凭据访问账户。</p>
-      <form onSubmit={login} className="fr-form"><label>账户<input value="owner" readOnly autoComplete="username"/></label>
-        <label>所有者密码<input type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password" required placeholder="输入原来的所有者密码"/></label>
-        {auth?.configured===false&&<p className="fr-error">后台所有者访问码尚未配置。</p>}
-        <button className="fr-button" type="submit" disabled={Boolean(busy)||!auth||!auth.configured||password.length<16}>{busy==="login"?"验证中…":"登录所有者账户"}</button>
-      </form></section>:<>
-      <div className="fr-owner-session"><span>● owner · 已登录</span><button className="fr-text-button" type="button" disabled={Boolean(busy)} onClick={logout}>退出登录</button></div>
-      <nav className="fr-live-tabs fr-live-record-tabs" aria-label="实盘子导航">{tabs.map(([id,title])=><button type="button" key={id} aria-current={section===id?"page":undefined}
-        className={section===id?"selected":""} onClick={()=>setSection(id)}>{title}</button>)}</nav>
-      {section==="account"&&<>
-        <section className="fr-stats"><LiveStat title="实盘账户权益" value={`${num(live?.equity)} U`} detail="Gate余额＋已核对持仓浮盈"/>
-          <LiveStat title="可用保证金" value={`${num(live?.available)} U`} detail="Gate可用余额"/>
-          <LiveStat title="持仓浮动盈亏" value={`${signed(floating)} U`} detail={marks.some(m=>!m.fresh)?"Gate最近回报（等待更新）；不是最终净收益":"Gate持仓实际回报；不是最终净收益"}/>
-          <LiveStat title="当前持仓" value={live?`${positions.length} 笔`:"—"} detail={`待执行 ${live?entries.length:"—"} 笔`}/></section>
+    </details>
+        <div className="fr-owner-session"><span>● {auth.username} · 已登录</span><button className="fr-text-button" type="button" disabled={Boolean(busy)} onClick={logout}>退出登录</button></div>
         <section className="fr-section" data-testid="live-turnover"><div className="fr-section-head"><h2>实盘累计成交额</h2><span>USDT · Gate已确认成交</span></div>
           <div className="fr-three"><div><small>开仓＋平仓合计</small><b>{num(live?.turnover?.total)} U</b></div><div><small>开仓成交额</small><b>{num(live?.turnover?.opening)} U</b></div><div><small>平仓成交额</small><b>{num(live?.turnover?.closing)} U</b></div></div>
           <p className="fr-note">统计自 {time(live?.turnover?.startedAt)}，按实际成交ID去重；同一Gate USDT账户含手工成交，不是模拟金额或保证金。失败、挂单和未成交部分不计入。</p>
