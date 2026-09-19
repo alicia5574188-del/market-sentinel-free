@@ -2736,6 +2736,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       let subrequests = 0;
       // PAPER is the strategy authority. The owner-controlled LIVE adapter
       // mirrors only these persisted decisions; the generator has no keys.
+      this.launchLiveSettlementBackground();
       await this.advanceForwardNow(Date.now());
       if (universeDue) {
         subrequests += 2;
@@ -2826,7 +2827,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           subrequests += Math.max(0, (this.liveClient?.requestCount ?? liveRequestsBefore) - liveRequestsBefore);
         }
       }
-      this.launchLiveSettlementBackground();
       this.launchOptionalWork(now, universeDue);
       this.launchTurnoverWork(Date.now());
     } catch (error) {
