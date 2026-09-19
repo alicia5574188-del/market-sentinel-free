@@ -205,7 +205,7 @@ test("market-turn guard never auto-reverses and preserves armed winners",()=>{
   s.positions=Array.from({length:4},(_,i)=>({...position(),id:`armed-${i}`,symbol:`M${i}_USDT`,plannedRisk:10,
     favorable:.03,lastQuoteAt:now-1000}));
   s.balance=1000-s.positions.reduce((n,t)=>n+t.entryFee,0);
-  const quotes=Object.fromEntries(s.positions.map(t=>[t.symbol,{bestBid:101.8,bestAsk:101.81,observedAt:now,fresh:true}]));
+  const quotes=Object.fromEntries(s.positions.map(t=>[t.symbol,{bestBid:102.6,bestAsk:102.61,observedAt:now,fresh:true}]));
   const out=advanceForward({state:s,now,paths:broadTurnPaths(now),quotes,contracts:{}}).state;
   assert.equal(out.turnProtection?.threatenedSide,"LONG");
   assert.equal(out.positions.length,4);assert.ok(out.positions.every(t=>t.side==="LONG"));
