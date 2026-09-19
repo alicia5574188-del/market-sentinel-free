@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { register } from "node:module";
 import { LIVE_PARITY_PREFIX, LIVE_PARITY_VERSION, forwardMirrorSources, buildProportionalMirror,
-  mirrorCoverage, sourceLifecycle, type MirrorBinding } from "../lib/live-parity.ts";
+  mirrorCoverage, sourceLifecycle, liveEntryDriftGuard, type MirrorBinding } from "../lib/live-parity.ts";
 import { advanceForward, initialForward, type Trade, type ForwardState } from "../lib/forward-relations.ts";
 import {newExitControl} from "../lib/forward-protection.ts";
 import { gateMarkedEquity, gatePositionValuation, liveEntryDisposition, liveExitTag, type GateLiveAccount, type GateLiveOrder, type GateLivePosition, type LiveEntryIntent, type LiveStopIntent, LiveEntrySizingError, GateLiveClient } from "../lib/gate-live.ts";
@@ -49,9 +49,25 @@ test("same leverage and proportional notional/margin are frozen in full-source b
   assert.deepEqual(r.binding.sourceAtCopy,t);t.rule.reason="changed afterwards";assert.notEqual(r.binding.sourceAtCopy.rule.reason,t.rule.reason);
 });
 test("the PAPER arm price is not a hard target or a second economic admission model",()=>{
-  const i=request();i.entryPrice=100.8;const r=buildProportionalMirror(i);assert.equal(r.intent.kind,"MARKET");
+  const i=request();i.entryPrice=100.2;const r=buildProportionalMirror(i);assert.equal(r.intent.kind,"MARKET");
   assert.ok(r.intent.notional<=20);assert.equal(r.binding.receipt.sourceDeadline,i.source.openedAt+3600000);
 });
+test("dynamic entry drift guard allows small or favorable moves and rejects material chase",()=>{
+  const t=trade(),g=liveEntryDriftGuard(t,100.2);assert.ok(g.adverse>0);assert.ok(g.adverse<=g.allowed);
+  assert.equal(liveEntryDriftGuard(t,99.8).adverse,0);
+  const ok=request(t);ok.entryPrice=100.2;assert.doesNotThrow(()=>buildProportionalMirror(ok));
+  const chase=request(t);chase.entryPrice=100.4;assert.throws(()=>buildProportionalMirror(chase),/不利偏差.*动态上限/);
+  const short=trade("short-drift","ETH_USDT","SHORT"),bad=request(short);bad.entryPrice=99.6;
+  assert.throws(()=>buildProportionalMirror(bad),/不利偏差.*动态上限/);
+});
+test("mirror receipt records source and copy quote timing before any private order",()=>{
+  const i=request();i.now=T+120;i.quoteObservedAt=T+100;i.entryPrice=100.1;
+  const r=buildProportionalMirror(i),p=r.binding.receipt;
+  assert.equal(p.sourceEntryPrice,100);assert.equal(p.sourceQuoteAt,T);assert.equal(p.copyQuoteAt,T+100);
+  assert.equal(p.copyQuotePrice,100.1);assert.equal(p.copyDelayMs,60120);
+  assert.ok((p.allowedAdverseEntryDriftRate??0)>0);assert.ok((p.adverseEntryDriftRate??0)>0);
+});
+
 test("round down within one lot, never enlarge a tiny account to one oversized contract",()=>{
   const i=request();i.equity=.001;i.available=.001;assert.throws(()=>buildProportionalMirror(i),/真实最小数量/);
   const j=request();j.equity=99.9;const r=buildProportionalMirror(j);assert.ok(r.binding.receipt.roundingNotional>=0);
@@ -73,7 +89,7 @@ test("PAPER fee is not double-reserved against Gate available margin",()=>{
 });
 test("large actual entry drift still cannot hide behind source risk authority",()=>{
   const i=request();i.entryPrice=110;i.mirrorRatio=.1;i.sourceRiskAuthority=true;
-  assert.throws(()=>buildProportionalMirror(i),/风险明显高于模拟比例|止损/);
+  assert.throws(()=>buildProportionalMirror(i),/不利偏差|风险明显高于模拟比例|止损/);
 });
 
 test("expired, future and already stopped source cannot be backdated into LIVE",()=>{
@@ -212,6 +228,29 @@ async function enableNew(h:Harness) {
   if(result.ok)await h.syncLive(T);
   return result;
 }
+
+test("persisted new PAPER source immediately wakes LIVE in the same optional task",()=>clock(async()=>{
+  const {h}=await harness();h.forwardState.positions=[];
+  live(h).requestedEnabled=true;live(h).activation=startLiveSession(T-1000,h.forwardState);
+  let syncs=0;
+  const x=h as unknown as {advanceForwardNow(n:number):Promise<void>;advanceForwardAndWakeLive(n:number):Promise<void>;syncLive(n:number):Promise<void>};
+  x.advanceForwardNow=async()=>{h.forwardState.positions=[{...trade("instant-wake"),openedAt:T-500}];};
+  x.syncLive=async()=>{syncs++;};
+  await x.advanceForwardAndWakeLive(T);
+  assert.equal(syncs,1);
+}));
+test("price running away during leverage setup is rejected before Gate entry submit",()=>clock(async()=>{
+  const {h,gate}=await harness();
+  gate.onLeverage=async()=>{h.runtime.evidence={BTC_USDT:{midpoint:100.4,bestBid:100.39,bestAsk:100.4,observedAt:T,fresh:true,entryReady:true}};};
+  await enableNew(h);
+  assert.equal(gate.placed.length,0);assert.match(live(h).entrySkips.BTC_USDT.reason,/不利偏差.*动态上限/);
+}));
+test("accepted live fill stores submit quote, delay and verified exchange entry drift",()=>clock(async()=>{
+  const {h}=await harness();await enableNew(h);await h.syncLive(T);
+  const p=live(h).positions.BTC_USDT.parity!;
+  assert.equal(p.submitQuotePrice,100);assert.equal(p.submitQuoteAt,T);assert.equal(p.exchangeEntryPrice,100);
+  assert.ok((p.submitDelayMs??-1)>=0);assert.equal(p.exchangeEntryDriftRate,0);
+}));
 
 test("actual owner enable excludes all already-open sources without resetting PAPER",()=>clock(async()=>{
   const {h,gate}=await harness(),before=structuredClone(h.forwardState);
