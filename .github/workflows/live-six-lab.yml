@@ -1,4 +1,4 @@
-name: LIVE six-member isolated verification
+name: LIVE UI-only browser verification
 on:
   pull_request:
     branches: [main]
@@ -8,19 +8,49 @@ jobs:
   lab:
     if: github.head_ref == 'fix/live-first-six-20260919'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
+    env:
+      UI_SOURCE_SHA: 178b82e5d3f584e73a156ccfa8db8a1fefdd563a
+      UI_RESULTS: /tmp/live-ui-results
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-      - name: Export exact tracked source (no credentials or environment)
-        run: |
-          mkdir -p /tmp/live-six-artifacts
-          git archive HEAD | gzip > /tmp/live-six-artifacts/source.tar.gz
-          git rev-parse HEAD > /tmp/live-six-artifacts/source-sha.txt
-      - uses: actions/upload-artifact@v4
+          path: lab
+      - uses: actions/checkout@v4
         with:
-          name: live-six-source-${{ github.run_id }}
-          path: /tmp/live-six-artifacts
+          ref: 178b82e5d3f584e73a156ccfa8db8a1fefdd563a
+          path: release
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+          cache: npm
+          cache-dependency-path: release/package-lock.json
+      - name: Verify exact three-file presentation scope
+        working-directory: release
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$UI_SOURCE_SHA"
+          printf '%s\n' app/layout.tsx app/live-console.tsx app/live-priority.css > /tmp/ui-expected.txt
+          git diff --name-only 55e90e8346ac13736f4591533aec32d6992c5fb8 HEAD > /tmp/ui-actual.txt
+          diff -u /tmp/ui-expected.txt /tmp/ui-actual.txt
+          mkdir -p "$UI_RESULTS"
+          git diff 55e90e8346ac13736f4591533aec32d6992c5fb8 HEAD > "$UI_RESULTS/ui-only.patch"
+          sha256sum app/layout.tsx app/live-console.tsx app/live-priority.css > "$UI_RESULTS/source-hashes.txt"
+      - name: Install exact application and disposable browser runner
+        working-directory: release
+        run: |
+          npm ci
+          npm install --no-save --package-lock=false --ignore-scripts playwright
+          npx playwright install --with-deps chromium
+          cp ../lab/tests/live-ui-only-browser.mjs tests/live-ui-only-browser.mjs
+      - name: Actual mobile and desktop React layout checks
+        working-directory: release
+        run: node --experimental-strip-types tests/live-ui-only-browser.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-ui-browser-${{ github.run_id }}
+          path: /tmp/live-ui-results
           retention-days: 3
