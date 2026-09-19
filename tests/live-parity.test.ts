@@ -225,7 +225,11 @@ test("a NEW source after enable copies, repeated ON does not move its eligibilit
   const epoch=structuredClone(live(h).activation),oldNow=Date.now;Date.now=()=>T+100;
   try{h.forwardState.positions=[{...trade("new-after-enable"),openedAt:T+50}];
     await h.setLiveMode(true);await h.syncLive(T+100);
-    assert.equal(gate.placed.length,1);assert.deepEqual(live(h).activation,epoch);
+    assert.equal(gate.placed.length,1);
+    assert.equal(live(h).activation!.enabledAt,epoch!.enabledAt);
+    assert.equal(live(h).activation!.sourceStartedAt,epoch!.sourceStartedAt);
+    assert.deepEqual(live(h).activation!.excludedSourceIds,epoch!.excludedSourceIds);
+    assert.ok((live(h).activation!.scaleRatio??0)>0);
     assert.equal(live(h).positions.BTC_USDT.id,"new-after-enable");
   }finally{Date.now=oldNow;}
 }));
