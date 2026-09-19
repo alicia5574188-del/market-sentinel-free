@@ -16,13 +16,29 @@ const condition = (r:Rule) => r.conditions.map(c=>`${FEATURES[c.feature]} ${c.op
 export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,liveEnabled,accountPanel,memberName,cacheScope="owner"}:{data:View|null;healthy:boolean;feedAt:number|null;error:string|null;livePanel:ReactNode;liveEnabled:boolean;accountPanel?:ReactNode;memberName?:string;cacheScope?:string}) {
   const [equityCache]=useState(()=>new EquityHistoryCache());
   useEffect(()=>()=>equityCache.cancel(),[equityCache]);
-  const [tab,setTab]=useState<Tab>("overview"),[now,setNow]=useState(0),[showDormant,setShowDormant]=useState(false);
+  const [tab,setTab]=useState<Tab>("overview"),[now,setNow]=useState(0),[showDormant,setShowDormant]=useState(false);\n  const [exporting,setExporting]=useState(false),[exportStatus,setExportStatus]=useState<string|null>(null);
   const [paperTab,setPaperTab]=useState<"positions"|"history"|"archive">("positions"),[paperPage,setPaperPage]=useState(0);
   const paperRecords=recordWindows(data?.history??[],t=>t.closedAt??0),paperArchive=archivePage(paperRecords.archive,paperPage);
   const scroll=useRef<Record<Tab,number>>({overview:0,relations:0,orders:0,live:0,journal:0,settings:0});
   useEffect(()=>{const id=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(id);},[]);
   useLayoutEffect(()=>{window.scrollTo({top:tab==="live"?0:scroll.current[tab],behavior:"auto"});},[tab]);
   const select=(next:Tab)=>{scroll.current[tab]=window.scrollY;setTab(next);};
+  const exportSnapshot=async()=>{
+    if(exporting)return;
+    setExporting(true);setExportStatus(null);
+    try{
+      const response=await fetch("/api/forward/export",{cache:"no-store",credentials:"same-origin"});
+      if(!response.ok)throw new Error(`HTTP ${response.status}`);
+      const blob=await response.blob(),url=URL.createObjectURL(blob);
+      const anchor=document.createElement("a");
+      anchor.href=url;anchor.download=`forward-research-snapshot-${new Date().toISOString().slice(0,10)}.json`;
+      document.body.appendChild(anchor);anchor.click();anchor.remove();
+      window.setTimeout(()=>URL.revokeObjectURL(url),1000);
+      setExportStatus("已开始下载，仍停留在当前页面。");
+    }catch{
+      setExportStatus("导出失败，请重试。");
+    }finally{setExporting(false);}
+  };
   const active=data?.rules.filter(r=>r.status==="EXPERIMENTAL")??[],dormant=data?.rules.filter(r=>r.status==="DORMANT")??[];
   const elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
   const stage=!data||!healthy?0:!data.measured?1:!active.length?2:data.positions.length?4:3;
@@ -65,7 +81,7 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
       </section>}</>}
 
     {tab==="journal"&&<>
-      <section className="fr-section"><h2>数据导出</h2><p className="fr-note">导出当前研究数据与账户快照。</p><a className="fr-button" href="/api/forward/export" download="forward-research-snapshot.json">导出当前研究快照 ↗</a></section>
+      <section className="fr-section"><h2>数据导出</h2><p className="fr-note">导出当前研究数据与账户快照，不会离开当前页面。</p><button className="fr-button" type="button" onClick={exportSnapshot} disabled={exporting}>{exporting?"正在导出…":"导出当前研究快照 ↗"}</button>{exportStatus&&<p className="fr-note" role="status">{exportStatus}</p>}</section>
       <PageTitle eyebrow="AUDITABLE ADAPTATION" title="运行记录" text="查看规则变化、成交与运行异常。"/>
       <section className="fr-section"><div className="fr-section-head"><h2>演变记录</h2><span>最近 {data?.events.length??"—"} 条</span></div><Journal data={data} limit={80}/></section></>}
 
