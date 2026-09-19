@@ -13,7 +13,7 @@ const signed = (v: number | null | undefined, digits=2) => typeof v==="number"?`
 const time = (v?:number|null) => v?new Date(v).toLocaleString("zh-CN",{timeZone:"Asia/Vientiane",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}):"—";
 const condition = (r:Rule) => r.conditions.map(c=>`${FEATURES[c.feature]} ${c.op==="GE"?"≥":"≤"} ${fmt(c.threshold)}`).join(" ＋ ");
 
-export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,liveSystemPanel,liveEnabled,accountPanel,memberName,cacheScope="owner"}:{data:View|null;healthy:boolean;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;liveEnabled:boolean;accountPanel?:ReactNode;memberName?:string;cacheScope?:string}) {
+export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,memberName,cacheScope="owner"}:{data:View|null;healthy:boolean;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;liveEnabled:boolean;liveOverview?:{equity:number|null;available:number|null;positionCount:number;operational:boolean;lastSyncAt:number|null;copied:number|null;eligible:number|null;missing:number|null};accountPanel?:ReactNode;memberName?:string;cacheScope?:string}) {
   const [equityCache]=useState(()=>new EquityHistoryCache());
   useEffect(()=>()=>equityCache.cancel(),[equityCache]);
   const [tab,setTab]=useState<Tab>("overview"),[now,setNow]=useState(0),[showDormant,setShowDormant]=useState(false);
@@ -53,18 +53,36 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
     {memberName&&<p className="fr-note">{memberName} · 共用同一模拟策略，实盘账户独立，开关只由你控制。</p>}
 
     {tab==="overview"&&<>
-      <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">市场在变化，规则随证据更新</span><h1>{title}</h1><p>{data?.latestReason??"读取已持久化的账户、规则和观测记录；连接前不显示虚构成交或收益。"}</p><div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>5分钟行情</span><span>实盘由所有者开启</span></div></div>
-      <div className="fr-equity"><small>当前模拟净值 · USDT</small><strong>{fmt(data?.equity)}</strong><div className={(data?.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(data?.netPnl)} <span>U · {signed(data?data.netPnl/data.initialEquity*100:null)}%</span></div><div className="fr-progress"><i style={{width:`${data?Math.max(0,Math.min(100,data.netPnl/data.initialEquity*100)):0}%`}}/></div><footer><span>起点 {fmt(data?.initialEquity,0)}</span><span>月度目标 {fmt(data?.targetEquity,0)}</span></footer><p>目标不是收益预测，尚未证明月翻倍。</p></div></section>
+      <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">账户驾驶舱</span><h1>{healthy?"系统正在正常运行":"系统正在恢复连接"}</h1>
+        <p>{data?.latestReason??"正在读取已持久化账户和真实行情状态。"}</p>
+        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>5分钟行情</span><span>动态市场范围</span><span>实盘{liveEnabled?"已开启":"关闭"}</span></div></div>
+        <div className="fr-equity"><small>模拟账户权益 · USDT</small><strong>{fmt(data?.equity)}</strong><div className={(data?.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(data?.netPnl)} <span>U · {signed(data?data.netPnl/data.initialEquity*100:null)}%</span></div>
+          <footer><span>起点 {fmt(data?.initialEquity,0)}</span><span>最大回撤 {fmt(data?data.maxDrawdown*100:null)}%</span></footer></div></section>
 
-      <section className="fr-stats"><Stat label="正在测量的反应" value={fmt(data?.pending,0)} note={`已完成 ${fmt(data?.measured,0)} 次市场测量`}/><Stat label="当前实验规则" value={data?String(active.length):"—"} note="查看入场与退出条件"/><Stat label="模拟持仓 / 已平仓" value={data?`${data.positions.length} / ${data.resolved}`:"—"} note="测量数量不计入交易数量"/><Stat label="已扣交易费用" value={`${fmt(data?.fees)} U`} note={`资金费占位 ${fmt(data?.fundingAllowance)} U`}/></section>
+      <section className="fr-stats">
+        <Stat label="模拟账户" value={`${fmt(data?.equity)} U`} note={`${data?.positions.length??"—"} 笔持仓 · 浮盈 ${signed(data?.floating)} U`}/>
+        <Stat label="实盘账户" value={`${fmt(liveOverview?.equity)} U`} note={`${liveOverview?.positionCount??"—"} 笔持仓 · 可用 ${fmt(liveOverview?.available)} U`}/>
+        <Stat label="复制一致性" value={liveOverview?.eligible==null?"—":`${liveOverview.copied??0} / ${liveOverview.eligible}`} note={liveOverview?.missing?`${liveOverview.missing} 笔需要核对`:"当前无漏复制提示"}/>
+        <Stat label="系统状态" value={healthy?"正常":"恢复中"} note={`行情心跳 ${time(feedAt)}`}/>
+      </section>
 
-      <section className="fr-section"><div className="fr-section-head"><div><small>运行进程</small><h2>系统此刻在做什么</h2></div><span>{time(data?.updatedAt)}</span></div><div className="fr-pipeline">{stages.map((name,i)=><div key={name} className={i===stage?"current":i<stage?"done":""}><span>{i<stage?"✓":String(i+1).padStart(2,"0")}</span><b>{name}</b></div>)}</div><div className="fr-insight"><span className="fr-dot"/><p>{data?.latestReason??"等待后台的首个持久化快照。"}</p></div>
-      <div className="fr-three"><div><small>用于特征的市场</small><b>{fmt(data?.marketCount,0)} / 30</b></div><div><small>最近规则更新</small><b>{time(data?.lastFitAt)}</b></div><div><small>状态已保存</small><b>{time(data?.storage.persistedAt)}</b></div></div></section>
+      <div className="fr-two">
+        <section className="fr-section"><div className="fr-section-head"><div><small>模拟账户</small><h2>净值变化</h2></div><span>含模拟成本</span></div>
+          <EquityCurve data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>
+          <div className="fr-three"><div><small>累计模拟成交额</small><b>{fmt(data?.turnover)} U</b></div><div><small>已扣模拟费用</small><b>{fmt(data?.fees)} U</b></div><div><small>已完成订单</small><b>{fmt(data?.resolved,0)}</b></div></div>
+        </section>
+        <section className="fr-section"><div className="fr-section-head"><div><small>当前状态</small><h2>现在需要看什么</h2></div><span>{time(data?.updatedAt)}</span></div>
+          <div className="fr-three"><div><small>模拟持仓</small><b>{fmt(data?.positions.length,0)}</b></div><div><small>实盘持仓</small><b>{liveOverview?.positionCount??"—"}</b></div><div><small>实盘执行</small><b>{!liveEnabled?"关闭":liveOverview?.operational?"正常":"核对中"}</b></div></div>
+          <div className="fr-insight"><span className="fr-dot"/><p>{data?.latestReason??"等待运行状态。"}</p></div>
+          <div className="fr-action-row"><button className="fr-button" onClick={()=>select("orders")}>查看模拟账户</button><button className="fr-button secondary" onClick={()=>select("live")}>查看实盘账户</button></div>
+        </section>
+      </div>
 
-      <section className="fr-section"><div className="fr-section-head"><h2>机会与执行</h2><span>统计自 {time(data?.participation?.since)}</span></div><div className="fr-three"><div><small>匹配次数（非订单）</small><b>{fmt(data?.participation?.matches,0)}</b></div><div><small>当前等待报价</small><b>{fmt(data?.quoteRetries?.length,0)}</b></div><div><small>新开仓 / 重试成交</small><b>{fmt(data?.participation?.opened,0)} / {fmt(data?.participation?.retryFills,0)}</b></div></div><p className="fr-note">报价暂缺会在当前5分钟信号剩余窗口内重试；超时作废，不补成交，不设强制交易数。同一币同一根K线不重复开仓。</p></section>
-      <div className="fr-two"><section className="fr-section"><div className="fr-section-head"><div><small>账户结果</small><h2>净值曲线</h2></div><span>含模拟成本</span></div><EquityCurve data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/><div className="fr-three"><div><small>已实现价格损益</small><b>{signed(data?.grossPnl)} U</b></div><div><small>含退出成本浮盈</small><b>{signed(data?.floating)} U</b></div><div><small>已观测最大回撤</small><b>{fmt(data?data.maxDrawdown*100:null)}%</b></div></div></section>
-      <section className="fr-section"><div className="fr-section-head"><div><small>响应样本</small><h2>观察多长时间的反应</h2></div></div><div className="fr-horizons">{[15,60,180].map(h=><div key={h}><b>{h<60?`${h} 分钟`:`${h/60} 小时`}</b><div><i style={{width:`${data?Math.min(100,(data.sampleCounts[h]??0)/384*100):0}%`}}/></div><strong>{fmt(data?.sampleCounts[h],0)}</strong></div>)}</div><p className="fr-note">样本来自已完成的市场反应，不计入交易次数。</p><button className="fr-text-button" onClick={()=>select("relations")}>查看规则如何生成 <span>↗</span></button></section></div>
-      <section className="fr-section"><div className="fr-section-head"><div><small>最近变化</small><h2>每次改变都有依据</h2></div><button className="fr-text-button" onClick={()=>select("journal")}>全部记录 ↗</button></div><Journal data={data} limit={4}/></section>
+      {(liveOverview?.missing??0)>0&&<section className="fr-section fr-parity-alert"><div className="fr-section-head"><div><small>需要关注</small><h2>模拟—实盘复制存在差异</h2></div><span>{liveOverview?.missing} 笔</span></div>
+        <p className="fr-note">这里仅提示存在需要核对的订单，不用不同资金规模账户的绝对盈亏做比较。进入实盘页查看标准化收益率、入场偏差、复制延迟和按实盘名义额折算后的执行结果。</p>
+        <button className="fr-text-button" onClick={()=>select("live")}>查看实盘差异 →</button></section>}
+
+      <section className="fr-section"><div className="fr-section-head"><div><small>最近变化</small><h2>需要留意的运行记录</h2></div><button className="fr-text-button" onClick={()=>select("journal")}>全部记录 ↗</button></div><Journal data={data} limit={3}/></section>
     </>}
 
     {tab==="relations"&&<><PageTitle eyebrow="RELATION → RULE" title="交易规则" text="查看当前入场条件、适用市场与退出设置。"/>
