@@ -16,6 +16,9 @@ export class LiveHistoryReader<T extends SettlementPosition> {
       checkedAt:this.at||null,pending:[...windows.recent,...windows.archive].filter(p=>!this.values[p.id]).length,
       error:this.error,updating:!!this.work};
   }
+  needsRefresh(current:readonly T[]) {
+    return this.view(current).pending>0;
+  }
   launch(input:{storage:Reader;client:Client|null;current:readonly T[];now:number;
     valid:()=>boolean;reserve:()=>boolean;committed:(writes:number)=>void;waitUntil:(work:Promise<void>)=>void}) {
 
