@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      UI_SOURCE_SHA: 178b82e5d3f584e73a156ccfa8db8a1fefdd563a
+      UI_SOURCE_SHA: 5a1a9664cc654883c392cea5b5e4c8595f543d81
       UI_RESULTS: /tmp/live-ui-results
     steps:
       - uses: actions/checkout@v4
@@ -19,7 +19,7 @@ jobs:
           path: lab
       - uses: actions/checkout@v4
         with:
-          ref: 178b82e5d3f584e73a156ccfa8db8a1fefdd563a
+          ref: 5a1a9664cc654883c392cea5b5e4c8595f543d81
           path: release
           fetch-depth: 0
       - uses: actions/setup-node@v4
@@ -27,23 +27,24 @@ jobs:
           node-version: 22.16.0
           cache: npm
           cache-dependency-path: release/package-lock.json
-      - name: Verify exact three-file presentation scope
+      - name: Verify exact four-file presentation scope
         working-directory: release
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$UI_SOURCE_SHA"
-          printf '%s\n' app/layout.tsx app/live-console.tsx app/live-priority.css > /tmp/ui-expected.txt
+          printf '%s\n' app/forward-dashboard.tsx app/layout.tsx app/live-console.tsx app/live-priority.css > /tmp/ui-expected.txt
           git diff --name-only 55e90e8346ac13736f4591533aec32d6992c5fb8 HEAD > /tmp/ui-actual.txt
           diff -u /tmp/ui-expected.txt /tmp/ui-actual.txt
           mkdir -p "$UI_RESULTS"
           git diff 55e90e8346ac13736f4591533aec32d6992c5fb8 HEAD > "$UI_RESULTS/ui-only.patch"
-          sha256sum app/layout.tsx app/live-console.tsx app/live-priority.css > "$UI_RESULTS/source-hashes.txt"
-      - name: Install exact application and disposable browser runner
+          sha256sum app/forward-dashboard.tsx app/layout.tsx app/live-console.tsx app/live-priority.css > "$UI_RESULTS/source-hashes.txt"
+      - name: Install exact application and separate disposable browser runner
         working-directory: release
         run: |
           npm ci
-          npm install --no-save --package-lock=false --ignore-scripts playwright
-          npx playwright install --with-deps chromium
+          npm install --prefix /tmp/live-ui-browser-tools --no-save --package-lock=false --ignore-scripts playwright
+          ln -s /tmp/live-ui-browser-tools/node_modules/playwright node_modules/playwright
+          /tmp/live-ui-browser-tools/node_modules/.bin/playwright install --with-deps chromium
           cp ../lab/tests/live-ui-only-browser.mjs tests/live-ui-only-browser.mjs
       - name: Actual mobile and desktop React layout checks
         working-directory: release
