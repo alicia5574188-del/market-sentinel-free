@@ -1,0 +1,26 @@
+name: LIVE six-member isolated verification
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  lab:
+    if: github.head_ref == 'fix/live-first-six-20260919'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Export exact tracked source (no credentials or environment)
+        run: |
+          mkdir -p /tmp/live-six-artifacts
+          git archive HEAD | gzip > /tmp/live-six-artifacts/source.tar.gz
+          git rev-parse HEAD > /tmp/live-six-artifacts/source-sha.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: live-six-source-${{ github.run_id }}
+          path: /tmp/live-six-artifacts
+          retention-days: 3
