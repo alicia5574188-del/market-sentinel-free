@@ -1,0 +1,32 @@
+name: Public PAPER Audit Only
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/research-production-audit.yml'
+permissions:
+  contents: read
+jobs:
+  audit:
+    if: github.head_ref == 'research/inventory-continuation-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Read public runtime and archives; no session or mutations
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p public-paper-audit
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > public-paper-audit/fetched-at.txt
+          curl --fail --silent --show-error --retry 2 --max-time 20 'https://market-sentinel-free.alicia5574188.workers.dev/api/runtime' > public-paper-audit/runtime.json
+          curl --fail --silent --show-error --retry 2 --max-time 20 'https://market-sentinel-free.alicia5574188.workers.dev/api/history' > public-paper-audit/history.json
+          curl --fail --silent --show-error --retry 2 --max-time 20 'https://market-sentinel-free.alicia5574188.workers.dev/api/account-logs' > public-paper-audit/account-logs.json
+          jq '{generatedAt,version,mode,state,stale,lastError,liveMode,strategyData,arena:(.strategyArena | {systemName,initialEquity,startedAt,portfolioCycle,portfolioCycleStartedAt,portfolioEquity,portfolioResolved,portfolioWins,portfolioGrossPnl,portfolioCosts,currentContext,portfolioOpen,recentPortfolio,archivedPortfolioCycles,currentRouteChecks,blockedCandidates,admissionRejects})}' public-paper-audit/runtime.json > public-paper-audit/summary.json
+          cat public-paper-audit/summary.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: public-paper-audit-${{ github.run_id }}
+          path: public-paper-audit/
+          retention-days: 3
+          if-no-files-found: error
