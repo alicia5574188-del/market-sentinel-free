@@ -12,7 +12,7 @@ import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recor
   PAPER_BANKRUPTCY_EQUITY, PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
 import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, gateMarkedEquity, gatePositionValuation, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
-import { LIVE_SESSION_VERSION, startLiveSession, sourceAfterEnable, sameLiveSession, type LiveSession } from "../lib/live-session.ts";
+import { LIVE_SESSION_VERSION, establishLiveScale, startLiveSession, sourceAfterEnable, sameLiveSession, type LiveSession } from "../lib/live-session.ts";
 import type { GateSizeRules, SizeDiagnostic } from "../lib/gate-quantity.ts";
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
 import { credentialMetadata } from "../lib/gate-readonly.ts";
@@ -1623,6 +1623,31 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.live.auditEvents = this.runtime.live.auditEvents.slice(-100);
   }
 
+  private liveSessionSeedRatio() {
+    const activation=this.runtime.live.activation;
+    if(!activation)return null;
+    const receipts=[
+      ...Object.values(this.runtime.live.positions).flatMap(p=>p?.parity?[p.parity]:[]),
+      ...Object.values(this.runtime.live.entries).flatMap(e=>e?.parity?[e.parity]:[]),
+      ...this.liveHistory.flatMap(p=>p.parity?[p.parity]:[]),
+    ].filter(r=>r.activationAt===activation.enabledAt&&Number.isFinite(r.ratio)&&r.ratio>0)
+      .sort((a,b)=>a.copiedAt-b.copiedAt);
+    return receipts[0]?.ratio??null;
+  }
+
+  private async ensureLiveSessionScale(sourceEquity:number,liveEquity:number,now:number) {
+    const activation=this.runtime.live.activation;
+    if(!activation||activation.scaleRatio)return activation;
+    const scaled=establishLiveScale(activation,sourceEquity,liveEquity,now,this.liveSessionSeedRatio()??undefined);
+    this.runtime.live.activation=scaled;
+    await this.ctx.storage.put(`${LIVE_PARITY_PREFIX}owner-intent`,{
+      enabled:this.runtime.live.requestedEnabled,changedAt:this.runtime.live.changedAt,activation:scaled,
+    });
+    this.runtime.nonAlarmWrites++;
+    await this.saveCheckpoint(now,true);
+    return scaled;
+  }
+
   private liveEntryAwaitingReconcile(entry: LiveEntry | null | undefined) {
     if(!entry?.parity || entry.marketSubmittedAt == null) return false;
     if(this.runtime.live.positions[entry.symbol]?.id === entry.planId) return false;
@@ -2111,6 +2136,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ...Object.values(this.runtime.live.entries).filter(e=>e&&["SUBMITTING","OPEN","ERROR"].includes(e.status))]
       .reduce((n,p)=>n+(p?.notional??0),0);
     const paperMark=forwardEquity(this.forwardState!,this.regimeQuotes(Date.now()),Date.now());
+    let mirrorRatio=this.runtime.live.activation?.scaleRatio??null;
     const staged: Array<{ symbol: string; plan: PaperPlan; intent: ReturnType<typeof buildLiveEntryIntent>;binding?:MirrorBinding;activation:LiveSession|null }> = [];
     for (const [symbol, skip] of Object.entries(this.runtime.live.entrySkips)) {
       const trade = desiredPortfolio[symbol] ?? null;
@@ -2152,6 +2178,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       let binding:MirrorBinding|undefined;
       try {
         if(paperMark.stalePositions)throw new LiveEntrySizingError("ECONOMICS",symbol,"模拟账户当前估值不完整，不能确定复制比例");
+        if(!mirrorRatio){
+          const scaled=await this.ensureLiveSessionScale(paperMark.equity,equity,Date.now());
+          mirrorRatio=scaled?.scaleRatio??equity/paperMark.equity;
+        }
+        const expectedLiveEquity=paperMark.equity*mirrorRatio;
+        const liveEquityDrift=expectedLiveEquity>0?equity/expectedLiveEquity:0;
+        if(liveEquityDrift<.85)throw new LiveEntrySizingError("ECONOMICS",symbol,
+          `实盘权益已低于固定模拟比例预期的${(liveEquityDrift*100).toFixed(1)}%，暂停新增复制并保留已有保护`);
         const quote=this.runtime.evidence[symbol];
         const result=buildProportionalMirror({source:trade.forwardSource,sourceEquity:paperMark.equity,equity,
           available:availableForNewEntries,openRisk:riskForNewEntries,sameDirectionRisk:directionRiskForNewEntries[plan.side],
@@ -2159,7 +2193,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           quantoMultiplier:this.runtime.contractMeta[symbol]?.quantoMultiplier??0,
           leverageMax:this.runtime.contractMeta[symbol]?.leverageMax??0,maintenanceRate:this.runtime.contractMeta[symbol]?.maintenanceRate??0.005,
           openMargin:marginForNewEntries,openNotional:notionalForNewEntries,now:Date.now(),policy:this.forwardState!.policyVersion??this.forwardState!.version,
-          sizeRules:this.runtime.contractMeta[symbol],activationAt:this.runtime.live.activation?.enabledAt});
+          sizeRules:this.runtime.contractMeta[symbol],activationAt:this.runtime.live.activation?.enabledAt,
+          mirrorRatio,sourceRiskAuthority:true});
         intent=result.intent;binding=result.binding;
       } catch (error) {
         if (!(error instanceof LiveEntrySizingError)) throw error;
@@ -2167,7 +2202,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         continue;
       }
       delete this.runtime.live.entrySkips[symbol];
-      availableForNewEntries = Math.max(0, availableForNewEntries - intent.margin-intent.notional*.0007);
+      availableForNewEntries = Math.max(0, availableForNewEntries - intent.margin);
       riskForNewEntries += intent.plannedRisk;
       directionRiskForNewEntries[plan.side] += intent.plannedRisk;
       marginForNewEntries += intent.margin;

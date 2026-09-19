@@ -26,7 +26,7 @@ function trade(id="ft-fixture-1",symbol="BTC_USDT",side:"LONG"|"SHORT"="LONG"):T
       estimatedNetRate:.002,priorResponse:.005,recentResponse:.004,standardError:.001,
       reason:"Synthetic functional source, never a trading result",mutation:"CREATE",grammar:"fixture",liveEligible:false}};
 }
-function request(t=trade()){return {source:t,sourceEquity:1000,equity:100,available:100,entryPrice:100,
+function request(t=trade()):Parameters<typeof buildProportionalMirror>[0]{return {source:t,sourceEquity:1000,equity:100,available:100,entryPrice:100,
   quantoMultiplier:.001,leverageMax:20,maintenanceRate:.005,openRisk:0,sameDirectionRisk:0,openMargin:0,
   openNotional:0,now:T,policy:"any-current-or-future-policy",sizeRules:{enableDecimal:false,orderSizeMin:"1",orderSizeMax:"10000000"}};}
 
@@ -61,6 +61,21 @@ test("margin or leverage failure is explicit, not silent new leverage or smaller
   const i=request();i.leverageMax=1;assert.throws(()=>buildProportionalMirror(i),/杠杆/);
   const j=request();j.available=1;assert.throws(()=>buildProportionalMirror(j),/不静默缩单/);
 });
+test("source-authoritative mirror keeps fixed scale despite small live fee drift",()=>{
+  const i=request();i.equity=95;i.available=100;i.mirrorRatio=.1;i.sourceRiskAuthority=true;
+  i.openRisk=9.8;i.sameDirectionRisk=6.4;i.openMargin=74;i.openNotional=390;
+  const r=buildProportionalMirror(i);
+  assert.equal(r.binding.receipt.ratio,.1);assert.equal(r.intent.notional,20);assert.equal(r.intent.margin,10);
+});
+test("PAPER fee is not double-reserved against Gate available margin",()=>{
+  const i=request();i.available=10;i.sourceRiskAuthority=true;i.mirrorRatio=.1;
+  const r=buildProportionalMirror(i);assert.equal(r.intent.margin,10);
+});
+test("large actual entry drift still cannot hide behind source risk authority",()=>{
+  const i=request();i.entryPrice=110;i.mirrorRatio=.1;i.sourceRiskAuthority=true;
+  assert.throws(()=>buildProportionalMirror(i),/风险明显高于模拟比例|止损/);
+});
+
 test("expired, future and already stopped source cannot be backdated into LIVE",()=>{
   const i=request();i.now=i.source.openedAt+3600000;assert.throws(()=>buildProportionalMirror(i),/过期/);
   i.now=i.source.openedAt-1;assert.throws(()=>buildProportionalMirror(i));
@@ -210,7 +225,11 @@ test("a NEW source after enable copies, repeated ON does not move its eligibilit
   const epoch=structuredClone(live(h).activation),oldNow=Date.now;Date.now=()=>T+100;
   try{h.forwardState.positions=[{...trade("new-after-enable"),openedAt:T+50}];
     await h.setLiveMode(true);await h.syncLive(T+100);
-    assert.equal(gate.placed.length,1);assert.deepEqual(live(h).activation,epoch);
+    assert.equal(gate.placed.length,1);
+    assert.equal(live(h).activation!.enabledAt,epoch!.enabledAt);
+    assert.equal(live(h).activation!.sourceStartedAt,epoch!.sourceStartedAt);
+    assert.deepEqual(live(h).activation!.excludedSourceIds,epoch!.excludedSourceIds);
+    assert.ok((live(h).activation!.scaleRatio??0)>0);
     assert.equal(live(h).positions.BTC_USDT.id,"new-after-enable");
   }finally{Date.now=oldNow;}
 }));

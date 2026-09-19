@@ -90,7 +90,7 @@ export function mirrorSourceFresh(t: Trade | undefined, id: string, now: number)
 export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;equity:number;available:number;
   entryPrice:number;quantoMultiplier:number;leverageMax:number;maintenanceRate:number;openRisk:number;
   sameDirectionRisk:number;openMargin:number;openNotional:number;now:number;policy:string;
-  sizeRules?: GateSizeRules; activationAt?: number}): {intent:LiveEntryIntent;binding:MirrorBinding} {
+  sizeRules?: GateSizeRules; activationAt?: number; mirrorRatio?: number; sourceRiskAuthority?: boolean}): {intent:LiveEntryIntent;binding:MirrorBinding} {
   const t=input.source;validateMirrorSource(t);
   const fail=(code:"MIN_CONTRACT"|"CONTRACT_SPEC"|"MARGIN"|"RISK_CAP"|"ECONOMICS",message:string,sizing?:SizeDiagnostic):never=>{
     throw new LiveEntrySizingError(code,t.symbol,`${t.symbol} ${message}；源单 ${t.id} 未完成复制，不冒充已成交`,sizing);
@@ -103,7 +103,8 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
   if (t.leverage>input.leverageMax)fail("MARGIN","交易所不支持源单杠杆，不擅自改杠杆");
   const direction=t.side==="LONG"?1:-1;
   if (direction*(input.entryPrice-t.stopPrice)<=0)fail("ECONOMICS","当前价已越过源单止损，不开即平");
-  const ratio=input.equity/input.sourceEquity,targetNotional=t.notional*ratio,targetMargin=t.margin*ratio;
+  const ratio=input.mirrorRatio&&positive(input.mirrorRatio)?input.mirrorRatio:input.equity/input.sourceEquity;
+  const mirrorEquity=input.sourceEquity*ratio,targetNotional=t.notional*ratio,targetMargin=t.margin*ratio;
   const one=input.entryPrice*input.quantoMultiplier,requestedContracts=targetNotional/one;
   let sized: ReturnType<typeof quantizeMirrorNotional>;
   try { sized=quantizeMirrorNotional(targetNotional,input.entryPrice,input.quantoMultiplier,input.sizeRules??{}); }
@@ -116,10 +117,17 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
   const notional=contracts*one,leverage=t.leverage,margin=notional/leverage;
   const cost=2*(PAPER_COST.feeRate+PAPER_COST.slippageRate)+PAPER_COST.fundingAllowancePerDay*t.rule.horizon/1440;
   const plannedRisk=notional*(Math.abs(input.entryPrice-t.stopPrice)/input.entryPrice+cost);
-  if (margin+notional*PAPER_COST.feeRate>input.available)fail("MARGIN","可用保证金不足，保留比例，不静默缩单");
-  if (input.openMargin+margin>input.equity*.75+1e-8)fail("MARGIN","累计保证金超出模拟同口径75%预算");
-  if (input.openNotional+notional>input.equity*4+1e-8 || input.openRisk+plannedRisk>input.equity*.10+1e-8
-    || input.sameDirectionRisk+plannedRisk>input.equity*.065+1e-8)fail("RISK_CAP","按实际成交价计算已超过原账户风险预算");
+  const sourceScaledRisk=t.plannedRisk*ratio;
+  // Gate is the execution authority for actual fees and available margin. Do not
+  // double-reserve PAPER's model fee and turn a valid source order into a skip.
+  if (margin>input.available+1e-8)fail("MARGIN","可用保证金不足，保留比例，不静默缩单");
+  if(!input.sourceRiskAuthority){
+    if (input.openMargin+margin>mirrorEquity*.75+1e-8)fail("MARGIN","累计保证金超出模拟同口径75%预算");
+    if (input.openNotional+notional>mirrorEquity*4+1e-8 || input.openRisk+plannedRisk>mirrorEquity*.10+1e-8
+      || input.sameDirectionRisk+plannedRisk>mirrorEquity*.065+1e-8)fail("RISK_CAP","按实际成交价计算已超过原账户风险预算");
+  } else if (plannedRisk>sourceScaledRisk*1.25+mirrorEquity*.001) {
+    fail("ECONOMICS","实盘成交价偏离使单笔风险明显高于模拟比例，等待下一笔新源单而不追价");
+  }
   if (1/leverage <= Math.abs(input.entryPrice-t.stopPrice)/input.entryPrice+input.maintenanceRate+cost)
     fail("RISK_CAP","源单杠杆与实际入场价无法保留止损前的保证金余量");
   const size=direction*contracts,tag=liveEntryTag(t.id);
