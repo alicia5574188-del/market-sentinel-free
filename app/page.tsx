@@ -66,6 +66,12 @@ export default function Home() {
   return <ForwardDashboard key={auth.memberId??"owner"} cacheScope={auth.memberId??"owner"} data={runtime?.forward?.startedAt?runtime.forward:null}
     healthy={runtimeBackendOperational(runtime)} feedAt={runtime?.lastSuccessAt??null}
     error={runtime?.forward?.storage?.error??error} liveEnabled={runtime?.liveMode?.requestedEnabled??false}
+    liveOverview={{equity:runtime?.live?.equity??null,available:runtime?.live?.available??null,
+      positionCount:Object.values(runtime?.live?.positions??{}).filter(p=>p?.status==="OPEN").length,
+      operational:runtime?.liveMode?.operational??false,lastSyncAt:runtime?.live?.lastSyncAt??null,
+      copied:runtime?.live?.mirror?.eligibleCopiedCount??runtime?.liveMirror?.eligibleCopiedCount??null,
+      eligible:runtime?.live?.mirror?.eligibleSourceCount??runtime?.liveMirror?.eligibleSourceCount??null,
+      missing:runtime?.live?.mirror?.eligibleMissingCount??runtime?.liveMirror?.eligibleMissingCount??null}}
     livePanel={<LiveConsole view="trade" auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}
     liveSystemPanel={<LiveConsole view="system" auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}
     accountPanel={<MemberAccess auth={auth}/>} memberName={auth.role==="member"?auth.username:undefined}/>;
