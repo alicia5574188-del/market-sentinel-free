@@ -151,7 +151,7 @@ export function memberExecutionClass(Base:typeof MarketStream) {
     }
     private async arm() {
       if(!this.identity||this.bootError)return;
-      if(this.liveNeedsSync()) {
+      if(this.liveNeedsSync()||this.liveSettlementNeedsRefresh()) {
         const jitter=parseInt(this.identity.id.slice(-2),16)%4*100;
         const at=(Math.floor(Date.now()/10000)+1)*10000+jitter;
         const old=await this.ctx.storage.getAlarm();if(old==null||old<Date.now()-10000||old>at+10000)await this.ctx.storage.setAlarm(at);
@@ -162,7 +162,7 @@ export function memberExecutionClass(Base:typeof MarketStream) {
       // the primary's loop or another member's execution lock.
       await this.ctx.storage.setAlarm((Math.floor(Date.now()/10000)+1)*10000+100);
       try {await this.tick();}finally {
-        if(!this.bootError&&!this.liveNeedsSync()) {await this.ctx.storage.deleteAlarm();if(this.identity)await this.directory("/seat",{enabled:false}).catch(()=>undefined);}
+        if(!this.bootError&&!this.liveNeedsSync()&&!this.liveSettlementNeedsRefresh()) {await this.ctx.storage.deleteAlarm();if(this.identity)await this.directory("/seat",{enabled:false}).catch(()=>undefined);}
       }
     }
     private async tick() {
@@ -173,6 +173,7 @@ export function memberExecutionClass(Base:typeof MarketStream) {
         await this.refreshSource().catch(()=>undefined);
         try {if(this.liveNeedsSync())await this.syncLive(Date.now());}
         catch(e){this.runtime.live.operational=false;this.runtime.live.lastError=errorText(e);}
+        this.launchLiveSettlementBackground();
         await this.saveCheckpoint(Date.now(),false).catch(e=>{this.runtime.live.lastError=errorText(e);this.runtime.live.operational=false;});
         this.launchTurnoverWork(Date.now());
         if(Date.now()-this.usageAt>=60000) {
