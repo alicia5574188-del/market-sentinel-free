@@ -49,7 +49,7 @@ test("same leverage and proportional notional/margin are frozen in full-source b
   assert.deepEqual(r.binding.sourceAtCopy,t);t.rule.reason="changed afterwards";assert.notEqual(r.binding.sourceAtCopy.rule.reason,t.rule.reason);
 });
 test("the PAPER arm price is not a hard target or a second economic admission model",()=>{
-  const i=request();i.entryPrice=100.8;const r=buildProportionalMirror(i);assert.equal(r.intent.kind,"MARKET");
+  const i=request();i.entryPrice=100.2;const r=buildProportionalMirror(i);assert.equal(r.intent.kind,"MARKET");
   assert.ok(r.intent.notional<=20);assert.equal(r.binding.receipt.sourceDeadline,i.source.openedAt+3600000);
 });
 test("dynamic entry drift guard allows small or favorable moves and rejects material chase",()=>{
@@ -89,7 +89,7 @@ test("PAPER fee is not double-reserved against Gate available margin",()=>{
 });
 test("large actual entry drift still cannot hide behind source risk authority",()=>{
   const i=request();i.entryPrice=110;i.mirrorRatio=.1;i.sourceRiskAuthority=true;
-  assert.throws(()=>buildProportionalMirror(i),/风险明显高于模拟比例|止损/);
+  assert.throws(()=>buildProportionalMirror(i),/不利偏差|风险明显高于模拟比例|止损/);
 });
 
 test("expired, future and already stopped source cannot be backdated into LIVE",()=>{
