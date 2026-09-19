@@ -488,8 +488,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   protected liveSettlementCurrent() {
     return [...this.liveHistory,...Object.values(this.runtime.live.positions).filter((p):p is LivePosition=>p?.status==="CLOSED")];
   }
-  protected liveSettlementNeedsRefresh() {
-    return this.runtime.live.credentialConfigured&&this.historyReader.needsRefresh(this.liveSettlementCurrent());
+  protected liveSettlementNeedsRefresh(now=Date.now()) {
+    const current=this.liveSettlementCurrent();
+    // Background reconciliation is bounded to fresh closes. Older exceptional
+    // records remain available to the explicit history reader without keeping
+    // an otherwise-idle member executor awake forever.
+    return this.runtime.live.credentialConfigured
+      &&current.some(p=>p.status==="CLOSED"&&p.exitAt!=null&&now-p.exitAt<=30*60_000)
+      &&this.historyReader.needsRefresh(current);
   }
   protected async privateLiveHistory() {
     if(!this.liveClient&&this.runtime.live.credentialConfigured)await this.gateLive().catch(()=>undefined);
