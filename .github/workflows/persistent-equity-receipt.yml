@@ -1,0 +1,74 @@
+name: Persistent Equity Public Receipt
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/persistent-equity-receipt.yml']
+permissions:
+  contents: read
+jobs:
+  receipt:
+    if: github.head_ref == 'verify/persistent-equity-20260919'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Public exact-build, client cache and continuous source receipt
+        run: |
+          mkdir -p persistent-equity-receipt
+          python3 - <<'PY'
+          import subprocess,pathlib,json,time,re,urllib.parse,hashlib,datetime
+          root=pathlib.Path('persistent-equity-receipt');base='https://market-sentinel-free.alicia5574188.workers.dev';expected='55e90e8346ac13736f4591533aec32d6992c5fb8';observations=[]
+          def get(path,name):
+              dest=root/name
+              p=subprocess.run(['curl','-sS','--max-time','12','-o',str(dest),'-w','%{http_code}',base+path],capture_output=True,text=True)
+              return p.stdout.strip(),dest.read_bytes() if dest.exists() else b''
+          first=None;final=None
+          for i in range(32):
+              code,raw=get('/__health','health-latest.json')
+              try:h=json.loads(raw)
+              except Exception:h={}
+              r=h.get('runtime',{});f=r.get('forward',{});s=f.get('storage',{})
+              observations.append({'at':int(time.time()*1000),'http':code,'build':r.get('buildSha'),'state':r.get('state'),'stale':r.get('stale'),'error':r.get('lastError'),'lastCycleAt':f.get('lastCycleAt'),'persistedAt':s.get('persistedAt')})
+              (root/'observations.json').write_text(json.dumps(observations,ensure_ascii=False,indent=2))
+              if first is None and isinstance(r.get('liveMode',{}).get('requestedEnabled'),bool) and f.get('startedAt')==1789556791436:
+                  first=h;(root/'health-first.json').write_text(json.dumps(h,ensure_ascii=False))
+              good=code=='200' and h.get('ok') is True and h.get('ready') is True and r.get('buildSha')==expected and r.get('stale') is False and r.get('lastError') is None and s.get('error') is None
+              if good and first and f.get('lastCycleAt',0)>first['runtime']['forward']['lastCycleAt'] and s.get('persistedAt',0)>=f['lastCycleAt']:
+                  final=h;break
+              time.sleep(15)
+          assert first is not None and final is not None,'No exact healthy build with a subsequent saved source cycle; do not override or redeploy'
+          before=first['runtime'];r=final['runtime'];f=r['forward'];m=r['liveMirror']
+          assert r['liveMode']['requestedEnabled']==before['liveMode']['requestedEnabled']
+          assert m['enabledAt']==before['liveMirror']['enabledAt']
+          assert f['startedAt']==1789556791436 and f['policyVersion']=='participation-execution-v1.2' and f['exitPolicyVersion']=='timely-protection-v1'
+          assert f['exitPolicyActivatedAt']==before['forward']['exitPolicyActivatedAt']
+          assert f['resolved']>=before['forward']['resolved'] and r['lastSuccessAt']>before['lastSuccessAt']
+          assert m['source']=='CURRENT_FORWARD_ACCOUNT' and m['ownerControlled'] is True and m['newOrdersOnly'] is True
+          assert final['members']==first['members'] and final['records']==first['records']
+          assert final['records']['recent']==10 and final['records']['archive']==50 and r['resourceAccounting']['cap']==8000
+          (root/'health-final.json').write_text(json.dumps(final,ensure_ascii=False,indent=2))
+          code,html=get('/','index.html');assert code=='200'
+          strings=lambda raw:re.findall(r'[\"\x27]([^\"\x27\s]+\.js(?:\?[^\"\x27\s]*)?)[\"\x27]',raw.decode(errors='ignore'))
+          queue=[urllib.parse.urljoin(base+'/',x) for x in strings(html)];seen=set();assets=[];found=False
+          while queue and len(seen)<24:
+              url=queue.pop(0);u=urllib.parse.urlparse(url)
+              if u.netloc!=urllib.parse.urlparse(base).netloc or u.path in seen or not u.path.startswith('/assets/'):continue
+              seen.add(u.path);status,body=get(u.path,'asset-'+str(len(seen))+'.js')
+              if status!='200':continue
+              found=b'incremental-persistent-v1' in body
+              assets.append({'path':u.path,'bytes':len(body),'sha256':hashlib.sha256(body).hexdigest(),'persistentCacheMarker':found})
+              if found:break
+              queue.extend(urllib.parse.urljoin(url,x) for x in strings(body))
+          (root/'assets.json').write_text(json.dumps(assets,indent=2));assert found,'Published client marker not found'
+          denied={}
+          for path in ['/api/runtime','/api/forward/equity','/api/forward/equity?after=invalid']:
+              status,body=get(path,'guest-'+str(len(denied))+'.json');denied[path]=status;assert status=='401'
+          result={'checkedAt':int(time.time()*1000),'checkedAtVientiane':datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7))).isoformat(),'build':expected,'browserCacheVersion':'incremental-persistent-v1','source':f,'previousCycleAt':before['forward']['lastCycleAt'],'owner':r['liveMode'],'originalActivation':m['enabledAt'],'members':final['members'],'records':final['records'],'resources':r['resourceAccounting'],'publishedClientVerified':True,'guestStatuses':denied,'productionLoginRequests':0,'ownerToggleRequests':0,'realTestOrders':0,'billingChanges':0,'privateNumericAccountViewed':False}
+          (root/'receipt.json').write_text(json.dumps(result,ensure_ascii=False,indent=2));print(json.dumps(result,ensure_ascii=False))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: persistent-equity-production-${{ github.run_id }}
+          path: persistent-equity-receipt/
+          retention-days: 7
+          if-no-files-found: error
