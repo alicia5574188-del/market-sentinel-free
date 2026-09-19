@@ -12,6 +12,7 @@ import { LIVE_SESSION_VERSION, sourceAfterEnable, type LiveSession } from "./liv
 export const LIVE_PARITY_VERSION = "current-paper-live-parity-v1";
 export const LIVE_PARITY_SOURCE = "CURRENT_FORWARD_ACCOUNT";
 export const LIVE_PARITY_PREFIX = "live-parity:v1:";
+export const LIVE_ENTRY_DRIFT_POLICY = "source-entry-drift-v1";
 export type MirrorSourceTrade = ArenaTrade & { forwardSource?: Trade };
 export type MirrorReceipt = {
   version: typeof LIVE_PARITY_VERSION; sourceId: string; sourceRuleId: string;
@@ -27,6 +28,11 @@ export type MirrorReceipt = {
   discrepancy?: string | null;
   quantityText?: string; minimumContracts?: number; quantityQuantum?: string;
   supportsDecimalContracts?: boolean; activationAt?: number;
+  entryDriftPolicy?: typeof LIVE_ENTRY_DRIFT_POLICY;
+  sourceQuoteAt?: number; copyQuoteAt?: number; copyQuotePrice?: number; copyDelayMs?: number;
+  allowedAdverseEntryDriftRate?: number; adverseEntryDriftRate?: number;
+  submitQuoteAt?: number; submitQuotePrice?: number; submittedAt?: number; submitDelayMs?: number;
+  exchangeEntryPrice?: number; exchangeEntryAt?: number; exchangeEntryDriftRate?: number;
 };
 export type MirrorBinding = { version: typeof LIVE_PARITY_VERSION; sourceAtCopy: Trade;
   receipt: MirrorReceipt; sourceAtClose?: Trade; actual?: unknown };
@@ -87,10 +93,22 @@ export function mirrorSourceFresh(t: Trade | undefined, id: string, now: number)
   return !!t && t.id===id && t.status==="OPEN" && now>=t.openedAt && now<t.openedAt+t.rule.horizon*60_000;
 }
 
+export function liveEntryDriftGuard(source:Trade,currentPrice:number) {
+  const direction=source.side==="LONG"?1:-1;
+  const adverse=Math.max(0,direction*(currentPrice/source.entryPrice-1));
+  const stopWidth=Math.abs(source.entryPrice-source.stopPrice)/source.entryPrice;
+  const stopBound=Math.max(.0015,Math.min(.005,stopWidth*.25));
+  const remaining=Math.max(0,source.forecast?.remainingNetRate??0);
+  const edgeBound=remaining>0?Math.max(.0015,Math.min(.005,remaining*.5)):.005;
+  const allowed=Math.min(stopBound,edgeBound);
+  return {policy:LIVE_ENTRY_DRIFT_POLICY,adverse,allowed,stopWidth,remaining};
+}
+
 export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;equity:number;available:number;
   entryPrice:number;quantoMultiplier:number;leverageMax:number;maintenanceRate:number;openRisk:number;
   sameDirectionRisk:number;openMargin:number;openNotional:number;now:number;policy:string;
-  sizeRules?: GateSizeRules; activationAt?: number; mirrorRatio?: number; sourceRiskAuthority?: boolean}): {intent:LiveEntryIntent;binding:MirrorBinding} {
+  sizeRules?: GateSizeRules; activationAt?: number; mirrorRatio?: number; sourceRiskAuthority?: boolean;
+  quoteObservedAt?: number}): {intent:LiveEntryIntent;binding:MirrorBinding} {
   const t=input.source;validateMirrorSource(t);
   const fail=(code:"MIN_CONTRACT"|"CONTRACT_SPEC"|"MARGIN"|"RISK_CAP"|"ECONOMICS",message:string,sizing?:SizeDiagnostic):never=>{
     throw new LiveEntrySizingError(code,t.symbol,`${t.symbol} ${message}；源单 ${t.id} 未完成复制，不冒充已成交`,sizing);
@@ -103,6 +121,9 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
   if (t.leverage>input.leverageMax)fail("MARGIN","交易所不支持源单杠杆，不擅自改杠杆");
   const direction=t.side==="LONG"?1:-1;
   if (direction*(input.entryPrice-t.stopPrice)<=0)fail("ECONOMICS","当前价已越过源单止损，不开即平");
+  const drift=liveEntryDriftGuard(t,input.entryPrice);
+  if(drift.adverse>drift.allowed+1e-9)fail("ECONOMICS",
+    `当前实盘盘口相对模拟入场出现不利偏差${(drift.adverse*100).toFixed(3)}%，超过动态上限${(drift.allowed*100).toFixed(3)}%，不追价`);
   const ratio=input.mirrorRatio&&positive(input.mirrorRatio)?input.mirrorRatio:input.equity/input.sourceEquity;
   const mirrorEquity=input.sourceEquity*ratio,targetNotional=t.notional*ratio,targetMargin=t.margin*ratio;
   const one=input.entryPrice*input.quantoMultiplier,requestedContracts=targetNotional/one;
@@ -139,7 +160,10 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
     copiedAt:input.now,sourceEquity:input.sourceEquity,liveEquity:input.equity,ratio,targetNotional,targetMargin,
     requestedContracts,roundedContracts:contracts,roundingNotional:Math.max(0,targetNotional-notional),discrepancy:null,
     quantityText:sized.quantityText,minimumContracts:sized.minimum,quantityQuantum:sized.quantum,
-    supportsDecimalContracts:sized.supportsDecimals,activationAt:input.activationAt};
+    supportsDecimalContracts:sized.supportsDecimals,activationAt:input.activationAt,
+    entryDriftPolicy:LIVE_ENTRY_DRIFT_POLICY,sourceQuoteAt:t.lastQuoteAt,copyQuoteAt:input.quoteObservedAt,
+    copyQuotePrice:input.entryPrice,copyDelayMs:Math.max(0,input.now-t.openedAt),
+    allowedAdverseEntryDriftRate:drift.allowed,adverseEntryDriftRate:drift.adverse};
   return {intent:{kind:"MARKET",tag,size,contracts,notional,plannedRisk,leverage,margin,
     body:{contract:t.symbol,size:`${direction<0?"-":""}${sized.quantityText}`,price:"0",tif:"ioc",text:tag,reduce_only:false}},
     binding:{version:LIVE_PARITY_VERSION,sourceAtCopy:structuredClone(t),receipt}};
