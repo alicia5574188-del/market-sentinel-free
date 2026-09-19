@@ -112,7 +112,7 @@ export default function LiveConsole({auth,runtime,onSession,onLive,onRefresh,vie
       <div className="fr-four"><Metric label="应跟随" value={num(mirror?.eligibleSourceCount,0)}/><Metric label="已复制" value={num(mirror?.eligibleCopiedCount,0)}/><Metric label="待确认" value={num(mirror?.pendingCount,0)}/><Metric label="最低量阻塞" value={num(mirror?.minimumSizeBlockedCount,0)}/></div>
       {mirror?.error&&<p className="fr-error">{mirror.error}</p>}
       {mirror?.rows.filter(r=>r.status!=="COPIED"&&r.status!=="EXCLUDED_BEFORE_ENABLE").map(r=><p className="fr-diagnostic-row" key={r.sourceId}><b>{r.symbol.replace("_"," / ")}</b><span>{r.reason??r.status}</span></p>)}
-      <details className="fr-details"><summary>复制规则与边界</summary><p className="fr-note">跟随起点 {time(mirror?.enabledAt)}。开启前旧单不补开；之后的新模拟单按固定账户比例复制。交易所最低张数、真实可用保证金、价格越过止损或不利入场偏差过大时会明确阻止，不会伪装成已复制。</p></details>
+      <details className="fr-details"><summary>复制规则与边界</summary><p className="fr-note">当前模拟账户。按权益比例复制，沿用源单杠杆、保护和退出依据。实际成交以Gate回报为准。</p><p className="fr-note">跟随起点 {time(mirror?.enabledAt)}。开启前旧单不补开；之后的新模拟单按固定账户比例复制。交易所最低张数、真实可用保证金、价格越过止损或不利入场偏差过大时会明确阻止，不会伪装成已复制。</p></details>
     </section>
     <section className="fr-section"><div className="fr-section-head"><div><small>Gate成交</small><h2>实盘累计成交额</h2></div><span>已确认成交</span></div>
       <div className="fr-three"><Metric label="系统标记成交" value={`${num(live?.turnover?.systemTagged)} U`}/><Metric label="全账户成交" value={`${num(live?.turnover?.total)} U`}/><Metric label="核对成交明细" value={num(live?.turnover?.fillCount,0)}/></div>
@@ -123,7 +123,7 @@ export default function LiveConsole({auth,runtime,onSession,onLive,onRefresh,vie
       {audits.length?<div className="fr-journal">{audits.slice(0,10).map(e=><article key={e.id}><time>{time(e.observedAt)}</time><div><b>{e.symbol?.replace("_"," / ")??"实盘控制"} · {e.stage}</b><p>{e.reason}</p></div></article>)}</div>:<p className="fr-note">暂无执行异常或保护事件。</p>}
       {Object.values(live?.entrySkips??{}).map(e=>e&&<div key={e.planId} className="fr-error"><b>{e.symbol} · 未成交</b><p>{e.reason}</p>{e.sizing&&<p>比例目标 {contractText(e.sizing.targetContracts)} 张 / {num(e.sizing.targetNotional,4)} U；交易所最低 {contractText(e.sizing.minimumContracts)} 张 / {num(e.sizing.minimumNotional,4)} U。</p>}</div>)}
     </section>
-    <section className="fr-section"><div className="fr-section-head"><div><small>连接与权限</small><h2>Gate API</h2></div><button type="button" className="fr-text-button" onClick={onRefresh}>刷新状态 ↻</button></div>
+    <section className="fr-section"><div className="fr-section-head"><div><small>API 管理</small><h2>Gate API</h2></div><button type="button" className="fr-text-button" onClick={onRefresh}>刷新状态 ↻</button></div>
       <div className="fr-setting"><div><h3>API状态</h3><p>{credential?.keyHint??"密钥内容不会回显"}</p></div><b>{credential?credential.configured?"已保存":"未配置":"读取中"}</b></div>
       <div className="fr-setting"><div><h3>最近账户核对</h3><p>{live?.lastError??"以Gate账户回报为准。"}</p></div><b>{time(live?.lastSyncAt)}</b></div>
       <form className="fr-form" onSubmit={saveCredential}><label>API Key<input type="password" autoComplete="off" spellCheck={false} value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="填写新的Gate API Key" disabled={enabled}/></label>
@@ -188,7 +188,7 @@ export default function LiveConsole({auth,runtime,onSession,onLive,onRefresh,vie
     </section>}
 
     {(section==="history"||section==="archive")&&<section className="fr-section" data-testid={section==="history"?"live-history":"live-archive"}>
-      <div className="fr-section-head"><h2>{section==="history"?"最近记录":"归档记录"}</h2><span>{section==="history"?"最新10条":"更早记录"}</span></div>
+      <div className="fr-section-head"><h2>{section==="history"?"已平仓实盘记录":"归档记录"}</h2><span>{section==="history"?"最新10条":"更早记录"}</span></div>
       {(section==="history"?records.recent:archive.items).length?<div className="fr-rule-grid">{(section==="history"?records.recent:archive.items).map(p=><LivePositionCard key={p.id} position={p} runtime={runtime} now={clock}/>)}</div>:<LiveEmpty title="暂无已平仓记录" text="订单平仓后自动保留。"/>}
       {(historyError||historyView?.error)&&<p className="fr-error">{historyError??historyView?.error}</p>}
       {!!historyView?.pending&&<p className="fr-note">{historyView.pending}条Gate结算待核对；缺失值不会当成零。</p>}
