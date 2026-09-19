@@ -114,7 +114,7 @@ export default function LiveConsole({auth,runtime,onSession,onLive,onRefresh,vie
       {mirror?.rows.filter(r=>r.status!=="COPIED"&&r.status!=="EXCLUDED_BEFORE_ENABLE").map(r=><p className="fr-diagnostic-row" key={r.sourceId}><b>{r.symbol.replace("_"," / ")}</b><span>{r.reason??r.status}</span></p>)}
       <details className="fr-details"><summary>复制规则与边界</summary><p className="fr-note">跟随起点 {time(mirror?.enabledAt)}。开启前旧单不补开；之后的新模拟单按固定账户比例复制。交易所最低张数、真实可用保证金、价格越过止损或不利入场偏差过大时会明确阻止，不会伪装成已复制。</p></details>
     </section>
-    <section className="fr-section"><div className="fr-section-head"><div><small>Gate成交</small><h2>实盘成交额</h2></div><span>已确认成交</span></div>
+    <section className="fr-section"><div className="fr-section-head"><div><small>Gate成交</small><h2>实盘累计成交额</h2></div><span>已确认成交</span></div>
       <div className="fr-three"><Metric label="系统标记成交" value={`${num(live?.turnover?.systemTagged)} U`}/><Metric label="全账户成交" value={`${num(live?.turnover?.total)} U`}/><Metric label="核对成交明细" value={num(live?.turnover?.fillCount,0)}/></div>
       <p className="fr-note">全账户成交可能包含手工成交；日常交易观察以系统标记成交和订单记录为准。核对至 {time(live?.turnover?.checkedThrough)}。</p>
       {live?.turnover?.error&&<p className="fr-error">{live.turnover.error}</p>}
