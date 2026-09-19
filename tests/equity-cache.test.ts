@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
-import {EquityHistoryCache,clearEquityBrowserCache} from "../lib/equity-cache.ts";
+import {EquityHistoryCache,clearEquityBrowserCache,EQUITY_CACHE_VERSION} from "../lib/equity-cache.ts";
 import {EquityReader} from "../lib/equity-reader.ts";
 import {EQUITY_CURVE_VERSION,type CurveContext} from "../lib/equity-curve.ts";
 const T=1789556791436,STEP=300000;
@@ -101,10 +101,12 @@ test("transient failure preserves history and rapid retries are held for a minut
   await c.load(T,T+151*STEP,()=>true);assert.equal(c.getSnapshot().points.length,150);assert.ok(c.getSnapshot().error);
   for(let i=0;i<10;i++)await c.load(T,T+151*STEP,()=>true);assert.equal(calls,1);
 });
-test("expired authorization clears projection and prevents refetch under that cache session",async()=>{
+test("expired authorization hides projection without erasing history needed after reauthentication",async()=>{
   const h=host();await h.cache.load(T,T+150*STEP,()=>true);h.time(STEP);
   const c=new EquityHistoryCache({...h.options,fetch:async()=>new Response("unauthorized",{status:401})});c.configure(context,"owner");
-  await c.load(T,T+151*STEP,()=>true);assert.equal(c.getSnapshot().points.length,0);assert.equal(h.disk.length,0);
+  await c.load(T,T+151*STEP,()=>true);assert.equal(c.getSnapshot().points.length,0);assert.equal(h.disk.length,1);
+  const restored=new EquityHistoryCache(h.options);restored.configure(context,"owner");
+  assert.equal(restored.getSnapshot().points.length,150);
 });
 test("logout/cancel invalidates a late response instead of recreating cache",async()=>{
   const h=host();let release!:(x:Response)=>void;
@@ -126,7 +128,70 @@ test("incremental API cannot use mixed or foreign storage cursors",async()=>{
 });
 test("client cache contains no trading/private-account call or automatic switch",()=>{
   const s=readFileSync(new URL('../lib/equity-cache.ts',import.meta.url),'utf8');
-  assert.doesNotMatch(s,/\/api\/(?:live|members)|advanceForward|setLiveMode|localStorage/);
-  const home=readFileSync(new URL('../app/page.tsx',import.meta.url),'utf8');assert.match(home,/if\(!session.authenticated\)clearEquityBrowserCache\(\)/);
+  assert.doesNotMatch(s,/\/api\/(?:live|members)|advanceForward|setLiveMode/);
+  assert.match(s,/window\.localStorage/);
+  const home=readFileSync(new URL('../app/page.tsx',import.meta.url),'utf8');assert.doesNotMatch(home,/clearEquityBrowserCache/);
+  assert.match(home,/if\(!auth\?\.authenticated\)return <LoginGate/);
   const chart=readFileSync(new URL('../app/equity-curve.tsx',import.meta.url),'utf8');assert.match(chart,/!stopped&&!document.hidden/);
+});
+
+test("closing the browser loses sessionStorage but persistent history needs no history request",async()=>{
+  const h=host(),tab=new Memory();
+  const first=new EquityHistoryCache({...h.options,legacyStorage:()=>tab});first.configure(context,"owner");
+  await first.load(T,T+150*STEP,()=>true);const old=first.getSnapshot().points;first.cancel();
+  tab.data.clear();h.time(10*STEP);
+  const reopened=new EquityHistoryCache({...h.options,legacyStorage:()=>new Memory()});reopened.configure(context,"owner");
+  assert.deepEqual(reopened.getSnapshot().points,old);
+  await reopened.load(T,T+150*STEP,()=>true);assert.equal(h.urls.length,3);
+  h.archive.add(155,151);await reopened.load(T,T+155*STEP,()=>true);
+  assert.equal(h.urls.length,4);assert.ok(h.urls[3].startsWith("?after="));
+  assert.deepEqual(reopened.getSnapshot().points.slice(0,150),old);assert.equal(reopened.getSnapshot().points.length,155);
+});
+test("upgrade migrates validated session cache without downloading already read data",async()=>{
+  const h=host();await h.cache.load(T,T+150*STEP,()=>true);
+  const k=h.disk.key(0)!,legacy=JSON.parse(h.disk.getItem(k)!);legacy.version="incremental-session-v1";
+  h.disk.setItem(k,JSON.stringify(legacy));const persistent=new Memory();
+  const upgraded=new EquityHistoryCache({...h.options,storage:()=>persistent,legacyStorage:()=>h.disk});upgraded.configure(context,"owner");
+  assert.equal(upgraded.getSnapshot().points.length,150);assert.equal(h.disk.length,0);
+  assert.equal(JSON.parse(persistent.getItem(k)!).version,EQUITY_CACHE_VERSION);
+  await upgraded.load(T,T+150*STEP,()=>true);assert.equal(h.urls.length,3);
+});
+test("failed persistent migration preserves old session cache and displays an accurate notice",async()=>{
+  const h=host(1);await h.cache.load(T,T+STEP,()=>true);
+  const denied=new Memory();denied.setItem=()=>{throw new Error("QuotaExceededError");};
+  const c=new EquityHistoryCache({...h.options,storage:()=>denied,legacyStorage:()=>h.disk});c.configure(context,"owner");
+  assert.equal(c.getSnapshot().points.length,1);assert.equal(h.disk.length,1);assert.ok(c.getSnapshot().cacheNotice);
+  await c.load(T,T+STEP,()=>true);assert.equal(h.urls.length,1);
+});
+test("persistent source is authoritative over a stale tab cache and remains account-scoped",async()=>{
+  const h=host(1);await h.cache.load(T,T+STEP,()=>true);const legacy=new Memory();
+  for(const [k,v] of h.disk.data)legacy.setItem(k,v);
+  h.archive.add(2,2);h.time(STEP);await h.cache.load(T,T+2*STEP,()=>true);
+  const c=new EquityHistoryCache({...h.options,legacyStorage:()=>legacy});c.configure(context,"owner");
+  assert.equal(c.getSnapshot().points.length,2);c.configure(context,"member-other");assert.equal(c.getSnapshot().points.length,0);
+  c.configure({...context,startedAt:T+STEP},"owner");assert.equal(c.getSnapshot().points.length,0);
+});
+test("corrupt durable copy can recover the valid legacy copy, rather than discard both",async()=>{
+  const h=host(2);await h.cache.load(T,T+2*STEP,()=>true);const broken=new Memory();broken.setItem(h.disk.key(0)!,"{broken");
+  const c=new EquityHistoryCache({...h.options,storage:()=>broken,legacyStorage:()=>h.disk});c.configure(context,"owner");
+  assert.equal(c.getSnapshot().points.length,2);assert.equal(h.disk.length,0);
+  await c.load(T,T+2*STEP,()=>true);assert.equal(h.urls.length,1);
+});
+test("native browser quota retains last successful checkpoint, subsequent reopen only catches up after it",async()=>{
+  const h=host(1);await h.cache.load(T,T+STEP,()=>true);const before=h.disk.getItem(h.disk.key(0)!);
+  const write=h.disk.setItem.bind(h.disk);h.disk.setItem=()=>{throw new Error("QuotaExceededError");};
+  h.archive.add(2,2);h.time(STEP);await h.cache.load(T,T+2*STEP,()=>true);
+  assert.equal(h.cache.getSnapshot().points.length,2);assert.ok(h.cache.getSnapshot().cacheNotice);
+  assert.equal(h.disk.getItem(h.disk.key(0)!),before);h.disk.setItem=write;
+  const c=new EquityHistoryCache(h.options);c.configure(context,"owner");await c.load(T,T+2*STEP,()=>true);
+  assert.ok(h.urls.at(-1)!.startsWith("?after="));assert.equal(c.getSnapshot().points.length,2);
+});
+test("past the old 20000-point cutoff the saved history is still retained, not silently abandoned",async()=>{
+  const h=host(1);await h.cache.load(T,T+STEP,()=>true);h.time(21000*STEP);
+  const k=h.disk.key(0)!,s=JSON.parse(h.disk.getItem(k)!);
+  s.points=Array.from({length:20001},(_,i)=>[T+(i+1)*STEP,1000+i/100,context.policy,true]);
+  s.newestCursor=key(20001);s.checkedCycle=T+20001*STEP;h.disk.setItem(k,JSON.stringify(s));
+  const c=new EquityHistoryCache(h.options);c.configure(context,"owner");assert.equal(c.getSnapshot().points.length,20001);
+  h.archive.rows.clear();h.archive.add(20002,20002);await c.load(T,T+20002*STEP,()=>true);
+  const reopened=new EquityHistoryCache(h.options);reopened.configure(context,"owner");assert.equal(reopened.getSnapshot().points.length,20002);
 });
