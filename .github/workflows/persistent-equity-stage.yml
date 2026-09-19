@@ -62,7 +62,7 @@ jobs:
           site=pathlib.Path('work/persistent-browser');site.mkdir(parents=True,exist_ok=True)
           old='Date.now=()=>T+(count+1)*STEP;'
           assert data['host'].count(old)==1
-          host=data['host'].replace(old,'const nativeNow=Date.now,bootAt=nativeNow(); Date.now=()=>T+(count+1)*STEP+(nativeNow()-bootAt);')
+          host=data['host'].replace(old,'const nativeNow=Date.now,bootAt=Number(localStorage.getItem("synthetic-clock-origin")||nativeNow()); localStorage.setItem("synthetic-clock-origin",String(bootAt)); Date.now=()=>T+(count+1)*STEP+(nativeNow()-bootAt);')
           (site/'index.tsx').write_text(host);(site/'index.html').write_text(data['html']);(out/'browser-test.py').write_text(data['browser'])
           (out/'tested-browser-host.tsx').write_text(host)
           PY
