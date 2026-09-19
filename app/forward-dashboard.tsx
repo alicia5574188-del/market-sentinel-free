@@ -23,9 +23,10 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
   const paperRecords=recordWindows(data?.history??[],t=>t.closedAt??0),paperArchive=archivePage(paperRecords.archive,paperPage);
   const scroll=useRef<Record<Tab,number>>({overview:0,relations:0,orders:0,live:0,journal:0,settings:0});
   useEffect(()=>{const id=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(id);},[]);
-  useEffect(()=>{try{const saved=Number(window.localStorage.getItem("sentinel-ui-font-scale-v1"));if(saved>=80&&saved<=110)setFontScale(saved);}catch{}},[]);
+  useEffect(()=>{let frame=0;try{const saved=Number(window.localStorage.getItem("sentinel-ui-font-scale-v1"));if(saved>=80&&saved<=110)frame=window.requestAnimationFrame(()=>setFontScale(saved));}catch{}return()=>{if(frame)window.cancelAnimationFrame(frame);};},[]);
   const changeFontScale=(value:number)=>{const next=Math.max(80,Math.min(110,Math.round(value)));setFontScale(next);try{window.localStorage.setItem("sentinel-ui-font-scale-v1",String(next));}catch{}};
-  const fontStyle=Object.fromEntries(Array.from({length:41},(_,i)=>{const px=i+10;return [`--fr-fs${px}`,`${(px*fontScale/100).toFixed(2)}px`];})) as CSSProperties;
+  const fontVars:Record<string,string>={};for(let px=10;px<=50;px++)fontVars[`--fr-fs${px}`]=`${(px*fontScale/100).toFixed(2)}px`;
+  const fontStyle=fontVars as CSSProperties;
   useLayoutEffect(()=>{window.scrollTo({top:tab==="live"?0:scroll.current[tab],behavior:"auto"});},[tab]);
   const select=(next:Tab)=>{scroll.current[tab]=window.scrollY;setTab(next);};
   const exportSnapshot=async()=>{
@@ -47,9 +48,6 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
   const active=data?.rules.filter(r=>r.status==="EXPERIMENTAL")??[],dormant=data?.rules.filter(r=>r.status==="DORMANT")??[];
   const paperMargin=data?.positions.reduce((sum,t)=>sum+t.margin,0)??null;
   const elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
-  const stage=!data||!healthy?0:!data.measured?1:!active.length?2:data.positions.length?4:3;
-  const stages=["接入行情","观察反应","生成规则","匹配机会","执行复盘"];
-  const title=!data?"正在连接前向实验":!healthy?"行情连接恢复中":data.positions.length?"交易正在接受市场检验":active.length?"新的交易规则已生成":"先观察变化，再形成交易办法";
   const nav:[Tab,string,string][]=[["overview","◉","总览"],["relations","⌘","规则"],["orders","⇄","模拟"],["live","◈","实盘"],["journal","≋","演变"],["settings","⊙","系统"]];
   return <main className="fr-app" style={fontStyle} data-ui-version="dark-live-v1" data-record-view="compact-records-pnl-v1">
     <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · 关系引擎</b><small>FORWARD LAB / 01</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
