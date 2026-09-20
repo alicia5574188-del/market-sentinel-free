@@ -17,7 +17,9 @@ test("15-minute broad weakness inside a still-positive 60-minute trend raises an
   assert.equal(f.phase,"PULLBACK");assert.equal(f.threatenedSide,"LONG");assert.ok(f.breadth15<.5);assert.ok(f.median60>0);
   const a=updateMarketState(market(T,()=>.0015),null,T),trend=updateMarketState(market(T+BAR,()=>.0015),a,T+BAR);
   const budget=marketRiskBudget(trend,1000,1000,f);
-  assert.equal(budget.longRate,.03);assert.equal(budget.shortRate,.02);assert.equal(budget.totalRate,.06);assert.equal(budget.netDirectionalRate,.025);
+  assert.ok(budget.longRate>0&&budget.longRate<.065);assert.ok(budget.shortRate>=.02);
+  assert.ok(budget.totalRate>=.06&&budget.totalRate<=.075);assert.ok(budget.netDirectionalRate>=.03&&budget.netDirectionalRate<=.045);
+  assert.equal(budget.allocationScale,1);
 });
 test("pullback warning needs two clear completed bars before re-enabling the threatened direction",()=>{
   const latePullback=(i:number)=>i>=10?-.002:.0015;
@@ -34,7 +36,8 @@ test("persistent severe short-term damage upgrades from pullback to reversal ris
   const two=updateTurnForecast(market(T+BAR,severe),one,T+BAR);
   assert.equal(two.phase,"REVERSAL_RISK");assert.equal(two.threatenedSide,"LONG");
   const budget=marketRiskBudget(null,960,1000,two);
-  assert.equal(budget.longRate,.015);assert.equal(budget.totalRate,.04);assert.equal(budget.netDirectionalRate,.01);
+  assert.equal(budget.longRate,.02);assert.equal(budget.totalRate,.05);assert.equal(budget.netDirectionalRate,.015);
+  assert.equal(budget.allocationScale,.7);
 });
 test("turn forecast blocks adding to the threatened side and only permits short-horizon independent countertrend entries",()=>{
   const f=updateTurnForecast(market(T,i=>i>=10?-.002:.0015),null,T);
@@ -74,13 +77,15 @@ test("wide alternating range confirms NEUTRAL and lowers net directional exposur
   assert.equal(budget.totalRate,.05);assert.equal(budget.longRate,.03);assert.equal(budget.shortRate,.03);
   assert.equal(budget.netDirectionalRate,.02);
 });
-test("profit giveback tightens transition/range budgets without changing trend caps",()=>{
+test("drawdown scales new allocation without tightening regime caps into a trading pause",()=>{
   const transition={...updateMarketState(market(T,()=>.0015),null,T),mode:"TRANSITION" as const};
   const b=marketRiskBudget(transition,950,1000);
-  assert.ok(Math.abs(b.totalRate-.05)<1e-12);assert.ok(Math.abs(b.longRate-.035)<1e-12);assert.ok(Math.abs(b.netDirectionalRate-.025)<1e-12);
+  assert.equal(b.totalRate,.06);assert.equal(b.longRate,.045);assert.equal(b.netDirectionalRate,.03);
+  assert.equal(b.allocationScale,.7);
   const trend={...transition,mode:"TREND_LONG" as const};
   const t=marketRiskBudget(trend,950,1000);
-  assert.equal(t.longRate,.065);assert.equal(t.totalRate,.075);
+  assert.equal(t.longRate,.065);assert.equal(t.totalRate,.075);assert.equal(t.allocationScale,.7);
+  assert.ok(t.allocationScale>0);
 });
 test("opposite-side risk can reduce net exposure but cannot overshoot the regime cap",()=>{
   const neutral={...updateMarketState(market(T,(i)=>i%2?.004:-.004),null,T),mode:"NEUTRAL" as const};

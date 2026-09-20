@@ -102,9 +102,10 @@ for(const side of ["LONG","SHORT"] as const){
     const equity=forwardEquity(afterRestart.state,quotes,T+dt).equity;
     assert.ok(Math.abs(1-equity/afterRestart.state.peakEquity-.025)<1e-12);
     const budget=marketRiskBudget(afterRestart.state.marketState,equity,afterRestart.state.peakEquity);
-    assert.ok(Math.abs(budget.totalRate-.045)<1e-12);assert.ok(Math.abs(budget.netDirectionalRate-.0175)<1e-12);
+    assert.equal(budget.totalRate,.05);assert.equal(budget.netDirectionalRate,.02);assert.equal(budget.allocationScale,.85);
     const lostPeakBudget=marketRiskBudget(full.marketState,equity,full.peakEquity);
-    assert.equal(lostPeakBudget.totalRate,.05,"old checkpoint would wrongly restore the looser budget");
+    assert.equal(lostPeakBudget.totalRate,.05);assert.equal(lostPeakBudget.allocationScale,1,
+      "losing the persisted peak would wrongly restore full new-entry allocation");
     const restoredDrawdown=restoreForwardProtectionCheckpoint(full,buildForwardProtectionCheckpoint(afterRestart.state));
     assert.equal(restoredDrawdown.maxDrawdown,afterRestart.state.maxDrawdown);
     assert.deepEqual(marketRiskBudget(restoredDrawdown.marketState,equity,restoredDrawdown.peakEquity),budget);

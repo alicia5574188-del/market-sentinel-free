@@ -48,6 +48,10 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
     }finally{setExporting(false);}
   };
   const active=data?.rules.filter(r=>r.status==="EXPERIMENTAL")??[],dormant=data?.rules.filter(r=>r.status==="DORMANT")??[];
+  const blockers=Object.entries(data?.entryDiagnostics?.reasons??{}).sort((a,b)=>b[1]-a[1]);
+  const mainBlocker=blockers[0]?.[0]??"本轮暂无阻塞";
+  const modeName={UNKNOWN:"未知",TREND_LONG:"趋势偏多",TREND_SHORT:"趋势偏空",TRANSITION:"转折过渡",NEUTRAL:"震荡中性"}[data?.marketState?.mode??"UNKNOWN"];
+  const turnName={UNKNOWN:"数据待确认",CLEAR:"清晰",PULLBACK:"回调预警",REVERSAL_RISK:"反转风险"}[data?.turnForecast?.phase??"UNKNOWN"];
   const paperMargin=data?.positions.reduce((sum,t)=>sum+t.margin,0)??null;
   const elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
   const nav:[Tab,string,string][]=[["overview","◉","总览"],["relations","⌘","规则"],["orders","⇄","模拟"],["live","◈","实盘"],["journal","≋","演变"],["settings","⊙","系统"]];
@@ -91,6 +95,12 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
 
     {tab==="relations"&&<><PageTitle eyebrow="RELATION → RULE" title="交易规则" text="查看当前入场条件、适用市场与退出设置。"/>
       <section className="fr-section"><div className="fr-section-head"><div><small>当前规则</small><h2>{data?active.length:"—"} 条前向实验</h2></div><span>模拟为决策源 · 尚未验证盈利</span></div>{!active.length?<Empty title="正在积累可比较的条件—反应关系" text={data?.latestReason??"后台快照尚未返回。"}/>:<div className="fr-rule-grid">{active.map(r=><RuleCard key={r.id} rule={r}/>)}</div>}</section>
+      <section className="fr-section"><div className="fr-section-head"><div><small>自适应路由</small><h2>当前行情与换挡状态</h2></div><span>{data?.adaptationVersion??"读取中"}</span></div>
+        <div className="fr-three"><div><small>市场状态</small><b>{modeName}</b></div><div><small>转折阶段</small><b>{turnName}</b></div><div><small>新仓分配系数</small><b>{data?`${fmt(data.marketRiskBudget.allocationScale*100,0)}%`:"—"}</b></div></div>
+        <div className="fr-three"><div><small>快速15分钟候选</small><b>{fmt(data?.fitDiagnostics.rapidQualified,0)}</b></div><div><small>当前多向规则</small><b>{fmt(data?.fitDiagnostics.activeLong,0)}</b></div><div><small>当前空向规则</small><b>{fmt(data?.fitDiagnostics.activeShort,0)}</b></div></div>
+        <div className="fr-three"><div><small>本轮匹配</small><b>{fmt(data?.entryDiagnostics?.matched,0)}</b></div><div><small>本轮开仓</small><b>{fmt(data?.entryDiagnostics?.opened,0)}</b></div><div><small>风险迁移候选</small><b>{fmt(data?.entryDiagnostics?.adaptiveScaled,0)}</b></div></div>
+        <p className="fr-note">{data?.marketRiskBudget.reason??"等待风险预算。"} 当前主要阻塞：{mainBlocker}</p>
+      </section>
       <section className="fr-section"><div className="fr-three"><div><small>本轮表达检查</small><b>{fmt(data?.fitDiagnostics.tested,0)}</b></div><div><small>较早时间组</small><b>{fmt(data?.fitDiagnostics.trainGroups,0)}</b></div><div><small>较晚检查时间组</small><b>{fmt(data?.fitDiagnostics.checkGroups,0)}</b></div></div><p className="fr-note">统计估计不等于胜率，需结合后续交易结果评估。</p></section>
       <section className="fr-section"><div className="fr-section-head"><h2>关系与成交校准</h2><span>不是胜率</span></div><div className="fr-three"><div><small>单币集中度提示</small><b>{fmt(data?.evidenceDiagnostics?.concentrationWarnings,0)}</b></div><div><small>成交偏差提示</small><b>{fmt(data?.evidenceDiagnostics?.calibrationWarnings,0)}</b></div><div><small>保留的已平仓反馈</small><b>{fmt(data?.feedbackCount,0)}</b></div></div><p className="fr-note">集中度和成交偏差用于风险评估；统计估计并非收益承诺。</p></section>
       <section className="fr-section"><button className="fr-expand" aria-expanded={showDormant} onClick={()=>setShowDormant(!showDormant)}><div><h2>休眠规则</h2><p>仅展示不参与当前开仓的规则。</p></div><span>{dormant.length} {showDormant?"−":"+"}</span></button>{showDormant&&<div className="fr-rule-grid">{dormant.map(r=><RuleCard key={r.id} rule={r}/>)}</div>}</section></>}
