@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { FEATURES, type Rule, type Trade, type forwardSummary } from "../lib/forward-relations.ts";
 import {recordWindows,archivePage} from "../lib/record-view.ts";
 import {ArchivePagination} from "./record-controls.tsx";
@@ -22,17 +22,12 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
   const [paperTab,setPaperTab]=useState<"account"|"positions"|"history"|"archive">("account"),[paperPage,setPaperPage]=useState(0);
   const paperRecords=recordWindows(data?.history??[],t=>t.closedAt??0),paperArchive=archivePage(paperRecords.archive,paperPage);
   const scroll=useRef<Record<Tab,number>>({overview:0,relations:0,orders:0,live:0,journal:0,settings:0});
-  const fontSlider=useRef<HTMLDivElement|null>(null),fontSliderActive=useRef(false);
+  const fontControl=useRef<HTMLElement|null>(null),fontAnchor=useRef<{top:number;scrollY:number}|null>(null);
   useEffect(()=>{const id=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(id);},[]);
-  useEffect(()=>{let frame=0;try{const saved=Number(window.localStorage.getItem("sentinel-ui-font-scale-v1"));if(saved>=70&&saved<=110)frame=window.requestAnimationFrame(()=>setFontScale(saved));}catch{}return()=>{if(frame)window.cancelAnimationFrame(frame);};},[]);
-  useEffect(()=>{const el=fontSlider.current;if(!el)return;const stop=(event:TouchEvent)=>event.preventDefault();el.addEventListener("touchmove",stop,{passive:false});return()=>el.removeEventListener("touchmove",stop);},[]);
-  const changeFontScale=(value:number)=>{const next=Math.max(70,Math.min(110,Math.round(value)));setFontScale(next);try{window.localStorage.setItem("sentinel-ui-font-scale-v1",String(next));}catch{}};
-  const fontScaleFromClientX=(clientX:number)=>{const el=fontSlider.current;if(!el)return;const box=el.getBoundingClientRect();if(box.width<=0)return;changeFontScale(70+Math.max(0,Math.min(1,(clientX-box.left)/box.width))*40);};
-  const startFontDrag=(event:ReactPointerEvent<HTMLDivElement>)=>{event.preventDefault();fontSliderActive.current=true;event.currentTarget.setPointerCapture(event.pointerId);fontScaleFromClientX(event.clientX);};
-  const moveFontDrag=(event:ReactPointerEvent<HTMLDivElement>)=>{if(!fontSliderActive.current)return;event.preventDefault();fontScaleFromClientX(event.clientX);};
-  const stopFontDrag=(event:ReactPointerEvent<HTMLDivElement>)=>{fontSliderActive.current=false;if(event.currentTarget.hasPointerCapture(event.pointerId))event.currentTarget.releasePointerCapture(event.pointerId);};
+  useEffect(()=>{let frame=0;try{const saved=Number(window.localStorage.getItem("sentinel-ui-font-scale-v1"));if(saved>=70&&saved<=110){const options=[70,80,90,100,110];const nearest=options.reduce((best,n)=>Math.abs(n-saved)<Math.abs(best-saved)?n:best,90);frame=window.requestAnimationFrame(()=>setFontScale(nearest));}}catch{}return()=>{if(frame)window.cancelAnimationFrame(frame);};},[]);
+  const selectFontScale=(value:number)=>{const anchor=fontControl.current;fontAnchor.current={top:anchor?.getBoundingClientRect().top??0,scrollY:window.scrollY};setFontScale(value);try{window.localStorage.setItem("sentinel-ui-font-scale-v1",String(value));}catch{}};
+  useLayoutEffect(()=>{const pending=fontAnchor.current;if(!pending)return;const anchor=fontControl.current;if(anchor){const after=anchor.getBoundingClientRect().top;window.scrollBy({top:after-pending.top,left:0,behavior:"auto"});}else window.scrollTo({top:pending.scrollY,left:0,behavior:"auto"});fontAnchor.current=null;},[fontScale]);
   const fontVars:Record<string,string>={};for(let px=10;px<=64;px++)fontVars[`--fr-fs${px}`]=`${(px*fontScale/100).toFixed(2)}px`;
-  fontVars["--fr-font-slider-pct"]=`${((fontScale-70)/40*100).toFixed(2)}%`;
   const fontStyle=fontVars as CSSProperties;
   useLayoutEffect(()=>{window.scrollTo({top:tab==="live"?0:scroll.current[tab],behavior:"auto"});},[tab]);
   const select=(next:Tab)=>{scroll.current[tab]=window.scrollY;setTab(next);};
@@ -126,13 +121,9 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
     {tab==="settings"&&<><PageTitle eyebrow="SYSTEM & ACCESS" title="系统" text="日常交易观察留在模拟和实盘页；这里集中放权限、API、复制诊断和运行边界。"/>
       {accountPanel}
       {liveSystemPanel}
-      <section className="fr-section fr-font-control"><div className="fr-section-head"><div><small>界面显示</small><h2>界面字号</h2></div><b>{fontScale}%</b></div>
-        <p className="fr-note">只调整这个浏览器里的页面字号，不影响交易、账户或其他设备。手机上如果觉得展开卡太挤，可以直接缩小。</p>
-        <div className="fr-font-slider-row"><span>70%</span><div ref={fontSlider} className="fr-font-slider" role="slider" tabIndex={0} aria-label="界面字号" aria-valuemin={70} aria-valuemax={110} aria-valuenow={fontScale}
-          onPointerDown={startFontDrag} onPointerMove={moveFontDrag} onPointerUp={stopFontDrag} onPointerCancel={stopFontDrag}
-          onKeyDown={e=>{if(e.key==="ArrowLeft"||e.key==="ArrowDown"){e.preventDefault();changeFontScale(fontScale-1);}else if(e.key==="ArrowRight"||e.key==="ArrowUp"){e.preventDefault();changeFontScale(fontScale+1);}else if(e.key==="Home"){e.preventDefault();changeFontScale(70);}else if(e.key==="End"){e.preventDefault();changeFontScale(110);}}}>
-          <span className="fr-font-slider-fill"/><span className="fr-font-slider-thumb"/></div><span>110%</span></div>
-        <div className="fr-action-row"><button className="fr-button secondary" type="button" onClick={()=>changeFontScale(85)}>推荐 85%</button><button className="fr-text-button" type="button" onClick={()=>changeFontScale(100)}>恢复 100%</button></div>
+      <section ref={fontControl} className="fr-section fr-font-control"><div className="fr-section-head"><div><small>界面显示</small><h2>界面字号</h2></div><b>{fontScale}%</b></div>
+        <p className="fr-note">只调整这个浏览器里的页面字号，不影响交易、账户或其他设备。改用固定档位，点击后保持当前页面位置不动。</p>
+        <div className="fr-font-options" role="group" aria-label="界面字号">{[70,80,90,100,110].map(value=><button key={value} type="button" className={fontScale===value?"selected":""} aria-pressed={fontScale===value} onClick={()=>selectFontScale(value)}>{value}%</button>)}</div>
       </section>
       <section className="fr-section"><div className="fr-section-head"><div><small>运行边界</small><h2>当前系统设置</h2></div></div>
         <Setting title="当前主系统" value={data?.policyVersion??data?.version??"读取中"} text="行情驱动的交易规则与执行。"/><Setting title="规则自动适应" value="在线运行" text="每5分钟整理行情，按后续反应更新规则。"/><Setting title="执行权限" value="模拟决策 / 实盘复制" text="模拟提供交易决定；实盘按固定比例复制并使用Gate真实成交。"/><Setting title="风险预算" value="权益随动" text={data?.boundaries.risk??"读取中"}/><Setting title="成本口径" value="显式假设" text={data?.cost.assumption??"读取中"}/><Setting title="连续性" value="持久化" text="状态保存后才提交新订单；重启恢复原账户。"/>
