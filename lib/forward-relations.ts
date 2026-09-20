@@ -63,7 +63,7 @@ export type ForwardState = { version: string; startedAt: number; revision: numbe
     rapidQualified?:number; activeLong?:number; activeShort?:number };
   selectedSymbols: string[]; storage: { persistedAt: number; error: string | null }; liveEligible: false;
   adaptationVersion?:string; lastFitMeasured?:number;
-  strategyAuthorityVersion?:string;turnEngine?:MultiTurnState;turnLastEntryBars?:Record<string,number>;cutoverAt?:number;
+  strategyAuthorityVersion?:string;turnEngine?:MultiTurnState;turnLastEntryBars?:Record<string,number>;turnSymbolExitAt?:Record<string,number>;cutoverAt?:number;
   policyVersion?:string; feedback?:Feedback[]; evidenceDiagnostics?:EvidenceDiagnostics;
   entryDiagnostics?:{at:number;matched:number;opened:number;reasons:Record<string,number>;retry?:boolean;queued?:number;adaptiveScaled?:number};
   quoteRetries?:QuoteRetry[];
@@ -100,7 +100,7 @@ export function initialForward(now:number):ForwardState {
 export function initialMultiTurnForward(now:number):ForwardState{
   const s=initialForward(now);
   s.revision=0;s.events=[];s.rules=[];s.samples=[];s.pending={};s.frames={};s.feedback=[];s.relationEntries={};s.quoteRetries=[];
-  s.strategyAuthorityVersion=MULTI_TURN_VERSION;s.turnEngine=initialMultiTurn();s.turnLastEntryBars={};s.cutoverAt=now;
+  s.strategyAuthorityVersion=MULTI_TURN_VERSION;s.turnEngine=initialMultiTurn();s.turnLastEntryBars={};s.turnSymbolExitAt={};s.cutoverAt=now;
   s.latestReason="Multi-Turn六周期转折引擎已启动；旧Forward规则不再拥有新开仓或策略退出权。";
   event(s,now,"START",MULTI_TURN_VERSION,s.latestReason);return s;
 }
@@ -115,7 +115,7 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
   if(v.marketState&&v.marketState.version!==MARKET_STATE_VERSION)throw new Error("未知组合市场状态版本，保留原账户");
   if(v.turnForecast&&v.turnForecast.version!==TURN_FORECAST_VERSION)throw new Error("未知转折预警版本，保留原账户");
   return {...v,adaptationVersion:v.adaptationVersion??"legacy-forward-adaptation-v1",lastFitMeasured:v.lastFitMeasured??v.measured,
-    strategyAuthorityVersion:v.strategyAuthorityVersion??"legacy-forward-rules-v1",turnLastEntryBars:v.turnLastEntryBars??{},
+    strategyAuthorityVersion:v.strategyAuthorityVersion??"legacy-forward-rules-v1",turnLastEntryBars:v.turnLastEntryBars??{},turnSymbolExitAt:v.turnSymbolExitAt??{},
     ...(v.turnEngine?.version===MULTI_TURN_VERSION?{turnEngine:v.turnEngine}:{})};
 }
 export function frameFromCandles(symbol:string,rows:Candle[],now:number):Frame|null {
@@ -397,6 +397,7 @@ function manageMultiTurn(s:ForwardState,quotes:Record<string,Quote>,now:number){
     if(!decision)continue;
     closeTrade(s,t,q,now,decision.reason);
     const sourceRule=s.rules.find(r=>r.id===t.rule.id);if(sourceRule)sourceRule.status="DORMANT";
+    s.turnSymbolExitAt??={};s.turnSymbolExitAt[t.symbol]=now;
     if(t.exitControl)t.exitAudit=makeExitAudit(t,decision,px,q.observedAt,now,gap);
     const key=`${t.symbol}:${t.turn.timeframe}`;
     s.turnLastEntryBars[key]=Math.max(s.turnLastEntryBars[key]??0,freshFrame?.completedAt??0,Math.floor(now/BAR_MS)*BAR_MS);
@@ -413,6 +414,7 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
   const reject=(reason:string)=>{diagnostics.reasons[reason]=(diagnostics.reasons[reason]??0)+1;};
   for(const candidate of candidates){
     if(s.positions.some(t=>t.symbol===candidate.symbol))continue;
+    if(now-(s.turnSymbolExitAt?.[candidate.symbol]??-Infinity)<10_000){reject("该币刚完成周期转折退出；下一执行周期再比较各周期新方向");continue;}
     const key=`${candidate.symbol}:${candidate.timeframe}`;
     if((s.turnLastEntryBars[key]??0)>=candidate.completedAt)continue;
     const cfg=TURN_CONFIG[candidate.timeframe],maxAge=Math.max(BAR_MS*2,cfg.minutes*60_000*1.5);
@@ -449,7 +451,15 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
       Math.max(0,equity*4-gross));
     if(!(desired>=equity*.05)){reject("该周期剩余风险额度不足有效仓位，不生成碎片订单");continue;}
     const price=(candidate.side==="LONG"?q.bestAsk:q.bestBid)*(1+d*PAPER_COST.slippageRate);
-    const count=Math.floor(desired/(price*meta.quantoMultiplier));
+    const exitNow=(candidate.side==="LONG"?q.bestBid:q.bestAsk)*(1-d*PAPER_COST.slippageRate);
+    const notionalPer=price*meta.quantoMultiplier,riskPer=notionalPer*lossRate;
+    const equityDeltaPer=-notionalPer*PAPER_COST.feeRate
+      +d*meta.quantoMultiplier*(exitNow-price)-meta.quantoMultiplier*exitNow*PAPER_COST.feeRate;
+    const capCount=(rate:number,used:number)=>Math.max(0,Math.floor((equity*rate-used)
+      /Math.max(1e-12,riskPer-rate*equityDeltaPer)));
+    const qualityRate=.015*quality*drawdownScale;
+    let count=Math.floor(desired/notionalPer);
+    count=Math.min(count,capCount(.10,totalRisk),capCount(.065,sideRisk),capCount(candidate.riskCap,sleeveRisk),capCount(qualityRate,0));
     if(count<Math.max(1,meta.minContracts??1)){reject("风险额度低于交易所最小合约张数");continue;}
     const quantity=count*meta.quantoMultiplier,notional=quantity*price;
     if(notional<equity*.05||notional<desired*.25){reject("合约取整后只剩碎片仓位");continue;}
