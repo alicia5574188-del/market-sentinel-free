@@ -71,6 +71,9 @@ test("drawdown scaling and turn scaling reduce size without introducing a peer-c
   assert.ok(Math.abs(risk-4.2)<1e-12);
   assert.ok(Math.abs(adaptiveTargetRisk({equity:1000,quality:.8,allocationScale:.55,riskMultiplier:.2,stateHeadroom:20})-1.32)<1e-12);
   assert.ok(risk>0);
+  const many=adaptiveTargetRisk({equity:1000,quality:1,allocationScale:1,riskMultiplier:1,stateHeadroom:20,
+    readyPeers:30,minimumMeaningfulRisk:1.1});
+  assert.ok(many>=1.1);assert.ok(many>20/30,"ready names must not pre-divide every order below meaningful size");
 });
 
 test("adaptive priority favors fresh opposite migration without overriding learned evidence",()=>{
