@@ -42,16 +42,21 @@ export function reconcileLiveScale(session:LiveSession,sourceEquity:number,liveE
   if(!(positive(sourceEquity)&&positive(liveEquity)))throw new Error("实盘复制比例无法核对");
   if(!positive(session.scaleRatio))return establishLiveScale(session,sourceEquity,liveEquity,now);
   const fixed=session.scaleRatio!;
+  const currentRatio=liveEquity/sourceEquity;
   if(positive(session.scaleSourceEquity)&&positive(session.scaleLiveEquity)){
     const anchorRatio=session.scaleLiveEquity!/session.scaleSourceEquity!;
     if(anchorRatio>fixed&&ratioGap(anchorRatio,fixed)>1.05)
       return {...session,scaleRatio:anchorRatio,scaleRebasedAt:now,scaleRebaseFrom:fixed,scaleRebaseReason:"ANCHOR_MISMATCH" as const};
-    const currentRatio=liveEquity/sourceEquity;
     const liveGrowth=liveEquity/session.scaleLiveEquity!;
     const ratioGrowth=currentRatio/fixed;
     if(liveGrowth>=4&&ratioGrowth>=4)
       return {...session,scaleRatio:currentRatio,scaleSourceEquity:sourceEquity,scaleLiveEquity:liveEquity,scaleAt:now,
         scaleRebasedAt:now,scaleRebaseFrom:fixed,scaleRebaseReason:"LIVE_CAPITAL_INCREASE" as const};
+  } else if(currentRatio/fixed>=4) {
+    // Legacy activation from before capital anchors existed. Only a very large
+    // upward mismatch is safe to interpret as stale scale rather than PnL drift.
+    return {...session,scaleRatio:currentRatio,scaleSourceEquity:sourceEquity,scaleLiveEquity:liveEquity,scaleAt:now,
+      scaleRebasedAt:now,scaleRebaseFrom:fixed,scaleRebaseReason:"ANCHOR_MISMATCH" as const};
   }
   return session;
 }
