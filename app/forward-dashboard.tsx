@@ -11,12 +11,12 @@ type Tab = "overview" | "relations" | "orders" | "live" | "journal" | "settings"
 const fmt = (v: number | null | undefined, digits=2) => typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:digits,maximumFractionDigits:digits}):"—";
 const signed = (v: number | null | undefined, digits=2) => typeof v==="number"?`${v>=0?"+":""}${fmt(v,digits)}`:"—";
 const time = (v?:number|null) => v?new Date(v).toLocaleString("zh-CN",{timeZone:"Asia/Vientiane",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}):"—";
-const condition = (r:Rule) => r.conditions.map(c=>`${FEATURES[c.feature]} ${c.op==="GE"?"≥":"≤"} ${fmt(c.threshold)}`).join(" ＋ ");
+const condition = (r:Rule) => r.authority==="MULTI_TURN"?`${r.turnTimeframe??"—"} 转折引擎`:r.conditions.map(c=>`${FEATURES[c.feature]} ${c.op==="GE"?"≥":"≤"} ${fmt(c.threshold)}`).join(" ＋ ");
 
 export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,memberName,cacheScope="owner"}:{data:View|null;healthy:boolean;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;liveEnabled:boolean;liveOverview?:{equity:number|null;available:number|null;positionCount:number;operational:boolean;lastSyncAt:number|null;copied:number|null;eligible:number|null;missing:number|null};accountPanel?:ReactNode;memberName?:string;cacheScope?:string}) {
   const [equityCache]=useState(()=>new EquityHistoryCache());
   useEffect(()=>()=>equityCache.cancel(),[equityCache]);
-  const [tab,setTab]=useState<Tab>("overview"),[now,setNow]=useState(0),[showDormant,setShowDormant]=useState(false);
+  const [tab,setTab]=useState<Tab>("overview"),[now,setNow]=useState(0);
   const [fontScale,setFontScale]=useState(92);
   const [exporting,setExporting]=useState(false),[exportStatus,setExportStatus]=useState<string|null>(null);
   const [paperTab,setPaperTab]=useState<"account"|"positions"|"history"|"archive">("account"),[paperPage,setPaperPage]=useState(0);
@@ -47,23 +47,28 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
       setExportStatus("导出失败，请重试。");
     }finally{setExporting(false);}
   };
-  const active=data?.rules.filter(r=>r.status==="EXPERIMENTAL")??[],dormant=data?.rules.filter(r=>r.status==="DORMANT")??[];
+  const active=data?.rules.filter(r=>r.status==="EXPERIMENTAL")??[];
   const blockers=Object.entries(data?.entryDiagnostics?.reasons??{}).sort((a,b)=>b[1]-a[1]);
   const mainBlocker=blockers[0]?.[0]??"本轮暂无阻塞";
-  const modeName={UNKNOWN:"未知",TREND_LONG:"趋势偏多",TREND_SHORT:"趋势偏空",TRANSITION:"转折过渡",NEUTRAL:"震荡中性"}[data?.marketState?.mode??"UNKNOWN"];
-  const turnName={UNKNOWN:"数据待确认",CLEAR:"清晰",PULLBACK:"回调预警",REVERSAL_RISK:"反转风险"}[data?.turnForecast?.phase??"UNKNOWN"];
+  const turnTfs=["5m","15m","30m","1h","4h","1d"] as const,turnFrames=data?.turnEngine?.frames??{};
+  const turnRows=turnTfs.map(tf=>{const rows=Object.values(turnFrames).flatMap(by=>by[tf]?[by[tf]!]:[]);
+    const long=rows.filter(x=>x.direction==="LONG").length,short=rows.filter(x=>x.direction==="SHORT").length;
+    return{tf,rows,long,short,neutral:rows.length-long-short,avgTurn:rows.length?rows.reduce((n,x)=>n+x.turnProbability,0)/rows.length:null,
+      turning:rows.filter(x=>x.phase==="TURNING"||x.phase==="CONFIRMED").length,cal:data?.turnEngine?.calibration[tf]};});
+  const hotTurns=Object.values(turnFrames).flatMap(by=>turnTfs.flatMap(tf=>by[tf]?[by[tf]!]:[]))
+    .sort((a,b)=>b.triggerProbability-a.triggerProbability).slice(0,10);
   const paperMargin=data?.positions.reduce((sum,t)=>sum+t.margin,0)??null;
   const elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
-  const nav:[Tab,string,string][]=[["overview","◉","总览"],["relations","⌘","规则"],["orders","⇄","模拟"],["live","◈","实盘"],["journal","≋","演变"],["settings","⊙","系统"]];
+  const nav:[Tab,string,string][]=[["overview","◉","总览"],["relations","⌘","转折"],["orders","⇄","模拟"],["live","◈","实盘"],["journal","≋","演变"],["settings","⊙","系统"]];
   return <main className="fr-app" style={fontStyle} data-ui-version="dark-live-v1" data-record-view="compact-records-pnl-v1">
-    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · 关系引擎</b><small>FORWARD LAB / 01</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
-    <div className="fr-subhead"><span>Gate USDT 永续 · 关系引擎</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
+    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · 多周期转折引擎</b><small>MULTI-TURN / 01</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
+    <div className="fr-subhead"><span>Gate USDT 永续 · 六周期转折</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
     {memberName&&<p className="fr-note">{memberName} · 共用同一模拟策略，实盘账户独立，开关只由你控制。</p>}
 
     {tab==="overview"&&<>
       <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">账户驾驶舱</span><h1>{healthy?"系统正在正常运行":"系统正在恢复连接"}</h1>
         <p>{data?.latestReason??"正在读取已持久化账户和真实行情状态。"}</p>
-        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>5分钟行情</span><span>动态市场范围</span><span>实盘{liveEnabled?"已开启":"关闭"}</span></div></div>
+        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>5m / 15m / 30m / 1h / 4h / 日线</span><span>Top30动态市场</span><span>实盘{liveEnabled?"已开启":"关闭"}</span></div></div>
         <div className="fr-equity"><small>模拟账户权益 · USDT</small><strong>{fmt(data?.equity)}</strong><div className={(data?.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(data?.netPnl)} <span>U · {signed(data?data.netPnl/data.initialEquity*100:null)}%</span></div>
           <footer><span>起点 {fmt(data?.initialEquity,0)}</span><span>最大回撤 {fmt(data?data.maxDrawdown*100:null)}%</span></footer></div></section>
 
@@ -93,18 +98,32 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
       <section className="fr-section"><div className="fr-section-head"><div><small>最近变化</small><h2>需要留意的运行记录</h2></div><button className="fr-text-button" onClick={()=>select("journal")}>全部记录 ↗</button></div><Journal data={data} limit={3}/></section>
     </>}
 
-    {tab==="relations"&&<><PageTitle eyebrow="RELATION → RULE" title="交易规则" text="查看当前入场条件、适用市场与退出设置。"/>
-      <section className="fr-section"><div className="fr-section-head"><div><small>当前规则</small><h2>{data?active.length:"—"} 条前向实验</h2></div><span>模拟为决策源 · 尚未验证盈利</span></div>{!active.length?<Empty title="正在积累可比较的条件—反应关系" text={data?.latestReason??"后台快照尚未返回。"}/>:<div className="fr-rule-grid">{active.map(r=><RuleCard key={r.id} rule={r}/>)}</div>}</section>
-      <section className="fr-section"><div className="fr-section-head"><div><small>自适应路由</small><h2>当前行情与换挡状态</h2></div><span>{data?.adaptationVersion??"读取中"}</span></div>
-        <div className="fr-three"><div><small>市场状态</small><b>{modeName}</b></div><div><small>转折阶段</small><b>{turnName}</b></div><div><small>新仓分配系数</small><b>{data?`${fmt(data.marketRiskBudget.allocationScale*100,0)}%`:"—"}</b></div></div>
-        <div className="fr-three"><div><small>快速15分钟候选</small><b>{fmt(data?.fitDiagnostics.rapidQualified,0)}</b></div><div><small>当前多向规则</small><b>{fmt(data?.fitDiagnostics.activeLong,0)}</b></div><div><small>当前空向规则</small><b>{fmt(data?.fitDiagnostics.activeShort,0)}</b></div></div>
-        <div className="fr-three"><div><small>本轮匹配</small><b>{fmt(data?.entryDiagnostics?.matched,0)}</b></div><div><small>本轮开仓</small><b>{fmt(data?.entryDiagnostics?.opened,0)}</b></div><div><small>风险迁移候选</small><b>{fmt(data?.entryDiagnostics?.adaptiveScaled,0)}</b></div></div>
-        <p className="fr-note">{data?.marketRiskBudget.reason??"等待风险预算。"} 当前主要阻塞：{mainBlocker}</p>
+    {tab==="relations"&&<><PageTitle eyebrow="MULTI-TIMEFRAME TURN ENGINE" title="六周期转折" text="每个周期独立判断当前方向是否仍成立。小周期转折只影响自己的仓位，并作为大周期转折的传播证据，不直接否决大周期。"/>
+      <section className="fr-section"><div className="fr-section-head"><div><small>唯一策略权威</small><h2>转折状态总览</h2></div><span>{data?.strategyAuthorityVersion??"读取中"}</span></div>
+        <div className="fr-rule-grid">{turnRows.map(row=><article className="fr-rule" key={row.tf}><header><span>{row.tf}级别</span><b>{row.rows.length} 市场</b></header>
+          <h3>多 {row.long} · 空 {row.short} · 中性 {row.neutral}</h3>
+          <div className="fr-rule-numbers"><div><small>平均转折概率</small><b>{row.avgTurn==null?"—":`${fmt(row.avgTurn*100,1)}%`}</b></div>
+            <div><small>转折中 / 已确认</small><b>{row.turning}</b></div><div><small>Brier</small><b>{row.cal?.count?fmt(row.cal.brier,3):"待样本"}</b></div></div>
+          <footer><span>风险袖套 {fmt((data?.turnRiskSleeves?.[row.tf]??0)*100,1)}%</span><span>校准 {row.cal?.count??0} 次</span></footer></article>)}</div>
+        <p className="fr-note">{data?.marketRiskBudget.reason??"等待风险预算。"}</p>
       </section>
-      <section className="fr-section"><div className="fr-three"><div><small>本轮表达检查</small><b>{fmt(data?.fitDiagnostics.tested,0)}</b></div><div><small>较早时间组</small><b>{fmt(data?.fitDiagnostics.trainGroups,0)}</b></div><div><small>较晚检查时间组</small><b>{fmt(data?.fitDiagnostics.checkGroups,0)}</b></div></div><p className="fr-note">统计估计不等于胜率，需结合后续交易结果评估。</p></section>
-      <section className="fr-section"><div className="fr-section-head"><h2>关系与成交校准</h2><span>不是胜率</span></div><div className="fr-three"><div><small>单币集中度提示</small><b>{fmt(data?.evidenceDiagnostics?.concentrationWarnings,0)}</b></div><div><small>成交偏差提示</small><b>{fmt(data?.evidenceDiagnostics?.calibrationWarnings,0)}</b></div><div><small>保留的已平仓反馈</small><b>{fmt(data?.feedbackCount,0)}</b></div></div><p className="fr-note">集中度和成交偏差用于风险评估；统计估计并非收益承诺。</p></section>
-      <section className="fr-section"><button className="fr-expand" aria-expanded={showDormant} onClick={()=>setShowDormant(!showDormant)}><div><h2>休眠规则</h2><p>仅展示不参与当前开仓的规则。</p></div><span>{dormant.length} {showDormant?"−":"+"}</span></button>{showDormant&&<div className="fr-rule-grid">{dormant.map(r=><RuleCard key={r.id} rule={r}/>)}</div>}</section></>}
-
+      <section className="fr-section"><div className="fr-section-head"><div><small>当前最敏感变化</small><h2>最高转折概率</h2></div><span>最多10项</span></div>
+        {hotTurns.length?<div>{hotTurns.map(x=><p className="fr-diagnostic-row" key={`${x.symbol}:${x.timeframe}`}><b>{x.symbol.replace("_"," / ")} · {x.timeframe}</b>
+          <span>{x.direction==="LONG"?"多":"空"}向 · 转折 {fmt(x.triggerProbability*100,1)}% · 延续 {fmt(x.continuationScore*100,1)}% · {x.phase}</span></p>)}</div>
+          :<Empty title="正在建立六周期状态" text="短周期会先就绪；日线只影响日线级别，不阻塞其他周期。"/>}
+      </section>
+      <section className="fr-section"><div className="fr-section-head"><div><small>执行诊断</small><h2>本轮参与</h2></div><span>{time(data?.turnEngine?.updatedAt)}</span></div>
+        <div className="fr-three"><div><small>可用周期状态</small><b>{fmt(data?.turnEngine?.diagnostics.readyFrames,0)}</b></div>
+          <div><small>本轮确认转折</small><b>{fmt(data?.turnEngine?.diagnostics.confirmedTurns,0)}</b></div>
+          <div><small>匹配可交易候选</small><b>{fmt(data?.entryDiagnostics?.matched,0)}</b></div></div>
+        <div className="fr-three"><div><small>本轮开仓</small><b>{fmt(data?.entryDiagnostics?.opened,0)}</b></div>
+          <div><small>当前多向候选</small><b>{fmt(data?.fitDiagnostics.activeLong,0)}</b></div>
+          <div><small>当前空向候选</small><b>{fmt(data?.fitDiagnostics.activeShort,0)}</b></div></div>
+        <p className="fr-note">当前主要阻塞：{mainBlocker}。没有连亏暂停或固定每日开单配额。</p>
+      </section>
+      {active.length>0&&<section className="fr-section"><div className="fr-section-head"><div><small>当前持仓 / 近期生成</small><h2>周期执行规则</h2></div><span>只用于审计</span></div>
+        <div className="fr-rule-grid">{active.slice(0,12).map(r=><RuleCard key={r.id} rule={r}/>)}</div></section>}
+    </>}
     {tab==="orders"&&<><PageTitle eyebrow="REAL-FEED PAPER" title="模拟账户" text="与实盘使用同一套观察结构。模拟成交含模型手续费、滑点和资金费用占位，不冒充Gate真实成交。"/>
       <nav className="fr-live-tabs fr-paper-tabs" aria-label="模拟子导航">{([["account","账户"],["positions","持仓"],["history","记录"],["archive","归档"]] as const).map(([id,label])=><button key={id} className={paperTab===id?"selected":""} aria-current={paperTab===id?"page":undefined} onClick={()=>setPaperTab(id)}>{label}</button>)}</nav>
       {paperTab==="account"&&<>
@@ -136,14 +155,14 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
         <div className="fr-font-options" role="group" aria-label="界面字号">{[70,80,90,100,110].map(value=><button key={value} type="button" className={fontScale===value?"selected":""} aria-pressed={fontScale===value} onClick={()=>selectFontScale(value)}>{value}%</button>)}</div>
       </section>
       <section className="fr-section"><div className="fr-section-head"><div><small>运行边界</small><h2>当前系统设置</h2></div></div>
-        <Setting title="当前主系统" value={data?.policyVersion??data?.version??"读取中"} text="行情驱动的交易规则与执行。"/><Setting title="规则自动适应" value="在线运行" text="每5分钟整理行情，按后续反应更新规则。"/><Setting title="执行权限" value="模拟决策 / 实盘复制" text="模拟提供交易决定；实盘按固定比例复制并使用Gate真实成交。"/><Setting title="风险预算" value="权益随动" text={data?.boundaries.risk??"读取中"}/><Setting title="成本口径" value="显式假设" text={data?.cost.assumption??"读取中"}/><Setting title="连续性" value="持久化" text="状态保存后才提交新订单；重启恢复原账户。"/>
+        <Setting title="当前主系统" value={data?.strategyAuthorityVersion??data?.version??"读取中"} text="六周期转折概率是唯一新开仓与策略退出权威。"/><Setting title="转折概率校准" value="在线运行" text="每个周期只用已完成K线；未来结果到期后才更新Brier与概率偏差。"/><Setting title="执行权限" value="模拟决策 / 实盘复制" text="模拟提供交易决定；实盘按固定比例复制并使用Gate真实成交。"/><Setting title="风险预算" value="权益随动" text={data?.boundaries.risk??"读取中"}/><Setting title="成本口径" value="显式假设" text={data?.cost.assumption??"读取中"}/><Setting title="连续性" value="持久化" text="状态保存后才提交新订单；重启恢复原账户。"/>
       </section></>}
 
     {tab==="live"&&livePanel}
 
 
     {(error||data?.storage.error)&&<aside className="fr-error" role="status"><b>运行提示</b><p>{data?.storage.error??error}</p><small>保留最近数据；不会把未保存的交易发布为已成交。</small></aside>}
-    <footer className="fr-footer"><span>行情心跳 {time(feedAt)}</span><span>{data?.version??"FORWARD LAB"} · Asia/Vientiane</span></footer>
+    <footer className="fr-footer"><span>行情心跳 {time(feedAt)}</span><span>{data?.strategyAuthorityVersion??data?.version??"MULTI-TURN"} · Asia/Vientiane</span></footer>
     <nav className="fr-nav" aria-label="主导航">{nav.map(([id,icon,label])=><button key={id} className={id===tab?"selected":""} aria-current={id===tab?"page":undefined} onClick={()=>select(id)}><span>{icon}</span><b>{label}</b>{id==="orders"&&!!data?.positions.length&&<i>{data.positions.length}</i>}</button>)}</nav>
   </main>;
 }
@@ -151,13 +170,13 @@ function Stat({label,value,note}:{label:string;value:string;note:string}){return
 function Empty({title,text}:{title:string;text:string}){return<div className="fr-empty"><span>◎</span><h3>{title}</h3><p>{text}</p></div>;}
 function PageTitle({eyebrow,title,text}:{eyebrow:string;title:string;text:string}){return<section className="fr-page-title"><small>{eyebrow}</small><h1>{title}</h1><p>{text}</p></section>;}
 function Setting({title,value,text}:{title:string;value:string;text:string}){return<div className="fr-setting"><div><h3>{title}</h3><p>{text}</p></div><b>{value}</b></div>;}
-function RuleCard({rule:r}:{rule:Rule}){return<article className="fr-rule"><header><span>{r.horizon}分钟反应 · v{r.version}</span><b className={r.side==="LONG"?"fr-positive":"fr-negative"}>{r.side==="LONG"?"做多":"做空"}</b></header><h3>{condition(r)}</h3><details className="fr-details"><summary>规则依据与风险</summary><p>{r.reason}</p>{r.evidence&&<p className="fr-note">{r.evidence.scope==="SINGLE_ASSET"?"仅限本币":"跨币实验范围（尚未证明通用）"}：{r.evidence.symbols.slice(0,6).join("、")}{r.evidence.symbols.length>6?` 等${r.evidence.symbols.length}个已观测标的`:""}。稳健估计 {signed(r.evidence.boundedNet==null?null:r.evidence.boundedNet*100,3)}%，成交校准后 {signed((r.evidence.calibratedNet??r.estimatedNetRate)*100,3)}%。这些估计可能为负；保留实验不等于承诺盈利。</p>}{r.evidence?.warnings?.length?<p className="fr-note">{r.evidence.warnings.join("；")}</p>:null}</details><div className="fr-rule-numbers"><div><small>原始净反应假设</small><b>{signed(r.estimatedNetRate*100,3)}%</b></div><div><small>已见市场样本</small><b>{r.samples}</b></div><div><small>生成止损距离</small><b>{fmt(r.stopRate*100)}%</b></div></div><footer><span>{r.status==="EXPERIMENTAL"?"前向实验中":"已休眠 / 被替代"}</span><span>{time(r.createdAt)}</span></footer></article>;}
+function RuleCard({rule:r}:{rule:Rule}){return<article className="fr-rule"><header><span>{r.authority==="MULTI_TURN"?`${r.turnTimeframe}级别 · 安全寿命${r.horizon}分`:`${r.horizon}分钟反应 · v${r.version}`}</span><b className={r.side==="LONG"?"fr-positive":"fr-negative"}>{r.side==="LONG"?"做多":"做空"}</b></header><h3>{condition(r)}</h3><details className="fr-details"><summary>规则依据与风险</summary><p>{r.reason}</p>{r.evidence&&<p className="fr-note">{r.evidence.scope==="SINGLE_ASSET"?"仅限本币":"跨币实验范围（尚未证明通用）"}：{r.evidence.symbols.slice(0,6).join("、")}{r.evidence.symbols.length>6?` 等${r.evidence.symbols.length}个已观测标的`:""}。稳健估计 {signed(r.evidence.boundedNet==null?null:r.evidence.boundedNet*100,3)}%，成交校准后 {signed((r.evidence.calibratedNet??r.estimatedNetRate)*100,3)}%。这些估计可能为负；保留实验不等于承诺盈利。</p>}{r.evidence?.warnings?.length?<p className="fr-note">{r.evidence.warnings.join("；")}</p>:null}</details><div className="fr-rule-numbers"><div><small>原始净反应假设</small><b>{signed(r.estimatedNetRate*100,3)}%</b></div><div><small>已见市场样本</small><b>{r.samples}</b></div><div><small>生成止损距离</small><b>{fmt(r.stopRate*100)}%</b></div></div><footer><span>{r.status==="EXPERIMENTAL"?"前向实验中":"已休眠 / 被替代"}</span><span>{time(r.createdAt)}</span></footer></article>;}
 function tradePnl(t:Trade,now:number){const open=t.status==="OPEN",d=t.side==="LONG"?1:-1;
   return open?d*t.quantity*(t.lastPrice-t.entryPrice)-t.entryFee-t.quantity*t.lastPrice*.0007-t.notional*.0002*Math.max(0,now-t.openedAt)/86400000:t.netPnl;
 }
 function duration(start:number,end:number|null|undefined,now:number){const ms=Math.max(0,(end??now)-start),minutes=Math.floor(ms/60000);return minutes>=60?`${Math.floor(minutes/60)}小时${minutes%60}分`:`${minutes}分钟`;}
 function TradeCard({trade:t,now}:{trade:Trade;now:number}){const open=t.status==="OPEN",pnl=tradePnl(t,now),rate=t.notional>0&&pnl!=null?pnl/t.notional:null;
-  return <article className="fr-trade fr-trade-unified"><header><div><small>{open?"持仓中":"已平仓"} · {t.side==="LONG"?"多单":"空单"}</small><h3>{t.symbol.replace("_"," / ")}</h3></div>
+  return <article className="fr-trade fr-trade-unified"><header><div><small>{open?"持仓中":"已平仓"} · {t.side==="LONG"?"多单":"空单"}{t.turn?` · ${t.turn.timeframe}级别`:""}</small><h3>{t.symbol.replace("_"," / ")}</h3></div>
     <strong className={(pnl??0)>=0?"fr-positive":"fr-negative"}>{signed(pnl)} <small>U{rate==null?"":` · ${signed(rate*100,3)}%`}</small></strong></header>
     <dl><div><dt>入场价</dt><dd>{fmt(t.entryPrice,5)}</dd></div><div><dt>{open?"当前价格":"出场价"}</dt><dd>{fmt(open?t.lastPrice:t.exitPrice,5)}</dd></div>
       <div><dt>保护止损</dt><dd>{fmt(t.stopPrice,5)}</dd></div><div><dt>名义金额</dt><dd>{fmt(t.notional)} U</dd></div>
@@ -165,7 +184,7 @@ function TradeCard({trade:t,now}:{trade:Trade;now:number}){const open=t.status==
       <div><dt>进场时间</dt><dd>{time(t.openedAt)}</dd></div><div><dt>出场时间</dt><dd>{open?"持仓中":time(t.closedAt)}</dd></div>
       <div><dt>持仓时长</dt><dd>{duration(t.openedAt,t.closedAt,now)}</dd></div></dl>
     {t.exitReason&&<p className="fr-trade-reason">退出原因：{t.exitReason}</p>}
-    <details className="fr-details"><summary>策略与模拟成本</summary><p className="fr-note">规则 v{t.rule.version} · {condition(t.rule)}。{t.exitReason??`退出依据：${t.rule.exitMode==="REACTION_DECAY"?"反应回吐保护":"反应期限"}；相反新证据连续确认后可退出。`}</p>
+    <details className="fr-details"><summary>策略与模拟成本</summary><p className="fr-note">{t.turn?`${t.turn.timeframe}转折级别 · 入场转折概率 ${fmt(t.turn.entryTurnProbability*100,1)}% · 延续 ${fmt(t.turn.entryContinuation*100,1)}%。退出由同周期转折、原始硬止损或异常安全寿命决定。`:`规则 v${t.rule.version} · ${condition(t.rule)}。退出依据：${t.rule.exitMode==="REACTION_DECAY"?"反应回吐保护":"反应期限"}。`}{t.exitReason?` ${t.exitReason}`:""}</p>
       <p className="fr-note">模拟成交使用新鲜盘口并计入模型手续费、滑点和资金费占位；实盘实际结果请在实盘页对照。</p></details>
   </article>;
 }

@@ -1091,6 +1091,7 @@ jobs:
               .runtime.strategyArena.shadowCount == 0 and .runtime.strategyArena.activeCount == 0 and
               .runtime.legacyRetired == true and
               .runtime.forward.version == "forward-relations-v1.0" and
+              .runtime.forward.strategyAuthorityVersion == "multi-turn-v1" and
               .runtime.forward.liveEligible == false and
               .runtime.liveMirror.version == "current-paper-live-parity-v1" and
               .runtime.liveMirror.source == "CURRENT_FORWARD_ACCOUNT" and
@@ -1190,7 +1191,7 @@ jobs:
           page_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/main-page.html" -w '%{http_code}' \
             "$WORKER_BASE_URL/" || true)"
           [[ "$page_code" == "200" ]]
-          grep -Fq '哨兵 · 关系引擎' "$RUNNER_TEMP/main-page.html"
+          grep -Fq '哨兵 · 多周期转折引擎' "$RUNNER_TEMP/main-page.html"
           jq -e --arg sha "$GITHUB_SHA" '.runtime.buildSha == $sha' "$RUNNER_TEMP/main-health.json" >/dev/null
           before="$(jq -r '.runtime.liveMode.requestedEnabled' "$RUNNER_TEMP/owner-intent-before.json")"
           after="$(jq -r '.runtime.liveMode.requestedEnabled' "$RUNNER_TEMP/main-health.json")"
@@ -1280,6 +1281,7 @@ jobs:
             .runtime.strategyArena.shadowCount == 0 and .runtime.strategyArena.activeCount == 0 and
               .runtime.legacyRetired == true and
               .runtime.forward.version == "forward-relations-v1.0" and
+              .runtime.forward.strategyAuthorityVersion == "multi-turn-v1" and
               .runtime.forward.liveEligible == false and
               .runtime.liveMirror.version == "current-paper-live-parity-v1" and
               .runtime.liveMirror.source == "CURRENT_FORWARD_ACCOUNT" and
@@ -1365,7 +1367,7 @@ jobs:
           page_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/monitor-page.html" -w '%{http_code}' \
             "$WORKER_BASE_URL/" || true)"
           [[ "$page_code" == "200" ]]
-          grep -Fq '哨兵 · 关系引擎' "$RUNNER_TEMP/monitor-page.html"
+          grep -Fq '哨兵 · 多周期转折引擎' "$RUNNER_TEMP/monitor-page.html"
           jq -e '.members.version == "isolated-member-keys-v1" and .members.configured == true' "$RUNNER_TEMP/monitor-health-2.json" >/dev/null
           for path in /api/runtime /api/forward/export /api/forward/archive /api/history /api/account-logs; do
             code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/monitor-guest-denied.json" -w '%{http_code}' "$WORKER_BASE_URL$path")"

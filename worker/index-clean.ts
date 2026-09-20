@@ -36,9 +36,12 @@ import { advanceRegimePortfolio, evaluateRegimePortfolio, initialRegimePortfolio
   REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE, resetRegimePortfolio,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
-import { advanceForward, forwardSummary, forwardEquity, freshQuote, forwardWatchSymbols, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
+import { advanceForward, closeForwardForReset, forwardSummary, forwardEquity, freshQuote, forwardWatchSymbols, initialMultiTurnForward,
+  FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
+import { MULTI_TURN_VERSION } from "../lib/multi-turn-engine.ts";
 import { forwardSymbolAllowed } from "../lib/forward-evidence.ts";
-import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE } from "../lib/forward-store.ts";
+import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, prepareForwardReset,
+  FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE } from "../lib/forward-store.ts";
 import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBudgetView,
   PRIMARY_PLANNED_DO_ROWS, TWO_MEMBER_PLANNED_DO_ROWS, type ProtectionWriteBudget } from "../lib/forward-write-budget.ts";
 import { EquityReader } from "../lib/equity-reader.ts";
@@ -51,6 +54,7 @@ import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwa
   type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
 declare const __FORWARD_BUILD_SHA__: string;
 const FORWARD_BUILD_SHA = typeof __FORWARD_BUILD_SHA__ === "string" ? __FORWARD_BUILD_SHA__ : "local-verification";
+const MULTI_TURN_AUTO_CUTOVER = FORWARD_BUILD_SHA !== "local-verification";
 import { advanceStrategyArena as advancePreviousStrategyArena,
   initialStrategyArena as initialPreviousStrategyArena,
   normalizeStrategyArena as normalizePreviousStrategyArena,
@@ -84,6 +88,8 @@ const AUTHORITY_SCHEMA_VERSION = 1;
 const DEFAULT_SYMBOLS = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];
 const REGIME_HOURLY_STORAGE_PREFIX = "regime-hourly:";
 const REGIME_HOURLY_RETRY_MS = 10_000;
+const TURN_DAILY_STORAGE_PREFIX = "multi-turn-daily:v1:";
+const TURN_DAILY_REQUIRED_CANDLES = 90;
 
 function broadMarketContext(candidates: Record<string, { symbol: string; observedAt: number; broadMoveRate?: number;
   trendRate: number; move4hRate?: number; move24hRate?: number }>, now: number) {
@@ -355,7 +361,7 @@ export function mergeStrategyCandlePath(
   incoming: Awaited<ReturnType<typeof fetchStructureCandles>>,
 ) {
   const rows = [...new Map([...prior, ...incoming].map((row) => [row.time, row])).values()]
-    .sort((left, right) => left.time - right.time).slice(-360);
+    .sort((left, right) => left.time - right.time).slice(-1_000);
   let start = rows.length ? rows.length - 1 : 0;
   while (start > 0 && rows[start].time - rows[start - 1].time === 300) start -= 1;
   return rows.slice(start);
@@ -383,6 +389,20 @@ export function mergeRegimeHourlyPath(prior: RegimeHourlyPath, incoming: RegimeH
   while (start > 0 && rows[start].time - rows[start - 1].time === 3_600) start -= 1;
   return rows.slice(start);
 }
+
+export function mergeTurnDailyPath(
+  prior: Awaited<ReturnType<typeof fetchStructureCandles>>,
+  incoming: Awaited<ReturnType<typeof fetchStructureCandles>>,
+) {
+  const rows=[...new Map([...prior,...incoming].filter(row=>row
+    &&[row.time,row.volume,row.close,row.high,row.low,row.open].every(Number.isFinite)
+    &&row.time>0&&row.close>0&&row.high>=row.low&&row.volume>=0).map(row=>[row.time,row])).values()]
+    .sort((a,b)=>a.time-b.time).slice(-120);
+  let start=rows.length?rows.length-1:0;
+  while(start>0&&rows[start].time-rows[start-1].time===86_400)start-=1;
+  return rows.slice(start);
+}
+function turnDailyStorageKey(symbol:string){return `${TURN_DAILY_STORAGE_PREFIX}${symbol}`;}
 
 function regimeHourlyStorageKey(symbol: string) {
   return `${REGIME_HOURLY_STORAGE_PREFIX}${symbol}`;
@@ -466,6 +486,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private memory: Record<string, SymbolMemory> = {};
   private structureCandles: Record<string, Partial<Record<"1m" | "15m" | "1h" | "4h", Awaited<ReturnType<typeof fetchStructureCandles>>>>> = {};
   private strategyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
+  private turnDailyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
+  private turnDailyLoaded = new Set<string>();
+  private turnDailyCursor = 0;
+  private turnDailyFailures = new Map<string,{retryAt:number;lastError:string}>();
   private regimeHourly: Record<string, RegimeHourlyPath> = {};
   private sessionWarmup: Record<string, number> = {};
   private contractCatalog = new Map<string, Awaited<ReturnType<typeof fetchActiveContracts>>[number]>();
@@ -863,7 +887,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (!contract) return 0;
     try {
       const prior = this.strategyCandles[symbol] ?? [];
-      const incoming = await fetchStructureCandles(symbol, "5m", prior.length >= 324 ? 4 : 360);
+      const incoming = await fetchStructureCandles(symbol, "5m", prior.length >= 960 ? 4 : 1_000);
       const candles = mergeStrategyCandlePath(prior, incoming);
       const latest = candles.at(-1);
       const completedAt = latest ? (latest.time + 300) * 1_000 : 0;
@@ -944,7 +968,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private forwardHealth() {
     const s=this.forwardState;
-    return {version:FORWARD_VERSION,policyVersion:s?.policyVersion??null,liveEligible:false,
+    return {version:FORWARD_VERSION,policyVersion:s?.policyVersion??null,strategyAuthorityVersion:s?.strategyAuthorityVersion??null,liveEligible:false,
       startedAt:s?.startedAt??null,lastCycleAt:s?.lastCycleAt??null,resolved:s?.resolved??0,openCount:s?.positions.length??0,
       exitPolicyVersion:s?.exitPolicyUpgrade?.policy??null,exitPolicyActivatedAt:s?.exitPolicyUpgrade?.at??null,
       timelyExitOpenCount:s?.positions.filter(t=>!!t.exitControl&&t.exitControl.policy===s.exitPolicyUpgrade?.policy).length??0,
@@ -993,18 +1017,39 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.liveJournal.set(key,{...existing,receipt:structuredClone(entry.parity)});
   }
 
+  private async ensureMultiTurnCutover(now:number){
+    const previous=this.forwardState;if(!previous||previous.strategyAuthorityVersion===MULTI_TURN_VERSION)return false;
+    if(this.runtime.live.requestedEnabled||this.runtime.live.operational||this.activeLivePositions().length||this.activeLiveEntries().length)
+      return false; // legacy drain continues protection, but cannot create new legacy entries
+    const quotes=this.regimeQuotes(now),closed=closeForwardForReset(previous,quotes,now),next=initialMultiTurnForward(now);
+    const prepared=await prepareForwardReset(previous,closed,next,now);
+    const saved=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
+    const protection=prepared.entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
+    if(protection&&saved?.writeBudget!==undefined)prepared.entries[FORWARD_PROTECTION_STORAGE]={...protection,writeBudget:saved.writeBudget};
+    const reservation=this.reserveNonAlarmWrites(prepared.writes,64);
+    if(!reservation)throw new Error("Multi-Turn原子切换等待写入预算；旧账户保持完整，不发布半重置状态");
+    try{await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});reservation.finish(true);}
+    finally{reservation.finish(false);}
+    this.forwardCompression=prepared.compression;this.forwardState=prepared.state;this.forwardError=null;
+    this.forwardProtectionBudget=readProtectionWriteBudget(saved?.writeBudget);
+    return true;
+  }
+
   private async advanceForwardNow(now: number) {
     if (this.forwardBusy || now - this.forwardLastAttemptAt < 10_000) return;
     this.forwardLastAttemptAt = now;
     this.forwardBusy = true;
     try {
       if (!this.forwardState) this.forwardState = await readForwardStore(this.ctx.storage, now);
+      if(MULTI_TURN_AUTO_CUTOVER&&this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION)await this.ensureMultiTurnCutover(now);
+      if(!this.forwardState)throw new Error("PAPER权威账户缺失");
+      const legacyDrainOnly=this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION;
       // Restarts retain the existing ten-second source cadence. Otherwise a
       // restart could create extra compact commits inside the daily bound.
       if(now-this.forwardState.lastQuoteCycleAt<10_000){this.forwardLastAttemptAt=this.forwardState.lastQuoteCycleAt;return;}
       const previous = this.forwardState;
-      const next = advanceForward({ state: previous, now, paths: this.strategyCandles,
-        quotes: this.regimeQuotes(now), contracts: this.regimeContracts() });
+      const next = advanceForward({ state: previous, now, paths: this.strategyCandles,daily:this.turnDailyCandles,
+        quotes: this.regimeQuotes(now), contracts: this.regimeContracts(),legacyDrainOnly });
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
         const prepared = await prepareForwardWrite(previous.storage.persistedAt ? previous : null, next.state, now, {compact:true});
@@ -1124,6 +1169,40 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         lastFailureAt: now, retryAt, stage: "FETCH", lastError: `补齐720小时路径失败：${safeError(error)}` };
     }
     this.evaluateRegimeNow(now);
+    return 1;
+  }
+
+  private async refreshTurnDaily(now:number) {
+    const universe=this.runtime.liquidUniverse.filter(forwardSymbolAllowed);if(!universe.length)return 0;
+    const target=Math.floor(now/86_400_000)*86_400-86_400;
+    let selected:string|null=null;
+    for(let offset=0;offset<universe.length;offset++){
+      const index=(this.turnDailyCursor+offset)%universe.length,symbol=universe[index];
+      if(!this.turnDailyLoaded.has(symbol)){
+        const saved=await this.ctx.storage.get<Awaited<ReturnType<typeof fetchStructureCandles>>>(turnDailyStorageKey(symbol));
+        if(saved?.length)this.turnDailyCandles[symbol]=mergeTurnDailyPath([],saved);
+        this.turnDailyLoaded.add(symbol);
+      }
+      const rows=this.turnDailyCandles[symbol]??[],retryAt=this.turnDailyFailures.get(symbol)?.retryAt??0;
+      if((rows.length<TURN_DAILY_REQUIRED_CANDLES||(rows.at(-1)?.time??0)<target)&&retryAt<=now){
+        selected=symbol;this.turnDailyCursor=(index+1)%universe.length;break;
+      }
+    }
+    if(!selected)return 0;
+    try{
+      const prior=this.turnDailyCandles[selected]??[];
+      const incoming=await fetchStructureCandles(selected,"1d",prior.length>=TURN_DAILY_REQUIRED_CANDLES?4:120);
+      const rows=mergeTurnDailyPath(prior,incoming);this.turnDailyCandles[selected]=rows;
+      if(rows.length<TURN_DAILY_REQUIRED_CANDLES)throw new Error(`日线历史不足：${rows.length}/${TURN_DAILY_REQUIRED_CANDLES}`);
+      const reservation=this.reserveNonAlarmWrites(1,64);
+      if(reservation){
+        try{await this.ctx.storage.put(turnDailyStorageKey(selected),rows);reservation.finish(true);}
+        finally{reservation.finish(false);}
+      }
+      this.turnDailyFailures.delete(selected);
+    }catch(error){
+      this.turnDailyFailures.set(selected,{retryAt:now+60_000,lastError:safeError(error)});
+    }
     return 1;
   }
 
@@ -1613,6 +1692,25 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return { ok: true, credential: await credentialMetadata(this.env.DB) };
   }
 
+  private async resetMultiTurnPaperAccount(now:number){
+    if(!this.forwardState)this.forwardState=await readForwardStore(this.ctx.storage,now);
+    const previous=this.forwardState;
+    if(previous.strategyAuthorityVersion!==MULTI_TURN_VERSION)throw new Error("当前权威账户尚未切换到Multi-Turn");
+    const quotes=this.regimeQuotes(now);
+    const closed=closeForwardForReset(previous,quotes,now,"手动重置模拟账户：用新鲜可执行价归档本周期持仓并从1000U重新开始");
+    const next=initialMultiTurnForward(now),prepared=await prepareForwardReset(previous,closed,next,now);
+    const saved=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
+    const protection=prepared.entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
+    if(protection&&saved?.writeBudget!==undefined)prepared.entries[FORWARD_PROTECTION_STORAGE]={...protection,writeBudget:saved.writeBudget};
+    const reservation=this.reserveNonAlarmWrites(prepared.writes,64);
+    if(!reservation)throw new Error("模拟账户重置等待写入预算；当前账户保持完整");
+    try{await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});reservation.finish(true);}
+    finally{reservation.finish(false);}
+    this.forwardCompression=prepared.compression;this.forwardState=prepared.state;this.forwardError=null;
+    this.forwardProtectionBudget=readProtectionWriteBudget(saved?.writeBudget);
+    return{ok:true,equity:1000,forward:forwardSummary(this.forwardState,this.regimeQuotes(now),now)};
+  }
+
   private async resetPaperAccount() {
     const now = Date.now();
     const authorityBefore = this.captureAuthority();
@@ -1621,6 +1719,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       || Object.values(this.runtime.live.entries).some((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status))) {
       throw new Error("请先关闭实盘并确认 Gate 没有本系统持仓或待成交订单");
     }
+    if(!this.forwardState)this.forwardState=await readForwardStore(this.ctx.storage,now);
+    if(this.forwardState.strategyAuthorityVersion===MULTI_TURN_VERSION)return await this.resetMultiTurnPaperAccount(now);
     const openPositions = Object.values(this.runtime.positions).filter((position): position is PaperPosition => position?.status === "OPEN");
     const currentArenaPositions = Object.values(this.runtime.strategyArena.portfolioOpen);
     const previousArenaPositions = Object.values(this.runtime.previousStrategyArena.portfolioOpen);
@@ -2943,6 +3043,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         catch (error) { this.runtime.radar = failedRadarRuntime(this.runtime.radar, Date.now(), error); }
       }
       subrequests += await this.refreshStrategyCandle(Date.now());
+      subrequests += await this.refreshTurnDaily(Date.now());
       subrequests += await this.refreshRegimeHourly(Date.now());
       await this.advanceForwardAndWakeLive(Date.now());
       await this.maybeWriteStrategyRuntimeLog(Date.now());
