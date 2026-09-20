@@ -114,3 +114,23 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
   return{entries,writes:Object.keys(entries).length,compression:{encoding:useGzip?"gzip":"utf8",rawBytes:raw.length,
     storedBytes:bytes.length,chunks:count,...(options.compact?{inlineHead:inline,chunkBytes}:{})}};
 }
+
+
+/** One transaction can preserve the final legacy account archive while making
+ * a fresh Multi-Turn account the only readable financial head. Old account
+ * chunks may remain physically present, but the new authenticated head cannot
+ * reference them. No partial reset is publishable. */
+export async function prepareForwardReset(previous:ForwardState,closedLegacy:ForwardState,next:ForwardState,now:number){
+  if(!previous.storage.persistedAt)throw new Error("旧Forward账户尚未持久化，拒绝切换");
+  if(closedLegacy.positions.length)throw new Error("旧Forward账户仍有未归档持仓，拒绝切换");
+  if(next.positions.length||next.history.length||next.initialEquity!==1000||next.balance!==1000)
+    throw new Error("Multi-Turn新账户初始状态异常");
+  next.storage={persistedAt:now+1,error:null};
+  const legacy=await prepareForwardWrite(previous,closedLegacy,now,{compact:true});
+  const fresh=await prepareForwardWrite(null,next,now+1,{compact:true});
+  const entries:Record<string,unknown>={};
+  for(const[key,value]of Object.entries(legacy.entries))
+    if(key.startsWith(`${FORWARD_STORAGE}archive:`))entries[key]=value;
+  Object.assign(entries,fresh.entries,prepareForwardProtectionWrite(next).entries);
+  return{state:next,entries,writes:Object.keys(entries).length,compression:fresh.compression};
+}
