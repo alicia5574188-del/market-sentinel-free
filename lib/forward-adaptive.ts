@@ -189,6 +189,21 @@ export function adaptiveCandidatePriority(rule:Pick<Rule,"estimatedNetRate"|"sta
   return adjustment.priorityMultiplier*((rule.evidence?.quality??.5)+signal);
 }
 
+export function calibrationRiskMultiplier(rawNet:number,calibratedNet:number){
+  if(!(rawNet>0)||!Number.isFinite(calibratedNet))return .15;
+  if(calibratedNet<=0)return .15;
+  return clip(calibratedNet/rawNet,.15,1);
+}
+
+export function sampleRiskMultiplier(scope:Rule["evidence"] extends infer _T ? "CROSS_ASSET"|"SINGLE_ASSET" : never,samples:number){
+  if(scope!=="SINGLE_ASSET")return 1;
+  return clip(Math.sqrt(Math.max(1,samples)/20),.15,1);
+}
+
+export function familyRiskHeadroom(equity:number,openFamilyRisk:number){
+  return Math.max(0,equity*.015-Math.max(0,openFamilyRisk));
+}
+
 export function adaptiveTargetRisk(input:{
   equity:number;
   quality:number;
