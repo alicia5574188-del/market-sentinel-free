@@ -9,7 +9,7 @@ import { TIMELY_PROTECTION_POLICY, newExitControl, observeExitControl, protected
 import { assessMarketTurn, MARKET_TURN_PROTECTION_VERSION, MARKET_TURN_TARGET_DIRECTION_RISK_RATE,
   type MarketTurnProtection } from "./forward-turn-protection.ts";
 import { MARKET_STATE_VERSION, TURN_FORECAST_VERSION, marketRiskBudget, selectDirectionalCandidates, sideRiskHeadroom,
-  turnForecastEntryGuard, updateMarketState, updateTurnForecast, type MarketState, type TurnForecast } from "./forward-market-state.ts";
+  updateMarketState, updateTurnForecast, type MarketState, type TurnForecast } from "./forward-market-state.ts";
 import { forwardProtectionChanged } from "./forward-protection-checkpoint.ts";
 import { FORWARD_ADAPTIVE_VERSION, adaptiveCandidatePriority, adaptiveEntryAdjustment, inspectRapidCondition,
   type AdaptiveCandidate, type AdaptiveLane } from "./forward-adaptive.ts";
@@ -452,8 +452,15 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
     event(s,now,"UPGRADE",EVIDENCE_POLICY,"恢复广度与及时执行：证据疑问用于排序/风险，报价短窗重试，新增规则回吐边界考虑费用；账户、亏损、历史和原持仓保护保持连续。",
       {equity:mark.equity,resolved:s.resolved,open:s.positions.length});
   }
+  const adaptiveUpgraded=s.adaptationVersion!==FORWARD_ADAPTIVE_VERSION;
+  if(adaptiveUpgraded){
+    s.adaptationVersion=FORWARD_ADAPTIVE_VERSION;s.lastFitMeasured=-1;
+    event(s,now,"UPGRADE",FORWARD_ADAPTIVE_VERSION,
+      "自适应架构升级：保留原账户、持仓、历史、样本和保护边界；新增快速15分钟迁移、连续风险权重和顺序额度分配，市场预警不再直接把学习候选归零。",
+      {equity:forwardEquity(s,quotes,now).equity,resolved:s.resolved,open:s.positions.length});
+  }
   // Wait for a bounded Top30 refresh after the completed 5-minute boundary.
-  const dataDue=upgraded||!s.lastCycleAt||Math.floor((now-90_000)/BAR_MS)>Math.floor((s.lastCycleAt-90_000)/BAR_MS);
+  const dataDue=upgraded||adaptiveUpgraded||!s.lastCycleAt||Math.floor((now-90_000)/BAR_MS)>Math.floor((s.lastCycleAt-90_000)/BAR_MS);
   if(dataDue){
     const priorState=s.marketState??null;
     s.marketState=updateMarketState(paths,priorState,now);
@@ -481,7 +488,8 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   // Exits at currently executable prices happen first. Their now-known results
   // can calibrate NEW entries immediately; no future closure enters learning.
   manage(s,quotes,now,turn,marketState,turnForecast);s.feedback=collectFeedback(s.feedback??[],s.history,now);
-  if(dataDue){ingest(s,paths,now);s.lastCycleAt=now;if(now-s.lastFitAt>=15*60_000)synthesizeRules(s,now);
+  if(dataDue){ingest(s,paths,now);s.lastCycleAt=now;
+    if(s.measured!==(s.lastFitMeasured??-1)||now-s.lastFitAt>=15*60_000)synthesizeRules(s,now);
     for(const r of s.rules)if(r.status==="EXPERIMENTAL"&&r.expiresAt<=now){r.status="DORMANT";event(s,now,"DORMANT",r.id,"证据过期，停止新开仓，等待新反应。");}}
   if(dataDue)openTrades(s,quotes,contracts,now,false,turn,marketState,turnForecast);
   else if(s.quoteRetries?.some(w=>w.expiresAt>now))openTrades(s,quotes,contracts,now,true,turn,marketState,turnForecast);
@@ -503,7 +511,7 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     participation:s.participation??null,quoteRetries:s.quoteRetries?.filter(w=>w.expiresAt>now)??[],
     evidenceDiagnostics:s.evidenceDiagnostics??null,entryDiagnostics:s.entryDiagnostics??null,feedbackCount:s.feedback?.length??0,
     turnProtection:s.turnProtection&&s.turnProtection.until>now?s.turnProtection:null,marketState:s.marketState??null,
-    turnForecast:s.turnForecast??null,
+    turnForecast:s.turnForecast??null,adaptationVersion:s.adaptationVersion??"legacy-forward-adaptation-v1",
     marketRiskBudget:marketRiskBudget(s.marketState??null,marked.equity,s.peakEquity,s.turnForecast??null),
     lastCycleAt:s.lastCycleAt,lastFitAt:s.lastFitAt,revision:s.revision,initialEquity:s.initialEquity,balance:s.balance,...marked,
     targetEquity:s.initialEquity*2,netPnl:marked.equity-s.initialEquity,maxDrawdown:s.maxDrawdown,resolved:s.resolved,wins:s.wins,grossPnl:s.grossPnl,
@@ -513,6 +521,6 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     nextCycleAt:s.lastCycleAt?(Math.floor((s.lastCycleAt-90_000)/BAR_MS)+1)*BAR_MS+90_000:now,cost:PAPER_COST,
     boundaries:{scope:"PAPER_ONLY",grammar:"最多两个连续特征条件；方向、期限、止损和回吐退出由新市场反应生成",historyBackfill:false,
       sampleMeaning:"市场条件与后来反应；不是影子订单或连胜晋级",accounting:"新鲜买卖价模拟成交；净值包含退出费用与资金占位",
-      risk:"单笔风险上限1.5%；正常趋势原上限保留，但转折预警可在15分钟广度先失速时提前压低受威胁方向并禁止继续加码；15/60分钟独立反向规则可提前参与，180分钟反向等待大周期确认；不强制反手，总名义额仍不超过4倍",
+      risk:"单笔风险上限1.5%；转折/回调只连续调整候选优先级和新仓额度，不再用市场预警直接把学习候选归零；回撤只缩放新仓而不停止学习。顺序分配最高质量候选后再重算剩余额度，总名义额仍不超过4倍",
       validation:"前向实验未证明盈利或月翻倍；多重规则筛选存在估计偏差",liquidation:"当前盘口保护，不冒充交易所标记价格强平复现"}};
 }
