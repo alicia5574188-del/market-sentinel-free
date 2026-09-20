@@ -115,7 +115,7 @@ export default function LiveConsole({auth,runtime,onSession,onLive,onRefresh,vie
       <details className="fr-details"><summary>复制规则与边界</summary><p className="fr-note">当前模拟账户。按权益比例复制，沿用源单杠杆、保护和退出依据。实际成交以Gate回报为准。</p><p className="fr-note">跟随起点 {time(mirror?.enabledAt)}。开启前旧单不补开；之后的新模拟单按固定账户比例复制。交易所最低张数、真实可用保证金、价格越过止损或不利入场偏差过大时会明确阻止，不会伪装成已复制。</p></details>
     </section>
     <section className="fr-section"><div className="fr-section-head"><div><small>Gate成交</small><h2>实盘累计成交额</h2></div><span>已确认成交</span></div>
-      <div className="fr-three"><Metric label="系统标记成交" value={`${num(live?.turnover?.systemTagged)} U`}/><Metric label="全账户成交" value={`${num(live?.turnover?.total)} U`}/><Metric label="核对成交明细" value={num(live?.turnover?.fillCount,0)}/></div>
+      <div className="fr-four"><Metric label="系统标记成交" value={`${num(live?.turnover?.systemTagged)} U`}/><Metric label="系统已扣费用" value={`${num(live?.turnover?.systemTaggedFees)} U`}/><Metric label="全账户成交" value={`${num(live?.turnover?.total)} U`}/><Metric label="核对成交明细" value={num(live?.turnover?.fillCount,0)}/></div>
       <p className="fr-note">全账户成交可能包含手工成交；日常交易观察以系统标记成交和订单记录为准。核对至 {time(live?.turnover?.checkedThrough)}。</p>
       {live?.turnover?.error&&<p className="fr-error">{live.turnover.error}</p>}
     </section>
@@ -144,7 +144,8 @@ export default function LiveConsole({auth,runtime,onSession,onLive,onRefresh,vie
       <LiveStat title="可用保证金" value={`${num(live?.available)} U`} detail="Gate可用余额"/>
       <LiveStat title="持仓浮动盈亏" value={`${signed(floating)} U`} detail="Gate实际回报"/>
       <LiveStat title="当前持仓" value={live?`${positions.length} 笔`:"—"} detail={entries.length?`待执行 ${entries.length} 笔`:"无待执行订单"}/></section>
-    <div className="fr-account-line"><span>账户核对 {time(live?.lastSyncAt)}</span><b className={copyHealthy?"fr-positive":missing||mirror?.error?"fr-negative":""}>复制一致性 {copyLabel}</b></div>
+    <div className="fr-account-line"><span>实盘成交额 {num(live?.turnover?.systemTagged)} U · 已扣费用 {num(live?.turnover?.systemTaggedFees)} U</span><b className={copyHealthy?"fr-positive":missing||mirror?.error?"fr-negative":""}>复制一致性 {copyLabel}</b></div>
+    <p className="fr-note">Gate成交核对至 {time(live?.turnover?.checkedThrough)}{live?.turnover?.catchingUp?" · 正在补齐":""} · 账户核对 {time(live?.lastSyncAt)}</p>
     {live?.lastError&&<p className="fr-error" role="status">执行提示：{live.lastError}</p>}
     {error&&<div className="fr-error" role="alert"><b>操作未完成</b><p>{error}</p></div>}
     {notice&&<div className="fr-notice" role="status">{notice}</div>}
