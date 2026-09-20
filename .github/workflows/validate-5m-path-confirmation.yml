@@ -1,0 +1,36 @@
+name: Validate 5m Path Confirmation
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-5m-path-confirmation.mjs"
+      - "scripts/research-5m-path-nearmiss-eval.mjs"
+      - ".github/workflows/validate-5m-path-confirmation.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Check syntax and patch anchors
+        run: |
+          node --check scripts/research-5m-path-confirmation.mjs
+          node --check scripts/research-5m-path-nearmiss-eval.mjs
+          PATCH_ONLY=1 node scripts/research-5m-path-nearmiss-eval.mjs
+          node --check /tmp/research-5m-path-confirmation-nearmiss-runtime.mjs
+      - name: Run frozen near-miss blind evaluation
+        run: node --max-old-space-size=4096 scripts/research-5m-path-nearmiss-eval.mjs
+      - name: Print focused result
+        run: jq '{decision,authority,goal,periods,cost,shockCount,pathEventCount,candidateCount,eligibleSleeveCount,nearMiss,nearMissEvaluation,evaluation}' /tmp/5m-path-confirmation-report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 5m-path-confirmation-report
+          path: /tmp/5m-path-confirmation-report.json
+          retention-days: 7
