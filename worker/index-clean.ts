@@ -36,7 +36,7 @@ import { advanceRegimePortfolio, evaluateRegimePortfolio, initialRegimePortfolio
   REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE, resetRegimePortfolio,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
-import { advanceForward, closeForwardForReset, forwardSummary, forwardEquity, freshQuote, forwardWatchSymbols, initialForward,
+import { advanceForward, closeForwardForReset, forwardSummary, forwardEquity, freshQuote, forwardWatchSymbols, initialMultiTurnForward,
   FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { MULTI_TURN_VERSION } from "../lib/multi-turn-engine.ts";
 import { forwardSymbolAllowed } from "../lib/forward-evidence.ts";
@@ -1020,7 +1020,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const previous=this.forwardState;if(!previous||previous.strategyAuthorityVersion===MULTI_TURN_VERSION)return false;
     if(this.runtime.live.requestedEnabled||this.runtime.live.operational||this.activeLivePositions().length||this.activeLiveEntries().length)
       throw new Error("Multi-Turn切换等待：请保持LIVE关闭且无受管实盘持仓/挂单；不会自动改变所有者开关");
-    const quotes=this.regimeQuotes(now),closed=closeForwardForReset(previous,quotes,now),next=initialForward(now);
+    const quotes=this.regimeQuotes(now),closed=closeForwardForReset(previous,quotes,now),next=initialMultiTurnForward(now);
     const prepared=await prepareForwardReset(previous,closed,next,now);
     const saved=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
     const protection=prepared.entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
