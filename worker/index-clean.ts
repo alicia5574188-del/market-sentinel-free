@@ -84,6 +84,8 @@ const AUTHORITY_SCHEMA_VERSION = 1;
 const DEFAULT_SYMBOLS = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];
 const REGIME_HOURLY_STORAGE_PREFIX = "regime-hourly:";
 const REGIME_HOURLY_RETRY_MS = 10_000;
+const TURN_DAILY_STORAGE_PREFIX = "multi-turn-daily:v1:";
+const TURN_DAILY_REQUIRED_CANDLES = 90;
 
 function broadMarketContext(candidates: Record<string, { symbol: string; observedAt: number; broadMoveRate?: number;
   trendRate: number; move4hRate?: number; move24hRate?: number }>, now: number) {
@@ -355,7 +357,7 @@ export function mergeStrategyCandlePath(
   incoming: Awaited<ReturnType<typeof fetchStructureCandles>>,
 ) {
   const rows = [...new Map([...prior, ...incoming].map((row) => [row.time, row])).values()]
-    .sort((left, right) => left.time - right.time).slice(-360);
+    .sort((left, right) => left.time - right.time).slice(-1_000);
   let start = rows.length ? rows.length - 1 : 0;
   while (start > 0 && rows[start].time - rows[start - 1].time === 300) start -= 1;
   return rows.slice(start);
@@ -383,6 +385,20 @@ export function mergeRegimeHourlyPath(prior: RegimeHourlyPath, incoming: RegimeH
   while (start > 0 && rows[start].time - rows[start - 1].time === 3_600) start -= 1;
   return rows.slice(start);
 }
+
+export function mergeTurnDailyPath(
+  prior: Awaited<ReturnType<typeof fetchStructureCandles>>,
+  incoming: Awaited<ReturnType<typeof fetchStructureCandles>>,
+) {
+  const rows=[...new Map([...prior,...incoming].filter(row=>row
+    &&[row.time,row.volume,row.close,row.high,row.low,row.open].every(Number.isFinite)
+    &&row.time>0&&row.close>0&&row.high>=row.low&&row.volume>=0).map(row=>[row.time,row])).values()]
+    .sort((a,b)=>a.time-b.time).slice(-120);
+  let start=rows.length?rows.length-1:0;
+  while(start>0&&rows[start].time-rows[start-1].time===86_400)start-=1;
+  return rows.slice(start);
+}
+function turnDailyStorageKey(symbol:string){return `${TURN_DAILY_STORAGE_PREFIX}${symbol}`;}
 
 function regimeHourlyStorageKey(symbol: string) {
   return `${REGIME_HOURLY_STORAGE_PREFIX}${symbol}`;
@@ -466,6 +482,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private memory: Record<string, SymbolMemory> = {};
   private structureCandles: Record<string, Partial<Record<"1m" | "15m" | "1h" | "4h", Awaited<ReturnType<typeof fetchStructureCandles>>>>> = {};
   private strategyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
+  private turnDailyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
+  private turnDailyLoaded = new Set<string>();
+  private turnDailyCursor = 0;
+  private turnDailyFailures = new Map<string,{retryAt:number;lastError:string}>();
   private regimeHourly: Record<string, RegimeHourlyPath> = {};
   private sessionWarmup: Record<string, number> = {};
   private contractCatalog = new Map<string, Awaited<ReturnType<typeof fetchActiveContracts>>[number]>();
@@ -863,7 +883,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (!contract) return 0;
     try {
       const prior = this.strategyCandles[symbol] ?? [];
-      const incoming = await fetchStructureCandles(symbol, "5m", prior.length >= 324 ? 4 : 360);
+      const incoming = await fetchStructureCandles(symbol, "5m", prior.length >= 960 ? 4 : 1_000);
       const candles = mergeStrategyCandlePath(prior, incoming);
       const latest = candles.at(-1);
       const completedAt = latest ? (latest.time + 300) * 1_000 : 0;
@@ -1124,6 +1144,40 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         lastFailureAt: now, retryAt, stage: "FETCH", lastError: `补齐720小时路径失败：${safeError(error)}` };
     }
     this.evaluateRegimeNow(now);
+    return 1;
+  }
+
+  private async refreshTurnDaily(now:number) {
+    const universe=this.runtime.liquidUniverse.filter(forwardSymbolAllowed);if(!universe.length)return 0;
+    const target=Math.floor(now/86_400_000)*86_400-86_400;
+    let selected:string|null=null;
+    for(let offset=0;offset<universe.length;offset++){
+      const index=(this.turnDailyCursor+offset)%universe.length,symbol=universe[index];
+      if(!this.turnDailyLoaded.has(symbol)){
+        const saved=await this.ctx.storage.get<Awaited<ReturnType<typeof fetchStructureCandles>>>(turnDailyStorageKey(symbol));
+        if(saved?.length)this.turnDailyCandles[symbol]=mergeTurnDailyPath([],saved);
+        this.turnDailyLoaded.add(symbol);
+      }
+      const rows=this.turnDailyCandles[symbol]??[],retryAt=this.turnDailyFailures.get(symbol)?.retryAt??0;
+      if((rows.length<TURN_DAILY_REQUIRED_CANDLES||(rows.at(-1)?.time??0)<target)&&retryAt<=now){
+        selected=symbol;this.turnDailyCursor=(index+1)%universe.length;break;
+      }
+    }
+    if(!selected)return 0;
+    try{
+      const prior=this.turnDailyCandles[selected]??[];
+      const incoming=await fetchStructureCandles(selected,"1d",prior.length>=TURN_DAILY_REQUIRED_CANDLES?4:120);
+      const rows=mergeTurnDailyPath(prior,incoming);this.turnDailyCandles[selected]=rows;
+      if(rows.length<TURN_DAILY_REQUIRED_CANDLES)throw new Error(`日线历史不足：${rows.length}/${TURN_DAILY_REQUIRED_CANDLES}`);
+      const reservation=this.reserveNonAlarmWrites(1,64);
+      if(reservation){
+        try{await this.ctx.storage.put(turnDailyStorageKey(selected),rows);reservation.finish(true);}
+        finally{reservation.finish(false);}
+      }
+      this.turnDailyFailures.delete(selected);
+    }catch(error){
+      this.turnDailyFailures.set(selected,{retryAt:now+60_000,lastError:safeError(error)});
+    }
     return 1;
   }
 
@@ -2943,6 +2997,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         catch (error) { this.runtime.radar = failedRadarRuntime(this.runtime.radar, Date.now(), error); }
       }
       subrequests += await this.refreshStrategyCandle(Date.now());
+      subrequests += await this.refreshTurnDaily(Date.now());
       subrequests += await this.refreshRegimeHourly(Date.now());
       await this.advanceForwardAndWakeLive(Date.now());
       await this.maybeWriteStrategyRuntimeLog(Date.now());
