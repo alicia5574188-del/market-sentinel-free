@@ -36,9 +36,12 @@ import { advanceRegimePortfolio, evaluateRegimePortfolio, initialRegimePortfolio
   REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE, resetRegimePortfolio,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
-import { advanceForward, forwardSummary, forwardEquity, freshQuote, forwardWatchSymbols, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
+import { advanceForward, closeForwardForReset, forwardSummary, forwardEquity, freshQuote, forwardWatchSymbols, initialForward,
+  FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
+import { MULTI_TURN_VERSION } from "../lib/multi-turn-engine.ts";
 import { forwardSymbolAllowed } from "../lib/forward-evidence.ts";
-import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE } from "../lib/forward-store.ts";
+import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, prepareForwardReset,
+  FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE } from "../lib/forward-store.ts";
 import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBudgetView,
   PRIMARY_PLANNED_DO_ROWS, TWO_MEMBER_PLANNED_DO_ROWS, type ProtectionWriteBudget } from "../lib/forward-write-budget.ts";
 import { EquityReader } from "../lib/equity-reader.ts";
@@ -964,7 +967,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private forwardHealth() {
     const s=this.forwardState;
-    return {version:FORWARD_VERSION,policyVersion:s?.policyVersion??null,liveEligible:false,
+    return {version:FORWARD_VERSION,policyVersion:s?.policyVersion??null,strategyAuthorityVersion:s?.strategyAuthorityVersion??null,liveEligible:false,
       startedAt:s?.startedAt??null,lastCycleAt:s?.lastCycleAt??null,resolved:s?.resolved??0,openCount:s?.positions.length??0,
       exitPolicyVersion:s?.exitPolicyUpgrade?.policy??null,exitPolicyActivatedAt:s?.exitPolicyUpgrade?.at??null,
       timelyExitOpenCount:s?.positions.filter(t=>!!t.exitControl&&t.exitControl.policy===s.exitPolicyUpgrade?.policy).length??0,
@@ -1013,17 +1016,38 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.liveJournal.set(key,{...existing,receipt:structuredClone(entry.parity)});
   }
 
+  private async ensureMultiTurnCutover(now:number){
+    const previous=this.forwardState;if(!previous||previous.strategyAuthorityVersion===MULTI_TURN_VERSION)return false;
+    if(this.runtime.live.requestedEnabled||this.runtime.live.operational||this.activeLivePositions().length||this.activeLiveEntries().length)
+      throw new Error("Multi-Turn切换等待：请保持LIVE关闭且无受管实盘持仓/挂单；不会自动改变所有者开关");
+    const quotes=this.regimeQuotes(now),closed=closeForwardForReset(previous,quotes,now),next=initialForward(now);
+    const prepared=await prepareForwardReset(previous,closed,next,now);
+    const saved=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
+    const protection=prepared.entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
+    if(protection&&saved?.writeBudget!==undefined)prepared.entries[FORWARD_PROTECTION_STORAGE]={...protection,writeBudget:saved.writeBudget};
+    const reservation=this.reserveNonAlarmWrites(prepared.writes,64);
+    if(!reservation)throw new Error("Multi-Turn原子切换等待写入预算；旧账户保持完整，不发布半重置状态");
+    try{await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});reservation.finish(true);}
+    finally{reservation.finish(false);}
+    this.forwardCompression=prepared.compression;this.forwardState=prepared.state;this.forwardError=null;
+    this.forwardProtectionBudget=readProtectionWriteBudget(saved?.writeBudget);
+    return true;
+  }
+
   private async advanceForwardNow(now: number) {
     if (this.forwardBusy || now - this.forwardLastAttemptAt < 10_000) return;
     this.forwardLastAttemptAt = now;
     this.forwardBusy = true;
     try {
       if (!this.forwardState) this.forwardState = await readForwardStore(this.ctx.storage, now);
+      if(this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION)await this.ensureMultiTurnCutover(now);
+      if(!this.forwardState||this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION)
+        throw new Error("Multi-Turn切换尚未形成唯一PAPER权威");
       // Restarts retain the existing ten-second source cadence. Otherwise a
       // restart could create extra compact commits inside the daily bound.
       if(now-this.forwardState.lastQuoteCycleAt<10_000){this.forwardLastAttemptAt=this.forwardState.lastQuoteCycleAt;return;}
       const previous = this.forwardState;
-      const next = advanceForward({ state: previous, now, paths: this.strategyCandles,
+      const next = advanceForward({ state: previous, now, paths: this.strategyCandles,daily:this.turnDailyCandles,
         quotes: this.regimeQuotes(now), contracts: this.regimeContracts() });
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
