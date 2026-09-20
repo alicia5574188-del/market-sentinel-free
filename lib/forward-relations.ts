@@ -115,8 +115,8 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
   if(v.marketState&&v.marketState.version!==MARKET_STATE_VERSION)throw new Error("未知组合市场状态版本，保留原账户");
   if(v.turnForecast&&v.turnForecast.version!==TURN_FORECAST_VERSION)throw new Error("未知转折预警版本，保留原账户");
   return {...v,adaptationVersion:v.adaptationVersion??"legacy-forward-adaptation-v1",lastFitMeasured:v.lastFitMeasured??v.measured,
-    strategyAuthorityVersion:v.strategyAuthorityVersion??"legacy-forward-rules-v1",
-    turnEngine:v.turnEngine?.version===MULTI_TURN_VERSION?v.turnEngine:undefined,turnLastEntryBars:v.turnLastEntryBars??{}};
+    strategyAuthorityVersion:v.strategyAuthorityVersion??"legacy-forward-rules-v1",turnLastEntryBars:v.turnLastEntryBars??{},
+    ...(v.turnEngine?.version===MULTI_TURN_VERSION?{turnEngine:v.turnEngine}:{})};
 }
 export function frameFromCandles(symbol:string,rows:Candle[],now:number):Frame|null {
   const a=rows.filter(r=>r.time*1000+BAR_MS<=now).slice(-25);
@@ -625,7 +625,7 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
   return{state:s,changed:dataDue||s.revision!==before,protectionChanged:forwardProtectionChanged(input.state,s)};
 }
 
-export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;daily?:Record<string,Candle[]>;quotes:Record<string,Quote>;contracts:Record<string,Contract>}){
+export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;daily?:Record<string,Candle[]>;quotes:Record<string,Quote>;contracts:Record<string,Contract>;legacyDrainOnly?:boolean}){
   const{now,paths,quotes,contracts}=input,s=structuredClone(input.state),before=s.revision;
   if(s.strategyAuthorityVersion===MULTI_TURN_VERSION)return advanceMultiTurnForward(input,s,before);
   if(!s.exitPolicyUpgrade){
@@ -686,9 +686,11 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   // can calibrate NEW entries immediately; no future closure enters learning.
   manage(s,quotes,now,turn,marketState,turnForecast);s.feedback=collectFeedback(s.feedback??[],s.history,now);
   if(dataDue){ingest(s,paths,now);s.lastCycleAt=now;
-    if(s.measured!==(s.lastFitMeasured??-1)||now-s.lastFitAt>=15*60_000)synthesizeRules(s,now);
+    if(!input.legacyDrainOnly&&(s.measured!==(s.lastFitMeasured??-1)||now-s.lastFitAt>=15*60_000))synthesizeRules(s,now);
     for(const r of s.rules)if(r.status==="EXPERIMENTAL"&&r.expiresAt<=now){r.status="DORMANT";event(s,now,"DORMANT",r.id,"证据过期，停止新开仓，等待新反应。");}}
-  if(dataDue)openTrades(s,quotes,contracts,now,false,turn,marketState,turnForecast);
+  if(input.legacyDrainOnly){
+    s.quoteRetries=[];s.latestReason=`等待Multi-Turn安全切换：旧Forward仅管理${s.positions.length}笔既有源持仓，不再生成新开仓。`;
+  }else if(dataDue)openTrades(s,quotes,contracts,now,false,turn,marketState,turnForecast);
   else if(s.quoteRetries?.some(w=>w.expiresAt>now))openTrades(s,quotes,contracts,now,true,turn,marketState,turnForecast);
   else s.quoteRetries=[];
   const marked=forwardEquity(s,quotes,now);
