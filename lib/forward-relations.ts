@@ -11,6 +11,8 @@ import { assessMarketTurn, MARKET_TURN_PROTECTION_VERSION, MARKET_TURN_TARGET_DI
 import { MARKET_STATE_VERSION, TURN_FORECAST_VERSION, marketRiskBudget, selectDirectionalCandidates, sideRiskHeadroom,
   turnForecastEntryGuard, updateMarketState, updateTurnForecast, type MarketState, type TurnForecast } from "./forward-market-state.ts";
 import { forwardProtectionChanged } from "./forward-protection-checkpoint.ts";
+import { FORWARD_ADAPTIVE_VERSION, adaptiveCandidatePriority, adaptiveEntryAdjustment, inspectRapidCondition,
+  type AdaptiveCandidate, type AdaptiveLane } from "./forward-adaptive.ts";
 // The storage schema stays v1.0 so an algorithm upgrade cannot reset the ledger.
 export const FORWARD_VERSION = "forward-relations-v1.0";
 export const FORWARD_GRAMMAR = "conditional-response-conjunction-v1";
@@ -32,7 +34,7 @@ export type Rule = { id: string; signature: string; parentId: string | null; ver
   stopRate: number; armRate: number; givebackRate: number; exitMode: "HORIZON" | "REACTION_DECAY";
   samples: number; trainGroups: number; checkGroups: number; estimatedNetRate: number; priorResponse: number | null;
   recentResponse: number; standardError: number; reason: string; mutation: "CREATE" | "REVISE" | "RECALL";
-  grammar: string; liveEligible: false; evidence?: Evidence };
+  grammar: string; liveEligible: false; evidence?: Evidence; adaptiveLane?:AdaptiveLane };
 export type Trade = { id: string; symbol: string; side: "LONG" | "SHORT"; rule: Rule; openedAt: number; closedAt: number | null;
   status: "OPEN" | "CLOSED"; entryPrice: number; exitPrice: number | null; quantity: number; contracts: number;
   quantoMultiplier: number; notional: number; leverage: number; margin: number; plannedRisk: number; stopPrice: number;
@@ -52,8 +54,10 @@ export type ForwardState = { version: string; startedAt: number; revision: numbe
   observations: number; measured: number; invalidated: number; frames: Record<string, Frame>; pending: Record<string, Pending>;
   samples: Measurement[]; rules: Rule[]; positions: Trade[]; history: Trade[]; events: AuditEvent[]; daily: Daily[];
   lastBars: Record<string, number>; lastEntryBars: Record<string, number>; latestReason: string;
-  fitDiagnostics: { tested: number; qualified: number; trainGroups: number; checkGroups: number; latestAt: number };
+  fitDiagnostics: { tested: number; qualified: number; trainGroups: number; checkGroups: number; latestAt: number;
+    rapidQualified?:number; activeLong?:number; activeShort?:number };
   selectedSymbols: string[]; storage: { persistedAt: number; error: string | null }; liveEligible: false;
+  adaptationVersion?:string; lastFitMeasured?:number;
   policyVersion?:string; feedback?:Feedback[]; evidenceDiagnostics?:EvidenceDiagnostics;
   entryDiagnostics?:{at:number;matched:number;opened:number;reasons:Record<string,number>;retry?:boolean;queued?:number};
   quoteRetries?:QuoteRetry[];
@@ -81,7 +85,8 @@ export function initialForward(now:number):ForwardState {
     balance:1000,initialEquity:1000,peakEquity:1000,maxDrawdown:0,resolved:0,wins:0,grossPnl:0,fees:0,fundingAllowance:0,turnover:0,
     observations:0,measured:0,invalidated:0,frames:{},pending:{},samples:[],rules:[],positions:[],history:[],events:[],daily:[],
     lastBars:{},lastEntryBars:{},policyVersion:EVIDENCE_POLICY,feedback:[],relationEntries:{},latestReason:"启动真实行情前向实验；旧K线只计算特征，不回填学习收益或模拟订单。",
-    fitDiagnostics:{tested:0,qualified:0,trainGroups:0,checkGroups:0,latestAt:0},selectedSymbols:[],storage:{persistedAt:0,error:null},liveEligible:false};
+    fitDiagnostics:{tested:0,qualified:0,trainGroups:0,checkGroups:0,latestAt:0,rapidQualified:0,activeLong:0,activeShort:0},
+    selectedSymbols:[],storage:{persistedAt:0,error:null},liveEligible:false,adaptationVersion:FORWARD_ADAPTIVE_VERSION,lastFitMeasured:0};
   event(s,now,"START",FORWARD_VERSION,s.latestReason);return s;
 }
 export function normalizeForward(v:ForwardState|null|undefined,now:number):ForwardState {
@@ -94,7 +99,7 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
   if(v.turnProtection&&v.turnProtection.version!==MARKET_TURN_PROTECTION_VERSION)throw new Error("未知市场转折保护版本，保留原账户");
   if(v.marketState&&v.marketState.version!==MARKET_STATE_VERSION)throw new Error("未知组合市场状态版本，保留原账户");
   if(v.turnForecast&&v.turnForecast.version!==TURN_FORECAST_VERSION)throw new Error("未知转折预警版本，保留原账户");
-  return v;
+  return {...v,adaptationVersion:v.adaptationVersion??"legacy-forward-adaptation-v1",lastFitMeasured:v.lastFitMeasured??v.measured};
 }
 export function frameFromCandles(symbol:string,rows:Candle[],now:number):Frame|null {
   const a=rows.filter(r=>r.time*1000+BAR_MS<=now).slice(-25);
