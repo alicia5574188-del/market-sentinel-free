@@ -406,7 +406,11 @@ function openTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<
     const quantity=count*meta.quantoMultiplier,notional=quantity*price;
     if(notional<equity*.05||notional<desired*.25){reject("整数张数后只剩碎片仓位，跳过而不放大风险");continue;}
     const usedMargin=s.positions.reduce((a,t)=>a+t.margin,0),markedAfter=equity-notional*immediateCost;
-    const marginTarget=Math.min(equity*.2,Math.max(0,markedAfter*.75-usedMargin));
+    // Margin reservation can be shared across ready names because leverage only
+    // changes reserved collateral, not notional or planned loss. Risk itself is
+    // shared only across meaningful slots above, avoiding fragment starvation.
+    const marginPeers=Math.max(1,readySymbols(r.side));
+    const marginTarget=Math.min(equity*.2,Math.max(0,markedAfter*.75-usedMargin)/marginPeers);
     if(!(marginTarget>0)){reject("模拟可用保证金不足");continue;}
     // More names share margin as well as stop risk. Leverage only changes
     // reserved margin here; neither notional nor planned loss is increased.
