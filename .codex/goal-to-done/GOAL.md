@@ -1,3 +1,9 @@
+# 2026-09-20 — comparative correctness repair candidate
+
+User authorizes a release only if it is demonstrably better than production 401768ccd5ea75da6bf55b2855433aba2df5d1a5. Implement narrowly scoped audit fixes, compare same inputs, preserve participation discovery, original geometry, continuous accounts and owner/member LIVE intent. Correctness superiority is not evidence of higher net returns. Do not merge/deploy until acceptance scope and gates are satisfied; do not make real-money test trades. No account reset, automatic LIVE toggling, membership expansion or revival of retired strategies.
+
+Current work explicitly permits audited changes to forward exit/forecast/protection persistence and pure actual-risk checks; update only the corresponding frozen hash baselines after semantic tests and independent review. Keep unrelated protected bodies frozen. Record resource overhead and do not raise the daily write cap without evidence.
+
 # Equity history cache — 2026-09-19
 
 User requests retaining history across tab changes and reducing repeated reads. Implement only authenticated browser-scoped projection caching and bounded exclusive new-archive reads; keep all strategies/cadence/financial state/owner and member execution untouched. Read research/EQUITY_CACHE_INCREMENTAL.md. Cached curves are not trading authority or proof of better returns. Preserve frozen tests and reviewed-main deployment/continuity checks.

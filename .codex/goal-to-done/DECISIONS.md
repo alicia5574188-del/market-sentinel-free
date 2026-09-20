@@ -1,3 +1,7 @@
+# 2026-09-20 — hold the audited repair, do not deploy
+
+The user made superiority a release condition. Named deterministic bugs are corrected and normal-input discovery/execution comparisons are preserved, but profitability remains unverified. Independent actual-Worker stress proves the new exact peak checkpoint can steal the next exit commit's write capacity. The complete candidate is therefore retained outside main, not deployed. Compact per-record size does not establish safe daily write load. Preserve all existing source/history/owner/member authority; no cap raise or data/clock degradation is authorized merely to pass. Only forward/store/advanceForwardNow hash baselines advance for audited code; nine unrelated primary method bodies remain frozen. See research/AUDITED_REPAIR_RELEASE_GATE.md for blockers and required next steps.
+
 # Equity history cache — 2026-09-19
 
 User requests retaining history across tab changes and reducing repeated reads. Implement only authenticated browser-scoped projection caching and bounded exclusive new-archive reads; keep all strategies/cadence/financial state/owner and member execution untouched. Read research/EQUITY_CACHE_INCREMENTAL.md. Cached curves are not trading authority or proof of better returns. Preserve frozen tests and reviewed-main deployment/continuity checks.

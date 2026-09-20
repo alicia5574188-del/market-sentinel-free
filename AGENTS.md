@@ -1,3 +1,7 @@
+# Audited repair candidate — 2026-09-20
+
+User requires demonstrable improvement before deployment. Read `research/AUDITED_REPAIR_RELEASE_GATE.md` first. Candidate repairs deterministic exit/forecast/LIVE-risk/health defects, but the compact peak checkpoint has a reproduced write-budget versus exit-commit regression. Do not merge/deploy until resolved; passing functional tests do not prove net-profit superiority. This task authorizes only the corresponding forward/store and `advanceForwardNow` frozen-hash updates; keep all other frozen primary methods, credentials, owner intent, ledgers and membership capacity unchanged. No real-money production test.
+
 # Equity history cache — 2026-09-19
 
 User requests retaining history across tab changes and reducing repeated reads. Implement only authenticated browser-scoped projection caching and bounded exclusive new-archive reads; keep all strategies/cadence/financial state/owner and member execution untouched. Read research/EQUITY_CACHE_INCREMENTAL.md. Cached curves are not trading authority or proof of better returns. Preserve frozen tests and reviewed-main deployment/continuity checks.

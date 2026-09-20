@@ -37,13 +37,13 @@ import { advanceRegimePortfolio, evaluateRegimePortfolio, initialRegimePortfolio
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
 import { advanceForward, forwardSummary, forwardEquity, freshQuote, forwardWatchSymbols, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
-import { readForwardStore, prepareForwardWrite, FORWARD_STORAGE } from "../lib/forward-store.ts";
+import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, FORWARD_STORAGE } from "../lib/forward-store.ts";
 import { EquityReader } from "../lib/equity-reader.ts";
 import { EQUITY_CURVE_VERSION } from "../lib/equity-curve.ts";
 import { resourceDay, rollResourceDay, RESOURCE_DAY_POLICY, type ResourceCounters } from "../lib/resource-day.ts";
 import { LIVE_TURNOVER_PREFIX, LIVE_TURNOVER_VERSION, initialTurnover, validateTurnover, nextFillWindow,
   prepareTurnoverPage, turnoverView, type TurnoverState, type GateConfirmedFill } from "../lib/live-turnover.ts";
-import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwardMirrorSources,
+import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwardMirrorSources, mirrorPositionRisk,
   sourceLifecycle, mirrorSourceFresh, mirrorCoverage, liveEntryDriftGuard,
   type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
 declare const __FORWARD_BUILD_SHA__: string;
@@ -977,8 +977,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         this.runtime.nonAlarmWrites += prepared.writes;
         this.forwardCompression=prepared.compression;
         for(const t of closures)this.mirrorClosures.set(t.id,structuredClone(t));
+      } else if (next.protectionChanged) {
+        // Only a new decision-relevant peak/confirmation requests this compact
+        // write. Ordinary quote/audit changes do not write or create archives.
+        // Keep the same base persistedAt: it fences this overlay to the last
+        // full financial commit, which remains the sole account authority.
+        const prepared=prepareForwardProtectionWrite(next.state);
+        if (this.runtime.nonAlarmWrites + prepared.writes + 64 > NON_ALARM_WRITE_CAP)
+          throw new Error("前向保护写入预算不足；保留原账户，不发布未持久化保护状态");
+        await this.ctx.storage.transaction(async transaction => { await transaction.put(prepared.entries); });
+        this.runtime.nonAlarmWrites += prepared.writes;
       }
-      // A PAPER fill/rule update becomes visible only after its atomic commit.
+      // A PAPER fill/rule update or critical protection update becomes visible
+      // only after its atomic commit. A failed write retains the old authority.
       this.forwardState = next.state;
       this.forwardError = null;
     } catch (error) { this.forwardError = safeError(error); }
@@ -1685,16 +1696,36 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private liveOpenRisk() {
-    const positionRisk = Object.values(this.runtime.live.positions).reduce((sum, position) => sum + (position?.status === "OPEN"
-      ? remainingStressRisk(position, this.runtime.evidence[position.symbol]?.midpoint ?? position.entryPrice) : 0), 0);
+    const now=Date.now();
+    const positionRisk = Object.values(this.runtime.live.positions).reduce((sum, position) => {
+      if(position?.status!=="OPEN")return sum;
+      if(!position.parity)return sum+remainingStressRisk(position,this.runtime.evidence[position.symbol]?.midpoint??position.entryPrice);
+      const q=this.runtime.evidence[position.symbol],at=position.exchangePnlAt;
+      // Gate's current position mark survives loss of the source's public-book
+      // slot. A stale public midpoint must never override that actual mark.
+      const mark=position.exchangeMarkPrice!=null&&Number.isFinite(position.exchangeMarkPrice)&&position.exchangeMarkPrice>0
+        &&at!=null&&at<=now+1000&&now-at<=30_000 ? position.exchangeMarkPrice
+        :q&&freshQuote({bestBid:q.bestBid??0,bestAsk:q.bestAsk??0,observedAt:q.observedAt,fresh:q.fresh},now)
+          ?((q.bestBid??0)+(q.bestAsk??0))/2:NaN;
+      return sum+mirrorPositionRisk(position,mark);
+    }, 0);
     const pendingRisk = Object.values(this.runtime.live.entries).reduce((sum, entry) => sum + (entry && ["SUBMITTING", "OPEN", "ERROR"].includes(entry.status)
       ? entry.plannedRisk : 0), 0);
     return positionRisk + pendingRisk;
   }
 
   private liveDirectionalRisk(side: Side) {
-    const positionRisk = Object.values(this.runtime.live.positions).reduce((sum, position) => sum + (position?.status === "OPEN" && position.side === side
-      ? remainingStressRisk(position, this.runtime.evidence[position.symbol]?.midpoint ?? position.entryPrice) : 0), 0);
+    const now=Date.now();
+    const positionRisk = Object.values(this.runtime.live.positions).reduce((sum, position) => {
+      if(position?.status!=="OPEN"||position.side!==side)return sum;
+      if(!position.parity)return sum+remainingStressRisk(position,this.runtime.evidence[position.symbol]?.midpoint??position.entryPrice);
+      const q=this.runtime.evidence[position.symbol],at=position.exchangePnlAt;
+      const mark=position.exchangeMarkPrice!=null&&Number.isFinite(position.exchangeMarkPrice)&&position.exchangeMarkPrice>0
+        &&at!=null&&at<=now+1000&&now-at<=30_000 ? position.exchangeMarkPrice
+        :q&&freshQuote({bestBid:q.bestBid??0,bestAsk:q.bestAsk??0,observedAt:q.observedAt,fresh:q.fresh},now)
+          ?((q.bestBid??0)+(q.bestAsk??0))/2:NaN;
+      return sum+mirrorPositionRisk(position,mark);
+    }, 0);
     const pendingRisk = Object.values(this.runtime.live.entries).reduce((sum, entry) => sum + (entry && entry.side === side
       && ["SUBMITTING", "OPEN", "ERROR"].includes(entry.status) ? entry.plannedRisk : 0), 0);
     return positionRisk + pendingRisk;

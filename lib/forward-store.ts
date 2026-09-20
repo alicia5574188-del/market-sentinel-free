@@ -1,7 +1,9 @@
 import { FORWARD_VERSION, normalizeForward, type ForwardState } from "./forward-relations.ts";
 import { gzip, gunzip, MAX_STATE_BYTES } from "./storage-codec.ts";
+import { buildForwardProtectionCheckpoint, restoreForwardProtectionCheckpoint } from "./forward-protection-checkpoint.ts";
 
 export const FORWARD_STORAGE = "forward-relations:v1:";
+export const FORWARD_PROTECTION_STORAGE = `${FORWARD_STORAGE}protection`;
 type Head = { version: string; count: number; length: number; sha256: string; encoding?: "gzip"; rawLength?: number };
 type Reader = { get<T>(key: string): Promise<T | undefined> };
 export type Store = Reader & { put(entries: Record<string, unknown>): Promise<void>; delete(keys: string[]): Promise<number> };
@@ -19,7 +21,23 @@ export async function readForwardStore(storage: Reader, now: number) {
   if(offset!==bytes.length||await digest(bytes)!==head.sha256)throw new Error("前向存储校验失败，原账户不会被覆盖");
   const raw=head.encoding==="gzip"?await gunzip(bytes):bytes;
   if(head.encoding==="gzip"&&raw.length!==head.rawLength)throw new Error("前向解压长度校验失败");
-  return normalizeForward(JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(raw)) as ForwardState,now);
+  const state=normalizeForward(JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(raw)) as ForwardState,now);
+  // An overlay belongs to exactly one durable full-account generation. Old
+  // overlays need no delete/write on each full commit and cannot resurrect a
+  // reset account, a closed position or a previous financial revision.
+  return restoreForwardProtectionCheckpoint(state,await storage.get<unknown>(FORWARD_PROTECTION_STORAGE));
+}
+
+/** At most ONE bounded KV record, never another full-state/archive packet.
+ * The caller must await its commit before publishing the observed protection.
+ */
+export function prepareForwardProtectionWrite(next:ForwardState){
+  if(!Number.isFinite(next.storage.persistedAt)||next.storage.persistedAt<=0)
+    throw new Error("前向整包账户尚未持久化，拒绝保存孤立保护检查点");
+  const checkpoint=buildForwardProtectionCheckpoint(next);
+  if(new TextEncoder().encode(JSON.stringify(checkpoint)).length>120*1024)
+    throw new Error("前向保护检查点超过单值预算；保留原账户，不截断保护状态");
+  return {entries:{[FORWARD_PROTECTION_STORAGE]:checkpoint},writes:1};
 }
 
 export async function prepareForwardWrite(previous:ForwardState|null,next:ForwardState,now:number){

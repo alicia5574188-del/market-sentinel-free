@@ -1,3 +1,13 @@
+# 2026-09-20 comparative repair — HOLD, NOT DEPLOYED
+
+Baseline production: 401768ccd5ea75da6bf55b2855433aba2df5d1a5. Candidate branch: audit/20260920-correctness-hold-401768c. No main merge/deploy; owner LIVE intent was not changed, and no private Gate test occurred. Implemented forecast/data/duplicate-exit/compact-protection/actual-LIVE-risk/health corrections. Source discovery, size geometry, financial records, credentials and membership capacity remain unchanged.
+
+Verified: `npm run test:direct` 678/678; `npm test` (equity57, members36, LIVE114, build, architecture/migration18); `npm run typecheck`; ESLint 0 errors (3 pre-existing warnings); Wrangler dry-run; `git diff --check`. `node --experimental-strip-types research/upgrade-comparison-2026-09-20.mjs /path/to/snapshots` passes21/21 (7 corrected defects +14 normal paths). JSON binds tested source hashes. The old omitted market-state tests are now included by glob. Only authorized forward/store and advanceForwardNow frozen hashes changed; nine other primary bodies remain frozen.
+
+BLOCKERS: actual Worker stress proves a 1-key peak save can consume the remaining capacity for the next 3-key exit. Worst-case8,352 added daily peak writes exceeds8,000 total cap; existing usage7,773 leaves163 after64 reserve. HORIZON-only account equity peaks also remain outside complete restart coverage. Missing continuous executable quotes/full ledger means net-profit/drawdown superiority cannot be established. Passing tests include reproducing the unsafe budget boundary, not approving it.
+
+Next: read research/AUDITED_REPAIR_RELEASE_GATE.md and research/UPGRADE_COMPARISON_2026-09-20.md; redesign bounded critical persistence without starving exits, clarify account-peak durability semantics, then repeat exact-head comparisons and review. Do not relax tests/caps, delete archives, reset accounts, or silently substitute correctness for profitability to deploy.
+
 # Equity history cache — 2026-09-19
 
 User requests retaining history across tab changes and reducing repeated reads. Implement only authenticated browser-scoped projection caching and bounded exclusive new-archive reads; keep all strategies/cadence/financial state/owner and member execution untouched. Read research/EQUITY_CACHE_INCREMENTAL.md. Cached curves are not trading authority or proof of better returns. Preserve frozen tests and reviewed-main deployment/continuity checks.

@@ -8,6 +8,7 @@ import { type ForwardState, type Trade, PAPER_COST } from "./forward-relations.t
 import { LiveEntrySizingError, liveEntryTag, type LiveEntryIntent } from "./gate-live.ts";
 import { quantizeMirrorNotional, type GateSizeRules, type SizeDiagnostic } from "./gate-quantity.ts";
 import { LIVE_SESSION_VERSION, sourceAfterEnable, type LiveSession } from "./live-session.ts";
+import { PORTFOLIO_RISK_CAP, CORRELATED_DIRECTION_RISK_CAP } from "./liquidity-core.ts";
 
 export const LIVE_PARITY_VERSION = "current-paper-live-parity-v1";
 export const LIVE_PARITY_SOURCE = "CURRENT_FORWARD_ACCOUNT";
@@ -104,6 +105,25 @@ export function liveEntryDriftGuard(source:Trade,currentPrice:number) {
   return {policy:LIVE_ENTRY_DRIFT_POLICY,adverse,allowed,stopWidth,remaining};
 }
 
+/** Remaining quantity is reconciled from Gate before entry admission. A close
+ * request is not a fill: every still-OPEN holding retains this risk. Recompute
+ * the entry-risk floor from the actual remaining quantity, rather than using a
+ * stale full-size plannedRisk after a partial fill/reduction. Profit cannot
+ * hide the mark-to-stop exposure and an unrealised loss cannot free the floor.
+ * NaN deliberately propagates to the existing account-input validation so an
+ * unknown exposure blocks only additions, never protection or owner intent. */
+export function mirrorPositionRisk(position:{status:string;side:"LONG"|"SHORT";entryPrice:number;
+  currentStop:number;notional:number;parity?:Pick<MirrorReceipt,"sourceOpenedAt"|"sourceDeadline">},markPrice=position.entryPrice) {
+  if(position.status!=="OPEN")return 0;
+  const horizonMs=position.parity ? position.parity.sourceDeadline-position.parity.sourceOpenedAt : NaN;
+  if(![position.entryPrice,position.currentStop,position.notional,markPrice,horizonMs].every(positive))return NaN;
+  const quantity=position.notional/position.entryPrice,direction=position.side==="LONG"?1:-1;
+  const cost=2*(PAPER_COST.feeRate+PAPER_COST.slippageRate)+PAPER_COST.fundingAllowancePerDay*horizonMs/86_400_000;
+  const entryRisk=quantity*Math.max(0,direction*(position.entryPrice-position.currentStop))+position.notional*cost;
+  const markedRisk=quantity*Math.max(0,direction*(markPrice-position.currentStop))+quantity*markPrice*cost;
+  return Math.max(entryRisk,markedRisk);
+}
+
 export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;equity:number;available:number;
   entryPrice:number;quantoMultiplier:number;leverageMax:number;maintenanceRate:number;openRisk:number;
   sameDirectionRisk:number;openMargin:number;openNotional:number;now:number;policy:string;
@@ -142,10 +162,17 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
   // Gate is the execution authority for actual fees and available margin. Do not
   // double-reserve PAPER's model fee and turn a valid source order into a skip.
   if (margin>input.available+1e-8)fail("MARGIN","可用保证金不足，保留比例，不静默缩单");
+  // Source authority freezes proportional size and rules, not Gate exposure.
+  // Existing live positions (including requested-but-unconfirmed exits) and
+  // unresolved reservations must still consume actual-equity risk capacity.
+  // Do not use the frozen mirror equity here: fees, partial fills and delayed
+  // source exits can make the actual account diverge from its PAPER source.
+  if (input.openRisk+plannedRisk>input.equity*PORTFOLIO_RISK_CAP+1e-8
+    || input.sameDirectionRisk+plannedRisk>input.equity*CORRELATED_DIRECTION_RISK_CAP+1e-8)
+    fail("RISK_CAP","按实际权益与未平仓/未决暴露计算已超过原账户风险预算；不缩单、不改杠杆，等待风险释放");
   if(!input.sourceRiskAuthority){
     if (input.openMargin+margin>mirrorEquity*.75+1e-8)fail("MARGIN","累计保证金超出模拟同口径75%预算");
-    if (input.openNotional+notional>mirrorEquity*4+1e-8 || input.openRisk+plannedRisk>mirrorEquity*.10+1e-8
-      || input.sameDirectionRisk+plannedRisk>mirrorEquity*.065+1e-8)fail("RISK_CAP","按实际成交价计算已超过原账户风险预算");
+    if (input.openNotional+notional>mirrorEquity*4+1e-8)fail("RISK_CAP","按实际成交价计算已超过原账户风险预算");
   } else if (plannedRisk>sourceScaledRisk*1.25+mirrorEquity*.001) {
     fail("ECONOMICS","实盘成交价偏离使单笔风险明显高于模拟比例，等待下一笔新源单而不追价");
   }

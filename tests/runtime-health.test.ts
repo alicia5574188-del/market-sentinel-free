@@ -52,3 +52,75 @@ test("phone transport delay never changes the last known backend trading authori
   assert.equal(runtimeBackendOperational({ ...live(), stale: true }), false);
   assert.equal(runtimeBackendOperational({ ...live(), state: "RECONNECTING" }), false);
 });
+
+const T = 1_789_901_000_000;
+const forwardLive = (): RuntimeHealthShape => ({ ...live(), lastSuccessAt: T,
+  forward: { mode: "REAL_FEED_PAPER", lastCycleAt: T - 5 * 60_000, storage: { persistedAt: T - 5 * 60_000, error: null } } });
+
+test("healthy forward source needs no trade or opportunity to be ready", () => {
+  const runtime = { ...forwardLive(), realtimeReadiness: { capacity: 10, actionableMarkets: 0, protectedMarketsReady: true },
+    strategyData: { stableMarkets: 0, lastCompletedCandleAt: 0 } };
+  assert.equal(runtimeReady(runtime), true);
+  assert.equal(runtimeStatusLabel(runtime), "后台运行中", "retired strategy warmup must not override the active forward source");
+  assert.equal(runtimeNotice(runtime), null);
+  assert.equal(runtimeReady({ ...runtime, lastSuccessAt: T + 10 * 60_000 }), true, "three cycles of tolerance include scheduling delays");
+});
+
+test("forward storage failures cannot hide behind healthy market transport", () => {
+  const runtime = forwardLive();
+  runtime.forward!.storage!.error = "synthetic write failure";
+  assert.equal(runtimeReady(runtime), false);
+  assert.equal(runtimeBackendOperational(runtime), true, "health reporting must not alter backend authority");
+  assert.equal(runtimeAuthorityOperational(runtime), true);
+  assert.equal(runtimeStatusLabel(runtime), "后台运行中 · 策略存储异常");
+  assert.match(runtimeNotice(runtime) ?? "", /synthetic write failure/);
+  assert.doesNotMatch(runtimeNotice(runtime) ?? "", /行情重连|暂停新开仓/);
+});
+
+test("missing forward state, cycle and durable state are separate diagnostic failures", () => {
+  const cases: Array<[RuntimeHealthShape["forward"], string]> = [
+    [null, "策略状态未恢复"],
+    [{ mode: "RECOVERY_REQUIRED", storage: { error: null } }, "策略状态未恢复"],
+    [{}, "策略周期未启动"],
+    [{ lastCycleAt: 0, storage: { persistedAt: T, error: null } }, "策略周期未启动"],
+    [{ lastCycleAt: Number.NaN, storage: { persistedAt: T, error: null } }, "策略周期未启动"],
+    [{ lastCycleAt: T }, "策略尚未持久化"],
+    [{ lastCycleAt: T, storage: { persistedAt: 0, error: null } }, "策略尚未持久化"],
+    [{ lastCycleAt: T, storage: { persistedAt: T - 1, error: null } }, "策略持久化落后"],
+  ];
+  for (const [forward, label] of cases) {
+    const runtime = { ...live(), lastSuccessAt: T, forward };
+    assert.equal(runtimeReady(runtime), false, label);
+    assert.equal(runtimeStatusLabel(runtime), `后台运行中 · ${label}`);
+    assert.ok(runtimeNotice(runtime), label);
+    assert.equal(runtimeBackendOperational(runtime), true, label);
+  }
+});
+
+test("cycle stalls use source or explicit time, never the executing machine clock", () => {
+  const snapshot = forwardLive();
+  assert.equal(runtimeReady(snapshot), true, "historical snapshots are replayable");
+  const stopped = { ...snapshot, lastSuccessAt: T + 10 * 60_000 + 1 };
+  assert.equal(runtimeReady(stopped), false);
+  assert.equal(runtimeStatusLabel(stopped), "后台运行中 · 策略周期未推进");
+  assert.match(runtimeNotice(stopped) ?? "", /超过15分钟/);
+  assert.equal(runtimeReady(snapshot, true, T + 10 * 60_000 + 1), false);
+  assert.equal(runtimeStatusLabel(snapshot, true, false, T + 10 * 60_000 + 1), "后台运行中 · 策略周期未推进");
+  assert.match(runtimeNotice(snapshot, T + 10 * 60_000 + 1) ?? "", /超过15分钟/);
+  assert.equal(runtimeReady({ ...snapshot, lastSuccessAt: undefined }), true, "missing reference time cannot prove a stalled cycle");
+});
+
+test("legacy and member projections retain their transport and authority contracts", () => {
+  assert.equal(runtimeReady(live()), true, "old runtime without a forward field remains compatible");
+  const member = { ...forwardLive(), realtimeReadiness: undefined };
+  assert.equal(runtimeBackendOperational(member), true);
+  assert.equal(runtimeAuthorityOperational(member), true);
+  assert.equal(runtimeStatusLabel(member), "后台运行中");
+  assert.equal(runtimeNotice(member), null);
+  assert.equal(runtimeReady(member), false, "member projection does not claim primary protected-market readiness");
+  const absent = { ...member, forward: null };
+  assert.equal(runtimeStatusLabel(absent), "后台运行中 · 策略状态未恢复");
+  assert.equal(runtimeBackendOperational(absent), true, "diagnostics never change member trading authority");
+  assert.equal(runtimeStatusLabel(absent, false), "页面数据延迟", "transport status keeps its priority");
+  assert.equal(runtimeStatusLabel(absent, true, true), "页面连接中断");
+});
