@@ -1,3 +1,7 @@
+# 2026-09-20 — Forward Adaptive v2 IN PROGRESS
+
+Branch `strategy/forward-adaptive-v2-20260920` starts from deployed main `4810af8d717c70208738e8141fba15498a24a66b`. Architecture lock and the first implementation are present: rapid matured-15m migration candidates, refit on newly matured responses, continuous turn/drawdown allocation, and best-first sequential risk allocation. Existing PAPER account/LIVE authority are unchanged. Counterexample tests and exact-head CI are still required; this status is not a deployment or profitability claim.
+
 # 2026-09-20 continuation — local gates passed; remote release pending
 
 The concrete intermediate blockers below are repaired: peaks cannot consume financial exit rows; HORIZON account highs/maxDrawdown survive restart; early post-restart callbacks do not delay the next valid10s slot. Compact financial records reduce each of6 measured real/padded full commits by2 rows with identical archives. Actual Worker no-fill24h turnover test writes288 vs old1440 (same1440 reads). Shared in-flight financial reservations cover primary/member checkpoints, forward full commits, turnover, settlement and other previously counted writes, including failure and UTC boundaries.
