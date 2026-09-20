@@ -188,3 +188,15 @@ export function adaptiveCandidatePriority(rule:Pick<Rule,"estimatedNetRate"|"sta
   const signal=Math.max(0,calibrated)/(cost+Math.max(1e-6,rule.standardError));
   return adjustment.priorityMultiplier*((rule.evidence?.quality??.5)+signal);
 }
+
+export function adaptiveTargetRisk(input:{
+  equity:number;
+  quality:number;
+  allocationScale:number;
+  riskMultiplier:number;
+  stateHeadroom:number;
+}){
+  if(!(input.equity>0)||!(input.stateHeadroom>0))return 0;
+  return Math.max(0,Math.min(input.equity*.015*clip(input.quality,0,1)
+    *clip(input.allocationScale,.01,1)*clip(input.riskMultiplier,.01,1),input.stateHeadroom));
+}
