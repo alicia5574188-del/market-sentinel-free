@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { marketRiskBudget, selectDirectionalCandidates, sideRiskHeadroom, updateMarketState } from "../lib/forward-market-state.ts";
+import { marketRiskBudget, selectDirectionalCandidates, sideRiskHeadroom, turnForecastEntryGuard, updateMarketState, updateTurnForecast } from "../lib/forward-market-state.ts";
 
 const BAR=300_000,T=1_790_100_000_000;
 function path(now:number,step:(i:number)=>number){
@@ -11,6 +11,39 @@ function market(now:number,step:(i:number)=>number,n=12){
   return Object.fromEntries(Array.from({length:n},(_,i)=>[`M${i}_USDT`,path(now,j=>step(j+i*0))]));
 }
 
+test("15-minute broad weakness inside a still-positive 60-minute trend raises an early pullback warning",()=>{
+  const latePullback=(i:number)=>i>=10?-.002:.0015;
+  const f=updateTurnForecast(market(T,latePullback),null,T);
+  assert.equal(f.phase,"PULLBACK");assert.equal(f.threatenedSide,"LONG");assert.ok(f.breadth15<.5);assert.ok(f.median60>0);
+  const a=updateMarketState(market(T,()=>.0015),null,T),trend=updateMarketState(market(T+BAR,()=>.0015),a,T+BAR);
+  const budget=marketRiskBudget(trend,1000,1000,f);
+  assert.equal(budget.longRate,.03);assert.equal(budget.shortRate,.02);assert.equal(budget.totalRate,.06);assert.equal(budget.netDirectionalRate,.025);
+});
+test("pullback warning needs two clear completed bars before re-enabling the threatened direction",()=>{
+  const latePullback=(i:number)=>i>=10?-.002:.0015;
+  const f=updateTurnForecast(market(T,latePullback),null,T);
+  const one=updateTurnForecast(market(T+BAR,()=>.0015),f,T+BAR);
+  assert.equal(one.phase,"PULLBACK");assert.equal(one.clearBars,1);
+  const two=updateTurnForecast(market(T+2*BAR,()=>.0015),one,T+2*BAR);
+  assert.equal(two.phase,"CLEAR");
+});
+test("persistent severe short-term damage upgrades from pullback to reversal risk without instantly flipping the portfolio",()=>{
+  const severe=(i:number)=>i>=10?-.004:.003;
+  const one=updateTurnForecast(market(T,severe),null,T);
+  assert.equal(one.phase,"PULLBACK");assert.equal(one.rawPhase,"REVERSAL_RISK");
+  const two=updateTurnForecast(market(T+BAR,severe),one,T+BAR);
+  assert.equal(two.phase,"REVERSAL_RISK");assert.equal(two.threatenedSide,"LONG");
+  const budget=marketRiskBudget(null,960,1000,two);
+  assert.equal(budget.longRate,.015);assert.equal(budget.totalRate,.04);assert.equal(budget.netDirectionalRate,.01);
+});
+test("turn forecast blocks adding to the threatened side and only permits short-horizon independent countertrend entries",()=>{
+  const f=updateTurnForecast(market(T,i=>i>=10?-.002:.0015),null,T);
+  assert.match(turnForecastEntryGuard(f,"LONG",15,null)??"",/暂不增加/);
+  assert.equal(turnForecastEntryGuard(f,"SHORT",60,null),null);
+  assert.match(turnForecastEntryGuard(f,"SHORT",180,null)??"",/180分钟/);
+  const shortTrend={...updateMarketState(market(T,()=>-.0015),null,T),mode:"TREND_SHORT" as const};
+  assert.equal(turnForecastEntryGuard(f,"SHORT",180,shortTrend),null);
+});
 test("broad trend requires confirmation but keeps the original 6.5% aligned risk budget",()=>{
   const p=market(T,()=>.0015),a=updateMarketState(p,null,T);
   assert.equal(a.mode,"UNKNOWN");assert.equal(a.rawMode,"TREND_LONG");
