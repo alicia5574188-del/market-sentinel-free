@@ -8,7 +8,7 @@
  * a direction and never turns a market warning into a synthetic trade.
  */
 import { EVIDENCE_POLICY, costAwareGiveback, evidenceHash, evidenceQuality, executionCalibration,
-  familyKey, matches, modeledCost, type Candidate, type Feedback } from "./forward-evidence.ts";
+  familyKey, forwardSymbolAllowed, matches, modeledCost, type Candidate, type Feedback } from "./forward-evidence.ts";
 import type { Condition, Measurement, Rule } from "./forward-relations.ts";
 import type { MarketSide, MarketState, TurnForecast } from "./forward-market-state.ts";
 import type { MarketTurnProtection } from "./forward-turn-protection.ts";
@@ -65,7 +65,7 @@ export function inspectRapidCondition(input:{
   now:number;
   feedback:Feedback[];
 }):AdaptiveCandidate|null {
-  const ordered=dedup(input.rows.filter(r=>r.horizon===15&&r.endAt<=input.now&&r.availableAt<=input.now));
+  const ordered=dedup(input.rows.filter(r=>r.horizon===15&&r.endAt<=input.now&&r.availableAt<=input.now&&forwardSymbolAllowed(r.symbol)));
   const eligible=ordered.filter(r=>matches(r.x,input.conditions));
   const groups=groupResponses(eligible);
   if(groups.length<3)return null;
@@ -187,6 +187,21 @@ export function adaptiveCandidatePriority(rule:Pick<Rule,"estimatedNetRate"|"sta
   const cost=rule.evidence?.costRate??.0022,calibrated=rule.evidence?.calibratedNet??rule.estimatedNetRate;
   const signal=Math.max(0,calibrated)/(cost+Math.max(1e-6,rule.standardError));
   return adjustment.priorityMultiplier*((rule.evidence?.quality??.5)+signal);
+}
+
+export function calibrationRiskMultiplier(rawNet:number,calibratedNet:number){
+  if(!(rawNet>0)||!Number.isFinite(calibratedNet))return .15;
+  if(calibratedNet<=0)return .15;
+  return clip(calibratedNet/rawNet,.15,1);
+}
+
+export function sampleRiskMultiplier(scope:"CROSS_ASSET"|"SINGLE_ASSET",samples:number){
+  if(scope!=="SINGLE_ASSET")return 1;
+  return clip(Math.sqrt(Math.max(1,samples)/20),.15,1);
+}
+
+export function familyRiskHeadroom(equity:number,openFamilyRisk:number){
+  return Math.max(0,equity*.015-Math.max(0,openFamilyRisk));
 }
 
 export function adaptiveTargetRisk(input:{

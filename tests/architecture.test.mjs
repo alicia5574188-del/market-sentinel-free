@@ -245,6 +245,8 @@ test("retired systems remain isolated; only current PAPER can create new LIVE en
   assert.match(worker, /entry\.exchangeOrderId = await client\.createEntry\(intent\);[\s\S]{0,1600}await this\.createImmediateLiveStop\(client, entry\)/);
   assert.match(gateLive, /side === "LONG" \? Math\.floor\(units \+ 1e-9\) : Math\.ceil\(units - 1e-9\)/);
   assert.match(worker, /SCAN_UNIVERSE_SIZE = 30/);
+  assert.match(worker, /eligible\.has\(row\.symbol\) && forwardSymbolAllowed\(row\.symbol\)/);
+  assert.match(worker, /import \{ forwardSymbolAllowed \} from "\.\.\/lib\/forward-evidence\.ts"/);
   assert.match(worker, /maxOpenPositions: null/);
   assert.match(migration, /DELETE FROM `paper_events`/);
   assert.match(migration, /DELETE FROM `paper_positions`/);
