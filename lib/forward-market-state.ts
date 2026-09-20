@@ -251,8 +251,8 @@ export function marketRiskBudget(state:MarketState|null|undefined,equity:number,
   let totalRate=.10,longRate=.065,shortRate=.065,netDirectionalRate=.10;
   if(mode==="TREND_LONG"){totalRate=.075;longRate=.065;shortRate=.015;netDirectionalRate=.065;}
   else if(mode==="TREND_SHORT"){totalRate=.075;longRate=.015;shortRate=.065;netDirectionalRate=.065;}
-  else if(mode==="TRANSITION"){totalRate=.065;longRate=.045;shortRate=.045;netDirectionalRate=.035;}
-  else if(mode==="NEUTRAL"){totalRate=.055;longRate=.0325;shortRate=.0325;netDirectionalRate=.025;}
+  else if(mode==="TRANSITION"){totalRate=.06;longRate=.045;shortRate=.045;netDirectionalRate=.03;}
+  else if(mode==="NEUTRAL"){totalRate=.05;longRate=.03;shortRate=.03;netDirectionalRate=.02;}
   const drawdownRate=equity>0&&peakEquity>0?Math.max(0,1-equity/peakEquity):0;
   // Drawdown changes NEW allocation size instead of silently becoming a trading
   // pause. Existing portfolio caps remain state-driven so a losing period does
