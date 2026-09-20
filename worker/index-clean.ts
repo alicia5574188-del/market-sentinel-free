@@ -44,8 +44,8 @@ import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBu
 import { EquityReader } from "../lib/equity-reader.ts";
 import { EQUITY_CURVE_VERSION } from "../lib/equity-curve.ts";
 import { resourceDay, rollResourceDay, RESOURCE_DAY_POLICY, type ResourceCounters } from "../lib/resource-day.ts";
-import { LIVE_TURNOVER_PREFIX, LIVE_TURNOVER_VERSION, initialTurnover, validateTurnover, nextFillWindow,
-  prepareTurnoverPage, turnoverView, type TurnoverState, type GateConfirmedFill } from "../lib/live-turnover.ts";
+import { LIVE_TURNOVER_PREFIX, LIVE_TURNOVER_VERSION, initialTurnover, validateTurnover, nextFillWindow, nextFeeWindow,
+  prepareTurnoverPage, prepareFeePage, turnoverView, type TurnoverState, type GateConfirmedFill } from "../lib/live-turnover.ts";
 import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwardMirrorSources, mirrorPositionRisk,
   sourceLifecycle, mirrorSourceFresh, mirrorCoverage, liveEntryDriftGuard,
   type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
@@ -1519,6 +1519,26 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if(this.liveClient===client&&this.turnoverAccountUser===accountUser&&this.turnoverAccountKey===key){
       if(persist)this.turnoverPersisted={accountKey:key,at:now};
       this.turnoverState=prepared.state;this.turnoverError=null;this.runtime.live.turnoverAccountKey=key;
+    }else return;
+
+    // Backfill actual Gate trade fees independently from the already-confirmed
+    // turnover ledger. This is read-only analytics and never blocks trading.
+    const feeWindow=nextFeeWindow(this.turnoverState,now);
+    if(!feeWindow)return;
+    try{
+      this.runtime.subrequestCount++;
+      const feeRows=await this.turnoverRows(await client.confirmedFills(feeWindow.from,feeWindow.to,feeWindow.offset));
+      if(this.liveClient!==client||this.turnoverAccountUser!==accountUser||this.turnoverAccountKey!==key)return;
+      const feeState=prepareFeePage({state:this.turnoverState,window:feeWindow,rows:feeRows,now});
+      const reservation=this.reserveNonAlarmWrites(1,256);
+      if(!reservation)throw new Error("手续费保存等待资源预算，交易保护优先");
+      try{await this.ctx.storage.transaction(async tx=>{await tx.put({[`${LIVE_TURNOVER_PREFIX}${key}:summary`]:feeState});});reservation.finish(true);}
+      finally{reservation.finish(false);}
+      if(this.liveClient===client&&this.turnoverAccountUser===accountUser&&this.turnoverAccountKey===key){
+        this.turnoverState=feeState;this.turnoverError=null;this.runtime.live.turnoverAccountKey=key;
+      }
+    }catch(error){
+      this.turnoverError=`手续费核对：${safeError(error)}`;
     }
   }
 
