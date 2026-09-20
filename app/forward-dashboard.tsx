@@ -11,12 +11,12 @@ type Tab = "overview" | "relations" | "orders" | "live" | "journal" | "settings"
 const fmt = (v: number | null | undefined, digits=2) => typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:digits,maximumFractionDigits:digits}):"—";
 const signed = (v: number | null | undefined, digits=2) => typeof v==="number"?`${v>=0?"+":""}${fmt(v,digits)}`:"—";
 const time = (v?:number|null) => v?new Date(v).toLocaleString("zh-CN",{timeZone:"Asia/Vientiane",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}):"—";
-const condition = (r:Rule) => r.conditions.map(c=>`${FEATURES[c.feature]} ${c.op==="GE"?"≥":"≤"} ${fmt(c.threshold)}`).join(" ＋ ");
+const condition = (r:Rule) => r.authority==="MULTI_TURN"?`${r.turnTimeframe??"—"} 转折引擎`:r.conditions.map(c=>`${FEATURES[c.feature]} ${c.op==="GE"?"≥":"≤"} ${fmt(c.threshold)}`).join(" ＋ ");
 
 export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,memberName,cacheScope="owner"}:{data:View|null;healthy:boolean;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;liveEnabled:boolean;liveOverview?:{equity:number|null;available:number|null;positionCount:number;operational:boolean;lastSyncAt:number|null;copied:number|null;eligible:number|null;missing:number|null};accountPanel?:ReactNode;memberName?:string;cacheScope?:string}) {
   const [equityCache]=useState(()=>new EquityHistoryCache());
   useEffect(()=>()=>equityCache.cancel(),[equityCache]);
-  const [tab,setTab]=useState<Tab>("overview"),[now,setNow]=useState(0),[showDormant,setShowDormant]=useState(false);
+  const [tab,setTab]=useState<Tab>("overview"),[now,setNow]=useState(0);
   const [fontScale,setFontScale]=useState(92);
   const [exporting,setExporting]=useState(false),[exportStatus,setExportStatus]=useState<string|null>(null);
   const [paperTab,setPaperTab]=useState<"account"|"positions"|"history"|"archive">("account"),[paperPage,setPaperPage]=useState(0);
@@ -47,23 +47,28 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
       setExportStatus("导出失败，请重试。");
     }finally{setExporting(false);}
   };
-  const active=data?.rules.filter(r=>r.status==="EXPERIMENTAL")??[],dormant=data?.rules.filter(r=>r.status==="DORMANT")??[];
+  const active=data?.rules.filter(r=>r.status==="EXPERIMENTAL")??[];
   const blockers=Object.entries(data?.entryDiagnostics?.reasons??{}).sort((a,b)=>b[1]-a[1]);
   const mainBlocker=blockers[0]?.[0]??"本轮暂无阻塞";
-  const modeName={UNKNOWN:"未知",TREND_LONG:"趋势偏多",TREND_SHORT:"趋势偏空",TRANSITION:"转折过渡",NEUTRAL:"震荡中性"}[data?.marketState?.mode??"UNKNOWN"];
-  const turnName={UNKNOWN:"数据待确认",CLEAR:"清晰",PULLBACK:"回调预警",REVERSAL_RISK:"反转风险"}[data?.turnForecast?.phase??"UNKNOWN"];
+  const turnTfs=["5m","15m","30m","1h","4h","1d"] as const,turnFrames=data?.turnEngine?.frames??{};
+  const turnRows=turnTfs.map(tf=>{const rows=Object.values(turnFrames).flatMap(by=>by[tf]?[by[tf]!]:[]);
+    const long=rows.filter(x=>x.direction==="LONG").length,short=rows.filter(x=>x.direction==="SHORT").length;
+    return{tf,rows,long,short,neutral:rows.length-long-short,avgTurn:rows.length?rows.reduce((n,x)=>n+x.turnProbability,0)/rows.length:null,
+      turning:rows.filter(x=>x.phase==="TURNING"||x.phase==="CONFIRMED").length,cal:data?.turnEngine?.calibration[tf]};});
+  const hotTurns=Object.values(turnFrames).flatMap(by=>turnTfs.flatMap(tf=>by[tf]?[by[tf]!]:[]))
+    .sort((a,b)=>b.triggerProbability-a.triggerProbability).slice(0,10);
   const paperMargin=data?.positions.reduce((sum,t)=>sum+t.margin,0)??null;
   const elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
-  const nav:[Tab,string,string][]=[["overview","◉","总览"],["relations","⌘","规则"],["orders","⇄","模拟"],["live","◈","实盘"],["journal","≋","演变"],["settings","⊙","系统"]];
+  const nav:[Tab,string,string][]=[["overview","◉","总览"],["relations","⌘","转折"],["orders","⇄","模拟"],["live","◈","实盘"],["journal","≋","演变"],["settings","⊙","系统"]];
   return <main className="fr-app" style={fontStyle} data-ui-version="dark-live-v1" data-record-view="compact-records-pnl-v1">
-    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · 关系引擎</b><small>FORWARD LAB / 01</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
-    <div className="fr-subhead"><span>Gate USDT 永续 · 关系引擎</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
+    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · 多周期转折引擎</b><small>MULTI-TURN / 01</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
+    <div className="fr-subhead"><span>Gate USDT 永续 · 六周期转折</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
     {memberName&&<p className="fr-note">{memberName} · 共用同一模拟策略，实盘账户独立，开关只由你控制。</p>}
 
     {tab==="overview"&&<>
       <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">账户驾驶舱</span><h1>{healthy?"系统正在正常运行":"系统正在恢复连接"}</h1>
         <p>{data?.latestReason??"正在读取已持久化账户和真实行情状态。"}</p>
-        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>5分钟行情</span><span>动态市场范围</span><span>实盘{liveEnabled?"已开启":"关闭"}</span></div></div>
+        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>5m / 15m / 30m / 1h / 4h / 日线</span><span>Top30动态市场</span><span>实盘{liveEnabled?"已开启":"关闭"}</span></div></div>
         <div className="fr-equity"><small>模拟账户权益 · USDT</small><strong>{fmt(data?.equity)}</strong><div className={(data?.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(data?.netPnl)} <span>U · {signed(data?data.netPnl/data.initialEquity*100:null)}%</span></div>
           <footer><span>起点 {fmt(data?.initialEquity,0)}</span><span>最大回撤 {fmt(data?data.maxDrawdown*100:null)}%</span></footer></div></section>
 
