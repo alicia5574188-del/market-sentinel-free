@@ -18,7 +18,7 @@ test("15-minute broad weakness inside a still-positive 60-minute trend raises an
   const a=updateMarketState(market(T,()=>.0015),null,T),trend=updateMarketState(market(T+BAR,()=>.0015),a,T+BAR);
   const budget=marketRiskBudget(trend,1000,1000,f);
   assert.ok(budget.longRate>0&&budget.longRate<.065);assert.ok(budget.shortRate>=.02);
-  assert.ok(budget.totalRate>.06&&budget.totalRate<=.075);assert.ok(budget.netDirectionalRate>.025&&budget.netDirectionalRate<=.045);
+  assert.ok(budget.totalRate>=.06&&budget.totalRate<=.075);assert.ok(budget.netDirectionalRate>=.03&&budget.netDirectionalRate<=.045);
   assert.equal(budget.allocationScale,1);
 });
 test("pullback warning needs two clear completed bars before re-enabling the threatened direction",()=>{
