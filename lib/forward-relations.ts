@@ -114,8 +114,10 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
   if(v.turnProtection&&v.turnProtection.version!==MARKET_TURN_PROTECTION_VERSION)throw new Error("未知市场转折保护版本，保留原账户");
   if(v.marketState&&v.marketState.version!==MARKET_STATE_VERSION)throw new Error("未知组合市场状态版本，保留原账户");
   if(v.turnForecast&&v.turnForecast.version!==TURN_FORECAST_VERSION)throw new Error("未知转折预警版本，保留原账户");
+  const authority=v.strategyAuthorityVersion??"legacy-forward-rules-v1";
   return {...v,adaptationVersion:v.adaptationVersion??"legacy-forward-adaptation-v1",lastFitMeasured:v.lastFitMeasured??v.measured,
-    strategyAuthorityVersion:v.strategyAuthorityVersion??"legacy-forward-rules-v1",turnLastEntryBars:v.turnLastEntryBars??{},turnSymbolExitAt:v.turnSymbolExitAt??{},
+    strategyAuthorityVersion:authority,turnLastEntryBars:v.turnLastEntryBars??{},
+    ...(authority===MULTI_TURN_VERSION?{turnSymbolExitAt:v.turnSymbolExitAt??{}}:v.turnSymbolExitAt?{turnSymbolExitAt:v.turnSymbolExitAt}:{}),
     ...(v.turnEngine?.version===MULTI_TURN_VERSION?{turnEngine:v.turnEngine}:{})};
 }
 export function frameFromCandles(symbol:string,rows:Candle[],now:number):Frame|null {
