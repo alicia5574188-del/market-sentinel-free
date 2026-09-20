@@ -385,8 +385,11 @@ function openTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<
     const longRisk=s.positions.filter(t=>t.side==="LONG").reduce((a,t)=>a+t.plannedRisk,0);
     const shortRisk=s.positions.filter(t=>t.side==="SHORT").reduce((a,t)=>a+t.plannedRisk,0);
     const budget=marketRiskBudget(marketState,equity,s.peakEquity,turnForecast);
-    const quality=Math.min(r.evidence!.quality,economics.quality,evidenceQuality(r.evidence!.rawNet,
-      r.evidence!.boundedNet??r.evidence!.rawNet,r.standardError,r.evidence!.costRate,calibration.penalty));
+    // Execution calibration has its own continuous risk multiplier below.
+    // Do not apply the same loss penalty a second time through quality; quality
+    // here reflects structural evidence robustness plus the current entry move.
+    const quality=Math.min(economics.quality,evidenceQuality(r.evidence!.rawNet,
+      r.evidence!.boundedNet??r.evidence!.rawNet,r.standardError,r.evidence!.costRate,0));
     // Best-first sequential allocation: the highest-ranked executable candidate
     // receives a meaningful slice first; the next candidate sees the recomputed
     // remaining headroom. We never pre-divide risk among candidates that may not fill.
