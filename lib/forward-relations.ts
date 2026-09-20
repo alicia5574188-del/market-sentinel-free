@@ -342,21 +342,17 @@ function openTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<
   const candidates=Object.values(s.frames).flatMap(f=>s.rules.filter(r=>r.status==="EXPERIMENTAL"&&r.createdAt<=now&&r.expiresAt>now
     &&f.at>=s.startedAt&&now-f.at<BAR_MS&&conditionMatches(f.x,r.conditions)
     &&(!retry||waiting.some(w=>w.ruleId===r.id&&w.symbol===f.symbol&&w.signalAt===f.at&&w.expiresAt>now)))
-    .map(r=>({f,r}))).sort((a,b)=>(b.r.evidence?.quality??0)-(a.r.evidence?.quality??0)
+    .map(r=>({f,r,adjustment:adaptiveEntryAdjustment({side:r.side,horizon:r.horizon,state:marketState,forecast:turnForecast,turn})})))
+    .sort((a,b)=>adaptiveCandidatePriority(b.r,b.adjustment)-adaptiveCandidatePriority(a.r,a.adjustment)
       ||b.r.estimatedNetRate-a.r.estimatedNetRate||a.f.symbol.localeCompare(b.f.symbol));
-  let blocker="";const diagnostics={at:now,matched:candidates.length,opened:0,reasons:{} as Record<string,number>,retry,queued:0};
+  let blocker="";const diagnostics={at:now,matched:candidates.length,opened:0,reasons:{} as Record<string,number>,retry,queued:0,adaptiveScaled:0};
   s.entryDiagnostics=diagnostics;s.relationEntries??={};s.quoteRetries=[];
   s.participation??={since:now,cycles:0,matches:0,quoteWaits:0,retryChecks:0,retryFills:0,opened:0};
   if(retry)s.participation.retryChecks++;else{s.participation.cycles++;s.participation.matches+=candidates.length;}
   const reject=(reason:string)=>{blocker=reason;diagnostics.reasons[reason]=(diagnostics.reasons[reason]??0)+1;};
-  const readySymbols=(side:Trade["side"])=>new Set(candidates.filter(({f,r})=>r.side===side&&ruleApplies(r,f.symbol)
-    &&!s.positions.some(t=>t.symbol===f.symbol)&&(s.lastEntryBars[f.symbol]??0)<f.at
-    &&freshQuote(quotes[f.symbol],now)&&quotes[f.symbol].entryReady!==false).map(({f})=>f.symbol)).size;
-  for(const{f,r}of candidates){
+  for(const{f,r,adjustment}of candidates){
     if(s.positions.some(t=>t.symbol===f.symbol)||(s.lastEntryBars[f.symbol]??0)>=f.at)continue;
-    if(turn&&turn.until>now&&r.side===turn.threatenedSide){reject("市场转折保护生效：暂不增加受威胁方向风险，反向或其他独立机会仍按原规则执行");continue;}
-    const forecastBlock=turnForecastEntryGuard(turnForecast,r.side,r.horizon,marketState);
-    if(forecastBlock){reject(forecastBlock);continue;}
+    if(adjustment.riskMultiplier<.999)diagnostics.adaptiveScaled++;
     if(!ruleApplies(r,f.symbol)){reject("规则为本币专用或当前币不在已观测样本范围内");continue;}
     const family=familyKey(r),episodeKey=`${f.symbol}:${family}`;
     // A completed observation, not the whole holding horizon, is the repeat
@@ -384,16 +380,16 @@ function openTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<
     const gross=s.positions.reduce((a,t)=>a+t.notional,0),risk=s.positions.reduce((a,t)=>a+t.plannedRisk,0);
     const longRisk=s.positions.filter(t=>t.side==="LONG").reduce((a,t)=>a+t.plannedRisk,0);
     const shortRisk=s.positions.filter(t=>t.side==="SHORT").reduce((a,t)=>a+t.plannedRisk,0);
-    const same=r.side==="LONG"?longRisk:shortRisk,budget=marketRiskBudget(marketState,equity,s.peakEquity,turnForecast);
+    const budget=marketRiskBudget(marketState,equity,s.peakEquity,turnForecast);
     const quality=Math.min(r.evidence!.quality,economics.quality,evidenceQuality(r.evidence!.rawNet,
       r.evidence!.boundedNet??r.evidence!.rawNet,r.standardError,r.evidence!.costRate,calibration.penalty));
-    // Market state never invents a trade. It only allocates the same risk to
-    // learned LONG/SHORT opportunities with smaller exposure in transition/range.
-    const peers=Math.max(1,readySymbols(r.side));
+    // Best-first sequential allocation: the highest-ranked executable candidate
+    // receives a meaningful slice first; the next candidate sees the recomputed
+    // remaining headroom. We never pre-divide risk among candidates that may not fill.
     const stateHeadroom=sideRiskHeadroom(r.side,longRisk,shortRisk,equity,budget);
-    const targetRisk=Math.min(equity*.015*quality,stateHeadroom/peers);
+    const targetRisk=Math.min(equity*.015*quality*budget.allocationScale*adjustment.riskMultiplier,stateHeadroom);
     const lossRate=r.stopRate+Math.max(COST_FLOOR,r.evidence!.costRate)+spread;
-    const desired=Math.min(equity*1.5,targetRisk/lossRate,Math.max(0,equity*4-gross)/peers);
+    const desired=Math.min(equity*1.5,targetRisk/lossRate,Math.max(0,equity*4-gross));
     const immediateExit=(r.side==="LONG"?q.bestBid:q.bestAsk)*(1-d*PAPER_COST.slippageRate);
     const immediateCost=Math.max(r.evidence!.costRate,PAPER_COST.feeRate*(1+immediateExit/price)+d*(1-immediateExit/price));
     const wanted=Math.max(0,Math.min(desired,(equity*4-gross)/(1+4*immediateCost),
@@ -405,7 +401,7 @@ function openTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<
     const quantity=count*meta.quantoMultiplier,notional=quantity*price;
     if(notional<equity*.05||notional<desired*.25){reject("整数张数后只剩碎片仓位，跳过而不放大风险");continue;}
     const usedMargin=s.positions.reduce((a,t)=>a+t.margin,0),markedAfter=equity-notional*immediateCost;
-    const marginTarget=Math.min(equity*.2,Math.max(0,markedAfter*.75-usedMargin)/peers);
+    const marginTarget=Math.min(equity*.2,Math.max(0,markedAfter*.75-usedMargin));
     if(!(marginTarget>0)){reject("模拟可用保证金不足");continue;}
     // More names share margin as well as stop risk. Leverage only changes
     // reserved margin here; neither notional nor planned loss is increased.
@@ -423,7 +419,9 @@ function openTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<
     s.relationEntries[episodeKey]=f.at+BAR_MS;diagnostics.opened++;s.participation.opened++;
     if(retry)s.participation.retryFills++;
     event(s,now,"ENTRY",t.id,`${f.symbol}按实验假设${r.id}使用新鲜买卖价模拟成交；不是Gate实盘成交。`,
-      {ruleId:r.id,notional,contracts:count,remainingNet:economics.remaining,calibrationPenalty:calibration.penalty,quality,quoteRetry:Number(retry)});
+      {ruleId:r.id,notional,contracts:count,remainingNet:economics.remaining,calibrationPenalty:calibration.penalty,quality,
+        quoteRetry:Number(retry),adaptiveRiskMultiplier:adjustment.riskMultiplier,adaptivePriorityMultiplier:adjustment.priorityMultiplier,
+        adaptiveLane:r.adaptiveLane??"BASE"});
   }
   for(const[key,until]of Object.entries(s.relationEntries))if(until<now)delete s.relationEntries[key];
   s.quoteRetries=[...new Map(s.quoteRetries.map(w=>[`${w.symbol}:${w.ruleId}:${w.signalAt}`,w])).values()].slice(0,90);
