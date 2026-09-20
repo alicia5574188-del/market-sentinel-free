@@ -1,19 +1,23 @@
 {
   "schema": "quant-upgrade-engineering-comparison-v1",
   "baselineCommit": "401768ccd5ea75da6bf55b2855433aba2df5d1a5",
-  "candidateCommit": "401768ccd5ea75da6bf55b2855433aba2df5d1a5",
+  "candidateCommit": "a3fa00f9889c73bd4dab673fc3b22b8c869e14b2",
   "candidateWorktreeMayContainUncommittedChanges": true,
   "candidateSourceHashes": {
-    "lib/forward-relations.ts": "8d05343b5b234538a5e332fceb4d01d6aed43c84ff38818f28382ebc72e8bba3",
+    "lib/forward-relations.ts": "de686bd4a890d45d43cf7845f5061e86db103c5e2552702437486728b941e521",
     "lib/forward-market-state.ts": "c2da9f8d2c57c200e4ba375a8152de2a985bcfef3d941119938f68201cb46f19",
-    "lib/forward-protection-checkpoint.ts": "f15dc193fd6ab341dd39cb1a9eaa1bb4f40af64d089e6d6cde5323da89afeaca",
+    "lib/forward-protection-checkpoint.ts": "ce644d3122874b2c799c0bac31cb90006e03f72d3063fb1e4861b7a670daf476",
     "lib/forward-protection.ts": "cb671551b117bdb22154377a0b36a048950bc0b58f29d20418df879bc022ecd9",
     "lib/forward-evidence.ts": "d586dbee7ada97df8948c830a9ffe8582f11e85ebb3376a45235e90c8fdc3ca3",
     "lib/forward-turn-protection.ts": "92099cdf8bcd0b947d111c06c4efc964c84c5e989c70e29fcd0faa9e0c491892",
     "lib/live-parity.ts": "777032789d6b327ac7bfe2c07ef0ad503495487e90a2886d9ed8cf80fe33e64c",
     "lib/runtime-health.ts": "bd482276b3ac60b8cff09064cf239bba0ff6326eeab748f1aa18e083c232b132",
-    "lib/forward-store.ts": "f8c988a7476d4a1b236347b138cd7e0e4e077b7bb679de439457aa4d455b98c5",
-    "worker/index-clean.ts": "a663287c3d23acc4f3e0b90de05f293488579e40364352019d50c7b7f2482133"
+    "lib/forward-store.ts": "9079dbf2501ff0456962a2cbe4828ba195aee033e98149fa7512f63644e6330a",
+    "lib/forward-write-budget.ts": "642ee520a35dcfc549cf3bfd089895aa2e32830a4e5c2af22138d3dc635ddc49",
+    "lib/storage-codec.ts": "c1f2b3d7a0070c9dfb10786a647c390adfe8ce1b634793dfa649451f9ef31190",
+    "lib/live-turnover.ts": "0585868efee92c6c969666e0c25cb978c335a8c1067920154604d3061c8624e4",
+    "worker/index-clean.ts": "f11df337e65d98f53e2f9cfbbad4f0b543a8c06a915eba9593a76efde89f540e",
+    "worker/member-executor.ts": "d1d6716c21669e695452e2f5cca50607b51e6698c886198f54ae5517df98a48c"
   },
   "evidenceScope": "Synthetic causal same-input correctness fixtures plus deterministic generation from retained real labels; no historical account PnL replay.",
   "correctnessImproved": true,
@@ -25,8 +29,10 @@
   "fullAccountReplayAvailable": false,
   "resourceSafetyVerified": false,
   "releaseEligible": false,
+  "resourceSafetyScope": "No full-account 24-hour writes/requests/duration capacity certification. The earlier shared-budget peak-starves-exit counterexample has a separate durable protection lane and Worker regression tests; false does not assert that old counterexample remains unfixed.",
+  "releaseEligibilityScope": "This comparison script alone does not approve deployment. The main task evaluates the finite correctness/resource/no-normal-path-regression gate in research/AUDITED_REPAIR_RELEASE_GATE.md together with Worker and exact-head release checks. This is not an overall release HOLD or a new requirement to certify unbounded whole-account capacity.",
   "releaseEligibilityUnderStrictProfitImprovement": false,
-  "deploymentConclusion": "Engineering improvement must not be substituted for the user's profitability-improvement condition. Net-profit / drawdown superiority remains unverified.",
+  "deploymentConclusion": "The user asked for a demonstrably better version, not an explicit guarantee of higher net profit. This script provides same-input correctness and normal-path evidence; separate resource and Worker validation feed the main task's finite release gate. If strictly higher net profit or lower drawdown is required, current evidence is insufficient. This script does not independently authorize deployment.",
   "dataAudit": [
     {
       "file": "forward-research-snapshot-2026-09-19.json",

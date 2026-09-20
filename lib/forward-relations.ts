@@ -255,7 +255,11 @@ function manage(s:ForwardState,quotes:Record<string,Quote>,now:number,turn:Marke
   let remainingThreatenedRisk=threatened?remaining.filter(t=>t.side===threatened.threatenedSide).reduce((n,t)=>n+t.plannedRisk,0):0;
   const targetThreatenedRisk=threatened?Math.max(0,marked.equity*MARKET_TURN_TARGET_DIRECTION_RISK_RATE):0;
   const cuts=new Set<string>(),stateCuts=new Set<string>();
-  if(threatened&&remainingThreatenedRisk>targetThreatenedRisk){
+  // Portfolio cuts require a fresh valuation of the WHOLE remaining account.
+  // A stale lastPrice is useful display fallback, not authority to liquidate a
+  // different fresh position. Holding extra portfolio risk until valuation
+  // recovers is deliberate; each fresh position's own exits still run below.
+  if(marked.stalePositions===0&&threatened&&remainingThreatenedRisk>targetThreatenedRisk){
     const vulnerable=remaining.filter(t=>t.side===threatened.threatenedSide).flatMap(t=>{
       const row=observed.get(t.id);if(!row)return[];const{r}=row;
       // Preserve already-armed winners; they keep their original giveback protection.
@@ -275,7 +279,7 @@ function manage(s:ForwardState,quotes:Record<string,Quote>,now:number,turn:Marke
     &&marketState.observedAt<=now&&now-marketState.observedAt<=BAR_MS?marketState:null;
   const observedForecast=turnForecast?.fresh&&turnForecast.observedAt<=now&&now-turnForecast.observedAt<=BAR_MS
     &&(turnForecast.phase==="PULLBACK"||turnForecast.phase==="REVERSAL_RISK")?turnForecast:null;
-  if((observedState&&(observedState.mode==="TRANSITION"||observedState.mode==="NEUTRAL"))||observedForecast){
+  if(marked.stalePositions===0&&((observedState&&(observedState.mode==="TRANSITION"||observedState.mode==="NEUTRAL"))||observedForecast)){
     const budget=marketRiskBudget(observedState,marked.equity,s.peakEquity,observedForecast);
     const afterTurn=remaining.filter(t=>!cuts.has(t.id));
     let longRisk=afterTurn.filter(t=>t.side==="LONG").reduce((n,t)=>n+t.plannedRisk,0);

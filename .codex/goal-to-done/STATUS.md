@@ -1,4 +1,12 @@
-# 2026-09-20 comparative repair — HOLD, NOT DEPLOYED
+# 2026-09-20 continuation — local gates passed; remote release pending
+
+The concrete intermediate blockers below are repaired: peaks cannot consume financial exit rows; HORIZON account highs/maxDrawdown survive restart; early post-restart callbacks do not delay the next valid10s slot. Compact financial records reduce each of6 measured real/padded full commits by2 rows with identical archives. Actual Worker no-fill24h turnover test writes288 vs old1440 (same1440 reads). Shared in-flight financial reservations cover primary/member checkpoints, forward full commits, turnover, settlement and other previously counted writes, including failure and UTC boundaries.
+
+Latest local validation:728/728 direct tests; npm test including equity/member/LIVE, build and18 architecture/migration tests passed. Typecheck passed; lint0 errors/3 pre-existing warnings. Same-input comparison21/21; storage probe6/6; local SQLite/workerd typed-array/atomic rollback/legacy round-trip passed. Independent strategy/LIVE review found no new blocker; independent resource review passed its10 concurrency tests. Only the approved forward/helper baselines and advanceForwardNow/saveCheckpoint hashes advance; eight other frozen primary bodies remain unchanged. Final dry-run, remote exact-head CI, reviewed-main deployment and public receipt still required before claiming deployed.
+
+Public pre-release read observed401768c, same forward startedAt1789556791436,437resolved/8open, storage error null, owner requestedEnabled=false (5existing managed holdings continue). This differs from the earlier ON snapshot; its cause is not established by public metadata, and our work has made no switch/API changes. Preserve the latest pre-release intent and re-read before release. Resource diagnostics disclose63,032 primary /99,192 two-member reserved row model, not55k or unbounded free capacity. Profitability remains unverified. Rollback must retain compatible compact reader or first losslessly restore/rewrite legacy, never delete history.
+
+# 2026-09-20 comparative repair — HOLD, NOT DEPLOYED (historical intermediate candidate)
 
 Baseline production: 401768ccd5ea75da6bf55b2855433aba2df5d1a5. Candidate branch: audit/20260920-correctness-hold-401768c. No main merge/deploy; owner LIVE intent was not changed, and no private Gate test occurred. Implemented forecast/data/duplicate-exit/compact-protection/actual-LIVE-risk/health corrections. Source discovery, size geometry, financial records, credentials and membership capacity remain unchanged.
 

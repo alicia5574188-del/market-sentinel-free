@@ -21,8 +21,10 @@ test("runtime uses bounded futures REST snapshots, no continuous WebSocket", asy
   assert.match(gate, /\/futures\/usdt\/candlesticks/);
   assert.doesNotMatch(worker + gate, /new WebSocket|futures\.order_book_update/);
   assert.match(worker, /MAX_ANCILLARY_CONCURRENCY = 2/);
-  assert.match(worker, /plannedTotalDoRequestsPerDay: 50_400/);
-  assert.match(worker, /plannedDoWritesPerDay: 54_344/);
+  assert.match(worker, /plannedTotalDoRequestsPerDay: 53_280/);
+  assert.match(worker, /plannedDoWritesPerDay: PRIMARY_PLANNED_DO_ROWS/);
+  assert.match(worker, /twoMemberReservedDoRowsPerDay: TWO_MEMBER_PLANNED_DO_ROWS/);
+  assert.match(worker, /capacityCertified: false/);
   assert.match(worker, /NON_ALARM_WRITE_CAP = 8_000/);
   assert.match(worker, /plannedMaxD1BilledWritesPerDay: 4_800/);
   assert.match(worker, /RADAR_MS = 60_000/);

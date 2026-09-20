@@ -105,15 +105,18 @@ export function memberExecutionClass(Base:typeof MarketStream) {
         else {journal.set(`member-program-tag:${tag}`,true);newTags.push(tag);}
       }
       const writes=1+journal.size;
-      if(this.runtime.nonAlarmWrites+writes>8000)throw new Error("会员写入预算不足，保留保护并等待核对");
-      const bytes=await gzip(new TextEncoder().encode(JSON.stringify({version:MEMBERS_VERSION,id:this.identity.id,live:this.runtime.live,
-        utcDay:this.runtime.utcDay,nonAlarmWrites:this.runtime.nonAlarmWrites+writes})));
-      if(bytes.length>112*1024)throw new Error("会员检查点超过预算，拒绝丢弃已有仓位");
-      const sha=await digestMember([...bytes].join(","));
-      await this.ctx.storage.transaction(async tx=>{await tx.put({[CHECKPOINT]:{bytes,sha},...Object.fromEntries(journal)});});
-      for(const[k,v]of journal)if(this.liveJournal.get(k)===v)this.liveJournal.delete(k);
-      for(const tag of newTags)this.knownProgramTags.add(tag);
-      this.runtime.nonAlarmWrites+=writes;this.runtime.lastHeartbeatAt=now;
+      const reservation=this.reserveNonAlarmWrites(writes);
+      if(!reservation)throw new Error("会员写入预算不足，保留保护并等待核对");
+      try {
+        const bytes=await gzip(new TextEncoder().encode(JSON.stringify({version:MEMBERS_VERSION,id:this.identity.id,live:this.runtime.live,
+          utcDay:this.runtime.utcDay,nonAlarmWrites:this.runtime.nonAlarmWrites+this.nonAlarmPendingWrites})));
+        if(bytes.length>112*1024)throw new Error("会员检查点超过预算，拒绝丢弃已有仓位");
+        const sha=await digestMember([...bytes].join(","));
+        await this.ctx.storage.transaction(async tx=>{await tx.put({[CHECKPOINT]:{bytes,sha},...Object.fromEntries(journal)});});
+        for(const[k,v]of journal)if(this.liveJournal.get(k)===v)this.liveJournal.delete(k);
+        for(const tag of newTags)this.knownProgramTags.add(tag);
+        reservation.finish(true);this.runtime.lastHeartbeatAt=now;
+      } finally {reservation.finish(false);}
     }
     private async directory(path:string,body?:unknown) {
       if(!this.env.MEMBERS||!this.identity)throw new Error("会员服务尚未就绪");
@@ -141,7 +144,10 @@ export function memberExecutionClass(Base:typeof MarketStream) {
               if(binding)close=(await this.directory("/source-close",{id,openedAt:binding.sourceAtCopy.openedAt})).trade as typeof close;
             }
             if(close&&!this.mirrorClosures.has(id)) {
-              await this.ctx.storage.put(`${LIVE_PARITY_PREFIX}source-close:${id}`,close);this.runtime.nonAlarmWrites++;
+              const reservation=this.reserveNonAlarmWrites(1);
+              if(!reservation)throw new Error("会员源单退出保存预算不足，保留保护并等待核对");
+              try {await this.ctx.storage.put(`${LIVE_PARITY_PREFIX}source-close:${id}`,close);reservation.finish(true);}
+              finally {reservation.finish(false);}
               this.mirrorClosures.set(id,structuredClone(close));
             }
           }

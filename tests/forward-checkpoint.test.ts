@@ -6,6 +6,7 @@ import { newExitControl, TIMELY_PROTECTION_POLICY } from "../lib/forward-protect
 import { buildForwardProtectionCheckpoint, forwardProtectionChanged } from "../lib/forward-protection-checkpoint.ts";
 import { FORWARD_PROTECTION_STORAGE, FORWARD_STORAGE, prepareForwardProtectionWrite,
   prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
+import { nextProtectionWriteBudget, PROTECTION_WRITE_CAP, type ProtectionWriteBudget } from "../lib/forward-write-budget.ts";
 register("./worker-test-loader.mjs",import.meta.url);
 const { MarketStream }=await import("../worker/index-clean.ts");
 const T=1_790_100_000_000;
@@ -34,6 +35,7 @@ function step(state:ForwardState,offset:number,price:number){
 }
 class Memory {
   data=new Map<string,unknown>();writes:string[][]=[];fail=false;
+  queue:Promise<unknown>=Promise.resolve();
   async get<V>(key:string){return structuredClone(this.data.get(key)) as V|undefined;}
   async put(entries:Record<string,unknown>){
     if(this.fail)throw new Error("injected storage failure");
@@ -41,7 +43,10 @@ class Memory {
     for(const[k,v]of Object.entries(entries))this.data.set(k,structuredClone(v));
   }
   async transaction<V>(fn:(db:Memory)=>Promise<V>){
-    const old=structuredClone(this.data);try{return await fn(this);}catch(error){this.data=old;throw error;}
+    const job=this.queue.then(async()=>{
+      const old=structuredClone(this.data);try{return await fn(this);}catch(error){this.data=old;throw error;}
+    });
+    this.queue=job.catch(()=>{});return job;
   }
 }
 async function base(){
@@ -51,6 +56,7 @@ async function base(){
   store.writes=[];return{state,store};
 }
 type Harness={forwardState:ForwardState;forwardError:string|null;forwardBusy:boolean;forwardLastAttemptAt:number;
+  forwardProtectionBudget:ProtectionWriteBudget|null;
   forwardCompression:unknown;runtime:{nonAlarmWrites:number;live:{entries:Record<string,never>;positions:Record<string,never>}};
   ctx:{storage:Memory};strategyCandles:Record<string,never>;mirrorClosures:Map<string,Trade>;
   regimeQuotes(now:number):Record<string,Quote>;regimeContracts():Record<string,never>;advanceForwardNow(now:number):Promise<void>};
@@ -59,7 +65,7 @@ function harness(state:ForwardState,store:Memory,price=104){
   // host services or making Gate/D1/network requests.
   const h=Object.create(MarketStream.prototype) as Harness;
   Object.assign(h,{forwardState:structuredClone(state),forwardError:null,forwardBusy:false,forwardLastAttemptAt:0,
-    forwardCompression:null,ctx:{storage:store},strategyCandles:{},mirrorClosures:new Map(),
+    forwardCompression:null,forwardProtectionBudget:null,ctx:{storage:store},strategyCandles:{},mirrorClosures:new Map(),
     runtime:{nonAlarmWrites:0,live:{entries:{},positions:{}}},
     regimeQuotes:(now:number)=>quote(now,price),regimeContracts:()=>({})});
   return h;
@@ -122,9 +128,11 @@ test("overlay storage read errors do not silently fall back to forgotten protect
   }},T+120_000),/overlay read failed/);
 });
 test("ordinary quote/audit movements alone request no compact persistence",async()=>{
-  const{state}=await base(),audit=step(state,110_000,101.9);
+  const{state}=await base();state.peakEquity=1100;state.maxDrawdown=.1;
+  const audit=step(state,110_000,101.9);
   assert.equal(audit.changed,false);assert.equal(audit.protectionChanged,false);
-  const below=account(),n=step(below,110_000,100.5).state;
+  const below=account();below.peakEquity=1100;below.maxDrawdown=.1;
+  const n=step(below,110_000,100.5).state;
   assert.equal(forwardProtectionChanged(below,n),false);
 });
 test("only actual completed-bar confirmation changes request protection persistence",async()=>{
@@ -139,7 +147,9 @@ test("actual Worker writes exactly one compact key and publishes only after comm
     assert.deepEqual(h.forwardState,original);await put(entries);
   };
   await h.advanceForwardNow(T+110_000);
-  assert.equal(h.forwardError,null);assert.equal(h.runtime.nonAlarmWrites,1);
+  assert.equal(h.forwardError,null);assert.equal(h.runtime.nonAlarmWrites,0);
+  assert.equal(h.forwardProtectionBudget?.writes,1);
+  assert.equal((await store.get<{writeBudget:ProtectionWriteBudget}>(FORWARD_PROTECTION_STORAGE))?.writeBudget.writes,1);
   assert.deepEqual(store.writes,[[FORWARD_PROTECTION_STORAGE]]);
   assert.ok(h.forwardState.positions[0].favorable>state.positions[0].favorable);
   assert.equal(h.forwardState.storage.persistedAt,state.storage.persistedAt);
@@ -153,43 +163,97 @@ test("actual Worker failed checkpoint write retains authority and records a visi
   assert.equal(h.runtime.nonAlarmWrites,0);assert.equal(h.forwardBusy,false);
   assert.equal(store.data.has(FORWARD_PROTECTION_STORAGE),false);
 });
-test("actual Worker obeys unchanged 8000 cap and 64-write reserve, including critical peaks",async()=>{
+test("actual Worker critical peaks cannot consume the unchanged financial cap or exit reserve",async()=>{
   const{state,store}=await base(),h=harness(state,store);h.runtime.nonAlarmWrites=7936;
   await h.advanceForwardNow(T+110_000);
-  assert.match(h.forwardError!,/保护写入预算不足/);assert.deepEqual(h.forwardState,state);
-  assert.equal(h.runtime.nonAlarmWrites,7936);assert.equal(store.writes.length,0);
-  h.runtime.nonAlarmWrites=7935;await h.advanceForwardNow(T+120_000);
   assert.equal(h.forwardError,null);assert.equal(h.runtime.nonAlarmWrites,7936);
   assert.deepEqual(store.writes,[[FORWARD_PROTECTION_STORAGE]]);
-  // This arithmetic is a LIMITATION, not a capacity claim: all 10s callbacks
-  // becoming new peaks would exceed the whole cap before other account work.
-  assert.ok(86_400_000/10_000>8000);
+  h.runtime.nonAlarmWrites=8000;h.regimeQuotes=now=>quote(now,105);
+  await h.advanceForwardNow(T+120_000);
+  assert.equal(h.forwardError,null);assert.equal(h.runtime.nonAlarmWrites,8000);
+  assert.equal(h.forwardProtectionBudget?.writes,2);
 });
-test("resource stress: a durable peak can consume the final headroom needed by a subsequent close",async t=>{
+test("resource stress: a durable peak preserves the final headroom for a subsequent close",async t=>{
   const{state,store}=await base(),peak=step(state,110_000,104).state;
   const closure=step(peak,120_000,103).state;closure.storage={persistedAt:T+120_000,error:null};
-  const closeWrite=await prepareForwardWrite(peak,closure,T+120_000);
+  const closeWrite=await prepareForwardWrite(peak,closure,T+120_000,{compact:true});
   const h=harness(state,store);h.runtime.nonAlarmWrites=8000-64-closeWrite.writes;
   // Without the intervening peak, this many full-close records exactly fits.
   assert.equal(h.runtime.nonAlarmWrites+closeWrite.writes+64,8000);
   await h.advanceForwardNow(T+110_000);assert.equal(h.forwardError,null);
   assert.equal(h.forwardState.positions.length,1);assert.equal(store.writes.length,1);
   h.regimeQuotes=now=>quote(now,103);await h.advanceForwardNow(T+120_000);
-  assert.match(h.forwardError!,/前向写入预算不足/);
-  assert.equal(h.forwardState.positions.length,1);assert.equal(h.forwardState.history.length,0);
-  assert.equal(store.writes.length,1); // No uncommitted close or archive is published.
-  const metrics={scenario:"forward-protection-write-budget",releaseReady:false,
+  assert.equal(h.forwardError,null);
+  assert.equal(h.forwardState.positions.length,0);assert.equal(h.forwardState.history.length,1);
+  assert.equal(h.runtime.nonAlarmWrites,7936);
+  assert.equal(store.writes.length,2);
+  const restored=await readForwardStore(store,T+125_000);
+  assert.equal(restored.history[0].netPnl,h.forwardState.history[0].netPnl);
+  const metrics={scenario:"forward-protection-write-budget",criticalCheckpointNoLongerStarvesExit:true,
     dailyCap:8000,reserve:64,observedBaselineWrites:7773,observedRemainingUsable:8000-64-7773,
     callbackCadenceMs:10_000,callbacksPerDay:86_400_000/10_000,
     fullCyclesPerDay:86_400_000/300_000,
     worstAdditionalCheckpointWrites:86_400_000/10_000-86_400_000/300_000,
-    closeWrites:closeWrite.writes,peakWrites:1,failedClosePreservesAuthority:true};
+    closeWrites:closeWrite.writes,peakWrites:1,protectionCap:PROTECTION_WRITE_CAP};
   assert.equal(metrics.worstAdditionalCheckpointWrites,8352);
   assert.ok(metrics.worstAdditionalCheckpointWrites>metrics.dailyCap-metrics.reserve);
   t.diagnostic(JSON.stringify(metrics));
 });
+test("restart preserves lane counter and does not delay the next eligible ten-second slot",async()=>{
+  const{state,store}=await base(),h=harness(state,store);
+  await h.advanceForwardNow(T+110_000);
+  const restarted=harness(await readForwardStore(store,T+115_000),store,105);
+  await restarted.advanceForwardNow(T+115_000);
+  assert.equal(store.writes.length,1);
+  await restarted.advanceForwardNow(T+120_000);
+  assert.equal(restarted.forwardError,null);assert.equal(store.writes.length,2);
+  assert.equal(restarted.forwardProtectionBudget?.writes,2);
+});
+test("a financial full commit leaves the protection counter durable across generation change",async()=>{
+  const{state,store}=await base(),h=harness(state,store);
+  await h.advanceForwardNow(T+110_000);
+  const next=structuredClone(h.forwardState);next.revision++;next.storage.persistedAt=T+115_000;
+  await store.put((await prepareForwardWrite(h.forwardState,next,T+115_000,{compact:true})).entries);
+  const restored=await readForwardStore(store,T+116_000);
+  assert.equal(restored.revision,next.revision);
+  const restarted=harness(restored,store,105);await restarted.advanceForwardNow(T+120_000);
+  assert.equal(restarted.forwardError,null);assert.equal(restarted.forwardProtectionBudget?.writes,2);
+});
+test("a full financial exit bypasses exhausted or corrupt protection-only resource metadata",async()=>{
+  for(const corrupt of [false,true]){
+    const{state,store}=await base(),peak=step(state,110_000,104).state;
+    const write=prepareForwardProtectionWrite(peak);
+    const writeBudget={...nextProtectionWriteBudget(null,T+110_000),writes:corrupt?-1:PROTECTION_WRITE_CAP};
+    await store.put({[FORWARD_PROTECTION_STORAGE]:{...write.entries[FORWARD_PROTECTION_STORAGE],writeBudget}});
+    const h=harness(await readForwardStore(store,T+115_000),store,103);
+    await h.advanceForwardNow(T+120_000);
+    assert.equal(h.forwardError,null);assert.equal(h.forwardState.positions.length,0);
+    assert.equal(h.forwardState.history[0].exitAudit!.trigger,"PROFIT_GIVEBACK");
+  }
+});
+test("exhausted, corrupt and failed critical commits retain both financial and protection authority",async()=>{
+  for(const mode of ["full","corrupt","failed"]){
+    const{state,store}=await base(),peak=step(state,110_000,104).state;
+    const write=prepareForwardProtectionWrite(peak);
+    const writeBudget={...nextProtectionWriteBudget(null,T+110_000),writes:mode==="full"?PROTECTION_WRITE_CAP:mode==="corrupt"?-1:3};
+    await store.put({[FORWARD_PROTECTION_STORAGE]:{...write.entries[FORWARD_PROTECTION_STORAGE],writeBudget}});
+    const h=harness(await readForwardStore(store,T+115_000),store,105),old=structuredClone(h.forwardState);
+    const saved=structuredClone(store.data);store.fail=mode==="failed";
+    await h.advanceForwardNow(T+120_000);
+    assert.ok(h.forwardError);assert.deepEqual(h.forwardState,old);assert.deepEqual(store.data,saved);
+    assert.equal(h.runtime.nonAlarmWrites,0);
+  }
+});
+test("serialized competing critical transactions cannot reset the durable counter or double-commit a slot",async()=>{
+  const{state,store}=await base(),a=harness(state,store,104),b=harness(state,store,105);
+  await Promise.all([a.advanceForwardNow(T+110_000),b.advanceForwardNow(T+110_000)]);
+  assert.equal(store.writes.length,1);
+  assert.equal([a,b].filter(x=>x.forwardError===null).length,1);
+  assert.equal((await store.get<{writeBudget:ProtectionWriteBudget}>(FORWARD_PROTECTION_STORAGE))?.writeBudget.writes,1);
+});
 test("actual Worker does not write on ordinary noncritical quote updates",async()=>{
-  const{state,store}=await base(),h=harness(state,store,101.9);
+  const{state,store}=await base();state.peakEquity=1100;state.maxDrawdown=.1;
+  const h=harness(state,store,101.9);
   await h.advanceForwardNow(T+110_000);
   assert.equal(h.forwardError,null);assert.equal(store.writes.length,0);assert.equal(h.runtime.nonAlarmWrites,0);
 });

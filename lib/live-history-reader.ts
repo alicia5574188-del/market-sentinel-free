@@ -20,7 +20,7 @@ export class LiveHistoryReader<T extends SettlementPosition> {
     return this.view(current).pending>0;
   }
   launch(input:{storage:Reader;client:Client|null;current:readonly T[];now:number;
-    valid:()=>boolean;reserve:()=>boolean;committed:(writes:number)=>void;waitUntil:(work:Promise<void>)=>void}) {
+    valid:()=>boolean;reserve:()=>boolean;persist:(entries:Record<string,unknown>)=>Promise<void>;waitUntil:(work:Promise<void>)=>void}) {
 
     // No client after credential removal: do not return another account's cache.
     const client=input.client;
@@ -42,7 +42,7 @@ export class LiveHistoryReader<T extends SettlementPosition> {
     const task=this.refresh(input,client,identity).catch(()=>{this.error="历史结算暂不可用，保留已核对记录";});
     this.work=task;input.waitUntil(task.finally(()=>{if(this.work===task)this.work=null;}));
   }
-  private async refresh(input:{storage:Reader;current:readonly T[];now:number;valid:()=>boolean;reserve:()=>boolean;committed:(n:number)=>void},client:Client,identity:string) {
+  private async refresh(input:{storage:Reader;current:readonly T[];now:number;valid:()=>boolean;reserve:()=>boolean;persist:(entries:Record<string,unknown>)=>Promise<void>},client:Client,identity:string) {
     const hash=[...new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(identity)))].map(x=>x.toString(16).padStart(2,"0")).join("");
     const key=`live-history-settlement:v1:${hash}`;
     const persisted=await input.storage.get<{version:string;values:Record<string,Settlement>}>(key);
@@ -67,8 +67,7 @@ export class LiveHistoryReader<T extends SettlementPosition> {
     const kept=Object.fromEntries(history.flatMap(p=>values[p.id]?[[p.id,values[p.id]]]:[]));
     if(Object.keys(found).length){
       if(!input.reserve())throw new Error("No optional write reserve");
-      await input.storage.transaction(async tx=>{await tx.put({[key]:{version:SETTLEMENT_VERSION,values:kept}});});
-      input.committed(1);
+      await input.persist({[key]:{version:SETTLEMENT_VERSION,values:kept}});
       if(!input.valid())return;
     }
     this.values=kept;this.error=null;

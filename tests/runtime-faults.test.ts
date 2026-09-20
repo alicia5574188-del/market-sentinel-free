@@ -784,23 +784,25 @@ test("a full D1 outage for 24h has bounded retries and a bounded latest-state ou
   assert.equal(stream.runtime.d1Writes, 1_536, "closed rows also retain one detailed diagnostic record each");
 });
 
-test("24h Free-plan budget stays below every published daily cap", () => {
+test("24h primary reserved workload fits platform caps but is not a full-account capacity certificate", () => {
   const alarms = 86_400_000 / 2_000;
   const cronWatchdogs = 24 * 60;
-  const foreground = 86_400 / 15;
+  const foreground = 86_400 / 10;
   const nonAlarmWriteCap = 8_000;
   const watchdogWorstWrites = cronWatchdogs * 2;
-  const regimeHourlyPathWrites = 11 * 24;
+  const regimeHourlyPathWrites = 13 * 24;
+  const criticalProtectionWrites = 86_400 / 10;
   const doRequests = alarms + cronWatchdogs + foreground;
-  const doWrites = alarms + nonAlarmWriteCap + watchdogWorstWrites + regimeHourlyPathWrites;
+  const doWrites = alarms + nonAlarmWriteCap + watchdogWorstWrites + regimeHourlyPathWrites + criticalProtectionWrites;
   const gateBookRequests = alarms * 4;
   const universeCycles = 24 * 60 / 5;
   const ancillaryCycles = alarms - universeCycles;
   const gateRequests = gateBookRequests + universeCycles * 2 + ancillaryCycles * 2;
 
   assert.equal(alarms, 43_200);
-  assert.equal(doRequests, 50_400);
-  assert.equal(doWrites, 54_344);
+  assert.equal(doRequests, 53_280);
+  assert.equal(doWrites, 63_032);
+  assert.equal(doWrites+2*(8640+8000)+2880,99_192);
   assert.equal(gateRequests, 259_200);
   assert.ok(doRequests < 100_000);
   assert.ok(doWrites < 100_000);

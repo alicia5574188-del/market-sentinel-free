@@ -12,11 +12,15 @@ export type ForwardProtectionCheckpoint = {
   peakEquity: number; maxDrawdown: number; positions: ProtectionRow[];
 };
 
-/** Quote timestamps/audit extrema alone do not request another write. A new
- * armed trail peak or completed-bar confirmation can change the next exit and
- * therefore must survive restart before the in-memory result is published.
+/** Quote timestamps/audit extrema alone do not request another write. Account
+ * equity peaks affect portfolio risk budgets for EVERY exit mode; historical
+ * maximum drawdown must also survive restart. Save actual new extrema without
+ * time throttling or rounding, alongside trail peaks/bar confirmations that can
+ * change the next exit, before publishing the in-memory result.
  */
 export function forwardProtectionChanged(previous: ForwardState, next: ForwardState) {
+  if ((Number.isFinite(next.peakEquity) && next.peakEquity > previous.peakEquity)
+    || (Number.isFinite(next.maxDrawdown) && next.maxDrawdown > previous.maxDrawdown)) return true;
   const prior = new Map(previous.positions.map(t => [t.id, t]));
   return next.positions.some(t => {
     const p = prior.get(t.id);

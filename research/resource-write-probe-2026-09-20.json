@@ -1,0 +1,485 @@
+{
+  "schema": "resource-write-probe-v1",
+  "sourceScope": "Three real exported summaries and measurements; missing state listed, padded stress is synthetic, not actual production full-state byte count.",
+  "candidateSourceHashes": {
+    "lib/forward-store.ts": "9079dbf2501ff0456962a2cbe4828ba195aee033e98149fa7512f63644e6330a",
+    "lib/forward-write-budget.ts": "642ee520a35dcfc549cf3bfd089895aa2e32830a4e5c2af22138d3dc635ddc49",
+    "lib/forward-protection-checkpoint.ts": "ce644d3122874b2c799c0bac31cb90006e03f72d3063fb1e4861b7a670daf476",
+    "lib/storage-codec.ts": "c1f2b3d7a0070c9dfb10786a647c390adfe8ce1b634793dfa649451f9ef31190",
+    "lib/live-turnover.ts": "0585868efee92c6c969666e0c25cb978c335a8c1067920154604d3061c8624e4",
+    "worker/index-clean.ts": "f11df337e65d98f53e2f9cfbbad4f0b543a8c06a915eba9593a76efde89f540e",
+    "worker/member-executor.ts": "d1d6716c21669e695452e2f5cca50607b51e6698c886198f54ae5517df98a48c"
+  },
+  "declaredRowWorkloadModel": {
+    "primaryRowsPerDay": 63032,
+    "primaryPlusTwoMembersRowsPerDay": 99192,
+    "independentProtectionCap": 8640,
+    "modelIsNotWholeAccount24HourCapacityCertification": true,
+    "requestsAndDurationVerifiedByThisProbe": false
+  },
+  "implementationStatus": "This probe does not edit production. Compares legacy prepareForwardWrite default with actual candidate {compact:true}; separate whole-state-inline arithmetic is a rejected alternative.",
+  "result": [
+    {
+      "file": "forward-research-snapshot-2026-09-19.json",
+      "label": "available_export_fields_only_lower_bound",
+      "unavailableExportStateFields": [
+        "lastQuoteCycleAt",
+        "peakEquity",
+        "frames",
+        "pending",
+        "lastBars",
+        "lastEntryBars",
+        "feedback",
+        "relationEntries",
+        "selectedSymbols"
+      ],
+      "historyRows": 80,
+      "events": 80,
+      "frames": 0,
+      "pending": 0,
+      "compression": {
+        "encoding": "gzip",
+        "rawBytes": 912106,
+        "storedBytes": 196043,
+        "chunks": 3
+      },
+      "writes": 5,
+      "entrySizes": [
+        {
+          "kind": "chunk",
+          "bytes": 81920
+        },
+        {
+          "kind": "chunk",
+          "bytes": 81920
+        },
+        {
+          "kind": "chunk",
+          "bytes": 32203
+        },
+        {
+          "kind": "head",
+          "bytes": 175
+        },
+        {
+          "kind": "archive",
+          "bytes": 34349
+        }
+      ],
+      "compact": {
+        "compression": {
+          "encoding": "gzip",
+          "rawBytes": 912106,
+          "storedBytes": 196043,
+          "chunks": 1,
+          "inlineHead": true,
+          "chunkBytes": 114688
+        },
+        "writes": 3,
+        "savedRows": 2,
+        "roundTripEqual": true,
+        "archiveKeysAndValuesUnchanged": true
+      },
+      "protectionOverlayRows": 1,
+      "protectionOverlayBytes": 4188,
+      "protectionOverlayWithBudgetBytes": 4308,
+      "hypotheticalLosslessInlineHead": {
+        "fits120KiB": false,
+        "writes": 5,
+        "savedRowsPerFullCommit": 0
+      },
+      "dailyAt288LearningCycles": {
+        "currentRows": 1440,
+        "compactRows": 864,
+        "inlineRows": 1440
+      }
+    },
+    {
+      "file": "forward-research-snapshot-2026-09-19.json",
+      "label": "synthetic_hot_history256_events256_frames_pending_padding",
+      "unavailableExportStateFields": [
+        "lastQuoteCycleAt",
+        "peakEquity",
+        "frames",
+        "pending",
+        "lastBars",
+        "lastEntryBars",
+        "feedback",
+        "relationEntries",
+        "selectedSymbols"
+      ],
+      "historyRows": 256,
+      "events": 256,
+      "frames": 30,
+      "pending": 90,
+      "compression": {
+        "encoding": "gzip",
+        "rawBytes": 1643441,
+        "storedBytes": 279475,
+        "chunks": 4
+      },
+      "writes": 6,
+      "entrySizes": [
+        {
+          "kind": "chunk",
+          "bytes": 81920
+        },
+        {
+          "kind": "chunk",
+          "bytes": 81920
+        },
+        {
+          "kind": "chunk",
+          "bytes": 81920
+        },
+        {
+          "kind": "chunk",
+          "bytes": 33715
+        },
+        {
+          "kind": "head",
+          "bytes": 176
+        },
+        {
+          "kind": "archive",
+          "bytes": 34349
+        }
+      ],
+      "compact": {
+        "compression": {
+          "encoding": "gzip",
+          "rawBytes": 1643441,
+          "storedBytes": 279475,
+          "chunks": 2,
+          "inlineHead": true,
+          "chunkBytes": 114688
+        },
+        "writes": 4,
+        "savedRows": 2,
+        "roundTripEqual": true,
+        "archiveKeysAndValuesUnchanged": true
+      },
+      "protectionOverlayRows": 1,
+      "protectionOverlayBytes": 4188,
+      "protectionOverlayWithBudgetBytes": 4308,
+      "hypotheticalLosslessInlineHead": {
+        "fits120KiB": false,
+        "writes": 6,
+        "savedRowsPerFullCommit": 0
+      },
+      "dailyAt288LearningCycles": {
+        "currentRows": 1728,
+        "compactRows": 1152,
+        "inlineRows": 1728
+      }
+    },
+    {
+      "file": "forward-research-snapshot-2026-09-20(1).json",
+      "label": "available_export_fields_only_lower_bound",
+      "unavailableExportStateFields": [
+        "lastQuoteCycleAt",
+        "peakEquity",
+        "frames",
+        "pending",
+        "lastBars",
+        "lastEntryBars",
+        "feedback",
+        "relationEntries",
+        "selectedSymbols"
+      ],
+      "historyRows": 80,
+      "events": 80,
+      "frames": 0,
+      "pending": 0,
+      "compression": {
+        "encoding": "gzip",
+        "rawBytes": 903397,
+        "storedBytes": 192384,
+        "chunks": 3
+      },
+      "writes": 5,
+      "entrySizes": [
+        {
+          "kind": "chunk",
+          "bytes": 81920
+        },
+        {
+          "kind": "chunk",
+          "bytes": 81920
+        },
+        {
+          "kind": "chunk",
+          "bytes": 28544
+        },
+        {
+          "kind": "head",
+          "bytes": 175
+        },
+        {
+          "kind": "archive",
+          "bytes": 19424
+        }
+      ],
+      "compact": {
+        "compression": {
+          "encoding": "gzip",
+          "rawBytes": 903397,
+          "storedBytes": 192384,
+          "chunks": 1,
+          "inlineHead": true,
+          "chunkBytes": 114688
+        },
+        "writes": 3,
+        "savedRows": 2,
+        "roundTripEqual": true,
+        "archiveKeysAndValuesUnchanged": true
+      },
+      "protectionOverlayRows": 1,
+      "protectionOverlayBytes": 2406,
+      "protectionOverlayWithBudgetBytes": 2526,
+      "hypotheticalLosslessInlineHead": {
+        "fits120KiB": false,
+        "writes": 5,
+        "savedRowsPerFullCommit": 0
+      },
+      "dailyAt288LearningCycles": {
+        "currentRows": 1440,
+        "compactRows": 864,
+        "inlineRows": 1440
+      }
+    },
+    {
+      "file": "forward-research-snapshot-2026-09-20(1).json",
+      "label": "synthetic_hot_history256_events256_frames_pending_padding",
+      "unavailableExportStateFields": [
+        "lastQuoteCycleAt",
+        "peakEquity",
+        "frames",
+        "pending",
+        "lastBars",
+        "lastEntryBars",
+        "feedback",
+        "relationEntries",
+        "selectedSymbols"
+      ],
+      "historyRows": 256,
+      "events": 256,
+      "frames": 30,
+      "pending": 90,
+      "compression": {
+        "encoding": "gzip",
+        "rawBytes": 1651921,
+        "storedBytes": 272936,
+        "chunks": 4
+      },
+      "writes": 6,
+      "entrySizes": [
+        {
+          "kind": "chunk",
+          "bytes": 81920
+        },
+        {
+          "kind": "chunk",
+          "bytes": 81920
+        },
+        {
+          "kind": "chunk",
+          "bytes": 81920
+        },
+        {
+          "kind": "chunk",
+          "bytes": 27176
+        },
+        {
+          "kind": "head",
+          "bytes": 176
+        },
+        {
+          "kind": "archive",
+          "bytes": 19424
+        }
+      ],
+      "compact": {
+        "compression": {
+          "encoding": "gzip",
+          "rawBytes": 1651921,
+          "storedBytes": 272936,
+          "chunks": 2,
+          "inlineHead": true,
+          "chunkBytes": 114688
+        },
+        "writes": 4,
+        "savedRows": 2,
+        "roundTripEqual": true,
+        "archiveKeysAndValuesUnchanged": true
+      },
+      "protectionOverlayRows": 1,
+      "protectionOverlayBytes": 2406,
+      "protectionOverlayWithBudgetBytes": 2526,
+      "hypotheticalLosslessInlineHead": {
+        "fits120KiB": false,
+        "writes": 6,
+        "savedRowsPerFullCommit": 0
+      },
+      "dailyAt288LearningCycles": {
+        "currentRows": 1728,
+        "compactRows": 1152,
+        "inlineRows": 1728
+      }
+    },
+    {
+      "file": "forward-research-snapshot-2026-09-20.json",
+      "label": "available_export_fields_only_lower_bound",
+      "unavailableExportStateFields": [
+        "lastQuoteCycleAt",
+        "peakEquity",
+        "frames",
+        "pending",
+        "lastBars",
+        "lastEntryBars",
+        "feedback",
+        "relationEntries",
+        "selectedSymbols"
+      ],
+      "historyRows": 80,
+      "events": 80,
+      "frames": 0,
+      "pending": 0,
+      "compression": {
+        "encoding": "gzip",
+        "rawBytes": 908444,
+        "storedBytes": 193436,
+        "chunks": 3
+      },
+      "writes": 5,
+      "entrySizes": [
+        {
+          "kind": "chunk",
+          "bytes": 81920
+        },
+        {
+          "kind": "chunk",
+          "bytes": 81920
+        },
+        {
+          "kind": "chunk",
+          "bytes": 29596
+        },
+        {
+          "kind": "head",
+          "bytes": 175
+        },
+        {
+          "kind": "archive",
+          "bytes": 27076
+        }
+      ],
+      "compact": {
+        "compression": {
+          "encoding": "gzip",
+          "rawBytes": 908444,
+          "storedBytes": 193436,
+          "chunks": 1,
+          "inlineHead": true,
+          "chunkBytes": 114688
+        },
+        "writes": 3,
+        "savedRows": 2,
+        "roundTripEqual": true,
+        "archiveKeysAndValuesUnchanged": true
+      },
+      "protectionOverlayRows": 1,
+      "protectionOverlayBytes": 3104,
+      "protectionOverlayWithBudgetBytes": 3224,
+      "hypotheticalLosslessInlineHead": {
+        "fits120KiB": false,
+        "writes": 5,
+        "savedRowsPerFullCommit": 0
+      },
+      "dailyAt288LearningCycles": {
+        "currentRows": 1440,
+        "compactRows": 864,
+        "inlineRows": 1440
+      }
+    },
+    {
+      "file": "forward-research-snapshot-2026-09-20.json",
+      "label": "synthetic_hot_history256_events256_frames_pending_padding",
+      "unavailableExportStateFields": [
+        "lastQuoteCycleAt",
+        "peakEquity",
+        "frames",
+        "pending",
+        "lastBars",
+        "lastEntryBars",
+        "feedback",
+        "relationEntries",
+        "selectedSymbols"
+      ],
+      "historyRows": 256,
+      "events": 256,
+      "frames": 30,
+      "pending": 90,
+      "compression": {
+        "encoding": "gzip",
+        "rawBytes": 1649576,
+        "storedBytes": 272599,
+        "chunks": 4
+      },
+      "writes": 6,
+      "entrySizes": [
+        {
+          "kind": "chunk",
+          "bytes": 81920
+        },
+        {
+          "kind": "chunk",
+          "bytes": 81920
+        },
+        {
+          "kind": "chunk",
+          "bytes": 81920
+        },
+        {
+          "kind": "chunk",
+          "bytes": 26839
+        },
+        {
+          "kind": "head",
+          "bytes": 176
+        },
+        {
+          "kind": "archive",
+          "bytes": 27076
+        }
+      ],
+      "compact": {
+        "compression": {
+          "encoding": "gzip",
+          "rawBytes": 1649576,
+          "storedBytes": 272599,
+          "chunks": 2,
+          "inlineHead": true,
+          "chunkBytes": 114688
+        },
+        "writes": 4,
+        "savedRows": 2,
+        "roundTripEqual": true,
+        "archiveKeysAndValuesUnchanged": true
+      },
+      "protectionOverlayRows": 1,
+      "protectionOverlayBytes": 3104,
+      "protectionOverlayWithBudgetBytes": 3224,
+      "hypotheticalLosslessInlineHead": {
+        "fits120KiB": false,
+        "writes": 6,
+        "savedRowsPerFullCommit": 0
+      },
+      "dailyAt288LearningCycles": {
+        "currentRows": 1728,
+        "compactRows": 1152,
+        "inlineRows": 1728
+      }
+    }
+  ]
+}

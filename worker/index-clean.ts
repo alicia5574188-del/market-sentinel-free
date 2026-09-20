@@ -37,7 +37,9 @@ import { advanceRegimePortfolio, evaluateRegimePortfolio, initialRegimePortfolio
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
 import { advanceForward, forwardSummary, forwardEquity, freshQuote, forwardWatchSymbols, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
-import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, FORWARD_STORAGE } from "../lib/forward-store.ts";
+import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE } from "../lib/forward-store.ts";
+import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBudgetView,
+  PRIMARY_PLANNED_DO_ROWS, TWO_MEMBER_PLANNED_DO_ROWS, type ProtectionWriteBudget } from "../lib/forward-write-budget.ts";
 import { EquityReader } from "../lib/equity-reader.ts";
 import { EQUITY_CURVE_VERSION } from "../lib/equity-curve.ts";
 import { resourceDay, rollResourceDay, RESOURCE_DAY_POLICY, type ResourceCounters } from "../lib/resource-day.ts";
@@ -474,6 +476,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   protected forwardError: string | null = null;
   private forwardBusy = false;
   private forwardLastAttemptAt = 0;
+  private forwardProtectionBudget: ProtectionWriteBudget | null = null;
   private forwardCompression: Awaited<ReturnType<typeof prepareForwardWrite>>["compression"] | null = null;
   private equityReader = new EquityReader();
   protected turnoverState: TurnoverState | null = null;
@@ -482,6 +485,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   protected turnoverAccountUser: string | null = null;
   protected turnoverWork: Promise<void> | null = null;
   protected turnoverAttemptAt = 0;
+  private turnoverPersisted: {accountKey:string;at:number} | null = null;
+  protected nonAlarmPendingWrites = 0;
   protected liveSyncWork: Promise<void> | null = null;
   protected liveJournal = new Map<string, unknown>();
   protected liveHistory: LivePosition[] = [];
@@ -503,8 +508,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const client=this.liveClient,current=this.liveSettlementCurrent();
     this.historyReader.launch({storage:this.ctx.storage,client,current,now:Date.now(),
       valid:()=>this.liveClient===client,
-      reserve:()=>this.runtime.nonAlarmWrites+256<NON_ALARM_WRITE_CAP,
-      committed:n=>{this.runtime.nonAlarmWrites+=n;},waitUntil:p=>this.ctx.waitUntil(p)});
+      reserve:()=>this.runtime.nonAlarmWrites+(this.nonAlarmPendingWrites??0)+256<NON_ALARM_WRITE_CAP,
+      persist:async entries=>{
+        const reservation=this.reserveNonAlarmWrites(Object.keys(entries).length,256);
+        if(!reservation)throw new Error("No optional write reserve");
+        try {await this.ctx.storage.transaction(async tx=>{await tx.put(entries);});reservation.finish(true);}
+        finally {reservation.finish(false);}
+      },waitUntil:p=>this.ctx.waitUntil(p)});
     return this.historyReader.view(current);
   }
   protected launchLiveSettlementBackground() {
@@ -597,7 +607,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           .filter((symbol) => (this.regimeHourly[symbol]?.length ?? 0) >= REGIME_HOURLY_REQUIRED_CANDLES).length;
       }
       this.resetDailyCounters(Date.now());
-      try { this.forwardState = await readForwardStore(ctx.storage, Date.now()); }
+      try {
+        this.forwardState = await readForwardStore(ctx.storage, Date.now());
+        const overlay=await ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
+        this.forwardProtectionBudget=readProtectionWriteBudget(overlay?.writeBudget);
+      }
       catch (error) { this.forwardError = safeError(error); }
       // Owner intent has its own durable record. Background checkpoints and
       // deployments cannot replace a later OFF with an earlier in-flight ON.
@@ -608,8 +622,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         // One-time rule migration: protect already-bound real positions, but do
         // not catch up any as-yet-unsubmitted position present at deployment.
         const activation=startLiveSession(Date.now(),this.forwardState,true);
-        await ctx.storage.put(`${LIVE_PARITY_PREFIX}owner-intent`,{enabled:true,changedAt:this.runtime.live.changedAt,activation});
-        this.runtime.live.activation=activation;this.runtime.nonAlarmWrites++;
+        const reservation=this.reserveNonAlarmWrites(1);
+        if(!reservation)throw new Error("实盘会话迁移写入预算不足");
+        try {await ctx.storage.put(`${LIVE_PARITY_PREFIX}owner-intent`,{enabled:true,changedAt:this.runtime.live.changedAt,activation});reservation.finish(true);}
+        finally {reservation.finish(false);}
+        this.runtime.live.activation=activation;
       }
       if(this.runtime.live.activation&&this.runtime.live.activation.version!==LIVE_SESSION_VERSION)
         this.liveBindingError="实盘开启会话版本不兼容，停止新增复制，不改写所有者开关";
@@ -698,6 +715,30 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (rollResourceDay(this.runtime,now)) {
       this.runtime.dailyStartEquity = markToMarketEquity(this.runtime);
     }
+  }
+
+  /** Synchronous admission before any storage await. Outstanding reservations
+   * survive UTC rollover in memory, so an old-day write cannot become free
+   * capacity while it is still pending. Completion is conservatively charged
+   * to the completion day. This is not a durable platform-quota ledger. */
+  protected reserveNonAlarmWrites(writes:number,headroom=0) {
+    if(!Number.isSafeInteger(writes)||writes<1||!Number.isSafeInteger(headroom)||headroom<0)
+      throw new Error("Invalid non-alarm write reservation");
+    const roll=()=>{
+      if(this.runtime.utcDay)this.resetDailyCounters(Date.now());
+      else this.runtime.utcDay=resourceDay(Date.now()); // isolated legacy/test state: retain its existing count
+    };
+    roll();this.nonAlarmPendingWrites??=0;
+    if(!Number.isFinite(this.runtime.nonAlarmWrites)||this.runtime.nonAlarmWrites<0
+      ||this.runtime.nonAlarmWrites+this.nonAlarmPendingWrites+writes+headroom>NON_ALARM_WRITE_CAP)return null;
+    this.nonAlarmPendingWrites+=writes;
+    let finished=false;
+    return {finish:(committed:boolean)=>{
+      if(finished)return;
+      roll();
+      if(committed)this.runtime.nonAlarmWrites+=writes;
+      this.nonAlarmPendingWrites-=writes;finished=true;
+    }};
   }
 
   private refreshUniverse(now: number, ranked: Awaited<ReturnType<typeof fetchActiveContracts>>) {
@@ -957,12 +998,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.forwardBusy = true;
     try {
       if (!this.forwardState) this.forwardState = await readForwardStore(this.ctx.storage, now);
+      // Restarts retain the existing ten-second source cadence. Otherwise a
+      // restart could create extra compact commits inside the daily bound.
+      if(now-this.forwardState.lastQuoteCycleAt<10_000){this.forwardLastAttemptAt=this.forwardState.lastQuoteCycleAt;return;}
       const previous = this.forwardState;
       const next = advanceForward({ state: previous, now, paths: this.strategyCandles,
         quotes: this.regimeQuotes(now), contracts: this.regimeContracts() });
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
-        const prepared = await prepareForwardWrite(previous.storage.persistedAt ? previous : null, next.state, now);
+        const prepared = await prepareForwardWrite(previous.storage.persistedAt ? previous : null, next.state, now, {compact:true});
         // Retain authoritative parent exits even when the hot PAPER history
         // rotates while Gate is unreachable. This is one write per bound exit,
         // in the same atomic commit, not a new strategy/account or per-tick log.
@@ -972,9 +1016,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         for(const t of closures)prepared.entries[`${LIVE_PARITY_PREFIX}source-close:${t.id}`]=structuredClone(t);
         prepared.writes+=closures.length;
         // All extra persistence consumes the existing non-alarm write reserve.
-        if (this.runtime.nonAlarmWrites + prepared.writes + 64 > NON_ALARM_WRITE_CAP) throw new Error("前向写入预算不足；保留原账户，不提交未持久化订单");
-        await this.ctx.storage.transaction(async transaction => { await transaction.put(prepared.entries); });
-        this.runtime.nonAlarmWrites += prepared.writes;
+        const reservation=this.reserveNonAlarmWrites(prepared.writes,64);
+        if(!reservation)throw new Error("前向写入预算不足；保留原账户，不提交未持久化订单");
+        try {await this.ctx.storage.transaction(async transaction => { await transaction.put(prepared.entries); });reservation.finish(true);}
+        finally {reservation.finish(false);}
         this.forwardCompression=prepared.compression;
         for(const t of closures)this.mirrorClosures.set(t.id,structuredClone(t));
       } else if (next.protectionChanged) {
@@ -983,10 +1028,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         // Keep the same base persistedAt: it fences this overlay to the last
         // full financial commit, which remains the sole account authority.
         const prepared=prepareForwardProtectionWrite(next.state);
-        if (this.runtime.nonAlarmWrites + prepared.writes + 64 > NON_ALARM_WRITE_CAP)
-          throw new Error("前向保护写入预算不足；保留原账户，不发布未持久化保护状态");
-        await this.ctx.storage.transaction(async transaction => { await transaction.put(prepared.entries); });
-        this.runtime.nonAlarmWrites += prepared.writes;
+        // Resource counters survive a new financial generation and process
+        // restart. They share the checkpoint key/atomic commit, NOT the exit
+        // budget. A peak can no longer steal the final financial commit rows.
+        const usage=await this.ctx.storage.transaction(async transaction => {
+          const saved=await transaction.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
+          const writeBudget=nextProtectionWriteBudget(saved?.writeBudget,now);
+          await transaction.put({[FORWARD_PROTECTION_STORAGE]:{
+            ...prepared.entries[FORWARD_PROTECTION_STORAGE],writeBudget}});
+          return writeBudget;
+        });
+        this.forwardProtectionBudget=usage;
       }
       // A PAPER fill/rule update or critical protection update becomes visible
       // only after its atomic commit. A failed write retains the old authority.
@@ -1426,27 +1478,47 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // Independent low-frequency read-only analytics. Its failure MUST NOT
     // block entry, protection, source close, or change requestedEnabled.
     const client=this.liveClient;if(!client||!this.forwardState)return;
-    const identity=`${client.credentials.environment}:${this.turnoverAccountUser??client.credentials.apiKey}`;
+    const accountUser=this.turnoverAccountUser;
+    const identity=`${client.credentials.environment}:${accountUser??client.credentials.apiKey}`;
     const hash=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(identity));
     const key=[...new Uint8Array(hash)].map(b=>b.toString(16).padStart(2,"0")).join("");
+    if(this.liveClient!==client||this.turnoverAccountUser!==accountUser)return;
     if(this.turnoverAccountKey!==key){
       this.turnoverState=null;this.turnoverError=null;
       const saved=await this.ctx.storage.get<TurnoverState>(`${LIVE_TURNOVER_PREFIX}${key}:summary`);
+      if(this.liveClient!==client||this.turnoverAccountUser!==accountUser)return;
       this.turnoverState=saved?validateTurnover(saved):initialTurnover(this.turnoverStartsAt(),now);
       this.turnoverAccountKey=key;
+      this.turnoverPersisted={accountKey:key,at:saved?.lastScanAt??0};
     }
+    // Constructor/member recovery already restored this account's durable
+    // summary. The wall clock belongs to that account, never another tenant.
+    if(this.turnoverPersisted?.accountKey!==key)
+      this.turnoverPersisted={accountKey:key,at:this.turnoverState?.lastScanAt??0};
     const previous=this.turnoverState!;const window=nextFillWindow(previous,now);if(!window)return;
     this.runtime.subrequestCount++;
     const rows=await this.turnoverRows(await client.confirmedFills(window.from,window.to,window.offset));
-    if(this.liveClient!==client)return; // credentials/account changed while reading
+    if(this.liveClient!==client||this.turnoverAccountUser!==accountUser||this.turnoverAccountKey!==key)return;
     const multipliers=Object.fromEntries([...this.contractCatalog].map(([symbol,m])=>[symbol,m.quantoMultiplier]));
     for(const [symbol,m]of Object.entries(this.runtime.contractMeta))multipliers[symbol]=m.quantoMultiplier;
     const prepared=await prepareTurnoverPage({state:previous,window,rows,accountKey:key,storage:this.ctx.storage,multipliers,now});
-    this.resetDailyCounters(Date.now());
-    if(this.runtime.nonAlarmWrites+prepared.writes+256>NON_ALARM_WRITE_CAP)throw new Error("成交额保存等待资源预算，已核对金额保留；交易保护优先");
-    await this.ctx.storage.transaction(async tx=>{await tx.put(prepared.entries);});
-    this.runtime.nonAlarmWrites+=prepared.writes;
-    if(this.liveClient===client&&this.turnoverAccountKey===key){this.turnoverState=prepared.state;this.turnoverError=null;this.runtime.live.turnoverAccountKey=key;}
+    if(this.liveClient!==client||this.turnoverAccountUser!==accountUser||this.turnoverAccountKey!==key||this.turnoverState!==previous)return;
+    // Only an unchanged-money, non-paginated scan may advance in memory. Every
+    // new fill/dedupe bucket and every pending-page transition remains atomic
+    // and immediate. A restart merely rescans the last <=5min of read attempts;
+    // already-persisted fill IDs still dedupe, with no invented/lost turnover.
+    const persist=prepared.newFills>0||prepared.writes>1||previous.pending!==null||prepared.state.pending!==null
+      ||!this.turnoverPersisted.at||now-this.turnoverPersisted.at>=300_000;
+    if(persist){
+      const reservation=this.reserveNonAlarmWrites(prepared.writes,256);
+      if(!reservation)throw new Error("成交额保存等待资源预算，已核对金额保留；交易保护优先");
+      try {await this.ctx.storage.transaction(async tx=>{await tx.put(prepared.entries);});reservation.finish(true);}
+      finally {reservation.finish(false);}
+    }
+    if(this.liveClient===client&&this.turnoverAccountUser===accountUser&&this.turnoverAccountKey===key){
+      if(persist)this.turnoverPersisted={accountKey:key,at:now};
+      this.turnoverState=prepared.state;this.turnoverError=null;this.runtime.live.turnoverAccountKey=key;
+    }
   }
 
   protected activeLivePositions() {
@@ -1671,11 +1743,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       :establishLiveScale(activation,sourceEquity,liveEquity,now,this.liveSessionSeedRatio()??undefined);
     if(scaled===activation)return activation;
     const prior=activation.scaleRatio??null;
+    const reservation=this.reserveNonAlarmWrites(1);
+    if(!reservation)throw new Error("实盘比例保存预算不足，保留原比例");
     this.runtime.live.activation=scaled;
-    await this.ctx.storage.put(`${LIVE_PARITY_PREFIX}owner-intent`,{
-      enabled:this.runtime.live.requestedEnabled,changedAt:this.runtime.live.changedAt,activation:scaled,
-    });
-    this.runtime.nonAlarmWrites++;
+    try {
+      await this.ctx.storage.put(`${LIVE_PARITY_PREFIX}owner-intent`,{
+        enabled:this.runtime.live.requestedEnabled,changedAt:this.runtime.live.changedAt,activation:scaled,
+      });
+      reservation.finish(true);
+    } finally {reservation.finish(false);}
     if(prior&&scaled.scaleRatio!==prior)this.recordLiveAudit({observedAt:now,symbol:null,planId:null,stage:"LIVE_CONTROL",level:"INFO",
       reason:`检测到旧复制比例与当前实盘资本基准明显不一致；仅将以后新源单比例从 ${prior.toFixed(6)} 重建为 ${scaled.scaleRatio!.toFixed(6)}，已有实盘仓位不补仓不改仓`});
     await this.saveCheckpoint(now,true);
@@ -2794,26 +2870,29 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const openCount = Object.values(this.runtime.positions).filter((position) => position?.status === "OPEN").length;
     const journal=new Map(this.liveJournal);
     const writes=1+journal.size;
-    if (this.runtime.nonAlarmWrites + writes + openCount > NON_ALARM_WRITE_CAP) {
+    const reservation=this.reserveNonAlarmWrites(writes,openCount);
+    if (!reservation) {
       if (force) throw new Error("Durable Object non-alarm write reserve reached");
       return;
     }
-    // Full immutable source snapshots live outside the bounded hot checkpoint.
-    // A binding and its entry reservation commit atomically BEFORE a Gate call.
-    const compact=<T extends {parity?:MirrorReceipt}>(value:T|null)=>{
-      if(!value)return value;
-      const {parity,...rest}=value;void parity;return rest;
-    };
-    const checkpoint = { ...this.runtime, live:{...this.runtime.live,
-      entries:Object.fromEntries(Object.entries(this.runtime.live.entries).map(([k,e])=>[k,compact(e)])),
-      positions:Object.fromEntries(Object.entries(this.runtime.live.positions).map(([k,p])=>[k,compact(p)]))},
-      analysisMs: [], nonAlarmWrites: this.runtime.nonAlarmWrites + writes, lastHeartbeatAt: now };
-    await this.ctx.storage.transaction(async transaction=>{
-      await transaction.put({checkpoint,...Object.fromEntries(journal)});
-    });
-    for(const[key,value]of journal)if(this.liveJournal.get(key)===value)this.liveJournal.delete(key);
-    this.runtime.nonAlarmWrites += writes;
-    this.runtime.lastHeartbeatAt = now;
+    try {
+      // Full immutable source snapshots live outside the bounded hot checkpoint.
+      // A binding and its entry reservation commit atomically BEFORE a Gate call.
+      const compact=<T extends {parity?:MirrorReceipt}>(value:T|null)=>{
+        if(!value)return value;
+        const {parity,...rest}=value;void parity;return rest;
+      };
+      const checkpoint = { ...this.runtime, live:{...this.runtime.live,
+        entries:Object.fromEntries(Object.entries(this.runtime.live.entries).map(([k,e])=>[k,compact(e)])),
+        positions:Object.fromEntries(Object.entries(this.runtime.live.positions).map(([k,p])=>[k,compact(p)]))},
+        analysisMs: [], nonAlarmWrites: this.runtime.nonAlarmWrites + this.nonAlarmPendingWrites, lastHeartbeatAt: now };
+      await this.ctx.storage.transaction(async transaction=>{
+        await transaction.put({checkpoint,...Object.fromEntries(journal)});
+      });
+      for(const[key,value]of journal)if(this.liveJournal.get(key)===value)this.liveJournal.delete(key);
+      reservation.finish(true);
+      this.runtime.lastHeartbeatAt = now;
+    } finally {reservation.finish(false);}
   }
 
   private publishCriticalHealth(observedAt: number, books: { successes: number; requests: number }) {
@@ -3043,7 +3122,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         liveMirror: {...this.liveMirrorView(),rows:undefined},
         liveTurnover:this.turnoverStatus(),
         resourceAccounting:{policy:RESOURCE_DAY_POLICY,day:this.runtime.utcDay,nonAlarmWrites:this.runtime.nonAlarmWrites,
-          cap:NON_ALARM_WRITE_CAP,previous:this.runtime.resourceRollovers?.at(-1)??null,forwardCompression:this.forwardCompression},
+          cap:NON_ALARM_WRITE_CAP,pendingWrites:this.nonAlarmPendingWrites??0,
+          criticalProtection:protectionWriteBudgetView(this.forwardProtectionBudget,Date.now()),
+          previous:this.runtime.resourceRollovers?.at(-1)??null,forwardCompression:this.forwardCompression},
         forward: this.forwardHealth(),
         legacyRetired: true,
         mode: this.runtime.mode,
@@ -3151,8 +3232,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           scannedMarkets: this.runtime.radar.scanned,
           scanUniverse: SCAN_UNIVERSE_SIZE,
           realtimeCapacity: PORTFOLIO_REALTIME_CAPACITY,
-          plannedDoWritesPerDay: 54_344,
-          plannedTotalDoRequestsPerDay: 50_400,
+          plannedDoWritesPerDay: PRIMARY_PLANNED_DO_ROWS,
+          twoMemberReservedDoRowsPerDay: TWO_MEMBER_PLANNED_DO_ROWS,
+          resourceModelScope:"reserved rows; retries, controls, other workloads, request traffic and duration not certified",
+          capacityCertified: false,
+          plannedTotalDoRequestsPerDay: 53_280,
           plannedMaxD1BilledWritesPerDay: 4_800,
         },
       });
@@ -3198,9 +3282,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           maxAncillaryConcurrency: MAX_ANCILLARY_CONCURRENCY, maxSubrequestsPerAlarm: 32, plannedAlarmRequestsPerDay: 43_200,
           plannedAlarmWritesPerDay: 43_200, watchdogWriteReservePerDay: WATCHDOG_WRITE_RESERVE,
           nonAlarmWriteCapPerDay: NON_ALARM_WRITE_CAP, nonAlarmWritesToday: this.runtime.nonAlarmWrites,
-          plannedDoWritesPerDay: 54_344,
-          internalAnalysisP99RedlineMs: 25, topLevelCpuP99RedlineMs: 8, assumedRuntimePollSeconds: 15,
-          plannedForegroundDoRequestsPerDay: 5_760, plannedCronWatchdogsPerDay: 1_440, plannedTotalDoRequestsPerDay: 50_400,
+          criticalProtection:protectionWriteBudgetView(this.forwardProtectionBudget,Date.now()),
+          plannedDoWritesPerDay: PRIMARY_PLANNED_DO_ROWS,
+          twoMemberReservedDoRowsPerDay: TWO_MEMBER_PLANNED_DO_ROWS,
+          resourceModelScope:"reserved rows; retries, controls, other workloads, request traffic and duration not certified",
+          capacityCertified: false,
+          internalAnalysisP99RedlineMs: 25, topLevelCpuP99RedlineMs: 8, assumedRuntimePollSeconds: 10,
+          plannedForegroundDoRequestsPerDay: 8_640, plannedCronWatchdogsPerDay: 1_440, plannedTotalDoRequestsPerDay: 53_280,
           maxOpenPositions: null, realtimeCapacity: PORTFOLIO_REALTIME_CAPACITY, plannedMaxD1BilledWritesPerDay: 4_800 } });
     }
     if (path === "/live-history" && request.method === "GET") return json(await this.privateLiveHistory());

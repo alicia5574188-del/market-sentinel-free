@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { advanceForward, initialForward, type ForwardState, type Trade } from "../lib/forward-relations.ts";
+import { advanceForward, initialForward, forwardEquity, PAPER_COST, type ForwardState, type Trade } from "../lib/forward-relations.ts";
 import { newExitControl } from "../lib/forward-protection.ts";
-import { updateMarketState, updateTurnForecast } from "../lib/forward-market-state.ts";
+import { marketRiskBudget, updateMarketState, updateTurnForecast } from "../lib/forward-market-state.ts";
 import { type MarketTurnProtection } from "../lib/forward-turn-protection.ts";
 import { buildForwardProtectionCheckpoint, restoreForwardProtectionCheckpoint, forwardProtectionChanged } from "../lib/forward-protection-checkpoint.ts";
 
@@ -80,6 +80,37 @@ for(const side of ["LONG","SHORT"] as const){
     assert.deepEqual(afterRestart,uninterrupted);
     assert.equal(step(base,120000,price).state.positions.length,1,"old full checkpoint loses the newer peak");
   });
+  test(`${side}: HORIZON account peak and 2.5% giveback preserve the same risk budget through both restarts`,()=>{
+    const p=position("horizon",side);p.rule.exitMode="HORIZON";
+    const full=step(neutral(account([p])),100000,side==="LONG"?102:98).state;
+    const peak=step(full,110000,side==="LONG"?120:80);
+    assert.equal(peak.changed,false);assert.equal(peak.protectionChanged,true);
+    assert.equal(peak.state.positions[0].exitControl?.armedAt,null,"HORIZON never becomes a trailing exit");
+    const peakOverlay=buildForwardProtectionCheckpoint(peak.state);
+    const restartedPeak=restoreForwardProtectionCheckpoint(full,peakOverlay);
+    assert.equal(restartedPeak.peakEquity,peak.state.peakEquity);
+    const target=peak.state.peakEquity*.975,dt=120000;
+    const funding=p.notional*PAPER_COST.fundingAllowancePerDay*dt/86400000;
+    const price=side==="LONG"
+      ?(target-full.balance+p.quantity*p.entryPrice+funding)/(p.quantity*(1-PAPER_COST.slippageRate)*(1-PAPER_COST.feeRate))
+      :(full.balance+p.quantity*p.entryPrice-funding-target)/(p.quantity*(1+PAPER_COST.slippageRate)*(1+PAPER_COST.feeRate))-.01;
+    const uninterrupted=step(peak.state,dt,price),afterRestart=step(restartedPeak,dt,price);
+    assert.deepEqual(afterRestart,uninterrupted);
+    assert.equal(afterRestart.changed,false);assert.equal(afterRestart.protectionChanged,true,"new maximum account drawdown is durable too");
+    assert.equal(afterRestart.state.positions.length,1,"HORIZON geometry is unchanged");
+    const quotes={[p.symbol]:{bestBid:price,bestAsk:price+.01,observedAt:T+dt,fresh:true}};
+    const equity=forwardEquity(afterRestart.state,quotes,T+dt).equity;
+    assert.ok(Math.abs(1-equity/afterRestart.state.peakEquity-.025)<1e-12);
+    const budget=marketRiskBudget(afterRestart.state.marketState,equity,afterRestart.state.peakEquity);
+    assert.ok(Math.abs(budget.totalRate-.045)<1e-12);assert.ok(Math.abs(budget.netDirectionalRate-.0175)<1e-12);
+    const lostPeakBudget=marketRiskBudget(full.marketState,equity,full.peakEquity);
+    assert.equal(lostPeakBudget.totalRate,.05,"old checkpoint would wrongly restore the looser budget");
+    const restoredDrawdown=restoreForwardProtectionCheckpoint(full,buildForwardProtectionCheckpoint(afterRestart.state));
+    assert.equal(restoredDrawdown.maxDrawdown,afterRestart.state.maxDrawdown);
+    assert.deepEqual(marketRiskBudget(restoredDrawdown.marketState,equity,restoredDrawdown.peakEquity),budget);
+    assert.equal(restoredDrawdown.balance,full.balance);assert.deepEqual(restoredDrawdown.history,full.history);
+    assert.deepEqual(restoredDrawdown.positions[0].rule,p.rule);
+  });
 }
 
 test("already-planned opposite-side exit is removed from net risk before choosing additional cuts",()=>{
@@ -91,11 +122,41 @@ test("already-planned opposite-side exit is removed from net risk before choosin
   assert.equal(n.history.find(p=>p.id==="short")?.exitAudit?.trigger,"HORIZON");
   assert.equal(n.history.find(p=>p.id==="l0")?.exitAudit?.trigger,"MARKET_STATE");
 });
-test("unexecutable stale risk is retained and never receives an invented exit",()=>{
+test("incomplete account valuation retains portfolio risk without using stale marks to liquidate another position",()=>{
   const s=neutral(account(Array.from({length:6},(_,i)=>position(`p${i}`))));s.turnProtection=turn("LONG");
   const old=structuredClone(s.positions[0]),n=step(s,100000,99.8,["p0"]).state;
-  assert.deepEqual(n.positions,[old]);assert.equal(n.history.length,5);
+  assert.deepEqual(n.positions[0],old);assert.equal(n.positions.length,6);assert.equal(n.history.length,0);
+  const recovered=step(n,110000,99.8).state;
+  assert.equal(recovered.positions.length,1);assert.equal(recovered.history.length,5,"fresh valuation restores the original portfolio budget");
 });
+test("different stale fallback marks cannot change extra exits of fresh positions or suppress their own hard stop",()=>{
+  const base=neutral(account(Array.from({length:6},(_,i)=>position(`p${i}`))));base.turnProtection=turn("LONG");
+  const low=structuredClone(base),high=structuredClone(base);
+  low.positions[0].lastPrice=10;high.positions[0].lastPrice=1000;
+  const prices={p0:99.8,p1:90,p2:99.8,p3:99.8,p4:99.8,p5:99.8};
+  const a=step(low,100000,prices,["p0"]).state,b=step(high,100000,prices,["p0"]).state;
+  for(const n of [a,b]){
+    assert.equal(n.history.length,1);assert.equal(n.history[0].id,"p1");
+    assert.equal(n.history[0].exitAudit?.trigger,"HARD_STOP");assert.equal(n.positions.length,5);
+    assert.equal(n.positions[0].lastQuoteAt,T,"stale position never acquires an invented quote or fill");
+  }
+  assert.deepEqual(a.history,b.history);assert.equal(a.balance,b.balance);
+  const freshA=step(a,110000,99.8).state,freshB=step(b,110000,99.8).state;
+  assert.deepEqual(freshA,freshB,"same executable valuation restores identical remaining-risk decisions after restart");
+  assert.equal(freshA.positions.length,1);
+});
+for(const trigger of ["HORIZON","PROFIT_GIVEBACK","RELATION_CHANGE"] as const){
+  test(`a stale portfolio mark does not suppress a fresh position's own ${trigger} exit`,()=>{
+    const stale=position("stale"),fresh=position("fresh");
+    if(trigger==="HORIZON")fresh.openedAt=T-3600000;
+    if(trigger==="PROFIT_GIVEBACK")fresh.favorable=.03;
+    if(trigger==="RELATION_CHANGE")fresh.relationFailureBars=2;
+    const s=neutral(account([stale,fresh]));s.turnProtection=turn("LONG");
+    const n=step(s,100000,100,["stale"]).state;
+    assert.deepEqual(n.positions,[stale]);assert.equal(n.history.length,1);
+    assert.equal(n.history[0].id,"fresh");assert.equal(n.history[0].exitAudit?.trigger,trigger);
+  });
+}
 test("missing market observations do not turn a retained old regime label into new liquidation authority",()=>{
   const s=neutral(account(Array.from({length:6},(_,i)=>position(`p${i}`))));
   s.marketState=updateMarketState({},s.marketState,T+90000);
@@ -114,13 +175,25 @@ test("previous valid classification expires after one normal evaluation interval
   assert.deepEqual(n.positions.map(p=>p.id),["kept"]);
   assert.equal(n.history[0].exitAudit?.trigger,"HARD_STOP");
 });
-test("protection-only checkpoints do not request writes for ordinary quotes or unarmed fluctuations",()=>{
-  const a=account();
+test("ordinary quotes inside saved account extrema and below the trail arm do not request another write",()=>{
+  const a=account();a.peakEquity=1100;a.maxDrawdown=.1;
   for(const price of [100,100.3,99.8]){
     const n=step(a,100000,price);assert.equal(n.changed,false);assert.equal(n.protectionChanged,false);
   }
   const armed=step(a,100000,102).state;
   const n=step(armed,110000,101.9);assert.equal(n.protectionChanged,false);assert.equal(n.state.positions.length,1);
+});
+test("only actual finite increases of account extrema trigger protection persistence",()=>{
+  const a=account();
+  assert.equal(forwardProtectionChanged(a,structuredClone(a)),false);
+  for(const field of ["peakEquity","maxDrawdown"] as const){
+    for(const value of [a[field],a[field]-1,Number.NaN,Number.POSITIVE_INFINITY]){
+      const unchanged=structuredClone(a);unchanged[field]=value;
+      assert.equal(forwardProtectionChanged(a,unchanged),false);
+    }
+    const increased=structuredClone(a);increased[field]=a[field]+1e-10;
+    assert.equal(forwardProtectionChanged(a,increased),true,"no hidden rounding/threshold may discard a real extremum");
+  }
 });
 test("compact restart does not alter frozen rules, ledger, history or original legacy timing",()=>{
   const p=position();delete p.exitControl;
