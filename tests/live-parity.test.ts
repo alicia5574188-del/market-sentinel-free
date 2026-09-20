@@ -277,7 +277,7 @@ test("real Worker repairs a stale fixed ratio before sizing a new source and doe
   live(h).activation={...activation,scaleRatio:.01,scaleSourceEquity:1000,scaleLiveEquity:900,scaleAt:T-900};
   h.forwardState.positions=[{...trade("capital-rebase"),openedAt:T-500}];
   gate.account={total:900,available:900,unrealised_pnl:0,in_dual_mode:false};
-  await h.syncLive(T);
+  await h.syncLive(T);await h.syncLive(T);
   assert.equal(gate.placed.length,1);
   assert.ok((live(h).activation!.scaleRatio??0)>.85);
   assert.equal(live(h).positions.BTC_USDT.parity!.ratio,live(h).activation!.scaleRatio);
