@@ -12,7 +12,7 @@ import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recor
   PAPER_BANKRUPTCY_EQUITY, PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
 import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, gateMarkedEquity, gatePositionValuation, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
-import { LIVE_SESSION_VERSION, establishLiveScale, startLiveSession, sourceAfterEnable, sameLiveSession, type LiveSession } from "../lib/live-session.ts";
+import { LIVE_SESSION_VERSION, establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, sameLiveSession, type LiveSession } from "../lib/live-session.ts";
 import type { GateSizeRules, SizeDiagnostic } from "../lib/gate-quantity.ts";
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
 import { credentialMetadata } from "../lib/gate-readonly.ts";
@@ -1654,13 +1654,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private async ensureLiveSessionScale(sourceEquity:number,liveEquity:number,now:number) {
     const activation=this.runtime.live.activation;
-    if(!activation||activation.scaleRatio)return activation;
-    const scaled=establishLiveScale(activation,sourceEquity,liveEquity,now,this.liveSessionSeedRatio()??undefined);
+    if(!activation)return activation;
+    const scaled=activation.scaleRatio
+      ?reconcileLiveScale(activation,sourceEquity,liveEquity,now)
+      :establishLiveScale(activation,sourceEquity,liveEquity,now,this.liveSessionSeedRatio()??undefined);
+    if(scaled===activation)return activation;
+    const prior=activation.scaleRatio??null;
     this.runtime.live.activation=scaled;
     await this.ctx.storage.put(`${LIVE_PARITY_PREFIX}owner-intent`,{
       enabled:this.runtime.live.requestedEnabled,changedAt:this.runtime.live.changedAt,activation:scaled,
     });
     this.runtime.nonAlarmWrites++;
+    if(prior&&scaled.scaleRatio!==prior)this.recordLiveAudit({observedAt:now,symbol:null,planId:null,stage:"LIVE_CONTROL",level:"INFO",
+      reason:`检测到旧复制比例与当前实盘资本基准明显不一致；仅将以后新源单比例从 ${prior.toFixed(6)} 重建为 ${scaled.scaleRatio!.toFixed(6)}，已有实盘仓位不补仓不改仓`});
     await this.saveCheckpoint(now,true);
     return scaled;
   }
@@ -2203,10 +2209,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       let binding:MirrorBinding|undefined;
       try {
         if(paperMark.stalePositions)throw new LiveEntrySizingError("ECONOMICS",symbol,"模拟账户当前估值不完整，不能确定复制比例");
-        if(!mirrorRatio){
-          const scaled=await this.ensureLiveSessionScale(paperMark.equity,equity,Date.now());
-          mirrorRatio=scaled?.scaleRatio??equity/paperMark.equity;
-        }
+        const scaled=await this.ensureLiveSessionScale(paperMark.equity,equity,Date.now());
+        mirrorRatio=scaled?.scaleRatio??equity/paperMark.equity;
         const expectedLiveEquity=paperMark.equity*mirrorRatio;
         const liveEquityDrift=expectedLiveEquity>0?equity/expectedLiveEquity:0;
         if(liveEquityDrift<.85)throw new LiveEntrySizingError("ECONOMICS",symbol,
