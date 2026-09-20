@@ -49,6 +49,16 @@ test("stale receipt seed cannot shrink a newly anchored 900/1000 account back to
   assert.equal(scaled.scaleRatio,.9);assert.equal(scaled.scaleSourceEquity,1000);assert.equal(scaled.scaleLiveEquity,900);
   assert.equal(scaled.scaleRebaseFrom,.01);assert.equal(scaled.scaleRebaseReason,"ANCHOR_MISMATCH");
 });
+test("legacy anchorless stale scale repairs for a 900/1000 live-to-paper account",()=>{
+  const session={...startLiveSession(T-1000,initialForward(T-2000)),scaleRatio:.01};
+  const scaled=reconcileLiveScale(session,1000,900,T);
+  assert.equal(scaled.scaleRatio,.9);assert.equal(scaled.scaleSourceEquity,1000);assert.equal(scaled.scaleLiveEquity,900);
+  assert.equal(scaled.scaleRebaseFrom,.01);assert.equal(scaled.scaleRebaseReason,"ANCHOR_MISMATCH");
+});
+test("legacy anchorless ordinary drift stays frozen instead of re-scaling every trade",()=>{
+  const session={...startLiveSession(T-1000,initialForward(T-2000)),scaleRatio:.9};
+  assert.equal(reconcileLiveScale(session,1000,920,T),session);
+});
 test("internally inconsistent stored scale repairs from its own anchor equities without touching source trades",()=>{
   const session={...startLiveSession(T-1000,initialForward(T-2000)),scaleRatio:.01,scaleSourceEquity:1000,scaleLiveEquity:900,scaleAt:T-500};
   const scaled=reconcileLiveScale(session,1000,900,T);
@@ -269,6 +279,18 @@ test("accepted live fill stores submit quote, delay and verified exchange entry 
   assert.ok((p.submitDelayMs??-1)>=0);assert.equal(p.exchangeEntryDriftRate,0);
 }));
 
+test("real Worker repairs an anchorless legacy ratio before sizing a current source",()=>clock(async()=>{
+  const {h,gate}=await harness();
+  h.forwardState.positions=[];
+  live(h).requestedEnabled=true;
+  live(h).activation={...startLiveSession(T-1000,h.forwardState),scaleRatio:.01};
+  h.forwardState.positions=[{...trade("anchorless-capital-rebase"),openedAt:T-500}];
+  gate.account={total:900,available:900,unrealised_pnl:0,in_dual_mode:false};
+  await h.syncLive(T);await h.syncLive(T);
+  assert.equal(gate.placed.length,1);
+  assert.ok((live(h).activation!.scaleRatio??0)>.85);
+  assert.equal(live(h).positions.BTC_USDT.parity!.ratio,live(h).activation!.scaleRatio);
+}));
 test("real Worker repairs a stale fixed ratio before sizing a new source and does not mutate PAPER",()=>clock(async()=>{
   const {h,gate}=await harness(),before=structuredClone(h.forwardState);
   h.forwardState.positions=[];
