@@ -437,7 +437,14 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
     const quality=clip(candidate.continuationScore*(.65+.35*candidate.confidence),.15,1);
     const headroom=Math.min(equity*.10-totalRisk,equity*.065-sideRisk,equity*candidate.riskCap-sleeveRisk);
     const targetRisk=Math.max(0,Math.min(equity*.015*quality*drawdownScale,headroom));
-    const lossRate=candidate.stopRate+cost,desired=Math.min(equity*1.5,targetRisk/Math.max(lossRate,1e-9),Math.max(0,equity*4-gross));
+    const lossRate=candidate.stopRate+cost;
+    // Size against post-entry-fee equity so the persisted risk ratios remain
+    // inside their caps after the fee is deducted from balance.
+    const totalCapNotional=Math.max(0,(equity*.10-totalRisk)/(lossRate+.10*PAPER_COST.feeRate));
+    const sideCapNotional=Math.max(0,(equity*.065-sideRisk)/(lossRate+.065*PAPER_COST.feeRate));
+    const sleeveCapNotional=Math.max(0,(equity*candidate.riskCap-sleeveRisk)/(lossRate+candidate.riskCap*PAPER_COST.feeRate));
+    const desired=Math.min(equity*1.5,targetRisk/Math.max(lossRate,1e-9),totalCapNotional,sideCapNotional,sleeveCapNotional,
+      Math.max(0,equity*4-gross));
     if(!(desired>=equity*.05)){reject("该周期剩余风险额度不足有效仓位，不生成碎片订单");continue;}
     const price=(candidate.side==="LONG"?q.bestAsk:q.bestBid)*(1+d*PAPER_COST.slippageRate);
     const count=Math.floor(desired/(price*meta.quantoMultiplier));
