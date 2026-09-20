@@ -46,7 +46,6 @@ const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
 const mean=(v:number[])=>v.length?v.reduce((a,b)=>a+b,0)/v.length:0;
 const median=(v:number[])=>{const a=[...v].sort((x,y)=>x-y);return a.length?(a.length%2?a[(a.length-1)/2]:(a[a.length/2-1]+a[a.length/2])/2):0;};
 const sigmoid=(x:number)=>1/(1+Math.exp(-Math.max(-20,Math.min(20,x))));
-const sideSign=(s:TurnSide)=>s==="LONG"?1:s==="SHORT"?-1:0;
 const opposite=(s:TurnSide):TurnSide=>s==="LONG"?"SHORT":s==="SHORT"?"LONG":"NEUTRAL";
 const tfMs=(tf:TurnTimeframe)=>TURN_CONFIG[tf].minutes*60_000;
 const completeAt=(c:TurnCandle,tf:TurnTimeframe)=>c.time*1000+tfMs(tf);
@@ -161,7 +160,7 @@ function buildFrame(input:{symbol:string;tf:TurnTimeframe;m:RawMetrics;previous?
   else if(newBar)candidateBars=Math.max(0,candidateBars-1);
   const extreme=p>=.90&&structure>=.65,confirmed=incumbent!=="NEUTRAL"&&p>=cfg.confirm&&(candidateBars>=cfg.confirmBars||extreme);
   let direction=incumbent,justTurned=false,lastTurnAt=previous?.lastTurnAt??null,phase:TurnPhase;
-  let turnProbability=p,triggerProbability=p;
+  let turnProbability=p;const triggerProbability=p;
   if(confirmed&&opp!=="NEUTRAL"){
     direction=opp;justTurned=true;lastTurnAt=completeAt(last,tf);candidateSide="NEUTRAL";candidateBars=0;
     phase="CONFIRMED";turnProbability=clip(1-p,.05,.32);
