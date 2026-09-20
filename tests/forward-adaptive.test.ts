@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { adaptiveCandidatePriority, adaptiveEntryAdjustment, adaptiveTargetRisk, inspectRapidCondition } from "../lib/forward-adaptive.ts";
+import { adaptiveCandidatePriority, adaptiveEntryAdjustment, adaptiveTargetRisk, calibrationRiskMultiplier, familyRiskHeadroom,
+  inspectRapidCondition, sampleRiskMultiplier } from "../lib/forward-adaptive.ts";
 import { EVIDENCE_POLICY, blankDiagnostics, familyKey, inspectCondition } from "../lib/forward-evidence.ts";
 import type { Measurement, Rule } from "../lib/forward-relations.ts";
 import type { TurnForecast } from "../lib/forward-market-state.ts";
@@ -85,6 +86,27 @@ test("drawdown scaling and turn scaling reduce size without introducing a peer-c
   const many=adaptiveTargetRisk({equity:1000,quality:1,allocationScale:1,riskMultiplier:1,stateHeadroom:20,
     readyPeers:30,minimumMeaningfulRisk:1.1});
   assert.ok(many>=1.1);assert.ok(many>20/30,"ready names must not pre-divide every order below meaningful size");
+});
+
+test("negative execution calibration keeps a 15% probe instead of half-risk or a hard stop",()=>{
+  assert.equal(calibrationRiskMultiplier(.01,-.002),.15);
+  assert.equal(calibrationRiskMultiplier(.01,0),.15);
+  assert.equal(calibrationRiskMultiplier(.01,.004),.4);
+  assert.equal(calibrationRiskMultiplier(.01,.02),1);
+});
+
+test("single-asset evidence scales continuously by sample count without a promotion threshold",()=>{
+  assert.equal(sampleRiskMultiplier("CROSS_ASSET",5),1);
+  assert.ok(Math.abs(sampleRiskMultiplier("SINGLE_ASSET",5)-.5)<1e-12);
+  assert.ok(Math.abs(sampleRiskMultiplier("SINGLE_ASSET",10)-Math.sqrt(.5))<1e-12);
+  assert.equal(sampleRiskMultiplier("SINGLE_ASSET",20),1);
+});
+
+test("one relationship family can never consume more than one 1.5% portfolio risk slot",()=>{
+  assert.equal(familyRiskHeadroom(1000,0),15);
+  assert.equal(familyRiskHeadroom(1000,9),6);
+  assert.equal(familyRiskHeadroom(1000,15),0);
+  assert.equal(familyRiskHeadroom(1000,20),0);
 });
 
 test("adaptive priority favors fresh opposite migration without overriding learned evidence",()=>{
