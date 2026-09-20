@@ -54,6 +54,7 @@ import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwa
   type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
 declare const __FORWARD_BUILD_SHA__: string;
 const FORWARD_BUILD_SHA = typeof __FORWARD_BUILD_SHA__ === "string" ? __FORWARD_BUILD_SHA__ : "local-verification";
+const MULTI_TURN_AUTO_CUTOVER = FORWARD_BUILD_SHA !== "local-verification";
 import { advanceStrategyArena as advancePreviousStrategyArena,
   initialStrategyArena as initialPreviousStrategyArena,
   normalizeStrategyArena as normalizePreviousStrategyArena,
@@ -1040,7 +1041,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.forwardBusy = true;
     try {
       if (!this.forwardState) this.forwardState = await readForwardStore(this.ctx.storage, now);
-      if(this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION)await this.ensureMultiTurnCutover(now);
+      if(MULTI_TURN_AUTO_CUTOVER&&this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION)await this.ensureMultiTurnCutover(now);
       if(!this.forwardState)throw new Error("PAPER权威账户缺失");
       const legacyDrainOnly=this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION;
       // Restarts retain the existing ten-second source cadence. Otherwise a
