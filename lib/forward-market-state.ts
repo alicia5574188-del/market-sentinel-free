@@ -66,6 +66,7 @@ export type MarketRiskBudget = {
   shortRate:number;
   netDirectionalRate:number;
   drawdownRate:number;
+  allocationScale:number;
   reason:string;
 };
 type CandleLike={time:number;close:number};
@@ -250,36 +251,39 @@ export function marketRiskBudget(state:MarketState|null|undefined,equity:number,
   let totalRate=.10,longRate=.065,shortRate=.065,netDirectionalRate=.10;
   if(mode==="TREND_LONG"){totalRate=.075;longRate=.065;shortRate=.015;netDirectionalRate=.065;}
   else if(mode==="TREND_SHORT"){totalRate=.075;longRate=.015;shortRate=.065;netDirectionalRate=.065;}
-  else if(mode==="TRANSITION"){totalRate=.06;longRate=.045;shortRate=.045;netDirectionalRate=.03;}
-  else if(mode==="NEUTRAL"){totalRate=.05;longRate=.03;shortRate=.03;netDirectionalRate=.02;}
+  else if(mode==="TRANSITION"){totalRate=.065;longRate=.045;shortRate=.045;netDirectionalRate=.035;}
+  else if(mode==="NEUTRAL"){totalRate=.055;longRate=.0325;shortRate=.0325;netDirectionalRate=.025;}
   const drawdownRate=equity>0&&peakEquity>0?Math.max(0,1-equity/peakEquity):0;
-  if((mode==="TRANSITION"||mode==="NEUTRAL")&&drawdownRate>=.02){
-    const p=drawdownRate>=.04?.01:.005;
-    totalRate=Math.max(.04,totalRate-p);longRate=Math.max(.025,longRate-p);shortRate=Math.max(.025,shortRate-p);
-    netDirectionalRate=Math.max(.015,netDirectionalRate-p/2);
-  }
+  // Drawdown changes NEW allocation size instead of silently becoming a trading
+  // pause. Existing portfolio caps remain state-driven so a losing period does
+  // not recursively squeeze every candidate to zero.
+  const allocationScale=drawdownRate>=.08?.55:drawdownRate>=.04?.70:drawdownRate>=.02?.85:1;
+
   // Entry budgets retain the last known warning through missing observations.
-  // Existing-position reducers must pass only a fresh forecast: UNKNOWN itself
-  // is not new evidence authorizing a protective exit.
+  // Existing-position reducers pass only a fresh forecast, so UNKNOWN is never
+  // new authority to liquidate a holding.
   const effectivePhase=forecast?.phase==="UNKNOWN"?forecast.lastFreshPhase:forecast?.phase;
   const activeForecast=!!forecast?.threatenedSide&&(effectivePhase==="PULLBACK"||effectivePhase==="REVERSAL_RISK");
   if(activeForecast&&forecast){
-    const threatenedLong=forecast.threatenedSide==="LONG",oppositeFloor=effectivePhase==="REVERSAL_RISK"?.025:.02;
-    totalRate=Math.min(totalRate,effectivePhase==="REVERSAL_RISK"?.05:.06);
-    netDirectionalRate=Math.min(netDirectionalRate,effectivePhase==="REVERSAL_RISK"?.015:.025);
-    if(threatenedLong){longRate=Math.min(longRate,effectivePhase==="REVERSAL_RISK"?.02:.03);shortRate=Math.max(shortRate,oppositeFloor);}
-    else{shortRate=Math.min(shortRate,effectivePhase==="REVERSAL_RISK"?.02:.03);longRate=Math.max(longRate,oppositeFloor);}
-    if(drawdownRate>=.04){
-      totalRate=Math.min(totalRate,.04);netDirectionalRate=Math.min(netDirectionalRate,.01);
-      if(threatenedLong)longRate=Math.min(longRate,.015);else shortRate=Math.min(shortRate,.015);
-    }else if(drawdownRate>=.02){
+    const threatenedLong=forecast.threatenedSide==="LONG";
+    if(effectivePhase==="REVERSAL_RISK"){
       totalRate=Math.min(totalRate,.05);netDirectionalRate=Math.min(netDirectionalRate,.015);
-      if(threatenedLong)longRate=Math.min(longRate,.02);else shortRate=Math.min(shortRate,.02);
+      if(threatenedLong){longRate=Math.min(longRate,.02);shortRate=Math.max(shortRate,.03);}
+      else{shortRate=Math.min(shortRate,.02);longRate=Math.max(longRate,.03);}
+    }else{
+      // Pullback is intentionally continuous: mild pressure does not collapse
+      // the portfolio into the same tiny budget as a confirmed reversal risk.
+      const p=Math.max(.20,Math.min(1,forecast.pressure));
+      totalRate=Math.min(totalRate,.075-.015*p);
+      netDirectionalRate=Math.min(netDirectionalRate,.045-.015*p);
+      const threatenedCap=.05-.02*p,oppositeFloor=.02+.01*p;
+      if(threatenedLong){longRate=Math.min(longRate,threatenedCap);shortRate=Math.max(shortRate,oppositeFloor);}
+      else{shortRate=Math.min(shortRate,threatenedCap);longRate=Math.max(longRate,oppositeFloor);}
     }
   }
   const forecastNote=activeForecast?`；${forecast?.fresh?"转折预警":"数据未知，保留上次预警"}${effectivePhase==="REVERSAL_RISK"?"升级":"生效"}，受威胁方向${forecast?.threatenedSide==="LONG"?"多":"空"}`:"";
-  return{totalRate,longRate,shortRate,netDirectionalRate,drawdownRate,
-    reason:`${mode}风险预算：总风险≤${(totalRate*100).toFixed(1)}%，多≤${(longRate*100).toFixed(1)}%，空≤${(shortRate*100).toFixed(1)}%，净方向≤${(netDirectionalRate*100).toFixed(1)}%${forecastNote}。`};
+  return{totalRate,longRate,shortRate,netDirectionalRate,drawdownRate,allocationScale,
+    reason:`${mode}风险预算：总风险≤${(totalRate*100).toFixed(1)}%，多≤${(longRate*100).toFixed(1)}%，空≤${(shortRate*100).toFixed(1)}%，净方向≤${(netDirectionalRate*100).toFixed(1)}%；新开仓分配系数${(allocationScale*100).toFixed(0)}%${forecastNote}。`};
 }
 
 export function sideRiskHeadroom(side:MarketSide,longRisk:number,shortRisk:number,equity:number,budget:MarketRiskBudget){
