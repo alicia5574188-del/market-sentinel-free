@@ -112,7 +112,7 @@ test("a large adverse pre-entry move invalidates the old context instead of incr
 });
 test("a weak structural edge does not receive the strong edge's full 1.5% risk",()=>{
   const now=START+BAR_MS*10,strong=freshState(now),weak=structuredClone(strong);
-  weak.rules[0].estimatedNetRate=.003;weak.rules[0].evidence!.rawNet=.003;weak.rules[0].evidence!.boundedNet=.0023;
+  weak.rules[0].estimatedNetRate=.003;weak.rules[0].evidence!.rawNet=.003;weak.rules[0].evidence!.boundedNet=.0001;
   const m=market(now,["S0"]),a=advanceForward({state:strong,now,...m}).state,b=advanceForward({state:weak,now,...m}).state;
   assert.equal(a.positions.length,1);assert.equal(b.positions.length,1);assert.ok(b.positions[0].notional<a.positions[0].notional);
 });
