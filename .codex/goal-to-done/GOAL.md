@@ -1,3 +1,7 @@
+# 2026-09-20 — Forward Adaptive v2 final architecture upgrade
+
+Keep the current Forward market-response learning concept and make it adapt to changing market conditions without solving drawdown by becoming inactive. Build and verify fast/slow causal learning, continuous market-state risk migration, best-first allocation, visible participation diagnostics, and unchanged PAPER/LIVE continuity. Do not introduce fixed strategies, forced reversals, trade quotas, account reset, extra Gate cadence or LIVE-switch mutations. Acceptance and invariants are in `research/FORWARD_ADAPTIVE_V2.md`.
+
 # 2026-09-20 continuation — finish known fixes through conditional deployment
 
 User asks why known problems cannot be solved together. Complete the persistence/resource/correctness fixes, independently review, compare against401768c, then use the existing verified main release if concrete improvements and continuity gates pass. Do not stop merely at another fixable implementation defect. Preserve all accounts/history, original risk geometry, owner/member intent and billing plan; no real-money tests. Improving code correctness and lossless resource usage is measurable, but never label it proof of higher future net profit. The former peak-versus-exit failure and missing HORIZON equity-high checkpoint are now specifically addressed. See the current audited release gate for resource-model tradeoffs and rollback compatibility.
