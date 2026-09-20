@@ -262,7 +262,13 @@ test("Gate degradation is endpoint-aware, incremental, and only blocking after r
   assert.match(gate, /endpointBackoffUntil/);
   assert.match(gate, /x-gate-ratelimit-reset-timestamp/);
   assert.match(worker, /const RADAR_MS = 60_000/);
-  assert.match(worker, /prior\.length >= 324 \? 4 : 360/);
+  assert.match(worker, /prior\.length >= 960 \? 4 : 1_000/);
+  assert.match(worker, /slice\(-1_000\)/);
+  assert.match(worker, /fetchStructureCandles\(selected,"1d",prior\.length>=TURN_DAILY_REQUIRED_CANDLES\?4:120\)/);
+  assert.match(worker, /TURN_DAILY_REQUIRED_CANDLES = 90/);
+  assert.match(worker, /mergeTurnDailyPath/);
+  assert.match(worker, /strategyAuthorityVersion!==MULTI_TURN_VERSION/);
+  assert.match(worker, /legacyDrainOnly/);
   assert.match(worker, /mergeStrategyCandlePath/);
   assert.match(worker, /STRATEGY_CANDLE_STALE_MS = 11 \* 60_000/);
   assert.doesNotMatch(gate, /apiSecret|apiKey|KEY|SIGN/);
@@ -299,7 +305,8 @@ test("cutover remains credential-bound and production gates enforce five direct 
   assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.canonicalAdmissionGate == false/g) ?? []).length, 2);
   assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.canonicalCapitalAgnostic == false/g) ?? []).length, 2);
   assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.liveSource == "CANONICAL_PAPER_NORMALIZED_NET"/g) ?? []).length, 2);
-  assert.equal((workflow.match(/grep -Fq '哨兵 · 关系引擎'/g) ?? []).length, 2);
+  assert.equal((workflow.match(/grep -Fq '哨兵 · 多周期转折引擎'/g) ?? []).length, 2);
+  assert.equal((workflow.match(/runtime\.forward\.strategyAuthorityVersion == "multi-turn-v1"/g) ?? []).length,2);
   assert.match(workflow, /deployment-plan/);
   assert.match(workflow, /runtime\.forward\.liveEligible == false/);
   assert.match(workflow, /runtime\.legacyRetired == true/);
