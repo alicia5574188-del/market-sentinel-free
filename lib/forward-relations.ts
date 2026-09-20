@@ -11,7 +11,7 @@ import { assessMarketTurn, MARKET_TURN_PROTECTION_VERSION, MARKET_TURN_TARGET_DI
 import { MARKET_STATE_VERSION, TURN_FORECAST_VERSION, marketRiskBudget, selectDirectionalCandidates, sideRiskHeadroom,
   updateMarketState, updateTurnForecast, type MarketState, type TurnForecast } from "./forward-market-state.ts";
 import { forwardProtectionChanged } from "./forward-protection-checkpoint.ts";
-import { FORWARD_ADAPTIVE_VERSION, adaptiveCandidatePriority, adaptiveEntryAdjustment, inspectRapidCondition,
+import { FORWARD_ADAPTIVE_VERSION, adaptiveCandidatePriority, adaptiveEntryAdjustment, adaptiveTargetRisk, inspectRapidCondition,
   type AdaptiveCandidate, type AdaptiveLane } from "./forward-adaptive.ts";
 // The storage schema stays v1.0 so an algorithm upgrade cannot reset the ledger.
 export const FORWARD_VERSION = "forward-relations-v1.0";
@@ -387,7 +387,8 @@ function openTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<
     // receives a meaningful slice first; the next candidate sees the recomputed
     // remaining headroom. We never pre-divide risk among candidates that may not fill.
     const stateHeadroom=sideRiskHeadroom(r.side,longRisk,shortRisk,equity,budget);
-    const targetRisk=Math.min(equity*.015*quality*budget.allocationScale*adjustment.riskMultiplier,stateHeadroom);
+    const targetRisk=adaptiveTargetRisk({equity,quality,allocationScale:budget.allocationScale,
+      riskMultiplier:adjustment.riskMultiplier,stateHeadroom});
     const lossRate=r.stopRate+Math.max(COST_FLOOR,r.evidence!.costRate)+spread;
     const desired=Math.min(equity*1.5,targetRisk/lossRate,Math.max(0,equity*4-gross));
     const immediateExit=(r.side==="LONG"?q.bestBid:q.bestAsk)*(1-d*PAPER_COST.slippageRate);
