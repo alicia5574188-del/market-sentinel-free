@@ -1099,7 +1099,7 @@ jobs:
               .runtime.liveMirror.newOrdersOnly == true and
               .runtime.liveMirror.executionPolicy == "new-orders-decimal-pnl-v1" and
               .runtime.resourceAccounting.policy == "cloudflare-utc-day-v1" and
-              .runtime.liveTurnover.version == "gate-confirmed-turnover-v1" and
+              .runtime.liveTurnover.version == "gate-confirmed-turnover-v2" and
               .runtime.liveMirror.exactFillsGuaranteed == false and
               .runtime.forward.storage.persistedAt > 0 and
               .runtime.forward.storage.error == null and
