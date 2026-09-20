@@ -72,12 +72,13 @@ test("pending quote and completed retry survive atomic chunk persistence exactly
   assert.equal(s.positions.length,1);assert.equal(s.participation!.retryFills,1);
   const final=await prepareForwardWrite(restored,s,NOW+20000);assert.ok(Object.keys(final.entries).some(k=>k.includes("archive:")));
 });
-test("simultaneous eight-coin opportunities retain meaningful lots under existing total caps",()=>{
+test("simultaneous same-family opportunities share one 1.5% risk slot without becoming zero-trade",()=>{
   const names=Array.from({length:8},(_,i)=>`S${i}`),m=market(NOW,names),s=advanceForward({state:fixture(names),now:NOW,...m}).state;
-  assert.equal(s.positions.length,8);const eq=forwardEquity(s,m.quotes,NOW).equity;
-  assert.ok(s.positions.every(t=>t.notional>=eq*.05));assert.ok(s.positions.reduce((n,t)=>n+t.plannedRisk,0)<=eq*.065+1e-8);
+  const eq=forwardEquity(s,m.quotes,NOW).equity;
+  assert.ok(s.positions.length>0&&s.positions.length<8);
+  assert.ok(s.positions.every(t=>t.notional>=eq*.05));
+  assert.ok(s.positions.reduce((n,t)=>n+t.plannedRisk,0)<=eq*.015+1e-8);
   assert.ok(s.positions.reduce((n,t)=>n+t.notional,0)<=eq*4+1e-8);
-  const notionals=s.positions.map(t=>t.notional);assert.ok(Math.max(...notionals)/Math.min(...notionals)<1.05);
 });
 test("thirty ready names under a neutral budget produce meaningful participation instead of thirty fragments",()=>{
   const names=Array.from({length:30},(_,i)=>`S${i}`),s=fixture(names);
@@ -91,7 +92,19 @@ test("thirty ready names under a neutral budget produce meaningful participation
   assert.ok(n.positions.length>0,"meaningful-slot allocation must not convert a valid candidate set into zero trades");
   assert.ok(n.positions.length<30,"neutral risk budget must still constrain participation");
   assert.ok(n.positions.every(t=>t.notional>=eq*.05));
-  assert.ok(n.positions.reduce((sum,t)=>sum+t.plannedRisk,0)<=20.1);
+  assert.ok(n.positions.reduce((sum,t)=>sum+t.plannedRisk,0)<=eq*.015+1e-8);
+});
+
+test("entry diagnostics count only applicable executable rule matches",()=>{
+  const m=market(NOW,["S0","S1"]),s=advanceForward({state:fixture(["S0"]),now:NOW,...m}).state;
+  assert.equal(s.entryDiagnostics!.matched,1);
+  assert.equal(s.entryDiagnostics!.reasons["规则为本币专用或当前币不在已观测样本范围内"],undefined);
+});
+
+test("ZEC is excluded from Forward frames and cannot open a new trade",()=>{
+  const m=market(NOW,["ZEC_USDT"]),s=advanceForward({state:fixture(["ZEC_USDT"]),now:NOW,...m}).state;
+  assert.equal(s.positions.length,0);assert.equal(s.frames.ZEC_USDT,undefined);
+  assert.equal(s.selectedSymbols.includes("ZEC_USDT"),false);assert.equal(s.entryDiagnostics!.matched,0);
 });
 
 test("an actual same-bar close cannot reopen under another version in the same evaluation",()=>{
