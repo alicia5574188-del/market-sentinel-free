@@ -98,18 +98,32 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
       <section className="fr-section"><div className="fr-section-head"><div><small>最近变化</small><h2>需要留意的运行记录</h2></div><button className="fr-text-button" onClick={()=>select("journal")}>全部记录 ↗</button></div><Journal data={data} limit={3}/></section>
     </>}
 
-    {tab==="relations"&&<><PageTitle eyebrow="RELATION → RULE" title="交易规则" text="查看当前入场条件、适用市场与退出设置。"/>
-      <section className="fr-section"><div className="fr-section-head"><div><small>当前规则</small><h2>{data?active.length:"—"} 条前向实验</h2></div><span>模拟为决策源 · 尚未验证盈利</span></div>{!active.length?<Empty title="正在积累可比较的条件—反应关系" text={data?.latestReason??"后台快照尚未返回。"}/>:<div className="fr-rule-grid">{active.map(r=><RuleCard key={r.id} rule={r}/>)}</div>}</section>
-      <section className="fr-section"><div className="fr-section-head"><div><small>自适应路由</small><h2>当前行情与换挡状态</h2></div><span>{data?.adaptationVersion??"读取中"}</span></div>
-        <div className="fr-three"><div><small>市场状态</small><b>{modeName}</b></div><div><small>转折阶段</small><b>{turnName}</b></div><div><small>新仓分配系数</small><b>{data?`${fmt(data.marketRiskBudget.allocationScale*100,0)}%`:"—"}</b></div></div>
-        <div className="fr-three"><div><small>快速15分钟候选</small><b>{fmt(data?.fitDiagnostics.rapidQualified,0)}</b></div><div><small>当前多向规则</small><b>{fmt(data?.fitDiagnostics.activeLong,0)}</b></div><div><small>当前空向规则</small><b>{fmt(data?.fitDiagnostics.activeShort,0)}</b></div></div>
-        <div className="fr-three"><div><small>本轮匹配</small><b>{fmt(data?.entryDiagnostics?.matched,0)}</b></div><div><small>本轮开仓</small><b>{fmt(data?.entryDiagnostics?.opened,0)}</b></div><div><small>风险迁移候选</small><b>{fmt(data?.entryDiagnostics?.adaptiveScaled,0)}</b></div></div>
-        <p className="fr-note">{data?.marketRiskBudget.reason??"等待风险预算。"} 当前主要阻塞：{mainBlocker}</p>
+    {tab==="relations"&&<><PageTitle eyebrow="MULTI-TIMEFRAME TURN ENGINE" title="六周期转折" text="每个周期独立判断当前方向是否仍成立。小周期转折只影响自己的仓位，并作为大周期转折的传播证据，不直接否决大周期。"/>
+      <section className="fr-section"><div className="fr-section-head"><div><small>唯一策略权威</small><h2>转折状态总览</h2></div><span>{data?.strategyAuthorityVersion??"读取中"}</span></div>
+        <div className="fr-rule-grid">{turnRows.map(row=><article className="fr-rule" key={row.tf}><header><span>{row.tf}级别</span><b>{row.rows.length} 市场</b></header>
+          <h3>多 {row.long} · 空 {row.short} · 中性 {row.neutral}</h3>
+          <div className="fr-rule-numbers"><div><small>平均转折概率</small><b>{row.avgTurn==null?"—":`${fmt(row.avgTurn*100,1)}%`}</b></div>
+            <div><small>转折中 / 已确认</small><b>{row.turning}</b></div><div><small>Brier</small><b>{row.cal?.count?fmt(row.cal.brier,3):"待样本"}</b></div></div>
+          <footer><span>风险袖套 {fmt((data?.turnRiskSleeves?.[row.tf]??0)*100,1)}%</span><span>校准 {row.cal?.count??0} 次</span></footer></article>)}</div>
+        <p className="fr-note">{data?.marketRiskBudget.reason??"等待风险预算。"}</p>
       </section>
-      <section className="fr-section"><div className="fr-three"><div><small>本轮表达检查</small><b>{fmt(data?.fitDiagnostics.tested,0)}</b></div><div><small>较早时间组</small><b>{fmt(data?.fitDiagnostics.trainGroups,0)}</b></div><div><small>较晚检查时间组</small><b>{fmt(data?.fitDiagnostics.checkGroups,0)}</b></div></div><p className="fr-note">统计估计不等于胜率，需结合后续交易结果评估。</p></section>
-      <section className="fr-section"><div className="fr-section-head"><h2>关系与成交校准</h2><span>不是胜率</span></div><div className="fr-three"><div><small>单币集中度提示</small><b>{fmt(data?.evidenceDiagnostics?.concentrationWarnings,0)}</b></div><div><small>成交偏差提示</small><b>{fmt(data?.evidenceDiagnostics?.calibrationWarnings,0)}</b></div><div><small>保留的已平仓反馈</small><b>{fmt(data?.feedbackCount,0)}</b></div></div><p className="fr-note">集中度和成交偏差用于风险评估；统计估计并非收益承诺。</p></section>
-      <section className="fr-section"><button className="fr-expand" aria-expanded={showDormant} onClick={()=>setShowDormant(!showDormant)}><div><h2>休眠规则</h2><p>仅展示不参与当前开仓的规则。</p></div><span>{dormant.length} {showDormant?"−":"+"}</span></button>{showDormant&&<div className="fr-rule-grid">{dormant.map(r=><RuleCard key={r.id} rule={r}/>)}</div>}</section></>}
-
+      <section className="fr-section"><div className="fr-section-head"><div><small>当前最敏感变化</small><h2>最高转折概率</h2></div><span>最多10项</span></div>
+        {hotTurns.length?<div>{hotTurns.map(x=><p className="fr-diagnostic-row" key={`${x.symbol}:${x.timeframe}`}><b>{x.symbol.replace("_"," / ")} · {x.timeframe}</b>
+          <span>{x.direction==="LONG"?"多":"空"}向 · 转折 {fmt(x.triggerProbability*100,1)}% · 延续 {fmt(x.continuationScore*100,1)}% · {x.phase}</span></p>)}</div>
+          :<Empty title="正在建立六周期状态" text="短周期会先就绪；日线只影响日线级别，不阻塞其他周期。"/>}
+      </section>
+      <section className="fr-section"><div className="fr-section-head"><div><small>执行诊断</small><h2>本轮参与</h2></div><span>{time(data?.turnEngine?.updatedAt)}</span></div>
+        <div className="fr-three"><div><small>可用周期状态</small><b>{fmt(data?.turnEngine?.diagnostics.readyFrames,0)}</b></div>
+          <div><small>本轮确认转折</small><b>{fmt(data?.turnEngine?.diagnostics.confirmedTurns,0)}</b></div>
+          <div><small>匹配可交易候选</small><b>{fmt(data?.entryDiagnostics?.matched,0)}</b></div></div>
+        <div className="fr-three"><div><small>本轮开仓</small><b>{fmt(data?.entryDiagnostics?.opened,0)}</b></div>
+          <div><small>当前多向候选</small><b>{fmt(data?.fitDiagnostics.activeLong,0)}</b></div>
+          <div><small>当前空向候选</small><b>{fmt(data?.fitDiagnostics.activeShort,0)}</b></div></div>
+        <p className="fr-note">当前主要阻塞：{mainBlocker}。没有连亏暂停或固定每日开单配额。</p>
+      </section>
+      {active.length>0&&<section className="fr-section"><div className="fr-section-head"><div><small>当前持仓 / 近期生成</small><h2>周期执行规则</h2></div><span>只用于审计</span></div>
+        <div className="fr-rule-grid">{active.slice(0,12).map(r=><RuleCard key={r.id} rule={r}/>)}</div></section>}
+    </>}
     {tab==="orders"&&<><PageTitle eyebrow="REAL-FEED PAPER" title="模拟账户" text="与实盘使用同一套观察结构。模拟成交含模型手续费、滑点和资金费用占位，不冒充Gate真实成交。"/>
       <nav className="fr-live-tabs fr-paper-tabs" aria-label="模拟子导航">{([["account","账户"],["positions","持仓"],["history","记录"],["archive","归档"]] as const).map(([id,label])=><button key={id} className={paperTab===id?"selected":""} aria-current={paperTab===id?"page":undefined} onClick={()=>setPaperTab(id)}>{label}</button>)}</nav>
       {paperTab==="account"&&<>
@@ -141,14 +155,14 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
         <div className="fr-font-options" role="group" aria-label="界面字号">{[70,80,90,100,110].map(value=><button key={value} type="button" className={fontScale===value?"selected":""} aria-pressed={fontScale===value} onClick={()=>selectFontScale(value)}>{value}%</button>)}</div>
       </section>
       <section className="fr-section"><div className="fr-section-head"><div><small>运行边界</small><h2>当前系统设置</h2></div></div>
-        <Setting title="当前主系统" value={data?.policyVersion??data?.version??"读取中"} text="行情驱动的交易规则与执行。"/><Setting title="规则自动适应" value="在线运行" text="每5分钟整理行情，按后续反应更新规则。"/><Setting title="执行权限" value="模拟决策 / 实盘复制" text="模拟提供交易决定；实盘按固定比例复制并使用Gate真实成交。"/><Setting title="风险预算" value="权益随动" text={data?.boundaries.risk??"读取中"}/><Setting title="成本口径" value="显式假设" text={data?.cost.assumption??"读取中"}/><Setting title="连续性" value="持久化" text="状态保存后才提交新订单；重启恢复原账户。"/>
+        <Setting title="当前主系统" value={data?.strategyAuthorityVersion??data?.version??"读取中"} text="六周期转折概率是唯一新开仓与策略退出权威。"/><Setting title="转折概率校准" value="在线运行" text="每个周期只用已完成K线；未来结果到期后才更新Brier与概率偏差。"/><Setting title="执行权限" value="模拟决策 / 实盘复制" text="模拟提供交易决定；实盘按固定比例复制并使用Gate真实成交。"/><Setting title="风险预算" value="权益随动" text={data?.boundaries.risk??"读取中"}/><Setting title="成本口径" value="显式假设" text={data?.cost.assumption??"读取中"}/><Setting title="连续性" value="持久化" text="状态保存后才提交新订单；重启恢复原账户。"/>
       </section></>}
 
     {tab==="live"&&livePanel}
 
 
     {(error||data?.storage.error)&&<aside className="fr-error" role="status"><b>运行提示</b><p>{data?.storage.error??error}</p><small>保留最近数据；不会把未保存的交易发布为已成交。</small></aside>}
-    <footer className="fr-footer"><span>行情心跳 {time(feedAt)}</span><span>{data?.version??"FORWARD LAB"} · Asia/Vientiane</span></footer>
+    <footer className="fr-footer"><span>行情心跳 {time(feedAt)}</span><span>{data?.strategyAuthorityVersion??data?.version??"MULTI-TURN"} · Asia/Vientiane</span></footer>
     <nav className="fr-nav" aria-label="主导航">{nav.map(([id,icon,label])=><button key={id} className={id===tab?"selected":""} aria-current={id===tab?"page":undefined} onClick={()=>select(id)}><span>{icon}</span><b>{label}</b>{id==="orders"&&!!data?.positions.length&&<i>{data.positions.length}</i>}</button>)}</nav>
   </main>;
 }
