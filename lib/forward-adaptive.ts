@@ -195,7 +195,7 @@ export function calibrationRiskMultiplier(rawNet:number,calibratedNet:number){
   return clip(calibratedNet/rawNet,.15,1);
 }
 
-export function sampleRiskMultiplier(scope:Rule["evidence"] extends infer _T ? "CROSS_ASSET"|"SINGLE_ASSET" : never,samples:number){
+export function sampleRiskMultiplier(scope:"CROSS_ASSET"|"SINGLE_ASSET",samples:number){
   if(scope!=="SINGLE_ASSET")return 1;
   return clip(Math.sqrt(Math.max(1,samples)/20),.15,1);
 }
