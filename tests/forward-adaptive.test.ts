@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { adaptiveCandidatePriority, adaptiveEntryAdjustment, adaptiveTargetRisk, inspectRapidCondition } from "../lib/forward-adaptive.ts";
-import { EVIDENCE_POLICY, familyKey } from "../lib/forward-evidence.ts";
+import { EVIDENCE_POLICY, blankDiagnostics, familyKey, inspectCondition } from "../lib/forward-evidence.ts";
 import type { Measurement, Rule } from "../lib/forward-relations.ts";
 
 const BAR=300_000,BASE=1_790_300_000_000;
@@ -30,6 +30,15 @@ test("rapid lane can recognize a recent conditional reversal without relabeling 
   assert.ok(c);assert.equal(c!.adaptiveLane,"RAPID_15M");assert.equal(c!.side,"SHORT");
   assert.equal(c!.checkGroups,3);assert.ok(c!.estimatedNetRate>0);assert.ok((c!.evidence.boundedNet??0)>0);
   assert.ok(c!.evidence.quality<=.85);assert.match(c!.evidence.warnings?.join("；")??"",/快速适应层/);
+});
+
+test("rapid lane fills the transition gap when the slow chronological learner has not yet qualified the new side",()=>{
+  const rows=measurements([.008,.008,.008,.008,.008,.008,.008,.008,.008,-.015,-.015,-.015]);
+  const now=rows.at(-1)!.availableAt+1000,conditions=[{feature:0,op:"GE" as const,threshold:0}];
+  const slow=inspectCondition({rows,conditions,horizon:15,now,feedback:[]},blankDiagnostics());
+  const fast=inspectRapidCondition({rows,conditions,now,feedback:[]});
+  assert.equal(slow,null,"mixed old/new chronology should not fabricate a slow edge during regime migration");
+  assert.ok(fast);assert.equal(fast!.side,"SHORT");assert.equal(fast!.adaptiveLane,"RAPID_15M");
 });
 
 test("rapid lane rejects noisy or cost-negative recent groups instead of forcing a reversal",()=>{
