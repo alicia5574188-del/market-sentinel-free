@@ -11,7 +11,7 @@ import { rollResourceDay,resourceDay, type ResourceCounters } from "../lib/resou
 import { gzip,gunzip } from "../lib/storage-codec.ts";
 const START=Date.parse("2026-09-17T00:00:00Z"),NOW=START+180000;
 const KEY="a".repeat(64),multipliers={BTC_USDT:.001,龙虾_USDT:.1};
-const fill=(id="100",overrides:Partial<GateConfirmedFill>={}):GateConfirmedFill=>({trade_id:id,order_id:"1000000000000000001",create_time:(START+60000)/1000,contract:"BTC_USDT",size:"2.5",close_size:"0",price:"20000",text:"t-ms-e-test",...overrides});
+const fill=(id="100",overrides:Partial<GateConfirmedFill>={}):GateConfirmedFill=>({trade_id:id,order_id:"1000000000000000001",create_time:(START+60000)/1000,contract:"BTC_USDT",size:"2.5",close_size:"0",price:"20000",fee:"0.04",text:"t-ms-e-test",...overrides});
 class Memory {
  data=new Map<string,unknown>();writes=0;fail=false;alarm:number|null=null;
  async get<T>(k:string){return structuredClone(this.data.get(k)) as T|undefined;}
@@ -84,6 +84,18 @@ test("only actual fill quantities contribute; partial fractional fills are count
  assert.equal(p.state.total,60.5);assert.equal(p.state.opening,60.5);assert.equal(p.state.closing,0);assert.equal(p.state.fills,2);
  assert.equal(s.total,0);assert.equal(p.writes,2);
 });
+test("actual Gate fees accumulate with turnover and system-tagged fees exclude manual trades",async()=>{
+ const s=initialTurnover(START,NOW),p=await page(s,new Memory(),[
+   fill("1",{fee:"0.04",text:"t-ms-e-system"}),
+   fill("2",{fee:"0.03",text:"manual",size:"0.5",price:"21000"}),
+ ]);
+ assert.equal(p.state.fees,.07);assert.equal(p.state.systemTaggedFees,.04);
+ const view=turnoverView(p.state,null,NOW);assert.equal(view.fees,.07);assert.equal(view.systemTaggedFees,.04);
+});
+test("missing Gate fee fails closed rather than estimating a live fee",()=>{
+ assert.throws(()=>normalizeGateFill(fill("1",{fee:undefined}),multipliers),/实际手续费/);
+});
+
 test("close fills and reversals split by actual close_size, not order labels",async()=>{
  const s=initialTurnover(START,NOW),p=await page(s,new Memory(),[fill("1",{size:"-3",close_size:"-1",text:"manual"})]);
  assert.equal(p.state.total,60);assert.equal(p.state.opening,40);assert.equal(p.state.closing,20);assert.equal(p.state.systemTagged,0);
@@ -245,7 +257,9 @@ test("actual Worker turnover storage failure never publishes uncommitted money o
  db.fail=true;const before=structuredClone(w.runtime.live);await assert.rejects(()=>w.syncTurnover(NOW));
  assert.equal(w.turnoverState!.total,0);assert.equal(w.turnoverState!.lastScanAt,0);assert.deepEqual(w.runtime.live,before);
 });
-test("UI names real account turnover separately from PAPER and waits rather than fabricating totals",()=>{
- const ui=readFileSync(new URL("../app/live-console.tsx",import.meta.url),"utf8");assert.match(ui,/实盘累计成交额/);assert.match(ui,/live\?\.turnover\?\.total/);assert.match(ui,/含手工成交/);
+test("UI shows system LIVE turnover and actual Gate fees beside the account summary",()=>{
+ const ui=readFileSync(new URL("../app/live-console.tsx",import.meta.url),"utf8");
+ assert.match(ui,/实盘成交额/);assert.match(ui,/已扣费用/);assert.match(ui,/live\?\.turnover\?\.systemTagged/);assert.match(ui,/live\?\.turnover\?\.systemTaggedFees/);
+ assert.match(ui,/实盘累计成交额/);assert.match(ui,/live\?\.turnover\?\.total/);assert.match(ui,/全账户成交可能包含手工成交/);
  const worker=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8");assert.match(worker,/now-this.turnoverAttemptAt<60_000/);assert.match(worker,/this\.ctx\.waitUntil\(work\.finally/);
 });
