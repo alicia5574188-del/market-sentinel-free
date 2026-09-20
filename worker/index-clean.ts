@@ -1019,7 +1019,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private async ensureMultiTurnCutover(now:number){
     const previous=this.forwardState;if(!previous||previous.strategyAuthorityVersion===MULTI_TURN_VERSION)return false;
     if(this.runtime.live.requestedEnabled||this.runtime.live.operational||this.activeLivePositions().length||this.activeLiveEntries().length)
-      throw new Error("Multi-Turn切换等待：请保持LIVE关闭且无受管实盘持仓/挂单；不会自动改变所有者开关");
+      return false; // legacy drain continues protection, but cannot create new legacy entries
     const quotes=this.regimeQuotes(now),closed=closeForwardForReset(previous,quotes,now),next=initialMultiTurnForward(now);
     const prepared=await prepareForwardReset(previous,closed,next,now);
     const saved=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
@@ -1041,14 +1041,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     try {
       if (!this.forwardState) this.forwardState = await readForwardStore(this.ctx.storage, now);
       if(this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION)await this.ensureMultiTurnCutover(now);
-      if(!this.forwardState||this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION)
-        throw new Error("Multi-Turn切换尚未形成唯一PAPER权威");
+      if(!this.forwardState)throw new Error("PAPER权威账户缺失");
+      const legacyDrainOnly=this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION;
       // Restarts retain the existing ten-second source cadence. Otherwise a
       // restart could create extra compact commits inside the daily bound.
       if(now-this.forwardState.lastQuoteCycleAt<10_000){this.forwardLastAttemptAt=this.forwardState.lastQuoteCycleAt;return;}
       const previous = this.forwardState;
       const next = advanceForward({ state: previous, now, paths: this.strategyCandles,daily:this.turnDailyCandles,
-        quotes: this.regimeQuotes(now), contracts: this.regimeContracts() });
+        quotes: this.regimeQuotes(now), contracts: this.regimeContracts(),legacyDrainOnly });
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
         const prepared = await prepareForwardWrite(previous.storage.persistedAt ? previous : null, next.state, now, {compact:true});
