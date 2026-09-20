@@ -37,6 +37,7 @@ import { advanceRegimePortfolio, evaluateRegimePortfolio, initialRegimePortfolio
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
 import { advanceForward, forwardSummary, forwardEquity, freshQuote, forwardWatchSymbols, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
+import { forwardSymbolAllowed } from "../lib/forward-evidence.ts";
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE } from "../lib/forward-store.ts";
 import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBudgetView,
   PRIMARY_PLANNED_DO_ROWS, TWO_MEMBER_PLANNED_DO_ROWS, type ProtectionWriteBudget } from "../lib/forward-write-budget.ts";
@@ -792,7 +793,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private refreshRadar(now: number, rows: Awaited<ReturnType<typeof fetchMarketTickers>>) {
     const eligible = new Set(this.contractCatalog.keys());
-    const universeRows = rows.filter((row) => eligible.has(row.symbol))
+    const universeRows = rows.filter((row) => eligible.has(row.symbol) && forwardSymbolAllowed(row.symbol))
       .sort((left, right) => right.volume24hUsd - left.volume24hUsd).slice(0, SCAN_UNIVERSE_SIZE);
     const universe = new Set(universeRows.map((row) => row.symbol));
     this.runtime.liquidUniverse = universeRows.map((row) => row.symbol);
