@@ -141,7 +141,10 @@ function buildFrame(input:{symbol:string;tf:TurnTimeframe;m:RawMetrics;previous?
   const changePoint=incumbent==="LONG"?m.changeShort:incumbent==="SHORT"?m.changeLong:0;
   const failedExtension=incumbent==="LONG"?m.failedShort:incumbent==="SHORT"?m.failedLong:0;
   const breadth=breadthOpposition(incumbent,breadthLong);
-  const volBoost=.75+.25*m.volatility,activityBoost=.85+.15*m.volume;
+  // Volatility/volume are corroboration, never a prerequisite. A structural
+  // break with strong sequential evidence must still be able to confirm in a
+  // quiet tape; activity can only strengthen, not suppress, that conclusion.
+  const volBoost=1+.12*m.volatility,activityBoost=1+.04*m.volume;
   const evidence:TurnEvidence={structure,momentum,acceleration,cusum,changePoint,failedExtension,
     volatility:m.volatility,volume:m.volume,breadth,propagation};
   const score=-2.45+1.35*structure+1.05*momentum+.75*acceleration+1.10*cusum+.90*changePoint+
