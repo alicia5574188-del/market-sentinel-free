@@ -8,7 +8,7 @@ export const TIMELY_PROTECTION_POLICY = "timely-protection-v1";
 export type ExitControl = { policy: typeof TIMELY_PROTECTION_POLICY;
   armedAt: number | null; armedQuoteAt: number | null;
   maxObservationGapMs: number; maxQuoteAgeMs: number };
-export type ExitTrigger = "HARD_STOP" | "HORIZON" | "RELATION_CHANGE" | "PROFIT_GIVEBACK" | "MARKET_TURN" | "MARKET_STATE";
+export type ExitTrigger = "HARD_STOP" | "HORIZON" | "RELATION_CHANGE" | "PROFIT_GIVEBACK" | "MARKET_TURN" | "MARKET_STATE" | "TURN_FORECAST";
 export type ExitAudit = { policy: string; trigger: ExitTrigger; decisionAt: number;
   quoteAt: number; quoteAgeMs: number; observationGapMs: number;
   maxObservationGapMs: number; maxQuoteAgeMs: number;
