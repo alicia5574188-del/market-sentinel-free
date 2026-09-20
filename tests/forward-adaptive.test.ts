@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { adaptiveCandidatePriority, adaptiveEntryAdjustment, adaptiveTargetRisk, inspectRapidCondition } from "../lib/forward-adaptive.ts";
 import { EVIDENCE_POLICY, blankDiagnostics, familyKey, inspectCondition } from "../lib/forward-evidence.ts";
 import type { Measurement, Rule } from "../lib/forward-relations.ts";
+import type { TurnForecast } from "../lib/forward-market-state.ts";
+import type { MarketTurnProtection } from "../lib/forward-turn-protection.ts";
 
 const BAR=300_000,BASE=1_790_300_000_000;
 function measurements(groupReturns:number[],symbols=8):Measurement[]{
@@ -50,13 +52,13 @@ test("rapid lane rejects noisy or cost-negative recent groups instead of forcing
 });
 
 test("pullback and reversal warnings migrate learned risk continuously instead of hard-zeroing it",()=>{
-  const pullback={phase:"PULLBACK",lastFreshPhase:"PULLBACK",threatenedSide:"LONG",pressure:.6} as any;
+  const pullback={phase:"PULLBACK",lastFreshPhase:"PULLBACK",threatenedSide:"LONG",pressure:.6} as unknown as TurnForecast;
   const long=adaptiveEntryAdjustment({side:"LONG",horizon:60,state:null,forecast:pullback,turn:null});
   const short=adaptiveEntryAdjustment({side:"SHORT",horizon:60,state:null,forecast:pullback,turn:null});
   assert.ok(long.riskMultiplier>0&&long.riskMultiplier<1);assert.ok(short.riskMultiplier>0);
   assert.ok(short.priorityMultiplier>long.priorityMultiplier);
 
-  const reversal={...pullback,phase:"REVERSAL_RISK",lastFreshPhase:"REVERSAL_RISK",pressure:1} as any;
+  const reversal={...pullback,phase:"REVERSAL_RISK",lastFreshPhase:"REVERSAL_RISK",pressure:1} as unknown as TurnForecast;
   const threatened=adaptiveEntryAdjustment({side:"LONG",horizon:60,state:null,forecast:reversal,turn:null});
   const opposite=adaptiveEntryAdjustment({side:"SHORT",horizon:60,state:null,forecast:reversal,turn:null});
   assert.equal(threatened.riskMultiplier,.3);assert.ok(opposite.priorityMultiplier>1);
@@ -64,13 +66,13 @@ test("pullback and reversal warnings migrate learned risk continuously instead o
 });
 
 test("unconfirmed long-horizon countertrend is throttled rather than blocked",()=>{
-  const forecast={phase:"REVERSAL_RISK",lastFreshPhase:"REVERSAL_RISK",threatenedSide:"LONG",pressure:1} as any;
+  const forecast={phase:"REVERSAL_RISK",lastFreshPhase:"REVERSAL_RISK",threatenedSide:"LONG",pressure:1} as unknown as TurnForecast;
   const a=adaptiveEntryAdjustment({side:"SHORT",horizon:180,state:null,forecast,turn:null});
   assert.equal(a.riskMultiplier,.55);assert.ok(a.priorityMultiplier>0);
 });
 
 test("severe synchronized turn protection retains a small learned probe allocation",()=>{
-  const turn={until:BASE+60_000,threatenedSide:"LONG"} as any;
+  const turn={until:BASE+60_000,threatenedSide:"LONG"} as unknown as MarketTurnProtection;
   const a=adaptiveEntryAdjustment({side:"LONG",horizon:15,state:null,forecast:null,turn});
   assert.equal(a.riskMultiplier,.2);assert.ok(a.priorityMultiplier>0);
 });
@@ -88,7 +90,7 @@ test("drawdown scaling and turn scaling reduce size without introducing a peer-c
 test("adaptive priority favors fresh opposite migration without overriding learned evidence",()=>{
   const rule=baseRule("SHORT",60);
   const normal=adaptiveEntryAdjustment({side:"SHORT",horizon:60,state:null,forecast:null,turn:null});
-  const reversal={phase:"REVERSAL_RISK",lastFreshPhase:"REVERSAL_RISK",threatenedSide:"LONG",pressure:1} as any;
+  const reversal={phase:"REVERSAL_RISK",lastFreshPhase:"REVERSAL_RISK",threatenedSide:"LONG",pressure:1} as unknown as TurnForecast;
   const migrate=adaptiveEntryAdjustment({side:"SHORT",horizon:60,state:null,forecast:reversal,turn:null});
   assert.ok(adaptiveCandidatePriority(rule,migrate)>adaptiveCandidatePriority(rule,normal));
 });
