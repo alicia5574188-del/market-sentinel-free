@@ -116,9 +116,10 @@ test("a weak expected edge does not receive the strong edge's full 1.5% risk",()
   const m=market(now,["S0"]),a=advanceForward({state:strong,now,...m}).state,b=advanceForward({state:weak,now,...m}).state;
   assert.equal(a.positions.length,1);assert.equal(b.positions.length,1);assert.ok(b.positions[0].notional<a.positions[0].notional);
 });
-test("same-horizon opportunities share existing directional risk instead of a separate 3% veto",()=>{
+test("same-family opportunities stay inside one 1.5% risk slot while preserving participation",()=>{
   const now=START+BAR_MS*10,m=market(now),s=advanceForward({state:freshState(now),now,...m}).state;
-  const eq=forwardEquity(s,m.quotes,now).equity;assert.equal(s.positions.length,4);assert.ok(s.positions.reduce((a,t)=>a+t.plannedRisk,0)<=eq*.065+1e-8);
+  const eq=forwardEquity(s,m.quotes,now).equity;assert.ok(s.positions.length>0);
+  assert.ok(s.positions.reduce((a,t)=>a+t.plannedRisk,0)<=eq*.015+1e-8);
   assert.ok(s.positions.every(t=>t.plannedRisk<=t.forecast!.sizingEquity!*.015+1e-8));
 });
 test("tiny remaining allocation is skipped rather than creating dust orders",()=>{
