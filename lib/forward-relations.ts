@@ -457,11 +457,28 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
     const notionalPer=price*meta.quantoMultiplier,riskPer=notionalPer*lossRate;
     const equityDeltaPer=-notionalPer*PAPER_COST.feeRate
       +d*meta.quantoMultiplier*(exitNow-price)-meta.quantoMultiplier*exitNow*PAPER_COST.feeRate;
-    const capCount=(rate:number,used:number)=>Math.max(0,Math.floor((equity*rate-used)
-      /Math.max(1e-12,riskPer-rate*equityDeltaPer)));
+    const capCount=(rate:number,used:number,addedRiskPer=0)=>Math.max(0,Math.floor((equity*rate-used)
+      /Math.max(1e-12,addedRiskPer-rate*equityDeltaPer)));
     const qualityRate=.015*quality*drawdownScale;
     let count=Math.floor(desired/notionalPer);
-    count=Math.min(count,capCount(.10,totalRisk),capCount(.065,sideRisk),capCount(candidate.riskCap,sleeveRisk),capCount(qualityRate,0));
+    // The new fill's immediate drag lowers the denominator for every existing
+    // risk sleeve, not merely the sleeve that receives the new position.
+    // Constrain all sleeves, both directions and every existing single-trade
+    // risk simultaneously on post-fill marked equity.
+    const longRisk=s.positions.filter(t=>t.side==="LONG").reduce((n,t)=>n+t.plannedRisk,0);
+    const shortRisk=s.positions.filter(t=>t.side==="SHORT").reduce((n,t)=>n+t.plannedRisk,0);
+    const constraints=[
+      capCount(.10,totalRisk,riskPer),
+      capCount(.065,longRisk,candidate.side==="LONG"?riskPer:0),
+      capCount(.065,shortRisk,candidate.side==="SHORT"?riskPer:0),
+      capCount(qualityRate,0,riskPer),
+      capCount(.015,0,riskPer),
+      ...TURN_TIMEFRAMES.map(tf=>capCount(TURN_CONFIG[tf].riskCap,
+        s.positions.filter(t=>t.turn?.timeframe===tf).reduce((n,t)=>n+t.plannedRisk,0),
+        tf===candidate.timeframe?riskPer:0)),
+      ...s.positions.map(t=>capCount(.015,t.plannedRisk,0)),
+    ];
+    count=Math.min(count,...constraints);
     if(count<Math.max(1,meta.minContracts??1)){reject("风险额度低于交易所最小合约张数");continue;}
     const quantity=count*meta.quantoMultiplier,notional=quantity*price;
     if(notional<equity*.05||notional<desired*.25){reject("合约取整后只剩碎片仓位");continue;}
