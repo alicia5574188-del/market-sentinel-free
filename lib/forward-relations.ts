@@ -91,11 +91,18 @@ export function initialForward(now:number):ForwardState {
     balance:1000,initialEquity:1000,peakEquity:1000,maxDrawdown:0,resolved:0,wins:0,grossPnl:0,fees:0,fundingAllowance:0,turnover:0,
     observations:0,measured:0,invalidated:0,frames:{},pending:{},samples:[],rules:[],positions:[],history:[],events:[],daily:[],
     lastBars:{},lastEntryBars:{},policyVersion:EVIDENCE_POLICY,feedback:[],relationEntries:{},
-    latestReason:"Multi-Turn六周期转折引擎已启动；旧Forward规则不再拥有新开仓或策略退出权。",
+    latestReason:"启动真实行情前向实验；旧K线只计算特征，不回填学习收益或模拟订单。",
     fitDiagnostics:{tested:0,qualified:0,trainGroups:0,checkGroups:0,latestAt:0,rapidQualified:0,activeLong:0,activeShort:0},
     selectedSymbols:[],storage:{persistedAt:0,error:null},liveEligible:false,adaptationVersion:FORWARD_ADAPTIVE_VERSION,lastFitMeasured:0,
-    strategyAuthorityVersion:MULTI_TURN_VERSION,turnEngine:initialMultiTurn(),turnLastEntryBars:{},cutoverAt:now};
+    strategyAuthorityVersion:"legacy-forward-rules-v1",turnLastEntryBars:{}};
   event(s,now,"START",FORWARD_VERSION,s.latestReason);return s;
+}
+export function initialMultiTurnForward(now:number):ForwardState{
+  const s=initialForward(now);
+  s.revision=0;s.events=[];s.rules=[];s.samples=[];s.pending={};s.frames={};s.feedback=[];s.relationEntries={};s.quoteRetries=[];
+  s.strategyAuthorityVersion=MULTI_TURN_VERSION;s.turnEngine=initialMultiTurn();s.turnLastEntryBars={};s.cutoverAt=now;
+  s.latestReason="Multi-Turn六周期转折引擎已启动；旧Forward规则不再拥有新开仓或策略退出权。";
+  event(s,now,"START",MULTI_TURN_VERSION,s.latestReason);return s;
 }
 export function normalizeForward(v:ForwardState|null|undefined,now:number):ForwardState {
   if(!v)return initialForward(now);
