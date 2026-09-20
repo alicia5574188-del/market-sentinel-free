@@ -6,11 +6,12 @@ export const LIVE_TURNOVER_PREFIX="live-turnover:v1:";
 export const FILL_PAGE_SIZE=100;
 export type GateConfirmedFill={id?:string|number;trade_id?:string|number;order_id?:string|number;
   create_time?:number|string;contract?:string;size?:number|string;close_size?:number|string;
-  price?:number|string;trade_value?:number|string;text?:string};
+  price?:number|string;trade_value?:number|string;fee?:number|string;text?:string};
 type Window={from:number;to:number;offset:number};
 export type TurnoverState={version:typeof LIVE_TURNOVER_VERSION;startedAt:number;createdAt:number;
   total:number;opening:number;closing:number;unclassified:number;systemTagged:number;fills:number;
-  through:number;lastScanAt:number;pending:Window|null};
+  through:number;lastScanAt:number;pending:Window|null;
+  fees:number;systemTaggedFees:number;feeThrough:number;feeLastScanAt:number;feePending:Window|null};
 type Fill={key:string;at:number;day:string;notional:number;opening:number;closing:number;unclassified:number;
   systemTagged:number;fingerprint:string};
 type Bucket={version:typeof LIVE_TURNOVER_VERSION;day:string;seen:Record<string,string>};
@@ -20,14 +21,26 @@ const known=(x:unknown)=>x!==undefined&&x!==null&&String(x).trim()!==""&&Number.
 const stableId=(x:unknown)=>typeof x==="number"&&!Number.isSafeInteger(x)?null:/^\d{1,40}$/.test(String(x))?String(x):null;
 export function initialTurnover(startedAt:number,now:number):TurnoverState {
   if(!Number.isSafeInteger(startedAt)||startedAt<=0||startedAt>now)throw new Error("实盘成交额统计起点无效");
+  const before=Math.floor(startedAt/1000)-1;
   return {version:LIVE_TURNOVER_VERSION,startedAt,createdAt:now,total:0,opening:0,closing:0,unclassified:0,
-    systemTagged:0,fills:0,through:Math.floor(startedAt/1000)-1,lastScanAt:0,pending:null};
+    systemTagged:0,fills:0,through:before,lastScanAt:0,pending:null,
+    fees:0,systemTaggedFees:0,feeThrough:before,feeLastScanAt:0,feePending:null};
 }
-export function validateTurnover(s:TurnoverState) {
-  if(s.version!==LIVE_TURNOVER_VERSION||![s.total,s.opening,s.closing,s.unclassified,s.systemTagged,s.fills,s.through,s.startedAt,s.createdAt,s.lastScanAt].every(x=>Number.isFinite(x)&&x>=0)
+export function validateTurnover(input:TurnoverState):TurnoverState {
+  const start=Math.floor(input.startedAt/1000)-1;
+  // Older v1 summaries predate fee accounting. Migrate analytics in place
+  // without resetting the already-confirmed turnover ledger.
+  const s={...input,
+    fees:Number.isFinite(input.fees)?input.fees:0,
+    systemTaggedFees:Number.isFinite(input.systemTaggedFees)?input.systemTaggedFees:0,
+    feeThrough:Number.isSafeInteger(input.feeThrough)?input.feeThrough:start,
+    feeLastScanAt:Number.isFinite(input.feeLastScanAt)?input.feeLastScanAt:0,
+    feePending:input.feePending??null};
+  if(s.version!==LIVE_TURNOVER_VERSION||![s.total,s.opening,s.closing,s.unclassified,s.systemTagged,s.fills,s.through,s.startedAt,s.createdAt,s.lastScanAt,
+      s.fees,s.systemTaggedFees,s.feeThrough,s.feeLastScanAt].every(x=>Number.isFinite(x)&&x>=0)
     ||Math.abs(s.total-s.opening-s.closing-s.unclassified)>1e-7*Math.max(1,s.total))
     throw new Error("成交额账本异常，拒绝清零覆盖");
-  if(s.pending&&(![s.pending.from,s.pending.to,s.pending.offset].every(Number.isSafeInteger)||s.pending.offset<0||s.pending.from>s.pending.to))
+  for(const cursor of[s.pending,s.feePending])if(cursor&&(![cursor.from,cursor.to,cursor.offset].every(Number.isSafeInteger)||cursor.offset<0||cursor.from>cursor.to))
     throw new Error("成交额分页游标异常");
   return s;
 }
@@ -36,6 +49,14 @@ export function nextFillWindow(s:TurnoverState,now:number):Window|null {
   // Frozen upper boundary avoids chasing a moving newest page. Revisit two
   // minutes at the frontier to include delayed/indexing-lagged responses.
   const from=Math.max(Math.floor(s.startedAt/1000),s.through-120);
+  const to=Math.min(Math.floor((now-15_000)/1000),from+86400-1);
+  return to>=from?{from,to,offset:0}:null;
+}
+export function nextFeeWindow(s:TurnoverState,now:number):Window|null {
+  const v=validateTurnover(s);if(v.feePending)return {...v.feePending};
+  // Fee backfill is contiguous and non-overlapping. State and cursor are saved
+  // atomically, so a restart can safely repeat the same page without skipping.
+  const from=Math.max(Math.floor(v.startedAt/1000),v.feeThrough+1);
   const to=Math.min(Math.floor((now-15_000)/1000),from+86400-1);
   return to>=from?{from,to,offset:0}:null;
 }
@@ -101,11 +122,32 @@ export async function prepareTurnoverPage(input:{state:TurnoverState;window:Wind
   entries[`${LIVE_TURNOVER_PREFIX}${accountKey}:summary`]=s;
   return {state:s,entries,writes:Object.keys(entries).length,newFills:s.fills-state.fills};
 }
+export function prepareFeePage(input:{state:TurnoverState;window:Window;rows:GateConfirmedFill[];now:number}) {
+  const base=validateTurnover(input.state),expected=nextFeeWindow(base,input.now);
+  if(input.rows.length>FILL_PAGE_SIZE||input.window.offset>50000)throw new Error("手续费分页超出预算，保留已核对部分");
+  if(!expected||JSON.stringify(expected)!==JSON.stringify(input.window))throw new Error("手续费分页范围发生变化");
+  let fees=0,systemTaggedFees=0;
+  for(const row of input.rows){
+    if(!known(row.create_time)||!known(row.fee))throw new Error("Gate成交记录缺少实际手续费，拒绝估算");
+    const at=Math.round(Number(row.create_time)*1000);
+    if(at<input.window.from*1000||at>input.window.to*1000+999)throw new Error("Gate手续费记录超出请求的固定时间范围");
+    const fee=Number(row.fee);if(!Number.isFinite(fee))throw new Error("Gate手续费不是有效数字");
+    const deducted=Math.max(0,fee);
+    fees+=deducted;if(/^t-ms-[esx]-/.test(row.text??""))systemTaggedFees+=deducted;
+  }
+  const s=structuredClone(base);s.fees+=fees;s.systemTaggedFees+=systemTaggedFees;s.feeLastScanAt=input.now;
+  if(input.rows.length===FILL_PAGE_SIZE)s.feePending={...input.window,offset:input.window.offset+FILL_PAGE_SIZE};
+  else{s.feeThrough=Math.max(s.feeThrough,input.window.to);s.feePending=null;}
+  return validateTurnover(s);
+}
+
 export function turnoverView(state:TurnoverState|null,error:string|null,now:number) {
   return {version:LIVE_TURNOVER_VERSION,scope:"GATE_USDT_ACCOUNT" as const,includesManualTrades:true,
     startedAt:state?.startedAt??null,total:state?.lastScanAt?state.total:null,opening:state?.lastScanAt?state.opening:null,
     closing:state?.lastScanAt?state.closing:null,unclassified:state?.lastScanAt?state.unclassified:null,
     systemTagged:state?.lastScanAt?state.systemTagged:null,fillCount:state?.fills??0,checkedThrough:state?state.through*1000:null,
-    lastScanAt:state?.lastScanAt??null,catchingUp:!state?.lastScanAt||Boolean(state.pending)||now-state.through*1000>120000,
-    error,method:"逐笔Gate成交ID去重，开仓＋平仓名义金额；非保证金、非收益、非模拟成交"};
+    fees:state?.feeLastScanAt?state.fees:null,systemTaggedFees:state?.feeLastScanAt?state.systemTaggedFees:null,
+    feeCheckedThrough:state?.feeLastScanAt?state.feeThrough*1000:null,feeCatchingUp:!state?.feeLastScanAt||Boolean(state?.feePending)||!state||now-state.feeThrough*1000>120000,
+    lastScanAt:state?.lastScanAt??null,catchingUp:!state?.lastScanAt||Boolean(state?.pending)||!state||now-state.through*1000>120000,
+    error,method:"逐笔Gate成交ID去重，开仓＋平仓名义金额；手续费使用Gate成交记录fee字段累计，不用模型费率估算"};
 }
