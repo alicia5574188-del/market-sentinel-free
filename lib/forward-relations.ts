@@ -480,13 +480,14 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
   else s.latestReason=`Multi-Turn管理${s.positions.length}笔持仓；无周期被强制暂停。`;
 }
 
-export function closeForwardForReset(state:ForwardState,quotes:Record<string,Quote>,now:number){
+export function closeForwardForReset(state:ForwardState,quotes:Record<string,Quote>,now:number,
+  reason="Multi-Turn正式切换：归档旧模拟仓位并重建1000U新账户"){
   const s=structuredClone(state);
   for(const t of [...s.positions]){
-    const q=quotes[t.symbol];if(!freshQuote(q,now))throw new Error(`${t.symbol}缺少新鲜盘口，不能原子切换模拟账户`);
-    closeTrade(s,t,q,now,"Multi-Turn正式切换：归档旧Forward模拟仓位并重建1000U新账户");
+    const q=quotes[t.symbol];if(!freshQuote(q,now))throw new Error(`${t.symbol}缺少新鲜盘口，不能原子重置模拟账户`);
+    closeTrade(s,t,q,now,reason);
   }
-  s.positions=[];event(s,now,"UPGRADE",MULTI_TURN_VERSION,"旧Forward账户已用新鲜可执行价完成归档；下一代六周期转折账户从独立1000U基准开始。");
+  s.positions=[];event(s,now,"UPGRADE",MULTI_TURN_VERSION,reason);
   return s;
 }
 
