@@ -69,7 +69,7 @@ test("severe synchronized turn protection retains a small learned probe allocati
 test("drawdown scaling and turn scaling reduce size without introducing a peer-count starvation term",()=>{
   const risk=adaptiveTargetRisk({equity:1000,quality:.8,allocationScale:.7,riskMultiplier:.5,stateHeadroom:20});
   assert.ok(Math.abs(risk-4.2)<1e-12);
-  assert.equal(adaptiveTargetRisk({equity:1000,quality:.8,allocationScale:.55,riskMultiplier:.2,stateHeadroom:20}),1.32);
+  assert.ok(Math.abs(adaptiveTargetRisk({equity:1000,quality:.8,allocationScale:.55,riskMultiplier:.2,stateHeadroom:20})-1.32)<1e-12);
   assert.ok(risk>0);
 });
 
