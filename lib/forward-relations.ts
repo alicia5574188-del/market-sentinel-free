@@ -13,6 +13,8 @@ import { MARKET_STATE_VERSION, TURN_FORECAST_VERSION, marketRiskBudget, selectDi
 import { forwardProtectionChanged } from "./forward-protection-checkpoint.ts";
 import { FORWARD_ADAPTIVE_VERSION, adaptiveCandidatePriority, adaptiveEntryAdjustment, adaptiveTargetRisk, calibrationRiskMultiplier,
   familyRiskHeadroom, inspectRapidCondition, sampleRiskMultiplier, type AdaptiveCandidate, type AdaptiveLane } from "./forward-adaptive.ts";
+import { MULTI_TURN_VERSION, TURN_CONFIG, TURN_TIMEFRAMES, evaluateMultiTurn, initialMultiTurn, turnCandidates,
+  type MultiTurnState, type TurnCandidate, type TurnTimeframe } from "./multi-turn-engine.ts";
 // The storage schema stays v1.0 so an algorithm upgrade cannot reset the ledger.
 export const FORWARD_VERSION = "forward-relations-v1.0";
 export const FORWARD_GRAMMAR = "conditional-response-conjunction-v1";
@@ -34,7 +36,8 @@ export type Rule = { id: string; signature: string; parentId: string | null; ver
   stopRate: number; armRate: number; givebackRate: number; exitMode: "HORIZON" | "REACTION_DECAY";
   samples: number; trainGroups: number; checkGroups: number; estimatedNetRate: number; priorResponse: number | null;
   recentResponse: number; standardError: number; reason: string; mutation: "CREATE" | "REVISE" | "RECALL";
-  grammar: string; liveEligible: false; evidence?: Evidence; adaptiveLane?:AdaptiveLane };
+  grammar: string; liveEligible: false; evidence?: Evidence; adaptiveLane?:AdaptiveLane;
+  authority?:"LEGACY_FORWARD"|"MULTI_TURN";turnTimeframe?:TurnTimeframe };
 export type Trade = { id: string; symbol: string; side: "LONG" | "SHORT"; rule: Rule; openedAt: number; closedAt: number | null;
   status: "OPEN" | "CLOSED"; entryPrice: number; exitPrice: number | null; quantity: number; contracts: number;
   quantoMultiplier: number; notional: number; leverage: number; margin: number; plannedRisk: number; stopPrice: number;
@@ -43,7 +46,9 @@ export type Trade = { id: string; symbol: string; side: "LONG" | "SHORT"; rule: 
   relationFailureBars: number; lastRelationBar: number; execution: "REAL_QUOTE_PAPER_MODEL"; liveEligible: false;
   exitControl?: ExitControl; exitAudit?: ExitAudit;
   forecast?: { policy:string; family:string; signalAt:number; signalPrice:number; baseNetRate:number;
-    calibratedNetRate:number; remainingNetRate:number; quality:number; sizingEquity?:number } };
+    calibratedNetRate:number; remainingNetRate:number; quality:number; sizingEquity?:number };
+  turn?:{version:typeof MULTI_TURN_VERSION;timeframe:TurnTimeframe;signalAt:number;entryTurnProbability:number;
+    entryContinuation:number;entryDirectionConfidence:number} };
 export type AuditEvent = { id: string; at: number; kind: "START" | "RULE" | "DORMANT" | "ENTRY" | "EXIT" | "PROTECTION" | "DATA_GAP" | "FIT" | "UPGRADE";
   subject: string; reason: string; detail?: Record<string, string | number | null> };
 export type Daily = { day: string; firstAt: number; lastAt: number; startEquity: number; endEquity: number; exactBoundary: boolean };
@@ -58,6 +63,7 @@ export type ForwardState = { version: string; startedAt: number; revision: numbe
     rapidQualified?:number; activeLong?:number; activeShort?:number };
   selectedSymbols: string[]; storage: { persistedAt: number; error: string | null }; liveEligible: false;
   adaptationVersion?:string; lastFitMeasured?:number;
+  strategyAuthorityVersion?:string;turnEngine?:MultiTurnState;turnLastEntryBars?:Record<string,number>;cutoverAt?:number;
   policyVersion?:string; feedback?:Feedback[]; evidenceDiagnostics?:EvidenceDiagnostics;
   entryDiagnostics?:{at:number;matched:number;opened:number;reasons:Record<string,number>;retry?:boolean;queued?:number;adaptiveScaled?:number};
   quoteRetries?:QuoteRetry[];
@@ -84,9 +90,11 @@ export function initialForward(now:number):ForwardState {
   const s:ForwardState={version:FORWARD_VERSION,startedAt:now,revision:0,lastCycleAt:0,lastFitAt:0,lastQuoteCycleAt:0,
     balance:1000,initialEquity:1000,peakEquity:1000,maxDrawdown:0,resolved:0,wins:0,grossPnl:0,fees:0,fundingAllowance:0,turnover:0,
     observations:0,measured:0,invalidated:0,frames:{},pending:{},samples:[],rules:[],positions:[],history:[],events:[],daily:[],
-    lastBars:{},lastEntryBars:{},policyVersion:EVIDENCE_POLICY,feedback:[],relationEntries:{},latestReason:"启动真实行情前向实验；旧K线只计算特征，不回填学习收益或模拟订单。",
+    lastBars:{},lastEntryBars:{},policyVersion:EVIDENCE_POLICY,feedback:[],relationEntries:{},
+    latestReason:"Multi-Turn六周期转折引擎已启动；旧Forward规则不再拥有新开仓或策略退出权。",
     fitDiagnostics:{tested:0,qualified:0,trainGroups:0,checkGroups:0,latestAt:0,rapidQualified:0,activeLong:0,activeShort:0},
-    selectedSymbols:[],storage:{persistedAt:0,error:null},liveEligible:false,adaptationVersion:FORWARD_ADAPTIVE_VERSION,lastFitMeasured:0};
+    selectedSymbols:[],storage:{persistedAt:0,error:null},liveEligible:false,adaptationVersion:FORWARD_ADAPTIVE_VERSION,lastFitMeasured:0,
+    strategyAuthorityVersion:MULTI_TURN_VERSION,turnEngine:initialMultiTurn(),turnLastEntryBars:{},cutoverAt:now};
   event(s,now,"START",FORWARD_VERSION,s.latestReason);return s;
 }
 export function normalizeForward(v:ForwardState|null|undefined,now:number):ForwardState {
@@ -99,7 +107,9 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
   if(v.turnProtection&&v.turnProtection.version!==MARKET_TURN_PROTECTION_VERSION)throw new Error("未知市场转折保护版本，保留原账户");
   if(v.marketState&&v.marketState.version!==MARKET_STATE_VERSION)throw new Error("未知组合市场状态版本，保留原账户");
   if(v.turnForecast&&v.turnForecast.version!==TURN_FORECAST_VERSION)throw new Error("未知转折预警版本，保留原账户");
-  return {...v,adaptationVersion:v.adaptationVersion??"legacy-forward-adaptation-v1",lastFitMeasured:v.lastFitMeasured??v.measured};
+  return {...v,adaptationVersion:v.adaptationVersion??"legacy-forward-adaptation-v1",lastFitMeasured:v.lastFitMeasured??v.measured,
+    strategyAuthorityVersion:v.strategyAuthorityVersion??"legacy-forward-rules-v1",
+    turnEngine:v.turnEngine?.version===MULTI_TURN_VERSION?v.turnEngine:undefined,turnLastEntryBars:v.turnLastEntryBars??{}};
 }
 export function frameFromCandles(symbol:string,rows:Candle[],now:number):Frame|null {
   const a=rows.filter(r=>r.time*1000+BAR_MS<=now).slice(-25);
