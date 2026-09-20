@@ -8,7 +8,7 @@
  * a direction and never turns a market warning into a synthetic trade.
  */
 import { EVIDENCE_POLICY, costAwareGiveback, evidenceHash, evidenceQuality, executionCalibration,
-  familyKey, matches, modeledCost, type Candidate, type Feedback } from "./forward-evidence.ts";
+  familyKey, forwardSymbolAllowed, matches, modeledCost, type Candidate, type Feedback } from "./forward-evidence.ts";
 import type { Condition, Measurement, Rule } from "./forward-relations.ts";
 import type { MarketSide, MarketState, TurnForecast } from "./forward-market-state.ts";
 import type { MarketTurnProtection } from "./forward-turn-protection.ts";
@@ -65,7 +65,7 @@ export function inspectRapidCondition(input:{
   now:number;
   feedback:Feedback[];
 }):AdaptiveCandidate|null {
-  const ordered=dedup(input.rows.filter(r=>r.horizon===15&&r.endAt<=input.now&&r.availableAt<=input.now));
+  const ordered=dedup(input.rows.filter(r=>r.horizon===15&&r.endAt<=input.now&&r.availableAt<=input.now&&forwardSymbolAllowed(r.symbol)));
   const eligible=ordered.filter(r=>matches(r.x,input.conditions));
   const groups=groupResponses(eligible);
   if(groups.length<3)return null;
