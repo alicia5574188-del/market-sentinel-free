@@ -151,12 +151,14 @@ function buildFrame(input:{symbol:string;tf:TurnTimeframe;m:RawMetrics;previous?
     .55*failedExtension+.60*breadth+.70*propagation+.25*m.volatility+.10*m.volume;
   const raw=clip(sigmoid(score)*volBoost*activityBoost+.05*structure);
   const p=calibratedProbability(raw,calibration),opp=opposite(incumbent);
+  const completedAt=completeAt(last,tf),newBar=!previous||previous.completedAt!==completedAt;
   let candidateSide:TurnSide=previous?.candidateSide??"NEUTRAL",candidateBars=previous?.candidateBars??0;
   if(incumbent==="NEUTRAL"){candidateSide="NEUTRAL";candidateBars=0;}
   else if(p>=cfg.turning){
-    if(candidateSide===opp)candidateBars++;else{candidateSide=opp;candidateBars=1;}
+    if(newBar){if(candidateSide===opp)candidateBars++;else{candidateSide=opp;candidateBars=1;}}
+    else if(candidateSide!=="NEUTRAL"&&candidateSide!==opp){candidateSide=opp;candidateBars=0;}
   }else if(p<cfg.watch){candidateSide="NEUTRAL";candidateBars=0;}
-  else candidateBars=Math.max(0,candidateBars-1);
+  else if(newBar)candidateBars=Math.max(0,candidateBars-1);
   const extreme=p>=.90&&structure>=.65,confirmed=incumbent!=="NEUTRAL"&&p>=cfg.confirm&&(candidateBars>=cfg.confirmBars||extreme);
   let direction=incumbent,justTurned=false,lastTurnAt=previous?.lastTurnAt??null,phase:TurnPhase;
   let turnProbability=p,triggerProbability=p;
@@ -173,7 +175,7 @@ function buildFrame(input:{symbol:string;tf:TurnTimeframe;m:RawMetrics;previous?
   return{version:MULTI_TURN_VERSION,symbol,timeframe:tf,observedAt:now,completedAt:completeAt(last,tf),ready:true,
     direction,rawDirection:m.rawDirection,directionConfidence:m.confidence,turnProbability,triggerProbability,
     continuationScore,phase,candidateSide,candidateBars,justTurned,lastTurnAt,
-    signalAgeBars:previous&&previous.completedAt===completeAt(last,tf)?previous.signalAgeBars+1:0,atrRate:m.atrRate,
+    signalAgeBars:justTurned?0:newBar?(previous?.signalAgeBars??0)+1:(previous?.signalAgeBars??0),atrRate:m.atrRate,
     expectedMoveRate:m.expectedMoveRate,stopRate,price,breadthLong,propagationPressure:propagation,evidence,
     reason:`${tf} ${direction} | 转折${(turnProbability*100).toFixed(0)}% | 延续${(continuationScore*100).toFixed(0)}% | ${phase}`};
 }
