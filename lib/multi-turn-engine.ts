@@ -31,7 +31,7 @@ export type TurnFrameState={
   ready:boolean;direction:TurnSide;rawDirection:TurnSide;directionConfidence:number;turnProbability:number;
   triggerProbability:number;continuationScore:number;phase:TurnPhase;candidateSide:TurnSide;candidateBars:number;
   justTurned:boolean;lastTurnAt:number|null;signalAgeBars:number;atrRate:number;expectedMoveRate:number;stopRate:number;
-  breadthLong:number;propagationPressure:number;evidence:TurnEvidence;reason:string;
+  price:number;breadthLong:number;propagationPressure:number;evidence:TurnEvidence;reason:string;
 };
 export type TurnCalibration={count:number;brier:number;predictedMean:number;actualMean:number;bias:number;lastResolvedAt:number};
 export type TurnForecastRecord={id:string;symbol:string;timeframe:TurnTimeframe;at:number;dueAt:number;
@@ -174,7 +174,7 @@ function buildFrame(input:{symbol:string;tf:TurnTimeframe;m:RawMetrics;previous?
     direction,rawDirection:m.rawDirection,directionConfidence:m.confidence,turnProbability,triggerProbability,
     continuationScore,phase,candidateSide,candidateBars,justTurned,lastTurnAt,
     signalAgeBars:previous&&previous.completedAt===completeAt(last,tf)?previous.signalAgeBars+1:0,atrRate:m.atrRate,
-    expectedMoveRate:m.expectedMoveRate,stopRate,breadthLong,propagationPressure:propagation,evidence,
+    expectedMoveRate:m.expectedMoveRate,stopRate,price,breadthLong,propagationPressure:propagation,evidence,
     reason:`${tf} ${direction} | 转折${(turnProbability*100).toFixed(0)}% | 延续${(continuationScore*100).toFixed(0)}% | ${phase}`};
 }
 
@@ -238,16 +238,16 @@ export function evaluateMultiTurn(input:{state?:MultiTurnState|null;paths:Record
 
 export type TurnCandidate={symbol:string;timeframe:TurnTimeframe;side:Exclude<TurnSide,"NEUTRAL">;
   score:number;riskCap:number;stopRate:number;expectedMoveRate:number;turnProbability:number;confidence:number;
-  completedAt:number;reason:string};
-export function turnCandidates(state:MultiTurnState,costRate:number){
+  completedAt:number;signalPrice:number;reason:string};
+export function turnCandidates(state:MultiTurnState,costRate:number|((tf:TurnTimeframe)=>number)){
   const rows:TurnCandidate[]=[];
   for(const [symbol,byTf] of Object.entries(state.frames))for(const tf of TURN_TIMEFRAMES){
     const f=byTf[tf];if(!f?.ready||f.direction==="NEUTRAL")continue;
-    const cfg=TURN_CONFIG[tf],costEdge=f.expectedMoveRate-costRate;
+    const cfg=TURN_CONFIG[tf],cost=typeof costRate==="function"?costRate(tf):costRate,costEdge=f.expectedMoveRate-cost;
     if(f.continuationScore<cfg.minContinuation||costEdge<=0)continue;
-    rows.push({symbol,timeframe:tf,side:f.direction,score:f.continuationScore*Math.max(.1,costEdge/Math.max(costRate,.001)),
+    rows.push({symbol,timeframe:tf,side:f.direction,score:f.continuationScore*Math.max(.1,costEdge/Math.max(cost,.001)),
       riskCap:cfg.riskCap,stopRate:f.stopRate,expectedMoveRate:f.expectedMoveRate,turnProbability:f.turnProbability,
-      confidence:f.directionConfidence,completedAt:f.completedAt,reason:f.reason});
+      confidence:f.directionConfidence,completedAt:f.completedAt,signalPrice:f.price,reason:f.reason});
   }
   return rows.sort((a,b)=>b.score-a.score||TURN_CONFIG[b.timeframe].minutes-TURN_CONFIG[a.timeframe].minutes||a.symbol.localeCompare(b.symbol));
 }
