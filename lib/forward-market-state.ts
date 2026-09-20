@@ -57,7 +57,7 @@ function rawState(paths:Record<string,CandleLike[]>,now:number){
     const r15=last/closes[closes.length-4]-1,r30=last/closes[closes.length-7]-1,r60=last/closes[0]-1;
     const path=steps.slice(-6),travel=path.reduce((n,v)=>n+Math.abs(v),0);
     const efficiency=travel>0?Math.abs(r30)/travel:0;
-    const dirs=path.map(sign).filter(Boolean),flips=dirs.slice(1).reduce((n,v,i)=>n+Number(v!==dirs[i]),0);
+    const dirs=path.map(sign).filter(Boolean),flips=dirs.slice(1).reduce<number>((n,v,i)=>n+Number(v!==dirs[i]),0);
     return[{r15,r30,r60,efficiency,flipRate:dirs.length>1?flips/(dirs.length-1):0,base:median(steps.map(Math.abs))}];
   });
   if(rows.length<8)return{mode:"UNKNOWN" as MarketMode,rows,base:.0005,b15:0,b30:0,b60:0,m15:0,m30:0,m60:0,eff:0,flip:0};
