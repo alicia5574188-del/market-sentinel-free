@@ -8,7 +8,8 @@ export const TIMELY_PROTECTION_POLICY = "timely-protection-v1";
 export type ExitControl = { policy: typeof TIMELY_PROTECTION_POLICY;
   armedAt: number | null; armedQuoteAt: number | null;
   maxObservationGapMs: number; maxQuoteAgeMs: number };
-export type ExitTrigger = "HARD_STOP" | "HORIZON" | "RELATION_CHANGE" | "PROFIT_GIVEBACK" | "MARKET_TURN" | "MARKET_STATE" | "TURN_FORECAST";
+export type ExitTrigger = "HARD_STOP" | "HORIZON" | "RELATION_CHANGE" | "PROFIT_GIVEBACK" | "MARKET_TURN" | "MARKET_STATE" | "TURN_FORECAST" | "MULTI_TURN" | "MAX_LIFETIME";
+export type ExitDecision = { trigger: ExitTrigger; reason: string; boundaryRate: number | null };
 export type ExitAudit = { policy: string; trigger: ExitTrigger; decisionAt: number;
   quoteAt: number; quoteAgeMs: number; observationGapMs: number;
   maxObservationGapMs: number; maxQuoteAgeMs: number;
@@ -41,8 +42,7 @@ export function observeExitControl(t: Trade, quoteAt: number, now: number) {
  * Only the extra five-/fifteen-minute age embargoes are removed for NEW trades.
  * Being armed alone never exits a position; a subsequent giveback is required.
  */
-export function protectedExitDecision(t: Trade, returnRate: number, now: number):
-  { trigger: ExitTrigger; reason: string; boundaryRate: number | null } | null {
+export function protectedExitDecision(t: Trade, returnRate: number, now: number): ExitDecision | null {
   const r = t.rule, elapsed = now - t.openedAt;
   const timely = t.exitControl?.policy === TIMELY_PROTECTION_POLICY;
   if (elapsed < 0) return null;
@@ -58,7 +58,7 @@ export function protectedExitDecision(t: Trade, returnRate: number, now: number)
   return null;
 }
 
-export function makeExitAudit(t: Trade, decision: NonNullable<ReturnType<typeof protectedExitDecision>>,
+export function makeExitAudit(t: Trade, decision: ExitDecision,
   px: number, quoteAt: number, now: number, observationGapMs: number): ExitAudit {
   const d = t.side === "LONG" ? 1 : -1;
   const boundary = decision.boundaryRate;
