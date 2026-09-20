@@ -198,14 +198,15 @@ export async function fetchContractStats(symbol: string) {
 export type GateCandle = { time: number; volume: number; close: number; high: number; low: number; open: number };
 type GateCandleRow = { t?: number; v?: string | number; c?: string | number; h?: string | number; l?: string | number; o?: string | number };
 
-export async function fetchStructureCandles(symbol: string, interval: "1m" | "5m" | "15m" | "1h", limit = 120) {
+export async function fetchStructureCandles(symbol: string, interval: "1m" | "5m" | "15m" | "30m" | "1h" | "4h" | "1d", limit = 120) {
   const boundedLimit = Math.max(2, Math.min(1_000, Math.floor(limit)));
   const rows = await gatePublic<GateCandleRow[]>(
     `/futures/usdt/candlesticks?contract=${encodeURIComponent(symbol)}&interval=${interval}&limit=${boundedLimit}`,
     GATE_RESILIENT_TIMEOUT_MS,
     2,
   );
-  const intervalSeconds = interval === "1m" ? 60 : interval === "5m" ? 300 : interval === "15m" ? 900 : 3_600;
+  const intervalSeconds = interval === "1m" ? 60 : interval === "5m" ? 300 : interval === "15m" ? 900
+    : interval === "30m" ? 1_800 : interval === "1h" ? 3_600 : interval === "4h" ? 14_400 : 86_400;
   const completedBefore = Math.floor(Date.now() / 1_000 / intervalSeconds) * intervalSeconds;
   const parsed = rows.map((row) => ({
     time: Number(row.t), volume: Number(row.v), close: Number(row.c), high: Number(row.h), low: Number(row.l), open: Number(row.o),
