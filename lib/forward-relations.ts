@@ -156,7 +156,7 @@ export function synthesizeRules(s:ForwardState,now:number) {
     // Keep a slightly broader learned set, then guarantee that an independently
     // qualified opposite-side family is not erased by a strong incumbent trend.
     // Risk caps, not candidate pre-pruning, decide how much capital can migrate.
-    for(const c of selectDirectionalCandidates(shared,3))candidates.push(c);
+    for(const c of selectDirectionalCandidates(shared,2))candidates.push(c);
     // Single-coin evidence is not banned and is never exported to other coins.
     // Scope uses that coin's own chronological discovery/check split.
     const local:Candidate[]=[];
@@ -350,6 +350,9 @@ function openTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<
   s.participation??={since:now,cycles:0,matches:0,quoteWaits:0,retryChecks:0,retryFills:0,opened:0};
   if(retry)s.participation.retryChecks++;else{s.participation.cycles++;s.participation.matches+=candidates.length;}
   const reject=(reason:string)=>{blocker=reason;diagnostics.reasons[reason]=(diagnostics.reasons[reason]??0)+1;};
+  const readySymbols=(side:Trade["side"])=>new Set(candidates.filter(({f,r})=>r.side===side&&ruleApplies(r,f.symbol)
+    &&!s.positions.some(t=>t.symbol===f.symbol)&&(s.lastEntryBars[f.symbol]??0)<f.at
+    &&freshQuote(quotes[f.symbol],now)&&quotes[f.symbol].entryReady!==false).map(({f})=>f.symbol)).size;
   for(const{f,r,adjustment}of candidates){
     if(s.positions.some(t=>t.symbol===f.symbol)||(s.lastEntryBars[f.symbol]??0)>=f.at)continue;
     if(adjustment.riskMultiplier<.999)diagnostics.adaptiveScaled++;
@@ -387,9 +390,10 @@ function openTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<
     // receives a meaningful slice first; the next candidate sees the recomputed
     // remaining headroom. We never pre-divide risk among candidates that may not fill.
     const stateHeadroom=sideRiskHeadroom(r.side,longRisk,shortRisk,equity,budget);
-    const targetRisk=adaptiveTargetRisk({equity,quality,allocationScale:budget.allocationScale,
-      riskMultiplier:adjustment.riskMultiplier,stateHeadroom});
     const lossRate=r.stopRate+Math.max(COST_FLOOR,r.evidence!.costRate)+spread;
+    const targetRisk=adaptiveTargetRisk({equity,quality,allocationScale:budget.allocationScale,
+      riskMultiplier:adjustment.riskMultiplier,stateHeadroom,readyPeers:readySymbols(r.side),
+      minimumMeaningfulRisk:equity*.055*lossRate});
     const desired=Math.min(equity*1.5,targetRisk/lossRate,Math.max(0,equity*4-gross));
     const immediateExit=(r.side==="LONG"?q.bestBid:q.bestAsk)*(1-d*PAPER_COST.slippageRate);
     const immediateCost=Math.max(r.evidence!.costRate,PAPER_COST.feeRate*(1+immediateExit/price)+d*(1-immediateExit/price));
