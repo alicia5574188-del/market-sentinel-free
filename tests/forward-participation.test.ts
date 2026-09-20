@@ -4,6 +4,7 @@ import { advanceForward, initialForward, normalizeForward, synthesizeRules, forw
   type Rule, type Measurement, type Candle } from "../lib/forward-relations.ts";
 import { EVIDENCE_POLICY, PREVIOUS_POLICY, inspectCondition, blankDiagnostics, costAwareGiveback, modeledCost } from "../lib/forward-evidence.ts";
 import { readForwardStore, prepareForwardWrite } from "../lib/forward-store.ts";
+import { updateMarketState } from "../lib/forward-market-state.ts";
 const START=1_790_000_100_000, NOW=START+10*BAR_MS+90_000;
 function rows():Measurement[]{return Array.from({length:12},(_,i)=>Array.from({length:8},(_,j)=>{
   const at=START+(i+1)*900000;return{symbol:`S${j}`,at,seenAt:at+90000,price:100,x:Array(8).fill(0),horizon:15,
@@ -78,6 +79,21 @@ test("simultaneous eight-coin opportunities retain meaningful lots under existin
   assert.ok(s.positions.reduce((n,t)=>n+t.notional,0)<=eq*4+1e-8);
   const notionals=s.positions.map(t=>t.notional);assert.ok(Math.max(...notionals)/Math.min(...notionals)<1.05);
 });
+test("thirty ready names under a neutral budget produce meaningful participation instead of thirty fragments",()=>{
+  const names=Array.from({length:30},(_,i)=>`S${i}`),s=fixture(names);
+  const priorNow=NOW-BAR_MS,priorMarket=market(priorNow,names),current=market(NOW,names);
+  const first=updateMarketState(priorMarket.paths,null,priorNow);
+  s.marketState=updateMarketState(current.paths,first,NOW);
+  assert.equal(s.marketState.mode,"NEUTRAL");
+  const beforeNetHeadroom=1000*.02,minimumRisk=1000*.055*(s.rules[0].stopRate+.0022);
+  assert.ok(beforeNetHeadroom/30<minimumRisk,"the legacy all-peer split would be sub-meaningful");
+  const n=advanceForward({state:s,now:NOW,...current}).state,eq=forwardEquity(n,current.quotes,NOW).equity;
+  assert.ok(n.positions.length>0,"meaningful-slot allocation must not convert a valid candidate set into zero trades");
+  assert.ok(n.positions.length<30,"neutral risk budget must still constrain participation");
+  assert.ok(n.positions.every(t=>t.notional>=eq*.05));
+  assert.ok(n.positions.reduce((sum,t)=>sum+t.plannedRisk,0)<=20.1);
+});
+
 test("an actual same-bar close cannot reopen under another version in the same evaluation",()=>{
   let s=advanceForward({state:fixture(),now:NOW,...market()}).state;const now=Math.floor(NOW/BAR_MS)*BAR_MS+BAR_MS+90000;
   s.rules[0].version=99;s=advanceForward({state:s,now,...market(now,["S0"],true,90)}).state;
