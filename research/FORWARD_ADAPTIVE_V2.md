@@ -12,7 +12,7 @@ This release keeps the same Forward idea. It does not replace it with fixed tren
 2. **Rapid 15-minute migration lane.** A candidate may be added only from already-matured observations after three non-overlapping 15-minute groups agree strongly enough after modeled cost and uncertainty. It is explicitly uncertain, capped below full confidence, and cannot invent a trade without the same current condition matching.
 3. **Every new matured response can refit.** The old 15-minute wall-clock refit remains a fallback, but new matured data can update rules on each 5-minute cycle. No new API call or history backfill is added.
 4. **Warnings become continuous allocation, not silence.** Pullback/reversal/market-turn information changes candidate priority and risk weight. It never directly creates a LONG/SHORT order. Market-derived warnings no longer hard-zero an otherwise learned candidate; stale data, invalid quotes, contract metadata, cost, account risk and stop protection remain hard safety gates.
-5. **Sequential best-first allocator.** Do not divide the available risk by every ready symbol before attempting the first order. Sort learned candidates, allocate to the best executable candidate under the unchanged single-trade/portfolio caps, then recompute remaining headroom for the next candidate. This prevents “all fragments, zero fills.”
+5. **Meaningful-slot best-first allocator.** Do not divide available risk by every merely-ready symbol. Rank learned candidates, calculate how many remaining slots can still clear a meaningful order under the unchanged portfolio cap, share risk only across those slots, then recompute headroom after each fill. Margin can still be shared across ready names because leverage changes collateral reservation, not planned loss. This prevents both “all fragments, zero fills” and needless concentration into only the first few names.
 6. **Drawdown changes size, not permission to learn.** State/turn caps can migrate existing portfolio risk, while drawdown scales *new* allocation continuously and never becomes a loss-triggered trading pause.
 7. **No account reset or LIVE authority change.** Existing PAPER history, positions, samples, rules, startedAt and realized losses remain. Owner/member LIVE remains manual and mirrors only persisted current Forward source orders under the existing parity contract.
 
@@ -39,7 +39,7 @@ The release must demonstrate in deterministic tests:
 - a strong recent conditional response can produce a rapid 15-minute migration candidate even when older evidence points the other way;
 - the rapid lane rejects inconsistent or cost-negative recent groups;
 - drawdown lowers new allocation but does not make allocation scale zero;
-- multiple ready candidates under a smaller regime budget no longer all fail solely because headroom was pre-divided;
+- multiple ready candidates under a smaller regime budget no longer all fail solely because headroom was pre-divided, while a normal eight-name opportunity set can still diversify under the same total cap;
 - stale quotes/data and account-risk constraints still fail closed;
 - existing positions/history and LIVE parity remain continuous.
 
