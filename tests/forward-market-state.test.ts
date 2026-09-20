@@ -74,13 +74,13 @@ test("wide alternating range confirms NEUTRAL and lowers net directional exposur
   const b=updateMarketState(market(T+BAR,oscillate),a,T+BAR);
   assert.equal(b.mode,"NEUTRAL");
   const budget=marketRiskBudget(b,1000,1000);
-  assert.equal(budget.totalRate,.055);assert.equal(budget.longRate,.0325);assert.equal(budget.shortRate,.0325);
-  assert.equal(budget.netDirectionalRate,.025);
+  assert.equal(budget.totalRate,.05);assert.equal(budget.longRate,.03);assert.equal(budget.shortRate,.03);
+  assert.equal(budget.netDirectionalRate,.02);
 });
 test("drawdown scales new allocation without tightening regime caps into a trading pause",()=>{
   const transition={...updateMarketState(market(T,()=>.0015),null,T),mode:"TRANSITION" as const};
   const b=marketRiskBudget(transition,950,1000);
-  assert.equal(b.totalRate,.065);assert.equal(b.longRate,.045);assert.equal(b.netDirectionalRate,.035);
+  assert.equal(b.totalRate,.06);assert.equal(b.longRate,.045);assert.equal(b.netDirectionalRate,.03);
   assert.equal(b.allocationScale,.7);
   const trend={...transition,mode:"TREND_LONG" as const};
   const t=marketRiskBudget(trend,950,1000);
@@ -90,7 +90,7 @@ test("drawdown scales new allocation without tightening regime caps into a tradi
 test("opposite-side risk can reduce net exposure but cannot overshoot the regime cap",()=>{
   const neutral={...updateMarketState(market(T,(i)=>i%2?.004:-.004),null,T),mode:"NEUTRAL" as const};
   const b=marketRiskBudget(neutral,1000,1000);
-  assert.equal(sideRiskHeadroom("SHORT",30,0,1000,b),25);
+  assert.equal(sideRiskHeadroom("SHORT",30,0,1000,b),20);
   assert.equal(sideRiskHeadroom("LONG",30,0,1000,b),0);
 });
 test("directional selection preserves the original top two and adds at most one qualified opposite family",()=>{
