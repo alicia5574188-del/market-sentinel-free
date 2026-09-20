@@ -7,7 +7,7 @@ import { advanceForward, initialForward, type Trade, type ForwardState } from ".
 import {newExitControl} from "../lib/forward-protection.ts";
 import { gateMarkedEquity, gatePositionValuation, liveEntryDisposition, liveExitTag, type GateLiveAccount, type GateLiveOrder, type GateLivePosition, type LiveEntryIntent, type LiveStopIntent, LiveEntrySizingError, GateLiveClient } from "../lib/gate-live.ts";
 import { quantizeMirrorNotional } from "../lib/gate-quantity.ts";
-import { startLiveSession, sourceAfterEnable, LIVE_SESSION_VERSION, type LiveSession } from "../lib/live-session.ts";
+import { establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, LIVE_SESSION_VERSION, type LiveSession } from "../lib/live-session.ts";
 import { prepareForwardWrite } from "../lib/forward-store.ts";
 import { readFileSync } from "node:fs";
 register("./worker-test-loader.mjs",import.meta.url);
@@ -42,6 +42,23 @@ test("a future same-symbol multi-leg source cannot silently become a single net 
 test("source missing or malformed cannot fall back to the retired canonical account",()=>{
   assert.throws(()=>forwardMirrorSources(null as unknown as ForwardState,1000));
   const s=initialForward(T);s.positions=[{...trade(),quantity:10}];assert.throws(()=>forwardMirrorSources(s,1000));
+});
+test("stale receipt seed cannot shrink a newly anchored 900/1000 account back to an old tiny ratio",()=>{
+  const session=startLiveSession(T-1000,initialForward(T-2000));
+  const scaled=establishLiveScale(session,1000,900,T,.01);
+  assert.equal(scaled.scaleRatio,.9);assert.equal(scaled.scaleSourceEquity,1000);assert.equal(scaled.scaleLiveEquity,900);
+  assert.equal(scaled.scaleRebaseFrom,.01);assert.equal(scaled.scaleRebaseReason,"ANCHOR_MISMATCH");
+});
+test("internally inconsistent stored scale repairs from its own anchor equities without touching source trades",()=>{
+  const session={...startLiveSession(T-1000,initialForward(T-2000)),scaleRatio:.01,scaleSourceEquity:1000,scaleLiveEquity:900,scaleAt:T-500};
+  const scaled=reconcileLiveScale(session,1000,900,T);
+  assert.equal(scaled.scaleRatio,.9);assert.equal(scaled.scaleRebaseReason,"ANCHOR_MISMATCH");
+});
+test("large upward external capital expansion rebases future entries but ordinary PnL drift stays fixed",()=>{
+  const base={...startLiveSession(T-1000,initialForward(T-2000)),scaleRatio:.1,scaleSourceEquity:1000,scaleLiveEquity:100,scaleAt:T-500};
+  const grown=reconcileLiveScale(base,1000,900,T);assert.equal(grown.scaleRatio,.9);assert.equal(grown.scaleRebaseReason,"LIVE_CAPITAL_INCREASE");
+  const small=reconcileLiveScale(base,1000,112,T);assert.equal(small,base);
+  const down=reconcileLiveScale(base,1000,50,T);assert.equal(down,base);
 });
 test("same leverage and proportional notional/margin are frozen in full-source binding",()=>{
   const t=trade(),r=buildProportionalMirror(request(t));assert.equal(r.intent.notional,20);assert.equal(r.intent.margin,10);
@@ -252,6 +269,21 @@ test("accepted live fill stores submit quote, delay and verified exchange entry 
   assert.ok((p.submitDelayMs??-1)>=0);assert.equal(p.exchangeEntryDriftRate,0);
 }));
 
+test("real Worker repairs a stale fixed ratio before sizing a new source and does not mutate PAPER",()=>clock(async()=>{
+  const {h,gate}=await harness(),before=structuredClone(h.forwardState);
+  h.forwardState.positions=[];
+  live(h).requestedEnabled=true;
+  const activation=startLiveSession(T-1000,h.forwardState);
+  live(h).activation={...activation,scaleRatio:.01,scaleSourceEquity:1000,scaleLiveEquity:900,scaleAt:T-900};
+  h.forwardState.positions=[{...trade("capital-rebase"),openedAt:T-500}];
+  gate.account={total:900,available:900,unrealised_pnl:0,in_dual_mode:false};
+  await h.syncLive(T);
+  assert.equal(gate.placed.length,1);
+  assert.ok((live(h).activation!.scaleRatio??0)>.85);
+  assert.equal(live(h).positions.BTC_USDT.parity!.ratio,live(h).activation!.scaleRatio);
+  assert.equal(h.forwardState.positions[0].id,"capital-rebase");
+  assert.deepEqual({...h.forwardState,positions:[]},{...before,positions:[]});
+}));
 test("actual owner enable excludes all already-open sources without resetting PAPER",()=>clock(async()=>{
   const {h,gate}=await harness(),before=structuredClone(h.forwardState);
   assert.equal((await h.setLiveMode(true)).ok,true);await h.syncLive(T);
