@@ -8,9 +8,9 @@ import "./live-priority.css";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "哨兵 · 关系引擎 | 前向实验",
-  description: "真实行情驱动的关系观测、规则生成、模拟交易与可审计演变；新规则仅模拟",
-  applicationName: "哨兵关系引擎",
+  title: "哨兵 · 多周期转折引擎 | 前向实验",
+  description: "真实行情驱动的六周期转折判断、模拟交易与可审计演变；转折引擎为当前策略权威",
+  applicationName: "哨兵多周期转折引擎",
   manifest: "/manifest.webmanifest",
 };
 
