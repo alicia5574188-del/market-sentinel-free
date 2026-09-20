@@ -69,6 +69,9 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
   const archiveKey=`${FORWARD_STORAGE}archive:${String(now).padStart(16,"0")}:${next.revision}`;
   const packet={
     at:now,version:FORWARD_VERSION,policyVersion:next.policyVersion,policyUpgrade:next.policyUpgrade,
+    strategyAuthorityVersion:next.strategyAuthorityVersion??"legacy-forward-rules-v1",cutoverAt:next.cutoverAt??null,
+    turnEngine:next.turnEngine?{version:next.turnEngine.version,updatedAt:next.turnEngine.updatedAt,
+      diagnostics:next.turnEngine.diagnostics,calibration:next.turnEngine.calibration}:null,
     startedAt:next.startedAt,revision:next.revision,events,
     evidenceDiagnostics:next.evidenceDiagnostics,entryDiagnostics:next.entryDiagnostics,
     feedback:next.feedback?.filter(f=>!(previous?.feedback??[]).some(p=>p.id===f.id))??[],
