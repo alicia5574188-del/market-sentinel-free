@@ -332,6 +332,13 @@ test("cutover remains credential-bound and production gates enforce five direct 
 test("ordinary production deploy accepts evolved paper equity", async () => {
   const workflow = await read(".github/workflows/sentinel-v2-ci.yml");
   const ordinaryDeploy = workflow.slice(workflow.lastIndexOf("- name: Verify advancing production health"));
+  assert.equal((ordinaryDeploy.match(/plannedDoWritesPerDay == 63032/g)??[]).length,2);
+  assert.equal((ordinaryDeploy.match(/twoMemberReservedDoRowsPerDay == 99192/g)??[]).length,2);
+  assert.equal((ordinaryDeploy.match(/criticalProtection\.independentOfFinancialWrites == true/g)??[]).length,2);
+  assert.equal((ordinaryDeploy.match(/criticalProtection\.cap == 8640/g)??[]).length,2);
+  assert.equal((ordinaryDeploy.match(/resourceAccounting\.cap == 8000/g)??[]).length,2);
+  assert.equal((ordinaryDeploy.match(/capacityCertified == false/g)??[]).length,2);
+  assert.doesNotMatch(ordinaryDeploy,/plannedDoWritesPerDay < 55000/);
   assert.match(ordinaryDeploy, /\(\.runtime\.strategyArena\.portfolioEquity \| type\) == "number"/);
   assert.match(ordinaryDeploy, /\.runtime\.strategyArena\.portfolioEquity > 0/);
   assert.doesNotMatch(ordinaryDeploy, /portfolioEquity == 1000/);

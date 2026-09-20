@@ -1156,7 +1156,13 @@ jobs:
               .runtime.strategyArena.rules.sameSymbolCrossEngineAllowed == true and
               .runtime.strategyArena.rules.liveSource == "CANONICAL_PAPER_NORMALIZED_NET" and
               .runtime.limits.plannedTotalDoRequestsPerDay < 55000 and
-              .runtime.limits.plannedDoWritesPerDay < 55000 and
+              .runtime.limits.plannedDoWritesPerDay == 63032 and
+              .runtime.limits.twoMemberReservedDoRowsPerDay == 99192 and
+              .runtime.limits.capacityCertified == false and
+              .runtime.resourceAccounting.cap == 8000 and
+              .runtime.resourceAccounting.criticalProtection.cap == 8640 and
+              .runtime.resourceAccounting.criticalProtection.independentOfFinancialWrites == true and
+              .runtime.resourceAccounting.criticalProtection.writes <= 8640 and
               .runtime.limits.plannedMaxD1BilledWritesPerDay < 5000
             ' "$RUNNER_TEMP/main-health.json" >/dev/null; then
               current="$(jq -er '.runtime.lastSuccessAt' "$RUNNER_TEMP/main-health.json")"
@@ -1334,7 +1340,13 @@ jobs:
             .runtime.strategyData.marketContextMarkets >= 8 and
             .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 11 and
             .runtime.limits.plannedTotalDoRequestsPerDay < 55000 and
-            .runtime.limits.plannedDoWritesPerDay < 55000 and
+            .runtime.limits.plannedDoWritesPerDay == 63032 and
+            .runtime.limits.twoMemberReservedDoRowsPerDay == 99192 and
+            .runtime.limits.capacityCertified == false and
+            .runtime.resourceAccounting.cap == 8000 and
+            .runtime.resourceAccounting.criticalProtection.cap == 8640 and
+            .runtime.resourceAccounting.criticalProtection.independentOfFinancialWrites == true and
+            .runtime.resourceAccounting.criticalProtection.writes <= 8640 and
             .runtime.limits.plannedMaxD1BilledWritesPerDay < 5000
           ' "$RUNNER_TEMP/monitor-health-2.json" >/dev/null
           first="$(jq -er '.runtime.lastSuccessAt' "$RUNNER_TEMP/monitor-health-1.json")"
