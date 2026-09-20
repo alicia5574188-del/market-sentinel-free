@@ -1692,6 +1692,25 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return { ok: true, credential: await credentialMetadata(this.env.DB) };
   }
 
+  private async resetMultiTurnPaperAccount(now:number){
+    if(!this.forwardState)this.forwardState=await readForwardStore(this.ctx.storage,now);
+    const previous=this.forwardState;
+    if(previous.strategyAuthorityVersion!==MULTI_TURN_VERSION)throw new Error("当前权威账户尚未切换到Multi-Turn");
+    const quotes=this.regimeQuotes(now);
+    const closed=closeForwardForReset(previous,quotes,now,"手动重置模拟账户：用新鲜可执行价归档本周期持仓并从1000U重新开始");
+    const next=initialMultiTurnForward(now),prepared=await prepareForwardReset(previous,closed,next,now);
+    const saved=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
+    const protection=prepared.entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
+    if(protection&&saved?.writeBudget!==undefined)prepared.entries[FORWARD_PROTECTION_STORAGE]={...protection,writeBudget:saved.writeBudget};
+    const reservation=this.reserveNonAlarmWrites(prepared.writes,64);
+    if(!reservation)throw new Error("模拟账户重置等待写入预算；当前账户保持完整");
+    try{await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});reservation.finish(true);}
+    finally{reservation.finish(false);}
+    this.forwardCompression=prepared.compression;this.forwardState=prepared.state;this.forwardError=null;
+    this.forwardProtectionBudget=readProtectionWriteBudget(saved?.writeBudget);
+    return{ok:true,equity:1000,forward:forwardSummary(this.forwardState,this.regimeQuotes(now),now)};
+  }
+
   private async resetPaperAccount() {
     const now = Date.now();
     const authorityBefore = this.captureAuthority();
@@ -1700,6 +1719,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       || Object.values(this.runtime.live.entries).some((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status))) {
       throw new Error("请先关闭实盘并确认 Gate 没有本系统持仓或待成交订单");
     }
+    if(!this.forwardState)this.forwardState=await readForwardStore(this.ctx.storage,now);
+    if(this.forwardState.strategyAuthorityVersion===MULTI_TURN_VERSION)return await this.resetMultiTurnPaperAccount(now);
     const openPositions = Object.values(this.runtime.positions).filter((position): position is PaperPosition => position?.status === "OPEN");
     const currentArenaPositions = Object.values(this.runtime.strategyArena.portfolioOpen);
     const previousArenaPositions = Object.values(this.runtime.previousStrategyArena.portfolioOpen);
