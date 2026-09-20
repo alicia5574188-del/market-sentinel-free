@@ -117,9 +117,12 @@ export function conditionMatches(x:number[],conditions:Condition[]) {
   return conditions.every(c=>finite(x[c.feature])&&(c.op==="GE"?x[c.feature]>=c.threshold:x[c.feature]<=c.threshold));
 }
 export function synthesizeRules(s:ForwardState,now:number) {
-  const candidates:Candidate[]=[],diagnostics=blankDiagnostics();let trainGroups=0,checkGroups=0;
+  const candidates:Array<Candidate&{adaptiveLane?:AdaptiveLane}>=[],diagnostics=blankDiagnostics();
+  let trainGroups=0,checkGroups=0,rapidQualified=0;
   s.feedback=collectFeedback(s.feedback??[],s.history,now);
-  const rank=(a:Candidate,b:Candidate)=>b.estimatedNetRate-a.estimatedNetRate;
+  const score=(a:Candidate)=>Math.max(0,a.evidence.calibratedNet??a.estimatedNetRate)*a.evidence.quality
+    /Math.max(1e-6,a.evidence.costRate+a.standardError);
+  const rank=(a:Candidate,b:Candidate)=>score(b)-score(a)||b.estimatedNetRate-a.estimatedNetRate;
   for(const h of HORIZONS){
     const rows=s.samples.filter(r=>r.horizon===h&&r.availableAt<=now&&r.endAt<=now&&r.at>=s.startedAt);
     if(rows.length<8||Math.max(...rows.map(r=>r.endAt))<now-h*60_000-BAR_MS)continue;
@@ -129,25 +132,31 @@ export function synthesizeRules(s:ForwardState,now:number) {
       trainGroups=Math.max(trainGroups,new Set(discovery.map(r=>Math.floor(r.at/(h*60000)))).size);
       checkGroups=Math.max(checkGroups,new Set(ordered.filter(r=>r.at>=split).map(r=>Math.floor(r.at/(h*60000)))).size);
       if(discovery.length<(symbol?3:12))return [];
-      const stumps:Candidate[]=[],seen=new Set<string>();
+      const stumps:Candidate[]=[],rapid:AdaptiveCandidate[]=[],seen=new Set<string>();
       const assess=(conditions:Condition[])=>inspectCondition({rows:ordered,conditions,horizon:h,now,feedback:s.feedback??[],scopeSymbol:symbol},diagnostics);
       for(let f=0;f<FEATURES.length;f++)for(const p of[1/3,2/3])for(const op of["GE","LE"] as const){
         const threshold=Math.round(quantile(discovery.map(r=>r.x[f]),p)*100)/100,key=`${f}:${op}:${threshold}`;
         if(seen.has(key))continue;seen.add(key);
-        const c=assess([{feature:f,op,threshold}]);if(c)stumps.push(c);
+        const conditions=[{feature:f,op,threshold}];
+        const base=assess(conditions);if(base)stumps.push(base);
+        if(h===15&&!symbol){
+          const fast=inspectRapidCondition({rows:ordered,conditions,now,feedback:s.feedback??[]});
+          if(fast){rapid.push(fast);rapidQualified++;}
+        }
       }
-      const top=[...stumps].sort(rank).slice(0,3),combined=[...stumps];
+      const top=[...stumps].sort(rank).slice(0,3),combined:Array<Candidate&{adaptiveLane?:AdaptiveLane}>=[...stumps];
       for(let i=0;i<top.length;i++)for(let j=i+1;j<top.length;j++){
         if(top[i].conditions[0].feature===top[j].conditions[0].feature)continue;
         const c=assess([...top[i].conditions,...top[j].conditions].sort((a,b)=>a.feature-b.feature));if(c)combined.push(c);
       }
+      combined.push(...rapid);
       return combined.sort(rank);
     };
     const shared=generate(rows);
-    // Preserve the original top-two selection exactly, then keep at most one
-    // independently qualified opposite-side family so a strong trend cannot
-    // erase the other direction from the executable rule set.
-    for(const c of selectDirectionalCandidates(shared,2))candidates.push(c);
+    // Keep a slightly broader learned set, then guarantee that an independently
+    // qualified opposite-side family is not erased by a strong incumbent trend.
+    // Risk caps, not candidate pre-pruning, decide how much capital can migrate.
+    for(const c of selectDirectionalCandidates(shared,3))candidates.push(c);
     // Single-coin evidence is not banned and is never exported to other coins.
     // Scope uses that coin's own chronological discovery/check split.
     const local:Candidate[]=[];
@@ -181,18 +190,23 @@ export function synthesizeRules(s:ForwardState,now:number) {
     const mutation=parent?(exact&&!previous.includes(parent)?"RECALL":"REVISE"):"CREATE";
     const text=c.conditions.map(k=>`${FEATURES[k.feature]}${k.op==="GE"?"≥":"≤"}${k.threshold}`).join(" 且 ");
     const scope=c.evidence.scope==="SINGLE_ASSET"?`仅${c.evidence.symbols[0]}`:`已观测${c.evidence.symbols.length}币的跨币实验，适用性尚待成交验证`;
-    const reason=`${text} 后${c.horizon}分钟${scope}；${c.side==="LONG"?"多":"空"}向原始净反应假设${(c.estimatedNetRate*100).toFixed(3)}%，成交校准后${((c.evidence.calibratedNet??c.estimatedNetRate)*100).toFixed(3)}%。${c.evidence.uncertain?"证据不确定，降低排序/风险而不假装已证明通用优势。":""}退出采用${c.exitMode==="REACTION_DECAY"?"回吐保护":"反应期限"}；不是胜率或盈利保证。`;
+    const lane=c.adaptiveLane==="RAPID_15M"?"快速适应层":"基础学习层";
+    const reason=`${lane}：${text} 后${c.horizon}分钟${scope}；${c.side==="LONG"?"多":"空"}向原始净反应假设${(c.estimatedNetRate*100).toFixed(3)}%，成交校准后${((c.evidence.calibratedNet??c.estimatedNetRate)*100).toFixed(3)}%。${c.evidence.uncertain?"证据不确定，降低排序/风险而不假装已证明通用优势。":""}退出采用${c.exitMode==="REACTION_DECAY"?"回吐保护":"反应期限"}；不是胜率或盈利保证。`;
     const r:Rule={...c,id:`fr-${s.startedAt}-${s.revision+1}`,signature,parentId:parent?.id??null,version:(parent?.version??0)+1,
-      createdAt:now,expiresAt:now+Math.max(60,c.horizon*2)*60_000,status:"EXPERIMENTAL",reason,mutation,grammar:FORWARD_GRAMMAR,liveEligible:false};
+      createdAt:now,expiresAt:now+Math.max(60,c.horizon*2)*60_000,status:"EXPERIMENTAL",reason,mutation,grammar:FORWARD_GRAMMAR,
+      liveEligible:false,adaptiveLane:c.adaptiveLane??"BASE"};
     s.rules.unshift(r);event(s,now,"RULE",r.id,reason,{mutation,rawNet:c.evidence.rawNet,penalty:c.evidence.calibration.penalty,
       netEstimate:r.estimatedNetRate,samples:r.samples,scope:c.evidence.scope});
   }
   for(const r of previous)if(r.status==="DORMANT"&&!candidates.some(c=>c.evidence.family===familyKey(r)))
     event(s,now,"DORMANT",r.id,"当前适用性、集中度或成交偏差校准不再支持该规则；继续观察市场，不把失败直接反向。");
-  s.rules=s.rules.slice(0,48);const active=s.rules.filter(r=>r.status==="EXPERIMENTAL").length;
-  s.fitDiagnostics={tested:diagnostics.tested,qualified:active,trainGroups,checkGroups,latestAt:now};s.evidenceDiagnostics=diagnostics;
-  s.latestReason=active?`${active}条交易假设；集中度和成交偏差用于排序/风险，报价暂缺在本根5分钟窗口内重试。未证明盈利。`
-    :`当前未形成满足原始成本后估计的交易假设；检查${diagnostics.tested}项表达。不是冷启动或停机，不强制开单。`;
+  s.rules=s.rules.slice(0,48);const activeRules=s.rules.filter(r=>r.status==="EXPERIMENTAL"),active=activeRules.length;
+  s.lastFitMeasured=s.measured;
+  s.fitDiagnostics={tested:diagnostics.tested,qualified:active,trainGroups,checkGroups,latestAt:now,rapidQualified,
+    activeLong:activeRules.filter(r=>r.side==="LONG").length,activeShort:activeRules.filter(r=>r.side==="SHORT").length};
+  s.evidenceDiagnostics=diagnostics;
+  s.latestReason=active?`${active}条交易假设（快层候选${rapidQualified}）；新成熟反应可在5分钟周期触发重估，行情预警只迁移优先级/额度，不再直接让学习系统停摆。未证明盈利。`
+    :`当前未形成满足原始成本后估计的交易假设；检查${diagnostics.tested}项表达。不是冷启动或停机，继续按5分钟新反应更新。`;
   event(s,now,"FIT",EVIDENCE_POLICY,s.latestReason,{tested:diagnostics.tested,qualified:active,trainGroups,checkGroups});
 }
 function ingest(s:ForwardState,paths:Record<string,Candle[]>,now:number){
