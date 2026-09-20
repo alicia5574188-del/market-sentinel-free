@@ -396,6 +396,7 @@ function manageMultiTurn(s:ForwardState,quotes:Record<string,Quote>,now:number){
       decision={trigger:"MAX_LIFETIME",reason:`${t.turn.timeframe}超过异常安全寿命上限；退出以防止孤立陈旧持仓，不作为正常策略期限`,boundaryRate:null};
     if(!decision)continue;
     closeTrade(s,t,q,now,decision.reason);
+    const sourceRule=s.rules.find(r=>r.id===t.rule.id);if(sourceRule)sourceRule.status="DORMANT";
     if(t.exitControl)t.exitAudit=makeExitAudit(t,decision,px,q.observedAt,now,gap);
     const key=`${t.symbol}:${t.turn.timeframe}`;
     s.turnLastEntryBars[key]=Math.max(s.turnLastEntryBars[key]??0,freshFrame?.completedAt??0,Math.floor(now/BAR_MS)*BAR_MS);
@@ -733,9 +734,10 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     turnEngine:engine?{version:engine.version,updatedAt:engine.updatedAt,diagnostics:engine.diagnostics,
       calibration:engine.calibration,frames:engine.frames}:null,
     turnRiskSleeves:multi?Object.fromEntries(TURN_TIMEFRAMES.map(tf=>[tf,TURN_CONFIG[tf].riskCap])):null,
-    marketRiskBudget:multi?{totalRate:.10,longRate:.065,shortRate:.065,netDirectionalRate:.065,
-      drawdownRate:Math.max(0,1-marked.equity/Math.max(s.peakEquity,marked.equity)),allocationScale:1,
-      reason:"Multi-Turn：六周期独立风险袖套合计10%，同方向最多6.5%；回撤仅连续缩仓，不停止转折搜索。"}
+    marketRiskBudget:multi?(()=>{const dd=Math.max(0,1-marked.equity/Math.max(s.peakEquity,marked.equity));
+      const scale=dd>=.20?.50:dd>=.10?.70:dd>=.05?.85:1;
+      return{totalRate:.10,longRate:.065,shortRate:.065,netDirectionalRate:.065,drawdownRate:dd,allocationScale:scale,
+        reason:`Multi-Turn：六周期独立风险袖套合计10%，同方向最多6.5%；当前回撤只把新仓缩至${(scale*100).toFixed(0)}%，不停止转折搜索。`};})()
       :marketRiskBudget(s.marketState??null,marked.equity,s.peakEquity,s.turnForecast??null),
     lastCycleAt:s.lastCycleAt,lastFitAt:s.lastFitAt,revision:s.revision,initialEquity:s.initialEquity,balance:s.balance,...marked,
     targetEquity:s.initialEquity*2,netPnl:marked.equity-s.initialEquity,maxDrawdown:s.maxDrawdown,resolved:s.resolved,wins:s.wins,grossPnl:s.grossPnl,
