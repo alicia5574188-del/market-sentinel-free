@@ -1,4 +1,10 @@
-# 2026-09-20 continuation — local gates passed; remote release pending
+# 2026-09-20 — DEPLOYED AND VERIFIED: 4810af8
+
+PR337 merged after exact-head CI success. Production workflow35494240652 succeeded; public buildSha is4810af8d717c70208738e8141fba15498a24a66b. Two post-deploy reads prove advancing forward cycle and full persisted state, same original account start1789556791436, storage error null and ready=true. New compact format actually saved1,062,883 raw bytes as218,096 gzip bytes with112KiB inline head and1 external chunk. Independent protection lane has a successful durable record; finance cap remains8,000. Latest owner requestedEnabled=false and activation time1789779698835 match the pre-release read; existing managed holdings remain protected. Page200; guest runtime401. No private Gate test, account reset, switch mutation or billing-plan change.
+
+Evidence: research/DEPLOYMENT_RECEIPT_2026-09-20.json and PR337 production receipt. 728 direct tests,21 same-input checks,6 lossless storage probes,full CI/build/type/lint/dry-run and independent reviews passed. The receipt/status-only commit is intentionally kept on a separate documentation branch so recording completion causes no unnecessary redeployment. Production code remains exact main4810af8. Future-profit superiority and unlimited all-account Free capacity remain unproven; use the explicit finite release scope and compact-reader rollback rules in the audited gate. No further action is required to finish this release.
+
+# 2026-09-20 continuation — local gates passed; remote release pending (pre-release record)
 
 The concrete intermediate blockers below are repaired: peaks cannot consume financial exit rows; HORIZON account highs/maxDrawdown survive restart; early post-restart callbacks do not delay the next valid10s slot. Compact financial records reduce each of6 measured real/padded full commits by2 rows with identical archives. Actual Worker no-fill24h turnover test writes288 vs old1440 (same1440 reads). Shared in-flight financial reservations cover primary/member checkpoints, forward full commits, turnover, settlement and other previously counted writes, including failure and UTC boundaries.
 

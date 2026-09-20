@@ -1,0 +1,65 @@
+{
+  "release": "audited-correctness-2026-09-20",
+  "baseline": "401768ccd5ea75da6bf55b2855433aba2df5d1a5",
+  "deployedCommit": "4810af8d717c70208738e8141fba15498a24a66b",
+  "pr": "https://github.com/alicia5574188-del/market-sentinel-free/pull/337",
+  "workflow": "https://github.com/alicia5574188-del/market-sentinel-free/actions/runs/35494240652",
+  "workflowResult": "success",
+  "checkedAt": 1789885929080,
+  "localVerification": {
+    "directTests": 728,
+    "passed": 728,
+    "engineeringComparison": "21/21",
+    "losslessStorageProbe": "6/6",
+    "architectureAndMigration": "18/18",
+    "typecheck": true,
+    "build": true,
+    "lintErrors": 0,
+    "preexistingLintWarnings": 3,
+    "dryRun": true,
+    "localSQLiteAtomicRollback": true
+  },
+  "production": {
+    "healthy": true,
+    "accountStartedAt": 1789556791436,
+    "accountIdentityUnchanged": true,
+    "resolvedBefore": 438,
+    "resolvedAfter": 440,
+    "firstCycleAfterDeploy": 1789885598759,
+    "lastCycleAfterDeploy": 1789885894000,
+    "lastPersistedAt": 1789885904749,
+    "storageError": null,
+    "criticalProtection": {
+      "policy": "critical-protection-budget-v1",
+      "day": "2026-09-20",
+      "writes": 1,
+      "cap": 8640,
+      "lastCommittedAt": 1789885704789,
+      "independentOfFinancialWrites": true
+    },
+    "compactStorage": {
+      "encoding": "gzip",
+      "rawBytes": 1062883,
+      "storedBytes": 218096,
+      "chunks": 1,
+      "inlineHead": true,
+      "chunkBytes": 114688
+    },
+    "requestedEnabledBefore": false,
+    "requestedEnabledAfter": false,
+    "activationTimeBefore": 1789779698835,
+    "activationTimeAfter": 1789779698835,
+    "mirrorSource": "CURRENT_FORWARD_ACCOUNT",
+    "pageStatus": 200,
+    "guestRuntimeStatus": 401
+  },
+  "boundaries": {
+    "privateGateTests": false,
+    "switchMutations": false,
+    "accountReset": false,
+    "newBillingPlan": false,
+    "profitabilitySuperiorityVerified": false,
+    "wholeAccountFreeCapacityCertified": false,
+    "rollback": "Retain compatible compact reader, or atomically rewrite fully restored legacy state including overlay before reverting old reader."
+  }
+}
