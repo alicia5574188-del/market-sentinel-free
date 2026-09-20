@@ -8,6 +8,8 @@ import { TIMELY_PROTECTION_POLICY, newExitControl, observeExitControl, protected
   type ExitControl, type ExitAudit } from "./forward-protection.ts";
 import { assessMarketTurn, MARKET_TURN_PROTECTION_VERSION, MARKET_TURN_TARGET_DIRECTION_RISK_RATE,
   type MarketTurnProtection } from "./forward-turn-protection.ts";
+import { MARKET_STATE_VERSION, marketRiskBudget, selectDirectionalCandidates, sideRiskHeadroom, updateMarketState,
+  type MarketState } from "./forward-market-state.ts";
 // The storage schema stays v1.0 so an algorithm upgrade cannot reset the ledger.
 export const FORWARD_VERSION = "forward-relations-v1.0";
 export const FORWARD_GRAMMAR = "conditional-response-conjunction-v1";
@@ -59,6 +61,7 @@ export type ForwardState = { version: string; startedAt: number; revision: numbe
   policyUpgrades?:NonNullable<ForwardState["policyUpgrade"]>[];
   relationEntries?:Record<string,number>;
   turnProtection?:MarketTurnProtection;
+  marketState?:MarketState;
   policyUpgrade?:{at:number;from:string;to:string;equity:number;stalePositions:number;balance:number;resolved:number;positionIds:string[]} };
 
 const mean = (v: number[]) => v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
@@ -87,6 +90,7 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
   if(v.exitPolicyUpgrade&&v.exitPolicyUpgrade.policy!==TIMELY_PROTECTION_POLICY)throw new Error("未知退出策略，保留原账户");
   if(v.positions.some(t=>t.exitControl&&t.exitControl.policy!==TIMELY_PROTECTION_POLICY))throw new Error("未知持仓退出策略，保留原持仓");
   if(v.turnProtection&&v.turnProtection.version!==MARKET_TURN_PROTECTION_VERSION)throw new Error("未知市场转折保护版本，保留原账户");
+  if(v.marketState&&v.marketState.version!==MARKET_STATE_VERSION)throw new Error("未知组合市场状态版本，保留原账户");
   return v;
 }
 export function frameFromCandles(symbol:string,rows:Candle[],now:number):Frame|null {
@@ -131,8 +135,11 @@ export function synthesizeRules(s:ForwardState,now:number) {
       }
       return combined.sort(rank);
     };
-    const shared=generate(rows),kept=new Set<string>();
-    for(const c of shared){if(kept.has(c.evidence.family))continue;kept.add(c.evidence.family);candidates.push(c);if(kept.size>=2)break;}
+    const shared=generate(rows);
+    // Preserve the original top-two selection exactly, then keep at most one
+    // independently qualified opposite-side family so a strong trend cannot
+    // erase the other direction from the executable rule set.
+    for(const c of selectDirectionalCandidates(shared,2))candidates.push(c);
     // Single-coin evidence is not banned and is never exported to other coins.
     // Scope uses that coin's own chronological discovery/check split.
     const local:Candidate[]=[];
@@ -225,11 +232,11 @@ function closeTrade(s:ForwardState,t:Trade,q:Quote,now:number,reason:string){
   s.lastEntryBars[t.symbol]=Math.max(s.lastEntryBars[t.symbol]??0,s.frames[t.symbol]?.at??0,Math.floor(now/BAR_MS)*BAR_MS);
   event(s,now,"EXIT",t.id,reason,{netPnl:t.netPnl,entryRule:t.rule.id,holdingMinutes:(now-t.openedAt)/60000});
 }
-function manage(s:ForwardState,quotes:Record<string,Quote>,now:number,turn:MarketTurnProtection|null){
+function manage(s:ForwardState,quotes:Record<string,Quote>,now:number,turn:MarketTurnProtection|null,marketState:MarketState|null){
   const marked=forwardEquity(s,quotes,now),threatened=turn?.until&&turn.until>now?turn:null;
   let remainingThreatenedRisk=threatened?s.positions.filter(t=>t.side===threatened.threatenedSide).reduce((n,t)=>n+t.plannedRisk,0):0;
   const targetThreatenedRisk=threatened?Math.max(0,marked.equity*MARKET_TURN_TARGET_DIRECTION_RISK_RATE):0;
-  const cuts=new Set<string>();
+  const cuts=new Set<string>(),stateCuts=new Set<string>();
   if(threatened&&remainingThreatenedRisk>targetThreatenedRisk){
     const vulnerable=s.positions.filter(t=>t.side===threatened.threatenedSide).flatMap(t=>{
       const q=quotes[t.symbol];if(!freshQuote(q,now))return[];
@@ -244,6 +251,30 @@ function manage(s:ForwardState,quotes:Record<string,Quote>,now:number,turn:Marke
       cuts.add(row.t.id);remainingThreatenedRisk=Math.max(0,remainingThreatenedRisk-row.t.plannedRisk);
     }
   }
+  if(marketState&&(marketState.mode==="TRANSITION"||marketState.mode==="NEUTRAL")){
+    const budget=marketRiskBudget(marketState,marked.equity,s.peakEquity);
+    let longRisk=s.positions.filter(t=>t.side==="LONG").reduce((n,t)=>n+t.plannedRisk,0);
+    let shortRisk=s.positions.filter(t=>t.side==="SHORT").reduce((n,t)=>n+t.plannedRisk,0);
+    const vulnerable=s.positions.flatMap(t=>{
+      const q=quotes[t.symbol];if(!freshQuote(q,now)||cuts.has(t.id))return[];
+      const px=exitPrice(t,q),r=direction(t.side)*(px/t.entryPrice-1);
+      if(r>0&&t.favorable>=t.rule.armRate)return[];
+      return[{t,r}];
+    }).sort((a,b)=>a.r-b.r||b.t.plannedRisk-a.t.plannedRisk);
+    const over=()=>longRisk+shortRisk>marked.equity*budget.totalRate+1e-9
+      ||longRisk>marked.equity*budget.longRate+1e-9||shortRisk>marked.equity*budget.shortRate+1e-9
+      ||Math.abs(longRisk-shortRisk)>marked.equity*budget.netDirectionalRate+1e-9;
+    while(over()){
+      const net=longRisk-shortRisk;
+      const preferred:Trade["side"]=longRisk>marked.equity*budget.longRate||net>marked.equity*budget.netDirectionalRate?"LONG"
+        :shortRisk>marked.equity*budget.shortRate||-net>marked.equity*budget.netDirectionalRate?"SHORT"
+        :longRisk>=shortRisk?"LONG":"SHORT";
+      const idx=vulnerable.findIndex(x=>x.t.side===preferred&&!stateCuts.has(x.t.id));
+      if(idx<0)break;
+      const row=vulnerable[idx];stateCuts.add(row.t.id);
+      if(row.t.side==="LONG")longRisk=Math.max(0,longRisk-row.t.plannedRisk);else shortRisk=Math.max(0,shortRisk-row.t.plannedRisk);
+    }
+  }
   for(const t of s.positions){const q=quotes[t.symbol];if(!freshQuote(q,now))continue;
     const px=exitPrice(t,q),d=direction(t.side),r=d*(px/t.entryPrice-1);
     if(t.favorable<t.rule.armRate&&r>=t.rule.armRate)event(s,now,"PROTECTION",t.id,"已观测有利反应触及生成的保护启动点；保存状态，原始止损不放宽。",{favorable:r,armRate:t.rule.armRate});
@@ -254,14 +285,16 @@ function manage(s:ForwardState,quotes:Record<string,Quote>,now:number,turn:Marke
       t.relationFailureBars=contrary?t.relationFailureBars+1:0;t.lastRelationBar=f.at;}
     const normal=protectedExitDecision(t,r,now);
     const decision=normal??(cuts.has(t.id)?{trigger:"MARKET_TURN" as const,
-      reason:"市场转折保护：广泛同步逆向且波动加速，优先削减尚未形成盈利保护的同向风险",boundaryRate:null}:null);
+      reason:"市场转折保护：广泛同步逆向且波动加速，优先削减尚未形成盈利保护的同向风险",boundaryRate:null}
+      :stateCuts.has(t.id)?{trigger:"MARKET_STATE" as const,
+        reason:`组合市场状态${marketState?.mode==="NEUTRAL"?"进入震荡中性":"进入转折过渡"}：降低单边风险，优先退出尚未形成盈利保护的脆弱仓位`,boundaryRate:null}:null);
     if(decision){
       closeTrade(s,t,q,now,decision.reason);
       if(t.exitControl)t.exitAudit=makeExitAudit(t,decision,px,q.observedAt,now,observationGapMs);
     }
   }s.positions=s.positions.filter(t=>t.status==="OPEN");
 }
-function openTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,retry=false,turn:MarketTurnProtection|null=null){
+function openTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,retry=false,turn:MarketTurnProtection|null=null,marketState:MarketState|null=null){
   const waiting=s.quoteRetries??[];
   const candidates=Object.values(s.frames).flatMap(f=>s.rules.filter(r=>r.status==="EXPERIMENTAL"&&r.createdAt<=now&&r.expiresAt>now
     &&f.at>=s.startedAt&&now-f.at<BAR_MS&&conditionMatches(f.x,r.conditions)
@@ -303,21 +336,25 @@ function openTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<
     const economics=entryEconomics(r,f.price,(q.bestBid+q.bestAsk)/2,spread);
     if(economics.contextInvalid){reject("入场前价格已明显偏离原观察条件，不把下跌自动当成便宜机会");continue;}
     if(economics.remaining<=0){reject("价差及入场前已发生的价格推进吃掉剩余优势");continue;}
-    const gross=s.positions.reduce((a,t)=>a+t.notional,0),risk=s.positions.reduce((a,t)=>a+t.plannedRisk,0),same=s.positions.filter(t=>t.side===r.side).reduce((a,t)=>a+t.plannedRisk,0);
+    const gross=s.positions.reduce((a,t)=>a+t.notional,0),risk=s.positions.reduce((a,t)=>a+t.plannedRisk,0);
+    const longRisk=s.positions.filter(t=>t.side==="LONG").reduce((a,t)=>a+t.plannedRisk,0);
+    const shortRisk=s.positions.filter(t=>t.side==="SHORT").reduce((a,t)=>a+t.plannedRisk,0);
+    const same=r.side==="LONG"?longRisk:shortRisk,budget=marketRiskBudget(marketState,equity,s.peakEquity);
     const quality=Math.min(r.evidence!.quality,economics.quality,evidenceQuality(r.evidence!.rawNet,
       r.evidence!.boundedNet??r.evidence!.rawNet,r.standardError,r.evidence!.costRate,calibration.penalty));
-    // Share existing capacity across simultaneously executable opportunities.
-    // No new 3%-per-horizon veto; total and directional risk limits stay intact.
+    // Market state never invents a trade. It only allocates the same risk to
+    // learned LONG/SHORT opportunities with smaller exposure in transition/range.
     const peers=Math.max(1,readySymbols(r.side));
-    const targetRisk=Math.min(equity*.015*quality,Math.max(0,equity*.065-same)/peers);
+    const stateHeadroom=sideRiskHeadroom(r.side,longRisk,shortRisk,equity,budget);
+    const targetRisk=Math.min(equity*.015*quality,stateHeadroom/peers);
     const lossRate=r.stopRate+Math.max(COST_FLOOR,r.evidence!.costRate)+spread;
     const desired=Math.min(equity*1.5,targetRisk/lossRate,Math.max(0,equity*4-gross)/peers);
     const immediateExit=(r.side==="LONG"?q.bestBid:q.bestAsk)*(1-d*PAPER_COST.slippageRate);
     const immediateCost=Math.max(r.evidence!.costRate,PAPER_COST.feeRate*(1+immediateExit/price)+d*(1-immediateExit/price));
     const wanted=Math.max(0,Math.min(desired,(equity*4-gross)/(1+4*immediateCost),
       targetRisk/(lossRate+.015*quality*immediateCost),
-      (equity*.10-risk)/(lossRate+.10*immediateCost),
-      (equity*.065-same)/(lossRate+.065*immediateCost)));
+      (equity*budget.totalRate-risk)/(lossRate+budget.totalRate*immediateCost),
+      stateHeadroom/(lossRate+Math.max(.015,r.side==="LONG"?budget.longRate:budget.shortRate)*immediateCost)));
     if(wanted<equity*.05||wanted<desired*.25){reject("账户可用风险预算或有效仓位不足，不填碎片订单");continue;}
     const count=Math.floor(wanted/(price*meta.quantoMultiplier));if(count<Math.max(1,meta.minContracts??1)){reject("风险额度或最小张数不足");continue;}
     const quantity=count*meta.quantoMultiplier,notional=quantity*price;
@@ -375,6 +412,10 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   // Wait for a bounded Top30 refresh after the completed 5-minute boundary.
   const dataDue=upgraded||!s.lastCycleAt||Math.floor((now-90_000)/BAR_MS)>Math.floor((s.lastCycleAt-90_000)/BAR_MS);
   if(dataDue){
+    const priorState=s.marketState??null;
+    s.marketState=updateMarketState(paths,priorState,now);
+    if(!priorState||priorState.mode!==s.marketState.mode)event(s,now,"PROTECTION",MARKET_STATE_VERSION,s.marketState.reason,
+      {mode:s.marketState.mode,markets:s.marketState.markets,breadth30:s.marketState.breadth30,pathEfficiency30:s.marketState.pathEfficiency30});
     const detected=assessMarketTurn({paths,positions:s.positions,equity:forwardEquity(s,quotes,now).equity,now});
     if(detected){
       const prior=s.turnProtection;
@@ -387,13 +428,14 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
     }else if(s.turnProtection&&s.turnProtection.until<=now)s.turnProtection=undefined;
   }
   const turn=s.turnProtection&&s.turnProtection.until>now?s.turnProtection:null;
+  const marketState=s.marketState??null;
   // Exits at currently executable prices happen first. Their now-known results
   // can calibrate NEW entries immediately; no future closure enters learning.
-  manage(s,quotes,now,turn);s.feedback=collectFeedback(s.feedback??[],s.history,now);
+  manage(s,quotes,now,turn,marketState);s.feedback=collectFeedback(s.feedback??[],s.history,now);
   if(dataDue){ingest(s,paths,now);s.lastCycleAt=now;if(now-s.lastFitAt>=15*60_000)synthesizeRules(s,now);
     for(const r of s.rules)if(r.status==="EXPERIMENTAL"&&r.expiresAt<=now){r.status="DORMANT";event(s,now,"DORMANT",r.id,"证据过期，停止新开仓，等待新反应。");}}
-  if(dataDue)openTrades(s,quotes,contracts,now,false,turn);
-  else if(s.quoteRetries?.some(w=>w.expiresAt>now))openTrades(s,quotes,contracts,now,true,turn);
+  if(dataDue)openTrades(s,quotes,contracts,now,false,turn,marketState);
+  else if(s.quoteRetries?.some(w=>w.expiresAt>now))openTrades(s,quotes,contracts,now,true,turn,marketState);
   else s.quoteRetries=[];
   const marked=forwardEquity(s,quotes,now);
   if(!marked.stalePositions){s.peakEquity=Math.max(s.peakEquity,marked.equity);s.maxDrawdown=Math.max(s.maxDrawdown,1-marked.equity/Math.max(s.peakEquity,1e-9));}
@@ -411,7 +453,8 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     exitPolicyVersion:TIMELY_PROTECTION_POLICY,exitPolicyUpgrade:s.exitPolicyUpgrade??null,
     participation:s.participation??null,quoteRetries:s.quoteRetries?.filter(w=>w.expiresAt>now)??[],
     evidenceDiagnostics:s.evidenceDiagnostics??null,entryDiagnostics:s.entryDiagnostics??null,feedbackCount:s.feedback?.length??0,
-    turnProtection:s.turnProtection&&s.turnProtection.until>now?s.turnProtection:null,
+    turnProtection:s.turnProtection&&s.turnProtection.until>now?s.turnProtection:null,marketState:s.marketState??null,
+    marketRiskBudget:marketRiskBudget(s.marketState??null,marked.equity,s.peakEquity),
     lastCycleAt:s.lastCycleAt,lastFitAt:s.lastFitAt,revision:s.revision,initialEquity:s.initialEquity,balance:s.balance,...marked,
     targetEquity:s.initialEquity*2,netPnl:marked.equity-s.initialEquity,maxDrawdown:s.maxDrawdown,resolved:s.resolved,wins:s.wins,grossPnl:s.grossPnl,
     fees:s.fees,fundingAllowance:s.fundingAllowance,turnover:s.turnover,observations:s.observations,measured:s.measured,invalidated:s.invalidated,
@@ -420,6 +463,6 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     nextCycleAt:s.lastCycleAt?(Math.floor((s.lastCycleAt-90_000)/BAR_MS)+1)*BAR_MS+90_000:now,cost:PAPER_COST,
     boundaries:{scope:"PAPER_ONLY",grammar:"最多两个连续特征条件；方向、期限、止损和回吐退出由新市场反应生成",historyBackfill:false,
       sampleMeaning:"市场条件与后来反应；不是影子订单或连胜晋级",accounting:"新鲜买卖价模拟成交；净值包含退出费用与资金占位",
-      risk:"单笔风险上限1.5%，置信信息用于0.5至1倍预算缩放；总风险10%，同向6.5%，总名义额4倍；当前可执行机会分配预算，不以少交易冒充改善",
+      risk:"单笔风险上限1.5%；正常趋势保留原同向6.5%上限，转折/震荡按组合市场状态降低总风险与净方向暴露；LONG/SHORT独立证据可同时保留但不强制反手，总名义额仍不超过4倍",
       validation:"前向实验未证明盈利或月翻倍；多重规则筛选存在估计偏差",liquidation:"当前盘口保护，不冒充交易所标记价格强平复现"}};
 }
