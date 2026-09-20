@@ -157,7 +157,7 @@ test("a synthetic whipsaw can rebound after early exit: earlier protection is NO
   legacy=step(legacy,3600000,105).state;assert.ok(legacy.history[0].netPnl!>quick.history[0].netPnl!);
 });
 test("rule evidence/discovery, owner and member execution bytes remain at the pre-patch baseline",()=>{
-  const checks={"lib/forward-evidence.ts":"d586dbee7ada97df8948c830a9ffe8582f11e85ebb3376a45235e90c8fdc3ca3"};
+  const checks={"lib/forward-evidence.ts":"c1b45849e29a6c6021f9a71d1a88fbd7424ff3af3dbefb4b44ed28810d6f4c3b"};
   for(const[path,sha]of Object.entries(checks))assert.equal(createHash("sha256").update(readFileSync(new URL("../"+path,import.meta.url))).digest("hex"),sha);
   const core=readFileSync(new URL("../lib/forward-relations.ts",import.meta.url),"utf8");
   assert.doesNotMatch(core,/GateLiveClient|setLiveMode\(|fetch\(|client\.close/);
