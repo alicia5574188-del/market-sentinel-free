@@ -46,6 +46,18 @@ test("sharp V reversal turns the fast frame before the 1h frame and never hard-f
   assert.ok(["LONG","NEUTRAL"].includes(firstFastTurn!.slow!.direction));
 });
 
+test("re-evaluating the same higher-timeframe bar never fabricates persistence confirmations",()=>{
+  const p=path(360,i=>100*Math.exp(i*.0007));
+  const now=(p.at(-1)!.time+300)*1000+1000;
+  let s=evaluateMultiTurn({state:initialMultiTurn(),paths:{BTC_USDT:p},now});
+  const h=s.frames.BTC_USDT?.["1h"];assert.ok(h);
+  h!.direction="LONG";h!.candidateSide="SHORT";h!.candidateBars=1;h!.phase="TURNING";h!.turnProbability=.75;
+  const completed=h!.completedAt;
+  for(let i=1;i<=8;i++)s=evaluateMultiTurn({state:s,paths:{BTC_USDT:p},now:now+i*300_000});
+  const after=s.frames.BTC_USDT?.["1h"];assert.ok(after);assert.equal(after!.completedAt,completed);
+  assert.ok(after!.candidateBars<=1,"same completed 1h bar cannot count as multiple confirmation bars");
+});
+
 test("one adverse 5m spike does not flip slower frames",()=>{
   const p=path(359,i=>100*Math.exp(i*.0007));
   const last=p.at(-1)!.close;
