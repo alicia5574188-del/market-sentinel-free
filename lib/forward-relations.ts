@@ -582,8 +582,45 @@ function openTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<
   if(diagnostics.opened)s.latestReason=`本轮${retry?"报价重试后":""}模拟开仓${diagnostics.opened}笔；管理${s.positions.length}笔持仓。`;
   else if(blocker)s.latestReason=blocker;else if(s.positions.length)s.latestReason=`管理${s.positions.length}笔前向模拟持仓；原始保护止损不会放宽。`;
 }
-export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;quotes:Record<string,Quote>;contracts:Record<string,Contract>}){
+function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;daily?:Record<string,Candle[]>;
+  quotes:Record<string,Quote>;contracts:Record<string,Contract>},s:ForwardState,before:number){
+  const{now,paths,quotes,contracts}=input,daily=input.daily??{};
+  if(s.strategyAuthorityVersion!==MULTI_TURN_VERSION)throw new Error("Multi-Turn权威版本不一致");
+  const dataDue=!s.lastCycleAt||Math.floor((now-90_000)/BAR_MS)>Math.floor((s.lastCycleAt-90_000)/BAR_MS);
+  if(dataDue){
+    s.turnEngine=evaluateMultiTurn({state:s.turnEngine??initialMultiTurn(),paths,daily,now});
+    s.lastCycleAt=now;s.selectedSymbols=Object.keys(s.turnEngine.frames);
+    const candidates=turnCandidates(s.turnEngine,tf=>turnModeledCost(tf,0));
+    s.fitDiagnostics={tested:s.turnEngine.diagnostics.readyFrames,qualified:candidates.length,trainGroups:0,checkGroups:0,latestAt:now,
+      rapidQualified:0,activeLong:candidates.filter(x=>x.side==="LONG").length,activeShort:candidates.filter(x=>x.side==="SHORT").length};
+    s.observations+=s.turnEngine.diagnostics.updatedFrames;s.measured+=s.turnEngine.diagnostics.confirmedTurns;
+    const turns=Object.values(s.turnEngine.frames).flatMap(by=>TURN_TIMEFRAMES.flatMap(tf=>by[tf]?.justTurned?[by[tf]!]:[]));
+    if(turns.length){
+      const sample=turns.slice(0,5).map(x=>`${x.symbol} ${x.timeframe}→${x.direction}`).join("；");
+      event(s,now,"PROTECTION",MULTI_TURN_VERSION,`本轮确认${turns.length}个独立周期转折：${sample}`,
+        {confirmed:turns.length,readyFrames:s.turnEngine.diagnostics.readyFrames});
+    }
+  }
+  manageMultiTurn(s,quotes,now);
+  openMultiTurnTrades(s,quotes,contracts,now);
+  const marked=forwardEquity(s,quotes,now);
+  if(!marked.stalePositions){
+    s.peakEquity=Math.max(s.peakEquity,marked.equity);
+    s.maxDrawdown=Math.max(s.maxDrawdown,1-marked.equity/Math.max(s.peakEquity,1e-9));
+  }
+  if(dataDue){
+    const k=dayKey(now),a=s.daily.find(d=>d.day===k);
+    if(a){a.endEquity=marked.equity;a.lastAt=now;}
+    else s.daily.push({day:k,firstAt:now,lastAt:now,startEquity:s.daily.at(-1)?.endEquity??s.initialEquity,endEquity:marked.equity,exactBoundary:false});
+    s.daily=s.daily.slice(-400);
+  }
+  s.lastQuoteCycleAt=now;
+  return{state:s,changed:dataDue||s.revision!==before,protectionChanged:forwardProtectionChanged(input.state,s)};
+}
+
+export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;daily?:Record<string,Candle[]>;quotes:Record<string,Quote>;contracts:Record<string,Contract>}){
   const{now,paths,quotes,contracts}=input,s=structuredClone(input.state),before=s.revision;
+  if(s.strategyAuthorityVersion===MULTI_TURN_VERSION)return advanceMultiTurnForward(input,s,before);
   if(!s.exitPolicyUpgrade){
     const marked=forwardEquity(s,quotes,now);
     s.exitPolicyUpgrade={policy:TIMELY_PROTECTION_POLICY,at:now,equity:marked.equity,balance:s.balance,
@@ -653,27 +690,49 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   s.lastQuoteCycleAt=now;return{state:s,changed:dataDue||s.revision!==before,protectionChanged:forwardProtectionChanged(input.state,s)};
 }
 export function forwardWatchSymbols(s:ForwardState,now:number){
+  if(s.strategyAuthorityVersion===MULTI_TURN_VERSION&&s.turnEngine){
+    const ranked=turnCandidates(s.turnEngine,tf=>turnModeledCost(tf,0))
+      .filter(x=>x.completedAt<=now&&now-x.completedAt<=Math.max(BAR_MS*2,TURN_CONFIG[x.timeframe].minutes*60_000*1.5));
+    return[...new Set([...s.positions.map(p=>p.symbol),...ranked.map(x=>x.symbol)])].slice(0,11);
+  }
   const matched=Object.values(s.frames).filter(f=>now-f.at<11*60_000&&s.rules.some(r=>r.status==="EXPERIMENTAL"&&r.expiresAt>now&&ruleApplies(r,f.symbol)&&conditionMatches(f.x,r.conditions)));
   return[...new Set([...s.positions.map(p=>p.symbol),...matched.map(f=>f.symbol)])];
 }
 export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:number){
   const marked=forwardEquity(s,quotes,now),count=Object.fromEntries(HORIZONS.map(h=>[h,s.samples.filter(r=>r.horizon===h).length]));
-  return{version:s.version,grammar:FORWARD_GRAMMAR,mode:"REAL_FEED_PAPER",liveEligible:false,startedAt:s.startedAt,updatedAt:s.lastQuoteCycleAt,
+  const multi=s.strategyAuthorityVersion===MULTI_TURN_VERSION,engine=multi?s.turnEngine:null;
+  return{version:s.version,grammar:multi?MULTI_TURN_VERSION:FORWARD_GRAMMAR,mode:"REAL_FEED_PAPER",liveEligible:false,
+    strategyAuthorityVersion:s.strategyAuthorityVersion??"legacy-forward-rules-v1",cutoverAt:s.cutoverAt??null,
+    startedAt:s.startedAt,updatedAt:s.lastQuoteCycleAt,
     policyVersion:s.policyVersion??"legacy-forward-v1.0",policyUpgrade:s.policyUpgrade??null,policyUpgrades:s.policyUpgrades??[],
-    exitPolicyVersion:TIMELY_PROTECTION_POLICY,exitPolicyUpgrade:s.exitPolicyUpgrade??null,
-    participation:s.participation??null,quoteRetries:s.quoteRetries?.filter(w=>w.expiresAt>now)??[],
-    evidenceDiagnostics:s.evidenceDiagnostics??null,entryDiagnostics:s.entryDiagnostics??null,feedbackCount:s.feedback?.length??0,
-    turnProtection:s.turnProtection&&s.turnProtection.until>now?s.turnProtection:null,marketState:s.marketState??null,
-    turnForecast:s.turnForecast??null,adaptationVersion:s.adaptationVersion??"legacy-forward-adaptation-v1",
-    marketRiskBudget:marketRiskBudget(s.marketState??null,marked.equity,s.peakEquity,s.turnForecast??null),
+    exitPolicyVersion:multi?MULTI_TURN_VERSION:TIMELY_PROTECTION_POLICY,exitPolicyUpgrade:s.exitPolicyUpgrade??null,
+    participation:s.participation??null,quoteRetries:multi?[]:s.quoteRetries?.filter(w=>w.expiresAt>now)??[],
+    evidenceDiagnostics:multi?null:s.evidenceDiagnostics??null,entryDiagnostics:s.entryDiagnostics??null,feedbackCount:s.feedback?.length??0,
+    turnProtection:multi?null:s.turnProtection&&s.turnProtection.until>now?s.turnProtection:null,
+    marketState:multi?null:s.marketState??null,turnForecast:multi?null:s.turnForecast??null,
+    adaptationVersion:multi?MULTI_TURN_VERSION:s.adaptationVersion??"legacy-forward-adaptation-v1",
+    turnEngine:engine?{version:engine.version,updatedAt:engine.updatedAt,diagnostics:engine.diagnostics,
+      calibration:engine.calibration,frames:engine.frames}:null,
+    turnRiskSleeves:multi?Object.fromEntries(TURN_TIMEFRAMES.map(tf=>[tf,TURN_CONFIG[tf].riskCap])):null,
+    marketRiskBudget:multi?{totalRate:.10,longRate:.065,shortRate:.065,netDirectionalRate:.065,
+      drawdownRate:Math.max(0,1-marked.equity/Math.max(s.peakEquity,marked.equity)),allocationScale:1,
+      reason:"Multi-Turn：六周期独立风险袖套合计10%，同方向最多6.5%；回撤仅连续缩仓，不停止转折搜索。"}
+      :marketRiskBudget(s.marketState??null,marked.equity,s.peakEquity,s.turnForecast??null),
     lastCycleAt:s.lastCycleAt,lastFitAt:s.lastFitAt,revision:s.revision,initialEquity:s.initialEquity,balance:s.balance,...marked,
     targetEquity:s.initialEquity*2,netPnl:marked.equity-s.initialEquity,maxDrawdown:s.maxDrawdown,resolved:s.resolved,wins:s.wins,grossPnl:s.grossPnl,
     fees:s.fees,fundingAllowance:s.fundingAllowance,turnover:s.turnover,observations:s.observations,measured:s.measured,invalidated:s.invalidated,
-    pending:Object.keys(s.pending).length,sampleCounts:count,fitDiagnostics:s.fitDiagnostics,rules:s.rules,positions:s.positions,history:s.history,
-    events:s.events.slice(0,80),daily:s.daily,marketCount:s.selectedSymbols.length,markets:s.selectedSymbols,latestReason:s.latestReason,storage:s.storage,
+    pending:multi?(engine?.pending.length??0):Object.keys(s.pending).length,sampleCounts:count,fitDiagnostics:s.fitDiagnostics,
+    rules:s.rules,positions:s.positions,history:s.history,events:s.events.slice(0,80),daily:s.daily,
+    marketCount:s.selectedSymbols.length,markets:s.selectedSymbols,latestReason:s.latestReason,storage:s.storage,
     nextCycleAt:s.lastCycleAt?(Math.floor((s.lastCycleAt-90_000)/BAR_MS)+1)*BAR_MS+90_000:now,cost:PAPER_COST,
-    boundaries:{scope:"PAPER_ONLY",grammar:"最多两个连续特征条件；方向、期限、止损和回吐退出由新市场反应生成",historyBackfill:false,
+    boundaries:multi?{scope:"PAPER_ONLY",grammar:"5m/15m/30m/1h/4h/1d六周期独立转折概率；同一币当前仅一条可执行源腿以保持Gate单向持仓精确复制",
+      historyBackfill:false,sampleMeaning:"转折概率的未来标签只在到期后用于Brier/概率校准，不回填交易",
+      accounting:"新鲜买卖价模拟成交；费用、滑点、资金占位先进入转折可交易空间",
+      risk:"组合风险≤10%，同方向≤6.5%，六周期袖套1.5/2/2/2/1.5/1%；单笔≤1.5%，回撤只缩仓",
+      validation:"转折检测与成本后交易仍需真实前向验证，不承诺盈利或月翻倍",
+      liquidation:"对应周期开仓由对应周期转折退出；硬止损和异常安全寿命独立生效"}:
+      {scope:"PAPER_ONLY",grammar:"最多两个连续特征条件；方向、期限、止损和回吐退出由新市场反应生成",historyBackfill:false,
       sampleMeaning:"市场条件与后来反应；不是影子订单或连胜晋级",accounting:"新鲜买卖价模拟成交；净值包含退出费用与资金占位",
-      risk:"单笔风险上限1.5%；同一关系family的所有并行币合计最多占一个1.5%风险槽；成交校准为负仍保留15%探测风险，单币小样本按sqrt(samples/20)连续缩仓；转折/回调和回撤只调整额度而不停止学习，总名义额仍不超过4倍",
-      validation:"前向实验未证明盈利或月翻倍；多重规则筛选存在估计偏差",liquidation:"当前盘口保护，不冒充交易所标记价格强平复现"}};
+      risk:"单笔风险上限1.5%；同一关系family的所有并行币合计最多占一个1.5%风险槽；成交校准为负仍保留15%探测风险，单币小样本连续缩仓",
+      validation:"前向实验未证明盈利或月翻倍",liquidation:"当前盘口保护，不冒充交易所标记价格强平复现"}};
 }
