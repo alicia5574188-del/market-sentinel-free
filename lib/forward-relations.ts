@@ -438,11 +438,14 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
     const headroom=Math.min(equity*.10-totalRisk,equity*.065-sideRisk,equity*candidate.riskCap-sleeveRisk);
     const targetRisk=Math.max(0,Math.min(equity*.015*quality*drawdownScale,headroom));
     const lossRate=candidate.stopRate+cost;
-    // Size against post-entry-fee equity so the persisted risk ratios remain
-    // inside their caps after the fee is deducted from balance.
-    const totalCapNotional=Math.max(0,(equity*.10-totalRisk)/(lossRate+.10*PAPER_COST.feeRate));
-    const sideCapNotional=Math.max(0,(equity*.065-sideRisk)/(lossRate+.065*PAPER_COST.feeRate));
-    const sleeveCapNotional=Math.max(0,(equity*candidate.riskCap-sleeveRisk)/(lossRate+candidate.riskCap*PAPER_COST.feeRate));
+    // Risk ratios are evaluated on marked equity, which immediately reflects
+    // round-trip fee/slippage/spread drag. Reserve that same immediate mark cost
+    // when sizing so persisted sleeve/directional/portfolio caps remain true
+    // after the order is opened, not only before the entry fee is booked.
+    const immediateMarkCost=Math.max(0,2*(PAPER_COST.feeRate+PAPER_COST.slippageRate)+spread);
+    const totalCapNotional=Math.max(0,(equity*.10-totalRisk)/(lossRate+.10*immediateMarkCost));
+    const sideCapNotional=Math.max(0,(equity*.065-sideRisk)/(lossRate+.065*immediateMarkCost));
+    const sleeveCapNotional=Math.max(0,(equity*candidate.riskCap-sleeveRisk)/(lossRate+candidate.riskCap*immediateMarkCost));
     const desired=Math.min(equity*1.5,targetRisk/Math.max(lossRate,1e-9),totalCapNotional,sideCapNotional,sleeveCapNotional,
       Math.max(0,equity*4-gross));
     if(!(desired>=equity*.05)){reject("该周期剩余风险额度不足有效仓位，不生成碎片订单");continue;}
