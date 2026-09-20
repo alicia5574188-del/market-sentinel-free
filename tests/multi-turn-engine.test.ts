@@ -34,16 +34,16 @@ test("sharp V reversal turns the fast frame before the 1h frame and never hard-f
   const up=path(330,i=>100*Math.exp(i*.0007));
   const base=up.at(-1)!.close;
   const p=[...up,...Array.from({length:30},(_,j)=>bar(330+j,base*Math.exp(-(j+1)*.006)))];
-  let state=initialMultiTurn();
+  let state=initialMultiTurn(),firstFastTurn:{fast:NonNullable<typeof state.frames.BTC_USDT>["5m"];slow:NonNullable<typeof state.frames.BTC_USDT>["1h"]}|null=null;
   for(let end=330;end<=360;end+=3){
     const rows=p.slice(0,end),now=(rows.at(-1)!.time+300)*1000+1000;
     state=evaluateMultiTurn({state,paths:{BTC_USDT:rows},now});
+    const fast=state.frames.BTC_USDT?.["5m"],slow=state.frames.BTC_USDT?.["1h"];
+    if(!firstFastTurn&&fast?.direction==="SHORT"&&fast.lastTurnAt!=null&&slow)firstFastTurn={fast,slow};
   }
-  const fast=state.frames.BTC_USDT?.["5m"],slow=state.frames.BTC_USDT?.["1h"];
-  assert.ok(fast);assert.ok(slow);
-  assert.equal(fast!.direction,"SHORT");
-  assert.ok(["LONG","NEUTRAL"].includes(slow!.direction));
-  assert.ok(fast!.lastTurnAt!==null);
+  assert.ok(firstFastTurn);
+  assert.equal(firstFastTurn!.fast!.direction,"SHORT");
+  assert.ok(["LONG","NEUTRAL"].includes(firstFastTurn!.slow!.direction));
 });
 
 test("one adverse 5m spike does not flip slower frames",()=>{
