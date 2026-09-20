@@ -195,8 +195,20 @@ export function adaptiveTargetRisk(input:{
   allocationScale:number;
   riskMultiplier:number;
   stateHeadroom:number;
+  readyPeers?:number;
+  minimumMeaningfulRisk?:number;
 }){
   if(!(input.equity>0)||!(input.stateHeadroom>0))return 0;
-  return Math.max(0,Math.min(input.equity*.015*clip(input.quality,0,1)
-    *clip(input.allocationScale,.01,1)*clip(input.riskMultiplier,.01,1),input.stateHeadroom));
+  const singleCap=input.equity*.015*clip(input.quality,0,1)
+    *clip(input.allocationScale,.01,1)*clip(input.riskMultiplier,.01,1);
+  let share=input.stateHeadroom;
+  if((input.readyPeers??0)>1&&(input.minimumMeaningfulRisk??0)>0){
+    // Share only across as many slots as can still clear a meaningful order.
+    // This preserves diversification without the old failure mode where dozens
+    // of merely-ready symbols divided every candidate below executable size.
+    const capacity=Math.max(1,Math.floor(input.stateHeadroom/input.minimumMeaningfulRisk!));
+    const slots=Math.max(1,Math.min(Math.floor(input.readyPeers!),capacity));
+    share=input.stateHeadroom/slots;
+  }
+  return Math.max(0,Math.min(singleCap,share,input.stateHeadroom));
 }
