@@ -411,9 +411,7 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
   const diagnostics={at:now,matched:candidates.length,opened:0,reasons:{} as Record<string,number>,retry:false,queued:0,adaptiveScaled:0};
   s.entryDiagnostics=diagnostics;
   const reject=(reason:string)=>{diagnostics.reasons[reason]=(diagnostics.reasons[reason]??0)+1;};
-  const attempted=new Set<string>();
   for(const candidate of candidates){
-    if(attempted.has(candidate.symbol))continue;attempted.add(candidate.symbol);
     if(s.positions.some(t=>t.symbol===candidate.symbol))continue;
     const key=`${candidate.symbol}:${candidate.timeframe}`;
     if((s.turnLastEntryBars[key]??0)>=candidate.completedAt)continue;
