@@ -6,6 +6,8 @@ import type { Condition, Measurement, Rule, Trade } from "./forward-relations.ts
 
 export const EVIDENCE_POLICY = "participation-execution-v1.2";
 export const PREVIOUS_POLICY = "evidence-calibration-v1.1";
+export const FORWARD_EXCLUDED_SYMBOLS = new Set(["ZEC_USDT"]);
+export const forwardSymbolAllowed = (symbol:string) => !FORWARD_EXCLUDED_SYMBOLS.has(symbol);
 const HOUR = 3_600_000;
 const mean = (a: number[]) => a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0;
 const clip = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
@@ -101,7 +103,7 @@ export function costAwareGiveback(armRate:number,givebackRate:number,cost:number
 export function inspectCondition(input:{rows:Measurement[];conditions:Condition[];horizon:number;now:number;
   feedback:Feedback[];scopeSymbol?:string},diagnostics:EvidenceDiagnostics):Candidate|null {
   const {conditions,horizon,now,feedback,scopeSymbol}=input;diagnostics.tested++;
-  const ordered=dedup(input.rows.filter(r=>r.horizon===horizon&&r.endAt<=now&&r.availableAt<=now));
+  const ordered=dedup(input.rows.filter(r=>r.horizon===horizon&&r.endAt<=now&&r.availableAt<=now&&forwardSymbolAllowed(r.symbol)));
   const boundary=ordered[Math.floor(ordered.length*.6)]?.at??0;
   const eligible=(r:Measurement)=>(!scopeSymbol||r.symbol===scopeSymbol)&&matches(r.x,conditions);
   const train=ordered.filter(r=>r.endAt<=boundary&&eligible(r)),check=ordered.filter(r=>r.at>=boundary&&eligible(r));
@@ -147,7 +149,7 @@ export function inspectCondition(input:{rows:Measurement[];conditions:Condition[
       rawNet,boundedNet,calibratedNet:net,uncertain:warnings.length>0,warnings,costRate:cost,
       quality:evidenceQuality(rawNet,boundedNet,se,cost,calibration.penalty),worstWithoutSymbol,calibration}};
 }
-export function ruleApplies(r:Rule,symbol:string) { return r.evidence?.policy===EVIDENCE_POLICY&&r.evidence.symbols.includes(symbol); }
+export function ruleApplies(r:Rule,symbol:string) { return forwardSymbolAllowed(symbol)&&r.evidence?.policy===EVIDENCE_POLICY&&r.evidence.symbols.includes(symbol); }
 export function entryEconomics(r:Rule,signalPrice:number,entryPrice:number,spread:number) {
   const cost=r.evidence?.costRate??modeledCost(r.horizon);
   const move=(r.side==="LONG"?1:-1)*(entryPrice/signalPrice-1);
