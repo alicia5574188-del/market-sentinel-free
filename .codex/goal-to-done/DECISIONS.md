@@ -1,3 +1,9 @@
+# 2026-09-20 — Forward Adaptive v2 architecture decision
+
+Preserve Forward rather than replace it. The diagnosed defect is fast defense plus slow offense: turn protection can remove/limit one direction before the slower learner produces the next executable relationship, while peer-split risk can reduce every candidate below meaningful order size. The fix is architectural: a bounded rapid lane from already-matured 15m outcomes, refit on new matured data, continuous nonzero warning weights, drawdown as new-allocation scaling, and best-first sequential allocation. Do not force reversal or manufacture a market-state signal.
+
+Keep all existing execution safety and persistence boundaries, Top30 5m learning, realtime quote-slot protection, owner/member LIVE controls and account history. No extra market requests or resets. Future tuning must be layer-specific and counterexample-driven; do not reintroduce inactivity as a risk-management shortcut.
+
 # 2026-09-20 continuation — finish fixes; evaluate the whole release
 
 Do not confuse a self-imposed8,000 financial counter with the platform quota. Preserve that lane and its reserves, while a separate8,640/day durable protection counter shares the overlay's one atomic record; full exits never depend on that lane. Keep2s/10s cadence. Compact112KiB inline-first storage reduces real full writes by2 without deleting data. Empty turnover scans defer only nonfinancial cursor saves to5min; new fills/dedup/pagination persist immediately. All existing counted financial writers share synchronous in-flight reservations; failures release, UTC turnover retains outstanding claims. Main/member checkpoints include pending counts conservatively, not a perfect crash-proof billing ledger.
