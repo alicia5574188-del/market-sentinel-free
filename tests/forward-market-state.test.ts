@@ -57,7 +57,11 @@ test("a strong opposite regime passes through TRANSITION instead of instant full
   const long=updateMarketState(market(T+BAR,()=>.0015),first,T+BAR);
   const transition=updateMarketState(market(T+2*BAR,()=>-.0015),long,T+2*BAR);
   assert.equal(transition.mode,"TRANSITION");assert.equal(transition.rawMode,"TREND_SHORT");
-  const short=updateMarketState(market(T+3*BAR,()=>-.0015),transition,T+3*BAR);
+  const second=updateMarketState(market(T+3*BAR,()=>-.0015),transition,T+3*BAR);
+  assert.equal(second.mode,"TRANSITION");assert.equal(second.candidateBars,2);assert.equal(second.candidateRequiredBars,3);
+  const repeated=updateMarketState(market(T+3*BAR,()=>-.0015),second,T+3*BAR+10_000);
+  assert.equal(repeated.mode,"TRANSITION");assert.equal(repeated.candidateBars,2);
+  const short=updateMarketState(market(T+4*BAR,()=>-.0015),JSON.parse(JSON.stringify(repeated)),T+4*BAR);
   assert.equal(short.mode,"TREND_SHORT");
 });
 test("wide alternating range confirms NEUTRAL and lowers net directional exposure",()=>{
@@ -73,7 +77,7 @@ test("wide alternating range confirms NEUTRAL and lowers net directional exposur
 test("profit giveback tightens transition/range budgets without changing trend caps",()=>{
   const transition={...updateMarketState(market(T,()=>.0015),null,T),mode:"TRANSITION" as const};
   const b=marketRiskBudget(transition,950,1000);
-  assert.equal(b.totalRate,.05);assert.equal(b.longRate,.035);assert.equal(b.netDirectionalRate,.025);
+  assert.ok(Math.abs(b.totalRate-.05)<1e-12);assert.ok(Math.abs(b.longRate-.035)<1e-12);assert.ok(Math.abs(b.netDirectionalRate-.025)<1e-12);
   const trend={...transition,mode:"TREND_LONG" as const};
   const t=marketRiskBudget(trend,950,1000);
   assert.equal(t.longRate,.065);assert.equal(t.totalRate,.075);
@@ -95,4 +99,149 @@ test("directional selection preserves the original top two and adds at most one 
   assert.deepEqual(selected.map(x=>x.evidence.family),["L1","L2","S1"]);
   const mixed=selectDirectionalCandidates([shared[0],shared[2],shared[1]],2);
   assert.deepEqual(mixed.map(x=>x.evidence.family),["L1","S1"]);
+});
+
+for(const side of ["LONG","SHORT"] as const){
+  const direction=side==="LONG"?1:-1,other=side==="LONG"?"SHORT":"LONG";
+  const warning=(i:number)=>direction*(i>=10?-.004:.003);
+  test(`${side}: missing breadth is UNKNOWN, not recovery, and never freezes both directions`,()=>{
+    const before=updateTurnForecast(market(T,warning),null,T);
+    assert.equal(before.threatenedSide,side);
+    const missing=updateTurnForecast(market(T+BAR,warning,7),before,T+BAR);
+    assert.equal(missing.phase,"UNKNOWN");assert.equal(missing.fresh,false);
+    assert.equal(missing.threatenedSide,side);assert.equal(missing.clearBars,0);
+    assert.match(turnForecastEntryGuard(missing,side,60,null)??"",/数据未知/);
+    assert.equal(turnForecastEntryGuard(missing,other,60,null),null);
+    // Missing observations preserve, rather than relax, the entry budget. The
+    // position manager independently requires fresh evidence before reducing.
+    const beforeBudget=marketRiskBudget(null,1000,1000,before),unknownBudget=marketRiskBudget(null,1000,1000,missing);
+    for(const field of ["totalRate","longRate","shortRate","netDirectionalRate"] as const)
+      assert.equal(unknownBudget[field],beforeBudget[field]);
+    const recoveredOne=updateTurnForecast(market(T+2*BAR,()=>direction*.003),missing,T+2*BAR);
+    assert.notEqual(recoveredOne.phase,"CLEAR");assert.equal(recoveredOne.clearBars,1);
+    const recoveredTwo=updateTurnForecast(market(T+3*BAR,()=>direction*.003),recoveredOne,T+3*BAR);
+    assert.equal(recoveredTwo.phase,"CLEAR");assert.equal(turnForecastEntryGuard(recoveredTwo,side,60,null),null);
+  });
+  test(`${side}: a chronological trend reversal cannot masquerade as recovery when 60-minute context changes sign`,()=>{
+    let price=100;
+    const tape=Array.from({length:35},(_,i)=>{
+      price*=1+direction*(i<16?.003:-.004);
+      return {time:T/1000+(i-13)*300,close:price};
+    });
+    let forecast:ReturnType<typeof updateTurnForecast>|null=null;
+    let state:ReturnType<typeof updateMarketState>|null=null;
+    let warned=false,confirmed=false;
+    for(let i=12;i<tape.length;i++){
+      const now=(tape[i].time+300)*1000;
+      const paths=Object.fromEntries(Array.from({length:12},(_,n)=>[`M${n}_USDT`,tape.slice(0,i+1)]));
+      forecast=updateTurnForecast(paths,forecast,now);state=updateMarketState(paths,state,now);
+      if(forecast.threatenedSide===side)warned=true;
+      if(warned){
+        assert.notEqual(forecast.phase,"CLEAR",`unexpected recovery at bar ${i}`);
+        assert.ok(turnForecastEntryGuard(forecast,side,60,state));
+        assert.equal(turnForecastEntryGuard(forecast,other,60,state),null);
+      }
+      if(forecast.reversalConfirmed){
+        confirmed=true;assert.equal(forecast.phase,"REVERSAL_RISK");
+        assert.equal(forecast.threatenedSide,side);assert.match(forecast.reason,/反转确认/);
+      }
+    }
+    assert.ok(warned);assert.ok(confirmed);
+    assert.equal(state!.mode,other==="LONG"?"TREND_LONG":"TREND_SHORT");
+    assert.equal(turnForecastEntryGuard(forecast,other,180,state),null);
+  });
+  test(`${side}: two genuinely neutral observations release the warning without selecting a trade side`,()=>{
+    const before=updateTurnForecast(market(T,warning),null,T);
+    const range=(i:number)=>i%2?.004:-.004;
+    const one=updateTurnForecast(market(T+BAR,range),before,T+BAR);
+    assert.equal(one.clearBars,1);assert.equal(one.threatenedSide,side);
+    const two=updateTurnForecast(market(T+2*BAR,range),one,T+2*BAR);
+    assert.equal(two.phase,"CLEAR");assert.equal(two.threatenedSide,null);
+    assert.equal(turnForecastEntryGuard(two,"LONG",60,null),null);
+    assert.equal(turnForecastEntryGuard(two,"SHORT",60,null),null);
+  });
+}
+
+test("cold UNKNOWN has no invented threatened direction or blanket entry veto",()=>{
+  const f=updateTurnForecast({},null,T);
+  assert.equal(f.phase,"UNKNOWN");assert.equal(f.threatenedSide,null);assert.equal(f.fresh,false);
+  for(const side of ["LONG","SHORT"] as const)assert.equal(turnForecastEntryGuard(f,side,180,null),null);
+});
+
+test("duplicate callbacks cannot confirm a trend, escalate a warning or count as two recovery bars",()=>{
+  const trending=market(T,()=>.003),firstState=updateMarketState(trending,null,T);
+  const state=updateMarketState(trending,firstState,T+10_000);
+  assert.equal(state.mode,"UNKNOWN");assert.equal(state.candidateBars,1);
+  const severe=market(T,i=>i>=10?-.004:.003),warning=updateTurnForecast(severe,null,T);
+  const duplicate=updateTurnForecast(severe,warning,T+10_000);
+  assert.equal(duplicate.phase,"PULLBACK");assert.equal(duplicate.confirmations,1);
+  const restored=market(T+BAR,()=>.003),one=updateTurnForecast(restored,warning,T+BAR);
+  const again=updateTurnForecast(restored,one,T+BAR+10_000);
+  assert.equal(again.phase,"PULLBACK");assert.equal(again.clearBars,1);
+  assert.equal(updateTurnForecast(market(T+2*BAR,()=>.003),again,T+2*BAR).phase,"CLEAR");
+});
+
+test("missing or skipped completed bars break consecutive recovery and trend confirmation",()=>{
+  const f=updateTurnForecast(market(T,i=>i>=10?-.004:.003),null,T);
+  const one=updateTurnForecast(market(T+BAR,()=>.003),f,T+BAR);
+  const skipped=updateTurnForecast(market(T+3*BAR,()=>.003),one,T+3*BAR);
+  assert.equal(skipped.clearBars,1);assert.notEqual(skipped.phase,"CLEAR");
+  const first=updateMarketState(market(T,()=>.003),null,T);
+  const unknown=updateMarketState({},first,T+BAR);
+  const next=updateMarketState(market(T+2*BAR,()=>.003),unknown,T+2*BAR);
+  assert.equal(next.mode,"UNKNOWN");assert.equal(next.candidateBars,1);
+});
+
+test("switching the threatened side is confirmed on two distinct bars without an intervening CLEAR",()=>{
+  const long=updateTurnForecast(market(T,i=>i>=10?-.004:.003),null,T);
+  const shortWarning=(i:number)=>i>=10?.004:-.003;
+  const first=updateTurnForecast(market(T+BAR,shortWarning),long,T+BAR);
+  assert.equal(first.threatenedSide,"LONG");assert.equal(first.candidateSide,"SHORT");
+  assert.notEqual(first.phase,"CLEAR");
+  const duplicate=updateTurnForecast(market(T+BAR,shortWarning),first,T+BAR+10_000);
+  assert.equal(duplicate.candidateBars,1);assert.equal(duplicate.threatenedSide,"LONG");
+  const second=updateTurnForecast(market(T+2*BAR,shortWarning),duplicate,T+2*BAR);
+  assert.equal(second.threatenedSide,"SHORT");assert.equal(second.phase,"PULLBACK");
+  assert.equal(turnForecastEntryGuard(second,"LONG",60,null),null);
+});
+
+test("persisted v1 forecasts without new optional fields retain their warning through data loss",()=>{
+  const current=updateTurnForecast(market(T,i=>i>=10?-.004:.003),null,T);
+  const legacy=JSON.parse(JSON.stringify(current)) as typeof current;
+  delete legacy.completedBarAt;delete legacy.lastFreshPhase;delete legacy.reversalConfirmed;
+  const unknown=updateTurnForecast({},legacy,T+BAR);
+  const roundTrip=JSON.parse(JSON.stringify(unknown)) as typeof unknown;
+  assert.equal(roundTrip.phase,"UNKNOWN");assert.equal(roundTrip.threatenedSide,"LONG");
+  const fresh=updateTurnForecast(market(T+2*BAR,()=>-.004),roundTrip,T+2*BAR);
+  assert.equal(fresh.phase,"REVERSAL_RISK");assert.equal(fresh.threatenedSide,"LONG");
+});
+
+test("gap, duplicate, out-of-order, invalid and unsynchronized candles cannot vote as a current 60-minute path",()=>{
+  const base=market(T,i=>i>=10?-.004:.003);
+  const corruptions:Record<string,(rows:ReturnType<typeof path>)=>ReturnType<typeof path>>={
+    tenMinuteGap:rows=>rows.map((r,i)=>({...r,time:r.time-(12-i)*300})),
+    duplicate:rows=>rows.map((r,i)=>i===8?{...r,time:rows[7].time}:r),
+    outOfOrder:rows=>rows.map((r,i)=>i===7?rows[8]:i===8?rows[7]:r),
+    shiftedClock:rows=>rows.map(r=>({...r,time:r.time-60})),
+    invalidClose:rows=>rows.map((r,i)=>i===8?{...r,close:NaN}:r),
+    stale:rows=>rows.map(r=>({...r,time:r.time-300})),
+  };
+  for(const [name,corrupt] of Object.entries(corruptions)){
+    const paths=Object.fromEntries(Object.entries(base).map(([name,rows])=>[name,corrupt(rows)]));
+    const forecast=updateTurnForecast(paths,null,T),state=updateMarketState(paths,null,T);
+    assert.equal(forecast.fresh,false,name);assert.equal(forecast.phase,"UNKNOWN",name);
+    assert.equal(state.rawMode,"UNKNOWN",name);assert.equal(forecast.markets,0,name);
+  }
+  const partial=Object.fromEntries(Object.entries(base).map(([name,rows],i)=>[name,i<7?rows:corruptions.shiftedClock(rows)]));
+  assert.equal(updateTurnForecast(partial,null,T).markets,7);
+  assert.equal(updateTurnForecast(partial,null,T).fresh,false);
+  partial.M7_USDT=base.M7_USDT;
+  assert.equal(updateTurnForecast(partial,null,T).markets,8);
+  assert.equal(updateTurnForecast(partial,null,T).fresh,true);
+});
+
+test("unfinished future candle is not an observation and cannot alter the completed-path forecast",()=>{
+  const base=market(T,i=>i>=10?-.004:.003);
+  const future=Object.fromEntries(Object.entries(base).map(([name,rows])=>[name,[...rows,{time:T/1000,close:1}]]));
+  assert.deepEqual(updateTurnForecast(future,null,T),updateTurnForecast(base,null,T));
 });

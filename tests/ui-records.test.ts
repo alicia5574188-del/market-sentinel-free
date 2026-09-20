@@ -69,7 +69,8 @@ test("missing cost breakdown is unknown rather than invented0",()=>{
 async function readerHarness(){const storage=new Memory(),p=position(),client={credentials:{environment:"testnet",apiKey:"fixture-only"},
  count:0,async positionCloseHistory(){this.count++;return [native()];}},reader=new LiveHistoryReader<SettlementPosition>(),tasks:Promise<void>[]=[];
  await storage.put("live-parity:v1:closed:0000000000000001:source-a",{position:p});
- const input={storage,client,current:[p],now:T+620000,valid:()=>true,reserve:()=>true,committed:()=>{},waitUntil:(t:Promise<void>)=>tasks.push(t)};
+ const input={storage,client,current:[p],now:T+620000,valid:()=>true,reserve:()=>true,
+  persist:async(entries:Record<string,unknown>)=>{await storage.transaction(async tx=>{await tx.put(entries);});},waitUntil:(t:Promise<void>)=>tasks.push(t)};
  return {storage,p,client,reader,tasks,input};}
 test("lazy reader saves separate cache without rewriting trade or balance",async()=>{
  const h=await readerHarness(),old=await h.storage.get("live-parity:v1:closed:0000000000000001:source-a");h.reader.launch(h.input);await Promise.all(h.tasks);

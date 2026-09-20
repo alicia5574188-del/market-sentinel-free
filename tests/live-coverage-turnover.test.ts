@@ -135,6 +135,93 @@ const {MarketStream}=await import("../worker/index-clean.ts");
 type WorkerTest={runtime:{nonAlarmWrites:number;live:{requestedEnabled:boolean;operational:boolean};contractMeta:Record<string,unknown>};
   forwardState:ForwardState;liveClient:unknown;turnoverAccountUser:string;turnoverState:TurnoverState|null;
   syncTurnover(now:number):Promise<void>;saveCheckpoint(now:number,force:boolean):Promise<void>;fetch(r:Request):Promise<Response>};
+async function turnoverHarness(db=new Memory()) {
+ let ready=Promise.resolve();
+ const ctx={storage:db,blockConcurrencyWhile(fn:()=>Promise<void>){ready=fn();},waitUntil(){}};
+ const stream=new MarketStream(ctx as unknown as DurableObjectState,{OWNER_ACCESS_TOKEN:"test-owner"} as never);await ready;
+ const w=stream as unknown as WorkerTest;w.forwardState=initialForward(START);w.turnoverAccountUser="123";
+ w.runtime.contractMeta={BTC_USDT:{quantoMultiplier:.001}};w.runtime.live.requestedEnabled=true;w.runtime.live.operational=true;
+ const requests:Array<{from:number;to:number;offset:number}>=[];
+ const gate={credentials:{environment:"testnet",apiKey:"never-real"},rows:[] as GateConfirmedFill[],
+   async confirmedFills(from:number,to:number,offset:number){requests.push({from,to,offset});
+     return this.rows.filter(r=>Number(r.create_time)>=from&&Number(r.create_time)<=to).slice(offset,offset+FILL_PAGE_SIZE);}};
+ w.liveClient=gate;return {w,db,gate,requests};
+}
+test("unchanged non-paginated turnover scans persist every five minutes: 1440 reads use 288 summary writes",async()=>{
+ const {w,db,requests}=await turnoverHarness(),before=db.writes,owner=structuredClone(w.runtime.live);
+ for(let minute=0;minute<1440;minute++)await w.syncTurnover(NOW+minute*60_000);
+ assert.equal(requests.length,1440);assert.equal(db.writes-before,288);
+ assert.equal(w.turnoverState!.fills,0);assert.equal(w.turnoverState!.total,0);
+ assert.equal(w.turnoverState!.lastScanAt,NOW+1439*60_000);
+ const summaries=[...db.data].filter(([k])=>k.endsWith(":summary"));assert.equal(summaries.length,1);
+ assert.equal((summaries[0][1] as TurnoverState).lastScanAt,NOW+1435*60_000);
+ assert.equal(w.runtime.live.requestedEnabled,owner.requestedEnabled);assert.equal(w.runtime.live.operational,owner.operational);
+});
+test("duplicate-only scans defer the cursor but every new fill and dedupe bucket commits immediately",async()=>{
+ const {w,db,gate}=await turnoverHarness();gate.rows=[fill()];await w.syncTurnover(NOW);
+ const firstWrites=db.writes;await w.syncTurnover(NOW+60_000);
+ assert.equal(db.writes,firstWrites);assert.equal(w.turnoverState!.total,50);
+ gate.rows.push(fill("101",{create_time:(NOW+100_000)/1000}));await w.syncTurnover(NOW+120_000);
+ assert.equal(db.writes,firstWrites+2);assert.equal(w.turnoverState!.total,100);assert.equal(w.turnoverState!.fills,2);
+ const saved=[...db.data].find(([k])=>k.endsWith(":summary"))![1] as TurnoverState;
+ assert.equal(saved.total,100);assert.equal(saved.lastScanAt,NOW+120_000);
+});
+test("restart from an older deferred cursor rescans without losing late fills or counting old fills twice",async()=>{
+ const first=await turnoverHarness();first.gate.rows=[fill()];await first.w.syncTurnover(NOW);
+ await first.w.syncTurnover(NOW+60_000);await first.w.syncTurnover(NOW+120_000);
+ const saved=[...first.db.data].find(([k])=>k.endsWith(":summary"))![1] as TurnoverState;
+ assert.equal(saved.lastScanAt,NOW);
+ const restarted=await turnoverHarness(first.db);
+ restarted.gate.rows=[fill(),fill("late",{trade_id:"101",create_time:(NOW-5_000)/1000})];
+ await restarted.w.syncTurnover(NOW+180_000);
+ assert.equal(restarted.requests[0].from,saved.through-120);
+ assert.equal(restarted.w.turnoverState!.fills,2);assert.equal(restarted.w.turnoverState!.total,100);
+ const persisted=[...first.db.data].find(([k])=>k.endsWith(":summary"))![1] as TurnoverState;
+ assert.equal(persisted.total,100);assert.equal(persisted.fills,2);
+});
+test("full duplicate pages and pending-page completion never defer pagination state",async()=>{
+ const {w,db,gate}=await turnoverHarness();gate.rows=Array.from({length:FILL_PAGE_SIZE},(_,i)=>fill(String(i+1)));
+ await w.syncTurnover(NOW);assert.equal(w.turnoverState!.pending!.offset,FILL_PAGE_SIZE);
+ let writes=db.writes;await w.syncTurnover(NOW+60_000);
+ assert.equal(w.turnoverState!.pending,null);assert.equal(db.writes,writes+1);
+ writes=db.writes;await w.syncTurnover(NOW+120_000);
+ assert.equal(w.turnoverState!.pending!.offset,FILL_PAGE_SIZE);assert.equal(db.writes,writes+1);
+ writes=db.writes;await w.syncTurnover(NOW+180_000);
+ assert.equal(w.turnoverState!.pending,null);assert.equal(db.writes,writes+1);assert.equal(w.turnoverState!.total,5000);
+});
+test("deferred checkpoint failure does not publish a new durable cursor or money; retry retains history",async()=>{
+ const {w,db}=await turnoverHarness();await w.syncTurnover(NOW);await w.syncTurnover(NOW+240_000);
+ const before=structuredClone(w.turnoverState),persisted=structuredClone(db.data);db.fail=true;
+ await assert.rejects(()=>w.syncTurnover(NOW+300_000),/storage failure/);
+ assert.deepEqual(w.turnoverState,before);assert.deepEqual(db.data,persisted);
+ db.fail=false;await w.syncTurnover(NOW+360_000);
+ assert.equal(w.turnoverState!.lastScanAt,NOW+360_000);assert.equal(w.turnoverState!.total,0);
+});
+test("empty scans spend no scarce write budget while a new monetary update still honors the trading reserve",async()=>{
+ const {w,db,gate}=await turnoverHarness();gate.rows=[fill()];await w.syncTurnover(NOW);
+ const writes=db.writes;w.runtime.nonAlarmWrites=7999;await w.syncTurnover(NOW+60_000);
+ assert.equal(db.writes,writes);assert.equal(w.runtime.nonAlarmWrites,7999);
+ gate.rows.push(fill("101",{create_time:(NOW+100_000)/1000}));
+ await assert.rejects(()=>w.syncTurnover(NOW+120_000),/交易保护优先/);
+ assert.equal(w.turnoverState!.total,50);assert.equal(w.turnoverState!.fills,1);assert.equal(db.writes,writes);
+ assert.equal(w.runtime.live.requestedEnabled,true);assert.equal(w.runtime.live.operational,true);
+});
+test("turnover checkpoint cadence and dedupe state are account-scoped after an account switch",async()=>{
+ const {w,db,gate}=await turnoverHarness();gate.rows=[fill()];await w.syncTurnover(NOW);
+ await w.syncTurnover(NOW+60_000);const writes=db.writes;
+ w.turnoverAccountUser="456";gate.rows=[fill("100",{create_time:(NOW+100_000)/1000,trade_value:75})];
+ await w.syncTurnover(NOW+120_000);assert.equal(db.writes,writes+2);assert.equal(w.turnoverState!.total,75);
+ const summaries=[...db.data].filter(([k])=>k.endsWith(":summary")).map(([,v])=>(v as TurnoverState).total).sort((a,b)=>a-b);
+ assert.deepEqual(summaries,[50,75]);
+});
+test("account changes during a turnover read cannot commit the old response into the new account",async()=>{
+ const {w,db,gate}=await turnoverHarness();const before=db.writes;
+ const replacement={...gate,rows:[fill("200",{trade_value:75})]};
+ gate.confirmedFills=async()=>{w.liveClient=replacement;w.turnoverAccountUser="456";return [fill()];};
+ await w.syncTurnover(NOW);assert.equal(db.writes,before);
+ await w.syncTurnover(NOW+60_000);assert.equal(w.turnoverState!.total,75);
+ const summaries=[...db.data].filter(([k])=>k.endsWith(":summary"));assert.equal(summaries.length,1);
+});
 test("actual Worker persists fill-only turnover, exposes values only to owner and cannot toggle LIVE",async()=>{
  let ready=Promise.resolve();const db=new Memory();
  const ctx={storage:db,blockConcurrencyWhile(fn:()=>Promise<void>){ready=fn();},waitUntil(){}};

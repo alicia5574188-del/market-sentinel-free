@@ -1,3 +1,13 @@
+# Complete audited repair — 2026-09-20 continuation
+
+The user asks us to finish known fixes end-to-end and permits deployment once demonstrably better. `research/AUDITED_REPAIR_RELEASE_GATE.md` is the current gate. The earlier HOLD below records the rejected intermediate design. Keep the financial lane at8,000; independent durable protection has at most8,640 writes/day and cannot consume exit capacity. Compact full storage and no-amount-change turnover coalescing must remain lossless. Counted financial writers require synchronous reservations through commit/failure, including members. This narrowly authorizes the `saveCheckpoint` frozen body update as well as `advanceForwardNow` and affected pure storage/helper baselines, after semantic tests. Eight other frozen primary bodies, owner intent, credentials, account identities and membership capacity stay unchanged.
+
+Correct the obsolete owner-only55,000 write target explicitly: reserved rows are63,032 primary and99,192 with two members/directory usage. This is not a global capacity guarantee: retries, manual controls, other readers and account-wide duration/requests remain separate limitations. No billing plan, alarm/data cadence or trading switch change. No bare rollback to401768c after compact writes: keep the compatible reader or first atomically rewrite fully restored state including protection overlay to the old format. Main-only verified deployment and advancing-state receipt remain mandatory. Correctness/resource improvements are not future-profit proof.
+
+# Audited repair candidate — 2026-09-20 (historical intermediate HOLD)
+
+User requires demonstrable improvement before deployment. Read `research/AUDITED_REPAIR_RELEASE_GATE.md` first. Candidate repairs deterministic exit/forecast/LIVE-risk/health defects, but the compact peak checkpoint has a reproduced write-budget versus exit-commit regression. Do not merge/deploy until resolved; passing functional tests do not prove net-profit superiority. This task authorizes only the corresponding forward/store and `advanceForwardNow` frozen-hash updates; keep all other frozen primary methods, credentials, owner intent, ledgers and membership capacity unchanged. No real-money production test.
+
 # Equity history cache — 2026-09-19
 
 User requests retaining history across tab changes and reducing repeated reads. Implement only authenticated browser-scoped projection caching and bounded exclusive new-archive reads; keep all strategies/cadence/financial state/owner and member execution untouched. Read research/EQUITY_CACHE_INCREMENTAL.md. Cached curves are not trading authority or proof of better returns. Preserve frozen tests and reviewed-main deployment/continuity checks.
@@ -51,5 +61,5 @@ Read `.codex/goal-to-done/GOAL.md`, `STATUS.md`, and `DECISIONS.md` before chang
 - Keep total structural stop risk at or below 10% of the applicable PAPER or actual Gate equity, with same-direction BTC/ETH/SOL risk at or below 6.5%. Include fee and stress-slippage estimates and recalculate on actual fill.
 - Stale, failed, or sequence-fault data may cancel prepared plans, but may not open or close a position from an old price.
 - Every alarm must remain idempotent and re-arm before optional checkpoint work. Do not add per-snapshot D1 writes.
-- Keep planned daily DO requests and writes below 55,000 and planned D1 billed writes below 5,000. Update tests and README if cadence or persistence changes.
+- Use the latest scoped resource model above; the original55,000 owner-only planning assumption is obsolete. Keep planned D1 billed writes below5,000. Update tests and README if cadence or persistence changes; local counters are not whole-account quotas.
 - Use `apply_patch` for edits. Run all README verification commands and `git diff --check` before commit. Do not deploy from a coding branch.

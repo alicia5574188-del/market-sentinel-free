@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { register } from "node:module";
 import { LIVE_PARITY_PREFIX, LIVE_PARITY_VERSION, forwardMirrorSources, buildProportionalMirror,
-  mirrorCoverage, sourceLifecycle, liveEntryDriftGuard, type MirrorBinding } from "../lib/live-parity.ts";
+  mirrorCoverage, sourceLifecycle, liveEntryDriftGuard, mirrorPositionRisk, type MirrorBinding } from "../lib/live-parity.ts";
 import { advanceForward, initialForward, type Trade, type ForwardState } from "../lib/forward-relations.ts";
 import {newExitControl} from "../lib/forward-protection.ts";
 import { gateMarkedEquity, gatePositionValuation, liveEntryDisposition, liveExitTag, type GateLiveAccount, type GateLiveOrder, type GateLivePosition, type LiveEntryIntent, type LiveStopIntent, LiveEntrySizingError, GateLiveClient } from "../lib/gate-live.ts";
@@ -106,7 +106,9 @@ test("margin or leverage failure is explicit, not silent new leverage or smaller
 });
 test("source-authoritative mirror keeps fixed scale despite small live fee drift",()=>{
   const i=request();i.equity=95;i.available=100;i.mirrorRatio=.1;i.sourceRiskAuthority=true;
-  i.openRisk=9.8;i.sameDirectionRisk=6.4;i.openMargin=74;i.openNotional=390;
+  // The ratio remains fixed, but existing actual risk must leave headroom
+  // under 10% / 6.5% of the now-95 equity, not the old 100 mirror anchor.
+  i.openRisk=8.8;i.sameDirectionRisk=5.8;i.openMargin=74;i.openNotional=390;
   const r=buildProportionalMirror(i);
   assert.equal(r.binding.receipt.ratio,.1);assert.equal(r.intent.notional,20);assert.equal(r.intent.margin,10);
 });
@@ -461,6 +463,10 @@ test("storage failure prevents private entry calls and successful copies",()=>cl
 test("partial execution is adopted and shown as a deviation, not repeated as a full new entry",()=>clock(async()=>{
   const {h,gate}=await harness();gate.partial=true;await enableNew(h);await h.syncLive(T);await h.syncLive(T);
   assert.equal(gate.placed.length,1);assert.match(live(h).positions.BTC_USDT.parity!.discrepancy!,/实际/);
+  const p=live(h).positions.BTC_USDT as unknown as Parameters<typeof mirrorPositionRisk>[0];
+  const risk=(h as unknown as {liveOpenRisk():number}).liveOpenRisk();
+  assert.ok(Math.abs(risk-mirrorPositionRisk(p,100))<1e-9);
+  assert.ok(Math.abs(risk-gate.placed[0].plannedRisk/2)<1e-9);
 }));
 test("zero-fill IOC cannot produce a fictitious filled position",()=>clock(async()=>{
   const {h,gate}=await harness();gate.zero=true;await enableNew(h);await h.syncLive(T);
@@ -573,7 +579,8 @@ test("the permanent contract and parity suite cannot be omitted by the default r
   const ci=readFileSync(new URL("../.github/workflows/sentinel-v2-ci.yml",import.meta.url),"utf8");
   assert.equal((ci.match(/\.runtime\.liveMirror\.newOrdersOnly == true/g)??[]).length,2);
   assert.equal((ci.match(/\.runtime\.liveMirror\.executionPolicy == "new-orders-decimal-pnl-v1"/g)??[]).length,2);
-  assert.ok(pkg.scripts.test.includes("test:live-parity"));assert.ok(pkg.scripts["test:direct"].includes("live-parity.test.ts"));
+  assert.ok(pkg.scripts.test.includes("test:live-parity"));
+  assert.ok(pkg.scripts["test:direct"].includes("live-parity.test.ts")||pkg.scripts["test:direct"].includes("tests/*.test.ts"));
   assert.match(ci,/run: npm run test:live-parity/);assert.equal((ci.match(/liveMirror.source == "CURRENT_FORWARD_ACCOUNT"/g)??[]).length,2);
   assert.match(readFileSync(new URL("../AGENTS.md",import.meta.url),"utf8"),/LIVE_MIRROR_CONTRACT.md/);
 });
@@ -606,4 +613,73 @@ test("an unconfirmed old parent cannot be overwritten by a new same-coin source 
     assert.equal(gate.placed.length,1);assert.equal(live(h).entries.BTC_USDT.planId,"ft-fixture-1");
     assert.equal(live(h).operational,false);
   }finally{Date.now=original;}
+}));
+
+function addRiskTestSource(h:Harness,side:"LONG"|"SHORT"="LONG") {
+  const meta=h.runtime.contractMeta as Record<string,unknown>;
+  meta.ETH_USDT=structuredClone(meta.BTC_USDT);
+  const quotes=h.runtime.evidence as Record<string,unknown>;
+  quotes.ETH_USDT={midpoint:100,bestBid:100,bestAsk:100,observedAt:T,fresh:true,entryReady:true};
+  h.forwardState.positions.push(trade("risk-next","ETH_USDT",side));
+}
+test("real Worker blocks excess marked directional exposure without closing or resizing the existing parent",()=>clock(async()=>{
+  const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);
+  const quote=(h.runtime.evidence as Record<string,Record<string,unknown>>).BTC_USDT;
+  Object.assign(quote,{midpoint:135,bestBid:135,bestAsk:135});
+  gate.account.unrealised_pnl=7;
+  addRiskTestSource(h);
+  await h.syncLive(T);
+  assert.equal(gate.placed.length,1);assert.equal(gate.closeTags.length,0);
+  assert.equal(live(h).positions.BTC_USDT.exchangeSize,200);
+  assert.match(live(h).entrySkips.ETH_USDT.reason,/实际权益.*风险预算/);
+  assert.equal(live(h).requestedEnabled,true);
+  // Opposite-side source remains executable because gross risk is <10% and
+  // the existing LONG exposure cannot be misclassified as SHORT exposure.
+  h.forwardState.positions[1]=trade("risk-opposite","ETH_USDT","SHORT");
+  await h.syncLive(T);assert.equal(gate.placed.length,2);assert.equal(gate.placed[1].size,-200);
+}));
+test("real Worker keeps requested-but-unconfirmed closes and pending entries in risk totals",()=>clock(async()=>{
+  const {h}=await harness();await enableNew(h);await h.syncLive(T);
+  const r=h as unknown as {liveOpenRisk():number;liveDirectionalRisk(side:"LONG"|"SHORT"):number};
+  const p=live(h).positions.BTC_USDT as unknown as Parameters<typeof mirrorPositionRisk>[0]&{exitRequestedAt:number|null};
+  const before=r.liveOpenRisk();p.exitRequestedAt=T;
+  assert.equal(r.liveOpenRisk(),before);assert.equal(r.liveDirectionalRisk("LONG"),before);
+  const entries=h.runtime.live.entries as Record<string,unknown>;
+  entries.ETH_USDT={planId:"pending",symbol:"ETH_USDT",side:"SHORT",status:"OPEN",plannedRisk:2};
+  assert.equal(r.liveOpenRisk(),before+2);assert.equal(r.liveDirectionalRisk("SHORT"),2);
+  p.status="CLOSED";assert.equal(r.liveOpenRisk(),2);
+}));
+test("an unknown prior submission blocks a different-symbol addition without rewriting owner intent",()=>clock(async()=>{
+  const {h,gate}=await harness();gate.ambiguous=true;await enableNew(h);
+  addRiskTestSource(h);await h.syncLive(T);
+  assert.equal(gate.placed.length,1);assert.equal(live(h).requestedEnabled,true);
+  assert.equal(live(h).operational,false);assert.equal(live(h).entries.BTC_USDT.status,"ERROR");
+}));
+test("fresh Gate mark defeats a stale public midpoint while a source-closed position is still pending actual exit",()=>clock(async()=>{
+  const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);
+  const old=h.forwardState.positions[0];old.status="CLOSED";old.closedAt=T;old.exitPrice=135;old.exitReason="synthetic source close";
+  h.forwardState.history=[old];h.forwardState.positions=[];h.forwardState.balance=1070;
+  const quote=(h.runtime.evidence as Record<string,Record<string,unknown>>).BTC_USDT;
+  Object.assign(quote,{midpoint:100,bestBid:100,bestAsk:100,fresh:false,observedAt:T-60_000});
+  gate.holdings.BTC_USDT.mark_price=135;gate.account.unrealised_pnl=7;
+  gate.closePosition=async(_symbol,tag)=>{gate.closeTags.push(tag);return "pending-close";};
+  addRiskTestSource(h);await h.syncLive(T);
+  assert.equal(gate.placed.length,1);assert.equal(gate.closeTags.length,1);
+  assert.equal(live(h).positions.BTC_USDT.status,"OPEN");
+  assert.equal(live(h).positions.BTC_USDT.exchangeMarkPrice,135);
+  assert.match(live(h).entrySkips.ETH_USDT.reason,/实际权益.*风险预算/);
+  const r=h as unknown as {liveOpenRisk():number;liveDirectionalRisk(side:"LONG"|"SHORT"):number};
+  assert.ok(r.liveOpenRisk()>7);assert.equal(r.liveOpenRisk(),r.liveDirectionalRisk("LONG"));
+}));
+test("risk falls back only to a fresh public quote; absent current Gate and public marks stay unknown",()=>clock(async()=>{
+  const {h}=await harness();await enableNew(h);await h.syncLive(T);
+  const r=h as unknown as {liveOpenRisk():number;liveDirectionalRisk(side:"LONG"|"SHORT"):number};
+  const p=live(h).positions.BTC_USDT;
+  p.exchangeMarkPrice=90;p.exchangePnlAt=T-31_000;
+  const quote=(h.runtime.evidence as Record<string,Record<string,unknown>>).BTC_USDT;
+  Object.assign(quote,{midpoint:100,bestBid:135,bestAsk:135,fresh:true,observedAt:T});
+  assert.ok(r.liveOpenRisk()>7); // use the validated bid/ask, not an inconsistent midpoint
+  Object.assign(quote,{fresh:false,observedAt:T-60_000});
+  assert.ok(Number.isNaN(r.liveOpenRisk()));assert.ok(Number.isNaN(r.liveDirectionalRisk("LONG")));
+  assert.equal(r.liveDirectionalRisk("SHORT"),0);assert.equal(live(h).requestedEnabled,true);
 }));

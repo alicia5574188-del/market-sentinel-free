@@ -1,3 +1,13 @@
+# 审计修复与资源边界 — 2026-09-20
+
+本次修复组合重复减仓、缺失/断档行情误判恢复、持仓保护及账户净值高点重启丢失、LIVE实际风险漏检，以及前向存储故障被健康状态掩盖。正常机会发现、持仓原始几何、学习节奏、账户历史与所有者/会员开关不重置。任何持仓估值陈旧时暂缓额外组合减仓，但新鲜报价下各仓自身止损、期限、回吐和关系退出仍独立运行。
+
+保护高点有独立、与保护记录原子提交的日计数，最多8,640写/UTC日，保持10秒节奏，不占原8,000次财务预算。完整账户采用112KiB首段内联，6组真实字段/补齐压力记录每次完整提交少2行、归档逐项相同。成交额扫描频率不变，新成交立即保存；无新增成交/无分页时只合并游标，24小时实测1,440次写降至288次，重启通过去重账重扫。
+
+旧55,000自设写入规划已不能准确描述程序。保守分配模型：主账户63,032行/日；加两个会员及目录usage为99,192。主模型含2秒alarm、原8,000财务预算、8,640保护预算、2,880 watchdog预留、13×24 hourly路径，**不是包含所有异常重试、手动操作、持续页面访问和其他应用的免费容量保证**。请求数和运行时长另有限额；没有修改付费方案、会员席位或交易节奏。SQLite按行计费，多key事务不是1行，见[Cloudflare说明](https://developers.cloudflare.com/durable-objects/platform/pricing/)。详见`research/RESOURCE_WRITE_INVENTORY_2026-09-20.md`。
+
+回滚约束：新版兼容旧记录，旧版401768c不能读新内联格式。禁止裸回滚旧reader；需保留新版reader，或先完整恢复含保护overlay并原子重写旧格式，再切换。损坏时禁止重置账户。验证包括`npm run test:direct`、`npm test`、类型/lint/dry-run及`node tests/forward-storage-workerd-smoke.mjs`。发布门见`research/AUDITED_REPAIR_RELEASE_GATE.md`；测试证明具体逻辑和资源改进，不证明更高未来收益。
+
 # Equity history cache — 2026-09-19
 
 User requests retaining history across tab changes and reducing repeated reads. Implement only authenticated browser-scoped projection caching and bounded exclusive new-archive reads; keep all strategies/cadence/financial state/owner and member execution untouched. Read research/EQUITY_CACHE_INCREMENTAL.md. Cached curves are not trading authority or proof of better returns. Preserve frozen tests and reviewed-main deployment/continuity checks.
