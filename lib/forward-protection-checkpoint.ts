@@ -76,6 +76,7 @@ export function restoreForwardProtectionCheckpoint(s: ForwardState, value: unkno
       if(p.version!==MULTI_TURN_PROFIT_PROTECTION_VERSION
         || ![p.reachedR,p.lockedR,p.floorRate,p.retentionRate,p.activationRate,p.checkpointBand,p.peakR,p.updatedAt].every(Number.isFinite)
         || p.floorRate<=0||p.lockedR<=0||p.retentionRate<=0||p.retentionRate>=1||p.activationRate<=0
+        || !["STRONG_TREND","HEALTHY_TREND","NORMAL","WEAKENING"].includes(p.mode)
         || p.peakR<p.lockedR||!Number.isSafeInteger(p.checkpointBand)||p.checkpointBand<0
         || p.updatedAt<t.openedAt||p.updatedAt>c.quoteCycleAt+1000
         || (prior&&(p.floorRate+1e-12<prior.floorRate||p.checkpointBand<prior.checkpointBand||p.peakR<prior.peakR)))
