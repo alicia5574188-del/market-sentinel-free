@@ -17,7 +17,7 @@ test("wide-stop higher-timeframe winners get absolute-MFE protection before one 
 test("weak continuation tightens the same winner while a strong trend keeps more room",()=>{
   const strong=multiTurnProfitFloor(.14,.02,.0022,{continuationScore:.82,turnProbability:.08,phase:"FLOW",directionAligned:true})!;
   const weak=multiTurnProfitFloor(.14,.02,.0022,{continuationScore:.32,turnProbability:.48,phase:"WATCH",directionAligned:true})!;
-  assert.equal(strong.reachedR,7);
+  assert.ok(Math.abs(strong.reachedR-7)<1e-12);
   assert.ok(strong.retentionRate>=.60&&strong.retentionRate<.75);
   assert.ok(weak.floorRate>strong.floorRate);
   assert.ok(weak.retentionRate<=.82);
