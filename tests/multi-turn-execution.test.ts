@@ -48,24 +48,51 @@ test("a confirmed 5m turn cannot close a 1h-owned position",()=>{
   assert.equal(s.positions.length,1);
 });
 
-test("a position above one planned-risk R cannot normally give back through zero",()=>{
+test("a newly managed winner uses the adaptive floor and cannot normally give back through zero",()=>{
   const p=candles(),now=(p.at(-1)!.time+300)*1000+1000,quotes={BTC_USDT:q(p,now)};
   let s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},quotes,contracts:{BTC_USDT:meta}}).state;
   assert.ok(s.positions.length);
-  const t=s.positions[0];
-  const riskRate=t.plannedRisk/t.notional;
+  // One normal management pass initializes the v3 floor state before any
+  // historical MFE exists, which is how a genuinely new production trade runs.
+  s.lastCycleAt=now;
+  s=advanceForward({state:s,now:now+1000,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:{...quotes.BTC_USDT,observedAt:now+1000}},contracts:{BTC_USDT:meta}}).state;
+  const t=s.positions[0],riskRate=t.plannedRisk/t.notional;
   t.favorable=riskRate*3.2;
   const protectedReturn=riskRate*1.2;
-  const mid=t.entryPrice*(t.side==="LONG"?1+protectedReturn:1-protectedReturn),later=now+1000;
+  const mid=t.entryPrice*(t.side==="LONG"?1+protectedReturn:1-protectedReturn),later=now+2000;
   const protectedQuote={bestBid:mid*.9999,bestAsk:mid*1.0001,observedAt:later,fresh:true,entryReady:true};
   const frame=s.turnEngine!.frames.BTC_USDT![t.turn!.timeframe]!;
   frame.direction=t.side;frame.phase="FLOW";frame.lastTurnAt=null;frame.justTurned=false;
-  s.lastCycleAt=now;
+  frame.continuationScore=.55;frame.triggerProbability=.20;
+  s.lastCycleAt=now+1000;
   s=advanceForward({state:s,now:later,paths:{BTC_USDT:p},quotes:{BTC_USDT:protectedQuote},contracts:{BTC_USDT:meta}}).state;
   assert.equal(s.positions.length,0);
-  assert.match(s.history[0].exitReason??"",/利润保护：最高浮盈达到/);
+  assert.match(s.history[0].exitReason??"",/动态利润保护/);
   assert.equal(s.history[0].exitAudit?.trigger,"PROFIT_GIVEBACK");
   assert.ok((s.history[0].netPnl??0)>0);
+});
+
+test("upgrading an old trade never retroactively forces an already-crossed historical floor",()=>{
+  const p=candles(),now=(p.at(-1)!.time+300)*1000+1000,quotes={BTC_USDT:q(p,now)};
+  let s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},quotes,contracts:{BTC_USDT:meta}}).state;
+  assert.ok(s.positions.length);
+  const t=s.positions[0],riskRate=t.plannedRisk/t.notional;
+  delete t.exitControl!.profitFloorVersion;
+  delete t.exitControl!.profitFloorRate;
+  t.favorable=riskRate*3.2;
+  const currentReturn=riskRate*1.2;
+  const mid=t.entryPrice*(t.side==="LONG"?1+currentReturn:1-currentReturn),later=now+1000;
+  const frame=s.turnEngine!.frames.BTC_USDT![t.turn!.timeframe]!;
+  frame.direction=t.side;frame.phase="FLOW";frame.lastTurnAt=null;frame.justTurned=false;
+  frame.continuationScore=.50;frame.triggerProbability=.20;
+  s.lastCycleAt=now;
+  s=advanceForward({state:s,now:later,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:{bestBid:mid*.9999,bestAsk:mid*1.0001,observedAt:later,fresh:true,entryReady:true}},
+    contracts:{BTC_USDT:meta}}).state;
+  assert.equal(s.positions.length,1,"migration clamps the new floor below current executable profit instead of retroactive exit");
+  assert.ok((s.positions[0].exitControl?.profitFloorRate??0)>0);
+  assert.ok((s.positions[0].exitControl?.profitFloorRate??0)<currentReturn);
 });
 
 test("the owning timeframe confirmed turn exits its own position without waiting for a fixed horizon",()=>{
