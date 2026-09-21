@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { advanceForward, forwardEquity, initialForward, initialMultiTurnForward, type Candle, type Contract, type Quote } from "../lib/forward-relations.ts";
+import { advanceForward, forwardEquity, forwardWatchSymbols, initialForward, initialMultiTurnForward, type Candle, type Contract, type Quote } from "../lib/forward-relations.ts";
 import { MULTI_TURN_VERSION, TURN_CONFIG, TURN_TIMEFRAMES, evaluateMultiTurn, initialMultiTurn } from "../lib/multi-turn-engine.ts";
 import { FORWARD_PROTECTION_STORAGE, FORWARD_STORAGE, prepareForwardReset, prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
 
@@ -210,4 +210,22 @@ test("turn probability calibration is causal and never imports future labels int
   const p=candles(),now=(p.at(-1)!.time+300)*1000+1000;
   const e=evaluateMultiTurn({state:initialMultiTurn(),paths:{BTC_USDT:p},now});
   assert.ok(e.pending.length>0);assert.ok(TURN_TIMEFRAMES.every(tf=>e.calibration[tf].count===0));
+});
+
+
+test("only the current scan universe can create or occupy new Multi-Turn entry slots",()=>{
+  const p=candles(),now=(p.at(-1)!.time+300)*1000+1000;
+  const paths={BTC_USDT:p,OLD_USDT:p},quotes={BTC_USDT:q(p,now),OLD_USDT:q(p,now)};
+  const contracts={BTC_USDT:meta,OLD_USDT:meta};
+  const s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths,quotes,contracts,
+    entrySymbols:["BTC_USDT"]}).state;
+  assert.ok(s.turnEngine?.frames.BTC_USDT);
+  assert.equal(s.turnEngine?.frames.OLD_USDT,undefined,
+    "a retired scan symbol cannot be rebuilt from a stale retained path");
+  assert.ok(s.positions.every(position=>position.symbol==="BTC_USDT"));
+
+  s.turnEngine!.frames.OLD_USDT=structuredClone(s.turnEngine!.frames.BTC_USDT);
+  const watched=forwardWatchSymbols(s,now,["BTC_USDT"]);
+  assert.equal(watched.includes("OLD_USDT"),false,
+    "an old frame cannot steal realtime entry capacity after leaving the active scan universe");
 });

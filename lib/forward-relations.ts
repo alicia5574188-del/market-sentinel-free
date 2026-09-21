@@ -472,10 +472,12 @@ function manageMultiTurn(s:ForwardState,quotes:Record<string,Quote>,now:number){
   s.positions=s.positions.filter(t=>t.status==="OPEN");
 }
 
-function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number){
+function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,
+  entrySymbols?:ReadonlySet<string>){
   const engine=s.turnEngine;if(!engine||engine.version!==MULTI_TURN_VERSION)return;
   s.turnLastEntryBars??={};s.quoteRetries=[];
-  const candidates=turnCandidates(engine,tf=>turnModeledCost(tf,0));
+  const candidates=turnCandidates(engine,tf=>turnModeledCost(tf,0))
+    .filter(candidate=>!entrySymbols||entrySymbols.has(candidate.symbol));
   const diagnostics={at:now,matched:candidates.length,opened:0,reasons:{} as Record<string,number>,retry:false,queued:0,adaptiveScaled:0};
   s.entryDiagnostics=diagnostics;
   const reject=(reason:string)=>{diagnostics.reasons[reason]=(diagnostics.reasons[reason]??0)+1;};
@@ -695,14 +697,16 @@ function openTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<
   else if(blocker)s.latestReason=blocker;else if(s.positions.length)s.latestReason=`管理${s.positions.length}笔前向模拟持仓；原始保护止损不会放宽。`;
 }
 function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;daily?:Record<string,Candle[]>;
-  quotes:Record<string,Quote>;contracts:Record<string,Contract>},s:ForwardState,before:number){
+  quotes:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:string[]},s:ForwardState,before:number){
   const{now,paths,quotes,contracts}=input,daily=input.daily??{};
   if(s.strategyAuthorityVersion!==MULTI_TURN_VERSION)throw new Error("Multi-Turn权威版本不一致");
+  const entrySymbols=new Set(input.entrySymbols??Object.keys(paths));
+  const retainedSymbols=[...new Set([...entrySymbols,...s.positions.map(position=>position.symbol)])];
   const dataDue=!s.lastCycleAt||Math.floor((now-90_000)/BAR_MS)>Math.floor((s.lastCycleAt-90_000)/BAR_MS);
   if(dataDue){
-    s.turnEngine=evaluateMultiTurn({state:s.turnEngine??initialMultiTurn(),paths,daily,now});
-    s.lastCycleAt=now;s.selectedSymbols=Object.keys(s.turnEngine.frames);
-    const candidates=turnCandidates(s.turnEngine,tf=>turnModeledCost(tf,0));
+    s.turnEngine=evaluateMultiTurn({state:s.turnEngine??initialMultiTurn(),paths,daily,retainSymbols:retainedSymbols,now});
+    s.lastCycleAt=now;s.selectedSymbols=[...entrySymbols];
+    const candidates=turnCandidates(s.turnEngine,tf=>turnModeledCost(tf,0)).filter(candidate=>entrySymbols.has(candidate.symbol));
     s.fitDiagnostics={tested:s.turnEngine.diagnostics.readyFrames,qualified:candidates.length,trainGroups:0,checkGroups:0,latestAt:now,
       rapidQualified:0,activeLong:candidates.filter(x=>x.side==="LONG").length,activeShort:candidates.filter(x=>x.side==="SHORT").length};
     s.observations+=s.turnEngine.diagnostics.updatedFrames;s.measured+=s.turnEngine.diagnostics.confirmedTurns;
@@ -714,7 +718,7 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
     }
   }
   manageMultiTurn(s,quotes,now);
-  openMultiTurnTrades(s,quotes,contracts,now);
+  openMultiTurnTrades(s,quotes,contracts,now,entrySymbols);
   const marked=forwardEquity(s,quotes,now);
   if(!marked.stalePositions){
     s.peakEquity=Math.max(s.peakEquity,marked.equity);
@@ -730,7 +734,7 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
   return{state:s,changed:dataDue||s.revision!==before,protectionChanged:forwardProtectionChanged(input.state,s)};
 }
 
-export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;daily?:Record<string,Candle[]>;quotes:Record<string,Quote>;contracts:Record<string,Contract>;legacyDrainOnly?:boolean}){
+export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;daily?:Record<string,Candle[]>;quotes:Record<string,Quote>;contracts:Record<string,Contract>;legacyDrainOnly?:boolean;entrySymbols?:string[]}){
   const{now,paths,quotes,contracts}=input,s=structuredClone(input.state),before=s.revision;
   if(s.strategyAuthorityVersion===MULTI_TURN_VERSION)return advanceMultiTurnForward(input,s,before);
   if(!s.exitPolicyUpgrade){
@@ -803,10 +807,12 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   if(dataDue){const k=dayKey(now),a=s.daily.find(d=>d.day===k);if(a){a.endEquity=marked.equity;a.lastAt=now;}else s.daily.push({day:k,firstAt:now,lastAt:now,startEquity:s.daily.at(-1)?.endEquity??s.initialEquity,endEquity:marked.equity,exactBoundary:false});s.daily=s.daily.slice(-400);}
   s.lastQuoteCycleAt=now;return{state:s,changed:dataDue||s.revision!==before,protectionChanged:forwardProtectionChanged(input.state,s)};
 }
-export function forwardWatchSymbols(s:ForwardState,now:number){
+export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iterable<string>){
   if(s.strategyAuthorityVersion===MULTI_TURN_VERSION&&s.turnEngine){
+    const allowed=entrySymbols?new Set(entrySymbols):null;
     const ranked=turnCandidates(s.turnEngine,tf=>turnModeledCost(tf,0))
-      .filter(x=>x.completedAt<=now&&now-x.completedAt<=Math.max(BAR_MS*2,TURN_CONFIG[x.timeframe].minutes*60_000*1.5));
+      .filter(x=>(!allowed||allowed.has(x.symbol))&&x.completedAt<=now
+        &&now-x.completedAt<=Math.max(BAR_MS*2,TURN_CONFIG[x.timeframe].minutes*60_000*1.5));
     return[...new Set([...s.positions.map(p=>p.symbol),...ranked.map(x=>x.symbol)])].slice(0,11);
   }
   const matched=Object.values(s.frames).filter(f=>now-f.at<11*60_000&&s.rules.some(r=>r.status==="EXPERIMENTAL"&&r.expiresAt>now&&ruleApplies(r,f.symbol)&&conditionMatches(f.x,r.conditions)));

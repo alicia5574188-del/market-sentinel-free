@@ -191,3 +191,15 @@ test("candidate selector never opens against its own current raw direction",()=>
   assert.equal(turnCandidates(s,.0022).some(x=>x.symbol==="BTC_USDT"&&x.timeframe==="15m"),false,
     "an incumbent direction cannot create a new order while the same frame currently estimates the opposite raw trend");
 });
+
+
+test("restart retention scope drops frames that no longer belong to the active or protected universe",()=>{
+  const up=path(360,i=>100*Math.exp(i*.0008)),down=path(360,i=>100*Math.exp(i*-.0008));
+  const now=(up.at(-1)!.time+300)*1000+1000;
+  const before=evaluateMultiTurn({state:initialMultiTurn(),paths:{BTC_USDT:up,OLD_USDT:down},now});
+  assert.ok(before.frames.BTC_USDT);assert.ok(before.frames.OLD_USDT);
+  const duringRestart=evaluateMultiTurn({state:before,paths:{},retainSymbols:["BTC_USDT"],now:now+30_000});
+  assert.ok(duringRestart.frames.BTC_USDT,"active scan symbols keep fresh frames during restart warmup");
+  assert.equal(duringRestart.frames.OLD_USDT,undefined,
+    "a symbol that left the scan/protection universe cannot survive only as a stale entry frame");
+});

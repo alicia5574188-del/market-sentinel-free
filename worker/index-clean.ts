@@ -39,7 +39,6 @@ import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCand
 import { advanceForward, closeForwardForReset, forwardSummary, forwardEquity, freshQuote, forwardWatchSymbols, initialMultiTurnForward,
   FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { MULTI_TURN_VERSION } from "../lib/multi-turn-engine.ts";
-import { rankMultiTurnUniverse } from "../lib/multi-turn-universe.ts";
 import { forwardSymbolAllowed } from "../lib/forward-evidence.ts";
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, prepareForwardReset,
   FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE } from "../lib/forward-store.ts";
@@ -833,15 +832,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // A failed cold-start catalog load is not a successful empty market scan.
     if (this.contractCatalog.size === 0) throw new Error("contract catalog unavailable: radar refresh deferred");
     const eligible = new Set(this.contractCatalog.keys());
-    const eligibleRows = rows.filter((row) => eligible.has(row.symbol) && forwardSymbolAllowed(row.symbol));
-    const rankedUniverse = rankMultiTurnUniverse(eligibleRows, SCAN_UNIVERSE_SIZE);
-    const rowBySymbol = new Map(eligibleRows.map((row) => [row.symbol, row]));
-    const universeRows = rankedUniverse.flatMap((ranked) => {
-      const row = rowBySymbol.get(ranked.symbol);
-      return row ? [{ ...row, opportunityClass: ranked.class, opportunityScore: ranked.score,
-        opportunityReason: ranked.reason, range24hRate: ranked.range24hRate,
-        marketMove24hRate: ranked.marketMove24hRate, residual24hRate: ranked.residual24hRate }] : [];
-    });
+    // Restore the pre-regression liquid Top30 surface: execution quality starts
+    // with markets that actually trade, while Multi-Turn still decides direction.
+    // Volatility remains inside the turn engine instead of deciding admission.
+    const universeRows = rows.filter((row) => eligible.has(row.symbol) && forwardSymbolAllowed(row.symbol))
+      .sort((left, right) => right.volume24hUsd - left.volume24hUsd).slice(0, SCAN_UNIVERSE_SIZE);
     const universe = new Set(universeRows.map((row) => row.symbol));
     this.runtime.liquidUniverse = universeRows.map((row) => row.symbol);
     this.runtime.radar = successfulRadarRuntime(this.runtime.radar, now, universeRows.length, []);
@@ -866,7 +861,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // Existing PAPER/LIVE exposure always owns a realtime slot. Research symbols
     // fill only the remaining capacity, so a cutover cannot orphan protection.
     const protectedLocked = [...this.currentAuthorityProtectionSymbols()];
-    const forwardWatched = this.forwardState ? forwardWatchSymbols(this.forwardState, now) : [];
+    const forwardWatched = this.forwardState ? forwardWatchSymbols(this.forwardState, now, universe) : [];
     const locked = [...new Set([...protectedLocked, ...forwardWatched, ...researchUniverse])];
     const liquidFallback = [...researchUniverse, ...universeRows.map((row) => row.symbol)];
     const next = selectDiverseMarketPool({ locked, current: this.runtime.symbols, candidates: poolCandidates,
@@ -1066,7 +1061,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(now-this.forwardState.lastQuoteCycleAt<10_000){this.forwardLastAttemptAt=this.forwardState.lastQuoteCycleAt;return;}
       const previous = this.forwardState;
       const next = advanceForward({ state: previous, now, paths: this.strategyCandles,daily:this.turnDailyCandles,
-        quotes: this.regimeQuotes(now), contracts: this.regimeContracts(),legacyDrainOnly });
+        quotes: this.regimeQuotes(now), contracts: this.regimeContracts(),legacyDrainOnly,
+        entrySymbols: this.runtime.liquidUniverse });
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
         const prepared = await prepareForwardWrite(previous.storage.persistedAt ? previous : null, next.state, now, {compact:true});
