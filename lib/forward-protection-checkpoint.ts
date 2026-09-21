@@ -2,6 +2,7 @@
  * strategy or financial ledger. The full atomic forward record stays authority.
  */
 import type { ForwardState, Trade } from "./forward-relations.ts";
+import { multiTurnProfitFloor } from "./multi-turn-profit-protection.ts";
 
 export const FORWARD_PROTECTION_CHECKPOINT_VERSION = "forward-protection-checkpoint-v1";
 type ProtectionRow = Pick<Trade, "id" | "openedAt" | "favorable" | "adverse" | "lastPrice" | "lastQuoteAt"
@@ -25,7 +26,10 @@ export function forwardProtectionChanged(previous: ForwardState, next: ForwardSt
   return next.positions.some(t => {
     const p = prior.get(t.id);
     if (!p || p.openedAt !== t.openedAt) return false; // Financial change saves the full account.
+    const priorProfitTier=t.rule.authority==="MULTI_TURN"?multiTurnProfitFloor(p.favorable)?.tier??-1:-1;
+    const nextProfitTier=t.rule.authority==="MULTI_TURN"?multiTurnProfitFloor(t.favorable)?.tier??-1:-1;
     return (t.rule.exitMode === "REACTION_DECAY" && t.favorable >= t.rule.armRate && t.favorable !== p.favorable)
+      || nextProfitTier!==priorProfitTier
       || t.relationFailureBars !== p.relationFailureBars || t.lastRelationBar !== p.lastRelationBar;
   });
 }
