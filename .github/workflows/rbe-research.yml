@@ -5,6 +5,9 @@ on:
     paths:
       - "lib/turn-exit-predictor.ts"
       - "scripts/research-rbe-exit.mjs"
+      - "scripts/rbe-replay-policy.mjs"
+      - "tests/rbe-replay-policy.test.ts"
+      - "tests/turn-exit-predictor.test.ts"
       - "scripts/fetch-gate-history.mjs"
       - ".github/workflows/rbe-research.yml"
   workflow_dispatch:
@@ -21,6 +24,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22.15.0"
+      - name: Check prediction and causal execution contracts
+        run: node --experimental-strip-types --test tests/turn-exit-predictor.test.ts tests/rbe-replay-policy.test.ts
       - name: Fetch six complete months of official Gate 5m data
         env:
           RESEARCH_INTERVAL: 5m
@@ -33,3 +38,10 @@ jobs:
         env:
           RESEARCH_DATASET: /tmp/rbe-gate-history.json
         run: node --experimental-strip-types scripts/research-rbe-exit.mjs
+      - name: Preserve the result even when economic acceptance fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rbe-exit-audit
+          path: research-results/rbe-exit-audit.json
+          if-no-files-found: warn

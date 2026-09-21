@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { rbeExitIntent, nextOpenExit, originalStopFill, commonTopCohort, predictiveExits } from "./rbe-replay-policy.mjs";
 import { TURN_CONFIG, TURN_TIMEFRAMES } from "../lib/multi-turn-engine.ts";
 import { predictMultiTurnExit, RBE_EXIT_CONFIGS } from "../lib/turn-exit-predictor.ts";
 
@@ -91,26 +92,15 @@ const indices=Object.fromEntries(symbols.map(s=>[s,Object.fromEntries(TURN_TIMEF
 const prevFrames=Object.fromEntries(symbols.map(s=>[s,{}])),frames=Object.fromEntries(symbols.map(s=>[s,{}]));
 const rowByTime=Object.fromEntries(symbols.map(s=>[s,new Map(series[s]["5m"].map(r=>[r.time+300,r]))]));
 const start=Math.max(...symbols.map(s=>series[s]["5m"][0].time))+30*86400,end=Math.min(...symbols.map(s=>series[s]["5m"].at(-1).time+300));
-const paired=[],active=new Map();
-const actionDebug={decisions:0,healthy:0,early:0,defensive:0,preExit:0,shouldExit:0,warnings:0,arms:0,
-  secondSignals:0,renewalRearms:0,hazardPass:0,survivalPass:0,pairPass:0,countPass:0,
-  persistent:0,reductions:0,full:0,stopArms:0,stopHits:0,resets:0};
+const paired=[],active=new Map(),pendingEntries=new Map();
+const dataAudit={gapCensored:0,rightCensored:0,entryExpired:0,missingFrames:0};
+const actionDebug={decisions:0,healthy:0,early:0,defensive:0,preExit:0,predictiveIntents:0,predictiveFills:0};
 
 function closeLeg(leg,price,time,reason){
   if(leg.closedAt)return;
   const remaining=leg.remaining??1,d=signFor(leg.side),ret=d*(price/leg.entry-1)-FRICTION;
   leg.realized=(leg.realized??0)+remaining*ret;leg.remaining=0;
   leg.closedAt=time;leg.exit=price;leg.reason=reason;leg.net=leg.realized;
-}
-function reduceLeg(leg,price,time,fraction,reason,decision){
-  if(leg.closedAt)return;
-  const remaining=leg.remaining??1,cut=Math.min(remaining,Math.max(0,fraction));
-  if(cut<=0)return;
-  const d=signFor(leg.side),ret=d*(price/leg.entry-1)-FRICTION;
-  leg.realized=(leg.realized??0)+cut*ret;leg.remaining=remaining-cut;
-  leg.rbeStage=(leg.rbeStage??0)+1;leg.rbeActions=(leg.rbeActions??0)+1;leg.rbe=decision;
-  leg.lastRbeAt=time;leg.lastRbeMfe=leg.mfe;leg.lastRbeReason=reason;
-  if(leg.remaining<=1e-9)closeLeg(leg,price,time,reason);
 }
 function markLeg(leg,row){
   const d=signFor(leg.side);const favorable=d>0?row.high/leg.entry-1:1-row.low/leg.entry;
@@ -148,135 +138,93 @@ for(let now=start;now<=end;now+=300){
     }
   }
 
-  for(const [symbol,pair] of [...active]){
-    const row=rowByTime[symbol].get(now);if(!row)continue;
-    for(const kind of ["baseline","candidate"])if(!pair[kind].closedAt)markLeg(pair[kind],row);
-    const own=frames[symbol][pair.timeframe];
-    const d=signFor(pair.side),baselineStopHit=d>0?row.low<=pair.baseline.stop:row.high>=pair.baseline.stop;
-    const candidateStop=pair.candidate.rbeStop??pair.candidate.stop;
-    const candidateStopHit=!pair.candidate.closedAt&&(d>0?row.low<=candidateStop:row.high>=candidateStop);
-    if(candidateStopHit){
-      if(candidateStop!==pair.candidate.stop)actionDebug.stopHits++;
-      closeLeg(pair.candidate,candidateStop,now,candidateStop!==pair.candidate.stop?"RBE_PROTECTIVE_STOP":"STOP");
+  // Expire frames whose next completed bar is unavailable.
+  for(const symbol of symbols)for(const tf of TURN_TIMEFRAMES){
+    const f=frames[symbol][tf];
+    if(f&&now-f.completedAt>=tfSeconds[tf]){
+      delete frames[symbol][tf];delete prevFrames[symbol][tf];dataAudit.missingFrames++;
     }
-    if(baselineStopHit){
-      closeLeg(pair.baseline,pair.baseline.stop,now,"STOP");
-      if(!pair.candidate.closedAt)closeLeg(pair.candidate,pair.candidate.stop,now,"STOP");
+  }
+  for(const symbol of symbols){
+    const row=rowByTime[symbol].get(now),waiting=pendingEntries.get(symbol);
+    if(waiting){
+      pendingEntries.delete(symbol);
+      if(row&&row.time===waiting.signalAt){
+        const d=signFor(waiting.side),entry=row.open*(1+d*.00025),stop=entry*(1-d*waiting.stopRate);
+        const base={side:waiting.side,entry,stop,entryAtr:waiting.entryAtr,openedAt:row.time,
+          closedAt:0,exit:0,net:0,mfe:0,mae:0,reason:"",remaining:1,realized:0,pendingExit:null};
+        const pair={symbol,side:waiting.side,timeframe:waiting.timeframe,openedAt:row.time,
+          config:RBE_EXIT_CONFIGS.balanced,baseline:{...base},candidate:{...base}};
+        active.set(symbol,pair);paired.push(pair);
+      }else dataAudit.entryExpired++;
+    }
+    const pair=active.get(symbol);if(!pair)continue;
+    if(!row){
+      pair.censored="DATA_GAP";dataAudit.gapCensored++;active.delete(symbol);continue;
+    }
+    for(const kind of ["baseline","candidate"]){
+      const leg=pair[kind];if(leg.closedAt)continue;
+      const atOpen=nextOpenExit(leg.pendingExit,row);
+      if(atOpen){
+        markLeg(leg,{...row,high:row.open,low:row.open});
+        closeLeg(leg,atOpen.price,atOpen.time,atOpen.reason);
+        if(atOpen.reason==="RBE")actionDebug.predictiveFills++;
+        continue;
+      }
+      const stopFill=originalStopFill(pair.side,leg.stop,row);
+      if(stopFill!==null){
+        // Unknown intrabar order: do not credit an extreme after the stop.
+        markLeg(leg,{...row,high:Math.max(row.open,stopFill),low:Math.min(row.open,stopFill)});
+        closeLeg(leg,stopFill,now,"STOP");continue;
+      }
+      markLeg(leg,row);
+    }
+    if(pair.baseline.closedAt){
+      if(!pair.candidate.closedAt)throw new Error("baseline ended without candidate close");
       active.delete(symbol);continue;
     }
+    const own=frames[symbol][pair.timeframe];
     if(own&&own.direction!==pair.side&&own.lastTurnAt&&own.lastTurnAt>=pair.openedAt){
-      closeLeg(pair.baseline,row.close,now,"CONFIRMED_TURN");
+      pair.baseline.pendingExit={reason:"CONFIRMED_TURN",signalAt:now};
+      if(!pair.candidate.closedAt)pair.candidate.pendingExit={reason:"CONFIRMED_TURN",signalAt:now};
+      continue;
     }
-    if(!pair.candidate.closedAt){
-      const dec=predictMultiTurnExit({side:pair.side,timeframe:pair.timeframe,entryPrice:pair.candidate.entry,stopPrice:pair.candidate.stop,
-        currentPrice:row.close,favorable:pair.candidate.mfe,frames:frames[symbol]},pair.config);
-      const leg=pair.candidate,atr=Math.max(own?.atrRate??.001,1e-9);
-      const renewed=(leg.mfe-(leg.rbeArmedMfe??leg.mfe))/atr;
+    if(!pair.candidate.closedAt&&own){
+      const dec=predictMultiTurnExit({side:pair.side,timeframe:pair.timeframe,entryPrice:pair.candidate.entry,
+        stopPrice:pair.candidate.stop,currentPrice:row.close,favorable:pair.candidate.mfe,frames:frames[symbol]},pair.config);
       if(dec){
         actionDebug.decisions++;
         if(dec.phase==="HEALTHY")actionDebug.healthy++;
         else if(dec.phase==="EARLY_WARNING")actionDebug.early++;
         else if(dec.phase==="DEFENSIVE")actionDebug.defensive++;
-        else if(dec.phase==="PRE_TURN_EXIT")actionDebug.preExit++;
-        if(dec.shouldExit)actionDebug.shouldExit++;
+        else actionDebug.preExit++;
       }
-      const warning=dec&&(dec.shouldExit||dec.phase==="DEFENSIVE");
-      if(warning){actionDebug.warnings++;
-        const severe=dec.diagnostics.ownTurn>=.84&&dec.diagnostics.structureBreak>=.55||dec.shockHazard>=.93;
-        if(!leg.rbeArmedAt){
-          // First predictive hit only arms the state. We do not wait for price
-          // confirmation; we wait for the predictive state itself to persist.
-          actionDebug.arms++;leg.rbeArmedAt=now;leg.rbeArmedMfe=leg.mfe;leg.rbeArmedHazard=dec.reversalHazard;
-          leg.rbeArmedSurvival=dec.extensionSurvival;leg.rbeSignalCount=1;leg.rbe=dec;
-        }else{
-          if(renewed>=.45&&!severe){
-            actionDebug.renewalRearms++;
-            // A real extension after the warning means the old warning became
-            // stale. Re-arm from the new MFE instead of permanently blocking
-            // persistence or cutting a trend that just proved it can extend.
-            actionDebug.resets++;actionDebug.arms++;
-            leg.rbeArmedAt=now;leg.rbeArmedMfe=leg.mfe;leg.rbeArmedHazard=dec.reversalHazard;
-            leg.rbeArmedSurvival=dec.extensionSurvival;leg.rbeSignalCount=1;leg.rbe=dec;
-          }else{
-            const separated=now-(leg.lastRbeSignalAt??leg.rbeArmedAt)>=300;
-            if(separated){leg.rbeSignalCount=(leg.rbeSignalCount??1)+1;actionDebug.secondSignals++;}
-            const hazardPersistent=dec.reversalHazard>=(leg.rbeArmedHazard??0)-.035;
-            const survivalPersistent=dec.extensionSurvival<=(leg.rbeArmedSurvival??1)+.05;
-            if(hazardPersistent)actionDebug.hazardPass++;
-            if(survivalPersistent)actionDebug.survivalPass++;
-            if(hazardPersistent&&survivalPersistent)actionDebug.pairPass++;
-            if((leg.rbeSignalCount??0)>=2)actionDebug.countPass++;
-            const persistent=(leg.rbeSignalCount??0)>=2&&hazardPersistent&&survivalPersistent;
-            if(persistent)actionDebug.persistent++;
-            if(persistent){
-              // Prediction does not liquidate the runner. It converts the
-              // forecast into a temporary, causal protection boundary that is
-              // only active while the RBE state remains dangerous.
-              const hazardScale=clip((dec.reversalHazard-.45)/.45);
-              const horizonCushion={ "5m":.95,"15m":1.15,"30m":1.35,"1h":1.60,"4h":1.95,"1d":2.30 }[pair.timeframe];
-              const phaseScale=dec.shouldExit?1:1.45;
-              const cushionAtr=severe
-                ?horizonCushion*.55
-                :horizonCushion*phaseScale*(1-.30*hazardScale);
-              const originalFloor=pair.side==="LONG"
-                ?leg.stop/leg.entry-1
-                :1-leg.stop/leg.entry;
-              const minimumFloor=dec.shouldExit
-                ?Math.max(originalFloor,FRICTION+.00015)
-                :originalFloor;
-              const grossFloor=Math.max(minimumFloor,
-                dec.diagnostics.currentReturn-atr*cushionAtr);
-              const floorPrice=pair.side==="LONG"
-                ?leg.entry*(1+grossFloor)
-                :leg.entry*(1-grossFloor);
-              const currentProtect=leg.rbeStop??leg.stop;
-              const better=pair.side==="LONG"?floorPrice>currentProtect:floorPrice<currentProtect;
-              if(better){leg.rbeStop=floorPrice;actionDebug.stopArms++;}
-              leg.rbe=dec;
-              if((leg.rbeStage??0)===0&&dec.diagnostics.currentReturnAtr>.75){
-                // The prediction already acts by arming a protective boundary.
-                // Do not skim a healthy runner merely because the warning fired.
-                leg.rbeStage=1;
-              }
-            }
-          }
-        }
-        leg.lastRbeSignalAt=now;
-      }else if(leg.rbeArmedAt){
-        // A renewed extension or a material hazard collapse invalidates the
-        // prior warning. This lets genuine runners clear stale alarms.
-        if(renewed>=.45||!dec||dec.reversalHazard<(leg.rbeArmedHazard??1)-.12){
-          actionDebug.resets++;leg.rbeArmedAt=0;leg.rbeArmedMfe=leg.mfe;leg.rbeArmedHazard=0;leg.rbeArmedSurvival=1;
-          leg.rbeSignalCount=0;leg.lastRbeSignalAt=0;leg.rbeStop=leg.stop;
-        }
-      }
+      const intent=rbeExitIntent(dec,now);
+      if(intent){pair.candidate.pendingExit=intent;pair.candidate.rbe=dec;actionDebug.predictiveIntents++;}
     }
-    if(pair.baseline.closedAt){if(!pair.candidate.closedAt)closeLeg(pair.candidate,row.close,now,"BASELINE_END");active.delete(symbol);}
   }
-
   for(const symbol of symbols){
-    if(active.has(symbol))continue;
+    if(active.has(symbol)||pendingEntries.has(symbol))continue;
     const row=rowByTime[symbol].get(now);if(!row)continue;
-    const candidates=TURN_TIMEFRAMES.flatMap(tf=>{const f=frames[symbol][tf],cfg=TURN_CONFIG[tf];return f&&f.direction!=="NEUTRAL"&&f.continuationScore>=cfg.minContinuation
-      ?[{tf,f,score:f.continuationScore*Math.max(.1,f.expectedMoveRate/.0019)}]:[];}).sort((a,b)=>b.score-a.score);
+    const candidates=TURN_TIMEFRAMES.flatMap(tf=>{const f=frames[symbol][tf],cfg=TURN_CONFIG[tf];
+      return f&&f.direction!=="NEUTRAL"&&f.continuationScore>=cfg.minContinuation
+        ?[{tf,f,score:f.continuationScore*Math.max(.1,f.expectedMoveRate/.0019)}]:[];
+    }).sort((a,b)=>b.score-a.score);
     const c=candidates[0];if(!c)continue;
-    const side=c.f.direction,d=signFor(side),entry=row.close*(1+d*.00025),stop=entry*(1-d*c.f.stopRate);
-    const config=RBE_EXIT_CONFIGS.balanced,base={side,entry,stop,entryAtr:c.f.atrRate,openedAt:now,closedAt:0,exit:0,net:0,mfe:0,mae:0,
-      reason:"",remaining:1,realized:0,rbeStage:0,rbeActions:0,lastRbeAt:0,lastRbeMfe:0,
-      rbeArmedAt:0,rbeArmedMfe:0,rbeArmedHazard:0,rbeArmedSurvival:1,rbeSignalCount:0,lastRbeSignalAt:0,rbeStop:stop};
-    const pair={symbol,side,timeframe:c.tf,openedAt:now,config,baseline:{...base},candidate:{...base}};active.set(symbol,pair);paired.push(pair);
+    pendingEntries.set(symbol,{side:c.f.direction,timeframe:c.tf,signalAt:now,stopRate:c.f.stopRate,entryAtr:c.f.atrRate});
   }
 }
-for(const pair of active.values()){const row=series[pair.symbol]["5m"].at(-1);for(const kind of ["baseline","candidate"])if(!pair[kind].closedAt)closeLeg(pair[kind],row.close,end,"END");}
+for(const pair of active.values()){pair.censored="END_OF_DATA";dataAudit.rightCensored++;}
+const completed=paired.filter(p=>!p.censored&&p.baseline.closedAt&&p.candidate.closedAt);
 
-const folds=[0,1,2].map(i=>{const a=start+(end-start)*i/3,b=start+(end-start)*(i+1)/3,t=paired.filter(x=>x.openedAt>=a&&x.openedAt<b);
+const folds=[0,1,2].map(i=>{const a=start+(end-start)*i/3,b=start+(end-start)*(i+1)/3,t=completed.filter(x=>x.openedAt>=a&&x.openedAt<b);
   return{fold:i+1,baseline:metrics(t,"baseline"),candidate:metrics(t,"candidate")};});
-const all={baseline:metrics(paired,"baseline"),candidate:metrics(paired,"candidate")};
+const all={baseline:metrics(completed,"baseline"),candidate:metrics(completed,"candidate")};
 const byTimeframe=Object.fromEntries(TURN_TIMEFRAMES.map(tf=>{
-  const rows=paired.filter(x=>x.timeframe===tf);return[tf,{n:rows.length,baseline:metrics(rows,"baseline"),candidate:metrics(rows,"candidate")}];
+  const rows=completed.filter(x=>x.timeframe===tf);return[tf,{n:rows.length,baseline:metrics(rows,"baseline"),candidate:metrics(rows,"candidate")}];
 }));
-const runnerRows=paired.filter(x=>x.baseline.mfe>=Math.max(.02,x.baseline.entryAtr*1.5)&&x.baseline.net>0);
-const givebackRows=paired.filter(x=>x.baseline.mfe>=Math.max(.008,x.baseline.entryAtr*.75)&&x.baseline.net<0);
+const runnerRows=completed.filter(x=>x.baseline.mfe>=Math.max(.02,x.baseline.entryAtr*1.5)&&x.baseline.net>0);
+const givebackRows=completed.filter(x=>x.baseline.mfe>=Math.max(.008,x.baseline.entryAtr*.75)&&x.baseline.net<0);
 const cohort={
   runners:{n:runnerRows.length,baseline:metrics(runnerRows,"baseline"),candidate:metrics(runnerRows,"candidate"),
     candidateWorse:runnerRows.filter(x=>x.candidate.net<x.baseline.net).length},
@@ -290,7 +238,6 @@ const cohortByTimeframe=Object.fromEntries(TURN_TIMEFRAMES.map(tf=>{
     givebacks:{n:givebacks.length,baseline:metrics(givebacks,"baseline"),candidate:metrics(givebacks,"candidate")},
   }];
 }));
-console.log("RBE_RESEARCH_SUMMARY="+JSON.stringify({source:raw.source,months:raw.months,symbols,paired:paired.length,all,folds,byTimeframe,cohort,cohortByTimeframe,actionDebug},null,2));
 const rbeFields=["reversalHazard","slowHazard","shockHazard","extensionSurvival","holdValueRate","expectedExtensionRate","expectedReversalCostRate","evidenceFamilies"];
 const rbeDiagFields=["ownTurn","ownDecay","lowerLead","lowerSupport","upperSupport","upperOpposition","sequenceShift","structureBreak","breadthPressure","currentReturn","profitGiveback","runnerMfeAtr","givebackAtr"];
 function rbeFeatureMeans(rows){
@@ -300,7 +247,7 @@ function rbeFeatureMeans(rows){
   for(const key of rbeDiagFields)out[key]=mean(exits.map(x=>Number(x.diagnostics?.[key]??0)));
   return out;
 }
-const falseRunnerExits=runnerRows.filter(x=>x.candidate.reason==="RBE");
+const falseRunnerExits=predictiveExits(runnerRows).filter(x=>x.candidate.net<x.baseline.net);
 const savedGivebackExits=givebackRows.filter(x=>x.candidate.reason==="RBE"&&x.candidate.net>x.baseline.net);
 const harmfulGivebackExits=givebackRows.filter(x=>x.candidate.reason==="RBE"&&x.candidate.net<=x.baseline.net);
 const rbeExitDiagnostics={
@@ -308,17 +255,37 @@ const rbeExitDiagnostics={
   savedGiveback:rbeFeatureMeans(savedGivebackExits),
   harmfulGiveback:rbeFeatureMeans(harmfulGivebackExits),
 };
-console.log("RBE_EXIT_DIAGNOSTICS="+JSON.stringify(rbeExitDiagnostics,null,2));
+
 
 const foldWins=folds.filter(x=>x.candidate.net>x.baseline.net).length;
 const reversalImproved=all.candidate.reversals<all.baseline.reversals;
 const captureImproved=all.candidate.capture>all.baseline.capture;
-const topRunnerPreserved=all.candidate.topMfe>=all.baseline.topMfe*.85;
+const topCohort=commonTopCohort(completed);
+const commonTop={baseline:metrics(topCohort,"baseline"),candidate:metrics(topCohort,"candidate")};
+const topRunnerPreserved=commonTop.candidate.net>=commonTop.baseline.net*.85;
 const foldRobust=folds.every(x=>x.candidate.net>=x.baseline.net-.00015*x.baseline.n);
 const runnerRetention=cohort.runners.baseline.net>0?cohort.runners.candidate.net/cohort.runners.baseline.net:1;
 const givebackRecovery=cohort.givebacks.baseline.net<0
   ?(cohort.givebacks.candidate.net-cohort.givebacks.baseline.net)/Math.abs(cohort.givebacks.baseline.net):0;
-const accepted=paired.length>=120&&foldWins>=2&&all.candidate.net>all.baseline.net&&reversalImproved&&captureImproved
+const accepted=completed.length>=120&&foldWins>=2&&all.candidate.net>all.baseline.net&&reversalImproved&&captureImproved
   &&topRunnerPreserved&&foldRobust&&runnerRetention>=.85&&givebackRecovery>=.35;
-if(!accepted)throw new Error(`RBE_ACCEPTANCE_FAILED paired=${paired.length} foldWins=${foldWins} net=${all.baseline.net.toFixed(4)}->${all.candidate.net.toFixed(4)} reversals=${all.baseline.reversals}->${all.candidate.reversals} capture=${all.baseline.capture.toFixed(3)}->${all.candidate.capture.toFixed(3)} topMfe=${all.baseline.topMfe.toFixed(3)}->${all.candidate.topMfe.toFixed(3)} runnerRetention=${runnerRetention.toFixed(3)} givebackRecovery=${givebackRecovery.toFixed(3)} foldRobust=${foldRobust}`);
-console.log(`RBE_ACCEPTANCE_PASS paired=${paired.length} foldWins=${foldWins}/3 net=${all.baseline.net.toFixed(4)}->${all.candidate.net.toFixed(4)} reversals=${all.baseline.reversals}->${all.candidate.reversals} capture=${all.baseline.capture.toFixed(3)}->${all.candidate.capture.toFixed(3)} topMfe=${all.baseline.topMfe.toFixed(3)}->${all.candidate.topMfe.toFixed(3)} foldRobust=${foldRobust}`);
+const report={
+  version:"rbe-replay-audit-v2",source:raw.source,datasetSha256:raw.sha256,months:raw.months,symbols,
+  paired:completed.length,started:paired.length,dataAudit,all,folds,byTimeframe,cohort,cohortByTimeframe,
+  commonTop,rbeExitDiagnostics,actionDebug,
+  gates:{accepted,foldWins,reversalImproved,captureImproved,topRunnerPreserved,foldRobust,runnerRetention,givebackRecovery},
+  releaseAuthorized:false,
+  limitations:[
+    "Fixed heuristic predictor; no learned extension/reversal competing risks or fitted optimal-stopping model.",
+    "Chronological descriptive folds, NOT walk-forward training; all six months were inspected before this repair.",
+    "Entry/frame reconstruction is a research surrogate, NOT exact production account replay; no portfolio sizing, funding or exchange quotes.",
+    "Net is the sum of equal-notional paired trade return rates, NOT account profit or compound return.",
+    "Next 5m open fills with fixed friction; stop-bar favourable excursion is conservatively excluded.",
+    "Data gaps and end-of-data pairs are censored; no invented fills or gap interpolation."
+  ]
+};
+mkdirSync("research-results",{recursive:true});
+writeFileSync("research-results/rbe-exit-audit.json",JSON.stringify(report,null,2)+"\n");
+console.log("RBE_RESEARCH_SUMMARY="+JSON.stringify(report,null,2));
+if(!accepted)throw new Error(`RBE_ACCEPTANCE_FAILED pairs=${completed.length} runnerRetention=${runnerRetention.toFixed(3)} givebackRecovery=${givebackRecovery.toFixed(3)}`);
+console.log("RBE_DIAGNOSTIC_GATE_PASS; production release remains unauthorized until trained walk-forward and exact-source validation");

@@ -179,27 +179,16 @@ export function predictMultiTurnExit(input:PredictiveExitInput,
   const currentReturnAtr=currentReturn/Math.max(own.atrRate,1e-9);
   const runnerRenewalVeto=runnerMfeAtr>=1.10&&givebackAtr<.65
     &&ownDecay<.78&&ownTurn<.78&&shockHazard<.92;
-  // Historical Gate paths show that RBE evidence by itself cannot reliably
-  // distinguish a temporary lower-TF shakeout from a true reversal while a
-  // runner still carries a large ATR-normalized profit cushion. Keep that
-  // cushion unless structure/shock evidence is genuinely extreme. This remains
-  // predictive: the exit still requires RBE hazard; profit cushion only vetoes
-  // low-specificity early exits and never triggers an exit by itself.
-  // A pre-turn forecast is allowed to arm protection early, but a full
-  // liquidation of an established runner waits until the remaining open-profit
-  // cushion contracts below 0.75 ATR. This is not a take-profit/trailing-stop
-  // trigger: without RBE threat there is no exit, and a runner that renews its
-  // extension simply stays open. The cushion gate exists because six months of
-  // Gate history shows false and true RBE alarms overlap heavily while runners
-  // still retain more than ~1 ATR of open edge.
-  const profitCushionVeto=runnerMfeAtr>=1.10&&currentReturnAtr>.75;
+  // Profit size is not an unconditional veto: sufficiently broad causal
+  // deterioration may require exiting a profitable position before confirmation.
+  // Healthy runners remain protected by continuation and renewal evidence above.
   const genericThreat=propagatedThreat||structuralThreat||shockThreat;
   const fourHourThreat=input.timeframe!=="4h"||(
     (ownTurn>=.58||ownDecay>=.72||shockHazard>=.90)
     &&(lowerLead>=.62||structuralThreat||shockHazard>=.90)
     &&(upperOpposition>=.30||upperSupport<.28||shockHazard>=.93)
   );
-  const shouldExit=eligible&&!higherTrendVeto&&!runnerRenewalVeto&&!profitCushionVeto&&genericThreat&&fourHourThreat
+  const shouldExit=eligible&&!higherTrendVeto&&!runnerRenewalVeto&&genericThreat&&fourHourThreat
     &&reversalHazard>=config.exitHazard&&extensionSurvival<=config.maxExitSurvival
     &&holdValueRate<=-exitMargin&&evidenceFamilies>=config.minEvidenceFamilies;
 

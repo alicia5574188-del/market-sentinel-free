@@ -1,3 +1,7 @@
+# 2026-09-21 — RBE evidence and execution boundary
+
+DEFENSIVE is informational, not permission to tighten stops independently of predictor.shouldExit. Execute accepted completed-candle signals at the next available adjacent open, censor missing paths, and compare a common winner cohort. Preserve negative reports. Existing fixed-weight scores and chronological slices cannot be presented as learned competing-risk probabilities or walk-forward evidence. Keep PR356 research-only pending genuine training/exact-source validation; never lower the runner-retention gate to rescue an inspected failure.
+
 # 2026-09-20 — Forward Adaptive v2 architecture decision
 
 Preserve Forward rather than replace it. The diagnosed defect is fast defense plus slow offense: turn protection can remove/limit one direction before the slower learner produces the next executable relationship, while peer-split risk can reduce every candidate below meaningful order size. The fix is architectural: a bounded rapid lane from already-matured 15m outcomes, refit on new matured data, continuous nonzero warning weights, drawdown as new-allocation scaling, and best-first sequential allocation. Do not force reversal or manufacture a market-state signal.
