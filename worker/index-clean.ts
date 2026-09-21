@@ -844,20 +844,20 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.marketRegimes = { ...regimes, candidates: stable };
     this.runtime.lastRadarAt = now;
     const researchUniverse = REGIME_EXECUTION_UNIVERSE.filter((symbol) => universe.has(symbol));
-    // Existing PAPER/LIVE exposure always owns a realtime slot. Research symbols
-    // fill only the remaining capacity, so a cutover cannot orphan protection.
-    const protectedLocked = [...new Set([
+    // The current Multi-Turn PAPER account and actual Gate exposure own the
+    // first realtime slots. Retired PAPER engines may drain in spare capacity,
+    // but they can never crowd a current source position out of executable data.
+    const currentProtected = this.currentAuthorityProtectedSymbols();
+    const retiredDrain = [...new Set([
       ...Object.values(this.runtime.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
-      ...Object.values(this.runtime.plans).flatMap((plan) => plan?.state === "PREPARED" ? [plan.symbol] : []),
-      ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
-      ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status) ? [entry.symbol] : []),
       ...Object.values(this.runtime.strategyArena.portfolioOpen).map((position) => position.symbol),
       ...Object.values(this.runtime.previousStrategyArena.portfolioOpen).map((position) => position.symbol),
       ...REGIME_SYSTEMS.flatMap((id) => Object.values(this.runtime.regimePortfolio.accounts[id].open).map((position) => position.symbol)),
-      ...(this.forwardState?.positions.map((position) => position.symbol) ?? []),
     ])];
+    const entryOnly = Object.values(this.runtime.plans)
+      .flatMap((plan) => plan?.state === "PREPARED" ? [plan.symbol] : []);
     const forwardWatched = this.forwardState ? forwardWatchSymbols(this.forwardState, now) : [];
-    const locked = [...new Set([...protectedLocked, ...forwardWatched, ...researchUniverse])];
+    const locked = [...new Set([...currentProtected, ...retiredDrain, ...entryOnly, ...forwardWatched, ...researchUniverse])];
     const liquidFallback = [...researchUniverse, ...universeRows.map((row) => row.symbol)];
     const next = selectDiverseMarketPool({ locked, current: this.runtime.symbols, candidates: poolCandidates,
       fallback: liquidFallback, limit: PORTFOLIO_REALTIME_CAPACITY });
@@ -2651,6 +2651,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return Boolean(evidence?.fresh && evidence.ancillaryFresh && evidence.entryReady !== false);
   }
 
+  private currentAuthorityProtectedSymbols() {
+    return [...new Set([
+      ...(this.forwardState?.positions.map((position) => position.symbol) ?? []),
+      ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
+      ...Object.values(this.runtime.live.entries).flatMap((entry) =>
+        entry && !["FILLED", "CANCELLED"].includes(entry.status) ? [entry.symbol] : []),
+    ])];
+  }
+
   private symbolManagementReady(symbol: string, now = Date.now()) {
     const evidence = this.runtime.evidence[symbol];
     if (!evidence || this.runtime.contractMeta[symbol] == null) return false;
@@ -2659,26 +2668,28 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private realtimeReadiness(now = Date.now()) {
-    // "Protected" means an already-open exposure that must keep executable
-    // management data. Entry candidates/plans may warm or retry independently
-    // and must not demote the whole account. Open-position management needs a
-    // fresh executable book and contract metadata, not ancillary entry evidence
-    // or a four-snapshot entry warmup.
-    const protectedSymbols = new Set([
-      ...Object.values(this.runtime.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
-      ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
-      ...Object.values(this.runtime.strategyArena.portfolioOpen).map((position) => position.symbol),
-      ...Object.values(this.runtime.previousStrategyArena.portfolioOpen).map((position) => position.symbol),
-      ...REGIME_SYSTEMS.flatMap((id) => Object.values(this.runtime.regimePortfolio.accounts[id].open).map((position) => position.symbol)),
-      ...(this.forwardState?.positions.map((position) => position.symbol) ?? []),
-    ]);
+    // Service health follows the current Multi-Turn source and real Gate
+    // exposure only. Retired V4/V5/regime paper accounts are research/drain
+    // state and must never freeze current-source entries or make the operator
+    // page look globally broken.
+    const protectedSymbols = this.currentAuthorityProtectedSymbols();
+    const protectedIssues = protectedSymbols.flatMap((symbol) => {
+      if (!this.runtime.symbols.includes(symbol)) return [{ symbol, reason: "NOT_IN_REALTIME_POOL", quoteAgeMs: null }];
+      if (this.runtime.contractMeta[symbol] == null) return [{ symbol, reason: "CONTRACT_METADATA", quoteAgeMs: null }];
+      const evidence = this.runtime.evidence[symbol];
+      if (!evidence) return [{ symbol, reason: "NO_EXECUTABLE_BOOK", quoteAgeMs: null }];
+      if (!this.symbolManagementReady(symbol, now)) return [{
+        symbol, reason: "STALE_EXECUTABLE_BOOK",
+        quoteAgeMs: Number.isFinite(evidence.observedAt) ? Math.max(0, now - evidence.observedAt) : null,
+      }];
+      return [];
+    });
     const actionableMarkets = this.runtime.symbols.filter((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS
       && this.runtime.contractMeta[symbol] != null && this.symbolEntryReady(symbol)).length;
-    const protectedMarketsReady = [...protectedSymbols].every((symbol) => this.runtime.symbols.includes(symbol)
-      && this.symbolManagementReady(symbol, now));
     return { capacity: PORTFOLIO_REALTIME_CAPACITY, actionableMarkets,
       warmingMarkets: Math.max(0, this.runtime.symbols.length - actionableMarkets),
-      protectedMarkets: protectedSymbols.size, protectedMarketsReady };
+      protectedMarkets: protectedSymbols.length, protectedMarketsReady: protectedIssues.length === 0,
+      protectedIssues };
   }
 
   private cycleBookSymbols(now: number, symbols: string[]) {
@@ -3014,7 +3025,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.lastSuccessAt = books.successes > 0 ? observedAt : this.runtime.lastSuccessAt;
     const allWarm = this.runtime.symbols.every((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS);
     const allMeta = this.runtime.symbols.every((symbol) => this.runtime.contractMeta[symbol] != null);
-    const realtimeReadiness = this.realtimeReadiness();
+    const realtimeReadiness = this.realtimeReadiness(observedAt);
     const ancillaryStarted = this.runtime.symbols.every((symbol) => {
       const memory = this.memory[symbol];
       return memory && memory.timeframeUpdatedAt.m1 > 0 && memory.timeframeUpdatedAt.m15 > 0
