@@ -85,7 +85,7 @@ export function restoreForwardProtectionCheckpoint(s: ForwardState, value: unkno
         || (a.armedAt === null) !== (a.armedQuoteAt === null)
         || (b.armedAt !== null && (a.armedAt !== b.armedAt || a.armedQuoteAt !== b.armedQuoteAt))
         || (a.profitFloorVersion!==undefined&&a.profitFloorVersion!==MULTI_TURN_PROFIT_PROTECTION_VERSION)
-        || (floor!==undefined&&(!Number.isFinite(floor)||floor<baseFloor||floor<0||floor>=r.favorable))
+        || (floor!==undefined&&(!Number.isFinite(floor)||floor<baseFloor||floor<0||(floor>0&&floor>=r.favorable)))
         || (updated!==undefined&&(!Number.isFinite(updated)||updated<t.openedAt||updated>c.quoteCycleAt+1000))
         || (floor!==undefined&&floor>0&&updated===undefined)
         || (a.profitFloorDeferred!==undefined&&typeof a.profitFloorDeferred!=="boolean")) return invalid();
