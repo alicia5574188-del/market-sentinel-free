@@ -388,7 +388,13 @@ function manageMultiTurn(s:ForwardState,quotes:Record<string,Quote>,now:number){
     const freshFrame=frame&&frame.ready&&frame.completedAt<=now
       &&now-frame.completedAt<=Math.max(BAR_MS*2,cfg.minutes*60_000*1.5)?frame:null;
     let decision:ExitDecision|null=null;
+    const spread=(q.bestAsk-q.bestBid)/Math.max((q.bestAsk+q.bestBid)/2,1e-9);
+    const profitFloor=multiTurnProfitFloor(t.favorable,turnModeledCost(t.turn.timeframe,spread));
     if(ret<=-t.rule.stopRate)decision={trigger:"HARD_STOP",reason:"Multi-Turn硬止损：当前可执行价触及该周期原始结构风险边界",boundaryRate:-t.rule.stopRate};
+    else if(profitFloor&&ret<=profitFloor.floorRate)
+      decision={trigger:"PROFIT_GIVEBACK",
+        reason:`Multi-Turn利润保护：最高浮盈达到${(t.favorable*100).toFixed(1)}%，最低保护抬至${(profitFloor.floorRate*100).toFixed(1)}%；保留趋势空间但不再允许正常回吐成亏损`,
+        boundaryRate:profitFloor.floorRate};
     else if(freshFrame&&freshFrame.direction!==t.side&&freshFrame.lastTurnAt!=null&&freshFrame.lastTurnAt>=t.openedAt)
       decision={trigger:"MULTI_TURN",reason:`${t.turn.timeframe}已确认转向${freshFrame.direction==="LONG"?"多":"空"}；退出原${t.side==="LONG"?"多":"空"}向仓位`,boundaryRate:null};
     else if(freshFrame&&freshFrame.direction===t.side&&freshFrame.phase==="TURNING"&&freshFrame.triggerProbability>=.90
