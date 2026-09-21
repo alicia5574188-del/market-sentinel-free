@@ -880,6 +880,35 @@ test("one failed staggered book batch does not impersonate a ten-market outage",
   assert.match(stream.runtime.lastError, /^1 scheduled market snapshot/);
 });
 
+test("entry-only ancillary staleness on an open position never demotes fresh executable protection", async (t) => {
+  const { stream } = await makeStream();
+  const now = 1_800_000_209_000;
+  t.mock.method(Date, "now", () => now);
+  stream.runtime.symbols = ["BTC_USDT", "ETH_USDT"];
+  stream.runtime.positions = { BTC_USDT: position("protected-open", "BTC_USDT"), ETH_USDT: null };
+  stream.runtime.contractMeta = {
+    BTC_USDT: { quantoMultiplier: 1, maintenanceRate: 0.005, leverageMax: 20, fundingRate: 0 },
+    ETH_USDT: { quantoMultiplier: 1, maintenanceRate: 0.005, leverageMax: 20, fundingRate: 0 },
+  };
+  stream.sessionWarmup.BTC_USDT = 4;
+  stream.sessionWarmup.ETH_USDT = 4;
+  stream.runtime.evidence = {
+    BTC_USDT: { midpoint: 100, bestBid: 99.99, bestAsk: 100.01, observedAt: now, warmup: 4,
+      fresh: true, ancillaryFresh: false, entryReady: false, topLong: null, topShort: null, absorption: 0, range15m: null },
+    ETH_USDT: { midpoint: 50, bestBid: 49.99, bestAsk: 50.01, observedAt: now, warmup: 4,
+      fresh: true, ancillaryFresh: true, entryReady: true, topLong: null, topShort: null, absorption: 0, range15m: null },
+  };
+
+  stream.publishCriticalHealth(now, { successes: 2, requests: 2 });
+  assert.equal(stream.runtime.state, "LIVE");
+  assert.equal(stream.runtime.lastError, null, "entry warmup on a held symbol is local and cannot freeze the whole account");
+
+  stream.runtime.evidence.BTC_USDT.fresh = false;
+  stream.publishCriticalHealth(now + 2_000, { successes: 1, requests: 2 });
+  assert.equal(stream.runtime.state, "DEGRADED", "actual loss of the held symbol's executable book still fails closed");
+  assert.match(stream.runtime.lastError, /protected position or route data unavailable/);
+});
+
 test("candidate rotation stays operational while new slots warm and no protected exposure is stale", async (t) => {
   const { stream } = await makeStream();
   const now = 1_800_000_210_000;
