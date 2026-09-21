@@ -1,3 +1,7 @@
+# 2026-09-21 — audit boundary and cold-start recovery (current)
+
+User approval covers verified defect repairs and the existing GitHub/main/Cloudflare release; no strategy change. PR #366 is deployed and verified. The follow-up treats absent/empty contract catalog as unavailable data before state mutation, using the existing failed-radar path. Do not reject an empty *ranked* result: valid low-volatility data can legitimately produce no eligible markets under the existing strategy. Preserve all cadence, retry, ranking, execution and account rules. The initial hypothesis that lastUniverseAt was restored was disproved: the constructor already resets it, and the failure is the later catalog-missing success path.
+
 # 2026-09-20 — Forward Adaptive v2 architecture decision
 
 Preserve Forward rather than replace it. The diagnosed defect is fast defense plus slow offense: turn protection can remove/limit one direction before the slower learner produces the next executable relationship, while peer-split risk can reduce every candidate below meaningful order size. The fix is architectural: a bounded rapid lane from already-matured 15m outcomes, refit on new matured data, continuous nonzero warning weights, drawdown as new-allocation scaling, and best-first sequential allocation. Do not force reversal or manufacture a market-state signal.

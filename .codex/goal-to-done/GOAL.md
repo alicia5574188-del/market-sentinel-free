@@ -1,3 +1,7 @@
+# 2026-09-21 — comprehensive code audit and approved release (current)
+
+Repair code defects and conflicts without changing strategy, parameters or execution steps. The user explicitly confirmed publication to the original repository and the existing reviewed main/Cloudflare release. Preserve account/history, credentials, owner/member LIVE intent, data cadence, risk formulas and frozen strategy modules. No real-money verification trade. PR #366 is deployed; finish the reproduced cold-start catalog recovery defect and verify the real scan pool as well as health/account continuity. Earlier strategy-design goals below are historical, not authority to change strategy in this task.
+
 # 2026-09-20 — Forward Adaptive v2 final architecture upgrade
 
 Keep the current Forward market-response learning concept and make it adapt to changing market conditions without solving drawdown by becoming inactive. Build and verify fast/slow causal learning, continuous market-state risk migration, best-first allocation, visible participation diagnostics, and unchanged PAPER/LIVE continuity. Do not introduce fixed strategies, forced reversals, trade quotas, account reset, extra Gate cadence or LIVE-switch mutations. Acceptance and invariants are in `research/FORWARD_ADAPTIVE_V2.md`.
