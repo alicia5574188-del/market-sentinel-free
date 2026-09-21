@@ -4,7 +4,8 @@ import {EQUITY_CURVE_VERSION,type CurveContext,type CurvePage,type EquityPoint} 
  * A Dashboard owns one instance; destroying a chart tab does not destroy history.
  * localStorage retains the projection across app/browser restarts. Authentication
  * is still required before configure; no session, API key or LIVE state is stored. */
-export const EQUITY_CACHE_VERSION="incremental-persistent-v1";
+export const EQUITY_CACHE_VERSION="incremental-persistent-v2";
+const PERSISTENT_V1="incremental-persistent-v1";
 const LEGACY_VERSION="incremental-session-v1";
 const PREFIX="sentinel:equity-cache:v1:";
 // Bound parsing of untrusted browser data, not the age/number of saved points.
@@ -47,34 +48,43 @@ export class EquityHistoryCache {
       this.cancel();this.key=key;this.blocked=false;this.lastAttempt=-Infinity;this.state={...empty(),account:context.startedAt};
       // Hydrate synchronously before the chart can start its first HTTP request.
       // Keep the stable account key; a UI release or renewed login is not a reset.
-      let migrated=false;
+      let migratedLegacy=false,projectionUpgrade=false;
       for(const [index,source] of [this.storage,this.legacyStorage].entries()){
       try{
         const raw=source()?.getItem(key);
         if(raw&&raw.length<=LIMIT){
           const s=JSON.parse(raw);
           const validCursor=(v:unknown)=>v===null||(cursorOK(v)&&Number(v.split(":")[3])>=context.startedAt);
-          if((s.version===EQUITY_CACHE_VERSION||s.version===LEGACY_VERSION)&&s.account===context.startedAt&&s.initialEquity===context.initialEquity
+          if((s.version===EQUITY_CACHE_VERSION||s.version===PERSISTENT_V1||s.version===LEGACY_VERSION)
+            &&s.account===context.startedAt&&s.initialEquity===context.initialEquity
             &&Array.isArray(s.points)&&validCursor(s.cursor)&&validCursor(s.newestCursor)
             &&typeof s.done==="boolean"&&typeof s.loaded==="boolean"&&typeof s.catchingUp==="boolean"
             &&finite(s.latestAt)&&s.latestAt<=this.now()&&finite(s.checkedCycle)&&s.checkedCycle<=this.now()
             &&(s.coveredTo===null||finite(s.coveredTo)&&s.coveredTo>=context.startedAt)){
             let last=context.startedAt;
             const points:EquityPoint[]=s.points.map((p:unknown)=>{
-              if(!Array.isArray(p)||p.length!==4||!finite(p[0])||p[0]<=last||p[0]>this.now()
-                ||!finite(p[1])||typeof p[2]!=="string"||typeof p[3]!=="boolean")throw new Error("Invalid local point");
-              last=p[0];return{at:p[0],equity:p[1],policy:p[2],homogeneous:p[3],kind:"observed"};
+              if(!Array.isArray(p)||(p.length!==4&&p.length!==5)||!finite(p[0])||p[0]<=last||p[0]>this.now()
+                ||!finite(p[1])||typeof p[2]!=="string"||typeof p[3]!=="boolean"
+                ||(p.length===5&&typeof p[4]!=="boolean"))throw new Error("Invalid local point");
+              last=p[0];return{at:p[0],equity:p[1],policy:p[2],homogeneous:p[3],kind:"observed",
+                ...(p.length===5&&p[4]?{stale:true}:{})};
             });
-            this.state={...this.state,points,cursor:s.cursor,newestCursor:s.newestCursor,done:s.done,loaded:s.loaded,
-              coveredTo:s.coveredTo,latestAt:s.latestAt,checkedCycle:s.checkedCycle,catchingUp:s.catchingUp};
-            if(finite(s.lastAttempt)&&s.lastAttempt<=this.now())this.lastAttempt=s.lastAttempt;
-            migrated=index===1;break;
+            const oldProjection=s.version!==EQUITY_CACHE_VERSION;
+            this.state={...this.state,points,cursor:oldProjection?null:s.cursor,newestCursor:oldProjection?null:s.newestCursor,
+              done:oldProjection?false:s.done,loaded:oldProjection?false:s.loaded,coveredTo:oldProjection?null:s.coveredTo,
+              latestAt:oldProjection?0:s.latestAt,checkedCycle:oldProjection?0:s.checkedCycle,
+              catchingUp:oldProjection?false:s.catchingUp};
+            if(!oldProjection&&finite(s.lastAttempt)&&s.lastAttempt<=this.now())this.lastAttempt=s.lastAttempt;
+            migratedLegacy=index===1;projectionUpgrade=oldProjection;break;
           }
         }
       }catch{/* Damaged, blocked or unavailable browser cache falls back to actual saved history. */}
       }
+      // Projection v2 re-reads the archive while retaining old points, so marks
+      // previously omitted only because one position quote was stale can reappear.
       // Never remove the old tab copy until the durable browser write succeeds.
-      if(migrated&&this.persist())try{this.legacyStorage()?.removeItem(key);}catch{/* Optional */}
+      if((migratedLegacy||projectionUpgrade)&&this.persist()&&migratedLegacy)
+        try{this.legacyStorage()?.removeItem(key);}catch{/* Optional */}
     }
     // Notify on configure, including after account reset; never show another account's points.
     for(const listener of this.listeners)listener();
@@ -84,7 +94,7 @@ export class EquityHistoryCache {
     if(!this.context)return false;
     try{
       const s=this.state,raw=JSON.stringify({version:EQUITY_CACHE_VERSION,account:s.account,initialEquity:this.context.initialEquity,
-        points:s.points.map(p=>[p.at,p.equity,p.policy,p.homogeneous]),cursor:s.cursor,newestCursor:s.newestCursor,
+        points:s.points.map(p=>[p.at,p.equity,p.policy,p.homogeneous,!!p.stale]),cursor:s.cursor,newestCursor:s.newestCursor,
         done:s.done,loaded:s.loaded,coveredTo:s.coveredTo,latestAt:s.latestAt,checkedCycle:s.checkedCycle,catchingUp:s.catchingUp,lastAttempt:this.lastAttempt});
       const storage=this.storage();if(!storage||raw.length>LIMIT)throw new Error("Browser cache unavailable");
       storage.setItem(this.key,raw);
