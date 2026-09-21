@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { TURN_CONFIG, TURN_TIMEFRAMES, type TurnFrameState, type TurnTimeframe } from "../lib/multi-turn-engine.ts";
+import { TURN_CONFIG, TURN_TIMEFRAMES } from "../lib/multi-turn-engine.ts";
 import { predictMultiTurnExit, RBE_EXIT_CONFIGS } from "../lib/turn-exit-predictor.ts";
 
 const DATASET=process.env.RESEARCH_DATASET??"/tmp/rbe-gate-history.json";
