@@ -909,6 +909,85 @@ test("candidate rotation stays operational while new slots warm and no protected
   assert.equal(stream.runtime.evidence.WARMING_USDT.entryReady, false, "warming slot must remain unable to trade");
 });
 
+test("open-position health needs a fresh executable book, not ancillary entry warmup", async (t) => {
+  const { stream } = await makeStream();
+  const now = 1_800_000_212_000;
+  t.mock.method(Date, "now", () => now);
+  stream.runtime.symbols = ["HELD_USDT", "READY_USDT"];
+  stream.runtime.lastSuccessAt = now;
+  stream.runtime.contractMeta = Object.fromEntries(stream.runtime.symbols.map((symbol: string) => [symbol, {
+    quantoMultiplier: 1, maintenanceRate: 0.005, leverageMax: 20, fundingRate: 0,
+  }]));
+  stream.runtime.strategyArena.portfolioOpen = { HELD_USDT: portfolioTrade("HELD_USDT", now - 60_000) };
+  stream.sessionWarmup.HELD_USDT = 0;
+  stream.sessionWarmup.READY_USDT = 4;
+  stream.runtime.evidence = {
+    HELD_USDT: { midpoint: 100, bestBid: 99.99, bestAsk: 100.01, observedAt: now, warmup: 0,
+      fresh: true, ancillaryFresh: false, entryReady: false, topLong: null, topShort: null, absorption: 0, range15m: null },
+    READY_USDT: { midpoint: 50, bestBid: 49.99, bestAsk: 50.01, observedAt: now, warmup: 4,
+      fresh: true, ancillaryFresh: true, entryReady: true, topLong: null, topShort: null, absorption: 0, range15m: null },
+  };
+
+  const readiness = stream.realtimeReadiness(now);
+  assert.equal(readiness.protectedMarkets, 1);
+  assert.equal(readiness.protectedMarketsReady, true, "an open holding is manageable from its fresh executable book immediately");
+  stream.publishCriticalHealth(now, { successes: 1, requests: 1 });
+  assert.equal(stream.runtime.state, "LIVE");
+  assert.equal(stream.runtime.lastError, null);
+});
+
+test("a stale open-position book still degrades health even when other markets are tradable", async (t) => {
+  const { stream } = await makeStream();
+  const now = 1_800_000_213_000;
+  t.mock.method(Date, "now", () => now);
+  stream.runtime.symbols = ["HELD_USDT", "READY_USDT"];
+  stream.runtime.lastSuccessAt = now;
+  stream.runtime.contractMeta = Object.fromEntries(stream.runtime.symbols.map((symbol: string) => [symbol, {
+    quantoMultiplier: 1, maintenanceRate: 0.005, leverageMax: 20, fundingRate: 0,
+  }]));
+  stream.runtime.strategyArena.portfolioOpen = { HELD_USDT: portfolioTrade("HELD_USDT", now - 60_000) };
+  stream.sessionWarmup.HELD_USDT = 4;
+  stream.sessionWarmup.READY_USDT = 4;
+  stream.runtime.evidence = {
+    HELD_USDT: { midpoint: 100, bestBid: 99.99, bestAsk: 100.01, observedAt: now - STALE_AFTER_MS - 1, warmup: 4,
+      fresh: true, ancillaryFresh: true, entryReady: true, topLong: null, topShort: null, absorption: 0, range15m: null },
+    READY_USDT: { midpoint: 50, bestBid: 49.99, bestAsk: 50.01, observedAt: now, warmup: 4,
+      fresh: true, ancillaryFresh: true, entryReady: true, topLong: null, topShort: null, absorption: 0, range15m: null },
+  };
+
+  assert.equal(stream.realtimeReadiness(now).protectedMarketsReady, false);
+  stream.publishCriticalHealth(now, { successes: 1, requests: 1 });
+  assert.equal(stream.runtime.state, "DEGRADED");
+  assert.match(stream.runtime.lastError, /protected position/);
+});
+
+test("a stale prepared plan freezes only that entry and is not a protected-position outage", async (t) => {
+  const { stream } = await makeStream();
+  const now = 1_800_000_214_000;
+  t.mock.method(Date, "now", () => now);
+  stream.runtime.symbols = ["PLAN_USDT", "READY_USDT"];
+  stream.runtime.lastSuccessAt = now;
+  stream.runtime.contractMeta = Object.fromEntries(stream.runtime.symbols.map((symbol: string) => [symbol, {
+    quantoMultiplier: 1, maintenanceRate: 0.005, leverageMax: 20, fundingRate: 0,
+  }]));
+  stream.runtime.plans.PLAN_USDT = plan("PLAN_USDT");
+  stream.sessionWarmup.PLAN_USDT = 4;
+  stream.sessionWarmup.READY_USDT = 4;
+  stream.runtime.evidence = {
+    PLAN_USDT: { midpoint: 100, bestBid: 99.99, bestAsk: 100.01, observedAt: now - STALE_AFTER_MS - 1, warmup: 4,
+      fresh: false, ancillaryFresh: false, entryReady: false, topLong: null, topShort: null, absorption: 0, range15m: null },
+    READY_USDT: { midpoint: 50, bestBid: 49.99, bestAsk: 50.01, observedAt: now, warmup: 4,
+      fresh: true, ancillaryFresh: true, entryReady: true, topLong: null, topShort: null, absorption: 0, range15m: null },
+  };
+
+  const readiness = stream.realtimeReadiness(now);
+  assert.equal(readiness.protectedMarkets, 0);
+  assert.equal(readiness.protectedMarketsReady, true);
+  stream.publishCriticalHealth(now, { successes: 1, requests: 1 });
+  assert.equal(stream.runtime.state, "LIVE");
+  assert.equal(stream.runtime.lastError, null);
+});
+
 test("an empty entry-ready set is diagnostic and never becomes a global recovery error", async (t) => {
   const { stream } = await makeStream();
   const now = 1_800_000_215_000;
