@@ -101,7 +101,7 @@ test("dynamic Multi-Turn profit floor survives a compact restart overlay without
   assert.equal(restored.positions[0].favorable,.08);
 });
 
-test("actual Worker durably preserves Multi-Turn sub-band tightening below the original arm rate",async()=>{
+test("release-344 Worker does not create a later profit-floor checkpoint",async()=>{
   const start=Date.parse("2026-09-21T00:00:00Z");
   const rows=Array.from({length:360},(_,i)=>{
     const close=100*Math.exp(i*.0008),open=close/1.0008;
@@ -112,36 +112,18 @@ test("actual Worker durably preserves Multi-Turn sub-band tightening below the o
     quotes:{BTC_USDT:{bestBid:mid*.9999,bestAsk:mid*1.0001,observedAt:now,fresh:true,entryReady:true}},
     contracts:{BTC_USDT:{quantoMultiplier:.001,leverageMax:50,maintenanceRate:.005,minContracts:1}}}).state;
   assert.equal(state.positions.length,1);
-  const trade=state.positions[0];assert.equal(trade.side,"LONG");
-  const frame=state.turnEngine!.frames.BTC_USDT[trade.turn!.timeframe]!;
-  frame.continuationScore=.55;frame.triggerProbability=.20;frame.direction="LONG";frame.rawDirection="LONG";
-  frame.phase="FLOW";frame.lastTurnAt=null;
-  // Other previously observed account extrema must not accidentally make this
-  // position's otherwise-unsaved floor durable.
-  state.peakEquity=1200;state.maxDrawdown=.3;
-  const atReturn=(at:number,ret:number)=>quote(at,trade.entryPrice*(1+ret)/(1-.00025));
-  const step=(s:ForwardState,at:number,ret:number)=>advanceForward({state:s,now:at,paths:{},contracts:{},quotes:atReturn(at,ret)});
-  state=step(state,now+10_000,.035).state;state.storage.persistedAt=now+10_000;
-  const store=new Memory();await store.put((await prepareForwardWrite(null,state,now+10_000,{compact:true})).entries);
-  store.writes=[];
-  const next=step(state,now+20_000,.036),oldFloor=state.positions[0].profitProtection!,newFloor=next.state.positions[0].profitProtection!;
-  assert.equal(next.changed,false);assert.equal(newFloor.checkpointBand,oldFloor.checkpointBand);
-  assert.ok(newFloor.floorRate>oldFloor.floorRate);assert.ok(next.state.positions[0].favorable<trade.rule.armRate);
-  assert.equal(next.protectionChanged,true);
-  const h=harness(state,store);h.regimeQuotes=at=>atReturn(at,.036);
-  h.runtime.nonAlarmWrites=8000;
-  await h.advanceForwardNow(now+20_000);
-  assert.equal(h.forwardError,null);assert.equal(h.runtime.nonAlarmWrites,8000);
-  assert.deepEqual(store.writes,[[FORWARD_PROTECTION_STORAGE]]);
-  assert.equal(h.forwardProtectionBudget?.writes,1);
-  const restored=await readForwardStore(store,now+25_000);
-  assert.equal(restored.positions[0].profitProtection!.floorRate,newFloor.floorRate);
-  const returnBetweenFloors=(oldFloor.floorRate+newFloor.floorRate)/2;
-  const continuous=step(h.forwardState,now+30_000,returnBetweenFloors).state;
-  const restarted=step(restored,now+30_000,returnBetweenFloors).state;
-  assert.equal(continuous.positions.length,0);assert.equal(restarted.positions.length,0);
-  assert.equal(restarted.history[0].netPnl,continuous.history[0].netPnl);
-  assert.equal(restarted.history[0].exitAudit?.trigger,"PROFIT_GIVEBACK");
+  const trade=state.positions[0],frame=state.turnEngine!.frames.BTC_USDT[trade.turn!.timeframe]!;
+  frame.continuationScore=.55;frame.triggerProbability=.20;frame.direction=trade.side;frame.rawDirection=trade.side;
+  frame.phase="FLOW";frame.lastTurnAt=null;state.lastCycleAt=now;
+  const px=trade.entryPrice*(trade.side==="LONG"?1.035:.965),at=now+10_000;
+  const next=advanceForward({state,now:at,paths:{},
+    quotes:{BTC_USDT:{bestBid:px*.99999,bestAsk:px*1.00001,observedAt:at,fresh:true,entryReady:true}},contracts:{}});
+
+  assert.equal(next.state.positions.length,1);
+  assert.equal(next.state.positions[0].profitProtection,undefined);
+  assert.equal(next.state.positions[0].profitProtectionMigration,undefined);
+  assert.equal(next.protectionChanged,false,
+    "release-344 has no independent Multi-Turn profit-floor checkpoint to persist");
 });
 
 test("guarded and deferred adaptive-profit migration state survives compact restart",()=>{
