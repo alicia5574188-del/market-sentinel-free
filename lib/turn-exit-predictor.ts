@@ -60,6 +60,8 @@ export type PredictiveExitDecision = {
     breadthPressure: number;
     currentReturn: number;
     profitGiveback: number;
+    runnerMfeAtr: number;
+    givebackAtr: number;
   };
   reason: string;
 };
@@ -156,7 +158,16 @@ export function predictMultiTurnExit(input:PredictiveExitInput,
   const structuralThreat=sequenceShift>=.62&&structureBreak>=.48;
   const shockThreat=shockHazard>=.84;
   const higherTrendVeto=upperSupport>=.62&&upperOpposition<.35&&shockHazard<.90;
-  const shouldExit=eligible&&!higherTrendVeto&&(propagatedThreat||structuralThreat||shockThreat)
+  // Profit is never itself an exit trigger. It only tells us how expensive a
+  // false early exit would be. A runner still printing near its MFE gets a
+  // renewal veto until either a small ATR-normalized giveback appears or the
+  // shock/own-timeframe evidence becomes exceptional. This keeps prediction
+  // early without turning RBE into a fixed trailing stop.
+  const runnerMfeAtr=input.favorable/Math.max(own.atrRate,1e-9);
+  const givebackAtr=profitGiveback/Math.max(own.atrRate,1e-9);
+  const runnerRenewalVeto=runnerMfeAtr>=1.35&&givebackAtr<.32
+    &&ownDecay<.70&&ownTurn<.72&&shockHazard<.90;
+  const shouldExit=eligible&&!higherTrendVeto&&!runnerRenewalVeto&&(propagatedThreat||structuralThreat||shockThreat)
     &&reversalHazard>=config.exitHazard&&extensionSurvival<=config.maxExitSurvival
     &&holdValueRate<=-exitMargin&&evidenceFamilies>=config.minEvidenceFamilies;
 
@@ -172,5 +183,5 @@ export function predictMultiTurnExit(input:PredictiveExitInput,
   return{version:RBE_EXIT_VERSION,phase,shouldExit,reversalHazard,slowHazard,shockHazard,extensionSurvival,
     holdValueRate,expectedExtensionRate,expectedReversalCostRate,evidenceFamilies,eligible,
     diagnostics:{ownTurn,ownDecay,lowerLead,lowerSupport,upperSupport,upperOpposition,sequenceShift,structureBreak,
-      breadthPressure,currentReturn,profitGiveback},reason};
+      breadthPressure,currentReturn,profitGiveback,runnerMfeAtr,givebackAtr},reason};
 }
