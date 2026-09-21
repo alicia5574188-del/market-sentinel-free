@@ -43,7 +43,8 @@ export function buildForwardProtectionCheckpoint(s: ForwardState): ForwardProtec
     positions: s.positions.map(t => ({ id: t.id, openedAt: t.openedAt, favorable: t.favorable, adverse: t.adverse,
       lastPrice: t.lastPrice, lastQuoteAt: t.lastQuoteAt, relationFailureBars: t.relationFailureBars,
       lastRelationBar: t.lastRelationBar, ...(t.exitControl ? { exitControl: { ...t.exitControl } } : {}),
-      ...(t.profitProtection ? { profitProtection: { ...t.profitProtection } } : {}) })) };
+      ...(t.profitProtection ? { profitProtection: { ...t.profitProtection } } : {}),
+      ...(t.profitProtectionMigration ? { profitProtectionMigration: { ...t.profitProtectionMigration } } : {}) })) };
 }
 
 /** An older overlay is harmless after any new full-account commit. A matching
