@@ -147,7 +147,17 @@ export function predictMultiTurnExit(input:PredictiveExitInput,
   const provenMove=Math.max(own.atrRate*.45,own.expectedMoveRate*.25);
   const eligible=input.favorable>=provenMove || (shockHazard>=.82&&evidenceFamilies>=3);
   const exitMargin=own.atrRate*config.valueMarginAtr;
-  const shouldExit=eligible&&reversalHazard>=config.exitHazard&&extensionSurvival<=config.maxExitSurvival
+  // A real pre-turn exit needs evidence that the position's own timeframe is
+  // losing its trend-generation mechanism, not merely a noisy lower-TF flip.
+  // Strong higher-TF continuation is an explicit veto unless shock evidence is
+  // exceptional. This is the key asymmetry that protects large runners.
+  const ownDeteriorating=ownDecay>=.55||ownTurn>=.55||own.rawDirection===opposite(input.side);
+  const propagatedThreat=lowerLead>=.52&&(ownDeteriorating||sequenceShift>=.58);
+  const structuralThreat=sequenceShift>=.62&&structureBreak>=.48;
+  const shockThreat=shockHazard>=.84;
+  const higherTrendVeto=upperSupport>=.62&&upperOpposition<.35&&shockHazard<.90;
+  const shouldExit=eligible&&!higherTrendVeto&&(propagatedThreat||structuralThreat||shockThreat)
+    &&reversalHazard>=config.exitHazard&&extensionSurvival<=config.maxExitSurvival
     &&holdValueRate<=-exitMargin&&evidenceFamilies>=config.minEvidenceFamilies;
 
   let phase:PredictiveExitPhase="HEALTHY";
