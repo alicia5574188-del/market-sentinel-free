@@ -77,10 +77,13 @@ export function restoreForwardProtectionCheckpoint(s: ForwardState, value: unkno
     if(r.profitProtectionMigration){
       const m=r.profitProtectionMigration,prior=t.profitProtectionMigration;
       if(m.version!==MULTI_TURN_PROFIT_PROTECTION_VERSION
-        || !["CURRENT","DEFERRED"].includes(m.state)
+        || !["CURRENT","GUARDED","DEFERRED"].includes(m.state)
         || !Number.isFinite(m.updatedAt)||m.updatedAt<t.openedAt||m.updatedAt>c.quoteCycleAt+1000
+        || !Number.isFinite(m.baselineFavorable)||m.baselineFavorable<0||m.baselineFavorable>r.favorable+1e-12
         || (prior&&prior.version===MULTI_TURN_PROFIT_PROTECTION_VERSION
-          && (m.updatedAt<prior.updatedAt||(prior.state==="CURRENT"&&m.state!=="CURRENT")))
+          && (m.updatedAt<prior.updatedAt||m.baselineFavorable+1e-12<prior.baselineFavorable
+            || (prior.state==="CURRENT"&&m.state!=="CURRENT")
+            || (prior.state==="GUARDED"&&m.state==="DEFERRED")))
         || (m.state==="DEFERRED"&&r.profitProtection))return invalid();
     }
     if(r.profitProtection){
