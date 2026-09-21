@@ -157,17 +157,27 @@ export function predictMultiTurnExit(input:PredictiveExitInput,
   const propagatedThreat=lowerLead>=.52&&(ownDeteriorating||sequenceShift>=.58);
   const structuralThreat=sequenceShift>=.62&&structureBreak>=.48;
   const shockThreat=shockHazard>=.84;
-  const higherTrendVeto=upperSupport>=.62&&upperOpposition<.35&&shockHazard<.90;
+  const genericHigherTrendVeto=upperSupport>=.62&&upperOpposition<.35&&shockHazard<.90;
+  // 4h is structurally different: 5m-1h counter-moves are frequent inside a
+  // healthy multi-hour trend. Historical Gate validation therefore requires
+  // the daily context to deteriorate too, unless a genuine shock is present.
+  const fourHourHigherVeto=input.timeframe==="4h"&&upperSupport>=.35&&upperOpposition<.40&&shockHazard<.93;
+  const higherTrendVeto=genericHigherTrendVeto||fourHourHigherVeto;
   // Profit is never itself an exit trigger. It only tells us how expensive a
-  // false early exit would be. A runner still printing near its MFE gets a
-  // renewal veto until either a small ATR-normalized giveback appears or the
-  // shock/own-timeframe evidence becomes exceptional. This keeps prediction
-  // early without turning RBE into a fixed trailing stop.
+  // false early exit would be. A runner gets room for an ordinary sub-ATR
+  // pullback; RBE may act only when predictive evidence survives that renewal
+  // test. This is not a trailing stop because giveback alone can never exit.
   const runnerMfeAtr=input.favorable/Math.max(own.atrRate,1e-9);
   const givebackAtr=profitGiveback/Math.max(own.atrRate,1e-9);
-  const runnerRenewalVeto=runnerMfeAtr>=1.35&&givebackAtr<.32
-    &&ownDecay<.70&&ownTurn<.72&&shockHazard<.90;
-  const shouldExit=eligible&&!higherTrendVeto&&!runnerRenewalVeto&&(propagatedThreat||structuralThreat||shockThreat)
+  const runnerRenewalVeto=runnerMfeAtr>=1.10&&givebackAtr<.65
+    &&ownDecay<.78&&ownTurn<.78&&shockHazard<.92;
+  const genericThreat=propagatedThreat||structuralThreat||shockThreat;
+  const fourHourThreat=input.timeframe!=="4h"||(
+    (ownTurn>=.58||ownDecay>=.72||shockHazard>=.90)
+    &&(lowerLead>=.62||structuralThreat||shockHazard>=.90)
+    &&(upperOpposition>=.30||upperSupport<.28||shockHazard>=.93)
+  );
+  const shouldExit=eligible&&!higherTrendVeto&&!runnerRenewalVeto&&genericThreat&&fourHourThreat
     &&reversalHazard>=config.exitHazard&&extensionSurvival<=config.maxExitSurvival
     &&holdValueRate<=-exitMargin&&evidenceFamilies>=config.minEvidenceFamilies;
 
