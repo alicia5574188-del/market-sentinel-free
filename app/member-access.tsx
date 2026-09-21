@@ -11,17 +11,17 @@ type Overview={
   version:string;authVersion:string;invite:{code:string;createdAt:number};memberLimit:number;activeLimit:number;activeCount:number;
   members:MemberRow[]
 };
-type LoginMode="login"|"register"|"owner"|"legacy";
+type LoginMode="login"|"register"|"owner";
 type AdminAction={id:string;kind:"stop"|"resume"|"delete";label:string};
 
 export function LoginGate({auth,onSession}:{auth:AuthSession|null;onSession:(s:AuthSession)=>void}) {
   const[mode,setMode]=useState<LoginMode>("login");
   const[username,setUsername]=useState(""),[password,setPassword]=useState(""),[confirm,setConfirm]=useState("");
-  const[invite,setInvite]=useState(""),[legacyKey,setLegacyKey]=useState("");
+  const[invite,setInvite]=useState("");
   const[busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null);
   const lock=useRef(false),registrationId=useRef<string|null>(null);
   const changeMode=(next:LoginMode)=>{
-    setMode(next);setUsername("");setPassword("");setConfirm("");setInvite("");setLegacyKey("");setError(null);
+    setMode(next);setUsername("");setPassword("");setConfirm("");setInvite("");setError(null);
   };
   const submit=async(e:React.FormEvent)=>{
     e.preventDefault();if(lock.current)return;setError(null);
@@ -35,13 +35,12 @@ export function LoginGate({auth,onSession}:{auth:AuthSession|null;onSession:(s:A
         session=await operatorRequest<AuthSession>("/api/members/register","POST",
           {inviteCode:invite,username,password,requestId:registrationId.current});
         registrationId.current=null;
-      }else if(mode==="legacy")session=await operatorRequest<AuthSession>("/api/members/login","POST",{key:legacyKey});
-      else session=await operatorRequest<AuthSession>("/api/members/login","POST",{username,password});
-      setUsername("");setPassword("");setConfirm("");setInvite("");setLegacyKey("");onSession(session);
+      }else session=await operatorRequest<AuthSession>("/api/members/login","POST",{username,password});
+      setUsername("");setPassword("");setConfirm("");setInvite("");onSession(session);
     }catch(e){setError(e instanceof Error?e.message:"登录失败");}
     finally{lock.current=false;setBusy(false);}
   };
-  const title=mode==="owner"?"主账户登录":mode==="register"?"注册会员账户":mode==="legacy"?"旧会员账户登录":"会员登录";
+  const title=mode==="owner"?"主账户登录":mode==="register"?"注册会员账户":"会员登录";
   return <main className="fr-app fr-access" data-access="login">
     <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · 多周期转折引擎</b><small>PRIVATE ACCESS</small></div></div></header>
     <section className="fr-section">
@@ -49,19 +48,16 @@ export function LoginGate({auth,onSession}:{auth:AuthSession|null;onSession:(s:A
       <p className="fr-note">{auth===null?"正在检查已有登录状态…":
         mode==="register"?"填写主账户提供的一次性邀请码，再自行设置用户名和密码。注册成功后该邀请码立即失效。":
         mode==="login"?"使用注册时设置的用户名和密码登录。":
-        mode==="legacy"?"仅供升级前已经发放过登录密钥的旧会员账户使用。":
         "沿用你的原主账户密码，登录不会改变实盘开关。"}</p>
       <form className="fr-form" onSubmit={submit}>
         {mode==="register"&&<label>邀请码<input value={invite} onChange={e=>setInvite(e.target.value)} placeholder="INV-…" autoComplete="off" spellCheck={false} disabled={busy||auth===null}/></label>}
         {(mode==="login"||mode==="register")&&<label>用户名<input value={username} onChange={e=>setUsername(e.target.value)} placeholder="2–32位用户名" autoComplete="username" spellCheck={false} disabled={busy||auth===null}/></label>}
-        {mode==="legacy"
-          ?<label>旧登录密钥<input type="password" value={legacyKey} onChange={e=>setLegacyKey(e.target.value)} placeholder="MS-…" autoComplete="off" spellCheck={false} disabled={busy||auth===null}/></label>
-          :<label>{mode==="owner"?"主账户密码":"密码"}<input type="password" value={password} onChange={e=>setPassword(e.target.value)}
-            placeholder={mode==="register"?"至少8位":"输入密码"} autoComplete={mode==="register"?"new-password":"current-password"} disabled={busy||auth===null}/></label>}
+        <label>{mode==="owner"?"主账户密码":"密码"}<input type="password" value={password} onChange={e=>setPassword(e.target.value)}
+          placeholder={mode==="register"?"至少8位":"输入密码"} autoComplete={mode==="register"?"new-password":"current-password"} disabled={busy||auth===null}/></label>
         {mode==="register"&&<label>确认密码<input type="password" value={confirm} onChange={e=>setConfirm(e.target.value)}
           placeholder="再次输入密码" autoComplete="new-password" disabled={busy||auth===null}/></label>}
         <button className="fr-button" type="submit" disabled={busy||auth===null
-          ||(mode==="legacy"?!legacyKey.trim():!password)
+          ||!password
           ||((mode==="login"||mode==="register")&&!username.trim())
           ||(mode==="register"&&(!invite.trim()||!confirm))}>
           {busy?"正在处理…":mode==="register"?"注册并登录":"登录程序"}
@@ -71,7 +67,6 @@ export function LoginGate({auth,onSession}:{auth:AuthSession|null;onSession:(s:A
         {mode!=="login"&&<button className="fr-text-button" type="button" onClick={()=>changeMode("login")} disabled={busy}>会员登录</button>}
         {mode!=="register"&&<button className="fr-text-button" type="button" onClick={()=>changeMode("register")} disabled={busy}>使用邀请码注册</button>}
         {mode!=="owner"&&<button className="fr-text-button" type="button" onClick={()=>changeMode("owner")} disabled={busy}>我是主账户所有者</button>}
-        {mode!=="legacy"&&<button className="fr-text-button" type="button" onClick={()=>changeMode("legacy")} disabled={busy}>旧账户密钥登录</button>}
       </div>
       {mode!=="owner"&&<p className="fr-note">每个邀请码只能成功注册一个账户。用户名不可重复；以后只需要用户名和密码登录。</p>}
       {error&&<p className="fr-error" role="status">{error}</p>}
@@ -136,8 +131,8 @@ export function MemberAccess({auth}:{auth:AuthSession}) {
     {error&&<p className="fr-error" role="status">{error}</p>}
     <div className="fr-member-list">
       {overview?.members.length?overview.members.map(m=><article className="fr-rule" key={m.id}>
-        <header><h3>{m.username??m.label}</h3><span>{m.revokedAt?"删除处理中":m.followBlockedAt?"禁止开启实盘":m.activatedAt?"已激活":"旧账户待登录"}</span></header>
-        <p className="fr-note">{m.username?`用户名：${m.username}`:`旧版账户：${m.id}`}</p>
+        <header><h3>{m.username??m.label}</h3><span>{m.revokedAt?"删除处理中":m.followBlockedAt?"禁止开启实盘":m.username?"已激活":"旧账户不可登录"}</span></header>
+        <p className="fr-note">{m.username?`用户名：${m.username}`:"旧密钥账户已停用登录，请删除后用邀请码重新注册。"}</p>
         <div className="fr-three">
           <div><small>本程序实盘成交额</small><b>{numberText(m.usage?.notional)} U</b></div>
           <div><small>统计截至</small><b>{operatorTime(m.usage?.through)}</b></div>
