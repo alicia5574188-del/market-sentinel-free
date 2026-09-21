@@ -46,6 +46,7 @@ export type Trade = { id: string; symbol: string; side: "LONG" | "SHORT"; rule: 
   exitFee: number; fundingAllowance: number; grossPnl: number | null; netPnl: number | null; exitReason: string | null;
   relationFailureBars: number; lastRelationBar: number; execution: "REAL_QUOTE_PAPER_MODEL"; liveEligible: false;
   exitControl?: ExitControl; exitAudit?: ExitAudit; profitProtection?:MultiTurnTradeProfitProtection;
+  profitProtectionMigration?:{version:typeof MULTI_TURN_PROFIT_PROTECTION_VERSION;state:"CURRENT"|"GUARDED"|"DEFERRED";updatedAt:number;baselineFavorable:number};
   forecast?: { policy:string; family:string; signalAt:number; signalPrice:number; baseNetRate:number;
     calibratedNetRate:number; remainingNetRate:number; quality:number; sizingEquity?:number };
   turn?:{version:typeof MULTI_TURN_VERSION;timeframe:TurnTimeframe;signalAt:number;entryTurnProbability:number;
@@ -117,6 +118,8 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
   if(v.turnForecast&&v.turnForecast.version!==TURN_FORECAST_VERSION)throw new Error("未知转折预警版本，保留原账户");
   if(v.positions.some(t=>t.profitProtection&&t.profitProtection.version!==MULTI_TURN_PROFIT_PROTECTION_VERSION))
     throw new Error("未知Multi-Turn利润保护版本，保留原持仓");
+  if(v.positions.some(t=>t.profitProtectionMigration&&t.profitProtectionMigration.version!==MULTI_TURN_PROFIT_PROTECTION_VERSION))
+    throw new Error("未知Multi-Turn利润保护迁移版本，保留原持仓");
   const authority=v.strategyAuthorityVersion??"legacy-forward-rules-v1";
   return {...v,adaptationVersion:v.adaptationVersion??"legacy-forward-adaptation-v1",lastFitMeasured:v.lastFitMeasured??v.measured,
     strategyAuthorityVersion:authority,turnLastEntryBars:v.turnLastEntryBars??{},
@@ -393,18 +396,56 @@ function manageMultiTurn(s:ForwardState,quotes:Record<string,Quote>,now:number){
     let decision:ExitDecision|null=null;
     const spread=(q.bestAsk-q.bestBid)/Math.max((q.bestAsk+q.bestBid)/2,1e-9);
     const riskRate=t.plannedRisk/Math.max(t.notional,1e-9);
-    const proposedFloor=multiTurnProfitFloor(t.favorable,riskRate,turnModeledCost(t.turn.timeframe,spread),freshFrame?{
+    const modeledCost=turnModeledCost(t.turn.timeframe,spread);
+    const proposedFloor=multiTurnProfitFloor(t.favorable,riskRate,modeledCost,freshFrame?{
       continuationScore:freshFrame.continuationScore,turnProbability:freshFrame.triggerProbability,phase:freshFrame.phase,
       rawDirectionAligned:freshFrame.rawDirection==="NEUTRAL"||freshFrame.rawDirection===t.side,
     }:null);
-    if(proposedFloor){
-      const prior=t.profitProtection?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?t.profitProtection:null;
-      if(!prior||proposedFloor.floorRate>prior.floorRate+1e-12){
-        t.profitProtection={...proposedFloor,peakR:Math.max(prior?.peakR??0,proposedFloor.reachedR),updatedAt:now};
+    let migration=t.profitProtectionMigration;
+    const prior=t.profitProtection?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?t.profitProtection:null;
+    const cushion=Math.max(.0015,Math.min(.005,riskRate*.15)),minNet=modeledCost+.0010;
+    const migrateFloor=(floorRate:number,source:NonNullable<typeof proposedFloor>)=>{
+      const lockedR=floorRate/riskRate;
+      t.profitProtection={...source,floorRate,lockedR,retentionRate:floorRate/Math.max(t.favorable,1e-9),
+        checkpointBand:Math.floor(lockedR*4+1e-9),peakR:source.reachedR,updatedAt:now};
+    };
+    if(!migration){
+      // Existing v3 protection is already live authority. Otherwise this is a
+      // pre-v3 holding with historical MFE, so fence that old peak until a new
+      // post-upgrade high proves the market has crossed the new trail geometry.
+      if(prior)migration={version:MULTI_TURN_PROFIT_PROTECTION_VERSION,state:"CURRENT",updatedAt:now,baselineFavorable:0};
+      else{
+        const baselineFavorable=t.favorable;
+        if(proposedFloor&&ret>proposedFloor.floorRate+cushion)migrateFloor(proposedFloor.floorRate,proposedFloor);
+        else if(proposedFloor&&ret>minNet+cushion)migrateFloor(Math.max(minNet,ret-cushion),proposedFloor);
+        migration={version:MULTI_TURN_PROFIT_PROTECTION_VERSION,
+          state:proposedFloor&&ret<=minNet+cushion?"DEFERRED":"GUARDED",updatedAt:now,baselineFavorable};
+      }
+      t.profitProtectionMigration=migration;
+    }
+    if(migration.state!=="CURRENT"){
+      const newPeak=t.favorable>migration.baselineFavorable+Math.max(.001,riskRate*.05);
+      if(newPeak){
+        migration={...migration,state:"CURRENT",updatedAt:now};
+        t.profitProtectionMigration=migration;
+      }else if(proposedFloor&&ret>minNet+cushion){
+        const active=t.profitProtection?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?t.profitProtection:null;
+        const safeFloor=Math.min(proposedFloor.floorRate,ret-cushion);
+        if(safeFloor>modeledCost&&(active==null||safeFloor>active.floorRate+1e-12))migrateFloor(safeFloor,proposedFloor);
+        if(migration.state==="DEFERRED"){
+          migration={...migration,state:"GUARDED",updatedAt:now};
+          t.profitProtectionMigration=migration;
+        }
+      }
+    }
+    if(proposedFloor&&migration.state==="CURRENT"){
+      const active=t.profitProtection?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?t.profitProtection:null;
+      if(!active||proposedFloor.floorRate>active.floorRate+1e-12){
+        t.profitProtection={...proposedFloor,peakR:Math.max(active?.peakR??0,proposedFloor.reachedR),updatedAt:now};
       }else{
-        t.profitProtection={...prior,reachedR:proposedFloor.reachedR,peakR:Math.max(prior.peakR,proposedFloor.reachedR),
-          retentionRate:prior.floorRate/Math.max(t.favorable,1e-9),
-          checkpointBand:Math.max(prior.checkpointBand,Math.floor(prior.lockedR*4+1e-9))};
+        t.profitProtection={...active,reachedR:proposedFloor.reachedR,peakR:Math.max(active.peakR,proposedFloor.reachedR),
+          retentionRate:active.floorRate/Math.max(t.favorable,1e-9),
+          checkpointBand:Math.max(active.checkpointBand,Math.floor(active.lockedR*4+1e-9))};
       }
     }
     const profitFloor=t.profitProtection?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?t.profitProtection:null;
@@ -518,6 +559,7 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
       armPrice:price*(1+d*Math.max(candidate.expectedMoveRate,cost*1.5)),favorable:0,adverse:0,lastPrice:price,lastQuoteAt:q.observedAt,
       entryFee,exitFee:0,fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,relationFailureBars:0,lastRelationBar:candidate.completedAt,
       execution:"REAL_QUOTE_PAPER_MODEL",liveEligible:false,exitControl:newExitControl(),
+      profitProtectionMigration:{version:MULTI_TURN_PROFIT_PROTECTION_VERSION,state:"CURRENT",updatedAt:now,baselineFavorable:0},
       forecast:{policy:MULTI_TURN_VERSION,family:`TURN:${candidate.timeframe}:${candidate.side}`,signalAt:candidate.completedAt,
         signalPrice:candidate.signalPrice,baseNetRate:remaining,calibratedNetRate:remaining,remainingNetRate:remaining,quality,sizingEquity:equity-entryFee},
       turn:{version:MULTI_TURN_VERSION,timeframe:candidate.timeframe,signalAt:candidate.completedAt,

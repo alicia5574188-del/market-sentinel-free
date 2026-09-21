@@ -101,6 +101,25 @@ test("dynamic Multi-Turn profit floor survives a compact restart overlay without
   assert.equal(restored.positions[0].favorable,.08);
 });
 
+test("guarded and deferred adaptive-profit migration state survives compact restart",()=>{
+  for(const state of["GUARDED","DEFERRED"] as const){
+    const base=account();base.storage={persistedAt:T+1,error:null};base.lastQuoteCycleAt=T+1000;
+    base.positions[0].rule.authority="MULTI_TURN";
+    const next=structuredClone(base);next.lastQuoteCycleAt=T+2000;next.positions[0].favorable=.06;
+    next.positions[0].profitProtectionMigration={
+      version:MULTI_TURN_PROFIT_PROTECTION_VERSION,state,updatedAt:T+2000,baselineFavorable:.06,
+    };
+    if(state==="GUARDED")next.positions[0].profitProtection={
+      version:MULTI_TURN_PROFIT_PROTECTION_VERSION,reachedR:3,lockedR:1.2,floorRate:.024,retentionRate:.4,
+      activationRate:.012,checkpointBand:4,mode:"NORMAL",peakR:3,updatedAt:T+2000,
+    };
+    const checkpoint=buildForwardProtectionCheckpoint(next);
+    const restored=restoreForwardProtectionCheckpoint(base,checkpoint);
+    assert.deepEqual(restored.positions[0].profitProtectionMigration,next.positions[0].profitProtectionMigration);
+    assert.deepEqual(restored.positions[0].profitProtection,next.positions[0].profitProtection);
+  }
+});
+
 test("legacy full records remain readable when no protection overlay exists",async()=>{
   const{state,store}=await base();assert.deepEqual(await readForwardStore(store,T+110_000),state);
 });

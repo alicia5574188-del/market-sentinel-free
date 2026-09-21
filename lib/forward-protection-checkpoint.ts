@@ -6,7 +6,7 @@ import { MULTI_TURN_PROFIT_PROTECTION_VERSION } from "./multi-turn-profit-protec
 
 export const FORWARD_PROTECTION_CHECKPOINT_VERSION = "forward-protection-checkpoint-v1";
 type ProtectionRow = Pick<Trade, "id" | "openedAt" | "favorable" | "adverse" | "lastPrice" | "lastQuoteAt"
-  | "relationFailureBars" | "lastRelationBar" | "exitControl" | "profitProtection">;
+  | "relationFailureBars" | "lastRelationBar" | "exitControl" | "profitProtection" | "profitProtectionMigration">;
 export type ForwardProtectionCheckpoint = {
   version: typeof FORWARD_PROTECTION_CHECKPOINT_VERSION;
   startedAt: number; baseRevision: number; basePersistedAt: number; quoteCycleAt: number;
@@ -28,8 +28,10 @@ export function forwardProtectionChanged(previous: ForwardState, next: ForwardSt
     if (!p || p.openedAt !== t.openedAt) return false; // Financial change saves the full account.
     const priorBand=p.profitProtection?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?p.profitProtection.checkpointBand:-1;
     const nextBand=t.profitProtection?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?t.profitProtection.checkpointBand:-1;
+    const priorMigration=p.profitProtectionMigration?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?p.profitProtectionMigration.state:null;
+    const nextMigration=t.profitProtectionMigration?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?t.profitProtectionMigration.state:null;
     return (t.rule.exitMode === "REACTION_DECAY" && t.favorable >= t.rule.armRate && t.favorable !== p.favorable)
-      || nextBand!==priorBand
+      || nextBand!==priorBand || nextMigration!==priorMigration
       || t.relationFailureBars !== p.relationFailureBars || t.lastRelationBar !== p.lastRelationBar;
   });
 }
@@ -41,7 +43,8 @@ export function buildForwardProtectionCheckpoint(s: ForwardState): ForwardProtec
     positions: s.positions.map(t => ({ id: t.id, openedAt: t.openedAt, favorable: t.favorable, adverse: t.adverse,
       lastPrice: t.lastPrice, lastQuoteAt: t.lastQuoteAt, relationFailureBars: t.relationFailureBars,
       lastRelationBar: t.lastRelationBar, ...(t.exitControl ? { exitControl: { ...t.exitControl } } : {}),
-      ...(t.profitProtection ? { profitProtection: { ...t.profitProtection } } : {}) })) };
+      ...(t.profitProtection ? { profitProtection: { ...t.profitProtection } } : {}),
+      ...(t.profitProtectionMigration ? { profitProtectionMigration: { ...t.profitProtectionMigration } } : {}) })) };
 }
 
 /** An older overlay is harmless after any new full-account commit. A matching
@@ -70,7 +73,20 @@ export function restoreForwardProtectionCheckpoint(s: ForwardState, value: unkno
       || r.lastQuoteAt > c.quoteCycleAt + 1000 || r.lastRelationBar < t.lastRelationBar
       || r.lastRelationBar > c.quoteCycleAt || !Number.isSafeInteger(r.relationFailureBars) || r.relationFailureBars < 0
       || !!r.exitControl !== !!t.exitControl
-      || (t.profitProtection != null && r.profitProtection == null)) return invalid();
+      || (t.profitProtection != null && r.profitProtection == null)
+      || (t.profitProtectionMigration != null && r.profitProtectionMigration == null)) return invalid();
+    if(r.profitProtectionMigration){
+      const m=r.profitProtectionMigration,prior=t.profitProtectionMigration;
+      if(m.version!==MULTI_TURN_PROFIT_PROTECTION_VERSION
+        || !["CURRENT","GUARDED","DEFERRED"].includes(m.state)
+        || !Number.isFinite(m.updatedAt)||m.updatedAt<t.openedAt||m.updatedAt>c.quoteCycleAt+1000
+        || !Number.isFinite(m.baselineFavorable)||m.baselineFavorable<0||m.baselineFavorable>r.favorable+1e-12
+        || (prior&&prior.version===MULTI_TURN_PROFIT_PROTECTION_VERSION
+          && (m.updatedAt<prior.updatedAt||m.baselineFavorable+1e-12<prior.baselineFavorable
+            || (prior.state==="CURRENT"&&m.state!=="CURRENT")
+            || (prior.state==="GUARDED"&&m.state==="DEFERRED")))
+        || (m.state==="DEFERRED"&&r.profitProtection))return invalid();
+    }
     if(r.profitProtection){
       const p=r.profitProtection,prior=t.profitProtection;
       if(p.version!==MULTI_TURN_PROFIT_PROTECTION_VERSION
@@ -100,6 +116,7 @@ export function restoreForwardProtectionCheckpoint(s: ForwardState, value: unkno
       armedQuoteAt: r.exitControl.armedQuoteAt, maxObservationGapMs: r.exitControl.maxObservationGapMs,
       maxQuoteAgeMs: r.exitControl.maxQuoteAgeMs };
     if(r.profitProtection)t.profitProtection={...r.profitProtection};
+    if(r.profitProtectionMigration)t.profitProtectionMigration={...r.profitProtectionMigration};
   }
   restored.lastQuoteCycleAt = c.quoteCycleAt;
   restored.peakEquity = c.peakEquity; restored.maxDrawdown = c.maxDrawdown;

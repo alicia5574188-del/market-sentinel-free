@@ -2690,11 +2690,26 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const protectedSymbols = this.currentAuthorityProtectionSymbols();
     const actionableMarkets = this.runtime.symbols.filter((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS
       && this.runtime.contractMeta[symbol] != null && this.symbolEntryReady(symbol)).length;
-    const protectedMarketsReady = [...protectedSymbols].every((symbol) => this.runtime.symbols.includes(symbol)
-      && this.symbolManagementReady(symbol, now));
+    const missingProtectedMarkets=[...protectedSymbols].filter((symbol)=>!this.runtime.symbols.includes(symbol)
+      || !this.symbolManagementReady(symbol,now));
+    const protectedMarketsReady = missingProtectedMarkets.length===0;
     return { capacity: PORTFOLIO_REALTIME_CAPACITY, actionableMarkets,
       warmingMarkets: Math.max(0, this.runtime.symbols.length - actionableMarkets),
-      protectedMarkets: protectedSymbols.size, protectedMarketsReady };
+      protectedMarkets: protectedSymbols.size, protectedMarketsReady, missingProtectedMarkets };
+  }
+
+  private ensureProtectionSymbolsResident() {
+    const protectedSymbols=[...this.currentAuthorityProtectionSymbols()];
+    if(!protectedSymbols.length)return;
+    const protectedSet=new Set(protectedSymbols);
+    const residentNonProtected=this.runtime.symbols.filter((symbol)=>!protectedSet.has(symbol));
+    // Normal discovery capacity remains 20. If already-owned exposure ever
+    // exceeds that number, protection temporarily wins over discovery rather
+    // than orphaning a live/PAPER holding.
+    const residentLimit=Math.max(PORTFOLIO_REALTIME_CAPACITY,protectedSymbols.length);
+    const next=[...protectedSymbols,...residentNonProtected].slice(0,residentLimit);
+    if(next.length!==this.runtime.symbols.length||next.some((symbol,index)=>symbol!==this.runtime.symbols[index]))
+      this.applyRealtimeSymbols(next);
   }
 
   private cycleBookSymbols(now: number, symbols: string[]) {
@@ -2729,7 +2744,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if (result.status !== "fulfilled") {
         const prior = this.runtime.feedFailures[attemptedSymbol]?.count ?? 0;
         const count = Math.min(5, prior + 1);
-        const backoff = [2_000, 4_000, 8_000, 16_000, 30_000][count - 1];
+        const ordinaryBackoff = [2_000, 4_000, 8_000, 16_000, 30_000][count - 1];
+        const protectedSymbol=this.currentAuthorityProtectionSymbols().has(attemptedSymbol);
+        const backoff=protectedSymbol?LOOP_MS:ordinaryBackoff;
         const gateRetry = result.reason instanceof GatePublicError ? result.reason.retryAt : null;
         const error = safeError(result.reason);
         this.runtime.feedQuality.failures += 1; this.runtime.feedQuality.lastFailureAt = now;
@@ -3116,6 +3133,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     let subrequests = 0;
     try {
       const universeDue = now - this.runtime.lastUniverseAt >= UNIVERSE_MS;
+      this.ensureProtectionSymbolsResident();
       const cycleSymbols = this.cycleBookSymbols(now, [...this.runtime.symbols]);
       // The fresh executable book is the critical clock. Completed-candle,
       // universe, radar and research logging run under one non-overlapping

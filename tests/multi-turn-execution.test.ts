@@ -68,6 +68,83 @@ test("a position above one planned-risk R cannot normally give back through zero
   assert.ok((s.history[0].netPnl??0)>0);
 });
 
+test("legacy historical MFE is guarded instead of causing a retroactive profit exit",()=>{
+  const p=candles(),now=(p.at(-1)!.time+300)*1000+1000,quotes={BTC_USDT:q(p,now)};
+  let s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},quotes,contracts:{BTC_USDT:meta}}).state;
+  assert.ok(s.positions.length);
+  const t=s.positions[0],riskRate=t.plannedRisk/t.notional;
+  delete t.profitProtection;delete t.profitProtectionMigration;
+  t.favorable=riskRate*3.2;
+  const frame=s.turnEngine!.frames.BTC_USDT![t.turn!.timeframe]!;
+  frame.direction=t.side;frame.rawDirection=t.side;frame.phase="FLOW";frame.continuationScore=.55;frame.triggerProbability=.20;
+  frame.lastTurnAt=null;frame.justTurned=false;
+  const priceAt=(r:number)=>t.entryPrice*(t.side==="LONG"?1+r:1-r);
+  let later=now+1000,ret=riskRate*1.2,px=priceAt(ret);s.lastCycleAt=now;
+  s=advanceForward({state:s,now:later,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:{bestBid:px*.99999,bestAsk:px*1.00001,observedAt:later,fresh:true,entryReady:true}},contracts:{BTC_USDT:meta}}).state;
+  assert.equal(s.positions.length,1);
+  assert.equal(s.positions[0].profitProtectionMigration?.state,"GUARDED");
+  const floor=s.positions[0].profitProtection!.floorRate;
+  assert.ok(floor>0&&floor<ret,"legacy floor must start below current executable profit");
+
+  // A second quote without a new post-upgrade high must not catch the floor up
+  // to the historical 3.2R peak and force a delayed retroactive exit.
+  later+=1000;ret=riskRate*1.15;px=priceAt(ret);s.lastCycleAt=later-1000;
+  s=advanceForward({state:s,now:later,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:{bestBid:px*.99999,bestAsk:px*1.00001,observedAt:later,fresh:true,entryReady:true}},contracts:{BTC_USDT:meta}}).state;
+  assert.equal(s.positions.length,1);
+  assert.equal(s.positions[0].profitProtectionMigration?.state,"GUARDED");
+  assert.ok(s.positions[0].profitProtection!.floorRate<ret);
+});
+
+test("legacy winner that already gave back through profit defers until a safe recovery",()=>{
+  const p=candles(),now=(p.at(-1)!.time+300)*1000+1000,quotes={BTC_USDT:q(p,now)};
+  let s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},quotes,contracts:{BTC_USDT:meta}}).state;
+  assert.ok(s.positions.length);
+  const t=s.positions[0],riskRate=t.plannedRisk/t.notional;
+  delete t.profitProtection;delete t.profitProtectionMigration;
+  t.favorable=riskRate*3;
+  const frame=s.turnEngine!.frames.BTC_USDT![t.turn!.timeframe]!;
+  frame.direction=t.side;frame.rawDirection=t.side;frame.phase="FLOW";frame.continuationScore=.55;frame.triggerProbability=.20;
+  frame.lastTurnAt=null;frame.justTurned=false;
+  const priceAt=(r:number)=>t.entryPrice*(t.side==="LONG"?1+r:1-r);
+  let later=now+1000,ret=-riskRate*.20,px=priceAt(ret);s.lastCycleAt=now;
+  s=advanceForward({state:s,now:later,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:{bestBid:px*.99999,bestAsk:px*1.00001,observedAt:later,fresh:true,entryReady:true}},contracts:{BTC_USDT:meta}}).state;
+  assert.equal(s.positions.length,1);assert.equal(s.positions[0].profitProtection,undefined);
+  assert.equal(s.positions[0].profitProtectionMigration?.state,"DEFERRED");
+
+  later+=1000;ret=riskRate*.8;px=priceAt(ret);s.lastCycleAt=later-1000;
+  s=advanceForward({state:s,now:later,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:{bestBid:px*.99999,bestAsk:px*1.00001,observedAt:later,fresh:true,entryReady:true}},contracts:{BTC_USDT:meta}}).state;
+  assert.equal(s.positions.length,1);
+  assert.equal(s.positions[0].profitProtectionMigration?.state,"GUARDED");
+  assert.ok((s.positions[0].profitProtection?.floorRate??0)>0);
+  assert.ok((s.positions[0].profitProtection?.floorRate??Infinity)<ret);
+});
+
+test("a post-upgrade new high releases a guarded legacy trade into normal monotonic protection",()=>{
+  const p=candles(),now=(p.at(-1)!.time+300)*1000+1000,quotes={BTC_USDT:q(p,now)};
+  let s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},quotes,contracts:{BTC_USDT:meta}}).state;
+  const t=s.positions[0],riskRate=t.plannedRisk/t.notional;
+  delete t.profitProtection;delete t.profitProtectionMigration;t.favorable=riskRate*2.5;
+  const frame=s.turnEngine!.frames.BTC_USDT![t.turn!.timeframe]!;
+  frame.direction=t.side;frame.rawDirection=t.side;frame.phase="FLOW";frame.continuationScore=.75;frame.triggerProbability=.10;
+  frame.lastTurnAt=null;frame.justTurned=false;
+  const priceAt=(r:number)=>t.entryPrice*(t.side==="LONG"?1+r:1-r);
+  let later=now+1000,ret=riskRate*1.5,px=priceAt(ret);s.lastCycleAt=now;
+  s=advanceForward({state:s,now:later,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:{bestBid:px*.99999,bestAsk:px*1.00001,observedAt:later,fresh:true,entryReady:true}},contracts:{BTC_USDT:meta}}).state;
+  assert.equal(s.positions[0].profitProtectionMigration?.state,"GUARDED");
+  const baseline=s.positions[0].profitProtectionMigration!.baselineFavorable;
+
+  later+=1000;ret=baseline+riskRate*.10;px=priceAt(ret);s.lastCycleAt=later-1000;
+  s=advanceForward({state:s,now:later,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:{bestBid:px*.99999,bestAsk:px*1.00001,observedAt:later,fresh:true,entryReady:true}},contracts:{BTC_USDT:meta}}).state;
+  assert.equal(s.positions[0].profitProtectionMigration?.state,"CURRENT");
+  assert.ok(s.positions[0].favorable>baseline);
+});
+
 test("a tightened profit floor never loosens again when continuation later recovers",()=>{
   const p=candles(),now=(p.at(-1)!.time+300)*1000+1000,quotes={BTC_USDT:q(p,now)};
   let s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},quotes,contracts:{BTC_USDT:meta}}).state;
