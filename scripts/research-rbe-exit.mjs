@@ -157,24 +157,41 @@ for(let now=start;now<=end;now+=300){
     if(!pair.candidate.closedAt){
       const dec=predictMultiTurnExit({side:pair.side,timeframe:pair.timeframe,entryPrice:pair.candidate.entry,stopPrice:pair.candidate.stop,
         currentPrice:row.close,favorable:pair.candidate.mfe,frames:frames[symbol]},pair.config);
+      const leg=pair.candidate,atr=Math.max(own?.atrRate??.001,1e-9);
+      const renewed=(leg.mfe-(leg.rbeArmedMfe??leg.mfe))/atr;
       if(dec?.shouldExit){
-        const stage=pair.candidate.rbeStage??0;
-        const currentAtr=dec.diagnostics.currentReturnAtr;
-        const renewed=(pair.candidate.mfe-(pair.candidate.lastRbeMfe??0))/Math.max(own?.atrRate??.001,1e-9);
-        const severe=dec.diagnostics.ownTurn>=.84&&dec.diagnostics.structureBreak>=.55
-          ||dec.shockHazard>=.93;
-        if(stage===0&&currentAtr>.35){
-          // Prediction acts immediately, but uncertainty is expressed as size:
-          // bank only 20%, leaving 80% to participate if the trend renews.
-          reduceLeg(pair.candidate,row.close,now,.20,"RBE_REDUCE_20",dec);
-        }else if(severe||currentAtr<=.35){
-          // Full liquidation needs either near-exhausted profit cushion or
-          // exceptional own-timeframe/shock evidence.
-          pair.candidate.rbe=dec;closeLeg(pair.candidate,row.close,now,"RBE_FULL");
-        }else if(stage===1&&renewed<.20&&now-(pair.candidate.lastRbeAt??0)>=tfSeconds[pair.timeframe]*1000){
-          // Persistent unrenewed danger can bank one additional 15%; never
-          // cascade reductions on every 5m tick.
-          reduceLeg(pair.candidate,row.close,now,.15,"RBE_REDUCE_15",dec);
+        const severe=dec.diagnostics.ownTurn>=.84&&dec.diagnostics.structureBreak>=.55||dec.shockHazard>=.93;
+        if(!leg.rbeArmedAt){
+          // First predictive hit only arms the state. We do not wait for price
+          // confirmation; we wait for the predictive state itself to persist.
+          leg.rbeArmedAt=now;leg.rbeArmedMfe=leg.mfe;leg.rbeArmedHazard=dec.reversalHazard;
+          leg.rbeArmedSurvival=dec.extensionSurvival;leg.rbeSignalCount=1;leg.rbe=dec;
+        }else{
+          const separated=now-(leg.lastRbeSignalAt??leg.rbeArmedAt)>=300_000;
+          if(separated)leg.rbeSignalCount=(leg.rbeSignalCount??1)+1;
+          const hazardPersistent=dec.reversalHazard>=(leg.rbeArmedHazard??0)-.035;
+          const survivalPersistent=dec.extensionSurvival<=(leg.rbeArmedSurvival??1)+.05;
+          const persistent=(leg.rbeSignalCount??0)>=2&&hazardPersistent&&survivalPersistent&&renewed<.45;
+          if(persistent&&severe){
+            leg.rbe=dec;closeLeg(leg,row.close,now,"RBE_FULL_SEVERE");
+          }else if(persistent&&(leg.rbeStage??0)===0){
+            // Two independent completed-5m observations agree before any size
+            // is cut. Bank 20%, leaving 80% to keep compounding if trend renews.
+            reduceLeg(leg,row.close,now,.20,"RBE_REDUCE_20_PERSISTENT",dec);
+          }else if(persistent&&(leg.rbeStage??0)===1&&(leg.rbeSignalCount??0)>=4
+            &&dec.diagnostics.currentReturnAtr<=.35){
+            // A full exit still needs prolonged predictive danger plus a
+            // compressed remaining cushion; not a raw giveback stop.
+            leg.rbe=dec;closeLeg(leg,row.close,now,"RBE_FULL_PERSISTENT");
+          }
+        }
+        leg.lastRbeSignalAt=now;
+      }else if(leg.rbeArmedAt){
+        // A renewed extension or a material hazard collapse invalidates the
+        // prior warning. This lets genuine runners clear stale alarms.
+        if(renewed>=.45||!dec||dec.reversalHazard<(leg.rbeArmedHazard??1)-.12){
+          leg.rbeArmedAt=0;leg.rbeArmedMfe=leg.mfe;leg.rbeArmedHazard=0;leg.rbeArmedSurvival=1;
+          leg.rbeSignalCount=0;leg.lastRbeSignalAt=0;
         }
       }
     }
@@ -189,7 +206,8 @@ for(let now=start;now<=end;now+=300){
     const c=candidates[0];if(!c)continue;
     const side=c.f.direction,d=signFor(side),entry=row.close*(1+d*.00025),stop=entry*(1-d*c.f.stopRate);
     const config=RBE_EXIT_CONFIGS.balanced,base={side,entry,stop,entryAtr:c.f.atrRate,openedAt:now,closedAt:0,exit:0,net:0,mfe:0,mae:0,
-      reason:"",remaining:1,realized:0,rbeStage:0,rbeActions:0,lastRbeAt:0,lastRbeMfe:0};
+      reason:"",remaining:1,realized:0,rbeStage:0,rbeActions:0,lastRbeAt:0,lastRbeMfe:0,
+      rbeArmedAt:0,rbeArmedMfe:0,rbeArmedHazard:0,rbeArmedSurvival:1,rbeSignalCount:0,lastRbeSignalAt:0};
     const pair={symbol,side,timeframe:c.tf,openedAt:now,config,baseline:{...base},candidate:{...base}};active.set(symbol,pair);paired.push(pair);
   }
 }
