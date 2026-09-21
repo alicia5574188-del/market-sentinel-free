@@ -1128,7 +1128,7 @@ jobs:
               .runtime.strategyData.polarityReady == true and
               .runtime.strategyData.lastCompletedCandleAt > 0 and
               .runtime.strategyData.marketContextMarkets >= 8 and
-              .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 11 and
+              .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 20 and
               .runtime.strategyArena.rules.singleTradeRiskMin == 0.015 and
               .runtime.strategyArena.rules.singleTradeRiskMax == 0.015 and
               .runtime.strategyArena.rules.minimumPortfolioRiskUsdt == 0 and
@@ -1346,7 +1346,7 @@ jobs:
             .runtime.strategyData.polarityReady == true and
             .runtime.strategyData.lastCompletedCandleAt > 0 and
             .runtime.strategyData.marketContextMarkets >= 8 and
-            .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 11 and
+            .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 20 and
             .runtime.limits.plannedTotalDoRequestsPerDay < 55000 and
             .runtime.limits.plannedDoWritesPerDay == 63032 and
             .runtime.limits.twoMemberReservedDoRowsPerDay == 99192 and
