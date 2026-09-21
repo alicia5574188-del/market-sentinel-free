@@ -177,23 +177,32 @@ for(let now=start;now<=end;now+=300){
           actionDebug.arms++;leg.rbeArmedAt=now;leg.rbeArmedMfe=leg.mfe;leg.rbeArmedHazard=dec.reversalHazard;
           leg.rbeArmedSurvival=dec.extensionSurvival;leg.rbeSignalCount=1;leg.rbe=dec;
         }else{
-          const separated=now-(leg.lastRbeSignalAt??leg.rbeArmedAt)>=300_000;
-          if(separated)leg.rbeSignalCount=(leg.rbeSignalCount??1)+1;
-          const hazardPersistent=dec.reversalHazard>=(leg.rbeArmedHazard??0)-.035;
-          const survivalPersistent=dec.extensionSurvival<=(leg.rbeArmedSurvival??1)+.05;
-          const persistent=(leg.rbeSignalCount??0)>=2&&hazardPersistent&&survivalPersistent&&renewed<.45;
-          if(persistent)actionDebug.persistent++;
-          if(persistent&&severe&&dec.shouldExit){
-            actionDebug.full++;leg.rbe=dec;closeLeg(leg,row.close,now,"RBE_FULL_SEVERE");
-          }else if(persistent&&(leg.rbeStage??0)===0){
-            // Two independent completed-5m observations agree before any size
-            // is cut. Bank 20%, leaving 80% to keep compounding if trend renews.
-            actionDebug.reductions++;reduceLeg(leg,row.close,now,.20,"RBE_REDUCE_20_PERSISTENT",dec);
-          }else if(persistent&&(leg.rbeStage??0)===1&&(leg.rbeSignalCount??0)>=4
-            &&dec.shouldExit&&dec.diagnostics.currentReturnAtr<=.35){
-            // A full exit still needs prolonged predictive danger plus a
-            // compressed remaining cushion; not a raw giveback stop.
-            actionDebug.full++;leg.rbe=dec;closeLeg(leg,row.close,now,"RBE_FULL_PERSISTENT");
+          if(renewed>=.45&&!severe){
+            // A real extension after the warning means the old warning became
+            // stale. Re-arm from the new MFE instead of permanently blocking
+            // persistence or cutting a trend that just proved it can extend.
+            actionDebug.resets++;actionDebug.arms++;
+            leg.rbeArmedAt=now;leg.rbeArmedMfe=leg.mfe;leg.rbeArmedHazard=dec.reversalHazard;
+            leg.rbeArmedSurvival=dec.extensionSurvival;leg.rbeSignalCount=1;leg.rbe=dec;
+          }else{
+            const separated=now-(leg.lastRbeSignalAt??leg.rbeArmedAt)>=300_000;
+            if(separated)leg.rbeSignalCount=(leg.rbeSignalCount??1)+1;
+            const hazardPersistent=dec.reversalHazard>=(leg.rbeArmedHazard??0)-.035;
+            const survivalPersistent=dec.extensionSurvival<=(leg.rbeArmedSurvival??1)+.05;
+            const persistent=(leg.rbeSignalCount??0)>=2&&hazardPersistent&&survivalPersistent;
+            if(persistent)actionDebug.persistent++;
+            if(persistent&&severe&&dec.shouldExit){
+              actionDebug.full++;leg.rbe=dec;closeLeg(leg,row.close,now,"RBE_FULL_SEVERE");
+            }else if(persistent&&(leg.rbeStage??0)===0){
+              // Two independent completed-5m observations agree before any size
+              // is cut. Bank 20%, leaving 80% to keep compounding if trend renews.
+              actionDebug.reductions++;reduceLeg(leg,row.close,now,.20,"RBE_REDUCE_20_PERSISTENT",dec);
+            }else if(persistent&&(leg.rbeStage??0)===1&&(leg.rbeSignalCount??0)>=4
+              &&dec.shouldExit&&dec.diagnostics.currentReturnAtr<=.35){
+              // A full exit still needs prolonged predictive danger plus a
+              // compressed remaining cushion; not a raw giveback stop.
+              actionDebug.full++;leg.rbe=dec;closeLeg(leg,row.close,now,"RBE_FULL_PERSISTENT");
+            }
           }
         }
         leg.lastRbeSignalAt=now;
