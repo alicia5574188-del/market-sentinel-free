@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { advanceForward, forwardEquity, forwardWatchSymbols, initialForward, initialMultiTurnForward, multiTurnEntryLeverage, MULTI_TURN_TARGET_LEVERAGE, type Candle, type Contract, type Quote } from "../lib/forward-relations.ts";
+import { advanceForward, forwardEquity, forwardWatchSymbols, initialForward, initialMultiTurnForward, multiTurnEntryLeverage, MULTI_TURN_TARGET_LEVERAGE, turnModeledCost, type Candle, type Contract, type Quote } from "../lib/forward-relations.ts";
 import { MULTI_TURN_VERSION, TURN_CONFIG, TURN_TIMEFRAMES, evaluateMultiTurn, initialMultiTurn } from "../lib/multi-turn-engine.ts";
 import { FORWARD_PROTECTION_STORAGE, FORWARD_STORAGE, prepareForwardReset, prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
 
@@ -121,13 +121,15 @@ test("only the current scan universe can create or occupy new Multi-Turn entry s
 });
 
 
-test("safe Multi-Turn entries use the 20x target leverage and derive margin from notional",()=>{
-  const p=candles(),now=(p.at(-1)!.time+300)*1000+1000;
+test("Multi-Turn entries use the exact 20x-or-lower safe leverage and derive margin from notional",()=>{
+  const p=candles(),now=(p.at(-1)!.time+300)*1000+1000,quote=q(p,now);
   const result=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},
-    quotes:{BTC_USDT:q(p,now)},contracts:{BTC_USDT:meta}}).state;
+    quotes:{BTC_USDT:quote},contracts:{BTC_USDT:meta}}).state;
   assert.ok(result.positions.length);
-  const t=result.positions[0];
-  assert.equal(t.leverage,MULTI_TURN_TARGET_LEVERAGE);
+  const t=result.positions[0],mid=(quote.bestBid+quote.bestAsk)/2,spread=(quote.bestAsk-quote.bestBid)/mid;
+  const expected=multiTurnEntryLeverage(t.rule.stopRate,meta.maintenanceRate,turnModeledCost(t.turn!.timeframe,spread),meta.leverageMax);
+  assert.equal(t.leverage,expected);
+  assert.ok(t.leverage<=MULTI_TURN_TARGET_LEVERAGE);
   assert.ok(Math.abs(t.margin-t.notional/t.leverage)<1e-9);
 });
 
