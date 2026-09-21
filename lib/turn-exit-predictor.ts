@@ -52,6 +52,7 @@ export type PredictiveExitDecision = {
     ownTurn: number;
     ownDecay: number;
     lowerLead: number;
+    adjacentLowerOpposition: number;
     lowerSupport: number;
     upperSupport: number;
     upperOpposition: number;
@@ -110,6 +111,8 @@ export function predictMultiTurnExit(input:PredictiveExitInput,
   const lowerWeights=lower.map((_,i)=>1+(i+1)/Math.max(1,lower.length));
   const lowerOpp=lower.map((f,i)=>opposition(f,input.side)*lowerWeights[i]);
   const lowerLead=lowerOpp.length?clip(lowerOpp.reduce((a,b)=>a+b,0)/lowerWeights.reduce((a,b)=>a+b,0)):0;
+  const adjacentLower=ownIndex>0?input.frames[TURN_TIMEFRAMES[ownIndex-1]]:undefined;
+  const adjacentLowerOpposition=opposition(adjacentLower,input.side);
   const lowerSupport=lower.length?clip(mean(lower.map(f=>sameSideSupport(f,input.side)))):ownContinuity;
   const upperSupport=upper.length?clip(mean(upper.map(f=>sameSideSupport(f,input.side)))):ownContinuity;
   const upperOpposition=upper.length?clip(mean(upper.map(f=>opposition(f,input.side)))):0;
@@ -155,7 +158,10 @@ export function predictMultiTurnExit(input:PredictiveExitInput,
   // Strong higher-TF continuation is an explicit veto unless shock evidence is
   // exceptional. This is the key asymmetry that protects large runners.
   const ownDeteriorating=ownDecay>=.55||ownTurn>=.55||own.rawDirection===opposite(input.side);
-  const propagatedThreat=lowerLead>=.52&&(ownDeteriorating||sequenceShift>=.58);
+  const propagationConfirmed=ownIndex<=1
+    ?lowerLead>=.52
+    :lowerLead>=.45&&adjacentLowerOpposition>=.58;
+  const propagatedThreat=propagationConfirmed&&(ownDeteriorating||sequenceShift>=.58);
   const structuralThreat=sequenceShift>=.62&&structureBreak>=.48;
   const shockThreat=shockHazard>=.84;
   const genericHigherTrendVeto=upperSupport>=.62&&upperOpposition<.35&&shockHazard<.90;
@@ -199,7 +205,8 @@ export function predictMultiTurnExit(input:PredictiveExitInput,
 
   let phase:PredictiveExitPhase="HEALTHY";
   if(shouldExit)phase="PRE_TURN_EXIT";
-  else if(eligible&&reversalHazard>=config.defensiveHazard&&holdValueRate<=0&&evidenceFamilies>=2)phase="DEFENSIVE";
+  else if(eligible&&!higherTrendVeto&&genericThreat&&fourHourThreat
+    &&reversalHazard>=config.defensiveHazard&&holdValueRate<=0&&evidenceFamilies>=2)phase="DEFENSIVE";
   else if(reversalHazard>=.34||holdValueRate<=0)phase="EARLY_WARNING";
 
   const reason=shouldExit
@@ -208,6 +215,6 @@ export function predictMultiTurnExit(input:PredictiveExitInput,
 
   return{version:RBE_EXIT_VERSION,phase,shouldExit,reversalHazard,slowHazard,shockHazard,extensionSurvival,
     holdValueRate,expectedExtensionRate,expectedReversalCostRate,evidenceFamilies,eligible,
-    diagnostics:{ownTurn,ownDecay,lowerLead,lowerSupport,upperSupport,upperOpposition,sequenceShift,structureBreak,
+    diagnostics:{ownTurn,ownDecay,lowerLead,adjacentLowerOpposition,lowerSupport,upperSupport,upperOpposition,sequenceShift,structureBreak,
       breadthPressure,currentReturn,profitGiveback,runnerMfeAtr,givebackAtr,currentReturnAtr},reason};
 }
