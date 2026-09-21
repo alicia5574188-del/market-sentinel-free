@@ -919,7 +919,7 @@ test("open-position health needs a fresh executable book, not ancillary entry wa
   stream.runtime.contractMeta = Object.fromEntries(stream.runtime.symbols.map((symbol: string) => [symbol, {
     quantoMultiplier: 1, maintenanceRate: 0.005, leverageMax: 20, fundingRate: 0,
   }]));
-  stream.runtime.strategyArena.portfolioOpen = { HELD_USDT: portfolioTrade("HELD_USDT", now - 60_000) };
+  await currentForwardFixture(stream,[portfolioTrade("HELD_USDT", now - 60_000)]);
   stream.sessionWarmup.HELD_USDT = 0;
   stream.sessionWarmup.READY_USDT = 4;
   stream.runtime.evidence = {
@@ -946,7 +946,7 @@ test("a stale open-position book still degrades health even when other markets a
   stream.runtime.contractMeta = Object.fromEntries(stream.runtime.symbols.map((symbol: string) => [symbol, {
     quantoMultiplier: 1, maintenanceRate: 0.005, leverageMax: 20, fundingRate: 0,
   }]));
-  stream.runtime.strategyArena.portfolioOpen = { HELD_USDT: portfolioTrade("HELD_USDT", now - 60_000) };
+  await currentForwardFixture(stream,[portfolioTrade("HELD_USDT", now - 60_000)]);
   stream.sessionWarmup.HELD_USDT = 4;
   stream.sessionWarmup.READY_USDT = 4;
   stream.runtime.evidence = {
@@ -960,6 +960,31 @@ test("a stale open-position book still degrades health even when other markets a
   stream.publishCriticalHealth(now, { successes: 1, requests: 1 });
   assert.equal(stream.runtime.state, "DEGRADED");
   assert.match(stream.runtime.lastError, /protected position/);
+});
+
+test("retired sidecar PAPER positions cannot consume current authority protection slots", async (t) => {
+  const { stream } = await makeStream();
+  const now = 1_800_000_213_500;
+  t.mock.method(Date, "now", () => now);
+  stream.runtime.symbols = ["READY_USDT"];
+  stream.runtime.lastSuccessAt = now;
+  stream.runtime.contractMeta.READY_USDT = {
+    quantoMultiplier: 1, maintenanceRate: 0.005, leverageMax: 20, fundingRate: 0,
+  };
+  stream.sessionWarmup.READY_USDT = 4;
+  stream.runtime.evidence.READY_USDT = {
+    midpoint: 50, bestBid: 49.99, bestAsk: 50.01, observedAt: now, warmup: 4,
+    fresh: true, ancillaryFresh: true, entryReady: true, topLong: null, topShort: null, absorption: 0, range15m: null,
+  };
+  stream.runtime.regimePortfolio.accounts.BALANCED_ROTATION.open.LEGACY_USDT =
+    portfolioTrade("LEGACY_USDT", now - 60_000) as never;
+
+  const readiness = stream.realtimeReadiness(now);
+  assert.equal(readiness.protectedMarkets, 0, "hidden retired/sidecar PAPER cannot freeze the visible Multi-Turn account");
+  assert.equal(readiness.protectedMarketsReady, true);
+  stream.publishCriticalHealth(now, { successes: 1, requests: 1 });
+  assert.equal(stream.runtime.state, "LIVE");
+  assert.equal(stream.runtime.lastError, null);
 });
 
 test("a stale prepared plan freezes only that entry and is not a protected-position outage", async (t) => {
