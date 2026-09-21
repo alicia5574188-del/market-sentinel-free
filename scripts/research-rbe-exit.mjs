@@ -146,7 +146,7 @@ for(let now=start;now<=end;now+=300){
     if(!pair.candidate.closedAt){
       const dec=predictMultiTurnExit({side:pair.side,timeframe:pair.timeframe,entryPrice:pair.candidate.entry,stopPrice:pair.candidate.stop,
         currentPrice:row.close,favorable:pair.candidate.mfe,frames:frames[symbol]},pair.config);
-      if(dec?.shouldExit)closeLeg(pair.candidate,row.close,now,"RBE");
+      if(dec?.shouldExit){pair.candidate.rbe=dec;closeLeg(pair.candidate,row.close,now,"RBE");}
     }
     if(pair.baseline.closedAt){if(!pair.candidate.closedAt)closeLeg(pair.candidate,row.close,now,"BASELINE_END");active.delete(symbol);}
   }
@@ -186,6 +186,25 @@ const cohortByTimeframe=Object.fromEntries(TURN_TIMEFRAMES.map(tf=>{
   }];
 }));
 console.log("RBE_RESEARCH_SUMMARY="+JSON.stringify({source:raw.source,months:raw.months,symbols,paired:paired.length,all,folds,byTimeframe,cohort,cohortByTimeframe},null,2));
+const rbeFields=["reversalHazard","slowHazard","shockHazard","extensionSurvival","holdValueRate","expectedExtensionRate","expectedReversalCostRate","evidenceFamilies"];
+const rbeDiagFields=["ownTurn","ownDecay","lowerLead","lowerSupport","upperSupport","upperOpposition","sequenceShift","structureBreak","breadthPressure","currentReturn","profitGiveback","runnerMfeAtr","givebackAtr"];
+function rbeFeatureMeans(rows){
+  const exits=rows.map(x=>x.candidate.rbe).filter(Boolean);
+  const out={n:exits.length};
+  for(const key of rbeFields)out[key]=mean(exits.map(x=>Number(x[key]??0)));
+  for(const key of rbeDiagFields)out[key]=mean(exits.map(x=>Number(x.diagnostics?.[key]??0)));
+  return out;
+}
+const falseRunnerExits=runnerRows.filter(x=>x.candidate.reason==="RBE");
+const savedGivebackExits=givebackRows.filter(x=>x.candidate.reason==="RBE"&&x.candidate.net>x.baseline.net);
+const harmfulGivebackExits=givebackRows.filter(x=>x.candidate.reason==="RBE"&&x.candidate.net<=x.baseline.net);
+const rbeExitDiagnostics={
+  falseRunner:rbeFeatureMeans(falseRunnerExits),
+  savedGiveback:rbeFeatureMeans(savedGivebackExits),
+  harmfulGiveback:rbeFeatureMeans(harmfulGivebackExits),
+};
+console.log("RBE_EXIT_DIAGNOSTICS="+JSON.stringify(rbeExitDiagnostics,null,2));
+
 const foldWins=folds.filter(x=>x.candidate.net>x.baseline.net).length;
 const reversalImproved=all.candidate.reversals<all.baseline.reversals;
 const captureImproved=all.candidate.capture>all.baseline.capture;
