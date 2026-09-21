@@ -4,8 +4,10 @@
 export const MEMBERS_VERSION = "isolated-member-keys-v1";
 export const MEMBER_COOKIE = "ms_member_session";
 export const MEMBER_TTL = 30 * 86400;
-export const MEMBER_LIMIT = 20;
+export const MEMBER_LIMIT = 50;
 export const MEMBER_ACTIVE_LIMIT = 2; // bounded initial rollout, never the primary owner
+export const MEMBER_AUTH_VERSION = "invite-username-password-v1";
+export const MEMBER_PASSWORD_ITERATIONS = 120_000;
 const enc = new TextEncoder();
 export const hex = (v: ArrayBuffer) => [...new Uint8Array(v)].map(x=>x.toString(16).padStart(2,"0")).join("");
 export async function digestMember(value:string) { return hex(await crypto.subtle.digest("SHA-256",enc.encode(value))); }
@@ -53,4 +55,33 @@ export async function encryptMemberText(value:string,root:string,context:string)
 export async function decryptMemberText(v:{iv:number[];bytes:number[]},root:string,context:string) {
   const key=await crypto.subtle.importKey("raw",Uint8Array.from((await mac(root,`member-text:${context}`)).match(/../g)!,x=>parseInt(x,16)),"AES-GCM",false,["decrypt"]);
   return new TextDecoder("utf-8",{fatal:true}).decode(await crypto.subtle.decrypt({name:"AES-GCM",iv:new Uint8Array(v.iv),additionalData:enc.encode(context)},key,new Uint8Array(v.bytes)));
+}
+export function normalizeMemberUsername(raw:unknown) {
+  if(typeof raw!=="string")return null;
+  const display=raw.normalize("NFKC").trim();
+  if(display.length<2||display.length>32||!/^[\p{L}\p{N}][\p{L}\p{N}_.-]{1,31}$/u.test(display))return null;
+  return {display,key:display.toLocaleLowerCase("en-US")};
+}
+export function normalizeInviteCode(raw:unknown) {
+  if(typeof raw!=="string")return null;
+  const code=raw.normalize("NFKC").trim().toUpperCase();
+  return /^INV-[A-F0-9]{24}$/.test(code)?code:null;
+}
+export function validateMemberPassword(raw:unknown) {
+  if(typeof raw!=="string"||raw.length<8||raw.length>128)return null;
+  return raw;
+}
+async function derivePasswordHash(password:string,saltHex:string,iterations:number) {
+  const salt=Uint8Array.from(saltHex.match(/../g)??[],x=>parseInt(x,16));
+  const material=await crypto.subtle.importKey("raw",enc.encode(password),"PBKDF2",false,["deriveBits"]);
+  return hex(await crypto.subtle.deriveBits({name:"PBKDF2",hash:"SHA-256",salt,iterations},material,256));
+}
+export async function createMemberPassword(password:string) {
+  const salt=randomHex(16),iterations=MEMBER_PASSWORD_ITERATIONS;
+  return {salt,iterations,hash:await derivePasswordHash(password,salt,iterations)};
+}
+export async function verifyMemberPassword(password:string,record:{salt:string;iterations:number;hash:string}) {
+  if(!/^[a-f0-9]{32}$/.test(record.salt)||!Number.isSafeInteger(record.iterations)||record.iterations<50_000||record.iterations>500_000
+    ||!/^[a-f0-9]{64}$/.test(record.hash))return false;
+  return equalSecret(await derivePasswordHash(password,record.salt,record.iterations),record.hash);
 }

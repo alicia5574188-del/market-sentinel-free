@@ -31,6 +31,7 @@ export class Memory {
   async getAlarm(){return this.alarm;}async setAlarm(value:number){this.alarm=value;}
   async deleteAlarm(){this.alarm=null;}
   async delete(key:string|string[]){let n=0;for(const k of typeof key==="string"?[key]:key)n+=Number(this.data.delete(k));return n;}
+  async deleteAll(){this.data.clear();this.alarm=null;}
 }
 export class FakeGate {
   account:GateLiveAccount={user:"synthetic-member",total:100,available:100,unrealised_pnl:0,in_dual_mode:false};
