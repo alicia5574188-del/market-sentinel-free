@@ -4,7 +4,7 @@
 export const MEMBERS_VERSION = "isolated-member-keys-v1";
 export const MEMBER_COOKIE = "ms_member_session";
 export const MEMBER_TTL = 30 * 86400;
-export const MEMBER_LIMIT = 20;
+export const MEMBER_LIMIT = 50;
 export const MEMBER_ACTIVE_LIMIT = 2; // bounded initial rollout, never the primary owner
 export const MEMBER_AUTH_VERSION = "invite-username-password-v1";
 export const MEMBER_PASSWORD_ITERATIONS = 120_000;
