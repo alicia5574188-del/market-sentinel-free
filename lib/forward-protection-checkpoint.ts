@@ -2,11 +2,11 @@
  * strategy or financial ledger. The full atomic forward record stays authority.
  */
 import type { ForwardState, Trade } from "./forward-relations.ts";
-import { multiTurnProfitFloor } from "./multi-turn-profit-protection.ts";
+import { MULTI_TURN_PROFIT_PROTECTION_VERSION } from "./multi-turn-profit-protection.ts";
 
 export const FORWARD_PROTECTION_CHECKPOINT_VERSION = "forward-protection-checkpoint-v1";
 type ProtectionRow = Pick<Trade, "id" | "openedAt" | "favorable" | "adverse" | "lastPrice" | "lastQuoteAt"
-  | "relationFailureBars" | "lastRelationBar" | "exitControl">;
+  | "relationFailureBars" | "lastRelationBar" | "exitControl" | "profitProtection">;
 export type ForwardProtectionCheckpoint = {
   version: typeof FORWARD_PROTECTION_CHECKPOINT_VERSION;
   startedAt: number; baseRevision: number; basePersistedAt: number; quoteCycleAt: number;
@@ -26,11 +26,10 @@ export function forwardProtectionChanged(previous: ForwardState, next: ForwardSt
   return next.positions.some(t => {
     const p = prior.get(t.id);
     if (!p || p.openedAt !== t.openedAt) return false; // Financial change saves the full account.
-    const riskRate=t.plannedRisk/Math.max(t.notional,1e-9);
-    const priorProfitTier=t.rule.authority==="MULTI_TURN"?multiTurnProfitFloor(p.favorable,riskRate)?.tier??-1:-1;
-    const nextProfitTier=t.rule.authority==="MULTI_TURN"?multiTurnProfitFloor(t.favorable,riskRate)?.tier??-1:-1;
+    const priorBand=p.profitProtection?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?p.profitProtection.checkpointBand:-1;
+    const nextBand=t.profitProtection?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?t.profitProtection.checkpointBand:-1;
     return (t.rule.exitMode === "REACTION_DECAY" && t.favorable >= t.rule.armRate && t.favorable !== p.favorable)
-      || nextProfitTier!==priorProfitTier
+      || nextBand!==priorBand
       || t.relationFailureBars !== p.relationFailureBars || t.lastRelationBar !== p.lastRelationBar;
   });
 }
@@ -41,7 +40,8 @@ export function buildForwardProtectionCheckpoint(s: ForwardState): ForwardProtec
     peakEquity: s.peakEquity, maxDrawdown: s.maxDrawdown,
     positions: s.positions.map(t => ({ id: t.id, openedAt: t.openedAt, favorable: t.favorable, adverse: t.adverse,
       lastPrice: t.lastPrice, lastQuoteAt: t.lastQuoteAt, relationFailureBars: t.relationFailureBars,
-      lastRelationBar: t.lastRelationBar, ...(t.exitControl ? { exitControl: { ...t.exitControl } } : {}) })) };
+      lastRelationBar: t.lastRelationBar, ...(t.exitControl ? { exitControl: { ...t.exitControl } } : {}),
+      ...(t.profitProtection ? { profitProtection: { ...t.profitProtection } } : {}) })) };
 }
 
 /** An older overlay is harmless after any new full-account commit. A matching
@@ -69,7 +69,19 @@ export function restoreForwardProtectionCheckpoint(s: ForwardState, value: unkno
       || r.favorable < t.favorable || r.adverse < t.adverse || r.lastPrice <= 0 || r.lastQuoteAt < t.lastQuoteAt
       || r.lastQuoteAt > c.quoteCycleAt + 1000 || r.lastRelationBar < t.lastRelationBar
       || r.lastRelationBar > c.quoteCycleAt || !Number.isSafeInteger(r.relationFailureBars) || r.relationFailureBars < 0
-      || !!r.exitControl !== !!t.exitControl) return invalid();
+      || !!r.exitControl !== !!t.exitControl
+      || (t.profitProtection != null && r.profitProtection == null)) return invalid();
+    if(r.profitProtection){
+      const p=r.profitProtection,prior=t.profitProtection;
+      if(p.version!==MULTI_TURN_PROFIT_PROTECTION_VERSION
+        || ![p.reachedR,p.lockedR,p.floorRate,p.retentionRate,p.activationRate,p.checkpointBand,p.peakR,p.updatedAt].every(Number.isFinite)
+        || p.floorRate<=0||p.lockedR<=0||p.retentionRate<=0||p.retentionRate>=1||p.activationRate<=0
+        || !["STRONG_TREND","HEALTHY_TREND","NORMAL","WEAKENING"].includes(p.mode)
+        || p.peakR<p.lockedR||!Number.isSafeInteger(p.checkpointBand)||p.checkpointBand<0
+        || p.updatedAt<t.openedAt||p.updatedAt>c.quoteCycleAt+1000
+        || (prior&&(p.floorRate+1e-12<prior.floorRate||p.checkpointBand<prior.checkpointBand||p.peakR<prior.peakR)))
+        return invalid();
+    }
     if (r.exitControl && t.exitControl) {
       const a = r.exitControl, b = t.exitControl;
       if (a.policy !== b.policy || !Number.isFinite(a.maxObservationGapMs) || !Number.isFinite(a.maxQuoteAgeMs)
@@ -87,6 +99,7 @@ export function restoreForwardProtectionCheckpoint(s: ForwardState, value: unkno
     if (r.exitControl) t.exitControl = { policy: r.exitControl.policy, armedAt: r.exitControl.armedAt,
       armedQuoteAt: r.exitControl.armedQuoteAt, maxObservationGapMs: r.exitControl.maxObservationGapMs,
       maxQuoteAgeMs: r.exitControl.maxQuoteAgeMs };
+    if(r.profitProtection)t.profitProtection={...r.profitProtection};
   }
   restored.lastQuoteCycleAt = c.quoteCycleAt;
   restored.peakEquity = c.peakEquity; restored.maxDrawdown = c.maxDrawdown;

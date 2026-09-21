@@ -1,41 +1,85 @@
-export const MULTI_TURN_PROFIT_PROTECTION_VERSION="multi-turn-profit-floor-v2";
+export const MULTI_TURN_PROFIT_PROTECTION_VERSION="multi-turn-profit-floor-v3";
+
+export type MultiTurnProfitSignal={
+  continuationScore?:number|null;
+  turnProbability?:number|null;
+  phase?:string|null;
+  rawDirectionAligned?:boolean|null;
+};
 
 export type MultiTurnProfitFloor={
   version:typeof MULTI_TURN_PROFIT_PROTECTION_VERSION;
-  tier:number;armedAtR:number;reachedR:number;lockedR:number;
-  floorRate:number;retentionRate:number;
+  reachedR:number;
+  lockedR:number;
+  floorRate:number;
+  retentionRate:number;
+  activationRate:number;
+  checkpointBand:number;
+  mode:"STRONG_TREND"|"HEALTHY_TREND"|"NORMAL"|"WEAKENING";
 };
 
-const TIERS=[
-  {mfeR:1.0,lockR:.15},
-  {mfeR:1.5,lockR:.45},
-  {mfeR:2.0,lockR:.80},
-  {mfeR:3.0,lockR:1.40},
-  {mfeR:5.0,lockR:2.80},
-  {mfeR:8.0,lockR:5.00},
-  {mfeR:12.0,lockR:8.00},
-  {mfeR:20.0,lockR:14.00},
-  {mfeR:30.0,lockR:22.00},
-] as const;
+export type MultiTurnTradeProfitProtection=MultiTurnProfitFloor&{
+  peakR:number;
+  updatedAt:number;
+};
+
+const clip=(v:number,a:number,b:number)=>Math.min(b,Math.max(a,v));
+
+function baseRetention(reachedR:number){
+  if(reachedR<.60)return .15;
+  if(reachedR<1)return .18+(reachedR-.60)/.40*.20;
+  return Math.min(.74,.38+.12*Math.log2(Math.max(1,reachedR)));
+}
+
+function signalAdjustment(signal?:MultiTurnProfitSignal|null){
+  if(!signal)return{adjustment:0,mode:"NORMAL" as const};
+  const continuation=signal.continuationScore,turn=signal.turnProbability,phase=signal.phase??"FLOW";
+  const aligned=signal.rawDirectionAligned!==false;
+  let adjustment=0;
+  let weak=false;
+  if(continuation!=null&&turn!=null&&phase==="FLOW"&&aligned&&continuation>=.72&&turn<=.20)
+    adjustment-=.08;
+  else if(continuation!=null&&turn!=null&&phase==="FLOW"&&aligned&&continuation>=.58&&turn<=.25)
+    adjustment-=.03;
+  if(continuation!=null&&continuation<=.42){adjustment+=.08;weak=true;}
+  if(turn!=null&&turn>=.45){adjustment+=.06;weak=true;}
+  if(phase==="WATCH"||phase==="TURNING"){adjustment+=.06;weak=true;}
+  if(signal.rawDirectionAligned===false){adjustment+=.08;weak=true;}
+  const mode=weak?"WEAKENING":adjustment<=-.06?"STRONG_TREND":adjustment<0?"HEALTHY_TREND":"NORMAL";
+  return{adjustment,mode} as const;
+}
 
 /**
- * Profit protection is expressed in R, where one R is this trade's original
- * planned loss rate (plannedRisk / notional), including its entry-time modeled
- * trading drag. Leverage and margin therefore do not change the protection
- * geometry. The floor remains in underlying directional-return units because
- * exits are executed from price.
+ * Reactive profit protection only. It never predicts a top and never exits just
+ * because continuation weakens. Observed MFE raises a floor; the owning frame
+ * can only tighten how much of that already-observed profit may be returned.
+ *
+ * One R is original plannedRisk/notional. Very wide-stop trades also arm after
+ * a material absolute move so a 4h/1d winner cannot give back 5-10% simply
+ * because that move is still below one R.
  */
-export function multiTurnProfitFloor(favorable:number,riskRate:number,modeledCost=.0022):MultiTurnProfitFloor|null{
+export function multiTurnProfitFloor(
+  favorable:number,
+  riskRate:number,
+  modeledCost=.0022,
+  signal?:MultiTurnProfitSignal|null,
+):MultiTurnProfitFloor|null{
   if(![favorable,riskRate,modeledCost].every(Number.isFinite)||riskRate<=0||favorable<=0)return null;
   const reachedR=favorable/riskRate;
-  if(reachedR<1)return null;
-  let selected:typeof TIERS[number]=TIERS[0],tier=0;
-  for(let i=0;i<TIERS.length;i++)if(reachedR>=TIERS[i].mfeR){selected=TIERS[i];tier=i;}
+  const activationRate=Math.max(modeledCost+.0010,Math.min(.60*riskRate,.04));
+  if(favorable<activationRate)return null;
+
+  const {adjustment,mode}=signalAdjustment(signal);
+  const minRetention=reachedR>=1?.30:.12;
+  const retentionRate=clip(baseRetention(reachedR)+adjustment,minRetention,.82);
   const costPositiveFloor=modeledCost+.0010;
-  const rFloor=selected.lockR*riskRate;
-  const breathingRoom=Math.max(.0015,.25*riskRate);
-  const floorRate=Math.min(favorable-breathingRoom,Math.max(rFloor,costPositiveFloor));
+  const breathingRoom=Math.max(.0015,.12*riskRate);
+  const floorRate=Math.min(favorable-breathingRoom,Math.max(favorable*retentionRate,costPositiveFloor));
   if(!(floorRate>modeledCost&&floorRate<favorable))return null;
-  return{version:MULTI_TURN_PROFIT_PROTECTION_VERSION,tier,armedAtR:selected.mfeR,reachedR,
-    lockedR:floorRate/riskRate,floorRate,retentionRate:floorRate/favorable};
+  const lockedR=floorRate/riskRate;
+  return{
+    version:MULTI_TURN_PROFIT_PROTECTION_VERSION,
+    reachedR,lockedR,floorRate,retentionRate:floorRate/favorable,
+    activationRate,checkpointBand:Math.floor(lockedR*4+1e-9),mode,
+  };
 }

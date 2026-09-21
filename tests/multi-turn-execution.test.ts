@@ -63,9 +63,39 @@ test("a position above one planned-risk R cannot normally give back through zero
   s.lastCycleAt=now;
   s=advanceForward({state:s,now:later,paths:{BTC_USDT:p},quotes:{BTC_USDT:protectedQuote},contracts:{BTC_USDT:meta}}).state;
   assert.equal(s.positions.length,0);
-  assert.match(s.history[0].exitReason??"",/利润保护：最高浮盈达到/);
+  assert.match(s.history[0].exitReason??"",/动态利润保护：最高浮盈达到/);
   assert.equal(s.history[0].exitAudit?.trigger,"PROFIT_GIVEBACK");
   assert.ok((s.history[0].netPnl??0)>0);
+});
+
+test("a tightened profit floor never loosens again when continuation later recovers",()=>{
+  const p=candles(),now=(p.at(-1)!.time+300)*1000+1000,quotes={BTC_USDT:q(p,now)};
+  let s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},quotes,contracts:{BTC_USDT:meta}}).state;
+  assert.ok(s.positions.length);
+  const t=s.positions[0],riskRate=t.plannedRisk/t.notional,frame=s.turnEngine!.frames.BTC_USDT![t.turn!.timeframe]!;
+  t.favorable=riskRate*3;
+  frame.direction=t.side;frame.rawDirection=t.side;frame.phase="WATCH";frame.continuationScore=.30;frame.triggerProbability=.50;
+  frame.lastTurnAt=null;frame.justTurned=false;s.lastCycleAt=now;
+  const priceAt=(r:number)=>t.entryPrice*(t.side==="LONG"?1+r:1-r);
+  let later=now+1000,px=priceAt(riskRate*2.5);
+  s=advanceForward({state:s,now:later,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:{bestBid:px*.99999,bestAsk:px*1.00001,observedAt:later,fresh:true,entryReady:true}},contracts:{BTC_USDT:meta}}).state;
+  assert.equal(s.positions.length,1);const locked=s.positions[0].profitProtection!.floorRate;
+  const lockedR=s.positions[0].profitProtection!.lockedR;assert.ok(lockedR>2);
+
+  const recovered=s.turnEngine!.frames.BTC_USDT![t.turn!.timeframe]!;
+  recovered.direction=t.side;recovered.rawDirection=t.side;recovered.phase="FLOW";recovered.continuationScore=.85;recovered.triggerProbability=.05;
+  later+=1000;px=priceAt(riskRate*2.4);
+  s=advanceForward({state:s,now:later,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:{bestBid:px*.99999,bestAsk:px*1.00001,observedAt:later,fresh:true,entryReady:true}},contracts:{BTC_USDT:meta}}).state;
+  assert.equal(s.positions.length,1);
+  assert.ok(s.positions[0].profitProtection!.floorRate>=locked-1e-12,"a recovered trend cannot reopen prior giveback room");
+
+  later+=1000;px=priceAt(riskRate*(lockedR-.1));
+  s=advanceForward({state:s,now:later,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:{bestBid:px*.99999,bestAsk:px*1.00001,observedAt:later,fresh:true,entryReady:true}},contracts:{BTC_USDT:meta}}).state;
+  assert.equal(s.positions.length,0);
+  assert.equal(s.history[0].exitAudit?.trigger,"PROFIT_GIVEBACK");
 });
 
 test("the owning timeframe confirmed turn exits its own position without waiting for a fixed horizon",()=>{
