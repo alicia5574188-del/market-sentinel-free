@@ -14,9 +14,9 @@ import { forwardProtectionChanged } from "./forward-protection-checkpoint.ts";
 import { FORWARD_ADAPTIVE_VERSION, adaptiveCandidatePriority, adaptiveEntryAdjustment, adaptiveTargetRisk, calibrationRiskMultiplier,
   familyRiskHeadroom, inspectRapidCondition, sampleRiskMultiplier, type AdaptiveCandidate, type AdaptiveLane } from "./forward-adaptive.ts";
 import { MULTI_TURN_VERSION, TURN_CONFIG, TURN_TIMEFRAMES, evaluateMultiTurn, initialMultiTurn, turnCandidates,
-  type MultiTurnState, type TurnCandidate, type TurnTimeframe } from "./multi-turn-engine.ts";
+  type MultiTurnState, type TurnCandidate, type TurnEvidence, type TurnPhase, type TurnSide, type TurnTimeframe } from "./multi-turn-engine.ts";
 import { MULTI_TURN_PROFIT_PROTECTION_VERSION, type MultiTurnTradeProfitProtection } from "./multi-turn-profit-protection.ts";
-import { evaluateMultiTurnHoldValue, type MultiTurnHoldValue } from "./multi-turn-hold-value.ts";
+import { evaluateMultiTurnHoldValue, multiTurnHoldWindows, type MultiTurnHoldValue } from "./multi-turn-hold-value.ts";
 // The storage schema stays v1.0 so an algorithm upgrade cannot reset the ledger.
 export const FORWARD_VERSION = "forward-relations-v1.0";
 export const FORWARD_GRAMMAR = "conditional-response-conjunction-v1";
@@ -41,6 +41,16 @@ export type Rule = { id: string; signature: string; parentId: string | null; ver
   recentResponse: number; standardError: number; reason: string; mutation: "CREATE" | "REVISE" | "RECALL";
   grammar: string; liveEligible: false; evidence?: Evidence; adaptiveLane?:AdaptiveLane;
   authority?:"LEGACY_FORWARD"|"MULTI_TURN";turnTimeframe?:TurnTimeframe };
+export type MultiTurnEntryContext = {
+  version:"multi-turn-entry-context-v1";capturedAt:number;timeframe:TurnTimeframe;side:"LONG"|"SHORT";
+  phase:TurnPhase;signalAt:number;signalPrice:number;reason:string;directionConfidence:number;continuationScore:number;
+  turnProbability:number;triggerProbability:number;expectedMoveRate:number;modeledCostRate:number;remainingSpaceRate:number;
+  stopRate:number;riskCap:number;bestHoldMinutes:number;strongExtensionMinutes:number;hardExtensionMinutes:number;
+  evidence:TurnEvidence;
+  timeframeStates:Array<{timeframe:TurnTimeframe;direction:TurnSide;phase:TurnPhase;directionConfidence:number;
+    continuationScore:number;turnProbability:number;triggerProbability:number;expectedMoveRate:number;atrRate:number;
+    evidence:TurnEvidence}>;
+};
 export type Trade = { id: string; symbol: string; side: "LONG" | "SHORT"; rule: Rule; openedAt: number; closedAt: number | null;
   status: "OPEN" | "CLOSED"; entryPrice: number; exitPrice: number | null; quantity: number; contracts: number;
   quantoMultiplier: number; notional: number; leverage: number; margin: number; plannedRisk: number; stopPrice: number;
@@ -48,6 +58,7 @@ export type Trade = { id: string; symbol: string; side: "LONG" | "SHORT"; rule: 
   exitFee: number; fundingAllowance: number; grossPnl: number | null; netPnl: number | null; exitReason: string | null;
   relationFailureBars: number; lastRelationBar: number; execution: "REAL_QUOTE_PAPER_MODEL"; liveEligible: false;
   exitControl?: ExitControl; exitAudit?: ExitAudit; profitProtection?:MultiTurnTradeProfitProtection; holdValue?:MultiTurnHoldValue;
+  entryContext?:MultiTurnEntryContext;
   profitProtectionMigration?:{version:typeof MULTI_TURN_PROFIT_PROTECTION_VERSION;state:"CURRENT"|"GUARDED"|"DEFERRED";updatedAt:number;baselineFavorable:number};
   forecast?: { policy:string; family:string; signalAt:number; signalPrice:number; baseNetRate:number;
     calibratedNetRate:number; remainingNetRate:number; quality:number; sizingEquity?:number };
@@ -513,6 +524,25 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
     const entryFee=notional*PAPER_COST.feeRate,markedAfter=equity-entryFee,margin=notional/leverage;
     if(usedMargin+margin>markedAfter*.75+1e-8){reject("模拟可用保证金不足");continue;}
     const rule=multiTurnRule(s,candidate,now),plannedRisk=notional*lossRate;
+    const entryFrame=s.turnEngine?.frames[candidate.symbol]?.[candidate.timeframe];
+    const entryWindows=multiTurnHoldWindows(candidate.timeframe);
+    const entryContext:MultiTurnEntryContext|undefined=entryFrame?{
+      version:"multi-turn-entry-context-v1",capturedAt:now,timeframe:candidate.timeframe,side:candidate.side,
+      phase:entryFrame.phase,signalAt:candidate.completedAt,signalPrice:candidate.signalPrice,reason:candidate.reason,
+      directionConfidence:candidate.confidence,continuationScore:candidate.continuationScore,
+      turnProbability:candidate.turnProbability,triggerProbability:entryFrame.triggerProbability,
+      expectedMoveRate:candidate.expectedMoveRate,modeledCostRate:cost,remainingSpaceRate:remaining,
+      stopRate:candidate.stopRate,riskCap:candidate.riskCap,
+      bestHoldMinutes:entryWindows.bestHoldMinutes,strongExtensionMinutes:entryWindows.strongExtensionMinutes,
+      hardExtensionMinutes:entryWindows.hardExtensionMinutes,evidence:structuredClone(entryFrame.evidence),
+      timeframeStates:TURN_TIMEFRAMES.flatMap(timeframe=>{
+        const observed=s.turnEngine?.frames[candidate.symbol]?.[timeframe];
+        return observed?[{timeframe,direction:observed.direction,phase:observed.phase,
+          directionConfidence:observed.directionConfidence,continuationScore:observed.continuationScore,
+          turnProbability:observed.turnProbability,triggerProbability:observed.triggerProbability,
+          expectedMoveRate:observed.expectedMoveRate,atrRate:observed.atrRate,evidence:structuredClone(observed.evidence)}]:[];
+      }),
+    }:undefined;
     const t:Trade={id:`ft-${s.startedAt}-${s.revision+1}`,symbol:candidate.symbol,side:candidate.side,rule:structuredClone(rule),
       openedAt:now,closedAt:null,status:"OPEN",entryPrice:price,exitPrice:null,quantity,contracts:count,quantoMultiplier:meta.quantoMultiplier,
       notional,leverage,margin,plannedRisk,stopPrice:price*(1-d*candidate.stopRate),
@@ -522,7 +552,8 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
       forecast:{policy:MULTI_TURN_VERSION,family:`TURN:${candidate.timeframe}:${candidate.side}`,signalAt:candidate.completedAt,
         signalPrice:candidate.signalPrice,baseNetRate:remaining,calibratedNetRate:remaining,remainingNetRate:remaining,quality,sizingEquity:equity-entryFee},
       turn:{version:MULTI_TURN_VERSION,timeframe:candidate.timeframe,signalAt:candidate.completedAt,
-        entryTurnProbability:candidate.turnProbability,entryContinuation:candidate.continuationScore,entryDirectionConfidence:candidate.confidence}};
+        entryTurnProbability:candidate.turnProbability,entryContinuation:candidate.continuationScore,entryDirectionConfidence:candidate.confidence},
+      ...(entryContext?{entryContext}:{}),};
     s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.positions.push(t);s.rules.unshift(rule);s.rules=s.rules.slice(0,48);
     s.turnLastEntryBars[key]=candidate.completedAt;s.lastEntryBars[candidate.symbol]=candidate.completedAt;diagnostics.opened++;
     event(s,now,"ENTRY",t.id,`${candidate.symbol}按${candidate.timeframe}转折状态沿${candidate.side==="LONG"?"多":"空"}向进入；该周期独立负责策略退出。`,
