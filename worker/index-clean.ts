@@ -2651,12 +2651,22 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return Boolean(evidence?.fresh && evidence.ancillaryFresh && evidence.entryReady !== false);
   }
 
-  private realtimeReadiness() {
+  private symbolManagementReady(symbol: string, now = Date.now()) {
+    const evidence = this.runtime.evidence[symbol];
+    if (!evidence || this.runtime.contractMeta[symbol] == null) return false;
+    return freshQuote({ bestBid: evidence.bestBid ?? evidence.midpoint, bestAsk: evidence.bestAsk ?? evidence.midpoint,
+      observedAt: evidence.observedAt, fresh: evidence.fresh }, now);
+  }
+
+  private realtimeReadiness(now = Date.now()) {
+    // "Protected" means an already-open exposure that must keep executable
+    // management data. Entry candidates/plans may warm or retry independently
+    // and must not demote the whole account. Open-position management needs a
+    // fresh executable book and contract metadata, not ancillary entry evidence
+    // or a four-snapshot entry warmup.
     const protectedSymbols = new Set([
       ...Object.values(this.runtime.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
-      ...Object.values(this.runtime.plans).flatMap((plan) => plan?.state === "PREPARED" ? [plan.symbol] : []),
       ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
-      ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status) ? [entry.symbol] : []),
       ...Object.values(this.runtime.strategyArena.portfolioOpen).map((position) => position.symbol),
       ...Object.values(this.runtime.previousStrategyArena.portfolioOpen).map((position) => position.symbol),
       ...REGIME_SYSTEMS.flatMap((id) => Object.values(this.runtime.regimePortfolio.accounts[id].open).map((position) => position.symbol)),
@@ -2665,8 +2675,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const actionableMarkets = this.runtime.symbols.filter((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS
       && this.runtime.contractMeta[symbol] != null && this.symbolEntryReady(symbol)).length;
     const protectedMarketsReady = [...protectedSymbols].every((symbol) => this.runtime.symbols.includes(symbol)
-      && (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS && this.runtime.contractMeta[symbol] != null
-      && this.symbolEntryReady(symbol));
+      && this.symbolManagementReady(symbol, now));
     return { capacity: PORTFOLIO_REALTIME_CAPACITY, actionableMarkets,
       warmingMarkets: Math.max(0, this.runtime.symbols.length - actionableMarkets),
       protectedMarkets: protectedSymbols.size, protectedMarketsReady };
