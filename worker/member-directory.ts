@@ -86,9 +86,11 @@ export class MemberDirectory extends DurableObject<CloudflareEnv> {
         return json({ok:true,...result,loginKey:display,oldKeysRemainValid:true,member:publicRecord((await this.readMember(result.id))!)});
       }
       if(p==="/overview") {
-        const rows=await this.ctx.storage.list<MemberRecord>({prefix:"member:",limit:MEMBER_LIMIT}),invite=await this.currentInvite(root);
+        const rows=await this.ctx.storage.list<MemberRecord>({prefix:"member:",limit:MEMBER_LIMIT}),invite=await this.currentInvite(root),
+          current=await this.ctx.storage.get<{id:string;sealed:Awaited<ReturnType<typeof encryptMemberText>>}>("current-key");
         return json({version:MEMBERS_VERSION,authVersion:MEMBER_AUTH_VERSION,members:[...rows.values()].map(publicRecord).sort((a,b)=>b.createdAt-a.createdAt),
-          invite,memberLimit:MEMBER_LIMIT,activeLimit:MEMBER_ACTIVE_LIMIT,activeCount:(await this.ctx.storage.get<string[]>("execution-seats"))?.length??0});
+          invite,current:current?{id:current.id,loginKey:await decryptMemberText(current.sealed,root,`current-key:${current.id}`)}:null,
+          memberLimit:MEMBER_LIMIT,activeLimit:MEMBER_ACTIVE_LIMIT,activeCount:(await this.ctx.storage.get<string[]>("execution-seats"))?.length??0});
       }
       if(p==="/rotate-invite"&&request.method==="POST") {
         const next=await this.newInvite(root);await this.ctx.storage.put("current-invite",next.record);
