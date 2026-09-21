@@ -31,6 +31,25 @@ const { MarketStream, failedRadarRuntime, radarAttemptDue, radarCandidateExecuti
   successfulRadarRuntime, latestCompletedStrategyCandleAt, mergeStrategyCandlePath,
   mergeRegimeHourlyPath, regimeHourlyNeedsRefresh } = await import(runtimeWorkerSpecifier);
 
+test("open Multi-Turn holdings keep strategy paths after leaving the scan universe", async () => {
+  const { stream } = await makeStream();
+  stream.forwardState = { positions: [{ symbol: "HOLD_USDT", status: "OPEN" }] };
+  stream.runtime.liquidUniverse = ["SCAN_USDT"];
+  stream.runtime.symbols = ["HOLD_USDT"];
+  stream.strategyCandles.HOLD_USDT = [{ time: 300, open: 1, high: 1, low: 1, close: 1, volume: 1 }];
+  stream.strategyCandles.OLD_USDT = [{ time: 300, open: 1, high: 1, low: 1, close: 1, volume: 1 }];
+  stream.runtime.strategyCandleFailures.HOLD_USDT = { count: 1, lastFailureAt: 1, retryAt: 1, lastError: "retry" };
+  stream.runtime.strategyCandleFailures.OLD_USDT = { count: 1, lastFailureAt: 1, retryAt: 1, lastError: "retry" };
+
+  assert.deepEqual(new Set(stream.strategyPathSymbols()), new Set(["SCAN_USDT", "HOLD_USDT"]));
+  stream.applyRealtimeSymbols(["SCAN_USDT"]);
+
+  assert.ok(stream.strategyCandles.HOLD_USDT, "open holding must retain its completed-candle path");
+  assert.ok(stream.runtime.strategyCandleFailures.HOLD_USDT, "open holding must retain its candle retry state");
+  assert.equal(stream.strategyCandles.OLD_USDT, undefined, "unowned non-scan path should still be released");
+  assert.equal(stream.runtime.strategyCandleFailures.OLD_USDT, undefined);
+});
+
 test("the strategy candle clock waits for Gate publication grace and advances once per closed bar", () => {
   const boundary = 1_800_000;
   assert.equal(latestCompletedStrategyCandleAt(boundary + 7_999), boundary - 300_000);

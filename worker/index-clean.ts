@@ -787,6 +787,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (this.memory[symbol]) this.memory[symbol].flow.funding = row.fundingRate;
   }
 
+  private strategyPathSymbols() {
+    return [...new Set([
+      ...this.runtime.liquidUniverse.filter(forwardSymbolAllowed),
+      ...(this.forwardState?.positions.flatMap(position => position.status === "OPEN" ? [position.symbol] : []) ?? []),
+    ])];
+  }
+
   private applyRealtimeSymbols(next: string[]) {
     const prior = new Set(this.runtime.symbols);
     this.runtime.symbols = next;
@@ -811,9 +818,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if (next.includes(symbol)) continue;
       delete this.memory[symbol]; delete this.sessionWarmup[symbol]; delete this.runtime.decisions[symbol]; delete this.runtime.routes[symbol]; delete this.runtime.plans[symbol];
       delete this.runtime.positions[symbol]; delete this.runtime.evidence[symbol]; delete this.runtime.entryAssessments[symbol]; delete this.runtime.feedFailures[symbol];
-      // Five-minute learning paths are independent of the small realtime book pool.
-      // Keep a Top30 path when its symbol leaves a realtime slot.
-      if (!this.runtime.liquidUniverse.includes(symbol)) {
+      // Five-minute Multi-Turn paths are independent of the small realtime book pool.
+      // Keep current scan paths AND every open source holding until it closes,
+      // otherwise the owning timeframe could stop seeing its own reversal.
+      if (!this.strategyPathSymbols().includes(symbol)) {
         delete this.runtime.strategyCandleFailures[symbol]; delete this.strategyCandles[symbol];
       }
       delete this.runtime.tickSize[symbol]; delete this.runtime.contractMeta[symbol];
@@ -872,19 +880,22 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private async refreshStrategyCandle(now: number) {
-    if (!this.runtime.liquidUniverse.length) return 0;
+    const universe=this.strategyPathSymbols();
+    if (!universe.length) return 0;
     const targetCompletedAt = latestCompletedStrategyCandleAt(now);
-    const size = this.runtime.liquidUniverse.length;
+    const size = universe.length;
     let selectedIndex = -1;
     for (let offset = 0; offset < size; offset += 1) {
       const index = (this.runtime.strategyCandleCursor + offset) % size;
-      const symbol = this.runtime.liquidUniverse[index];
-      const retainedAt = this.runtime.stableStructures[symbol]?.observedAt ?? 0;
+      const symbol = universe[index];
+      const latestPathCompletedAt=this.strategyCandles[symbol]?.at(-1)
+        ? (this.strategyCandles[symbol].at(-1)!.time+300)*1_000 : 0;
+      const retainedAt = Math.max(this.runtime.stableStructures[symbol]?.observedAt ?? 0,latestPathCompletedAt);
       const retryAt = this.runtime.strategyCandleFailures[symbol]?.retryAt ?? 0;
       if (retainedAt < targetCompletedAt && retryAt <= now) { selectedIndex = index; break; }
     }
     if (selectedIndex < 0) return 0;
-    const symbol = this.runtime.liquidUniverse[selectedIndex];
+    const symbol = universe[selectedIndex];
     this.runtime.strategyCandleCursor = (selectedIndex + 1) % size;
     const contract = this.contractCatalog.get(symbol);
     if (!contract) return 0;
@@ -1176,7 +1187,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private async refreshTurnDaily(now:number) {
-    const universe=this.runtime.liquidUniverse.filter(forwardSymbolAllowed);if(!universe.length)return 0;
+    const universe=this.strategyPathSymbols();if(!universe.length)return 0;
     const target=Math.floor(now/86_400_000)*86_400-86_400;
     let selected:string|null=null;
     for(let offset=0;offset<universe.length;offset++){
