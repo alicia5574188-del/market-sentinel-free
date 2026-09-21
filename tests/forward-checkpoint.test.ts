@@ -108,7 +108,7 @@ test("release-344 Worker does not create a later profit-floor checkpoint",async(
     return{time:start/1000+i*300,open,high:close*1.001,low:open*.999,close,volume:1000+i};
   });
   const now=(rows.at(-1)!.time+300)*1000+1000,mid=rows.at(-1)!.close;
-  let state=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:rows},
+  const state=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:rows},
     quotes:{BTC_USDT:{bestBid:mid*.9999,bestAsk:mid*1.0001,observedAt:now,fresh:true,entryReady:true}},
     contracts:{BTC_USDT:{quantoMultiplier:.001,leverageMax:50,maintenanceRate:.005,minContracts:1}}}).state;
   assert.equal(state.positions.length,1);
