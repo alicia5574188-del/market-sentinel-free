@@ -35,9 +35,10 @@ test("archived endpoint uses recorded net equity, not balance or gross trade PnL
   const p={...packet(1,971.236),account:{balance:99999,grossPnl:555,positions:[]}};
   assert.equal(archivedEquity(p,context,T+STEP)!.equity,971.236);
 });
-test("stale historical mark cannot be drawn as a timely observed point",()=>{
+test("stale historical mark remains chartable but is excluded from comparable advice",()=>{
   const p=packet(1);p.account.positions=[{lastQuoteAt:T,exitControl:{policy:context.exitPolicy}}];
-  assert.equal(archivedEquity(p,context,T+STEP),null);
+  const out=archivedEquity(p,context,T+STEP)!;
+  assert.equal(out.equity,1000);assert.equal(out.stale,true);assert.equal(out.homogeneous,false);
 });
 test("future, wrong account, NaN and split continuation have no equity point",()=>{
   for(const v of [{...packet(1),startedAt:T-1},{...packet(1),daily:undefined},{...packet(1),daily:{lastAt:T+STEP,endEquity:NaN}},packet(2)])
@@ -61,6 +62,13 @@ test("sorting and validation do not mutate original financial inputs",()=>{
 });
 test("curve segments preserve missing intervals rather than smoothing an outage",()=>{
   assert.deepEqual(curveSegments([point(1),point(2),point(8),point(9)]).map(s=>s.length),[2,2]);
+});
+test("saved stale marks reconnect a filtered display gap without manufacturing an archive point",()=>{
+  const a=packet(1,998),b=packet(2,997),d=packet(3,999);
+  b.account.positions=[{lastQuoteAt:T,exitControl:{policy:context.exitPolicy}}];
+  const points=[a,b,d].map(p=>archivedEquity(p,context,T+3*STEP)!);
+  assert.equal(points[1].stale,true);assert.equal(points[1].homogeneous,false);
+  assert.deepEqual(curveSegments(points).map(s=>s.length),[3]);
 });
 test("nearest point tooltip chooses an original observation, never an interpolated amount",()=>{
   const p=[point(1,999),point(2,1003)];assert.equal(nearestPoint(p,T+1.4*STEP),p[0]);assert.equal(nearestPoint(p,T+1.7*STEP),p[1]);
