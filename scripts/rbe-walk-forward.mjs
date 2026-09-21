@@ -104,7 +104,7 @@ export function runLearnedWalkForward({pairs,rowByTime,months,friction}){
       }
       evaluated.push({...pair,candidate});
     }
-    probabilityRows.push(...predictions);
+    for(const prediction of predictions)probabilityRows.push(prediction);
     const foldPairs=evaluated.filter(p=>p.openedAt>=start&&p.openedAt<end);
     folds.push({month,cutoff,trainedStates:model.samples,trainedTrades:model.trades,
       baseline:summarize(foldPairs,"baseline"),candidate:summarize(foldPairs,"candidate"),
