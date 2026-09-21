@@ -2,7 +2,7 @@
  * strategy or financial ledger. The full atomic forward record stays authority.
  */
 import type { ForwardState, Trade } from "./forward-relations.ts";
-import { multiTurnProfitFloor } from "./multi-turn-profit-protection.ts";
+import { MULTI_TURN_PROFIT_PROTECTION_VERSION } from "./multi-turn-profit-protection.ts";
 
 export const FORWARD_PROTECTION_CHECKPOINT_VERSION = "forward-protection-checkpoint-v1";
 type ProtectionRow = Pick<Trade, "id" | "openedAt" | "favorable" | "adverse" | "lastPrice" | "lastQuoteAt"
@@ -27,10 +27,16 @@ export function forwardProtectionChanged(previous: ForwardState, next: ForwardSt
     const p = prior.get(t.id);
     if (!p || p.openedAt !== t.openedAt) return false; // Financial change saves the full account.
     const riskRate=t.plannedRisk/Math.max(t.notional,1e-9);
-    const priorProfitTier=t.rule.authority==="MULTI_TURN"?multiTurnProfitFloor(p.favorable,riskRate)?.tier??-1:-1;
-    const nextProfitTier=t.rule.authority==="MULTI_TURN"?multiTurnProfitFloor(t.favorable,riskRate)?.tier??-1:-1;
+    const priorFloor=p.exitControl?.profitFloorRate??0,nextFloor=t.exitControl?.profitFloorRate??0;
+    const floorStep=Math.min(.005,Math.max(.0025,riskRate*.25));
+    const profitStateChanged=t.rule.authority==="MULTI_TURN"&&(
+      p.exitControl?.profitFloorVersion!==t.exitControl?.profitFloorVersion
+      || p.exitControl?.profitFloorDeferred!==t.exitControl?.profitFloorDeferred
+      || (priorFloor<=0&&nextFloor>0)
+      || nextFloor-priorFloor>=floorStep-1e-12
+    );
     return (t.rule.exitMode === "REACTION_DECAY" && t.favorable >= t.rule.armRate && t.favorable !== p.favorable)
-      || nextProfitTier!==priorProfitTier
+      || profitStateChanged
       || t.relationFailureBars !== p.relationFailureBars || t.lastRelationBar !== p.lastRelationBar;
   });
 }
@@ -72,11 +78,17 @@ export function restoreForwardProtectionCheckpoint(s: ForwardState, value: unkno
       || !!r.exitControl !== !!t.exitControl) return invalid();
     if (r.exitControl && t.exitControl) {
       const a = r.exitControl, b = t.exitControl;
+      const floor=a.profitFloorRate,baseFloor=b.profitFloorRate??0,updated=a.profitFloorUpdatedAt;
       if (a.policy !== b.policy || !Number.isFinite(a.maxObservationGapMs) || !Number.isFinite(a.maxQuoteAgeMs)
         || a.maxObservationGapMs < b.maxObservationGapMs || a.maxQuoteAgeMs < b.maxQuoteAgeMs
         || ![a.armedAt, a.armedQuoteAt].every(v => v === null || (Number.isFinite(v) && v >= t.openedAt && v <= c.quoteCycleAt + 1000))
         || (a.armedAt === null) !== (a.armedQuoteAt === null)
-        || (b.armedAt !== null && (a.armedAt !== b.armedAt || a.armedQuoteAt !== b.armedQuoteAt))) return invalid();
+        || (b.armedAt !== null && (a.armedAt !== b.armedAt || a.armedQuoteAt !== b.armedQuoteAt))
+        || (a.profitFloorVersion!==undefined&&a.profitFloorVersion!==MULTI_TURN_PROFIT_PROTECTION_VERSION)
+        || (floor!==undefined&&(!Number.isFinite(floor)||floor<baseFloor||floor<0||floor>=r.favorable))
+        || (updated!==undefined&&(!Number.isFinite(updated)||updated<t.openedAt||updated>c.quoteCycleAt+1000))
+        || (floor!==undefined&&floor>0&&updated===undefined)
+        || (a.profitFloorDeferred!==undefined&&typeof a.profitFloorDeferred!=="boolean")) return invalid();
     }
   }
   const restored = structuredClone(s);
@@ -84,9 +96,7 @@ export function restoreForwardProtectionCheckpoint(s: ForwardState, value: unkno
     const r = rows.get(t.id)!;
     t.favorable = r.favorable; t.adverse = r.adverse; t.lastPrice = r.lastPrice; t.lastQuoteAt = r.lastQuoteAt;
     t.relationFailureBars = r.relationFailureBars; t.lastRelationBar = r.lastRelationBar;
-    if (r.exitControl) t.exitControl = { policy: r.exitControl.policy, armedAt: r.exitControl.armedAt,
-      armedQuoteAt: r.exitControl.armedQuoteAt, maxObservationGapMs: r.exitControl.maxObservationGapMs,
-      maxQuoteAgeMs: r.exitControl.maxQuoteAgeMs };
+    if (r.exitControl) t.exitControl = { ...r.exitControl };
   }
   restored.lastQuoteCycleAt = c.quoteCycleAt;
   restored.peakEquity = c.peakEquity; restored.maxDrawdown = c.maxDrawdown;
