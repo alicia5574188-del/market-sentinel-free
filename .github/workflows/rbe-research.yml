@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - "lib/turn-exit-predictor.ts"
+      - "lib/rbe-learned-value.ts"
+      - "scripts/rbe-walk-forward.mjs"
+      - "tests/rbe-learned-value.test.ts"
       - "scripts/research-rbe-exit.mjs"
       - "scripts/rbe-replay-policy.mjs"
       - "tests/rbe-replay-policy.test.ts"
@@ -25,7 +28,7 @@ jobs:
         with:
           node-version: "22.15.0"
       - name: Check prediction and causal execution contracts
-        run: node --experimental-strip-types --test tests/turn-exit-predictor.test.ts tests/rbe-replay-policy.test.ts
+        run: node --experimental-strip-types --test tests/turn-exit-predictor.test.ts tests/rbe-replay-policy.test.ts tests/rbe-learned-value.test.ts
       - name: Fetch six complete months of official Gate 5m data
         env:
           RESEARCH_INTERVAL: 5m
@@ -43,5 +46,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rbe-exit-audit
-          path: research-results/rbe-exit-audit.json
+          path: research-results/rbe-*.json
           if-no-files-found: warn

@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { rbeExitIntent, nextOpenExit, originalStopFill, commonTopCohort, predictiveExits } from "./rbe-replay-policy.mjs";
+import { learnedFeatures, runLearnedWalkForward } from "./rbe-walk-forward.mjs";
 import { TURN_CONFIG, TURN_TIMEFRAMES } from "../lib/multi-turn-engine.ts";
 import { predictMultiTurnExit, RBE_EXIT_CONFIGS } from "../lib/turn-exit-predictor.ts";
 
@@ -153,7 +154,7 @@ for(let now=start;now<=end;now+=300){
         const d=signFor(waiting.side),entry=row.open*(1+d*.00025),stop=entry*(1-d*waiting.stopRate);
         const base={side:waiting.side,entry,stop,entryAtr:waiting.entryAtr,openedAt:row.time,
           closedAt:0,exit:0,net:0,mfe:0,mae:0,reason:"",remaining:1,realized:0,pendingExit:null};
-        const pair={symbol,side:waiting.side,timeframe:waiting.timeframe,openedAt:row.time,
+        const pair={id:`${symbol}:${row.time}`,samples:[],symbol,side:waiting.side,timeframe:waiting.timeframe,openedAt:row.time,
           config:RBE_EXIT_CONFIGS.balanced,baseline:{...base},candidate:{...base}};
         active.set(symbol,pair);paired.push(pair);
       }else dataAudit.entryExpired++;
@@ -189,10 +190,14 @@ for(let now=start;now<=end;now+=300){
       if(!pair.candidate.closedAt)pair.candidate.pendingExit={reason:"CONFIRMED_TURN",signalAt:now};
       continue;
     }
-    if(!pair.candidate.closedAt&&own){
+    if(own){
       const dec=predictMultiTurnExit({side:pair.side,timeframe:pair.timeframe,entryPrice:pair.candidate.entry,
-        stopPrice:pair.candidate.stop,currentPrice:row.close,favorable:pair.candidate.mfe,frames:frames[symbol]},pair.config);
+        stopPrice:pair.candidate.stop,currentPrice:row.close,favorable:pair.baseline.mfe,frames:frames[symbol]},pair.config);
       if(dec){
+        pair.samples.push({at:now,price:row.close,atr:own.atrRate,mfe:pair.baseline.mfe,
+          horizon:tfSeconds[pair.timeframe]*2,
+          x:learnedFeatures(dec,own,pair.previousFeatures,(now-pair.openedAt)/tfSeconds[pair.timeframe],TURN_CONFIG[pair.timeframe].minutes)});
+        pair.previousFeatures={continuation:own.continuationScore,turn:own.triggerProbability};
         actionDebug.decisions++;
         if(dec.phase==="HEALTHY")actionDebug.healthy++;
         else if(dec.phase==="EARLY_WARNING")actionDebug.early++;
@@ -200,7 +205,7 @@ for(let now=start;now<=end;now+=300){
         else actionDebug.preExit++;
       }
       const intent=rbeExitIntent(dec,now);
-      if(intent){pair.candidate.pendingExit=intent;pair.candidate.rbe=dec;actionDebug.predictiveIntents++;}
+      if(intent&&!pair.candidate.closedAt){pair.candidate.pendingExit=intent;pair.candidate.rbe=dec;actionDebug.predictiveIntents++;}
     }
   }
   for(const symbol of symbols){
@@ -286,6 +291,12 @@ const report={
 };
 mkdirSync("research-results",{recursive:true});
 writeFileSync("research-results/rbe-exit-audit.json",JSON.stringify(report,null,2)+"\n");
-console.log("RBE_RESEARCH_SUMMARY="+JSON.stringify(report,null,2));
-if(!accepted)throw new Error(`RBE_ACCEPTANCE_FAILED pairs=${completed.length} runnerRetention=${runnerRetention.toFixed(3)} givebackRecovery=${givebackRecovery.toFixed(3)}`);
-console.log("RBE_DIAGNOSTIC_GATE_PASS; production release remains unauthorized until trained walk-forward and exact-source validation");
+console.log("RBE_HEURISTIC_SUMMARY="+JSON.stringify({paired:report.paired,all:report.all,gates:report.gates,dataAudit}));
+const learned=runLearnedWalkForward({pairs:completed,rowByTime,months:raw.months,friction:FRICTION});
+learned.datasetSha256=raw.sha256;
+writeFileSync("research-results/rbe-learned-walk-forward.json",JSON.stringify(learned,null,2)+"\n");
+const summary={...learned};delete summary.models;
+console.log("RBE_LEARNED_SUMMARY="+JSON.stringify(summary));
+// Neither experiment can be promoted by changing the other's failure threshold.
+if(!learned.accepted)throw new Error(`RBE_LEARNED_ACCEPTANCE_FAILED ${JSON.stringify(learned.gates)}`);
+console.log("RBE_LEARNED_DIAGNOSTIC_PASS; production release remains unauthorized pending exact-source validation");

@@ -1,5 +1,13 @@
 # RBE continuation — 2026-09-21
 
+## Current learned experiment
+
+The repaired heuristic's completed run35583191263 still fails: runner retention72.21%, giveback recovery56.25%, common top-runner gate false. Full release verification35583191274 succeeded. This result is retained without threshold sweeps.
+
+The missing learned core is now implemented as a separate research experiment: a regularized four-outcome competing-risk fit (extension first, slow reversal first, first-five-minute shock reversal, unresolved) plus a continuation-value regression and three fixed fitted-policy iterations. Models fit only matured earlier episodes, with an additional two-day purge. Train on earlier months and evaluate June, July and August with expanding training; each evaluation trade keeps its entry-month model. Inputs include six-timeframe propagation, continuation/turn changes, structural/sequence evidence and holding state. Policy requires reversal probability above extension probability and negative continuation value beyond0.10ATR. No parameter search or profit-based stop changes.
+
+Per-trade training weights limit long-trade sample dominance. Ambiguous future barrier order is excluded from training/scoring but NEVER from exit decisions. Outcomes cannot enter their earlier training cutoff. Report Brier versus training prevalence, ROC-AUC, precision/recall, lead time and paired baseline-cohort capture/net/runner retention. This is approximate fitted policy iteration, not proof of globally optimal stopping. Ten focused tests pass. One new historical run is required; results are automatically retained even if the gate rejects the experiment.
+
 ## Objective and scope
 
 Continue PR #356 from e92b490 without repeating completed health/UI work or deploying an unqualified exit. The user requests the shortest necessary execution. Entry strategy, production code, original stops, sizing, accounts and owner LIVE control remain outside this research patch.
@@ -15,10 +23,10 @@ Research run 35581892348 completed, rather than hanging: its economic gate faile
 - Signal at completed candle close, execute at the next observed candle open. Never include post-open extremes in a closed position's MFE. Gap stops use the adverse open, not the unreachable stop price.
 - Censor trades across missing bars/end of data. Compare the top-runner gate on one common baseline cohort; preserve the report even when acceptance fails.
 
-## Limitations and release authority
+## Original heuristic limitations and release authority
 
-The existing predictor is a hand-weighted heuristic, not the promised trained Extension First/Reversal First model. Its three chronological sections are descriptive, not walk-forward training. Its reconstructed frames omit production calibration and use surrogate entry/stop rules; sums of equal-notional return rates are not account returns. Repeated inspection of March–August also means this is not untouched holdout evidence. Therefore this PR cannot authorize production even if its diagnostic economic gate passes. The missing learned competing-risk/value model and exact-source replay must be completed before considering deployment. Do not relax economic gates or tune failed thresholds on the same inspected sample to manufacture a pass.
+The original predictor remains a hand-weighted heuristic; its three chronological sections are descriptive, not walk-forward training. The separate learned experiment above now supplies causal training. Reconstructed frames still omit production calibration and use surrogate entry/stop rules; sums of equal-notional return rates are not account returns. Repeated inspection of March–August also means this is not untouched holdout evidence. Therefore this PR cannot authorize production even if a diagnostic gate passes. Exact-source replay and genuinely independent evidence remain prerequisites. Do not relax economic gates or tune failed thresholds on the same inspected sample to manufacture a pass.
 
 ## Validation and next action
 
-Seven focused predictor/execution tests pass locally. Syntax and whitespace checks pass. Run one exact-head historical workflow and the existing mandatory release verification; record its actual outcome here. Do not rerun a completed result without a new concrete defect.
+Ten focused predictor/execution/learning tests pass locally. Syntax and whitespace checks pass. Run one exact-head historical workflow and the existing mandatory release verification; record its actual outcome here. Do not rerun a completed result without a new concrete defect.

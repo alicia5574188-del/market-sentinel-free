@@ -1,6 +1,6 @@
 # 2026-09-21 — RBE research continuation; production unchanged
 
-Resume PR #356, not the old adaptive/health tasks below. Exact breakpoint: e92b490, research run35581892348 failed its economic gate; verify run35581892347 failed one pre-turn assertion. Corrected local predictor/executor inconsistency and causal replay accounting; seven focused tests pass. One new exact-head replay and CI are pending. See research/RBE_CONTINUATION.md. Learned competing-risk/value training and exact production replay are still missing; do not label the heuristic or three descriptive folds a trained walk-forward result. No main merge, deployment, account reset or LIVE mutation.
+Resume PR #356, not old adaptive/health tasks below. Repaired heuristic commit3cddea0: full CI35583191274 succeeded, research35583191263 rejected72.21% runner retention. The separate learned competing-risk/continuation-value model and three fixed fitted-policy iterations are now implemented, with matured-outcome cutoffs, two-day purge, expanding June/July/August tests and10focused tests passing locally. Its exact-head remote replay/CI are pending. See research/RBE_CONTINUATION.md. Exact production replay and independent evidence remain missing. No main merge, deployment, account reset or LIVE mutation.
 
 # 2026-09-20 — Forward Adaptive v2 IN PROGRESS
 
