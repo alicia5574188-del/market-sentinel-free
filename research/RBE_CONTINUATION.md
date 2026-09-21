@@ -1,5 +1,13 @@
 # RBE continuation — 2026-09-21
 
+## Final result — REJECTED, no production release
+
+Evaluated code6cb74d4de5d188e01aa4865ed8bb482e297b7bde. Functional verification35584112638 passed all required tests/build/lint/type/dry-run gates; deployment was skipped. Historical workflow35584112663 completed its computation and correctly failed economic acceptance. The earlier stack-limit error in bulk array accumulation was repaired; this is not an execution hang.
+
+The learned experiment used577,972 labelled states and evaluated3,328 paired trades across June–August. One of three months improved. Brier0.2290 improves over training-prevalence0.2433, but ROC-AUC0.5280 does not meet the0.55 discrimination gate. Candidate equal-notional net remains negative; baseline-winning runner return retained only3.20%, far below85%. Reducing profit-to-loss reversals493→39 therefore does not establish a usable exit policy: it mostly exited before the large winners developed. Mean lead time is not a success measure when false early exits dominate. These are surrogate research returns, not actual account performance.
+
+This fixed architecture is rejected on the inspected dataset. No parameter sweep, weakened gate, production wiring, account reset or LIVE mutation follows. Do not rerun this experiment as an unfinished task. Exact code, dataset hash, both models' diagnostic outcomes and limitations are retained in research-results/rbe-continuation-2026-09-21.json and the run's rbe-exit-audit artifact. A future genuinely different mechanism would require its own independent evidence; current user goal of a proven better exit remains unmet.
+
 ## Current learned experiment
 
 The repaired heuristic's completed run35583191263 still fails: runner retention72.21%, giveback recovery56.25%, common top-runner gate false. Full release verification35583191274 succeeded. This result is retained without threshold sweeps.

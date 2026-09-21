@@ -1,5 +1,7 @@
 # 2026-09-21 — RBE evidence and execution boundary
 
+The repaired heuristic and the fixed learned fitted-policy experiment both fail economic acceptance. Learned June–August result:1/3 folds improve, AUC0.528, runner retention3.20%, negative cost-adjusted returns. Reject the tested architecture; no deployment or same-sample threshold sweep. Reduced givebacks alone are not a release criterion. Results are in research-results/rbe-continuation-2026-09-21.json; source6cb74d4, run35584112663. Preserve failed evidence and do not misclassify this completed rejection as a hung task.
+
 DEFENSIVE is informational, not permission to tighten stops independently of predictor.shouldExit. Execute accepted completed-candle signals at the next available adjacent open, censor missing paths, and compare a common winner cohort. Preserve negative reports. Existing fixed-weight scores and chronological slices cannot be presented as learned competing-risk probabilities or walk-forward evidence. Keep PR356 research-only pending genuine training/exact-source validation; never lower the runner-retention gate to rescue an inspected failure.
 
 # 2026-09-20 — Forward Adaptive v2 architecture decision

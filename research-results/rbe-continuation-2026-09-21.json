@@ -1,0 +1,254 @@
+{
+  "evaluatedCommit": "6cb74d4de5d188e01aa4865ed8bb482e297b7bde",
+  "historicalRun": 35584112663,
+  "functionalVerification": { "run": 35584112638, "conclusion": "success", "deployment": "skipped" },
+  "previousFunctionalRun": 35583959957,
+  "heuristic": {
+    "paired": 6684,
+    "all": {
+      "baseline": {
+        "n": 6684,
+        "net": -16.982289746209684,
+        "mean": -0.0025407375443162305,
+        "winRate": 0.20272292040694195,
+        "reversals": 893,
+        "capture": -0.3857697457677583,
+        "topMfe": 0.022994835420262386
+      },
+      "candidate": {
+        "n": 6684,
+        "net": -14.561134981707369,
+        "mean": -0.002178506131314687,
+        "winRate": 0.21693596648713345,
+        "reversals": 607,
+        "capture": -0.32400026321521935,
+        "topMfe": 0.01934556901484437
+      }
+    },
+    "gates": {
+      "accepted": false,
+      "foldWins": 3,
+      "reversalImproved": true,
+      "captureImproved": true,
+      "topRunnerPreserved": false,
+      "foldRobust": true,
+      "runnerRetention": 0.7220546431892032,
+      "givebackRecovery": 0.5625022382215893
+    },
+    "dataAudit": {
+      "gapCensored": 253,
+      "rightCensored": 15,
+      "entryExpired": 15,
+      "missingFrames": 772
+    }
+  },
+  "learned": {
+    "version": "rbe-fitted-stopping-research-v1",
+    "policyIterations": 3,
+    "folds": [
+      {
+        "month": "202606",
+        "cutoff": 1780099200,
+        "trainedStates": 28953,
+        "trainedTrades": 2586,
+        "baseline": {
+          "n": 1275,
+          "net": -2.6232813949372726,
+          "mean": -0.0020574756038723705,
+          "winRate": 0.2,
+          "capture": -0.39559688406703963,
+          "reversals": 223
+        },
+        "candidate": {
+          "n": 1275,
+          "net": -2.9592158001550617,
+          "mean": -0.002320953568749068,
+          "winRate": 0.1388235294117647,
+          "capture": -0.2211065034591917,
+          "reversals": 4
+        },
+        "prediction": {
+          "n": 145803,
+          "brier": 0.23124855683687512,
+          "referenceBrier": 0.2455997630801895,
+          "auc": 0.5226908721130152,
+          "precision": 0.27884140925688344,
+          "recall": 0.30472646876432363
+        }
+      },
+      {
+        "month": "202607",
+        "cutoff": 1782691200,
+        "trainedStates": 28383,
+        "trainedTrades": 3305,
+        "baseline": {
+          "n": 1258,
+          "net": -4.076963133209117,
+          "mean": -0.003240829199689282,
+          "winRate": 0.21701112877583467,
+          "capture": -0.3641763228291042,
+          "reversals": 169
+        },
+        "candidate": {
+          "n": 1258,
+          "net": -2.986637759959088,
+          "mean": -0.0023741158664221684,
+          "winRate": 0.10810810810810811,
+          "capture": -0.24887117429728414,
+          "reversals": 17
+        },
+        "prediction": {
+          "n": 120142,
+          "brier": 0.22970527532532004,
+          "referenceBrier": 0.24103084789883925,
+          "auc": 0.5117972208544644,
+          "precision": 0.3176475806093937,
+          "recall": 0.2062609797540535
+        }
+      },
+      {
+        "month": "202608",
+        "cutoff": 1785369600,
+        "trainedStates": 28809,
+        "trainedTrades": 3953,
+        "baseline": {
+          "n": 795,
+          "net": -1.0704831434269755,
+          "mean": -0.0013465196772666358,
+          "winRate": 0.1811320754716981,
+          "capture": -0.4496944333753526,
+          "reversals": 101
+        },
+        "candidate": {
+          "n": 795,
+          "net": -1.7860356530686856,
+          "mean": -0.002246585727130422,
+          "winRate": 0.11572327044025157,
+          "capture": -0.30163578873720825,
+          "reversals": 18
+        },
+        "prediction": {
+          "n": 92877,
+          "brier": 0.2245404335363305,
+          "referenceBrier": 0.2424901605070504,
+          "auc": 0.5552709401633324,
+          "precision": 0.35790350958422074,
+          "recall": 0.2894372261953795
+        }
+      }
+    ],
+    "all": {
+      "baseline": {
+        "n": 3328,
+        "net": -7.770727671573245,
+        "mean": -0.002334954228237153,
+        "winRate": 0.20192307692307693,
+        "capture": -0.39656086305738575,
+        "reversals": 493
+      },
+      "candidate": {
+        "n": 3328,
+        "net": -7.731889213182702,
+        "mean": -0.0023232840183842257,
+        "winRate": 0.12169471153846154,
+        "capture": -0.2506238813501124,
+        "reversals": 39
+      }
+    },
+    "labelAudit": {
+      "ambiguousOrMissing": 830,
+      "valid": 577972
+    },
+    "prediction": {
+      "n": 358822,
+      "brier": 0.2289955085423231,
+      "referenceBrier": 0.24326509807715693,
+      "auc": 0.5280179957715145,
+      "precision": 0.3093401986371742,
+      "recall": 0.26587764796638214
+    },
+    "cohort": {
+      "runners": {
+        "baseline": {
+          "n": 350,
+          "net": 11.766655370475725,
+          "mean": 0.03361901534421636,
+          "winRate": 1,
+          "capture": 0.43419393595051703,
+          "reversals": 0
+        },
+        "candidate": {
+          "n": 350,
+          "net": 0.3763553330724017,
+          "mean": 0.0010753009516354334,
+          "winRate": 0.2571428571428571,
+          "capture": -0.012152882621683871,
+          "reversals": 3
+        }
+      },
+      "givebacks": {
+        "baseline": {
+          "n": 493,
+          "net": -5.09025909174159,
+          "mean": -0.01032506915160566,
+          "winRate": 0,
+          "capture": -0.5369860361571684,
+          "reversals": 493
+        },
+        "candidate": {
+          "n": 493,
+          "net": -0.7455352118442979,
+          "mean": -0.0015122418090148032,
+          "winRate": 0.281947261663286,
+          "capture": -0.10157485455399998,
+          "reversals": 36
+        }
+      },
+      "commonTop": {
+        "baseline": {
+          "n": 332,
+          "net": 9.3299536966534,
+          "mean": 0.02810227017064277,
+          "winRate": 0.7710843373493976,
+          "capture": 0.25478010806971485,
+          "reversals": 75
+        },
+        "candidate": {
+          "n": 332,
+          "net": 0.38540923029817076,
+          "mean": 0.0011608711755968998,
+          "winRate": 0.2560240963855422,
+          "capture": -0.007701104662005134,
+          "reversals": 9
+        }
+      }
+    },
+    "runnerRetention": 0.03198490320509707,
+    "givebackRecovery": 0.8535368832101591,
+    "foldWins": 1,
+    "meanLeadMinutes": 751.6552582451774,
+    "leadSampleCount": 1607,
+    "gates": {
+      "enoughPairs": true,
+      "positiveNet": false,
+      "netImproves": true,
+      "foldsImprove": false,
+      "runnerPreserved": false,
+      "givebackRecovered": true,
+      "commonTopPreserved": false,
+      "brierImproves": true,
+      "discrimination": false
+    },
+    "accepted": false,
+    "releaseAuthorized": false,
+    "limitations": [
+      "Approximate regularized fitted policy, not a proof of global optimal stopping.",
+      "State samples within trades are correlated; weighting is per trade, metrics are descriptive.",
+      "March-August history was already inspected; expanding fits are causal but evaluation is not pristine holdout.",
+      "Surrogate entries/frames and fixed friction do not prove production or account-level profitability."
+    ],
+    "datasetSha256": "50499b5e4b5d22b153bb1a247d3a82f28db38d4353cb1d7294bd9980df220811"
+  },
+  "decision": "REJECTED_NO_DEPLOY",
+  "productionChanged": false
+}

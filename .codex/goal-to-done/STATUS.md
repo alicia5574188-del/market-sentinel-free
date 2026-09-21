@@ -1,5 +1,9 @@
 # 2026-09-21 — RBE research continuation; production unchanged
 
+FINAL: research computation finished on6cb74d4; run35584112663 rejects the learned policy.3,328 evaluation pairs,1/3 months improve, ROC-AUC0.5280, runner retention3.20%, after-cost result still negative. Earlier heuristic retains72.21%, also below85%. Do not keep rerunning/tuning either failed route. See research/RBE_CONTINUATION.md and research-results/rbe-continuation-2026-09-21.json. The research attempt is complete and rejected; a demonstrably superior production exit has NOT been achieved. Production/main/accounts/LIVE untouched. Final exact-code functional verification35584112638 succeeded; deployment was skipped. No workflow is left running for this attempt.
+
+## Prior implementation checkpoint — superseded
+
 Resume PR #356, not old adaptive/health tasks below. Repaired heuristic commit3cddea0: full CI35583191274 succeeded, research35583191263 rejected72.21% runner retention. The separate learned competing-risk/continuation-value model and three fixed fitted-policy iterations are now implemented, with matured-outcome cutoffs, two-day purge, expanding June/July/August tests and10focused tests passing locally. Its exact-head remote replay/CI are pending. See research/RBE_CONTINUATION.md. Exact production replay and independent evidence remain missing. No main merge, deployment, account reset or LIVE mutation.
 
 # 2026-09-20 — Forward Adaptive v2 IN PROGRESS
