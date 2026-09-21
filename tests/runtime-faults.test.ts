@@ -909,6 +909,7 @@ test("candidate rotation stays operational while new slots warm and no protected
   assert.equal(stream.runtime.evidence.WARMING_USDT.entryReady, false, "warming slot must remain unable to trade");
 });
 
+// Health classification must never weaken the separate executable-price guard.
 test("open-position health needs a fresh executable book, not ancillary entry warmup", async (t) => {
   const { stream } = await makeStream();
   const now = 1_800_000_212_000;
