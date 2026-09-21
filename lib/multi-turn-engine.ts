@@ -211,9 +211,20 @@ export function evaluateMultiTurn(input:{state?:MultiTurnState|null;paths:Record
     breadth[tf]=(longs+shorts)?longs/(longs+shorts):.5;
   }
   let ready=0,confirmed=0,updated=0;
+  // A deployment/restart temporarily has no in-memory candle paths. Retain only
+  // still-fresh prior frames until their paths are rebuilt instead of publishing
+  // an empty engine and temporarily disabling owning-timeframe exits.
   const nextFrames:MultiTurnState["frames"]={};
+  for(const [symbol,byTf] of Object.entries(state.frames)) {
+    const kept:Partial<Record<TurnTimeframe,TurnFrameState>>={};
+    for(const tf of TURN_TIMEFRAMES){
+      const frame=byTf[tf],cfg=TURN_CONFIG[tf];
+      if(frame&&input.now-frame.completedAt<=Math.max(10*60_000,cfg.minutes*60_000*1.5))kept[tf]=frame;
+    }
+    if(Object.keys(kept).length)nextFrames[symbol]=kept;
+  }
   for(const [symbol,byTf] of Object.entries(raw)){
-    const out:Partial<Record<TurnTimeframe,TurnFrameState>>={};
+    const out:Partial<Record<TurnTimeframe,TurnFrameState>>={...(nextFrames[symbol]??{})};
     for(let i=0;i<TURN_TIMEFRAMES.length;i++){
       const tf=TURN_TIMEFRAMES[i],m=byTf[tf];if(!m)continue;
       const prev=state.frames[symbol]?.[tf],incumbent=prev?.direction??m.rawDirection;
@@ -244,7 +255,9 @@ export function turnCandidates(state:MultiTurnState,costRate:number|((tf:TurnTim
   const rows:TurnCandidate[]=[];
   for(const [symbol,byTf] of Object.entries(state.frames))for(const tf of TURN_TIMEFRAMES){
     const f=byTf[tf];if(!f?.ready||f.direction==="NEUTRAL")continue;
-    const cfg=TURN_CONFIG[tf],cost=typeof costRate==="function"?costRate(tf):costRate,costEdge=f.expectedMoveRate-cost;
+    const cfg=TURN_CONFIG[tf];
+    if(state.updatedAt-f.completedAt>Math.max(10*60_000,cfg.minutes*60_000*1.5))continue;
+    const cost=typeof costRate==="function"?costRate(tf):costRate,costEdge=f.expectedMoveRate-cost;
     if(f.rawDirection!=="NEUTRAL"&&f.rawDirection!==f.direction)continue;
     if(f.continuationScore<cfg.minContinuation||costEdge<=0)continue;
     rows.push({symbol,timeframe:tf,side:f.direction,score:f.continuationScore*Math.max(.1,costEdge/Math.max(cost,.001)),

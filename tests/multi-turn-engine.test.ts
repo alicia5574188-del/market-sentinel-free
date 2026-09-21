@@ -88,6 +88,24 @@ test("a gap invalidates only affected aggregated frames instead of interpolation
   assert.equal(s.frames.BTC_USDT,undefined);
 });
 
+test("restart warmup preserves fresh prior frames instead of publishing an empty engine",()=>{
+  const p=path(360,i=>100*Math.exp(i*.0008));
+  const now=(p.at(-1)!.time+300)*1000+1000;
+  const before=evaluateMultiTurn({state:initialMultiTurn(),paths:{BTC_USDT:p},now});
+  assert.ok(Object.keys(before.frames.BTC_USDT??{}).length>0);
+  const duringRestart=evaluateMultiTurn({state:before,paths:{},now:now+30_000});
+  assert.ok(Object.keys(duringRestart.frames.BTC_USDT??{}).length>0);
+});
+
+test("retained restart frames age out and cannot create stale entries",()=>{
+  const p=path(360,i=>100*Math.exp(i*.0008));
+  const now=(p.at(-1)!.time+300)*1000+1000;
+  const before=evaluateMultiTurn({state:initialMultiTurn(),paths:{BTC_USDT:p},now});
+  const stale=evaluateMultiTurn({state:before,paths:{},now:now+3*24*60*60_000});
+  assert.equal(Object.keys(stale.frames).length,0);
+  assert.equal(turnCandidates(stale,.0022).length,0);
+});
+
 test("candidate selector rejects expected movement that cannot clear costs",()=>{
   const p=path(360,i=>100*Math.exp(i*.00005));
   const now=(p.at(-1)!.time+300)*1000+1000;
