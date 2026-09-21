@@ -200,12 +200,14 @@ function settleCalibration(state:MultiTurnState,paths:Record<string,TurnCandle[]
 export function evaluateMultiTurn(input:{state?:MultiTurnState|null;paths:Record<string,TurnCandle[]>;
   daily?:Record<string,TurnCandle[]>;retainSymbols?:string[];now:number}):MultiTurnState{
   const state=structuredClone(input.state?.version===MULTI_TURN_VERSION?input.state:initialMultiTurn()),daily=input.daily??{};
+  const retainSymbols=input.retainSymbols?new Set(input.retainSymbols):null;
   settleCalibration(state,input.paths,daily,input.now);
   const raw:Record<string,Partial<Record<TurnTimeframe,RawMetrics>>>={};
   const breadth:Partial<Record<TurnTimeframe,number>>={};
   for(const tf of TURN_TIMEFRAMES){
     let longs=0,shorts=0;
     for(const [symbol,base] of Object.entries(input.paths)){
+      if(retainSymbols&&!retainSymbols.has(symbol))continue;
       const rows=tf==="1d"?(daily[symbol]??[]):aggregateTurnCandles(base,tf),m=metrics(rows,tf);
       if(!m)continue;(raw[symbol]??={})[tf]=m;
       if(m.rawDirection==="LONG")longs++;else if(m.rawDirection==="SHORT")shorts++;
@@ -217,7 +219,6 @@ export function evaluateMultiTurn(input:{state?:MultiTurnState|null;paths:Record
   // still-fresh prior frames until their paths are rebuilt instead of publishing
   // an empty engine and temporarily disabling owning-timeframe exits.
   const nextFrames:MultiTurnState["frames"]={};
-  const retainSymbols=input.retainSymbols?new Set(input.retainSymbols):null;
   for(const [symbol,byTf] of Object.entries(state.frames)) {
     if(retainSymbols&&!retainSymbols.has(symbol))continue;
     const kept:Partial<Record<TurnTimeframe,TurnFrameState>>={};
