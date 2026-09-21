@@ -111,6 +111,9 @@ export type GateTicker = {
   volume_24h?: string;
   volume_24h_usd?: string;
   volume_24h_settle?: string;
+  high_24h?: string;
+  low_24h?: string;
+  change_percentage?: string;
   funding_rate?: string;
   mark_price?: string;
   index_price?: string;
@@ -169,6 +172,9 @@ export async function fetchMarketTickers() {
     symbol: row.contract ?? "",
     last: Number(row.last ?? 0),
     volume24hUsd: Number(row.volume_24h_usd ?? row.volume_24h_settle ?? 0),
+    high24h: Number(row.high_24h ?? row.last ?? 0),
+    low24h: Number(row.low_24h ?? row.last ?? 0),
+    change24hRate: Number(row.change_percentage ?? 0) / 100,
     fundingRate: Number(row.funding_rate ?? 0),
     openInterest: Math.abs(Number(row.total_size ?? 0)),
   })).filter((row) => row.symbol.endsWith("_USDT") && row.last > 0 && row.volume24hUsd > 0);
