@@ -25,7 +25,7 @@ export function archivedEquity(value:unknown,context:CurveContext,now:number):Eq
     ||!d||d.lastAt!==p.at||!valid(d.endEquity)||!Array.isArray(positions))return null;
   if(positions.some(t=>!valid(t.lastQuoteAt)||t.lastQuoteAt>p.at!+1000))return null;
   const stale=positions.some(t=>p.at!-t.lastQuoteAt!>8000);
-  return {at:p.at,equity:d.endEquity,kind:"observed",policy:p.policyVersion??"legacy",stale,
+  return {at:p.at,equity:d.endEquity,kind:"observed",policy:p.policyVersion??"legacy",...(stale?{stale:true}:{}),
     homogeneous:!stale&&p.at>=context.comparableSince&&p.policyVersion===context.policy
       &&positions.every(t=>t.exitControl?.policy===context.exitPolicy)};
 }
