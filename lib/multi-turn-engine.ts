@@ -245,7 +245,7 @@ export function turnCandidates(state:MultiTurnState,costRate:number|((tf:TurnTim
   for(const [symbol,byTf] of Object.entries(state.frames))for(const tf of TURN_TIMEFRAMES){
     const f=byTf[tf];if(!f?.ready||f.direction==="NEUTRAL")continue;
     const cfg=TURN_CONFIG[tf],cost=typeof costRate==="function"?costRate(tf):costRate,costEdge=f.expectedMoveRate-cost;
-    if(f.continuationScore<cfg.minContinuation||costEdge<=0)continue;
+    if(f.rawDirection!=="NEUTRAL"&&f.rawDirection!==f.direction)continue;\n    if(f.continuationScore<cfg.minContinuation||costEdge<=0)continue;
     rows.push({symbol,timeframe:tf,side:f.direction,score:f.continuationScore*Math.max(.1,costEdge/Math.max(cost,.001)),
       riskCap:cfg.riskCap,stopRate:f.stopRate,expectedMoveRate:f.expectedMoveRate,turnProbability:f.turnProbability,
       confidence:f.directionConfidence,continuationScore:f.continuationScore,completedAt:f.completedAt,signalPrice:f.price,reason:f.reason});
