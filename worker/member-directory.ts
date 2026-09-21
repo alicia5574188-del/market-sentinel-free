@@ -135,8 +135,8 @@ export class MemberDirectory extends DurableObject<CloudflareEnv> {
           const row=await tx.get<MemberRecord>(`member:${id}`);if(!row)throw new Error("账户不存在");
           if(row.revokedAt&&b.blocked===false)throw new Error("账户正在删除，不能恢复实盘跟随权限");
           const next={...row,followBlockedAt:b.blocked?(row.followBlockedAt??now):null};await tx.put(`member:${id}`,next);
-          if(b.blocked){const seats=await tx.get<string[]>("execution-seats")??[],nextSeats=seats.filter(v=>v!==id);
-            if(nextSeats.length!==seats.length)await tx.put("execution-seats",nextSeats);}
+          // Blocking new following does not evict a draining LIVE seat. The
+          // executor releases its seat only after all managed risk is flat.
           return publicRecord(next);
         });
         return json({ok:true,member:value});
