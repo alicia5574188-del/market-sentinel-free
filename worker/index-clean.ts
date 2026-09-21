@@ -3231,8 +3231,26 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     if (path === "/forward-export" && request.method === "GET") {
       await this.ensureAlarm();
-      return json({ exportedAt: Date.now(), forward: this.forwardView(),
-        measurements: this.forwardState?.samples ?? [],
+      const state=this.forwardState,exportedAt=Date.now();
+      const researchTrades=state?[...state.positions,...state.history].map(trade=>({
+        id:trade.id,symbol:trade.symbol,side:trade.side,status:trade.status,openedAt:trade.openedAt,closedAt:trade.closedAt,
+        durationMs:Math.max(0,(trade.closedAt??exportedAt)-trade.openedAt),
+        leverage:trade.leverage,margin:trade.margin,notional:trade.notional,plannedRisk:trade.plannedRisk,
+        entry:trade.entryContext?{provenance:"RECORDED_AT_ENTRY",...trade.entryContext}:{
+          provenance:"LEGACY_POSITION_WITHOUT_ENTRY_CONTEXT",
+          note:"该持仓早于入场上下文持久化上线；只保留当时已存在的turn/forecast/rule字段，不用当前状态伪造入场原因。",
+          timeframe:trade.turn?.timeframe??null,side:trade.side,signalAt:trade.turn?.signalAt??null,
+          turnProbability:trade.turn?.entryTurnProbability??null,continuationScore:trade.turn?.entryContinuation??null,
+          directionConfidence:trade.turn?.entryDirectionConfidence??null,forecast:trade.forecast??null,ruleReason:trade.rule.reason,
+        },
+        holdAssessment:trade.holdValue??null,
+        path:{maxFavorableRate:trade.favorable,maxAdverseRate:trade.adverse,lastPrice:trade.lastPrice,lastQuoteAt:trade.lastQuoteAt},
+        exit:trade.status==="CLOSED"?{reason:trade.exitReason,closedAt:trade.closedAt,exitPrice:trade.exitPrice,
+          netPnl:trade.netPnl,grossPnl:trade.grossPnl,audit:trade.exitAudit??null}:null,
+      })): [];
+      return json({ exportedAt, forward: this.forwardView(exportedAt),
+        measurements: state?.samples ?? [],
+        research:{version:"multi-turn-trade-review-v1",purpose:"逐单复盘入场依据、持仓价值与退出结果",trades:researchTrades},
         archiveEndpoint: "/api/forward/archive", completeness: "当前快照与滚动样本；完整不可变记录按archive接口分页读取" });
     }
     if (path === "/forward-equity" && request.method === "GET") {

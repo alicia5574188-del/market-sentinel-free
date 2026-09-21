@@ -131,9 +131,18 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         <section className="fr-stats fr-paper-summary" data-testid="paper-account-summary"><Stat label="模拟账户权益" value={`${fmt(data?.equity)} U`} note={`起始 ${fmt(data?.initialEquity)} U`}/><Stat label="保证金占用" value={`${fmt(paperMargin)} U`} note="当前模拟持仓合计"/><Stat label="持仓浮动盈亏" value={`${signed(data?.floating)} U`} note="已包含模型退出成本口径"/><Stat label="当前持仓" value={data?`${data.positions.length} 笔`:"—"} note={`已完成 ${fmt(data?.resolved,0)} 笔`}/></section>
         <div className="fr-account-line"><span>模拟成交额 {fmt(data?.turnover)} U · 已扣费用 {fmt(data?.fees)} U</span><b>最大回撤 {fmt(data?data.maxDrawdown*100:null)}%</b></div>
         <section className="fr-section fr-live-holdings" data-testid="paper-account-holdings"><div className="fr-section-head"><h2>当前持仓</h2><span>{data?.positions.length??"—"} 笔</span></div>
-          {data?.positions.length?<div className="fr-position-list">{data.positions.map(t=>{const pnl=tradePnl(t,now),rate=t.notional>0&&pnl!=null?pnl/t.notional:null;return <details key={t.id} className="fr-position-row"><summary>
-            <span><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {fmt(t.leverage,0)}× · 保证金 {fmt(t.margin)} U</small></span>
-            <span className={(pnl??0)>=0?"fr-positive":"fr-negative"}><b>{signed(pnl)} U</b><small>{rate==null?"—":`${signed(rate*100,3)}%`} · 展开</small></span>
+          {data?.positions.length?<div className="fr-position-list">{data.positions.map(t=>{const pnl=tradePnl(t,now),rate=t.notional>0&&pnl!=null?pnl/t.notional:null;
+            const context=t.entryContext,hold=t.holdValue,tf=context?.timeframe??t.turn?.timeframe;
+            const entrySpace=context?.remainingSpaceRate??t.forecast?.remainingNetRate??null;
+            const pullback=hold?.pullbackRiskRate??null,best=hold?.bestHoldMinutes??context?.bestHoldMinutes??null;
+            const verdict=hold?.action==="EXIT_PROFIT"?"建议止盈":hold?.action==="EXIT_RISK"?"建议退出":hold?"继续持有":"等待评估";
+            const holdText=best==null?"最佳持有 —":best>=1440?`最佳持有 ${fmt(best/1440,1)}天`:best>=60?`最佳持有 ${fmt(best/60,1)}小时`:`最佳持有 ${fmt(best,0)}分钟`;
+            return <details key={t.id} className="fr-position-row"><summary>
+            <span className="fr-position-primary"><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {fmt(t.leverage,0)}× · 保证金 {fmt(t.margin)} U</small>
+              <b className={(pnl??0)>=0?"fr-positive":"fr-negative"}>{signed(pnl)} U</b><small>{rate==null?"—":`${signed(rate*100,3)}% · 展开`}</small></span>
+            <span className="fr-position-entry"><b>{tf?`${tf} · ${t.side==="LONG"?"多向":"空向"}`:"入场依据"}</b>
+              <small>空间 {entrySpace==null?"—":`${fmt(entrySpace*100,1)}%`} · 回调 {pullback==null?"—":`${fmt(pullback*100,1)}%`}</small>
+              <small>{holdText} · {verdict}</small></span>
           </summary><TradeCard trade={t} now={now}/></details>;})}</div>:<Empty title="当前没有模拟持仓" text="符合条件的新订单会显示在这里。"/>}
         </section>
       </>}
@@ -185,7 +194,7 @@ function TradeCard({trade:t,now}:{trade:Trade;now:number}){const open=t.status==
       <div><dt>进场时间</dt><dd>{time(t.openedAt)}</dd></div><div><dt>出场时间</dt><dd>{open?"持仓中":time(t.closedAt)}</dd></div>
       <div><dt>持仓时长</dt><dd>{duration(t.openedAt,t.closedAt,now)}</dd></div></dl>
     {t.exitReason&&<p className="fr-trade-reason">退出原因：{t.exitReason}</p>}
-    <details className="fr-details"><summary>策略与模拟成本</summary><p className="fr-note">{t.turn?`${t.turn.timeframe}转折级别 · 入场转折概率 ${fmt(t.turn.entryTurnProbability*100,1)}% · 延续 ${fmt(t.turn.entryContinuation*100,1)}%。退出由同周期转折、原始硬止损或异常安全寿命决定。`:`规则 v${t.rule.version} · ${condition(t.rule)}。退出依据：${t.rule.exitMode==="REACTION_DECAY"?"反应回吐保护":"反应期限"}。`}{t.exitReason?` ${t.exitReason}`:""}</p>
+    <details className="fr-details"><summary>策略与模拟成本</summary><p className="fr-note">{t.turn?`${t.turn.timeframe}转折级别 · 入场转折概率 ${fmt(t.turn.entryTurnProbability*100,1)}% · 延续 ${fmt(t.turn.entryContinuation*100,1)}%。当前由同周期转折、原始硬止损与时间—空间持仓价值共同管理退出。`:`规则 v${t.rule.version} · ${condition(t.rule)}。退出依据：${t.rule.exitMode==="REACTION_DECAY"?"反应回吐保护":"反应期限"}。`}{t.exitReason?` ${t.exitReason}`:""}</p>
       <p className="fr-note">模拟成交使用新鲜盘口并计入模型手续费、滑点和资金费占位；实盘实际结果请在实盘页对照。</p></details>
   </article>;
 }
