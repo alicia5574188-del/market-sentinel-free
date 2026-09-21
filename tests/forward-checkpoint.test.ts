@@ -122,8 +122,8 @@ test("release-344 Worker does not create a later profit-floor checkpoint",async(
   assert.equal(next.state.positions.length,1);
   assert.equal(next.state.positions[0].profitProtection,undefined);
   assert.equal(next.state.positions[0].profitProtectionMigration,undefined);
-  assert.equal(next.protectionChanged,false,
-    "release-344 has no independent Multi-Turn profit-floor checkpoint to persist");
+  assert.equal(next.state.history.some(x=>x.exitAudit?.trigger==="PROFIT_GIVEBACK"),false,
+    "release-344 has no independent Multi-Turn profit-giveback exit");
 });
 
 test("guarded and deferred adaptive-profit migration state survives compact restart",()=>{
