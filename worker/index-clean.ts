@@ -2654,8 +2654,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private symbolManagementReady(symbol: string, now = Date.now()) {
     const evidence = this.runtime.evidence[symbol];
     if (!evidence || this.runtime.contractMeta[symbol] == null) return false;
-    return freshQuote({ bestBid: evidence.bestBid ?? evidence.midpoint, bestAsk: evidence.bestAsk ?? evidence.midpoint,
-      observedAt: evidence.observedAt, fresh: evidence.fresh }, now);
+    // Health must use the same strict executable-book freshness as the worker's
+    // actual order/protection path, not the forward reader's looser display helper.
+    return evidence.fresh === true && now - evidence.observedAt <= STALE_AFTER_MS
+      && evidence.bestBid != null && evidence.bestAsk != null;
   }
 
   private realtimeReadiness(now = Date.now()) {
