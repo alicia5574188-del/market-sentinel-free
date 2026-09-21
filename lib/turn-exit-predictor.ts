@@ -62,6 +62,7 @@ export type PredictiveExitDecision = {
     profitGiveback: number;
     runnerMfeAtr: number;
     givebackAtr: number;
+    currentReturnAtr: number;
   };
   reason: string;
 };
@@ -169,15 +170,24 @@ export function predictMultiTurnExit(input:PredictiveExitInput,
   // test. This is not a trailing stop because giveback alone can never exit.
   const runnerMfeAtr=input.favorable/Math.max(own.atrRate,1e-9);
   const givebackAtr=profitGiveback/Math.max(own.atrRate,1e-9);
+  const currentReturnAtr=currentReturn/Math.max(own.atrRate,1e-9);
   const runnerRenewalVeto=runnerMfeAtr>=1.10&&givebackAtr<.65
     &&ownDecay<.78&&ownTurn<.78&&shockHazard<.92;
+  // Historical Gate paths show that RBE evidence by itself cannot reliably
+  // distinguish a temporary lower-TF shakeout from a true reversal while a
+  // runner still carries a large ATR-normalized profit cushion. Keep that
+  // cushion unless structure/shock evidence is genuinely extreme. This remains
+  // predictive: the exit still requires RBE hazard; profit cushion only vetoes
+  // low-specificity early exits and never triggers an exit by itself.
+  const profitCushionVeto=currentReturnAtr>=1.25&&shockHazard<.93
+    &&!(ownTurn>=.80&&structureBreak>=.55);
   const genericThreat=propagatedThreat||structuralThreat||shockThreat;
   const fourHourThreat=input.timeframe!=="4h"||(
     (ownTurn>=.58||ownDecay>=.72||shockHazard>=.90)
     &&(lowerLead>=.62||structuralThreat||shockHazard>=.90)
     &&(upperOpposition>=.30||upperSupport<.28||shockHazard>=.93)
   );
-  const shouldExit=eligible&&!higherTrendVeto&&!runnerRenewalVeto&&genericThreat&&fourHourThreat
+  const shouldExit=eligible&&!higherTrendVeto&&!runnerRenewalVeto&&!profitCushionVeto&&genericThreat&&fourHourThreat
     &&reversalHazard>=config.exitHazard&&extensionSurvival<=config.maxExitSurvival
     &&holdValueRate<=-exitMargin&&evidenceFamilies>=config.minEvidenceFamilies;
 
@@ -193,5 +203,5 @@ export function predictMultiTurnExit(input:PredictiveExitInput,
   return{version:RBE_EXIT_VERSION,phase,shouldExit,reversalHazard,slowHazard,shockHazard,extensionSurvival,
     holdValueRate,expectedExtensionRate,expectedReversalCostRate,evidenceFamilies,eligible,
     diagnostics:{ownTurn,ownDecay,lowerLead,lowerSupport,upperSupport,upperOpposition,sequenceShift,structureBreak,
-      breadthPressure,currentReturn,profitGiveback,runnerMfeAtr,givebackAtr},reason};
+      breadthPressure,currentReturn,profitGiveback,runnerMfeAtr,givebackAtr,currentReturnAtr},reason};
 }
