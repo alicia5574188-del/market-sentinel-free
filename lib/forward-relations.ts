@@ -17,6 +17,8 @@ import { MULTI_TURN_VERSION, TURN_CONFIG, TURN_TIMEFRAMES, evaluateMultiTurn, in
   type MultiTurnState, type TurnCandidate, type TurnEvidence, type TurnPhase, type TurnSide, type TurnTimeframe } from "./multi-turn-engine.ts";
 import { MULTI_TURN_PROFIT_PROTECTION_VERSION, type MultiTurnTradeProfitProtection } from "./multi-turn-profit-protection.ts";
 import { evaluateMultiTurnHoldValue, multiTurnHoldWindows, type MultiTurnHoldValue } from "./multi-turn-hold-value.ts";
+import { MULTI_TURN_ROTATION_COOLDOWN_MS, MULTI_TURN_ROTATION_VERSION, evaluateRotationOpportunity,
+  multiTurnRotationReentryCooldownMs, rankWeakRotationHoldings, rotationAdvantageEnough, rotationRiskSaturated } from "./multi-turn-rotation.ts";
 // The storage schema stays v1.0 so an algorithm upgrade cannot reset the ledger.
 export const FORWARD_VERSION = "forward-relations-v1.0";
 export const FORWARD_GRAMMAR = "conditional-response-conjunction-v1";
@@ -79,6 +81,8 @@ export type ForwardState = { version: string; startedAt: number; revision: numbe
   selectedSymbols: string[]; storage: { persistedAt: number; error: string | null }; liveEligible: false;
   adaptationVersion?:string; lastFitMeasured?:number;
   strategyAuthorityVersion?:string;turnEngine?:MultiTurnState;turnLastEntryBars?:Record<string,number>;turnSymbolExitAt?:Record<string,number>;cutoverAt?:number;
+  turnRotationBlockedUntil?:Record<string,number>;
+  rotationState?:{version:typeof MULTI_TURN_ROTATION_VERSION;lastAt:number;count:number;lastFrom:string|null;lastTo:string|null};
   policyVersion?:string; feedback?:Feedback[]; evidenceDiagnostics?:EvidenceDiagnostics;
   entryDiagnostics?:{at:number;matched:number;opened:number;reasons:Record<string,number>;retry?:boolean;queued?:number;adaptiveScaled?:number};
   quoteRetries?:QuoteRetry[];
@@ -115,7 +119,8 @@ export function initialForward(now:number):ForwardState {
 export function initialMultiTurnForward(now:number):ForwardState{
   const s=initialForward(now);
   s.revision=0;s.events=[];s.rules=[];s.samples=[];s.pending={};s.frames={};s.feedback=[];s.relationEntries={};s.quoteRetries=[];
-  s.strategyAuthorityVersion=MULTI_TURN_VERSION;s.turnEngine=initialMultiTurn();s.turnLastEntryBars={};s.turnSymbolExitAt={};s.cutoverAt=now;
+  s.strategyAuthorityVersion=MULTI_TURN_VERSION;s.turnEngine=initialMultiTurn();s.turnLastEntryBars={};s.turnSymbolExitAt={};
+  s.turnRotationBlockedUntil={};s.rotationState={version:MULTI_TURN_ROTATION_VERSION,lastAt:0,count:0,lastFrom:null,lastTo:null};s.cutoverAt=now;
   s.latestReason="Multi-Turn六周期转折引擎已启动；旧Forward规则不再拥有新开仓或策略退出权。";
   event(s,now,"START",MULTI_TURN_VERSION,s.latestReason);return s;
 }
@@ -136,7 +141,12 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
   const authority=v.strategyAuthorityVersion??"legacy-forward-rules-v1";
   return {...v,adaptationVersion:v.adaptationVersion??"legacy-forward-adaptation-v1",lastFitMeasured:v.lastFitMeasured??v.measured,
     strategyAuthorityVersion:authority,turnLastEntryBars:v.turnLastEntryBars??{},
-    ...(authority===MULTI_TURN_VERSION?{turnSymbolExitAt:v.turnSymbolExitAt??{}}:v.turnSymbolExitAt?{turnSymbolExitAt:v.turnSymbolExitAt}:{}),
+    ...(authority===MULTI_TURN_VERSION?{
+      turnSymbolExitAt:v.turnSymbolExitAt??{},
+      turnRotationBlockedUntil:v.turnRotationBlockedUntil??{},
+      rotationState:v.rotationState?.version===MULTI_TURN_ROTATION_VERSION?v.rotationState:
+        {version:MULTI_TURN_ROTATION_VERSION,lastAt:0,count:0,lastFrom:null,lastTo:null},
+    }:v.turnSymbolExitAt?{turnSymbolExitAt:v.turnSymbolExitAt}:{}),
     ...(v.turnEngine?.version===MULTI_TURN_VERSION?{turnEngine:v.turnEngine}:{})};
 }
 export function frameFromCandles(symbol:string,rows:Candle[],now:number):Frame|null {
