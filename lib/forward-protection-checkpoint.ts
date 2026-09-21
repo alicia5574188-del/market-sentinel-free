@@ -26,8 +26,9 @@ export function forwardProtectionChanged(previous: ForwardState, next: ForwardSt
   return next.positions.some(t => {
     const p = prior.get(t.id);
     if (!p || p.openedAt !== t.openedAt) return false; // Financial change saves the full account.
-    const priorProfitTier=t.rule.authority==="MULTI_TURN"?multiTurnProfitFloor(p.favorable)?.tier??-1:-1;
-    const nextProfitTier=t.rule.authority==="MULTI_TURN"?multiTurnProfitFloor(t.favorable)?.tier??-1:-1;
+    const riskRate=t.plannedRisk/Math.max(t.notional,1e-9);
+    const priorProfitTier=t.rule.authority==="MULTI_TURN"?multiTurnProfitFloor(p.favorable,riskRate)?.tier??-1:-1;
+    const nextProfitTier=t.rule.authority==="MULTI_TURN"?multiTurnProfitFloor(t.favorable,riskRate)?.tier??-1:-1;
     return (t.rule.exitMode === "REACTION_DECAY" && t.favorable >= t.rule.armRate && t.favorable !== p.favorable)
       || nextProfitTier!==priorProfitTier
       || t.relationFailureBars !== p.relationFailureBars || t.lastRelationBar !== p.lastRelationBar;
