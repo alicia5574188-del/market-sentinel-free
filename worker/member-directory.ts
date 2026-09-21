@@ -78,13 +78,28 @@ export class MemberDirectory extends DurableObject<CloudflareEnv> {
         if(!username)return json({error:"用户名需为2–32位字母、数字、中文、点、横线或下划线，且必须以文字或数字开头"},400);
         if(!password)return json({error:"密码长度需为8–128位"},400);
         if(typeof b.requestId!=="string"||!/^[-a-zA-Z0-9_]{16,80}$/.test(b.requestId))return json({error:"注册请求标识无效"},400);
-        const inviteHash=await digestMember(invite),usernameKeyHash=await digestMember(username.key),
-          passwordRecord=await createMemberPassword(password),nextInvite=await this.newInvite(root),id=`m_${randomHex(16)}`;
+        const inviteHash=await digestMember(invite),usernameKeyHash=await digestMember(username.key);
+        // Reject invalid invitations before expensive password work. This
+        // read-only preflight accepts a valid retry; the commit checks again.
+        await this.ctx.storage.transaction(async tx=>{
+          const activeInvite=await tx.get<InviteRecord>("current-invite");
+          if(activeInvite?.hash===inviteHash)return;
+          const priorId=await tx.get<string>(`register:${b.requestId}`),existing=priorId?await tx.get<MemberRecord>(`member:${priorId}`):null;
+          if(existing?.usernameKeyHash===usernameKeyHash&&!existing.revokedAt&&existing.password)return;
+          throw new Error("邀请码已失效或已被其他账户使用，请向邀请人获取新的邀请码");
+        });
+        const passwordRecord=await createMemberPassword(password),nextInvite=await this.newInvite(root),id=`m_${randomHex(16)}`;
         const result=await this.ctx.storage.transaction(async tx=>{
           const requestKey=`register:${b.requestId}`,priorId=await tx.get<string>(requestKey);
           if(priorId) {
             const existing=await tx.get<MemberRecord>(`member:${priorId}`);
-            if(existing?.usernameKeyHash===usernameKeyHash&&!existing.revokedAt)return {id:priorId,repeated:true};
+            if(existing) {
+              // The retry token is an idempotency key, never an alternative
+              // login credential. A successful retry still proves the password.
+              if(existing.usernameKeyHash!==usernameKeyHash||existing.revokedAt||!existing.password
+                ||!await verifyMemberPassword(password,existing.password))throw new Error("注册请求与原账户不匹配，请使用用户名和密码登录");
+              return {id:priorId,repeated:true};
+            }
             await tx.delete(requestKey);
           }
           const activeInvite=await tx.get<InviteRecord>("current-invite");
@@ -143,8 +158,12 @@ export class MemberDirectory extends DurableObject<CloudflareEnv> {
           const row=await tx.get<MemberRecord>(`member:${id}`);if(!row)throw new Error("账户不存在");
           if(!row.revokedAt)throw new Error("账户尚未进入安全删除状态");
           const current=await tx.get<{id:string}>("current-key"),seats=await tx.get<string[]>("execution-seats")??[],total=(await tx.get<number>("member-count"))??0;
-          const keys=[`member:${id}`,...(row.keyHash?[`key:${row.keyHash}`]:[]),...(row.usernameKeyHash?[`username:${row.usernameKeyHash}`]:[]),
-            ...claimKeys,...issueKeys,...registrationKeys];if(current?.id===id)keys.push("current-key");
+          const keys=[`member:${id}`],references=[...(row.keyHash?[`key:${row.keyHash}`]:[]),...(row.usernameKeyHash?[`username:${row.usernameKeyHash}`]:[]),
+            ...claimKeys,...issueKeys,...registrationKeys];
+          // A username may be registered again while a revoked account waits
+          // for deletion. Remove only references still owned by this account.
+          for(const key of references)if(await tx.get<string>(key)===id)keys.push(key);
+          if(current?.id===id)keys.push("current-key");
           await tx.delete(keys);const nextSeats=seats.filter(v=>v!==id);if(nextSeats.length!==seats.length)await tx.put("execution-seats",nextSeats);
           await tx.put("member-count",Math.max(0,total-1));
         });

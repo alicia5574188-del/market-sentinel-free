@@ -26,12 +26,19 @@ export function forwardProtectionChanged(previous: ForwardState, next: ForwardSt
   return next.positions.some(t => {
     const p = prior.get(t.id);
     if (!p || p.openedAt !== t.openedAt) return false; // Financial change saves the full account.
-    const priorBand=p.profitProtection?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?p.profitProtection.checkpointBand:-1;
-    const nextBand=t.profitProtection?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?t.profitProtection.checkpointBand:-1;
+    const priorProtection=p.profitProtection?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?p.profitProtection:null;
+    const nextProtection=t.profitProtection?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?t.profitProtection:null;
+    const priorBand=priorProtection?.checkpointBand??-1;
+    const nextBand=nextProtection?.checkpointBand??-1;
     const priorMigration=p.profitProtectionMigration?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?p.profitProtectionMigration.state:null;
     const nextMigration=t.profitProtectionMigration?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?t.profitProtectionMigration.state:null;
     return (t.rule.exitMode === "REACTION_DECAY" && t.favorable >= t.rule.armRate && t.favorable !== p.favorable)
       || nextBand!==priorBand || nextMigration!==priorMigration
+      // Multi-Turn can arm before the legacy rule's armRate. Its exact floor
+      // and observed peak remain authority within a 0.25R display band too.
+      // The caller retains the same ten-second dedicated write lane.
+      || !!(nextProtection&&priorProtection&&(nextProtection.floorRate!==priorProtection.floorRate
+        || nextProtection.peakR!==priorProtection.peakR))
       || t.relationFailureBars !== p.relationFailureBars || t.lastRelationBar !== p.lastRelationBar;
   });
 }

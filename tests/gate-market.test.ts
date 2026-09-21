@@ -114,3 +114,24 @@ test("Gate stats use contract_stats and liquidations retain signed order_size", 
   await withFetch([{ time: 1, open_interest: "123.5" }], async () => assert.equal(Number((await fetchContractStats("X_USDT"))?.open_interest), 123.5));
   await withFetch([{ time: 1, order_size: "-7", size: "999", fill_price: "100" }], async () => assert.equal(Number((await fetchLiquidations("X_USDT"))[0].order_size), -7));
 });
+
+test("public fallback releases the failed host response before starting another request",async()=>{
+  const prior=globalThis.fetch;let cancelled=false,requests=0;
+  const completed=Math.floor(Date.now()/300000)*300-300;
+  globalThis.fetch=async()=>{
+    requests++;
+    if(requests===1)return new Response(new ReadableStream({cancel(){cancelled=true;}}),{status:503});
+    assert.equal(cancelled,true,"failed response must free its connection before fallback");
+    return Response.json([{t:completed,v:"1",o:"100",h:"102",l:"99",c:"101"}]);
+  };
+  try{assert.equal((await fetchStructureCandles("BODY_RELEASE_USDT","5m",4)).length,1);assert.equal(requests,2);}
+  finally{globalThis.fetch=prior;}
+});
+
+test("terminal public errors release unread bodies without changing error or retry policy",async()=>{
+  const prior=globalThis.fetch;let cancelled=false,requests=0;
+  globalThis.fetch=async()=>{requests++;return new Response(new ReadableStream({cancel(){cancelled=true;}}),{status:400});};
+  try{await assert.rejects(()=>fetchContractStats("BODY_RELEASE_USDT"),/Gate public 400/);
+    assert.equal(cancelled,true);assert.equal(requests,1);}
+  finally{globalThis.fetch=prior;}
+});

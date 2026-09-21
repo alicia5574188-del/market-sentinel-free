@@ -137,6 +137,34 @@ test("turn calibration resolves only after the causal due time",()=>{
   assert.ok(s3.calibration["5m"].brier>=0&&s3.calibration["5m"].brier<=1);
 });
 
+test("delayed calibration uses the same forecast endpoint and label as an on-time evaluation",()=>{
+  const state=initialMultiTurn();
+  state.pending=[{id:"BTC_USDT:5m:window",symbol:"BTC_USDT",timeframe:"5m",at:START+300_000,
+    dueAt:START+900_000,direction:"LONG",predicted:.2,price:100,volatilityRate:.001}];
+  const endpoint=[bar(0,100),bar(1,100),bar(2,99)];
+  const onTime=evaluateMultiTurn({state,paths:{BTC_USDT:endpoint},now:START+900_000});
+  const delayed=evaluateMultiTurn({state,paths:{BTC_USDT:[...endpoint,bar(3,101),bar(4,102)]},now:START+1_500_000});
+  assert.equal(onTime.calibration["5m"].actualMean,1);
+  const {lastResolvedAt:timelyAt,...timelyLabel}=onTime.calibration["5m"];
+  const {lastResolvedAt:delayedAt,...delayedLabel}=delayed.calibration["5m"];
+  assert.deepEqual(delayedLabel,timelyLabel,"a later recovery cannot rewrite the original two-bar outcome");
+  assert.equal(timelyAt,START+900_000);assert.equal(delayedAt,START+1_500_000);
+  const repeated=evaluateMultiTurn({state:delayed,paths:{BTC_USDT:endpoint},now:START+1_600_000});
+  assert.equal(repeated.calibration["5m"].count,1,"a resolved forecast is not scored twice");
+});
+
+test("calibration waits for a missing exact endpoint and never substitutes a later candle",()=>{
+  const state=initialMultiTurn();
+  const forecast={id:"BTC_USDT:5m:missing",symbol:"BTC_USDT",timeframe:"5m" as const,at:START+300_000,
+    dueAt:START+900_000,direction:"LONG" as const,predicted:.2,price:100,volatilityRate:.001};
+  state.pending=[forecast];
+  const laterOnly=[bar(3,99),bar(4,98)];
+  const waiting=evaluateMultiTurn({state,paths:{BTC_USDT:laterOnly},now:START+1_200_000});
+  assert.equal(waiting.calibration["5m"].count,0);assert.deepEqual(waiting.pending,[forecast]);
+  const expired=evaluateMultiTurn({state:waiting,paths:{BTC_USDT:laterOnly},now:START+1_500_000});
+  assert.equal(expired.calibration["5m"].count,0);assert.deepEqual(expired.pending,[]);
+});
+
 test("breadth contradiction raises turn probability for the incumbent direction",()=>{
   const make=(down:boolean)=>path(360,i=>100*Math.exp(i*(down?-.0007:.0007)));
   const long=make(false),now=(long.at(-1)!.time+300)*1000+1000;

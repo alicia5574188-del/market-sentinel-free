@@ -52,6 +52,9 @@ async function gatePublic<T>(path: string, timeoutMs = GATE_PUBLIC_TIMEOUT_MS, a
       });
       if (!response.ok) {
         const retryAt = responseRetryAt(response, Date.now());
+        // Failed responses are never read. Release their connections before
+        // retrying another host so errors cannot occupy the book fetch slots.
+        await response.body?.cancel().catch(() => undefined);
         if (response.status === 429) endpointBackoffUntil.set(hostKey, retryAt);
         const error = new GatePublicError(`Gate public ${response.status}`, response.status, retryAt);
         if ((response.status < 500 && response.status !== 429) || attempt + 1 >= attempts) throw error;

@@ -70,6 +70,155 @@ test("simultaneous repeated registration request commits a single user",()=>cloc
   assert.equal(a.status,200);assert.equal(b.status,200);assert.equal(x.member.id,y.member.id);
   assert.equal((await(await h.rpc("/overview")).json<any>()).members.length,1);
 }));
+test("registration retry authenticates the original password before returning a session",()=>clock(async()=>{
+  const h=await harness(),overview=await(await h.rpc("/overview")).json<any>(),
+    body={inviteCode:overview.invite.code,username:"retry_user",password:"original-password",requestId:"auth-retry-request-01"};
+  const registered=await h.http("/api/members/register","",body);assert.equal(registered.status,200);
+  const original=await registered.json<any>();
+  const wrong=await h.http("/api/members/register","",{...body,password:"different-password"});
+  assert.equal(wrong.status,409);assert.equal(wrong.headers.has("set-cookie"),false);
+  const retry=await h.http("/api/members/register","",body);assert.equal(retry.status,200);
+  assert.equal((await retry.json<any>()).memberId,original.memberId);
+}));
+
+test("invalid registration invitations are rejected before password derivation",()=>clock(async()=>{
+  const h=await harness();let derivations=0;const original=crypto.subtle.deriveBits.bind(crypto.subtle);
+  crypto.subtle.deriveBits=async(...args)=>{derivations++;return original(...args);};
+  try {
+    const r=await h.rpc("/register",{inviteCode:"INV-"+"A".repeat(24),username:"invalid_invite_user",password:"synthetic-password",requestId:"invalid-invite-test-01"});
+    assert.equal(r.status,409);assert.equal(derivations,0);assert.equal(await h.dstore.get("member-count"),undefined);
+  }finally{crypto.subtle.deriveBits=original;}
+}));
+
+test("finalizing an older deletion preserves a replacement user's username index",()=>clock(async()=>{
+  const h=await harness(),a=await h.issue();
+  assert.equal((await h.rpc(`/begin-delete?id=${a.id}`,{})).status,200);
+  const overview=await(await h.rpc("/overview")).json<any>();
+  const registered=await h.rpc("/register",{inviteCode:overview.invite.code,username:a.username,password:"replacement-password",requestId:"replacement-user-01"});
+  assert.equal(registered.status,200);const replacement=await registered.json<any>();
+  assert.equal((await h.rpc(`/finalize-delete?id=${a.id}`,{})).status,200);
+  const login=await h.rpc("/login",{username:a.username,password:"replacement-password",bucket:"b".repeat(64)});
+  assert.equal(login.status,200);assert.equal((await login.json<any>()).id,replacement.member.id);
+}));
+
+test("owner can finish deletion after executor erasure succeeded but directory finalization failed",()=>clock(async()=>{
+  const h=await harness(),a=await h.issue(),owner=ownerSessionCookie(await createOwnerSession(ROOT));await h.internal(a.id,"/status");
+  const original=h.directory.fetch.bind(h.directory);let fail=true;
+  h.directory.fetch=async(request:Request)=>{
+    if(new URL(request.url).pathname==="/finalize-delete"&&fail){fail=false;return Response.json({error:"injected transient directory failure"},{status:503});}
+    return original(request);
+  };
+  assert.equal((await h.http("/api/members/delete",owner,{id:a.id})).status,503);
+  const actor=h.actors.get(a.id);assert.ok(await actor.storage.get("member-execution:v1:deleted"));
+  const restarted=context(actor.storage);actor.engine=new MemberExecutor(restarted.ctx as never,h.env);await restarted.ready();
+  assert.equal((await h.internal(a.id,"/status")).status,410);
+  const removed=await h.http("/api/members/delete",owner,{id:a.id});assert.equal(removed.status,200);
+  assert.equal(await h.dstore.get(`member:${a.id}`),undefined);
+  assert.equal(await h.dstore.get("member-count"),0);
+  assert.equal((await h.http("/api/members/resume",owner,{id:a.id})).status,404);
+}));
+
+test("deletion atomically retains original state when the tombstone write fails and retries safely",()=>clock(async()=>{
+  const h=await harness(),a=await h.issue(),owner=ownerSessionCookie(await createOwnerSession(ROOT));await h.internal(a.id,"/status");
+  const actor=h.actors.get(a.id),put=actor.storage.put.bind(actor.storage);
+  await actor.storage.put(Object.fromEntries(Array.from({length:260},(_,i)=>[`test-archive:${i}`,{i}])));
+  let fail=true;actor.storage.put=async(key:string|Record<string,unknown>,value?:unknown)=>{
+    if(key==="member-execution:v1:deleted"&&fail){fail=false;throw new Error("injected tombstone failure");}
+    return put(key,value);
+  };
+  assert.equal((await h.http("/api/members/delete",owner,{id:a.id})).status,409);
+  assert.equal((await actor.storage.get("member-execution:v1:identity")).id,a.id);
+  assert.deepEqual(await actor.storage.get("test-archive:259"),{i:259});
+  const restarted=context(actor.storage);actor.engine=new MemberExecutor(restarted.ctx as never,h.env);await restarted.ready();
+  assert.equal((await h.http("/api/members/delete",owner,{id:a.id})).status,200);
+  assert.deepEqual([...actor.storage.data.keys()],["member-execution:v1:deleted"]);
+}));
+
+test("owner cleanup can finish a legacy anonymous tombstone without restoring member access",()=>clock(async()=>{
+  const h=await harness(),a=await h.issue(),owner=ownerSessionCookie(await createOwnerSession(ROOT));await h.internal(a.id,"/status");
+  await h.rpc(`/begin-delete?id=${a.id}`,{});const actor=h.actors.get(a.id);
+  await actor.storage.deleteAll();await actor.storage.put("member-execution:v1:deleted",{id:"deleted",at:now});
+  const restarted=context(actor.storage);actor.engine=new MemberExecutor(restarted.ctx as never,h.env);await restarted.ready();
+  assert.equal((await h.internal(a.id,"/status")).status,410);
+  assert.equal((await h.http("/api/members/delete",owner,{id:a.id})).status,200);
+  assert.equal(await h.dstore.get(`member:${a.id}`),undefined);
+}));
+
+test("deletion drains turnover and invalidates delayed settlement writes before erasure",()=>clock(async()=>{
+  const h=await harness(),a=await h.issue(),aa=await h.member(a.id),owner=ownerSessionCookie(await createOwnerSession(ROOT));
+  const opened=now-620000,closed=now-15000,id="source-delete-settlement";
+  aa.gate.credentials={environment:"testnet",apiKey:"synthetic-delete"};
+  aa.engine.liveHistory=[{id,symbol:"BTC_USDT",side:"LONG",status:"CLOSED",entryAt:opened+10000,exitAt:closed+5000,
+    entryPrice:100,exchangeSize:.1,parity:{sourceId:id,copiedAt:opened,roundedContracts:.1}}];
+  let releaseHistory!:()=>void,historyStarted!:()=>void,releaseTurnover!:()=>void,turnoverDrained!:()=>void;
+  const historyHold=new Promise<void>(r=>{releaseHistory=r;}),historyStart=new Promise<void>(r=>{historyStarted=r;});
+  aa.gate.positionCloseHistory=async()=>{historyStarted();await historyHold;return [{contract:"BTC_USDT",side:"long",time:closed/1000,
+    first_open_time:opened/1000,pnl:"-.07",text:liveExitTag(id),max_size:".1",accum_size:".1",long_price:"100",short_price:"103"}];};
+  await aa.engine.privateLiveHistory();await historyStart;
+  const turnoverHold=new Promise<void>(r=>{releaseTurnover=r;}),turnoverStart=new Promise<void>(r=>{turnoverDrained=r;}),
+    turnover=turnoverHold.then(()=>aa.storage.put("late-turnover",{amount:1}));
+  Object.defineProperty(aa.engine,"turnoverWork",{configurable:true,get(){turnoverDrained();return turnover;},set(){}});
+  const deleting=h.http("/api/members/delete",owner,{id:a.id});await turnoverStart;
+  assert.equal(aa.engine.liveClient,null);releaseTurnover();assert.equal((await deleting).status,200);
+  releaseHistory();await Promise.all(aa.c.tasks);
+  assert.deepEqual([...aa.storage.data.keys()],["member-execution:v1:deleted"]);
+}));
+
+test("final deletion refuses a credential mutation that started after the ready check",()=>clock(async()=>{
+  const h=await harness(),a=await h.issue();await h.internal(a.id,"/status");const actor=h.actors.get(a.id);
+  actor.engine.credentialBusy=true;
+  const result=await actor.engine.adminDeleteFinalize(a.id);assert.equal(result.ok,false);
+  assert.ok(await actor.storage.get("member-execution:v1:identity"));
+  assert.equal(await actor.storage.get("member-execution:v1:deleted"),undefined);
+}));
+
+test("an already admitted ON request cannot undo a completed owner forced stop",()=>clock(async()=>{
+  const h=await harness(),a=await h.issue(),aa=await h.member(a.id),owner=ownerSessionCookie(await createOwnerSession(ROOT));
+  const original=h.directory.fetch.bind(h.directory);let release!:()=>void,admitted!:()=>void;
+  const waiting=new Promise<void>(r=>{release=r;}),started=new Promise<void>(r=>{admitted=r;});
+  h.directory.fetch=async(request:Request)=>{
+    const isEnable=new URL(request.url).pathname==="/seat"&&(await request.clone().json<any>()).enabled===true;
+    const response=await original(request);
+    if(isEnable&&response.ok){admitted();await waiting;}
+    return response;
+  };
+  const enabling=h.internal(a.id,"/live-mode",{enabled:true});await started;
+  try {assert.equal((await h.http("/api/members/stop",owner,{id:a.id})).status,200);}
+  finally {release();}
+  const result=await enabling;assert.equal(result.status,409);assert.equal(aa.engine.runtime.live.requestedEnabled,false);
+  const intent=await aa.storage.get(`${LIVE_PARITY_PREFIX}owner-intent`);assert.equal(intent.enabled,false);
+  assert.equal(aa.gate.placed.length,0);
+}));
+
+test("delayed LIVE request bodies cannot revive erased state or undo a newer owner stop",()=>clock(async()=>{
+  for(const enabled of [false,true]) {
+    const h=await harness(),a=await h.issue(),aa=await h.member(a.id),owner=ownerSessionCookie(await createOwnerSession(ROOT));
+    let release!:()=>void,started!:()=>void;const hold=new Promise<void>(r=>{release=r;}),waiting=new Promise<void>(r=>{started=r;});
+    const request=new Request("https://member/live-mode",{method:"POST",headers:{"x-verified-member":a.id,"x-member-created-at":String(a.createdAt)}});
+    request.json=async()=>{started();await hold;return {enabled};};
+    const pending=aa.engine.fetch(request);await waiting;
+    try {assert.equal((await h.http(enabled?"/api/members/stop":"/api/members/delete",owner,{id:a.id})).status,200);}
+    finally {release();}
+    assert.equal((await pending).status,409);assert.equal(aa.engine.runtime.live.requestedEnabled,false);
+    if(!enabled)assert.deepEqual([...aa.storage.data.keys()],["member-execution:v1:deleted"]);
+  }
+}));
+
+test("a completed credential replacement invalidates an older pending ON request",()=>clock(async()=>{
+  const h=await harness(),a=await h.issue(),aa=await h.member(a.id),cookie=memberCookie(await issueMemberSession(ROOT,a.id,1));
+  const original=h.directory.fetch.bind(h.directory);let release!:()=>void,admitted!:()=>void;
+  const waiting=new Promise<void>(r=>{release=r;}),started=new Promise<void>(r=>{admitted=r;});
+  h.directory.fetch=async(request:Request)=>{
+    const isEnable=new URL(request.url).pathname==="/seat"&&(await request.clone().json<any>()).enabled===true;
+    const response=await original(request);if(isEnable&&response.ok){admitted();await waiting;}return response;
+  };
+  aa.engine.saveCredential=async()=>{aa.engine.credential={...aa.engine.credential,keyHint:"replacement"};return {ok:true};};
+  const enabling=h.internal(a.id,"/live-mode",{enabled:true});await started;
+  try {assert.equal((await h.http("/api/live/credentials",cookie,{apiKey:"synthetic",apiSecret:"synthetic"},"PUT")).status,200);}
+  finally {release();}
+  assert.equal((await enabling).status,409);assert.equal(aa.engine.runtime.live.requestedEnabled,false);
+  assert.equal((await h.dstore.get<string[]>("execution-seats"))?.includes(a.id),false);
+}));
 test("member passwords are salted hashes and no login key is created",()=>clock(async()=>{
   const h=await harness(),a=await h.issue(),text=JSON.stringify([...h.dstore.data]),row=await h.dstore.get<any>(`member:${a.id}`);
   assert.ok(!text.includes(a.password));assert.ok(row.password?.hash&&row.password.hash!==a.password);

@@ -30,6 +30,9 @@ export function memberExecutionClass(Base:typeof MarketStream) {
     private usageAt=0;
     private bootError:string|null=null;
     private deleted=false;
+    private deleting=false;
+    private deletedId:string|null=null;
+    private controlGeneration=0;
     private credentialBusy=false;
     private knownProgramTags=new Set<string>();
     constructor(ctx:DurableObjectState,env:CloudflareEnv) {
@@ -37,7 +40,7 @@ export function memberExecutionClass(Base:typeof MarketStream) {
       ctx.blockConcurrencyWhile(async()=>{
         try {
           const deleted=await ctx.storage.get<{id:string;at:number}>(DELETED);
-          if(deleted){this.deleted=true;return;}
+          if(deleted){this.deleted=true;this.deletedId=deleted.id;return;}
           this.identity=await ctx.storage.get<Identity>(IDENTITY)??null;
           if(this.identity&&!validMemberId(this.identity.id))throw new Error("会员执行账户损坏，禁止自动重置");
           const saved=await ctx.storage.get<{bytes:Uint8Array;sha:string}>(CHECKPOINT);
@@ -89,14 +92,18 @@ export function memberExecutionClass(Base:typeof MarketStream) {
     }
     protected async gateLive() {
       if(this.bootError)throw new Error(this.bootError);
+      if(this.deleted||this.deleting)throw new Error("会员账户正在删除");
       if(!this.identity||!this.credential||!this.env.OWNER_ACCESS_TOKEN)throw new Error("请先在自己的账户保存Gate API");
       if(!this.liveClient) {
         const root=await memberVaultRoot(this.env.OWNER_ACCESS_TOKEN,this.identity.id);
-        this.liveClient=new GateLiveClient(await decryptGateCredentials(this.credential.encrypted,root));
+        const client=new GateLiveClient(await decryptGateCredentials(this.credential.encrypted,root));
+        if(this.deleted||this.deleting)throw new Error("会员账户正在删除");
+        this.liveClient=client;
       }
       this.runtime.live.credentialConfigured=true;return this.liveClient;
     }
     protected async saveCheckpoint(now:number,force=false) {
+      if(this.deleted||this.deleting)throw new Error("会员账户正在删除");
       if(!this.identity||this.bootError)throw new Error(this.bootError??"会员归属未确认");
       this.resetDailyCounters(now);
       if(!force&&now-(this.runtime.lastHeartbeatAt??0)<30000)return;
@@ -116,6 +123,7 @@ export function memberExecutionClass(Base:typeof MarketStream) {
           utcDay:this.runtime.utcDay,nonAlarmWrites:this.runtime.nonAlarmWrites+this.nonAlarmPendingWrites})));
         if(bytes.length>112*1024)throw new Error("会员检查点超过预算，拒绝丢弃已有仓位");
         const sha=await digestMember([...bytes].join(","));
+        if(this.deleted||this.deleting)throw new Error("会员账户正在删除");
         await this.ctx.storage.transaction(async tx=>{await tx.put({[CHECKPOINT]:{bytes,sha},...Object.fromEntries(journal)});});
         for(const[k,v]of journal)if(this.liveJournal.get(k)===v)this.liveJournal.delete(k);
         for(const tag of newTags)this.knownProgramTags.add(tag);
@@ -160,7 +168,7 @@ export function memberExecutionClass(Base:typeof MarketStream) {
       try{await this.sourceWork;}finally{this.sourceWork=null;}
     }
     private async arm() {
-      if(!this.identity||this.bootError)return;
+      if(!this.identity||this.bootError||this.deleted||this.deleting)return;
       const trading=this.liveNeedsSync(),settlement=this.liveSettlementNeedsRefresh();
       if(trading||settlement) {
         const cadence=trading?10000:60000,jitter=parseInt(this.identity.id.slice(-2),16)%4*100;
@@ -169,6 +177,7 @@ export function memberExecutionClass(Base:typeof MarketStream) {
       }
     }
     async alarm() {
+      if(this.deleted||this.deleting)return;
       // Trading stays on the existing ten-second cadence. Settlement-only
       // actors wake once per minute and never compete with active execution.
       const cadence=this.liveNeedsSync()?10000:60000;
@@ -180,7 +189,7 @@ export function memberExecutionClass(Base:typeof MarketStream) {
     private async tick() {
       if(this.memberTick)return this.memberTick;
       this.memberTick=(async()=>{
-        if(this.bootError||!this.identity)return;
+        if(this.bootError||!this.identity||this.deleted||this.deleting)return;
         this.resetDailyCounters(Date.now());
         await this.refreshSource().catch(()=>undefined);
         try {if(this.liveNeedsSync())await this.syncLive(Date.now());}
@@ -222,6 +231,7 @@ export function memberExecutionClass(Base:typeof MarketStream) {
         draining:openPositions>0||pendingEntries>0,credentialConfigured:!!this.credential};
     }
     private async adminStopFollowing() {
+      this.controlGeneration++;
       if(!this.identity)return {ok:true,cleanupConfirmed:true,...this.adminState()};
       const result=await this.setLiveMode(false);
       await this.arm();
@@ -244,31 +254,56 @@ export function memberExecutionClass(Base:typeof MarketStream) {
       }
       return {ok:true,...state};
     }
-    private async adminDeleteFinalize() {
+    private async adminDeleteFinalize(id:string) {
+      if(this.credentialBusy||this.deleting)return {ok:false,error:"账户修改或删除正在进行，请稍后重试",...this.adminState()};
+      this.deleting=true;this.controlGeneration++;
+      try {
       if(this.memberTick)await this.memberTick.catch(()=>undefined);
       if(this.liveSyncWork)await this.liveSyncWork.catch(()=>undefined);
       if(this.sourceWork)await this.sourceWork.catch(()=>undefined);
       const state=this.adminState();
       if(this.runtime.live.requestedEnabled||state.openPositions||state.pendingEntries)
         return {ok:false,error:"删除前状态再次变化；账户已停止新增跟随，但必须等现有风险全部退出后再完成删除",...state};
-      await this.ctx.storage.deleteAlarm().catch(()=>undefined);
-      const deletedId=this.identity?.id??"deleted";
-      await this.ctx.storage.deleteAll();
-      await this.ctx.storage.put(DELETED,{id:deletedId,at:Date.now()});
-      this.deleted=true;this.identity=null;this.credential=null;this.feed=null;this.forwardState=null;this.liveClient=null;
+      // Invalidate the settlement reader before it can schedule more writes;
+      // await turnover already in flight before atomically erasing its ledger.
+      this.liveClient=null;
+      if(this.turnoverWork)await this.turnoverWork.catch(()=>undefined);
+      const deletedId=this.identity?.id??id;
+      // Keep erasure and the permanent tombstone atomic. A failed write or
+      // restart must never leave an empty executor that can initialize again.
+      await this.ctx.storage.transaction(async tx=>{
+        for(;;) {
+          const rows=await tx.list({prefix:"",limit:128}),keys=[...rows.keys()].filter(key=>key!==DELETED);
+          if(!keys.length)break;
+          await tx.delete(keys);
+        }
+        await tx.put(DELETED,{id:deletedId,at:Date.now()});
+        await tx.deleteAlarm();
+      });
+      this.deleted=true;this.deletedId=deletedId;this.identity=null;this.credential=null;this.feed=null;this.forwardState=null;this.liveClient=null;
       this.liveHistory=[];this.liveJournal.clear();this.mirrorClosures.clear();this.knownProgramTags.clear();
       this.turnoverState=null;this.turnoverError=null;this.turnoverAccountKey=null;this.turnoverAccountUser=null;
       Object.assign(this.runtime.live,{requestedEnabled:false,operational:false,activation:null,credentialConfigured:false,
         entries:{},positions:{},entrySkips:{},equity:null,available:null,lastSyncAt:null,lastError:null,auditEvents:[]});
       return {ok:true};
+      }finally{this.deleting=false;}
     }
     async fetch(request:Request) {
       const url=new URL(request.url),path=url.pathname;
       try {
         if(this.bootError)return json({error:this.bootError},503);
-        if(this.deleted)return json({error:"会员账户已删除"},410);
         const id=request.headers.get("x-verified-member"),createdAt=Number(request.headers.get("x-member-created-at"));
         const admin=request.headers.get("x-member-admin")==="owner";
+        if(this.deleted) {
+          // An interrupted two-stage deletion may have erased the executor
+          // before the directory committed. Only its owner-admin retry can
+          // acknowledge the tombstone; member access stays permanently denied.
+          if(admin&&request.method==="POST"&&validMemberId(id)&&(id===this.deletedId||this.deletedId==="deleted")
+            &&["/admin-stop","/admin-delete-ready","/admin-delete-finalize"].includes(path))
+            return json({ok:true,deleted:true,cleanupConfirmed:true,...this.adminState()});
+          return json({error:"会员账户已删除"},410);
+        }
+        if(this.deleting)return json({error:"会员账户正在删除，请稍后重试"},409);
         if(admin&&["/admin-stop","/admin-delete-ready","/admin-delete-finalize"].includes(path)) {
           if(!validMemberId(id))return json({error:"会员身份未确认"},401);
           if(this.identity&&this.identity.id!==id)return json({error:"账户归属不匹配"},403);
@@ -281,7 +316,7 @@ export function memberExecutionClass(Base:typeof MarketStream) {
             return json(result,result.ok?200:409);
           }
           if(path==="/admin-delete-finalize"&&request.method==="POST") {
-            const result=await this.adminDeleteFinalize();
+            const result=await this.adminDeleteFinalize(id);
             return json(result,result.ok?200:409);
           }
           return json({error:"不支持此管理操作"},405);
@@ -307,11 +342,13 @@ export function memberExecutionClass(Base:typeof MarketStream) {
         if(path==="/credential-status")return json({credential:this.credentialView()});
         if(path==="/credentials"&&request.method==="PUT") {
           if(this.credentialBusy)throw new Error("API验证正在进行，请勿重复提交");
+          this.controlGeneration++;
           this.credentialBusy=true;
           try{return json(await this.saveCredential(await request.json<GateCredentials>()));}finally{this.credentialBusy=false;}
         }
         if(path==="/credentials"&&request.method==="DELETE") {
           if(this.credentialBusy)throw new Error("API验证正在进行，请勿重复提交");
+          this.controlGeneration++;
           this.credentialBusy=true;
           try {
           if(this.runtime.live.requestedEnabled||this.liveNeedsSync())throw new Error("存在开启状态、持仓或未决委托，不能删除API");
@@ -322,8 +359,20 @@ export function memberExecutionClass(Base:typeof MarketStream) {
           }finally{this.credentialBusy=false;}
         }
         if(path==="/live-mode"&&request.method==="POST") {
+          const generation=this.controlGeneration;
           const b=await request.json<{enabled?:unknown}>();if(typeof b.enabled!=="boolean")return json({error:"实盘开关无效"},400);
-          if(b.enabled) {if(this.credentialBusy)throw new Error("API验证期间不能开启实盘");await this.refreshSource();if(this.forwardError)throw new Error(this.forwardError);if(!this.credential)throw new Error("请先保存本人的Gate API");await this.directory("/seat",{enabled:true});}
+          if(this.deleted||this.deleting||generation!==this.controlGeneration)throw new Error("账户状态已变化，请重新确认实盘开关");
+          if(!b.enabled)this.controlGeneration++;
+          if(b.enabled) {
+            if(this.credentialBusy)throw new Error("API验证期间不能开启实盘");
+            await this.refreshSource();if(this.forwardError)throw new Error(this.forwardError);
+            if(!this.credential)throw new Error("请先保存本人的Gate API");
+            await this.directory("/seat",{enabled:true});
+            if(this.deleted||this.deleting||generation!==this.controlGeneration||this.credentialBusy||!this.credential) {
+              if(!this.liveNeedsSync()&&this.identity)await this.directory("/seat",{enabled:false}).catch(()=>undefined);
+              throw new Error("开启期间账户权限或API状态已变化，请重新确认");
+            }
+          }
           const result=await this.setLiveMode(b.enabled);await this.arm();
           if(!this.liveNeedsSync())await this.directory("/seat",{enabled:false});
           return json(result,result.ok?200:409);

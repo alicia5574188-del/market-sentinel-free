@@ -111,10 +111,12 @@ test("new Gate reader is GET only, fixed pagination, no retry",async()=>{
  assert.equal(calls[0].headers.get("X-Gate-Size-Decimal"),"1");await assert.rejects(()=>c.positionCloseHistory(200,100));assert.equal(calls.length,1);
  }finally{globalThis.fetch=original;}
 });
-test("all prior Gate source bytes are unchanged except one read-only method",()=>{
+test("reviewed Gate adapter stays frozen outside the read-only settlement method",()=>{
  const file=readFileSync(new URL("../lib/gate-live.ts",import.meta.url),"utf8");
  const from=file.indexOf("  /** Read-only position-cycle settlements."),to=file.indexOf("  async createEntry",from);
- const old=file.slice(0,from)+file.slice(to);assert.equal(createHash("sha256").update(old).digest("hex"),"5c4782055b2a8126b9ca35a8bd14685c4d28f4bcde19d5dff28845b12a6c1fcb");
+ // 2026-09-21: reviewed submission fence and decimal-grid repairs; behavior is
+ // covered by gate-live/live-parity regressions, all other adapter bytes freeze.
+ const old=file.slice(0,from)+file.slice(to);assert.equal(createHash("sha256").update(old).digest("hex"),"9c87f66a1f2240ca4164d87068cbab9f19783924c6a97e0408250982a2bd90c6");
 });
 test("operational UI removes version narratives and friend terminology",()=>{
  const paths=["forward-dashboard.tsx","live-console.tsx","member-access.tsx"];

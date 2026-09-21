@@ -5,7 +5,7 @@ import { LIVE_PARITY_PREFIX, LIVE_PARITY_VERSION, forwardMirrorSources, buildPro
   mirrorCoverage, sourceLifecycle, liveEntryDriftGuard, mirrorPositionRisk, type MirrorBinding } from "../lib/live-parity.ts";
 import { advanceForward, initialForward, type Trade, type ForwardState } from "../lib/forward-relations.ts";
 import {newExitControl} from "../lib/forward-protection.ts";
-import { gateMarkedEquity, gatePositionValuation, liveEntryDisposition, liveExitTag, type GateLiveAccount, type GateLiveOrder, type GateLivePosition, type LiveEntryIntent, type LiveStopIntent, LiveEntrySizingError, GateLiveClient } from "../lib/gate-live.ts";
+import { gateMarkedEquity, gatePositionValuation, liveEntryDisposition, liveExitTag, type GateLiveAccount, type GateLiveOrder, type GateLivePosition, type LiveEntryIntent, type LiveStopIntent, LiveEntrySizingError, GateEntryCancelledError, GateLiveClient } from "../lib/gate-live.ts";
 import { quantizeMirrorNotional } from "../lib/gate-quantity.ts";
 import { establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, LIVE_SESSION_VERSION, type LiveSession } from "../lib/live-session.ts";
 import { prepareForwardWrite } from "../lib/forward-store.ts";
@@ -211,7 +211,7 @@ class FakeGate {
   async snapshot(){this.requestCount++;if(this.failSnapshot)throw new Error("injected Gate outage");
     return structuredClone({account:this.account,positions:Object.values(this.holdings),orders:[],priceOrders:this.stops,checkedAt:Date.now()});}
   async setLeverage(_symbol:string,n:number){this.leverages.push(n);await this.onLeverage?.();}
-  async createEntry(i:LiveEntryIntent){await this.onCreate?.();this.placed.push(structuredClone(i));const id=String(this.counter++);
+  async createEntry(i:LiveEntryIntent,beforeSend?:()=>boolean){await this.onCreate?.();if(beforeSend&&!beforeSend())throw new GateEntryCancelledError();this.placed.push(structuredClone(i));const id=String(this.counter++);
     if(this.ambiguous)throw new Error("injected submission timeout");
     const filled=this.zero?0:this.partial?Math.floor(i.contracts/2):i.contracts;
     this.orders.set(id,{id_string:id,contract:String(i.body.contract),text:i.tag,status:"finished",finish_as:filled===i.contracts?"filled":"ioc",size:i.size,left:(i.size>0?1:-1)*(i.contracts-filled),fill_price:100});
@@ -447,6 +447,60 @@ test("owner OFF during leverage request prevents the already-staged market entry
   const {h,gate}=await harness();let off:Promise<unknown>|undefined;
   gate.onLeverage=async()=>{off=h.setLiveMode(false);};await enableNew(h);await off;
   assert.equal(gate.placed.length,0);assert.equal(live(h).requestedEnabled,false);
+}));
+test("forced LIVE reconciliation waiters remain serialized after a shared active pass",async()=>{
+  const h=Object.create(MarketStream.prototype) as {liveSyncWork:Promise<void>|null;
+    syncLive(now:number,enable?:boolean,off?:boolean):Promise<void>;syncLiveOnce():Promise<void>};
+  let releaseBusy!:()=>void,running=0,maximum=0,started=0;
+  h.liveSyncWork=new Promise<void>(resolve=>{releaseBusy=()=>{h.liveSyncWork=null;resolve();};});
+  const releases:Array<()=>void>=[];
+  h.syncLiveOnce=async()=>{started++;running++;maximum=Math.max(maximum,running);
+    await new Promise<void>(resolve=>{releases.push(resolve);});running--;};
+  const enabling=h.syncLive(T,true),disabling=h.syncLive(T,false,true);
+  releaseBusy();await new Promise<void>(resolve=>setImmediate(resolve));
+  assert.equal(started,1);assert.equal(maximum,1);
+  releases.shift()!();await new Promise<void>(resolve=>setImmediate(resolve));
+  assert.equal(started,2);assert.equal(maximum,1);
+  releases.shift()!();await Promise.all([enabling,disabling]);assert.equal(h.liveSyncWork,null);
+});
+test("owner OFF during final durable entry reservation prevents the network submission",()=>clock(async()=>{
+  const {h,gate}=await harness();let off:Promise<unknown>|undefined;
+  const save=h.saveCheckpoint.bind(h);
+  h.saveCheckpoint=async(now,force)=>{await save(now,force);
+    const entry=live(h).entries.BTC_USDT as unknown as {marketSubmittedAt?:number};
+    if(entry?.marketSubmittedAt&&!off)off=h.setLiveMode(false);
+  };
+  await enableNew(h);await off;
+  assert.equal(gate.placed.length,0);assert.equal(live(h).requestedEnabled,false);
+  const entry=live(h).entries.BTC_USDT as unknown as {marketSubmittedAt?:number;submissionResolved?:boolean};
+  assert.equal(entry.marketSubmittedAt,undefined);assert.equal(entry.submissionResolved,true);
+}));
+test("source closure during final durable entry reservation prevents the network submission",()=>clock(async()=>{
+  const {h,gate}=await harness();const save=h.saveCheckpoint.bind(h);
+  h.saveCheckpoint=async(now,force)=>{await save(now,force);
+    const entry=live(h).entries.BTC_USDT as unknown as {marketSubmittedAt?:number};
+    if(entry?.marketSubmittedAt)h.forwardState.positions=[];
+  };
+  await enableNew(h);assert.equal(gate.placed.length,0);
+}));
+test("existing stop and adverse drift limits are rechecked after the final reservation and signing",()=>clock(async()=>{
+  for(const phase of ["reservation","signing"]){
+    for(const price of [98,100.4]){
+      const {h,gate}=await harness(),save=h.saveCheckpoint.bind(h);
+      const changeQuote=()=>{h.runtime.evidence={BTC_USDT:{midpoint:price,bestBid:price,bestAsk:price,observedAt:T,fresh:true,entryReady:true}};};
+      if(phase==="reservation")h.saveCheckpoint=async(now,force)=>{await save(now,force);
+        if((live(h).entries.BTC_USDT as unknown as {marketSubmittedAt?:number})?.marketSubmittedAt)changeQuote();};
+      else gate.onCreate=async()=>{changeQuote();};
+      await enableNew(h);assert.equal(gate.placed.length,0,`${phase} price ${price}`);
+    }
+  }
+}));
+test("owner OFF while signing an entry is a known local cancellation, not an uncertain fill",()=>clock(async()=>{
+  const {h,gate}=await harness();let off:Promise<unknown>|undefined;
+  gate.onCreate=async()=>{off=h.setLiveMode(false);};
+  await enableNew(h);await off;
+  assert.equal(gate.placed.length,0);assert.equal(live(h).entries.BTC_USDT.status,"CANCELLED");
+  assert.equal(live(h).requestedEnabled,false);
 }));
 test("source closure during leverage request cancels the stale entry without opening",()=>clock(async()=>{
   const {h,gate}=await harness();gate.onLeverage=async()=>{h.forwardState.positions=[];};await enableNew(h);

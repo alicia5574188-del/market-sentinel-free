@@ -137,18 +137,21 @@ export class EquityHistoryCache {
         this.set({loading:true,error:null});this.lastAttempt=this.now();
         const controller=new AbortController();this.controller=controller;
         const timeout=setTimeout(()=>controller.abort(),12_000);
-        let response:Response;
-        try{response=await this.request(`/api/forward/equity${query}`,{credentials:"same-origin",cache:"no-store",signal:controller.signal});}
-        finally{clearTimeout(timeout);if(this.controller===controller)this.controller=null;}
-        if(epoch!==this.epoch)return;
-        if(response.status===401||response.status===403){
-          // Expired login hides the projection and stops requests, but does not
-          // delete valid history. A fresh authenticated Dashboard may restore it.
-          this.blocked=true;
-          this.set({...empty(),account:s.account,error:"登录已失效，请重新登录。"});return;
-        }
-        if(!response.ok)throw new Error(response.status===429?"净值历史读取繁忙；保留已有曲线，稍后继续。":"新增净值暂未取得；已加载历史保留，交易不受图表影响。");
-        const page=await response.json() as CurvePage;
+        let page:CurvePage;
+        try{
+          const response=await this.request(`/api/forward/equity${query}`,{credentials:"same-origin",cache:"no-store",signal:controller.signal});
+          if(epoch!==this.epoch)return;
+          if(response.status===401||response.status===403){
+            // Expired login hides the projection and stops requests, but does not
+            // delete valid history. A fresh authenticated Dashboard may restore it.
+            this.blocked=true;
+            this.set({...empty(),account:s.account,error:"登录已失效，请重新登录。"});return;
+          }
+          if(!response.ok)throw new Error(response.status===429?"净值历史读取繁忙；保留已有曲线，稍后继续。":"新增净值暂未取得；已加载历史保留，交易不受图表影响。");
+          // Headers can arrive before a stalled body. Keep both the timeout and
+          // logout/account-change cancellation alive until JSON has been read.
+          page=await response.json() as CurvePage;
+        }finally{clearTimeout(timeout);if(this.controller===controller)this.controller=null;}
         if(epoch!==this.epoch)return;
         const ctx=this.context!;
         if(page.version!==EQUITY_CURVE_VERSION||page.context?.startedAt!==ctx.startedAt||page.context.initialEquity!==ctx.initialEquity
