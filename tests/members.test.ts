@@ -177,13 +177,13 @@ test("member inherits the same early protection source close without new strateg
   assert.equal(aa.engine.runtime.live.requestedEnabled,true);assert.deepEqual(aa.engine.runtime.live.activation,activation);
   assert.equal(h.events.d1,0);assert.equal(aa.gate.placed.length,1);
 }));
-test("member position, key identity and original activation survive restart without a second entry",()=>clock(async()=>{
+test("member position, account identity and original activation survive restart without a second entry",()=>clock(async()=>{
   const h=await harness(),a=await h.issue(),aa=await h.member(a.id);await h.internal(a.id,"/live-mode",{enabled:true});now+=10000;
   h.source.positions=[{...trade("ft-persisted"),openedAt:now-1000}];await aa.engine.alarm();now+=10000;await aa.engine.alarm();await aa.engine.saveCheckpoint(now,true);
   const epoch=structuredClone(aa.engine.runtime.live.activation),c=context(aa.storage),restored=new MemberExecutor(c.ctx as never,h.env) as any;await c.ready();restored.liveClient=aa.gate;
   now+=10000;await restored.alarm();assert.deepEqual(restored.runtime.live.activation,epoch);assert.equal(aa.gate.placed.length,1);assert.equal(restored.runtime.live.positions.BTC_USDT.id,"ft-persisted");
 }));
-test("new B key creation while A holds a position cannot change A's checkpoint or intent",()=>clock(async()=>{
+test("new member registration while A holds a position cannot change A's checkpoint or intent",()=>clock(async()=>{
   const h=await harness(),a=await h.issue(),aa=await h.member(a.id);await h.internal(a.id,"/live-mode",{enabled:true});now+=10000;
   h.source.positions=[{...trade("ft-a-stable"),openedAt:now-1000}];await aa.engine.alarm();const storage=structuredClone([...aa.storage.data]);await h.issue("next friend");
   assert.deepEqual([...aa.storage.data],storage);assert.equal(aa.engine.runtime.live.requestedEnabled,true);
@@ -246,10 +246,11 @@ test("an authenticated member cannot access another member's binding or primary 
   const status=await h.http("/api/live/credentials",cookie);assert.equal(status.status,200);assert.equal((await status.json<any>()).credential.keyHint,"test");
   assert.equal(h.events.d1,0);
 }));
-test("issuing the bounded inactive member capacity cannot schedule trading or start source collection",()=>clock(async()=>{
+test("registering the bounded inactive member capacity cannot schedule trading or start source collection",()=>clock(async()=>{
   const h=await harness();for(let i=0;i<MEMBER_LIMIT;i++)await h.issue();
   assert.equal(h.events.primaryReads,0);assert.equal(h.events.d1,0);assert.equal(h.actors.size,0);
-  assert.equal((await h.rpc("/issue",{label:"overflow",requestId:"capacity-overflow-key"})).status,409);
+  const overview=await(await h.rpc("/overview")).json<any>();
+  assert.equal((await h.rpc("/register",{inviteCode:overview.invite.code,username:"overflow_user",password:"strong-pass-overflow",requestId:"capacity-overflow-user"})).status,409);
 }));
 test("ordinary viewers reuse a shared ten-second projection instead of multiplying primary reads",()=>clock(async()=>{
   const h=await harness(),a=await h.issue(),b=await h.issue();await h.internal(a.id,"/status");now+=5000;await h.internal(b.id,"/status");
