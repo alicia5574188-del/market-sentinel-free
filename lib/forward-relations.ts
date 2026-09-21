@@ -14,7 +14,8 @@ import { forwardProtectionChanged } from "./forward-protection-checkpoint.ts";
 import { FORWARD_ADAPTIVE_VERSION, adaptiveCandidatePriority, adaptiveEntryAdjustment, adaptiveTargetRisk, calibrationRiskMultiplier,
   familyRiskHeadroom, inspectRapidCondition, sampleRiskMultiplier, type AdaptiveCandidate, type AdaptiveLane } from "./forward-adaptive.ts";
 import { MULTI_TURN_VERSION, TURN_CONFIG, TURN_TIMEFRAMES, evaluateMultiTurn, initialMultiTurn, turnCandidates,
-  type MultiTurnState, type TurnCandidate, type TurnTimeframe } from "./multi-turn-engine.ts";\nimport { multiTurnProfitFloor } from "./multi-turn-profit-protection.ts";
+  type MultiTurnState, type TurnCandidate, type TurnTimeframe } from "./multi-turn-engine.ts";
+import { multiTurnProfitFloor } from "./multi-turn-profit-protection.ts";
 // The storage schema stays v1.0 so an algorithm upgrade cannot reset the ledger.
 export const FORWARD_VERSION = "forward-relations-v1.0";
 export const FORWARD_GRAMMAR = "conditional-response-conjunction-v1";
