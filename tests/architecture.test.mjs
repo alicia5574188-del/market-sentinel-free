@@ -169,7 +169,7 @@ test("retired systems remain isolated; only current PAPER can create new LIVE en
   assert.doesNotMatch(arena, /adaptiveMechanismForPlaybook/);
   assert.match(arena, /ARENA_FRICTION_RATE = 0\.0014/);
   assert.match(arena, /ARENA_MAX_COST_SHARE = 0\.25/);
-  assert.match(arena, /PORTFOLIO_REALTIME_CAPACITY = 11/);
+  assert.match(arena, /PORTFOLIO_REALTIME_CAPACITY = 20/);
   assert.match(regimePortfolio, /REGIME_ACCOUNT_INITIAL_EQUITY = 1_000/);
   assert.match(regimePortfolio, /REGIME_STRATEGIES/);
   assert.match(regimePortfolio, /riskRate|\.015/);
