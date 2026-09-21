@@ -46,7 +46,7 @@ export type Trade = { id: string; symbol: string; side: "LONG" | "SHORT"; rule: 
   exitFee: number; fundingAllowance: number; grossPnl: number | null; netPnl: number | null; exitReason: string | null;
   relationFailureBars: number; lastRelationBar: number; execution: "REAL_QUOTE_PAPER_MODEL"; liveEligible: false;
   exitControl?: ExitControl; exitAudit?: ExitAudit; profitProtection?:MultiTurnTradeProfitProtection;
-  profitProtectionMigration?:{version:typeof MULTI_TURN_PROFIT_PROTECTION_VERSION;state:"CURRENT"|"DEFERRED";updatedAt:number};
+  profitProtectionMigration?:{version:typeof MULTI_TURN_PROFIT_PROTECTION_VERSION;state:"CURRENT"|"GUARDED"|"DEFERRED";updatedAt:number;baselineFavorable:number};
   forecast?: { policy:string; family:string; signalAt:number; signalPrice:number; baseNetRate:number;
     calibratedNetRate:number; remainingNetRate:number; quality:number; sizingEquity?:number };
   turn?:{version:typeof MULTI_TURN_VERSION;timeframe:TurnTimeframe;signalAt:number;entryTurnProbability:number;
@@ -401,41 +401,44 @@ function manageMultiTurn(s:ForwardState,quotes:Record<string,Quote>,now:number){
       continuationScore:freshFrame.continuationScore,turnProbability:freshFrame.triggerProbability,phase:freshFrame.phase,
       rawDirectionAligned:freshFrame.rawDirection==="NEUTRAL"||freshFrame.rawDirection===t.side,
     }:null);
-    let migration=t.profitProtectionMigration,suppressRaise=false;
+    let migration=t.profitProtectionMigration;
     const prior=t.profitProtection?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?t.profitProtection:null;
+    const cushion=Math.max(.0015,Math.min(.005,riskRate*.15)),minNet=modeledCost+.0010;
+    const migrateFloor=(floorRate:number,source:NonNullable<typeof proposedFloor>)=>{
+      const lockedR=floorRate/riskRate;
+      t.profitProtection={...source,floorRate,lockedR,retentionRate:floorRate/Math.max(t.favorable,1e-9),
+        checkpointBand:Math.floor(lockedR*4+1e-9),peakR:source.reachedR,updatedAt:now};
+    };
     if(!migration){
-      // v3 may arrive while an old position already has a historical MFE. Never
-      // manufacture a retroactive exit from a floor that did not exist when the
-      // market crossed it. New v3 trades are stamped CURRENT at entry below.
-      if(prior)migration={version:MULTI_TURN_PROFIT_PROTECTION_VERSION,state:"CURRENT",updatedAt:now};
-      else if(!proposedFloor)migration={version:MULTI_TURN_PROFIT_PROTECTION_VERSION,state:"CURRENT",updatedAt:now};
+      // Existing v3 protection is already live authority. Otherwise this is a
+      // pre-v3 holding with historical MFE, so fence that old peak until a new
+      // post-upgrade high proves the market has crossed the new trail geometry.
+      if(prior)migration={version:MULTI_TURN_PROFIT_PROTECTION_VERSION,state:"CURRENT",updatedAt:now,baselineFavorable:0};
       else{
-        const cushion=Math.max(.0015,Math.min(.005,riskRate*.15)),minNet=modeledCost+.0010;
-        if(ret>proposedFloor.floorRate+cushion){
-          t.profitProtection={...proposedFloor,peakR:proposedFloor.reachedR,updatedAt:now};
-          migration={version:MULTI_TURN_PROFIT_PROTECTION_VERSION,state:"CURRENT",updatedAt:now};suppressRaise=true;
-        }else if(ret>minNet+cushion){
-          const floorRate=Math.max(minNet,ret-cushion),lockedR=floorRate/riskRate;
-          t.profitProtection={...proposedFloor,floorRate,lockedR,retentionRate:floorRate/Math.max(t.favorable,1e-9),
-            checkpointBand:Math.floor(lockedR*4+1e-9),peakR:proposedFloor.reachedR,updatedAt:now};
-          migration={version:MULTI_TURN_PROFIT_PROTECTION_VERSION,state:"CURRENT",updatedAt:now};suppressRaise=true;
-        }else{migration={version:MULTI_TURN_PROFIT_PROTECTION_VERSION,state:"DEFERRED",updatedAt:now};suppressRaise=true;}
+        const baselineFavorable=t.favorable;
+        if(proposedFloor&&ret>proposedFloor.floorRate+cushion)migrateFloor(proposedFloor.floorRate,proposedFloor);
+        else if(proposedFloor&&ret>minNet+cushion)migrateFloor(Math.max(minNet,ret-cushion),proposedFloor);
+        migration={version:MULTI_TURN_PROFIT_PROTECTION_VERSION,
+          state:proposedFloor&&ret<=minNet+cushion?"DEFERRED":"GUARDED",updatedAt:now,baselineFavorable};
       }
       t.profitProtectionMigration=migration;
-    }else if(migration.state==="DEFERRED"&&proposedFloor){
-      const cushion=Math.max(.0015,Math.min(.005,riskRate*.15)),minNet=modeledCost+.0010;
-      if(ret>minNet+cushion){
-        const floorRate=Math.min(proposedFloor.floorRate,ret-cushion);
-        if(floorRate>modeledCost){
-          const lockedR=floorRate/riskRate;
-          t.profitProtection={...proposedFloor,floorRate,lockedR,retentionRate:floorRate/Math.max(t.favorable,1e-9),
-            checkpointBand:Math.floor(lockedR*4+1e-9),peakR:proposedFloor.reachedR,updatedAt:now};
-          t.profitProtectionMigration={version:MULTI_TURN_PROFIT_PROTECTION_VERSION,state:"CURRENT",updatedAt:now};
-          migration=t.profitProtectionMigration;suppressRaise=true;
+    }
+    if(migration.state!=="CURRENT"){
+      const newPeak=t.favorable>migration.baselineFavorable+Math.max(.001,riskRate*.05);
+      if(newPeak){
+        migration={...migration,state:"CURRENT",updatedAt:now};
+        t.profitProtectionMigration=migration;
+      }else if(proposedFloor&&ret>minNet+cushion){
+        const active=t.profitProtection?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?t.profitProtection:null;
+        const safeFloor=Math.min(proposedFloor.floorRate,ret-cushion);
+        if(safeFloor>modeledCost&&(active==null||safeFloor>active.floorRate+1e-12))migrateFloor(safeFloor,proposedFloor);
+        if(migration.state==="DEFERRED"){
+          migration={...migration,state:"GUARDED",updatedAt:now};
+          t.profitProtectionMigration=migration;
         }
       }
     }
-    if(proposedFloor&&migration?.state==="CURRENT"&&!suppressRaise){
+    if(proposedFloor&&migration.state==="CURRENT"){
       const active=t.profitProtection?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?t.profitProtection:null;
       if(!active||proposedFloor.floorRate>active.floorRate+1e-12){
         t.profitProtection={...proposedFloor,peakR:Math.max(active?.peakR??0,proposedFloor.reachedR),updatedAt:now};
@@ -556,7 +559,7 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
       armPrice:price*(1+d*Math.max(candidate.expectedMoveRate,cost*1.5)),favorable:0,adverse:0,lastPrice:price,lastQuoteAt:q.observedAt,
       entryFee,exitFee:0,fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,relationFailureBars:0,lastRelationBar:candidate.completedAt,
       execution:"REAL_QUOTE_PAPER_MODEL",liveEligible:false,exitControl:newExitControl(),
-      profitProtectionMigration:{version:MULTI_TURN_PROFIT_PROTECTION_VERSION,state:"CURRENT",updatedAt:now},
+      profitProtectionMigration:{version:MULTI_TURN_PROFIT_PROTECTION_VERSION,state:"CURRENT",updatedAt:now,baselineFavorable:0},
       forecast:{policy:MULTI_TURN_VERSION,family:`TURN:${candidate.timeframe}:${candidate.side}`,signalAt:candidate.completedAt,
         signalPrice:candidate.signalPrice,baseNetRate:remaining,calibratedNetRate:remaining,remainingNetRate:remaining,quality,sizingEquity:equity-entryFee},
       turn:{version:MULTI_TURN_VERSION,timeframe:candidate.timeframe,signalAt:candidate.completedAt,
