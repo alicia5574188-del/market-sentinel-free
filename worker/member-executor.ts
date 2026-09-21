@@ -11,7 +11,8 @@ import { forwardEquity } from "../lib/forward-relations.ts";
 import { gzip, gunzip } from "../lib/storage-codec.ts";
 type Identity={id:string;label:string;createdAt:number};
 type Credential={encrypted:EncryptedGateCredentials;keyHint:string;user:string;accountHash:string;savedAt:number};
-const CHECKPOINT="member-execution:v1:checkpoint",IDENTITY="member-execution:v1:identity",CREDENTIAL="member-execution:v1:credential";
+const CHECKPOINT="member-execution:v1:checkpoint",IDENTITY="member-execution:v1:identity",CREDENTIAL="member-execution:v1:credential",
+  DELETED="member-execution:v1:deleted";
 const json=(v:unknown,status=200)=>Response.json(v,{status,headers:{"Cache-Control":"no-store"}});
 const errorText=(e:unknown)=>e instanceof Error?e.message:"会员执行暂不可用";
 
@@ -28,12 +29,15 @@ export function memberExecutionClass(Base:typeof MarketStream) {
     private memberTick:Promise<void>|null=null;
     private usageAt=0;
     private bootError:string|null=null;
+    private deleted=false;
     private credentialBusy=false;
     private knownProgramTags=new Set<string>();
     constructor(ctx:DurableObjectState,env:CloudflareEnv) {
       super(ctx,env,true);
       ctx.blockConcurrencyWhile(async()=>{
         try {
+          const deleted=await ctx.storage.get<{id:string;at:number}>(DELETED);
+          if(deleted){this.deleted=true;return;}
           this.identity=await ctx.storage.get<Identity>(IDENTITY)??null;
           if(this.identity&&!validMemberId(this.identity.id))throw new Error("会员执行账户损坏，禁止自动重置");
           const saved=await ctx.storage.get<{bytes:Uint8Array;sha:string}>(CHECKPOINT);
@@ -243,12 +247,15 @@ export function memberExecutionClass(Base:typeof MarketStream) {
     private async adminDeleteFinalize() {
       if(this.memberTick)await this.memberTick.catch(()=>undefined);
       if(this.liveSyncWork)await this.liveSyncWork.catch(()=>undefined);
+      if(this.sourceWork)await this.sourceWork.catch(()=>undefined);
       const state=this.adminState();
       if(this.runtime.live.requestedEnabled||state.openPositions||state.pendingEntries)
         return {ok:false,error:"删除前状态再次变化；账户已停止新增跟随，但必须等现有风险全部退出后再完成删除",...state};
       await this.ctx.storage.deleteAlarm().catch(()=>undefined);
+      const deletedId=this.identity?.id??"deleted";
       await this.ctx.storage.deleteAll();
-      this.identity=null;this.credential=null;this.feed=null;this.forwardState=null;this.liveClient=null;
+      await this.ctx.storage.put(DELETED,{id:deletedId,at:Date.now()});
+      this.deleted=true;this.identity=null;this.credential=null;this.feed=null;this.forwardState=null;this.liveClient=null;
       this.liveHistory=[];this.liveJournal.clear();this.mirrorClosures.clear();this.knownProgramTags.clear();
       this.turnoverState=null;this.turnoverError=null;this.turnoverAccountKey=null;this.turnoverAccountUser=null;
       Object.assign(this.runtime.live,{requestedEnabled:false,operational:false,activation:null,credentialConfigured:false,
@@ -259,6 +266,7 @@ export function memberExecutionClass(Base:typeof MarketStream) {
       const url=new URL(request.url),path=url.pathname;
       try {
         if(this.bootError)return json({error:this.bootError},503);
+        if(this.deleted)return json({error:"会员账户已删除"},410);
         const id=request.headers.get("x-verified-member"),createdAt=Number(request.headers.get("x-member-created-at"));
         const admin=request.headers.get("x-member-admin")==="owner";
         if(admin&&["/admin-stop","/admin-delete-ready","/admin-delete-finalize"].includes(path)) {
