@@ -1,10 +1,10 @@
 /** Read-only observations. Nothing in this module authorizes trading. */
-export const EQUITY_CURVE_VERSION = "observed-equity-reference-v1";
+export const EQUITY_CURVE_VERSION = "observed-equity-reference-v2";
 export const FIVE_MINUTES = 300_000;
 export const CURVE_GAP = 15 * 60_000;
 export const DAY_MS = 86_400_000;
 export type EquityPoint = { at:number; equity:number; kind:"origin"|"observed"|"preview";
-  policy:string; homogeneous:boolean };
+  policy:string; homogeneous:boolean; stale?:boolean };
 export type CurveContext = { startedAt:number; initialEquity:number; policy:string;
   exitPolicy:string; comparableSince:number; persistedAt:number };
 export type CurvePage = { version:string; context:CurveContext; points:EquityPoint[];
@@ -23,9 +23,10 @@ export function archivedEquity(value:unknown,context:CurveContext,now:number):Eq
   const p=value as Packet,d=p.daily,positions=p.account?.positions;
   if(p.startedAt!==context.startedAt||!valid(p.at)||p.at<context.startedAt||p.at>now
     ||!d||d.lastAt!==p.at||!valid(d.endEquity)||!Array.isArray(positions))return null;
-  if(positions.some(t=>!valid(t.lastQuoteAt)||t.lastQuoteAt>p.at!+1000||p.at!-t.lastQuoteAt>8000))return null;
-  return {at:p.at,equity:d.endEquity,kind:"observed",policy:p.policyVersion??"legacy",
-    homogeneous:p.at>=context.comparableSince&&p.policyVersion===context.policy
+  if(positions.some(t=>!valid(t.lastQuoteAt)||t.lastQuoteAt>p.at!+1000))return null;
+  const stale=positions.some(t=>p.at!-t.lastQuoteAt!>8000);
+  return {at:p.at,equity:d.endEquity,kind:"observed",policy:p.policyVersion??"legacy",stale,
+    homogeneous:!stale&&p.at>=context.comparableSince&&p.policyVersion===context.policy
       &&positions.every(t=>t.exitControl?.policy===context.exitPolicy)};
 }
 export function mergeEquity(points:EquityPoint[],context:CurveContext,now:number):EquityPoint[] {
