@@ -1,0 +1,50 @@
+name: RBE exit research
+
+on:
+  pull_request:
+    paths:
+      - "lib/turn-exit-predictor.ts"
+      - "lib/rbe-learned-value.ts"
+      - "scripts/rbe-walk-forward.mjs"
+      - "tests/rbe-learned-value.test.ts"
+      - "scripts/research-rbe-exit.mjs"
+      - "scripts/rbe-replay-policy.mjs"
+      - "tests/rbe-replay-policy.test.ts"
+      - "tests/turn-exit-predictor.test.ts"
+      - "scripts/fetch-gate-history.mjs"
+      - ".github/workflows/rbe-research.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  historical-rbe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.15.0"
+      - name: Check prediction and causal execution contracts
+        run: node --experimental-strip-types --test tests/turn-exit-predictor.test.ts tests/rbe-replay-policy.test.ts tests/rbe-learned-value.test.ts
+      - name: Fetch six complete months of official Gate 5m data
+        env:
+          RESEARCH_INTERVAL: 5m
+          RESEARCH_MONTHS: 202603,202604,202605,202606,202607,202608
+          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,SUI_USDT,UNI_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,DOT_USDT,BCH_USDT,FIL_USDT,PEPE_USDT,ARB_USDT
+          RESEARCH_MIN_CONTRACTS: "12"
+          RESEARCH_DATASET: /tmp/rbe-gate-history.json
+        run: node scripts/fetch-gate-history.mjs
+      - name: Compare confirmed-turn exit with causal RBE optimal stopping
+        env:
+          RESEARCH_DATASET: /tmp/rbe-gate-history.json
+        run: node --experimental-strip-types scripts/research-rbe-exit.mjs
+      - name: Preserve the result even when economic acceptance fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rbe-exit-audit
+          path: research-results/rbe-*.json
+          if-no-files-found: warn
