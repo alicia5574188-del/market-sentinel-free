@@ -87,7 +87,7 @@ export async function memberRoutes(request:Request,env:CloudflareEnv):Promise<Re
       const b=await smallJson(request),r=await env.MEMBERS.getByName("directory").fetch("https://members/register",{method:"POST",
         headers:{"Content-Type":"application/json"},body:JSON.stringify({inviteCode:b.inviteCode,username:b.username,password:b.password,requestId:b.requestId})});
       if(!r.ok)return r;
-      const value=await r.json<{member:Identity}>(),m=value.member,cookie=memberCookie(await issueMemberSession(env.OWNER_ACCESS_TOKEN,m.id,m.version??1));
+      const value=await r.json<{session:Identity}>(),m=value.session,cookie=memberCookie(await issueMemberSession(env.OWNER_ACCESS_TOKEN,m.id,m.version));
       const headers=new Headers({"Cache-Control":"no-store"});headers.append("Set-Cookie",cookie);headers.append("Set-Cookie",clearOwnerSessionCookie());
       return Response.json({configured:true,authenticated:true,role:"member",username:m.label,memberId:m.id,version:MEMBERS_VERSION},{headers});
     }
