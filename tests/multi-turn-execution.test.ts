@@ -186,3 +186,81 @@ test("new Multi-Turn trades persist the exact entry context used for later resea
   const restored=structuredClone(state);
   assert.deepEqual(restored.positions[0].entryContext,ctx);
 });
+
+
+test("full-risk rotation atomically replaces one clearly weak holding and cannot churn again inside the cooldown",()=>{
+  const p=candles(),seedAt=(p.at(-1)!.time+300)*1000+1000;
+  const seeded=advanceForward({state:initialMultiTurnForward(seedAt-1000),now:seedAt,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:q(p,seedAt)},contracts:{BTC_USDT:meta}}).state;
+  assert.ok(seeded.positions.length);
+  const baseTrade=seeded.positions[0],baseFrame=seeded.turnEngine!.frames.BTC_USDT![baseTrade.turn!.timeframe]!;
+  const s=structuredClone(seeded),symbols=["W0_USDT","W1_USDT","W2_USDT","W3_USDT","W4_USDT"];
+  const timeframes=["5m","15m","30m","4h","1h"] as const;
+  s.positions=symbols.map((symbol,i)=>{
+    const t=structuredClone(baseTrade),tf=timeframes[i];
+    t.id=`rotation-${i}`;t.symbol=symbol;t.side="LONG";t.openedAt=seedAt-(i===0?11:5)*60_000;
+    t.entryPrice=100;t.lastPrice=100;t.quantity=1;t.contracts=1000;t.quantoMultiplier=.001;t.notional=100;
+    t.leverage=20;t.margin=5;t.plannedRisk=12.4;t.stopPrice=98;t.armPrice=103;t.entryFee=.07;
+    t.exitFee=0;t.fundingAllowance=0;t.grossPnl=null;t.netPnl=null;t.exitReason=null;t.favorable=0;t.adverse=0;
+    t.lastQuoteAt=seedAt;t.rule={...t.rule,id:`rotation-rule-${i}`,side:"LONG",authority:"MULTI_TURN",turnTimeframe:tf,
+      horizon:TURN_CONFIG[tf].maxHoldMinutes,stopRate:.02};
+    t.turn={version:MULTI_TURN_VERSION,timeframe:tf,signalAt:seedAt-60_000,
+      entryTurnProbability:.1,entryContinuation:.8,entryDirectionConfidence:.8};
+    delete t.holdValue;return t;
+  });
+  s.rules=s.positions.map(t=>structuredClone(t.rule));s.balance=1000-s.positions.reduce((n,t)=>n+t.entryFee,0);
+  s.peakEquity=1000;s.turnLastEntryBars={};s.turnSymbolExitAt={};s.turnRotationBlockedUntil={};
+  s.rotationState={version:"multi-turn-selective-risk-rotation-v1",lastAt:0,count:0,lastFrom:null,lastTo:null};
+  s.turnEngine!.frames={};
+  const strong=(symbol:string,tf:(typeof timeframes)[number]|"1h")=>({...structuredClone(baseFrame),symbol,timeframe:tf,
+    observedAt:seedAt,completedAt:seedAt,ready:true,direction:"LONG" as const,rawDirection:"LONG" as const,
+    directionConfidence:.92,continuationScore:.84,turnProbability:.08,triggerProbability:.10,phase:"FLOW" as const,
+    candidateSide:"NEUTRAL" as const,candidateBars:0,justTurned:false,lastTurnAt:null,signalAgeBars:1,
+    atrRate:.005,expectedMoveRate:.04,stopRate:.012,price:100,propagationPressure:.06,
+    evidence:{structure:.06,momentum:.06,acceleration:.06,cusum:.06,changePoint:.06,failedExtension:.03,
+      volatility:.2,volume:.2,breadth:.08,propagation:.06},reason:"strong rotation fixture"});
+  for(let i=0;i<symbols.length;i++)s.turnEngine!.frames[symbols[i]]={[timeframes[i]]:strong(symbols[i],timeframes[i])};
+  const weak=s.turnEngine!.frames.W0_USDT!["5m"]!;
+  weak.directionConfidence=.35;weak.continuationScore=.25;weak.turnProbability=.60;weak.triggerProbability=.60;weak.phase="WATCH";
+  weak.atrRate=.012;weak.expectedMoveRate=.012;weak.propagationPressure=.55;
+  weak.evidence={structure:.70,momentum:.55,acceleration:.45,cusum:.60,changePoint:.58,failedExtension:.40,
+    volatility:.4,volume:.3,breadth:.5,propagation:.55};
+  s.turnEngine!.frames.NEW_USDT={["1h"]:strong("NEW_USDT","1h")};
+  s.turnEngine!.updatedAt=seedAt;s.lastCycleAt=seedAt;
+
+  const later=seedAt+1000,quotes:Record<string,Quote>={},contracts:Record<string,Contract>={};
+  for(const symbol of [...symbols,"NEW_USDT"]){quotes[symbol]={bestBid:99.99,bestAsk:100.01,observedAt:later,fresh:true,entryReady:true};contracts[symbol]=meta;}
+  const first=advanceForward({state:s,now:later,paths:{},quotes,contracts,entrySymbols:[...symbols,"NEW_USDT"]}).state;
+  assert.equal(first.rotationState?.count,1);
+  assert.equal(first.rotationState?.lastFrom,"W0_USDT");
+  assert.equal(first.rotationState?.lastTo,"NEW_USDT");
+  assert.equal(first.positions.some(t=>t.symbol==="W0_USDT"),false);
+  assert.equal(first.positions.some(t=>t.symbol==="NEW_USDT"&&t.openedAt===later),true);
+  assert.equal(first.history[0].exitAudit?.trigger,"ROTATION");
+  assert.match(first.history[0].exitReason??"",/择优换仓/);
+  assert.ok((first.turnRotationBlockedUntil?.W0_USDT??0)>later);
+
+  // Refill the synthetic risk budget, weaken a second holding, and present two
+  // strong candidates inside 60 minutes. Neither a second rotation nor an
+  // immediate re-entry of W0 is allowed.
+  const secondAt=later+30*60_000;
+  for(const t of first.positions)t.plannedRisk=12.4;
+  const w1=first.positions.find(t=>t.symbol==="W1_USDT")!;w1.openedAt=secondAt-31*60_000;
+  const w1Frame=first.turnEngine!.frames.W1_USDT!["15m"]!;
+  w1Frame.directionConfidence=.35;w1Frame.continuationScore=.25;w1Frame.turnProbability=.60;w1Frame.triggerProbability=.60;w1Frame.phase="WATCH";
+  w1Frame.atrRate=.012;w1Frame.expectedMoveRate=.012;w1Frame.propagationPressure=.55;w1Frame.completedAt=secondAt-1000;
+  w1Frame.evidence={structure:.70,momentum:.55,acceleration:.45,cusum:.60,changePoint:.58,failedExtension:.40,
+    volatility:.4,volume:.3,breadth:.5,propagation:.55};
+  first.turnEngine!.frames.W0_USDT={["5m"]:{...strong("W0_USDT","5m"),completedAt:secondAt-1000,observedAt:secondAt}};
+  first.turnEngine!.frames.NEW2_USDT={["1h"]:{...strong("NEW2_USDT","1h"),completedAt:secondAt-1000,observedAt:secondAt}};
+  first.turnEngine!.updatedAt=secondAt;first.lastCycleAt=secondAt;
+  quotes.W0_USDT={bestBid:99.99,bestAsk:100.01,observedAt:secondAt,fresh:true,entryReady:true};
+  quotes.NEW2_USDT={bestBid:99.99,bestAsk:100.01,observedAt:secondAt,fresh:true,entryReady:true};
+  contracts.W0_USDT=meta;contracts.NEW2_USDT=meta;
+  for(const symbol of Object.keys(quotes))quotes[symbol]={...quotes[symbol],observedAt:secondAt};
+  const second=advanceForward({state:first,now:secondAt,paths:{},quotes,contracts,
+    entrySymbols:[...symbols,"NEW_USDT","NEW2_USDT"]}).state;
+  assert.equal(second.rotationState?.count,1);
+  assert.equal(second.positions.some(t=>t.symbol==="W0_USDT"),false,"rotated-out symbol stays in its re-entry cooldown");
+  assert.equal(second.positions.some(t=>t.symbol==="NEW2_USDT"),false,"account-level 60-minute cooldown prevents rotation churn");
+});
