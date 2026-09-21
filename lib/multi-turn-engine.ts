@@ -263,7 +263,6 @@ export function turnCandidates(state:MultiTurnState,costRate:number|((tf:TurnTim
     const cfg=TURN_CONFIG[tf];
     if(state.updatedAt-f.completedAt>Math.max(10*60_000,cfg.minutes*60_000*1.5))continue;
     const cost=typeof costRate==="function"?costRate(tf):costRate,costEdge=f.expectedMoveRate-cost;
-    if(f.rawDirection!=="NEUTRAL"&&f.rawDirection!==f.direction)continue;
     if(f.continuationScore<cfg.minContinuation||costEdge<=0)continue;
     rows.push({symbol,timeframe:tf,side:f.direction,score:f.continuationScore*Math.max(.1,costEdge/Math.max(cost,.001)),
       riskCap:cfg.riskCap,stopRate:f.stopRate,expectedMoveRate:f.expectedMoveRate,turnProbability:f.turnProbability,
