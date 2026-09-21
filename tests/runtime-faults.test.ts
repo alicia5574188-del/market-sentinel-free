@@ -50,6 +50,40 @@ test("open Multi-Turn holdings keep strategy paths after leaving the scan univer
   assert.equal(stream.runtime.strategyCandleFailures.OLD_USDT, undefined);
 });
 
+test("protected holdings are force-resident before every book cycle and expose missing readiness explicitly", async () => {
+  const { stream } = await makeStream();
+  stream.forwardState = { positions: [{ symbol: "HOLD_USDT", status: "OPEN" }] };
+  stream.runtime.symbols = ["SCAN_USDT"];
+  stream.contractCatalog = new Map([
+    ["SCAN_USDT", { symbol: "SCAN_USDT", tickSize: 0.01, quantoMultiplier: 1, maintenanceRate: 0.005, leverageMax: 20, fundingRate: 0 }],
+    ["HOLD_USDT", { symbol: "HOLD_USDT", tickSize: 0.01, quantoMultiplier: 1, maintenanceRate: 0.005, leverageMax: 20, fundingRate: 0 }],
+  ]);
+
+  stream.ensureProtectionSymbolsResident();
+  assert.ok(stream.runtime.symbols.includes("HOLD_USDT"));
+  assert.ok(stream.runtime.contractMeta.HOLD_USDT);
+  const readiness = stream.realtimeReadiness(100_000);
+  assert.equal(readiness.protectedMarkets, 1);
+  assert.deepEqual(readiness.missingProtectedMarkets, ["HOLD_USDT"],
+    "resident but not-yet-fresh protected holdings must stay visibly degraded until a real book arrives");
+});
+
+test("protected holding book failures retry on the two-second protection clock instead of ordinary exponential backoff", async () => {
+  const { stream } = await makeStream();
+  const now = 1_800_000_000_000;
+  stream.forwardState = { positions: [{ symbol: "HOLD_USDT", status: "OPEN" }] };
+  stream.runtime.symbols = ["HOLD_USDT"];
+  stream.runtime.tickSize.HOLD_USDT = 0.01;
+  stream.runtime.contractMeta.HOLD_USDT = { quantoMultiplier: 1, maintenanceRate: 0.005, leverageMax: 20, fundingRate: 0 };
+  stream.memory.HOLD_USDT = emptySymbolMemory();
+  stream.sessionWarmup.HOLD_USDT = 0;
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () => { throw new Error("transient protected book failure"); }) as typeof fetch;
+  try { await stream.processBooks(now, ["HOLD_USDT"]); }
+  finally { globalThis.fetch = original; }
+  assert.equal(stream.runtime.feedFailures.HOLD_USDT.retryAt, now + 2_000);
+});
+
 test("the strategy candle clock waits for Gate publication grace and advances once per closed bar", () => {
   const boundary = 1_800_000;
   assert.equal(latestCompletedStrategyCandleAt(boundary + 7_999), boundary - 300_000);
