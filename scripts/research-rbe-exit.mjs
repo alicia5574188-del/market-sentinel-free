@@ -213,7 +213,10 @@ for(let now=start;now<=end;now+=300){
               // forecast into a temporary, causal protection boundary that is
               // only active while the RBE state remains dangerous.
               const hazardScale=clip((dec.reversalHazard-.45)/.45);
-              const cushionAtr=severe?.35:(.85-.35*hazardScale);
+              const horizonCushion={ "5m":.95,"15m":1.15,"30m":1.35,"1h":1.60,"4h":1.95,"1d":2.30 }[pair.timeframe];
+              const cushionAtr=severe
+                ?horizonCushion*.55
+                :horizonCushion*(1-.30*hazardScale);
               const grossFloor=Math.max(FRICTION+.00015,
                 dec.diagnostics.currentReturn-atr*cushionAtr);
               const floorPrice=pair.side==="LONG"
@@ -224,9 +227,9 @@ for(let now=start;now<=end;now+=300){
               if(better){leg.rbeStop=floorPrice;actionDebug.stopArms++;}
               leg.rbe=dec;
               if((leg.rbeStage??0)===0&&dec.diagnostics.currentReturnAtr>.75){
-                // Bank only 10% on the first persistent forecast; the remaining
-                // 90% stays exposed to a renewed large trend.
-                actionDebug.reductions++;reduceLeg(leg,row.close,now,.10,"RBE_REDUCE_10_PERSISTENT",dec);
+                // The prediction already acts by arming a protective boundary.
+                // Do not skim a healthy runner merely because the warning fired.
+                leg.rbeStage=1;
               }
             }
           }
