@@ -188,7 +188,7 @@ for(let now=start;now<=end;now+=300){
             leg.rbeArmedAt=now;leg.rbeArmedMfe=leg.mfe;leg.rbeArmedHazard=dec.reversalHazard;
             leg.rbeArmedSurvival=dec.extensionSurvival;leg.rbeSignalCount=1;leg.rbe=dec;
           }else{
-            const separated=now-(leg.lastRbeSignalAt??leg.rbeArmedAt)>=300_000;
+            const separated=now-(leg.lastRbeSignalAt??leg.rbeArmedAt)>=300;
             if(separated){leg.rbeSignalCount=(leg.rbeSignalCount??1)+1;actionDebug.secondSignals++;}
             const hazardPersistent=dec.reversalHazard>=(leg.rbeArmedHazard??0)-.035;
             const survivalPersistent=dec.extensionSurvival<=(leg.rbeArmedSurvival??1)+.05;
