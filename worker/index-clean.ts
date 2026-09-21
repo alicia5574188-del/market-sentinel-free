@@ -2646,15 +2646,27 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return { entryReady, recoveryFreshCount, recovered };
   }
 
-  private symbolEntryReady(symbol: string) {
+  private symbolEntryReady(symbol: string, now = Date.now()) {
     const evidence = this.runtime.evidence[symbol];
-    return Boolean(evidence?.fresh && evidence.ancillaryFresh && evidence.entryReady !== false);
+    return Boolean(evidence?.fresh && now - evidence.observedAt <= STALE_AFTER_MS
+      && evidence.bestBid != null && evidence.bestAsk != null
+      && evidence.ancillaryFresh && evidence.entryReady !== false);
   }
 
-  private realtimeReadiness() {
+  private symbolManagementReady(symbol: string, now = Date.now()) {
+    const evidence = this.runtime.evidence[symbol];
+    // Existing exposure is protected by executable-book freshness. Entry-only
+    // evidence (1m structure warmup/recovery confirmations) may block that
+    // symbol from opening another trade, but must not demote the whole account
+    // while its current position can still be priced and protected safely.
+    return this.runtime.symbols.includes(symbol) && this.runtime.contractMeta[symbol] != null
+      && Boolean(evidence?.fresh && now - evidence.observedAt <= STALE_AFTER_MS
+        && evidence.bestBid != null && evidence.bestAsk != null);
+  }
+
+  private realtimeReadiness(now = Date.now()) {
     const protectedSymbols = new Set([
       ...Object.values(this.runtime.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
-      ...Object.values(this.runtime.plans).flatMap((plan) => plan?.state === "PREPARED" ? [plan.symbol] : []),
       ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
       ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status) ? [entry.symbol] : []),
       ...Object.values(this.runtime.strategyArena.portfolioOpen).map((position) => position.symbol),
@@ -2663,10 +2675,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ...(this.forwardState?.positions.map((position) => position.symbol) ?? []),
     ]);
     const actionableMarkets = this.runtime.symbols.filter((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS
-      && this.runtime.contractMeta[symbol] != null && this.symbolEntryReady(symbol)).length;
-    const protectedMarketsReady = [...protectedSymbols].every((symbol) => this.runtime.symbols.includes(symbol)
-      && (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS && this.runtime.contractMeta[symbol] != null
-      && this.symbolEntryReady(symbol));
+      && this.runtime.contractMeta[symbol] != null && this.symbolEntryReady(symbol, now)).length;
+    const protectedMarketsReady = [...protectedSymbols].every((symbol) => this.symbolManagementReady(symbol, now));
     return { capacity: PORTFOLIO_REALTIME_CAPACITY, actionableMarkets,
       warmingMarkets: Math.max(0, this.runtime.symbols.length - actionableMarkets),
       protectedMarkets: protectedSymbols.size, protectedMarketsReady };
@@ -3005,7 +3015,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.lastSuccessAt = books.successes > 0 ? observedAt : this.runtime.lastSuccessAt;
     const allWarm = this.runtime.symbols.every((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS);
     const allMeta = this.runtime.symbols.every((symbol) => this.runtime.contractMeta[symbol] != null);
-    const realtimeReadiness = this.realtimeReadiness();
+    const realtimeReadiness = this.realtimeReadiness(observedAt);
     const ancillaryStarted = this.runtime.symbols.every((symbol) => {
       const memory = this.memory[symbol];
       return memory && memory.timeframeUpdatedAt.m1 > 0 && memory.timeframeUpdatedAt.m15 > 0
