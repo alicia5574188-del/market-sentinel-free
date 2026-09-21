@@ -40,7 +40,11 @@ async function harness(){
     return actors.get(id).engine.fetch(new Request(input,init));}};}};
   async function rpc(path:string,body?:unknown){return directory.fetch(new Request("https://members"+path,body===undefined?{}:{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}));}
   let sequence=0;
-  async function issue(label="test"){const r=await rpc("/issue",{label,requestId:`idempotent-test-${++sequence}`});assert.equal(r.status,200);return r.json<any>();}
+  async function issue(_label="test"){
+    const n=++sequence,overview=await(await rpc("/overview")).json<any>(),username=`member_${n}`,password=`test-password-${n}`;
+    const r=await rpc("/register",{inviteCode:overview.invite.code,username,password,requestId:`idempotent-test-${n}`});
+    assert.equal(r.status,200);const value=await r.json<any>();return {...value.member,username,password};
+  }
   async function internal(id:string,path:string,body?:unknown){const m=await(await rpc(`/identity?id=${id}`)).json<any>();
     return env.MEMBER_EXECUTION.getByName(`member:${id}`).fetch("https://member"+path,{method:body===undefined?"GET":"POST",
       headers:{"x-verified-member":id,"x-member-created-at":String(m.createdAt),"x-member-label":encodeURIComponent(m.label),"Content-Type":"application/json"},...(body===undefined?{}:{body:JSON.stringify(body)})});}
@@ -53,28 +57,29 @@ async function harness(){
   }
   return {env,events,actors,dstore,directory,rpc,issue,internal,member,http,get source(){return source;},set source(v){source=v;}};
 }
-test("A remains valid after generating B before A's first login; one stable account per key",()=>clock(async()=>{
+test("registered username/password remains valid after the next invite rotates",()=>clock(async()=>{
   const h=await harness(),a=await h.issue("甲"),b=await h.issue("乙");assert.notEqual(a.id,b.id);
-  for(let i=0;i<2;i++){const r=await h.rpc("/login",{key:a.loginKey,bucket:"a".repeat(64)});assert.equal(r.status,200);assert.equal((await r.json<any>()).id,a.id);}
-  const listing=await(await h.rpc("/overview")).json<any>();assert.equal(listing.members.length,2);assert.equal(listing.current.loginKey,b.loginKey);
-  assert.equal(listing.members.find((m:any)=>m.id===b.id).activatedAt,null);assert.ok(listing.members.find((m:any)=>m.id===a.id).activatedAt);
+  for(let i=0;i<2;i++){const r=await h.rpc("/login",{username:a.username,password:a.password,bucket:"a".repeat(64)});assert.equal(r.status,200);assert.equal((await r.json<any>()).id,a.id);}
+  const listing=await(await h.rpc("/overview")).json<any>();assert.equal(listing.members.length,2);assert.equal(listing.current,undefined);
+  assert.ok(listing.members.every((m:any)=>m.username));assert.ok(listing.members.find((m:any)=>m.id===a.id).activatedAt);
 }));
-test("simultaneous repeated issue request commits a single user and key",()=>clock(async()=>{
-  const h=await harness(),body={label:"one",requestId:"concurrent-request-123"};
-  const [a,b]=await Promise.all([h.rpc("/issue",body),h.rpc("/issue",body)]);const x=await a.json<any>(),y=await b.json<any>();
-  assert.equal(x.id,y.id);assert.equal(x.loginKey,y.loginKey);assert.equal((await(await h.rpc("/overview")).json<any>()).members.length,1);
+test("simultaneous repeated registration request commits a single user",()=>clock(async()=>{
+  const h=await harness(),overview=await(await h.rpc("/overview")).json<any>(),
+    body={inviteCode:overview.invite.code,username:"one_user",password:"strong-pass-one",requestId:"concurrent-request-123"};
+  const [a,b]=await Promise.all([h.rpc("/register",body),h.rpc("/register",body)]);const x=await a.json<any>(),y=await b.json<any>();
+  assert.equal(a.status,200);assert.equal(b.status,200);assert.equal(x.member.id,y.member.id);
+  assert.equal((await(await h.rpc("/overview")).json<any>()).members.length,1);
 }));
-test("issued secrets are hashed; only the current owner-display key is encrypted at rest",()=>clock(async()=>{
-  const h=await harness(),a=await h.issue(),b=await h.issue();const text=JSON.stringify([...h.dstore.data]);
-  assert.ok(!text.includes(a.loginKey)&&!text.includes(b.loginKey));assert.ok(text.includes("keyHash"));
-  const row=await h.dstore.get<any>(`member:${a.id}`);assert.equal(row.keyHash,await digestMember(a.loginKey));
+test("member passwords are salted hashes and no login key is created",()=>clock(async()=>{
+  const h=await harness(),a=await h.issue(),text=JSON.stringify([...h.dstore.data]),row=await h.dstore.get<any>(`member:${a.id}`);
+  assert.ok(!text.includes(a.password));assert.ok(row.password?.hash&&row.password.hash!==a.password);
+  assert.equal(row.keyHash,undefined);assert.equal([...h.dstore.data.keys()].some(k=>k.startsWith("key:")),false);
 }));
-test("authenticated master alone can create keys; arbitrary member role/ID input grants nothing",()=>clock(async()=>{
-  const h=await harness(),a=await h.issue(),member=memberCookie(await issueMemberSession(ROOT,a.id,1));
-  assert.equal((await h.http("/api/members/issue","",{requestId:"forged-role-owner",role:"owner"})).status,403);
+test("legacy key issuance endpoint is gone and members cannot use owner administration",()=>clock(async()=>{
+  const h=await harness(),a=await h.issue(),member=memberCookie(await issueMemberSession(ROOT,a.id,1)),owner=ownerSessionCookie(await createOwnerSession(ROOT));
+  assert.equal((await h.http("/api/members/issue","",{requestId:"removed-key-issue"})).status,410);
+  assert.equal((await h.http("/api/members/issue",owner,{requestId:"removed-owner-key-issue"})).status,410);
   assert.equal((await h.http("/api/members/admin",member)).status,403);
-  assert.equal((await h.http("/api/members/issue",member,{requestId:"forged-owner-again",role:"owner"})).status,403);
-  const owner=ownerSessionCookie(await createOwnerSession(ROOT));assert.equal((await h.http("/api/members/issue",owner,{requestId:"owner-issued-new-key"})).status,200);
 }));
 test("member signature domain cannot become an owner session or another user's session",()=>clock(async()=>{
   const h=await harness(),a=await h.issue(),b=await h.issue(),token=await issueMemberSession(ROOT,a.id,1);
@@ -82,18 +87,19 @@ test("member signature domain cannot become an owner session or another user's s
   const ownerCookie=ownerSessionCookie(token);assert.equal((await h.http("/api/members/admin",ownerCookie)).status,403);
   now+=31*86400000;assert.equal(await verifyMemberSession(new Request(ORIGIN,{headers:{Cookie:memberCookie(token)}}),ROOT),null);
 }));
-test("member key login returns a separate HttpOnly cookie without embedding the key",()=>clock(async()=>{
-  const h=await harness(),a=await h.issue();const r=await h.http("/api/members/login","",{key:a.loginKey});assert.equal(r.status,200);
-  const cookie=r.headers.get("set-cookie")!;assert.match(cookie,/ms_member_session=/);assert.match(cookie,/HttpOnly; Secure; SameSite=Strict/);assert.ok(!cookie.includes(a.loginKey));
+test("username/password login returns HttpOnly session and legacy key payload is rejected",()=>clock(async()=>{
+  const h=await harness(),a=await h.issue();
+  const r=await h.http("/api/members/login","",{username:a.username,password:a.password});assert.equal(r.status,200);
+  const cookie=r.headers.get("set-cookie")!;assert.match(cookie,/ms_member_session=/);assert.match(cookie,/HttpOnly; Secure; SameSite=Strict/);
   const body=await r.json<any>();assert.equal(body.role,"member");assert.equal(body.memberId,a.id);
-}));
-test("invalid keys never create memberships or enter the primary status path",()=>clock(async()=>{
-  const h=await harness();for(const key of [ROOT,"MS-"+"0".repeat(64),"",{role:"owner"}])assert.equal((await h.http("/api/members/login","",{key})).status,401);
-  assert.equal(h.events.primaryReads,0);assert.equal(h.dstore.data.get("member-count"),undefined);
+  assert.equal((await h.http("/api/members/login","",{key:"MS-"+"0".repeat(64)})).status,401);
+  assert.equal((await h.http("/api/members/login","",{username:a.username,password:"wrong-pass"})).status,401);
 }));
 test("anonymous and cross-origin mutations cannot read runtime or create users",()=>clock(async()=>{
   const h=await harness();for(const path of ["/api/runtime","/api/forward/export","/api/live/status","/api/live/source?id=anything"])assert.equal((await h.http(path)).status,401);
-  const cookie=ownerSessionCookie(await createOwnerSession(ROOT));const r=await worker.fetch(new Request(ORIGIN+"/api/members/issue",{method:"POST",headers:{Cookie:cookie,Origin:"https://other.test","Content-Type":"application/json"},body:"{}"}),h.env,{} as never);
+  const cookie=ownerSessionCookie(await createOwnerSession(ROOT)),overview=await(await h.http("/api/members/admin",cookie)).json<any>();
+  const r=await worker.fetch(new Request(ORIGIN+"/api/members/register",{method:"POST",headers:{Origin:"https://other.test","Content-Type":"application/json"},
+    body:JSON.stringify({inviteCode:overview.invite.code,username:"cross_origin",password:"strong-pass-cross",requestId:"cross-origin-register"})}),h.env,{} as never);
   assert.equal(r.status,403);assert.equal(h.events.primaryReads,0);
 }));
 test("new member access never initializes a PAPER account, touches D1 or enables Gate",()=>clock(async()=>{
@@ -116,8 +122,8 @@ test("per-user encryption prevents swapping encrypted Gate credentials between m
   const sealed=await encryptGateCredentials(raw,await memberVaultRoot(ROOT,a));assert.deepEqual(await decryptGateCredentials(sealed,await memberVaultRoot(ROOT,a)),raw);
   const otherRoot=await memberVaultRoot(ROOT,b);await assert.rejects(()=>decryptGateCredentials(sealed,otherRoot));
   await assert.rejects(()=>decryptGateCredentials(sealed,ROOT));
-  const text=await encryptMemberText("demo",ROOT,`current-key:${a}`);assert.equal(await decryptMemberText(text,ROOT,`current-key:${a}`),"demo");
-  await assert.rejects(()=>decryptMemberText(text,ROOT,`current-key:${b}`));
+  const text=await encryptMemberText("demo",ROOT,`member-invite:v1:${a}`);assert.equal(await decryptMemberText(text,ROOT,`member-invite:v1:${a}`),"demo");
+  await assert.rejects(()=>decryptMemberText(text,ROOT,`member-invite:v1:${b}`));
 }));
 test("master Gate account and another member's Gate account cannot be claimed",()=>clock(async()=>{
   const h=await harness(),a=await h.issue(),b=await h.issue();
@@ -325,6 +331,6 @@ test("safe delete refuses while live risk exists, then removes login and release
   await aa.engine.alarm();now+=10000;await aa.engine.alarm();
   assert.equal(aa.engine.runtime.live.positions.BTC_USDT.status,"CLOSED");
   const deleted=await h.http("/api/members/delete",owner,{id:a.id});assert.equal(deleted.status,200);
-  assert.equal((await h.rpc("/login",{key:a.loginKey,bucket:"d".repeat(64)})).status,401);
+  assert.equal((await h.rpc("/login",{username:a.username,password:a.password,bucket:"d".repeat(64)})).status,401);
   const listing=await(await h.http("/api/members/admin",owner)).json<any>();assert.equal(listing.members.some((m:any)=>m.id===a.id),false);
 }));
