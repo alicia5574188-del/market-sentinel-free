@@ -159,7 +159,8 @@ for(let now=start;now<=end;now+=300){
         currentPrice:row.close,favorable:pair.candidate.mfe,frames:frames[symbol]},pair.config);
       const leg=pair.candidate,atr=Math.max(own?.atrRate??.001,1e-9);
       const renewed=(leg.mfe-(leg.rbeArmedMfe??leg.mfe))/atr;
-      if(dec?.shouldExit){
+      const warning=dec&&(dec.shouldExit||dec.phase==="DEFENSIVE");
+      if(warning){
         const severe=dec.diagnostics.ownTurn>=.84&&dec.diagnostics.structureBreak>=.55||dec.shockHazard>=.93;
         if(!leg.rbeArmedAt){
           // First predictive hit only arms the state. We do not wait for price
@@ -172,14 +173,14 @@ for(let now=start;now<=end;now+=300){
           const hazardPersistent=dec.reversalHazard>=(leg.rbeArmedHazard??0)-.035;
           const survivalPersistent=dec.extensionSurvival<=(leg.rbeArmedSurvival??1)+.05;
           const persistent=(leg.rbeSignalCount??0)>=2&&hazardPersistent&&survivalPersistent&&renewed<.45;
-          if(persistent&&severe){
+          if(persistent&&severe&&dec.shouldExit){
             leg.rbe=dec;closeLeg(leg,row.close,now,"RBE_FULL_SEVERE");
           }else if(persistent&&(leg.rbeStage??0)===0){
             // Two independent completed-5m observations agree before any size
             // is cut. Bank 20%, leaving 80% to keep compounding if trend renews.
             reduceLeg(leg,row.close,now,.20,"RBE_REDUCE_20_PERSISTENT",dec);
           }else if(persistent&&(leg.rbeStage??0)===1&&(leg.rbeSignalCount??0)>=4
-            &&dec.diagnostics.currentReturnAtr<=.35){
+            &&dec.shouldExit&&dec.diagnostics.currentReturnAtr<=.35){
             // A full exit still needs prolonged predictive danger plus a
             // compressed remaining cushion; not a raw giveback stop.
             leg.rbe=dec;closeLeg(leg,row.close,now,"RBE_FULL_PERSISTENT");
