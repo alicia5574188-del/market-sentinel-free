@@ -167,7 +167,18 @@ for(const pair of active.values()){const row=series[pair.symbol]["5m"].at(-1);fo
 const folds=[0,1,2].map(i=>{const a=start+(end-start)*i/3,b=start+(end-start)*(i+1)/3,t=paired.filter(x=>x.openedAt>=a&&x.openedAt<b);
   return{fold:i+1,baseline:metrics(t,"baseline"),candidate:metrics(t,"candidate")};});
 const all={baseline:metrics(paired,"baseline"),candidate:metrics(paired,"candidate")};
-console.log("RBE_RESEARCH_SUMMARY="+JSON.stringify({source:raw.source,months:raw.months,symbols,paired:paired.length,all,folds},null,2));
+const byTimeframe=Object.fromEntries(TURN_TIMEFRAMES.map(tf=>{
+  const rows=paired.filter(x=>x.timeframe===tf);return[tf,{n:rows.length,baseline:metrics(rows,"baseline"),candidate:metrics(rows,"candidate")}];
+}));
+const runnerRows=paired.filter(x=>x.baseline.mfe>=Math.max(.02,x.baseline.entryAtr*1.5)&&x.baseline.net>0);
+const givebackRows=paired.filter(x=>x.baseline.mfe>=Math.max(.008,x.baseline.entryAtr*.75)&&x.baseline.net<0);
+const cohort={
+  runners:{n:runnerRows.length,baseline:metrics(runnerRows,"baseline"),candidate:metrics(runnerRows,"candidate"),
+    candidateWorse:runnerRows.filter(x=>x.candidate.net<x.baseline.net).length},
+  givebacks:{n:givebackRows.length,baseline:metrics(givebackRows,"baseline"),candidate:metrics(givebackRows,"candidate"),
+    candidateBetter:givebackRows.filter(x=>x.candidate.net>x.baseline.net).length},
+};
+console.log("RBE_RESEARCH_SUMMARY="+JSON.stringify({source:raw.source,months:raw.months,symbols,paired:paired.length,all,folds,byTimeframe,cohort},null,2));
 const foldWins=folds.filter(x=>x.candidate.net>x.baseline.net).length;
 const reversalImproved=all.candidate.reversals<all.baseline.reversals;
 const captureImproved=all.candidate.capture>all.baseline.capture;
