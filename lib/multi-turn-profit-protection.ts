@@ -1,37 +1,41 @@
-export const MULTI_TURN_PROFIT_PROTECTION_VERSION="multi-turn-profit-floor-v1";
+export const MULTI_TURN_PROFIT_PROTECTION_VERSION="multi-turn-profit-floor-v2";
 
 export type MultiTurnProfitFloor={
   version:typeof MULTI_TURN_PROFIT_PROTECTION_VERSION;
-  tier:number;armedAtMfe:number;floorRate:number;retentionRate:number;
+  tier:number;armedAtR:number;reachedR:number;lockedR:number;
+  floorRate:number;retentionRate:number;
 };
 
 const TIERS=[
-  {mfe:.01,floor:.0035},
-  {mfe:.02,floor:.0080},
-  {mfe:.04,floor:.0180},
-  {mfe:.06,floor:.0300},
-  {mfe:.08,floor:.0450},
-  {mfe:.12,floor:.0700},
-  {mfe:.20,floor:.1300},
-  {mfe:.30,floor:.2000},
-  {mfe:.40,floor:.2800},
-  {mfe:.50,floor:.3600},
+  {mfeR:1.0,lockR:.15},
+  {mfeR:1.5,lockR:.45},
+  {mfeR:2.0,lockR:.80},
+  {mfeR:3.0,lockR:1.40},
+  {mfeR:5.0,lockR:2.80},
+  {mfeR:8.0,lockR:5.00},
+  {mfeR:12.0,lockR:8.00},
+  {mfeR:20.0,lockR:14.00},
+  {mfeR:30.0,lockR:22.00},
 ] as const;
 
 /**
- * Stepwise profit floor for Multi-Turn positions.
- * It does not try to retain 85% of MFE. Small winners get room to breathe,
- * while larger winners progressively lock a majority of the reached move.
- * modeledCost is the current estimated round-trip drag; the first floor must
- * remain positive after that drag.
+ * Profit protection is expressed in R, where one R is this trade's original
+ * planned loss rate (plannedRisk / notional), including its entry-time modeled
+ * trading drag. Leverage and margin therefore do not change the protection
+ * geometry. The floor remains in underlying directional-return units because
+ * exits are executed from price.
  */
-export function multiTurnProfitFloor(favorable:number,modeledCost=.0022):MultiTurnProfitFloor|null{
-  if(!Number.isFinite(favorable)||favorable<.01)return null;
+export function multiTurnProfitFloor(favorable:number,riskRate:number,modeledCost=.0022):MultiTurnProfitFloor|null{
+  if(![favorable,riskRate,modeledCost].every(Number.isFinite)||riskRate<=0||favorable<=0)return null;
+  const reachedR=favorable/riskRate;
+  if(reachedR<1)return null;
   let selected:typeof TIERS[number]=TIERS[0],tier=0;
-  for(let i=0;i<TIERS.length;i++)if(favorable>=TIERS[i].mfe){selected=TIERS[i];tier=i;}
-  const floorRate=Math.min(favorable-Math.max(.0015,modeledCost*.35),
-    Math.max(selected.floor,modeledCost+.0010));
-  if(!(floorRate>0&&floorRate<favorable))return null;
-  return{version:MULTI_TURN_PROFIT_PROTECTION_VERSION,tier,armedAtMfe:selected.mfe,
-    floorRate,retentionRate:floorRate/favorable};
+  for(let i=0;i<TIERS.length;i++)if(reachedR>=TIERS[i].mfeR){selected=TIERS[i];tier=i;}
+  const costPositiveFloor=modeledCost+.0010;
+  const rFloor=selected.lockR*riskRate;
+  const breathingRoom=Math.max(.0015,.25*riskRate);
+  const floorRate=Math.min(favorable-breathingRoom,Math.max(rFloor,costPositiveFloor));
+  if(!(floorRate>modeledCost&&floorRate<favorable))return null;
+  return{version:MULTI_TURN_PROFIT_PROTECTION_VERSION,tier,armedAtR:selected.mfeR,reachedR,
+    lockedR:floorRate/riskRate,floorRate,retentionRate:floorRate/favorable};
 }
