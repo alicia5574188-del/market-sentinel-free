@@ -29,7 +29,8 @@ export async function memberRoutes(request:Request,env:CloudflareEnv):Promise<Re
   const u=new URL(request.url),path=u.pathname;if(!path.startsWith("/api/"))return null;
   const owner=!!env.OWNER_ACCESS_TOKEN&&await verifyOwnerSession(request,env.OWNER_ACCESS_TOKEN);
   try {
-    if(["/api/members/admin","/api/members/issue","/api/members/invite/rotate","/api/members/stop","/api/members/resume","/api/members/delete"].includes(path)) {
+    if(path==="/api/members/issue")return json({error:"密钥会员功能已移除，请使用邀请码注册"},410);
+    if(["/api/members/admin","/api/members/invite/rotate","/api/members/stop","/api/members/resume","/api/members/delete"].includes(path)) {
       if(!owner)return json({error:"仅主账户可以管理会员"},403);
       if(!env.MEMBERS||!env.MEMBER_EXECUTION)return json({error:"会员服务未部署"},503);
       const directory=env.MEMBERS.getByName("directory");
@@ -37,8 +38,6 @@ export async function memberRoutes(request:Request,env:CloudflareEnv):Promise<Re
       if(request.method!=="POST")return json({error:"不支持此操作"},405);
       if(!sameOriginMutation(request))return json({error:"请求来源验证失败"},403);
       const b=await smallJson(request);
-      if(path==="/api/members/issue")
-        return directory.fetch("https://members/issue",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({label:b.label,requestId:b.requestId})});
       if(path==="/api/members/invite/rotate")
         return directory.fetch("https://members/rotate-invite",{method:"POST"});
       const id=typeof b.id==="string"?b.id:"";
@@ -98,7 +97,7 @@ export async function memberRoutes(request:Request,env:CloudflareEnv):Promise<Re
       if(!env.MEMBERS||!env.MEMBER_EXECUTION||!env.OWNER_ACCESS_TOKEN)return json({error:"会员服务未部署"},503);
       const b=await smallJson(request),ip=request.headers.get("CF-Connecting-IP")??"unknown";
       const r=await env.MEMBERS.getByName("directory").fetch("https://members/login",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({username:b.username,password:b.password,key:b.key,bucket:await digestMember(`login:${ip}`)})});
+        body:JSON.stringify({username:b.username,password:b.password,bucket:await digestMember(`login:${ip}`)})});
       if(!r.ok)return r;
       const m=await r.json<Identity>();const cookie=memberCookie(await issueMemberSession(env.OWNER_ACCESS_TOKEN,m.id,m.version));
       const headers=new Headers({"Cache-Control":"no-store"});headers.append("Set-Cookie",cookie);headers.append("Set-Cookie",clearOwnerSessionCookie());

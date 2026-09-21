@@ -1,6 +1,6 @@
 /// <reference types="@cloudflare/workers-types" />
 import { DurableObject } from "cloudflare:workers";
-import { MEMBERS_VERSION, MEMBER_LIMIT, MEMBER_ACTIVE_LIMIT, MEMBER_AUTH_VERSION, digestMember, randomHex, validMemberId, equalSecret, parseLoginKey,
+import { MEMBERS_VERSION, MEMBER_LIMIT, MEMBER_ACTIVE_LIMIT, MEMBER_AUTH_VERSION, digestMember, randomHex, validMemberId,
   encryptMemberText, decryptMemberText, normalizeMemberUsername, normalizeInviteCode, validateMemberPassword, createMemberPassword, verifyMemberPassword } from "../lib/member-auth.ts";
 import type { CloudflareEnv } from "./index-clean.ts";
 import type { ForwardState, Trade, forwardSummary } from "../lib/forward-relations.ts";
@@ -62,35 +62,10 @@ export class MemberDirectory extends DurableObject<CloudflareEnv> {
     if(!root||root.length<16)return json({error:"登录密钥服务未配置"},503);
     try {
       if(p==="/health")return json({version:MEMBERS_VERSION,configured:true,memberLimit:MEMBER_LIMIT,activeLimit:MEMBER_ACTIVE_LIMIT});
-      if(p==="/issue"&&request.method==="POST") {
-        const b=await request.json<{label?:unknown;requestId?:unknown}>();
-        if(typeof b.requestId!=="string"||!/^[-a-zA-Z0-9_]{16,80}$/.test(b.requestId))return json({error:"请求标识无效"},400);
-        const label=typeof b.label==="string"?b.label.trim().slice(0,60):"";
-        const key=`MS-${randomHex(32)}`,id=`m_${randomHex(16)}`,keyHash=await digestMember(key);
-        const sealed=await encryptMemberText(key,root,`current-key:${id}`);
-        const result=await this.ctx.storage.transaction(async tx=>{
-          const issueKey=`issue:${b.requestId}`,prior=await tx.get<string>(issueKey);
-          if(prior) {
-            const existing=await tx.get<MemberRecord>(`member:${prior}`);
-            if(existing)return {id:prior,repeated:true};
-            await tx.delete(issueKey);
-          }
-          const total=(await tx.get<number>("member-count"))??0;
-          if(total>=MEMBER_LIMIT)throw new Error(`首批登录账户容量${MEMBER_LIMIT}位已满；不会影响已有用户，请先评估资源后扩容`);
-          const row:MemberRecord={id,label:label||`朋友${String(total+1).padStart(2,"0")}`,createdAt:now,activatedAt:null,lastLoginAt:null,keyHash,keyVersion:1,usage:null,revokedAt:null};
-          await tx.put({[`member:${id}`]:row,[`key:${keyHash}`]:id,[`issue:${b.requestId}`]:id,"member-count":total+1,"current-key":{id,sealed}});
-          return {id,repeated:false};
-        });
-        const current=await this.ctx.storage.get<{id:string;sealed:Awaited<ReturnType<typeof encryptMemberText>>}>("current-key");
-        const display=current?.id===result.id?await decryptMemberText(current.sealed,root,`current-key:${current.id}`):null;
-        return json({ok:true,...result,loginKey:display,oldKeysRemainValid:true,member:publicRecord((await this.readMember(result.id))!)});
-      }
       if(p==="/overview") {
-        const rows=await this.ctx.storage.list<MemberRecord>({prefix:"member:",limit:MEMBER_LIMIT}),invite=await this.currentInvite(root),
-          current=await this.ctx.storage.get<{id:string;sealed:Awaited<ReturnType<typeof encryptMemberText>>}>("current-key");
+        const rows=await this.ctx.storage.list<MemberRecord>({prefix:"member:",limit:MEMBER_LIMIT}),invite=await this.currentInvite(root);
         return json({version:MEMBERS_VERSION,authVersion:MEMBER_AUTH_VERSION,members:[...rows.values()].map(publicRecord).sort((a,b)=>b.createdAt-a.createdAt),
-          invite,current:current?{id:current.id,loginKey:await decryptMemberText(current.sealed,root,`current-key:${current.id}`)}:null,
-          memberLimit:MEMBER_LIMIT,activeLimit:MEMBER_ACTIVE_LIMIT,activeCount:(await this.ctx.storage.get<string[]>("execution-seats"))?.length??0});
+          invite,memberLimit:MEMBER_LIMIT,activeLimit:MEMBER_ACTIVE_LIMIT,activeCount:(await this.ctx.storage.get<string[]>("execution-seats"))?.length??0});
       }
       if(p==="/rotate-invite"&&request.method==="POST") {
         const next=await this.newInvite(root);await this.ctx.storage.put("current-invite",next.record);
@@ -176,7 +151,7 @@ export class MemberDirectory extends DurableObject<CloudflareEnv> {
         return json({ok:true,id,deleted:true});
       }
       if(p==="/login"&&request.method==="POST") {
-        const b=await request.json<{username?:unknown;password?:unknown;key?:unknown;bucket?:string}>(),bucket=b.bucket??"unknown";
+        const b=await request.json<{username?:unknown;password?:unknown;bucket?:string}>(),bucket=b.bucket??"unknown";
         if(!/^[a-f0-9]{64}$/.test(bucket))return json({error:"请求无效"},400);
         const rate=this.failures.get(bucket);if(rate&&rate.reset>now&&rate.n>=20)return json({error:"尝试过于频繁，请稍后再试"},429);
         let m:MemberRecord|null=null;
@@ -184,11 +159,6 @@ export class MemberDirectory extends DurableObject<CloudflareEnv> {
         if(username&&password){
           const usernameKeyHash=await digestMember(username.key),id=await this.ctx.storage.get<string>(`username:${usernameKeyHash}`),candidate=id?await this.readMember(id):null;
           if(candidate?.password&&candidate.authVersion===MEMBER_AUTH_VERSION&&await verifyMemberPassword(password,candidate.password))m=candidate;
-        } else {
-          // Backward compatibility only: existing pre-upgrade login keys remain
-          // usable until the owner deletes/migrates that legacy account.
-          const key=parseLoginKey(b.key),hash=await digestMember(key??"invalid"),id=key?await this.ctx.storage.get<string>(`key:${hash}`):null,candidate=id?await this.readMember(id):null;
-          if(candidate?.keyHash&&equalSecret(hash,candidate.keyHash))m=candidate;
         }
         if(!m||m.revokedAt) {
           this.failures.set(bucket,{n:rate&&rate.reset>now?rate.n+1:1,reset:rate?.reset&&rate.reset>now?rate.reset:now+15*60000});

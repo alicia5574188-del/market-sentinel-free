@@ -1,4 +1,4 @@
-/** Random per-person login keys and independently scoped signed sessions.
+/** Invite registration, username/password authentication and independently scoped signed sessions.
  * Neither a member ID nor a client-supplied role grants any authority.
  */
 export const MEMBERS_VERSION = "isolated-member-keys-v1";
@@ -42,10 +42,6 @@ export async function verifyMemberSession(request:Request,root:string|undefined,
   const expiry=Number(expires);if(expiry<=Math.floor(now/1000)||expiry>Math.floor(now/1000)+MEMBER_TTL+120)return null;
   const text=[id,version,expires,nonce].join(".");
   return equalSecret(sig,await mac(root,`market-sentinel:member-session:v1:${text}`))?{id,version:Number(version),expiresAt:expiry}:null;
-}
-export function parseLoginKey(raw:unknown) {
-  if(typeof raw!=="string")return null;
-  const key=raw.trim();return /^MS-[a-f0-9]{64}$/.test(key)?key:null;
 }
 export async function encryptMemberText(value:string,root:string,context:string) {
   const key=await crypto.subtle.importKey("raw",Uint8Array.from((await mac(root,`member-text:${context}`)).match(/../g)!,x=>parseInt(x,16)),"AES-GCM",false,["encrypt"]);
