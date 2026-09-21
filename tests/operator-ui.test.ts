@@ -45,6 +45,13 @@ test("unauthorized mutations fail and are never automatically replayed",async()=
   try{await assert.rejects(()=>operatorRequest("/api/live/mode","POST",{enabled:true}),e=>e instanceof OperatorRequestError&&e.status===401);assert.equal(calls,1);}
   finally{globalThis.fetch=original;}
 });
+test("dashboard uses granular runtime labels instead of a generic recovery bucket",()=>{
+  const page=readFileSync(new URL("../app/page.tsx",import.meta.url),"utf8");
+  const dashboard=readFileSync(new URL("../app/forward-dashboard.tsx",import.meta.url),"utf8");
+  assert.match(page,/runtimeStatusLabel\(runtime\)/);
+  assert.match(dashboard,/statusLabel/);
+  assert.doesNotMatch(dashboard,/healthy\?"正常":"恢复中"/);
+});
 test("network failure is not interpreted as confirmed OFF or a successful API save",async()=>{
   const original=globalThis.fetch;let calls=0;
   globalThis.fetch=async()=>{calls++;throw new Error("network unavailable");};
