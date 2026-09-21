@@ -181,15 +181,15 @@ test("configuration exposes six independent sleeves whose caps sum to the 10% po
 });
 
 
-test("candidate selector never opens against its own current raw direction",()=>{
+test("release-344 candidate admission keeps the incumbent direction until a confirmed turn",()=>{
   const p=path(360,i=>100*Math.exp(i*.0008));
   const now=(p.at(-1)!.time+300)*1000+1000;
   const s=evaluateMultiTurn({state:initialMultiTurn(),paths:{BTC_USDT:p},now});
   const f=s.frames.BTC_USDT?.["15m"];assert.ok(f);
   assert.ok(turnCandidates(s,.0022).some(x=>x.symbol==="BTC_USDT"&&x.timeframe==="15m"));
   f!.direction="LONG";f!.rawDirection="SHORT";f!.directionConfidence=.90;f!.turnProbability=.10;f!.continuationScore=.81;
-  assert.equal(turnCandidates(s,.0022).some(x=>x.symbol==="BTC_USDT"&&x.timeframe==="15m"),false,
-    "an incumbent direction cannot create a new order while the same frame currently estimates the opposite raw trend");
+  assert.equal(turnCandidates(s,.0022).some(x=>x.symbol==="BTC_USDT"&&x.timeframe==="15m"),true,
+    "release-344 did not add a raw-direction veto before the engine confirms a turn");
 });
 
 
