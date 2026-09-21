@@ -950,7 +950,7 @@ test("a stale open-position book still degrades health even when other markets a
   stream.sessionWarmup.HELD_USDT = 4;
   stream.sessionWarmup.READY_USDT = 4;
   stream.runtime.evidence = {
-    HELD_USDT: { midpoint: 100, bestBid: 99.99, bestAsk: 100.01, observedAt: now - STALE_AFTER_MS - 1, warmup: 4,
+    HELD_USDT: { midpoint: 100, bestBid: 99.99, bestAsk: 100.01, observedAt: now - 8_001, warmup: 4,
       fresh: true, ancillaryFresh: true, entryReady: true, topLong: null, topShort: null, absorption: 0, range15m: null },
     READY_USDT: { midpoint: 50, bestBid: 49.99, bestAsk: 50.01, observedAt: now, warmup: 4,
       fresh: true, ancillaryFresh: true, entryReady: true, topLong: null, topShort: null, absorption: 0, range15m: null },
