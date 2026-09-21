@@ -8,6 +8,7 @@ type Identity={id:string;version:number;label:string;createdAt:number;followBloc
 const json=(v:unknown,status=200,headers?:HeadersInit)=>Response.json(v,{status,headers:{"Cache-Control":"no-store",...headers}});
 const cachedIdentity=new Map<string,{value:Identity;at:number}>();
 const rates=new Map<string,{count:number;at:number}>();
+function clearCachedIdentity(id:string){for(const key of [...cachedIdentity.keys()])if(key.startsWith(id+":"))cachedIdentity.delete(key);}
 async function smallJson(request:Request) {
   if(Number(request.headers.get("content-length")??0)>2048)throw new Error("请求过大");
   const text=await request.text();if(text.length>2048)throw new Error("请求过大");
@@ -74,6 +75,7 @@ export async function memberRoutes(request:Request,env:CloudflareEnv):Promise<Re
       if(!ready.ok)return json({...readyValue,followBlocked:true,stop:stopValue,draining:true},409);
       const revoked=await directory.fetch(`https://members/begin-delete?id=${encodeURIComponent(m.id)}`,{method:"POST"});
       if(!revoked.ok)return revoked;
+      clearCachedIdentity(m.id);
       const readyAgain=await actor.fetch("https://member-execution/admin-delete-ready",{method:"POST",headers:internal});
       if(!readyAgain.ok)return json({...(await readyAgain.json<Record<string,unknown>>()),followBlocked:true,revoked:true,draining:true},409);
       const cleared=await actor.fetch("https://member-execution/admin-delete-finalize",{method:"POST",headers:internal});
