@@ -120,7 +120,8 @@ export class MemberDirectory extends DurableObject<CloudflareEnv> {
           await tx.put({[`member:${id}`]:row,[`username:${usernameKeyHash}`]:id,[requestKey]:id,"member-count":total+1,"current-invite":nextInvite.record});
           return {id,repeated:false};
         });
-        const member=await this.readMember(result.id);return json({ok:true,...result,member:publicRecord(member!)});
+        const member=await this.readMember(result.id);return json({ok:true,...result,member:publicRecord(member!),
+          session:{id:member!.id,version:member!.keyVersion,label:member!.label,createdAt:member!.createdAt}});
       }
       if(p==="/admin-identity") {
         const id=url.searchParams.get("id");if(!validMemberId(id))return json({error:"账户无效"},400);
@@ -219,8 +220,10 @@ export class MemberDirectory extends DurableObject<CloudflareEnv> {
       if(p==="/seat"&&request.method==="POST") {
         const b=await request.json<{enabled:boolean}>();
         if(typeof b.enabled!=="boolean")return json({error:"参数无效"},400);
-        if((m.revokedAt||m.followBlockedAt)&&b.enabled)return json({error:m.revokedAt?"账户正在删除，不能重新开启实盘席位":"主账户已停止本账户的实盘跟随权限"},409);
         await this.ctx.storage.transaction(async tx=>{
+          const current=await tx.get<MemberRecord>(`member:${id}`);if(!current)throw new Error("账户不存在");
+          if(b.enabled&&(current.revokedAt||current.followBlockedAt))
+            throw new Error(current.revokedAt?"账户正在删除，不能重新开启实盘席位":"主账户已停止本账户的实盘跟随权限");
           const seats=await tx.get<string[]>("execution-seats")??[];
           if(b.enabled&&!seats.includes(id)&&seats.length>=MEMBER_ACTIVE_LIMIT)throw new Error(`会员实盘安全容量为${MEMBER_ACTIVE_LIMIT}个并行账户，已有账户和主账户不受影响`);
           const next=b.enabled?[...new Set([...seats,id])]:seats.filter(v=>v!==id);
