@@ -43,7 +43,7 @@ export function rankMultiTurnUniverse(rows:MultiTurnUniverseTicker[],limit=30):R
       : 0;
     const independent=range*(.72+.28*efficiency)*(1+.30*Math.min(4,residualMultiple))
       *((broadDirection!==0&&sgn(r.change24hRate)===-broadDirection)?1.15:1);
-    const useFollower=follower>=independent&&sameDirection&&amplification>=1.15;
+    const useFollower=sameDirection&&amplification>=1.15&&follower>=independent*.90;
     const kind:MultiTurnUniverseClass=useFollower?"MARKET_AMPLIFIER":"INDEPENDENT_VOLATILITY";
     const score=Math.max(follower,independent);
     const reason=useFollower
