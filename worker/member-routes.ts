@@ -29,6 +29,7 @@ export async function memberRoutes(request:Request,env:CloudflareEnv):Promise<Re
   const u=new URL(request.url),path=u.pathname;if(!path.startsWith("/api/"))return null;
   const owner=!!env.OWNER_ACCESS_TOKEN&&await verifyOwnerSession(request,env.OWNER_ACCESS_TOKEN);
   try {
+    if(path==="/api/members/issue")return json({error:"密钥会员功能已移除，请使用邀请码注册"},410);
     if(["/api/members/admin","/api/members/invite/rotate","/api/members/stop","/api/members/resume","/api/members/delete"].includes(path)) {
       if(!owner)return json({error:"仅主账户可以管理会员"},403);
       if(!env.MEMBERS||!env.MEMBER_EXECUTION)return json({error:"会员服务未部署"},503);
