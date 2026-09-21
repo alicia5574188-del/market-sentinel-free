@@ -371,6 +371,13 @@ export function turnModeledCost(tf:TurnTimeframe,spread=0){
     +PAPER_COST.fundingAllowancePerDay*expectedHold/1440);
 }
 
+export function multiTurnEntryLeverage(stopRate:number,maintenanceRate:number,costRate:number,leverageMax:number){
+  if(![stopRate,maintenanceRate,costRate,leverageMax].every(Number.isFinite)||stopRate<=0||maintenanceRate<0||costRate<0||leverageMax<1)
+    return 1;
+  const safeLeverage=Math.max(1,Math.floor(.8/Math.max(stopRate+maintenanceRate+costRate,1e-9)));
+  return Math.max(1,Math.floor(Math.min(MULTI_TURN_TARGET_LEVERAGE,leverageMax,safeLeverage)));
+}
+
 function multiTurnRule(s:ForwardState,candidate:TurnCandidate,now:number):Rule{
   const cfg=TURN_CONFIG[candidate.timeframe],net=Math.max(0,candidate.expectedMoveRate-turnModeledCost(candidate.timeframe));
   return{id:`mt-${s.startedAt}-${s.revision+1}`,signature:hash(JSON.stringify(["MULTI_TURN",candidate.symbol,candidate.timeframe,
@@ -456,8 +463,7 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
     const headroom=Math.min(equity*.10-totalRisk,equity*.065-sideRisk,equity*candidate.riskCap-sleeveRisk);
     const targetRisk=Math.max(0,Math.min(equity*.015*quality*drawdownScale,headroom));
     const lossRate=candidate.stopRate+cost;
-    const safeLeverage=Math.max(1,Math.floor(.8/Math.max(candidate.stopRate+meta.maintenanceRate+cost,1e-9)));
-    const leverage=Math.max(1,Math.floor(Math.min(MULTI_TURN_TARGET_LEVERAGE,meta.leverageMax,safeLeverage)));
+    const leverage=multiTurnEntryLeverage(candidate.stopRate,meta.maintenanceRate,cost,meta.leverageMax);
     const usedMargin=s.positions.reduce((n,t)=>n+t.margin,0);
     // Nominal value remains risk-authoritative. Leverage is normally fixed at
     // 20x and margin becomes the balancing variable. A structurally wide stop
