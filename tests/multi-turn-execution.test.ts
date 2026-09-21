@@ -200,7 +200,7 @@ test("full-risk rotation atomically replaces one clearly weak holding and cannot
     const t=structuredClone(baseTrade),tf=timeframes[i];
     t.id=`rotation-${i}`;t.symbol=symbol;t.side="LONG";t.openedAt=seedAt-(i===0?11:5)*60_000;
     t.entryPrice=100;t.lastPrice=100;t.quantity=1;t.contracts=1000;t.quantoMultiplier=.001;t.notional=100;
-    t.leverage=20;t.margin=5;t.plannedRisk=12.4;t.stopPrice=98;t.armPrice=103;t.entryFee=.07;
+    t.leverage=20;t.margin=5;t.plannedRisk=12.9;t.stopPrice=98;t.armPrice=103;t.entryFee=.07;
     t.exitFee=0;t.fundingAllowance=0;t.grossPnl=null;t.netPnl=null;t.exitReason=null;t.favorable=0;t.adverse=0;
     t.lastQuoteAt=seedAt;t.rule={...t.rule,id:`rotation-rule-${i}`,side:"LONG",authority:"MULTI_TURN",turnTimeframe:tf,
       horizon:TURN_CONFIG[tf].maxHoldMinutes,stopRate:.02};
@@ -244,7 +244,7 @@ test("full-risk rotation atomically replaces one clearly weak holding and cannot
   // strong candidates inside 60 minutes. Neither a second rotation nor an
   // immediate re-entry of W0 is allowed.
   const secondAt=later+30*60_000;
-  for(const t of first.positions)t.plannedRisk=12.4;
+  for(const t of first.positions)t.plannedRisk=12.9;
   const w1=first.positions.find(t=>t.symbol==="W1_USDT")!;w1.openedAt=secondAt-31*60_000;
   const w1Frame=first.turnEngine!.frames.W1_USDT!["15m"]!;
   w1Frame.directionConfidence=.35;w1Frame.continuationScore=.25;w1Frame.turnProbability=.60;w1Frame.triggerProbability=.60;w1Frame.phase="WATCH";
