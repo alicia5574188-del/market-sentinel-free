@@ -17,6 +17,8 @@ import { MULTI_TURN_VERSION, TURN_CONFIG, TURN_TIMEFRAMES, evaluateMultiTurn, in
   type MultiTurnState, type TurnCandidate, type TurnEvidence, type TurnPhase, type TurnSide, type TurnTimeframe } from "./multi-turn-engine.ts";
 import { MULTI_TURN_PROFIT_PROTECTION_VERSION, type MultiTurnTradeProfitProtection } from "./multi-turn-profit-protection.ts";
 import { evaluateMultiTurnHoldValue, multiTurnHoldWindows, type MultiTurnHoldValue } from "./multi-turn-hold-value.ts";
+import { MULTI_TURN_ROTATION_COOLDOWN_MS, MULTI_TURN_ROTATION_VERSION, evaluateRotationOpportunity,
+  multiTurnRotationReentryCooldownMs, rankWeakRotationHoldings, rotationAdvantageEnough, rotationRiskSaturated } from "./multi-turn-rotation.ts";
 // The storage schema stays v1.0 so an algorithm upgrade cannot reset the ledger.
 export const FORWARD_VERSION = "forward-relations-v1.0";
 export const FORWARD_GRAMMAR = "conditional-response-conjunction-v1";
@@ -79,6 +81,8 @@ export type ForwardState = { version: string; startedAt: number; revision: numbe
   selectedSymbols: string[]; storage: { persistedAt: number; error: string | null }; liveEligible: false;
   adaptationVersion?:string; lastFitMeasured?:number;
   strategyAuthorityVersion?:string;turnEngine?:MultiTurnState;turnLastEntryBars?:Record<string,number>;turnSymbolExitAt?:Record<string,number>;cutoverAt?:number;
+  turnRotationBlockedUntil?:Record<string,number>;
+  rotationState?:{version:typeof MULTI_TURN_ROTATION_VERSION;lastAt:number;count:number;lastFrom:string|null;lastTo:string|null};
   policyVersion?:string; feedback?:Feedback[]; evidenceDiagnostics?:EvidenceDiagnostics;
   entryDiagnostics?:{at:number;matched:number;opened:number;reasons:Record<string,number>;retry?:boolean;queued?:number;adaptiveScaled?:number};
   quoteRetries?:QuoteRetry[];
@@ -115,7 +119,8 @@ export function initialForward(now:number):ForwardState {
 export function initialMultiTurnForward(now:number):ForwardState{
   const s=initialForward(now);
   s.revision=0;s.events=[];s.rules=[];s.samples=[];s.pending={};s.frames={};s.feedback=[];s.relationEntries={};s.quoteRetries=[];
-  s.strategyAuthorityVersion=MULTI_TURN_VERSION;s.turnEngine=initialMultiTurn();s.turnLastEntryBars={};s.turnSymbolExitAt={};s.cutoverAt=now;
+  s.strategyAuthorityVersion=MULTI_TURN_VERSION;s.turnEngine=initialMultiTurn();s.turnLastEntryBars={};s.turnSymbolExitAt={};
+  s.turnRotationBlockedUntil={};s.rotationState={version:MULTI_TURN_ROTATION_VERSION,lastAt:0,count:0,lastFrom:null,lastTo:null};s.cutoverAt=now;
   s.latestReason="Multi-Turn六周期转折引擎已启动；旧Forward规则不再拥有新开仓或策略退出权。";
   event(s,now,"START",MULTI_TURN_VERSION,s.latestReason);return s;
 }
@@ -136,7 +141,12 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
   const authority=v.strategyAuthorityVersion??"legacy-forward-rules-v1";
   return {...v,adaptationVersion:v.adaptationVersion??"legacy-forward-adaptation-v1",lastFitMeasured:v.lastFitMeasured??v.measured,
     strategyAuthorityVersion:authority,turnLastEntryBars:v.turnLastEntryBars??{},
-    ...(authority===MULTI_TURN_VERSION?{turnSymbolExitAt:v.turnSymbolExitAt??{}}:v.turnSymbolExitAt?{turnSymbolExitAt:v.turnSymbolExitAt}:{}),
+    ...(authority===MULTI_TURN_VERSION?{
+      turnSymbolExitAt:v.turnSymbolExitAt??{},
+      turnRotationBlockedUntil:v.turnRotationBlockedUntil??{},
+      rotationState:v.rotationState?.version===MULTI_TURN_ROTATION_VERSION?v.rotationState:
+        {version:MULTI_TURN_ROTATION_VERSION,lastAt:0,count:0,lastFrom:null,lastTo:null},
+    }:v.turnSymbolExitAt?{turnSymbolExitAt:v.turnSymbolExitAt}:{}),
     ...(v.turnEngine?.version===MULTI_TURN_VERSION?{turnEngine:v.turnEngine}:{})};
 }
 export function frameFromCandles(symbol:string,rows:Candle[],now:number):Frame|null {
@@ -438,17 +448,82 @@ function manageMultiTurn(s:ForwardState,quotes:Record<string,Quote>,now:number){
   }
   s.positions=s.positions.filter(t=>t.status==="OPEN");
 }
+type MultiTurnOpenOptions={
+  allowRotation?:boolean;
+  onlyCandidate?:{symbol:string;timeframe:TurnTimeframe;completedAt:number};
+};
+
+function trySelectiveRiskRotation(input:{state:ForwardState;candidate:TurnCandidate;quotes:Record<string,Quote>;
+  contracts:Record<string,Contract>;now:number;entrySymbols?:ReadonlySet<string>;remainingSpaceRate:number;costRate:number}){
+  const s=input.state,engine=s.turnEngine,frame=engine?.frames[input.candidate.symbol]?.[input.candidate.timeframe];
+  if(!engine||!frame)return false;
+  const rotation=s.rotationState??{version:MULTI_TURN_ROTATION_VERSION,lastAt:0,count:0,lastFrom:null,lastTo:null};
+  if(rotation.version!==MULTI_TURN_ROTATION_VERSION||input.now-rotation.lastAt<MULTI_TURN_ROTATION_COOLDOWN_MS)return false;
+  const marked=forwardEquity(s,input.quotes,input.now);if(marked.stalePositions||!(marked.equity>0))return false;
+  const totalRisk=s.positions.reduce((n,t)=>n+t.plannedRisk,0);
+  const sideRisk=s.positions.filter(t=>t.side===input.candidate.side).reduce((n,t)=>n+t.plannedRisk,0);
+  const sleeveRisk=s.positions.filter(t=>t.turn?.timeframe===input.candidate.timeframe).reduce((n,t)=>n+t.plannedRisk,0);
+  if(!rotationRiskSaturated({equity:marked.equity,totalRisk,sideRisk,sleeveRisk,riskCap:input.candidate.riskCap}))return false;
+  const opportunity=evaluateRotationOpportunity({candidate:input.candidate,frame,remainingSpaceRate:input.remainingSpaceRate,costRate:input.costRate});
+  if(!opportunity.eligible)return false;
+  const weak=rankWeakRotationHoldings({now:input.now,holdings:s.positions.flatMap(t=>
+    t.turn&&t.holdValue&&t.holdValue.evaluatedAt>=input.now-15_000?[{
+      id:t.id,symbol:t.symbol,side:t.side,timeframe:t.turn.timeframe,openedAt:t.openedAt,holdValue:t.holdValue,
+    }]:[])});
+  for(const row of weak){
+    if(!rotationAdvantageEnough(opportunity,row))continue;
+    const weakQuote=input.quotes[row.holding.symbol];if(!freshQuote(weakQuote,input.now))continue;
+    const reason=`择优换仓：账户风险接近满额，${input.candidate.symbol} ${input.candidate.timeframe}候选优势显著高于${row.holding.symbol}；${opportunity.reason} ${row.reason}`;
+    const trial=structuredClone(s),trialWeak=trial.positions.find(t=>t.id===row.holding.id);if(!trialWeak)continue;
+    const trialDecision:ExitDecision={trigger:"ROTATION",reason,boundaryRate:null};
+    const trialPx=exitPrice(trialWeak,weakQuote);
+    closeTrade(trial,trialWeak,weakQuote,input.now,reason);
+    if(trialWeak.exitControl)trialWeak.exitAudit=makeExitAudit(trialWeak,trialDecision,trialPx,weakQuote.observedAt,input.now,0);
+    trial.positions=trial.positions.filter(t=>t.status==="OPEN");
+    openMultiTurnTrades(trial,input.quotes,input.contracts,input.now,input.entrySymbols,{
+      allowRotation:false,onlyCandidate:{symbol:input.candidate.symbol,timeframe:input.candidate.timeframe,completedAt:input.candidate.completedAt}});
+    if(!trial.positions.some(t=>t.symbol===input.candidate.symbol&&t.openedAt===input.now))continue;
+
+    const actual=s.positions.find(t=>t.id===row.holding.id);if(!actual)continue;
+    const decision:ExitDecision={trigger:"ROTATION",reason,boundaryRate:null},px=exitPrice(actual,weakQuote);
+    closeTrade(s,actual,weakQuote,input.now,reason);
+    if(actual.exitControl)actual.exitAudit=makeExitAudit(actual,decision,px,weakQuote.observedAt,input.now,0);
+    const sourceRule=s.rules.find(r=>r.id===actual.rule.id);if(sourceRule)sourceRule.status="DORMANT";
+    s.turnSymbolExitAt??={};s.turnSymbolExitAt[actual.symbol]=input.now;
+    s.turnRotationBlockedUntil??={};
+    s.turnRotationBlockedUntil[actual.symbol]=input.now+multiTurnRotationReentryCooldownMs(actual.turn!.timeframe);
+    const oldKey=`${actual.symbol}:${actual.turn!.timeframe}`;
+    s.turnLastEntryBars??={};s.turnLastEntryBars[oldKey]=Math.max(s.turnLastEntryBars[oldKey]??0,Math.floor(input.now/BAR_MS)*BAR_MS);
+    s.positions=s.positions.filter(t=>t.status==="OPEN");
+    s.rotationState={version:MULTI_TURN_ROTATION_VERSION,lastAt:input.now,count:rotation.count+1,
+      lastFrom:actual.symbol,lastTo:input.candidate.symbol};
+    openMultiTurnTrades(s,input.quotes,input.contracts,input.now,input.entrySymbols,{
+      allowRotation:false,onlyCandidate:{symbol:input.candidate.symbol,timeframe:input.candidate.timeframe,completedAt:input.candidate.completedAt}});
+    if(!s.positions.some(t=>t.symbol===input.candidate.symbol&&t.openedAt===input.now))
+      throw new Error("择优换仓原子校验失败：弱仓已退出但强候选未能进入；整轮状态不得发布");
+    event(s,input.now,"PROTECTION",MULTI_TURN_ROTATION_VERSION,reason,{
+      from:actual.symbol,to:input.candidate.symbol,candidateScore:opportunity.score,holdingScore:row.score,
+      candidateEdgeRatio:opportunity.edgeRatio,holdingEdgeRatio:row.holding.holdValue.edgeRatio});
+    s.latestReason=`择优换仓完成：${actual.symbol} → ${input.candidate.symbol}；仅在风险满额且强弱差显著时执行。`;
+    return true;
+  }
+  return false;
+}
+
 function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,
-  entrySymbols?:ReadonlySet<string>){
+  entrySymbols?:ReadonlySet<string>,options:MultiTurnOpenOptions={}){
   const engine=s.turnEngine;if(!engine||engine.version!==MULTI_TURN_VERSION)return;
   s.turnLastEntryBars??={};s.quoteRetries=[];
   const candidates=turnCandidates(engine,tf=>turnModeledCost(tf,0))
-    .filter(candidate=>!entrySymbols||entrySymbols.has(candidate.symbol));
+    .filter(candidate=>!entrySymbols||entrySymbols.has(candidate.symbol))
+    .filter(candidate=>!options.onlyCandidate||(candidate.symbol===options.onlyCandidate.symbol
+      &&candidate.timeframe===options.onlyCandidate.timeframe&&candidate.completedAt===options.onlyCandidate.completedAt));
   const diagnostics={at:now,matched:candidates.length,opened:0,reasons:{} as Record<string,number>,retry:false,queued:0,adaptiveScaled:0};
   s.entryDiagnostics=diagnostics;
   const reject=(reason:string)=>{diagnostics.reasons[reason]=(diagnostics.reasons[reason]??0)+1;};
   for(const candidate of candidates){
     if(s.positions.some(t=>t.symbol===candidate.symbol))continue;
+    if((s.turnRotationBlockedUntil?.[candidate.symbol]??0)>now){reject("该币刚被择优换出，冷却期内不重新追入");continue;}
     if(now-(s.turnSymbolExitAt?.[candidate.symbol]??-Infinity)<10_000){reject("该币刚完成周期转折退出；下一执行周期再比较各周期新方向");continue;}
     const key=`${candidate.symbol}:${candidate.timeframe}`;
     if((s.turnLastEntryBars[key]??0)>=candidate.completedAt)continue;
@@ -490,7 +565,11 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
     const sleeveCapNotional=Math.max(0,(equity*candidate.riskCap-sleeveRisk)/(lossRate+candidate.riskCap*immediateMarkCost));
     const desired=Math.min(equity*1.5,targetRisk/Math.max(lossRate,1e-9),totalCapNotional,sideCapNotional,sleeveCapNotional,
       marginCapNotional,Math.max(0,equity*4-gross));
-    if(!(desired>=equity*.05)){reject("该周期剩余风险额度不足有效仓位，不生成碎片订单");continue;}
+    if(!(desired>=equity*.05)){
+      if(options.allowRotation!==false&&trySelectiveRiskRotation({state:s,candidate,quotes,contracts,now,entrySymbols,
+        remainingSpaceRate:remaining,costRate:cost}))return;
+      reject("该周期剩余风险额度不足有效仓位，不生成碎片订单");continue;
+    }
     const price=(candidate.side==="LONG"?q.bestAsk:q.bestBid)*(1+d*PAPER_COST.slippageRate);
     const exitNow=(candidate.side==="LONG"?q.bestBid:q.bestAsk)*(1-d*PAPER_COST.slippageRate);
     const notionalPer=price*meta.quantoMultiplier,riskPer=notionalPer*lossRate;
@@ -518,7 +597,11 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
       ...s.positions.map(t=>capCount(.015,t.plannedRisk,0)),
     ];
     count=Math.min(count,...constraints);
-    if(count<Math.max(1,meta.minContracts??1)){reject("风险额度低于交易所最小合约张数");continue;}
+    if(count<Math.max(1,meta.minContracts??1)){
+      if(options.allowRotation!==false&&trySelectiveRiskRotation({state:s,candidate,quotes,contracts,now,entrySymbols,
+        remainingSpaceRate:remaining,costRate:cost}))return;
+      reject("风险额度低于交易所最小合约张数");continue;
+    }
     const quantity=count*meta.quantoMultiplier,notional=quantity*price;
     if(notional<equity*.05||notional<desired*.25){reject("合约取整后只剩碎片仓位");continue;}
     const entryFee=notional*PAPER_COST.feeRate,markedAfter=equity-entryFee,margin=notional/leverage;
