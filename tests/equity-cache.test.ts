@@ -147,14 +147,30 @@ test("closing the browser loses sessionStorage but persistent history needs no h
   assert.equal(h.urls.length,4);assert.ok(h.urls[3].startsWith("?after="));
   assert.deepEqual(reopened.getSnapshot().points.slice(0,150),old);assert.equal(reopened.getSnapshot().points.length,155);
 });
-test("upgrade migrates validated session cache without downloading already read data",async()=>{
+test("projection upgrade retains validated points but re-scans archive to recover formerly omitted marks",async()=>{
   const h=host();await h.cache.load(T,T+150*STEP,()=>true);
   const k=h.disk.key(0)!,legacy=JSON.parse(h.disk.getItem(k)!);legacy.version="incremental-session-v1";
   h.disk.setItem(k,JSON.stringify(legacy));const persistent=new Memory();
   const upgraded=new EquityHistoryCache({...h.options,storage:()=>persistent,legacyStorage:()=>h.disk});upgraded.configure(context,"owner");
-  assert.equal(upgraded.getSnapshot().points.length,150);assert.equal(h.disk.length,0);
+  assert.equal(upgraded.getSnapshot().points.length,150);assert.equal(upgraded.getSnapshot().loaded,false);assert.equal(h.disk.length,0);
   assert.equal(JSON.parse(persistent.getItem(k)!).version,EQUITY_CACHE_VERSION);
-  await upgraded.load(T,T+150*STEP,()=>true);assert.equal(h.urls.length,3);
+  await upgraded.load(T,T+150*STEP,()=>true);assert.equal(h.urls.length,6);
+  assert.equal(upgraded.getSnapshot().points.length,150);
+});
+test("persistent v1 cache re-scan fills a stale saved mark that the old projection omitted",async()=>{
+  const h=host(3),k=`sentinel:equity-cache:v1:owner:${T}:1000`,p1=packet(1),p3=packet(3);
+  const stale=packet(2);stale.account.positions=[{lastQuoteAt:T,exitControl:{policy:context.exitPolicy}}];h.archive.rows.set(key(2),stale);
+  h.disk.setItem(k,JSON.stringify({version:"incremental-persistent-v1",account:T,initialEquity:1000,
+    points:[[p1.at,p1.daily.endEquity,context.policy,true],[p3.at,p3.daily.endEquity,context.policy,true]],
+    cursor:null,newestCursor:key(3),done:true,loaded:true,coveredTo:T+STEP,latestAt:h.now(),checkedCycle:T+3*STEP,
+    catchingUp:false,lastAttempt:h.now()}));
+  const repaired=new EquityHistoryCache(h.options);repaired.configure(context,"owner");
+  assert.equal(repaired.getSnapshot().points.length,2);assert.equal(repaired.getSnapshot().loaded,false);
+  await repaired.load(T,T+3*STEP,()=>true);
+  assert.equal(repaired.getSnapshot().points.length,3);
+  assert.equal(repaired.getSnapshot().points.find(p=>p.at===stale.at)?.stale,true);
+  assert.equal(repaired.getSnapshot().points.find(p=>p.at===stale.at)?.homogeneous,false);
+  assert.equal(JSON.parse(h.disk.getItem(k)!).version,EQUITY_CACHE_VERSION);
 });
 test("failed persistent migration preserves old session cache and displays an accurate notice",async()=>{
   const h=host(1);await h.cache.load(T,T+STEP,()=>true);
