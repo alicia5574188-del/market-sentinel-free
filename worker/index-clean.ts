@@ -772,6 +772,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private refreshUniverse(now: number, ranked: Awaited<ReturnType<typeof fetchActiveContracts>>) {
+    if (ranked.length === 0) throw new Error("contract catalog unavailable: empty active-contract response");
     this.contractCatalog = new Map(ranked.map((row) => [row.symbol, row]));
     this.runtime.lastUniverseAt = now;
     for (const symbol of this.runtime.symbols) this.applyContractMetadata(symbol);
@@ -829,6 +830,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private refreshRadar(now: number, rows: Awaited<ReturnType<typeof fetchMarketTickers>>) {
+    // A failed cold-start catalog load is not a successful empty market scan.
+    if (this.contractCatalog.size === 0) throw new Error("contract catalog unavailable: radar refresh deferred");
     const eligible = new Set(this.contractCatalog.keys());
     const eligibleRows = rows.filter((row) => eligible.has(row.symbol) && forwardSymbolAllowed(row.symbol));
     const rankedUniverse = rankMultiTurnUniverse(eligibleRows, SCAN_UNIVERSE_SIZE);

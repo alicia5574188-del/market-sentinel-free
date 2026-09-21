@@ -1,3 +1,9 @@
+# 2026-09-21 — audit release deployed; catalog recovery follow-up (current)
+
+PR #366 merged as `0747bb703963c71e7fedeae013f9a82116c5a7f2`; exact-head PR run 35607181057 and main release run 35607379461 succeeded. Published tree exactly matches the locally verified 823-test repair. Three production receipts preserve account startedAt 1789939420215, 29 closed/9 open at deployment, storage.error=null and owner LIVE false/false; lastSuccessAt advances, with the third receipt back to LIVE market health.
+
+Further continuity checks found radar.scanned=0 after restart. The constructor correctly resets lastUniverseAt=0: the defect is a failed initial catalog fetch followed by successful tickers being filtered against an empty catalog and incorrectly committed as a successful empty scan. Reproduced with the actual optional-work method. On `audit/catalog-restart-20260921` based on deployed main, add only pre-mutation empty-catalog/input guards and semantic recovery tests, retaining existing 60-second radar retry and valid low-volatility zero-result scans. Independently reviewed design. Verify and release this scoped follow-up, then obtain scan-pool plus account/LIVE continuity receipts. Do not redesign strategy, suppress the health gate or attribute all degradation solely to upstream outages.
+
 # 2026-09-20 — Forward Adaptive v2 IN PROGRESS
 
 Branch `strategy/forward-adaptive-v2-20260920` starts from deployed main `4810af8d717c70208738e8141fba15498a24a66b`. Architecture lock and the first implementation are present: rapid matured-15m migration candidates, refit on newly matured responses, continuous turn/drawdown allocation, and best-first sequential risk allocation. Existing PAPER account/LIVE authority are unchanged. Counterexample tests and exact-head CI are still required; this status is not a deployment or profitability claim.

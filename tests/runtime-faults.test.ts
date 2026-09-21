@@ -198,6 +198,77 @@ async function makeStream(checkpoint?: unknown) {
   return makeStreamFromStorage(new FakeStorage(checkpoint));
 }
 
+test("restart catalog outage preserves the saved scan and recovers on the existing radar retry", async () => {
+  const { stream: previous } = await makeStream();
+  const symbols = ["BTC_USDT", "ETH_USDT", "SOL_USDT"], started = 1_800_000_000_000;
+  previous.runtime.liquidUniverse = symbols;
+  previous.runtime.lastUniverseAt = started - 1_000;
+  previous.runtime.radar = successfulRadarRuntime(previous.runtime.radar, started - 60_000, symbols.length, []);
+  const { stream } = await makeStream(previous.runtime);
+  assert.equal(stream.contractCatalog.size, 0);
+  assert.equal(stream.runtime.lastUniverseAt, 0, "restart immediately refreshes the ephemeral contract catalog");
+  delete stream.launchOptionalWork;
+  for (const method of ["launchLiveSettlementBackground", "advanceForwardAndWakeLive", "updateAncillary",
+    "refreshStrategyCandle", "refreshTurnDaily", "refreshRegimeHourly", "maybeWriteStrategyRuntimeLog"])
+    stream[method] = async () => 0;
+  const oldFetch = globalThis.fetch, oldNow = Date.now;
+  let now = started, contractsFail = true;
+  Date.now = () => now;
+  globalThis.fetch = async (input) => {
+    const path = new URL(String(input)).pathname;
+    if (path.endsWith("/contracts")) {
+      if (contractsFail) throw new DOMException("synthetic catalog timeout", "TimeoutError");
+      return Response.json(symbols.map(name => ({ name, status: "trading", order_price_round: ".01", quanto_multiplier: ".001" })));
+    }
+    if (path.endsWith("/tickers")) return Response.json(symbols.map(contract => ({ contract, last: "100",
+      volume_24h_usd: "10000000", high_24h: "105", low_24h: "95" })));
+    throw new Error(`Unexpected network request in catalog test: ${path}`);
+  };
+  const pass = async (universeDue: boolean) => { stream.launchOptionalWork(now, universeDue); await stream.optionalWork; };
+  try {
+    await pass(true);
+    assert.deepEqual(stream.runtime.liquidUniverse, symbols, "valid tickers cannot erase the saved scan while catalog is absent");
+    assert.equal(stream.runtime.radar.lastScanAt, started - 60_000);
+    assert.equal(stream.runtime.radar.scanned, symbols.length);
+    assert.equal(stream.runtime.radar.consecutiveFailures, 1);
+    assert.ok(stream.runtime.radar.lastError);
+    assert.equal(stream.runtime.radar.retryAt, started + 60_000, "retain the existing one-minute radar retry");
+    contractsFail = false; now += 2_000;
+    await pass(true);
+    assert.equal(stream.contractCatalog.size, symbols.length);
+    assert.equal(stream.runtime.radar.lastScanAt, started - 60_000, "catalog recovery does not accelerate the established radar retry");
+    now = started + 60_000;
+    await pass(false);
+    assert.equal(stream.runtime.radar.lastScanAt, now);
+    assert.equal(stream.runtime.radar.lastError, null);
+    assert.equal(stream.runtime.radar.scanned, symbols.length);
+    assert.deepEqual(new Set(stream.runtime.liquidUniverse), new Set(symbols));
+  } finally { globalThis.fetch = oldFetch; Date.now = oldNow; }
+});
+
+test("empty upstream contract results cannot replace the last valid catalog or successful refresh time", async () => {
+  const { stream } = await makeStream();
+  stream.refreshUniverse(10_000, [{ symbol: "BTC_USDT", tickSize: .01, quantoMultiplier: .001,
+    maintenanceRate: .005, leverageMax: 20, fundingRate: 0 }]);
+  const prior = new Map(stream.contractCatalog);
+  assert.throws(() => stream.refreshUniverse(11_000, []));
+  assert.deepEqual(stream.contractCatalog, prior);
+  assert.equal(stream.runtime.lastUniverseAt, 10_000);
+});
+
+test("a warm catalog keeps the existing strategy's legitimate zero-opportunity radar result", async () => {
+  const { stream } = await makeStream();
+  stream.refreshUniverse(10_000, [{ symbol: "BTC_USDT", tickSize: .01, quantoMultiplier: .001,
+    maintenanceRate: .005, leverageMax: 20, fundingRate: 0 }]);
+  stream.runtime.liquidUniverse = ["BTC_USDT"];
+  stream.refreshRadar(11_000, [{ symbol: "BTC_USDT", last: 100, high24h: 101, low24h: 99,
+    change24hRate: .01, volume24hUsd: 10_000_000, fundingRate: 0, openInterest: 10_000 }]);
+  assert.deepEqual(stream.runtime.liquidUniverse, []);
+  assert.equal(stream.runtime.radar.scanned, 0);
+  assert.equal(stream.runtime.radar.lastScanAt, 11_000);
+  assert.equal(stream.runtime.radar.lastError, null);
+});
+
 function gateHourlyRows(currentHour: number, completedCount: number) {
   return Array.from({ length: completedCount + 1 }, (_, index) => {
     const time = currentHour - (completedCount - index) * 3_600;
