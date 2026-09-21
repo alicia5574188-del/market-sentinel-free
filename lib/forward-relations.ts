@@ -402,7 +402,8 @@ function manageMultiTurn(s:ForwardState,quotes:Record<string,Quote>,now:number){
       if(!prior||proposedFloor.floorRate>prior.floorRate+1e-12){
         t.profitProtection={...proposedFloor,peakR:Math.max(prior?.peakR??0,proposedFloor.reachedR),updatedAt:now};
       }else{
-        t.profitProtection={...prior,peakR:Math.max(prior.peakR,proposedFloor.reachedR),
+        t.profitProtection={...prior,reachedR:proposedFloor.reachedR,peakR:Math.max(prior.peakR,proposedFloor.reachedR),
+          retentionRate:prior.floorRate/Math.max(t.favorable,1e-9),
           checkpointBand:Math.max(prior.checkpointBand,Math.floor(prior.lockedR*4+1e-9))};
       }
     }
