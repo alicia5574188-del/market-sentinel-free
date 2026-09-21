@@ -15,7 +15,7 @@ import { FORWARD_ADAPTIVE_VERSION, adaptiveCandidatePriority, adaptiveEntryAdjus
   familyRiskHeadroom, inspectRapidCondition, sampleRiskMultiplier, type AdaptiveCandidate, type AdaptiveLane } from "./forward-adaptive.ts";
 import { MULTI_TURN_VERSION, TURN_CONFIG, TURN_TIMEFRAMES, evaluateMultiTurn, initialMultiTurn, turnCandidates,
   type MultiTurnState, type TurnCandidate, type TurnTimeframe } from "./multi-turn-engine.ts";
-import { multiTurnProfitFloor } from "./multi-turn-profit-protection.ts";
+import { MULTI_TURN_PROFIT_PROTECTION_VERSION, multiTurnProfitFloor, type MultiTurnProfitMode } from "./multi-turn-profit-protection.ts";
 // The storage schema stays v1.0 so an algorithm upgrade cannot reset the ledger.
 export const FORWARD_VERSION = "forward-relations-v1.0";
 export const FORWARD_GRAMMAR = "conditional-response-conjunction-v1";
@@ -390,12 +390,46 @@ function manageMultiTurn(s:ForwardState,quotes:Record<string,Quote>,now:number){
       &&now-frame.completedAt<=Math.max(BAR_MS*2,cfg.minutes*60_000*1.5)?frame:null;
     let decision:ExitDecision|null=null;
     const spread=(q.bestAsk-q.bestBid)/Math.max((q.bestAsk+q.bestBid)/2,1e-9);
-    const profitFloor=multiTurnProfitFloor(t.favorable,t.plannedRisk/Math.max(t.notional,1e-9),turnModeledCost(t.turn.timeframe,spread));
+    const modeledCost=turnModeledCost(t.turn.timeframe,spread),riskRate=t.plannedRisk/Math.max(t.notional,1e-9);
+    const context=freshFrame?{continuationScore:freshFrame.continuationScore,turnProbability:freshFrame.triggerProbability,
+      phase:freshFrame.phase,directionAligned:freshFrame.direction==="NEUTRAL"||freshFrame.direction===t.side}:null;
+    const control=t.exitControl;
+    const proposed=multiTurnProfitFloor(t.favorable,riskRate,modeledCost,context,control?.profitFloorRate??0);
+    if(control){
+      const legacy=control.profitFloorVersion!==MULTI_TURN_PROFIT_PROTECTION_VERSION;
+      const cushion=Math.max(.0015,Math.min(.005,riskRate*.15));
+      const minNet=modeledCost+.0010;
+      if(legacy){
+        control.profitFloorVersion=MULTI_TURN_PROFIT_PROTECTION_VERSION;
+        control.profitFloorUpdatedAt=now;
+        control.profitFloorMode=(proposed?.mode??"UNKNOWN") as MultiTurnProfitMode;
+        if(proposed&&ret>proposed.floorRate+cushion){
+          control.profitFloorRate=proposed.floorRate;control.profitFloorDeferred=false;
+        }else if(proposed&&ret>minNet+cushion){
+          control.profitFloorRate=Math.max(minNet,ret-cushion);control.profitFloorDeferred=false;
+        }else{
+          control.profitFloorRate=0;control.profitFloorDeferred=Boolean(proposed);
+        }
+      }else if(control.profitFloorDeferred){
+        if(proposed&&ret>minNet+cushion){
+          control.profitFloorRate=Math.min(proposed.floorRate,ret-cushion);
+          control.profitFloorDeferred=false;control.profitFloorUpdatedAt=now;control.profitFloorMode=proposed.mode;
+        }
+      }else if(proposed&&proposed.floorRate>(control.profitFloorRate??0)+1e-12){
+        control.profitFloorRate=proposed.floorRate;control.profitFloorUpdatedAt=now;control.profitFloorMode=proposed.mode;
+      }
+    }
+    const activeFloor=control?.profitFloorRate??proposed?.floorRate??0;
+    const reachedR=t.favorable/riskRate,lockedR=activeFloor/riskRate;
+    const retained=t.favorable>0?activeFloor/t.favorable:0;
+    const mode=control?.profitFloorMode??proposed?.mode??"UNKNOWN";
+    const modeLabel=mode==="STRONG"?"强延续":mode==="WEAK"?"弱延续":mode==="DEFENSIVE"?"转折防守":
+      mode==="REVERSAL"?"反向确认前":mode==="NORMAL"?"正常延续":"数据待恢复";
     if(ret<=-t.rule.stopRate)decision={trigger:"HARD_STOP",reason:"Multi-Turn硬止损：当前可执行价触及该周期原始结构风险边界",boundaryRate:-t.rule.stopRate};
-    else if(profitFloor&&ret<=profitFloor.floorRate)
+    else if(activeFloor>0&&ret<=activeFloor)
       decision={trigger:"PROFIT_GIVEBACK",
-        reason:`Multi-Turn利润保护：最高浮盈达到${profitFloor.reachedR.toFixed(1)}R，最低保护抬至${profitFloor.lockedR.toFixed(1)}R（价格收益${(profitFloor.floorRate*100).toFixed(1)}%）；继续保留趋势空间`,
-        boundaryRate:profitFloor.floorRate};
+        reason:`Multi-Turn动态利润保护：最高浮盈${reachedR.toFixed(1)}R，${modeLabel}状态已锁${lockedR.toFixed(1)}R（约保留${(retained*100).toFixed(0)}%最高浮盈）；盈利底线只升不降`,
+        boundaryRate:activeFloor};
     else if(freshFrame&&freshFrame.direction!==t.side&&freshFrame.lastTurnAt!=null&&freshFrame.lastTurnAt>=t.openedAt)
       decision={trigger:"MULTI_TURN",reason:`${t.turn.timeframe}已确认转向${freshFrame.direction==="LONG"?"多":"空"}；退出原${t.side==="LONG"?"多":"空"}向仓位`,boundaryRate:null};
     else if(freshFrame&&freshFrame.direction===t.side&&freshFrame.phase==="TURNING"&&freshFrame.triggerProbability>=.90
