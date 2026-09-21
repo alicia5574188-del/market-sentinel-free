@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { advanceForward, forwardEquity, forwardWatchSymbols, initialForward, initialMultiTurnForward, type Candle, type Contract, type Quote } from "../lib/forward-relations.ts";
+import { advanceForward, forwardEquity, forwardWatchSymbols, initialForward, initialMultiTurnForward, multiTurnEntryLeverage, MULTI_TURN_TARGET_LEVERAGE, turnModeledCost, type Candle, type Contract, type Quote } from "../lib/forward-relations.ts";
 import { MULTI_TURN_VERSION, TURN_CONFIG, TURN_TIMEFRAMES, evaluateMultiTurn, initialMultiTurn } from "../lib/multi-turn-engine.ts";
 import { FORWARD_PROTECTION_STORAGE, FORWARD_STORAGE, prepareForwardReset, prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
 
@@ -118,4 +118,46 @@ test("only the current scan universe can create or occupy new Multi-Turn entry s
   const watched=forwardWatchSymbols(s,now,["BTC_USDT"]);
   assert.equal(watched.includes("OLD_USDT"),false,
     "an old frame cannot steal realtime entry capacity after leaving the active scan universe");
+});
+
+
+test("Multi-Turn entries use the exact 20x-or-lower safe leverage and derive margin from notional",()=>{
+  const p=candles(),now=(p.at(-1)!.time+300)*1000+1000,quote=q(p,now);
+  const result=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:quote},contracts:{BTC_USDT:meta}}).state;
+  assert.ok(result.positions.length);
+  const t=result.positions[0],mid=(quote.bestBid+quote.bestAsk)/2,spread=(quote.bestAsk-quote.bestBid)/mid;
+  const expected=multiTurnEntryLeverage(t.rule.stopRate,meta.maintenanceRate,turnModeledCost(t.turn!.timeframe,spread),meta.leverageMax);
+  assert.equal(t.leverage,expected);
+  assert.ok(t.leverage<=MULTI_TURN_TARGET_LEVERAGE);
+  assert.ok(Math.abs(t.margin-t.notional/t.leverage)<1e-9);
+});
+
+test("20x is a target, never an excuse to place the structural stop inside unsafe margin",()=>{
+  assert.equal(multiTurnEntryLeverage(.02,.005,.0022,50),20);
+  const wide=multiTurnEntryLeverage(.08,.005,.0022,50);
+  assert.ok(wide<20);
+  assert.ok(1/wide>.08+.005+.0022);
+  assert.equal(multiTurnEntryLeverage(.02,.005,.0022,10),10);
+});
+
+test("time-space hold value can exit an old position before the legacy maximum lifetime",()=>{
+  const p=candles(),now=(p.at(-1)!.time+300)*1000+1000,quotes={BTC_USDT:q(p,now)};
+  let s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},quotes,contracts:{BTC_USDT:meta}}).state;
+  assert.ok(s.positions.length);
+  const t=s.positions[0],tf="1h" as const;
+  t.turn={version:MULTI_TURN_VERSION,timeframe:tf,signalAt:now-60_000,entryTurnProbability:.1,entryContinuation:.8,entryDirectionConfidence:.8};
+  t.rule.authority="MULTI_TURN";t.rule.turnTimeframe=tf;t.rule.horizon=TURN_CONFIG[tf].maxHoldMinutes;
+  t.openedAt=now-8*60*60_000;
+  const frame=s.turnEngine!.frames.BTC_USDT![tf]!;
+  frame.direction=t.side;frame.rawDirection=t.side;frame.phase="WATCH";frame.directionConfidence=.35;
+  frame.continuationScore=.25;frame.triggerProbability=.65;frame.expectedMoveRate=.012;frame.atrRate=.012;
+  frame.propagationPressure=.55;frame.evidence.structure=.70;frame.evidence.changePoint=.60;frame.evidence.cusum=.60;
+  frame.completedAt=now;frame.lastTurnAt=null;s.lastCycleAt=now;
+  const mid=t.entryPrice*(t.side==="LONG"?1.012:.988),later=now+1000;
+  s=advanceForward({state:s,now:later,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:{bestBid:mid*.9999,bestAsk:mid*1.0001,observedAt:later,fresh:true,entryReady:true}},contracts:{BTC_USDT:meta}}).state;
+  assert.equal(s.positions.length,0);
+  assert.equal(s.history[0].exitAudit?.trigger,"HOLD_VALUE");
+  assert.match(s.history[0].exitReason??"",/时间—空间持仓价值退出/);
 });
