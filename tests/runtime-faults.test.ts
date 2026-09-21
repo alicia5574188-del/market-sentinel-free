@@ -871,11 +871,11 @@ test("one failed staggered book batch does not impersonate a ten-market outage",
   assert.equal(stream.runtime.state, "LIVE", "a recent valid market remains authoritative after an isolated batch miss");
   assert.equal(stream.runtime.lastError, null, "isolated misses stay in rolling feed diagnostics instead of becoming a global blocker");
 
-  stream.publishCriticalHealth(now + 29_000, { successes: 0, requests: 1 });
+  stream.publishCriticalHealth(now + 27_000, { successes: 0, requests: 1 });
   assert.equal(stream.runtime.state, "LIVE", "brief transport misses do not flap the whole service while per-symbol quote guards stay strict");
   assert.equal(stream.runtime.lastError, null);
 
-  stream.publishCriticalHealth(now + 31_000, { successes: 0, requests: 1 });
+  stream.publishCriticalHealth(now + 29_000, { successes: 0, requests: 1 });
   assert.equal(stream.runtime.state, "RECONNECTING", "the whole service reports reconnecting only after a sustained outage");
   assert.match(stream.runtime.lastError, /^1 scheduled market snapshot/);
 });
