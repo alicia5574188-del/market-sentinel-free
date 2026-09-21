@@ -178,7 +178,14 @@ const cohort={
   givebacks:{n:givebackRows.length,baseline:metrics(givebackRows,"baseline"),candidate:metrics(givebackRows,"candidate"),
     candidateBetter:givebackRows.filter(x=>x.candidate.net>x.baseline.net).length},
 };
-console.log("RBE_RESEARCH_SUMMARY="+JSON.stringify({source:raw.source,months:raw.months,symbols,paired:paired.length,all,folds,byTimeframe,cohort},null,2));
+const cohortByTimeframe=Object.fromEntries(TURN_TIMEFRAMES.map(tf=>{
+  const runners=runnerRows.filter(x=>x.timeframe===tf),givebacks=givebackRows.filter(x=>x.timeframe===tf);
+  return[tf,{
+    runners:{n:runners.length,baseline:metrics(runners,"baseline"),candidate:metrics(runners,"candidate")},
+    givebacks:{n:givebacks.length,baseline:metrics(givebacks,"baseline"),candidate:metrics(givebacks,"candidate")},
+  }];
+}));
+console.log("RBE_RESEARCH_SUMMARY="+JSON.stringify({source:raw.source,months:raw.months,symbols,paired:paired.length,all,folds,byTimeframe,cohort,cohortByTimeframe},null,2));
 const foldWins=folds.filter(x=>x.candidate.net>x.baseline.net).length;
 const reversalImproved=all.candidate.reversals<all.baseline.reversals;
 const captureImproved=all.candidate.capture>all.baseline.capture;
