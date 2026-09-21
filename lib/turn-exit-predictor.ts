@@ -179,8 +179,14 @@ export function predictMultiTurnExit(input:PredictiveExitInput,
   // cushion unless structure/shock evidence is genuinely extreme. This remains
   // predictive: the exit still requires RBE hazard; profit cushion only vetoes
   // low-specificity early exits and never triggers an exit by itself.
-  const profitCushionVeto=currentReturnAtr>=1.25&&shockHazard<.93
-    &&!(ownTurn>=.80&&structureBreak>=.55);
+  // A pre-turn forecast is allowed to arm protection early, but a full
+  // liquidation of an established runner waits until the remaining open-profit
+  // cushion contracts below 0.75 ATR. This is not a take-profit/trailing-stop
+  // trigger: without RBE threat there is no exit, and a runner that renews its
+  // extension simply stays open. The cushion gate exists because six months of
+  // Gate history shows false and true RBE alarms overlap heavily while runners
+  // still retain more than ~1 ATR of open edge.
+  const profitCushionVeto=runnerMfeAtr>=1.10&&currentReturnAtr>.75;
   const genericThreat=propagatedThreat||structuralThreat||shockThreat;
   const fourHourThreat=input.timeframe!=="4h"||(
     (ownTurn>=.58||ownDecay>=.72||shockHazard>=.90)
