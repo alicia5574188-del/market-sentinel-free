@@ -846,16 +846,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const researchUniverse = REGIME_EXECUTION_UNIVERSE.filter((symbol) => universe.has(symbol));
     // Existing PAPER/LIVE exposure always owns a realtime slot. Research symbols
     // fill only the remaining capacity, so a cutover cannot orphan protection.
-    const protectedLocked = [...new Set([
-      ...Object.values(this.runtime.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
-      ...Object.values(this.runtime.plans).flatMap((plan) => plan?.state === "PREPARED" ? [plan.symbol] : []),
-      ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
-      ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status) ? [entry.symbol] : []),
-      ...Object.values(this.runtime.strategyArena.portfolioOpen).map((position) => position.symbol),
-      ...Object.values(this.runtime.previousStrategyArena.portfolioOpen).map((position) => position.symbol),
-      ...REGIME_SYSTEMS.flatMap((id) => Object.values(this.runtime.regimePortfolio.accounts[id].open).map((position) => position.symbol)),
-      ...(this.forwardState?.positions.map((position) => position.symbol) ?? []),
-    ])];
+    const protectedLocked = [...this.currentAuthorityProtectionSymbols()];
     const forwardWatched = this.forwardState ? forwardWatchSymbols(this.forwardState, now) : [];
     const locked = [...new Set([...protectedLocked, ...forwardWatched, ...researchUniverse])];
     const liquidFallback = [...researchUniverse, ...universeRows.map((row) => row.symbol)];
@@ -2651,6 +2642,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return Boolean(evidence?.fresh && evidence.ancillaryFresh && evidence.entryReady !== false);
   }
 
+  private currentAuthorityProtectionSymbols() {
+    // The displayed/current PAPER authority is forwardState. Retired/sidecar
+    // PAPER research may continue to drain internally, but it must not consume
+    // critical realtime slots or freeze the current account. Any real legacy
+    // Gate exposure remains protected because it is present in live.positions
+    // (or a still-active live entry) regardless of its original source.
+    return new Set([
+      ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
+      ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status) ? [entry.symbol] : []),
+      ...(this.forwardState?.positions.map((position) => position.symbol) ?? []),
+    ]);
+  }
+
   private symbolManagementReady(symbol: string, now = Date.now()) {
     const evidence = this.runtime.evidence[symbol];
     if (!evidence || this.runtime.contractMeta[symbol] == null) return false;
@@ -2664,14 +2668,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // and must not demote the whole account. Open-position management needs a
     // fresh executable book and contract metadata, not ancillary entry evidence
     // or a four-snapshot entry warmup.
-    const protectedSymbols = new Set([
-      ...Object.values(this.runtime.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
-      ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
-      ...Object.values(this.runtime.strategyArena.portfolioOpen).map((position) => position.symbol),
-      ...Object.values(this.runtime.previousStrategyArena.portfolioOpen).map((position) => position.symbol),
-      ...REGIME_SYSTEMS.flatMap((id) => Object.values(this.runtime.regimePortfolio.accounts[id].open).map((position) => position.symbol)),
-      ...(this.forwardState?.positions.map((position) => position.symbol) ?? []),
-    ]);
+    const protectedSymbols = this.currentAuthorityProtectionSymbols();
     const actionableMarkets = this.runtime.symbols.filter((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS
       && this.runtime.contractMeta[symbol] != null && this.symbolEntryReady(symbol)).length;
     const protectedMarketsReady = [...protectedSymbols].every((symbol) => this.runtime.symbols.includes(symbol)
@@ -2683,14 +2680,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private cycleBookSymbols(now: number, symbols: string[]) {
     const protectedSymbols = new Set([
-      ...Object.values(this.runtime.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
-      ...Object.values(this.runtime.plans).flatMap((plan) => plan?.state === "PREPARED" ? [plan.symbol] : []),
-      ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" ? [position.symbol] : []),
-      ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status) ? [entry.symbol] : []),
-      ...Object.values(this.runtime.strategyArena.portfolioOpen).map((position) => position.symbol),
-      ...Object.values(this.runtime.previousStrategyArena.portfolioOpen).map((position) => position.symbol),
-      ...REGIME_SYSTEMS.flatMap((id) => Object.values(this.runtime.regimePortfolio.accounts[id].open).map((position) => position.symbol)),
-      ...(this.forwardState?.positions.map((position) => position.symbol) ?? []),
+      ...this.currentAuthorityProtectionSymbols(),
       ...Object.values(this.runtime.stableCandidates).filter((candidate) => approvedRouteScore(candidate) >= 0)
         .map((candidate) => candidate.symbol),
       ...Object.values(this.runtime.previousStableCandidates).filter((candidate) => previousApprovedRouteScore(candidate) >= 0)
