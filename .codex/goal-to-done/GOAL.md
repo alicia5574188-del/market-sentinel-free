@@ -1,6 +1,6 @@
 # 2026-09-21 — comprehensive code audit and approved release (current)
 
-Repair code defects and conflicts without changing strategy, parameters or execution steps. The user explicitly confirmed publication to the original repository and the existing reviewed main/Cloudflare release. Preserve account/history, credentials, owner/member LIVE intent, data cadence, risk formulas and frozen strategy modules. No real-money verification trade. PR #366 is deployed; finish the reproduced cold-start catalog recovery defect and verify the real scan pool as well as health/account continuity. Earlier strategy-design goals below are historical, not authority to change strategy in this task.
+Repair code defects and conflicts without changing strategy, parameters or execution steps. The user explicitly confirmed publication to the original repository and the existing reviewed main/Cloudflare release. Preserve account/history, credentials, owner/member LIVE intent, data cadence, risk formulas and frozen strategy modules. No real-money verification trade. PR #366 and cold-start follow-up #367 are deployed, final main ec01f59; scan/account continuity is verified, while the final production health gate remains failed due to protected-market quote availability. Do not claim full stability or broaden into strategy changes to disguise it. Earlier strategy-design goals below are historical, not authority to change strategy in this task.
 
 # 2026-09-20 — Forward Adaptive v2 final architecture upgrade
 
