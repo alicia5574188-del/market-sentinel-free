@@ -48,6 +48,24 @@ test("a confirmed 5m turn cannot close a 1h-owned position",()=>{
   assert.equal(s.positions.length,1);
 });
 
+test("a materially profitable Multi-Turn position cannot normally give back through zero",()=>{
+  const p=candles(),now=(p.at(-1)!.time+300)*1000+1000,quotes={BTC_USDT:q(p,now)};
+  let s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},quotes,contracts:{BTC_USDT:meta}}).state;
+  assert.ok(s.positions.length);
+  const t=s.positions[0];
+  t.favorable=.08;
+  const mid=t.entryPrice*(t.side==="LONG"?1.04:.96),later=now+1000;
+  const protectedQuote={bestBid:mid*.9999,bestAsk:mid*1.0001,observedAt:later,fresh:true,entryReady:true};
+  const frame=s.turnEngine!.frames.BTC_USDT![t.turn!.timeframe]!;
+  frame.direction=t.side;frame.phase="FLOW";frame.lastTurnAt=null;frame.justTurned=false;
+  s.lastCycleAt=now;
+  s=advanceForward({state:s,now:later,paths:{BTC_USDT:p},quotes:{BTC_USDT:protectedQuote},contracts:{BTC_USDT:meta}}).state;
+  assert.equal(s.positions.length,0);
+  assert.match(s.history[0].exitReason??"",/利润保护/);
+  assert.equal(s.history[0].exitAudit?.trigger,"PROFIT_GIVEBACK");
+  assert.ok((s.history[0].netPnl??0)>0);
+});
+
 test("the owning timeframe confirmed turn exits its own position without waiting for a fixed horizon",()=>{
   const p=candles(),now=(p.at(-1)!.time+300)*1000+1000,quotes={BTC_USDT:q(p,now)};
   let s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},quotes,contracts:{BTC_USDT:meta}}).state;

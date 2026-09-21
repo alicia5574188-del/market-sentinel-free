@@ -39,6 +39,7 @@ import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCand
 import { advanceForward, closeForwardForReset, forwardSummary, forwardEquity, freshQuote, forwardWatchSymbols, initialMultiTurnForward,
   FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { MULTI_TURN_VERSION } from "../lib/multi-turn-engine.ts";
+import { rankMultiTurnUniverse } from "../lib/multi-turn-universe.ts";
 import { forwardSymbolAllowed } from "../lib/forward-evidence.ts";
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, prepareForwardReset,
   FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE } from "../lib/forward-store.ts";
@@ -821,8 +822,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private refreshRadar(now: number, rows: Awaited<ReturnType<typeof fetchMarketTickers>>) {
     const eligible = new Set(this.contractCatalog.keys());
-    const universeRows = rows.filter((row) => eligible.has(row.symbol) && forwardSymbolAllowed(row.symbol))
-      .sort((left, right) => right.volume24hUsd - left.volume24hUsd).slice(0, SCAN_UNIVERSE_SIZE);
+    const eligibleRows = rows.filter((row) => eligible.has(row.symbol) && forwardSymbolAllowed(row.symbol));
+    const rankedUniverse = rankMultiTurnUniverse(eligibleRows, SCAN_UNIVERSE_SIZE);
+    const rowBySymbol = new Map(eligibleRows.map((row) => [row.symbol, row]));
+    const universeRows = rankedUniverse.flatMap((ranked) => {
+      const row = rowBySymbol.get(ranked.symbol);
+      return row ? [{ ...row, opportunityClass: ranked.class, opportunityScore: ranked.score,
+        opportunityReason: ranked.reason, range24hRate: ranked.range24hRate,
+        marketMove24hRate: ranked.marketMove24hRate, residual24hRate: ranked.residual24hRate }] : [];
+    });
     const universe = new Set(universeRows.map((row) => row.symbol));
     this.runtime.liquidUniverse = universeRows.map((row) => row.symbol);
     this.runtime.radar = successfulRadarRuntime(this.runtime.radar, now, universeRows.length, []);

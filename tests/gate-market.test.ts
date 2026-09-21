@@ -91,8 +91,10 @@ test("active universe exposes only liquid crypto USDT futures to the radar", asy
 });
 
 test("one bulk ticker request returns the complete low-cost radar surface", async () => {
-  await withFetch([{ contract: "X_USDT", last: "2", volume_24h_usd: "3000000", total_size: "55", funding_rate: "0.001" }], async () => {
-    assert.deepEqual(await fetchMarketTickers(), [{ symbol: "X_USDT", last: 2, volume24hUsd: 3_000_000, fundingRate: 0.001, openInterest: 55 }]);
+  await withFetch([{ contract: "X_USDT", last: "2", high_24h: "2.4", low_24h: "1.8", change_percentage: "12.5",
+    volume_24h_usd: "3000000", total_size: "55", funding_rate: "0.001" }], async () => {
+    assert.deepEqual(await fetchMarketTickers(), [{ symbol: "X_USDT", last: 2, volume24hUsd: 3_000_000,
+      high24h: 2.4, low24h: 1.8, change24hRate: .125, fundingRate: 0.001, openInterest: 55 }]);
   });
 });
 
