@@ -184,7 +184,10 @@ const reversalImproved=all.candidate.reversals<all.baseline.reversals;
 const captureImproved=all.candidate.capture>all.baseline.capture;
 const topRunnerPreserved=all.candidate.topMfe>=all.baseline.topMfe*.85;
 const foldRobust=folds.every(x=>x.candidate.net>=x.baseline.net-.00015*x.baseline.n);
+const runnerRetention=cohort.runners.baseline.net>0?cohort.runners.candidate.net/cohort.runners.baseline.net:1;
+const givebackRecovery=cohort.givebacks.baseline.net<0
+  ?(cohort.givebacks.candidate.net-cohort.givebacks.baseline.net)/Math.abs(cohort.givebacks.baseline.net):0;
 const accepted=paired.length>=120&&foldWins>=2&&all.candidate.net>all.baseline.net&&reversalImproved&&captureImproved
-  &&topRunnerPreserved&&foldRobust;
-if(!accepted)throw new Error(`RBE_ACCEPTANCE_FAILED paired=${paired.length} foldWins=${foldWins} net=${all.baseline.net.toFixed(4)}->${all.candidate.net.toFixed(4)} reversals=${all.baseline.reversals}->${all.candidate.reversals} capture=${all.baseline.capture.toFixed(3)}->${all.candidate.capture.toFixed(3)} topMfe=${all.baseline.topMfe.toFixed(3)}->${all.candidate.topMfe.toFixed(3)} foldRobust=${foldRobust}`);
+  &&topRunnerPreserved&&foldRobust&&runnerRetention>=.85&&givebackRecovery>=.35;
+if(!accepted)throw new Error(`RBE_ACCEPTANCE_FAILED paired=${paired.length} foldWins=${foldWins} net=${all.baseline.net.toFixed(4)}->${all.candidate.net.toFixed(4)} reversals=${all.baseline.reversals}->${all.candidate.reversals} capture=${all.baseline.capture.toFixed(3)}->${all.candidate.capture.toFixed(3)} topMfe=${all.baseline.topMfe.toFixed(3)}->${all.candidate.topMfe.toFixed(3)} runnerRetention=${runnerRetention.toFixed(3)} givebackRecovery=${givebackRecovery.toFixed(3)} foldRobust=${foldRobust}`);
 console.log(`RBE_ACCEPTANCE_PASS paired=${paired.length} foldWins=${foldWins}/3 net=${all.baseline.net.toFixed(4)}->${all.candidate.net.toFixed(4)} reversals=${all.baseline.reversals}->${all.candidate.reversals} capture=${all.baseline.capture.toFixed(3)}->${all.candidate.capture.toFixed(3)} topMfe=${all.baseline.topMfe.toFixed(3)}->${all.candidate.topMfe.toFixed(3)} foldRobust=${foldRobust}`);
