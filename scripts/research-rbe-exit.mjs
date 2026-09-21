@@ -92,6 +92,7 @@ const prevFrames=Object.fromEntries(symbols.map(s=>[s,{}])),frames=Object.fromEn
 const rowByTime=Object.fromEntries(symbols.map(s=>[s,new Map(series[s]["5m"].map(r=>[r.time+300,r]))]));
 const start=Math.max(...symbols.map(s=>series[s]["5m"][0].time))+30*86400,end=Math.min(...symbols.map(s=>series[s]["5m"].at(-1).time+300));
 const paired=[],active=new Map();
+const actionDebug={decisions:0,healthy:0,early:0,defensive:0,preExit:0,shouldExit:0,arms:0,persistent:0,reductions:0,full:0,resets:0};
 
 function closeLeg(leg,price,time,reason){
   if(leg.closedAt)return;
@@ -159,13 +160,21 @@ for(let now=start;now<=end;now+=300){
         currentPrice:row.close,favorable:pair.candidate.mfe,frames:frames[symbol]},pair.config);
       const leg=pair.candidate,atr=Math.max(own?.atrRate??.001,1e-9);
       const renewed=(leg.mfe-(leg.rbeArmedMfe??leg.mfe))/atr;
+      if(dec){
+        actionDebug.decisions++;
+        if(dec.phase==="HEALTHY")actionDebug.healthy++;
+        else if(dec.phase==="EARLY_WARNING")actionDebug.early++;
+        else if(dec.phase==="DEFENSIVE")actionDebug.defensive++;
+        else if(dec.phase==="PRE_TURN_EXIT")actionDebug.preExit++;
+        if(dec.shouldExit)actionDebug.shouldExit++;
+      }
       const warning=dec&&(dec.shouldExit||dec.phase==="DEFENSIVE");
       if(warning){
         const severe=dec.diagnostics.ownTurn>=.84&&dec.diagnostics.structureBreak>=.55||dec.shockHazard>=.93;
         if(!leg.rbeArmedAt){
           // First predictive hit only arms the state. We do not wait for price
           // confirmation; we wait for the predictive state itself to persist.
-          leg.rbeArmedAt=now;leg.rbeArmedMfe=leg.mfe;leg.rbeArmedHazard=dec.reversalHazard;
+          actionDebug.arms++;leg.rbeArmedAt=now;leg.rbeArmedMfe=leg.mfe;leg.rbeArmedHazard=dec.reversalHazard;
           leg.rbeArmedSurvival=dec.extensionSurvival;leg.rbeSignalCount=1;leg.rbe=dec;
         }else{
           const separated=now-(leg.lastRbeSignalAt??leg.rbeArmedAt)>=300_000;
@@ -173,17 +182,18 @@ for(let now=start;now<=end;now+=300){
           const hazardPersistent=dec.reversalHazard>=(leg.rbeArmedHazard??0)-.035;
           const survivalPersistent=dec.extensionSurvival<=(leg.rbeArmedSurvival??1)+.05;
           const persistent=(leg.rbeSignalCount??0)>=2&&hazardPersistent&&survivalPersistent&&renewed<.45;
+          if(persistent)actionDebug.persistent++;
           if(persistent&&severe&&dec.shouldExit){
-            leg.rbe=dec;closeLeg(leg,row.close,now,"RBE_FULL_SEVERE");
+            actionDebug.full++;leg.rbe=dec;closeLeg(leg,row.close,now,"RBE_FULL_SEVERE");
           }else if(persistent&&(leg.rbeStage??0)===0){
             // Two independent completed-5m observations agree before any size
             // is cut. Bank 20%, leaving 80% to keep compounding if trend renews.
-            reduceLeg(leg,row.close,now,.20,"RBE_REDUCE_20_PERSISTENT",dec);
+            actionDebug.reductions++;reduceLeg(leg,row.close,now,.20,"RBE_REDUCE_20_PERSISTENT",dec);
           }else if(persistent&&(leg.rbeStage??0)===1&&(leg.rbeSignalCount??0)>=4
             &&dec.shouldExit&&dec.diagnostics.currentReturnAtr<=.35){
             // A full exit still needs prolonged predictive danger plus a
             // compressed remaining cushion; not a raw giveback stop.
-            leg.rbe=dec;closeLeg(leg,row.close,now,"RBE_FULL_PERSISTENT");
+            actionDebug.full++;leg.rbe=dec;closeLeg(leg,row.close,now,"RBE_FULL_PERSISTENT");
           }
         }
         leg.lastRbeSignalAt=now;
@@ -191,7 +201,7 @@ for(let now=start;now<=end;now+=300){
         // A renewed extension or a material hazard collapse invalidates the
         // prior warning. This lets genuine runners clear stale alarms.
         if(renewed>=.45||!dec||dec.reversalHazard<(leg.rbeArmedHazard??1)-.12){
-          leg.rbeArmedAt=0;leg.rbeArmedMfe=leg.mfe;leg.rbeArmedHazard=0;leg.rbeArmedSurvival=1;
+          actionDebug.resets++;leg.rbeArmedAt=0;leg.rbeArmedMfe=leg.mfe;leg.rbeArmedHazard=0;leg.rbeArmedSurvival=1;
           leg.rbeSignalCount=0;leg.lastRbeSignalAt=0;
         }
       }
@@ -235,7 +245,7 @@ const cohortByTimeframe=Object.fromEntries(TURN_TIMEFRAMES.map(tf=>{
     givebacks:{n:givebacks.length,baseline:metrics(givebacks,"baseline"),candidate:metrics(givebacks,"candidate")},
   }];
 }));
-console.log("RBE_RESEARCH_SUMMARY="+JSON.stringify({source:raw.source,months:raw.months,symbols,paired:paired.length,all,folds,byTimeframe,cohort,cohortByTimeframe},null,2));
+console.log("RBE_RESEARCH_SUMMARY="+JSON.stringify({source:raw.source,months:raw.months,symbols,paired:paired.length,all,folds,byTimeframe,cohort,cohortByTimeframe,actionDebug},null,2));
 const rbeFields=["reversalHazard","slowHazard","shockHazard","extensionSurvival","holdValueRate","expectedExtensionRate","expectedReversalCostRate","evidenceFamilies"];
 const rbeDiagFields=["ownTurn","ownDecay","lowerLead","lowerSupport","upperSupport","upperOpposition","sequenceShift","structureBreak","breadthPressure","currentReturn","profitGiveback","runnerMfeAtr","givebackAtr"];
 function rbeFeatureMeans(rows){
