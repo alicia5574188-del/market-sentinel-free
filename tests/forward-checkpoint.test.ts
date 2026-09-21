@@ -3,10 +3,11 @@ import assert from "node:assert/strict";
 import { register } from "node:module";
 import { advanceForward, initialForward, type ForwardState, type Quote, type Trade } from "../lib/forward-relations.ts";
 import { newExitControl, TIMELY_PROTECTION_POLICY } from "../lib/forward-protection.ts";
-import { buildForwardProtectionCheckpoint, forwardProtectionChanged } from "../lib/forward-protection-checkpoint.ts";
+import { buildForwardProtectionCheckpoint, forwardProtectionChanged, restoreForwardProtectionCheckpoint } from "../lib/forward-protection-checkpoint.ts";
 import { FORWARD_PROTECTION_STORAGE, FORWARD_STORAGE, prepareForwardProtectionWrite,
   prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
 import { nextProtectionWriteBudget, PROTECTION_WRITE_CAP, type ProtectionWriteBudget } from "../lib/forward-write-budget.ts";
+import { MULTI_TURN_PROFIT_PROTECTION_VERSION } from "../lib/multi-turn-profit-protection.ts";
 register("./worker-test-loader.mjs",import.meta.url);
 const { MarketStream }=await import("../worker/index-clean.ts");
 const T=1_790_100_000_000;
@@ -85,6 +86,21 @@ test("compact checkpoint restores the same next giveback decision across restart
   for(const field of ["balance","fees","turnover","history","rules","samples","events","revision"] as const)
     assert.deepEqual(restored[field],state[field]);
 });
+test("dynamic Multi-Turn profit floor survives a compact restart overlay without loosening",()=>{
+  const base=account();base.storage={persistedAt:T+1,error:null};base.lastQuoteCycleAt=T+1000;
+  base.positions[0].rule.authority="MULTI_TURN";
+  const next=structuredClone(base);next.lastQuoteCycleAt=T+2000;
+  next.positions[0].favorable=.08;
+  next.positions[0].profitProtection={
+    version:MULTI_TURN_PROFIT_PROTECTION_VERSION,reachedR:4,lockedR:2.5,floorRate:.05,retentionRate:.625,
+    activationRate:.012,checkpointBand:10,mode:"WEAKENING",peakR:4,updatedAt:T+2000,
+  };
+  const checkpoint=buildForwardProtectionCheckpoint(next);
+  const restored=restoreForwardProtectionCheckpoint(base,checkpoint);
+  assert.deepEqual(restored.positions[0].profitProtection,next.positions[0].profitProtection);
+  assert.equal(restored.positions[0].favorable,.08);
+});
+
 test("legacy full records remain readable when no protection overlay exists",async()=>{
   const{state,store}=await base();assert.deepEqual(await readForwardStore(store,T+110_000),state);
 });
