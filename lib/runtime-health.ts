@@ -8,7 +8,8 @@ export type RuntimeHealthShape = {
     storage?: { persistedAt?: number; error?: unknown } } | null;
   symbols?: string[];
   evidence?: Record<string, { fresh?: boolean; ancillaryFresh?: boolean; entryReady?: boolean }>;
-  realtimeReadiness?: { capacity?: number; actionableMarkets?: number; protectedMarketsReady?: boolean };
+  realtimeReadiness?: { capacity?: number; actionableMarkets?: number; protectedMarkets?: number; protectedMarketsReady?: boolean;
+    protectedIssues?: Array<{ symbol?: string; reason?: string; quoteAgeMs?: number | null }> };
   strategyData?: { stableMarkets?: number; lastCompletedCandleAt?: number; hourlyPathFailures?: number };
 };
 
@@ -80,7 +81,7 @@ export function runtimeNotice(runtime: RuntimeHealthShape | null, now?: number) 
   if (!error) return null;
   if (error.startsWith("D1")) return `历史镜像稍后重试，不影响行情判断和开仓：${error}`;
   if (error.startsWith("portfolio stress risk")) return "账户风险已触及保护线，后台继续管理持仓并暂停新开仓。";
-  if (error.startsWith("protected position data")) return "持仓相关盘口正在等待新鲜数据；旧价格不会触发平仓，新开仓已暂停。";
+  if (error.startsWith("protected position")) return "当前权威持仓的可执行盘口正在等待新鲜数据；旧价格不会触发平仓，新开仓已暂停。";
   if (error.includes("realtime markets warming")) return "部分精细市场正在准备新鲜数据；后台持续运行，未准备好的币种不会开仓。";
   if (runtime?.stale || runtime?.state === "RECONNECTING" || runtime?.state === "RECOVERY_REQUIRED"
     || error.startsWith("checkpoint:") || error.startsWith("authority checkpoint")) {
