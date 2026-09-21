@@ -94,7 +94,7 @@ const start=Math.max(...symbols.map(s=>series[s]["5m"][0].time))+30*86400,end=Ma
 const paired=[],active=new Map();
 const actionDebug={decisions:0,healthy:0,early:0,defensive:0,preExit:0,shouldExit:0,warnings:0,arms:0,
   secondSignals:0,renewalRearms:0,hazardPass:0,survivalPass:0,pairPass:0,countPass:0,
-  persistent:0,reductions:0,full:0,resets:0};
+  persistent:0,reductions:0,full:0,stopArms:0,stopHits:0,resets:0};
 
 function closeLeg(leg,price,time,reason){
   if(leg.closedAt)return;
@@ -152,8 +152,18 @@ for(let now=start;now<=end;now+=300){
     const row=rowByTime[symbol].get(now);if(!row)continue;
     for(const kind of ["baseline","candidate"])if(!pair[kind].closedAt)markLeg(pair[kind],row);
     const own=frames[symbol][pair.timeframe];
-    const d=signFor(pair.side),stopHit=d>0?row.low<=pair.baseline.stop:row.high>=pair.baseline.stop;
-    if(stopHit){closeLeg(pair.baseline,pair.baseline.stop,now,"STOP");if(!pair.candidate.closedAt)closeLeg(pair.candidate,pair.candidate.stop,now,"STOP");active.delete(symbol);continue;}
+    const d=signFor(pair.side),baselineStopHit=d>0?row.low<=pair.baseline.stop:row.high>=pair.baseline.stop;
+    const candidateStop=pair.candidate.rbeStop??pair.candidate.stop;
+    const candidateStopHit=!pair.candidate.closedAt&&(d>0?row.low<=candidateStop:row.high>=candidateStop);
+    if(candidateStopHit){
+      if(candidateStop!==pair.candidate.stop)actionDebug.stopHits++;
+      closeLeg(pair.candidate,candidateStop,now,candidateStop!==pair.candidate.stop?"RBE_PROTECTIVE_STOP":"STOP");
+    }
+    if(baselineStopHit){
+      closeLeg(pair.baseline,pair.baseline.stop,now,"STOP");
+      if(!pair.candidate.closedAt)closeLeg(pair.candidate,pair.candidate.stop,now,"STOP");
+      active.delete(symbol);continue;
+    }
     if(own&&own.direction!==pair.side&&own.lastTurnAt&&own.lastTurnAt>=pair.openedAt){
       closeLeg(pair.baseline,row.close,now,"CONFIRMED_TURN");
     }
@@ -198,17 +208,26 @@ for(let now=start;now<=end;now+=300){
             if((leg.rbeSignalCount??0)>=2)actionDebug.countPass++;
             const persistent=(leg.rbeSignalCount??0)>=2&&hazardPersistent&&survivalPersistent;
             if(persistent)actionDebug.persistent++;
-            if(persistent&&severe&&dec.shouldExit){
-              actionDebug.full++;leg.rbe=dec;closeLeg(leg,row.close,now,"RBE_FULL_SEVERE");
-            }else if(persistent&&(leg.rbeStage??0)===0){
-              // Two independent completed-5m observations agree before any size
-              // is cut. Bank 20%, leaving 80% to keep compounding if trend renews.
-              actionDebug.reductions++;reduceLeg(leg,row.close,now,.20,"RBE_REDUCE_20_PERSISTENT",dec);
-            }else if(persistent&&(leg.rbeStage??0)===1&&(leg.rbeSignalCount??0)>=4
-              &&dec.shouldExit&&dec.diagnostics.currentReturnAtr<=.35){
-              // A full exit still needs prolonged predictive danger plus a
-              // compressed remaining cushion; not a raw giveback stop.
-              actionDebug.full++;leg.rbe=dec;closeLeg(leg,row.close,now,"RBE_FULL_PERSISTENT");
+            if(persistent){
+              // Prediction does not liquidate the runner. It converts the
+              // forecast into a temporary, causal protection boundary that is
+              // only active while the RBE state remains dangerous.
+              const hazardScale=clip((dec.reversalHazard-.45)/.45);
+              const cushionAtr=severe?.35:(.85-.35*hazardScale);
+              const grossFloor=Math.max(FRICTION+.00015,
+                dec.diagnostics.currentReturn-atr*cushionAtr);
+              const floorPrice=pair.side==="LONG"
+                ?leg.entry*(1+grossFloor)
+                :leg.entry*(1-grossFloor);
+              const currentProtect=leg.rbeStop??leg.stop;
+              const better=pair.side==="LONG"?floorPrice>currentProtect:floorPrice<currentProtect;
+              if(better){leg.rbeStop=floorPrice;actionDebug.stopArms++;}
+              leg.rbe=dec;
+              if((leg.rbeStage??0)===0&&dec.diagnostics.currentReturnAtr>.75){
+                // Bank only 10% on the first persistent forecast; the remaining
+                // 90% stays exposed to a renewed large trend.
+                actionDebug.reductions++;reduceLeg(leg,row.close,now,.10,"RBE_REDUCE_10_PERSISTENT",dec);
+              }
             }
           }
         }
@@ -218,7 +237,7 @@ for(let now=start;now<=end;now+=300){
         // prior warning. This lets genuine runners clear stale alarms.
         if(renewed>=.45||!dec||dec.reversalHazard<(leg.rbeArmedHazard??1)-.12){
           actionDebug.resets++;leg.rbeArmedAt=0;leg.rbeArmedMfe=leg.mfe;leg.rbeArmedHazard=0;leg.rbeArmedSurvival=1;
-          leg.rbeSignalCount=0;leg.lastRbeSignalAt=0;
+          leg.rbeSignalCount=0;leg.lastRbeSignalAt=0;leg.rbeStop=leg.stop;
         }
       }
     }
@@ -234,7 +253,7 @@ for(let now=start;now<=end;now+=300){
     const side=c.f.direction,d=signFor(side),entry=row.close*(1+d*.00025),stop=entry*(1-d*c.f.stopRate);
     const config=RBE_EXIT_CONFIGS.balanced,base={side,entry,stop,entryAtr:c.f.atrRate,openedAt:now,closedAt:0,exit:0,net:0,mfe:0,mae:0,
       reason:"",remaining:1,realized:0,rbeStage:0,rbeActions:0,lastRbeAt:0,lastRbeMfe:0,
-      rbeArmedAt:0,rbeArmedMfe:0,rbeArmedHazard:0,rbeArmedSurvival:1,rbeSignalCount:0,lastRbeSignalAt:0};
+      rbeArmedAt:0,rbeArmedMfe:0,rbeArmedHazard:0,rbeArmedSurvival:1,rbeSignalCount:0,lastRbeSignalAt:0,rbeStop:stop};
     const pair={symbol,side,timeframe:c.tf,openedAt:now,config,baseline:{...base},candidate:{...base}};active.set(symbol,pair);paired.push(pair);
   }
 }
