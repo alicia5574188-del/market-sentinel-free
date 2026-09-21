@@ -12,7 +12,16 @@ type Props = { auth: AuthSession|null; runtime: OperatorRuntime|null; onSession:
   onLive: (live:LiveRuntime)=>void; onRefresh: ()=>void; view?:"trade"|"system" };
 type Section = "account" | "positions" | "history" | "archive";
 
-export default function LiveConsole({auth,runtime,onSession,onLive,onRefresh,view="trade"}:Props) {
+export default function LiveConsole(props:Props) {
+  // Account changes replace all private form/history state, even when a parent
+  // retains the same component instance. Old async mutations belong to that key.
+  const auth=props.auth,identity=JSON.stringify([auth?.authenticated,auth?.role,auth?.memberId,auth?.username]);
+  return <LiveConsoleSession key={identity} {...props}/>;
+}
+
+function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade"}:Props) {
+  const responseEpoch=useRef({value:0});
+  useEffect(()=>{const epoch=responseEpoch.current;epoch.value++;return()=>{epoch.value++;};},[]);
   // A newly opened LIVE tab starts with account equity, not an old scroll offset.
   useEffect(()=>{window.scrollTo({top:0,behavior:"auto"});},[]);
   const [section,setSection]=useState<Section>("account"),[clock,setClock]=useState(0);
@@ -49,41 +58,47 @@ export default function LiveConsole({auth,runtime,onSession,onLive,onRefresh,vie
   const canControl=Boolean(auth?.authenticated&&live&&runtime);
   const canEnable=canControl&&Boolean(credential?.configured)&&!busy;
   const clearSensitive=()=>{setHistoryView(null);setHistoryError(null);setPassword("");setApiKey("");setApiSecret("");setCredential(null);setVerification(null);setConfirmEnable(false);setConfirmDelete(false);};
-  async function action(name:string,task:()=>Promise<void>){
+  async function action(name:string,task:(current:()=>boolean)=>Promise<void>){
     if(submitting.current)return;
+    const epoch=responseEpoch.current,startedEpoch=epoch.value,current=()=>startedEpoch===epoch.value;
     submitting.current=true;setBusy(name);setError(null);setNotice(null);
-    try{await task();}catch(e){setError(e instanceof Error?e.message:"操作失败");
+    try{await task(current);}catch(e){if(!current())return;setError(e instanceof Error?e.message:"操作失败");
       if(e instanceof OperatorRequestError&&e.status===401){clearSensitive();onSession({configured:auth?.configured??true,authenticated:false,username:"owner"});}}
-    finally{submitting.current=false;setBusy(null);onRefresh();}
+    finally{if(current()){submitting.current=false;setBusy(null);onRefresh();}}
   }
-  const login=(event:FormEvent)=>{event.preventDefault();void action("login",async()=>{
+  const login=(event:FormEvent)=>{event.preventDefault();void action("login",async current=>{
     const session=await operatorRequest<AuthSession>("/api/auth/login","POST",{username:"owner",password});
+    if(!current())return;
     if(!session.authenticated)throw new Error("登录未得到确认");
     setPassword("");onSession({...session,configured:true});setNotice("所有者已登录。登录不会改变实盘开关。");
   });};
-  const logout=()=>void action("logout",async()=>{
-    await operatorRequest("/api/auth/logout","POST");clearSensitive();onSession({configured:true,authenticated:false,username:"owner"});
+  const logout=()=>void action("logout",async current=>{
+    await operatorRequest("/api/auth/logout","POST");if(!current())return;
+    clearSensitive();onSession({configured:true,authenticated:false,username:"owner"});
     setNotice("已退出所有者账户；实盘开关保持原状态。");
   });
   const setMode=(value:boolean)=>{
     if(!canControl||(value&&!canEnable))return;
-    void action("mode",async()=>{
+    void action("mode",async current=>{
       const result=await operatorRequest<{live?:LiveRuntime}>("/api/live/mode","POST",{enabled:value});
+      if(!current())return;
       if(!result.live)throw new Error("未收到完整实盘状态，请核对服务器结果，不重复提交。");
       onLive(result.live);setConfirmEnable(false);
       setNotice(result.live.requestedEnabled?"服务器已确认你的开启请求；运行状态以账户核对结果为准。":"服务器已确认关闭；撤单结果请查看执行记录。");
     });
   };
   const saveCredential=(event:FormEvent)=>{event.preventDefault();if(!auth?.authenticated||enabled)return;
-    void action("credential",async()=>{
+    void action("credential",async current=>{
       const result=await operatorRequest<{credential:CredentialStatus;verification?:CredentialVerification}>("/api/live/credentials","PUT",{apiKey,apiSecret});
+      if(!current())return;
       if(!result.credential)throw new Error("未收到API保存结果");
       setCredential(result.credential);setVerification(result.verification??null);setApiKey("");setApiSecret("");
       setNotice("API已验证并加密保存。实盘不会自动开启。");
     });
   };
   const deleteCredential=()=>{if(!auth?.authenticated||enabled||positions.length||entries.length)return;
-    void action("delete",async()=>{const result=await operatorRequest<{credential:CredentialStatus}>("/api/live/credentials","DELETE");
+    void action("delete",async current=>{const result=await operatorRequest<{credential:CredentialStatus}>("/api/live/credentials","DELETE");
+      if(!current())return;
       setCredential(result.credential);setVerification(null);setConfirmDelete(false);setNotice("API已删除，实盘保持关闭。");});
   };
   const marks=positions.map(p=>livePositionMark(p,runtime,clock));

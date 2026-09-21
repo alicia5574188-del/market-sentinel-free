@@ -184,8 +184,10 @@ function settleCalibration(state:MultiTurnState,paths:Record<string,TurnCandle[]
   for(const f of state.pending){
     if(f.dueAt>now){keep.push(f);continue;}
     const rows=f.timeframe==="1d"?(daily[f.symbol]??[]):aggregateTurnCandles(paths[f.symbol]??[],f.timeframe);
-    const last=rows.filter(r=>completeAt(r,f.timeframe)<=now).at(-1);
-    if(!last||completeAt(last,f.timeframe)<f.dueAt){if(now-f.dueAt<tfMs(f.timeframe)*2)keep.push(f);continue;}
+    // A delayed scan/restart must score the original forecast window, not
+    // replace its endpoint with a later price. Missing endpoints stay unknown.
+    const last=rows.find(r=>completeAt(r,f.timeframe)===f.dueAt&&validCandle(r));
+    if(!last){if(now-f.dueAt<tfMs(f.timeframe)*2)keep.push(f);continue;}
     const signed=(f.direction==="LONG"?1:-1)*(last.close/f.price-1),threshold=Math.max(.0025,f.volatilityRate*.75);
     const actual=signed<=-threshold?1:0,c=state.calibration[f.timeframe],n=c.count+1;
     const brier=((c.brier*c.count)+(f.predicted-actual)**2)/n;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, LiveEntrySizingError, liveEntryDisposition, liveOrderId, liveStopPriceForTick } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, LiveEntrySizingError, liveEntryDisposition, liveOrderId, liveStopPriceForTick } from "../lib/gate-live.ts";
 import type { PaperPlan } from "../lib/liquidity-core.ts";
 
 function plan(marketState: PaperPlan["marketState"], side: PaperPlan["side"]): PaperPlan {
@@ -24,6 +24,20 @@ test("a confirmed breakout becomes an IOC market order sized from its current en
   assert.equal(intent.body.tif, "ioc");
   assert.equal(intent.body.reduce_only, false);
   assert.equal(intent.body.trigger, undefined);
+});
+
+test("entry intent is rechecked after asynchronous signing before any private fetch",async()=>{
+  const original=globalThis.fetch;let requests=0,allowed=true,guardCalls=0;
+  globalThis.fetch=async()=>{requests++;throw new Error("unexpected private network call");};
+  try {
+    const intent=buildLiveEntryIntent({plan:plan("BREAKOUT","LONG"),entryPrice:100.25,
+      equity:1000,available:1000,openRisk:0,quantoMultiplier:.001,leverageMax:50});
+    const client=new GateLiveClient({apiKey:"test-only-key",apiSecret:"test-only-secret",environment:"testnet"});
+    const pending=client.createEntry(intent,()=>{guardCalls++;return allowed;});
+    allowed=false;
+    await assert.rejects(pending,GateEntryCancelledError);
+    assert.equal(guardCalls,1);assert.equal(requests,0);
+  }finally{globalThis.fetch=original;}
 });
 
 test("confirmed retest and failed-break entries both use realtime IOC", () => {
@@ -118,6 +132,20 @@ test("LIVE protective stops align outward to Gate's contract tick without exitin
   assert.equal(long.price % 0.01 < 1e-9 || 0.01 - long.price % 0.01 < 1e-9, true);
   assert.ok(short.price >= 736.135);
   assert.ok(long.price <= 1123.721);
+});
+
+test("scientific decimal ticks retain their mantissa precision without tightening source stops", () => {
+  for (const tick of [2.5e-7, 1.25e-7, 2.5e-8]) {
+    const exact = 41 * tick;
+    for (const side of ["LONG", "SHORT"] as const) {
+      const stop = buildLiveStopIntent({ id: `tiny-${side}`, symbol: "SMALL_USDT", side, currentStop: exact }, tick);
+      assert.ok(Math.abs(stop.price - exact) < tick * 1e-8);
+      assert.ok(Math.abs(Number((stop.body.trigger as { price: string }).price) / tick - 41) < 1e-8);
+    }
+    const between = 41.4 * tick;
+    assert.ok(Math.abs(liveStopPriceForTick("LONG", between, tick) / tick - 41) < 1e-8);
+    assert.ok(Math.abs(liveStopPriceForTick("SHORT", between, tick) / tick - 42) < 1e-8);
+  }
 });
 
 test("terminal Gate orders are classified without ever replaying a successful entry", () => {

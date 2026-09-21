@@ -11,7 +11,7 @@ import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
   PAPER_BANKRUPTCY_EQUITY, PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
-import { buildLiveEntryIntent, buildLiveStopIntent, GateLiveClient, gateMarkedEquity, gatePositionValuation, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
 import { LIVE_SESSION_VERSION, establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, sameLiveSession, type LiveSession } from "../lib/live-session.ts";
 import type { GateSizeRules, SizeDiagnostic } from "../lib/gate-quantity.ts";
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
@@ -2085,7 +2085,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   protected async syncLive(now:number,initialEnable=false,forceEntryCleanup=false) {
-    if(this.liveSyncWork){
+    while(this.liveSyncWork){
       if(!initialEnable&&!forceEntryCleanup)return this.liveSyncWork;
       await this.liveSyncWork.catch(()=>undefined);
     }
@@ -2522,7 +2522,18 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             adverseEntryDriftRate:drift.adverse});
           entry.marketSubmittedAt=submittedAt;
           await this.saveCheckpoint(submittedAt,true);
-          entry.exchangeOrderId = await client.createEntry(intent);
+          const submissionStillAllowed=()=>{
+            if(!this.runtime.live.requestedEnabled||!this.mirrorQuoteReady(symbol)
+              ||!sameLiveSession(activation,this.runtime.live.activation)
+              ||!sourceAfterEnable(binding!.sourceAtCopy,this.runtime.live.activation,this.forwardState?.startedAt??0)
+              ||!mirrorSourceFresh(this.currentMirrorSource(plan.id).trade??undefined,plan.id,Date.now()))return false;
+            const latest=this.runtime.evidence[symbol],latestPrice=entry.side==="LONG"?latest?.bestAsk:latest?.bestBid;
+            if(!latestPrice||(entry.side==="LONG"?latestPrice<=entry.invalidation:latestPrice>=entry.invalidation))return false;
+            const latestDrift=liveEntryDriftGuard(source,latestPrice);
+            return latestDrift.adverse<=latestDrift.allowed+1e-9;
+          };
+          if(!submissionStillAllowed())throw new GateEntryCancelledError();
+          entry.exchangeOrderId = await client.createEntry(intent,submissionStillAllowed);
           entry.status = "OPEN";
           const filled=await client.inspectEntry("MARKET",symbol,entry.tag,entry.exchangeOrderId);
           const fillPrice=Number(filled?.fill_price);
@@ -2546,6 +2557,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           await this.queueLiveBinding(entry);
           await this.saveCheckpoint(Date.now(),true);
         } catch (error) {
+          if(error instanceof GateEntryCancelledError){
+            entry.status="CANCELLED";entry.submissionResolved=true;entry.lastError=error.message;
+            delete entry.marketSubmittedAt;
+            if(entry.parity){delete entry.parity.submittedAt;delete entry.parity.submitDelayMs;}
+            await this.queueLiveBinding(entry);
+            await this.saveCheckpoint(Date.now(),true);
+            continue;
+          }
           const reason = `Gate 实盘入场提交失败：${safeError(error)}`;
           entry.lastError = reason;
           if (definitiveGateRejection(error)) {

@@ -115,6 +115,39 @@ test("logout/cancel invalidates a late response instead of recreating cache",asy
   release(Response.json({version:EQUITY_CURVE_VERSION,context,points:[],nextCursor:null,scannedTo:null,generatedAt:h.now()}));await work;
   assert.equal(c.getSnapshot().points.length,0);assert.equal(h.disk.length,0);
 });
+test("a stalled response body times out, preserves history and permits a later retry",async t=>{
+  const h=host(1);await h.cache.load(T,T+STEP,()=>true);h.time(STEP);h.archive.add(2,2);
+  t.mock.timers.enable({apis:["setTimeout"]});
+  let stall=true,signal:AbortSignal|null=null;
+  const c=new EquityHistoryCache({...h.options,fetch:async(input,init)=>{
+    if(!stall)return h.options.fetch(input);
+    signal=init!.signal!;
+    return new Response(new ReadableStream({start(body){
+      signal!.addEventListener("abort",()=>body.error(new DOMException("Body stalled","AbortError")),{once:true});
+    }}));
+  }});c.configure(context,"owner");
+  let settled=false;const loading=c.load(T,T+2*STEP,()=>true).then(()=>{settled=true;});
+  for(let i=0;i<8;i++)await Promise.resolve();
+  t.mock.timers.tick(12_000);
+  for(let i=0;i<12;i++)await Promise.resolve();
+  assert.equal((signal as AbortSignal|null)?.aborted,true);assert.equal(settled,true);await loading;
+  assert.equal(c.getSnapshot().loading,false);assert.equal(c.getSnapshot().points.length,1);assert.ok(c.getSnapshot().error);
+  stall=false;h.time(60_001);await c.load(T,T+2*STEP,()=>true);
+  assert.equal(c.getSnapshot().error,null);assert.equal(c.getSnapshot().points.length,2);
+});
+test("logout during a response body aborts the shared flight before it can restore private history",async()=>{
+  const h=host(1);let signal:AbortSignal|null=null;
+  const c=new EquityHistoryCache({...h.options,fetch:async(_input,init)=>{
+    signal=init!.signal!;
+    return new Response(new ReadableStream({start(body){
+      signal!.addEventListener("abort",()=>body.error(new DOMException("Cancelled","AbortError")),{once:true});
+    }}));
+  }});c.configure(context,"owner");
+  const loading=c.load(T,T+STEP,()=>true);
+  for(let i=0;i<8;i++)await Promise.resolve();
+  c.cancel();assert.equal((signal as AbortSignal|null)?.aborted,true);await loading;
+  assert.equal(c.getSnapshot().points.length,0);assert.equal(c.getSnapshot().error,null);assert.equal(h.disk.length,0);
+});
 test("strictly newer reader cache expires and new rows are not hidden by old negative response",async()=>{
   const s=new Archive();s.add(1);const r=new EquityReader();let now=T+STEP;
   const a=await r.read(s,context,null,now);now+=1000;

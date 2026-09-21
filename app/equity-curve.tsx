@@ -59,7 +59,9 @@ export default function EquityCurve({data,healthy,fixture,cache,cacheScope="owne
   const end=Math.max(account+1,chartPoints.at(-1)?.at??account+1),span=range==="24h"?DAY_MS:range==="7d"?7*DAY_MS:Math.max(1,end-account);
   const canvasWidth=Math.min(20000,Math.max(width,width*(end-account)/span)),plot=canvasWidth-28;
   useEffect(()=>{if(atLatest.current&&scroll.current)scroll.current.scrollLeft=canvasWidth-width;},[canvasWidth,width,end,range]);
-  const values=chartPoints.map(p=>p.equity),low=Math.min(context.initialEquity,...values),high=Math.max(context.initialEquity,...values);
+  // Persistent history can outgrow a browser's function-argument limit.
+  let low=context.initialEquity,high=context.initialEquity;
+  for(const point of chartPoints){low=Math.min(low,point.equity);high=Math.max(high,point.equity);}
   const pad=Math.max(1,(high-low)*.14),min=low-pad,max=high+pad,y=(v:number)=>214-(v-min)/(max-min)*192;
   const x=(t:number)=>14+(t-account)/(end-account)*plot;
   const visibleStart=account+Math.max(0,offset-14)/plot*(end-account),visibleEnd=account+Math.min(plot,offset+width)/plot*(end-account);

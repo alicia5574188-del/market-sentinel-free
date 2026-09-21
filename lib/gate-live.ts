@@ -118,6 +118,14 @@ export class LiveEntrySizingError extends Error {
   }
 }
 
+/** The final local guard rejected an entry before any order request was sent. */
+export class GateEntryCancelledError extends Error {
+  constructor() {
+    super("实盘提交前所有者选择、源单或行情状态已变化，未发送入场请求");
+    this.name = "GateEntryCancelledError";
+  }
+}
+
 function hex(buffer: ArrayBuffer) {
   return Array.from(new Uint8Array(buffer), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -165,12 +173,16 @@ export class GateLiveClient {
   requestCount = 0;
   constructor(credentials: GateCredentials) { this.credentials = credentials; }
 
-  private async request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, query = "", value?: unknown) {
+  private async request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, query = "", value?: unknown, beforeSend?: () => boolean) {
     this.requestCount += 1;
     const timestamp = Math.floor(Date.now() / 1_000).toString();
     const signedPath = `/api/v4${path}`;
     const body = value == null ? "" : JSON.stringify(value);
     const base = this.credentials.environment === "testnet" ? "https://api-testnet.gateapi.io" : "https://api.gateio.ws";
+    const signature = await gateRequestSignature(this.credentials.apiSecret, method, signedPath, query, body, timestamp);
+    // Signing yields to owner controls. Fence directly at the network boundary,
+    // with no await between this final local check and the order request.
+    if (beforeSend && !beforeSend()) throw new GateEntryCancelledError();
     const response = await fetch(`${base}${signedPath}${query ? `?${query}` : ""}`, {
       method,
       headers: {
@@ -178,7 +190,7 @@ export class GateLiveClient {
         "Content-Type": "application/json",
         KEY: this.credentials.apiKey,
         Timestamp: timestamp,
-        SIGN: await gateRequestSignature(this.credentials.apiSecret, method, signedPath, query, body, timestamp),
+        SIGN: signature,
         "X-Gate-Exptime": String(Date.now() + 5_000),
         "X-Gate-Size-Decimal": "1",
       },
@@ -225,9 +237,9 @@ export class GateLiveClient {
     return response.data;
   }
 
-  async createEntry(intent: LiveEntryIntent) {
+  async createEntry(intent: LiveEntryIntent, beforeSend?: () => boolean) {
     const path = intent.kind === "PRICE_TRIGGER" ? "/futures/usdt/price_orders" : "/futures/usdt/orders";
-    const response = await this.request<GateLiveOrder>("POST", path, "", intent.body);
+    const response = await this.request<GateLiveOrder>("POST", path, "", intent.body, beforeSend);
     return responseId(response.raw, response.data);
   }
 
@@ -397,9 +409,8 @@ export function buildLiveEntryIntent(input: {
 }
 
 function tickDecimals(tickSize: number) {
-  const text = tickSize.toString().toLowerCase();
-  if (text.includes("e-")) return Math.min(12, Number(text.split("e-")[1]) || 0);
-  return Math.min(12, text.split(".")[1]?.length ?? 0);
+  const [coefficient, exponent = "0"] = tickSize.toString().toLowerCase().split("e");
+  return Math.min(12, Math.max(0, (coefficient.split(".")[1]?.length ?? 0) - Number(exponent)));
 }
 
 export function liveStopPriceForTick(side: Side, currentStop: number, tickSize?: number) {

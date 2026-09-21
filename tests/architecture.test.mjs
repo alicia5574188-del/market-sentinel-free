@@ -242,7 +242,7 @@ test("retired systems remain isolated; only current PAPER can create new LIVE en
   assert.match(gateLive, /Math\.min\(MAX_NOTIONAL_TO_EQUITY, input\.mirrorNotionalFraction\)/);
   assert.match(worker, /maxNotionalMultiple: 0\.5/);
   assert.match(worker, /buildLiveStopIntent\(position, tick\)/);
-  assert.match(worker, /entry\.exchangeOrderId = await client\.createEntry\(intent\);[\s\S]{0,1600}await this\.createImmediateLiveStop\(client, entry\)/);
+  assert.match(worker, /entry\.exchangeOrderId = await client\.createEntry\(intent,submissionStillAllowed\);[\s\S]{0,1600}await this\.createImmediateLiveStop\(client, entry\)/);
   assert.match(gateLive, /side === "LONG" \? Math\.floor\(units \+ 1e-9\) : Math\.ceil\(units - 1e-9\)/);
   assert.match(worker, /SCAN_UNIVERSE_SIZE = 30/);
   assert.match(worker, /eligible\.has\(row\.symbol\) && forwardSymbolAllowed\(row\.symbol\)/);
