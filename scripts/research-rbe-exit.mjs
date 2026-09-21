@@ -158,7 +158,7 @@ for(let now=start;now<=end;now+=300){
       ?[{tf,f,score:f.continuationScore*Math.max(.1,f.expectedMoveRate/.0019)}]:[];}).sort((a,b)=>b.score-a.score);
     const c=candidates[0];if(!c)continue;
     const side=c.f.direction,d=signFor(side),entry=row.close*(1+d*.00025),stop=entry*(1-d*c.f.stopRate);
-    const config=RBE_EXIT_CONFIGS.conservative,base={side,entry,stop,entryAtr:c.f.atrRate,openedAt:now,closedAt:0,exit:0,net:0,mfe:0,mae:0,reason:""};
+    const config=RBE_EXIT_CONFIGS.balanced,base={side,entry,stop,entryAtr:c.f.atrRate,openedAt:now,closedAt:0,exit:0,net:0,mfe:0,mae:0,reason:""};
     const pair={symbol,side,timeframe:c.tf,openedAt:now,config,baseline:{...base},candidate:{...base}};active.set(symbol,pair);paired.push(pair);
   }
 }
