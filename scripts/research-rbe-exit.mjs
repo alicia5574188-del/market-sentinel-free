@@ -92,7 +92,9 @@ const prevFrames=Object.fromEntries(symbols.map(s=>[s,{}])),frames=Object.fromEn
 const rowByTime=Object.fromEntries(symbols.map(s=>[s,new Map(series[s]["5m"].map(r=>[r.time+300,r]))]));
 const start=Math.max(...symbols.map(s=>series[s]["5m"][0].time))+30*86400,end=Math.min(...symbols.map(s=>series[s]["5m"].at(-1).time+300));
 const paired=[],active=new Map();
-const actionDebug={decisions:0,healthy:0,early:0,defensive:0,preExit:0,shouldExit:0,arms:0,persistent:0,reductions:0,full:0,resets:0};
+const actionDebug={decisions:0,healthy:0,early:0,defensive:0,preExit:0,shouldExit:0,warnings:0,arms:0,
+  secondSignals:0,renewalRearms:0,hazardPass:0,survivalPass:0,pairPass:0,countPass:0,
+  persistent:0,reductions:0,full:0,resets:0};
 
 function closeLeg(leg,price,time,reason){
   if(leg.closedAt)return;
@@ -169,7 +171,7 @@ for(let now=start;now<=end;now+=300){
         if(dec.shouldExit)actionDebug.shouldExit++;
       }
       const warning=dec&&(dec.shouldExit||dec.phase==="DEFENSIVE");
-      if(warning){
+      if(warning){actionDebug.warnings++;
         const severe=dec.diagnostics.ownTurn>=.84&&dec.diagnostics.structureBreak>=.55||dec.shockHazard>=.93;
         if(!leg.rbeArmedAt){
           // First predictive hit only arms the state. We do not wait for price
@@ -178,6 +180,7 @@ for(let now=start;now<=end;now+=300){
           leg.rbeArmedSurvival=dec.extensionSurvival;leg.rbeSignalCount=1;leg.rbe=dec;
         }else{
           if(renewed>=.45&&!severe){
+            actionDebug.renewalRearms++;
             // A real extension after the warning means the old warning became
             // stale. Re-arm from the new MFE instead of permanently blocking
             // persistence or cutting a trend that just proved it can extend.
@@ -186,9 +189,13 @@ for(let now=start;now<=end;now+=300){
             leg.rbeArmedSurvival=dec.extensionSurvival;leg.rbeSignalCount=1;leg.rbe=dec;
           }else{
             const separated=now-(leg.lastRbeSignalAt??leg.rbeArmedAt)>=300_000;
-            if(separated)leg.rbeSignalCount=(leg.rbeSignalCount??1)+1;
+            if(separated){leg.rbeSignalCount=(leg.rbeSignalCount??1)+1;actionDebug.secondSignals++;}
             const hazardPersistent=dec.reversalHazard>=(leg.rbeArmedHazard??0)-.035;
             const survivalPersistent=dec.extensionSurvival<=(leg.rbeArmedSurvival??1)+.05;
+            if(hazardPersistent)actionDebug.hazardPass++;
+            if(survivalPersistent)actionDebug.survivalPass++;
+            if(hazardPersistent&&survivalPersistent)actionDebug.pairPass++;
+            if((leg.rbeSignalCount??0)>=2)actionDebug.countPass++;
             const persistent=(leg.rbeSignalCount??0)>=2&&hazardPersistent&&survivalPersistent;
             if(persistent)actionDebug.persistent++;
             if(persistent&&severe&&dec.shouldExit){
