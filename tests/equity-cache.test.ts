@@ -159,7 +159,7 @@ test("projection upgrade retains validated points but re-scans archive to recove
 });
 test("persistent v1 cache re-scan fills a stale saved mark that the old projection omitted",async()=>{
   const h=host(3),k=`sentinel:equity-cache:v1:owner:${T}:1000`,p1=packet(1),p3=packet(3);
-  const stale=packet(2);stale.account.positions=[{lastQuoteAt:T,exitControl:{policy:context.exitPolicy}}];h.archive.rows.set(key(2),stale);
+  const stale:any=packet(2);stale.account.positions=[{lastQuoteAt:T,exitControl:{policy:context.exitPolicy}}];h.archive.rows.set(key(2),stale);
   h.disk.setItem(k,JSON.stringify({version:"incremental-persistent-v1",account:T,initialEquity:1000,
     points:[[p1.at,p1.daily.endEquity,context.policy,true],[p3.at,p3.daily.endEquity,context.policy,true]],
     cursor:null,newestCursor:key(3),done:true,loaded:true,coveredTo:T+STEP,latestAt:h.now(),checkedCycle:T+3*STEP,
