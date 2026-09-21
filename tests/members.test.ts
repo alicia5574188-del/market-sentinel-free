@@ -7,7 +7,7 @@ import {createHash} from "node:crypto";
 import {Memory,FakeGate,T,trade} from "./member-fixtures.ts";
 import {advanceForward,initialForward} from "../lib/forward-relations.ts";
 import {newExitControl} from "../lib/forward-protection.ts";
-import {MEMBERS_VERSION,memberCookie,issueMemberSession,verifyMemberSession,digestMember,memberVaultRoot,encryptMemberText,decryptMemberText} from "../lib/member-auth.ts";
+import {MEMBERS_VERSION,MEMBER_LIMIT,memberCookie,issueMemberSession,verifyMemberSession,digestMember,memberVaultRoot,encryptMemberText,decryptMemberText} from "../lib/member-auth.ts";
 import {createOwnerSession,ownerSessionCookie} from "../lib/owner-auth.ts";
 import {encryptGateCredentials,decryptGateCredentials} from "../lib/credential-vault.ts";
 import {liveEntryTag,liveExitTag} from "../lib/gate-live.ts";
@@ -240,8 +240,8 @@ test("an authenticated member cannot access another member's binding or primary 
   const status=await h.http("/api/live/credentials",cookie);assert.equal(status.status,200);assert.equal((await status.json<any>()).credential.keyHint,"test");
   assert.equal(h.events.d1,0);
 }));
-test("issuing twenty inactive users cannot schedule trading or start source collection",()=>clock(async()=>{
-  const h=await harness();for(let i=0;i<20;i++)await h.issue();
+test("issuing the bounded inactive member capacity cannot schedule trading or start source collection",()=>clock(async()=>{
+  const h=await harness();for(let i=0;i<MEMBER_LIMIT;i++)await h.issue();
   assert.equal(h.events.primaryReads,0);assert.equal(h.events.d1,0);assert.equal(h.actors.size,0);
   assert.equal((await h.rpc("/issue",{label:"overflow",requestId:"capacity-overflow-key"})).status,409);
 }));
@@ -284,4 +284,47 @@ test("history reader preserves authenticated member namespace and denies guests"
  const response=await h.http(`/api/live/history?memberId=${b.id}`,cookie);assert.equal(response.status,200);
  const value=await response.json<any>();assert.equal(value.history[0].id,"only-A");assert.ok(!JSON.stringify(value).includes("only-B"));
  await Promise.all(aa.c.tasks);await Promise.all(bb.c.tasks);
+}));
+
+
+test("single-use invite registers username/password, rotates automatically and rejects reuse",()=>clock(async()=>{
+  const h=await harness(),owner=ownerSessionCookie(await createOwnerSession(ROOT));
+  const first=await(await h.http("/api/members/admin",owner)).json<any>();
+  assert.match(first.invite.code,/^INV-[A-F0-9]{24}$/);
+  const requestId="register-user-one-0001";
+  const registered=await h.http("/api/members/register","",{inviteCode:first.invite.code,username:"Alice_01",password:"strong-pass-01",requestId});
+  assert.equal(registered.status,200);const body=await registered.json<any>();assert.equal(body.role,"member");assert.equal(body.username,"Alice_01");
+  const after=await(await h.http("/api/members/admin",owner)).json<any>();
+  assert.notEqual(after.invite.code,first.invite.code);assert.equal(after.members[0].username,"Alice_01");
+  assert.equal((await h.http("/api/members/register","",{inviteCode:first.invite.code,username:"Bob_02",password:"strong-pass-02",requestId:"register-user-two-0002"})).status,409);
+  assert.equal((await h.http("/api/members/login","",{username:"Alice_01",password:"strong-pass-01"})).status,200);
+  assert.equal((await h.http("/api/members/login","",{username:"Alice_01",password:"wrong-pass"})).status,401);
+}));
+
+test("owner stop blocks member re-enable, resume only restores permission, and held risk keeps its seat",()=>clock(async()=>{
+  const h=await harness(),a=await h.issue("stop-user"),aa=await h.member(a.id),owner=ownerSessionCookie(await createOwnerSession(ROOT));
+  await h.internal(a.id,"/live-mode",{enabled:true});now+=10000;
+  h.source.positions=[{...trade("ft-admin-drain"),openedAt:now-1000}];await aa.engine.alarm();now+=10000;await aa.engine.alarm();
+  let overview=await(await h.http("/api/members/admin",owner)).json<any>();assert.equal(overview.activeCount,1);
+  const stop=await h.http("/api/members/stop",owner,{id:a.id});assert.equal(stop.status,200);
+  assert.equal(aa.engine.runtime.live.requestedEnabled,false);assert.equal(aa.gate.closeTags.length,0);assert.ok(aa.gate.stops.length>0);
+  overview=await(await h.http("/api/members/admin",owner)).json<any>();assert.equal(overview.activeCount,1);
+  assert.equal((await h.internal(a.id,"/live-mode",{enabled:true})).status,409);
+  const resume=await h.http("/api/members/resume",owner,{id:a.id});assert.equal(resume.status,200);
+  assert.equal(aa.engine.runtime.live.requestedEnabled,false);
+  assert.equal((await h.internal(a.id,"/live-mode",{enabled:true})).status,200);
+}));
+
+test("safe delete refuses while live risk exists, then removes login and releases capacity after normal source exit",()=>clock(async()=>{
+  const h=await harness(),a=await h.issue("delete-user"),aa=await h.member(a.id),owner=ownerSessionCookie(await createOwnerSession(ROOT));
+  await h.internal(a.id,"/live-mode",{enabled:true});now+=10000;
+  const t={...trade("ft-delete-drain"),openedAt:now-1000};h.source.positions=[t];await aa.engine.alarm();now+=10000;await aa.engine.alarm();
+  const blocked=await h.http("/api/members/delete",owner,{id:a.id});assert.equal(blocked.status,409);
+  assert.equal(aa.engine.runtime.live.requestedEnabled,false);assert.equal(aa.gate.closeTags.length,0);
+  now+=10000;h.source.history=[{...t,status:"CLOSED",closedAt:now,exitReason:"source-finished"}];h.source.positions=[];
+  await aa.engine.alarm();now+=10000;await aa.engine.alarm();
+  assert.equal(aa.engine.runtime.live.positions.BTC_USDT.status,"CLOSED");
+  const deleted=await h.http("/api/members/delete",owner,{id:a.id});assert.equal(deleted.status,200);
+  assert.equal((await h.rpc("/login",{key:a.loginKey,bucket:"d".repeat(64)})).status,401);
+  const listing=await(await h.http("/api/members/admin",owner)).json<any>();assert.equal(listing.members.some((m:any)=>m.id===a.id),false);
 }));
