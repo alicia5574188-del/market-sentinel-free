@@ -401,7 +401,7 @@ function manageMultiTurn(s:ForwardState,quotes:Record<string,Quote>,now:number){
       continuationScore:freshFrame.continuationScore,turnProbability:freshFrame.triggerProbability,phase:freshFrame.phase,
       rawDirectionAligned:freshFrame.rawDirection==="NEUTRAL"||freshFrame.rawDirection===t.side,
     }:null);
-    let migration=t.profitProtectionMigration;
+    let migration=t.profitProtectionMigration,suppressRaise=false;
     const prior=t.profitProtection?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?t.profitProtection:null;
     if(!migration){
       // v3 may arrive while an old position already has a historical MFE. Never
@@ -413,13 +413,13 @@ function manageMultiTurn(s:ForwardState,quotes:Record<string,Quote>,now:number){
         const cushion=Math.max(.0015,Math.min(.005,riskRate*.15)),minNet=modeledCost+.0010;
         if(ret>proposedFloor.floorRate+cushion){
           t.profitProtection={...proposedFloor,peakR:proposedFloor.reachedR,updatedAt:now};
-          migration={version:MULTI_TURN_PROFIT_PROTECTION_VERSION,state:"CURRENT",updatedAt:now};
+          migration={version:MULTI_TURN_PROFIT_PROTECTION_VERSION,state:"CURRENT",updatedAt:now};suppressRaise=true;
         }else if(ret>minNet+cushion){
           const floorRate=Math.max(minNet,ret-cushion),lockedR=floorRate/riskRate;
           t.profitProtection={...proposedFloor,floorRate,lockedR,retentionRate:floorRate/Math.max(t.favorable,1e-9),
             checkpointBand:Math.floor(lockedR*4+1e-9),peakR:proposedFloor.reachedR,updatedAt:now};
-          migration={version:MULTI_TURN_PROFIT_PROTECTION_VERSION,state:"CURRENT",updatedAt:now};
-        }else migration={version:MULTI_TURN_PROFIT_PROTECTION_VERSION,state:"DEFERRED",updatedAt:now};
+          migration={version:MULTI_TURN_PROFIT_PROTECTION_VERSION,state:"CURRENT",updatedAt:now};suppressRaise=true;
+        }else{migration={version:MULTI_TURN_PROFIT_PROTECTION_VERSION,state:"DEFERRED",updatedAt:now};suppressRaise=true;}
       }
       t.profitProtectionMigration=migration;
     }else if(migration.state==="DEFERRED"&&proposedFloor){
@@ -431,11 +431,11 @@ function manageMultiTurn(s:ForwardState,quotes:Record<string,Quote>,now:number){
           t.profitProtection={...proposedFloor,floorRate,lockedR,retentionRate:floorRate/Math.max(t.favorable,1e-9),
             checkpointBand:Math.floor(lockedR*4+1e-9),peakR:proposedFloor.reachedR,updatedAt:now};
           t.profitProtectionMigration={version:MULTI_TURN_PROFIT_PROTECTION_VERSION,state:"CURRENT",updatedAt:now};
-          migration=t.profitProtectionMigration;
+          migration=t.profitProtectionMigration;suppressRaise=true;
         }
       }
     }
-    if(proposedFloor&&migration?.state==="CURRENT"){
+    if(proposedFloor&&migration?.state==="CURRENT"&&!suppressRaise){
       const active=t.profitProtection?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?t.profitProtection:null;
       if(!active||proposedFloor.floorRate>active.floorRate+1e-12){
         t.profitProtection={...proposedFloor,peakR:Math.max(active?.peakR??0,proposedFloor.reachedR),updatedAt:now};
