@@ -214,10 +214,17 @@ for(let now=start;now<=end;now+=300){
               // only active while the RBE state remains dangerous.
               const hazardScale=clip((dec.reversalHazard-.45)/.45);
               const horizonCushion={ "5m":.95,"15m":1.15,"30m":1.35,"1h":1.60,"4h":1.95,"1d":2.30 }[pair.timeframe];
+              const phaseScale=dec.shouldExit?1:1.45;
               const cushionAtr=severe
                 ?horizonCushion*.55
-                :horizonCushion*(1-.30*hazardScale);
-              const grossFloor=Math.max(FRICTION+.00015,
+                :horizonCushion*phaseScale*(1-.30*hazardScale);
+              const originalFloor=pair.side==="LONG"
+                ?leg.stop/leg.entry-1
+                :1-leg.stop/leg.entry;
+              const minimumFloor=dec.shouldExit
+                ?Math.max(originalFloor,FRICTION+.00015)
+                :originalFloor;
+              const grossFloor=Math.max(minimumFloor,
                 dec.diagnostics.currentReturn-atr*cushionAtr);
               const floorPrice=pair.side==="LONG"
                 ?leg.entry*(1+grossFloor)
