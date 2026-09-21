@@ -115,8 +115,12 @@ for(let now=start;now<=end;now+=300){
   for(const tf of TURN_TIMEFRAMES){
     const completed=[];
     for(const symbol of symbols){
-      const rows=series[symbol][tf],idx=indices[symbol][tf];
-      while(idx<rows.length&&rows[idx].time+tfSeconds[tf]<=now){indices[symbol][tf]++;if(rows[idx].time+tfSeconds[tf]===now)completed.push([symbol,idx]);}
+      const rows=series[symbol][tf];let idx=indices[symbol][tf];
+      while(idx<rows.length&&rows[idx].time+tfSeconds[tf]<=now){
+        const completedAt=rows[idx].time+tfSeconds[tf];
+        if(completedAt===now)completed.push([symbol,idx]);
+        idx+=1;indices[symbol][tf]=idx;
+      }
     }
     if(!completed.length)continue;
     const rawNow=new Map();let longs=0,shorts=0;
