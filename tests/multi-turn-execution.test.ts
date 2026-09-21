@@ -161,3 +161,28 @@ test("time-space hold value can exit an old position before the legacy maximum l
   assert.equal(s.history[0].exitAudit?.trigger,"HOLD_VALUE");
   assert.match(s.history[0].exitReason??"",/时间—空间持仓价值退出/);
 });
+
+
+test("new Multi-Turn trades persist the exact entry context used for later research review",()=>{
+  const p=candles(),now=(p.at(-1)!.time+300)*1000+1000;
+  const state=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:q(p,now)},contracts:{BTC_USDT:meta}}).state;
+  assert.ok(state.positions.length);
+  const trade=state.positions[0],ctx=trade.entryContext;
+  assert.ok(ctx);
+  assert.equal(ctx.version,"multi-turn-entry-context-v1");
+  assert.equal(ctx.capturedAt,trade.openedAt);
+  assert.equal(ctx.timeframe,trade.turn!.timeframe);
+  assert.equal(ctx.side,trade.side);
+  assert.equal(ctx.signalAt,trade.turn!.signalAt);
+  assert.equal(ctx.directionConfidence,trade.turn!.entryDirectionConfidence);
+  assert.equal(ctx.continuationScore,trade.turn!.entryContinuation);
+  assert.ok(ctx.expectedMoveRate>0);
+  assert.ok(ctx.modeledCostRate>0);
+  assert.ok(ctx.stopRate>0);
+  assert.ok(ctx.bestHoldMinutes>0&&ctx.strongExtensionMinutes>=ctx.bestHoldMinutes&&ctx.hardExtensionMinutes>=ctx.strongExtensionMinutes);
+  assert.ok(ctx.timeframeStates.length>=4);
+  assert.ok(ctx.timeframeStates.some(row=>row.timeframe===ctx.timeframe));
+  const restored=structuredClone(state);
+  assert.deepEqual(restored.positions[0].entryContext,ctx);
+});
