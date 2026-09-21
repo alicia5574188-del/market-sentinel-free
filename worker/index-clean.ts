@@ -63,7 +63,11 @@ import { advanceStrategyArena as advancePreviousStrategyArena,
   type StrategyArenaState as PreviousStrategyArenaState } from "../lib/previous-strategy-arena.ts";
 
 const LOOP_MS = 2_000;
-const AUTHORITY_STALE_AFTER_MS = 8_000;
+// Whole-system display/health tolerance only. Executable quotes remain guarded
+// by the stricter per-symbol STALE_AFTER_MS/freshQuote checks; this must never
+// authorize an order from an old price. A few missed 2s polls should not make
+// the entire service flap into RECONNECTING.
+const SYSTEM_HEALTH_STALE_AFTER_MS = 30_000;
 const FEED_HARD_FAILURE_COUNT = 4;
 const FEED_HARD_FAILURE_MS = 15_000;
 const FEED_RECOVERY_CONFIRMATIONS = 2;
@@ -3008,7 +3012,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         && memory.timeframeUpdatedAt.h1 > 0 && memory.timeframeUpdatedAt.h4 > 0;
     });
     const authorityStale = this.runtime.lastSuccessAt == null
-      || observedAt - this.runtime.lastSuccessAt > AUTHORITY_STALE_AFTER_MS;
+      || observedAt - this.runtime.lastSuccessAt > SYSTEM_HEALTH_STALE_AFTER_MS;
     this.runtime.state = !this.authorityReady ? "RECOVERY_REQUIRED"
       : authorityStale ? "RECONNECTING"
         : this.runtime.riskBreach || !realtimeReadiness.protectedMarketsReady ? "DEGRADED"
@@ -3145,11 +3149,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         positions:s.positions,history:s.history,policyVersion:s.policyVersion,storage:s.storage} as ForwardState:null;
       const view=s?forwardSummary(s,this.regimeQuotes(now),now):null;
       const feed:MemberFeed={version:MEMBERS_VERSION,at:now,healthy:!this.forwardError&&this.authorityReady
-        &&this.runtime.lastSuccessAt!=null&&now-this.runtime.lastSuccessAt<=AUTHORITY_STALE_AFTER_MS,
+        &&this.runtime.lastSuccessAt!=null&&now-this.runtime.lastSuccessAt<=SYSTEM_HEALTH_STALE_AFTER_MS,
         error:this.forwardError,state:sourceState,view,metadata:this.runtime.contractMeta,ticks:this.runtime.tickSize,
         evidence:this.runtime.evidence,ownerAccountHash:this.turnoverAccountUser?await digestMember(`gate-user:${this.turnoverAccountUser}`):null,
         sourceStatus:{state:this.runtime.state,lastSuccessAt:this.runtime.lastSuccessAt,
-          stale:this.runtime.lastSuccessAt==null||now-this.runtime.lastSuccessAt>AUTHORITY_STALE_AFTER_MS}};
+          stale:this.runtime.lastSuccessAt==null||now-this.runtime.lastSuccessAt>SYSTEM_HEALTH_STALE_AFTER_MS}};
       return json(feed);
     }
     if(path === "/member-closed" && request.method === "GET") {
@@ -3201,7 +3205,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         immutable: true, generatedAt: Date.now() });
     }
     if (path === "/watchdog") {
-      const stale = this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > AUTHORITY_STALE_AFTER_MS;
+      const stale = this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > SYSTEM_HEALTH_STALE_AFTER_MS;
       const alarm = await this.ctx.storage.getAlarm();
       if (alarm == null || alarm < Date.now() - 6_000) {
         this.runtime.state = this.authorityReady ? "RECONNECTING" : "RECOVERY_REQUIRED";
@@ -3212,7 +3216,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     if (path === "/health-status") {
       await this.ensureAlarm();
-      const stale = !this.authorityReady || this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > AUTHORITY_STALE_AFTER_MS;
+      const stale = !this.authorityReady || this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > SYSTEM_HEALTH_STALE_AFTER_MS;
       const effectiveState = !this.authorityReady ? "RECOVERY_REQUIRED" : stale ? "RECONNECTING" : this.runtime.state;
       const strategies = REGIME_STRATEGIES;
       const canonical = canonicalPaperSummary({ current: this.runtime.strategyArena, previous: this.runtime.previousStrategyArena,
@@ -3351,7 +3355,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         previousStableStructures: _previousStableStructures, liquidUniverse: _liquidUniverse,
         strategyCandleFailures, ...publicRuntime } = this.runtime;
       void _stableCandidates; void _previousStableCandidates; void _previousStableStructures; void _liquidUniverse;
-      const stale = !this.authorityReady || this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > AUTHORITY_STALE_AFTER_MS;
+      const stale = !this.authorityReady || this.runtime.lastSuccessAt == null || Date.now() - this.runtime.lastSuccessAt > SYSTEM_HEALTH_STALE_AFTER_MS;
       const effectiveState = !this.authorityReady ? "RECOVERY_REQUIRED" : stale ? "RECONNECTING" : this.runtime.state;
       return json({ ...publicRuntime, ...this.authorityView, paperCycle: paperCycleSummary(paperCycle, this.authorityView.equity),
         buildSha: FORWARD_BUILD_SHA,

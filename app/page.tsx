@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ForwardDashboard from "./forward-dashboard.tsx";
 import LiveConsole from "./live-console.tsx";
 import { LoginGate, MemberAccess } from "./member-access.tsx";
-import { runtimeBackendOperational } from "../lib/runtime-health.ts";
+import { runtimeBackendOperational, runtimeStatusLabel } from "../lib/runtime-health.ts";
 import { operatorRequest, type AuthSession, type LiveRuntime, type OperatorRuntime } from "../lib/operator-ui.ts";
 
 const RUNTIME_REQUEST_TIMEOUT_MS = 12_000;
@@ -64,7 +64,7 @@ export default function Home() {
   },[refresh,auth,sessionChanged]);
   if(!auth?.authenticated)return <LoginGate auth={auth} onSession={sessionChanged}/>;
   return <ForwardDashboard key={auth.memberId??"owner"} cacheScope={auth.memberId??"owner"} data={runtime?.forward?.startedAt?runtime.forward:null}
-    healthy={runtimeBackendOperational(runtime)} feedAt={runtime?.lastSuccessAt??null}
+    healthy={runtimeBackendOperational(runtime)} statusLabel={runtimeStatusLabel(runtime)} feedAt={runtime?.lastSuccessAt??null}
     error={runtime?.forward?.storage?.error??error} liveEnabled={runtime?.liveMode?.requestedEnabled??false}
     liveOverview={{equity:runtime?.live?.equity??null,available:runtime?.live?.available??null,
       positionCount:Object.values(runtime?.live?.positions??{}).filter(p=>p?.status==="OPEN").length,

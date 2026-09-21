@@ -13,7 +13,7 @@ const signed = (v: number | null | undefined, digits=2) => typeof v==="number"?`
 const time = (v?:number|null) => v?new Date(v).toLocaleString("zh-CN",{timeZone:"Asia/Vientiane",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}):"—";
 const condition = (r:Rule) => r.authority==="MULTI_TURN"?`${r.turnTimeframe??"—"} 转折引擎`:r.conditions.map(c=>`${FEATURES[c.feature]} ${c.op==="GE"?"≥":"≤"} ${fmt(c.threshold)}`).join(" ＋ ");
 
-export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,memberName,cacheScope="owner"}:{data:View|null;healthy:boolean;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;liveEnabled:boolean;liveOverview?:{equity:number|null;available:number|null;positionCount:number;operational:boolean;lastSyncAt:number|null;copied:number|null;eligible:number|null;missing:number|null};accountPanel?:ReactNode;memberName?:string;cacheScope?:string}) {
+export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,memberName,cacheScope="owner"}:{data:View|null;healthy:boolean;statusLabel?:string;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;liveEnabled:boolean;liveOverview?:{equity:number|null;available:number|null;positionCount:number;operational:boolean;lastSyncAt:number|null;copied:number|null;eligible:number|null;missing:number|null};accountPanel?:ReactNode;memberName?:string;cacheScope?:string}) {
   const [equityCache]=useState(()=>new EquityHistoryCache());
   useEffect(()=>()=>equityCache.cancel(),[equityCache]);
   const [tab,setTab]=useState<Tab>("overview"),[now,setNow]=useState(0);
@@ -60,13 +60,14 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
   const paperMargin=data?.positions.reduce((sum,t)=>sum+t.margin,0)??null;
   const elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
   const nav:[Tab,string,string][]=[["overview","◉","总览"],["relations","⌘","转折"],["orders","⇄","模拟"],["live","◈","实盘"],["journal","≋","演变"],["settings","⊙","系统"]];
+  const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice("后台运行中 · ".length):statusLabel??(healthy?"正常":"行情重连中");
   return <main className="fr-app" style={fontStyle} data-ui-version="dark-live-v1" data-record-view="compact-records-pnl-v1">
     <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · 多周期转折引擎</b><small>MULTI-TURN / 01</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
     <div className="fr-subhead"><span>Gate USDT 永续 · 六周期转折</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
     {memberName&&<p className="fr-note">{memberName} · 共用同一模拟策略，实盘账户独立，开关只由你控制。</p>}
 
     {tab==="overview"&&<>
-      <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">账户驾驶舱</span><h1>{healthy?"系统正在正常运行":"系统正在恢复连接"}</h1>
+      <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">账户驾驶舱</span><h1>{systemStatus==="正常"?"系统正在正常运行":`系统状态：${systemStatus}`}</h1>
         <p>{data?.latestReason??"正在读取已持久化账户和真实行情状态。"}</p>
         <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>5m / 15m / 30m / 1h / 4h / 日线</span><span>Top30动态市场</span><span>实盘{liveEnabled?"已开启":"关闭"}</span></div></div>
         <div className="fr-equity"><small>模拟账户权益 · USDT</small><strong>{fmt(data?.equity)}</strong><div className={(data?.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(data?.netPnl)} <span>U · {signed(data?data.netPnl/data.initialEquity*100:null)}%</span></div>
@@ -76,7 +77,7 @@ export default function ForwardDashboard({data,healthy,feedAt,error,livePanel,li
         <Stat label="模拟账户" value={`${fmt(data?.equity)} U`} note={`${data?.positions.length??"—"} 笔持仓 · 浮盈 ${signed(data?.floating)} U`}/>
         <Stat label="实盘账户" value={`${fmt(liveOverview?.equity)} U`} note={`${liveOverview?.positionCount??"—"} 笔持仓 · 可用 ${fmt(liveOverview?.available)} U`}/>
         <Stat label="复制一致性" value={liveOverview?.eligible==null?"—":`${liveOverview.copied??0} / ${liveOverview.eligible}`} note={liveOverview?.missing?`${liveOverview.missing} 笔需要核对`:"当前无漏复制提示"}/>
-        <Stat label="系统状态" value={healthy?"正常":"恢复中"} note={`行情心跳 ${time(feedAt)}`}/>
+        <Stat label="系统状态" value={systemStatus} note={`行情心跳 ${time(feedAt)}`}/>
       </section>
 
       <div className="fr-two">
