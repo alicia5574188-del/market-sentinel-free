@@ -4,12 +4,12 @@ import { MEMBERS_VERSION, MEMBER_LIMIT, MEMBER_ACTIVE_LIMIT, digestMember, rando
 import type { CloudflareEnv } from "./index-clean.ts";
 import type { ForwardState, Trade, forwardSummary } from "../lib/forward-relations.ts";
 export type MemberUsage={notional:number|null;fills:number;through:number|null;reportedAt:number;partial:boolean;error:boolean};
-export type MemberRecord={id:string;label:string;createdAt:number;activatedAt:number|null;lastLoginAt:number|null;keyHash:string;keyVersion:number;usage:MemberUsage|null};
+export type MemberRecord={id:string;label:string;createdAt:number;activatedAt:number|null;lastLoginAt:number|null;keyHash:string;keyVersion:number;usage:MemberUsage|null;revokedAt?:number|null};
 export type MemberFeed={version:string;at:number;healthy:boolean;error:string|null;state:ForwardState|null;
   view:ReturnType<typeof forwardSummary>|null;metadata:Record<string,unknown>;ticks:Record<string,number>;evidence:Record<string,unknown>;
   ownerAccountHash:string|null;sourceStatus:{state:string;lastSuccessAt:number|null;stale:boolean};};
 const json=(v:unknown,status=200)=>Response.json(v,{status,headers:{"Cache-Control":"no-store"}});
-const publicRecord=(m:MemberRecord)=>({id:m.id,label:m.label,createdAt:m.createdAt,activatedAt:m.activatedAt,lastLoginAt:m.lastLoginAt,usage:m.usage});
+const publicRecord=(m:MemberRecord)=>({id:m.id,label:m.label,createdAt:m.createdAt,activatedAt:m.activatedAt,lastLoginAt:m.lastLoginAt,usage:m.usage,revokedAt:m.revokedAt??null});
 
 /** Separate namespace: registration/aggregation has no primary trade authority.
  * /feed is one bounded shared read, independent of the number of friends.
@@ -48,11 +48,15 @@ export class MemberDirectory extends DurableObject<CloudflareEnv> {
         const key=`MS-${randomHex(32)}`,id=`m_${randomHex(16)}`,keyHash=await digestMember(key);
         const sealed=await encryptMemberText(key,root,`current-key:${id}`);
         const result=await this.ctx.storage.transaction(async tx=>{
-          const prior=await tx.get<string>(`issue:${b.requestId}`);
-          if(prior)return {id:prior,repeated:true};
+          const issueKey=`issue:${b.requestId}`,prior=await tx.get<string>(issueKey);
+          if(prior) {
+            const existing=await tx.get<MemberRecord>(`member:${prior}`);
+            if(existing)return {id:prior,repeated:true};
+            await tx.delete(issueKey);
+          }
           const total=(await tx.get<number>("member-count"))??0;
           if(total>=MEMBER_LIMIT)throw new Error(`首批登录账户容量${MEMBER_LIMIT}位已满；不会影响已有用户，请先评估资源后扩容`);
-          const row:MemberRecord={id,label:label||`朋友${String(total+1).padStart(2,"0")}`,createdAt:now,activatedAt:null,lastLoginAt:null,keyHash,keyVersion:1,usage:null};
+          const row:MemberRecord={id,label:label||`朋友${String(total+1).padStart(2,"0")}`,createdAt:now,activatedAt:null,lastLoginAt:null,keyHash,keyVersion:1,usage:null,revokedAt:null};
           await tx.put({[`member:${id}`]:row,[`key:${keyHash}`]:id,[`issue:${b.requestId}`]:id,"member-count":total+1,"current-key":{id,sealed}});
           return {id,repeated:false};
         });
@@ -67,13 +71,48 @@ export class MemberDirectory extends DurableObject<CloudflareEnv> {
           current:current?{id:current.id,loginKey:await decryptMemberText(current.sealed,root,`current-key:${current.id}`)}:null,
           memberLimit:MEMBER_LIMIT,activeLimit:MEMBER_ACTIVE_LIMIT,activeCount:(await this.ctx.storage.get<string[]>("execution-seats"))?.length??0});
       }
+      if(p==="/admin-identity") {
+        const id=url.searchParams.get("id");if(!validMemberId(id))return json({error:"账户无效"},400);
+        const m=await this.readMember(id);return m?json({id:m.id,version:m.keyVersion,label:m.label,createdAt:m.createdAt,revokedAt:m.revokedAt??null}):json({error:"账户不存在"},404);
+      }
+      if(p==="/begin-delete"&&request.method==="POST") {
+        const id=url.searchParams.get("id");if(!validMemberId(id))return json({error:"账户无效"},400);
+        const value=await this.ctx.storage.transaction(async tx=>{
+          const row=await tx.get<MemberRecord>(`member:${id}`);if(!row)throw new Error("账户不存在");
+          if(row.revokedAt)return {id,revokedAt:row.revokedAt,repeated:true};
+          const current=await tx.get<{id:string}>("current-key");
+          await tx.put(`member:${id}`,{...row,keyVersion:row.keyVersion+1,revokedAt:now});
+          await tx.delete(`key:${row.keyHash}`);
+          if(current?.id===id)await tx.delete("current-key");
+          return {id,revokedAt:now,repeated:false};
+        });
+        return json({ok:true,...value});
+      }
+      if(p==="/finalize-delete"&&request.method==="POST") {
+        const id=url.searchParams.get("id");if(!validMemberId(id))return json({error:"账户无效"},400);
+        const claims=await this.ctx.storage.list<string>({prefix:"gate:"}),issues=await this.ctx.storage.list<string>({prefix:"issue:"});
+        const claimKeys=[...claims].filter(([,owner])=>owner===id).map(([key])=>key);
+        const issueKeys=[...issues].filter(([,owner])=>owner===id).map(([key])=>key);
+        await this.ctx.storage.transaction(async tx=>{
+          const row=await tx.get<MemberRecord>(`member:${id}`);if(!row)throw new Error("账户不存在");
+          if(!row.revokedAt)throw new Error("账户尚未进入安全删除状态");
+          const current=await tx.get<{id:string}>("current-key"),seats=await tx.get<string[]>("execution-seats")??[];
+          const total=(await tx.get<number>("member-count"))??0;
+          const keys=[`member:${id}`,`key:${row.keyHash}`,...claimKeys,...issueKeys];
+          if(current?.id===id)keys.push("current-key");
+          await tx.delete(keys);
+          const nextSeats=seats.filter(v=>v!==id);if(nextSeats.length!==seats.length)await tx.put("execution-seats",nextSeats);
+          await tx.put("member-count",Math.max(0,total-1));
+        });
+        return json({ok:true,id,deleted:true});
+      }
       if(p==="/login"&&request.method==="POST") {
         const b=await request.json<{key?:unknown;bucket?:string}>(),bucket=b.bucket??"unknown";
         if(!/^[a-f0-9]{64}$/.test(bucket))return json({error:"请求无效"},400);
         const rate=this.failures.get(bucket);if(rate&&rate.reset>now&&rate.n>=20)return json({error:"尝试过于频繁，请稍后再试"},429);
         const key=parseLoginKey(b.key),hash=await digestMember(key??"invalid");
         const id=key?await this.ctx.storage.get<string>(`key:${hash}`):null,m=id?await this.readMember(id):null;
-        if(!m||!equalSecret(hash,m.keyHash)) {
+        if(!m||m.revokedAt||!equalSecret(hash,m.keyHash)) {
           this.failures.set(bucket,{n:rate&&rate.reset>now?rate.n+1:1,reset:rate?.reset&&rate.reset>now?rate.reset:now+15*60000});
           if(this.failures.size>500)this.failures.delete(this.failures.keys().next().value!);
           return json({error:"登录密钥无效"},401);
@@ -87,7 +126,7 @@ export class MemberDirectory extends DurableObject<CloudflareEnv> {
       }
       const id=url.searchParams.get("id");if(!validMemberId(id))return json({error:"账户无效"},400);
       const m=await this.readMember(id);if(!m)return json({error:"账户不存在"},401);
-      if(p==="/identity")return json({id:m.id,version:m.keyVersion,label:m.label,createdAt:m.createdAt});
+      if(p==="/identity")return m.revokedAt?json({error:"账户已删除或正在删除"},401):json({id:m.id,version:m.keyVersion,label:m.label,createdAt:m.createdAt});
       if(p==="/feed")return json(await this.feed(url.searchParams.get("view")==="1"));
       if(p==="/source-close"&&request.method==="POST") {
         // Every lookup is bounded and only uses already-closed primary records.
@@ -105,6 +144,7 @@ export class MemberDirectory extends DurableObject<CloudflareEnv> {
       if(p==="/seat"&&request.method==="POST") {
         const b=await request.json<{enabled:boolean}>();
         if(typeof b.enabled!=="boolean")return json({error:"参数无效"},400);
+        if(m.revokedAt&&b.enabled)return json({error:"账户正在删除，不能重新开启实盘席位"},409);
         await this.ctx.storage.transaction(async tx=>{
           const seats=await tx.get<string[]>("execution-seats")??[];
           if(b.enabled&&!seats.includes(id)&&seats.length>=MEMBER_ACTIVE_LIMIT)throw new Error(`会员实盘安全容量为${MEMBER_ACTIVE_LIMIT}个并行账户，已有账户和主账户不受影响`);
@@ -114,6 +154,7 @@ export class MemberDirectory extends DurableObject<CloudflareEnv> {
       }
       if(p==="/claim-account"&&request.method==="POST") {
         const b=await request.json<{accountHash:string}>();if(!/^[a-f0-9]{64}$/.test(b.accountHash))return json({error:"账户标识无效"},400);
+        if(m.revokedAt)return json({error:"账户正在删除，不能绑定新的Gate账户"},409);
         const feed=await this.feed();
         if(!feed.ownerAccountHash)throw new Error("主账户身份尚未完成隔离核对，请稍后保存API");
         if(b.accountHash===feed.ownerAccountHash)throw new Error("不能将主账户的Gate账户绑定给会员");
