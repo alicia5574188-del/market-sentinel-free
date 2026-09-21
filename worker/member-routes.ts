@@ -4,7 +4,7 @@
 import type { CloudflareEnv } from "./index-clean.ts";
 import { verifyOwnerSession, sameOriginMutation, clearOwnerSessionCookie } from "../lib/owner-auth.ts";
 import { MEMBERS_VERSION, verifyMemberSession, issueMemberSession, memberCookie, clearMemberCookie, digestMember } from "../lib/member-auth.ts";
-type Identity={id:string;version:number;label:string;createdAt:number};
+type Identity={id:string;version:number;label:string;createdAt:number;followBlockedAt?:number|null;revokedAt?:number|null};
 const json=(v:unknown,status=200,headers?:HeadersInit)=>Response.json(v,{status,headers:{"Cache-Control":"no-store",...headers}});
 const cachedIdentity=new Map<string,{value:Identity;at:number}>();
 const rates=new Map<string,{count:number;at:number}>();
@@ -28,23 +28,75 @@ export async function memberRoutes(request:Request,env:CloudflareEnv):Promise<Re
   const u=new URL(request.url),path=u.pathname;if(!path.startsWith("/api/"))return null;
   const owner=!!env.OWNER_ACCESS_TOKEN&&await verifyOwnerSession(request,env.OWNER_ACCESS_TOKEN);
   try {
-    if(path==="/api/members/admin"||path==="/api/members/issue") {
-      if(!owner)return json({error:"仅主账户可以发放登录密钥或查看会员成交额"},403);
-      if(!env.MEMBERS)return json({error:"会员服务未部署"},503);
-      if(path.endsWith("/admin")&&request.method==="GET")return env.MEMBERS.getByName("directory").fetch("https://members/overview");
-      if(path.endsWith("/issue")&&request.method==="POST") {
-        if(!sameOriginMutation(request))return json({error:"请求来源验证失败"},403);
-        const b=await smallJson(request);
-        return env.MEMBERS.getByName("directory").fetch("https://members/issue",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({label:b.label,requestId:b.requestId})});
+    if(["/api/members/admin","/api/members/issue","/api/members/invite/rotate","/api/members/stop","/api/members/resume","/api/members/delete"].includes(path)) {
+      if(!owner)return json({error:"仅主账户可以管理会员"},403);
+      if(!env.MEMBERS||!env.MEMBER_EXECUTION)return json({error:"会员服务未部署"},503);
+      const directory=env.MEMBERS.getByName("directory");
+      if(path==="/api/members/admin"&&request.method==="GET")return directory.fetch("https://members/overview");
+      if(request.method!=="POST")return json({error:"不支持此操作"},405);
+      if(!sameOriginMutation(request))return json({error:"请求来源验证失败"},403);
+      const b=await smallJson(request);
+      if(path==="/api/members/issue")
+        return directory.fetch("https://members/issue",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({label:b.label,requestId:b.requestId})});
+      if(path==="/api/members/invite/rotate")
+        return directory.fetch("https://members/rotate-invite",{method:"POST"});
+      const id=typeof b.id==="string"?b.id:"";
+      const identityResponse=await directory.fetch(`https://members/admin-identity?id=${encodeURIComponent(id)}`);
+      if(!identityResponse.ok)return identityResponse;
+      const m=await identityResponse.json<Identity>();
+      const internal=new Headers({"x-verified-member":m.id,"x-member-created-at":String(m.createdAt),
+        "x-member-label":encodeURIComponent(m.label),"x-member-admin":"owner","Content-Type":"application/json"});
+      const actor=env.MEMBER_EXECUTION.getByName(`member:${m.id}`);
+      if(path==="/api/members/stop") {
+        const blocked=await directory.fetch(`https://members/follow-block?id=${encodeURIComponent(m.id)}`,{method:"POST",
+          headers:{"Content-Type":"application/json"},body:JSON.stringify({blocked:true})});
+        if(!blocked.ok)return blocked;
+        const stopped=await actor.fetch("https://member-execution/admin-stop",{method:"POST",headers:internal});
+        const value=await stopped.json<Record<string,unknown>>();
+        return json({...value,followBlocked:true},stopped.ok?200:409);
       }
-      return json({error:"不支持此操作"},405);
+      if(path==="/api/members/resume") {
+        const resumed=await directory.fetch(`https://members/follow-block?id=${encodeURIComponent(m.id)}`,{method:"POST",
+          headers:{"Content-Type":"application/json"},body:JSON.stringify({blocked:false})});
+        if(!resumed.ok)return resumed;
+        return json({ok:true,followBlocked:false,note:"仅恢复开启权限，不会自动开启该会员实盘"});
+      }
+      // Safe deletion is deliberately two-stage. First block new risk and ask
+      // the executor to turn OFF. Existing positions keep their stop/source-exit
+      // lifecycle. Only an already-flat account is revoked and physically erased.
+      const blocked=await directory.fetch(`https://members/follow-block?id=${encodeURIComponent(m.id)}`,{method:"POST",
+        headers:{"Content-Type":"application/json"},body:JSON.stringify({blocked:true})});
+      if(!blocked.ok)return blocked;
+      const stopped=await actor.fetch("https://member-execution/admin-stop",{method:"POST",headers:internal});
+      const stopValue=await stopped.json<Record<string,unknown>>();
+      const ready=await actor.fetch("https://member-execution/admin-delete-ready",{method:"POST",headers:internal});
+      const readyValue=await ready.json<Record<string,unknown>>();
+      if(!ready.ok)return json({...readyValue,followBlocked:true,stop:stopValue,draining:true},409);
+      const revoked=await directory.fetch(`https://members/begin-delete?id=${encodeURIComponent(m.id)}`,{method:"POST"});
+      if(!revoked.ok)return revoked;
+      const readyAgain=await actor.fetch("https://member-execution/admin-delete-ready",{method:"POST",headers:internal});
+      if(!readyAgain.ok)return json({...(await readyAgain.json<Record<string,unknown>>()),followBlocked:true,revoked:true,draining:true},409);
+      const cleared=await actor.fetch("https://member-execution/admin-delete-finalize",{method:"POST",headers:internal});
+      if(!cleared.ok)return cleared;
+      const finalized=await directory.fetch(`https://members/finalize-delete?id=${encodeURIComponent(m.id)}`,{method:"POST"});
+      return finalized;
+    }
+    if(path==="/api/members/register"&&request.method==="POST") {
+      if(!sameOriginMutation(request))return json({error:"请求来源验证失败"},403);
+      if(!env.MEMBERS||!env.MEMBER_EXECUTION||!env.OWNER_ACCESS_TOKEN)return json({error:"会员服务未部署"},503);
+      const b=await smallJson(request),r=await env.MEMBERS.getByName("directory").fetch("https://members/register",{method:"POST",
+        headers:{"Content-Type":"application/json"},body:JSON.stringify({inviteCode:b.inviteCode,username:b.username,password:b.password,requestId:b.requestId})});
+      if(!r.ok)return r;
+      const value=await r.json<{member:Identity}>(),m=value.member,cookie=memberCookie(await issueMemberSession(env.OWNER_ACCESS_TOKEN,m.id,m.version??1));
+      const headers=new Headers({"Cache-Control":"no-store"});headers.append("Set-Cookie",cookie);headers.append("Set-Cookie",clearOwnerSessionCookie());
+      return Response.json({configured:true,authenticated:true,role:"member",username:m.label,memberId:m.id,version:MEMBERS_VERSION},{headers});
     }
     if(path==="/api/members/login"&&request.method==="POST") {
       if(!sameOriginMutation(request))return json({error:"请求来源验证失败"},403);
       if(!env.MEMBERS||!env.MEMBER_EXECUTION||!env.OWNER_ACCESS_TOKEN)return json({error:"会员服务未部署"},503);
       const b=await smallJson(request),ip=request.headers.get("CF-Connecting-IP")??"unknown";
       const r=await env.MEMBERS.getByName("directory").fetch("https://members/login",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({key:b.key,bucket:await digestMember(`login:${ip}`)})});
+        body:JSON.stringify({username:b.username,password:b.password,key:b.key,bucket:await digestMember(`login:${ip}`)})});
       if(!r.ok)return r;
       const m=await r.json<Identity>();const cookie=memberCookie(await issueMemberSession(env.OWNER_ACCESS_TOKEN,m.id,m.version));
       const headers=new Headers({"Cache-Control":"no-store"});headers.append("Set-Cookie",cookie);headers.append("Set-Cookie",clearOwnerSessionCookie());
