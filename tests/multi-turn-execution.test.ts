@@ -48,21 +48,23 @@ test("a confirmed 5m turn cannot close a 1h-owned position",()=>{
   assert.equal(s.positions.length,1);
 });
 
-test("release-344 does not add an independent profit-giveback exit",()=>{
+test("observed profit gets a monotonic giveback floor before it can fall back to hard stop",()=>{
   const p=candles(),now=(p.at(-1)!.time+300)*1000+1000,quotes={BTC_USDT:q(p,now)};
   let s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},quotes,contracts:{BTC_USDT:meta}}).state;
   assert.ok(s.positions.length);
   const t=s.positions[0],riskRate=t.plannedRisk/t.notional;
-  t.favorable=riskRate*3.2;
+  t.favorable=riskRate*2.2;
   const frame=s.turnEngine!.frames.BTC_USDT![t.turn!.timeframe]!;
   frame.direction=t.side;frame.rawDirection=t.side;frame.phase="FLOW";frame.lastTurnAt=null;frame.justTurned=false;
+  frame.continuationScore=.35;frame.triggerProbability=.48;frame.directionConfidence=.38;
   s.lastCycleAt=now;
-  const ret=riskRate*.5,px=t.entryPrice*(t.side==="LONG"?1+ret:1-ret),later=now+1000;
+  const ret=riskRate*.25,px=t.entryPrice*(t.side==="LONG"?1+ret:1-ret),later=now+1000;
   s=advanceForward({state:s,now:later,paths:{BTC_USDT:p},
     quotes:{BTC_USDT:{bestBid:px*.99999,bestAsk:px*1.00001,observedAt:later,fresh:true,entryReady:true}},contracts:{BTC_USDT:meta}}).state;
-  assert.equal(s.positions.length,1,
-    "release-344 keeps managing by hard stop, owning-timeframe turn or safety lifetime instead of a later profit-floor patch");
-  assert.equal(s.history.some(x=>x.exitAudit?.trigger==="PROFIT_GIVEBACK"),false);
+  assert.equal(s.positions.length,0);
+  assert.equal(s.history[0].exitAudit?.trigger,"PROFIT_GIVEBACK");
+  assert.match(s.history[0].exitReason??"",/利润路径保护/);
+  assert.ok((s.history[0].profitProtection?.floorRate??0)>0);
 });
 
 test("the owning timeframe confirmed turn exits its own position without waiting for a fixed horizon",()=>{
