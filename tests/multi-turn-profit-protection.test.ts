@@ -50,3 +50,24 @@ test("first meaningful protection remains positive after modeled costs",()=>{
   assert.ok(floor.floorRate<.013);
   assert.ok(floor.checkpointBand>=0);
 });
+
+
+test("weak time-space value tightens an observed winner more than continuation alone",()=>{
+  const base=multiTurnProfitFloor(.0431,.0383,.0033,{
+    continuationScore:.46,turnProbability:.13,phase:"FLOW",rawDirectionAligned:true,
+    edgeRatio:1.4,directionStrength:.46,turnRisk:.13,ageRatio:.28,
+  })!;
+  const weak=multiTurnProfitFloor(.0431,.0383,.0033,{
+    continuationScore:.34,turnProbability:.48,phase:"WATCH",rawDirectionAligned:false,
+    edgeRatio:.55,directionStrength:.30,turnRisk:.52,ageRatio:.8,
+  })!;
+  assert.ok(base.floorRate>.015);
+  assert.ok(weak.floorRate>base.floorRate);
+  assert.ok(weak.retentionRate>.60);
+});
+
+test("wide-stop winners arm before four percent so large-cycle positions cannot occupy a slot while returning all progress",()=>{
+  const floor=multiTurnProfitFloor(.028,.083,.0022,{continuationScore:.5,turnProbability:.25,phase:"FLOW",rawDirectionAligned:true})!;
+  assert.ok(floor.activationRate<=.025);
+  assert.ok(floor.floorRate>.0022);
+});
