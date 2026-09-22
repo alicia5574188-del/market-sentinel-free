@@ -323,7 +323,7 @@ test("full-risk rotation atomically replaces one clearly weak holding and cannot
     trendSlopeScore:92,structureScore:90,pathEfficiency:90,momentumPersistence:90,pullbackResilience:90,
     grossRemainingSpaceRate:.04,netRemainingSpaceRate:.0378,statisticalRemainingSpaceRate:.05,structuralSpaceRate:.04,
     pullbackRiskRate:.01,edgeRatio:3.78,legMoveRate:.001,expectedLegRate:.05,legUtilization:.02,
-    turnRisk:.10,turnPenalty:0,stopRate:.012,riskCap:TURN_CONFIG[tf].riskCap,reason:"rotation opportunity fixture",
+    turnRisk:.10,turnPenalty:0,stopRate:.012,stopPrice:98.8,stopPenalty:0,riskCap:TURN_CONFIG[tf].riskCap,reason:"rotation opportunity fixture",
     anchorPrice:99.9,anchorAt:completedAt-900_000,anchorConfirmedAt:completedAt-300_000,anchorQuality:92,anchorAgeBars:4,
     anchorMfeRate:.05,anchorMaeRate:.004,anchorProfitRatio:12.5,anchorFirstProfitBars:1,anchorRetentionRate:.85,
     distanceFromAnchorRate:.001,maxEntryDistanceRate:.01
