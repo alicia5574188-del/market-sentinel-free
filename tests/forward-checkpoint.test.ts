@@ -101,7 +101,7 @@ test("dynamic Multi-Turn profit floor survives a compact restart overlay without
   assert.equal(restored.positions[0].favorable,.08);
 });
 
-test("unified exit Worker persists a newly armed Multi-Turn profit floor without closing a healthy winner",async()=>{
+test("Multi-Turn arms and restores a profit floor, including a legacy deferred migration",async()=>{
   const start=Date.parse("2026-09-21T00:00:00Z");
   const rows=Array.from({length:360},(_,i)=>{
     const close=100*Math.exp(i*.0008),open=close/1.0008;
@@ -113,17 +113,62 @@ test("unified exit Worker persists a newly armed Multi-Turn profit floor without
     contracts:{BTC_USDT:{quantoMultiplier:.001,leverageMax:50,maintenanceRate:.005,minContracts:1}}}).state;
   assert.equal(state.positions.length,1);
   const trade=state.positions[0],frame=state.turnEngine!.frames.BTC_USDT[trade.turn!.timeframe]!;
-  frame.continuationScore=.78;frame.triggerProbability=.10;frame.directionConfidence=.88;
-  frame.direction=trade.side;frame.rawDirection=trade.side;frame.phase="FLOW";frame.lastTurnAt=null;state.lastCycleAt=now;
+  frame.continuationScore=.55;frame.triggerProbability=.20;frame.direction=trade.side;frame.rawDirection=trade.side;
+  frame.phase="FLOW";frame.lastTurnAt=null;state.lastCycleAt=now;
+  trade.profitProtectionMigration={version:"multi-turn-profit-floor-v4",state:"DEFERRED",updatedAt:now,baselineFavorable:0};
+  state.storage={persistedAt:now,error:null};
   const px=trade.entryPrice*(trade.side==="LONG"?1.035:.965),at=now+10_000;
   const next=advanceForward({state,now:at,paths:{},
     quotes:{BTC_USDT:{bestBid:px*.99999,bestAsk:px*1.00001,observedAt:at,fresh:true,entryReady:true}},contracts:{}});
 
   assert.equal(next.state.positions.length,1);
   assert.ok(next.state.positions[0].profitProtection);
-  assert.ok((next.state.positions[0].profitProtection?.floorRate??0)>0);
+  assert.equal(next.state.positions[0].profitProtectionMigration?.state,"CURRENT");
   assert.equal(next.protectionChanged,true);
-  assert.equal(next.state.history.some(x=>x.exitAudit?.trigger==="PROFIT_GIVEBACK"),false);
+  const store=new Memory();await store.put((await prepareForwardWrite(null,state,now,{compact:true})).entries);
+  await store.put(prepareForwardProtectionWrite(next.state).entries);
+  const restored=await readForwardStore(store,at+1000);
+  assert.deepEqual(restored.positions[0].profitProtection,next.state.positions[0].profitProtection);
+  assert.equal(restored.positions[0].profitProtectionMigration?.state,"CURRENT");
+  const floor=restored.positions[0].profitProtection!.floorRate;
+  const exitPx=trade.entryPrice*(trade.side==="LONG"?1+floor*.5:1-floor*.5),exitAt=at+2000;
+  const input={now:exitAt,paths:{},contracts:{},quotes:{BTC_USDT:{bestBid:exitPx*.99999,
+    bestAsk:exitPx*1.00001,observedAt:exitAt,fresh:true}}};
+  const restarted=advanceForward({...input,state:restored}).state;
+  const continuous=advanceForward({...input,state:next.state}).state;
+  assert.equal(restarted.positions.length,0);
+  assert.equal(restarted.history[0].exitAudit?.trigger,"PROFIT_GIVEBACK");
+  assert.equal(restarted.history[0].netPnl,continuous.history[0].netPnl);
+});
+
+test("every deployed profit version loads through the complete full-record and overlay restart path",async()=>{
+  for(const compact of [false,true])for(const version of ["multi-turn-profit-floor-v3","multi-turn-profit-floor-v4"] as const){
+    const s=account();s.storage={persistedAt:T,error:null};s.lastQuoteCycleAt=T+1000;
+    const t=s.positions[0];t.favorable=.08;
+    t.profitProtection={version,reachedR:4,lockedR:2,floorRate:.04,retentionRate:.5,activationRate:.012,
+      checkpointBand:8,mode:"NORMAL",peakR:4,updatedAt:T+1000};
+    t.profitProtectionMigration={version,state:"GUARDED",updatedAt:T+1000,baselineFavorable:.08};
+    const store=new Memory();await store.put((await prepareForwardWrite(null,s,T,{compact})).entries);
+    assert.deepEqual(await readForwardStore(store,T+2000),s);
+    const next=structuredClone(s);next.lastQuoteCycleAt=T+2000;
+    next.positions[0].profitProtection={...t.profitProtection,version:MULTI_TURN_PROFIT_PROTECTION_VERSION,
+      floorRate:.05,lockedR:2.5,retentionRate:.625,checkpointBand:10,updatedAt:T+2000};
+    await store.put(prepareForwardProtectionWrite(next).entries);
+    const restarted=await readForwardStore(store,T+3000);
+    assert.equal(restarted.positions[0].profitProtection!.floorRate,.05);
+    for(const key of ["startedAt","balance","history","revision","turnover"] as const)assert.deepEqual(restarted[key],s[key]);
+    // Reading another time cannot silently discard or downgrade the overlay.
+    assert.deepEqual(await readForwardStore(store,T+4000),restarted);
+  }
+});
+
+test("unknown profit versions remain a visible storage error instead of resetting the account",async()=>{
+  const s=account();s.storage={persistedAt:T,error:null};
+  s.positions[0].profitProtectionMigration={version:"multi-turn-profit-floor-v4",state:"DEFERRED",updatedAt:T,baselineFavorable:0};
+  (s.positions[0].profitProtectionMigration as {version:string}).version="future-unknown";
+  const store=new Memory();await store.put((await prepareForwardWrite(null,s,T,{compact:true})).entries);
+  await assert.rejects(()=>readForwardStore(store,T+1000),/未知Multi-Turn利润保护迁移版本/);
+  assert.equal(store.writes.length,1);
 });
 
 test("guarded and deferred adaptive-profit migration state survives compact restart",()=>{

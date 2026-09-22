@@ -2,9 +2,7 @@
  * strategy or financial ledger. The full atomic forward record stays authority.
  */
 import type { ForwardState, Trade } from "./forward-relations.ts";
-import { MULTI_TURN_PROFIT_PROTECTION_VERSION } from "./multi-turn-profit-protection.ts";
-const LEGACY_MULTI_TURN_PROFIT_PROTECTION_VERSION="multi-turn-profit-floor-v3";
-const supportedProfitVersion=(value:unknown)=>value===MULTI_TURN_PROFIT_PROTECTION_VERSION||value===LEGACY_MULTI_TURN_PROFIT_PROTECTION_VERSION;
+import { supportedProfitVersion } from "./multi-turn-profit-protection.ts";
 
 export const FORWARD_PROTECTION_CHECKPOINT_VERSION = "forward-protection-checkpoint-v1";
 type ProtectionRow = Pick<Trade, "id" | "openedAt" | "favorable" | "adverse" | "lastPrice" | "lastQuoteAt"

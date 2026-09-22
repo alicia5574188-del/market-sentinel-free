@@ -1,18 +1,19 @@
-export const MULTI_TURN_PROFIT_PROTECTION_VERSION="multi-turn-profit-floor-v4";
+export const MULTI_TURN_PROFIT_PROTECTION_VERSION="multi-turn-profit-floor-v3";
+// Persisted v3 and v4 share the same record shape. A policy rollback must not
+// make either deployed generation unreadable or erase an existing floor.
+export type MultiTurnProfitVersion=typeof MULTI_TURN_PROFIT_PROTECTION_VERSION|"multi-turn-profit-floor-v4";
+export const supportedProfitVersion=(value:unknown):value is MultiTurnProfitVersion=>
+  value===MULTI_TURN_PROFIT_PROTECTION_VERSION||value==="multi-turn-profit-floor-v4";
 
 export type MultiTurnProfitSignal={
   continuationScore?:number|null;
   turnProbability?:number|null;
   phase?:string|null;
   rawDirectionAligned?:boolean|null;
-  edgeRatio?:number|null;
-  directionStrength?:number|null;
-  turnRisk?:number|null;
-  ageRatio?:number|null;
 };
 
 export type MultiTurnProfitFloor={
-  version:typeof MULTI_TURN_PROFIT_PROTECTION_VERSION;
+  version:MultiTurnProfitVersion;
   reachedR:number;
   lockedR:number;
   floorRate:number;
@@ -30,9 +31,9 @@ export type MultiTurnTradeProfitProtection=MultiTurnProfitFloor&{
 const clip=(v:number,a:number,b:number)=>Math.min(b,Math.max(a,v));
 
 function baseRetention(reachedR:number){
-  if(reachedR<.60)return .18;
-  if(reachedR<1)return .22+(reachedR-.60)/.40*.18;
-  return Math.min(.78,.42+.13*Math.log2(Math.max(1,reachedR)));
+  if(reachedR<.60)return .15;
+  if(reachedR<1)return .18+(reachedR-.60)/.40*.20;
+  return Math.min(.74,.38+.12*Math.log2(Math.max(1,reachedR)));
 }
 
 function signalAdjustment(signal?:MultiTurnProfitSignal|null){
@@ -49,11 +50,6 @@ function signalAdjustment(signal?:MultiTurnProfitSignal|null){
   if(turn!=null&&turn>=.45){adjustment+=.06;weak=true;}
   if(phase==="WATCH"||phase==="TURNING"){adjustment+=.06;weak=true;}
   if(signal.rawDirectionAligned===false){adjustment+=.08;weak=true;}
-  if(signal.edgeRatio!=null&&signal.edgeRatio<1){adjustment+=.10;weak=true;}
-  if(signal.edgeRatio!=null&&signal.edgeRatio<.70){adjustment+=.12;weak=true;}
-  if(signal.directionStrength!=null&&signal.directionStrength<.40){adjustment+=.08;weak=true;}
-  if(signal.turnRisk!=null&&signal.turnRisk>=.45){adjustment+=.08;weak=true;}
-  if(signal.ageRatio!=null&&signal.ageRatio>=1&&signal.edgeRatio!=null&&signal.edgeRatio<1.20){adjustment+=.06;weak=true;}
   const mode=weak?"WEAKENING":adjustment<=-.06?"STRONG_TREND":adjustment<0?"HEALTHY_TREND":"NORMAL";
   return{adjustment,mode} as const;
 }
@@ -79,10 +75,10 @@ export function multiTurnProfitFloor(
   if(favorable<activationRate)return null;
 
   const {adjustment,mode}=signalAdjustment(signal);
-  const minRetention=reachedR>=1?.35:.15;
-  const retentionRate=clip(baseRetention(reachedR)+adjustment,minRetention,.88);
+  const minRetention=reachedR>=1?.30:.12;
+  const retentionRate=clip(baseRetention(reachedR)+adjustment,minRetention,.82);
   const costPositiveFloor=modeledCost+.0010;
-  const breathingRoom=Math.max(.0015,.10*riskRate);
+  const breathingRoom=Math.max(.0015,.12*riskRate);
   const floorRate=Math.min(favorable-breathingRoom,Math.max(favorable*retentionRate,costPositiveFloor));
   if(!(floorRate>modeledCost&&floorRate<favorable))return null;
   const lockedR=floorRate/riskRate;

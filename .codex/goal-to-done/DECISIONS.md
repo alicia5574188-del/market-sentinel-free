@@ -1,3 +1,11 @@
+# 2026-09-22 — compatibility before policy rollback
+
+Both full-account normalization and compact overlay must accept deployed v3/v4.
+Do not bare-deploy PR375: v4 state may already exist. Remove correlated hold-value
+profit scoring, preserve monotonic stored floors, require post-entry frame proof
+for new early invalidation. Combine recovery and tested replacement in one main
+release to avoid repeated cold starts. Scope/evidence: EXIT_RECOVERY_2026-09-22.md.
+
 # 2026-09-21 — audit boundary and cold-start recovery (current)
 
 User approval covers verified defect repairs and the existing GitHub/main/Cloudflare release; no strategy change. PR #366 is deployed and verified. The follow-up treats absent/empty contract catalog as unavailable data before state mutation, using the existing failed-radar path. Do not reject an empty *ranked* result: valid low-volatility data can legitimately produce no eligible markets under the existing strategy. Preserve all cadence, retry, ranking, execution and account rules. The initial hypothesis that lastUniverseAt was restored was disproved: the constructor already resets it, and the failure is the later catalog-missing success path.
