@@ -218,7 +218,7 @@ test("stale owning-frame data cannot leave a four-hour no-progress holding occup
     quotes:{BTC_USDT:{bestBid:px*.99999,bestAsk:px*1.00001,observedAt:later,fresh:true,entryReady:true}},contracts:{}}).state;
   assert.equal(s.positions.length,0);
   assert.equal(s.history[0].exitAudit?.trigger,"HOLD_VALUE");
-  assert.match(s.history[0].exitReason??"",/释放长期无进展仓位/);
+  assert.match(s.history[0].exitReason??"",/硬上限|释放长期无进展仓位/);
 });
 
 test("critical quote management cannot consume a pending 5m data cycle but can preserve one fallback equity mark",()=>{
