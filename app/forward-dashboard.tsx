@@ -62,13 +62,13 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice("后台运行中 · ".length):statusLabel??(healthy?"正常":"行情重连中");
   return <main className="fr-app" style={fontStyle} data-ui-version="dark-live-v1" data-record-view="compact-records-pnl-v1">
     <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · 多周期转折引擎</b><small>DIRECTION / SPACE + TURN RISK</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
-    <div className="fr-subhead"><span>Gate USDT 永续 · 六周期方向 / 空间评分 · 转折风控</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
+    <div className="fr-subhead"><span>Gate USDT 永续 · 5m / 15m / 30m / 1h 短线优势位置</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
     {memberName&&<p className="fr-note">{memberName} · 共用同一模拟策略，实盘账户独立，开关只由你控制。</p>}
 
     {tab==="overview"&&<>
       <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">账户驾驶舱</span><h1>{systemStatus==="正常"?"系统正在正常运行":`系统状态：${systemStatus}`}</h1>
         <p>{data?.latestReason??"正在读取已持久化账户和真实行情状态。"}</p>
-        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>六周期方向独立评分</span><span>Top30动态市场</span><span>转折只做风险辅助</span><span>实盘{liveEnabled?"已开启":"关闭"}</span></div></div>
+        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>短线优势位置</span><span>Top30动态市场</span><span>4h / 日线不生成订单</span><span>实盘{liveEnabled?"已开启":"关闭"}</span></div></div>
         <div className="fr-equity"><small>模拟账户权益 · USDT</small><strong>{fmt(data?.equity)}</strong><div className={(data?.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(data?.netPnl)} <span>U · {signed(data?data.netPnl/data.initialEquity*100:null)}%</span></div>
           <footer><span>起点 {fmt(data?.initialEquity,0)}</span><span>最大回撤 {fmt(data?data.maxDrawdown*100:null)}%</span></footer></div></section>
 
@@ -98,39 +98,39 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       <section className="fr-section"><div className="fr-section-head"><div><small>最近变化</small><h2>需要留意的运行记录</h2></div><button className="fr-text-button" onClick={()=>select("journal")}>全部记录 ↗</button></div><Journal data={data} limit={3}/></section>
     </>}
 
-    {tab==="relations"&&<><PageTitle eyebrow="EXECUTION PIPELINE" title="执行" text="从Top30选币、六周期方向识别、入场评分、准备进场，到下单、持仓和退出管理。流程状态保持简洁，进场候选提供完整评分拆分。"/>
+    {tab==="relations"&&<><PageTitle eyebrow="SHORT-TERM EXECUTION" title="执行" text="只做5m / 15m / 30m / 1h短线。系统先找到已经被价格证明有效的多头或空头优势位置，再判断当前价格是否仍靠近该位置、前方净空间是否值得参与。"/>
 
       <section className="fr-section fr-exec-flow-section"><div className="fr-section-head"><div><small>当前执行层</small><h2>系统正在做什么</h2></div><span>{time(data?.updatedAt)}</span></div>
         <div className="fr-exec-flow">
-          <ExecStep index="01" title="选币" status={(data?.marketCount??0)>0?"已更新":"等待"} text={`Gate成交量Top30池：当前 ${fmt(data?.marketCount,0)} 个标的进入策略扫描。`}/>
-          <ExecStep index="02" title="方向识别" status={(data?.turnEngine?.diagnostics.readyFrames??0)>0?"分析中":"等待"} text={`正在更新5m / 15m / 30m / 1h / 4h / 日线方向，共 ${fmt(data?.turnEngine?.diagnostics.readyFrames,0)} 个可用周期状态。`}/>
-          <ExecStep index="03" title="入场评分" status={allEntryCandidates.length?"已评分":"等待"} text={`当前评分 ${allEntryCandidates.length} 个周期机会，${fmt(eligibleCount,0)} 个通过基础评分条件。`}/>
-          <ExecStep index="04" title="准备进场" status={preparedCandidates.length?"准备中":"等待"} text={preparedCandidates.length?`${preparedCandidates.length} 个候选进入准备进场层，等待风险额度、冷却与最终盘口检查。`:"当前没有候选进入准备进场层。"}/>
-          <ExecStep index="05" title="下单执行" status={(data?.entryDiagnostics?.opened??0)>0?"已开仓":"检查中"} text={(data?.entryDiagnostics?.opened??0)>0?`本轮已开仓 ${fmt(data?.entryDiagnostics?.opened,0)} 笔。`:`当前主要执行状态：${mainBlocker}。`}/>
+          <ExecStep index="01" title="选币" status={(data?.marketCount??0)>0?"已更新":"等待"} text={`Gate成交量Top30：当前 ${fmt(data?.marketCount,0)} 个标的进入短线扫描。`}/>
+          <ExecStep index="02" title="寻找优势位置" status={allEntryCandidates.length?"扫描中":"等待"} text="在5m / 15m / 30m / 1h里寻找已经出现过“很快浮赢、浮亏小”的价格位置。"/>
+          <ExecStep index="03" title="验证位置" status={allEntryCandidates.length?"已验证":"等待"} text={`当前找到 ${allEntryCandidates.length} 个有效多/空锚点；4h和日线不参与开仓。`}/>
+          <ExecStep index="04" title="检查距离 / 空间" status={preparedCandidates.length?"有机会":"检查中"} text={preparedCandidates.length?`${preparedCandidates.length} 个候选仍靠近优势位置，而且前方净空间足够。`:"当前候选距离优势位置过远，或剩余空间不足。"} />
+          <ExecStep index="05" title="准备进场 / 下单" status={preparedCandidates.length?"准备中":"等待"} text={(data?.entryDiagnostics?.opened??0)>0?`本轮已开仓 ${fmt(data?.entryDiagnostics?.opened,0)} 笔。`:`当前执行状态：${mainBlocker}。`}/>
           <ExecStep index="06" title="持仓 / 退出" status={(data?.positions.length??0)>0?"管理中":"等待持仓"} text={`管理 ${fmt(data?.positions.length,0)} 笔持仓；${protectedPositionCount} 笔已启用利润保护，${exitAttentionCount} 笔处于退出关注状态。`}/>
         </div>
       </section>
 
-      <section className="fr-section fr-prepared-section"><div className="fr-section-head"><div><small>READY TO ENTER</small><h2>准备进场</h2><p>这里表示已通过方向—空间评分层；真正下单前仍会继续检查账户风险、同币冷却和新鲜盘口。</p></div><span>{preparedCandidates.length} 个</span></div>
+      <section className="fr-section fr-prepared-section"><div className="fr-section-head"><div><small>READY TO ENTER</small><h2>准备进场</h2><p>只有“优势位置已经被市场证明 + 当前价格仍靠近该位置 + 剩余净空间足够”的标的才会进入这里。</p></div><span>{preparedCandidates.length} 个</span></div>
         {preparedCandidates.length?<div className="fr-prepared-grid">{preparedCandidates.map((x,index)=><article className="fr-prepared-card" key={`${x.symbol}:${x.timeframe}`}>
-          <header><div><small>#{index+1} · 总分 {fmt(x.score,0)}</small><h3>{x.symbol.replace("_"," / ")}</h3><p>{x.timeframe} · {x.side==="LONG"?"准备顺势做多":"准备顺势做空"}</p></div><b>准备进场</b></header>
-          <div className="fr-prepared-metrics"><span><small>方向强度</small><strong>{fmt(x.directionStrength,0)}</strong></span><span><small>净剩余空间</small><strong>{fmt(x.netRemainingSpaceRate*100,2)}%</strong></span><span><small>空间 / 风险</small><strong>{fmt(x.edgeRatio,2)}</strong></span><span><small>进场位置</small><strong>{fmt(x.positionScore,0)}</strong></span><span><small>执行质量</small><strong>{fmt(x.executionScore,0)}</strong></span><span><small>转折风险</small><strong>{fmt(x.turnRisk*100,1)}%</strong></span></div>
+          <header><div><small>#{index+1} · 交易分 {fmt(x.score,0)}</small><h3>{x.symbol.replace("_"," / ")}</h3><p>{x.timeframe} · {x.side==="LONG"?"多头优势位置":"空头优势位置"}</p></div><b>准备进场</b></header>
+          <div className="fr-prepared-metrics"><span><small>优势位置</small><strong>{fmt(x.anchorPrice,5)}</strong></span><span><small>锚点质量</small><strong>{fmt(x.anchorQuality,0)}</strong></span><span><small>当前离锚点</small><strong>{signed(x.distanceFromAnchorRate*100,2)}%</strong></span><span><small>允许最大距离</small><strong>{fmt(x.maxEntryDistanceRate*100,2)}%</strong></span><span><small>净剩余空间</small><strong>{fmt(x.netRemainingSpaceRate*100,2)}%</strong></span><span><small>空间 / 风险</small><strong>{fmt(x.edgeRatio,2)}</strong></span></div>
           <p>{x.reason}</p>
-        </article>)}</div>:<Empty title="当前没有准备进场标的" text={allEntryCandidates.length?"有候选正在评分或观察，但还没有进入准备进场层。":"正在等待下一轮选币、方向和空间评分。"}/>}
+        </article>)}</div>:<Empty title="当前没有准备进场标的" text={allEntryCandidates.length?"已经找到优势位置，但当前价格还没有同时满足“距离近 + 空间够”。":"正在等待新的短线优势位置被市场证明。"} />}
       </section>
 
-      <section className="fr-section fr-scoreboard-section"><div className="fr-section-head"><div><small>ENTRY SCOREBOARD</small><h2>入场候选评分榜</h2><p>默认只看排名和关键指标；展开单个候选可查看完整评分构成。</p></div><span>Top {entryCandidates.length}</span></div>
-        {entryCandidates.length?<div className="fr-scoreboard">{entryCandidates.map((x,index)=>{const held=openSymbols.has(x.symbol);const label=held?"已持仓":x.eligible?"准备进场":"观察";
+      <section className="fr-section fr-scoreboard-section"><div className="fr-section-head"><div><small>ANCHOR SCOREBOARD</small><h2>优势位置候选</h2><p>重点不是传统趋势强弱，而是这个位置是否曾经让正确方向迅速浮赢，以及现在还能不能以合理价格参与。</p></div><span>Top {entryCandidates.length}</span></div>
+        {entryCandidates.length?<div className="fr-scoreboard">{entryCandidates.map((x,index)=>{const held=openSymbols.has(x.symbol);const label=held?"已持仓":x.eligible?"准备进场":"等待位置";
           return <details className={`fr-score-row ${x.eligible?"is-eligible":""}`} key={`${x.symbol}:${x.timeframe}`}>
-            <summary><span className="fr-score-rank">#{index+1}</span><span className="fr-score-value">{fmt(x.score,0)}</span><span className="fr-score-symbol"><b>{x.symbol.replace("_"," / ")}</b><small>{x.timeframe} · {x.side==="LONG"?"多":"空"}</small></span>
-              <span><small>方向</small><b>{fmt(x.directionStrength,0)}</b></span><span><small>净空间</small><b>{fmt(x.netRemainingSpaceRate*100,2)}%</b></span><span><small>空间/风险</small><b>{fmt(x.edgeRatio,2)}</b></span><em>{label}</em></summary>
+            <summary><span className="fr-score-rank">#{index+1}</span><span className="fr-score-value">{fmt(x.score,0)}</span><span className="fr-score-symbol"><b>{x.symbol.replace("_"," / ")}</b><small>{x.timeframe} · {x.side==="LONG"?"多头锚点":"空头锚点"}</small></span>
+              <span><small>锚点质量</small><b>{fmt(x.anchorQuality,0)}</b></span><span><small>离锚点</small><b>{signed(x.distanceFromAnchorRate*100,2)}%</b></span><span><small>净空间</small><b>{fmt(x.netRemainingSpaceRate*100,2)}%</b></span><em>{label}</em></summary>
             <div className="fr-score-details">
-              <div><h3>方向强度拆分</h3><div className="fr-score-detail-grid"><Metric label="趋势斜率" value={fmt(x.trendSlopeScore,0)}/><Metric label="市场结构" value={fmt(x.structureScore,0)}/><Metric label="路径效率" value={fmt(x.pathEfficiency,0)}/><Metric label="动量持续" value={fmt(x.momentumPersistence,0)}/><Metric label="回调承受" value={fmt(x.pullbackResilience,0)}/></div></div>
-              <div><h3>空间价值拆分</h3><div className="fr-score-detail-grid"><Metric label="统计剩余空间" value={`${fmt(x.statisticalRemainingSpaceRate*100,2)}%`}/><Metric label="结构空间" value={x.structuralSpaceRate==null?"无近端结构墙":`${fmt(x.structuralSpaceRate*100,2)}%`}/><Metric label="毛剩余空间" value={`${fmt(x.grossRemainingSpaceRate*100,2)}%`}/><Metric label="净剩余空间" value={`${fmt(x.netRemainingSpaceRate*100,2)}%`}/><Metric label="回调风险" value={`${fmt(x.pullbackRiskRate*100,2)}%`}/></div></div>
-              <div><h3>位置与风险</h3><div className="fr-score-detail-grid"><Metric label="进场位置" value={fmt(x.positionScore,0)}/><Metric label="执行质量" value={fmt(x.executionScore,0)}/><Metric label="趋势腿已用" value={`${fmt(x.legUtilization*100,1)}%`}/><Metric label="转折风险" value={`${fmt(x.turnRisk*100,1)}%`}/><Metric label="转折扣分" value={fmt(x.turnPenalty,1)}/></div></div>
+              <div><h3>这个位置为什么有效</h3><div className="fr-score-detail-grid"><Metric label="优势位置" value={fmt(x.anchorPrice,5)}/><Metric label="首次明显浮赢" value={`${x.anchorFirstProfitBars} 根K内`}/><Metric label="验证期最大浮赢" value={`${fmt(x.anchorMfeRate*100,2)}%`}/><Metric label="验证期最大浮亏" value={`${fmt(x.anchorMaeRate*100,2)}%`}/><Metric label="MFE / MAE" value={fmt(x.anchorProfitRatio,2)}/></div></div>
+              <div><h3>现在是否值得进入</h3><div className="fr-score-detail-grid"><Metric label="当前距离" value={`${signed(x.distanceFromAnchorRate*100,2)}%`}/><Metric label="最大允许距离" value={`${fmt(x.maxEntryDistanceRate*100,2)}%`}/><Metric label="锚点保持率" value={`${fmt(x.anchorRetentionRate*100,0)}%`}/><Metric label="净剩余空间" value={`${fmt(x.netRemainingSpaceRate*100,2)}%`}/><Metric label="空间 / 风险" value={fmt(x.edgeRatio,2)}/></div></div>
+              <div><h3>辅助检查</h3><div className="fr-score-detail-grid"><Metric label="位置分" value={fmt(x.positionScore,0)}/><Metric label="空间分" value={fmt(x.spaceScore,0)}/><Metric label="盘口执行" value={fmt(x.executionScore,0)}/><Metric label="转折风险" value={`${fmt(x.turnRisk*100,1)}%`}/><Metric label="锚点年龄" value={`${x.anchorAgeBars} 根K`}/></div></div>
               <p>{x.reason}</p>
             </div>
-          </details>;})}</div>:<Empty title="暂无入场候选评分" text="系统正在等待足够的完整K线和下一轮执行数据。"/>}
+          </details>;})}</div>:<Empty title="暂无优势位置候选" text="系统正在等待新的短线价格位置先被市场证明。"/>}
       </section>
     </>}
     {tab==="orders"&&<><PageTitle eyebrow="REAL-FEED PAPER" title="模拟账户" text="与实盘使用同一套观察结构。模拟成交含模型手续费、滑点和资金费用占位，不冒充Gate真实成交。"/>
@@ -173,7 +173,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         <div className="fr-font-options" role="group" aria-label="界面字号">{[70,80,90,100,110].map(value=><button key={value} type="button" className={fontScale===value?"selected":""} aria-pressed={fontScale===value} onClick={()=>selectFontScale(value)}>{value}%</button>)}</div>
       </section>
       <section className="fr-section"><div className="fr-section-head"><div><small>运行边界</small><h2>当前系统设置</h2></div></div>
-        <Setting title="当前主系统" value={data?.strategyAuthorityVersion??data?.version??"读取中"} text="新开仓由六周期方向—空间评分决定；转折概率只负责风险扣分、方向失效与退出辅助。"/><Setting title="方向 / 空间 / 转折" value="在线运行" text="方向强度与剩余空间决定候选排序；转折概率继续用已完成K线在线校准，但不直接生成订单。"/><Setting title="执行权限" value="模拟决策 / 实盘复制" text="模拟提供交易决定；实盘按固定比例复制并使用Gate真实成交。"/><Setting title="风险预算" value="权益随动" text={data?.boundaries.risk??"读取中"}/><Setting title="成本口径" value="显式假设" text={data?.cost.assumption??"读取中"}/><Setting title="连续性" value="持久化" text="状态保存后才提交新订单；重启恢复原账户。"/>
+        <Setting title="当前主系统" value={data?.strategyAuthorityVersion??data?.version??"读取中"} text="新开仓只使用5m / 15m / 30m / 1h短线优势位置；4h和日线不生成订单。"/><Setting title="优势位置" value="在线运行" text="价格位置只有在随后快速浮赢、最大浮亏较小并保持正向离开后才被确认；当前价离得太远就不追。"/><Setting title="执行权限" value="模拟决策 / 实盘复制" text="模拟提供交易决定；实盘按固定比例复制并使用Gate真实成交。"/><Setting title="风险预算" value="权益随动" text={data?.boundaries.risk??"读取中"}/><Setting title="成本口径" value="显式假设" text={data?.cost.assumption??"读取中"}/><Setting title="连续性" value="持久化" text="状态保存后才提交新订单；重启恢复原账户。"/>
       </section></>}
 
     {liveMounted&&<div className="fr-live-panel-host" hidden={tab!=="live"} aria-hidden={tab!=="live"}>{livePanel}</div>}
