@@ -2,7 +2,9 @@
   "name": "market-sentinel-free",
   "version": "1.0.0",
   "private": true,
-  "engines": { "node": ">=22.15.0" },
+  "engines": {
+    "node": ">=22.15.0"
+  },
   "scripts": {
     "install:ci": "bash scripts/install-ci.sh",
     "test:all-regime": "node --experimental-strip-types --test tests/all-regime-engine.test.ts",
@@ -27,10 +29,35 @@
     "test:forward": "node --experimental-strip-types --test tests/forward-*.test.ts",
     "test:signals": "npm run test:direct",
     "lint": "bash scripts/sites-env.sh -- eslint . --ignore-pattern dist --ignore-pattern .next",
-    "typecheck": "tsc --noEmit --incremental false"
+    "typecheck": "tsc --noEmit --incremental false",
+    "test:module:exit": "node --experimental-strip-types --test tests/multi-turn-exit.test.ts tests/multi-turn-exit-controller.test.ts tests/multi-turn-hold-value.test.ts",
+    "test:module:clock": "node --experimental-strip-types --test tests/multi-turn-clock.test.ts tests/multi-turn-execution.test.ts"
   },
-  "dependencies": { "drizzle-orm": "0.45.2", "next": "16.2.6", "react": "19.2.8", "react-dom": "19.2.8" },
-  "devDependencies": { "@cloudflare/vite-plugin": "1.37.1", "@cloudflare/workers-types": "^4.20260702.1", "@tailwindcss/postcss": "4.2.1", "@types/node": "22.19.19", "@types/react": "19.2.14", "@types/react-dom": "19.2.3", "@vitejs/plugin-react": "6.0.2", "@vitejs/plugin-rsc": "0.5.26", "drizzle-kit": "0.31.10", "eslint": "9.39.4", "eslint-config-next": "16.2.6", "react-server-dom-webpack": "19.2.8", "tailwindcss": "4.2.1", "typescript": "5.9.3", "vinext": "0.0.50", "vite": "8.0.13", "wrangler": "4.92.0" },
+  "dependencies": {
+    "drizzle-orm": "0.45.2",
+    "next": "16.2.6",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "1.37.1",
+    "@cloudflare/workers-types": "^4.20260702.1",
+    "@tailwindcss/postcss": "4.2.1",
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.2",
+    "@vitejs/plugin-rsc": "0.5.26",
+    "drizzle-kit": "0.31.10",
+    "eslint": "9.39.4",
+    "eslint-config-next": "16.2.6",
+    "react-server-dom-webpack": "19.2.8",
+    "tailwindcss": "4.2.1",
+    "typescript": "5.9.3",
+    "vinext": "0.0.50",
+    "vite": "8.0.13",
+    "wrangler": "4.92.0"
+  },
   "type": "module",
   "displayName": "Forward Market Relation Engine"
 }
