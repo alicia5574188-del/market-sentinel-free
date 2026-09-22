@@ -5,10 +5,19 @@ import { MULTI_TURN_VERSION, TURN_CONFIG, TURN_TIMEFRAMES, evaluateMultiTurn, in
 import { FORWARD_PROTECTION_STORAGE, FORWARD_STORAGE, prepareForwardReset, prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
 
 const BASE=Date.parse("2026-09-21T00:00:00Z");
-const candles=(count=360,slope=.0008):Candle[]=>Array.from({length:count},(_,i)=>{
-  const close=100*Math.exp(i*slope),open=close/(1+slope);
-  return{time:BASE/1000+i*300,open,high:Math.max(open,close)*1.001,low:Math.min(open,close)*.999,close,volume:1000+i};
-});
+const candles=():Candle[]=>{
+  const rows:Candle[]=Array.from({length:355},(_,i)=>{
+    const close=100*Math.exp(i*.00025),open=close/1.00025;
+    return{time:BASE/1000+i*300,open,high:Math.max(open,close)*1.0008,low:Math.min(open,close)*.9992,close,volume:1000+i};
+  });
+  const base=rows.at(-1)!.close,i=rows.length,at=(n:number)=>BASE/1000+n*300;
+  rows.push({time:at(i),open:base*.9998,high:base*1.0005,low:base*.9995,close:base,volume:1400});
+  rows.push({time:at(i+1),open:base,high:base*1.0045,low:base*.9997,close:base*1.004,volume:1401});
+  rows.push({time:at(i+2),open:base*1.004,high:base*1.0075,low:base*1.0035,close:base*1.007,volume:1402});
+  rows.push({time:at(i+3),open:base*1.007,high:base*1.0085,low:base*1.006,close:base*1.008,volume:1403});
+  rows.push({time:at(i+4),open:base*1.008,high:base*1.0082,low:base*1.0012,close:base*1.0015,volume:1404});
+  return rows;
+};
 const q=(rows:Candle[],at:number):Quote=>{const mid=rows.at(-1)!.close;return{bestBid:mid*.9999,bestAsk:mid*1.0001,observedAt:at,fresh:true,entryReady:true};};
 const meta:Contract={quantoMultiplier:.001,leverageMax:50,maintenanceRate:.005,minContracts:1};
 
