@@ -31,8 +31,12 @@ test("runtime uses bounded futures REST snapshots, no continuous WebSocket", asy
   assert.match(worker, /await fetchMarketTickers\(\)/);
   assert.match(worker, /stableCandidates/);
   const alarm = worker.slice(worker.indexOf("async alarm("), worker.indexOf("async fetch(request"));
-  assert.ok(alarm.indexOf("processBooks") < alarm.indexOf("launchOptionalWork"), "position books must run before optional market work is launched");
+  assert.ok(alarm.indexOf("processBooks") < alarm.indexOf("advanceForwardNow"), "fresh books must precede forward account management");
+  assert.ok(alarm.indexOf("advanceForwardNow") < alarm.indexOf("syncLive"), "persisted PAPER decisions must precede LIVE reconciliation");
   assert.ok(alarm.indexOf("syncLive") < alarm.indexOf("launchOptionalWork"), "LIVE reconciliation must run before optional market work is launched");
+  const optional=worker.slice(worker.indexOf("private launchOptionalWork"),worker.indexOf("private async syncTurnover"));
+  assert.doesNotMatch(optional,/advanceForwardNow|advanceForwardAndWakeLive/,
+    "optional candle/universe work must never own the forward account clock");
   assert.doesNotMatch(alarm, /lastError = `radar:/, "a radar timeout must not become a global execution fault");
   assert.doesNotMatch(alarm, /successes !== this\.runtime\.symbols\.length \? "DEGRADED"/, "partial candidate-book loss must not degrade the whole authority");
   assert.doesNotMatch(alarm, /actionableMarkets === 0 \? `\$\{recoveringMarkets\} realtime markets warming/, "a temporarily empty entry-ready set must not become a global error");
