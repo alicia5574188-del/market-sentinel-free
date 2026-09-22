@@ -57,19 +57,20 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       turning:rows.filter(x=>x.phase==="TURNING"||x.phase==="CONFIRMED").length,cal:data?.turnEngine?.calibration[tf]};});
   const hotTurns=Object.values(turnFrames).flatMap(by=>turnTfs.flatMap(tf=>by[tf]?[by[tf]!]:[]))
     .sort((a,b)=>b.triggerProbability-a.triggerProbability).slice(0,10);
+  const entryCandidates=(data?.entryOpportunities??[]).slice(0,10);
   const paperMargin=data?.positions.reduce((sum,t)=>sum+t.margin,0)??null;
   const elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
   const nav:[Tab,string,string][]=[["overview","◉","总览"],["relations","⌘","转折"],["orders","⇄","模拟"],["live","◈","实盘"],["journal","≋","演变"],["settings","⊙","系统"]];
   const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice("后台运行中 · ".length):statusLabel??(healthy?"正常":"行情重连中");
   return <main className="fr-app" style={fontStyle} data-ui-version="dark-live-v1" data-record-view="compact-records-pnl-v1">
-    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · 多周期转折引擎</b><small>MULTI-TURN / 01</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
-    <div className="fr-subhead"><span>Gate USDT 永续 · 六周期转折</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
+    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · 多周期转折引擎</b><small>DIRECTION / SPACE + TURN RISK</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
+    <div className="fr-subhead"><span>Gate USDT 永续 · 六周期方向 / 空间评分 · 转折风控</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
     {memberName&&<p className="fr-note">{memberName} · 共用同一模拟策略，实盘账户独立，开关只由你控制。</p>}
 
     {tab==="overview"&&<>
       <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">账户驾驶舱</span><h1>{systemStatus==="正常"?"系统正在正常运行":`系统状态：${systemStatus}`}</h1>
         <p>{data?.latestReason??"正在读取已持久化账户和真实行情状态。"}</p>
-        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>5m / 15m / 30m / 1h / 4h / 日线</span><span>Top30动态市场</span><span>实盘{liveEnabled?"已开启":"关闭"}</span></div></div>
+        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>六周期方向独立评分</span><span>Top30动态市场</span><span>转折只做风险辅助</span><span>实盘{liveEnabled?"已开启":"关闭"}</span></div></div>
         <div className="fr-equity"><small>模拟账户权益 · USDT</small><strong>{fmt(data?.equity)}</strong><div className={(data?.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(data?.netPnl)} <span>U · {signed(data?data.netPnl/data.initialEquity*100:null)}%</span></div>
           <footer><span>起点 {fmt(data?.initialEquity,0)}</span><span>最大回撤 {fmt(data?data.maxDrawdown*100:null)}%</span></footer></div></section>
 
@@ -80,17 +81,26 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         <Stat label="系统状态" value={systemStatus} note={`行情心跳 ${time(feedAt)}`}/>
       </section>
 
-      <div className="fr-two">
-        <section className="fr-section"><div className="fr-section-head"><div><small>模拟账户</small><h2>净值变化</h2></div><span>含模拟成本</span></div>
-          <EquityCurve data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>
-          <div className="fr-three"><div><small>累计模拟成交额</small><b>{fmt(data?.turnover)} U</b></div><div><small>已扣模拟费用</small><b>{fmt(data?.fees)} U</b></div><div><small>已完成订单</small><b>{fmt(data?.resolved,0)}</b></div></div>
+      <div className="fr-dashboard-grid">
+        <section className="fr-section fr-entry-board"><div className="fr-section-head"><div><small>ENTRY OPPORTUNITY SCORE</small><h2>入场候选评分</h2><p>顺各周期当前方向，优先选择方向强、剩余空间高、位置不过度延伸的标的。</p></div><span>Top {entryCandidates.length}</span></div>
+          {entryCandidates.length?<div className="fr-entry-score-list">{entryCandidates.map((x,index)=><article className={`fr-entry-score ${x.eligible?"is-eligible":""}`} key={`${x.symbol}:${x.timeframe}`}>
+            <div className="fr-entry-rank"><span>#{index+1}</span><strong>{fmt(x.score,0)}</strong><small>总分</small></div>
+            <div className="fr-entry-main"><header><div><b>{x.symbol.replace("_"," / ")}</b><small>{x.timeframe} · {x.side==="LONG"?"顺势做多":"顺势做空"}</small></div><em className={x.eligible?"is-ready":""}>{x.eligible?"可参与":"观察"}</em></header>
+              <div className="fr-entry-metrics"><span><small>方向强度</small><b>{fmt(x.directionStrength,0)}</b></span><span><small>净剩余空间</small><b>{fmt(x.netRemainingSpaceRate*100,2)}%</b></span><span><small>空间 / 风险</small><b>{fmt(x.edgeRatio,2)}</b></span><span><small>进场位置</small><b>{fmt(x.positionScore,0)}</b></span><span><small>转折风险</small><b>{fmt(x.turnRisk*100,1)}%</b></span></div>
+            </div>
+          </article>)}</div>:<Empty title="正在建立方向—空间评分" text="系统会在六个周期分别识别当前方向、剩余空间和进场位置，转折只作为风险扣分。"/>}
         </section>
-        <section className="fr-section"><div className="fr-section-head"><div><small>当前状态</small><h2>现在需要看什么</h2></div><span>{time(data?.updatedAt)}</span></div>
+        <section className="fr-section fr-now-card"><div className="fr-section-head"><div><small>当前状态</small><h2>现在需要看什么</h2></div><span>{time(data?.updatedAt)}</span></div>
           <div className="fr-three"><div><small>模拟持仓</small><b>{fmt(data?.positions.length,0)}</b></div><div><small>实盘持仓</small><b>{liveOverview?.positionCount??"—"}</b></div><div><small>实盘执行</small><b>{!liveEnabled?"关闭":liveOverview?.operational?"正常":"核对中"}</b></div></div>
           <div className="fr-insight"><span className="fr-dot"/><p>{data?.latestReason??"等待运行状态。"}</p></div>
           <div className="fr-action-row"><button className="fr-button" onClick={()=>select("orders")}>查看模拟账户</button><button className="fr-button secondary" onClick={()=>select("live")}>查看实盘账户</button></div>
         </section>
       </div>
+
+      <section className="fr-section fr-equity-section"><div className="fr-section-head"><div><small>模拟账户</small><h2>净值变化</h2></div><span>含模拟成本</span></div>
+        <EquityCurve data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>
+        <div className="fr-three"><div><small>累计模拟成交额</small><b>{fmt(data?.turnover)} U</b></div><div><small>已扣模拟费用</small><b>{fmt(data?.fees)} U</b></div><div><small>已完成订单</small><b>{fmt(data?.resolved,0)}</b></div></div>
+      </section>
 
       {(liveOverview?.missing??0)>0&&<section className="fr-section fr-parity-alert"><div className="fr-section-head"><div><small>需要关注</small><h2>模拟—实盘复制存在差异</h2></div><span>{liveOverview?.missing} 笔</span></div>
         <p className="fr-note">这里仅提示存在需要核对的订单，不用不同资金规模账户的绝对盈亏做比较。进入实盘页查看标准化收益率、入场偏差、复制延迟和按实盘名义额折算后的执行结果。</p>
@@ -99,8 +109,8 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       <section className="fr-section"><div className="fr-section-head"><div><small>最近变化</small><h2>需要留意的运行记录</h2></div><button className="fr-text-button" onClick={()=>select("journal")}>全部记录 ↗</button></div><Journal data={data} limit={3}/></section>
     </>}
 
-    {tab==="relations"&&<><PageTitle eyebrow="MULTI-TIMEFRAME TURN ENGINE" title="六周期转折" text="每个周期独立判断当前方向是否仍成立。小周期转折只影响自己的仓位，并作为大周期转折的传播证据，不直接否决大周期。"/>
-      <section className="fr-section"><div className="fr-section-head"><div><small>唯一策略权威</small><h2>转折状态总览</h2></div><span>{data?.strategyAuthorityVersion??"读取中"}</span></div>
+    {tab==="relations"&&<><PageTitle eyebrow="MULTI-TIMEFRAME TURN ENGINE" title="六周期转折" text="转折页现在专门承担风险与退出辅助：每个周期独立监测现有方向是否开始失效，但不再单独生成进场订单。"/>
+      <section className="fr-section"><div className="fr-section-head"><div><small>风险与退出辅助</small><h2>转折状态总览</h2></div><span>{data?.strategyAuthorityVersion??"读取中"}</span></div>
         <div className="fr-rule-grid">{turnRows.map(row=><article className="fr-rule" key={row.tf}><header><span>{row.tf}级别</span><b>{row.rows.length} 市场</b></header>
           <h3>多 {row.long} · 空 {row.short} · 中性 {row.neutral}</h3>
           <div className="fr-rule-numbers"><div><small>平均反转风险</small><b>{row.avgTurn==null?"—":`${fmt(row.avgTurn*100,1)}%`}</b></div>
@@ -151,7 +161,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
             <span className="fr-position-primary"><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {fmt(t.leverage,0)}× · 保证金 {fmt(t.margin)} U</small>
               <b className={(pnl??0)>=0?"fr-positive":"fr-negative"}>{signed(pnl)} U</b><small>{rate==null?"—":`${signed(rate*100,3)}% · 展开`}</small></span>
             <span className="fr-position-entry"><b>{tf?`${tf} · ${t.side==="LONG"?"多向":"空向"}`:"入场依据"}</b>
-              <small>空间 {entrySpace==null?"—":`${fmt(entrySpace*100,1)}%`} · 回调 {pullback==null?"—":`${fmt(pullback*100,1)}%`}</small>
+              <small>评分 {context?.entryScore==null?"—":fmt(context.entryScore,0)} · 空间 {entrySpace==null?"—":`${fmt(entrySpace*100,1)}%`} · 回调 {pullback==null?"—":`${fmt(pullback*100,1)}%`}</small>
               <small>{holdText} · {verdict}</small></span>
           </summary><TradeCard trade={t} now={now}/></details>;})}</div>:<Empty title="当前没有模拟持仓" text="符合条件的新订单会显示在这里。"/>}
         </section>
@@ -175,7 +185,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         <div className="fr-font-options" role="group" aria-label="界面字号">{[70,80,90,100,110].map(value=><button key={value} type="button" className={fontScale===value?"selected":""} aria-pressed={fontScale===value} onClick={()=>selectFontScale(value)}>{value}%</button>)}</div>
       </section>
       <section className="fr-section"><div className="fr-section-head"><div><small>运行边界</small><h2>当前系统设置</h2></div></div>
-        <Setting title="当前主系统" value={data?.strategyAuthorityVersion??data?.version??"读取中"} text="六周期转折概率是唯一新开仓与策略退出权威。"/><Setting title="转折概率校准" value="在线运行" text="每个周期只用已完成K线；未来结果到期后才更新Brier与概率偏差。"/><Setting title="执行权限" value="模拟决策 / 实盘复制" text="模拟提供交易决定；实盘按固定比例复制并使用Gate真实成交。"/><Setting title="风险预算" value="权益随动" text={data?.boundaries.risk??"读取中"}/><Setting title="成本口径" value="显式假设" text={data?.cost.assumption??"读取中"}/><Setting title="连续性" value="持久化" text="状态保存后才提交新订单；重启恢复原账户。"/>
+        <Setting title="当前主系统" value={data?.strategyAuthorityVersion??data?.version??"读取中"} text="新开仓由六周期方向—空间评分决定；转折概率只负责风险扣分、方向失效与退出辅助。"/><Setting title="方向 / 空间 / 转折" value="在线运行" text="方向强度与剩余空间决定候选排序；转折概率继续用已完成K线在线校准，但不直接生成订单。"/><Setting title="执行权限" value="模拟决策 / 实盘复制" text="模拟提供交易决定；实盘按固定比例复制并使用Gate真实成交。"/><Setting title="风险预算" value="权益随动" text={data?.boundaries.risk??"读取中"}/><Setting title="成本口径" value="显式假设" text={data?.cost.assumption??"读取中"}/><Setting title="连续性" value="持久化" text="状态保存后才提交新订单；重启恢复原账户。"/>
       </section></>}
 
     {liveMounted&&<div className="fr-live-panel-host" hidden={tab!=="live"} aria-hidden={tab!=="live"}>{livePanel}</div>}
@@ -195,7 +205,7 @@ function tradePnl(t:Trade,now:number){const open=t.status==="OPEN",d=t.side==="L
   return open?d*t.quantity*(t.lastPrice-t.entryPrice)-t.entryFee-t.quantity*t.lastPrice*.0007-t.notional*.0002*Math.max(0,now-t.openedAt)/86400000:t.netPnl;
 }
 function duration(start:number,end:number|null|undefined,now:number){const ms=Math.max(0,(end??now)-start),minutes=Math.floor(ms/60000);return minutes>=60?`${Math.floor(minutes/60)}小时${minutes%60}分`:`${minutes}分钟`;}
-function TradeCard({trade:t,now}:{trade:Trade;now:number}){const open=t.status==="OPEN",pnl=tradePnl(t,now),rate=t.notional>0&&pnl!=null?pnl/t.notional:null;
+function TradeCard({trade:t,now}:{trade:Trade;now:number}){const open=t.status==="OPEN",pnl=tradePnl(t,now),rate=t.notional>0&&pnl!=null?pnl/t.notional:null,ctx=t.entryContext;
   return <article className="fr-trade fr-trade-unified"><header><div><small>{open?"持仓中":"已平仓"} · {t.side==="LONG"?"多单":"空单"}{t.turn?` · ${t.turn.timeframe}级别`:""}</small><h3>{t.symbol.replace("_"," / ")}</h3></div>
     <strong className={(pnl??0)>=0?"fr-positive":"fr-negative"}>{signed(pnl)} <small>U{rate==null?"":` · ${signed(rate*100,3)}%`}</small></strong></header>
     <dl><div><dt>入场价</dt><dd>{fmt(t.entryPrice,5)}</dd></div><div><dt>{open?"当前价格":"出场价"}</dt><dd>{fmt(open?t.lastPrice:t.exitPrice,5)}</dd></div>
@@ -204,7 +214,7 @@ function TradeCard({trade:t,now}:{trade:Trade;now:number}){const open=t.status==
       <div><dt>进场时间</dt><dd>{time(t.openedAt)}</dd></div><div><dt>出场时间</dt><dd>{open?"持仓中":time(t.closedAt)}</dd></div>
       <div><dt>持仓时长</dt><dd>{duration(t.openedAt,t.closedAt,now)}</dd></div></dl>
     {t.exitReason&&<p className="fr-trade-reason">退出原因：{t.exitReason}</p>}
-    <details className="fr-details"><summary>策略与模拟成本</summary><p className="fr-note">{t.turn?`${t.turn.timeframe}转折级别 · 入场转折概率 ${fmt(t.turn.entryTurnProbability*100,1)}% · 延续 ${fmt(t.turn.entryContinuation*100,1)}%。当前由同周期转折、原始硬止损与时间—空间持仓价值共同管理退出。`:`规则 v${t.rule.version} · ${condition(t.rule)}。退出依据：${t.rule.exitMode==="REACTION_DECAY"?"反应回吐保护":"反应期限"}。`}{t.exitReason?` ${t.exitReason}`:""}</p>
+    <details className="fr-details"><summary>策略与模拟成本</summary><p className="fr-note">{ctx?.version==="direction-space-entry-context-v2"?`${ctx.timeframe}方向—空间入场 · 总分 ${fmt(ctx.entryScore,0)} · 方向强度 ${fmt(ctx.directionStrength,0)} · 净剩余空间 ${fmt(ctx.remainingSpaceRate*100,2)}% · 空间/风险 ${fmt(ctx.edgeRatio,2)} · 转折风险 ${fmt(ctx.triggerProbability*100,1)}%。`:t.turn?`${t.turn.timeframe}旧版周期记录 · 入场转折概率 ${fmt(t.turn.entryTurnProbability*100,1)}% · 延续 ${fmt(t.turn.entryContinuation*100,1)}%。当前由同周期方向失效、利润保护、原始硬止损与时间—空间持仓价值共同管理退出。`:`规则 v${t.rule.version} · ${condition(t.rule)}。退出依据：${t.rule.exitMode==="REACTION_DECAY"?"反应回吐保护":"反应期限"}。`}{t.exitReason?` ${t.exitReason}`:""}</p>
       <p className="fr-note">模拟成交使用新鲜盘口并计入模型手续费、滑点和资金费占位；实盘实际结果请在实盘页对照。</p></details>
   </article>;
 }
