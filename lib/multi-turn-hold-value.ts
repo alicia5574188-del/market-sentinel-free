@@ -1,6 +1,6 @@
 import { TURN_CONFIG, type TurnFrameState, type TurnTimeframe } from "./multi-turn-engine.ts";
 
-export const MULTI_TURN_HOLD_VALUE_VERSION = "multi-turn-time-space-v1";
+export const MULTI_TURN_HOLD_VALUE_VERSION = "multi-turn-time-space-v2";
 export const MULTI_TURN_BEST_HOLD_BARS = 6;
 export const MULTI_TURN_STRONG_EXTENSION_BARS = 12;
 export const MULTI_TURN_HARD_EXTENSION_BARS = 18;
@@ -21,6 +21,10 @@ export type MultiTurnHoldValue = {
   pullbackRiskRate: number;
   edgeRatio: number;
   requiredEdgeRatio: number;
+  entryExpectedMoveRate: number;
+  expectedProgressRate: number;
+  progressEfficiency: number;
+  currentReturnRate: number;
   strongContinuation: boolean;
   exceptionalContinuation: boolean;
   reason: string;
@@ -49,9 +53,13 @@ export function evaluateMultiTurnHoldValue(input:{
   returnRate:number;
   favorableRate:number;
   modeledCostRate:number;
+  entryExpectedMoveRate?:number;
+  plannedRiskRate?:number;
 }):MultiTurnHoldValue{
   const{timeframe,frame,side,openedAt,now,returnRate,favorableRate}=input;
   const modeledCostRate=Math.max(0,input.modeledCostRate);
+  const entryExpectedMoveRate=Math.max(modeledCostRate+.001, input.entryExpectedMoveRate??frame.expectedMoveRate);
+  const plannedRiskRate=Math.max(modeledCostRate+.001,input.plannedRiskRate??frame.stopRate+modeledCostRate);
   const windows=multiTurnHoldWindows(timeframe);
   const heldMinutes=Math.max(0,(now-openedAt)/60_000),ageRatio=heldMinutes/windows.bestHoldMinutes;
   const rawAligned=frame.rawDirection==="NEUTRAL"||frame.rawDirection===side;
@@ -69,6 +77,9 @@ export function evaluateMultiTurnHoldValue(input:{
   const pullbackRiskRate=Math.max(frame.atrRate*.55,
     frame.atrRate*(.72+.95*turnRisk+.55*(1-directionStrength))+.20*giveback);
   const edgeRatio=safeRatio(remainingSpaceRate,pullbackRiskRate);
+  const progressClock=clip(ageRatio,0,1);
+  const expectedProgressRate=Math.max(modeledCostRate,entryExpectedMoveRate*Math.max(.20,progressClock));
+  const progressEfficiency=safeRatio(favorableRate,expectedProgressRate);
   const strongContinuation=rawAligned&&directionStrength>=.70&&frame.continuationScore>=.55
     &&frame.triggerProbability<=.35&&frame.phase!=="TURNING";
   const exceptionalContinuation=rawAligned&&directionStrength>=.82&&frame.continuationScore>=.68
@@ -87,9 +98,23 @@ export function evaluateMultiTurnHoldValue(input:{
   const weakSpace=edgeRatio<requiredEdgeRatio;
   const clearlyUnfavorable=edgeRatio<.60&&turnRisk>=.45;
   const takeProfit=returnRate>modeledCostRate;
+  const earliestReviewMinutes=Math.max(5,TURN_CONFIG[timeframe].minutes);
+  const progressStalled=ageRatio>=.30&&progressEfficiency<.35&&directionStrength<.40
+    &&(returnRate<0||edgeRatio<1.15);
+  const deepStall=ageRatio>=.50&&progressEfficiency<.50&&directionStrength<.48&&edgeRatio<1.20;
+  const immediateInvalidation=heldMinutes>=earliestReviewMinutes
+    &&((edgeRatio<.45&&turnRisk>=.45)
+      ||(!rawAligned&&directionStrength<.30&&returnRate<0)
+      ||(returnRate<=-Math.max(modeledCostRate*1.5,plannedRiskRate*.35)&&directionStrength<.35&&edgeRatio<.75));
 
-  if(heldMinutes<windows.minimumEvaluationMinutes){
-    reason="尚未达到所属周期的最小持仓观察时间；先保留原始结构止损和转折退出权威。";
+  if(immediateInvalidation){
+    action=takeProfit?"EXIT_PROFIT":"EXIT_RISK";
+    reason=`所属周期继续持有价值已提前失效：当前收益${(returnRate*100).toFixed(2)}%，空间/回调风险${edgeRatio.toFixed(2)}，方向强度${(directionStrength*100).toFixed(0)}%，无需等到最佳持仓时间。`;
+  }else if(progressStalled||deepStall){
+    action=takeProfit?"EXIT_PROFIT":"EXIT_RISK";
+    reason=`持仓进展明显落后于${timeframe}预期：已用最佳时间${(ageRatio*100).toFixed(0)}%，最高顺向进展仅达到时间路径预期的${(progressEfficiency*100).toFixed(0)}%，当前空间/回调风险${edgeRatio.toFixed(2)}；释放低价值占位。`;
+  }else if(heldMinutes<windows.minimumEvaluationMinutes){
+    reason="仍在所属周期早期观察段，但利润路径保护与明显失效判断已实时生效；普通时间退出暂不启用。";
   }else if(heldMinutes>=windows.hardExtensionMinutes){
     action=takeProfit?"EXIT_PROFIT":"EXIT_RISK";
     reason=`已持有${heldMinutes.toFixed(0)}分钟，达到${timeframe}级别时间—空间硬上限${windows.hardExtensionMinutes}分钟；即使未正式反转也不再无限等待。`;
@@ -116,5 +141,6 @@ export function evaluateMultiTurnHoldValue(input:{
   return{version:MULTI_TURN_HOLD_VALUE_VERSION,action,evaluatedAt:now,
     bestHoldMinutes:windows.bestHoldMinutes,strongExtensionMinutes:windows.strongExtensionMinutes,
     hardExtensionMinutes:windows.hardExtensionMinutes,heldMinutes,ageRatio,directionStrength,turnRisk,
-    remainingSpaceRate,pullbackRiskRate,edgeRatio,requiredEdgeRatio,strongContinuation,exceptionalContinuation,reason};
+    remainingSpaceRate,pullbackRiskRate,edgeRatio,requiredEdgeRatio,entryExpectedMoveRate,expectedProgressRate,
+    progressEfficiency,currentReturnRate:returnRate,strongContinuation,exceptionalContinuation,reason};
 }
