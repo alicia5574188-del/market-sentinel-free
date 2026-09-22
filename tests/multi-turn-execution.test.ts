@@ -242,8 +242,8 @@ test("full-risk rotation atomically replaces one clearly weak holding and cannot
       volatility:.2,volume:.2,breadth:.08,propagation:.06},reason:"strong rotation fixture"});
   for(let i=0;i<symbols.length;i++)s.turnEngine!.frames[symbols[i]]={[timeframes[i]]:strong(symbols[i],timeframes[i])};
   const weak=s.turnEngine!.frames.W0_USDT!["5m"]!;
-  // Weak enough for selective replacement, but still above the independent
-  // stalled-exit threshold; otherwise an ordinary exit already frees the risk.
+  // Weak enough for selective replacement while still inside the short 5m
+  // no-progress window; rotation remains independently testable.
   weak.directionConfidence=.48;weak.continuationScore=.38;weak.turnProbability=.60;weak.triggerProbability=.60;weak.phase="WATCH";
   weak.atrRate=.012;weak.expectedMoveRate=.012;weak.propagationPressure=.55;
   weak.evidence={structure:.70,momentum:.55,acceleration:.45,cusum:.60,changePoint:.58,failedExtension:.40,
