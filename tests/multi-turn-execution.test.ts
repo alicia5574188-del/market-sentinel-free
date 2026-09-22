@@ -21,6 +21,27 @@ test("Multi-Turn opens at most one executable leg per symbol while every timefra
   if(result.positions.length){assert.equal(result.positions[0].rule.authority,"MULTI_TURN");assert.ok(result.positions[0].turn);}
 });
 
+test("wall-clock time cannot consume a new data slot before its completed candle is fetched",()=>{
+  const p=candles(),now=(p.at(-1)!.time+300)*1000+1000;
+  let s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:q(p,now)},contracts:{BTC_USDT:meta}}).state;
+  const firstCycle=s.lastCycleAt;
+  const later=now+BAR_MS+90_000;
+  s=advanceForward({state:s,now:later,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:{...q(p,later),observedAt:later}},contracts:{BTC_USDT:meta}}).state;
+  assert.equal(s.lastCycleAt,firstCycle,
+    "stale 5m path must not be relabeled as the next completed-candle cycle");
+
+  const last=p.at(-1)!,slope=.0008,close=last.close*Math.exp(slope),open=close/(1+slope);
+  const fresh=[...p,{time:last.time+300,open,high:Math.max(open,close)*1.001,
+    low:Math.min(open,close)*.999,close,volume:last.volume+1}];
+  const at=later+10_000;
+  s=advanceForward({state:s,now:at,paths:{BTC_USDT:fresh},
+    quotes:{BTC_USDT:q(fresh,at)},contracts:{BTC_USDT:meta}}).state;
+  assert.equal(s.lastCycleAt,at,
+    "the pending slot advances as soon as the genuinely completed candle exists");
+});
+
 test("timeframe sleeves, directional cap and portfolio cap remain authoritative with many simultaneous markets",()=>{
   const paths:Record<string,Candle[]>={},quotes:Record<string,Quote>={},contracts:Record<string,Contract>={};
   const p=candles(),now=(p.at(-1)!.time+300)*1000+1000;
