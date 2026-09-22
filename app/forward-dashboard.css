@@ -115,19 +115,19 @@ main.fr-app{--fr-ink:#eef4fc;--fr-muted:#b8c6d9;--fr-line:#304158;--fr-green:#71
 .fr-entry-score{display:grid;grid-template-columns:74px minmax(0,1fr);gap:14px;align-items:center;padding:15px 16px;border:1px solid #34485f;border-radius:14px;background:#172432;min-width:0}
 .fr-entry-score.is-eligible{border-color:#456f61;background:#172b29}
 .fr-entry-rank{display:grid;place-items:center;align-content:center;min-height:82px;border-right:1px solid #34485f}
-.fr-entry-rank span,.fr-entry-rank small{font-size:12px;font-size:var(--fr-fs12,12px);color:var(--fr-muted)}
+.fr-entry-rank span,.fr-entry-rank small{font-size:calc(var(--fr-fs14,14px)*.86);color:var(--fr-muted)}
 .fr-entry-rank strong{font-size:28px;font-size:var(--fr-fs28,28px);line-height:1.15;color:#dcecff}
 .fr-entry-score.is-eligible .fr-entry-rank strong{color:#8ce7bf}
 .fr-entry-main{min-width:0}
 .fr-entry-main header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:12px}
 .fr-entry-main header>div{display:grid;gap:2px;min-width:0}
 .fr-entry-main header b{font-size:17px;font-size:var(--fr-fs17,17px)}
-.fr-entry-main header small{font-size:13px;font-size:var(--fr-fs13,13px);color:var(--fr-muted)}
-.fr-entry-main em{font-style:normal;font-size:12px;font-size:var(--fr-fs12,12px);padding:4px 8px;border:1px solid #4b6077;border-radius:999px;color:#b6c5d7;white-space:nowrap}
+.fr-entry-main header small{font-size:calc(var(--fr-fs14,14px)*.93);color:var(--fr-muted)}
+.fr-entry-main em{font-style:normal;font-size:calc(var(--fr-fs14,14px)*.86);padding:4px 8px;border:1px solid #4b6077;border-radius:999px;color:#b6c5d7;white-space:nowrap}
 .fr-entry-main em.is-ready{color:#baf3d7;border-color:#4b7b68;background:#1c3a31}
 .fr-entry-metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}
 .fr-entry-metrics span{display:grid;gap:3px;min-width:0;padding:8px 9px;border-radius:9px;background:#1d2c3d}
-.fr-entry-metrics small{font-size:11px;font-size:var(--fr-fs11,11px);color:var(--fr-muted);white-space:nowrap}
+.fr-entry-metrics small{font-size:calc(var(--fr-fs14,14px)*.79);color:var(--fr-muted);white-space:nowrap}
 .fr-entry-metrics b{font-size:14px;font-size:var(--fr-fs14,14px);font-weight:650;overflow-wrap:anywhere}
 .fr-now-card .fr-insight{margin-top:18px}
 .fr-equity-section{margin-top:0}
