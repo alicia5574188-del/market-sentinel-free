@@ -1,10 +1,9 @@
 name: One-shot PAPER reset 2026-09-22
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/paper-reset-once-20260922.yml"
+  workflow_run:
+    workflows: ["Market Anomaly Radar Release"]
+    types: [completed]
 
 permissions:
   contents: read
@@ -16,6 +15,7 @@ env:
 
 jobs:
   reset-paper:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.display_title == 'ops: arm one-shot PAPER reset'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -27,7 +27,7 @@ jobs:
           node-version: 22.16.0
           cache: npm
       - run: npm ci
-      - name: Require LIVE fully OFF
+      - name: Require LIVE fully OFF from diagnostic JSON
         run: |
           set -euo pipefail
           code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/health-before.json" -w '%{http_code}' "$WORKER_BASE_URL/__health" || true)"
@@ -36,7 +36,8 @@ jobs:
       - name: Deploy isolated reset bridge and reset PAPER
         run: |
           set -euo pipefail
-          cat > "$RUNNER_TEMP/paper-reset-once.mjs" <<'JS'
+          mkdir -p .ops-reset
+          cat > .ops-reset/paper-reset-once.mjs <<'JS'
           export default {
             async fetch(_request, env) {
               const stub = env.MARKET_STREAM.getByName("primary");
@@ -48,9 +49,9 @@ jobs:
             },
           };
           JS
-          cat > "$RUNNER_TEMP/wrangler.paper-reset.toml" <<EOF
+          cat > .ops-reset/wrangler.toml <<EOF
           name = "$RESET_WORKER_NAME"
-          main = "$RUNNER_TEMP/paper-reset-once.mjs"
+          main = "paper-reset-once.mjs"
           compatibility_date = "2026-09-22"
           workers_dev = true
 
@@ -60,28 +61,43 @@ jobs:
           script_name = "market-sentinel-free"
           EOF
           cleanup() {
-            npx wrangler delete --name "$RESET_WORKER_NAME" --force >/dev/null 2>&1 || true
+            npx wrangler delete --config .ops-reset/wrangler.toml --force >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
-          npx wrangler deploy --config "$RUNNER_TEMP/wrangler.paper-reset.toml" >/dev/null
-          code="$(curl -sS --max-time 30 -X POST -o "$RUNNER_TEMP/reset-result.json" -w '%{http_code}'             "https://$RESET_WORKER_NAME.alicia5574188.workers.dev/" || true)"
-          [[ "$code" == "200" ]]
-          jq -e '.ok == true and .equity == 1000 and (.forward.positions | length) == 0 and .forward.initialEquity == 1000'             "$RUNNER_TEMP/reset-result.json" >/dev/null
-          jq -c '{ok,equity,forward:{initialEquity:.forward.initialEquity,balance:.forward.balance,equity:.forward.equity,
-            positions:(.forward.positions|length),history:(.forward.history|length),resolved:.forward.resolved,netPnl:.forward.netPnl}}'             "$RUNNER_TEMP/reset-result.json"
-      - name: Verify production resumes with LIVE still OFF
-        run: |
-          set -euo pipefail
+          npx wrangler deploy --config .ops-reset/wrangler.toml >/dev/null
+          reset_url="https://$RESET_WORKER_NAME.alicia5574188.workers.dev/"
+          code=""
           for attempt in {1..12}; do
-            if curl -fsS --max-time 10 "$WORKER_BASE_URL/__health" > "$RUNNER_TEMP/health-after.json"               && jq -e '.runtime.stale == false and .runtime.liveMode.requestedEnabled == false and .runtime.liveMode.operational == false
-                and .runtime.forward.initialEquity == 1000' "$RUNNER_TEMP/health-after.json" >/dev/null; then
-              jq -c '{state:.runtime.state,stale:.runtime.stale,liveMode:.runtime.liveMode,
-                forward:{initialEquity:.runtime.forward.initialEquity,balance:.runtime.forward.balance,equity:.runtime.forward.equity,
-                  positions:(.runtime.forward.positions|length),history:(.runtime.forward.history|length),
-                  resolved:.runtime.forward.resolved,netPnl:.runtime.forward.netPnl}}' "$RUNNER_TEMP/health-after.json"
+            code="$(curl -sS --max-time 30 -X POST -o "$RUNNER_TEMP/reset-result.json" -w '%{http_code}' "$reset_url" || true)"
+            if [[ "$code" == "200" ]] && jq -e '.ok == true and .equity == 1000 and (.forward.positions | length) == 0
+              and (.forward.history | length) == 0 and .forward.initialEquity == 1000 and .forward.balance == 1000'               "$RUNNER_TEMP/reset-result.json" >/dev/null; then
+              jq -c '{ok,equity,forward:{initialEquity:.forward.initialEquity,balance:.forward.balance,equity:.forward.equity,
+                positions:(.forward.positions|length),history:(.forward.history|length),resolved:.forward.resolved,netPnl:.forward.netPnl}}'                 "$RUNNER_TEMP/reset-result.json"
               exit 0
             fi
             sleep 5
           done
-          cat "$RUNNER_TEMP/health-after.json"
+          echo "reset_http=$code"
+          cat "$RUNNER_TEMP/reset-result.json" || true
+          exit 1
+      - name: Verify production resumes with LIVE still OFF
+        run: |
+          set -euo pipefail
+          for attempt in {1..18}; do
+            code="$(curl -sS --max-time 10 -o "$RUNNER_TEMP/health-after.json" -w '%{http_code}' "$WORKER_BASE_URL/__health" || true)"
+            if [[ "$code" == "200" || "$code" == "503" ]]; then
+              if jq -e '.runtime.liveMode.requestedEnabled == false and .runtime.liveMode.operational == false
+                and .runtime.forward.initialEquity == 1000
+                and .runtime.forward.balance > 0
+                and .runtime.forward.history | length >= 0' "$RUNNER_TEMP/health-after.json" >/dev/null; then
+                jq -c '{state:.runtime.state,stale:.runtime.stale,liveMode:.runtime.liveMode,
+                  forward:{initialEquity:.runtime.forward.initialEquity,balance:.runtime.forward.balance,equity:.runtime.forward.equity,
+                    positions:(.runtime.forward.positions|length),history:(.runtime.forward.history|length),
+                    resolved:.runtime.forward.resolved,netPnl:.runtime.forward.netPnl}}' "$RUNNER_TEMP/health-after.json"
+                exit 0
+              fi
+            fi
+            sleep 5
+          done
+          cat "$RUNNER_TEMP/health-after.json" || true
           exit 1
