@@ -81,10 +81,16 @@ test("native dark LIVE console retains owner authentication and isolates financi
   assert.match(page, /setRuntime\(null\)/);
   assert.match(dashboard, /scroll\.current\[tab\]=window\.scrollY/);
   assert.match(dashboard, /\["live","◈","实盘"\]/);
-  assert.match(dashboard, /hidden=\{tab!==\"live\"\}[\s\S]*\{livePanel\}/,
-    "LIVE panel must stay mounted and only be hidden so tab switches preserve the last rendered data");
+  assert.match(dashboard, /\[liveMounted,setLiveMounted\]=useState\(false\)/,
+    "LIVE console must not mount during the initial authenticated render");
+  assert.match(dashboard, /if\(next===\"live\"\)setLiveMounted\(true\)/,
+    "the first explicit LIVE visit must opt the console into keep-alive mode");
+  assert.match(dashboard, /liveMounted&&<div className=\"fr-live-panel-host\" hidden=\{tab!==\"live\"\}[\s\S]*\{livePanel\}/,
+    "after the first LIVE visit the console must stay mounted and only be hidden so tab switches preserve its data");
   assert.doesNotMatch(dashboard, /tab===\"live\"&&livePanel/,
     "LIVE tab selection must not remount the console and flash unknown values");
+  assert.match(worker, /Cache-Control\",\"no-store, no-cache, must-revalidate, max-age=0\"/,
+    "HTML navigation responses must not be reused across deployments with different hashed chunks");
   assert.match(page, /livePanel=\{<LiveConsole/);
   assert.doesNotMatch(page+dashboard+consoleUi, /legacyConsole|onLegacy|fr-return|进入旧账户|window\.(confirm|alert|prompt)|role="dialog"/);
   assert.match(consoleUi, /role="switch"/);

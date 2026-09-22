@@ -3753,7 +3753,17 @@ const worker = {
     if (url.pathname === "/api/paper/reset" && request.method === "POST") return ownerPaperAction(request, env, "RESET");
     if (url.pathname === "/api/paper/history/clear" && request.method === "POST") return ownerPaperAction(request, env, "CLEAR_HISTORY");
     if (url.pathname.startsWith("/api/")) return json({ error: "not found" }, 404);
-    return handler.fetch(request, env, ctx);
+    const pageResponse=await handler.fetch(request, env, ctx);
+    if(request.method!=="GET")return pageResponse;
+    const contentType=pageResponse.headers.get("content-type")??"";
+    if(!contentType.toLowerCase().includes("text/html"))return pageResponse;
+    const headers=new Headers(pageResponse.headers);
+    // Deployment replaces hashed client chunks. Never let Safari/iOS reuse an
+    // older HTML shell that points at chunks which no longer exist.
+    headers.set("Cache-Control","no-store, no-cache, must-revalidate, max-age=0");
+    headers.set("Pragma","no-cache");
+    headers.set("Expires","0");
+    return new Response(pageResponse.body,{status:pageResponse.status,statusText:pageResponse.statusText,headers});
   },
   async scheduled(_controller: ScheduledController, env: CloudflareEnv, ctx: ExecutionContext) {
     ctx.waitUntil(env.MARKET_STREAM.getByName("primary").fetch("https://market-stream/watchdog"));
