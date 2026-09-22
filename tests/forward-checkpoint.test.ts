@@ -8,6 +8,7 @@ import { FORWARD_PROTECTION_STORAGE, FORWARD_STORAGE, prepareForwardProtectionWr
   prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
 import { nextProtectionWriteBudget, PROTECTION_WRITE_CAP, type ProtectionWriteBudget } from "../lib/forward-write-budget.ts";
 import { MULTI_TURN_PROFIT_PROTECTION_VERSION } from "../lib/multi-turn-profit-protection.ts";
+import { MULTI_TURN_VERSION } from "../lib/multi-turn-engine.ts";
 register("./worker-test-loader.mjs",import.meta.url);
 const { MarketStream }=await import("../worker/index-clean.ts");
 const T=1_790_100_000_000;
@@ -101,51 +102,33 @@ test("dynamic Multi-Turn profit floor survives a compact restart overlay without
   assert.equal(restored.positions[0].favorable,.08);
 });
 
-test("Multi-Turn arms and restores a profit floor, including a legacy deferred migration",async()=>{
-  const start=Date.parse("2026-09-21T00:00:00Z");
-  const rows:Array<{time:number;open:number;high:number;low:number;close:number;volume:number}>=[],barTime=(n:number)=>start/1000+n*300,target=103.5;
-  let prev=target;
-  for(let i=0;i<330;i++){
-    const close=target*(1+.0013*Math.sin(i*1.17));
-    rows.push({time:barTime(i),open:prev,high:Math.max(prev,close)*1.0007,low:Math.min(prev,close)*.9993,close,volume:1000+i});prev=close;
-  }
-  for(let j=0;j<16;j++){
-    const i=rows.length,close=target+(100.20-target)*(j+1)/16;
-    rows.push({time:barTime(i),open:prev,high:Math.max(prev,close)*1.0007,low:Math.min(prev,close)*.9993,close,volume:1400+i});prev=close;
-  }
-  for(const close of[100.08,99.96,100.05,99.98,100.04,99.97]){
-    const i=rows.length;rows.push({time:barTime(i),open:prev,high:Math.max(prev,close)*1.00055,low:Math.min(prev,close)*.99945,close,volume:1600+i});prev=close;
-  }
-  for(const close of[100.35,100.68,101.0]){
-    const i=rows.length;rows.push({time:barTime(i),open:prev,high:Math.max(prev,close)*1.0007,low:Math.min(prev,close)*.9994,close,volume:1800+i});prev=close;
-  }
-  const now=(rows.at(-1)!.time+300)*1000+1000,mid=rows.at(-1)!.close;
-  const state=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:rows},
-    quotes:{BTC_USDT:{bestBid:mid*.9999,bestAsk:mid*1.0001,observedAt:now,fresh:true,entryReady:true}},
-    contracts:{BTC_USDT:{quantoMultiplier:.001,leverageMax:50,maintenanceRate:.005,minContracts:1}}}).state;
-  assert.equal(state.positions.length,1);
-  const trade=state.positions[0],frame=state.turnEngine!.frames.BTC_USDT[trade.turn!.timeframe]!;
-  frame.continuationScore=.55;frame.triggerProbability=.20;frame.direction=trade.side;frame.rawDirection=trade.side;
-  frame.phase="FLOW";frame.lastTurnAt=null;state.lastCycleAt=now;
+test("inherited pre-region Multi-Turn profit protection still arms and survives compact restart",async()=>{
+  const now=T+200_000,state=initialMultiTurnForward(now-1000),trade=structuredClone(account().positions[0]);
+  trade.openedAt=now-60_000;trade.lastQuoteAt=now;trade.rule.authority="MULTI_TURN";trade.rule.turnTimeframe="5m";
+  trade.rule.grammar=MULTI_TURN_VERSION;trade.rule.horizon=360;
+  trade.turn={version:MULTI_TURN_VERSION,timeframe:"5m",signalAt:now-60_000,
+    entryTurnProbability:.1,entryContinuation:.8,entryDirectionConfidence:.8};
   trade.profitProtectionMigration={version:"multi-turn-profit-floor-v4",state:"DEFERRED",updatedAt:now,baselineFavorable:0};
-  state.storage={persistedAt:now,error:null};
-  const px=trade.entryPrice*(trade.side==="LONG"?1.035:.965),peakAt=now+10_000;
-  const next=advanceForward({state,now:peakAt,paths:{},
-    quotes:{BTC_USDT:{bestBid:px*.99999,bestAsk:px*1.00001,observedAt:peakAt,fresh:true,entryReady:true}},contracts:{}});
+  state.positions=[trade];state.storage={persistedAt:now,error:null};state.lastCycleAt=now;state.lastQuoteCycleAt=now-20_000;
 
+  const px=trade.entryPrice*1.035,peakAt=now+10_000;
+  const next=advanceForward({state,now:peakAt,paths:{},quotes:{BTC_USDT:{bestBid:px*.99999,bestAsk:px*1.00001,
+    observedAt:peakAt,fresh:true,entryReady:true}},contracts:{},allowDataCycle:false});
   assert.equal(next.state.positions.length,1);
   assert.ok(next.state.positions[0].profitProtection);
   assert.equal(next.state.positions[0].profitProtectionMigration?.state,"CURRENT");
   assert.equal(next.protectionChanged,true);
+
   const store=new Memory();await store.put((await prepareForwardWrite(null,state,now,{compact:true})).entries);
   await store.put(prepareForwardProtectionWrite(next.state).entries);
   const restored=await readForwardStore(store,peakAt+1000);
   assert.deepEqual(restored.positions[0].profitProtection,next.state.positions[0].profitProtection);
   assert.equal(restored.positions[0].profitProtectionMigration?.state,"CURRENT");
+
   const floor=restored.positions[0].profitProtection!.floorRate;
-  const exitPx=trade.entryPrice*(trade.side==="LONG"?1+floor*.5:1-floor*.5),exitAt=peakAt+2000;
+  const exitPx=trade.entryPrice*(1+floor*.5),exitAt=peakAt+2000;
   const input={now:exitAt,paths:{},contracts:{},quotes:{BTC_USDT:{bestBid:exitPx*.99999,
-    bestAsk:exitPx*1.00001,observedAt:exitAt,fresh:true}}};
+    bestAsk:exitPx*1.00001,observedAt:exitAt,fresh:true}},allowDataCycle:false};
   const restarted=advanceForward({...input,state:restored}).state;
   const continuous=advanceForward({...input,state:next.state}).state;
   assert.equal(restarted.positions.length,0);

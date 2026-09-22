@@ -125,3 +125,66 @@ export function selectAnchorOpportunityUniverse(input:{
   for(const x of activity)push(x.row.symbol,"ACTIVITY");
   return selected.slice(0,limit);
 }
+
+export type RegionLifecycleUniverseRow=MultiTurnUniverseTicker&{
+  selectionSource:"LOCKED_REGION"|"RESIDENT"|"EXPLORATION";
+  activityScore:number;
+  range24hRate:number;
+  liquidityFloorUsd:number;
+};
+
+/**
+ * Outer 5m region scanner.
+ * - Region/position symbols keep their path while still liquid.
+ * - Resident slots prefer observable travel, not turnover rank.
+ * - Exploration rotates through the rest of the liquid Gate USDT-perp surface.
+ * Turnover is only a fixed executability floor; no direction is inferred here.
+ */
+export function selectRegionLifecycleUniverse(input:{
+  rows:MultiTurnUniverseTicker[];
+  limit?:number;
+  lockedSymbols?:Iterable<string>;
+  currentSymbols?:Iterable<string>;
+  rotationSeed?:number;
+  explorationSlots?:number;
+}):RegionLifecycleUniverseRow[]{
+  const limit=Math.max(1,Math.floor(input.limit??60));
+  const valid=input.rows.filter(r=>r.symbol.endsWith("_USDT")&&r.last>0&&r.high24h>=r.low24h&&r.low24h>0
+    &&r.volume24hUsd>0&&[r.change24hRate,r.volume24hUsd,r.fundingRate,r.openInterest].every(Number.isFinite));
+  if(!valid.length)return[];
+  const liquidityFloorUsd=100_000;
+  const liquid=valid.filter(r=>r.volume24hUsd>=liquidityFloorUsd);
+  if(!liquid.length)return[];
+  const current=new Set(input.currentSymbols??[]);
+  const scored=liquid.map(row=>{
+    const range24hRate=Math.max(0,(row.high24h-row.low24h)/Math.max(row.last,1e-12));
+    const travel=clip(range24hRate/.08),netMove=clip(Math.abs(row.change24hRate)/.05);
+    return{row,range24hRate,activityScore:.70*travel+.30*netMove+(current.has(row.symbol)?.04:0)};
+  });
+  const bySymbol=new Map(scored.map(x=>[x.row.symbol,x]));
+  const selected:RegionLifecycleUniverseRow[]=[],used=new Set<string>();
+  const push=(symbol:string,source:RegionLifecycleUniverseRow["selectionSource"])=>{
+    if(used.has(symbol)||selected.length>=limit)return;
+    const x=bySymbol.get(symbol);if(!x)return;
+    used.add(symbol);selected.push({...x.row,selectionSource:source,activityScore:x.activityScore,
+      range24hRate:x.range24hRate,liquidityFloorUsd});
+  };
+
+  for(const symbol of input.lockedSymbols??[])push(symbol,"LOCKED_REGION");
+
+  const explorationSlots=Math.min(Math.max(0,Math.floor(input.explorationSlots??18)),Math.max(0,limit-selected.length));
+  const residentSlots=Math.max(0,limit-selected.length-explorationSlots);
+  const activity=[...scored].filter(x=>!used.has(x.row.symbol))
+    .sort((a,b)=>b.activityScore-a.activityScore||b.range24hRate-a.range24hRate
+      ||Math.abs(b.row.change24hRate)-Math.abs(a.row.change24hRate)||a.row.symbol.localeCompare(b.row.symbol));
+  for(const x of activity.slice(0,residentSlots))push(x.row.symbol,"RESIDENT");
+
+  const remaining=activity.filter(x=>!used.has(x.row.symbol)).sort((a,b)=>a.row.symbol.localeCompare(b.row.symbol));
+  if(remaining.length&&explorationSlots){
+    const start=((Math.floor(input.rotationSeed??0)*explorationSlots)%remaining.length+remaining.length)%remaining.length;
+    for(let i=0;i<explorationSlots&&selected.length<limit;i++)push(remaining[(start+i)%remaining.length]!.row.symbol,"EXPLORATION");
+  }
+  for(const x of activity)push(x.row.symbol,"RESIDENT");
+  return selected.slice(0,limit);
+}
+

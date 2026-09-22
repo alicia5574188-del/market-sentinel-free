@@ -71,3 +71,72 @@ test("turnover is only a liquidity floor in the new selector",async()=>{
   const a=selected.find(x=>x.symbol==="A_USDT"),b=selected.find(x=>x.symbol==="B_USDT");
   assert.ok(a&&b);assert.equal(a!.activityScore,b!.activityScore);
 });
+
+
+test("region lifecycle universe expands completed-5m scanning to 60 while retaining mature-region symbols",async()=>{
+  const {selectRegionLifecycleUniverse}=await import("../lib/multi-turn-universe.ts");
+  const rows=[
+    row("LOCKED_REGION_USDT",.002,.02,250_000),
+    ...Array.from({length:90},(_,i)=>row(`R${String(i).padStart(2,"0")}_USDT`,.006+(i%7)*.004,.025+(i%11)*.005,300_000+i*2_000)),
+  ];
+  const selected=selectRegionLifecycleUniverse({rows,limit:60,lockedSymbols:["LOCKED_REGION_USDT"],rotationSeed:0,explorationSlots:18});
+  assert.equal(selected.length,60);
+  assert.equal(selected[0].symbol,"LOCKED_REGION_USDT");
+  assert.equal(selected[0].selectionSource,"LOCKED_REGION");
+});
+
+test("region lifecycle exploration rotates across the wider liquid surface without enlarging realtime authority",async()=>{
+  const {selectRegionLifecycleUniverse}=await import("../lib/multi-turn-universe.ts");
+  const rows=Array.from({length:100},(_,i)=>row(`X${String(i).padStart(3,"0")}_USDT`,.008+(i%5)*.003,.03+(i%13)*.004,500_000+i*1_000));
+  const a=selectRegionLifecycleUniverse({rows,limit:60,rotationSeed:0,explorationSlots:18});
+  const b=selectRegionLifecycleUniverse({rows,limit:60,rotationSeed:1,explorationSlots:18});
+  assert.equal(a.length,60);assert.equal(b.length,60);
+  assert.equal(a.filter(x=>x.selectionSource==="EXPLORATION").length,18);
+  assert.equal(b.filter(x=>x.selectionSource==="EXPLORATION").length,18);
+  const ae=new Set(a.filter(x=>x.selectionSource==="EXPLORATION").map(x=>x.symbol));
+  const be=new Set(b.filter(x=>x.selectionSource==="EXPLORATION").map(x=>x.symbol));
+  assert.ok([...ae].some(x=>!be.has(x)));
+});
+
+test("turnover remains only a fixed liquidity floor for the region scanner",async()=>{
+  const {selectRegionLifecycleUniverse}=await import("../lib/multi-turn-universe.ts");
+  const rows=[
+    row("LOWVOL_USDT",.03,.07,150_000),
+    row("WHALE_USDT",.03,.07,9_000_000_000),
+    row("TOO_THIN_USDT",.20,.30,99_999),
+    ...Array.from({length:70},(_,i)=>row(`L${i}_USDT`,.015,.045,200_000+i*1_000)),
+  ];
+  const selected=selectRegionLifecycleUniverse({rows,limit:60,rotationSeed:0,explorationSlots:18});
+  const a=selected.find(x=>x.symbol==="LOWVOL_USDT"),b=selected.find(x=>x.symbol==="WHALE_USDT");
+  assert.ok(a&&b);assert.equal(a!.activityScore,b!.activityScore);
+  assert.equal(selected.some(x=>x.symbol==="TOO_THIN_USDT"),false);
+});
+
+
+test("region lifecycle pool expands completed-5m scanning to 60 while retaining active regions",async()=>{
+  const {selectRegionLifecycleUniverse}=await import("../lib/multi-turn-universe.ts");
+  const rows=[
+    row("LOCKED_REGION_USDT",.002,.012,250_000),
+    ...Array.from({length:95},(_,i)=>row(`R${String(i).padStart(2,"0")}_USDT`,.01+(i%7)*.004,.02+(i%13)*.004,300_000+i*2_000)),
+  ];
+  const selected=selectRegionLifecycleUniverse({rows,limit:60,lockedSymbols:["LOCKED_REGION_USDT"],rotationSeed:0,explorationSlots:18});
+  assert.equal(selected.length,60);
+  assert.equal(selected[0].symbol,"LOCKED_REGION_USDT");
+  assert.equal(selected[0].selectionSource,"LOCKED_REGION");
+  assert.equal(selected.filter(x=>x.selectionSource==="EXPLORATION").length,18);
+});
+
+test("region lifecycle exploration rotates without using turnover as a ranking signal",async()=>{
+  const {selectRegionLifecycleUniverse}=await import("../lib/multi-turn-universe.ts");
+  const rows=[
+    row("A_USDT",.04,.08,300_000),
+    row("B_USDT",.04,.08,3_000_000_000),
+    ...Array.from({length:90},(_,i)=>row(`X${i}_USDT`,.01+(i%5)*.003,.025+(i%11)*.004,400_000+i*1_000)),
+  ];
+  const a=selectRegionLifecycleUniverse({rows,limit:60,rotationSeed:0,explorationSlots:18});
+  const b=selectRegionLifecycleUniverse({rows,limit:60,rotationSeed:1,explorationSlots:18});
+  assert.equal(a.find(x=>x.symbol==="A_USDT")?.activityScore,a.find(x=>x.symbol==="B_USDT")?.activityScore);
+  const ae=new Set(a.filter(x=>x.selectionSource==="EXPLORATION").map(x=>x.symbol));
+  const be=new Set(b.filter(x=>x.selectionSource==="EXPLORATION").map(x=>x.symbol));
+  assert.ok([...ae].some(x=>!be.has(x)));
+});
