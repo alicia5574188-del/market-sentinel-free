@@ -103,14 +103,24 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       <section className="fr-section"><div className="fr-section-head"><div><small>唯一策略权威</small><h2>转折状态总览</h2></div><span>{data?.strategyAuthorityVersion??"读取中"}</span></div>
         <div className="fr-rule-grid">{turnRows.map(row=><article className="fr-rule" key={row.tf}><header><span>{row.tf}级别</span><b>{row.rows.length} 市场</b></header>
           <h3>多 {row.long} · 空 {row.short} · 中性 {row.neutral}</h3>
-          <div className="fr-rule-numbers"><div><small>平均转折概率</small><b>{row.avgTurn==null?"—":`${fmt(row.avgTurn*100,1)}%`}</b></div>
-            <div><small>转折中 / 已确认</small><b>{row.turning}</b></div><div><small>Brier</small><b>{row.cal?.count?fmt(row.cal.brier,3):"待样本"}</b></div></div>
+          <div className="fr-rule-numbers"><div><small>平均反转风险</small><b>{row.avgTurn==null?"—":`${fmt(row.avgTurn*100,1)}%`}</b></div>
+            <div><small>转折中 / 刚确认</small><b>{row.turning}</b></div><div><small>Brier</small><b>{row.cal?.count?fmt(row.cal.brier,3):"待样本"}</b></div></div>
           <footer><span>风险袖套 {fmt((data?.turnRiskSleeves?.[row.tf]??0)*100,1)}%</span><span>校准 {row.cal?.count??0} 次</span></footer></article>)}</div>
         <p className="fr-note">{data?.marketRiskBudget.reason??"等待风险预算。"}</p>
       </section>
-      <section className="fr-section"><div className="fr-section-head"><div><small>当前最敏感变化</small><h2>最高转折概率</h2></div><span>最多10项</span></div>
-        {hotTurns.length?<div>{hotTurns.map(x=><p className="fr-diagnostic-row" key={`${x.symbol}:${x.timeframe}`}><b>{x.symbol.replace("_"," / ")} · {x.timeframe}</b>
-          <span>{x.direction==="LONG"?"多":"空"}向 · 转折 {fmt(x.triggerProbability*100,1)}% · 延续 {fmt(x.continuationScore*100,1)}% · {x.phase}</span></p>)}</div>
+      <section className="fr-section"><div className="fr-section-head"><div><small>当前最敏感变化</small><h2>最强转折信号</h2></div><span>最多10项</span></div>
+        {hotTurns.length?<div>{hotTurns.map(x=>{const current=x.direction==="LONG"?"多":x.direction==="SHORT"?"空":"中性";
+          const opposite=x.direction==="LONG"?"空":x.direction==="SHORT"?"多":"—";
+          const status=x.phase==="CONFIRMED"
+            ?`已确认 ${opposite}→${current} · 触发 ${fmt(x.triggerProbability*100,1)}% · 当前转${opposite}风险 ${fmt(x.turnProbability*100,1)}% · 延续 ${fmt(x.continuationScore*100,1)}%`
+            :x.phase==="TURNING"
+              ?`当前${current} · 正在转${opposite} ${fmt(x.triggerProbability*100,1)}% · 延续 ${fmt(x.continuationScore*100,1)}%`
+              :x.phase==="WATCH"
+                ?`当前${current} · 观察转${opposite} ${fmt(x.triggerProbability*100,1)}% · 延续 ${fmt(x.continuationScore*100,1)}%`
+                :x.direction==="NEUTRAL"
+                  ?`当前中性 · 等待方向确认`
+                  :`当前${current} · 延续 ${fmt(x.continuationScore*100,1)}% · 转${opposite}风险 ${fmt(x.triggerProbability*100,1)}%`;
+          return <p className="fr-diagnostic-row" key={`${x.symbol}:${x.timeframe}`}><b>{x.symbol.replace("_"," / ")} · {x.timeframe}</b><span>{status}</span></p>;})}</div>
           :<Empty title="正在建立六周期状态" text="短周期会先就绪；日线只影响日线级别，不阻塞其他周期。"/>}
       </section>
       <section className="fr-section"><div className="fr-section-head"><div><small>执行诊断</small><h2>本轮参与</h2></div><span>{time(data?.turnEngine?.updatedAt)}</span></div>
