@@ -1,0 +1,3 @@
+One-shot PAPER reset trigger.
+Purpose: trigger the already-registered post-release reset workflow once.
+No production strategy or runtime code is changed by this file.
