@@ -40,7 +40,11 @@ export function evaluateMultiTurnEntryPolicy(input:{
   const c=input.candidate,mid=(input.bestBid+input.bestAsk)/2,spread=(input.bestAsk-input.bestBid)/Math.max(mid,1e-9);
   if(spread>.0015)return{ok:false,reason:"当前买卖价差过大",rotationEligible:false,remainingSpaceRate:0};
   const d=c.side==="LONG"?1:-1,progress=d*(mid/c.signalPrice-1);
-  const adverseLimit=Math.max(.0015,Math.min(c.stopRate*.35,c.expectedMoveRate*.60));
+  const price=(c.side==="LONG"?input.bestAsk:input.bestBid)*(1+d*input.slippageRate);
+  const structuralStopRate=c.stopPrice!=null?d*(price-c.stopPrice)/Math.max(price,1e-9):c.stopRate;
+  if(!(structuralStopRate>0))return{ok:false,reason:"结构止损不在锚点反向一侧，本轮放弃开仓",rotationEligible:false,remainingSpaceRate:0};
+  if(structuralStopRate>TURN_CONFIG[c.timeframe].maxStop)return{ok:false,reason:"实际成交价到锚点结构止损的距离超过该周期风险边界，不把止损往锚点内移动",rotationEligible:false,remainingSpaceRate:0};
+  const adverseLimit=Math.max(.0015,Math.min(structuralStopRate*.35,c.expectedMoveRate*.60));
   if(progress< -adverseLimit)return{ok:false,reason:"方向—空间评分形成后价格已明显逆向，原入场上下文失效",rotationEligible:false,remainingSpaceRate:0};
   const remaining=c.expectedMoveRate-input.costRate-Math.max(0,progress);
   if(remaining<=0)return{ok:false,reason:"价格推进和交易成本已吃掉该周期剩余空间",rotationEligible:false,remainingSpaceRate:remaining};
@@ -51,8 +55,8 @@ export function evaluateMultiTurnEntryPolicy(input:{
   const quality=clip(c.continuationScore*(.65+.35*c.confidence),.15,1);
   const headroom=Math.min(input.equity*.10-input.totalRisk,input.equity*.065-sideRisk,input.equity*c.riskCap-sleeveRisk);
   const targetRisk=Math.max(0,Math.min(input.equity*.015*quality*drawdownScale,headroom));
-  const lossRate=c.stopRate+input.costRate;
-  const leverage=multiTurnEntryLeverage(c.stopRate,input.contract.maintenanceRate,input.costRate,input.contract.leverageMax);
+  const lossRate=structuralStopRate+input.costRate;
+  const leverage=multiTurnEntryLeverage(structuralStopRate,input.contract.maintenanceRate,input.costRate,input.contract.leverageMax);
   if(leverage<MULTI_TURN_MIN_LEVERAGE)return{ok:false,reason:"该结构在6倍逐仓杠杆下仍无法保留止损前安全余量，本轮放弃开仓",rotationEligible:false,remainingSpaceRate:remaining};
   const immediateMarkCost=Math.max(0,2*(input.feeRate+input.slippageRate)+spread);
   const totalCapNotional=Math.max(0,(input.equity*.10-input.totalRisk)/(lossRate+.10*immediateMarkCost));
@@ -65,7 +69,6 @@ export function evaluateMultiTurnEntryPolicy(input:{
   if(marginCapNotional<riskDesired*.85)return{ok:false,reason:"降低杠杆后可用保证金不足以维持目标名义价值，不缩成小单",rotationEligible:false,remainingSpaceRate:remaining};
   const desired=Math.min(riskDesired,marginCapNotional);
 
-  const price=(c.side==="LONG"?input.bestAsk:input.bestBid)*(1+d*input.slippageRate);
   const exitNow=(c.side==="LONG"?input.bestBid:input.bestAsk)*(1-d*input.slippageRate);
   const notionalPer=price*input.contract.quantoMultiplier,riskPer=notionalPer*lossRate;
   const equityDeltaPer=-notionalPer*input.feeRate+d*input.contract.quantoMultiplier*(exitNow-price)-input.contract.quantoMultiplier*exitNow*input.feeRate;

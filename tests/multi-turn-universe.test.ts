@@ -33,3 +33,41 @@ test("quiet contracts can be omitted even if liquid",()=>{
   const ranked=rankMultiTurnUniverse([row("QUIET_USDT",.002,.01,10_000_000_000),row("MOVE_USDT",.08,.12,10_000)],30);
   assert.deepEqual(ranked.map(x=>x.symbol),["MOVE_USDT"]);
 });
+
+
+test("dynamic anchor pool keeps confirmed anchor symbols and does not rank by turnover",async()=>{
+  const {selectAnchorOpportunityUniverse}=await import("../lib/multi-turn-universe.ts");
+  const rows=[
+    row("LOCKED_USDT",.01,.035,200_000),
+    row("QUIET_WHALE_USDT",.001,.008,8_000_000_000),
+    ...Array.from({length:40},(_,i)=>row(`MOVE${String(i).padStart(2,"0")}_USDT`,.01+(i%5)*.006,.035+(i%9)*.006,300_000+i*10_000)),
+  ];
+  const selected=selectAnchorOpportunityUniverse({rows,limit:30,lockedSymbols:["LOCKED_USDT"],rotationSeed:0});
+  assert.equal(selected.length,30);
+  assert.equal(selected[0].symbol,"LOCKED_USDT");
+  assert.equal(selected[0].selectionSource,"LOCKED_ANCHOR");
+  assert.equal(selected.some(x=>x.symbol==="QUIET_WHALE_USDT"),false);
+});
+
+test("dynamic anchor pool rotates exploration slots across the wider liquid universe",async()=>{
+  const {selectAnchorOpportunityUniverse}=await import("../lib/multi-turn-universe.ts");
+  const rows=Array.from({length:70},(_,i)=>row(`C${String(i).padStart(2,"0")}_USDT`,.01+(i%4)*.004,.03+(i%10)*.004,500_000+i*1_000));
+  const a=selectAnchorOpportunityUniverse({rows,limit:30,rotationSeed:0,explorationSlots:6});
+  const b=selectAnchorOpportunityUniverse({rows,limit:30,rotationSeed:1,explorationSlots:6});
+  const ae=new Set(a.filter(x=>x.selectionSource==="EXPLORATION").map(x=>x.symbol));
+  const be=new Set(b.filter(x=>x.selectionSource==="EXPLORATION").map(x=>x.symbol));
+  assert.equal(a.length,30);assert.equal(b.length,30);
+  assert.ok([...ae].some(x=>!be.has(x)));
+});
+
+test("turnover is only a liquidity floor in the new selector",async()=>{
+  const {selectAnchorOpportunityUniverse}=await import("../lib/multi-turn-universe.ts");
+  const rows=[
+    row("A_USDT",.04,.08,300_000),
+    row("B_USDT",.04,.08,3_000_000_000),
+    ...Array.from({length:35},(_,i)=>row(`F${i}_USDT`,.02,.04,400_000+i*1_000)),
+  ];
+  const selected=selectAnchorOpportunityUniverse({rows,limit:30,rotationSeed:0});
+  const a=selected.find(x=>x.symbol==="A_USDT"),b=selected.find(x=>x.symbol==="B_USDT");
+  assert.ok(a&&b);assert.equal(a!.activityScore,b!.activityScore);
+});

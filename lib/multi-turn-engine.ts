@@ -255,7 +255,7 @@ export function evaluateMultiTurn(input:{state?:MultiTurnState|null;paths:Record
 }
 
 export type TurnCandidate={symbol:string;timeframe:TurnTimeframe;side:Exclude<TurnSide,"NEUTRAL">;
-  score:number;riskCap:number;stopRate:number;expectedMoveRate:number;turnProbability:number;confidence:number;continuationScore:number;
+  score:number;riskCap:number;stopRate:number;stopPrice?:number;expectedMoveRate:number;turnProbability:number;confidence:number;continuationScore:number;
   completedAt:number;signalPrice:number;reason:string};
 
 export function multiTurnCandidateScore(frame:TurnFrameState,cost:number){

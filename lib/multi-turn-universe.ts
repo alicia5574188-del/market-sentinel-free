@@ -55,3 +55,73 @@ export function rankMultiTurnUniverse(rows:MultiTurnUniverseTicker[],limit=30):R
     .sort((a,b)=>b.score-a.score||b.range24hRate-a.range24hRate||a.symbol.localeCompare(b.symbol));
   return ranked.slice(0,Math.max(1,Math.floor(limit)));
 }
+
+
+export type AnchorOpportunityUniverseRow=MultiTurnUniverseTicker&{
+  selectionSource:"LOCKED_ANCHOR"|"ACTIVITY"|"EXPLORATION";
+  activityScore:number;
+  range24hRate:number;
+  liquidityFloorUsd:number;
+};
+
+/**
+ * Cheap outer selector for the winding-anchor engine.
+ * It does NOT predict direction and does NOT revive the retired volatility strategy.
+ * Turnover is only an executability floor. Actual anchor/entry qualification still
+ * happens later from 5m/15m/30m/1h candles.
+ *
+ * Slots:
+ * - confirmed current anchor opportunities stay in the scan set while still liquid;
+ * - most remaining slots go to markets with enough observable price travel;
+ * - a small rotating exploration sleeve samples the rest of the liquid Gate universe.
+ */
+export function selectAnchorOpportunityUniverse(input:{
+  rows:MultiTurnUniverseTicker[];
+  limit?:number;
+  lockedSymbols?:Iterable<string>;
+  currentSymbols?:Iterable<string>;
+  rotationSeed?:number;
+  explorationSlots?:number;
+}):AnchorOpportunityUniverseRow[]{
+  const limit=Math.max(1,Math.floor(input.limit??30));
+  const valid=input.rows.filter(r=>r.symbol.endsWith("_USDT")&&r.last>0&&r.high24h>=r.low24h&&r.low24h>0
+    &&r.volume24hUsd>0&&[r.change24hRate,r.volume24hUsd,r.fundingRate,r.openInterest].every(Number.isFinite));
+  if(!valid.length)return[];
+  const liquidityFloorUsd=100_000;
+  const liquid=valid.filter(r=>r.volume24hUsd>=liquidityFloorUsd);
+  if(!liquid.length)return[];
+  const bySymbol=new Map(liquid.map(r=>[r.symbol,r]));
+  const current=new Set(input.currentSymbols??[]);
+  const scored=liquid.map(row=>{
+    const range24hRate=Math.max(0,(row.high24h-row.low24h)/Math.max(row.last,1e-12));
+    const travel=clip(range24hRate/.08);
+    const netMove=clip(Math.abs(row.change24hRate)/.05);
+    const activityScore=.72*travel+.28*netMove+(current.has(row.symbol)?.025:0);
+    return{row,range24hRate,activityScore};
+  });
+  const selected:AnchorOpportunityUniverseRow[]=[];
+  const used=new Set<string>();
+  const push=(symbol:string,source:AnchorOpportunityUniverseRow["selectionSource"])=>{
+    if(used.has(symbol)||selected.length>=limit)return;
+    const row=bySymbol.get(symbol),score=scored.find(x=>x.row.symbol===symbol);if(!row||!score)return;
+    used.add(symbol);selected.push({...row,selectionSource:source,activityScore:score.activityScore,
+      range24hRate:score.range24hRate,liquidityFloorUsd});
+  };
+
+  for(const symbol of input.lockedSymbols??[])push(symbol,"LOCKED_ANCHOR");
+
+  const explorationSlots=Math.min(Math.max(0,Math.floor(input.explorationSlots??6)),Math.max(0,limit-selected.length));
+  const activitySlots=Math.max(0,limit-selected.length-explorationSlots);
+  const activity=[...scored].filter(x=>!used.has(x.row.symbol))
+    .sort((a,b)=>b.activityScore-a.activityScore||b.range24hRate-a.range24hRate
+      ||Math.abs(b.row.change24hRate)-Math.abs(a.row.change24hRate)||a.row.symbol.localeCompare(b.row.symbol));
+  for(const x of activity.slice(0,activitySlots))push(x.row.symbol,"ACTIVITY");
+
+  const remaining=activity.filter(x=>!used.has(x.row.symbol)).sort((a,b)=>a.row.symbol.localeCompare(b.row.symbol));
+  if(remaining.length&&explorationSlots){
+    const start=((Math.floor(input.rotationSeed??0)*explorationSlots)%remaining.length+remaining.length)%remaining.length;
+    for(let i=0;i<explorationSlots&&selected.length<limit;i++)push(remaining[(start+i)%remaining.length].row.symbol,"EXPLORATION");
+  }
+  for(const x of activity)push(x.row.symbol,"ACTIVITY");
+  return selected.slice(0,limit);
+}

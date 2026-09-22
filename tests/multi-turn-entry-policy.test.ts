@@ -12,13 +12,18 @@ test("entry leverage uses 6-12x structural tiers",()=>{
   assert.equal(multiTurnEntryLeverage(.03,.005,.0022,50),8);
   assert.equal(multiTurnEntryLeverage(.05,.005,.0022,50),6);
 });
-test("an entry that would require below 6x is rejected instead of forcing unsafe leverage",()=>{
+test("an unsafe structural stop is never rescued by leverage or by pulling the stop inward",()=>{
   assert.equal(multiTurnEntryLeverage(.14,.02,.01,50),0);
   const r=evaluateMultiTurnEntryPolicy({...base,candidate:{...candidate,stopRate:.14}});
-  assert.equal(r.ok,false);if(!r.ok)assert.match(r.reason,/6倍逐仓杠杆/);
+  assert.equal(r.ok,false);if(!r.ok)assert.match(r.reason,/风险边界/);
 });
 test("lower leverage never silently turns a target order into a tiny notional",()=>{
   const normal=evaluateMultiTurnEntryPolicy(base);assert.equal(normal.ok,true);
   const constrained=evaluateMultiTurnEntryPolicy({...base,usedMargin:730});
   assert.equal(constrained.ok,false);if(!constrained.ok)assert.match(constrained.reason,/不缩成小单|保证金/);
+});
+
+test("exact anchor stop cannot be pulled inward when execution slippage makes it too wide",()=>{
+  const r=evaluateMultiTurnEntryPolicy({...base,candidate:{...candidate,stopRate:.01,stopPrice:94}});
+  assert.equal(r.ok,false);if(!r.ok)assert.match(r.reason,/不把止损往锚点内移动/);
 });
