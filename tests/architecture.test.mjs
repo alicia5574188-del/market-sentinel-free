@@ -113,7 +113,7 @@ test("native dark LIVE console retains owner authentication and isolates financi
     assert.ok(consoleUi.includes(label));
   assert.match(consoleUi, /当前模拟账户。按权益比例复制/);
   assert.match(consoleUi, /沿用源单杠杆、保护和退出依据/);
-  assert.match(layout, /哨兵 · 多周期转折引擎/);
+  assert.match(layout, /哨兵 · 区域生命周期引擎/);
   assert.match(layout, /themeColor: "#0b111a"/);
   const fontSizes=[...css.matchAll(/font-size:\s*(\d+)px/g)].map(v=>Number(v[1]));
   assert.ok(fontSizes.length>40&&Math.min(...fontSizes)>=14);
