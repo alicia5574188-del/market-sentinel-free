@@ -118,7 +118,7 @@ function opportunityFor(input:{symbol:string;timeframe:TurnTimeframe;rows:TurnCa
   const positionScore=100*(1-clip(distanceAbs/Math.max(maxEntryDistanceRate,1e-9)));
 
   const demonstratedRemaining=Math.max(0,anchor.mfeRate-Math.max(0,distanceFromAnchorRate));
-  const structuralSpaceRate=nearestStructureSpace(rows,anchor.side,currentPrice,atrRate);
+  const structuralSpaceRate=nearestStructureSpace(rows.slice(0,anchor.anchorIndex+1),anchor.side,currentPrice,atrRate);
   const grossRemainingSpaceRate=Math.max(0,structuralSpaceRate==null?demonstratedRemaining:Math.min(demonstratedRemaining,structuralSpaceRate));
   const netRemainingSpaceRate=Math.max(0,grossRemainingSpaceRate-input.costRate);
   const pullbackRiskRate=Math.max(anchor.maeRate,atrRate*.35,input.costRate*.50);
