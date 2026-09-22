@@ -40,7 +40,6 @@ test("four-hour no-progress holding releases on the faster management clock even
 });
 
 test("meaningful favorable progress preserves the baseline hold-value decision",()=>{
-  const r=evaluateMultiTurnExitOverlay({timeframe:"4h",side:"LONG",test("meaningful favorable progress preserves the baseline hold-value decision",()=>{
   const r=evaluateMultiTurnExitOverlay({timeframe:"4h",side:"LONG",openedAt:NOW-8*60*60_000,now:NOW,
     returnRate:.01,favorableRate:.04,riskRate:.08,modeledCostRate:.0022,entryExpectedMoveRate:.08,frame:null});
   assert.equal(r.decision,null);
