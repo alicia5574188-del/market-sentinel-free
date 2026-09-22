@@ -34,7 +34,7 @@ test("runtime uses bounded futures REST snapshots, no continuous WebSocket", asy
   assert.ok(alarm.indexOf("processBooks") < alarm.indexOf("advanceForwardNow(Date.now(),false)"), "fresh books must precede critical forward management");
   assert.ok(alarm.indexOf("advanceForwardNow(Date.now(),false)") < alarm.indexOf("syncLive"), "persisted PAPER exits must precede LIVE reconciliation");
   assert.ok(alarm.indexOf("syncLive") < alarm.indexOf("launchOptionalWork"), "LIVE reconciliation must run before optional market work is launched");
-  const optional=worker.slice(worker.indexOf("private launchOptionalWork"),worker.indexOf("private async syncTurnover"));
+  const optional=worker.slice(worker.indexOf("private launchOptionalWork"),worker.indexOf("async alarm("));
   assert.match(optional,/refreshStrategyCandle[\s\S]*refreshTurnDaily[\s\S]*advanceForwardNow\(Date\.now\(\),true\)/,
     "only the post-refresh optional path may advance completed-candle turn state");
   assert.doesNotMatch(alarm, /lastError = `radar:/, "a radar timeout must not become a global execution fault");
