@@ -43,6 +43,7 @@ export function evaluateMultiTurnEntryPolicy(input:{
   const price=(c.side==="LONG"?input.bestAsk:input.bestBid)*(1+d*input.slippageRate);
   const structuralStopRate=c.stopPrice!=null?d*(price-c.stopPrice)/Math.max(price,1e-9):c.stopRate;
   if(!(structuralStopRate>0))return{ok:false,reason:"结构止损不在锚点反向一侧，本轮放弃开仓",rotationEligible:false,remainingSpaceRate:0};
+  if(structuralStopRate>TURN_CONFIG[c.timeframe].maxStop)return{ok:false,reason:"实际成交价到锚点结构止损的距离超过该周期风险边界，不把止损往锚点内移动",rotationEligible:false,remainingSpaceRate:0};
   const adverseLimit=Math.max(.0015,Math.min(structuralStopRate*.35,c.expectedMoveRate*.60));
   if(progress< -adverseLimit)return{ok:false,reason:"方向—空间评分形成后价格已明显逆向，原入场上下文失效",rotationEligible:false,remainingSpaceRate:0};
   const remaining=c.expectedMoveRate-input.costRate-Math.max(0,progress);
