@@ -1,12 +1,15 @@
 import { TURN_CONFIG, TURN_TIMEFRAMES, type TurnCandidate, type TurnTimeframe } from "./multi-turn-engine.ts";
 
 export const MULTI_TURN_ENTRY_POLICY_VERSION="multi-turn-entry-policy-v1";
-export const MULTI_TURN_TARGET_LEVERAGE=20;
+export const MULTI_TURN_MIN_LEVERAGE=6;
+export const MULTI_TURN_TARGET_LEVERAGE=12;
 
 export function multiTurnEntryLeverage(stopRate:number,maintenanceRate:number,costRate:number,leverageMax:number){
-  if(![stopRate,maintenanceRate,costRate,leverageMax].every(Number.isFinite)||stopRate<=0||maintenanceRate<0||costRate<0||leverageMax<1)return 1;
+  if(![stopRate,maintenanceRate,costRate,leverageMax].every(Number.isFinite)||stopRate<=0||maintenanceRate<0||costRate<0||leverageMax<1)return 0;
+  const structuralTarget=stopRate<=.015?12:stopRate<=.025?10:stopRate<=.04?8:6;
   const safeLeverage=Math.max(1,Math.floor(.8/Math.max(stopRate+maintenanceRate+costRate,1e-9)));
-  return Math.max(1,Math.floor(Math.min(MULTI_TURN_TARGET_LEVERAGE,leverageMax,safeLeverage)));
+  const leverage=Math.floor(Math.min(MULTI_TURN_TARGET_LEVERAGE,structuralTarget,leverageMax,safeLeverage));
+  return leverage>=MULTI_TURN_MIN_LEVERAGE?leverage:0;
 }
 
 type Contract={quantoMultiplier:number;leverageMax:number;maintenanceRate:number;minContracts?:number};
@@ -50,14 +53,17 @@ export function evaluateMultiTurnEntryPolicy(input:{
   const targetRisk=Math.max(0,Math.min(input.equity*.015*quality*drawdownScale,headroom));
   const lossRate=c.stopRate+input.costRate;
   const leverage=multiTurnEntryLeverage(c.stopRate,input.contract.maintenanceRate,input.costRate,input.contract.leverageMax);
-  const marginCapNotional=Math.max(0,(input.equity*.75-input.usedMargin)/(1/leverage+.75*input.feeRate));
+  if(leverage<MULTI_TURN_MIN_LEVERAGE)return{ok:false,reason:"该结构在6倍逐仓杠杆下仍无法保留止损前安全余量，本轮放弃开仓",rotationEligible:false,remainingSpaceRate:remaining};
   const immediateMarkCost=Math.max(0,2*(input.feeRate+input.slippageRate)+spread);
   const totalCapNotional=Math.max(0,(input.equity*.10-input.totalRisk)/(lossRate+.10*immediateMarkCost));
   const sideCapNotional=Math.max(0,(input.equity*.065-sideRisk)/(lossRate+.065*immediateMarkCost));
   const sleeveCapNotional=Math.max(0,(input.equity*c.riskCap-sleeveRisk)/(lossRate+c.riskCap*immediateMarkCost));
-  const desired=Math.min(input.equity*1.5,targetRisk/Math.max(lossRate,1e-9),totalCapNotional,sideCapNotional,sleeveCapNotional,
-    marginCapNotional,Math.max(0,input.equity*4-input.grossNotional));
-  if(!(desired>=input.equity*.05))return{ok:false,reason:"该周期剩余风险额度不足有效仓位，不生成碎片订单",rotationEligible:true,remainingSpaceRate:remaining};
+  const riskDesired=Math.min(input.equity*1.5,targetRisk/Math.max(lossRate,1e-9),totalCapNotional,sideCapNotional,sleeveCapNotional,
+    Math.max(0,input.equity*4-input.grossNotional));
+  if(!(riskDesired>=input.equity*.05))return{ok:false,reason:"该周期剩余风险额度不足有效仓位，不生成碎片订单",rotationEligible:true,remainingSpaceRate:remaining};
+  const marginCapNotional=Math.max(0,(input.equity*.75-input.usedMargin)/(1/leverage+.75*input.feeRate));
+  if(marginCapNotional<riskDesired*.85)return{ok:false,reason:"降低杠杆后可用保证金不足以维持目标名义价值，不缩成小单",rotationEligible:false,remainingSpaceRate:remaining};
+  const desired=Math.min(riskDesired,marginCapNotional);
 
   const price=(c.side==="LONG"?input.bestAsk:input.bestBid)*(1+d*input.slippageRate);
   const exitNow=(c.side==="LONG"?input.bestBid:input.bestAsk)*(1-d*input.slippageRate);
