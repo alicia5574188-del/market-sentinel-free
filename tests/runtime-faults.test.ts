@@ -256,7 +256,7 @@ test("empty upstream contract results cannot replace the last valid catalog or s
   assert.equal(stream.runtime.lastUniverseAt, 10_000);
 });
 
-test("radar admission restores the liquid Top30 instead of preferring high-volatility thin markets", async () => {
+test("radar admission selects the most useful active markets instead of ordering by turnover", async () => {
   const { stream } = await makeStream();
   const contracts=["LIQ_USDT","MID_USDT","VOL_USDT"].map(symbol=>({ symbol, tickSize:.01, quantoMultiplier:.001,
     maintenanceRate:.005, leverageMax:20, fundingRate:0 }));
@@ -266,7 +266,7 @@ test("radar admission restores the liquid Top30 instead of preferring high-volat
     { symbol:"LIQ_USDT", last:100, high24h:101, low24h:99, change24hRate:.01, volume24hUsd:100_000_000, fundingRate:0, openInterest:10_000 },
     { symbol:"MID_USDT", last:100, high24h:110, low24h:90, change24hRate:.05, volume24hUsd:50_000_000, fundingRate:0, openInterest:10_000 },
   ]);
-  assert.deepEqual(stream.runtime.liquidUniverse,["LIQ_USDT","MID_USDT","VOL_USDT"]);
+  assert.deepEqual(stream.runtime.liquidUniverse,["VOL_USDT","MID_USDT","LIQ_USDT"]);
   assert.equal(stream.runtime.radar.scanned,3);
   assert.equal(stream.runtime.radar.lastScanAt,11_000);
   assert.equal(stream.runtime.radar.lastError,null);
