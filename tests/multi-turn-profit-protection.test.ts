@@ -25,9 +25,9 @@ test("AKE-like seven-R winner protects a majority instead of falling back to 2.8
   const risk=.26456911240220427/6.994629;
   const floor=multiTurnProfitFloor(.26456911240220427,risk,.0022)!;
   assert.ok(floor.reachedR>6.9&&floor.reachedR<7.1);
-  assert.ok(floor.lockedR>4.5);
-  assert.ok(floor.retentionRate>.64);
-  assert.ok(floor.retentionRate<.80);
+  assert.ok(floor.lockedR>5.3);
+  assert.ok(floor.retentionRate>.78);
+  assert.ok(floor.retentionRate<.85);
 });
 
 test("strong continuation keeps more trend room than weakening continuation",()=>{
@@ -41,7 +41,7 @@ test("strong continuation keeps more trend room than weakening continuation",()=
   assert.equal(strong.mode,"STRONG_TREND");
   assert.equal(weak.mode,"WEAKENING");
   assert.ok(strong.retentionRate>.40,"strong trend still protects meaningful profit");
-  assert.ok(weak.retentionRate<.83,"weakening never becomes an 85% fixed trailing rule");
+  assert.ok(weak.retentionRate<=.88,"weakening tightens protection but still leaves executable breathing room");
 });
 
 test("first meaningful protection remains positive after modeled costs",()=>{
@@ -49,4 +49,16 @@ test("first meaningful protection remains positive after modeled costs",()=>{
   assert.ok(floor.floorRate>.0022);
   assert.ok(floor.floorRate<.013);
   assert.ok(floor.checkpointBand>=0);
+});
+
+
+test("substantial but still noisy early profit does not arm before the meaningful threshold",()=>{
+  assert.equal(multiTurnProfitFloor(.007,.02,.0022),null);
+  assert.ok(multiTurnProfitFloor(.010,.02,.0022));
+});
+
+test("a two-R winner without weakening locks about half of observed profit",()=>{
+  const floor=multiTurnProfitFloor(.04,.02,.0022)!;
+  assert.ok(floor.retentionRate>=.49&&floor.retentionRate<=.63);
+  assert.ok(floor.floorRate>.0022);
 });

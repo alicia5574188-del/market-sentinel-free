@@ -38,7 +38,7 @@ export function evaluateMultiTurnEntryPolicy(input:{
   if(spread>.0015)return{ok:false,reason:"当前买卖价差过大",rotationEligible:false,remainingSpaceRate:0};
   const d=c.side==="LONG"?1:-1,progress=d*(mid/c.signalPrice-1);
   const adverseLimit=Math.max(.0015,Math.min(c.stopRate*.35,c.expectedMoveRate*.60));
-  if(progress< -adverseLimit)return{ok:false,reason:"转折状态形成后价格已明显逆向，原入场上下文失效",rotationEligible:false,remainingSpaceRate:0};
+  if(progress< -adverseLimit)return{ok:false,reason:"方向—空间评分形成后价格已明显逆向，原入场上下文失效",rotationEligible:false,remainingSpaceRate:0};
   const remaining=c.expectedMoveRate-input.costRate-Math.max(0,progress);
   if(remaining<=0)return{ok:false,reason:"价格推进和交易成本已吃掉该周期剩余空间",rotationEligible:false,remainingSpaceRate:remaining};
 

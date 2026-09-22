@@ -244,12 +244,15 @@ test("new Multi-Turn trades persist the exact entry context used for later resea
   assert.ok(state.positions.length);
   const trade=state.positions[0],ctx=trade.entryContext;
   assert.ok(ctx);
-  assert.equal(ctx.version,"multi-turn-entry-context-v1");
+  assert.equal(ctx.version,"direction-space-entry-context-v2");
   assert.equal(ctx.capturedAt,trade.openedAt);
   assert.equal(ctx.timeframe,trade.turn!.timeframe);
   assert.equal(ctx.side,trade.side);
   assert.equal(ctx.signalAt,trade.turn!.signalAt);
   assert.equal(ctx.directionConfidence,trade.turn!.entryDirectionConfidence);
+  assert.ok((ctx.entryScore??0)>=0&&(ctx.entryScore??0)<=100);
+  assert.ok((ctx.directionStrength??0)>=45);
+  assert.ok((ctx.edgeRatio??0)>0);
   assert.equal(ctx.continuationScore,trade.turn!.entryContinuation);
   assert.ok(ctx.expectedMoveRate>0);
   assert.ok(ctx.modeledCostRate>0);
@@ -293,6 +296,14 @@ test("full-risk rotation atomically replaces one clearly weak holding and cannot
     atrRate:.005,expectedMoveRate:.04,stopRate:.012,price:100,propagationPressure:.06,
     evidence:{structure:.06,momentum:.06,acceleration:.06,cusum:.06,changePoint:.06,failedExtension:.03,
       volatility:.2,volume:.2,breadth:.08,propagation:.06},reason:"strong rotation fixture"});
+  const opportunity=(symbol:string,tf:(typeof timeframes)[number]|"1h",completedAt:number)=>({
+    version:"direction-space-entry-v1" as const,symbol,timeframe:tf,side:"LONG" as const,completedAt,price:100,
+    score:92,eligible:true,directionStrength:92,spaceScore:88,positionScore:82,executionScore:96,
+    trendSlopeScore:94,structureScore:90,pathEfficiency:88,momentumPersistence:90,pullbackResilience:86,
+    grossRemainingSpaceRate:.04,netRemainingSpaceRate:.0378,statisticalRemainingSpaceRate:.05,structuralSpaceRate:.04,
+    pullbackRiskRate:.01,edgeRatio:3.78,legMoveRate:.01,expectedLegRate:.05,legUtilization:.2,
+    turnRisk:.10,turnPenalty:0,stopRate:.012,riskCap:TURN_CONFIG[tf].riskCap,reason:"rotation opportunity fixture"
+  });
   for(let i=0;i<symbols.length;i++)s.turnEngine!.frames[symbols[i]]={[timeframes[i]]:strong(symbols[i],timeframes[i])};
   const weak=s.turnEngine!.frames.W0_USDT!["5m"]!;
   // Weak enough for selective replacement while still inside the short 5m
@@ -302,6 +313,7 @@ test("full-risk rotation atomically replaces one clearly weak holding and cannot
   weak.evidence={structure:.70,momentum:.55,acceleration:.45,cusum:.60,changePoint:.58,failedExtension:.40,
     volatility:.4,volume:.3,breadth:.5,propagation:.55};
   s.turnEngine!.frames.NEW_USDT={["1h"]:strong("NEW_USDT","1h")};
+  s.entryOpportunities=[opportunity("NEW_USDT","1h",seedAt)];
   s.turnEngine!.updatedAt=seedAt;s.lastCycleAt=seedAt;
 
   const later=seedAt+1000,quotes:Record<string,Quote>={},contracts:Record<string,Contract>={};
@@ -329,6 +341,7 @@ test("full-risk rotation atomically replaces one clearly weak holding and cannot
     volatility:.4,volume:.3,breadth:.5,propagation:.55};
   first.turnEngine!.frames.W0_USDT={["5m"]:{...strong("W0_USDT","5m"),completedAt:secondAt-1000,observedAt:secondAt}};
   first.turnEngine!.frames.NEW2_USDT={["1h"]:{...strong("NEW2_USDT","1h"),completedAt:secondAt-1000,observedAt:secondAt}};
+  first.entryOpportunities=[opportunity("W0_USDT","5m",secondAt-1000),opportunity("NEW2_USDT","1h",secondAt-1000)];
   first.turnEngine!.updatedAt=secondAt;first.lastCycleAt=secondAt;
   quotes.W0_USDT={bestBid:99.99,bestAsk:100.01,observedAt:secondAt,fresh:true,entryReady:true};
   quotes.NEW2_USDT={bestBid:99.99,bestAsk:100.01,observedAt:secondAt,fresh:true,entryReady:true};
@@ -355,4 +368,16 @@ test("recent same-symbol loss cannot consume a realtime candidate slot during it
   const watched=forwardWatchSymbols(seeded,now,["BTC_USDT"]);
   assert.equal(watched.includes("BTC_USDT"),false,
     "cooldown candidates must not waste the scarce realtime discovery slots");
+});
+
+
+test("runtime exposes direction-space opportunities separately from turn diagnostics",()=>{
+  const p=candles(),now=(p.at(-1)!.time+300)*1000+1000;
+  const state=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:q(p,now)},contracts:{BTC_USDT:meta}}).state;
+  assert.ok((state.entryOpportunities?.length??0)>0);
+  const row=state.entryOpportunities![0];
+  assert.ok(row.directionStrength>=0&&row.directionStrength<=100);
+  assert.ok(row.score>=0&&row.score<=100);
+  assert.equal(typeof row.eligible,"boolean");
 });

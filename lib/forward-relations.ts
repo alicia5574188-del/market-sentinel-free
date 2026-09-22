@@ -13,7 +13,7 @@ import { MARKET_STATE_VERSION, TURN_FORECAST_VERSION, marketRiskBudget, selectDi
 import { forwardProtectionChanged } from "./forward-protection-checkpoint.ts";
 import { FORWARD_ADAPTIVE_VERSION, adaptiveCandidatePriority, adaptiveEntryAdjustment, adaptiveTargetRisk, calibrationRiskMultiplier,
   familyRiskHeadroom, inspectRapidCondition, sampleRiskMultiplier, type AdaptiveCandidate, type AdaptiveLane } from "./forward-adaptive.ts";
-import { MULTI_TURN_VERSION, TURN_CONFIG, TURN_TIMEFRAMES, evaluateMultiTurn, initialMultiTurn, turnCandidates,
+import { MULTI_TURN_VERSION, TURN_CONFIG, TURN_TIMEFRAMES, evaluateMultiTurn, initialMultiTurn,
   type MultiTurnState, type TurnCandidate, type TurnEvidence, type TurnPhase, type TurnSide, type TurnTimeframe } from "./multi-turn-engine.ts";
 import { MULTI_TURN_PROFIT_PROTECTION_VERSION, supportedProfitVersion, type MultiTurnProfitVersion, type MultiTurnTradeProfitProtection } from "./multi-turn-profit-protection.ts";
 import { multiTurnHoldWindows, type MultiTurnHoldValue } from "./multi-turn-hold-value.ts";
@@ -21,6 +21,7 @@ import { evaluateMultiTurnExitController } from "./multi-turn-exit-controller.ts
 import { evaluateMultiTurnClock } from "./multi-turn-clock.ts";
 import { evaluateMultiTurnEntryPolicy, multiTurnEntryLeverage, MULTI_TURN_TARGET_LEVERAGE } from "./multi-turn-entry-policy.ts";
 import { evaluateMultiTurnEntryMemory, type MultiTurnClosedOutcome } from "./multi-turn-entry-memory.ts";
+import { evaluateMultiTurnEntryOpportunities, entryOpportunityCandidate, type MultiTurnEntryOpportunity } from "./multi-turn-entry-opportunity.ts";
 import { MULTI_TURN_ROTATION_COOLDOWN_MS, MULTI_TURN_ROTATION_VERSION, evaluateRotationOpportunity,
   multiTurnRotationReentryCooldownMs, rankWeakRotationHoldings, rotationAdvantageEnough, rotationRiskSaturated } from "./multi-turn-rotation.ts";
 // The storage schema stays v1.0 so an algorithm upgrade cannot reset the ledger.
@@ -47,10 +48,13 @@ export type Rule = { id: string; signature: string; parentId: string | null; ver
   grammar: string; liveEligible: false; evidence?: Evidence; adaptiveLane?:AdaptiveLane;
   authority?:"LEGACY_FORWARD"|"MULTI_TURN";turnTimeframe?:TurnTimeframe };
 export type MultiTurnEntryContext = {
-  version:"multi-turn-entry-context-v1";capturedAt:number;timeframe:TurnTimeframe;side:"LONG"|"SHORT";
+  version:"multi-turn-entry-context-v1"|"direction-space-entry-context-v2";capturedAt:number;timeframe:TurnTimeframe;side:"LONG"|"SHORT";
   phase:TurnPhase;signalAt:number;signalPrice:number;reason:string;directionConfidence:number;continuationScore:number;
   turnProbability:number;triggerProbability:number;expectedMoveRate:number;modeledCostRate:number;remainingSpaceRate:number;
   stopRate:number;riskCap:number;bestHoldMinutes:number;strongExtensionMinutes:number;hardExtensionMinutes:number;
+  entryScore?:number;directionStrength?:number;spaceScore?:number;positionScore?:number;executionScore?:number;
+  edgeRatio?:number;grossRemainingSpaceRate?:number;statisticalRemainingSpaceRate?:number;structuralSpaceRate?:number|null;
+  pullbackRiskRate?:number;legUtilization?:number;turnPenalty?:number;
   evidence:TurnEvidence;
   timeframeStates:Array<{timeframe:TurnTimeframe;direction:TurnSide;phase:TurnPhase;directionConfidence:number;
     continuationScore:number;turnProbability:number;triggerProbability:number;expectedMoveRate:number;atrRate:number;
@@ -83,7 +87,7 @@ export type ForwardState = { version: string; startedAt: number; revision: numbe
     rapidQualified?:number; activeLong?:number; activeShort?:number };
   selectedSymbols: string[]; storage: { persistedAt: number; error: string | null }; liveEligible: false;
   adaptationVersion?:string; lastFitMeasured?:number;
-  strategyAuthorityVersion?:string;turnEngine?:MultiTurnState;turnLastEntryBars?:Record<string,number>;turnSymbolExitAt?:Record<string,number>;cutoverAt?:number;
+  strategyAuthorityVersion?:string;turnEngine?:MultiTurnState;entryOpportunities?:MultiTurnEntryOpportunity[];turnLastEntryBars?:Record<string,number>;turnSymbolExitAt?:Record<string,number>;cutoverAt?:number;
   turnRotationBlockedUntil?:Record<string,number>;
   rotationState?:{version:typeof MULTI_TURN_ROTATION_VERSION;lastAt:number;count:number;lastFrom:string|null;lastTo:string|null};
   policyVersion?:string; feedback?:Feedback[]; evidenceDiagnostics?:EvidenceDiagnostics;
@@ -122,9 +126,9 @@ export function initialForward(now:number):ForwardState {
 export function initialMultiTurnForward(now:number):ForwardState{
   const s=initialForward(now);
   s.revision=0;s.events=[];s.rules=[];s.samples=[];s.pending={};s.frames={};s.feedback=[];s.relationEntries={};s.quoteRetries=[];
-  s.strategyAuthorityVersion=MULTI_TURN_VERSION;s.turnEngine=initialMultiTurn();s.turnLastEntryBars={};s.turnSymbolExitAt={};
+  s.strategyAuthorityVersion=MULTI_TURN_VERSION;s.turnEngine=initialMultiTurn();s.entryOpportunities=[];s.turnLastEntryBars={};s.turnSymbolExitAt={};
   s.turnRotationBlockedUntil={};s.rotationState={version:MULTI_TURN_ROTATION_VERSION,lastAt:0,count:0,lastFrom:null,lastTo:null};s.cutoverAt=now;
-  s.latestReason="Multi-Turn六周期转折引擎已启动；旧Forward规则不再拥有新开仓或策略退出权。";
+  s.latestReason="多周期方向—空间进场引擎已启动；转折引擎改为风险与退出辅助，不再单独生成新开仓。";
   event(s,now,"START",MULTI_TURN_VERSION,s.latestReason);return s;
 }
 export function normalizeForward(v:ForwardState|null|undefined,now:number):ForwardState {
@@ -145,6 +149,7 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
   return {...v,adaptationVersion:v.adaptationVersion??"legacy-forward-adaptation-v1",lastFitMeasured:v.lastFitMeasured??v.measured,
     strategyAuthorityVersion:authority,turnLastEntryBars:v.turnLastEntryBars??{},
     ...(authority===MULTI_TURN_VERSION?{
+      entryOpportunities:Array.isArray(v.entryOpportunities)?v.entryOpportunities:[],
       turnSymbolExitAt:v.turnSymbolExitAt??{},
       turnRotationBlockedUntil:v.turnRotationBlockedUntil??{},
       rotationState:v.rotationState?.version===MULTI_TURN_ROTATION_VERSION?v.rotationState:
@@ -405,7 +410,7 @@ function multiTurnRule(s:ForwardState,candidate:TurnCandidate,now:number):Rule{
     armRate:Math.max(candidate.expectedMoveRate,candidate.stopRate*.75),givebackRate:Math.max(.0025,candidate.expectedMoveRate*.35),
     exitMode:"REACTION_DECAY",samples:s.turnEngine?.calibration[candidate.timeframe].count??0,trainGroups:0,checkGroups:0,
     estimatedNetRate:net,priorResponse:null,recentResponse:0,standardError:0,
-    reason:`Multi-Turn ${candidate.timeframe}：${candidate.reason}；由时间—空间持仓价值、该周期转折、原始硬止损或安全寿命共同管理退出。`,
+    reason:`方向—空间 ${candidate.timeframe}：${candidate.reason}；顺当前周期方向进入，转折仅作为风险与退出辅助。`,
     mutation:"CREATE",grammar:MULTI_TURN_VERSION,liveEligible:false,authority:"MULTI_TURN",turnTimeframe:candidate.timeframe};
 }
 
@@ -458,11 +463,12 @@ function multiTurnEntryMemoryFor(s:ForwardState,candidate:TurnCandidate,now:numb
 }
 
 function rankedMultiTurnEntryRows(s:ForwardState,now:number,entrySymbols?:ReadonlySet<string>){
-  return turnCandidates(s.turnEngine!,tf=>turnModeledCost(tf,0))
-    .filter(candidate=>!entrySymbols||entrySymbols.has(candidate.symbol))
-    .map(candidate=>({candidate,memory:multiTurnEntryMemoryFor(s,candidate,now)}))
-    .sort((a,b)=>b.candidate.score*b.memory.scoreMultiplier-a.candidate.score*a.memory.scoreMultiplier
-      ||b.candidate.score-a.candidate.score||a.candidate.symbol.localeCompare(b.candidate.symbol));
+  return (s.entryOpportunities??[])
+    .filter(opportunity=>opportunity.eligible&&(!entrySymbols||entrySymbols.has(opportunity.symbol)))
+    .map(opportunity=>{const candidate=entryOpportunityCandidate(opportunity);
+      return{opportunity,candidate,memory:multiTurnEntryMemoryFor(s,candidate,now)};})
+    .sort((a,b)=>b.opportunity.score*b.memory.scoreMultiplier-a.opportunity.score*a.memory.scoreMultiplier
+      ||b.opportunity.directionStrength-a.opportunity.directionStrength||a.candidate.symbol.localeCompare(b.candidate.symbol));
 }
 
 function trySelectiveRiskRotation(input:{state:ForwardState;candidate:TurnCandidate;quotes:Record<string,Quote>;
@@ -532,7 +538,7 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
   const diagnostics={at:now,matched:rows.length,opened:0,reasons:{} as Record<string,number>,retry:false,queued:0,adaptiveScaled:0};
   s.entryDiagnostics=diagnostics;
   const reject=(reason:string)=>{diagnostics.reasons[reason]=(diagnostics.reasons[reason]??0)+1;};
-  for(const {candidate,memory} of rows){
+  for(const {opportunity,candidate,memory} of rows){
     if(s.positions.some(t=>t.symbol===candidate.symbol))continue;
     if((s.turnRotationBlockedUntil?.[candidate.symbol]??0)>now){reject("该币刚被择优换出，冷却期内不重新追入");continue;}
     if(!memory.allowed){reject(memory.reason??"同币交易生命周期冷却中");continue;}
@@ -566,12 +572,17 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
     const entryFrame=s.turnEngine?.frames[candidate.symbol]?.[candidate.timeframe];
     const entryWindows=multiTurnHoldWindows(candidate.timeframe);
     const entryContext:MultiTurnEntryContext|undefined=entryFrame?{
-      version:"multi-turn-entry-context-v1",capturedAt:now,timeframe:candidate.timeframe,side:candidate.side,
+      version:"direction-space-entry-context-v2",capturedAt:now,timeframe:candidate.timeframe,side:candidate.side,
       phase:entryFrame.phase,signalAt:candidate.completedAt,signalPrice:candidate.signalPrice,reason:candidate.reason,
       directionConfidence:candidate.confidence,continuationScore:candidate.continuationScore,
       turnProbability:candidate.turnProbability,triggerProbability:entryFrame.triggerProbability,
       expectedMoveRate:candidate.expectedMoveRate,modeledCostRate:cost,remainingSpaceRate:remaining,
       stopRate:candidate.stopRate,riskCap:candidate.riskCap,
+      entryScore:opportunity.score,directionStrength:opportunity.directionStrength,spaceScore:opportunity.spaceScore,
+      positionScore:opportunity.positionScore,executionScore:opportunity.executionScore,edgeRatio:opportunity.edgeRatio,
+      grossRemainingSpaceRate:opportunity.grossRemainingSpaceRate,statisticalRemainingSpaceRate:opportunity.statisticalRemainingSpaceRate,
+      structuralSpaceRate:opportunity.structuralSpaceRate,pullbackRiskRate:opportunity.pullbackRiskRate,
+      legUtilization:opportunity.legUtilization,turnPenalty:opportunity.turnPenalty,
       bestHoldMinutes:entryWindows.bestHoldMinutes,strongExtensionMinutes:entryWindows.strongExtensionMinutes,
       hardExtensionMinutes:entryWindows.hardExtensionMinutes,evidence:structuredClone(entryFrame.evidence),
       timeframeStates:TURN_TIMEFRAMES.flatMap(timeframe=>{
@@ -595,11 +606,11 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
       ...(entryContext?{entryContext}:{}),};
     s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.positions.push(t);s.rules.unshift(rule);s.rules=s.rules.slice(0,48);
     s.turnLastEntryBars[key]=candidate.completedAt;s.lastEntryBars[candidate.symbol]=candidate.completedAt;diagnostics.opened++;
-    event(s,now,"ENTRY",t.id,`${candidate.symbol}按${candidate.timeframe}转折状态沿${candidate.side==="LONG"?"多":"空"}向进入；该周期独立负责策略退出。`,
+    event(s,now,"ENTRY",t.id,`${candidate.symbol}按${candidate.timeframe}当前${candidate.side==="LONG"?"多":"空"}向方向—空间评分进入；转折只参与风险与退出。`,
       {timeframe:candidate.timeframe,turnProbability:candidate.turnProbability,continuation:candidate.continuationScore,
         notional,plannedRisk,remainingEdge:remaining});
   }
-  if(diagnostics.opened)s.latestReason=`Multi-Turn本轮开仓${diagnostics.opened}笔；六周期继续独立观察转折。`;
+  if(diagnostics.opened)s.latestReason=`本轮按方向—空间评分开仓${diagnostics.opened}笔；六周期继续独立评估方向强度、剩余空间与转折风险。`;
   else if(Object.keys(diagnostics.reasons).length)s.latestReason=Object.entries(diagnostics.reasons).sort((a,b)=>b[1]-a[1])[0][0];
   else s.latestReason=`Multi-Turn管理${s.positions.length}笔持仓；无周期被强制暂停。`;
 }
@@ -738,8 +749,10 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
   const dataDue=clock.dataDue,markDue=clock.markDue;
   if(dataDue){
     s.turnEngine=evaluateMultiTurn({state:s.turnEngine??initialMultiTurn(),paths,daily,retainSymbols:retainedSymbols,now});
+    s.entryOpportunities=evaluateMultiTurnEntryOpportunities({paths,daily,turnEngine:s.turnEngine,quotes,now,
+      costRate:tf=>turnModeledCost(tf,0)}).filter(opportunity=>entrySymbols.has(opportunity.symbol));
     s.lastCycleAt=now;s.selectedSymbols=[...entrySymbols];
-    const candidates=turnCandidates(s.turnEngine,tf=>turnModeledCost(tf,0)).filter(candidate=>entrySymbols.has(candidate.symbol));
+    const candidates=s.entryOpportunities.filter(opportunity=>opportunity.eligible);
     s.fitDiagnostics={tested:s.turnEngine.diagnostics.readyFrames,qualified:candidates.length,trainGroups:0,checkGroups:0,latestAt:now,
       rapidQualified:0,activeLong:candidates.filter(x=>x.side==="LONG").length,activeShort:candidates.filter(x=>x.side==="SHORT").length};
     s.observations+=s.turnEngine.diagnostics.updatedFrames;s.measured+=s.turnEngine.diagnostics.confirmedTurns;
@@ -846,7 +859,7 @@ export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iter
     const ranked=rankedMultiTurnEntryRows(s,now,allowed??undefined)
       .filter(({candidate,memory})=>memory.allowed&&candidate.completedAt<=now
         &&now-candidate.completedAt<=Math.max(BAR_MS*2,TURN_CONFIG[candidate.timeframe].minutes*60_000*1.5));
-    return[...new Set([...s.positions.map(p=>p.symbol),...ranked.map(row=>row.candidate.symbol)])].slice(0,11);
+    return[...new Set([...s.positions.map(p=>p.symbol),...ranked.map(row=>row.opportunity.symbol)])].slice(0,11);
   }
   const matched=Object.values(s.frames).filter(f=>now-f.at<11*60_000&&s.rules.some(r=>r.status==="EXPERIMENTAL"&&r.expiresAt>now&&ruleApplies(r,f.symbol)&&conditionMatches(f.x,r.conditions)));
   return[...new Set([...s.positions.map(p=>p.symbol),...matched.map(f=>f.symbol)])];
@@ -876,15 +889,16 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     targetEquity:s.initialEquity*2,netPnl:marked.equity-s.initialEquity,maxDrawdown:s.maxDrawdown,resolved:s.resolved,wins:s.wins,grossPnl:s.grossPnl,
     fees:s.fees,fundingAllowance:s.fundingAllowance,turnover:s.turnover,observations:s.observations,measured:s.measured,invalidated:s.invalidated,
     pending:multi?(engine?.pending.length??0):Object.keys(s.pending).length,sampleCounts:count,fitDiagnostics:s.fitDiagnostics,
+    entryOpportunities:multi?(s.entryOpportunities??[]).slice(0,30):[],
     rules:s.rules,positions:s.positions,history:s.history,events:s.events.slice(0,80),daily:s.daily,
     marketCount:s.selectedSymbols.length,markets:s.selectedSymbols,latestReason:s.latestReason,storage:s.storage,
     nextCycleAt:s.lastCycleAt?(Math.floor((s.lastCycleAt-90_000)/BAR_MS)+1)*BAR_MS+90_000:now,cost:PAPER_COST,
-    boundaries:multi?{scope:"PAPER_ONLY",grammar:"5m/15m/30m/1h/4h/1d六周期独立转折概率；同一币当前仅一条可执行源腿以保持Gate单向持仓精确复制",
-      historyBackfill:false,sampleMeaning:"转折概率的未来标签只在到期后用于Brier/概率校准，不回填交易",
-      accounting:"新鲜买卖价模拟成交；费用、滑点、资金占位先进入转折可交易空间",
+    boundaries:multi?{scope:"PAPER_ONLY",grammar:"5m/15m/30m/1h/4h/1d独立判断当前方向；按方向强度、剩余空间、进场位置和执行质量评分选优，同币只执行最高优先级源腿",
+      historyBackfill:false,sampleMeaning:"方向—空间评分只使用已完成K线；转折未来标签继续用于风险概率校准，不回填交易",
+      accounting:"新鲜买卖价模拟成交；费用、滑点、资金占位先从剩余可交易空间中扣除",
       risk:"组合风险≤10%，同方向≤6.5%，六周期袖套1.5/2/2/2/1.5/1%；单笔≤1.5%，回撤只缩仓",
-      validation:"转折检测与成本后交易仍需真实前向验证，不承诺盈利或月翻倍",
-      liquidation:"对应周期开仓由对应周期转折退出；硬止损和异常安全寿命独立生效"}:
+      validation:"方向强度、空间价值与动态利润保护仍需真实前向验证，不承诺盈利或月翻倍",
+      liquidation:"原始硬止损、方向失效、动态利润保护、空间价值衰减、转折风险和无进展寿命共同管理退出"}:
       {scope:"PAPER_ONLY",grammar:"最多两个连续特征条件；方向、期限、止损和回吐退出由新市场反应生成",historyBackfill:false,
       sampleMeaning:"市场条件与后来反应；不是影子订单或连胜晋级",accounting:"新鲜买卖价模拟成交；净值包含退出费用与资金占位",
       risk:"单笔风险上限1.5%；同一关系family的所有并行币合计最多占一个1.5%风险槽；成交校准为负仍保留15%探测风险，单币小样本连续缩仓",

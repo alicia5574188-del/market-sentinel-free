@@ -388,7 +388,7 @@ test("release guard accepts only exact additive member namespaces, never primary
 
 
 test("Multi-Turn modules obey one-way architecture boundaries", async () => {
-  const paths=["lib/multi-turn-engine.ts","lib/multi-turn-exit.ts","lib/multi-turn-exit-controller.ts","lib/multi-turn-hold-value.ts","lib/multi-turn-profit-protection.ts","lib/multi-turn-clock.ts","lib/multi-turn-entry-policy.ts","lib/multi-turn-entry-memory.ts"];
+  const paths=["lib/multi-turn-engine.ts","lib/multi-turn-exit.ts","lib/multi-turn-exit-controller.ts","lib/multi-turn-hold-value.ts","lib/multi-turn-profit-protection.ts","lib/multi-turn-clock.ts","lib/multi-turn-entry-policy.ts","lib/multi-turn-entry-memory.ts","lib/multi-turn-entry-opportunity.ts"];
   const sources=await Promise.all(paths.map(read));
   const forbidden=/worker\/|app\/|gate-live|forward-store|D1Database|DurableObject|ctx\.storage|requestedEnabled|createEntry\(|fetch\(/;
   for(let i=0;i<paths.length;i++)assert.doesNotMatch(sources[i],forbidden,`${paths[i]} crossed runtime/storage/LIVE/UI boundary`);
@@ -396,5 +396,6 @@ test("Multi-Turn modules obey one-way architecture boundaries", async () => {
   assert.doesNotMatch(sources[2],/forward-relations|multi-turn-entry/,"exit authority must not depend on entry/account orchestration");
   assert.doesNotMatch(sources[6],/forward-relations|multi-turn-exit|forward-store|gate-live/,"entry policy must not depend on exit/account/LIVE orchestration");
   assert.doesNotMatch(sources[7],/forward-relations|multi-turn-exit|forward-store|gate-live/,"entry memory must remain a pure short-lived admission layer");
+  assert.doesNotMatch(sources[8],/forward-relations|multi-turn-exit|forward-store|gate-live/,"entry opportunity scoring must remain pure and independent from account/LIVE orchestration");
   assert.doesNotMatch(sources[0],/forward-relations|multi-turn-exit|multi-turn-entry|forward-store|gate-live/,"turn engine must remain signal-only");
 });

@@ -31,9 +31,12 @@ export type MultiTurnTradeProfitProtection=MultiTurnProfitFloor&{
 const clip=(v:number,a:number,b:number)=>Math.min(b,Math.max(a,v));
 
 function baseRetention(reachedR:number){
-  if(reachedR<.60)return .15;
-  if(reachedR<1)return .18+(reachedR-.60)/.40*.20;
-  return Math.min(.74,.38+.12*Math.log2(Math.max(1,reachedR)));
+  if(reachedR<.70)return .20;
+  if(reachedR<1.20)return .20+(reachedR-.70)/.50*.15;
+  if(reachedR<2)return .35+(reachedR-1.20)/.80*.15;
+  if(reachedR<3)return .50+(reachedR-2)*.12;
+  if(reachedR<5)return .62+(reachedR-3)/2*.10;
+  return Math.min(.84,.80+.02*Math.log2(Math.max(1,reachedR/5)));
 }
 
 function signalAdjustment(signal?:MultiTurnProfitSignal|null){
@@ -45,11 +48,11 @@ function signalAdjustment(signal?:MultiTurnProfitSignal|null){
   if(continuation!=null&&turn!=null&&phase==="FLOW"&&aligned&&continuation>=.72&&turn<=.20)
     adjustment-=.08;
   else if(continuation!=null&&turn!=null&&phase==="FLOW"&&aligned&&continuation>=.58&&turn<=.25)
-    adjustment-=.03;
-  if(continuation!=null&&continuation<=.42){adjustment+=.08;weak=true;}
-  if(turn!=null&&turn>=.45){adjustment+=.06;weak=true;}
+    adjustment-=.04;
+  if(continuation!=null&&continuation<=.42){adjustment+=.10;weak=true;}
+  if(turn!=null&&turn>=.45){adjustment+=.08;weak=true;}
   if(phase==="WATCH"||phase==="TURNING"){adjustment+=.06;weak=true;}
-  if(signal.rawDirectionAligned===false){adjustment+=.08;weak=true;}
+  if(signal.rawDirectionAligned===false){adjustment+=.10;weak=true;}
   const mode=weak?"WEAKENING":adjustment<=-.06?"STRONG_TREND":adjustment<0?"HEALTHY_TREND":"NORMAL";
   return{adjustment,mode} as const;
 }
@@ -71,14 +74,18 @@ export function multiTurnProfitFloor(
 ):MultiTurnProfitFloor|null{
   if(![favorable,riskRate,modeledCost].every(Number.isFinite)||riskRate<=0||favorable<=0)return null;
   const reachedR=favorable/riskRate;
-  const activationRate=Math.max(modeledCost+.0010,Math.min(.45*riskRate,.025));
+  // Profit protection does not arm on noise. It waits for a move that is
+  // meaningful versus both modeled round-trip cost and original structural risk.
+  const activationRate=Math.max(modeledCost*2.5,Math.min(.45*riskRate,.015));
   if(favorable<activationRate)return null;
 
   const {adjustment,mode}=signalAdjustment(signal);
-  const minRetention=reachedR>=1?.30:.12;
-  const retentionRate=clip(baseRetention(reachedR)+adjustment,minRetention,.82);
-  const costPositiveFloor=modeledCost+.0010;
-  const breathingRoom=Math.max(.0015,.12*riskRate);
+  const base=baseRetention(reachedR),minRetention=Math.max(.18,base-.10);
+  const retentionRate=clip(base+adjustment,minRetention,.88);
+  // Once protection is armed, a normal giveback may not turn a meaningful
+  // winner into an after-cost loser. The floor itself remains monotonic upstream.
+  const costPositiveFloor=modeledCost+Math.max(.0010,modeledCost*.50);
+  const breathingRoom=Math.max(.0018,.10*riskRate);
   const floorRate=Math.min(favorable-breathingRoom,Math.max(favorable*retentionRate,costPositiveFloor));
   if(!(floorRate>modeledCost&&floorRate<favorable))return null;
   const lockedR=floorRate/riskRate;
