@@ -132,7 +132,7 @@ test("single-timeframe region entries still obey portfolio, directional and per-
 
 test("wall-clock time cannot consume a new data slot before a genuinely new completed 5m candle exists",()=>{
   const p=regionPath(),now=(p.at(-1)!.time+300)*1000+1;
-  const s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},
+  let s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},
     quotes:{BTC_USDT:quote(p.at(-1)!.close,now)},contracts:{BTC_USDT:meta},entrySymbols:["BTC_USDT"]}).state;
   const firstCycle=s.lastCycleAt,later=now+BAR_MS+90_000;
   s=advanceForward({state:s,now:later,paths:{BTC_USDT:p},quotes:{BTC_USDT:quote(p.at(-1)!.close,later)},contracts:{BTC_USDT:meta},
@@ -147,7 +147,7 @@ test("wall-clock time cannot consume a new data slot before a genuinely new comp
 
 test("critical quote management can mark equity without consuming stale strategy data",()=>{
   const p=regionPath(),now=(p.at(-1)!.time+300)*1000+1;
-  let s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},
+  const s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},
     quotes:{BTC_USDT:quote(p.at(-1)!.close,now)},contracts:{BTC_USDT:meta},entrySymbols:["BTC_USDT"]}).state;
   const cycle=s.lastCycleAt,mark=s.daily.at(-1)!.lastAt,later=now+BAR_MS+150_000;
   const next=advanceForward({state:s,now:later,paths:{BTC_USDT:p},quotes:{BTC_USDT:quote(p.at(-1)!.close,later)},
