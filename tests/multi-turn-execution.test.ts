@@ -163,6 +163,27 @@ test("time-space hold value can exit an old position before the legacy maximum l
 });
 
 
+test("stale owning-frame data cannot leave a four-hour no-progress holding occupying risk indefinitely",()=>{
+  const p=candles(),now=(p.at(-1)!.time+300)*1000+1000;
+  let s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:q(p,now)},contracts:{BTC_USDT:meta}}).state;
+  assert.ok(s.positions.length);
+  const t=s.positions[0];
+  t.turn={version:MULTI_TURN_VERSION,timeframe:"4h",signalAt:now-25*60*60_000,
+    entryTurnProbability:.1,entryContinuation:.7,entryDirectionConfidence:.7};
+  t.rule.authority="MULTI_TURN";t.rule.turnTimeframe="4h";t.rule.horizon=TURN_CONFIG["4h"].maxHoldMinutes;
+  t.openedAt=now-25*60*60_000;t.favorable=.003;
+  if(t.entryContext){t.entryContext.timeframe="4h";t.entryContext.expectedMoveRate=.08;t.entryContext.bestHoldMinutes=1440;}
+  delete s.turnEngine!.frames.BTC_USDT?.["4h"];
+  s.lastCycleAt=now;
+  const ret=-.006,px=t.entryPrice*(t.side==="LONG"?1+ret:1-ret),later=now+1000;
+  s=advanceForward({state:s,now:later,paths:{},
+    quotes:{BTC_USDT:{bestBid:px*.99999,bestAsk:px*1.00001,observedAt:later,fresh:true,entryReady:true}},contracts:{}}).state;
+  assert.equal(s.positions.length,0);
+  assert.equal(s.history[0].exitAudit?.trigger,"HOLD_VALUE");
+  assert.match(s.history[0].exitReason??"",/释放长期无进展仓位/);
+});
+
 test("new Multi-Turn trades persist the exact entry context used for later research review",()=>{
   const p=candles(),now=(p.at(-1)!.time+300)*1000+1000;
   const state=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},

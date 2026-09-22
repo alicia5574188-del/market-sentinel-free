@@ -49,7 +49,6 @@ export function evaluateMultiTurnHoldValue(input:{
   returnRate:number;
   favorableRate:number;
   modeledCostRate:number;
-  entryExpectedMoveRate?:number;
 }):MultiTurnHoldValue{
   const{timeframe,frame,side,openedAt,now,returnRate,favorableRate}=input;
   const modeledCostRate=Math.max(0,input.modeledCostRate);
@@ -89,19 +88,7 @@ export function evaluateMultiTurnHoldValue(input:{
   const clearlyUnfavorable=edgeRatio<.60&&turnRisk>=.45;
   const takeProfit=returnRate>modeledCostRate;
 
-  const postEntryFrame=frame.completedAt>openedAt&&frame.completedAt<=now;
-  const earlyInvalidation=postEntryFrame&&heldMinutes>=TURN_CONFIG[timeframe].minutes
-    &&!rawAligned&&directionStrength<.30&&turnRisk>=.45&&returnRate<-modeledCostRate;
-  const expectedProgress=Math.max(modeledCostRate,
-    (input.entryExpectedMoveRate??frame.expectedMoveRate)*clip(ageRatio,0,1));
-  const stalled=postEntryFrame&&heldMinutes>=windows.minimumEvaluationMinutes
-    &&favorableRate<expectedProgress*.35&&directionStrength<.40
-    &&returnRate<=modeledCostRate&&edgeRatio<1.15;
-  if(earlyInvalidation||stalled){
-    action="EXIT_RISK";
-    reason=earlyInvalidation?"入场后的完整K线确认原方向明显失效，提前退出。"
-      :"已观察至少两根所属周期K线，顺向进展不足、方向弱且剩余空间不能覆盖回调风险；释放无进展持仓。";
-  }else if(heldMinutes<windows.minimumEvaluationMinutes){
+  if(heldMinutes<windows.minimumEvaluationMinutes){
     reason="尚未达到所属周期的最小持仓观察时间；先保留原始结构止损和转折退出权威。";
   }else if(heldMinutes>=windows.hardExtensionMinutes){
     action=takeProfit?"EXIT_PROFIT":"EXIT_RISK";
@@ -130,4 +117,53 @@ export function evaluateMultiTurnHoldValue(input:{
     bestHoldMinutes:windows.bestHoldMinutes,strongExtensionMinutes:windows.strongExtensionMinutes,
     hardExtensionMinutes:windows.hardExtensionMinutes,heldMinutes,ageRatio,directionStrength,turnRisk,
     remainingSpaceRate,pullbackRiskRate,edgeRatio,requiredEdgeRatio,strongContinuation,exceptionalContinuation,reason};
+}
+
+export type MultiTurnTimeFallback = {
+  action: MultiTurnHoldAction;
+  heldMinutes: number;
+  requiredProgressRate: number;
+  reason: string;
+};
+
+/**
+ * Frame-independent safety valve.
+ *
+ * The rich hold-value model above only runs when the owning timeframe has a
+ * fresh completed frame. A missing/stale high-timeframe frame must not turn a
+ * 4h/1d position into an indefinitely reserved risk slot. This fallback uses
+ * only facts already frozen on the trade plus the current executable return:
+ * after the normal six-bar best-hold window, a position that has never made
+ * meaningful progress and is not even cost-positive may release its slot.
+ * The original hard-extension window remains an unconditional safety ceiling.
+ *
+ * No state version or persisted record is introduced here.
+ */
+export function evaluateMultiTurnTimeFallback(input:{
+  timeframe:TurnTimeframe;
+  openedAt:number;
+  now:number;
+  returnRate:number;
+  favorableRate:number;
+  modeledCostRate:number;
+  entryExpectedMoveRate:number;
+}):MultiTurnTimeFallback|null{
+  const windows=multiTurnHoldWindows(input.timeframe);
+  const heldMinutes=Math.max(0,(input.now-input.openedAt)/60_000);
+  const modeledCostRate=Math.max(0,input.modeledCostRate);
+  const expectedMoveRate=Math.max(modeledCostRate,input.entryExpectedMoveRate);
+  if(heldMinutes<windows.bestHoldMinutes)return null;
+
+  if(heldMinutes>=windows.hardExtensionMinutes){
+    const action:MultiTurnHoldAction=input.returnRate>modeledCostRate?"EXIT_PROFIT":"EXIT_RISK";
+    return{action,heldMinutes,requiredProgressRate:0,
+      reason:`已持有${heldMinutes.toFixed(0)}分钟并达到${input.timeframe}时间—空间硬上限${windows.hardExtensionMinutes}分钟；所属周期数据即使暂缺也不能无限占用仓位。`};
+  }
+
+  const requiredRatio=heldMinutes>=windows.strongExtensionMinutes?.60:.35;
+  const requiredProgressRate=Math.max(modeledCostRate*2,expectedMoveRate*requiredRatio);
+  if(input.favorableRate>=requiredProgressRate||input.returnRate>modeledCostRate)return null;
+
+  return{action:"EXIT_RISK",heldMinutes,requiredProgressRate,
+    reason:`已超过${input.timeframe}最佳持仓时间${windows.bestHoldMinutes}分钟，但最高顺向仅${(input.favorableRate*100).toFixed(2)}%，低于最小进展${(requiredProgressRate*100).toFixed(2)}%，当前收益也未覆盖成本；释放长期无进展仓位。`};
 }
