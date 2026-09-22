@@ -296,6 +296,14 @@ test("full-risk rotation atomically replaces one clearly weak holding and cannot
     atrRate:.005,expectedMoveRate:.04,stopRate:.012,price:100,propagationPressure:.06,
     evidence:{structure:.06,momentum:.06,acceleration:.06,cusum:.06,changePoint:.06,failedExtension:.03,
       volatility:.2,volume:.2,breadth:.08,propagation:.06},reason:"strong rotation fixture"});
+  const opportunity=(symbol:string,tf:(typeof timeframes)[number]|"1h",completedAt:number)=>({
+    version:"direction-space-entry-v1" as const,symbol,timeframe:tf,side:"LONG" as const,completedAt,price:100,
+    score:92,eligible:true,directionStrength:92,spaceScore:88,positionScore:82,executionScore:96,
+    trendSlopeScore:94,structureScore:90,pathEfficiency:88,momentumPersistence:90,pullbackResilience:86,
+    grossRemainingSpaceRate:.04,netRemainingSpaceRate:.0378,statisticalRemainingSpaceRate:.05,structuralSpaceRate:.04,
+    pullbackRiskRate:.01,edgeRatio:3.78,legMoveRate:.01,expectedLegRate:.05,legUtilization:.2,
+    turnRisk:.10,turnPenalty:0,stopRate:.012,riskCap:TURN_CONFIG[tf].riskCap,reason:"rotation opportunity fixture"
+  });
   for(let i=0;i<symbols.length;i++)s.turnEngine!.frames[symbols[i]]={[timeframes[i]]:strong(symbols[i],timeframes[i])};
   const weak=s.turnEngine!.frames.W0_USDT!["5m"]!;
   // Weak enough for selective replacement while still inside the short 5m
@@ -305,6 +313,7 @@ test("full-risk rotation atomically replaces one clearly weak holding and cannot
   weak.evidence={structure:.70,momentum:.55,acceleration:.45,cusum:.60,changePoint:.58,failedExtension:.40,
     volatility:.4,volume:.3,breadth:.5,propagation:.55};
   s.turnEngine!.frames.NEW_USDT={["1h"]:strong("NEW_USDT","1h")};
+  s.entryOpportunities=[opportunity("NEW_USDT","1h",seedAt)];
   s.turnEngine!.updatedAt=seedAt;s.lastCycleAt=seedAt;
 
   const later=seedAt+1000,quotes:Record<string,Quote>={},contracts:Record<string,Contract>={};
@@ -332,6 +341,7 @@ test("full-risk rotation atomically replaces one clearly weak holding and cannot
     volatility:.4,volume:.3,breadth:.5,propagation:.55};
   first.turnEngine!.frames.W0_USDT={["5m"]:{...strong("W0_USDT","5m"),completedAt:secondAt-1000,observedAt:secondAt}};
   first.turnEngine!.frames.NEW2_USDT={["1h"]:{...strong("NEW2_USDT","1h"),completedAt:secondAt-1000,observedAt:secondAt}};
+  first.entryOpportunities=[opportunity("W0_USDT","5m",secondAt-1000),opportunity("NEW2_USDT","1h",secondAt-1000)];
   first.turnEngine!.updatedAt=secondAt;first.lastCycleAt=secondAt;
   quotes.W0_USDT={bestBid:99.99,bestAsk:100.01,observedAt:secondAt,fresh:true,entryReady:true};
   quotes.NEW2_USDT={bestBid:99.99,bestAsk:100.01,observedAt:secondAt,fresh:true,entryReady:true};
