@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { TURN_TIMEFRAMES, TURN_CONFIG, aggregateTurnCandles, evaluateMultiTurn, initialMultiTurn, turnCandidates,
+import { TURN_TIMEFRAMES, TURN_CONFIG, aggregateTurnCandles, evaluateMultiTurn, initialMultiTurn, multiTurnCandidateScore, turnCandidates,
   type TurnCandle } from "../lib/multi-turn-engine.ts";
 
 const START=Date.parse("2026-09-01T00:00:00Z");
@@ -202,4 +202,40 @@ test("restart retention scope drops frames that no longer belong to the active o
   assert.ok(duringRestart.frames.BTC_USDT,"active scan symbols keep fresh frames during restart warmup");
   assert.equal(duringRestart.frames.OLD_USDT,undefined,
     "a symbol that left the scan/protection universe cannot survive only as a stale entry frame");
+});
+
+
+test("confirmed and turning bars are exit evidence, not immediate chase entries",()=>{
+  const p=path(360,i=>100*Math.exp(i*.0008));
+  const now=(p.at(-1)!.time+300)*1000+1000;
+  const s=evaluateMultiTurn({state:initialMultiTurn(),paths:{BTC_USDT:p},now});
+  const f=s.frames.BTC_USDT?.["15m"];assert.ok(f);
+  f!.phase="CONFIRMED";f!.justTurned=true;f!.direction="LONG";f!.continuationScore=.80;
+  assert.equal(turnCandidates(s,.0022).some(x=>x.symbol==="BTC_USDT"&&x.timeframe==="15m"),false);
+  f!.phase="TURNING";f!.justTurned=false;
+  assert.equal(turnCandidates(s,.0022).some(x=>x.symbol==="BTC_USDT"&&x.timeframe==="15m"),false);
+  f!.phase="FLOW";
+  assert.equal(turnCandidates(s,.0022).some(x=>x.symbol==="BTC_USDT"&&x.timeframe==="15m"),true);
+});
+
+test("candidate score is risk-normalized so extreme ATR cannot dominate without bound",()=>{
+  const p=path(360,i=>100*Math.exp(i*.0008));
+  const now=(p.at(-1)!.time+300)*1000+1000;
+  const s=evaluateMultiTurn({state:initialMultiTurn(),paths:{BTC_USDT:p},now});
+  const base=s.frames.BTC_USDT?.["15m"];assert.ok(base);
+  const moderate={...base!,expectedMoveRate:.08,stopRate:.035};
+  const extreme={...base!,expectedMoveRate:3,stopRate:.035};
+  const a=multiTurnCandidateScore(moderate,.0022),b=multiTurnCandidateScore(extreme,.0022);
+  assert.equal(a,b,"once the risk-adjusted edge cap is reached, larger raw ATR cannot keep inflating rank");
+});
+
+test("expected move is bounded relative to structural risk cap on every timeframe",()=>{
+  const p=path(360,i=>100*Math.exp(i*.0008));
+  const daily=Array.from({length:30},(_,i)=>({time:START/1000+i*86400,open:100+i,high:130+i,low:70+i,close:101+i,volume:10000}));
+  const now=(daily.at(-1)!.time+86400)*1000+1000;
+  const s=evaluateMultiTurn({state:initialMultiTurn(),paths:{BTC_USDT:p},daily:{BTC_USDT:daily},now});
+  for(const tf of TURN_TIMEFRAMES){
+    const row=s.frames.BTC_USDT?.[tf];if(!row)continue;
+    assert.ok(row.expectedMoveRate<=TURN_CONFIG[tf].maxStop*2.5+1e-12);
+  }
 });
