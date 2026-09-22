@@ -64,12 +64,6 @@ export type AnchorOpportunityUniverseRow=MultiTurnUniverseTicker&{
   liquidityFloorUsd:number;
 };
 
-const percentile=(values:number[],p:number)=>{
-  const a=values.filter(Number.isFinite).sort((x,y)=>x-y);
-  if(!a.length)return 0;
-  return a[Math.min(a.length-1,Math.max(0,Math.floor((a.length-1)*p)))]??0;
-};
-
 /**
  * Cheap outer selector for the winding-anchor engine.
  * It does NOT predict direction and does NOT revive the retired volatility strategy.
