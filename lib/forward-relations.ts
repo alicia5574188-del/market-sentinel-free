@@ -789,7 +789,16 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
   const retainedSymbols=[...new Set([...entrySymbols,...s.positions.map(position=>position.symbol)])];
   const targetSlot=Math.floor((now-90_000)/BAR_MS);
   const lastDataSlot=s.lastCycleAt?Math.floor((s.lastCycleAt-90_000)/BAR_MS):-1;
-  const dataDue=input.allowDataCycle!==false&&targetSlot>lastDataSlot;
+  // A wall-clock boundary is not evidence that the new candle was fetched.
+  // Consume the data slot only when at least one retained 5m path actually
+  // contains a candle completed at that target boundary.
+  const targetCompletedAt=targetSlot*BAR_MS;
+  const newestPathCompletedAt=retainedSymbols.reduce((latest,symbol)=>{
+    const row=paths[symbol]?.at(-1);
+    return row?Math.max(latest,(row.time+300)*1000):latest;
+  },0);
+  const dataDue=input.allowDataCycle!==false&&targetSlot>lastDataSlot
+    &&newestPathCompletedAt>=targetCompletedAt;
   const lastMarkAt=s.daily.at(-1)?.lastAt??0;
   const lastMarkSlot=lastMarkAt?Math.floor((lastMarkAt-90_000)/BAR_MS):-1;
   // Normal path: the data cycle owns the 5m account mark. If optional candle
