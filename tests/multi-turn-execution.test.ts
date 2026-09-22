@@ -223,7 +223,7 @@ test("stale owning-frame data cannot leave a four-hour no-progress holding occup
 
 test("critical quote management cannot consume a pending 5m data cycle but can preserve one fallback equity mark",()=>{
   const p=candles(),seed=(p.at(-1)!.time+300)*1000+91_000;
-  let s=advanceForward({state:initialMultiTurnForward(seed-10*60_000),now:seed,paths:{BTC_USDT:p},
+  const s=advanceForward({state:initialMultiTurnForward(seed-10*60_000),now:seed,paths:{BTC_USDT:p},
     quotes:{BTC_USDT:q(p,seed)},contracts:{BTC_USDT:meta},allowDataCycle:true}).state;
   const priorCycle=s.lastCycleAt,priorFrame=s.turnEngine!.frames.BTC_USDT?.["5m"]?.completedAt??0;
   const nextSlot=Math.floor((priorCycle-90_000)/300_000)+1;
