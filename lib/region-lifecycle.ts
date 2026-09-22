@@ -212,7 +212,7 @@ export function evaluateRegionLifecycle(input:{symbol:string;rows:RegionCandle[]
     lastProcessedAt,zone,status,probeStartedAt,probeExtreme,acceptedAt,detachedAt,upperConsumedAt,lowerConsumedAt,reason},signals};
 }
 
-export function evaluateRegionUniverse(input:{paths:Record<string,RegionCandle[]>;prior?:Record<string,RegionLifecycleState>;now:number;costRate:number;suppressSignals?:boolean}){
+export function evaluateRegionUniverse(input:{paths:Record<string,RegionCandle[]>;prior?:Record<string,RegionLifecycleState>;now:number;costRate:number;suppressSignals?:boolean}):{states:Record<string,RegionLifecycleState>;signals:RegionEntrySignal[];updated:number}{
   const states:{[symbol:string]:RegionLifecycleState}={...(input.prior??{})},signals:RegionEntrySignal[]=[];
   let updated=0;
   for(const [symbol,rows] of Object.entries(input.paths)){
