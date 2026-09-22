@@ -1107,22 +1107,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     finally { this.forwardBusy = false; }
   }
 
-  private async advanceForwardAndWakeLive(now:number) {
-    const before=new Set(this.forwardState?.positions.map(t=>t.id)??[]);
-    await this.advanceForwardNow(now);
-    if(!this.runtime.live.requestedEnabled||!this.forwardState||!this.runtime.live.activation)return;
-    const hasNewEligible=this.forwardState.positions.some(t=>!before.has(t.id)
-      &&sourceAfterEnable(t,this.runtime.live.activation,this.forwardState!.startedAt));
-    if(!hasNewEligible)return;
-    try { await this.syncLive(Date.now()); }
-    catch(error){
-      this.runtime.live.operational=false;
-      this.runtime.live.lastError=`新模拟单即时复制核对失败：${safeError(error)}`;
-      this.recordLiveAudit({observedAt:Date.now(),symbol:null,planId:null,stage:"LIVE_CONTROL",level:"RECOVERING",
-        reason:this.runtime.live.lastError,error});
-    }
-  }
-
   private async refreshRegimeHourly(now: number) {
     const target = Math.floor(now / 3_600_000) * 3_600 - 3_600;
     const storageRetry = REGIME_EXECUTION_UNIVERSE.find((item) => {
@@ -3086,7 +3070,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // PAPER is the strategy authority. The owner-controlled LIVE adapter
       // mirrors only these persisted decisions; the generator has no keys.
       this.launchLiveSettlementBackground();
-      await this.advanceForwardAndWakeLive(Date.now());
       if (universeDue) {
         subrequests += 2;
         try { this.refreshUniverse(Date.now(), await fetchActiveContracts()); }
@@ -3102,7 +3085,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       subrequests += await this.refreshStrategyCandle(Date.now());
       subrequests += await this.refreshTurnDaily(Date.now());
       subrequests += await this.refreshRegimeHourly(Date.now());
-      await this.advanceForwardAndWakeLive(Date.now());
       await this.maybeWriteStrategyRuntimeLog(Date.now());
       this.runtime.subrequestCount += subrequests;
       this.runtime.maxSubrequestsInAlarm = Math.max(this.runtime.maxSubrequestsInAlarm, subrequests);
@@ -3159,6 +3141,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const books = await this.processBooks(now, cycleSymbols);
       subrequests += books.requests;
       this.publishCriticalHealth(Date.now(), books);
+      // Forward/PAPER is financial authority, not optional analysis. Keep its
+      // exits and 5-minute account archive on the same critical protection clock.
+      await this.advanceForwardNow(Date.now());
       const liveNeedsSync = this.liveNeedsSync();
       if (liveNeedsSync) {
         const liveRequestsBefore = this.liveClient?.requestCount ?? 0;
