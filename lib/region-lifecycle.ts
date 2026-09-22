@@ -130,7 +130,7 @@ export function consumeRegionBoundary(state:RegionLifecycleState,boundary:Region
   return boundary==="UPPER"?{...state,upperConsumedAt:at}:{...state,lowerConsumedAt:at};
 }
 
-export function evaluateRegionLifecycle(input:{symbol:string;rows:RegionCandle[];prior?:RegionLifecycleState|null;now:number;costRate:number;suppressSignals?:boolean}){
+export function evaluateRegionLifecycle(input:{symbol:string;rows:RegionCandle[];prior?:RegionLifecycleState|null;now:number;costRate:number;suppressSignals?:boolean}):{state:RegionLifecycleState;signals:RegionEntrySignal[]}{
   const completed=input.rows.filter(row=>valid(row)&&completeAt(row)<=input.now).sort((a,b)=>a.time-b.time);
   const detected=findLatestMatureRegion({symbol:input.symbol,rows:completed,now:input.now,costRate:input.costRate});
   const prior=input.prior??null;
