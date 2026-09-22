@@ -184,6 +184,22 @@ test("stale owning-frame data cannot leave a four-hour no-progress holding occup
   assert.match(s.history[0].exitReason??"",/释放长期无进展仓位/);
 });
 
+test("critical quote management cannot consume a pending 5m data cycle but can preserve one fallback equity mark",()=>{
+  const p=candles(),seed=(p.at(-1)!.time+300)*1000+91_000;
+  let s=advanceForward({state:initialMultiTurnForward(seed-10*60_000),now:seed,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:q(p,seed)},contracts:{BTC_USDT:meta},allowDataCycle:true}).state;
+  const priorCycle=s.lastCycleAt,priorFrame=s.turnEngine!.frames.BTC_USDT?.["5m"]?.completedAt??0;
+  const nextSlot=Math.floor((priorCycle-90_000)/300_000)+1;
+  const criticalAt=nextSlot*300_000+151_000;
+  const critical=advanceForward({state:s,now:criticalAt,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:{...q(p,criticalAt),observedAt:criticalAt}},contracts:{BTC_USDT:meta},allowDataCycle:false});
+  assert.equal(critical.state.lastCycleAt,priorCycle,"critical exit clock must not consume the completed-candle cycle");
+  assert.equal(critical.state.turnEngine!.frames.BTC_USDT?.["5m"]?.completedAt??0,priorFrame);
+  assert.equal(critical.changed,true,"one stale-aware fallback account mark is persisted after the bounded grace");
+  assert.equal(critical.state.daily.at(-1)!.lastAt,criticalAt);
+});
+
+
 test("new Multi-Turn trades persist the exact entry context used for later research review",()=>{
   const p=candles(),now=(p.at(-1)!.time+300)*1000+1000;
   const state=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},
