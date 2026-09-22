@@ -6,16 +6,21 @@ import { FORWARD_PROTECTION_STORAGE, FORWARD_STORAGE, prepareForwardReset, prepa
 
 const BASE=Date.parse("2026-09-21T00:00:00Z");
 const candles=():Candle[]=>{
-  const rows:Candle[]=Array.from({length:355},(_,i)=>{
-    const close=100*Math.exp(i*.00025),open=close/1.00025;
-    return{time:BASE/1000+i*300,open,high:Math.max(open,close)*1.0008,low:Math.min(open,close)*.9992,close,volume:1000+i};
-  });
-  const base=rows.at(-1)!.close,i=rows.length,at=(n:number)=>BASE/1000+n*300;
-  rows.push({time:at(i),open:base*.9998,high:base*1.0005,low:base*.9995,close:base,volume:1400});
-  rows.push({time:at(i+1),open:base,high:base*1.0045,low:base*.9997,close:base*1.004,volume:1401});
-  rows.push({time:at(i+2),open:base*1.004,high:base*1.0075,low:base*1.0035,close:base*1.007,volume:1402});
-  rows.push({time:at(i+3),open:base*1.007,high:base*1.0085,low:base*1.006,close:base*1.008,volume:1403});
-  rows.push({time:at(i+4),open:base*1.008,high:base*1.0082,low:base*1.0012,close:base*1.0015,volume:1404});
+  const rows:Candle[]=[],at=(n:number)=>BASE/1000+n*300,target=103.5;let prev=target;
+  for(let i=0;i<330;i++){
+    const close=target*(1+.0013*Math.sin(i*1.17));
+    rows.push({time:at(i),open:prev,high:Math.max(prev,close)*1.0007,low:Math.min(prev,close)*.9993,close,volume:1000+i});prev=close;
+  }
+  for(let j=0;j<16;j++){
+    const i=rows.length,close=target+(100.20-target)*(j+1)/16;
+    rows.push({time:at(i),open:prev,high:Math.max(prev,close)*1.0007,low:Math.min(prev,close)*.9993,close,volume:1400+i});prev=close;
+  }
+  for(const close of[100.08,99.96,100.05,99.98,100.04,99.97]){
+    const i=rows.length;rows.push({time:at(i),open:prev,high:Math.max(prev,close)*1.00055,low:Math.min(prev,close)*.99945,close,volume:1600+i});prev=close;
+  }
+  for(const close of[100.35,100.68,101.0]){
+    const i=rows.length;rows.push({time:at(i),open:prev,high:Math.max(prev,close)*1.0007,low:Math.min(prev,close)*.9994,close,volume:1800+i});prev=close;
+  }
   return rows;
 };
 const q=(rows:Candle[],at:number):Quote=>{const mid=rows.at(-1)!.close;return{bestBid:mid*.9999,bestAsk:mid*1.0001,observedAt:at,fresh:true,entryReady:true};};
@@ -306,7 +311,7 @@ test("full-risk rotation atomically replaces one clearly weak holding and cannot
     evidence:{structure:.06,momentum:.06,acceleration:.06,cusum:.06,changePoint:.06,failedExtension:.03,
       volatility:.2,volume:.2,breadth:.08,propagation:.06},reason:"strong rotation fixture"});
   const opportunity=(symbol:string,tf:(typeof timeframes)[number]|"1h",completedAt:number)=>({
-    version:"anchor-entry-v2" as const,symbol,timeframe:tf,side:"LONG" as const,completedAt,price:100,
+    version:"winding-anchor-entry-v3" as const,symbol,timeframe:tf,side:"LONG" as const,completedAt,price:100,
     score:92,eligible:true,directionStrength:92,spaceScore:88,positionScore:82,executionScore:96,
     trendSlopeScore:92,structureScore:90,pathEfficiency:90,momentumPersistence:90,pullbackResilience:90,
     grossRemainingSpaceRate:.04,netRemainingSpaceRate:.0378,statisticalRemainingSpaceRate:.05,structuralSpaceRate:.04,
