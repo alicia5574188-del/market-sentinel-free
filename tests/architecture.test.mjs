@@ -81,6 +81,10 @@ test("native dark LIVE console retains owner authentication and isolates financi
   assert.match(page, /setRuntime\(null\)/);
   assert.match(dashboard, /scroll\.current\[tab\]=window\.scrollY/);
   assert.match(dashboard, /\["live","◈","实盘"\]/);
+  assert.match(dashboard, /hidden=\{tab!==\"live\"\}[\s\S]*\{livePanel\}/,
+    "LIVE panel must stay mounted and only be hidden so tab switches preserve the last rendered data");
+  assert.doesNotMatch(dashboard, /tab===\"live\"&&livePanel/,
+    "LIVE tab selection must not remount the console and flash unknown values");
   assert.match(page, /livePanel=\{<LiveConsole/);
   assert.doesNotMatch(page+dashboard+consoleUi, /legacyConsole|onLegacy|fr-return|进入旧账户|window\.(confirm|alert|prompt)|role="dialog"/);
   assert.match(consoleUi, /role="switch"/);
