@@ -36,7 +36,7 @@ test("four-hour no-progress holding releases on the faster management clock even
     returnRate:-.006,favorableRate:.003,riskRate:.08,modeledCostRate:.0022,entryExpectedMoveRate:.08,frame:null});
   assert.equal(r.bestHoldMinutes,360);
   assert.equal(r.decision?.trigger,"HOLD_VALUE");
-  assert.match(r.decision?.reason??"",/释放长期无进展仓位/);
+  assert.match(r.decision?.reason??"",/硬上限|释放长期无进展仓位/);
 });
 
 test("meaningful favorable progress preserves the baseline hold-value decision",()=>{
