@@ -30,7 +30,8 @@ jobs:
       - name: Require LIVE fully OFF
         run: |
           set -euo pipefail
-          curl -fsS --max-time 15 "$WORKER_BASE_URL/__health" > "$RUNNER_TEMP/health-before.json"
+          code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/health-before.json" -w '%{http_code}' "$WORKER_BASE_URL/__health" || true)"
+          [[ "$code" == "200" || "$code" == "503" ]]
           jq -e '.runtime.liveMode.requestedEnabled == false and .runtime.liveMode.operational == false'             "$RUNNER_TEMP/health-before.json" >/dev/null
       - name: Deploy isolated reset bridge and reset PAPER
         run: |
