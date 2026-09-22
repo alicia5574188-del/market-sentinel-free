@@ -182,6 +182,11 @@ test("Multi-Turn entries use 6-12x isolated leverage and derive larger margin fr
   assert.equal(t.leverage,expected);
   assert.ok(t.leverage<=MULTI_TURN_TARGET_LEVERAGE);
   assert.ok(Math.abs(t.margin-t.notional/t.leverage)<1e-9);
+  const source=result.entryOpportunities?.find(row=>row.symbol===t.symbol&&row.timeframe===t.turn?.timeframe);
+  assert.ok(source);
+  assert.equal(t.stopPrice,source!.stopPrice);
+  const exactStopRate=(t.side==="LONG"?t.entryPrice-t.stopPrice:t.stopPrice-t.entryPrice)/t.entryPrice;
+  assert.ok(Math.abs(t.rule.stopRate-exactStopRate)<1e-12);
 });
 
 test("6-12x tiers remain below liquidation pressure and respect exchange leverage limits",()=>{
