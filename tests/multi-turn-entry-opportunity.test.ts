@@ -65,12 +65,27 @@ test("a forward level that is not farther than anchor1 cannot qualify the entry"
   assert.equal(row!.eligible,false);
 });
 
-test("farther forward space receives a higher score when anchor structure is otherwise comparable",()=>{
-  const near=longWindingPath(102.35,101.0),far=longWindingPath(104.5,101.0);
+test("closer to anchor1 scores higher even when the farther entry has more forward reward space",()=>{
+  const close=longWindingPath(102.0,100.55),far=longWindingPath(106.5,101.20);
+  const closeNow=(close.at(-1)!.time+300)*1000+1000,farNow=(far.at(-1)!.time+300)*1000+1000;
+  const a=evaluateMultiTurnEntryOpportunities({paths:{BTC_USDT:close},now:closeNow,costRate:.0022}).find(x=>x.timeframe==="5m");
+  const b=evaluateMultiTurnEntryOpportunities({paths:{BTC_USDT:far},now:farNow,costRate:.0022}).find(x=>x.timeframe==="5m");
+  assert.ok(a&&b);assert.equal(a!.eligible,true);assert.equal(b!.eligible,true);
+  assert.ok(a!.distanceFromAnchorRate<b!.distanceFromAnchorRate);
+  assert.ok((b!.targetDistanceRate??0)>(a!.targetDistanceRate??0));
+  assert.ok(b!.edgeRatio>a!.edgeRatio);
+  assert.ok(a!.positionScore>b!.positionScore);
+  assert.ok(a!.score>b!.score);
+});
+
+test("forward reward space remains a secondary positive score when anchor distance is comparable",()=>{
+  const near=longWindingPath(102.0,100.70),far=longWindingPath(105.0,100.70);
   const nearNow=(near.at(-1)!.time+300)*1000+1000,farNow=(far.at(-1)!.time+300)*1000+1000;
   const a=evaluateMultiTurnEntryOpportunities({paths:{BTC_USDT:near},now:nearNow,costRate:.0022}).find(x=>x.timeframe==="5m");
   const b=evaluateMultiTurnEntryOpportunities({paths:{BTC_USDT:far},now:farNow,costRate:.0022}).find(x=>x.timeframe==="5m");
-  assert.ok(a&&b);assert.ok((b!.targetDistanceRate??0)>(a!.targetDistanceRate??0));assert.ok(b!.score>a!.score);
+  assert.ok(a&&b);assert.ok(Math.abs(a!.distanceFromAnchorRate-b!.distanceFromAnchorRate)<.001);
+  assert.ok(b!.spaceScore>a!.spaceScore);
+  assert.ok(b!.score>a!.score);
 });
 
 test("4h and daily can never become executable entry candidates",()=>{
