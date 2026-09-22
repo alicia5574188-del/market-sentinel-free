@@ -180,13 +180,16 @@ function opportunityFor(input:{symbol:string;timeframe:TurnTimeframe;rows:TurnCa
   const netRemainingSpaceRate=Math.max(0,grossRemainingSpaceRate-input.costRate);
   const edgeRatio=grossRemainingSpaceRate/Math.max(backToAnchorRate,1e-9);
   const spaceScore=100*clip((edgeRatio-1)/2.5);
-  const positionScore=100*clip((edgeRatio-1)/1.6);
+  // Entry location is the primary ranking authority: once price has genuinely
+  // left anchor1, the closer it still is to that winding center, the better.
+  // Forward reward/risk remains a qualification gate and only a secondary score.
+  const positionScore=100*(1-clip(backToAnchorRate/Math.max(cfg.maxStop,.001)));
   const exec=executionScore(q,now);
 
   const turnFrame=turnEngine?.frames[symbol]?.[timeframe],turnRisk=turnFrame?.triggerProbability??.25;
   const turnPenalty=2*clip((turnRisk-.60)/.30);
   const targetQuality=target?.quality??0;
-  const score=clip(.52*spaceScore+.25*anchor.quality+.13*targetQuality+.10*exec-turnPenalty,0,100);
+  const score=clip(.58*positionScore+.18*anchor.quality+.10*spaceScore+.07*targetQuality+.07*exec-turnPenalty,0,100);
   const stopRate=Math.min(cfg.maxStop,Math.max(.0035,backToAnchorRate+anchor.bandRate*.25,atrRate*.65,input.costRate*1.15));
   const eligible=!!target&&edgeRatio>1&&netRemainingSpaceRate>0&&exec>0&&backToAnchorRate<=cfg.maxStop*.95;
 
@@ -229,5 +232,5 @@ export function evaluateMultiTurnEntryOpportunities(input:{paths:Record<string,T
 export function entryOpportunityCandidate(row:MultiTurnEntryOpportunity):TurnCandidate{
   return{symbol:row.symbol,timeframe:row.timeframe,side:row.side,score:row.score/100,riskCap:row.riskCap,stopRate:row.stopRate,
     expectedMoveRate:row.grossRemainingSpaceRate,turnProbability:row.turnRisk,confidence:row.anchorQuality/100,
-    continuationScore:clip((.42*row.anchorQuality+.58*row.spaceScore)/100),completedAt:row.completedAt,signalPrice:row.price,reason:row.reason};
+    continuationScore:clip((.55*row.positionScore+.25*row.anchorQuality+.20*row.spaceScore)/100),completedAt:row.completedAt,signalPrice:row.price,reason:row.reason};
 }
