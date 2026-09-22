@@ -93,7 +93,7 @@ export function selectAnchorOpportunityUniverse(input:{
   const valid=input.rows.filter(r=>r.symbol.endsWith("_USDT")&&r.last>0&&r.high24h>=r.low24h&&r.low24h>0
     &&r.volume24hUsd>0&&[r.change24hRate,r.volume24hUsd,r.fundingRate,r.openInterest].every(Number.isFinite));
   if(!valid.length)return[];
-  const liquidityFloorUsd=Math.max(100_000,percentile(valid.map(r=>r.volume24hUsd),.10));
+  const liquidityFloorUsd=100_000;
   const liquid=valid.filter(r=>r.volume24hUsd>=liquidityFloorUsd);
   if(!liquid.length)return[];
   const bySymbol=new Map(liquid.map(r=>[r.symbol,r]));
