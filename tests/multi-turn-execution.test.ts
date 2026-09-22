@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { advanceForward, forwardEquity, forwardWatchSymbols, initialForward, initialMultiTurnForward, multiTurnEntryLeverage, MULTI_TURN_TARGET_LEVERAGE, turnModeledCost, type Candle, type Contract, type Quote } from "../lib/forward-relations.ts";
+import { advanceForward, BAR_MS, forwardEquity, forwardWatchSymbols, initialForward, initialMultiTurnForward, multiTurnEntryLeverage, MULTI_TURN_TARGET_LEVERAGE, turnModeledCost, type Candle, type Contract, type Quote } from "../lib/forward-relations.ts";
 import { MULTI_TURN_VERSION, TURN_CONFIG, TURN_TIMEFRAMES, evaluateMultiTurn, initialMultiTurn } from "../lib/multi-turn-engine.ts";
 import { FORWARD_PROTECTION_STORAGE, FORWARD_STORAGE, prepareForwardReset, prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
 
