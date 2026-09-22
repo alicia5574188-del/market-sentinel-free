@@ -103,34 +103,34 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       <section className="fr-section fr-exec-flow-section"><div className="fr-section-head"><div><small>当前执行层</small><h2>系统正在做什么</h2></div><span>{time(data?.updatedAt)}</span></div>
         <div className="fr-exec-flow">
           <ExecStep index="01" title="选币" status={(data?.marketCount??0)>0?"已更新":"等待"} text={`Gate成交量Top30：当前 ${fmt(data?.marketCount,0)} 个标的进入短线扫描。`}/>
-          <ExecStep index="02" title="寻找优势位置" status={allEntryCandidates.length?"扫描中":"等待"} text="在5m / 15m / 30m / 1h里寻找已经出现过“很快浮赢、浮亏小”的价格位置。"/>
-          <ExecStep index="03" title="验证位置" status={allEntryCandidates.length?"已验证":"等待"} text={`当前找到 ${allEntryCandidates.length} 个有效多/空锚点；4h和日线不参与开仓。`}/>
-          <ExecStep index="04" title="检查距离 / 空间" status={preparedCandidates.length?"有机会":"检查中"} text={preparedCandidates.length?`${preparedCandidates.length} 个候选仍靠近优势位置，而且前方净空间足够。`:"当前候选距离优势位置过远，或剩余空间不足。"} />
+          <ExecStep index="02" title="寻找优势位置" status={allEntryCandidates.length?"扫描中":"等待"} text="在5m / 15m / 30m / 1h里寻找近期价格反复上下缠绕的中心位置（锚点1），再看价格最终脱离的方向。"/>
+          <ExecStep index="03" title="验证位置" status={allEntryCandidates.length?"已验证":"等待"} text={`当前找到 ${allEntryCandidates.length} 个近期缠绕锚点；价格脱离锚点1的方向就是候选做单方向，4h和日线不参与开仓。`}/>
+          <ExecStep index="04" title="比较回锚 / 前方距离" status={preparedCandidates.length?"有机会":"检查中"} text={preparedCandidates.length?`${preparedCandidates.length} 个候选的前方目标距离大于回到锚点1的距离。`:"当前候选前方目标还不够远，空间优势比未超过 1。"} />
           <ExecStep index="05" title="准备进场 / 下单" status={preparedCandidates.length?"准备中":"等待"} text={(data?.entryDiagnostics?.opened??0)>0?`本轮已开仓 ${fmt(data?.entryDiagnostics?.opened,0)} 笔。`:`当前执行状态：${mainBlocker}。`}/>
           <ExecStep index="06" title="持仓 / 退出" status={(data?.positions.length??0)>0?"管理中":"等待持仓"} text={`管理 ${fmt(data?.positions.length,0)} 笔持仓；${protectedPositionCount} 笔已启用利润保护，${exitAttentionCount} 笔处于退出关注状态。`}/>
         </div>
       </section>
 
-      <section className="fr-section fr-prepared-section"><div className="fr-section-head"><div><small>READY TO ENTER</small><h2>准备进场</h2><p>只有“优势位置已经被市场证明 + 当前价格仍靠近该位置 + 剩余净空间足够”的标的才会进入这里。</p></div><span>{preparedCandidates.length} 个</span></div>
+      <section className="fr-section fr-prepared-section"><div className="fr-section-head"><div><small>READY TO ENTER</small><h2>准备进场</h2><p>只有“近期先形成缠绕锚点1 + 价格已明确脱离 + 前方支撑/压力/旧缠绕区比回锚距离更远”的标的才会进入这里。</p></div><span>{preparedCandidates.length} 个</span></div>
         {preparedCandidates.length?<div className="fr-prepared-grid">{preparedCandidates.map((x,index)=><article className="fr-prepared-card" key={`${x.symbol}:${x.timeframe}`}>
           <header><div><small>#{index+1} · 交易分 {fmt(x.score,0)}</small><h3>{x.symbol.replace("_"," / ")}</h3><p>{x.timeframe} · {x.side==="LONG"?"多头优势位置":"空头优势位置"}</p></div><b>准备进场</b></header>
-          <div className="fr-prepared-metrics"><span><small>优势位置</small><strong>{fmt(x.anchorPrice,5)}</strong></span><span><small>锚点质量</small><strong>{fmt(x.anchorQuality,0)}</strong></span><span><small>当前离锚点</small><strong>{signed(x.distanceFromAnchorRate*100,2)}%</strong></span><span><small>允许最大距离</small><strong>{fmt(x.maxEntryDistanceRate*100,2)}%</strong></span><span><small>净剩余空间</small><strong>{fmt(x.netRemainingSpaceRate*100,2)}%</strong></span><span><small>空间 / 风险</small><strong>{fmt(x.edgeRatio,2)}</strong></span></div>
+          <div className="fr-prepared-metrics"><span><small>锚点1</small><strong>{fmt(x.anchorPrice,5)}</strong></span><span><small>缠绕质量</small><strong>{fmt(x.anchorQuality,0)}</strong></span><span><small>回锚距离</small><strong>{fmt(x.distanceFromAnchorRate*100,2)}%</strong></span><span><small>前方目标价</small><strong>{x.targetPrice?fmt(x.targetPrice,5):"—"}</strong></span><span><small>前方距离</small><strong>{fmt((x.targetDistanceRate??x.maxEntryDistanceRate)*100,2)}%</strong></span><span><small>空间优势比</small><strong>{fmt(x.edgeRatio,2)}x</strong></span></div>
           <p>{x.reason}</p>
-        </article>)}</div>:<Empty title="当前没有准备进场标的" text={allEntryCandidates.length?"已经找到优势位置，但当前价格还没有同时满足“距离近 + 空间够”。":"正在等待新的短线优势位置被市场证明。"} />}
+        </article>)}</div>:<Empty title="当前没有准备进场标的" text={allEntryCandidates.length?"已经找到缠绕锚点，但前方目标距离还没有大于回锚距离。":"正在等待新的短线缠绕区形成并出现明确脱离。"} />}
       </section>
 
-      <section className="fr-section fr-scoreboard-section"><div className="fr-section-head"><div><small>ANCHOR SCOREBOARD</small><h2>优势位置候选</h2><p>重点不是传统趋势强弱，而是这个位置是否曾经让正确方向迅速浮赢，以及现在还能不能以合理价格参与。</p></div><span>Top {entryCandidates.length}</span></div>
+      <section className="fr-section fr-scoreboard-section"><div className="fr-section-head"><div><small>ANCHOR SCOREBOARD</small><h2>优势位置候选</h2><p>重点是先找到近期反复缠绕的锚点1，再比较当前价回到锚点1的距离与做单方向前方目标的距离；前方越远，优势评分越高。</p></div><span>Top {entryCandidates.length}</span></div>
         {entryCandidates.length?<div className="fr-scoreboard">{entryCandidates.map((x,index)=>{const held=openSymbols.has(x.symbol);const label=held?"已持仓":x.eligible?"准备进场":"等待位置";
           return <details className={`fr-score-row ${x.eligible?"is-eligible":""}`} key={`${x.symbol}:${x.timeframe}`}>
-            <summary><span className="fr-score-rank">#{index+1}</span><span className="fr-score-value">{fmt(x.score,0)}</span><span className="fr-score-symbol"><b>{x.symbol.replace("_"," / ")}</b><small>{x.timeframe} · {x.side==="LONG"?"多头锚点":"空头锚点"}</small></span>
-              <span><small>锚点质量</small><b>{fmt(x.anchorQuality,0)}</b></span><span><small>离锚点</small><b>{signed(x.distanceFromAnchorRate*100,2)}%</b></span><span><small>净空间</small><b>{fmt(x.netRemainingSpaceRate*100,2)}%</b></span><em>{label}</em></summary>
+            <summary><span className="fr-score-rank">#{index+1}</span><span className="fr-score-value">{fmt(x.score,0)}</span><span className="fr-score-symbol"><b>{x.symbol.replace("_"," / ")}</b><small>{x.timeframe} · {x.side==="LONG"?"向上脱离":"向下脱离"}</small></span>
+              <span><small>缠绕质量</small><b>{fmt(x.anchorQuality,0)}</b></span><span><small>回锚距离</small><b>{fmt(x.distanceFromAnchorRate*100,2)}%</b></span><span><small>前方距离</small><b>{fmt((x.targetDistanceRate??x.maxEntryDistanceRate)*100,2)}%</b></span><em>{label}</em></summary>
             <div className="fr-score-details">
-              <div><h3>这个位置为什么有效</h3><div className="fr-score-detail-grid"><Metric label="优势位置" value={fmt(x.anchorPrice,5)}/><Metric label="首次明显浮赢" value={`${x.anchorFirstProfitBars} 根K内`}/><Metric label="验证期最大浮赢" value={`${fmt(x.anchorMfeRate*100,2)}%`}/><Metric label="验证期最大浮亏" value={`${fmt(x.anchorMaeRate*100,2)}%`}/><Metric label="MFE / MAE" value={fmt(x.anchorProfitRatio,2)}/></div></div>
-              <div><h3>现在是否值得进入</h3><div className="fr-score-detail-grid"><Metric label="当前距离" value={`${signed(x.distanceFromAnchorRate*100,2)}%`}/><Metric label="最大允许距离" value={`${fmt(x.maxEntryDistanceRate*100,2)}%`}/><Metric label="锚点保持率" value={`${fmt(x.anchorRetentionRate*100,0)}%`}/><Metric label="净剩余空间" value={`${fmt(x.netRemainingSpaceRate*100,2)}%`}/><Metric label="空间 / 风险" value={fmt(x.edgeRatio,2)}/></div></div>
+              <div><h3>锚点1怎么来的</h3><div className="fr-score-detail-grid"><Metric label="锚点1" value={fmt(x.anchorPrice,5)}/><Metric label="缠绕区半径" value={`${fmt((x.windingBandRate??x.anchorMaeRate)*100,2)}%`}/><Metric label="脱离方向" value={x.side==="LONG"?"向上 / 做多":"向下 / 做空"}/><Metric label="脱离已持续" value={`${x.breakoutBars??x.anchorFirstProfitBars} 根K`}/><Metric label="当前回锚距离" value={`${fmt(x.distanceFromAnchorRate*100,2)}%`}/></div></div>
+              <div><h3>前方还有没有空间</h3><div className="fr-score-detail-grid"><Metric label="目标类型" value={x.targetType==="OLDER_WINDING"?"更早缠绕区":x.targetType==="RESISTANCE"?"压力位":x.targetType==="SUPPORT"?"支撑位":"—"}/><Metric label="目标价格" value={x.targetPrice?fmt(x.targetPrice,5):"—"}/><Metric label="前方距离" value={`${fmt((x.targetDistanceRate??x.maxEntryDistanceRate)*100,2)}%`}/><Metric label="回锚距离" value={`${fmt(x.distanceFromAnchorRate*100,2)}%`}/><Metric label="空间优势比" value={`${fmt(x.edgeRatio,2)}x`}/></div></div>
               <div><h3>辅助检查</h3><div className="fr-score-detail-grid"><Metric label="位置分" value={fmt(x.positionScore,0)}/><Metric label="空间分" value={fmt(x.spaceScore,0)}/><Metric label="盘口执行" value={fmt(x.executionScore,0)}/><Metric label="转折风险" value={`${fmt(x.turnRisk*100,1)}%`}/><Metric label="锚点年龄" value={`${x.anchorAgeBars} 根K`}/></div></div>
               <p>{x.reason}</p>
             </div>
-          </details>;})}</div>:<Empty title="暂无优势位置候选" text="系统正在等待新的短线价格位置先被市场证明。"/>}
+          </details>;})}</div>:<Empty title="暂无优势位置候选" text="系统正在等待新的短线缠绕锚点与前方空间组合。"/>}
       </section>
     </>}
     {tab==="orders"&&<><PageTitle eyebrow="REAL-FEED PAPER" title="模拟账户" text="与实盘使用同一套观察结构。模拟成交含模型手续费、滑点和资金费用占位，不冒充Gate真实成交。"/>
