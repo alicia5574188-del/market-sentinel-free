@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { evaluateMultiTurnHoldValue, multiTurnHoldWindows } from "../lib/multi-turn-hold-value.ts";
+import { evaluateMultiTurnHoldValue, evaluateMultiTurnTimeFallback, multiTurnHoldWindows } from "../lib/multi-turn-hold-value.ts";
 import type { TurnFrameState } from "../lib/multi-turn-engine.ts";
 
 const NOW=Date.parse("2026-09-22T00:00:00Z");
@@ -72,24 +72,31 @@ test("the hold-value layer never acts before the owning timeframe has enough obs
   assert.equal(d.action,"HOLD");
 });
 
-test("early invalidation needs new owning-frame evidence and cannot act on a pre-entry frame",()=>{
-  const openedAt=NOW-60*60_000;
-  const weak=frame({rawDirection:"SHORT",directionConfidence:.2,continuationScore:.2,
-    triggerProbability:.9,phase:"TURNING",expectedMoveRate:.01});
-  const input={timeframe:"1h" as const,frame:weak,side:"LONG" as const,openedAt,now:NOW,
-    returnRate:-.009,favorableRate:.001,modeledCostRate:.0022};
-  assert.equal(evaluateMultiTurnHoldValue(input).action,"EXIT_RISK");
-  assert.equal(evaluateMultiTurnHoldValue({...input,frame:{...weak,completedAt:openedAt-1}}).action,"HOLD");
-  assert.equal(evaluateMultiTurnHoldValue({...input,openedAt:NOW-10*60_000}).action,"HOLD");
+test("frame-independent fallback waits for the stable six-bar best-hold window",()=>{
+  const input={timeframe:"4h" as const,openedAt:NOW-10*60*60_000,now:NOW,
+    returnRate:-.01,favorableRate:.002,modeledCostRate:.0022,entryExpectedMoveRate:.08};
+  assert.equal(evaluateMultiTurnTimeFallback(input),null);
 });
 
-test("a stalled four-hour holding exits after observation while a strong trend retains its slot",()=>{
-  const weak=frame({timeframe:"4h",directionConfidence:.28,continuationScore:.15,triggerProbability:.34,
-    atrRate:.054,expectedMoveRate:.07,stopRate:.08});
-  const input={timeframe:"4h" as const,frame:weak,side:"LONG" as const,openedAt:NOW-10*60*60_000,
-    now:NOW,returnRate:-.015,favorableRate:.003,modeledCostRate:.0022,entryExpectedMoveRate:.10};
-  const d=evaluateMultiTurnHoldValue(input);
-  assert.equal(d.action,"EXIT_RISK");assert.match(d.reason,/无进展持仓/);
-  assert.equal(evaluateMultiTurnHoldValue({...input,frame:frame({timeframe:"4h"})}).action,"HOLD");
-  assert.equal(evaluateMultiTurnHoldValue({...input,openedAt:NOW-60*60_000}).action,"HOLD");
+test("a four-hour no-progress holding releases its slot even when the owning frame is unavailable",()=>{
+  const input={timeframe:"4h" as const,openedAt:NOW-25*60*60_000,now:NOW,
+    returnRate:-.006,favorableRate:.006,modeledCostRate:.0022,entryExpectedMoveRate:.08};
+  const d=evaluateMultiTurnTimeFallback(input);
+  assert.equal(d?.action,"EXIT_RISK");
+  assert.match(d?.reason??"",/释放长期无进展仓位/);
+});
+
+test("meaningful progress or a cost-positive current return is not treated as a stalled slot",()=>{
+  const input={timeframe:"4h" as const,openedAt:NOW-25*60*60_000,now:NOW,
+    returnRate:-.004,favorableRate:.006,modeledCostRate:.0022,entryExpectedMoveRate:.08};
+  assert.ok(evaluateMultiTurnTimeFallback(input));
+  assert.equal(evaluateMultiTurnTimeFallback({...input,favorableRate:.04}),null);
+  assert.equal(evaluateMultiTurnTimeFallback({...input,returnRate:.003}),null);
+});
+
+test("hard-extension safety ceiling does not depend on a fresh timeframe frame",()=>{
+  const d=evaluateMultiTurnTimeFallback({timeframe:"1h",openedAt:NOW-19*60*60_000,now:NOW,
+    returnRate:.01,favorableRate:.02,modeledCostRate:.0022,entryExpectedMoveRate:.03});
+  assert.equal(d?.action,"EXIT_PROFIT");
+  assert.match(d?.reason??"",/硬上限/);
 });
