@@ -1,7 +1,8 @@
 import { TURN_CONFIG, TURN_TIMEFRAMES, type TurnCandidate, type TurnTimeframe } from "./multi-turn-engine.ts";
 
 export const MULTI_TURN_ENTRY_POLICY_VERSION="multi-turn-entry-policy-v1";
-export const MULTI_TURN_MIN_LEVERAGE=6;\nexport const MULTI_TURN_TARGET_LEVERAGE=12;
+export const MULTI_TURN_MIN_LEVERAGE=6;
+export const MULTI_TURN_TARGET_LEVERAGE=12;
 
 export function multiTurnEntryLeverage(stopRate:number,maintenanceRate:number,costRate:number,leverageMax:number){
   if(![stopRate,maintenanceRate,costRate,leverageMax].every(Number.isFinite)||stopRate<=0||maintenanceRate<0||costRate<0||leverageMax<1)return 0;
