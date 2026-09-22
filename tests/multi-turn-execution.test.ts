@@ -218,7 +218,7 @@ test("stale owning-frame data cannot leave a four-hour no-progress holding occup
     quotes:{BTC_USDT:{bestBid:px*.99999,bestAsk:px*1.00001,observedAt:later,fresh:true,entryReady:true}},contracts:{}}).state;
   assert.equal(s.positions.length,0);
   assert.equal(s.history[0].exitAudit?.trigger,"HOLD_VALUE");
-  assert.match(s.history[0].exitReason??"",/释放长期无进展仓位/);
+  assert.match(s.history[0].exitReason??"",/硬上限|释放长期无进展仓位/);
 });
 
 test("critical quote management cannot consume a pending 5m data cycle but can preserve one fallback equity mark",()=>{
@@ -339,4 +339,20 @@ test("full-risk rotation atomically replaces one clearly weak holding and cannot
   assert.equal(second.rotationState?.count,1);
   assert.equal(second.positions.some(t=>t.symbol==="W0_USDT"),false,"rotated-out symbol stays in its re-entry cooldown");
   assert.equal(second.positions.some(t=>t.symbol==="NEW2_USDT"),false,"account-level 60-minute cooldown prevents rotation churn");
+});
+
+
+test("recent same-symbol loss cannot consume a realtime candidate slot during its cooldown",()=>{
+  const p=candles(),now=(p.at(-1)!.time+300)*1000+1000;
+  const seeded=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:q(p,now)},contracts:{BTC_USDT:meta}}).state;
+  assert.ok(seeded.positions.length);
+  const trade=structuredClone(seeded.positions[0]);
+  trade.status="CLOSED";trade.closedAt=now-5*60_000;trade.netPnl=-2;trade.grossPnl=-1.8;
+  trade.exitPrice=trade.lastPrice;trade.exitReason="fixture loss";
+  seeded.positions=[];seeded.history.unshift(trade);
+  seeded.turnLastEntryBars={};seeded.turnRotationBlockedUntil={};seeded.turnSymbolExitAt={};
+  const watched=forwardWatchSymbols(seeded,now,["BTC_USDT"]);
+  assert.equal(watched.includes("BTC_USDT"),false,
+    "cooldown candidates must not waste the scarce realtime discovery slots");
 });

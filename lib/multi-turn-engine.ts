@@ -114,7 +114,8 @@ function metrics(rows:TurnCandle[],tf:TurnTimeframe):RawMetrics|null{
   const failedShort=newHigh&&location<.35?clip((.35-location)/.35):0;
   const volatility=clip((ranges.at(-1)!/Math.max(median(ranges.slice(-14,-1)),1e-9)-1)/1.5);
   const vols=a.map(x=>x.volume),volume=clip((Math.log(Math.max(last.volume,1e-9)/Math.max(median(vols.slice(-14,-1)),1e-9))+.2)/2);
-  return{rows:a,rawDirection,confidence,atrRate,expectedMoveRate:atrRate*(.8+.55*Math.sqrt(Math.max(1,cfg.minutes/15))),
+  const expectedMoveRate=Math.min(atrRate*(.8+.55*Math.sqrt(Math.max(1,cfg.minutes/15))),cfg.maxStop*2.5);
+  return{rows:a,rawDirection,confidence,atrRate,expectedMoveRate,
     structureLong,structureShort,momentum,acceleration,cusumLong,cusumShort,changeLong,changeShort,failedLong,failedShort,
     volatility,volume,latestReturn:rets.at(-1)??0};
 }
@@ -256,15 +257,27 @@ export function evaluateMultiTurn(input:{state?:MultiTurnState|null;paths:Record
 export type TurnCandidate={symbol:string;timeframe:TurnTimeframe;side:Exclude<TurnSide,"NEUTRAL">;
   score:number;riskCap:number;stopRate:number;expectedMoveRate:number;turnProbability:number;confidence:number;continuationScore:number;
   completedAt:number;signalPrice:number;reason:string};
+
+export function multiTurnCandidateScore(frame:TurnFrameState,cost:number){
+  const costEdge=Math.max(0,frame.expectedMoveRate-cost);
+  const riskAnchor=Math.max(frame.stopRate,cost*2,.0035);
+  const edgeMultiple=clip(costEdge/riskAnchor,0,2);
+  return frame.continuationScore*(.75+.50*edgeMultiple);
+}
+
 export function turnCandidates(state:MultiTurnState,costRate:number|((tf:TurnTimeframe)=>number)){
   const rows:TurnCandidate[]=[];
   for(const [symbol,byTf] of Object.entries(state.frames))for(const tf of TURN_TIMEFRAMES){
     const f=byTf[tf];if(!f?.ready||f.direction==="NEUTRAL")continue;
     const cfg=TURN_CONFIG[tf];
     if(state.updatedAt-f.completedAt>Math.max(10*60_000,cfg.minutes*60_000*1.5))continue;
+    // Entry belongs to stable FLOW. WATCH/TURNING are reversal-risk states,
+    // while a CONFIRMED bar has already made the turn and is prone to chase.
+    // The next completed bar may enter if the new direction settles into FLOW.
+    if(f.phase!=="FLOW"||f.justTurned)continue;
     const cost=typeof costRate==="function"?costRate(tf):costRate,costEdge=f.expectedMoveRate-cost;
     if(f.continuationScore<cfg.minContinuation||costEdge<=0)continue;
-    rows.push({symbol,timeframe:tf,side:f.direction,score:f.continuationScore*Math.max(.1,costEdge/Math.max(cost,.001)),
+    rows.push({symbol,timeframe:tf,side:f.direction,score:multiTurnCandidateScore(f,cost),
       riskCap:cfg.riskCap,stopRate:f.stopRate,expectedMoveRate:f.expectedMoveRate,turnProbability:f.turnProbability,
       confidence:f.directionConfidence,continuationScore:f.continuationScore,completedAt:f.completedAt,signalPrice:f.price,reason:f.reason});
   }

@@ -29,15 +29,19 @@ export type MultiTurnHoldValue = {
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
 const safeRatio=(a:number,b:number)=>a/Math.max(b,1e-9);
 
+export const MULTI_TURN_MANAGEMENT_WINDOWS:Record<TurnTimeframe,{
+  bestHoldMinutes:number;strongExtensionMinutes:number;hardExtensionMinutes:number;minimumEvaluationMinutes:number;
+}>={
+  "5m":{bestHoldMinutes:30,strongExtensionMinutes:60,hardExtensionMinutes:90,minimumEvaluationMinutes:10},
+  "15m":{bestHoldMinutes:90,strongExtensionMinutes:180,hardExtensionMinutes:270,minimumEvaluationMinutes:30},
+  "30m":{bestHoldMinutes:180,strongExtensionMinutes:360,hardExtensionMinutes:540,minimumEvaluationMinutes:60},
+  "1h":{bestHoldMinutes:240,strongExtensionMinutes:480,hardExtensionMinutes:720,minimumEvaluationMinutes:90},
+  "4h":{bestHoldMinutes:360,strongExtensionMinutes:720,hardExtensionMinutes:1440,minimumEvaluationMinutes:120},
+  "1d":{bestHoldMinutes:720,strongExtensionMinutes:1440,hardExtensionMinutes:2880,minimumEvaluationMinutes:180},
+};
+
 export function multiTurnHoldWindows(timeframe:TurnTimeframe){
-  const minutes=TURN_CONFIG[timeframe].minutes;
-  return{
-    bestHoldMinutes:Math.max(30,minutes*MULTI_TURN_BEST_HOLD_BARS),
-    strongExtensionMinutes:Math.max(60,minutes*MULTI_TURN_STRONG_EXTENSION_BARS),
-    hardExtensionMinutes:Math.min(TURN_CONFIG[timeframe].maxHoldMinutes,
-      Math.max(90,minutes*MULTI_TURN_HARD_EXTENSION_BARS)),
-    minimumEvaluationMinutes:Math.max(10,minutes*2),
-  };
+  return MULTI_TURN_MANAGEMENT_WINDOWS[timeframe];
 }
 
 export function evaluateMultiTurnHoldValue(input:{

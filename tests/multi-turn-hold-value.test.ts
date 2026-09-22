@@ -15,19 +15,21 @@ const frame=(overrides:Partial<TurnFrameState>={}):TurnFrameState=>({
   reason:"test",...overrides,
 });
 
-test("six-bar best holding windows are explicit for every owning timeframe",()=>{
+test("management windows stay fast enough that large signal timeframes cannot reserve risk for days",()=>{
   assert.equal(multiTurnHoldWindows("5m").bestHoldMinutes,30);
   assert.equal(multiTurnHoldWindows("15m").bestHoldMinutes,90);
   assert.equal(multiTurnHoldWindows("30m").bestHoldMinutes,180);
-  assert.equal(multiTurnHoldWindows("1h").bestHoldMinutes,360);
-  assert.equal(multiTurnHoldWindows("4h").bestHoldMinutes,1440);
-  assert.equal(multiTurnHoldWindows("1d").bestHoldMinutes,8640);
+  assert.equal(multiTurnHoldWindows("1h").bestHoldMinutes,240);
+  assert.equal(multiTurnHoldWindows("4h").bestHoldMinutes,360);
+  assert.equal(multiTurnHoldWindows("1d").bestHoldMinutes,720);
+  assert.equal(multiTurnHoldWindows("4h").hardExtensionMinutes,1440);
+  assert.equal(multiTurnHoldWindows("1d").hardExtensionMinutes,2880);
 });
 
 test("a strong owning direction may exceed its best holding time",()=>{
   const d=evaluateMultiTurnHoldValue({timeframe:"1h",frame:frame(),side:"LONG",
     openedAt:NOW-7*60*60_000,now:NOW,returnRate:.02,favorableRate:.025,modeledCostRate:.0022});
-  assert.equal(d.bestHoldMinutes,360);
+  assert.equal(d.bestHoldMinutes,240);
   assert.equal(d.action,"HOLD");
   assert.equal(d.strongContinuation,true);
 });
@@ -37,20 +39,20 @@ test("a non-exceptional direction cannot drift past the strong-extension window"
       triggerProbability:.30,phase:"WATCH"}),side:"LONG",
     openedAt:NOW-13*60*60_000,now:NOW,returnRate:.015,favorableRate:.02,modeledCostRate:.0022});
   assert.notEqual(d.action,"HOLD");
-  assert.equal(d.strongExtensionMinutes,720);
+  assert.equal(d.strongExtensionMinutes,480);
 });
 
 test("exceptional continuation can extend beyond two best windows but never past the hard extension",()=>{
   const strong=frame({directionConfidence:.94,continuationScore:.86,triggerProbability:.08,phase:"FLOW"});
   const extended=evaluateMultiTurnHoldValue({timeframe:"1h",frame:strong,side:"LONG",
-    openedAt:NOW-13*60*60_000,now:NOW,returnRate:.03,favorableRate:.035,modeledCostRate:.0022});
+    openedAt:NOW-9*60*60_000,now:NOW,returnRate:.03,favorableRate:.035,modeledCostRate:.0022});
   assert.equal(extended.exceptionalContinuation,true);
   assert.equal(extended.action,"HOLD");
 
   const hard=evaluateMultiTurnHoldValue({timeframe:"1h",frame:strong,side:"LONG",
-    openedAt:NOW-18*60*60_000,now:NOW,returnRate:.03,favorableRate:.035,modeledCostRate:.0022});
+    openedAt:NOW-13*60*60_000,now:NOW,returnRate:.03,favorableRate:.035,modeledCostRate:.0022});
   assert.notEqual(hard.action,"HOLD");
-  assert.equal(hard.hardExtensionMinutes,1080);
+  assert.equal(hard.hardExtensionMinutes,720);
 });
 
 test("weak direction exits when pullback risk overwhelms remaining space after enough observation",()=>{
