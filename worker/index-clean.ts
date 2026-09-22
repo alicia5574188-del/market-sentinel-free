@@ -37,7 +37,7 @@ import { advanceRegimePortfolio, evaluateRegimePortfolio, initialRegimePortfolio
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
 import { advanceForward, closeForwardForReset, forwardSummary, forwardEquity, freshQuote, forwardWatchSymbols, initialMultiTurnForward,
-  FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
+  BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { MULTI_TURN_VERSION } from "../lib/multi-turn-engine.ts";
 import { forwardSymbolAllowed } from "../lib/forward-evidence.ts";
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, prepareForwardReset,
