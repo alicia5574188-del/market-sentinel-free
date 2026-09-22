@@ -101,7 +101,7 @@ test("dynamic Multi-Turn profit floor survives a compact restart overlay without
   assert.equal(restored.positions[0].favorable,.08);
 });
 
-test("release-344 Worker does not create a later profit-floor checkpoint",async()=>{
+test("unified exit Worker persists a newly armed Multi-Turn profit floor without closing a healthy winner",async()=>{
   const start=Date.parse("2026-09-21T00:00:00Z");
   const rows=Array.from({length:360},(_,i)=>{
     const close=100*Math.exp(i*.0008),open=close/1.0008;
@@ -113,17 +113,17 @@ test("release-344 Worker does not create a later profit-floor checkpoint",async(
     contracts:{BTC_USDT:{quantoMultiplier:.001,leverageMax:50,maintenanceRate:.005,minContracts:1}}}).state;
   assert.equal(state.positions.length,1);
   const trade=state.positions[0],frame=state.turnEngine!.frames.BTC_USDT[trade.turn!.timeframe]!;
-  frame.continuationScore=.55;frame.triggerProbability=.20;frame.direction=trade.side;frame.rawDirection=trade.side;
-  frame.phase="FLOW";frame.lastTurnAt=null;state.lastCycleAt=now;
+  frame.continuationScore=.78;frame.triggerProbability=.10;frame.directionConfidence=.88;
+  frame.direction=trade.side;frame.rawDirection=trade.side;frame.phase="FLOW";frame.lastTurnAt=null;state.lastCycleAt=now;
   const px=trade.entryPrice*(trade.side==="LONG"?1.035:.965),at=now+10_000;
   const next=advanceForward({state,now:at,paths:{},
     quotes:{BTC_USDT:{bestBid:px*.99999,bestAsk:px*1.00001,observedAt:at,fresh:true,entryReady:true}},contracts:{}});
 
   assert.equal(next.state.positions.length,1);
-  assert.equal(next.state.positions[0].profitProtection,undefined);
-  assert.equal(next.state.positions[0].profitProtectionMigration,undefined);
-  assert.equal(next.state.history.some(x=>x.exitAudit?.trigger==="PROFIT_GIVEBACK"),false,
-    "release-344 has no independent Multi-Turn profit-giveback exit");
+  assert.ok(next.state.positions[0].profitProtection);
+  assert.ok((next.state.positions[0].profitProtection?.floorRate??0)>0);
+  assert.equal(next.protectionChanged,true);
+  assert.equal(next.state.history.some(x=>x.exitAudit?.trigger==="PROFIT_GIVEBACK"),false);
 });
 
 test("guarded and deferred adaptive-profit migration state survives compact restart",()=>{
