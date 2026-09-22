@@ -113,16 +113,19 @@ function opportunityFor(input:{symbol:string;timeframe:TurnTimeframe;rows:TurnCa
 
   const legStart=currentLegStart(rows,side,atrRate),legBase=rows[legStart].close;
   const legMoveRate=Math.max(0,d*(last.close/legBase-1));
-  const expectedLegRate=historicalLegExpectation(rows,side,atrRate,cfg.maxStop*3);
-  const statisticalRemainingSpaceRate=Math.max(0,expectedLegRate-legMoveRate);
+  let expectedLegRate=historicalLegExpectation(rows,side,atrRate,cfg.maxStop*3);
   const structuralSpaceRate=nearestStructureSpace(rows,side,last.close,atrRate);
+  // A clean breakout with no prior structure above/below it must not be treated
+  // as having zero room merely because its current directional leg is longer
+  // than the historical rolling windows. Grant only a bounded ATR extension.
+  if(structuralSpaceRate==null&&directionStrength>=70&&expectedLegRate-legMoveRate<atrRate*.75)
+    expectedLegRate=Math.min(cfg.maxStop*3,Math.max(expectedLegRate,legMoveRate+atrRate*1.75));
+  const statisticalRemainingSpaceRate=Math.max(0,expectedLegRate-legMoveRate);
   const grossRemainingSpaceRate=Math.max(0,structuralSpaceRate==null?statisticalRemainingSpaceRate:
     Math.min(statisticalRemainingSpaceRate,structuralSpaceRate));
   const netRemainingSpaceRate=Math.max(0,grossRemainingSpaceRate-Math.max(0,input.costRate));
-  const localStructureRisk=side==="LONG"
-    ?Math.max(0,last.close/Math.min(...recent.map(r=>r.low))-1)
-    :Math.max(0,Math.max(...recent.map(r=>r.high))/last.close-1);
-  const pullbackRiskRate=Math.max(atrRate*.65,Math.min(cfg.maxStop,localStructureRisk));
+  const observedCounterMove=maxCounterMove(recent,side);
+  const pullbackRiskRate=Math.max(atrRate*.65,Math.min(cfg.maxStop,observedCounterMove*1.15));
   const edgeRatio=netRemainingSpaceRate/Math.max(pullbackRiskRate,1e-9);
   const spaceScore=100*clip(edgeRatio/2.5);
 
