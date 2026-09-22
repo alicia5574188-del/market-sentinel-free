@@ -37,7 +37,7 @@ import { advanceRegimePortfolio, evaluateRegimePortfolio, initialRegimePortfolio
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
 import { advanceForward, closeForwardForReset, forwardSummary, forwardEquity, freshQuote, forwardWatchSymbols, initialMultiTurnForward,
-  FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
+  BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { MULTI_TURN_VERSION } from "../lib/multi-turn-engine.ts";
 import { forwardSymbolAllowed } from "../lib/forward-evidence.ts";
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, prepareForwardReset,
@@ -1047,22 +1047,27 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return true;
   }
 
-  private async advanceForwardNow(now: number) {
-    if (this.forwardBusy || now - this.forwardLastAttemptAt < 10_000) return;
-    this.forwardLastAttemptAt = now;
+  private async advanceForwardNow(now: number, allowDataCycle = true) {
+    if (this.forwardBusy) return;
     this.forwardBusy = true;
     try {
       if (!this.forwardState) this.forwardState = await readForwardStore(this.ctx.storage, now);
       if(MULTI_TURN_AUTO_CUTOVER&&this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION)await this.ensureMultiTurnCutover(now);
       if(!this.forwardState)throw new Error("PAPER权威账户缺失");
       const legacyDrainOnly=this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION;
-      // Restarts retain the existing ten-second source cadence. Otherwise a
-      // restart could create extra compact commits inside the daily bound.
-      if(now-this.forwardState.lastQuoteCycleAt<10_000){this.forwardLastAttemptAt=this.forwardState.lastQuoteCycleAt;return;}
+      const dataCycleDue=allowDataCycle&&(!this.forwardState.lastCycleAt
+        ||Math.floor((now-90_000)/BAR_MS)>Math.floor((this.forwardState.lastCycleAt-90_000)/BAR_MS));
+      // Quote/exit management keeps the existing ten-second source cadence.
+      // A due post-refresh data cycle may bypass it once so fresh completed
+      // candles are never lost just because the critical loop ran first.
+      if(!dataCycleDue&&now-this.forwardState.lastQuoteCycleAt<10_000){
+        this.forwardLastAttemptAt=this.forwardState.lastQuoteCycleAt;return;
+      }
+      this.forwardLastAttemptAt=now;
       const previous = this.forwardState;
       const next = advanceForward({ state: previous, now, paths: this.strategyCandles,daily:this.turnDailyCandles,
         quotes: this.regimeQuotes(now), contracts: this.regimeContracts(),legacyDrainOnly,
-        entrySymbols: this.runtime.liquidUniverse });
+        entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue });
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
         const prepared = await prepareForwardWrite(previous.storage.persistedAt ? previous : null, next.state, now, {compact:true});
@@ -1105,22 +1110,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.forwardError = null;
     } catch (error) { this.forwardError = safeError(error); }
     finally { this.forwardBusy = false; }
-  }
-
-  private async advanceForwardAndWakeLive(now:number) {
-    const before=new Set(this.forwardState?.positions.map(t=>t.id)??[]);
-    await this.advanceForwardNow(now);
-    if(!this.runtime.live.requestedEnabled||!this.forwardState||!this.runtime.live.activation)return;
-    const hasNewEligible=this.forwardState.positions.some(t=>!before.has(t.id)
-      &&sourceAfterEnable(t,this.runtime.live.activation,this.forwardState!.startedAt));
-    if(!hasNewEligible)return;
-    try { await this.syncLive(Date.now()); }
-    catch(error){
-      this.runtime.live.operational=false;
-      this.runtime.live.lastError=`新模拟单即时复制核对失败：${safeError(error)}`;
-      this.recordLiveAudit({observedAt:Date.now(),symbol:null,planId:null,stage:"LIVE_CONTROL",level:"RECOVERING",
-        reason:this.runtime.live.lastError,error});
-    }
   }
 
   private async refreshRegimeHourly(now: number) {
@@ -3086,7 +3075,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // PAPER is the strategy authority. The owner-controlled LIVE adapter
       // mirrors only these persisted decisions; the generator has no keys.
       this.launchLiveSettlementBackground();
-      await this.advanceForwardAndWakeLive(Date.now());
       if (universeDue) {
         subrequests += 2;
         try { this.refreshUniverse(Date.now(), await fetchActiveContracts()); }
@@ -3102,7 +3090,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       subrequests += await this.refreshStrategyCandle(Date.now());
       subrequests += await this.refreshTurnDaily(Date.now());
       subrequests += await this.refreshRegimeHourly(Date.now());
-      await this.advanceForwardAndWakeLive(Date.now());
+      // Completed-candle work may advance turnEngine only after refresh. The
+      // critical alarm independently owns exits and fallback equity marks.
+      await this.advanceForwardNow(Date.now(),true);
       await this.maybeWriteStrategyRuntimeLog(Date.now());
       this.runtime.subrequestCount += subrequests;
       this.runtime.maxSubrequestsInAlarm = Math.max(this.runtime.maxSubrequestsInAlarm, subrequests);
@@ -3159,6 +3149,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const books = await this.processBooks(now, cycleSymbols);
       subrequests += books.requests;
       this.publishCriticalHealth(Date.now(), books);
+      // Forward/PAPER is financial authority, not optional analysis. Keep its
+      // exits and 5-minute account archive on the same critical protection clock.
+      await this.advanceForwardNow(Date.now(),false);
       const liveNeedsSync = this.liveNeedsSync();
       if (liveNeedsSync) {
         const liveRequestsBefore = this.liveClient?.requestCount ?? 0;

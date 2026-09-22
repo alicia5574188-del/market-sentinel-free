@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { advanceForward, forwardEquity, forwardWatchSymbols, initialForward, initialMultiTurnForward, multiTurnEntryLeverage, MULTI_TURN_TARGET_LEVERAGE, turnModeledCost, type Candle, type Contract, type Quote } from "../lib/forward-relations.ts";
+import { advanceForward, BAR_MS, forwardEquity, forwardWatchSymbols, initialForward, initialMultiTurnForward, multiTurnEntryLeverage, MULTI_TURN_TARGET_LEVERAGE, turnModeledCost, type Candle, type Contract, type Quote } from "../lib/forward-relations.ts";
 import { MULTI_TURN_VERSION, TURN_CONFIG, TURN_TIMEFRAMES, evaluateMultiTurn, initialMultiTurn } from "../lib/multi-turn-engine.ts";
 import { FORWARD_PROTECTION_STORAGE, FORWARD_STORAGE, prepareForwardReset, prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
 
@@ -19,6 +19,43 @@ test("Multi-Turn opens at most one executable leg per symbol while every timefra
   assert.ok(Object.keys(result.turnEngine!.frames.BTC_USDT??{}).length>=4);
   assert.ok(result.positions.length<=1);
   if(result.positions.length){assert.equal(result.positions[0].rule.authority,"MULTI_TURN");assert.ok(result.positions[0].turn);}
+});
+
+test("wall-clock time cannot consume a new data slot before its completed candle is fetched",()=>{
+  const p=candles(),now=(p.at(-1)!.time+300)*1000+1000;
+  let s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:q(p,now)},contracts:{BTC_USDT:meta}}).state;
+  const firstCycle=s.lastCycleAt;
+  const later=now+BAR_MS+90_000;
+  s=advanceForward({state:s,now:later,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:{...q(p,later),observedAt:later}},contracts:{BTC_USDT:meta}}).state;
+  assert.equal(s.lastCycleAt,firstCycle,
+    "stale 5m path must not be relabeled as the next completed-candle cycle");
+
+  const last=p.at(-1)!,slope=.0008,close=last.close*Math.exp(slope),open=close/(1+slope);
+  const fresh=[...p,{time:last.time+300,open,high:Math.max(open,close)*1.001,
+    low:Math.min(open,close)*.999,close,volume:last.volume+1}];
+  const at=later+10_000;
+  s=advanceForward({state:s,now:at,paths:{BTC_USDT:fresh},
+    quotes:{BTC_USDT:q(fresh,at)},contracts:{BTC_USDT:meta}}).state;
+  assert.equal(s.lastCycleAt,at,
+    "the pending slot advances as soon as the genuinely completed candle exists");
+});
+
+test("critical management writes a fallback five-minute equity mark without advancing stale strategy data",()=>{
+  const p=candles(),now=(p.at(-1)!.time+300)*1000+1000;
+  let s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:q(p,now)},contracts:{BTC_USDT:meta}}).state;
+  const cycle=s.lastCycleAt,mark=s.daily.at(-1)!.lastAt;
+  const later=now+BAR_MS+150_000;
+  const next=advanceForward({state:s,now:later,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:{...q(p,later),observedAt:later}},contracts:{BTC_USDT:meta},
+    allowDataCycle:false});
+  s=next.state;
+  assert.equal(s.lastCycleAt,cycle,"fallback curve mark cannot consume strategy data");
+  assert.ok(s.daily.at(-1)!.lastAt>mark,"fallback curve mark must advance the saved account path");
+  assert.equal(s.daily.at(-1)!.lastAt,later);
+  assert.equal(next.changed,true);
 });
 
 test("timeframe sleeves, directional cap and portfolio cap remain authoritative with many simultaneous markets",()=>{
@@ -184,6 +221,22 @@ test("stale owning-frame data cannot leave a four-hour no-progress holding occup
   assert.match(s.history[0].exitReason??"",/释放长期无进展仓位/);
 });
 
+test("critical quote management cannot consume a pending 5m data cycle but can preserve one fallback equity mark",()=>{
+  const p=candles(),seed=(p.at(-1)!.time+300)*1000+91_000;
+  const s=advanceForward({state:initialMultiTurnForward(seed-10*60_000),now:seed,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:q(p,seed)},contracts:{BTC_USDT:meta},allowDataCycle:true}).state;
+  const priorCycle=s.lastCycleAt,priorFrame=s.turnEngine!.frames.BTC_USDT?.["5m"]?.completedAt??0;
+  const nextSlot=Math.floor((priorCycle-90_000)/300_000)+1;
+  const criticalAt=nextSlot*300_000+151_000;
+  const critical=advanceForward({state:s,now:criticalAt,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:{...q(p,criticalAt),observedAt:criticalAt}},contracts:{BTC_USDT:meta},allowDataCycle:false});
+  assert.equal(critical.state.lastCycleAt,priorCycle,"critical exit clock must not consume the completed-candle cycle");
+  assert.equal(critical.state.turnEngine!.frames.BTC_USDT?.["5m"]?.completedAt??0,priorFrame);
+  assert.equal(critical.changed,true,"one stale-aware fallback account mark is persisted after the bounded grace");
+  assert.equal(critical.state.daily.at(-1)!.lastAt,criticalAt);
+});
+
+
 test("new Multi-Turn trades persist the exact entry context used for later research review",()=>{
   const p=candles(),now=(p.at(-1)!.time+300)*1000+1000;
   const state=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},
@@ -242,8 +295,8 @@ test("full-risk rotation atomically replaces one clearly weak holding and cannot
       volatility:.2,volume:.2,breadth:.08,propagation:.06},reason:"strong rotation fixture"});
   for(let i=0;i<symbols.length;i++)s.turnEngine!.frames[symbols[i]]={[timeframes[i]]:strong(symbols[i],timeframes[i])};
   const weak=s.turnEngine!.frames.W0_USDT!["5m"]!;
-  // Weak enough for selective replacement, but still above the independent
-  // stalled-exit threshold; otherwise an ordinary exit already frees the risk.
+  // Weak enough for selective replacement while still inside the short 5m
+  // no-progress window; rotation remains independently testable.
   weak.directionConfidence=.48;weak.continuationScore=.38;weak.turnProbability=.60;weak.triggerProbability=.60;weak.phase="WATCH";
   weak.atrRate=.012;weak.expectedMoveRate=.012;weak.propagationPressure=.55;
   weak.evidence={structure:.70,momentum:.55,acceleration:.45,cusum:.60,changePoint:.58,failedExtension:.40,

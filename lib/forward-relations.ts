@@ -15,8 +15,9 @@ import { FORWARD_ADAPTIVE_VERSION, adaptiveCandidatePriority, adaptiveEntryAdjus
   familyRiskHeadroom, inspectRapidCondition, sampleRiskMultiplier, type AdaptiveCandidate, type AdaptiveLane } from "./forward-adaptive.ts";
 import { MULTI_TURN_VERSION, TURN_CONFIG, TURN_TIMEFRAMES, evaluateMultiTurn, initialMultiTurn, turnCandidates,
   type MultiTurnState, type TurnCandidate, type TurnEvidence, type TurnPhase, type TurnSide, type TurnTimeframe } from "./multi-turn-engine.ts";
-import { MULTI_TURN_PROFIT_PROTECTION_VERSION, multiTurnProfitFloor, supportedProfitVersion, type MultiTurnProfitVersion, type MultiTurnTradeProfitProtection } from "./multi-turn-profit-protection.ts";
-import { evaluateMultiTurnHoldValue, evaluateMultiTurnTimeFallback, multiTurnHoldWindows, type MultiTurnHoldValue } from "./multi-turn-hold-value.ts";
+import { MULTI_TURN_PROFIT_PROTECTION_VERSION, supportedProfitVersion, type MultiTurnProfitVersion, type MultiTurnTradeProfitProtection } from "./multi-turn-profit-protection.ts";
+import { evaluateMultiTurnHoldValue, multiTurnHoldWindows, type MultiTurnHoldValue } from "./multi-turn-hold-value.ts";
+import { evaluateMultiTurnExitOverlay } from "./multi-turn-exit.ts";
 import { MULTI_TURN_ROTATION_COOLDOWN_MS, MULTI_TURN_ROTATION_VERSION, evaluateRotationOpportunity,
   multiTurnRotationReentryCooldownMs, rankWeakRotationHoldings, rotationAdvantageEnough, rotationRiskSaturated } from "./multi-turn-rotation.ts";
 // The storage schema stays v1.0 so an algorithm upgrade cannot reset the ledger.
@@ -427,23 +428,15 @@ function manageMultiTurn(s:ForwardState,quotes:Record<string,Quote>,now:number){
     const modeledCost=turnModeledCost(t.turn.timeframe,spread),riskRate=t.plannedRisk/Math.max(t.notional,1e-9);
     const holdValue=freshFrame?evaluateMultiTurnHoldValue({timeframe:t.turn.timeframe,frame:freshFrame,side:t.side,
       openedAt:t.openedAt,now,returnRate:ret,favorableRate:t.favorable,modeledCostRate:modeledCost}):null;
-    const timeFallback=evaluateMultiTurnTimeFallback({timeframe:t.turn.timeframe,openedAt:t.openedAt,now,
-      returnRate:ret,favorableRate:t.favorable,modeledCostRate:modeledCost,
-      entryExpectedMoveRate:t.entryContext?.expectedMoveRate??t.rule.armRate});
     if(holdValue)t.holdValue=holdValue;
-    // Keep the stable single-signal protection model. Do not sum correlated
-    // time/space scores into a second aggressive profit-retention multiplier.
-    const floor=multiTurnProfitFloor(t.favorable,riskRate,modeledCost,freshFrame?{
-      continuationScore:freshFrame.continuationScore,turnProbability:freshFrame.triggerProbability,
-      phase:freshFrame.phase,rawDirectionAligned:freshFrame.rawDirection==="NEUTRAL"||freshFrame.rawDirection===t.side,
-    }:null);
-    if(floor){
-      const protectedFloor=Math.max(t.profitProtection?.floorRate??0,floor.floorRate);
-      t.profitProtection={...floor,floorRate:protectedFloor,lockedR:protectedFloor/riskRate,
-        retentionRate:protectedFloor/Math.max(t.favorable,1e-9),checkpointBand:Math.floor(protectedFloor/riskRate*4+1e-9),
-        peakR:Math.max(t.profitProtection?.peakR??0,floor.reachedR),updatedAt:now};
-      // A legacy DEFERRED marker cannot coexist with an armed floor: the
-      // checkpoint reader correctly rejects that inconsistent combination.
+    const exitOverlay=evaluateMultiTurnExitOverlay({timeframe:t.turn.timeframe,side:t.side,openedAt:t.openedAt,now,
+      returnRate:ret,favorableRate:t.favorable,riskRate,modeledCostRate:modeledCost,
+      entryExpectedMoveRate:t.entryContext?.expectedMoveRate??t.rule.armRate,frame:freshFrame,
+      priorProtection:t.profitProtection});
+    if(exitOverlay.profitProtection){
+      t.profitProtection=exitOverlay.profitProtection;
+      // Legacy v4 migration metadata is compatibility-only and cannot keep an
+      // actually armed floor in an impossible DEFERRED state.
       if(t.profitProtectionMigration?.state==="DEFERRED")t.profitProtectionMigration={
         ...t.profitProtectionMigration,version:MULTI_TURN_PROFIT_PROTECTION_VERSION,state:"CURRENT",updatedAt:now};
     }
@@ -454,10 +447,7 @@ function manageMultiTurn(s:ForwardState,quotes:Record<string,Quote>,now:number){
     else if(freshFrame&&freshFrame.direction===t.side&&freshFrame.phase==="TURNING"&&freshFrame.triggerProbability>=.90
       &&freshFrame.evidence.structure>=.65&&(freshFrame.evidence.cusum>=.60||freshFrame.evidence.changePoint>=.65))
       decision={trigger:"MULTI_TURN",reason:`${t.turn.timeframe}转折概率达到${(freshFrame.triggerProbability*100).toFixed(0)}%，结构破坏与序贯变化同时成立；提前退出该周期旧方向`,boundaryRate:null};
-    else if(t.profitProtection&&ret<=t.profitProtection.floorRate)
-      decision={trigger:"PROFIT_GIVEBACK",reason:`利润路径保护：已观测最高顺向${(t.favorable*100).toFixed(2)}%，当前回落触及只能上移的保护线${(t.profitProtection.floorRate*100).toFixed(2)}%。`,boundaryRate:t.profitProtection.floorRate};
-    else if(timeFallback)
-      decision={trigger:"HOLD_VALUE",reason:`时间—空间持仓价值退出：${timeFallback.reason}`,boundaryRate:null};
+    else if(exitOverlay.decision)decision=exitOverlay.decision;
     else if(holdValue&&holdValue.action!=="HOLD")
       decision={trigger:"HOLD_VALUE",reason:`时间—空间持仓价值退出：${holdValue.reason}`,boundaryRate:null};
     else if(now-t.openedAt>=t.rule.horizon*60_000)
@@ -792,12 +782,31 @@ function openTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<
   else if(blocker)s.latestReason=blocker;else if(s.positions.length)s.latestReason=`管理${s.positions.length}笔前向模拟持仓；原始保护止损不会放宽。`;
 }
 function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;daily?:Record<string,Candle[]>;
-  quotes:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:string[]},s:ForwardState,before:number){
+  quotes:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:string[];allowDataCycle?:boolean},s:ForwardState,before:number){
   const{now,paths,quotes,contracts}=input,daily=input.daily??{};
   if(s.strategyAuthorityVersion!==MULTI_TURN_VERSION)throw new Error("Multi-Turn权威版本不一致");
   const entrySymbols=new Set(input.entrySymbols??Object.keys(paths));
   const retainedSymbols=[...new Set([...entrySymbols,...s.positions.map(position=>position.symbol)])];
-  const dataDue=!s.lastCycleAt||Math.floor((now-90_000)/BAR_MS)>Math.floor((s.lastCycleAt-90_000)/BAR_MS);
+  const targetSlot=Math.floor((now-90_000)/BAR_MS);
+  const lastDataSlot=s.lastCycleAt?Math.floor((s.lastCycleAt-90_000)/BAR_MS):-1;
+  // A wall-clock boundary is not evidence that the new candle was fetched.
+  // Consume the data slot only when at least one retained 5m path actually
+  // contains a candle completed at that target boundary.
+  const targetCompletedAt=targetSlot*BAR_MS;
+  const newestPathCompletedAt=retainedSymbols.reduce((latest,symbol)=>{
+    const row=paths[symbol]?.at(-1);
+    return row?Math.max(latest,(row.time+300)*1000):latest;
+  },0);
+  const dataDue=input.allowDataCycle!==false&&targetSlot>lastDataSlot
+    &&newestPathCompletedAt>=targetCompletedAt;
+  const lastMarkAt=s.daily.at(-1)?.lastAt??0;
+  const lastMarkSlot=lastMarkAt?Math.floor((lastMarkAt-90_000)/BAR_MS):-1;
+  // Normal path: the data cycle owns the 5m account mark. If optional candle
+  // work is delayed for >60s beyond the normal 90s grace, the critical loop may
+  // persist one stale-aware mark for that slot without advancing turnEngine.
+  const fallbackMarkDue=input.allowDataCycle===false&&targetSlot>lastMarkSlot
+    &&now>=(targetSlot*BAR_MS+150_000);
+  const markDue=dataDue||fallbackMarkDue;
   if(dataDue){
     s.turnEngine=evaluateMultiTurn({state:s.turnEngine??initialMultiTurn(),paths,daily,retainSymbols:retainedSymbols,now});
     s.lastCycleAt=now;s.selectedSymbols=[...entrySymbols];
@@ -819,17 +828,17 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
     s.peakEquity=Math.max(s.peakEquity,marked.equity);
     s.maxDrawdown=Math.max(s.maxDrawdown,1-marked.equity/Math.max(s.peakEquity,1e-9));
   }
-  if(dataDue){
+  if(markDue){
     const k=dayKey(now),a=s.daily.find(d=>d.day===k);
     if(a){a.endEquity=marked.equity;a.lastAt=now;}
     else s.daily.push({day:k,firstAt:now,lastAt:now,startEquity:s.daily.at(-1)?.endEquity??s.initialEquity,endEquity:marked.equity,exactBoundary:false});
     s.daily=s.daily.slice(-400);
   }
   s.lastQuoteCycleAt=now;
-  return{state:s,changed:dataDue||s.revision!==before,protectionChanged:forwardProtectionChanged(input.state,s)};
+  return{state:s,changed:dataDue||markDue||s.revision!==before,protectionChanged:forwardProtectionChanged(input.state,s)};
 }
 
-export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;daily?:Record<string,Candle[]>;quotes:Record<string,Quote>;contracts:Record<string,Contract>;legacyDrainOnly?:boolean;entrySymbols?:string[]}){
+export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;daily?:Record<string,Candle[]>;quotes:Record<string,Quote>;contracts:Record<string,Contract>;legacyDrainOnly?:boolean;entrySymbols?:string[];allowDataCycle?:boolean}){
   const{now,paths,quotes,contracts}=input,s=structuredClone(input.state),before=s.revision;
   if(s.strategyAuthorityVersion===MULTI_TURN_VERSION)return advanceMultiTurnForward(input,s,before);
   if(!s.exitPolicyUpgrade){

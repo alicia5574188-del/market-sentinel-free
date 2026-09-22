@@ -418,13 +418,13 @@ test("negative, future or private usage fields never create invented published m
   }
   const overview=await(await h.rpc("/overview")).json<any>();assert.equal(overview.members[0].usage,null);
 }));
-test("primary trading, main alarm, source evaluation and owner switch bodies are exactly unchanged",async()=>{
+test("primary trading, audited main alarm, source evaluation and owner switch bodies stay frozen",async()=>{
   const ts=(await import("typescript")).default;
   const source=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8"),tree=ts.createSourceFile("worker.ts",source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);
   const main=tree.statements.find((x:any)=>ts.isClassDeclaration(x)&&x.name?.text==="MarketStream") as any;
   const baseline=JSON.parse(readFileSync(new URL("./member-method-baseline.json",import.meta.url),"utf8"));
   for(const [name,sha]of Object.entries(baseline.methods)){const method=main.members.find((x:any)=>x.name?.getText(tree)===name);assert.ok(method?.body,name);
-    assert.equal(createHash("sha256").update(method.body.getText(tree)).digest("hex"),sha,`${name}: existing primary logic must not change`);}
+    assert.equal(createHash("sha256").update(method.body.getText(tree)).digest("hex"),sha,`${name}: audited primary logic changed unexpectedly`);}
 });
 
 
