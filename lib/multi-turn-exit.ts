@@ -1,4 +1,4 @@
-import { TURN_CONFIG, type TurnFrameState, type TurnTimeframe } from "./multi-turn-engine.ts";
+import { type TurnFrameState, type TurnTimeframe } from "./multi-turn-engine.ts";
 import { multiTurnHoldWindows } from "./multi-turn-hold-value.ts";
 import { MULTI_TURN_PROFIT_PROTECTION_VERSION, multiTurnProfitFloor, supportedProfitVersion,
   type MultiTurnTradeProfitProtection } from "./multi-turn-profit-protection.ts";
@@ -10,24 +10,22 @@ export type MultiTurnExitOverlay={
   version:typeof MULTI_TURN_EXIT_OVERLAY_VERSION;
   profitProtection:MultiTurnTradeProfitProtection|null;
   decision:ExitDecision|null;
-  releaseMinutes:number;
-  meaningfulProgressRate:number;
+  bestHoldMinutes:number;
+  hardExtensionMinutes:number;
+  requiredProgressRate:number;
 };
 
-const aligned=(frame:TurnFrameState,side:"LONG"|"SHORT")=>
-  frame.rawDirection==="NEUTRAL"||frame.rawDirection===side;
-
 /**
- * Additive exit overlay only.
+ * The only additive Multi-Turn exit layer.
  *
- * Baseline hold-value, hard stop, owning-timeframe turn and safety lifetime stay
- * authoritative in forward-relations. This helper owns just two additions:
- * 1) a monotonic floor derived from already-observed favorable price;
- * 2) release of a slot after the normal best-hold window (never later than 24h)
- *    when the trade has made no meaningful favorable progress.
+ * Stable hold-value, hard stop, owning-timeframe turn and lifetime logic remain
+ * where they were before the failed exit rewrite. This pure helper contains the
+ * two additions that were actually wanted:
+ * - monotonic protection of already-observed profit;
+ * - the PR #379 frame-independent time fallback for long no-progress holdings.
  *
- * It has no storage/network/LIVE dependency and introduces no persisted policy
- * version. Deployed v3/v4 floors are read for continuity; all new floors use v3.
+ * No storage, Worker, LIVE or schema dependency is allowed here. Deployed v3/v4
+ * floors remain readable, while all newly computed floors use the stable v3 shape.
  */
 export function evaluateMultiTurnExitOverlay(input:{
   timeframe:TurnTimeframe;
@@ -44,14 +42,16 @@ export function evaluateMultiTurnExitOverlay(input:{
 }):MultiTurnExitOverlay{
   const modeledCostRate=Math.max(0,input.modeledCostRate);
   const riskRate=Math.max(1e-9,input.riskRate);
+  const windows=multiTurnHoldWindows(input.timeframe);
   const prior=input.priorProtection&&supportedProfitVersion(input.priorProtection.version)
     ?input.priorProtection:null;
   const signal=input.frame?{
     continuationScore:input.frame.continuationScore,
     turnProbability:input.frame.triggerProbability,
     phase:input.frame.phase,
-    rawDirectionAligned:aligned(input.frame,input.side),
+    rawDirectionAligned:input.frame.rawDirection==="NEUTRAL"||input.frame.rawDirection===input.side,
   }:null;
+
   const next=multiTurnProfitFloor(input.favorableRate,riskRate,modeledCostRate,signal);
   let protection:MultiTurnTradeProfitProtection|null=prior?{...prior}:null;
   if(next){
@@ -62,31 +62,41 @@ export function evaluateMultiTurnExitOverlay(input:{
       checkpointBand:Math.floor(floorRate/riskRate*4+1e-9),
       peakR:Math.max(prior?.peakR??0,next.reachedR),updatedAt:input.now};
   }
+
   if(protection&&input.returnRate<=protection.floorRate){
     return{version:MULTI_TURN_EXIT_OVERLAY_VERSION,profitProtection:protection,
       decision:{trigger:"PROFIT_GIVEBACK",
         reason:`利润路径保护：已观测最高顺向${(input.favorableRate*100).toFixed(2)}%，当前回落触及只能上移的保护线${(protection.floorRate*100).toFixed(2)}%。`,
         boundaryRate:protection.floorRate},
-      releaseMinutes:Math.min(multiTurnHoldWindows(input.timeframe).bestHoldMinutes,24*60),
-      meaningfulProgressRate:0};
+      bestHoldMinutes:windows.bestHoldMinutes,hardExtensionMinutes:windows.hardExtensionMinutes,requiredProgressRate:0};
   }
 
-  const windows=multiTurnHoldWindows(input.timeframe);
-  const releaseMinutes=Math.min(windows.bestHoldMinutes,24*60);
+  // Preserve PR #379's exact frame-independent fallback thresholds, but keep
+  // them out of the baseline hold-value model and out of persisted state.
   const heldMinutes=Math.max(0,(input.now-input.openedAt)/60_000);
-  const meaningfulProgressRate=Math.max(modeledCostRate*1.5,
-    Math.min(Math.max(0,input.entryExpectedMoveRate)*.30,riskRate*.50));
-  const noMeaningfulProgress=input.favorableRate<meaningfulProgressRate
-    &&input.returnRate<=modeledCostRate;
-  if(heldMinutes>=releaseMinutes&&noMeaningfulProgress){
-    const profitable=input.returnRate>modeledCostRate;
+  if(heldMinutes>=windows.hardExtensionMinutes){
     return{version:MULTI_TURN_EXIT_OVERLAY_VERSION,profitProtection:protection,
       decision:{trigger:"HOLD_VALUE",
-        reason:`无进展持仓释放：已持有${heldMinutes.toFixed(0)}分钟，超过${input.timeframe}无进展观察上限${releaseMinutes}分钟；最高顺向${(input.favorableRate*100).toFixed(2)}%仍低于有效进展${(meaningfulProgressRate*100).toFixed(2)}%，释放风险额度。`,
+        reason:`时间—空间持仓价值退出：已持有${heldMinutes.toFixed(0)}分钟并达到${input.timeframe}时间—空间硬上限${windows.hardExtensionMinutes}分钟；所属周期数据即使暂缺也不能无限占用仓位。`,
         boundaryRate:null},
-      releaseMinutes,meaningfulProgressRate};
+      bestHoldMinutes:windows.bestHoldMinutes,hardExtensionMinutes:windows.hardExtensionMinutes,requiredProgressRate:0};
+  }
+  if(heldMinutes<windows.bestHoldMinutes){
+    return{version:MULTI_TURN_EXIT_OVERLAY_VERSION,profitProtection:protection,decision:null,
+      bestHoldMinutes:windows.bestHoldMinutes,hardExtensionMinutes:windows.hardExtensionMinutes,requiredProgressRate:0};
   }
 
-  return{version:MULTI_TURN_EXIT_OVERLAY_VERSION,profitProtection:protection,decision:null,
-    releaseMinutes,meaningfulProgressRate};
+  const expectedMoveRate=Math.max(modeledCostRate,input.entryExpectedMoveRate);
+  const requiredRatio=heldMinutes>=windows.strongExtensionMinutes?.60:.35;
+  const requiredProgressRate=Math.max(modeledCostRate*2,expectedMoveRate*requiredRatio);
+  if(input.favorableRate>=requiredProgressRate||input.returnRate>modeledCostRate){
+    return{version:MULTI_TURN_EXIT_OVERLAY_VERSION,profitProtection:protection,decision:null,
+      bestHoldMinutes:windows.bestHoldMinutes,hardExtensionMinutes:windows.hardExtensionMinutes,requiredProgressRate};
+  }
+
+  return{version:MULTI_TURN_EXIT_OVERLAY_VERSION,profitProtection:protection,
+    decision:{trigger:"HOLD_VALUE",
+      reason:`时间—空间持仓价值退出：已超过${input.timeframe}最佳持仓时间${windows.bestHoldMinutes}分钟，但最高顺向仅${(input.favorableRate*100).toFixed(2)}%，低于最小进展${(requiredProgressRate*100).toFixed(2)}%，当前收益也未覆盖成本；释放长期无进展仓位。`,
+      boundaryRate:null},
+    bestHoldMinutes:windows.bestHoldMinutes,hardExtensionMinutes:windows.hardExtensionMinutes,requiredProgressRate};
 }
