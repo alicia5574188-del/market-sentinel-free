@@ -32,7 +32,7 @@
     "typecheck": "tsc --noEmit --incremental false",
     "test:module:exit": "node --experimental-strip-types --test tests/multi-turn-exit.test.ts tests/multi-turn-exit-controller.test.ts tests/multi-turn-hold-value.test.ts",
     "test:module:clock": "node --experimental-strip-types --test tests/multi-turn-clock.test.ts tests/multi-turn-execution.test.ts",
-    "test:module:entry": "node --experimental-strip-types --test tests/multi-turn-entry-opportunity.test.ts tests/multi-turn-entry-policy.test.ts tests/multi-turn-entry-memory.test.ts tests/multi-turn-engine.test.ts tests/multi-turn-execution.test.ts"
+    "test:module:entry": "node --experimental-strip-types --test tests/region-lifecycle.test.ts tests/region-entry-policy.test.ts tests/multi-turn-entry-opportunity.test.ts tests/multi-turn-entry-policy.test.ts tests/multi-turn-entry-memory.test.ts tests/multi-turn-engine.test.ts tests/multi-turn-execution.test.ts"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
