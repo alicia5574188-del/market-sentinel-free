@@ -39,7 +39,7 @@ import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCand
 import { advanceForward, closeForwardForReset, forwardSummary, forwardEquity, freshQuote, forwardWatchSymbols, initialMultiTurnForward,
   BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { MULTI_TURN_VERSION } from "../lib/multi-turn-engine.ts";
-import { forwardSymbolAllowed } from "../lib/forward-evidence.ts";
+import { forwardSymbolAllowed } from "../lib/forward-evidence.ts";\nimport { selectAnchorOpportunityUniverse } from "../lib/multi-turn-universe.ts";
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, prepareForwardReset,
   FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE } from "../lib/forward-store.ts";
 import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBudgetView,
@@ -832,11 +832,18 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // A failed cold-start catalog load is not a successful empty market scan.
     if (this.contractCatalog.size === 0) throw new Error("contract catalog unavailable: radar refresh deferred");
     const eligible = new Set(this.contractCatalog.keys());
-    // Restore the pre-regression liquid Top30 surface: execution quality starts
-    // with markets that actually trade, while Multi-Turn still decides direction.
-    // Volatility remains inside the turn engine instead of deciding admission.
-    const universeRows = rows.filter((row) => eligible.has(row.symbol) && forwardSymbolAllowed(row.symbol))
-      .sort((left, right) => right.volume24hUsd - left.volume24hUsd).slice(0, SCAN_UNIVERSE_SIZE);
+    // Scan exactly 30 symbols, but select them from the wider Gate USDT-perp surface.
+    // Turnover is only a liquidity floor. Current confirmed winding-anchor
+    // opportunities are retained; the remaining slots favor observable price
+    // travel plus a small rotating exploration sleeve. Actual direction/entry
+    // remains exclusively owned by the winding-anchor engine.
+    const eligibleRows = rows.filter((row) => eligible.has(row.symbol) && forwardSymbolAllowed(row.symbol));
+    const lockedAnchorSymbols = [...new Map((this.forwardState?.entryOpportunities ?? [])
+      .filter(row => row.eligible).sort((a,b)=>b.score-a.score)
+      .map(row => [row.symbol,row.symbol])).values()];
+    const universeRows = selectAnchorOpportunityUniverse({ rows: eligibleRows, limit: SCAN_UNIVERSE_SIZE,
+      lockedSymbols: lockedAnchorSymbols, currentSymbols: this.runtime.liquidUniverse,
+      rotationSeed: Math.floor(now / RADAR_MS), explorationSlots: 6 });
     const universe = new Set(universeRows.map((row) => row.symbol));
     this.runtime.liquidUniverse = universeRows.map((row) => row.symbol);
     this.runtime.radar = successfulRadarRuntime(this.runtime.radar, now, universeRows.length, []);
