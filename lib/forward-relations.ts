@@ -21,7 +21,7 @@ import { evaluateMultiTurnExitController } from "./multi-turn-exit-controller.ts
 import { evaluateMultiTurnClock } from "./multi-turn-clock.ts";
 import { evaluateMultiTurnEntryPolicy, multiTurnEntryLeverage, MULTI_TURN_TARGET_LEVERAGE } from "./multi-turn-entry-policy.ts";
 import { evaluateMultiTurnEntryMemory, type MultiTurnClosedOutcome } from "./multi-turn-entry-memory.ts";
-import { evaluateMultiTurnEntryOpportunities, entryOpportunityCandidate, type MultiTurnEntryOpportunity } from "./multi-turn-entry-opportunity.ts";
+import { entryOpportunityCandidate, type MultiTurnEntryOpportunity } from "./multi-turn-entry-opportunity.ts";
 import { MULTI_TURN_ROTATION_COOLDOWN_MS, MULTI_TURN_ROTATION_VERSION, evaluateRotationOpportunity,
   multiTurnRotationReentryCooldownMs, rankWeakRotationHoldings, rotationAdvantageEnough, rotationRiskSaturated } from "./multi-turn-rotation.ts";
 import { REGION_LIFECYCLE_VERSION, consumeRegionBoundary, evaluateRegionUniverse,
@@ -824,7 +824,7 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
       grossNotional:s.positions.reduce((n,t)=>n+t.notional,0),usedMargin:s.positions.reduce((n,t)=>n+t.margin,0),
       tradeRisks:s.positions.map(t=>t.plannedRisk),costRate:cost,feeRate:PAPER_COST.feeRate,slippageRate:PAPER_COST.slippageRate});
     if(!plan.ok){reject(plan.reason);continue;}
-    const {price,count,quantity,notional,leverage,margin,plannedRisk,entryFee,remainingSpaceRate:remaining,lossRate}=plan.plan;
+    const {price,count,quantity,notional,leverage,margin,plannedRisk,entryFee,remainingSpaceRate:remaining}=plan.plan;
     const d=signal.side==="LONG"?1:-1,stopRate=d*(price-signal.stopPrice)/Math.max(price,1e-9);
     const rule=regionRule(s,signal,stopRate,remaining,now);
     const frame=s.turnEngine?.frames[signal.symbol]?.["5m"];
