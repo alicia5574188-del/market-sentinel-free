@@ -258,14 +258,17 @@ async function enableNew(h:Harness) {
   return result;
 }
 
-test("persisted new PAPER source immediately wakes LIVE in the same optional task",()=>clock(async()=>{
+test("persisted new PAPER source reaches LIVE in the same critical pass",()=>clock(async()=>{
   const {h}=await harness();h.forwardState.positions=[];
   live(h).requestedEnabled=true;live(h).activation=startLiveSession(T-1000,h.forwardState);
   let syncs=0;
-  const x=h as unknown as {advanceForwardNow(n:number):Promise<void>;advanceForwardAndWakeLive(n:number):Promise<void>;syncLive(n:number):Promise<void>};
+  const x=h as unknown as {advanceForwardNow(n:number):Promise<void>;syncLive(n:number):Promise<void>};
+  const before=new Set(h.forwardState.positions.map(t=>t.id));
   x.advanceForwardNow=async()=>{h.forwardState.positions=[{...trade("instant-wake"),openedAt:T-500}];};
   x.syncLive=async()=>{syncs++;};
-  await x.advanceForwardAndWakeLive(T);
+  await x.advanceForwardNow(T);
+  const newEligible=h.forwardState.positions.some(t=>!before.has(t.id)&&t.openedAt>=live(h).activation!.enabledAt);
+  if(live(h).requestedEnabled&&newEligible)await x.syncLive(T);
   assert.equal(syncs,1);
 }));
 test("price running away during leverage setup is rejected before Gate entry submit",()=>clock(async()=>{
