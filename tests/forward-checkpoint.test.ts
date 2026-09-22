@@ -123,9 +123,9 @@ test("Multi-Turn arms and restores a profit floor, including a legacy deferred m
   frame.phase="FLOW";frame.lastTurnAt=null;state.lastCycleAt=now;
   trade.profitProtectionMigration={version:"multi-turn-profit-floor-v4",state:"DEFERRED",updatedAt:now,baselineFavorable:0};
   state.storage={persistedAt:now,error:null};
-  const px=trade.entryPrice*(trade.side==="LONG"?1.035:.965),at=now+10_000;
-  const next=advanceForward({state,now:at,paths:{},
-    quotes:{BTC_USDT:{bestBid:px*.99999,bestAsk:px*1.00001,observedAt:at,fresh:true,entryReady:true}},contracts:{}});
+  const px=trade.entryPrice*(trade.side==="LONG"?1.035:.965),peakAt=now+10_000;
+  const next=advanceForward({state,now:peakAt,paths:{},
+    quotes:{BTC_USDT:{bestBid:px*.99999,bestAsk:px*1.00001,observedAt:peakAt,fresh:true,entryReady:true}},contracts:{}});
 
   assert.equal(next.state.positions.length,1);
   assert.ok(next.state.positions[0].profitProtection);
@@ -133,11 +133,11 @@ test("Multi-Turn arms and restores a profit floor, including a legacy deferred m
   assert.equal(next.protectionChanged,true);
   const store=new Memory();await store.put((await prepareForwardWrite(null,state,now,{compact:true})).entries);
   await store.put(prepareForwardProtectionWrite(next.state).entries);
-  const restored=await readForwardStore(store,at+1000);
+  const restored=await readForwardStore(store,peakAt+1000);
   assert.deepEqual(restored.positions[0].profitProtection,next.state.positions[0].profitProtection);
   assert.equal(restored.positions[0].profitProtectionMigration?.state,"CURRENT");
   const floor=restored.positions[0].profitProtection!.floorRate;
-  const exitPx=trade.entryPrice*(trade.side==="LONG"?1+floor*.5:1-floor*.5),exitAt=at+2000;
+  const exitPx=trade.entryPrice*(trade.side==="LONG"?1+floor*.5:1-floor*.5),exitAt=peakAt+2000;
   const input={now:exitAt,paths:{},contracts:{},quotes:{BTC_USDT:{bestBid:exitPx*.99999,
     bestAsk:exitPx*1.00001,observedAt:exitAt,fresh:true}}};
   const restarted=advanceForward({...input,state:restored}).state;
