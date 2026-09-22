@@ -1,0 +1,32 @@
+name: Post deploy health read
+
+on:
+  push:
+    branches: [risk/lower-isolated-leverage-20260922]
+    paths:
+      - ".github/workflows/post-deploy-health.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read production health
+        run: |
+          set -euo pipefail
+          code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/health.json" -w '%{http_code}' "https://market-sentinel-free.alicia5574188.workers.dev/__health" || true)"
+          echo "http=$code"
+          jq -c '{
+            ok,ready,
+            buildSha:.runtime.buildSha,
+            state:.runtime.state,
+            stale:.runtime.stale,
+            lastError:.runtime.lastError,
+            lastSuccessAt:.runtime.lastSuccessAt,
+            liveMode:.runtime.liveMode,
+            forward:.runtime.forward,
+            realtimeReadiness:.runtime.realtimeReadiness,
+            strategyData:.runtime.strategyData
+          }' "$RUNNER_TEMP/health.json"
