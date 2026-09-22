@@ -64,10 +64,35 @@ test("weak direction exits when pullback risk overwhelms remaining space after e
   assert.ok(d.pullbackRiskRate>d.remainingSpaceRate);
 });
 
-test("the hold-value layer never acts before the owning timeframe has enough observation",()=>{
+test("obvious early invalidation is allowed before the old minimum-hold gate",()=>{
   const weak=frame({directionConfidence:.2,continuationScore:.2,triggerProbability:.9,phase:"TURNING",
-    expectedMoveRate:.01});
+    expectedMoveRate:.01,rawDirection:"SHORT"});
   const d=evaluateMultiTurnHoldValue({timeframe:"1h",frame:weak,side:"LONG",
-    openedAt:NOW-60*60_000,now:NOW,returnRate:-.005,favorableRate:.001,modeledCostRate:.0022});
+    openedAt:NOW-60*60_000,now:NOW,returnRate:-.009,favorableRate:.001,modeledCostRate:.0022,
+    entryExpectedMoveRate:.03,plannedRiskRate:.022});
+  assert.equal(d.action,"EXIT_RISK");
+  assert.match(d.reason,/提前失效/);
+});
+
+test("KMNO-like 4h position with poor progress can free its slot before the 24h best-hold time",()=>{
+  const weak=frame({timeframe:"4h",directionConfidence:.28,continuationScore:.15,triggerProbability:.34,
+    phase:"FLOW",rawDirection:"LONG",atrRate:.054,expectedMoveRate:.162,stopRate:.08});
+  const d=evaluateMultiTurnHoldValue({timeframe:"4h",frame:weak,side:"LONG",
+    openedAt:NOW-14*60*60_000,now:NOW,returnRate:-.047,favorableRate:.016,modeledCostRate:.0022,
+    entryExpectedMoveRate:.146,plannedRiskRate:.083});
+  assert.equal(d.bestHoldMinutes,1440);
+  assert.ok(d.ageRatio<1);
+  assert.ok(d.progressEfficiency<.5);
+  assert.equal(d.action,"EXIT_RISK");
+  assert.match(d.reason,/进展明显落后/);
+});
+
+test("large-timeframe winner with strong continuation is never cut merely to free a slot",()=>{
+  const strong=frame({timeframe:"4h",directionConfidence:.90,continuationScore:.82,triggerProbability:.10,
+    phase:"FLOW",rawDirection:"LONG",atrRate:.03,expectedMoveRate:.12,stopRate:.08});
+  const d=evaluateMultiTurnHoldValue({timeframe:"4h",frame:strong,side:"LONG",
+    openedAt:NOW-14*60*60_000,now:NOW,returnRate:.065,favorableRate:.07,modeledCostRate:.0022,
+    entryExpectedMoveRate:.10,plannedRiskRate:.083});
   assert.equal(d.action,"HOLD");
+  assert.equal(d.strongContinuation,true);
 });
