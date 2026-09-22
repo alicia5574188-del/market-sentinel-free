@@ -24,6 +24,7 @@ const hold=(overrides:Partial<MultiTurnHoldValue>={}):MultiTurnHoldValue=>({
   version:"multi-turn-time-space-v2",action:"HOLD",evaluatedAt:NOW,bestHoldMinutes:360,strongExtensionMinutes:720,
   hardExtensionMinutes:1080,heldMinutes:150,ageRatio:.42,directionStrength:.42,turnRisk:.58,
   remainingSpaceRate:.004,pullbackRiskRate:.012,edgeRatio:.33,requiredEdgeRatio:.70,
+  entryExpectedMoveRate:.03,expectedProgressRate:.012,progressEfficiency:.40,currentReturnRate:0,
   strongContinuation:false,exceptionalContinuation:false,reason:"weak hold",...overrides,
 });
 
