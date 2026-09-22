@@ -1047,22 +1047,27 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return true;
   }
 
-  private async advanceForwardNow(now: number) {
-    if (this.forwardBusy || now - this.forwardLastAttemptAt < 10_000) return;
-    this.forwardLastAttemptAt = now;
+  private async advanceForwardNow(now: number, allowDataCycle = true) {
+    if (this.forwardBusy) return;
     this.forwardBusy = true;
     try {
       if (!this.forwardState) this.forwardState = await readForwardStore(this.ctx.storage, now);
       if(MULTI_TURN_AUTO_CUTOVER&&this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION)await this.ensureMultiTurnCutover(now);
       if(!this.forwardState)throw new Error("PAPER权威账户缺失");
       const legacyDrainOnly=this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION;
-      // Restarts retain the existing ten-second source cadence. Otherwise a
-      // restart could create extra compact commits inside the daily bound.
-      if(now-this.forwardState.lastQuoteCycleAt<10_000){this.forwardLastAttemptAt=this.forwardState.lastQuoteCycleAt;return;}
+      const dataCycleDue=allowDataCycle&&(!this.forwardState.lastCycleAt
+        ||Math.floor((now-90_000)/BAR_MS)>Math.floor((this.forwardState.lastCycleAt-90_000)/BAR_MS));
+      // Quote/exit management keeps the existing ten-second source cadence.
+      // A due post-refresh data cycle may bypass it once so fresh completed
+      // candles are never lost just because the critical loop ran first.
+      if(!dataCycleDue&&now-this.forwardState.lastQuoteCycleAt<10_000){
+        this.forwardLastAttemptAt=this.forwardState.lastQuoteCycleAt;return;
+      }
+      this.forwardLastAttemptAt=now;
       const previous = this.forwardState;
       const next = advanceForward({ state: previous, now, paths: this.strategyCandles,daily:this.turnDailyCandles,
         quotes: this.regimeQuotes(now), contracts: this.regimeContracts(),legacyDrainOnly,
-        entrySymbols: this.runtime.liquidUniverse });
+        entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue });
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
         const prepared = await prepareForwardWrite(previous.storage.persistedAt ? previous : null, next.state, now, {compact:true});
@@ -3085,6 +3090,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       subrequests += await this.refreshStrategyCandle(Date.now());
       subrequests += await this.refreshTurnDaily(Date.now());
       subrequests += await this.refreshRegimeHourly(Date.now());
+      // Completed-candle work may advance turnEngine only after refresh. The
+      // critical alarm independently owns exits and fallback equity marks.
+      await this.advanceForwardNow(Date.now(),true);
       await this.maybeWriteStrategyRuntimeLog(Date.now());
       this.runtime.subrequestCount += subrequests;
       this.runtime.maxSubrequestsInAlarm = Math.max(this.runtime.maxSubrequestsInAlarm, subrequests);
@@ -3143,7 +3151,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.publishCriticalHealth(Date.now(), books);
       // Forward/PAPER is financial authority, not optional analysis. Keep its
       // exits and 5-minute account archive on the same critical protection clock.
-      await this.advanceForwardNow(Date.now());
+      await this.advanceForwardNow(Date.now(),false);
       const liveNeedsSync = this.liveNeedsSync();
       if (liveNeedsSync) {
         const liveRequestsBefore = this.liveClient?.requestCount ?? 0;
