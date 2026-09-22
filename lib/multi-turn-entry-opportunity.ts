@@ -11,7 +11,7 @@ export type MultiTurnEntryOpportunity={
   trendSlopeScore:number;structureScore:number;pathEfficiency:number;momentumPersistence:number;pullbackResilience:number;
   grossRemainingSpaceRate:number;netRemainingSpaceRate:number;statisticalRemainingSpaceRate:number;structuralSpaceRate:number|null;
   pullbackRiskRate:number;edgeRatio:number;legMoveRate:number;expectedLegRate:number;legUtilization:number;
-  turnRisk:number;turnPenalty:number;stopRate:number;riskCap:number;reason:string;
+  turnRisk:number;turnPenalty:number;stopRate:number;stopPrice:number;stopPenalty:number;riskCap:number;reason:string;
   anchorPrice:number;anchorAt:number;anchorConfirmedAt:number;anchorQuality:number;anchorAgeBars:number;
   anchorMfeRate:number;anchorMaeRate:number;anchorProfitRatio:number;anchorFirstProfitBars:number;anchorRetentionRate:number;
   distanceFromAnchorRate:number;maxEntryDistanceRate:number;
@@ -22,7 +22,7 @@ export type MultiTurnEntryOpportunity={
 type QuoteLike={bestBid:number;bestAsk:number;observedAt:number;fresh:boolean;entryReady?:boolean};
 type AnchorCandidate={
   side:"LONG"|"SHORT";startIndex:number;endIndex:number;anchorPrice:number;anchorAt:number;confirmedAt:number;quality:number;
-  bandRate:number;breakoutBars:number;breakoutRate:number;touches:number;crossings:number;ageBars:number;
+  bandRate:number;breakoutBars:number;breakoutRate:number;touches:number;crossings:number;ageBars:number;reverseExtremePrice:number;
 };
 type TargetCandidate={price:number;type:ForwardTargetType;distanceRate:number;quality:number};
 
@@ -85,9 +85,10 @@ function findWindingAnchor(rows:TurnCandle[],currentPrice:number,atrRate:number,
     const recency=1-clip((ageBars-1)/Math.max(1,maxAge-1));
     const quality=100*(.38*oscillation+.20*compactness+.27*departure+.15*recency);
     if(quality<36)continue;
+    const reverseExtremePrice=side==="LONG"?Math.min(...window.map(row=>row.low)):Math.max(...window.map(row=>row.high));
     candidates.push({side,startIndex:start,endIndex:end,anchorPrice:center,anchorAt:completedAt(window.at(-1)!,tf),
       confirmedAt:completedAt(rows.at(-1)!,tf),quality,bandRate,breakoutBars:ageBars,breakoutRate,
-      touches:stats.touches,crossings:stats.crossings,ageBars});
+      touches:stats.touches,crossings:stats.crossings,ageBars,reverseExtremePrice});
   }
   return candidates.sort((a,b)=>{
     const ar=a.quality-Math.max(0,a.ageBars-1)*1.4,br=b.quality-Math.max(0,b.ageBars-1)*1.4;
@@ -189,14 +190,23 @@ function opportunityFor(input:{symbol:string;timeframe:TurnTimeframe;rows:TurnCa
   const turnFrame=turnEngine?.frames[symbol]?.[timeframe],turnRisk=turnFrame?.triggerProbability??.25;
   const turnPenalty=2*clip((turnRisk-.60)/.30);
   const targetQuality=target?.quality??0;
-  const score=clip(.58*positionScore+.18*anchor.quality+.10*spaceScore+.07*targetQuality+.07*exec-turnPenalty,0,100);
-  const stopRate=Math.min(cfg.maxStop,Math.max(.0035,backToAnchorRate+anchor.bandRate*.25,atrRate*.65,input.costRate*1.15));
-  const eligible=!!target&&edgeRatio>1&&netRemainingSpaceRate>0&&exec>0&&backToAnchorRate<=cfg.maxStop*.95;
+  // Structural stop sits beyond the reverse extreme of anchor1's winding zone,
+  // with a small volatility/cost buffer. Never pull it back inside the anchor
+  // merely to satisfy a numerical max-stop cap.
+  const stopBufferRate=Math.max(.00045,atrRate*.12,input.costRate*.18,anchor.bandRate*.08);
+  const stopPrice=anchor.side==="LONG"
+    ?anchor.reverseExtremePrice*(1-stopBufferRate)
+    :anchor.reverseExtremePrice*(1+stopBufferRate);
+  const stopRate=anchor.side==="LONG"?1-stopPrice/currentPrice:stopPrice/currentPrice-1;
+  if(!(stopRate>0))return null;
+  const stopPenalty=24*clip((stopRate-cfg.maxStop*.35)/Math.max(cfg.maxStop*.65,.001));
+  const score=clip(.58*positionScore+.18*anchor.quality+.10*spaceScore+.07*targetQuality+.07*exec-turnPenalty-stopPenalty,0,100);
+  const eligible=!!target&&edgeRatio>1&&netRemainingSpaceRate>0&&exec>0&&stopRate<=cfg.maxStop;
 
   const breakoutStrength=100*clip(anchor.breakoutRate/Math.max(atrRate*2.0,input.costRate*2.0,.001));
   const bandQuality=100*(1-clip(anchor.bandRate/Math.max(atrRate*1.8,input.costRate*2.1,.002)));
   const reason=target
-    ?timeframe+" "+anchor.side+" | 锚点1 "+anchor.anchorPrice.toFixed(5)+" | 回锚距离"+(backToAnchorRate*100).toFixed(2)+"% | "+targetLabel(target)+" "+target.price.toFixed(5)+"，前方"+(targetDistanceRate*100).toFixed(2)+"% | 空间优势"+edgeRatio.toFixed(2)+"x | "+(eligible?"准备进场":"继续等待")
+    ?timeframe+" "+anchor.side+" | 锚点1 "+anchor.anchorPrice.toFixed(5)+" | 回锚距离"+(backToAnchorRate*100).toFixed(2)+"% | 结构止损"+stopPrice.toFixed(5)+"（"+(stopRate*100).toFixed(2)+"%） | "+targetLabel(target)+" "+target.price.toFixed(5)+"，前方"+(targetDistanceRate*100).toFixed(2)+"% | 空间优势"+edgeRatio.toFixed(2)+"x | "+(stopRate>cfg.maxStop?"结构止损过大":eligible?"准备进场":"继续等待")
     :timeframe+" "+anchor.side+" | 已脱离近期缠绕锚点1，但前方暂未找到可用支撑/压力/旧缠绕目标";
 
   return{version:MULTI_TURN_ENTRY_OPPORTUNITY_VERSION,symbol,timeframe,side:anchor.side,completedAt:completedAt(last,timeframe),price:currentPrice,
@@ -206,7 +216,7 @@ function opportunityFor(input:{symbol:string;timeframe:TurnTimeframe;rows:TurnCa
     statisticalRemainingSpaceRate:targetDistanceRate,structuralSpaceRate:target?targetDistanceRate:null,
     pullbackRiskRate:backToAnchorRate,edgeRatio,legMoveRate:backToAnchorRate,expectedLegRate:targetDistanceRate,
     legUtilization:targetDistanceRate>0?clip(backToAnchorRate/targetDistanceRate):1,
-    turnRisk,turnPenalty,stopRate,riskCap:cfg.riskCap,reason,
+    turnRisk,turnPenalty,stopRate,stopPrice,stopPenalty,riskCap:cfg.riskCap,reason,
     anchorPrice:anchor.anchorPrice,anchorAt:anchor.anchorAt,anchorConfirmedAt:anchor.confirmedAt,anchorQuality:anchor.quality,
     anchorAgeBars:anchor.ageBars,anchorMfeRate:anchor.breakoutRate,anchorMaeRate:anchor.bandRate,anchorProfitRatio:edgeRatio,
     anchorFirstProfitBars:anchor.breakoutBars,anchorRetentionRate:targetQuality/100,
@@ -230,7 +240,7 @@ export function evaluateMultiTurnEntryOpportunities(input:{paths:Record<string,T
 }
 
 export function entryOpportunityCandidate(row:MultiTurnEntryOpportunity):TurnCandidate{
-  return{symbol:row.symbol,timeframe:row.timeframe,side:row.side,score:row.score/100,riskCap:row.riskCap,stopRate:row.stopRate,
+  return{symbol:row.symbol,timeframe:row.timeframe,side:row.side,score:row.score/100,riskCap:row.riskCap,stopRate:row.stopRate,stopPrice:row.stopPrice,
     expectedMoveRate:row.grossRemainingSpaceRate,turnProbability:row.turnRisk,confidence:row.anchorQuality/100,
     continuationScore:clip((.55*row.positionScore+.25*row.anchorQuality+.20*row.spaceScore)/100),completedAt:row.completedAt,signalPrice:row.price,reason:row.reason};
 }
