@@ -172,7 +172,7 @@ test("only the current scan universe can create or occupy new Multi-Turn entry s
 });
 
 
-test("Multi-Turn entries use the exact 20x-or-lower safe leverage and derive margin from notional",()=>{
+test("Multi-Turn entries use 6-12x isolated leverage and derive larger margin from unchanged notional",()=>{
   const p=candles(),now=(p.at(-1)!.time+300)*1000+1000,quote=q(p,now);
   const result=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},
     quotes:{BTC_USDT:quote},contracts:{BTC_USDT:meta}}).state;
@@ -184,12 +184,14 @@ test("Multi-Turn entries use the exact 20x-or-lower safe leverage and derive mar
   assert.ok(Math.abs(t.margin-t.notional/t.leverage)<1e-9);
 });
 
-test("20x is a target, never an excuse to place the structural stop inside unsafe margin",()=>{
-  assert.equal(multiTurnEntryLeverage(.02,.005,.0022,50),20);
-  const wide=multiTurnEntryLeverage(.08,.005,.0022,50);
-  assert.ok(wide<20);
-  assert.ok(1/wide>.08+.005+.0022);
-  assert.equal(multiTurnEntryLeverage(.02,.005,.0022,10),10);
+test("6-12x tiers remain below liquidation pressure and respect exchange leverage limits",()=>{
+  assert.equal(multiTurnEntryLeverage(.01,.005,.0022,50),12);
+  assert.equal(multiTurnEntryLeverage(.02,.005,.0022,50),10);
+  const wide=multiTurnEntryLeverage(.05,.005,.0022,50);
+  assert.equal(wide,6);
+  assert.ok(1/wide>.05+.005+.0022);
+  assert.equal(multiTurnEntryLeverage(.02,.005,.0022,8),8);
+  assert.equal(multiTurnEntryLeverage(.02,.005,.0022,5),0);
 });
 
 test("time-space hold value can exit an old position before the legacy maximum lifetime",()=>{
