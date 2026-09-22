@@ -39,7 +39,8 @@ import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCand
 import { advanceForward, closeForwardForReset, forwardSummary, forwardEquity, freshQuote, forwardWatchSymbols, initialMultiTurnForward,
   BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { MULTI_TURN_VERSION } from "../lib/multi-turn-engine.ts";
-import { forwardSymbolAllowed } from "../lib/forward-evidence.ts";\nimport { selectAnchorOpportunityUniverse } from "../lib/multi-turn-universe.ts";
+import { forwardSymbolAllowed } from "../lib/forward-evidence.ts";
+import { selectAnchorOpportunityUniverse } from "../lib/multi-turn-universe.ts";
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, prepareForwardReset,
   FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE } from "../lib/forward-store.ts";
 import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBudgetView,
