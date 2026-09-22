@@ -55,7 +55,13 @@ jobs:
           trap cleanup EXIT
           npx wrangler deploy --config .ops-diag/wrangler.toml >/dev/null
           url="https://$DIAG_WORKER_NAME.alicia5574188.workers.dev/"
-          curl -fsS --retry 6 --retry-delay 2 --max-time 20 "$url" > "$RUNNER_TEMP/forward.json"
+          code=""
+          for attempt in {1..15}; do
+            code="$(curl -sS --max-time 20 -o "$RUNNER_TEMP/forward.json" -w '%{http_code}' "$url" || true)"
+            [[ "$code" == "200" ]] && break
+            sleep 2
+          done
+          [[ "$code" == "200" ]]
           jq -c '{
             exportedAt,
             account:{
