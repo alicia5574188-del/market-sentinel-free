@@ -11,7 +11,7 @@ export type MultiTurnEntryOpportunity={
   trendSlopeScore:number;structureScore:number;pathEfficiency:number;momentumPersistence:number;pullbackResilience:number;
   grossRemainingSpaceRate:number;netRemainingSpaceRate:number;statisticalRemainingSpaceRate:number;structuralSpaceRate:number|null;
   pullbackRiskRate:number;edgeRatio:number;legMoveRate:number;expectedLegRate:number;legUtilization:number;
-  turnRisk:number;turnPenalty:number;stopRate:number;stopPrice:number;stopPenalty:number;riskCap:number;reason:string;
+  turnRisk:number;turnPenalty:number;stopRate:number;stopPrice?:number;stopPenalty?:number;riskCap:number;reason:string;
   anchorPrice:number;anchorAt:number;anchorConfirmedAt:number;anchorQuality:number;anchorAgeBars:number;
   anchorMfeRate:number;anchorMaeRate:number;anchorProfitRatio:number;anchorFirstProfitBars:number;anchorRetentionRate:number;
   distanceFromAnchorRate:number;maxEntryDistanceRate:number;
