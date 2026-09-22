@@ -1,0 +1,40 @@
+name: Winding runtime diagnostic
+
+on:
+  push:
+    branches: [fix/winding-anchor-space-20260922]
+    paths:
+      - ".github/workflows/winding-runtime-diagnostic.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read production forward snapshot
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 20 "https://market-sentinel-free.alicia5574188.workers.dev/api/forward/export" > "$RUNNER_TEMP/forward.json"
+          jq -c '{
+            exportedAt,
+            account:{
+              startedAt:.forward.startedAt,
+              equity:.forward.equity,
+              resolved:.forward.resolved,
+              open:(.forward.positions|length),
+              turnover:.forward.turnover
+            },
+            fit:.forward.fitDiagnostics,
+            diagnostics:.forward.entryDiagnostics,
+            candidateCount:(.forward.entryOpportunities|length),
+            eligibleCount:([.forward.entryOpportunities[]?|select(.eligible==true)]|length),
+            top:[.forward.entryOpportunities[]?|{
+              symbol,timeframe,side,score,eligible,
+              anchorPrice,anchorQuality,
+              backToAnchor: .distanceFromAnchorRate,
+              targetPrice,targetType,targetDistanceRate,
+              edgeRatio,netRemainingSpaceRate,executionScore,reason
+            }][0:12]
+          }' "$RUNNER_TEMP/forward.json"
