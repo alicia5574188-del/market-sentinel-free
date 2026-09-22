@@ -1,13 +1,30 @@
-# 2026-09-22 — recovery validated; publication in progress
+# 2026-09-22 — page/account recovery deployed; market-health acceptance remains open
 
-Branch fix/exit-rebuild-20260922 from production6f6cfa6. Confirmed live storage
-error: unknown Multi-Turn profit protection version; startedAt projection null.
-Rolled back PR376 locally then rebuilt compatible v3/v4 profit/stalled exits.
-PR377 page and caching fixes retained. No reset, mode change or private Gate call.
-Validation:845direct,212Forward, npm test including member/LIVE/equity/build and
-architecture, typecheck, lint0errors/3existing warnings, dry-run and local SQLite
-storage/member smokes pass. Final exact-head PR/main deployment still pending.
-Design/evidence:research/EXIT_RECOVERY_2026-09-22.md. Local logs in parent scratch.
+PR378 merged as bf722e5ebc344627b6829aeec06e385029c10a42. Cloudflare version
+e695dbaa-2b15-4afd-9393-a09490c231fb is deployed. PR run35694403261 and main
+verification passed. Main run35694553419 deployment succeeded, but its final
+advancing-health step FAILED on intermittent protected-market quote availability.
+Do not describe the full release workflow or production health as green.
+
+Confirmed recovered original startedAt1789939420215,84closed/5open, storage error
+null. lastSuccessAt1790058495490→1790058767330 and durable strategy cycle
+1790058451415→1790058709210 advance. Homepage and all7 referenced assets return200;
+HTML no-store cache headers remain. Owner LIVE false/false throughout. No reset,
+private Gate verification trade or switch mutation occurred.
+
+Rollback/rebuild addressed the actual v3/v4 startup failure and retains PR377
+page fixes. Validation:845direct,212Forward, npm test (equity61/member49/LIVE129,
+build/architecture), typecheck, lint0errors/3existing warnings, dry-run and local
+SQLite storage/member smokes pass. Expanded restart/exit checkpoint25 pass.
+
+The remaining issue is Gate quote timeout/freshness, also present before release;
+protected markets fluctuate and global health returns503. Do not weaken quote
+safety, reset data, or repeatedly redeploy the same source to hide this. Core
+account recovery and requested exit code are deployed, but full production
+stability is NOT accepted. Design:research/EXIT_RECOVERY_2026-09-22.md.
+This audit/exit-recovery-receipt-20260922 branch is documentation only, not another
+application release. Next work should diagnose feed availability from this exact
+production SHA rather than repeat the completed recovery.
 
 # 2026-09-21 — audit release deployed; catalog recovery follow-up (current)
 

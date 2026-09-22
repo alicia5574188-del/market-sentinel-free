@@ -1,0 +1,23 @@
+{
+  "date": "2026-09-22",
+  "pullRequest": 378,
+  "productionSha": "bf722e5ebc344627b6829aeec06e385029c10a42",
+  "cloudflareVersion": "e695dbaa-2b15-4afd-9393-a09490c231fb",
+  "prVerificationRun": 35694403261,
+  "mainReleaseRun": 35694553419,
+  "deploymentSucceeded": true,
+  "fullProductionHealthAccepted": false,
+  "remainingIssue": "Intermittent protected-market quote availability and Gate public request timeouts; final automated health step failed.",
+  "accountStartedAt": 1789939420215,
+  "closedTrades": 84,
+  "openTrades": 5,
+  "storageError": null,
+  "strategyCycleBefore": 1790058451415,
+  "strategyCycleAfter": 1790058709210,
+  "ownerRequestedLive": false,
+  "pageStatus": 200,
+  "referencedAssetsPassing": 7,
+  "directTestsPassing": 845,
+  "accountReset": false,
+  "privateGateVerificationTrades": 0
+}
