@@ -217,7 +217,7 @@ test("stale owning-frame data cannot leave a four-hour no-progress holding occup
   const t=s.positions[0];
   t.turn={version:MULTI_TURN_VERSION,timeframe:"4h",signalAt:now-25*60*60_000,
     entryTurnProbability:.1,entryContinuation:.7,entryDirectionConfidence:.7};
-  t.rule.authority="MULTI_TURN";t.rule.turnTimeframe="4h";t.rule.horizon=TURN_CONFIG["4h"].maxHoldMinutes;
+  t.rule.authority="MULTI_TURN";t.rule.turnTimeframe="4h";t.rule.horizon=TURN_CONFIG["4h"].maxHoldMinutes;t.rule.stopRate=.08;t.stopPrice=t.entryPrice*(t.side==="LONG"?.92:1.08);
   t.openedAt=now-25*60*60_000;t.favorable=.003;
   if(t.entryContext){t.entryContext.timeframe="4h";t.entryContext.expectedMoveRate=.08;t.entryContext.bestHoldMinutes=1440;}
   delete s.turnEngine!.frames.BTC_USDT?.["4h"];
@@ -306,12 +306,15 @@ test("full-risk rotation atomically replaces one clearly weak holding and cannot
     evidence:{structure:.06,momentum:.06,acceleration:.06,cusum:.06,changePoint:.06,failedExtension:.03,
       volatility:.2,volume:.2,breadth:.08,propagation:.06},reason:"strong rotation fixture"});
   const opportunity=(symbol:string,tf:(typeof timeframes)[number]|"1h",completedAt:number)=>({
-    version:"direction-space-entry-v1" as const,symbol,timeframe:tf,side:"LONG" as const,completedAt,price:100,
+    version:"anchor-entry-v2" as const,symbol,timeframe:tf,side:"LONG" as const,completedAt,price:100,
     score:92,eligible:true,directionStrength:92,spaceScore:88,positionScore:82,executionScore:96,
-    trendSlopeScore:94,structureScore:90,pathEfficiency:88,momentumPersistence:90,pullbackResilience:86,
+    trendSlopeScore:92,structureScore:90,pathEfficiency:90,momentumPersistence:90,pullbackResilience:90,
     grossRemainingSpaceRate:.04,netRemainingSpaceRate:.0378,statisticalRemainingSpaceRate:.05,structuralSpaceRate:.04,
-    pullbackRiskRate:.01,edgeRatio:3.78,legMoveRate:.01,expectedLegRate:.05,legUtilization:.2,
-    turnRisk:.10,turnPenalty:0,stopRate:.012,riskCap:TURN_CONFIG[tf].riskCap,reason:"rotation opportunity fixture"
+    pullbackRiskRate:.01,edgeRatio:3.78,legMoveRate:.001,expectedLegRate:.05,legUtilization:.02,
+    turnRisk:.10,turnPenalty:0,stopRate:.012,riskCap:TURN_CONFIG[tf].riskCap,reason:"rotation opportunity fixture",
+    anchorPrice:99.9,anchorAt:completedAt-900_000,anchorConfirmedAt:completedAt-300_000,anchorQuality:92,anchorAgeBars:4,
+    anchorMfeRate:.05,anchorMaeRate:.004,anchorProfitRatio:12.5,anchorFirstProfitBars:1,anchorRetentionRate:.85,
+    distanceFromAnchorRate:.001,maxEntryDistanceRate:.01
   });
   for(let i=0;i<symbols.length;i++)s.turnEngine!.frames[symbols[i]]={[timeframes[i]]:strong(symbols[i],timeframes[i])};
   const weak=s.turnEngine!.frames.W0_USDT!["5m"]!;
