@@ -1416,7 +1416,7 @@ test("health status is compact while retaining every release gate", async () => 
   assert.equal(status.strategyArena.rules.normalShadowAlwaysOn, false);
   assert.equal(status.strategyArena.rules.profitArmIsExit, true);
   assert.equal(status.strategyArena.rules.dailyObjectiveIsQuota, false);
-  assert.equal(status.limits.scanUniverse, 30);
+  assert.equal(status.limits.scanUniverse, 60);
   assert.equal(status.limits.realtimeCapacity, 11);
   assert.equal(status.liveMode.requestedEnabled, false);
   assert.equal(status.liveMode.operational, false);
