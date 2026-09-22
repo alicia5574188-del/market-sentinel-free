@@ -20,6 +20,7 @@ import { multiTurnHoldWindows, type MultiTurnHoldValue } from "./multi-turn-hold
 import { evaluateMultiTurnExitController } from "./multi-turn-exit-controller.ts";
 import { evaluateMultiTurnClock } from "./multi-turn-clock.ts";
 import { evaluateMultiTurnEntryPolicy, multiTurnEntryLeverage, MULTI_TURN_TARGET_LEVERAGE } from "./multi-turn-entry-policy.ts";
+import { evaluateMultiTurnEntryMemory, type MultiTurnClosedOutcome } from "./multi-turn-entry-memory.ts";
 import { MULTI_TURN_ROTATION_COOLDOWN_MS, MULTI_TURN_ROTATION_VERSION, evaluateRotationOpportunity,
   multiTurnRotationReentryCooldownMs, rankWeakRotationHoldings, rotationAdvantageEnough, rotationRiskSaturated } from "./multi-turn-rotation.ts";
 // The storage schema stays v1.0 so an algorithm upgrade cannot reset the ledger.
@@ -450,6 +451,20 @@ type MultiTurnOpenOptions={
   onlyCandidate?:{symbol:string;timeframe:TurnTimeframe;completedAt:number};
 };
 
+function multiTurnEntryMemoryFor(s:ForwardState,candidate:TurnCandidate,now:number){
+  const recent=s.history.flatMap((t):MultiTurnClosedOutcome[]=>t.status==="CLOSED"&&t.closedAt!=null&&t.turn
+    ?[{symbol:t.symbol,side:t.side,timeframe:t.turn.timeframe,closedAt:t.closedAt,netPnl:t.netPnl??0,exitReason:t.exitReason}]:[]);
+  return evaluateMultiTurnEntryMemory({now,symbol:candidate.symbol,side:candidate.side,recent});
+}
+
+function rankedMultiTurnEntryRows(s:ForwardState,now:number,entrySymbols?:ReadonlySet<string>){
+  return turnCandidates(s.turnEngine!,tf=>turnModeledCost(tf,0))
+    .filter(candidate=>!entrySymbols||entrySymbols.has(candidate.symbol))
+    .map(candidate=>({candidate,memory:multiTurnEntryMemoryFor(s,candidate,now)}))
+    .sort((a,b)=>b.candidate.score*b.memory.scoreMultiplier-a.candidate.score*a.memory.scoreMultiplier
+      ||b.candidate.score-a.candidate.score||a.candidate.symbol.localeCompare(b.candidate.symbol));
+}
+
 function trySelectiveRiskRotation(input:{state:ForwardState;candidate:TurnCandidate;quotes:Record<string,Quote>;
   contracts:Record<string,Contract>;now:number;entrySymbols?:ReadonlySet<string>;remainingSpaceRate:number;costRate:number}){
   const s=input.state,engine=s.turnEngine,frame=engine?.frames[input.candidate.symbol]?.[input.candidate.timeframe];
@@ -511,17 +526,16 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
   entrySymbols?:ReadonlySet<string>,options:MultiTurnOpenOptions={}){
   const engine=s.turnEngine;if(!engine||engine.version!==MULTI_TURN_VERSION)return;
   s.turnLastEntryBars??={};s.quoteRetries=[];
-  const candidates=turnCandidates(engine,tf=>turnModeledCost(tf,0))
-    .filter(candidate=>!entrySymbols||entrySymbols.has(candidate.symbol))
-    .filter(candidate=>!options.onlyCandidate||(candidate.symbol===options.onlyCandidate.symbol
+  const rows=rankedMultiTurnEntryRows(s,now,entrySymbols)
+    .filter(({candidate})=>!options.onlyCandidate||(candidate.symbol===options.onlyCandidate.symbol
       &&candidate.timeframe===options.onlyCandidate.timeframe&&candidate.completedAt===options.onlyCandidate.completedAt));
-  const diagnostics={at:now,matched:candidates.length,opened:0,reasons:{} as Record<string,number>,retry:false,queued:0,adaptiveScaled:0};
+  const diagnostics={at:now,matched:rows.length,opened:0,reasons:{} as Record<string,number>,retry:false,queued:0,adaptiveScaled:0};
   s.entryDiagnostics=diagnostics;
   const reject=(reason:string)=>{diagnostics.reasons[reason]=(diagnostics.reasons[reason]??0)+1;};
-  for(const candidate of candidates){
+  for(const {candidate,memory} of rows){
     if(s.positions.some(t=>t.symbol===candidate.symbol))continue;
     if((s.turnRotationBlockedUntil?.[candidate.symbol]??0)>now){reject("该币刚被择优换出，冷却期内不重新追入");continue;}
-    if(now-(s.turnSymbolExitAt?.[candidate.symbol]??-Infinity)<10_000){reject("该币刚完成周期转折退出；下一执行周期再比较各周期新方向");continue;}
+    if(!memory.allowed){reject(memory.reason??"同币交易生命周期冷却中");continue;}
     const key=`${candidate.symbol}:${candidate.timeframe}`;
     if((s.turnLastEntryBars[key]??0)>=candidate.completedAt)continue;
     const cfg=TURN_CONFIG[candidate.timeframe],maxAge=Math.max(BAR_MS*2,cfg.minutes*60_000*1.5);
@@ -829,10 +843,10 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
 export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iterable<string>){
   if(s.strategyAuthorityVersion===MULTI_TURN_VERSION&&s.turnEngine){
     const allowed=entrySymbols?new Set(entrySymbols):null;
-    const ranked=turnCandidates(s.turnEngine,tf=>turnModeledCost(tf,0))
-      .filter(x=>(!allowed||allowed.has(x.symbol))&&x.completedAt<=now
-        &&now-x.completedAt<=Math.max(BAR_MS*2,TURN_CONFIG[x.timeframe].minutes*60_000*1.5));
-    return[...new Set([...s.positions.map(p=>p.symbol),...ranked.map(x=>x.symbol)])].slice(0,11);
+    const ranked=rankedMultiTurnEntryRows(s,now,allowed??undefined)
+      .filter(({candidate,memory})=>memory.allowed&&candidate.completedAt<=now
+        &&now-candidate.completedAt<=Math.max(BAR_MS*2,TURN_CONFIG[candidate.timeframe].minutes*60_000*1.5));
+    return[...new Set([...s.positions.map(p=>p.symbol),...ranked.map(row=>row.candidate.symbol)])].slice(0,11);
   }
   const matched=Object.values(s.frames).filter(f=>now-f.at<11*60_000&&s.rules.some(r=>r.status==="EXPERIMENTAL"&&r.expiresAt>now&&ruleApplies(r,f.symbol)&&conditionMatches(f.x,r.conditions)));
   return[...new Set([...s.positions.map(p=>p.symbol),...matched.map(f=>f.symbol)])];
