@@ -848,7 +848,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     ])];
     const universeRows = selectRegionLifecycleUniverse({ rows: eligibleRows, limit: SCAN_UNIVERSE_SIZE,
       lockedSymbols: lockedRegionSymbols, currentSymbols: this.runtime.liquidUniverse,
-      rotationSeed: Math.floor(now / (5*BAR_MS)), explorationSlots: 18 });
+      rotationSeed: Math.floor(now / BAR_MS), explorationSlots: 18 });
     const universe = new Set(universeRows.map((row) => row.symbol));
     this.runtime.liquidUniverse = universeRows.map((row) => row.symbol);
     this.runtime.radar = successfulRadarRuntime(this.runtime.radar, now, universeRows.length, []);
