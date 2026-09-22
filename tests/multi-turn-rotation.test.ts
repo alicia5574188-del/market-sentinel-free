@@ -21,7 +21,7 @@ const candidate=(overrides:Partial<TurnCandidate>={}):TurnCandidate=>({
   completedAt:NOW,signalPrice:100,reason:"strong candidate",...overrides,
 });
 const hold=(overrides:Partial<MultiTurnHoldValue>={}):MultiTurnHoldValue=>({
-  version:"multi-turn-time-space-v1",action:"HOLD",evaluatedAt:NOW,bestHoldMinutes:360,strongExtensionMinutes:720,
+  version:"multi-turn-time-space-v2",action:"HOLD",evaluatedAt:NOW,bestHoldMinutes:360,strongExtensionMinutes:720,
   hardExtensionMinutes:1080,heldMinutes:150,ageRatio:.42,directionStrength:.42,turnRisk:.58,
   remainingSpaceRate:.004,pullbackRiskRate:.012,edgeRatio:.33,requiredEdgeRatio:.70,
   strongContinuation:false,exceptionalContinuation:false,reason:"weak hold",...overrides,
