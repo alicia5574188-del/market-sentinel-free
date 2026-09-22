@@ -1026,7 +1026,7 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     targetEquity:s.initialEquity*2,netPnl:marked.equity-s.initialEquity,maxDrawdown:s.maxDrawdown,resolved:s.resolved,wins:s.wins,grossPnl:s.grossPnl,
     fees:s.fees,fundingAllowance:s.fundingAllowance,turnover:s.turnover,observations:s.observations,measured:s.measured,invalidated:s.invalidated,
     pending:multi?(engine?.pending.length??0):Object.keys(s.pending).length,sampleCounts:count,fitDiagnostics:s.fitDiagnostics,
-    entryOpportunities:multi?[]:[],
+    entryOpportunities:multi?([] as MultiTurnEntryOpportunity[]):[],
     regionVersion:multi?s.regionVersion??null:null,
     regionLifecycles:multi?Object.values(s.regionLifecycles??{}).sort((a,b)=>b.observedAt-a.observedAt).slice(0,60):[],
     regionSignals:multi?(s.regionSignals??[]).filter(signal=>signal.expiresAt>now).slice(0,60):[],
