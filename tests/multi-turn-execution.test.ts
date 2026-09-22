@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { advanceForward, BAR_MS, forwardEquity, forwardSummary, forwardWatchSymbols, initialForward, initialMultiTurnForward,
-  multiTurnEntryLeverage, MULTI_TURN_TARGET_LEVERAGE, turnModeledCost, type Candle, type Contract, type Quote } from "../lib/forward-relations.ts";
+  multiTurnEntryLeverage, MULTI_TURN_TARGET_LEVERAGE, type Candle, type Contract, type Quote } from "../lib/forward-relations.ts";
 import { MULTI_TURN_VERSION, TURN_TIMEFRAMES, evaluateMultiTurn, initialMultiTurn } from "../lib/multi-turn-engine.ts";
 import { REGION_LIFECYCLE_VERSION, type RegionEntrySignal, type RegionLifecycleState } from "../lib/region-lifecycle.ts";
 import { FORWARD_PROTECTION_STORAGE, FORWARD_STORAGE, prepareForwardReset, prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
@@ -132,7 +132,7 @@ test("single-timeframe region entries still obey portfolio, directional and per-
 
 test("wall-clock time cannot consume a new data slot before a genuinely new completed 5m candle exists",()=>{
   const p=regionPath(),now=(p.at(-1)!.time+300)*1000+1;
-  let s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},
+  const s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},
     quotes:{BTC_USDT:quote(p.at(-1)!.close,now)},contracts:{BTC_USDT:meta},entrySymbols:["BTC_USDT"]}).state;
   const firstCycle=s.lastCycleAt,later=now+BAR_MS+90_000;
   s=advanceForward({state:s,now:later,paths:{BTC_USDT:p},quotes:{BTC_USDT:quote(p.at(-1)!.close,later)},contracts:{BTC_USDT:meta},
