@@ -54,8 +54,13 @@ jobs:
           trap cleanup EXIT
           npx wrangler deploy --config .audit-forward/wrangler.toml >/dev/null
           url="https://$AUDIT_WORKER_NAME.alicia5574188.workers.dev/"
-          for attempt in {1..8}; do
-            curl -fsS --max-time 20 "$url" > "$RUNNER_TEMP/forward.json"
+          code=""
+          for attempt in {1..12}; do
+            code="$(curl -sS --max-time 20 -o "$RUNNER_TEMP/forward.json" -w '%{http_code}' "$url" || true)"
+            if [[ "$code" != "200" ]]; then
+              sleep 5
+              continue
+            fi
             jq -c '{
               exportedAt,
               forward:{
@@ -77,6 +82,7 @@ jobs:
             if jq -e '.forward.entryOpportunities | any(.version=="winding-anchor-entry-v3")' "$RUNNER_TEMP/forward.json" >/dev/null; then
               exit 0
             fi
-            sleep 15
+            sleep 10
           done
-          exit 0
+          echo "last_http=$code"
+          [[ "$code" == "200" ]]
