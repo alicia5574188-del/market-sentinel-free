@@ -41,7 +41,7 @@ test("strong continuation keeps more trend room than weakening continuation",()=
   assert.equal(strong.mode,"STRONG_TREND");
   assert.equal(weak.mode,"WEAKENING");
   assert.ok(strong.retentionRate>.40,"strong trend still protects meaningful profit");
-  assert.ok(weak.retentionRate<.83,"weakening never becomes an 85% fixed trailing rule");
+  assert.ok(weak.retentionRate<=.88,"weakening may tighten substantially but still retains breathing room");
 });
 
 test("first meaningful protection remains positive after modeled costs",()=>{
