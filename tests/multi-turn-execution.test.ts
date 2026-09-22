@@ -42,6 +42,22 @@ test("wall-clock time cannot consume a new data slot before its completed candle
     "the pending slot advances as soon as the genuinely completed candle exists");
 });
 
+test("critical management writes a fallback five-minute equity mark without advancing stale strategy data",()=>{
+  const p=candles(),now=(p.at(-1)!.time+300)*1000+1000;
+  let s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:q(p,now)},contracts:{BTC_USDT:meta}}).state;
+  const cycle=s.lastCycleAt,mark=s.daily.at(-1)!.lastAt;
+  const later=now+BAR_MS+150_000;
+  const next=advanceForward({state:s,now:later,paths:{BTC_USDT:p},
+    quotes:{BTC_USDT:{...q(p,later),observedAt:later}},contracts:{BTC_USDT:meta},
+    allowDataCycle:false});
+  s=next.state;
+  assert.equal(s.lastCycleAt,cycle,"fallback curve mark cannot consume strategy data");
+  assert.ok(s.daily.at(-1)!.lastAt>mark,"fallback curve mark must advance the saved account path");
+  assert.equal(s.daily.at(-1)!.lastAt,later);
+  assert.equal(next.changed,true);
+});
+
 test("timeframe sleeves, directional cap and portfolio cap remain authoritative with many simultaneous markets",()=>{
   const paths:Record<string,Candle[]>={},quotes:Record<string,Quote>={},contracts:Record<string,Contract>={};
   const p=candles(),now=(p.at(-1)!.time+300)*1000+1000;
