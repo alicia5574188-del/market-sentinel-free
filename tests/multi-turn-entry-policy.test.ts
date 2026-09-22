@@ -22,3 +22,8 @@ test("lower leverage never silently turns a target order into a tiny notional",(
   const constrained=evaluateMultiTurnEntryPolicy({...base,usedMargin:730});
   assert.equal(constrained.ok,false);if(!constrained.ok)assert.match(constrained.reason,/不缩成小单|保证金/);
 });
+
+test("exact anchor stop cannot be pulled inward when execution slippage makes it too wide",()=>{
+  const r=evaluateMultiTurnEntryPolicy({...base,candidate:{...candidate,stopRate:.01,stopPrice:94}});
+  assert.equal(r.ok,false);if(!r.ok)assert.match(r.reason,/不把止损往锚点内移动/);
+});
