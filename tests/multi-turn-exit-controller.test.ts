@@ -1,0 +1,10 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {evaluateMultiTurnExitController} from "../lib/multi-turn-exit-controller.ts";
+import type {TurnFrameState} from "../lib/multi-turn-engine.ts";
+const NOW=Date.parse("2026-09-22T12:00:00Z");
+const frame=(overrides:Partial<TurnFrameState>={}):TurnFrameState=>({version:"multi-turn-v1",symbol:"BTC_USDT",timeframe:"15m",observedAt:NOW,completedAt:NOW,ready:true,direction:"LONG",rawDirection:"LONG",directionConfidence:.8,turnProbability:.15,triggerProbability:.15,continuationScore:.7,phase:"FLOW",candidateSide:"NEUTRAL",candidateBars:0,justTurned:false,lastTurnAt:null,signalAgeBars:1,atrRate:.01,expectedMoveRate:.03,stopRate:.03,price:100,breadthLong:.6,propagationPressure:.05,evidence:{structure:.1,momentum:.1,acceleration:.1,cusum:.1,changePoint:.1,failedExtension:.05,volatility:.2,volume:.2,breadth:.1,propagation:.05},reason:"fixture",...overrides});
+const base={timeframe:"15m" as const,side:"LONG" as const,openedAt:NOW-60_000,now:NOW,returnRate:.01,favorableRate:.02,plannedRisk:30,notional:1000,modeledCostRate:.0022,entryExpectedMoveRate:.03,stopRate:.03,horizonMinutes:1080,frame:frame()};
+test("hard stop remains first",()=>assert.equal(evaluateMultiTurnExitController({...base,returnRate:-.031}).decision?.trigger,"HARD_STOP"));
+test("confirmed turn is owned by exit controller",()=>assert.equal(evaluateMultiTurnExitController({...base,frame:frame({direction:"SHORT",lastTurnAt:NOW-1000})}).decision?.trigger,"MULTI_TURN"));
+test("time overlay returns one exit decision",()=>assert.equal(evaluateMultiTurnExitController({...base,openedAt:NOW-7*60*60_000,returnRate:-.003,favorableRate:.001,frame:null}).decision?.trigger,"HOLD_VALUE"));
