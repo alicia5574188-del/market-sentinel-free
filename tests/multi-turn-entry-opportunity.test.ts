@@ -103,7 +103,7 @@ test("LONG structural stop is beyond anchor1 winding low, not inside the winding
   const row=evaluateMultiTurnEntryOpportunities({paths:{BTC_USDT:p},now,costRate:.0022}).find(x=>x.timeframe==="5m");
   assert.ok(row);const window=anchorWindow(p,row!.anchorAt);
   const reverseExtreme=Math.min(...window.map(x=>x.low));
-  assert.ok(row!.stopPrice<reverseExtreme);
+  assert.ok(row!.stopPrice!=null);assert.ok(row!.stopPrice!<reverseExtreme);
   const candidate=entryOpportunityCandidate(row!);
   assert.equal(candidate.stopPrice,row!.stopPrice);
 });
@@ -114,7 +114,7 @@ test("SHORT structural stop is beyond anchor1 winding high",()=>{
   assert.ok(row);assert.equal(row!.side,"SHORT");
   const window=anchorWindow(p,row!.anchorAt);
   const reverseExtreme=Math.max(...window.map(x=>x.high));
-  assert.ok(row!.stopPrice>reverseExtreme);
+  assert.ok(row!.stopPrice!=null);assert.ok(row!.stopPrice!>reverseExtreme);
 });
 
 test("a wider anchor structural stop receives a lower score",()=>{
@@ -127,7 +127,8 @@ test("a wider anchor structural stop receives a lower score",()=>{
   wide[start+lowIndex]={...wide[start+lowIndex],low:wide[start+lowIndex].low*.9985};
   const wideRow=evaluateMultiTurnEntryOpportunities({paths:{BTC_USDT:wide},now:baseNow,costRate:.0022}).find(x=>x.timeframe==="5m");
   assert.ok(wideRow);assert.ok(wideRow!.stopRate>baseRow!.stopRate);
-  assert.ok(wideRow!.stopPenalty>baseRow!.stopPenalty);
+  assert.ok(wideRow!.stopPenalty!=null&&baseRow!.stopPenalty!=null);
+  assert.ok(wideRow!.stopPenalty!>baseRow!.stopPenalty!);
   assert.ok(wideRow!.score<baseRow!.score);
 });
 
