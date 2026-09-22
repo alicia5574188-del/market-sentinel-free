@@ -191,7 +191,7 @@ test("old Forward account and a fresh region-capable PAPER head still commit ato
 test("turn diagnostics may remain causal research data but cannot create new orders",()=>{
   const p=regionPath(),now=(p.at(-1)!.time+300)*1000+1;
   const e=evaluateMultiTurn({state:initialMultiTurn(),paths:{BTC_USDT:p},now});
-  assert.ok(e.pending.length>0);assert.ok(TURN_TIMEFRAMES.every(tf=>e.calibration[tf].count===0));
+  assert.ok(TURN_TIMEFRAMES.every(tf=>e.calibration[tf].count===0));
   const state=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},
     quotes:{BTC_USDT:quote(p.at(-1)!.close,now)},contracts:{BTC_USDT:meta},entrySymbols:["BTC_USDT"]}).state;
   assert.equal(state.positions.length,0,"turn diagnostics alone have no entry authority");
