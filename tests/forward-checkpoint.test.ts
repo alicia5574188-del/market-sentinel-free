@@ -107,12 +107,12 @@ test("Multi-Turn arms and restores a profit floor, including a legacy deferred m
     const close=100*Math.exp(i*.00025),open=close/1.00025;
     return{time:start/1000+i*300,open,high:Math.max(open,close)*1.0008,low:Math.min(open,close)*.9992,close,volume:1000+i};
   });
-  const base=rows.at(-1)!.close,i=rows.length,at=(n:number)=>start/1000+n*300;
-  rows.push({time:at(i),open:base*.9998,high:base*1.0005,low:base*.9995,close:base,volume:1400});
-  rows.push({time:at(i+1),open:base,high:base*1.0045,low:base*.9997,close:base*1.004,volume:1401});
-  rows.push({time:at(i+2),open:base*1.004,high:base*1.0075,low:base*1.0035,close:base*1.007,volume:1402});
-  rows.push({time:at(i+3),open:base*1.007,high:base*1.0085,low:base*1.006,close:base*1.008,volume:1403});
-  rows.push({time:at(i+4),open:base*1.008,high:base*1.0082,low:base*1.0012,close:base*1.0015,volume:1404});
+  const base=rows.at(-1)!.close,i=rows.length,barTime=(n:number)=>start/1000+n*300;
+  rows.push({time:barTime(i),open:base*.9998,high:base*1.0005,low:base*.9995,close:base,volume:1400});
+  rows.push({time:barTime(i+1),open:base,high:base*1.0045,low:base*.9997,close:base*1.004,volume:1401});
+  rows.push({time:barTime(i+2),open:base*1.004,high:base*1.0075,low:base*1.0035,close:base*1.007,volume:1402});
+  rows.push({time:barTime(i+3),open:base*1.007,high:base*1.0085,low:base*1.006,close:base*1.008,volume:1403});
+  rows.push({time:barTime(i+4),open:base*1.008,high:base*1.0082,low:base*1.0012,close:base*1.0015,volume:1404});
   const now=(rows.at(-1)!.time+300)*1000+1000,mid=rows.at(-1)!.close;
   const state=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:rows},
     quotes:{BTC_USDT:{bestBid:mid*.9999,bestAsk:mid*1.0001,observedAt:now,fresh:true,entryReady:true}},
