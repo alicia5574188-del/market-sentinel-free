@@ -103,8 +103,8 @@ function distinctRegion(a:RegionZone,b:RegionZone){
   return overlapRatio<.35||centerShift>.75;
 }
 
-function migrationSignal(zone:RegionZone,row:RegionCandle,side:"LONG"|"SHORT",costRate:number):RegionEntrySignal{
-  const d=side==="LONG"?1:-1,boundary:RegionBoundary=side==="LONG"?"UPPER":"LOWER";
+function migrationSignal(zone:RegionZone,row:RegionCandle,side:"LONG"|"SHORT"):RegionEntrySignal{
+  const boundary:RegionBoundary=side==="LONG"?"UPPER":"LOWER";
   const signalPrice=row.close;
   const stopPrice=side==="LONG"?zone.upper-zone.width*.20:zone.lower+zone.width*.20;
   const completedAt=completeAt(row);
@@ -172,7 +172,7 @@ export function evaluateRegionLifecycle(input:{symbol:string;rows:RegionCandle[]
         status=widths>REGION_DETACH_WIDTHS?"DETACHED_UP":"ACCEPTED_UP";
         if(status==="DETACHED_UP")detachedAt=detachedAt??at;
         if(upCount===2&&widths<=REGION_DETACH_WIDTHS&&at>cutoff&&!input.suppressSignals&&upperConsumedAt==null)
-          signals.push(migrationSignal(zone,row,"LONG",input.costRate));
+          signals.push(migrationSignal(zone,row,"LONG"));
       }else status="PROBE_UP";
       continue;
     }
@@ -187,7 +187,7 @@ export function evaluateRegionLifecycle(input:{symbol:string;rows:RegionCandle[]
         status=widths>REGION_DETACH_WIDTHS?"DETACHED_DOWN":"ACCEPTED_DOWN";
         if(status==="DETACHED_DOWN")detachedAt=detachedAt??at;
         if(downCount===2&&widths<=REGION_DETACH_WIDTHS&&at>cutoff&&!input.suppressSignals&&lowerConsumedAt==null)
-          signals.push(migrationSignal(zone,row,"SHORT",input.costRate));
+          signals.push(migrationSignal(zone,row,"SHORT"));
       }else status="PROBE_DOWN";
       continue;
     }
