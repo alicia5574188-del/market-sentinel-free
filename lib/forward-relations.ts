@@ -16,8 +16,10 @@ import { FORWARD_ADAPTIVE_VERSION, adaptiveCandidatePriority, adaptiveEntryAdjus
 import { MULTI_TURN_VERSION, TURN_CONFIG, TURN_TIMEFRAMES, evaluateMultiTurn, initialMultiTurn, turnCandidates,
   type MultiTurnState, type TurnCandidate, type TurnEvidence, type TurnPhase, type TurnSide, type TurnTimeframe } from "./multi-turn-engine.ts";
 import { MULTI_TURN_PROFIT_PROTECTION_VERSION, supportedProfitVersion, type MultiTurnProfitVersion, type MultiTurnTradeProfitProtection } from "./multi-turn-profit-protection.ts";
-import { evaluateMultiTurnHoldValue, multiTurnHoldWindows, type MultiTurnHoldValue } from "./multi-turn-hold-value.ts";
-import { evaluateMultiTurnExitOverlay } from "./multi-turn-exit.ts";
+import { multiTurnHoldWindows, type MultiTurnHoldValue } from "./multi-turn-hold-value.ts";
+import { evaluateMultiTurnExitController } from "./multi-turn-exit-controller.ts";
+import { evaluateMultiTurnClock } from "./multi-turn-clock.ts";
+import { evaluateMultiTurnEntryPolicy, multiTurnEntryLeverage, MULTI_TURN_TARGET_LEVERAGE } from "./multi-turn-entry-policy.ts";
 import { MULTI_TURN_ROTATION_COOLDOWN_MS, MULTI_TURN_ROTATION_VERSION, evaluateRotationOpportunity,
   multiTurnRotationReentryCooldownMs, rankWeakRotationHoldings, rotationAdvantageEnough, rotationRiskSaturated } from "./multi-turn-rotation.ts";
 // The storage schema stays v1.0 so an algorithm upgrade cannot reset the ledger.
@@ -29,7 +31,6 @@ export const FEATURES = ["5分钟推进", "15分钟推进", "1小时推进", "�
 export const PAPER_COST = { feeRate: .0007, slippageRate: .00025, fundingAllowancePerDay: .0002,
   assumption: "双边吃单费各7bp＋滑点各2.5bp＋实际买卖价差；资金费为每日2bp不利占位，并非Gate实际结算" };
 const COST_FLOOR = .0022, DAY = 86_400_000;
-export const MULTI_TURN_TARGET_LEVERAGE = 20;
 export type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
 export type Quote = { bestBid: number; bestAsk: number; observedAt: number; fresh: boolean; entryReady?: boolean };
 export type Contract = { quantoMultiplier: number; leverageMax: number; maintenanceRate: number; minContracts?: number };
@@ -393,12 +394,7 @@ export function turnModeledCost(tf:TurnTimeframe,spread=0){
     +PAPER_COST.fundingAllowancePerDay*expectedHold/1440);
 }
 
-export function multiTurnEntryLeverage(stopRate:number,maintenanceRate:number,costRate:number,leverageMax:number){
-  if(![stopRate,maintenanceRate,costRate,leverageMax].every(Number.isFinite)||stopRate<=0||maintenanceRate<0||costRate<0||leverageMax<1)
-    return 1;
-  const safeLeverage=Math.max(1,Math.floor(.8/Math.max(stopRate+maintenanceRate+costRate,1e-9)));
-  return Math.max(1,Math.floor(Math.min(MULTI_TURN_TARGET_LEVERAGE,leverageMax,safeLeverage)));
-}
+export { multiTurnEntryLeverage, MULTI_TURN_TARGET_LEVERAGE };
 
 function multiTurnRule(s:ForwardState,candidate:TurnCandidate,now:number):Rule{
   const cfg=TURN_CONFIG[candidate.timeframe],net=Math.max(0,candidate.expectedMoveRate-turnModeledCost(candidate.timeframe));
@@ -425,33 +421,20 @@ function manageMultiTurn(s:ForwardState,quotes:Record<string,Quote>,now:number){
     const freshFrame=frame&&frame.ready&&frame.completedAt<=now
       &&now-frame.completedAt<=Math.max(BAR_MS*2,cfg.minutes*60_000*1.5)?frame:null;
     const spread=(q.bestAsk-q.bestBid)/Math.max((q.bestAsk+q.bestBid)/2,1e-9);
-    const modeledCost=turnModeledCost(t.turn.timeframe,spread),riskRate=t.plannedRisk/Math.max(t.notional,1e-9);
-    const holdValue=freshFrame?evaluateMultiTurnHoldValue({timeframe:t.turn.timeframe,frame:freshFrame,side:t.side,
-      openedAt:t.openedAt,now,returnRate:ret,favorableRate:t.favorable,modeledCostRate:modeledCost}):null;
-    if(holdValue)t.holdValue=holdValue;
-    const exitOverlay=evaluateMultiTurnExitOverlay({timeframe:t.turn.timeframe,side:t.side,openedAt:t.openedAt,now,
-      returnRate:ret,favorableRate:t.favorable,riskRate,modeledCostRate:modeledCost,
-      entryExpectedMoveRate:t.entryContext?.expectedMoveRate??t.rule.armRate,frame:freshFrame,
-      priorProtection:t.profitProtection});
-    if(exitOverlay.profitProtection){
-      t.profitProtection=exitOverlay.profitProtection;
+    const modeledCost=turnModeledCost(t.turn.timeframe,spread);
+    const exit=evaluateMultiTurnExitController({timeframe:t.turn.timeframe,side:t.side,openedAt:t.openedAt,now,
+      returnRate:ret,favorableRate:t.favorable,plannedRisk:t.plannedRisk,notional:t.notional,
+      modeledCostRate:modeledCost,entryExpectedMoveRate:t.entryContext?.expectedMoveRate??t.rule.armRate,
+      stopRate:t.rule.stopRate,horizonMinutes:t.rule.horizon,frame:freshFrame,priorProtection:t.profitProtection});
+    if(exit.holdValue)t.holdValue=exit.holdValue;
+    if(exit.profitProtection){
+      t.profitProtection=exit.profitProtection;
       // Legacy v4 migration metadata is compatibility-only and cannot keep an
       // actually armed floor in an impossible DEFERRED state.
       if(t.profitProtectionMigration?.state==="DEFERRED")t.profitProtectionMigration={
         ...t.profitProtectionMigration,version:MULTI_TURN_PROFIT_PROTECTION_VERSION,state:"CURRENT",updatedAt:now};
     }
-    let decision:ExitDecision|null=null;
-    if(ret<=-t.rule.stopRate)decision={trigger:"HARD_STOP",reason:"Multi-Turn硬止损：当前可执行价触及该周期原始结构风险边界",boundaryRate:-t.rule.stopRate};
-    else if(freshFrame&&freshFrame.direction!==t.side&&freshFrame.lastTurnAt!=null&&freshFrame.lastTurnAt>=t.openedAt)
-      decision={trigger:"MULTI_TURN",reason:`${t.turn.timeframe}已确认转向${freshFrame.direction==="LONG"?"多":"空"}；退出原${t.side==="LONG"?"多":"空"}向仓位`,boundaryRate:null};
-    else if(freshFrame&&freshFrame.direction===t.side&&freshFrame.phase==="TURNING"&&freshFrame.triggerProbability>=.90
-      &&freshFrame.evidence.structure>=.65&&(freshFrame.evidence.cusum>=.60||freshFrame.evidence.changePoint>=.65))
-      decision={trigger:"MULTI_TURN",reason:`${t.turn.timeframe}转折概率达到${(freshFrame.triggerProbability*100).toFixed(0)}%，结构破坏与序贯变化同时成立；提前退出该周期旧方向`,boundaryRate:null};
-    else if(exitOverlay.decision)decision=exitOverlay.decision;
-    else if(holdValue&&holdValue.action!=="HOLD")
-      decision={trigger:"HOLD_VALUE",reason:`时间—空间持仓价值退出：${holdValue.reason}`,boundaryRate:null};
-    else if(now-t.openedAt>=t.rule.horizon*60_000)
-      decision={trigger:"MAX_LIFETIME",reason:`${t.turn.timeframe}超过异常安全寿命上限；退出以防止孤立陈旧持仓，不作为正常策略期限`,boundaryRate:null};
+    const decision=exit.decision;
     if(!decision)continue;
     closeTrade(s,t,q,now,decision.reason);
     const sourceRule=s.rules.find(r=>r.id===t.rule.id);if(sourceRule)sourceRule.status="DORMANT";
@@ -549,78 +532,23 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
       ||!finite(meta.maintenanceRate)){reject("等待合约乘数和杠杆元数据");continue;}
     const marked=forwardEquity(s,quotes,now),equity=marked.equity;if(equity<=0){reject("净值不足，不自动充值");break;}
     if(marked.stalePositions){reject("已有持仓估值过期，只管理风险不新增仓位");break;}
-    const mid=(q.bestBid+q.bestAsk)/2,spread=(q.bestAsk-q.bestBid)/mid;if(spread>.0015){reject("当前买卖价差过大");continue;}
-    const d=candidate.side==="LONG"?1:-1,progress=d*(mid/candidate.signalPrice-1);
-    const adverseLimit=Math.max(.0015,Math.min(candidate.stopRate*.35,candidate.expectedMoveRate*.60));
-    if(progress < -adverseLimit){reject("转折状态形成后价格已明显逆向，原入场上下文失效");continue;}
-    const cost=turnModeledCost(candidate.timeframe,spread),remaining=candidate.expectedMoveRate-cost-Math.max(0,progress);
-    if(remaining<=0){reject("价格推进和交易成本已吃掉该周期剩余空间");continue;}
-    const totalRisk=s.positions.reduce((n,t)=>n+t.plannedRisk,0),sideRisk=s.positions.filter(t=>t.side===candidate.side).reduce((n,t)=>n+t.plannedRisk,0);
-    const sleeveRisk=s.positions.filter(t=>t.turn?.timeframe===candidate.timeframe).reduce((n,t)=>n+t.plannedRisk,0);
-    const gross=s.positions.reduce((n,t)=>n+t.notional,0),drawdown=Math.max(0,1-equity/Math.max(s.peakEquity,equity));
-    const drawdownScale=drawdown>=.20?.50:drawdown>=.10?.70:drawdown>=.05?.85:1;
-    const quality=clip(candidate.continuationScore*(.65+.35*candidate.confidence),.15,1);
-    const headroom=Math.min(equity*.10-totalRisk,equity*.065-sideRisk,equity*candidate.riskCap-sleeveRisk);
-    const targetRisk=Math.max(0,Math.min(equity*.015*quality*drawdownScale,headroom));
-    const lossRate=candidate.stopRate+cost;
-    const leverage=multiTurnEntryLeverage(candidate.stopRate,meta.maintenanceRate,cost,meta.leverageMax);
-    const usedMargin=s.positions.reduce((n,t)=>n+t.margin,0);
-    // Nominal value remains risk-authoritative. Leverage is normally fixed at
-    // 20x and margin becomes the balancing variable. A structurally wide stop
-    // may lower leverage, never raise it beyond 20x to force a position through.
-    const marginCapNotional=Math.max(0,(equity*.75-usedMargin)/(1/leverage+.75*PAPER_COST.feeRate));
-    // Risk ratios are evaluated on marked equity, which immediately reflects
-    // round-trip fee/slippage/spread drag. Reserve that same immediate mark cost
-    // when sizing so persisted sleeve/directional/portfolio caps remain true
-    // after the order is opened, not only before the entry fee is booked.
-    const immediateMarkCost=Math.max(0,2*(PAPER_COST.feeRate+PAPER_COST.slippageRate)+spread);
-    const totalCapNotional=Math.max(0,(equity*.10-totalRisk)/(lossRate+.10*immediateMarkCost));
-    const sideCapNotional=Math.max(0,(equity*.065-sideRisk)/(lossRate+.065*immediateMarkCost));
-    const sleeveCapNotional=Math.max(0,(equity*candidate.riskCap-sleeveRisk)/(lossRate+candidate.riskCap*immediateMarkCost));
-    const desired=Math.min(equity*1.5,targetRisk/Math.max(lossRate,1e-9),totalCapNotional,sideCapNotional,sleeveCapNotional,
-      marginCapNotional,Math.max(0,equity*4-gross));
-    if(!(desired>=equity*.05)){
-      if(options.allowRotation!==false&&trySelectiveRiskRotation({state:s,candidate,quotes,contracts,now,entrySymbols,
-        remainingSpaceRate:remaining,costRate:cost}))return;
-      reject("该周期剩余风险额度不足有效仓位，不生成碎片订单");continue;
-    }
-    const price=(candidate.side==="LONG"?q.bestAsk:q.bestBid)*(1+d*PAPER_COST.slippageRate);
-    const exitNow=(candidate.side==="LONG"?q.bestBid:q.bestAsk)*(1-d*PAPER_COST.slippageRate);
-    const notionalPer=price*meta.quantoMultiplier,riskPer=notionalPer*lossRate;
-    const equityDeltaPer=-notionalPer*PAPER_COST.feeRate
-      +d*meta.quantoMultiplier*(exitNow-price)-meta.quantoMultiplier*exitNow*PAPER_COST.feeRate;
-    const capCount=(rate:number,used:number,addedRiskPer=0)=>Math.max(0,Math.floor((equity*rate-used)
-      /Math.max(1e-12,addedRiskPer-rate*equityDeltaPer)));
-    const qualityRate=.015*quality*drawdownScale;
-    let count=Math.floor(desired/notionalPer);
-    // The new fill's immediate drag lowers the denominator for every existing
-    // risk sleeve, not merely the sleeve that receives the new position.
-    // Constrain all sleeves, both directions and every existing single-trade
-    // risk simultaneously on post-fill marked equity.
+    const spread=(q.bestAsk-q.bestBid)/Math.max((q.bestAsk+q.bestBid)/2,1e-9),cost=turnModeledCost(candidate.timeframe,spread);
+    const totalRisk=s.positions.reduce((n,t)=>n+t.plannedRisk,0);
     const longRisk=s.positions.filter(t=>t.side==="LONG").reduce((n,t)=>n+t.plannedRisk,0);
     const shortRisk=s.positions.filter(t=>t.side==="SHORT").reduce((n,t)=>n+t.plannedRisk,0);
-    const constraints=[
-      capCount(.10,totalRisk,riskPer),
-      capCount(.065,longRisk,candidate.side==="LONG"?riskPer:0),
-      capCount(.065,shortRisk,candidate.side==="SHORT"?riskPer:0),
-      capCount(qualityRate,0,riskPer),
-      capCount(.015,0,riskPer),
-      ...TURN_TIMEFRAMES.map(tf=>capCount(TURN_CONFIG[tf].riskCap,
-        s.positions.filter(t=>t.turn?.timeframe===tf).reduce((n,t)=>n+t.plannedRisk,0),
-        tf===candidate.timeframe?riskPer:0)),
-      ...s.positions.map(t=>capCount(.015,t.plannedRisk,0)),
-    ];
-    count=Math.min(count,...constraints);
-    if(count<Math.max(1,meta.minContracts??1)){
-      if(options.allowRotation!==false&&trySelectiveRiskRotation({state:s,candidate,quotes,contracts,now,entrySymbols,
-        remainingSpaceRate:remaining,costRate:cost}))return;
-      reject("风险额度低于交易所最小合约张数");continue;
+    const sleeveRisks=Object.fromEntries(TURN_TIMEFRAMES.map(tf=>[tf,s.positions.filter(t=>t.turn?.timeframe===tf).reduce((n,t)=>n+t.plannedRisk,0)]));
+    const entryPolicy=evaluateMultiTurnEntryPolicy({candidate,bestBid:q.bestBid,bestAsk:q.bestAsk,contract:meta,equity,peakEquity:s.peakEquity,
+      totalRisk,longRisk,shortRisk,sleeveRisks,grossNotional:s.positions.reduce((n,t)=>n+t.notional,0),
+      usedMargin:s.positions.reduce((n,t)=>n+t.margin,0),tradeRisks:s.positions.map(t=>t.plannedRisk),costRate:cost,
+      feeRate:PAPER_COST.feeRate,slippageRate:PAPER_COST.slippageRate});
+    if(!entryPolicy.ok){
+      if(entryPolicy.rotationEligible&&options.allowRotation!==false&&trySelectiveRiskRotation({state:s,candidate,quotes,contracts,now,entrySymbols,
+        remainingSpaceRate:entryPolicy.remainingSpaceRate,costRate:cost}))return;
+      reject(entryPolicy.reason);continue;
     }
-    const quantity=count*meta.quantoMultiplier,notional=quantity*price;
-    if(notional<equity*.05||notional<desired*.25){reject("合约取整后只剩碎片仓位");continue;}
-    const entryFee=notional*PAPER_COST.feeRate,markedAfter=equity-entryFee,margin=notional/leverage;
-    if(usedMargin+margin>markedAfter*.75+1e-8){reject("模拟可用保证金不足");continue;}
-    const rule=multiTurnRule(s,candidate,now),plannedRisk=notional*lossRate;
+    const {price,count,quantity,notional,leverage,margin,plannedRisk,entryFee,remainingSpaceRate:remaining,quality}=entryPolicy.plan;
+    const d=candidate.side==="LONG"?1:-1;
+    const rule=multiTurnRule(s,candidate,now);
     const entryFrame=s.turnEngine?.frames[candidate.symbol]?.[candidate.timeframe];
     const entryWindows=multiTurnHoldWindows(candidate.timeframe);
     const entryContext:MultiTurnEntryContext|undefined=entryFrame?{
@@ -787,26 +715,13 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
   if(s.strategyAuthorityVersion!==MULTI_TURN_VERSION)throw new Error("Multi-Turn权威版本不一致");
   const entrySymbols=new Set(input.entrySymbols??Object.keys(paths));
   const retainedSymbols=[...new Set([...entrySymbols,...s.positions.map(position=>position.symbol)])];
-  const targetSlot=Math.floor((now-90_000)/BAR_MS);
-  const lastDataSlot=s.lastCycleAt?Math.floor((s.lastCycleAt-90_000)/BAR_MS):-1;
-  // A wall-clock boundary is not evidence that the new candle was fetched.
-  // Consume the data slot only when at least one retained 5m path actually
-  // contains a candle completed at that target boundary.
-  const targetCompletedAt=targetSlot*BAR_MS;
   const newestPathCompletedAt=retainedSymbols.reduce((latest,symbol)=>{
     const row=paths[symbol]?.at(-1);
     return row?Math.max(latest,(row.time+300)*1000):latest;
   },0);
-  const dataDue=input.allowDataCycle!==false&&targetSlot>lastDataSlot
-    &&newestPathCompletedAt>=targetCompletedAt;
-  const lastMarkAt=s.daily.at(-1)?.lastAt??0;
-  const lastMarkSlot=lastMarkAt?Math.floor((lastMarkAt-90_000)/BAR_MS):-1;
-  // Normal path: the data cycle owns the 5m account mark. If optional candle
-  // work is delayed for >60s beyond the normal 90s grace, the critical loop may
-  // persist one stale-aware mark for that slot without advancing turnEngine.
-  const fallbackMarkDue=input.allowDataCycle===false&&targetSlot>lastMarkSlot
-    &&now>=(targetSlot*BAR_MS+150_000);
-  const markDue=dataDue||fallbackMarkDue;
+  const clock=evaluateMultiTurnClock({now,lastCycleAt:s.lastCycleAt,lastMarkAt:s.daily.at(-1)?.lastAt??0,
+    newestPathCompletedAt,allowDataCycle:input.allowDataCycle!==false});
+  const dataDue=clock.dataDue,markDue=clock.markDue;
   if(dataDue){
     s.turnEngine=evaluateMultiTurn({state:s.turnEngine??initialMultiTurn(),paths,daily,retainSymbols:retainedSymbols,now});
     s.lastCycleAt=now;s.selectedSymbols=[...entrySymbols];
