@@ -3,6 +3,8 @@
  */
 import type { ForwardState, Trade } from "./forward-relations.ts";
 import { MULTI_TURN_PROFIT_PROTECTION_VERSION } from "./multi-turn-profit-protection.ts";
+const LEGACY_MULTI_TURN_PROFIT_PROTECTION_VERSION="multi-turn-profit-floor-v3";
+const supportedProfitVersion=(value:unknown)=>value===MULTI_TURN_PROFIT_PROTECTION_VERSION||value===LEGACY_MULTI_TURN_PROFIT_PROTECTION_VERSION;
 
 export const FORWARD_PROTECTION_CHECKPOINT_VERSION = "forward-protection-checkpoint-v1";
 type ProtectionRow = Pick<Trade, "id" | "openedAt" | "favorable" | "adverse" | "lastPrice" | "lastQuoteAt"
@@ -26,12 +28,12 @@ export function forwardProtectionChanged(previous: ForwardState, next: ForwardSt
   return next.positions.some(t => {
     const p = prior.get(t.id);
     if (!p || p.openedAt !== t.openedAt) return false; // Financial change saves the full account.
-    const priorProtection=p.profitProtection?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?p.profitProtection:null;
-    const nextProtection=t.profitProtection?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?t.profitProtection:null;
+    const priorProtection=p.profitProtection&&supportedProfitVersion(p.profitProtection.version)?p.profitProtection:null;
+    const nextProtection=t.profitProtection&&supportedProfitVersion(t.profitProtection.version)?t.profitProtection:null;
     const priorBand=priorProtection?.checkpointBand??-1;
     const nextBand=nextProtection?.checkpointBand??-1;
-    const priorMigration=p.profitProtectionMigration?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?p.profitProtectionMigration.state:null;
-    const nextMigration=t.profitProtectionMigration?.version===MULTI_TURN_PROFIT_PROTECTION_VERSION?t.profitProtectionMigration.state:null;
+    const priorMigration=p.profitProtectionMigration&&supportedProfitVersion(p.profitProtectionMigration.version)?p.profitProtectionMigration.state:null;
+    const nextMigration=t.profitProtectionMigration&&supportedProfitVersion(t.profitProtectionMigration.version)?t.profitProtectionMigration.state:null;
     return (t.rule.exitMode === "REACTION_DECAY" && t.favorable >= t.rule.armRate && t.favorable !== p.favorable)
       || nextBand!==priorBand || nextMigration!==priorMigration
       // Multi-Turn can arm before the legacy rule's armRate. Its exact floor
@@ -84,11 +86,11 @@ export function restoreForwardProtectionCheckpoint(s: ForwardState, value: unkno
       || (t.profitProtectionMigration != null && r.profitProtectionMigration == null)) return invalid();
     if(r.profitProtectionMigration){
       const m=r.profitProtectionMigration,prior=t.profitProtectionMigration;
-      if(m.version!==MULTI_TURN_PROFIT_PROTECTION_VERSION
+      if(!supportedProfitVersion(m.version)
         || !["CURRENT","GUARDED","DEFERRED"].includes(m.state)
         || !Number.isFinite(m.updatedAt)||m.updatedAt<t.openedAt||m.updatedAt>c.quoteCycleAt+1000
         || !Number.isFinite(m.baselineFavorable)||m.baselineFavorable<0||m.baselineFavorable>r.favorable+1e-12
-        || (prior&&prior.version===MULTI_TURN_PROFIT_PROTECTION_VERSION
+        || (prior&&supportedProfitVersion(prior.version)
           && (m.updatedAt<prior.updatedAt||m.baselineFavorable+1e-12<prior.baselineFavorable
             || (prior.state==="CURRENT"&&m.state!=="CURRENT")
             || (prior.state==="GUARDED"&&m.state==="DEFERRED")))
@@ -96,7 +98,7 @@ export function restoreForwardProtectionCheckpoint(s: ForwardState, value: unkno
     }
     if(r.profitProtection){
       const p=r.profitProtection,prior=t.profitProtection;
-      if(p.version!==MULTI_TURN_PROFIT_PROTECTION_VERSION
+      if(!supportedProfitVersion(p.version)
         || ![p.reachedR,p.lockedR,p.floorRate,p.retentionRate,p.activationRate,p.checkpointBand,p.peakR,p.updatedAt].every(Number.isFinite)
         || p.floorRate<=0||p.lockedR<=0||p.retentionRate<=0||p.retentionRate>=1||p.activationRate<=0
         || !["STRONG_TREND","HEALTHY_TREND","NORMAL","WEAKENING"].includes(p.mode)

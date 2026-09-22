@@ -1,10 +1,14 @@
-export const MULTI_TURN_PROFIT_PROTECTION_VERSION="multi-turn-profit-floor-v3";
+export const MULTI_TURN_PROFIT_PROTECTION_VERSION="multi-turn-profit-floor-v4";
 
 export type MultiTurnProfitSignal={
   continuationScore?:number|null;
   turnProbability?:number|null;
   phase?:string|null;
   rawDirectionAligned?:boolean|null;
+  edgeRatio?:number|null;
+  directionStrength?:number|null;
+  turnRisk?:number|null;
+  ageRatio?:number|null;
 };
 
 export type MultiTurnProfitFloor={
@@ -26,9 +30,9 @@ export type MultiTurnTradeProfitProtection=MultiTurnProfitFloor&{
 const clip=(v:number,a:number,b:number)=>Math.min(b,Math.max(a,v));
 
 function baseRetention(reachedR:number){
-  if(reachedR<.60)return .15;
-  if(reachedR<1)return .18+(reachedR-.60)/.40*.20;
-  return Math.min(.74,.38+.12*Math.log2(Math.max(1,reachedR)));
+  if(reachedR<.60)return .18;
+  if(reachedR<1)return .22+(reachedR-.60)/.40*.18;
+  return Math.min(.78,.42+.13*Math.log2(Math.max(1,reachedR)));
 }
 
 function signalAdjustment(signal?:MultiTurnProfitSignal|null){
@@ -45,6 +49,11 @@ function signalAdjustment(signal?:MultiTurnProfitSignal|null){
   if(turn!=null&&turn>=.45){adjustment+=.06;weak=true;}
   if(phase==="WATCH"||phase==="TURNING"){adjustment+=.06;weak=true;}
   if(signal.rawDirectionAligned===false){adjustment+=.08;weak=true;}
+  if(signal.edgeRatio!=null&&signal.edgeRatio<1){adjustment+=.10;weak=true;}
+  if(signal.edgeRatio!=null&&signal.edgeRatio<.70){adjustment+=.12;weak=true;}
+  if(signal.directionStrength!=null&&signal.directionStrength<.40){adjustment+=.08;weak=true;}
+  if(signal.turnRisk!=null&&signal.turnRisk>=.45){adjustment+=.08;weak=true;}
+  if(signal.ageRatio!=null&&signal.ageRatio>=1&&signal.edgeRatio!=null&&signal.edgeRatio<1.20){adjustment+=.06;weak=true;}
   const mode=weak?"WEAKENING":adjustment<=-.06?"STRONG_TREND":adjustment<0?"HEALTHY_TREND":"NORMAL";
   return{adjustment,mode} as const;
 }
@@ -66,14 +75,14 @@ export function multiTurnProfitFloor(
 ):MultiTurnProfitFloor|null{
   if(![favorable,riskRate,modeledCost].every(Number.isFinite)||riskRate<=0||favorable<=0)return null;
   const reachedR=favorable/riskRate;
-  const activationRate=Math.max(modeledCost+.0010,Math.min(.60*riskRate,.04));
+  const activationRate=Math.max(modeledCost+.0010,Math.min(.45*riskRate,.025));
   if(favorable<activationRate)return null;
 
   const {adjustment,mode}=signalAdjustment(signal);
-  const minRetention=reachedR>=1?.30:.12;
-  const retentionRate=clip(baseRetention(reachedR)+adjustment,minRetention,.82);
+  const minRetention=reachedR>=1?.35:.15;
+  const retentionRate=clip(baseRetention(reachedR)+adjustment,minRetention,.88);
   const costPositiveFloor=modeledCost+.0010;
-  const breathingRoom=Math.max(.0015,.12*riskRate);
+  const breathingRoom=Math.max(.0015,.10*riskRate);
   const floorRate=Math.min(favorable-breathingRoom,Math.max(favorable*retentionRate,costPositiveFloor));
   if(!(floorRate>modeledCost&&floorRate<favorable))return null;
   const lockedR=floorRate/riskRate;

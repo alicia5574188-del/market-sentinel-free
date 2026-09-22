@@ -48,21 +48,23 @@ test("a confirmed 5m turn cannot close a 1h-owned position",()=>{
   assert.equal(s.positions.length,1);
 });
 
-test("release-344 does not add an independent profit-giveback exit",()=>{
+test("observed profit gets a monotonic giveback floor before it can fall back to hard stop",()=>{
   const p=candles(),now=(p.at(-1)!.time+300)*1000+1000,quotes={BTC_USDT:q(p,now)};
   let s=advanceForward({state:initialMultiTurnForward(now-1000),now,paths:{BTC_USDT:p},quotes,contracts:{BTC_USDT:meta}}).state;
   assert.ok(s.positions.length);
   const t=s.positions[0],riskRate=t.plannedRisk/t.notional;
-  t.favorable=riskRate*3.2;
+  t.favorable=riskRate*2.2;
   const frame=s.turnEngine!.frames.BTC_USDT![t.turn!.timeframe]!;
   frame.direction=t.side;frame.rawDirection=t.side;frame.phase="FLOW";frame.lastTurnAt=null;frame.justTurned=false;
+  frame.continuationScore=.35;frame.triggerProbability=.48;frame.directionConfidence=.38;
   s.lastCycleAt=now;
-  const ret=riskRate*.5,px=t.entryPrice*(t.side==="LONG"?1+ret:1-ret),later=now+1000;
+  const ret=riskRate*.25,px=t.entryPrice*(t.side==="LONG"?1+ret:1-ret),later=now+1000;
   s=advanceForward({state:s,now:later,paths:{BTC_USDT:p},
     quotes:{BTC_USDT:{bestBid:px*.99999,bestAsk:px*1.00001,observedAt:later,fresh:true,entryReady:true}},contracts:{BTC_USDT:meta}}).state;
-  assert.equal(s.positions.length,1,
-    "release-344 keeps managing by hard stop, owning-timeframe turn or safety lifetime instead of a later profit-floor patch");
-  assert.equal(s.history.some(x=>x.exitAudit?.trigger==="PROFIT_GIVEBACK"),false);
+  assert.equal(s.positions.length,0);
+  assert.equal(s.history[0].exitAudit?.trigger,"PROFIT_GIVEBACK");
+  assert.match(s.history[0].exitReason??"",/利润路径保护/);
+  assert.ok((s.history[0].profitProtection?.floorRate??0)>0);
 });
 
 test("the owning timeframe confirmed turn exits its own position without waiting for a fixed horizon",()=>{
@@ -221,10 +223,11 @@ test("full-risk rotation atomically replaces one clearly weak holding and cannot
       volatility:.2,volume:.2,breadth:.08,propagation:.06},reason:"strong rotation fixture"});
   for(let i=0;i<symbols.length;i++)s.turnEngine!.frames[symbols[i]]={[timeframes[i]]:strong(symbols[i],timeframes[i])};
   const weak=s.turnEngine!.frames.W0_USDT!["5m"]!;
-  weak.directionConfidence=.35;weak.continuationScore=.25;weak.turnProbability=.60;weak.triggerProbability=.60;weak.phase="WATCH";
-  weak.atrRate=.012;weak.expectedMoveRate=.012;weak.propagationPressure=.55;
-  weak.evidence={structure:.70,momentum:.55,acceleration:.45,cusum:.60,changePoint:.58,failedExtension:.40,
-    volatility:.4,volume:.3,breadth:.5,propagation:.55};
+  weak.directionConfidence=.35;weak.continuationScore=.25;weak.turnProbability=.25;weak.triggerProbability=.25;weak.phase="FLOW";
+  weak.atrRate=.012;weak.expectedMoveRate=.006;weak.propagationPressure=.10;
+  weak.evidence={structure:.10,momentum:.10,acceleration:.10,cusum:.10,changePoint:.10,failedExtension:.10,
+    volatility:.2,volume:.2,breadth:.2,propagation:.10};
+  s.positions[0].favorable=.005;
   s.turnEngine!.frames.NEW_USDT={["1h"]:strong("NEW_USDT","1h")};
   s.turnEngine!.updatedAt=seedAt;s.lastCycleAt=seedAt;
 
@@ -247,10 +250,11 @@ test("full-risk rotation atomically replaces one clearly weak holding and cannot
   for(const t of first.positions)t.plannedRisk=12.9;
   const w1=first.positions.find(t=>t.symbol==="W1_USDT")!;w1.openedAt=secondAt-31*60_000;
   const w1Frame=first.turnEngine!.frames.W1_USDT!["15m"]!;
-  w1Frame.directionConfidence=.35;w1Frame.continuationScore=.25;w1Frame.turnProbability=.60;w1Frame.triggerProbability=.60;w1Frame.phase="WATCH";
-  w1Frame.atrRate=.012;w1Frame.expectedMoveRate=.012;w1Frame.propagationPressure=.55;w1Frame.completedAt=secondAt-1000;
-  w1Frame.evidence={structure:.70,momentum:.55,acceleration:.45,cusum:.60,changePoint:.58,failedExtension:.40,
-    volatility:.4,volume:.3,breadth:.5,propagation:.55};
+  w1Frame.directionConfidence=.35;w1Frame.continuationScore=.25;w1Frame.turnProbability=.25;w1Frame.triggerProbability=.25;w1Frame.phase="FLOW";
+  w1Frame.atrRate=.012;w1Frame.expectedMoveRate=.006;w1Frame.propagationPressure=.10;w1Frame.completedAt=secondAt-1000;
+  w1Frame.evidence={structure:.10,momentum:.10,acceleration:.10,cusum:.10,changePoint:.10,failedExtension:.10,
+    volatility:.2,volume:.2,breadth:.2,propagation:.10};
+  w1.favorable=.005;
   first.turnEngine!.frames.W0_USDT={["5m"]:{...strong("W0_USDT","5m"),completedAt:secondAt-1000,observedAt:secondAt}};
   first.turnEngine!.frames.NEW2_USDT={["1h"]:{...strong("NEW2_USDT","1h"),completedAt:secondAt-1000,observedAt:secondAt}};
   first.turnEngine!.updatedAt=secondAt;first.lastCycleAt=secondAt;
