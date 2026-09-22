@@ -31,10 +31,10 @@ test("a deployed v4 floor remains readable and monotonic while new computation s
   assert.equal(r.profitProtection?.version,"multi-turn-profit-floor-v3");
 });
 
-test("four-hour no-progress holding releases after the same six-bar threshold even without a frame",()=>{
+test("four-hour no-progress holding releases on the faster management clock even without a frame",()=>{
   const r=evaluateMultiTurnExitOverlay({timeframe:"4h",side:"LONG",openedAt:NOW-25*60*60_000,now:NOW,
     returnRate:-.006,favorableRate:.003,riskRate:.08,modeledCostRate:.0022,entryExpectedMoveRate:.08,frame:null});
-  assert.equal(r.bestHoldMinutes,1440);
+  assert.equal(r.bestHoldMinutes,360);
   assert.equal(r.decision?.trigger,"HOLD_VALUE");
   assert.match(r.decision?.reason??"",/释放长期无进展仓位/);
 });
@@ -48,7 +48,7 @@ test("meaningful favorable progress preserves the baseline hold-value decision",
 test("hard time ceiling is frame-independent",()=>{
   const r=evaluateMultiTurnExitOverlay({timeframe:"1h",side:"LONG",openedAt:NOW-19*60*60_000,now:NOW,
     returnRate:.001,favorableRate:.01,riskRate:.05,modeledCostRate:.0022,entryExpectedMoveRate:.03,frame:null});
-  assert.equal(r.hardExtensionMinutes,1080);
+  assert.equal(r.hardExtensionMinutes,720);
   assert.equal(r.decision?.trigger,"HOLD_VALUE");
   assert.match(r.decision?.reason??"",/硬上限/);
 });
