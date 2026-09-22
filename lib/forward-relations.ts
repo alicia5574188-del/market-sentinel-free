@@ -464,7 +464,10 @@ function multiTurnEntryMemoryFor(s:ForwardState,candidate:TurnCandidate,now:numb
 
 function rankedMultiTurnEntryRows(s:ForwardState,now:number,entrySymbols?:ReadonlySet<string>){
   return (s.entryOpportunities??[])
-    .filter(opportunity=>opportunity.eligible&&(!entrySymbols||entrySymbols.has(opportunity.symbol)))
+    .filter(opportunity=>opportunity.eligible
+      &&typeof opportunity.stopPrice==="number"&&Number.isFinite(opportunity.stopPrice)
+      &&typeof opportunity.stopPenalty==="number"&&Number.isFinite(opportunity.stopPenalty)
+      &&(!entrySymbols||entrySymbols.has(opportunity.symbol)))
     .map(opportunity=>{const candidate=entryOpportunityCandidate(opportunity);
       return{opportunity,candidate,memory:multiTurnEntryMemoryFor(s,candidate,now)};})
     .sort((a,b)=>b.opportunity.score*b.memory.scoreMultiplier-a.opportunity.score*a.memory.scoreMultiplier
