@@ -322,7 +322,7 @@ test("cutover remains credential-bound and production gates enforce five direct 
   assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.canonicalAdmissionGate == false/g) ?? []).length, 2);
   assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.canonicalCapitalAgnostic == false/g) ?? []).length, 2);
   assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.liveSource == "CANONICAL_PAPER_NORMALIZED_NET"/g) ?? []).length, 2);
-  assert.equal((workflow.match(/grep -Fq '哨兵 · 多周期转折引擎'/g) ?? []).length, 2);
+  assert.equal((workflow.match(/grep -Fq '哨兵 · 区域生命周期引擎'/g) ?? []).length, 2);
   assert.equal((workflow.match(/runtime\.forward\.strategyAuthorityVersion == "multi-turn-v1"/g) ?? []).length,2);
   assert.match(workflow, /deployment-plan/);
   assert.match(workflow, /runtime\.forward\.liveEligible == false/);
