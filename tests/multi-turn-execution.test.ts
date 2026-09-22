@@ -249,7 +249,10 @@ test("new Multi-Turn trades persist the exact entry context used for later resea
   assert.equal(ctx.timeframe,trade.turn!.timeframe);
   assert.equal(ctx.side,trade.side);
   assert.equal(ctx.signalAt,trade.turn!.signalAt);
-  assert.equal(ctx.directionConfidence,trade.turn!.entryDirectionConfidence);\n  assert.ok((ctx.entryScore??0)>=0&&(ctx.entryScore??0)<=100);\n  assert.ok((ctx.directionStrength??0)>=45);\n  assert.ok((ctx.edgeRatio??0)>0);
+  assert.equal(ctx.directionConfidence,trade.turn!.entryDirectionConfidence);
+  assert.ok((ctx.entryScore??0)>=0&&(ctx.entryScore??0)<=100);
+  assert.ok((ctx.directionStrength??0)>=45);
+  assert.ok((ctx.edgeRatio??0)>0);
   assert.equal(ctx.continuationScore,trade.turn!.entryContinuation);
   assert.ok(ctx.expectedMoveRate>0);
   assert.ok(ctx.modeledCostRate>0);
