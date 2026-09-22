@@ -385,3 +385,14 @@ test("release guard accepts only exact additive member namespaces, never primary
   ];
   for (const mutate of mutations) { const c = structuredClone(config); mutate(c); assert.equal(accepts(c), false); }
 });
+
+
+test("Multi-Turn modules obey one-way architecture boundaries", async () => {
+  const paths=["lib/multi-turn-engine.ts","lib/multi-turn-exit.ts","lib/multi-turn-exit-controller.ts","lib/multi-turn-hold-value.ts","lib/multi-turn-profit-protection.ts","lib/multi-turn-clock.ts"];
+  const sources=await Promise.all(paths.map(read));
+  const forbidden=/worker\/|app\/|gate-live|forward-store|D1Database|DurableObject|ctx\.storage|requestedEnabled|createEntry\(|fetch\(/;
+  for(let i=0;i<paths.length;i++)assert.doesNotMatch(sources[i],forbidden,`${paths[i]} crossed runtime/storage/LIVE/UI boundary`);
+  assert.doesNotMatch(sources[5],/from\s+["']/,"clock arbitration must remain dependency-free");
+  assert.doesNotMatch(sources[2],/forward-relations|multi-turn-entry/,"exit authority must not depend on entry/account orchestration");
+  assert.doesNotMatch(sources[0],/forward-relations|multi-turn-exit|multi-turn-entry|forward-store|gate-live/,"turn engine must remain signal-only");
+});
