@@ -782,12 +782,22 @@ function openTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<
   else if(blocker)s.latestReason=blocker;else if(s.positions.length)s.latestReason=`管理${s.positions.length}笔前向模拟持仓；原始保护止损不会放宽。`;
 }
 function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;daily?:Record<string,Candle[]>;
-  quotes:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:string[]},s:ForwardState,before:number){
+  quotes:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:string[];allowDataCycle?:boolean},s:ForwardState,before:number){
   const{now,paths,quotes,contracts}=input,daily=input.daily??{};
   if(s.strategyAuthorityVersion!==MULTI_TURN_VERSION)throw new Error("Multi-Turn权威版本不一致");
   const entrySymbols=new Set(input.entrySymbols??Object.keys(paths));
   const retainedSymbols=[...new Set([...entrySymbols,...s.positions.map(position=>position.symbol)])];
-  const dataDue=!s.lastCycleAt||Math.floor((now-90_000)/BAR_MS)>Math.floor((s.lastCycleAt-90_000)/BAR_MS);
+  const targetSlot=Math.floor((now-90_000)/BAR_MS);
+  const lastDataSlot=s.lastCycleAt?Math.floor((s.lastCycleAt-90_000)/BAR_MS):-1;
+  const dataDue=input.allowDataCycle!==false&&targetSlot>lastDataSlot;
+  const lastMarkAt=s.daily.at(-1)?.lastAt??0;
+  const lastMarkSlot=lastMarkAt?Math.floor((lastMarkAt-90_000)/BAR_MS):-1;
+  // Normal path: the data cycle owns the 5m account mark. If optional candle
+  // work is delayed for >60s beyond the normal 90s grace, the critical loop may
+  // persist one stale-aware mark for that slot without advancing turnEngine.
+  const fallbackMarkDue=input.allowDataCycle===false&&targetSlot>lastMarkSlot
+    &&now>=(targetSlot*BAR_MS+150_000);
+  const markDue=dataDue||fallbackMarkDue;
   if(dataDue){
     s.turnEngine=evaluateMultiTurn({state:s.turnEngine??initialMultiTurn(),paths,daily,retainSymbols:retainedSymbols,now});
     s.lastCycleAt=now;s.selectedSymbols=[...entrySymbols];
@@ -809,17 +819,17 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
     s.peakEquity=Math.max(s.peakEquity,marked.equity);
     s.maxDrawdown=Math.max(s.maxDrawdown,1-marked.equity/Math.max(s.peakEquity,1e-9));
   }
-  if(dataDue){
+  if(markDue){
     const k=dayKey(now),a=s.daily.find(d=>d.day===k);
     if(a){a.endEquity=marked.equity;a.lastAt=now;}
     else s.daily.push({day:k,firstAt:now,lastAt:now,startEquity:s.daily.at(-1)?.endEquity??s.initialEquity,endEquity:marked.equity,exactBoundary:false});
     s.daily=s.daily.slice(-400);
   }
   s.lastQuoteCycleAt=now;
-  return{state:s,changed:dataDue||s.revision!==before,protectionChanged:forwardProtectionChanged(input.state,s)};
+  return{state:s,changed:dataDue||markDue||s.revision!==before,protectionChanged:forwardProtectionChanged(input.state,s)};
 }
 
-export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;daily?:Record<string,Candle[]>;quotes:Record<string,Quote>;contracts:Record<string,Contract>;legacyDrainOnly?:boolean;entrySymbols?:string[]}){
+export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;daily?:Record<string,Candle[]>;quotes:Record<string,Quote>;contracts:Record<string,Contract>;legacyDrainOnly?:boolean;entrySymbols?:string[];allowDataCycle?:boolean}){
   const{now,paths,quotes,contracts}=input,s=structuredClone(input.state),before=s.revision;
   if(s.strategyAuthorityVersion===MULTI_TURN_VERSION)return advanceMultiTurnForward(input,s,before);
   if(!s.exitPolicyUpgrade){
