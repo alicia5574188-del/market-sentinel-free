@@ -1,3 +1,10 @@
+# 2026-09-22 — recover failed exit upgrade and release scoped replacement
+
+Restore pre-PR376 exit baseline, preserve compatible v3/v4 durable records and
+PR377 page fixes, then release the simplified profit/stalled-exit design in
+research/EXIT_RECOVERY_2026-09-22.md. User authorizes direct verified main release.
+Preserve account/history, entry/sizing, credentials and manual LIVE intent.
+
 # 2026-09-21 — comprehensive code audit and approved release (current)
 
 Repair code defects and conflicts without changing strategy, parameters or execution steps. The user explicitly confirmed publication to the original repository and the existing reviewed main/Cloudflare release. Preserve account/history, credentials, owner/member LIVE intent, data cadence, risk formulas and frozen strategy modules. No real-money verification trade. PR #366 is deployed; finish the reproduced cold-start catalog recovery defect and verify the real scan pool as well as health/account continuity. Earlier strategy-design goals below are historical, not authority to change strategy in this task.

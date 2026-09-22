@@ -15,7 +15,7 @@ import { FORWARD_ADAPTIVE_VERSION, adaptiveCandidatePriority, adaptiveEntryAdjus
   familyRiskHeadroom, inspectRapidCondition, sampleRiskMultiplier, type AdaptiveCandidate, type AdaptiveLane } from "./forward-adaptive.ts";
 import { MULTI_TURN_VERSION, TURN_CONFIG, TURN_TIMEFRAMES, evaluateMultiTurn, initialMultiTurn, turnCandidates,
   type MultiTurnState, type TurnCandidate, type TurnEvidence, type TurnPhase, type TurnSide, type TurnTimeframe } from "./multi-turn-engine.ts";
-import { MULTI_TURN_PROFIT_PROTECTION_VERSION, multiTurnProfitFloor, type MultiTurnTradeProfitProtection } from "./multi-turn-profit-protection.ts";
+import { MULTI_TURN_PROFIT_PROTECTION_VERSION, multiTurnProfitFloor, supportedProfitVersion, type MultiTurnProfitVersion, type MultiTurnTradeProfitProtection } from "./multi-turn-profit-protection.ts";
 import { evaluateMultiTurnHoldValue, multiTurnHoldWindows, type MultiTurnHoldValue } from "./multi-turn-hold-value.ts";
 import { MULTI_TURN_ROTATION_COOLDOWN_MS, MULTI_TURN_ROTATION_VERSION, evaluateRotationOpportunity,
   multiTurnRotationReentryCooldownMs, rankWeakRotationHoldings, rotationAdvantageEnough, rotationRiskSaturated } from "./multi-turn-rotation.ts";
@@ -61,7 +61,7 @@ export type Trade = { id: string; symbol: string; side: "LONG" | "SHORT"; rule: 
   relationFailureBars: number; lastRelationBar: number; execution: "REAL_QUOTE_PAPER_MODEL"; liveEligible: false;
   exitControl?: ExitControl; exitAudit?: ExitAudit; profitProtection?:MultiTurnTradeProfitProtection; holdValue?:MultiTurnHoldValue;
   entryContext?:MultiTurnEntryContext;
-  profitProtectionMigration?:{version:typeof MULTI_TURN_PROFIT_PROTECTION_VERSION;state:"CURRENT"|"GUARDED"|"DEFERRED";updatedAt:number;baselineFavorable:number};
+  profitProtectionMigration?:{version:MultiTurnProfitVersion;state:"CURRENT"|"GUARDED"|"DEFERRED";updatedAt:number;baselineFavorable:number};
   forecast?: { policy:string; family:string; signalAt:number; signalPrice:number; baseNetRate:number;
     calibratedNetRate:number; remainingNetRate:number; quality:number; sizingEquity?:number };
   turn?:{version:typeof MULTI_TURN_VERSION;timeframe:TurnTimeframe;signalAt:number;entryTurnProbability:number;
@@ -134,9 +134,9 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
   if(v.turnProtection&&v.turnProtection.version!==MARKET_TURN_PROTECTION_VERSION)throw new Error("未知市场转折保护版本，保留原账户");
   if(v.marketState&&v.marketState.version!==MARKET_STATE_VERSION)throw new Error("未知组合市场状态版本，保留原账户");
   if(v.turnForecast&&v.turnForecast.version!==TURN_FORECAST_VERSION)throw new Error("未知转折预警版本，保留原账户");
-  if(v.positions.some(t=>t.profitProtection&&t.profitProtection.version!==MULTI_TURN_PROFIT_PROTECTION_VERSION))
+  if(v.positions.some(t=>t.profitProtection&&!supportedProfitVersion(t.profitProtection.version)))
     throw new Error("未知Multi-Turn利润保护版本，保留原持仓");
-  if(v.positions.some(t=>t.profitProtectionMigration&&t.profitProtectionMigration.version!==MULTI_TURN_PROFIT_PROTECTION_VERSION))
+  if(v.positions.some(t=>t.profitProtectionMigration&&!supportedProfitVersion(t.profitProtectionMigration.version)))
     throw new Error("未知Multi-Turn利润保护迁移版本，保留原持仓");
   const authority=v.strategyAuthorityVersion??"legacy-forward-rules-v1";
   return {...v,adaptationVersion:v.adaptationVersion??"legacy-forward-adaptation-v1",lastFitMeasured:v.lastFitMeasured??v.measured,
@@ -407,7 +407,7 @@ function multiTurnRule(s:ForwardState,candidate:TurnCandidate,now:number):Rule{
     armRate:Math.max(candidate.expectedMoveRate,candidate.stopRate*.75),givebackRate:Math.max(.0025,candidate.expectedMoveRate*.35),
     exitMode:"REACTION_DECAY",samples:s.turnEngine?.calibration[candidate.timeframe].count??0,trainGroups:0,checkGroups:0,
     estimatedNetRate:net,priorResponse:null,recentResponse:0,standardError:0,
-    reason:`Multi-Turn ${candidate.timeframe}：${candidate.reason}；由利润路径保护、时间—空间持仓价值、该周期转折、原始硬止损或安全寿命共同管理退出。`,
+    reason:`Multi-Turn ${candidate.timeframe}：${candidate.reason}；由时间—空间持仓价值、该周期转折、原始硬止损或安全寿命共同管理退出。`,
     mutation:"CREATE",grammar:MULTI_TURN_VERSION,liveEligible:false,authority:"MULTI_TURN",turnTimeframe:candidate.timeframe};
 }
 
@@ -423,25 +423,27 @@ function manageMultiTurn(s:ForwardState,quotes:Record<string,Quote>,now:number){
     const frame=engine.frames[t.symbol]?.[t.turn.timeframe],cfg=TURN_CONFIG[t.turn.timeframe];
     const freshFrame=frame&&frame.ready&&frame.completedAt<=now
       &&now-frame.completedAt<=Math.max(BAR_MS*2,cfg.minutes*60_000*1.5)?frame:null;
-    const spread=(q.bestAsk-q.bestBid)/Math.max((q.bestAsk+q.bestBid)/2,1e-9),modeledCost=turnModeledCost(t.turn.timeframe,spread);
-    const riskRate=t.plannedRisk/Math.max(t.notional,1e-9);
-    const entryExpectedMoveRate=t.entryContext?.expectedMoveRate??t.forecast?.baseNetRate??t.rule.armRate;
+    const spread=(q.bestAsk-q.bestBid)/Math.max((q.bestAsk+q.bestBid)/2,1e-9);
+    const modeledCost=turnModeledCost(t.turn.timeframe,spread),riskRate=t.plannedRisk/Math.max(t.notional,1e-9);
     const holdValue=freshFrame?evaluateMultiTurnHoldValue({timeframe:t.turn.timeframe,frame:freshFrame,side:t.side,
       openedAt:t.openedAt,now,returnRate:ret,favorableRate:t.favorable,modeledCostRate:modeledCost,
-      entryExpectedMoveRate,plannedRiskRate:riskRate}):null;
+      entryExpectedMoveRate:t.entryContext?.expectedMoveRate??t.rule.armRate}):null;
     if(holdValue)t.holdValue=holdValue;
-    const rawAligned=freshFrame?freshFrame.rawDirection==="NEUTRAL"||freshFrame.rawDirection===t.side:null;
+    // Keep the stable single-signal protection model. Do not sum correlated
+    // time/space scores into a second aggressive profit-retention multiplier.
     const floor=multiTurnProfitFloor(t.favorable,riskRate,modeledCost,freshFrame?{
-      continuationScore:freshFrame.continuationScore,turnProbability:freshFrame.triggerProbability,phase:freshFrame.phase,
-      rawDirectionAligned:rawAligned,edgeRatio:holdValue?.edgeRatio,directionStrength:holdValue?.directionStrength,
-      turnRisk:holdValue?.turnRisk,ageRatio:holdValue?.ageRatio,
+      continuationScore:freshFrame.continuationScore,turnProbability:freshFrame.triggerProbability,
+      phase:freshFrame.phase,rawDirectionAligned:freshFrame.rawDirection==="NEUTRAL"||freshFrame.rawDirection===t.side,
     }:null);
     if(floor){
-      const previousFloor=t.profitProtection?.floorRate??0,protectedFloor=Math.max(previousFloor,floor.floorRate);
+      const protectedFloor=Math.max(t.profitProtection?.floorRate??0,floor.floorRate);
       t.profitProtection={...floor,floorRate:protectedFloor,lockedR:protectedFloor/riskRate,
-        retentionRate:protectedFloor/Math.max(t.favorable,1e-9),
-        checkpointBand:Math.floor((protectedFloor/riskRate)*4+1e-9),
+        retentionRate:protectedFloor/Math.max(t.favorable,1e-9),checkpointBand:Math.floor(protectedFloor/riskRate*4+1e-9),
         peakR:Math.max(t.profitProtection?.peakR??0,floor.reachedR),updatedAt:now};
+      // A legacy DEFERRED marker cannot coexist with an armed floor: the
+      // checkpoint reader correctly rejects that inconsistent combination.
+      if(t.profitProtectionMigration?.state==="DEFERRED")t.profitProtectionMigration={
+        ...t.profitProtectionMigration,version:MULTI_TURN_PROFIT_PROTECTION_VERSION,state:"CURRENT",updatedAt:now};
     }
     let decision:ExitDecision|null=null;
     if(ret<=-t.rule.stopRate)decision={trigger:"HARD_STOP",reason:"Multi-Turn硬止损：当前可执行价触及该周期原始结构风险边界",boundaryRate:-t.rule.stopRate};
@@ -451,9 +453,7 @@ function manageMultiTurn(s:ForwardState,quotes:Record<string,Quote>,now:number){
       &&freshFrame.evidence.structure>=.65&&(freshFrame.evidence.cusum>=.60||freshFrame.evidence.changePoint>=.65))
       decision={trigger:"MULTI_TURN",reason:`${t.turn.timeframe}转折概率达到${(freshFrame.triggerProbability*100).toFixed(0)}%，结构破坏与序贯变化同时成立；提前退出该周期旧方向`,boundaryRate:null};
     else if(t.profitProtection&&ret<=t.profitProtection.floorRate)
-      decision={trigger:"PROFIT_GIVEBACK",
-        reason:`利润路径保护：最高顺向${(t.favorable*100).toFixed(2)}%，当前回落至${(ret*100).toFixed(2)}%，触及只能上移的保护线${(t.profitProtection.floorRate*100).toFixed(2)}%（${t.profitProtection.mode}）。`,
-        boundaryRate:t.profitProtection.floorRate};
+      decision={trigger:"PROFIT_GIVEBACK",reason:`利润路径保护：已观测最高顺向${(t.favorable*100).toFixed(2)}%，当前回落触及只能上移的保护线${(t.profitProtection.floorRate*100).toFixed(2)}%。`,boundaryRate:t.profitProtection.floorRate};
     else if(holdValue&&holdValue.action!=="HOLD")
       decision={trigger:"HOLD_VALUE",reason:`时间—空间持仓价值退出：${holdValue.reason}`,boundaryRate:null};
     else if(now-t.openedAt>=t.rule.horizon*60_000)

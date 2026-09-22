@@ -1,3 +1,14 @@
+# 2026-09-22 — recovery validated; publication in progress
+
+Branch fix/exit-rebuild-20260922 from production6f6cfa6. Confirmed live storage
+error: unknown Multi-Turn profit protection version; startedAt projection null.
+Rolled back PR376 locally then rebuilt compatible v3/v4 profit/stalled exits.
+PR377 page and caching fixes retained. No reset, mode change or private Gate call.
+Validation:845direct,212Forward, npm test including member/LIVE/equity/build and
+architecture, typecheck, lint0errors/3existing warnings, dry-run and local SQLite
+storage/member smokes pass. Final exact-head PR/main deployment still pending.
+Design/evidence:research/EXIT_RECOVERY_2026-09-22.md. Local logs in parent scratch.
+
 # 2026-09-21 — audit release deployed; catalog recovery follow-up (current)
 
 PR #366 merged as `0747bb703963c71e7fedeae013f9a82116c5a7f2`; exact-head PR run 35607181057 and main release run 35607379461 succeeded. Published tree exactly matches the locally verified 823-test repair. Three production receipts preserve account startedAt 1789939420215, 29 closed/9 open at deployment, storage.error=null and owner LIVE false/false; lastSuccessAt advances, with the third receipt back to LIVE market health.
