@@ -1,0 +1,87 @@
+name: One-shot PAPER reset 2026-09-22
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/paper-reset-once-20260922.yml"
+
+permissions:
+  contents: read
+
+env:
+  WORKER_BASE_URL: https://market-sentinel-free.alicia5574188.workers.dev
+  WRANGLER_SEND_METRICS: "false"
+  RESET_WORKER_NAME: market-sentinel-paper-reset-once
+
+jobs:
+  reset-paper:
+    if: github.event.head_commit.message == 'ops: reset PAPER account once 2026-09-22'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+          cache: npm
+      - run: npm ci
+      - name: Require LIVE fully OFF
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 15 "$WORKER_BASE_URL/__health" > "$RUNNER_TEMP/health-before.json"
+          jq -e '.runtime.liveMode.requestedEnabled == false and .runtime.liveMode.operational == false'             "$RUNNER_TEMP/health-before.json" >/dev/null
+      - name: Deploy isolated reset bridge and reset PAPER
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/paper-reset-once.mjs" <<'JS'
+          export default {
+            async fetch(_request, env) {
+              const stub = env.MARKET_STREAM.getByName("primary");
+              return stub.fetch("https://market-stream/paper-reset", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: "{}",
+              });
+            },
+          };
+          JS
+          cat > "$RUNNER_TEMP/wrangler.paper-reset.toml" <<EOF
+          name = "$RESET_WORKER_NAME"
+          main = "$RUNNER_TEMP/paper-reset-once.mjs"
+          compatibility_date = "2026-09-22"
+          workers_dev = true
+
+          [[durable_objects.bindings]]
+          name = "MARKET_STREAM"
+          class_name = "MarketStream"
+          script_name = "market-sentinel-free"
+          EOF
+          cleanup() {
+            npx wrangler delete --name "$RESET_WORKER_NAME" --force >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          npx wrangler deploy --config "$RUNNER_TEMP/wrangler.paper-reset.toml" >/dev/null
+          code="$(curl -sS --max-time 30 -X POST -o "$RUNNER_TEMP/reset-result.json" -w '%{http_code}'             "https://$RESET_WORKER_NAME.alicia5574188.workers.dev/" || true)"
+          [[ "$code" == "200" ]]
+          jq -e '.ok == true and .equity == 1000 and (.forward.positions | length) == 0 and .forward.initialEquity == 1000'             "$RUNNER_TEMP/reset-result.json" >/dev/null
+          jq -c '{ok,equity,forward:{initialEquity:.forward.initialEquity,balance:.forward.balance,equity:.forward.equity,
+            positions:(.forward.positions|length),history:(.forward.history|length),resolved:.forward.resolved,netPnl:.forward.netPnl}}'             "$RUNNER_TEMP/reset-result.json"
+      - name: Verify production resumes with LIVE still OFF
+        run: |
+          set -euo pipefail
+          for attempt in {1..12}; do
+            if curl -fsS --max-time 10 "$WORKER_BASE_URL/__health" > "$RUNNER_TEMP/health-after.json"               && jq -e '.runtime.stale == false and .runtime.liveMode.requestedEnabled == false and .runtime.liveMode.operational == false
+                and .runtime.forward.initialEquity == 1000' "$RUNNER_TEMP/health-after.json" >/dev/null; then
+              jq -c '{state:.runtime.state,stale:.runtime.stale,liveMode:.runtime.liveMode,
+                forward:{initialEquity:.runtime.forward.initialEquity,balance:.runtime.forward.balance,equity:.runtime.forward.equity,
+                  positions:(.runtime.forward.positions|length),history:(.runtime.forward.history|length),
+                  resolved:.runtime.forward.resolved,netPnl:.runtime.forward.netPnl}}' "$RUNNER_TEMP/health-after.json"
+              exit 0
+            fi
+            sleep 5
+          done
+          cat "$RUNNER_TEMP/health-after.json"
+          exit 1
