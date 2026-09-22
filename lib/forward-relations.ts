@@ -566,9 +566,11 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
         remainingSpaceRate:entryPolicy.remainingSpaceRate,costRate:cost}))return;
       reject(entryPolicy.reason);continue;
     }
-    const {price,count,quantity,notional,leverage,margin,plannedRisk,entryFee,remainingSpaceRate:remaining,quality}=entryPolicy.plan;
+    const {price,count,quantity,notional,leverage,margin,plannedRisk,entryFee,remainingSpaceRate:remaining,quality,lossRate}=entryPolicy.plan;
     const d=candidate.side==="LONG"?1:-1;
-    const rule=multiTurnRule(s,candidate,now);
+    const executableStopRate=Math.max(0,lossRate-cost);
+    const executableCandidate={...candidate,stopRate:executableStopRate};
+    const rule=multiTurnRule(s,executableCandidate,now);
     const entryFrame=s.turnEngine?.frames[candidate.symbol]?.[candidate.timeframe];
     const entryWindows=multiTurnHoldWindows(candidate.timeframe);
     const entryContext:MultiTurnEntryContext|undefined=entryFrame?{
@@ -577,7 +579,7 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
       directionConfidence:candidate.confidence,continuationScore:candidate.continuationScore,
       turnProbability:candidate.turnProbability,triggerProbability:entryFrame.triggerProbability,
       expectedMoveRate:candidate.expectedMoveRate,modeledCostRate:cost,remainingSpaceRate:remaining,
-      stopRate:candidate.stopRate,riskCap:candidate.riskCap,
+      stopRate:executableCandidate.stopRate,riskCap:candidate.riskCap,
       entryScore:opportunity.score,directionStrength:opportunity.directionStrength,spaceScore:opportunity.spaceScore,
       positionScore:opportunity.positionScore,executionScore:opportunity.executionScore,edgeRatio:opportunity.edgeRatio,
       grossRemainingSpaceRate:opportunity.grossRemainingSpaceRate,statisticalRemainingSpaceRate:opportunity.statisticalRemainingSpaceRate,
@@ -595,7 +597,7 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
     }:undefined;
     const t:Trade={id:`ft-${s.startedAt}-${s.revision+1}`,symbol:candidate.symbol,side:candidate.side,rule:structuredClone(rule),
       openedAt:now,closedAt:null,status:"OPEN",entryPrice:price,exitPrice:null,quantity,contracts:count,quantoMultiplier:meta.quantoMultiplier,
-      notional,leverage,margin,plannedRisk,stopPrice:price*(1-d*candidate.stopRate),
+      notional,leverage,margin,plannedRisk,stopPrice:candidate.stopPrice??price*(1-d*executableCandidate.stopRate),
       armPrice:price*(1+d*Math.max(candidate.expectedMoveRate,cost*1.5)),favorable:0,adverse:0,lastPrice:price,lastQuoteAt:q.observedAt,
       entryFee,exitFee:0,fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,relationFailureBars:0,lastRelationBar:candidate.completedAt,
       execution:"REAL_QUOTE_PAPER_MODEL",liveEligible:false,exitControl:newExitControl(),
