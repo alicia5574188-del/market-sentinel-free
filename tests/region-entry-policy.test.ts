@@ -38,3 +38,20 @@ test("structural invalidation is never pulled inward to fit the 5m risk boundary
   const result=run(wide,101.19,101.21);assert.equal(result.ok,false);
   if(!result.ok)assert.match(result.reason,/风险边界/);
 });
+
+
+test("MON-like late confirmation is not treated as a fresh migration opportunity",()=>{
+  const mon=base({symbol:"MON_USDT",side:"SHORT",boundary:"LOWER",signalPrice:.02624,stopPrice:.026542,
+    regionLower:.02646,regionUpper:.02687,regionCenter:.026735,regionWidth:.00041,regionWidthRate:.00041/.026735});
+  const result=run(mon,.026232,.026236);
+  assert.equal(result.ok,false);
+  if(!result.ok){assert.match(result.reason,/回踩边界|盈亏比/);assert.ok(result.remainingSpaceRate>0);}
+});
+
+test("the same confirmed migration may enter after price retests close to the old boundary",()=>{
+  const mon=base({symbol:"MON_USDT",side:"SHORT",boundary:"LOWER",signalPrice:.02624,stopPrice:.026542,
+    regionLower:.02646,regionUpper:.02687,regionCenter:.026735,regionWidth:.00041,regionWidthRate:.00041/.026735});
+  const result=run(mon,.026405,.026409);
+  assert.equal(result.ok,true);
+  if(result.ok)assert.ok(result.plan.remainingSpaceRate>result.plan.lossRate);
+});

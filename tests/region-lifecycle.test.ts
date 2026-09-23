@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { REGION_LIFECYCLE_VERSION, consumeRegionBoundary, evaluateRegionLifecycle, findLatestMatureRegion, type RegionCandle } from "../lib/region-lifecycle.ts";
+import { REGION_BAR_MS, REGION_LIFECYCLE_VERSION, REGION_MIGRATION_SIGNAL_TTL_BARS, REGION_SIGNAL_TTL_BARS, consumeRegionBoundary, evaluateRegionLifecycle, findLatestMatureRegion, type RegionCandle } from "../lib/region-lifecycle.ts";
 
 const START=Date.parse("2026-09-22T00:00:00Z")/1000;
 const bar=(i:number,close:number,prev=close):RegionCandle=>({
@@ -47,6 +47,16 @@ test("two completed closes outside the same boundary create one migration event"
   assert.equal(next.state.status,"ACCEPTED_UP");assert.equal(next.signals.length,1);
   assert.equal(next.signals[0]!.kind,"MIGRATION");assert.equal(next.signals[0]!.side,"LONG");
   assert.equal(next.signals[0]!.boundary,"UPPER");
+});
+
+test("migration event remains valid longer than rejection so a near-boundary retest can execute",()=>{
+  const base=region(),first=evaluateRegionLifecycle({symbol:"BTC_USDT",rows:base,now:nowFor(base),costRate:.0022});
+  const z=first.state.zone!,rows=[...base];let prev=rows.at(-1)!.close;
+  for(const close of[z.upper+z.width*.18,z.upper+z.width*.28]){rows.push(bar(rows.length,close,prev));prev=close;}
+  const next=evaluateRegionLifecycle({symbol:"BTC_USDT",rows,prior:first.state,now:nowFor(rows),costRate:.0022});
+  assert.equal(next.signals.length,1);
+  assert.equal(next.signals[0]!.expiresAt-next.signals[0]!.completedAt,REGION_MIGRATION_SIGNAL_TTL_BARS*REGION_BAR_MS);
+  assert.ok(REGION_MIGRATION_SIGNAL_TTL_BARS>REGION_SIGNAL_TTL_BARS);
 });
 
 test("an outside probe that is rejected back inside creates a center-reversion event",()=>{
