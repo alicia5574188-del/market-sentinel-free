@@ -1,0 +1,87 @@
+{
+  "verifiedAt": "2026-09-23T13:54:27.231570+00:00",
+  "productionSha": "4b1ec64a36c470384b975c01263e2f6526fa1c7c",
+  "candidateSha": "1751924880a279854b8f18c608ca870bbfb3361b",
+  "pr": 411,
+  "prRun": 35869271149,
+  "mainRun": 35869462387,
+  "cloudflareVersion": "760633d2-10d5-4efa-b472-92a95550c49f",
+  "validation": {
+    "direct": 979,
+    "forward": 213,
+    "equity": 61,
+    "member": 49,
+    "liveParity": 130,
+    "architectureMigration": 19,
+    "typecheck": "passed",
+    "lintErrors": 0,
+    "build": "passed",
+    "dryRun": "passed",
+    "ci": "success",
+    "homepageHTTP": 200,
+    "mainJSHeadHTTP": 200
+  },
+  "observations": [
+    {
+      "sample": "health-predeploy.json",
+      "ok": true,
+      "buildSha": "235c92e816b3a8af3e6c29ad70490a11d6cc0133",
+      "lastSuccessAt": 1790171218623,
+      "startedAt": 1790157902785,
+      "lastCycleAt": 1790171196875,
+      "persistedAt": 1790171196875,
+      "storageError": null,
+      "resolved": 8,
+      "openCount": 0,
+      "scanned": 30,
+      "liveMode": {
+        "requestedEnabled": false,
+        "operational": false
+      },
+      "enabledAt": 1790160169434
+    },
+    {
+      "sample": "health-after-1.json",
+      "ok": true,
+      "buildSha": "4b1ec64a36c470384b975c01263e2f6526fa1c7c",
+      "lastSuccessAt": 1790171439779,
+      "startedAt": 1790157902785,
+      "lastCycleAt": 1790171196875,
+      "persistedAt": 1790171196875,
+      "storageError": null,
+      "resolved": 8,
+      "openCount": 0,
+      "scanned": 30,
+      "liveMode": {
+        "requestedEnabled": false,
+        "operational": false
+      },
+      "enabledAt": 1790160169434
+    },
+    {
+      "sample": "health-after-2.json",
+      "ok": true,
+      "buildSha": "4b1ec64a36c470384b975c01263e2f6526fa1c7c",
+      "lastSuccessAt": 1790171564396,
+      "startedAt": 1790157902785,
+      "lastCycleAt": 1790171491115,
+      "persistedAt": 1790171491115,
+      "storageError": null,
+      "resolved": 8,
+      "openCount": 0,
+      "scanned": 30,
+      "liveMode": {
+        "requestedEnabled": true,
+        "operational": true
+      },
+      "enabledAt": 1790171525732
+    }
+  ],
+  "limits": [
+    "Screenshot-derived scenarios are deterministic counterexamples, not complete historical order replay.",
+    "Available research snapshot exported at 1790140967485 predates the reported orders.",
+    "No private Gate verification trades or owner/member switch mutations performed.",
+    "Pre-deploy OFF persisted in first post-deploy sample; a later new activation was observed after deployment and was not performed by this session.",
+    "Passing tests do not prove future profitability."
+  ]
+}
