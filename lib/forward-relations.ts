@@ -15,7 +15,8 @@ import { FORWARD_ADAPTIVE_VERSION, adaptiveCandidatePriority, adaptiveEntryAdjus
   familyRiskHeadroom, inspectRapidCondition, sampleRiskMultiplier, type AdaptiveCandidate, type AdaptiveLane } from "./forward-adaptive.ts";
 import { MULTI_TURN_VERSION, TURN_CONFIG, TURN_TIMEFRAMES, evaluateMultiTurn, initialMultiTurn,
   type MultiTurnState, type TurnCandidate, type TurnEvidence, type TurnPhase, type TurnSide, type TurnTimeframe } from "./multi-turn-engine.ts";
-import { MULTI_TURN_PROFIT_PROTECTION_VERSION, supportedProfitVersion, type MultiTurnProfitVersion, type MultiTurnTradeProfitProtection } from "./multi-turn-profit-protection.ts";
+import { MULTI_TURN_PROFIT_PROTECTION_VERSION, REGION_MIGRATION_PROFIT_PROTECTION_VERSION, regionMigrationProfitFloor, supportedProfitVersion,
+  type MultiTurnProfitVersion, type MultiTurnTradeProfitProtection } from "./multi-turn-profit-protection.ts";
 import { multiTurnHoldWindows, type MultiTurnHoldValue } from "./multi-turn-hold-value.ts";
 import { evaluateMultiTurnExitController } from "./multi-turn-exit-controller.ts";
 import { evaluateMultiTurnClock } from "./multi-turn-clock.ts";
@@ -447,9 +448,32 @@ function manageMultiTurn(s:ForwardState,quotes:Record<string,Quote>,now:number){
         }
       }
 
+      if(regionContext.regionKind==="MIGRATION"){
+        const spread=(q.bestAsk-q.bestBid)/Math.max((q.bestAsk+q.bestBid)/2,1e-9);
+        const modeledCost=turnModeledCost("5m",spread),riskRate=t.plannedRisk/Math.max(t.notional,1e-9);
+        const next=regionMigrationProfitFloor(t.favorable,riskRate,modeledCost),prior=t.profitProtection??null;
+        if(next){
+          const floorRate=Math.max(prior?.floorRate??0,next.floorRate);
+          t.profitProtection={...next,version:REGION_MIGRATION_PROFIT_PROTECTION_VERSION,
+            floorRate,lockedR:floorRate/riskRate,
+            retentionRate:floorRate/Math.max(t.favorable,1e-9),
+            checkpointBand:Math.floor(floorRate/riskRate*4+1e-9),
+            peakR:Math.max(prior?.peakR??0,next.reachedR),updatedAt:now};
+          const floorPrice=t.entryPrice*(1+d*floorRate);
+          if(t.side==="LONG"){
+            if(floorPrice>t.stopPrice&&floorPrice<px)t.stopPrice=floorPrice;
+          }else if(floorPrice<t.stopPrice&&floorPrice>px)t.stopPrice=floorPrice;
+        }
+      }
+
       let decision:ExitDecision|null=null;
+      const profitHit=regionContext.regionKind==="MIGRATION"&&t.profitProtection!=null&&ret<=t.profitProtection.floorRate;
       const stopHit=t.side==="LONG"?px<=t.stopPrice:px>=t.stopPrice;
-      if(stopHit){
+      if(profitHit){
+        decision={trigger:"PROFIT_GIVEBACK",
+          reason:`区域迁移利润保护：最高浮盈已达${(t.favorable*100).toFixed(2)}%，当前回落触及只能上移的利润保护线${(t.profitProtection!.floorRate*100).toFixed(2)}%。`,
+          boundaryRate:t.profitProtection!.floorRate};
+      }else if(stopHit){
         decision={trigger:"HARD_STOP",reason:"区域结构失效：当前可执行价触及只能向盈利方向移动的防守位",
           boundaryRate:d*(t.stopPrice/t.entryPrice-1)};
       }else if(regionContext.regionKind==="REJECTION"&&regionContext.regionCenter!=null){
