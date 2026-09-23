@@ -3,7 +3,7 @@ import { registerHooks } from "node:module";
 import test from "node:test";
 import { ancillaryIsFresh, ancillarySchedule, emptySymbolMemory, optionalEvidenceIsFresh } from "../lib/liquidity-runtime.ts";
 import { remainingStressRisk, STALE_AFTER_MS, type PaperPlan, type PaperPosition } from "../lib/liquidity-core.ts";
-import { initialForward, type Trade } from "../lib/forward-relations.ts";
+import { forwardUrgentMinuteSymbols, initialForward, type Trade } from "../lib/forward-relations.ts";
 import type { ArenaTrade } from "../lib/strategy-arena.ts";
 import { completedCandleStrategyCandidate } from "../lib/market-regime.ts";
 
@@ -92,7 +92,7 @@ test("AnchorFlow READY and RETEST share the urgent one-minute data path without 
       RETEST_USDT:{symbol:"RETEST_USDT",phase:"RETEST",readyAt:null,createdAt:now-120_000},
     },regionLaunches:{}};
   stream.runtime.liquidUniverse=["READY_USDT","RETEST_USDT"];
-  const urgent=stream.forwardUrgentMinuteSymbols(stream.forwardState,stream.runtime.liquidUniverse);
+  const urgent=forwardUrgentMinuteSymbols(stream.forwardState,stream.runtime.liquidUniverse);
   assert.deepEqual(urgent.slice(0,2),["READY_USDT","RETEST_USDT"]);
 });
 
