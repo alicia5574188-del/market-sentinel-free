@@ -1,0 +1,345 @@
+{
+  "version": "launch-five-minute-release-v1",
+  "date": "2026-09-23",
+  "startedAt": "2026-09-23T15:32:57Z",
+  "pullRequest": 413,
+  "baseSha": "42ca9bdf1ddec2d99116add7f570f526339ade85",
+  "candidateSha": "ce0c15beb8c634abc0ca741b1a7eb5f42cc34bae",
+  "mainSha": "e8fabe2af7687b0b1c64d710b0fa1d33d56bbf09",
+  "tree": "4ca37a864b3c0dde440379eacaa53fee347d169a",
+  "strategyMarker": "region-launch-v3",
+  "prRun": 35884962523,
+  "mainRun": 35885245580,
+  "validation": {
+    "directTests": 1010,
+    "focusedLaunchTests": 36,
+    "equityTests": 61,
+    "memberTests": 49,
+    "liveParityTests": 130,
+    "architectureAndMigrationTests": 19,
+    "nativeWorkerdFeedSmoke": "passed",
+    "typecheck": "passed",
+    "lintErrors": 0,
+    "existingLintWarnings": 16,
+    "build": "passed",
+    "dryRun": "passed"
+  },
+  "scope": {
+    "fullWickBoundaries": true,
+    "frozenObservedEpisodeBounds": true,
+    "fiveMinuteFirst": true,
+    "fastInitialBodyMeanRangeMultiple": 3,
+    "slowerClosedThenRestart": true,
+    "wholePullbackExtremes": true,
+    "pendingReadyRevalidated": true,
+    "pendingV2Fenced": true,
+    "consumedMotherRetained": true
+  },
+  "unchanged": {
+    "openPositionLifecycle": true,
+    "accountIdentity": true,
+    "history": true,
+    "stopRiskSizingChasePolicy": true,
+    "gateDualTransport": true,
+    "workerMethods": true,
+    "liveAndMemberControls": true
+  },
+  "privateGateTests": 0,
+  "switchMutations": 0,
+  "accountResets": 0,
+  "limitations": [
+    "The screenshot is not an exact historical tick replay and cannot prove the specific order's full trigger context.",
+    "The unfinished five-minute fast route can still fail after entry; future candle shape is not known in advance.",
+    "Tests establish implementation behavior and compatibility, not future profit or guaranteed orders."
+  ],
+  "workerVersionId": "deeb1496-47ce-41be-97f1-e7887b02dc4f",
+  "deployedAt": "2026-09-23T15:58:55.2903957Z",
+  "mainConclusion": "success",
+  "samples": {
+    "before": {
+      "buildSha": "42ca9bdf1ddec2d99116add7f570f526339ade85",
+      "state": "LIVE",
+      "stale": false,
+      "lastError": null,
+      "lastSuccessAt": 1790177611255,
+      "authorityReady": true,
+      "forward": {
+        "version": "forward-relations-v1.0",
+        "policyVersion": "participation-execution-v1.2",
+        "strategyAuthorityVersion": "multi-turn-v1",
+        "executionVersion": "anchor-flow-v1",
+        "regionVersion": "region-lifecycle-v1",
+        "liveEligible": false,
+        "startedAt": 1790157902785,
+        "initialEquity": 1000,
+        "balance": 982.8512993060967,
+        "lastCycleAt": 1790177490617,
+        "resolved": 9,
+        "openCount": 1,
+        "anchorFlowCount": 2,
+        "executableEventCount": 2,
+        "exitPolicyVersion": null,
+        "exitPolicyActivatedAt": null,
+        "timelyExitOpenCount": 0,
+        "inheritedExitOpenCount": 0,
+        "storage": {
+          "persistedAt": 1790177490617,
+          "error": null
+        }
+      },
+      "liveMode": {
+        "requestedEnabled": true,
+        "operational": true
+      },
+      "realtimeReadiness": {
+        "capacity": 11,
+        "actionableMarkets": 11,
+        "warmingMarkets": 0,
+        "protectedMarkets": 1,
+        "protectedMarketsReady": true,
+        "missingProtectedMarkets": []
+      },
+      "marketDataTransport": {
+        "version": "gate-dual-transport-v1",
+        "connected": true,
+        "lastMessageAt": 1790177614079,
+        "lastError": null,
+        "retryAt": null,
+        "connections": 1,
+        "subscriptions": 47,
+        "acceptedBooks": 38467,
+        "acceptedCandles": 167,
+        "rejected": 61,
+        "websocketUses": 2683,
+        "restUses": 70,
+        "freshBooks": 11
+      },
+      "radar": {
+        "scanned": 30,
+        "lastScanAt": 1790177578837,
+        "lastAttemptAt": 1790177578837,
+        "consecutiveFailures": 0,
+        "retryAt": null,
+        "entryFresh": true
+      }
+    },
+    "predeploy": {
+      "buildSha": "42ca9bdf1ddec2d99116add7f570f526339ade85",
+      "state": "LIVE",
+      "stale": false,
+      "lastError": null,
+      "lastSuccessAt": 1790178742017,
+      "authorityReady": true,
+      "forward": {
+        "version": "forward-relations-v1.0",
+        "policyVersion": "participation-execution-v1.2",
+        "strategyAuthorityVersion": "multi-turn-v1",
+        "executionVersion": "anchor-flow-v1",
+        "regionVersion": "region-lifecycle-v1",
+        "liveEligible": false,
+        "startedAt": 1790157902785,
+        "initialEquity": 1000,
+        "balance": 988.7709066485781,
+        "lastCycleAt": 1790178690683,
+        "resolved": 10,
+        "openCount": 0,
+        "anchorFlowCount": 7,
+        "executableEventCount": 4,
+        "exitPolicyVersion": null,
+        "exitPolicyActivatedAt": null,
+        "timelyExitOpenCount": 0,
+        "inheritedExitOpenCount": 0,
+        "storage": {
+          "persistedAt": 1790178690683,
+          "error": null
+        }
+      },
+      "liveMode": {
+        "requestedEnabled": true,
+        "operational": true
+      },
+      "realtimeReadiness": {
+        "capacity": 11,
+        "actionableMarkets": 11,
+        "warmingMarkets": 0,
+        "protectedMarkets": 0,
+        "protectedMarketsReady": true,
+        "missingProtectedMarkets": []
+      },
+      "marketDataTransport": {
+        "version": "gate-dual-transport-v1",
+        "connected": true,
+        "lastMessageAt": 1790178742510,
+        "lastError": null,
+        "retryAt": null,
+        "connections": 1,
+        "subscriptions": 52,
+        "acceptedBooks": 96250,
+        "acceptedCandles": 441,
+        "rejected": 61,
+        "websocketUses": 6440,
+        "restUses": 158,
+        "freshBooks": 11
+      },
+      "radar": {
+        "scanned": 30,
+        "lastScanAt": 1790178682924,
+        "lastAttemptAt": 1790178682924,
+        "consecutiveFailures": 0,
+        "retryAt": null,
+        "entryFresh": true
+      }
+    },
+    "after-1": {
+      "buildSha": "e8fabe2af7687b0b1c64d710b0fa1d33d56bbf09",
+      "state": "LIVE",
+      "stale": false,
+      "lastError": null,
+      "lastSuccessAt": 1790179176053,
+      "authorityReady": true,
+      "forward": {
+        "version": "forward-relations-v1.0",
+        "policyVersion": "participation-execution-v1.2",
+        "strategyAuthorityVersion": "multi-turn-v1",
+        "executionVersion": "anchor-flow-v1",
+        "regionVersion": "region-lifecycle-v1",
+        "liveEligible": false,
+        "startedAt": 1790157902785,
+        "initialEquity": 1000,
+        "balance": 987.9429899453118,
+        "lastCycleAt": 1790179140042,
+        "resolved": 10,
+        "openCount": 2,
+        "anchorFlowCount": 8,
+        "executableEventCount": 3,
+        "exitPolicyVersion": null,
+        "exitPolicyActivatedAt": null,
+        "timelyExitOpenCount": 0,
+        "inheritedExitOpenCount": 0,
+        "storage": {
+          "persistedAt": 1790179140042,
+          "error": null
+        }
+      },
+      "liveMode": {
+        "requestedEnabled": true,
+        "operational": true
+      },
+      "realtimeReadiness": {
+        "capacity": 11,
+        "actionableMarkets": 10,
+        "warmingMarkets": 1,
+        "protectedMarkets": 2,
+        "protectedMarketsReady": true,
+        "missingProtectedMarkets": []
+      },
+      "marketDataTransport": {
+        "version": "gate-dual-transport-v1",
+        "connected": true,
+        "lastMessageAt": 1790179176109,
+        "lastError": null,
+        "retryAt": null,
+        "connections": 1,
+        "subscriptions": 52,
+        "acceptedBooks": 1925,
+        "acceptedCandles": 11,
+        "rejected": 0,
+        "websocketUses": 164,
+        "restUses": 12,
+        "freshBooks": 11
+      },
+      "radar": {
+        "scanned": 30,
+        "lastScanAt": 1790179127810,
+        "lastAttemptAt": 1790179127810,
+        "consecutiveFailures": 0,
+        "retryAt": null,
+        "entryFresh": true
+      }
+    },
+    "after-2": {
+      "buildSha": "e8fabe2af7687b0b1c64d710b0fa1d33d56bbf09",
+      "state": "LIVE",
+      "stale": false,
+      "lastError": null,
+      "lastSuccessAt": 1790179230976,
+      "authorityReady": true,
+      "forward": {
+        "version": "forward-relations-v1.0",
+        "policyVersion": "participation-execution-v1.2",
+        "strategyAuthorityVersion": "multi-turn-v1",
+        "executionVersion": "anchor-flow-v1",
+        "regionVersion": "region-lifecycle-v1",
+        "liveEligible": false,
+        "startedAt": 1790157902785,
+        "initialEquity": 1000,
+        "balance": 987.9429899453118,
+        "lastCycleAt": 1790179140042,
+        "resolved": 10,
+        "openCount": 2,
+        "anchorFlowCount": 8,
+        "executableEventCount": 3,
+        "exitPolicyVersion": null,
+        "exitPolicyActivatedAt": null,
+        "timelyExitOpenCount": 0,
+        "inheritedExitOpenCount": 0,
+        "storage": {
+          "persistedAt": 1790179140042,
+          "error": null
+        }
+      },
+      "liveMode": {
+        "requestedEnabled": true,
+        "operational": true
+      },
+      "realtimeReadiness": {
+        "capacity": 11,
+        "actionableMarkets": 11,
+        "warmingMarkets": 0,
+        "protectedMarkets": 2,
+        "protectedMarketsReady": true,
+        "missingProtectedMarkets": []
+      },
+      "marketDataTransport": {
+        "version": "gate-dual-transport-v1",
+        "connected": true,
+        "lastMessageAt": 1790179232948,
+        "lastError": null,
+        "retryAt": null,
+        "connections": 1,
+        "subscriptions": 52,
+        "acceptedBooks": 4974,
+        "acceptedCandles": 52,
+        "rejected": 0,
+        "websocketUses": 369,
+        "restUses": 16,
+        "freshBooks": 11
+      },
+      "radar": {
+        "scanned": 30,
+        "lastScanAt": 1790179188558,
+        "lastAttemptAt": 1790179188558,
+        "consecutiveFailures": 0,
+        "retryAt": null,
+        "entryFresh": true
+      }
+    }
+  },
+  "acceptance": {
+    "sameSourceAccount": true,
+    "historyNotReset": true,
+    "ownerLiveIntentUnchanged": true,
+    "lastSuccessAdvanced": true,
+    "strategyPersistedAfterDeployment": true,
+    "strategyPersistedAt": "2026-09-23T15:59:00.042Z",
+    "storageError": null,
+    "runtimeError": null,
+    "gateStreamConnected": true,
+    "readyMarkets": 11,
+    "protectedMarketsReady": true,
+    "scannedMarkets": 30,
+    "closedPositions": 10,
+    "openPositions": 2
+  },
+  "continuityNote": "The pre-deploy sample at15:52 had10closed/0open. Post-release samples have10closed/2open and balance987.9429899453118. The system continued trading normally during release; public metadata alone cannot identify those orders' strategy or exact opening revision. No claim that these are new v3 validation trades. No account-reset or private test-trade action occurred."
+}
