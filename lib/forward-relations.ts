@@ -15,8 +15,8 @@ import { FORWARD_ADAPTIVE_VERSION, adaptiveCandidatePriority, adaptiveEntryAdjus
   familyRiskHeadroom, inspectRapidCondition, sampleRiskMultiplier, type AdaptiveCandidate, type AdaptiveLane } from "./forward-adaptive.ts";
 import { MULTI_TURN_VERSION, TURN_CONFIG, TURN_TIMEFRAMES, evaluateMultiTurn, initialMultiTurn,
   type MultiTurnState, type TurnCandidate, type TurnEvidence, type TurnPhase, type TurnSide, type TurnTimeframe } from "./multi-turn-engine.ts";
-import { ANCHOR_FLOW_PROFIT_PROTECTION_VERSION, MULTI_TURN_PROFIT_PROTECTION_VERSION, REGION_MIGRATION_PROFIT_PROTECTION_VERSION,
-  anchorFlowProfitFloor, regionMigrationProfitFloor, supportedProfitVersion,
+import { ANCHOR_FLOW_PROFIT_PROTECTION_VERSION, MULTI_TURN_PROFIT_PROTECTION_VERSION, REGION_LAUNCH_PROFIT_PROTECTION_VERSION,
+  REGION_MIGRATION_PROFIT_PROTECTION_VERSION, anchorFlowProfitFloor, regionLaunchProfitFloor, regionMigrationProfitFloor, supportedProfitVersion,
   type MultiTurnProfitVersion, type MultiTurnTradeProfitProtection } from "./multi-turn-profit-protection.ts";
 import { multiTurnHoldWindows, type MultiTurnHoldValue } from "./multi-turn-hold-value.ts";
 import { evaluateMultiTurnExitController } from "./multi-turn-exit-controller.ts";
@@ -31,6 +31,8 @@ import { REGION_LIFECYCLE_VERSION, consumeRegionBoundary, evaluateRegionUniverse
 import { evaluateRegionEntryPolicy } from "./region-entry-policy.ts";
 import { ANCHOR_FLOW_VERSION, advanceAnchorFlowUniverse, anchorFlowExecutableProofRate,
   type AnchorFlowEntrySignal, type AnchorFlowState } from "./anchor-flow.ts";
+import { REGION_LAUNCH_VERSION, advanceRegionLaunchQuotes, advanceRegionLaunchUniverse, consumeRegionLaunch, regionLaunchValidationProofRate,
+  type RegionLaunchSignal, type RegionLaunchState } from "./region-launch.ts";
 // The storage schema stays v1.0 so an algorithm upgrade cannot reset the ledger.
 export const FORWARD_VERSION = "forward-relations-v1.0";
 export const FORWARD_GRAMMAR = "conditional-response-conjunction-v1";
@@ -55,7 +57,7 @@ export type Rule = { id: string; signature: string; parentId: string | null; ver
   grammar: string; liveEligible: false; evidence?: Evidence; adaptiveLane?:AdaptiveLane;
   authority?:"LEGACY_FORWARD"|"MULTI_TURN";turnTimeframe?:TurnTimeframe };
 export type MultiTurnEntryContext = {
-  version:"multi-turn-entry-context-v1"|"direction-space-entry-context-v2"|"region-lifecycle-entry-v1"|"anchor-flow-entry-v1";capturedAt:number;timeframe:TurnTimeframe;side:"LONG"|"SHORT";
+  version:"multi-turn-entry-context-v1"|"direction-space-entry-context-v2"|"region-lifecycle-entry-v1"|"anchor-flow-entry-v1"|"region-launch-entry-v1";capturedAt:number;timeframe:TurnTimeframe;side:"LONG"|"SHORT";
   phase:TurnPhase;signalAt:number;signalPrice:number;reason:string;directionConfidence:number;continuationScore:number;
   turnProbability:number;triggerProbability:number;expectedMoveRate:number;modeledCostRate:number;remainingSpaceRate:number;
   stopRate:number;riskCap:number;bestHoldMinutes:number;strongExtensionMinutes:number;hardExtensionMinutes:number;
@@ -65,6 +67,8 @@ export type MultiTurnEntryContext = {
   regionVersion?:typeof REGION_LIFECYCLE_VERSION;regionKind?:"MIGRATION"|"REJECTION";regionId?:string;regionBoundary?:"UPPER"|"LOWER";
   regionConfirmedAt?:number;regionLower?:number;regionUpper?:number;regionCenter?:number;regionWidth?:number;
   anchorRetestAt?:number;anchorRestartLevel?:number;anchorPullbackExtreme?:number;directionFrameAt?:number;trendFrameAt?:number;
+  launchTriggerPrice?:number;launchCompressionLower?:number;launchCompressionUpper?:number;launchCompressionBars?:number;
+  launchFailedDepartures?:number;launchImpulseRate?:number;launchConfirmationMs?:number;launchMaxChaseRate?:number;
   evidence:TurnEvidence;
   timeframeStates:Array<{timeframe:TurnTimeframe;direction:TurnSide;phase:TurnPhase;directionConfidence:number;
     continuationScore:number;turnProbability:number;triggerProbability:number;expectedMoveRate:number;atrRate:number;
@@ -78,7 +82,7 @@ export type Trade = { id: string; symbol: string; side: "LONG" | "SHORT"; rule: 
   relationFailureBars: number; lastRelationBar: number; execution: "REAL_QUOTE_PAPER_MODEL"; liveEligible: false;
   exitControl?: ExitControl; exitAudit?: ExitAudit; profitProtection?:MultiTurnTradeProfitProtection; holdValue?:MultiTurnHoldValue;
   entryContext?:MultiTurnEntryContext;
-  entryValidation?:{version:"anchor-entry-validation-v1";dueAt:number;evaluatedAt:number|null;passed:boolean|null};
+  entryValidation?:{version:"anchor-entry-validation-v1"|"region-launch-entry-validation-v1";dueAt:number;evaluatedAt:number|null;passed:boolean|null};
   profitProtectionMigration?:{version:MultiTurnProfitVersion;state:"CURRENT"|"GUARDED"|"DEFERRED";updatedAt:number;baselineFavorable:number};
   forecast?: { policy:string; family:string; signalAt:number; signalPrice:number; baseNetRate:number;
     calibratedNetRate:number; remainingNetRate:number; quality:number; sizingEquity?:number };
@@ -101,6 +105,7 @@ export type ForwardState = { version: string; startedAt: number; revision: numbe
   strategyAuthorityVersion?:string;turnEngine?:MultiTurnState;entryOpportunities?:MultiTurnEntryOpportunity[];turnLastEntryBars?:Record<string,number>;turnSymbolExitAt?:Record<string,number>;cutoverAt?:number;
   regionVersion?:string;regionInitializedAt?:number;regionLifecycles?:Record<string,RegionLifecycleState>;regionSignals?:RegionEntrySignal[];
   executionVersion?:string;anchorFlows?:Record<string,AnchorFlowState>;anchorConsumed?:Record<string,number>;
+  regionLaunchVersion?:string;regionLaunches?:Record<string,RegionLaunchState>;regionLaunchSignals?:RegionLaunchSignal[];
   turnRotationBlockedUntil?:Record<string,number>;
   rotationState?:{version:typeof MULTI_TURN_ROTATION_VERSION;lastAt:number;count:number;lastFrom:string|null;lastTo:string|null};
   policyVersion?:string; feedback?:Feedback[]; evidenceDiagnostics?:EvidenceDiagnostics;
@@ -143,6 +148,7 @@ export function initialMultiTurnForward(now:number):ForwardState{
   s.turnRotationBlockedUntil={};s.rotationState={version:MULTI_TURN_ROTATION_VERSION,lastAt:0,count:0,lastFrom:null,lastTo:null};s.cutoverAt=now;
   s.regionVersion=REGION_LIFECYCLE_VERSION;s.regionInitializedAt=now;s.regionLifecycles={};s.regionSignals=[];
   s.executionVersion=ANCHOR_FLOW_VERSION;s.anchorFlows={};s.anchorConsumed={};
+  s.regionLaunchVersion=REGION_LAUNCH_VERSION;s.regionLaunches={};s.regionLaunchSignals=[];
   s.latestReason="AnchorFlow 已启动：1h/15m只否决有置信度的明确反向，5m区域负责位置；顺向反应先进入READY，只有真实开仓才消费。";
   event(s,now,"START",ANCHOR_FLOW_VERSION,s.latestReason);return s;
 }
@@ -168,6 +174,7 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
       regionVersion:v.regionVersion,regionInitializedAt:v.regionInitializedAt,
       regionLifecycles:v.regionLifecycles??{},regionSignals:Array.isArray(v.regionSignals)?v.regionSignals:[],
       executionVersion:v.executionVersion,anchorFlows:v.anchorFlows??{},anchorConsumed:v.anchorConsumed??{},
+      regionLaunchVersion:v.regionLaunchVersion,regionLaunches:v.regionLaunches??{},regionLaunchSignals:Array.isArray(v.regionLaunchSignals)?v.regionLaunchSignals:[],
       turnSymbolExitAt:v.turnSymbolExitAt??{},
       turnRotationBlockedUntil:v.turnRotationBlockedUntil??{},
       rotationState:v.rotationState?.version===MULTI_TURN_ROTATION_VERSION?v.rotationState:
