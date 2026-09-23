@@ -11,7 +11,7 @@ import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
   PAPER_BANKRUPTCY_EQUITY, PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
-import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, isGateReadTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
 import { LIVE_SESSION_VERSION, establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, sameLiveSession, type LiveSession } from "../lib/live-session.ts";
 import type { GateSizeRules, SizeDiagnostic } from "../lib/gate-quantity.ts";
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
@@ -222,6 +222,8 @@ type LiveRuntime = {
   activation?: LiveSession | null;
   lastSyncAt: number | null;
   lastError: string | null;
+  readTimeoutStreak?: number;
+  lastReadTimeoutAt?: number | null;
   equity: number | null;
   available: number | null;
   credentialConfigured: boolean;
@@ -233,7 +235,7 @@ type LiveRuntime = {
 
 function initialLiveState(): LiveRuntime {
   return { recordEpochVersion:null,recordEpochAt:null,requestedEnabled: false, operational: false, changedAt: null, lastSyncAt: null, lastError: null,
-    equity: null, available: null, credentialConfigured: false, entries: {}, positions: {}, entrySkips: {}, auditEvents: [] };
+    readTimeoutStreak:0,lastReadTimeoutAt:null,equity: null, available: null, credentialConfigured: false, entries: {}, positions: {}, entrySkips: {}, auditEvents: [] };
 }
 
 function gateLabelFromError(error: unknown) {
@@ -248,6 +250,9 @@ function definitiveGateRejection(error: unknown) {
 
 function liveFailureRequiresOff(error: unknown) {
   return /未纳管|与模拟账户订单不一致|方向与系统记录冲突|撤单未确认|系统挂单未撤销/.test(safeError(error));
+}
+function transientLiveReadMessage(value:string|null|undefined){
+  return Boolean(value&&(/The operation was aborted due to timeout|Gate只读核对超时|Gate账户核对连续\d+轮超时/.test(value)));
 }
 
 type RuntimeState = {
@@ -2160,6 +2165,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // protection of an already-mapped position.
     const client = await this.gateLive();
     let snapshot = await client.snapshot();
+    this.runtime.live.readTimeoutStreak=0;
+    this.runtime.live.lastReadTimeoutAt=null;
+    if(transientLiveReadMessage(this.runtime.live.lastError))this.runtime.live.lastError=null;
     this.turnoverAccountUser=snapshot.account.user==null?null:String(snapshot.account.user);
     const knownTags = new Set([
       ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status)
@@ -3226,15 +3234,33 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         try {
           await this.syncLive(Date.now());
         } catch (error) {
-          const message = safeError(error);
-          const blocked=liveFailureRequiresOff(error);
-          const shouldRecord = this.runtime.live.lastError !== message || this.runtime.live.operational;
-          this.runtime.live.operational = false;
-          this.runtime.live.lastError = message;
-          if (shouldRecord) this.recordLiveAudit({ observedAt: Date.now(), symbol: null, planId: null,
-            stage: "LIVE_CONTROL", level: "RECOVERING",
-            reason: blocked ? `账户纳管冲突，执行暂停但不改写所有者开关：${message}`
-              : `实盘核对暂时失败，所有者开关选择保持不变：${message}`, error });
+          if(isGateReadTimeoutError(error)){
+            const streak=Math.min(99,(this.runtime.live.readTimeoutStreak??0)+1),at=Date.now();
+            this.runtime.live.readTimeoutStreak=streak;this.runtime.live.lastReadTimeoutAt=at;
+            if(streak<3){
+              // A single slow Gate read is not an execution failure. Keep the
+              // last confirmed LIVE state and retry on the next 2s alarm. No
+              // mutation/order is retried here and no red execution error is published.
+              if(transientLiveReadMessage(this.runtime.live.lastError))this.runtime.live.lastError=null;
+            }else{
+              const message=`Gate账户核对连续${streak}轮超时；已暂停新增复制并继续保留已有交易所原生保护，Owner开关保持不变。`;
+              const shouldRecord=this.runtime.live.lastError!==message||this.runtime.live.operational;
+              this.runtime.live.operational=false;this.runtime.live.lastError=message;
+              if(shouldRecord)this.recordLiveAudit({observedAt:at,symbol:null,planId:null,stage:"LIVE_CONTROL",level:"RECOVERING",
+                reason:message,error});
+            }
+          }else{
+            this.runtime.live.readTimeoutStreak=0;this.runtime.live.lastReadTimeoutAt=null;
+            const message = safeError(error);
+            const blocked=liveFailureRequiresOff(error);
+            const shouldRecord = this.runtime.live.lastError !== message || this.runtime.live.operational;
+            this.runtime.live.operational = false;
+            this.runtime.live.lastError = message;
+            if (shouldRecord) this.recordLiveAudit({ observedAt: Date.now(), symbol: null, planId: null,
+              stage: "LIVE_CONTROL", level: "RECOVERING",
+              reason: blocked ? `账户纳管冲突，执行暂停但不改写所有者开关：${message}`
+                : `实盘核对暂时失败，所有者开关选择保持不变：${message}`, error });
+          }
         } finally {
           subrequests += Math.max(0, (this.liveClient?.requestCount ?? liveRequestsBefore) - liveRequestsBefore);
         }
