@@ -58,7 +58,7 @@ export function rankMultiTurnUniverse(rows:MultiTurnUniverseTicker[],limit=30):R
 
 
 export type AnchorOpportunityUniverseRow=MultiTurnUniverseTicker&{
-  selectionSource:"LOCKED_ANCHOR"|"ACTIVITY"|"EXPLORATION";
+  selectionSource:"LOCKED_ANCHOR"|"MARKET_CORE"|"LIQUIDITY"|"ACTIVITY"|"EXPLORATION";
   activityScore:number;
   range24hRate:number;
   liquidityFloorUsd:number;
@@ -79,9 +79,11 @@ export function selectAnchorOpportunityUniverse(input:{
   rows:MultiTurnUniverseTicker[];
   limit?:number;
   lockedSymbols?:Iterable<string>;
+  coreSymbols?:Iterable<string>;
   currentSymbols?:Iterable<string>;
   rotationSeed?:number;
   explorationSlots?:number;
+  liquiditySlots?:number;
 }):AnchorOpportunityUniverseRow[]{
   const limit=Math.max(1,Math.floor(input.limit??30));
   const valid=input.rows.filter(r=>r.symbol.endsWith("_USDT")&&r.last>0&&r.high24h>=r.low24h&&r.low24h>0
@@ -109,6 +111,15 @@ export function selectAnchorOpportunityUniverse(input:{
   };
 
   for(const symbol of input.lockedSymbols??[])push(symbol,"LOCKED_ANCHOR");
+  // Stable broad-market anchors keep causal 5m structure before a synchronized
+  // move begins. Turnover below is scan continuity only; neither sleeve chooses
+  // side nor bypasses the later completed-candle/executable-book policy.
+  for(const symbol of input.coreSymbols??[])push(symbol,"MARKET_CORE");
+
+  const liquiditySlots=Math.min(Math.max(0,Math.floor(input.liquiditySlots??0)),Math.max(0,limit-selected.length));
+  const liquidLeaders=[...scored].filter(x=>!used.has(x.row.symbol))
+    .sort((a,b)=>b.row.volume24hUsd-a.row.volume24hUsd||b.activityScore-a.activityScore||a.row.symbol.localeCompare(b.row.symbol));
+  for(const x of liquidLeaders.slice(0,liquiditySlots))push(x.row.symbol,"LIQUIDITY");
 
   const explorationSlots=Math.min(Math.max(0,Math.floor(input.explorationSlots??6)),Math.max(0,limit-selected.length));
   const activitySlots=Math.max(0,limit-selected.length-explorationSlots);
@@ -187,4 +198,3 @@ export function selectRegionLifecycleUniverse(input:{
   for(const x of activity)push(x.row.symbol,"RESIDENT");
   return selected.slice(0,limit);
 }
-

@@ -1,3 +1,14 @@
+# 2026-09-23 — LIVE edge and broad-shock continuity
+
+Keep the current AnchorFlow + RegionLaunch base and remove five reproduced
+obstructions: Cloudflare-invalid private redirect mode, eviction of active launch
+states from the 30-market pool, missing core/liquid scan continuity, no strong
+1m continuation route after a valid outside 5m close, and counter-shock REJECTION
+entries during extreme synchronized moves. Preserve all accounts/history/open
+positions, execution risk/cost/freshness, credentials and manual LIVE switches.
+Verify, publish reviewed main and obtain an advancing production receipt; no
+real-money test order or account reset.
+
 # Goal
 
 上线一个覆盖全行情的多系统组合：五个系统分别拥有独立 1,000 U 假想账户和冻结策略组合；唯一 PAPER 从 10,000 U 开始，完整复制每笔系统订单占所属系统权益的比例并独立复利；LIVE 仅按真实权益复制唯一 PAPER 的逐币标准化净额。

@@ -1,3 +1,17 @@
+# 2026-09-23 — LIVE边缘兼容与大跌连续性修复，待发布
+
+基于已部署`e645c1d`完成五项定向修复：Gate签名请求改为Cloudflare支持的
+`manual`重定向并在本地拒绝全部3xx；RegionLaunch信号及ARMED/IGNITION/READY
+不再被30标的轮换挤出；BTC/ETH/SOL和有限高流动性连续性槽重新进入扫描；有效
+5分钟区间外收盘增加严格的首根完整1分钟强延续确认；仅在5m/15m广度与方向
+极端同步反向时拒绝REJECTION逆势单。原AnchorFlow/RegionLaunch框架、账户、历史、
+持仓、风险、成本、新鲜度、实盘开关及写单不重放规则不变。
+
+本地已通过1028直接、214 Forward、61权益、49会员、132 LIVE、19架构/迁移测试，
+以及聚焦故障测试、类型、构建、Gate流workerd、lint（0错误/16条既有警告）、
+diff-check和Wrangler dry-run。未调用私有Gate测试、未改变实盘开关、未重置账户。
+下一步只剩reviewed main发布与生产连续性回执。
+
 # 2026-09-23 — LIVE timeout and source-dispatch repair verified locally
 
 Branch fix/20260923-live-sync-latency from deployed e8fabe2. Complete-body Gate

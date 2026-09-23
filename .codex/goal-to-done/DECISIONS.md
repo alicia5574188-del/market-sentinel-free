@@ -1,3 +1,24 @@
+# 2026-09-23 — LIVE edge and broad-shock continuity decisions
+
+- Keep the existing account, storage version, strategy version, open positions,
+  risk/cost/freshness gates and owner/member LIVE intent. This is an additive
+  obstruction repair, not a reset or a new strategy epoch.
+- Every signed Gate request uses `redirect: "manual"` and rejects all 3xx locally
+  before reading `Location`; only idempotent GETs may hedge to the reviewed
+  second official Gate futures origin. A mutation is never replayed.
+- Preserve the 30 scan slots and 11 realtime capacity. Priority is current
+  exposure/events and READY/RETEST/ARMED/IGNITION, then up to six mature WATCH
+  launches, BTC/ETH/SOL, six high-turnover continuity markets, causal activity
+  and four rotating exploration markets. Turnover supplies no direction.
+- After a completed 5m outside close, a first contiguous completed 1m candle may
+  confirm only when it breaks the 5m extreme, has body rate at least
+  `max(0.08%, 0.35 × modeled cost)`, close location at least 75% and
+  wick/body at most 0.35. Existing chase/economics/stop rules remain final.
+- REJECTION alone is vetoed when at least eight markets are ready and both 5m
+  and 15m direction/confidence plus extreme breadth still strongly oppose it.
+  Neutral, incomplete or ordinary conditions cannot block; the thresholds are
+  symmetric and AnchorFlow/RegionLaunch keep their prior authority.
+
 # 2026-09-23 — shared source events, isolated private reconciliation
 
 Do not fork a second live strategy or bypass confirmation for apparent speed.

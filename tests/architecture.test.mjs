@@ -85,6 +85,10 @@ test("native dark LIVE console retains owner authentication and isolates financi
   assert.match(worker, /desiredPortfolio\s*=\s*this\.liveDesiredPortfolio/);
   assert.match(worker, /allowNewEntries: false/);
   assert.match(live, /reduce_only: true/);
+  assert.match(live, /redirect:"manual"/);
+  assert.doesNotMatch(live, /redirect:"error"/);
+  assert.match(live, /response\.status>=300&&response\.status<400/);
+  assert.match(live, /REDIRECT_REJECTED/);
   assert.match(auth, /HttpOnly; Secure; SameSite=Strict/);
   for (const [name, ms] of [["RUNTIME_REQUEST_TIMEOUT_MS","12_000"],["RUNTIME_REFRESH_MS","10_000"],["RUNTIME_RETRY_MS","3_000"]])
     assert.match(page,new RegExp(`${name} = ${ms}`));

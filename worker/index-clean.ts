@@ -883,14 +883,32 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // the remaining slots rotate through liquid contracts without giving turnover
     // or raw volatility any direct trading authority.
     const eligibleRows = rows.filter((row) => eligible.has(row.symbol) && forwardSymbolAllowed(row.symbol));
+    const anchorFlows=Object.values(this.forwardState?.anchorFlows??{});
+    const launches=Object.values(this.forwardState?.regionLaunches??{});
+    const urgentAnchors=anchorFlows.filter(row=>row.phase==="READY"||row.phase==="RETEST")
+      .sort((a,b)=>(a.phase==="READY"?0:1)-(b.phase==="READY"?0:1)||(b.readyAt??0)-(a.readyAt??0));
+    const launchPriority=(phase:string)=>phase==="READY"?0:phase==="IGNITION"?1:phase==="ARMED"?2:9;
+    const urgentLaunches=launches.filter(row=>["READY","IGNITION","ARMED"].includes(row.phase))
+      .sort((a,b)=>launchPriority(a.phase)-launchPriority(b.phase)
+        ||b.quality-a.quality||b.updatedAt-a.updatedAt);
+    // Retain a bounded sleeve of the best mature mother regions long enough to
+    // form their child compression. Locking every WATCH forever would stop the
+    // exploration sleeve; locking none was evicting setups before ignition.
+    const launchContinuity=launches.filter(row=>row.phase==="WATCH"&&now-row.updatedAt<=30*60_000)
+      .sort((a,b)=>b.quality-a.quality||b.failedDepartures-a.failedDepartures||b.motherBars-a.motherBars||b.updatedAt-a.updatedAt)
+      .slice(0,6);
+    const passiveAnchors=anchorFlows.filter(row=>!["READY","RETEST","FAILED","CONSUMED"].includes(row.phase))
+      .sort((a,b)=>b.createdAt-a.createdAt).slice(0,6);
     const lockedAnchorSymbols=[...new Set([
       ...(this.forwardState?.positions.flatMap(position=>position.status==="OPEN"?[position.symbol]:[])??[]),
       ...(this.forwardState?.regionSignals??[]).filter(signal=>signal.expiresAt>now).map(signal=>signal.symbol),
-      ...Object.values(this.forwardState?.anchorFlows??{}).filter(row=>row.phase!=="FAILED"&&row.phase!=="CONSUMED").map(row=>row.symbol),
+      ...(this.forwardState?.regionLaunchSignals??[]).filter(signal=>signal.expiresAt>now).map(signal=>signal.symbol),
+      ...urgentAnchors.map(row=>row.symbol),...urgentLaunches.map(row=>row.symbol),
+      ...launchContinuity.map(row=>row.symbol),...passiveAnchors.map(row=>row.symbol),
     ])];
     const universeRows = selectAnchorOpportunityUniverse({ rows: eligibleRows, limit: SCAN_UNIVERSE_SIZE,
       lockedSymbols: lockedAnchorSymbols, currentSymbols: this.runtime.liquidUniverse,
-      rotationSeed: Math.floor(now / BAR_MS), explorationSlots: 6 });
+      coreSymbols:DEFAULT_SYMBOLS,rotationSeed: Math.floor(now / BAR_MS),explorationSlots:4,liquiditySlots:6 });
     const universe = new Set(universeRows.map((row) => row.symbol));
     this.runtime.liquidUniverse = universeRows.map((row) => row.symbol);
     this.runtime.radar = successfulRadarRuntime(this.runtime.radar, now, universeRows.length, []);

@@ -72,6 +72,22 @@ test("turnover is only a liquidity floor in the new selector",async()=>{
   assert.ok(a&&b);assert.equal(a!.activityScore,b!.activityScore);
 });
 
+test("hybrid anchor pool reserves market cores and a bounded liquid sleeve without using either for direction",async()=>{
+  const {selectAnchorOpportunityUniverse}=await import("../lib/multi-turn-universe.ts");
+  const rows=[
+    row("BTC_USDT",-.025,.035,9_000_000_000),row("ETH_USDT",-.035,.05,7_000_000_000),
+    row("SOL_USDT",-.05,.07,5_000_000_000),row("LIQUID_USDT",.001,.012,8_000_000_000),
+    ...Array.from({length:45},(_,i)=>row(`HOT${String(i).padStart(2,"0")}_USDT`,.08,.16,200_000+i*1_000)),
+  ];
+  const selected=selectAnchorOpportunityUniverse({rows,limit:30,coreSymbols:["BTC_USDT","ETH_USDT","SOL_USDT"],
+    liquiditySlots:1,explorationSlots:4,rotationSeed:0});
+  assert.deepEqual(selected.slice(0,3).map(x=>x.symbol),["BTC_USDT","ETH_USDT","SOL_USDT"]);
+  assert.ok(selected.some(x=>x.symbol==="LIQUID_USDT"&&x.selectionSource==="LIQUIDITY"));
+  assert.equal(selected.length,30);
+  assert.equal(selected.find(x=>x.symbol==="BTC_USDT")?.change24hRate,-.025,
+    "selection continuity must not rewrite or infer trade direction");
+});
+
 
 test("region lifecycle universe expands completed-5m scanning to 60 while retaining mature-region symbols",async()=>{
   const {selectRegionLifecycleUniverse}=await import("../lib/multi-turn-universe.ts");

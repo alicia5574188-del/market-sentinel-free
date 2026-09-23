@@ -146,6 +146,16 @@ test("slower outside 5m close followed by a shallow 1m pullback and full recover
   assert.match(s.positions[0]!.rule.reason,/5分钟区间外收盘/);
 });
 
+test("slower outside 5m close followed by a strong first 1m continuation opens through the real source engine",()=>{
+  const closed=minute(BASE,100.79,101.38,100.76,101.35),continuation=minute(BASE+300_000,101.35,101.54,101.33,101.52);
+  const paths={BCH_USDT:[closed]};let s=seeded(BASE);
+  s=step(s,BASE+300_000,101.35,{BCH_USDT:[closed]},paths).state;
+  assert.equal(s.positions.length,0);assert.equal(s.regionLaunches!.BCH_USDT!.launchPath,"CLOSED");
+  s=step(s,BASE+360_000,101.52,{BCH_USDT:[continuation]},paths).state;
+  assert.equal(s.positions.length,1);assert.equal(s.regionLaunches!.BCH_USDT!.phase,"CONSUMED");
+  assert.match(s.positions[0]!.rule.reason,/第一根完整1分钟K继续突破/);
+});
+
 test("the former 1m-only positive path is no longer an entry when its actual 5m reference is too wide",()=>{
   let s=seeded(BASE);
   const prior=compression(BASE).map((r,i)=>({...r,high:[100.94,100.98,100.96,101,100.97,101.01][i]!,

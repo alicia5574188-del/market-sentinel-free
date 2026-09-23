@@ -23,6 +23,7 @@ export type RegionLaunchState={
   breakoutImpulseRate:number|null;breakoutWickRate:number|null;pullbackExtreme:number|null;lastMinuteAt:number|null;
   readyAt:number|null;readySide:"LONG"|"SHORT"|null;readySignalPrice:number|null;readyStopPrice:number|null;
   readyImpulseRate:number|null;readyExpectedMoveRate:number|null;readyMaxChaseRate:number|null;readyConfirmationMs:number|null;
+  readyConfirmation?:"CONTINUATION"|"PULLBACK_RESTART";
   consumedAt:number|null;consumedSide:"LONG"|"SHORT"|null;reason:string;
   launchPath?:"FAST"|"CLOSED";departureAfter?:number;currentFiveMinute?:RegionCandle;fiveMinuteBodyMultiple?:number;
 };
@@ -129,7 +130,7 @@ function clearIgnition(s:RegionLaunchState){
 }
 function clearReady(s:RegionLaunchState){
   s.readyAt=null;s.readySide=null;s.readySignalPrice=null;s.readyStopPrice=null;s.readyImpulseRate=null;
-  s.readyExpectedMoveRate=null;s.readyMaxChaseRate=null;s.readyConfirmationMs=null;
+  s.readyExpectedMoveRate=null;s.readyMaxChaseRate=null;s.readyConfirmationMs=null;s.readyConfirmation=undefined;
 }
 function motherQuality(s:RegionLaunchState,compression:RegionLaunchCompression|null){
   const age=clip((s.motherBars-12)/36),touch=clip((s.motherTouchesUpper+s.motherTouchesLower-4)/10),
@@ -222,7 +223,9 @@ function readySignal(s:RegionLaunchState):RegionLaunchSignal|null{
     completedAt:s.readyAt,expiresAt:s.readyAt+REGION_LAUNCH_SIGNAL_MS,signalPrice:s.readySignalPrice,stopPrice:s.readyStopPrice,targetPrice:null,
     regionId:s.motherRegionId,regionConfirmedAt:s.motherConfirmedAt,regionLower:s.motherLower,regionUpper:s.motherUpper,
     regionCenter:s.motherCenter,regionWidth:s.motherWidth,regionWidthRate:s.motherWidthRate,
-    reason:`RegionLaunch：完整5分钟缠绕边界${s.compression.lower.toPrecision(8)}–${s.compression.upper.toPrecision(8)}（含影线）；${s.launchPath==="CLOSED"?"5分钟区间外收盘后小回调再突破":"5分钟强势离区后1分钟连续突破或小回调重启"}。5分钟实体/前期平均振幅${(s.fiveMinuteBodyMultiple??0).toFixed(2)}倍。`,
+    reason:`RegionLaunch：完整5分钟缠绕边界${s.compression.lower.toPrecision(8)}–${s.compression.upper.toPrecision(8)}（含影线）；${s.launchPath==="CLOSED"
+      ?s.readyConfirmation==="CONTINUATION"?"5分钟区间外收盘后第一根完整1分钟K继续突破":"5分钟区间外收盘后小回调再突破"
+      :"5分钟强势离区后1分钟连续突破或小回调重启"}。5分钟实体/前期平均振幅${(s.fiveMinuteBodyMultiple??0).toFixed(2)}倍。`,
     entryModel:"REGION_LAUNCH",launchVersion:REGION_LAUNCH_VERSION,launchTriggerPrice:s.triggerPrice!,
     launchCompressionLower:s.compression.lower,launchCompressionUpper:s.compression.upper,launchCompressionBars:s.compression.bars,
     launchFailedDepartures:s.failedDepartures,launchImpulseRate:s.readyImpulseRate,launchConfirmationMs:s.readyConfirmationMs,
@@ -346,6 +349,7 @@ export function advanceRegionLaunchMinutes(input:{states:Record<string,RegionLau
           const expected=Math.min(.20,Math.max(.015,s.motherWidthRate*1.50,impulse*3,f15?.expectedMoveRate??0));
           s.phase="READY";s.readyAt=evaluated.restartAt;s.readySide=side;s.readySignalPrice=evaluated.restartPrice;s.readyStopPrice=stop;
           s.readyImpulseRate=impulse;s.readyExpectedMoveRate=expected;s.readyMaxChaseRate=maxChase;s.readyConfirmationMs=evaluated.restartAt-ignitionAt;
+          s.readyConfirmation=evaluated.confirmation;
           s.reason=`RegionLaunch READY：${evaluated.reason} 等待当前可执行盘口成交。`;
         }
       }

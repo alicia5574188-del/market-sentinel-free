@@ -34,6 +34,12 @@ for(const side of ["LONG","SHORT"] as MicroSide[]){
     assert.equal(assess([b(300,100.3,100.31,100.02,100.05)]).state,"FAIL");
     assert.equal(assess([b(300,100.3,100.32,100.28,100.31)]).state,"WAIT","slow continuation with no pullback is not enough");
   });
+  test(`${side}: outside 5m close plus a strong first 1m continuation becomes ready`,()=>{
+    const anchor=b(0,99.9,100.32,99.88,100.3),continuation=b(300,100.3,100.48,100.29,100.47);
+    const result=evaluateSlowLaunchRestart({bar:anchor,following:[continuation],side,boundary:100,costRate:.0022});
+    assert.equal(result.state,"READY");assert.equal(result.confirmation,"CONTINUATION");
+    assert.equal(result.restartAt,(T+360)*1000);
+  });
   test(`${side}: a later sudden acceleration switches the slow observation to fast`,()=>{
     const prior=b(0,99.9,100.32,99.88,100.3),fast=b(300,100.3,101.1,100.29,101.05);
     const r=launchFiveMinuteEvidence({box:bounds,minutes:[fast],fiveMinutes:[prior],now:(T+360)*1000,costRate:.0022});
