@@ -204,7 +204,7 @@ class Memory {
 }
 class FakeGate {
   account:GateLiveAccount={total:100,available:100,unrealised_pnl:0,in_dual_mode:false};
-  requestCount=0;placed:LiveEntryIntent[]=[];leverages:number[]=[];stops:GateLiveOrder[]=[];amendedStops:Array<{id:string;price:number}>=[];
+  requestCount=0;placed:LiveEntryIntent[]=[];leverages:number[]=[];stops:GateLiveOrder[]=[];amends:Array<{id:string;price:number}>=[];amendedStops:Array<{id:string;price:number}>=[];
   orders=new Map<string,GateLiveOrder>();holdings:Record<string,GateLivePosition>={};
   closeTags:string[]=[];onLeverage:(()=>Promise<void>)|null=null;onCreate:(()=>Promise<void>)|null=null;
   failSnapshot=false;partial=false;zero=false;ambiguous=false;omitExit=false;counter=1;
@@ -425,6 +425,19 @@ test("a tightened PAPER profit stop amends the existing Gate-native protective s
   assert.equal(p.currentStop,100.8);
   assert.equal(p.stopPrice,100.8);
   assert.equal(gate.amendedStops.at(-1)?.price,100.8);
+  assert.equal(gate.closeTags.length,0);
+}));
+
+
+test("PAPER profit stop tightening amends the existing Gate native protection instead of waiting for source close",()=>clock(async()=>{
+  const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);
+  const source=h.forwardState.positions[0],before=source.stopPrice;
+  source.stopPrice=101.25;
+  assert.ok(source.stopPrice>before);
+  await h.syncLive(T);
+  assert.ok(gate.amends.length>=1);
+  assert.equal(gate.amends.at(-1)?.price,101.25);
+  assert.equal(live(h).positions.BTC_USDT.status,"OPEN");
   assert.equal(gate.closeTags.length,0);
 }));
 
