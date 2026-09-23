@@ -1110,7 +1110,7 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
     const lifecycle=s.regionLifecycles?.[signal.symbol];
     if(!launchSignal&&lifecycle&&lifecycle.zone?.id===signal.regionId)s.regionLifecycles![signal.symbol]=consumeRegionBoundary(lifecycle,signal.boundary,now);
     if(!anchorSignal&&!launchSignal)s.regionSignals=(s.regionSignals??[]).filter(row=>row.id!==signal.id);
-    diagnostics.opened++;diagnostics.queued=s.regionSignals.length;
+    diagnostics.opened++;diagnostics.queued=(s.regionSignals?.length??0)+(s.regionLaunchSignals?.length??0);
     event(s,now,"ENTRY",t.id,launchSignal
       ?`${signal.symbol} RegionLaunch 开仓：成熟母区与子区压缩已提前ARMED，实时盘口20–60秒强势离区且浅回吐后通过追价与风险检查。`
       :anchorSignal?`${signal.symbol} AnchorFlow 开仓：1h/15m没有有置信度的明确反向否决，5m回测反应READY后通过订单经济性检查。`
@@ -1119,7 +1119,7 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
   }
   if(diagnostics.opened)s.latestReason=`本轮 AnchorFlow / RegionLaunch / 区域回归开仓${diagnostics.opened}笔；只有提前ARMED并完成实时爆发确认的RegionLaunch允许追击。`;
   else if(Object.keys(diagnostics.reasons).length)s.latestReason=Object.entries(diagnostics.reasons).sort((a,b)=>b[1]-a[1])[0]![0];
-  else s.latestReason=`AnchorFlow 管理${s.positions.length}笔持仓；等待方向、区域位置和第一次回测共同成立。`;
+  else s.latestReason=`双通道管理${s.positions.length}笔持仓；AnchorFlow等待回测，RegionLaunch只等待提前ARMED后的真实爆发确认。`;
 }
 
 function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;daily?:Record<string,Candle[]>;
