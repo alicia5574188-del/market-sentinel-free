@@ -1212,12 +1212,20 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
     }
   }
   manageMultiTurn(s,quotes,now);
+  const launchDecisionSnapshot=JSON.stringify(Object.values(s.regionLaunches??{}).sort((a,b)=>a.symbol.localeCompare(b.symbol)).map(row=>[
+    row.symbol,row.phase,row.armedInsideObserved,row.ignitionSide,row.ignitionAt,row.ignitionExtreme,row.ignitionWorstPrice,
+    row.quoteSamples,row.lastQuoteAt,row.readyAt,row.readySide,row.readySignalPrice,row.readyStopPrice,row.cooldownUntil,row.consumedAt
+  ]));
   const launchQuotes=advanceRegionLaunchQuotes({states:s.regionLaunches??{},quotes,frames:s.turnEngine?.frames,now,costRate:turnModeledCost("5m",0)});
   s.regionLaunches=launchQuotes.states;
   const existingLaunch=(s.regionLaunchSignals??[]).filter(signal=>signal.expiresAt>now
     &&s.regionLaunches?.[signal.symbol]?.phase==="READY"&&s.regionLaunches?.[signal.symbol]?.motherRegionId===signal.regionId);
   s.regionLaunchSignals=[...new Map([...existingLaunch,...launchQuotes.signals].map(signal=>[signal.id,signal])).values()]
     .sort((a,b)=>a.completedAt-b.completedAt||a.symbol.localeCompare(b.symbol)).slice(-30);
+  const launchDecisionChanged=launchDecisionSnapshot!==JSON.stringify(Object.values(s.regionLaunches??{}).sort((a,b)=>a.symbol.localeCompare(b.symbol)).map(row=>[
+    row.symbol,row.phase,row.armedInsideObserved,row.ignitionSide,row.ignitionAt,row.ignitionExtreme,row.ignitionWorstPrice,
+    row.quoteSamples,row.lastQuoteAt,row.readyAt,row.readySide,row.readySignalPrice,row.readyStopPrice,row.cooldownUntil,row.consumedAt
+  ]));
   openRegionTrades(s,quotes,contracts,now,entrySymbols);
   const marked=forwardEquity(s,quotes,now);
   if(!marked.stalePositions){
@@ -1231,7 +1239,7 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
     s.daily=s.daily.slice(-400);
   }
   s.lastQuoteCycleAt=now;
-  return{state:s,changed:dataDue||markDue||s.revision!==before,protectionChanged:forwardProtectionChanged(input.state,s)};
+  return{state:s,changed:dataDue||markDue||launchDecisionChanged||s.revision!==before,protectionChanged:forwardProtectionChanged(input.state,s)};
 }
 
 export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;daily?:Record<string,Candle[]>;quotes:Record<string,Quote>;contracts:Record<string,Contract>;legacyDrainOnly?:boolean;entrySymbols?:string[];allowDataCycle?:boolean}){
