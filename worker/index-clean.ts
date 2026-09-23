@@ -497,6 +497,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private strategyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private forwardMinuteCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private forwardMinuteRetryAt = new Map<string,number>();
+  private forwardMinuteQuoteBars: Record<string,{minute:number;open:number;high:number;low:number;close:number;samples:number;
+    completed:Array<{time:number;open:number;high:number;low:number;close:number;volume:number}>}> = {};
   private turnDailyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private turnDailyLoaded = new Set<string>();
   private turnDailyCursor = 0;
@@ -2834,8 +2836,25 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }));
   }
 
+  private recordForwardMinuteQuote(symbol:string,mid:number,observedAt:number){
+    if(!this.forwardUrgentSymbols(observedAt).includes(symbol)||!Number.isFinite(mid)||mid<=0)return;
+    const minute=Math.floor(observedAt/60_000)*60_000;
+    let row=this.forwardMinuteQuoteBars[symbol];
+    if(!row||row.minute!==minute){
+      if(row&&row.samples>=6)row.completed=[...row.completed,{time:row.minute/1000,open:row.open,high:row.high,low:row.low,close:row.close,volume:0}].slice(-90);
+      row={minute,open:mid,high:mid,low:mid,close:mid,samples:1,completed:row?.completed??[]};
+      this.forwardMinuteQuoteBars[symbol]=row;return;
+    }
+    row.high=Math.max(row.high,mid);row.low=Math.min(row.low,mid);row.close=mid;row.samples++;
+  }
+
   private forwardMinutePaths(){
-    return Object.fromEntries(Object.entries(this.forwardMinuteCandles).filter(([,rows])=>rows.length));
+    const symbols=new Set([...Object.keys(this.forwardMinuteCandles),...Object.keys(this.forwardMinuteQuoteBars)]);
+    return Object.fromEntries([...symbols].flatMap(symbol=>{
+      const official=this.forwardMinuteCandles[symbol]??[],synthetic=this.forwardMinuteQuoteBars[symbol]?.completed??[];
+      const merged=[...new Map([...synthetic,...official].map(row=>[row.time,row])).values()].sort((a,b)=>a.time-b.time).slice(-90);
+      return merged.length?[[symbol,merged]]:[];
+    }));
   }
 
   private async refreshForwardUrgentMinutes(now=Date.now()){
