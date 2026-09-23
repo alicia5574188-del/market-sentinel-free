@@ -73,6 +73,20 @@ test("cold reconstruction can restore an old region but cannot backfill an alrea
   assert.equal(state.regionSignals?.length??0,0,"restored historical boundary events are state only, never catch-up orders");
 });
 
+test("far confirmed migration stays queued and may enter after a boundary retest",()=>{
+  const now=BASE+6*60*60_000+30_000,s=seeded(["BTC_USDT"],now);
+  let state=advanceForward({state:s,now,paths:{},quotes:{BTC_USDT:quote(101.8,now)},contracts:{BTC_USDT:meta},
+    entrySymbols:["BTC_USDT"],allowDataCycle:false}).state;
+  assert.equal(state.positions.length,0,"late confirmation must not be chased");
+  assert.equal(state.regionSignals?.length,1,"confirmed event stays queued while still valid");
+  assert.match(state.entryDiagnostics?.reasons&&Object.keys(state.entryDiagnostics.reasons).join(" ")||"",/回踩边界|盈亏比/);
+  const later=now+60_000;
+  state=advanceForward({state,now:later,paths:{},quotes:{BTC_USDT:quote(101.25,later)},contracts:{BTC_USDT:meta},
+    entrySymbols:["BTC_USDT"],allowDataCycle:false}).state;
+  assert.equal(state.positions.length,1,"pullback near the accepted boundary restores entry economics");
+  assert.equal(state.regionSignals?.length,0);
+});
+
 test("a rejection trade can close at region center immediately without a minimum holding-age embargo",()=>{
   const now=BASE+7*60*60_000,s=seeded(["ETH_USDT"],now);
   s.regionSignals=[signal("ETH_USDT",now,{kind:"REJECTION",side:"SHORT",boundary:"UPPER",signalPrice:100.65,stopPrice:101.5,targetPrice:100,
