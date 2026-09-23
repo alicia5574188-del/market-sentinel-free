@@ -60,8 +60,9 @@ export function launchFiveMinuteEvidence(input:{box:LaunchBox;minutes:MicroCandl
   return proof?{...proof,current}:{state:"WAIT",current,reason:"5分钟尚未有效离开完整区间：未收盘需实体达到前期平均振幅3倍；较慢离区等收盘和后续确认，长影线不算突破。"};
 }
 
-/** The slow route starts AFTER the outside 5m close, then requires a genuine
- * shallow pullback and a close beyond its entire high/low, not a tiny last bar. */
+/** The slow route starts AFTER the outside 5m close. It accepts either a
+ * genuinely strong first 1m continuation beyond the closed 5m extreme, or a
+ * shallow pullback followed by a close beyond the entire pullback high/low. */
 export function evaluateSlowLaunchRestart(input:{bar:MicroCandle;following:MicroCandle[];side:MicroSide;
   boundary:number;costRate:number}):MicroRestartResult{
   const {bar,side}=input,d=side==="LONG"?1:-1,body=Math.abs(bar.close-bar.open),start=bar.time+300;
@@ -79,6 +80,12 @@ export function evaluateSlowLaunchRestart(input:{bar:MicroCandle;following:Micro
     if(d*(b.close-input.boundary)<=0||giveback>body*.50||adverse>body*.70)
       return empty("FAIL","较慢离区后回到区间或回调超过原5分钟实体允许幅度；本次离区失效。");
     const metrics=microDirectionalBar(b,side),beyond=side==="LONG"?b.close>oldHigh:b.close<oldLow;
+    if(i===0&&!reversal&&beyond&&metrics.bodyRate>=Math.max(.0008,input.costRate*.35)
+      &&metrics.closeLocation>=.75&&metrics.wickToBody<=.35){
+      return{state:"READY",confirmation:"CONTINUATION",reason:"5分钟区间外收盘后，第一根完整1分钟K继续突破5分钟离区极值，实体、收盘位置与影线均满足强延续确认。",
+        pullbackCloseRate:0,pullbackExtremeRate:Math.max(0,giveback)/bar.close,
+        cumulativeAdverseBodyRate:adverse/bar.open,restartAt:(b.time+60)*1000,restartPrice:b.close,supportPrice:side==="LONG"?low:high};
+    }
     if(hadPullback&&!reversal&&beyond&&metrics.bodyRate>=Math.max(.0006,input.costRate*.25)
       &&metrics.closeLocation>=.65&&metrics.wickToBody<=.50){
       return{state:"READY",confirmation:"PULLBACK_RESTART",reason:"5分钟区间外收盘后仅小回调，当前1分钟实体重新突破整段回调极值。",
@@ -87,5 +94,5 @@ export function evaluateSlowLaunchRestart(input:{bar:MicroCandle;following:Micro
     }
     hadPullback=hadPullback||reversal;prior=b.close;
   }
-  return empty("WAIT","5分钟已在区间外收盘；等待后续突然加速，或小回调后重新超过整段回调极值。");
+  return empty("WAIT","5分钟已在区间外收盘；等待第一根1分钟强延续，或小回调后重新超过整段回调极值。");
 }

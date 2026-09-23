@@ -1,3 +1,14 @@
+# LIVE edge and broad-shock continuity — 2026-09-23
+
+The latest owner request authorizes the scoped repair in
+research/LIVE_AND_SHOCK_CONTINUITY_2026-09-23.md. Fix Cloudflare-incompatible
+private Gate redirect handling without weakening dual-route reads or replaying
+writes. Preserve AnchorFlow + RegionLaunch and improve only scan continuity,
+core/liquid allocation, completed-5m strong continuation and extreme synchronized
+REJECTION conflict handling. Keep the account/history/open positions, risk,
+cost, freshness, credentials and manual LIVE intent unchanged. No reset or real
+order. Reviewed-main deployment and public continuity receipt are mandatory.
+
 # Private LIVE read and dispatch repair — 2026-09-23
 
 The latest owner request authorizes fixing repeated private Gate account timeouts

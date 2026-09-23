@@ -267,7 +267,7 @@ test("private read races the complete body through Gate's independent futures ro
   const real=globalThis.fetch,hosts:string[]=[];let stalledSignal:AbortSignal|undefined;
   globalThis.fetch=async(input,init)=>{
     const host=new URL(String(input)).hostname;hosts.push(host);
-    assert.equal(init?.redirect,"error");
+    assert.equal(init?.redirect,"manual");
     if(host==="api.gateio.ws"){
       stalledSignal=init?.signal??undefined;
       return new Response(new ReadableStream({start(){/* Headers succeed, body never finishes. */}}));
@@ -280,6 +280,32 @@ test("private read races the complete body through Gate's independent futures ro
     assert.equal(order?.id,"90071992547409931");
     assert.deepEqual(hosts,["api.gateio.ws","fx-api.gateio.ws"]);
     assert.equal(stalledSignal?.aborted,true);assert.equal(client.readTransport.recovered,1);
+  }finally{globalThis.fetch=real;}
+});
+
+test("manual redirect mode rejects 3xx without following the signed location and safely hedges GET only",async()=>{
+  const real=globalThis.fetch,urls:string[]=[];
+  globalThis.fetch=async(input,init)=>{
+    const url=String(input);urls.push(url);assert.equal(init?.redirect,"manual");
+    if(new URL(url).hostname==="api.gateio.ws")return new Response(null,{status:302,headers:{Location:"https://attacker.invalid/private"}});
+    return Response.json({id:"123",status:"finished"});
+  };
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    assert.equal((await client.inspectEntry("MARKET","BTC_USDT","t-fixture","123"))?.id,"123");
+    assert.deepEqual(urls.map(url=>new URL(url).hostname),["api.gateio.ws","fx-api.gateio.ws"]);
+    assert.equal(urls.some(url=>url.includes("attacker.invalid")),false);
+  }finally{globalThis.fetch=real;}
+});
+
+test("a redirected mutation remains one unknown-safe submission and is never replayed",async()=>{
+  const real=globalThis.fetch;let calls=0;
+  globalThis.fetch=async(_input,init)=>{calls++;assert.equal(init?.redirect,"manual");
+    return new Response(null,{status:307,headers:{Location:"https://attacker.invalid/write"}});};
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    await assert.rejects(client.setLeverage("BTC_USDT",10),/Gate 307 REDIRECT_REJECTED/);
+    assert.equal(calls,1);assert.equal(client.readTransport.hedges,0);
   }finally{globalThis.fetch=real;}
 });
 

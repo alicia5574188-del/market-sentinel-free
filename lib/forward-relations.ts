@@ -28,7 +28,7 @@ import { MULTI_TURN_ROTATION_COOLDOWN_MS, MULTI_TURN_ROTATION_VERSION, evaluateR
   multiTurnRotationReentryCooldownMs, rankWeakRotationHoldings, rotationAdvantageEnough, rotationRiskSaturated } from "./multi-turn-rotation.ts";
 import { REGION_LIFECYCLE_VERSION, consumeRegionBoundary, evaluateRegionUniverse,
   type RegionEntrySignal, type RegionLifecycleState } from "./region-lifecycle.ts";
-import { evaluateRegionEntryPolicy } from "./region-entry-policy.ts";
+import { evaluateRegionEntryPolicy, rejectionAgainstSynchronizedFlow } from "./region-entry-policy.ts";
 import { ANCHOR_FLOW_VERSION, advanceAnchorFlowUniverse, anchorFlowExecutableProofRate, anchorFlowStopPrice,
   type AnchorFlowEntrySignal, type AnchorFlowState } from "./anchor-flow.ts";
 import { REGION_LAUNCH_VERSION, advanceRegionLaunchMinutes, advanceRegionLaunchQuotes, advanceRegionLaunchUniverse, consumeRegionLaunch, regionLaunchValidationProofRate,
@@ -1048,6 +1048,11 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
     const model=(signal as RegionEntrySignal&{entryModel?:string}).entryModel;
     const anchorSignal=signal.kind==="MIGRATION"&&model==="ANCHOR_FLOW",launchSignal=signal.kind==="MIGRATION"&&model==="REGION_LAUNCH";
     if(signal.kind==="MIGRATION"&&!anchorSignal&&!launchSignal){reject("直接区域迁移已退役；等待 AnchorFlow 回测重启或 RegionLaunch 爆发确认");continue;}
+    if(signal.kind==="REJECTION"&&rejectionAgainstSynchronizedFlow({side:signal.side,
+      marketCount:s.turnEngine?.diagnostics.markets??0,five:s.turnEngine?.frames[signal.symbol]?.["5m"],
+      fifteen:s.turnEngine?.frames[signal.symbol]?.["15m"]})){
+      reject("全市场5分钟与15分钟同步冲击仍明显反向；本次区域REJECTION只观察，不逆势接单");continue;
+    }
     if(s.positions.some(t=>t.symbol===signal.symbol))continue;
     if(!launchSignal&&(s.lastEntryBars[signal.symbol]??0)>=signal.completedAt)continue;
     const q=quotes[signal.symbol],meta=contracts[signal.symbol];

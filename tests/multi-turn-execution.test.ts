@@ -233,6 +233,21 @@ test("a rejection trade can close at region center immediately without a minimum
   assert.match(state.history[0]?.exitReason??"",/区域中心/);
 });
 
+test("an extreme synchronized broad-market shock blocks only the opposite rejection in the real entry path",()=>{
+  const now=BASE+7*60*60_000,s=seeded(["ETH_USDT"],now);
+  s.regionSignals=[signal("ETH_USDT",now,{kind:"REJECTION",side:"SHORT",boundary:"UPPER",signalPrice:100.65,
+    stopPrice:100.68,targetPrice:100,reason:"fixture rejection"})];
+  s.regionLifecycles!.ETH_USDT=lifecycle("ETH_USDT",now,"IN_REGION");
+  const five={...frame5("ETH_USDT",now-300_000,100.6),direction:"LONG" as const,rawDirection:"LONG" as const,
+    directionConfidence:.8,breadthLong:.90};
+  const fifteen={...five,timeframe:"15m" as const,directionConfidence:.75,breadthLong:.76};
+  s.turnEngine!.diagnostics.markets=12;s.turnEngine!.frames.ETH_USDT={"5m":five,"15m":fifteen};
+  const state=advanceForward({state:s,now,paths:{},quotes:{ETH_USDT:quote(100.6,now)},contracts:{ETH_USDT:meta},
+    entrySymbols:["ETH_USDT"],allowDataCycle:false}).state;
+  assert.equal(state.positions.length,0);
+  assert.ok(Object.keys(state.entryDiagnostics!.reasons).some(reason=>reason.includes("同步冲击")));
+});
+
 test("profitable AnchorFlow trade uses the proven monotonic Multi-Turn profit floor",()=>{
   const now=BASE+8*60*60_000,s=seeded(["SOL_USDT"],now);
   let state=advanceForward({state:s,now,paths:{},quotes:{SOL_USDT:quote(101.2,now)},contracts:{SOL_USDT:meta},

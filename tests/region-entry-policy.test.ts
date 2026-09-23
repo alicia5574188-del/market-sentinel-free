@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { evaluateRegionEntryPolicy } from "../lib/region-entry-policy.ts";
+import { evaluateRegionEntryPolicy, rejectionAgainstSynchronizedFlow } from "../lib/region-entry-policy.ts";
 import type { RegionEntrySignal } from "../lib/region-lifecycle.ts";
+import { MULTI_TURN_VERSION, type TurnFrameState } from "../lib/multi-turn-engine.ts";
 
 const contract={quantoMultiplier:.001,leverageMax:50,maintenanceRate:.005,minContracts:1};
 type TestSignal=RegionEntrySignal&{entryModel?:"ANCHOR_FLOW"|"REGION_LAUNCH";anchorExpectedMoveRate?:number;
@@ -16,6 +17,25 @@ const run=(signal:RegionEntrySignal,bid:number,ask:number,anchorConfirmationRefe
   signal,bestBid:bid,bestAsk:ask,contract,equity:1000,peakEquity:1000,totalRisk:0,longRisk:0,shortRisk:0,
   grossNotional:0,usedMargin:0,tradeRisks:[],costRate:.0022,feeRate:.0007,slippageRate:.00025,
   anchorConfirmationReferencePrice,anchorMicroConfirmed});
+const frame=(timeframe:"5m"|"15m",direction:"LONG"|"SHORT",breadthLong:number,confidence=.8):TurnFrameState=>({
+  version:MULTI_TURN_VERSION,symbol:"BTC_USDT",timeframe,observedAt:1,completedAt:1,ready:true,direction,rawDirection:direction,
+  directionConfidence:confidence,turnProbability:.1,triggerProbability:.8,continuationScore:.8,phase:"FLOW",candidateSide:"NEUTRAL",
+  candidateBars:0,justTurned:false,lastTurnAt:null,signalAgeBars:1,atrRate:.01,expectedMoveRate:.02,stopRate:.01,price:100,
+  breadthLong,propagationPressure:0,evidence:{structure:0,momentum:0,acceleration:0,cusum:0,changePoint:0,failedExtension:0,
+    volatility:0,volume:0,breadth:0,propagation:0},reason:"fixture"});
+
+test("only a sufficiently broad synchronized shock blocks the opposite REJECTION side",()=>{
+  assert.equal(rejectionAgainstSynchronizedFlow({side:"LONG",marketCount:12,
+    five:frame("5m","SHORT",.10),fifteen:frame("15m","SHORT",.24)}),true);
+  assert.equal(rejectionAgainstSynchronizedFlow({side:"SHORT",marketCount:12,
+    five:frame("5m","LONG",.90),fifteen:frame("15m","LONG",.76)}),true);
+  assert.equal(rejectionAgainstSynchronizedFlow({side:"LONG",marketCount:7,
+    five:frame("5m","SHORT",.10),fifteen:frame("15m","SHORT",.24)}),false);
+  assert.equal(rejectionAgainstSynchronizedFlow({side:"LONG",marketCount:12,
+    five:frame("5m","SHORT",.35),fifteen:frame("15m","SHORT",.40)}),false);
+  assert.equal(rejectionAgainstSynchronizedFlow({side:"LONG",marketCount:12,
+    five:frame("5m","SHORT",.10),fifteen:frame("15m","LONG",.24)}),false);
+});
 
 test("FOLKS six-second-stop geometry is not executable merely because fill is above stop",()=>{
   const signal=base({symbol:"FOLKS_USDT",entryModel:"ANCHOR_FLOW",signalPrice:2.38860,stopPrice:2.38804,

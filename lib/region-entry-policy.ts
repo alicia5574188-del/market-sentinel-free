@@ -1,4 +1,4 @@
-import { TURN_CONFIG } from "./multi-turn-engine.ts";
+import { TURN_CONFIG, type TurnFrameState } from "./multi-turn-engine.ts";
 import { MULTI_TURN_MIN_LEVERAGE, MULTI_TURN_TARGET_LEVERAGE, multiTurnEntryLeverage } from "./multi-turn-entry-policy.ts";
 import { REGION_DETACH_WIDTHS, type RegionEntrySignal } from "./region-lifecycle.ts";
 import { anchorFlowExecutableProofRate } from "./anchor-flow.ts";
@@ -10,6 +10,20 @@ type Reject={ok:false;reason:string;remainingSpaceRate:number};
 export type RegionEntryPlan={price:number;count:number;quantity:number;notional:number;leverage:number;margin:number;plannedRisk:number;
   entryFee:number;remainingSpaceRate:number;lossRate:number;};
 type Accept={ok:true;plan:RegionEntryPlan};
+
+/** Only veto mean-reversion REJECTION entries when a sufficiently broad,
+ * synchronized 5m + 15m market shock is still moving against that entry. */
+export function rejectionAgainstSynchronizedFlow(input:{side:"LONG"|"SHORT";marketCount:number;
+  five?:TurnFrameState;fifteen?:TurnFrameState}){
+  const {side,marketCount,five,fifteen}=input;
+  if(marketCount<8||!five?.ready||!fifteen?.ready)return false;
+  const opposite=side==="LONG"?"SHORT":"LONG";
+  const breadthAgainst=side==="LONG"
+    ?five.breadthLong<=.18&&fifteen.breadthLong<=.32
+    :five.breadthLong>=.82&&fifteen.breadthLong>=.68;
+  return breadthAgainst&&five.direction===opposite&&fifteen.direction===opposite
+    &&five.directionConfidence>=.35&&fifteen.directionConfidence>=.30;
+}
 
 export function evaluateRegionEntryPolicy(input:{
   signal:RegionEntrySignal;bestBid:number;bestAsk:number;contract:Contract;equity:number;peakEquity:number;

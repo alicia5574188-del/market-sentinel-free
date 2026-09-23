@@ -258,8 +258,15 @@ export class GateLiveClient {
         },
         body: body || undefined,
         signal,
-        redirect:"error",
+        // Cloudflare Workers implements only follow/manual. Manual preserves
+        // the signed origin so we can reject every redirect ourselves without
+        // ever forwarding Gate credentials or a mutation to another URL.
+        redirect:"manual",
       });
+      if(response.status>=300&&response.status<400){
+        await response.body?.cancel().catch(()=>undefined);
+        throw new GateHttpError('{"label":"REDIRECT_REJECTED","message":"signed request redirect refused"}',response.status);
+      }
       const raw=await response.text();
       if(!response.ok)throw new GateHttpError(raw,response.status);
       return {data:(raw?parseGateJson<T>(raw):{}) as T,raw};

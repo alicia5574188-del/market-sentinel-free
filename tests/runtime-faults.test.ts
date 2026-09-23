@@ -401,7 +401,7 @@ test("empty upstream contract results cannot replace the last valid catalog or s
   assert.equal(stream.runtime.lastUniverseAt, 10_000);
 });
 
-test("radar admission selects the most useful active markets instead of ordering by turnover", async () => {
+test("radar admission retains the bounded liquidity sleeve before activity ranking", async () => {
   const { stream } = await makeStream();
   const contracts=["LIQ_USDT","MID_USDT","VOL_USDT"].map(symbol=>({ symbol, tickSize:.01, quantoMultiplier:.001,
     maintenanceRate:.005, leverageMax:20, fundingRate:0 }));
@@ -411,10 +411,30 @@ test("radar admission selects the most useful active markets instead of ordering
     { symbol:"LIQ_USDT", last:100, high24h:101, low24h:99, change24hRate:.01, volume24hUsd:100_000_000, fundingRate:0, openInterest:10_000 },
     { symbol:"MID_USDT", last:100, high24h:110, low24h:90, change24hRate:.05, volume24hUsd:50_000_000, fundingRate:0, openInterest:10_000 },
   ]);
-  assert.deepEqual(stream.runtime.liquidUniverse,["VOL_USDT","MID_USDT","LIQ_USDT"]);
+  assert.deepEqual(stream.runtime.liquidUniverse,["LIQ_USDT","MID_USDT","VOL_USDT"]);
   assert.equal(stream.runtime.radar.scanned,3);
   assert.equal(stream.runtime.radar.lastScanAt,11_000);
   assert.equal(stream.runtime.radar.lastError,null);
+});
+
+test("radar keeps core markets and in-progress RegionLaunch paths inside the bounded scan",async()=>{
+  const {stream}=await makeStream(),now=1_800_000_000_000;
+  const symbols=["BTC_USDT","ETH_USDT","SOL_USDT","ARMED_USDT","IGNITION_USDT","READY_USDT","SIGNAL_USDT","WATCH_USDT",
+    ...Array.from({length:32},(_,i)=>`ALT${i}_USDT`)];
+  stream.refreshUniverse(now-1_000,symbols.map((symbol,i)=>({symbol,tickSize:.01,quantoMultiplier:.001,
+    maintenanceRate:.005,leverageMax:20,fundingRate:0,rank:i})));
+  const launch=(symbol:string,phase:string,quality:number)=>({symbol,phase,quality,updatedAt:now-60_000,
+    failedDepartures:2,motherBars:30});
+  stream.forwardState.regionLaunches={
+    ARMED_USDT:launch("ARMED_USDT","ARMED",.8),IGNITION_USDT:launch("IGNITION_USDT","IGNITION",.8),
+    READY_USDT:launch("READY_USDT","READY",.8),WATCH_USDT:launch("WATCH_USDT","WATCH",.95),
+  };
+  stream.forwardState.regionLaunchSignals=[{symbol:"SIGNAL_USDT",expiresAt:now+60_000}];
+  stream.refreshRadar(now,symbols.map((symbol,i)=>({symbol,last:100,high24h:105+i,low24h:95-i/10,
+    change24hRate:i/100,volume24hUsd:1_000_000+i*1_000_000,fundingRate:0,openInterest:10_000})));
+  for(const symbol of ["BTC_USDT","ETH_USDT","SOL_USDT","ARMED_USDT","IGNITION_USDT","READY_USDT","SIGNAL_USDT","WATCH_USDT"])
+    assert.ok(stream.runtime.liquidUniverse.includes(symbol),`${symbol} must remain scanned`);
+  assert.equal(stream.runtime.liquidUniverse.length,30);
 });
 
 function gateHourlyRows(currentHour: number, completedCount: number) {

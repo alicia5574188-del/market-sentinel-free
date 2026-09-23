@@ -1,3 +1,26 @@
+# 2026-09-23 — LIVE edge / shock continuity candidate verified locally
+
+Branch `fix/20260923-live-strategy-continuity` from deployed main `e645c1d` now
+implements the five reproduced repairs in
+`research/LIVE_AND_SHOCK_CONTINUITY_2026-09-23.md`. Signed Gate requests use
+Cloudflare-compatible manual redirects with explicit local 3xx rejection;
+mutations remain single-shot and GET hedging remains restricted to the two
+official futures origins. The existing 30-slot scan now retains current
+RegionLaunch work, BTC/ETH/SOL, a bounded six-market liquidity sleeve and four
+exploration slots. A valid outside 5m close may use only a strict first complete
+1m continuation or the existing pullback/restart. Only extreme synchronized
+5m+15m breadth conflicts veto REJECTION; AnchorFlow/RegionLaunch are unchanged.
+
+Local gates pass: 1028 direct, 214 Forward, 61 equity, 49 member, 132 LIVE and
+19 architecture/migration tests; focused fault/integration tests, typecheck,
+build, Gate-stream workerd, lint (0 errors / 16 existing warnings), diff-check
+and Wrangler dry-run pass. The optional local Member workerd smoke reached the
+compiled auth/register/permission assertions but the Node24/Miniflare emulator
+timed out on a later member-session request after its external Request.cf
+metadata lookup was unavailable; the deterministic member suite and default
+release workflow pass. No private Gate test, LIVE switch mutation or account
+reset occurred. Reviewed-main release and public continuity receipt remain.
+
 # 2026-09-23 — private LIVE timeout/dispatch repair; release verification
 
 Base deployed main e8fabe2 (PR413) is confirmed healthy, source startedAt

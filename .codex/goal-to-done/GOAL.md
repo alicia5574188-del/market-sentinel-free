@@ -1,3 +1,12 @@
+# 2026-09-23 — LIVE edge and broad-shock continuity
+
+Complete the owner-authorized repair described in
+research/LIVE_AND_SHOCK_CONTINUITY_2026-09-23.md: preserve the current framework
+while fixing Cloudflare redirect incompatibility, RegionLaunch scan eviction,
+missing market/liquidity anchors, the completed-5m strong-continuation gap and
+counter-shock REJECTION entries. Preserve account/history/positions/risk and all
+manual LIVE intent; verify and deploy reviewed main without a real-money test.
+
 # 2026-09-23 — private account resilience and immediate source dispatch
 
 Latest owner request: fix repeated LIVE account timeouts and avoid waiting for a
