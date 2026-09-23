@@ -2803,6 +2803,67 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       this.applyRealtimeSymbols(next);
   }
 
+  private forwardUrgentSymbols(now=Date.now()){
+    if(!this.forwardState)return [];
+    return forwardUrgentQuoteSymbols(this.forwardState,now,this.runtime.liquidUniverse);
+  }
+
+  private ensureForwardUrgentSymbolsResident(now=Date.now()){
+    const urgent=this.forwardUrgentSymbols(now);
+    if(!urgent.length)return;
+    const protectedSymbols=[...this.currentAuthorityProtectionSymbols()];
+    const keep=this.runtime.symbols.filter(symbol=>!protectedSymbols.includes(symbol)&&!urgent.includes(symbol));
+    const next=[...new Set([...protectedSymbols,...urgent,...keep])].slice(0,PORTFOLIO_REALTIME_CAPACITY);
+    if(next.length!==this.runtime.symbols.length||next.some((symbol,index)=>symbol!==this.runtime.symbols[index]))
+      this.applyRealtimeSymbols(next);
+  }
+
+  private forwardQuotes(now=Date.now()){
+    const urgent=new Set(this.forwardUrgentSymbols(now));
+    return Object.fromEntries(Object.entries(this.runtime.evidence).flatMap(([symbol,row])=>{
+      if(!row?.fresh||row.bestBid==null||row.bestAsk==null||now-row.observedAt>STALE_AFTER_MS)return [];
+      const failure=this.runtime.feedFailures[symbol];
+      const recovered=failure?.suspendedSince==null&&(failure?.recoveryFreshCount??FEED_RECOVERY_CONFIRMATIONS)>=FEED_RECOVERY_CONFIRMATIONS;
+      const warm=(this.sessionWarmup[symbol]??0)>=(urgent.has(symbol)?2:WARMUP_SNAPSHOTS);
+      return [[symbol,{midpoint:row.midpoint,bestBid:row.bestBid,bestAsk:row.bestAsk,observedAt:row.observedAt,fresh:true,
+        entryReady:recovered&&warm&&this.runtime.contractMeta[symbol]!=null,
+        completedMinuteAt:this.forwardMinuteCandles[symbol]?.at(-1)
+          ?(this.forwardMinuteCandles[symbol]!.at(-1)!.time+60)*1_000:undefined}]];
+    }));
+  }
+
+  private forwardMinutePaths(){
+    return Object.fromEntries(Object.entries(this.forwardMinuteCandles).filter(([,rows])=>rows.length));
+  }
+
+  private async refreshForwardUrgentMinutes(now=Date.now()){
+    const targetCompletedAt=Math.floor(now/60_000)*60_000;
+    const urgent=this.forwardUrgentSymbols(now).slice(0,6);
+    const due=urgent.filter(symbol=>{
+      if((this.forwardMinuteRetryAt.get(symbol)??0)>now)return false;
+      const last=this.forwardMinuteCandles[symbol]?.at(-1);
+      return !last||(last.time+60)*1_000<targetCompletedAt;
+    });
+    if(!due.length)return 0;
+    const results=await Promise.allSettled(due.map(async symbol=>({symbol,
+      rows:await fetchStructureCandles(symbol,"1m",60)})));
+    for(const result of results){
+      if(result.status!=="fulfilled"){
+        const symbol=due[results.indexOf(result)]!;
+        this.forwardMinuteRetryAt.set(symbol,now+5_000);
+        continue;
+      }
+      const {symbol,rows}=result.value;
+      if(rows.length){
+        this.forwardMinuteCandles[symbol]=rows.slice(-90);
+        this.forwardMinuteRetryAt.delete(symbol);
+      }else this.forwardMinuteRetryAt.set(symbol,now+5_000);
+    }
+    for(const symbol of Object.keys(this.forwardMinuteCandles))
+      if(!this.runtime.liquidUniverse.includes(symbol)&&!urgent.includes(symbol))delete this.forwardMinuteCandles[symbol];
+    return due.length;
+  }
+
   private cycleBookSymbols(now: number, symbols: string[]) {
     const protectedSymbols = new Set([
       ...this.currentAuthorityProtectionSymbols(),
