@@ -1,4 +1,5 @@
 /** UI contracts only. No strategy, credentials storage, or exchange execution. */
+import {isTransientLiveReadErrorText} from "./live-read-resilience.ts";
 import type { forwardSummary } from "./forward-relations.ts";
 import type { RuntimeHealthShape } from "./runtime-health.ts";
 import type { MirrorReceipt, mirrorCoverage } from "./live-parity.ts";
@@ -52,9 +53,7 @@ export function holdingTime(start: number | undefined, end: number) {
   const minutes = Math.max(0, Math.floor((end-start)/60_000));
   return minutes >= 60 ? `${Math.floor(minutes/60)}小时${minutes%60}分` : `${minutes}分钟`;
 }
-export function isTransientLiveReadError(value:string|null|undefined){
-  return Boolean(value&&(/The operation was aborted due to timeout|Gate只读核对超时/.test(value)));
-}
+export const isTransientLiveReadError=isTransientLiveReadErrorText;
 export function livePositionMark(position: LivePosition, runtime: OperatorRuntime | null, now: number) {
   // Keep the last REAL exchange valuation with a timestamp when stale.
   // Public market data and PAPER prices never substitute for Gate's PnL.
