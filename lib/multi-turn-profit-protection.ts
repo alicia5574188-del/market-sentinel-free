@@ -1,9 +1,10 @@
 export const MULTI_TURN_PROFIT_PROTECTION_VERSION="multi-turn-profit-floor-v3";
-// Persisted v3 and v4 share the same record shape. A policy rollback must not
-// make either deployed generation unreadable or erase an existing floor.
-export type MultiTurnProfitVersion=typeof MULTI_TURN_PROFIT_PROTECTION_VERSION|"multi-turn-profit-floor-v4";
+export const REGION_MIGRATION_PROFIT_PROTECTION_VERSION="region-migration-profit-floor-v1";
+// Persisted generations share the same record shape. A policy rollout must not
+// make an earlier deployed floor unreadable or erase an existing protection line.
+export type MultiTurnProfitVersion=typeof MULTI_TURN_PROFIT_PROTECTION_VERSION|"multi-turn-profit-floor-v4"|typeof REGION_MIGRATION_PROFIT_PROTECTION_VERSION;
 export const supportedProfitVersion=(value:unknown):value is MultiTurnProfitVersion=>
-  value===MULTI_TURN_PROFIT_PROTECTION_VERSION||value==="multi-turn-profit-floor-v4";
+  value===MULTI_TURN_PROFIT_PROTECTION_VERSION||value==="multi-turn-profit-floor-v4"||value===REGION_MIGRATION_PROFIT_PROTECTION_VERSION;
 
 export type MultiTurnProfitSignal={
   continuationScore?:number|null;
@@ -93,5 +94,45 @@ export function multiTurnProfitFloor(
     version:MULTI_TURN_PROFIT_PROTECTION_VERSION,
     reachedR,lockedR,floorRate,retentionRate:floorRate/favorable,
     activationRate,checkpointBand:Math.floor(lockedR*4+1e-9),mode,
+  };
+}
+
+
+/**
+ * Region MIGRATION profit protection.
+ *
+ * A 5m accepted migration is expected to keep making immediate forward progress.
+ * Once an executable move is meaningfully above round-trip cost, its observed
+ * profit may no longer fall all the way back to the original structural stop.
+ * This floor is intentionally quicker and tighter than the old multi-timeframe
+ * overlay, while still leaving a real pullback buffer and never predicting a top.
+ */
+export function regionMigrationProfitFloor(
+  favorable:number,
+  riskRate:number,
+  modeledCost=.0022,
+):MultiTurnProfitFloor|null{
+  if(![favorable,riskRate,modeledCost].every(Number.isFinite)||riskRate<=0||favorable<=0)return null;
+  const reachedR=favorable/riskRate;
+  const activationRate=Math.max(modeledCost*1.75,Math.min(.35*riskRate,.0075));
+  if(favorable<activationRate)return null;
+
+  let retentionRate:number;
+  if(reachedR<.75)retentionRate=.35;
+  else if(reachedR<1.25)retentionRate=.45+(reachedR-.75)/.50*.10;
+  else if(reachedR<2)retentionRate=.55+(reachedR-1.25)/.75*.10;
+  else if(reachedR<4)retentionRate=.65+(reachedR-2)/2*.12;
+  else if(reachedR<8)retentionRate=.77+(reachedR-4)/4*.08;
+  else retentionRate=Math.min(.90,.85+.02*Math.log2(Math.max(1,reachedR/8)));
+
+  const costPositiveFloor=modeledCost+Math.max(.0006,modeledCost*.25);
+  const breathingRoom=Math.max(.0010,Math.min(.0025,.08*riskRate));
+  const floorRate=Math.min(favorable-breathingRoom,Math.max(favorable*retentionRate,costPositiveFloor));
+  if(!(floorRate>modeledCost&&floorRate<favorable))return null;
+  return{
+    version:REGION_MIGRATION_PROFIT_PROTECTION_VERSION,
+    reachedR,lockedR:floorRate/riskRate,floorRate,
+    retentionRate:floorRate/favorable,activationRate,
+    checkpointBand:Math.floor(floorRate/riskRate*4+1e-9),mode:"NORMAL",
   };
 }
