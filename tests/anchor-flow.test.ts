@@ -27,16 +27,16 @@ const raw:RegionEntrySignal={version:REGION_LIFECYCLE_VERSION,id:"raw",symbol:"B
   regionWidth:zone.width,regionWidthRate:zone.widthRate,reason:"raw accepted migration"};
 const bar=(offset:number,o:number,h:number,l:number,c:number):RegionCandle=>({time:START+offset,open:o,high:h,low:l,close:c,volume:1000});
 
-test("raw accepted migration creates no order until extension, first retest and restart all occur",()=>{
-  const partial=[bar(300,101.3,102,101.7,101.8)];
-  const first=advanceAnchorFlowUniverse({paths:{BTC_USDT:partial},lifecycles:{BTC_USDT:lifecycle},frames:frames("LONG",(START+600)*1000),
+test("accepted migration waits for a good 5m location, not for an extra extension stage",()=>{
+  const firstRows=[bar(300,101.3,102,101.7,101.8)];
+  const first=advanceAnchorFlowUniverse({paths:{BTC_USDT:firstRows},lifecycles:{BTC_USDT:lifecycle},frames:frames("LONG",(START+600)*1000),
     prior:{},migrationSignals:[raw],consumed:{},now:(START+600)*1000+1,costRate:.0022});
   assert.equal(first.signals.length,0);
-  assert.equal(first.states.BTC_USDT?.phase,"WAIT_RETEST");
+  assert.equal(first.states.BTC_USDT?.phase,"RETEST");
 
-  const full=[...partial,bar(600,101.8,101.65,101.2,101.4),bar(900,101.4,101.85,101.3,101.75)];
-  const next=advanceAnchorFlowUniverse({paths:{BTC_USDT:full},lifecycles:{BTC_USDT:lifecycle},frames:frames("LONG",(START+1200)*1000),
-    prior:first.states,migrationSignals:[],consumed:{},now:(START+1200)*1000+1,costRate:.0022});
+  const full=[...firstRows,bar(600,101.75,101.95,101.25,101.9)];
+  const next=advanceAnchorFlowUniverse({paths:{BTC_USDT:full},lifecycles:{BTC_USDT:lifecycle},frames:frames("LONG",(START+900)*1000),
+    prior:first.states,migrationSignals:[],consumed:{},now:(START+900)*1000+1,costRate:.0022});
   assert.equal(next.signals.length,1);
   assert.equal(next.signals[0]!.entryModel,"ANCHOR_FLOW");
   assert.equal(next.signals[0]!.contextTimeframe,"15m");
@@ -44,7 +44,7 @@ test("raw accepted migration creates no order until extension, first retest and 
   assert.equal(next.states.BTC_USDT?.phase,"FIRED");
 });
 
-test("1h and 15m must agree before a raw migration can arm AnchorFlow",()=>{
+test("a clearly established opposite 1h direction still vetoes the 5m opportunity",()=>{
   const disagree:MultiTurnState["frames"]={BTC_USDT:{"15m":frame("15m","LONG",START*1000),"1h":frame("1h","SHORT",START*1000)}};
   const result=advanceAnchorFlowUniverse({paths:{BTC_USDT:[]},lifecycles:{BTC_USDT:lifecycle},frames:disagree,
     prior:{},migrationSignals:[raw],consumed:{},now:(START+300)*1000+1,costRate:.0022});
@@ -52,6 +52,25 @@ test("1h and 15m must agree before a raw migration can arm AnchorFlow",()=>{
   assert.equal(result.states.BTC_USDT,undefined);
 });
 
+test("a weak higher-timeframe WATCH no longer kills an otherwise valid 5m setup",()=>{
+  const weak1h={...frame("1h","SHORT",START*1000),phase:"WATCH" as const,directionConfidence:.30,turnProbability:.30};
+  const weak15={...frame("15m","LONG",START*1000),phase:"WATCH" as const,continuationScore:.20};
+  const context:MultiTurnState["frames"]={BTC_USDT:{"15m":weak15,"1h":weak1h}};
+  const result=advanceAnchorFlowUniverse({paths:{BTC_USDT:[]},lifecycles:{BTC_USDT:lifecycle},frames:context,
+    prior:{},migrationSignals:[raw],consumed:{},now:(START+300)*1000+1,costRate:.0022});
+  assert.equal(result.signals.length,0);
+  assert.equal(result.states.BTC_USDT?.phase,"WAIT_RETEST");
+});
+
+
+test("a strong retest candle may fire on the same completed 5m bar",()=>{
+  const rows=[bar(300,101.4,101.85,101.2,101.8)];
+  const result=advanceAnchorFlowUniverse({paths:{BTC_USDT:rows},lifecycles:{BTC_USDT:lifecycle},frames:frames("LONG",(START+600)*1000),
+    prior:{},migrationSignals:[raw],consumed:{},now:(START+600)*1000+1,costRate:.0022});
+  assert.equal(result.signals.length,1);
+  assert.equal(result.states.BTC_USDT?.phase,"FIRED");
+  assert.equal(result.signals[0]!.anchorExpectedMoveRate,.018);
+});
 test("deep reacceptance of the old region kills the candidate instead of re-entering",()=>{
   const rows=[bar(300,101.3,102,101.2,101.8),bar(600,101.8,101.9,100.6,100.7)];
   const result=advanceAnchorFlowUniverse({paths:{BTC_USDT:rows},lifecycles:{BTC_USDT:lifecycle},frames:frames("LONG",(START+900)*1000),
