@@ -1008,7 +1008,8 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
     }
     const lifecycle=s.regionLifecycles?.[signal.symbol];
     if(lifecycle&&lifecycle.zone?.id===signal.regionId)s.regionLifecycles![signal.symbol]=consumeRegionBoundary(lifecycle,signal.boundary,now);
-    s.regionSignals=(s.regionSignals??[]).filter(row=>row.id!==signal.id);diagnostics.opened++;diagnostics.queued=s.regionSignals.length;
+    if(!anchorSignal)s.regionSignals=(s.regionSignals??[]).filter(row=>row.id!==signal.id);
+    diagnostics.opened++;diagnostics.queued=s.regionSignals.length;
     event(s,now,"ENTRY",t.id,anchorSignal
       ?`${signal.symbol} AnchorFlow 开仓：1h/15m没有有置信度的明确反向否决，5m回测反应READY后通过订单经济性检查。`
       :`${signal.symbol} 5m区域边界拒绝回归开仓。`,
