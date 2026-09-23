@@ -870,7 +870,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const lockedAnchorSymbols=[...new Set([
       ...(this.forwardState?.positions.flatMap(position=>position.status==="OPEN"?[position.symbol]:[])??[]),
       ...(this.forwardState?.regionSignals??[]).filter(signal=>signal.expiresAt>now).map(signal=>signal.symbol),
-      ...Object.values(this.forwardState?.anchorFlows??{}).filter(row=>row.phase!=="FAILED"&&row.phase!=="FIRED").map(row=>row.symbol),
+      ...Object.values(this.forwardState?.anchorFlows??{}).filter(row=>row.phase!=="FAILED"&&row.phase!=="CONSUMED").map(row=>row.symbol),
     ])];
     const universeRows = selectAnchorOpportunityUniverse({ rows: eligibleRows, limit: SCAN_UNIVERSE_SIZE,
       lockedSymbols: lockedAnchorSymbols, currentSymbols: this.runtime.liquidUniverse,
@@ -1022,7 +1022,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       executionVersion:s?.executionVersion??null,regionVersion:s?.regionVersion??null,liveEligible:false,
       startedAt:s?.startedAt??null,initialEquity:s?.initialEquity??null,balance:s?.balance??null,
       lastCycleAt:s?.lastCycleAt??null,resolved:s?.resolved??0,openCount:s?.positions.length??0,
-      anchorFlowCount:Object.values(s?.anchorFlows??{}).filter(row=>row.phase!=="FAILED"&&row.phase!=="FIRED").length,
+      anchorFlowCount:Object.values(s?.anchorFlows??{}).filter(row=>row.phase!=="FAILED"&&row.phase!=="CONSUMED").length,
       executableEventCount:(s?.regionSignals??[]).filter(row=>row.expiresAt>Date.now()).length,
       exitPolicyVersion:s?.exitPolicyUpgrade?.policy??null,exitPolicyActivatedAt:s?.exitPolicyUpgrade?.at??null,
       timelyExitOpenCount:s?.positions.filter(t=>!!t.exitControl&&t.exitControl.policy===s.exitPolicyUpgrade?.policy).length??0,

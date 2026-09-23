@@ -141,7 +141,7 @@ export function initialMultiTurnForward(now:number):ForwardState{
   s.turnRotationBlockedUntil={};s.rotationState={version:MULTI_TURN_ROTATION_VERSION,lastAt:0,count:0,lastFrom:null,lastTo:null};s.cutoverAt=now;
   s.regionVersion=REGION_LIFECYCLE_VERSION;s.regionInitializedAt=now;s.regionLifecycles={};s.regionSignals=[];
   s.executionVersion=ANCHOR_FLOW_VERSION;s.anchorFlows={};s.anchorConsumed={};
-  s.latestReason="AnchorFlow 已启动：1h/15m定义主方向，5m区域只负责位置；顺势单必须经过真实推进、第一次回测守住和重新启动。";
+  s.latestReason="AnchorFlow 已启动：1h/15m只否决有置信度的明确反向，5m区域负责位置；顺向反应先进入READY，只有真实开仓才消费。";
   event(s,now,"START",ANCHOR_FLOW_VERSION,s.latestReason);return s;
 }
 export function normalizeForward(v:ForwardState|null|undefined,now:number):ForwardState {
@@ -936,12 +936,19 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
         entryTurnProbability:frame?.turnProbability??0,entryContinuation:frame?.continuationScore??1,entryDirectionConfidence:frame?.directionConfidence??1}};
     s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.positions.push(t);s.rules.unshift(rule);s.rules=s.rules.slice(0,48);
     s.lastEntryBars[signal.symbol]=signal.completedAt;s.turnLastEntryBars??={};s.turnLastEntryBars[`region:${signal.regionId}`]=signal.completedAt;
-    if(anchorSignal){s.anchorConsumed??={};s.anchorConsumed[`${signal.regionId}:${signal.side}`]=now;}
+    if(anchorSignal){
+      s.anchorConsumed??={};s.anchorConsumed[`${signal.regionId}:${signal.side}`]=now;
+      const flow=s.anchorFlows?.[signal.symbol];
+      if(flow&&flow.regionId===signal.regionId&&flow.side===signal.side){
+        flow.phase="CONSUMED";flow.consumedAt=now;
+        flow.reason="READY信号已经通过盘口与经济性检查并完成真实模拟开仓；该区域方向已消费。";
+      }
+    }
     const lifecycle=s.regionLifecycles?.[signal.symbol];
     if(lifecycle&&lifecycle.zone?.id===signal.regionId)s.regionLifecycles![signal.symbol]=consumeRegionBoundary(lifecycle,signal.boundary,now);
     s.regionSignals=(s.regionSignals??[]).filter(row=>row.id!==signal.id);diagnostics.opened++;diagnostics.queued=s.regionSignals.length;
     event(s,now,"ENTRY",t.id,anchorSignal
-      ?`${signal.symbol} AnchorFlow 开仓：1h/15m同向，5m第一次回测守住后重新启动。`
+      ?`${signal.symbol} AnchorFlow 开仓：1h/15m没有有置信度的明确反向否决，5m回测反应READY后通过订单经济性检查。`
       :`${signal.symbol} 5m区域边界拒绝回归开仓。`,
       {notional,plannedRisk,regionWidthRate:signal.regionWidthRate,stopRate,remainingEdge:remaining});
   }
@@ -976,7 +983,7 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
   }
   const entrySymbols=new Set(input.entrySymbols??Object.keys(paths));
   const retainedSymbols=[...new Set([...entrySymbols,...s.positions.map(position=>position.symbol),
-    ...Object.values(s.anchorFlows??{}).flatMap(row=>row.phase!=="FAILED"&&row.phase!=="FIRED"?[row.symbol]:[])])];
+    ...Object.values(s.anchorFlows??{}).flatMap(row=>row.phase!=="FAILED"&&row.phase!=="CONSUMED"?[row.symbol]:[])])];
   const newestPathCompletedAt=retainedSymbols.reduce((latest,symbol)=>{
     const row=paths[symbol]?.at(-1);
     return row?Math.max(latest,(row.time+300)*1000):latest;
@@ -995,26 +1002,31 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
     const anchor=advanceAnchorFlowUniverse({paths:regionPaths,lifecycles:s.regionLifecycles,frames:s.turnEngine.frames,
       prior:s.anchorFlows??{},migrationSignals:rawMigrations,consumed:s.anchorConsumed??{},now,costRate:cost});
     s.anchorFlows=anchor.states;
-    const existing=(s.regionSignals??[]).filter(signal=>signal.expiresAt>now
-      &&s.regionLifecycles?.[signal.symbol]?.zone?.id===signal.regionId
-      &&(signal.kind==="REJECTION"||(signal as AnchorFlowEntrySignal).entryModel==="ANCHOR_FLOW"));
-    s.regionSignals=[...new Map([...existing,...rejections,...anchor.signals].map(signal=>[signal.id,signal])).values()]
+    const existing=(s.regionSignals??[]).filter(signal=>{
+      if(signal.expiresAt<=now||s.regionLifecycles?.[signal.symbol]?.zone?.id!==signal.regionId)return false;
+      if(signal.kind==="REJECTION")return true;
+      if((signal as AnchorFlowEntrySignal).entryModel!=="ANCHOR_FLOW")return false;
+      const flow=s.anchorFlows?.[signal.symbol];
+      return flow?.regionId===signal.regionId&&flow.side===signal.side&&flow.phase==="READY";
+    });
+    s.regionSignals=[...new Map([...existing,...rejections,...anchor.rejections,...anchor.signals].map(signal=>[signal.id,signal])).values()]
       .sort((x,y)=>x.completedAt-y.completedAt||x.symbol.localeCompare(y.symbol)).slice(-90);
     s.entryOpportunities=[];
     s.lastCycleAt=now;s.selectedSymbols=[...entrySymbols];
     const regionRows=Object.values(s.regionLifecycles).filter(row=>entrySymbols.has(row.symbol)&&row.zone);
-    const activeAnchors=Object.values(s.anchorFlows).filter(row=>row.phase!=="FAILED"&&row.phase!=="FIRED"&&entrySymbols.has(row.symbol));
+    const activeAnchors=Object.values(s.anchorFlows).filter(row=>row.phase!=="FAILED"&&row.phase!=="CONSUMED"&&entrySymbols.has(row.symbol));
     s.fitDiagnostics={tested:regionRows.length,qualified:s.regionSignals.length+activeAnchors.length,trainGroups:0,checkGroups:0,latestAt:now,rapidQualified:0,
       activeLong:s.regionSignals.filter(x=>x.side==="LONG").length+activeAnchors.filter(x=>x.side==="LONG").length,
       activeShort:s.regionSignals.filter(x=>x.side==="SHORT").length+activeAnchors.filter(x=>x.side==="SHORT").length};
-    s.observations+=region.updated;s.measured+=region.signals.length+anchor.signals.length;
-    if(region.signals.length||anchor.signals.length){
+    s.observations+=region.updated;s.measured+=region.signals.length+anchor.signals.length+anchor.rejections.length;
+    if(region.signals.length||anchor.signals.length||anchor.rejections.length){
       const sample=[...rejections.map(x=>`${x.symbol} REJECTION→${x.side}`),
+        ...anchor.rejections.map(x=>`${x.symbol} FALSE_BREAK→${x.side}`),
         ...rawMigrations.map(x=>`${x.symbol} BREAKOUT→${x.side}`),
-        ...anchor.signals.map(x=>`${x.symbol} ANCHOR→${x.side}`)].slice(0,6).join("；");
+        ...anchor.signals.map(x=>`${x.symbol} ANCHOR_READY→${x.side}`)].slice(0,6).join("；");
       event(s,now,"PROTECTION",ANCHOR_FLOW_VERSION,
-        `本轮区域事件${region.signals.length}个，AnchorFlow可执行事件${anchor.signals.length}个：${sample}`,
-        {regions:regionRows.length,signals:region.signals.length,anchorSignals:anchor.signals.length});
+        `本轮区域事件${region.signals.length}个，AnchorFlow READY事件${anchor.signals.length}个，假突破转换${anchor.rejections.length}个：${sample}`,
+        {regions:regionRows.length,signals:region.signals.length,anchorSignals:anchor.signals.length,anchorRejections:anchor.rejections.length});
     }
   }
   manageMultiTurn(s,quotes,now);
@@ -1114,7 +1126,7 @@ export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iter
     const regions=Object.values(s.regionLifecycles??{}).filter(row=>row.zone&&(!allowed||allowed.has(row.symbol)))
       .sort((a,b)=>(priority[a.status]??9)-(priority[b.status]??9)||b.observedAt-a.observedAt||a.symbol.localeCompare(b.symbol));
     const signals=(s.regionSignals??[]).filter(signal=>signal.expiresAt>now&&(!allowed||allowed.has(signal.symbol)));
-    const anchors=Object.values(s.anchorFlows??{}).filter(row=>row.phase!=="FAILED"&&row.phase!=="FIRED"
+    const anchors=Object.values(s.anchorFlows??{}).filter(row=>row.phase!=="FAILED"&&row.phase!=="CONSUMED"
       &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>a.createdAt-b.createdAt||a.symbol.localeCompare(b.symbol));
     return[...new Set([...s.positions.map(p=>p.symbol),...signals.map(x=>x.symbol),...anchors.map(x=>x.symbol),...regions.map(x=>x.symbol)])].slice(0,11);
   }
@@ -1155,7 +1167,7 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     rules:s.rules,positions:s.positions,history:s.history,events:s.events.slice(0,80),daily:s.daily,
     marketCount:s.selectedSymbols.length,markets:s.selectedSymbols,latestReason:s.latestReason,storage:s.storage,
     nextCycleAt:s.lastCycleAt?(Math.floor((s.lastCycleAt-90_000)/BAR_MS)+1)*BAR_MS+90_000:now,cost:PAPER_COST,
-    boundaries:multi?{scope:"PAPER_ONLY",grammar:"AnchorFlow：1h确定主导流向，15m确认仍处FLOW，5m成熟区域只负责位置；顺势必须真实推进→第一次回测守住→重新启动，直接突破追单已退役",
+    boundaries:multi?{scope:"PAPER_ONLY",grammar:"AnchorFlow：1h/15m只否决有置信度的明确反向；5m成熟区域负责位置。首次回测可浅入旧区，顺向反应进入READY，只有真实开仓才CONSUMED；连续重新接受旧区可转REJECTION回归中心。",
       historyBackfill:false,sampleMeaning:"历史K线只恢复方向、区域和候选状态；任何过去已经发生的回测/启动绝不补单",
       accounting:"新鲜买卖价模拟成交；费用、滑点和本次真实回测止损进入下单经济性计算",
       risk:"组合计划风险≤4%，同方向≤3%；AnchorFlow单笔≤0.8%，REJECTION单笔≤0.6%，单笔名义价值≤权益60%",
