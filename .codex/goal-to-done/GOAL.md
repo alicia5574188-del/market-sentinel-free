@@ -1,3 +1,7 @@
+# 2026-09-23 — full launch boundary and five-minute-first entry
+
+The latest MET screenshot request authorizes correcting launch geometry and temporal hierarchy: retain the earlier wick extremes belonging to the same consolidation, require5m strong departure first, allow extraordinary unfinished5m strength to use the established1m entry methods, and let slower outside5m closes wait for acceleration or shallow pullback/restart. Scope is RegionLaunch entry only; preserve current account/history/open positions, prior Gate feed repair, risk, owner/member intent and existing verified-main release. Screenshot alone cannot establish the exact source trade's historical tick path. Finish regression tests, publication and live continuity within the user's efficient workflow, not another strategy redesign.
+
 # 2026-09-23 — resolve feed-caused entry obstruction
 
 User authorizes robust market-data acquisition without lowering strategy quality. Add bounded public Gate streaming with existing independent REST/backfill, preserve fresh executable prices, candle causality and all account/LIVE authority. Cross-venue prices cannot be labeled Gate fills. Finish functional/release gates and observe live stream use plus advancing source state. Scope supersedes the old REST-only architecture constraint and permits only the processBooks baseline change.

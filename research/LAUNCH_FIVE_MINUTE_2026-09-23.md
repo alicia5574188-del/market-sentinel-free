@@ -1,0 +1,20 @@
+# Full launch boundary and five-minute departure
+
+The user supplied a MET screenshot with an earlier rejection low and a later short near a long lower wick, asking for a five-minute departure before one-minute entry timing. Source inspection confirms two defects: the launch box used the20th/80th percentiles as executable boundaries, excluding some wicks; and a strong one-minute bar could authorize ignition without checking its containing five-minute candle. The image alone does not establish the exact historical source trade or its tick-by-tick path. Regression fixtures describe the reported failure, not fabricated exchange replay.
+
+## Geometry
+
+Keep quantile bands, overlapping candles, center crossings and limited drift for recognizing a dense core. Execution boundaries use every high/low in the associated episode. Look backward through contiguous overlapping closes for at most24bars, including the first approach/rejection candle and stopping at displacement. Once observed, the same box retains its older extremes when the window rolls; a wick that returns inside expands it. A close outside freezes the pre-breakout box rather than moving the boundary with the breakout. Mother-region identity and its already-consumed status survive the v2-to-v3 transition.
+
+## Two entry paths
+
+- FAST: an unfinished5m candle must have a directional real body at least3times the pre-departure mean5m high-low range, strong close location (at least75%) and limited opposite wick (at most35%of body). The baseline uses up to20already-completed bars before departure. Actual5m open comes from contiguous completed1m bars beginning at the bucket open; current executable quotes update its live close and observed extremes. No scaling one minute into five and no future closing prices. After it first qualifies, a shallow pullback may reduce the body while the5m shape, outside boundary and original micro pullback checks still hold. The existing two-strong-minute continuation or shallow-pullback restart then determines entry.
+- CLOSED: a slower candle must actually complete outside the full boundary, with directional body at least max(60%of reference range, reference mean body,75%of modeled cost in price), close location at least70%, opposite wick at most50%of body. Continue observing the following candle. Sudden strength can use FAST; otherwise a real shallow pullback is required, followed by a1m close beyond the ENTIRE pullback high/low. Giveback may not exceed50%of original5m body and cumulative opposite bodies may not exceed70%. Slow direction alone, without acceleration or pullback/restart, does not trigger.
+
+Recheck five-minute evidence before consuming READY. A return inside cancels this departure; old source signals cannot bypass the version fence. New observation continues from the next5m bucket. A20-minute unconsumed departure expires back to mother observation, rather than pursuing an obsolete breakout. New rules do not change any open position's stop or exit lifecycle.
+
+## Scope and verification
+
+Reuse the deployed Gate WebSocket+REST feed, existing1m/5m paths, quote cadence, bounded pool and source-account/LIVE bridge. No Worker, authentication, credentials, private execution, account reset, owner switch or membership change. Only the authorized forward source module fingerprint changes; every frozen primary Worker method stays byte-identical.
+
+Tests cover symmetric LONG/SHORT fast/slow paths, long-wick rejection, full old-low retention during rolling windows, new rejection-wick expansion, frozen outside boundary, missing bucket-open data, incomplete/future candles, current-quote invalidation, slow whole-pullback recovery, slow-to-fast acceleration, old-version signal fencing and consumed-memory preservation. Both valid paths open via the real source engine. The former one-minute-only positive example with a wider5m baseline now remains observation; narrower real compression still permits a valid strong launch. Existing post-entry protection and LIVE parity tests remain required. Functional tests do not establish future profitability.

@@ -12,9 +12,9 @@ const lifecycle=(zone=mother):RegionLifecycleState=>({version:REGION_LIFECYCLE_V
   acceptedAt:null,detachedAt:null,upperConsumedAt:null,lowerConsumedAt:null,reason:"fixture"});
 const bar=(offset:number,o:number,h:number,l:number,c:number):RegionCandle=>({time:START+offset,open:o,high:h,low:l,close:c,volume:1000});
 const compression=[
-  bar(300,100.68,100.94,100.48,100.78),bar(600,100.78,100.98,100.55,100.70),
-  bar(900,100.70,100.96,100.52,100.84),bar(1200,100.84,101.00,100.58,100.73),
-  bar(1500,100.73,100.97,100.57,100.86),bar(1800,100.86,101.01,100.60,100.79),
+  bar(300,100.78,100.90,100.68,100.82),bar(600,100.82,100.94,100.70,100.76),
+  bar(900,100.76,100.95,100.72,100.84),bar(1200,100.84,100.96,100.73,100.77),
+  bar(1500,100.77,100.97,100.73,100.86),bar(1800,100.86,100.98,100.74,100.79),
 ];
 const q=(mid:number,at:number)=>({bestBid:mid-.005,bestAsk:mid+.005,observedAt:at,fresh:true,entryReady:true});
 const armed=()=>advanceRegionLaunchUniverse({paths:{BCH_USDT:compression},lifecycles:{BCH_USDT:lifecycle()},prior:{},
@@ -47,7 +47,7 @@ test("late one-minute history can restore observation but can never create a pos
   const states=armed();
   const late=bar(2100,100.90,102.30,100.85,102.00);
   const r=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[late]},now:(START+2400)*1000,costRate:.0022});
-  assert.equal(r.states.BCH_USDT?.phase,"ARMED");assert.match(r.states.BCH_USDT?.reason??"",/不历史补追/);
+  assert.equal(r.states.BCH_USDT?.phase,"ARMED");assert.equal(advanceRegionLaunchQuotes({states:r.states,quotes:{},now:(START+2400)*1000,costRate:.0022}).signals.length,0);
 });
 
 test("BCH-like strong 1m breakout, small pullback and first real restart becomes READY",()=>{
@@ -57,7 +57,7 @@ test("BCH-like strong 1m breakout, small pullback and first real restart becomes
   assert.equal(states.BCH_USDT?.phase,"IGNITION");
   const pullback=bar(2160,102.00,102.05,101.65,101.75);
   states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[breakout,pullback]},now:(START+2220)*1000,costRate:.0022}).states;
-  assert.equal(states.BCH_USDT?.phase,"IGNITION");assert.match(states.BCH_USDT?.reason??"",/小回调|重新顺向/);
+  assert.equal(states.BCH_USDT?.phase,"IGNITION");assert.match(states.BCH_USDT?.reason??"",/小回调|重新顺向|5分钟/);
   const restart=bar(2220,101.75,102.15,101.72,102.10);
   states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[breakout,pullback,restart]},now:(START+2280)*1000,costRate:.0022}).states;
   assert.equal(states.BCH_USDT?.phase,"READY");
@@ -69,7 +69,7 @@ test("BCH-like strong 1m breakout, small pullback and first real restart becomes
 test("MET-like one-minute breakout with a large upper wick never reaches IGNITION",()=>{
   const states=armed(),fake=bar(2100,100.90,103.30,100.85,101.45);
   const r=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[fake]},now:(START+2160)*1000,costRate:.0022});
-  assert.equal(r.states.BCH_USDT?.phase,"ARMED");assert.match(r.states.BCH_USDT?.reason??"",/突破K不够强/);
+  assert.equal(r.states.BCH_USDT?.phase,"ARMED");assert.match(r.states.BCH_USDT?.reason??"",/5分钟|突破K不够强/);
 });
 
 test("too much combined pullback invalidates the launch but keeps the mother under observation",()=>{
@@ -91,4 +91,54 @@ test("missing one-minute data simply preserves observation and creates no execut
 test("fast post-entry validation threshold remains above ordinary noise",()=>{
   assert.equal(regionLaunchValidationProofRate(.0022),.0015);assert.equal(regionLaunchValidationProofRate(.004),.0024);
   assert.equal(regionLaunchValidationProofRate(.010),.0025);
+});
+
+test("full compression includes the earlier rejection wick and never shrinks it away as the window rolls",()=>{
+  const withWick=compression.map((r,i)=>i===0?{...r,low:100.1}:r);
+  let states=advanceRegionLaunchUniverse({paths:{BCH_USDT:withWick},lifecycles:{BCH_USDT:lifecycle()},now:(START+2100)*1000,costRate:.0022}).states;
+  assert.equal(states.BCH_USDT!.compression!.lower,100.1);
+  const old=states.BCH_USDT!.compression!.id;
+  const later=Array.from({length:12},(_,i)=>bar(2100+i*300,100.8,100.94,100.70,i%2?100.77:100.83));
+  states=advanceRegionLaunchUniverse({paths:{BCH_USDT:[...withWick,...later]},lifecycles:{BCH_USDT:lifecycle()},prior:states,
+    now:(START+5700)*1000,costRate:.0022}).states;
+  assert.equal(states.BCH_USDT!.compression!.lower,100.1);assert.equal(states.BCH_USDT!.compression!.id,old);
+  const inner=bar(5700,100.82,100.84,100.3,100.35);
+  states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[inner]},now:(START+5760)*1000,costRate:.0022}).states;
+  assert.equal(states.BCH_USDT!.phase,"ARMED","a sharp local move above the earlier low is not a SHORT breakout");
+});
+
+test("new rejection wick extends the same box while an outside closing breakout cannot stretch it",()=>{
+  let states=armed();const old=states.BCH_USDT!.compression!;
+  const wick=bar(2100,100.79,101.1,100.3,100.8);
+  states=advanceRegionLaunchUniverse({paths:{BCH_USDT:[...compression,wick]},lifecycles:{BCH_USDT:lifecycle()},prior:states,
+    now:(START+2400)*1000,costRate:.0022}).states;
+  assert.equal(states.BCH_USDT!.compression!.lower,100.3);assert.equal(states.BCH_USDT!.compression!.id,old.id);
+  const breakout=bar(2400,100.8,103,100.79,102.9);
+  states=advanceRegionLaunchUniverse({paths:{BCH_USDT:[...compression,wick,breakout]},lifecycles:{BCH_USDT:lifecycle()},prior:states,
+    now:(START+2700)*1000,costRate:.0022}).states;
+  assert.equal(states.BCH_USDT!.compression!.upper,101.1);
+});
+
+test("pending READY is revoked if the current 5m quote has returned inside before execution",()=>{
+  let states=armed();
+  const rows=[bar(2100,100.90,102.30,100.85,102),bar(2160,102,102.05,101.65,101.75),bar(2220,101.75,102.15,101.72,102.10)];
+  for(let i=1;i<=3;i++)states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:rows.slice(0,i)},now:(START+2100+i*60)*1000,costRate:.0022}).states;
+  assert.equal(states.BCH_USDT!.phase,"READY");
+  const now=(START+2281)*1000;
+  states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:rows},quotes:{BCH_USDT:q(100.8,now)},now,costRate:.0022}).states;
+  assert.equal(states.BCH_USDT!.phase,"ARMED");
+  assert.equal(advanceRegionLaunchQuotes({states,quotes:{BCH_USDT:q(100.8,now)},now,costRate:.0022}).signals.length,0);
+});
+
+test("v2 pending permissions are rebuilt without consuming or forgetting the mother; consumed state stays consumed",()=>{
+  const states=armed(),old=states.BCH_USDT!;
+  Object.assign(old,{version:"region-launch-v2",phase:"READY",failedDepartures:3});
+  assert.equal(advanceRegionLaunchQuotes({states,quotes:{BCH_USDT:q(102,(START+2101)*1000)},now:(START+2101)*1000,costRate:.0022}).signals.length,0);
+  const upgraded=advanceRegionLaunchUniverse({paths:{BCH_USDT:compression},lifecycles:{BCH_USDT:lifecycle()},prior:states,
+    now:(START+2101)*1000,costRate:.0022}).states.BCH_USDT!;
+  assert.equal(upgraded.version,REGION_LAUNCH_VERSION);assert.equal(upgraded.phase,"ARMED");assert.equal(upgraded.failedDepartures,3);
+  Object.assign(old,{version:"region-launch-v2",phase:"CONSUMED",consumedSide:"LONG",consumedAt:(START+2100)*1000});
+  const consumed=advanceRegionLaunchUniverse({paths:{BCH_USDT:compression},lifecycles:{BCH_USDT:lifecycle()},prior:states,
+    now:(START+2101)*1000,costRate:.0022}).states.BCH_USDT!;
+  assert.equal(consumed.phase,"CONSUMED");assert.equal(consumed.consumedAt,(START+2100)*1000);
 });

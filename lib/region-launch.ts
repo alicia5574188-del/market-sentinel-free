@@ -1,15 +1,16 @@
 import { REGION_BAR_MS, REGION_LIFECYCLE_VERSION, type RegionCandle, type RegionEntrySignal, type RegionLifecycleState, type RegionZone } from "./region-lifecycle.ts";
 import type { MultiTurnState } from "./multi-turn-engine.ts";
 import { assessStrongBreakout, evaluateMicroRestart } from "./micro-restart.ts";
+import {launchFiveMinuteEvidence,evaluateSlowLaunchRestart} from "./launch-five-minute.ts";
 
-export const REGION_LAUNCH_VERSION="region-launch-v2";
+export const REGION_LAUNCH_VERSION="region-launch-v3";
 export const REGION_LAUNCH_SIGNAL_MS=120_000;
 export const REGION_LAUNCH_MINUTE_MS=60_000;
 
 export type RegionLaunchPhase="WATCH"|"ARMED"|"IGNITION"|"READY"|"CONSUMED";
 export type RegionLaunchCompression={
   id:string;startAt:number;endAt:number;bars:number;lower:number;upper:number;center:number;width:number;widthRate:number;
-  crossings:number;overlapPairs:number;
+  crossings:number;overlapPairs:number;coreLower?:number;coreUpper?:number;averageRange?:number;averageBody?:number;
 };
 export type RegionLaunchState={
   version:typeof REGION_LAUNCH_VERSION;symbol:string;phase:RegionLaunchPhase;createdAt:number;updatedAt:number;lastProcessedAt:number;
@@ -23,6 +24,7 @@ export type RegionLaunchState={
   readyAt:number|null;readySide:"LONG"|"SHORT"|null;readySignalPrice:number|null;readyStopPrice:number|null;
   readyImpulseRate:number|null;readyExpectedMoveRate:number|null;readyMaxChaseRate:number|null;readyConfirmationMs:number|null;
   consumedAt:number|null;consumedSide:"LONG"|"SHORT"|null;reason:string;
+  launchPath?:"FAST"|"CLOSED";departureAfter?:number;currentFiveMinute?:RegionCandle;fiveMinuteBodyMultiple?:number;
 };
 export type RegionLaunchSignal=RegionEntrySignal&{
   entryModel:"REGION_LAUNCH";launchVersion:typeof REGION_LAUNCH_VERSION;
@@ -58,14 +60,16 @@ export function regionLaunchValidationProofRate(modeledCostRate:number){
 
 function compressionFrom(rows:RegionCandle[],mother:Pick<RegionLaunchState,
   "motherLower"|"motherUpper"|"motherCenter"|"motherWidth"|"motherWidthRate">,costRate:number):RegionLaunchCompression|null{
-  const completed=rows.filter(r=>[r.time,r.open,r.high,r.low,r.close,r.volume].every(finite)&&r.high>=r.low&&r.low>0)
+  const completed=rows.filter(r=>[r.time,r.open,r.high,r.low,r.close,r.volume].every(finite)&&r.open>0&&r.close>0
+    &&r.high>=Math.max(r.open,r.close)&&r.low<=Math.min(r.open,r.close)&&r.low>0&&r.volume>=0)
     .sort((a,b)=>a.time-b.time);
   for(const size of [10,9,8,7,6,5,4]){
     if(completed.length<size)continue;
     const window=completed.slice(-size);
     if(window.some((r,i)=>i&&r.time!==window[i-1]!.time+300))continue;
     const lows=window.map(r=>r.low),highs=window.map(r=>r.high),closes=window.map(r=>r.close);
-    const lower=quantile(lows,.20),upper=quantile(highs,.80);
+    const coreLower=quantile(lows,.20),coreUpper=quantile(highs,.80);
+    const lower=coreLower,upper=coreUpper;
     if(!(upper>lower&&lower>0))continue;
     const center=quantile(closes,.50),width=upper-lower,widthRate=width/Math.max(center,1e-12);
     const closeSpan=(Math.max(...closes)-Math.min(...closes))/width;
@@ -77,9 +81,23 @@ function compressionFrom(rows:RegionCandle[],mother:Pick<RegionLaunchState,
     if(width>mother.motherWidth*.82||widthRate<Math.max(.0008,costRate*.75)||widthRate>Math.max(.06,mother.motherWidthRate*.95)
       ||center<expandedLow||center>expandedHigh||nearBoundary>.60||closeSpan>.90||drift>.55
       ||cross<(size>=6?2:1)||overlaps<Math.max(2,size-2))continue;
-    const startAt=completeAt(window[0]!),endAt=completeAt(window.at(-1)!);
-    return{id:`rc-${window[0]!.time}-${window.at(-1)!.time}-${lower.toPrecision(8)}-${upper.toPrecision(8)}`,
-      startAt,endAt,bars:size,lower,upper,center,width,widthRate,crossings:cross,overlapPairs:overlaps};
+    // A small recent box can be nested in the same older rejection area. Walk
+    // back through connected closes, retaining wicks, and stop at a genuine
+    // approach/displacement candle instead of dragging in the entire trend.
+    const envelope=[...window];let fullLower=Math.min(...lows),fullUpper=Math.max(...highs);
+    for(let i=completed.length-size-1;i>=Math.max(0,completed.length-24);i--){
+      const prior=completed[i]!;
+      if(prior.time+300!==envelope[0]!.time||prior.close<fullLower-width*.25||prior.close>fullUpper+width*.25
+        ||prior.high<fullLower||prior.low>fullUpper)break;
+      envelope.unshift(prior);fullLower=Math.min(fullLower,prior.low);fullUpper=Math.max(fullUpper,prior.high);
+      if(Math.abs(prior.close-prior.open)>width*.75)break;
+    }
+    const startAt=completeAt(envelope[0]!),endAt=completeAt(window.at(-1)!);
+    const reference=completed.slice(-20);
+    return{id:`rc-${envelope[0]!.time}-${window.at(-1)!.time}-${fullLower.toPrecision(8)}-${fullUpper.toPrecision(8)}`,
+      startAt,endAt,bars:envelope.length,lower:fullLower,upper:fullUpper,center,width:fullUpper-fullLower,widthRate:(fullUpper-fullLower)/center,
+      coreLower,coreUpper,averageRange:reference.reduce((n,r)=>n+r.high-r.low,0)/reference.length,
+      averageBody:reference.reduce((n,r)=>n+Math.abs(r.close-r.open),0)/reference.length,crossings:cross,overlapPairs:overlaps};
   }
   return null;
 }
@@ -107,6 +125,7 @@ function initial(symbol:string,zone:RegionZone,now:number):RegionLaunchState{
 function clearIgnition(s:RegionLaunchState){
   s.ignitionSide=null;s.ignitionAt=null;s.triggerPrice=null;s.breakoutOpen=null;s.breakoutHigh=null;s.breakoutLow=null;
   s.breakoutClose=null;s.breakoutImpulseRate=null;s.breakoutWickRate=null;s.pullbackExtreme=null;s.lastMinuteAt=null;
+  s.launchPath=undefined;s.currentFiveMinute=undefined;s.fiveMinuteBodyMultiple=undefined;
 }
 function clearReady(s:RegionLaunchState){
   s.readyAt=null;s.readySide=null;s.readySignalPrice=null;s.readyStopPrice=null;s.readyImpulseRate=null;
@@ -143,17 +162,39 @@ export function advanceRegionLaunchUniverse(input:{paths:Record<string,RegionCan
   frames?:MultiTurnState["frames"];prior?:Record<string,RegionLaunchState>;now:number;costRate:number}){
   const states:Record<string,RegionLaunchState>={...(input.prior??{})};
   for(const [symbol,lifecycle] of Object.entries(input.lifecycles)){
-    const zone=lifecycle.zone,rows=input.paths[symbol]??[];
+    const zone=lifecycle.zone,rows=(input.paths[symbol]??[]).filter(r=>completeAt(r)<=input.now);
     if(!zone||!rows.length)continue;
     let state=states[symbol];
-    if(!state||state.version!==REGION_LAUNCH_VERSION||!relatedMother(state,zone))state=initial(symbol,zone,input.now);
+    if(!state||!relatedMother(state,zone))state=initial(symbol,zone,input.now);
+    else if(state.version!==REGION_LAUNCH_VERSION){
+      // Preserve mother/consumption memory and old positions; never execute an
+      // old READY built from percentile-only bounds under the new authority.
+      state={...state,version:REGION_LAUNCH_VERSION,phase:state.phase==="CONSUMED"?"CONSUMED":"WATCH",compression:null};
+      clearIgnition(state);clearReady(state);
+    }
     processDepartures(state,rows);
     if(state.phase!=="CONSUMED"&&state.phase!=="READY"&&state.phase!=="IGNITION"){
       const wasArmed=state.phase==="ARMED"&&!!state.compression;
       const observedCompression=compressionFrom(rows,state,input.costRate);
       // A completed breakout 5m bar naturally stops looking compressed. Keep
       // the already-observed box long enough for its 1m confirmation to arrive.
-      const compression=observedCompression??(wasArmed&&input.now<=state.compression!.endAt+2*REGION_BAR_MS?state.compression:null);
+      let compression=observedCompression;
+      if(wasArmed){
+        const old=state.compression!,latest=rows.at(-1)!;
+        if(latest.close<old.lower||latest.close>old.upper){
+          // Freeze the pre-departure box. A rolling window cannot swallow its
+          // breakout or remove the older rejection wick immediately before it.
+          compression=input.now<=old.endAt+4*REGION_BAR_MS?old:null;
+        }else{
+          const returned=rows.filter(r=>completeAt(r)>old.endAt&&r.close>=old.lower&&r.close<=old.upper);
+          const lower=Math.min(old.lower,...returned.map(r=>r.low)),upper=Math.max(old.upper,...returned.map(r=>r.high));
+          const endAt=Math.max(old.endAt,...returned.map(completeAt)),reference=rows.filter(r=>completeAt(r)<=endAt).slice(-20);
+          compression={...old,lower,upper,width:upper-lower,widthRate:(upper-lower)/old.center,
+            endAt,bars:old.bars+returned.length,
+            averageRange:reference.reduce((n,r)=>n+r.high-r.low,0)/reference.length,
+            averageBody:reference.reduce((n,r)=>n+Math.abs(r.close-r.open),0)/reference.length};
+        }
+      }
       state.compression=compression;state.quality=motherQuality(state,compression);
       if(compression){
         state.phase="ARMED";
@@ -181,7 +222,7 @@ function readySignal(s:RegionLaunchState):RegionLaunchSignal|null{
     completedAt:s.readyAt,expiresAt:s.readyAt+REGION_LAUNCH_SIGNAL_MS,signalPrice:s.readySignalPrice,stopPrice:s.readyStopPrice,targetPrice:null,
     regionId:s.motherRegionId,regionConfirmedAt:s.motherConfirmedAt,regionLower:s.motherLower,regionUpper:s.motherUpper,
     regionCenter:s.motherCenter,regionWidth:s.motherWidth,regionWidthRate:s.motherWidthRate,
-    reason:`RegionLaunch：成熟母区域长期观察 + ${s.compression.bars}根5m子区压缩后，1分钟强势突破K成立；允许回调，直到第一根重新顺向并突破前一根局部高/低点的1分钟K完成后才允许追击。`,
+    reason:`RegionLaunch：完整5分钟缠绕边界${s.compression.lower.toPrecision(8)}–${s.compression.upper.toPrecision(8)}（含影线）；${s.launchPath==="CLOSED"?"5分钟区间外收盘后小回调再突破":"5分钟强势离区后1分钟连续突破或小回调重启"}。5分钟实体/前期平均振幅${(s.fiveMinuteBodyMultiple??0).toFixed(2)}倍。`,
     entryModel:"REGION_LAUNCH",launchVersion:REGION_LAUNCH_VERSION,launchTriggerPrice:s.triggerPrice!,
     launchCompressionLower:s.compression.lower,launchCompressionUpper:s.compression.upper,launchCompressionBars:s.compression.bars,
     launchFailedDepartures:s.failedDepartures,launchImpulseRate:s.readyImpulseRate,launchConfirmationMs:s.readyConfirmationMs,
@@ -198,29 +239,69 @@ function launchTriggers(s:RegionLaunchState,costRate:number){
 }
 
 export function advanceRegionLaunchMinutes(input:{states:Record<string,RegionLaunchState>;minutePaths:Record<string,RegionCandle[]>;
-  frames?:MultiTurnState["frames"];now:number;costRate:number}){
+  fiveMinutePaths?:Record<string,RegionCandle[]>;quotes?:Record<string,Quote>;frames?:MultiTurnState["frames"];now:number;costRate:number}){
   const states:Record<string,RegionLaunchState>={...input.states};
   for(const [symbol,source] of Object.entries(states)){
     const s=structuredClone(source);
-    if((s.phase!=="ARMED"&&s.phase!=="IGNITION")||!s.compression||input.now<s.cooldownUntil){states[symbol]=s;continue;}
+    if(s.version!==REGION_LAUNCH_VERSION||(s.phase!=="ARMED"&&s.phase!=="IGNITION"&&s.phase!=="READY")||!s.compression||input.now<s.cooldownUntil){states[symbol]=s;continue;}
+    if(s.phase!=="READY"&&input.now>s.compression.endAt+4*REGION_BAR_MS){
+      s.phase="WATCH";s.compression=null;s.launchPath=undefined;clearIgnition(s);clearReady(s);
+      s.reason="原5分钟离区观察已过期；母区域保留，重新识别当前缠绕，不追旧突破。";states[symbol]=s;continue;
+    }
     const rows=(input.minutePaths[symbol]??[]).filter(row=>[row.time,row.open,row.high,row.low,row.close,row.volume].every(finite)
       &&row.high>=row.low&&row.low>0&&minuteCompleteAt(row)<=input.now).sort((a,b)=>a.time-b.time);
     if(!rows.length){states[symbol]=s;continue;}
     const {long:longTrigger,short:shortTrigger}=launchTriggers(s,input.costRate);
+    const quote=input.quotes?.[symbol],livePrice=quote?.fresh&&quote.bestBid>0&&quote.bestAsk>=quote.bestBid
+      &&quote.observedAt<=input.now+1000&&input.now-quote.observedAt<=5000?(quote.bestBid+quote.bestAsk)/2:undefined;
+    const five=launchFiveMinuteEvidence({box:s.compression,minutes:rows,fiveMinutes:input.fiveMinutePaths?.[symbol],
+      now:input.now,costRate:input.costRate,after:s.departureAfter,livePrice,previousCurrent:s.currentFiveMinute,
+      activeSide:s.ignitionSide??undefined,activeAt:s.ignitionAt??undefined,fastQualifiedAt:s.launchPath==="FAST"?s.ignitionAt??undefined:undefined,
+      initialFastBody:s.breakoutClose!=null&&s.breakoutOpen!=null?Math.abs(s.breakoutClose-s.breakoutOpen):undefined});
+    s.currentFiveMinute=five.current;
+    const cancel=(reason:string)=>{s.failedDepartures++;s.phase="ARMED";s.departureAfter=Math.floor(input.now/REGION_BAR_MS)*REGION_BAR_MS+REGION_BAR_MS;
+      s.launchPath=undefined;clearIgnition(s);clearReady(s);s.reason=reason;};
+    if(five.state==="FAIL"){cancel(five.reason);states[symbol]=s;continue;}
+    if(five.state==="WAIT"){
+      if(s.launchPath==="FAST"&&s.ignitionSide&&s.ignitionAt!=null&&s.breakoutOpen!=null&&s.breakoutHigh!=null&&s.breakoutLow!=null&&s.breakoutClose!=null){
+        const checked=evaluateMicroRestart({breakout:{time:(s.ignitionAt-60_000)/1000,open:s.breakoutOpen,high:s.breakoutHigh,
+          low:s.breakoutLow,close:s.breakoutClose,volume:0},following:rows.filter(r=>minuteCompleteAt(r)>s.ignitionAt!),
+          side:s.ignitionSide,triggerPrice:s.triggerPrice!,costRate:input.costRate,regionWidthRate:s.motherWidthRate});
+        if(checked.state==="FAIL"){cancel(checked.reason);states[symbol]=s;continue;}
+      }
+      if(s.phase==="READY"){s.phase="IGNITION";clearReady(s);}
+      s.reason=five.reason;states[symbol]=s;continue;
+    }
+    if(s.ignitionSide&&s.ignitionSide!==five.side){cancel("5分钟离区方向已改变；取消原方向追击，等待新的完整结构。");states[symbol]=s;continue;}
+    s.fiveMinuteBodyMultiple=five.bodyMultiple;
+    if(s.phase==="READY"){states[symbol]=s;continue;}
+    if(s.launchPath==="CLOSED"&&five.state==="FAST"){
+      s.phase="ARMED";clearIgnition(s);clearReady(s);s.launchPath="FAST";
+    }
+    let slow:ReturnType<typeof evaluateSlowLaunchRestart>|null=null;
+    if(five.state==="CLOSED"&&s.launchPath!=="FAST"){
+      const b=five.bar!,side=five.side!;
+      s.launchPath="CLOSED";s.phase="IGNITION";s.ignitionSide=side;s.ignitionAt=completeAt(b);
+      s.triggerPrice=side==="LONG"?longTrigger:shortTrigger;
+      s.breakoutOpen=b.open;s.breakoutHigh=b.high;s.breakoutLow=b.low;s.breakoutClose=b.close;
+      slow=evaluateSlowLaunchRestart({bar:b,following:rows.filter(r=>r.time>=b.time+300),side,
+        boundary:s.triggerPrice,costRate:input.costRate});
+    }
 
     if(s.phase==="ARMED"){
-      const fresh=rows.filter(row=>minuteCompleteAt(row)>Math.max(s.armedAt??0,s.lastMinuteAt??0));
+      const fresh=rows.filter(row=>row.time>=five.bar!.time&&minuteCompleteAt(row)>Math.max(s.armedAt??0,s.lastMinuteAt??0,s.departureAfter??0));
       for(const row of fresh){
         const at=minuteCompleteAt(row);s.lastMinuteAt=at;
         // Late one-minute history can restore observation state, but can never
         // create a retroactive chase after the move has already happened.
         if(input.now-at>75_000){s.reason="RegionLaunch收到迟到的1分钟K，仅补齐观察，不历史补追。";continue;}
         const side=row.close>=longTrigger?"LONG":row.close<=shortTrigger?"SHORT":null;
-        if(!side)continue;
+        if(!side||side!==five.side)continue;
         const trigger=side==="LONG"?longTrigger:shortTrigger;
         const quality=assessStrongBreakout({bar:row,side,triggerPrice:trigger,costRate:input.costRate,regionWidthRate:s.motherWidthRate});
         if(!quality.ok){s.reason=`RegionLaunch继续观察：${quality.reason}`;continue;}
         s.phase="IGNITION";s.ignitionSide=side;s.ignitionAt=at;s.triggerPrice=trigger;
+        s.launchPath="FAST";
         s.breakoutOpen=row.open;s.breakoutHigh=row.high;s.breakoutLow=row.low;s.breakoutClose=row.close;
         s.breakoutImpulseRate=quality.impulseRate;s.breakoutWickRate=quality.adverseWickRate;
         s.pullbackExtreme=side==="LONG"?row.low:row.high;
@@ -235,13 +316,12 @@ export function advanceRegionLaunchMinutes(input:{states:Record<string,RegionLau
       const breakout:RegionCandle={time:Math.floor((ignitionAt-REGION_LAUNCH_MINUTE_MS)/1000),
         open:s.breakoutOpen,high:s.breakoutHigh,low:s.breakoutLow,close:s.breakoutClose,volume:1};
       const following=rows.filter(row=>minuteCompleteAt(row)>ignitionAt);
-      const evaluated=evaluateMicroRestart({breakout,following,side:ignitionSide,triggerPrice,
+      const evaluated=slow??evaluateMicroRestart({breakout,following,side:ignitionSide,triggerPrice,
         costRate:input.costRate,regionWidthRate:s.motherWidthRate});
       s.pullbackExtreme=evaluated.supportPrice??s.pullbackExtreme;
       s.lastMinuteAt=Math.max(s.lastMinuteAt??0,...following.map(minuteCompleteAt),ignitionAt);
       if(evaluated.state==="FAIL"){
-        s.failedDepartures++;s.phase="ARMED";s.cooldownUntil=0;clearIgnition(s);clearReady(s);
-        s.reason=`RegionLaunch本次启动失败：${evaluated.reason} 成熟母区域继续保留观察。`;
+        cancel(`RegionLaunch本次启动失败：${evaluated.reason} 成熟母区域继续保留观察。`);
       }else if(evaluated.state==="WAIT"){
         s.reason=`RegionLaunch继续观察：${evaluated.reason}`;
       }else if(evaluated.restartAt!=null&&evaluated.restartPrice!=null){
@@ -277,7 +357,7 @@ export function advanceRegionLaunchQuotes(input:{states:Record<string,RegionLaun
   const states:Record<string,RegionLaunchState>={...input.states},signals:RegionLaunchSignal[]=[];
   for(const [symbol,source] of Object.entries(states)){
     const s=structuredClone(source),q=input.quotes[symbol];
-    if(s.phase!=="READY"){states[symbol]=s;continue;}
+    if(s.version!==REGION_LAUNCH_VERSION||s.phase!=="READY"){states[symbol]=s;continue;}
     const signal=readySignal(s);
     if(!signal||input.now>signal.expiresAt){s.phase=s.compression?"ARMED":"WATCH";s.cooldownUntil=input.now+REGION_BAR_MS;clearReady(s);clearIgnition(s);states[symbol]=s;continue;}
     if(!q?.fresh||q.bestBid<=0||q.bestAsk<q.bestBid||q.observedAt>input.now+1000||input.now-q.observedAt>5000){states[symbol]=s;continue;}
