@@ -17,9 +17,11 @@ export function evaluateRegionEntryPolicy(input:{
   costRate:number;feeRate:number;slippageRate:number;anchorConfirmationReferencePrice?:number|null;
 }):Accept|Reject{
   const s=input.signal,mid=(input.bestBid+input.bestAsk)/2,spread=(input.bestAsk-input.bestBid)/Math.max(mid,1e-9);
-  const entryModel=(s as RegionEntrySignal&{entryModel?:string;anchorExpectedMoveRate?:number}).entryModel;
-  const isAnchor=s.kind==="MIGRATION"&&entryModel==="ANCHOR_FLOW";
-  const totalRiskRate=.04,sideRiskRate=.03,tradeRiskRate=isAnchor?.008:.006,perTradeNotionalRate=.60,totalNotionalRate=2.0;
+  const extra=s as RegionEntrySignal&{entryModel?:string;anchorExpectedMoveRate?:number;launchExpectedMoveRate?:number;
+    launchTriggerPrice?:number;launchMaxChaseRate?:number};
+  const entryModel=extra.entryModel;
+  const isAnchor=s.kind==="MIGRATION"&&entryModel==="ANCHOR_FLOW",isLaunch=s.kind==="MIGRATION"&&entryModel==="REGION_LAUNCH";
+  const totalRiskRate=.04,sideRiskRate=.03,tradeRiskRate=isAnchor?.008:isLaunch?.006:.006,perTradeNotionalRate=.60,totalNotionalRate=2.0;
   if(![input.bestBid,input.bestAsk,input.equity,input.peakEquity,input.costRate].every(Number.isFinite)||input.bestBid<=0||input.bestAsk<=input.bestBid)
     return{ok:false,reason:"当前盘口无效",remainingSpaceRate:0};
   if(spread>.0015)return{ok:false,reason:"当前买卖价差过大",remainingSpaceRate:0};
@@ -46,20 +48,31 @@ export function evaluateRegionEntryPolicy(input:{
     if(remaining/Math.max(lossRate,1e-9)<1)
       return{ok:false,reason:"区域拒绝虽有回归空间，但净收益不足覆盖完整结构风险与成本",remainingSpaceRate:remaining};
   }else{
-    if(!isAnchor)return{ok:false,reason:"直接区域迁移已退役；只允许 AnchorFlow 第一次回测重新启动事件",remainingSpaceRate:0};
-    const expected=(s as RegionEntrySignal&{anchorExpectedMoveRate?:number}).anchorExpectedMoveRate??0;
-    remaining=Math.max(0,expected-input.costRate);
-    const boundary=s.side==="LONG"?s.regionUpper:s.regionLower;
-    const location=d*(mid-boundary);
-    if(location< -s.regionWidth*.30||location>s.regionWidth*.45)
-      return{ok:false,reason:"AnchorFlow READY继续保留；当前价格已离开边界优势区，等待更好的成交位置",remainingSpaceRate:remaining};
-    const reference=input.anchorConfirmationReferencePrice??NaN,proof=anchorFlowExecutableProofRate(input.costRate);
-    const quoteProgress=Number.isFinite(reference)&&reference>0?d*(price/reference-1):0;
-    if(quoteProgress<proof)
-      return{ok:false,reason:"AnchorFlow READY继续保留；等待短时真实可执行盘口从回测极值给出顺向确认",remainingSpaceRate:remaining};
-    const edgeRatio=remaining/Math.max(lossRate,1e-9);
-    if(remaining<=input.costRate||edgeRatio<1.10)
-      return{ok:false,reason:"AnchorFlow 回测成立，但当前15m剩余空间仍不足覆盖结构风险与成本",remainingSpaceRate:remaining};
+    if(!isAnchor&&!isLaunch)return{ok:false,reason:"直接区域迁移已退役；只允许 AnchorFlow 回测重启或 RegionLaunch 爆发确认事件",remainingSpaceRate:0};
+    if(isLaunch){
+      const expected=extra.launchExpectedMoveRate??0,trigger=extra.launchTriggerPrice??0,maxChase=extra.launchMaxChaseRate??0;
+      const progress=trigger>0?d*(price/trigger-1):Infinity;
+      if(!(progress>0&&maxChase>0)||progress>maxChase)
+        return{ok:false,reason:"RegionLaunch已超过允许追价距离或发射边界失效；等待新的压缩，不补追",remainingSpaceRate:0};
+      remaining=Math.max(0,expected-progress-input.costRate);
+      const edgeRatio=remaining/Math.max(lossRate,1e-9);
+      if(remaining<=input.costRate||edgeRatio<1.10)
+        return{ok:false,reason:"RegionLaunch实时爆发成立，但当前位置的预期剩余空间已不足覆盖结构风险与成本",remainingSpaceRate:remaining};
+    }else{
+      const expected=extra.anchorExpectedMoveRate??0;
+      remaining=Math.max(0,expected-input.costRate);
+      const boundary=s.side==="LONG"?s.regionUpper:s.regionLower;
+      const location=d*(mid-boundary);
+      if(location< -s.regionWidth*.30||location>s.regionWidth*.45)
+        return{ok:false,reason:"AnchorFlow READY继续保留；当前价格已离开边界优势区，等待更好的成交位置",remainingSpaceRate:remaining};
+      const reference=input.anchorConfirmationReferencePrice??NaN,proof=anchorFlowExecutableProofRate(input.costRate);
+      const quoteProgress=Number.isFinite(reference)&&reference>0?d*(price/reference-1):0;
+      if(quoteProgress<proof)
+        return{ok:false,reason:"AnchorFlow READY继续保留；等待短时真实可执行盘口从回测极值给出顺向确认",remainingSpaceRate:remaining};
+      const edgeRatio=remaining/Math.max(lossRate,1e-9);
+      if(remaining<=input.costRate||edgeRatio<1.10)
+        return{ok:false,reason:"AnchorFlow 回测成立，但当前15m剩余空间仍不足覆盖结构风险与成本",remainingSpaceRate:remaining};
+    }
   }
   const sideRisk=s.side==="LONG"?input.longRisk:input.shortRisk;
   const drawdown=Math.max(0,1-input.equity/Math.max(input.peakEquity,input.equity));
