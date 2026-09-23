@@ -317,8 +317,9 @@ test("production gates follow the current AnchorFlow PAPER authority", async () 
   assert.equal((workflow.match(/runtime\.forward\.storage\.persistedAt >= \.runtime\.forward\.lastCycleAt/g) ?? []).length,2);
   assert.equal((workflow.match(/runtime\.liveMirror\.source == "CURRENT_FORWARD_ACCOUNT"/g) ?? []).length,2);
   assert.equal((workflow.match(/runtime\.liveMirror\.ownerControlled == true/g) ?? []).length,2);
-  assert.equal((workflow.match(/runtime\.limits\.scanUniverse == 30/g) ?? []).length,2);
-  assert.equal((workflow.match(/runtime\.limits\.realtimeCapacity == 11/g) ?? []).length,2);
+  const currentGates=workflow.slice(workflow.lastIndexOf("- name: Verify advancing production health"));
+  assert.equal((currentGates.match(/runtime\.limits\.scanUniverse == 30/g) ?? []).length,2);
+  assert.equal((currentGates.match(/runtime\.limits\.realtimeCapacity == 11/g) ?? []).length,2);
   assert.equal((workflow.match(/grep -Fq '哨兵 · AnchorFlow'/g) ?? []).length,2);
   assert.doesNotMatch(workflow,/runtime\.strategyArena\.rules\.strategyName == "五行情独立账户组合"/);
   assert.doesNotMatch(workflow,/runtime\.strategyData\.hourlyRequiredCandles == 721/);
