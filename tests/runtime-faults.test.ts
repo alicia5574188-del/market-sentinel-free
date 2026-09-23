@@ -84,6 +84,54 @@ test("protected holding book failures retry on the two-second protection clock i
   assert.equal(stream.runtime.feedFailures.HOLD_USDT.retryAt, now + 2_000);
 });
 
+test("RegionLaunch ARMED markets stay on the two-second book clock across every background bucket",async()=>{
+  const {stream}=await makeStream();const now=1_800_000_000_000;
+  stream.forwardState={strategyAuthorityVersion:"multi-turn-v1",positions:[],regionSignals:[],anchorFlows:{},
+    regionLaunches:{URGENT_USDT:{symbol:"URGENT_USDT",phase:"ARMED",quality:.9,updatedAt:now}}};
+  stream.runtime.symbols=["URGENT_USDT","BG_USDT"];stream.runtime.liquidUniverse=["URGENT_USDT","BG_USDT"];
+  stream.sessionWarmup.URGENT_USDT=4;stream.sessionWarmup.BG_USDT=4;
+  for(let i=0;i<5;i++)assert.ok(stream.cycleBookSymbols(now+i*2_000,stream.runtime.symbols).includes("URGENT_USDT"));
+});
+
+test("urgent Forward quotes no longer depend on stale legacy one-minute ancillary evidence",async()=>{
+  const {stream}=await makeStream();const now=1_800_000_000_000;
+  stream.forwardState={strategyAuthorityVersion:"multi-turn-v1",positions:[],regionSignals:[],anchorFlows:{},
+    regionLaunches:{URGENT_USDT:{symbol:"URGENT_USDT",phase:"ARMED",quality:.9,updatedAt:now}}};
+  stream.runtime.liquidUniverse=["URGENT_USDT"];stream.runtime.symbols=["URGENT_USDT"];
+  stream.runtime.contractMeta.URGENT_USDT={quantoMultiplier:1,maintenanceRate:.005,leverageMax:20,fundingRate:0};
+  stream.sessionWarmup.URGENT_USDT=2;
+  stream.runtime.evidence.URGENT_USDT={midpoint:100,bestBid:99.99,bestAsk:100.01,observedAt:now,fresh:true,
+    ancillaryFresh:false,optionalFresh:false,entryReady:false,recoveryFreshCount:2,suspensionReason:"旧1分钟辅助尚未更新"};
+  const quotes=stream.forwardQuotes(now);
+  assert.equal(quotes.URGENT_USDT?.entryReady,true);
+  assert.equal(quotes.URGENT_USDT?.bestBid,99.99);
+});
+
+test("fresh urgent books build a local completed one-minute fallback without publishing a data outage",async()=>{
+  const {stream}=await makeStream();const start=1_800_000_000_000;
+  stream.forwardState={strategyAuthorityVersion:"multi-turn-v1",positions:[],regionSignals:[],anchorFlows:{},
+    regionLaunches:{URGENT_USDT:{symbol:"URGENT_USDT",phase:"ARMED",quality:.9,updatedAt:start}}};
+  stream.runtime.liquidUniverse=["URGENT_USDT"];
+  for(const [offset,mid] of [[1_000,100],[10_000,101],[20_000,100.5],[30_000,101.2],[40_000,100.8],[50_000,101.1]] as const)
+    stream.recordForwardMinuteQuote("URGENT_USDT",mid,start+offset);
+  stream.recordForwardMinuteQuote("URGENT_USDT",101.3,start+61_000);
+  const row=stream.forwardMinutePaths().URGENT_USDT?.at(-1);
+  assert.deepEqual(row&&[row.open,row.high,row.low,row.close,row.volume],[100,101.2,100,101.1,0]);
+  assert.equal(stream.runtime.lastError,null);
+});
+
+test("a failed urgent official 1m refresh is local and retryable instead of becoming a system data-missing error",async()=>{
+  const {stream}=await makeStream();const now=1_800_000_060_000;
+  stream.forwardState={strategyAuthorityVersion:"multi-turn-v1",positions:[],regionSignals:[],anchorFlows:{},
+    regionLaunches:{URGENT_USDT:{symbol:"URGENT_USDT",phase:"ARMED",quality:.9,updatedAt:now}}};
+  stream.runtime.liquidUniverse=["URGENT_USDT"];
+  const original=globalThis.fetch;globalThis.fetch=(async()=>{throw new Error("synthetic urgent 1m outage");}) as typeof fetch;
+  try{const count=await stream.refreshForwardUrgentMinutes(now);assert.equal(count,1);}
+  finally{globalThis.fetch=original;}
+  assert.ok((stream.forwardMinuteRetryAt.get("URGENT_USDT")??0)>now);
+  assert.equal(stream.runtime.lastError,null);
+});
+
 test("the strategy candle clock waits for Gate publication grace and advances once per closed bar", () => {
   const boundary = 1_800_000;
   assert.equal(latestCompletedStrategyCandleAt(boundary + 7_999), boundary - 300_000);
