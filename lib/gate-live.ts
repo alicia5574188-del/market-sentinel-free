@@ -258,7 +258,7 @@ export class GateLiveClient {
         },
         body: body || undefined,
         signal,
-        redirect:"error",
+        redirect:"manual",
       });
       const raw=await response.text();
       if(!response.ok)throw new GateHttpError(raw,response.status);
