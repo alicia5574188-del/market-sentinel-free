@@ -17,6 +17,14 @@ const run=(signal:RegionEntrySignal,bid:number,ask:number,anchorConfirmationRefe
   grossNotional:0,usedMargin:0,tradeRisks:[],costRate:.0022,feeRate:.0007,slippageRate:.00025,
   anchorConfirmationReferencePrice,anchorMicroConfirmed});
 
+test("FOLKS six-second-stop geometry is not executable merely because fill is above stop",()=>{
+  const signal=base({symbol:"FOLKS_USDT",entryModel:"ANCHOR_FLOW",signalPrice:2.38860,stopPrice:2.38804,
+    regionLower:2.358,regionUpper:2.395,regionCenter:2.3855,regionWidth:.037,regionWidthRate:.037/2.3855,anchorExpectedMoveRate:.025});
+  const result=run(signal,2.3878,2.388,2.383);
+  assert.equal(result.ok,false);
+  if(!result.ok)assert.match(result.reason,/可平仓价/);
+});
+
 test("direct migration no longer owns entry authority",()=>{
   const result=run(base(),101.19,101.21);assert.equal(result.ok,false);
   if(!result.ok)assert.match(result.reason,/已退役|AnchorFlow/);

@@ -113,21 +113,21 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       <section className="fr-section"><div className="fr-section-head"><div><small>最近变化</small><h2>需要留意的运行记录</h2></div><button className="fr-text-button" onClick={()=>select("journal")}>全部记录 ↗</button></div><Journal data={data} limit={3}/></section>
     </>}
 
-    {tab==="relations"&&<><PageTitle eyebrow="DUAL REGION EXECUTION" title="执行" text="同一成熟区域提供两条互不替代的执行通道：AnchorFlow等第一次回测守住再启动；RegionLaunch长期保存母区域，识别4–10根5m子区压缩并提前ARMED，随后只看完整1分钟K：强突破、小回调、第一根重新顺向后才允许追击。"/>
+    {tab==="relations"&&<><PageTitle eyebrow="DUAL REGION EXECUTION" title="执行" text="AnchorFlow回测后必须重新突破当前1分钟局部结构，横盘里的旧信号不能直接开仓。RegionLaunch按当前缠绕区向上或向下的实际突破追击：连续两根1分钟强突破，或强突破后小回调再启动；大周期旧方向只作背景。"/>
 
       <section className="fr-section fr-exec-flow-section"><div className="fr-section-head"><div><small>当前执行层</small><h2>成熟区域双通道</h2></div><span>{time(data?.updatedAt)}</span></div>
         <div className="fr-exec-flow">
           <ExecStep index="01" title="30市场扫描" status={(data?.marketCount??0)>0?"已更新":"等待"} text={`当前维护 ${fmt(data?.marketCount,0)} 个市场；已有持仓、AnchorFlow READY/RETEST 与 RegionLaunch ARMED/IGNITION 优先获得11个实时盘口槽。`}/>
           <ExecStep index="02" title="成熟母区域记忆" status={activeRegions.length?"持续识别":"扫描中"} text={`当前 ${activeRegions.length} 个区域；普通失败离区不会让 RegionLaunch 消费母区域，直到真正出现独立新结构或成功发射后回到中心再重新计次。`}/>
           <ExecStep index="03" title="子区压缩 / 提前ARMED" status={armedLaunches.length?"正在盯盘":"等待压缩"} text={armedLaunches.length?`当前 ${armedLaunches.length} 个 RegionLaunch 标的已获得高优先级；必须先观察到突破前真实盘口，禁止部署后补追已经发生的行情。`:`正在母区域边界附近寻找4–10根5m短压缩；短子区本身没有独立交易权。`}/>
-          <ExecStep index="04" title="两种顺势入口" status={anchorFlows.length||armedLaunches.length?"观察中":"等待机会"} text={`AnchorFlow候选 ${anchorFlows.length} 个：等第一次回测；RegionLaunch活跃 ${armedLaunches.length} 个：等1分钟强突破K，小回调总量必须明显小于突破推进，再等第一根重新顺向K。`}/>
+          <ExecStep index="04" title="两种启动入口" status={anchorFlows.length||armedLaunches.length?"观察中":"等待机会"} text={`AnchorFlow候选 ${anchorFlows.length} 个：等回测后当前局部结构重启；RegionLaunch活跃 ${armedLaunches.length} 个：连续两根1分钟强突破即可追，或小回调后第一根重新顺向。`}/>
           <ExecStep index="05" title="真实盘口开仓" status={executableSignals.length?"检查中":"等待"} text={(data?.entryDiagnostics?.opened??0)>0?`本轮已开仓 ${fmt(data?.entryDiagnostics?.opened,0)} 笔。`:`当前执行状态：${mainBlocker}。`}/>
           <ExecStep index="06" title="快速正反馈验证" status={(data?.positions.length??0)>0?"管理中":"等待持仓"} text="RegionLaunch成交后60秒必须产生真实可执行浮赢；AnchorFlow仍按第一根完整5m验证。验证失败只结束本次启动，不删除成熟母区域。"/>
           <ExecStep index="07" title="利润保护与退出" status={(data?.positions.length??0)>0?"持续保护":"等待持仓"} text={`管理 ${fmt(data?.positions.length,0)} 笔持仓；RegionLaunch约85%峰值起步锁利，大利润5–8分钟不创新高主动兑现；AnchorFlow继续使用现有动态锁利。`}/>
         </div>
       </section>
 
-      <section className="fr-section fr-prepared-section"><div className="fr-section-head"><div><small>EXECUTABLE EVENTS</small><h2>待交易事件</h2><p>这里只显示真正拥有下单权的事件：AnchorFlow回测重启、RegionLaunch完成“1分钟强突破→小回调→重新顺向”确认，或区域边界拒绝。单独一根强K没有直接下单权。</p></div><span>{executableSignals.length} 个</span></div>
+      <section className="fr-section fr-prepared-section"><div className="fr-section-head"><div><small>EXECUTABLE EVENTS</small><h2>待交易事件</h2><p>候选成交前仍须通过当前盘口、局部结构与完整止损风险检查。爆发追击接受连续两根1分钟强突破，或强突破后小回调再启动；单独一根强K不直接开仓。</p></div><span>{executableSignals.length} 个</span></div>
         {preparedSignals.length?<div className="fr-prepared-grid">{preparedSignals.map((x,index)=><article className="fr-prepared-card" key={x.id}>
           <header><div><small>#{index+1} · {("entryModel" in x&&x.entryModel==="REGION_LAUNCH")?"爆发追击":x.kind==="MIGRATION"?"回测重启":"边界拒绝"}</small><h3>{x.symbol.replace("_"," / ")}</h3><p>5m · {x.side==="LONG"?"准备做多":"准备做空"} · {x.boundary==="UPPER"?"上沿事件":"下沿事件"}</p></div><b>待执行</b></header>
           <div className="fr-prepared-metrics"><span><small>区域下沿</small><strong>{fmt(x.regionLower,5)}</strong></span><span><small>区域中心</small><strong>{fmt(x.regionCenter,5)}</strong></span><span><small>区域上沿</small><strong>{fmt(x.regionUpper,5)}</strong></span><span><small>事件价格</small><strong>{fmt(x.signalPrice,5)}</strong></span><span><small>结构止损</small><strong>{fmt(x.stopPrice,5)}</strong></span><span><small>{x.kind==="REJECTION"?"回归目标":"有效至"}</small><strong>{x.kind==="REJECTION"?fmt(x.targetPrice,5):time(x.expiresAt)}</strong></span></div>
@@ -221,7 +221,7 @@ function Setting({title,value,text}:{title:string;value:string;text:string}){ret
 function tradePnl(t:Trade,now:number){const open=t.status==="OPEN",d=t.side==="LONG"?1:-1;
   return open?d*t.quantity*(t.lastPrice-t.entryPrice)-t.entryFee-t.quantity*t.lastPrice*.0007-t.notional*.0002*Math.max(0,now-t.openedAt)/86400000:t.netPnl;
 }
-function duration(start:number,end:number|null|undefined,now:number){const ms=Math.max(0,(end??now)-start),minutes=Math.floor(ms/60000);return minutes>=60?`${Math.floor(minutes/60)}小时${minutes%60}分`:`${minutes}分钟`;}
+function duration(start:number,end:number|null|undefined,now:number){const ms=Math.max(0,(end??now)-start),minutes=Math.floor(ms/60000);return minutes<1?`${Math.floor(ms/1000)}秒`:minutes>=60?`${Math.floor(minutes/60)}小时${minutes%60}分`:`${minutes}分钟`;}
 function TradeCard({trade:t,now,region}:{trade:Trade;now:number;region?:RegionLifecycleState}){const open=t.status==="OPEN",pnl=tradePnl(t,now),rate=t.notional>0&&pnl!=null?pnl/t.notional:null,ctx=t.entryContext;
   const isAnchor=ctx?.version==="anchor-flow-entry-v1",isLaunch=ctx?.version==="region-launch-entry-v1";
   const isRegion=ctx?.version==="region-lifecycle-entry-v1"||isAnchor||isLaunch;
@@ -234,6 +234,7 @@ function TradeCard({trade:t,now,region}:{trade:Trade;now:number;region?:RegionLi
       <div><dt>持仓时长</dt><dd>{duration(t.openedAt,t.closedAt,now)}</dd></div></dl>
     {isRegion&&<div className="fr-rule-numbers"><Metric label="来源区域下沿" value={fmt(ctx?.regionLower,5)}/><Metric label="来源区域中心" value={fmt(ctx?.regionCenter,5)}/><Metric label="来源区域上沿" value={fmt(ctx?.regionUpper,5)}/><Metric label="入场类型" value={isLaunch?"RegionLaunch爆发追击":isAnchor?"AnchorFlow回测启动":ctx?.regionKind==="MIGRATION"?"接受迁移":"边界拒绝"}/><Metric label="当前区域状态" value={region?REGION_STATUS[region.status]:"—"}/><Metric label="退出依据" value={isLaunch?"1m确认 / 60秒正反馈 / 85%锁利":isAnchor?"5m验证 / 利润保护 / 15m管理":ctx?.regionKind==="REJECTION"?"到中心 / 结构失效":"新区防守 / 反向接受"}/></div>}
     {t.exitReason&&<p className="fr-trade-reason">退出原因：{t.exitReason}</p>}
+    {ctx?.reason&&<p className="fr-trade-reason">入场依据：{ctx.reason}</p>}
     <details className="fr-details"><summary>策略与模拟成本</summary><p className="fr-note">{isLaunch?`RegionLaunch新版 · 成熟母区域长期记忆，4–10根5m子区提前ARMED；1分钟突破K必须强势且反向影线受控，后续只允许小回调，突破推进必须明显大于累计回调；第一根重新顺向1分钟K完成后才允许追击。成交后60秒仍必须产生真实浮赢，盈利后高比例锁利。来源母区 ${fmt(ctx?.regionLower,5)} – ${fmt(ctx?.regionUpper,5)}，结构防守 ${fmt(t.stopPrice,5)}。`:isAnchor?`AnchorFlow新版 · 5m区域负责位置与回测启动，15m负责持仓管理。来源区域 ${fmt(ctx?.regionLower,5)} – ${fmt(ctx?.regionUpper,5)}，中心 ${fmt(ctx?.regionCenter,5)}，结构防守 ${fmt(t.stopPrice,5)}。${region?` 当前区域状态：${REGION_STATUS[region.status]}。`:""}`:isRegion?`5分钟区域生命周期 · ${ctx?.regionKind==="MIGRATION"?"区域外连续收盘被接受后顺方向迁移":"边界外探失败重新回到区域后做中心回归"}。来源区域 ${fmt(ctx?.regionLower,5)} – ${fmt(ctx?.regionUpper,5)}，中心 ${fmt(ctx?.regionCenter,5)}，结构防守 ${fmt(t.stopPrice,5)}。${region?` 当前区域状态：${REGION_STATUS[region.status]}。`:""}`:ctx?.version==="direction-space-entry-context-v2"?`${ctx.timeframe}旧版方向—空间入场 · 总分 ${fmt(ctx.entryScore,0)} · 净剩余空间 ${fmt(ctx.remainingSpaceRate*100,2)}%。`:t.turn?`${t.turn.timeframe}旧版周期记录；继续按原持仓保护自然结束。`:`规则 v${t.rule.version} · ${condition(t.rule)}。`}{t.exitReason?` ${t.exitReason}`:""}</p>
       <p className="fr-note">模拟成交使用新鲜盘口并计入模型手续费、滑点和资金费占位；实盘实际结果请在实盘页对照。</p></details>
   </article>;

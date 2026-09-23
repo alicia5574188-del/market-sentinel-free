@@ -1,3 +1,9 @@
+# 2026-09-23 — targeted repair, verification in progress
+
+Base235c92e/PR409/run35863213562 is confirmed deployed. Public pre-read: account startedAt1790157902785,7resolved/0open, storage.error=null, owner LIVE true/true enabledAt1790160169434. Preserve latest user intent. FOLKS screenshot20:07 uses Asia/Vientiane(+07), i.e.13:07UTC, AFTER PR40912:51UTC. An initial mistaken+08 comparison was explicitly corrected to the user. The stale stop/quote-proof defects already existed in prior source and remained in PR409; interruption itself is not established as the cause.
+
+Implemented latest pre-entry pullback stop/risk calculation, executable-stop room, current1m local AnchorFlow confirmation, compression-side launch without old higher-frame veto, two-strong-bar continuation, contiguous/fresh1m evidence and bounded ARMED retention. Screenshot-derived FOLKS/MET/MUBARAK counterexamples fail original source and pass candidate. Final local979direct,213Forward,61equity,49member,130LIVE,19architecture/migration, typecheck, production build and dry-run pass; lint0errors/16existing warnings. Only the authorized Forward module hash baseline changed; Worker/auth/credentials unchanged. A fresh5m retest uses its already-completed1m context without an extra two-minute embargo. No LIVE/private Gate mutation or account reset. Remaining: exact-head PR/main gates, deployment and receipt. Logs are in /workspace/scratch/1ae21a1ae821; working branch fix/20260923-chase-geometry.
+
 # 2026-09-22 — recovery validated; publication in progress
 
 Branch fix/exit-rebuild-20260922 from production6f6cfa6. Confirmed live storage

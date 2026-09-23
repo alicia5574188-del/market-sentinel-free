@@ -9,6 +9,13 @@ export function anchorFlowExecutableProofRate(modeledCostRate:number){
   return Math.max(.001,Math.min(.0015,cost*.45));
 }
 
+// New orders use the latest observed pullback, including quotes received while
+// READY waits for a rebound. Existing positions never pass through this helper.
+export function anchorFlowStopPrice(side:"LONG"|"SHORT",support:number,regionWidth:number,regionCenter:number,costRate:number){
+  const buffer=Math.max(regionWidth*.08,regionCenter*Math.max(.001,costRate*.50));
+  return support+(side==="LONG"?-buffer:buffer);
+}
+
 export type AnchorFlowPhase="EXTENSION"|"WAIT_RETEST"|"RETEST"|"READY"|"FIRED"|"CONSUMED"|"FAILED";
 export type AnchorFlowState={
   version:typeof ANCHOR_FLOW_VERSION;
@@ -92,8 +99,7 @@ function signalFromReady(input:{state:AnchorFlowState;signalPrice:number;at:numb
   const s=input.state,{signalPrice,at}=input,d=s.side==="LONG"?1:-1;
   const by=input.frames?.[s.symbol],f15=by?.["15m"],f1h=by?.["1h"];
   if(!f15?.ready||!f1h?.ready||s.retestAt==null||s.pullbackExtreme==null||s.restartLevel==null)return null;
-  const stopBuffer=Math.max(s.regionWidth*.08,s.regionCenter*input.costRate*.25);
-  const stopPrice=s.side==="LONG"?s.pullbackExtreme-stopBuffer:s.pullbackExtreme+stopBuffer;
+  const stopPrice=anchorFlowStopPrice(s.side,s.pullbackExtreme,s.regionWidth,s.regionCenter,input.costRate);
   if((s.side==="LONG"&&stopPrice>=signalPrice)||(s.side==="SHORT"&&stopPrice<=signalPrice))return null;
   return {
     version:REGION_LIFECYCLE_VERSION,

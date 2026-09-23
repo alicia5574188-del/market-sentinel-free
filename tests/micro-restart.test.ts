@@ -4,6 +4,26 @@ import {assessStrongBreakout,evaluateMicroRestart} from "../lib/micro-restart.ts
 
 const bar=(time:number,open:number,high:number,low:number,close:number)=>({time,open,high,low,close,volume:1000});
 
+for(const side of ["LONG","SHORT"] as const){
+  const mirror=(r:ReturnType<typeof bar>)=>side==="LONG"?r:{...r,open:200-r.open,high:200-r.low,low:200-r.high,close:200-r.close};
+  test(`${side}: a second consecutive strong 1m extreme break confirms without a pullback`,()=>{
+    const result=evaluateMicroRestart({breakout:mirror(bar(0,100,102.2,99.9,102)),
+      following:[mirror(bar(60,102,103.05,101.98,103))],side,triggerPrice:side==="LONG"?100.8:99.2,costRate:.0022,regionWidthRate:.02});
+    assert.equal(result.state,"READY");assert.equal(result.confirmation,"CONTINUATION");assert.equal(result.restartAt,120_000);
+  });
+  test(`${side}: a weak second extreme break cannot masquerade as a strong continuation`,()=>{
+    const result=evaluateMicroRestart({breakout:mirror(bar(0,100,102.2,99.9,102)),
+      following:[mirror(bar(60,102.16,102.29,102.15,102.27))],side,triggerPrice:side==="LONG"?100.8:99.2,costRate:.0022,regionWidthRate:.02});
+    assert.equal(result.state,"WAIT");
+  });
+}
+
+test("missing intervening minute does not create a false two-bar confirmation",()=>{
+  const result=evaluateMicroRestart({breakout:bar(0,100,102.2,99.9,102),following:[bar(120,102,103.05,101.98,103)],
+    side:"LONG",triggerPrice:100.8,costRate:.0022,regionWidthRate:.02});
+  assert.equal(result.state,"WAIT");assert.match(result.reason,/不跨缺口/);
+});
+
 test("BCH-like strong 1m impulse plus small pullback waits, then accepts the first real restart",()=>{
   const breakout=bar(0,100,102.2,99.9,102.0);
   const q=assessStrongBreakout({bar:breakout,side:"LONG",triggerPrice:100.8,costRate:.0022,regionWidthRate:.02});

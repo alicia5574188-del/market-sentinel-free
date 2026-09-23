@@ -29,7 +29,7 @@ import { MULTI_TURN_ROTATION_COOLDOWN_MS, MULTI_TURN_ROTATION_VERSION, evaluateR
 import { REGION_LIFECYCLE_VERSION, consumeRegionBoundary, evaluateRegionUniverse,
   type RegionEntrySignal, type RegionLifecycleState } from "./region-lifecycle.ts";
 import { evaluateRegionEntryPolicy } from "./region-entry-policy.ts";
-import { ANCHOR_FLOW_VERSION, advanceAnchorFlowUniverse, anchorFlowExecutableProofRate,
+import { ANCHOR_FLOW_VERSION, advanceAnchorFlowUniverse, anchorFlowExecutableProofRate, anchorFlowStopPrice,
   type AnchorFlowEntrySignal, type AnchorFlowState } from "./anchor-flow.ts";
 import { REGION_LAUNCH_VERSION, advanceRegionLaunchMinutes, advanceRegionLaunchQuotes, advanceRegionLaunchUniverse, consumeRegionLaunch, regionLaunchValidationProofRate,
   type RegionLaunchSignal, type RegionLaunchState } from "./region-launch.ts";
@@ -999,12 +999,20 @@ function regionRule(s:ForwardState,signal:RegionEntrySignal,stopRate:number,rema
     grammar:launch?REGION_LAUNCH_VERSION:anchor?ANCHOR_FLOW_VERSION:REGION_LIFECYCLE_VERSION,liveEligible:false,authority:"MULTI_TURN",turnTimeframe:launch||anchor?"15m":"5m"};
 }
 
-function anchorMinuteRestartConfirmed(flow:AnchorFlowState|undefined,rows:Candle[]|undefined,costRate:number){
-  if(!flow||flow.phase!=="READY"||flow.retestAt==null||flow.restartLevel==null||!rows?.length)return false;
+function anchorMinuteConfirmation(flow:AnchorFlowState|undefined,rows:Candle[]|undefined,costRate:number,now:number,price:number){
+  const waiting={microConfirmed:false,liveBreakout:false,reason:"当前连续1分钟确认尚未就绪；候选保留并等待已有数据通道补齐"};
+  if(!flow||flow.phase!=="READY"||flow.retestAt==null||flow.restartLevel==null||!rows?.length)return waiting;
   const retestAt=flow.retestAt,restartLevel=flow.restartLevel;
   const completed=rows.filter(row=>[row.time,row.open,row.high,row.low,row.close,row.volume].every(finite)
-    &&row.high>=row.low&&row.low>0&&(row.time+60)*1000>retestAt).sort((a,b)=>a.time-b.time).slice(-12);
-  if(completed.length<2)return false;
+    &&row.high>=row.low&&row.low>0&&(row.time+60)*1000>retestAt-BAR_MS&&(row.time+60)*1000<=now).sort((a,b)=>a.time-b.time).slice(-12);
+  if(completed.length<2)return waiting;
+  const last=completed.at(-1)!,previous=completed.at(-2)!,d=flow.side==="LONG"?1:-1;
+  if(last.time!==previous.time+60||now-(last.time+60)*1000>75_000)return waiting;
+  // A quote rebound measured from an old extreme is not a new entry signal.
+  // Require a break of the CURRENT local two-minute structure, or a freshly
+  // completed impulse/restart whose price has not already reversed.
+  const localBoundary=flow.side==="LONG"?Math.max(previous.high,last.high):Math.min(previous.low,last.low);
+  const liveBreakout=d*(price-localBoundary)>0;
   for(let i=0;i<completed.length-1;i++){
     const breakout=completed[i]!,at=(breakout.time+60)*1000;
     if(at<retestAt)continue;
@@ -1013,9 +1021,13 @@ function anchorMinuteRestartConfirmed(flow:AnchorFlowState|undefined,rows:Candle
     if(!quality.ok)continue;
     const result=evaluateMicroRestart({breakout,following:completed.slice(i+1),side:flow.side,
       triggerPrice:restartLevel,costRate,regionWidthRate:flow.regionWidthRate});
-    if(result.state==="READY")return true;
+    if(result.state==="READY"&&result.restartAt!=null&&now-result.restartAt<=75_000
+      &&result.restartAt===(last.time+60)*1000&&result.restartPrice!=null
+      &&d*(price/result.restartPrice-1)>=-costRate*.10)return{microConfirmed:true,liveBreakout,reason:result.reason};
   }
-  return false;
+  return{microConfirmed:false,liveBreakout,reason:liveBreakout
+    ?`当前盘口顺向突破最近两根完整1分钟K的局部${flow.side==="LONG"?"高点":"低点"}${localBoundary.toPrecision(8)}，完成时间${(last.time+60)*1000}`
+    :"等待当前1分钟局部结构重新顺向突破，旧报价位移不能在横盘内触发入场"};
 }
 
 function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,
@@ -1063,7 +1075,18 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
       flow.confirmationExtreme=flow.confirmationExtreme==null?executable
         :signal.side==="LONG"?Math.min(flow.confirmationExtreme,executable):Math.max(flow.confirmationExtreme,executable);
       anchorConfirmationReferencePrice=flow.confirmationExtreme;
-      anchorMicroConfirmed=anchorMinuteRestartConfirmed(flow,minutePaths[signal.symbol],cost);
+      const exitNow=(signal.side==="LONG"?q.bestBid:q.bestAsk)*(1-d*PAPER_COST.slippageRate);
+      flow.pullbackExtreme=flow.pullbackExtreme==null?exitNow:signal.side==="LONG"
+        ?Math.min(flow.pullbackExtreme,exitNow):Math.max(flow.pullbackExtreme,exitNow);
+      const updatedStop=anchorFlowStopPrice(signal.side,flow.pullbackExtreme,flow.regionWidth,flow.regionCenter,cost);
+      signal.stopPrice=signal.side==="LONG"?Math.min(signal.stopPrice,updatedStop):Math.max(signal.stopPrice,updatedStop);
+      (signal as AnchorFlowEntrySignal).pullbackExtreme=flow.pullbackExtreme;
+      const confirmation=anchorMinuteConfirmation(flow,minutePaths[signal.symbol],cost,now,(q.bestBid+q.bestAsk)/2);
+      anchorMicroConfirmed=confirmation.microConfirmed;
+      if(!anchorMicroConfirmed&&!confirmation.liveBreakout){
+        reject(`AnchorFlow READY保留；${confirmation.reason}`);continue;
+      }
+      signal.reason=`AnchorFlow：回测位置仍有效；${confirmation.reason}；最新回调支点${flow.pullbackExtreme.toPrecision(8)}，按完整结构防守核算风险。`;
     }
     const totalRisk=s.positions.reduce((n,t)=>n+t.plannedRisk,0),longRisk=s.positions.filter(t=>t.side==="LONG").reduce((n,t)=>n+t.plannedRisk,0),
       shortRisk=s.positions.filter(t=>t.side==="SHORT").reduce((n,t)=>n+t.plannedRisk,0);

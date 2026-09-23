@@ -6,6 +6,7 @@ import {REGION_LIFECYCLE_VERSION, type RegionLifecycleState} from "../lib/region
 import {ANCHOR_FLOW_VERSION, type AnchorFlowState} from "../lib/anchor-flow.ts";
 import {REGION_LAUNCH_VERSION, advanceRegionLaunchUniverse} from "../lib/region-launch.ts";
 import {REGION_LAUNCH_PROFIT_PROTECTION_VERSION} from "../lib/multi-turn-profit-protection.ts";
+import {MULTI_TURN_VERSION,type TurnFrameState} from "../lib/multi-turn-engine.ts";
 
 const BASE=Date.parse("2026-09-23T12:00:00Z");
 const meta:Contract={quantoMultiplier:.001,leverageMax:50,maintenanceRate:.005,minContracts:1};
@@ -58,6 +59,25 @@ function driveLaunch(state:ForwardState,now:number){
   s=step(s,now+180_000,102.11,{BCH_USDT:[m.breakout,m.pullback,m.restart]}).state;
   return{s,m};
 }
+
+test("MET-style top compression can launch SHORT inside the mother while higher frames remain LONG",()=>{
+  let s=seeded(BASE);
+  const trend:TurnFrameState={version:MULTI_TURN_VERSION,symbol:"BCH_USDT",timeframe:"15m",observedAt:BASE,completedAt:BASE,
+    ready:true,direction:"LONG",rawDirection:"LONG",directionConfidence:.95,turnProbability:.05,triggerProbability:.05,
+    continuationScore:.9,phase:"FLOW",candidateSide:"NEUTRAL",candidateBars:0,justTurned:false,lastTurnAt:BASE-600_000,
+    signalAgeBars:10,atrRate:.01,expectedMoveRate:.03,stopRate:.01,price:100.8,breadthLong:.8,propagationPressure:0,
+    evidence:{structure:0,momentum:0,acceleration:0,cusum:0,changePoint:0,failedExtension:0,volatility:0,volume:0,breadth:0,propagation:0},reason:"old uptrend"};
+  s.turnEngine!.frames.BCH_USDT={"15m":trend,"1h":{...trend,timeframe:"1h"}};
+  const first=minute(BASE,100.8,100.82,99.95,100.0),second=minute(BASE+60_000,100,100.02,99.45,99.5);
+  s=step(s,BASE+60_000,100,{BCH_USDT:[first]}).state;
+  assert.equal(s.regionLaunches?.BCH_USDT?.phase,"IGNITION");
+  s=step(s,BASE+120_000,99.5,{BCH_USDT:[first,second]}).state;
+  assert.equal(s.positions.length,1);assert.equal(s.positions[0]!.side,"SHORT");
+  assert.ok(s.positions[0]!.entryPrice>99,"short launched before breaking the old mother low");
+  assert.ok(s.positions[0]!.stopPrice>100,"full continuation support is retained");
+  s=step(s,BASE+126_000,99.48,{BCH_USDT:[first,second]}).state;
+  assert.equal(s.positions.length,1,"the pre-existing bullish frame cannot instantly close a new countertrend launch");
+});
 
 test("full RegionLaunch path opens only after strong 1m impulse, small pullback and real restart; AnchorFlow remains independent",()=>{
   const now=BASE;const m=launchPath(BASE);let s=seeded(now);
