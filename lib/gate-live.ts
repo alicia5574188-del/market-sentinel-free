@@ -124,6 +124,24 @@ export class GateEntryCancelledError extends Error {
     super("实盘提交前所有者选择、源单或行情状态已变化，未发送入场请求");
     this.name = "GateEntryCancelledError";
   }
+
+
+export class GateReadTimeoutError extends Error {
+  readonly code="GATE_READ_TIMEOUT";
+  readonly path:string;
+  constructor(path:string){
+    super(`Gate只读核对超时：${path}；本轮不执行新增实盘动作，下一轮会自动重新核对。`);
+    this.name="GateReadTimeoutError";this.path=path;
+  }
+}
+export function isGateReadTimeoutError(error:unknown):error is GateReadTimeoutError{
+  return error instanceof GateReadTimeoutError
+    ||(error instanceof Error&&(error.name==="GateReadTimeoutError"||(error as Error&{code?:string}).code==="GATE_READ_TIMEOUT"));
+}
+function gateRequestTimedOut(error:unknown){
+  return error instanceof Error&&(error.name==="TimeoutError"||error.name==="AbortError"
+    ||/aborted due to timeout|timed out|timeout/i.test(error.message));
+}
 }
 
 function hex(buffer: ArrayBuffer) {
@@ -183,20 +201,29 @@ export class GateLiveClient {
     // Signing yields to owner controls. Fence directly at the network boundary,
     // with no await between this final local check and the order request.
     if (beforeSend && !beforeSend()) throw new GateEntryCancelledError();
-    const response = await fetch(`${base}${signedPath}${query ? `?${query}` : ""}`, {
-      method,
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        KEY: this.credentials.apiKey,
-        Timestamp: timestamp,
-        SIGN: signature,
-        "X-Gate-Exptime": String(Date.now() + 5_000),
-        "X-Gate-Size-Decimal": "1",
-      },
-      body: body || undefined,
-      signal: AbortSignal.timeout(6_000),
-    });
+    let response:Response;
+    try{
+      response = await fetch(`${base}${signedPath}${query ? `?${query}` : ""}`, {
+        method,
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          KEY: this.credentials.apiKey,
+          Timestamp: timestamp,
+          SIGN: signature,
+          "X-Gate-Exptime": String(Date.now() + 5_000),
+          "X-Gate-Size-Decimal": "1",
+        },
+        body: body || undefined,
+        signal: AbortSignal.timeout(6_000),
+      });
+    }catch(error){
+      if(gateRequestTimedOut(error)){
+        if(method==="GET")throw new GateReadTimeoutError(path);
+        throw new Error(`Gate ${method} 请求超时：${path}；提交结果可能不明确，必须按订单身份继续核对，不能自动重放。`);
+      }
+      throw error;
+    }
     const raw = await response.text();
     if (!response.ok) throw new Error(safeGateError(raw, response.status));
     return { data: (raw ? parseGateJson<T>(raw) : {}) as T, raw };
