@@ -1,0 +1,31 @@
+name: Validate Heterogeneous 1h Sleeve Portfolio
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-heterogeneous-1h-sleeve-portfolio.mjs"
+      - ".github/workflows/validate-heterogeneous-1h-sleeve-portfolio.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Check syntax
+        run: node --check scripts/research-heterogeneous-1h-sleeve-portfolio.mjs
+      - name: Run heterogeneous sleeve portfolio
+        run: node --max-old-space-size=4096 scripts/research-heterogeneous-1h-sleeve-portfolio.mjs
+      - name: Print focused result
+        run: jq '{decision,authority,goal,method,cost,data:{activeSymbols:.data.activeSymbols},candidateCount,sleeveRaw,calibrationMonths,blindMonths,policyCount,feasibleCount,target,bestReturn,bestFrequencyPositive,paretoFrontier}' /tmp/heterogeneous-1h-sleeve-portfolio-report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: heterogeneous-1h-sleeve-portfolio-report
+          path: /tmp/heterogeneous-1h-sleeve-portfolio-report.json
+          retention-days: 7
