@@ -267,7 +267,7 @@ test("private read races the complete body through Gate's independent futures ro
   const real=globalThis.fetch,hosts:string[]=[];let stalledSignal:AbortSignal|undefined;
   globalThis.fetch=async(input,init)=>{
     const host=new URL(String(input)).hostname;hosts.push(host);
-    assert.equal(init?.redirect,"error");
+    assert.equal(init?.redirect,"manual");
     if(host==="api.gateio.ws"){
       stalledSignal=init?.signal??undefined;
       return new Response(new ReadableStream({start(){/* Headers succeed, body never finishes. */}}));
@@ -280,6 +280,21 @@ test("private read races the complete body through Gate's independent futures ro
     assert.equal(order?.id,"90071992547409931");
     assert.deepEqual(hosts,["api.gateio.ws","fx-api.gateio.ws"]);
     assert.equal(stalledSignal?.aborted,true);assert.equal(client.readTransport.recovered,1);
+  }finally{globalThis.fetch=real;}
+});
+
+test("Cloudflare-compatible manual redirects are never followed with private credentials",async()=>{
+  const real=globalThis.fetch,hosts:string[]=[];
+  globalThis.fetch=async(input,init)=>{
+    const host=new URL(String(input)).hostname;hosts.push(host);
+    assert.equal(init?.redirect,"manual");
+    if(host==="api.gateio.ws")return new Response("",{status:302,headers:{location:"https://example.invalid/steal"}});
+    return Response.json({id:"123",status:"finished"});
+  };
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    assert.equal((await client.inspectEntry("MARKET","BTC_USDT","t-fixture","123"))?.id,"123");
+    assert.deepEqual(hosts,["api.gateio.ws","fx-api.gateio.ws"]);
   }finally{globalThis.fetch=real;}
 });
 
