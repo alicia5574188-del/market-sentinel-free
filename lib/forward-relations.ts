@@ -449,6 +449,78 @@ function manageMultiTurn(s:ForwardState,quotes:Record<string,Quote>,now:number){
     t.favorable=Math.max(t.favorable,ret);t.adverse=Math.max(t.adverse,-ret);
     const gap=observeExitControl(t,q.observedAt,now);t.lastPrice=px;t.lastQuoteAt=q.observedAt;
 
+    const launchContext=t.entryContext?.version==="region-launch-entry-v1"?t.entryContext:null;
+    if(launchContext){
+      const d=t.side==="LONG"?1:-1,spread=(q.bestAsk-q.bestBid)/Math.max((q.bestAsk+q.bestBid)/2,1e-9);
+      const modeledCost=turnModeledCost("5m",spread),by=engine?.frames[t.symbol],frame15=by?.["15m"],frame1h=by?.["1h"];
+      let decision:ExitDecision|null=null,validationFailed=false;
+      if(t.entryValidation?.version==="region-launch-entry-validation-v1"&&t.entryValidation.evaluatedAt==null&&now>=t.entryValidation.dueAt){
+        const proof=t.favorable,required=regionLaunchValidationProofRate(launchContext.modeledCostRate),passed=proof>=required;
+        t.entryValidation={...t.entryValidation,evaluatedAt:now,passed};
+        if(!passed){
+          validationFailed=true;
+          decision={trigger:"MULTI_TURN",
+            reason:`RegionLaunch入场验证失败：追击后${Math.round((now-t.openedAt)/1000)}秒真实可执行最高浮赢仅${(proof*100).toFixed(2)}%，低于快速正反馈门槛${(required*100).toFixed(2)}%；爆发假设失效，立即退出。`,
+            boundaryRate:null};
+        }
+      }
+      const stopHit=t.side==="LONG"?px<=t.stopPrice:px>=t.stopPrice;
+      if(!decision&&stopHit)decision={trigger:"HARD_STOP",
+        reason:"RegionLaunch微结构防守失效：追击后价格回到启动支点下方，不等待5分钟确认。",boundaryRate:d*(t.stopPrice/t.entryPrice-1)};
+      if(!decision&&frame1h&&frame1h.direction!==t.side&&frame1h.lastTurnAt!=null&&frame1h.lastTurnAt>=t.openedAt)
+        decision={trigger:"MULTI_TURN",reason:`1h主导方向在RegionLaunch开仓后确认转向${frame1h.direction==="LONG"?"多":"空"}；爆发延续假设失效。`,boundaryRate:null};
+
+      const cfg=TURN_CONFIG["15m"],fresh15=frame15&&frame15.ready&&frame15.completedAt<=now
+        &&now-frame15.completedAt<=Math.max(BAR_MS*2,cfg.minutes*60_000*1.5)?frame15:null;
+      const originalStopRate=Math.max(1e-9,launchContext.stopRate),riskRate=t.plannedRisk/Math.max(t.notional,1e-9);
+      const profitSignal=fresh15?{continuationScore:fresh15.continuationScore,turnProbability:fresh15.triggerProbability,phase:fresh15.phase,
+        rawDirectionAligned:fresh15.rawDirection==="NEUTRAL"||fresh15.rawDirection===t.side}:null;
+      const nextFloor=regionLaunchProfitFloor(t.favorable,riskRate,modeledCost,launchContext.expectedMoveRate,profitSignal);
+      if(nextFloor){
+        const prior=t.profitProtection??null,floorRate=Math.max(prior?.floorRate??0,nextFloor.floorRate);
+        const peakR=Math.max(prior?.peakR??0,nextFloor.reachedR),peakAdvanced=nextFloor.reachedR>(prior?.peakR??0)+1e-9;
+        t.profitProtection={...nextFloor,version:REGION_LAUNCH_PROFIT_PROTECTION_VERSION,
+          floorRate,lockedR:floorRate/riskRate,retentionRate:floorRate/Math.max(t.favorable,1e-9),
+          checkpointBand:Math.floor(floorRate/riskRate*4+1e-9),peakR,updatedAt:peakAdvanced?now:(prior?.updatedAt??now)};
+        const floorPrice=t.entryPrice*(1+d*floorRate);
+        if(t.side==="LONG"){if(floorPrice>t.stopPrice)t.stopPrice=floorPrice;}
+        else if(floorPrice<t.stopPrice)t.stopPrice=floorPrice;
+      }
+      if(!decision&&t.profitProtection?.version===REGION_LAUNCH_PROFIT_PROTECTION_VERSION){
+        const expected=Math.max(launchContext.expectedMoveRate,modeledCost*4);
+        const largeProfit=Math.max(expected*.50,riskRate*1.20,modeledCost*2.5),exceptional=t.favorable>=expected;
+        const stallMs=(exceptional?5:8)*60_000;
+        if(t.favorable>=largeProfit&&now-t.profitProtection.updatedAt>=stallMs&&ret<t.favorable*.985)
+          decision={trigger:"PROFIT_GIVEBACK",
+            reason:`RegionLaunch大利润停滞兑现：最高浮赢${(t.favorable*100).toFixed(2)}%后已${((now-t.profitProtection.updatedAt)/60_000).toFixed(0)}分钟未创新高；爆发行情应持续给正向反馈，主动兑现。`,
+            boundaryRate:t.profitProtection.floorRate};
+      }
+      if(!decision){
+        const exit=evaluateMultiTurnExitController({timeframe:"15m",side:t.side,openedAt:t.openedAt,now,
+          returnRate:ret,favorableRate:t.favorable,plannedRisk:t.plannedRisk,notional:t.notional,
+          modeledCostRate:modeledCost,entryExpectedMoveRate:launchContext.expectedMoveRate,stopRate:originalStopRate,
+          horizonMinutes:t.rule.horizon,frame:fresh15,priorProtection:t.profitProtection,profitPolicy:"EXTERNAL"});
+        if(exit.holdValue)t.holdValue=exit.holdValue;
+        if(exit.profitProtection)t.profitProtection=exit.profitProtection;
+        decision=exit.decision;
+      }
+      if(!decision)continue;
+      closeTrade(s,t,q,now,decision.reason);
+      const sourceRule=s.rules.find(r=>r.id===t.rule.id);if(sourceRule)sourceRule.status="DORMANT";
+      s.turnSymbolExitAt??={};s.turnSymbolExitAt[t.symbol]=now;
+      if(t.exitControl)t.exitAudit=makeExitAudit(t,decision,px,q.observedAt,now,gap);
+      s.turnLastEntryBars[`launch:${launchContext.regionId??t.symbol}:${t.side}`]=Math.max(
+        s.turnLastEntryBars[`launch:${launchContext.regionId??t.symbol}:${t.side}`]??0,Math.floor(now/BAR_MS)*BAR_MS);
+      if(validationFailed){
+        const launch=s.regionLaunches?.[t.symbol];
+        if(launch&&launch.motherRegionId===launchContext.regionId){
+          launch.phase="WATCH";launch.consumedAt=null;launch.consumedSide=null;launch.cooldownUntil=now+BAR_MS;
+          launch.reason="RegionLaunch成交后60秒内没有产生应有真实浮赢；本次点火失败，但成熟母区域继续保留，等待新的子区压缩。";
+        }
+      }
+      continue;
+    }
+
     const anchorContext=t.entryContext?.version==="anchor-flow-entry-v1"?t.entryContext:null;
     if(anchorContext){
       const d=t.side==="LONG"?1:-1,spread=(q.bestAsk-q.bestBid)/Math.max((q.bestAsk+q.bestBid)/2,1e-9);
