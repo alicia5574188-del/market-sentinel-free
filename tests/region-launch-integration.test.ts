@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {advanceForward, forwardWatchSymbols, initialMultiTurnForward, type Contract, type ForwardState, type Quote} from "../lib/forward-relations.ts";
+import {advanceForward, forwardUrgentQuoteSymbols, forwardWatchSymbols, initialMultiTurnForward,
+  type Contract, type ForwardState, type Quote} from "../lib/forward-relations.ts";
 import {REGION_LIFECYCLE_VERSION, type RegionLifecycleState} from "../lib/region-lifecycle.ts";
 import {ANCHOR_FLOW_VERSION, type AnchorFlowState} from "../lib/anchor-flow.ts";
 import {REGION_LAUNCH_VERSION, advanceRegionLaunchUniverse} from "../lib/region-launch.ts";
@@ -31,6 +32,7 @@ const passiveAnchor=(symbol:string,now:number):AnchorFlowState=>({
   excursionExtreme:101.2,retestAt:null,pullbackExtreme:null,restartLevel:null,readyAt:null,reacceptBars:0,retryCount:0,
   confirmationExtreme:null,firedAt:null,consumedAt:null,failedAt:null,reason:"AnchorFlow stays independent"
 });
+const minute=(startMs:number,o:number,h:number,l:number,c:number)=>({time:startMs/1000,open:o,high:h,low:l,close:c,volume:1000});
 function seeded(now:number){
   const s=initialMultiTurnForward(now-60_000);
   s.lastCycleAt=now;s.lastQuoteCycleAt=now-10_000;s.daily=[{day:"2026-09-23",firstAt:now,lastAt:now,startEquity:1000,endEquity:1000,exactBoundary:false}];
@@ -39,63 +41,75 @@ function seeded(now:number){
   s.regionLaunches=advanceRegionLaunchUniverse({paths:{BCH_USDT:compression(now)},lifecycles:s.regionLifecycles,prior:{},now,costRate:.0022}).states;
   s.regionLaunchSignals=[];return s;
 }
-function step(state:ForwardState,now:number,mid:number){
-  return advanceForward({state,now,paths:{},quotes:{BCH_USDT:quote(mid,now)},contracts:{BCH_USDT:meta},
+function step(state:ForwardState,now:number,mid:number,minutePaths:Record<string,ReturnType<typeof minute>[]>={}){
+  return advanceForward({state,now,paths:{},minutePaths,quotes:{BCH_USDT:quote(mid,now)},contracts:{BCH_USDT:meta},
     entrySymbols:["BCH_USDT"],allowDataCycle:false});
 }
+function launchPath(now:number){
+  const breakout=minute(now,100.90,102.30,100.85,102.00);
+  const pullback=minute(now+60_000,102.00,102.05,101.65,101.75);
+  const restart=minute(now+120_000,101.75,102.15,101.72,102.10);
+  return{breakout,pullback,restart};
+}
+function driveLaunch(state:ForwardState,now:number){
+  const m=launchPath(now);let s=state;
+  s=step(s,now+60_000,102.00,{BCH_USDT:[m.breakout]}).state;
+  s=step(s,now+120_000,101.75,{BCH_USDT:[m.breakout,m.pullback]}).state;
+  s=step(s,now+180_000,102.11,{BCH_USDT:[m.breakout,m.pullback,m.restart]}).state;
+  return{s,m};
+}
 
-test("full RegionLaunch path opens only after pre-breakout observation and leaves AnchorFlow boundary authority untouched",()=>{
-  const now=BASE;let s=seeded(now);
-  assert.equal(s.regionLaunches?.BCH_USDT?.phase,"ARMED");
-  let r=step(s,now+1_000,100.95);s=r.state;
-  assert.equal(s.regionLaunches?.BCH_USDT?.armedInsideObserved,true);assert.equal(s.positions.length,0);
-  r=step(s,now+10_000,101.40);s=r.state;assert.equal(s.regionLaunches?.BCH_USDT?.phase,"IGNITION");
-  r=step(s,now+25_000,101.55);s=r.state;assert.equal(s.positions.length,0);
-  r=step(s,now+40_000,101.66);s=r.state;
+test("full RegionLaunch path opens only after strong 1m impulse, small pullback and real restart; AnchorFlow remains independent",()=>{
+  const now=BASE;const m=launchPath(BASE);let s=seeded(now);
+  s=step(s,now+60_000,102.00,{BCH_USDT:[m.breakout]}).state;
+  assert.equal(s.regionLaunches?.BCH_USDT?.phase,"IGNITION");assert.equal(s.positions.length,0);
+  s=step(s,now+120_000,101.75,{BCH_USDT:[m.breakout,m.pullback]}).state;
+  assert.equal(s.regionLaunches?.BCH_USDT?.phase,"IGNITION");assert.equal(s.positions.length,0);
+  s=step(s,now+180_000,102.11,{BCH_USDT:[m.breakout,m.pullback,m.restart]}).state;
   assert.equal(s.positions.length,1);
   const t=s.positions[0]!;
-  assert.equal(t.entryContext?.version,"region-launch-entry-v1");
-  assert.equal(t.rule.grammar,REGION_LAUNCH_VERSION);
-  assert.equal(t.entryValidation?.version,"region-launch-entry-validation-v1");
-  assert.equal(t.entryValidation?.dueAt,t.openedAt+60_000);
+  assert.equal(t.entryContext?.version,"region-launch-entry-v1");assert.equal(t.rule.grammar,REGION_LAUNCH_VERSION);
+  assert.equal(t.entryValidation?.version,"region-launch-entry-validation-v1");assert.equal(t.entryValidation?.dueAt,t.openedAt+60_000);
   assert.equal(s.regionLaunches?.BCH_USDT?.phase,"CONSUMED");
   assert.equal(s.regionLifecycles?.BCH_USDT?.upperConsumedAt,null,"RegionLaunch must not consume AnchorFlow/region boundary authority");
   assert.equal(s.anchorFlows?.BCH_USDT?.phase,"WAIT_RETEST","existing AnchorFlow state remains independent");
 });
 
-test("RegionLaunch with no prompt executable profit exits after sixty seconds but keeps the mature mother for future observation",()=>{
-  const now=BASE;let s=seeded(now);
-  for(const [dt,mid] of [[1_000,100.95],[10_000,101.40],[25_000,101.55],[40_000,101.66]] as const)s=step(s,now+dt,mid).state;
+test("MET-like upper-wick breakout never creates a RegionLaunch position",()=>{
+  const now=BASE;const fake=minute(BASE,100.90,103.30,100.85,101.45);let s=seeded(now);
+  s=step(s,now+60_000,101.45,{BCH_USDT:[fake]}).state;
+  assert.equal(s.positions.length,0);assert.equal(s.regionLaunches?.BCH_USDT?.phase,"ARMED");
+  assert.match(s.regionLaunches?.BCH_USDT?.reason??"",/突破K不够强/);
+});
+
+test("RegionLaunch with no prompt executable profit still exits after sixty seconds and keeps the mother for future observation",()=>{
+  const now=BASE,{s:opened,m}=driveLaunch(seeded(now),now);let s=opened;
+  assert.equal(s.positions.length,1);
   const t=s.positions[0]!,due=t.entryValidation!.dueAt;
-  s=step(s,due+1,t.entryPrice*1.0004).state;
-  assert.equal(s.positions.length,0);
-  assert.equal(s.history[0]?.entryValidation?.passed,false);
+  s=step(s,due+1,t.entryPrice*1.0004,{BCH_USDT:[m.breakout,m.pullback,m.restart]}).state;
+  assert.equal(s.positions.length,0);assert.equal(s.history[0]?.entryValidation?.passed,false);
   assert.match(s.history[0]?.exitReason??"",/RegionLaunch入场验证失败/);
-  assert.equal(s.regionLaunches?.BCH_USDT?.phase,"WATCH");
-  assert.equal(s.regionLaunches?.BCH_USDT?.motherRegionId,"mother-BCH_USDT");
-  assert.equal(s.regionLifecycles?.BCH_USDT?.upperConsumedAt,null);
+  assert.equal(s.regionLaunches?.BCH_USDT?.phase,"WATCH");assert.equal(s.regionLaunches?.BCH_USDT?.motherRegionId,"mother-BCH_USDT");
 });
 
-test("a fast RegionLaunch winner passes sixty-second validation and raises a high-retention monotonic source stop",()=>{
-  const now=BASE;let s=seeded(now);
-  for(const [dt,mid] of [[1_000,100.95],[10_000,101.40],[25_000,101.55],[40_000,101.66]] as const)s=step(s,now+dt,mid).state;
-  const opened=s.positions[0]!,entry=opened.entryPrice;
-  s=step(s,now+50_000,entry*1.020).state;
+test("a fast RegionLaunch winner passes sixty-second validation and raises the high-retention source stop",()=>{
+  const now=BASE,{s:opened,m}=driveLaunch(seeded(now),now);let s=opened;
   assert.equal(s.positions.length,1);
-  assert.equal(s.positions[0]!.profitProtection?.version,REGION_LAUNCH_PROFIT_PROTECTION_VERSION);
-  assert.ok((s.positions[0]!.profitProtection?.retentionRate??0)>=.84);
-  assert.ok(s.positions[0]!.stopPrice>entry);
+  const entry=s.positions[0]!.entryPrice;
+  s=step(s,now+190_000,entry*1.020,{BCH_USDT:[m.breakout,m.pullback,m.restart]}).state;
+  assert.equal(s.positions[0]?.profitProtection?.version,REGION_LAUNCH_PROFIT_PROTECTION_VERSION);
+  assert.ok((s.positions[0]?.profitProtection?.retentionRate??0)>=.84);assert.ok((s.positions[0]?.stopPrice??0)>entry);
   const due=s.positions[0]!.entryValidation!.dueAt;
-  s=step(s,due+1,entry*1.019).state;
-  assert.equal(s.positions.length,1);
-  assert.equal(s.positions[0]!.entryValidation?.passed,true);
+  s=step(s,due+1,entry*1.019,{BCH_USDT:[m.breakout,m.pullback,m.restart]}).state;
+  assert.equal(s.positions.length,1);assert.equal(s.positions[0]!.entryValidation?.passed,true);
 });
 
-test("RegionLaunch ARMED/IGNITION is promoted into the bounded realtime pool after positions and urgent AnchorFlow states",()=>{
+test("ARMED/IGNITION/READY are explicit urgent quote priorities inside the same bounded realtime pool",()=>{
   const now=BASE,s=seeded(now);
+  const urgent=forwardUrgentQuoteSymbols(s,now,["BCH_USDT"]);
+  assert.ok(urgent.includes("BCH_USDT"));
   const ordinary=Array.from({length:14},(_,i)=>`R${i}_USDT`);
   for(const symbol of ordinary)s.regionLifecycles![symbol]=lifecycle(symbol,now);
   const watched=forwardWatchSymbols(s,now,["BCH_USDT",...ordinary]);
-  assert.ok(watched.includes("BCH_USDT"));
-  assert.ok(watched.length<=11);
+  assert.ok(watched.includes("BCH_USDT"));assert.ok(watched.length<=11);
 });

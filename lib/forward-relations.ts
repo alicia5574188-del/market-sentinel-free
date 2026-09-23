@@ -31,8 +31,9 @@ import { REGION_LIFECYCLE_VERSION, consumeRegionBoundary, evaluateRegionUniverse
 import { evaluateRegionEntryPolicy } from "./region-entry-policy.ts";
 import { ANCHOR_FLOW_VERSION, advanceAnchorFlowUniverse, anchorFlowExecutableProofRate,
   type AnchorFlowEntrySignal, type AnchorFlowState } from "./anchor-flow.ts";
-import { REGION_LAUNCH_VERSION, advanceRegionLaunchQuotes, advanceRegionLaunchUniverse, consumeRegionLaunch, regionLaunchValidationProofRate,
+import { REGION_LAUNCH_VERSION, advanceRegionLaunchMinutes, advanceRegionLaunchQuotes, advanceRegionLaunchUniverse, consumeRegionLaunch, regionLaunchValidationProofRate,
   type RegionLaunchSignal, type RegionLaunchState } from "./region-launch.ts";
+import { assessStrongBreakout, evaluateMicroRestart } from "./micro-restart.ts";
 // The storage schema stays v1.0 so an algorithm upgrade cannot reset the ledger.
 export const FORWARD_VERSION = "forward-relations-v1.0";
 export const FORWARD_GRAMMAR = "conditional-response-conjunction-v1";
@@ -998,7 +999,27 @@ function regionRule(s:ForwardState,signal:RegionEntrySignal,stopRate:number,rema
     grammar:launch?REGION_LAUNCH_VERSION:anchor?ANCHOR_FLOW_VERSION:REGION_LIFECYCLE_VERSION,liveEligible:false,authority:"MULTI_TURN",turnTimeframe:launch||anchor?"15m":"5m"};
 }
 
-function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,entrySymbols?:ReadonlySet<string>){
+function anchorMinuteRestartConfirmed(flow:AnchorFlowState|undefined,rows:Candle[]|undefined,costRate:number){
+  if(!flow||flow.phase!=="READY"||flow.retestAt==null||flow.restartLevel==null||!rows?.length)return false;
+  const retestAt=flow.retestAt,restartLevel=flow.restartLevel;
+  const completed=rows.filter(row=>[row.time,row.open,row.high,row.low,row.close,row.volume].every(finite)
+    &&row.high>=row.low&&row.low>0&&(row.time+60)*1000>retestAt).sort((a,b)=>a.time-b.time).slice(-12);
+  if(completed.length<2)return false;
+  for(let i=0;i<completed.length-1;i++){
+    const breakout=completed[i]!,at=(breakout.time+60)*1000;
+    if(at<retestAt)continue;
+    const quality=assessStrongBreakout({bar:breakout,side:flow.side,triggerPrice:restartLevel,
+      costRate,regionWidthRate:flow.regionWidthRate});
+    if(!quality.ok)continue;
+    const result=evaluateMicroRestart({breakout,following:completed.slice(i+1),side:flow.side,
+      triggerPrice:restartLevel,costRate,regionWidthRate:flow.regionWidthRate});
+    if(result.state==="READY")return true;
+  }
+  return false;
+}
+
+function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,
+  entrySymbols?:ReadonlySet<string>,minutePaths:Record<string,Candle[]>={}){
   s.regionSignals=(s.regionSignals??[]).filter(signal=>signal.expiresAt>now
     &&(!entrySymbols||entrySymbols.has(signal.symbol))
     &&s.regionLifecycles?.[signal.symbol]?.zone?.id===signal.regionId);
@@ -1026,7 +1047,7 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
     if(marked.stalePositions){reject("已有持仓估值过期，只管理风险不新增仓位");break;}
     const spread=(q.bestAsk-q.bestBid)/Math.max((q.bestAsk+q.bestBid)/2,1e-9),cost=turnModeledCost("5m",spread);
     const d=signal.side==="LONG"?1:-1;
-    let anchorConfirmationReferencePrice:number|null=null;
+    let anchorConfirmationReferencePrice:number|null=null,anchorMicroConfirmed=false;
     if(launchSignal){
       const launch=s.regionLaunches?.[signal.symbol];
       if(!launch||launch.phase!=="READY"||launch.motherRegionId!==signal.regionId||launch.readySide!==signal.side){
@@ -1042,13 +1063,14 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
       flow.confirmationExtreme=flow.confirmationExtreme==null?executable
         :signal.side==="LONG"?Math.min(flow.confirmationExtreme,executable):Math.max(flow.confirmationExtreme,executable);
       anchorConfirmationReferencePrice=flow.confirmationExtreme;
+      anchorMicroConfirmed=anchorMinuteRestartConfirmed(flow,minutePaths[signal.symbol],cost);
     }
     const totalRisk=s.positions.reduce((n,t)=>n+t.plannedRisk,0),longRisk=s.positions.filter(t=>t.side==="LONG").reduce((n,t)=>n+t.plannedRisk,0),
       shortRisk=s.positions.filter(t=>t.side==="SHORT").reduce((n,t)=>n+t.plannedRisk,0);
     const plan=evaluateRegionEntryPolicy({signal,bestBid:q.bestBid,bestAsk:q.bestAsk,contract:meta,equity,peakEquity:s.peakEquity,totalRisk,longRisk,shortRisk,
       grossNotional:s.positions.reduce((n,t)=>n+t.notional,0),usedMargin:s.positions.reduce((n,t)=>n+t.margin,0),
       tradeRisks:s.positions.map(t=>t.plannedRisk),costRate:cost,feeRate:PAPER_COST.feeRate,slippageRate:PAPER_COST.slippageRate,
-      anchorConfirmationReferencePrice});
+      anchorConfirmationReferencePrice,anchorMicroConfirmed});
     if(!plan.ok){reject(plan.reason);continue;}
     const {price,count,quantity,notional,leverage,margin,plannedRisk,entryFee,remainingSpaceRate:remaining}=plan.plan;
     const stopRate=d*(price-signal.stopPrice)/Math.max(price,1e-9);
@@ -1124,9 +1146,9 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
   else s.latestReason=`双通道管理${s.positions.length}笔持仓；AnchorFlow等待回测，RegionLaunch只等待提前ARMED后的真实爆发确认。`;
 }
 
-function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;daily?:Record<string,Candle[]>;
+function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;minutePaths?:Record<string,Candle[]>;daily?:Record<string,Candle[]>;
   quotes:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:string[];allowDataCycle?:boolean},s:ForwardState,before:number){
-  const{now,paths,quotes,contracts}=input,daily=input.daily??{};
+  const{now,paths,quotes,contracts}=input,daily=input.daily??{},minutePaths=input.minutePaths??{};
   if(s.strategyAuthorityVersion!==MULTI_TURN_VERSION)throw new Error("Multi-Turn权威版本不一致");
   if(s.executionVersion!==ANCHOR_FLOW_VERSION){
     // During the short deploy-to-cutover window, the old PAPER generation may
@@ -1152,7 +1174,7 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
   if(launchUpgrade){
     s.regionLaunchVersion=REGION_LAUNCH_VERSION;s.regionLaunches=s.regionLaunches??{};s.regionLaunchSignals=[];
     event(s,now,"UPGRADE",REGION_LAUNCH_VERSION,
-      "RegionLaunch独立通道已接入：复用成熟区域但不改变AnchorFlow；只从提前ARMED的母区/子区压缩进入实时爆发确认，不补历史追单。");
+      "RegionLaunch升级为1分钟确认：成熟母区和5分钟子区继续负责提前ARMED；爆发必须先出现强势1分钟突破K，再等第一根停止回调并重新顺向的完整1分钟K，当前盘口确认后才追击。");
   }
   const entrySymbols=new Set(input.entrySymbols??Object.keys(paths));
   const retainedSymbols=[...new Set([...entrySymbols,...s.positions.map(position=>position.symbol),
@@ -1214,13 +1236,16 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
     }
   }
   manageMultiTurn(s,quotes,now);
+  const launchMinutes=advanceRegionLaunchMinutes({states:s.regionLaunches??{},minutePaths,frames:s.turnEngine?.frames,
+    now,costRate:turnModeledCost("5m",0)});
+  s.regionLaunches=launchMinutes.states;
   const launchQuotes=advanceRegionLaunchQuotes({states:s.regionLaunches??{},quotes,frames:s.turnEngine?.frames,now,costRate:turnModeledCost("5m",0)});
   s.regionLaunches=launchQuotes.states;
   const existingLaunch=(s.regionLaunchSignals??[]).filter(signal=>signal.expiresAt>now
     &&s.regionLaunches?.[signal.symbol]?.phase==="READY"&&s.regionLaunches?.[signal.symbol]?.motherRegionId===signal.regionId);
   s.regionLaunchSignals=[...new Map([...existingLaunch,...launchQuotes.signals].map(signal=>[signal.id,signal])).values()]
     .sort((a,b)=>a.completedAt-b.completedAt||a.symbol.localeCompare(b.symbol)).slice(-30);
-  openRegionTrades(s,quotes,contracts,now,entrySymbols);
+  openRegionTrades(s,quotes,contracts,now,entrySymbols,minutePaths);
   const marked=forwardEquity(s,quotes,now);
   if(!marked.stalePositions){
     s.peakEquity=Math.max(s.peakEquity,marked.equity);
@@ -1236,7 +1261,7 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
   return{state:s,changed:dataDue||markDue||s.revision!==before,protectionChanged:forwardProtectionChanged(input.state,s)};
 }
 
-export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;daily?:Record<string,Candle[]>;quotes:Record<string,Quote>;contracts:Record<string,Contract>;legacyDrainOnly?:boolean;entrySymbols?:string[];allowDataCycle?:boolean}){
+export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;minutePaths?:Record<string,Candle[]>;daily?:Record<string,Candle[]>;quotes:Record<string,Quote>;contracts:Record<string,Contract>;legacyDrainOnly?:boolean;entrySymbols?:string[];allowDataCycle?:boolean}){
   const{now,paths,quotes,contracts}=input,s=structuredClone(input.state),before=s.revision;
   if(s.strategyAuthorityVersion===MULTI_TURN_VERSION)return advanceMultiTurnForward(input,s,before);
   if(!s.exitPolicyUpgrade){
@@ -1309,6 +1334,37 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   if(dataDue){const k=dayKey(now),a=s.daily.find(d=>d.day===k);if(a){a.endEquity=marked.equity;a.lastAt=now;}else s.daily.push({day:k,firstAt:now,lastAt:now,startEquity:s.daily.at(-1)?.endEquity??s.initialEquity,endEquity:marked.equity,exactBoundary:false});s.daily=s.daily.slice(-400);}
   s.lastQuoteCycleAt=now;return{state:s,changed:dataDue||s.revision!==before,protectionChanged:forwardProtectionChanged(input.state,s)};
 }
+export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols?:Iterable<string>){
+  if(s.strategyAuthorityVersion!==MULTI_TURN_VERSION)return s.positions.map(p=>p.symbol);
+  const allowed=entrySymbols?new Set(entrySymbols):null;
+  const anchorSignals=(s.regionSignals??[]).filter(signal=>signal.expiresAt>now&&signal.kind==="MIGRATION"
+    &&(signal as AnchorFlowEntrySignal).entryModel==="ANCHOR_FLOW"&&(!allowed||allowed.has(signal.symbol)));
+  const anchors=Object.values(s.anchorFlows??{}).filter(row=>["READY","RETEST"].includes(row.phase)
+    &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>(a.phase==="READY"?0:1)-(b.phase==="READY"?0:1)
+      ||(b.readyAt??0)-(a.readyAt??0));
+  const launchSignals=(s.regionLaunchSignals??[]).filter(signal=>signal.expiresAt>now&&(!allowed||allowed.has(signal.symbol)));
+  const launchPriority:Record<RegionLaunchState["phase"],number>={READY:0,IGNITION:1,ARMED:2,WATCH:9,CONSUMED:9};
+  const launches=Object.values(s.regionLaunches??{}).filter(row=>["READY","IGNITION","ARMED"].includes(row.phase)
+    &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>launchPriority[a.phase]-launchPriority[b.phase]
+      ||b.quality-a.quality||b.updatedAt-a.updatedAt||a.symbol.localeCompare(b.symbol));
+  return[...new Set([...s.positions.map(p=>p.symbol),...anchorSignals.map(x=>x.symbol),...anchors.map(x=>x.symbol),
+    ...launchSignals.map(x=>x.symbol),...launches.map(x=>x.symbol)])];
+}
+
+export function forwardUrgentMinuteSymbols(s:ForwardState,entrySymbols?:Iterable<string>){
+  if(s.strategyAuthorityVersion!==MULTI_TURN_VERSION)return [];
+  const allowed=entrySymbols?new Set(entrySymbols):null;
+  const anchors=Object.values(s.anchorFlows??{}).filter(row=>["READY","RETEST"].includes(row.phase)
+    &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>(a.phase==="READY"?0:1)-(b.phase==="READY"?0:1)
+      ||(b.readyAt??0)-(a.readyAt??0)||b.createdAt-a.createdAt);
+  const priority:Record<RegionLaunchState["phase"],number>={IGNITION:0,ARMED:1,READY:2,WATCH:9,CONSUMED:9};
+  const launches=Object.values(s.regionLaunches??{}).filter(row=>["IGNITION","ARMED"].includes(row.phase)
+    &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>priority[a.phase]-priority[b.phase]
+      ||b.quality-a.quality||b.updatedAt-a.updatedAt||a.symbol.localeCompare(b.symbol));
+  return[...new Set([...anchors.map(row=>row.symbol),...launches.map(row=>row.symbol)])].slice(0,11);
+}
+
+
 export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iterable<string>){
   if(s.strategyAuthorityVersion===MULTI_TURN_VERSION){
     const allowed=entrySymbols?new Set(entrySymbols):null;

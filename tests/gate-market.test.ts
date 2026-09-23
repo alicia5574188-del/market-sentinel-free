@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchMarketTickers, fetchStructureCandles } from "../lib/gate-market.ts";
+import { fetchActiveContracts, fetchBackgroundFuturesBook, fetchContractStats, fetchFuturesBook, fetchLiquidations,
+  fetchMarketTickers, fetchStructureCandles, fetchUrgentFuturesBook } from "../lib/gate-market.ts";
 
 const withFetch = async (body: unknown, run: () => Promise<void>) => {
   const prior = globalThis.fetch;
@@ -134,4 +135,30 @@ test("terminal public errors release unread bodies without changing error or ret
   try{await assert.rejects(()=>fetchContractStats("BODY_RELEASE_USDT"),/Gate public 400/);
     assert.equal(cancelled,true);assert.equal(requests,1);}
   finally{globalThis.fetch=prior;}
+});
+
+
+test("urgent books keep one host fallback while ordinary discovery never blocks on a second host",async()=>{
+  const prior=globalThis.fetch,realNow=Date.now,baseNow=realNow()+60_000;
+  Date.now=()=>baseNow;
+  const urls:string[]=[];
+  globalThis.fetch=async(input)=>{
+    urls.push(String(input));
+    if(urls.length===1)throw new DOMException("timed out","TimeoutError");
+    return Response.json({id:91,update:Date.now(),bids:[{p:"99",s:"2"}],asks:[{p:"101",s:"2"}]});
+  };
+  try{
+    const urgent=await fetchUrgentFuturesBook("URGENT_USDT",.1,.01);
+    assert.equal(urgent.sequence,91);
+    assert.equal(urls.length,2);
+    assert.ok(urls.every(url=>url.includes("limit=20")));
+  }finally{globalThis.fetch=prior;}
+
+  const ordinaryUrls:string[]=[];
+  globalThis.fetch=async(input)=>{ordinaryUrls.push(String(input));throw new DOMException("timed out","TimeoutError");};
+  try{
+    await assert.rejects(fetchBackgroundFuturesBook("ORDINARY_USDT",.1,.01));
+    assert.equal(ordinaryUrls.length,1,"ordinary polling yields to the next 2s bucket instead of serially blocking on both hosts");
+    assert.ok(ordinaryUrls[0]!.includes("limit=20"));
+  }finally{globalThis.fetch=prior;Date.now=realNow;}
 });

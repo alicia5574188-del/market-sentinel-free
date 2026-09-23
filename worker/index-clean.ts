@@ -3,7 +3,8 @@ import { LiveHistoryReader } from "../lib/live-history-reader.ts";
 
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
-import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchMarketTickers, fetchRecentTrades, fetchStructureCandles } from "../lib/gate-market.ts";
+import { GatePublicError, fetchActiveContracts, fetchBackgroundFuturesBook, fetchContractStats, fetchFuturesBook, fetchLiquidations,
+  fetchMarketTickers, fetchRecentTrades, fetchStructureCandles, fetchUrgentFuturesBook } from "../lib/gate-market.ts";
 import { closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_RISK_CAP, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
 import { aggregateFourHourCandles, analyzeSnapshot, ancillarySchedule, applyFlow, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, optionalEvidenceIsFresh, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
 import { arenaProtectionStop, arenaTradePlan, liveMirrorExitRequired } from "../lib/arena-live.ts";
@@ -36,8 +37,8 @@ import { advanceRegimePortfolio, evaluateRegimePortfolio, initialRegimePortfolio
   REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE, resetRegimePortfolio,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
-import { advanceForward, closeForwardForReset, forwardSummary, forwardEquity, freshQuote, forwardWatchSymbols, initialMultiTurnForward,
-  BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
+import { advanceForward, closeForwardForReset, forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols,
+  forwardUrgentQuoteSymbols, forwardWatchSymbols, initialMultiTurnForward, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { MULTI_TURN_VERSION } from "../lib/multi-turn-engine.ts";
 import { ANCHOR_FLOW_VERSION } from "../lib/anchor-flow.ts";
 import { forwardSymbolAllowed } from "../lib/forward-evidence.ts";
@@ -495,6 +496,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private memory: Record<string, SymbolMemory> = {};
   private structureCandles: Record<string, Partial<Record<"1m" | "15m" | "1h" | "4h", Awaited<ReturnType<typeof fetchStructureCandles>>>>> = {};
   private strategyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
+  private forwardMinuteCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
+  private forwardMinuteRetryAt = new Map<string,number>();
+  private forwardMinuteQuoteBars: Record<string,{minute:number;open:number;high:number;low:number;close:number;samples:number;
+    firstAt:number;lastAt:number;completed:Array<{time:number;open:number;high:number;low:number;close:number;volume:number}>}> = {};
   private turnDailyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private turnDailyLoaded = new Set<string>();
   private turnDailyCursor = 0;
@@ -856,6 +861,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if (!this.strategyPathSymbols().includes(symbol)) {
         delete this.runtime.strategyCandleFailures[symbol]; delete this.strategyCandles[symbol];
       }
+      if(!this.runtime.liquidUniverse.includes(symbol)&&!this.forwardUrgentSymbols().includes(symbol)){
+        delete this.forwardMinuteCandles[symbol];delete this.forwardMinuteQuoteBars[symbol];this.forwardMinuteRetryAt.delete(symbol);
+      }
       delete this.runtime.tickSize[symbol]; delete this.runtime.contractMeta[symbol];
     }
   }
@@ -1077,7 +1085,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const previous=this.forwardState;if(!previous||previous.strategyAuthorityVersion===MULTI_TURN_VERSION)return false;
     if(this.runtime.live.requestedEnabled||this.runtime.live.operational||this.activeLivePositions().length||this.activeLiveEntries().length)
       return false; // legacy drain continues protection, but cannot create new legacy entries
-    const quotes=this.regimeQuotes(now),closed=closeForwardForReset(previous,quotes,now),next=initialMultiTurnForward(now);
+    const quotes=this.forwardQuotes(now),closed=closeForwardForReset(previous,quotes,now),next=initialMultiTurnForward(now);
     const prepared=await prepareForwardReset(previous,closed,next,now);
     const saved=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
     const protection=prepared.entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
@@ -1121,16 +1129,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const legacyDrainOnly=this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION;
       const dataCycleDue=allowDataCycle&&(!this.forwardState.lastCycleAt
         ||Math.floor((now-90_000)/BAR_MS)>Math.floor((this.forwardState.lastCycleAt-90_000)/BAR_MS));
-      // Quote/exit management keeps the existing ten-second source cadence.
-      // A due post-refresh data cycle may bypass it once so fresh completed
-      // candles are never lost just because the critical loop ran first.
-      if(!dataCycleDue&&now-this.forwardState.lastQuoteCycleAt<10_000){
+      // Urgent current-authority markets (open holdings, AnchorFlow RETEST/READY,
+      // RegionLaunch ARMED/IGNITION/READY) consume the 2s critical quote clock.
+      // Non-urgent research/account marking stays on the cheaper 10s cadence.
+      const currentMulti=this.forwardState.strategyAuthorityVersion===MULTI_TURN_VERSION;
+      const urgent=currentMulti&&(this.forwardUrgentSymbols(now).length>0||this.forwardState.positions.length>0);
+      const quoteCadence=urgent?LOOP_MS:10_000;
+      if(!dataCycleDue&&now-this.forwardState.lastQuoteCycleAt<quoteCadence){
         this.forwardLastAttemptAt=this.forwardState.lastQuoteCycleAt;return;
       }
       this.forwardLastAttemptAt=now;
       const previous = this.forwardState;
-      const next = advanceForward({ state: previous, now, paths: this.strategyCandles,daily:this.turnDailyCandles,
-        quotes: this.regimeQuotes(now), contracts: this.regimeContracts(),legacyDrainOnly,
+      const next = advanceForward({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),daily:this.turnDailyCandles,
+        quotes: this.forwardQuotes(now), contracts: this.regimeContracts(),legacyDrainOnly,
         entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue });
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
@@ -2777,8 +2788,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // fresh executable book and contract metadata, not ancillary entry evidence
     // or a four-snapshot entry warmup.
     const protectedSymbols = this.currentAuthorityProtectionSymbols();
-    const actionableMarkets = this.runtime.symbols.filter((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS
-      && this.runtime.contractMeta[symbol] != null && this.symbolEntryReady(symbol)).length;
+    const urgent=new Set(this.forwardUrgentSymbols(now));
+    const currentForward=this.forwardState?.strategyAuthorityVersion===MULTI_TURN_VERSION;
+    const actionableMarkets = this.runtime.symbols.filter((symbol) => {
+      const warm=(this.sessionWarmup[symbol]??0)>=(urgent.has(symbol)?2:WARMUP_SNAPSHOTS);
+      if(!warm||this.runtime.contractMeta[symbol]==null)return false;
+      if(currentForward)return this.symbolManagementReady(symbol,now)
+        &&this.runtime.feedFailures[symbol]?.suspendedSince==null;
+      return this.symbolEntryReady(symbol);
+    }).length;
     const missingProtectedMarkets=[...protectedSymbols].filter((symbol)=>!this.runtime.symbols.includes(symbol)
       || !this.symbolManagementReady(symbol,now));
     const protectedMarketsReady = missingProtectedMarkets.length===0;
@@ -2789,21 +2807,101 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private ensureProtectionSymbolsResident() {
     const protectedSymbols=[...this.currentAuthorityProtectionSymbols()];
-    if(!protectedSymbols.length)return;
-    const protectedSet=new Set(protectedSymbols);
-    const residentNonProtected=this.runtime.symbols.filter((symbol)=>!protectedSet.has(symbol));
-    // Normal discovery capacity remains 20. If already-owned exposure ever
-    // exceeds that number, protection temporarily wins over discovery rather
-    // than orphaning a live/PAPER holding.
+    const urgentSymbols=this.forwardUrgentSymbols();
+    if(!protectedSymbols.length&&!urgentSymbols.length)return;
+    const locked=[...new Set([...protectedSymbols,...urgentSymbols])],lockedSet=new Set(locked);
+    const residentNonProtected=this.runtime.symbols.filter((symbol)=>!lockedSet.has(symbol));
+    // Existing exposure always wins. Current-authority RETEST/READY/ARMED/
+    // IGNITION states use the remaining realtime capacity immediately instead
+    // of waiting for the one-minute radar refresh.
     const residentLimit=Math.max(PORTFOLIO_REALTIME_CAPACITY,protectedSymbols.length);
-    const next=[...protectedSymbols,...residentNonProtected].slice(0,residentLimit);
+    const next=[...locked,...residentNonProtected].slice(0,residentLimit);
     if(next.length!==this.runtime.symbols.length||next.some((symbol,index)=>symbol!==this.runtime.symbols[index]))
       this.applyRealtimeSymbols(next);
+  }
+
+  private forwardUrgentSymbols(now=Date.now()){
+    if(!this.forwardState||this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION)return [];
+    return forwardUrgentQuoteSymbols(this.forwardState,now,this.runtime.liquidUniverse??[]);
+  }
+
+  private forwardQuotes(now=Date.now()){
+    if(!this.forwardState||this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION||!this.runtime.evidence)
+      return this.regimeQuotes(now);
+    const urgent=new Set(this.forwardUrgentSymbols(now)),failures=this.runtime.feedFailures??{},meta=this.runtime.contractMeta??{};
+    return Object.fromEntries(Object.entries(this.runtime.evidence).flatMap(([symbol,row])=>{
+      if(!row?.fresh||row.bestBid==null||row.bestAsk==null||now-row.observedAt>STALE_AFTER_MS)return [];
+      const failure=failures[symbol];
+      const recovered=failure?.suspendedSince==null&&(failure?.recoveryFreshCount??FEED_RECOVERY_CONFIRMATIONS)>=FEED_RECOVERY_CONFIRMATIONS;
+      const warm=(this.sessionWarmup[symbol]??0)>=(urgent.has(symbol)?2:WARMUP_SNAPSHOTS);
+      return [[symbol,{midpoint:row.midpoint,bestBid:row.bestBid,bestAsk:row.bestAsk,observedAt:row.observedAt,fresh:true,
+        entryReady:recovered&&warm&&meta[symbol]!=null,
+        completedMinuteAt:this.forwardMinuteCandles[symbol]?.at(-1)
+          ?(this.forwardMinuteCandles[symbol]!.at(-1)!.time+60)*1_000:undefined}]];
+    }));
+  }
+
+  private recordForwardMinuteQuote(symbol:string,mid:number,observedAt:number){
+    if(!this.forwardUrgentSymbols(observedAt).includes(symbol)||!Number.isFinite(mid)||mid<=0)return;
+    this.forwardMinuteQuoteBars??={};
+    const minute=Math.floor(observedAt/60_000)*60_000;
+    let row=this.forwardMinuteQuoteBars[symbol];
+    if(!row||row.minute!==minute){
+      if(row){
+        const covered=row.lastAt-row.firstAt;
+        const fullMinute=row.samples>=12&&covered>=45_000&&row.firstAt<=row.minute+10_000&&row.lastAt>=row.minute+50_000;
+        if(fullMinute)row.completed=[...row.completed,{time:row.minute/1000,open:row.open,high:row.high,low:row.low,close:row.close,volume:0}].slice(-90);
+      }
+      row={minute,open:mid,high:mid,low:mid,close:mid,samples:1,firstAt:observedAt,lastAt:observedAt,completed:row?.completed??[]};
+      this.forwardMinuteQuoteBars[symbol]=row;return;
+    }
+    row.high=Math.max(row.high,mid);row.low=Math.min(row.low,mid);row.close=mid;row.samples++;row.lastAt=observedAt;
+  }
+
+  private forwardMinutePaths(){
+    const officialCache=this.forwardMinuteCandles??{},syntheticCache=this.forwardMinuteQuoteBars??{};
+    const symbols=new Set([...Object.keys(officialCache),...Object.keys(syntheticCache)]);
+    return Object.fromEntries([...symbols].flatMap(symbol=>{
+      const official=officialCache[symbol]??[],synthetic=syntheticCache[symbol]?.completed??[];
+      const merged=[...new Map([...synthetic,...official].map(row=>[row.time,row])).values()].sort((a,b)=>a.time-b.time).slice(-90);
+      return merged.length?[[symbol,merged]]:[];
+    }));
+  }
+
+  private async refreshForwardUrgentMinutes(now=Date.now()){
+    this.forwardMinuteCandles??={};this.forwardMinuteQuoteBars??={};this.forwardMinuteRetryAt??=new Map();
+    const targetCompletedAt=Math.floor(now/60_000)*60_000;
+    const urgent=this.forwardState?.strategyAuthorityVersion===MULTI_TURN_VERSION
+      ?forwardUrgentMinuteSymbols(this.forwardState,this.runtime.liquidUniverse??[]).slice(0,PORTFOLIO_REALTIME_CAPACITY):[];
+    const due=urgent.filter(symbol=>{
+      if((this.forwardMinuteRetryAt.get(symbol)??0)>now)return false;
+      const last=this.forwardMinuteCandles[symbol]?.at(-1);
+      return !last||(last.time+60)*1_000<targetCompletedAt;
+    });
+    if(!due.length)return 0;
+    const results=await Promise.allSettled(due.map(async symbol=>({symbol,
+      rows:await fetchStructureCandles(symbol,"1m",60)})));
+    for(const result of results){
+      if(result.status!=="fulfilled"){
+        const symbol=due[results.indexOf(result)]!;
+        this.forwardMinuteRetryAt.set(symbol,now+5_000);
+        continue;
+      }
+      const {symbol,rows}=result.value;
+      if(rows.length){
+        this.forwardMinuteCandles[symbol]=rows.slice(-90);
+        this.forwardMinuteRetryAt.delete(symbol);
+      }else this.forwardMinuteRetryAt.set(symbol,now+5_000);
+    }
+    for(const symbol of Object.keys(this.forwardMinuteCandles))
+      if(!this.runtime.liquidUniverse.includes(symbol)&&!urgent.includes(symbol))delete this.forwardMinuteCandles[symbol];
+    return due.length;
   }
 
   private cycleBookSymbols(now: number, symbols: string[]) {
     const protectedSymbols = new Set([
       ...this.currentAuthorityProtectionSymbols(),
+      ...this.forwardUrgentSymbols(now),
       ...Object.values(this.runtime.stableCandidates).filter((candidate) => approvedRouteScore(candidate) >= 0)
         .map((candidate) => candidate.symbol),
       ...Object.values(this.runtime.previousStableCandidates).filter((candidate) => previousApprovedRouteScore(candidate) >= 0)
@@ -2819,8 +2917,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const authorityBefore = this.captureAuthority();
     const dueSymbols = cycleSymbols.filter((symbol) => (this.runtime.feedFailures[symbol]?.retryAt ?? 0) <= now);
     this.runtime.feedQuality.attempts += dueSymbols.length;
+    const urgentSet=new Set([...this.currentAuthorityProtectionSymbols(),...this.forwardUrgentSymbols(now)]);
     const rows = await Promise.allSettled(dueSymbols.map(async (symbol) => ({
-      symbol, snapshot: await fetchFuturesBook(symbol, this.runtime.tickSize[symbol] ?? 0.0001, this.runtime.contractMeta[symbol]?.quantoMultiplier ?? 1),
+      symbol, snapshot: await (urgentSet.has(symbol)?fetchUrgentFuturesBook:fetchBackgroundFuturesBook)(
+        symbol,this.runtime.tickSize[symbol]??0.0001,this.runtime.contractMeta[symbol]?.quantoMultiplier??1),
     })));
     let successes = 0;
     let criticalChanged = false;
@@ -2834,7 +2934,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const prior = this.runtime.feedFailures[attemptedSymbol]?.count ?? 0;
         const count = Math.min(5, prior + 1);
         const ordinaryBackoff = [2_000, 4_000, 8_000, 16_000, 30_000][count - 1];
-        const protectedSymbol=this.currentAuthorityProtectionSymbols().has(attemptedSymbol);
+        const protectedSymbol=this.currentAuthorityProtectionSymbols().has(attemptedSymbol)||this.forwardUrgentSymbols(now).includes(attemptedSymbol);
         const backoff=protectedSymbol?LOOP_MS:ordinaryBackoff;
         const gateRetry = result.reason instanceof GatePublicError ? result.reason.retryAt : null;
         const error = safeError(result.reason);
@@ -2919,6 +3019,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const decision: Decision | null = null;
       const bestBid = snapshot.bids[0]?.price ?? analyzed.midpoint;
       const bestAsk = snapshot.asks[0]?.price ?? analyzed.midpoint;
+      this.recordForwardMinuteQuote(symbol,(bestBid+bestAsk)/2,snapshot.observedAt);
       // Position protection needs only a fresh executable book. It must continue
       // even while ancillary entry evidence is warming or temporarily stale.
       this.runtime.regimePortfolio = advanceRegimePortfolio({ state: this.runtime.regimePortfolio,
@@ -3129,7 +3230,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.lastSuccessAt = books.successes > 0 ? observedAt : this.runtime.lastSuccessAt;
     const allWarm = this.runtime.symbols.every((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS);
     const allMeta = this.runtime.symbols.every((symbol) => this.runtime.contractMeta[symbol] != null);
-    const realtimeReadiness = this.realtimeReadiness();
+    const realtimeReadiness = this.realtimeReadiness(observedAt);
     const ancillaryStarted = this.runtime.symbols.every((symbol) => {
       const memory = this.memory[symbol];
       return memory && memory.timeframeUpdatedAt.m1 > 0 && memory.timeframeUpdatedAt.m15 > 0
@@ -3159,6 +3260,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // optional settlement history can be repopulated.
       await this.ensureLiveRecordEpoch(Date.now());
       this.launchLiveSettlementBackground();
+      subrequests += await this.refreshForwardUrgentMinutes(Date.now());
       if (universeDue) {
         subrequests += 2;
         try { this.refreshUniverse(Date.now(), await fetchActiveContracts()); }

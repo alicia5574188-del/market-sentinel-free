@@ -3,7 +3,7 @@ import { registerHooks } from "node:module";
 import test from "node:test";
 import { ancillaryIsFresh, ancillarySchedule, emptySymbolMemory, optionalEvidenceIsFresh } from "../lib/liquidity-runtime.ts";
 import { remainingStressRisk, STALE_AFTER_MS, type PaperPlan, type PaperPosition } from "../lib/liquidity-core.ts";
-import { initialForward, type Trade } from "../lib/forward-relations.ts";
+import { forwardUrgentMinuteSymbols, initialForward, type Trade } from "../lib/forward-relations.ts";
 import type { ArenaTrade } from "../lib/strategy-arena.ts";
 import { completedCandleStrategyCandidate } from "../lib/market-regime.ts";
 
@@ -82,6 +82,97 @@ test("protected holding book failures retry on the two-second protection clock i
   try { await stream.processBooks(now, ["HOLD_USDT"]); }
   finally { globalThis.fetch = original; }
   assert.equal(stream.runtime.feedFailures.HOLD_USDT.retryAt, now + 2_000);
+});
+
+test("AnchorFlow READY and RETEST share the urgent one-minute data path without making it a hard dependency",async()=>{
+  const {stream}=await makeStream();const now=1_800_000_000_000;
+  stream.forwardState={strategyAuthorityVersion:"multi-turn-v1",positions:[],regionSignals:[],
+    anchorFlows:{
+      READY_USDT:{symbol:"READY_USDT",phase:"READY",readyAt:now,createdAt:now-60_000},
+      RETEST_USDT:{symbol:"RETEST_USDT",phase:"RETEST",readyAt:null,createdAt:now-120_000},
+    },regionLaunches:{}};
+  stream.runtime.liquidUniverse=["READY_USDT","RETEST_USDT"];
+  const urgent=forwardUrgentMinuteSymbols(stream.forwardState,stream.runtime.liquidUniverse);
+  assert.deepEqual(urgent.slice(0,2),["READY_USDT","RETEST_USDT"]);
+});
+
+test("RegionLaunch ARMED markets stay on the two-second book clock across every background bucket",async()=>{
+  const {stream}=await makeStream();const now=1_800_000_000_000;
+  stream.forwardState={strategyAuthorityVersion:"multi-turn-v1",positions:[],regionSignals:[],anchorFlows:{},
+    regionLaunches:{URGENT_USDT:{symbol:"URGENT_USDT",phase:"ARMED",quality:.9,updatedAt:now}}};
+  stream.runtime.symbols=["URGENT_USDT","BG_USDT"];stream.runtime.liquidUniverse=["URGENT_USDT","BG_USDT"];
+  stream.sessionWarmup.URGENT_USDT=4;stream.sessionWarmup.BG_USDT=4;
+  for(let i=0;i<5;i++)assert.ok(stream.cycleBookSymbols(now+i*2_000,stream.runtime.symbols).includes("URGENT_USDT"));
+});
+
+test("urgent Forward quotes no longer depend on stale legacy one-minute ancillary evidence",async()=>{
+  const {stream}=await makeStream();const now=1_800_000_000_000;
+  stream.forwardState={strategyAuthorityVersion:"multi-turn-v1",positions:[],regionSignals:[],anchorFlows:{},
+    regionLaunches:{URGENT_USDT:{symbol:"URGENT_USDT",phase:"ARMED",quality:.9,updatedAt:now}}};
+  stream.runtime.liquidUniverse=["URGENT_USDT"];stream.runtime.symbols=["URGENT_USDT"];
+  stream.runtime.contractMeta.URGENT_USDT={quantoMultiplier:1,maintenanceRate:.005,leverageMax:20,fundingRate:0};
+  stream.sessionWarmup.URGENT_USDT=2;
+  stream.runtime.evidence.URGENT_USDT={midpoint:100,bestBid:99.99,bestAsk:100.01,observedAt:now,fresh:true,
+    ancillaryFresh:false,optionalFresh:false,entryReady:false,recoveryFreshCount:2,suspensionReason:"旧1分钟辅助尚未更新"};
+  const quotes=stream.forwardQuotes(now);
+  assert.equal(quotes.URGENT_USDT?.entryReady,true);
+  assert.equal(quotes.URGENT_USDT?.bestBid,99.99);
+});
+
+test("fresh urgent books build a local completed one-minute fallback only after near-full-minute coverage",async()=>{
+  const {stream}=await makeStream();const start=1_800_000_000_000;
+  stream.forwardState={strategyAuthorityVersion:"multi-turn-v1",positions:[],regionSignals:[],anchorFlows:{},
+    regionLaunches:{URGENT_USDT:{symbol:"URGENT_USDT",phase:"ARMED",quality:.9,updatedAt:start}}};
+  stream.runtime.liquidUniverse=["URGENT_USDT"];
+  for(let second=2;second<=58;second+=4){
+    const mid=100+(second%12===0?.9:second%8===0?.4:second/1000);
+    stream.recordForwardMinuteQuote("URGENT_USDT",mid,start+second*1_000);
+  }
+  stream.recordForwardMinuteQuote("URGENT_USDT",101.3,start+61_000);
+  const row=stream.forwardMinutePaths().URGENT_USDT?.at(-1);
+  assert.ok(row,"near-full 2s/4s executable quote coverage must provide a local minute fallback");
+  assert.equal(row?.volume,0);
+  assert.equal(stream.runtime.lastError,null);
+});
+
+test("partial urgent quote coverage never masquerades as a completed one-minute candle",async()=>{
+  const {stream}=await makeStream();const start=1_800_000_000_000;
+  stream.forwardState={strategyAuthorityVersion:"multi-turn-v1",positions:[],regionSignals:[],anchorFlows:{},
+    regionLaunches:{URGENT_USDT:{symbol:"URGENT_USDT",phase:"ARMED",quality:.9,updatedAt:start}}};
+  stream.runtime.liquidUniverse=["URGENT_USDT"];
+  for(const second of [32,36,40,44,48,52,56])stream.recordForwardMinuteQuote("URGENT_USDT",100+second/10_000,start+second*1_000);
+  stream.recordForwardMinuteQuote("URGENT_USDT",100.8,start+61_000);
+  assert.equal(stream.forwardMinutePaths().URGENT_USDT?.length??0,0,
+    "entering realtime observation halfway through a minute must wait for the next complete minute or official Gate candle");
+});
+
+test("a failed urgent official 1m refresh is local and retryable instead of becoming a system data-missing error",async()=>{
+  const {stream}=await makeStream();const now=1_800_000_060_000;
+  stream.forwardState={strategyAuthorityVersion:"multi-turn-v1",positions:[],regionSignals:[],anchorFlows:{},
+    regionLaunches:{URGENT_USDT:{symbol:"URGENT_USDT",phase:"ARMED",quality:.9,updatedAt:now}}};
+  stream.runtime.liquidUniverse=["URGENT_USDT"];
+  const original=globalThis.fetch;globalThis.fetch=(async()=>{throw new Error("synthetic urgent 1m outage");}) as typeof fetch;
+  try{const count=await stream.refreshForwardUrgentMinutes(now);assert.equal(count,1);}
+  finally{globalThis.fetch=original;}
+  assert.ok((stream.forwardMinuteRetryAt.get("URGENT_USDT")??0)>now);
+  assert.equal(stream.runtime.lastError,null);
+});
+
+
+test("current Multi-Turn health stays LIVE when legacy ancillary evidence is stale but executable books are fresh",async()=>{
+  const {stream}=await makeStream();const now=1_800_000_120_000;
+  stream.forwardState={strategyAuthorityVersion:"multi-turn-v1",positions:[],regionSignals:[],anchorFlows:{},regionLaunches:{}};
+  stream.runtime.symbols=["READY_USDT"];stream.runtime.liquidUniverse=["READY_USDT"];stream.runtime.lastSuccessAt=now;
+  stream.runtime.contractMeta.READY_USDT={quantoMultiplier:1,maintenanceRate:.005,leverageMax:20,fundingRate:0};
+  stream.sessionWarmup.READY_USDT=4;
+  stream.runtime.evidence.READY_USDT={midpoint:100,bestBid:99.99,bestAsk:100.01,observedAt:now,warmup:4,
+    fresh:true,ancillaryFresh:false,optionalFresh:false,entryReady:false,topLong:null,topShort:null,absorption:0,range15m:null};
+  stream.runtime.feedFailures.READY_USDT={count:0,retryAt:0,suspendedSince:null,recoveryFreshCount:2,lastFreshAt:now};
+  const readiness=stream.realtimeReadiness(now);
+  assert.equal(readiness.actionableMarkets,1);
+  stream.publishCriticalHealth(now,{successes:1,requests:1});
+  assert.equal(stream.runtime.state,"LIVE");
+  assert.equal(stream.runtime.lastError,null);
 });
 
 test("the strategy candle clock waits for Gate publication grace and advances once per closed bar", () => {

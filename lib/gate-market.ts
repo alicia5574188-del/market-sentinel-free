@@ -88,8 +88,10 @@ function levels(rows: GateBook["asks"]): BookLevel[] {
     .filter((row) => row.price > 0 && row.size > 0);
 }
 
-export async function fetchFuturesBook(symbol: string, tickSize = 0.0001, quantoMultiplier = 1): Promise<BookSnapshot> {
-  const book = await gatePublic<GateBook>(`/futures/usdt/order_book?contract=${encodeURIComponent(symbol)}&limit=50&with_id=true`, GATE_PUBLIC_TIMEOUT_MS, 2);
+async function fetchFuturesBookPolicy(symbol:string,tickSize:number,quantoMultiplier:number,
+  timeoutMs:number,attempts:number,limit:number):Promise<BookSnapshot>{
+  const book = await gatePublic<GateBook>(`/futures/usdt/order_book?contract=${encodeURIComponent(symbol)}&limit=${limit}&with_id=true`,
+    timeoutMs, attempts);
   const toNotional = (row: BookLevel) => ({ ...row, size: row.size * row.price * Math.max(quantoMultiplier, 1e-12) });
   const bids = levels(book.bids).map(toNotional).sort((a, b) => b.price - a.price);
   const asks = levels(book.asks).map(toNotional).sort((a, b) => a.price - b.price);
@@ -98,14 +100,28 @@ export async function fetchFuturesBook(symbol: string, tickSize = 0.0001, quanto
   const sequence = Number(book.id ?? 0);
   if (!(update > 0)) throw new Error(`${symbol} futures book missing exchange update time`);
   if (!(sequence > 0)) throw new Error(`${symbol} futures book missing sequence id`);
-  return {
-    symbol,
-    observedAt: update < 1e12 ? update * 1_000 : update,
-    sequence,
-    tickSize,
-    bids,
-    asks,
-  };
+  return {symbol,observedAt:update<1e12?update*1_000:update,sequence,tickSize,bids,asks};
+}
+
+export async function fetchFuturesBook(symbol: string, tickSize = 0.0001, quantoMultiplier = 1): Promise<BookSnapshot> {
+  return fetchFuturesBookPolicy(symbol,tickSize,quantoMultiplier,GATE_PUBLIC_TIMEOUT_MS,2,50);
+}
+
+/**
+ * Current-authority execution path. Smaller depth and a shorter per-host wait
+ * keep one slow contract from consuming the whole 2s execution clock while
+ * retaining one independent-host fallback.
+ */
+export async function fetchUrgentFuturesBook(symbol:string,tickSize=.0001,quantoMultiplier=1):Promise<BookSnapshot>{
+  return fetchFuturesBookPolicy(symbol,tickSize,quantoMultiplier,1_200,2,20);
+}
+
+/**
+ * Non-urgent realtime discovery prefers bounded latency over blocking the next
+ * protection/entry cycle. A miss is retried by the next scheduled bucket.
+ */
+export async function fetchBackgroundFuturesBook(symbol:string,tickSize=.0001,quantoMultiplier=1):Promise<BookSnapshot>{
+  return fetchFuturesBookPolicy(symbol,tickSize,quantoMultiplier,1_500,1,20);
 }
 
 export type GateTicker = {
@@ -206,6 +222,23 @@ export async function fetchContractStats(symbol: string) {
 
 export type GateCandle = { time: number; volume: number; close: number; high: number; low: number; open: number };
 type GateCandleRow = { t?: number; v?: string | number; c?: string | number; h?: string | number; l?: string | number; o?: string | number };
+
+export async function fetchUrgentMinuteCandles(symbol:string,limit=60){
+  const boundedLimit=Math.max(2,Math.min(120,Math.floor(limit)));
+  const rows=await gatePublic<GateCandleRow[]>(
+    `/futures/usdt/candlesticks?contract=${encodeURIComponent(symbol)}&interval=1m&limit=${boundedLimit}`,
+    1_500,2,
+  );
+  const completedBefore=Math.floor(Date.now()/60_000)*60;
+  const parsed=rows.map(row=>({time:Number(row.t),volume:Number(row.v),close:Number(row.c),high:Number(row.h),low:Number(row.l),open:Number(row.o)}))
+    .filter(row=>row.time>0&&row.time+60<=Date.now()/1000&&row.time<completedBefore
+      &&[row.volume,row.close,row.high,row.low,row.open].every(Number.isFinite)&&row.close>0&&row.high>=row.low&&row.volume>=0)
+    .sort((a,b)=>a.time-b.time);
+  const unique=[...new Map(parsed.map(row=>[row.time,row])).values()];
+  let start=unique.length?unique.length-1:0;
+  while(start>0&&unique[start]!.time-unique[start-1]!.time===60)start-=1;
+  return unique.slice(start);
+}
 
 export async function fetchStructureCandles(symbol: string, interval: "1m" | "5m" | "15m" | "30m" | "1h" | "4h" | "1d", limit = 120) {
   const boundedLimit = Math.max(2, Math.min(1_000, Math.floor(limit)));
