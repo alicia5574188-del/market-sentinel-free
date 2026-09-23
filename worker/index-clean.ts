@@ -3,7 +3,8 @@ import { LiveHistoryReader } from "../lib/live-history-reader.ts";
 
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
-import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchFuturesBook, fetchLiquidations, fetchMarketTickers, fetchRecentTrades, fetchStructureCandles } from "../lib/gate-market.ts";
+import { GatePublicError, fetchActiveContracts, fetchBackgroundFuturesBook, fetchContractStats, fetchFuturesBook, fetchLiquidations,
+  fetchMarketTickers, fetchRecentTrades, fetchStructureCandles, fetchUrgentFuturesBook } from "../lib/gate-market.ts";
 import { closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_RISK_CAP, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
 import { aggregateFourHourCandles, analyzeSnapshot, ancillarySchedule, applyFlow, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, optionalEvidenceIsFresh, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
 import { arenaProtectionStop, arenaTradePlan, liveMirrorExitRequired } from "../lib/arena-live.ts";
@@ -36,8 +37,8 @@ import { advanceRegimePortfolio, evaluateRegimePortfolio, initialRegimePortfolio
   REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE, resetRegimePortfolio,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
-import { advanceForward, closeForwardForReset, forwardSummary, forwardEquity, freshQuote, forwardUrgentQuoteSymbols,
-  forwardWatchSymbols, initialMultiTurnForward, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
+import { advanceForward, closeForwardForReset, forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols,
+  forwardUrgentQuoteSymbols, forwardWatchSymbols, initialMultiTurnForward, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { MULTI_TURN_VERSION } from "../lib/multi-turn-engine.ts";
 import { ANCHOR_FLOW_VERSION } from "../lib/anchor-flow.ts";
 import { forwardSymbolAllowed } from "../lib/forward-evidence.ts";
@@ -2786,8 +2787,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // fresh executable book and contract metadata, not ancillary entry evidence
     // or a four-snapshot entry warmup.
     const protectedSymbols = this.currentAuthorityProtectionSymbols();
-    const actionableMarkets = this.runtime.symbols.filter((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS
-      && this.runtime.contractMeta[symbol] != null && this.symbolEntryReady(symbol)).length;
+    const urgent=new Set(this.forwardUrgentSymbols(now));
+    const actionableMarkets = this.runtime.symbols.filter((symbol) => {
+      const warm=(this.sessionWarmup[symbol]??0)>=(urgent.has(symbol)?2:WARMUP_SNAPSHOTS);
+      if(!warm||this.runtime.contractMeta[symbol]==null)return false;
+      if(urgent.has(symbol))return this.symbolManagementReady(symbol,now)
+        &&this.runtime.feedFailures[symbol]?.suspendedSince==null;
+      return this.symbolEntryReady(symbol);
+    }).length;
     const missingProtectedMarkets=[...protectedSymbols].filter((symbol)=>!this.runtime.symbols.includes(symbol)
       || !this.symbolManagementReady(symbol,now));
     const protectedMarketsReady = missingProtectedMarkets.length===0;
@@ -2862,7 +2869,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private async refreshForwardUrgentMinutes(now=Date.now()){
     const targetCompletedAt=Math.floor(now/60_000)*60_000;
-    const urgent=this.forwardUrgentSymbols(now).slice(0,6);
+    const urgent=this.forwardState?forwardUrgentMinuteSymbols(this.forwardState,this.runtime.liquidUniverse).slice(0,PORTFOLIO_REALTIME_CAPACITY):[];
     const due=urgent.filter(symbol=>{
       if((this.forwardMinuteRetryAt.get(symbol)??0)>now)return false;
       const last=this.forwardMinuteCandles[symbol]?.at(-1);
@@ -2907,8 +2914,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const authorityBefore = this.captureAuthority();
     const dueSymbols = cycleSymbols.filter((symbol) => (this.runtime.feedFailures[symbol]?.retryAt ?? 0) <= now);
     this.runtime.feedQuality.attempts += dueSymbols.length;
+    const urgentSet=new Set([...this.currentAuthorityProtectionSymbols(),...this.forwardUrgentSymbols(now)]);
     const rows = await Promise.allSettled(dueSymbols.map(async (symbol) => ({
-      symbol, snapshot: await fetchFuturesBook(symbol, this.runtime.tickSize[symbol] ?? 0.0001, this.runtime.contractMeta[symbol]?.quantoMultiplier ?? 1),
+      symbol, snapshot: await (urgentSet.has(symbol)?fetchUrgentFuturesBook:fetchBackgroundFuturesBook)(
+        symbol,this.runtime.tickSize[symbol]??0.0001,this.runtime.contractMeta[symbol]?.quantoMultiplier??1),
     })));
     let successes = 0;
     let criticalChanged = false;
