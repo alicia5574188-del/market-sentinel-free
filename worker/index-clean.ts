@@ -3225,6 +3225,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // optional settlement history can be repopulated.
       await this.ensureLiveRecordEpoch(Date.now());
       this.launchLiveSettlementBackground();
+      subrequests += await this.refreshForwardUrgentMinutes(Date.now());
       if (universeDue) {
         subrequests += 2;
         try { this.refreshUniverse(Date.now(), await fetchActiveContracts()); }
@@ -3296,6 +3297,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     try {
       const universeDue = now - this.runtime.lastUniverseAt >= UNIVERSE_MS;
       this.ensureProtectionSymbolsResident();
+      this.ensureForwardUrgentSymbolsResident(now);
       const cycleSymbols = this.cycleBookSymbols(now, [...this.runtime.symbols]);
       // The fresh executable book is the critical clock. Completed-candle,
       // universe, radar and research logging run under one non-overlapping
