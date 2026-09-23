@@ -2867,6 +2867,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private cycleBookSymbols(now: number, symbols: string[]) {
     const protectedSymbols = new Set([
       ...this.currentAuthorityProtectionSymbols(),
+      ...this.forwardUrgentSymbols(now),
       ...Object.values(this.runtime.stableCandidates).filter((candidate) => approvedRouteScore(candidate) >= 0)
         .map((candidate) => candidate.symbol),
       ...Object.values(this.runtime.previousStableCandidates).filter((candidate) => previousApprovedRouteScore(candidate) >= 0)
@@ -2897,7 +2898,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const prior = this.runtime.feedFailures[attemptedSymbol]?.count ?? 0;
         const count = Math.min(5, prior + 1);
         const ordinaryBackoff = [2_000, 4_000, 8_000, 16_000, 30_000][count - 1];
-        const protectedSymbol=this.currentAuthorityProtectionSymbols().has(attemptedSymbol);
+        const protectedSymbol=this.currentAuthorityProtectionSymbols().has(attemptedSymbol)||this.forwardUrgentSymbols(now).includes(attemptedSymbol);
         const backoff=protectedSymbol?LOOP_MS:ordinaryBackoff;
         const gateRetry = result.reason instanceof GatePublicError ? result.reason.retryAt : null;
         const error = safeError(result.reason);
