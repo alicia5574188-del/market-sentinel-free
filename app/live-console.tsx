@@ -34,7 +34,7 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
     if(view!=="trade"||!auth?.authenticated||(section!=="history"&&section!=="archive"))return;
     let active=true,reading=false;
     const load=async()=>{if(reading)return;reading=true;try{const value=await operatorRequest<HistoryView>("/api/live/history");if(active){setHistoryView(value);setHistoryError(null);}}
-      catch(e){if(active)setHistoryError(e instanceof Error?e.message:"历史记录读取失败");}finally{reading=false;}};
+      catch(e){if(active&&!(e instanceof OperatorRequestError&&e.status===0))setHistoryError(e instanceof Error?e.message:"历史记录读取失败");}finally{reading=false;}};
     void load();const timer=setInterval(()=>void load(),10000);return()=>{active=false;clearInterval(timer);};
   },[auth?.authenticated,auth?.memberId,section,view]);
   const submitting=useRef(false);
@@ -43,7 +43,8 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
     let active=true;
     if(!auth?.authenticated)return;
     void operatorRequest<{credential:CredentialStatus}>("/api/live/credentials").then(p=>{if(active)setCredential(p.credential);})
-      .catch(e=>{if(active){setError(e instanceof Error?e.message:"读取API状态失败");if(e instanceof OperatorRequestError&&e.status===401)onSession({...auth,authenticated:false});}});
+      .catch(e=>{if(active){if(e instanceof OperatorRequestError&&e.status===0)return;
+        setError(e instanceof Error?e.message:"读取API状态失败");if(e instanceof OperatorRequestError&&e.status===401)onSession({...auth,authenticated:false});}});
     return()=>{active=false;};
   },[auth,onSession]);
 
