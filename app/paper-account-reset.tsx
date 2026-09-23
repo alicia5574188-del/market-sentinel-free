@@ -1,12 +1,13 @@
 "use client";
 
-import {useState} from "react";
+import {useRef,useState} from "react";
 import {operatorRequest, type AuthSession, type OperatorRuntime} from "../lib/operator-ui.ts";
 
 type ResetResult={ok:boolean;equity:number;forward?:{startedAt:number;initialEquity:number}};
 
 export default function PaperAccountReset({auth,runtime,onReset}:{auth:AuthSession|null;runtime:OperatorRuntime|null;onReset:()=>void}){
   const owner=Boolean(auth?.authenticated&&auth.username==="owner"&&!auth.memberId&&auth.role!=="member");
+  const submitting=useRef(false);
   const [confirming,setConfirming]=useState(false),[busy,setBusy]=useState(false);
   const [error,setError]=useState<string|null>(null),[notice,setNotice]=useState<string|null>(null);
   if(!owner)return null;
@@ -17,8 +18,8 @@ export default function PaperAccountReset({auth,runtime,onReset}:{auth:AuthSessi
   const blocked=!runtime||Boolean(runtime.liveMode.requestedEnabled||runtime.liveMode.operational||openLive||pendingLive);
 
   const reset=async()=>{
-    if(busy||blocked)return;
-    setBusy(true);setError(null);setNotice(null);
+    if(submitting.current||busy||blocked)return;
+    submitting.current=true;setBusy(true);setError(null);setNotice(null);
     try{
       const result=await operatorRequest<ResetResult>("/api/paper/reset","POST",{confirm:"RESET_PAPER"});
       if(!result.ok||result.equity!==1000)throw new Error("服务器没有确认新的1000U模拟账户，未发布重置结果。");
@@ -26,7 +27,7 @@ export default function PaperAccountReset({auth,runtime,onReset}:{auth:AuthSessi
       setNotice("模拟账户已原子重置为1000U；策略、扫描范围、实盘API和LIVE开关均未改变。");
       onReset();
     }catch(e){setError(e instanceof Error?e.message:"模拟账户重置失败");}
-    finally{setBusy(false);}
+    finally{submitting.current=false;setBusy(false);}
   };
 
   return <section className="fr-section" data-testid="owner-paper-reset">
