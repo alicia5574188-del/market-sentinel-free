@@ -139,7 +139,8 @@ test("terminal public errors release unread bodies without changing error or ret
 
 
 test("urgent books keep one host fallback while ordinary discovery never blocks on a second host",async()=>{
-  const prior=globalThis.fetch;
+  const prior=globalThis.fetch,realNow=Date.now,baseNow=realNow()+60_000;
+  Date.now=()=>baseNow;
   const urls:string[]=[];
   globalThis.fetch=async(input)=>{
     urls.push(String(input));
@@ -159,5 +160,5 @@ test("urgent books keep one host fallback while ordinary discovery never blocks 
     await assert.rejects(fetchBackgroundFuturesBook("ORDINARY_USDT",.1,.01));
     assert.equal(ordinaryUrls.length,1,"ordinary polling yields to the next 2s bucket instead of serially blocking on both hosts");
     assert.ok(ordinaryUrls[0]!.includes("limit=20"));
-  }finally{globalThis.fetch=prior;}
+  }finally{globalThis.fetch=prior;Date.now=realNow;}
 });
