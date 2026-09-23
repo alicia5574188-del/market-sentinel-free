@@ -499,7 +499,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private forwardMinuteCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private forwardMinuteRetryAt = new Map<string,number>();
   private forwardMinuteQuoteBars: Record<string,{minute:number;open:number;high:number;low:number;close:number;samples:number;
-    completed:Array<{time:number;open:number;high:number;low:number;close:number;volume:number}>}> = {};
+    firstAt:number;lastAt:number;completed:Array<{time:number;open:number;high:number;low:number;close:number;volume:number}>}> = {};
   private turnDailyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private turnDailyLoaded = new Set<string>();
   private turnDailyCursor = 0;
@@ -2789,10 +2789,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // or a four-snapshot entry warmup.
     const protectedSymbols = this.currentAuthorityProtectionSymbols();
     const urgent=new Set(this.forwardUrgentSymbols(now));
+    const currentForward=this.forwardState?.strategyAuthorityVersion===MULTI_TURN_VERSION;
     const actionableMarkets = this.runtime.symbols.filter((symbol) => {
       const warm=(this.sessionWarmup[symbol]??0)>=(urgent.has(symbol)?2:WARMUP_SNAPSHOTS);
       if(!warm||this.runtime.contractMeta[symbol]==null)return false;
-      if(urgent.has(symbol))return this.symbolManagementReady(symbol,now)
+      if(currentForward)return this.symbolManagementReady(symbol,now)
         &&this.runtime.feedFailures[symbol]?.suspendedSince==null;
       return this.symbolEntryReady(symbol);
     }).length;
@@ -2846,11 +2847,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const minute=Math.floor(observedAt/60_000)*60_000;
     let row=this.forwardMinuteQuoteBars[symbol];
     if(!row||row.minute!==minute){
-      if(row&&row.samples>=6)row.completed=[...row.completed,{time:row.minute/1000,open:row.open,high:row.high,low:row.low,close:row.close,volume:0}].slice(-90);
-      row={minute,open:mid,high:mid,low:mid,close:mid,samples:1,completed:row?.completed??[]};
+      if(row){
+        const covered=row.lastAt-row.firstAt;
+        const fullMinute=row.samples>=12&&covered>=45_000&&row.firstAt<=row.minute+10_000&&row.lastAt>=row.minute+50_000;
+        if(fullMinute)row.completed=[...row.completed,{time:row.minute/1000,open:row.open,high:row.high,low:row.low,close:row.close,volume:0}].slice(-90);
+      }
+      row={minute,open:mid,high:mid,low:mid,close:mid,samples:1,firstAt:observedAt,lastAt:observedAt,completed:row?.completed??[]};
       this.forwardMinuteQuoteBars[symbol]=row;return;
     }
-    row.high=Math.max(row.high,mid);row.low=Math.min(row.low,mid);row.close=mid;row.samples++;
+    row.high=Math.max(row.high,mid);row.low=Math.min(row.low,mid);row.close=mid;row.samples++;row.lastAt=observedAt;
   }
 
   private forwardMinutePaths(){
