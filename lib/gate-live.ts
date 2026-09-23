@@ -124,7 +124,7 @@ export class GateEntryCancelledError extends Error {
     super("实盘提交前所有者选择、源单或行情状态已变化，未发送入场请求");
     this.name = "GateEntryCancelledError";
   }
-
+}
 
 export class GateReadTimeoutError extends Error {
   readonly code="GATE_READ_TIMEOUT";
@@ -138,10 +138,10 @@ export function isGateReadTimeoutError(error:unknown):error is GateReadTimeoutEr
   return error instanceof GateReadTimeoutError
     ||(error instanceof Error&&(error.name==="GateReadTimeoutError"||(error as Error&{code?:string}).code==="GATE_READ_TIMEOUT"));
 }
-function gateRequestTimedOut(error:unknown){
+function gateRequestTimedOut(error:unknown):boolean{
+  if(error instanceof AggregateError)return error.errors.length>0&&error.errors.every(gateRequestTimedOut);
   return error instanceof Error&&(error.name==="TimeoutError"||error.name==="AbortError"
     ||/aborted due to timeout|timed out|timeout/i.test(error.message));
-}
 }
 
 function hex(buffer: ArrayBuffer) {
@@ -192,7 +192,6 @@ export class GateLiveClient {
   constructor(credentials: GateCredentials) { this.credentials = credentials; }
 
   private async request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, query = "", value?: unknown, beforeSend?: () => boolean) {
-    this.requestCount += 1;
     const timestamp = Math.floor(Date.now() / 1_000).toString();
     const signedPath = `/api/v4${path}`;
     const body = value == null ? "" : JSON.stringify(value);
@@ -201,9 +200,9 @@ export class GateLiveClient {
     // Signing yields to owner controls. Fence directly at the network boundary,
     // with no await between this final local check and the order request.
     if (beforeSend && !beforeSend()) throw new GateEntryCancelledError();
-    let response:Response;
-    try{
-      response = await fetch(`${base}${signedPath}${query ? `?${query}` : ""}`, {
+    const send=(timeoutMs:number)=>{
+      this.requestCount+=1;
+      return fetch(`${base}${signedPath}${query ? `?${query}` : ""}`, {
         method,
         headers: {
           Accept: "application/json",
@@ -215,13 +214,29 @@ export class GateLiveClient {
           "X-Gate-Size-Decimal": "1",
         },
         body: body || undefined,
-        signal: AbortSignal.timeout(6_000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
+    };
+    let response:Response;
+    try{
+      if(method==="GET"){
+        // GET is safe to hedge. If Gate/edge latency stalls one read, start a
+        // second identical read after 2s but keep the whole logical request
+        // bounded to roughly the old 6s window. Writes are never retried.
+        let hedgeStarted=false,timer:ReturnType<typeof setTimeout>|null=null;
+        const primary=send(6_000);
+        const hedge=new Promise<Response>((resolve,reject)=>{
+          timer=setTimeout(()=>{hedgeStarted=true;send(4_000).then(resolve,reject);},2_000);
+        });
+        try{response=await Promise.any([primary,hedge]);}
+        finally{if(!hedgeStarted&&timer!=null)clearTimeout(timer);}
+      }else response=await send(6_000);
     }catch(error){
       if(gateRequestTimedOut(error)){
         if(method==="GET")throw new GateReadTimeoutError(path);
         throw new Error(`Gate ${method} 请求超时：${path}；提交结果可能不明确，必须按订单身份继续核对，不能自动重放。`);
       }
+      if(error instanceof AggregateError&&error.errors.length)throw error.errors[0];
       throw error;
     }
     const raw = await response.text();
