@@ -954,14 +954,18 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
   quotes:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:string[];allowDataCycle?:boolean},s:ForwardState,before:number){
   const{now,paths,quotes,contracts}=input,daily=input.daily??{};
   if(s.strategyAuthorityVersion!==MULTI_TURN_VERSION)throw new Error("Multi-Turn权威版本不一致");
+  if(s.executionVersion!==ANCHOR_FLOW_VERSION)
+    throw new Error("AnchorFlow执行版本尚未完成原子实验纪元切换；拒绝在旧账户上混跑新策略");
   const regionUpgrade=s.regionVersion!==REGION_LIFECYCLE_VERSION;
   if(regionUpgrade){
     s.regionVersion=REGION_LIFECYCLE_VERSION;s.regionInitializedAt=now;s.regionLifecycles=s.regionLifecycles??{};s.regionSignals=[];s.entryOpportunities=[];
+    s.anchorFlows={};s.anchorConsumed={};
     s.turnRotationBlockedUntil={};s.rotationState={version:MULTI_TURN_ROTATION_VERSION,lastAt:0,count:0,lastFrom:null,lastTo:null};
-    event(s,now,"UPGRADE",REGION_LIFECYCLE_VERSION,"交易权威切换为单一5分钟区域生命周期；保留账户、历史和既有持仓，禁止历史区域事件补单。");
+    event(s,now,"UPGRADE",REGION_LIFECYCLE_VERSION,"区域识别升级；区域只负责位置与拒绝回归，不再直接拥有顺势突破交易权。");
   }
   const entrySymbols=new Set(input.entrySymbols??Object.keys(paths));
-  const retainedSymbols=[...new Set([...entrySymbols,...s.positions.map(position=>position.symbol)])];
+  const retainedSymbols=[...new Set([...entrySymbols,...s.positions.map(position=>position.symbol),
+    ...Object.values(s.anchorFlows??{}).flatMap(row=>row.phase!=="FAILED"&&row.phase!=="FIRED"?[row.symbol]:[])])];
   const newestPathCompletedAt=retainedSymbols.reduce((latest,symbol)=>{
     const row=paths[symbol]?.at(-1);
     return row?Math.max(latest,(row.time+300)*1000):latest;
@@ -972,22 +976,34 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
   if(dataDue){
     s.turnEngine=evaluateMultiTurn({state:s.turnEngine??initialMultiTurn(),paths,daily,retainSymbols:retainedSymbols,now});
     const regionPaths=Object.fromEntries(retainedSymbols.flatMap(symbol=>paths[symbol]?.length?[[symbol,paths[symbol]]]:[]));
-    const region=evaluateRegionUniverse({paths:regionPaths,prior:s.regionLifecycles??{},now,costRate:turnModeledCost("5m",0),suppressSignals:regionUpgrade});
+    const cost=turnModeledCost("5m",0);
+    const region=evaluateRegionUniverse({paths:regionPaths,prior:s.regionLifecycles??{},now,costRate:cost,suppressSignals:regionUpgrade});
     s.regionLifecycles=region.states;
+    const rawMigrations=region.signals.filter(signal=>signal.kind==="MIGRATION");
+    const rejections=region.signals.filter(signal=>signal.kind==="REJECTION");
+    const anchor=advanceAnchorFlowUniverse({paths:regionPaths,lifecycles:s.regionLifecycles,frames:s.turnEngine.frames,
+      prior:s.anchorFlows??{},migrationSignals:rawMigrations,consumed:s.anchorConsumed??{},now,costRate:cost});
+    s.anchorFlows=anchor.states;
     const existing=(s.regionSignals??[]).filter(signal=>signal.expiresAt>now
-      &&s.regionLifecycles?.[signal.symbol]?.zone?.id===signal.regionId);
-    s.regionSignals=[...new Map([...existing,...region.signals].map(signal=>[signal.id,signal])).values()]
-      .sort((a,b)=>a.completedAt-b.completedAt||a.symbol.localeCompare(b.symbol)).slice(-120);
+      &&s.regionLifecycles?.[signal.symbol]?.zone?.id===signal.regionId
+      &&(signal.kind==="REJECTION"||(signal as AnchorFlowEntrySignal).entryModel==="ANCHOR_FLOW"));
+    s.regionSignals=[...new Map([...existing,...rejections,...anchor.signals].map(signal=>[signal.id,signal])).values()]
+      .sort((x,y)=>x.completedAt-y.completedAt||x.symbol.localeCompare(y.symbol)).slice(-90);
     s.entryOpportunities=[];
     s.lastCycleAt=now;s.selectedSymbols=[...entrySymbols];
     const regionRows=Object.values(s.regionLifecycles).filter(row=>entrySymbols.has(row.symbol)&&row.zone);
-    s.fitDiagnostics={tested:regionRows.length,qualified:s.regionSignals.length,trainGroups:0,checkGroups:0,latestAt:now,rapidQualified:0,
-      activeLong:s.regionSignals.filter(x=>x.side==="LONG").length,activeShort:s.regionSignals.filter(x=>x.side==="SHORT").length};
-    s.observations+=region.updated;s.measured+=region.signals.length;
-    if(region.signals.length){
-      const sample=region.signals.slice(0,5).map(x=>`${x.symbol} ${x.kind}→${x.side}`).join("；");
-      event(s,now,"PROTECTION",REGION_LIFECYCLE_VERSION,`本轮产生${region.signals.length}个新区域事件：${sample}`,
-        {regions:regionRows.length,signals:region.signals.length});
+    const activeAnchors=Object.values(s.anchorFlows).filter(row=>row.phase!=="FAILED"&&row.phase!=="FIRED"&&entrySymbols.has(row.symbol));
+    s.fitDiagnostics={tested:regionRows.length,qualified:s.regionSignals.length+activeAnchors.length,trainGroups:0,checkGroups:0,latestAt:now,rapidQualified:0,
+      activeLong:s.regionSignals.filter(x=>x.side==="LONG").length+activeAnchors.filter(x=>x.side==="LONG").length,
+      activeShort:s.regionSignals.filter(x=>x.side==="SHORT").length+activeAnchors.filter(x=>x.side==="SHORT").length};
+    s.observations+=region.updated;s.measured+=region.signals.length+anchor.signals.length;
+    if(region.signals.length||anchor.signals.length){
+      const sample=[...rejections.map(x=>`${x.symbol} REJECTION→${x.side}`),
+        ...rawMigrations.map(x=>`${x.symbol} BREAKOUT→${x.side}`),
+        ...anchor.signals.map(x=>`${x.symbol} ANCHOR→${x.side}`)].slice(0,6).join("；");
+      event(s,now,"PROTECTION",ANCHOR_FLOW_VERSION,
+        `本轮区域事件${region.signals.length}个，AnchorFlow可执行事件${anchor.signals.length}个：${sample}`,
+        {regions:regionRows.length,signals:region.signals.length,anchorSignals:anchor.signals.length});
     }
   }
   manageMultiTurn(s,quotes,now);
@@ -998,8 +1014,8 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
     s.maxDrawdown=Math.max(s.maxDrawdown,1-marked.equity/Math.max(s.peakEquity,1e-9));
   }
   if(markDue){
-    const k=dayKey(now),a=s.daily.find(d=>d.day===k);
-    if(a){a.endEquity=marked.equity;a.lastAt=now;}
+    const k=dayKey(now),row=s.daily.find(d=>d.day===k);
+    if(row){row.endEquity=marked.equity;row.lastAt=now;}
     else s.daily.push({day:k,firstAt:now,lastAt:now,startEquity:s.daily.at(-1)?.endEquity??s.initialEquity,endEquity:marked.equity,exactBoundary:false});
     s.daily=s.daily.slice(-400);
   }
