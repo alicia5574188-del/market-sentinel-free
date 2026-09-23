@@ -6,8 +6,8 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 const read = (path) => readFile(new URL(path, root), "utf8");
 
-test("runtime uses bounded futures REST snapshots, no continuous WebSocket", async () => {
-  const [worker, gate] = await Promise.all([read("worker/index-clean.ts"), read("lib/gate-market.ts")]);
+test("runtime uses bounded Gate stream snapshots with independent futures REST fallback", async () => {
+  const [worker, gate, stream] = await Promise.all([read("worker/index-clean.ts"), read("lib/gate-market.ts"),read("lib/gate-stream.ts")]);
   assert.match(gate, /\/futures\/usdt\/order_book/);
   assert.match(gate, /with_id=true/);
   assert.match(gate, /\/futures\/usdt\/liq_orders/);
@@ -19,7 +19,12 @@ test("runtime uses bounded futures REST snapshots, no continuous WebSocket", asy
   assert.match(gate, /GATE_BULK_TICKER_TIMEOUT_MS = 4_000/);
   assert.match(gate, /gatePublic<GateTicker\[\]>\("\/futures\/usdt\/tickers", GATE_BULK_TICKER_TIMEOUT_MS, 2\)/);
   assert.match(gate, /\/futures\/usdt\/candlesticks/);
-  assert.doesNotMatch(worker + gate, /new WebSocket|futures\.order_book_update/);
+  assert.doesNotMatch(stream, /futures\.order_book_update|setInterval/);
+  assert.match(stream,/clearTimeout\(timer\)/);
+  assert.match(stream,/futures\.order_book/);
+  assert.match(stream,/message\.event===\"all\"/);
+  assert.match(stream,/row\.w!==true/);
+  assert.match(worker,/streamBook\(symbol\)/);
   assert.match(worker, /MAX_ANCILLARY_CONCURRENCY = 2/);
   assert.match(worker, /plannedTotalDoRequestsPerDay: 53_280/);
   assert.match(worker, /plannedDoWritesPerDay: PRIMARY_PLANNED_DO_ROWS/);

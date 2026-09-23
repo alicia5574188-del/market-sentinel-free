@@ -1,3 +1,7 @@
+# 2026-09-23 — preserve venue quality while adding transport redundancy
+
+Current user authorization permits replacing the REST-only limitation with one bounded Gate public stream plus REST. Other-venue prices cannot manufacture Gate executable quotes or same-symbol candle identity. Complete20-level messages and explicitly closed candles preserve quality; stream timestamps are never rewritten. Push events change only in-memory market data, original alarm owns every financial action. Scope authorizes processBooks hash only; all other frozen methods and pure strategy baselines stay fixed. Evidence and limitations:research/GATE_FEED_CONTINUITY_2026-09-23.md.
+
 # 2026-09-23 — current entry authority and evidence
 
 The user explicitly requests local opposite-direction compression launch, consecutive strong1m continuation and correction of stale/tight entries, including MUBARAK consolidation. This supersedes the old optional-minute AnchorFlow entry shortcut. Current1m local price structure is required; the existing urgent official/quote-built data lane supplies it without extra requests or global degradation. Missing/old/future/discontinuous evidence cannot authorize entry; candidate remains retryable.

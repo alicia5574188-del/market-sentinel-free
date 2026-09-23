@@ -1,3 +1,7 @@
+# 2026-09-23 — feed continuity repair in progress
+
+Branch fix/20260923-gate-feed-continuity from deployed4b1ec64. Supplied14:44UTC snapshot and public samples confirm executable-book obstruction and about31%REST book failures. Added bounded Gate complete20-level/closed1m5m stream with unchanged REST backfill, freshness/sequence guards, no trading callbacks, no new writes/alarms and unchanged financial/strategy authority.989direct,75focused,61equity,49member,130LIVE,19architecture/migration pass; typecheck/build/dry-run pass and lint0errors/16existing warnings. Remaining: reviewed-main publication and actual production transport/continuity evidence. Local direct Gate WS probe blocked by executor DNS. No real-money test or switch call.
+
 # 2026-09-23 — targeted repair, verification in progress
 
 Base235c92e/PR409/run35863213562 is confirmed deployed. Public pre-read: account startedAt1790157902785,7resolved/0open, storage.error=null, owner LIVE true/true enabledAt1790160169434. Preserve latest user intent. FOLKS screenshot20:07 uses Asia/Vientiane(+07), i.e.13:07UTC, AFTER PR40912:51UTC. An initial mistaken+08 comparison was explicitly corrected to the user. The stale stop/quote-proof defects already existed in prior source and remained in PR409; interruption itself is not established as the cause.
