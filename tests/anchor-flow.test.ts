@@ -72,7 +72,7 @@ test("a strong retest candle may fire on the same completed 5m bar",()=>{
   assert.equal(result.signals[0]!.anchorExpectedMoveRate,.018);
 });
 test("deep reacceptance of the old region kills the candidate instead of re-entering",()=>{
-  const rows=[bar(300,101.3,102,101.2,101.8),bar(600,101.8,101.9,100.6,100.7)];
+  const rows=[bar(300,101.3,101.6,101.1,101.35),bar(600,101.35,101.5,100.6,100.7)];
   const result=advanceAnchorFlowUniverse({paths:{BTC_USDT:rows},lifecycles:{BTC_USDT:lifecycle},frames:frames("LONG",(START+900)*1000),
     prior:{},migrationSignals:[raw],consumed:{},now:(START+900)*1000+1,costRate:.0022});
   assert.equal(result.signals.length,0);
