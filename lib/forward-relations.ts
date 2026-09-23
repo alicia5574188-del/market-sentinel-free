@@ -31,7 +31,7 @@ import { REGION_LIFECYCLE_VERSION, consumeRegionBoundary, evaluateRegionUniverse
 import { evaluateRegionEntryPolicy } from "./region-entry-policy.ts";
 import { ANCHOR_FLOW_VERSION, advanceAnchorFlowUniverse, anchorFlowExecutableProofRate,
   type AnchorFlowEntrySignal, type AnchorFlowState } from "./anchor-flow.ts";
-import { REGION_LAUNCH_VERSION, advanceRegionLaunchQuotes, advanceRegionLaunchUniverse, consumeRegionLaunch, regionLaunchValidationProofRate,
+import { REGION_LAUNCH_VERSION, advanceRegionLaunchMinutes, advanceRegionLaunchQuotes, advanceRegionLaunchUniverse, consumeRegionLaunch, regionLaunchValidationProofRate,
   type RegionLaunchSignal, type RegionLaunchState } from "./region-launch.ts";
 // The storage schema stays v1.0 so an algorithm upgrade cannot reset the ledger.
 export const FORWARD_VERSION = "forward-relations-v1.0";
@@ -1124,9 +1124,9 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
   else s.latestReason=`双通道管理${s.positions.length}笔持仓；AnchorFlow等待回测，RegionLaunch只等待提前ARMED后的真实爆发确认。`;
 }
 
-function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;daily?:Record<string,Candle[]>;
+function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;minutePaths?:Record<string,Candle[]>;daily?:Record<string,Candle[]>;
   quotes:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:string[];allowDataCycle?:boolean},s:ForwardState,before:number){
-  const{now,paths,quotes,contracts}=input,daily=input.daily??{};
+  const{now,paths,quotes,contracts}=input,daily=input.daily??{},minutePaths=input.minutePaths??{};
   if(s.strategyAuthorityVersion!==MULTI_TURN_VERSION)throw new Error("Multi-Turn权威版本不一致");
   if(s.executionVersion!==ANCHOR_FLOW_VERSION){
     // During the short deploy-to-cutover window, the old PAPER generation may
@@ -1152,7 +1152,7 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
   if(launchUpgrade){
     s.regionLaunchVersion=REGION_LAUNCH_VERSION;s.regionLaunches=s.regionLaunches??{};s.regionLaunchSignals=[];
     event(s,now,"UPGRADE",REGION_LAUNCH_VERSION,
-      "RegionLaunch独立通道已接入：复用成熟区域但不改变AnchorFlow；只从提前ARMED的母区/子区压缩进入实时爆发确认，不补历史追单。");
+      "RegionLaunch升级为1分钟确认：成熟母区和5分钟子区继续负责提前ARMED；爆发必须先出现强势1分钟突破K，再等第一根停止回调并重新顺向的完整1分钟K，当前盘口确认后才追击。");
   }
   const entrySymbols=new Set(input.entrySymbols??Object.keys(paths));
   const retainedSymbols=[...new Set([...entrySymbols,...s.positions.map(position=>position.symbol),
@@ -1214,6 +1214,9 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
     }
   }
   manageMultiTurn(s,quotes,now);
+  const launchMinutes=advanceRegionLaunchMinutes({states:s.regionLaunches??{},minutePaths,frames:s.turnEngine?.frames,
+    now,costRate:turnModeledCost("5m",0)});
+  s.regionLaunches=launchMinutes.states;
   const launchQuotes=advanceRegionLaunchQuotes({states:s.regionLaunches??{},quotes,frames:s.turnEngine?.frames,now,costRate:turnModeledCost("5m",0)});
   s.regionLaunches=launchQuotes.states;
   const existingLaunch=(s.regionLaunchSignals??[]).filter(signal=>signal.expiresAt>now
@@ -1236,7 +1239,7 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
   return{state:s,changed:dataDue||markDue||s.revision!==before,protectionChanged:forwardProtectionChanged(input.state,s)};
 }
 
-export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;daily?:Record<string,Candle[]>;quotes:Record<string,Quote>;contracts:Record<string,Contract>;legacyDrainOnly?:boolean;entrySymbols?:string[];allowDataCycle?:boolean}){
+export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;minutePaths?:Record<string,Candle[]>;daily?:Record<string,Candle[]>;quotes:Record<string,Quote>;contracts:Record<string,Contract>;legacyDrainOnly?:boolean;entrySymbols?:string[];allowDataCycle?:boolean}){
   const{now,paths,quotes,contracts}=input,s=structuredClone(input.state),before=s.revision;
   if(s.strategyAuthorityVersion===MULTI_TURN_VERSION)return advanceMultiTurnForward(input,s,before);
   if(!s.exitPolicyUpgrade){
