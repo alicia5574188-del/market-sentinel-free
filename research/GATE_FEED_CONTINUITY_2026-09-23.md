@@ -1,0 +1,11 @@
+# Gate feed continuity repair
+
+User authorizes solving no-entry caused by missing data without reducing strategy quality, including alternative sources where suitable. The supplied snapshot exported14:44UTC contains three pending AnchorFlow signals, all stopped at executable quote readiness. Public health later observed1,725failures/5,592book attempts, timeouts,7/11ready markets. This proves a data obstruction in the observed samples, not every historical missed order.
+
+Use independent Gate full-book/closed-candle WebSocket plus existing two-host REST; preserve exact instrument, venue, spread and sequence. Other exchanges cannot be treated as Gate executable liquidity and many scanned small contracts have no trustworthy counterpart. No cross-venue synthetic fill or relaxed data age. Do not promise no outages or guaranteed orders.
+
+One bounded public connection per primary runtime. The existing alarm owns reconciliation, reconnect/ping and all financial actions. Push callbacks parse and retain data only. Full20-level snapshots avoid incremental-gap reconstruction; only explicit window-close candles are admitted. REST remains bootstrapping/backfill and disconnected-stream fallback. Stream failure cannot contaminate a valid REST read; REST timeout cannot suspend a contemporaneously recovered stream. Existing two distinct fresh snapshots remain necessary after actual loss of all data.
+
+Expose bounded transport counters in public health and per-symbol readiness/failure details in authenticated research export. No credentials are used or exposed. No extra writes/alarms, no account resets, LIVE intent, position geometry, source authority or strategy changes. Outbound connection adds CPU/bandwidth and is not a claim of higher certified membership capacity.
+
+Verification: deterministic malformed/out-of-order/stale/future/crossed snapshots, decimal depth, closed-candle causality, disconnect/reconnect and old-socket fencing; real Worker REST-backoff bypass and push-during-timeout recovery. Local live WS probe is unavailable because executor DNS cannot resolve Gate. Production acceptance must observe successful stream subscription/data use and continuing authority after reviewed-main deployment; retain REST if WebSocket unavailable.

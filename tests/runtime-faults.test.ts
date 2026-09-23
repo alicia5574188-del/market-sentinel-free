@@ -31,6 +31,45 @@ const { MarketStream, failedRadarRuntime, radarAttemptDue, radarCandidateExecuti
   successfulRadarRuntime, latestCompletedStrategyCandleAt, mergeStrategyCandlePath,
   mergeRegimeHourlyPath, regimeHourlyNeedsRefresh } = await import(runtimeWorkerSpecifier);
 
+test("fresh Gate stream bypasses REST retry backoff but still requires two genuine recovery snapshots",async()=>{
+  const {stream}=await makeStream();const now=Date.now();let sequence=11;
+  stream.runtime.symbols=["BTC_USDT"];stream.runtime.tickSize.BTC_USDT=.1;
+  stream.runtime.contractMeta.BTC_USDT={quantoMultiplier:1,maintenanceRate:.005,leverageMax:20,fundingRate:0};
+  stream.memory.BTC_USDT=emptySymbolMemory();stream.memory.BTC_USDT.lastSequence=10;stream.memory.BTC_USDT.lastBookObservedAt=now-1000;
+  stream.sessionWarmup.BTC_USDT=2;
+  stream.runtime.feedFailures.BTC_USDT={count:1,retryAt:now+30000,suspendedSince:now-2000,recoveryFreshCount:0};
+  stream.gateStream={book:()=>({symbol:"BTC_USDT",observedAt:now,sequence,tickSize:.1,
+    bids:[{price:100,size:1000}],asks:[{price:100.1,size:1000}]}),used:()=>{},path:()=>[]};
+  const prior=globalThis.fetch;let requests=0;
+  globalThis.fetch=async()=>{requests++;throw new Error("REST unavailable");};
+  try{
+    await stream.processBooks(now,["BTC_USDT"]);assert.equal(stream.runtime.feedFailures.BTC_USDT.recoveryFreshCount,1);
+    sequence=12;await stream.processBooks(now,["BTC_USDT"]);
+    assert.equal(stream.runtime.feedFailures.BTC_USDT.suspendedSince,null);assert.equal(requests,0);
+    assert.equal(stream.runtime.feedQuality.failures,0);
+  }finally{globalThis.fetch=prior;}
+});
+
+test("a Gate push arriving during REST timeout prevents false suspension",async()=>{
+  const {stream}=await makeStream();const now=Date.now();let pushed=false;
+  stream.runtime.symbols=["BTC_USDT"];stream.runtime.tickSize.BTC_USDT=.1;
+  stream.runtime.contractMeta.BTC_USDT={quantoMultiplier:1,maintenanceRate:.005,leverageMax:20,fundingRate:0};
+  stream.memory.BTC_USDT=emptySymbolMemory();stream.sessionWarmup.BTC_USDT=2;
+  stream.gateStream={book:()=>pushed?{symbol:"BTC_USDT",observedAt:now,sequence:12,tickSize:.1,
+    bids:[{price:100,size:1000}],asks:[{price:100.1,size:1000}]}:null,used:()=>{},path:()=>[]};
+  const prior=globalThis.fetch;globalThis.fetch=async()=>{pushed=true;throw new Error("REST unavailable");};
+  try{await stream.processBooks(now,["BTC_USDT"]);assert.equal(stream.runtime.feedFailures.BTC_USDT.suspendedSince,null);
+    assert.equal(stream.runtime.evidence.BTC_USDT.fresh,true);assert.equal(stream.runtime.feedQuality.failures,0);
+  }finally{globalThis.fetch=prior;}
+});
+
+test("stream-only closed minute candles reach the existing confirmation path",async()=>{
+  const {stream}=await makeStream();stream.runtime.symbols=["BTC_USDT"];
+  const row={time:1800000000,open:100,high:102,low:99,close:101,volume:2};
+  stream.gateStream={path:()=>[row]};
+  assert.deepEqual(stream.forwardMinutePaths().BTC_USDT,[row]);
+});
+
 test("open Multi-Turn holdings keep strategy paths after leaving the scan universe", async () => {
   const { stream } = await makeStream();
   stream.forwardState = { positions: [{ symbol: "HOLD_USDT", status: "OPEN" }] };

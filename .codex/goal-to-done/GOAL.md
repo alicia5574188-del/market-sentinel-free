@@ -1,3 +1,7 @@
+# 2026-09-23 — resolve feed-caused entry obstruction
+
+User authorizes robust market-data acquisition without lowering strategy quality. Add bounded public Gate streaming with existing independent REST/backfill, preserve fresh executable prices, candle causality and all account/LIVE authority. Cross-venue prices cannot be labeled Gate fills. Finish functional/release gates and observe live stream use plus advancing source state. Scope supersedes the old REST-only architecture constraint and permits only the processBooks baseline change.
+
 # 2026-09-23 — current targeted entry repair
 
 Within the user's tightened 45-minute total target, audit deployed235c92e and repair tight entry/stop geometry, local compression countertrend launches, explicit consecutive strong1m continuation, and stale AnchorFlow quote proof inside a bottom consolidation. Existing positions/history/accounts, owner/member intent and private Gate safety remain. Use existing verified-main release. Do not add a new system or promise profitability. Confirm source/stop/risk parity and advancing persisted production before completion.

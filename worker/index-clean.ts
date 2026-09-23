@@ -5,6 +5,7 @@ import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
 import { GatePublicError, fetchActiveContracts, fetchBackgroundFuturesBook, fetchContractStats, fetchFuturesBook, fetchLiquidations,
   fetchMarketTickers, fetchRecentTrades, fetchStructureCandles, fetchUrgentFuturesBook } from "../lib/gate-market.ts";
+import { GateStreamingFeed } from "../lib/gate-stream.ts";
 import { closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_RISK_CAP, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
 import { aggregateFourHourCandles, analyzeSnapshot, ancillarySchedule, applyFlow, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, optionalEvidenceIsFresh, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
 import { arenaProtectionStop, arenaTradePlan, liveMirrorExitRequired } from "../lib/arena-live.ts";
@@ -498,6 +499,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private strategyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private forwardMinuteCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private forwardMinuteRetryAt = new Map<string,number>();
+  private gateStream = new GateStreamingFeed();
   private forwardMinuteQuoteBars: Record<string,{minute:number;open:number;high:number;low:number;close:number;samples:number;
     firstAt:number;lastAt:number;completed:Array<{time:number;open:number;high:number;low:number;close:number;volume:number}>}> = {};
   private turnDailyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
@@ -928,6 +930,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private async refreshStrategyCandle(now: number) {
     const universe=this.strategyPathSymbols();
     if (!universe.length) return 0;
+    // Streamed closed bars extend an already bootstrapped Gate history. A gap
+    // remains a REST backfill request; never join disjoint paths as continuous.
+    for(const symbol of universe){
+      const prior=this.strategyCandles[symbol]??[];
+      if(prior.length<960)continue;
+      const tail=this.gateStream.path(symbol,"5m").filter(row=>row.time>(prior.at(-1)?.time??0));
+      if(tail.length&&tail[0]!.time===prior.at(-1)!.time+300&&tail.every((row,i)=>!i||row.time===tail[i-1]!.time+300)){
+        this.strategyCandles[symbol]=mergeStrategyCandlePath(prior,tail);
+        delete this.runtime.strategyCandleFailures[symbol];
+      }
+    }
     const targetCompletedAt = latestCompletedStrategyCandleAt(now);
     const size = universe.length;
     let selectedIndex = -1;
@@ -2860,10 +2873,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private forwardMinutePaths(){
     const officialCache=this.forwardMinuteCandles??{},syntheticCache=this.forwardMinuteQuoteBars??{};
-    const symbols=new Set([...Object.keys(officialCache),...Object.keys(syntheticCache)]);
+    const symbols=new Set([...Object.keys(officialCache),...Object.keys(syntheticCache),...(this.runtime.symbols??[])]);
     return Object.fromEntries([...symbols].flatMap(symbol=>{
-      const official=officialCache[symbol]??[],synthetic=syntheticCache[symbol]?.completed??[];
-      const merged=[...new Map([...synthetic,...official].map(row=>[row.time,row])).values()].sort((a,b)=>a.time-b.time).slice(-90);
+      const official=officialCache[symbol]??[],synthetic=syntheticCache[symbol]?.completed??[],streamed=this.gateStream?.path(symbol,"1m")??[];
+      const merged=[...new Map([...synthetic,...official,...streamed].map(row=>[row.time,row])).values()].sort((a,b)=>a.time-b.time).slice(-90);
       return merged.length?[[symbol,merged]]:[];
     }));
   }
@@ -2875,8 +2888,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ?forwardUrgentMinuteSymbols(this.forwardState,this.runtime.liquidUniverse??[]).slice(0,PORTFOLIO_REALTIME_CAPACITY):[];
     const due=urgent.filter(symbol=>{
       if((this.forwardMinuteRetryAt.get(symbol)??0)>now)return false;
-      const last=this.forwardMinuteCandles[symbol]?.at(-1);
-      return !last||(last.time+60)*1_000<targetCompletedAt;
+      const last=Math.max(this.forwardMinuteCandles[symbol]?.at(-1)?.time??0,this.gateStream.path(symbol,"1m").at(-1)?.time??0);
+      return !last||(last+60)*1_000<targetCompletedAt;
     });
     if(!due.length)return 0;
     const results=await Promise.allSettled(due.map(async symbol=>({symbol,
@@ -2915,13 +2928,36 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private async processBooks(now: number, cycleSymbols = [...this.runtime.symbols]) {
     const authorityBefore = this.captureAuthority();
-    const dueSymbols = cycleSymbols.filter((symbol) => (this.runtime.feedFailures[symbol]?.retryAt ?? 0) <= now);
+    if(this.forwardState?.strategyAuthorityVersion===MULTI_TURN_VERSION){
+      const work=this.gateStream.ensure(this.runtime.symbols,forwardUrgentMinuteSymbols(this.forwardState,this.runtime.liquidUniverse),
+        this.strategyPathSymbols(),now);
+      this.ctx.waitUntil(work);
+    }
+    const streamBook=(symbol:string)=>{
+      const book=this.gateStream.book(symbol,this.runtime.tickSize[symbol]??0.0001,this.runtime.contractMeta[symbol]?.quantoMultiplier??1,Math.max(now,Date.now()));
+      const memory=this.memory[symbol];
+      return book&&(!memory||book.sequence>=memory.lastSequence&&book.observedAt>=memory.lastBookObservedAt)?book:null;
+    };
+    // REST retry/backoff belongs to that transport. A fresh independent Gate
+    // stream can recover the symbol immediately on the existing alarm clock.
+    const dueSymbols = cycleSymbols.filter((symbol) => streamBook(symbol)||(this.runtime.feedFailures[symbol]?.retryAt ?? 0) <= now);
     this.runtime.feedQuality.attempts += dueSymbols.length;
     const urgentSet=new Set([...this.currentAuthorityProtectionSymbols(),...this.forwardUrgentSymbols(now)]);
-    const rows = await Promise.allSettled(dueSymbols.map(async (symbol) => ({
-      symbol, snapshot: await (urgentSet.has(symbol)?fetchUrgentFuturesBook:fetchBackgroundFuturesBook)(
-        symbol,this.runtime.tickSize[symbol]??0.0001,this.runtime.contractMeta[symbol]?.quantoMultiplier??1),
-    })));
+    const rows = await Promise.allSettled(dueSymbols.map(async (symbol) => {
+      const pushed=streamBook(symbol);
+      if(pushed){this.gateStream.used("websocket");return{symbol,snapshot:pushed};}
+      try{
+        const snapshot=await (urgentSet.has(symbol)?fetchUrgentFuturesBook:fetchBackgroundFuturesBook)(
+          symbol,this.runtime.tickSize[symbol]??0.0001,this.runtime.contractMeta[symbol]?.quantoMultiplier??1);
+        const latest=streamBook(symbol);
+        if(latest&&latest.sequence>=snapshot.sequence&&latest.observedAt>=snapshot.observedAt){this.gateStream.used("websocket");return{symbol,snapshot:latest};}
+        this.gateStream.used("rest");return{symbol,snapshot};
+      }catch(error){
+        const recovered=streamBook(symbol);
+        if(recovered){this.gateStream.used("websocket");return{symbol,snapshot:recovered};}
+        throw error;
+      }
+    }));
     let successes = 0;
     let criticalChanged = false;
     let stopCheckpointDue = false;
@@ -3432,6 +3468,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           netPnl:trade.netPnl,grossPnl:trade.grossPnl,audit:trade.exitAudit??null}:null,
       })): [];
       return json({ exportedAt, forward: this.forwardView(exportedAt),
+        marketData:{transport:this.gateStream.status(exportedAt),feedQuality:this.runtime.feedQuality,
+          symbols:this.runtime.symbols.map(symbol=>({symbol,quoteAt:this.runtime.evidence[symbol]?.observedAt??null,
+            entryReady:this.forwardQuotes(exportedAt)[symbol]?.entryReady===true,
+            completedMinuteAt:this.forwardMinutePaths()[symbol]?.at(-1)
+              ?(this.forwardMinutePaths()[symbol]!.at(-1)!.time+60)*1_000:null,
+            failure:this.runtime.feedFailures[symbol]??null}))},
         measurements: state?.samples ?? [],
         research:{version:"multi-turn-trade-review-v1",purpose:"逐单复盘入场依据、持仓价值与退出结果",trades:researchTrades},
         archiveEndpoint: "/api/forward/archive", completeness: "当前快照与滚动样本；完整不可变记录按archive接口分页读取" });
@@ -3587,6 +3629,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           logError: this.runtime.strategyLogError,
         },
         feedQuality: this.runtime.feedQuality,
+        marketDataTransport: this.gateStream.status(),
         marketRegimes: { tracked: regimes.tracked, warmed: regimes.warmed, counts: regimes.counts },
         limits: {
           markets: this.runtime.symbols.length,
