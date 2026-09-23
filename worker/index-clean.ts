@@ -2806,14 +2806,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private ensureProtectionSymbolsResident() {
     const protectedSymbols=[...this.currentAuthorityProtectionSymbols()];
-    if(!protectedSymbols.length)return;
-    const protectedSet=new Set(protectedSymbols);
-    const residentNonProtected=this.runtime.symbols.filter((symbol)=>!protectedSet.has(symbol));
-    // Normal discovery capacity remains 20. If already-owned exposure ever
-    // exceeds that number, protection temporarily wins over discovery rather
-    // than orphaning a live/PAPER holding.
+    const urgentSymbols=this.forwardUrgentSymbols();
+    if(!protectedSymbols.length&&!urgentSymbols.length)return;
+    const locked=[...new Set([...protectedSymbols,...urgentSymbols])],lockedSet=new Set(locked);
+    const residentNonProtected=this.runtime.symbols.filter((symbol)=>!lockedSet.has(symbol));
+    // Existing exposure always wins. Current-authority RETEST/READY/ARMED/
+    // IGNITION states use the remaining realtime capacity immediately instead
+    // of waiting for the one-minute radar refresh.
     const residentLimit=Math.max(PORTFOLIO_REALTIME_CAPACITY,protectedSymbols.length);
-    const next=[...protectedSymbols,...residentNonProtected].slice(0,residentLimit);
+    const next=[...locked,...residentNonProtected].slice(0,residentLimit);
     if(next.length!==this.runtime.symbols.length||next.some((symbol,index)=>symbol!==this.runtime.symbols[index]))
       this.applyRealtimeSymbols(next);
   }
@@ -3336,7 +3337,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     try {
       const universeDue = now - this.runtime.lastUniverseAt >= UNIVERSE_MS;
       this.ensureProtectionSymbolsResident();
-      this.ensureForwardUrgentSymbolsResident(now);
       const cycleSymbols = this.cycleBookSymbols(now, [...this.runtime.symbols]);
       // The fresh executable book is the critical clock. Completed-candle,
       // universe, radar and research logging run under one non-overlapping
