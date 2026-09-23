@@ -277,6 +277,33 @@ test("price running away during leverage setup is rejected before Gate entry sub
   await enableNew(h);
   assert.equal(gate.placed.length,0);assert.match(live(h).entrySkips.BTC_USDT.reason,/不利偏差.*动态上限/);
 }));
+
+test("a committed source arriving during the account read is copied in that same real Worker pass",()=>clock(async()=>{
+  const {h,gate}=await harness();h.forwardState.positions=[];
+  live(h).requestedEnabled=true;live(h).activation=startLiveSession(T-120000,h.forwardState);
+  const snapshot=gate.snapshot.bind(gate);let release!:()=>void;
+  const pending=new Promise<void>(resolve=>{release=resolve;});
+  gate.snapshot=async()=>{await pending;return snapshot();};
+  const work=h.syncLive(T);await new Promise<void>(resolve=>setImmediate(resolve));
+  h.forwardState.positions=[trade()];release();await work;
+  assert.equal(gate.placed.length,1);assert.ok(gate.stops.length>0);
+  await h.syncLive(T);assert.equal(gate.placed.length,1);
+}));
+
+test("source events coalesce into an immediate serialized follow-up; alarm joins do not create a retry loop",()=>clock(async()=>{
+  const {h}=await harness();live(h).requestedEnabled=true;
+  const s=h as Harness&{launchLiveWork(changed?:boolean):void;liveBackgroundWork:Promise<void>|null;syncLiveOnce():Promise<void>};
+  let calls=0,active=0,maximum=0;const release:Array<()=>void>=[];
+  s.syncLiveOnce=async()=>{calls++;active++;maximum=Math.max(maximum,active);
+    await new Promise<void>(resolve=>release.push(resolve));active--;};
+  s.launchLiveWork(true);
+  for(let i=0;i<10;i++)s.launchLiveWork();
+  s.launchLiveWork(true);s.launchLiveWork(true);
+  assert.equal(calls,1);release.shift()!();await new Promise<void>(resolve=>setImmediate(resolve));
+  assert.equal(calls,2);assert.equal(maximum,1);
+  const done=s.liveBackgroundWork;release.shift()!();await done;
+  assert.equal(calls,2);assert.equal(live(h).requestedEnabled,true);
+}));
 test("accepted live fill stores submit quote, delay and verified exchange entry drift",()=>clock(async()=>{
   const {h}=await harness();await enableNew(h);await h.syncLive(T);
   const p=live(h).positions.BTC_USDT.parity!;
@@ -660,7 +687,6 @@ test("the permanent contract and parity suite cannot be omitted by the default r
 test("owner OFF continues reconciling an uncertain submission until a late verified fill is protected and source-closed",()=>clock(async()=>{
   const {h,gate}=await harness();gate.ambiguous=true;await enableNew(h);await h.setLiveMode(false);
   const scheduler=h as unknown as {liveNeedsSync():boolean};assert.equal(scheduler.liveNeedsSync(),true);
-  assert.match(readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8"),/const liveNeedsSync = this.liveNeedsSync\(\)/);
   const original=Date.now;Date.now=()=>T+120000;
   try{
     const intent=gate.placed[0];

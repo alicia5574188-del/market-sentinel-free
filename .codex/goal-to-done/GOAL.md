@@ -1,3 +1,13 @@
+# 2026-09-23 — private account resilience and immediate source dispatch
+
+Latest owner request: fix repeated LIVE account timeouts and avoid waiting for a
+later PAPER-copy pass. Preserve persisted single-source authority, actual-account
+risk, credentials, account/history, owner/member switches and unknown-order
+protection. Implement official dual-route complete-body GET reads and serialized
+source-event dispatch independent of the quote alarm. Finish focused/full gates,
+reviewed-main deployment and public continuity checks efficiently; no live test
+order. Scope and limits:research/LIVE_SYNC_LATENCY_2026-09-23.md.
+
 # 2026-09-23 — full launch boundary and five-minute-first entry
 
 The latest MET screenshot request authorizes correcting launch geometry and temporal hierarchy: retain the earlier wick extremes belonging to the same consolidation, require5m strong departure first, allow extraordinary unfinished5m strength to use the established1m entry methods, and let slower outside5m closes wait for acceleration or shallow pullback/restart. Scope is RegionLaunch entry only; preserve current account/history/open positions, prior Gate feed repair, risk, owner/member intent and existing verified-main release. Screenshot alone cannot establish the exact source trade's historical tick path. Finish regression tests, publication and live continuity within the user's efficient workflow, not another strategy redesign.

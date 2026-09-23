@@ -114,10 +114,11 @@ test("new Gate reader is GET only, fixed pagination, no retry",async()=>{
 test("reviewed Gate adapter stays frozen outside the read-only settlement method",()=>{
  const file=readFileSync(new URL("../lib/gate-live.ts",import.meta.url),"utf8");
  const from=file.indexOf("  /** Read-only position-cycle settlements."),to=file.indexOf("  async createEntry",from);
- // 2026-09-23: reviewed read-timeout resilience: only idempotent GETs may use
- // one bounded hedge; POST/PUT/DELETE remain single-shot. All other reviewed
- // adapter bytes stay frozen behind gate-live/live-parity regressions.
- const old=file.slice(0,from)+file.slice(to);assert.equal(createHash("sha256").update(old).digest("hex"),"085d3b05402180fb1e44bc4a07e611e0dad8f3f721eb1f296c09b5a72a0bc42f");
+ // 2026-09-23 owner-requested private timeout repair: complete-body GET races
+ // use two official futures routes and drain snapshots. Mutations stay single
+ // submit, including body timeout. See LIVE_SYNC_LATENCY_2026-09-23.md and
+ // actual transport/parity regressions; unrelated adapter bytes stay frozen.
+ const old=file.slice(0,from)+file.slice(to);assert.equal(createHash("sha256").update(old).digest("hex"),"8fe8afbac32b62c948eb44aba9fa7d03f37456674dd8217c89fd299c6497717a");
 });
 test("operational UI removes version narratives and friend terminology",()=>{
  const paths=["forward-dashboard.tsx","live-console.tsx","member-access.tsx"];

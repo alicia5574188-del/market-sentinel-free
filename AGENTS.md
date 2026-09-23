@@ -1,3 +1,17 @@
+# Private LIVE read and dispatch repair — 2026-09-23
+
+The latest owner request authorizes fixing repeated private Gate account timeouts
+and PAPER-to-LIVE scheduling latency. Read research/LIVE_SYNC_LATENCY_2026-09-23.md.
+Use two official Gate futures GET routes with complete-body deadlines and abort
+losers; never hedge mutations or accept another exchange's private account data.
+Committed source lifecycle events wake a serialized background reconciler without
+holding the critical book/PAPER alarm. This explicitly permits only the alarm,
+advanceForwardNow and syncLiveOnce method baseline updates plus reviewed private
+adapter fingerprint after semantic tests. Preserve strategy/storage/auth hashes,
+owner/member intent, unknown-order reconciliation, fresh data/risk gates, account
+and history. No real-money test. Existing reviewed-main release and public
+advancing-state/continuity receipt remain mandatory.
+
 # Forward Adaptive v2 architecture lock — 2026-09-20
 
 The user explicitly authorizes a one-time architecture-level upgrade of the current Forward self-learning route, not a replacement with fixed strategies. Read `research/FORWARD_ADAPTIVE_V2.md` first. Preserve the existing PAPER account, samples, history, open positions, source identity, owner/member LIVE intent, credentials, Gate copy contract, Top30 five-minute learning feed and bounded realtime quote pool. No account reset or real-money verification trade.

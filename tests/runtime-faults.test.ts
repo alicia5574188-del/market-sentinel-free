@@ -328,6 +328,21 @@ async function makeStream(checkpoint?: unknown) {
   return makeStreamFromStorage(new FakeStorage(checkpoint));
 }
 
+test("a private LIVE read cannot hold the alarm's executable-book and PAPER clock",async()=>{
+  const {stream,storage}=await makeStream();let release!:()=>void,reads=0,paper=0;
+  stream.runtime.live.requestedEnabled=true;
+  stream.syncLive=async()=>{reads++;await new Promise<void>(resolve=>{release=resolve;});};
+  stream.processBooks=async()=>({requests:0,successes:0,failures:0});
+  stream.publishCriticalHealth=()=>{};stream.advanceForwardNow=async()=>{paper++;};
+  stream.launchTurnoverWork=()=>{};stream.saveCheckpoint=async()=>{};
+  await stream.alarm();
+  assert.equal(paper,1);assert.equal(reads,1);assert.ok(storage.alarm);
+  assert.ok(stream.liveBackgroundWork,"the alarm returned while the private read remains pending");
+  stream.runtime.lastProcessedSlot=0;await stream.alarm();
+  assert.equal(paper,2);assert.equal(reads,1,"next quote pass must not overlap Gate writes");
+  const done=stream.liveBackgroundWork;release();await done;
+});
+
 test("restart catalog outage preserves the saved scan and recovers on the existing radar retry", async () => {
   const { stream: previous } = await makeStream();
   const symbols = ["BTC_USDT", "ETH_USDT", "SOL_USDT"], started = 1_800_000_000_000;

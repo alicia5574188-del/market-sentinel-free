@@ -276,6 +276,24 @@ test("actual Worker failed checkpoint write retains authority and records a visi
   assert.equal(h.runtime.nonAlarmWrites,0);assert.equal(h.forwardBusy,false);
   assert.equal(store.data.has(FORWARD_PROTECTION_STORAGE),false);
 });
+test("the real source commit wakes LIVE only after a durable lifecycle change; failed commits never dispatch",async()=>{
+  for(const fail of [false,true]){
+    const{state,store}=await base(),peak=step(state,110_000,104).state;
+    const h=harness(peak,store,103) as Harness&{launchLiveWork(changed:boolean):void};
+    let dispatched=0;
+    h.launchLiveWork=changed=>{
+      assert.equal(changed,true);assert.equal(h.forwardState.positions.length,0);
+      assert.ok(store.writes.flat().some(k=>k===`${FORWARD_STORAGE}head`),"financial source must already be durable");
+      dispatched++;
+    };
+    store.fail=fail;
+    await h.advanceForwardNow(T+120_000);
+    assert.equal(dispatched,fail?0:1);
+    assert.equal(h.forwardState.positions.length,fail?1:0);
+    if(fail)assert.match(h.forwardError!,/injected storage failure/);
+    else assert.equal(h.forwardError,null);
+  }
+});
 test("actual Worker critical peaks cannot consume the unchanged financial cap or exit reserve",async()=>{
   const{state,store}=await base(),h=harness(state,store);h.runtime.nonAlarmWrites=7936;
   await h.advanceForwardNow(T+110_000);
