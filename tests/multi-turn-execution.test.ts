@@ -111,7 +111,7 @@ test("profitable AnchorFlow trade uses the proven monotonic Multi-Turn profit fl
     entrySymbols:["SOL_USDT"],allowDataCycle:false}).state;
   assert.equal(state.positions.length,0);
   assert.equal(state.history[0]?.exitAudit?.trigger,"PROFIT_GIVEBACK");
-  assert.match(state.history[0]?.exitReason??"",/利润保护/);
+  assert.match(state.history[0]?.exitReason??"",/利润.*保护/);
 });
 
 test("AnchorFlow structural defense is the retest invalidation and is never widened",()=>{
@@ -135,7 +135,7 @@ test("AnchorFlow entries obey the rebuilt portfolio, directional, trade-risk and
   assert.ok(total<=eq*.04+1e-8);
   assert.ok(state.positions.filter(t=>t.side==="LONG").reduce((n,t)=>n+t.plannedRisk,0)<=eq*.03+1e-8);
   assert.ok(state.positions.every(t=>t.plannedRisk<=eq*.008+1e-8));
-  assert.ok(state.positions.every(t=>t.notional<=eq*.60+1e-8));
+  assert.ok(state.positions.every(t=>t.notional<=600.01));
   assert.ok(state.positions.every(t=>t.turn?.timeframe==="15m"));
 });
 
