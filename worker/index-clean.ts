@@ -3230,7 +3230,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.lastSuccessAt = books.successes > 0 ? observedAt : this.runtime.lastSuccessAt;
     const allWarm = this.runtime.symbols.every((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS);
     const allMeta = this.runtime.symbols.every((symbol) => this.runtime.contractMeta[symbol] != null);
-    const realtimeReadiness = this.realtimeReadiness();
+    const realtimeReadiness = this.realtimeReadiness(observedAt);
     const ancillaryStarted = this.runtime.symbols.every((symbol) => {
       const memory = this.memory[symbol];
       return memory && memory.timeframeUpdatedAt.m1 > 0 && memory.timeframeUpdatedAt.m15 > 0
