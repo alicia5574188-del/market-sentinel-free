@@ -21,7 +21,7 @@ export function evaluateRegionEntryPolicy(input:{
     launchTriggerPrice?:number;launchMaxChaseRate?:number};
   const entryModel=extra.entryModel;
   const isAnchor=s.kind==="MIGRATION"&&entryModel==="ANCHOR_FLOW",isLaunch=s.kind==="MIGRATION"&&entryModel==="REGION_LAUNCH";
-  const totalRiskRate=.04,sideRiskRate=.03,tradeRiskRate=isAnchor?.008:isLaunch?.006:.006,perTradeNotionalRate=.60,totalNotionalRate=2.0;
+  const totalRiskRate=.04,sideRiskRate=.03,tradeRiskRate=isAnchor?.008:.006,perTradeNotionalRate=.60,totalNotionalRate=2.0;
   if(![input.bestBid,input.bestAsk,input.equity,input.peakEquity,input.costRate].every(Number.isFinite)||input.bestBid<=0||input.bestAsk<=input.bestBid)
     return{ok:false,reason:"当前盘口无效",remainingSpaceRate:0};
   if(spread>.0015)return{ok:false,reason:"当前买卖价差过大",remainingSpaceRate:0};
