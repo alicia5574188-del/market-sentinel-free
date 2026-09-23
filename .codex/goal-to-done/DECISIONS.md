@@ -1,3 +1,14 @@
+# 2026-09-23 — shared source events, isolated private reconciliation
+
+Do not fork a second live strategy or bypass confirmation for apparent speed.
+Wake LIVE after durable source lifecycle commit; coalesce events during an active
+pass and serialize all exchange mutations. Private account waits cannot hold the
+book/PAPER clock. Read-only hedges use Gate's official futures alternate, race
+complete successful JSON and drain snapshot work; mutations remain single-submit.
+No stale account cache, new alarm or financial-cap increase. Latest request
+authorizes only alarm/advanceForwardNow/syncLiveOnce and private adapter baseline
+updates after semantic tests. Pure strategy and owner/auth/storage stay frozen.
+
 # 2026-09-23 — full extrema are execution boundaries, five-minute evidence owns launch permission
 
 Confirmed source defects: compression20th/80th-percentile bounds omit some earlier wicks;1m strength previously bypassed containing5m geometry. Keep robust core detection but use the episode's full high/low envelope, connected historical rejection candles and non-shrinking observed boundaries. FAST means real5m body initially>=3pre-departure mean ranges with controlled wick; CLOSED means an actual strong-enough outside5m close, then next-bar acceleration or a shallow1m pullback followed by clearing its entire extreme. Recheck pending READY with current quote/5m geometry. Missing bucket-open data cannot fabricate a5m candle; future or incomplete candles cannot be labeled closed. Existing stop/risk/chase limits stay unchanged. An unconsumed departure ages out after20minutes back to mother observation.

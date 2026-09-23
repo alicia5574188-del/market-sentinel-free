@@ -1,3 +1,17 @@
+# 2026-09-23 — private LIVE timeout/dispatch repair; release verification
+
+Base deployed main e8fabe2 (PR413) is confirmed healthy, source startedAt
+1790157902785,12closed/0open,owner LIVE requested/operational true, same activation
+1790171525732. Branch fix/20260923-live-sync-latency repairs complete-body dual-route
+private GETs, snapshot draining, source selection after read, commit-driven
+serialized LIVE dispatch and nonblocking critical alarm.1019direct,214Forward,
+61equity,49member,132LIVE and19architecture/migration tests pass; native feed
+workerd/build/typecheck/lint/dry-run pass (16existing lint warnings,0errors).
+Verified publication is in progress. Only scoped method/adapter fingerprints
+advance; strategy/auth/storage unchanged. No Gate test trades/switch actions.
+Design:research/LIVE_SYNC_LATENCY_2026-09-23.md. Prior in-progress entries below are
+historical; PR413 deployment completed before this task.
+
 # 2026-09-23 — five-minute launch repair; final verification/publication in progress
 
 Base main42ca9bd is the verified deployed Gate dual-transport repair. Work branch fix/20260923-five-minute-launch corrects percentile-only launch boundaries and missing5m departure authority. Added full-wick/episode retention, FAST3x-average-range unfinished5m path, CLOSED outside5m+shallow-restart path, live READY invalidation and v2 signal fencing while keeping consumed memory/open positions.1009direct tests passed before final metadata cleanup; typecheck/npm test/build/native workerd/architecture pass, lint had16existing warnings plus one new unused constant now removed. Final scoped rerun, dry-run, exact-head release and live continuity receipt remain. No private Gate verification trade, switch mutation or reset. Design:research/LAUNCH_FIVE_MINUTE_2026-09-23.md.

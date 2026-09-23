@@ -529,6 +529,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private turnoverPersisted: {accountKey:string;at:number} | null = null;
   protected nonAlarmPendingWrites = 0;
   protected liveSyncWork: Promise<void> | null = null;
+  private liveBackgroundWork: Promise<void> | null = null;
+  private liveSourcePending=false;
+  private liveExecution={version:"event-driven-live-v1",cycles:0,sourceWakeups:0,
+    startedAt:null as number|null,finishedAt:null as number|null,lastDurationMs:null as number|null};
   private liveReadTimeoutStreak=0;
   protected liveJournal = new Map<string, unknown>();
   protected liveHistory: LivePosition[] = [];
@@ -1196,6 +1200,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // only after its atomic commit. A failed write retains the old authority.
       this.forwardState = next.state;
       this.forwardError = null;
+      // Publish only committed lifecycle events. A source born in the candle
+      // lane must not wait for the next alarm; a source closed while Gate is
+      // awaiting I/O must wake the serialized reconciler as well.
+      if(previous.positions.length!==next.state.positions.length
+        ||previous.positions.some(p=>!next.state.positions.some(n=>n.id===p.id)))this.launchLiveWork(true);
     } catch (error) { this.forwardError = safeError(error); }
     finally { this.forwardBusy = false; }
   }
@@ -2160,6 +2169,37 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return current;
   }
 
+  private launchLiveWork(sourceChanged=false) {
+    if(!this.liveNeedsSync())return;
+    if(sourceChanged){this.liveSourcePending=true;this.liveExecution.sourceWakeups++;}
+    if(this.liveBackgroundWork)return;
+    const task=(async()=>{
+      do{
+        this.liveSourcePending=false;
+        const started=Date.now(),requestsBefore=this.liveClient?.requestCount??0;
+        this.liveExecution.startedAt=started;this.liveExecution.cycles++;
+        try{await this.syncLive(started);}
+        catch(error){
+          const message=safeError(error),blocked=liveFailureRequiresOff(error);
+          const shouldRecord=this.runtime.live.lastError!==message||this.runtime.live.operational;
+          this.runtime.live.operational=false;this.runtime.live.lastError=message;
+          if(shouldRecord)this.recordLiveAudit({observedAt:Date.now(),symbol:null,planId:null,
+            stage:"LIVE_CONTROL",level:"RECOVERING",reason:blocked
+              ?`账户纳管冲突，执行暂停但不改写所有者开关：${message}`
+              :`实盘核对暂时失败，所有者开关选择保持不变：${message}`,error});
+        }finally{
+          this.liveExecution.finishedAt=Date.now();
+          this.liveExecution.lastDurationMs=Date.now()-started;
+          this.runtime.subrequestCount+=Math.max(0,(this.liveClient?.requestCount??requestsBefore)-requestsBefore);
+        }
+        // Alarms merely join; only an actual committed source lifecycle event
+        // requests a follow-up. No overlapping write lanes or busy retries.
+      }while(this.liveSourcePending&&this.liveNeedsSync());
+    })();
+    this.liveBackgroundWork=task;
+    this.ctx.waitUntil(task.finally(()=>{if(this.liveBackgroundWork===task)this.liveBackgroundWork=null;}));
+  }
+
   protected async syncLive(now:number,initialEnable=false,forceEntryCleanup=false) {
     while(this.liveSyncWork){
       if(!initialEnable&&!forceEntryCleanup)return this.liveSyncWork;
@@ -2196,14 +2236,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const activeEntries = Object.values(this.runtime.live.entries).some((entry) => entry &&
       (!["FILLED", "CANCELLED"].includes(entry.status) || this.liveEntryAwaitingReconcile(entry)));
     if (!this.runtime.live.requestedEnabled && !activePositions && !activeEntries && !initialEnable && !forceEntryCleanup) return;
-    let sourceError=this.liveBindingError??this.forwardError;
-    let desiredPortfolio:Record<string,MirrorSourceTrade>={};
-    try { desiredPortfolio=this.liveDesiredPortfolio(now); }
-    catch(error){sourceError=safeError(error);}
     // A missing source blocks additions, not the owner's OFF cleanup or native
     // protection of an already-mapped position.
     const client = await this.gateLive();
     let snapshot = await client.snapshot();
+    // The committed PAPER account can advance while private reads are in flight.
+    // Select sources after the read, never from a pre-await portfolio snapshot.
+    now=Date.now();this.reconcileCanonicalMirror(now);
+    let sourceError=this.liveBindingError??this.forwardError;
+    let desiredPortfolio:Record<string,MirrorSourceTrade>={};
+    try{desiredPortfolio=this.liveDesiredPortfolio(now);}
+    catch(error){sourceError=safeError(error);}
     this.turnoverAccountUser=snapshot.account.user==null?null:String(snapshot.account.user);
     const knownTags = new Set([
       ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status)
@@ -2234,7 +2277,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     this.runtime.live.equity = accountError?null:equity;
     this.runtime.live.available = available;
-    this.runtime.live.lastSyncAt = now;
+    this.runtime.live.lastSyncAt = snapshot.checkedAt;
 
     const exchangeOrders = [...snapshot.orders, ...snapshot.priceOrders];
     const unknownOrders = exchangeOrders.filter((order) => !knownTags.has(liveOrderTag(order) ?? ""));
@@ -3378,25 +3421,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // Forward/PAPER is financial authority, not optional analysis. Keep its
       // exits and 5-minute account archive on the same critical protection clock.
       await this.advanceForwardNow(Date.now(),false);
-      const liveNeedsSync = this.liveNeedsSync();
-      if (liveNeedsSync) {
-        const liveRequestsBefore = this.liveClient?.requestCount ?? 0;
-        try {
-          await this.syncLive(Date.now());
-        } catch (error) {
-          const message = safeError(error);
-          const blocked=liveFailureRequiresOff(error);
-          const shouldRecord = this.runtime.live.lastError !== message || this.runtime.live.operational;
-          this.runtime.live.operational = false;
-          this.runtime.live.lastError = message;
-          if (shouldRecord) this.recordLiveAudit({ observedAt: Date.now(), symbol: null, planId: null,
-            stage: "LIVE_CONTROL", level: "RECOVERING",
-            reason: blocked ? `账户纳管冲突，执行暂停但不改写所有者开关：${message}`
-              : `实盘核对暂时失败，所有者开关选择保持不变：${message}`, error });
-        } finally {
-          subrequests += Math.max(0, (this.liveClient?.requestCount ?? liveRequestsBefore) - liveRequestsBefore);
-        }
-      }
+      // Private network latency must not hold the 2s executable-book/PAPER clock.
+      this.launchLiveWork();
       this.launchOptionalWork(now, universeDue);
       this.launchTurnoverWork(Date.now());
     } catch (error) {
@@ -3540,6 +3566,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         symbols: this.runtime.symbols,
         realtimeReadiness: this.realtimeReadiness(),
         liveMode: { requestedEnabled: this.runtime.live.requestedEnabled, operational: this.runtime.live.operational },
+        liveExecution:{...this.liveExecution,inFlight:!!this.liveBackgroundWork,queued:this.liveSourcePending,
+          timeoutStreak:this.liveReadTimeoutStreak,lastAccountAt:this.runtime.live.lastSyncAt,
+          readTransport:this.liveClient?.readTransport??null},
         strategyArena: {
           version: canonical.version,
           playbookCount: canonical.playbookCount,

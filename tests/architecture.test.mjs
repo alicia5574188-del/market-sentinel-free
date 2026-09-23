@@ -37,8 +37,9 @@ test("runtime uses bounded Gate stream snapshots with independent futures REST f
   assert.match(worker, /stableCandidates/);
   const alarm = worker.slice(worker.indexOf("async alarm("), worker.indexOf("async fetch(request"));
   assert.ok(alarm.indexOf("processBooks") < alarm.indexOf("advanceForwardNow(Date.now(),false)"), "fresh books must precede critical forward management");
-  assert.ok(alarm.indexOf("advanceForwardNow(Date.now(),false)") < alarm.indexOf("syncLive"), "persisted PAPER exits must precede LIVE reconciliation");
-  assert.ok(alarm.indexOf("syncLive") < alarm.indexOf("launchOptionalWork"), "LIVE reconciliation must run before optional market work is launched");
+  assert.ok(alarm.indexOf("advanceForwardNow(Date.now(),false)") < alarm.indexOf("this.launchLiveWork()"), "persisted PAPER exits must precede LIVE dispatch");
+  assert.ok(alarm.indexOf("this.launchLiveWork()") < alarm.indexOf("launchOptionalWork"), "LIVE dispatch must start before optional market work is launched");
+  assert.doesNotMatch(alarm,/await this\.syncLive\(/,"private exchange latency must not hold the quote clock");
   const optionalStart=worker.indexOf("private launchOptionalWork");
   const optional=worker.slice(optionalStart,worker.indexOf("async alarm(",optionalStart));
   assert.match(optional,/refreshStrategyCandle[\s\S]*advanceForwardNow\(Date\.now\(\),true\)/,

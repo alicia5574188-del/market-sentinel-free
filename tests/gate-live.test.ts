@@ -262,3 +262,83 @@ test("a fully timed-out Gate read surfaces a typed Chinese read-timeout instead 
       &&/Gate只读核对超时/.test(error.message)&&!/The operation was aborted due to timeout/.test(error.message));
   }finally{globalThis.fetch=real;}
 });
+
+test("private read races the complete body through Gate's independent futures route and cancels the stalled loser",async()=>{
+  const real=globalThis.fetch,hosts:string[]=[];let stalledSignal:AbortSignal|undefined;
+  globalThis.fetch=async(input,init)=>{
+    const host=new URL(String(input)).hostname;hosts.push(host);
+    assert.equal(init?.redirect,"error");
+    if(host==="api.gateio.ws"){
+      stalledSignal=init?.signal??undefined;
+      return new Response(new ReadableStream({start(){/* Headers succeed, body never finishes. */}}));
+    }
+    return Response.json({id:"90071992547409931",status:"finished",fill_price:"100"});
+  };
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    const order=await client.inspectEntry("MARKET","BTC_USDT","t-fixture","90071992547409931");
+    assert.equal(order?.id,"90071992547409931");
+    assert.deepEqual(hosts,["api.gateio.ws","fx-api.gateio.ws"]);
+    assert.equal(stalledSignal?.aborted,true);assert.equal(client.readTransport.recovered,1);
+  }finally{globalThis.fetch=real;}
+});
+
+test("server failures and malformed read bodies use the alternate immediately, while auth and rate limits stay definitive",async()=>{
+  const real=globalThis.fetch;
+  try{for(const failure of ["server","json","auth","rate"]){
+    const hosts:string[]=[];
+    globalThis.fetch=async(input)=>{
+      const host=new URL(String(input)).hostname;hosts.push(host);
+      if(host==="fx-api.gateio.ws")return Response.json({id:"123",status:"finished"});
+      if(failure==="server")return new Response("unavailable",{status:503});
+      if(failure==="json")return new Response("{broken");
+      return Response.json({label:failure==="auth"?"INVALID_KEY":"TOO_MANY_REQUESTS"},{status:failure==="auth"?401:429});
+    };
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    if(failure==="auth"||failure==="rate"){
+      await assert.rejects(client.inspectEntry("MARKET","BTC_USDT","t-fixture","123"),/Gate (401|429)/);
+      assert.equal(hosts.length,1);
+    }else{
+      assert.equal((await client.inspectEntry("MARKET","BTC_USDT","t-fixture","123"))?.id,"123");
+      assert.deepEqual(hosts,["api.gateio.ws","fx-api.gateio.ws"]);
+    }
+  }}finally{globalThis.fetch=real;}
+});
+
+test("testnet hedges never send private credentials to production",async()=>{
+  const real=globalThis.fetch,hosts:string[]=[];
+  globalThis.fetch=async(input)=>{
+    hosts.push(new URL(String(input)).hostname);
+    if(hosts.length===1)throw new TypeError("network outage");
+    return Response.json({id:"123"});
+  };
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"testnet"});
+    await client.inspectEntry("MARKET","BTC_USDT","t-fixture","123");
+    assert.deepEqual(hosts,["api-testnet.gateapi.io","api-testnet.gateapi.io"]);
+  }finally{globalThis.fetch=real;}
+});
+
+test("a mutation body timeout is an unknown single submission, never a replay",async()=>{
+  const real=globalThis.fetch;let calls=0;
+  globalThis.fetch=async()=>{calls++;return new Response(new ReadableStream({start(controller){
+    controller.error(new DOMException("body timed out","TimeoutError"));
+  }}));};
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    await assert.rejects(client.setLeverage("BTC_USDT",10),/提交结果可能不明确/);
+    assert.equal(calls,1);assert.equal(client.readTransport.hedges,0);
+  }finally{globalThis.fetch=real;}
+});
+
+test("both private routes hanging remain bounded and public diagnostics omit the private order ID",async()=>{
+  const real=globalThis.fetch,signals:AbortSignal[]=[];
+  globalThis.fetch=async(_input,init)=>{signals.push(init!.signal!);return new Promise<Response>(()=>{});};
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    await assert.rejects(client.inspectEntry("MARKET","BTC_USDT","t-fixture","90071992547409931"),GateReadTimeoutError);
+    assert.equal(signals.length,2);assert.ok(signals.every(s=>s.aborted));
+    assert.equal(client.readTransport.timeouts,1);
+    assert.equal(client.readTransport.lastTimeoutPath,"/futures/usdt/orders");
+  }finally{globalThis.fetch=real;}
+});

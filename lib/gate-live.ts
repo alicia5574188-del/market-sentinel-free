@@ -169,6 +169,47 @@ function safeGateError(raw: string, status: number) {
   }
 }
 
+class GateHttpError extends Error {
+  readonly status:number;
+  constructor(raw:string,status:number){super(safeGateError(raw,status));this.status=status;}
+}
+
+// Both hosts are Gate's documented futures production endpoints. Never send
+// account credentials to another exchange, a redirect, or a mainnet fallback
+// for a testnet account. A race includes the body and JSON, not just headers.
+async function completeGateRead<T>(read:(alternate:boolean,signal:AbortSignal)=>Promise<T>,onHedge:()=>void):Promise<T>{
+  const controllers=[new AbortController(),new AbortController()];
+  let hedge:ReturnType<typeof setTimeout>|undefined,deadline:ReturnType<typeof setTimeout>|undefined;
+  let settled=false,secondary=false;
+  const errors:unknown[]=[];
+  try{return await new Promise<T>((resolve,reject)=>{
+    const fail=(error:unknown)=>{if(!settled){settled=true;reject(error);}};
+    const start=(index:number)=>{
+      void read(index===1,controllers[index].signal).then(value=>{
+        if(!settled){settled=true;resolve(value);}
+      },error=>{
+        if(settled)return;
+        // Authentication, permission, rate limits and absence are definitive;
+        // a second route must not conceal them or multiply a rate-limit burst.
+        if(error instanceof GateHttpError&&error.status>=400&&error.status<500){fail(error);return;}
+        errors.push(error);
+        if(index===0&&!secondary)startSecondary();
+        if(errors.length===2)fail(new AggregateError(errors));
+      });
+    };
+    const startSecondary=()=>{
+      if(settled||secondary)return;
+      secondary=true;onHedge();start(1);
+    };
+    deadline=setTimeout(()=>fail(new DOMException("Gate read deadline exceeded","TimeoutError")),6_000);
+    hedge=setTimeout(startSecondary,350);
+    start(0);
+  });}finally{
+    clearTimeout(hedge);clearTimeout(deadline);
+    for(const controller of controllers)controller.abort();
+  }
+}
+
 function responseId(raw: string, parsed: GateLiveOrder) {
   if (typeof parsed.id_string === "string" && /^\d+$/.test(parsed.id_string)) return parsed.id_string;
   const match = raw.match(/"id"\s*:\s*(?:"(\d+)"|(\d+))/);
@@ -189,6 +230,7 @@ function parseGateJson<T>(raw: string): T {
 export class GateLiveClient {
   readonly credentials: GateCredentials;
   requestCount = 0;
+  readonly readTransport={version:"gate-private-dual-route-v1",hedges:0,recovered:0,timeouts:0,lastTimeoutPath:null as string|null};
   constructor(credentials: GateCredentials) { this.credentials = credentials; }
 
   private async request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, query = "", value?: unknown, beforeSend?: () => boolean) {
@@ -200,9 +242,10 @@ export class GateLiveClient {
     // Signing yields to owner controls. Fence directly at the network boundary,
     // with no await between this final local check and the order request.
     if (beforeSend && !beforeSend()) throw new GateEntryCancelledError();
-    const send=(timeoutMs:number)=>{
+    const send=async(alternate:boolean,signal:AbortSignal)=>{
       this.requestCount+=1;
-      return fetch(`${base}${signedPath}${query ? `?${query}` : ""}`, {
+      const host=alternate&&this.credentials.environment!=="testnet"?"https://fx-api.gateio.ws":base;
+      const response=await fetch(`${host}${signedPath}${query ? `?${query}` : ""}`, {
         method,
         headers: {
           Accept: "application/json",
@@ -214,44 +257,51 @@ export class GateLiveClient {
           "X-Gate-Size-Decimal": "1",
         },
         body: body || undefined,
-        signal: AbortSignal.timeout(timeoutMs),
+        signal,
+        redirect:"error",
       });
+      const raw=await response.text();
+      if(!response.ok)throw new GateHttpError(raw,response.status);
+      return {data:(raw?parseGateJson<T>(raw):{}) as T,raw};
     };
-    let response:Response;
     try{
       if(method==="GET"){
-        // GET is safe to hedge. If Gate/edge latency stalls one read, start a
-        // second identical read after 2s but keep the whole logical request
-        // bounded to roughly the old 6s window. Writes are never retried.
-        let hedgeStarted=false,timer:ReturnType<typeof setTimeout>|null=null;
-        const primary=send(6_000);
-        const hedge=new Promise<Response>((resolve,reject)=>{
-          timer=setTimeout(()=>{hedgeStarted=true;send(4_000).then(resolve,reject);},2_000);
-        });
-        try{response=await Promise.any([primary,hedge]);}
-        finally{if(!hedgeStarted&&timer!=null)clearTimeout(timer);}
-      }else response=await send(6_000);
+        const result=await completeGateRead(async(alternate,signal)=>({
+          ...await send(alternate,signal),alternate,
+        }),()=>{this.readTransport.hedges++;});
+        if(result.alternate)this.readTransport.recovered++;
+        return {data:result.data,raw:result.raw};
+      }
+      // Mutations remain single-submit, including a timeout reading the body.
+      return await send(false,AbortSignal.timeout(6_000));
     }catch(error){
       if(gateRequestTimedOut(error)){
-        if(method==="GET")throw new GateReadTimeoutError(path);
+        if(method==="GET"){
+          this.readTransport.timeouts++;
+          this.readTransport.lastTimeoutPath=path.split("/").slice(0,4).join("/");
+          throw new GateReadTimeoutError(path);
+        }
         throw new Error(`Gate ${method} 请求超时：${path}；提交结果可能不明确，必须按订单身份继续核对，不能自动重放。`);
       }
       if(error instanceof AggregateError&&error.errors.length)throw error.errors[0];
       throw error;
     }
-    const raw = await response.text();
-    if (!response.ok) throw new Error(safeGateError(raw, response.status));
-    return { data: (raw ? parseGateJson<T>(raw) : {}) as T, raw };
   }
 
   async snapshot(): Promise<GateLiveSnapshot> {
-    const [account, positions, orders, priceOrders] = await Promise.all([
+    const [account, positions, orders, priceOrders] = await Promise.allSettled([
       this.request<GateLiveAccount>("GET", "/futures/usdt/accounts"),
       this.request<GateLivePosition[]>("GET", "/futures/usdt/positions", "holding=true"),
       this.request<GateLiveOrder[]>("GET", "/futures/usdt/orders", "status=open"),
       this.request<GateLiveOrder[]>("GET", "/futures/usdt/price_orders", "status=open"),
     ]);
-    return { account: account.data, positions: positions.data, orders: orders.data, priceOrders: priceOrders.data, checkedAt: Date.now() };
+    // Drain the bounded parallel reads before reporting failure: an early
+    // rejection must not leave old signed requests alive in the next pass.
+    const value=<T>(result:PromiseSettledResult<{data:T;raw:string}>):T=>{
+      if(result.status==="rejected")throw result.reason;
+      return result.value.data;
+    };
+    return {account:value(account),positions:value(positions),orders:value(orders),priceOrders:value(priceOrders),checkedAt:Date.now()};
   }
 
   async setLeverage(symbol: string, leverage: number) {

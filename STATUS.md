@@ -1,3 +1,13 @@
+# 2026-09-23 — LIVE timeout and source-dispatch repair verified locally
+
+Branch fix/20260923-live-sync-latency from deployed e8fabe2. Complete-body Gate
+private GET fallback and immediate serialized source dispatch pass1019direct,
+214Forward,61equity,49member,132LIVE and19architecture/migration tests. Native
+workerd/build/typecheck/lint/dry-run passed;16existing warnings,0errors. Final
+reviewed-main publication and advancing public continuity receipt in progress.
+No strategy/account/history/credential/switch changes or real-money test order.
+Design:research/LIVE_SYNC_LATENCY_2026-09-23.md.
+
 # Status
 
 - 五行情运行时、12 条冻结策略、独立账户和直接信号：已实现。
