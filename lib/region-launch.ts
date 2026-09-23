@@ -228,20 +228,21 @@ export function advanceRegionLaunchMinutes(input:{states:Record<string,RegionLau
 
     if(s.phase==="IGNITION"&&s.ignitionSide&&s.triggerPrice!=null&&s.ignitionAt!=null
       &&s.breakoutOpen!=null&&s.breakoutHigh!=null&&s.breakoutLow!=null&&s.breakoutClose!=null){
-      const breakout:RegionCandle={time:Math.floor((s.ignitionAt-REGION_LAUNCH_MINUTE_MS)/1000),
+      const ignitionAt=s.ignitionAt,ignitionSide=s.ignitionSide,triggerPrice=s.triggerPrice;
+      const breakout:RegionCandle={time:Math.floor((ignitionAt-REGION_LAUNCH_MINUTE_MS)/1000),
         open:s.breakoutOpen,high:s.breakoutHigh,low:s.breakoutLow,close:s.breakoutClose,volume:1};
-      const following=rows.filter(row=>minuteCompleteAt(row)>s.ignitionAt);
-      const evaluated=evaluateMicroRestart({breakout,following,side:s.ignitionSide,triggerPrice:s.triggerPrice,
+      const following=rows.filter(row=>minuteCompleteAt(row)>ignitionAt);
+      const evaluated=evaluateMicroRestart({breakout,following,side:ignitionSide,triggerPrice,
         costRate:input.costRate,regionWidthRate:s.motherWidthRate});
       s.pullbackExtreme=evaluated.supportPrice??s.pullbackExtreme;
-      s.lastMinuteAt=Math.max(s.lastMinuteAt??0,...following.map(minuteCompleteAt),s.ignitionAt);
+      s.lastMinuteAt=Math.max(s.lastMinuteAt??0,...following.map(minuteCompleteAt),ignitionAt);
       if(evaluated.state==="FAIL"){
         s.failedDepartures++;s.phase="ARMED";s.cooldownUntil=0;clearIgnition(s);clearReady(s);
         s.reason=`RegionLaunch本次启动失败：${evaluated.reason} 成熟母区域继续保留观察。`;
       }else if(evaluated.state==="WAIT"){
         s.reason=`RegionLaunch继续观察：${evaluated.reason}`;
       }else if(evaluated.restartAt!=null&&evaluated.restartPrice!=null){
-        const side=s.ignitionSide,d=side==="LONG"?1:-1,trigger=s.triggerPrice;
+        const side=ignitionSide,d=side==="LONG"?1:-1,trigger=triggerPrice;
         const impulse=d*(evaluated.restartPrice/trigger-1);
         const maxChase=Math.max(.009,Math.min(.025,Math.max(s.motherWidthRate*.60,input.costRate*4)));
         if(input.now-evaluated.restartAt>75_000){
@@ -257,7 +258,7 @@ export function advanceRegionLaunchMinutes(input:{states:Record<string,RegionLau
           const f15=input.frames?.[symbol]?.["15m"];
           const expected=Math.min(.20,Math.max(.015,s.motherWidthRate*1.50,impulse*3,f15?.expectedMoveRate??0));
           s.phase="READY";s.readyAt=evaluated.restartAt;s.readySide=side;s.readySignalPrice=evaluated.restartPrice;s.readyStopPrice=stop;
-          s.readyImpulseRate=impulse;s.readyExpectedMoveRate=expected;s.readyMaxChaseRate=maxChase;s.readyConfirmationMs=evaluated.restartAt-s.ignitionAt;
+          s.readyImpulseRate=impulse;s.readyExpectedMoveRate=expected;s.readyMaxChaseRate=maxChase;s.readyConfirmationMs=evaluated.restartAt-ignitionAt;
           s.reason=`RegionLaunch READY：${evaluated.reason} 等待当前可执行盘口成交。`;
         }
       }
