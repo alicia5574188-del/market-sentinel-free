@@ -47,8 +47,8 @@ export function evaluateRegionEntryPolicy(input:{
     const expected=(s as RegionEntrySignal&{anchorExpectedMoveRate?:number}).anchorExpectedMoveRate??0;
     remaining=Math.max(0,expected-input.costRate);
     const edgeRatio=remaining/Math.max(lossRate,1e-9);
-    if(remaining<=input.costRate||edgeRatio<1.20)
-      return{ok:false,reason:"AnchorFlow 回测成立，但当前15m/1h剩余空间不足覆盖结构风险与成本",remainingSpaceRate:remaining};
+    if(remaining<=input.costRate||edgeRatio<1.10)
+      return{ok:false,reason:"AnchorFlow 回测成立，但当前15m剩余空间仍不足覆盖结构风险与成本",remainingSpaceRate:remaining};
   }
   const sideRisk=s.side==="LONG"?input.longRisk:input.shortRisk;
   const drawdown=Math.max(0,1-input.equity/Math.max(input.peakEquity,input.equity));
