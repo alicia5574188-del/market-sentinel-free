@@ -81,6 +81,19 @@ test("only a completed AnchorFlow restart owns trend entry authority and preserv
   assert.equal(state.anchorConsumed?.["rg-BTC_USDT:LONG"],now);
 });
 
+test("an AnchorFlow READY signal rejected by current quote execution stays READY and unconsumed",()=>{
+  const now=BASE+6*60*60_000+30_000,s=seeded(["BTC_USDT"],now);
+  s.anchorFlows={BTC_USDT:readyAnchor("BTC_USDT",now)};
+  const blocked={...quote(101.2,now),entryReady:false};
+  const state=advanceForward({state:s,now,paths:{},quotes:{BTC_USDT:blocked},contracts:{BTC_USDT:meta},
+    entrySymbols:["BTC_USDT"],allowDataCycle:false}).state;
+  assert.equal(state.positions.length,0);
+  assert.equal(state.anchorFlows?.BTC_USDT?.phase,"READY");
+  assert.equal(state.anchorFlows?.BTC_USDT?.consumedAt,null);
+  assert.equal(state.anchorConsumed?.["rg-BTC_USDT:LONG"],undefined);
+  assert.equal(state.regionSignals?.some(x=>x.symbol==="BTC_USDT"&&x.kind==="MIGRATION"),true);
+});
+
 test("cold reconstruction can restore an old region but cannot backfill an already happened entry",()=>{
   const p=regionPath(),zNow=(p.at(-1)!.time+300)*1000+1;
   const rows=[...p];let prev=rows.at(-1)!.close;
