@@ -1326,8 +1326,9 @@ export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iter
     const urgentAnchors=anchors.filter(row=>row.phase==="READY"||row.phase==="RETEST");
     const passiveAnchors=anchors.filter(row=>row.phase!=="READY"&&row.phase!=="RETEST");
     const launchSignals=(s.regionLaunchSignals??[]).filter(signal=>signal.expiresAt>now&&(!allowed||allowed.has(signal.symbol)));
+    const launchPriority:Record<RegionLaunchState["phase"],number>={READY:0,IGNITION:0,ARMED:1,WATCH:9,CONSUMED:9};
     const launches=Object.values(s.regionLaunches??{}).filter(row=>["READY","IGNITION","ARMED"].includes(row.phase)
-      &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>({READY:0,IGNITION:0,ARMED:1}[a.phase]??9)-({READY:0,IGNITION:0,ARMED:1}[b.phase]??9)
+      &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>launchPriority[a.phase]-launchPriority[b.phase]
         ||b.quality-a.quality||b.updatedAt-a.updatedAt||a.symbol.localeCompare(b.symbol));
     const otherSignals=signals.filter(signal=>!(signal.kind==="MIGRATION"&&(signal as AnchorFlowEntrySignal).entryModel==="ANCHOR_FLOW"));
     return[...new Set([...s.positions.map(p=>p.symbol),...anchorSignals.map(x=>x.symbol),...urgentAnchors.map(x=>x.symbol),
