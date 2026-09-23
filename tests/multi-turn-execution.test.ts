@@ -98,8 +98,13 @@ test("failed first-full-5m executable-MFE validation recycles the same valid reg
   assert.match(state.history[0]?.exitReason??"",/真实可执行最高浮赢/);
   assert.equal(state.anchorFlows?.ETH_USDT?.phase,"READY");
   assert.equal(state.anchorFlows?.ETH_USDT?.retryCount,1);
-  assert.equal(state.anchorFlows?.ETH_USDT?.confirmationExtreme,null);
+  assert.ok((state.anchorFlows?.ETH_USDT?.confirmationExtreme??0)>0);
   assert.equal(state.anchorConsumed?.["rg-ETH_USDT:LONG"],undefined);
+  const retryAt=due+10_001;
+  state=advanceForward({state,now:retryAt,paths:{},quotes:{ETH_USDT:quote((state.anchorFlows!.ETH_USDT!.confirmationExtreme!)*1.002,retryAt)},
+    contracts:{ETH_USDT:meta},entrySymbols:["ETH_USDT"],allowDataCycle:false}).state;
+  assert.equal(state.positions.length,1,"the one allowed restart can refill without waiting for another completed 5m candle");
+  assert.equal(state.anchorFlows?.ETH_USDT?.retryCount,1);
 });
 
 test("only a completed AnchorFlow restart owns trend entry authority and preserves retest invalidation",()=>{
@@ -143,7 +148,7 @@ test("cold reconstruction can restore an old region but cannot backfill an alrea
 
 test("a rejection trade can close at region center immediately without a minimum holding-age embargo",()=>{
   const now=BASE+7*60*60_000,s=seeded(["ETH_USDT"],now);
-  s.regionSignals=[signal("ETH_USDT",now,{kind:"REJECTION",side:"SHORT",boundary:"UPPER",signalPrice:100.65,stopPrice:100.74,targetPrice:100,
+  s.regionSignals=[signal("ETH_USDT",now,{kind:"REJECTION",side:"SHORT",boundary:"UPPER",signalPrice:100.65,stopPrice:100.68,targetPrice:100,
     reason:"fixture rejection"})];
   s.regionLifecycles!.ETH_USDT=lifecycle("ETH_USDT",now,"IN_REGION");
   let state=advanceForward({state:s,now,paths:{},quotes:{ETH_USDT:quote(100.6,now)},contracts:{ETH_USDT:meta},
