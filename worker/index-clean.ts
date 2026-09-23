@@ -39,6 +39,7 @@ import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCand
 import { advanceForward, closeForwardForReset, forwardSummary, forwardEquity, freshQuote, forwardWatchSymbols, initialMultiTurnForward,
   BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { MULTI_TURN_VERSION } from "../lib/multi-turn-engine.ts";
+import { ANCHOR_FLOW_VERSION } from "../lib/anchor-flow.ts";
 import { forwardSymbolAllowed } from "../lib/forward-evidence.ts";
 import { selectAnchorOpportunityUniverse } from "../lib/multi-turn-universe.ts";
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, prepareForwardReset,
@@ -1056,12 +1057,34 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return true;
   }
 
+  private async ensureAnchorFlowCutover(now:number){
+    const previous=this.forwardState;
+    if(!previous||previous.strategyAuthorityVersion!==MULTI_TURN_VERSION||previous.executionVersion===ANCHOR_FLOW_VERSION)return false;
+    if(this.runtime.live.requestedEnabled||this.runtime.live.operational||this.activeLivePositions().length||this.activeLiveEntries().length)
+      return false;
+    const quotes=this.regimeQuotes(now),closed=closeForwardForReset(previous,quotes,now),next=initialMultiTurnForward(now);
+    const prepared=await prepareForwardReset(previous,closed,next,now);
+    const saved=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
+    const protection=prepared.entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
+    if(protection&&saved?.writeBudget!==undefined)prepared.entries[FORWARD_PROTECTION_STORAGE]={...protection,writeBudget:saved.writeBudget};
+    const reservation=this.reserveNonAlarmWrites(prepared.writes,64);
+    if(!reservation)throw new Error("AnchorFlow原子实验纪元切换等待写入预算；旧账户保持完整，不发布半重置状态");
+    try{await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});reservation.finish(true);}
+    finally{reservation.finish(false);}
+    this.forwardCompression=prepared.compression;this.forwardState=prepared.state;this.forwardError=null;
+    this.forwardProtectionBudget=readProtectionWriteBudget(saved?.writeBudget);
+    this.mirrorClosures.clear();
+    return true;
+  }
+
   private async advanceForwardNow(now: number, allowDataCycle = true) {
     if (this.forwardBusy) return;
     this.forwardBusy = true;
     try {
       if (!this.forwardState) this.forwardState = await readForwardStore(this.ctx.storage, now);
       if(MULTI_TURN_AUTO_CUTOVER&&this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION)await this.ensureMultiTurnCutover(now);
+      if(this.forwardState?.strategyAuthorityVersion===MULTI_TURN_VERSION&&this.forwardState.executionVersion!==ANCHOR_FLOW_VERSION)
+        await this.ensureAnchorFlowCutover(now);
       if(!this.forwardState)throw new Error("PAPER权威账户缺失");
       const legacyDrainOnly=this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION;
       const dataCycleDue=allowDataCycle&&(!this.forwardState.lastCycleAt
