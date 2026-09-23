@@ -14,7 +14,7 @@ type Accept={ok:true;plan:RegionEntryPlan};
 export function evaluateRegionEntryPolicy(input:{
   signal:RegionEntrySignal;bestBid:number;bestAsk:number;contract:Contract;equity:number;peakEquity:number;
   totalRisk:number;longRisk:number;shortRisk:number;grossNotional:number;usedMargin:number;tradeRisks:number[];
-  costRate:number;feeRate:number;slippageRate:number;
+  costRate:number;feeRate:number;slippageRate:number;anchorConfirmationReferencePrice?:number|null;
 }):Accept|Reject{
   const s=input.signal,mid=(input.bestBid+input.bestAsk)/2,spread=(input.bestAsk-input.bestBid)/Math.max(mid,1e-9);
   const entryModel=(s as RegionEntrySignal&{entryModel?:string;anchorExpectedMoveRate?:number}).entryModel;
@@ -53,9 +53,10 @@ export function evaluateRegionEntryPolicy(input:{
     const location=d*(mid-boundary);
     if(location< -s.regionWidth*.30||location>s.regionWidth*.45)
       return{ok:false,reason:"AnchorFlow READY继续保留；当前价格已离开边界优势区，等待更好的成交位置",remainingSpaceRate:remaining};
-    const quoteProgress=d*(price/s.signalPrice-1),proof=anchorFlowExecutableProofRate(input.costRate);
+    const reference=input.anchorConfirmationReferencePrice??NaN,proof=anchorFlowExecutableProofRate(input.costRate);
+    const quoteProgress=Number.isFinite(reference)&&reference>0?d*(price/reference-1):0;
     if(quoteProgress<proof)
-      return{ok:false,reason:"AnchorFlow READY继续保留；等待短时真实可执行盘口给出顺向确认",remainingSpaceRate:remaining};
+      return{ok:false,reason:"AnchorFlow READY继续保留；等待短时真实可执行盘口从回测极值给出顺向确认",remainingSpaceRate:remaining};
     const edgeRatio=remaining/Math.max(lossRate,1e-9);
     if(remaining<=input.costRate||edgeRatio<1.10)
       return{ok:false,reason:"AnchorFlow 回测成立，但当前15m剩余空间仍不足覆盖结构风险与成本",remainingSpaceRate:remaining};
