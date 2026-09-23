@@ -4,7 +4,8 @@ import { evaluateRegionEntryPolicy } from "../lib/region-entry-policy.ts";
 import type { RegionEntrySignal } from "../lib/region-lifecycle.ts";
 
 const contract={quantoMultiplier:.001,leverageMax:50,maintenanceRate:.005,minContracts:1};
-type TestSignal=RegionEntrySignal&{entryModel?:"ANCHOR_FLOW";anchorExpectedMoveRate?:number};
+type TestSignal=RegionEntrySignal&{entryModel?:"ANCHOR_FLOW"|"REGION_LAUNCH";anchorExpectedMoveRate?:number;
+  launchExpectedMoveRate?:number;launchTriggerPrice?:number;launchMaxChaseRate?:number};
 const base=(overrides:Partial<TestSignal>={}):TestSignal=>({
   version:"region-lifecycle-v1",id:"s1",symbol:"BTC_USDT",kind:"MIGRATION",side:"LONG",boundary:"UPPER",
   completedAt:1_000,expiresAt:601_000,signalPrice:101.2,stopPrice:100.6,targetPrice:null,
@@ -79,4 +80,27 @@ test("FOLKS-like rejection with positive target space but terrible reward versus
     costRate:.0031,feeRate:.0007,slippageRate:.00025});
   assert.equal(result.ok,false);
   if(!result.ok)assert.match(result.reason,/完整结构风险/);
+});
+
+
+test("RegionLaunch is executable only after ignition and while chase distance remains bounded",()=>{
+  const launch=base({entryModel:"REGION_LAUNCH",signalPrice:101.60,stopPrice:100.95,
+    launchTriggerPrice:101.05,launchExpectedMoveRate:.04,launchMaxChaseRate:.012});
+  const accepted=run(launch,101.58,101.60);
+  assert.equal(accepted.ok,true);
+  if(accepted.ok){
+    assert.ok(accepted.plan.plannedRisk<=6.01);
+    assert.ok(accepted.plan.notional<=600.01);
+  }
+  const chased=run(launch,102.50,102.52);
+  assert.equal(chased.ok,false);
+  if(!chased.ok)assert.match(chased.reason,/追价距离/);
+});
+
+test("RegionLaunch still rejects a confirmed impulse when remaining expected space no longer pays for risk",()=>{
+  const weak=base({entryModel:"REGION_LAUNCH",signalPrice:101.60,stopPrice:100.20,
+    launchTriggerPrice:101.05,launchExpectedMoveRate:.010,launchMaxChaseRate:.02});
+  const result=run(weak,101.58,101.60);
+  assert.equal(result.ok,false);
+  if(!result.ok)assert.match(result.reason,/剩余空间/);
 });
