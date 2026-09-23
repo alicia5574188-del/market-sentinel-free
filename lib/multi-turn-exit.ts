@@ -1,6 +1,6 @@
 import { type TurnFrameState, type TurnTimeframe } from "./multi-turn-engine.ts";
 import { multiTurnHoldWindows } from "./multi-turn-hold-value.ts";
-import { MULTI_TURN_PROFIT_PROTECTION_VERSION, multiTurnProfitFloor, supportedProfitVersion,
+import { multiTurnProfitFloor, supportedProfitVersion,
   type MultiTurnTradeProfitProtection } from "./multi-turn-profit-protection.ts";
 import type { ExitDecision } from "./forward-protection.ts";
 
@@ -24,8 +24,8 @@ export type MultiTurnExitOverlay={
  * - monotonic protection of already-observed profit;
  * - the PR #379 frame-independent time fallback for long no-progress holdings.
  *
- * No storage, Worker, LIVE or schema dependency is allowed here. Deployed v3/v4
- * floors remain readable, while all newly computed floors use the stable v3 shape.
+ * No storage, Worker, LIVE or schema dependency is allowed here. Deployed floors
+ * remain readable. AnchorFlow may supply its own already-computed monotonic floor.
  */
 export function evaluateMultiTurnExitOverlay(input:{
   timeframe:TurnTimeframe;
