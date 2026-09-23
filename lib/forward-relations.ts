@@ -954,8 +954,19 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
   quotes:Record<string,Quote>;contracts:Record<string,Contract>;entrySymbols?:string[];allowDataCycle?:boolean},s:ForwardState,before:number){
   const{now,paths,quotes,contracts}=input,daily=input.daily??{};
   if(s.strategyAuthorityVersion!==MULTI_TURN_VERSION)throw new Error("Multi-Turn权威版本不一致");
-  if(s.executionVersion!==ANCHOR_FLOW_VERSION)
-    throw new Error("AnchorFlow执行版本尚未完成原子实验纪元切换；拒绝在旧账户上混跑新策略");
+  if(s.executionVersion!==ANCHOR_FLOW_VERSION){
+    // During the short deploy-to-cutover window, the old PAPER generation may
+    // still protect/close its existing positions, but it cannot consume fresh
+    // completed candles or create another old-strategy entry.
+    manageMultiTurn(s,quotes,now);
+    const marked=forwardEquity(s,quotes,now);
+    if(!marked.stalePositions){
+      s.peakEquity=Math.max(s.peakEquity,marked.equity);
+      s.maxDrawdown=Math.max(s.maxDrawdown,1-marked.equity/Math.max(s.peakEquity,1e-9));
+    }
+    s.lastQuoteCycleAt=now;s.latestReason="AnchorFlow新实验纪元等待新鲜5分钟路径完成原子切换；旧账户只管理退出，不再开仓。";
+    return{state:s,changed:s.revision!==before,protectionChanged:forwardProtectionChanged(input.state,s)};
+  }
   const regionUpgrade=s.regionVersion!==REGION_LIFECYCLE_VERSION;
   if(regionUpgrade){
     s.regionVersion=REGION_LIFECYCLE_VERSION;s.regionInitializedAt=now;s.regionLifecycles=s.regionLifecycles??{};s.regionSignals=[];s.entryOpportunities=[];
