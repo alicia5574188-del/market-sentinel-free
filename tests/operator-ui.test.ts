@@ -52,6 +52,13 @@ test("dashboard uses granular runtime labels instead of a generic recovery bucke
   assert.match(dashboard,/statusLabel/);
   assert.doesNotMatch(dashboard,/healthy\?"正常":"恢复中"/);
 });
+test("AnchorFlow history cards never fall through to the 15m legacy label",()=>{
+  const dashboard=readFileSync(new URL("../app/forward-dashboard.tsx",import.meta.url),"utf8");
+  assert.match(dashboard,/const isAnchor=ctx\?\.version==="anchor-flow-entry-v1"/);
+  assert.match(dashboard,/isAnchor\?" · AnchorFlow"/);
+  assert.match(dashboard,/AnchorFlow新版 · 5m区域负责位置与回测启动，15m负责持仓管理/);
+});
+
 test("network failure is not interpreted as confirmed OFF or a successful API save",async()=>{
   const original=globalThis.fetch;let calls=0;
   globalThis.fetch=async()=>{calls++;throw new Error("network unavailable");};
