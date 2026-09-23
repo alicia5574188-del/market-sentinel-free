@@ -223,8 +223,6 @@ type LiveRuntime = {
   activation?: LiveSession | null;
   lastSyncAt: number | null;
   lastError: string | null;
-  readTimeoutStreak?: number;
-  lastReadTimeoutAt?: number | null;
   equity: number | null;
   available: number | null;
   credentialConfigured: boolean;
@@ -236,7 +234,7 @@ type LiveRuntime = {
 
 function initialLiveState(): LiveRuntime {
   return { recordEpochVersion:null,recordEpochAt:null,requestedEnabled: false, operational: false, changedAt: null, lastSyncAt: null, lastError: null,
-    readTimeoutStreak:0,lastReadTimeoutAt:null,equity: null, available: null, credentialConfigured: false, entries: {}, positions: {}, entrySkips: {}, auditEvents: [] };
+    equity: null, available: null, credentialConfigured: false, entries: {}, positions: {}, entrySkips: {}, auditEvents: [] };
 }
 
 function gateLabelFromError(error: unknown) {
@@ -524,6 +522,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private turnoverPersisted: {accountKey:string;at:number} | null = null;
   protected nonAlarmPendingWrites = 0;
   protected liveSyncWork: Promise<void> | null = null;
+  private liveReadTimeoutStreak=0;
   protected liveJournal = new Map<string, unknown>();
   protected liveHistory: LivePosition[] = [];
   private historyReader=new LiveHistoryReader<LivePosition>();
@@ -2144,7 +2143,25 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     const work=this.syncLiveOnce(Date.now(),initialEnable,forceEntryCleanup);
     this.liveSyncWork=work;
-    try { await work; } finally { if(this.liveSyncWork===work)this.liveSyncWork=null; }
+    try {
+      await work;
+      this.liveReadTimeoutStreak=0;
+    } catch(error) {
+      // Background read-only Gate latency is retryable because no exchange
+      // mutation crossed the network boundary. Owner actions and forced OFF
+      // cleanup stay strict and receive the error immediately.
+      if(!initialEnable&&!forceEntryCleanup&&isGateReadTimeoutError(error)){
+        const decision=liveReadTimeoutDecision(this.liveReadTimeoutStreak);
+        this.liveReadTimeoutStreak=decision.streak;
+        if(!decision.escalated){
+          if(isTransientLiveReadErrorText(this.runtime.live.lastError))this.runtime.live.lastError=null;
+          return;
+        }
+        throw new Error(decision.message!);
+      }
+      this.liveReadTimeoutStreak=0;
+      throw error;
+    } finally { if(this.liveSyncWork===work)this.liveSyncWork=null; }
   }
 
   private async syncLiveOnce(now: number, initialEnable = false, forceEntryCleanup = false) {
@@ -2163,8 +2180,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // protection of an already-mapped position.
     const client = await this.gateLive();
     let snapshot = await client.snapshot();
-    this.runtime.live.readTimeoutStreak=0;
-    this.runtime.live.lastReadTimeoutAt=null;
     if(isTransientLiveReadErrorText(this.runtime.live.lastError))this.runtime.live.lastError=null;
     this.turnoverAccountUser=snapshot.account.user==null?null:String(snapshot.account.user);
     const knownTags = new Set([
@@ -3232,33 +3247,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         try {
           await this.syncLive(Date.now());
         } catch (error) {
-          if(isGateReadTimeoutError(error)){
-            const decision=liveReadTimeoutDecision(this.runtime.live.readTimeoutStreak??0),at=Date.now();
-            this.runtime.live.readTimeoutStreak=decision.streak;this.runtime.live.lastReadTimeoutAt=at;
-            if(!decision.escalated){
-              // A single slow Gate read is not an execution failure. Keep the
-              // last confirmed LIVE state and retry on the next 2s alarm. No
-              // mutation/order is retried here and no red execution error is published.
-              if(isTransientLiveReadErrorText(this.runtime.live.lastError))this.runtime.live.lastError=null;
-            }else{
-              const message=decision.message!;
-              const shouldRecord=this.runtime.live.lastError!==message||this.runtime.live.operational;
-              this.runtime.live.operational=false;this.runtime.live.lastError=message;
-              if(shouldRecord)this.recordLiveAudit({observedAt:at,symbol:null,planId:null,stage:"LIVE_CONTROL",level:"RECOVERING",
-                reason:message,error});
-            }
-          }else{
-            this.runtime.live.readTimeoutStreak=0;this.runtime.live.lastReadTimeoutAt=null;
-            const message = safeError(error);
-            const blocked=liveFailureRequiresOff(error);
-            const shouldRecord = this.runtime.live.lastError !== message || this.runtime.live.operational;
-            this.runtime.live.operational = false;
-            this.runtime.live.lastError = message;
-            if (shouldRecord) this.recordLiveAudit({ observedAt: Date.now(), symbol: null, planId: null,
-              stage: "LIVE_CONTROL", level: "RECOVERING",
-              reason: blocked ? `账户纳管冲突，执行暂停但不改写所有者开关：${message}`
-                : `实盘核对暂时失败，所有者开关选择保持不变：${message}`, error });
-          }
+          const message = safeError(error);
+          const blocked=liveFailureRequiresOff(error);
+          const shouldRecord = this.runtime.live.lastError !== message || this.runtime.live.operational;
+          this.runtime.live.operational = false;
+          this.runtime.live.lastError = message;
+          if (shouldRecord) this.recordLiveAudit({ observedAt: Date.now(), symbol: null, planId: null,
+            stage: "LIVE_CONTROL", level: "RECOVERING",
+            reason: blocked ? `账户纳管冲突，执行暂停但不改写所有者开关：${message}`
+              : `实盘核对暂时失败，所有者开关选择保持不变：${message}`, error });
         } finally {
           subrequests += Math.max(0, (this.liveClient?.requestCount ?? liveRequestsBefore) - liveRequestsBefore);
         }
