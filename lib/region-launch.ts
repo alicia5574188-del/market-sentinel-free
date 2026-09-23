@@ -1,6 +1,7 @@
 import { anchorFlowDirectionAllowed } from "./anchor-flow.ts";
 import { REGION_BAR_MS, REGION_LIFECYCLE_VERSION, type RegionCandle, type RegionEntrySignal, type RegionLifecycleState, type RegionZone } from "./region-lifecycle.ts";
 import type { MultiTurnState } from "./multi-turn-engine.ts";
+import { assessStrongBreakout, evaluateMicroRestart } from "./micro-restart.ts";
 
 export const REGION_LAUNCH_VERSION="region-launch-v2";
 export const REGION_LAUNCH_SIGNAL_MS=120_000;
@@ -187,13 +188,6 @@ function readySignal(s:RegionLaunchState):RegionLaunchSignal|null{
 
 
 const minuteCompleteAt=(row:RegionCandle)=>row.time*1000+REGION_LAUNCH_MINUTE_MS;
-function directionalBar(row:RegionCandle,side:"LONG"|"SHORT"){
-  const d=side==="LONG"?1:-1,range=Math.max(row.high-row.low,1e-12),body=Math.max(0,d*(row.close-row.open));
-  const adverseWick=side==="LONG"?Math.max(0,row.high-Math.max(row.open,row.close)):Math.max(0,Math.min(row.open,row.close)-row.low);
-  const closeLocation=side==="LONG"?(row.close-row.low)/range:(row.high-row.close)/range;
-  return{bodyRate:body/Math.max(row.open,1e-12),adverseWickRate:adverseWick/Math.max(row.open,1e-12),
-    wickToBody:adverseWick/Math.max(body,1e-12),closeLocation};
-}
 function launchTriggers(s:RegionLaunchState,costRate:number){
   const triggerBuffer=Math.max(s.motherWidth*.02,s.motherCenter*costRate*.20);
   return{long:Math.max(s.motherUpper,s.compression!.upper)+triggerBuffer,
@@ -210,64 +204,63 @@ export function advanceRegionLaunchMinutes(input:{states:Record<string,RegionLau
       &&row.high>=row.low&&row.low>0&&minuteCompleteAt(row)<=input.now).sort((a,b)=>a.time-b.time);
     if(!rows.length){states[symbol]=s;continue;}
     const {long:longTrigger,short:shortTrigger}=launchTriggers(s,input.costRate);
-    const fresh=rows.filter(row=>minuteCompleteAt(row)>Math.max(s.armedAt??0,s.lastMinuteAt??0));
-    for(let index=0;index<fresh.length;index++){
-      const row=fresh[index]!,at=minuteCompleteAt(row);
-      s.lastMinuteAt=at;
-      if(s.phase==="ARMED"){
+
+    if(s.phase==="ARMED"){
+      const fresh=rows.filter(row=>minuteCompleteAt(row)>Math.max(s.armedAt??0,s.lastMinuteAt??0));
+      for(const row of fresh){
+        const at=minuteCompleteAt(row);s.lastMinuteAt=at;
+        // Late one-minute history can restore observation state, but can never
+        // create a retroactive chase after the move has already happened.
+        if(input.now-at>75_000){s.reason="RegionLaunch收到迟到的1分钟K，仅补齐观察，不历史补追。";continue;}
         const side=row.close>=longTrigger?"LONG":row.close<=shortTrigger?"SHORT":null;
         if(!side||!anchorFlowDirectionAllowed(input.frames,symbol,side))continue;
-        const d=side==="LONG"?1:-1,trigger=side==="LONG"?longTrigger:shortTrigger,metrics=directionalBar(row,side);
-        const impulse=d*(row.close/trigger-1);
-        const minImpulse=Math.max(.0030,input.costRate*1.10,s.motherWidthRate*.10);
-        const strongBody=Math.max(.0020,input.costRate*.75,s.motherWidthRate*.055);
-        const strong=impulse>=minImpulse&&metrics.bodyRate>=strongBody&&metrics.closeLocation>=.72&&metrics.wickToBody<=.45;
-        if(!strong){
-          s.reason=`RegionLaunch继续观察：1分钟价格已离开区域，但突破K质量不足（顺向推进${(impulse*100).toFixed(2)}%，实体${(metrics.bodyRate*100).toFixed(2)}%，上/下影相对实体${metrics.wickToBody.toFixed(2)}）；不把带明显反向影线的突破当发射。`;
-          continue;
-        }
-        s.phase="IGNITION";s.ignitionSide=side;s.ignitionAt=at;s.triggerPrice=trigger;s.breakoutOpen=row.open;s.breakoutHigh=row.high;
-        s.breakoutLow=row.low;s.breakoutClose=row.close;s.breakoutImpulseRate=impulse;s.breakoutWickRate=metrics.adverseWickRate;
+        const trigger=side==="LONG"?longTrigger:shortTrigger;
+        const quality=assessStrongBreakout({bar:row,side,triggerPrice:trigger,costRate:input.costRate,regionWidthRate:s.motherWidthRate});
+        if(!quality.ok){s.reason=`RegionLaunch继续观察：${quality.reason}`;continue;}
+        s.phase="IGNITION";s.ignitionSide=side;s.ignitionAt=at;s.triggerPrice=trigger;
+        s.breakoutOpen=row.open;s.breakoutHigh=row.high;s.breakoutLow=row.low;s.breakoutClose=row.close;
+        s.breakoutImpulseRate=quality.impulseRate;s.breakoutWickRate=quality.adverseWickRate;
         s.pullbackExtreme=side==="LONG"?row.low:row.high;
-        s.reason=`RegionLaunch IGNITION：1分钟强势突破K成立，实体与收盘位置合格；允许随后出现小回调，不按回调K线数量计数，等待第一根重新顺向的1分钟K。`;
-        continue;
+        s.reason="RegionLaunch IGNITION：强势1分钟突破K成立；允许后续出现小回调，但突破实体必须持续明显大于累计反向回调，等待第一根重新顺向1分钟K。";
+        break;
       }
-      if(s.phase!=="IGNITION"||!s.ignitionSide||s.triggerPrice==null||s.breakoutClose==null||s.ignitionAt==null)continue;
-      const side=s.ignitionSide,d=side==="LONG"?1:-1,trigger=s.triggerPrice;
-      s.pullbackExtreme=side==="LONG"?Math.min(s.pullbackExtreme??row.low,row.low):Math.max(s.pullbackExtreme??row.high,row.high);
-      const current=d*(row.close/trigger-1),breakoutExtreme=side==="LONG"?s.breakoutHigh!:s.breakoutLow!;
-      const pullbackDepth=side==="LONG"
-        ?Math.max(0,(breakoutExtreme-(s.pullbackExtreme??row.low))/Math.max(breakoutExtreme-trigger,1e-12))
-        :Math.max(0,((s.pullbackExtreme??row.high)-breakoutExtreme)/Math.max(trigger-breakoutExtreme,1e-12));
-      if(current<=0||pullbackDepth>.72){
+    }
+
+    if(s.phase==="IGNITION"&&s.ignitionSide&&s.triggerPrice!=null&&s.ignitionAt!=null
+      &&s.breakoutOpen!=null&&s.breakoutHigh!=null&&s.breakoutLow!=null&&s.breakoutClose!=null){
+      const breakout:RegionCandle={time:Math.floor((s.ignitionAt-REGION_LAUNCH_MINUTE_MS)/1000),
+        open:s.breakoutOpen,high:s.breakoutHigh,low:s.breakoutLow,close:s.breakoutClose,volume:1};
+      const following=rows.filter(row=>minuteCompleteAt(row)>s.ignitionAt);
+      const evaluated=evaluateMicroRestart({breakout,following,side:s.ignitionSide,triggerPrice:s.triggerPrice,
+        costRate:input.costRate,regionWidthRate:s.motherWidthRate});
+      s.pullbackExtreme=evaluated.supportPrice??s.pullbackExtreme;
+      s.lastMinuteAt=Math.max(s.lastMinuteAt??0,...following.map(minuteCompleteAt),s.ignitionAt);
+      if(evaluated.state==="FAIL"){
         s.failedDepartures++;s.phase="ARMED";s.cooldownUntil=0;clearIgnition(s);clearReady(s);
-        s.reason="RegionLaunch突破后回调已经回到发射边界或吞掉超过72%的突破距离；本次视为失败离区，成熟母区域继续保留。";
-        continue;
+        s.reason=`RegionLaunch本次启动失败：${evaluated.reason} 成熟母区域继续保留观察。`;
+      }else if(evaluated.state==="WAIT"){
+        s.reason=`RegionLaunch继续观察：${evaluated.reason}`;
+      }else if(evaluated.restartAt!=null&&evaluated.restartPrice!=null){
+        const side=s.ignitionSide,d=side==="LONG"?1:-1,trigger=s.triggerPrice;
+        const impulse=d*(evaluated.restartPrice/trigger-1);
+        const maxChase=Math.max(.009,Math.min(.025,Math.max(s.motherWidthRate*.60,input.costRate*4)));
+        if(input.now-evaluated.restartAt>75_000){
+          s.phase="WATCH";s.cooldownUntil=input.now+REGION_BAR_MS;clearIgnition(s);clearReady(s);
+          s.reason="RegionLaunch重新启动1分钟K到达过晚；只记录结构，不历史补追。";
+        }else if(impulse>maxChase){
+          s.phase="WATCH";s.cooldownUntil=evaluated.restartAt+REGION_BAR_MS;clearIgnition(s);clearReady(s);
+          s.reason="RegionLaunch小回调后重新启动，但确认时离发射边界过远；不补追，等待新的压缩或更好位置。";
+        }else{
+          const support=evaluated.supportPrice!,microBuffer=Math.max(trigger*.0015,s.compression.width*.08,input.costRate*trigger*.30);
+          const fallbackGap=Math.min(trigger*.0075,Math.max(trigger*.0025,s.compression.width*.22));
+          const stop=side==="LONG"?Math.max(trigger-fallbackGap,support-microBuffer):Math.min(trigger+fallbackGap,support+microBuffer);
+          const f15=input.frames?.[symbol]?.["15m"];
+          const expected=Math.min(.20,Math.max(.015,s.motherWidthRate*1.50,impulse*3,f15?.expectedMoveRate??0));
+          s.phase="READY";s.readyAt=evaluated.restartAt;s.readySide=side;s.readySignalPrice=evaluated.restartPrice;s.readyStopPrice=stop;
+          s.readyImpulseRate=impulse;s.readyExpectedMoveRate=expected;s.readyMaxChaseRate=maxChase;s.readyConfirmationMs=evaluated.restartAt-s.ignitionAt;
+          s.reason=`RegionLaunch READY：${evaluated.reason} 等待当前可执行盘口成交。`;
+        }
       }
-      const previousRows=rows.filter(candidate=>minuteCompleteAt(candidate)<at);
-      const prior=previousRows.at(-1);if(!prior)continue;
-      const metrics=directionalBar(row,side),resumeMove=d*(row.close/prior.close-1);
-      const localBreak=side==="LONG"?row.close>prior.high:row.close<prior.low;
-      const minResume=Math.max(.0006,input.costRate*.25);
-      const resumed=localBreak&&metrics.bodyRate>=minResume&&metrics.closeLocation>=.60&&metrics.wickToBody<=.80&&resumeMove>0;
-      if(!resumed){
-        s.reason=`RegionLaunch继续观察：突破后允许回调；当前1分钟K尚未重新顺向突破前一根局部${side==="LONG"?"高点":"低点"}，不进场。`;
-        continue;
-      }
-      const impulse=d*(row.close/trigger-1),maxChase=Math.max(.009,Math.min(.025,Math.max(s.motherWidthRate*.60,input.costRate*4)));
-      if(impulse>maxChase){
-        s.phase="WATCH";s.cooldownUntil=at+REGION_BAR_MS;clearIgnition(s);clearReady(s);
-        s.reason="RegionLaunch已经重新顺向，但确认时离发射边界过远；不补追，等待新的压缩或回到更好位置。";
-        continue;
-      }
-      const support=s.pullbackExtreme!,microBuffer=Math.max(trigger*.0015,s.compression.width*.08,input.costRate*trigger*.30);
-      const fallbackGap=Math.min(trigger*.0075,Math.max(trigger*.0025,s.compression.width*.22));
-      const stop=side==="LONG"?Math.max(trigger-fallbackGap,support-microBuffer):Math.min(trigger+fallbackGap,support+microBuffer);
-      const f15=input.frames?.[symbol]?.["15m"];
-      const expected=Math.min(.20,Math.max(.015,s.motherWidthRate*1.50,impulse*3,f15?.expectedMoveRate??0));
-      s.phase="READY";s.readyAt=at;s.readySide=side;s.readySignalPrice=row.close;s.readyStopPrice=stop;
-      s.readyImpulseRate=impulse;s.readyExpectedMoveRate=expected;s.readyMaxChaseRate=maxChase;s.readyConfirmationMs=at-s.ignitionAt;
-      s.reason=`RegionLaunch READY：1分钟突破K后回调未破坏发射结构，${Math.round((at-s.ignitionAt)/60_000)}分钟后第一根重新顺向K突破前一根局部${side==="LONG"?"高点":"低点"}；等待当前可执行盘口成交。`;
     }
     s.updatedAt=input.now;states[symbol]=s;
   }
