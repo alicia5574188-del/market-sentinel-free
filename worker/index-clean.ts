@@ -3471,7 +3471,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         marketData:{transport:this.gateStream.status(exportedAt),feedQuality:this.runtime.feedQuality,
           symbols:this.runtime.symbols.map(symbol=>({symbol,quoteAt:this.runtime.evidence[symbol]?.observedAt??null,
             entryReady:this.forwardQuotes(exportedAt)[symbol]?.entryReady===true,
-            completedMinuteAt:this.forwardMinutePaths()[symbol]?.at(-1)?.time??null,
+            completedMinuteAt:this.forwardMinutePaths()[symbol]?.at(-1)
+              ?(this.forwardMinutePaths()[symbol]!.at(-1)!.time+60)*1_000:null,
             failure:this.runtime.feedFailures[symbol]??null}))},
         measurements: state?.samples ?? [],
         research:{version:"multi-turn-trade-review-v1",purpose:"逐单复盘入场依据、持仓价值与退出结果",trades:researchTrades},
