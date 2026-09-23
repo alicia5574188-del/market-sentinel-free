@@ -69,3 +69,19 @@ test("protected PAPER/authentication sources remain unchanged by the LIVE adapte
   const frozen=JSON.parse(readFileSync(new URL("./ui-authority-baseline.json",import.meta.url),"utf8")) as Record<string,string>;
   for(const[path,sha]of Object.entries(frozen))assert.equal(createHash("sha256").update(readFileSync(new URL(`../${path}`,import.meta.url))).digest("hex"),sha,path);
 });
+
+test("browser TimeoutError is normalized to a Chinese no-replay warning",async()=>{
+  const original=globalThis.fetch;
+  globalThis.fetch=async()=>{const error=new Error("The operation was aborted due to timeout");error.name="TimeoutError";throw error;};
+  try{
+    await assert.rejects(()=>operatorRequest("/api/live/history"),e=>e instanceof OperatorRequestError&&e.status===0
+      &&/未收到服务器确认/.test(e.message)&&!/The operation was aborted due to timeout/.test(e.message));
+  }finally{globalThis.fetch=original;}
+});
+
+test("LIVE console suppresses transient read-only timeout banners but keeps real execution errors visible",()=>{
+  const live=readFileSync(new URL("../app/live-console.tsx",import.meta.url),"utf8");
+  assert.match(live,/!isTransientLiveReadError\(live\.lastError\)/);
+  assert.match(live,/OperatorRequestError&&e\.status===0/);
+  assert.match(live,/执行提示：\{live\.lastError\}/);
+});

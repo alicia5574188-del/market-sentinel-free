@@ -11,7 +11,7 @@ import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
   PAPER_BANKRUPTCY_EQUITY, PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
-import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, isGateReadTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
 import { LIVE_SESSION_VERSION, establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, sameLiveSession, type LiveSession } from "../lib/live-session.ts";
 import type { GateSizeRules, SizeDiagnostic } from "../lib/gate-quantity.ts";
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
@@ -49,6 +49,7 @@ import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBu
 import { EquityReader } from "../lib/equity-reader.ts";
 import { EQUITY_CURVE_VERSION } from "../lib/equity-curve.ts";
 import { resourceDay, rollResourceDay, RESOURCE_DAY_POLICY, type ResourceCounters } from "../lib/resource-day.ts";
+import {isTransientLiveReadErrorText,liveReadTimeoutDecision} from "../lib/live-read-resilience.ts";
 import { LIVE_TURNOVER_PREFIX, LIVE_TURNOVER_VERSION, initialTurnover, validateTurnover, nextFillWindow,
   prepareTurnoverPage, turnoverView, type TurnoverState, type GateConfirmedFill } from "../lib/live-turnover.ts";
 import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwardMirrorSources, mirrorPositionRisk,
@@ -521,6 +522,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private turnoverPersisted: {accountKey:string;at:number} | null = null;
   protected nonAlarmPendingWrites = 0;
   protected liveSyncWork: Promise<void> | null = null;
+  private liveReadTimeoutStreak=0;
   protected liveJournal = new Map<string, unknown>();
   protected liveHistory: LivePosition[] = [];
   private historyReader=new LiveHistoryReader<LivePosition>();
@@ -2141,7 +2143,25 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
     const work=this.syncLiveOnce(Date.now(),initialEnable,forceEntryCleanup);
     this.liveSyncWork=work;
-    try { await work; } finally { if(this.liveSyncWork===work)this.liveSyncWork=null; }
+    try {
+      await work;
+      this.liveReadTimeoutStreak=0;
+    } catch(error) {
+      // Background read-only Gate latency is retryable because no exchange
+      // mutation crossed the network boundary. Owner actions and forced OFF
+      // cleanup stay strict and receive the error immediately.
+      if(!initialEnable&&!forceEntryCleanup&&isGateReadTimeoutError(error)){
+        const decision=liveReadTimeoutDecision(this.liveReadTimeoutStreak);
+        this.liveReadTimeoutStreak=decision.streak;
+        if(!decision.escalated){
+          if(isTransientLiveReadErrorText(this.runtime.live.lastError))this.runtime.live.lastError=null;
+          return;
+        }
+        throw new Error(decision.message!);
+      }
+      this.liveReadTimeoutStreak=0;
+      throw error;
+    } finally { if(this.liveSyncWork===work)this.liveSyncWork=null; }
   }
 
   private async syncLiveOnce(now: number, initialEnable = false, forceEntryCleanup = false) {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { OperatorRequestError, operatorRequest, numberText as num, signedText as signed, operatorTime as time, contractText,
+import { OperatorRequestError, operatorRequest, isTransientLiveReadError, numberText as num, signedText as signed, operatorTime as time, contractText,
   holdingTime, livePositionMark, type AuthSession, type CredentialStatus, type CredentialVerification,
   type LivePosition, type LiveRuntime, type OperatorRuntime } from "../lib/operator-ui.ts";
 
@@ -34,7 +34,7 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
     if(view!=="trade"||!auth?.authenticated||(section!=="history"&&section!=="archive"))return;
     let active=true,reading=false;
     const load=async()=>{if(reading)return;reading=true;try{const value=await operatorRequest<HistoryView>("/api/live/history");if(active){setHistoryView(value);setHistoryError(null);}}
-      catch(e){if(active)setHistoryError(e instanceof Error?e.message:"历史记录读取失败");}finally{reading=false;}};
+      catch(e){if(active&&!(e instanceof OperatorRequestError&&e.status===0))setHistoryError(e instanceof Error?e.message:"历史记录读取失败");}finally{reading=false;}};
     void load();const timer=setInterval(()=>void load(),10000);return()=>{active=false;clearInterval(timer);};
   },[auth?.authenticated,auth?.memberId,section,view]);
   const submitting=useRef(false);
@@ -43,7 +43,8 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
     let active=true;
     if(!auth?.authenticated)return;
     void operatorRequest<{credential:CredentialStatus}>("/api/live/credentials").then(p=>{if(active)setCredential(p.credential);})
-      .catch(e=>{if(active){setError(e instanceof Error?e.message:"读取API状态失败");if(e instanceof OperatorRequestError&&e.status===401)onSession({...auth,authenticated:false});}});
+      .catch(e=>{if(active){if(e instanceof OperatorRequestError&&e.status===0)return;
+        setError(e instanceof Error?e.message:"读取API状态失败");if(e instanceof OperatorRequestError&&e.status===401)onSession({...auth,authenticated:false});}});
     return()=>{active=false;};
   },[auth,onSession]);
 
@@ -140,7 +141,7 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
     </section>
     <section className="fr-section"><div className="fr-section-head"><div><small>API 管理</small><h2>Gate API</h2></div><button type="button" className="fr-text-button" onClick={onRefresh}>刷新状态 ↻</button></div>
       <div className="fr-setting"><div><h3>API状态</h3><p>{credential?.keyHint??"密钥内容不会回显"}</p></div><b>{credential?credential.configured?"已保存":"未配置":"读取中"}</b></div>
-      <div className="fr-setting"><div><h3>最近账户核对</h3><p>{live?.lastError??"以Gate账户回报为准。"}</p></div><b>{time(live?.lastSyncAt)}</b></div>
+      <div className="fr-setting"><div><h3>最近账户核对</h3><p>{live?.lastError&&!isTransientLiveReadError(live.lastError)?live.lastError:"以Gate账户回报为准。"}</p></div><b>{time(live?.lastSyncAt)}</b></div>
       <form className="fr-form" onSubmit={saveCredential}><label>API Key<input type="password" autoComplete="off" spellCheck={false} value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="填写新的Gate API Key" disabled={enabled}/></label>
         <label>API Secret<input type="password" autoComplete="new-password" spellCheck={false} value={apiSecret} onChange={e=>setApiSecret(e.target.value)} placeholder="填写新的Gate API Secret" disabled={enabled}/></label>
         <p className="fr-note">只有添加或更换API时需要填写。保存API不会自动开启实盘；实盘开启时不能更换或删除。</p>
@@ -161,7 +162,7 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
       <LiveStat title="当前持仓" value={live?`${positions.length} 笔`:"—"} detail={entries.length?`待执行 ${entries.length} 笔`:"无待执行订单"}/></section>
     <div className="fr-account-line"><span>实盘成交额 {num(live?.turnover?.systemTagged)} U · 已扣费用 {num(live?.turnover?.systemTaggedFees)} U</span><b className={copyHealthy?"fr-positive":missing||mirror?.error?"fr-negative":""}>复制一致性 {copyLabel}</b></div>
     <p className="fr-note">Gate成交核对至 {time(live?.turnover?.checkedThrough)}{live?.turnover?.catchingUp?" · 正在补齐":""} · 账户核对 {time(live?.lastSyncAt)}</p>
-    {live?.lastError&&<p className="fr-error" role="status">执行提示：{live.lastError}</p>}
+    {live?.lastError&&!isTransientLiveReadError(live.lastError)&&<p className="fr-error" role="status">执行提示：{live.lastError}</p>}
     {error&&<div className="fr-error" role="alert"><b>操作未完成</b><p>{error}</p></div>}
     {notice&&<div className="fr-notice" role="status">{notice}</div>}
     <nav className="fr-live-tabs fr-live-record-tabs" aria-label="实盘子导航">{tabs.map(([id,title])=><button type="button" key={id} aria-current={section===id?"page":undefined}

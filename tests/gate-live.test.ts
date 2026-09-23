@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, LiveEntrySizingError, liveEntryDisposition, liveOrderId, liveStopPriceForTick } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, GateReadTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveOrderId, liveStopPriceForTick } from "../lib/gate-live.ts";
 import type { PaperPlan } from "../lib/liquidity-core.ts";
 
 function plan(marketState: PaperPlan["marketState"], side: PaperPlan["side"]): PaperPlan {
@@ -216,4 +216,49 @@ test("int64 order IDs from Gate snapshots survive JSON parsing and cancellation 
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+
+test("Gate LIVE hedges a timed-out read and still returns a complete snapshot without duplicating any write",async()=>{
+  const real=globalThis.fetch;
+  const attempts=new Map<string,number>();
+  globalThis.fetch=async(input,init)=>{
+    const req=new Request(input,init),path=new URL(req.url).pathname;
+    attempts.set(path,(attempts.get(path)??0)+1);
+    if(path.endsWith("/accounts")&&(attempts.get(path)??0)===1){
+      const error=new Error("The operation was aborted due to timeout");error.name="TimeoutError";throw error;
+    }
+    if(path.endsWith("/accounts"))return Response.json({user:1,total:"100",available:"100",unrealised_pnl:"0",in_dual_mode:false});
+    return Response.json([]);
+  };
+  try{
+    const client=new GateLiveClient({apiKey:"abcdefgh12345678",apiSecret:"secret-value-12345678",environment:"live"});
+    const snapshot=await client.snapshot();
+    assert.equal(snapshot.account.total,"100");
+    assert.equal(snapshot.positions.length,0);
+    assert.equal(attempts.get("/api/v4/futures/usdt/accounts"),2);
+    assert.equal(client.requestCount,5,"four normal reads plus one safe hedge");
+  }finally{globalThis.fetch=real;}
+});
+
+test("Gate LIVE never retries a timed-out write because the exchange may already have accepted it",async()=>{
+  const real=globalThis.fetch;let requests=0;
+  globalThis.fetch=async()=>{requests++;const error=new Error("The operation was aborted due to timeout");error.name="TimeoutError";throw error;};
+  try{
+    const client=new GateLiveClient({apiKey:"abcdefgh12345678",apiSecret:"secret-value-12345678",environment:"live"});
+    await assert.rejects(client.setLeverage("BTC_USDT",10),error=>error instanceof Error
+      &&/提交结果可能不明确/.test(error.message)&&!/The operation was aborted due to timeout/.test(error.message));
+    assert.equal(requests,1);
+    assert.equal(client.requestCount,1);
+  }finally{globalThis.fetch=real;}
+});
+
+test("a fully timed-out Gate read surfaces a typed Chinese read-timeout instead of the platform English exception",async()=>{
+  const real=globalThis.fetch;
+  globalThis.fetch=async()=>{const error=new Error("The operation was aborted due to timeout");error.name="TimeoutError";throw error;};
+  try{
+    const client=new GateLiveClient({apiKey:"abcdefgh12345678",apiSecret:"secret-value-12345678",environment:"live"});
+    await assert.rejects(client.snapshot(),error=>error instanceof GateReadTimeoutError
+      &&/Gate只读核对超时/.test(error.message)&&!/The operation was aborted due to timeout/.test(error.message));
+  }finally{globalThis.fetch=real;}
 });
