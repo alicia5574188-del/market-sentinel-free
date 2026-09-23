@@ -1,6 +1,7 @@
 import { TURN_CONFIG } from "./multi-turn-engine.ts";
 import { MULTI_TURN_MIN_LEVERAGE, MULTI_TURN_TARGET_LEVERAGE, multiTurnEntryLeverage } from "./multi-turn-entry-policy.ts";
 import { REGION_DETACH_WIDTHS, type RegionEntrySignal } from "./region-lifecycle.ts";
+import { anchorFlowExecutableProofRate } from "./anchor-flow.ts";
 
 export const REGION_ENTRY_POLICY_VERSION="region-entry-policy-v1";
 
@@ -42,10 +43,19 @@ export function evaluateRegionEntryPolicy(input:{
     const outside=s.boundary==="UPPER"?(mid-s.regionUpper)/s.regionWidth:(s.regionLower-mid)/s.regionWidth;
     if(outside>.15)return{ok:false,reason:"边界拒绝后价格又重新跑回区域外，原回归事件失效",remainingSpaceRate:0};
     remaining=targetRate-input.costRate;
+    if(remaining/Math.max(lossRate,1e-9)<1)
+      return{ok:false,reason:"区域拒绝虽有回归空间，但净收益不足覆盖完整结构风险与成本",remainingSpaceRate:remaining};
   }else{
     if(!isAnchor)return{ok:false,reason:"直接区域迁移已退役；只允许 AnchorFlow 第一次回测重新启动事件",remainingSpaceRate:0};
     const expected=(s as RegionEntrySignal&{anchorExpectedMoveRate?:number}).anchorExpectedMoveRate??0;
     remaining=Math.max(0,expected-input.costRate);
+    const boundary=s.side==="LONG"?s.regionUpper:s.regionLower;
+    const location=d*(mid-boundary);
+    if(location< -s.regionWidth*.30||location>s.regionWidth*.45)
+      return{ok:false,reason:"AnchorFlow READY继续保留；当前价格已离开边界优势区，等待更好的成交位置",remainingSpaceRate:remaining};
+    const quoteProgress=d*(price/s.signalPrice-1),proof=anchorFlowExecutableProofRate(input.costRate);
+    if(quoteProgress<proof)
+      return{ok:false,reason:"AnchorFlow READY继续保留；等待短时真实可执行盘口给出顺向确认",remainingSpaceRate:remaining};
     const edgeRatio=remaining/Math.max(lossRate,1e-9);
     if(remaining<=input.costRate||edgeRatio<1.10)
       return{ok:false,reason:"AnchorFlow 回测成立，但当前15m剩余空间仍不足覆盖结构风险与成本",remainingSpaceRate:remaining};
