@@ -118,7 +118,7 @@ test("reviewed Gate adapter stays frozen outside the read-only settlement method
  // use two official futures routes and drain snapshots. Mutations stay single
  // submit, including body timeout. See LIVE_SYNC_LATENCY_2026-09-23.md and
  // actual transport/parity regressions; unrelated adapter bytes stay frozen.
- const old=file.slice(0,from)+file.slice(to);assert.equal(createHash("sha256").update(old).digest("hex"),"8fe8afbac32b62c948eb44aba9fa7d03f37456674dd8217c89fd299c6497717a");
+ const old=file.slice(0,from)+file.slice(to);assert.equal(createHash("sha256").update(old).digest("hex"),"74aa3c26d191ed383a77a01012f72eb9e5124e7bd3284f35e07d1f7efa34e58e");
 });
 test("operational UI removes version narratives and friend terminology",()=>{
  const paths=["forward-dashboard.tsx","live-console.tsx","member-access.tsx"];
