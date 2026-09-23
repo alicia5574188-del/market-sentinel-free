@@ -517,6 +517,7 @@ function manageMultiTurn(s:ForwardState,quotes:Record<string,Quote>,now:number){
           &&now<flow.expiresAt&&lifecycle?.zone?.id===anchorContext.regionId){
           s.anchorConsumed??={};delete s.anchorConsumed[`${anchorContext.regionId}:${t.side}`];
           flow.phase="READY";flow.consumedAt=null;flow.readyAt=now;flow.firedAt=now;flow.retryCount=(flow.retryCount??0)+1;
+          flow.confirmationExtreme=null;
           flow.reason="第一次成交未产生应有真实浮赢，但区域结构仍有效；释放消费标记并允许一次重新启动，等待新的盘口顺向确认。";
         }
       }
@@ -936,14 +937,27 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
     if(equity<=0){reject("净值不足，不自动充值");break;}
     if(marked.stalePositions){reject("已有持仓估值过期，只管理风险不新增仓位");break;}
     const spread=(q.bestAsk-q.bestBid)/Math.max((q.bestAsk+q.bestBid)/2,1e-9),cost=turnModeledCost("5m",spread);
+    const d=signal.side==="LONG"?1:-1;
+    let anchorConfirmationReferencePrice:number|null=null;
+    if(anchorSignal){
+      const flow=s.anchorFlows?.[signal.symbol];
+      if(!flow||flow.regionId!==signal.regionId||flow.side!==signal.side||flow.phase!=="READY"){
+        reject("AnchorFlow READY状态与可执行事件不一致；保留机会等待状态同步");continue;
+      }
+      const executable=(signal.side==="LONG"?q.bestAsk:q.bestBid)*(1+d*PAPER_COST.slippageRate);
+      flow.confirmationExtreme=flow.confirmationExtreme==null?executable
+        :signal.side==="LONG"?Math.min(flow.confirmationExtreme,executable):Math.max(flow.confirmationExtreme,executable);
+      anchorConfirmationReferencePrice=flow.confirmationExtreme;
+    }
     const totalRisk=s.positions.reduce((n,t)=>n+t.plannedRisk,0),longRisk=s.positions.filter(t=>t.side==="LONG").reduce((n,t)=>n+t.plannedRisk,0),
       shortRisk=s.positions.filter(t=>t.side==="SHORT").reduce((n,t)=>n+t.plannedRisk,0);
     const plan=evaluateRegionEntryPolicy({signal,bestBid:q.bestBid,bestAsk:q.bestAsk,contract:meta,equity,peakEquity:s.peakEquity,totalRisk,longRisk,shortRisk,
       grossNotional:s.positions.reduce((n,t)=>n+t.notional,0),usedMargin:s.positions.reduce((n,t)=>n+t.margin,0),
-      tradeRisks:s.positions.map(t=>t.plannedRisk),costRate:cost,feeRate:PAPER_COST.feeRate,slippageRate:PAPER_COST.slippageRate});
+      tradeRisks:s.positions.map(t=>t.plannedRisk),costRate:cost,feeRate:PAPER_COST.feeRate,slippageRate:PAPER_COST.slippageRate,
+      anchorConfirmationReferencePrice});
     if(!plan.ok){reject(plan.reason);continue;}
     const {price,count,quantity,notional,leverage,margin,plannedRisk,entryFee,remainingSpaceRate:remaining}=plan.plan;
-    const d=signal.side==="LONG"?1:-1,stopRate=d*(price-signal.stopPrice)/Math.max(price,1e-9);
+    const stopRate=d*(price-signal.stopPrice)/Math.max(price,1e-9);
     const rule=regionRule(s,signal,stopRate,remaining,now);
     const contextTimeframe:TurnTimeframe=anchorSignal?"15m":"5m";
     const frame=s.turnEngine?.frames[signal.symbol]?.[contextTimeframe],trend=s.turnEngine?.frames[signal.symbol]?.["1h"];
