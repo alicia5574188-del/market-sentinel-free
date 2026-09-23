@@ -1329,6 +1329,16 @@ export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols
     ...launchSignals.map(x=>x.symbol),...launches.map(x=>x.symbol)])];
 }
 
+export function forwardUrgentMinuteSymbols(s:ForwardState,entrySymbols?:Iterable<string>){
+  if(s.strategyAuthorityVersion!==MULTI_TURN_VERSION)return [];
+  const allowed=entrySymbols?new Set(entrySymbols):null;
+  const priority:Record<RegionLaunchState["phase"],number>={IGNITION:0,ARMED:1,READY:2,WATCH:9,CONSUMED:9};
+  return Object.values(s.regionLaunches??{}).filter(row=>["IGNITION","ARMED"].includes(row.phase)
+    &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>priority[a.phase]-priority[b.phase]
+      ||b.quality-a.quality||b.updatedAt-a.updatedAt||a.symbol.localeCompare(b.symbol)).map(row=>row.symbol);
+}
+
+
 export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iterable<string>){
   if(s.strategyAuthorityVersion===MULTI_TURN_VERSION){
     const allowed=entrySymbols?new Set(entrySymbols):null;
