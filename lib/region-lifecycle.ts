@@ -3,6 +3,7 @@ export const REGION_BAR_MS=300_000;
 export const REGION_WINDOW_BARS=[12,18,24,36,48] as const;
 export const REGION_DETACH_WIDTHS=.60;
 export const REGION_SIGNAL_TTL_BARS=2;
+export const REGION_MIGRATION_SIGNAL_TTL_BARS=4;
 
 export type RegionCandle={time:number;open:number;high:number;low:number;close:number;volume:number};
 export type RegionStatus="NO_REGION"|"IN_REGION"|"PROBE_UP"|"PROBE_DOWN"|"ACCEPTED_UP"|"ACCEPTED_DOWN"|"DETACHED_UP"|"DETACHED_DOWN";
@@ -109,7 +110,7 @@ function migrationSignal(zone:RegionZone,row:RegionCandle,side:"LONG"|"SHORT"):R
   const stopPrice=side==="LONG"?zone.upper-zone.width*.20:zone.lower+zone.width*.20;
   const completedAt=completeAt(row);
   return{version:REGION_LIFECYCLE_VERSION,id:`rs-${zone.id}-M-${side}-${completedAt}`,symbol:zone.symbol,kind:"MIGRATION",side,boundary,
-    completedAt,expiresAt:completedAt+REGION_SIGNAL_TTL_BARS*REGION_BAR_MS,signalPrice,stopPrice,targetPrice:null,
+    completedAt,expiresAt:completedAt+REGION_MIGRATION_SIGNAL_TTL_BARS*REGION_BAR_MS,signalPrice,stopPrice,targetPrice:null,
     regionId:zone.id,regionConfirmedAt:zone.confirmedAt,regionLower:zone.lower,regionUpper:zone.upper,regionCenter:zone.center,
     regionWidth:zone.width,regionWidthRate:zone.widthRate,
     reason:`5m区域${zone.lower.toPrecision(6)}-${zone.upper.toPrecision(6)}外连续收盘被接受，顺${side==="LONG"?"上":"下"}迁移进入；重新接受旧区域即失效。`};
