@@ -2146,7 +2146,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     try {
       await work;
       this.liveReadTimeoutStreak=0;
-      if(isTransientLiveReadErrorText(this.runtime.live.lastError))this.runtime.live.lastError=null;
     } catch(error) {
       // Background read-only Gate latency is retryable because no exchange
       // mutation crossed the network boundary. Owner actions and forced OFF
