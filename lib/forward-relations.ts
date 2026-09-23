@@ -1016,7 +1016,7 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
     const anchorSignal=signal.kind==="MIGRATION"&&model==="ANCHOR_FLOW",launchSignal=signal.kind==="MIGRATION"&&model==="REGION_LAUNCH";
     if(signal.kind==="MIGRATION"&&!anchorSignal&&!launchSignal){reject("直接区域迁移已退役；等待 AnchorFlow 回测重启或 RegionLaunch 爆发确认");continue;}
     if(s.positions.some(t=>t.symbol===signal.symbol))continue;
-    if((s.lastEntryBars[signal.symbol]??0)>=signal.completedAt)continue;
+    if(!launchSignal&&(s.lastEntryBars[signal.symbol]??0)>=signal.completedAt)continue;
     const q=quotes[signal.symbol],meta=contracts[signal.symbol];
     if(!freshQuote(q,now)||q.entryReady===false){reject("等待新鲜可执行盘口；事件保留到短期有效期结束");continue;}
     if(!meta||!finite(meta.quantoMultiplier)||meta.quantoMultiplier<=0||!finite(meta.leverageMax)||meta.leverageMax<1
