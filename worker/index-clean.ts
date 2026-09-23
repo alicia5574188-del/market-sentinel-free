@@ -2851,6 +2851,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private recordForwardMinuteQuote(symbol:string,mid:number,observedAt:number){
     if(!this.forwardUrgentSymbols(observedAt).includes(symbol)||!Number.isFinite(mid)||mid<=0)return;
+    this.forwardMinuteQuoteBars??={};
     const minute=Math.floor(observedAt/60_000)*60_000;
     let row=this.forwardMinuteQuoteBars[symbol];
     if(!row||row.minute!==minute){
@@ -2862,15 +2863,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private forwardMinutePaths(){
-    const symbols=new Set([...Object.keys(this.forwardMinuteCandles),...Object.keys(this.forwardMinuteQuoteBars)]);
+    const officialCache=this.forwardMinuteCandles??{},syntheticCache=this.forwardMinuteQuoteBars??{};
+    const symbols=new Set([...Object.keys(officialCache),...Object.keys(syntheticCache)]);
     return Object.fromEntries([...symbols].flatMap(symbol=>{
-      const official=this.forwardMinuteCandles[symbol]??[],synthetic=this.forwardMinuteQuoteBars[symbol]?.completed??[];
+      const official=officialCache[symbol]??[],synthetic=syntheticCache[symbol]?.completed??[];
       const merged=[...new Map([...synthetic,...official].map(row=>[row.time,row])).values()].sort((a,b)=>a.time-b.time).slice(-90);
       return merged.length?[[symbol,merged]]:[];
     }));
   }
 
   private async refreshForwardUrgentMinutes(now=Date.now()){
+    this.forwardMinuteCandles??={};this.forwardMinuteQuoteBars??={};this.forwardMinuteRetryAt??=new Map();
     const targetCompletedAt=Math.floor(now/60_000)*60_000;
     const urgent=this.forwardState?.strategyAuthorityVersion===MULTI_TURN_VERSION
       ?forwardUrgentMinuteSymbols(this.forwardState,this.runtime.liquidUniverse??[]).slice(0,PORTFOLIO_REALTIME_CAPACITY):[];
