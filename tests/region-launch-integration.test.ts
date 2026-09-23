@@ -60,7 +60,7 @@ function driveLaunch(state:ForwardState,now:number){
 }
 
 test("full RegionLaunch path opens only after strong 1m impulse, small pullback and real restart; AnchorFlow remains independent",()=>{
-  const now=BASE;let s=seeded(now),m=launchPath(now);
+  const now=BASE,m=launchPath(BASE);let s=seeded(now);
   s=step(s,now+60_000,102.00,{BCH_USDT:[m.breakout]}).state;
   assert.equal(s.regionLaunches?.BCH_USDT?.phase,"IGNITION");assert.equal(s.positions.length,0);
   s=step(s,now+120_000,101.75,{BCH_USDT:[m.breakout,m.pullback]}).state;
@@ -76,7 +76,7 @@ test("full RegionLaunch path opens only after strong 1m impulse, small pullback 
 });
 
 test("MET-like upper-wick breakout never creates a RegionLaunch position",()=>{
-  const now=BASE;let s=seeded(now),fake=minute(now,100.90,103.30,100.85,101.45);
+  const now=BASE,fake=minute(BASE,100.90,103.30,100.85,101.45);let s=seeded(now);
   s=step(s,now+60_000,101.45,{BCH_USDT:[fake]}).state;
   assert.equal(s.positions.length,0);assert.equal(s.regionLaunches?.BCH_USDT?.phase,"ARMED");
   assert.match(s.regionLaunches?.BCH_USDT?.reason??"",/突破K不够强/);
