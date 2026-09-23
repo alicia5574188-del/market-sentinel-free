@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { anchorFlowProfitFloor, ANCHOR_FLOW_PROFIT_PROTECTION_VERSION, multiTurnProfitFloor,
+import { anchorFlowProfitFloor, ANCHOR_FLOW_PROFIT_PROTECTION_VERSION, regionLaunchProfitFloor, REGION_LAUNCH_PROFIT_PROTECTION_VERSION, multiTurnProfitFloor,
   regionMigrationProfitFloor, REGION_MIGRATION_PROFIT_PROTECTION_VERSION } from "../lib/multi-turn-profit-protection.ts";
 
 test("tiny favorable noise below both risk and absolute activation stays inactive",()=>{
@@ -105,4 +105,21 @@ test("weakening AnchorFlow evidence tightens an already high-retention floor",()
   })!;
   assert.ok(weak.retentionRate>normal.retentionRate);
   assert.ok(weak.retentionRate>=.88);
+});
+
+
+test("RegionLaunch keeps about eighty-five percent of early explosive profit",()=>{
+  const floor=regionLaunchProfitFloor(.020,.010,.0022,.040)!;
+  assert.equal(floor.version,REGION_LAUNCH_PROFIT_PROTECTION_VERSION);
+  assert.ok(floor.retentionRate>=.84&&floor.retentionRate<=.86);
+  assert.ok(floor.floorRate>.016);
+});
+
+test("RegionLaunch only relaxes materially after profit exceeds the original launch expectation",()=>{
+  const early=regionLaunchProfitFloor(.04,.01,.0022,.04)!;
+  const extended=regionLaunchProfitFloor(.10,.01,.0022,.04)!;
+  const extreme=regionLaunchProfitFloor(.16,.01,.0022,.04)!;
+  assert.ok(early.retentionRate>=.84);
+  assert.ok(extended.retentionRate>=.77&&extended.retentionRate<=.79);
+  assert.ok(extreme.retentionRate>=.74&&extreme.retentionRate<=.76);
 });

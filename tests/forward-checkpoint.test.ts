@@ -8,7 +8,7 @@ import { FORWARD_PROTECTION_STORAGE, FORWARD_STORAGE, prepareForwardProtectionWr
   prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
 import { nextProtectionWriteBudget, PROTECTION_WRITE_CAP, type ProtectionWriteBudget } from "../lib/forward-write-budget.ts";
 import { ANCHOR_FLOW_PROFIT_PROTECTION_VERSION, MULTI_TURN_PROFIT_PROTECTION_VERSION,
-  REGION_MIGRATION_PROFIT_PROTECTION_VERSION } from "../lib/multi-turn-profit-protection.ts";
+  REGION_LAUNCH_PROFIT_PROTECTION_VERSION, REGION_MIGRATION_PROFIT_PROTECTION_VERSION } from "../lib/multi-turn-profit-protection.ts";
 import { MULTI_TURN_VERSION } from "../lib/multi-turn-engine.ts";
 register("./worker-test-loader.mjs",import.meta.url);
 const { MarketStream }=await import("../worker/index-clean.ts");
@@ -150,7 +150,7 @@ test("inherited pre-region Multi-Turn profit protection still arms and survives 
 
 test("every deployed profit version loads through the complete full-record and overlay restart path",async()=>{
   for(const compact of [false,true])for(const version of ["multi-turn-profit-floor-v3","multi-turn-profit-floor-v4",
-    ANCHOR_FLOW_PROFIT_PROTECTION_VERSION,REGION_MIGRATION_PROFIT_PROTECTION_VERSION] as const){
+    ANCHOR_FLOW_PROFIT_PROTECTION_VERSION,REGION_LAUNCH_PROFIT_PROTECTION_VERSION,REGION_MIGRATION_PROFIT_PROTECTION_VERSION] as const){
     const s=account();s.storage={persistedAt:T,error:null};s.lastQuoteCycleAt=T+1000;
     const t=s.positions[0];t.favorable=.08;
     t.profitProtection={version,reachedR:4,lockedR:2,floorRate:.04,retentionRate:.5,activationRate:.012,
