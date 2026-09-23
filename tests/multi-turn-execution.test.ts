@@ -4,7 +4,7 @@ import { advanceForward, BAR_MS, forwardEquity, forwardSummary, forwardWatchSymb
   multiTurnEntryLeverage, MULTI_TURN_TARGET_LEVERAGE, type Candle, type Contract, type Quote } from "../lib/forward-relations.ts";
 import { MULTI_TURN_VERSION, TURN_TIMEFRAMES, evaluateMultiTurn, initialMultiTurn } from "../lib/multi-turn-engine.ts";
 import { REGION_LIFECYCLE_VERSION, type RegionEntrySignal, type RegionLifecycleState } from "../lib/region-lifecycle.ts";
-import { ANCHOR_FLOW_VERSION, type AnchorFlowEntrySignal } from "../lib/anchor-flow.ts";
+import { ANCHOR_FLOW_VERSION, type AnchorFlowEntrySignal, type AnchorFlowState } from "../lib/anchor-flow.ts";
 import { FORWARD_PROTECTION_STORAGE, FORWARD_STORAGE, prepareForwardReset, prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
 
 const BASE=Date.parse("2026-09-21T00:00:00Z");
@@ -49,8 +49,17 @@ const seeded=(symbols:string[],now:number)=>{
   return s;
 };
 
+const readyAnchor=(symbol:string,now:number):AnchorFlowState=>({
+  version:ANCHOR_FLOW_VERSION,symbol,regionId:`rg-${symbol}`,side:"LONG",boundary:"UPPER",phase:"READY",
+  createdAt:now-10*60_000,expiresAt:now+50*60_000,lastProcessedAt:now-1_000,breakoutCompletedAt:now-10*60_000,
+  regionConfirmedAt:now-600_000,regionLower:99,regionUpper:101,regionCenter:100,regionWidth:2,regionWidthRate:.02,
+  excursionExtreme:102,retestAt:now-300_000,pullbackExtreme:100.7,restartLevel:101.1,readyAt:now-1_000,reacceptBars:0,
+  firedAt:now-1_000,consumedAt:null,failedAt:null,reason:"fixture READY"
+});
+
 test("only a completed AnchorFlow restart owns trend entry authority and preserves retest invalidation",()=>{
   const now=BASE+6*60*60_000,s=seeded(["BTC_USDT"],now);
+  s.anchorFlows={BTC_USDT:readyAnchor("BTC_USDT",now)};
   const state=advanceForward({state:s,now,paths:{},quotes:{BTC_USDT:quote(101.2,now)},contracts:{BTC_USDT:meta},
     entrySymbols:["BTC_USDT"],allowDataCycle:false}).state;
   assert.equal(state.positions.length,1);
@@ -67,6 +76,9 @@ test("only a completed AnchorFlow restart owns trend entry authority and preserv
   const exact=(t.entryPrice-t.stopPrice)/t.entryPrice;
   assert.ok(Math.abs(t.rule.stopRate-exact)<1e-12);
   assert.equal(state.entryOpportunities?.length??0,0);
+  assert.equal(state.anchorFlows?.BTC_USDT?.phase,"CONSUMED");
+  assert.equal(state.anchorFlows?.BTC_USDT?.consumedAt,now);
+  assert.equal(state.anchorConsumed?.["rg-BTC_USDT:LONG"],now);
 });
 
 test("cold reconstruction can restore an old region but cannot backfill an already happened entry",()=>{
