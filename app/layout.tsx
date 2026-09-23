@@ -10,7 +10,8 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   title: "哨兵 · AnchorFlow | 前向实验",
   description: "真实行情驱动的5分钟区域生命周期、模拟交易与可审计演变；成熟区域的接受迁移与边界拒绝为当前交易权威",
-  applicationName: "哨兵区域生命周期引擎",
+  applicationName: "哨兵",
+  appleWebApp: { capable: true, title: "哨兵", statusBarStyle: "black-translucent" },
   manifest: "/manifest.webmanifest",
 };
 
