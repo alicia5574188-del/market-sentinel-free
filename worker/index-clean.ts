@@ -860,6 +860,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if (!this.strategyPathSymbols().includes(symbol)) {
         delete this.runtime.strategyCandleFailures[symbol]; delete this.strategyCandles[symbol];
       }
+      if(!this.runtime.liquidUniverse.includes(symbol)&&!this.forwardUrgentSymbols().includes(symbol)){
+        delete this.forwardMinuteCandles[symbol];delete this.forwardMinuteQuoteBars[symbol];this.forwardMinuteRetryAt.delete(symbol);
+      }
       delete this.runtime.tickSize[symbol]; delete this.runtime.contractMeta[symbol];
     }
   }
@@ -3004,6 +3007,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const decision: Decision | null = null;
       const bestBid = snapshot.bids[0]?.price ?? analyzed.midpoint;
       const bestAsk = snapshot.asks[0]?.price ?? analyzed.midpoint;
+      this.recordForwardMinuteQuote(symbol,(bestBid+bestAsk)/2,snapshot.observedAt);
       // Position protection needs only a fresh executable book. It must continue
       // even while ancillary entry evidence is warming or temporarily stale.
       this.runtime.regimePortfolio = advanceRegimePortfolio({ state: this.runtime.regimePortfolio,
