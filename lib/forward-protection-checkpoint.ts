@@ -6,7 +6,8 @@ import { supportedProfitVersion } from "./multi-turn-profit-protection.ts";
 
 export const FORWARD_PROTECTION_CHECKPOINT_VERSION = "forward-protection-checkpoint-v1";
 type ProtectionRow = Pick<Trade, "id" | "openedAt" | "favorable" | "adverse" | "lastPrice" | "lastQuoteAt"
-  | "relationFailureBars" | "lastRelationBar" | "exitControl" | "profitProtection" | "profitProtectionMigration">;
+  | "relationFailureBars" | "lastRelationBar" | "exitControl" | "profitProtection" | "profitProtectionMigration">
+  & { stopPrice?:number };
 export type ForwardProtectionCheckpoint = {
   version: typeof FORWARD_PROTECTION_CHECKPOINT_VERSION;
   startedAt: number; baseRevision: number; basePersistedAt: number; quoteCycleAt: number;
@@ -39,6 +40,7 @@ export function forwardProtectionChanged(previous: ForwardState, next: ForwardSt
       // The caller retains the same ten-second dedicated write lane.
       || !!(nextProtection&&priorProtection&&(nextProtection.floorRate!==priorProtection.floorRate
         || nextProtection.peakR!==priorProtection.peakR))
+      || t.stopPrice!==p.stopPrice
       || t.relationFailureBars !== p.relationFailureBars || t.lastRelationBar !== p.lastRelationBar;
   });
 }
@@ -48,7 +50,7 @@ export function buildForwardProtectionCheckpoint(s: ForwardState): ForwardProtec
     baseRevision: s.revision, basePersistedAt: s.storage.persistedAt, quoteCycleAt: s.lastQuoteCycleAt,
     peakEquity: s.peakEquity, maxDrawdown: s.maxDrawdown,
     positions: s.positions.map(t => ({ id: t.id, openedAt: t.openedAt, favorable: t.favorable, adverse: t.adverse,
-      lastPrice: t.lastPrice, lastQuoteAt: t.lastQuoteAt, relationFailureBars: t.relationFailureBars,
+      lastPrice: t.lastPrice, lastQuoteAt: t.lastQuoteAt, stopPrice:t.stopPrice, relationFailureBars: t.relationFailureBars,
       lastRelationBar: t.lastRelationBar, ...(t.exitControl ? { exitControl: { ...t.exitControl } } : {}),
       ...(t.profitProtection ? { profitProtection: { ...t.profitProtection } } : {}),
       ...(t.profitProtectionMigration ? { profitProtectionMigration: { ...t.profitProtectionMigration } } : {}) })) };
@@ -79,6 +81,8 @@ export function restoreForwardProtectionCheckpoint(s: ForwardState, value: unkno
       || r.favorable < t.favorable || r.adverse < t.adverse || r.lastPrice <= 0 || r.lastQuoteAt < t.lastQuoteAt
       || r.lastQuoteAt > c.quoteCycleAt + 1000 || r.lastRelationBar < t.lastRelationBar
       || r.lastRelationBar > c.quoteCycleAt || !Number.isSafeInteger(r.relationFailureBars) || r.relationFailureBars < 0
+      || (r.stopPrice!=null&&(!Number.isFinite(r.stopPrice)||r.stopPrice<=0
+        ||(t.side==="LONG"?r.stopPrice+1e-12<t.stopPrice:r.stopPrice-1e-12>t.stopPrice)))
       || !!r.exitControl !== !!t.exitControl
       || (t.profitProtection != null && r.profitProtection == null)
       || (t.profitProtectionMigration != null && r.profitProtectionMigration == null)) return invalid();
@@ -118,6 +122,7 @@ export function restoreForwardProtectionCheckpoint(s: ForwardState, value: unkno
   for (const t of restored.positions) {
     const r = rows.get(t.id)!;
     t.favorable = r.favorable; t.adverse = r.adverse; t.lastPrice = r.lastPrice; t.lastQuoteAt = r.lastQuoteAt;
+    if(r.stopPrice!=null)t.stopPrice=r.stopPrice;
     t.relationFailureBars = r.relationFailureBars; t.lastRelationBar = r.lastRelationBar;
     if (r.exitControl) t.exitControl = { policy: r.exitControl.policy, armedAt: r.exitControl.armedAt,
       armedQuoteAt: r.exitControl.armedQuoteAt, maxObservationGapMs: r.exitControl.maxObservationGapMs,
