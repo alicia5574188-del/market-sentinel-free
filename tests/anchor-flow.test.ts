@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ANCHOR_FLOW_VERSION, advanceAnchorFlowUniverse } from "../lib/anchor-flow.ts";
+import { ANCHOR_FLOW_VERSION, advanceAnchorFlowUniverse, anchorFlowExecutableProofRate } from "../lib/anchor-flow.ts";
 import { MULTI_TURN_VERSION, type MultiTurnState, type TurnEvidence, type TurnFrameState, type TurnSide } from "../lib/multi-turn-engine.ts";
 import { REGION_LIFECYCLE_VERSION, type RegionCandle, type RegionEntrySignal, type RegionLifecycleState } from "../lib/region-lifecycle.ts";
 
@@ -153,4 +153,23 @@ test("an existing READY state becomes CONSUMED only after the order layer record
   assert.equal(next.states.BTC_USDT?.phase,"CONSUMED");
   assert.equal(next.states.BTC_USDT?.consumedAt,consumedAt);
   assert.equal(next.signals.length,0);
+});
+
+
+test("READY stays executable between completed 5m bars instead of requiring another reaction candle",()=>{
+  const rows=[bar(300,101.4,101.85,101.2,101.8)];
+  const ready=advanceAnchorFlowUniverse({paths:{BTC_USDT:rows},lifecycles:{BTC_USDT:lifecycle},frames:frames("LONG",(START+600)*1000),
+    prior:{},migrationSignals:[raw],consumed:{},now:(START+600)*1000+1,costRate:.0022});
+  assert.equal(ready.states.BTC_USDT?.phase,"READY");
+  const between=advanceAnchorFlowUniverse({paths:{BTC_USDT:rows},lifecycles:{BTC_USDT:lifecycle},frames:frames("LONG",(START+600)*1000),
+    prior:ready.states,migrationSignals:[],consumed:{},now:(START+720)*1000,costRate:.0022});
+  assert.equal(between.signals.length,1);
+  assert.equal(between.signals[0]!.id,`af-${zone.id}-LONG-READY`);
+  assert.equal(between.signals[0]!.expiresAt,between.states.BTC_USDT!.expiresAt);
+});
+
+test("executable confirmation threshold is deliberately small and cost-bounded",()=>{
+  assert.equal(anchorFlowExecutableProofRate(.0022),.001);
+  assert.equal(anchorFlowExecutableProofRate(.004),.0015);
+  assert.equal(anchorFlowExecutableProofRate(.0005),.001);
 });

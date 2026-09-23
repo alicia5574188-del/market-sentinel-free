@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {evaluateMultiTurnExitOverlay,MULTI_TURN_EXIT_OVERLAY_VERSION} from "../lib/multi-turn-exit.ts";
 import type {TurnFrameState} from "../lib/multi-turn-engine.ts";
+import {ANCHOR_FLOW_PROFIT_PROTECTION_VERSION, type MultiTurnTradeProfitProtection} from "../lib/multi-turn-profit-protection.ts";
 
 const NOW=Date.parse("2026-09-22T12:00:00Z");
 const frame=(overrides:Partial<TurnFrameState>={}):TurnFrameState=>({
@@ -51,4 +52,16 @@ test("hard time ceiling is frame-independent",()=>{
   assert.equal(r.hardExtensionMinutes,720);
   assert.equal(r.decision?.trigger,"HOLD_VALUE");
   assert.match(r.decision?.reason??"",/硬上限/);
+});
+
+
+test("external AnchorFlow floor stays authoritative and is not downgraded to the generic curve",()=>{
+  const prior:MultiTurnTradeProfitProtection={version:ANCHOR_FLOW_PROFIT_PROTECTION_VERSION,reachedR:2.4,lockedR:1.9,floorRate:.052,
+    retentionRate:.80,activationRate:.006,checkpointBand:7,mode:"NORMAL" as const,peakR:2.4,updatedAt:NOW-1000};
+  const r=evaluateMultiTurnExitOverlay({timeframe:"15m",side:"LONG",openedAt:NOW-20*60_000,now:NOW,
+    returnRate:.060,favorableRate:.065,riskRate:.027,modeledCostRate:.0026,entryExpectedMoveRate:.070,
+    frame:null,priorProtection:prior,profitPolicy:"EXTERNAL"});
+  assert.equal(r.profitProtection?.version,ANCHOR_FLOW_PROFIT_PROTECTION_VERSION);
+  assert.equal(r.profitProtection?.floorRate,prior.floorRate);
+  assert.equal(r.decision,null);
 });

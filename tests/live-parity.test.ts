@@ -204,7 +204,7 @@ class Memory {
 }
 class FakeGate {
   account:GateLiveAccount={total:100,available:100,unrealised_pnl:0,in_dual_mode:false};
-  requestCount=0;placed:LiveEntryIntent[]=[];leverages:number[]=[];stops:GateLiveOrder[]=[];
+  requestCount=0;placed:LiveEntryIntent[]=[];leverages:number[]=[];stops:GateLiveOrder[]=[];amendedStops:Array<{id:string;price:number}>=[];
   orders=new Map<string,GateLiveOrder>();holdings:Record<string,GateLivePosition>={};
   closeTags:string[]=[];onLeverage:(()=>Promise<void>)|null=null;onCreate:(()=>Promise<void>)|null=null;
   failSnapshot=false;partial=false;zero=false;ambiguous=false;omitExit=false;counter=1;
@@ -220,7 +220,7 @@ class FakeGate {
   }
   async inspectEntry(_kind:string,_symbol:string,tag:string,id:string|null){return structuredClone(this.orders.get(id??"")??[...this.orders.values()].find(o=>o.text===tag)??null);}
   async createStop(i:LiveStopIntent){const id=String(this.counter++);this.stops.push({id_string:id,text:i.tag,contract:String((i.body.initial as Record<string,unknown>).contract),status:"open"});return id;}
-  async amendStop(){return;}
+  async amendStop(id:string,price:number){this.amendedStops.push({id,price});return;}
   async cancelOrder(_kind:string,id:string){this.stops=this.stops.filter(s=>s.id_string!==id);}
   async closePosition(symbol:string,tag:string){this.closeTags.push(tag);delete this.holdings[symbol];const id=String(this.counter++);
     if(!this.omitExit)this.orders.set(id,{id_string:id,text:tag,contract:symbol,status:"finished",finish_as:"filled",fill_price:100.4});return id;}
@@ -414,6 +414,21 @@ test("real owner-enable path routes current source, freezes binding before submi
   const p=live(h).positions.BTC_USDT;assert.equal(p.id,"ft-fixture-1");assert.equal(p.parity!.sourceRuleId,"fr-fixture-1");
   assert.equal(gate.leverages[0],2);assert.ok(gate.stops.length>0);
 }));
+test("a tightened PAPER profit stop amends the existing Gate-native protective stop before source close",()=>clock(async()=>{
+  const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);
+  const source=h.forwardState.positions[0]!;
+  assert.ok(gate.stops.length>0);
+  source.stopPrice=100.8;
+  h.runtime.evidence={BTC_USDT:{midpoint:102,bestBid:101.99,bestAsk:102.01,observedAt:T,fresh:true,entryReady:true}};
+  await h.syncLive(T);
+  const p=live(h).positions.BTC_USDT as LiveTest["positions"][string]&{currentStop:number;stopPrice:number|null};
+  assert.equal(p.currentStop,100.8);
+  assert.equal(p.stopPrice,100.8);
+  assert.equal(gate.amendedStops.at(-1)?.price,100.8);
+  assert.equal(gate.closeTags.length,0);
+}));
+
+
 test("real Worker follows source CLOSE reason, not an independently restarted holding timer",()=>clock(async()=>{
   const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);
   const t=h.forwardState.positions[0];t.status="CLOSED";t.closedAt=T;t.exitReason="反应回吐：源单退出";

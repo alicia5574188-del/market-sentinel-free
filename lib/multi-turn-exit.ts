@@ -1,6 +1,6 @@
 import { type TurnFrameState, type TurnTimeframe } from "./multi-turn-engine.ts";
 import { multiTurnHoldWindows } from "./multi-turn-hold-value.ts";
-import { MULTI_TURN_PROFIT_PROTECTION_VERSION, multiTurnProfitFloor, supportedProfitVersion,
+import { multiTurnProfitFloor, supportedProfitVersion,
   type MultiTurnTradeProfitProtection } from "./multi-turn-profit-protection.ts";
 import type { ExitDecision } from "./forward-protection.ts";
 
@@ -24,8 +24,8 @@ export type MultiTurnExitOverlay={
  * - monotonic protection of already-observed profit;
  * - the PR #379 frame-independent time fallback for long no-progress holdings.
  *
- * No storage, Worker, LIVE or schema dependency is allowed here. Deployed v3/v4
- * floors remain readable, while all newly computed floors use the stable v3 shape.
+ * No storage, Worker, LIVE or schema dependency is allowed here. Deployed floors
+ * remain readable. AnchorFlow may supply its own already-computed monotonic floor.
  */
 export function evaluateMultiTurnExitOverlay(input:{
   timeframe:TurnTimeframe;
@@ -39,6 +39,7 @@ export function evaluateMultiTurnExitOverlay(input:{
   entryExpectedMoveRate:number;
   frame:TurnFrameState|null;
   priorProtection?:MultiTurnTradeProfitProtection|null;
+  profitPolicy?:"DEFAULT"|"EXTERNAL";
 }):MultiTurnExitOverlay{
   const modeledCostRate=Math.max(0,input.modeledCostRate);
   const riskRate=Math.max(1e-9,input.riskRate);
@@ -52,11 +53,11 @@ export function evaluateMultiTurnExitOverlay(input:{
     rawDirectionAligned:input.frame.rawDirection==="NEUTRAL"||input.frame.rawDirection===input.side,
   }:null;
 
-  const next=multiTurnProfitFloor(input.favorableRate,riskRate,modeledCostRate,signal);
+  const next=input.profitPolicy==="EXTERNAL"?null:multiTurnProfitFloor(input.favorableRate,riskRate,modeledCostRate,signal);
   let protection:MultiTurnTradeProfitProtection|null=prior?{...prior}:null;
   if(next){
     const floorRate=Math.max(prior?.floorRate??0,next.floorRate);
-    protection={...next,version:MULTI_TURN_PROFIT_PROTECTION_VERSION,
+    protection={...next,version:next.version,
       floorRate,lockedR:floorRate/riskRate,
       retentionRate:floorRate/Math.max(input.favorableRate,1e-9),
       checkpointBand:Math.floor(floorRate/riskRate*4+1e-9),
