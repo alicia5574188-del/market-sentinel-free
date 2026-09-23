@@ -1,7 +1,7 @@
 export const LIVE_READ_TIMEOUT_ESCALATE_AFTER=3;
 
 export function isTransientLiveReadErrorText(value:string|null|undefined){
-  return Boolean(value&&(/operation was aborted due to timeout|Gate只读核对超时/i.test(value)));
+  return Boolean(value&&(/operation was aborted due to timeout/i.test(value)));
 }
 
 export function liveReadTimeoutDecision(priorStreak:number){
