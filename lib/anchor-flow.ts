@@ -82,7 +82,7 @@ function fail(state:AnchorFlowState,at:number,reason:string){
   state.phase="FAILED";state.failedAt=at;state.reason=reason;
 }
 function signalFromRetest(input:{state:AnchorFlowState;row:RegionCandle;at:number;frames?:MultiTurnState["frames"];costRate:number}){
-  const{s,row,at}=input,d=s.side==="LONG"?1:-1;
+  const s=input.state,{row,at}=input,d=s.side==="LONG"?1:-1;
   const by=input.frames?.[s.symbol],f15=by?.["15m"],f1h=by?.["1h"];
   if(!f15||!f1h||s.retestAt==null||s.pullbackExtreme==null||s.restartLevel==null)return null;
   const stopBuffer=Math.max(s.regionWidth*.08,s.regionCenter*input.costRate*.25);
