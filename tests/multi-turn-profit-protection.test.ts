@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { multiTurnProfitFloor } from "../lib/multi-turn-profit-protection.ts";
+import { multiTurnProfitFloor, regionMigrationProfitFloor, REGION_MIGRATION_PROFIT_PROTECTION_VERSION } from "../lib/multi-turn-profit-protection.ts";
 
 test("tiny favorable noise below both risk and absolute activation stays inactive",()=>{
   assert.equal(multiTurnProfitFloor(.005,.02,.0022),null);
@@ -61,4 +61,20 @@ test("a two-R winner without weakening locks about half of observed profit",()=>
   const floor=multiTurnProfitFloor(.04,.02,.0022)!;
   assert.ok(floor.retentionRate>=.49&&floor.retentionRate<=.63);
   assert.ok(floor.floorRate>.0022);
+});
+
+
+test("5m region migration protection arms earlier than the multi-timeframe floor once profit clears cost",()=>{
+  assert.equal(multiTurnProfitFloor(.0055,.012,.0025),null);
+  const floor=regionMigrationProfitFloor(.0055,.012,.0025)!;
+  assert.equal(floor.version,REGION_MIGRATION_PROFIT_PROTECTION_VERSION);
+  assert.ok(floor.floorRate>.0025);
+  assert.ok(floor.floorRate<.0055);
+});
+
+test("large region migration winner keeps more than eighty percent of observed profit",()=>{
+  const floor=regionMigrationProfitFloor(.12,.012,.003)!;
+  assert.ok(floor.reachedR>=9.9);
+  assert.ok(floor.retentionRate>.84);
+  assert.ok(floor.floorRate>.10);
 });

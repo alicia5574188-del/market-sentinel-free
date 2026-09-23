@@ -89,17 +89,31 @@ test("a rejection trade can close at region center immediately without a minimum
   assert.match(state.history[0]?.exitReason??"",/区域中心/);
 });
 
-test("region trades ignore old profit-giveback and hold-time exits while the region thesis remains valid",()=>{
+test("profitable migration closes on the region-only monotonic giveback floor",()=>{
   const now=BASE+8*60*60_000,s=seeded(["SOL_USDT"],now);
   let state=advanceForward({state:s,now,paths:{},quotes:{SOL_USDT:quote(101.2,now)},contracts:{SOL_USDT:meta},
     entrySymbols:["SOL_USDT"],allowDataCycle:false}).state;
   assert.equal(state.positions.length,1);
   state.positions[0]!.favorable=.08;
-  state.positions[0]!.openedAt=now-12*60*60_000;
   const later=now+1_000,mid=state.positions[0]!.entryPrice*1.01;
   state=advanceForward({state,now:later,paths:{},quotes:{SOL_USDT:quote(mid,later)},contracts:{SOL_USDT:meta},
     entrySymbols:["SOL_USDT"],allowDataCycle:false}).state;
-  assert.equal(state.positions.length,1,"new region trade must not be closed by legacy giveback or hold-value clocks");
+  assert.equal(state.positions.length,0);
+  assert.equal(state.history[0]?.exitAudit?.trigger,"PROFIT_GIVEBACK");
+  assert.match(state.history[0]?.exitReason??"",/区域迁移利润保护/);
+});
+
+test("region migration still ignores retired hold-time exits when no meaningful profit floor has armed",()=>{
+  const now=BASE+8*60*60_000+30_000,s=seeded(["SOL_USDT"],now);
+  let state=advanceForward({state:s,now,paths:{},quotes:{SOL_USDT:quote(101.2,now)},contracts:{SOL_USDT:meta},
+    entrySymbols:["SOL_USDT"],allowDataCycle:false}).state;
+  assert.equal(state.positions.length,1);
+  state.positions[0]!.openedAt=now-12*60*60_000;
+  const later=now+1_000,mid=state.positions[0]!.entryPrice*1.001;
+  state=advanceForward({state,now:later,paths:{},quotes:{SOL_USDT:quote(mid,later)},contracts:{SOL_USDT:meta},
+    entrySymbols:["SOL_USDT"],allowDataCycle:false}).state;
+  assert.equal(state.positions.length,1,"region thesis stays open until its own structure/profit rules act");
+  assert.equal(state.positions[0]!.profitProtection,undefined);
 });
 
 test("migration exits at its structural defense and the stop is never widened",()=>{
@@ -108,9 +122,9 @@ test("migration exits at its structural defense and the stop is never widened",(
     entrySymbols:["AAVE_USDT"],allowDataCycle:false}).state;
   const initialStop=state.positions[0]!.stopPrice;
   state.regionLifecycles!.AAVE_USDT={...state.regionLifecycles!.AAVE_USDT!,zone:{...state.regionLifecycles!.AAVE_USDT!.zone!,
-    id:"rg-AAVE-new",confirmedAt:now+300_000,startAt:now,endAt:now+300_000,lower:102,upper:104,center:103,width:2,widthRate:.0194}};
+    id:"rg-AAVE-new",confirmedAt:now+300_000,startAt:now,endAt:now+300_000,lower:100.9,upper:101.3,center:101.1,width:.4,widthRate:.00396}};
   const liftAt=now+1_000;
-  state=advanceForward({state,now:liftAt,paths:{},quotes:{AAVE_USDT:quote(103,liftAt)},contracts:{AAVE_USDT:meta},
+  state=advanceForward({state,now:liftAt,paths:{},quotes:{AAVE_USDT:quote(101.25,liftAt)},contracts:{AAVE_USDT:meta},
     entrySymbols:["AAVE_USDT"],allowDataCycle:false}).state;
   assert.ok(state.positions[0]!.stopPrice>initialStop,"higher accepted region may only raise LONG defense");
   const raised=state.positions[0]!.stopPrice,hitAt=liftAt+1_000;
