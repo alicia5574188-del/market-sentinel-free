@@ -84,7 +84,7 @@ function fail(state:AnchorFlowState,at:number,reason:string){
 function signalFromRetest(input:{state:AnchorFlowState;row:RegionCandle;at:number;frames?:MultiTurnState["frames"];costRate:number}){
   const s=input.state,{row,at}=input,d=s.side==="LONG"?1:-1;
   const by=input.frames?.[s.symbol],f15=by?.["15m"],f1h=by?.["1h"];
-  if(!f15||!f1h||s.retestAt==null||s.pullbackExtreme==null||s.restartLevel==null)return null;
+  if(!f15?.ready||!f1h?.ready||s.retestAt==null||s.pullbackExtreme==null||s.restartLevel==null)return null;
   const stopBuffer=Math.max(s.regionWidth*.08,s.regionCenter*input.costRate*.25);
   const stopPrice=s.side==="LONG"?s.pullbackExtreme-stopBuffer:s.pullbackExtreme+stopBuffer;
   if((s.side==="LONG"&&stopPrice>=row.close)||(s.side==="SHORT"&&stopPrice<=row.close))return null;
@@ -124,7 +124,7 @@ function updateOne(input:{
   const s=input.state;
   let readySignal:AnchorFlowEntrySignal|null=null;
   const rejections:RegionEntrySignal[]=[];
-  s.readyAt=s.readyAt??null;s.reacceptBars=Number.isFinite(s.reacceptBars)?Math.max(0,s.reacceptBars!):0;s.consumedAt=s.consumedAt??null;
+  s.readyAt=s.readyAt??null;s.reacceptBars=Number.isFinite(s.reacceptBars??NaN)?Math.max(0,s.reacceptBars??0):0;s.consumedAt=s.consumedAt??null;
 
   const consumedAt=input.consumed?.[keyOf(s.regionId,s.side)];
   if(consumedAt){
