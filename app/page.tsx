@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ForwardDashboard from "./forward-dashboard.tsx";
 import LiveConsole from "./live-console.tsx";
 import { LoginGate, MemberAccess } from "./member-access.tsx";
+import PaperAccountReset from "./paper-account-reset.tsx";
 import { runtimeBackendOperational, runtimeStatusLabel } from "../lib/runtime-health.ts";
 import { operatorRequest, type AuthSession, type LiveRuntime, type OperatorRuntime } from "../lib/operator-ui.ts";
 
@@ -74,5 +75,6 @@ export default function Home() {
       missing:runtime?.live?.mirror?.eligibleMissingCount??runtime?.liveMirror?.eligibleMissingCount??null}}
     livePanel={<LiveConsole view="trade" auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}
     liveSystemPanel={<LiveConsole view="system" auth={auth} runtime={runtime} onSession={sessionChanged} onLive={liveChanged} onRefresh={reload}/>}
-    accountPanel={<MemberAccess auth={auth}/>} memberName={auth.role==="member"?auth.username:undefined}/>;
+    accountPanel={<><MemberAccess auth={auth}/><PaperAccountReset auth={auth} runtime={runtime} onReset={reload}/></>}
+    memberName={auth.role==="member"?auth.username:undefined}/>;
 }
