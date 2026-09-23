@@ -1,3 +1,7 @@
+# 2026-09-23 — current targeted entry repair
+
+Within the user's tightened 45-minute total target, audit deployed235c92e and repair tight entry/stop geometry, local compression countertrend launches, explicit consecutive strong1m continuation, and stale AnchorFlow quote proof inside a bottom consolidation. Existing positions/history/accounts, owner/member intent and private Gate safety remain. Use existing verified-main release. Do not add a new system or promise profitability. Confirm source/stop/risk parity and advancing persisted production before completion.
+
 # 2026-09-22 — recover failed exit upgrade and release scoped replacement
 
 Restore pre-PR376 exit baseline, preserve compatible v3/v4 durable records and

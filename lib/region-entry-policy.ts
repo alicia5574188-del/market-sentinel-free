@@ -32,6 +32,12 @@ export function evaluateRegionEntryPolicy(input:{
   const price=(s.side==="LONG"?input.bestAsk:input.bestBid)*(1+d*input.slippageRate);
   const structuralStopRate=d*(price-s.stopPrice)/Math.max(price,1e-9);
   if(!(structuralStopRate>0))return{ok:false,reason:"区域失效位不在持仓反向一侧",remainingSpaceRate:0};
+  const exitNow=(s.side==="LONG"?input.bestBid:input.bestAsk)*(1-d*input.slippageRate);
+  const stopRoom=d*(exitNow-s.stopPrice);
+  const minimumRoom=Math.max(mid*Math.max(.001,input.costRate*.50),2*(input.bestAsk-input.bestBid),
+    isAnchor?s.regionWidth*.08:0);
+  if((isAnchor||isLaunch)&&stopRoom<minimumRoom-1e-10)
+    return{ok:false,reason:"结构止损贴近当前可平仓价；保留候选，等待最新回调支点与真实顺向确认",remainingSpaceRate:0};
   if(structuralStopRate>TURN_CONFIG["5m"].maxStop)
     return{ok:false,reason:"区域结构止损超过5分钟统一风险边界，不缩短结构止损",remainingSpaceRate:0};
   const lossRate=structuralStopRate+input.costRate;
@@ -95,7 +101,6 @@ export function evaluateRegionEntryPolicy(input:{
   if(marginCapNotional<riskDesired*.85)
     return{ok:false,reason:"可用保证金不足以维持目标名义价值，不缩成小单",remainingSpaceRate:remaining};
   const desired=Math.min(riskDesired,marginCapNotional);
-  const exitNow=(s.side==="LONG"?input.bestBid:input.bestAsk)*(1-d*input.slippageRate);
   const notionalPer=price*input.contract.quantoMultiplier,riskPer=notionalPer*lossRate;
   const equityDeltaPer=-notionalPer*input.feeRate+d*input.contract.quantoMultiplier*(exitNow-price)-input.contract.quantoMultiplier*exitNow*input.feeRate;
   const capCount=(rate:number,used:number,addedRiskPer=0)=>Math.max(0,Math.floor((input.equity*rate-used)/Math.max(1e-12,addedRiskPer-rate*equityDeltaPer)));

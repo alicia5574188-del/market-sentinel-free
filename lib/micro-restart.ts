@@ -8,6 +8,7 @@ export type BreakoutQuality={
 export type MicroRestartResult={
   state:"WAIT"|"FAIL"|"READY";reason:string;pullbackCloseRate:number;pullbackExtremeRate:number;
   cumulativeAdverseBodyRate:number;restartAt:number|null;restartPrice:number|null;supportPrice:number|null;
+  confirmation?:"CONTINUATION"|"PULLBACK_RESTART";
 };
 
 const finite=(v:number)=>Number.isFinite(v);
@@ -46,13 +47,16 @@ export function evaluateMicroRestart(input:{breakout:MicroCandle;following:Micro
     cumulativeAdverseBodyRate:0,restartAt:null,restartPrice:null,supportPrice:null};
   const rows=input.following.filter(row=>[row.time,row.open,row.high,row.low,row.close,row.volume].every(finite)
     &&row.high>=row.low&&row.low>0).sort((a,b)=>a.time-b.time);
-  if(!rows.length)return{state:"WAIT",reason:"强突破K成立，等待小回调后的第一根重新顺向1分钟K。",pullbackCloseRate:0,
+  if(!rows.length)return{state:"WAIT",reason:"强突破K成立，等待下一根继续强突破，或小回调后的第一根重新顺向1分钟K。",pullbackCloseRate:0,
     pullbackExtremeRate:0,cumulativeAdverseBodyRate:0,restartAt:null,restartPrice:null,
     supportPrice:side==="LONG"?breakout.low:breakout.high};
 
   let minClose=breakout.close,maxClose=breakout.close,minLow=breakout.close,maxHigh=breakout.close,cumulativeAdverse=0;
   for(let index=0;index<rows.length;index++){
     const row=rows[index]!,prior=index?rows[index-1]!:breakout;
+    if(row.time!==prior.time+60)return{state:"WAIT",reason:"1分钟K尚未连续，保留观察并等待补齐，不跨缺口拼接突破确认。",
+      pullbackCloseRate:0,pullbackExtremeRate:0,cumulativeAdverseBodyRate:cumulativeAdverse,
+      restartAt:null,restartPrice:null,supportPrice:null};
     minClose=Math.min(minClose,row.close);maxClose=Math.max(maxClose,row.close);minLow=Math.min(minLow,row.low);maxHigh=Math.max(maxHigh,row.high);
     cumulativeAdverse+=Math.max(0,-d*(row.close/Math.max(row.open,1e-12)-1));
 
@@ -79,8 +83,13 @@ export function evaluateMicroRestart(input:{breakout:MicroCandle;following:Micro
     const localBreak=side==="LONG"?row.close>prior.high:row.close<prior.low;
     const minResume=Math.max(.0006,costRate*.25);
     const resumed=localBreak&&metrics.bodyRate>=minResume&&metrics.closeLocation>=.62&&metrics.wickToBody<=.65&&resumeMove>0;
-    if(resumed)return{state:"READY",
-      reason:`小回调后重新启动：突破实体${(quality.bodyRate*100).toFixed(2)}%仍明显大于累计反向实体${(cumulativeAdverse*100).toFixed(2)}%，当前1分钟K重新顺向突破前一根局部${side==="LONG"?"高点":"低点"}。`,
+    const hadPullback=cumulativeAdverse>0||pullbackClose>0;
+    const continuation=index===0&&!hadPullback&&localBreak&&assessStrongBreakout({bar:row,side,
+      triggerPrice:breakoutExtreme,costRate,regionWidthRate:input.regionWidthRate}).ok;
+    if(continuation||(hadPullback&&resumed))return{state:"READY",
+      confirmation:continuation?"CONTINUATION":"PULLBACK_RESTART",
+      reason:continuation?"连续两根1分钟强突破：第二根继续突破第一根极值，实体与收盘强度合格；无需等待回调。"
+        :`小回调后重新启动：突破实体${(quality.bodyRate*100).toFixed(2)}%仍明显大于累计反向实体${(cumulativeAdverse*100).toFixed(2)}%，当前1分钟K重新顺向突破前一根局部${side==="LONG"?"高点":"低点"}。`,
       pullbackCloseRate:pullbackClose,pullbackExtremeRate:pullbackExtreme,cumulativeAdverseBodyRate:cumulativeAdverse,
       restartAt:(row.time+60)*1000,restartPrice:row.close,supportPrice:side==="LONG"?minLow:maxHigh};
   }

@@ -1,3 +1,9 @@
+# 2026-09-23 — current entry authority and evidence
+
+The user explicitly requests local opposite-direction compression launch, consecutive strong1m continuation and correction of stale/tight entries, including MUBARAK consolidation. This supersedes the old optional-minute AnchorFlow entry shortcut. Current1m local price structure is required; the existing urgent official/quote-built data lane supplies it without extra requests or global degradation. Missing/old/future/discontinuous evidence cannot authorize entry; candidate remains retryable.
+
+Only NEW order geometry can use a newly observed pullback; risk, cost, size and copied source stop use the same final value. Never widen an open position. RegionLaunch owns child compression direction independently of AnchorFlow's higher-frame veto. Preserve mother identity/history, old open-order rules and the source-account/LIVE bridge. Regression scenarios are synthetic screenshot-derived counterexamples, not proof of the exact historical exchange path or future profit. Source-only baseline update is authorized by this strategy fix; all Worker/auth/credential hashes remain unchanged.
+
 # 2026-09-22 — compatibility before policy rollback
 
 Both full-account normalization and compact overlay must accept deployed v3/v4.

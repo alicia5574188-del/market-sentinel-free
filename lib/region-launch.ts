@@ -1,4 +1,3 @@
-import { anchorFlowDirectionAllowed } from "./anchor-flow.ts";
 import { REGION_BAR_MS, REGION_LIFECYCLE_VERSION, type RegionCandle, type RegionEntrySignal, type RegionLifecycleState, type RegionZone } from "./region-lifecycle.ts";
 import type { MultiTurnState } from "./multi-turn-engine.ts";
 import { assessStrongBreakout, evaluateMicroRestart } from "./micro-restart.ts";
@@ -150,8 +149,11 @@ export function advanceRegionLaunchUniverse(input:{paths:Record<string,RegionCan
     if(!state||state.version!==REGION_LAUNCH_VERSION||!relatedMother(state,zone))state=initial(symbol,zone,input.now);
     processDepartures(state,rows);
     if(state.phase!=="CONSUMED"&&state.phase!=="READY"&&state.phase!=="IGNITION"){
-      const compression=compressionFrom(rows,state,input.costRate);
       const wasArmed=state.phase==="ARMED"&&!!state.compression;
+      const observedCompression=compressionFrom(rows,state,input.costRate);
+      // A completed breakout 5m bar naturally stops looking compressed. Keep
+      // the already-observed box long enough for its 1m confirmation to arrive.
+      const compression=observedCompression??(wasArmed&&input.now<=state.compression!.endAt+2*REGION_BAR_MS?state.compression:null);
       state.compression=compression;state.quality=motherQuality(state,compression);
       if(compression){
         state.phase="ARMED";
@@ -189,9 +191,10 @@ function readySignal(s:RegionLaunchState):RegionLaunchSignal|null{
 
 const minuteCompleteAt=(row:RegionCandle)=>row.time*1000+REGION_LAUNCH_MINUTE_MS;
 function launchTriggers(s:RegionLaunchState,costRate:number){
-  const triggerBuffer=Math.max(s.motherWidth*.02,s.motherCenter*costRate*.20);
-  return{long:Math.max(s.motherUpper,s.compression!.upper)+triggerBuffer,
-    short:Math.min(s.motherLower,s.compression!.lower)-triggerBuffer};
+  // The live compression owns both launch boundaries. A top compression can
+  // break down before the much wider mother region or higher trend turns down.
+  const c=s.compression!,triggerBuffer=Math.max(c.width*.02,c.center*costRate*.20);
+  return{long:c.upper+triggerBuffer,short:c.lower-triggerBuffer};
 }
 
 export function advanceRegionLaunchMinutes(input:{states:Record<string,RegionLaunchState>;minutePaths:Record<string,RegionCandle[]>;
@@ -213,7 +216,7 @@ export function advanceRegionLaunchMinutes(input:{states:Record<string,RegionLau
         // create a retroactive chase after the move has already happened.
         if(input.now-at>75_000){s.reason="RegionLaunch收到迟到的1分钟K，仅补齐观察，不历史补追。";continue;}
         const side=row.close>=longTrigger?"LONG":row.close<=shortTrigger?"SHORT":null;
-        if(!side||!anchorFlowDirectionAllowed(input.frames,symbol,side))continue;
+        if(!side)continue;
         const trigger=side==="LONG"?longTrigger:shortTrigger;
         const quality=assessStrongBreakout({bar:row,side,triggerPrice:trigger,costRate:input.costRate,regionWidthRate:s.motherWidthRate});
         if(!quality.ok){s.reason=`RegionLaunch继续观察：${quality.reason}`;continue;}
@@ -221,7 +224,7 @@ export function advanceRegionLaunchMinutes(input:{states:Record<string,RegionLau
         s.breakoutOpen=row.open;s.breakoutHigh=row.high;s.breakoutLow=row.low;s.breakoutClose=row.close;
         s.breakoutImpulseRate=quality.impulseRate;s.breakoutWickRate=quality.adverseWickRate;
         s.pullbackExtreme=side==="LONG"?row.low:row.high;
-        s.reason="RegionLaunch IGNITION：强势1分钟突破K成立；允许后续出现小回调，但突破实体必须持续明显大于累计反向回调，等待第一根重新顺向1分钟K。";
+        s.reason="RegionLaunch IGNITION：强势1分钟突破K成立；等待下一根继续强突破，或小回调后的第一根重新顺向1分钟K。";
         break;
       }
     }
@@ -253,8 +256,9 @@ export function advanceRegionLaunchMinutes(input:{states:Record<string,RegionLau
           s.reason="RegionLaunch小回调后重新启动，但确认时离发射边界过远；不补追，等待新的压缩或更好位置。";
         }else{
           const support=evaluated.supportPrice!,microBuffer=Math.max(trigger*.0015,s.compression.width*.08,input.costRate*trigger*.30);
-          const fallbackGap=Math.min(trigger*.0075,Math.max(trigger*.0025,s.compression.width*.22));
-          const stop=side==="LONG"?Math.max(trigger-fallbackGap,support-microBuffer):Math.min(trigger+fallbackGap,support+microBuffer);
+          // Never truncate the actual pullback structure to make a trade fit.
+          // Entry sizing/remaining-space policy evaluates this full stop.
+          const stop=side==="LONG"?support-microBuffer:support+microBuffer;
           const f15=input.frames?.[symbol]?.["15m"];
           const expected=Math.min(.20,Math.max(.015,s.motherWidthRate*1.50,impulse*3,f15?.expectedMoveRate??0));
           s.phase="READY";s.readyAt=evaluated.restartAt;s.readySide=side;s.readySignalPrice=evaluated.restartPrice;s.readyStopPrice=stop;

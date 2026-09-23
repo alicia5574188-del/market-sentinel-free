@@ -20,6 +20,14 @@ const q=(mid:number,at:number)=>({bestBid:mid-.005,bestAsk:mid+.005,observedAt:a
 const armed=()=>advanceRegionLaunchUniverse({paths:{BCH_USDT:compression},lifecycles:{BCH_USDT:lifecycle()},prior:{},
   now:(START+2100)*1000,costRate:.0022}).states;
 
+test("a 5m breakout cannot erase an already armed compression before the 1m lane evaluates it",()=>{
+  const prior=armed(),box=prior.BCH_USDT!.compression!.id;
+  const rows=[...compression,bar(2100,100.79,103,100.7,102.8)];
+  const next=advanceRegionLaunchUniverse({paths:{BCH_USDT:rows},lifecycles:{BCH_USDT:lifecycle()},prior,
+    now:(START+2400)*1000,costRate:.0022}).states;
+  assert.equal(next.BCH_USDT!.phase,"ARMED");assert.equal(next.BCH_USDT!.compression!.id,box);
+});
+
 test("mature mother plus short boundary compression becomes ARMED without consuming AnchorFlow",()=>{
   const s=armed().BCH_USDT!;
   assert.equal(s.version,REGION_LAUNCH_VERSION);assert.equal(s.motherRegionId,mother.id);assert.equal(s.phase,"ARMED");
