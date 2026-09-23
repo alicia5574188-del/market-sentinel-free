@@ -16,6 +16,9 @@ export function evaluateRegionEntryPolicy(input:{
   costRate:number;feeRate:number;slippageRate:number;
 }):Accept|Reject{
   const s=input.signal,mid=(input.bestBid+input.bestAsk)/2,spread=(input.bestAsk-input.bestBid)/Math.max(mid,1e-9);
+  const entryModel=(s as RegionEntrySignal&{entryModel?:string;anchorExpectedMoveRate?:number}).entryModel;
+  const isAnchor=s.kind==="MIGRATION"&&entryModel==="ANCHOR_FLOW";
+  const totalRiskRate=.04,sideRiskRate=.03,tradeRiskRate=isAnchor?.008:.006,perTradeNotionalRate=.60,totalNotionalRate=2.0;
   if(![input.bestBid,input.bestAsk,input.equity,input.peakEquity,input.costRate].every(Number.isFinite)||input.bestBid<=0||input.bestAsk<=input.bestBid)
     return{ok:false,reason:"当前盘口无效",remainingSpaceRate:0};
   if(spread>.0015)return{ok:false,reason:"当前买卖价差过大",remainingSpaceRate:0};
@@ -40,37 +43,27 @@ export function evaluateRegionEntryPolicy(input:{
     if(outside>.15)return{ok:false,reason:"边界拒绝后价格又重新跑回区域外，原回归事件失效",remainingSpaceRate:0};
     remaining=targetRate-input.costRate;
   }else{
-    const boundary=s.side==="LONG"?s.regionUpper:s.regionLower;
-    const travel=d*(mid-boundary)/s.regionWidth;
-    if(travel<-.10)return{ok:false,reason:"价格已重新接受旧区域，迁移事件失效",remainingSpaceRate:0};
-    if(travel>REGION_DETACH_WIDTHS)return{ok:false,reason:"价格已经离旧区域过远，不追迁移单；保留事件等待回踩",remainingSpaceRate:0};
-
-    // The extension budget belongs to the REGION BOUNDARY, not to the second
-    // confirmation close. Otherwise the distance already travelled while
-    // waiting for two completed 5m closes is forgotten and a late confirmation
-    // is incorrectly treated as a fresh full-size opportunity.
-    const extensionBudget=Math.max(s.regionWidthRate*1.25,input.costRate*3);
-    const consumedFromBoundary=Math.max(0,d*(price/boundary-1));
-    remaining=extensionBudget-consumedFromBoundary-input.costRate;
+    if(!isAnchor)return{ok:false,reason:"直接区域迁移已退役；只允许 AnchorFlow 第一次回测重新启动事件",remainingSpaceRate:0};
+    const expected=(s as RegionEntrySignal&{anchorExpectedMoveRate?:number}).anchorExpectedMoveRate??0;
+    remaining=Math.max(0,expected-input.costRate);
     const edgeRatio=remaining/Math.max(lossRate,1e-9);
-    if(remaining<=0||edgeRatio<1.15)
-      return{ok:false,reason:"迁移已确认，但确认前已消耗过多区域外推进空间；保留事件等待回踩边界改善盈亏比",remainingSpaceRate:remaining};
+    if(remaining<=input.costRate||edgeRatio<1.20)
+      return{ok:false,reason:"AnchorFlow 回测成立，但当前15m/1h剩余空间不足覆盖结构风险与成本",remainingSpaceRate:remaining};
   }
-
   const sideRisk=s.side==="LONG"?input.longRisk:input.shortRisk;
   const drawdown=Math.max(0,1-input.equity/Math.max(input.peakEquity,input.equity));
   const drawdownScale=drawdown>=.20?.50:drawdown>=.10?.70:drawdown>=.05?.85:1;
-  const headroom=Math.min(input.equity*.10-input.totalRisk,input.equity*.065-sideRisk);
-  const targetRisk=Math.max(0,Math.min(input.equity*.015*drawdownScale,headroom));
+  const headroom=Math.min(input.equity*totalRiskRate-input.totalRisk,input.equity*sideRiskRate-sideRisk);
+  const targetRisk=Math.max(0,Math.min(input.equity*tradeRiskRate*drawdownScale,headroom));
   const leverage=multiTurnEntryLeverage(structuralStopRate,input.contract.maintenanceRate,input.costRate,input.contract.leverageMax);
   if(leverage<MULTI_TURN_MIN_LEVERAGE)
     return{ok:false,reason:"该区域结构在6倍逐仓杠杆下仍无法保留安全余量",remainingSpaceRate:remaining};
 
   const immediateMarkCost=Math.max(0,2*(input.feeRate+input.slippageRate)+spread);
-  const totalCapNotional=Math.max(0,(input.equity*.10-input.totalRisk)/(lossRate+.10*immediateMarkCost));
-  const sideCapNotional=Math.max(0,(input.equity*.065-sideRisk)/(lossRate+.065*immediateMarkCost));
-  const riskDesired=Math.min(input.equity*1.5,targetRisk/Math.max(lossRate,1e-9),totalCapNotional,sideCapNotional,
-    Math.max(0,input.equity*4-input.grossNotional));
+  const totalCapNotional=Math.max(0,(input.equity*totalRiskRate-input.totalRisk)/(lossRate+totalRiskRate*immediateMarkCost));
+  const sideCapNotional=Math.max(0,(input.equity*sideRiskRate-sideRisk)/(lossRate+sideRiskRate*immediateMarkCost));
+  const riskDesired=Math.min(input.equity*perTradeNotionalRate,targetRisk/Math.max(lossRate,1e-9),totalCapNotional,sideCapNotional,
+    Math.max(0,input.equity*totalNotionalRate-input.grossNotional));
   if(!(riskDesired>=input.equity*.05))
     return{ok:false,reason:"组合风险额度不足有效仓位，不生成碎片订单",remainingSpaceRate:remaining};
 
@@ -84,11 +77,11 @@ export function evaluateRegionEntryPolicy(input:{
   const capCount=(rate:number,used:number,addedRiskPer=0)=>Math.max(0,Math.floor((input.equity*rate-used)/Math.max(1e-12,addedRiskPer-rate*equityDeltaPer)));
   let count=Math.floor(desired/notionalPer);
   count=Math.min(count,
-    capCount(.10,input.totalRisk,riskPer),
-    capCount(.065,input.longRisk,s.side==="LONG"?riskPer:0),
-    capCount(.065,input.shortRisk,s.side==="SHORT"?riskPer:0),
-    capCount(.015,0,riskPer),
-    ...input.tradeRisks.map(risk=>capCount(.015,risk,0))
+    capCount(totalRiskRate,input.totalRisk,riskPer),
+    capCount(sideRiskRate,input.longRisk,s.side==="LONG"?riskPer:0),
+    capCount(sideRiskRate,input.shortRisk,s.side==="SHORT"?riskPer:0),
+    capCount(tradeRiskRate,0,riskPer),
+    ...input.tradeRisks.map(risk=>capCount(tradeRiskRate,risk,0))
   );
   if(count<Math.max(1,input.contract.minContracts??1))
     return{ok:false,reason:"风险额度低于交易所最小合约张数",remainingSpaceRate:remaining};

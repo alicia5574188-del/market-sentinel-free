@@ -39,8 +39,9 @@ import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCand
 import { advanceForward, closeForwardForReset, forwardSummary, forwardEquity, freshQuote, forwardWatchSymbols, initialMultiTurnForward,
   BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { MULTI_TURN_VERSION } from "../lib/multi-turn-engine.ts";
+import { ANCHOR_FLOW_VERSION } from "../lib/anchor-flow.ts";
 import { forwardSymbolAllowed } from "../lib/forward-evidence.ts";
-import { selectRegionLifecycleUniverse } from "../lib/multi-turn-universe.ts";
+import { selectAnchorOpportunityUniverse } from "../lib/multi-turn-universe.ts";
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, prepareForwardReset,
   FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE } from "../lib/forward-store.ts";
 import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBudgetView,
@@ -85,7 +86,7 @@ const STRATEGY_LOG_RETENTION_MS = 14 * 24 * 60 * 60_000;
 const WARMUP_SNAPSHOTS = 4;
 const MAX_ANCILLARY_CONCURRENCY = 2;
 const MAX_OPEN_POSITIONS = PORTFOLIO_REALTIME_CAPACITY;
-const SCAN_UNIVERSE_SIZE = 60;
+const SCAN_UNIVERSE_SIZE = 30;
 const MAX_OUTBOX_ITEMS = 512;
 const NON_ALARM_WRITE_CAP = 8_000;
 const WATCHDOG_WRITE_RESERVE = 2_880;
@@ -833,22 +834,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // A failed cold-start catalog load is not a successful empty market scan.
     if (this.contractCatalog.size === 0) throw new Error("contract catalog unavailable: radar refresh deferred");
     const eligible = new Set(this.contractCatalog.keys());
-    // The single-timeframe strategy scans 60 completed-5m paths while the
-    // executable-book pool remains capped separately at 11. Mature regions,
-    // pending region events and existing holdings keep their scan path first;
-    // the remaining surface rotates every completed 5m window.
+    // AnchorFlow scans 30 liquid/active completed-5m paths. Existing exposure,
+    // executable events and an in-progress first-retest lifecycle keep their path;
+    // the remaining slots rotate through liquid contracts without giving turnover
+    // or raw volatility any direct trading authority.
     const eligibleRows = rows.filter((row) => eligible.has(row.symbol) && forwardSymbolAllowed(row.symbol));
-    const regionPriority:Record<string,number>={PROBE_UP:0,PROBE_DOWN:0,ACCEPTED_UP:1,ACCEPTED_DOWN:1,IN_REGION:2,DETACHED_UP:3,DETACHED_DOWN:3,NO_REGION:4};
-    const lockedRegionSymbols=[...new Set([
+    const lockedAnchorSymbols=[...new Set([
       ...(this.forwardState?.positions.flatMap(position=>position.status==="OPEN"?[position.symbol]:[])??[]),
       ...(this.forwardState?.regionSignals??[]).filter(signal=>signal.expiresAt>now).map(signal=>signal.symbol),
-      ...Object.values(this.forwardState?.regionLifecycles??{}).filter(row=>row.zone&&row.status!=="NO_REGION")
-        .sort((a,b)=>(regionPriority[a.status]??9)-(regionPriority[b.status]??9)||b.observedAt-a.observedAt)
-        .map(row=>row.symbol),
+      ...Object.values(this.forwardState?.anchorFlows??{}).filter(row=>row.phase!=="FAILED"&&row.phase!=="FIRED").map(row=>row.symbol),
     ])];
-    const universeRows = selectRegionLifecycleUniverse({ rows: eligibleRows, limit: SCAN_UNIVERSE_SIZE,
-      lockedSymbols: lockedRegionSymbols, currentSymbols: this.runtime.liquidUniverse,
-      rotationSeed: Math.floor(now / BAR_MS), explorationSlots: 18 });
+    const universeRows = selectAnchorOpportunityUniverse({ rows: eligibleRows, limit: SCAN_UNIVERSE_SIZE,
+      lockedSymbols: lockedAnchorSymbols, currentSymbols: this.runtime.liquidUniverse,
+      rotationSeed: Math.floor(now / BAR_MS), explorationSlots: 6 });
     const universe = new Set(universeRows.map((row) => row.symbol));
     this.runtime.liquidUniverse = universeRows.map((row) => row.symbol);
     this.runtime.radar = successfulRadarRuntime(this.runtime.radar, now, universeRows.length, []);
@@ -1056,6 +1054,26 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     finally{reservation.finish(false);}
     this.forwardCompression=prepared.compression;this.forwardState=prepared.state;this.forwardError=null;
     this.forwardProtectionBudget=readProtectionWriteBudget(saved?.writeBudget);
+    return true;
+  }
+
+  private async ensureAnchorFlowCutover(now:number){
+    const previous=this.forwardState;
+    if(!previous||previous.strategyAuthorityVersion!==MULTI_TURN_VERSION||previous.executionVersion===ANCHOR_FLOW_VERSION)return false;
+    if(this.runtime.live.requestedEnabled||this.runtime.live.operational||this.activeLivePositions().length||this.activeLiveEntries().length)
+      return false;
+    const quotes=this.regimeQuotes(now),closed=closeForwardForReset(previous,quotes,now),next=initialMultiTurnForward(now);
+    const prepared=await prepareForwardReset(previous,closed,next,now);
+    const saved=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
+    const protection=prepared.entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
+    if(protection&&saved?.writeBudget!==undefined)prepared.entries[FORWARD_PROTECTION_STORAGE]={...protection,writeBudget:saved.writeBudget};
+    const reservation=this.reserveNonAlarmWrites(prepared.writes,64);
+    if(!reservation)throw new Error("AnchorFlow原子实验纪元切换等待写入预算；旧账户保持完整，不发布半重置状态");
+    try{await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});reservation.finish(true);}
+    finally{reservation.finish(false);}
+    this.forwardCompression=prepared.compression;this.forwardState=prepared.state;this.forwardError=null;
+    this.forwardProtectionBudget=readProtectionWriteBudget(saved?.writeBudget);
+    this.mirrorClosures.clear();
     return true;
   }
 
@@ -3100,11 +3118,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         catch (error) { this.runtime.radar = failedRadarRuntime(this.runtime.radar, Date.now(), error); }
       }
       subrequests += await this.refreshStrategyCandle(Date.now());
-      // Region lifecycle trading is 5m-only. Daily candles remain a passive
-      // compatibility cache and no longer consume new Gate requests here.
+      // AnchorFlow derives 15m/1h direction from the retained 5m path. Daily
+      // candles remain a passive compatibility cache and consume no extra request.
       subrequests += await this.refreshRegimeHourly(Date.now());
-      // Completed-candle work may advance turnEngine only after refresh. The
-      // critical alarm independently owns exits and fallback equity marks.
+      // Completed-candle work may atomically start a new AnchorFlow PAPER
+      // experiment only after fresh strategy paths exist. The audited critical
+      // alarm remains unchanged and independently owns exits/fallback marks.
+      await this.ensureAnchorFlowCutover(Date.now());
       await this.advanceForwardNow(Date.now(),true);
       await this.maybeWriteStrategyRuntimeLog(Date.now());
       this.runtime.subrequestCount += subrequests;
