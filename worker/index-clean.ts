@@ -214,6 +214,8 @@ type LiveAuditEvent = {
 
 type LiveRuntime = {
   turnoverAccountKey?: string;
+  recordEpochVersion?: string | null;
+  recordEpochAt: number | null;
   requestedEnabled: boolean;
   operational: boolean;
   changedAt: number | null;
@@ -230,7 +232,7 @@ type LiveRuntime = {
 };
 
 function initialLiveState(): LiveRuntime {
-  return { requestedEnabled: false, operational: false, changedAt: null, lastSyncAt: null, lastError: null,
+  return { recordEpochVersion:null,recordEpochAt:null,requestedEnabled: false, operational: false, changedAt: null, lastSyncAt: null, lastError: null,
     equity: null, available: null, credentialConfigured: false, entries: {}, positions: {}, entrySkips: {}, auditEvents: [] };
 }
 
@@ -522,8 +524,29 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   protected liveJournal = new Map<string, unknown>();
   protected liveHistory: LivePosition[] = [];
   private historyReader=new LiveHistoryReader<LivePosition>();
+  private liveRecordEpochDirty=false;
+  private liveRecordEpochAt(){const at=this.runtime.live.recordEpochAt;return typeof at==="number"&&Number.isFinite(at)&&at>0?at:0;}
+  private liveRecordVisible(position:LivePosition){return position.status==="OPEN"||(position.exitAt??0)>=this.liveRecordEpochAt();}
+  private alignLiveRecordEpoch(now=Date.now()){
+    const version=this.forwardState?.executionVersion??null,startedAt=this.forwardState?.startedAt??0;
+    if(!version||!(startedAt>0)||this.runtime.live.recordEpochVersion===version)return false;
+    if(this.runtime.live.requestedEnabled||this.runtime.live.operational||this.activeLivePositions().length||this.activeLiveEntries().length)return false;
+    this.runtime.live.recordEpochVersion=version;this.runtime.live.recordEpochAt=startedAt;
+    this.runtime.live.positions=Object.fromEntries(Object.entries(this.runtime.live.positions)
+      .map(([symbol,position])=>[symbol,position?.status==="OPEN"?position:null]));
+    this.runtime.live.entries=Object.fromEntries(Object.entries(this.runtime.live.entries)
+      .map(([symbol,entry])=>[symbol,entry&&!["FILLED","CANCELLED"].includes(entry.status)?entry:null]));
+    this.runtime.live.entrySkips={};this.liveHistory=[];this.historyReader.reset(startedAt);this.liveRecordEpochDirty=true;
+    return true;
+  }
+  private async ensureLiveRecordEpoch(now=Date.now()){
+    this.alignLiveRecordEpoch(now);
+    if(!this.liveRecordEpochDirty)return false;
+    await this.saveCheckpoint(now,true);this.liveRecordEpochDirty=false;return true;
+  }
   protected liveSettlementCurrent() {
-    return [...this.liveHistory,...Object.values(this.runtime.live.positions).filter((p):p is LivePosition=>p?.status==="CLOSED")];
+    return [...this.liveHistory,...Object.values(this.runtime.live.positions).filter((p):p is LivePosition=>p?.status==="CLOSED")]
+      .filter(position=>(position.exitAt??0)>=this.liveRecordEpochAt());
   }
   protected liveSettlementNeedsRefresh(now=Date.now()) {
     const current=this.liveSettlementCurrent();
@@ -532,12 +555,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // an otherwise-idle member executor awake forever.
     return this.runtime.live.credentialConfigured
       &&current.some(p=>p.status==="CLOSED"&&p.exitAt!=null&&now-p.exitAt<=30*60_000)
-      &&this.historyReader.needsRefresh(current);
+      &&this.historyReader.needsRefresh(current,this.liveRecordEpochAt());
   }
   protected async privateLiveHistory() {
     if(!this.liveClient&&this.runtime.live.credentialConfigured)await this.gateLive().catch(()=>undefined);
     const client=this.liveClient,current=this.liveSettlementCurrent();
-    this.historyReader.launch({storage:this.ctx.storage,client,current,now:Date.now(),
+    const sinceAt=this.liveRecordEpochAt();
+    this.historyReader.launch({storage:this.ctx.storage,client,current,now:Date.now(),sinceAt,
       valid:()=>this.liveClient===client,
       reserve:()=>this.runtime.nonAlarmWrites+(this.nonAlarmPendingWrites??0)+256<NON_ALARM_WRITE_CAP,
       persist:async entries=>{
@@ -546,7 +570,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         try {await this.ctx.storage.transaction(async tx=>{await tx.put(entries);});reservation.finish(true);}
         finally {reservation.finish(false);}
       },waitUntil:p=>this.ctx.waitUntil(p)});
-    return this.historyReader.view(current);
+    return this.historyReader.view(current,sinceAt);
   }
   protected launchLiveSettlementBackground() {
     if(!this.liveSettlementNeedsRefresh())return;
@@ -661,6 +685,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       if(this.runtime.live.activation&&this.runtime.live.activation.version!==LIVE_SESSION_VERSION)
         this.liveBindingError="实盘开启会话版本不兼容，停止新增复制，不改写所有者开关";
+      // A major strategy execution-version change starts a fresh LIVE record
+      // epoch. Gate history and immutable parity bindings remain untouched, but
+      // the operator-facing record/archive cycle starts from this strategy epoch.
+      this.alignLiveRecordEpoch(Date.now());
       // Populate size metadata with the existing universe job immediately;
       // do not wait ten minutes or add per-symbol/private network requests.
       if(Object.values(this.runtime.contractMeta).some(m=>typeof m.enableDecimal!=="boolean"||!m.orderSizeMin))this.runtime.lastUniverseAt=0;
@@ -679,7 +707,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           if(sourceClosed?.status==="CLOSED"&&sourceClosed.id===id)this.mirrorClosures.set(id,sourceClosed);
         }
         const rows=await ctx.storage.list<{position:LivePosition}>({prefix:`${LIVE_PARITY_PREFIX}closed:`,reverse:true,limit:40});
-        this.liveHistory=[...rows.values()].map(row=>row.position);
+        this.liveHistory=[...rows.values()].map(row=>row.position).filter(position=>this.liveRecordVisible(position));
       } catch(error){this.liveBindingError=safeError(error);}
       // Cached cumulative amounts survive OFF and restart without a private
       // API request. Only owner-authenticated responses can view the amounts.
@@ -3106,8 +3134,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (this.optionalWork) return;
     const task = (async () => {
       let subrequests = 0;
-      // PAPER is the strategy authority. The owner-controlled LIVE adapter
-      // mirrors only these persisted decisions; the generator has no keys.
+      // PAPER is the strategy authority. A new major execution version also
+      // starts a fresh operator-facing LIVE record/archive epoch before any
+      // optional settlement history can be repopulated.
+      await this.ensureLiveRecordEpoch(Date.now());
       this.launchLiveSettlementBackground();
       if (universeDue) {
         subrequests += 2;
@@ -3129,6 +3159,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // experiment only after fresh strategy paths exist. The audited critical
       // alarm remains unchanged and independently owns exits/fallback marks.
       await this.ensureAnchorFlowCutover(Date.now());
+      await this.ensureLiveRecordEpoch(Date.now());
       await this.advanceForwardNow(Date.now(),true);
       await this.maybeWriteStrategyRuntimeLog(Date.now());
       this.runtime.subrequestCount += subrequests;
