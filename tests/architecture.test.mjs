@@ -37,9 +37,9 @@ test("runtime uses bounded futures REST snapshots, no continuous WebSocket", asy
   const optionalStart=worker.indexOf("private launchOptionalWork");
   const optional=worker.slice(optionalStart,worker.indexOf("async alarm(",optionalStart));
   assert.match(optional,/refreshStrategyCandle[\s\S]*advanceForwardNow\(Date\.now\(\),true\)/,
-    "only the post-refresh optional path may advance completed-candle region state");
+    "only the post-refresh optional path may advance completed-candle AnchorFlow state");
   assert.doesNotMatch(optional,/refreshTurnDaily\(Date\.now\(\)\)/,
-    "5m-only region authority must not spend optional requests refreshing daily candles");
+    "AnchorFlow direction is derived from retained 5m paths and must not spend optional requests refreshing daily candles");
   assert.doesNotMatch(alarm, /lastError = `radar:/, "a radar timeout must not become a global execution fault");
   assert.doesNotMatch(alarm, /successes !== this\.runtime\.symbols\.length \? "DEGRADED"/, "partial candidate-book loss must not degrade the whole authority");
   assert.doesNotMatch(alarm, /actionableMarkets === 0 \? `\$\{recoveringMarkets\} realtime markets warming/, "a temporarily empty entry-ready set must not become a global error");
@@ -113,7 +113,7 @@ test("native dark LIVE console retains owner authentication and isolates financi
     assert.ok(consoleUi.includes(label));
   assert.match(consoleUi, /当前模拟账户。按权益比例复制/);
   assert.match(consoleUi, /沿用源单杠杆、保护和退出依据/);
-  assert.match(layout, /哨兵 · 区域生命周期引擎/);
+  assert.match(layout, /哨兵 · AnchorFlow/);
   assert.match(layout, /themeColor: "#0b111a"/);
   const fontSizes=[...css.matchAll(/font-size:\s*(\d+)px/g)].map(v=>Number(v[1]));
   assert.ok(fontSizes.length>40&&Math.min(...fontSizes)>=14);
