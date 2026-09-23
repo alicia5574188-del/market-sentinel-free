@@ -1,10 +1,13 @@
 export const MULTI_TURN_PROFIT_PROTECTION_VERSION="multi-turn-profit-floor-v3";
+export const ANCHOR_FLOW_PROFIT_PROTECTION_VERSION="anchor-flow-profit-floor-v1";
 export const REGION_MIGRATION_PROFIT_PROTECTION_VERSION="region-migration-profit-floor-v1";
 // Persisted generations share the same record shape. A policy rollout must not
 // make an earlier deployed floor unreadable or erase an existing protection line.
-export type MultiTurnProfitVersion=typeof MULTI_TURN_PROFIT_PROTECTION_VERSION|"multi-turn-profit-floor-v4"|typeof REGION_MIGRATION_PROFIT_PROTECTION_VERSION;
+export type MultiTurnProfitVersion=typeof MULTI_TURN_PROFIT_PROTECTION_VERSION|"multi-turn-profit-floor-v4"
+  |typeof ANCHOR_FLOW_PROFIT_PROTECTION_VERSION|typeof REGION_MIGRATION_PROFIT_PROTECTION_VERSION;
 export const supportedProfitVersion=(value:unknown):value is MultiTurnProfitVersion=>
-  value===MULTI_TURN_PROFIT_PROTECTION_VERSION||value==="multi-turn-profit-floor-v4"||value===REGION_MIGRATION_PROFIT_PROTECTION_VERSION;
+  value===MULTI_TURN_PROFIT_PROTECTION_VERSION||value==="multi-turn-profit-floor-v4"
+  ||value===ANCHOR_FLOW_PROFIT_PROTECTION_VERSION||value===REGION_MIGRATION_PROFIT_PROTECTION_VERSION;
 
 export type MultiTurnProfitSignal={
   continuationScore?:number|null;
@@ -94,6 +97,53 @@ export function multiTurnProfitFloor(
     version:MULTI_TURN_PROFIT_PROTECTION_VERSION,
     reachedR,lockedR,floorRate,retentionRate:floorRate/favorable,
     activationRate,checkpointBand:Math.floor(lockedR*4+1e-9),mode,
+  };
+}
+
+
+/**
+ * AnchorFlow profit protection.
+ *
+ * A good 5m restart is expected to produce prompt executable profit. Until the
+ * observed move exceeds the entry expectation, keep about 80% of MFE. Only
+ * profits materially beyond that expectation earn progressively more breathing
+ * room, and weakening owning-frame evidence tightens rather than loosens the
+ * floor. This is a monotonic floor input; the caller owns persistence and the
+ * exchange-native stop mirror.
+ */
+export function anchorFlowProfitFloor(
+  favorable:number,
+  riskRate:number,
+  modeledCost=.0022,
+  expectedMoveRate=0,
+  signal?:MultiTurnProfitSignal|null,
+):MultiTurnProfitFloor|null{
+  if(![favorable,riskRate,modeledCost,expectedMoveRate].every(Number.isFinite)||riskRate<=0||favorable<=0)return null;
+  const reachedR=favorable/riskRate;
+  const activationRate=Math.max(modeledCost*1.6,Math.min(.25*riskRate,.006));
+  if(favorable<activationRate)return null;
+
+  const expected=Math.max(activationRate,expectedMoveRate>0?expectedMoveRate:riskRate);
+  const progress=favorable/expected;
+  let base=.80;
+  if(progress>1&&progress<=1.5)base=.80-(progress-1)/.5*.02;
+  else if(progress>1.5&&progress<=2)base=.78-(progress-1.5)/.5*.03;
+  else if(progress>2&&progress<=3)base=.75-(progress-2)*.03;
+  else if(progress>3)base=.70;
+
+  const {adjustment,mode}=signalAdjustment(signal);
+  // Strong continuation does not justify early giveback. Only already-earned
+  // excess progress loosens the base; weakening evidence can tighten it.
+  const retentionRate=clip(base+Math.max(0,adjustment),base,.92);
+  const costPositiveFloor=modeledCost+Math.max(.0006,modeledCost*.20);
+  const breathingRoom=Math.max(.0008,Math.min(.0018,modeledCost*.35));
+  const floorRate=Math.min(favorable-breathingRoom,Math.max(favorable*retentionRate,costPositiveFloor));
+  if(!(floorRate>modeledCost&&floorRate<favorable))return null;
+  return{
+    version:ANCHOR_FLOW_PROFIT_PROTECTION_VERSION,
+    reachedR,lockedR:floorRate/riskRate,floorRate,
+    retentionRate:floorRate/favorable,activationRate,
+    checkpointBand:Math.floor(floorRate/riskRate*4+1e-9),mode,
   };
 }
 
