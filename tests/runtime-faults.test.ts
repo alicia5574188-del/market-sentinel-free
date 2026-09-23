@@ -1373,6 +1373,7 @@ test("status exposes bounded mirror telemetry, never the complete outage outbox"
   assert.equal((body.liveTurnover as Record<string,unknown>).total,undefined);
   assert.deepEqual(history,[]);assert.equal((mirror as {source:string}).source,"CURRENT_FORWARD_ACCOUNT");
   assert.deepEqual(owned, {
+    recordEpochVersion:null,recordEpochAt:null,
     requestedEnabled: false, operational: false, changedAt: null, lastSyncAt: null, lastError: null,
     equity: null, available: null, credentialConfigured: false, entries: {}, positions: {}, entrySkips: {}, auditEvents: [],
   });
