@@ -1087,89 +1087,49 @@ jobs:
               "$WORKER_BASE_URL/__health" || true)"
             if [[ "$code" == "200" ]] && jq -e '
               .ok == true and .version == "all-regime-compound-v3" and .mode == "PAPER" and
+              .runtime.version == "all-regime-compound-v3" and .runtime.mode == "PAPER" and
               .runtime.state == "LIVE" and .runtime.stale == false and .runtime.lastError == null and
+              .runtime.authorityReady == true and
               ((now * 1000 - .runtime.lastSuccessAt) < 10000) and
               (.runtime.liveMode.requestedEnabled | type) == "boolean" and
               (.runtime.liveMode.operational | type) == "boolean" and
               (.runtime.liveMode.operational == false or .runtime.liveMode.requestedEnabled == true) and
-              .runtime.strategyArena.version == 1 and .runtime.strategyArena.playbookCount == 12 and
-              .runtime.strategyArena.catalogSize == 12 and
-              .runtime.strategyArena.shadowCount == 0 and .runtime.strategyArena.activeCount == 0 and
-              .runtime.legacyRetired == true and
               .runtime.forward.version == "forward-relations-v1.0" and
               .runtime.forward.strategyAuthorityVersion == "multi-turn-v1" and
+              .runtime.forward.executionVersion == "anchor-flow-v1" and
+              .runtime.forward.regionVersion == "region-lifecycle-v1" and
               .runtime.forward.liveEligible == false and
+              .runtime.forward.initialEquity == 1000 and
+              (.runtime.forward.startedAt | type) == "number" and .runtime.forward.startedAt > 0 and
+              (.runtime.forward.lastCycleAt | type) == "number" and .runtime.forward.lastCycleAt > 0 and
+              (.runtime.forward.openCount | type) == "number" and
+              (.runtime.forward.anchorFlowCount | type) == "number" and
+              (.runtime.forward.executableEventCount | type) == "number" and
+              .runtime.forward.storage.persistedAt >= .runtime.forward.lastCycleAt and
+              .runtime.forward.storage.error == null and
               .runtime.liveMirror.version == "current-paper-live-parity-v1" and
               .runtime.liveMirror.source == "CURRENT_FORWARD_ACCOUNT" and
               .runtime.liveMirror.connected == true and
               .runtime.liveMirror.ownerControlled == true and
               .runtime.liveMirror.newOrdersOnly == true and
               .runtime.liveMirror.executionPolicy == "new-orders-decimal-pnl-v1" and
-              .runtime.resourceAccounting.policy == "cloudflare-utc-day-v1" and
-              .runtime.liveTurnover.version == "gate-confirmed-turnover-v2" and
               .runtime.liveMirror.exactFillsGuaranteed == false and
-              .runtime.forward.storage.persistedAt > 0 and
-              .runtime.forward.storage.error == null and
-              (.runtime.strategyArena.engines | length) == 5 and
-              ([.runtime.strategyArena.engines[].id] | sort) == ["BALANCED_ROTATION", "COMPRESSION", "DIRECTIONAL_TREND", "NON_TREND_EXPANSION", "SHOCK_TRANSITION"] and
-              (all(.runtime.strategyArena.engines[];
-                (.portfolioEquity | type) == "number" and .portfolioEquity > 0)) and
-              (.runtime.strategyArena.routeCheckCount | type) == "number" and
-              (.runtime.strategyArena.formingRouteCount | type) == "number" and
-              (.runtime.strategyArena.blockedRouteCount | type) == "number" and
-              (.runtime.strategyArena.openRouteCount | type) == "number" and
+              .runtime.liveTurnover.version == "gate-confirmed-turnover-v2" and
+              .runtime.realtimeReadiness.capacity == 11 and
+              .runtime.realtimeReadiness.protectedMarketsReady == true and
               (.runtime.feedQuality.attempts | type) == "number" and
-              (.runtime.strategyArena.portfolioEquity | type) == "number" and
-              .runtime.strategyArena.portfolioEquity > 0 and
-              .runtime.strategyData.stableMarkets == 11 and
-              .runtime.strategyData.hourlyRequiredCandles == 721 and
-              .runtime.strategyData.hourlyPathFailures == 0 and
-              .runtime.strategyData.hourlyPathError == null and
-              .runtime.strategyData.polarityReady == true and
-              .runtime.strategyData.lastCompletedCandleAt > 0 and
-              .runtime.strategyData.marketContextMarkets >= 8 and
+              .runtime.radar.scanned > 0 and .runtime.radar.scanned <= 30 and
               .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 11 and
-              .runtime.strategyArena.rules.singleTradeRiskMin == 0.015 and
-              .runtime.strategyArena.rules.singleTradeRiskMax == 0.015 and
-              .runtime.strategyArena.rules.minimumPortfolioRiskUsdt == 0 and
-              .runtime.strategyArena.rules.targetPortfolioRiskUsdt == 15 and
-              .runtime.strategyArena.rules.minimumNotionalMultiple == 0.05 and
-              .runtime.strategyArena.rules.empiricalCostFloorRate == 0.0014 and
-              .runtime.strategyArena.rules.authorityWindowPriority == "CURRENT_REGIME_DIRECT" and
-              .runtime.strategyArena.rules.extremeSequenceAuthority == false and
-              .runtime.strategyArena.rules.strategyName == "五行情独立账户组合" and
-              .runtime.strategyArena.rules.maxNotionalMultiple == 0.5 and
-              .runtime.strategyArena.rules.generatedRouteAuthority == false and
-              .runtime.strategyArena.rules.legacyStrategyAuthority == false and
-              .runtime.strategyArena.rules.paperCycleResetOnCutover == false and
-              .runtime.strategyArena.rules.normalShadowAlwaysOn == false and
-              .runtime.strategyArena.rules.shadowExecution == false and
-              .runtime.strategyArena.rules.outcomeBasedPromotion == false and
-              (.runtime.strategyArena.rules | has("streakLength") | not) and
-              .runtime.strategyArena.rules.maxPortfolioPositions == null and
-              .runtime.strategyArena.rules.profitArmIsExit == true and
-              .runtime.strategyArena.rules.dailyObjectiveRate == 0.10 and
-              .runtime.strategyArena.rules.dailyObjectiveIsQuota == false and
-              .runtime.strategyArena.rules.portfolioRiskCap == 0.10 and
-              .runtime.strategyArena.rules.correlatedRiskCap == 0.065 and
-              .runtime.strategyArena.rules.dualIndependentEngines == false and
-              .runtime.strategyArena.rules.independentSystemCount == 5 and
-              .runtime.strategyArena.rules.engineInitialEquity == 1000 and
-              .runtime.strategyArena.rules.canonicalReferenceEquity == 10000 and
-              .runtime.strategyArena.rules.canonicalCopySizing == "SOURCE_EQUITY_FRACTION" and
-              .runtime.strategyArena.rules.canonicalEntryScaleFrozen == true and
-              .runtime.strategyArena.rules.canonicalAdmissionGate == false and
-              .runtime.strategyArena.rules.canonicalCapitalAgnostic == false and
-              .runtime.strategyArena.rules.sameSymbolCrossEngineAllowed == true and
-              .runtime.strategyArena.rules.liveSource == "CANONICAL_PAPER_NORMALIZED_NET" and
-              .runtime.limits.plannedTotalDoRequestsPerDay < 55000 and
-              .runtime.limits.plannedDoWritesPerDay == 63032 and
-              .runtime.limits.twoMemberReservedDoRowsPerDay == 99192 and
-              .runtime.limits.capacityCertified == false and
+              .runtime.limits.markets <= 11 and .runtime.limits.markets > 0 and
+              .runtime.resourceAccounting.policy == "cloudflare-utc-day-v1" and
               .runtime.resourceAccounting.cap == 8000 and
               .runtime.resourceAccounting.criticalProtection.cap == 8640 and
               .runtime.resourceAccounting.criticalProtection.independentOfFinancialWrites == true and
               .runtime.resourceAccounting.criticalProtection.writes <= 8640 and
+              .runtime.limits.plannedTotalDoRequestsPerDay < 55000 and
+              .runtime.limits.plannedDoWritesPerDay == 63032 and
+              .runtime.limits.twoMemberReservedDoRowsPerDay == 99192 and
+              .runtime.limits.capacityCertified == false and
               .runtime.limits.plannedMaxD1BilledWritesPerDay < 5000
             ' "$RUNNER_TEMP/main-health.json" >/dev/null; then
               current="$(jq -er '.runtime.lastSuccessAt' "$RUNNER_TEMP/main-health.json")"
@@ -1187,8 +1147,8 @@ jobs:
                 stale: .runtime.stale, authorityReady: .runtime.authorityReady,
                 lastError: .runtime.lastError, lastSuccessAt: .runtime.lastSuccessAt,
                 lastAlarmAt: .runtime.lastAlarmAt, liveMode: .runtime.liveMode,
-                strategyArenaVersion: .runtime.strategyArena.version,
-                portfolioEquity: .runtime.strategyArena.portfolioEquity
+                forward: .runtime.forward, realtimeReadiness: .runtime.realtimeReadiness,
+                radar: .runtime.radar, limits: .runtime.limits
               }
             }' "$RUNNER_TEMP/main-health.json"
             exit 1
@@ -1197,7 +1157,7 @@ jobs:
           page_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/main-page.html" -w '%{http_code}' \
             "$WORKER_BASE_URL/" || true)"
           [[ "$page_code" == "200" ]]
-          grep -Fq '哨兵 · 区域生命周期引擎' "$RUNNER_TEMP/main-page.html"
+          grep -Fq '哨兵 · AnchorFlow' "$RUNNER_TEMP/main-page.html"
           jq -e --arg sha "$GITHUB_SHA" '.runtime.buildSha == $sha' "$RUNNER_TEMP/main-health.json" >/dev/null
           before="$(jq -r '.runtime.liveMode.requestedEnabled' "$RUNNER_TEMP/owner-intent-before.json")"
           after="$(jq -r '.runtime.liveMode.requestedEnabled' "$RUNNER_TEMP/main-health.json")"
@@ -1222,13 +1182,9 @@ jobs:
           admin_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/member-admin-denied.json" -w '%{http_code}' "$WORKER_BASE_URL/api/members/admin")"
           [[ "$admin_code" == 403 ]]
           jq -c '{version, mode, runtime: {state: .runtime.state, stale: .runtime.stale,
-            liveMode: .runtime.liveMode, currentContext: .runtime.strategyArena.currentContext,
-            routeCheckCount: .runtime.strategyArena.routeCheckCount,
-            formingRouteCount: .runtime.strategyArena.formingRouteCount,
-            blockedRouteCount: .runtime.strategyArena.blockedRouteCount,
-            openRouteCount: .runtime.strategyArena.openRouteCount,
-            stableMarkets: .runtime.strategyData.stableMarkets,
-            marketContextMarkets: .runtime.strategyData.marketContextMarkets}}' \
+            liveMode: .runtime.liveMode, forward: .runtime.forward,
+            realtimeReadiness: .runtime.realtimeReadiness,
+            scannedMarkets: .runtime.radar.scanned, limits: .runtime.limits}}' \
             "$RUNNER_TEMP/main-health.json"
 
   monitor:
@@ -1278,102 +1234,62 @@ jobs:
             .ok == true and .version == "all-regime-compound-v3" and .mode == "PAPER" and
             .runtime.version == "all-regime-compound-v3" and .runtime.mode == "PAPER" and
             .runtime.state == "LIVE" and .runtime.stale == false and .runtime.lastError == null and
+            .runtime.authorityReady == true and
             ((now * 1000 - .runtime.lastSuccessAt) < 10000) and
             (.runtime.liveMode.requestedEnabled | type) == "boolean" and
             (.runtime.liveMode.operational | type) == "boolean" and
             (.runtime.liveMode.operational == false or .runtime.liveMode.requestedEnabled == true) and
-            .runtime.strategyArena.version == 1 and .runtime.strategyArena.playbookCount == 12 and
-            .runtime.strategyArena.catalogSize == 12 and
-            .runtime.strategyArena.shadowCount == 0 and .runtime.strategyArena.activeCount == 0 and
-              .runtime.legacyRetired == true and
-              .runtime.forward.version == "forward-relations-v1.0" and
-              .runtime.forward.strategyAuthorityVersion == "multi-turn-v1" and
-              .runtime.forward.liveEligible == false and
-              .runtime.liveMirror.version == "current-paper-live-parity-v1" and
-              .runtime.liveMirror.source == "CURRENT_FORWARD_ACCOUNT" and
-              .runtime.liveMirror.connected == true and
-              .runtime.liveMirror.ownerControlled == true and
-              .runtime.liveMirror.newOrdersOnly == true and
-              .runtime.liveMirror.executionPolicy == "new-orders-decimal-pnl-v1" and
-              .runtime.resourceAccounting.policy == "cloudflare-utc-day-v1" and
-              .runtime.liveTurnover.version == "gate-confirmed-turnover-v2" and
-              .runtime.liveMirror.exactFillsGuaranteed == false and
-              .runtime.forward.storage.persistedAt > 0 and
-              .runtime.forward.storage.error == null and
-            (.runtime.strategyArena.engines | length) == 5 and
-            ([.runtime.strategyArena.engines[].id] | sort) == ["BALANCED_ROTATION", "COMPRESSION", "DIRECTIONAL_TREND", "NON_TREND_EXPANSION", "SHOCK_TRANSITION"] and
-            (all(.runtime.strategyArena.engines[];
-              (.portfolioEquity | type) == "number" and .portfolioEquity > 0)) and
-            (.runtime.strategyArena.routeCheckCount | type) == "number" and
-            (.runtime.strategyArena.formingRouteCount | type) == "number" and
-            (.runtime.strategyArena.blockedRouteCount | type) == "number" and
-            (.runtime.strategyArena.openRouteCount | type) == "number" and
+            .runtime.forward.version == "forward-relations-v1.0" and
+            .runtime.forward.strategyAuthorityVersion == "multi-turn-v1" and
+            .runtime.forward.executionVersion == "anchor-flow-v1" and
+            .runtime.forward.regionVersion == "region-lifecycle-v1" and
+            .runtime.forward.liveEligible == false and
+            .runtime.forward.initialEquity == 1000 and
+            (.runtime.forward.startedAt | type) == "number" and .runtime.forward.startedAt > 0 and
+            (.runtime.forward.lastCycleAt | type) == "number" and .runtime.forward.lastCycleAt > 0 and
+            (.runtime.forward.openCount | type) == "number" and
+            (.runtime.forward.anchorFlowCount | type) == "number" and
+            (.runtime.forward.executableEventCount | type) == "number" and
+            .runtime.forward.storage.persistedAt >= .runtime.forward.lastCycleAt and
+            .runtime.forward.storage.error == null and
+            .runtime.liveMirror.version == "current-paper-live-parity-v1" and
+            .runtime.liveMirror.source == "CURRENT_FORWARD_ACCOUNT" and
+            .runtime.liveMirror.connected == true and
+            .runtime.liveMirror.ownerControlled == true and
+            .runtime.liveMirror.newOrdersOnly == true and
+            .runtime.liveMirror.executionPolicy == "new-orders-decimal-pnl-v1" and
+            .runtime.liveMirror.exactFillsGuaranteed == false and
+            .runtime.liveTurnover.version == "gate-confirmed-turnover-v2" and
+            .runtime.realtimeReadiness.capacity == 11 and
+            .runtime.realtimeReadiness.protectedMarketsReady == true and
             (.runtime.feedQuality.attempts | type) == "number" and
-            .runtime.strategyArena.rules.minimumPortfolioRiskUsdt == 0 and
-            .runtime.strategyArena.rules.targetPortfolioRiskUsdt == 15 and
-            .runtime.strategyArena.rules.singleTradeRiskMin == 0.015 and
-            .runtime.strategyArena.rules.singleTradeRiskMax == 0.015 and
-            .runtime.strategyArena.rules.minimumNotionalMultiple == 0.05 and
-            .runtime.strategyArena.rules.empiricalCostFloorRate == 0.0014 and
-            .runtime.strategyArena.rules.normalShadowAlwaysOn == false and
-            .runtime.strategyArena.rules.shadowExecution == false and
-            .runtime.strategyArena.rules.outcomeBasedPromotion == false and
-            .runtime.strategyArena.rules.extremeSequenceAuthority == false and
-            .runtime.strategyArena.rules.strategyName == "五行情独立账户组合" and
-            .runtime.strategyArena.rules.maxNotionalMultiple == 0.5 and
-            .runtime.strategyArena.rules.generatedRouteAuthority == false and
-            .runtime.strategyArena.rules.legacyStrategyAuthority == false and
-            .runtime.strategyArena.rules.paperCycleResetOnCutover == false and
-            .runtime.strategyArena.rules.authorityWindowPriority == "CURRENT_REGIME_DIRECT" and
-            (.runtime.strategyArena.rules | has("streakLength") | not) and
-            .runtime.strategyArena.rules.maxPortfolioPositions == null and
-            .runtime.strategyArena.rules.profitArmIsExit == true and
-            .runtime.strategyArena.rules.dailyObjectiveIsQuota == false and
-            .runtime.strategyArena.rules.dualIndependentEngines == false and
-            .runtime.strategyArena.rules.independentSystemCount == 5 and
-            .runtime.strategyArena.rules.engineInitialEquity == 1000 and
-            .runtime.strategyArena.rules.canonicalReferenceEquity == 10000 and
-            .runtime.strategyArena.rules.canonicalCopySizing == "SOURCE_EQUITY_FRACTION" and
-            .runtime.strategyArena.rules.canonicalEntryScaleFrozen == true and
-            .runtime.strategyArena.rules.canonicalAdmissionGate == false and
-            .runtime.strategyArena.rules.canonicalCapitalAgnostic == false and
-            .runtime.strategyArena.rules.sameSymbolCrossEngineAllowed == true and
-            .runtime.strategyArena.rules.liveSource == "CANONICAL_PAPER_NORMALIZED_NET" and
-            .runtime.strategyData.stableMarkets == 11 and
-            .runtime.strategyData.hourlyRequiredCandles == 721 and
-            .runtime.strategyData.hourlyPathFailures == 0 and
-            .runtime.strategyData.hourlyPathError == null and
-            .runtime.strategyData.polarityReady == true and
-            .runtime.strategyData.lastCompletedCandleAt > 0 and
-            .runtime.strategyData.marketContextMarkets >= 8 and
+            .runtime.radar.scanned > 0 and .runtime.radar.scanned <= 30 and
             .runtime.limits.scanUniverse == 30 and .runtime.limits.realtimeCapacity == 11 and
-            .runtime.limits.plannedTotalDoRequestsPerDay < 55000 and
-            .runtime.limits.plannedDoWritesPerDay == 63032 and
-            .runtime.limits.twoMemberReservedDoRowsPerDay == 99192 and
-            .runtime.limits.capacityCertified == false and
+            .runtime.limits.markets <= 11 and .runtime.limits.markets > 0 and
+            .runtime.resourceAccounting.policy == "cloudflare-utc-day-v1" and
             .runtime.resourceAccounting.cap == 8000 and
             .runtime.resourceAccounting.criticalProtection.cap == 8640 and
             .runtime.resourceAccounting.criticalProtection.independentOfFinancialWrites == true and
             .runtime.resourceAccounting.criticalProtection.writes <= 8640 and
+            .runtime.limits.plannedTotalDoRequestsPerDay < 55000 and
+            .runtime.limits.plannedDoWritesPerDay == 63032 and
+            .runtime.limits.twoMemberReservedDoRowsPerDay == 99192 and
+            .runtime.limits.capacityCertified == false and
             .runtime.limits.plannedMaxD1BilledWritesPerDay < 5000
           ' "$RUNNER_TEMP/monitor-health-2.json" >/dev/null
           first="$(jq -er '.runtime.lastSuccessAt' "$RUNNER_TEMP/monitor-health-1.json")"
           second="$(jq -er '.runtime.lastSuccessAt' "$RUNNER_TEMP/monitor-health-2.json")"
           (( second > first ))
           jq -c '{version, mode, runtime: {state: .runtime.state, stale: .runtime.stale,
-            liveMode: .runtime.liveMode, currentContext: .runtime.strategyArena.currentContext,
-            routeCheckCount: .runtime.strategyArena.routeCheckCount,
-            formingRouteCount: .runtime.strategyArena.formingRouteCount,
-            blockedRouteCount: .runtime.strategyArena.blockedRouteCount,
-            openRouteCount: .runtime.strategyArena.openRouteCount,
-            stableMarkets: .runtime.strategyData.stableMarkets,
-            marketContextMarkets: .runtime.strategyData.marketContextMarkets}}' \
+            liveMode: .runtime.liveMode, forward: .runtime.forward,
+            realtimeReadiness: .runtime.realtimeReadiness,
+            scannedMarkets: .runtime.radar.scanned, limits: .runtime.limits}}' \
             "$RUNNER_TEMP/monitor-health-2.json"
 
           page_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/monitor-page.html" -w '%{http_code}' \
             "$WORKER_BASE_URL/" || true)"
           [[ "$page_code" == "200" ]]
-          grep -Fq '哨兵 · 区域生命周期引擎' "$RUNNER_TEMP/monitor-page.html"
+          grep -Fq '哨兵 · AnchorFlow' "$RUNNER_TEMP/monitor-page.html"
           jq -e '.members.version == "isolated-member-keys-v1" and .members.configured == true' "$RUNNER_TEMP/monitor-health-2.json" >/dev/null
           for path in /api/runtime /api/forward/export /api/forward/archive /api/history /api/account-logs; do
             code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/monitor-guest-denied.json" -w '%{http_code}' "$WORKER_BASE_URL$path")"
