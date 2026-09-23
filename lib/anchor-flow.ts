@@ -38,6 +38,7 @@ export type AnchorFlowEntrySignal=RegionEntrySignal&{
   retestAt:number;
   restartLevel:number;
   pullbackExtreme:number;
+  anchorExpectedMoveRate:number;
 };
 
 const completeAt=(row:RegionCandle)=>row.time*1000+REGION_BAR_MS;
@@ -126,6 +127,7 @@ function updateOne(input:{
           reason:`AnchorFlow：1h/15m同向FLOW；区域外已真实推进，第一次回测守住后5m重新启动。`,
           entryModel:"ANCHOR_FLOW",contextTimeframe:"15m",directionFrameAt:f15.completedAt,trendFrameAt:f1h.completedAt,
           retestAt:s.retestAt,restartLevel:s.restartLevel,pullbackExtreme:s.pullbackExtreme,
+          anchorExpectedMoveRate:Math.max(0,Math.min(f15.expectedMoveRate,f1h.expectedMoveRate)),
         });
         s.phase="FIRED";s.firedAt=at;s.reason="第一次回测守住并重新启动；已产生一次性 AnchorFlow 真实交易事件。";
         s.lastProcessedAt=at;break;
