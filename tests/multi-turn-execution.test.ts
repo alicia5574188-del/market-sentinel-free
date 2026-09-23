@@ -122,9 +122,9 @@ test("migration exits at its structural defense and the stop is never widened",(
     entrySymbols:["AAVE_USDT"],allowDataCycle:false}).state;
   const initialStop=state.positions[0]!.stopPrice;
   state.regionLifecycles!.AAVE_USDT={...state.regionLifecycles!.AAVE_USDT!,zone:{...state.regionLifecycles!.AAVE_USDT!.zone!,
-    id:"rg-AAVE-new",confirmedAt:now+300_000,startAt:now,endAt:now+300_000,lower:102,upper:104,center:103,width:2,widthRate:.0194}};
+    id:"rg-AAVE-new",confirmedAt:now+300_000,startAt:now,endAt:now+300_000,lower:100.9,upper:101.3,center:101.1,width:.4,widthRate:.00396}};
   const liftAt=now+1_000;
-  state=advanceForward({state,now:liftAt,paths:{},quotes:{AAVE_USDT:quote(103,liftAt)},contracts:{AAVE_USDT:meta},
+  state=advanceForward({state,now:liftAt,paths:{},quotes:{AAVE_USDT:quote(101.25,liftAt)},contracts:{AAVE_USDT:meta},
     entrySymbols:["AAVE_USDT"],allowDataCycle:false}).state;
   assert.ok(state.positions[0]!.stopPrice>initialStop,"higher accepted region may only raise LONG defense");
   const raised=state.positions[0]!.stopPrice,hitAt=liftAt+1_000;
