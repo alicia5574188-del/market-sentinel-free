@@ -12,10 +12,10 @@ const base=(overrides:Partial<TestSignal>={}):TestSignal=>({
   regionId:"r1",regionConfirmedAt:500,regionLower:99,regionUpper:101,regionCenter:100,regionWidth:2,regionWidthRate:.02,
   reason:"fixture",...overrides,
 });
-const run=(signal:RegionEntrySignal,bid:number,ask:number,anchorConfirmationReferencePrice?:number)=>evaluateRegionEntryPolicy({
+const run=(signal:RegionEntrySignal,bid:number,ask:number,anchorConfirmationReferencePrice?:number,anchorMicroConfirmed=false)=>evaluateRegionEntryPolicy({
   signal,bestBid:bid,bestAsk:ask,contract,equity:1000,peakEquity:1000,totalRisk:0,longRisk:0,shortRisk:0,
   grossNotional:0,usedMargin:0,tradeRisks:[],costRate:.0022,feeRate:.0007,slippageRate:.00025,
-  anchorConfirmationReferencePrice});
+  anchorConfirmationReferencePrice,anchorMicroConfirmed});
 
 test("direct migration no longer owns entry authority",()=>{
   const result=run(base(),101.19,101.21);assert.equal(result.ok,false);
@@ -32,6 +32,14 @@ test("AnchorFlow restart stays READY until a small executable-price confirmation
     assert.ok(result.plan.plannedRisk<=8.01);
     assert.ok(result.plan.notional<=600.01);
   }
+});
+
+test("AnchorFlow may use shared completed-1m micro restart as an optional confirmation without making minute data mandatory",()=>{
+  const signal=base({entryModel:"ANCHOR_FLOW",anchorExpectedMoveRate:.022});
+  const noMinute=run(signal,101.19,101.21);
+  assert.equal(noMinute.ok,false,"without micro data the existing live-quote confirmation remains authoritative");
+  const microConfirmed=run(signal,101.19,101.21,undefined,true);
+  assert.equal(microConfirmed.ok,true,"a completed shared 1m restart may confirm the same READY location");
 });
 
 test("rejection entry must still have enough room to the region center after costs and full risk",()=>{
