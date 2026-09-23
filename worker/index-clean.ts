@@ -2824,16 +2824,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return forwardUrgentQuoteSymbols(this.forwardState,now,this.runtime.liquidUniverse??[]);
   }
 
-  private ensureForwardUrgentSymbolsResident(now=Date.now()){
-    const urgent=this.forwardUrgentSymbols(now);
-    if(!urgent.length)return;
-    const protectedSymbols=[...this.currentAuthorityProtectionSymbols()];
-    const keep=this.runtime.symbols.filter(symbol=>!protectedSymbols.includes(symbol)&&!urgent.includes(symbol));
-    const next=[...new Set([...protectedSymbols,...urgent,...keep])].slice(0,PORTFOLIO_REALTIME_CAPACITY);
-    if(next.length!==this.runtime.symbols.length||next.some((symbol,index)=>symbol!==this.runtime.symbols[index]))
-      this.applyRealtimeSymbols(next);
-  }
-
   private forwardQuotes(now=Date.now()){
     if(!this.forwardState||this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION||!this.runtime.evidence)
       return this.regimeQuotes(now);
