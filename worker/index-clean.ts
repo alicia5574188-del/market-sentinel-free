@@ -990,8 +990,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private forwardHealth() {
     const s=this.forwardState;
-    return {version:FORWARD_VERSION,policyVersion:s?.policyVersion??null,strategyAuthorityVersion:s?.strategyAuthorityVersion??null,liveEligible:false,
-      startedAt:s?.startedAt??null,lastCycleAt:s?.lastCycleAt??null,resolved:s?.resolved??0,openCount:s?.positions.length??0,
+    return {version:FORWARD_VERSION,policyVersion:s?.policyVersion??null,strategyAuthorityVersion:s?.strategyAuthorityVersion??null,
+      executionVersion:s?.executionVersion??null,regionVersion:s?.regionVersion??null,liveEligible:false,
+      startedAt:s?.startedAt??null,initialEquity:s?.initialEquity??null,balance:s?.balance??null,
+      lastCycleAt:s?.lastCycleAt??null,resolved:s?.resolved??0,openCount:s?.positions.length??0,
+      anchorFlowCount:Object.values(s?.anchorFlows??{}).filter(row=>row.phase!=="FAILED"&&row.phase!=="FIRED").length,
+      executableEventCount:(s?.regionSignals??[]).filter(row=>row.expiresAt>Date.now()).length,
       exitPolicyVersion:s?.exitPolicyUpgrade?.policy??null,exitPolicyActivatedAt:s?.exitPolicyUpgrade?.at??null,
       timelyExitOpenCount:s?.positions.filter(t=>!!t.exitControl&&t.exitControl.policy===s.exitPolicyUpgrade?.policy).length??0,
       inheritedExitOpenCount:s?.positions.filter(t=>!t.exitControl).length??0,
