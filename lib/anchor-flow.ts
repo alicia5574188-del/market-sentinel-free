@@ -4,6 +4,11 @@ import { type MultiTurnState, type TurnFrameState } from "./multi-turn-engine.ts
 export const ANCHOR_FLOW_VERSION="anchor-flow-v1";
 export const ANCHOR_FLOW_TTL_BARS=12;
 
+export function anchorFlowExecutableProofRate(modeledCostRate:number){
+  const cost=Number.isFinite(modeledCostRate)?Math.max(0,modeledCostRate):0;
+  return Math.max(.001,Math.min(.0015,cost*.45));
+}
+
 export type AnchorFlowPhase="EXTENSION"|"WAIT_RETEST"|"RETEST"|"READY"|"FIRED"|"CONSUMED"|"FAILED";
 export type AnchorFlowState={
   version:typeof ANCHOR_FLOW_VERSION;
@@ -28,6 +33,7 @@ export type AnchorFlowState={
   restartLevel:number|null;
   readyAt?:number|null;
   reacceptBars?:number;
+  retryCount?:number;
   firedAt:number|null;
   consumedAt?:number|null;
   failedAt:number|null;
@@ -73,7 +79,7 @@ function startState(signal:RegionEntrySignal):AnchorFlowState{
     regionLower:signal.regionLower,regionUpper:signal.regionUpper,regionCenter:signal.regionCenter,
     regionWidth:signal.regionWidth,regionWidthRate:signal.regionWidthRate,
     excursionExtreme:signal.signalPrice,retestAt:null,pullbackExtreme:null,restartLevel:null,
-    readyAt:null,reacceptBars:0,firedAt:null,consumedAt:null,failedAt:null,
+    readyAt:null,reacceptBars:0,retryCount:0,firedAt:null,consumedAt:null,failedAt:null,
     reason:"区域外连续收盘已确认；不追突破，只等边界附近出现可执行的5m顺向反应。"
   };
 }
@@ -81,17 +87,17 @@ function startState(signal:RegionEntrySignal):AnchorFlowState{
 function fail(state:AnchorFlowState,at:number,reason:string){
   state.phase="FAILED";state.failedAt=at;state.reason=reason;
 }
-function signalFromRetest(input:{state:AnchorFlowState;row:RegionCandle;at:number;frames?:MultiTurnState["frames"];costRate:number}){
-  const s=input.state,{row,at}=input,d=s.side==="LONG"?1:-1;
+function signalFromReady(input:{state:AnchorFlowState;signalPrice:number;at:number;frames?:MultiTurnState["frames"];costRate:number}){
+  const s=input.state,{signalPrice,at}=input,d=s.side==="LONG"?1:-1;
   const by=input.frames?.[s.symbol],f15=by?.["15m"],f1h=by?.["1h"];
   if(!f15?.ready||!f1h?.ready||s.retestAt==null||s.pullbackExtreme==null||s.restartLevel==null)return null;
   const stopBuffer=Math.max(s.regionWidth*.08,s.regionCenter*input.costRate*.25);
   const stopPrice=s.side==="LONG"?s.pullbackExtreme-stopBuffer:s.pullbackExtreme+stopBuffer;
-  if((s.side==="LONG"&&stopPrice>=row.close)||(s.side==="SHORT"&&stopPrice<=row.close))return null;
+  if((s.side==="LONG"&&stopPrice>=signalPrice)||(s.side==="SHORT"&&stopPrice<=signalPrice))return null;
   return {
     version:REGION_LIFECYCLE_VERSION,
-    id:`af-${s.regionId}-${s.side}-${at}`,symbol:s.symbol,kind:"MIGRATION",side:s.side,boundary:s.boundary,
-    completedAt:at,expiresAt:at+2*REGION_BAR_MS,signalPrice:row.close,stopPrice,targetPrice:null,
+    id:`af-${s.regionId}-${s.side}-READY`,symbol:s.symbol,kind:"MIGRATION",side:s.side,boundary:s.boundary,
+    completedAt:at,expiresAt:s.expiresAt,signalPrice,stopPrice,targetPrice:null,
     regionId:s.regionId,regionConfirmedAt:s.regionConfirmedAt,regionLower:s.regionLower,regionUpper:s.regionUpper,
     regionCenter:s.regionCenter,regionWidth:s.regionWidth,regionWidthRate:s.regionWidthRate,
     reason:"AnchorFlow：高周期没有有置信度的明确反向否决；5m区域外确认后回到边界附近并重新出现顺向反应。",
@@ -124,7 +130,8 @@ function updateOne(input:{
   const s=input.state;
   let readySignal:AnchorFlowEntrySignal|null=null;
   const rejections:RegionEntrySignal[]=[];
-  s.readyAt=s.readyAt??null;s.reacceptBars=Number.isFinite(s.reacceptBars??NaN)?Math.max(0,s.reacceptBars??0):0;s.consumedAt=s.consumedAt??null;
+  s.readyAt=s.readyAt??null;s.reacceptBars=Number.isFinite(s.reacceptBars??NaN)?Math.max(0,s.reacceptBars??0):0;
+  s.retryCount=Number.isFinite(s.retryCount??NaN)?Math.max(0,Math.floor(s.retryCount??0)):0;s.consumedAt=s.consumedAt??null;
 
   const consumedAt=input.consumed?.[keyOf(s.regionId,s.side)];
   if(consumedAt){
@@ -183,7 +190,7 @@ function updateOne(input:{
         const reacted=body>=s.regionWidth*.025&&closeLocation>=.58;
         s.reason=reacted?"第一次回测允许浅入旧区域，并在同一根5m出现明确顺向反应。":"第一次回测仍处旧区域外侧；等待价格从回测位置重新向主方向移动。";
         if(reacted){
-          const signal=signalFromRetest({state:s,row,at,frames:input.frames,costRate:input.costRate});
+          const signal=signalFromReady({state:s,signalPrice:row.close,at,frames:input.frames,costRate:input.costRate});
           if(signal){
             readySignal=signal;s.phase="READY";s.readyAt=s.readyAt??at;s.firedAt=s.firedAt??at;
             s.reason="边界回测已产生可执行信号；状态保持READY，只有真实开仓后才CONSUMED。";
@@ -195,7 +202,7 @@ function updateOne(input:{
       const buffer=s.regionWidth*.025;
       const restarted=d*(close-s.restartLevel)>=buffer&&d*(close-row.open)>0;
       if(restarted){
-        const signal=signalFromRetest({state:s,row,at,frames:input.frames,costRate:input.costRate});
+        const signal=signalFromReady({state:s,signalPrice:row.close,at,frames:input.frames,costRate:input.costRate});
         if(signal){
           readySignal=signal;s.phase="READY";s.readyAt=s.readyAt??at;s.firedAt=s.firedAt??at;
           s.reason="回测守住后5m重新向主方向移动；状态保持READY，只有真实开仓后才CONSUMED。";
@@ -210,11 +217,20 @@ function updateOne(input:{
       const reacted=d*(close-row.open)>0;
       readySignal=null;
       if(inBand&&reacted){
-        const signal=signalFromRetest({state:s,row,at,frames:input.frames,costRate:input.costRate});
+        const signal=signalFromReady({state:s,signalPrice:row.close,at,frames:input.frames,costRate:input.costRate});
         if(signal){readySignal=signal;s.reason="READY机会仍在边界优势区出现新鲜顺向反应；重新提交订单经济性检查，尚未消费。";}
       }else s.reason="READY机会尚未成交；继续保留区域，等待边界优势位置重新出现，不追远。";
     }
     s.lastProcessedAt=at;
+  }
+  if(!readySignal&&s.phase==="READY"&&s.readyAt!=null&&s.restartLevel!=null&&s.retestAt!=null&&s.pullbackExtreme!=null){
+    const signal=signalFromReady({state:s,signalPrice:s.restartLevel,at:s.readyAt,frames:input.frames,costRate:input.costRate});
+    if(signal){
+      readySignal=signal;
+      s.reason=s.retryCount
+        ?"READY重试机会持续保留；等待边界附近真实盘口再次给出顺向反馈，不追价。"
+        :"READY机会持续保留；不要求再等一根新的5m反应，等待真实盘口顺向确认后成交。";
+    }
   }
   return{signals:readySignal?[readySignal]:[],rejections};
 }
