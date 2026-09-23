@@ -1103,7 +1103,9 @@ export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iter
     const regions=Object.values(s.regionLifecycles??{}).filter(row=>row.zone&&(!allowed||allowed.has(row.symbol)))
       .sort((a,b)=>(priority[a.status]??9)-(priority[b.status]??9)||b.observedAt-a.observedAt||a.symbol.localeCompare(b.symbol));
     const signals=(s.regionSignals??[]).filter(signal=>signal.expiresAt>now&&(!allowed||allowed.has(signal.symbol)));
-    return[...new Set([...s.positions.map(p=>p.symbol),...signals.map(x=>x.symbol),...regions.map(x=>x.symbol)])].slice(0,11);
+    const anchors=Object.values(s.anchorFlows??{}).filter(row=>row.phase!=="FAILED"&&row.phase!=="FIRED"
+      &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>a.createdAt-b.createdAt||a.symbol.localeCompare(b.symbol));
+    return[...new Set([...s.positions.map(p=>p.symbol),...signals.map(x=>x.symbol),...anchors.map(x=>x.symbol),...regions.map(x=>x.symbol)])].slice(0,11);
   }
   const matched=Object.values(s.frames).filter(f=>now-f.at<11*60_000&&s.rules.some(r=>r.status==="EXPERIMENTAL"&&r.expiresAt>now&&ruleApplies(r,f.symbol)&&conditionMatches(f.x,r.conditions)));
   return[...new Set([...s.positions.map(p=>p.symbol),...matched.map(f=>f.symbol)])];
@@ -1112,41 +1114,42 @@ export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iter
 export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:number){
   const marked=forwardEquity(s,quotes,now),count=Object.fromEntries(HORIZONS.map(h=>[h,s.samples.filter(r=>r.horizon===h).length]));
   const multi=s.strategyAuthorityVersion===MULTI_TURN_VERSION,engine=multi?s.turnEngine:null;
-  return{version:s.version,grammar:multi?(s.regionVersion??MULTI_TURN_VERSION):FORWARD_GRAMMAR,mode:"REAL_FEED_PAPER",liveEligible:false,
+  return{version:s.version,grammar:multi?(s.executionVersion??s.regionVersion??MULTI_TURN_VERSION):FORWARD_GRAMMAR,mode:"REAL_FEED_PAPER",liveEligible:false,
     strategyAuthorityVersion:s.strategyAuthorityVersion??"legacy-forward-rules-v1",cutoverAt:s.cutoverAt??null,
     startedAt:s.startedAt,updatedAt:s.lastQuoteCycleAt,
     policyVersion:s.policyVersion??"legacy-forward-v1.0",policyUpgrade:s.policyUpgrade??null,policyUpgrades:s.policyUpgrades??[],
-    exitPolicyVersion:multi?(s.regionVersion??MULTI_TURN_VERSION):TIMELY_PROTECTION_POLICY,exitPolicyUpgrade:s.exitPolicyUpgrade??null,
+    exitPolicyVersion:multi?(s.executionVersion??s.regionVersion??MULTI_TURN_VERSION):TIMELY_PROTECTION_POLICY,exitPolicyUpgrade:s.exitPolicyUpgrade??null,
     participation:s.participation??null,quoteRetries:multi?[]:s.quoteRetries?.filter(w=>w.expiresAt>now)??[],
     evidenceDiagnostics:multi?null:s.evidenceDiagnostics??null,entryDiagnostics:s.entryDiagnostics??null,feedbackCount:s.feedback?.length??0,
     turnProtection:multi?null:s.turnProtection&&s.turnProtection.until>now?s.turnProtection:null,
     marketState:multi?null:s.marketState??null,turnForecast:multi?null:s.turnForecast??null,
-    adaptationVersion:multi?(s.regionVersion??MULTI_TURN_VERSION):s.adaptationVersion??"legacy-forward-adaptation-v1",
+    adaptationVersion:multi?(s.executionVersion??s.regionVersion??MULTI_TURN_VERSION):s.adaptationVersion??"legacy-forward-adaptation-v1",
     turnEngine:engine?{version:engine.version,updatedAt:engine.updatedAt,diagnostics:engine.diagnostics,
       calibration:engine.calibration,frames:engine.frames}:null,
-    turnRiskSleeves:multi?{"5m":TURN_CONFIG["5m"].riskCap}:null,
+    turnRiskSleeves:multi?{"15m_anchor":.008,"5m_rejection":.006}:null,
     marketRiskBudget:multi?(()=>{const dd=Math.max(0,1-marked.equity/Math.max(s.peakEquity,marked.equity));
       const scale=dd>=.20?.50:dd>=.10?.70:dd>=.05?.85:1;
-      return{totalRate:.10,longRate:.065,shortRate:.065,netDirectionalRate:.065,drawdownRate:dd,allocationScale:scale,
-        reason:`5分钟区域生命周期：组合计划风险最多10%，同方向最多6.5%，单笔最多1.5%；当前回撤只缩仓至${(scale*100).toFixed(0)}%。`};})()
+      return{totalRate:.04,longRate:.03,shortRate:.03,netDirectionalRate:.03,drawdownRate:dd,allocationScale:scale,
+        reason:`AnchorFlow：组合计划风险最多4%，同方向最多3%；顺势回测单0.8%，区域拒绝回归单0.6%；当前回撤缩放${(scale*100).toFixed(0)}%。`};})()
       :marketRiskBudget(s.marketState??null,marked.equity,s.peakEquity,s.turnForecast??null),
     lastCycleAt:s.lastCycleAt,lastFitAt:s.lastFitAt,revision:s.revision,initialEquity:s.initialEquity,balance:s.balance,...marked,
     targetEquity:s.initialEquity*2,netPnl:marked.equity-s.initialEquity,maxDrawdown:s.maxDrawdown,resolved:s.resolved,wins:s.wins,grossPnl:s.grossPnl,
     fees:s.fees,fundingAllowance:s.fundingAllowance,turnover:s.turnover,observations:s.observations,measured:s.measured,invalidated:s.invalidated,
     pending:multi?(engine?.pending.length??0):Object.keys(s.pending).length,sampleCounts:count,fitDiagnostics:s.fitDiagnostics,
     entryOpportunities:multi?([] as MultiTurnEntryOpportunity[]):[],
-    regionVersion:multi?s.regionVersion??null:null,
-    regionLifecycles:multi?Object.values(s.regionLifecycles??{}).sort((a,b)=>b.observedAt-a.observedAt).slice(0,60):[],
-    regionSignals:multi?(s.regionSignals??[]).filter(signal=>signal.expiresAt>now).slice(0,60):[],
+    regionVersion:multi?s.regionVersion??null:null,executionVersion:multi?s.executionVersion??null:null,
+    anchorFlows:multi?Object.values(s.anchorFlows??{}).sort((a,b)=>b.createdAt-a.createdAt).slice(0,30):[],
+    regionLifecycles:multi?Object.values(s.regionLifecycles??{}).sort((a,b)=>b.observedAt-a.observedAt).slice(0,30):[],
+    regionSignals:multi?(s.regionSignals??[]).filter(signal=>signal.expiresAt>now).slice(0,30):[],
     rules:s.rules,positions:s.positions,history:s.history,events:s.events.slice(0,80),daily:s.daily,
     marketCount:s.selectedSymbols.length,markets:s.selectedSymbols,latestReason:s.latestReason,storage:s.storage,
     nextCycleAt:s.lastCycleAt?(Math.floor((s.lastCycleAt-90_000)/BAR_MS)+1)*BAR_MS+90_000:now,cost:PAPER_COST,
-    boundaries:multi?{scope:"PAPER_ONLY",grammar:"统一5分钟周期；先识别最近成熟缠绕区域，再只交易外部接受迁移或边界拒绝回归；无多周期投票和方向评分",
-      historyBackfill:false,sampleMeaning:"历史5分钟K只用于恢复当前区域生命周期；恢复出的旧事件绝不补单",
-      accounting:"新鲜买卖价模拟成交；费用、滑点和真实结构止损进入下单经济性计算",
-      risk:"组合计划风险≤10%，同方向≤6.5%，单笔≤1.5%；统一周期不再设置重复的周期袖套",
-      validation:"区域生命周期仍需真实前向验证，不承诺盈利或月翻倍",
-      liquidation:"拒绝单到区域中心兑现；迁移单在旧区域重新被接受、反向接受或只能上移的区域防守位失效时退出"}:
+    boundaries:multi?{scope:"PAPER_ONLY",grammar:"AnchorFlow：1h确定主导流向，15m确认仍处FLOW，5m成熟区域只负责位置；顺势必须真实推进→第一次回测守住→重新启动，直接突破追单已退役",
+      historyBackfill:false,sampleMeaning:"历史K线只恢复方向、区域和候选状态；任何过去已经发生的回测/启动绝不补单",
+      accounting:"新鲜买卖价模拟成交；费用、滑点和本次真实回测止损进入下单经济性计算",
+      risk:"组合计划风险≤4%，同方向≤3%；AnchorFlow单笔≤0.8%，REJECTION单笔≤0.6%，单笔名义价值≤权益60%",
+      validation:"模拟账户就是直接前向实验账户；无影子、无晋级、无收益保证",
+      liquidation:"AnchorFlow先做下一根5m强度验证，随后由15m动态利润保护、时间—空间价值和转折管理；REJECTION到区域中心兑现"}:
       {scope:"PAPER_ONLY",grammar:"最多两个连续特征条件；方向、期限、止损和回吐退出由新市场反应生成",historyBackfill:false,
       sampleMeaning:"市场条件与后来反应；不是影子订单或连胜晋级",accounting:"新鲜买卖价模拟成交；净值包含退出费用与资金占位",
       risk:"单笔风险上限1.5%；同一关系family的所有并行币合计最多占一个1.5%风险槽；成交校准为负仍保留15%探测风险，单币小样本连续缩仓",
