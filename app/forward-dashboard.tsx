@@ -7,12 +7,13 @@ import {ArchivePagination} from "./record-controls.tsx";
 import EquityCurve from "./equity-curve.tsx";
 import {EquityHistoryCache} from "../lib/equity-cache.ts";
 import { REGION_LIFECYCLE_VERSION, type RegionLifecycleState } from "../lib/region-lifecycle.ts";
+import { ANCHOR_FLOW_VERSION } from "../lib/anchor-flow.ts";
 type View = ReturnType<typeof forwardSummary>;
 type Tab = "overview" | "relations" | "orders" | "live" | "journal" | "settings";
 const fmt = (v: number | null | undefined, digits=2) => typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:digits,maximumFractionDigits:digits}):"—";
 const signed = (v: number | null | undefined, digits=2) => typeof v==="number"?`${v>=0?"+":""}${fmt(v,digits)}`:"—";
 const time = (v?:number|null) => v?new Date(v).toLocaleString("zh-CN",{timeZone:"Asia/Vientiane",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}):"—";
-const condition = (r:Rule) => r.grammar===REGION_LIFECYCLE_VERSION?"5m 区域生命周期":r.authority==="MULTI_TURN"?`${r.turnTimeframe??"—"} 旧版转折记录`:r.conditions.map(c=>`${FEATURES[c.feature]} ${c.op==="GE"?"≥":"≤"} ${fmt(c.threshold)}`).join(" ＋ ");
+const condition = (r:Rule) => r.grammar===ANCHOR_FLOW_VERSION?"AnchorFlow · 15m管理":r.grammar===REGION_LIFECYCLE_VERSION?"5m 区域拒绝":r.authority==="MULTI_TURN"?`${r.turnTimeframe??"—"} 旧版转折记录`:r.conditions.map(c=>`${FEATURES[c.feature]} ${c.op==="GE"?"≥":"≤"} ${fmt(c.threshold)}`).join(" ＋ ");
 const REGION_STATUS:Record<RegionLifecycleState["status"],string>={NO_REGION:"未形成区域",IN_REGION:"区域内",PROBE_UP:"上沿试探",PROBE_DOWN:"下沿试探",ACCEPTED_UP:"上方接受",ACCEPTED_DOWN:"下方接受",DETACHED_UP:"上方已远离",DETACHED_DOWN:"下方已远离"};
 
 export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,memberName,cacheScope="owner"}:{data:View|null;healthy:boolean;statusLabel?:string;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;liveEnabled:boolean;liveOverview?:{equity:number|null;available:number|null;positionCount:number;operational:boolean;lastSyncAt:number|null;copied:number|null;eligible:number|null;missing:number|null};accountPanel?:ReactNode;memberName?:string;cacheScope?:string}) {
@@ -55,6 +56,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const activeRegions=regionStates.filter(row=>!!row.zone);
   const regionSignals=(data?.regionSignals??[]).filter(row=>!now||row.expiresAt>now);
   const preparedSignals=regionSignals.slice(0,6);
+  const anchorFlows=(data?.anchorFlows??[]).filter(row=>row.phase!=="FAILED"&&row.phase!=="FIRED");
   const regionMap=new Map(activeRegions.map(row=>[row.symbol,row]));
   const regionPriority:Record<RegionLifecycleState["status"],number>={PROBE_UP:0,PROBE_DOWN:0,ACCEPTED_UP:1,ACCEPTED_DOWN:1,IN_REGION:2,DETACHED_UP:3,DETACHED_DOWN:3,NO_REGION:4};
   const regionRows=[...activeRegions].sort((a,b)=>(regionPriority[a.status]??9)-(regionPriority[b.status]??9)||b.observedAt-a.observedAt||a.symbol.localeCompare(b.symbol)).slice(0,18);
@@ -62,21 +64,21 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const probeCount=activeRegions.filter(row=>row.status==="PROBE_UP"||row.status==="PROBE_DOWN").length;
   const acceptedCount=activeRegions.filter(row=>row.status==="ACCEPTED_UP"||row.status==="ACCEPTED_DOWN").length;
   const detachedCount=activeRegions.filter(row=>row.status==="DETACHED_UP"||row.status==="DETACHED_DOWN").length;
-  const regionPositionCount=data?.positions.filter(t=>t.entryContext?.version==="region-lifecycle-entry-v1").length??0;
-  const legacyPositionCount=(data?.positions.length??0)-regionPositionCount;
+  const currentPositionCount=data?.positions.filter(t=>t.entryContext?.version==="region-lifecycle-entry-v1"||t.entryContext?.version==="anchor-flow-entry-v1").length??0;
+  const legacyPositionCount=(data?.positions.length??0)-currentPositionCount;
   const paperMargin=data?.positions.reduce((sum,t)=>sum+t.margin,0)??null;
   const elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
   const nav:[Tab,string,string][]=[["overview","◉","总览"],["relations","⌘","执行"],["orders","⇄","模拟"],["live","◈","实盘"],["journal","≋","演变"],["settings","⊙","系统"]];
   const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice("后台运行中 · ".length):statusLabel??(healthy?"正常":"行情重连中");
-  return <main className="fr-app" style={fontStyle} data-ui-version="dark-region-v1" data-record-view="compact-records-pnl-v1">
-    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · 区域生命周期引擎</b><small>5M REGION LIFECYCLE</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
-    <div className="fr-subhead"><span>Gate USDT 永续 · 60市场5分钟区域扫描 · 11市场实时执行</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
+  return <main className="fr-app" style={fontStyle} data-ui-version="dark-anchor-flow-v1" data-record-view="compact-records-pnl-v1">
+    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · AnchorFlow</b><small>1H DIRECTION · 15M FLOW · 5M EXECUTION</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
+    <div className="fr-subhead"><span>Gate USDT 永续 · 30市场扫描 · 11市场实时执行</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
     {memberName&&<p className="fr-note">{memberName} · 共用同一模拟策略，实盘账户独立，开关只由你控制。</p>}
 
     {tab==="overview"&&<>
       <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">账户驾驶舱</span><h1>{systemStatus==="正常"?"系统正在正常运行":`系统状态：${systemStatus}`}</h1>
         <p>{data?.latestReason??"正在读取已持久化账户和真实行情状态。"}</p>
-        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>统一5分钟周期</span><span>60市场区域扫描</span><span>接受迁移 / 边界拒绝</span><span>实盘{liveEnabled?"已开启":"关闭"}</span></div></div>
+        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>1h主方向</span><span>15m延续确认</span><span>30市场区域扫描</span><span>第一次回测 / 边界拒绝</span><span>实盘{liveEnabled?"已开启":"关闭"}</span></div></div>
         <div className="fr-equity"><small>模拟账户权益 · USDT</small><strong>{fmt(data?.equity)}</strong><div className={(data?.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(data?.netPnl)} <span>U · {signed(data?data.netPnl/data.initialEquity*100:null)}%</span></div>
           <footer><span>起点 {fmt(data?.initialEquity,0)}</span><span>最大回撤 {fmt(data?data.maxDrawdown*100:null)}%</span></footer></div></section>
 
@@ -106,25 +108,25 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       <section className="fr-section"><div className="fr-section-head"><div><small>最近变化</small><h2>需要留意的运行记录</h2></div><button className="fr-text-button" onClick={()=>select("journal")}>全部记录 ↗</button></div><Journal data={data} limit={3}/></section>
     </>}
 
-    {tab==="relations"&&<><PageTitle eyebrow="5M REGION EXECUTION" title="执行" text="统一使用5分钟周期。系统先维护每个标的最近一个成熟缠绕区域，再观察价格是留在区域、向外试探、被外部接受，还是离开失败重新回到区域；不再使用多周期投票、锚点评分或空间评分决定交易。"/>
+    {tab==="relations"&&<><PageTitle eyebrow="ANCHORFLOW EXECUTION" title="执行" text="1h只决定主导方向，15m只确认这股方向仍处于FLOW，5m区域只负责位置。顺势交易必须先离开区域、产生真实推进，再等第一次回测守住并重新启动；直接突破追单已经退役。"/>
 
-      <section className="fr-section fr-exec-flow-section"><div className="fr-section-head"><div><small>当前执行层</small><h2>区域生命周期</h2></div><span>{time(data?.updatedAt)}</span></div>
+      <section className="fr-section fr-exec-flow-section"><div className="fr-section-head"><div><small>当前执行层</small><h2>AnchorFlow 运行链</h2></div><span>{time(data?.updatedAt)}</span></div>
         <div className="fr-exec-flow">
-          <ExecStep index="01" title="全市场扫描" status={(data?.marketCount??0)>0?"已更新":"等待"} text={`当前维护 ${fmt(data?.marketCount,0)} 个5分钟扫描标的；成熟区域、待交易事件和持仓优先保留，其余槽位轮换探索。`}/>
-          <ExecStep index="02" title="寻找最近成熟区域" status={activeRegions.length?"持续识别":"扫描中"} text={`当前找到并维护 ${activeRegions.length} 个成熟区域。区域不要求刚形成，系统会从已有5分钟K线恢复最近一个有效区域。`}/>
-          <ExecStep index="03" title="判断区域状态" status={activeRegions.length?"持续判断":"等待区域"} text={`区域内 ${inRegionCount} · 边界试探 ${probeCount} · 外部已接受 ${acceptedCount} · 已远离不追 ${detachedCount}。`}/>
-          <ExecStep index="04" title="等待交易事件" status={regionSignals.length?"有事件":"观察中"} text={regionSignals.length?`当前有 ${regionSignals.length} 个有效事件等待执行：接受迁移或边界拒绝回归。`:"没有新的可执行区域事件；区域内继续等，已经跑远的价格不追。"} />
-          <ExecStep index="05" title="新鲜盘口下单" status={regionSignals.length?"检查中":"等待"} text={(data?.entryDiagnostics?.opened??0)>0?`本轮已开仓 ${fmt(data?.entryDiagnostics?.opened,0)} 笔。`:`当前执行状态：${mainBlocker}。`}/>
-          <ExecStep index="06" title="区域退出" status={(data?.positions.length??0)>0?"管理中":"等待持仓"} text={`管理 ${fmt(data?.positions.length,0)} 笔持仓；其中 ${regionPositionCount} 笔使用新区域退出权威，${legacyPositionCount>0?`${legacyPositionCount} 笔旧持仓继续按原保护自然结束。`:"没有旧版持仓。"}`}/>
+          <ExecStep index="01" title="30市场扫描" status={(data?.marketCount??0)>0?"已更新":"等待"} text={`当前维护 ${fmt(data?.marketCount,0)} 个市场；持仓、可执行事件和正在等待第一次回测的候选优先保留数据槽。`}/>
+          <ExecStep index="02" title="1h + 15m 方向" status={data?.turnEngine?"持续更新":"等待"} text="1h定义主导流向；15m必须同方向且保持FLOW。5m不再拥有方向决策权。"/>
+          <ExecStep index="03" title="5m 成熟区域" status={activeRegions.length?"持续识别":"扫描中"} text={`当前维护 ${activeRegions.length} 个成熟区域；区域只提供交易位置。区域内 ${inRegionCount} · 试探 ${probeCount} · 外部接受 ${acceptedCount} · 已远离 ${detachedCount}。`}/>
+          <ExecStep index="04" title="第一次回测" status={anchorFlows.length?"等待/确认中":"等待机会"} text={anchorFlows.length?`当前 ${anchorFlows.length} 个顺势候选正在等待真实推进、第一次回测或重新启动。`:"没有正在进行的顺势回测候选；不会追已经跑远的突破。"} />
+          <ExecStep index="05" title="重新启动后开仓" status={regionSignals.length?"检查中":"等待"} text={(data?.entryDiagnostics?.opened??0)>0?`本轮已开仓 ${fmt(data?.entryDiagnostics?.opened,0)} 笔。`:`当前执行状态：${mainBlocker}。`}/>
+          <ExecStep index="06" title="验证与退出" status={(data?.positions.length??0)>0?"管理中":"等待持仓"} text={`管理 ${fmt(data?.positions.length,0)} 笔持仓；顺势单下一根5m先验证强度，随后由15m动态锁利、时间—空间价值和转折管理。当前版本持仓 ${currentPositionCount} 笔。`}/>
         </div>
       </section>
 
-      <section className="fr-section fr-prepared-section"><div className="fr-section-head"><div><small>REGION EVENTS</small><h2>待交易事件</h2><p>这里不再显示交易评分。只有成熟区域真正发生“外部接受迁移”或“边界拒绝回归”后才会进入；事件过期或价格已经跑远会自动失效。</p></div><span>{regionSignals.length} 个</span></div>
+      <section className="fr-section fr-prepared-section"><div className="fr-section-head"><div><small>EXECUTABLE EVENTS</small><h2>待交易事件</h2><p>这里只显示真正拥有下单权的事件：AnchorFlow 第一次回测守住后的重新启动，或区域边界拒绝回归。原始突破确认不会出现在这里。</p></div><span>{regionSignals.length} 个</span></div>
         {preparedSignals.length?<div className="fr-prepared-grid">{preparedSignals.map((x,index)=><article className="fr-prepared-card" key={x.id}>
-          <header><div><small>#{index+1} · {x.kind==="MIGRATION"?"接受迁移":"边界拒绝"}</small><h3>{x.symbol.replace("_"," / ")}</h3><p>5m · {x.side==="LONG"?"准备做多":"准备做空"} · {x.boundary==="UPPER"?"上沿事件":"下沿事件"}</p></div><b>待执行</b></header>
+          <header><div><small>#{index+1} · {x.kind==="MIGRATION"?"回测重启":"边界拒绝"}</small><h3>{x.symbol.replace("_"," / ")}</h3><p>5m · {x.side==="LONG"?"准备做多":"准备做空"} · {x.boundary==="UPPER"?"上沿事件":"下沿事件"}</p></div><b>待执行</b></header>
           <div className="fr-prepared-metrics"><span><small>区域下沿</small><strong>{fmt(x.regionLower,5)}</strong></span><span><small>区域中心</small><strong>{fmt(x.regionCenter,5)}</strong></span><span><small>区域上沿</small><strong>{fmt(x.regionUpper,5)}</strong></span><span><small>事件价格</small><strong>{fmt(x.signalPrice,5)}</strong></span><span><small>结构止损</small><strong>{fmt(x.stopPrice,5)}</strong></span><span><small>{x.kind==="REJECTION"?"回归目标":"有效至"}</small><strong>{x.kind==="REJECTION"?fmt(x.targetPrice,5):time(x.expiresAt)}</strong></span></div>
           <p>{x.reason}</p>
-        </article>)}</div>:<Empty title="当前没有待交易事件" text={activeRegions.length?"已有成熟区域，正在等待边界试探最终被接受或被拒绝。":"正在从5分钟历史路径中寻找最近已经形成的成熟缠绕区域。"} />}
+        </article>)}</div>:<Empty title="当前没有待交易事件" text={anchorFlows.length?"已有顺势候选，正在等待第一次回测守住并重新启动。":activeRegions.length?"已有成熟区域，等待方向与位置共同形成机会。":"正在寻找最近已经形成的成熟区域。"} />}
       </section>
 
       <section className="fr-section fr-scoreboard-section"><div className="fr-section-head"><div><small>REGION WATCHLIST</small><h2>区域观察池</h2><p>每个标的只维护最近一个有效区域。区域边界一旦确认就冻结；价格跑远不追，出现更晚且独立的新区域后才替换旧区域。</p></div><span>{activeRegions.length} 个区域</span></div>
@@ -138,7 +140,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
               <div><h3>边界交易资格</h3><div className="fr-score-detail-grid"><Metric label="上沿" value={row.upperConsumedAt?"已消费，等重置":"可观察"}/><Metric label="下沿" value={row.lowerConsumedAt?"已消费，等重置":"可观察"}/><Metric label="待交易事件" value={event?(event.kind==="MIGRATION"?"接受迁移":"边界拒绝"):"无"}/><Metric label="方向" value={event?(event.side==="LONG"?"做多":"做空"):"—"}/></div></div>
               <p>{row.reason}</p>
             </div>
-          </details>;})}</div>:<Empty title="暂无成熟区域" text="系统正在轮换扫描60个5分钟标的；没有成熟区域的标的不占用交易事件。"/>}
+          </details>;})}</div>:<Empty title="暂无成熟区域" text="系统正在轮换扫描30个市场；没有成熟区域的标的不占用交易事件。"/>}
       </section>
     </>}
     {tab==="orders"&&<><PageTitle eyebrow="REAL-FEED PAPER" title="模拟账户" text="与实盘使用同一套观察结构。模拟成交含模型手续费、滑点和资金费用占位，不冒充Gate真实成交。"/>
@@ -149,7 +151,8 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         <section className="fr-section fr-live-holdings" data-testid="paper-account-holdings"><div className="fr-section-head"><h2>当前持仓</h2><span>{data?.positions.length??"—"} 笔</span></div>
           {data?.positions.length?<div className="fr-position-list">{data.positions.map(t=>{const pnl=tradePnl(t,now),rate=t.notional>0&&pnl!=null?pnl/t.notional:null;
             const context=t.entryContext,hold=t.holdValue,tf=context?.timeframe??t.turn?.timeframe,region=regionMap.get(t.symbol);
-            const isRegion=context?.version==="region-lifecycle-entry-v1";
+            const isRegion=context?.version==="region-lifecycle-entry-v1"||context?.version==="anchor-flow-entry-v1";
+            const isAnchor=context?.version==="anchor-flow-entry-v1";
             const entrySpace=context?.remainingSpaceRate??t.forecast?.remainingNetRate??null;
             const pullback=hold?.pullbackRiskRate??null,best=hold?.bestHoldMinutes??context?.bestHoldMinutes??null;
             const verdict=hold?.action==="EXIT_PROFIT"?"建议止盈":hold?.action==="EXIT_RISK"?"建议退出":hold?"继续持有":"等待评估";
@@ -157,9 +160,9 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
             return <details key={t.id} className="fr-position-row"><summary>
             <span className="fr-position-primary"><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {fmt(t.leverage,0)}× · 保证金 {fmt(t.margin)} U</small>
               <b className={(pnl??0)>=0?"fr-positive":"fr-negative"}>{signed(pnl)} U</b><small>{rate==null?"—":`${signed(rate*100,3)}% · 展开`}</small></span>
-            <span className="fr-position-entry"><b>{isRegion?`5m · ${context?.regionKind==="MIGRATION"?"区域迁移":"边界拒绝"}`:tf?`${tf} · 旧版`:"入场依据"}</b>
+            <span className="fr-position-entry"><b>{isAnchor?"AnchorFlow · 15m管理":isRegion?"5m · 边界拒绝":tf?`${tf} · 旧版`:"入场依据"}</b>
               {isRegion?<><small>来源区域 {fmt(context?.regionLower,5)} – {fmt(context?.regionUpper,5)} · 当前 {region?REGION_STATUS[region.status]:"等待区域更新"}</small>
-                <small>防守 {fmt(t.stopPrice,5)} · {context?.regionKind==="REJECTION"?`中心目标 ${fmt(context?.regionCenter,5)}`:"新区形成后防守只向盈利方向移动"}</small></>:<><small>评分 {context?.entryScore==null?"—":fmt(context.entryScore,0)} · 空间 {entrySpace==null?"—":`${fmt(entrySpace*100,1)}%`} · 回调 {pullback==null?"—":`${fmt(pullback*100,1)}%`}</small><small>{holdText} · {verdict}</small></>}
+                <small>防守 {fmt(t.stopPrice,5)} · {isAnchor?`回测 ${time(context?.anchorRetestAt)} · 首根5m验证 ${t.entryValidation?.passed===true?"通过":t.entryValidation?.passed===false?"失败":"等待"}`:context?.regionKind==="REJECTION"?`中心目标 ${fmt(context?.regionCenter,5)}`:"结构管理"}</small></>:<><small>评分 {context?.entryScore==null?"—":fmt(context.entryScore,0)} · 空间 {entrySpace==null?"—":`${fmt(entrySpace*100,1)}%`} · 回调 {pullback==null?"—":`${fmt(pullback*100,1)}%`}</small><small>{holdText} · {verdict}</small></>}
             </span>
           </summary><TradeCard trade={t} now={now} region={region}/></details>;})}</div>:<Empty title="当前没有模拟持仓" text="符合条件的新订单会显示在这里。"/>}
         </section>
