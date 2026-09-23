@@ -20,8 +20,11 @@ test("direct migration no longer owns entry authority",()=>{
   if(!result.ok)assert.match(result.reason,/已退役|AnchorFlow/);
 });
 
-test("AnchorFlow restart may enter only after structural retest has produced an executable event",()=>{
-  const result=run(base({entryModel:"ANCHOR_FLOW",anchorExpectedMoveRate:.022}),101.19,101.21);assert.equal(result.ok,true);
+test("AnchorFlow restart stays READY until a small executable-price confirmation appears",()=>{
+  const signal=base({entryModel:"ANCHOR_FLOW",anchorExpectedMoveRate:.022});
+  const waiting=run(signal,101.19,101.21);assert.equal(waiting.ok,false);
+  if(!waiting.ok)assert.match(waiting.reason,/顺向确认/);
+  const result=run(signal,101.34,101.36);assert.equal(result.ok,true);
   if(result.ok){
     assert.ok(result.plan.leverage>=6&&result.plan.leverage<=12);
     assert.ok(result.plan.plannedRisk<=8.01);
@@ -29,9 +32,9 @@ test("AnchorFlow restart may enter only after structural retest has produced an 
   }
 });
 
-test("rejection entry must still have enough room to the region center after costs",()=>{
-  const good=base({kind:"REJECTION",side:"SHORT",boundary:"UPPER",signalPrice:100.65,stopPrice:101.5,targetPrice:100});
-  assert.equal(run(good,100.59,100.61).ok,true);
+test("rejection entry must still have enough room to the region center after costs and full risk",()=>{
+  const good=base({kind:"REJECTION",side:"SHORT",boundary:"UPPER",signalPrice:101.2,stopPrice:101.45,targetPrice:100});
+  assert.equal(run(good,101.18,101.20).ok,true);
   const thin=base({kind:"REJECTION",side:"SHORT",boundary:"UPPER",signalPrice:100.24,stopPrice:100.8,targetPrice:100,
     regionLower:99.5,regionUpper:100.5,regionCenter:100,regionWidth:1,regionWidthRate:.01});
   const result=run(thin,100.22,100.24);assert.equal(result.ok,false);
@@ -55,11 +58,24 @@ test("a raw MON-like migration is rejected even if the quote is close to its reg
   if(!result.ok)assert.match(result.reason,/已退役|AnchorFlow/);
 });
 
-test("the same MON structure is executable only as a completed AnchorFlow restart",()=>{
+test("the same MON structure is executable only after completed AnchorFlow restart plus live quote confirmation",()=>{
   const mon=base({symbol:"MON_USDT",side:"SHORT",boundary:"LOWER",signalPrice:.026405,stopPrice:.026542,
     regionLower:.02646,regionUpper:.02687,regionCenter:.026735,regionWidth:.00041,regionWidthRate:.00041/.026735,
     entryModel:"ANCHOR_FLOW",anchorExpectedMoveRate:.018});
-  const result=run(mon,.026405,.026409);
+  const waiting=run(mon,.026405,.026409);assert.equal(waiting.ok,false);
+  const result=run(mon,.026370,.026374);
   assert.equal(result.ok,true);
   if(result.ok){assert.ok(result.plan.remainingSpaceRate>result.plan.lossRate);assert.ok(result.plan.notional<=600.01);}
+});
+
+
+test("FOLKS-like rejection with positive target space but terrible reward versus full risk is rejected",()=>{
+  const weak=base({kind:"REJECTION",side:"LONG",boundary:"LOWER",signalPrice:2.489,stopPrice:2.4548,targetPrice:2.4995,
+    regionLower:2.476,regionUpper:2.516,regionCenter:2.4995,regionWidth:.04,regionWidthRate:.04/2.4995});
+  const contractLike={quantoMultiplier:1,leverageMax:50,maintenanceRate:.005,minContracts:1};
+  const result=evaluateRegionEntryPolicy({signal:weak,bestBid:2.486,bestAsk:2.487,contract:contractLike,
+    equity:1000,peakEquity:1000,totalRisk:0,longRisk:0,shortRisk:0,grossNotional:0,usedMargin:0,tradeRisks:[],
+    costRate:.0031,feeRate:.0007,slippageRate:.00025});
+  assert.equal(result.ok,false);
+  if(!result.ok)assert.match(result.reason,/完整结构风险/);
 });
