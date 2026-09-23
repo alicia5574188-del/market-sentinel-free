@@ -1132,7 +1132,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // Urgent current-authority markets (open holdings, AnchorFlow RETEST/READY,
       // RegionLaunch ARMED/IGNITION/READY) consume the 2s critical quote clock.
       // Non-urgent research/account marking stays on the cheaper 10s cadence.
-      const urgent=this.forwardUrgentSymbols(now).length>0||this.forwardState.positions.length>0;
+      const currentMulti=this.forwardState.strategyAuthorityVersion===MULTI_TURN_VERSION;
+      const urgent=currentMulti&&(this.forwardUrgentSymbols(now).length>0||this.forwardState.positions.length>0);
       const quoteCadence=urgent?LOOP_MS:10_000;
       if(!dataCycleDue&&now-this.forwardState.lastQuoteCycleAt<quoteCadence){
         this.forwardLastAttemptAt=this.forwardState.lastQuoteCycleAt;return;
@@ -2818,8 +2819,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private forwardUrgentSymbols(now=Date.now()){
-    if(!this.forwardState)return [];
-    return forwardUrgentQuoteSymbols(this.forwardState,now,this.runtime.liquidUniverse);
+    if(!this.forwardState||this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION)return [];
+    return forwardUrgentQuoteSymbols(this.forwardState,now,this.runtime.liquidUniverse??[]);
   }
 
   private ensureForwardUrgentSymbolsResident(now=Date.now()){
@@ -2833,14 +2834,16 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private forwardQuotes(now=Date.now()){
-    const urgent=new Set(this.forwardUrgentSymbols(now));
+    if(!this.forwardState||this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION||!this.runtime.evidence)
+      return this.regimeQuotes(now);
+    const urgent=new Set(this.forwardUrgentSymbols(now)),failures=this.runtime.feedFailures??{},meta=this.runtime.contractMeta??{};
     return Object.fromEntries(Object.entries(this.runtime.evidence).flatMap(([symbol,row])=>{
       if(!row?.fresh||row.bestBid==null||row.bestAsk==null||now-row.observedAt>STALE_AFTER_MS)return [];
-      const failure=this.runtime.feedFailures[symbol];
+      const failure=failures[symbol];
       const recovered=failure?.suspendedSince==null&&(failure?.recoveryFreshCount??FEED_RECOVERY_CONFIRMATIONS)>=FEED_RECOVERY_CONFIRMATIONS;
       const warm=(this.sessionWarmup[symbol]??0)>=(urgent.has(symbol)?2:WARMUP_SNAPSHOTS);
       return [[symbol,{midpoint:row.midpoint,bestBid:row.bestBid,bestAsk:row.bestAsk,observedAt:row.observedAt,fresh:true,
-        entryReady:recovered&&warm&&this.runtime.contractMeta[symbol]!=null,
+        entryReady:recovered&&warm&&meta[symbol]!=null,
         completedMinuteAt:this.forwardMinuteCandles[symbol]?.at(-1)
           ?(this.forwardMinuteCandles[symbol]!.at(-1)!.time+60)*1_000:undefined}]];
     }));
@@ -2869,7 +2872,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private async refreshForwardUrgentMinutes(now=Date.now()){
     const targetCompletedAt=Math.floor(now/60_000)*60_000;
-    const urgent=this.forwardState?forwardUrgentMinuteSymbols(this.forwardState,this.runtime.liquidUniverse).slice(0,PORTFOLIO_REALTIME_CAPACITY):[];
+    const urgent=this.forwardState?.strategyAuthorityVersion===MULTI_TURN_VERSION
+      ?forwardUrgentMinuteSymbols(this.forwardState,this.runtime.liquidUniverse??[]).slice(0,PORTFOLIO_REALTIME_CAPACITY):[];
     const due=urgent.filter(symbol=>{
       if((this.forwardMinuteRetryAt.get(symbol)??0)>now)return false;
       const last=this.forwardMinuteCandles[symbol]?.at(-1);
