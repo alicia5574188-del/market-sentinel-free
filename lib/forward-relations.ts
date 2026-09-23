@@ -440,6 +440,45 @@ function manageMultiTurn(s:ForwardState,quotes:Record<string,Quote>,now:number){
     t.favorable=Math.max(t.favorable,ret);t.adverse=Math.max(t.adverse,-ret);
     const gap=observeExitControl(t,q.observedAt,now);t.lastPrice=px;t.lastQuoteAt=q.observedAt;
 
+    const anchorContext=t.entryContext?.version==="anchor-flow-entry-v1"?t.entryContext:null;
+    if(anchorContext){
+      const d=t.side==="LONG"?1:-1,spread=(q.bestAsk-q.bestBid)/Math.max((q.bestAsk+q.bestBid)/2,1e-9);
+      const modeledCost=turnModeledCost("15m",spread);
+      const by=engine?.frames[t.symbol],frame5=by?.["5m"],frame15=by?.["15m"],frame1h=by?.["1h"];
+      let decision:ExitDecision|null=null;
+      if(t.entryValidation&&t.entryValidation.evaluatedAt==null&&now>=t.entryValidation.dueAt&&frame5
+        &&frame5.completedAt>=t.entryValidation.dueAt&&frame5.completedAt<=now){
+        const proof=d*(frame5.price/t.entryPrice-1),passed=proof>=modeledCost*.50;
+        t.entryValidation={...t.entryValidation,evaluatedAt:now,passed};
+        if(!passed)decision={trigger:"MULTI_TURN",
+          reason:`AnchorFlow入场验证失败：第一根完整5m没有形成足够顺向推进（${(proof*100).toFixed(2)}%）；好位置没有产生应有反应，提前退出。`,
+          boundaryRate:null};
+      }
+      if(!decision&&frame1h&&frame1h.direction!==t.side&&frame1h.lastTurnAt!=null&&frame1h.lastTurnAt>=t.openedAt)
+        decision={trigger:"MULTI_TURN",reason:`1h主导方向已确认转向${frame1h.direction==="LONG"?"多":"空"}；AnchorFlow原方向失效。`,boundaryRate:null};
+
+      const cfg=TURN_CONFIG["15m"],fresh15=frame15&&frame15.ready&&frame15.completedAt<=now
+        &&now-frame15.completedAt<=Math.max(BAR_MS*2,cfg.minutes*60_000*1.5)?frame15:null;
+      const structuralStopRate=Math.max(1e-9,d*(t.entryPrice-t.stopPrice)/Math.max(t.entryPrice,1e-9));
+      if(!decision){
+        const exit=evaluateMultiTurnExitController({timeframe:"15m",side:t.side,openedAt:t.openedAt,now,
+          returnRate:ret,favorableRate:t.favorable,plannedRisk:t.plannedRisk,notional:t.notional,
+          modeledCostRate:modeledCost,entryExpectedMoveRate:t.entryContext?.expectedMoveRate??t.rule.armRate,
+          stopRate:structuralStopRate,horizonMinutes:t.rule.horizon,frame:fresh15,priorProtection:t.profitProtection});
+        if(exit.holdValue)t.holdValue=exit.holdValue;
+        if(exit.profitProtection)t.profitProtection=exit.profitProtection;
+        decision=exit.decision;
+      }
+      if(!decision)continue;
+      closeTrade(s,t,q,now,decision.reason);
+      const sourceRule=s.rules.find(r=>r.id===t.rule.id);if(sourceRule)sourceRule.status="DORMANT";
+      s.turnSymbolExitAt??={};s.turnSymbolExitAt[t.symbol]=now;
+      if(t.exitControl)t.exitAudit=makeExitAudit(t,decision,px,q.observedAt,now,gap);
+      const key=`anchor:${anchorContext.regionId??t.symbol}:${t.side}`;
+      s.turnLastEntryBars[key]=Math.max(s.turnLastEntryBars[key]??0,fresh15?.completedAt??0,Math.floor(now/BAR_MS)*BAR_MS);
+      continue;
+    }
+
     const regionContext=t.entryContext?.version==="region-lifecycle-entry-v1"?t.entryContext:null;
     if(regionContext){
       const lifecycle=s.regionLifecycles?.[t.symbol],zone=lifecycle?.zone,d=t.side==="LONG"?1:-1;
@@ -875,7 +914,7 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
       directionConfidence:frame?.directionConfidence??1,continuationScore:frame?.continuationScore??1,
       turnProbability:frame?.turnProbability??0,triggerProbability:frame?.triggerProbability??1,
       expectedMoveRate:remaining+cost,modeledCostRate:cost,remainingSpaceRate:remaining,stopRate,
-      riskCap:anchorSignal?.008:.006,bestHoldMinutes:anchorSignal?windows.bestHoldMinutes:0,
+      riskCap:anchorSignal ? .008 : .006,bestHoldMinutes:anchorSignal?windows.bestHoldMinutes:0,
       strongExtensionMinutes:anchorSignal?windows.strongExtensionMinutes:0,hardExtensionMinutes:anchorSignal?windows.hardExtensionMinutes:0,
       regionVersion:REGION_LIFECYCLE_VERSION,regionKind:signal.kind,regionId:signal.regionId,regionBoundary:signal.boundary,
       regionConfirmedAt:signal.regionConfirmedAt,regionLower:signal.regionLower,regionUpper:signal.regionUpper,
