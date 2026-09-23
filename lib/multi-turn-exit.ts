@@ -39,6 +39,7 @@ export function evaluateMultiTurnExitOverlay(input:{
   entryExpectedMoveRate:number;
   frame:TurnFrameState|null;
   priorProtection?:MultiTurnTradeProfitProtection|null;
+  profitPolicy?:"DEFAULT"|"EXTERNAL";
 }):MultiTurnExitOverlay{
   const modeledCostRate=Math.max(0,input.modeledCostRate);
   const riskRate=Math.max(1e-9,input.riskRate);
@@ -52,11 +53,11 @@ export function evaluateMultiTurnExitOverlay(input:{
     rawDirectionAligned:input.frame.rawDirection==="NEUTRAL"||input.frame.rawDirection===input.side,
   }:null;
 
-  const next=multiTurnProfitFloor(input.favorableRate,riskRate,modeledCostRate,signal);
+  const next=input.profitPolicy==="EXTERNAL"?null:multiTurnProfitFloor(input.favorableRate,riskRate,modeledCostRate,signal);
   let protection:MultiTurnTradeProfitProtection|null=prior?{...prior}:null;
   if(next){
     const floorRate=Math.max(prior?.floorRate??0,next.floorRate);
-    protection={...next,version:MULTI_TURN_PROFIT_PROTECTION_VERSION,
+    protection={...next,version:next.version,
       floorRate,lockedR:floorRate/riskRate,
       retentionRate:floorRate/Math.max(input.favorableRate,1e-9),
       checkpointBand:Math.floor(floorRate/riskRate*4+1e-9),
