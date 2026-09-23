@@ -518,6 +518,9 @@ function manageMultiTurn(s:ForwardState,quotes:Record<string,Quote>,now:number){
           s.anchorConsumed??={};delete s.anchorConsumed[`${anchorContext.regionId}:${t.side}`];
           flow.phase="READY";flow.consumedAt=null;flow.readyAt=now;flow.firedAt=now;flow.retryCount=(flow.retryCount??0)+1;
           flow.confirmationExtreme=null;
+          const retrySignal=(s.regionSignals??[]).find(signal=>signal.regionId===anchorContext.regionId&&signal.side===t.side
+            &&signal.kind==="MIGRATION"&&(signal as AnchorFlowEntrySignal).entryModel==="ANCHOR_FLOW");
+          if(retrySignal){retrySignal.completedAt=now;retrySignal.expiresAt=flow.expiresAt;}
           flow.reason="第一次成交未产生应有真实浮赢，但区域结构仍有效；释放消费标记并允许一次重新启动，等待新的盘口顺向确认。";
         }
       }
