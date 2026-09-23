@@ -1,6 +1,6 @@
 {
-  "name": "哨兵区域生命周期引擎",
-  "short_name": "区域引擎",
+  "name": "哨兵",
+  "short_name": "哨兵",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0b111a",
