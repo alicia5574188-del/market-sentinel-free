@@ -34,6 +34,7 @@ export type AnchorFlowState={
   readyAt?:number|null;
   reacceptBars?:number;
   retryCount?:number;
+  confirmationExtreme?:number|null;
   firedAt:number|null;
   consumedAt?:number|null;
   failedAt:number|null;
@@ -79,7 +80,7 @@ function startState(signal:RegionEntrySignal):AnchorFlowState{
     regionLower:signal.regionLower,regionUpper:signal.regionUpper,regionCenter:signal.regionCenter,
     regionWidth:signal.regionWidth,regionWidthRate:signal.regionWidthRate,
     excursionExtreme:signal.signalPrice,retestAt:null,pullbackExtreme:null,restartLevel:null,
-    readyAt:null,reacceptBars:0,retryCount:0,firedAt:null,consumedAt:null,failedAt:null,
+    readyAt:null,reacceptBars:0,retryCount:0,confirmationExtreme:null,firedAt:null,consumedAt:null,failedAt:null,
     reason:"区域外连续收盘已确认；不追突破，只等边界附近出现可执行的5m顺向反应。"
   };
 }
@@ -131,7 +132,8 @@ function updateOne(input:{
   let readySignal:AnchorFlowEntrySignal|null=null;
   const rejections:RegionEntrySignal[]=[];
   s.readyAt=s.readyAt??null;s.reacceptBars=Number.isFinite(s.reacceptBars??NaN)?Math.max(0,s.reacceptBars??0):0;
-  s.retryCount=Number.isFinite(s.retryCount??NaN)?Math.max(0,Math.floor(s.retryCount??0)):0;s.consumedAt=s.consumedAt??null;
+  s.retryCount=Number.isFinite(s.retryCount??NaN)?Math.max(0,Math.floor(s.retryCount??0)):0;
+  s.confirmationExtreme=Number.isFinite(s.confirmationExtreme??NaN)?s.confirmationExtreme!:null;s.consumedAt=s.consumedAt??null;
 
   const consumedAt=input.consumed?.[keyOf(s.regionId,s.side)];
   if(consumedAt){
@@ -192,7 +194,7 @@ function updateOne(input:{
         if(reacted){
           const signal=signalFromReady({state:s,signalPrice:row.close,at,frames:input.frames,costRate:input.costRate});
           if(signal){
-            readySignal=signal;s.phase="READY";s.readyAt=s.readyAt??at;s.firedAt=s.firedAt??at;
+            readySignal=signal;s.phase="READY";s.readyAt=s.readyAt??at;s.firedAt=s.firedAt??at;s.confirmationExtreme=null;
             s.reason="边界回测已产生可执行信号；状态保持READY，只有真实开仓后才CONSUMED。";
           }
         }
@@ -204,7 +206,7 @@ function updateOne(input:{
       if(restarted){
         const signal=signalFromReady({state:s,signalPrice:row.close,at,frames:input.frames,costRate:input.costRate});
         if(signal){
-          readySignal=signal;s.phase="READY";s.readyAt=s.readyAt??at;s.firedAt=s.firedAt??at;
+          readySignal=signal;s.phase="READY";s.readyAt=s.readyAt??at;s.firedAt=s.firedAt??at;s.confirmationExtreme=null;
           s.reason="回测守住后5m重新向主方向移动；状态保持READY，只有真实开仓后才CONSUMED。";
         }
       }
