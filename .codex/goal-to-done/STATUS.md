@@ -1,4 +1,10 @@
-# 2026-09-23 — feed continuity repair in progress
+# 2026-09-23 — five-minute launch repair; final verification/publication in progress
+
+Base main42ca9bd is the verified deployed Gate dual-transport repair. Work branch fix/20260923-five-minute-launch corrects percentile-only launch boundaries and missing5m departure authority. Added full-wick/episode retention, FAST3x-average-range unfinished5m path, CLOSED outside5m+shallow-restart path, live READY invalidation and v2 signal fencing while keeping consumed memory/open positions.1009direct tests passed before final metadata cleanup; typecheck/npm test/build/native workerd/architecture pass, lint had16existing warnings plus one new unused constant now removed. Final scoped rerun, dry-run, exact-head release and live continuity receipt remain. No private Gate verification trade, switch mutation or reset. Design:research/LAUNCH_FIVE_MINUTE_2026-09-23.md.
+
+Previous feed repair below is complete: PR412 deployed42ca9bd at15:22UTC, receipt branch docs/20260923-feed-continuity-receipt commit4507066. Four live samples had11/11ready books;1147attempts/0new failures, source cycle persisted15:26:31UTC. Historical in-progress entries below are superseded by their receipts.
+
+# 2026-09-23 — feed continuity repair in progress (historical)
 
 Branch fix/20260923-gate-feed-continuity from deployed4b1ec64. Supplied14:44UTC snapshot and public samples confirm executable-book obstruction and about31%REST book failures. Added bounded Gate complete20-level/closed1m5m stream with unchanged REST backfill, freshness/sequence guards, no trading callbacks, no new writes/alarms and unchanged financial/strategy authority.989direct,75focused,61equity,49member,130LIVE,19architecture/migration pass; typecheck/build/dry-run pass and lint0errors/16existing warnings. Remaining: reviewed-main publication and actual production transport/continuity evidence. Local direct Gate WS probe blocked by executor DNS. No real-money test or switch call.
 

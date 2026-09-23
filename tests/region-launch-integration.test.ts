@@ -19,12 +19,12 @@ const lifecycle=(symbol:string,now:number):RegionLifecycleState=>({
   reason:"fixture mother"
 });
 const compression=(now:number)=>[
-  {time:(now-30*60_000)/1000,open:100.68,high:100.94,low:100.48,close:100.78,volume:1000},
-  {time:(now-25*60_000)/1000,open:100.78,high:100.98,low:100.55,close:100.70,volume:1100},
-  {time:(now-20*60_000)/1000,open:100.70,high:100.96,low:100.52,close:100.84,volume:1050},
-  {time:(now-15*60_000)/1000,open:100.84,high:101.00,low:100.58,close:100.73,volume:1200},
-  {time:(now-10*60_000)/1000,open:100.73,high:100.97,low:100.57,close:100.86,volume:1150},
-  {time:(now-5*60_000)/1000,open:100.86,high:101.01,low:100.60,close:100.79,volume:1250},
+  {time:(now-30*60_000)/1000,open:100.78,high:100.90,low:100.68,close:100.82,volume:1000},
+  {time:(now-25*60_000)/1000,open:100.82,high:100.94,low:100.70,close:100.76,volume:1100},
+  {time:(now-20*60_000)/1000,open:100.76,high:100.95,low:100.72,close:100.84,volume:1050},
+  {time:(now-15*60_000)/1000,open:100.84,high:100.96,low:100.73,close:100.77,volume:1200},
+  {time:(now-10*60_000)/1000,open:100.77,high:100.97,low:100.73,close:100.86,volume:1150},
+  {time:(now-5*60_000)/1000,open:100.86,high:100.98,low:100.74,close:100.79,volume:1250},
 ];
 const passiveAnchor=(symbol:string,now:number):AnchorFlowState=>({
   version:ANCHOR_FLOW_VERSION,symbol,regionId:`mother-${symbol}`,side:"LONG",boundary:"UPPER",phase:"WAIT_RETEST",
@@ -42,8 +42,8 @@ function seeded(now:number){
   s.regionLaunches=advanceRegionLaunchUniverse({paths:{BCH_USDT:compression(now)},lifecycles:s.regionLifecycles,prior:{},now,costRate:.0022}).states;
   s.regionLaunchSignals=[];return s;
 }
-function step(state:ForwardState,now:number,mid:number,minutePaths:Record<string,ReturnType<typeof minute>[]>={}){
-  return advanceForward({state,now,paths:{},minutePaths,quotes:{BCH_USDT:quote(mid,now)},contracts:{BCH_USDT:meta},
+function step(state:ForwardState,now:number,mid:number,minutePaths:Record<string,ReturnType<typeof minute>[]>={},paths:Record<string,ReturnType<typeof minute>[] >={}){
+  return advanceForward({state,now,paths,minutePaths,quotes:{BCH_USDT:quote(mid,now)},contracts:{BCH_USDT:meta},
     entrySymbols:["BCH_USDT"],allowDataCycle:false});
 }
 function launchPath(now:number){
@@ -99,7 +99,7 @@ test("MET-like upper-wick breakout never creates a RegionLaunch position",()=>{
   const now=BASE;const fake=minute(BASE,100.90,103.30,100.85,101.45);let s=seeded(now);
   s=step(s,now+60_000,101.45,{BCH_USDT:[fake]}).state;
   assert.equal(s.positions.length,0);assert.equal(s.regionLaunches?.BCH_USDT?.phase,"ARMED");
-  assert.match(s.regionLaunches?.BCH_USDT?.reason??"",/突破K不够强/);
+  assert.match(s.regionLaunches?.BCH_USDT?.reason??"",/5分钟|突破K不够强/);
 });
 
 test("RegionLaunch with no prompt executable profit still exits after sixty seconds and keeps the mother for future observation",()=>{
@@ -132,4 +132,26 @@ test("ARMED/IGNITION/READY are explicit urgent quote priorities inside the same 
   for(const symbol of ordinary)s.regionLifecycles![symbol]=lifecycle(symbol,now);
   const watched=forwardWatchSymbols(s,now,["BCH_USDT",...ordinary]);
   assert.ok(watched.includes("BCH_USDT"));assert.ok(watched.length<=11);
+});
+
+test("slower outside 5m close followed by a shallow 1m pullback and full recovery opens through the real source engine",()=>{
+  const closed=minute(BASE,100.79,101.38,100.76,101.35),pull=minute(BASE+300_000,101.35,101.36,101.27,101.28),resume=minute(BASE+360_000,101.28,101.43,101.27,101.42);
+  const paths={BCH_USDT:[closed]};let s=seeded(BASE);
+  s=step(s,BASE+300_000,101.35,{BCH_USDT:[closed]},paths).state;
+  assert.equal(s.positions.length,0);assert.equal(s.regionLaunches!.BCH_USDT!.launchPath,"CLOSED");
+  s=step(s,BASE+360_000,101.28,{BCH_USDT:[pull]},paths).state;
+  assert.equal(s.positions.length,0);
+  s=step(s,BASE+420_000,101.42,{BCH_USDT:[pull,resume]},paths).state;
+  assert.equal(s.positions.length,1);assert.equal(s.regionLaunches!.BCH_USDT!.phase,"CONSUMED");
+  assert.match(s.positions[0]!.rule.reason,/5分钟区间外收盘/);
+});
+
+test("the former 1m-only positive path is no longer an entry when its actual 5m reference is too wide",()=>{
+  let s=seeded(BASE);
+  const prior=compression(BASE).map((r,i)=>({...r,high:[100.94,100.98,100.96,101,100.97,101.01][i]!,
+    low:[100.48,100.55,100.52,100.58,100.57,100.60][i]!}));
+  s.regionLaunches=advanceRegionLaunchUniverse({paths:{BCH_USDT:prior},lifecycles:s.regionLifecycles!,now:BASE,costRate:.0022}).states;
+  s=driveLaunch(s,BASE).s;
+  assert.equal(s.positions.length,0);assert.equal(s.regionLaunches!.BCH_USDT!.phase,"ARMED");
+  assert.match(s.regionLaunches!.BCH_USDT!.reason,/5分钟/);
 });

@@ -1062,7 +1062,7 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
     let anchorConfirmationReferencePrice:number|null=null,anchorMicroConfirmed=false;
     if(launchSignal){
       const launch=s.regionLaunches?.[signal.symbol];
-      if(!launch||launch.phase!=="READY"||launch.motherRegionId!==signal.regionId||launch.readySide!==signal.side){
+      if(!launch||launch.version!==REGION_LAUNCH_VERSION||launch.phase!=="READY"||launch.motherRegionId!==signal.regionId||launch.readySide!==signal.side){
         reject("RegionLaunch READY状态与爆发事件不一致；不补追，等待状态同步");continue;
       }
     }
@@ -1159,7 +1159,7 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
     if(!anchorSignal&&!launchSignal)s.regionSignals=(s.regionSignals??[]).filter(row=>row.id!==signal.id);
     diagnostics.opened++;diagnostics.queued=(s.regionSignals?.length??0)+(s.regionLaunchSignals?.length??0);
     event(s,now,"ENTRY",t.id,launchSignal
-      ?`${signal.symbol} RegionLaunch 开仓：成熟母区与子区压缩已提前ARMED，实时盘口20–60秒强势离区且浅回吐后通过追价与风险检查。`
+      ?`${signal.symbol} RegionLaunch 开仓：${signal.reason} 当前盘口通过追价与风险检查。`
       :anchorSignal?`${signal.symbol} AnchorFlow 开仓：1h/15m没有有置信度的明确反向否决，5m回测反应READY后通过订单经济性检查。`
       :`${signal.symbol} 5m区域边界拒绝回归开仓。`,
       {notional,plannedRisk,regionWidthRate:signal.regionWidthRate,stopRate,remainingEdge:remaining});
@@ -1197,7 +1197,7 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
   if(launchUpgrade){
     s.regionLaunchVersion=REGION_LAUNCH_VERSION;s.regionLaunches=s.regionLaunches??{};s.regionLaunchSignals=[];
     event(s,now,"UPGRADE",REGION_LAUNCH_VERSION,
-      "RegionLaunch升级为1分钟确认：成熟母区和5分钟子区继续负责提前ARMED；爆发必须先出现强势1分钟突破K，再等第一根停止回调并重新顺向的完整1分钟K，当前盘口确认后才追击。");
+      "RegionLaunch升级为完整区间与5分钟先行确认：影线极值属于突破边界；5分钟异常强可提前切换1分钟确认，较慢离区先等5分钟区间外收盘，再观察加速或小回调重启。旧持仓生命周期不变。");
   }
   const entrySymbols=new Set(input.entrySymbols??Object.keys(paths));
   const retainedSymbols=[...new Set([...entrySymbols,...s.positions.map(position=>position.symbol),
@@ -1259,7 +1259,7 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
     }
   }
   manageMultiTurn(s,quotes,now);
-  const launchMinutes=advanceRegionLaunchMinutes({states:s.regionLaunches??{},minutePaths,frames:s.turnEngine?.frames,
+  const launchMinutes=advanceRegionLaunchMinutes({states:s.regionLaunches??{},minutePaths,fiveMinutePaths:paths,quotes,frames:s.turnEngine?.frames,
     now,costRate:turnModeledCost("5m",0)});
   s.regionLaunches=launchMinutes.states;
   const launchQuotes=advanceRegionLaunchQuotes({states:s.regionLaunches??{},quotes,frames:s.turnEngine?.frames,now,costRate:turnModeledCost("5m",0)});
