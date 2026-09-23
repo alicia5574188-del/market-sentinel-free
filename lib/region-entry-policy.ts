@@ -28,6 +28,7 @@ export function evaluateRegionEntryPolicy(input:{
   if(!(structuralStopRate>0))return{ok:false,reason:"区域失效位不在持仓反向一侧",remainingSpaceRate:0};
   if(structuralStopRate>TURN_CONFIG["5m"].maxStop)
     return{ok:false,reason:"区域结构止损超过5分钟统一风险边界，不缩短结构止损",remainingSpaceRate:0};
+  const lossRate=structuralStopRate+input.costRate;
 
   let remaining=0;
   if(s.kind==="REJECTION"){
@@ -42,9 +43,18 @@ export function evaluateRegionEntryPolicy(input:{
     const boundary=s.side==="LONG"?s.regionUpper:s.regionLower;
     const travel=d*(mid-boundary)/s.regionWidth;
     if(travel<-.10)return{ok:false,reason:"价格已重新接受旧区域，迁移事件失效",remainingSpaceRate:0};
-    if(travel>REGION_DETACH_WIDTHS)return{ok:false,reason:"价格已经离旧区域过远，不追迁移单",remainingSpaceRate:0};
-    remaining=Math.max(s.regionWidthRate*1.25,input.costRate*3)-Math.max(0,d*(mid/s.signalPrice-1));
-    if(remaining<=input.costRate)return{ok:false,reason:"迁移事件已经消耗过多初始推进空间",remainingSpaceRate:remaining};
+    if(travel>REGION_DETACH_WIDTHS)return{ok:false,reason:"价格已经离旧区域过远，不追迁移单；保留事件等待回踩",remainingSpaceRate:0};
+
+    // The extension budget belongs to the REGION BOUNDARY, not to the second
+    // confirmation close. Otherwise the distance already travelled while
+    // waiting for two completed 5m closes is forgotten and a late confirmation
+    // is incorrectly treated as a fresh full-size opportunity.
+    const extensionBudget=Math.max(s.regionWidthRate*1.25,input.costRate*3);
+    const consumedFromBoundary=Math.max(0,d*(price/boundary-1));
+    remaining=extensionBudget-consumedFromBoundary-input.costRate;
+    const edgeRatio=remaining/Math.max(lossRate,1e-9);
+    if(remaining<=0||edgeRatio<1.15)
+      return{ok:false,reason:"迁移已确认，但确认前已消耗过多区域外推进空间；保留事件等待回踩边界改善盈亏比",remainingSpaceRate:remaining};
   }
 
   const sideRisk=s.side==="LONG"?input.longRisk:input.shortRisk;
@@ -52,7 +62,6 @@ export function evaluateRegionEntryPolicy(input:{
   const drawdownScale=drawdown>=.20?.50:drawdown>=.10?.70:drawdown>=.05?.85:1;
   const headroom=Math.min(input.equity*.10-input.totalRisk,input.equity*.065-sideRisk);
   const targetRisk=Math.max(0,Math.min(input.equity*.015*drawdownScale,headroom));
-  const lossRate=structuralStopRate+input.costRate;
   const leverage=multiTurnEntryLeverage(structuralStopRate,input.contract.maintenanceRate,input.costRate,input.contract.leverageMax);
   if(leverage<MULTI_TURN_MIN_LEVERAGE)
     return{ok:false,reason:"该区域结构在6倍逐仓杠杆下仍无法保留安全余量",remainingSpaceRate:remaining};
