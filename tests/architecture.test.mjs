@@ -307,26 +307,22 @@ test("legacy sizing and portfolio mirroring both retain bounded account risk", a
   assert.match(live, /mirrorNotionalFraction/);
 });
 
-test("cutover remains credential-bound and production gates enforce five direct systems", async () => {
+test("production gates follow the current AnchorFlow PAPER authority", async () => {
   const workflow = await read(".github/workflows/sentinel-v2-ci.yml");
-  assert.equal((workflow.match(/\.runtime\.strategyArena\.version == 1 and \.runtime\.strategyArena\.playbookCount == 12/g) ?? []).length, 2);
-  assert.equal((workflow.match(/\.runtime\.strategyArena\.catalogSize == 12/g) ?? []).length, 2);
-  assert.equal((workflow.match(/\.runtime\.strategyArena\.shadowCount == 0/g) ?? []).length, 2);
-  assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.shadowExecution == false/g) ?? []).length, 2);
-  assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.outcomeBasedPromotion == false/g) ?? []).length, 2);
-  assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.dualIndependentEngines == false/g) ?? []).length, 2);
-  assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.independentSystemCount == 5/g) ?? []).length, 2);
-  assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.canonicalReferenceEquity == 10000/g) ?? []).length, 2);
-  assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.canonicalCopySizing == "SOURCE_EQUITY_FRACTION"/g) ?? []).length, 2);
-  assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.canonicalEntryScaleFrozen == true/g) ?? []).length, 2);
-  assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.canonicalAdmissionGate == false/g) ?? []).length, 2);
-  assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.canonicalCapitalAgnostic == false/g) ?? []).length, 2);
-  assert.equal((workflow.match(/\.runtime\.strategyArena\.rules\.liveSource == "CANONICAL_PAPER_NORMALIZED_NET"/g) ?? []).length, 2);
-  assert.equal((workflow.match(/grep -Fq '哨兵 · 区域生命周期引擎'/g) ?? []).length, 2);
   assert.equal((workflow.match(/runtime\.forward\.strategyAuthorityVersion == "multi-turn-v1"/g) ?? []).length,2);
+  assert.equal((workflow.match(/runtime\.forward\.executionVersion == "anchor-flow-v1"/g) ?? []).length,2);
+  assert.equal((workflow.match(/runtime\.forward\.regionVersion == "region-lifecycle-v1"/g) ?? []).length,2);
+  assert.equal((workflow.match(/runtime\.forward\.initialEquity == 1000/g) ?? []).length,2);
+  assert.equal((workflow.match(/runtime\.forward\.liveEligible == false/g) ?? []).length,2);
+  assert.equal((workflow.match(/runtime\.forward\.storage\.persistedAt >= \.runtime\.forward\.lastCycleAt/g) ?? []).length,2);
+  assert.equal((workflow.match(/runtime\.liveMirror\.source == "CURRENT_FORWARD_ACCOUNT"/g) ?? []).length,2);
+  assert.equal((workflow.match(/runtime\.liveMirror\.ownerControlled == true/g) ?? []).length,2);
+  assert.equal((workflow.match(/runtime\.limits\.scanUniverse == 30/g) ?? []).length,2);
+  assert.equal((workflow.match(/runtime\.limits\.realtimeCapacity == 11/g) ?? []).length,2);
+  assert.equal((workflow.match(/grep -Fq '哨兵 · AnchorFlow'/g) ?? []).length,2);
+  assert.doesNotMatch(workflow,/runtime\.strategyArena\.rules\.strategyName == "五行情独立账户组合"/);
+  assert.doesNotMatch(workflow,/runtime\.strategyData\.hourlyRequiredCandles == 721/);
   assert.match(workflow, /deployment-plan/);
-  assert.match(workflow, /runtime\.forward\.liveEligible == false/);
-  assert.match(workflow, /runtime\.legacyRetired == true/);
   assert.match(workflow, /Verify frozen V5 route authority/);
   assert.match(workflow, /Require crypto-only V5 architecture/);
   assert.doesNotMatch(workflow, /run: npm run research:v11/);
@@ -365,9 +361,10 @@ test("ordinary production deploy accepts evolved paper equity", async () => {
   assert.equal((ordinaryDeploy.match(/resourceAccounting\.cap == 8000/g)??[]).length,2);
   assert.equal((ordinaryDeploy.match(/capacityCertified == false/g)??[]).length,2);
   assert.doesNotMatch(ordinaryDeploy,/plannedDoWritesPerDay < 55000/);
-  assert.match(ordinaryDeploy, /\(\.runtime\.strategyArena\.portfolioEquity \| type\) == "number"/);
-  assert.match(ordinaryDeploy, /\.runtime\.strategyArena\.portfolioEquity > 0/);
-  assert.doesNotMatch(ordinaryDeploy, /portfolioEquity == 1000/);
+  assert.match(ordinaryDeploy, /\.runtime\.forward\.executionVersion == "anchor-flow-v1"/);
+  assert.match(ordinaryDeploy, /\.runtime\.forward\.initialEquity == 1000/);
+  assert.doesNotMatch(ordinaryDeploy, /\.runtime\.forward\.balance == 1000/);
+  assert.doesNotMatch(ordinaryDeploy, /\.runtime\.forward\.equity == 1000/);
 });
 
 
