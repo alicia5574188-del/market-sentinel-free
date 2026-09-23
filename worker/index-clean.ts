@@ -1079,7 +1079,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const previous=this.forwardState;if(!previous||previous.strategyAuthorityVersion===MULTI_TURN_VERSION)return false;
     if(this.runtime.live.requestedEnabled||this.runtime.live.operational||this.activeLivePositions().length||this.activeLiveEntries().length)
       return false; // legacy drain continues protection, but cannot create new legacy entries
-    const quotes=this.regimeQuotes(now),closed=closeForwardForReset(previous,quotes,now),next=initialMultiTurnForward(now);
+    const quotes=this.forwardQuotes(now),closed=closeForwardForReset(previous,quotes,now),next=initialMultiTurnForward(now);
     const prepared=await prepareForwardReset(previous,closed,next,now);
     const saved=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
     const protection=prepared.entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
@@ -1123,16 +1123,18 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const legacyDrainOnly=this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION;
       const dataCycleDue=allowDataCycle&&(!this.forwardState.lastCycleAt
         ||Math.floor((now-90_000)/BAR_MS)>Math.floor((this.forwardState.lastCycleAt-90_000)/BAR_MS));
-      // Quote/exit management keeps the existing ten-second source cadence.
-      // A due post-refresh data cycle may bypass it once so fresh completed
-      // candles are never lost just because the critical loop ran first.
-      if(!dataCycleDue&&now-this.forwardState.lastQuoteCycleAt<10_000){
+      // Urgent current-authority markets (open holdings, AnchorFlow RETEST/READY,
+      // RegionLaunch ARMED/IGNITION/READY) consume the 2s critical quote clock.
+      // Non-urgent research/account marking stays on the cheaper 10s cadence.
+      const urgent=this.forwardUrgentSymbols(now).length>0||this.forwardState.positions.length>0;
+      const quoteCadence=urgent?LOOP_MS:10_000;
+      if(!dataCycleDue&&now-this.forwardState.lastQuoteCycleAt<quoteCadence){
         this.forwardLastAttemptAt=this.forwardState.lastQuoteCycleAt;return;
       }
       this.forwardLastAttemptAt=now;
       const previous = this.forwardState;
-      const next = advanceForward({ state: previous, now, paths: this.strategyCandles,daily:this.turnDailyCandles,
-        quotes: this.regimeQuotes(now), contracts: this.regimeContracts(),legacyDrainOnly,
+      const next = advanceForward({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),daily:this.turnDailyCandles,
+        quotes: this.forwardQuotes(now), contracts: this.regimeContracts(),legacyDrainOnly,
         entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue });
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
