@@ -1,0 +1,447 @@
+{
+  "version": "gate-feed-release-receipt-v1",
+  "date": "2026-09-23",
+  "taskStartedAt": "2026-09-23T14:53:07Z",
+  "repository": "alicia5574188-del/market-sentinel-free",
+  "pullRequest": 412,
+  "baseBuildSha": "4b1ec64a36c470384b975c01263e2f6526fa1c7c",
+  "candidateSha": "33a59ba4d6c4f1d7b5f05171f4cbc38e241b642f",
+  "deployedSha": "42ca9bdf1ddec2d99116add7f570f526339ade85",
+  "deployedTree": "e864169809645f5be233cbe1712d0202a8e063c9",
+  "workerVersionId": "8b2229f5-6d88-471d-8163-799c5cd814a8",
+  "deployedAt": "2026-09-23T15:22:04Z",
+  "verification": {
+    "directTests": 989,
+    "focusedTests": 75,
+    "equityTests": 61,
+    "memberTests": 49,
+    "liveParityTests": 130,
+    "architectureAndMigrationTests": 19,
+    "lintErrors": 0,
+    "preExistingLintWarnings": 16,
+    "typecheck": "passed",
+    "build": "passed",
+    "dryRun": "passed",
+    "nativeWorkerdWebSocket": {
+      "passed": true,
+      "handshakeTimeoutCancelled": true,
+      "staleBookRejected": true,
+      "privateGateRequests": 0
+    },
+    "pullRequestRun": 35880510828,
+    "mainRun": 35880765392,
+    "mainConclusion": "success"
+  },
+  "scope": {
+    "publicGateFullBookWebSocket": true,
+    "publicGateClosed1m5mCandles": true,
+    "originalRestFallbackAndBackfill": true,
+    "externalVenueExecutionPrices": false,
+    "strategyAndRiskChanged": false,
+    "freshnessAndSequenceGuardsRetained": true,
+    "onlyFrozenMethodChanged": "processBooks",
+    "privateGateTests": 0,
+    "ownerSwitchMutations": 0,
+    "accountResets": 0
+  },
+  "limits": [
+    "Observed short-run availability is not a guarantee of uninterrupted future connectivity or orders.",
+    "When every valid Gate quote source is unavailable, fresh executable-price protections remain mandatory.",
+    "Cross-exchange prices do not substitute for Gate executable liquidity.",
+    "No forced trade was made for verification."
+  ],
+  "samples": {
+    "before": {
+      "buildSha": "4b1ec64a36c470384b975c01263e2f6526fa1c7c",
+      "state": "LIVE",
+      "stale": false,
+      "lastError": null,
+      "lastSuccessAt": 1790176681711,
+      "lastHeartbeatAt": 1790176660478,
+      "authorityReady": true,
+      "forward": {
+        "version": "forward-relations-v1.0",
+        "policyVersion": "participation-execution-v1.2",
+        "strategyAuthorityVersion": "multi-turn-v1",
+        "executionVersion": "anchor-flow-v1",
+        "regionVersion": "region-lifecycle-v1",
+        "liveEligible": false,
+        "startedAt": 1790157902785,
+        "initialEquity": 1000,
+        "balance": 983.2234417472217,
+        "lastCycleAt": 1790176591150,
+        "resolved": 9,
+        "openCount": 0,
+        "anchorFlowCount": 5,
+        "executableEventCount": 2,
+        "exitPolicyVersion": null,
+        "exitPolicyActivatedAt": null,
+        "timelyExitOpenCount": 0,
+        "inheritedExitOpenCount": 0,
+        "storage": {
+          "persistedAt": 1790176591150,
+          "error": null
+        }
+      },
+      "realtimeReadiness": {
+        "capacity": 11,
+        "actionableMarkets": 7,
+        "warmingMarkets": 4,
+        "protectedMarkets": 0,
+        "protectedMarketsReady": true,
+        "missingProtectedMarkets": []
+      },
+      "feedQuality": {
+        "windowStartedAt": 1790175633878,
+        "attempts": 3901,
+        "failures": 113,
+        "recoveries": 98,
+        "lastFailureAt": 1790176679311,
+        "lastFailureSymbol": "GWEI_USDT",
+        "lastError": "The operation was aborted due to timeout"
+      },
+      "marketDataTransport": null,
+      "radar": {
+        "scanned": 30,
+        "lastScanAt": 1790176634531,
+        "lastAttemptAt": 1790176634531,
+        "consecutiveFailures": 0,
+        "retryAt": null,
+        "entryFresh": true
+      },
+      "liveMode": {
+        "requestedEnabled": true,
+        "operational": true
+      }
+    },
+    "after-1": {
+      "buildSha": "42ca9bdf1ddec2d99116add7f570f526339ade85",
+      "state": "LIVE",
+      "stale": false,
+      "lastError": null,
+      "lastSuccessAt": 1790176995560,
+      "lastHeartbeatAt": 1790176975056,
+      "authorityReady": true,
+      "forward": {
+        "version": "forward-relations-v1.0",
+        "policyVersion": "participation-execution-v1.2",
+        "strategyAuthorityVersion": "multi-turn-v1",
+        "executionVersion": "anchor-flow-v1",
+        "regionVersion": "region-lifecycle-v1",
+        "liveEligible": false,
+        "startedAt": 1790157902785,
+        "initialEquity": 1000,
+        "balance": 983.2234417472217,
+        "lastCycleAt": 1790176891969,
+        "resolved": 9,
+        "openCount": 0,
+        "anchorFlowCount": 4,
+        "executableEventCount": 4,
+        "exitPolicyVersion": null,
+        "exitPolicyActivatedAt": null,
+        "timelyExitOpenCount": 0,
+        "inheritedExitOpenCount": 0,
+        "storage": {
+          "persistedAt": 1790176891969,
+          "error": null
+        }
+      },
+      "realtimeReadiness": {
+        "capacity": 11,
+        "actionableMarkets": 11,
+        "warmingMarkets": 0,
+        "protectedMarkets": 0,
+        "protectedMarketsReady": true,
+        "missingProtectedMarkets": []
+      },
+      "feedQuality": {
+        "windowStartedAt": 1790175633878,
+        "attempts": 5210,
+        "failures": 130,
+        "recoveries": 122,
+        "lastFailureAt": 1790176910551,
+        "lastFailureSymbol": "SHROOM_USDT",
+        "lastError": "The operation was aborted due to timeout"
+      },
+      "marketDataTransport": {
+        "version": "gate-dual-transport-v1",
+        "connected": true,
+        "lastMessageAt": 1790176998077,
+        "lastError": null,
+        "retryAt": null,
+        "connections": 1,
+        "subscriptions": 52,
+        "acceptedBooks": 3669,
+        "acceptedCandles": 12,
+        "rejected": 61,
+        "websocketUses": 331,
+        "restUses": 32,
+        "freshBooks": 11
+      },
+      "radar": {
+        "scanned": 30,
+        "lastScanAt": 1790176883086,
+        "lastAttemptAt": 1790176958222,
+        "consecutiveFailures": 1,
+        "retryAt": 1790177018222,
+        "entryFresh": true
+      },
+      "liveMode": {
+        "requestedEnabled": true,
+        "operational": true
+      }
+    },
+    "after-2": {
+      "buildSha": "42ca9bdf1ddec2d99116add7f570f526339ade85",
+      "state": "LIVE",
+      "stale": false,
+      "lastError": null,
+      "lastSuccessAt": 1790177053990,
+      "lastHeartbeatAt": 1790177035254,
+      "authorityReady": true,
+      "forward": {
+        "version": "forward-relations-v1.0",
+        "policyVersion": "participation-execution-v1.2",
+        "strategyAuthorityVersion": "multi-turn-v1",
+        "executionVersion": "anchor-flow-v1",
+        "regionVersion": "region-lifecycle-v1",
+        "liveEligible": false,
+        "startedAt": 1790157902785,
+        "initialEquity": 1000,
+        "balance": 983.2234417472217,
+        "lastCycleAt": 1790176891969,
+        "resolved": 9,
+        "openCount": 0,
+        "anchorFlowCount": 4,
+        "executableEventCount": 4,
+        "exitPolicyVersion": null,
+        "exitPolicyActivatedAt": null,
+        "timelyExitOpenCount": 0,
+        "inheritedExitOpenCount": 0,
+        "storage": {
+          "persistedAt": 1790176891969,
+          "error": null
+        }
+      },
+      "realtimeReadiness": {
+        "capacity": 11,
+        "actionableMarkets": 11,
+        "warmingMarkets": 0,
+        "protectedMarkets": 0,
+        "protectedMarketsReady": true,
+        "missingProtectedMarkets": []
+      },
+      "feedQuality": {
+        "windowStartedAt": 1790175633878,
+        "attempts": 5518,
+        "failures": 130,
+        "recoveries": 122,
+        "lastFailureAt": 1790176910551,
+        "lastFailureSymbol": "SHROOM_USDT",
+        "lastError": "The operation was aborted due to timeout"
+      },
+      "marketDataTransport": {
+        "version": "gate-dual-transport-v1",
+        "connected": true,
+        "lastMessageAt": 1790177057418,
+        "lastError": null,
+        "retryAt": null,
+        "connections": 1,
+        "subscriptions": 52,
+        "acceptedBooks": 6825,
+        "acceptedCandles": 23,
+        "rejected": 61,
+        "websocketUses": 635,
+        "restUses": 36,
+        "freshBooks": 11
+      },
+      "radar": {
+        "scanned": 30,
+        "lastScanAt": 1790177019339,
+        "lastAttemptAt": 1790177019339,
+        "consecutiveFailures": 0,
+        "retryAt": null,
+        "entryFresh": true
+      },
+      "liveMode": {
+        "requestedEnabled": true,
+        "operational": true
+      }
+    },
+    "after-3": {
+      "buildSha": "42ca9bdf1ddec2d99116add7f570f526339ade85",
+      "state": "LIVE",
+      "stale": false,
+      "lastError": null,
+      "lastSuccessAt": 1790177118332,
+      "lastHeartbeatAt": 1790177095494,
+      "authorityReady": true,
+      "forward": {
+        "version": "forward-relations-v1.0",
+        "policyVersion": "participation-execution-v1.2",
+        "strategyAuthorityVersion": "multi-turn-v1",
+        "executionVersion": "anchor-flow-v1",
+        "regionVersion": "region-lifecycle-v1",
+        "liveEligible": false,
+        "startedAt": 1790157902785,
+        "initialEquity": 1000,
+        "balance": 983.2234417472217,
+        "lastCycleAt": 1790176891969,
+        "resolved": 9,
+        "openCount": 0,
+        "anchorFlowCount": 4,
+        "executableEventCount": 4,
+        "exitPolicyVersion": null,
+        "exitPolicyActivatedAt": null,
+        "timelyExitOpenCount": 0,
+        "inheritedExitOpenCount": 0,
+        "storage": {
+          "persistedAt": 1790176891969,
+          "error": null
+        }
+      },
+      "realtimeReadiness": {
+        "capacity": 11,
+        "actionableMarkets": 11,
+        "warmingMarkets": 0,
+        "protectedMarkets": 0,
+        "protectedMarketsReady": true,
+        "missingProtectedMarkets": []
+      },
+      "feedQuality": {
+        "windowStartedAt": 1790175633878,
+        "attempts": 5782,
+        "failures": 130,
+        "recoveries": 124,
+        "lastFailureAt": 1790176910551,
+        "lastFailureSymbol": "SHROOM_USDT",
+        "lastError": "The operation was aborted due to timeout"
+      },
+      "marketDataTransport": {
+        "version": "gate-dual-transport-v1",
+        "connected": true,
+        "lastMessageAt": 1790177118449,
+        "lastError": null,
+        "retryAt": null,
+        "connections": 1,
+        "subscriptions": 52,
+        "acceptedBooks": 9843,
+        "acceptedCandles": 64,
+        "rejected": 61,
+        "websocketUses": 893,
+        "restUses": 42,
+        "freshBooks": 11
+      },
+      "radar": {
+        "scanned": 30,
+        "lastScanAt": 1790177080553,
+        "lastAttemptAt": 1790177080553,
+        "consecutiveFailures": 0,
+        "retryAt": null,
+        "entryFresh": true
+      },
+      "liveMode": {
+        "requestedEnabled": true,
+        "operational": true
+      }
+    },
+    "after-4": {
+      "buildSha": "42ca9bdf1ddec2d99116add7f570f526339ade85",
+      "state": "LIVE",
+      "stale": false,
+      "lastError": null,
+      "lastSuccessAt": 1790177231846,
+      "lastHeartbeatAt": 1790177223835,
+      "authorityReady": true,
+      "forward": {
+        "version": "forward-relations-v1.0",
+        "policyVersion": "participation-execution-v1.2",
+        "strategyAuthorityVersion": "multi-turn-v1",
+        "executionVersion": "anchor-flow-v1",
+        "regionVersion": "region-lifecycle-v1",
+        "liveEligible": false,
+        "startedAt": 1790157902785,
+        "initialEquity": 1000,
+        "balance": 983.2234417472217,
+        "lastCycleAt": 1790177191687,
+        "resolved": 9,
+        "openCount": 0,
+        "anchorFlowCount": 3,
+        "executableEventCount": 4,
+        "exitPolicyVersion": null,
+        "exitPolicyActivatedAt": null,
+        "timelyExitOpenCount": 0,
+        "inheritedExitOpenCount": 0,
+        "storage": {
+          "persistedAt": 1790177191687,
+          "error": null
+        }
+      },
+      "realtimeReadiness": {
+        "capacity": 11,
+        "actionableMarkets": 11,
+        "warmingMarkets": 0,
+        "protectedMarkets": 0,
+        "protectedMarketsReady": true,
+        "missingProtectedMarkets": []
+      },
+      "feedQuality": {
+        "windowStartedAt": 1790175633878,
+        "attempts": 6357,
+        "failures": 130,
+        "recoveries": 130,
+        "lastFailureAt": 1790176910551,
+        "lastFailureSymbol": "SHROOM_USDT",
+        "lastError": "The operation was aborted due to timeout"
+      },
+      "marketDataTransport": {
+        "version": "gate-dual-transport-v1",
+        "connected": true,
+        "lastMessageAt": 1790177233277,
+        "lastError": null,
+        "retryAt": null,
+        "connections": 1,
+        "subscriptions": 51,
+        "acceptedBooks": 15980,
+        "acceptedCandles": 85,
+        "rejected": 61,
+        "websocketUses": 1452,
+        "restUses": 58,
+        "freshBooks": 11
+      },
+      "radar": {
+        "scanned": 30,
+        "lastScanAt": 1790177202617,
+        "lastAttemptAt": 1790177202617,
+        "consecutiveFailures": 0,
+        "retryAt": null,
+        "entryFresh": true
+      },
+      "liveMode": {
+        "requestedEnabled": true,
+        "operational": true
+      }
+    }
+  },
+  "observedComparison": {
+    "beforeReady": 7,
+    "afterReady": 11,
+    "capacity": 11,
+    "from": "2026-09-23T15:23:15.560Z",
+    "through": "2026-09-23T15:27:11.846Z",
+    "bookAttempts": 1147,
+    "bookFailures": 0,
+    "additionalWebsocketUses": 1121,
+    "additionalRestUses": 26,
+    "acceptedBooks": 15980,
+    "acceptedClosedCandles": 85,
+    "postDeployStrategyCyclePersistedAt": "2026-09-23T15:26:31.687Z",
+    "accountStartedAtPreserved": true,
+    "balancePreserved": true,
+    "ownerLiveIntentPreserved": true,
+    "runtimeError": null,
+    "storageError": null,
+    "noForcedOrder": true
+  },
+  "diagnosisCaveat": "The earlier observed REST window had about31% failures; immediate pre-deploy window was113/3901 (about2.9%). These windows are different; do not represent31% as the immediate baseline or a controlled experiment. An additional trade closed on the old build during repair; the system was not globally unable to open."
+}
