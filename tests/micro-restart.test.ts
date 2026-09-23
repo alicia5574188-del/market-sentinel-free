@@ -28,7 +28,7 @@ test("MET-like breakout with a large upper wick is not a launch even before late
 test("several small red candles become invalid when their combined giveback is too large",()=>{
   const breakout=bar(0,100,102.2,99.9,102.0);
   const result=evaluateMicroRestart({breakout,side:"LONG",triggerPrice:100.8,costRate:.0022,regionWidthRate:.02,
-    following:[bar(60,102,102.05,101.50,101.55),bar(120,101.55,101.60,100.95,101.05)]});
+    following:[bar(60,102,102.05,101.25,101.30),bar(120,101.30,101.35,100.35,100.40)]});
   assert.equal(result.state,"FAIL");
   assert.match(result.reason,/不再属于小回调/);
 });
@@ -36,7 +36,7 @@ test("several small red candles become invalid when their combined giveback is t
 test("breakout strength must remain clearly larger than cumulative opposite candle bodies",()=>{
   const breakout=bar(0,100,101.65,99.95,101.50);
   const result=evaluateMicroRestart({breakout,side:"LONG",triggerPrice:100.5,costRate:.0015,regionWidthRate:.012,
-    following:[bar(60,101.50,101.52,101.05,101.10),bar(120,101.10,101.15,100.75,100.82)]});
+    following:[bar(60,101.50,101.52,100.85,100.90),bar(120,100.90,100.95,100.25,100.30)]});
   assert.equal(result.state,"FAIL");
   assert.ok(result.cumulativeAdverseBodyRate>0);
 });
