@@ -36,8 +36,8 @@ import { advanceRegimePortfolio, evaluateRegimePortfolio, initialRegimePortfolio
   REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE, resetRegimePortfolio,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
-import { advanceForward, closeForwardForReset, forwardSummary, forwardEquity, freshQuote, forwardWatchSymbols, initialMultiTurnForward,
-  BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
+import { advanceForward, closeForwardForReset, forwardSummary, forwardEquity, freshQuote, forwardUrgentQuoteSymbols,
+  forwardWatchSymbols, initialMultiTurnForward, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { MULTI_TURN_VERSION } from "../lib/multi-turn-engine.ts";
 import { ANCHOR_FLOW_VERSION } from "../lib/anchor-flow.ts";
 import { forwardSymbolAllowed } from "../lib/forward-evidence.ts";
@@ -495,6 +495,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private memory: Record<string, SymbolMemory> = {};
   private structureCandles: Record<string, Partial<Record<"1m" | "15m" | "1h" | "4h", Awaited<ReturnType<typeof fetchStructureCandles>>>>> = {};
   private strategyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
+  private forwardMinuteCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
+  private forwardMinuteRetryAt = new Map<string,number>();
   private turnDailyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private turnDailyLoaded = new Set<string>();
   private turnDailyCursor = 0;
