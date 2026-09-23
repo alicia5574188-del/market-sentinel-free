@@ -36,10 +36,10 @@ export default function PaperAccountReset({auth,runtime,onReset}:{auth:AuthSessi
     {error&&<div className="fr-error" role="alert"><b>重置未完成</b><p>{error}</p></div>}
     {notice&&<div className="fr-notice" role="status">{notice}</div>}
     {!confirming?<button className="fr-button" type="button" disabled={busy} onClick={()=>{setError(null);setNotice(null);setConfirming(true);}}>重置模拟账户</button>
-      :<div className="fr-confirm-panel">
+      :<div className="fr-form">
         <p className="fr-error"><b>确认重置？</b><br/>当前模拟账户的余额、持仓和本轮交易记录会结束，新账户从1000U重新开始。该操作不能撤销。</p>
         {blocked&&<p className="fr-note">当前不能重置：请先关闭实盘，并确认没有本系统实盘持仓或待成交订单。</p>}
-        <div className="fr-form-actions">
+        <div className="fr-owner-session">
           <button className="fr-button" type="button" disabled={busy||blocked} onClick={()=>void reset()}>{busy?"正在原子重置…":"确认重置为1000U"}</button>
           <button className="fr-text-button" type="button" disabled={busy} onClick={()=>setConfirming(false)}>取消</button>
         </div>
