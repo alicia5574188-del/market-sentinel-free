@@ -88,8 +88,10 @@ function levels(rows: GateBook["asks"]): BookLevel[] {
     .filter((row) => row.price > 0 && row.size > 0);
 }
 
-export async function fetchFuturesBook(symbol: string, tickSize = 0.0001, quantoMultiplier = 1): Promise<BookSnapshot> {
-  const book = await gatePublic<GateBook>(`/futures/usdt/order_book?contract=${encodeURIComponent(symbol)}&limit=50&with_id=true`, GATE_PUBLIC_TIMEOUT_MS, 2);
+async function fetchFuturesBookPolicy(symbol:string,tickSize:number,quantoMultiplier:number,
+  timeoutMs:number,attempts:number,limit:number):Promise<BookSnapshot>{
+  const book = await gatePublic<GateBook>(`/futures/usdt/order_book?contract=${encodeURIComponent(symbol)}&limit=${limit}&with_id=true`,
+    timeoutMs, attempts);
   const toNotional = (row: BookLevel) => ({ ...row, size: row.size * row.price * Math.max(quantoMultiplier, 1e-12) });
   const bids = levels(book.bids).map(toNotional).sort((a, b) => b.price - a.price);
   const asks = levels(book.asks).map(toNotional).sort((a, b) => a.price - b.price);
@@ -98,14 +100,28 @@ export async function fetchFuturesBook(symbol: string, tickSize = 0.0001, quanto
   const sequence = Number(book.id ?? 0);
   if (!(update > 0)) throw new Error(`${symbol} futures book missing exchange update time`);
   if (!(sequence > 0)) throw new Error(`${symbol} futures book missing sequence id`);
-  return {
-    symbol,
-    observedAt: update < 1e12 ? update * 1_000 : update,
-    sequence,
-    tickSize,
-    bids,
-    asks,
-  };
+  return {symbol,observedAt:update<1e12?update*1_000:update,sequence,tickSize,bids,asks};
+}
+
+export async function fetchFuturesBook(symbol: string, tickSize = 0.0001, quantoMultiplier = 1): Promise<BookSnapshot> {
+  return fetchFuturesBookPolicy(symbol,tickSize,quantoMultiplier,GATE_PUBLIC_TIMEOUT_MS,2,50);
+}
+
+/**
+ * Current-authority execution path. Smaller depth and a shorter per-host wait
+ * keep one slow contract from consuming the whole 2s execution clock while
+ * retaining one independent-host fallback.
+ */
+export async function fetchUrgentFuturesBook(symbol:string,tickSize=.0001,quantoMultiplier=1):Promise<BookSnapshot>{
+  return fetchFuturesBookPolicy(symbol,tickSize,quantoMultiplier,1_200,2,20);
+}
+
+/**
+ * Non-urgent realtime discovery prefers bounded latency over blocking the next
+ * protection/entry cycle. A miss is retried by the next scheduled bucket.
+ */
+export async function fetchBackgroundFuturesBook(symbol:string,tickSize=.0001,quantoMultiplier=1):Promise<BookSnapshot>{
+  return fetchFuturesBookPolicy(symbol,tickSize,quantoMultiplier,1_500,1,20);
 }
 
 export type GateTicker = {
