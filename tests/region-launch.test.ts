@@ -142,3 +142,16 @@ test("v2 pending permissions are rebuilt without consuming or forgetting the mot
     now:(START+2101)*1000,costRate:.0022}).states.BCH_USDT!;
   assert.equal(consumed.phase,"CONSUMED");assert.equal(consumed.consumedAt,(START+2100)*1000);
 });
+
+test("a restored READY cannot bypass the new five-minute evidence check while minute paths are absent",()=>{
+  let states=armed();
+  const rows=[bar(2100,100.90,102.30,100.85,102),bar(2160,102,102.05,101.65,101.75),bar(2220,101.75,102.15,101.72,102.10)];
+  for(let i=1;i<=3;i++)states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:rows.slice(0,i)},now:(START+2100+i*60)*1000,costRate:.0022}).states;
+  assert.equal(states.BCH_USDT!.phase,"READY");
+  const now=(START+2281)*1000;
+  states=advanceRegionLaunchMinutes({states,minutePaths:{},now,costRate:.0022}).states;
+  assert.equal(states.BCH_USDT!.phase,"IGNITION");
+  assert.equal(advanceRegionLaunchQuotes({states,quotes:{BCH_USDT:q(102.11,now)},now,costRate:.0022}).signals.length,0);
+  states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:rows},now:now+1,costRate:.0022}).states;
+  assert.equal(states.BCH_USDT!.phase,"READY","fresh restored evidence remains retryable rather than consuming the box");
+});

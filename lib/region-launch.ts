@@ -250,7 +250,10 @@ export function advanceRegionLaunchMinutes(input:{states:Record<string,RegionLau
     }
     const rows=(input.minutePaths[symbol]??[]).filter(row=>[row.time,row.open,row.high,row.low,row.close,row.volume].every(finite)
       &&row.high>=row.low&&row.low>0&&minuteCompleteAt(row)<=input.now).sort((a,b)=>a.time-b.time);
-    if(!rows.length){states[symbol]=s;continue;}
+    if(!rows.length){
+      if(s.phase==="READY"){s.phase="IGNITION";clearReady(s);s.reason="重新取得当前1分钟路径后核对5分钟离区；旧READY不绕过当前结构确认。";}
+      states[symbol]=s;continue;
+    }
     const {long:longTrigger,short:shortTrigger}=launchTriggers(s,input.costRate);
     const quote=input.quotes?.[symbol],livePrice=quote?.fresh&&quote.bestBid>0&&quote.bestAsk>=quote.bestBid
       &&quote.observedAt<=input.now+1000&&input.now-quote.observedAt<=5000?(quote.bestBid+quote.bestAsk)/2:undefined;
