@@ -88,7 +88,7 @@ function signalFromRetest(input:{state:AnchorFlowState;row:RegionCandle;at:numbe
   const stopBuffer=Math.max(s.regionWidth*.08,s.regionCenter*input.costRate*.25);
   const stopPrice=s.side==="LONG"?s.pullbackExtreme-stopBuffer:s.pullbackExtreme+stopBuffer;
   if((s.side==="LONG"&&stopPrice>=row.close)||(s.side==="SHORT"&&stopPrice<=row.close))return null;
-  return <AnchorFlowEntrySignal>{
+  return {
     version:"region-lifecycle-v1",
     id:`af-${s.regionId}-${s.side}-${at}`,symbol:s.symbol,kind:"MIGRATION",side:s.side,boundary:s.boundary,
     completedAt:at,expiresAt:at+2*REGION_BAR_MS,signalPrice:row.close,stopPrice,targetPrice:null,
@@ -100,7 +100,7 @@ function signalFromRetest(input:{state:AnchorFlowState;row:RegionCandle;at:numbe
     // 15m owns the executable move horizon. 1h is only a directional veto and
     // must not artificially shrink a valid 15m trade's remaining-space estimate.
     anchorExpectedMoveRate:Math.max(0,f15.expectedMoveRate),
-  };
+  } as AnchorFlowEntrySignal;
 }
 function updateOne(input:{
   state:AnchorFlowState;rows:RegionCandle[];lifecycle?:RegionLifecycleState;frames?:MultiTurnState["frames"];
