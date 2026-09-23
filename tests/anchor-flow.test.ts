@@ -28,7 +28,7 @@ const raw:RegionEntrySignal={version:REGION_LIFECYCLE_VERSION,id:"raw",symbol:"B
 const bar=(offset:number,o:number,h:number,l:number,c:number):RegionCandle=>({time:START+offset,open:o,high:h,low:l,close:c,volume:1000});
 
 test("raw accepted migration creates no order until extension, first retest and restart all occur",()=>{
-  const partial=[bar(300,101.3,102,101.2,101.8)];
+  const partial=[bar(300,101.3,102,101.7,101.8)];
   const first=advanceAnchorFlowUniverse({paths:{BTC_USDT:partial},lifecycles:{BTC_USDT:lifecycle},frames:frames("LONG",(START+600)*1000),
     prior:{},migrationSignals:[raw],consumed:{},now:(START+600)*1000+1,costRate:.0022});
   assert.equal(first.signals.length,0);
