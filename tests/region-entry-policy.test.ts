@@ -11,9 +11,10 @@ const base=(overrides:Partial<TestSignal>={}):TestSignal=>({
   regionId:"r1",regionConfirmedAt:500,regionLower:99,regionUpper:101,regionCenter:100,regionWidth:2,regionWidthRate:.02,
   reason:"fixture",...overrides,
 });
-const run=(signal:RegionEntrySignal,bid:number,ask:number)=>evaluateRegionEntryPolicy({signal,bestBid:bid,bestAsk:ask,contract,
-  equity:1000,peakEquity:1000,totalRisk:0,longRisk:0,shortRisk:0,grossNotional:0,usedMargin:0,tradeRisks:[],
-  costRate:.0022,feeRate:.0007,slippageRate:.00025});
+const run=(signal:RegionEntrySignal,bid:number,ask:number,anchorConfirmationReferencePrice?:number)=>evaluateRegionEntryPolicy({
+  signal,bestBid:bid,bestAsk:ask,contract,equity:1000,peakEquity:1000,totalRisk:0,longRisk:0,shortRisk:0,
+  grossNotional:0,usedMargin:0,tradeRisks:[],costRate:.0022,feeRate:.0007,slippageRate:.00025,
+  anchorConfirmationReferencePrice});
 
 test("direct migration no longer owns entry authority",()=>{
   const result=run(base(),101.19,101.21);assert.equal(result.ok,false);
@@ -24,7 +25,7 @@ test("AnchorFlow restart stays READY until a small executable-price confirmation
   const signal=base({entryModel:"ANCHOR_FLOW",anchorExpectedMoveRate:.022});
   const waiting=run(signal,101.19,101.21);assert.equal(waiting.ok,false);
   if(!waiting.ok)assert.match(waiting.reason,/顺向确认/);
-  const result=run(signal,101.34,101.36);assert.equal(result.ok,true);
+  const result=run(signal,101.34,101.36,101.21*(1+.00025));assert.equal(result.ok,true);
   if(result.ok){
     assert.ok(result.plan.leverage>=6&&result.plan.leverage<=12);
     assert.ok(result.plan.plannedRisk<=8.01);
@@ -63,7 +64,7 @@ test("the same MON structure is executable only after completed AnchorFlow resta
     regionLower:.02646,regionUpper:.02687,regionCenter:.026735,regionWidth:.00041,regionWidthRate:.00041/.026735,
     entryModel:"ANCHOR_FLOW",anchorExpectedMoveRate:.018});
   const waiting=run(mon,.026405,.026409);assert.equal(waiting.ok,false);
-  const result=run(mon,.026370,.026374);
+  const result=run(mon,.026370,.026374,.026405*(1+.00025));
   assert.equal(result.ok,true);
   if(result.ok){assert.ok(result.plan.remainingSpaceRate>result.plan.lossRate);assert.ok(result.plan.notional<=600.01);}
 });
