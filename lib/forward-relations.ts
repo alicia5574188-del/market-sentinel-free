@@ -1065,7 +1065,7 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
       timeframe:contextTimeframe,side:signal.side,phase:frame?.phase??"FLOW",signalAt:signal.completedAt,signalPrice:signal.signalPrice,reason:signal.reason,
       directionConfidence:frame?.directionConfidence??1,continuationScore:frame?.continuationScore??1,
       turnProbability:frame?.turnProbability??0,triggerProbability:frame?.triggerProbability??1,
-      expectedMoveRate:remaining+cost,modeledCostRate:cost,remainingSpaceRate:remaining,stopRate,
+      expectedMoveRate:launchSignal?rl.launchExpectedMoveRate:remaining+cost,modeledCostRate:cost,remainingSpaceRate:remaining,stopRate,
       riskCap:anchorSignal ? .008 : .006,bestHoldMinutes:anchorSignal||launchSignal?windows.bestHoldMinutes:0,
       strongExtensionMinutes:anchorSignal||launchSignal?windows.strongExtensionMinutes:0,hardExtensionMinutes:anchorSignal||launchSignal?windows.hardExtensionMinutes:0,
       regionVersion:REGION_LIFECYCLE_VERSION,regionKind:signal.kind,regionId:signal.regionId,regionBoundary:signal.boundary,
@@ -1093,7 +1093,9 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
       turn:{version:MULTI_TURN_VERSION,timeframe:contextTimeframe,signalAt:signal.completedAt,
         entryTurnProbability:frame?.turnProbability??0,entryContinuation:frame?.continuationScore??1,entryDirectionConfidence:frame?.directionConfidence??1}};
     s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.positions.push(t);s.rules.unshift(rule);s.rules=s.rules.slice(0,48);
-    s.lastEntryBars[signal.symbol]=signal.completedAt;s.turnLastEntryBars??={};s.turnLastEntryBars[`region:${signal.regionId}`]=signal.completedAt;
+    s.turnLastEntryBars??={};
+    if(!launchSignal)s.lastEntryBars[signal.symbol]=signal.completedAt;
+    s.turnLastEntryBars[launchSignal?`launch:${signal.regionId}:${signal.side}`:`region:${signal.regionId}`]=signal.completedAt;
     if(anchorSignal){
       s.anchorConsumed??={};s.anchorConsumed[`${signal.regionId}:${signal.side}`]=now;
       const flow=s.anchorFlows?.[signal.symbol];
@@ -1212,20 +1214,12 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
     }
   }
   manageMultiTurn(s,quotes,now);
-  const launchDecisionSnapshot=JSON.stringify(Object.values(s.regionLaunches??{}).sort((a,b)=>a.symbol.localeCompare(b.symbol)).map(row=>[
-    row.symbol,row.phase,row.armedInsideObserved,row.ignitionSide,row.ignitionAt,row.ignitionExtreme,row.ignitionWorstPrice,
-    row.quoteSamples,row.lastQuoteAt,row.readyAt,row.readySide,row.readySignalPrice,row.readyStopPrice,row.cooldownUntil,row.consumedAt
-  ]));
   const launchQuotes=advanceRegionLaunchQuotes({states:s.regionLaunches??{},quotes,frames:s.turnEngine?.frames,now,costRate:turnModeledCost("5m",0)});
   s.regionLaunches=launchQuotes.states;
   const existingLaunch=(s.regionLaunchSignals??[]).filter(signal=>signal.expiresAt>now
     &&s.regionLaunches?.[signal.symbol]?.phase==="READY"&&s.regionLaunches?.[signal.symbol]?.motherRegionId===signal.regionId);
   s.regionLaunchSignals=[...new Map([...existingLaunch,...launchQuotes.signals].map(signal=>[signal.id,signal])).values()]
     .sort((a,b)=>a.completedAt-b.completedAt||a.symbol.localeCompare(b.symbol)).slice(-30);
-  const launchDecisionChanged=launchDecisionSnapshot!==JSON.stringify(Object.values(s.regionLaunches??{}).sort((a,b)=>a.symbol.localeCompare(b.symbol)).map(row=>[
-    row.symbol,row.phase,row.armedInsideObserved,row.ignitionSide,row.ignitionAt,row.ignitionExtreme,row.ignitionWorstPrice,
-    row.quoteSamples,row.lastQuoteAt,row.readyAt,row.readySide,row.readySignalPrice,row.readyStopPrice,row.cooldownUntil,row.consumedAt
-  ]));
   openRegionTrades(s,quotes,contracts,now,entrySymbols);
   const marked=forwardEquity(s,quotes,now);
   if(!marked.stalePositions){
@@ -1239,7 +1233,7 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
     s.daily=s.daily.slice(-400);
   }
   s.lastQuoteCycleAt=now;
-  return{state:s,changed:dataDue||markDue||launchDecisionChanged||s.revision!==before,protectionChanged:forwardProtectionChanged(input.state,s)};
+  return{state:s,changed:dataDue||markDue||s.revision!==before,protectionChanged:forwardProtectionChanged(input.state,s)};
 }
 
 export function advanceForward(input:{state:ForwardState;now:number;paths:Record<string,Candle[]>;daily?:Record<string,Candle[]>;quotes:Record<string,Quote>;contracts:Record<string,Contract>;legacyDrainOnly?:boolean;entrySymbols?:string[];allowDataCycle?:boolean}){
