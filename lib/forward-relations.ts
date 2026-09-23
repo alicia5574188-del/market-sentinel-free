@@ -28,6 +28,7 @@ import { MULTI_TURN_ROTATION_COOLDOWN_MS, MULTI_TURN_ROTATION_VERSION, evaluateR
 import { REGION_LIFECYCLE_VERSION, consumeRegionBoundary, evaluateRegionUniverse,
   type RegionEntrySignal, type RegionLifecycleState } from "./region-lifecycle.ts";
 import { evaluateRegionEntryPolicy } from "./region-entry-policy.ts";
+import { ANCHOR_FLOW_VERSION, advanceAnchorFlowUniverse, type AnchorFlowEntrySignal, type AnchorFlowState } from "./anchor-flow.ts";
 // The storage schema stays v1.0 so an algorithm upgrade cannot reset the ledger.
 export const FORWARD_VERSION = "forward-relations-v1.0";
 export const FORWARD_GRAMMAR = "conditional-response-conjunction-v1";
@@ -52,7 +53,7 @@ export type Rule = { id: string; signature: string; parentId: string | null; ver
   grammar: string; liveEligible: false; evidence?: Evidence; adaptiveLane?:AdaptiveLane;
   authority?:"LEGACY_FORWARD"|"MULTI_TURN";turnTimeframe?:TurnTimeframe };
 export type MultiTurnEntryContext = {
-  version:"multi-turn-entry-context-v1"|"direction-space-entry-context-v2"|"region-lifecycle-entry-v1";capturedAt:number;timeframe:TurnTimeframe;side:"LONG"|"SHORT";
+  version:"multi-turn-entry-context-v1"|"direction-space-entry-context-v2"|"region-lifecycle-entry-v1"|"anchor-flow-entry-v1";capturedAt:number;timeframe:TurnTimeframe;side:"LONG"|"SHORT";
   phase:TurnPhase;signalAt:number;signalPrice:number;reason:string;directionConfidence:number;continuationScore:number;
   turnProbability:number;triggerProbability:number;expectedMoveRate:number;modeledCostRate:number;remainingSpaceRate:number;
   stopRate:number;riskCap:number;bestHoldMinutes:number;strongExtensionMinutes:number;hardExtensionMinutes:number;
@@ -61,6 +62,7 @@ export type MultiTurnEntryContext = {
   pullbackRiskRate?:number;legUtilization?:number;turnPenalty?:number;
   regionVersion?:typeof REGION_LIFECYCLE_VERSION;regionKind?:"MIGRATION"|"REJECTION";regionId?:string;regionBoundary?:"UPPER"|"LOWER";
   regionConfirmedAt?:number;regionLower?:number;regionUpper?:number;regionCenter?:number;regionWidth?:number;
+  anchorRetestAt?:number;anchorRestartLevel?:number;anchorPullbackExtreme?:number;directionFrameAt?:number;trendFrameAt?:number;
   evidence:TurnEvidence;
   timeframeStates:Array<{timeframe:TurnTimeframe;direction:TurnSide;phase:TurnPhase;directionConfidence:number;
     continuationScore:number;turnProbability:number;triggerProbability:number;expectedMoveRate:number;atrRate:number;
@@ -74,6 +76,7 @@ export type Trade = { id: string; symbol: string; side: "LONG" | "SHORT"; rule: 
   relationFailureBars: number; lastRelationBar: number; execution: "REAL_QUOTE_PAPER_MODEL"; liveEligible: false;
   exitControl?: ExitControl; exitAudit?: ExitAudit; profitProtection?:MultiTurnTradeProfitProtection; holdValue?:MultiTurnHoldValue;
   entryContext?:MultiTurnEntryContext;
+  entryValidation?:{version:"anchor-entry-validation-v1";dueAt:number;evaluatedAt:number|null;passed:boolean|null};
   profitProtectionMigration?:{version:MultiTurnProfitVersion;state:"CURRENT"|"GUARDED"|"DEFERRED";updatedAt:number;baselineFavorable:number};
   forecast?: { policy:string; family:string; signalAt:number; signalPrice:number; baseNetRate:number;
     calibratedNetRate:number; remainingNetRate:number; quality:number; sizingEquity?:number };
@@ -95,6 +98,7 @@ export type ForwardState = { version: string; startedAt: number; revision: numbe
   adaptationVersion?:string; lastFitMeasured?:number;
   strategyAuthorityVersion?:string;turnEngine?:MultiTurnState;entryOpportunities?:MultiTurnEntryOpportunity[];turnLastEntryBars?:Record<string,number>;turnSymbolExitAt?:Record<string,number>;cutoverAt?:number;
   regionVersion?:string;regionInitializedAt?:number;regionLifecycles?:Record<string,RegionLifecycleState>;regionSignals?:RegionEntrySignal[];
+  executionVersion?:string;anchorFlows?:Record<string,AnchorFlowState>;anchorConsumed?:Record<string,number>;
   turnRotationBlockedUntil?:Record<string,number>;
   rotationState?:{version:typeof MULTI_TURN_ROTATION_VERSION;lastAt:number;count:number;lastFrom:string|null;lastTo:string|null};
   policyVersion?:string; feedback?:Feedback[]; evidenceDiagnostics?:EvidenceDiagnostics;
@@ -136,8 +140,9 @@ export function initialMultiTurnForward(now:number):ForwardState{
   s.strategyAuthorityVersion=MULTI_TURN_VERSION;s.turnEngine=initialMultiTurn();s.entryOpportunities=[];s.turnLastEntryBars={};s.turnSymbolExitAt={};
   s.turnRotationBlockedUntil={};s.rotationState={version:MULTI_TURN_ROTATION_VERSION,lastAt:0,count:0,lastFrom:null,lastTo:null};s.cutoverAt=now;
   s.regionVersion=REGION_LIFECYCLE_VERSION;s.regionInitializedAt=now;s.regionLifecycles={};s.regionSignals=[];
-  s.latestReason="5分钟区域生命周期引擎已启动：只交易成熟区域的接受迁移或边界拒绝；旧多周期评分不再拥有交易权。";
-  event(s,now,"START",REGION_LIFECYCLE_VERSION,s.latestReason);return s;
+  s.executionVersion=ANCHOR_FLOW_VERSION;s.anchorFlows={};s.anchorConsumed={};
+  s.latestReason="AnchorFlow 已启动：1h/15m定义主方向，5m区域只负责位置；顺势单必须经过真实推进、第一次回测守住和重新启动。";
+  event(s,now,"START",ANCHOR_FLOW_VERSION,s.latestReason);return s;
 }
 export function normalizeForward(v:ForwardState|null|undefined,now:number):ForwardState {
   if(!v)return initialForward(now);
@@ -160,6 +165,7 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
       entryOpportunities:Array.isArray(v.entryOpportunities)?v.entryOpportunities:[],
       regionVersion:v.regionVersion,regionInitializedAt:v.regionInitializedAt,
       regionLifecycles:v.regionLifecycles??{},regionSignals:Array.isArray(v.regionSignals)?v.regionSignals:[],
+      executionVersion:v.executionVersion,anchorFlows:v.anchorFlows??{},anchorConsumed:v.anchorConsumed??{},
       turnSymbolExitAt:v.turnSymbolExitAt??{},
       turnRotationBlockedUntil:v.turnRotationBlockedUntil??{},
       rotationState:v.rotationState?.version===MULTI_TURN_ROTATION_VERSION?v.rotationState:
