@@ -39,7 +39,9 @@ export function assessStrongBreakout(input:{bar:MicroCandle;side:MicroSide;trigg
 
 export function evaluateMicroRestart(input:{breakout:MicroCandle;following:MicroCandle[];side:MicroSide;triggerPrice:number;
   costRate:number;regionWidthRate:number}):MicroRestartResult{
-  const {breakout,side,triggerPrice,costRate}=input,d=direction(side),quality=assessStrongBreakout(input);
+  const {breakout,side,triggerPrice,costRate}=input,d=direction(side),quality=assessStrongBreakout({
+    bar:breakout,side,triggerPrice,costRate,regionWidthRate:input.regionWidthRate,
+  });
   if(!quality.ok)return{state:"FAIL",reason:quality.reason,pullbackCloseRate:0,pullbackExtremeRate:0,
     cumulativeAdverseBodyRate:0,restartAt:null,restartPrice:null,supportPrice:null};
   const rows=input.following.filter(row=>[row.time,row.open,row.high,row.low,row.close,row.volume].every(finite)
