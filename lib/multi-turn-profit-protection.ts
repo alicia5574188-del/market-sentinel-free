@@ -1,13 +1,15 @@
 export const MULTI_TURN_PROFIT_PROTECTION_VERSION="multi-turn-profit-floor-v3";
 export const ANCHOR_FLOW_PROFIT_PROTECTION_VERSION="anchor-flow-profit-floor-v1";
+export const REGION_LAUNCH_PROFIT_PROTECTION_VERSION="region-launch-profit-floor-v1";
 export const REGION_MIGRATION_PROFIT_PROTECTION_VERSION="region-migration-profit-floor-v1";
 // Persisted generations share the same record shape. A policy rollout must not
 // make an earlier deployed floor unreadable or erase an existing protection line.
 export type MultiTurnProfitVersion=typeof MULTI_TURN_PROFIT_PROTECTION_VERSION|"multi-turn-profit-floor-v4"
-  |typeof ANCHOR_FLOW_PROFIT_PROTECTION_VERSION|typeof REGION_MIGRATION_PROFIT_PROTECTION_VERSION;
+  |typeof ANCHOR_FLOW_PROFIT_PROTECTION_VERSION|typeof REGION_LAUNCH_PROFIT_PROTECTION_VERSION|typeof REGION_MIGRATION_PROFIT_PROTECTION_VERSION;
 export const supportedProfitVersion=(value:unknown):value is MultiTurnProfitVersion=>
   value===MULTI_TURN_PROFIT_PROTECTION_VERSION||value==="multi-turn-profit-floor-v4"
-  ||value===ANCHOR_FLOW_PROFIT_PROTECTION_VERSION||value===REGION_MIGRATION_PROFIT_PROTECTION_VERSION;
+  ||value===ANCHOR_FLOW_PROFIT_PROTECTION_VERSION||value===REGION_LAUNCH_PROFIT_PROTECTION_VERSION
+  ||value===REGION_MIGRATION_PROFIT_PROTECTION_VERSION;
 
 export type MultiTurnProfitSignal={
   continuationScore?:number|null;
@@ -141,6 +143,46 @@ export function anchorFlowProfitFloor(
   if(!(floorRate>modeledCost&&floorRate<favorable))return null;
   return{
     version:ANCHOR_FLOW_PROFIT_PROTECTION_VERSION,
+    reachedR,lockedR:floorRate/riskRate,floorRate,
+    retentionRate:floorRate/favorable,activationRate,
+    checkpointBand:Math.floor(floorRate/riskRate*4+1e-9),mode,
+  };
+}
+
+
+/**
+ * RegionLaunch protection starts earlier and keeps more of a fast move than
+ * ordinary AnchorFlow. The entry thesis is precisely that a valid launch should
+ * not spend much time giving back profit. Only already-earned progress far
+ * beyond the original expectation is allowed progressively more room.
+ */
+export function regionLaunchProfitFloor(
+  favorable:number,
+  riskRate:number,
+  modeledCost=.0022,
+  expectedMoveRate=0,
+  signal?:MultiTurnProfitSignal|null,
+):MultiTurnProfitFloor|null{
+  if(![favorable,riskRate,modeledCost,expectedMoveRate].every(Number.isFinite)||riskRate<=0||favorable<=0)return null;
+  const reachedR=favorable/riskRate;
+  const activationRate=Math.max(modeledCost*1.35,Math.min(.20*riskRate,.005));
+  if(favorable<activationRate)return null;
+
+  const expected=Math.max(activationRate,expectedMoveRate>0?expectedMoveRate:riskRate);
+  const progress=favorable/expected;
+  let base=.85;
+  if(progress>1&&progress<=1.5)base=.85-(progress-1)/.5*.03;
+  else if(progress>1.5&&progress<=2.5)base=.82-(progress-1.5)*.04;
+  else if(progress>2.5)base=.75;
+
+  const {adjustment,mode}=signalAdjustment(signal);
+  const retentionRate=clip(base+Math.max(0,adjustment),base,.94);
+  const costPositiveFloor=modeledCost+Math.max(.0005,modeledCost*.18);
+  const breathingRoom=Math.max(.0007,Math.min(.0015,modeledCost*.30));
+  const floorRate=Math.min(favorable-breathingRoom,Math.max(favorable*retentionRate,costPositiveFloor));
+  if(!(floorRate>modeledCost&&floorRate<favorable))return null;
+  return{
+    version:REGION_LAUNCH_PROFIT_PROTECTION_VERSION,
     reachedR,lockedR:floorRate/riskRate,floorRate,
     retentionRate:floorRate/favorable,activationRate,
     checkpointBand:Math.floor(floorRate/riskRate*4+1e-9),mode,
