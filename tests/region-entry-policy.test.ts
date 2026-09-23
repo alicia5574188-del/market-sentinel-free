@@ -25,7 +25,7 @@ test("direct migration no longer owns entry authority",()=>{
 test("AnchorFlow restart stays READY until a small executable-price confirmation appears",()=>{
   const signal=base({entryModel:"ANCHOR_FLOW",anchorExpectedMoveRate:.022});
   const waiting=run(signal,101.19,101.21);assert.equal(waiting.ok,false);
-  if(!waiting.ok)assert.match(waiting.reason,/顺向确认/);
+  if(!waiting.ok)assert.match(waiting.reason,/真实盘口反弹|1分钟推进—小回调—再启动确认/);
   const result=run(signal,101.34,101.36,101.21*(1+.00025));assert.equal(result.ok,true);
   if(result.ok){
     assert.ok(result.plan.leverage>=6&&result.plan.leverage<=12);
