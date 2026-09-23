@@ -1191,7 +1191,12 @@ export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iter
     const anchors=Object.values(s.anchorFlows??{}).filter(row=>row.phase!=="FAILED"&&row.phase!=="CONSUMED"
       &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>(anchorPriority[a.phase]??9)-(anchorPriority[b.phase]??9)
         ||(b.readyAt??0)-(a.readyAt??0)||a.createdAt-b.createdAt||a.symbol.localeCompare(b.symbol));
-    return[...new Set([...s.positions.map(p=>p.symbol),...signals.map(x=>x.symbol),...anchors.map(x=>x.symbol),...regions.map(x=>x.symbol)])].slice(0,11);
+    const anchorSignals=signals.filter(signal=>signal.kind==="MIGRATION"&&(signal as AnchorFlowEntrySignal).entryModel==="ANCHOR_FLOW")
+      .sort((a,b)=>(s.anchorFlows?.[a.symbol]?.phase==="READY"?0:1)-(s.anchorFlows?.[b.symbol]?.phase==="READY"?0:1)
+        ||(s.anchorFlows?.[b.symbol]?.readyAt??0)-(s.anchorFlows?.[a.symbol]?.readyAt??0));
+    const otherSignals=signals.filter(signal=>!(signal.kind==="MIGRATION"&&(signal as AnchorFlowEntrySignal).entryModel==="ANCHOR_FLOW"));
+    return[...new Set([...s.positions.map(p=>p.symbol),...anchorSignals.map(x=>x.symbol),...anchors.map(x=>x.symbol),
+      ...otherSignals.map(x=>x.symbol),...regions.map(x=>x.symbol)])].slice(0,11);
   }
   const matched=Object.values(s.frames).filter(f=>now-f.at<11*60_000&&s.rules.some(r=>r.status==="EXPERIMENTAL"&&r.expiresAt>now&&ruleApplies(r,f.symbol)&&conditionMatches(f.x,r.conditions)));
   return[...new Set([...s.positions.map(p=>p.symbol),...matched.map(f=>f.symbol)])];
