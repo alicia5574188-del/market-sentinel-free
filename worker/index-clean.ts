@@ -49,6 +49,7 @@ import { nextProtectionWriteBudget, readProtectionWriteBudget, protectionWriteBu
 import { EquityReader } from "../lib/equity-reader.ts";
 import { EQUITY_CURVE_VERSION } from "../lib/equity-curve.ts";
 import { resourceDay, rollResourceDay, RESOURCE_DAY_POLICY, type ResourceCounters } from "../lib/resource-day.ts";
+import {isTransientLiveReadErrorText,liveReadTimeoutDecision} from "../lib/live-read-resilience.ts";
 import { LIVE_TURNOVER_PREFIX, LIVE_TURNOVER_VERSION, initialTurnover, validateTurnover, nextFillWindow,
   prepareTurnoverPage, turnoverView, type TurnoverState, type GateConfirmedFill } from "../lib/live-turnover.ts";
 import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwardMirrorSources, mirrorPositionRisk,
@@ -250,9 +251,6 @@ function definitiveGateRejection(error: unknown) {
 
 function liveFailureRequiresOff(error: unknown) {
   return /未纳管|与模拟账户订单不一致|方向与系统记录冲突|撤单未确认|系统挂单未撤销/.test(safeError(error));
-}
-function transientLiveReadMessage(value:string|null|undefined){
-  return Boolean(value&&(/The operation was aborted due to timeout|Gate只读核对超时|Gate账户核对连续\d+轮超时/.test(value)));
 }
 
 type RuntimeState = {
@@ -2167,7 +2165,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     let snapshot = await client.snapshot();
     this.runtime.live.readTimeoutStreak=0;
     this.runtime.live.lastReadTimeoutAt=null;
-    if(transientLiveReadMessage(this.runtime.live.lastError))this.runtime.live.lastError=null;
+    if(isTransientLiveReadErrorText(this.runtime.live.lastError))this.runtime.live.lastError=null;
     this.turnoverAccountUser=snapshot.account.user==null?null:String(snapshot.account.user);
     const knownTags = new Set([
       ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status)
@@ -3235,15 +3233,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           await this.syncLive(Date.now());
         } catch (error) {
           if(isGateReadTimeoutError(error)){
-            const streak=Math.min(99,(this.runtime.live.readTimeoutStreak??0)+1),at=Date.now();
-            this.runtime.live.readTimeoutStreak=streak;this.runtime.live.lastReadTimeoutAt=at;
-            if(streak<3){
+            const decision=liveReadTimeoutDecision(this.runtime.live.readTimeoutStreak??0),at=Date.now();
+            this.runtime.live.readTimeoutStreak=decision.streak;this.runtime.live.lastReadTimeoutAt=at;
+            if(!decision.escalated){
               // A single slow Gate read is not an execution failure. Keep the
               // last confirmed LIVE state and retry on the next 2s alarm. No
               // mutation/order is retried here and no red execution error is published.
-              if(transientLiveReadMessage(this.runtime.live.lastError))this.runtime.live.lastError=null;
+              if(isTransientLiveReadErrorText(this.runtime.live.lastError))this.runtime.live.lastError=null;
             }else{
-              const message=`Gate账户核对连续${streak}轮超时；已暂停新增复制并继续保留已有交易所原生保护，Owner开关保持不变。`;
+              const message=decision.message!;
               const shouldRecord=this.runtime.live.lastError!==message||this.runtime.live.operational;
               this.runtime.live.operational=false;this.runtime.live.lastError=message;
               if(shouldRecord)this.recordLiveAudit({observedAt:at,symbol:null,planId:null,stage:"LIVE_CONTROL",level:"RECOVERING",
