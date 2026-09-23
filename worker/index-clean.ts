@@ -1083,8 +1083,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     try {
       if (!this.forwardState) this.forwardState = await readForwardStore(this.ctx.storage, now);
       if(MULTI_TURN_AUTO_CUTOVER&&this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION)await this.ensureMultiTurnCutover(now);
-      if(this.forwardState?.strategyAuthorityVersion===MULTI_TURN_VERSION&&this.forwardState.executionVersion!==ANCHOR_FLOW_VERSION)
-        await this.ensureAnchorFlowCutover(now);
       if(!this.forwardState)throw new Error("PAPER权威账户缺失");
       const legacyDrainOnly=this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION;
       const dataCycleDue=allowDataCycle&&(!this.forwardState.lastCycleAt
@@ -3123,8 +3121,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // AnchorFlow derives 15m/1h direction from the retained 5m path. Daily
       // candles remain a passive compatibility cache and consume no extra request.
       subrequests += await this.refreshRegimeHourly(Date.now());
-      // Completed-candle work may advance turnEngine only after refresh. The
-      // critical alarm independently owns exits and fallback equity marks.
+      // Completed-candle work may atomically start a new AnchorFlow PAPER
+      // experiment only after fresh strategy paths exist. The audited critical
+      // alarm remains unchanged and independently owns exits/fallback marks.
+      await this.ensureAnchorFlowCutover(Date.now());
       await this.advanceForwardNow(Date.now(),true);
       await this.maybeWriteStrategyRuntimeLog(Date.now());
       this.runtime.subrequestCount += subrequests;
