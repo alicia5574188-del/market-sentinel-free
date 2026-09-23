@@ -1312,6 +1312,23 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   if(dataDue){const k=dayKey(now),a=s.daily.find(d=>d.day===k);if(a){a.endEquity=marked.equity;a.lastAt=now;}else s.daily.push({day:k,firstAt:now,lastAt:now,startEquity:s.daily.at(-1)?.endEquity??s.initialEquity,endEquity:marked.equity,exactBoundary:false});s.daily=s.daily.slice(-400);}
   s.lastQuoteCycleAt=now;return{state:s,changed:dataDue||s.revision!==before,protectionChanged:forwardProtectionChanged(input.state,s)};
 }
+export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols?:Iterable<string>){
+  if(s.strategyAuthorityVersion!==MULTI_TURN_VERSION)return s.positions.map(p=>p.symbol);
+  const allowed=entrySymbols?new Set(entrySymbols):null;
+  const anchorSignals=(s.regionSignals??[]).filter(signal=>signal.expiresAt>now&&signal.kind==="MIGRATION"
+    &&(signal as AnchorFlowEntrySignal).entryModel==="ANCHOR_FLOW"&&(!allowed||allowed.has(signal.symbol)));
+  const anchors=Object.values(s.anchorFlows??{}).filter(row=>["READY","RETEST"].includes(row.phase)
+    &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>(a.phase==="READY"?0:1)-(b.phase==="READY"?0:1)
+      ||(b.readyAt??0)-(a.readyAt??0));
+  const launchSignals=(s.regionLaunchSignals??[]).filter(signal=>signal.expiresAt>now&&(!allowed||allowed.has(signal.symbol)));
+  const launchPriority:Record<RegionLaunchState["phase"],number>={READY:0,IGNITION:1,ARMED:2,WATCH:9,CONSUMED:9};
+  const launches=Object.values(s.regionLaunches??{}).filter(row=>["READY","IGNITION","ARMED"].includes(row.phase)
+    &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>launchPriority[a.phase]-launchPriority[b.phase]
+      ||b.quality-a.quality||b.updatedAt-a.updatedAt||a.symbol.localeCompare(b.symbol));
+  return[...new Set([...s.positions.map(p=>p.symbol),...anchorSignals.map(x=>x.symbol),...anchors.map(x=>x.symbol),
+    ...launchSignals.map(x=>x.symbol),...launches.map(x=>x.symbol)])];
+}
+
 export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iterable<string>){
   if(s.strategyAuthorityVersion===MULTI_TURN_VERSION){
     const allowed=entrySymbols?new Set(entrySymbols):null;
