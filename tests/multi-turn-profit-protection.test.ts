@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { multiTurnProfitFloor, regionMigrationProfitFloor, REGION_MIGRATION_PROFIT_PROTECTION_VERSION } from "../lib/multi-turn-profit-protection.ts";
+import { anchorFlowProfitFloor, ANCHOR_FLOW_PROFIT_PROTECTION_VERSION, multiTurnProfitFloor,
+  regionMigrationProfitFloor, REGION_MIGRATION_PROFIT_PROTECTION_VERSION } from "../lib/multi-turn-profit-protection.ts";
 
 test("tiny favorable noise below both risk and absolute activation stays inactive",()=>{
   assert.equal(multiTurnProfitFloor(.005,.02,.0022),null);
@@ -77,4 +78,31 @@ test("large region migration winner keeps more than eighty percent of observed p
   assert.ok(floor.reachedR>=9.9);
   assert.ok(floor.retentionRate>.84);
   assert.ok(floor.floorRate>.10);
+});
+
+
+test("MUBARAK-like fast profit keeps about eighty percent before reaching its entry expectation",()=>{
+  const favorable=.0654692873117928,risk=8.048941266001357/297.03424,expected=.06986581627292286,cost=.0025758015843606796;
+  const floor=anchorFlowProfitFloor(favorable,risk,cost,expected)!;
+  assert.equal(floor.version,ANCHOR_FLOW_PROFIT_PROTECTION_VERSION);
+  assert.ok(floor.retentionRate>=.79&&floor.retentionRate<=.81);
+  assert.ok(floor.floorRate>.052);
+});
+
+test("AnchorFlow only loosens gradually after observed profit exceeds the original expectation",()=>{
+  const atExpected=anchorFlowProfitFloor(.04,.02,.0022,.04)!;
+  const double=anchorFlowProfitFloor(.08,.02,.0022,.04)!;
+  const extreme=anchorFlowProfitFloor(.16,.02,.0022,.04)!;
+  assert.ok(atExpected.retentionRate>=.79);
+  assert.ok(double.retentionRate>=.74&&double.retentionRate<=.76);
+  assert.ok(extreme.retentionRate>=.69&&extreme.retentionRate<=.71);
+});
+
+test("weakening AnchorFlow evidence tightens an already high-retention floor",()=>{
+  const normal=anchorFlowProfitFloor(.05,.02,.0022,.06)!;
+  const weak=anchorFlowProfitFloor(.05,.02,.0022,.06,{
+    continuationScore:.30,turnProbability:.60,phase:"TURNING",rawDirectionAligned:false,
+  })!;
+  assert.ok(weak.retentionRate>normal.retentionRate);
+  assert.ok(weak.retentionRate>=.88);
 });
