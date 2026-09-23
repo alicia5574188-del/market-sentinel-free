@@ -1001,17 +1001,18 @@ function regionRule(s:ForwardState,signal:RegionEntrySignal,stopRate:number,rema
 
 function anchorMinuteRestartConfirmed(flow:AnchorFlowState|undefined,rows:Candle[]|undefined,costRate:number){
   if(!flow||flow.phase!=="READY"||flow.retestAt==null||flow.restartLevel==null||!rows?.length)return false;
+  const retestAt=flow.retestAt,restartLevel=flow.restartLevel;
   const completed=rows.filter(row=>[row.time,row.open,row.high,row.low,row.close,row.volume].every(finite)
-    &&row.high>=row.low&&row.low>0&&(row.time+60)*1000>flow.retestAt).sort((a,b)=>a.time-b.time).slice(-12);
+    &&row.high>=row.low&&row.low>0&&(row.time+60)*1000>retestAt).sort((a,b)=>a.time-b.time).slice(-12);
   if(completed.length<2)return false;
   for(let i=0;i<completed.length-1;i++){
     const breakout=completed[i]!,at=(breakout.time+60)*1000;
-    if(at<flow.retestAt)continue;
-    const quality=assessStrongBreakout({bar:breakout,side:flow.side,triggerPrice:flow.restartLevel,
+    if(at<retestAt)continue;
+    const quality=assessStrongBreakout({bar:breakout,side:flow.side,triggerPrice:restartLevel,
       costRate,regionWidthRate:flow.regionWidthRate});
     if(!quality.ok)continue;
     const result=evaluateMicroRestart({breakout,following:completed.slice(i+1),side:flow.side,
-      triggerPrice:flow.restartLevel,costRate,regionWidthRate:flow.regionWidthRate});
+      triggerPrice:restartLevel,costRate,regionWidthRate:flow.regionWidthRate});
     if(result.state==="READY")return true;
   }
   return false;
