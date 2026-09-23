@@ -17,14 +17,14 @@ export default function Home() {
   const [error,setError] = useState<string|null>(null);
   const [auth,setAuth] = useState<AuthSession|null>(null);
   const [refresh,setRefresh] = useState(0);
-  const epoch=useRef(0);
+  const epoch=useRef(0),runtimeReadFailures=useRef(0),hasRuntimeSnapshot=useRef(false);
   const reload=useCallback(() => { epoch.current++; setRefresh(v=>v+1); },[]);
   const sessionChanged=useCallback((session:AuthSession) => {
     // Closing the app or renewing a login must not erase saved chart history.
     // The authenticated Dashboard unmounts below; no cache is read while logged out.
-    epoch.current++; setAuth(session);
+    epoch.current++;runtimeReadFailures.current=0;hasRuntimeSnapshot.current=false;setAuth(session);
     // Remove private snapshots immediately and invalidate any in-flight response.
-    setRuntime(null);setRefresh(v=>v+1);
+    setRuntime(null);setError(null);setRefresh(v=>v+1);
   },[]);
   const liveChanged=useCallback((live:LiveRuntime) => {
     epoch.current++;
@@ -50,10 +50,17 @@ export default function Home() {
         if(response.status===401){if(active&&requestEpoch===epoch.current)sessionChanged({...auth,authenticated:false});return false;}
         if(!response.ok)throw new Error(`HTTP ${response.status}`);
         const value=await response.json() as OperatorRuntime;
-        if(active&&requestEpoch===epoch.current){setRuntime(value);setError(null);
+        if(active&&requestEpoch===epoch.current){runtimeReadFailures.current=0;hasRuntimeSnapshot.current=true;setRuntime(value);setError(null);
           if(auth?.authenticated&&!value.live)sessionChanged({...auth,authenticated:false});}
         return true;
-      }catch(failure){if(active&&requestEpoch===epoch.current)setError(failure instanceof Error?failure.message:"读取失败");return false;}
+      }catch(failure){
+        if(active&&requestEpoch===epoch.current&&!document.hidden){
+          runtimeReadFailures.current+=1;
+          if(!hasRuntimeSnapshot.current||runtimeReadFailures.current>=3)
+            setError("页面连续读取失败；保留最近一次成功数据并自动重试。");
+        }
+        return false;
+      }
       finally{clearTimeout(timeout);inFlight=false;controller=null;}
     };
     const cycle=async()=>{const succeeded=await read();if(active&&!document.hidden)timer=setTimeout(cycle,succeeded?RUNTIME_REFRESH_MS:RUNTIME_RETRY_MS);};
