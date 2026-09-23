@@ -7,21 +7,25 @@ type Client={credentials:{environment:string;apiKey:string};positionCloseHistory
 export class LiveHistoryReader<T extends SettlementPosition> {
   private history:T[]=[]; private values:Record<string,Settlement>={}; private cacheKey="";
   private at=0; private work:Promise<void>|null=null; private error:string|null=null;
-  private window:{from:number;to:number;offset:number}|null=null;
-  view(current:readonly T[]) {
-    const windows=recordWindows([...current,...this.history].filter(p=>p.status==="CLOSED"),p=>p.exitAt??0);
+  private window:{from:number;to:number;offset:number}|null=null; private epochAt=0;
+  reset(epochAt=0){this.history=[];this.values={};this.cacheKey="";this.at=0;this.window=null;this.error=null;this.epochAt=Math.max(0,epochAt);}
+  view(current:readonly T[],sinceAt=this.epochAt) {
+    const cutoff=Math.max(0,sinceAt);
+    const windows=recordWindows([...current,...this.history].filter(p=>p.status==="CLOSED"&&(p.exitAt??0)>=cutoff),p=>p.exitAt??0);
     const decorate=(p:T)=>({...p,...(this.values[p.id]?{settlement:this.values[p.id],realizedPnl:this.values[p.id].pnl,
       exitPrice:this.values[p.id].exitPrice,actualExitPriceVerified:true}:{})});
     return {version:RECORD_VIEW_VERSION,history:[...windows.recent,...windows.archive].map(decorate),
       checkedAt:this.at||null,pending:[...windows.recent,...windows.archive].filter(p=>!this.values[p.id]).length,
       error:this.error,updating:!!this.work};
   }
-  needsRefresh(current:readonly T[]) {
-    return this.view(current).pending>0;
+  needsRefresh(current:readonly T[],sinceAt=this.epochAt) {
+    return this.view(current,sinceAt).pending>0;
   }
-  launch(input:{storage:Reader;client:Client|null;current:readonly T[];now:number;
+  launch(input:{storage:Reader;client:Client|null;current:readonly T[];now:number;sinceAt?:number;
     valid:()=>boolean;reserve:()=>boolean;persist:(entries:Record<string,unknown>)=>Promise<void>;waitUntil:(work:Promise<void>)=>void}) {
 
+    const sinceAt=Math.max(0,input.sinceAt??0);
+    if(this.epochAt!==sinceAt)this.reset(sinceAt);
     // No client after credential removal: do not return another account's cache.
     const client=input.client;
     if(!client){
@@ -29,7 +33,7 @@ export class LiveHistoryReader<T extends SettlementPosition> {
       if(!this.work&&input.now-this.at>=60000){
         this.at=input.now;
         const task=input.storage.list<{position:T}>({prefix:"live-parity:v1:closed:",reverse:true,limit:60})
-          .then(rows=>{if(input.valid())this.history=[...rows.values()].map(r=>r.position);})
+          .then(rows=>{if(input.valid())this.history=[...rows.values()].map(r=>r.position).filter(p=>(p.exitAt??0)>=sinceAt);})
           .catch(()=>{this.error="历史记录读取失败，保留最近记录";});
         this.work=task;input.waitUntil(task.finally(()=>{if(this.work===task)this.work=null;}));
       }
@@ -51,7 +55,8 @@ export class LiveHistoryReader<T extends SettlementPosition> {
       ||v.entryPrice<=0||v.exitPrice<=0||v.openedAt>v.closedAt||v.closedAt>input.now)))throw new Error("Invalid settlement cache");
     const rows=await input.storage.list<{position:T}>({prefix:"live-parity:v1:closed:",reverse:true,limit:60});
     if(!input.valid())return;
-    const windows=recordWindows([...input.current,...[...rows.values()].map(r=>r.position)].filter(p=>p.status==="CLOSED"),p=>p.exitAt??0);
+    const windows=recordWindows([...input.current,...[...rows.values()].map(r=>r.position)]
+      .filter(p=>p.status==="CLOSED"&&(p.exitAt??0)>=this.epochAt),p=>p.exitAt??0);
     const history=[...windows.recent,...windows.archive];
     this.history=history;this.values=persisted?.values??{};
     const pending=history.filter(p=>!this.values[p.id]&&p.entryAt&&p.exitAt);
