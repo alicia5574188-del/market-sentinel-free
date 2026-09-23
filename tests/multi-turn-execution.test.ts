@@ -221,6 +221,15 @@ test("critical quote management can mark equity without consuming stale strategy
   assert.equal(next.state.lastCycleAt,cycle);assert.ok(next.state.daily.at(-1)!.lastAt>mark);
 });
 
+test("READY AnchorFlow symbols cannot be pushed out of the eleven realtime slots by lower-stage candidates",()=>{
+  const now=BASE+11*60*60_000,symbols=Array.from({length:12},(_,i)=>`W${i}_USDT`),s=seeded(symbols,now);
+  for(const symbol of symbols)s.anchorFlows![symbol]!.phase="WAIT_RETEST";
+  const ready=symbols.at(-1)!;s.anchorFlows![ready]!.phase="READY";s.anchorFlows![ready]!.readyAt=now;
+  const watched=forwardWatchSymbols(s,now,symbols);
+  assert.equal(watched.length,11);
+  assert.ok(watched.includes(ready));
+});
+
 test("only active scan symbols and open positions can occupy scarce realtime watch slots",()=>{
   const now=BASE+11*60*60_000,s=seeded(["BTC_USDT","OLD_USDT"],now);
   const watched=forwardWatchSymbols(s,now,["BTC_USDT"]);
