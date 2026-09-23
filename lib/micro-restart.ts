@@ -48,7 +48,7 @@ export function evaluateMicroRestart(input:{breakout:MicroCandle;following:Micro
     pullbackExtremeRate:0,cumulativeAdverseBodyRate:0,restartAt:null,restartPrice:null,
     supportPrice:side==="LONG"?breakout.low:breakout.high};
 
-  let minClose=breakout.close,maxClose=breakout.close,minLow=breakout.low,maxHigh=breakout.high,cumulativeAdverse=0;
+  let minClose=breakout.close,maxClose=breakout.close,minLow=breakout.close,maxHigh=breakout.close,cumulativeAdverse=0;
   for(let index=0;index<rows.length;index++){
     const row=rows[index]!,prior=index?rows[index-1]!:breakout;
     minClose=Math.min(minClose,row.close);maxClose=Math.max(maxClose,row.close);minLow=Math.min(minLow,row.low);maxHigh=Math.max(maxHigh,row.high);
