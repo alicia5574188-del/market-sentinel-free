@@ -2146,6 +2146,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     try {
       await work;
       this.liveReadTimeoutStreak=0;
+      if(isTransientLiveReadErrorText(this.runtime.live.lastError))this.runtime.live.lastError=null;
     } catch(error) {
       // Background read-only Gate latency is retryable because no exchange
       // mutation crossed the network boundary. Owner actions and forced OFF
@@ -2180,7 +2181,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // protection of an already-mapped position.
     const client = await this.gateLive();
     let snapshot = await client.snapshot();
-    if(isTransientLiveReadErrorText(this.runtime.live.lastError))this.runtime.live.lastError=null;
     this.turnoverAccountUser=snapshot.account.user==null?null:String(snapshot.account.user);
     const knownTags = new Set([
       ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status)
