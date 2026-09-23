@@ -52,12 +52,16 @@ export function holdingTime(start: number | undefined, end: number) {
   const minutes = Math.max(0, Math.floor((end-start)/60_000));
   return minutes >= 60 ? `${Math.floor(minutes/60)}小时${minutes%60}分` : `${minutes}分钟`;
 }
+export function isTransientLiveReadError(value:string|null|undefined){
+  return Boolean(value&&(/The operation was aborted due to timeout|Gate只读核对超时/.test(value)));
+}
 export function livePositionMark(position: LivePosition, runtime: OperatorRuntime | null, now: number) {
   // Keep the last REAL exchange valuation with a timestamp when stale.
   // Public market data and PAPER prices never substitute for Gate's PnL.
   const at=position.exchangePnlAt??null, pnl=position.exchangeUnrealisedPnl;
   const known=typeof pnl==="number"&&Number.isFinite(pnl)&&at!=null&&at>0&&at<=now;
-  const fresh=known&&now-at!<=30_000&&!runtime?.live?.lastError;
+  const blockingError=runtime?.live?.lastError&&!isTransientLiveReadError(runtime.live.lastError);
+  const fresh=known&&now-at!<=30_000&&!blockingError;
   const basis=position.exchangePnlMargin;
   return { fresh, at, price:known?position.exchangeMarkPrice??null:null,pnl:known?pnl:null,
     margin:basis??null,rate:known&&basis!=null&&basis>0?pnl/basis:null };
@@ -76,7 +80,9 @@ export async function operatorRequest<T>(path: string, method: "GET" | "POST" | 
     if (!response.ok) throw new OperatorRequestError(payload.error || `请求失败（${response.status}）`, response.status);
     return payload;
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") throw new OperatorRequestError("未收到服务器确认，正在重新读取状态；不会自动重复提交。", 0);
+    if (error instanceof Error && (error.name === "AbortError"||error.name==="TimeoutError"
+      ||/aborted due to timeout/i.test(error.message)))
+      throw new OperatorRequestError("未收到服务器确认，正在重新读取状态；不会自动重复提交。", 0);
     throw error;
   } finally { clearTimeout(timeout); }
 }
