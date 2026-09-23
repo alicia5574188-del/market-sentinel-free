@@ -51,6 +51,13 @@ function launchPath(now:number){
   const restart=minute(now+120_000,101.75,102.15,101.72,102.10);
   return{breakout,pullback,restart};
 }
+function driveLaunch(state:ForwardState,now:number){
+  const m=launchPath(now);let s=state;
+  s=step(s,now+60_000,102.00,{BCH_USDT:[m.breakout]}).state;
+  s=step(s,now+120_000,101.75,{BCH_USDT:[m.breakout,m.pullback]}).state;
+  s=step(s,now+180_000,102.11,{BCH_USDT:[m.breakout,m.pullback,m.restart]}).state;
+  return{s,m};
+}
 
 test("full RegionLaunch path opens only after strong 1m impulse, small pullback and real restart; AnchorFlow remains independent",()=>{
   const now=BASE;let s=seeded(now),m=launchPath(now);
@@ -76,8 +83,8 @@ test("MET-like upper-wick breakout never creates a RegionLaunch position",()=>{
 });
 
 test("RegionLaunch with no prompt executable profit still exits after sixty seconds and keeps the mother for future observation",()=>{
-  const now=BASE;let s=seeded(now),m=launchPath(now);
-  s=step(s,now+180_000,102.11,{BCH_USDT:[m.breakout,m.pullback,m.restart]}).state;
+  const now=BASE,{s:opened,m}=driveLaunch(seeded(now),now);let s=opened;
+  assert.equal(s.positions.length,1);
   const t=s.positions[0]!,due=t.entryValidation!.dueAt;
   s=step(s,due+1,t.entryPrice*1.0004,{BCH_USDT:[m.breakout,m.pullback,m.restart]}).state;
   assert.equal(s.positions.length,0);assert.equal(s.history[0]?.entryValidation?.passed,false);
@@ -86,8 +93,8 @@ test("RegionLaunch with no prompt executable profit still exits after sixty seco
 });
 
 test("a fast RegionLaunch winner passes sixty-second validation and raises the high-retention source stop",()=>{
-  const now=BASE;let s=seeded(now),m=launchPath(now);
-  s=step(s,now+180_000,102.11,{BCH_USDT:[m.breakout,m.pullback,m.restart]}).state;
+  const now=BASE,{s:opened,m}=driveLaunch(seeded(now),now);let s=opened;
+  assert.equal(s.positions.length,1);
   const entry=s.positions[0]!.entryPrice;
   s=step(s,now+190_000,entry*1.020,{BCH_USDT:[m.breakout,m.pullback,m.restart]}).state;
   assert.equal(s.positions[0]?.profitProtection?.version,REGION_LAUNCH_PROFIT_PROTECTION_VERSION);
