@@ -858,7 +858,7 @@ function openTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<
   else if(blocker)s.latestReason=blocker;else if(s.positions.length)s.latestReason=`管理${s.positions.length}笔前向模拟持仓；原始保护止损不会放宽。`;
 }
 function regionRule(s:ForwardState,signal:RegionEntrySignal,stopRate:number,remaining:number,now:number):Rule{
-  const anchor=(signal as AnchorFlowEntrySignal).entryModel==="ANCHOR_FLOW";
+  const anchor=signal.kind==="MIGRATION"&&(signal as AnchorFlowEntrySignal).entryModel==="ANCHOR_FLOW";
   const horizon=signal.kind==="REJECTION"?1440:270;
   return{id:`mt-${s.startedAt}-${s.revision+1}`,signature:hash(JSON.stringify([anchor?"ANCHOR_FLOW":"REGION",signal.id,signal.side,signal.completedAt])),
     parentId:null,version:1,createdAt:now,expiresAt:now+horizon*60_000,status:"EXPERIMENTAL",conditions:[],side:signal.side,horizon,
@@ -880,7 +880,7 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
   s.entryDiagnostics=diagnostics;
   const reject=(reason:string)=>{diagnostics.reasons[reason]=(diagnostics.reasons[reason]??0)+1;};
   for(const signal of rows){
-    const anchorSignal=(signal as AnchorFlowEntrySignal).entryModel==="ANCHOR_FLOW";
+    const anchorSignal=signal.kind==="MIGRATION"&&(signal as AnchorFlowEntrySignal).entryModel==="ANCHOR_FLOW";
     if(signal.kind==="MIGRATION"&&!anchorSignal){reject("直接区域迁移已退役；等待 AnchorFlow 第一次回测重新启动");continue;}
     if(s.positions.some(t=>t.symbol===signal.symbol))continue;
     if((s.lastEntryBars[signal.symbol]??0)>=signal.completedAt)continue;
