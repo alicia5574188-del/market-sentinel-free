@@ -114,11 +114,13 @@ export class MarketDataHub{
 
   async candles(symbol:string,interval:"1m"|"5m",limit=120):Promise<{source:MarketSource;rows:HubCandle[]}|null>{
     const external=externalSymbol(symbol);if(!external)return null;
-    const preferred=this.candleSource.get(`${symbol}:${interval}`)?.source;
+    // One source affinity per symbol keeps 1m confirmation and 5m structure on
+    // the same venue. If that venue fails, the whole symbol moves to the other.
+    const preferred=this.candleSource.get(symbol)?.source;
     const order:MarketSource[]=preferred?[preferred,preferred==="BYBIT"?"BINANCE":"BYBIT"]:["BYBIT","BINANCE"];
     for(const source of order){
       try{const rows=source==="BYBIT"?await this.bybitCandles(external,interval,limit):await this.binanceCandles(external,interval,limit);
-        if(rows.length>=Math.min(6,limit)){this.candleSource.set(`${symbol}:${interval}`,{source,at:Date.now()});return{source,rows};}}
+        if(rows.length>=Math.min(6,limit)){this.candleSource.set(symbol,{source,at:Date.now()});return{source,rows};}}
       catch{/* try independent source */}
     }
     return null;
