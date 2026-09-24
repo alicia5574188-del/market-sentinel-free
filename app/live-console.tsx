@@ -162,7 +162,8 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
       <LiveStat title="当前持仓" value={live?`${positions.length} 笔`:"—"} detail={entries.length?`待执行 ${entries.length} 笔`:"无待执行订单"}/></section>
     <div className="fr-account-line"><span>实盘成交额 {num(live?.turnover?.systemTagged)} U · 已扣费用 {num(live?.turnover?.systemTaggedFees)} U</span><b className={copyHealthy?"fr-positive":missing||mirror?.error?"fr-negative":""}>复制一致性 {copyLabel}</b></div>
     <p className="fr-note">Gate成交核对至 {time(live?.turnover?.checkedThrough)}{live?.turnover?.catchingUp?" · 正在补齐":""} · 账户核对 {time(live?.lastSyncAt)}</p>
-    {live?.lastError&&!isTransientLiveReadError(live.lastError)&&<p className="fr-error" role="status">执行提示：{live.lastError}</p>}
+    {(enabled||positions.length>0||entries.length>0)&&live?.lastError&&!isTransientLiveReadError(live.lastError)
+      &&<p className="fr-error" role="status">执行提示：{live.lastError}</p>}
     {error&&<div className="fr-error" role="alert"><b>操作未完成</b><p>{error}</p></div>}
     {notice&&<div className="fr-notice" role="status">{notice}</div>}
     <nav className="fr-live-tabs fr-live-record-tabs" aria-label="实盘子导航">{tabs.map(([id,title])=><button type="button" key={id} aria-current={section===id?"page":undefined}
