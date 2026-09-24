@@ -2,7 +2,7 @@
  * Multi-source public market data for Adaptive Ten.
  *
  * Analysis never depends on one venue. Gate remains the execution/account truth;
- * Bybit and Binance are independent public analysis feeds. Symbols are mapped
+ * Bybit, OKX and Binance are independent public analysis feeds. Symbols are mapped
  * only by exact USDT contract name (FOO_USDT <-> FOOUSDT); no heuristic aliasing.
  */
 export type MarketSource="BYBIT"|"OKX"|"BINANCE";
