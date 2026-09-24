@@ -68,6 +68,9 @@ import { advanceStrategyArena as advancePreviousStrategyArena,
   type StrategyArenaState as PreviousStrategyArenaState } from "../lib/previous-strategy-arena.ts";
 
 const LOOP_MS = 2_000;
+const LIVE_FAST_SNAPSHOT_MAX_AGE_MS = 5_000;
+const LIVE_RECONCILE_ACTIVE_MS = 5_000;
+const LIVE_RECONCILE_IDLE_MS = 10_000;
 // Whole-system display/health tolerance only. Executable quotes remain guarded
 // by the stricter per-symbol STALE_AFTER_MS/freshQuote checks; this must never
 // authorize an order from an old price. A few missed 2s polls should not make
@@ -531,7 +534,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   protected liveSyncWork: Promise<void> | null = null;
   private liveBackgroundWork: Promise<void> | null = null;
   private liveSourcePending=false;
-  private liveExecution={version:"event-driven-live-v1",cycles:0,sourceWakeups:0,
+  private liveFastSourcePending=false;
+  private liveSnapshotCache:GateLiveSnapshot|null=null;
+  private liveNextReconcileAt=0;
+  private liveSyncUsedCached=false;
+  private liveExecution={version:"event-driven-live-v2",cycles:0,sourceWakeups:0,
     startedAt:null as number|null,finishedAt:null as number|null,lastDurationMs:null as number|null};
   private liveReadTimeoutStreak=0;
   protected liveJournal = new Map<string, unknown>();
@@ -551,6 +558,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       .map(([symbol,entry])=>[symbol,entry&&!["FILLED","CANCELLED"].includes(entry.status)?entry:null]));
     this.runtime.live.entrySkips={};this.liveHistory=[];this.historyReader.reset(startedAt);this.liveRecordEpochDirty=true;
     return true;
+  }
+  private clearRetiredLiveTransportError(){
+    const retired=(value:string|null|undefined)=>typeof value==="string"
+      &&value.includes("Invalid redirect value")&&value.includes("redirect");
+    if(retired(this.runtime.live.lastError))this.runtime.live.lastError=null;
+    for(const entry of Object.values(this.runtime.live.entries)){
+      if(entry&&retired(entry.lastError))entry.lastError=null;
+    }
   }
   private async ensureLiveRecordEpoch(now=Date.now()){
     this.alignLiveRecordEpoch(now);
@@ -698,6 +713,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       if(this.runtime.live.activation&&this.runtime.live.activation.version!==LIVE_SESSION_VERSION)
         this.liveBindingError="实盘开启会话版本不兼容，停止新增复制，不改写所有者开关";
+      // Retire the old Cloudflare redirect-option exception from durable UI
+      // state after the transport code has been upgraded to redirect:"manual".
+      this.clearRetiredLiveTransportError();
       // A major strategy execution-version change starts a fresh LIVE record
       // epoch. Gate history and immutable parity bindings remain untouched, but
       // the operator-facing record/archive cycle starts from this strategy epoch.
@@ -2191,14 +2209,25 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private launchLiveWork(sourceChanged=false) {
     if(!this.liveNeedsSync())return;
-    if(sourceChanged){this.liveSourcePending=true;this.liveExecution.sourceWakeups++;}
+    const requestedAt=Date.now();
+    if(sourceChanged){
+      this.liveSourcePending=true;this.liveFastSourcePending=true;this.liveExecution.sourceWakeups++;
+    }else if(requestedAt<this.liveNextReconcileAt)return;
     if(this.liveBackgroundWork)return;
     const task=(async()=>{
       do{
-        this.liveSourcePending=false;
+        const preferCached=this.liveFastSourcePending;
+        this.liveFastSourcePending=false;this.liveSourcePending=false;this.liveSyncUsedCached=false;
         const started=Date.now(),requestsBefore=this.liveClient?.requestCount??0;
         this.liveExecution.startedAt=started;this.liveExecution.cycles++;
-        try{await this.syncLive(started);}
+        try{
+          await this.syncLive(started,false,false,preferCached);
+          // If a committed PAPER source was handled from a very recent verified
+          // Gate snapshot, immediately follow with one network reconciliation.
+          // This removes the pre-submit private-read delay without pretending the
+          // cache is exchange confirmation.
+          if(preferCached&&this.liveSyncUsedCached)this.liveSourcePending=true;
+        }
         catch(error){
           const message=safeError(error),blocked=liveFailureRequiresOff(error);
           const shouldRecord=this.runtime.live.lastError!==message||this.runtime.live.operational;
@@ -2212,20 +2241,21 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           this.liveExecution.lastDurationMs=Date.now()-started;
           this.runtime.subrequestCount+=Math.max(0,(this.liveClient?.requestCount??requestsBefore)-requestsBefore);
         }
-        // Alarms merely join; only an actual committed source lifecycle event
-        // requests a follow-up. No overlapping write lanes or busy retries.
       }while(this.liveSourcePending&&this.liveNeedsSync());
+      const active=Object.values(this.runtime.live.positions).some(p=>p?.status==="OPEN")
+        ||Object.values(this.runtime.live.entries).some(e=>e&&!["FILLED","CANCELLED"].includes(e.status));
+      this.liveNextReconcileAt=Date.now()+(active?LIVE_RECONCILE_ACTIVE_MS:LIVE_RECONCILE_IDLE_MS);
     })();
     this.liveBackgroundWork=task;
     this.ctx.waitUntil(task.finally(()=>{if(this.liveBackgroundWork===task)this.liveBackgroundWork=null;}));
   }
 
-  protected async syncLive(now:number,initialEnable=false,forceEntryCleanup=false) {
+  protected async syncLive(now:number,initialEnable=false,forceEntryCleanup=false,preferCached=false) {
     while(this.liveSyncWork){
       if(!initialEnable&&!forceEntryCleanup)return this.liveSyncWork;
       await this.liveSyncWork.catch(()=>undefined);
     }
-    const work=this.syncLiveOnce(Date.now(),initialEnable,forceEntryCleanup);
+    const work=this.syncLiveOnce(Date.now(),initialEnable,forceEntryCleanup,preferCached);
     this.liveSyncWork=work;
     try {
       await work;
@@ -2248,7 +2278,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     } finally { if(this.liveSyncWork===work)this.liveSyncWork=null; }
   }
 
-  private async syncLiveOnce(now: number, initialEnable = false, forceEntryCleanup = false) {
+  private async syncLiveOnce(now: number, initialEnable = false, forceEntryCleanup = false, preferCached = false) {
     // Owner actions and optional hourly evaluation can arrive between two book
     // loops. Reconcile first so LIVE can never observe an unregistered source leg.
     this.reconcileCanonicalMirror(now);
@@ -2259,7 +2289,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // A missing source blocks additions, not the owner's OFF cleanup or native
     // protection of an already-mapped position.
     const client = await this.gateLive();
-    let snapshot = await client.snapshot();
+    const unresolvedEntry=Object.values(this.runtime.live.entries).some(entry=>entry
+      &&(!["FILLED","CANCELLED"].includes(entry.status)||this.liveEntryAwaitingReconcile(entry)));
+    const cached=preferCached&&this.runtime.live.operational&&!unresolvedEntry&&this.liveSnapshotCache
+      &&now-this.liveSnapshotCache.checkedAt<=LIVE_FAST_SNAPSHOT_MAX_AGE_MS
+      ?structuredClone(this.liveSnapshotCache):null;
+    let snapshot=cached??await client.snapshot();
+    this.liveSyncUsedCached=Boolean(cached);
+    if(!cached)this.liveSnapshotCache=structuredClone(snapshot);
     // The committed PAPER account can advance while private reads are in flight.
     // Select sources after the read, never from a pre-await portfolio snapshot.
     now=Date.now();this.reconcileCanonicalMirror(now);
@@ -2278,6 +2315,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     snapshot = forceEntryCleanup
       ? await this.cancelAndConfirmSystemEntries(client, snapshot, trackedEntryIds)
       : await this.cancelAndConfirmSystemEntries(client, snapshot, trackedEntryIds, knownTags);
+    if(!cached||snapshot.checkedAt!==cached.checkedAt)this.liveSnapshotCache=structuredClone(snapshot);
     if (forceEntryCleanup) {
       for (const entry of Object.values(this.runtime.live.entries)) {
         if (!entry || ["FILLED", "CANCELLED"].includes(entry.status)) continue;
@@ -2749,6 +2787,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         ? recoveringSubmission.lastError ?? `${recoveringSubmission.symbol} 的实盘提交正在与 Gate 核对`
         : `${recoveringEntryStop!.symbol} 的初始止损正在按订单标签核对`;
     }
+    // A cached source-trigger pass is provisional by construction; the caller
+    // schedules the immediate full Gate reconciliation. Network-backed passes
+    // become the next fast-event cache.
+    if(!cached)this.liveSnapshotCache=structuredClone(snapshot);
   }
 
   protected async setLiveMode(enabled: boolean) {
@@ -3399,6 +3441,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   async alarm(info?: { isRetry?: boolean; retryCount?: number }) {
     const now = Date.now();
+    this.clearRetiredLiveTransportError();
     if (info?.isRetry) {
       const persistedAlarm = await this.ctx.storage.getAlarm();
       if (persistedAlarm != null && persistedAlarm > now) {
