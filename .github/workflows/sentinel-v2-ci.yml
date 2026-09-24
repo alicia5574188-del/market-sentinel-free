@@ -59,7 +59,8 @@ jobs:
           if jq -e . >/dev/null 2>&1 <<<"$body"; then
             jq -c '{ok,version,mode,runtime:{state:.runtime.state,stale:.runtime.stale,lastError:.runtime.lastError,
               lastSuccessAt:.runtime.lastSuccessAt,forward:.runtime.forward,realtimeReadiness:.runtime.realtimeReadiness,
-              liveMode:.runtime.liveMode,limits:.runtime.limits}}' <<<"$body"
+              marketDataTransport:.runtime.marketDataTransport,feedQuality:.runtime.feedQuality,symbols:.runtime.symbols,
+              radar:.runtime.radar,liveMode:.runtime.liveMode,limits:.runtime.limits}}' <<<"$body"
           else
             echo '{"runtimeSnapshot":"unavailable"}'
           fi
