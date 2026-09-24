@@ -51,11 +51,11 @@ test("runtime alarm uses the slim market path and no strategy cutover can reset 
 
 test("Forward Relation analysis remains multi-source while Gate stays execution-only",async()=>{
   const hub=await read("lib/market-data-hub.ts"),worker=await read("worker/index-clean.ts");
-  assert.match(hub,/class MarketDataHub/);assert.match(hub,/BYBIT/);assert.match(hub,/OKX/);assert.match(hub,/BITGET/);assert.match(hub,/BINANCE/);
+  assert.match(hub,/class MarketDataHub/);assert.match(hub,/BYBIT/);assert.match(hub,/OKX/);assert.match(hub,/KUCOIN/);assert.match(hub,/BITGET/);assert.match(hub,/BINANCE/);
   assert.match(worker,/private marketHub = new MarketDataHub/);
   assert.match(worker,/Gate public websocket is execution-only/);
-  assert.match(worker,/Bybit\/OKX\/Bitget remain the normal scan surface/);
-  assert.match(worker,/forwardWatchSymbols/);assert.match(hub,/multi-source-market-hub-v3/);assert.match(hub,/nextRetryAt/);
+  assert.match(worker,/Bybit\/OKX\/KuCoin remain the normal scan surface/);
+  assert.match(worker,/forwardWatchSymbols/);assert.match(hub,/multi-source-market-hub-v4/);assert.match(hub,/nextRetryAt/);
   assert.doesNotMatch(worker,/fetchMarketTickers\(\)/);
 });
 
