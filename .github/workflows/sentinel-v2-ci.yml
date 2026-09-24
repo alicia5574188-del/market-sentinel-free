@@ -105,7 +105,8 @@ jobs:
           set -euo pipefail
           for i in $(seq 1 18); do
             body="$(curl -sS --max-time 15 "$WORKER_BASE_URL/__health" || true)"
-            if jq -e '
+            if jq -e --arg sha "$GITHUB_SHA" '
+              .runtime.buildSha == $sha and
               .runtime.authorityReady == true and
               .runtime.stale == false and
               .runtime.lastError == null and
@@ -172,7 +173,8 @@ jobs:
           npx wrangler deploy --config dist/server/wrangler.json
           for i in $(seq 1 18); do
             body="$(curl -sS --max-time 15 "$WORKER_BASE_URL/__health" || true)"
-            if jq -e '
+            if jq -e --arg sha "$head" '
+              .runtime.buildSha == $sha and
               .runtime.authorityReady == true and .runtime.stale == false and .runtime.lastError == null and
               .runtime.forward.strategyAuthorityVersion == "forward-relation-v2" and
               .runtime.forward.targetPositionCount == 10 and .runtime.forward.storage.error == null and
