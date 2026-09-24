@@ -5,6 +5,7 @@ type RawBook={symbol:string;observedAt:number;sequence:number;bids:Array<{price:
 type Socket={readyState:number;accept():void;send(data:string):void;close(code?:number,reason?:string):void;
   addEventListener(type:string,listener:(event:{data?:unknown})=>void):void};
 const ENDPOINT="https://fx-ws.gateio.ws/v4/ws/usdt";
+const STREAM_CACHE_LIVENESS_MS=15_000;
 const finite=(x:number)=>Number.isFinite(x);
 
 /** One bounded, public Gate connection per primary runtime. No trading loops,
@@ -141,10 +142,17 @@ export class GateStreamingFeed {
     }
   }
 
+  private streamBackedBookFresh(symbol:string,book:RawBook,now:number){
+    const direct=dataIsFresh(book.observedAt,now);
+    if(direct)return{fresh:true,observedAt:book.observedAt};
+    const connected=this.socket?.readyState===1,subscribed=this.subscribed.has(`book:${symbol}`);
+    const transportFresh=connected&&subscribed&&this.lastMessageAt>0&&now>=this.lastMessageAt&&now-this.lastMessageAt<=STREAM_CACHE_LIVENESS_MS;
+    return{fresh:transportFresh,observedAt:transportFresh?this.lastMessageAt:book.observedAt};
+  }
   book(symbol:string,tickSize:number,multiplier:number,now=Date.now()):BookSnapshot|null{
-    const book=this.books.get(symbol);
-    if(!book||!dataIsFresh(book.observedAt,now)||!(multiplier>0))return null;
-    return{...book,tickSize,bids:book.bids.map(row=>({...row,size:row.size*row.price*multiplier})),
+    const book=this.books.get(symbol);if(!book||!(multiplier>0))return null;
+    const freshness=this.streamBackedBookFresh(symbol,book,now);if(!freshness.fresh)return null;
+    return{...book,observedAt:freshness.observedAt,tickSize,bids:book.bids.map(row=>({...row,size:row.size*row.price*multiplier})),
       asks:book.asks.map(row=>({...row,size:row.size*row.price*multiplier}))};
   }
   path(symbol:string,interval:"1m"|"5m"){return this.candles.get(`${interval}:${symbol}`)??[];}
@@ -153,6 +161,7 @@ export class GateStreamingFeed {
     return{version:"gate-dual-transport-v1",connected:this.socket?.readyState===1,lastMessageAt:this.lastMessageAt||null,
       lastError:this.lastError,retryAt:this.retryAt>now?this.retryAt:null,connections:this.connects,
       subscriptions:this.wanted.size,acceptedBooks:this.acceptedBooks,acceptedCandles:this.acceptedCandles,rejected:this.rejected,
-      websocketUses:this.websocketUses,restUses:this.restUses,freshBooks:[...this.books.values()].filter(row=>dataIsFresh(row.observedAt,now)).length};
+      websocketUses:this.websocketUses,restUses:this.restUses,
+      freshBooks:[...this.books.entries()].filter(([symbol,row])=>this.streamBackedBookFresh(symbol,row,now).fresh).length};
   }
 }
