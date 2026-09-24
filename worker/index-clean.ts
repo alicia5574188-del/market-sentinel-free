@@ -887,10 +887,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }
   }
 
-  private refreshRadar(now: number, rows: Awaited<ReturnType<typeof fetchMarketTickers>>) {
+  private refreshRadar(now:number) {
     if(this.contractCatalog.size===0)throw new Error("contract catalog unavailable: radar refresh deferred");
-    const eligibleRows=rows.filter(row=>this.contractCatalog.has(row.symbol)&&adaptiveSymbolAllowed(row.symbol));
-    if(!eligibleRows.length)throw new Error("Gate ticker universe unavailable");
+    const gate=[...this.contractCatalog.values()].filter(row=>adaptiveSymbolAllowed(row.symbol));
+    const eligibleRows=this.marketHub.radarRows(gate,now);
+    if(!eligibleRows.length)throw new Error("no Gate-tradable Adaptive 10 markets");
     const locked=[...(this.forwardState?.positions.map(p=>p.symbol)??[]),
       ...(this.forwardState?forwardWatchSymbols(this.forwardState,now,this.runtime.liquidUniverse):[])];
     const universeRows=selectAnchorOpportunityUniverse({rows:eligibleRows,limit:SCAN_UNIVERSE_SIZE,
@@ -900,10 +901,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.liquidUniverse=universeRows.map(row=>row.symbol);
     this.runtime.radar=successfulRadarRuntime(this.runtime.radar,now,universeRows.length,[]);
     this.runtime.lastRadarAt=now;
+    // Gate realtime capacity is execution-only: open exposure and candidates
+    // that are actually eligible. Analysis-only markets stay on Bybit/Binance.
     const protectedSymbols=[...this.currentAuthorityProtectionSymbols()];
     const watched=this.forwardState?forwardWatchSymbols(this.forwardState,now,this.runtime.liquidUniverse):[];
-    const next=[...new Set([...protectedSymbols,...watched,...DEFAULT_SYMBOLS,...this.runtime.liquidUniverse])].slice(0,ADAPTIVE_REALTIME_POSITION_CAP);
-    if(next.length)this.applyRealtimeSymbols(next);
+    const next=[...new Set([...protectedSymbols,...watched])].slice(0,ADAPTIVE_REALTIME_POSITION_CAP);
+    if(next.length||this.runtime.symbols.length)this.applyRealtimeSymbols(next);
   }
 
   protected regimeQuotes(now: number) {
