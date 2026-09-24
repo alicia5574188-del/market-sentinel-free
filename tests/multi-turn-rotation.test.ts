@@ -27,8 +27,9 @@ const hold=(overrides:Partial<MultiTurnHoldValue>={}):MultiTurnHoldValue=>({
   strongContinuation:false,exceptionalContinuation:false,reason:"weak hold",...overrides,
 });
 
-test("rotation is considered only when an existing risk cap is genuinely near full",()=>{
-  assert.equal(rotationRiskSaturated({equity:1000,totalRisk:94,sideRisk:20,sleeveRisk:5,riskCap:.02}),false);
+test("rotation is considered when risk is near full or the ten-seat target is occupied",()=>{
+  assert.equal(rotationRiskSaturated({equity:1000,totalRisk:40,sideRisk:20,sleeveRisk:5,riskCap:.02,positionCount:10,targetPositions:10}),true);
+  assert.equal(rotationRiskSaturated({equity:1000,totalRisk:94,sideRisk:20,sleeveRisk:5,riskCap:.02,positionCount:9,targetPositions:10}),false);
   assert.equal(rotationRiskSaturated({equity:1000,totalRisk:95,sideRisk:20,sleeveRisk:5,riskCap:.02}),true);
   assert.equal(rotationRiskSaturated({equity:1000,totalRisk:40,sideRisk:61.75,sleeveRisk:5,riskCap:.02}),true);
   assert.equal(rotationRiskSaturated({equity:1000,totalRisk:40,sideRisk:20,sleeveRisk:19,riskCap:.02}),true);
@@ -65,9 +66,9 @@ test("replacement needs a large score and space advantage, not a marginal rankin
   assert.equal(rotationAdvantageEnough(marginal,weak),false);
 });
 
-test("rotation churn controls are deliberately slow",()=>{
-  assert.equal(MULTI_TURN_ROTATION_COOLDOWN_MS,60*60_000);
-  assert.equal(multiTurnRotationReentryCooldownMs("5m"),60*60_000);
+test("5m rotation is responsive while slower research horizons keep broader churn protection",()=>{
+  assert.equal(MULTI_TURN_ROTATION_COOLDOWN_MS,5*60_000);
+  assert.equal(multiTurnRotationReentryCooldownMs("5m"),10*60_000);
   assert.equal(multiTurnRotationReentryCooldownMs("1h"),2*60*60_000);
   assert.equal(multiTurnRotationReentryCooldownMs("4h"),8*60*60_000);
   assert.equal(multiTurnRotationReentryCooldownMs("1d"),8*60*60_000);

@@ -2,7 +2,7 @@ import { TURN_CONFIG, type TurnCandidate, type TurnFrameState, type TurnTimefram
 import { multiTurnHoldWindows, type MultiTurnHoldValue } from "./multi-turn-hold-value.ts";
 
 export const MULTI_TURN_ROTATION_VERSION="multi-turn-selective-risk-rotation-v1";
-export const MULTI_TURN_ROTATION_COOLDOWN_MS=60*60_000;
+export const MULTI_TURN_ROTATION_COOLDOWN_MS=5*60_000;
 
 export type RotationOpportunity={
   version:typeof MULTI_TURN_ROTATION_VERSION;
@@ -26,11 +26,14 @@ const valueScore=(edgeRatio:number,directionStrength:number,turnRisk:number)=>
   Math.max(0,edgeRatio)*(0.60+clip(directionStrength))*(1-.50*clip(turnRisk));
 
 export function multiTurnRotationReentryCooldownMs(timeframe:TurnTimeframe){
-  return Math.max(60*60_000,Math.min(8*60*60_000,TURN_CONFIG[timeframe].minutes*2*60_000));
+  if(timeframe==="5m")return 10*60_000;
+  return Math.max(30*60_000,Math.min(8*60*60_000,TURN_CONFIG[timeframe].minutes*2*60_000));
 }
 
-export function rotationRiskSaturated(input:{equity:number;totalRisk:number;sideRisk:number;sleeveRisk:number;riskCap:number}){
+export function rotationRiskSaturated(input:{equity:number;totalRisk:number;sideRisk:number;sleeveRisk:number;riskCap:number;
+  positionCount?:number;targetPositions?:number}){
   if(!(input.equity>0))return false;
+  if(input.positionCount!=null&&input.targetPositions!=null&&input.positionCount>=input.targetPositions)return true;
   return input.totalRisk>=input.equity*.095
     ||input.sideRisk>=input.equity*.065*.95
     ||input.sleeveRisk>=input.equity*input.riskCap*.95;

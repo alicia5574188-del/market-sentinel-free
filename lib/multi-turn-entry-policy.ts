@@ -53,7 +53,10 @@ export function evaluateMultiTurnEntryPolicy(input:{
   const drawdown=Math.max(0,1-input.equity/Math.max(input.peakEquity,input.equity));
   const drawdownScale=drawdown>=.20?.50:drawdown>=.10?.70:drawdown>=.05?.85:1;
   const quality=clip(c.continuationScore*(.65+.35*c.confidence),.15,1);
-  const headroom=Math.min(input.equity*.10-input.totalRisk,input.equity*.065-sideRisk,input.equity*c.riskCap-sleeveRisk);
+  // 5m participation is the high-occupancy lane. It shares the portfolio risk
+  // envelope instead of being capped as one 1.5% timeframe sleeve.
+  const sleeveRiskRate=c.timeframe==="5m"?.10:c.riskCap;
+  const headroom=Math.min(input.equity*.10-input.totalRisk,input.equity*.065-sideRisk,input.equity*sleeveRiskRate-sleeveRisk);
   const targetRisk=Math.max(0,Math.min(input.equity*.015*quality*drawdownScale,headroom));
   const lossRate=structuralStopRate+input.costRate;
   const leverage=multiTurnEntryLeverage(structuralStopRate,input.contract.maintenanceRate,input.costRate,input.contract.leverageMax);
@@ -61,7 +64,7 @@ export function evaluateMultiTurnEntryPolicy(input:{
   const immediateMarkCost=Math.max(0,2*(input.feeRate+input.slippageRate)+spread);
   const totalCapNotional=Math.max(0,(input.equity*.10-input.totalRisk)/(lossRate+.10*immediateMarkCost));
   const sideCapNotional=Math.max(0,(input.equity*.065-sideRisk)/(lossRate+.065*immediateMarkCost));
-  const sleeveCapNotional=Math.max(0,(input.equity*c.riskCap-sleeveRisk)/(lossRate+c.riskCap*immediateMarkCost));
+  const sleeveCapNotional=Math.max(0,(input.equity*sleeveRiskRate-sleeveRisk)/(lossRate+sleeveRiskRate*immediateMarkCost));
   const riskDesired=Math.min(input.equity*1.5,targetRisk/Math.max(lossRate,1e-9),totalCapNotional,sideCapNotional,sleeveCapNotional,
     Math.max(0,input.equity*4-input.grossNotional));
   if(!(riskDesired>=input.equity*.05))return{ok:false,reason:"该周期剩余风险额度不足有效仓位，不生成碎片订单",rotationEligible:true,remainingSpaceRate:remaining};
@@ -81,7 +84,8 @@ export function evaluateMultiTurnEntryPolicy(input:{
     capCount(.065,input.shortRisk,c.side==="SHORT"?riskPer:0),
     capCount(qualityRate,0,riskPer),
     capCount(.015,0,riskPer),
-    ...TURN_TIMEFRAMES.map(tf=>capCount(TURN_CONFIG[tf].riskCap,input.sleeveRisks[tf]??0,tf===c.timeframe?riskPer:0)),
+    ...TURN_TIMEFRAMES.map(tf=>capCount(tf===c.timeframe?sleeveRiskRate:TURN_CONFIG[tf].riskCap,
+      input.sleeveRisks[tf]??0,tf===c.timeframe?riskPer:0)),
     ...input.tradeRisks.map(risk=>capCount(.015,risk,0)),
   ];
   count=Math.min(count,...constraints);

@@ -1,11 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {advanceForward, BAR_MS, forwardSummary, forwardWatchSymbols, initialForward, initialMultiTurnForward,
+import {advanceForward, ADAPTIVE_TARGET_POSITIONS, BAR_MS, forwardSummary, forwardUrgentQuoteSymbols, forwardWatchSymbols, initialForward, initialMultiTurnForward,
   multiTurnEntryLeverage, type Candle, type Contract, type Quote} from "../lib/forward-relations.ts";
 import {MULTI_TURN_VERSION, TURN_TIMEFRAMES, evaluateMultiTurn, initialMultiTurn} from "../lib/multi-turn-engine.ts";
 import {REGION_LIFECYCLE_VERSION, type RegionEntrySignal, type RegionLifecycleState} from "../lib/region-lifecycle.ts";
 import {ANCHOR_FLOW_VERSION, type AnchorFlowState} from "../lib/anchor-flow.ts";
 import {REGION_LAUNCH_VERSION} from "../lib/region-launch.ts";
+import type {MultiTurnEntryOpportunity} from "../lib/multi-turn-entry-opportunity.ts";
 import {FORWARD_PROTECTION_STORAGE, FORWARD_STORAGE, prepareForwardReset, prepareForwardWrite, readForwardStore} from "../lib/forward-store.ts";
 
 const BASE=Date.parse("2026-09-21T00:00:00Z");
@@ -46,6 +47,17 @@ const rejectionSignal=(symbol:string,now:number):RegionEntrySignal=>({
   regionId:`rg-${symbol}`,regionConfirmedAt:now-600_000,regionLower:99,regionUpper:101,regionCenter:100,regionWidth:2,regionWidthRate:.02,
   reason:"legacy rejection"
 });
+const participationOpportunity=(symbol:string,now:number):MultiTurnEntryOpportunity=>({
+  version:"winding-anchor-entry-v3",symbol,timeframe:"5m",side:"LONG",completedAt:now-1_000,price:100,
+  score:92,eligible:true,directionStrength:90,spaceScore:85,positionScore:95,executionScore:90,
+  trendSlopeScore:80,structureScore:80,pathEfficiency:80,momentumPersistence:80,pullbackResilience:80,
+  grossRemainingSpaceRate:.04,netRemainingSpaceRate:.0378,statisticalRemainingSpaceRate:.04,structuralSpaceRate:.04,
+  pullbackRiskRate:.01,edgeRatio:4,legMoveRate:.01,expectedLegRate:.04,legUtilization:.25,
+  turnRisk:.10,turnPenalty:0,stopRate:.015,stopPrice:98.5,stopPenalty:0,riskCap:.015,reason:"5m participation fixture",
+  anchorPrice:99,anchorAt:now-300_000,anchorConfirmedAt:now-1_000,anchorQuality:90,anchorAgeBars:1,
+  anchorMfeRate:.01,anchorMaeRate:.005,anchorProfitRatio:4,anchorFirstProfitBars:1,anchorRetentionRate:.8,
+  distanceFromAnchorRate:.01,maxEntryDistanceRate:.04,
+});
 
 test("legacy AnchorFlow READY state can no longer create a new order",()=>{
   const now=BASE+5*60*60_000,s=initialMultiTurnForward(now-60_000);
@@ -63,6 +75,18 @@ test("region REJECTION events are observation only and cannot spend fees or occu
   const state=advanceForward({state:s,now,paths:{},quotes:{ETH_USDT:quote(100.6,now)},contracts:{ETH_USDT:meta},
     entrySymbols:["ETH_USDT"],allowDataCycle:false}).state;
   assert.equal(state.positions.length,0);assert.equal(state.fees,fees);assert.equal(state.balance,balance);
+});
+
+test("restored 5m participation can open without waiting for a RegionLaunch and owns a realtime quote slot",()=>{
+  const now=BASE+6*60*60_000+10_000,s=initialMultiTurnForward(now-60_000);
+  s.lastCycleAt=now;s.lastQuoteCycleAt=0;s.entryOpportunities=[participationOpportunity("BTC_USDT",now)];
+  assert.ok(forwardUrgentQuoteSymbols(s,now,["BTC_USDT"]).includes("BTC_USDT"));
+  const state=advanceForward({state:s,now,paths:{},quotes:{BTC_USDT:quote(100,now)},contracts:{BTC_USDT:meta},
+    entrySymbols:["BTC_USDT"],allowDataCycle:false}).state;
+  assert.equal(state.positions.length,1);
+  assert.equal(state.positions[0]?.turn?.timeframe,"5m");
+  assert.equal(state.positions[0]?.rule.grammar,MULTI_TURN_VERSION);
+  assert.equal(ADAPTIVE_TARGET_POSITIONS,10);
 });
 
 test("cold reconstruction may restore a mature region but can never backfill a historical trade",()=>{
@@ -126,8 +150,9 @@ test("runtime summary exposes RegionLaunch as the active grammar while keeping s
   assert.equal(summary.grammar,REGION_LAUNCH_VERSION);
   assert.equal(summary.executionVersion,ANCHOR_FLOW_VERSION,"storage/cutover compatibility version remains explicit");
   assert.equal(summary.regionVersion,REGION_LIFECYCLE_VERSION);
-  assert.deepEqual(summary.turnRiskSleeves,{region_launch:.006});
-  assert.match(summary.boundaries.grammar,/单一执行通道|完整边界/);
+  assert.deepEqual(summary.turnRiskSleeves,{region_launch:.006,"5m_participation_per_trade":.015});
+  assert.equal(summary.marketRiskBudget.totalRate,.10);assert.equal(summary.marketRiskBudget.longRate,.065);
+  assert.match(summary.boundaries.grammar,/双通道|10个持仓/);
 });
 
 test("old Forward archive and a fresh RegionLaunch PAPER head still commit atomically",async()=>{
