@@ -157,7 +157,7 @@ export function evaluateMultiTurnEntryOpportunities(input:{paths:Record<string,T
   turnEngine?:MultiTurnState|null;quotes?:Record<string,QuoteLike>;now:number;costRate:number|((tf:TurnTimeframe)=>number)}){
   const out:MultiTurnEntryOpportunity[]=[];
   for(const[symbol,base]of Object.entries(input.paths)){
-    const timeframe:"5m"="5m",candles=aggregateTurnCandles(base,timeframe);
+    const timeframe="5m" as const,candles=aggregateTurnCandles(base,timeframe);
     const cost=typeof input.costRate==="function"?input.costRate(timeframe):input.costRate;
     const row=opportunityFor({symbol,timeframe,rows:candles,turnEngine:input.turnEngine??null,quote:input.quotes?.[symbol],now:input.now,costRate:cost});
     if(row)out.push(row);
