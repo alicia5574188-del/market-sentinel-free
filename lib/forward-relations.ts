@@ -26,7 +26,7 @@ const median=(v:number[])=>{const a=v.filter(Number.isFinite).sort((x,y)=>x-y);r
 const quantile=(v:number[],p:number)=>{const a=v.filter(Number.isFinite).sort((x,y)=>x-y);return a.length?a[Math.min(a.length-1,Math.floor((a.length-1)*p))]:0;};
 const dir=(side:"LONG"|"SHORT")=>side==="LONG"?1:-1;
 const dayKey=(now:number)=>new Date(now+7*3600_000).toISOString().slice(0,10);
-const safe=(v:number,fallback=0)=>Number.isFinite(v)?v:fallback;
+const safe=(v:number|null|undefined,fallback=0)=>typeof v==="number"&&Number.isFinite(v)?v:fallback;
 
 export type Candle={time:number;open:number;high:number;low:number;close:number;volume:number};
 export type Quote={bestBid:number;bestAsk:number;observedAt:number;fresh:boolean;entryReady?:boolean};
@@ -491,7 +491,8 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
   const mark=equityMark(s,quotes,now),eligible=s.opportunities.filter(o=>o.eligible&&o.expiresAt>now);
   return{version:s.version,engineVersion:ADAPTIVE_ENGINE_VERSION,grammar:ADAPTIVE_ENGINE_VERSION,mode:"REAL_FEED_PAPER",liveEligible:false,
     strategyAuthorityVersion:ADAPTIVE_ENGINE_VERSION,executionVersion:ADAPTIVE_ENGINE_VERSION,regionVersion:"adaptive-region-v1",
-    regionLaunchVersion:"adaptive-region-v1",policyVersion:ADAPTIVE_ENGINE_VERSION,startedAt:s.startedAt,updatedAt:s.lastQuoteCycleAt,
+    regionLaunchVersion:"adaptive-region-v1",policyVersion:ADAPTIVE_ENGINE_VERSION,exitPolicyVersion:ADAPTIVE_ENGINE_VERSION,
+    policyUpgrade:null,exitPolicyUpgrade:null,startedAt:s.startedAt,updatedAt:s.lastQuoteCycleAt,
     lastCycleAt:s.lastCycleAt,revision:s.revision,initialEquity:s.initialEquity,balance:s.balance,...mark,targetEquity:s.initialEquity*2,
     netPnl:mark.equity-s.initialEquity,maxDrawdown:s.maxDrawdown,resolved:s.resolved,wins:s.wins,grossPnl:s.grossPnl,fees:s.fees,
     fundingAllowance:s.fundingAllowance,turnover:s.turnover,positions:s.positions,history:s.history,events:s.events,daily:s.daily,
