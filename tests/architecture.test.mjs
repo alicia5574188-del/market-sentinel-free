@@ -17,10 +17,15 @@ test("Forward Relation 2.0 is the only PAPER strategy authority and retired stra
   assert.match(core,/ROTATION_GAP=10/);
   assert.match(core,/TOTAL_RISK_RATE=\.10/);
   assert.match(core,/SIDE_RISK_RATE=\.065/);
+  assert.match(core,/PROBE_RISK_POOL_RATE=\.015/);
+  assert.match(core,/RELATION_RISK_CAP_RATE=\.025/);
+  assert.match(core,/FIVE_MINUTE_NEW_RISK_RATE=\.025/);
+  assert.match(core,/portfolioRiskCharge/);
+  assert.match(core,/premiumOnly/);
   const minute=core.slice(core.indexOf("export function forwardUrgentMinuteSymbols"),core.indexOf("export function forwardWatchSymbols"));
   assert.doesNotMatch(minute,/s\.positions/);
   assert.match(minute,/o\.premium&&o\.eligible/);
-  const rotation=core.slice(core.indexOf("function rotateIfNeeded"),core.indexOf("function fillSeats"));
+  const rotation=core.slice(core.indexOf("function rotateIfNeeded"),core.indexOf("function fillPortfolio"));
   assert.match(rotation,/sideFull/);assert.match(rotation,/existingRisk\(s,candidate\.side\)/);
   assert.match(rotation,/structuredClone\(s\)/);
 });
