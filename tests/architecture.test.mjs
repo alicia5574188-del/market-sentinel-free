@@ -29,6 +29,16 @@ test("runtime alarm uses the slim market path and no strategy cutover can reset 
   assert.doesNotMatch(alarm,/processLegacyBooks|advanceRegimePortfolio|advanceStrategyArena|ensureAnchorFlowCutover/);
 });
 
+test("Adaptive Ten analysis is multi-source while Gate stays execution-only",async()=>{
+  const hub=await read("lib/market-data-hub.ts"),worker=await read("worker/index-clean.ts");
+  assert.match(hub,/class MarketDataHub/);assert.match(hub,/BYBIT/);assert.match(hub,/BINANCE/);
+  assert.match(worker,/private marketHub = new MarketDataHub/);
+  assert.match(worker,/Gate public websocket is execution-only/);
+  assert.match(worker,/Bybit\/Binance remain the normal scan surface/);
+  assert.match(worker,/forwardWatchSymbols/);
+  assert.doesNotMatch(worker,/fetchMarketTickers\(\)/);
+});
+
 test("entry readiness needs only fresh executable Gate data and contract metadata",async()=>{
   const worker=await read("worker/index-clean.ts");
   const readiness=worker.slice(worker.indexOf("private symbolEntryReady"),worker.indexOf("private currentAuthorityProtectionSymbols"));
