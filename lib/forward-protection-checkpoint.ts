@@ -2,6 +2,11 @@
 import type {ForwardState,Trade} from "./forward-relations.ts";
 export const FORWARD_PROTECTION_CHECKPOINT_VERSION="adaptive-ten-protection-v1";
 type Row=Pick<Trade,"id"|"openedAt"|"favorable"|"adverse"|"lastPrice"|"lastQuoteAt"|"stopPrice"|"firstProfitAt"|"holdScore"|"profitFloorRate"|"peakPnlRate">;
+type LegacyRow=Pick<Trade,"id"|"openedAt"|"favorable"|"adverse"|"lastPrice"|"lastQuoteAt">&{
+  stopPrice?:number;profitProtection?:{floorRate?:number};
+};
+type ProtectionEnvelope={version?:string;startedAt?:number;baseRevision?:number;basePersistedAt?:number;
+  quoteCycleAt?:number;peakEquity?:number;maxDrawdown?:number;positions?:unknown[]};
 export type ForwardProtectionCheckpoint={version:typeof FORWARD_PROTECTION_CHECKPOINT_VERSION;startedAt:number;baseRevision:number;
   basePersistedAt:number;quoteCycleAt:number;peakEquity:number;maxDrawdown:number;positions:Row[]};
 
@@ -21,7 +26,7 @@ export function buildForwardProtectionCheckpoint(s:ForwardState):ForwardProtecti
 }
 export function restoreForwardProtectionCheckpoint(s:ForwardState,value:unknown):ForwardState{
   if(value==null)return s;
-  const c=value as ForwardProtectionCheckpoint&{version?:string;positions?:Array<Row&{profitProtection?:{floorRate?:number}}>} ;
+  const c=value as ProtectionEnvelope;
   if(!c||c.startedAt!==s.startedAt||c.baseRevision!==s.revision||c.basePersistedAt!==s.storage.persistedAt)return s;
   // A protection overlay can only change currently open risk. With no open
   // positions it is intentionally inert, including overlays from retired engines.
@@ -29,7 +34,8 @@ export function restoreForwardProtectionCheckpoint(s:ForwardState,value:unknown)
   if(c.version==="forward-protection-checkpoint-v1"){
     if(!finite(c.quoteCycleAt)||!finite(c.peakEquity)||!finite(c.maxDrawdown)
       ||!Array.isArray(c.positions)||c.positions.length!==s.positions.length)throw new Error("旧版前向保护检查点异常；保留账户");
-    const rows=new Map(c.positions.map(r=>[r?.id,r]));if(rows.size!==c.positions.length)throw new Error("旧版前向保护检查点异常；保留账户");
+    const legacyRows=c.positions as LegacyRow[];
+    const rows=new Map(legacyRows.map(r=>[r?.id,r]));if(rows.size!==legacyRows.length)throw new Error("旧版前向保护检查点异常；保留账户");
     const next=structuredClone(s);
     for(const t of next.positions){const r=rows.get(t.id);if(!r||r.openedAt!==t.openedAt
         ||![r.favorable,r.adverse,r.lastPrice,r.lastQuoteAt].every(finite)||r.lastPrice<=0||r.lastQuoteAt<t.lastQuoteAt
@@ -44,12 +50,13 @@ export function restoreForwardProtectionCheckpoint(s:ForwardState,value:unknown)
       t.profitFloorRate=Math.max(t.profitFloorRate??0,locked>0?locked:0,finite(r.profitProtection?.floorRate)?r.profitProtection!.floorRate!:0);
       t.peakPnlRate=Math.max(t.peakPnlRate??0,t.favorable);
     }
-    next.lastQuoteCycleAt=Math.max(next.lastQuoteCycleAt,c.quoteCycleAt!);next.peakEquity=Math.max(next.peakEquity,c.peakEquity!);
-    next.maxDrawdown=Math.max(next.maxDrawdown,c.maxDrawdown!);return next;
+    next.lastQuoteCycleAt=Math.max(next.lastQuoteCycleAt,c.quoteCycleAt as number);next.peakEquity=Math.max(next.peakEquity,c.peakEquity as number);
+    next.maxDrawdown=Math.max(next.maxDrawdown,c.maxDrawdown as number);return next;
   }
-  if(c.version!==FORWARD_PROTECTION_CHECKPOINT_VERSION||!finite(c.quoteCycleAt)||!finite(c.peakEquity)||!finite(c.maxDrawdown)
-    ||!Array.isArray(c.positions)||c.positions.length!==s.positions.length)throw new Error("前向保护检查点异常；保留账户");
-  const rows=new Map(c.positions.map(r=>[r?.id,r]));if(rows.size!==c.positions.length)throw new Error("前向保护检查点异常；保留账户");
+  if(c.version!==FORWARD_PROTECTION_CHECKPOINT_VERSION||!finite(current.quoteCycleAt)||!finite(current.peakEquity)||!finite(current.maxDrawdown)
+    ||!Array.isArray(c.positions)||current.positions.length!==s.positions.length)throw new Error("前向保护检查点异常；保留账户");
+  const current=c as ForwardProtectionCheckpoint;
+  const rows=new Map(current.positions.map(r=>[r?.id,r]));if(rows.size!==current.positions.length)throw new Error("前向保护检查点异常；保留账户");
   const next=structuredClone(s);
   for(const t of next.positions){const r=rows.get(t.id);if(!r||r.openedAt!==t.openedAt||![r.favorable,r.adverse,r.lastPrice,r.lastQuoteAt,r.stopPrice,r.holdScore,r.profitFloorRate,r.peakPnlRate].every(finite)
       ||r.lastPrice<=0||r.stopPrice<=0||r.favorable<t.favorable||r.adverse<t.adverse||r.lastQuoteAt<t.lastQuoteAt
@@ -57,6 +64,6 @@ export function restoreForwardProtectionCheckpoint(s:ForwardState,value:unknown)
       throw new Error("前向保护检查点异常；保留账户");
     t.favorable=r.favorable;t.adverse=r.adverse;t.lastPrice=r.lastPrice;t.lastQuoteAt=r.lastQuoteAt;t.stopPrice=r.stopPrice;
     t.firstProfitAt=r.firstProfitAt??null;t.holdScore=r.holdScore;t.profitFloorRate=r.profitFloorRate;t.peakPnlRate=r.peakPnlRate;}
-  next.lastQuoteCycleAt=Math.max(next.lastQuoteCycleAt,c.quoteCycleAt);next.peakEquity=Math.max(next.peakEquity,c.peakEquity);
-  next.maxDrawdown=Math.max(next.maxDrawdown,c.maxDrawdown);return next;
+  next.lastQuoteCycleAt=Math.max(next.lastQuoteCycleAt,current.quoteCycleAt);next.peakEquity=Math.max(next.peakEquity,current.peakEquity);
+  next.maxDrawdown=Math.max(next.maxDrawdown,current.maxDrawdown);return next;
 }
