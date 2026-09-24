@@ -371,16 +371,16 @@ test("both private routes hanging remain bounded and public diagnostics omit the
 
 
 test("live market entry uses RESULT mode so IOC execution does not wait for full clearing fields",async()=>{
-  const real=globalThis.fetch;let body:Record<string,unknown>|null=null;
+  const real=globalThis.fetch;const bodies:Record<string,unknown>[]=[];
   globalThis.fetch=async(input,init)=>{
-    const request=new Request(input,init);body=JSON.parse(await request.text()) as Record<string,unknown>;
+    const request=new Request(input,init);bodies.push(JSON.parse(await request.text()) as Record<string,unknown>);
     return Response.json({id_string:"123456789012345678",text:"t-ms-e-test",status:"finished",finish_as:"filled"});
   };
   try{
     const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
     const id=await client.createEntry({kind:"MARKET",tag:"t-ms-e-test",size:1,contracts:1,notional:100,plannedRisk:2,leverage:10,margin:10,
       body:{contract:"BTC_USDT",size:"1",price:"0",tif:"ioc",text:"t-ms-e-test",reduce_only:false}});
-    assert.equal(id,"123456789012345678");assert.equal(body?.action_mode,"RESULT");
+    assert.equal(id,"123456789012345678");assert.equal(bodies[0]?.action_mode,"RESULT");
   }finally{globalThis.fetch=real;}
 });
 
