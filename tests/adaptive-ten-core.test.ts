@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {ADAPTIVE_ENGINE_VERSION,advanceForward,closeForwardForReset,forwardSummary,initialForward,normalizeForward,resetForwardAccountPreservingLearning,
+import {ADAPTIVE_ENGINE_VERSION,advanceForward,closeForwardForReset,fillForwardPortfolio,forwardSummary,initialForward,normalizeForward,resetForwardAccountPreservingLearning,
   type Candle,type Contract,type Opportunity,type Quote} from "../lib/forward-relations.ts";
 import {FORWARD_STORAGE,prepareForwardReset} from "../lib/forward-store.ts";
 import {FORWARD_RELATION_V2_VERSION,advanceRelationEngine,initialRelationEngine,relationCandidates} from "../lib/forward-relation-v2.ts";
@@ -98,7 +98,7 @@ test("ordinary 5m relation inventory cannot keep opening on the fast quote loop"
 test("one 5m deployment window cannot spray more than 2.5% portfolio risk budget",()=>{
   const now=nowAt(39),paths=sliced(39);let s=initialForward(now-60_000);s.lastCandleAt=now;
   s.opportunities=symbols.map((symbol,i)=>manualOpportunity(symbol,i,{premium:true}));
-  s=advanceForward({state:s,now,paths,quotes:quotesAt(39,now),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
+  fillForwardPortfolio(s,quotesAt(39,now),contracts,now,1000,false);
   const charge=s.positions.reduce((n,t)=>n+(t.entryContext?.portfolioRiskCharge??t.plannedRisk),0);
   assert.ok(charge<=25.01,`cycle charge ${charge}`);assert.ok(s.positions.length<=4);
 });
@@ -106,7 +106,7 @@ test("one 5m deployment window cannot spray more than 2.5% portfolio risk budget
 test("probe relationships share one 1.5% portfolio pool instead of fragmenting into dozens of positions",()=>{
   const now=nowAt(39),paths=sliced(39);let s=initialForward(now-60_000);s.lastCandleAt=now;
   s.opportunities=symbols.map((symbol,i)=>manualOpportunity(symbol,i,{premium:true,reserve:true,health:.25,score:70}));
-  s=advanceForward({state:s,now,paths,quotes:quotesAt(39,now),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
+  fillForwardPortfolio(s,quotesAt(39,now),contracts,now,1000,false);
   const charge=s.positions.reduce((n,t)=>n+(t.entryContext?.portfolioRiskCharge??t.plannedRisk),0);
   assert.ok(charge<=15.01);assert.ok(s.positions.length<=5);
 });
@@ -114,7 +114,7 @@ test("probe relationships share one 1.5% portfolio pool instead of fragmenting i
 test("one learned relation cannot consume more than 2.5% portfolio budget across correlated symbols",()=>{
   const now=nowAt(39),paths=sliced(39);let s=initialForward(now-60_000);s.lastCandleAt=now;
   s.opportunities=symbols.map((symbol,i)=>manualOpportunity(symbol,i,{premium:true,ruleId:"shared-market-factor"}));
-  s=advanceForward({state:s,now,paths,quotes:quotesAt(39,now),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
+  fillForwardPortfolio(s,quotesAt(39,now),contracts,now,1000,false);
   const charge=s.positions.reduce((n,t)=>n+(t.entryContext?.portfolioRiskCharge??t.plannedRisk),0);
   assert.ok(charge<=25.01);assert.ok(s.positions.length<=4);
 });
@@ -124,8 +124,8 @@ test("there is no fixed ten-position cap; strong independent relations can grow 
   for(let cycle=0;cycle<5&&s.positions.length<=10;cycle++){
     const at=base+cycle*300_000;s.lastCandleAt=at;
     s.opportunities=symbols.filter(symbol=>!s.positions.some(t=>t.symbol===symbol))
-      .map((symbol,i)=>manualOpportunity(symbol,symbols.indexOf(symbol),{premium:true,score:92,health:.95}));
-    s=advanceForward({state:s,now:at+1000,paths,quotes:quotesAt(39,at+1000),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
+      .map(symbol=>manualOpportunity(symbol,symbols.indexOf(symbol),{premium:true,score:92,health:.95}));
+    fillForwardPortfolio(s,quotesAt(39,at+1000),contracts,at+1000,1000,false);
   }
   assert.ok(s.positions.length>10,"risk-shaped portfolio may exceed ten when independent high-quality relations justify it");
   const charge=s.positions.reduce((n,t)=>n+(t.entryContext?.portfolioRiskCharge??t.plannedRisk),0),equity=forwardSummary(s,quotesAt(39,base+1_500_000),base+1_500_000).equity;
@@ -136,7 +136,7 @@ test("there is no fixed ten-position cap; strong independent relations can grow 
 test("manual reset preparation remains bounded with twenty-two legacy open positions",async()=>{
   const now=nowAt(39),paths=sliced(39),symbol=symbols[0]!;let previous=initialForward(now-60_000);previous.lastCandleAt=now;
   previous.opportunities=[manualOpportunity(symbol,0,{premium:true})];
-  previous=advanceForward({state:previous,now,paths,quotes:quotesAt(39,now),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
+  fillForwardPortfolio(previous,quotesAt(39,now),contracts,now,1000,false);
   assert.equal(previous.positions.length,1);const baseTrade=previous.positions[0]!;
   previous.positions=Array.from({length:22},(_,i)=>({...structuredClone(baseTrade),id:`legacy-${i}`,symbol:`LEG${i}_USDT`}));
   previous.storage={persistedAt:now-1000,error:null};
