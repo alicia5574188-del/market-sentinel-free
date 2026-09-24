@@ -84,6 +84,12 @@ export function gateMarkedEquity(snapshot:GateLiveSnapshot) {
   return balance+pnl;
 }
 
+export const GATE_CUSTOM_TEXT_NO_FILL_LOOKUP_MS = 60_000;
+export const GATE_UNKNOWN_SUBMISSION_RESOLVE_MS = 65_000;
+export function gateUnknownSubmissionCanResolve(submittedAt:number,now:number){
+  return Number.isFinite(submittedAt)&&submittedAt>0&&Number.isFinite(now)&&now-submittedAt>=GATE_UNKNOWN_SUBMISSION_RESOLVE_MS;
+}
+
 export type LiveEntryIntent = {
   kind: "PRICE_TRIGGER" | "LIMIT" | "MARKET";
   tag: string;
@@ -338,7 +344,13 @@ export class GateLiveClient {
 
   async createEntry(intent: LiveEntryIntent, beforeSend?: () => boolean) {
     const path = intent.kind === "PRICE_TRIGGER" ? "/futures/usdt/price_orders" : "/futures/usdt/orders";
-    const response = await this.request<GateLiveOrder>("POST", path, "", intent.body, beforeSend);
+    // FULL waits for clearing information and can turn a perfectly valid short
+    // market order into an ambiguous six-second network timeout. RESULT keeps
+    // the one-shot IOC semantics but returns after the matching result without
+    // waiting for clearing fields. ACK is deliberately not used here because
+    // the caller creates native protection only after a definitive IOC result.
+    const body = intent.kind==="MARKET" ? {...intent.body,action_mode:"RESULT"} : intent.body;
+    const response = await this.request<GateLiveOrder>("POST", path, "", body, beforeSend);
     return responseId(response.raw, response.data);
   }
 
