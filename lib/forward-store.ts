@@ -89,18 +89,30 @@ export async function prepareForwardWrite(previous:ForwardState|null,next:Forwar
 }
 
 
-/** Explicit owner reset only. Strategy upgrades never call this function. */
+/** Explicit owner reset only. Strategy upgrades never call this function.
+ * Reset archives are deliberately split one open trade per record. A manual
+ * reset must not become less reliable merely because the portfolio currently
+ * contains many positions. */
 export async function prepareForwardReset(previous:ForwardState,closedLegacy:ForwardState,next:ForwardState,now:number){
   if(!previous.storage.persistedAt)throw new Error("旧Forward账户尚未持久化，拒绝切换");
   if(closedLegacy.positions.length)throw new Error("旧Forward账户仍有未归档持仓，拒绝切换");
   if(next.positions.length||next.history.length||next.initialEquity!==1000||next.balance!==1000)
     throw new Error("新模拟账户初始状态异常");
   next.storage={persistedAt:now+1,error:null};
-  const legacy=await prepareForwardWrite(previous,closedLegacy,now,{compact:true});
   const fresh=await prepareForwardWrite(null,next,now+1,{compact:true});
-  const entries:Record<string,unknown>={};
-  for(const[key,value]of Object.entries(legacy.entries))
-    if(key.startsWith(`${FORWARD_STORAGE}archive:`))entries[key]=value;
-  Object.assign(entries,fresh.entries,prepareForwardProtectionWrite(next).entries);
-  return{state:next,entries,writes:Object.keys(entries).length,compression:fresh.compression};
+  const openIds=new Set(previous.positions.map(t=>t.id)),resetTrades=closedLegacy.history.filter(t=>openIds.has(t.id));
+  const archiveEntries:Record<string,unknown>={};
+  for(let i=0;i<resetTrades.length;i++){
+    const trade=resetTrades[i]!,events=closedLegacy.events.filter(e=>e.subject===trade.id);
+    const packet={at:now,type:"ACCOUNT_RESET",version:FORWARD_VERSION,engineVersion:previous.engineVersion,policyVersion:previous.policyVersion,
+      startedAt:previous.startedAt,revision:closedLegacy.revision,events,trades:[trade],
+      account:{balance:closedLegacy.balance,positions:[],fees:closedLegacy.fees,fundingAllowance:closedLegacy.fundingAllowance,
+        turnover:closedLegacy.turnover,resolved:closedLegacy.resolved,wins:closedLegacy.wins,maxDrawdown:closedLegacy.maxDrawdown},
+      daily:closedLegacy.daily.at(-1)??null,marketPulse:closedLegacy.marketPulse,opportunities:[]};
+    if(new TextEncoder().encode(JSON.stringify(packet)).length>112*1024)
+      throw new Error(`重置归档单笔记录超过预算：${trade.symbol}`);
+    archiveEntries[`${FORWARD_STORAGE}archive:${String(now+i).padStart(16,"0")}:reset:${i}`]=packet;
+  }
+  const accountEntries={...fresh.entries,...prepareForwardProtectionWrite(next).entries};
+  return{state:next,archiveEntries,accountEntries,writes:Object.keys(archiveEntries).length+Object.keys(accountEntries).length,compression:fresh.compression};
 }
