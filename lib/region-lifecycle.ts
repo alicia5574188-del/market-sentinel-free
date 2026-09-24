@@ -1,6 +1,6 @@
 export const REGION_LIFECYCLE_VERSION="region-lifecycle-v1";
 export const REGION_BAR_MS=300_000;
-export const REGION_WINDOW_BARS=[12,18,24,36,48] as const;
+export const REGION_WINDOW_BARS=[12,18,24,36,48,72,96,144] as const;
 export const REGION_DETACH_WIDTHS=.60;
 export const REGION_SIGNAL_TTL_BARS=2;
 export const REGION_MIGRATION_SIGNAL_TTL_BARS=4;
@@ -53,27 +53,55 @@ function centerCrossings(closes:number[],center:number){
   return crossings;
 }
 
-function regionCandidate(symbol:string,window:RegionCandle[],costRate:number):RegionZone|null{
+function acceptedRegionWindow(window:RegionCandle[]){
+  if(!contiguous(window)||window.length<12)return window;
+  // Build the provisional accepted-price band from candle bodies, not isolated
+  // wick extremes. Then cut away the latest formation shock/probe that clearly
+  // sits outside the price area the market subsequently accepted.
+  const recent=window.slice(-Math.min(36,window.length));
+  const recentBodyLows=recent.map(x=>Math.min(x.open,x.close));
+  const recentBodyHighs=recent.map(x=>Math.max(x.open,x.close));
+  const coreLower=quantile(recentBodyLows,.18),coreUpper=quantile(recentBodyHighs,.82);
+  const coreWidth=Math.max(coreUpper-coreLower,median(recent.map(x=>x.high-x.low)),1e-12);
+  let cut=0;
+  for(let i=0;i<=window.length-12;i++){
+    const row=window[i]!,bodyLow=Math.min(row.open,row.close),bodyHigh=Math.max(row.open,row.close);
+    const lowerProbe=coreLower-row.low>coreWidth*.30;
+    const upperProbe=row.high-coreUpper>coreWidth*.30;
+    const bodyDetached=bodyHigh<coreLower-coreWidth*.20||bodyLow>coreUpper+coreWidth*.20;
+    if(lowerProbe||upperProbe||bodyDetached)cut=i+1;
+  }
+  return window.slice(Math.min(cut,window.length-12));
+}
+
+function regionCandidate(symbol:string,source:RegionCandle[],costRate:number):RegionZone|null{
+  const window=acceptedRegionWindow(source);
   if(!contiguous(window)||window.length<12)return null;
-  const closes=window.map(x=>x.close),lows=window.map(x=>x.low),highs=window.map(x=>x.high);
+  const closes=window.map(x=>x.close);
+  const bodyLows=window.map(x=>Math.min(x.open,x.close)),bodyHighs=window.map(x=>Math.max(x.open,x.close));
   const typicalRanges=window.map(x=>(x.high-x.low)/Math.max(x.close,1e-12));
-  const lower=quantile(lows,.25),upper=quantile(highs,.75);
+
+  // A winding region is the price area repeatedly ACCEPTED by the market.
+  // One-off rejection wicks are evidence of failed departure, not permission
+  // to drag the executable region boundary outward.
+  const lower=quantile(bodyLows,.18),upper=quantile(bodyHighs,.82);
   if(!(lower>0&&upper>lower))return null;
   const width=upper-lower,center=clip(median(closes),lower,upper),widthRate=width/Math.max(center,1e-12);
   const medianRange=Math.max(.0002,median(typicalRanges));
-  const minWidthRate=Math.max(.0015,costRate*2.2,medianRange*1.20);
-  const maxWidthRate=Math.min(.20,Math.max(minWidthRate*2.0,medianRange*8.5));
+  const minWidthRate=Math.max(.0015,costRate*2.2,medianRange*.90);
+  const maxWidthRate=Math.min(.20,Math.max(minWidthRate*2.2,medianRange*8.5));
   if(widthRate<minWidthRate||widthRate>maxWidthRate)return null;
 
   const inside=closes.filter(x=>x>=lower&&x<=upper).length/window.length;
   const crossings=centerCrossings(closes,center);
-  const touchesUpper=window.filter(x=>x.high>=upper-width*.12).length;
-  const touchesLower=window.filter(x=>x.low<=lower+width*.12).length;
+  const touchBand=Math.max(width*.14,center*costRate*.15);
+  const touchesUpper=window.filter(x=>Math.max(x.open,x.close)>=upper-touchBand&&x.close<=upper+touchBand).length;
+  const touchesLower=window.filter(x=>Math.min(x.open,x.close)<=lower+touchBand&&x.close>=lower-touchBand).length;
   const drift=Math.abs(closes.at(-1)!-closes[0]!)/width;
   const half=Math.floor(window.length/2);
   const halfShift=Math.abs(median(closes.slice(0,half))-median(closes.slice(half)))/width;
-  const lastInside=closes.at(-1)!>=lower&&closes.at(-1)!<=upper;
-  if(!lastInside||inside<.68||crossings<3||touchesUpper<2||touchesLower<2||drift>.65||halfShift>.38)return null;
+  const lastInside=closes.at(-1)!>=lower-touchBand&&closes.at(-1)!<=upper+touchBand;
+  if(!lastInside||inside<.62||crossings<3||touchesUpper<2||touchesLower<2||drift>.80||halfShift>.55)return null;
 
   const startAt=completeAt(window[0]!),endAt=completeAt(window.at(-1)!);
   const id=`rg-${symbol}-${window[0]!.time}-${window.at(-1)!.time}-${hash([lower,upper].map(x=>x.toPrecision(10)).join(":"))}`;
@@ -83,7 +111,9 @@ function regionCandidate(symbol:string,window:RegionCandle[],costRate:number):Re
 export function findLatestMatureRegion(input:{symbol:string;rows:RegionCandle[];now:number;costRate:number}):RegionZone|null{
   const rows=input.rows.filter(row=>valid(row)&&completeAt(row)<=input.now).sort((a,b)=>a.time-b.time);
   if(rows.length<12)return null;
-  const earliest=Math.max(0,rows.length-144);
+  // Search up to 24h of 5m structure. Long-lived accepted regions are allowed
+  // to survive well beyond the old 48-bar/4h ceiling.
+  const earliest=Math.max(0,rows.length-288);
   for(let end=rows.length-1;end>=earliest;end--){
     const found:RegionZone[]=[];
     for(const size of REGION_WINDOW_BARS){
@@ -91,7 +121,7 @@ export function findLatestMatureRegion(input:{symbol:string;rows:RegionCandle[];
       const candidate=regionCandidate(input.symbol,rows.slice(start,end+1),input.costRate);
       if(candidate)found.push(candidate);
     }
-    if(found.length)return found.sort((a,b)=>b.bars-a.bars||b.widthRate-a.widthRate)[0]!;
+    if(found.length)return found.sort((a,b)=>b.bars-a.bars||a.widthRate-b.widthRate||b.crossings-a.crossings)[0]!;
   }
   return null;
 }
