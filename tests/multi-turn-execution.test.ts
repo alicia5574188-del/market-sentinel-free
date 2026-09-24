@@ -106,7 +106,7 @@ test("RegionLaunch phases own scarce realtime watch slots while retired anchors 
     version:REGION_LAUNCH_VERSION,symbol,phase:i===11?"READY":"ARMED",createdAt:now-1000,updatedAt:now,lastProcessedAt:now,
     motherRegionId:`rg-${symbol}`,motherConfirmedAt:now-600_000,motherLower:99,motherUpper:101,motherCenter:100,motherWidth:2,motherWidthRate:.02,
     motherBars:24,motherTouchesUpper:5,motherTouchesLower:5,motherCrossings:6,failedDepartures:0,departureSide:null,departureAt:null,lastReentryAt:null,
-    compression:null,quality:i===11?.99:.5,armedAt:now,cooldownUntil:0,ignitionSide:null,ignitionAt:null,triggerPrice:null,
+    compression:null,quality:i===11?.99:.5,armedAt:now,armedInsideObserved:false,cooldownUntil:0,ignitionSide:null,ignitionAt:null,triggerPrice:null,
     breakoutOpen:null,breakoutHigh:null,breakoutLow:null,breakoutClose:null,breakoutImpulseRate:null,breakoutWickRate:null,pullbackExtreme:null,
     lastMinuteAt:null,readyAt:i===11?now:null,readySide:i===11?"LONG":null,readySignalPrice:i===11?101.2:null,readyStopPrice:i===11?100.5:null,
     readyImpulseRate:i===11?.01:null,readyExpectedMoveRate:i===11?.03:null,readyMaxChaseRate:i===11?.01:null,readyConfirmationMs:i===11?60_000:null,
