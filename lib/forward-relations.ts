@@ -48,7 +48,7 @@ export type Region={
 };
 export type Opportunity={
   id:string;symbol:string;side:"LONG"|"SHORT";mode:OpportunityMode;premium:boolean;reserve?:boolean;score:number;eligible:boolean;
-  completedAt:number;expiresAt:number;price:number;stopPrice:number;targetPrice:number;directionStrength:number;
+  completedAt:number;expiresAt:number;price:number;stopPrice:number;targetPrice:number;stopRate:number;targetRate:number;directionStrength:number;
   pathEfficiency:number;momentumPersistence:number;positionScore:number;spaceScore:number;executionScore:number;
   grossRemainingSpaceRate:number;netRemainingSpaceRate:number;pullbackRiskRate:number;edgeRatio:number;
   expectedHoldMinutes:number;marketFit:number;regionId:string|null;regionQuality:number|null;reason:string;
@@ -272,7 +272,7 @@ function flowOpportunity(s:ForwardState,symbol:string,rows:Candle[],q:Quote|unde
   const reserve=!primary&&score>=42&&directionStrength>=34&&net>=.0004&&edge>=.25&&positionScore>=8;
   return{id:`flow-${symbol}-${st.last.time}`,symbol,side,mode:"FLOW",premium:false,reserve,score,eligible:primary||reserve,
     completedAt:(st.last.time+300)*1000,expiresAt:now+12*60_000,price,stopPrice:price*(1-d*stopRate),
-    targetPrice:price*(1+d*Math.max(gross,.004)),directionStrength,pathEfficiency:100*efficiency,momentumPersistence:100*persistence,
+    targetPrice:price*(1+d*Math.max(gross,.004)),stopRate,targetRate:Math.max(gross,.004),directionStrength,pathEfficiency:100*efficiency,momentumPersistence:100*persistence,
     positionScore,spaceScore,executionScore:exec,grossRemainingSpaceRate:gross,netRemainingSpaceRate:net,pullbackRiskRate:pullback,
     edgeRatio:edge,expectedHoldMinutes:reserve?20:30,marketFit:fit,regionId:null,regionQuality:null,
     reason:`5m ${side} ${reserve?"空席补位":"持续参与"}｜方向${directionStrength.toFixed(0)}｜净空间${(net*100).toFixed(2)}%｜位置${positionScore.toFixed(0)}｜评分${score.toFixed(0)}`};
@@ -284,8 +284,9 @@ function regionOpportunities(s:ForwardState,symbol:string,rows:Candle[],minute:C
     const d=dir(side),gross=Math.max(0,d*(target/price-1)),net=Math.max(0,gross-ROUND_TRIP_COST),pullback=Math.max(.0035,Math.abs(price-stop)/price);
     const edge=net/Math.max(pullback,1e-9),fit=pulse.bias==="MIXED"?60:pulse.bias===(side==="LONG"?"UP":"DOWN")?85:40;
     const score=clip(baseScore+.08*exec+.06*fit+sampleAdjustment(s,mode,side,pulse),0,100);
+    const stopRate=Math.abs(price-stop)/price,targetRate=Math.abs(target/price-1);
     out.push({id:`${mode.toLowerCase()}-${symbol}-${last.time}`,symbol,side,mode,premium,score,
-      eligible:score>=58&&net>0&&edge>=.5,completedAt:(last.time+300)*1000,expiresAt:now+(premium?6:10)*60_000,price,stopPrice:stop,targetPrice:target,
+      eligible:score>=58&&net>0&&edge>=.5,completedAt:(last.time+300)*1000,expiresAt:now+(premium?6:10)*60_000,price,stopPrice:stop,targetPrice:target,stopRate,targetRate,
       directionStrength:Math.min(100,baseScore+5),pathEfficiency:region.quality,momentumPersistence:baseScore,positionScore:80,spaceScore:100*clip(edge/2),
       executionScore:exec,grossRemainingSpaceRate:gross,netRemainingSpaceRate:net,pullbackRiskRate:pullback,edgeRatio:edge,
       expectedHoldMinutes:mode==="RANGE"?12:mode==="BREAKOUT"?18:22,marketFit:fit,regionId:region.id,regionQuality:region.quality,reason});
@@ -378,7 +379,11 @@ function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
 function candidateRiskRate(o:Opportunity){return o.reserve?.004:o.mode==="RANGE"?.006:o.premium?.009:.008;}
 function existingRisk(s:ForwardState,side?:"LONG"|"SHORT"){return s.positions.filter(t=>!side||t.side===side).reduce((n,t)=>n+t.plannedRisk,0);}
 function openTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number){
-  const side=o.side,d=dir(side),price=side==="LONG"?q.bestAsk:q.bestBid,stopRate=Math.abs(price-o.stopPrice)/price;
+  const side=o.side,d=dir(side),price=side==="LONG"?q.bestAsk:q.bestBid;
+  // Analysis can come from Bybit/Binance. Only relative structure may cross
+  // venues; all executable prices are re-anchored to the actual Gate quote.
+  const stopRate=Number.isFinite(o.stopRate)?o.stopRate:Math.abs(o.price-o.stopPrice)/Math.max(o.price,1e-9);
+  const targetRate=Number.isFinite(o.targetRate)?o.targetRate:Math.abs(o.targetPrice/o.price-1);
   if(!(stopRate>=.002&&stopRate<=.03))return"结构止损宽度不合理";
   const headroom=Math.min(equity*TOTAL_RISK_RATE-existingRisk(s),equity*SIDE_RISK_RATE-existingRisk(s,side));
   const wantedRisk=equity*candidateRiskRate(o);if(headroom<=equity*.001)return"组合风险已满";
@@ -389,21 +394,23 @@ function openTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:nu
   const contracts=Math.floor(targetNotional/(price*mult));if(contracts<minContracts)return"低于最小模拟合约数量";
   const quantity=contracts*mult,notional=quantity*price,margin=notional/leverage,totalMargin=s.positions.reduce((n,t)=>n+t.margin,0);
   if(totalMargin+margin>equity*TOTAL_MARGIN_RATE)return"组合保证金已满";
-  const plannedRisk=notional*(stopRate+ROUND_TRIP_COST),entryFee=notional*PAPER_COST.feeRate,target=o.targetPrice>0?o.targetPrice:price*(1+d*.006);
+  const plannedRisk=notional*(stopRate+ROUND_TRIP_COST),entryFee=notional*PAPER_COST.feeRate;
+  const stopPrice=price*(1-d*stopRate),target=price*(1+d*Math.max(.003,targetRate));
   const horizon=Math.max(20,Math.round(o.expectedHoldMinutes*3)),id=`ft-${now.toString(36)}-${o.symbol.replace(/[^A-Z0-9]/g,"")}-${side[0]}-${o.mode[0]}`;
   const rule:Rule={id:`adaptive-${o.mode.toLowerCase()}`,signature:o.mode,parentId:null,version:1,createdAt:now,expiresAt:now+horizon*60_000,
     status:"EXPERIMENTAL",conditions:[],side,horizon,stopRate,armRate:Math.max(.003,o.netRemainingSpaceRate*.45),givebackRate:.002,
     exitMode:"REACTION_DECAY",samples:0,trainGroups:0,checkGroups:0,estimatedNetRate:o.netRemainingSpaceRate,priorResponse:null,
     recentResponse:0,standardError:0,reason:o.reason,mutation:"CREATE",grammar:ADAPTIVE_ENGINE_VERSION,liveEligible:false,authority:"ADAPTIVE_TEN",turnTimeframe:"5m"};
   const region=o.regionId?s.regions[o.symbol]:null;
+  const scale=o.price>0?price/o.price:1;
   const t:Trade={id,symbol:o.symbol,side,rule,openedAt:now,closedAt:null,status:"OPEN",entryPrice:price,exitPrice:null,quantity,contracts,
-    quantoMultiplier:mult,notional,leverage,margin,plannedRisk,stopPrice:o.stopPrice,armPrice:target,favorable:0,adverse:0,lastPrice:price,
+    quantoMultiplier:mult,notional,leverage,margin,plannedRisk,stopPrice,armPrice:target,favorable:0,adverse:0,lastPrice:price,
     lastQuoteAt:q.observedAt,entryFee,exitFee:0,fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,relationFailureBars:0,lastRelationBar:now,
     execution:"REAL_QUOTE_PAPER_MODEL",liveEligible:false,firstProfitAt:null,holdScore:o.score,profitFloorRate:0,expectedHoldMinutes:o.expectedHoldMinutes,
     peakPnlRate:0,exitControl:{policy:ADAPTIVE_ENGINE_VERSION,armedAt:null,armedQuoteAt:null,maxObservationGapMs:30_000,maxQuoteAgeMs:10_000},entryContext:{version:"adaptive-ten-entry-v1",capturedAt:now,timeframe:"5m",side,mode:o.mode,reserve:o.reserve===true,reason:o.reason,entryScore:o.score,
       directionStrength:o.directionStrength,spaceScore:o.spaceScore,positionScore:o.positionScore,executionScore:o.executionScore,
       remainingSpaceRate:o.netRemainingSpaceRate,pullbackRiskRate:o.pullbackRiskRate,edgeRatio:o.edgeRatio,expectedHoldMinutes:o.expectedHoldMinutes,
-      marketFit:o.marketFit,regionId:o.regionId,...(region?{regionLower:region.lower,regionUpper:region.upper,regionCenter:region.center}:{})},
+      marketFit:o.marketFit,regionId:o.regionId,...(region?{regionLower:region.lower*scale,regionUpper:region.upper*scale,regionCenter:region.center*scale}:{})},
     forecast:{remainingNetRate:o.netRemainingSpaceRate,quality:o.score/100,sizingEquity:equity}};
   s.positions.push(t);s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.lastEntryAt[o.symbol]=now;s.lastSide[o.symbol]=side;
   event(s,now,"ENTRY",id,`${o.symbol} ${side} ${o.mode} 评分${o.score.toFixed(0)}`,{notional,plannedRisk});
