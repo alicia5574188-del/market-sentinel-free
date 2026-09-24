@@ -150,6 +150,10 @@ function normalizeTrade(raw:Trade,now:number):Trade{
   t.exitReason=t.exitReason??null;t.relationFailureBars=Math.max(0,Math.floor(safe(t.relationFailureBars)));t.lastRelationBar=safe(t.lastRelationBar,t.openedAt);
   t.execution="REAL_QUOTE_PAPER_MODEL";t.liveEligible=false;t.firstProfitAt=t.firstProfitAt??null;t.holdScore=safe(t.holdScore,50);
   t.profitFloorRate=Math.max(0,safe(t.profitFloorRate));t.expectedHoldMinutes=Math.max(5,safe(t.expectedHoldMinutes,t.entryContext?.expectedHoldMinutes??30));
+  if(t.entryContext&&!(safe(t.entryContext.portfolioRiskCharge)>0)){
+    const sizingEquity=safe(t.forecast?.sizingEquity),floor=sizingEquity*(t.entryContext.reserve===true?.003:.006);
+    if(floor>0)t.entryContext.portfolioRiskCharge=Math.max(t.plannedRisk,floor);
+  }
   t.peakPnlRate=Math.max(0,safe(t.peakPnlRate,t.favorable));return t;
 }
 export function normalizeForward(v:ForwardState|null|undefined,now:number):ForwardState{
@@ -398,7 +402,7 @@ function candidateRiskRate(o:Opportunity){
   const base=o.mode==="RANGE"?.006:o.premium?.009:.008;
   return clip(base*clip(o.riskScale??1,.75,1),.006,.009);
 }
-const riskCharge=(t:Trade)=>Math.max(t.plannedRisk,t.entryContext?.portfolioRiskCharge??0);
+const riskCharge=(t:Trade)=>Math.max(t.plannedRisk,t.entryContext?.portfolioRiskCharge??((t.forecast?.sizingEquity??0)*(t.entryContext?.reserve===true?.003:.006)));
 function existingRisk(s:ForwardState,side?:"LONG"|"SHORT"){return s.positions.filter(t=>!side||t.side===side).reduce((n,t)=>n+riskCharge(t),0);}
 function probeRisk(s:ForwardState){return s.positions.filter(t=>t.entryContext?.reserve===true).reduce((n,t)=>n+riskCharge(t),0);}
 function relationRisk(s:ForwardState,ruleId:string){return s.positions.filter(t=>t.entryContext?.relationRuleId===ruleId).reduce((n,t)=>n+riskCharge(t),0);}
