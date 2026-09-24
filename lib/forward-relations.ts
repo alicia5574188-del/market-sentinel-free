@@ -426,8 +426,13 @@ function rotateIfNeeded(s:ForwardState,quotes:Record<string,Quote>,contracts:Rec
   return true;
 }
 function fillSeats(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,equity:number){
+  const eligible=rankedEligible(s,now);
+  // This is a current-state blocker view, not a retry counter. One candidate can
+  // contribute at most once per execution pass, so the UI can never show
+  // hundreds of fake "failures" from the same waiting opportunity.
+  s.entryDiagnostics={at:now,matched:eligible.length,opened:0,reasons:{}};
   let opened=0;const reject=(reason:string)=>{s.entryDiagnostics.reasons[reason]=(s.entryDiagnostics.reasons[reason]??0)+1;};
-  for(const o of rankedEligible(s,now)){
+  for(const o of eligible){
     const cap=o.premium?ADAPTIVE_REALTIME_POSITION_CAP:ADAPTIVE_TARGET_POSITIONS;if(s.positions.length>=cap)continue;
     if(opened>=3)break;const q=quotes[o.symbol],meta=contracts[o.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
     if(!meta){reject("等待合约规格");continue;}
