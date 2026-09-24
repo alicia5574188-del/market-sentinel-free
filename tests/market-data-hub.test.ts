@@ -7,6 +7,13 @@ function withFetch(handler:(url:string)=>Promise<Response>|Response,run:()=>Prom
   globalThis.fetch=(input)=>handler(String(input));
   return run().finally(()=>{globalThis.fetch=priorFetch;});
 }
+const bybitSurface=(symbol="BTCUSDT",bid=99.9,ask=100.1)=>({retCode:0,result:{list:Array.from({length:20},(_,i)=>({
+  symbol:i===0?symbol:`X${i}USDT`,lastPrice:String(i===0?(bid+ask)/2:10+i),bid1Price:String(i===0?bid:9+i),
+  ask1Price:String(i===0?ask:9.2+i),turnover24h:"1000000",price24hPcnt:"0.01"
+}))}});
+const binanceSurface=(symbol="BTCUSDT",bid=99.9,ask=100.1,time=1_000_000)=>Array.from({length:20},(_,i)=>({
+  symbol:i===0?symbol:`Y${i}USDT`,bidPrice:String(i===0?bid:19+i),askPrice:String(i===0?ask:19.2+i),time
+}));
 
 test("exact Gate-to-external symbol mapping never invents aliases",()=>{
   assert.equal(externalSymbol("BTC_USDT"),"BTCUSDT");
@@ -16,9 +23,7 @@ test("exact Gate-to-external symbol mapping never invents aliases",()=>{
 
 test("one healthy venue keeps the market hub alive when the other fails",async()=>{
   await withFetch(url=>{
-    if(url.includes("api.bybit.com"))return Response.json({retCode:0,result:{list:[
-      {symbol:"BTCUSDT",lastPrice:"100",bid1Price:"99.9",ask1Price:"100.1",turnover24h:"1000000",price24hPcnt:"0.01"}
-    ]}});
+    if(url.includes("api.bybit.com"))return Response.json(bybitSurface());
     throw new DOMException("timeout","TimeoutError");
   },async()=>{
     const hub=new MarketDataHub();await hub.refresh(1_000_000);
@@ -29,10 +34,8 @@ test("one healthy venue keeps the market hub alive when the other fails",async()
 
 test("two venues form consensus and expose disagreement instead of averaging it away",async()=>{
   await withFetch(url=>{
-    if(url.includes("api.bybit.com"))return Response.json({retCode:0,result:{list:[
-      {symbol:"ETHUSDT",lastPrice:"100",bid1Price:"99.9",ask1Price:"100.1",turnover24h:"500000",price24hPcnt:"0.02"}
-    ]}});
-    return Response.json([{symbol:"ETHUSDT",bidPrice:"100.9",askPrice:"101.1",time:1_000_000}]);
+    if(url.includes("api.bybit.com"))return Response.json(bybitSurface("ETHUSDT",99.9,100.1));
+    return Response.json(binanceSurface("ETHUSDT",100.9,101.1));
   },async()=>{
     const hub=new MarketDataHub();await hub.refresh(1_000_000);
     const q=hub.quote("ETH_USDT",1_000_001);assert.ok(q);assert.equal(q.sourceCount,2);
