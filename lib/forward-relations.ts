@@ -1362,14 +1362,11 @@ export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols
 export function forwardUrgentMinuteSymbols(s:ForwardState,entrySymbols?:Iterable<string>){
   if(s.strategyAuthorityVersion!==MULTI_TURN_VERSION)return [];
   const allowed=entrySymbols?new Set(entrySymbols):null;
-  const anchors=Object.values(s.anchorFlows??{}).filter(row=>["READY","RETEST"].includes(row.phase)
-    &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>(a.phase==="READY"?0:1)-(b.phase==="READY"?0:1)
-      ||(b.readyAt??0)-(a.readyAt??0)||b.createdAt-a.createdAt);
   const priority:Record<RegionLaunchState["phase"],number>={IGNITION:0,ARMED:1,READY:2,WATCH:9,CONSUMED:9};
   const launches=Object.values(s.regionLaunches??{}).filter(row=>["IGNITION","ARMED"].includes(row.phase)
     &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>priority[a.phase]-priority[b.phase]
       ||b.quality-a.quality||b.updatedAt-a.updatedAt||a.symbol.localeCompare(b.symbol));
-  return[...new Set([...anchors.map(row=>row.symbol),...launches.map(row=>row.symbol)])].slice(0,11);
+  return[...new Set(launches.map(row=>row.symbol))].slice(0,11);
 }
 
 
@@ -1379,25 +1376,13 @@ export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iter
     const priority:Record<string,number>={PROBE_UP:0,PROBE_DOWN:0,ACCEPTED_UP:1,ACCEPTED_DOWN:1,IN_REGION:2,DETACHED_UP:3,DETACHED_DOWN:3,NO_REGION:4};
     const regions=Object.values(s.regionLifecycles??{}).filter(row=>row.zone&&(!allowed||allowed.has(row.symbol)))
       .sort((a,b)=>(priority[a.status]??9)-(priority[b.status]??9)||b.observedAt-a.observedAt||a.symbol.localeCompare(b.symbol));
-    const signals=(s.regionSignals??[]).filter(signal=>signal.expiresAt>now&&(!allowed||allowed.has(signal.symbol)));
-    const anchorPriority:Record<string,number>={READY:0,FIRED:0,RETEST:1,WAIT_RETEST:2,EXTENSION:3};
-    const anchors=Object.values(s.anchorFlows??{}).filter(row=>row.phase!=="FAILED"&&row.phase!=="CONSUMED"
-      &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>(anchorPriority[a.phase]??9)-(anchorPriority[b.phase]??9)
-        ||(b.readyAt??0)-(a.readyAt??0)||a.createdAt-b.createdAt||a.symbol.localeCompare(b.symbol));
-    const anchorSignals=signals.filter(signal=>signal.kind==="MIGRATION"&&(signal as AnchorFlowEntrySignal).entryModel==="ANCHOR_FLOW")
-      .sort((a,b)=>(s.anchorFlows?.[a.symbol]?.phase==="READY"?0:1)-(s.anchorFlows?.[b.symbol]?.phase==="READY"?0:1)
-        ||(s.anchorFlows?.[b.symbol]?.readyAt??0)-(s.anchorFlows?.[a.symbol]?.readyAt??0));
-    const urgentAnchors=anchors.filter(row=>row.phase==="READY"||row.phase==="RETEST");
-    const passiveAnchors=anchors.filter(row=>row.phase!=="READY"&&row.phase!=="RETEST");
     const launchSignals=(s.regionLaunchSignals??[]).filter(signal=>signal.expiresAt>now&&(!allowed||allowed.has(signal.symbol)));
     const launchPriority:Record<RegionLaunchState["phase"],number>={READY:0,IGNITION:0,ARMED:1,WATCH:9,CONSUMED:9};
     const launches=Object.values(s.regionLaunches??{}).filter(row=>["READY","IGNITION","ARMED"].includes(row.phase)
       &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>launchPriority[a.phase]-launchPriority[b.phase]
         ||b.quality-a.quality||b.updatedAt-a.updatedAt||a.symbol.localeCompare(b.symbol));
-    const otherSignals=signals.filter(signal=>!(signal.kind==="MIGRATION"&&(signal as AnchorFlowEntrySignal).entryModel==="ANCHOR_FLOW"));
-    return[...new Set([...s.positions.map(p=>p.symbol),...anchorSignals.map(x=>x.symbol),...urgentAnchors.map(x=>x.symbol),
-      ...launchSignals.map(x=>x.symbol),...launches.map(x=>x.symbol),...passiveAnchors.map(x=>x.symbol),
-      ...otherSignals.map(x=>x.symbol),...regions.map(x=>x.symbol)])].slice(0,11);
+    return[...new Set([...s.positions.map(p=>p.symbol),...launchSignals.map(x=>x.symbol),
+      ...launches.map(x=>x.symbol),...regions.map(x=>x.symbol)])].slice(0,11);
   }
   const matched=Object.values(s.frames).filter(f=>now-f.at<11*60_000&&s.rules.some(r=>r.status==="EXPERIMENTAL"&&r.expiresAt>now&&ruleApplies(r,f.symbol)&&conditionMatches(f.x,r.conditions)));
   return[...new Set([...s.positions.map(p=>p.symbol),...matched.map(f=>f.symbol)])];
