@@ -47,9 +47,9 @@ function step(state:ForwardState,now:number,mid:number,minutePaths:Record<string
     entrySymbols:["BCH_USDT"],allowDataCycle:false});
 }
 function fastPath(now:number){
-  const breakout=candle(now,100.95,103.30,100.92,103.20);
-  const pullback=candle(now+60_000,103.20,103.22,102.80,102.88);
-  const restart=candle(now+120_000,102.88,103.35,102.86,103.32);
+  const breakout=candle(now,100.95,102.72,100.92,102.62);
+  const pullback=candle(now+60_000,102.62,102.63,102.28,102.32);
+  const restart=candle(now+120_000,102.32,102.56,102.30,102.54);
   return{breakout,pullback,restart};
 }
 function driveFast(state:ForwardState,now:number){
@@ -124,15 +124,15 @@ test("slow route needs a real outside 5m close and fresh first-minute continuati
   const closed=candle(now,101.00,102.06,100.98,102.02),paths={BCH_USDT:[...motherRows(now),closed]};
   s=step(s,now+300_000,102.02,{},paths).state;
   assert.equal(s.positions.length,0);assert.equal(s.regionLaunches!.BCH_USDT!.launchPath,"CLOSED");
-  const continuation=candle(now+300_000,102.02,102.15,102.00,102.14);
-  s=step(s,now+360_000,102.14,{BCH_USDT:[continuation]},paths).state;
+  const continuation=candle(now+300_000,102.02,102.14,102.00,102.13);
+  s=step(s,now+360_000,102.13,{BCH_USDT:[continuation]},paths).state;
   assert.equal(s.positions.length,1);assert.equal(s.regionLaunches!.BCH_USDT!.phase,"CONSUMED");
   assert.match(s.positions[0]!.rule.reason,/第一根完整1分钟K继续突破/);
 });
 
 test("weakening an unfinished fast 5m move revokes its old micro ignition and never opens on stale strength",()=>{
   const now=BASE;let s=seeded(now);
-  const first=candle(now,100.95,103.30,100.92,103.20),fade=candle(now+60_000,103.20,103.22,101.35,101.42);
+  const first=candle(now,100.95,102.72,100.92,102.62),fade=candle(now+60_000,103.20,103.22,101.35,101.42);
   s=step(s,now+60_000,103.20,{BCH_USDT:[first]}).state;assert.equal(s.regionLaunches!.BCH_USDT!.phase,"IGNITION");
   s=step(s,now+120_000,101.42,{BCH_USDT:[first,fade]}).state;
   assert.equal(s.positions.length,0);assert.equal(s.regionLaunches!.BCH_USDT!.phase,"ARMED");
