@@ -13,8 +13,8 @@ const quote=(mid:number,at:number):Quote=>({bestBid:mid*.99995,bestAsk:mid*1.000
 const candle=(timeMs:number,o:number,h:number,l:number,c:number)=>({time:timeMs/1000,open:o,high:h,low:l,close:c,volume:1000});
 const motherRows=(now:number)=>Array.from({length:36},(_,i)=>{
   const time=now-(36-i)*300_000,open=100+(i%2?-.08:.08),close=100+(i%2?.08:-.08);
-  const high=i===4?101.18:Math.max(open,close)+.20+(i%3)*.015;
-  const low=i===10?98.82:Math.min(open,close)-.20-(i%4)*.01;
+  const high=i===4?101.18:Math.max(open,close)+.08+(i%3)*.01;
+  const low=i===10?98.82:Math.min(open,close)-.08-(i%4)*.008;
   return candle(time,open,high,low,close);
 });
 const lifecycle=(symbol:string,now:number):RegionLifecycleState=>({
