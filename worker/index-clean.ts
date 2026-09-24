@@ -2970,6 +2970,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const task=(async()=>{
       let subrequests=0;
       this.launchLiveSettlementBackground();
+      const hub=this.marketHub.status(Date.now());
+      if(hub.healthySources===0){
+        const refresh=this.marketHub.launchRefresh(Date.now());
+        if(refresh)await refresh.catch(()=>undefined);
+      }
       if(universeDue){
         subrequests+=2;
         try{this.refreshUniverse(Date.now(),await fetchActiveContracts());}
