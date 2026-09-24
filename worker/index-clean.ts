@@ -2795,14 +2795,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private forwardMinutePaths(){
-    const officialCache=this.forwardMinuteCandles??{},syntheticCache=this.forwardMinuteQuoteBars??{};
-    const symbols=new Set([...Object.keys(officialCache),...Object.keys(syntheticCache)]);
-    return Object.fromEntries([...symbols].flatMap(symbol=>{
-      // Never mix Gate absolute prices into an external 5m structure. Prefer
-      // same-venue 1m candles; consensus quote bars are only a short fallback.
-      const official=officialCache[symbol]??[],synthetic=syntheticCache[symbol]?.completed??[];
-      const rows=(official.length>=3?official:synthetic).slice(-90);
-      return rows.length?[[symbol,rows]]:[];
+    const officialCache=this.forwardMinuteCandles??{};
+    return Object.fromEntries(Object.entries(officialCache).flatMap(([symbol,official])=>{
+      // 1m confirmation must come from the same official analysis venue as 5m.
+      // Synthetic cross-venue quote bars are never allowed to certify a breakout.
+      const rows=(official??[]).slice(-90);
+      return rows.length>=3?[[symbol,rows]]:[];
     }));
   }
 
