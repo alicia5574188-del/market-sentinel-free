@@ -33,7 +33,7 @@ export type RelationEngineState={version:typeof FORWARD_RELATION_V2_VERSION;star
   diagnostics:{markets:number;matureSamples:number;rules:number;active:number;pressured:number;degraded:number;recovering:number;liveAnomalies:number;
     qualified15:number;qualified60:number;qualified180:number;warmup:string}};
 
-const BAR_MS=300_000,DAY=86_400_000,SAMPLE_LIMIT_PER_HORIZON=128,RULE_LIMIT=24;
+const BAR_MS=300_000,DAY=86_400_000,SAMPLE_LIMIT_PER_HORIZON=384,RULE_LIMIT=24;
 const COST=.0019;
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
 const mean=(v:number[])=>v.length?v.reduce((a,b)=>a+b,0)/v.length:0;
@@ -161,7 +161,7 @@ export function advanceRelationEngine(input:{state?:RelationEngineState|null;pat
     degraded:counts("DEGRADED"),recovering:counts("RECOVERING"),liveAnomalies,qualified15:qualified(15),qualified60:qualified(60),qualified180:qualified(180),warmup};return state;}
 
 export function relationCandidates(state:RelationEngineState){const rows:RelationCandidate[]=[];for(const frame of Object.values(state.frames))for(const rule of state.rules){
-  if(!matches(frame.x,rule.conditions)||!rule.symbols.includes(frame.symbol))continue;const reserve=rule.status!=="ACTIVE"||rule.health<.68,net=Math.max(COST*.15,rule.longNet*clip(.45+.55*rule.health,.2,1)),gross=net+COST,
+  if(!matches(frame.x,rule.conditions)||!rule.symbols.includes(frame.symbol))continue;const reserve=rule.scope==="RECENT"||rule.status!=="ACTIVE"||rule.health<.68,net=Math.max(COST*.15,rule.longNet*clip(.45+.55*rule.health,.2,1)),gross=net+COST,
     edge=net/Math.max(rule.stopRate,COST),score=clip(32+36*rule.health+10*rule.environmentFit+10*rule.livePathScore+12*clip(edge/.8),0,100);
   if(rule.health<.15||!(rule.longNet>0))continue;rows.push({symbol:frame.symbol,ruleId:rule.id,side:rule.side,horizon:rule.horizon,status:rule.status,health:rule.health,
     score,netRate:net,grossRate:gross,stopRate:rule.stopRate,environmentFit:rule.environmentFit,livePathScore:rule.livePathScore,reserve,
