@@ -14,7 +14,7 @@ const contract:Contract={quantoMultiplier:.001,leverageMax:20,maintenanceRate:.0
 
 function source(){
   const path=makePath(),now=(path.at(-1)!.time+300)*1000+1000,price=path.at(-1)!.close;
-  let s=initialForward(now-60_000);
+  const s=initialForward(now-60_000);
   const opportunity:Opportunity={id:"fixture-relation",symbol:"BTC_USDT",side:"LONG",mode:"RELATION",premium:false,reserve:false,
     score:82,eligible:true,completedAt:now-1000,expiresAt:now+60_000,price,stopPrice:price*.992,targetPrice:price*1.012,
     stopRate:.008,targetRate:.012,directionStrength:82,pathEfficiency:80,momentumPersistence:80,positionScore:80,spaceScore:80,
