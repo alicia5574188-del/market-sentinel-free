@@ -274,6 +274,7 @@ test("retired systems remain isolated; only current PAPER can create new LIVE en
   assert.match(worker, /participationCandidateCount/);
   assert.match(worker, /participationEligibleCount/);
   assert.match(worker, /targetPositionCount:10/);
+  assert.match(worker, /armedContinuity=launches\.filter\([\s\S]{0,320}\.slice\(0,4\)/);
   assert.match(worker, /SCAN_UNIVERSE_SIZE = 30/);
   assert.match(worker, /eligible\.has\(row\.symbol\) && forwardSymbolAllowed\(row\.symbol\)/);
   assert.match(worker, /import \{ forwardSymbolAllowed \} from "\.\.\/lib\/forward-evidence\.ts"/);
