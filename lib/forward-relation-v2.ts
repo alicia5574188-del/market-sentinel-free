@@ -131,7 +131,7 @@ function synthesize(state:RelationEngineState,paths:Record<string,RelationCandle
     for(const conditions of conditionsPool){const rapid=recentCandidate(discovery,conditions);if(!rapid)continue;const selected=discovery.filter(r=>matches(r.x,conditions)).slice(-36);
       made.push(ruleFrom({state,paths,conditions,horizon:15,scope:"RECENT",side:rapid.side,net:rapid.net,se:rapid.se,selected,longGroups:3,now,currentEnv}));}
   }
-  const best=new Map<string,RelationRule>();for(const r of made){const key=`${r.horizon}:${r.side}:${r.conditions.map(c=>`${c.feature}${c.op}`).join("-")}`,
+  const best=new Map<string,RelationRule>();for(const r of made){const key=`${r.scope}:${r.horizon}:${r.side}:${r.conditions.map(c=>`${c.feature}${c.op}`).join("-")}`,
     prior=best.get(key);if(!prior||r.health*r.longNet>prior.health*prior.longNet)best.set(key,r);}const next=[...best.values()].sort((a,b)=>b.health*b.longNet-a.health*a.longNet).slice(0,RULE_LIMIT);
   for(const old of state.rules){if(next.some(r=>r.signature===old.signature))continue;if(now-old.lastQualifiedAt>Math.max(3*60*60_000,old.horizon*4*60_000))continue;
     next.push({...old,status:"DEGRADED",health:Math.min(.25,old.health),updatedAt:now,reason:"旧关系未再通过成熟样本验证；仅保留低风险探测，不推导反向"});}
