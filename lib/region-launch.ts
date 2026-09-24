@@ -72,12 +72,15 @@ function compressionFrom(rows:RegionCandle[],mother:Pick<RegionLaunchState,
   // Detection may use a robust statistical core, but execution must use every
   // wick belonging to the actual mature region. This is the trading box.
   const firstComplete=mother.motherConfirmedAt-(mother.motherBars-1)*REGION_BAR_MS;
-  const base=completed.filter(r=>completeAt(r)>=firstComplete&&completeAt(r)<=mother.motherConfirmedAt);
-  if(base.length<Math.min(12,mother.motherBars))return null;
-
+  const historical=completed.filter(r=>completeAt(r)>=firstComplete&&completeAt(r)<=mother.motherConfirmedAt);
+  // Normal production paths contain the full mother history. Compact fixtures or
+  // a newly restored cache may not; in that case keep the lifecycle bounds as a
+  // conservative fallback until the missing historical bars arrive rather than
+  // inventing a smaller child box.
+  const base=historical.length>=Math.min(12,mother.motherBars)?historical:[];
   const envelope=[...base];
-  let lower=Math.min(mother.motherLower,...base.map(r=>r.low));
-  let upper=Math.max(mother.motherUpper,...base.map(r=>r.high));
+  let lower=base.length?Math.min(mother.motherLower,...base.map(r=>r.low)):mother.motherLower;
+  let upper=base.length?Math.max(mother.motherUpper,...base.map(r=>r.high)):mother.motherUpper;
   // After confirmation, a candle that CLOSES inside remains part of the same
   // winding region and its wick expands the boundary. The first outside close
   // freezes the box; it is never swallowed into a rolling child box.
@@ -85,17 +88,20 @@ function compressionFrom(rows:RegionCandle[],mother:Pick<RegionLaunchState,
     if(row.close<lower||row.close>upper)break;
     envelope.push(row);
     lower=Math.min(lower,row.low);upper=Math.max(upper,row.high);
-    if(envelope.length>=mother.motherBars+12)break;
+    if(envelope.length>=Math.max(12,mother.motherBars)+12)break;
   }
   if(!(upper>lower&&lower>0))return null;
-  const closes=envelope.map(r=>r.close),center=quantile(closes,.50),width=upper-lower,widthRate=width/Math.max(center,1e-12);
+  const closes=envelope.length?envelope.map(r=>r.close):[mother.motherCenter];
+  const center=quantile(closes,.50),width=upper-lower,widthRate=width/Math.max(center,1e-12);
   if(widthRate<Math.max(.0015,costRate*1.50)||widthRate>.25)return null;
   const cross=crossings(closes,center);
   let overlaps=0;for(let i=1;i<envelope.length;i++)if(overlap(envelope[i-1]!,envelope[i]!)>=.15)overlaps++;
-  const reference=envelope.slice(-20);
-  return{id:`rc-${envelope[0]!.time}-${envelope.at(-1)!.time}-${lower.toPrecision(8)}-${upper.toPrecision(8)}`,
-    startAt:completeAt(envelope[0]!),endAt:completeAt(envelope.at(-1)!),bars:envelope.length,lower,upper,center,width,widthRate,
-    coreLower:mother.motherLower,coreUpper:mother.motherUpper,
+  const reference=(envelope.length?envelope:completed.filter(r=>completeAt(r)>mother.motherConfirmedAt).slice(0,20)).slice(-20);
+  if(!reference.length)return null;
+  const startRow=envelope[0]??reference[0]!,endRow=envelope.at(-1)??reference[0]!;
+  return{id:`rc-${startRow.time}-${endRow.time}-${lower.toPrecision(8)}-${upper.toPrecision(8)}`,
+    startAt:completeAt(startRow),endAt:Math.max(mother.motherConfirmedAt,completeAt(endRow)),bars:Math.max(mother.motherBars,envelope.length),
+    lower,upper,center,width,widthRate,coreLower:mother.motherLower,coreUpper:mother.motherUpper,
     averageRange:reference.reduce((n,r)=>n+r.high-r.low,0)/reference.length,
     averageBody:reference.reduce((n,r)=>n+Math.abs(r.close-r.open),0)/reference.length,
     crossings:cross,overlapPairs:overlaps};
