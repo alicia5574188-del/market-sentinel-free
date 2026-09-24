@@ -68,12 +68,12 @@ export function evaluateMicroRestart(input:{breakout:MicroCandle;following:Micro
     const current=d*(row.close/triggerPrice-1);
     const breakoutStrength=Math.max(quality.bodyRate,quality.impulseRate);
 
-    // "Small pullback" is not a candle count. It is a hard relationship to the
-    // original impulse: close giveback <= 50%, cumulative adverse candle bodies
-    // <= 70% of the breakout body, and the impulse must remain at least 1.35x
-    // the accumulated opposite bodies.
-    const tooDeep=current<=0||pullbackClose>breakoutStrength*.50||pullbackExtreme>breakoutStrength*.65
-      ||cumulativeAdverse>quality.bodyRate*.70||quality.bodyRate<cumulativeAdverse*1.35;
+    // "Small pullback" is not a candle count. It must stay visibly smaller than
+    // the breakout itself: close giveback <=35%, wick/extreme giveback <=45%,
+    // cumulative opposite bodies <=45%, and the original breakout body must
+    // remain at least 1.75x the accumulated opposite bodies.
+    const tooDeep=current<=0||pullbackClose>breakoutStrength*.35||pullbackExtreme>breakoutStrength*.45
+      ||cumulativeAdverse>quality.bodyRate*.45||quality.bodyRate<cumulativeAdverse*1.75;
     if(tooDeep)return{state:"FAIL",
       reason:`回调已经不再属于小回调：突破实体${(quality.bodyRate*100).toFixed(2)}%，累计反向实体${(cumulativeAdverse*100).toFixed(2)}%，收盘回吐${(pullbackClose*100).toFixed(2)}%。母结构继续观察，但本次启动不追。`,
       pullbackCloseRate:pullbackClose,pullbackExtremeRate:pullbackExtreme,cumulativeAdverseBodyRate:cumulativeAdverse,
@@ -81,8 +81,9 @@ export function evaluateMicroRestart(input:{breakout:MicroCandle;following:Micro
 
     const metrics=microDirectionalBar(row,side),resumeMove=d*(row.close/prior.close-1);
     const localBreak=side==="LONG"?row.close>prior.high:row.close<prior.low;
-    const minResume=Math.max(.0006,costRate*.25);
-    const resumed=localBreak&&metrics.bodyRate>=minResume&&metrics.closeLocation>=.62&&metrics.wickToBody<=.65&&resumeMove>0;
+    const minResume=Math.max(.0008,costRate*.35);
+    const resumed=localBreak&&metrics.bodyRate>=minResume&&metrics.closeLocation>=.68&&metrics.wickToBody<=.50
+      &&resumeMove>=Math.max(.0003,costRate*.10);
     const hadPullback=cumulativeAdverse>0||pullbackClose>0;
     const continuation=index===0&&!hadPullback&&localBreak&&assessStrongBreakout({bar:row,side,
       triggerPrice:breakoutExtreme,costRate,regionWidthRate:input.regionWidthRate}).ok;

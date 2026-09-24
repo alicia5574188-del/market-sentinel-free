@@ -1098,12 +1098,14 @@ jobs:
               .runtime.forward.strategyAuthorityVersion == "multi-turn-v1" and
               .runtime.forward.executionVersion == "anchor-flow-v1" and
               .runtime.forward.regionVersion == "region-lifecycle-v1" and
+              .runtime.forward.regionLaunchVersion == "region-launch-v3" and
               .runtime.forward.liveEligible == false and
               .runtime.forward.initialEquity == 1000 and
               (.runtime.forward.startedAt | type) == "number" and .runtime.forward.startedAt > 0 and
               (.runtime.forward.lastCycleAt | type) == "number" and .runtime.forward.lastCycleAt > 0 and
               (.runtime.forward.openCount | type) == "number" and
               (.runtime.forward.anchorFlowCount | type) == "number" and
+              (.runtime.forward.regionLaunchCount | type) == "number" and
               (.runtime.forward.executableEventCount | type) == "number" and
               .runtime.forward.storage.persistedAt >= .runtime.forward.lastCycleAt and
               .runtime.forward.storage.error == null and
@@ -1157,7 +1159,7 @@ jobs:
           page_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/main-page.html" -w '%{http_code}' \
             "$WORKER_BASE_URL/" || true)"
           [[ "$page_code" == "200" ]]
-          grep -Fq '哨兵 · AnchorFlow' "$RUNNER_TEMP/main-page.html"
+          grep -Fq '哨兵 · RegionLaunch' "$RUNNER_TEMP/main-page.html"
           jq -e --arg sha "$GITHUB_SHA" '.runtime.buildSha == $sha' "$RUNNER_TEMP/main-health.json" >/dev/null
           before="$(jq -r '.runtime.liveMode.requestedEnabled' "$RUNNER_TEMP/owner-intent-before.json")"
           after="$(jq -r '.runtime.liveMode.requestedEnabled' "$RUNNER_TEMP/main-health.json")"
@@ -1289,7 +1291,7 @@ jobs:
           page_code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/monitor-page.html" -w '%{http_code}' \
             "$WORKER_BASE_URL/" || true)"
           [[ "$page_code" == "200" ]]
-          grep -Fq '哨兵 · AnchorFlow' "$RUNNER_TEMP/monitor-page.html"
+          grep -Fq '哨兵 · RegionLaunch' "$RUNNER_TEMP/monitor-page.html"
           jq -e '.members.version == "isolated-member-keys-v1" and .members.configured == true' "$RUNNER_TEMP/monitor-health-2.json" >/dev/null
           for path in /api/runtime /api/forward/export /api/forward/archive /api/history /api/account-logs; do
             code="$(curl -sS --max-time 15 -o "$RUNNER_TEMP/monitor-guest-denied.json" -w '%{http_code}' "$WORKER_BASE_URL$path")"

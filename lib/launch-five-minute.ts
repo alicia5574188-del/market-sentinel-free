@@ -45,17 +45,33 @@ export function launchFiveMinuteEvidence(input:{box:LaunchBox;minutes:MicroCandl
     if(!side)continue;
     const metrics=microDirectionalBar(b,side),body=Math.abs(b.close-b.open),multiple=body/Math.max(range,1e-12);
     const directed=(side==="LONG"?1:-1)*(b.close-b.open)>0;
-    const strongShape=directed&&metrics.closeLocation>=.75&&metrics.wickToBody<=.35;
-    const retainedFast=input.fastQualifiedAt!=null&&b.time===Math.floor((input.fastQualifiedAt-1)/BAR)*300
-      &&body>=Math.max(range*.60,(input.initialFastBody??0)*.50);
+    const boundary=side==="LONG"?box.upper:box.lower;
+    const outsideBody=side==="LONG"
+      ?Math.max(0,b.close-Math.max(b.open,boundary))
+      :Math.max(0,Math.min(b.open,boundary)-b.close);
+    const outsideBodyShare=outsideBody/Math.max(body,1e-12);
+    const strongShape=directed&&metrics.closeLocation>=.75&&metrics.wickToBody<=.35&&outsideBodyShare>=.25;
+    // First qualification must be >=3x the recent average range. After that,
+    // the SAME unfinished 5m candle may absorb only a genuinely small pullback:
+    // retain FAST only while >=70% of the originally qualified body and >=2x
+    // the recent average range remain. This encodes the user's "strong impulse
+    // still obviously larger than the pullback" rule without grandfathering a
+    // collapsed candle.
+    const sameFastBucket=input.fastQualifiedAt!=null
+      &&b.time===Math.floor((input.fastQualifiedAt-1)/BAR)*300;
+    const retainedFast=sameFastBucket&&(input.initialFastBody??0)>0
+      &&body>=(input.initialFastBody??0)*.70&&multiple>=2;
     const fast=strongShape&&(multiple>=3||retainedFast)&&metrics.bodyRate>=input.costRate*.75;
     const closed=(b.time+300)*1000<=now;
-    const accepted=closed&&directed&&body>=Math.max(range*.60,averageBody,b.open*input.costRate*.75)
-      &&metrics.closeLocation>=.70&&metrics.wickToBody<=.50;
+    // The slower path is still a real 5m breakout, not a marginal close outside.
+    // Require a long body, a meaningful share of that body beyond the full box,
+    // a strong close, and controlled adverse wick before looking at 1m follow-through.
+    const accepted=closed&&directed&&body>=Math.max(range*1.20,averageBody*1.60,b.open*input.costRate*.90)
+      &&outsideBodyShare>=.20&&metrics.closeLocation>=.72&&metrics.wickToBody<=.45;
     if(fast&&(!proof||proof.state==="CLOSED"))proof={state:"FAST",side,bar:b,bodyMultiple:multiple,
-      reason:`${retainedFast&&multiple<3?"5分钟此前已达异常强离区，回调后当前":"5分钟"}实体为前期平均振幅${multiple.toFixed(2)}倍，完整边界外强势离区；允许1分钟确认。`};
+      reason:`5分钟实体为前期平均振幅${multiple.toFixed(2)}倍，且实体有${(outsideBodyShare*100).toFixed(0)}%已经真正离开完整边界；允许切换1分钟确认。`};
     else if(accepted&&!proof)proof={state:"CLOSED",side,bar:b,bodyMultiple:multiple,
-      reason:"5分钟已在完整边界外有效收盘；观察下一根加速，或区间外小回调后的再次突破。"};
+      reason:`5分钟已用长实体在完整边界外有效收盘，实体外离占比${(outsideBodyShare*100).toFixed(0)}%；观察第一根1分钟强延续，或区间外小回调后的再次突破。`};
   }
   return proof?{...proof,current}:{state:"WAIT",current,reason:"5分钟尚未有效离开完整区间：未收盘需实体达到前期平均振幅3倍；较慢离区等收盘和后续确认，长影线不算突破。"};
 }
@@ -77,17 +93,17 @@ export function evaluateSlowLaunchRestart(input:{bar:MicroCandle;following:Micro
     const oldHigh=high,oldLow=low;
     high=Math.max(high,b.high);low=Math.min(low,b.low);adverse+=Math.max(0,-d*(b.close-b.open));
     const giveback=side==="LONG"?bar.close-low:high-bar.close;
-    if(d*(b.close-input.boundary)<=0||giveback>body*.50||adverse>body*.70)
-      return empty("FAIL","较慢离区后回到区间或回调超过原5分钟实体允许幅度；本次离区失效。");
+    if(d*(b.close-input.boundary)<=0||giveback>body*.35||adverse>body*.45)
+      return empty("FAIL","较慢离区后回到区间，或回调已超过原5分钟实体的35%/累计反向实体超过45%；不再属于小回调，本次离区失效。");
     const metrics=microDirectionalBar(b,side),beyond=side==="LONG"?b.close>oldHigh:b.close<oldLow;
-    if(i===0&&!reversal&&beyond&&metrics.bodyRate>=Math.max(.0008,input.costRate*.35)
-      &&metrics.closeLocation>=.75&&metrics.wickToBody<=.35){
+    if(i===0&&!reversal&&beyond&&metrics.bodyRate>=Math.max(.0010,input.costRate*.40)
+      &&metrics.closeLocation>=.78&&metrics.wickToBody<=.30){
       return{state:"READY",confirmation:"CONTINUATION",reason:"5分钟区间外收盘后，第一根完整1分钟K继续突破5分钟离区极值，实体、收盘位置与影线均满足强延续确认。",
         pullbackCloseRate:0,pullbackExtremeRate:Math.max(0,giveback)/bar.close,
         cumulativeAdverseBodyRate:adverse/bar.open,restartAt:(b.time+60)*1000,restartPrice:b.close,supportPrice:side==="LONG"?low:high};
     }
-    if(hadPullback&&!reversal&&beyond&&metrics.bodyRate>=Math.max(.0006,input.costRate*.25)
-      &&metrics.closeLocation>=.65&&metrics.wickToBody<=.50){
+    if(hadPullback&&!reversal&&beyond&&metrics.bodyRate>=Math.max(.0008,input.costRate*.30)
+      &&metrics.closeLocation>=.68&&metrics.wickToBody<=.45){
       return{state:"READY",confirmation:"PULLBACK_RESTART",reason:"5分钟区间外收盘后仅小回调，当前1分钟实体重新突破整段回调极值。",
         pullbackCloseRate:Math.max(0,giveback)/bar.close,pullbackExtremeRate:Math.max(0,giveback)/bar.close,
         cumulativeAdverseBodyRate:adverse/bar.open,restartAt:(b.time+60)*1000,restartPrice:b.close,supportPrice:side==="LONG"?low:high};

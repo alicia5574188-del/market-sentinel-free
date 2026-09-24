@@ -68,6 +68,9 @@ import { advanceStrategyArena as advancePreviousStrategyArena,
   type StrategyArenaState as PreviousStrategyArenaState } from "../lib/previous-strategy-arena.ts";
 
 const LOOP_MS = 2_000;
+const LIVE_FAST_SNAPSHOT_MAX_AGE_MS = 5_000;
+const LIVE_RECONCILE_ACTIVE_MS = 5_000;
+const LIVE_RECONCILE_IDLE_MS = 10_000;
 // Whole-system display/health tolerance only. Executable quotes remain guarded
 // by the stricter per-symbol STALE_AFTER_MS/freshQuote checks; this must never
 // authorize an order from an old price. A few missed 2s polls should not make
@@ -531,7 +534,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   protected liveSyncWork: Promise<void> | null = null;
   private liveBackgroundWork: Promise<void> | null = null;
   private liveSourcePending=false;
-  private liveExecution={version:"event-driven-live-v1",cycles:0,sourceWakeups:0,
+  private liveFastSourcePending=false;
+  private livePreferCachedNext=false;
+  private liveSnapshotCache:GateLiveSnapshot|null=null;
+  private liveNextReconcileAt=0;
+  private liveSyncUsedCached=false;
+  private liveExecution={version:"event-driven-live-v2",cycles:0,sourceWakeups:0,
     startedAt:null as number|null,finishedAt:null as number|null,lastDurationMs:null as number|null};
   private liveReadTimeoutStreak=0;
   protected liveJournal = new Map<string, unknown>();
@@ -551,6 +559,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       .map(([symbol,entry])=>[symbol,entry&&!["FILLED","CANCELLED"].includes(entry.status)?entry:null]));
     this.runtime.live.entrySkips={};this.liveHistory=[];this.historyReader.reset(startedAt);this.liveRecordEpochDirty=true;
     return true;
+  }
+  private clearRetiredLiveTransportError(){
+    const retired=(value:string|null|undefined)=>typeof value==="string"
+      &&value.includes("Invalid redirect value")&&value.includes("redirect");
+    if(retired(this.runtime.live.lastError))this.runtime.live.lastError=null;
+    for(const entry of Object.values(this.runtime.live.entries)){
+      if(entry&&retired(entry.lastError))entry.lastError=null;
+    }
   }
   private async ensureLiveRecordEpoch(now=Date.now()){
     this.alignLiveRecordEpoch(now);
@@ -698,6 +714,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       if(this.runtime.live.activation&&this.runtime.live.activation.version!==LIVE_SESSION_VERSION)
         this.liveBindingError="实盘开启会话版本不兼容，停止新增复制，不改写所有者开关";
+      // Retire the old Cloudflare redirect-option exception from durable UI
+      // state after the transport code has been upgraded to redirect:"manual".
+      this.clearRetiredLiveTransportError();
       // A major strategy execution-version change starts a fresh LIVE record
       // epoch. Gate history and immutable parity bindings remain untouched, but
       // the operator-facing record/archive cycle starts from this strategy epoch.
@@ -883,32 +902,34 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // the remaining slots rotate through liquid contracts without giving turnover
     // or raw volatility any direct trading authority.
     const eligibleRows = rows.filter((row) => eligible.has(row.symbol) && forwardSymbolAllowed(row.symbol));
-    const anchorFlows=Object.values(this.forwardState?.anchorFlows??{});
     const launches=Object.values(this.forwardState?.regionLaunches??{});
-    const urgentAnchors=anchorFlows.filter(row=>row.phase==="READY"||row.phase==="RETEST")
-      .sort((a,b)=>(a.phase==="READY"?0:1)-(b.phase==="READY"?0:1)||(b.readyAt??0)-(a.readyAt??0));
+    const tickerBySymbol=new Map(eligibleRows.map(row=>[row.symbol,row]));
     const launchPriority=(phase:string)=>phase==="READY"?0:phase==="IGNITION"?1:phase==="ARMED"?2:9;
+    const boundaryDistance=(row:(typeof launches)[number])=>{
+      const px=tickerBySymbol.get(row.symbol)?.last,c=row.compression;
+      if(!(px&&c&&c.width>0))return Number.POSITIVE_INFINITY;
+      return Math.min(Math.abs(px-c.lower),Math.abs(px-c.upper))/c.width;
+    };
+    // Realtime slots go first to the already-formed regions that are actually
+    // closest to a full-boundary departure, then to region quality. This keeps
+    // broad moves from wasting scarce 1m/book capacity on distant setups.
     const urgentLaunches=launches.filter(row=>["READY","IGNITION","ARMED"].includes(row.phase))
       .sort((a,b)=>launchPriority(a.phase)-launchPriority(b.phase)
-        ||b.quality-a.quality||b.updatedAt-a.updatedAt);
-    // Retain a bounded sleeve of the best mature mother regions long enough to
-    // form their child compression. Locking every WATCH forever would stop the
-    // exploration sleeve; locking none was evicting setups before ignition.
-    const launchContinuity=launches.filter(row=>row.phase==="WATCH"&&now-row.updatedAt<=30*60_000)
-      .sort((a,b)=>b.quality-a.quality||b.failedDepartures-a.failedDepartures||b.motherBars-a.motherBars||b.updatedAt-a.updatedAt)
-      .slice(0,6);
-    const passiveAnchors=anchorFlows.filter(row=>!["READY","RETEST","FAILED","CONSUMED"].includes(row.phase))
-      .sort((a,b)=>b.createdAt-a.createdAt).slice(0,6);
+        ||boundaryDistance(a)-boundaryDistance(b)||b.quality-a.quality||b.updatedAt-a.updatedAt);
+    // Keep more recent mature regions in the 30-symbol completed-5m universe;
+    // they do not consume realtime slots until they become close/urgent.
+    const launchContinuity=launches.filter(row=>row.phase==="WATCH"&&now-row.updatedAt<=45*60_000)
+      .sort((a,b)=>b.quality-a.quality||boundaryDistance(a)-boundaryDistance(b)
+        ||b.failedDepartures-a.failedDepartures||b.motherBars-a.motherBars||b.updatedAt-a.updatedAt)
+      .slice(0,10);
     const lockedAnchorSymbols=[...new Set([
       ...(this.forwardState?.positions.flatMap(position=>position.status==="OPEN"?[position.symbol]:[])??[]),
-      ...(this.forwardState?.regionSignals??[]).filter(signal=>signal.expiresAt>now).map(signal=>signal.symbol),
       ...(this.forwardState?.regionLaunchSignals??[]).filter(signal=>signal.expiresAt>now).map(signal=>signal.symbol),
-      ...urgentAnchors.map(row=>row.symbol),...urgentLaunches.map(row=>row.symbol),
-      ...launchContinuity.map(row=>row.symbol),...passiveAnchors.map(row=>row.symbol),
+      ...urgentLaunches.map(row=>row.symbol),...launchContinuity.map(row=>row.symbol),
     ])];
     const universeRows = selectAnchorOpportunityUniverse({ rows: eligibleRows, limit: SCAN_UNIVERSE_SIZE,
       lockedSymbols: lockedAnchorSymbols, currentSymbols: this.runtime.liquidUniverse,
-      coreSymbols:DEFAULT_SYMBOLS,rotationSeed: Math.floor(now / BAR_MS),explorationSlots:4,liquiditySlots:6 });
+      coreSymbols:DEFAULT_SYMBOLS,rotationSeed: Math.floor(now / BAR_MS),explorationSlots:0,liquiditySlots:10 });
     const universe = new Set(universeRows.map((row) => row.symbol));
     this.runtime.liquidUniverse = universeRows.map((row) => row.symbol);
     this.runtime.radar = successfulRadarRuntime(this.runtime.radar, now, universeRows.length, []);
@@ -1064,11 +1085,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private forwardHealth() {
     const s=this.forwardState;
     return {version:FORWARD_VERSION,policyVersion:s?.policyVersion??null,strategyAuthorityVersion:s?.strategyAuthorityVersion??null,
-      executionVersion:s?.executionVersion??null,regionVersion:s?.regionVersion??null,liveEligible:false,
+      executionVersion:s?.executionVersion??null,regionVersion:s?.regionVersion??null,regionLaunchVersion:s?.regionLaunchVersion??null,liveEligible:false,
       startedAt:s?.startedAt??null,initialEquity:s?.initialEquity??null,balance:s?.balance??null,
       lastCycleAt:s?.lastCycleAt??null,resolved:s?.resolved??0,openCount:s?.positions.length??0,
+      // anchorFlowCount stays visible only as an upgrade-drain diagnostic. It
+      // must fall to zero after the first completed data cycle because it has no
+      // new-entry authority.
       anchorFlowCount:Object.values(s?.anchorFlows??{}).filter(row=>row.phase!=="FAILED"&&row.phase!=="CONSUMED").length,
-      executableEventCount:(s?.regionSignals??[]).filter(row=>row.expiresAt>Date.now()).length,
+      regionLaunchCount:Object.values(s?.regionLaunches??{}).filter(row=>["ARMED","IGNITION","READY"].includes(row.phase)).length,
+      executableEventCount:(s?.regionLaunchSignals??[]).filter(row=>row.expiresAt>Date.now()).length,
       exitPolicyVersion:s?.exitPolicyUpgrade?.policy??null,exitPolicyActivatedAt:s?.exitPolicyUpgrade?.at??null,
       timelyExitOpenCount:s?.positions.filter(t=>!!t.exitControl&&t.exitControl.policy===s.exitPolicyUpgrade?.policy).length??0,
       inheritedExitOpenCount:s?.positions.filter(t=>!t.exitControl).length??0,
@@ -2189,14 +2214,26 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private launchLiveWork(sourceChanged=false) {
     if(!this.liveNeedsSync())return;
-    if(sourceChanged){this.liveSourcePending=true;this.liveExecution.sourceWakeups++;}
+    const requestedAt=Date.now();
+    if(sourceChanged){
+      this.liveSourcePending=true;this.liveFastSourcePending=true;this.liveExecution.sourceWakeups++;
+    }else if(requestedAt<this.liveNextReconcileAt)return;
     if(this.liveBackgroundWork)return;
     const task=(async()=>{
       do{
-        this.liveSourcePending=false;
+        const preferCached=this.liveFastSourcePending;
+        this.liveFastSourcePending=false;this.liveSourcePending=false;this.liveSyncUsedCached=false;
         const started=Date.now(),requestsBefore=this.liveClient?.requestCount??0;
         this.liveExecution.startedAt=started;this.liveExecution.cycles++;
-        try{await this.syncLive(started);}
+        try{
+          this.livePreferCachedNext=preferCached;
+          await this.syncLive(started);
+          // If a committed PAPER source was handled from a very recent verified
+          // Gate snapshot, immediately follow with one network reconciliation.
+          // This removes the pre-submit private-read delay without pretending the
+          // cache is exchange confirmation.
+          if(preferCached&&this.liveSyncUsedCached)this.liveSourcePending=true;
+        }
         catch(error){
           const message=safeError(error),blocked=liveFailureRequiresOff(error);
           const shouldRecord=this.runtime.live.lastError!==message||this.runtime.live.operational;
@@ -2210,9 +2247,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           this.liveExecution.lastDurationMs=Date.now()-started;
           this.runtime.subrequestCount+=Math.max(0,(this.liveClient?.requestCount??requestsBefore)-requestsBefore);
         }
-        // Alarms merely join; only an actual committed source lifecycle event
-        // requests a follow-up. No overlapping write lanes or busy retries.
       }while(this.liveSourcePending&&this.liveNeedsSync());
+      const active=Object.values(this.runtime.live.positions).some(p=>p?.status==="OPEN")
+        ||Object.values(this.runtime.live.entries).some(e=>e&&!["FILLED","CANCELLED"].includes(e.status));
+      this.liveNextReconcileAt=Date.now()+(active?LIVE_RECONCILE_ACTIVE_MS:LIVE_RECONCILE_IDLE_MS);
     })();
     this.liveBackgroundWork=task;
     this.ctx.waitUntil(task.finally(()=>{if(this.liveBackgroundWork===task)this.liveBackgroundWork=null;}));
@@ -2247,6 +2285,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private async syncLiveOnce(now: number, initialEnable = false, forceEntryCleanup = false) {
+    const preferCached=this.livePreferCachedNext&&!initialEnable&&!forceEntryCleanup;
+    this.livePreferCachedNext=false;
     // Owner actions and optional hourly evaluation can arrive between two book
     // loops. Reconcile first so LIVE can never observe an unregistered source leg.
     this.reconcileCanonicalMirror(now);
@@ -2257,7 +2297,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // A missing source blocks additions, not the owner's OFF cleanup or native
     // protection of an already-mapped position.
     const client = await this.gateLive();
-    let snapshot = await client.snapshot();
+    const unresolvedEntry=Object.values(this.runtime.live.entries).some(entry=>entry
+      &&(!["FILLED","CANCELLED"].includes(entry.status)||this.liveEntryAwaitingReconcile(entry)));
+    const cached=preferCached&&this.runtime.live.operational&&!unresolvedEntry&&this.liveSnapshotCache
+      &&now-this.liveSnapshotCache.checkedAt<=LIVE_FAST_SNAPSHOT_MAX_AGE_MS
+      ?structuredClone(this.liveSnapshotCache):null;
+    let snapshot=cached??await client.snapshot();
+    this.liveSyncUsedCached=Boolean(cached);
+    if(!cached)this.liveSnapshotCache=structuredClone(snapshot);
     // The committed PAPER account can advance while private reads are in flight.
     // Select sources after the read, never from a pre-await portfolio snapshot.
     now=Date.now();this.reconcileCanonicalMirror(now);
@@ -2276,6 +2323,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     snapshot = forceEntryCleanup
       ? await this.cancelAndConfirmSystemEntries(client, snapshot, trackedEntryIds)
       : await this.cancelAndConfirmSystemEntries(client, snapshot, trackedEntryIds, knownTags);
+    if(!cached||snapshot.checkedAt!==cached.checkedAt)this.liveSnapshotCache=structuredClone(snapshot);
     if (forceEntryCleanup) {
       for (const entry of Object.values(this.runtime.live.entries)) {
         if (!entry || ["FILLED", "CANCELLED"].includes(entry.status)) continue;
@@ -2747,6 +2795,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         ? recoveringSubmission.lastError ?? `${recoveringSubmission.symbol} 的实盘提交正在与 Gate 核对`
         : `${recoveringEntryStop!.symbol} 的初始止损正在按订单标签核对`;
     }
+    // A cached source-trigger pass is provisional by construction; the caller
+    // schedules the immediate full Gate reconciliation. Network-backed passes
+    // become the next fast-event cache.
+    if(!cached)this.liveSnapshotCache=structuredClone(snapshot);
   }
 
   protected async setLiveMode(enabled: boolean) {
