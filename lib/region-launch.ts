@@ -58,7 +58,7 @@ export function regionLaunchValidationProofRate(modeledCostRate:number){
   const cost=finite(modeledCostRate)?Math.max(0,modeledCostRate):0;
   // A valid burst should become meaningfully profitable quickly. Validation
   // below round-trip modeled cost merely proves motion, not a usable entry.
-  return Math.max(.0025,Math.min(.0060,cost*1.25));
+  return Math.round(Math.max(.0025,Math.min(.0060,cost*1.25))*1e8)/1e8;
 }
 
 function compressionFrom(rows:RegionCandle[],mother:Pick<RegionLaunchState,
@@ -254,9 +254,9 @@ export function advanceRegionLaunchMinutes(input:{states:Record<string,RegionLau
     }
     const rows=(input.minutePaths[symbol]??[]).filter(row=>[row.time,row.open,row.high,row.low,row.close,row.volume].every(finite)
       &&row.high>=row.low&&row.low>0&&minuteCompleteAt(row)<=input.now).sort((a,b)=>a.time-b.time);
-    if(!rows.length){
-      if(s.phase==="READY"){s.phase="IGNITION";clearReady(s);s.reason="重新取得当前1分钟路径后核对5分钟离区；旧READY不绕过当前结构确认。";}
-      states[symbol]=s;continue;
+    if(!rows.length&&s.phase==="READY"){
+      s.phase="IGNITION";clearReady(s);
+      s.reason="当前1分钟路径暂缺；旧READY已降级，仍继续用完整5分钟路径核对离区，但没有新鲜1分钟确认绝不成交。";
     }
     const {long:longTrigger,short:shortTrigger}=launchTriggers(s,input.costRate);
     const quote=input.quotes?.[symbol],livePrice=quote?.fresh&&quote.bestBid>0&&quote.bestAsk>=quote.bestBid
@@ -275,8 +275,8 @@ export function advanceRegionLaunchMinutes(input:{states:Record<string,RegionLau
       // shrinks, discard the old 1m ignition immediately. A later entry must
       // either regain FAST strength or wait for a valid outside 5m close.
       if(s.launchPath==="FAST"){
-        s.phase="ARMED";clearIgnition(s);clearReady(s);
-        s.reason="未收盘5分钟K已失去异常强离区强度；此前1分钟点火资格立即失效，等待重新变强或5分钟有效收盘。";
+        s.failedDepartures++;s.phase="ARMED";clearIgnition(s);clearReady(s);
+        s.reason="未收盘5分钟K已失去异常强离区强度；此前1分钟点火资格立即失效，本次记为失败离区，等待重新变强或5分钟有效收盘。";
         states[symbol]=s;continue;
       }
       if(s.phase==="READY"){s.phase="IGNITION";clearReady(s);}
@@ -343,7 +343,10 @@ export function advanceRegionLaunchMinutes(input:{states:Record<string,RegionLau
       }else if(evaluated.restartAt!=null&&evaluated.restartPrice!=null){
         const side=ignitionSide,d=side==="LONG"?1:-1,trigger=triggerPrice;
         const impulse=d*(evaluated.restartPrice/trigger-1);
-        const maxChase=Math.max(.006,Math.min(.015,Math.max(s.motherWidthRate*.45,input.costRate*3)));
+        const averageRangeRate=(s.compression.averageRange??s.compression.width)/Math.max(s.compression.center,1e-12);
+        const maxChase=s.launchPath==="FAST"
+          ?Math.max(.012,Math.min(.040,Math.max(averageRangeRate*3.8,s.motherWidthRate*.65,input.costRate*4)))
+          :Math.max(.006,Math.min(.025,Math.max(averageRangeRate*1.8,s.motherWidthRate*.45,input.costRate*3)));
         if(input.now-evaluated.restartAt>75_000){
           s.phase="WATCH";s.cooldownUntil=input.now+REGION_BAR_MS;clearIgnition(s);clearReady(s);
           s.reason="RegionLaunch重新启动1分钟K到达过晚；只记录结构，不历史补追。";
