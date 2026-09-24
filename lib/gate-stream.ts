@@ -6,6 +6,7 @@ type Socket={readyState:number;accept():void;send(data:string):void;close(code?:
   addEventListener(type:string,listener:(event:{data?:unknown})=>void):void};
 const ENDPOINT="https://fx-ws.gateio.ws/v4/ws/usdt";
 const STREAM_CACHE_LIVENESS_MS=15_000;
+const STREAM_HANDSHAKE_TIMEOUT_MS=12_000;
 const finite=(x:number)=>Number.isFinite(x);
 
 /** One bounded, public Gate connection per primary runtime. No trading loops,
@@ -55,7 +56,7 @@ export class GateStreamingFeed {
   }
 
   private async connect(now:number){
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),5_000);
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),STREAM_HANDSHAKE_TIMEOUT_MS);
     try{
       const response=await fetch(ENDPOINT,{headers:{Upgrade:"websocket","X-Gate-Size-Decimal":"1"},signal:controller.signal});
       // In workerd an aborted upgrade request also closes its accepted socket.
