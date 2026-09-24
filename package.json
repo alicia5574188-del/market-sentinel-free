@@ -8,7 +8,7 @@
   "scripts": {
     "install:ci": "bash scripts/install-ci.sh",
     "research:aggregate-gate": "node scripts/aggregate-gate-history.mjs",
-    "test:direct": "node --experimental-strip-types --test tests/adaptive-ten-core.test.ts tests/paper-reset-control.test.ts tests/market-data-hub.test.ts tests/gate-market.test.ts tests/gate-live.test.ts tests/gate-stream.test.ts tests/live-read-resilience.test.ts tests/credential-vault.test.ts tests/owner-auth.test.ts",
+    "test:direct": "node --experimental-strip-types --test tests/adaptive-ten-core.test.ts tests/forward-family-probe.test.ts tests/paper-reset-control.test.ts tests/market-data-hub.test.ts tests/gate-market.test.ts tests/gate-live.test.ts tests/gate-stream.test.ts tests/live-read-resilience.test.ts tests/credential-vault.test.ts tests/owner-auth.test.ts",
     "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vite",
     "build": "bash scripts/build-verified.sh",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
@@ -18,7 +18,7 @@
     "test:equity": "node --experimental-strip-types --test tests/equity-curve.test.ts tests/equity-cache.test.ts",
     "test:feed:workerd": "node tests/gate-stream-workerd-smoke.mjs",
     "test": "npm run test:equity && npm run test:members && npm run test:live-parity && npm run test:feed:workerd && npm run build && node --test tests/architecture.test.mjs tests/migration.test.mjs",
-    "test:forward": "node --experimental-strip-types --test tests/adaptive-ten-core.test.ts",
+    "test:forward": "node --experimental-strip-types --test tests/adaptive-ten-core.test.ts tests/forward-family-probe.test.ts",
     "lint": "bash scripts/sites-env.sh -- eslint . --ignore-pattern dist --ignore-pattern .next",
     "typecheck": "tsc --noEmit --incremental false"
   },
