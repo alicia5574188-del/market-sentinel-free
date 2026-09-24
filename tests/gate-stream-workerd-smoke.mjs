@@ -14,9 +14,9 @@ export default {async fetch(req,env){
 const bundle=await build({stdin:{contents:code,resolveDir:process.cwd(),sourcefile:'feed-smoke.ts'},bundle:true,write:false,
   format:'esm',platform:'browser',target:'es2022'});
 const mock=`export default {fetch(req){const pair=new WebSocketPair(),s=pair[1];s.accept();
- s.addEventListener('message',e=>{const m=JSON.parse(e.data);if(m.channel==='futures.order_book'&&m.event==='subscribe')
- s.send(JSON.stringify({channel:'futures.order_book',event:'all',result:{contract:'BTC_USDT',t:Date.now(),id:100,
- bids:[{p:'100',s:'2.5'}],asks:[{p:'101',s:'3.5'}]}}));});return new Response(null,{status:101,webSocket:pair[0]});}}`;
+ s.addEventListener('message',e=>{const m=JSON.parse(e.data);if(m.channel==='futures.book_ticker'&&m.event==='subscribe')
+ s.send(JSON.stringify({channel:'futures.book_ticker',event:'update',result:{s:'BTC_USDT',t:Date.now(),u:100,
+ b:'100',B:'2.5',a:'101',A:'3.5'}}));});return new Response(null,{status:101,webSocket:pair[0]});}}`;
 const mf=new Miniflare({workers:[{name:'test',modules:true,script:bundle.outputFiles[0].text,compatibilityDate:'2026-05-22',
   serviceBindings:{GATE:'mock'}},{name:'mock',modules:true,script:mock,compatibilityDate:'2026-05-22'}]});
 try{
