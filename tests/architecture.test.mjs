@@ -61,12 +61,12 @@ test("LIVE, member, auth and credential infrastructure remain isolated from stra
   for(const source of[live,auth,vault])assert.doesNotMatch(source,/forward-relation-v2/);
 });
 
-test("operator UI and release config expose Forward Relation 2.0 while keeping 30 scan and 11 realtime capacity",async()=>{
+test("operator UI and release config expose Forward Relation 2.0 with risk-based holdings and 30 execution BBO capacity",async()=>{
   const [dashboard,worker,workflow,wrangler]=await Promise.all([
     read("app/forward-dashboard.tsx"),read("worker/index-clean.ts"),read(".github/workflows/sentinel-v2-ci.yml"),read("wrangler.jsonc"),
   ]);
   assert.match(dashboard,/哨兵 · Forward Relation 2\.0/);assert.match(dashboard,/反向独立确认/);
-  assert.match(worker,/SCAN_UNIVERSE_SIZE = 30/);assert.match(worker,/ADAPTIVE_REALTIME_POSITION_CAP/);
+  assert.match(worker,/SCAN_UNIVERSE_SIZE = 30/);assert.match(worker,/FORWARD_EXECUTION_BBO_CAP/);
   assert.match(workflow,/forward-relation-v2/);
   assert.match(wrangler,/MarketStream/);assert.match(wrangler,/MemberExecutor/);assert.match(wrangler,/MemberDirectory/);
 });
