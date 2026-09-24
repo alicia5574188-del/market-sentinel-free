@@ -88,6 +88,18 @@ function recovered(record:FamilyGuardRecord,rules:RelationRule[]){
   });
 }
 
+export function reserveExperimentValueBlock(input:{
+  reserve:boolean;netRate:number;edgeRatio:number;livePathScore:number;environmentFit:number;roundTripCost:number;
+}){
+  if(!input.reserve)return null;
+  const netFloor=Math.max(.0010,input.roundTripCost*.55);
+  if(input.netRate<netFloor)return `探测净空间不足：${(input.netRate*100).toFixed(2)}%`;
+  if(input.edgeRatio<.30)return `探测收益风险价值不足：${input.edgeRatio.toFixed(2)}`;
+  if(input.livePathScore<.50)return `探测路径尚未恢复：${Math.round(input.livePathScore*100)}`;
+  if(input.environmentFit<.60)return `探测环境匹配不足：${Math.round(input.environmentFit*100)}`;
+  return null;
+}
+
 export function familyAdmissionBlock(input:{
   state:FamilyExperimentState;rule:RelationRule;allRules:RelationRule[];reserve:boolean;openFamilyIds:ReadonlySet<string>;
   netRate:number;edgeRatio:number;roundTripCost:number;
@@ -98,16 +110,8 @@ export function familyAdmissionBlock(input:{
   if(!input.reserve)return null;
   if(input.openFamilyIds.has(familyId))return `关系族${familyId}已有一笔探测仓`;
 
-  // Minimum economic value for an experiment. Snapshot evidence showed that
-  // reserve orders with tiny post-cost space and poor edge repeatedly paid fees
-  // without ever reaching positive feedback. These are not global strategy
-  // thresholds: they apply only to low-authority reserve experiments.
-  const netFloor=Math.max(.0010,input.roundTripCost*.55);
-  if(input.netRate<netFloor)return `探测净空间不足：${(input.netRate*100).toFixed(2)}%`;
-  if(input.edgeRatio<.30)return `探测收益风险价值不足：${input.edgeRatio.toFixed(2)}`;
-  if(input.rule.livePathScore<.50)return `探测路径尚未恢复：${Math.round(input.rule.livePathScore*100)}`;
-  if(input.rule.environmentFit<.60)return `探测环境匹配不足：${Math.round(input.rule.environmentFit*100)}`;
-  return null;
+  return reserveExperimentValueBlock({reserve:true,netRate:input.netRate,edgeRatio:input.edgeRatio,
+    livePathScore:input.rule.livePathScore,environmentFit:input.rule.environmentFit,roundTripCost:input.roundTripCost});
 }
 
 export function recordFamilyFailure(input:{
