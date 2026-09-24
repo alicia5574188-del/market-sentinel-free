@@ -2755,6 +2755,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     }));
   }
 
+  private launchExternalMarketRefresh(now=Date.now()){
+    const task=this.marketHub.launchRefresh(now);if(!task)return;
+    this.ctx.waitUntil(task.then(()=>{
+      const at=Date.now(),status=this.marketHub.status(at);
+      if(status.healthySources>0)this.runtime.lastSuccessAt=at;
+      for(const symbol of this.forwardUrgentSymbols(at)){
+        const q=this.marketHub.quote(symbol,at);if(q)this.recordForwardMinuteQuote(symbol,q.mid,q.observedAt);
+      }
+    }).catch(error=>{this.runtime.strategyLogError=`external-market: ${safeError(error)}`;}));
+  }
+
   private recordForwardMinuteQuote(symbol:string,mid:number,observedAt:number){
     if(!this.forwardUrgentSymbols(observedAt).includes(symbol)||!Number.isFinite(mid)||mid<=0)return;
     this.forwardMinuteQuoteBars??={};
@@ -2943,8 +2954,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       const radarDue=radarAttemptDue(this.runtime.radar,Date.now());
       if(radarDue){
-        subrequests++;
-        try{this.refreshRadar(Date.now(),await fetchMarketTickers());}
+        try{this.refreshRadar(Date.now());}
         catch(error){this.runtime.radar=failedRadarRuntime(this.runtime.radar,Date.now(),error);}
       }
       subrequests+=await this.refreshAdaptiveCandles(Date.now());
@@ -2991,6 +3001,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     let subrequests = 0;
     try {
       const universeDue = now - this.runtime.lastUniverseAt >= UNIVERSE_MS;
+      this.launchExternalMarketRefresh(now);
       this.ensureProtectionSymbolsResident();
       const cycleSymbols = this.cycleBookSymbols(now, [...this.runtime.symbols]);
       // The fresh executable book is the critical clock. Completed-candle,
