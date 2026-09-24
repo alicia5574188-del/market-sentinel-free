@@ -54,7 +54,7 @@ test("Forward Relation analysis remains multi-source while Gate stays execution-
   assert.match(hub,/class MarketDataHub/);assert.match(hub,/BYBIT/);assert.match(hub,/OKX/);assert.match(hub,/BITGET/);assert.match(hub,/BINANCE/);
   assert.match(worker,/private marketHub = new MarketDataHub/);
   assert.match(worker,/Gate public websocket is execution-only/);
-  assert.match(worker,/Bybit\/Binance remain the normal scan surface/);
+  assert.match(worker,/Bybit\/OKX\/Bitget remain the normal scan surface/);
   assert.match(worker,/forwardWatchSymbols/);assert.match(hub,/multi-source-market-hub-v3/);assert.match(hub,/nextRetryAt/);
   assert.doesNotMatch(worker,/fetchMarketTickers\(\)/);
 });
