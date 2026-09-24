@@ -65,7 +65,7 @@ test("strong 1m impulse plus genuinely small pullback and full restart becomes R
   const restart=bar(120,102.88,103.35,102.86,103.32);
   states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[breakout]},now:(START+60)*1000,costRate:.0022}).states;
   states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[breakout,pullback]},now:(START+120)*1000,costRate:.0022}).states;
-  assert.equal(states.BCH_USDT?.phase,"IGNITION");
+  assert.equal(states.BCH_USDT?.phase,"IGNITION",states.BCH_USDT?.reason);
   states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[breakout,pullback,restart]},now:(START+180)*1000,costRate:.0022}).states;
   assert.equal(states.BCH_USDT?.phase,"READY");
   const ready=advanceRegionLaunchQuotes({states,quotes:{BCH_USDT:q(102.53,(START+181)*1000)},now:(START+181)*1000,costRate:.0022});
@@ -97,7 +97,7 @@ test("slow path waits for a long-body 5m close outside the entire region and the
   const continuation=bar(300,102.02,102.34,102.00,102.31);
   states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[continuation]},fiveMinutePaths:{BCH_USDT:[...motherRows,closed]},
     now:(START+360)*1000,costRate:.0022}).states;
-  assert.equal(states.BCH_USDT?.phase,"READY");
+  assert.equal(states.BCH_USDT?.phase,"READY",states.BCH_USDT?.reason);
 });
 
 test("missing or late 1m data never creates a retroactive chase",()=>{
