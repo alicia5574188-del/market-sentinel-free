@@ -46,19 +46,16 @@ function step(state:ForwardState,now:number,mid:number,minutePaths:Record<string
   return advanceForward({state,now,paths,minutePaths,quotes:{BCH_USDT:quote(mid,now)},contracts:{BCH_USDT:meta},
     entrySymbols:["BCH_USDT"],allowDataCycle:false});
 }
-function fastPath(now:number){
-  const breakout=candle(now,100.95,102.72,100.92,102.62);
-  const pullback=candle(now+60_000,102.62,102.63,102.28,102.32);
-  const restart=candle(now+120_000,102.32,102.78,102.30,102.74);
-  return{breakout,pullback,restart};
+function releasePath(now:number){
+  const breakout=candle(now,100.80,101.28,100.78,101.25);
+  const hold=candle(now+60_000,101.25,101.31,101.18,101.27);
+  return{breakout,hold};
 }
-function driveFast(state:ForwardState,now:number){
-  const m=fastPath(now);let s=state;
-  // Executable quotes stay close to the just-completed 1m evidence. The test
-  // deliberately does not "help" the strategy with a later, farther chase.
-  s=step(s,now+60_000,102.62,{BCH_USDT:[m.breakout]}).state;
-  s=step(s,now+120_000,102.32,{BCH_USDT:[m.breakout,m.pullback]}).state;
-  s=step(s,now+180_000,102.74,{BCH_USDT:[m.breakout,m.pullback,m.restart]}).state;
+function driveRelease(state:ForwardState,now:number){
+  const m=releasePath(now);let s=state;
+  // v4 must participate near the effective trigger rather than waiting several
+  // minutes and making a later confirmation price look artificially "close".
+  s=step(s,now+60_000,101.26,{BCH_USDT:[m.breakout]}).state;
   return{s,m};
 }
 
@@ -71,16 +68,16 @@ test("a move inside the accepted mature region cannot create a trade even when o
   assert.equal(s.anchorFlows?.BCH_USDT?.phase,"READY","legacy state may exist until data-cycle cleanup but has no entry authority");
 });
 
-test("full RegionLaunch path opens only after current 5m strength, a small pullback and real restart",()=>{
-  const now=BASE,{s,m}=driveFast(seeded(now),now);
+test("clean RegionLaunch RELEASE participates near the effective trigger instead of waiting for a late restart",()=>{
+  const now=BASE,{s}=driveRelease(seeded(now),now);
   assert.equal(s.positions.length,1,s.regionLaunches?.BCH_USDT?.reason);
   const t=s.positions[0]!;
-  assert.equal(t.entryContext?.version,"region-launch-entry-v1");assert.equal(t.rule.grammar,REGION_LAUNCH_VERSION);
-  assert.equal(t.entryValidation?.version,"region-launch-entry-validation-v1");assert.equal(t.entryValidation?.dueAt,t.openedAt+60_000);
-  assert.equal(s.regionLaunches?.BCH_USDT?.phase,"CONSUMED");
-  assert.equal(s.regionLifecycles?.BCH_USDT?.upperConsumedAt,null);
+  assert.equal(t.entryContext?.version,"region-launch-entry-v1");assert.equal(t.entryContext?.launchEntryMode,"RELEASE");
+  assert.equal(t.rule.grammar,REGION_LAUNCH_VERSION);assert.equal(t.entryValidation?.dueAt,t.openedAt+60_000);
+  assert.equal(s.regionLaunches?.BCH_USDT?.phase,"CONSUMED");assert.equal(s.regionLifecycles?.BCH_USDT?.upperConsumedAt,null);
   assert.ok(t.stopPrice<t.entryPrice);assert.ok(t.notional<=600.01);
-  assert.ok(m.restart.close<t.entryPrice*1.001,"real quote/slippage may be slightly above the restart but not a distant chase");
+  const trigger=t.entryContext?.launchEffectiveTrigger??101;
+  assert.ok(t.entryPrice/trigger-1<.006,"first participation must remain inside the effective-trigger chase budget");
 });
 
 test("a long upper wick with weak 5m body cannot create a RegionLaunch position",()=>{
@@ -89,24 +86,27 @@ test("a long upper wick with weak 5m body cannot create a RegionLaunch position"
   assert.equal(s.positions.length,0);assert.equal(s.regionLaunches?.BCH_USDT?.phase,"ARMED");
 });
 
-test("RegionLaunch without prompt executable profit exits after sixty seconds and preserves the mother",()=>{
-  const now=BASE,{s:opened,m}=driveFast(seeded(now),now);let s=opened;
+test("sixty-second weak feedback is diagnostic; intact structure stays open and later reacceptance exits",()=>{
+  const now=BASE,{s:opened,m}=driveRelease(seeded(now),now);let s=opened;
   assert.equal(s.positions.length,1);
   const t=s.positions[0]!,due=t.entryValidation!.dueAt;
-  s=step(s,due+1,t.entryPrice*1.0005,{BCH_USDT:[m.breakout,m.pullback,m.restart]}).state;
-  assert.equal(s.positions.length,0);assert.equal(s.history[0]?.entryValidation?.passed,false);
-  assert.match(s.history[0]?.exitReason??"",/RegionLaunch入场验证失败/);
-  assert.equal(s.regionLaunches?.BCH_USDT?.phase,"WATCH");assert.equal(s.regionLaunches?.BCH_USDT?.motherRegionId,"mother-BCH_USDT");
+  s=step(s,due+1,t.entryPrice*1.0005,{BCH_USDT:[m.breakout,m.hold]}).state;
+  assert.equal(s.positions.length,1);assert.equal(s.positions[0]?.entryValidation?.passed,false);
+  assert.equal(s.positions[0]?.entryValidation?.weakStart,true);
+  const r1=candle(now+60_000,101.10,101.14,100.86,100.90),r2=candle(now+120_000,100.90,100.94,100.72,100.80);
+  s=step(s,now+180_000,100.80,{BCH_USDT:[m.breakout,r1,r2]}).state;
+  assert.equal(s.positions.length,0);assert.match(s.history[0]?.exitReason??"",/有效触发位|结构失效/);
+  assert.equal(s.regionLaunches?.BCH_USDT?.motherRegionId,"mother-BCH_USDT");
 });
 
-test("a real burst winner passes cost-aware sixty-second validation and raises the monotonic profit stop",()=>{
-  const now=BASE,{s:opened,m}=driveFast(seeded(now),now);let s=opened;
+test("a real RegionLaunch winner passes the diagnostic and raises the monotonic MFE protection stop",()=>{
+  const now=BASE,{s:opened,m}=driveRelease(seeded(now),now);let s=opened;
   const entry=s.positions[0]!.entryPrice;
-  s=step(s,now+190_000,entry*1.020,{BCH_USDT:[m.breakout,m.pullback,m.restart]}).state;
+  s=step(s,now+90_000,entry*1.020,{BCH_USDT:[m.breakout,m.hold]}).state;
   assert.equal(s.positions[0]?.profitProtection?.version,REGION_LAUNCH_PROFIT_PROTECTION_VERSION);
-  assert.ok((s.positions[0]?.profitProtection?.retentionRate??0)>=.84);assert.ok((s.positions[0]?.stopPrice??0)>entry);
+  assert.ok((s.positions[0]?.profitProtection?.retentionRate??0)>=.79);assert.ok((s.positions[0]?.stopPrice??0)>entry);
   const due=s.positions[0]!.entryValidation!.dueAt;
-  s=step(s,due+1,entry*1.019,{BCH_USDT:[m.breakout,m.pullback,m.restart]}).state;
+  s=step(s,due+1,entry*1.019,{BCH_USDT:[m.breakout,m.hold]}).state;
   assert.equal(s.positions.length,1);assert.equal(s.positions[0]!.entryValidation?.passed,true);
 });
 
@@ -121,22 +121,22 @@ test("ARMED and IGNITION RegionLaunch states own scarce minute/book priority ins
   assert.ok(watched.includes("BCH_USDT"));assert.ok(watched.length<=11);
 });
 
-test("slow route needs a real outside 5m close and fresh first-minute continuation before opening",()=>{
+test("slow RELEASE can open after a real outside 5m close only while the quote is still near the effective trigger",()=>{
   const now=BASE;let s=seeded(now);
-  const closed=candle(now,101.00,102.06,100.98,102.02),paths={BCH_USDT:[...motherRows(now),closed]};
-  s=step(s,now+300_000,102.02,{},paths).state;
+  const closed=candle(now,101.00,101.48,100.98,101.44),paths={BCH_USDT:[...motherRows(now),closed]};
+  s=step(s,now+300_000,101.44,{},paths).state;
   assert.equal(s.positions.length,0);assert.equal(s.regionLaunches!.BCH_USDT!.launchPath,"CLOSED");
-  const continuation=candle(now+300_000,102.02,102.14,102.00,102.13);
-  s=step(s,now+360_000,102.13,{BCH_USDT:[continuation]},paths).state;
-  assert.equal(s.positions.length,1);assert.equal(s.regionLaunches!.BCH_USDT!.phase,"CONSUMED");
-  assert.match(s.positions[0]!.rule.reason,/第一根完整1分钟K继续突破/);
+  const continuation=candle(now+300_000,101.44,101.57,101.43,101.55);
+  s=step(s,now+360_000,101.54,{BCH_USDT:[continuation]},paths).state;
+  assert.equal(s.positions.length,1,s.regionLaunches!.BCH_USDT!.reason);
+  assert.equal(s.positions[0]!.entryContext?.launchEntryMode,"RELEASE");
 });
 
-test("weakening an unfinished fast 5m move revokes its old micro ignition and never opens on stale strength",()=>{
+test("an already-far unfinished burst is never backfilled; weakening it still creates no stale order",()=>{
   const now=BASE;let s=seeded(now);
   const first=candle(now,100.95,102.72,100.92,102.62),fade=candle(now+60_000,103.20,103.22,101.35,101.42);
-  s=step(s,now+60_000,103.20,{BCH_USDT:[first]}).state;assert.equal(s.regionLaunches!.BCH_USDT!.phase,"IGNITION");
+  s=step(s,now+60_000,103.20,{BCH_USDT:[first]}).state;
+  assert.equal(s.positions.length,0);assert.equal(s.regionLaunches!.BCH_USDT!.phase,"RETEST");
   s=step(s,now+120_000,101.42,{BCH_USDT:[first,fade]}).state;
-  assert.equal(s.positions.length,0);assert.equal(s.regionLaunches!.BCH_USDT!.phase,"ARMED");
-  assert.match(s.regionLaunches!.BCH_USDT!.reason,/失去异常强离区强度/);
+  assert.equal(s.positions.length,0);assert.notEqual(s.regionLaunches!.BCH_USDT!.phase,"CONSUMED");
 });

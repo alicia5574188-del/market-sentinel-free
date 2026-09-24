@@ -5,8 +5,8 @@ import type { RegionEntrySignal } from "../lib/region-lifecycle.ts";
 import { MULTI_TURN_VERSION, type TurnFrameState } from "../lib/multi-turn-engine.ts";
 
 const contract={quantoMultiplier:.001,leverageMax:50,maintenanceRate:.005,minContracts:1};
-type TestSignal=RegionEntrySignal&{entryModel?:"ANCHOR_FLOW"|"REGION_LAUNCH";anchorExpectedMoveRate?:number;
-  launchExpectedMoveRate?:number;launchTriggerPrice?:number;launchMaxChaseRate?:number};
+type TestSignal=RegionEntrySignal&{entryModel?:"ANCHOR_FLOW"|"REGION_LAUNCH";entryMode?:"ROTATION"|"RELEASE"|"RETEST";
+  anchorExpectedMoveRate?:number;launchExpectedMoveRate?:number;launchTriggerPrice?:number;launchEffectiveTrigger?:number;launchMaxChaseRate?:number};
 const base=(overrides:Partial<TestSignal>={}):TestSignal=>({
   version:"region-lifecycle-v1",id:"s1",symbol:"BTC_USDT",kind:"MIGRATION",side:"LONG",boundary:"UPPER",
   completedAt:1_000,expiresAt:601_000,signalPrice:101.2,stopPrice:100.6,targetPrice:null,
@@ -119,24 +119,24 @@ test("FOLKS-like rejection with positive target space but terrible reward versus
 });
 
 
-test("RegionLaunch is executable only after ignition and while chase distance remains bounded",()=>{
-  const launch=base({entryModel:"REGION_LAUNCH",signalPrice:101.60,stopPrice:100.95,
-    launchTriggerPrice:101.05,launchExpectedMoveRate:.04,launchMaxChaseRate:.004});
-  const accepted=run(launch,101.58,101.60);
+test("RegionLaunch v4 measures chase from the effective trigger rather than the confirmation candle",()=>{
+  const launch=base({entryModel:"REGION_LAUNCH",entryMode:"RELEASE",signalPrice:101.34,stopPrice:100.70,
+    launchTriggerPrice:101.05,launchEffectiveTrigger:101.05,launchExpectedMoveRate:.04,launchMaxChaseRate:.004});
+  const accepted=run(launch,101.33,101.35);
   assert.equal(accepted.ok,true);
   if(accepted.ok){
     assert.ok(accepted.plan.plannedRisk<=6.01);
     assert.ok(accepted.plan.notional<=600.01);
   }
-  const chased=run(launch,102.20,102.22);
+  const chased=run(launch,101.58,101.60);
   assert.equal(chased.ok,false);
-  if(!chased.ok)assert.match(chased.reason,/追价距离/);
+  if(!chased.ok)assert.match(chased.reason,/有效触发位.*追远/);
 });
 
 test("RegionLaunch still rejects a confirmed impulse when remaining expected space no longer pays for risk",()=>{
-  const weak=base({entryModel:"REGION_LAUNCH",signalPrice:101.60,stopPrice:100.20,
-    launchTriggerPrice:101.05,launchExpectedMoveRate:.010,launchMaxChaseRate:.02});
-  const result=run(weak,101.58,101.60);
+  const weak=base({entryModel:"REGION_LAUNCH",entryMode:"RELEASE",signalPrice:101.30,stopPrice:100.20,
+    launchTriggerPrice:101.05,launchEffectiveTrigger:101.05,launchExpectedMoveRate:.010,launchMaxChaseRate:.02});
+  const result=run(weak,101.28,101.30);
   assert.equal(result.ok,false);
-  if(!result.ok)assert.match(result.reason,/剩余空间/);
+  if(!result.ok)assert.match(result.reason,/剩余.*空间/);
 });

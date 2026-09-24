@@ -326,7 +326,7 @@ test("production gates follow the current RegionLaunch PAPER authority", async (
   assert.equal((workflow.match(/runtime\.forward\.strategyAuthorityVersion == "multi-turn-v1"/g) ?? []).length,2);
   assert.equal((workflow.match(/runtime\.forward\.executionVersion == "anchor-flow-v1"/g) ?? []).length,2);
   assert.equal((workflow.match(/runtime\.forward\.regionVersion == "region-lifecycle-v1"/g) ?? []).length,2);
-  assert.equal((workflow.match(/runtime\.forward\.regionLaunchVersion == "region-launch-v3"/g) ?? []).length,2);
+  assert.equal((workflow.match(/runtime\.forward\.regionLaunchVersion == "region-launch-v4"/g) ?? []).length,2);
   assert.equal((workflow.match(/runtime\.forward\.initialEquity == 1000/g) ?? []).length,2);
   assert.equal((workflow.match(/runtime\.forward\.liveEligible == false/g) ?? []).length,2);
   assert.equal((workflow.match(/runtime\.forward\.storage\.persistedAt >= \.runtime\.forward\.lastCycleAt/g) ?? []).length,2);

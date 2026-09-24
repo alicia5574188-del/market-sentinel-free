@@ -108,18 +108,20 @@ test("weakening AnchorFlow evidence tightens an already high-retention floor",()
 });
 
 
-test("RegionLaunch keeps about eighty-five percent of early explosive profit",()=>{
+test("RegionLaunch v4 keeps about eighty percent once a trade reaches two R",()=>{
   const floor=regionLaunchProfitFloor(.020,.010,.0022,.040)!;
   assert.equal(floor.version,REGION_LAUNCH_PROFIT_PROTECTION_VERSION);
-  assert.ok(floor.retentionRate>=.84&&floor.retentionRate<=.86);
-  assert.ok(floor.floorRate>.016);
+  assert.ok(floor.retentionRate>=.79&&floor.retentionRate<=.81);
+  assert.ok(floor.floorRate>.015);
 });
 
-test("RegionLaunch only relaxes materially after profit exceeds the original launch expectation",()=>{
-  const early=regionLaunchProfitFloor(.04,.01,.0022,.04)!;
-  const extended=regionLaunchProfitFloor(.10,.01,.0022,.04)!;
-  const extreme=regionLaunchProfitFloor(.16,.01,.0022,.04)!;
-  assert.ok(early.retentionRate>=.84);
-  assert.ok(extended.retentionRate>=.77&&extended.retentionRate<=.79);
-  assert.ok(extreme.retentionRate>=.74&&extreme.retentionRate<=.76);
+test("RegionLaunch v4 tightens MFE retention as realized R expands",()=>{
+  const oneR=regionLaunchProfitFloor(.01,.01,.0022,.04)!;
+  const twoR=regionLaunchProfitFloor(.02,.01,.0022,.04)!;
+  const fourR=regionLaunchProfitFloor(.04,.01,.0022,.04)!;
+  const tenR=regionLaunchProfitFloor(.10,.01,.0022,.04)!;
+  assert.ok(oneR.retentionRate>=.64&&oneR.retentionRate<=.66);
+  assert.ok(twoR.retentionRate>=.79&&twoR.retentionRate<=.81);
+  assert.ok(fourR.retentionRate>=.83&&fourR.retentionRate<=.85);
+  assert.ok(tenR.retentionRate>=.87&&tenR.retentionRate<=.89);
 });

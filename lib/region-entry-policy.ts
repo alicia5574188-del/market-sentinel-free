@@ -31,8 +31,8 @@ export function evaluateRegionEntryPolicy(input:{
   costRate:number;feeRate:number;slippageRate:number;anchorConfirmationReferencePrice?:number|null;anchorMicroConfirmed?:boolean;
 }):Accept|Reject{
   const s=input.signal,mid=(input.bestBid+input.bestAsk)/2,spread=(input.bestAsk-input.bestBid)/Math.max(mid,1e-9);
-  const extra=s as RegionEntrySignal&{entryModel?:string;anchorExpectedMoveRate?:number;launchExpectedMoveRate?:number;
-    launchTriggerPrice?:number;launchMaxChaseRate?:number};
+  const extra=s as RegionEntrySignal&{entryModel?:string;entryMode?:"ROTATION"|"RELEASE"|"RETEST";anchorExpectedMoveRate?:number;launchExpectedMoveRate?:number;
+    launchTriggerPrice?:number;launchEffectiveTrigger?:number;launchMaxChaseRate?:number};
   const entryModel=extra.entryModel;
   const isAnchor=s.kind==="MIGRATION"&&entryModel==="ANCHOR_FLOW",isLaunch=s.kind==="MIGRATION"&&entryModel==="REGION_LAUNCH";
   const totalRiskRate=.04,sideRiskRate=.03,tradeRiskRate=isAnchor?.008:.006,perTradeNotionalRate=.60,totalNotionalRate=2.0;
@@ -70,22 +70,20 @@ export function evaluateRegionEntryPolicy(input:{
   }else{
     if(!isAnchor&&!isLaunch)return{ok:false,reason:"直接区域迁移已退役；只允许 AnchorFlow 回测重启或 RegionLaunch 爆发确认事件",remainingSpaceRate:0};
     if(isLaunch){
-      const expected=extra.launchExpectedMoveRate??0,trigger=extra.launchTriggerPrice??0,maxChase=extra.launchMaxChaseRate??0;
-      // Keep two distances separate:
-      // 1) boundaryProgress is how far the valid burst has actually left the
-      //    full mature region and is subtracted from expected remaining space;
-      // 2) postConfirmationChase is only the extra adverse movement after the
-      //    fresh 1m confirmation price and is the anti-late-chase gate.
-      const boundaryProgress=trigger>0?d*(price/trigger-1):Infinity;
-      const postConfirmationChase=s.signalPrice>0?d*(price/s.signalPrice-1):Infinity;
-      if(!(boundaryProgress>0&&maxChase>0))
-        return{ok:false,reason:"RegionLaunch完整区域发射边界已经失效；等待新的区域机会",remainingSpaceRate:0};
-      if(postConfirmationChase>maxChase)
-        return{ok:false,reason:"RegionLaunch在1分钟确认后已超过允许的额外追价距离；不补追旧确认",remainingSpaceRate:0};
-      remaining=Math.max(0,expected-boundaryProgress-input.costRate);
+      const expected=extra.launchExpectedMoveRate??0,trigger=extra.launchEffectiveTrigger??extra.launchTriggerPrice??0,maxChase=extra.launchMaxChaseRate??0;
+      // Anti-late-chase is measured from the actual effective trigger (region edge
+      // or the nearest pressure/support band that had to be cleared), never from
+      // the last confirmation candle. This prevents a late BNB-style fill from
+      // looking "close" merely because confirmation itself arrived late.
+      const triggerProgress=trigger>0?d*(price/trigger-1):Infinity;
+      if(!(triggerProgress>0&&maxChase>0))
+        return{ok:false,reason:"RegionLaunch有效触发位已经失效；等待回踩或新的区域机会",remainingSpaceRate:0};
+      if(triggerProgress>maxChase)
+        return{ok:false,reason:"RegionLaunch从有效触发位计算已经追远；不补追，保留回踩二次参与",remainingSpaceRate:0};
+      remaining=Math.max(0,expected-triggerProgress-input.costRate);
       const edgeRatio=remaining/Math.max(lossRate,1e-9);
-      if(remaining<=input.costRate||edgeRatio<1.10)
-        return{ok:false,reason:"RegionLaunch实时爆发成立，但当前位置的预期剩余空间已不足覆盖结构风险与成本",remainingSpaceRate:remaining};
+      if(remaining<=input.costRate||edgeRatio<1.05)
+        return{ok:false,reason:"RegionLaunch当前位置的剩余可运行空间不足覆盖结构风险与成本",remainingSpaceRate:remaining};
     }else{
       const expected=extra.anchorExpectedMoveRate??0;
       remaining=Math.max(0,expected-input.costRate);
