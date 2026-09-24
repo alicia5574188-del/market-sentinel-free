@@ -1,0 +1,37 @@
+name: Validate 1h Adaptive Alpha Ensemble
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-1h-adaptive-alpha-ensemble.mjs"
+      - ".github/workflows/validate-1h-adaptive-alpha-ensemble.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Check syntax
+        run: node --check scripts/research-1h-adaptive-alpha-ensemble.mjs
+      - name: Run causal adaptive 1h alpha research
+        run: node --max-old-space-size=6144 scripts/research-1h-adaptive-alpha-ensemble.mjs
+      - name: Print focused result
+        if: always()
+        run: |
+          if [ -f /tmp/adaptive-1h-alpha-ensemble-report.json ]; then
+            jq '{decision,authority,goal,method,cost,data:{activeSymbols:.data.activeSymbols},model,candidateCount,raw,calibrationMonths,blindMonths,policyCount,feasibleCount,target,bestReturn,bestFrequencyPositive,paretoFrontier}' /tmp/adaptive-1h-alpha-ensemble-report.json
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: adaptive-1h-alpha-ensemble-report
+          path: /tmp/adaptive-1h-alpha-ensemble-report.json
+          if-no-files-found: warn
+          retention-days: 7
