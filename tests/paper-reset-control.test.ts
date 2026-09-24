@@ -12,7 +12,7 @@ test("owner PAPER reset remains isolated, confirmed and unavailable to members",
   assert.match(ownerAction,/sameOriginMutation\(request\)/);
   assert.match(ownerAction,/ownerAuthenticated\(request, env\)/);
   assert.match(ownerAction,/RESET_PAPER/);
-  assert.match(resetMethod,/runtime\.live\.requestedEnabled \|\| this\.runtime\.live\.operational/);
+  assert.match(resetMethod,/runtime\.live\.requestedEnabled\|\|this\.runtime\.live\.operational/);
   assert.match(resetMethod,/resetForwardAccountPreservingLearning\(previous,now\)/);
   assert.match(worker,/prepareForwardReset\(previous,closed,next,now\)/);
   assert.doesNotMatch(resetMethod,/initialForward\(now\)/);
