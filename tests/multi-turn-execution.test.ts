@@ -6,6 +6,7 @@ import {MULTI_TURN_VERSION, TURN_TIMEFRAMES, evaluateMultiTurn, initialMultiTurn
 import {REGION_LIFECYCLE_VERSION, type RegionEntrySignal, type RegionLifecycleState} from "../lib/region-lifecycle.ts";
 import {ANCHOR_FLOW_VERSION, type AnchorFlowState} from "../lib/anchor-flow.ts";
 import {REGION_LAUNCH_VERSION} from "../lib/region-launch.ts";
+import type {MultiTurnEntryOpportunity} from "../lib/multi-turn-entry-opportunity.ts";
 import {FORWARD_PROTECTION_STORAGE, FORWARD_STORAGE, prepareForwardReset, prepareForwardWrite, readForwardStore} from "../lib/forward-store.ts";
 
 const BASE=Date.parse("2026-09-21T00:00:00Z");
@@ -46,7 +47,7 @@ const rejectionSignal=(symbol:string,now:number):RegionEntrySignal=>({
   regionId:`rg-${symbol}`,regionConfirmedAt:now-600_000,regionLower:99,regionUpper:101,regionCenter:100,regionWidth:2,regionWidthRate:.02,
   reason:"legacy rejection"
 });
-const participationOpportunity=(symbol:string,now:number)=>({
+const participationOpportunity=(symbol:string,now:number):MultiTurnEntryOpportunity=>({
   version:"winding-anchor-entry-v3",symbol,timeframe:"5m",side:"LONG",completedAt:now-1_000,price:100,
   score:92,eligible:true,directionStrength:90,spaceScore:85,positionScore:95,executionScore:90,
   trendSlopeScore:80,structureScore:80,pathEfficiency:80,momentumPersistence:80,pullbackResilience:80,
@@ -56,7 +57,7 @@ const participationOpportunity=(symbol:string,now:number)=>({
   anchorPrice:99,anchorAt:now-300_000,anchorConfirmedAt:now-1_000,anchorQuality:90,anchorAgeBars:1,
   anchorMfeRate:.01,anchorMaeRate:.005,anchorProfitRatio:4,anchorFirstProfitBars:1,anchorRetentionRate:.8,
   distanceFromAnchorRate:.01,maxEntryDistanceRate:.04,
-} as any);
+});
 
 test("legacy AnchorFlow READY state can no longer create a new order",()=>{
   const now=BASE+5*60*60_000,s=initialMultiTurnForward(now-60_000);
