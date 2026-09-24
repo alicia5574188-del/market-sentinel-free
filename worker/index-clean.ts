@@ -1120,67 +1120,30 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.liveJournal.set(key,{...existing,receipt:structuredClone(entry.parity)});
   }
 
-  private async ensureMultiTurnCutover(now:number){
-    const previous=this.forwardState;if(!previous||previous.strategyAuthorityVersion===MULTI_TURN_VERSION)return false;
-    if(this.runtime.live.requestedEnabled||this.runtime.live.operational||this.activeLivePositions().length||this.activeLiveEntries().length)
-      return false; // legacy drain continues protection, but cannot create new legacy entries
-    const quotes=this.forwardQuotes(now),closed=closeForwardForReset(previous,quotes,now),next=initialMultiTurnForward(now);
-    const prepared=await prepareForwardReset(previous,closed,next,now);
-    const saved=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
-    const protection=prepared.entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
-    if(protection&&saved?.writeBudget!==undefined)prepared.entries[FORWARD_PROTECTION_STORAGE]={...protection,writeBudget:saved.writeBudget};
-    const reservation=this.reserveNonAlarmWrites(prepared.writes,64);
-    if(!reservation)throw new Error("Multi-Turn原子切换等待写入预算；旧账户保持完整，不发布半重置状态");
-    try{await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});reservation.finish(true);}
-    finally{reservation.finish(false);}
-    this.forwardCompression=prepared.compression;this.forwardState=prepared.state;this.forwardError=null;
-    this.forwardProtectionBudget=readProtectionWriteBudget(saved?.writeBudget);
-    return true;
-  }
-
-  private async ensureAnchorFlowCutover(now:number){
-    const previous=this.forwardState;
-    if(!previous||previous.strategyAuthorityVersion!==MULTI_TURN_VERSION||previous.executionVersion===ANCHOR_FLOW_VERSION)return false;
-    if(this.runtime.live.requestedEnabled||this.runtime.live.operational||this.activeLivePositions().length||this.activeLiveEntries().length)
-      return false;
-    const quotes=this.regimeQuotes(now),closed=closeForwardForReset(previous,quotes,now),next=initialMultiTurnForward(now);
-    const prepared=await prepareForwardReset(previous,closed,next,now);
-    const saved=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
-    const protection=prepared.entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
-    if(protection&&saved?.writeBudget!==undefined)prepared.entries[FORWARD_PROTECTION_STORAGE]={...protection,writeBudget:saved.writeBudget};
-    const reservation=this.reserveNonAlarmWrites(prepared.writes,64);
-    if(!reservation)throw new Error("AnchorFlow原子实验纪元切换等待写入预算；旧账户保持完整，不发布半重置状态");
-    try{await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});reservation.finish(true);}
-    finally{reservation.finish(false);}
-    this.forwardCompression=prepared.compression;this.forwardState=prepared.state;this.forwardError=null;
-    this.forwardProtectionBudget=readProtectionWriteBudget(saved?.writeBudget);
-    this.mirrorClosures.clear();
-    return true;
+  private async ensureAdaptiveAccount(now:number){
+    if(!this.forwardState)this.forwardState=await readForwardStore(this.ctx.storage,now);
+    if(!this.forwardState)throw new Error("PAPER权威账户缺失");
+    // normalizeForward already upgrades old records in place. Strategy revisions
+    // must never close positions, replace startedAt or create a fresh 1000U ledger.
+    return false;
   }
 
   private async advanceForwardNow(now: number, allowDataCycle = true) {
     if (this.forwardBusy) return;
     this.forwardBusy = true;
     try {
-      if (!this.forwardState) this.forwardState = await readForwardStore(this.ctx.storage, now);
-      if(MULTI_TURN_AUTO_CUTOVER&&this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION)await this.ensureMultiTurnCutover(now);
-      if(!this.forwardState)throw new Error("PAPER权威账户缺失");
-      const legacyDrainOnly=this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION;
-      const dataCycleDue=allowDataCycle&&(!this.forwardState.lastCycleAt
-        ||Math.floor((now-90_000)/BAR_MS)>Math.floor((this.forwardState.lastCycleAt-90_000)/BAR_MS));
-      // Urgent current-authority markets (open holdings, AnchorFlow RETEST/READY,
-      // RegionLaunch ARMED/IGNITION/READY) consume the 2s critical quote clock.
-      // Non-urgent research/account marking stays on the cheaper 10s cadence.
-      const currentMulti=this.forwardState.strategyAuthorityVersion===MULTI_TURN_VERSION;
-      const urgent=currentMulti&&(this.forwardUrgentSymbols(now).length>0||this.forwardState.positions.length>0);
-      const quoteCadence=urgent?LOOP_MS:10_000;
+      await this.ensureAdaptiveAccount(now);
+      const dataCycleDue=allowDataCycle&&(!this.forwardState!.lastCycleAt
+        ||Math.floor((now-90_000)/BAR_MS)>Math.floor((this.forwardState!.lastCycleAt-90_000)/BAR_MS));
+      const urgent=this.forwardUrgentSymbols(now).length>0||this.forwardState!.positions.length>0;
+      const quoteCadence=urgent?LOOP_MS:5_000;
       if(!dataCycleDue&&now-this.forwardState.lastQuoteCycleAt<quoteCadence){
         this.forwardLastAttemptAt=this.forwardState.lastQuoteCycleAt;return;
       }
       this.forwardLastAttemptAt=now;
-      const previous = this.forwardState;
-      const next = advanceForward({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),daily:this.turnDailyCandles,
-        quotes: this.forwardQuotes(now), contracts: this.regimeContracts(),legacyDrainOnly,
+      const previous = this.forwardState!;
+      const next = advanceForward({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
+        quotes: this.forwardQuotes(now), contracts: this.regimeContracts(),
         entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue });
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
