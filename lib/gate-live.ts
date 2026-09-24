@@ -71,8 +71,8 @@ export type GateLiveOrderSnapshot = {
   checkedAt: number;
 };
 export type GateLiveSnapshot = GateLiveCoreSnapshot & GateLiveOrderSnapshot & {
-  ordersCheckedAt:number;
-  orderAuditDegraded:boolean;
+  ordersCheckedAt?:number;
+  orderAuditDegraded?:boolean;
 };
 
 /** Gate classic futures `total` is wallet balance, not marked equity.
