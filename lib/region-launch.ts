@@ -62,47 +62,43 @@ export function regionLaunchValidationProofRate(modeledCostRate:number){
 }
 
 function compressionFrom(rows:RegionCandle[],mother:Pick<RegionLaunchState,
-  "motherLower"|"motherUpper"|"motherCenter"|"motherWidth"|"motherWidthRate">,costRate:number):RegionLaunchCompression|null{
+  "motherLower"|"motherUpper"|"motherCenter"|"motherWidth"|"motherWidthRate"|"motherBars"|"motherConfirmedAt">,
+  costRate:number):RegionLaunchCompression|null{
   const completed=rows.filter(r=>[r.time,r.open,r.high,r.low,r.close,r.volume].every(finite)&&r.open>0&&r.close>0
     &&r.high>=Math.max(r.open,r.close)&&r.low<=Math.min(r.open,r.close)&&r.low>0&&r.volume>=0)
     .sort((a,b)=>a.time-b.time);
-  for(const size of [10,9,8,7,6,5,4]){
-    if(completed.length<size)continue;
-    const window=completed.slice(-size);
-    if(window.some((r,i)=>i&&r.time!==window[i-1]!.time+300))continue;
-    const lows=window.map(r=>r.low),highs=window.map(r=>r.high),closes=window.map(r=>r.close);
-    const coreLower=quantile(lows,.20),coreUpper=quantile(highs,.80);
-    const lower=coreLower,upper=coreUpper;
-    if(!(upper>lower&&lower>0))continue;
-    const center=quantile(closes,.50),width=upper-lower,widthRate=width/Math.max(center,1e-12);
-    const closeSpan=(Math.max(...closes)-Math.min(...closes))/width;
-    const drift=Math.abs(closes.at(-1)!-closes[0]!)/width;
-    const cross=crossings(closes,center);
-    let overlaps=0;for(let i=1;i<window.length;i++)if(overlap(window[i-1]!,window[i]!)>=.15)overlaps++;
-    const expandedLow=mother.motherLower-mother.motherWidth*.30,expandedHigh=mother.motherUpper+mother.motherWidth*.30;
-    const nearBoundary=Math.min(Math.abs(center-mother.motherUpper),Math.abs(center-mother.motherLower))/mother.motherWidth;
-    if(width>mother.motherWidth*.82||widthRate<Math.max(.0008,costRate*.75)||widthRate>Math.max(.06,mother.motherWidthRate*.95)
-      ||center<expandedLow||center>expandedHigh||nearBoundary>.60||closeSpan>.90||drift>.55
-      ||cross<(size>=6?2:1)||overlaps<Math.max(2,size-2))continue;
-    // A small recent box can be nested in the same older rejection area. Walk
-    // back through connected closes, retaining wicks, and stop at a genuine
-    // approach/displacement candle instead of dragging in the entire trend.
-    const envelope=[...window];let fullLower=Math.min(...lows),fullUpper=Math.max(...highs);
-    for(let i=completed.length-size-1;i>=Math.max(0,completed.length-24);i--){
-      const prior=completed[i]!;
-      if(prior.time+300!==envelope[0]!.time||prior.close<fullLower-width*.25||prior.close>fullUpper+width*.25
-        ||prior.high<fullLower||prior.low>fullUpper)break;
-      envelope.unshift(prior);fullLower=Math.min(fullLower,prior.low);fullUpper=Math.max(fullUpper,prior.high);
-      if(Math.abs(prior.close-prior.open)>width*.75)break;
-    }
-    const startAt=completeAt(envelope[0]!),endAt=completeAt(window.at(-1)!);
-    const reference=completed.slice(-20);
-    return{id:`rc-${envelope[0]!.time}-${window.at(-1)!.time}-${fullLower.toPrecision(8)}-${fullUpper.toPrecision(8)}`,
-      startAt,endAt,bars:envelope.length,lower:fullLower,upper:fullUpper,center,width:fullUpper-fullLower,widthRate:(fullUpper-fullLower)/center,
-      coreLower,coreUpper,averageRange:reference.reduce((n,r)=>n+r.high-r.low,0)/reference.length,
-      averageBody:reference.reduce((n,r)=>n+Math.abs(r.close-r.open),0)/reference.length,crossings:cross,overlapPairs:overlaps};
+  if(!completed.length||mother.motherBars<12)return null;
+
+  // Detection may use a robust statistical core, but execution must use every
+  // wick belonging to the actual mature region. This is the trading box.
+  const firstComplete=mother.motherConfirmedAt-(mother.motherBars-1)*REGION_BAR_MS;
+  const base=completed.filter(r=>completeAt(r)>=firstComplete&&completeAt(r)<=mother.motherConfirmedAt);
+  if(base.length<Math.min(12,mother.motherBars))return null;
+
+  const envelope=[...base];
+  let lower=Math.min(mother.motherLower,...base.map(r=>r.low));
+  let upper=Math.max(mother.motherUpper,...base.map(r=>r.high));
+  // After confirmation, a candle that CLOSES inside remains part of the same
+  // winding region and its wick expands the boundary. The first outside close
+  // freezes the box; it is never swallowed into a rolling child box.
+  for(const row of completed.filter(r=>completeAt(r)>mother.motherConfirmedAt)){
+    if(row.close<lower||row.close>upper)break;
+    envelope.push(row);
+    lower=Math.min(lower,row.low);upper=Math.max(upper,row.high);
+    if(envelope.length>=mother.motherBars+12)break;
   }
-  return null;
+  if(!(upper>lower&&lower>0))return null;
+  const closes=envelope.map(r=>r.close),center=quantile(closes,.50),width=upper-lower,widthRate=width/Math.max(center,1e-12);
+  if(widthRate<Math.max(.0015,costRate*1.50)||widthRate>.25)return null;
+  const cross=crossings(closes,center);
+  let overlaps=0;for(let i=1;i<envelope.length;i++)if(overlap(envelope[i-1]!,envelope[i]!)>=.15)overlaps++;
+  const reference=envelope.slice(-20);
+  return{id:`rc-${envelope[0]!.time}-${envelope.at(-1)!.time}-${lower.toPrecision(8)}-${upper.toPrecision(8)}`,
+    startAt:completeAt(envelope[0]!),endAt:completeAt(envelope.at(-1)!),bars:envelope.length,lower,upper,center,width,widthRate,
+    coreLower:mother.motherLower,coreUpper:mother.motherUpper,
+    averageRange:reference.reduce((n,r)=>n+r.high-r.low,0)/reference.length,
+    averageBody:reference.reduce((n,r)=>n+Math.abs(r.close-r.open),0)/reference.length,
+    crossings:cross,overlapPairs:overlaps};
 }
 
 function relatedMother(s:RegionLaunchState,zone:RegionZone){
@@ -136,8 +132,9 @@ function clearReady(s:RegionLaunchState){
 }
 function motherQuality(s:RegionLaunchState,compression:RegionLaunchCompression|null){
   const age=clip((s.motherBars-12)/36),touch=clip((s.motherTouchesUpper+s.motherTouchesLower-4)/10),
-    cross=clip((s.motherCrossings-3)/6),fails=clip(s.failedDepartures/3),child=compression?clip((compression.bars-4)/6):0;
-  return clip(.42+age*.13+touch*.10+cross*.10+fails*.10+(compression?.bars? .10+child*.05:0),.35,.95);
+    cross=clip((s.motherCrossings-3)/6),fails=clip(s.failedDepartures/3),
+    continuity=compression?clip((compression.bars-s.motherBars)/12):0;
+  return clip(.48+age*.14+touch*.12+cross*.12+fails*.08+(compression?.bars?.06??0)+continuity*.05,.35,.95);
 }
 
 function processDepartures(s:RegionLaunchState,rows:RegionCandle[]){
@@ -179,33 +176,23 @@ export function advanceRegionLaunchUniverse(input:{paths:Record<string,RegionCan
     if(state.phase!=="CONSUMED"&&state.phase!=="READY"&&state.phase!=="IGNITION"){
       const wasArmed=state.phase==="ARMED"&&!!state.compression;
       const observedCompression=compressionFrom(rows,state,input.costRate);
-      // A completed breakout 5m bar naturally stops looking compressed. Keep
-      // the already-observed box long enough for its 1m confirmation to arrive.
+      // The launch box is the full mature winding region, including every wick.
+      // Once a completed candle closes outside it, freeze that exact box long
+      // enough for the 1m confirmation path; never roll the breakout into a
+      // smaller child range and pretend the old extreme did not exist.
       let compression=observedCompression;
-      if(wasArmed){
-        const old=state.compression!,latest=rows.at(-1)!;
-        if(latest.close<old.lower||latest.close>old.upper){
-          // Freeze the pre-departure box. A rolling window cannot swallow its
-          // breakout or remove the older rejection wick immediately before it.
-          compression=input.now<=old.endAt+4*REGION_BAR_MS?old:null;
-        }else{
-          const returned=rows.filter(r=>completeAt(r)>old.endAt&&r.close>=old.lower&&r.close<=old.upper);
-          const lower=Math.min(old.lower,...returned.map(r=>r.low)),upper=Math.max(old.upper,...returned.map(r=>r.high));
-          const endAt=Math.max(old.endAt,...returned.map(completeAt)),reference=rows.filter(r=>completeAt(r)<=endAt).slice(-20);
-          compression={...old,lower,upper,width:upper-lower,widthRate:(upper-lower)/old.center,
-            endAt,bars:old.bars+returned.length,
-            averageRange:reference.reduce((n,r)=>n+r.high-r.low,0)/reference.length,
-            averageBody:reference.reduce((n,r)=>n+Math.abs(r.close-r.open),0)/reference.length};
-        }
+      if(wasArmed&&!compression){
+        const old=state.compression!;
+        if(input.now<=old.endAt+4*REGION_BAR_MS)compression=old;
       }
       state.compression=compression;state.quality=motherQuality(state,compression);
       if(compression){
         state.phase="ARMED";
         if(!wasArmed){state.armedAt=input.now;state.armedInsideObserved=false;clearIgnition(state);clearReady(state);}
-        state.reason=`成熟母区域持续保留；已识别${compression.bars}根5m子区压缩，进入ARMED并提前争取实时盘口槽。失败离区累计${state.failedDepartures}次。`;
+        state.reason=`最近成熟5分钟缠绕区域已完整纳入${compression.bars}根K线及全部影线边界，进入ARMED并提前争取实时盘口槽。失败离区累计${state.failedDepartures}次。`;
       }else{
         state.phase="WATCH";state.armedAt=null;state.armedInsideObserved=false;clearIgnition(state);clearReady(state);
-        state.reason=`成熟母区域继续观察；此前失败离区${state.failedDepartures}次不会消费区域，等待靠近边界的4–10根5m子区压缩。`;
+        state.reason=`成熟区域继续观察；此前失败离区${state.failedDepartures}次不会消费区域，等待形成可完整追踪的最新缠绕边界。`;
       }
     }
     state.updatedAt=input.now;states[symbol]=state;
