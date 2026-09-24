@@ -39,6 +39,9 @@ test("family guard blocks a new rule id from the same failed hypothesis until re
   const idHop=familyEvidence({familyKey,ruleId:"r-new",status:"DEGRADED",health:.25,livePathScore:.58,lastQualifiedAt:3_000})!;
   assert.match(familyAdmissionBlock(guards,idHop)??"",/等待真正恢复/,"new rule id and timestamp alone must not bypass the family lock");
 
+  const staleActive=familyEvidence({familyKey,ruleId:"r-active",status:"ACTIVE",health:.9,livePathScore:.9,lastQualifiedAt:1_000})!;
+  assert.match(familyAdmissionBlock(guards,staleActive)??"",/等待真正恢复/,"old evidence cannot unlock merely by flipping lifecycle state");
+
   const recovered=familyEvidence({familyKey,ruleId:"r-newer",status:"RECOVERING",health:.55,livePathScore:.62,lastQualifiedAt:4_000})!;
   assert.equal(familyAdmissionBlock(guards,recovered),null);
   assert.equal(guards[familyKey],undefined);
