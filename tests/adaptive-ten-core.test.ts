@@ -1,133 +1,96 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {ADAPTIVE_ENGINE_VERSION,ADAPTIVE_REALTIME_POSITION_CAP,ADAPTIVE_TARGET_POSITIONS,advanceForward,forwardSummary,
-  initialForward,normalizeForward,type Candle,type Contract,type Quote} from "../lib/forward-relations.ts";
-import {restoreForwardProtectionCheckpoint} from "../lib/forward-protection-checkpoint.ts";
+import {ADAPTIVE_ENGINE_VERSION,ADAPTIVE_TARGET_POSITIONS,advanceForward,forwardSummary,initialForward,normalizeForward,
+  type Candle,type Contract,type Quote} from "../lib/forward-relations.ts";
+import {FORWARD_RELATION_V2_VERSION,advanceRelationEngine,initialRelationEngine,relationCandidates} from "../lib/forward-relation-v2.ts";
 
 const START=Date.parse("2026-09-24T00:00:00Z")/1000;
-const path=(step=.0015,bars=60):Candle[]=>{const out:Candle[]=[];let prev=100;
-  for(let i=0;i<bars;i++){const close=prev*(1+step);out.push({time:START+i*300,open:prev,close,
-    high:Math.max(prev,close)*1.0006,low:Math.min(prev,close)*.9994,volume:1000+i});prev=close;}return out;};
-const quote=(price:number,now:number):Quote=>({bestBid:price*.9999,bestAsk:price*1.0001,observedAt:now,fresh:true,entryReady:true});
-const contract:Contract={quantoMultiplier:.001,leverageMax:20,maintenanceRate:.005,minContracts:1};
+const symbols=Array.from({length:12},(_,i)=>`S${i}_USDT`);
+const contract:Contract={quantoMultiplier:.001,leverageMax:10,maintenanceRate:.005,minContracts:1};
+function makePath(index:number,bars=80,flipAt=40):Candle[]{const out:Candle[]=[];let prev=100+index;
+  for(let i=0;i<bars;i++){const step=i<flipAt?.002:-.006,close=prev*(1+step);out.push({time:START+i*300,open:prev,close,
+    high:Math.max(prev,close)*1.0002,low:Math.min(prev,close)*.9998,volume:1000+i});prev=close;}return out;}
+const full=Object.fromEntries(symbols.map((s,i)=>[s,makePath(i)])) as Record<string,Candle[]>;
+const sliced=(last:number)=>Object.fromEntries(symbols.map(s=>[s,full[s]!.slice(0,last+1)])) as Record<string,Candle[]>;
+const nowAt=(last:number)=>(full[symbols[0]]![last]!.time+300)*1000+1000;
+const quotesAt=(last:number,now=nowAt(last))=>Object.fromEntries(symbols.map(s=>{const p=full[s]![last]!.close;
+  return[s,{bestBid:p*.9999,bestAsk:p*1.0001,observedAt:now,fresh:true,entryReady:true} satisfies Quote];})) as Record<string,Quote>;
+const contracts=Object.fromEntries(symbols.map(s=>[s,contract]));
 
-test("ordinary 5m participation fills toward ten seats without requiring a winding region",()=>{
-  const symbols=Array.from({length:12},(_,i)=>`S${i}_USDT`),paths=Object.fromEntries(symbols.map(s=>[s,path()]));
-  const latest=paths[symbols[0]]!.at(-1)!.close,now=(paths[symbols[0]]!.at(-1)!.time+300)*1000+1000;
-  const quotes=Object.fromEntries(symbols.map(s=>[s,quote(latest,now)])),contracts=Object.fromEntries(symbols.map(s=>[s,contract]));
-  let s=initialForward(now-60_000);
-  for(let i=0;i<5;i++)s=advanceForward({state:s,now:now+i*1000,paths,quotes,contracts,entrySymbols:symbols,allowDataCycle:i===0}).state;
-  assert.equal(s.positions.length,ADAPTIVE_TARGET_POSITIONS);
-  assert.ok(s.opportunities.some(o=>o.mode==="FLOW"&&o.eligible));
-  assert.ok(s.positions.every(t=>t.entryContext?.mode==="FLOW"));
-  assert.ok(s.positions.every(t=>t.entryContext?.reserve!==true),"strong FLOW must remain primary, not reserve");
-  assert.equal(s.positions.some(t=>t.entryContext?.regionId),false);
+function learnThrough(last:number){let e=initialRelationEngine(nowAt(24)-1);for(let i=24;i<=last;i++)
+  e=advanceRelationEngine({state:e,paths:sliced(i),now:nowAt(i)});return e;}
+
+test("Forward Relation 2.0 learns only from matured market responses and produces causal long relations",()=>{
+  const e=learnThrough(39);
+  assert.equal(e.version,FORWARD_RELATION_V2_VERSION);
+  assert.ok(e.measured>=48,"five 15m groups across the market should have matured");
+  assert.ok(e.rules.length>0,"mature cost-positive responses should produce relations");
+  assert.ok(e.rules.some(r=>r.side==="LONG"&&r.status==="ACTIVE"));
+  assert.equal(e.rules.some(r=>r.side==="SHORT"),false,"the opposite side must not be fabricated while only long responses matured");
+  assert.ok(relationCandidates(e).length>0);
 });
 
-
-test("clean slow 5m trends may fill empty seats as half-risk reserve positions",()=>{
-  const symbols=Array.from({length:12},(_,i)=>`R${i}_USDT`),paths=Object.fromEntries(symbols.map(s=>[s,path(.0001)]));
-  const price=paths[symbols[0]]!.at(-1)!.close,now=(paths[symbols[0]]!.at(-1)!.time+300)*1000+1000;
-  const quotes=Object.fromEntries(symbols.map(s=>[s,quote(price,now)])),contracts=Object.fromEntries(symbols.map(s=>[s,contract]));
-  let s=initialForward(now-60_000);
-  for(let i=0;i<5;i++)s=advanceForward({state:s,now:now+i*1000,paths,quotes,contracts,entrySymbols:symbols,allowDataCycle:i===0}).state;
-  const reserves=s.opportunities.filter(o=>o.reserve&&o.eligible);
-  assert.ok(reserves.length>=10,"slow clean direction should produce reserve opportunities instead of an empty book");
-  assert.equal(s.positions.length,ADAPTIVE_TARGET_POSITIONS);
-  assert.ok(s.positions.every(t=>t.entryContext?.reserve===true));
-  assert.ok(s.positions.every(t=>t.plannedRisk<=s.initialEquity*.0041),"reserve risk must stay near half normal risk");
+test("ongoing 5m response path can degrade an old relation before its 15m final label matures",()=>{
+  const before=learnThrough(39);
+  assert.ok(before.rules.some(r=>r.side==="LONG"&&r.status==="ACTIVE"));
+  const after=advanceRelationEngine({state:before,paths:sliced(40),now:nowAt(40)});
+  assert.ok(after.rules.some(r=>r.side==="LONG"&&(r.status==="PRESSURED"||r.status==="DEGRADED")));
+  assert.equal(after.rules.some(r=>r.side==="SHORT"),false,"old long deterioration alone must never create a short relation");
+  assert.ok(after.diagnostics.liveAnomalies>0);
 });
 
-test("reserve opportunities cannot rotate a full primary ten-seat book",()=>{
-  const primarySymbols=Array.from({length:10},(_,i)=>`P${i}_USDT`),primaryPaths=Object.fromEntries(primarySymbols.map(s=>[s,path(.0015)]));
-  const primaryPrice=primaryPaths[primarySymbols[0]]!.at(-1)!.close,now=(primaryPaths[primarySymbols[0]]!.at(-1)!.time+300)*1000+1000;
-  const primaryQuotes=Object.fromEntries(primarySymbols.map(s=>[s,quote(primaryPrice,now)]));
-  const primaryContracts=Object.fromEntries(primarySymbols.map(s=>[s,contract]));
-  let s=initialForward(now-60_000);
-  for(let i=0;i<4;i++)s=advanceForward({state:s,now:now+i*1000,paths:primaryPaths,quotes:primaryQuotes,
-    contracts:primaryContracts,entrySymbols:primarySymbols,allowDataCycle:i===0}).state;
-  assert.equal(s.positions.length,10);const ids=s.positions.map(t=>t.id).sort();
-
-  const reserveSymbol="RESERVE_USDT",reservePath=path(.0001),reservePrice=reservePath.at(-1)!.close;
-  const probe=advanceForward({state:initialForward(now-60_000),now,paths:{[reserveSymbol]:reservePath},
-    quotes:{[reserveSymbol]:quote(reservePrice,now)},contracts:{[reserveSymbol]:contract},entrySymbols:[reserveSymbol]}).state;
-  const reserve=probe.opportunities.find(o=>o.symbol===reserveSymbol&&o.reserve&&o.eligible);assert.ok(reserve);
-  s.opportunities=[reserve!];
-  const allQuotes={...primaryQuotes,[reserveSymbol]:quote(reservePrice,now+5000)},allContracts={...primaryContracts,[reserveSymbol]:contract};
-  s=advanceForward({state:s,now:now+5000,paths:primaryPaths,quotes:allQuotes,contracts:allContracts,
-    entrySymbols:[...primarySymbols,reserveSymbol],allowDataCycle:false}).state;
-  assert.deepEqual(s.positions.map(t=>t.id).sort(),ids);
-  assert.equal(s.events.some(e=>e.kind==="ROTATION"&&e.subject===reserveSymbol),false);
+test("opposite direction earns authority only after its own completed recent response groups agree",()=>{
+  let e=learnThrough(39);
+  e=advanceRelationEngine({state:e,paths:sliced(40),now:nowAt(40)});
+  assert.equal(e.rules.some(r=>r.side==="SHORT"),false);
+  for(let i=41;i<=51;i++)e=advanceRelationEngine({state:e,paths:sliced(i),now:nowAt(i)});
+  const shorts=e.rules.filter(r=>r.side==="SHORT");
+  assert.ok(shorts.length>0,"three completed negative 15m groups should be able to create an independent short relation");
+  assert.ok(shorts.some(r=>r.scope==="RECENT"),"fast migration must still be based on matured recent samples");
 });
 
-test("ordinary participation never forces the eleventh seat",()=>{
-  const symbols=Array.from({length:14},(_,i)=>`T${i}_USDT`),paths=Object.fromEntries(symbols.map(s=>[s,path(.0016)]));
-  const price=paths[symbols[0]]!.at(-1)!.close,now=(paths[symbols[0]]!.at(-1)!.time+300)*1000+1000;
-  const quotes=Object.fromEntries(symbols.map(s=>[s,quote(price,now)])),contracts=Object.fromEntries(symbols.map(s=>[s,contract]));
-  let s=initialForward(now-60_000);
-  for(let i=0;i<8;i++)s=advanceForward({state:s,now:now+i*1000,paths,quotes,contracts,entrySymbols:symbols,allowDataCycle:i===0}).state;
-  assert.equal(s.positions.length,10);
-  assert.equal(ADAPTIVE_REALTIME_POSITION_CAP,11);
+test("PAPER uses learned relations for entries instead of the retired 5m FLOW gate",()=>{
+  const learned=learnThrough(39),now=nowAt(39),paths=sliced(39),quotes=quotesAt(39,now);
+  let s=initialForward(now-60_000);s.relationEngine=learned;
+  s=advanceForward({state:s,now,paths,quotes,contracts,entrySymbols:symbols}).state;
+  assert.ok(s.positions.length>0);assert.ok(s.positions.length<=ADAPTIVE_TARGET_POSITIONS);
+  assert.ok(s.opportunities.some(o=>o.mode==="RELATION"&&o.eligible));
+  assert.ok(s.positions.every(t=>t.entryContext?.mode==="RELATION"||t.entryContext?.regionId));
+  assert.ok(s.positions.some(t=>t.entryContext?.relationRuleId));
 });
 
-
-test("external analysis price basis is re-anchored to the Gate execution quote",()=>{
-  const external=path(.0015).map(r=>({...r,open:r.open*2,high:r.high*2,low:r.low*2,close:r.close*2}));
-  const now=(external.at(-1)!.time+300)*1000+1000,gatePrice=100;
-  let s=initialForward(now-60_000);
-  s=advanceForward({state:s,now,paths:{BTC_USDT:external},quotes:{BTC_USDT:quote(gatePrice,now)},
-    contracts:{BTC_USDT:contract},entrySymbols:["BTC_USDT"]}).state;
-  assert.equal(s.positions.length,1,"cross-venue basis must not invalidate an otherwise valid opportunity");
-  const t=s.positions[0]!,distance=Math.abs(t.entryPrice-t.stopPrice)/t.entryPrice;
-  assert.ok(distance>=.002&&distance<=.03);
-  assert.ok(t.stopPrice<150,"Bybit/Binance absolute stop must never be copied directly onto Gate");
-  assert.ok((t.entryContext?.regionLower??0)<150||t.entryContext?.regionLower==null);
+test("a newly degraded relation exits a weak no-feedback position without waiting for the full horizon or auto-reversing",()=>{
+  const learned=learnThrough(39),now=nowAt(39),paths=sliced(39);
+  let s=initialForward(now-60_000);s.relationEngine=learned;
+  s=advanceForward({state:s,now,paths,quotes:quotesAt(39,now),contracts,entrySymbols:symbols}).state;
+  assert.ok(s.positions.length>0);const opened=s.positions.length;
+  const later=nowAt(40),next=advanceForward({state:s,now:later,paths:sliced(40),quotes:quotesAt(40,later),contracts,entrySymbols:symbols}).state;
+  assert.ok(next.history.some(t=>t.exitReason==="RELATION_DEGRADED"),"weak holdings should react to relation failure at a path checkpoint");
+  assert.ok(next.positions.length<opened||next.history.length>0);
+  assert.equal(next.opportunities.some(o=>o.side==="SHORT"&&o.mode==="RELATION"),false,"degradation is defense, not a forced reversal");
 });
 
-test("strategy normalization upgrades an old account in place instead of creating a fresh ledger",()=>{
+test("risk scaling never becomes a global trading pause merely because a relation is pressured",()=>{
+  const learned=learnThrough(39),pressured=advanceRelationEngine({state:learned,paths:sliced(40),now:nowAt(40)});
+  const candidates=relationCandidates(pressured).filter(c=>c.side==="LONG");
+  assert.ok(candidates.length>0,"degraded/pressured relations retain bounded probe participation");
+  assert.ok(candidates.every(c=>c.health>=.15));
+  assert.ok(candidates.some(c=>c.reserve));
+});
+
+test("strategy migration preserves account identity and financial history while starting a fresh causal relation learner",()=>{
   const s=initialForward(1000);s.startedAt=123;s.balance=876.54;s.initialEquity=1000;s.resolved=7;s.turnover=4321;
   s.engineVersion="legacy";s.strategyAuthorityVersion="legacy";s.executionVersion="legacy";s.storage={persistedAt:999,error:null};
   const n=normalizeForward(s,5000);
   assert.equal(n.startedAt,123);assert.equal(n.balance,876.54);assert.equal(n.resolved,7);assert.equal(n.turnover,4321);
   assert.equal(n.storage.persistedAt,999);assert.equal(n.engineVersion,ADAPTIVE_ENGINE_VERSION);
-  assert.equal(n.strategyAuthorityVersion,ADAPTIVE_ENGINE_VERSION);assert.equal(n.executionVersion,ADAPTIVE_ENGINE_VERSION);
+  assert.equal(n.strategyAuthorityVersion,FORWARD_RELATION_V2_VERSION);assert.equal(n.executionVersion,FORWARD_RELATION_V2_VERSION);
+  assert.equal(n.relationEngine.startedAt,5000);assert.equal(n.relationEngine.measured,0);
 });
 
-test("legacy protection checkpoint migrates without resetting or forgetting tightened protection",()=>{
-  const symbols=["BTC_USDT"],paths={BTC_USDT:path(.0015)},price=path(.0015).at(-1)!.close;
-  const now=(paths.BTC_USDT.at(-1)!.time+300)*1000+1000,contracts={BTC_USDT:contract};
-  let s=initialForward(now-60_000);
-  s=advanceForward({state:s,now,paths,quotes:{BTC_USDT:quote(price,now)},contracts,entrySymbols:symbols}).state;
-  assert.equal(s.positions.length,1);s.storage={persistedAt:now,error:null};
-  const t=s.positions[0]!,tight=t.entryPrice*1.004;
-  const legacy={version:"forward-protection-checkpoint-v1",startedAt:s.startedAt,baseRevision:s.revision,basePersistedAt:s.storage.persistedAt,
-    quoteCycleAt:now+1000,peakEquity:s.peakEquity+1,maxDrawdown:s.maxDrawdown,
-    positions:[{id:t.id,openedAt:t.openedAt,favorable:.012,adverse:.002,lastPrice:t.entryPrice*1.01,lastQuoteAt:now+1000,
-      stopPrice:tight,relationFailureBars:0,lastRelationBar:now,profitProtection:{floorRate:.004}}]};
-  const restored=restoreForwardProtectionCheckpoint(s,legacy);
-  assert.equal(restored.startedAt,s.startedAt);assert.equal(restored.balance,s.balance);assert.equal(restored.positions.length,1);
-  assert.equal(restored.positions[0]!.stopPrice,tight);assert.equal(restored.positions[0]!.profitFloorRate,.004);
-  assert.equal(restored.positions[0]!.favorable,.012);assert.equal(restored.lastQuoteCycleAt,now+1000);
-});
-
-test("profit protection tightens after a strong favorable move and never loosens",()=>{
-  const symbols=["BTC_USDT"],paths={BTC_USDT:path(.0015)},price=path(.0015).at(-1)!.close;
-  const now=(paths.BTC_USDT.at(-1)!.time+300)*1000+1000,contracts={BTC_USDT:contract};
-  let s=initialForward(now-60_000);
-  s=advanceForward({state:s,now,paths,quotes:{BTC_USDT:quote(price,now)},contracts,entrySymbols:symbols}).state;
-  assert.equal(s.positions.length,1);const entry=s.positions[0]!.entryPrice,oldStop=s.positions[0]!.stopPrice;
-  const favorable=entry*1.014;
-  s=advanceForward({state:s,now:now+2000,paths,quotes:{BTC_USDT:quote(favorable,now+2000)},contracts,entrySymbols:symbols,allowDataCycle:false}).state;
-  assert.equal(s.positions.length,1);
-  const protectedStop=s.positions[0]!.stopPrice,floor=s.positions[0]!.profitFloorRate??0;
-  assert.ok(floor>0);assert.ok(protectedStop>oldStop);assert.ok(protectedStop>entry);
-  const stillProfit=entry*1.011;
-  s=advanceForward({state:s,now:now+3000,paths,quotes:{BTC_USDT:quote(stillProfit,now+3000)},contracts,entrySymbols:symbols,allowDataCycle:false}).state;
-  if(s.positions.length)assert.ok(s.positions[0]!.stopPrice>=protectedStop);
-});
-
-test("forward summary exposes the actual ten-seat engine instead of retired strategy labels",()=>{
+test("summary exposes relation lifecycle and the no-forced-reversal boundary",()=>{
   const s=initialForward(1000),view=forwardSummary(s,{},2000);
-  assert.equal(view.engineVersion,ADAPTIVE_ENGINE_VERSION);assert.equal(view.targetPositions,10);assert.equal(view.realtimePositionCap,11);
-  assert.match(view.boundaries.grammar,/5m方向—空间/);assert.match(view.boundaries.sampleMeaning,/实时市场方向优先/);
+  assert.equal(view.engineVersion,FORWARD_RELATION_V2_VERSION);assert.equal(view.targetPositions,10);assert.equal(view.realtimePositionCap,11);
+  assert.match(view.boundaries.grammar,/15\/60\/180/);assert.match(view.boundaries.sampleMeaning,/旧方向失效不会自动生成反向订单/);
+  assert.equal(view.relationEngine.version,FORWARD_RELATION_V2_VERSION);
 });
