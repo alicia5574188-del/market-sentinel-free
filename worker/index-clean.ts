@@ -43,7 +43,6 @@ import { ADAPTIVE_ENGINE_VERSION, ADAPTIVE_REALTIME_POSITION_CAP, ADAPTIVE_TARGE
   initialMultiTurnForward, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { MULTI_TURN_VERSION } from "../lib/multi-turn-engine.ts";
 import { ANCHOR_FLOW_VERSION } from "../lib/anchor-flow.ts";
-import { forwardSymbolAllowed } from "../lib/forward-evidence.ts";
 import { selectAnchorOpportunityUniverse } from "../lib/multi-turn-universe.ts";
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, prepareForwardReset,
   FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE } from "../lib/forward-store.ts";
@@ -101,6 +100,7 @@ const NON_ALARM_WRITE_CAP = 8_000;
 const WATCHDOG_WRITE_RESERVE = 2_880;
 const AUTHORITY_SCHEMA_VERSION = 1;
 const DEFAULT_SYMBOLS = ["BTC_USDT", "ETH_USDT", "SOL_USDT"];
+const adaptiveSymbolAllowed=(symbol:string)=>/^[A-Z0-9]{2,24}_USDT$/.test(symbol);
 const REGIME_HOURLY_STORAGE_PREFIX = "regime-hourly:";
 const REGIME_HOURLY_RETRY_MS = 10_000;
 const TURN_DAILY_STORAGE_PREFIX = "multi-turn-daily:v1:";
@@ -898,7 +898,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private refreshRadar(now: number, rows: Awaited<ReturnType<typeof fetchMarketTickers>>) {
     if(this.contractCatalog.size===0)throw new Error("contract catalog unavailable: radar refresh deferred");
-    const eligibleRows=rows.filter(row=>this.contractCatalog.has(row.symbol)&&forwardSymbolAllowed(row.symbol));
+    const eligibleRows=rows.filter(row=>this.contractCatalog.has(row.symbol)&&adaptiveSymbolAllowed(row.symbol));
     if(!eligibleRows.length)throw new Error("Gate ticker universe unavailable");
     const locked=[...(this.forwardState?.positions.map(p=>p.symbol)??[]),
       ...(this.forwardState?forwardWatchSymbols(this.forwardState,now,this.runtime.liquidUniverse):[])];
@@ -1005,15 +1005,16 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.forwardBusy = true;
     try {
       await this.ensureAdaptiveAccount(now);
-      const dataCycleDue=allowDataCycle&&(!this.forwardState!.lastCycleAt
-        ||Math.floor((now-90_000)/BAR_MS)>Math.floor((this.forwardState!.lastCycleAt-90_000)/BAR_MS));
-      const urgent=this.forwardUrgentSymbols(now).length>0||this.forwardState!.positions.length>0;
+      const state=this.forwardState!;
+      const dataCycleDue=allowDataCycle&&(!state.lastCycleAt
+        ||Math.floor((now-90_000)/BAR_MS)>Math.floor((state.lastCycleAt-90_000)/BAR_MS));
+      const urgent=this.forwardUrgentSymbols(now).length>0||state.positions.length>0;
       const quoteCadence=urgent?LOOP_MS:5_000;
-      if(!dataCycleDue&&now-this.forwardState.lastQuoteCycleAt<quoteCadence){
-        this.forwardLastAttemptAt=this.forwardState.lastQuoteCycleAt;return;
+      if(!dataCycleDue&&now-state.lastQuoteCycleAt<quoteCadence){
+        this.forwardLastAttemptAt=state.lastQuoteCycleAt;return;
       }
       this.forwardLastAttemptAt=now;
-      const previous = this.forwardState!;
+      const previous = state;
       const next = advanceForward({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
         quotes: this.forwardQuotes(now), contracts: this.regimeContracts(),
         entrySymbols: this.runtime.liquidUniverse,allowDataCycle:dataCycleDue });
@@ -1651,9 +1652,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private async resetMultiTurnPaperAccount(now:number){
     if(!this.forwardState)this.forwardState=await readForwardStore(this.ctx.storage,now);
     const previous=this.forwardState;
-    if(previous.strategyAuthorityVersion!==MULTI_TURN_VERSION)throw new Error("当前权威账户尚未切换到Multi-Turn");
+    if(!previous)throw new Error("当前模拟账户尚未恢复");
     const quotes=this.regimeQuotes(now);
-    const closed=closeForwardForReset(previous,quotes,now,"手动重置模拟账户：用新鲜可执行价归档本周期持仓并从1000U重新开始");
+    const closed=closeForwardForReset(previous,quotes,now);
     const next=initialMultiTurnForward(now),prepared=await prepareForwardReset(previous,closed,next,now);
     const saved=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
     const protection=prepared.entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
