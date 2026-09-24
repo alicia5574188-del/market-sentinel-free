@@ -446,7 +446,7 @@ function fillSeats(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<s
     if(opened>=3)break;const q=quotes[o.symbol],meta=contracts[o.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
     if(!meta){reject("等待合约规格");continue;}
     const last=s.lastExitAt[o.symbol]??0,lastSide=s.lastSide[o.symbol];
-    const cooldown=lastSide&&lastSide!==o.side?2*60_000:8*60_000;if(now-last<cooldown){reject("同币短时防抖");continue;}
+    const cooldown=lastSide&&lastSide!==o.side?5*60_000:8*60_000;if(now-last<cooldown){reject("同币短时防抖");continue;}
     const error=openTrade(s,o,q!,meta,now,equity);if(error){reject(error);continue;}opened++;
   }
   s.entryDiagnostics.opened=opened;return opened;
@@ -504,8 +504,10 @@ export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols
 }
 export function forwardUrgentMinuteSymbols(s:ForwardState,entrySymbols?:Iterable<string>){
   const allowed=entrySymbols?new Set(entrySymbols):null,keep=(x:string)=>!allowed||allowed.has(x);
+  const relationSymbols=new Set(s.opportunities.filter(o=>o.eligible&&keep(o.symbol)).map(o=>o.symbol));
   return[...new Set([...s.positions.map(t=>t.symbol),...s.opportunities.filter(o=>o.premium&&o.eligible&&keep(o.symbol)).map(o=>o.symbol),
-    ...Object.values(s.regions).filter(r=>keep(r.symbol)&&r.quality>=55).sort((a,b)=>b.quality-a.quality).slice(0,8).map(r=>r.symbol)])];
+    ...Object.values(s.regions).filter(r=>keep(r.symbol)&&relationSymbols.has(r.symbol)&&r.quality>=55)
+      .sort((a,b)=>b.quality-a.quality).slice(0,8).map(r=>r.symbol)])];
 }
 export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iterable<string>){
   return forwardUrgentQuoteSymbols(s,now,entrySymbols).slice(0,ADAPTIVE_REALTIME_POSITION_CAP);
