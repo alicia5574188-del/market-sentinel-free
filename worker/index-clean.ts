@@ -2932,13 +2932,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private publishCriticalHealth(observedAt:number,books:{successes:number;requests:number}) {
     this.runtime.lastAlarmAt=observedAt;
-    if(books.successes>0)this.runtime.lastSuccessAt=observedAt;
+    const hub=this.marketHub.status(observedAt);
+    if(books.successes>0||hub.healthySources>0)this.runtime.lastSuccessAt=observedAt;
     const readiness=this.realtimeReadiness(observedAt);
     const authorityStale=this.runtime.lastSuccessAt==null||observedAt-this.runtime.lastSuccessAt>SYSTEM_HEALTH_STALE_AFTER_MS;
     this.runtime.state=!this.authorityReady?"RECOVERY_REQUIRED":authorityStale?"RECONNECTING"
-      :!readiness.protectedMarketsReady?"DEGRADED":readiness.actionableMarkets>0?"LIVE":"WARMING";
-    const feedError=authorityStale?`${books.requests||this.runtime.symbols.length}个计划盘口暂不可用`
-      :!readiness.protectedMarketsReady?"已有持仓缺少新鲜保护盘口":null;
+      :!readiness.protectedMarketsReady?"DEGRADED":hub.healthySources>0||readiness.actionableMarkets>0?"LIVE":"WARMING";
+    const feedError=authorityStale?"Bybit/Binance分析源与Gate执行源同时不可用"
+      :!readiness.protectedMarketsReady?"已有持仓缺少Gate保护报价":null;
     this.runtime.lastError=feedError??this.runtime.d1MirrorError;
   }
 
@@ -3251,6 +3252,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           logError: this.runtime.strategyLogError,
         },
         feedQuality: this.runtime.feedQuality,
+        multiSourceMarket: this.marketHub.status(),
         marketDataTransport: this.gateStream.status(),
         marketRegimes: { tracked: regimes.tracked, warmed: regimes.warmed, counts: regimes.counts },
         limits: {
@@ -3303,7 +3305,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         ...(path === "/owner-runtime" ? { live:{...live,history:this.liveHistory,mirror:this.liveMirrorView(),
           turnover:turnoverView(this.turnoverState,this.turnoverError,Date.now())} } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length + bankruptcyOutbox.length,
         oldestOutboxAgeMs: outbox.length ? Math.max(0, Date.now() - (outbox[0].position.exitAt ?? outbox[0].position.entryAt)) : 0,
-        authorityReady: this.authorityReady, realtimeReadiness: this.realtimeReadiness(), generatedAt: Date.now(), state: effectiveState, stale,
+        authorityReady: this.authorityReady, realtimeReadiness: this.realtimeReadiness(), multiSourceMarket:this.marketHub.status(),
+        generatedAt: Date.now(), state: effectiveState, stale,
         analysisP99Ms: percentile99(this.runtime.analysisMs), limits: { loopMs: LOOP_MS, markets: this.runtime.symbols.length, scannedMarkets: this.runtime.radar.scanned, scanUniverse: SCAN_UNIVERSE_SIZE, radarMs: RADAR_MS, warmupSnapshots: WARMUP_SNAPSHOTS,
           maxAncillaryConcurrency: MAX_ANCILLARY_CONCURRENCY, maxSubrequestsPerAlarm: 32, plannedAlarmRequestsPerDay: 43_200,
           plannedAlarmWritesPerDay: 43_200, watchdogWriteReservePerDay: WATCHDOG_WRITE_RESERVE,
