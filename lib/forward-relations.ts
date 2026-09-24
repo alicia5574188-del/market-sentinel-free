@@ -278,14 +278,17 @@ function minuteConfirm(minute:Candle[]|undefined,side:"LONG"|"SHORT",level:numbe
 }
 function relationOpportunity(c:RelationCandidate,rows:Candle[],q:Quote|undefined,now:number):Opportunity{
   const framePrice=rows.at(-1)!.close,d=dir(c.side),exec=executionScore(q,now),net=Math.max(.0002,c.netRate),gross=Math.max(net+ROUND_TRIP_COST,c.grossRate),
-    pullback=Math.max(.003,c.stopRate),edge=net/Math.max(pullback,1e-9),score=clip(c.score*.90+exec*.10,0,100);
+    pullback=Math.max(.003,c.stopRate),edge=net/Math.max(pullback,1e-9),score=clip(c.score*.90+exec*.10,0,100),
+    reserveBlock=reserveExperimentValueBlock({reserve:c.reserve,netRate:net,edgeRatio:edge,livePathScore:c.livePathScore,
+      environmentFit:c.environmentFit,roundTripCost:ROUND_TRIP_COST});
   return{id:`relation-${c.ruleId}-${c.symbol}-${rows.at(-1)!.time}`,symbol:c.symbol,side:c.side,mode:"RELATION",premium:false,reserve:c.reserve,
-    score,eligible:c.health>=.15&&net>0,completedAt:(rows.at(-1)!.time+300)*1000,expiresAt:now+12*60_000,price:framePrice,
+    score,eligible:c.health>=.15&&net>0&&!reserveBlock,completedAt:(rows.at(-1)!.time+300)*1000,expiresAt:now+12*60_000,price:framePrice,
     stopPrice:framePrice*(1-d*pullback),targetPrice:framePrice*(1+d*Math.max(.003,gross)),stopRate:pullback,targetRate:Math.max(.003,gross),
     directionStrength:c.health*100,pathEfficiency:c.livePathScore*100,momentumPersistence:c.environmentFit*100,positionScore:75,
     spaceScore:100*clip(edge/1.5),executionScore:exec,grossRemainingSpaceRate:gross,netRemainingSpaceRate:net,pullbackRiskRate:pullback,
-    edgeRatio:edge,expectedHoldMinutes:c.horizon,marketFit:c.environmentFit*100,regionId:null,regionQuality:null,reason:c.reason,
-    relationRuleId:c.ruleId,relationStatus:c.status,relationHorizon:c.horizon,relationHealth:c.health,riskScale:clip(c.health,.25,1)};
+    edgeRatio:edge,expectedHoldMinutes:c.horizon,marketFit:c.environmentFit*100,regionId:null,regionQuality:null,
+    reason:reserveBlock?`${c.reason}｜${reserveBlock}`:c.reason,relationRuleId:c.ruleId,relationStatus:c.status,
+    relationHorizon:c.horizon,relationHealth:c.health,riskScale:clip(c.health,.25,1)};
 }
 function regionOpportunities(s:ForwardState,symbol:string,rows:Candle[],minute:Candle[]|undefined,q:Quote|undefined,now:number,pulse:MarketPulse,region:Region){
   const out:Opportunity[]=[],st=pathStats(rows),last=st.last,prev=rows.at(-2)!,price=last.close,exec=executionScore(q,now);
@@ -337,9 +340,12 @@ function relationBackedRegionOpportunities(s:ForwardState,symbol:string,rows:Can
   for(const o of regionOpportunities(s,symbol,rows,minute,q,now,pulse,region)){
     const relation=support.find(c=>c.side===o.side);
     if(!relation)continue;
-    out.push({...o,score:clip(o.score*.55+relation.score*.45,0,100),eligible:o.eligible&&relation.health>=.15,
+    const reserveBlock=reserveExperimentValueBlock({reserve:relation.reserve,netRate:o.netRemainingSpaceRate,edgeRatio:o.edgeRatio,
+      livePathScore:relation.livePathScore,environmentFit:relation.environmentFit,roundTripCost:ROUND_TRIP_COST});
+    out.push({...o,score:clip(o.score*.55+relation.score*.45,0,100),eligible:o.eligible&&relation.health>=.15&&!reserveBlock,
       reserve:relation.reserve,relationRuleId:relation.ruleId,relationStatus:relation.status,relationHorizon:relation.horizon,
-      relationHealth:relation.health,riskScale:clip(relation.health,.25,1),reason:`${relation.reason}｜执行结构：${o.reason}`});
+      relationHealth:relation.health,riskScale:clip(relation.health,.25,1),
+      reason:`${relation.reason}${reserveBlock?`｜${reserveBlock}`:""}｜执行结构：${o.reason}`});
   }
   return out;
 }
