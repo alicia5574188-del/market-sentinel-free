@@ -22,7 +22,7 @@ const seedManualRules=(state:ReturnType<typeof initialForward>,ops:Opportunity[]
   const grouped=new Map<string,Opportunity[]>();
   for(const o of ops){if(!o.relationRuleId)continue;const rows=grouped.get(o.relationRuleId)??[];rows.push(o);grouped.set(o.relationRuleId,rows);}
   state.relationEngine.rules=[...grouped.entries()].map(([id,rows],groupIndex)=>{const o=rows[0]!,idx=Math.max(0,symbols.indexOf(o.symbol)),
-    feature=(idx+groupIndex)%8,op:(idx+groupIndex)>=8?"LE":"GE",health=o.relationHealth??.9;
+    feature=idx%8,op:idx<8?"GE":"LE",health=o.relationHealth??.9;
     return{id,signature:id,scope:o.reserve?"RECENT":"BASE",horizon:o.relationHorizon??60,side:o.side,
       conditions:[{feature,op,threshold:0}],longNet:.01,recentNet:.008,standardError:.001,samples:40,longGroups:6,recentGroups:3,
       health,status:o.relationStatus??"ACTIVE",livePathScore:.78,environmentFit:.82,stopRate:o.stopRate,targetRate:o.targetRate,
@@ -124,6 +124,20 @@ test("probe relationships share one 1.5% portfolio pool instead of fragmenting i
   assert.ok(charge<=15.01);assert.ok(s.positions.length<=5);
 });
 
+test("different rule ids from one causal family can open only one reserve experiment",()=>{
+  const now=nowAt(39),s=initialForward(now-60_000);s.lastCandleAt=now;
+  const a=manualOpportunity(symbols[0]!,0,{premium:true,reserve:true,ruleId:"family-a",health:.25,score:72}),
+    b=manualOpportunity(symbols[1]!,1,{premium:true,reserve:true,ruleId:"family-b",health:.25,score:71});
+  s.opportunities=[a,b];seedManualRules(s,s.opportunities,now);
+  for(const [i,r] of s.relationEngine.rules.entries()){
+    r.scope="RECENT";r.status="DEGRADED";r.health=.25;r.livePathScore=.70;r.environmentFit=.80;
+    r.conditions=[{feature:2,op:"LE",threshold:i===0?-.17:-.31}];
+  }
+  fillForwardPortfolio(s,quotesAt(39,now),contracts,now,1000,false);
+  assert.equal(s.positions.length,1);
+  assert.ok(Object.keys(s.entryDiagnostics.reasons).some(reason=>/已有一笔探测仓/.test(reason)));
+});
+
 test("one learned relation cannot consume more than 2.5% portfolio budget across correlated symbols",()=>{
   const now=nowAt(39),s=initialForward(now-60_000);s.lastCandleAt=now;
   s.opportunities=symbols.map((symbol,i)=>manualOpportunity(symbol,i,{premium:true,ruleId:"shared-market-factor"}));seedManualRules(s,s.opportunities,now);
@@ -171,6 +185,7 @@ test("a holding exits early when its own relation is degraded and it has no posi
   held.openedAt=now-6*60_000;held.firstProfitAt=null;held.favorable=0;
   const later=now+1000,next=advanceForward({state:s,now:later,paths,quotes:quotesAt(39,later),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
   assert.ok(next.history.some(t=>t.id===held.id&&t.exitReason==="RELATION_DEGRADED"));
+  assert.ok(Object.keys(next.familyExperiment.guards).length>0,"no-feedback degraded exit must lock the relation family");
   assert.equal(next.opportunities.some(o=>o.side==="SHORT"&&o.mode==="RELATION"),false,"degradation is defense, not a forced reversal");
 });
 
