@@ -134,6 +134,17 @@ function distinctRegion(a:RegionZone,b:RegionZone){
   return overlapRatio<.35||centerShift>.75;
 }
 
+function legacyRegionNeedsAcceptedRefresh(a:RegionZone,b:RegionZone){
+  // Existing persisted regions were created by the old <=48-bar percentile
+  // detector. Refresh them once when the accepted-price detector finds a
+  // materially different boundary or a longer-lived mature region. After that,
+  // normal distinct-region rules prevent 5m-to-5m boundary churn.
+  if(a.bars>48||b.confirmedAt<=a.confirmedAt)return false;
+  const scale=Math.max(a.width,b.width,1e-12);
+  const boundaryShift=Math.max(Math.abs(a.lower-b.lower),Math.abs(a.upper-b.upper))/scale;
+  return b.bars>48||boundaryShift>=.18;
+}
+
 function migrationSignal(zone:RegionZone,row:RegionCandle,side:"LONG"|"SHORT"):RegionEntrySignal{
   const boundary:RegionBoundary=side==="LONG"?"UPPER":"LOWER";
   const signalPrice=row.close;
@@ -167,7 +178,7 @@ export function evaluateRegionLifecycle(input:{symbol:string;rows:RegionCandle[]
   const prior=input.prior??null;
   let zone=prior?.zone??null;
   if(!zone)zone=detected;
-  else if(detected&&distinctRegion(zone,detected))zone=detected;
+  else if(detected&&(distinctRegion(zone,detected)||legacyRegionNeedsAcceptedRefresh(zone,detected)))zone=detected;
   if(!zone){
     const lastProcessedAt=completed.at(-1)?completeAt(completed.at(-1)!):(prior?.lastProcessedAt??0);
     return{state:{version:REGION_LIFECYCLE_VERSION,symbol:input.symbol,initializedAt:prior?.initializedAt??input.now,observedAt:input.now,
