@@ -333,7 +333,12 @@ export function advanceRegionLaunchMinutes(input:{states:Record<string,RegionLau
         s.failedDepartures++;s.phase="ARMED";clearIgnition(s);clearReady(s);
         s.reason="未收盘5分钟K失去原有强离位质量；旧点火资格撤销，但区域与前方障碍继续保留。";
       }else if(s.phase==="IGNITION")s.reason=five.reason;
-      else s.reason="区域仍可交易：边缘轮转继续等待；顺势释放必须先突破包含近端压制/支撑的有效触发位。";
+      else {
+        const latest=rows.at(-1),active=five.current??latest;
+        const up=latest?latest.close-s.effectiveLongTrigger:0,down=latest?s.effectiveShortTrigger-latest.close:0;
+        const multiple=active?Math.abs(active.close-active.open)/Math.max(s.averageRange,1e-12):0;
+        s.reason=`区域仍可交易：边缘轮转继续等待；顺势释放必须先突破有效触发位。当前1m收盘${latest?.close?.toPrecision(8)??"—"}，上方触发${s.effectiveLongTrigger.toPrecision(8)}，下方触发${s.effectiveShortTrigger.toPrecision(8)}，当前方向距离${Math.max(up,down).toPrecision(4)}，5m/1m有效实体约${multiple.toFixed(2)}倍平均振幅。`;
+      }
       s.updatedAt=input.now;states[symbol]=s;continue;
     }
     if(s.ignitionSide&&s.ignitionSide!==five.side){cancel("有效释放方向已经改变；取消原方向点火，区域继续观察。");s.updatedAt=input.now;states[symbol]=s;continue;}
