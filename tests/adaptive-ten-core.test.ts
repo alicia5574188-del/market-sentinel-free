@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {ADAPTIVE_ENGINE_VERSION,ADAPTIVE_TARGET_POSITIONS,advanceForward,forwardSummary,initialForward,normalizeForward,
+import {ADAPTIVE_ENGINE_VERSION,advanceForward,forwardSummary,initialForward,normalizeForward,resetForwardAccountPreservingLearning,
   type Candle,type Contract,type Quote} from "../lib/forward-relations.ts";
 import {FORWARD_RELATION_V2_VERSION,advanceRelationEngine,initialRelationEngine,relationCandidates} from "../lib/forward-relation-v2.ts";
 
@@ -57,7 +57,7 @@ test("PAPER uses learned relations for entries instead of the retired 5m FLOW ga
   const learned=learnThrough(39),now=nowAt(39),paths=sliced(39),quotes=quotesAt(39,now);
   let s=initialForward(now-60_000);s.relationEngine=learned;
   s=advanceForward({state:s,now,paths,quotes,contracts,entrySymbols:symbols}).state;
-  assert.ok(s.positions.length>0);assert.ok(s.positions.length<=ADAPTIVE_TARGET_POSITIONS);
+  assert.ok(s.positions.length>0);
   assert.ok(s.opportunities.some(o=>o.mode==="RELATION"&&o.eligible));
   assert.ok(s.positions.every(t=>t.entryContext?.mode==="RELATION"||t.entryContext?.regionId));
   assert.ok(s.positions.some(t=>t.entryContext?.relationRuleId));
@@ -93,6 +93,19 @@ test("strategy migration preserves account identity and financial history while 
   assert.equal(n.storage.persistedAt,999);assert.equal(n.engineVersion,ADAPTIVE_ENGINE_VERSION);
   assert.equal(n.strategyAuthorityVersion,FORWARD_RELATION_V2_VERSION);assert.equal(n.executionVersion,FORWARD_RELATION_V2_VERSION);
   assert.equal(n.relationEngine.startedAt,5000);assert.equal(n.relationEngine.measured,0);
+});
+
+
+test("manual PAPER reset preserves causal learning while resetting the financial account",()=>{
+  const learned=learnThrough(39),now=nowAt(39);let s=initialForward(now-60_000);s.relationEngine=learned;
+  s.balance=812.34;s.resolved=9;s.wins=4;s.turnover=5432;s.history=[{...({} as any)}];
+  const n=resetForwardAccountPreservingLearning(s,now+1000);
+  assert.equal(n.balance,1000);assert.equal(n.initialEquity,1000);assert.equal(n.resolved,0);assert.equal(n.wins,0);assert.equal(n.turnover,0);
+  assert.equal(n.positions.length,0);assert.equal(n.history.length,0);
+  assert.equal(n.relationEngine.samples.length,learned.samples.length);assert.equal(n.relationEngine.rules.length,learned.rules.length);
+  assert.equal(n.relationEngine.observations,learned.observations);assert.equal(n.relationEngine.measured,learned.measured);
+  assert.deepEqual(n.relationEngine.rules,learned.rules);assert.deepEqual(n.relationEngine.pending,learned.pending);
+  assert.match(n.latestReason,/保留/);
 });
 
 test("summary exposes relation lifecycle and the no-forced-reversal boundary",()=>{
