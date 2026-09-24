@@ -424,16 +424,22 @@ function rankedEligible(s:ForwardState,now:number){
 }
 function rotateIfNeeded(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,equity:number){
   if(now-s.lastRotationAt<ROTATION_COOLDOWN_MS)return false;
-  const totalRisk=existingRisk(s),totalMargin=s.positions.reduce((n,t)=>n+t.margin,0);
-  const riskFull=equity>0&&totalRisk>=equity*(TOTAL_RISK_RATE-.006),marginFull=equity>0&&totalMargin>=equity*(TOTAL_MARGIN_RATE-.05);
-  if(!riskFull&&!marginFull)return false;
   const candidate=rankedEligible(s,now).find(o=>!o.reserve);if(!candidate)return false;
-  const weak=[...s.positions].sort((a,b)=>(a.holdScore??50)-(b.holdScore??50))[0];if(!weak)return false;
+  const totalRisk=existingRisk(s),totalMargin=s.positions.reduce((n,t)=>n+t.margin,0),sideRisk=existingRisk(s,candidate.side);
+  const totalFull=equity>0&&totalRisk>=equity*(TOTAL_RISK_RATE-.006),sideFull=equity>0&&sideRisk>=equity*(SIDE_RISK_RATE-.004),
+    marginFull=equity>0&&totalMargin>=equity*(TOTAL_MARGIN_RATE-.05);
+  if(!totalFull&&!sideFull&&!marginFull)return false;
+  const pool=sideFull?s.positions.filter(t=>t.side===candidate.side):s.positions;
+  const weak=[...pool].sort((a,b)=>(a.holdScore??50)-(b.holdScore??50))[0];if(!weak)return false;
   const weakScore=weak.holdScore??50;if(candidate.score<weakScore+ROTATION_GAP)return false;
   const qOld=quotes[weak.symbol],qNew=quotes[candidate.symbol],meta=contracts[candidate.symbol];
   if(!freshQuote(qOld,now)||!freshQuote(qNew,now)||qNew!.entryReady!==true||!meta)return false;
+  const probe=structuredClone(s),probeWeak=probe.positions.find(t=>t.id===weak.id);if(!probeWeak)return false;
+  closeTrade(probe,probeWeak,probeWeak.side==="LONG"?qOld!.bestBid:qOld!.bestAsk,now,"OPPORTUNITY_REPLACED");
+  probe.positions=probe.positions.filter(t=>t.id!==probeWeak.id);
+  if(openTrade(probe,candidate,qNew!,meta,now,equity))return false;
   closeTrade(s,weak,weak.side==="LONG"?qOld!.bestBid:qOld!.bestAsk,now,"OPPORTUNITY_REPLACED");s.positions=s.positions.filter(t=>t.id!==weak.id);
-  const err=openTrade(s,candidate,qNew!,meta,now,equity);if(err)return false;
+  const err=openTrade(s,candidate,qNew!,meta,now,equity);if(err)throw new Error(`换仓预检通过但正式开仓失败：${err}`);
   s.lastRotationAt=now;event(s,now,"ROTATION",candidate.symbol,`${weak.symbol} → ${candidate.symbol}，优势差${(candidate.score-weakScore).toFixed(0)}分`);
   return true;
 }
