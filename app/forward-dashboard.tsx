@@ -8,12 +8,13 @@ import EquityCurve from "./equity-curve.tsx";
 import {EquityHistoryCache} from "../lib/equity-cache.ts";
 import { REGION_LIFECYCLE_VERSION, type RegionLifecycleState } from "../lib/region-lifecycle.ts";
 import { ANCHOR_FLOW_VERSION } from "../lib/anchor-flow.ts";
+import { REGION_LAUNCH_VERSION } from "../lib/region-launch.ts";
 type View = ReturnType<typeof forwardSummary>;
 type Tab = "overview" | "relations" | "orders" | "live" | "journal" | "settings";
 const fmt = (v: number | null | undefined, digits=2) => typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:digits,maximumFractionDigits:digits}):"—";
 const signed = (v: number | null | undefined, digits=2) => typeof v==="number"?`${v>=0?"+":""}${fmt(v,digits)}`:"—";
 const time = (v?:number|null) => v?new Date(v).toLocaleString("zh-CN",{timeZone:"Asia/Vientiane",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}):"—";
-const condition = (r:Rule) => r.grammar===ANCHOR_FLOW_VERSION?"AnchorFlow · 15m管理":r.grammar===REGION_LIFECYCLE_VERSION?"5m 区域拒绝":r.authority==="MULTI_TURN"?`${r.turnTimeframe??"—"} 旧版转折记录`:r.conditions.map(c=>`${FEATURES[c.feature]} ${c.op==="GE"?"≥":"≤"} ${fmt(c.threshold)}`).join(" ＋ ");
+const condition = (r:Rule) => r.grammar===REGION_LAUNCH_VERSION?"RegionLaunch · 完整区域爆发追击":r.grammar===ANCHOR_FLOW_VERSION?"AnchorFlow · 历史持仓":r.grammar===REGION_LIFECYCLE_VERSION?"5m 区域历史记录":r.authority==="MULTI_TURN"?`${r.turnTimeframe??"—"} 旧版转折记录`:r.conditions.map(c=>`${FEATURES[c.feature]} ${c.op==="GE"?"≥":"≤"} ${fmt(c.threshold)}`).join(" ＋ ");
 const REGION_STATUS:Record<RegionLifecycleState["status"],string>={NO_REGION:"未形成区域",IN_REGION:"区域内",PROBE_UP:"上沿试探",PROBE_DOWN:"下沿试探",ACCEPTED_UP:"上方接受",ACCEPTED_DOWN:"下方接受",DETACHED_UP:"上方已远离",DETACHED_DOWN:"下方已远离"};
 
 export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,memberName,cacheScope="owner"}:{data:View|null;healthy:boolean;statusLabel?:string;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;liveEnabled:boolean;liveOverview?:{equity:number|null;available:number|null;positionCount:number;operational:boolean;lastSyncAt:number|null;copied:number|null;eligible:number|null;missing:number|null};accountPanel?:ReactNode;memberName?:string;cacheScope?:string}) {
@@ -138,7 +139,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
           <header><div><small>#{index+1} · {x.phase}</small><h3>{x.symbol.replace("_"," / ")}</h3><p>区域K线 {x.motherBars} · 失败离区 {x.failedDepartures} 次 · 质量 {fmt(x.quality*100,0)}</p></div><b>{x.phase}</b></header>
           <div className="fr-prepared-metrics"><span><small>区域下沿</small><strong>{fmt(x.motherLower,5)}</strong></span><span><small>区域中心</small><strong>{fmt(x.motherCenter,5)}</strong></span><span><small>区域上沿</small><strong>{fmt(x.motherUpper,5)}</strong></span><span><small>完整边界K线</small><strong>{x.compression?x.compression.bars:"—"}</strong></span><span><small>执行下沿</small><strong>{fmt(x.compression?.lower,5)}</strong></span><span><small>执行上沿</small><strong>{fmt(x.compression?.upper,5)}</strong></span></div>
           <p>{x.reason}</p>
-        </article>)}</div>:<Empty title="当前没有RegionLaunch待命区域" text="成熟区域仍由AnchorFlow正常使用；RegionLaunch只在母区边界出现短压缩时提高实时观察优先级。"/>}
+        </article>)}</div>:<Empty title="当前没有RegionLaunch待命区域" text="系统仍持续维护成熟缠绕区域；只有接近完整边界并进入ARMED的标的才占用高优先级实时观察槽。"/>}
       </section>
 
       <section className="fr-section fr-scoreboard-section"><div className="fr-section-head"><div><small>REGION WATCHLIST</small><h2>区域观察池</h2><p>这里展示成熟5分钟缠绕区域。交易只认完整影线边界；区域内的新影线会扩展边界，第一根真正收在区间外的5分钟K会冻结该边界供爆发确认使用。</p></div><span>{activeRegions.length} 个区域</span></div>
