@@ -50,7 +50,8 @@ export class MarketDataHub{
   private candleSource=new Map<string,{source:MarketSource;at:number}>();
 
   launchRefresh(now:number){
-    if(this.inFlight||now-this.lastAttemptAt<1_500)return null;
+    if(this.inFlight)return this.inFlight;
+    if(now-this.lastAttemptAt<1_500)return null;
     this.lastAttemptAt=now;
     const task=this.refresh(now).finally(()=>{if(this.inFlight===task)this.inFlight=null;});
     this.inFlight=task;return task;
