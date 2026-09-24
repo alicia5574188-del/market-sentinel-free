@@ -1,7 +1,7 @@
 import { aggregateTurnCandles, TURN_CONFIG, type MultiTurnState, type TurnCandle, type TurnTimeframe, type TurnSide, type TurnCandidate } from "./multi-turn-engine.ts";
 
-export const MULTI_TURN_ENTRY_OPPORTUNITY_VERSION="winding-anchor-entry-v3";
-export const SHORT_ENTRY_TIMEFRAMES=["5m","15m","30m","1h"] as const satisfies readonly TurnTimeframe[];
+export const MULTI_TURN_ENTRY_OPPORTUNITY_VERSION="direction-space-5m-v2";
+export const SHORT_ENTRY_TIMEFRAMES=["5m"] as const satisfies readonly TurnTimeframe[];
 export type ForwardTargetType="RESISTANCE"|"SUPPORT"|"OLDER_WINDING";
 
 export type MultiTurnEntryOpportunity={
@@ -12,28 +12,23 @@ export type MultiTurnEntryOpportunity={
   grossRemainingSpaceRate:number;netRemainingSpaceRate:number;statisticalRemainingSpaceRate:number;structuralSpaceRate:number|null;
   pullbackRiskRate:number;edgeRatio:number;legMoveRate:number;expectedLegRate:number;legUtilization:number;
   turnRisk:number;turnPenalty:number;stopRate:number;stopPrice?:number;stopPenalty?:number;riskCap:number;reason:string;
-  anchorPrice:number;anchorAt:number;anchorConfirmedAt:number;anchorQuality:number;anchorAgeBars:number;
-  anchorMfeRate:number;anchorMaeRate:number;anchorProfitRatio:number;anchorFirstProfitBars:number;anchorRetentionRate:number;
-  distanceFromAnchorRate:number;maxEntryDistanceRate:number;
-  windingBandRate?:number;breakoutBars?:number;breakoutRate?:number;
+  // Legacy winding-anchor fields remain optional so persisted diagnostic rows
+  // from earlier generations stay readable. They no longer gate participation.
+  anchorPrice?:number;anchorAt?:number;anchorConfirmedAt?:number;anchorQuality?:number;anchorAgeBars?:number;
+  anchorMfeRate?:number;anchorMaeRate?:number;anchorProfitRatio?:number;anchorFirstProfitBars?:number;anchorRetentionRate?:number;
+  distanceFromAnchorRate?:number;maxEntryDistanceRate?:number;windingBandRate?:number;breakoutBars?:number;breakoutRate?:number;
   targetPrice?:number|null;targetType?:ForwardTargetType|null;targetDistanceRate?:number;targetQuality?:number;
 };
 
 type QuoteLike={bestBid:number;bestAsk:number;observedAt:number;fresh:boolean;entryReady?:boolean};
-type AnchorCandidate={
-  side:"LONG"|"SHORT";startIndex:number;endIndex:number;anchorPrice:number;anchorAt:number;confirmedAt:number;quality:number;
-  bandRate:number;breakoutBars:number;breakoutRate:number;touches:number;crossings:number;ageBars:number;reverseExtremePrice:number;
-};
-type TargetCandidate={price:number;type:ForwardTargetType;distanceRate:number;quality:number};
-
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
 const median=(v:number[])=>{const a=[...v].sort((x,y)=>x-y);return a.length?(a.length%2?a[(a.length-1)/2]:(a[a.length/2-1]+a[a.length/2])/2):0;};
+const quantile=(v:number[],p:number)=>{const a=[...v].sort((x,y)=>x-y);return a.length?a[Math.min(a.length-1,Math.floor((a.length-1)*p))]:0;};
 const tfMs=(tf:TurnTimeframe)=>TURN_CONFIG[tf].minutes*60_000;
 const completedAt=(row:TurnCandle,tf:TurnTimeframe)=>row.time*1000+tfMs(tf);
-const typical=(r:TurnCandle)=>(r.high+r.low+r.close)/3;
 
 function validRows(rows:TurnCandle[],tf:TurnTimeframe){
-  const cfg=TURN_CONFIG[tf],need=Math.max(cfg.minBars,18),a=rows.slice(-Math.max(need,96));
+  const cfg=TURN_CONFIG[tf],need=Math.max(cfg.minBars,24),a=rows.slice(-Math.max(need,120));
   if(a.length<need)return null;
   const step=tfMs(tf)/1000;
   if(a.some((r,i)=>![r.time,r.open,r.high,r.low,r.close,r.volume].every(Number.isFinite)||r.time<=0||r.open<=0||r.high<=0||r.low<=0||r.close<=0
@@ -41,111 +36,46 @@ function validRows(rows:TurnCandle[],tf:TurnTimeframe){
   return a;
 }
 
-function windingBars(tf:TurnTimeframe){return tf==="5m"?6:tf==="15m"?5:tf==="30m"?5:4;}
-function windingLookback(tf:TurnTimeframe){return tf==="5m"?11:tf==="15m"?9:7;}
-
-function windingStats(window:TurnCandle[],center:number,toleranceRate:number){
-  let crossings=0,previous=0,positive=0,negative=0;
-  for(const row of window){
-    const side=row.close>center?1:row.close<center?-1:0;
-    if(side>0)positive++;if(side<0)negative++;
-    if(side&&previous&&side!==previous)crossings++;
-    if(side)previous=side;
+function maxCounterMove(rows:TurnCandle[],side:"LONG"|"SHORT"){
+  if(rows.length<2)return 0;
+  let extreme=rows[0]!.close,worst=0;
+  for(const row of rows.slice(1)){
+    if(side==="LONG"){extreme=Math.max(extreme,row.high);worst=Math.max(worst,extreme>0?(extreme-row.low)/extreme:0);}
+    else{extreme=Math.min(extreme,row.low);worst=Math.max(worst,extreme>0?(row.high-extreme)/extreme:0);}
   }
-  const touches=window.filter(row=>row.low<=center*(1+toleranceRate)&&row.high>=center*(1-toleranceRate)).length;
-  return{touches,crossings,positive,negative};
+  return worst;
 }
 
-function findWindingAnchor(rows:TurnCandle[],currentPrice:number,atrRate:number,costRate:number,tf:TurnTimeframe){
-  const size=windingBars(tf),maxAge=windingLookback(tf),latestEnd=rows.length-2;
-  const earliestEnd=Math.max(size-1,rows.length-1-maxAge),candidates:AnchorCandidate[]=[];
-  for(let end=latestEnd;end>=earliestEnd;end--){
-    const start=end-size+1;if(start<0)continue;
-    const window=rows.slice(start,end+1),center=median(window.map(typical));if(!(center>0))continue;
-    const bandRate=Math.max(...window.map(row=>Math.max(Math.abs(row.high/center-1),Math.abs(row.low/center-1))));
-    const maxBand=Math.max(costRate*1.8,atrRate*1.55,.0018);
-    if(bandRate>maxBand)continue;
-    const toleranceRate=Math.max(bandRate*.32,atrRate*.18,costRate*.22,.00025);
-    const stats=windingStats(window,center,toleranceRate);
-    const oscillating=(stats.positive>0&&stats.negative>0)||stats.touches>=Math.ceil(size*.75);
-    if(!oscillating||stats.touches<Math.ceil(size*.50))continue;
-    const net=Math.abs(window.at(-1)!.close/window[0].close-1);
-    if(net>Math.max(bandRate*1.25,atrRate*1.05,costRate*1.6))continue;
-
-    const signed=currentPrice/center-1,departureThreshold=Math.max(bandRate*.42,atrRate*.20,costRate*.30,.00055);
-    if(Math.abs(signed)<=departureThreshold)continue;
-    const side=signed>0?"LONG":"SHORT",d=side==="LONG"?1:-1,after=rows.slice(end+1);
-    const directional=after.filter(row=>d*(row.close/center-1)>departureThreshold*.35).length;
-    if(!directional||directional<Math.ceil(after.length*.40))continue;
-
-    const ageBars=rows.length-1-end,breakoutRate=Math.abs(signed);
-    const compactness=1-clip(bandRate/maxBand);
-    const oscillation=clip(.60*(stats.touches/size)+.40*Math.min(1,stats.crossings/2));
-    const departure=clip((breakoutRate-departureThreshold)/Math.max(atrRate*1.35,departureThreshold));
-    const recency=1-clip((ageBars-1)/Math.max(1,maxAge-1));
-    const quality=100*(.38*oscillation+.20*compactness+.27*departure+.15*recency);
-    if(quality<36)continue;
-    const reverseExtremePrice=side==="LONG"?Math.min(...window.map(row=>row.low)):Math.max(...window.map(row=>row.high));
-    candidates.push({side,startIndex:start,endIndex:end,anchorPrice:center,anchorAt:completedAt(window.at(-1)!,tf),
-      confirmedAt:completedAt(rows.at(-1)!,tf),quality,bandRate,breakoutBars:ageBars,breakoutRate,
-      touches:stats.touches,crossings:stats.crossings,ageBars,reverseExtremePrice});
+function currentLegStart(rows:TurnCandle[],side:"LONG"|"SHORT",atrRate:number){
+  const d=side==="LONG"?1:-1,noise=Math.max(.00045,atrRate*.42);
+  let start=Math.max(0,rows.length-2);
+  for(let i=rows.length-1;i>Math.max(0,rows.length-24);i--){
+    const signed=d*(rows[i]!.close/rows[i-1]!.close-1);
+    if(signed<-noise){start=i;break;}
+    start=i-1;
   }
-  return candidates.sort((a,b)=>{
-    const ar=a.quality-Math.max(0,a.ageBars-1)*1.4,br=b.quality-Math.max(0,b.ageBars-1)*1.4;
-    return br-ar||b.endIndex-a.endIndex;
-  })[0]??null;
+  return Math.max(0,start);
 }
 
-function targetDistance(side:"LONG"|"SHORT",currentPrice:number,level:number){
-  return side==="LONG"?level/currentPrice-1:1-level/currentPrice;
+function historicalLegExpectation(rows:TurnCandle[],side:"LONG"|"SHORT",atrRate:number,maxRate:number){
+  const d=side==="LONG"?1:-1,samples:number[]=[];
+  const src=rows.slice(0,-1);
+  for(const bars of[4,6,8,12])for(let i=bars;i<src.length;i++){
+    const move=d*(src[i]!.close/src[i-bars]!.close-1);
+    if(move>Math.max(.0008,atrRate*.55))samples.push(move);
+  }
+  const fallback=Math.max(atrRate*1.8,.0028);
+  return Math.min(maxRate,Math.max(fallback,samples.length>=6?quantile(samples,.65):fallback));
 }
 
-function forwardTargets(rows:TurnCandle[],beforeIndex:number,side:"LONG"|"SHORT",currentPrice:number,atrRate:number,costRate:number){
-  const history=rows.slice(Math.max(0,beforeIndex-80),beforeIndex),targets:TargetCandidate[]=[];
-  if(history.length<5)return targets;
-  const minGap=Math.max(atrRate*.10,costRate*.18,.00035);
-  const tolerance=Math.max(atrRate*.24,costRate*.35,.00045);
-
-  for(let i=2;i<history.length-2;i++){
-    const row=history[i],level=side==="LONG"?row.high:row.low,dist=targetDistance(side,currentPrice,level);
-    if(dist<=minGap)continue;
-    const local=side==="LONG"
-      ?row.high>=history[i-1].high&&row.high>=history[i+1].high&&row.high>=history[i-2].high&&row.high>=history[i+2].high
-      :row.low<=history[i-1].low&&row.low<=history[i+1].low&&row.low<=history[i-2].low&&row.low<=history[i+2].low;
-    if(!local)continue;
-    const neighbours=history.slice(Math.max(0,i-8),Math.min(history.length,i+9));
-    const touches=neighbours.filter(x=>{
-      const p=side==="LONG"?x.high:x.low;return Math.abs(p/level-1)<=tolerance;
-    }).length;
-    const localMid=median(neighbours.map(x=>x.close));
-    const prominence=Math.abs(level/localMid-1);
-    const quality=100*clip(.45*Math.min(1,touches/3)+.55*clip(prominence/Math.max(atrRate*.8,costRate*.8,.0008)));
-    targets.push({price:level,type:side==="LONG"?"RESISTANCE":"SUPPORT",distanceRate:dist,quality});
+function nearestStructureSpace(rows:TurnCandle[],side:"LONG"|"SHORT",price:number,atrRate:number){
+  const prior=rows.slice(0,-1),gap=Math.max(.0004,atrRate*.16);
+  if(side==="LONG"){
+    const levels=prior.map(r=>r.high).filter(level=>level>price*(1+gap)).sort((a,b)=>a-b);
+    return levels.length?levels[0]!/price-1:null;
   }
-
-  const size=5,maxBand=Math.max(atrRate*1.8,costRate*2.1,.0022);
-  for(let end=size-1;end<history.length;end+=2){
-    const window=history.slice(end-size+1,end+1),center=median(window.map(typical));
-    if(!(center>0))continue;
-    const dist=targetDistance(side,currentPrice,center);if(dist<=minGap)continue;
-    const band=Math.max(...window.map(row=>Math.max(Math.abs(row.high/center-1),Math.abs(row.low/center-1))));
-    if(band>maxBand)continue;
-    const stats=windingStats(window,center,Math.max(band*.35,tolerance));
-    if(stats.touches<Math.ceil(size*.6))continue;
-    const quality=100*clip(.65*(stats.touches/size)+.35*(1-band/maxBand));
-    targets.push({price:center,type:"OLDER_WINDING",distanceRate:dist,quality});
-  }
-  return targets;
-}
-
-function chooseForwardTarget(targets:TargetCandidate[],anchorDistanceRate:number){
-  if(!targets.length)return null;
-  const qualified=targets.filter(row=>row.distanceRate>anchorDistanceRate),pool=qualified.length?qualified:targets;
-  return [...pool].sort((a,b)=>{
-    const ar=a.distanceRate/Math.max(anchorDistanceRate,1e-9),br=b.distanceRate/Math.max(anchorDistanceRate,1e-9);
-    const aRank=.72*clip((ar-1)/2.5)+.28*(a.quality/100),bRank=.72*clip((br-1)/2.5)+.28*(b.quality/100);
-    return bRank-aRank||b.distanceRate-a.distanceRate||b.quality-a.quality;
-  })[0]??null;
+  const levels=prior.map(r=>r.low).filter(level=>level<price*(1-gap)).sort((a,b)=>b-a);
+  return levels.length?1-levels[0]!/price:null;
 }
 
 function executionScore(q:QuoteLike|undefined,now:number){
@@ -156,91 +86,88 @@ function executionScore(q:QuoteLike|undefined,now:number){
   return 100*(1-.55*clip(spread/.0015));
 }
 
-function targetLabel(target:TargetCandidate|null){
-  if(!target)return"未找到前方目标";
-  if(target.type==="OLDER_WINDING")return"更早缠绕区";
-  return target.type==="RESISTANCE"?"前方压力位":"前方支撑位";
-}
-
 function opportunityFor(input:{symbol:string;timeframe:TurnTimeframe;rows:TurnCandle[];turnEngine:MultiTurnState|null;
   quote?:QuoteLike;now:number;costRate:number}):MultiTurnEntryOpportunity|null{
   const{symbol,timeframe,turnEngine,now}=input,cfg=TURN_CONFIG[timeframe],rows=validRows(input.rows,timeframe);
-  if(!rows||!SHORT_ENTRY_TIMEFRAMES.includes(timeframe as typeof SHORT_ENTRY_TIMEFRAMES[number]))return null;
+  if(!rows||timeframe!=="5m")return null;
   const last=rows.at(-1)!;
-  if(completedAt(last,timeframe)>now||now-completedAt(last,timeframe)>Math.max(10*60_000,cfg.minutes*60_000*1.5))return null;
-  const ranges=rows.slice(-14).map(r=>(r.high-r.low)/r.close),atrRate=Math.max(.0005,median(ranges));
-  const q=input.quote,currentPrice=q?.fresh&&now-q.observedAt<=10_000?(q.bestBid+q.bestAsk)/2:last.close;
-  const anchor=findWindingAnchor(rows,currentPrice,atrRate,input.costRate,timeframe);if(!anchor)return null;
+  if(completedAt(last,timeframe)>now||now-completedAt(last,timeframe)>10*60_000)return null;
+  const ranges=rows.slice(-14).map(r=>(r.high-r.low)/r.close),atrRate=Math.max(.00045,median(ranges));
+  const ret=(bars:number)=>last.close/rows[Math.max(0,rows.length-1-bars)]!.close-1;
+  const signedBias=.50*ret(8)+.30*ret(5)+.20*ret(3);
+  if(Math.abs(signedBias)<atrRate*.10)return null;
 
-  const backToAnchorRate=Math.abs(anchor.anchorPrice/currentPrice-1);
-  if(!(backToAnchorRate>0))return null;
-  const targets=forwardTargets(rows,anchor.startIndex,anchor.side,currentPrice,atrRate,input.costRate);
-  const target=chooseForwardTarget(targets,backToAnchorRate);
-  const targetDistanceRate=target?.distanceRate??0;
-  const grossRemainingSpaceRate=Math.max(0,targetDistanceRate);
+  const side=signedBias>0?"LONG":"SHORT",d=side==="LONG"?1:-1;
+  const trendSlopeScore=100*clip(Math.abs(signedBias)/Math.max(atrRate*2.1,1e-9));
+  const recent=rows.slice(-9);
+  let structural=0;
+  for(let i=1;i<recent.length;i++){
+    structural+=side==="LONG"
+      ?Number(recent[i]!.high>=recent[i-1]!.high)*.5+Number(recent[i]!.low>=recent[i-1]!.low)*.5
+      :Number(recent[i]!.high<=recent[i-1]!.high)*.5+Number(recent[i]!.low<=recent[i-1]!.low)*.5;
+  }
+  const structureScore=100*structural/Math.max(1,recent.length-1);
+  const pathStart=recent[0]!.close,pathDen=recent.slice(1).reduce((n,row,i)=>n+Math.abs(row.close-recent[i]!.close),0);
+  const pathEfficiency=clip(Math.abs(last.close-pathStart)/Math.max(pathDen,last.close*.0002));
+  const returns=recent.slice(1).map((row,i)=>d*(row.close/recent[i]!.close-1));
+  const momentumPersistence=returns.length?returns.filter(x=>x>0).length/returns.length:0;
+  const counter=maxCounterMove(recent,side);
+  const pullbackResilience=1-clip(counter/Math.max(atrRate*2.8,.001));
+  const directionStrength=100*(.30*trendSlopeScore/100+.25*structureScore/100+.20*pathEfficiency+
+    .15*momentumPersistence+.10*pullbackResilience);
+
+  const legStart=currentLegStart(rows,side,atrRate),legBase=rows[legStart]!.close;
+  const legMoveRate=Math.max(0,d*(last.close/legBase-1));
+  let expectedLegRate=historicalLegExpectation(rows,side,atrRate,cfg.maxStop*3);
+  const structuralSpaceRate=nearestStructureSpace(rows,side,last.close,atrRate);
+  if(structuralSpaceRate==null&&directionStrength>=62&&expectedLegRate-legMoveRate<atrRate*.65)
+    expectedLegRate=Math.min(cfg.maxStop*3,Math.max(expectedLegRate,legMoveRate+atrRate*1.6));
+  const statisticalRemainingSpaceRate=Math.max(0,expectedLegRate-legMoveRate);
+  const grossRemainingSpaceRate=Math.max(0,structuralSpaceRate==null?statisticalRemainingSpaceRate:
+    Math.min(statisticalRemainingSpaceRate,structuralSpaceRate));
   const netRemainingSpaceRate=Math.max(0,grossRemainingSpaceRate-input.costRate);
-  const edgeRatio=grossRemainingSpaceRate/Math.max(backToAnchorRate,1e-9);
-  const spaceScore=100*clip((edgeRatio-1)/2.5);
-  // Entry location is the primary ranking authority: once price has genuinely
-  // left anchor1, the closer it still is to that winding center, the better.
-  // Forward reward/risk remains a qualification gate and only a secondary score.
-  const positionScore=100*(1-clip(backToAnchorRate/Math.max(cfg.maxStop,.001)));
-  const exec=executionScore(q,now);
+  const pullbackRiskRate=Math.max(atrRate*.60,Math.min(cfg.maxStop,maxCounterMove(recent,side)*1.10));
+  const edgeRatio=netRemainingSpaceRate/Math.max(pullbackRiskRate,1e-9);
+  const spaceScore=100*clip(edgeRatio/2.2);
 
-  const turnFrame=turnEngine?.frames[symbol]?.[timeframe],turnRisk=turnFrame?.triggerProbability??.25;
-  const turnPenalty=2*clip((turnRisk-.60)/.30);
-  const targetQuality=target?.quality??0;
-  // Structural stop sits beyond the reverse extreme of anchor1's winding zone,
-  // with a small volatility/cost buffer. Never pull it back inside the anchor
-  // merely to satisfy a numerical max-stop cap.
-  const stopBufferRate=Math.max(.00045,atrRate*.12,input.costRate*.18,anchor.bandRate*.08);
-  const stopPrice=anchor.side==="LONG"
-    ?anchor.reverseExtremePrice*(1-stopBufferRate)
-    :anchor.reverseExtremePrice*(1+stopBufferRate);
-  const stopRate=anchor.side==="LONG"?1-stopPrice/currentPrice:stopPrice/currentPrice-1;
-  if(!(stopRate>0))return null;
-  const stopPenalty=24*clip((stopRate-cfg.maxStop*.35)/Math.max(cfg.maxStop*.65,.001));
-  const score=clip(.58*positionScore+.18*anchor.quality+.10*spaceScore+.07*targetQuality+.07*exec-turnPenalty-stopPenalty,0,100);
-  const eligible=!!target&&edgeRatio>1&&netRemainingSpaceRate>0&&exec>0&&stopRate<=cfg.maxStop;
+  const legUtilization=expectedLegRate>0?legMoveRate/expectedLegRate:1;
+  const utilizationScore=legUtilization<=.60?1:clip(1-(legUtilization-.60)/.45);
+  const shortMove=Math.max(0,d*ret(3)),extension=shortMove/Math.max(atrRate*Math.sqrt(3),1e-9);
+  const extensionScore=extension<=1.9?1:clip(1-(extension-1.9)/1.8);
+  const positionScore=100*Math.min(utilizationScore,extensionScore);
+  const exec=executionScore(input.quote,now);
 
-  const breakoutStrength=100*clip(anchor.breakoutRate/Math.max(atrRate*2.0,input.costRate*2.0,.001));
-  const bandQuality=100*(1-clip(anchor.bandRate/Math.max(atrRate*1.8,input.costRate*2.1,.002)));
-  const reason=target
-    ?timeframe+" "+anchor.side+" | 锚点1 "+anchor.anchorPrice.toFixed(5)+" | 回锚距离"+(backToAnchorRate*100).toFixed(2)+"% | 结构止损"+stopPrice.toFixed(5)+"（"+(stopRate*100).toFixed(2)+"%） | "+targetLabel(target)+" "+target.price.toFixed(5)+"，前方"+(targetDistanceRate*100).toFixed(2)+"% | 空间优势"+edgeRatio.toFixed(2)+"x | "+(stopRate>cfg.maxStop?"结构止损过大":eligible?"准备进场":"继续等待")
-    :timeframe+" "+anchor.side+" | 已脱离近期缠绕锚点1，但前方暂未找到可用支撑/压力/旧缠绕目标";
-
-  return{version:MULTI_TURN_ENTRY_OPPORTUNITY_VERSION,symbol,timeframe,side:anchor.side,completedAt:completedAt(last,timeframe),price:currentPrice,
-    score,eligible,directionStrength:anchor.quality,spaceScore,positionScore,executionScore:exec,
-    trendSlopeScore:breakoutStrength,structureScore:targetQuality,pathEfficiency:anchor.quality,momentumPersistence:breakoutStrength,
-    pullbackResilience:bandQuality,grossRemainingSpaceRate,netRemainingSpaceRate,
-    statisticalRemainingSpaceRate:targetDistanceRate,structuralSpaceRate:target?targetDistanceRate:null,
-    pullbackRiskRate:backToAnchorRate,edgeRatio,legMoveRate:backToAnchorRate,expectedLegRate:targetDistanceRate,
-    legUtilization:targetDistanceRate>0?clip(backToAnchorRate/targetDistanceRate):1,
-    turnRisk,turnPenalty,stopRate,stopPrice,stopPenalty,riskCap:cfg.riskCap,reason,
-    anchorPrice:anchor.anchorPrice,anchorAt:anchor.anchorAt,anchorConfirmedAt:anchor.confirmedAt,anchorQuality:anchor.quality,
-    anchorAgeBars:anchor.ageBars,anchorMfeRate:anchor.breakoutRate,anchorMaeRate:anchor.bandRate,anchorProfitRatio:edgeRatio,
-    anchorFirstProfitBars:anchor.breakoutBars,anchorRetentionRate:targetQuality/100,
-    distanceFromAnchorRate:backToAnchorRate,maxEntryDistanceRate:targetDistanceRate,
-    windingBandRate:anchor.bandRate,breakoutBars:anchor.breakoutBars,breakoutRate:anchor.breakoutRate,
-    targetPrice:target?.price??null,targetType:target?.type??null,targetDistanceRate,targetQuality};
+  const turnFrame=turnEngine?.frames[symbol]?.["5m"],turnRisk=turnFrame?.triggerProbability??.25;
+  const turnPenalty=10*clip((turnRisk-.35)/.55)+(turnFrame?.phase==="TURNING"?2:turnFrame?.phase==="WATCH"?1:0);
+  const score=clip(.42*directionStrength+.33*spaceScore+.15*positionScore+.10*exec-turnPenalty,0,100);
+  const stopRate=Math.min(cfg.maxStop,Math.max(.0035,pullbackRiskRate,atrRate*1.10));
+  // This is deliberately a participation score, not a rare-event trigger. It
+  // still requires positive after-cost space, an unstretched entry location and
+  // a direction that is more than noise. RegionLaunch remains the premium path.
+  const eligible=directionStrength>=38&&netRemainingSpaceRate>0&&edgeRatio>=.55&&positionScore>=10&&turnRisk<.92&&exec>0;
+  const reason=`5m ${side} | 方向${directionStrength.toFixed(0)} | 净空间${(netRemainingSpaceRate*100).toFixed(2)}% | 空间/回调${edgeRatio.toFixed(2)} | 位置${positionScore.toFixed(0)} | 评分${score.toFixed(0)}`;
+  return{version:MULTI_TURN_ENTRY_OPPORTUNITY_VERSION,symbol,timeframe,side,completedAt:completedAt(last,timeframe),price:last.close,
+    score,eligible,directionStrength,spaceScore,positionScore,executionScore:exec,trendSlopeScore,structureScore,
+    pathEfficiency:100*pathEfficiency,momentumPersistence:100*momentumPersistence,pullbackResilience:100*pullbackResilience,
+    grossRemainingSpaceRate,netRemainingSpaceRate,statisticalRemainingSpaceRate,structuralSpaceRate,pullbackRiskRate,edgeRatio,
+    legMoveRate,expectedLegRate,legUtilization,turnRisk,turnPenalty,stopRate,riskCap:cfg.riskCap,reason};
 }
 
 export function evaluateMultiTurnEntryOpportunities(input:{paths:Record<string,TurnCandle[]>;daily?:Record<string,TurnCandle[]>;
   turnEngine?:MultiTurnState|null;quotes?:Record<string,QuoteLike>;now:number;costRate:number|((tf:TurnTimeframe)=>number)}){
   const out:MultiTurnEntryOpportunity[]=[];
-  for(const[symbol,base]of Object.entries(input.paths))for(const timeframe of SHORT_ENTRY_TIMEFRAMES){
-    const candles=aggregateTurnCandles(base,timeframe);
+  for(const[symbol,base]of Object.entries(input.paths)){
+    const timeframe:"5m"="5m",candles=aggregateTurnCandles(base,timeframe);
     const cost=typeof input.costRate==="function"?input.costRate(timeframe):input.costRate;
     const row=opportunityFor({symbol,timeframe,rows:candles,turnEngine:input.turnEngine??null,quote:input.quotes?.[symbol],now:input.now,costRate:cost});
     if(row)out.push(row);
   }
-  const tfPriority:Record<string,number>={"5m":4,"15m":3,"30m":2,"1h":1};
-  return out.sort((a,b)=>b.score-a.score||(tfPriority[b.timeframe]??0)-(tfPriority[a.timeframe]??0)
-    ||b.edgeRatio-a.edgeRatio||b.anchorQuality-a.anchorQuality||a.symbol.localeCompare(b.symbol));
+  return out.sort((a,b)=>Number(b.eligible)-Number(a.eligible)||b.score-a.score||b.directionStrength-a.directionStrength
+    ||b.edgeRatio-a.edgeRatio||a.symbol.localeCompare(b.symbol));
 }
 
 export function entryOpportunityCandidate(row:MultiTurnEntryOpportunity):TurnCandidate{
-  return{symbol:row.symbol,timeframe:row.timeframe,side:row.side,score:row.score/100,riskCap:row.riskCap,stopRate:row.stopRate,stopPrice:row.stopPrice,
-    expectedMoveRate:row.grossRemainingSpaceRate,turnProbability:row.turnRisk,confidence:row.anchorQuality/100,
-    continuationScore:clip((.55*row.positionScore+.25*row.anchorQuality+.20*row.spaceScore)/100),completedAt:row.completedAt,signalPrice:row.price,reason:row.reason};
+  return{symbol:row.symbol,timeframe:"5m",side:row.side,score:row.score/100,riskCap:row.riskCap,stopRate:row.stopRate,stopPrice:row.stopPrice,
+    expectedMoveRate:row.grossRemainingSpaceRate,turnProbability:row.turnRisk,confidence:clip(row.directionStrength/100),
+    continuationScore:clip((.60*row.directionStrength+.40*row.spaceScore)/100),completedAt:row.completedAt,signalPrice:row.price,reason:row.reason};
 }
