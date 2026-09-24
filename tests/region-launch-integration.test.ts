@@ -47,16 +47,16 @@ function step(state:ForwardState,now:number,mid:number,minutePaths:Record<string
     entrySymbols:["BCH_USDT"],allowDataCycle:false});
 }
 function fastPath(now:number){
-  const breakout=candle(now,101.02,102.52,101.00,102.46);
-  const pullback=candle(now+60_000,102.46,102.48,101.94,102.00);
-  const restart=candle(now+120_000,102.00,102.15,101.98,102.13);
+  const breakout=candle(now,100.95,103.30,100.92,103.20);
+  const pullback=candle(now+60_000,103.20,103.22,102.80,102.88);
+  const restart=candle(now+120_000,102.88,103.35,102.86,103.32);
   return{breakout,pullback,restart};
 }
 function driveFast(state:ForwardState,now:number){
   const m=fastPath(now);let s=state;
-  s=step(s,now+60_000,102.46,{BCH_USDT:[m.breakout]}).state;
-  s=step(s,now+120_000,102.00,{BCH_USDT:[m.breakout,m.pullback]}).state;
-  s=step(s,now+180_000,102.13,{BCH_USDT:[m.breakout,m.pullback,m.restart]}).state;
+  s=step(s,now+60_000,103.20,{BCH_USDT:[m.breakout]}).state;
+  s=step(s,now+120_000,102.88,{BCH_USDT:[m.breakout,m.pullback]}).state;
+  s=step(s,now+180_000,103.32,{BCH_USDT:[m.breakout,m.pullback,m.restart]}).state;
   return{s,m};
 }
 
@@ -132,8 +132,8 @@ test("slow route needs a real outside 5m close and fresh first-minute continuati
 
 test("weakening an unfinished fast 5m move revokes its old micro ignition and never opens on stale strength",()=>{
   const now=BASE;let s=seeded(now);
-  const first=candle(now,101.02,102.52,101.00,102.46),fade=candle(now+60_000,102.46,102.48,101.35,101.42);
-  s=step(s,now+60_000,102.46,{BCH_USDT:[first]}).state;assert.equal(s.regionLaunches!.BCH_USDT!.phase,"IGNITION");
+  const first=candle(now,100.95,103.30,100.92,103.20),fade=candle(now+60_000,103.20,103.22,101.35,101.42);
+  s=step(s,now+60_000,103.20,{BCH_USDT:[first]}).state;assert.equal(s.regionLaunches!.BCH_USDT!.phase,"IGNITION");
   s=step(s,now+120_000,101.42,{BCH_USDT:[first,fade]}).state;
   assert.equal(s.positions.length,0);assert.equal(s.regionLaunches!.BCH_USDT!.phase,"ARMED");
   assert.match(s.regionLaunches!.BCH_USDT!.reason,/失去异常强离区强度/);
