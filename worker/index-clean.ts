@@ -918,7 +918,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.radar=successfulRadarRuntime(this.runtime.radar,now,universeRows.length,[]);
     this.runtime.lastRadarAt=now;
     // Gate realtime capacity is execution-only: open exposure and candidates
-    // that are actually eligible. Analysis-only markets stay on Bybit/Binance.
+    // that are actually eligible. Analysis-only markets stay on Bybit/OKX/Bitget.
     const protectedSymbols=[...this.currentAuthorityProtectionSymbols()];
     const watched=this.forwardState?forwardWatchSymbols(this.forwardState,now,this.runtime.liquidUniverse):[];
     const next=[...new Set([...protectedSymbols,...watched])].slice(0,FORWARD_EXECUTION_BBO_CAP);
@@ -2859,7 +2859,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private async processAdaptiveBooks(now:number,cycleSymbols=[...this.runtime.symbols]) {
     if(this.forwardState){
-      // Gate public websocket is execution-only. Bybit/Binance own continuous
+      // Gate public websocket is execution-only. Bybit/OKX/Bitget own continuous
       // analysis candles; Gate does not carry the 30-market scan anymore.
       this.ctx.waitUntil(this.gateStream.ensure(this.runtime.symbols,[],[],now));
     }
@@ -2955,7 +2955,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(external)return{symbol,rows:external.rows,replace:true,source:external.source};
       if(this.marketHub.supports(symbol))throw new Error(`${symbol} external 5m temporarily unavailable`);
       // True Gate-only contracts retain a low-frequency fallback. A temporary
-      // Bybit/Binance outage never redirects common-market analysis onto Gate.
+      // Bybit/OKX/Bitget outage never redirects common-market analysis onto Gate.
       const rows=await fetchStructureCandles(symbol,"5m",(this.strategyCandles[symbol]?.length??0)>=120?6:120);
       return{symbol,rows,replace:false,source:"GATE" as const};
     }));
@@ -2980,7 +2980,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const authorityStale=this.runtime.lastSuccessAt==null||observedAt-this.runtime.lastSuccessAt>SYSTEM_HEALTH_STALE_AFTER_MS;
     this.runtime.state=!this.authorityReady?"RECOVERY_REQUIRED":authorityStale?"RECONNECTING"
       :!readiness.protectedMarketsReady?"DEGRADED":hub.healthySources>0||readiness.actionableMarkets>0?"LIVE":"WARMING";
-    const feedError=authorityStale?"Bybit/Binance分析源与Gate执行源同时不可用"
+    const feedError=authorityStale?"Bybit/OKX/Bitget分析源与Gate执行源同时不可用"
       :!readiness.protectedMarketsReady?"已有持仓缺少Gate保护报价":null;
     this.runtime.lastError=feedError??this.runtime.d1MirrorError;
   }
@@ -3003,7 +3003,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const radarDue=radarAttemptDue(this.runtime.radar,Date.now());
       if(radarDue){
         // Gate bulk discovery is optional and explicitly yields to private LIVE
-        // work. Bybit/Binance remain the normal scan surface.
+        // work. Bybit/OKX/Bitget remain the normal scan surface.
         if(!this.liveBackgroundWork&&!this.liveSyncWork){
           try{this.gateRadarCache=await fetchGateRadarTickers();this.gateRadarAt=Date.now();subrequests++;}
           catch{/* stale Gate-only discovery must never block external analysis */}
