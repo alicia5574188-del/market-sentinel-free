@@ -901,35 +901,33 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // A failed cold-start catalog load is not a successful empty market scan.
     if (this.contractCatalog.size === 0) throw new Error("contract catalog unavailable: radar refresh deferred");
     const eligible = new Set(this.contractCatalog.keys());
-    // AnchorFlow scans 30 liquid/active completed-5m paths. Existing exposure,
-    // executable events and an in-progress first-retest lifecycle keep their path;
-    // the remaining slots rotate through liquid contracts without giving turnover
-    // or raw volatility any direct trading authority.
+    // Adaptive 10 scans 30 liquid/active completed-5m paths. Existing exposure
+    // and already-triggered RegionLaunch episodes keep their path. Ordinary ARMED
+    // observation gets only a small continuity sleeve so it cannot monopolize the
+    // whole 30-market universe and hide current direction-space opportunities.
     const eligibleRows = rows.filter((row) => eligible.has(row.symbol) && forwardSymbolAllowed(row.symbol));
     const launches=Object.values(this.forwardState?.regionLaunches??{});
     const tickerBySymbol=new Map(eligibleRows.map(row=>[row.symbol,row]));
-    const launchPriority=(phase:string)=>phase==="READY"?0:phase==="IGNITION"?1:phase==="ARMED"?2:9;
+    const launchPriority=(phase:string)=>phase==="READY"?0:phase==="RETEST"?1:phase==="IGNITION"?2:9;
     const boundaryDistance=(row:(typeof launches)[number])=>{
       const px=tickerBySymbol.get(row.symbol)?.last,c=row.compression;
       if(!(px&&c&&c.width>0))return Number.POSITIVE_INFINITY;
       return Math.min(Math.abs(px-c.lower),Math.abs(px-c.upper))/c.width;
     };
-    // Realtime slots go first to the already-formed regions that are actually
-    // closest to a full-boundary departure, then to region quality. This keeps
-    // broad moves from wasting scarce 1m/book capacity on distant setups.
-    const urgentLaunches=launches.filter(row=>["READY","IGNITION","ARMED"].includes(row.phase))
+    const triggeredLaunches=launches.filter(row=>["READY","RETEST","IGNITION"].includes(row.phase))
       .sort((a,b)=>launchPriority(a.phase)-launchPriority(b.phase)
         ||boundaryDistance(a)-boundaryDistance(b)||b.quality-a.quality||b.updatedAt-a.updatedAt);
-    // Keep more recent mature regions in the 30-symbol completed-5m universe;
-    // they do not consume realtime slots until they become close/urgent.
+    const armedContinuity=launches.filter(row=>row.phase==="ARMED")
+      .sort((a,b)=>boundaryDistance(a)-boundaryDistance(b)||b.quality-a.quality||b.updatedAt-a.updatedAt)
+      .slice(0,4);
     const launchContinuity=launches.filter(row=>row.phase==="WATCH"&&now-row.updatedAt<=45*60_000)
       .sort((a,b)=>b.quality-a.quality||boundaryDistance(a)-boundaryDistance(b)
         ||b.failedDepartures-a.failedDepartures||b.motherBars-a.motherBars||b.updatedAt-a.updatedAt)
-      .slice(0,10);
+      .slice(0,4);
     const lockedAnchorSymbols=[...new Set([
       ...(this.forwardState?.positions.flatMap(position=>position.status==="OPEN"?[position.symbol]:[])??[]),
       ...(this.forwardState?.regionLaunchSignals??[]).filter(signal=>signal.expiresAt>now).map(signal=>signal.symbol),
-      ...urgentLaunches.map(row=>row.symbol),...launchContinuity.map(row=>row.symbol),
+      ...triggeredLaunches.map(row=>row.symbol),...armedContinuity.map(row=>row.symbol),...launchContinuity.map(row=>row.symbol),
     ])];
     const universeRows = selectAnchorOpportunityUniverse({ rows: eligibleRows, limit: SCAN_UNIVERSE_SIZE,
       lockedSymbols: lockedAnchorSymbols, currentSymbols: this.runtime.liquidUniverse,
@@ -1096,8 +1094,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // must fall to zero after the first completed data cycle because it has no
       // new-entry authority.
       anchorFlowCount:Object.values(s?.anchorFlows??{}).filter(row=>row.phase!=="FAILED"&&row.phase!=="CONSUMED").length,
-      regionLaunchCount:Object.values(s?.regionLaunches??{}).filter(row=>["ARMED","IGNITION","READY"].includes(row.phase)).length,
+      regionLaunchCount:Object.values(s?.regionLaunches??{}).filter(row=>["ARMED","IGNITION","RETEST","READY"].includes(row.phase)).length,
       executableEventCount:(s?.regionLaunchSignals??[]).filter(row=>row.expiresAt>Date.now()).length,
+      participationCandidateCount:(s?.entryOpportunities??[]).filter(row=>row.timeframe==="5m").length,
+      participationEligibleCount:(s?.entryOpportunities??[]).filter(row=>row.timeframe==="5m"&&row.eligible).length,
+      targetPositionCount:10,
       exitPolicyVersion:s?.exitPolicyUpgrade?.policy??null,exitPolicyActivatedAt:s?.exitPolicyUpgrade?.at??null,
       timelyExitOpenCount:s?.positions.filter(t=>!!t.exitControl&&t.exitControl.policy===s.exitPolicyUpgrade?.policy).length??0,
       inheritedExitOpenCount:s?.positions.filter(t=>!t.exitControl).length??0,
