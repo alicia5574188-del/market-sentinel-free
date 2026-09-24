@@ -67,22 +67,24 @@ function barrierClusters(input:{
 }
 
 function chainTrigger(input:{side:RegionOpportunitySide;boundary:number;width:number;center:number;averageRange:number;costRate:number;barriers:RegionBarrier[]}){
-  const chainGap=Math.max(input.width*1.50,input.averageRange*4,input.center*input.costRate*4);
+  // Only the nearest meaningful obstacle is allowed to replace the region edge
+  // as the effective trigger. Stacking several historical levels into one giant
+  // hurdle would recreate the old "wait for a special setup" problem and hide
+  // valid opportunities. A farther level is kept only as remaining-space context.
+  const nearGap=Math.max(input.width*1.50,input.averageRange*4,input.center*input.costRate*4);
   const distinctGap=Math.max(input.width*.06,input.averageRange*.30,input.center*input.costRate*.20);
-  let trigger=input.boundary,used:RegionBarrier|null=null,index=0;
-  for(;index<input.barriers.length;index++){
-    const barrier=input.barriers[index]!;
-    const gap=input.side==="LONG"?barrier.lower-trigger:trigger-barrier.upper;
-    if(gap>chainGap)break;
-    if(gap<-distinctGap)continue;
-    trigger=input.side==="LONG"?Math.max(trigger,barrier.upper):Math.min(trigger,barrier.lower);
-    used=barrier;
-  }
-  const next=input.barriers.slice(index).find(barrier=>{
+  const first=input.barriers.find(barrier=>{
+    const gap=input.side==="LONG"?barrier.lower-input.boundary:input.boundary-barrier.upper;
+    return gap>=-distinctGap;
+  })??null;
+  const use=first&&((input.side==="LONG"?first.lower-input.boundary:input.boundary-first.upper)<=nearGap)?first:null;
+  const trigger=use?(input.side==="LONG"?Math.max(input.boundary,use.upper):Math.min(input.boundary,use.lower)):input.boundary;
+  const next=input.barriers.find(barrier=>{
+    if(barrier===use)return false;
     const gap=input.side==="LONG"?barrier.lower-trigger:trigger-barrier.upper;
     return gap>distinctGap;
   })??null;
-  return{trigger,used,next};
+  return{trigger,used:use,next};
 }
 
 export function detectRegionOpportunityStructure(input:{
