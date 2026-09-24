@@ -141,7 +141,7 @@ function motherQuality(s:RegionLaunchState,compression:RegionLaunchCompression|n
   const age=clip((s.motherBars-12)/36),touch=clip((s.motherTouchesUpper+s.motherTouchesLower-4)/10),
     cross=clip((s.motherCrossings-3)/6),fails=clip(s.failedDepartures/3),
     continuity=compression?clip((compression.bars-s.motherBars)/12):0;
-  return clip(.48+age*.14+touch*.12+cross*.12+fails*.08+(compression?.bars?.06:0)+continuity*.05,.35,.95);
+  return clip(.48+age*.14+touch*.12+cross*.12+fails*.08+(compression?.bars ? .06 : 0)+continuity*.05,.35,.95);
 }
 
 function refreshStructure(s:RegionLaunchState,rows:RegionCandle[],now:number,costRate:number){
