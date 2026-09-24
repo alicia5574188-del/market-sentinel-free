@@ -42,7 +42,7 @@ export function LoginGate({auth,onSession}:{auth:AuthSession|null;onSession:(s:A
   };
   const title=mode==="owner"?"主账户登录":mode==="register"?"注册会员账户":"会员登录";
   return <main className="fr-app fr-access" data-access="login">
-    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · 多周期转折引擎</b><small>PRIVATE ACCESS</small></div></div></header>
+    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · Adaptive 10</b><small>PRIVATE ACCESS</small></div></div></header>
     <section className="fr-section">
       <div className="fr-section-head"><div><small>独立账户 · 同一策略源</small><h1>{title}</h1></div></div>
       <p className="fr-note">{auth===null?"正在检查已有登录状态…":

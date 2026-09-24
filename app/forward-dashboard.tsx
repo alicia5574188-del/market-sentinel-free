@@ -1,255 +1,167 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { ADAPTIVE_TARGET_POSITIONS, FEATURES, type Rule, type Trade, type forwardSummary } from "../lib/forward-relations.ts";
+import {useEffect,useLayoutEffect,useRef,useState,type CSSProperties,type ReactNode} from "react";
+import {ADAPTIVE_TARGET_POSITIONS,type Trade,type forwardSummary} from "../lib/forward-relations.ts";
 import {recordWindows,archivePage} from "../lib/record-view.ts";
 import {ArchivePagination} from "./record-controls.tsx";
 import EquityCurve from "./equity-curve.tsx";
 import {EquityHistoryCache} from "../lib/equity-cache.ts";
-import { REGION_LIFECYCLE_VERSION, type RegionLifecycleState } from "../lib/region-lifecycle.ts";
-import { ANCHOR_FLOW_VERSION } from "../lib/anchor-flow.ts";
-import { REGION_LAUNCH_VERSION } from "../lib/region-launch.ts";
-type View = ReturnType<typeof forwardSummary>;
-type Tab = "overview" | "relations" | "orders" | "live" | "journal" | "settings";
-const fmt = (v: number | null | undefined, digits=2) => typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:digits,maximumFractionDigits:digits}):"—";
-const signed = (v: number | null | undefined, digits=2) => typeof v==="number"?`${v>=0?"+":""}${fmt(v,digits)}`:"—";
-const time = (v?:number|null) => v?new Date(v).toLocaleString("zh-CN",{timeZone:"Asia/Vientiane",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}):"—";
-const condition = (r:Rule) => r.grammar===REGION_LAUNCH_VERSION?"RegionLaunch · 完整区域爆发追击":r.grammar===ANCHOR_FLOW_VERSION?"AnchorFlow · 历史持仓":r.grammar===REGION_LIFECYCLE_VERSION?"5m 区域历史记录":r.authority==="MULTI_TURN"?`${r.turnTimeframe??"—"} 旧版转折记录`:r.conditions.map(c=>`${FEATURES[c.feature]} ${c.op==="GE"?"≥":"≤"} ${fmt(c.threshold)}`).join(" ＋ ");
-const REGION_STATUS:Record<RegionLifecycleState["status"],string>={NO_REGION:"未形成区域",IN_REGION:"区域内",PROBE_UP:"上沿试探",PROBE_DOWN:"下沿试探",ACCEPTED_UP:"上方接受",ACCEPTED_DOWN:"下方接受",DETACHED_UP:"上方已远离",DETACHED_DOWN:"下方已远离"};
 
-export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,memberName,cacheScope="owner"}:{data:View|null;healthy:boolean;statusLabel?:string;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;liveEnabled:boolean;liveOverview?:{equity:number|null;available:number|null;positionCount:number;operational:boolean;lastSyncAt:number|null;copied:number|null;eligible:number|null;missing:number|null};accountPanel?:ReactNode;memberName?:string;cacheScope?:string}) {
+type View=ReturnType<typeof forwardSummary>;
+type Tab="overview"|"execution"|"paper"|"live"|"journal"|"settings";
+const fmt=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d}):"—";
+const signed=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)?`${v>=0?"+":""}${fmt(v,d)}`:"—";
+const time=(v?:number|null)=>v?new Date(v).toLocaleString("zh-CN",{timeZone:"Asia/Vientiane",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}):"—";
+const duration=(start:number,end:number|null|undefined,now:number)=>{const m=Math.floor(Math.max(0,(end??now)-start)/60000);return m<1?"<1分钟":m>=60?`${Math.floor(m/60)}小时${m%60}分`:`${m}分钟`;};
+const modeName=(mode:string)=>({FLOW:"方向—空间",BREAKOUT:"爆发突破",RETEST:"回踩重启",FAILED_BREAKOUT:"假突破反向",RANGE:"区域内部"}[mode]??mode);
+const exitName=(reason:string|null)=>reason?({STRUCTURE_STOP:"结构止损",PROFIT_GIVEBACK:"利润保护",MARKET_FLIP:"市场转向",NO_POSITIVE_FEEDBACK:"无正向反馈",TIME_DECAY:"持仓超时",OPPORTUNITY_REPLACED:"更优机会替换",ACCOUNT_RESET:"手动重置"}[reason]??reason):"—";
+
+export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,memberName,cacheScope="owner"}:{
+  data:View|null;healthy:boolean;statusLabel?:string;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;
+  liveEnabled:boolean;liveOverview?:{equity:number|null;available:number|null;positionCount:number;operational:boolean;lastSyncAt:number|null;copied:number|null;eligible:number|null;missing:number|null};
+  accountPanel?:ReactNode;memberName?:string;cacheScope?:string;
+}){
   const [equityCache]=useState(()=>new EquityHistoryCache());
   useEffect(()=>()=>equityCache.cancel(),[equityCache]);
   const [tab,setTab]=useState<Tab>("overview"),[now,setNow]=useState(0),[liveMounted,setLiveMounted]=useState(false);
-  const [fontScale,setFontScale]=useState(92);
+  const [fontScale,setFontScale]=useState(()=>{if(typeof window==="undefined")return 92;try{const saved=Number(localStorage.getItem("sentinel-ui-font-scale-v1"));return saved>=70&&saved<=110?saved:92;}catch{return 92;}}),
+    [paperTab,setPaperTab]=useState<"account"|"positions"|"history"|"archive">("account"),[paperPage,setPaperPage]=useState(0);
   const [exporting,setExporting]=useState(false),[exportStatus,setExportStatus]=useState<string|null>(null);
-  const [paperTab,setPaperTab]=useState<"account"|"positions"|"history"|"archive">("account"),[paperPage,setPaperPage]=useState(0);
-  const paperRecords=recordWindows(data?.history??[],t=>t.closedAt??0),paperArchive=archivePage(paperRecords.archive,paperPage);
-  const scroll=useRef<Record<Tab,number>>({overview:0,relations:0,orders:0,live:0,journal:0,settings:0});
-  const fontControl=useRef<HTMLElement|null>(null),fontAnchor=useRef<{top:number;scrollY:number}|null>(null);
+  const scroll=useRef<Record<Tab,number>>({overview:0,execution:0,paper:0,live:0,journal:0,settings:0}),fontControl=useRef<HTMLElement|null>(null);
   useEffect(()=>{const id=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(id);},[]);
-  useEffect(()=>{let frame=0;try{const saved=Number(window.localStorage.getItem("sentinel-ui-font-scale-v1"));if(saved>=70&&saved<=110){const options=[70,80,90,100,110];const nearest=options.reduce((best,n)=>Math.abs(n-saved)<Math.abs(best-saved)?n:best,90);frame=window.requestAnimationFrame(()=>setFontScale(nearest));}}catch{}return()=>{if(frame)window.cancelAnimationFrame(frame);};},[]);
-  const selectFontScale=(value:number)=>{const anchor=fontControl.current;fontAnchor.current={top:anchor?.getBoundingClientRect().top??0,scrollY:window.scrollY};setFontScale(value);try{window.localStorage.setItem("sentinel-ui-font-scale-v1",String(value));}catch{}};
-  useLayoutEffect(()=>{const pending=fontAnchor.current;if(!pending)return;const anchor=fontControl.current;if(anchor){const after=anchor.getBoundingClientRect().top;window.scrollBy({top:after-pending.top,left:0,behavior:"auto"});}else window.scrollTo({top:pending.scrollY,left:0,behavior:"auto"});fontAnchor.current=null;},[fontScale]);
-  const fontVars:Record<string,string>={};for(let px=10;px<=64;px++)fontVars[`--fr-fs${px}`]=`${(px*fontScale/100).toFixed(2)}px`;
-  const fontStyle=fontVars as CSSProperties;
   useLayoutEffect(()=>{window.scrollTo({top:tab==="live"?0:scroll.current[tab],behavior:"auto"});},[tab]);
   const select=(next:Tab)=>{scroll.current[tab]=window.scrollY;if(next==="live")setLiveMounted(true);setTab(next);};
-  const exportSnapshot=async()=>{
-    if(exporting)return;
-    setExporting(true);setExportStatus(null);
-    try{
-      const response=await fetch("/api/forward/export",{cache:"no-store",credentials:"same-origin"});
-      if(!response.ok)throw new Error(`HTTP ${response.status}`);
-      const blob=await response.blob(),url=URL.createObjectURL(blob);
-      const anchor=document.createElement("a");
-      anchor.href=url;anchor.download=`forward-research-snapshot-${new Date().toISOString().slice(0,10)}.json`;
-      document.body.appendChild(anchor);anchor.click();anchor.remove();
-      window.setTimeout(()=>URL.revokeObjectURL(url),1000);
-      setExportStatus("已开始下载，仍停留在当前页面。");
-    }catch{
-      setExportStatus("导出失败，请重试。");
-    }finally{setExporting(false);}
-  };
-  const blockers=Object.entries(data?.entryDiagnostics?.reasons??{}).sort((a,b)=>b[1]-a[1]);
-  const mainBlocker=blockers[0]?.[0]??"本轮暂无阻塞";
-  const regionStates=data?.regionLifecycles??[];
-  const activeRegions=regionStates.filter(row=>!!row.zone);
-  const launchSignals=(data?.regionLaunchSignals??[]).filter(row=>!now||row.expiresAt>now);
-  const executableSignals=[...launchSignals].sort((a,b)=>a.completedAt-b.completedAt);
-  const preparedSignals=executableSignals.slice(0,6);
-  const participationCandidates=[...(data?.entryOpportunities??[])].filter(row=>row.timeframe==="5m")
-    .sort((a,b)=>Number(b.eligible)-Number(a.eligible)||b.score-a.score||b.directionStrength-a.directionStrength);
-  const eligibleParticipation=participationCandidates.filter(row=>row.eligible),topParticipation=participationCandidates.slice(0,10);
-  const occupiedSeats=data?.positions.length??0,remainingSeats=Math.max(0,ADAPTIVE_TARGET_POSITIONS-occupiedSeats);
-  const readyCandidateCount=new Set([...eligibleParticipation.map(row=>row.symbol),...executableSignals.map(row=>row.symbol)]).size;
-  const regionLaunches=data?.regionLaunches??[];
-  const activeLaunches=regionLaunches.filter(row=>row.phase!=="CONSUMED");
-  const armedLaunches=activeLaunches.filter(row=>row.phase==="ARMED"||row.phase==="IGNITION"||row.phase==="READY");
-  const regionMap=new Map(activeRegions.map(row=>[row.symbol,row]));
-  const regionPriority:Record<RegionLifecycleState["status"],number>={PROBE_UP:0,PROBE_DOWN:0,ACCEPTED_UP:1,ACCEPTED_DOWN:1,IN_REGION:2,DETACHED_UP:3,DETACHED_DOWN:3,NO_REGION:4};
-  const regionRows=[...activeRegions].sort((a,b)=>(regionPriority[a.status]??9)-(regionPriority[b.status]??9)||b.observedAt-a.observedAt||a.symbol.localeCompare(b.symbol)).slice(0,18);
-  const inRegionCount=activeRegions.filter(row=>row.status==="IN_REGION").length;
-  const probeCount=activeRegions.filter(row=>row.status==="PROBE_UP"||row.status==="PROBE_DOWN").length;
-  const acceptedCount=activeRegions.filter(row=>row.status==="ACCEPTED_UP"||row.status==="ACCEPTED_DOWN").length;
-  const detachedCount=activeRegions.filter(row=>row.status==="DETACHED_UP"||row.status==="DETACHED_DOWN").length;
-  const currentPositionCount=data?.positions.filter(t=>["region-lifecycle-entry-v1","anchor-flow-entry-v1","region-launch-entry-v1","direction-space-entry-context-v2"].includes(t.entryContext?.version??"")).length??0;
-  const legacyPositionCount=(data?.positions.length??0)-currentPositionCount;
-  const paperMargin=data?.positions.reduce((sum,t)=>sum+t.margin,0)??null;
-  const elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
-  const nav:[Tab,string,string][]=[["overview","◉","总览"],["relations","⌘","执行"],["orders","⇄","模拟"],["live","◈","实盘"],["journal","≋","演变"],["settings","⊙","系统"]];
-  const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice("后台运行中 · ".length):statusLabel??(healthy?"正常":"行情重连中");
-  return <main className="fr-app" style={fontStyle} data-ui-version="adaptive-ten-v1" data-record-view="compact-records-pnl-v1">
-    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · Adaptive 10</b><small>5M DIRECTION · SPACE · REGIONLAUNCH</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
-    <div className="fr-subhead"><span>Gate USDT 永续 · 30市场扫描 · 目标10仓 · 11市场实时执行</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
-    {memberName&&<p className="fr-note">{memberName} · 共用同一模拟策略，实盘账户独立，开关只由你控制。</p>}
+  const fontVars:Record<string,string>={};for(let px=10;px<=64;px++)fontVars[`--fr-fs${px}`]=`${(px*fontScale/100).toFixed(2)}px`;
+  const exportSnapshot=async()=>{if(exporting)return;setExporting(true);setExportStatus(null);try{
+    const r=await fetch("/api/forward/export",{cache:"no-store",credentials:"same-origin"});if(!r.ok)throw new Error();
+    const blob=await r.blob(),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`adaptive-ten-snapshot-${new Date().toISOString().slice(0,10)}.json`;
+    document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);setExportStatus("已开始下载。");
+  }catch{setExportStatus("导出失败，请重试。");}finally{setExporting(false);}};
+
+  const positions=data?.positions??[],opportunities=[...(data?.opportunities??[])].sort((a,b)=>Number(b.eligible)-Number(a.eligible)||Number(b.premium)-Number(a.premium)||b.score-a.score);
+  const eligible=opportunities.filter(o=>o.eligible&&(!now||o.expiresAt>now)),premium=eligible.filter(o=>o.premium),ordinary=eligible.filter(o=>!o.premium);
+  const blockers=Object.entries(data?.entryDiagnostics?.reasons??{}).sort((a,b)=>b[1]-a[1]),mainBlocker=blockers[0]?.[0]??"当前没有额外阻塞";
+  const pulse=data?.marketPulse,records=recordWindows(data?.history??[],t=>t.closedAt??0),archive=archivePage(records.archive,paperPage);
+  const paperMargin=positions.reduce((n,t)=>n+t.margin,0),elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
+  const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice(8):statusLabel??(healthy?"正常":"行情恢复中");
+  const nav:[Tab,string,string][]=[["overview","◉","总览"],["execution","⌘","执行"],["paper","⇄","模拟"],["live","◈","实盘"],["journal","≋","记录"],["settings","⊙","系统"]];
+  return <main className="fr-app" style={fontVars as CSSProperties} data-ui-version="adaptive-ten-slim-v1">
+    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · Adaptive 10</b><small>5M CORE · 1M CONFIRM · TEN COMPETING SEATS</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
+    <div className="fr-subhead"><span>Gate USDT 永续 · 30市场扫描 · 目标10仓 · 11实时槽</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
+    {memberName&&<p className="fr-note">{memberName} · 共用同一策略事件源，实盘账户与API完全独立。</p>}
 
     {tab==="overview"&&<>
-      <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">账户驾驶舱</span><h1>{systemStatus==="正常"?"系统正在正常运行":`系统状态：${systemStatus}`}</h1>
-        <p>{data?.latestReason??"正在读取已持久化账户和真实行情状态。"}</p>
-        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>30市场5m扫描</span><span>目标10个持仓</span><span>方向—空间持续参与</span><span>RegionLaunch优先机会</span><span>实盘{liveEnabled?"已开启":"关闭"}</span></div></div>
+      <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">ADAPTIVE TEN</span><h1>{systemStatus==="正常"?"系统正在正常运行":`系统状态：${systemStatus}`}</h1>
+        <p>{data?.latestReason??"正在读取交易核心。"}</p>
+        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>5m唯一主周期</span><span>1m只做确认</span><span>10席位持续竞争</span><span>市场转向即时重评</span><span>实盘同源事件</span></div></div>
         <div className="fr-equity"><small>模拟账户权益 · USDT</small><strong>{fmt(data?.equity)}</strong><div className={(data?.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(data?.netPnl)} <span>U · {signed(data?data.netPnl/data.initialEquity*100:null)}%</span></div>
           <footer><span>起点 {fmt(data?.initialEquity,0)}</span><span>最大回撤 {fmt(data?data.maxDrawdown*100:null)}%</span></footer></div></section>
-
       <section className="fr-stats">
-        <Stat label="模拟账户" value={`${fmt(data?.equity)} U`} note={`${data?.positions.length??"—"} / ${ADAPTIVE_TARGET_POSITIONS} 席 · 浮盈 ${signed(data?.floating)} U`}/>
+        <Stat label="当前席位" value={data?`${positions.length} / ${ADAPTIVE_TARGET_POSITIONS}`:"—"} note={positions.length>=ADAPTIVE_TARGET_POSITIONS?"满席仍持续扫描换仓":`还可补 ${Math.max(0,ADAPTIVE_TARGET_POSITIONS-positions.length)} 席`}/>
+        <Stat label="可参与机会" value={data?`${eligible.length} 个`:"—"} note={`普通 ${ordinary.length} · 高级 ${premium.length}`}/>
+        <Stat label="市场状态" value={pulse?.bias==="UP"?"偏多":pulse?.bias==="DOWN"?"偏空":pulse?"分化":"—"} note={pulse?`上涨 ${pulse.up} · 下跌 ${pulse.down} · 中性 ${pulse.neutral}`:"等待5m数据"}/>
         <Stat label="实盘账户" value={`${fmt(liveOverview?.equity)} U`} note={`${liveOverview?.positionCount??"—"} 笔持仓 · 可用 ${fmt(liveOverview?.available)} U`}/>
-        <Stat label="复制一致性" value={liveOverview?.eligible==null?"—":`${liveOverview.copied??0} / ${liveOverview.eligible}`} note={liveOverview?.missing?`${liveOverview.missing} 笔需要核对`:"当前无漏复制提示"}/>
-        <Stat label="系统状态" value={systemStatus} note={`行情心跳 ${time(feedAt)}`}/>
       </section>
-
       <div className="fr-two">
-        <section className="fr-section"><div className="fr-section-head"><div><small>模拟账户</small><h2>净值变化</h2></div><span>含模拟成本</span></div>
-          <EquityCurve data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>
-          <div className="fr-three"><div><small>累计模拟成交额</small><b>{fmt(data?.turnover)} U</b></div><div><small>已扣模拟费用</small><b>{fmt(data?.fees)} U</b></div><div><small>已完成订单</small><b>{fmt(data?.resolved,0)}</b></div></div>
-        </section>
-        <section className="fr-section fr-now-card"><div className="fr-section-head"><div><small>当前状态</small><h2>系统正在做什么</h2></div><span>{time(data?.updatedAt)}</span></div>
-          <div className="fr-three"><div><small>当前席位</small><b>{occupiedSeats} / {ADAPTIVE_TARGET_POSITIONS}</b></div><div><small>5m可参与</small><b>{eligibleParticipation.length}</b></div><div><small>RegionLaunch事件</small><b>{executableSignals.length}</b></div></div>
+        <section className="fr-section"><div className="fr-section-head"><div><small>模拟账户</small><h2>净值变化</h2></div><span>含模型成本</span></div><EquityCurve data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>
+          <div className="fr-three"><div><small>累计成交额</small><b>{fmt(data?.turnover)} U</b></div><div><small>已扣费用</small><b>{fmt(data?.fees)} U</b></div><div><small>完成订单</small><b>{fmt(data?.resolved,0)}</b></div></div></section>
+        <section className="fr-section fr-now-card"><div className="fr-section-head"><div><small>现在</small><h2>系统正在做什么</h2></div><span>{time(data?.updatedAt)}</span></div>
+          <div className="fr-three"><div><small>席位</small><b>{positions.length}/{ADAPTIVE_TARGET_POSITIONS}</b></div><div><small>候选</small><b>{eligible.length}</b></div><div><small>高级机会</small><b>{premium.length}</b></div></div>
           <div className="fr-insight"><span className="fr-dot"/><p>{data?.latestReason??"等待运行状态。"}</p></div>
-          <div className="fr-action-row"><button className="fr-button" onClick={()=>select("relations")}>查看执行流程</button><button className="fr-button secondary" onClick={()=>select("orders")}>查看模拟账户</button></div>
-        </section>
+          <button className="fr-button" onClick={()=>select("execution")}>查看实时执行 →</button></section>
       </div>
-
-      {(liveOverview?.missing??0)>0&&<section className="fr-section fr-parity-alert"><div className="fr-section-head"><div><small>需要关注</small><h2>模拟—实盘复制存在差异</h2></div><span>{liveOverview?.missing} 笔</span></div>
-        <p className="fr-note">这里仅提示存在需要核对的订单，不用不同资金规模账户的绝对盈亏做比较。进入实盘页查看标准化收益率、入场偏差、复制延迟和按实盘名义额折算后的执行结果。</p>
-        <button className="fr-text-button" onClick={()=>select("live")}>查看实盘差异 →</button></section>}
-
-      <section className="fr-section"><div className="fr-section-head"><div><small>最近变化</small><h2>需要留意的运行记录</h2></div><button className="fr-text-button" onClick={()=>select("journal")}>全部记录 ↗</button></div><Journal data={data} limit={3}/></section>
+      <section className="fr-section"><div className="fr-section-head"><div><small>TOP OPPORTUNITIES</small><h2>当前最优机会</h2></div><span>{eligible.length} 个可参与</span></div>
+        <OpportunityGrid rows={opportunities.slice(0,6)}/></section>
     </>}
 
-    {tab==="relations"&&<><PageTitle eyebrow="ADAPTIVE TEN EXECUTION" title="执行" text="系统持续维护约10个当前最值得持有的短线席位：普通行情由5分钟方向—空间评分持续参与；成熟区域出现更优结构时由RegionLaunch优先进入或替换弱仓。"/>
-
-      <section className="fr-section fr-exec-flow-section"><div className="fr-section-head"><div><small>当前执行层</small><h2>10席位持续竞争</h2></div><span>{time(data?.updatedAt)}</span></div>
+    {tab==="execution"&&<>
+      <PageTitle eyebrow="ONE CLOSED LOOP" title="执行" text="只有一套交易核心：5分钟判断正在发生的方向、位置与剩余空间；成熟区域产生更优机会；1分钟只负责精确确认；所有候选和持仓持续争夺约10个席位。"/>
+      <section className="fr-section fr-exec-flow-section"><div className="fr-section-head"><div><small>当前执行层</small><h2>Adaptive 10 闭环</h2></div><span>{time(data?.updatedAt)}</span></div>
         <div className="fr-exec-flow">
-          <ExecStep index="01" title="30市场5m扫描" status={(data?.marketCount??0)>0?"已更新":"等待"} text={`当前维护 ${fmt(data?.marketCount,0)} 个市场；不要求先出现缠绕区域，每根完整5分钟K都会更新方向、空间和位置评分。`}/>
-          <ExecStep index="02" title="方向—空间候选" status={participationCandidates.length?"持续评分":"扫描中"} text={`当前生成 ${participationCandidates.length} 个5m候选，其中 ${eligibleParticipation.length} 个达到可参与条件；方向必须脱离噪音，扣成本后仍有空间，并且当前位置不能明显追远。`}/>
-          <ExecStep index="03" title="RegionLaunch优先机会" status={armedLaunches.length||executableSignals.length?"持续观察":"等待机会"} text={`当前 ${activeLaunches.length} 个区域机会在观察，${executableSignals.length} 个已形成可执行事件；READY / RETEST / IGNITION优先于普通补仓候选，ARMED不会再占满全部实时槽。`}/>
-          <ExecStep index="04" title="实时盘口分配" status={readyCandidateCount?"准备执行":"等待候选"} text="11个实时槽按已有持仓 → 已触发RegionLaunch → 5m高分候选 → 普通ARMED观察排序；不会再让大量ARMED候选堵死普通参与通道。"/>
-          <ExecStep index="05" title="10席位补仓 / 换仓" status={occupiedSeats>=ADAPTIVE_TARGET_POSITIONS?"满席竞争":"补充席位"} text={`当前 ${occupiedSeats} / ${ADAPTIVE_TARGET_POSITIONS} 席，剩余 ${remainingSeats} 席。未满时按评分补充；满10席后只有明显更强的新机会才能替换弱持仓。`}/>
-          <ExecStep index="06" title="真实盘口开仓" status={(data?.entryDiagnostics?.opened??0)>0?"已成交":eligibleParticipation.length||executableSignals.length?"执行检查":"等待"} text={(data?.entryDiagnostics?.opened??0)>0?`本轮已开仓 ${fmt(data?.entryDiagnostics?.opened,0)} 笔。`:`当前主要阻塞：${mainBlocker}。`}/>
-          <ExecStep index="07" title="入场反馈 / 利润保护" status={(data?.positions.length??0)>0?"持续管理":"等待持仓"} text="持仓持续重新评估方向强度、剩余空间和入场后反馈；弱仓失去价值可让位，盈利仓继续使用现有单向利润保护，RegionLaunch保留结构失效退出。"/>
-        </div>
+          <ExecStep index="01" title="30市场扫描" status={(data?.marketCount??0)>0?"运行中":"等待5m"} text={`当前维护 ${fmt(data?.marketCount,0)} 个5分钟市场；不依赖15m/1h/4h才能交易。`}/>
+          <ExecStep index="02" title="方向—空间" status={opportunities.length?"持续评分":"等待"} text={`方向、路径效率、剩余空间、回调风险和当前位置统一评分；当前 ${ordinary.length} 个普通可参与机会。`}/>
+          <ExecStep index="03" title="成熟区域高级机会" status={premium.length?"已发现":"持续观察"} text={`爆发突破、回踩重启、假突破反向、区域内部交易共用同一成熟区结构；当前 ${premium.length} 个高级机会。`}/>
+          <ExecStep index="04" title="1分钟精确确认" status={premium.length?"按需启用":"无需占用"} text="1m不决定大方向，只在强突破/回踩等高级机会里确认小回调结束、重新启动或连续突破。"/>
+          <ExecStep index="05" title="10席位竞争" status={positions.length>=ADAPTIVE_TARGET_POSITIONS?"满席竞争":"正在补仓"} text={`当前 ${positions.length}/${ADAPTIVE_TARGET_POSITIONS} 席；未满按评分补仓，满席后新机会必须明显强于最弱持仓才换仓。`}/>
+          <ExecStep index="06" title="入场后反馈" status={positions.length?"持续重评":"等待持仓"} text="快速浮赢提高持仓价值；长期围绕成本或很快浮亏会降级，但不会靠停止全部开仓来规避亏损。"/>
+          <ExecStep index="07" title="退出与锁利" status={positions.length?"持续保护":"等待持仓"} text="结构止损、市场转向、时间失败、机会替换和MFE保护统一管理；约2R以后优先保留接近80%的峰值利润。"/>
+        </div></section>
+      <section className="fr-stats">
+        <Stat label="市场广度" value={pulse?`${pulse.up}↑ / ${pulse.down}↓`:"—"} note={pulse?`强度 ${fmt(pulse.strength*100,0)}% · 波动扩张 ${fmt(pulse.expansion*100,0)}%`:"等待数据"}/>
+        <Stat label="候选总数" value={data?`${opportunities.length}`:"—"} note={`${eligible.length} 个当前可参与`}/>
+        <Stat label="本轮新开" value={fmt(data?.entryDiagnostics?.opened,0)} note={`匹配 ${fmt(data?.entryDiagnostics?.matched,0)}`}/>
+        <Stat label="主要阻塞" value={mainBlocker} note={blockers[0]?`${blockers[0][1]} 次`:"没有额外阻塞"}/>
       </section>
-
-      <section className="fr-section fr-scoreboard-section"><div className="fr-section-head"><div><small>5M PARTICIPATION QUEUE</small><h2>方向—空间候选</h2><p>这是维持约10个持仓的主参与通道。绿色候选可进入真实盘口执行检查；不是强制凑单，方向太弱、空间不足或已经追远都会继续观察。</p></div><span>{eligibleParticipation.length} 可参与 / {participationCandidates.length} 候选</span></div>
-        {topParticipation.length?<div className="fr-scoreboard">{topParticipation.map((row,index)=><details className={`fr-score-row ${row.eligible?"is-eligible":""}`} key={`participation:${row.symbol}`}>
-          <summary><span className="fr-score-rank">#{index+1}</span><span className="fr-score-value">{fmt(row.score,0)}</span><span className="fr-score-symbol"><b>{row.symbol.replace("_"," / ")}</b><small>{row.side==="LONG"?"做多":"做空"} · 5m</small></span>
-            <span><small>方向</small><b>{fmt(row.directionStrength,0)}</b></span><span><small>净空间</small><b>{fmt(row.netRemainingSpaceRate*100,2)}%</b></span><span><small>空间/回调</small><b>{fmt(row.edgeRatio,2)}×</b></span><em>{row.eligible?"可参与":"观察"}</em></summary>
-          <div className="fr-score-details"><div><h3>当前评分</h3><div className="fr-score-detail-grid"><Metric label="位置质量" value={fmt(row.positionScore,0)}/><Metric label="路径效率" value={fmt(row.pathEfficiency,0)}/><Metric label="动量持续" value={fmt(row.momentumPersistence,0)}/><Metric label="回调韧性" value={fmt(row.pullbackResilience,0)}/></div></div>
-            <div><h3>交易空间</h3><div className="fr-score-detail-grid"><Metric label="预计腿空间" value={`${fmt(row.expectedLegRate*100,2)}%`}/><Metric label="已运行" value={`${fmt(row.legMoveRate*100,2)}%`}/><Metric label="回调风险" value={`${fmt(row.pullbackRiskRate*100,2)}%`}/><Metric label="执行评分" value={fmt(row.executionScore,0)}/></div></div><p>{row.reason}</p></div>
-        </details>)}</div>:<Empty title="当前没有5分钟方向候选" text="当前30市场的方向尚未明显脱离噪音，系统继续随完整5分钟K更新。"/>}
-      </section>
-
-      <section className="fr-section fr-prepared-section"><div className="fr-section-head"><div><small>PREMIUM REGION EVENTS</small><h2>RegionLaunch优先事件</h2><p>成熟区域机会是更高质量的优先通道；已触发事件会优先获得实时执行，但普通ARMED观察不会再阻塞5分钟持续参与。</p></div><span>{executableSignals.length} 个</span></div>
-        {preparedSignals.length?<div className="fr-prepared-grid">{preparedSignals.map((x,index)=><article className="fr-prepared-card" key={x.id}>
-          <header><div><small>#{index+1} · 爆发追击</small><h3>{x.symbol.replace("_"," / ")}</h3><p>5m · {x.side==="LONG"?"准备做多":"准备做空"} · {x.boundary==="UPPER"?"上沿事件":"下沿事件"}</p></div><b>待执行</b></header>
-          <div className="fr-prepared-metrics"><span><small>区域下沿</small><strong>{fmt(x.regionLower,5)}</strong></span><span><small>区域中心</small><strong>{fmt(x.regionCenter,5)}</strong></span><span><small>区域上沿</small><strong>{fmt(x.regionUpper,5)}</strong></span><span><small>事件价格</small><strong>{fmt(x.signalPrice,5)}</strong></span><span><small>结构止损</small><strong>{fmt(x.stopPrice,5)}</strong></span><span><small>有效至</small><strong>{time(x.expiresAt)}</strong></span></div>
-          <p>{x.reason}</p>
-        </article>)}</div>:<Empty title="当前没有RegionLaunch优先事件" text={armedLaunches.length?"区域机会仍在观察；普通5分钟参与通道会独立继续寻找订单，不需要等待RegionLaunch。":activeRegions.length?"已有成熟区域，等待形成更优结构事件；普通5分钟候选照常运行。":"没有成熟区域也不会阻塞5分钟方向—空间参与。"} />}
-      </section>
-
-      <section className="fr-section fr-prepared-section"><div className="fr-section-head"><div><small>REGIONLAUNCH WATCH</small><h2>高级区域观察池</h2><p>成熟缠绕区域继续寻找 ROTATION / RELEASE / RETEST；它负责更优结构机会，但只有READY / RETEST / IGNITION抢占普通候选之前的实时优先级。</p></div><span>{activeLaunches.length} 个</span></div>
-        {activeLaunches.length?<div className="fr-prepared-grid">{activeLaunches.slice(0,8).map((x,index)=><article className="fr-prepared-card" key={`${x.symbol}:${x.motherRegionId}`}>
-          <header><div><small>#{index+1} · {x.phase}</small><h3>{x.symbol.replace("_"," / ")}</h3><p>区域K线 {x.motherBars} · 失败离区 {x.failedDepartures} 次 · 质量 {fmt(x.quality*100,0)}</p></div><b>{x.phase}</b></header>
-          <div className="fr-prepared-metrics"><span><small>区域下沿</small><strong>{fmt(x.motherLower,5)}</strong></span><span><small>区域中心</small><strong>{fmt(x.motherCenter,5)}</strong></span><span><small>区域上沿</small><strong>{fmt(x.motherUpper,5)}</strong></span><span><small>完整边界K线</small><strong>{x.compression?x.compression.bars:"—"}</strong></span><span><small>执行下沿</small><strong>{fmt(x.compression?.lower,5)}</strong></span><span><small>执行上沿</small><strong>{fmt(x.compression?.upper,5)}</strong></span></div>
-          <p>{x.reason}</p>
-        </article>)}</div>:<Empty title="当前没有RegionLaunch待命区域" text="系统仍持续维护成熟缠绕区域；只有接近完整边界并进入ARMED的标的才占用高优先级实时观察槽。"/>}
-      </section>
-
-      <section className="fr-section fr-scoreboard-section"><div className="fr-section-head"><div><small>REGION WATCHLIST</small><h2>区域观察池</h2><p>这里展示成熟5分钟缠绕区域。交易只认完整影线边界；区域内的新影线会扩展边界，第一根真正收在区间外的5分钟K会冻结该边界供爆发确认使用。</p></div><span>{activeRegions.length} 个区域</span></div>
-        {regionRows.length?<div className="fr-scoreboard">{regionRows.map((row,index)=>{const z=row.zone!;const event=launchSignals.find(signal=>signal.symbol===row.symbol);
-          return <details className={`fr-score-row ${event?"is-eligible":""}`} key={`${row.symbol}:${z.id}`}>
-            <summary><span className="fr-score-rank">#{index+1}</span><span className="fr-score-value">{fmt(z.widthRate*100,2)}%</span><span className="fr-score-symbol"><b>{row.symbol.replace("_"," / ")}</b><small>{REGION_STATUS[row.status]}</small></span>
-              <span><small>区域上沿</small><b>{fmt(z.upper,5)}</b></span><span><small>区域中心</small><b>{fmt(z.center,5)}</b></span><span><small>区域下沿</small><b>{fmt(z.lower,5)}</b></span><em>{event?"待交易":REGION_STATUS[row.status]}</em></summary>
-            <div className="fr-score-details">
-              <div><h3>当前区域</h3><div className="fr-score-detail-grid"><Metric label="形成完成" value={time(z.confirmedAt)}/><Metric label="区域K线" value={`${z.bars} 根`}/><Metric label="区域宽度" value={`${fmt(z.widthRate*100,2)}%`}/><Metric label="中心穿越" value={`${z.crossings} 次`}/><Metric label="上下触及" value={`${z.touchesLower} / ${z.touchesUpper}`}/></div></div>
-              <div><h3>生命周期</h3><div className="fr-score-detail-grid"><Metric label="当前状态" value={REGION_STATUS[row.status]}/><Metric label="最近处理" value={time(row.lastProcessedAt)}/><Metric label="试探极值" value={fmt(row.probeExtreme,5)}/><Metric label="接受确认" value={time(row.acceptedAt)}/><Metric label="远离确认" value={time(row.detachedAt)}/></div></div>
-              <div><h3>边界交易资格</h3><div className="fr-score-detail-grid"><Metric label="上沿" value={row.upperConsumedAt?"已消费，等重置":"可观察"}/><Metric label="下沿" value={row.lowerConsumedAt?"已消费，等重置":"可观察"}/><Metric label="待交易事件" value={event?"爆发追击":"无"}/><Metric label="方向" value={event?(event.side==="LONG"?"做多":"做空"):"—"}/></div></div>
-              <p>{row.reason}</p>
-            </div>
-          </details>;})}</div>:<Empty title="暂无成熟区域" text="系统正在轮换扫描30个市场；没有成熟区域的标的不占用交易事件。"/>}
-      </section>
+      <section className="fr-section fr-scoreboard-section"><div className="fr-section-head"><div><small>LIVE RANKING</small><h2>机会排名</h2><p>这里就是实际开仓排名，不是研究影子列表。</p></div><span>{eligible.length} 可参与</span></div>
+        <OpportunityGrid rows={opportunities.slice(0,16)} details/></section>
+      {blockers.length>0&&<section className="fr-section"><div className="fr-section-head"><h2>本轮未开仓原因</h2><span>真实阻塞统计</span></div>
+        <div className="fr-rule-grid">{blockers.slice(0,8).map(([reason,count])=><article className="fr-setting" key={reason}><div><h3>{reason}</h3><p>只有当前轮实际经过开仓检查才会计入。</p></div><b>{count}</b></article>)}</div></section>}
     </>}
-    {tab==="orders"&&<><PageTitle eyebrow="REAL-FEED PAPER" title="模拟账户" text="与实盘使用同一套观察结构。模拟成交含模型手续费、滑点和资金费用占位，不冒充Gate真实成交。"/>
-      <nav className="fr-live-tabs fr-paper-tabs" aria-label="模拟子导航">{([["account","账户"],["positions","持仓"],["history","记录"],["archive","归档"]] as const).map(([id,label])=><button key={id} className={paperTab===id?"selected":""} aria-current={paperTab===id?"page":undefined} onClick={()=>setPaperTab(id)}>{label}</button>)}</nav>
-      {paperTab==="account"&&<>
-        <section className="fr-stats fr-paper-summary" data-testid="paper-account-summary"><Stat label="模拟账户权益" value={`${fmt(data?.equity)} U`} note={`起始 ${fmt(data?.initialEquity)} U`}/><Stat label="保证金占用" value={`${fmt(paperMargin)} U`} note="当前模拟持仓合计"/><Stat label="持仓浮动盈亏" value={`${signed(data?.floating)} U`} note="已包含模型退出成本口径"/><Stat label="当前持仓" value={data?`${data.positions.length} 笔`:"—"} note={`已完成 ${fmt(data?.resolved,0)} 笔`}/></section>
-        <div className="fr-account-line"><span>模拟成交额 {fmt(data?.turnover)} U · 已扣费用 {fmt(data?.fees)} U</span><b>最大回撤 {fmt(data?data.maxDrawdown*100:null)}%</b></div>
-        <section className="fr-section fr-live-holdings" data-testid="paper-account-holdings"><div className="fr-section-head"><h2>当前持仓</h2><span>{data?.positions.length??"—"} 笔</span></div>
-          {data?.positions.length?<div className="fr-position-list">{data.positions.map(t=>{const pnl=tradePnl(t,now),rate=t.notional>0&&pnl!=null?pnl/t.notional:null;
-            const context=t.entryContext,hold=t.holdValue,tf=context?.timeframe??t.turn?.timeframe,region=regionMap.get(t.symbol);
-            const isLaunch=context?.version==="region-launch-entry-v1",isParticipation=context?.version==="direction-space-entry-context-v2";
-            const isRegion=context?.version==="region-lifecycle-entry-v1"||context?.version==="anchor-flow-entry-v1"||isLaunch;
-            const isAnchor=context?.version==="anchor-flow-entry-v1";
-            const entrySpace=context?.remainingSpaceRate??t.forecast?.remainingNetRate??null;
-            const pullback=hold?.pullbackRiskRate??null,best=hold?.bestHoldMinutes??context?.bestHoldMinutes??null;
-            const verdict=hold?.action==="EXIT_PROFIT"?"建议止盈":hold?.action==="EXIT_RISK"?"建议退出":hold?"继续持有":"等待评估";
-            const holdText=best==null?"最佳持有 —":best>=1440?`最佳持有 ${fmt(best/1440,1)}天`:best>=60?`最佳持有 ${fmt(best/60,1)}小时`:`最佳持有 ${fmt(best,0)}分钟`;
-            return <details key={t.id} className="fr-position-row"><summary>
-            <span className="fr-position-primary"><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {fmt(t.leverage,0)}× · 保证金 {fmt(t.margin)} U</small>
-              <b className={(pnl??0)>=0?"fr-positive":"fr-negative"}>{signed(pnl)} U</b><small>{rate==null?"—":`${signed(rate*100,3)}% · 展开`}</small></span>
-            <span className="fr-position-entry"><b>{isLaunch?"RegionLaunch · 高级区域机会":isParticipation?"5m · 方向—空间参与":isAnchor?"AnchorFlow · 历史持仓":isRegion?"5m · 区域历史":tf?`${tf} · 持仓`:"入场依据"}</b>
-              {isRegion?<><small>来源区域 {fmt(context?.regionLower,5)} – {fmt(context?.regionUpper,5)} · 当前 {region?REGION_STATUS[region.status]:"等待区域更新"}</small>
-                <small>防守 {fmt(t.stopPrice,5)} · {isLaunch?`点火推进 ${fmt((context?.launchImpulseRate??0)*100,2)}% · 60秒验证 ${t.entryValidation?.passed===true?"通过":t.entryValidation?.passed===false?"失败":"等待"}`:isAnchor?`回测 ${time(context?.anchorRetestAt)} · 首根5m验证 ${t.entryValidation?.passed===true?"通过":t.entryValidation?.passed===false?"失败":"等待"}`:context?.regionKind==="REJECTION"?`中心目标 ${fmt(context?.regionCenter,5)}`:"结构管理"}</small></>:<><small>评分 {context?.entryScore==null?"—":fmt(context.entryScore,0)} · 空间 {entrySpace==null?"—":`${fmt(entrySpace*100,1)}%`} · 回调 {pullback==null?"—":`${fmt(pullback*100,1)}%`}</small><small>{holdText} · {verdict}</small></>}
-            </span>
-          </summary><TradeCard trade={t} now={now} region={region}/></details>;})}</div>:<Empty title="当前没有模拟持仓" text="符合条件的新订单会显示在这里。"/>}
-        </section>
-      </>}
-      {paperTab==="positions"&&<section className="fr-section" data-testid="paper-positions"><div className="fr-section-head"><h2>当前持仓</h2><span>{data?.positions.length??"—"} 笔</span></div>{data?.positions.length?<div className="fr-rule-grid">{data.positions.map(t=><TradeCard key={t.id} trade={t} now={now} region={regionMap.get(t.symbol)}/>)}</div>:<Empty title="当前没有模拟持仓" text="符合条件的新订单会显示在这里。"/>}</section>}
-      {(paperTab==="history"||paperTab==="archive")&&<section className="fr-section" data-testid={paperTab==="history"?"paper-history":"paper-archive"}><div className="fr-section-head"><h2>{paperTab==="history"?"最近记录":"归档记录"}</h2><span>{paperTab==="history"?"最新10条":"更早记录"}</span></div>
-        {(paperTab==="history"?paperRecords.recent:paperArchive.items).length?<div className="fr-rule-grid">{(paperTab==="history"?paperRecords.recent:paperArchive.items).map(t=><TradeCard key={t.id} trade={t} now={now} region={regionMap.get(t.symbol)}/>)}</div>:<Empty title="暂无已平仓记录" text="订单平仓后自动归入记录。"/>}
-        {paperTab==="archive"&&<ArchivePagination page={paperArchive.page} pages={paperArchive.pages} onPage={setPaperPage}/>}
-      </section>}</>}
 
-    {tab==="journal"&&<>
-      <section className="fr-section"><h2>数据导出</h2><p className="fr-note">导出当前研究数据与账户快照，不会离开当前页面。</p><button className="fr-button" type="button" onClick={exportSnapshot} disabled={exporting}>{exporting?"正在导出…":"导出当前研究快照 ↗"}</button>{exportStatus&&<p className="fr-note" role="status">{exportStatus}</p>}</section>
-      <PageTitle eyebrow="AUDITABLE ADAPTATION" title="运行记录" text="查看规则变化、成交与运行异常。"/>
-      <section className="fr-section"><div className="fr-section-head"><h2>演变记录</h2><span>最近 {data?.events.length??"—"} 条</span></div><Journal data={data} limit={80}/></section></>}
+    {tab==="paper"&&<>
+      <PageTitle eyebrow="REAL-FEED PAPER" title="模拟账户" text="模拟和实盘读取同一个持久化交易事件；模拟成交计入手续费、滑点和资金费占位，实盘仍以Gate真实成交为准。"/>
+      <nav className="fr-live-tabs fr-paper-tabs">{([["account","账户"],["positions","持仓"],["history","记录"],["archive","归档"]] as const).map(([id,label])=><button key={id} className={paperTab===id?"selected":""} onClick={()=>setPaperTab(id)}>{label}</button>)}</nav>
+      {paperTab==="account"&&<><section className="fr-stats fr-paper-summary"><Stat label="模拟权益" value={`${fmt(data?.equity)} U`} note={`起始 ${fmt(data?.initialEquity)} U`}/><Stat label="保证金占用" value={`${fmt(paperMargin)} U`} note={`${positions.length} / ${ADAPTIVE_TARGET_POSITIONS} 席`}/><Stat label="浮动盈亏" value={`${signed(data?.floating)} U`} note="按当前可执行价估值"/><Stat label="累计成交额" value={`${fmt(data?.turnover)} U`} note={`已完成 ${fmt(data?.resolved,0)} 笔`}/></section>
+        <TradeList trades={positions} now={now} empty="当前没有模拟持仓"/></>}
+      {paperTab==="positions"&&<TradeList trades={positions} now={now} empty="当前没有模拟持仓"/>}
+      {(paperTab==="history"||paperTab==="archive")&&<section className="fr-section"><div className="fr-section-head"><h2>{paperTab==="history"?"最近记录":"归档记录"}</h2><span>{paperTab==="history"?"最新10条":"更早记录"}</span></div>
+        <TradeList trades={paperTab==="history"?records.recent:archive.items} now={now} empty="暂无已平仓记录" compact/>
+        {paperTab==="archive"&&<ArchivePagination page={archive.page} pages={archive.pages} onPage={setPaperPage}/>}</section>}
+    </>}
 
-    {tab==="settings"&&<><PageTitle eyebrow="SYSTEM & ACCESS" title="系统" text="日常交易观察留在模拟和实盘页；这里集中放权限、API、复制诊断和运行边界。"/>
-      {accountPanel}
-      {liveSystemPanel}
+    {tab==="journal"&&<><section className="fr-section"><h2>研究快照</h2><p className="fr-note">导出每笔入场原因、MFE/MAE、持仓反馈、退出原因、当前候选和账户状态。</p>
+      <button className="fr-button" onClick={exportSnapshot} disabled={exporting}>{exporting?"正在导出…":"导出当前研究快照 ↗"}</button>{exportStatus&&<p className="fr-note">{exportStatus}</p>}</section>
+      <section className="fr-section"><div className="fr-section-head"><h2>运行记录</h2><span>{data?.events.length??0} 条</span></div>
+        {(data?.events.length??0)>0?<div className="fr-journal">{data!.events.slice(0,80).map(e=><article key={e.id}><time>{time(e.at)}</time><div><b>{e.kind}</b><p>{e.reason}</p></div></article>)}</div>:<Empty title="暂无运行记录" text="成交、退出、换仓和保护更新会显示在这里。"/>}</section></>}
+
+    {tab==="settings"&&<><PageTitle eyebrow="SYSTEM & ACCESS" title="系统" text="交易规则已经收敛为单一核心；这里保留账户权限、实盘API和显示设置。"/>
+      {accountPanel}{liveSystemPanel}
       <section ref={fontControl} className="fr-section fr-font-control"><div className="fr-section-head"><div><small>界面显示</small><h2>界面字号</h2></div><b>{fontScale}%</b></div>
-        <p className="fr-note">只调整这个浏览器里的页面字号，不影响交易、账户或其他设备。改用固定档位，点击后保持当前页面位置不动。</p>
-        <div className="fr-font-options" role="group" aria-label="界面字号">{[70,80,90,100,110].map(value=><button key={value} type="button" className={fontScale===value?"selected":""} aria-pressed={fontScale===value} onClick={()=>selectFontScale(value)}>{value}%</button>)}</div>
-      </section>
-      <section className="fr-section"><div className="fr-section-head"><div><small>运行边界</small><h2>当前系统设置</h2></div></div>
-        <Setting title="当前主系统" value="5m方向—空间 + RegionLaunch" text="5分钟方向—空间负责持续参与并维持约10个席位；RegionLaunch负责成熟区域中的更优结构机会。两条通道共用同一账户、退出和实盘执行链。"/><Setting title="持仓目标" value="约10个席位" text="未满10席时按当前评分补仓；满10席后继续扫描30市场，只有明显更强机会才替换弱仓。RegionLaunch可临时使用第11实时席。"/><Setting title="实时优先级" value="持仓 → 触发区域 → 5m候选 → ARMED" text="普通ARMED观察不再占满11个实时盘口槽；高分5分钟候选可以获得可执行盘口。"/><Setting title="执行权限" value="模拟决策 / 实盘同事件链" text="新持仓提交后直接唤醒现有event-driven LIVE同步，不新增第二套复制器。"/><Setting title="风险预算" value="权益随动" text={data?.boundaries.risk??"读取中"}/><Setting title="连续性" value="持久化" text="账户、历史和已持仓保持连续；重启恢复5分钟评分与区域状态，但绝不补过去订单。"/>
+        <div className="fr-font-options">{[70,80,90,100,110].map(value=><button key={value} className={fontScale===value?"selected":""} onClick={()=>{setFontScale(value);try{localStorage.setItem("sentinel-ui-font-scale-v1",String(value));}catch{}}}>{value}%</button>)}</div></section>
+      <section className="fr-section"><div className="fr-section-head"><h2>当前系统边界</h2><span>adaptive-ten-slim-v1</span></div>
+        <Setting title="主周期" value="5m + 按需1m" text="5m负责结构、方向、空间和普通参与；1m只为高级机会做精确执行确认。"/>
+        <Setting title="组合" value="约10个持仓" text="持仓不是硬凑；未满主动补仓，满仓仍扫描并择优替换。高级机会可临时使用第11实时席。"/>
+        <Setting title="市场变化" value="实时优先" text="历史样本只做小幅评分修正，不能用旧胜率阻止当前方向切换。"/>
+        <Setting title="风险" value="10%组合 / 6.5%同向" text={data?.boundaries.risk??"读取中"}/>
+        <Setting title="实盘" value="同一持久化事件" text="模拟事件提交成功后立即唤醒event-driven LIVE；过期事件不补开，Gate是成交与账户唯一真相。"/>
+        <Setting title="账户连续性" value="原地升级" text="策略版本变化不自动重置模拟账户、不改startedAt、不清历史；只有所有者重置按钮可以重置。"/>
       </section></>}
 
-    {liveMounted&&<div className="fr-live-panel-host" hidden={tab!=="live"} aria-hidden={tab!=="live"}>{livePanel}</div>}
-
-
-    {(error||data?.storage.error)&&<aside className="fr-error" role="status"><b>运行提示</b><p>{data?.storage.error??error}</p><small>保留最近数据；不会把未保存的交易发布为已成交。</small></aside>}
-    <footer className="fr-footer"><span>行情心跳 {time(feedAt)}</span><span>{data?.regionVersion??data?.strategyAuthorityVersion??data?.version??"REGION"} · Asia/Vientiane</span></footer>
-    <nav className="fr-nav" aria-label="主导航">{nav.map(([id,icon,label])=><button key={id} className={id===tab?"selected":""} aria-current={id===tab?"page":undefined} onClick={()=>select(id)}><span>{icon}</span><b>{label}</b>{id==="orders"&&!!data?.positions.length&&<i>{data.positions.length}</i>}</button>)}</nav>
+    {liveMounted&&<div className="fr-live-panel-host" hidden={tab!=="live"}>{livePanel}</div>}
+    {(error||data?.storage.error)&&<aside className="fr-error"><b>运行提示</b><p>{data?.storage.error??error}</p><small>提示不会伪装成交；已有保护继续独立运行。</small></aside>}
+    <footer className="fr-footer"><span>行情心跳 {time(feedAt)}</span><span>{data?.engineVersion??data?.version??"ADAPTIVE"} · Asia/Vientiane</span></footer>
+    <nav className="fr-nav">{nav.map(([id,icon,label])=><button key={id} className={id===tab?"selected":""} onClick={()=>select(id)}><span>{icon}</span><b>{label}</b>{id==="paper"&&positions.length>0&&<i>{positions.length}</i>}</button>)}</nav>
   </main>;
 }
-function ExecStep({index,title,status,text}:{index:string;title:string;status:string;text:string}){return<article className="fr-exec-step"><span>{index}</span><div><header><b>{title}</b><em>{status}</em></header><p>{text}</p></div></article>;}
-function Metric({label,value}:{label:string;value:string}){return<span><small>{label}</small><b>{value}</b></span>;}
-function Stat({label,value,note}:{label:string;value:string;note:string}){return<article><small>{label}</small><strong>{value}</strong><p>{note}</p></article>;}
-function Empty({title,text}:{title:string;text:string}){return<div className="fr-empty"><span>◎</span><h3>{title}</h3><p>{text}</p></div>;}
-function PageTitle({eyebrow,title,text}:{eyebrow:string;title:string;text:string}){return<section className="fr-page-title"><small>{eyebrow}</small><h1>{title}</h1><p>{text}</p></section>;}
-function Setting({title,value,text}:{title:string;value:string;text:string}){return<div className="fr-setting"><div><h3>{title}</h3><p>{text}</p></div><b>{value}</b></div>;}
-function tradePnl(t:Trade,now:number){const open=t.status==="OPEN",d=t.side==="LONG"?1:-1;
-  return open?d*t.quantity*(t.lastPrice-t.entryPrice)-t.entryFee-t.quantity*t.lastPrice*.0007-t.notional*.0002*Math.max(0,now-t.openedAt)/86400000:t.netPnl;
+
+function OpportunityGrid({rows,details=false}:{rows:NonNullable<View["opportunities"]>;details?:boolean}){
+  if(!rows.length)return <Empty title="当前没有有效5分钟候选" text="系统继续扫描30个市场；这不会停止已有持仓保护。"/>;
+  return <div className="fr-scoreboard">{rows.map((o,index)=><details className={`fr-score-row ${o.eligible?"is-eligible":""}`} key={o.id} open={false}>
+    <summary><span className="fr-score-rank">#{index+1}</span><span className="fr-score-value">{fmt(o.score,0)}</span><span className="fr-score-symbol"><b>{o.symbol.replace("_"," / ")}</b><small>{o.side==="LONG"?"做多":"做空"} · {modeName(o.mode)}</small></span>
+      <span><small>方向</small><b>{fmt(o.directionStrength,0)}</b></span><span><small>净空间</small><b>{fmt(o.netRemainingSpaceRate*100,2)}%</b></span><span><small>空间/回调</small><b>{fmt(o.edgeRatio,2)}×</b></span><em>{o.eligible?(o.premium?"高级":"可参与"):"观察"}</em></summary>
+    {details&&<div className="fr-score-details"><div><h3>质量</h3><div className="fr-score-detail-grid"><Metric label="路径效率" value={fmt(o.pathEfficiency,0)}/><Metric label="动量持续" value={fmt(o.momentumPersistence,0)}/><Metric label="位置" value={fmt(o.positionScore,0)}/><Metric label="盘口" value={fmt(o.executionScore,0)}/></div></div>
+      <div><h3>空间与风险</h3><div className="fr-score-detail-grid"><Metric label="总剩余空间" value={`${fmt(o.grossRemainingSpaceRate*100,2)}%`}/><Metric label="回调风险" value={`${fmt(o.pullbackRiskRate*100,2)}%`}/><Metric label="预计持有" value={`${fmt(o.expectedHoldMinutes,0)} 分钟`}/><Metric label="市场适配" value={fmt(o.marketFit,0)}/></div></div><p>{o.reason}</p></div>}
+  </details>)}</div>;
 }
-function duration(start:number,end:number|null|undefined,now:number){const ms=Math.max(0,(end??now)-start),minutes=Math.floor(ms/60000);return minutes<1?`${Math.floor(ms/1000)}秒`:minutes>=60?`${Math.floor(minutes/60)}小时${minutes%60}分`:`${minutes}分钟`;}
-function TradeCard({trade:t,now,region}:{trade:Trade;now:number;region?:RegionLifecycleState}){const open=t.status==="OPEN",pnl=tradePnl(t,now),rate=t.notional>0&&pnl!=null?pnl/t.notional:null,ctx=t.entryContext;
-  const isAnchor=ctx?.version==="anchor-flow-entry-v1",isLaunch=ctx?.version==="region-launch-entry-v1",isParticipation=ctx?.version==="direction-space-entry-context-v2";
-  const isRegion=ctx?.version==="region-lifecycle-entry-v1"||isAnchor||isLaunch;
-  return <article className="fr-trade fr-trade-unified"><header><div><small>{open?"持仓中":"已平仓"} · {t.side==="LONG"?"多单":"空单"}{isLaunch?" · RegionLaunch":isParticipation?" · 5m方向—空间":isAnchor?" · AnchorFlow":isRegion?" · 5m区域":t.turn?` · ${t.turn.timeframe}`:""}</small><h3>{t.symbol.replace("_"," / ")}</h3></div>
-    <strong className={(pnl??0)>=0?"fr-positive":"fr-negative"}>{signed(pnl)} <small>U{rate==null?"":` · ${signed(rate*100,3)}%`}</small></strong></header>
-    <dl><div><dt>入场价</dt><dd>{fmt(t.entryPrice,5)}</dd></div><div><dt>{open?"当前价格":"出场价"}</dt><dd>{fmt(open?t.lastPrice:t.exitPrice,5)}</dd></div>
-      <div><dt>结构防守</dt><dd>{fmt(t.stopPrice,5)}</dd></div><div><dt>名义金额</dt><dd>{fmt(t.notional)} U</dd></div>
-      <div><dt>保证金 / 杠杆</dt><dd>{fmt(t.margin)} U / {fmt(t.leverage,0)}×</dd></div><div><dt>合约数量</dt><dd>{fmt(t.contracts,0)}</dd></div>
-      <div><dt>进场时间</dt><dd>{time(t.openedAt)}</dd></div><div><dt>出场时间</dt><dd>{open?"持仓中":time(t.closedAt)}</dd></div>
-      <div><dt>持仓时长</dt><dd>{duration(t.openedAt,t.closedAt,now)}</dd></div></dl>
-    {isRegion&&<div className="fr-rule-numbers"><Metric label="来源区域下沿" value={fmt(ctx?.regionLower,5)}/><Metric label="来源区域中心" value={fmt(ctx?.regionCenter,5)}/><Metric label="来源区域上沿" value={fmt(ctx?.regionUpper,5)}/><Metric label="入场类型" value={isLaunch?"RegionLaunch爆发追击":isAnchor?"AnchorFlow回测启动":ctx?.regionKind==="MIGRATION"?"接受迁移":"边界拒绝"}/><Metric label="当前区域状态" value={region?REGION_STATUS[region.status]:"—"}/><Metric label="退出依据" value={isLaunch?"1m确认 / 60秒正反馈 / 85%锁利":isAnchor?"5m验证 / 利润保护 / 15m管理":ctx?.regionKind==="REJECTION"?"到中心 / 结构失效":"新区防守 / 反向接受"}/></div>}
-    {t.exitReason&&<p className="fr-trade-reason">退出原因：{t.exitReason}</p>}
-    {ctx?.reason&&<p className="fr-trade-reason">入场依据：{ctx.reason}</p>}
-    <details className="fr-details"><summary>策略与模拟成本</summary><p className="fr-note">{isLaunch?`RegionLaunch新版 · 最近成熟5分钟缠绕区域的全部影线共同定义执行边界；未收盘5分钟必须保持异常强实体才允许提前切1分钟，普通离区必须等5分钟长实体收在完整边界外。随后只接受第一根1分钟强延续，或真正的小回调后突破整段回调极值。60秒反馈只记录启动强弱；结构有效则继续持有，结构失效立即退出；达到0.5R后逐步锁利，1R约保留65% MFE，2R以上约保留80% MFE。来源区域 ${fmt(ctx?.regionLower,5)} – ${fmt(ctx?.regionUpper,5)}，结构防守 ${fmt(t.stopPrice,5)}。`:isAnchor?`AnchorFlow新版 · 5m区域负责位置与回测启动，15m负责持仓管理。来源区域 ${fmt(ctx?.regionLower,5)} – ${fmt(ctx?.regionUpper,5)}，中心 ${fmt(ctx?.regionCenter,5)}，结构防守 ${fmt(t.stopPrice,5)}。${region?` 当前区域状态：${REGION_STATUS[region.status]}。`:""}`:isRegion?`5分钟区域生命周期 · ${ctx?.regionKind==="MIGRATION"?"区域外连续收盘被接受后顺方向迁移":"边界外探失败重新回到区域后做中心回归"}。来源区域 ${fmt(ctx?.regionLower,5)} – ${fmt(ctx?.regionUpper,5)}，中心 ${fmt(ctx?.regionCenter,5)}，结构防守 ${fmt(t.stopPrice,5)}。${region?` 当前区域状态：${REGION_STATUS[region.status]}。`:""}`:ctx?.version==="direction-space-entry-context-v2"?`Adaptive 10 · 5分钟方向—空间持续参与 · 总分 ${fmt(ctx.entryScore,0)} · 净剩余空间 ${fmt(ctx.remainingSpaceRate*100,2)}% · 空间/回调 ${fmt(ctx.edgeRatio,2)}×。系统会持续重评持仓价值，明显更强候选可替换弱仓。`:t.turn?`${t.turn.timeframe}旧版周期记录；继续按原持仓保护自然结束。`:`规则 v${t.rule.version} · ${condition(t.rule)}。`}{t.exitReason?` ${t.exitReason}`:""}</p>
-      <p className="fr-note">模拟成交使用新鲜盘口并计入模型手续费、滑点和资金费占位；实盘实际结果请在实盘页对照。</p></details>
-  </article>;
+function TradeList({trades,now,empty,compact=false}:{trades:Trade[];now:number;empty:string;compact?:boolean}){
+  return <section className={compact?"":"fr-section fr-live-holdings"}>{!compact&&<div className="fr-section-head"><h2>当前持仓</h2><span>{trades.length} 笔</span></div>}
+    {trades.length?<div className="fr-position-list">{trades.map(t=><TradeCard key={t.id} trade={t} now={now}/>)}</div>:<Empty title={empty} text="系统会继续扫描并实时更新候选。"/>}</section>;
 }
-function Journal({data,limit}:{data:View|null;limit:number}){const events=data?.events.filter(e=>e.kind!=="UPGRADE").slice(0,limit)??[];const names={START:"启动",RULE:"生成 / 修订",DORMANT:"休眠",ENTRY:"模拟开仓",EXIT:"模拟平仓",PROTECTION:"保护更新",DATA_GAP:"样本作废",FIT:"关系检查",UPGRADE:"连续升级"};return events.length?<div className="fr-journal">{events.map(e=><article key={e.id}><time>{time(e.at)}</time><div><b>{names[e.kind]}</b><p>{e.reason}</p></div></article>)}</div>:<Empty title="等待第一条运行记录" text="暂无运行事件。"/>;}
+function TradeCard({trade:t,now}:{trade:Trade;now:number}){
+  const open=t.status==="OPEN",d=t.side==="LONG"?1:-1,px=open?t.lastPrice:t.exitPrice??t.lastPrice;
+  const pnl=open?d*t.quantity*(px-t.entryPrice)-t.entryFee-t.quantity*px*.0007:t.netPnl??0,rate=t.notional>0?pnl/t.notional:0,ctx=t.entryContext;
+  return <details className="fr-position-row"><summary><span className="fr-position-primary"><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {ctx?modeName(ctx.mode):"兼容持仓"} · {fmt(t.leverage,0)}×</small>
+    <b className={pnl>=0?"fr-positive":"fr-negative"}>{signed(pnl)} U</b><small>{signed(rate*100,3)}% · {duration(t.openedAt,t.closedAt,now)}</small></span>
+    <span className="fr-position-entry"><b>{open?`持仓评分 ${fmt(t.holdScore,0)}`:exitName(t.exitReason)}</b><small>MFE {fmt(t.favorable*100,2)}% · MAE {fmt(t.adverse*100,2)}% · 锁利 {fmt((t.profitFloorRate??0)*100,2)}%</small>
+      <small>{ctx?`入场评分 ${fmt(ctx.entryScore,0)} · 净空间 ${fmt(ctx.remainingSpaceRate*100,2)}% · 首次浮赢 ${t.firstProfitAt?time(t.firstProfitAt):"尚未"}`:"历史兼容持仓"}</small></span></summary>
+    <article className="fr-trade fr-trade-unified"><dl><div><dt>入场价</dt><dd>{fmt(t.entryPrice,6)}</dd></div><div><dt>{open?"当前价":"出场价"}</dt><dd>{fmt(px,6)}</dd></div><div><dt>当前防守</dt><dd>{fmt(t.stopPrice,6)}</dd></div>
+      <div><dt>名义金额</dt><dd>{fmt(t.notional)} U</dd></div><div><dt>保证金 / 杠杆</dt><dd>{fmt(t.margin)} U / {fmt(t.leverage,0)}×</dd></div><div><dt>计划风险</dt><dd>{fmt(t.plannedRisk)} U</dd></div>
+      <div><dt>进场时间</dt><dd>{time(t.openedAt)}</dd></div><div><dt>持仓时长</dt><dd>{duration(t.openedAt,t.closedAt,now)}</dd></div><div><dt>预计持有</dt><dd>{fmt(t.expectedHoldMinutes,0)} 分钟</dd></div></dl>
+      {ctx&&<p className="fr-trade-reason">入场依据：{ctx.reason}</p>}{t.exitReason&&<p className="fr-trade-reason">退出依据：{exitName(t.exitReason)}</p>}</article></details>;
+}
+function ExecStep({index,title,status,text}:{index:string;title:string;status:string;text:string}){return <article className="fr-exec-step"><span>{index}</span><div><header><b>{title}</b><em>{status}</em></header><p>{text}</p></div></article>;}
+function Metric({label,value}:{label:string;value:string}){return <span><small>{label}</small><b>{value}</b></span>;}
+function Stat({label,value,note}:{label:string;value:string;note:string}){return <article><small>{label}</small><strong>{value}</strong><p>{note}</p></article>;}
+function Empty({title,text}:{title:string;text:string}){return <div className="fr-empty"><span>◎</span><h3>{title}</h3><p>{text}</p></div>;}
+function PageTitle({eyebrow,title,text}:{eyebrow:string;title:string;text:string}){return <section className="fr-page-title"><small>{eyebrow}</small><h1>{title}</h1><p>{text}</p></section>;}
+function Setting({title,value,text}:{title:string;value:string;text:string}){return <div className="fr-setting"><div><h3>{title}</h3><p>{text}</p></div><b>{value}</b></div>;}
