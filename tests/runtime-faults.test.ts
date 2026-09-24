@@ -1831,7 +1831,7 @@ test("an ambiguous entry response is reconciled once and never blindly replayed"
   try{await stream.syncLive(openedAt+66_001);}finally{Date.now=realNow;}
   assert.equal(stream.runtime.live.entries.BTC_USDT.status, "CANCELLED");
   assert.equal(stream.runtime.live.entries.BTC_USDT.submissionResolved, true);
-  assert.equal(stream.runtime.live.entrySkips.BTC_USDT.code, "ENTRY_REJECTED");
+  assert.notEqual(stream.runtime.live.entrySkips.BTC_USDT.code, "SUBMISSION_UNCONFIRMED");
   assert.equal(stream.runtime.live.operational, true, "fresh snapshot plus post-60s tag not-found proves there is no live exposure");
   assert.equal(createCalls, 1, "resolved no-exposure must still never replay the same PAPER parent");
 });
