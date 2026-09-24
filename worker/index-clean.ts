@@ -1096,8 +1096,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // must fall to zero after the first completed data cycle because it has no
       // new-entry authority.
       anchorFlowCount:Object.values(s?.anchorFlows??{}).filter(row=>row.phase!=="FAILED"&&row.phase!=="CONSUMED").length,
-      regionLaunchCount:Object.values(s?.regionLaunches??{}).filter(row=>["ARMED","IGNITION","READY"].includes(row.phase)).length,
+      regionLaunchCount:Object.values(s?.regionLaunches??{}).filter(row=>["ARMED","IGNITION","RETEST","READY"].includes(row.phase)).length,
       executableEventCount:(s?.regionLaunchSignals??[]).filter(row=>row.expiresAt>Date.now()).length,
+      participationCandidateCount:(s?.entryOpportunities??[]).filter(row=>row.timeframe==="5m").length,
+      participationEligibleCount:(s?.entryOpportunities??[]).filter(row=>row.timeframe==="5m"&&row.eligible).length,
+      targetPositionCount:10,
       exitPolicyVersion:s?.exitPolicyUpgrade?.policy??null,exitPolicyActivatedAt:s?.exitPolicyUpgrade?.at??null,
       timelyExitOpenCount:s?.positions.filter(t=>!!t.exitControl&&t.exitControl.policy===s.exitPolicyUpgrade?.policy).length??0,
       inheritedExitOpenCount:s?.positions.filter(t=>!t.exitControl).length??0,
