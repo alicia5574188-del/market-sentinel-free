@@ -2,9 +2,10 @@
 
 ## Clean strategy baseline
 
-- Branch: `baseline/forward-v2-20260925-pre-entry-guard`
-- Commit: `b4375bb71f073e05c581c5d73beaa28c4e3eed1b`
-- Meaning: Forward Relation 2.0 portfolio/reset baseline before the failed rule-id Entry Guard experiment.
+- Direct rollback branch: `baseline/forward-v2-clean-kucoin-20260925`
+- Direct rollback commit: `8821f56143d577ffd137f663a124958abbc4ffa1`
+- Meaning: clean Forward Relation 2.0 strategy baseline with the already-validated Bybit + OKX + KuCoin data layer included.
+- Historical pre-data baseline remains `b4375bb71f073e05c581c5d73beaa28c4e3eed1b`.
 
 ## Validated data layer kept independently
 
@@ -56,9 +57,7 @@ A neighboring threshold/rule ID in the same family cannot bypass that failure. R
 If real observation underperforms the clean baseline on net PnL, fee efficiency, repeated-family churn, participation quality, or no-feedback losses:
 
 1. do not add compensating strategy patches to the failed branch;
-2. start the next strategy attempt from `b4375bb71f073e05c581c5d73beaa28c4e3eed1b`;
-3. re-apply only the validated KuCoin multi-source infrastructure;
-4. preserve the failed experiment branch and snapshot for comparison.
+2. start the next strategy attempt directly from `baseline/forward-v2-clean-kucoin-20260925` (`8821f56143d577ffd137f663a124958abbc4ffa1`);\n3. preserve the failed experiment branch and snapshot for comparison;\n4. do not re-copy strategy code from the failed branch.
 
 ## Release gate
 
