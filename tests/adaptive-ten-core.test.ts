@@ -17,15 +17,18 @@ const nowAt=(last:number)=>(full[symbols[0]]![last]!.time+300)*1000+1000;
 const quotesAt=(last:number,now=nowAt(last))=>Object.fromEntries(symbols.map(s=>{const p=full[s]![last]!.close;
   return[s,{bestBid:p*.9999,bestAsk:p*1.0001,observedAt:now,fresh:true,entryReady:true} satisfies Quote];})) as Record<string,Quote>;
 const contracts=Object.fromEntries(symbols.map(s=>[s,contract]));
-const manualOpportunity=(symbol:string,index:number,options:{reserve?:boolean;premium?:boolean;ruleId?:string;score?:number;health?:number}={}):Opportunity=>{
-  const price=full[symbol]![39]!.close,side=index%2?"SHORT":"LONG",stopRate=.015,targetRate=.03;
-  return{id:`manual-${symbol}-${options.ruleId??index}`,symbol,side,mode:options.premium?"BREAKOUT":"RELATION",premium:options.premium??false,
+const manualOpportunity=(symbol:string,index:number,options:{reserve?:boolean;premium?:boolean;ruleId?:string;score?:number;health?:number;
+  familyKey?:string;edgeRatio?:number;netRate?:number;livePathScore?:number;status?:"ACTIVE"|"PRESSURED"|"DEGRADED"|"RECOVERING"}={}):Opportunity=>{
+  const price=full[symbol]![39]!.close,side=index%2?"SHORT":"LONG",stopRate=.015,targetRate=.03,ruleId=options.ruleId??`r-${symbol}`,
+    netRate=options.netRate??targetRate-.0019;
+  return{id:`manual-${symbol}-${ruleId}`,symbol,side,mode:options.premium?"BREAKOUT":"RELATION",premium:options.premium??false,
     reserve:options.reserve??false,score:options.score??90,eligible:true,completedAt:nowAt(39)-1000,expiresAt:nowAt(39)+60*60_000,price,
     stopPrice:price*(side==="LONG"?1-stopRate:1+stopRate),targetPrice:price*(side==="LONG"?1+targetRate:1-targetRate),stopRate,targetRate,
     directionStrength:90,pathEfficiency:85,momentumPersistence:85,positionScore:85,spaceScore:90,executionScore:90,grossRemainingSpaceRate:targetRate,
-    netRemainingSpaceRate:targetRate-.0019,pullbackRiskRate:stopRate,edgeRatio:1.8,expectedHoldMinutes:60,marketFit:85,regionId:null,regionQuality:null,
-    reason:"portfolio-control fixture",relationRuleId:options.ruleId??`r-${symbol}`,relationStatus:"ACTIVE",relationHorizon:60,
-    relationHealth:options.health??.9,riskScale:options.health??.9};
+    netRemainingSpaceRate:netRate,pullbackRiskRate:stopRate,edgeRatio:options.edgeRatio??1.8,expectedHoldMinutes:60,marketFit:85,regionId:null,regionQuality:null,
+    reason:"portfolio-control fixture",relationRuleId:ruleId,relationStatus:options.status??"ACTIVE",relationHorizon:60,
+    relationHealth:options.health??.9,riskScale:options.health??.9,relationFamilyKey:options.familyKey??`family-${ruleId}`,
+    relationEvidenceAt:nowAt(39)-60_000,relationLivePathScore:options.livePathScore??.8};
 };
 
 function learnThrough(last:number){let e=initialRelationEngine(nowAt(24)-1);for(let i=24;i<=last;i++)
@@ -183,6 +186,7 @@ test("strategy migration preserves account identity and financial history while 
 test("manual PAPER reset preserves causal learning while resetting the financial account",()=>{
   const learned=learnThrough(39),now=nowAt(39),s=initialForward(now-60_000);s.relationEngine=learned;
   s.sampleMemory["RELATION:MIXED:LONG"]={count:4,emaNetRate:.003,emaMfeRate:.008,emaMaeRate:.002,updatedAt:now};
+  s.familyProbeGuards["ff-test"]={familyKey:"ff-test",blockedAt:now-1000,blockedEvidenceAt:now-5000,blockedHealth:.25,blockedLivePathScore:.3,reason:"NO_POSITIVE_FEEDBACK",symbol:"S0_USDT",failures:1,lastRuleId:"r-test"};
   s.balance=812.34;s.resolved=9;s.wins=4;s.turnover=5432;
   const n=resetForwardAccountPreservingLearning(s,now+1000);
   assert.equal(n.balance,1000);assert.equal(n.initialEquity,1000);assert.equal(n.resolved,0);assert.equal(n.wins,0);assert.equal(n.turnover,0);
@@ -191,6 +195,7 @@ test("manual PAPER reset preserves causal learning while resetting the financial
   assert.equal(n.relationEngine.observations,learned.observations);assert.equal(n.relationEngine.measured,learned.measured);
   assert.deepEqual(n.relationEngine.rules,learned.rules);assert.deepEqual(n.relationEngine.pending,learned.pending);
   assert.deepEqual(n.sampleMemory,s.sampleMemory);
+  assert.deepEqual(n.familyProbeGuards,s.familyProbeGuards);
   assert.match(n.latestReason,/保留/);
 });
 
