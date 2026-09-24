@@ -51,6 +51,7 @@ jobs:
           node --test tests/architecture.test.mjs tests/migration.test.mjs
           git diff --check
           npx wrangler deploy --dry-run --config dist/server/wrangler.json
+      # Diagnostic rerun after realtime BBO deployment.
       - name: Observe current production without mutating it
         if: github.event_name == 'pull_request'
         run: |
