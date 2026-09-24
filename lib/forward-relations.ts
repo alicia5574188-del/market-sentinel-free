@@ -523,7 +523,10 @@ export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols
 export function forwardUrgentMinuteSymbols(s:ForwardState,entrySymbols?:Iterable<string>){
   const allowed=entrySymbols?new Set(entrySymbols):null,keep=(x:string)=>!allowed||allowed.has(x);
   const relationSymbols=new Set(s.opportunities.filter(o=>o.eligible&&keep(o.symbol)).map(o=>o.symbol));
-  return[...new Set([...s.positions.map(t=>t.symbol),...s.opportunities.filter(o=>o.premium&&o.eligible&&keep(o.symbol)).map(o=>o.symbol),
+  // 1m is an entry-confirmation resource, not a holding-management resource.
+  // Open positions use executable BBO + 5m relation state, so they must not
+  // consume the bounded 1m lane when position count grows beyond eleven.
+  return[...new Set([...s.opportunities.filter(o=>o.premium&&o.eligible&&keep(o.symbol)).map(o=>o.symbol),
     ...Object.values(s.regions).filter(r=>keep(r.symbol)&&relationSymbols.has(r.symbol)&&r.quality>=55)
       .sort((a,b)=>b.quality-a.quality).slice(0,8).map(r=>r.symbol)])];
 }
