@@ -3,7 +3,7 @@ import { LiveHistoryReader } from "../lib/live-history-reader.ts";
 
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
-import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchLiquidations, fetchRecentTrades,
+import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchGateRadarTickers, fetchLiquidations, fetchRecentTrades,
   fetchStructureCandles, fetchTickerBbo, fetchUrgentFuturesBook } from "../lib/gate-market.ts";
 import { MarketDataHub } from "../lib/market-data-hub.ts";
 import { GateStreamingFeed } from "../lib/gate-stream.ts";
@@ -506,6 +506,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private regimeHourly: Record<string, RegimeHourlyPath> = {};
   private sessionWarmup: Record<string, number> = {};
   private contractCatalog = new Map<string, Awaited<ReturnType<typeof fetchActiveContracts>>[number]>();
+  private gateRadarCache: Awaited<ReturnType<typeof fetchGateRadarTickers>> = [];
+  private gateRadarAt=0;
   private authorityReady = true;
   private authorityView = { positions: {} as RuntimeState["positions"], equity: CANONICAL_PAPER_REFERENCE_EQUITY, equityVersion: 0 };
   protected liveClient: GateLiveClient | null = null;
@@ -889,7 +891,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private refreshRadar(now:number) {
     if(this.contractCatalog.size===0)throw new Error("contract catalog unavailable: radar refresh deferred");
-    const gate=[...this.contractCatalog.values()].filter(row=>adaptiveSymbolAllowed(row.symbol));
+    const cached=this.gateRadarAt>0&&now-this.gateRadarAt<=2*RADAR_MS?new Map(this.gateRadarCache.map(row=>[row.symbol,row])):null;
+    const gate=[...this.contractCatalog.values()].filter(row=>adaptiveSymbolAllowed(row.symbol)).map(row=>{
+      const fresh=cached?.get(row.symbol);return fresh?{...fresh,fundingRate:row.fundingRate}:{symbol:row.symbol,last:row.last,
+        volume24hUsd:row.volume24hUsd,fundingRate:row.fundingRate};
+    });
     const eligibleRows=this.marketHub.radarRows(gate,now);
     if(!eligibleRows.length)throw new Error("no Gate-tradable Adaptive 10 markets");
     const locked=[...(this.forwardState?.positions.map(p=>p.symbol)??[]),
@@ -2956,6 +2962,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       const radarDue=radarAttemptDue(this.runtime.radar,Date.now());
       if(radarDue){
+        // Gate bulk discovery is optional and explicitly yields to private LIVE
+        // work. Bybit/Binance remain the normal scan surface.
+        if(!this.liveBackgroundWork&&!this.liveSyncWork){
+          try{this.gateRadarCache=await fetchGateRadarTickers();this.gateRadarAt=Date.now();subrequests++;}
+          catch{/* stale Gate-only discovery must never block external analysis */}
+        }
         try{this.refreshRadar(Date.now());}
         catch(error){this.runtime.radar=failedRadarRuntime(this.runtime.radar,Date.now(),error);}
       }
