@@ -1,3 +1,5 @@
+import { FORWARD_ENTRY_GUARD_VERSION, initialRelationGuards, normalizeRelationGuards, relationAdmissionBlock,
+  recordRelationFailure, shouldExitNoPositiveFeedback, type RelationGuardState } from "./forward-entry-guard.ts";
 import { FORWARD_RELATION_V2_VERSION, advanceRelationEngine, initialRelationEngine, relationCandidates,
   type RelationCandidate, type RelationEngineState, type RelationStatus } from "./forward-relation-v2.ts";
 
@@ -65,6 +67,7 @@ export type EntryContext={
   remainingSpaceRate:number;pullbackRiskRate:number;edgeRatio:number;expectedHoldMinutes:number;marketFit:number;
   regionId:string|null;regionLower?:number;regionUpper?:number;regionCenter?:number;
   relationRuleId?:string;relationStatus?:RelationStatus;relationHorizon?:15|60|180;relationHealth?:number;portfolioRiskCharge?:number;
+  relationEvidenceAt?:number;relationLivePathScore?:number;
 };
 export type Trade={
   id:string;symbol:string;side:"LONG"|"SHORT";rule:Rule;openedAt:number;closedAt:number|null;status:"OPEN"|"CLOSED";
@@ -91,6 +94,7 @@ export type ForwardState={
   balance:number;initialEquity:number;peakEquity:number;maxDrawdown:number;resolved:number;wins:number;grossPnl:number;fees:number;
   fundingAllowance:number;turnover:number;positions:Trade[];history:Trade[];events:AuditEvent[];daily:Daily[];
   selectedSymbols:string[];opportunities:Opportunity[];regions:Record<string,Region>;sampleMemory:Record<string,SampleMemory>;relationEngine:RelationEngineState;
+  relationGuards:RelationGuardState;
   marketPulse:MarketPulse;lastEntryAt:Record<string,number>;lastExitAt:Record<string,number>;lastSide:Record<string,"LONG"|"SHORT">;
   lastRotationAt:number;latestReason:string;entryDiagnostics:{at:number;matched:number;opened:number;reasons:Record<string,number>};
   storage:{persistedAt:number;error:string|null};liveEligible:false;policyVersion:string;strategyAuthorityVersion:string;
@@ -113,7 +117,8 @@ function blankPulse(now:number):MarketPulse{return{at:now,up:0,down:0,neutral:0,
 export function initialForward(now:number):ForwardState{
   const s:ForwardState={version:FORWARD_VERSION,engineVersion:ADAPTIVE_ENGINE_VERSION,startedAt:now,revision:0,lastCycleAt:0,lastQuoteCycleAt:0,lastCandleAt:0,
     balance:1000,initialEquity:1000,peakEquity:1000,maxDrawdown:0,resolved:0,wins:0,grossPnl:0,fees:0,fundingAllowance:0,turnover:0,
-    positions:[],history:[],events:[],daily:[],selectedSymbols:[],opportunities:[],regions:{},sampleMemory:{},relationEngine:initialRelationEngine(now),marketPulse:blankPulse(now),
+    positions:[],history:[],events:[],daily:[],selectedSymbols:[],opportunities:[],regions:{},sampleMemory:{},relationEngine:initialRelationEngine(now),
+    relationGuards:initialRelationGuards(),marketPulse:blankPulse(now),
     lastEntryAt:{},lastExitAt:{},lastSide:{},lastRotationAt:0,latestReason:"Forward Relation 2.0 已启动：正在积累真实市场反应；成熟关系负责方向，5m/1m只优化执行。",
     entryDiagnostics:{at:now,matched:0,opened:0,reasons:{}},storage:{persistedAt:0,error:null},liveEligible:false,
     policyVersion:ADAPTIVE_ENGINE_VERSION,strategyAuthorityVersion:ADAPTIVE_ENGINE_VERSION,executionVersion:ADAPTIVE_ENGINE_VERSION,
@@ -175,6 +180,7 @@ export function normalizeForward(v:ForwardState|null|undefined,now:number):Forwa
     selectedSymbols:Array.isArray(v.selectedSymbols)?v.selectedSymbols:[],opportunities:upgrading?[]:(Array.isArray(v.opportunities)?v.opportunities:[]),
     regions:v.regions&&typeof v.regions==="object"?v.regions:{},sampleMemory:v.sampleMemory&&typeof v.sampleMemory==="object"?v.sampleMemory:{},
     relationEngine:!upgrading&&v.relationEngine?.version===FORWARD_RELATION_V2_VERSION?v.relationEngine:initialRelationEngine(now),
+    relationGuards:normalizeRelationGuards((old as {relationGuards?:unknown}).relationGuards),
     marketPulse:v.marketPulse?.bias? v.marketPulse:blankPulse(now),lastEntryAt:v.lastEntryAt??{},lastExitAt:v.lastExitAt??{},lastSide:v.lastSide??{},
     lastRotationAt:safe(v.lastRotationAt),latestReason:typeof v.latestReason==="string"?v.latestReason:base.latestReason,
     entryDiagnostics:v.entryDiagnostics??base.entryDiagnostics,storage:v.storage??base.storage,
@@ -389,11 +395,20 @@ function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
     t.holdValue={action:t.holdScore<30?"EXIT_RISK":"HOLD",pullbackRiskRate:t.entryContext?.pullbackRiskRate??.01,bestHoldMinutes:t.expectedHoldMinutes??30,score:t.holdScore};
     const stopped=t.side==="LONG"?px<=t.stopPrice:px>=t.stopPrice;
     const marketFlip=!!opp&&!opp.reserve&&opp.eligible&&opp.score>=66&&opp.score>(same?.score??0)+8;
-    const expected=t.expectedHoldMinutes??30,timeFailure=ageMin>=Math.max(8,expected*.65)&&!t.firstProfitAt&&favorable<ROUND_TRIP_COST;
+    const expected=t.expectedHoldMinutes??30,evidenceNoFeedback=shouldExitNoPositiveFeedback({now,openedAt:t.openedAt,firstProfitAt:t.firstProfitAt,
+      favorable,adverse,roundTripCost:ROUND_TRIP_COST,relation});
+    const timeFailure=!evidenceNoFeedback&&ageMin>=Math.max(8,expected*.65)&&!t.firstProfitAt&&favorable<ROUND_TRIP_COST;
     const hardTime=ageMin>=expected*2.5&&favorable<Math.max(.003,t.adverse*.5);
-    const relationFailure=relation?.status==="DEGRADED"&&ageMin>=Math.max(5,expected*.20)&&!t.firstProfitAt&&favorable<ROUND_TRIP_COST;
-    if(stopped||marketFlip||relationFailure||timeFailure||hardTime){closeTrade(s,t,px,now,stopped?(t.profitFloorRate??0)>0?"PROFIT_GIVEBACK":"STRUCTURE_STOP":
-      marketFlip?"MARKET_FLIP":relationFailure?"RELATION_DEGRADED":timeFailure?"NO_POSITIVE_FEEDBACK":"TIME_DECAY");closed.add(t.id);}
+    if(stopped||marketFlip||evidenceNoFeedback||timeFailure||hardTime){
+      const reason=stopped?(t.profitFloorRate??0)>0?"PROFIT_GIVEBACK":"STRUCTURE_STOP":marketFlip?"MARKET_FLIP":
+        evidenceNoFeedback?(relation?.status==="DEGRADED"?"RELATION_DEGRADED":"NO_POSITIVE_FEEDBACK"):
+        timeFailure?"NO_POSITIVE_FEEDBACK":"TIME_DECAY";
+      closeTrade(s,t,px,now,reason);
+      if(reason==="RELATION_DEGRADED"||reason==="NO_POSITIVE_FEEDBACK")recordRelationFailure(s.relationGuards,relation,
+        {ruleId:t.entryContext?.relationRuleId,evidenceAt:t.entryContext?.relationEvidenceAt,health:t.entryContext?.relationHealth,
+          livePathScore:t.entryContext?.relationLivePathScore,horizon:t.entryContext?.relationHorizon},now,reason,t.symbol);
+      closed.add(t.id);
+    }
   }
   if(closed.size)s.positions=s.positions.filter(t=>!closed.has(t.id));
 }
@@ -423,6 +438,8 @@ function qualityBlockReason(s:ForwardState,o:Opportunity,equity:number){
 function openTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number){
   const side=o.side,d=dir(side),price=side==="LONG"?q.bestAsk:q.bestBid;
   if(!o.relationRuleId)return"缺少Forward关系授权";
+  const authorityRule=s.relationEngine.rules.find(r=>r.id===o.relationRuleId);if(!authorityRule)return"Forward关系证据已更新，等待下一轮";
+  const relationBlock=relationAdmissionBlock(s.relationGuards,authorityRule);if(relationBlock)return relationBlock;
   const qualityBlock=qualityBlockReason(s,o,equity);if(qualityBlock)return qualityBlock;
   // Analysis can come from Bybit/OKX/Binance. Only relative structure may cross
   // venues; all executable prices are re-anchored to the actual Gate quote.
@@ -460,7 +477,9 @@ function openTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:nu
     peakPnlRate:0,exitControl:{policy:ADAPTIVE_ENGINE_VERSION,armedAt:null,armedQuoteAt:null,maxObservationGapMs:30_000,maxQuoteAgeMs:10_000},entryContext:{version:"adaptive-ten-entry-v1",capturedAt:now,timeframe:"5m",side,mode:o.mode,reserve:o.reserve===true,reason:o.reason,entryScore:o.score,
       directionStrength:o.directionStrength,spaceScore:o.spaceScore,positionScore:o.positionScore,executionScore:o.executionScore,
       remainingSpaceRate:o.netRemainingSpaceRate,pullbackRiskRate:o.pullbackRiskRate,edgeRatio:o.edgeRatio,expectedHoldMinutes:o.expectedHoldMinutes,
-      marketFit:o.marketFit,regionId:o.regionId,relationRuleId:o.relationRuleId,relationStatus:o.relationStatus,relationHorizon:o.relationHorizon,relationHealth:o.relationHealth,portfolioRiskCharge:riskBudget,
+      marketFit:o.marketFit,regionId:o.regionId,relationRuleId:o.relationRuleId,relationStatus:o.relationStatus,relationHorizon:o.relationHorizon,
+      relationHealth:o.relationHealth,portfolioRiskCharge:riskBudget,relationEvidenceAt:authorityRule.lastQualifiedAt,
+      relationLivePathScore:authorityRule.livePathScore,
       ...(region?{regionLower:region.lower*scale,regionUpper:region.upper*scale,regionCenter:region.center*scale}:{})},
     forecast:{remainingNetRate:o.netRemainingSpaceRate,quality:o.score/100,sizingEquity:equity}};
   s.positions.push(t);s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.lastEntryAt[o.symbol]=now;s.lastSide[o.symbol]=side;
@@ -557,6 +576,7 @@ export function closeForwardForReset(state:ForwardState,quotes:Record<string,Quo
 export function resetForwardAccountPreservingLearning(previous:ForwardState,now:number){
   const prior=normalizeForward(structuredClone(previous),now),next=initialForward(now);
   next.relationEngine=structuredClone(prior.relationEngine);
+  next.relationGuards=structuredClone(prior.relationGuards);
   next.sampleMemory=structuredClone(prior.sampleMemory);
   next.observations=next.relationEngine.observations;next.measured=next.relationEngine.measured;next.invalidated=next.relationEngine.invalidated;
   next.latestReason=next.relationEngine.rules.length
@@ -597,6 +617,8 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     relationEngine:{version:s.relationEngine.version,updatedAt:s.relationEngine.updatedAt,diagnostics:d,
       rules:s.relationEngine.rules.map(r=>({id:r.id,horizon:r.horizon,side:r.side,status:r.status,health:r.health,longNet:r.longNet,
         recentNet:r.recentNet,livePathScore:r.livePathScore,environmentFit:r.environmentFit,scope:r.scope,reason:r.reason}))},
+    entryGuard:{version:FORWARD_ENTRY_GUARD_VERSION,blockedRelations:Object.keys(s.relationGuards).length,
+      records:Object.values(s.relationGuards).slice(-12)},
     marketCount:s.selectedSymbols.length,markets:s.selectedSymbols,latestReason:s.latestReason,entryDiagnostics:s.entryDiagnostics,
     fitDiagnostics:s.fitDiagnostics,storage:s.storage,targetPositions:null,positionLimit:null,executionBboCapacity:FORWARD_EXECUTION_BBO_CAP,
     minuteConfirmationCapacity:FORWARD_MINUTE_CONFIRMATION_CAP,seatCount:s.positions.length,eligibleCount:eligible.length,

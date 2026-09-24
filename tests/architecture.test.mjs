@@ -22,6 +22,13 @@ test("Forward Relation 2.0 is the only PAPER strategy authority and retired stra
   assert.match(core,/FIVE_MINUTE_NEW_RISK_RATE=\.025/);
   assert.match(core,/portfolioRiskCharge/);
   assert.match(core,/premiumOnly/);
+  assert.match(core,/from "\.\/forward-entry-guard\.ts"/);
+  const guard=await read("lib/forward-entry-guard.ts");
+  assert.match(guard,/FORWARD_ENTRY_GUARD_VERSION="forward-entry-guard-v1"/);
+  assert.match(guard,/feedbackDeadlineMinutes/);
+  assert.match(guard,/relationAdmissionBlock/);
+  assert.match(guard,/recordRelationFailure/);
+  assert.doesNotMatch(guard,/PAPER_COST|TOTAL_RISK_RATE|SIDE_RISK_RATE|profitFloor|stopPrice|targetPrice/);
   const minute=core.slice(core.indexOf("export function forwardUrgentMinuteSymbols"),core.indexOf("export function forwardWatchSymbols"));
   assert.doesNotMatch(minute,/s\.positions/);
   assert.match(minute,/o\.premium&&o\.eligible/);
