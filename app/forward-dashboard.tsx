@@ -54,11 +54,9 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const mainBlocker=blockers[0]?.[0]??"本轮暂无阻塞";
   const regionStates=data?.regionLifecycles??[];
   const activeRegions=regionStates.filter(row=>!!row.zone);
-  const regionSignals=(data?.regionSignals??[]).filter(row=>!now||row.expiresAt>now);
   const launchSignals=(data?.regionLaunchSignals??[]).filter(row=>!now||row.expiresAt>now);
-  const executableSignals=[...regionSignals,...launchSignals].sort((a,b)=>a.completedAt-b.completedAt);
+  const executableSignals=[...launchSignals].sort((a,b)=>a.completedAt-b.completedAt);
   const preparedSignals=executableSignals.slice(0,6);
-  const anchorFlows=(data?.anchorFlows??[]).filter(row=>row.phase!=="FAILED"&&row.phase!=="FIRED");
   const regionLaunches=data?.regionLaunches??[];
   const activeLaunches=regionLaunches.filter(row=>row.phase!=="CONSUMED");
   const armedLaunches=activeLaunches.filter(row=>row.phase==="ARMED"||row.phase==="IGNITION"||row.phase==="READY");
@@ -75,15 +73,15 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
   const nav:[Tab,string,string][]=[["overview","◉","总览"],["relations","⌘","执行"],["orders","⇄","模拟"],["live","◈","实盘"],["journal","≋","演变"],["settings","⊙","系统"]];
   const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice("后台运行中 · ".length):statusLabel??(healthy?"正常":"行情重连中");
-  return <main className="fr-app" style={fontStyle} data-ui-version="dark-anchor-flow-v1" data-record-view="compact-records-pnl-v1">
-    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · AnchorFlow / RegionLaunch</b><small>REGION MEMORY · RETEST · IGNITION</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
+  return <main className="fr-app" style={fontStyle} data-ui-version="dark-region-launch-v2" data-record-view="compact-records-pnl-v1">
+    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · RegionLaunch</b><small>WINDING REGION · FULL BOUNDARY · IGNITION</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
     <div className="fr-subhead"><span>Gate USDT 永续 · 30市场扫描 · 11市场实时执行</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
     {memberName&&<p className="fr-note">{memberName} · 共用同一模拟策略，实盘账户独立，开关只由你控制。</p>}
 
     {tab==="overview"&&<>
       <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">账户驾驶舱</span><h1>{systemStatus==="正常"?"系统正在正常运行":`系统状态：${systemStatus}`}</h1>
         <p>{data?.latestReason??"正在读取已持久化账户和真实行情状态。"}</p>
-        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>1h主方向</span><span>15m延续确认</span><span>30市场区域扫描</span><span>第一次回测 / 爆发追击 / 边界拒绝</span><span>实盘{liveEnabled?"已开启":"关闭"}</span></div></div>
+        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>30市场区域扫描</span><span>完整影线边界</span><span>5m强离区</span><span>1m延续 / 小回调重启</span><span>实盘{liveEnabled?"已开启":"关闭"}</span></div></div>
         <div className="fr-equity"><small>模拟账户权益 · USDT</small><strong>{fmt(data?.equity)}</strong><div className={(data?.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(data?.netPnl)} <span>U · {signed(data?data.netPnl/data.initialEquity*100:null)}%</span></div>
           <footer><span>起点 {fmt(data?.initialEquity,0)}</span><span>最大回撤 {fmt(data?data.maxDrawdown*100:null)}%</span></footer></div></section>
 
@@ -113,45 +111,45 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       <section className="fr-section"><div className="fr-section-head"><div><small>最近变化</small><h2>需要留意的运行记录</h2></div><button className="fr-text-button" onClick={()=>select("journal")}>全部记录 ↗</button></div><Journal data={data} limit={3}/></section>
     </>}
 
-    {tab==="relations"&&<><PageTitle eyebrow="DUAL REGION EXECUTION" title="执行" text="AnchorFlow回测后必须重新突破当前1分钟局部结构，横盘里的旧信号不能直接开仓。RegionLaunch按当前缠绕区向上或向下的实际突破追击：连续两根1分钟强突破，或强突破后小回调再启动；大周期旧方向只作背景。"/>
+    {tab==="relations"&&<><PageTitle eyebrow="REGION BURST EXECUTION" title="执行" text="新开仓只保留一条路径：先识别最近成熟的5分钟缠绕区域，并把实际K线全部上下影线纳入完整边界；只有真正强势离开完整边界后，才用1分钟确认延续或小回调后的重新启动。"/>
 
-      <section className="fr-section fr-exec-flow-section"><div className="fr-section-head"><div><small>当前执行层</small><h2>成熟区域双通道</h2></div><span>{time(data?.updatedAt)}</span></div>
+      <section className="fr-section fr-exec-flow-section"><div className="fr-section-head"><div><small>当前执行层</small><h2>缠绕区域 → 爆发追击</h2></div><span>{time(data?.updatedAt)}</span></div>
         <div className="fr-exec-flow">
-          <ExecStep index="01" title="30市场扫描" status={(data?.marketCount??0)>0?"已更新":"等待"} text={`当前维护 ${fmt(data?.marketCount,0)} 个市场；已有持仓、AnchorFlow READY/RETEST 与 RegionLaunch ARMED/IGNITION 优先获得11个实时盘口槽。`}/>
-          <ExecStep index="02" title="成熟母区域记忆" status={activeRegions.length?"持续识别":"扫描中"} text={`当前 ${activeRegions.length} 个区域；普通失败离区不会让 RegionLaunch 消费母区域，直到真正出现独立新结构或成功发射后回到中心再重新计次。`}/>
-          <ExecStep index="03" title="子区压缩 / 提前ARMED" status={armedLaunches.length?"正在盯盘":"等待压缩"} text={armedLaunches.length?`当前 ${armedLaunches.length} 个 RegionLaunch 标的已获得高优先级；必须先观察到突破前真实盘口，禁止部署后补追已经发生的行情。`:`正在母区域边界附近寻找4–10根5m短压缩；短子区本身没有独立交易权。`}/>
-          <ExecStep index="04" title="两种启动入口" status={anchorFlows.length||armedLaunches.length?"观察中":"等待机会"} text={`AnchorFlow候选 ${anchorFlows.length} 个：等回测后当前局部结构重启；RegionLaunch活跃 ${armedLaunches.length} 个：连续两根1分钟强突破即可追，或小回调后第一根重新顺向。`}/>
-          <ExecStep index="05" title="真实盘口开仓" status={executableSignals.length?"检查中":"等待"} text={(data?.entryDiagnostics?.opened??0)>0?`本轮已开仓 ${fmt(data?.entryDiagnostics?.opened,0)} 笔。`:`当前执行状态：${mainBlocker}。`}/>
-          <ExecStep index="06" title="快速正反馈验证" status={(data?.positions.length??0)>0?"管理中":"等待持仓"} text="RegionLaunch成交后60秒必须产生真实可执行浮赢；AnchorFlow仍按第一根完整5m验证。验证失败只结束本次启动，不删除成熟母区域。"/>
-          <ExecStep index="07" title="利润保护与退出" status={(data?.positions.length??0)>0?"持续保护":"等待持仓"} text={`管理 ${fmt(data?.positions.length,0)} 笔持仓；RegionLaunch约85%峰值起步锁利，大利润5–8分钟不创新高主动兑现；AnchorFlow继续使用现有动态锁利。`}/>
+          <ExecStep index="01" title="30市场扫描" status={(data?.marketCount??0)>0?"已更新":"等待"} text={`当前维护 ${fmt(data?.marketCount,0)} 个市场；已有持仓以及最接近完整区域边界的 ARMED / IGNITION 标的优先获得11个实时盘口槽。`}/>
+          <ExecStep index="02" title="完整缠绕区域" status={activeRegions.length?"持续识别":"扫描中"} text={`当前 ${activeRegions.length} 个成熟区域；执行边界采用该区域实际5分钟K线全部高低点，旧长影线不会被滚动窗口删掉。`}/>
+          <ExecStep index="03" title="提前ARMED" status={armedLaunches.length?"正在盯盘":"等待机会"} text={armedLaunches.length?`当前 ${armedLaunches.length} 个标的已进入高优先级观察；先看到区域内状态，再等待真实离区，禁止历史补追。`:"正在等待成熟区域靠近边界并出现可追踪的离区条件。"}/>
+          <ExecStep index="04" title="5分钟强离区" status={armedLaunches.length?"观察中":"等待机会"} text="未收盘5分钟只有实体仍达到近期平均振幅至少3倍才允许提前切到1分钟；普通行情必须等完整5分钟长实体在完整区域外有效收盘，长影线不算突破。"/>
+          <ExecStep index="05" title="1分钟确认" status={executableSignals.length?"检查中":"等待"} text="强离区后只接受第一根1分钟强延续，或真正的小回调后重新突破整段回调极值；回调明显吞掉原爆发实体时直接取消本次启动。"/>
+          <ExecStep index="06" title="真实盘口开仓" status={(data?.entryDiagnostics?.opened??0)>0?"已成交":"等待"} text={(data?.entryDiagnostics?.opened??0)>0?`本轮已开仓 ${fmt(data?.entryDiagnostics?.opened,0)} 笔。`:`当前执行状态：${mainBlocker}。`}/>
+          <ExecStep index="07" title="正反馈与利润保护" status={(data?.positions.length??0)>0?"持续保护":"等待持仓"} text={`管理 ${fmt(data?.positions.length,0)} 笔持仓；成交后60秒必须出现高于建模成本的真实可执行正反馈，利润保护线只向盈利方向移动。`}/>
         </div>
       </section>
 
-      <section className="fr-section fr-prepared-section"><div className="fr-section-head"><div><small>EXECUTABLE EVENTS</small><h2>待交易事件</h2><p>候选成交前仍须通过当前盘口、局部结构与完整止损风险检查。爆发追击接受连续两根1分钟强突破，或强突破后小回调再启动；单独一根强K不直接开仓。</p></div><span>{executableSignals.length} 个</span></div>
+      <section className="fr-section fr-prepared-section"><div className="fr-section-head"><div><small>EXECUTABLE EVENTS</small><h2>待交易事件</h2><p>候选成交前仍须通过当前盘口、完整区域边界、确认后追价距离、完整止损和剩余空间检查。单独一根1分钟强K不直接开仓。</p></div><span>{executableSignals.length} 个</span></div>
         {preparedSignals.length?<div className="fr-prepared-grid">{preparedSignals.map((x,index)=><article className="fr-prepared-card" key={x.id}>
-          <header><div><small>#{index+1} · {("entryModel" in x&&x.entryModel==="REGION_LAUNCH")?"爆发追击":x.kind==="MIGRATION"?"回测重启":"边界拒绝"}</small><h3>{x.symbol.replace("_"," / ")}</h3><p>5m · {x.side==="LONG"?"准备做多":"准备做空"} · {x.boundary==="UPPER"?"上沿事件":"下沿事件"}</p></div><b>待执行</b></header>
-          <div className="fr-prepared-metrics"><span><small>区域下沿</small><strong>{fmt(x.regionLower,5)}</strong></span><span><small>区域中心</small><strong>{fmt(x.regionCenter,5)}</strong></span><span><small>区域上沿</small><strong>{fmt(x.regionUpper,5)}</strong></span><span><small>事件价格</small><strong>{fmt(x.signalPrice,5)}</strong></span><span><small>结构止损</small><strong>{fmt(x.stopPrice,5)}</strong></span><span><small>{x.kind==="REJECTION"?"回归目标":"有效至"}</small><strong>{x.kind==="REJECTION"?fmt(x.targetPrice,5):time(x.expiresAt)}</strong></span></div>
+          <header><div><small>#{index+1} · 爆发追击</small><h3>{x.symbol.replace("_"," / ")}</h3><p>5m · {x.side==="LONG"?"准备做多":"准备做空"} · {x.boundary==="UPPER"?"上沿事件":"下沿事件"}</p></div><b>待执行</b></header>
+          <div className="fr-prepared-metrics"><span><small>区域下沿</small><strong>{fmt(x.regionLower,5)}</strong></span><span><small>区域中心</small><strong>{fmt(x.regionCenter,5)}</strong></span><span><small>区域上沿</small><strong>{fmt(x.regionUpper,5)}</strong></span><span><small>事件价格</small><strong>{fmt(x.signalPrice,5)}</strong></span><span><small>结构止损</small><strong>{fmt(x.stopPrice,5)}</strong></span><span><small>有效至</small><strong>{time(x.expiresAt)}</strong></span></div>
           <p>{x.reason}</p>
         </article>)}</div>:<Empty title="当前没有待交易事件" text={armedLaunches.length?"RegionLaunch 已提前盯住候选，等待1分钟强突破与小回调后的重新顺向确认。":anchorFlows.length?"已有 AnchorFlow 候选，正在等待第一次回测守住并重新启动。":activeRegions.length?"已有成熟区域，等待回测或爆发启动。":"正在寻找最近已经形成的成熟区域。"} />}
       </section>
 
-      <section className="fr-section fr-prepared-section"><div className="fr-section-head"><div><small>REGIONLAUNCH WATCH</small><h2>爆发观察池</h2><p>母区域长期保留；短子区只负责提前进入实时盘口观察。WATCH没有追单权限，只有ARMED→IGNITION→READY完整走完后才可能成交。</p></div><span>{activeLaunches.length} 个</span></div>
+      <section className="fr-section fr-prepared-section"><div className="fr-section-head"><div><small>REGIONLAUNCH WATCH</small><h2>爆发观察池</h2><p>成熟缠绕区域持续保留；WATCH没有追单权限，只有ARMED→IGNITION→READY完整走完并通过当前盘口检查后才可能成交。</p></div><span>{activeLaunches.length} 个</span></div>
         {activeLaunches.length?<div className="fr-prepared-grid">{activeLaunches.slice(0,8).map((x,index)=><article className="fr-prepared-card" key={`${x.symbol}:${x.motherRegionId}`}>
-          <header><div><small>#{index+1} · {x.phase}</small><h3>{x.symbol.replace("_"," / ")}</h3><p>母区K线 {x.motherBars} · 失败离区 {x.failedDepartures} 次 · 质量 {fmt(x.quality*100,0)}</p></div><b>{x.phase}</b></header>
-          <div className="fr-prepared-metrics"><span><small>母区下沿</small><strong>{fmt(x.motherLower,5)}</strong></span><span><small>母区中心</small><strong>{fmt(x.motherCenter,5)}</strong></span><span><small>母区上沿</small><strong>{fmt(x.motherUpper,5)}</strong></span><span><small>子区K线</small><strong>{x.compression?x.compression.bars:"—"}</strong></span><span><small>子区下沿</small><strong>{fmt(x.compression?.lower,5)}</strong></span><span><small>子区上沿</small><strong>{fmt(x.compression?.upper,5)}</strong></span></div>
+          <header><div><small>#{index+1} · {x.phase}</small><h3>{x.symbol.replace("_"," / ")}</h3><p>区域K线 {x.motherBars} · 失败离区 {x.failedDepartures} 次 · 质量 {fmt(x.quality*100,0)}</p></div><b>{x.phase}</b></header>
+          <div className="fr-prepared-metrics"><span><small>区域下沿</small><strong>{fmt(x.motherLower,5)}</strong></span><span><small>区域中心</small><strong>{fmt(x.motherCenter,5)}</strong></span><span><small>区域上沿</small><strong>{fmt(x.motherUpper,5)}</strong></span><span><small>完整边界K线</small><strong>{x.compression?x.compression.bars:"—"}</strong></span><span><small>执行下沿</small><strong>{fmt(x.compression?.lower,5)}</strong></span><span><small>执行上沿</small><strong>{fmt(x.compression?.upper,5)}</strong></span></div>
           <p>{x.reason}</p>
         </article>)}</div>:<Empty title="当前没有RegionLaunch待命区域" text="成熟区域仍由AnchorFlow正常使用；RegionLaunch只在母区边界出现短压缩时提高实时观察优先级。"/>}
       </section>
 
-      <section className="fr-section fr-scoreboard-section"><div className="fr-section-head"><div><small>REGION WATCHLIST</small><h2>区域观察池</h2><p>AnchorFlow继续维护当前有效区域；RegionLaunch另行保存长期母区域记忆。后续较短的新区域若仍属于同一价格家族，只作为子区压缩，不会抹掉母区经历。</p></div><span>{activeRegions.length} 个区域</span></div>
-        {regionRows.length?<div className="fr-scoreboard">{regionRows.map((row,index)=>{const z=row.zone!;const event=regionSignals.find(signal=>signal.symbol===row.symbol);
+      <section className="fr-section fr-scoreboard-section"><div className="fr-section-head"><div><small>REGION WATCHLIST</small><h2>区域观察池</h2><p>这里展示成熟5分钟缠绕区域。交易只认完整影线边界；区域内的新影线会扩展边界，第一根真正收在区间外的5分钟K会冻结该边界供爆发确认使用。</p></div><span>{activeRegions.length} 个区域</span></div>
+        {regionRows.length?<div className="fr-scoreboard">{regionRows.map((row,index)=>{const z=row.zone!;const event=launchSignals.find(signal=>signal.symbol===row.symbol);
           return <details className={`fr-score-row ${event?"is-eligible":""}`} key={`${row.symbol}:${z.id}`}>
             <summary><span className="fr-score-rank">#{index+1}</span><span className="fr-score-value">{fmt(z.widthRate*100,2)}%</span><span className="fr-score-symbol"><b>{row.symbol.replace("_"," / ")}</b><small>{REGION_STATUS[row.status]}</small></span>
               <span><small>区域上沿</small><b>{fmt(z.upper,5)}</b></span><span><small>区域中心</small><b>{fmt(z.center,5)}</b></span><span><small>区域下沿</small><b>{fmt(z.lower,5)}</b></span><em>{event?"待交易":REGION_STATUS[row.status]}</em></summary>
             <div className="fr-score-details">
               <div><h3>当前区域</h3><div className="fr-score-detail-grid"><Metric label="形成完成" value={time(z.confirmedAt)}/><Metric label="区域K线" value={`${z.bars} 根`}/><Metric label="区域宽度" value={`${fmt(z.widthRate*100,2)}%`}/><Metric label="中心穿越" value={`${z.crossings} 次`}/><Metric label="上下触及" value={`${z.touchesLower} / ${z.touchesUpper}`}/></div></div>
               <div><h3>生命周期</h3><div className="fr-score-detail-grid"><Metric label="当前状态" value={REGION_STATUS[row.status]}/><Metric label="最近处理" value={time(row.lastProcessedAt)}/><Metric label="试探极值" value={fmt(row.probeExtreme,5)}/><Metric label="接受确认" value={time(row.acceptedAt)}/><Metric label="远离确认" value={time(row.detachedAt)}/></div></div>
-              <div><h3>边界交易资格</h3><div className="fr-score-detail-grid"><Metric label="上沿" value={row.upperConsumedAt?"已消费，等重置":"可观察"}/><Metric label="下沿" value={row.lowerConsumedAt?"已消费，等重置":"可观察"}/><Metric label="待交易事件" value={event?(event.kind==="MIGRATION"?"接受迁移":"边界拒绝"):"无"}/><Metric label="方向" value={event?(event.side==="LONG"?"做多":"做空"):"—"}/></div></div>
+              <div><h3>边界交易资格</h3><div className="fr-score-detail-grid"><Metric label="上沿" value={row.upperConsumedAt?"已消费，等重置":"可观察"}/><Metric label="下沿" value={row.lowerConsumedAt?"已消费，等重置":"可观察"}/><Metric label="待交易事件" value={event?"爆发追击":"无"}/><Metric label="方向" value={event?(event.side==="LONG"?"做多":"做空"):"—"}/></div></div>
               <p>{row.reason}</p>
             </div>
           </details>;})}</div>:<Empty title="暂无成熟区域" text="系统正在轮换扫描30个市场；没有成熟区域的标的不占用交易事件。"/>}
@@ -201,7 +199,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         <div className="fr-font-options" role="group" aria-label="界面字号">{[70,80,90,100,110].map(value=><button key={value} type="button" className={fontScale===value?"selected":""} aria-pressed={fontScale===value} onClick={()=>selectFontScale(value)}>{value}%</button>)}</div>
       </section>
       <section className="fr-section"><div className="fr-section-head"><div><small>运行边界</small><h2>当前系统设置</h2></div></div>
-        <Setting title="当前主系统" value="AnchorFlow + RegionLaunch" text="同一成熟区域提供两条独立入口：正常行情等第一次回测重启；提前ARMED的无回踩爆发才允许RegionLaunch追击。"/><Setting title="区域扫描" value="30个5分钟标的" text="持仓、AnchorFlow READY/RETEST、RegionLaunch ARMED/IGNITION优先保留11个实时盘口执行槽；其余成熟区域继续5分钟观察。"/><Setting title="交易事件" value="回测重启 / 爆发追击 / 边界拒绝" text="普通突破仍不追；RegionLaunch必须完整走完母区记忆→子区压缩→ARMED→IGNITION→READY。"/><Setting title="执行权限" value="模拟决策 / 实盘复制" text="模拟提供交易决定；实盘按固定比例复制并使用Gate真实成交。"/><Setting title="风险预算" value="权益随动" text={data?.boundaries.risk??"读取中"}/><Setting title="连续性" value="持久化" text="重启从已有5分钟K恢复最近区域状态，但不会补历史订单；账户和旧持仓保持连续。"/>
+        <Setting title="当前主系统" value="缠绕区域 + RegionLaunch" text="新开仓只保留这一条执行链；旧AnchorFlow和边界回归只作为历史记录兼容，不再生成新订单。"/><Setting title="区域扫描" value="30个5分钟标的" text="持仓以及最接近完整区域边界的RegionLaunch ARMED/IGNITION优先保留11个实时盘口执行槽。"/><Setting title="交易事件" value="完整区域爆发追击" text="完整5分钟缠绕边界→ARMED→5m强离区→1m延续/小回调重启→READY→当前盘口经济性检查。"/><Setting title="执行权限" value="模拟决策 / 实盘复制" text="模拟提供交易决定；实盘按固定比例复制并使用Gate真实成交。"/><Setting title="风险预算" value="权益随动" text={data?.boundaries.risk??"读取中"}/><Setting title="连续性" value="持久化" text="重启从已有5分钟K恢复最近区域状态，但不会补历史订单；账户和旧持仓保持连续。"/>
       </section></>}
 
     {liveMounted&&<div className="fr-live-panel-host" hidden={tab!=="live"} aria-hidden={tab!=="live"}>{livePanel}</div>}
