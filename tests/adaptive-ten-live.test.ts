@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {fillForwardPortfolio,forwardEquity,initialForward,type Candle,type Contract,type Opportunity,type Quote} from "../lib/forward-relations.ts";
 import {buildProportionalMirror,forwardMirrorSources,liveEntryDriftGuard,mirrorSourceFresh} from "../lib/live-parity.ts";
-import type {RelationRule} from "../lib/forward-relation-v2.ts";
 import {sourceAfterEnable,startLiveSession} from "../lib/live-session.ts";
 
 const START=Date.parse("2026-09-24T00:00:00Z")/1000;
@@ -23,9 +22,6 @@ function source(){
     expectedHoldMinutes:60,marketFit:80,regionId:null,regionQuality:null,reason:"已成熟Forward关系的LIVE同源测试事件",
     relationRuleId:"fixture-rule",relationStatus:"ACTIVE",relationHorizon:60,relationHealth:.85,riskScale:.85};
   s.opportunities=[opportunity];s.lastCandleAt=now;
-  s.relationEngine.rules=[{id:"fixture-rule",signature:"fixture-rule",scope:"BASE",horizon:60,side:"LONG",conditions:[],
-    longNet:.01,recentNet:.008,standardError:.001,samples:40,longGroups:6,recentGroups:3,health:.85,status:"ACTIVE",livePathScore:.80,
-    environmentFit:.82,stopRate:.008,targetRate:.012,updatedAt:now,lastQualifiedAt:now-60_000,symbols:["BTC_USDT"],reason:"LIVE parity fixture"} satisfies RelationRule];
   fillForwardPortfolio(s,{BTC_USDT:q(price,now)},{BTC_USDT:contract},now,1000,false);
   assert.equal(s.positions.length,1);return{s,trade:s.positions[0]!,now,price};
 }
