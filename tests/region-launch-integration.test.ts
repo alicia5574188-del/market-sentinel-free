@@ -54,9 +54,11 @@ function fastPath(now:number){
 }
 function driveFast(state:ForwardState,now:number){
   const m=fastPath(now);let s=state;
-  s=step(s,now+60_000,103.20,{BCH_USDT:[m.breakout]}).state;
-  s=step(s,now+120_000,102.88,{BCH_USDT:[m.breakout,m.pullback]}).state;
-  s=step(s,now+180_000,103.32,{BCH_USDT:[m.breakout,m.pullback,m.restart]}).state;
+  // Executable quotes stay close to the just-completed 1m evidence. The test
+  // deliberately does not "help" the strategy with a later, farther chase.
+  s=step(s,now+60_000,102.62,{BCH_USDT:[m.breakout]}).state;
+  s=step(s,now+120_000,102.32,{BCH_USDT:[m.breakout,m.pullback]}).state;
+  s=step(s,now+180_000,102.54,{BCH_USDT:[m.breakout,m.pullback,m.restart]}).state;
   return{s,m};
 }
 
