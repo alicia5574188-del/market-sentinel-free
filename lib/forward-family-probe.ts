@@ -55,8 +55,7 @@ function recovered(record:FamilyProbeGuard,e:FamilyEvidence){
   const lifecycle=e.status==="ACTIVE"||e.status==="RECOVERING";
   const health=e.health>=Math.max(.50,record.blockedHealth+.10);
   const path=e.livePathScore>=Math.max(.60,record.blockedLivePathScore+.12);
-  if(newEvidence&&lifecycle&&(health||path))return true;
-  return e.status==="ACTIVE"&&e.health>=.68&&e.livePathScore>=.60;
+  return newEvidence&&lifecycle&&(health||path);
 }
 
 export function familyAdmissionBlock(state:FamilyProbeGuardState,e:FamilyEvidence){
