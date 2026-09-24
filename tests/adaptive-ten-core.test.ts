@@ -63,6 +63,20 @@ test("PAPER uses learned relations for entries instead of the retired 5m FLOW ga
   assert.ok(s.positions.some(t=>t.entryContext?.relationRuleId));
 });
 
+test("fast quote loop cannot open a premium region trade before any Forward Relation samples exist",()=>{
+  const symbol="S0_USDT",rows:Array<Candle>=[],base=START;
+  for(let i=0;i<24;i++){const open=100+(i%2?.01:-.01),close=100+(i%2?-.01:.01);
+    rows.push({time:base+i*300,open,close,high:100.05,low:99.95,volume:1000+i});}
+  rows.push({time:base+24*300,open:100,close:102,high:102.2,low:99.9,volume:2000});
+  const candleAt=(rows.at(-1)!.time+300)*1000,now=candleAt+1000,price=rows.at(-1)!.close;
+  let state=initialForward(now-60_000);state.lastCandleAt=candleAt;
+  state.regions[symbol]={id:"fixture-region",symbol,confirmedAt:candleAt-300_000,lower:99.8,upper:100.2,center:100,widthRate:.004,bars:10,quality:80,state:"ABOVE",lastSeenAt:now};
+  assert.equal(state.relationEngine.samples.length,0);assert.equal(state.relationEngine.rules.length,0);
+  state=advanceForward({state,now,paths:{[symbol]:rows},quotes:{[symbol]:{bestBid:price*.9999,bestAsk:price*1.0001,observedAt:now,fresh:true,entryReady:true}},contracts:{[symbol]:contract},entrySymbols:[symbol],allowDataCycle:false}).state;
+  assert.equal(state.positions.length,0,"premium region execution must never bypass empty relation authority");
+  assert.equal(state.opportunities.some(o=>o.premium&&o.eligible),false);
+});
+
 test("position count is not capped at ten; risk and margin remain the limiting authorities",()=>{
   const now=nowAt(39),paths=sliced(39);let s=initialForward(now-60_000);
   s.lastCandleAt=now;s.opportunities=symbols.map((symbol,i)=>({id:`manual-${symbol}`,symbol,side:i%2?"SHORT":"LONG",mode:"RELATION",premium:false,reserve:true,

@@ -301,19 +301,33 @@ function regionOpportunities(s:ForwardState,symbol:string,rows:Candle[],minute:C
   }
   return out;
 }
+function relationSupportMap(s:ForwardState,allowed?:ReadonlySet<string>){
+  const bySymbol=new Map<string,RelationCandidate[]>();
+  for(const c of relationCandidates(s.relationEngine)){
+    if(allowed&&!allowed.has(c.symbol))continue;
+    const rows=bySymbol.get(c.symbol)??[];rows.push(c);bySymbol.set(c.symbol,rows);
+  }
+  return bySymbol;
+}
+function relationBackedRegionOpportunities(s:ForwardState,symbol:string,rows:Candle[],minute:Candle[]|undefined,q:Quote|undefined,now:number,
+  pulse:MarketPulse,region:Region,support:RelationCandidate[]){
+  const out:Opportunity[]=[];
+  for(const o of regionOpportunities(s,symbol,rows,minute,q,now,pulse,region)){
+    const relation=support.find(c=>c.side===o.side);
+    if(!relation)continue;
+    out.push({...o,score:clip(o.score*.55+relation.score*.45,0,100),eligible:o.eligible&&relation.health>=.15,
+      reserve:relation.reserve,relationRuleId:relation.ruleId,relationStatus:relation.status,relationHorizon:relation.horizon,
+      relationHealth:relation.health,riskScale:clip(relation.health,.25,1),reason:`${relation.reason}｜执行结构：${o.reason}`});
+  }
+  return out;
+}
 function buildOpportunities(s:ForwardState,paths:Record<string,Candle[]>,minutePaths:Record<string,Candle[]>|undefined,quotes:Record<string,Quote>,now:number,allowed?:ReadonlySet<string>){
-  const pulse=marketPulse(paths,now),all:Opportunity[]=[],regions:Record<string,Region>={},bySymbol=new Map<string,RelationCandidate[]>();
-  for(const c of relationCandidates(s.relationEngine)){if(allowed&&!allowed.has(c.symbol))continue;const a=bySymbol.get(c.symbol)??[];a.push(c);bySymbol.set(c.symbol,a);}
+  const pulse=marketPulse(paths,now),all:Opportunity[]=[],regions:Record<string,Region>={},bySymbol=relationSupportMap(s,allowed);
   for(const[symbol,path]of Object.entries(paths)){if(allowed&&!allowed.has(symbol))continue;const rows=validPath(path,now);if(!rows)continue;
     const support=bySymbol.get(symbol)??[];
     for(const c of support)all.push(relationOpportunity(c,rows,quotes[symbol],now));
     const region=detectRegion(symbol,rows,now);if(region){regions[symbol]=region;
-      for(const o of regionOpportunities(s,symbol,rows,minutePaths?.[symbol],quotes[symbol],now,pulse,region)){
-        const relation=support.find(c=>c.side===o.side);if(!relation)continue;
-        all.push({...o,score:clip(o.score*.55+relation.score*.45,0,100),eligible:o.eligible&&relation.health>=.15,
-          reserve:relation.reserve,relationRuleId:relation.ruleId,relationStatus:relation.status,relationHorizon:relation.horizon,
-          relationHealth:relation.health,riskScale:clip(relation.health,.25,1),reason:`${relation.reason}｜执行结构：${o.reason}`});
-      }
+      all.push(...relationBackedRegionOpportunities(s,symbol,rows,minutePaths?.[symbol],quotes[symbol],now,pulse,region,support));
     }
   }
   const best=[...new Map(all.sort((a,b)=>Number(b.eligible)-Number(a.eligible)||Number(!b.reserve)-Number(!a.reserve)
@@ -482,9 +496,10 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
       activeLong:s.relationEngine.rules.filter(r=>r.side==="LONG"&&r.status!=="DEGRADED").length,
       activeShort:s.relationEngine.rules.filter(r=>r.side==="SHORT"&&r.status!=="DEGRADED").length};
   }else{
-    const pulse=s.marketPulse.at?s.marketPulse:marketPulse(input.paths,input.now),premium:Opportunity[]=[];
-    for(const [symbol,region] of Object.entries(s.regions)){const rows=validPath(input.paths[symbol]??[],input.now);if(!rows)continue;
-      premium.push(...regionOpportunities(s,symbol,rows,input.minutePaths?.[symbol],input.quotes[symbol],input.now,pulse,region).filter(o=>o.premium));}
+    const pulse=s.marketPulse.at?s.marketPulse:marketPulse(input.paths,input.now),premium:Opportunity[]=[],bySymbol=relationSupportMap(s,allowed);
+    for(const [symbol,region] of Object.entries(s.regions)){if(allowed&&!allowed.has(symbol))continue;const rows=validPath(input.paths[symbol]??[],input.now);if(!rows)continue;
+      const support=bySymbol.get(symbol)??[];
+      premium.push(...relationBackedRegionOpportunities(s,symbol,rows,input.minutePaths?.[symbol],input.quotes[symbol],input.now,pulse,region,support).filter(o=>o.premium));}
     const base=s.opportunities.filter(o=>!o.premium&&o.expiresAt>input.now),combined=[...premium,...base];
     s.opportunities=[...new Map(combined.sort((a,b)=>Number(b.eligible)-Number(a.eligible)||Number(b.premium)-Number(a.premium)
       ||Number(!b.reserve)-Number(!a.reserve)||b.score-a.score).map(o=>[o.symbol,o] as const)).values()];
