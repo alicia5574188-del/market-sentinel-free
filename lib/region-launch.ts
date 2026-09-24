@@ -345,8 +345,14 @@ export function advanceRegionLaunchMinutes(input:{states:Record<string,RegionLau
         const impulse=d*(evaluated.restartPrice/trigger-1);
         const averageRangeRate=(s.compression.averageRange??s.compression.width)/Math.max(s.compression.center,1e-12);
         const maxChase=s.launchPath==="FAST"
-          ?Math.max(.012,Math.min(.040,Math.max(averageRangeRate*3.8,s.motherWidthRate*.65,input.costRate*4)))
-          :Math.max(.006,Math.min(.025,Math.max(averageRangeRate*1.8,s.motherWidthRate*.45,input.costRate*3)));
+          // FAST is already exceptional: after a genuinely small pullback we
+          // may enter farther from the box than the slow route, but never more
+          // than one mature-region width or 3.0% from the launch boundary.
+          ?Math.max(.015,Math.min(.030,Math.max(averageRangeRate*4.5,s.motherWidthRate*1.00,input.costRate*5)))
+          // CLOSED is deliberately tighter. Give enough room for the first
+          // confirmed 1m continuation beyond a strong 5m close without turning
+          // a normal late chase into an entry.
+          :Math.max(.008,Math.min(.018,Math.max(averageRangeRate*2.2,s.motherWidthRate*.60,input.costRate*3.5)));
         if(input.now-evaluated.restartAt>75_000){
           s.phase="WATCH";s.cooldownUntil=input.now+REGION_BAR_MS;clearIgnition(s);clearReady(s);
           s.reason="RegionLaunch重新启动1分钟K到达过晚；只记录结构，不历史补追。";
