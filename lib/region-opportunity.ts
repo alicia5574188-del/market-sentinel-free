@@ -58,7 +58,14 @@ function barrierClusters(input:{
     if(last&&Math.abs(row.price-anchor)<=merge){last.prices.push(row.price);last.reject=Math.max(last.reject,row.reject);last.at=Math.max(last.at,row.at);}
     else clusters.push({prices:[row.price],reject:row.reject,at:row.at});
   }
-  const significant=clusters.filter(c=>c.prices.length>=2||c.reject>=Math.max(input.averageRange*1.10,input.width*.18)).map(c=>{
+  const significant=clusters.filter(c=>{
+    if(c.prices.length>=2)return true;
+    // A lone wick just outside the current region is not a "front barrier".
+    // Single-touch barriers must be materially separated from the region and
+    // show a strong rejection; nearby pressure requires repeated touches.
+    const price=median(c.prices),gap=input.side==="LONG"?price-input.upper:input.lower-price;
+    return gap>=input.width*.22&&c.reject>=Math.max(input.averageRange*1.20,input.width*.20);
+  }).map(c=>{
     const lower=Math.min(...c.prices),upper=Math.max(...c.prices),touches=c.prices.length;
     const rejectionScore=clip(c.reject/Math.max(input.averageRange,input.width*.10,1e-12)/2);
     const touchScore=clip((touches-1)/3);
