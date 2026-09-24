@@ -1661,36 +1661,50 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private async resetPaperAccount() {
-    const now=Date.now();
-    if(this.runtime.live.requestedEnabled||this.runtime.live.operational
-      ||Object.values(this.runtime.live.positions).some(position=>position?.status==="OPEN")
-      ||Object.values(this.runtime.live.entries).some(entry=>entry&&!["FILLED","CANCELLED"].includes(entry.status)))
-      throw new Error("请先关闭实盘并确认 Gate 没有本系统持仓或待成交订单");
-
-    if(!this.forwardState)this.forwardState=await readForwardStore(this.ctx.storage,now);
-    const previous=this.forwardState;
-    if(!previous)throw new Error("模拟账户尚未恢复");
-    const quotes=this.regimeQuotes(now);
-    for(const position of previous.positions){
-      const quote=quotes[position.symbol];
-      if(!freshQuote(quote,now))throw new Error(`${position.symbol} 行情不新鲜，不能用旧价格重置模拟持仓`);
-    }
-    const closed=closeForwardForReset(previous,quotes,now);
-    const next=resetForwardAccountPreservingLearning(previous,now);
-    const prepared=await prepareForwardReset(previous,closed,next,now);
-    const saved=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
-    const protection=prepared.entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
-    if(protection&&saved?.writeBudget!==undefined)
-      prepared.entries[FORWARD_PROTECTION_STORAGE]={...protection,writeBudget:saved.writeBudget};
-    const reservation=this.reserveNonAlarmWrites(prepared.writes,64);
-    if(!reservation)throw new Error("模拟账户重置等待写入预算；当前账户保持完整");
+    const now=Date.now();let stage="检查实盘状态";
     try{
-      await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});
-      reservation.finish(true);
-    }finally{reservation.finish(false);}
-    this.forwardCompression=prepared.compression;this.forwardState=prepared.state;this.forwardError=null;
-    this.forwardProtectionBudget=readProtectionWriteBudget(saved?.writeBudget);this.mirrorClosures.clear();
-    return{ok:true,equity:1000,forward:forwardSummary(this.forwardState,this.regimeQuotes(now),now)};
+      if(this.runtime.live.requestedEnabled||this.runtime.live.operational
+        ||Object.values(this.runtime.live.positions).some(position=>position?.status==="OPEN")
+        ||Object.values(this.runtime.live.entries).some(entry=>entry&& !["FILLED","CANCELLED"].includes(entry.status)))
+        throw new Error("请先关闭实盘并确认 Gate 没有本系统持仓或待成交订单");
+
+      stage="读取当前模拟账户";
+      if(!this.forwardState)this.forwardState=await readForwardStore(this.ctx.storage,now);
+      const previous=this.forwardState;if(!previous)throw new Error("模拟账户尚未恢复");
+
+      stage="封存旧账户";
+      // Manual reset abandons the old PAPER ledger. Fresh executable prices are
+      // preferred, but a missing quote must never make account maintenance
+      // impossible; closeForwardForReset safely falls back to the last saved mark.
+      const closed=closeForwardForReset(previous,this.regimeQuotes(now),now);
+      const next=resetForwardAccountPreservingLearning(previous,now);
+
+      stage="准备新账户";
+      const prepared=await prepareForwardReset(previous,closed,next,now);
+      const saved=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
+      const protection=prepared.accountEntries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
+      if(protection&&saved?.writeBudget!==undefined)
+        prepared.accountEntries[FORWARD_PROTECTION_STORAGE]={...protection,writeBudget:saved.writeBudget};
+
+      const reservation=this.reserveNonAlarmWrites(prepared.writes,64);
+      if(!reservation)throw new Error("模拟账户重置等待写入预算；当前账户保持完整");
+      stage="原子写入重置账户";
+      try{
+        await this.ctx.storage.transaction(async transaction=>{
+          for(const[key,value]of Object.entries(prepared.archiveEntries))await transaction.put(key,value);
+          await transaction.put(prepared.accountEntries);
+        });
+        reservation.finish(true);
+      }finally{reservation.finish(false);}
+
+      this.forwardCompression=prepared.compression;this.forwardState=prepared.state;this.forwardError=null;
+      this.forwardProtectionBudget=readProtectionWriteBudget(saved?.writeBudget);this.mirrorClosures.clear();
+      return{ok:true,equity:1000,forward:forwardSummary(this.forwardState,this.regimeQuotes(now),now)};
+    }catch(error){
+      const raw=safeError(error),friendly=/The string did not match the expected pattern/i.test(raw)
+        ?"底层存储参数校验失败；原账户保持不变":raw;
+      throw new Error(`模拟账户重置失败（${stage}）：${friendly}`);
+    }
   }
 
   private async clearPaperHistory() {
