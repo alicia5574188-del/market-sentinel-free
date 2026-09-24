@@ -1046,9 +1046,9 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
   s.entryDiagnostics=diagnostics;
   const reject=(reason:string)=>{diagnostics.reasons[reason]=(diagnostics.reasons[reason]??0)+1;};
   for(const signal of rows){
-    const model=(signal as RegionEntrySignal&{entryModel?:string}).entryModel;
-    const anchorSignal=false,launchSignal=signal.kind==="MIGRATION"&&model==="REGION_LAUNCH";
-    if(!launchSignal){reject("只有完整缠绕区域爆发追击拥有新开仓权限");continue;}
+    // regionLaunchSignals is the only executable queue. No other historical
+    // RegionEntrySignal subtype is allowed to reach this loop.
+    if(signal.entryModel!=="REGION_LAUNCH"){reject("只有完整缠绕区域爆发追击拥有新开仓权限");continue;}
     if(s.positions.some(t=>t.symbol===signal.symbol))continue;
     if((s.turnLastEntryBars?.[`launch:${signal.regionId}:${signal.side}`]??0)>=signal.completedAt)continue;
     const q=quotes[signal.symbol],meta=contracts[signal.symbol];
@@ -1060,69 +1060,42 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
     if(marked.stalePositions){reject("已有持仓估值过期，只管理风险不新增仓位");break;}
     const spread=(q.bestAsk-q.bestBid)/Math.max((q.bestAsk+q.bestBid)/2,1e-9),cost=turnModeledCost("5m",spread);
     const d=signal.side==="LONG"?1:-1;
-    let anchorConfirmationReferencePrice:number|null=null,anchorMicroConfirmed=false;
-    if(launchSignal){
-      const launch=s.regionLaunches?.[signal.symbol];
-      if(!launch||launch.version!==REGION_LAUNCH_VERSION||launch.phase!=="READY"||launch.motherRegionId!==signal.regionId||launch.readySide!==signal.side){
-        reject("RegionLaunch READY状态与爆发事件不一致；不补追，等待状态同步");continue;
-      }
-    }
-    if(anchorSignal){
-      const flow=s.anchorFlows?.[signal.symbol];
-      if(!flow||flow.regionId!==signal.regionId||flow.side!==signal.side||flow.phase!=="READY"){
-        reject("AnchorFlow READY状态与可执行事件不一致；保留机会等待状态同步");continue;
-      }
-      const executable=(signal.side==="LONG"?q.bestAsk:q.bestBid)*(1+d*PAPER_COST.slippageRate);
-      flow.confirmationExtreme=flow.confirmationExtreme==null?executable
-        :signal.side==="LONG"?Math.min(flow.confirmationExtreme,executable):Math.max(flow.confirmationExtreme,executable);
-      anchorConfirmationReferencePrice=flow.confirmationExtreme;
-      const exitNow=(signal.side==="LONG"?q.bestBid:q.bestAsk)*(1-d*PAPER_COST.slippageRate);
-      flow.pullbackExtreme=flow.pullbackExtreme==null?exitNow:signal.side==="LONG"
-        ?Math.min(flow.pullbackExtreme,exitNow):Math.max(flow.pullbackExtreme,exitNow);
-      const updatedStop=anchorFlowStopPrice(signal.side,flow.pullbackExtreme,flow.regionWidth,flow.regionCenter,cost);
-      signal.stopPrice=signal.side==="LONG"?Math.min(signal.stopPrice,updatedStop):Math.max(signal.stopPrice,updatedStop);
-      (signal as AnchorFlowEntrySignal).pullbackExtreme=flow.pullbackExtreme;
-      const confirmation=anchorMinuteConfirmation(flow,minutePaths[signal.symbol],cost,now,(q.bestBid+q.bestAsk)/2);
-      anchorMicroConfirmed=confirmation.microConfirmed;
-      if(!anchorMicroConfirmed&&!confirmation.liveBreakout){
-        reject(`AnchorFlow READY保留；${confirmation.reason}`);continue;
-      }
-      signal.reason=`AnchorFlow：回测位置仍有效；${confirmation.reason}；最新回调支点${flow.pullbackExtreme.toPrecision(8)}，按完整结构防守核算风险。`;
+    const launch=s.regionLaunches?.[signal.symbol];
+    if(!launch||launch.version!==REGION_LAUNCH_VERSION||launch.phase!=="READY"
+      ||launch.motherRegionId!==signal.regionId||launch.readySide!==signal.side){
+      reject("RegionLaunch READY状态与爆发事件不一致；不补追，等待状态同步");continue;
     }
     const totalRisk=s.positions.reduce((n,t)=>n+t.plannedRisk,0),longRisk=s.positions.filter(t=>t.side==="LONG").reduce((n,t)=>n+t.plannedRisk,0),
       shortRisk=s.positions.filter(t=>t.side==="SHORT").reduce((n,t)=>n+t.plannedRisk,0);
     const plan=evaluateRegionEntryPolicy({signal,bestBid:q.bestBid,bestAsk:q.bestAsk,contract:meta,equity,peakEquity:s.peakEquity,totalRisk,longRisk,shortRisk,
       grossNotional:s.positions.reduce((n,t)=>n+t.notional,0),usedMargin:s.positions.reduce((n,t)=>n+t.margin,0),
-      tradeRisks:s.positions.map(t=>t.plannedRisk),costRate:cost,feeRate:PAPER_COST.feeRate,slippageRate:PAPER_COST.slippageRate,
-      anchorConfirmationReferencePrice,anchorMicroConfirmed});
+      tradeRisks:s.positions.map(t=>t.plannedRisk),costRate:cost,feeRate:PAPER_COST.feeRate,slippageRate:PAPER_COST.slippageRate});
     if(!plan.ok){reject(plan.reason);continue;}
     const {price,count,quantity,notional,leverage,margin,plannedRisk,entryFee,remainingSpaceRate:remaining}=plan.plan;
     const stopRate=d*(price-signal.stopPrice)/Math.max(price,1e-9);
     const rule=regionRule(s,signal,stopRate,remaining,now);
-    const contextTimeframe:TurnTimeframe=anchorSignal||launchSignal?"15m":"5m";
+    const contextTimeframe:TurnTimeframe="15m";
     const frame=s.turnEngine?.frames[signal.symbol]?.[contextTimeframe],trend=s.turnEngine?.frames[signal.symbol]?.["1h"];
     const zeroEvidence:TurnEvidence={structure:0,momentum:0,acceleration:0,cusum:0,changePoint:0,failedExtension:0,volatility:0,volume:0,breadth:0,propagation:0};
     const windows=multiTurnHoldWindows(contextTimeframe);
-    const af=signal as AnchorFlowEntrySignal,rl=signal as RegionLaunchSignal;
-    const states=anchorSignal||launchSignal?[frame,trend].flatMap(x=>x?[{timeframe:x.timeframe,direction:x.direction,phase:x.phase,
+    const rl=signal;
+    const states=[frame,trend].flatMap(x=>x?[{timeframe:x.timeframe,direction:x.direction,phase:x.phase,
       directionConfidence:x.directionConfidence,continuationScore:x.continuationScore,turnProbability:x.turnProbability,
-      triggerProbability:x.triggerProbability,expectedMoveRate:x.expectedMoveRate,atrRate:x.atrRate,evidence:structuredClone(x.evidence)}]:[]):[];
-    const entryContext:MultiTurnEntryContext={version:launchSignal?"region-launch-entry-v1":anchorSignal?"anchor-flow-entry-v1":"region-lifecycle-entry-v1",capturedAt:now,
+      triggerProbability:x.triggerProbability,expectedMoveRate:x.expectedMoveRate,atrRate:x.atrRate,evidence:structuredClone(x.evidence)}]:[]);
+    const entryContext:MultiTurnEntryContext={version:"region-launch-entry-v1",capturedAt:now,
       timeframe:contextTimeframe,side:signal.side,phase:frame?.phase??"FLOW",signalAt:signal.completedAt,signalPrice:signal.signalPrice,reason:signal.reason,
       directionConfidence:frame?.directionConfidence??1,continuationScore:frame?.continuationScore??1,
       turnProbability:frame?.turnProbability??0,triggerProbability:frame?.triggerProbability??1,
-      expectedMoveRate:launchSignal?rl.launchExpectedMoveRate:remaining+cost,modeledCostRate:cost,remainingSpaceRate:remaining,stopRate,
-      riskCap:anchorSignal ? .008 : .006,bestHoldMinutes:anchorSignal||launchSignal?windows.bestHoldMinutes:0,
-      strongExtensionMinutes:anchorSignal||launchSignal?windows.strongExtensionMinutes:0,hardExtensionMinutes:anchorSignal||launchSignal?windows.hardExtensionMinutes:0,
+      expectedMoveRate:rl.launchExpectedMoveRate,modeledCostRate:cost,remainingSpaceRate:remaining,stopRate,
+      riskCap:.006,bestHoldMinutes:windows.bestHoldMinutes,
+      strongExtensionMinutes:windows.strongExtensionMinutes,hardExtensionMinutes:windows.hardExtensionMinutes,
       regionVersion:REGION_LIFECYCLE_VERSION,regionKind:signal.kind,regionId:signal.regionId,regionBoundary:signal.boundary,
       regionConfirmedAt:signal.regionConfirmedAt,regionLower:signal.regionLower,regionUpper:signal.regionUpper,
       regionCenter:signal.regionCenter,regionWidth:signal.regionWidth,
-      ...(anchorSignal?{anchorRetestAt:af.retestAt,anchorRestartLevel:af.restartLevel,anchorPullbackExtreme:af.pullbackExtreme,
-        directionFrameAt:af.directionFrameAt,trendFrameAt:af.trendFrameAt}:{}),
-      ...(launchSignal?{launchTriggerPrice:rl.launchTriggerPrice,launchCompressionLower:rl.launchCompressionLower,
-        launchCompressionUpper:rl.launchCompressionUpper,launchCompressionBars:rl.launchCompressionBars,
-        launchFailedDepartures:rl.launchFailedDepartures,launchImpulseRate:rl.launchImpulseRate,
-        launchConfirmationMs:rl.launchConfirmationMs,launchMaxChaseRate:rl.launchMaxChaseRate}:{}),
+      launchTriggerPrice:rl.launchTriggerPrice,launchCompressionLower:rl.launchCompressionLower,
+      launchCompressionUpper:rl.launchCompressionUpper,launchCompressionBars:rl.launchCompressionBars,
+      launchFailedDepartures:rl.launchFailedDepartures,launchImpulseRate:rl.launchImpulseRate,
+      launchConfirmationMs:rl.launchConfirmationMs,launchMaxChaseRate:rl.launchMaxChaseRate,
       evidence:structuredClone(frame?.evidence??zeroEvidence),timeframeStates:states};
     const t:Trade={id:`ft-${s.startedAt}-${s.revision+1}`,symbol:signal.symbol,side:signal.side,rule:structuredClone(rule),
       openedAt:now,closedAt:null,status:"OPEN",entryPrice:price,exitPrice:null,quantity,contracts:count,quantoMultiplier:meta.quantoMultiplier,
@@ -1130,39 +1103,19 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
       armPrice:signal.targetPrice??price*(1+d*Math.max(signal.regionWidthRate*.50,remaining)),favorable:0,adverse:0,lastPrice:price,lastQuoteAt:q.observedAt,
       entryFee,exitFee:0,fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,relationFailureBars:0,lastRelationBar:signal.completedAt,
       execution:"REAL_QUOTE_PAPER_MODEL",liveEligible:false,exitControl:newExitControl(),entryContext,
-      ...(anchorSignal?{entryValidation:{version:"anchor-entry-validation-v1" as const,
-        dueAt:Math.floor(now/BAR_MS)*BAR_MS+BAR_MS,evaluatedAt:null,passed:null}}:
-        launchSignal?{entryValidation:{version:"region-launch-entry-validation-v1" as const,dueAt:now+60_000,evaluatedAt:null,passed:null}}:{}),
-      forecast:{policy:launchSignal?REGION_LAUNCH_VERSION:anchorSignal?ANCHOR_FLOW_VERSION:REGION_LIFECYCLE_VERSION,
-        family:`${launchSignal?"LAUNCH":anchorSignal?"ANCHOR":"REGION"}:5m:${signal.kind}:${signal.side}`,signalAt:signal.completedAt,
+      entryValidation:{version:"region-launch-entry-validation-v1" as const,dueAt:now+60_000,evaluatedAt:null,passed:null},
+      forecast:{policy:REGION_LAUNCH_VERSION,
+        family:`LAUNCH:5m:${signal.kind}:${signal.side}`,signalAt:signal.completedAt,
         signalPrice:signal.signalPrice,baseNetRate:remaining,calibratedNetRate:remaining,remainingNetRate:remaining,quality:1,sizingEquity:equity-entryFee},
       turn:{version:MULTI_TURN_VERSION,timeframe:contextTimeframe,signalAt:signal.completedAt,
         entryTurnProbability:frame?.turnProbability??0,entryContinuation:frame?.continuationScore??1,entryDirectionConfidence:frame?.directionConfidence??1}};
     s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.positions.push(t);s.rules.unshift(rule);s.rules=s.rules.slice(0,48);
     s.turnLastEntryBars??={};
-    if(!launchSignal)s.lastEntryBars[signal.symbol]=signal.completedAt;
-    s.turnLastEntryBars[launchSignal?`launch:${signal.regionId}:${signal.side}`:`region:${signal.regionId}`]=signal.completedAt;
-    if(anchorSignal){
-      s.anchorConsumed??={};s.anchorConsumed[`${signal.regionId}:${signal.side}`]=now;
-      const flow=s.anchorFlows?.[signal.symbol];
-      if(flow&&flow.regionId===signal.regionId&&flow.side===signal.side){
-        flow.phase="CONSUMED";flow.consumedAt=now;
-        flow.reason="READY信号已经通过盘口与经济性检查并完成真实模拟开仓；该区域方向已消费。";
-      }
-    }
-    if(launchSignal){
-      const launch=s.regionLaunches?.[signal.symbol];
-      if(launch&&launch.motherRegionId===signal.regionId)s.regionLaunches![signal.symbol]=consumeRegionLaunch(launch,signal.side,now);
-      s.regionLaunchSignals=(s.regionLaunchSignals??[]).filter(row=>row.id!==signal.id);
-    }
-    const lifecycle=s.regionLifecycles?.[signal.symbol];
-    if(!launchSignal&&lifecycle&&lifecycle.zone?.id===signal.regionId)s.regionLifecycles![signal.symbol]=consumeRegionBoundary(lifecycle,signal.boundary,now);
-    if(!anchorSignal&&!launchSignal)s.regionSignals=(s.regionSignals??[]).filter(row=>row.id!==signal.id);
-    diagnostics.opened++;diagnostics.queued=(s.regionSignals?.length??0)+(s.regionLaunchSignals?.length??0);
-    event(s,now,"ENTRY",t.id,launchSignal
-      ?`${signal.symbol} RegionLaunch 开仓：${signal.reason} 当前盘口通过追价与风险检查。`
-      :anchorSignal?`${signal.symbol} AnchorFlow 开仓：1h/15m没有有置信度的明确反向否决，5m回测反应READY后通过订单经济性检查。`
-      :`${signal.symbol} 5m区域边界拒绝回归开仓。`,
+    s.turnLastEntryBars[`launch:${signal.regionId}:${signal.side}`]=signal.completedAt;
+    if(launch.motherRegionId===signal.regionId)s.regionLaunches![signal.symbol]=consumeRegionLaunch(launch,signal.side,now);
+    s.regionLaunchSignals=(s.regionLaunchSignals??[]).filter(row=>row.id!==signal.id);
+    diagnostics.opened++;diagnostics.queued=s.regionLaunchSignals?.length??0;
+    event(s,now,"ENTRY",t.id,`${signal.symbol} RegionLaunch 开仓：${signal.reason} 当前盘口通过确认后追价、剩余空间与风险检查。`,
       {notional,plannedRisk,regionWidthRate:signal.regionWidthRate,stopRate,remainingEdge:remaining});
   }
   if(diagnostics.opened)s.latestReason=`本轮 RegionLaunch 完整区域爆发追击开仓${diagnostics.opened}笔；不再使用 AnchorFlow 或区域回归补交易频率。`;
