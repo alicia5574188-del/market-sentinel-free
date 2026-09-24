@@ -8,8 +8,8 @@ export default {async fetch(req,env){
  globalThis.fetch=(input,init)=>env.GATE.fetch(new Request(input,init));
  const feed=new GateStreamingFeed();await feed.ensure(['BTC_USDT'],['BTC_USDT'],[]);
  await new Promise(r=>setTimeout(r,100));const initial=feed.status();
- await new Promise(r=>setTimeout(r,5300));const later=feed.status();
- return Response.json({initial,later});
+ await new Promise(r=>setTimeout(r,5300));const later=feed.status(),expired=feed.status(Date.now()+16000);
+ return Response.json({initial,later,expired});
 }}`;
 const bundle=await build({stdin:{contents:code,resolveDir:process.cwd(),sourcefile:'feed-smoke.ts'},bundle:true,write:false,
   format:'esm',platform:'browser',target:'es2022'});
@@ -23,6 +23,7 @@ try{
   const result=await(await mf.dispatchFetch('http://local/test')).json();
   assert.equal(result.initial.connected,true);assert.equal(result.initial.acceptedBooks,1);
   assert.equal(result.later.connected,true,'successful handshake must cancel its timeout and preserve the stream');
-  assert.equal(result.later.freshBooks,0,'a quiet old book must still expire even while the socket is connected');
-  console.log(JSON.stringify({workerdWebSocket:true,handshakeTimeoutCancelled:true,staleBookRejected:true,privateGateRequests:0}));
+  assert.equal(result.later.freshBooks,1,'unchanged BBO stays usable while the subscribed Gate socket is still live');
+  assert.equal(result.expired.freshBooks,0,'cached BBO expires after transport-liveness evidence ages out');
+  console.log(JSON.stringify({workerdWebSocket:true,handshakeTimeoutCancelled:true,streamBackedBbo:true,livenessExpiry:true,privateGateRequests:0}));
 }finally{await mf.dispose();}
