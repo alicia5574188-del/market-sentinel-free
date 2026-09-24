@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {ADAPTIVE_ENGINE_VERSION,advanceForward,forwardSummary,initialForward,normalizeForward,resetForwardAccountPreservingLearning,
+import {ADAPTIVE_ENGINE_VERSION,advanceForward,closeForwardForReset,forwardSummary,initialForward,normalizeForward,resetForwardAccountPreservingLearning,
   type Candle,type Contract,type Opportunity,type Quote} from "../lib/forward-relations.ts";
+import {FORWARD_STORAGE,prepareForwardReset} from "../lib/forward-store.ts";
 import {FORWARD_RELATION_V2_VERSION,advanceRelationEngine,initialRelationEngine,relationCandidates} from "../lib/forward-relation-v2.ts";
 
 const START=Date.parse("2026-09-24T00:00:00Z")/1000;
@@ -16,6 +17,16 @@ const nowAt=(last:number)=>(full[symbols[0]]![last]!.time+300)*1000+1000;
 const quotesAt=(last:number,now=nowAt(last))=>Object.fromEntries(symbols.map(s=>{const p=full[s]![last]!.close;
   return[s,{bestBid:p*.9999,bestAsk:p*1.0001,observedAt:now,fresh:true,entryReady:true} satisfies Quote];})) as Record<string,Quote>;
 const contracts=Object.fromEntries(symbols.map(s=>[s,contract]));
+const manualOpportunity=(symbol:string,index:number,options:{reserve?:boolean;premium?:boolean;ruleId?:string;score?:number;health?:number}={}):Opportunity=>{
+  const price=full[symbol]![39]!.close,side=index%2?"SHORT":"LONG",stopRate=.015,targetRate=.03;
+  return{id:`manual-${symbol}-${options.ruleId??index}`,symbol,side,mode:options.premium?"BREAKOUT":"RELATION",premium:options.premium??false,
+    reserve:options.reserve??false,score:options.score??90,eligible:true,completedAt:nowAt(39)-1000,expiresAt:nowAt(39)+60*60_000,price,
+    stopPrice:price*(side==="LONG"?1-stopRate:1+stopRate),targetPrice:price*(side==="LONG"?1+targetRate:1-targetRate),stopRate,targetRate,
+    directionStrength:90,pathEfficiency:85,momentumPersistence:85,positionScore:85,spaceScore:90,executionScore:90,grossRemainingSpaceRate:targetRate,
+    netRemainingSpaceRate:targetRate-.0019,pullbackRiskRate:stopRate,edgeRatio:1.8,expectedHoldMinutes:60,marketFit:85,regionId:null,regionQuality:null,
+    reason:"portfolio-control fixture",relationRuleId:options.ruleId??`r-${symbol}`,relationStatus:"ACTIVE",relationHorizon:60,
+    relationHealth:options.health??.9,riskScale:options.health??.9};
+};
 
 function learnThrough(last:number){let e=initialRelationEngine(nowAt(24)-1);for(let i=24;i<=last;i++)
   e=advanceRelationEngine({state:e,paths:sliced(i),now:nowAt(i)});return e;}
@@ -77,19 +88,63 @@ test("fast quote loop cannot open a premium region trade before any Forward Rela
   assert.equal(state.opportunities.some(o=>o.premium&&o.eligible),false);
 });
 
-test("position count is not capped at ten; risk and margin remain the limiting authorities",()=>{
-  const now=nowAt(39),paths=sliced(39);let s=initialForward(now-60_000);
-  s.lastCandleAt=now;s.opportunities=symbols.map((symbol,i)=>({id:`manual-${symbol}`,symbol,side:i%2?"SHORT":"LONG",mode:"RELATION",premium:false,reserve:true,
-    score:70,eligible:true,completedAt:now-1000,expiresAt:now+60_000,price:full[symbol]![39]!.close,stopPrice:full[symbol]![39]!.close*(i%2?1.003:.997),
-    targetPrice:full[symbol]![39]!.close*(i%2?.994:1.006),stopRate:.003,targetRate:.006,directionStrength:60,pathEfficiency:60,momentumPersistence:60,
-    positionScore:70,spaceScore:70,executionScore:90,grossRemainingSpaceRate:.006,netRemainingSpaceRate:.0041,pullbackRiskRate:.003,edgeRatio:1.36,
-    expectedHoldMinutes:60,marketFit:70,regionId:null,regionQuality:null,reason:"risk-limited fixture",relationRuleId:`r-${symbol}`,relationStatus:"ACTIVE",relationHorizon:60,
-    relationHealth:.25,riskScale:.25} satisfies Opportunity));
-  for(let i=0;i<4;i++)s=advanceForward({state:s,now:now+i*1000,paths,quotes:quotesAt(39,now+i*1000),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
-  assert.equal(s.positions.length,12,"legacy ten-seat cap must not stop otherwise risk-valid positions");
-  const equity=forwardSummary(s,quotesAt(39,now+4000),now+4000).equity;
-  assert.ok(s.positions.reduce((n,t)=>n+t.plannedRisk,0)<=equity*.10+1e-6);
+test("ordinary 5m relation inventory cannot keep opening on the fast quote loop",()=>{
+  const now=nowAt(39),paths=sliced(39),symbol=symbols[0]!,s=initialForward(now-60_000);
+  s.lastCandleAt=now;s.opportunities=[manualOpportunity(symbol,0,{premium:false})];
+  const next=advanceForward({state:s,now,paths,quotes:quotesAt(39,now),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
+  assert.equal(next.positions.length,0);
+});
+
+test("one 5m deployment window cannot spray more than 2.5% portfolio risk budget",()=>{
+  const now=nowAt(39),paths=sliced(39);let s=initialForward(now-60_000);s.lastCandleAt=now;
+  s.opportunities=symbols.map((symbol,i)=>manualOpportunity(symbol,i,{premium:true}));
+  s=advanceForward({state:s,now,paths,quotes:quotesAt(39,now),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
+  const charge=s.positions.reduce((n,t)=>n+(t.entryContext?.portfolioRiskCharge??t.plannedRisk),0);
+  assert.ok(charge<=25.01,`cycle charge ${charge}`);assert.ok(s.positions.length<=4);
+});
+
+test("probe relationships share one 1.5% portfolio pool instead of fragmenting into dozens of positions",()=>{
+  const now=nowAt(39),paths=sliced(39);let s=initialForward(now-60_000);s.lastCandleAt=now;
+  s.opportunities=symbols.map((symbol,i)=>manualOpportunity(symbol,i,{premium:true,reserve:true,health:.25,score:70}));
+  s=advanceForward({state:s,now,paths,quotes:quotesAt(39,now),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
+  const charge=s.positions.reduce((n,t)=>n+(t.entryContext?.portfolioRiskCharge??t.plannedRisk),0);
+  assert.ok(charge<=15.01);assert.ok(s.positions.length<=5);
+});
+
+test("one learned relation cannot consume more than 2.5% portfolio budget across correlated symbols",()=>{
+  const now=nowAt(39),paths=sliced(39);let s=initialForward(now-60_000);s.lastCandleAt=now;
+  s.opportunities=symbols.map((symbol,i)=>manualOpportunity(symbol,i,{premium:true,ruleId:"shared-market-factor"}));
+  s=advanceForward({state:s,now,paths,quotes:quotesAt(39,now),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
+  const charge=s.positions.reduce((n,t)=>n+(t.entryContext?.portfolioRiskCharge??t.plannedRisk),0);
+  assert.ok(charge<=25.01);assert.ok(s.positions.length<=4);
+});
+
+test("there is no fixed ten-position cap; strong independent relations can grow beyond ten only across multiple 5m budgets",()=>{
+  const base=nowAt(39),paths=sliced(39);let s=initialForward(base-60_000);
+  for(let cycle=0;cycle<5&&s.positions.length<=10;cycle++){
+    const at=base+cycle*300_000;s.lastCandleAt=at;
+    s.opportunities=symbols.filter(symbol=>!s.positions.some(t=>t.symbol===symbol))
+      .map((symbol,i)=>manualOpportunity(symbol,symbols.indexOf(symbol),{premium:true,score:92,health:.95}));
+    s=advanceForward({state:s,now:at+1000,paths,quotes:quotesAt(39,at+1000),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
+  }
+  assert.ok(s.positions.length>10,"risk-shaped portfolio may exceed ten when independent high-quality relations justify it");
+  const charge=s.positions.reduce((n,t)=>n+(t.entryContext?.portfolioRiskCharge??t.plannedRisk),0),equity=forwardSummary(s,quotesAt(39,base+1_500_000),base+1_500_000).equity;
+  assert.ok(charge<=equity*.10+1e-6);
   assert.ok(s.positions.reduce((n,t)=>n+t.margin,0)<=equity*.75+1e-6);
+});
+
+test("manual reset preparation remains bounded with twenty-two legacy open positions",async()=>{
+  const now=nowAt(39),paths=sliced(39),symbol=symbols[0]!;let previous=initialForward(now-60_000);previous.lastCandleAt=now;
+  previous.opportunities=[manualOpportunity(symbol,0,{premium:true})];
+  previous=advanceForward({state:previous,now,paths,quotes:quotesAt(39,now),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
+  assert.equal(previous.positions.length,1);const baseTrade=previous.positions[0]!;
+  previous.positions=Array.from({length:22},(_,i)=>({...structuredClone(baseTrade),id:`legacy-${i}`,symbol:`LEG${i}_USDT`}));
+  previous.storage={persistedAt:now-1000,error:null};
+  const closed=closeForwardForReset(previous,{},now+1000),next=resetForwardAccountPreservingLearning(previous,now+1000),
+    prepared=await prepareForwardReset(previous,closed,next,now+1000);
+  assert.equal(Object.keys(prepared.archiveEntries).length,22);
+  assert.ok(prepared.accountEntries[`${FORWARD_STORAGE}head`]);
+  assert.equal(prepared.state.positions.length,0);assert.equal(prepared.state.balance,1000);
 });
 
 test("a holding exits early when its own relation is degraded and it has no positive feedback",()=>{
