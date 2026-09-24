@@ -52,6 +52,17 @@ test("crossed, stale, future and out-of-order BBO updates cannot replace a valid
   assert.equal(feed.book("BTC_USDT",.1,1,now+15001),null,"cached BBO expires when stream liveness evidence ages out");
 }));
 
+test("other subscribed market traffic keeps an unchanged BBO executable on the same live socket",()=>fixture(async(feed,sockets,clock)=>{
+  const socket=sockets[0]!;socket.message(message());
+  await feed.ensure(["BTC_USDT","ETH_USDT"],[],[],now);
+  clock(now+6000);
+  socket.message({channel:"futures.book_ticker",event:"update",result:{s:"ETH_USDT",t:now+6000,u:20,b:"200",B:"3",a:"201",A:"4"}});
+  const btc=feed.book("BTC_USDT",.1,1,now+6000);
+  assert.equal(btc?.sequence,10);
+  assert.equal(btc?.observedAt,now+6000,"effective freshness follows the live Gate transport, not a forced BTC price change");
+  assert.equal(feed.status(now+6000).freshBooks,2);
+}));
+
 test("only explicitly closed and already complete Gate candles enter confirmation paths",()=>fixture(async(feed,sockets)=>{
   const send=(row:object)=>sockets[0]!.message({channel:"futures.candlesticks",event:"update",result:[row]});
   const row={n:"1m_BTC_USDT",t:now/1000-60,o:"100",h:"103",l:"99",c:"102",v:"5.5"};
