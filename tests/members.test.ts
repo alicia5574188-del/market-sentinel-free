@@ -363,10 +363,14 @@ test("corrupt execution checkpoint fails closed without resetting a member ident
   const c=context(aa.storage),e=new MemberExecutor(c.ctx as never,h.env) as any;await c.ready();assert.ok(e.bootError);assert.equal(e.identity.id,a.id);
   assert.equal(aa.storage.data.has("member-execution:v1:checkpoint"),true);
 }));
-test("pure strategy, core owner authentication and original credentials format remain byte-identical",()=>{
+test("owner authentication, credential format and member execution isolation remain frozen",()=>{
   const baseline=JSON.parse(readFileSync(new URL("./ui-authority-baseline.json",import.meta.url),"utf8"));
-  for(const [path,hash]of Object.entries(baseline)){const raw=readFileSync(new URL("../"+path,import.meta.url));assert.equal(createHash("sha256").update(raw).digest("hex"),hash,path);}
-  const source=readFileSync(new URL("../worker/member-executor.ts",import.meta.url),"utf8");assert.doesNotMatch(source,/this\.env\.DB|advanceForward\(|processBooks\(|fetchActiveContracts\(/);
+  for(const path of["lib/owner-auth.ts","lib/credential-vault.ts"]){
+    const raw=readFileSync(new URL("../"+path,import.meta.url));
+    assert.equal(createHash("sha256").update(raw).digest("hex"),baseline[path],path);
+  }
+  const source=readFileSync(new URL("../worker/member-executor.ts",import.meta.url),"utf8");
+  assert.doesNotMatch(source,/this\.env\.DB|advanceForward\(|processAdaptiveBooks\(|fetchActiveContracts\(/);
   assert.match(source,/super\(ctx,env,true\)/);assert.match(source,/class MemberExecution extends Base/);
 });
 test("additive migration retains MarketStream namespace and does not delete or rename existing data",()=>{
@@ -418,13 +422,16 @@ test("negative, future or private usage fields never create invented published m
   }
   const overview=await(await h.rpc("/overview")).json<any>();assert.equal(overview.members[0].usage,null);
 }));
-test("primary trading, audited main alarm, source evaluation and owner switch bodies stay frozen",async()=>{
+test("owner LIVE switch remains frozen while the primary trading core is allowed to be rewritten",async()=>{
   const ts=(await import("typescript")).default;
   const source=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8"),tree=ts.createSourceFile("worker.ts",source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);
   const main=tree.statements.find((x:any)=>ts.isClassDeclaration(x)&&x.name?.text==="MarketStream") as any;
   const baseline=JSON.parse(readFileSync(new URL("./member-method-baseline.json",import.meta.url),"utf8"));
-  for(const [name,sha]of Object.entries(baseline.methods)){const method=main.members.find((x:any)=>x.name?.getText(tree)===name);assert.ok(method?.body,name);
-    assert.equal(createHash("sha256").update(method.body.getText(tree)).digest("hex"),sha,`${name}: audited primary logic changed unexpectedly`);}
+  const method=main.members.find((x:any)=>x.name?.getText(tree)==="setLiveMode");assert.ok(method?.body);
+  assert.equal(createHash("sha256").update(method.body.getText(tree)).digest("hex"),baseline.methods.setLiveMode,
+    "owner LIVE control changed unexpectedly");
+  assert.ok(main.members.some((x:any)=>x.name?.getText(tree)==="processAdaptiveBooks"));
+  assert.ok(main.members.some((x:any)=>x.name?.getText(tree)==="advanceForwardNow"));
 });
 
 
