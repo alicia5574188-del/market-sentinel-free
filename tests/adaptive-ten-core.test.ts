@@ -121,7 +121,7 @@ test("probe relationships share one 1.5% portfolio pool instead of fragmenting i
   s.relationEngine.rules.forEach(r=>{r.status="DEGRADED";r.health=.25;r.livePathScore=.70;r.environmentFit=.80;});
   fillForwardPortfolio(s,quotesAt(39,now),contracts,now,1000,false);
   const charge=s.positions.reduce((n,t)=>n+(t.entryContext?.portfolioRiskCharge??t.plannedRisk),0);
-  assert.ok(charge<=15.01);assert.ok(s.positions.length<=5);
+  assert.ok(charge<=15.01);assert.ok(s.positions.length<=2,"reserve experiments are paced to at most two per 5m cycle");
 });
 
 test("different rule ids from one causal family can open only one reserve experiment",()=>{
