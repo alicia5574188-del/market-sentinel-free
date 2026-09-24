@@ -2697,7 +2697,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private symbolEntryReady(symbol:string,now=Date.now()) {
     const evidence=this.runtime.evidence[symbol],failure=this.runtime.feedFailures[symbol];
     return Boolean(evidence?.fresh&&evidence.entryReady!==false&&this.runtime.contractMeta[symbol]!=null
-      &&(this.sessionWarmup[symbol]??0)>=2&&now-evidence.observedAt<=STALE_AFTER_MS
+      &&(this.sessionWarmup[symbol]??0)>=1&&now-evidence.observedAt<=STALE_AFTER_MS
       &&failure?.suspendedSince==null);
   }
 
@@ -2734,14 +2734,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private ensureProtectionSymbolsResident() {
     const protectedSymbols=[...this.currentAuthorityProtectionSymbols()];
     const urgentSymbols=this.forwardUrgentSymbols();
-    if(!protectedSymbols.length&&!urgentSymbols.length)return;
-    const locked=[...new Set([...protectedSymbols,...urgentSymbols])],lockedSet=new Set(locked);
-    const residentNonProtected=this.runtime.symbols.filter((symbol)=>!lockedSet.has(symbol));
-    // Existing exposure always wins. Current-authority RETEST/READY/ARMED/
-    // IGNITION states use the remaining realtime capacity immediately instead
-    // of waiting for the one-minute radar refresh.
-    const residentLimit=Math.max(PORTFOLIO_REALTIME_CAPACITY,protectedSymbols.length);
-    const next=[...locked,...residentNonProtected].slice(0,residentLimit);
+    // Realtime Gate data is a scarce execution resource, never a scanner.
+    // Keep only actual exposure and currently executable candidates resident.
+    const next=[...new Set([...protectedSymbols,...urgentSymbols])].slice(0,ADAPTIVE_REALTIME_POSITION_CAP);
     if(next.length!==this.runtime.symbols.length||next.some((symbol,index)=>symbol!==this.runtime.symbols[index]))
       this.applyRealtimeSymbols(next);
   }
@@ -2807,11 +2802,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return due.length;
   }
 
-  private cycleBookSymbols(now:number,symbols:string[]) {
-    const urgent=new Set([...this.currentAuthorityProtectionSymbols(),...this.forwardUrgentSymbols(now)]);
-    const slot=Math.floor(now/LOOP_MS)%BACKGROUND_BOOK_INTERVALS;
-    const bucket=(symbol:string)=>[...symbol].reduce((n,ch)=>n+ch.charCodeAt(0),0)%BACKGROUND_BOOK_INTERVALS;
-    return symbols.filter(symbol=>urgent.has(symbol)||(this.sessionWarmup[symbol]??0)<2||bucket(symbol)===slot);
+  private cycleBookSymbols(_now:number,symbols:string[]) {
+    // Every resident Gate symbol is already execution-relevant.
+    return symbols;
   }
 
   private async processAdaptiveBooks(now:number,cycleSymbols=[...this.runtime.symbols]) {
@@ -2852,8 +2845,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(!fresh){this.suspendSymbol(symbol,now,"Gate盘口失鲜",now+LOOP_MS);continue;}
       const recovery=this.acceptFreshSymbol(symbol,now,at,true);
       if(recovery.recovered)this.runtime.feedQuality.recoveries++;
-      this.sessionWarmup[symbol]=Math.min(2,(this.sessionWarmup[symbol]??0)+1);
-      const ready=recovery.entryReady&&(this.sessionWarmup[symbol]??0)>=2&&this.runtime.contractMeta[symbol]!=null;
+      this.sessionWarmup[symbol]=Math.min(1,(this.sessionWarmup[symbol]??0)+1);
+      const ready=recovery.entryReady&&(this.sessionWarmup[symbol]??0)>=1&&this.runtime.contractMeta[symbol]!=null;
       const mid=(bid+ask)/2;
       this.runtime.evidence[symbol]={midpoint:mid,bestBid:bid,bestAsk:ask,observedAt:at,
         warmup:this.sessionWarmup[symbol]??0,fresh:true,ancillaryFresh:true,optionalFresh:true,entryReady:ready,
