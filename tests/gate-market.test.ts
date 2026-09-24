@@ -26,7 +26,7 @@ test("single-contract ticker BBO is a lightweight executable fallback",async()=>
   await withFetch([{contract:"NEAR_USDT",highest_bid:"5.10",highest_size:"20",lowest_ask:"5.11",lowest_size:"25"}],async()=>{
     const bbo=await fetchTickerBbo("NEAR_USDT",.001,.1);
     assert.equal(bbo.bids[0]!.price,5.10);assert.equal(bbo.asks[0]!.price,5.11);
-    assert.equal(bbo.bids[0]!.size,10.2);assert.equal(bbo.asks[0]!.size,12.775);
+    assert.ok(Math.abs(bbo.bids[0]!.size-10.2)<1e-10);assert.ok(Math.abs(bbo.asks[0]!.size-12.775)<1e-10);
     assert.ok(bbo.observedAt>=before&&bbo.observedAt<=Date.now());
   });
 });
