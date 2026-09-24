@@ -251,7 +251,7 @@ function earlyReleaseSetup(s:RegionLaunchState,rows:RegionCandle[],current:Regio
   // avoids waiting several minutes only to chase the same valid release later.
   const active=current??latest,fiveMetrics=microDirectionalBar(active,side),
     multiple=Math.abs(active.close-active.open)/Math.max(s.averageRange,1e-12);
-  const hasBarrier=barrierPrice(s,side)!=null,minimumMultiple=hasBarrier?1.45:1.25;
+  const hasBarrier=barrierPrice(s,side)!=null,minimumMultiple=hasBarrier?1.40:1.15;
   const progress=d*(latest.close/Math.max(trigger,1e-12)-1);
   const strong=multiple>=minimumMultiple&&fiveMetrics.bodyRate>0&&metrics.bodyRate>=Math.max(.0008,costRate*.25)
     &&metrics.closeLocation>=.70&&metrics.wickToBody<=.65&&progress>=Math.max(.0005,costRate*.15);
