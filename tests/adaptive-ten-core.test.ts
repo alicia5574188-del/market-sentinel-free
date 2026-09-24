@@ -72,7 +72,7 @@ test("fast quote loop cannot open a premium region trade before any Forward Rela
   let state=initialForward(now-60_000);state.lastCandleAt=candleAt;
   state.regions[symbol]={id:"fixture-region",symbol,confirmedAt:candleAt-300_000,lower:99.8,upper:100.2,center:100,widthRate:.004,bars:10,quality:80,state:"ABOVE",lastSeenAt:now};
   assert.equal(state.relationEngine.samples.length,0);assert.equal(state.relationEngine.rules.length,0);
-  state=advanceForward({state,now,paths:{[symbol]:rows},quotes:{[symbol]:q(price,now)},contracts:{[symbol]:contract},entrySymbols:[symbol],allowDataCycle:false}).state;
+  state=advanceForward({state,now,paths:{[symbol]:rows},quotes:{[symbol]:{bestBid:price*.9999,bestAsk:price*1.0001,observedAt:now,fresh:true,entryReady:true}},contracts:{[symbol]:contract},entrySymbols:[symbol],allowDataCycle:false}).state;
   assert.equal(state.positions.length,0,"premium region execution must never bypass empty relation authority");
   assert.equal(state.opportunities.some(o=>o.premium&&o.eligible),false);
 });
