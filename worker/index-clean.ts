@@ -3441,7 +3441,6 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   async alarm(info?: { isRetry?: boolean; retryCount?: number }) {
     const now = Date.now();
-    this.clearRetiredLiveTransportError();
     if (info?.isRetry) {
       const persistedAlarm = await this.ctx.storage.getAlarm();
       if (persistedAlarm != null && persistedAlarm > now) {
