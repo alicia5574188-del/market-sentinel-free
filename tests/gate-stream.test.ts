@@ -12,8 +12,8 @@ class FakeSocket {
   addEventListener(type:string,listener:(event:{data?:unknown})=>void){this.listeners.set(type,listener);}
   message(data:unknown){this.listeners.get("message")?.({data:JSON.stringify(data)});}
 }
-const message=(at=now,id=10)=>({channel:"futures.order_book",event:"all",result:{contract:"BTC_USDT",t:at,id,
-  bids:[{p:"100",s:"2.5"},{p:"99",s:"3"}],asks:[{p:"101",s:"1.25"},{p:"102",s:"4"}]}});
+const message=(at=now,id=10)=>({channel:"futures.book_ticker",event:"update",result:{s:"BTC_USDT",t:at,u:id,
+  b:"100",B:"2.5",a:"101",A:"1.25"}});
 async function fixture(run:(feed:GateStreamingFeed,sockets:FakeSocket[],clock:(at:number)=>void)=>Promise<void>){
   const prior=globalThis.fetch,oldNow=Date.now,sockets:FakeSocket[]=[];let at=now;
   Date.now=()=>at;
@@ -27,23 +27,23 @@ async function fixture(run:(feed:GateStreamingFeed,sockets:FakeSocket[],clock:(a
   finally{globalThis.fetch=prior;Date.now=oldNow;}
 }
 
-test("Gate stream subscribes bounded full depth and closed candle channels without private credentials",()=>fixture(async(feed,sockets)=>{
+test("Gate stream subscribes realtime best bid/ask and closed candle channels without private credentials",()=>fixture(async(feed,sockets)=>{
   assert.ok(sockets[0]!.accepted);
   const requests=sockets[0]!.sent.map(row=>JSON.parse(row));
-  assert.deepEqual(requests.map(row=>row.payload),[["BTC_USDT","20","0"],["1m","BTC_USDT"],["5m","BTC_USDT"]]);
+  assert.deepEqual(requests.map(row=>row.payload),[["BTC_USDT"],["1m","BTC_USDT"],["5m","BTC_USDT"]]);
+  assert.equal(requests[0]!.channel,"futures.book_ticker");
   assert.ok(requests.every(row=>!row.auth));
   sockets[0]!.message(message());
   const book=feed.book("BTC_USDT",.1,.01,now)!;
-  assert.equal(book.observedAt,now);assert.equal(book.sequence,10);assert.equal(book.bids.length,2);
+  assert.equal(book.observedAt,now);assert.equal(book.sequence,10);assert.equal(book.bids.length,1);
   assert.equal(book.bids[0]!.size,2.5);assert.equal(book.asks[0]!.size,1.2625);
   assert.equal(feed.status(now).freshBooks,1);
 }));
 
-test("partial delta, crossed, stale, future and out-of-order messages cannot replace a valid Gate book",()=>fixture(async(feed,sockets)=>{
+test("crossed, stale, future and out-of-order BBO updates cannot replace a valid Gate book",()=>fixture(async(feed,sockets)=>{
   const socket=sockets[0]!;socket.message(message());
-  socket.message({...message(now+1,11),event:"update"});
   socket.message(message(now-6000,12));socket.message(message(now+2000,13));socket.message(message(now,9));
-  const crossed=message(now,14);crossed.result.bids[0]!.p="102";socket.message(crossed);
+  const crossed=message(now,14);crossed.result.b="102";socket.message(crossed);
   assert.equal(feed.book("BTC_USDT",.1,1,now)?.sequence,10);
   assert.equal(feed.book("BTC_USDT",.1,1,now+5001),null,"unchanged local cache must not refresh exchange time");
 }));
