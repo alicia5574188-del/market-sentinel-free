@@ -121,14 +121,14 @@ test("FOLKS-like rejection with positive target space but terrible reward versus
 
 test("RegionLaunch is executable only after ignition and while chase distance remains bounded",()=>{
   const launch=base({entryModel:"REGION_LAUNCH",signalPrice:101.60,stopPrice:100.95,
-    launchTriggerPrice:101.05,launchExpectedMoveRate:.04,launchMaxChaseRate:.012});
+    launchTriggerPrice:101.05,launchExpectedMoveRate:.04,launchMaxChaseRate:.004});
   const accepted=run(launch,101.58,101.60);
   assert.equal(accepted.ok,true);
   if(accepted.ok){
     assert.ok(accepted.plan.plannedRisk<=6.01);
     assert.ok(accepted.plan.notional<=600.01);
   }
-  const chased=run(launch,102.50,102.52);
+  const chased=run(launch,102.20,102.22);
   assert.equal(chased.ok,false);
   if(!chased.ok)assert.match(chased.reason,/追价距离/);
 });
