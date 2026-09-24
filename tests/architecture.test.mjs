@@ -17,6 +17,12 @@ test("Forward Relation 2.0 is the only PAPER strategy authority and retired stra
   assert.match(core,/ROTATION_GAP=10/);
   assert.match(core,/TOTAL_RISK_RATE=\.10/);
   assert.match(core,/SIDE_RISK_RATE=\.065/);
+  const minute=core.slice(core.indexOf("export function forwardUrgentMinuteSymbols"),core.indexOf("export function forwardWatchSymbols"));
+  assert.doesNotMatch(minute,/s\.positions/);
+  assert.match(minute,/o\.premium&&o\.eligible/);
+  const rotation=core.slice(core.indexOf("function rotateIfNeeded"),core.indexOf("function fillSeats"));
+  assert.match(rotation,/sideFull/);assert.match(rotation,/existingRisk\(s,candidate\.side\)/);
+  assert.match(rotation,/structuredClone\(s\)/);
 });
 
 test("runtime alarm uses the slim market path and no strategy cutover can reset PAPER",async()=>{
