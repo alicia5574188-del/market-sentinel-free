@@ -47,7 +47,7 @@ export type Region={
   quality:number;state:RegionState;lastSeenAt:number;
 };
 export type Opportunity={
-  id:string;symbol:string;side:"LONG"|"SHORT";mode:OpportunityMode;premium:boolean;score:number;eligible:boolean;
+  id:string;symbol:string;side:"LONG"|"SHORT";mode:OpportunityMode;premium:boolean;reserve?:boolean;score:number;eligible:boolean;
   completedAt:number;expiresAt:number;price:number;stopPrice:number;targetPrice:number;directionStrength:number;
   pathEfficiency:number;momentumPersistence:number;positionScore:number;spaceScore:number;executionScore:number;
   grossRemainingSpaceRate:number;netRemainingSpaceRate:number;pullbackRiskRate:number;edgeRatio:number;
@@ -57,7 +57,7 @@ export type SampleMemory={count:number;emaNetRate:number;emaMfeRate:number;emaMa
 export type MarketPulse={at:number;up:number;down:number;neutral:number;bias:"UP"|"DOWN"|"MIXED";strength:number;expansion:number};
 
 export type EntryContext={
-  version:"adaptive-ten-entry-v1";capturedAt:number;timeframe:"5m";side:"LONG"|"SHORT";mode:OpportunityMode;
+  version:"adaptive-ten-entry-v1";capturedAt:number;timeframe:"5m";side:"LONG"|"SHORT";mode:OpportunityMode;reserve?:boolean;
   reason:string;entryScore:number;directionStrength:number;spaceScore:number;positionScore:number;executionScore:number;
   remainingSpaceRate:number;pullbackRiskRate:number;edgeRatio:number;expectedHoldMinutes:number;marketFit:number;
   regionId:string|null;regionLower?:number;regionUpper?:number;regionCenter?:number;
@@ -268,12 +268,14 @@ function flowOpportunity(s:ForwardState,symbol:string,rows:Candle[],q:Quote|unde
   const exec=executionScore(q,now),fit=pulse.bias==="MIXED"?55:pulse.bias===(side==="LONG"?"UP":"DOWN")?80:35;
   let score=.42*directionStrength+.28*spaceScore+.15*positionScore+.10*exec+.05*fit+sampleAdjustment(s,"FLOW",side,pulse);
   score=clip(score,0,100);const stopRate=Math.min(.018,Math.max(.0045,pullback,st.atr*1.15)),price=st.last.close;
-  return{id:`flow-${symbol}-${st.last.time}`,symbol,side,mode:"FLOW",premium:false,score,eligible:score>=50&&directionStrength>=42&&net>=.0012&&edge>=.55&&positionScore>=12,
+  const primary=score>=50&&directionStrength>=42&&net>=.0012&&edge>=.55&&positionScore>=12;
+  const reserve=!primary&&score>=42&&directionStrength>=34&&net>=.0004&&edge>=.25&&positionScore>=8;
+  return{id:`flow-${symbol}-${st.last.time}`,symbol,side,mode:"FLOW",premium:false,reserve,score,eligible:primary||reserve,
     completedAt:(st.last.time+300)*1000,expiresAt:now+12*60_000,price,stopPrice:price*(1-d*stopRate),
     targetPrice:price*(1+d*Math.max(gross,.004)),directionStrength,pathEfficiency:100*efficiency,momentumPersistence:100*persistence,
     positionScore,spaceScore,executionScore:exec,grossRemainingSpaceRate:gross,netRemainingSpaceRate:net,pullbackRiskRate:pullback,
-    edgeRatio:edge,expectedHoldMinutes:30,marketFit:fit,regionId:null,regionQuality:null,
-    reason:`5m ${side} 持续参与｜方向${directionStrength.toFixed(0)}｜净空间${(net*100).toFixed(2)}%｜位置${positionScore.toFixed(0)}｜评分${score.toFixed(0)}`};
+    edgeRatio:edge,expectedHoldMinutes:reserve?20:30,marketFit:fit,regionId:null,regionQuality:null,
+    reason:`5m ${side} ${reserve?"空席补位":"持续参与"}｜方向${directionStrength.toFixed(0)}｜净空间${(net*100).toFixed(2)}%｜位置${positionScore.toFixed(0)}｜评分${score.toFixed(0)}`};
 }
 function regionOpportunities(s:ForwardState,symbol:string,rows:Candle[],minute:Candle[]|undefined,q:Quote|undefined,now:number,pulse:MarketPulse,region:Region){
   const out:Opportunity[]=[],st=pathStats(rows),last=st.last,prev=rows.at(-2)!,price=last.close,exec=executionScore(q,now);
@@ -365,7 +367,7 @@ function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
     t.holdValue={action:t.holdScore<30?"EXIT_RISK":"HOLD",pullbackRiskRate:t.entryContext?.pullbackRiskRate??.01,
       bestHoldMinutes:t.expectedHoldMinutes??30,score:t.holdScore};
     const stopped=t.side==="LONG"?px<=t.stopPrice:px>=t.stopPrice;
-    const marketFlip=!!opp&&opp.eligible&&opp.score>=66&&opp.score>(same?.score??0)+8;
+    const marketFlip=!!opp&&!opp.reserve&&opp.eligible&&opp.score>=66&&opp.score>(same?.score??0)+8;
     const expected=t.expectedHoldMinutes??30,timeFailure=ageMin>=Math.max(8,expected*.65)&&!t.firstProfitAt&&favorable<ROUND_TRIP_COST;
     const hardTime=ageMin>=expected*2.5&&favorable<Math.max(.003,t.adverse*.5);
     if(stopped||marketFlip||timeFailure||hardTime){closeTrade(s,t,px,now,stopped?(t.profitFloorRate??0)>0?"PROFIT_GIVEBACK":"STRUCTURE_STOP":
@@ -373,7 +375,7 @@ function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
   }
   if(closed.size)s.positions=s.positions.filter(t=>!closed.has(t.id));
 }
-function candidateRiskRate(o:Opportunity){return o.mode==="RANGE"?.006:o.premium?.009:.008;}
+function candidateRiskRate(o:Opportunity){return o.reserve?.004:o.mode==="RANGE"?.006:o.premium?.009:.008;}
 function existingRisk(s:ForwardState,side?:"LONG"|"SHORT"){return s.positions.filter(t=>!side||t.side===side).reduce((n,t)=>n+t.plannedRisk,0);}
 function openTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number){
   const side=o.side,d=dir(side),price=side==="LONG"?q.bestAsk:q.bestBid,stopRate=Math.abs(price-o.stopPrice)/price;
@@ -398,7 +400,7 @@ function openTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:nu
     quantoMultiplier:mult,notional,leverage,margin,plannedRisk,stopPrice:o.stopPrice,armPrice:target,favorable:0,adverse:0,lastPrice:price,
     lastQuoteAt:q.observedAt,entryFee,exitFee:0,fundingAllowance:0,grossPnl:null,netPnl:null,exitReason:null,relationFailureBars:0,lastRelationBar:now,
     execution:"REAL_QUOTE_PAPER_MODEL",liveEligible:false,firstProfitAt:null,holdScore:o.score,profitFloorRate:0,expectedHoldMinutes:o.expectedHoldMinutes,
-    peakPnlRate:0,exitControl:{policy:ADAPTIVE_ENGINE_VERSION,armedAt:null,armedQuoteAt:null,maxObservationGapMs:30_000,maxQuoteAgeMs:10_000},entryContext:{version:"adaptive-ten-entry-v1",capturedAt:now,timeframe:"5m",side,mode:o.mode,reason:o.reason,entryScore:o.score,
+    peakPnlRate:0,exitControl:{policy:ADAPTIVE_ENGINE_VERSION,armedAt:null,armedQuoteAt:null,maxObservationGapMs:30_000,maxQuoteAgeMs:10_000},entryContext:{version:"adaptive-ten-entry-v1",capturedAt:now,timeframe:"5m",side,mode:o.mode,reserve:o.reserve===true,reason:o.reason,entryScore:o.score,
       directionStrength:o.directionStrength,spaceScore:o.spaceScore,positionScore:o.positionScore,executionScore:o.executionScore,
       remainingSpaceRate:o.netRemainingSpaceRate,pullbackRiskRate:o.pullbackRiskRate,edgeRatio:o.edgeRatio,expectedHoldMinutes:o.expectedHoldMinutes,
       marketFit:o.marketFit,regionId:o.regionId,...(region?{regionLower:region.lower,regionUpper:region.upper,regionCenter:region.center}:{})},
@@ -413,7 +415,7 @@ function rankedEligible(s:ForwardState,now:number){
 }
 function rotateIfNeeded(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,equity:number){
   if(s.positions.length<ADAPTIVE_TARGET_POSITIONS||now-s.lastRotationAt<ROTATION_COOLDOWN_MS)return false;
-  const candidate=rankedEligible(s,now)[0];if(!candidate)return false;
+  const candidate=rankedEligible(s,now).find(o=>!o.reserve);if(!candidate)return false;
   const weak=[...s.positions].sort((a,b)=>(a.holdScore??50)-(b.holdScore??50))[0];if(!weak)return false;
   const weakScore=weak.holdScore??50;if(candidate.score<weakScore+ROTATION_GAP)return false;
   const qOld=quotes[weak.symbol],qNew=quotes[candidate.symbol],meta=contracts[candidate.symbol];
@@ -490,7 +492,7 @@ export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iter
   return forwardUrgentQuoteSymbols(s,now,entrySymbols).slice(0,ADAPTIVE_REALTIME_POSITION_CAP);
 }
 export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:number){
-  const mark=equityMark(s,quotes,now),eligible=s.opportunities.filter(o=>o.eligible&&o.expiresAt>now);
+  const mark=equityMark(s,quotes,now),eligible=s.opportunities.filter(o=>o.eligible&&o.expiresAt>now),reserve=eligible.filter(o=>o.reserve);
   return{version:s.version,engineVersion:ADAPTIVE_ENGINE_VERSION,grammar:ADAPTIVE_ENGINE_VERSION,mode:"REAL_FEED_PAPER",liveEligible:false,
     strategyAuthorityVersion:ADAPTIVE_ENGINE_VERSION,executionVersion:ADAPTIVE_ENGINE_VERSION,regionVersion:"adaptive-region-v1",
     regionLaunchVersion:"adaptive-region-v1",policyVersion:ADAPTIVE_ENGINE_VERSION,exitPolicyVersion:ADAPTIVE_ENGINE_VERSION,
@@ -501,11 +503,11 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     opportunities:s.opportunities,entryOpportunities:s.opportunities,regions:Object.values(s.regions),marketPulse:s.marketPulse,
     marketCount:s.selectedSymbols.length,markets:s.selectedSymbols,latestReason:s.latestReason,entryDiagnostics:s.entryDiagnostics,
     fitDiagnostics:s.fitDiagnostics,storage:s.storage,targetPositions:ADAPTIVE_TARGET_POSITIONS,realtimePositionCap:ADAPTIVE_REALTIME_POSITION_CAP,
-    seatCount:s.positions.length,eligibleCount:eligible.length,premiumCount:eligible.filter(o=>o.premium).length,
+    seatCount:s.positions.length,eligibleCount:eligible.length,reserveCount:reserve.length,premiumCount:eligible.filter(o=>o.premium).length,
     boundaries:{scope:"PAPER_AUTHORITY",grammar:"5m方向—空间持续参与 + 成熟区域高级机会；1m只做精确确认；所有候选与持仓统一评分竞争约10个席位。",
       historyBackfill:false,sampleMeaning:"实时市场方向优先；旧样本只提供小幅评分修正，不能否决当前方向。",
       accounting:"模拟使用新鲜买卖价并计入手续费、滑点和资金费占位；同一持久化Trade事件供实盘执行。",
-      risk:"组合计划风险≤10%，同方向≤6.5%，保证金≤75%；普通单约0.8%风险，高级区域单约0.9%，固定8–10倍范围。",
+      risk:"组合计划风险≤10%，同方向≤6.5%，保证金≤75%；普通单约0.8%风险，空席补位单约0.4%，高级区域单约0.9%，固定8–10倍范围。",
       validation:"入场后是否快速浮赢直接影响持仓评分；长期围绕成本或很快浮亏会降级并可被替换。",
       liquidation:"结构止损 + 时间失败 + 市场反转 + 机会替换 + MFE利润保护；1R后逐步提高保护，2R附近约保留80%峰值利润。"},
     cost:PAPER_COST,nextCycleAt:s.lastCandleAt+BAR_MS};
