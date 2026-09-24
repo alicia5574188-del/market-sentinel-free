@@ -1,0 +1,46 @@
+name: Regime Universe Expansion Research
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-regime-universe-expansion.mjs"
+      - ".github/workflows/regime-universe-expansion.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Fetch expanded current 12-month Gate 5m dataset
+        env:
+          RESEARCH_INTERVAL: 5m
+          RESEARCH_DATASET: /tmp/gate-history-expanded-12m.json
+          RESEARCH_MONTHS: 202509,202510,202511,202512,202601,202602,202603,202604,202605,202606,202607,202608
+          RESEARCH_SYMBOLS: BTC_USDT,ETH_USDT,SOL_USDT,XRP_USDT,BNB_USDT,DOGE_USDT,ADA_USDT,LINK_USDT,LTC_USDT,AVAX_USDT,BCH_USDT,SUI_USDT,UNI_USDT,DOT_USDT,ZEC_USDT,STORJ_USDT,LSK_USDT
+          RESEARCH_MIN_CONTRACTS: 12
+          RESEARCH_MIN_MONTH_COVERAGE: 0.98
+          RESEARCH_CONCURRENCY: 12
+        run: node scripts/fetch-gate-history.mjs
+      - name: Replay exact production regime module on core and expanded universes
+        env:
+          RESEARCH_DATASET: /tmp/gate-history-expanded-12m.json
+          UNIVERSE_OUTPUT: /tmp/regime-universe-expansion.json
+        run: node --experimental-strip-types scripts/research-regime-universe-expansion.mjs
+      - name: Print expansion decision
+        run: jq '{replacementCandidate,months,coreSymbols,expandedSymbols,satellites,core:{trades:.core.trades,netPnl:.core.netPnl,profitFactor:.core.profitFactor,maxDrawdown:.core.maxDrawdown,positiveMonths:.core.positiveMonths},expanded:{trades:.expanded.trades,netPnl:.expanded.netPnl,profitFactor:.expanded.profitFactor,maxDrawdown:.expanded.maxDrawdown,positiveMonths:.expanded.positiveMonths},satellitePnl,frequencyGain,gates}' /tmp/regime-universe-expansion.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: regime-universe-expansion-research
+          path: /tmp/regime-universe-expansion.json
+          retention-days: 7
