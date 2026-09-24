@@ -39,7 +39,7 @@ test("an inner move cannot launch while price has not left the full wick envelop
 
 test("unfinished 5m fast path requires a several-times-average full-box departure before 1m ignition",()=>{
   let states=armed();
-  const breakout=bar(0,101.02,102.45,101.00,102.35);
+  const breakout=bar(0,100.95,103.30,100.92,103.20);
   states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[breakout]},now:(START+60)*1000,costRate:.0022}).states;
   assert.equal(states.BCH_USDT?.phase,"IGNITION");
   assert.equal(states.BCH_USDT?.launchPath,"FAST");
@@ -48,10 +48,10 @@ test("unfinished 5m fast path requires a several-times-average full-box departur
 
 test("a once-fast unfinished 5m move loses entry authority immediately when its body collapses",()=>{
   let states=armed();
-  const first=bar(0,101.02,102.45,101.00,102.35);
+  const first=bar(0,100.95,103.30,100.92,103.20);
   states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[first]},now:(START+60)*1000,costRate:.0022}).states;
   assert.equal(states.BCH_USDT?.phase,"IGNITION");
-  const fade=bar(60,102.35,102.38,101.35,101.42);
+  const fade=bar(60,103.20,103.22,101.35,101.42);
   states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[first,fade]},now:(START+120)*1000,costRate:.0022}).states;
   assert.equal(states.BCH_USDT?.phase,"ARMED");
   assert.equal(states.BCH_USDT?.ignitionAt,null);
@@ -60,9 +60,9 @@ test("a once-fast unfinished 5m move loses entry authority immediately when its 
 
 test("strong 1m impulse plus genuinely small pullback and full restart becomes READY",()=>{
   let states=armed();
-  const breakout=bar(0,101.02,102.45,101.00,102.35);
-  const pullback=bar(60,102.35,102.37,102.05,102.12);
-  const restart=bar(120,102.12,102.56,102.10,102.52);
+  const breakout=bar(0,100.95,103.30,100.92,103.20);
+  const pullback=bar(60,103.20,103.22,102.80,102.88);
+  const restart=bar(120,102.88,103.35,102.86,103.32);
   states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[breakout]},now:(START+60)*1000,costRate:.0022}).states;
   states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[breakout,pullback]},now:(START+120)*1000,costRate:.0022}).states;
   assert.equal(states.BCH_USDT?.phase,"IGNITION");
@@ -74,7 +74,7 @@ test("strong 1m impulse plus genuinely small pullback and full restart becomes R
 
 test("deep or cumulative opposite pullback cancels the ignition but preserves the mature region",()=>{
   let states=armed();
-  const breakout=bar(0,101.02,102.45,101.00,102.35),deep=bar(60,102.35,102.38,101.55,101.62);
+  const breakout=bar(0,100.95,103.30,100.92,103.20),deep=bar(60,103.20,103.22,101.55,101.62);
   states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[breakout]},now:(START+60)*1000,costRate:.0022}).states;
   states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[breakout,deep]},now:(START+120)*1000,costRate:.0022}).states;
   assert.equal(states.BCH_USDT?.phase,"ARMED");assert.equal(states.BCH_USDT?.motherRegionId,"mother");
@@ -102,7 +102,7 @@ test("slow path waits for a long-body 5m close outside the entire region and the
 
 test("missing or late 1m data never creates a retroactive chase",()=>{
   let states=armed();
-  const late=bar(0,101.02,102.45,101.00,102.35);
+  const late=bar(0,100.95,103.30,100.92,103.20);
   states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[late]},now:(START+240)*1000,costRate:.0022}).states;
   assert.notEqual(states.BCH_USDT?.phase,"READY");
   assert.equal(advanceRegionLaunchQuotes({states,quotes:{BCH_USDT:q(102.35,(START+241)*1000)},now:(START+241)*1000,costRate:.0022}).signals.length,0);
