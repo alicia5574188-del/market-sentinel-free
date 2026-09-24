@@ -331,7 +331,8 @@ test("production gates follow the current RegionLaunch PAPER authority", async (
   const currentGates=workflow.slice(workflow.lastIndexOf("- name: Verify advancing production health"));
   assert.equal((currentGates.match(/runtime\.limits\.scanUniverse == 30/g) ?? []).length,2);
   assert.equal((currentGates.match(/runtime\.limits\.realtimeCapacity == 11/g) ?? []).length,2);
-  assert.equal((workflow.match(/grep -Fq '哨兵 · RegionLaunch'/g) ?? []).length,2);
+  assert.equal((workflow.match(/grep -Fq '哨兵 · RegionLaunch'/g) ?? []).length,0);
+  assert.equal((workflow.match(/release-check: exact-build-sha-ok/g) ?? []).length,1);
   assert.doesNotMatch(workflow,/runtime\.strategyArena\.rules\.strategyName == "五行情独立账户组合"/);
   assert.doesNotMatch(workflow,/runtime\.strategyData\.hourlyRequiredCandles == 721/);
   assert.match(workflow, /deployment-plan/);
