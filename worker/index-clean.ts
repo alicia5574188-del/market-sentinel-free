@@ -2824,8 +2824,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private async processAdaptiveBooks(now:number,cycleSymbols=[...this.runtime.symbols]) {
     if(this.forwardState){
-      this.ctx.waitUntil(this.gateStream.ensure(this.runtime.symbols,
-        forwardUrgentMinuteSymbols(this.forwardState,this.runtime.liquidUniverse),this.strategyPathSymbols(),now));
+      // Gate public websocket is execution-only. Bybit/Binance own continuous
+      // analysis candles; Gate does not carry the 30-market scan anymore.
+      this.ctx.waitUntil(this.gateStream.ensure(this.runtime.symbols,[],[],now));
     }
     const urgent=new Set([...this.currentAuthorityProtectionSymbols(),...this.forwardUrgentSymbols(now)]);
     const streamBook=(symbol:string)=>this.gateStream.book(symbol,this.runtime.tickSize[symbol]??.0001,
