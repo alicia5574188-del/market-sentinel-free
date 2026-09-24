@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {advanceForward,forwardEquity,initialForward,type Candle,type Contract,type Opportunity,type Quote} from "../lib/forward-relations.ts";
+import {fillForwardPortfolio,forwardEquity,initialForward,type Candle,type Contract,type Opportunity,type Quote} from "../lib/forward-relations.ts";
 import {buildProportionalMirror,forwardMirrorSources,liveEntryDriftGuard,mirrorSourceFresh} from "../lib/live-parity.ts";
 import {sourceAfterEnable,startLiveSession} from "../lib/live-session.ts";
 
@@ -22,8 +22,7 @@ function source(){
     expectedHoldMinutes:60,marketFit:80,regionId:null,regionQuality:null,reason:"已成熟Forward关系的LIVE同源测试事件",
     relationRuleId:"fixture-rule",relationStatus:"ACTIVE",relationHorizon:60,relationHealth:.85,riskScale:.85};
   s.opportunities=[opportunity];s.lastCandleAt=now;
-  s=advanceForward({state:s,now,paths:{BTC_USDT:path},quotes:{BTC_USDT:q(price,now)},contracts:{BTC_USDT:contract},
-    entrySymbols:["BTC_USDT"],allowDataCycle:false}).state;
+  fillForwardPortfolio(s,{BTC_USDT:q(price,now)},{BTC_USDT:contract},now,1000,false);
   assert.equal(s.positions.length,1);return{s,trade:s.positions[0]!,now,price};
 }
 
