@@ -346,7 +346,16 @@ export class GateLiveClient {
   }
 
   async snapshot(): Promise<GateLiveSnapshot> {
-    const [core,orders]=await Promise.all([this.snapshotCore(),this.snapshotOrders()]);
+    // Drain both read lanes before reporting failure. Otherwise a rejected core
+    // lane could leave signed order-list requests alive after the caller already
+    // started its next reconciliation pass.
+    const [coreResult,orderResult]=await Promise.allSettled([this.snapshotCore(),this.snapshotOrders()]);
+    if(coreResult.status==="rejected"){
+      if(orderResult.status==="rejected")void orderResult.reason;
+      throw coreResult.reason;
+    }
+    if(orderResult.status==="rejected")throw orderResult.reason;
+    const core=coreResult.value,orders=orderResult.value;
     return{account:core.account,positions:core.positions,orders:orders.orders,priceOrders:orders.priceOrders,
       checkedAt:Math.max(core.checkedAt,orders.checkedAt)};
   }
