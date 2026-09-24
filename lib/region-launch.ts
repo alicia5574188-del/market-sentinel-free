@@ -258,14 +258,23 @@ export function advanceRegionLaunchMinutes(input:{states:Record<string,RegionLau
       s.launchPath=undefined;clearIgnition(s);clearReady(s);s.reason=reason;};
     if(five.state==="FAIL"){cancel(five.reason);states[symbol]=s;continue;}
     if(five.state==="WAIT"){
-      if(s.launchPath==="FAST"&&s.ignitionSide&&s.ignitionAt!=null&&s.breakoutOpen!=null&&s.breakoutHigh!=null&&s.breakoutLow!=null&&s.breakoutClose!=null){
-        const checked=evaluateMicroRestart({breakout:{time:(s.ignitionAt-60_000)/1000,open:s.breakoutOpen,high:s.breakoutHigh,
-          low:s.breakoutLow,close:s.breakoutClose,volume:0},following:rows.filter(r=>minuteCompleteAt(r)>s.ignitionAt!),
-          side:s.ignitionSide,triggerPrice:s.triggerPrice!,costRate:input.costRate,regionWidthRate:s.motherWidthRate});
-        if(checked.state==="FAIL"){cancel(checked.reason);states[symbol]=s;continue;}
+      // FAST authority exists only while the unfinished 5m candle itself still
+      // satisfies the several-times-average full-box departure. If that body
+      // shrinks, discard the old 1m ignition immediately. A later entry must
+      // either regain FAST strength or wait for a valid outside 5m close.
+      if(s.launchPath==="FAST"){
+        s.phase="ARMED";clearIgnition(s);clearReady(s);
+        s.reason="未收盘5分钟K已失去异常强离区强度；此前1分钟点火资格立即失效，等待重新变强或5分钟有效收盘。";
+        states[symbol]=s;continue;
       }
       if(s.phase==="READY"){s.phase="IGNITION";clearReady(s);}
       s.reason=five.reason;states[symbol]=s;continue;
+    }
+    if(s.launchPath==="FAST"&&five.state==="CLOSED"){
+      // The candle once qualified as an unfinished FAST move but finished below
+      // the FAST threshold. Do not grandfather the early 1m signal: restart from
+      // the actual closed 5m bar and require fresh post-close 1m confirmation.
+      s.phase="ARMED";clearIgnition(s);clearReady(s);
     }
     if(s.ignitionSide&&s.ignitionSide!==five.side){cancel("5分钟离区方向已改变；取消原方向追击，等待新的完整结构。");states[symbol]=s;continue;}
     s.fiveMinuteBodyMultiple=five.bodyMultiple;
@@ -322,13 +331,13 @@ export function advanceRegionLaunchMinutes(input:{states:Record<string,RegionLau
       }else if(evaluated.restartAt!=null&&evaluated.restartPrice!=null){
         const side=ignitionSide,d=side==="LONG"?1:-1,trigger=triggerPrice;
         const impulse=d*(evaluated.restartPrice/trigger-1);
-        const maxChase=Math.max(.009,Math.min(.025,Math.max(s.motherWidthRate*.60,input.costRate*4)));
+        const maxChase=Math.max(.006,Math.min(.015,Math.max(s.motherWidthRate*.45,input.costRate*3)));
         if(input.now-evaluated.restartAt>75_000){
           s.phase="WATCH";s.cooldownUntil=input.now+REGION_BAR_MS;clearIgnition(s);clearReady(s);
           s.reason="RegionLaunch重新启动1分钟K到达过晚；只记录结构，不历史补追。";
         }else if(impulse>maxChase){
           s.phase="WATCH";s.cooldownUntil=evaluated.restartAt+REGION_BAR_MS;clearIgnition(s);clearReady(s);
-          s.reason="RegionLaunch小回调后重新启动，但确认时离发射边界过远；不补追，等待新的压缩或更好位置。";
+          s.reason="RegionLaunch重新启动成立，但确认时已经离完整缠绕边界过远；不补追，等待新的区域或更好位置。";
         }else{
           const support=evaluated.supportPrice!,microBuffer=Math.max(trigger*.0015,s.compression.width*.08,input.costRate*trigger*.30);
           // Never truncate the actual pullback structure to make a trade fit.
@@ -361,7 +370,7 @@ export function advanceRegionLaunchQuotes(input:{states:Record<string,RegionLaun
     if(progress<=0){s.failedDepartures++;s.phase="ARMED";s.cooldownUntil=0;clearReady(s);clearIgnition(s);
       s.reason="RegionLaunch 1分钟重新顺向确认后，实时盘口又跌回发射边界；取消本次追击但继续保留母区域。";}
     else if(progress>signal.launchMaxChaseRate){s.phase="WATCH";s.cooldownUntil=input.now+REGION_BAR_MS;clearReady(s);clearIgnition(s);
-      s.reason="RegionLaunch确认后当前盘口已经超过允许追价距离；不补追，等待新的压缩。";}
+      s.reason="RegionLaunch确认后当前盘口已经超过允许追价距离；不补追，等待新的完整区域机会。";}
     else signals.push(signal);
     s.updatedAt=input.now;states[symbol]=s;
   }
