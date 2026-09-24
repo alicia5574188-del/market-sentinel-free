@@ -2792,7 +2792,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const last=Math.max(this.forwardMinuteCandles[symbol]?.at(-1)?.time??0,this.gateStream.path(symbol,"1m").at(-1)?.time??0);
       return!last||(last+60)*1000<targetCompletedAt;
     }).slice(0,4);
-    const results=await Promise.allSettled(due.map(async symbol=>({symbol,rows:await fetchStructureCandles(symbol,"1m",90)})));
+    const results=await Promise.allSettled(due.map(async symbol=>{
+      const external=await this.marketHub.candles(symbol,"1m",90);
+      if(external)return{symbol,rows:external.rows,source:external.source};
+      return{symbol,rows:await fetchStructureCandles(symbol,"1m",90),source:"GATE" as const};
+    }));
     results.forEach((result,index)=>{
       const symbol=due[index]!;
       if(result.status!=="fulfilled"){this.forwardMinuteRetryAt.set(symbol,now+5000);return;}
@@ -2892,29 +2896,25 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private async refreshAdaptiveCandles(now=Date.now()){
     const symbols=this.strategyPathSymbols();if(!symbols.length)return 0;
     const targetCompletedAt=latestCompletedStrategyCandleAt(now);
-    for(const symbol of symbols){
-      const prior=this.strategyCandles[symbol]??[];
-      if(!prior.length)continue;
-      const tail=this.gateStream.path(symbol,"5m").filter(row=>row.time>(prior.at(-1)?.time??0));
-      if(tail.length&&tail[0]!.time===prior.at(-1)!.time+300
-        &&tail.every((row,i)=>!i||row.time===tail[i-1]!.time+300))
-        this.strategyCandles[symbol]=mergeStrategyCandlePath(prior,tail);
-    }
     const due=symbols.filter(symbol=>{
       const last=this.strategyCandles[symbol]?.at(-1);
       return !last||(last.time+300)*1000<targetCompletedAt;
     }).slice(0,5);
-    const results=await Promise.allSettled(due.map(async symbol=>({symbol,
-      rows:await fetchStructureCandles(symbol,"5m",(this.strategyCandles[symbol]?.length??0)>=120?6:120)})));
+    const results=await Promise.allSettled(due.map(async symbol=>{
+      const external=await this.marketHub.candles(symbol,"5m",120);
+      if(external)return{symbol,rows:external.rows,replace:true,source:external.source};
+      const rows=await fetchStructureCandles(symbol,"5m",(this.strategyCandles[symbol]?.length??0)>=120?6:120);
+      return{symbol,rows,replace:false,source:"GATE" as const};
+    }));
     results.forEach((result,index)=>{
       const symbol=due[index]!;
       if(result.status!=="fulfilled"){
         const prior=this.runtime.strategyCandleFailures[symbol];
         this.runtime.strategyCandleFailures[symbol]={count:(prior?.count??0)+1,lastFailureAt:now,retryAt:now+5000,
-          lastError:`5m刷新失败：${safeError(result.reason)}`};return;
+          lastError:`5m多源刷新失败：${safeError(result.reason)}`};return;
       }
-      const merged=mergeStrategyCandlePath(this.strategyCandles[symbol]??[],result.value.rows);
-      if(merged.length>=30){this.strategyCandles[symbol]=merged.slice(-120);delete this.runtime.strategyCandleFailures[symbol];}
+      const rows=result.value.replace?result.value.rows:mergeStrategyCandlePath(this.strategyCandles[symbol]??[],result.value.rows);
+      if(rows.length>=30){this.strategyCandles[symbol]=rows.slice(-120);delete this.runtime.strategyCandleFailures[symbol];}
     });
     return due.length;
   }
