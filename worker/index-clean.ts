@@ -3528,7 +3528,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
               ?(this.forwardMinutePaths()[symbol]!.at(-1)!.time+60)*1_000:null,
             failure:this.runtime.feedFailures[symbol]??null}))},
         measurements: state?.samples ?? [],
-        research:{version:"multi-turn-trade-review-v1",purpose:"逐单复盘入场依据、持仓价值与退出结果",trades:researchTrades},
+        research:{version:"adaptive-ten-trade-review-v1",purpose:"逐单复盘入场评分、MFE/MAE、持仓反馈、利润保护与退出结果",trades:researchTrades},
         archiveEndpoint: "/api/forward/archive", completeness: "当前快照与滚动样本；完整不可变记录按archive接口分页读取" });
     }
     if (path === "/forward-equity" && request.method === "GET") {
@@ -3536,8 +3536,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(!s)return json({error:"净值源尚未恢复"},503);
       try {
         const page=await this.equityReader.read(this.ctx.storage,{startedAt:s.startedAt,initialEquity:s.initialEquity,
-          policy:s.policyVersion??"legacy",exitPolicy:s.exitPolicyUpgrade?.policy??"legacy",
-          comparableSince:Math.max(s.startedAt,s.policyUpgrade?.at??0,s.exitPolicyUpgrade?.at??0),
+          policy:s.policyVersion,exitPolicy:ADAPTIVE_ENGINE_VERSION,
+          comparableSince:s.startedAt,
           persistedAt:s.storage.persistedAt},url.searchParams.get("cursor"),Date.now(),url.searchParams.get("after"));
         return json(page);
       }catch(error){const message=error instanceof Error?error.message:"";
