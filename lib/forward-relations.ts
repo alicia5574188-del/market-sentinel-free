@@ -130,7 +130,7 @@ function normalizeRule(t:Partial<Trade>,now:number):Rule{
     givebackRate:Math.max(.001,safe(r?.givebackRate,.002)),exitMode:"REACTION_DECAY",samples:safe(r?.samples),trainGroups:safe(r?.trainGroups),
     checkGroups:safe(r?.checkGroups),estimatedNetRate:safe(r?.estimatedNetRate),priorResponse:r?.priorResponse??null,
     recentResponse:safe(r?.recentResponse),standardError:safe(r?.standardError),reason:r?.reason??"兼容持仓",
-    mutation:"CREATE",grammar:ADAPTIVE_ENGINE_VERSION,liveEligible:false,authority:o.mode==="RELATION"?"FORWARD_RELATION":"ADAPTIVE_TEN",turnTimeframe:"5m"};
+    mutation:"CREATE",grammar:ADAPTIVE_ENGINE_VERSION,liveEligible:false,authority:r?.authority==="FORWARD_RELATION"?"FORWARD_RELATION":"ADAPTIVE_TEN",turnTimeframe:"5m"};
 }
 function normalizeTrade(raw:Trade,now:number):Trade{
   const t=structuredClone(raw) as Trade,tick=Math.max(1e-9,safe(t.entryPrice,1)),side=t.side==="SHORT"?"SHORT":"LONG";
@@ -393,7 +393,7 @@ function openTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:nu
   const rule:Rule={id:o.relationRuleId??`adaptive-${o.mode.toLowerCase()}`,signature:o.relationRuleId??o.mode,parentId:null,version:1,createdAt:now,expiresAt:now+horizon*60_000,
     status:"EXPERIMENTAL",conditions:[],side,horizon,stopRate,armRate:Math.max(.003,o.netRemainingSpaceRate*.45),givebackRate:.002,
     exitMode:"REACTION_DECAY",samples:0,trainGroups:0,checkGroups:0,estimatedNetRate:o.netRemainingSpaceRate,priorResponse:null,
-    recentResponse:0,standardError:0,reason:o.reason,mutation:"CREATE",grammar:ADAPTIVE_ENGINE_VERSION,liveEligible:false,authority:"ADAPTIVE_TEN",turnTimeframe:"5m"};
+    recentResponse:0,standardError:0,reason:o.reason,mutation:"CREATE",grammar:ADAPTIVE_ENGINE_VERSION,liveEligible:false,authority:o.mode==="RELATION"?"FORWARD_RELATION":"ADAPTIVE_TEN",turnTimeframe:"5m"};
   const region=o.regionId?s.regions[o.symbol]:null;
   const scale=o.price>0?price/o.price:1;
   const t:Trade={id,symbol:o.symbol,side,rule,openedAt:now,closedAt:null,status:"OPEN",entryPrice:price,exitPrice:null,quantity,contracts,
