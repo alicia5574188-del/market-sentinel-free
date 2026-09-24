@@ -30,7 +30,10 @@ function barrierClusters(input:{
   const rows=input.rows.filter(row=>valid(row)&&completeAt(row)<=input.cutoff).sort((a,b)=>a.time-b.time).slice(-96);
   if(rows.length<7)return[];
   const merge=Math.max(input.width*.12,input.averageRange*.60,input.center*input.costRate*.35);
-  const minGap=Math.max(input.width*.05,input.averageRange*.25,input.center*input.costRate*.20);
+  // Very small excursions immediately outside the accepted region are boundary
+  // probes, not a separate pressure/support layer. A distinct obstacle must be
+  // materially separated from the region before it can move the effective trigger.
+  const minGap=Math.max(input.width*.12,input.averageRange*.40,input.center*input.costRate*.25);
   const maxDistance=Math.max(input.width*3,input.averageRange*10,input.center*.035);
   const raw:Array<{price:number;reject:number;at:number}>=[];
   for(let i=2;i<rows.length-3;i++){
