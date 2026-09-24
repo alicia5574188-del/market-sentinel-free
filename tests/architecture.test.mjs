@@ -8,8 +8,9 @@ test("Forward Relation 2.0 is the only PAPER strategy authority and retired stra
   const core=await read("lib/forward-relations.ts");
   assert.match(core,/ADAPTIVE_ENGINE_VERSION=FORWARD_RELATION_V2_VERSION/);
   assert.match(core,/from "\.\/forward-relation-v2\.ts"/);
-  assert.match(core,/ADAPTIVE_TARGET_POSITIONS=10/);
-  assert.match(core,/ADAPTIVE_REALTIME_POSITION_CAP=11/);
+  assert.doesNotMatch(core,/ADAPTIVE_TARGET_POSITIONS|ADAPTIVE_REALTIME_POSITION_CAP/);
+  assert.match(core,/FORWARD_EXECUTION_BBO_CAP=30/);
+  assert.match(core,/FORWARD_MINUTE_CONFIRMATION_CAP=11/);
   for(const retired of["multi-turn","anchor-flow","region-launch","region-lifecycle","strategy-arena","regime-portfolio","all-regime-engine"])
     assert.doesNotMatch(core,new RegExp(`from .*\\b${retired.replace(/[.*+?^$()|[\\]{}]/g,"\\$&")}`));
   for(const mode of["RELATION","BREAKOUT","RETEST","FAILED_BREAKOUT","RANGE"])assert.match(core,new RegExp(`"${mode}"`));
