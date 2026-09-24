@@ -235,4 +235,5 @@ test("summary exposes relation lifecycle and the no-forced-reversal boundary",()
   assert.equal(view.executionBboCapacity,30);assert.equal(view.minuteConfirmationCapacity,11);
   assert.match(view.boundaries.grammar,/15\/60\/180/);assert.match(view.boundaries.sampleMeaning,/旧方向失效不会自动生成反向订单/);
   assert.equal(view.relationEngine.version,FORWARD_RELATION_V2_VERSION);
+  assert.equal(view.familyProbe.version,"forward-family-probe-v1");assert.equal(view.familyProbe.maxNewPer5m,2);
 });
