@@ -110,6 +110,10 @@ test("RegionLaunch phases own scarce realtime watch slots while retired anchors 
     breakoutOpen:null,breakoutHigh:null,breakoutLow:null,breakoutClose:null,breakoutImpulseRate:null,breakoutWickRate:null,pullbackExtreme:null,
     lastMinuteAt:null,readyAt:i===11?now:null,readySide:i===11?"LONG":null,readySignalPrice:i===11?101.2:null,readyStopPrice:i===11?100.5:null,
     readyImpulseRate:i===11?.01:null,readyExpectedMoveRate:i===11?.03:null,readyMaxChaseRate:i===11?.01:null,readyConfirmationMs:i===11?60_000:null,
+    readyMode:i===11?"RELEASE":null,readyEffectiveTrigger:i===11?101:null,readyBarrierPrice:null,readyNextBarrierPrice:null,
+    readyTargetPrice:null,readyAttempt:1,longBarrier:null,shortBarrier:null,nextLongBarrier:null,nextShortBarrier:null,
+    effectiveLongTrigger:101,effectiveShortTrigger:99,averageRange:.5,releaseSide:null,releaseAt:null,releaseTrigger:null,releaseExtreme:null,
+    releaseAttemptsLong:0,releaseAttemptsShort:0,rotationLongConsumedAt:null,rotationShortConsumedAt:null,
     consumedAt:null,consumedSide:null,reason:"fixture"}]));
   const watched=forwardWatchSymbols(s,now,symbols);
   assert.equal(watched.length,11);assert.ok(watched.includes(symbols[11]!));assert.ok(!watched.includes("OLD_USDT"));
