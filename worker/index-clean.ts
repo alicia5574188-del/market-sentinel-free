@@ -3,8 +3,9 @@ import { LiveHistoryReader } from "../lib/live-history-reader.ts";
 
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
-import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchLiquidations, fetchMarketTickers, fetchRecentTrades,
+import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchGateRadarTickers, fetchLiquidations, fetchRecentTrades,
   fetchStructureCandles, fetchTickerBbo, fetchUrgentFuturesBook } from "../lib/gate-market.ts";
+import { MarketDataHub } from "../lib/market-data-hub.ts";
 import { GateStreamingFeed } from "../lib/gate-stream.ts";
 import { closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_RISK_CAP, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
 import { aggregateFourHourCandles, analyzeSnapshot, ancillarySchedule, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, structureDirection, updateOpenInterestCohorts, type SymbolMemory } from "../lib/liquidity-runtime.ts";
@@ -77,7 +78,7 @@ const LIVE_ORDER_AUDIT_ADMISSION_MAX_AGE_MS = 300_000;
 const SYSTEM_HEALTH_STALE_AFTER_MS = 30_000;
 const FEED_HARD_FAILURE_COUNT = 4;
 const FEED_HARD_FAILURE_MS = 15_000;
-const FEED_RECOVERY_CONFIRMATIONS = 2;
+const FEED_RECOVERY_CONFIRMATIONS = 1;
 const FEED_QUALITY_WINDOW_MS = 60 * 60_000;
 const BACKGROUND_BOOK_INTERVALS = 5;
 const HEARTBEAT_MS = 30_000;
@@ -495,6 +496,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private forwardMinuteCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private forwardMinuteRetryAt = new Map<string,number>();
   private gateStream = new GateStreamingFeed();
+  private marketHub = new MarketDataHub();
   private forwardMinuteQuoteBars: Record<string,{minute:number;open:number;high:number;low:number;close:number;samples:number;
     firstAt:number;lastAt:number;completed:Array<{time:number;open:number;high:number;low:number;close:number;volume:number}>}> = {};
   private turnDailyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
@@ -504,6 +506,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private regimeHourly: Record<string, RegimeHourlyPath> = {};
   private sessionWarmup: Record<string, number> = {};
   private contractCatalog = new Map<string, Awaited<ReturnType<typeof fetchActiveContracts>>[number]>();
+  private gateRadarCache: Awaited<ReturnType<typeof fetchGateRadarTickers>> = [];
+  private gateRadarAt=0;
   private authorityReady = true;
   private authorityView = { positions: {} as RuntimeState["positions"], equity: CANONICAL_PAPER_REFERENCE_EQUITY, equityVersion: 0 };
   protected liveClient: GateLiveClient | null = null;
@@ -664,6 +668,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         this.runtime.lastError = "authority checkpoint version mismatch; manual migration required";
       }
       if (this.authorityReady) {
+        try{
+          const cachedCatalog=await ctx.storage.get<Awaited<ReturnType<typeof fetchActiveContracts>>>("gate-contract-catalog:v1");
+          if(cachedCatalog?.length)this.contractCatalog=new Map(cachedCatalog.map(row=>[row.symbol,row]));
+        }catch{/* cached Gate universe is optional; live refresh will retry */}
         const loaded = await Promise.all(REGIME_EXECUTION_UNIVERSE.map(async (symbol) => {
           try {
             return [symbol, await ctx.storage.get<RegimeHourlyPath>(regimeHourlyStorageKey(symbol))] as const;
@@ -828,7 +836,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (ranked.length === 0) throw new Error("contract catalog unavailable: empty active-contract response");
     this.contractCatalog = new Map(ranked.map((row) => [row.symbol, row]));
     this.runtime.lastUniverseAt = now;
-    for (const symbol of this.runtime.symbols) this.applyContractMetadata(symbol);
+    for (const symbol of new Set([...this.runtime.symbols,...this.runtime.liquidUniverse])) this.applyContractMetadata(symbol);
+    this.ctx.waitUntil(this.ctx.storage.put("gate-contract-catalog:v1",ranked).catch(()=>undefined));
   }
 
   private applyContractMetadata(symbol: string) {
@@ -881,14 +890,24 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(!this.runtime.liquidUniverse.includes(symbol)&&!this.forwardUrgentSymbols().includes(symbol)){
         delete this.forwardMinuteCandles[symbol];delete this.forwardMinuteQuoteBars[symbol];this.forwardMinuteRetryAt.delete(symbol);
       }
-      delete this.runtime.tickSize[symbol]; delete this.runtime.contractMeta[symbol];
+      if(!this.runtime.liquidUniverse.includes(symbol)){
+        delete this.runtime.tickSize[symbol]; delete this.runtime.contractMeta[symbol];
+      }
     }
   }
 
-  private refreshRadar(now: number, rows: Awaited<ReturnType<typeof fetchMarketTickers>>) {
-    if(this.contractCatalog.size===0)throw new Error("contract catalog unavailable: radar refresh deferred");
-    const eligibleRows=rows.filter(row=>this.contractCatalog.has(row.symbol)&&adaptiveSymbolAllowed(row.symbol));
-    if(!eligibleRows.length)throw new Error("Gate ticker universe unavailable");
+  private refreshRadar(now:number) {
+    const cached=this.gateRadarAt>0&&now-this.gateRadarAt<=2*RADAR_MS?new Map(this.gateRadarCache.map(row=>[row.symbol,row])):null;
+    const known=this.contractCatalog.size
+      ?[...this.contractCatalog.values()].filter(row=>adaptiveSymbolAllowed(row.symbol)).map(row=>{
+        const fresh=cached?.get(row.symbol);return fresh?{...fresh,fundingRate:row.fundingRate}:{symbol:row.symbol,last:row.last,
+          volume24hUsd:row.volume24hUsd,fundingRate:row.fundingRate};
+      })
+      :[...new Set([...this.runtime.liquidUniverse,...DEFAULT_SYMBOLS])].flatMap(symbol=>{
+        const q=this.marketHub.quote(symbol,now);return q?[{symbol,last:q.mid,volume24hUsd:q.volume24hUsd,fundingRate:0}]:[];
+      });
+    const eligibleRows=this.marketHub.radarRows(known,now);
+    if(!eligibleRows.length)throw new Error("no Gate-tradable Adaptive 10 markets");
     const locked=[...(this.forwardState?.positions.map(p=>p.symbol)??[]),
       ...(this.forwardState?forwardWatchSymbols(this.forwardState,now,this.runtime.liquidUniverse):[])];
     const universeRows=selectAnchorOpportunityUniverse({rows:eligibleRows,limit:SCAN_UNIVERSE_SIZE,
@@ -898,10 +917,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.liquidUniverse=universeRows.map(row=>row.symbol);
     this.runtime.radar=successfulRadarRuntime(this.runtime.radar,now,universeRows.length,[]);
     this.runtime.lastRadarAt=now;
+    // Gate realtime capacity is execution-only: open exposure and candidates
+    // that are actually eligible. Analysis-only markets stay on Bybit/Binance.
     const protectedSymbols=[...this.currentAuthorityProtectionSymbols()];
     const watched=this.forwardState?forwardWatchSymbols(this.forwardState,now,this.runtime.liquidUniverse):[];
-    const next=[...new Set([...protectedSymbols,...watched,...DEFAULT_SYMBOLS,...this.runtime.liquidUniverse])].slice(0,ADAPTIVE_REALTIME_POSITION_CAP);
-    if(next.length)this.applyRealtimeSymbols(next);
+    const next=[...new Set([...protectedSymbols,...watched])].slice(0,ADAPTIVE_REALTIME_POSITION_CAP);
+    if(next.length||this.runtime.symbols.length)this.applyRealtimeSymbols(next);
   }
 
   protected regimeQuotes(now: number) {
@@ -2692,7 +2713,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private symbolEntryReady(symbol:string,now=Date.now()) {
     const evidence=this.runtime.evidence[symbol],failure=this.runtime.feedFailures[symbol];
     return Boolean(evidence?.fresh&&evidence.entryReady!==false&&this.runtime.contractMeta[symbol]!=null
-      &&(this.sessionWarmup[symbol]??0)>=2&&now-evidence.observedAt<=STALE_AFTER_MS
+      &&(this.sessionWarmup[symbol]??0)>=1&&now-evidence.observedAt<=STALE_AFTER_MS
       &&failure?.suspendedSince==null);
   }
 
@@ -2729,14 +2750,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private ensureProtectionSymbolsResident() {
     const protectedSymbols=[...this.currentAuthorityProtectionSymbols()];
     const urgentSymbols=this.forwardUrgentSymbols();
-    if(!protectedSymbols.length&&!urgentSymbols.length)return;
-    const locked=[...new Set([...protectedSymbols,...urgentSymbols])],lockedSet=new Set(locked);
-    const residentNonProtected=this.runtime.symbols.filter((symbol)=>!lockedSet.has(symbol));
-    // Existing exposure always wins. Current-authority RETEST/READY/ARMED/
-    // IGNITION states use the remaining realtime capacity immediately instead
-    // of waiting for the one-minute radar refresh.
-    const residentLimit=Math.max(PORTFOLIO_REALTIME_CAPACITY,protectedSymbols.length);
-    const next=[...locked,...residentNonProtected].slice(0,residentLimit);
+    // Realtime Gate data is a scarce execution resource, never a scanner.
+    // Keep only actual exposure and currently executable candidates resident.
+    const next=[...new Set([...protectedSymbols,...urgentSymbols])].slice(0,ADAPTIVE_REALTIME_POSITION_CAP);
     if(next.length!==this.runtime.symbols.length||next.some((symbol,index)=>symbol!==this.runtime.symbols[index]))
       this.applyRealtimeSymbols(next);
   }
@@ -2753,6 +2769,17 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       return[[symbol,{bestBid:row.bestBid,bestAsk:row.bestAsk,observedAt:row.observedAt,fresh:true,
         entryReady:this.symbolEntryReady(symbol,now)}]];
     }));
+  }
+
+  private launchExternalMarketRefresh(now=Date.now()){
+    const task=this.marketHub.launchRefresh(now);if(!task)return;
+    this.ctx.waitUntil(task.then(()=>{
+      const at=Date.now(),status=this.marketHub.status(at);
+      if(status.healthySources>0)this.runtime.lastSuccessAt=at;
+      for(const symbol of this.forwardUrgentSymbols(at)){
+        const q=this.marketHub.quote(symbol,at);if(q)this.recordForwardMinuteQuote(symbol,q.mid,q.observedAt);
+      }
+    }).catch(error=>{this.runtime.strategyLogError=`external-market: ${safeError(error)}`;}));
   }
 
   private recordForwardMinuteQuote(symbol:string,mid:number,observedAt:number){
@@ -2773,12 +2800,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private forwardMinutePaths(){
-    const officialCache=this.forwardMinuteCandles??{},syntheticCache=this.forwardMinuteQuoteBars??{};
-    const symbols=new Set([...Object.keys(officialCache),...Object.keys(syntheticCache),...(this.runtime.symbols??[])]);
-    return Object.fromEntries([...symbols].flatMap(symbol=>{
-      const official=officialCache[symbol]??[],synthetic=syntheticCache[symbol]?.completed??[],streamed=this.gateStream?.path(symbol,"1m")??[];
-      const merged=[...new Map([...synthetic,...official,...streamed].map(row=>[row.time,row])).values()].sort((a,b)=>a.time-b.time).slice(-90);
-      return merged.length?[[symbol,merged]]:[];
+    const officialCache=this.forwardMinuteCandles??{};
+    return Object.fromEntries(Object.entries(officialCache).flatMap(([symbol,official])=>{
+      // 1m confirmation must come from the same official analysis venue as 5m.
+      // Synthetic cross-venue quote bars are never allowed to certify a breakout.
+      const rows=(official??[]).slice(-90);
+      return rows.length>=3?[[symbol,rows]]:[];
     }));
   }
 
@@ -2792,7 +2819,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const last=Math.max(this.forwardMinuteCandles[symbol]?.at(-1)?.time??0,this.gateStream.path(symbol,"1m").at(-1)?.time??0);
       return!last||(last+60)*1000<targetCompletedAt;
     }).slice(0,4);
-    const results=await Promise.allSettled(due.map(async symbol=>({symbol,rows:await fetchStructureCandles(symbol,"1m",90)})));
+    const results=await Promise.allSettled(due.map(async symbol=>{
+      const coverage=this.marketHub.coverage(symbol,Date.now());
+      if(coverage.sourceCount>=2&&coverage.disagreementRate>.015)
+        throw new Error(`${symbol} external venue disagreement`);
+      const external=await this.marketHub.candles(symbol,"1m",90);
+      if(external)return{symbol,rows:external.rows,source:external.source};
+      if(this.marketHub.supports(symbol))throw new Error(`${symbol} external 1m temporarily unavailable`);
+      return{symbol,rows:await fetchStructureCandles(symbol,"1m",90),source:"GATE" as const};
+    }));
     results.forEach((result,index)=>{
       const symbol=due[index]!;
       if(result.status!=="fulfilled"){this.forwardMinuteRetryAt.set(symbol,now+5000);return;}
@@ -2802,17 +2837,16 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return due.length;
   }
 
-  private cycleBookSymbols(now:number,symbols:string[]) {
-    const urgent=new Set([...this.currentAuthorityProtectionSymbols(),...this.forwardUrgentSymbols(now)]);
-    const slot=Math.floor(now/LOOP_MS)%BACKGROUND_BOOK_INTERVALS;
-    const bucket=(symbol:string)=>[...symbol].reduce((n,ch)=>n+ch.charCodeAt(0),0)%BACKGROUND_BOOK_INTERVALS;
-    return symbols.filter(symbol=>urgent.has(symbol)||(this.sessionWarmup[symbol]??0)<2||bucket(symbol)===slot);
+  private cycleBookSymbols(_now:number,symbols:string[]) {
+    // Every resident Gate symbol is already execution-relevant.
+    return symbols;
   }
 
   private async processAdaptiveBooks(now:number,cycleSymbols=[...this.runtime.symbols]) {
     if(this.forwardState){
-      this.ctx.waitUntil(this.gateStream.ensure(this.runtime.symbols,
-        forwardUrgentMinuteSymbols(this.forwardState,this.runtime.liquidUniverse),this.strategyPathSymbols(),now));
+      // Gate public websocket is execution-only. Bybit/Binance own continuous
+      // analysis candles; Gate does not carry the 30-market scan anymore.
+      this.ctx.waitUntil(this.gateStream.ensure(this.runtime.symbols,[],[],now));
     }
     const urgent=new Set([...this.currentAuthorityProtectionSymbols(),...this.forwardUrgentSymbols(now)]);
     const streamBook=(symbol:string)=>this.gateStream.book(symbol,this.runtime.tickSize[symbol]??.0001,
@@ -2847,8 +2881,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(!fresh){this.suspendSymbol(symbol,now,"Gate盘口失鲜",now+LOOP_MS);continue;}
       const recovery=this.acceptFreshSymbol(symbol,now,at,true);
       if(recovery.recovered)this.runtime.feedQuality.recoveries++;
-      this.sessionWarmup[symbol]=Math.min(2,(this.sessionWarmup[symbol]??0)+1);
-      const ready=recovery.entryReady&&(this.sessionWarmup[symbol]??0)>=2&&this.runtime.contractMeta[symbol]!=null;
+      this.sessionWarmup[symbol]=Math.min(1,(this.sessionWarmup[symbol]??0)+1);
+      const ready=recovery.entryReady&&(this.sessionWarmup[symbol]??0)>=1&&this.runtime.contractMeta[symbol]!=null;
       const mid=(bid+ask)/2;
       this.runtime.evidence[symbol]={midpoint:mid,bestBid:bid,bestAsk:ask,observedAt:at,
         warmup:this.sessionWarmup[symbol]??0,fresh:true,ancillaryFresh:true,optionalFresh:true,entryReady:ready,
@@ -2894,42 +2928,45 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private async refreshAdaptiveCandles(now=Date.now()){
     const symbols=this.strategyPathSymbols();if(!symbols.length)return 0;
     const targetCompletedAt=latestCompletedStrategyCandleAt(now);
-    for(const symbol of symbols){
-      const prior=this.strategyCandles[symbol]??[];
-      if(!prior.length)continue;
-      const tail=this.gateStream.path(symbol,"5m").filter(row=>row.time>(prior.at(-1)?.time??0));
-      if(tail.length&&tail[0]!.time===prior.at(-1)!.time+300
-        &&tail.every((row,i)=>!i||row.time===tail[i-1]!.time+300))
-        this.strategyCandles[symbol]=mergeStrategyCandlePath(prior,tail);
-    }
     const due=symbols.filter(symbol=>{
       const last=this.strategyCandles[symbol]?.at(-1);
       return !last||(last.time+300)*1000<targetCompletedAt;
     }).slice(0,5);
-    const results=await Promise.allSettled(due.map(async symbol=>({symbol,
-      rows:await fetchStructureCandles(symbol,"5m",(this.strategyCandles[symbol]?.length??0)>=120?6:120)})));
+    const results=await Promise.allSettled(due.map(async symbol=>{
+      const coverage=this.marketHub.coverage(symbol,Date.now());
+      if(coverage.sourceCount>=2&&coverage.disagreementRate>.015)
+        throw new Error(`${symbol} external venue disagreement ${(coverage.disagreementRate*100).toFixed(2)}%`);
+      const external=await this.marketHub.candles(symbol,"5m",120);
+      if(external)return{symbol,rows:external.rows,replace:true,source:external.source};
+      if(this.marketHub.supports(symbol))throw new Error(`${symbol} external 5m temporarily unavailable`);
+      // True Gate-only contracts retain a low-frequency fallback. A temporary
+      // Bybit/Binance outage never redirects common-market analysis onto Gate.
+      const rows=await fetchStructureCandles(symbol,"5m",(this.strategyCandles[symbol]?.length??0)>=120?6:120);
+      return{symbol,rows,replace:false,source:"GATE" as const};
+    }));
     results.forEach((result,index)=>{
       const symbol=due[index]!;
       if(result.status!=="fulfilled"){
         const prior=this.runtime.strategyCandleFailures[symbol];
         this.runtime.strategyCandleFailures[symbol]={count:(prior?.count??0)+1,lastFailureAt:now,retryAt:now+5000,
-          lastError:`5m刷新失败：${safeError(result.reason)}`};return;
+          lastError:`5m多源刷新失败：${safeError(result.reason)}`};return;
       }
-      const merged=mergeStrategyCandlePath(this.strategyCandles[symbol]??[],result.value.rows);
-      if(merged.length>=30){this.strategyCandles[symbol]=merged.slice(-120);delete this.runtime.strategyCandleFailures[symbol];}
+      const rows=result.value.replace?result.value.rows:mergeStrategyCandlePath(this.strategyCandles[symbol]??[],result.value.rows);
+      if(rows.length>=30){this.strategyCandles[symbol]=rows.slice(-120);delete this.runtime.strategyCandleFailures[symbol];}
     });
     return due.length;
   }
 
   private publishCriticalHealth(observedAt:number,books:{successes:number;requests:number}) {
     this.runtime.lastAlarmAt=observedAt;
-    if(books.successes>0)this.runtime.lastSuccessAt=observedAt;
+    const hub=this.marketHub.status(observedAt);
+    if(books.successes>0||hub.healthySources>0)this.runtime.lastSuccessAt=observedAt;
     const readiness=this.realtimeReadiness(observedAt);
     const authorityStale=this.runtime.lastSuccessAt==null||observedAt-this.runtime.lastSuccessAt>SYSTEM_HEALTH_STALE_AFTER_MS;
     this.runtime.state=!this.authorityReady?"RECOVERY_REQUIRED":authorityStale?"RECONNECTING"
-      :!readiness.protectedMarketsReady?"DEGRADED":readiness.actionableMarkets>0?"LIVE":"WARMING";
-    const feedError=authorityStale?`${books.requests||this.runtime.symbols.length}个计划盘口暂不可用`
-      :!readiness.protectedMarketsReady?"已有持仓缺少新鲜保护盘口":null;
+      :!readiness.protectedMarketsReady?"DEGRADED":hub.healthySources>0||readiness.actionableMarkets>0?"LIVE":"WARMING";
+    const feedError=authorityStale?"Bybit/Binance分析源与Gate执行源同时不可用"
+      :!readiness.protectedMarketsReady?"已有持仓缺少Gate保护报价":null;
     this.runtime.lastError=feedError??this.runtime.d1MirrorError;
   }
 
@@ -2938,6 +2975,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const task=(async()=>{
       let subrequests=0;
       this.launchLiveSettlementBackground();
+      const hub=this.marketHub.status(Date.now());
+      if(hub.healthySources===0){
+        const refresh=this.marketHub.launchRefresh(Date.now());
+        if(refresh)await refresh.catch(()=>undefined);
+      }
       if(universeDue){
         subrequests+=2;
         try{this.refreshUniverse(Date.now(),await fetchActiveContracts());}
@@ -2945,8 +2987,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       const radarDue=radarAttemptDue(this.runtime.radar,Date.now());
       if(radarDue){
-        subrequests++;
-        try{this.refreshRadar(Date.now(),await fetchMarketTickers());}
+        // Gate bulk discovery is optional and explicitly yields to private LIVE
+        // work. Bybit/Binance remain the normal scan surface.
+        if(!this.liveBackgroundWork&&!this.liveSyncWork){
+          try{this.gateRadarCache=await fetchGateRadarTickers();this.gateRadarAt=Date.now();subrequests++;}
+          catch{/* stale Gate-only discovery must never block external analysis */}
+        }
+        try{this.refreshRadar(Date.now());}
         catch(error){this.runtime.radar=failedRadarRuntime(this.runtime.radar,Date.now(),error);}
       }
       subrequests+=await this.refreshAdaptiveCandles(Date.now());
@@ -2993,6 +3040,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     let subrequests = 0;
     try {
       const universeDue = now - this.runtime.lastUniverseAt >= UNIVERSE_MS;
+      this.launchExternalMarketRefresh(now);
       this.ensureProtectionSymbolsResident();
       const cycleSymbols = this.cycleBookSymbols(now, [...this.runtime.symbols]);
       // The fresh executable book is the critical clock. Completed-candle,
@@ -3242,6 +3290,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           logError: this.runtime.strategyLogError,
         },
         feedQuality: this.runtime.feedQuality,
+        multiSourceMarket: this.marketHub.status(),
         marketDataTransport: this.gateStream.status(),
         marketRegimes: { tracked: regimes.tracked, warmed: regimes.warmed, counts: regimes.counts },
         limits: {
@@ -3294,7 +3343,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         ...(path === "/owner-runtime" ? { live:{...live,history:this.liveHistory,mirror:this.liveMirrorView(),
           turnover:turnoverView(this.turnoverState,this.turnoverError,Date.now())} } : {}), liveMode: { requestedEnabled: live.requestedEnabled, operational: live.operational }, outboxLength: outbox.length + bankruptcyOutbox.length,
         oldestOutboxAgeMs: outbox.length ? Math.max(0, Date.now() - (outbox[0].position.exitAt ?? outbox[0].position.entryAt)) : 0,
-        authorityReady: this.authorityReady, realtimeReadiness: this.realtimeReadiness(), generatedAt: Date.now(), state: effectiveState, stale,
+        authorityReady: this.authorityReady, realtimeReadiness: this.realtimeReadiness(), multiSourceMarket:this.marketHub.status(),
+        generatedAt: Date.now(), state: effectiveState, stale,
         analysisP99Ms: percentile99(this.runtime.analysisMs), limits: { loopMs: LOOP_MS, markets: this.runtime.symbols.length, scannedMarkets: this.runtime.radar.scanned, scanUniverse: SCAN_UNIVERSE_SIZE, radarMs: RADAR_MS, warmupSnapshots: WARMUP_SNAPSHOTS,
           maxAncillaryConcurrency: MAX_ANCILLARY_CONCURRENCY, maxSubrequestsPerAlarm: 32, plannedAlarmRequestsPerDay: 43_200,
           plannedAlarmWritesPerDay: 43_200, watchdogWriteReservePerDay: WATCHDOG_WRITE_RESERVE,

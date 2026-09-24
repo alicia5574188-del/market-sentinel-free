@@ -70,6 +70,20 @@ test("ordinary participation never forces the eleventh seat",()=>{
   assert.equal(ADAPTIVE_REALTIME_POSITION_CAP,11);
 });
 
+
+test("external analysis price basis is re-anchored to the Gate execution quote",()=>{
+  const external=path(.0015).map(r=>({...r,open:r.open*2,high:r.high*2,low:r.low*2,close:r.close*2}));
+  const now=(external.at(-1)!.time+300)*1000+1000,gatePrice=100;
+  let s=initialForward(now-60_000);
+  s=advanceForward({state:s,now,paths:{BTC_USDT:external},quotes:{BTC_USDT:quote(gatePrice,now)},
+    contracts:{BTC_USDT:contract},entrySymbols:["BTC_USDT"]}).state;
+  assert.equal(s.positions.length,1,"cross-venue basis must not invalidate an otherwise valid opportunity");
+  const t=s.positions[0]!,distance=Math.abs(t.entryPrice-t.stopPrice)/t.entryPrice;
+  assert.ok(distance>=.002&&distance<=.03);
+  assert.ok(t.stopPrice<150,"Bybit/Binance absolute stop must never be copied directly onto Gate");
+  assert.ok((t.entryContext?.regionLower??0)<150||t.entryContext?.regionLower==null);
+});
+
 test("strategy normalization upgrades an old account in place instead of creating a fresh ledger",()=>{
   const s=initialForward(1000);s.startedAt=123;s.balance=876.54;s.initialEquity=1000;s.resolved=7;s.turnover=4321;
   s.engineVersion="legacy";s.strategyAuthorityVersion="legacy";s.executionVersion="legacy";s.storage={persistedAt:999,error:null};

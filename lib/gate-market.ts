@@ -203,6 +203,17 @@ export async function fetchMarketTickers() {
   })).filter((row) => row.symbol.endsWith("_USDT") && row.last > 0 && row.volume24hUsd > 0);
 }
 
+/** Optional Gate-only discovery snapshot. Never part of the execution clock. */
+export async function fetchGateRadarTickers(){
+  const rows=await gatePublic<GateTicker[]>("/futures/usdt/tickers",1_000,1);
+  return rows.map(row=>({symbol:row.contract??"",last:Number(row.last??0),
+    volume24hUsd:Number(row.volume_24h_usd??row.volume_24h_settle??0),
+    high24h:Number(row.high_24h??row.last??0),low24h:Number(row.low_24h??row.last??0),
+    change24hRate:Number(row.change_percentage??0)/100,fundingRate:Number(row.funding_rate??0),
+    openInterest:Math.abs(Number(row.total_size??0))}))
+    .filter(row=>row.symbol.endsWith("_USDT")&&row.last>0&&row.volume24hUsd>0);
+}
+
 export async function fetchTicker(symbol: string) {
   const rows = await gatePublic<GateTicker[]>(`/futures/usdt/tickers?contract=${encodeURIComponent(symbol)}`);
   return rows[0] ?? null;
