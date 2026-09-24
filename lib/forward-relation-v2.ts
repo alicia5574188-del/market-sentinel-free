@@ -147,9 +147,13 @@ export function advanceRelationEngine(input:{state?:RelationEngineState|null;pat
   }
   state.samples=RELATION_HORIZONS.flatMap(h=>state.samples.filter(r=>r.horizon===h&&input.now-r.at<=7*DAY).sort((a,b)=>a.at-b.at).slice(-SAMPLE_LIMIT_PER_HORIZON));
   if(matured||!state.rules.length)synthesize(state,input.paths,input.now,currentEnv);else if(state.rules.length){
-    state.rules=state.rules.map(r=>{const selected=state.samples.filter(x=>x.horizon===r.horizon&&matches(x.x,r.conditions)),live=livePathScore(state,input.paths,r.conditions,r.horizon,r.side,selected,input.now);
-      if(live>=r.livePathScore-.08)return{...r,livePathScore:live,updatedAt:input.now};const status:RelationStatus=live<.28?"DEGRADED":"PRESSURED",health=status==="DEGRADED"?Math.min(.30,r.health):Math.min(.60,r.health);
-      return{...r,livePathScore:live,status,health,updatedAt:input.now,reason:`进行中真实反应路径偏离历史｜${status}｜路径${Math.round(live*100)}｜不自动反手`};});}
+    state.rules=state.rules.map(r=>{const selected=state.samples.filter(x=>x.horizon===r.horizon&&matches(x.x,r.conditions)),
+      live=livePathScore(state,input.paths,r.conditions,r.horizon,r.side,selected,input.now),fit=envFit(selected,currentEnv),
+      weakened=live<r.livePathScore-.08||fit<r.environmentFit-.15||fit<.42;
+      if(!weakened)return{...r,livePathScore:live,environmentFit:fit,updatedAt:input.now};
+      const status:RelationStatus=live<.28||fit<.28?"DEGRADED":"PRESSURED",health=status==="DEGRADED"?Math.min(.30,r.health):Math.min(.60,r.health);
+      return{...r,livePathScore:live,environmentFit:fit,status,health,updatedAt:input.now,
+        reason:`进行中真实反应/市场环境偏离历史｜${status}｜路径${Math.round(live*100)}｜环境${Math.round(fit*100)}｜不自动反手`};});}
   state.updatedAt=input.now;const counts=(status:RelationStatus)=>state.rules.filter(r=>r.status===status).length,qualified=(h:RelationHorizon)=>state.rules.filter(r=>r.horizon===h).length,
     liveAnomalies=state.rules.filter(r=>r.livePathScore<.45).length;let warmup="关系学习已运行";if(state.samples.length<20)warmup=`冷启动：已成熟${state.samples.length}份真实反应，继续积累`;
   else if(!state.rules.length)warmup=`已有${state.samples.length}份成熟反应，尚无扣成本后稳定关系`;
@@ -157,7 +161,7 @@ export function advanceRelationEngine(input:{state?:RelationEngineState|null;pat
     degraded:counts("DEGRADED"),recovering:counts("RECOVERING"),liveAnomalies,qualified15:qualified(15),qualified60:qualified(60),qualified180:qualified(180),warmup};return state;}
 
 export function relationCandidates(state:RelationEngineState){const rows:RelationCandidate[]=[];for(const frame of Object.values(state.frames))for(const rule of state.rules){
-  if(!matches(frame.x,rule.conditions))continue;const reserve=rule.status!=="ACTIVE"||rule.health<.68,net=Math.max(COST*.15,rule.longNet*clip(.45+.55*rule.health,.2,1)),gross=net+COST,
+  if(!matches(frame.x,rule.conditions)||!rule.symbols.includes(frame.symbol))continue;const reserve=rule.status!=="ACTIVE"||rule.health<.68,net=Math.max(COST*.15,rule.longNet*clip(.45+.55*rule.health,.2,1)),gross=net+COST,
     edge=net/Math.max(rule.stopRate,COST),score=clip(32+36*rule.health+10*rule.environmentFit+10*rule.livePathScore+12*clip(edge/.8),0,100);
   if(rule.health<.15||!(rule.longNet>0))continue;rows.push({symbol:frame.symbol,ruleId:rule.id,side:rule.side,horizon:rule.horizon,status:rule.status,health:rule.health,
     score,netRate:net,grossRate:gross,stopRate:rule.stopRate,environmentFit:rule.environmentFit,livePathScore:rule.livePathScore,reserve,
