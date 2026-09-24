@@ -554,17 +554,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private liveRecordEpochAt(){const at=this.runtime.live.recordEpochAt;return typeof at==="number"&&Number.isFinite(at)&&at>0?at:0;}
   private liveRecordVisible(position:LivePosition){return position.status==="OPEN"||(position.exitAt??0)>=this.liveRecordEpochAt();}
   private alignLiveRecordEpoch(now=Date.now()){
-    const version=this.forwardState?.executionVersion??null,startedAt=this.forwardState?.startedAt??0;
-    if(!version||!(startedAt>0)||this.runtime.live.recordEpochVersion===version)return false;
-    if(this.runtime.live.requestedEnabled||this.runtime.live.operational||this.activeLivePositions().length||this.activeLiveEntries().length)return false;
-    this.runtime.live.recordEpochVersion=version;this.runtime.live.recordEpochAt=startedAt;
-    this.runtime.live.positions=Object.fromEntries(Object.entries(this.runtime.live.positions)
-      .map(([symbol,position])=>[symbol,position?.status==="OPEN"?position:null]));
-    this.runtime.live.entries=Object.fromEntries(Object.entries(this.runtime.live.entries)
-      .map(([symbol,entry])=>[symbol,entry&&!["FILLED","CANCELLED"].includes(entry.status)?entry:null]));
-    this.runtime.live.entrySkips={};this.liveHistory=[];this.historyReader.reset(startedAt);this.liveRecordEpochDirty=true;
-    return true;
+    const version=this.forwardState?.executionVersion??ADAPTIVE_ENGINE_VERSION;
+    if(this.runtime.live.recordEpochVersion===version)return false;
+    this.runtime.live.recordEpochVersion=version;
+    if(!(this.runtime.live.recordEpochAt&&this.runtime.live.recordEpochAt>0))
+      this.runtime.live.recordEpochAt=this.forwardState?.startedAt??now;
+    // Strategy revisions never erase LIVE history or entry audit records.
+    return false;
   }
+
   private clearRetiredLiveTransportError(){
     const retired=(value:string|null|undefined)=>typeof value==="string"
       &&value.includes("Invalid redirect value")&&value.includes("redirect");
@@ -3337,76 +3335,72 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     } finally {reservation.finish(false);}
   }
 
-  private publishCriticalHealth(observedAt: number, books: { successes: number; requests: number }) {
-    this.runtime.lastAlarmAt = observedAt;
-    this.runtime.lastSuccessAt = books.successes > 0 ? observedAt : this.runtime.lastSuccessAt;
-    const allWarm = this.runtime.symbols.every((symbol) => (this.sessionWarmup[symbol] ?? 0) >= WARMUP_SNAPSHOTS);
-    const allMeta = this.runtime.symbols.every((symbol) => this.runtime.contractMeta[symbol] != null);
-    const realtimeReadiness = this.realtimeReadiness(observedAt);
-    const ancillaryStarted = this.runtime.symbols.every((symbol) => {
-      const memory = this.memory[symbol];
-      return memory && memory.timeframeUpdatedAt.m1 > 0 && memory.timeframeUpdatedAt.m15 > 0
-        && memory.timeframeUpdatedAt.h1 > 0 && memory.timeframeUpdatedAt.h4 > 0;
+  private async refreshAdaptiveCandles(now=Date.now()){
+    const symbols=this.strategyPathSymbols();if(!symbols.length)return 0;
+    const targetCompletedAt=latestCompletedStrategyCandleAt(now);
+    for(const symbol of symbols){
+      const prior=this.strategyCandles[symbol]??[];
+      if(!prior.length)continue;
+      const tail=this.gateStream.path(symbol,"5m").filter(row=>row.time>(prior.at(-1)?.time??0));
+      if(tail.length&&tail[0]!.time===prior.at(-1)!.time+300
+        &&tail.every((row,i)=>!i||row.time===tail[i-1]!.time+300))
+        this.strategyCandles[symbol]=mergeStrategyCandlePath(prior,tail);
+    }
+    const due=symbols.filter(symbol=>{
+      const last=this.strategyCandles[symbol]?.at(-1);
+      return !last||(last.time+300)*1000<targetCompletedAt;
+    }).slice(0,5);
+    const results=await Promise.allSettled(due.map(async symbol=>({symbol,
+      rows:await fetchStructureCandles(symbol,"5m",(this.strategyCandles[symbol]?.length??0)>=120?6:120)})));
+    results.forEach((result,index)=>{
+      const symbol=due[index]!;
+      if(result.status!=="fulfilled"){
+        const prior=this.runtime.strategyCandleFailures[symbol];
+        this.runtime.strategyCandleFailures[symbol]={count:(prior?.count??0)+1,lastFailureAt:now,retryAt:now+5000,
+          lastError:`5m刷新失败：${safeError(result.reason)}`};return;
+      }
+      const merged=mergeStrategyCandlePath(this.strategyCandles[symbol]??[],result.value.rows);
+      if(merged.length>=30){this.strategyCandles[symbol]=merged.slice(-120);delete this.runtime.strategyCandleFailures[symbol];}
     });
-    const authorityStale = this.runtime.lastSuccessAt == null
-      || observedAt - this.runtime.lastSuccessAt > SYSTEM_HEALTH_STALE_AFTER_MS;
-    this.runtime.state = !this.authorityReady ? "RECOVERY_REQUIRED"
-      : authorityStale ? "RECONNECTING"
-        : this.runtime.riskBreach || !realtimeReadiness.protectedMarketsReady ? "DEGRADED"
-        : realtimeReadiness.actionableMarkets > 0 ? "LIVE"
-          : allWarm && allMeta && ancillaryStarted ? "DEGRADED" : "WARMING";
-    const feedError = authorityStale
-      ? `${books.requests || this.runtime.symbols.length} scheduled market snapshots unavailable; executable freshness expired`
-      : !realtimeReadiness.protectedMarketsReady ? "protected position or route data unavailable; new entries frozen"
-        : !allMeta && realtimeReadiness.protectedMarkets > 0 ? "protected contract metadata unavailable" : null;
-    this.runtime.lastError = (this.runtime.riskBreach ? "portfolio stress risk exceeds 10%; new entries blocked" : feedError)
-      ?? this.runtime.d1MirrorError;
+    return due.length;
   }
 
-  private launchOptionalWork(now: number, universeDue: boolean) {
-    if (this.optionalWork) return;
-    const task = (async () => {
-      let subrequests = 0;
-      // PAPER is the strategy authority. A new major execution version also
-      // starts a fresh operator-facing LIVE record/archive epoch before any
-      // optional settlement history can be repopulated.
-      await this.ensureLiveRecordEpoch(Date.now());
+  private publishCriticalHealth(observedAt:number,books:{successes:number;requests:number}) {
+    this.runtime.lastAlarmAt=observedAt;
+    if(books.successes>0)this.runtime.lastSuccessAt=observedAt;
+    const readiness=this.realtimeReadiness(observedAt);
+    const authorityStale=this.runtime.lastSuccessAt==null||observedAt-this.runtime.lastSuccessAt>SYSTEM_HEALTH_STALE_AFTER_MS;
+    this.runtime.state=!this.authorityReady?"RECOVERY_REQUIRED":authorityStale?"RECONNECTING"
+      :!readiness.protectedMarketsReady?"DEGRADED":readiness.actionableMarkets>0?"LIVE":"WARMING";
+    const feedError=authorityStale?`${books.requests||this.runtime.symbols.length}个计划盘口暂不可用`
+      :!readiness.protectedMarketsReady?"已有持仓缺少新鲜保护盘口":null;
+    this.runtime.lastError=feedError??this.runtime.d1MirrorError;
+  }
+
+  private launchOptionalWork(now:number,universeDue:boolean) {
+    if(this.optionalWork)return;
+    const task=(async()=>{
+      let subrequests=0;
       this.launchLiveSettlementBackground();
-      subrequests += await this.refreshForwardUrgentMinutes(Date.now());
-      if (universeDue) {
-        subrequests += 2;
-        try { this.refreshUniverse(Date.now(), await fetchActiveContracts()); }
-        catch (error) { this.runtime.lastError = `universe: ${safeError(error)}`; }
-      } else subrequests += await this.updateAncillary(now);
-      const radarDue = radarAttemptDue(this.runtime.radar, Date.now());
-      if (radarDue) {
-        subrequests += 1;
-        this.runtime.radar.lastAttemptAt = Date.now();
-        try { this.refreshRadar(Date.now(), await fetchMarketTickers()); }
-        catch (error) { this.runtime.radar = failedRadarRuntime(this.runtime.radar, Date.now(), error); }
+      if(universeDue){
+        subrequests+=2;
+        try{this.refreshUniverse(Date.now(),await fetchActiveContracts());}
+        catch(error){this.runtime.lastError=`universe: ${safeError(error)}`;}
       }
-      subrequests += await this.refreshStrategyCandle(Date.now());
-      // AnchorFlow derives 15m/1h direction from the retained 5m path. Daily
-      // candles remain a passive compatibility cache and consume no extra request.
-      subrequests += await this.refreshRegimeHourly(Date.now());
-      // Completed-candle work may atomically start a new AnchorFlow PAPER
-      // experiment only after fresh strategy paths exist. The audited critical
-      // alarm remains unchanged and independently owns exits/fallback marks.
-      await this.ensureAnchorFlowCutover(Date.now());
-      await this.ensureLiveRecordEpoch(Date.now());
+      const radarDue=radarAttemptDue(this.runtime.radar,Date.now());
+      if(radarDue){
+        subrequests++;
+        try{this.refreshRadar(Date.now(),await fetchMarketTickers());}
+        catch(error){this.runtime.radar=failedRadarRuntime(this.runtime.radar,Date.now(),error);}
+      }
+      subrequests+=await this.refreshAdaptiveCandles(Date.now());
+      subrequests+=await this.refreshForwardUrgentMinutes(Date.now());
       await this.advanceForwardNow(Date.now(),true);
-      await this.maybeWriteStrategyRuntimeLog(Date.now());
-      this.runtime.subrequestCount += subrequests;
-      this.runtime.maxSubrequestsInAlarm = Math.max(this.runtime.maxSubrequestsInAlarm, subrequests);
-    })().catch((error) => {
-      // Optional analysis may retry on its own cadence, but it cannot demote a
-      // fresh executable-book authority or break the two-second alarm chain.
-      this.runtime.strategyLogError = `optional: ${safeError(error)}`;
-    });
-    this.optionalWork = task;
-    const tracked = task.finally(() => {
-      if (this.optionalWork === task) this.optionalWork = null;
-    });
+      this.runtime.subrequestCount+=subrequests;
+      this.runtime.maxSubrequestsInAlarm=Math.max(this.runtime.maxSubrequestsInAlarm,subrequests);
+    })().catch(error=>{this.runtime.strategyLogError=`adaptive: ${safeError(error)}`;});
+    this.optionalWork=task;
+    const tracked=task.finally(()=>{if(this.optionalWork===task)this.optionalWork=null;});
     this.ctx.waitUntil(tracked);
   }
 
@@ -3448,7 +3442,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // The fresh executable book is the critical clock. Completed-candle,
       // universe, radar and research logging run under one non-overlapping
       // background task and can no longer delay the next protection/entry pass.
-      const books = await this.processBooks(now, cycleSymbols);
+      const books = await this.processAdaptiveBooks(now, cycleSymbols);
       subrequests += books.requests;
       this.publishCriticalHealth(Date.now(), books);
       // Forward/PAPER is financial authority, not optional analysis. Keep its
