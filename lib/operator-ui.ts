@@ -80,7 +80,7 @@ export async function operatorRequest<T>(path: string, method: "GET" | "POST" | 
     return payload;
   } catch (error) {
     if (error instanceof Error && (error.name === "AbortError"||error.name==="TimeoutError"
-      ||/aborted due to timeout/i.test(error.message)))
+      ||/aborted due to timeout/i.test(error.message)||/The string did not match the expected pattern/i.test(error.message)))
       throw new OperatorRequestError("未收到服务器确认，正在重新读取状态；不会自动重复提交。", 0);
     throw error;
   } finally { clearTimeout(timeout); }
