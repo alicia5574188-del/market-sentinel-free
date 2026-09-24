@@ -51,10 +51,17 @@ export function launchFiveMinuteEvidence(input:{box:LaunchBox;minutes:MicroCandl
       :Math.max(0,Math.min(b.open,boundary)-b.close);
     const outsideBodyShare=outsideBody/Math.max(body,1e-12);
     const strongShape=directed&&metrics.closeLocation>=.75&&metrics.wickToBody<=.35&&outsideBodyShare>=.25;
-    // An unfinished 5m candle may switch to 1m only while it is STILL several
-    // times the recent average range. Once that body collapses, the old fast
-    // qualification is gone; it cannot be carried forward from an earlier tick.
-    const fast=strongShape&&multiple>=3&&metrics.bodyRate>=input.costRate*.75;
+    // First qualification must be >=3x the recent average range. After that,
+    // the SAME unfinished 5m candle may absorb only a genuinely small pullback:
+    // retain FAST only while >=70% of the originally qualified body and >=2x
+    // the recent average range remain. This encodes the user's "strong impulse
+    // still obviously larger than the pullback" rule without grandfathering a
+    // collapsed candle.
+    const sameFastBucket=input.fastQualifiedAt!=null
+      &&b.time===Math.floor((input.fastQualifiedAt-1)/BAR)*300;
+    const retainedFast=sameFastBucket&&(input.initialFastBody??0)>0
+      &&body>=(input.initialFastBody??0)*.70&&multiple>=2;
+    const fast=strongShape&&(multiple>=3||retainedFast)&&metrics.bodyRate>=input.costRate*.75;
     const closed=(b.time+300)*1000<=now;
     // The slower path is still a real 5m breakout, not a marginal close outside.
     // Require a long body, a meaningful share of that body beyond the full box,
