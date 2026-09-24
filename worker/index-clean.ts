@@ -28,7 +28,7 @@ import { type EventEntryAssessment, type RadarCandidate } from "../lib/market-ra
 import { initialMarketRegimes, marketRegimeSummary, normalizeMarketRegimes, residentCandleCandidate,
   type MarketRegimeCandidate, type MarketRegimeState, type ResidentCandleStructure } from "../lib/market-regime.ts";
 import { advanceStrategyArena, initialStrategyArena, normalizeStrategyArena, observeStrategyArena,
-  ARENA_FRICTION_RATE, MAX_PORTFOLIO_POSITIONS, PORTFOLIO_REALTIME_CAPACITY, resetStrategyArenaAccount,
+  ARENA_FRICTION_RATE, MAX_PORTFOLIO_POSITIONS, resetStrategyArenaAccount,
   type StrategyArenaState } from "../lib/strategy-arena.ts";
 import { ALL_REGIME_ENGINE_VERSION, allRegimePaperApproved } from "../lib/all-regime-engine.ts";
 import { allRegimePaperApproved as previousAllRegimePaperApproved } from "../lib/previous-all-regime-engine.ts";
@@ -3299,7 +3299,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           markets: this.runtime.symbols.length,
           scannedMarkets: this.runtime.radar.scanned,
           scanUniverse: SCAN_UNIVERSE_SIZE,
-          realtimeCapacity: PORTFOLIO_REALTIME_CAPACITY,
+          realtimeCapacity: FORWARD_EXECUTION_BBO_CAP, minuteConfirmationCapacity: FORWARD_MINUTE_CONFIRMATION_CAP,
           plannedDoWritesPerDay: PRIMARY_PLANNED_DO_ROWS,
           twoMemberReservedDoRowsPerDay: TWO_MEMBER_PLANNED_DO_ROWS,
           resourceModelScope:"reserved rows; retries, controls, other workloads, request traffic and duration not certified",
@@ -3358,7 +3358,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           capacityCertified: false,
           internalAnalysisP99RedlineMs: 25, topLevelCpuP99RedlineMs: 8, assumedRuntimePollSeconds: 10,
           plannedForegroundDoRequestsPerDay: 8_640, plannedCronWatchdogsPerDay: 1_440, plannedTotalDoRequestsPerDay: 53_280,
-          maxOpenPositions: null, realtimeCapacity: PORTFOLIO_REALTIME_CAPACITY, plannedMaxD1BilledWritesPerDay: 4_800 } });
+          maxOpenPositions: null, realtimeCapacity: FORWARD_EXECUTION_BBO_CAP, minuteConfirmationCapacity: FORWARD_MINUTE_CONFIRMATION_CAP, plannedMaxD1BilledWritesPerDay: 4_800 } });
     }
     if (path === "/live-history" && request.method === "GET") return json(await this.privateLiveHistory());
     if (path === "/owner-status" && request.method === "GET") {
