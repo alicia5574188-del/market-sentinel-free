@@ -127,7 +127,7 @@ test("manual PAPER reset preserves causal learning while resetting the financial
 
 test("summary exposes relation lifecycle and the no-forced-reversal boundary",()=>{
   const s=initialForward(1000),view=forwardSummary(s,{},2000);
-  assert.equal(view.engineVersion,FORWARD_RELATION_V2_VERSION);assert.equal(view.targetPositions,10);assert.equal(view.realtimePositionCap,11);
+  assert.equal(view.engineVersion,FORWARD_RELATION_V2_VERSION);assert.equal(view.targetPositions,null);assert.equal(view.positionLimit,null);\n  assert.equal(view.executionBboCapacity,30);assert.equal(view.minuteConfirmationCapacity,11);
   assert.match(view.boundaries.grammar,/15\/60\/180/);assert.match(view.boundaries.sampleMeaning,/旧方向失效不会自动生成反向订单/);
   assert.equal(view.relationEngine.version,FORWARD_RELATION_V2_VERSION);
 });
