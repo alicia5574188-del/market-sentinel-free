@@ -2957,7 +2957,52 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return symbols.filter(symbol=>urgent.has(symbol)||(this.sessionWarmup[symbol]??0)<2||bucket(symbol)===slot);
   }
 
-  private async processBooks(now: number, cycleSymbols = [...this.runtime.symbols]) {
+  private async processAdaptiveBooks(now:number,cycleSymbols=[...this.runtime.symbols]) {
+    if(this.forwardState){
+      this.ctx.waitUntil(this.gateStream.ensure(this.runtime.symbols,
+        forwardUrgentMinuteSymbols(this.forwardState,this.runtime.liquidUniverse),this.strategyPathSymbols(),now));
+    }
+    const urgent=new Set([...this.currentAuthorityProtectionSymbols(),...this.forwardUrgentSymbols(now)]);
+    const streamBook=(symbol:string)=>this.gateStream.book(symbol,this.runtime.tickSize[symbol]??.0001,
+      this.runtime.contractMeta[symbol]?.quantoMultiplier??1,Math.max(now,Date.now()));
+    const due=cycleSymbols.filter(symbol=>streamBook(symbol)||(this.runtime.feedFailures[symbol]?.retryAt??0)<=now);
+    this.runtime.feedQuality.attempts+=due.length;
+    const rows=await Promise.allSettled(due.map(async symbol=>{
+      const pushed=streamBook(symbol);if(pushed){this.gateStream.used("websocket");return{symbol,snapshot:pushed};}
+      const fetcher=urgent.has(symbol)?fetchUrgentFuturesBook:fetchBackgroundFuturesBook;
+      const snapshot=await fetcher(symbol,this.runtime.tickSize[symbol]??.0001,this.runtime.contractMeta[symbol]?.quantoMultiplier??1);
+      this.gateStream.used("rest");return{symbol,snapshot};
+    }));
+    let successes=0;
+    for(let i=0;i<rows.length;i++){
+      const symbol=due[i]!,result=rows[i]!;
+      if(result.status!=="fulfilled"){
+        const prior=this.runtime.feedFailures[symbol]?.count??0,count=Math.min(5,prior+1);
+        const delay=urgent.has(symbol)?LOOP_MS:[2000,4000,8000,16000,30000][count-1]!;
+        const gateRetry=result.reason instanceof GatePublicError?result.reason.retryAt:null,error=safeError(result.reason);
+        this.runtime.feedQuality.failures++;this.runtime.feedQuality.lastFailureAt=now;
+        this.runtime.feedQuality.lastFailureSymbol=symbol;this.runtime.feedQuality.lastError=error;
+        this.suspendSymbol(symbol,now,error,Math.max(now+delay,gateRetry??0));continue;
+      }
+      const {snapshot}=result.value,bid=snapshot.bids[0]?.price??0,ask=snapshot.asks[0]?.price??0,at=snapshot.observedAt;
+      const fresh=bid>0&&ask>=bid&&at>0&&Math.max(now,Date.now())-at<=STALE_AFTER_MS;
+      if(!fresh){this.suspendSymbol(symbol,now,"Gate盘口失鲜",now+LOOP_MS);continue;}
+      const recovery=this.acceptFreshSymbol(symbol,now,at,true);
+      if(recovery.recovered)this.runtime.feedQuality.recoveries++;
+      this.sessionWarmup[symbol]=Math.min(2,(this.sessionWarmup[symbol]??0)+1);
+      const ready=recovery.entryReady&&(this.sessionWarmup[symbol]??0)>=2&&this.runtime.contractMeta[symbol]!=null;
+      const mid=(bid+ask)/2;
+      this.runtime.evidence[symbol]={midpoint:mid,bestBid:bid,bestAsk:ask,observedAt:at,
+        warmup:this.sessionWarmup[symbol]??0,fresh:true,ancillaryFresh:true,optionalFresh:true,entryReady:ready,
+        recoveryFreshCount:recovery.recoveryFreshCount,suspensionReason:ready?null:"等待第二份新鲜盘口确认",
+        topLong:null,topShort:null,absorption:0,range15m:null};
+      this.recordForwardMinuteQuote(symbol,mid,at);successes++;
+    }
+    if(successes>0)this.runtime.lastSuccessAt=Date.now();
+    return{successes,requests:due.length,criticalChanged:false};
+  }
+
+  private async processLegacyBooks(now: number, cycleSymbols = [...this.runtime.symbols]) {
     const authorityBefore = this.captureAuthority();
     if(this.forwardState?.strategyAuthorityVersion===MULTI_TURN_VERSION){
       const work=this.gateStream.ensure(this.runtime.symbols,forwardUrgentMinuteSymbols(this.forwardState,this.runtime.liquidUniverse),
