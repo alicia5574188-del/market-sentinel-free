@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
+import {OperatorRequestError,operatorRequest} from "../lib/operator-ui.ts";
 
 test("owner PAPER reset remains isolated, confirmed and unavailable to members",()=>{
   const worker=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8");
@@ -34,4 +35,15 @@ test("owner PAPER reset remains isolated, confirmed and unavailable to members",
   assert.match(page,/PaperAccountReset/);
   assert.match(cache,/context\.startedAt/);
   assert.match(cache,/if\(this\.key!==key\)/);
+});
+
+
+test("PAPER reset Safari DOMException is Chinese and never replayed",async()=>{
+  const original=globalThis.fetch;let calls=0;
+  globalThis.fetch=async()=>{calls++;throw new DOMException("The string did not match the expected pattern.","SyntaxError");};
+  try{
+    await assert.rejects(()=>operatorRequest("/api/paper/reset","POST",{confirm:"RESET_PAPER"}),
+      e=>e instanceof OperatorRequestError&&e.status===0&&/未收到服务器确认/.test(e.message));
+    assert.equal(calls,1);
+  }finally{globalThis.fetch=original;}
 });
