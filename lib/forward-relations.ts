@@ -150,7 +150,7 @@ export function initialMultiTurnForward(now:number):ForwardState{
   s.regionVersion=REGION_LIFECYCLE_VERSION;s.regionInitializedAt=now;s.regionLifecycles={};s.regionSignals=[];
   s.executionVersion=ANCHOR_FLOW_VERSION;s.anchorFlows={};s.anchorConsumed={};
   s.regionLaunchVersion=REGION_LAUNCH_VERSION;s.regionLaunches={};s.regionLaunchSignals=[];
-  s.latestReason="RegionLaunch 区域爆发系统已启动：只交易最近成熟5分钟缠绕区域的完整影线边界强离区；旧 AnchorFlow/区域回归仅保留历史兼容，不再产生新订单。";
+  s.latestReason="RegionLaunch 区域机会系统已启动：成熟5分钟缠绕区域同时提供边缘轮转、有效释放和突破回踩三种参与方式；旧 AnchorFlow 不再产生新订单。";
   event(s,now,"START",REGION_LAUNCH_VERSION,s.latestReason);return s;
 }
 export function normalizeForward(v:ForwardState|null|undefined,now:number):ForwardState {
@@ -1135,7 +1135,7 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
   if(launchUpgrade){
     s.regionLaunchVersion=REGION_LAUNCH_VERSION;s.regionLaunches=s.regionLaunches??{};s.regionLaunchSignals=[];
     event(s,now,"UPGRADE",REGION_LAUNCH_VERSION,
-      "RegionLaunch升级为完整区间与5分钟先行确认：影线极值属于突破边界；5分钟异常强可提前切换1分钟确认，较慢离区先等5分钟区间外收盘，再观察加速或小回调重启。旧持仓生命周期不变。");
+      "RegionLaunch v4升级为区域机会引擎：缠绕区域只负责位置；前方压制/支撑会并入有效触发位，同时开放边缘轮转、首次释放与回踩二次参与。60秒反馈只诊断，不再机械平仓；旧持仓生命周期不变。");
   }
   const entrySymbols=new Set(input.entrySymbols??Object.keys(paths));
   const retainedSymbols=[...new Set([...entrySymbols,...s.positions.map(position=>position.symbol),
@@ -1168,7 +1168,7 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
     s.entryOpportunities=[];
     s.lastCycleAt=now;s.selectedSymbols=[...entrySymbols];
     const regionRows=Object.values(s.regionLifecycles).filter(row=>entrySymbols.has(row.symbol)&&row.zone);
-    const activeLaunches=Object.values(s.regionLaunches??{}).filter(row=>["ARMED","IGNITION","READY"].includes(row.phase)&&entrySymbols.has(row.symbol));
+    const activeLaunches=Object.values(s.regionLaunches??{}).filter(row=>["ARMED","IGNITION","RETEST","READY"].includes(row.phase)&&entrySymbols.has(row.symbol));
     s.fitDiagnostics={tested:regionRows.length,qualified:activeLaunches.length,trainGroups:0,checkGroups:0,latestAt:now,
       rapidQualified:activeLaunches.length,activeLong:0,activeShort:0};
     s.observations+=region.updated;s.measured+=region.signals.length;
@@ -1283,7 +1283,7 @@ export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols
   if(s.strategyAuthorityVersion!==MULTI_TURN_VERSION)return s.positions.map(p=>p.symbol);
   const allowed=entrySymbols?new Set(entrySymbols):null;
   const launchSignals=(s.regionLaunchSignals??[]).filter(signal=>signal.expiresAt>now&&(!allowed||allowed.has(signal.symbol)));
-  const launchPriority:Record<RegionLaunchState["phase"],number>={READY:0,IGNITION:1,ARMED:2,WATCH:9,CONSUMED:9};
+  const launchPriority:Record<RegionLaunchState["phase"],number>={READY:0,RETEST:1,IGNITION:2,ARMED:3,WATCH:9,CONSUMED:9};
   const launches=Object.values(s.regionLaunches??{}).filter(row=>["READY","IGNITION","ARMED"].includes(row.phase)
     &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>launchPriority[a.phase]-launchPriority[b.phase]
       ||b.quality-a.quality||b.updatedAt-a.updatedAt||a.symbol.localeCompare(b.symbol));
@@ -1296,8 +1296,8 @@ export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols
 export function forwardUrgentMinuteSymbols(s:ForwardState,entrySymbols?:Iterable<string>){
   if(s.strategyAuthorityVersion!==MULTI_TURN_VERSION)return [];
   const allowed=entrySymbols?new Set(entrySymbols):null;
-  const priority:Record<RegionLaunchState["phase"],number>={IGNITION:0,ARMED:1,READY:2,WATCH:9,CONSUMED:9};
-  const launches=Object.values(s.regionLaunches??{}).filter(row=>["IGNITION","ARMED"].includes(row.phase)
+  const priority:Record<RegionLaunchState["phase"],number>={RETEST:0,IGNITION:1,ARMED:2,READY:3,WATCH:9,CONSUMED:9};
+  const launches=Object.values(s.regionLaunches??{}).filter(row=>["RETEST","IGNITION","ARMED"].includes(row.phase)
     &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>priority[a.phase]-priority[b.phase]
       ||b.quality-a.quality||b.updatedAt-a.updatedAt||a.symbol.localeCompare(b.symbol));
   return[...new Set(launches.map(row=>row.symbol))].slice(0,11);
@@ -1311,7 +1311,7 @@ export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iter
     const regions=Object.values(s.regionLifecycles??{}).filter(row=>row.zone&&(!allowed||allowed.has(row.symbol)))
       .sort((a,b)=>(priority[a.status]??9)-(priority[b.status]??9)||b.observedAt-a.observedAt||a.symbol.localeCompare(b.symbol));
     const launchSignals=(s.regionLaunchSignals??[]).filter(signal=>signal.expiresAt>now&&(!allowed||allowed.has(signal.symbol)));
-    const launchPriority:Record<RegionLaunchState["phase"],number>={READY:0,IGNITION:0,ARMED:1,WATCH:9,CONSUMED:9};
+    const launchPriority:Record<RegionLaunchState["phase"],number>={READY:0,RETEST:0,IGNITION:1,ARMED:2,WATCH:9,CONSUMED:9};
     const launches=Object.values(s.regionLaunches??{}).filter(row=>["READY","IGNITION","ARMED"].includes(row.phase)
       &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>launchPriority[a.phase]-launchPriority[b.phase]
         ||b.quality-a.quality||b.updatedAt-a.updatedAt||a.symbol.localeCompare(b.symbol));
