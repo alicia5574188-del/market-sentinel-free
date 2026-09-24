@@ -883,32 +883,34 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // the remaining slots rotate through liquid contracts without giving turnover
     // or raw volatility any direct trading authority.
     const eligibleRows = rows.filter((row) => eligible.has(row.symbol) && forwardSymbolAllowed(row.symbol));
-    const anchorFlows=Object.values(this.forwardState?.anchorFlows??{});
     const launches=Object.values(this.forwardState?.regionLaunches??{});
-    const urgentAnchors=anchorFlows.filter(row=>row.phase==="READY"||row.phase==="RETEST")
-      .sort((a,b)=>(a.phase==="READY"?0:1)-(b.phase==="READY"?0:1)||(b.readyAt??0)-(a.readyAt??0));
+    const tickerBySymbol=new Map(eligibleRows.map(row=>[row.symbol,row]));
     const launchPriority=(phase:string)=>phase==="READY"?0:phase==="IGNITION"?1:phase==="ARMED"?2:9;
+    const boundaryDistance=(row:(typeof launches)[number])=>{
+      const px=tickerBySymbol.get(row.symbol)?.last,c=row.compression;
+      if(!(px&&c&&c.width>0))return Number.POSITIVE_INFINITY;
+      return Math.min(Math.abs(px-c.lower),Math.abs(px-c.upper))/c.width;
+    };
+    // Realtime slots go first to the already-formed regions that are actually
+    // closest to a full-boundary departure, then to region quality. This keeps
+    // broad moves from wasting scarce 1m/book capacity on distant setups.
     const urgentLaunches=launches.filter(row=>["READY","IGNITION","ARMED"].includes(row.phase))
       .sort((a,b)=>launchPriority(a.phase)-launchPriority(b.phase)
-        ||b.quality-a.quality||b.updatedAt-a.updatedAt);
-    // Retain a bounded sleeve of the best mature mother regions long enough to
-    // form their child compression. Locking every WATCH forever would stop the
-    // exploration sleeve; locking none was evicting setups before ignition.
-    const launchContinuity=launches.filter(row=>row.phase==="WATCH"&&now-row.updatedAt<=30*60_000)
-      .sort((a,b)=>b.quality-a.quality||b.failedDepartures-a.failedDepartures||b.motherBars-a.motherBars||b.updatedAt-a.updatedAt)
-      .slice(0,6);
-    const passiveAnchors=anchorFlows.filter(row=>!["READY","RETEST","FAILED","CONSUMED"].includes(row.phase))
-      .sort((a,b)=>b.createdAt-a.createdAt).slice(0,6);
+        ||boundaryDistance(a)-boundaryDistance(b)||b.quality-a.quality||b.updatedAt-a.updatedAt);
+    // Keep more recent mature regions in the 30-symbol completed-5m universe;
+    // they do not consume realtime slots until they become close/urgent.
+    const launchContinuity=launches.filter(row=>row.phase==="WATCH"&&now-row.updatedAt<=45*60_000)
+      .sort((a,b)=>b.quality-a.quality||boundaryDistance(a)-boundaryDistance(b)
+        ||b.failedDepartures-a.failedDepartures||b.motherBars-a.motherBars||b.updatedAt-a.updatedAt)
+      .slice(0,10);
     const lockedAnchorSymbols=[...new Set([
       ...(this.forwardState?.positions.flatMap(position=>position.status==="OPEN"?[position.symbol]:[])??[]),
-      ...(this.forwardState?.regionSignals??[]).filter(signal=>signal.expiresAt>now).map(signal=>signal.symbol),
       ...(this.forwardState?.regionLaunchSignals??[]).filter(signal=>signal.expiresAt>now).map(signal=>signal.symbol),
-      ...urgentAnchors.map(row=>row.symbol),...urgentLaunches.map(row=>row.symbol),
-      ...launchContinuity.map(row=>row.symbol),...passiveAnchors.map(row=>row.symbol),
+      ...urgentLaunches.map(row=>row.symbol),...launchContinuity.map(row=>row.symbol),
     ])];
     const universeRows = selectAnchorOpportunityUniverse({ rows: eligibleRows, limit: SCAN_UNIVERSE_SIZE,
       lockedSymbols: lockedAnchorSymbols, currentSymbols: this.runtime.liquidUniverse,
-      coreSymbols:DEFAULT_SYMBOLS,rotationSeed: Math.floor(now / BAR_MS),explorationSlots:4,liquiditySlots:6 });
+      coreSymbols:DEFAULT_SYMBOLS,rotationSeed: Math.floor(now / BAR_MS),explorationSlots:0,liquiditySlots:10 });
     const universe = new Set(universeRows.map((row) => row.symbol));
     this.runtime.liquidUniverse = universeRows.map((row) => row.symbol);
     this.runtime.radar = successfulRadarRuntime(this.runtime.radar, now, universeRows.length, []);
