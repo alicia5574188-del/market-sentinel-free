@@ -23,7 +23,7 @@ import { evaluateMultiTurnExitController } from "./multi-turn-exit-controller.ts
 import { evaluateMultiTurnClock } from "./multi-turn-clock.ts";
 import { evaluateMultiTurnEntryPolicy, multiTurnEntryLeverage, MULTI_TURN_TARGET_LEVERAGE } from "./multi-turn-entry-policy.ts";
 import { evaluateMultiTurnEntryMemory, type MultiTurnClosedOutcome } from "./multi-turn-entry-memory.ts";
-import { entryOpportunityCandidate, type MultiTurnEntryOpportunity } from "./multi-turn-entry-opportunity.ts";
+import { entryOpportunityCandidate, evaluateMultiTurnEntryOpportunities, type MultiTurnEntryOpportunity } from "./multi-turn-entry-opportunity.ts";
 import { MULTI_TURN_ROTATION_COOLDOWN_MS, MULTI_TURN_ROTATION_VERSION, evaluateRotationOpportunity,
   multiTurnRotationReentryCooldownMs, rankWeakRotationHoldings, rotationAdvantageEnough, rotationRiskSaturated } from "./multi-turn-rotation.ts";
 import { REGION_LIFECYCLE_VERSION, evaluateRegionUniverse,
@@ -42,6 +42,8 @@ export const FEATURES = ["5分钟推进", "15分钟推进", "1小时推进", "�
 export const PAPER_COST = { feeRate: .0007, slippageRate: .00025, fundingAllowancePerDay: .0002,
   assumption: "双边吃单费各7bp＋滑点各2.5bp＋实际买卖价差；资金费为每日2bp不利占位，并非Gate实际结算" };
 const COST_FLOOR = .0022, DAY = 86_400_000;
+export const ADAPTIVE_TARGET_POSITIONS = 10;
+export const ADAPTIVE_REALTIME_POSITION_CAP = 11;
 export type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
 export type Quote = { bestBid: number; bestAsk: number; observedAt: number; fresh: boolean; entryReady?: boolean };
 export type Contract = { quantoMultiplier: number; leverageMax: number; maintenanceRate: number; minContracts?: number };
@@ -743,7 +745,8 @@ function trySelectiveRiskRotation(input:{state:ForwardState;candidate:TurnCandid
   const totalRisk=s.positions.reduce((n,t)=>n+t.plannedRisk,0);
   const sideRisk=s.positions.filter(t=>t.side===input.candidate.side).reduce((n,t)=>n+t.plannedRisk,0);
   const sleeveRisk=s.positions.filter(t=>t.turn?.timeframe===input.candidate.timeframe).reduce((n,t)=>n+t.plannedRisk,0);
-  if(!rotationRiskSaturated({equity:marked.equity,totalRisk,sideRisk,sleeveRisk,riskCap:input.candidate.riskCap}))return false;
+  if(!rotationRiskSaturated({equity:marked.equity,totalRisk,sideRisk,sleeveRisk,riskCap:input.candidate.riskCap,
+    positionCount:s.positions.length,targetPositions:ADAPTIVE_TARGET_POSITIONS}))return false;
   const opportunity=evaluateRotationOpportunity({candidate:input.candidate,frame,remainingSpaceRate:input.remainingSpaceRate,costRate:input.costRate});
   if(!opportunity.eligible)return false;
   const weak=rankWeakRotationHoldings({now:input.now,holdings:s.positions.flatMap(t=>
@@ -823,6 +826,12 @@ function openMultiTurnTrades(s:ForwardState,quotes:Record<string,Quote>,contract
       totalRisk,longRisk,shortRisk,sleeveRisks,grossNotional:s.positions.reduce((n,t)=>n+t.notional,0),
       usedMargin:s.positions.reduce((n,t)=>n+t.margin,0),tradeRisks:s.positions.map(t=>t.plannedRisk),costRate:cost,
       feeRate:PAPER_COST.feeRate,slippageRate:PAPER_COST.slippageRate});
+    const rotationRemaining=entryPolicy.ok?entryPolicy.plan.remainingSpaceRate:entryPolicy.remainingSpaceRate;
+    if(s.positions.length>=ADAPTIVE_TARGET_POSITIONS){
+      if(options.allowRotation!==false&&trySelectiveRiskRotation({state:s,candidate,quotes,contracts,now,entrySymbols,
+        remainingSpaceRate:rotationRemaining,costRate:cost}))return;
+      reject(`组合已达到${ADAPTIVE_TARGET_POSITIONS}个目标席位；只有明显更强候选才允许择优换仓`);continue;
+    }
     if(!entryPolicy.ok){
       if(entryPolicy.rotationEligible&&options.allowRotation!==false&&trySelectiveRiskRotation({state:s,candidate,quotes,contracts,now,entrySymbols,
         remainingSpaceRate:entryPolicy.remainingSpaceRate,costRate:cost}))return;
@@ -1028,7 +1037,8 @@ function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:R
   s.entryDiagnostics=diagnostics;
   const reject=(reason:string)=>{diagnostics.reasons[reason]=(diagnostics.reasons[reason]??0)+1;};
   for(const signal of rows){
-    // regionLaunchSignals is the only executable queue. No other historical
+    if(s.positions.length>=ADAPTIVE_REALTIME_POSITION_CAP){reject("组合已达到11个实时持仓上限；RegionLaunch保留到事件有效期结束");break;}
+    // RegionLaunch remains the highest-priority structural queue. No historical
     // RegionEntrySignal subtype is allowed to reach this loop.
     if(signal.entryModel!=="REGION_LAUNCH"){reject("只有RegionLaunch区域机会事件拥有新开仓权限");continue;}
     if(s.positions.some(t=>t.symbol===signal.symbol))continue;
@@ -1156,8 +1166,9 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
     s.regionLifecycles=region.states;
     const rawMigrations=region.signals.filter(signal=>signal.kind==="MIGRATION");
     const rejections=region.signals.filter(signal=>signal.kind==="REJECTION");
-    // New entries are intentionally single-authority: the region detector only
-    // supplies the latest location; RegionLaunch is the only executable path.
+    // The region detector remains location authority. RegionLaunch owns the
+    // highest-quality structural entries, while one simple 5m direction-space
+    // lane supplies continuous participation and portfolio occupancy.
     s.anchorFlows={};s.anchorConsumed={};s.regionSignals=[];
     const launchUniverse=advanceRegionLaunchUniverse({paths:regionPaths,lifecycles:s.regionLifecycles,frames:s.turnEngine.frames,
       prior:s.regionLaunches??{},now,costRate:cost});
@@ -1165,12 +1176,17 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
     s.regionLaunchSignals=(s.regionLaunchSignals??[]).filter(signal=>signal.expiresAt>now
       &&s.regionLaunches?.[signal.symbol]?.phase==="READY"
       &&s.regionLaunches?.[signal.symbol]?.motherRegionId===signal.regionId);
-    s.entryOpportunities=[];
+    s.entryOpportunities=evaluateMultiTurnEntryOpportunities({paths:regionPaths,turnEngine:s.turnEngine,quotes,now,
+      costRate:(timeframe)=>turnModeledCost(timeframe,0)})
+      .filter(row=>row.timeframe==="5m").slice(0,30);
     s.lastCycleAt=now;s.selectedSymbols=[...entrySymbols];
     const regionRows=Object.values(s.regionLifecycles).filter(row=>entrySymbols.has(row.symbol)&&row.zone);
     const activeLaunches=Object.values(s.regionLaunches??{}).filter(row=>["ARMED","IGNITION","RETEST","READY"].includes(row.phase)&&entrySymbols.has(row.symbol));
-    s.fitDiagnostics={tested:regionRows.length,qualified:activeLaunches.length,trainGroups:0,checkGroups:0,latestAt:now,
-      rapidQualified:activeLaunches.length,activeLong:0,activeShort:0};
+    const eligibleParticipation=(s.entryOpportunities??[]).filter(row=>row.eligible);
+    const qualifiedSymbols=new Set([...activeLaunches.map(row=>row.symbol),...eligibleParticipation.map(row=>row.symbol)]);
+    s.fitDiagnostics={tested:regionRows.length,qualified:qualifiedSymbols.size,trainGroups:0,checkGroups:0,latestAt:now,
+      rapidQualified:activeLaunches.length,activeLong:eligibleParticipation.filter(row=>row.side==="LONG").length,
+      activeShort:eligibleParticipation.filter(row=>row.side==="SHORT").length};
     s.observations+=region.updated;s.measured+=region.signals.length;
     if(region.signals.length){
       const sample=[...rawMigrations.map(x=>`${x.symbol} 区域外离→${x.side}`),
@@ -1190,7 +1206,11 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
     &&s.regionLaunches?.[signal.symbol]?.phase==="READY"&&s.regionLaunches?.[signal.symbol]?.motherRegionId===signal.regionId);
   s.regionLaunchSignals=[...new Map([...existingLaunch,...launchQuotes.signals].map(signal=>[signal.id,signal])).values()]
     .sort((a,b)=>a.completedAt-b.completedAt||a.symbol.localeCompare(b.symbol)).slice(-30);
+  // Structural RegionLaunch entries consume capacity first. The restored 5m
+  // direction-space lane then fills remaining seats and can rotate only when
+  // a materially stronger candidate exists.
   openRegionTrades(s,quotes,contracts,now,entrySymbols,minutePaths);
+  openMultiTurnTrades(s,quotes,contracts,now,entrySymbols);
   const marked=forwardEquity(s,quotes,now);
   if(!marked.stalePositions){
     s.peakEquity=Math.max(s.peakEquity,marked.equity);
@@ -1283,14 +1303,17 @@ export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols
   if(s.strategyAuthorityVersion!==MULTI_TURN_VERSION)return s.positions.map(p=>p.symbol);
   const allowed=entrySymbols?new Set(entrySymbols):null;
   const launchSignals=(s.regionLaunchSignals??[]).filter(signal=>signal.expiresAt>now&&(!allowed||allowed.has(signal.symbol)));
+  const participation=(s.entryOpportunities??[]).filter(row=>row.eligible&&row.timeframe==="5m"&&(!allowed||allowed.has(row.symbol)))
+    .sort((a,b)=>b.score-a.score||b.directionStrength-a.directionStrength||a.symbol.localeCompare(b.symbol));
   const launchPriority:Record<RegionLaunchState["phase"],number>={READY:0,RETEST:1,IGNITION:2,ARMED:3,WATCH:9,CONSUMED:9};
   const launches=Object.values(s.regionLaunches??{}).filter(row=>["READY","IGNITION","ARMED"].includes(row.phase)
     &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>launchPriority[a.phase]-launchPriority[b.phase]
       ||b.quality-a.quality||b.updatedAt-a.updatedAt||a.symbol.localeCompare(b.symbol));
-  // Existing positions retain protection priority. Every remaining urgent quote
-  // slot belongs to the sole executable RegionLaunch path; retired AnchorFlow
-  // state cannot displace a current winding-region launch.
-  return[...new Set([...s.positions.map(p=>p.symbol),...launchSignals.map(x=>x.symbol),...launches.map(x=>x.symbol)])];
+  // Existing positions retain protection priority, then fresh RegionLaunch
+  // states, then the highest-scored 5m participation candidates. The worker
+  // still enforces the same scarce 11-book realtime capacity.
+  return[...new Set([...s.positions.map(p=>p.symbol),...launchSignals.map(x=>x.symbol),...launches.map(x=>x.symbol),
+    ...participation.map(x=>x.symbol)])];
 }
 
 export function forwardUrgentMinuteSymbols(s:ForwardState,entrySymbols?:Iterable<string>){
@@ -1311,12 +1334,14 @@ export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iter
     const regions=Object.values(s.regionLifecycles??{}).filter(row=>row.zone&&(!allowed||allowed.has(row.symbol)))
       .sort((a,b)=>(priority[a.status]??9)-(priority[b.status]??9)||b.observedAt-a.observedAt||a.symbol.localeCompare(b.symbol));
     const launchSignals=(s.regionLaunchSignals??[]).filter(signal=>signal.expiresAt>now&&(!allowed||allowed.has(signal.symbol)));
+    const participation=(s.entryOpportunities??[]).filter(row=>row.eligible&&row.timeframe==="5m"&&(!allowed||allowed.has(row.symbol)))
+      .sort((a,b)=>b.score-a.score||b.directionStrength-a.directionStrength||a.symbol.localeCompare(b.symbol));
     const launchPriority:Record<RegionLaunchState["phase"],number>={READY:0,RETEST:0,IGNITION:1,ARMED:2,WATCH:9,CONSUMED:9};
     const launches=Object.values(s.regionLaunches??{}).filter(row=>["READY","IGNITION","ARMED"].includes(row.phase)
       &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>launchPriority[a.phase]-launchPriority[b.phase]
         ||b.quality-a.quality||b.updatedAt-a.updatedAt||a.symbol.localeCompare(b.symbol));
     return[...new Set([...s.positions.map(p=>p.symbol),...launchSignals.map(x=>x.symbol),
-      ...launches.map(x=>x.symbol),...regions.map(x=>x.symbol)])].slice(0,11);
+      ...launches.map(x=>x.symbol),...participation.map(x=>x.symbol),...regions.map(x=>x.symbol)])].slice(0,11);
   }
   const matched=Object.values(s.frames).filter(f=>now-f.at<11*60_000&&s.rules.some(r=>r.status==="EXPERIMENTAL"&&r.expiresAt>now&&ruleApplies(r,f.symbol)&&conditionMatches(f.x,r.conditions)));
   return[...new Set([...s.positions.map(p=>p.symbol),...matched.map(f=>f.symbol)])];
@@ -1337,17 +1362,17 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     adaptationVersion:multi?(s.regionLaunchVersion??s.executionVersion??s.regionVersion??MULTI_TURN_VERSION):s.adaptationVersion??"legacy-forward-adaptation-v1",
     turnEngine:engine?{version:engine.version,updatedAt:engine.updatedAt,diagnostics:engine.diagnostics,
       calibration:engine.calibration,frames:engine.frames}:null,
-    turnRiskSleeves:multi?{"region_launch":.006}:null,
+    turnRiskSleeves:multi?{"region_launch":.006,"5m_participation_per_trade":.015}:null,
     marketRiskBudget:multi?(()=>{const dd=Math.max(0,1-marked.equity/Math.max(s.peakEquity,marked.equity));
       const scale=dd>=.20?.50:dd>=.10?.70:dd>=.05?.85:1;
-      return{totalRate:.04,longRate:.03,shortRate:.03,netDirectionalRate:.03,drawdownRate:dd,allocationScale:scale,
-        reason:`组合计划风险最多4%，同方向最多3%；RegionLaunch单笔最多0.6%；当前回撤缩放${(scale*100).toFixed(0)}%。`};})()
+      return{totalRate:.10,longRate:.065,shortRate:.065,netDirectionalRate:.065,drawdownRate:dd,allocationScale:scale,
+        reason:`组合计划风险最多10%，同方向最多6.5%；目标${ADAPTIVE_TARGET_POSITIONS}个持仓，RegionLaunch单笔最多0.6%，5分钟参与单笔最多1.5%；当前回撤缩放${(scale*100).toFixed(0)}%。`};})()
       :marketRiskBudget(s.marketState??null,marked.equity,s.peakEquity,s.turnForecast??null),
     lastCycleAt:s.lastCycleAt,lastFitAt:s.lastFitAt,revision:s.revision,initialEquity:s.initialEquity,balance:s.balance,...marked,
     targetEquity:s.initialEquity*2,netPnl:marked.equity-s.initialEquity,maxDrawdown:s.maxDrawdown,resolved:s.resolved,wins:s.wins,grossPnl:s.grossPnl,
     fees:s.fees,fundingAllowance:s.fundingAllowance,turnover:s.turnover,observations:s.observations,measured:s.measured,invalidated:s.invalidated,
     pending:multi?(engine?.pending.length??0):Object.keys(s.pending).length,sampleCounts:count,fitDiagnostics:s.fitDiagnostics,
-    entryOpportunities:multi?([] as MultiTurnEntryOpportunity[]):[],
+    entryOpportunities:multi?(s.entryOpportunities??[]).slice(0,30):[],
     regionVersion:multi?s.regionVersion??null:null,executionVersion:multi?s.executionVersion??null:null,
     regionLaunchVersion:multi?s.regionLaunchVersion??null:null,
     regionLaunches:multi?Object.values(s.regionLaunches??{}).sort((a,b)=>b.quality-a.quality||b.updatedAt-a.updatedAt).slice(0,30):[],
@@ -1358,12 +1383,12 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     rules:s.rules,positions:s.positions,history:s.history,events:s.events.slice(0,80),daily:s.daily,
     marketCount:s.selectedSymbols.length,markets:s.selectedSymbols,latestReason:s.latestReason,storage:s.storage,
     nextCycleAt:s.lastCycleAt?(Math.floor((s.lastCycleAt-90_000)/BAR_MS)+1)*BAR_MS+90_000:now,cost:PAPER_COST,
-    boundaries:multi?{scope:"PAPER_ONLY",grammar:"单一执行通道：先识别最近成熟5分钟缠绕区域，并把该区域实际K线的全部上下影线极值纳入完整边界；未收盘5分钟只有实体仍达到近期平均振幅至少3倍才可切1分钟，普通离区必须先在完整边界外用长实体收盘；随后只允许第一根1分钟强延续，或真正的小回调后重新突破整段回调极值。",
-      historyBackfill:false,sampleMeaning:"历史K线只恢复区域和观察状态；过去已经发生的突破绝不补单",
-      accounting:"新鲜买卖价模拟成交；费用、滑点、完整结构止损与当前位置剩余空间全部进入下单经济性计算",
-      risk:"组合计划风险≤4%，同方向≤3%；RegionLaunch单笔≤0.6%，单笔名义价值≤权益60%",
-      validation:"开仓后60秒必须出现高于建模成本的真实可执行正反馈；模拟账户仍是直接前向实验，不承诺收益",
-      liquidation:"RegionLaunch使用完整微结构止损；出现利润后只允许保护线向盈利方向移动，大利润停滞主动兑现"}:
+    boundaries:multi?{scope:"PAPER_ONLY",grammar:"简单双通道：RegionLaunch负责成熟区域的高质量结构位置；5分钟方向—空间评分负责持续参与并补足约10个持仓。两者共享同一账户、退出、利润保护与实盘事件链，不再增加独立策略账户。",
+      historyBackfill:false,sampleMeaning:"历史K线只恢复结构和评分；不补过去订单。近期价格状态优先，旧交易结果只做短期同方向防抖，不阻止反方向快速重评",
+      accounting:"新鲜买卖价模拟成交；费用、滑点、结构止损与当前位置剩余空间全部进入下单经济性计算",
+      risk:"组合计划风险≤10%，同方向≤6.5%；目标10仓、RegionLaunch允许临时第11席；RegionLaunch单笔≤0.6%，5分钟参与单笔≤1.5%",
+      validation:"RegionLaunch保留60秒正反馈诊断；5分钟参与由实时方向、剩余空间和持仓价值持续管理",
+      liquidation:"所有持仓共用现有结构退出与单向利润保护；市场变化时弱仓可被明显更强候选择优替换"}:
       {scope:"PAPER_ONLY",grammar:"最多两个连续特征条件；方向、期限、止损和回吐退出由新市场反应生成",historyBackfill:false,
       sampleMeaning:"市场条件与后来反应；不是影子订单或连胜晋级",accounting:"新鲜买卖价模拟成交；净值包含退出费用与资金占位",
       risk:"单笔风险上限1.5%；同一关系family的所有并行币合计最多占一个1.5%风险槽；成交校准为负仍保留15%探测风险，单币小样本连续缩仓",
