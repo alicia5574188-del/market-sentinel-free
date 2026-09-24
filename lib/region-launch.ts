@@ -240,13 +240,17 @@ function releaseBox(s:RegionLaunchState){
   return{...s.compression!,lower,upper,center,width};
 }
 function earlyReleaseSetup(s:RegionLaunchState,rows:RegionCandle[],current:RegionCandle|undefined,now:number,costRate:number){
-  if(!rows.length||!current)return null;
+  if(!rows.length)return null;
   const latest=rows.at(-1)!,at=minuteCompleteAt(latest);if(now-at>75_000)return null;
   const longTrigger=triggerWithBuffer(s,"LONG",costRate),shortTrigger=triggerWithBuffer(s,"SHORT",costRate);
   const side:RegionOpportunitySide|null=latest.close>longTrigger?"LONG":latest.close<shortTrigger?"SHORT":null;
   if(!side)return null;
   const d=side==="LONG"?1:-1,trigger=effectiveTrigger(s,side),metrics=microDirectionalBar(latest,side);
-  const fiveMetrics=microDirectionalBar(current,side),multiple=Math.abs(current.close-current.open)/Math.max(s.averageRange,1e-12);
+  // Official/aggregated unfinished 5m is preferred, but a just-completed fresh
+  // 1m bar is already enough to participate near the effective trigger. This
+  // avoids waiting several minutes only to chase the same valid release later.
+  const active=current??latest,fiveMetrics=microDirectionalBar(active,side),
+    multiple=Math.abs(active.close-active.open)/Math.max(s.averageRange,1e-12);
   const hasBarrier=barrierPrice(s,side)!=null,minimumMultiple=hasBarrier?1.45:1.25;
   const progress=d*(latest.close/Math.max(trigger,1e-12)-1);
   const strong=multiple>=minimumMultiple&&fiveMetrics.bodyRate>0&&metrics.bodyRate>=Math.max(.0008,costRate*.25)
