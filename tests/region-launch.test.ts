@@ -123,19 +123,20 @@ test("post-entry burst validation must clear modeled round-trip cost rather than
   assert.equal(regionLaunchValidationProofRate(.010),.006);
 });
 
-test("an inside-closing new wick extends the same full box while the first outside close freezes it",()=>{
+test("an inside-closing rejection wick does not widen the accepted box and an outside close leaves it unchanged",()=>{
   let states=armed();const old=states.BCH_USDT!.compression!;
   const inside=bar(0,100.1,101.12,98.70,100.2);
   states=advanceRegionLaunchUniverse({paths:{BCH_USDT:[...motherRows,inside]},lifecycles:{BCH_USDT:lifecycle()},prior:states,
     now:(START+300)*1000,costRate:.0022}).states;
-  assert.equal(states.BCH_USDT!.compression!.lower,98.70);
+  assert.equal(states.BCH_USDT!.compression!.lower,mother.lower);
+  assert.equal(states.BCH_USDT!.compression!.upper,mother.upper);
   const frozenUpper=states.BCH_USDT!.compression!.upper,frozenLower=states.BCH_USDT!.compression!.lower;
   const outside=bar(300,100.2,103.2,100.15,102.9);
   states=advanceRegionLaunchUniverse({paths:{BCH_USDT:[...motherRows,inside,outside]},lifecycles:{BCH_USDT:lifecycle()},prior:states,
     now:(START+600)*1000,costRate:.0022}).states;
   assert.equal(states.BCH_USDT!.compression!.lower,frozenLower);
   assert.equal(states.BCH_USDT!.compression!.upper,frozenUpper);
-  assert.notEqual(old.lower,98.70);
+  assert.equal(old.lower,mother.lower);
 });
 
 test("a restored READY without current minute evidence is demoted and cannot emit an order",()=>{
