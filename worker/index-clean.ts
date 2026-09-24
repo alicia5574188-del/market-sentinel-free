@@ -38,8 +38,9 @@ import { advanceRegimePortfolio, evaluateRegimePortfolio, initialRegimePortfolio
   REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE, resetRegimePortfolio,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
-import { advanceForward, closeForwardForReset, forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols,
-  forwardUrgentQuoteSymbols, forwardWatchSymbols, initialMultiTurnForward, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
+import { ADAPTIVE_ENGINE_VERSION, ADAPTIVE_REALTIME_POSITION_CAP, ADAPTIVE_TARGET_POSITIONS, advanceForward, closeForwardForReset,
+  forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols, forwardUrgentQuoteSymbols, forwardWatchSymbols,
+  initialMultiTurnForward, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { MULTI_TURN_VERSION } from "../lib/multi-turn-engine.ts";
 import { ANCHOR_FLOW_VERSION } from "../lib/anchor-flow.ts";
 import { forwardSymbolAllowed } from "../lib/forward-evidence.ts";
@@ -59,7 +60,7 @@ import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwa
   type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
 declare const __FORWARD_BUILD_SHA__: string;
 const FORWARD_BUILD_SHA = typeof __FORWARD_BUILD_SHA__ === "string" ? __FORWARD_BUILD_SHA__ : "local-verification";
-const MULTI_TURN_AUTO_CUTOVER = FORWARD_BUILD_SHA !== "local-verification";
+const MULTI_TURN_AUTO_CUTOVER = false; // retired: strategy upgrades are in-place and never reset PAPER
 import { advanceStrategyArena as advancePreviousStrategyArena,
   initialStrategyArena as initialPreviousStrategyArena,
   normalizeStrategyArena as normalizePreviousStrategyArena,
@@ -1059,17 +1060,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   protected reconcileCanonicalMirror(now: number) {
-    const priorEquity = this.runtime.canonicalPaper.equity;
-    const result = reconcileCanonicalPaper({ state: this.runtime.canonicalPaper,
-      accounts: { current: this.runtime.strategyArena, previous: this.runtime.previousStrategyArena,
-        regime: this.runtime.regimePortfolio }, now });
-    this.runtime.canonicalPaper = result.state;
-    this.runtime.equity = result.state.equity;
-    if (result.state.equity !== priorEquity) {
-      this.runtime.equityVersion += 1;
-      this.runtime.paperCycle.peakEquity = Math.max(this.runtime.paperCycle.peakEquity, result.state.equity);
-    }
-    return result.changed;
+    // Retired arena/regime accounts no longer participate in trading authority.
+    // Keep the compatibility checkpoint fields inert until the next storage cleanup.
+    void now;
+    if(this.forwardState)this.runtime.equity=forwardEquity(this.forwardState,this.regimeQuotes(Date.now()),Date.now()).equity;
+    return false;
   }
 
   private evaluateRegimeNow(now: number) {
@@ -1085,23 +1080,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private forwardHealth() {
-    const s=this.forwardState;
-    return {version:FORWARD_VERSION,policyVersion:s?.policyVersion??null,strategyAuthorityVersion:s?.strategyAuthorityVersion??null,
-      executionVersion:s?.executionVersion??null,regionVersion:s?.regionVersion??null,regionLaunchVersion:s?.regionLaunchVersion??null,liveEligible:false,
-      startedAt:s?.startedAt??null,initialEquity:s?.initialEquity??null,balance:s?.balance??null,
-      lastCycleAt:s?.lastCycleAt??null,resolved:s?.resolved??0,openCount:s?.positions.length??0,
-      // anchorFlowCount stays visible only as an upgrade-drain diagnostic. It
-      // must fall to zero after the first completed data cycle because it has no
-      // new-entry authority.
-      anchorFlowCount:Object.values(s?.anchorFlows??{}).filter(row=>row.phase!=="FAILED"&&row.phase!=="CONSUMED").length,
-      regionLaunchCount:Object.values(s?.regionLaunches??{}).filter(row=>["ARMED","IGNITION","RETEST","READY"].includes(row.phase)).length,
-      executableEventCount:(s?.regionLaunchSignals??[]).filter(row=>row.expiresAt>Date.now()).length,
-      participationCandidateCount:(s?.entryOpportunities??[]).filter(row=>row.timeframe==="5m").length,
-      participationEligibleCount:(s?.entryOpportunities??[]).filter(row=>row.timeframe==="5m"&&row.eligible).length,
-      targetPositionCount:10,
-      exitPolicyVersion:s?.exitPolicyUpgrade?.policy??null,exitPolicyActivatedAt:s?.exitPolicyUpgrade?.at??null,
-      timelyExitOpenCount:s?.positions.filter(t=>!!t.exitControl&&t.exitControl.policy===s.exitPolicyUpgrade?.policy).length??0,
-      inheritedExitOpenCount:s?.positions.filter(t=>!t.exitControl).length??0,
+    const s=this.forwardState,now=Date.now();
+    const eligible=s?.opportunities.filter(row=>row.eligible&&row.expiresAt>now)??[];
+    return {version:FORWARD_VERSION,engineVersion:ADAPTIVE_ENGINE_VERSION,policyVersion:s?.policyVersion??null,
+      strategyAuthorityVersion:s?.strategyAuthorityVersion??null,executionVersion:s?.executionVersion??null,
+      regionVersion:s?.regionVersion??null,regionLaunchVersion:s?.regionLaunchVersion??null,liveEligible:false,
+      startedAt:s?.startedAt??null,initialEquity:s?.initialEquity??null,balance:s?.balance??null,lastCycleAt:s?.lastCycleAt??null,
+      resolved:s?.resolved??0,openCount:s?.positions.length??0,targetPositionCount:ADAPTIVE_TARGET_POSITIONS,
+      participationCandidateCount:s?.opportunities.length??0,participationEligibleCount:eligible.length,
+      premiumOpportunityCount:eligible.filter(row=>row.premium).length,regionCount:Object.keys(s?.regions??{}).length,
       storage:{persistedAt:s?.storage.persistedAt??0,error:this.forwardError}};
   }
 
@@ -1110,21 +1097,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   protected liveDesiredPortfolio(now:number):Record<string,MirrorSourceTrade> {
-    if(!this.forwardState)throw new Error("当前模拟账户尚未恢复，禁止退回旧实盘复制源");
-    const marked=forwardEquity(this.forwardState,this.regimeQuotes(now),now);
-    const desired=forwardMirrorSources(this.forwardState,marked.equity);
-    // Only already-owned legacy exposure may drain through its original
-    // lifecycle. It can never become a source of new orders after an upgrade.
-    const legacy=canonicalLivePortfolio({current:this.runtime.strategyArena,previous:this.runtime.previousStrategyArena,
-      regime:this.runtime.regimePortfolio},this.runtime.canonicalPaper);
-    for(const symbol of new Set([...Object.keys(this.runtime.live.positions),...Object.keys(this.runtime.live.entries)])){
-      const p=this.runtime.live.positions[symbol],e=this.runtime.live.entries[symbol];
-      const id=p?.status==="OPEN"?p.id:e&&["OPEN","SUBMITTING","ERROR"].includes(e.status)?e.planId:null;
-      if(id&&!(p?.status==="OPEN"?p.mirrorSourceId:e?.mirrorSourceId)){
-        if(legacy[symbol]?.id===id)desired[symbol]=legacy[symbol];else delete desired[symbol];
-      }
-    }
-    return desired;
+    if(!this.forwardState)throw new Error("当前模拟账户尚未恢复");
+    return forwardMirrorSources(this.forwardState,forwardEquity(this.forwardState,this.regimeQuotes(now),now).equity);
   }
 
   private currentMirrorSource(id:string) {
