@@ -70,7 +70,10 @@ export type GateLiveOrderSnapshot = {
   priceOrders: GateLiveOrder[];
   checkedAt: number;
 };
-export type GateLiveSnapshot = GateLiveCoreSnapshot & GateLiveOrderSnapshot;
+export type GateLiveSnapshot = GateLiveCoreSnapshot & GateLiveOrderSnapshot & {
+  ordersCheckedAt:number;
+  orderAuditDegraded:boolean;
+};
 
 /** Gate classic futures `total` is wallet balance, not marked equity.
  * Never compare it directly with a PAPER balance including open PnL. Unified
@@ -248,8 +251,9 @@ export class GateLiveClient {
   readonly credentials: GateCredentials;
   requestCount = 0;
   private readRoutePreference=new Map<string,boolean>();
+  private lastOrderSnapshot:GateLiveOrderSnapshot|null=null;
   readonly readTransport={version:"gate-private-dual-route-v2",hedges:0,recovered:0,timeouts:0,lastTimeoutPath:null as string|null,
-    preferredAlternatePaths:0};
+    preferredAlternatePaths:0,orderFallbacks:0};
   constructor(credentials: GateCredentials) { this.credentials = credentials; }
 
   private async request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, query = "", value?: unknown, beforeSend?: () => boolean) {
