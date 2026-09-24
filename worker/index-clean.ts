@@ -2615,6 +2615,22 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const symbol = trade.symbol;
       if(!trade.forwardSource)continue; // Legacy sources only drain existing exposure.
       const plan = { ...arenaTradePlan(trade), expiresAt:trade.openedAt+trade.forwardSource.rule.horizon*60_000 };
+      const prior = this.runtime.live.entries[symbol];
+      // Identity fencing comes before quote/admission diagnostics. Once a market
+      // request crossed the network boundary, this exact PAPER parent can never
+      // be submitted again. If the post-60s reconciliation proved no exposure,
+      // preserve that final result instead of overwriting it with a stale-quote
+      // ECONOMICS message on the next pass.
+      if(prior?.planId===plan.id&&prior.marketSubmittedAt!=null){
+        if(this.liveEntryAwaitingReconcile(prior)){
+          this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"SUBMISSION_UNCONFIRMED",
+            reason:prior.lastError??"此前源单的提交尚待交易所确认，保留原身份和保护，不覆盖为新源单",observedAt:now};
+        }else if(prior.status==="CANCELLED"&&prior.submissionResolved){
+          this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"ENTRY_REJECTED",
+            reason:prior.lastError??"该源单已确认未形成实盘暴露；不重放同一源单",observedAt:now};
+        }
+        continue;
+      }
       const justTriggeredEntry = sourceAfterEnable(trade.forwardSource,this.runtime.live.activation,this.forwardState!.startedAt);
       if (!justTriggeredEntry
         || this.runtime.live.positions[symbol]?.status === "OPEN" || !this.mirrorQuoteReady(symbol)) {
@@ -2628,20 +2644,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const retainedSkip = this.runtime.live.entrySkips[symbol];
       if (retainedSkip?.planId === plan.id && ["LEVERAGE_REJECTED","ENTRY_REJECTED","SUBMISSION_UNCONFIRMED"].includes(retainedSkip.code)
         && now-retainedSkip.observedAt<60_000) continue;
-      const prior = this.runtime.live.entries[symbol];
       if(this.liveEntryAwaitingReconcile(prior)) {
         this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"SUBMISSION_UNCONFIRMED",
           reason:"此前源单的提交尚待交易所确认，保留原身份和保护，不覆盖为新源单",observedAt:now};
         continue;
       }
-      // Once a market request may have crossed the network boundary, absence
-      // from a later snapshot is NOT permission to submit the parent again.
-      if (prior && prior.planId === plan.id && (prior.status !== "CANCELLED"||prior.marketSubmittedAt!=null)) {
-        if(prior.status==="CANCELLED"||prior.status==="ERROR")
-          this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"SUBMISSION_UNCONFIRMED",
-            reason:prior.lastError??"该源单已提交过，等待成交核对，不自动重放",observedAt:now};
-        continue;
-      }
+      // A non-market or pre-submit prior can still be cancelled/replaced below.
+      if (prior && prior.planId === plan.id && prior.status !== "CANCELLED") continue;
       if (prior && !["FILLED", "CANCELLED"].includes(prior.status)) await this.cancelLiveEntry(client, prior);
       let intent: ReturnType<typeof buildLiveEntryIntent>;
       let binding:MirrorBinding|undefined;
