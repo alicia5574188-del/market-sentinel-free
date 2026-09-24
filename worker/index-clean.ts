@@ -2360,7 +2360,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       .flatMap((entry) => entry?.exchangeOrderId ? [entry.exchangeOrderId] : []));
     snapshot = forceEntryCleanup
       ? await this.cancelAndConfirmSystemEntries(client, snapshot, trackedEntryIds)
-      : await this.cancelAndConfirmSystemEntries(client, snapshot, trackedEntryIds, knownTags);
+      : orderAuditDegraded?snapshot:await this.cancelAndConfirmSystemEntries(client, snapshot, trackedEntryIds, knownTags);
     if(!cached||snapshot.checkedAt!==cached.checkedAt)this.liveSnapshotCache=structuredClone(snapshot);
     if (forceEntryCleanup) {
       for (const entry of Object.values(this.runtime.live.entries)) {
@@ -2383,8 +2383,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.live.available = available;
     this.runtime.live.lastSyncAt = snapshot.checkedAt;
 
-    const exchangeOrders = [...snapshot.orders, ...snapshot.priceOrders];
-    const unknownOrders = exchangeOrders.filter((order) => !knownTags.has(liveOrderTag(order) ?? ""));
+    const exchangeOrders = orderAuditDegraded?[]:[...snapshot.orders, ...snapshot.priceOrders];
+    const unknownOrders = orderAuditDegraded?[]:exchangeOrders.filter((order) => !knownTags.has(liveOrderTag(order) ?? ""));
     const actualPositions = snapshot.positions.filter((position) => Number(position.size ?? 0) !== 0);
     const unmanagedPositions = actualPositions.filter((actual) => {
       const symbol = actual.contract ?? "";
@@ -2543,7 +2543,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         this.runtime.live.positions[symbol] = position;
       }
       if (!position.exitRequestedAt) {
-        await this.ensureLiveStop(client, position, snapshot.priceOrders);
+        if(!orderAuditDegraded)await this.ensureLiveStop(client, position, snapshot.priceOrders);
+        else if(!position.stopOrderId){
+          throw new GateReadTimeoutError("/futures/usdt/price_orders");
+        }
         if (!position.parity && !accountError && (this.liveOpenRisk() > equity * PORTFOLIO_RISK_CAP + 1e-8
           || this.liveDirectionalRisk(position.side) > equity * CORRELATED_DIRECTION_RISK_CAP + 1e-8)) {
           position.exitRequestedAt = now;
@@ -2611,6 +2614,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       return;
     }
     if (unknownOrders.length) throw new Error("Gate 存在未纳管挂单；已停止新开仓");
+    if(orderAuditDegraded&&Object.values(this.runtime.live.positions).some(p=>p?.status==="OPEN"&&!p.stopOrderId))
+      throw new GateReadTimeoutError("/futures/usdt/price_orders");
     if(unmanagedPositions.length)throw new Error("Gate 存在未纳管仓位；停止新增复制，保留已纳管保护");
     if(sourceError)throw new Error(`当前模拟复制源尚待恢复：${sourceError}`);
     if(accountError)throw new Error(accountError);
