@@ -3,15 +3,15 @@ import { LiveHistoryReader } from "../lib/live-history-reader.ts";
 
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
-import { GatePublicError, fetchActiveContracts, fetchBackgroundFuturesBook, fetchContractStats, fetchFuturesBook, fetchLiquidations,
+import { GatePublicError, fetchActiveContracts, fetchBackgroundFuturesBook, fetchContractStats, fetchLiquidations,
   fetchMarketTickers, fetchRecentTrades, fetchStructureCandles, fetchUrgentFuturesBook } from "../lib/gate-market.ts";
 import { GateStreamingFeed } from "../lib/gate-stream.ts";
 import { closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_RISK_CAP, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
-import { aggregateFourHourCandles, analyzeSnapshot, ancillarySchedule, applyFlow, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, optionalEvidenceIsFresh, reconcilePaper, structureDirection, updateOpenInterestCohorts, usableSnapshot, type SymbolMemory } from "../lib/liquidity-runtime.ts";
+import { aggregateFourHourCandles, analyzeSnapshot, ancillarySchedule, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, structureDirection, updateOpenInterestCohorts, type SymbolMemory } from "../lib/liquidity-runtime.ts";
 import { arenaProtectionStop, arenaTradePlan, liveMirrorExitRequired } from "../lib/arena-live.ts";
 import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem } from "../lib/paper-outbox.ts";
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
-  PAPER_BANKRUPTCY_EQUITY, PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
+  PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
 import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, gateUnknownSubmissionCanResolve, isGateReadTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveOrderSnapshot, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
 import { LIVE_SESSION_VERSION, establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, sameLiveSession, type LiveSession } from "../lib/live-session.ts";
@@ -24,20 +24,20 @@ import { memberExecutionClass } from "./member-executor.ts";
 import { memberRoutes } from "./member-routes.ts";
 import { clearOwnerSessionCookie, createOwnerSession, ownerAuthConfigured, ownerPasswordMatches, ownerSessionCookie, sameOriginMutation, verifyOwnerSession } from "../lib/owner-auth.ts";
 import { type EventEntryAssessment, type RadarCandidate } from "../lib/market-radar.ts";
-import { completedCandleStrategyCandidate, initialMarketRegimes, marketRegimeSummary, normalizeMarketRegimes, residentCandleCandidate, selectDiverseMarketPool, updateMarketRegimes,
+import { initialMarketRegimes, marketRegimeSummary, normalizeMarketRegimes, residentCandleCandidate,
   type MarketRegimeCandidate, type MarketRegimeState, type ResidentCandleStructure } from "../lib/market-regime.ts";
 import { advanceStrategyArena, initialStrategyArena, normalizeStrategyArena, observeStrategyArena,
   ARENA_FRICTION_RATE, MAX_PORTFOLIO_POSITIONS, PORTFOLIO_REALTIME_CAPACITY, resetStrategyArenaAccount,
   type StrategyArenaState } from "../lib/strategy-arena.ts";
 import { ALL_REGIME_ENGINE_VERSION, allRegimePaperApproved } from "../lib/all-regime-engine.ts";
 import { allRegimePaperApproved as previousAllRegimePaperApproved } from "../lib/previous-all-regime-engine.ts";
-import { CANONICAL_PAPER_REFERENCE_EQUITY, canonicalLivePortfolio, canonicalPaperOpen, canonicalPaperSummary,
+import { CANONICAL_PAPER_REFERENCE_EQUITY, canonicalPaperOpen, canonicalPaperSummary,
   initialCanonicalPaperState, normalizeCanonicalPaperState, reconcileCanonicalPaper,
   type CanonicalPaperState } from "../lib/dual-paper.ts";
-import { advanceRegimePortfolio, evaluateRegimePortfolio, initialRegimePortfolio, normalizeRegimePortfolio,
+import { evaluateRegimePortfolio, initialRegimePortfolio, normalizeRegimePortfolio,
   REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE, resetRegimePortfolio,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
-import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
+import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
 import { ADAPTIVE_ENGINE_VERSION, ADAPTIVE_REALTIME_POSITION_CAP, ADAPTIVE_TARGET_POSITIONS, advanceForward, closeForwardForReset,
   forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols, forwardUrgentQuoteSymbols, forwardWatchSymbols,
   initialForward, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
@@ -90,9 +90,7 @@ const STRATEGY_LOG_MS = 5 * 60_000;
 const STRATEGY_LOG_RETENTION_MS = 14 * 24 * 60 * 60_000;
 const WARMUP_SNAPSHOTS = 4;
 const MAX_ANCILLARY_CONCURRENCY = 2;
-const MAX_OPEN_POSITIONS = PORTFOLIO_REALTIME_CAPACITY;
 const SCAN_UNIVERSE_SIZE = 30;
-const MAX_OUTBOX_ITEMS = 512;
 const NON_ALARM_WRITE_CAP = 8_000;
 const WATCHDOG_WRITE_RESERVE = 2_880;
 const AUTHORITY_SCHEMA_VERSION = 1;
@@ -476,12 +474,6 @@ function directionalStressRisk(runtime: RuntimeState, side: Side | undefined) {
   if (!side) return 0;
   return Object.values(runtime.positions).reduce((sum, position) => sum + (position?.status === "OPEN" && position.side === side
     ? remainingStressRisk(position, runtime.evidence[position.symbol]?.midpoint ?? position.entryPrice) : 0), 0);
-}
-
-function paperRiskWithinLimits(runtime: RuntimeState, equity = markToMarketEquity(runtime)) {
-  return openStressRisk(runtime) <= equity * PORTFOLIO_RISK_CAP + 1e-9
-    && directionalStressRisk(runtime, "LONG") <= equity * CORRELATED_DIRECTION_RISK_CAP + 1e-9
-    && directionalStressRisk(runtime, "SHORT") <= equity * CORRELATED_DIRECTION_RISK_CAP + 1e-9;
 }
 
 function markToMarketEquity(runtime: RuntimeState) {
