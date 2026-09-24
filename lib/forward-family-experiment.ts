@@ -94,8 +94,8 @@ export function reserveExperimentValueBlock(input:{
   if(!input.reserve)return null;
   const netFloor=Math.max(.0010,input.roundTripCost*.55);
   if(input.netRate<netFloor)return `探测净空间不足：${(input.netRate*100).toFixed(2)}%`;
-  if(input.edgeRatio<.30)return `探测收益风险价值不足：${input.edgeRatio.toFixed(2)}`;
-  if(input.livePathScore<.50)return `探测路径尚未恢复：${Math.round(input.livePathScore*100)}`;
+  if(input.edgeRatio<.45)return `探测收益风险价值不足：${input.edgeRatio.toFixed(2)}`;
+  if(input.livePathScore<.55)return `探测路径尚未恢复：${Math.round(input.livePathScore*100)}`;
   if(input.environmentFit<.60)return `探测环境匹配不足：${Math.round(input.environmentFit*100)}`;
   return null;
 }
