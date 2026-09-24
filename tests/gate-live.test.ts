@@ -424,19 +424,3 @@ test("a recovered futures read path is preferred on the next read for the same e
     assert.ok(client.readTransport.preferredAlternatePaths>=1);
   }finally{globalThis.fetch=real;}
 });
-
-
-
-    if(path.endsWith("/positions"))return Response.json([]);
-    if(path.endsWith("/orders")||path.endsWith("/price_orders")){
-      if(failOrders){const e=new Error("The operation was aborted due to timeout");e.name="TimeoutError";throw e;}
-      return Response.json([]);
-    }
-    return Response.json([]);
-  };
-  try{
-    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
-    await client.snapshot();failOrders=true;
-    await assert.rejects(client.snapshot({allowOrderFallback:false}),GateReadTimeoutError);
-  }finally{globalThis.fetch=real;}
-});
