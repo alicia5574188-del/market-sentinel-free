@@ -49,11 +49,11 @@ export class MarketDataHub{
   private inFlight:Promise<void>|null=null;
   private candleSource=new Map<string,{source:MarketSource;at:number}>();
 
-  launchRefresh(now:number,waitUntil:(p:Promise<unknown>)=>void){
-    if(this.inFlight||now-this.lastAttemptAt<1_500)return;
+  launchRefresh(now:number){
+    if(this.inFlight||now-this.lastAttemptAt<1_500)return null;
     this.lastAttemptAt=now;
     const task=this.refresh(now).finally(()=>{if(this.inFlight===task)this.inFlight=null;});
-    this.inFlight=task;waitUntil(task);
+    this.inFlight=task;return task;
   }
   async refresh(now=Date.now()){
     const [bybit,binance]=await Promise.allSettled([this.fetchBybit(now),this.fetchBinance(now)]);
