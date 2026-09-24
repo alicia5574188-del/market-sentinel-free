@@ -271,6 +271,9 @@ test("retired systems remain isolated; only current PAPER can create new LIVE en
   assert.match(worker, /buildLiveStopIntent\(position, tick\)/);
   assert.match(worker, /entry\.exchangeOrderId = await client\.createEntry\(intent,submissionStillAllowed\);[\s\S]{0,1600}await this\.createImmediateLiveStop\(client, entry\)/);
   assert.match(gateLive, /side === "LONG" \? Math\.floor\(units \+ 1e-9\) : Math\.ceil\(units - 1e-9\)/);
+  assert.match(worker, /participationCandidateCount/);
+  assert.match(worker, /participationEligibleCount/);
+  assert.match(worker, /targetPositionCount:10/);
   assert.match(worker, /SCAN_UNIVERSE_SIZE = 30/);
   assert.match(worker, /eligible\.has\(row\.symbol\) && forwardSymbolAllowed\(row\.symbol\)/);
   assert.match(worker, /import \{ forwardSymbolAllowed \} from "\.\.\/lib\/forward-evidence\.ts"/);
@@ -337,8 +340,8 @@ test("production gates follow the current RegionLaunch PAPER authority", async (
   assert.equal((currentGates.match(/runtime\.limits\.realtimeCapacity == 11/g) ?? []).length,2);
   assert.equal((workflow.match(/grep -Fq '哨兵 · 多周期转折引擎'/g) ?? []).length,2);
   assert.match(access,/哨兵 · 多周期转折引擎/);
-  assert.match(dashboard,/哨兵 · RegionLaunch/);
-  assert.match(dashboard,/缠绕区域 \+ RegionLaunch/);
+  assert.match(dashboard,/哨兵 · Adaptive 10/);
+  assert.match(dashboard,/5m方向—空间 \+ RegionLaunch/);
   assert.doesNotMatch(workflow,/runtime\.strategyArena\.rules\.strategyName == "五行情独立账户组合"/);
   assert.doesNotMatch(workflow,/runtime\.strategyData\.hourlyRequiredCandles == 721/);
   assert.match(workflow, /deployment-plan/);
