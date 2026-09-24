@@ -4,7 +4,7 @@ import {ADAPTIVE_ENGINE_VERSION,advanceForward,closeForwardForReset,fillForwardP
   type Candle,type Contract,type Opportunity,type Quote} from "../lib/forward-relations.ts";
 import {FORWARD_STORAGE,prepareForwardReset} from "../lib/forward-store.ts";
 import {FORWARD_RELATION_V2_VERSION,advanceRelationEngine,initialRelationEngine,relationCandidates,type RelationRule} from "../lib/forward-relation-v2.ts";
-import {recordRelationFailure} from "../lib/forward-entry-guard.ts";
+import {recordFamilyFailure,relationFamilyId} from "../lib/forward-family-experiment.ts";
 
 const START=Date.parse("2026-09-24T00:00:00Z")/1000;
 const symbols=Array.from({length:12},(_,i)=>`S${i}_USDT`);
@@ -21,10 +21,12 @@ const contracts=Object.fromEntries(symbols.map(s=>[s,contract]));
 const seedManualRules=(state:ReturnType<typeof initialForward>,ops:Opportunity[],now:number)=>{
   const grouped=new Map<string,Opportunity[]>();
   for(const o of ops){if(!o.relationRuleId)continue;const rows=grouped.get(o.relationRuleId)??[];rows.push(o);grouped.set(o.relationRuleId,rows);}
-  state.relationEngine.rules=[...grouped.entries()].map(([id,rows])=>{const o=rows[0]!,health=o.relationHealth??.9;
-    return{id,signature:id,scope:"BASE",horizon:o.relationHorizon??60,side:o.side,conditions:[],longNet:.01,recentNet:.008,standardError:.001,
-      samples:40,longGroups:6,recentGroups:3,health,status:o.relationStatus??"ACTIVE",livePathScore:.78,environmentFit:.82,
-      stopRate:o.stopRate,targetRate:o.targetRate,updatedAt:now,lastQualifiedAt:now-60_000,symbols:rows.map(x=>x.symbol),reason:"manual relation fixture"} satisfies RelationRule;});
+  state.relationEngine.rules=[...grouped.entries()].map(([id,rows],groupIndex)=>{const o=rows[0]!,idx=Math.max(0,symbols.indexOf(o.symbol)),
+    feature=idx%8,op:idx<8?"GE":"LE",health=o.relationHealth??.9;
+    return{id,signature:id,scope:o.reserve?"RECENT":"BASE",horizon:o.relationHorizon??60,side:o.side,
+      conditions:[{feature,op,threshold:0}],longNet:.01,recentNet:.008,standardError:.001,samples:40,longGroups:6,recentGroups:3,
+      health,status:o.relationStatus??"ACTIVE",livePathScore:.78,environmentFit:.82,stopRate:o.stopRate,targetRate:o.targetRate,
+      updatedAt:now,lastQualifiedAt:now-60_000,symbols:rows.map(x=>x.symbol),reason:"manual relation fixture"} satisfies RelationRule;});
 };
 
 const manualOpportunity=(symbol:string,index:number,options:{reserve?:boolean;premium?:boolean;ruleId?:string;score?:number;health?:number}={}):Opportunity=>{
@@ -116,10 +118,24 @@ test("one 5m deployment window cannot spray more than 2.5% portfolio risk budget
 test("probe relationships share one 1.5% portfolio pool instead of fragmenting into dozens of positions",()=>{
   const now=nowAt(39),s=initialForward(now-60_000);s.lastCandleAt=now;
   s.opportunities=symbols.map((symbol,i)=>manualOpportunity(symbol,i,{premium:true,reserve:true,health:.25,score:70}));seedManualRules(s,s.opportunities,now);
-  s.relationEngine.rules.forEach(r=>{r.status="DEGRADED";r.health=.25;r.livePathScore=.30;});
+  s.relationEngine.rules.forEach(r=>{r.status="DEGRADED";r.health=.25;r.livePathScore=.70;r.environmentFit=.80;});
   fillForwardPortfolio(s,quotesAt(39,now),contracts,now,1000,false);
   const charge=s.positions.reduce((n,t)=>n+(t.entryContext?.portfolioRiskCharge??t.plannedRisk),0);
   assert.ok(charge<=15.01);assert.ok(s.positions.length<=5);
+});
+
+test("different rule ids from one causal family can open only one reserve experiment",()=>{
+  const now=nowAt(39),s=initialForward(now-60_000);s.lastCandleAt=now;
+  const a=manualOpportunity(symbols[0]!,0,{premium:true,reserve:true,ruleId:"family-a",health:.25,score:72}),
+    b=manualOpportunity(symbols[1]!,1,{premium:true,reserve:true,ruleId:"family-b",health:.25,score:71});
+  s.opportunities=[a,b];seedManualRules(s,s.opportunities,now);
+  for(const [i,r] of s.relationEngine.rules.entries()){
+    r.scope="RECENT";r.status="DEGRADED";r.health=.25;r.livePathScore=.70;r.environmentFit=.80;
+    r.conditions=[{feature:2,op:"LE",threshold:i===0?-.17:-.31}];
+  }
+  fillForwardPortfolio(s,quotesAt(39,now),contracts,now,1000,false);
+  assert.equal(s.positions.length,1);
+  assert.ok(Object.keys(s.entryDiagnostics.reasons).some(reason=>/已有一笔探测仓/.test(reason)));
 });
 
 test("one learned relation cannot consume more than 2.5% portfolio budget across correlated symbols",()=>{
@@ -158,25 +174,6 @@ test("manual reset preparation remains bounded with twenty-two legacy open posit
   assert.equal(prepared.state.positions.length,0);assert.equal(prepared.state.balance,1000);
 });
 
-test("failed relation lock blocks the same rule across symbols but leaves other relations tradable",()=>{
-  const now=nowAt(39),s=initialForward(now-60_000);
-  const blockedA=manualOpportunity(symbols[0]!,0,{premium:true,ruleId:"blocked-rule"});
-  const blockedB=manualOpportunity(symbols[2]!,2,{premium:true,ruleId:"blocked-rule"});
-  const healthy=manualOpportunity(symbols[1]!,1,{premium:true,ruleId:"healthy-rule"});
-  s.opportunities=[blockedA,blockedB,healthy];seedManualRules(s,s.opportunities,now);s.lastCandleAt=now;
-  const blockedRule=s.relationEngine.rules.find(r=>r.id==="blocked-rule")!;
-  recordRelationFailure(s.relationGuards,blockedRule,{ruleId:blockedRule.id,evidenceAt:blockedRule.lastQualifiedAt,health:blockedRule.health,
-    livePathScore:blockedRule.livePathScore,horizon:blockedRule.horizon},now-1000,"NO_POSITIVE_FEEDBACK",symbols[0]!);
-  fillForwardPortfolio(s,quotesAt(39,now),contracts,now,1000,false);
-  assert.equal(s.positions.some(t=>t.entryContext?.relationRuleId==="blocked-rule"),false);
-  assert.equal(s.positions.some(t=>t.entryContext?.relationRuleId==="healthy-rule"),true,"unrelated relation must remain tradable");
-
-  s.positions=[];s.opportunities=[blockedB];blockedRule.lastQualifiedAt=now+1000;blockedRule.updatedAt=now+1000;
-  blockedRule.status="RECOVERING";blockedRule.health=.65;blockedRule.livePathScore=.72;blockedRule.symbols=[symbols[0]!,symbols[2]!];
-  fillForwardPortfolio(s,quotesAt(39,now+2000),contracts,now+2000,1000,false);
-  assert.equal(s.positions.some(t=>t.entryContext?.relationRuleId==="blocked-rule"),true,"new recovered evidence must release the relation");
-});
-
 test("a holding exits early when its own relation is degraded and it has no positive feedback",()=>{
   const learned=learnThrough(39),now=nowAt(39),paths=sliced(39);
   let s=initialForward(now-60_000);s.relationEngine=learned;
@@ -185,10 +182,10 @@ test("a holding exits early when its own relation is degraded and it has no posi
   const held=s.positions[0]!,ruleId=held.entryContext?.relationRuleId;assert.ok(ruleId);
   const rule=s.relationEngine.rules.find(r=>r.id===ruleId);assert.ok(rule);
   rule!.status="DEGRADED";rule!.health=.2;rule!.livePathScore=.2;
-  const feedbackAge=(held.entryContext?.relationHorizon===15?5:10)*60_000;
-  held.openedAt=now-feedbackAge;held.firstProfitAt=null;held.favorable=0;held.adverse=.003;
+  held.openedAt=now-6*60_000;held.firstProfitAt=null;held.favorable=0;
   const later=now+1000,next=advanceForward({state:s,now:later,paths,quotes:quotesAt(39,later),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
   assert.ok(next.history.some(t=>t.id===held.id&&t.exitReason==="RELATION_DEGRADED"));
+  assert.ok(Object.keys(next.familyExperiment.guards).length>0,"no-feedback degraded exit must lock the relation family");
   assert.equal(next.opportunities.some(o=>o.side==="SHORT"&&o.mode==="RELATION"),false,"degradation is defense, not a forced reversal");
 });
 
@@ -214,9 +211,9 @@ test("strategy migration preserves account identity and financial history while 
 test("manual PAPER reset preserves causal learning while resetting the financial account",()=>{
   const learned=learnThrough(39),now=nowAt(39),s=initialForward(now-60_000);s.relationEngine=learned;
   s.sampleMemory["RELATION:MIXED:LONG"]={count:4,emaNetRate:.003,emaMfeRate:.008,emaMaeRate:.002,updatedAt:now};
-  const guardRule=learned.rules[0]!;
-  recordRelationFailure(s.relationGuards,guardRule,{ruleId:guardRule.id,evidenceAt:guardRule.lastQualifiedAt,health:guardRule.health,
-    livePathScore:guardRule.livePathScore,horizon:guardRule.horizon},now,"NO_POSITIVE_FEEDBACK","S0_USDT");
+  const guardRule=learned.rules[0]!,familyId=relationFamilyId(guardRule);
+  recordFamilyFailure({state:s.familyExperiment,familyId,sourceRuleId:guardRule.id,evidenceAt:guardRule.lastQualifiedAt,
+    health:guardRule.health,livePathScore:guardRule.livePathScore,now,reason:"NO_POSITIVE_FEEDBACK",symbol:"S0_USDT"});
   s.balance=812.34;s.resolved=9;s.wins=4;s.turnover=5432;
   const n=resetForwardAccountPreservingLearning(s,now+1000);
   assert.equal(n.balance,1000);assert.equal(n.initialEquity,1000);assert.equal(n.resolved,0);assert.equal(n.wins,0);assert.equal(n.turnover,0);
@@ -225,7 +222,7 @@ test("manual PAPER reset preserves causal learning while resetting the financial
   assert.equal(n.relationEngine.observations,learned.observations);assert.equal(n.relationEngine.measured,learned.measured);
   assert.deepEqual(n.relationEngine.rules,learned.rules);assert.deepEqual(n.relationEngine.pending,learned.pending);
   assert.deepEqual(n.sampleMemory,s.sampleMemory);
-  assert.deepEqual(n.relationGuards,s.relationGuards);
+  assert.deepEqual(n.familyExperiment,s.familyExperiment);
   assert.match(n.latestReason,/保留/);
 });
 
