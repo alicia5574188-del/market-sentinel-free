@@ -2822,6 +2822,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         throw new Error(`${symbol} external venue disagreement`);
       const external=await this.marketHub.candles(symbol,"1m",90);
       if(external)return{symbol,rows:external.rows,source:external.source};
+      if(this.marketHub.supports(symbol))throw new Error(`${symbol} external 1m temporarily unavailable`);
       return{symbol,rows:await fetchStructureCandles(symbol,"1m",90),source:"GATE" as const};
     }));
     results.forEach((result,index)=>{
@@ -2934,8 +2935,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         throw new Error(`${symbol} external venue disagreement ${(coverage.disagreementRate*100).toFixed(2)}%`);
       const external=await this.marketHub.candles(symbol,"5m",120);
       if(external)return{symbol,rows:external.rows,replace:true,source:external.source};
-      // Gate-only contracts retain a low-frequency fallback. Common contracts
-      // never need Gate public candles for normal analysis.
+      if(this.marketHub.supports(symbol))throw new Error(`${symbol} external 5m temporarily unavailable`);
+      // True Gate-only contracts retain a low-frequency fallback. A temporary
+      // Bybit/Binance outage never redirects common-market analysis onto Gate.
       const rows=await fetchStructureCandles(symbol,"5m",(this.strategyCandles[symbol]?.length??0)>=120?6:120);
       return{symbol,rows,replace:false,source:"GATE" as const};
     }));
