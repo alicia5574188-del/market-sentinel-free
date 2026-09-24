@@ -96,7 +96,7 @@ test("ordinary 5m relation inventory cannot keep opening on the fast quote loop"
 });
 
 test("one 5m deployment window cannot spray more than 2.5% portfolio risk budget",()=>{
-  const now=nowAt(39),paths=sliced(39);let s=initialForward(now-60_000);s.lastCandleAt=now;
+  const now=nowAt(39);let s=initialForward(now-60_000);s.lastCandleAt=now;
   s.opportunities=symbols.map((symbol,i)=>manualOpportunity(symbol,i,{premium:true}));
   fillForwardPortfolio(s,quotesAt(39,now),contracts,now,1000,false);
   const charge=s.positions.reduce((n,t)=>n+(t.entryContext?.portfolioRiskCharge??t.plannedRisk),0);
@@ -104,7 +104,7 @@ test("one 5m deployment window cannot spray more than 2.5% portfolio risk budget
 });
 
 test("probe relationships share one 1.5% portfolio pool instead of fragmenting into dozens of positions",()=>{
-  const now=nowAt(39),paths=sliced(39);let s=initialForward(now-60_000);s.lastCandleAt=now;
+  const now=nowAt(39);let s=initialForward(now-60_000);s.lastCandleAt=now;
   s.opportunities=symbols.map((symbol,i)=>manualOpportunity(symbol,i,{premium:true,reserve:true,health:.25,score:70}));
   fillForwardPortfolio(s,quotesAt(39,now),contracts,now,1000,false);
   const charge=s.positions.reduce((n,t)=>n+(t.entryContext?.portfolioRiskCharge??t.plannedRisk),0);
@@ -112,7 +112,7 @@ test("probe relationships share one 1.5% portfolio pool instead of fragmenting i
 });
 
 test("one learned relation cannot consume more than 2.5% portfolio budget across correlated symbols",()=>{
-  const now=nowAt(39),paths=sliced(39);let s=initialForward(now-60_000);s.lastCandleAt=now;
+  const now=nowAt(39);let s=initialForward(now-60_000);s.lastCandleAt=now;
   s.opportunities=symbols.map((symbol,i)=>manualOpportunity(symbol,i,{premium:true,ruleId:"shared-market-factor"}));
   fillForwardPortfolio(s,quotesAt(39,now),contracts,now,1000,false);
   const charge=s.positions.reduce((n,t)=>n+(t.entryContext?.portfolioRiskCharge??t.plannedRisk),0);
@@ -120,7 +120,7 @@ test("one learned relation cannot consume more than 2.5% portfolio budget across
 });
 
 test("there is no fixed ten-position cap; strong independent relations can grow beyond ten only across multiple 5m budgets",()=>{
-  const base=nowAt(39),paths=sliced(39);let s=initialForward(base-60_000);
+  const base=nowAt(39);let s=initialForward(base-60_000);
   for(let cycle=0;cycle<5&&s.positions.length<=10;cycle++){
     const at=base+cycle*300_000;s.lastCandleAt=at;
     s.opportunities=symbols.filter(symbol=>!s.positions.some(t=>t.symbol===symbol))
@@ -134,7 +134,7 @@ test("there is no fixed ten-position cap; strong independent relations can grow 
 });
 
 test("manual reset preparation remains bounded with twenty-two legacy open positions",async()=>{
-  const now=nowAt(39),paths=sliced(39),symbol=symbols[0]!;let previous=initialForward(now-60_000);previous.lastCandleAt=now;
+  const now=nowAt(39),symbol=symbols[0]!;let previous=initialForward(now-60_000);previous.lastCandleAt=now;
   previous.opportunities=[manualOpportunity(symbol,0,{premium:true})];
   fillForwardPortfolio(previous,quotesAt(39,now),contracts,now,1000,false);
   assert.equal(previous.positions.length,1);const baseTrade=previous.positions[0]!;
