@@ -668,6 +668,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         this.runtime.lastError = "authority checkpoint version mismatch; manual migration required";
       }
       if (this.authorityReady) {
+        try{
+          const cachedCatalog=await ctx.storage.get<Awaited<ReturnType<typeof fetchActiveContracts>>>("gate-contract-catalog:v1");
+          if(cachedCatalog?.length)this.contractCatalog=new Map(cachedCatalog.map(row=>[row.symbol,row]));
+        }catch{/* cached Gate universe is optional; live refresh will retry */}
         const loaded = await Promise.all(REGIME_EXECUTION_UNIVERSE.map(async (symbol) => {
           try {
             return [symbol, await ctx.storage.get<RegimeHourlyPath>(regimeHourlyStorageKey(symbol))] as const;
@@ -833,6 +837,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.contractCatalog = new Map(ranked.map((row) => [row.symbol, row]));
     this.runtime.lastUniverseAt = now;
     for (const symbol of this.runtime.symbols) this.applyContractMetadata(symbol);
+    this.ctx.waitUntil(this.ctx.storage.put("gate-contract-catalog:v1",ranked).catch(()=>undefined));
   }
 
   private applyContractMetadata(symbol: string) {
