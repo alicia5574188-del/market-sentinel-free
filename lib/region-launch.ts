@@ -69,8 +69,8 @@ function compressionFrom(rows:RegionCandle[],mother:Pick<RegionLaunchState,
     .sort((a,b)=>a.time-b.time);
   if(!completed.length||mother.motherBars<12)return null;
 
-  // Detection may use a robust statistical core, but execution must use every
-  // wick belonging to the actual mature region. This is the trading box.
+  // The lifecycle's accepted-price bounds are the trading box. One-off rejection
+  // wicks are probes, not permission to expand the executable winding region.
   const firstComplete=mother.motherConfirmedAt-(mother.motherBars-1)*REGION_BAR_MS;
   const historical=completed.filter(r=>completeAt(r)>=firstComplete&&completeAt(r)<=mother.motherConfirmedAt);
   // Normal production paths contain the full mother history. Compact fixtures or
@@ -79,15 +79,13 @@ function compressionFrom(rows:RegionCandle[],mother:Pick<RegionLaunchState,
   // inventing a smaller child box.
   const base=historical.length>=Math.min(12,mother.motherBars)?historical:[];
   const envelope=[...base];
-  let lower=base.length?Math.min(mother.motherLower,...base.map(r=>r.low)):mother.motherLower;
-  let upper=base.length?Math.max(mother.motherUpper,...base.map(r=>r.high)):mother.motherUpper;
-  // After confirmation, a candle that CLOSES inside remains part of the same
-  // winding region and its wick expands the boundary. The first outside close
-  // freezes the box; it is never swallowed into a rolling child box.
+  const lower=mother.motherLower,upper=mother.motherUpper;
+  // After confirmation, candles that CLOSE inside remain observations of the
+  // same accepted region. Their wick probes never widen the accepted boundary;
+  // a real boundary migration must first be recognized by region-lifecycle.
   for(const row of completed.filter(r=>completeAt(r)>mother.motherConfirmedAt)){
     if(row.close<lower||row.close>upper)break;
     envelope.push(row);
-    lower=Math.min(lower,row.low);upper=Math.max(upper,row.high);
     if(envelope.length>=Math.max(12,mother.motherBars)+12)break;
   }
   if(!(upper>lower&&lower>0))return null;
@@ -171,7 +169,9 @@ export function advanceRegionLaunchUniverse(input:{paths:Record<string,RegionCan
     const zone=lifecycle.zone,rows=(input.paths[symbol]??[]).filter(r=>completeAt(r)<=input.now);
     if(!zone||!rows.length)continue;
     let state=states[symbol];
-    if(!state||!relatedMother(state,zone))state=initial(symbol,zone,input.now);
+    // A new lifecycle zone id means the accepted winding boundary changed.
+    // Do not keep an older, wider mother just because the new zone overlaps it.
+    if(!state||state.motherRegionId!==zone.id||!relatedMother(state,zone))state=initial(symbol,zone,input.now);
     else if(state.version!==REGION_LAUNCH_VERSION){
       // Preserve mother/consumption memory and old positions; never execute an
       // old READY built from percentile-only bounds under the new authority.
@@ -182,26 +182,26 @@ export function advanceRegionLaunchUniverse(input:{paths:Record<string,RegionCan
     if(state.phase!=="CONSUMED"&&state.phase!=="READY"&&state.phase!=="IGNITION"){
       const wasArmed=state.phase==="ARMED"&&!!state.compression;
       const observedCompression=compressionFrom(rows,state,input.costRate);
-      // The launch box is the full mature winding region, including every wick.
-      // While closes remain inside, new rejection wicks may only EXPAND that
-      // same box and its identity stays stable. The first outside close freezes
-      // the pre-departure box so the breakout can never enlarge its own boundary.
+      // The launch box follows the accepted winding-region bounds. Rejection
+      // wicks are tracked as probes but cannot expand the executable boundary.
       let compression=observedCompression;
       if(wasArmed){
         const old=state.compression!,latest=rows.at(-1)!;
         if(latest.close<old.lower||latest.close>old.upper){
           compression=input.now<=old.endAt+4*REGION_BAR_MS?old:null;
         }else if(observedCompression){
-          const lower=Math.min(old.lower,observedCompression.lower),upper=Math.max(old.upper,observedCompression.upper);
-          compression={...observedCompression,id:old.id,startAt:old.startAt,endAt:Math.max(old.endAt,observedCompression.endAt),
-            lower,upper,width:upper-lower,widthRate:(upper-lower)/Math.max(observedCompression.center,1e-12)};
+          const oldMatchesAccepted=Math.abs(old.lower-state.motherLower)<=Math.max(1e-12,state.motherWidth*1e-6)
+            &&Math.abs(old.upper-state.motherUpper)<=Math.max(1e-12,state.motherWidth*1e-6);
+          compression=oldMatchesAccepted
+            ?{...observedCompression,id:old.id,startAt:old.startAt,endAt:Math.max(old.endAt,observedCompression.endAt)}
+            :observedCompression;
         }else if(input.now<=old.endAt+4*REGION_BAR_MS)compression=old;
       }
       state.compression=compression;state.quality=motherQuality(state,compression);
       if(compression){
         state.phase="ARMED";
         if(!wasArmed){state.armedAt=input.now;state.armedInsideObserved=false;clearIgnition(state);clearReady(state);}
-        state.reason=`最近成熟5分钟缠绕区域已完整纳入${compression.bars}根K线及全部影线边界，进入ARMED并提前争取实时盘口槽。失败离区累计${state.failedDepartures}次。`;
+        state.reason=`最近成熟5分钟缠绕区域已按反复接受价格确定边界，覆盖${compression.bars}根K线；孤立长影线仅记为试探，不扩大执行区域。进入ARMED并提前争取实时盘口槽。失败离区累计${state.failedDepartures}次。`;
       }else{
         state.phase="WATCH";state.armedAt=null;state.armedInsideObserved=false;clearIgnition(state);clearReady(state);
         state.reason=`成熟区域继续观察；此前失败离区${state.failedDepartures}次不会消费区域，等待形成可完整追踪的最新缠绕边界。`;
@@ -224,7 +224,7 @@ function readySignal(s:RegionLaunchState):RegionLaunchSignal|null{
     completedAt:s.readyAt,expiresAt:s.readyAt+REGION_LAUNCH_SIGNAL_MS,signalPrice:s.readySignalPrice,stopPrice:s.readyStopPrice,targetPrice:null,
     regionId:s.motherRegionId,regionConfirmedAt:s.motherConfirmedAt,regionLower:s.motherLower,regionUpper:s.motherUpper,
     regionCenter:s.motherCenter,regionWidth:s.motherWidth,regionWidthRate:s.motherWidthRate,
-    reason:`RegionLaunch：完整5分钟缠绕边界${s.compression.lower.toPrecision(8)}–${s.compression.upper.toPrecision(8)}（含影线）；${s.launchPath==="CLOSED"
+    reason:`RegionLaunch：5分钟接受价格缠绕边界${s.compression.lower.toPrecision(8)}–${s.compression.upper.toPrecision(8)}；${s.launchPath==="CLOSED"
       ?s.readyConfirmation==="CONTINUATION"?"5分钟区间外收盘后第一根完整1分钟K继续突破":"5分钟区间外收盘后小回调再突破"
       :"5分钟强势离区后1分钟连续突破或小回调重启"}。5分钟实体/前期平均振幅${(s.fiveMinuteBodyMultiple??0).toFixed(2)}倍。`,
     entryModel:"REGION_LAUNCH",launchVersion:REGION_LAUNCH_VERSION,launchTriggerPrice:s.triggerPrice!,
