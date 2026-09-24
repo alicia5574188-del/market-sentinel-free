@@ -40,9 +40,7 @@ import { advanceRegimePortfolio, evaluateRegimePortfolio, initialRegimePortfolio
 import { previousCompletedCandleStrategyCandidate, type PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
 import { ADAPTIVE_ENGINE_VERSION, ADAPTIVE_REALTIME_POSITION_CAP, ADAPTIVE_TARGET_POSITIONS, advanceForward, closeForwardForReset,
   forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols, forwardUrgentQuoteSymbols, forwardWatchSymbols,
-  initialMultiTurnForward, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
-import { MULTI_TURN_VERSION } from "../lib/multi-turn-engine.ts";
-import { ANCHOR_FLOW_VERSION } from "../lib/anchor-flow.ts";
+  initialForward, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { selectAnchorOpportunityUniverse } from "../lib/multi-turn-universe.ts";
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, prepareForwardReset,
   FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE } from "../lib/forward-store.ts";
@@ -59,7 +57,6 @@ import { LIVE_PARITY_VERSION, LIVE_PARITY_PREFIX, buildProportionalMirror, forwa
   type MirrorSourceTrade, type MirrorReceipt, type MirrorBinding } from "../lib/live-parity.ts";
 declare const __FORWARD_BUILD_SHA__: string;
 const FORWARD_BUILD_SHA = typeof __FORWARD_BUILD_SHA__ === "string" ? __FORWARD_BUILD_SHA__ : "local-verification";
-const MULTI_TURN_AUTO_CUTOVER = false; // retired: strategy upgrades are in-place and never reset PAPER
 import { advanceStrategyArena as advancePreviousStrategyArena,
   initialStrategyArena as initialPreviousStrategyArena,
   normalizeStrategyArena as normalizePreviousStrategyArena,
@@ -1649,95 +1646,37 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return { ok: true, credential: await credentialMetadata(this.env.DB) };
   }
 
-  private async resetMultiTurnPaperAccount(now:number){
+  private async resetPaperAccount() {
+    const now=Date.now();
+    if(this.runtime.live.requestedEnabled||this.runtime.live.operational
+      ||Object.values(this.runtime.live.positions).some(position=>position?.status==="OPEN")
+      ||Object.values(this.runtime.live.entries).some(entry=>entry&&!["FILLED","CANCELLED"].includes(entry.status)))
+      throw new Error("请先关闭实盘并确认 Gate 没有本系统持仓或待成交订单");
+
     if(!this.forwardState)this.forwardState=await readForwardStore(this.ctx.storage,now);
     const previous=this.forwardState;
-    if(!previous)throw new Error("当前模拟账户尚未恢复");
+    if(!previous)throw new Error("模拟账户尚未恢复");
     const quotes=this.regimeQuotes(now);
+    for(const position of previous.positions){
+      const quote=quotes[position.symbol];
+      if(!freshQuote(quote,now))throw new Error(`${position.symbol} 行情不新鲜，不能用旧价格重置模拟持仓`);
+    }
     const closed=closeForwardForReset(previous,quotes,now);
-    const next=initialMultiTurnForward(now),prepared=await prepareForwardReset(previous,closed,next,now);
+    const next=initialForward(now);
+    const prepared=await prepareForwardReset(previous,closed,next,now);
     const saved=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
     const protection=prepared.entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
-    if(protection&&saved?.writeBudget!==undefined)prepared.entries[FORWARD_PROTECTION_STORAGE]={...protection,writeBudget:saved.writeBudget};
+    if(protection&&saved?.writeBudget!==undefined)
+      prepared.entries[FORWARD_PROTECTION_STORAGE]={...protection,writeBudget:saved.writeBudget};
     const reservation=this.reserveNonAlarmWrites(prepared.writes,64);
     if(!reservation)throw new Error("模拟账户重置等待写入预算；当前账户保持完整");
-    try{await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});reservation.finish(true);}
-    finally{reservation.finish(false);}
+    try{
+      await this.ctx.storage.transaction(async transaction=>{await transaction.put(prepared.entries);});
+      reservation.finish(true);
+    }finally{reservation.finish(false);}
     this.forwardCompression=prepared.compression;this.forwardState=prepared.state;this.forwardError=null;
-    this.forwardProtectionBudget=readProtectionWriteBudget(saved?.writeBudget);
+    this.forwardProtectionBudget=readProtectionWriteBudget(saved?.writeBudget);this.mirrorClosures.clear();
     return{ok:true,equity:1000,forward:forwardSummary(this.forwardState,this.regimeQuotes(now),now)};
-  }
-
-  private async resetPaperAccount() {
-    const now = Date.now();
-    const authorityBefore = this.captureAuthority();
-    if (this.runtime.live.requestedEnabled || this.runtime.live.operational
-      || Object.values(this.runtime.live.positions).some((position) => position?.status === "OPEN")
-      || Object.values(this.runtime.live.entries).some((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status))) {
-      throw new Error("请先关闭实盘并确认 Gate 没有本系统持仓或待成交订单");
-    }
-    if(!this.forwardState)this.forwardState=await readForwardStore(this.ctx.storage,now);
-    if(this.forwardState.strategyAuthorityVersion===MULTI_TURN_VERSION)return await this.resetMultiTurnPaperAccount(now);
-    const openPositions = Object.values(this.runtime.positions).filter((position): position is PaperPosition => position?.status === "OPEN");
-    const currentArenaPositions = Object.values(this.runtime.strategyArena.portfolioOpen);
-    const previousArenaPositions = Object.values(this.runtime.previousStrategyArena.portfolioOpen);
-    const regimePositions = REGIME_SYSTEMS.flatMap((id) => Object.values(this.runtime.regimePortfolio.accounts[id].open));
-    for (const position of [...openPositions, ...currentArenaPositions, ...previousArenaPositions, ...regimePositions]) {
-      const evidence = this.runtime.evidence[position.symbol];
-      if (!evidence?.fresh || now - evidence.observedAt > STALE_AFTER_MS || evidence.midpoint <= 0) {
-        throw new Error(`${position.symbol} 行情不新鲜，不能用旧价格重置模拟持仓`);
-      }
-    }
-    try {
-      this.runtime.strategyArena = resetStrategyArenaAccount({ state: this.runtime.strategyArena,
-        quotes: Object.fromEntries(currentArenaPositions.map((position) => {
-          const evidence = this.runtime.evidence[position.symbol]!;
-          return [position.symbol, { midpoint: evidence.midpoint, bestBid: evidence.bestBid, bestAsk: evidence.bestAsk }];
-        })), now });
-      this.runtime.previousStrategyArena = resetPreviousStrategyArenaAccount({ state: this.runtime.previousStrategyArena,
-        quotes: Object.fromEntries(previousArenaPositions.map((position) => {
-          const evidence = this.runtime.evidence[position.symbol]!;
-          return [position.symbol, { midpoint: evidence.midpoint, bestBid: evidence.bestBid, bestAsk: evidence.bestAsk }];
-        })), now });
-      this.runtime.regimePortfolio = resetRegimePortfolio({ state: this.runtime.regimePortfolio,
-        quotes: Object.fromEntries(regimePositions.map((position) => {
-          const evidence = this.runtime.evidence[position.symbol]!;
-          return [position.symbol, { midpoint: evidence.midpoint, bestBid: evidence.bestBid, bestAsk: evidence.bestAsk,
-            observedAt: evidence.observedAt, fresh: true }];
-        })), now });
-      for (const position of openPositions) {
-        const closed = closePaperPosition(position, now, this.runtime.evidence[position.symbol]!.midpoint, "MANUAL_PAPER_RESET");
-        this.runtime.positions[position.symbol] = closed;
-        this.queueTransition(closed, position);
-      }
-      this.runtime.canonicalPaper = initialCanonicalPaperState(now);
-      this.runtime.equity = PAPER_INITIAL_EQUITY;
-      this.runtime.equityVersion += 1;
-      this.runtime.paperCycle = startPaperCycle(now, PAPER_INITIAL_EQUITY, this.runtime.paperCycle.number + 1);
-      this.runtime.positions = {};
-      this.runtime.plans = {};
-      this.runtime.decisions = {};
-      this.runtime.routes = {};
-      this.runtime.riskBreach = false;
-      await this.saveCheckpoint(now, true);
-      this.publishAuthority();
-    } catch (error) {
-      this.restoreAuthority(authorityBefore);
-      this.publishAuthority();
-      throw error;
-    }
-    await this.drainOutbox(now);
-    try {
-      await this.env.DB.batch([this.env.DB.prepare("UPDATE system_settings SET paper_equity=?,equity_version=?,updated_at=? WHERE id=1 AND equity_version<?")
-        .bind(PAPER_INITIAL_EQUITY, this.runtime.equityVersion, now, this.runtime.equityVersion)]);
-      this.runtime.d1Writes += 1;
-    } catch (error) {
-      this.runtime.d1MirrorError = `D1 reset mirror pending: ${safeError(error)}`;
-    }
-    const strategyArena = canonicalPaperSummary({ current: this.runtime.strategyArena, previous: this.runtime.previousStrategyArena,
-      regime: this.runtime.regimePortfolio }, this.runtime.canonicalPaper);
-    return { ok: true, equity: strategyArena.portfolioEquity,
-      strategyArena, paperCycle: paperCycleSummary(this.runtime.paperCycle, this.runtime.equity) };
   }
 
   private async clearPaperHistory() {
