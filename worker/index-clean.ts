@@ -836,7 +836,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     if (ranked.length === 0) throw new Error("contract catalog unavailable: empty active-contract response");
     this.contractCatalog = new Map(ranked.map((row) => [row.symbol, row]));
     this.runtime.lastUniverseAt = now;
-    for (const symbol of this.runtime.symbols) this.applyContractMetadata(symbol);
+    for (const symbol of new Set([...this.runtime.symbols,...this.runtime.liquidUniverse])) this.applyContractMetadata(symbol);
     this.ctx.waitUntil(this.ctx.storage.put("gate-contract-catalog:v1",ranked).catch(()=>undefined));
   }
 
@@ -890,18 +890,23 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(!this.runtime.liquidUniverse.includes(symbol)&&!this.forwardUrgentSymbols().includes(symbol)){
         delete this.forwardMinuteCandles[symbol];delete this.forwardMinuteQuoteBars[symbol];this.forwardMinuteRetryAt.delete(symbol);
       }
-      delete this.runtime.tickSize[symbol]; delete this.runtime.contractMeta[symbol];
+      if(!this.runtime.liquidUniverse.includes(symbol)){
+        delete this.runtime.tickSize[symbol]; delete this.runtime.contractMeta[symbol];
+      }
     }
   }
 
   private refreshRadar(now:number) {
-    if(this.contractCatalog.size===0)throw new Error("contract catalog unavailable: radar refresh deferred");
     const cached=this.gateRadarAt>0&&now-this.gateRadarAt<=2*RADAR_MS?new Map(this.gateRadarCache.map(row=>[row.symbol,row])):null;
-    const gate=[...this.contractCatalog.values()].filter(row=>adaptiveSymbolAllowed(row.symbol)).map(row=>{
-      const fresh=cached?.get(row.symbol);return fresh?{...fresh,fundingRate:row.fundingRate}:{symbol:row.symbol,last:row.last,
-        volume24hUsd:row.volume24hUsd,fundingRate:row.fundingRate};
-    });
-    const eligibleRows=this.marketHub.radarRows(gate,now);
+    const known=this.contractCatalog.size
+      ?[...this.contractCatalog.values()].filter(row=>adaptiveSymbolAllowed(row.symbol)).map(row=>{
+        const fresh=cached?.get(row.symbol);return fresh?{...fresh,fundingRate:row.fundingRate}:{symbol:row.symbol,last:row.last,
+          volume24hUsd:row.volume24hUsd,fundingRate:row.fundingRate};
+      })
+      :[...new Set([...this.runtime.liquidUniverse,...DEFAULT_SYMBOLS])].flatMap(symbol=>{
+        const q=this.marketHub.quote(symbol,now);return q?[{symbol,last:q.mid,volume24hUsd:q.volume24hUsd,fundingRate:0}]:[];
+      });
+    const eligibleRows=this.marketHub.radarRows(known,now);
     if(!eligibleRows.length)throw new Error("no Gate-tradable Adaptive 10 markets");
     const locked=[...(this.forwardState?.positions.map(p=>p.symbol)??[]),
       ...(this.forwardState?forwardWatchSymbols(this.forwardState,now,this.runtime.liquidUniverse):[])];
