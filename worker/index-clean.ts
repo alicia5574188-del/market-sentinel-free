@@ -2796,11 +2796,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private forwardMinutePaths(){
     const officialCache=this.forwardMinuteCandles??{},syntheticCache=this.forwardMinuteQuoteBars??{};
-    const symbols=new Set([...Object.keys(officialCache),...Object.keys(syntheticCache),...(this.runtime.symbols??[])]);
+    const symbols=new Set([...Object.keys(officialCache),...Object.keys(syntheticCache)]);
     return Object.fromEntries([...symbols].flatMap(symbol=>{
-      const official=officialCache[symbol]??[],synthetic=syntheticCache[symbol]?.completed??[],streamed=this.gateStream?.path(symbol,"1m")??[];
-      const merged=[...new Map([...synthetic,...official,...streamed].map(row=>[row.time,row])).values()].sort((a,b)=>a.time-b.time).slice(-90);
-      return merged.length?[[symbol,merged]]:[];
+      // Never mix Gate absolute prices into an external 5m structure. Prefer
+      // same-venue 1m candles; consensus quote bars are only a short fallback.
+      const official=officialCache[symbol]??[],synthetic=syntheticCache[symbol]?.completed??[];
+      const rows=(official.length>=3?official:synthetic).slice(-90);
+      return rows.length?[[symbol,rows]]:[];
     }));
   }
 
@@ -2815,6 +2817,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       return!last||(last+60)*1000<targetCompletedAt;
     }).slice(0,4);
     const results=await Promise.allSettled(due.map(async symbol=>{
+      const coverage=this.marketHub.coverage(symbol,Date.now());
+      if(coverage.sourceCount>=2&&coverage.disagreementRate>.015)
+        throw new Error(`${symbol} external venue disagreement`);
       const external=await this.marketHub.candles(symbol,"1m",90);
       if(external)return{symbol,rows:external.rows,source:external.source};
       return{symbol,rows:await fetchStructureCandles(symbol,"1m",90),source:"GATE" as const};
@@ -2924,8 +2929,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       return !last||(last.time+300)*1000<targetCompletedAt;
     }).slice(0,5);
     const results=await Promise.allSettled(due.map(async symbol=>{
+      const coverage=this.marketHub.coverage(symbol,Date.now());
+      if(coverage.sourceCount>=2&&coverage.disagreementRate>.015)
+        throw new Error(`${symbol} external venue disagreement ${(coverage.disagreementRate*100).toFixed(2)}%`);
       const external=await this.marketHub.candles(symbol,"5m",120);
       if(external)return{symbol,rows:external.rows,replace:true,source:external.source};
+      // Gate-only contracts retain a low-frequency fallback. Common contracts
+      // never need Gate public candles for normal analysis.
       const rows=await fetchStructureCandles(symbol,"5m",(this.strategyCandles[symbol]?.length??0)>=120?6:120);
       return{symbol,rows,replace:false,source:"GATE" as const};
     }));
