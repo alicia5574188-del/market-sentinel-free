@@ -60,13 +60,17 @@ export type GateLiveOrder = {
   initial?: { contract?: string; text?: string; size?: string | number; price?: string; close?: boolean; reduce_only?: boolean };
 };
 
-export type GateLiveSnapshot = {
+export type GateLiveCoreSnapshot = {
   account: GateLiveAccount;
   positions: GateLivePosition[];
+  checkedAt: number;
+};
+export type GateLiveOrderSnapshot = {
   orders: GateLiveOrder[];
   priceOrders: GateLiveOrder[];
   checkedAt: number;
 };
+export type GateLiveSnapshot = GateLiveCoreSnapshot & GateLiveOrderSnapshot;
 
 /** Gate classic futures `total` is wallet balance, not marked equity.
  * Never compare it directly with a PAPER balance including open PnL. Unified
@@ -183,16 +187,23 @@ class GateHttpError extends Error {
 // Both hosts are Gate's documented futures production endpoints. Never send
 // account credentials to another exchange, a redirect, or a mainnet fallback
 // for a testnet account. A race includes the body and JSON, not just headers.
-async function completeGateRead<T>(read:(alternate:boolean,signal:AbortSignal)=>Promise<T>,onHedge:()=>void):Promise<T>{
+async function completeGateRead<T>(
+  read:(alternate:boolean,signal:AbortSignal)=>Promise<T>,
+  preferredAlternate:boolean,
+  onHedge:()=>void,
+  onWinner:(alternate:boolean)=>void,
+):Promise<T>{
   const controllers=[new AbortController(),new AbortController()];
+  const routes=preferredAlternate?[true,false]:[false,true];
   let hedge:ReturnType<typeof setTimeout>|undefined,deadline:ReturnType<typeof setTimeout>|undefined;
   let settled=false,secondary=false;
   const errors:unknown[]=[];
   try{return await new Promise<T>((resolve,reject)=>{
     const fail=(error:unknown)=>{if(!settled){settled=true;reject(error);}};
     const start=(index:number)=>{
-      void read(index===1,controllers[index].signal).then(value=>{
-        if(!settled){settled=true;resolve(value);}
+      const alternate=routes[index]!;
+      void read(alternate,controllers[index].signal).then(value=>{
+        if(!settled){settled=true;onWinner(alternate);resolve(value);}
       },error=>{
         if(settled)return;
         // Authentication, permission, rate limits and absence are definitive;
@@ -236,7 +247,9 @@ function parseGateJson<T>(raw: string): T {
 export class GateLiveClient {
   readonly credentials: GateCredentials;
   requestCount = 0;
-  readonly readTransport={version:"gate-private-dual-route-v1",hedges:0,recovered:0,timeouts:0,lastTimeoutPath:null as string|null};
+  private readRoutePreference=new Map<string,boolean>();
+  readonly readTransport={version:"gate-private-dual-route-v2",hedges:0,recovered:0,timeouts:0,lastTimeoutPath:null as string|null,
+    preferredAlternatePaths:0};
   constructor(credentials: GateCredentials) { this.credentials = credentials; }
 
   private async request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, query = "", value?: unknown, beforeSend?: () => boolean) {
@@ -279,9 +292,15 @@ export class GateLiveClient {
     };
     try{
       if(method==="GET"){
+        const routeKey=`${path}?${query}`,preferredAlternate=this.credentials.environment==="live"&&(this.readRoutePreference.get(routeKey)??false);
         const result=await completeGateRead(async(alternate,signal)=>({
           ...await send(alternate,signal),alternate,
-        }),()=>{this.readTransport.hedges++;});
+        }),preferredAlternate,()=>{this.readTransport.hedges++;},alternate=>{
+          if(this.credentials.environment==="live"){
+            this.readRoutePreference.set(routeKey,alternate);
+            this.readTransport.preferredAlternatePaths=[...this.readRoutePreference.values()].filter(Boolean).length;
+          }
+        });
         if(result.alternate)this.readTransport.recovered++;
         return {data:result.data,raw:result.raw};
       }
@@ -301,20 +320,44 @@ export class GateLiveClient {
     }
   }
 
-  async snapshot(): Promise<GateLiveSnapshot> {
-    const [account, positions, orders, priceOrders] = await Promise.allSettled([
-      this.request<GateLiveAccount>("GET", "/futures/usdt/accounts"),
-      this.request<GateLivePosition[]>("GET", "/futures/usdt/positions", "holding=true"),
-      this.request<GateLiveOrder[]>("GET", "/futures/usdt/orders", "status=open"),
-      this.request<GateLiveOrder[]>("GET", "/futures/usdt/price_orders", "status=open"),
+  private settledValue<T>(result:PromiseSettledResult<{data:T;raw:string}>):T{
+    if(result.status==="rejected")throw result.reason;
+    return result.value.data;
+  }
+
+  /** Critical account lane used for routine short-horizon reconciliation.
+   * A slow open-order list must not make fresh equity/positions look offline. */
+  async snapshotCore():Promise<GateLiveCoreSnapshot>{
+    const [account,positions]=await Promise.allSettled([
+      this.request<GateLiveAccount>("GET","/futures/usdt/accounts"),
+      this.request<GateLivePosition[]>("GET","/futures/usdt/positions","holding=true"),
     ]);
-    // Drain the bounded parallel reads before reporting failure: an early
-    // rejection must not leave old signed requests alive in the next pass.
-    const value=<T>(result:PromiseSettledResult<{data:T;raw:string}>):T=>{
-      if(result.status==="rejected")throw result.reason;
-      return result.value.data;
-    };
-    return {account:value(account),positions:value(positions),orders:value(orders),priceOrders:value(priceOrders),checkedAt:Date.now()};
+    return{account:this.settledValue(account),positions:this.settledValue(positions),checkedAt:Date.now()};
+  }
+
+  /** Order/protection audit lane. This is intentionally separate from account
+   * truth so one slow list endpoint cannot create an all-or-nothing outage. */
+  async snapshotOrders():Promise<GateLiveOrderSnapshot>{
+    const [orders,priceOrders]=await Promise.allSettled([
+      this.request<GateLiveOrder[]>("GET","/futures/usdt/orders","status=open"),
+      this.request<GateLiveOrder[]>("GET","/futures/usdt/price_orders","status=open"),
+    ]);
+    return{orders:this.settledValue(orders),priceOrders:this.settledValue(priceOrders),checkedAt:Date.now()};
+  }
+
+  async snapshot(): Promise<GateLiveSnapshot> {
+    // Drain both read lanes before reporting failure. Otherwise a rejected core
+    // lane could leave signed order-list requests alive after the caller already
+    // started its next reconciliation pass.
+    const [coreResult,orderResult]=await Promise.allSettled([this.snapshotCore(),this.snapshotOrders()]);
+    if(coreResult.status==="rejected"){
+      if(orderResult.status==="rejected")void orderResult.reason;
+      throw coreResult.reason;
+    }
+    if(orderResult.status==="rejected")throw orderResult.reason;
+    const core=coreResult.value,orders=orderResult.value;
+    return{account:core.account,positions:core.positions,orders:orders.orders,priceOrders:orders.priceOrders,
+      checkedAt:Math.max(core.checkedAt,orders.checkedAt)};
   }
 
   async setLeverage(symbol: string, leverage: number) {

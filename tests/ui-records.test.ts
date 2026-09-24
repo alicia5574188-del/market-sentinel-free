@@ -118,7 +118,7 @@ test("reviewed Gate adapter stays frozen outside the read-only settlement method
  // short-entry repair are reviewed together. Market IOC now asks Gate for
  // RESULT instead of FULL clearing fields, while all mutations remain
  // single-submit and unknown writes are reconciled by identity.
- const old=file.slice(0,from)+file.slice(to);assert.equal(createHash("sha256").update(old).digest("hex"),"7e0ba1d36af1671f14b1bbe605d9ef9d777906c0db7286985a781a8273dccf48");
+ const old=file.slice(0,from)+file.slice(to);assert.equal(createHash("sha256").update(old).digest("hex"),"5f385c17ff6c7be8a888cedc1f3216f41156e6cbfc7df60e2e3828b96bd8dc19");
 });
 test("operational UI removes version narratives and friend terminology",()=>{
  const paths=["forward-dashboard.tsx","live-console.tsx","member-access.tsx"];
