@@ -41,7 +41,7 @@ import { evaluateRegimePortfolio, initialRegimePortfolio, normalizeRegimePortfol
 import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
 import { ADAPTIVE_ENGINE_VERSION, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONFIRMATION_CAP, advanceForward, closeForwardForReset,
   forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols, forwardUrgentQuoteSymbols, forwardWatchSymbols,
-  initialForward, resetForwardAccountPreservingLearning, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
+  resetForwardAccountPreservingLearning, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { selectAnchorOpportunityUniverse } from "../lib/multi-turn-universe.ts";
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, prepareForwardReset,
   FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE } from "../lib/forward-store.ts";
