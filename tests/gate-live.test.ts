@@ -389,3 +389,38 @@ test("unknown submission is only final after Gate custom-text no-fill lookup win
   assert.equal(gateUnknownSubmissionCanResolve(submitted,submitted+64_999),false);
   assert.equal(gateUnknownSubmissionCanResolve(submitted,submitted+65_000),true);
 });
+
+
+test("routine core snapshot is independent from slow open-order list endpoints",async()=>{
+  const real=globalThis.fetch,paths:string[]=[];
+  globalThis.fetch=async(input)=>{
+    const url=new URL(String(input));paths.push(url.pathname);
+    if(url.pathname.endsWith("/accounts"))return Response.json({user:1,total:"100",available:"100",unrealised_pnl:"0",in_dual_mode:false});
+    if(url.pathname.endsWith("/positions"))return Response.json([]);
+    throw new Error("order list must not be touched by snapshotCore");
+  };
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    const core=await client.snapshotCore();
+    assert.equal(core.account.total,"100");assert.deepEqual(core.positions,[]);
+    assert.deepEqual(paths.sort(),["/api/v4/futures/usdt/accounts","/api/v4/futures/usdt/positions"].sort());
+  }finally{globalThis.fetch=real;}
+});
+
+test("a recovered futures read path is preferred on the next read for the same endpoint",async()=>{
+  const real=globalThis.fetch,hosts:string[]=[];let primaryCalls=0;
+  globalThis.fetch=async(input)=>{
+    const host=new URL(String(input)).hostname;hosts.push(host);
+    if(host==="api.gateio.ws"&&primaryCalls++===0)return new Promise<Response>(()=>{});
+    return Response.json({id:"123",status:"finished",fill_price:"100"});
+  };
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    await client.inspectEntry("MARKET","BTC_USDT","t-fixture","123");
+    const before=hosts.length;
+    await client.inspectEntry("MARKET","BTC_USDT","t-fixture","123");
+    assert.equal(hosts[0],"api.gateio.ws");assert.equal(hosts[1],"fx-api.gateio.ws");
+    assert.equal(hosts[before],"fx-api.gateio.ws","the recovered futures host should become first choice for that read path");
+    assert.ok(client.readTransport.preferredAlternatePaths>=1);
+  }finally{globalThis.fetch=real;}
+});
