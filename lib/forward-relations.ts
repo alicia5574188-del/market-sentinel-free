@@ -2,15 +2,12 @@ import { FORWARD_RELATION_V2_VERSION, advanceRelationEngine, initialRelationEngi
   type RelationCandidate, type RelationEngineState, type RelationStatus } from "./forward-relation-v2.ts";
 
 /**
- * Adaptive Ten — compact PAPER authority.
+ * Forward Relation 2.0 — PAPER authority.
  *
- * One engine only:
- * 5m structure/direction -> optional 1m confirmation -> unified opportunity score
- * -> ~10 competitive portfolio seats -> post-entry feedback/profit protection
- * -> one persisted Trade event consumed by PAPER and LIVE.
- *
- * No shadow/promotion system, no multi-timeframe strategy switch, no historical
- * sample veto over the current market direction.
+ * Mature 15/60/180-minute market responses create directional relations.
+ * Six causal reaction checkpoints can reduce stale relation authority early,
+ * while the opposite side must earn independent mature evidence.
+ * Region/1m logic remains execution enhancement, not directional authority.
  */
 export const FORWARD_VERSION="forward-relations-v1.0";
 export const ADAPTIVE_ENGINE_VERSION=FORWARD_RELATION_V2_VERSION;
@@ -376,7 +373,7 @@ function candidateRiskRate(o:Opportunity){const base=o.reserve?.004:o.mode==="RA
 function existingRisk(s:ForwardState,side?:"LONG"|"SHORT"){return s.positions.filter(t=>!side||t.side===side).reduce((n,t)=>n+t.plannedRisk,0);}
 function openTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number){
   const side=o.side,d=dir(side),price=side==="LONG"?q.bestAsk:q.bestBid;
-  // Analysis can come from Bybit/Binance. Only relative structure may cross
+  // Analysis can come from Bybit/OKX/Binance. Only relative structure may cross
   // venues; all executable prices are re-anchored to the actual Gate quote.
   const stopRate=Number.isFinite(o.stopRate)?o.stopRate:Math.abs(o.price-o.stopPrice)/Math.max(o.price,1e-9);
   const targetRate=Number.isFinite(o.targetRate)?o.targetRate:Math.abs(o.targetPrice/o.price-1);
