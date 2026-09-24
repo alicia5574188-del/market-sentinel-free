@@ -118,7 +118,8 @@ jobs:
               (.runtime.forward.lastCycleAt|type) == "number" and .runtime.forward.lastCycleAt > 0 and
               .runtime.realtimeReadiness.capacity == 11 and
               .runtime.realtimeReadiness.protectedMarketsReady == true and
-              .runtime.realtimeReadiness.actionableMarkets >= 1 and
+              .runtime.multiSourceMarket.healthySources >= 1 and
+              ((.runtime.forward.participationEligibleCount == 0) or (.runtime.realtimeReadiness.actionableMarkets >= 1)) and
               .runtime.radar.scanned > 0 and .runtime.radar.scanned <= 30 and
               .runtime.limits.scanUniverse == 30 and
               .runtime.limits.realtimeCapacity == 11 and
@@ -127,7 +128,7 @@ jobs:
             ' <<<"$body" >/dev/null 2>&1; then
               jq -c '{ok,buildSha:.runtime.buildSha,state:.runtime.state,lastError:.runtime.lastError,
                 forward:.runtime.forward,realtimeReadiness:.runtime.realtimeReadiness,
-                liveMode:.runtime.liveMode,scanned:.runtime.radar.scanned}' <<<"$body"
+                multiSourceMarket:.runtime.multiSourceMarket,liveMode:.runtime.liveMode,scanned:.runtime.radar.scanned}' <<<"$body"
               exit 0
             fi
             sleep 10
@@ -176,7 +177,8 @@ jobs:
               .runtime.forward.strategyAuthorityVersion == "adaptive-ten-slim-v1" and
               .runtime.forward.targetPositionCount == 10 and .runtime.forward.storage.error == null and
               .runtime.forward.lastCycleAt > 0 and .runtime.realtimeReadiness.capacity == 11 and
-              .runtime.realtimeReadiness.protectedMarketsReady == true and .runtime.realtimeReadiness.actionableMarkets >= 1 and
+              .runtime.realtimeReadiness.protectedMarketsReady == true and .runtime.multiSourceMarket.healthySources >= 1 and
+              ((.runtime.forward.participationEligibleCount == 0) or (.runtime.realtimeReadiness.actionableMarkets >= 1)) and
               .runtime.radar.scanned > 0 and .runtime.radar.scanned <= 30
             ' <<<"$body" >/dev/null 2>&1; then
               exit 0
