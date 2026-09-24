@@ -13,7 +13,7 @@ import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
   PAPER_BANKRUPTCY_EQUITY, PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
-import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, gateUnknownSubmissionCanResolve, isGateReadTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, gateUnknownSubmissionCanResolve, isGateReadTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveOrderSnapshot, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
 import { LIVE_SESSION_VERSION, establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, sameLiveSession, type LiveSession } from "../lib/live-session.ts";
 import type { GateSizeRules, SizeDiagnostic } from "../lib/gate-quantity.ts";
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
@@ -71,6 +71,8 @@ const LOOP_MS = 2_000;
 const LIVE_FAST_SNAPSHOT_MAX_AGE_MS = 5_000;
 const LIVE_RECONCILE_ACTIVE_MS = 5_000;
 const LIVE_RECONCILE_IDLE_MS = 10_000;
+const LIVE_ORDER_AUDIT_MAX_AGE_MS = 120_000;
+const LIVE_ORDER_AUDIT_ADMISSION_MAX_AGE_MS = 300_000;
 // Whole-system display/health tolerance only. Executable quotes remain guarded
 // by the stricter per-symbol STALE_AFTER_MS/freshQuote checks; this must never
 // authorize an order from an old price. A few missed 2s polls should not make
@@ -537,6 +539,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private liveFastSourcePending=false;
   private livePreferCachedNext=false;
   private liveSnapshotCache:GateLiveSnapshot|null=null;
+  private liveOrderSnapshotCache:GateLiveOrderSnapshot|null=null;
+  private liveOrderAuditAt=0;
   private liveNextReconcileAt=0;
   private liveSyncUsedCached=false;
   private liveExecution={version:"event-driven-live-v2",cycles:0,sourceWakeups:0,
@@ -2299,12 +2303,42 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const client = await this.gateLive();
     const unresolvedEntry=Object.values(this.runtime.live.entries).some(entry=>entry
       &&(!["FILLED","CANCELLED"].includes(entry.status)||this.liveEntryAwaitingReconcile(entry)));
+    const needsProtectionOrderLane=activePositions||Object.values(this.runtime.live.entries).some(entry=>entry
+      &&entry.stopSubmittingAt&& !entry.stopOrderId && !["FILLED","CANCELLED"].includes(entry.status));
     const cached=preferCached&&this.runtime.live.operational&&!unresolvedEntry&&this.liveSnapshotCache
       &&now-this.liveSnapshotCache.checkedAt<=LIVE_FAST_SNAPSHOT_MAX_AGE_MS
       ?structuredClone(this.liveSnapshotCache):null;
-    let snapshot=cached??await client.snapshot();
-    this.liveSyncUsedCached=Boolean(cached);
-    if(!cached)this.liveSnapshotCache=structuredClone(snapshot);
+    let snapshot:GateLiveSnapshot;
+    let orderAuditUsable=true;
+    if(cached){
+      snapshot=cached;this.liveSyncUsedCached=true;
+    }else if(initialEnable||forceEntryCleanup||needsProtectionOrderLane){
+      snapshot=await client.snapshot();this.liveSyncUsedCached=false;
+      this.liveOrderSnapshotCache={orders:structuredClone(snapshot.orders),priceOrders:structuredClone(snapshot.priceOrders),checkedAt:snapshot.checkedAt};
+      this.liveOrderAuditAt=snapshot.checkedAt;
+      this.liveSnapshotCache=structuredClone(snapshot);
+    }else{
+      // Routine short-horizon LIVE reconciliation only needs fresh account and
+      // position truth. Open-order list latency is a separate audit lane: one
+      // slow optional endpoint must never make fresh account/positions appear
+      // offline or create an escalating "account timeout" loop.
+      const core=await client.snapshotCore();this.liveSyncUsedCached=false;
+      if(!this.liveOrderAuditAt&&this.runtime.live.lastSyncAt)this.liveOrderAuditAt=this.runtime.live.lastSyncAt;
+      let orders=this.liveOrderSnapshotCache;
+      if(!orders||now-orders.checkedAt>LIVE_ORDER_AUDIT_MAX_AGE_MS){
+        try{
+          orders=await client.snapshotOrders();
+          this.liveOrderSnapshotCache=structuredClone(orders);this.liveOrderAuditAt=orders.checkedAt;
+        }catch(error){
+          if(!isGateReadTimeoutError(error))throw error;
+          orderAuditUsable=false;
+        }
+      }
+      const inheritedAuditAt=orders?.checkedAt??this.liveOrderAuditAt;
+      orderAuditUsable=orderAuditUsable&&inheritedAuditAt>0&&now-inheritedAuditAt<=LIVE_ORDER_AUDIT_ADMISSION_MAX_AGE_MS;
+      snapshot={account:core.account,positions:core.positions,orders:orders?.orders??[],priceOrders:orders?.priceOrders??[],checkedAt:core.checkedAt};
+      this.liveSnapshotCache=structuredClone(snapshot);
+    }
     // The committed PAPER account can advance while private reads are in flight.
     // Select sources after the read, never from a pre-await portfolio snapshot.
     now=Date.now();this.reconcileCanonicalMirror(now);
@@ -2614,6 +2648,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     for (const trade of Object.values(desiredPortfolio)) {
       const symbol = trade.symbol;
       if(!trade.forwardSource)continue; // Legacy sources only drain existing exposure.
+      if(!orderAuditUsable){
+        this.runtime.live.entrySkips[symbol]={planId:trade.id,symbol,code:"ECONOMICS",
+          reason:"Gate账户与持仓核对正常，但挂单审计通道暂未恢复；只暂停新增复制，已有原生保护和持仓管理不受影响",observedAt:now};
+        continue;
+      }
       const plan = { ...arenaTradePlan(trade), expiresAt:trade.openedAt+trade.forwardSource.rule.horizon*60_000 };
       const prior = this.runtime.live.entries[symbol];
       // Identity fencing comes before quote/admission diagnostics. Once a market
@@ -3660,6 +3699,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         liveMode: { requestedEnabled: this.runtime.live.requestedEnabled, operational: this.runtime.live.operational },
         liveExecution:{...this.liveExecution,inFlight:!!this.liveBackgroundWork,queued:this.liveSourcePending,
           timeoutStreak:this.liveReadTimeoutStreak,lastAccountAt:this.runtime.live.lastSyncAt,
+          lastOrderAuditAt:this.liveOrderSnapshotCache?.checkedAt??this.liveOrderAuditAt||null,
           readTransport:this.liveClient?.readTransport??null},
         strategyArena: {
           version: canonical.version,
