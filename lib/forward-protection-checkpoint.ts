@@ -53,8 +53,8 @@ export function restoreForwardProtectionCheckpoint(s:ForwardState,value:unknown)
     next.lastQuoteCycleAt=Math.max(next.lastQuoteCycleAt,c.quoteCycleAt as number);next.peakEquity=Math.max(next.peakEquity,c.peakEquity as number);
     next.maxDrawdown=Math.max(next.maxDrawdown,c.maxDrawdown as number);return next;
   }
-  if(c.version!==FORWARD_PROTECTION_CHECKPOINT_VERSION||!finite(current.quoteCycleAt)||!finite(current.peakEquity)||!finite(current.maxDrawdown)
-    ||!Array.isArray(c.positions)||current.positions.length!==s.positions.length)throw new Error("前向保护检查点异常；保留账户");
+  if(c.version!==FORWARD_PROTECTION_CHECKPOINT_VERSION||!finite(c.quoteCycleAt)||!finite(c.peakEquity)||!finite(c.maxDrawdown)
+    ||!Array.isArray(c.positions)||c.positions.length!==s.positions.length)throw new Error("前向保护检查点异常；保留账户");
   const current=c as ForwardProtectionCheckpoint;
   const rows=new Map(current.positions.map(r=>[r?.id,r]));if(rows.size!==current.positions.length)throw new Error("前向保护检查点异常；保留账户");
   const next=structuredClone(s);
