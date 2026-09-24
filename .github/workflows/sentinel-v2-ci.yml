@@ -53,6 +53,7 @@ jobs:
           npx wrangler deploy --dry-run --config dist/server/wrangler.json
       # Diagnostic rerun after realtime BBO deployment.
       # BBO post-deploy observation: read-only production sampling.
+      # Runtime-only observation after reserve-seat deployment.
       - name: Observe current production without mutating it
         if: github.event_name == 'pull_request'
         run: |
