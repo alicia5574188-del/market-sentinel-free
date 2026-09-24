@@ -64,9 +64,10 @@ export function recordRelationFailure(state:RelationGuardState,relation:GuardRel
   fallback:{ruleId?:string;evidenceAt?:number;health?:number;livePathScore?:number;horizon?:15|60|180},
   now:number,reason:GuardFailureReason,symbol:string){
   const ruleId=relation?.id??fallback.ruleId;if(!ruleId)return;
-  const prior=state[ruleId];
-  state[ruleId]={ruleId,blockedAt:now,blockedEvidenceAt:relation?.lastQualifiedAt??finite(fallback.evidenceAt),
-    blockedHealth:relation?.health??finite(fallback.health),blockedLivePathScore:relation?.livePathScore??finite(fallback.livePathScore),
+  const prior=state[ruleId],entryEvidenceAt=finite(fallback.evidenceAt),newerEvidence=!!relation&&entryEvidenceAt>0&&relation.lastQualifiedAt>entryEvidenceAt;
+  state[ruleId]={ruleId,blockedAt:now,blockedEvidenceAt:entryEvidenceAt>0?entryEvidenceAt:(relation?.lastQualifiedAt??0),
+    blockedHealth:newerEvidence?finite(fallback.health):(relation?.health??finite(fallback.health)),
+    blockedLivePathScore:newerEvidence?finite(fallback.livePathScore):(relation?.livePathScore??finite(fallback.livePathScore)),
     reason,symbol,failures:(prior?.failures??0)+1};
 }
 
