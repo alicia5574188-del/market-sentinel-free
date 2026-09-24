@@ -62,7 +62,7 @@ test("strong 1m impulse plus genuinely small pullback and full restart becomes R
   let states=armed();
   const breakout=bar(0,100.95,102.72,100.92,102.62);
   const pullback=bar(60,102.62,102.63,102.28,102.32);
-  const restart=bar(120,102.32,102.56,102.30,102.54);
+  const restart=bar(120,102.32,102.78,102.30,102.74);
   states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[breakout]},now:(START+60)*1000,costRate:.0022}).states;
   states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[breakout,pullback]},now:(START+120)*1000,costRate:.0022}).states;
   assert.equal(states.BCH_USDT?.phase,"IGNITION",states.BCH_USDT?.reason);
