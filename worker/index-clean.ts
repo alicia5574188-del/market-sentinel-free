@@ -856,8 +856,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
 
   private strategyPathSymbols() {
     return [...new Set([
-      ...this.runtime.liquidUniverse.filter(forwardSymbolAllowed),
-      ...(this.forwardState?.positions.flatMap(position => position.status === "OPEN" ? [position.symbol] : []) ?? []),
+      ...this.runtime.liquidUniverse,
+      ...(this.forwardState?.positions.map(position=>position.symbol)??[]),
     ])];
   }
 
@@ -899,70 +899,22 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private refreshRadar(now: number, rows: Awaited<ReturnType<typeof fetchMarketTickers>>) {
-    // A failed cold-start catalog load is not a successful empty market scan.
-    if (this.contractCatalog.size === 0) throw new Error("contract catalog unavailable: radar refresh deferred");
-    const eligible = new Set(this.contractCatalog.keys());
-    // Adaptive 10 scans 30 liquid/active completed-5m paths. Existing exposure
-    // and already-triggered RegionLaunch episodes keep their path. Ordinary ARMED
-    // observation gets only a small continuity sleeve so it cannot monopolize the
-    // whole 30-market universe and hide current direction-space opportunities.
-    const eligibleRows = rows.filter((row) => eligible.has(row.symbol) && forwardSymbolAllowed(row.symbol));
-    const launches=Object.values(this.forwardState?.regionLaunches??{});
-    const tickerBySymbol=new Map(eligibleRows.map(row=>[row.symbol,row]));
-    const launchPriority=(phase:string)=>phase==="READY"?0:phase==="RETEST"?1:phase==="IGNITION"?2:9;
-    const boundaryDistance=(row:(typeof launches)[number])=>{
-      const px=tickerBySymbol.get(row.symbol)?.last,c=row.compression;
-      if(!(px&&c&&c.width>0))return Number.POSITIVE_INFINITY;
-      return Math.min(Math.abs(px-c.lower),Math.abs(px-c.upper))/c.width;
-    };
-    const triggeredLaunches=launches.filter(row=>["READY","RETEST","IGNITION"].includes(row.phase))
-      .sort((a,b)=>launchPriority(a.phase)-launchPriority(b.phase)
-        ||boundaryDistance(a)-boundaryDistance(b)||b.quality-a.quality||b.updatedAt-a.updatedAt);
-    const armedContinuity=launches.filter(row=>row.phase==="ARMED")
-      .sort((a,b)=>boundaryDistance(a)-boundaryDistance(b)||b.quality-a.quality||b.updatedAt-a.updatedAt)
-      .slice(0,4);
-    const launchContinuity=launches.filter(row=>row.phase==="WATCH"&&now-row.updatedAt<=45*60_000)
-      .sort((a,b)=>b.quality-a.quality||boundaryDistance(a)-boundaryDistance(b)
-        ||b.failedDepartures-a.failedDepartures||b.motherBars-a.motherBars||b.updatedAt-a.updatedAt)
-      .slice(0,4);
-    const lockedAnchorSymbols=[...new Set([
-      ...(this.forwardState?.positions.flatMap(position=>position.status==="OPEN"?[position.symbol]:[])??[]),
-      ...(this.forwardState?.regionLaunchSignals??[]).filter(signal=>signal.expiresAt>now).map(signal=>signal.symbol),
-      ...triggeredLaunches.map(row=>row.symbol),...armedContinuity.map(row=>row.symbol),...launchContinuity.map(row=>row.symbol),
-    ])];
-    const universeRows = selectAnchorOpportunityUniverse({ rows: eligibleRows, limit: SCAN_UNIVERSE_SIZE,
-      lockedSymbols: lockedAnchorSymbols, currentSymbols: this.runtime.liquidUniverse,
-      coreSymbols:DEFAULT_SYMBOLS,rotationSeed: Math.floor(now / BAR_MS),explorationSlots:0,liquiditySlots:10 });
-    const universe = new Set(universeRows.map((row) => row.symbol));
-    this.runtime.liquidUniverse = universeRows.map((row) => row.symbol);
-    this.runtime.radar = successfulRadarRuntime(this.runtime.radar, now, universeRows.length, []);
-    const regimes = updateMarketRegimes({ state: this.runtime.marketRegimes, rows: universeRows, eligible: universe, now });
-    this.runtime.stableCandidates = Object.fromEntries(Object.entries(this.runtime.stableCandidates)
-      .filter(([symbol, candidate]) => universe.has(symbol) && now - candidate.observedAt <= STRATEGY_CANDLE_STALE_MS));
-    this.runtime.previousStableCandidates = Object.fromEntries(Object.entries(this.runtime.previousStableCandidates)
-      .filter(([symbol, candidate]) => universe.has(symbol) && now - candidate.observedAt <= STRATEGY_CANDLE_STALE_MS));
-    this.runtime.stableStructures = Object.fromEntries(Object.entries(this.runtime.stableStructures)
-      .filter(([symbol, structure]) => universe.has(symbol) && now - structure.observedAt <= STRATEGY_CANDLE_STALE_MS));
-    this.runtime.previousStableStructures = Object.fromEntries(Object.entries(this.runtime.previousStableStructures)
-      .filter(([symbol, structure]) => universe.has(symbol) && now - structure.observedAt <= STRATEGY_CANDLE_STALE_MS));
-    const stable = Object.values(this.runtime.stableCandidates).sort((left, right) => right.score - left.score);
-    const previousForPool = Object.values(this.runtime.previousStableCandidates).map((candidate) => ({
-      ...candidate, allRegimeRoutes: [],
-    })) as MarketRegimeCandidate[];
-    const poolCandidates = [...new Map([...stable, ...previousForPool]
-      .sort((left, right) => right.score - left.score).map((candidate) => [candidate.symbol, candidate])).values()];
-    this.runtime.marketRegimes = { ...regimes, candidates: stable };
-    this.runtime.lastRadarAt = now;
-    const researchUniverse = REGIME_EXECUTION_UNIVERSE.filter((symbol) => universe.has(symbol));
-    // Existing PAPER/LIVE exposure always owns a realtime slot. Research symbols
-    // fill only the remaining capacity, so a cutover cannot orphan protection.
-    const protectedLocked = [...this.currentAuthorityProtectionSymbols()];
-    const forwardWatched = this.forwardState ? forwardWatchSymbols(this.forwardState, now, universe) : [];
-    const locked = [...new Set([...protectedLocked, ...forwardWatched, ...researchUniverse])];
-    const liquidFallback = [...researchUniverse, ...universeRows.map((row) => row.symbol)];
-    const next = selectDiverseMarketPool({ locked, current: this.runtime.symbols, candidates: poolCandidates,
-      fallback: liquidFallback, limit: PORTFOLIO_REALTIME_CAPACITY });
-    if (next.length) this.applyRealtimeSymbols(next);
+    if(this.contractCatalog.size===0)throw new Error("contract catalog unavailable: radar refresh deferred");
+    const eligibleRows=rows.filter(row=>this.contractCatalog.has(row.symbol)&&forwardSymbolAllowed(row.symbol));
+    if(!eligibleRows.length)throw new Error("Gate ticker universe unavailable");
+    const locked=[...(this.forwardState?.positions.map(p=>p.symbol)??[]),
+      ...(this.forwardState?forwardWatchSymbols(this.forwardState,now,this.runtime.liquidUniverse):[])];
+    const universeRows=selectAnchorOpportunityUniverse({rows:eligibleRows,limit:SCAN_UNIVERSE_SIZE,
+      lockedSymbols:locked,currentSymbols:this.runtime.liquidUniverse,coreSymbols:DEFAULT_SYMBOLS,
+      rotationSeed:Math.floor(now/BAR_MS),explorationSlots:4,liquiditySlots:8});
+    if(!universeRows.length)throw new Error("no liquid Adaptive 10 markets");
+    this.runtime.liquidUniverse=universeRows.map(row=>row.symbol);
+    this.runtime.radar=successfulRadarRuntime(this.runtime.radar,now,universeRows.length,[]);
+    this.runtime.lastRadarAt=now;
+    const protectedSymbols=[...this.currentAuthorityProtectionSymbols()];
+    const watched=this.forwardState?forwardWatchSymbols(this.forwardState,now,this.runtime.liquidUniverse):[];
+    const next=[...new Set([...protectedSymbols,...watched,...DEFAULT_SYMBOLS,...this.runtime.liquidUniverse])].slice(0,ADAPTIVE_REALTIME_POSITION_CAP);
+    if(next.length)this.applyRealtimeSymbols(next);
   }
 
   private blockingStrategyCandleError(now: number) {
@@ -2885,9 +2837,11 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     return { entryReady, recoveryFreshCount, recovered };
   }
 
-  private symbolEntryReady(symbol: string) {
-    const evidence = this.runtime.evidence[symbol];
-    return Boolean(evidence?.fresh && evidence.ancillaryFresh && evidence.entryReady !== false);
+  private symbolEntryReady(symbol:string,now=Date.now()) {
+    const evidence=this.runtime.evidence[symbol],failure=this.runtime.feedFailures[symbol];
+    return Boolean(evidence?.fresh&&evidence.entryReady!==false&&this.runtime.contractMeta[symbol]!=null
+      &&(this.sessionWarmup[symbol]??0)>=2&&now-evidence.observedAt<=STALE_AFTER_MS
+      &&failure?.suspendedSince==null);
   }
 
   private currentAuthorityProtectionSymbols() {
@@ -2910,28 +2864,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       observedAt: evidence.observedAt, fresh: evidence.fresh }, now);
   }
 
-  private realtimeReadiness(now = Date.now()) {
-    // "Protected" means an already-open exposure that must keep executable
-    // management data. Entry candidates/plans may warm or retry independently
-    // and must not demote the whole account. Open-position management needs a
-    // fresh executable book and contract metadata, not ancillary entry evidence
-    // or a four-snapshot entry warmup.
-    const protectedSymbols = this.currentAuthorityProtectionSymbols();
-    const urgent=new Set(this.forwardUrgentSymbols(now));
-    const currentForward=this.forwardState?.strategyAuthorityVersion===MULTI_TURN_VERSION;
-    const actionableMarkets = this.runtime.symbols.filter((symbol) => {
-      const warm=(this.sessionWarmup[symbol]??0)>=(urgent.has(symbol)?2:WARMUP_SNAPSHOTS);
-      if(!warm||this.runtime.contractMeta[symbol]==null)return false;
-      if(currentForward)return this.symbolManagementReady(symbol,now)
-        &&this.runtime.feedFailures[symbol]?.suspendedSince==null;
-      return this.symbolEntryReady(symbol);
-    }).length;
-    const missingProtectedMarkets=[...protectedSymbols].filter((symbol)=>!this.runtime.symbols.includes(symbol)
-      || !this.symbolManagementReady(symbol,now));
-    const protectedMarketsReady = missingProtectedMarkets.length===0;
-    return { capacity: PORTFOLIO_REALTIME_CAPACITY, actionableMarkets,
-      warmingMarkets: Math.max(0, this.runtime.symbols.length - actionableMarkets),
-      protectedMarkets: protectedSymbols.size, protectedMarketsReady, missingProtectedMarkets };
+  private realtimeReadiness(now=Date.now()) {
+    const protectedSymbols=this.currentAuthorityProtectionSymbols();
+    const actionableMarkets=this.runtime.symbols.filter(symbol=>this.symbolEntryReady(symbol,now)).length;
+    const missingProtectedMarkets=[...protectedSymbols].filter(symbol=>!this.runtime.symbols.includes(symbol)
+      ||!this.symbolManagementReady(symbol,now));
+    return{capacity:ADAPTIVE_REALTIME_POSITION_CAP,actionableMarkets,
+      warmingMarkets:Math.max(0,this.runtime.symbols.length-actionableMarkets),
+      protectedMarkets:protectedSymbols.size,protectedMarketsReady:missingProtectedMarkets.length===0,missingProtectedMarkets};
   }
 
   private ensureProtectionSymbolsResident() {
@@ -2950,23 +2890,16 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   }
 
   private forwardUrgentSymbols(now=Date.now()){
-    if(!this.forwardState||this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION)return [];
+    if(!this.forwardState)return[];
     return forwardUrgentQuoteSymbols(this.forwardState,now,this.runtime.liquidUniverse??[]);
   }
 
   private forwardQuotes(now=Date.now()){
-    if(!this.forwardState||this.forwardState.strategyAuthorityVersion!==MULTI_TURN_VERSION||!this.runtime.evidence)
-      return this.regimeQuotes(now);
-    const urgent=new Set(this.forwardUrgentSymbols(now)),failures=this.runtime.feedFailures??{},meta=this.runtime.contractMeta??{};
+    if(!this.forwardState||!this.runtime.evidence)return this.regimeQuotes(now);
     return Object.fromEntries(Object.entries(this.runtime.evidence).flatMap(([symbol,row])=>{
-      if(!row?.fresh||row.bestBid==null||row.bestAsk==null||now-row.observedAt>STALE_AFTER_MS)return [];
-      const failure=failures[symbol];
-      const recovered=failure?.suspendedSince==null&&(failure?.recoveryFreshCount??FEED_RECOVERY_CONFIRMATIONS)>=FEED_RECOVERY_CONFIRMATIONS;
-      const warm=(this.sessionWarmup[symbol]??0)>=(urgent.has(symbol)?2:WARMUP_SNAPSHOTS);
-      return [[symbol,{midpoint:row.midpoint,bestBid:row.bestBid,bestAsk:row.bestAsk,observedAt:row.observedAt,fresh:true,
-        entryReady:recovered&&warm&&meta[symbol]!=null,
-        completedMinuteAt:this.forwardMinuteCandles[symbol]?.at(-1)
-          ?(this.forwardMinuteCandles[symbol]!.at(-1)!.time+60)*1_000:undefined}]];
+      if(!row?.fresh||row.bestBid==null||row.bestAsk==null||now-row.observedAt>STALE_AFTER_MS)return[];
+      return[[symbol,{bestBid:row.bestBid,bestAsk:row.bestAsk,observedAt:row.observedAt,fresh:true,
+        entryReady:this.symbolEntryReady(symbol,now)}]];
     }));
   }
 
@@ -3000,46 +2933,28 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private async refreshForwardUrgentMinutes(now=Date.now()){
     this.forwardMinuteCandles??={};this.forwardMinuteQuoteBars??={};this.forwardMinuteRetryAt??=new Map();
     const targetCompletedAt=Math.floor(now/60_000)*60_000;
-    const urgent=this.forwardState?.strategyAuthorityVersion===MULTI_TURN_VERSION
-      ?forwardUrgentMinuteSymbols(this.forwardState,this.runtime.liquidUniverse??[]).slice(0,PORTFOLIO_REALTIME_CAPACITY):[];
+    const urgent=this.forwardState?forwardUrgentMinuteSymbols(this.forwardState,this.runtime.liquidUniverse??[])
+      .slice(0,ADAPTIVE_REALTIME_POSITION_CAP):[];
     const due=urgent.filter(symbol=>{
       if((this.forwardMinuteRetryAt.get(symbol)??0)>now)return false;
       const last=Math.max(this.forwardMinuteCandles[symbol]?.at(-1)?.time??0,this.gateStream.path(symbol,"1m").at(-1)?.time??0);
-      return !last||(last+60)*1_000<targetCompletedAt;
+      return!last||(last+60)*1000<targetCompletedAt;
+    }).slice(0,4);
+    const results=await Promise.allSettled(due.map(async symbol=>({symbol,rows:await fetchStructureCandles(symbol,"1m",90)})));
+    results.forEach((result,index)=>{
+      const symbol=due[index]!;
+      if(result.status!=="fulfilled"){this.forwardMinuteRetryAt.set(symbol,now+5000);return;}
+      if(result.value.rows.length){this.forwardMinuteCandles[symbol]=result.value.rows.slice(-90);this.forwardMinuteRetryAt.delete(symbol);}
+      else this.forwardMinuteRetryAt.set(symbol,now+5000);
     });
-    if(!due.length)return 0;
-    const results=await Promise.allSettled(due.map(async symbol=>({symbol,
-      rows:await fetchStructureCandles(symbol,"1m",60)})));
-    for(const result of results){
-      if(result.status!=="fulfilled"){
-        const symbol=due[results.indexOf(result)]!;
-        this.forwardMinuteRetryAt.set(symbol,now+5_000);
-        continue;
-      }
-      const {symbol,rows}=result.value;
-      if(rows.length){
-        this.forwardMinuteCandles[symbol]=rows.slice(-90);
-        this.forwardMinuteRetryAt.delete(symbol);
-      }else this.forwardMinuteRetryAt.set(symbol,now+5_000);
-    }
-    for(const symbol of Object.keys(this.forwardMinuteCandles))
-      if(!this.runtime.liquidUniverse.includes(symbol)&&!urgent.includes(symbol))delete this.forwardMinuteCandles[symbol];
     return due.length;
   }
 
-  private cycleBookSymbols(now: number, symbols: string[]) {
-    const protectedSymbols = new Set([
-      ...this.currentAuthorityProtectionSymbols(),
-      ...this.forwardUrgentSymbols(now),
-      ...Object.values(this.runtime.stableCandidates).filter((candidate) => approvedRouteScore(candidate) >= 0)
-        .map((candidate) => candidate.symbol),
-      ...Object.values(this.runtime.previousStableCandidates).filter((candidate) => previousApprovedRouteScore(candidate) >= 0)
-        .map((candidate) => candidate.symbol),
-    ]);
-    const slot = Math.floor(now / LOOP_MS) % BACKGROUND_BOOK_INTERVALS;
-    const bucket = (symbol: string) => [...symbol].reduce((sum, char) => sum + char.charCodeAt(0), 0) % BACKGROUND_BOOK_INTERVALS;
-    return symbols.filter((symbol) => protectedSymbols.has(symbol) || (this.sessionWarmup[symbol] ?? 0) < WARMUP_SNAPSHOTS
-      || bucket(symbol) === slot);
+  private cycleBookSymbols(now:number,symbols:string[]) {
+    const urgent=new Set([...this.currentAuthorityProtectionSymbols(),...this.forwardUrgentSymbols(now)]);
+    const slot=Math.floor(now/LOOP_MS)%BACKGROUND_BOOK_INTERVALS;
+    const bucket=(symbol:string)=>[...symbol].reduce((n,ch)=>n+ch.charCodeAt(0),0)%BACKGROUND_BOOK_INTERVALS;
+    return symbols.filter(symbol=>urgent.has(symbol)||(this.sessionWarmup[symbol]??0)<2||bucket(symbol)===slot);
   }
 
   private async processBooks(now: number, cycleSymbols = [...this.runtime.symbols]) {
