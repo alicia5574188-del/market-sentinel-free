@@ -1245,6 +1245,7 @@ jobs:
             .runtime.forward.strategyAuthorityVersion == "multi-turn-v1" and
             .runtime.forward.executionVersion == "anchor-flow-v1" and
             .runtime.forward.regionVersion == "region-lifecycle-v1" and
+            .runtime.forward.regionLaunchVersion == "region-launch-v3" and
             .runtime.forward.liveEligible == false and
             .runtime.forward.initialEquity == 1000 and
             (.runtime.forward.startedAt | type) == "number" and .runtime.forward.startedAt > 0 and
