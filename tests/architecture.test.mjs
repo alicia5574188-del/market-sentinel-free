@@ -19,7 +19,7 @@ test("Adaptive Ten core is self-contained and old strategy modules have no autho
 
 test("runtime alarm uses the slim market path and no strategy cutover can reset PAPER",async()=>{
   const worker=await read("worker/index-clean.ts");
-  assert.match(worker,/const MULTI_TURN_AUTO_CUTOVER = false/);
+  assert.doesNotMatch(worker,/MULTI_TURN_AUTO_CUTOVER|ensureMultiTurnCutover|ensureAnchorFlowCutover/);
   assert.match(worker,/private async ensureAdaptiveAccount/);
   const advance=worker.slice(worker.indexOf("private async advanceForwardNow"),worker.indexOf("private async refreshRegimeHourly"));
   assert.doesNotMatch(advance,/prepareForwardReset|initialMultiTurnForward\(/);
