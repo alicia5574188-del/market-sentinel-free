@@ -113,7 +113,7 @@ test("strategy migration preserves account identity and financial history while 
 
 test("manual PAPER reset preserves causal learning while resetting the financial account",()=>{
   const learned=learnThrough(39),now=nowAt(39);let s=initialForward(now-60_000);s.relationEngine=learned;
-  s.balance=812.34;s.resolved=9;s.wins=4;s.turnover=5432;s.history=[{...({} as any)}];
+  s.balance=812.34;s.resolved=9;s.wins=4;s.turnover=5432;
   const n=resetForwardAccountPreservingLearning(s,now+1000);
   assert.equal(n.balance,1000);assert.equal(n.initialEquity,1000);assert.equal(n.resolved,0);assert.equal(n.wins,0);assert.equal(n.turnover,0);
   assert.equal(n.positions.length,0);assert.equal(n.history.length,0);
