@@ -318,7 +318,11 @@ test("legacy sizing and portfolio mirroring both retain bounded account risk", a
 });
 
 test("production gates follow the current RegionLaunch PAPER authority", async () => {
-  const workflow = await read(".github/workflows/sentinel-v2-ci.yml");
+  const [workflow,dashboard,access] = await Promise.all([
+    read(".github/workflows/sentinel-v2-ci.yml"),
+    read("app/forward-dashboard.tsx"),
+    read("app/member-access.tsx"),
+  ]);
   assert.equal((workflow.match(/runtime\.forward\.strategyAuthorityVersion == "multi-turn-v1"/g) ?? []).length,2);
   assert.equal((workflow.match(/runtime\.forward\.executionVersion == "anchor-flow-v1"/g) ?? []).length,2);
   assert.equal((workflow.match(/runtime\.forward\.regionVersion == "region-lifecycle-v1"/g) ?? []).length,2);
@@ -331,7 +335,10 @@ test("production gates follow the current RegionLaunch PAPER authority", async (
   const currentGates=workflow.slice(workflow.lastIndexOf("- name: Verify advancing production health"));
   assert.equal((currentGates.match(/runtime\.limits\.scanUniverse == 30/g) ?? []).length,2);
   assert.equal((currentGates.match(/runtime\.limits\.realtimeCapacity == 11/g) ?? []).length,2);
-  assert.equal((workflow.match(/grep -Fq '哨兵 · RegionLaunch'/g) ?? []).length,2);
+  assert.equal((workflow.match(/grep -Fq '哨兵 · 多周期转折引擎'/g) ?? []).length,2);
+  assert.match(access,/哨兵 · 多周期转折引擎/);
+  assert.match(dashboard,/哨兵 · RegionLaunch/);
+  assert.match(dashboard,/缠绕区域 \+ RegionLaunch/);
   assert.doesNotMatch(workflow,/runtime\.strategyArena\.rules\.strategyName == "五行情独立账户组合"/);
   assert.doesNotMatch(workflow,/runtime\.strategyData\.hourlyRequiredCandles == 721/);
   assert.match(workflow, /deployment-plan/);
