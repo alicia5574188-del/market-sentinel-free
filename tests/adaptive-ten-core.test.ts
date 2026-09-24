@@ -106,12 +106,41 @@ test("one 5m deployment window cannot spray more than 2.5% portfolio risk budget
   assert.ok(charge<=25.01,`cycle charge ${charge}`);assert.ok(s.positions.length<=4);
 });
 
+test("one reserve relation family can hold only one real probe even when several rule ids and symbols match",()=>{
+  const now=nowAt(39),s=initialForward(now-60_000);s.lastCandleAt=now;
+  s.opportunities=[
+    manualOpportunity(symbols[0]!,0,{reserve:true,ruleId:"family-a-r1",familyKey:"family-a"}),
+    manualOpportunity(symbols[1]!,1,{reserve:true,ruleId:"family-a-r2",familyKey:"family-a"}),
+    manualOpportunity(symbols[2]!,2,{reserve:true,ruleId:"family-b-r1",familyKey:"family-b"}),
+  ];
+  fillForwardPortfolio(s,quotesAt(39,now),contracts,now,1000,false);
+  assert.equal(s.positions.filter(t=>t.entryContext?.relationFamilyKey==="family-a").length,1);
+  assert.equal(s.positions.filter(t=>t.entryContext?.relationFamilyKey==="family-b").length,1);
+  assert.equal(s.positions.length,2);
+});
+
+test("structure stop without positive feedback locks the whole probe family across symbol and rule-id changes",()=>{
+  const now=nowAt(39),paths=sliced(39),s=initialForward(now-60_000),familyKey="family-stop";
+  s.lastCandleAt=now;s.opportunities=[manualOpportunity(symbols[0]!,0,{reserve:true,premium:false,ruleId:"stop-r1",familyKey})];
+  fillForwardPortfolio(s,quotesAt(39,now),contracts,now,1000,false);assert.equal(s.positions.length,1);
+  const trade=s.positions[0]!,stopNow=now+10_000,stopQuote=quotesAt(39,stopNow);
+  const px=trade.stopPrice*1.001;stopQuote[trade.symbol]={bestBid:px*.9999,bestAsk:px,observedAt:stopNow,fresh:true,entryReady:true};
+  const stopped=advanceForward({state:s,now:stopNow,paths,quotes:stopQuote,contracts,entrySymbols:symbols,allowDataCycle:false}).state;
+  assert.ok(stopped.history.some(t=>t.id===trade.id&&t.exitReason==="STRUCTURE_STOP"));
+  assert.equal(stopped.familyProbeGuards[familyKey]?.reason,"STRUCTURE_STOP_NO_FEEDBACK");
+
+  stopped.lastCandleAt=stopNow+300_000;
+  stopped.opportunities=[manualOpportunity(symbols[2]!,2,{reserve:true,ruleId:"stop-r2",familyKey})];
+  fillForwardPortfolio(stopped,quotesAt(39,stopNow+301_000),contracts,stopNow+301_000,1000,false);
+  assert.equal(stopped.positions.some(t=>t.entryContext?.relationFamilyKey===familyKey),false);
+});
+
 test("probe relationships share one 1.5% portfolio pool instead of fragmenting into dozens of positions",()=>{
   const now=nowAt(39),s=initialForward(now-60_000);s.lastCandleAt=now;
   s.opportunities=symbols.map((symbol,i)=>manualOpportunity(symbol,i,{premium:true,reserve:true,health:.25,score:70}));
   fillForwardPortfolio(s,quotesAt(39,now),contracts,now,1000,false);
   const charge=s.positions.reduce((n,t)=>n+(t.entryContext?.portfolioRiskCharge??t.plannedRisk),0);
-  assert.ok(charge<=15.01);assert.ok(s.positions.length<=5);
+  assert.ok(charge<=15.01);assert.ok(s.positions.length<=2,"weak probe deployment is also paced to at most two per 5m cycle");
 });
 
 test("one learned relation cannot consume more than 2.5% portfolio budget across correlated symbols",()=>{
