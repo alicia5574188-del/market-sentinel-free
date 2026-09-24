@@ -1,0 +1,37 @@
+name: Validate Multiday Trend Path Exits
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/research-multiday-trend-path-exits.mjs"
+      - ".github/workflows/validate-multiday-trend-path-exits.yml"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Check syntax
+        run: node --check scripts/research-multiday-trend-path-exits.mjs
+      - name: Run multiday trend path-exit research
+        run: node --max-old-space-size=6144 scripts/research-multiday-trend-path-exits.mjs
+      - name: Print focused result
+        if: always()
+        run: |
+          if [ -f /tmp/multiday-trend-path-exits-report.json ]; then
+            jq '{decision,authority,goal,method,cost,data:{activeSymbols:.data.activeSymbols},signalCount,candidateCount,sleeves,exitProfiles,calibrationMonths,blindMonths,policyCount,feasibleCount,target,bestReturn,bestFrequencyPositive,paretoFrontier}' /tmp/multiday-trend-path-exits-report.json
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: multiday-trend-path-exits-report
+          path: /tmp/multiday-trend-path-exits-report.json
+          if-no-files-found: warn
+          retention-days: 7
