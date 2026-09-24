@@ -907,13 +907,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const q=this.marketHub.quote(symbol,now);return q?[{symbol,last:q.mid,volume24hUsd:q.volume24hUsd,fundingRate:0}]:[];
       });
     const eligibleRows=this.marketHub.radarRows(known,now);
-    if(!eligibleRows.length)throw new Error("no Gate-tradable Adaptive 10 markets");
+    if(!eligibleRows.length)throw new Error("no Gate-tradable Forward Relation markets");
     const locked=[...(this.forwardState?.positions.map(p=>p.symbol)??[]),
       ...(this.forwardState?forwardWatchSymbols(this.forwardState,now,this.runtime.liquidUniverse):[])];
     const universeRows=selectAnchorOpportunityUniverse({rows:eligibleRows,limit:SCAN_UNIVERSE_SIZE,
       lockedSymbols:locked,currentSymbols:this.runtime.liquidUniverse,coreSymbols:DEFAULT_SYMBOLS,
       rotationSeed:Math.floor(now/BAR_MS),explorationSlots:4,liquiditySlots:8});
-    if(!universeRows.length)throw new Error("no liquid Adaptive 10 markets");
+    if(!universeRows.length)throw new Error("no liquid Forward Relation markets");
     this.runtime.liquidUniverse=universeRows.map(row=>row.symbol);
     this.runtime.radar=successfulRadarRuntime(this.runtime.radar,now,universeRows.length,[]);
     this.runtime.lastRadarAt=now;
