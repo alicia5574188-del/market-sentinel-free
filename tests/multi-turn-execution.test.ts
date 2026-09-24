@@ -48,16 +48,13 @@ const rejectionSignal=(symbol:string,now:number):RegionEntrySignal=>({
   reason:"legacy rejection"
 });
 const participationOpportunity=(symbol:string,now:number):MultiTurnEntryOpportunity=>({
-  version:"winding-anchor-entry-v3",symbol,timeframe:"5m",side:"LONG",completedAt:now-1_000,price:100,
+  version:"direction-space-5m-v2",symbol,timeframe:"5m",side:"LONG",completedAt:now-1_000,price:100,
   score:92,eligible:true,directionStrength:90,spaceScore:85,positionScore:95,executionScore:90,
   trendSlopeScore:80,structureScore:80,pathEfficiency:80,momentumPersistence:80,pullbackResilience:80,
   grossRemainingSpaceRate:.04,netRemainingSpaceRate:.0378,statisticalRemainingSpaceRate:.04,structuralSpaceRate:.04,
   pullbackRiskRate:.01,edgeRatio:4,legMoveRate:.01,expectedLegRate:.04,legUtilization:.25,
   turnRisk:.10,turnPenalty:0,stopRate:.015,stopPrice:98.5,stopPenalty:0,riskCap:.015,reason:"5m participation fixture",
-  anchorPrice:99,anchorAt:now-300_000,anchorConfirmedAt:now-1_000,anchorQuality:90,anchorAgeBars:1,
-  anchorMfeRate:.01,anchorMaeRate:.005,anchorProfitRatio:4,anchorFirstProfitBars:1,anchorRetentionRate:.8,
-  distanceFromAnchorRate:.01,maxEntryDistanceRate:.04,
-});
+ });
 
 test("legacy AnchorFlow READY state can no longer create a new order",()=>{
   const now=BASE+5*60*60_000,s=initialMultiTurnForward(now-60_000);
@@ -120,6 +117,26 @@ test("critical quote management can mark equity without consuming stale strategy
   const next=advanceForward({state:s,now:later,paths:{BTC_USDT:p},quotes:{BTC_USDT:quote(p.at(-1)!.close,later)},
     contracts:{BTC_USDT:meta},entrySymbols:["BTC_USDT"],allowDataCycle:false});
   assert.equal(next.state.lastCycleAt,cycle);assert.ok(next.state.daily.at(-1)!.lastAt>mark);
+});
+
+test("5m participation outranks ordinary ARMED observation for scarce realtime slots",()=>{
+  const now=BASE+7*60*60_000,s=initialMultiTurnForward(now-60_000);
+  const armedSymbols=Array.from({length:11},(_,i)=>`A${i}_USDT`),participant="P_USDT";
+  s.entryOpportunities=[participationOpportunity(participant,now)];
+  s.regionLaunches=Object.fromEntries(armedSymbols.map(symbol=>[symbol,{
+    version:REGION_LAUNCH_VERSION,symbol,phase:"ARMED",createdAt:now-1000,updatedAt:now,lastProcessedAt:now,
+    motherRegionId:`rg-${symbol}`,motherConfirmedAt:now-600_000,motherLower:99,motherUpper:101,motherCenter:100,motherWidth:2,motherWidthRate:.02,
+    motherBars:24,motherTouchesUpper:5,motherTouchesLower:5,motherCrossings:6,failedDepartures:0,departureSide:null,departureAt:null,lastReentryAt:null,
+    compression:null,quality:.5,armedAt:now,armedInsideObserved:false,cooldownUntil:0,ignitionSide:null,ignitionAt:null,triggerPrice:null,
+    breakoutOpen:null,breakoutHigh:null,breakoutLow:null,breakoutClose:null,breakoutImpulseRate:null,breakoutWickRate:null,pullbackExtreme:null,
+    lastMinuteAt:null,readyAt:null,readySide:null,readySignalPrice:null,readyStopPrice:null,readyImpulseRate:null,readyExpectedMoveRate:null,
+    readyMaxChaseRate:null,readyConfirmationMs:null,readyMode:null,readyEffectiveTrigger:null,readyBarrierPrice:null,readyNextBarrierPrice:null,
+    readyTargetPrice:null,readyAttempt:0,longBarrier:null,shortBarrier:null,nextLongBarrier:null,nextShortBarrier:null,effectiveLongTrigger:101,
+    effectiveShortTrigger:99,averageRange:.5,releaseSide:null,releaseAt:null,releaseTrigger:null,releaseExtreme:null,releaseAttemptsLong:0,
+    releaseAttemptsShort:0,rotationLongConsumedAt:null,rotationShortConsumedAt:null,consumedAt:null,consumedSide:null,reason:"fixture"}]));
+  const watched=forwardWatchSymbols(s,now,[...armedSymbols,participant]);
+  assert.equal(watched.length,11);assert.ok(watched.includes(participant));
+  assert.ok(armedSymbols.some(symbol=>!watched.includes(symbol)),"one ordinary ARMED slot should yield to an executable 5m candidate");
 });
 
 test("RegionLaunch phases own scarce realtime watch slots while retired anchors do not",()=>{
