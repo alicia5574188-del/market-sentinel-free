@@ -414,8 +414,19 @@ function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
     const expected=t.expectedHoldMinutes??30,timeFailure=ageMin>=Math.max(8,expected*.65)&&!t.firstProfitAt&&favorable<ROUND_TRIP_COST;
     const hardTime=ageMin>=expected*2.5&&favorable<Math.max(.003,t.adverse*.5);
     const relationFailure=relation?.status==="DEGRADED"&&ageMin>=Math.max(5,expected*.20)&&!t.firstProfitAt&&favorable<ROUND_TRIP_COST;
-    if(stopped||marketFlip||relationFailure||timeFailure||hardTime){closeTrade(s,t,px,now,stopped?(t.profitFloorRate??0)>0?"PROFIT_GIVEBACK":"STRUCTURE_STOP":
-      marketFlip?"MARKET_FLIP":relationFailure?"RELATION_DEGRADED":timeFailure?"NO_POSITIVE_FEEDBACK":"TIME_DECAY");closed.add(t.id);}
+    if(stopped||marketFlip||relationFailure||timeFailure||hardTime){
+      const reason=stopped?(t.profitFloorRate??0)>0?"PROFIT_GIVEBACK":"STRUCTURE_STOP":
+        marketFlip?"MARKET_FLIP":relationFailure?"RELATION_DEGRADED":timeFailure?"NO_POSITIVE_FEEDBACK":"TIME_DECAY";
+      closeTrade(s,t,px,now,reason);
+      if(isFamilyFailure(reason,t.firstProfitAt)){
+        const familyId=t.entryContext?.relationFamilyId??(relation?relationFamilyId(relation):"");
+        if(familyId)recordFamilyFailure({state:s.familyExperiment,familyId,sourceRuleId:t.entryContext?.relationRuleId,
+          evidenceAt:t.entryContext?.relationEvidenceAt,health:t.entryContext?.relationHealth,
+          livePathScore:t.entryContext?.relationLivePathScore,now,reason:reason as "RELATION_DEGRADED"|"NO_POSITIVE_FEEDBACK"|"STRUCTURE_STOP",
+          symbol:t.symbol});
+      }
+      closed.add(t.id);
+    }
   }
   if(closed.size)s.positions=s.positions.filter(t=>!closed.has(t.id));
 }
@@ -593,6 +604,7 @@ export function closeForwardForReset(state:ForwardState,quotes:Record<string,Quo
 export function resetForwardAccountPreservingLearning(previous:ForwardState,now:number){
   const prior=normalizeForward(structuredClone(previous),now),next=initialForward(now);
   next.relationEngine=structuredClone(prior.relationEngine);
+  next.familyExperiment=structuredClone(prior.familyExperiment);
   next.sampleMemory=structuredClone(prior.sampleMemory);
   next.observations=next.relationEngine.observations;next.measured=next.relationEngine.measured;next.invalidated=next.relationEngine.invalidated;
   next.latestReason=next.relationEngine.rules.length
@@ -633,6 +645,7 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     relationEngine:{version:s.relationEngine.version,updatedAt:s.relationEngine.updatedAt,diagnostics:d,
       rules:s.relationEngine.rules.map(r=>({id:r.id,horizon:r.horizon,side:r.side,status:r.status,health:r.health,longNet:r.longNet,
         recentNet:r.recentNet,livePathScore:r.livePathScore,environmentFit:r.environmentFit,scope:r.scope,reason:r.reason}))},
+    familyExperiment:familyExperimentSummary(s.familyExperiment),
     marketCount:s.selectedSymbols.length,markets:s.selectedSymbols,latestReason:s.latestReason,entryDiagnostics:s.entryDiagnostics,
     fitDiagnostics:s.fitDiagnostics,storage:s.storage,targetPositions:null,positionLimit:null,executionBboCapacity:FORWARD_EXECUTION_BBO_CAP,
     minuteConfirmationCapacity:FORWARD_MINUTE_CONFIRMATION_CAP,seatCount:s.positions.length,eligibleCount:eligible.length,
@@ -640,8 +653,8 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     boundaries:{scope:"PAPER_AUTHORITY",grammar:"真实市场条件→15/60/180分钟成熟反应→关系生命周期；5/10/15/30/60/180分钟路径检查点只判断旧关系是否失效，不预测反向。",
       historyBackfill:false,sampleMeaning:"长期样本决定关系资格；近期成熟样本与进行中真实反应路径决定当前交易权。旧方向失效不会自动生成反向订单。",
       accounting:"模拟使用新鲜买卖价并计入手续费、滑点和资金费占位；同一持久化Trade事件供实盘执行。",
-      risk:"不设持仓席位数量上限；总风险≤10%、同方向≤6.5%、同一关系≤2.5%、探测池≤1.5%、单个5m周期新增风险≤2.5%、保证金≤75%。风险越高，新候选质量门槛越高。",
-      validation:"关系状态为ACTIVE/PRESSURED/DEGRADED/RECOVERING；反方向必须由自己的已成熟真实样本获得资格。",
+      risk:"不设持仓席位数量上限；总风险≤10%、同方向≤6.5%、同一关系族≤2.5%、探测池≤1.5%、单个5m周期新增风险≤2.5%、保证金≤75%。reserve同族一次仅允许一笔真实实验。",
+      validation:"关系状态为ACTIVE/PRESSURED/DEGRADED/RECOVERING；reserve必须通过最低交易价值，同族失败后等待新成熟证据；反方向必须独立获得资格。",
       liquidation:"结构止损 + 无正向反馈 + 关系降级 + 独立反向机会 + MFE利润保护；关系恶化时优先退出未形成浮赢的弱仓，盈利仓先收紧保护。"},
     cost:PAPER_COST,nextCycleAt:s.lastCandleAt+BAR_MS};
 }
