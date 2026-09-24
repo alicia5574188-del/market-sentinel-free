@@ -93,7 +93,7 @@ test("slow path waits for a long-body 5m close outside the entire region and the
   const closed=bar(0,101.00,102.10,100.98,102.02);
   states=advanceRegionLaunchMinutes({states,minutePaths:{},fiveMinutePaths:{BCH_USDT:[...motherRows,closed]},
     now:(START+300)*1000,costRate:.0022}).states;
-  assert.equal(states.BCH_USDT?.launchPath,"CLOSED");assert.equal(states.BCH_USDT?.phase,"IGNITION");
+  assert.equal(states.BCH_USDT?.launchPath,"CLOSED",states.BCH_USDT?.reason);assert.equal(states.BCH_USDT?.phase,"IGNITION",states.BCH_USDT?.reason);
   const continuation=bar(300,102.02,102.34,102.00,102.31);
   states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[continuation]},fiveMinutePaths:{BCH_USDT:[...motherRows,closed]},
     now:(START+360)*1000,costRate:.0022}).states;
