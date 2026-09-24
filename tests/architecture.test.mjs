@@ -6,7 +6,8 @@ const read=(path)=>readFile(new URL(`../${path}`,import.meta.url),"utf8");
 
 test("Forward Relation 2.0 is the only PAPER strategy authority and retired strategy stacks stay disconnected",async()=>{
   const core=await read("lib/forward-relations.ts");
-  assert.match(core,/ADAPTIVE_ENGINE_VERSION=FORWARD_RELATION_V2_VERSION/);\n  assert.match(core,/from "\\.\/forward-relation-v2\\.ts"/);
+  assert.match(core,/ADAPTIVE_ENGINE_VERSION=FORWARD_RELATION_V2_VERSION/);
+  assert.match(core,/from "\\.\/forward-relation-v2\\.ts"/);
   assert.match(core,/ADAPTIVE_TARGET_POSITIONS=10/);
   assert.match(core,/ADAPTIVE_REALTIME_POSITION_CAP=11/);
   for(const retired of["multi-turn","anchor-flow","region-launch","region-lifecycle","strategy-arena","regime-portfolio","all-regime-engine"])
