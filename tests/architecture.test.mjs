@@ -25,7 +25,7 @@ test("Forward Relation 2.0 is the only PAPER strategy authority and retired stra
   const minute=core.slice(core.indexOf("export function forwardUrgentMinuteSymbols"),core.indexOf("export function forwardWatchSymbols"));
   assert.doesNotMatch(minute,/s\.positions/);
   assert.match(minute,/o\.premium&&o\.eligible/);
-  const rotation=core.slice(core.indexOf("function rotateIfNeeded"),core.indexOf("function fillPortfolio"));
+  const rotation=core.slice(core.indexOf("function rotateIfNeeded"),core.indexOf("export function fillForwardPortfolio"));
   assert.match(rotation,/sideFull/);assert.match(rotation,/existingRisk\(s,candidate\.side\)/);
   assert.match(rotation,/structuredClone\(s\)/);
 });
