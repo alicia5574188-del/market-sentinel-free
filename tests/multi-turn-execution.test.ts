@@ -1,27 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { advanceForward as advanceForwardRaw, BAR_MS, forwardEquity, forwardSummary, forwardWatchSymbols, initialForward, initialMultiTurnForward,
-  multiTurnEntryLeverage, MULTI_TURN_TARGET_LEVERAGE, type Candle, type Contract, type Quote } from "../lib/forward-relations.ts";
-import { MULTI_TURN_VERSION, TURN_TIMEFRAMES, evaluateMultiTurn, initialMultiTurn, type TurnFrameState } from "../lib/multi-turn-engine.ts";
+import { advanceForward, BAR_MS, forwardSummary, forwardWatchSymbols, initialForward, initialMultiTurnForward,
+  multiTurnEntryLeverage, type Candle, type Contract, type Quote } from "../lib/forward-relations.ts";
+import { MULTI_TURN_VERSION, TURN_TIMEFRAMES, evaluateMultiTurn, initialMultiTurn } from "../lib/multi-turn-engine.ts";
 import { REGION_LIFECYCLE_VERSION, type RegionEntrySignal, type RegionLifecycleState } from "../lib/region-lifecycle.ts";
-import { ANCHOR_FLOW_VERSION, type AnchorFlowEntrySignal, type AnchorFlowState } from "../lib/anchor-flow.ts";
+import { ANCHOR_FLOW_VERSION, type AnchorFlowState } from "../lib/anchor-flow.ts";
+import { REGION_LAUNCH_VERSION } from "../lib/region-launch.ts";
 import { FORWARD_PROTECTION_STORAGE, FORWARD_STORAGE, prepareForwardReset, prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
 
 const BASE=Date.parse("2026-09-21T00:00:00Z");
 const meta:Contract={quantoMultiplier:.001,leverageMax:50,maintenanceRate:.005,minContracts:1};
 const quote=(mid:number,at:number):Quote=>({bestBid:mid*.9999,bestAsk:mid*1.0001,observedAt:at,fresh:true,entryReady:true});
-
-// These entry fixtures include a current local structure break. Tests for
-// missing/stale/range-bound evidence supply explicit minutePaths instead.
-const advanceForward=(input:Parameters<typeof advanceForwardRaw>[0])=>{
-  const end=Math.floor(input.now/60_000)*60;
-  const minutePaths=Object.fromEntries(Object.entries(input.quotes).map(([symbol,q])=>{
-    const mid=(q.bestBid+q.bestAsk)/2,side=input.state.anchorFlows?.[symbol]?.side??"LONG",d=side==="LONG"?1:-1;
-    const close=mid*(1-d*.0012),high=mid*(side==="LONG"?.9995:1.002),low=mid*(side==="LONG"?.998:1.0005);
-    return[symbol,[{time:end-120,open:close,high,low,close,volume:1000},{time:end-60,open:close,high,low,close,volume:1000}]];
-  }));
-  return advanceForwardRaw({...input,minutePaths:input.minutePaths??minutePaths});
-};
 
 const regionPath=():Candle[]=>{
   const rows:Candle[]=[],start=BASE/1000;let prev=100;
@@ -32,259 +21,56 @@ const regionPath=():Candle[]=>{
   return rows;
 };
 
-const lifecycle=(symbol:string,now:number,status:RegionLifecycleState["status"]="ACCEPTED_UP"):RegionLifecycleState=>({
+const lifecycle=(symbol:string,now:number):RegionLifecycleState=>({
   version:REGION_LIFECYCLE_VERSION,symbol,initializedAt:now-60_000,observedAt:now,lastProcessedAt:now,
   zone:{id:`rg-${symbol}`,symbol,startAt:now-3_600_000,endAt:now-600_000,confirmedAt:now-600_000,bars:24,
     lower:99,upper:101,center:100,width:2,widthRate:.02,touchesUpper:5,touchesLower:5,crossings:8},
-  status,probeStartedAt:null,probeExtreme:null,acceptedAt:now-300_000,detachedAt:null,upperConsumedAt:null,lowerConsumedAt:null,
-  reason:"fixture",
+  status:"IN_REGION",probeStartedAt:null,probeExtreme:null,acceptedAt:null,detachedAt:null,
+  upperConsumedAt:null,lowerConsumedAt:null,reason:"fixture",
 });
-type TestSignal=RegionEntrySignal&Partial<AnchorFlowEntrySignal>;
-const signal=(symbol:string,now:number,overrides:Partial<TestSignal>={}):TestSignal=>{
-  const row:TestSignal={
-    version:REGION_LIFECYCLE_VERSION,id:`rs-${symbol}-${now}`,symbol,kind:"MIGRATION",side:"LONG",boundary:"UPPER",
-    completedAt:now-1_000,expiresAt:now+9*60_000,signalPrice:101.2,stopPrice:100.6,targetPrice:null,
-    regionId:`rg-${symbol}`,regionConfirmedAt:now-600_000,regionLower:99,regionUpper:101,regionCenter:100,regionWidth:2,regionWidthRate:.02,
-    reason:"fixture AnchorFlow restart",entryModel:"ANCHOR_FLOW",contextTimeframe:"15m",directionFrameAt:now-60_000,trendFrameAt:now-60_000,
-    retestAt:now-300_000,restartLevel:101.1,pullbackExtreme:100.7,anchorExpectedMoveRate:.025,...overrides,
-  };
-  if(row.kind==="REJECTION"){
-    delete row.entryModel;delete row.contextTimeframe;delete row.directionFrameAt;delete row.trendFrameAt;
-    delete row.retestAt;delete row.restartLevel;delete row.pullbackExtreme;delete row.anchorExpectedMoveRate;
-  }
-  return row;
-};
-const seeded=(symbols:string[],now:number)=>{
-  const s=initialMultiTurnForward(now-60_000);
-  s.lastCycleAt=now;s.lastQuoteCycleAt=0;s.regionLifecycles={};s.regionSignals=[];s.anchorFlows={};
-  for(const symbol of symbols){
-    s.regionLifecycles[symbol]=lifecycle(symbol,now);s.regionSignals.push(signal(symbol,now));
-    s.anchorFlows[symbol]=readyAnchor(symbol,now);
-  }
-  return s;
-};
 
-const readyAnchor=(symbol:string,now:number):AnchorFlowState=>({
+const retiredAnchor=(symbol:string,now:number):AnchorFlowState=>({
   version:ANCHOR_FLOW_VERSION,symbol,regionId:`rg-${symbol}`,side:"LONG",boundary:"UPPER",phase:"READY",
   createdAt:now-10*60_000,expiresAt:now+50*60_000,lastProcessedAt:now-1_000,breakoutCompletedAt:now-10*60_000,
   regionConfirmedAt:now-600_000,regionLower:99,regionUpper:101,regionCenter:100,regionWidth:2,regionWidthRate:.02,
   excursionExtreme:102,retestAt:now-300_000,pullbackExtreme:100.7,restartLevel:101.1,readyAt:now-1_000,reacceptBars:0,
-  retryCount:0,confirmationExtreme:101.05,firedAt:now-1_000,consumedAt:null,failedAt:null,reason:"fixture READY"
+  retryCount:0,confirmationExtreme:101.05,firedAt:now-1_000,consumedAt:null,failedAt:null,reason:"retired fixture",
 });
 
-
-const frame5=(symbol:string,completedAt:number,price:number):TurnFrameState=>({
-  version:MULTI_TURN_VERSION,symbol,timeframe:"5m",observedAt:completedAt,completedAt,ready:true,
-  direction:"LONG",rawDirection:"LONG",directionConfidence:.6,turnProbability:.15,triggerProbability:.15,
-  continuationScore:.55,phase:"FLOW",candidateSide:"NEUTRAL",candidateBars:0,justTurned:false,lastTurnAt:null,
-  signalAgeBars:0,atrRate:.01,expectedMoveRate:.02,stopRate:.02,price,breadthLong:.5,propagationPressure:0,
-  evidence:{structure:0,momentum:0,acceleration:0,cusum:0,changePoint:0,failedExtension:0,volatility:0,volume:0,breadth:0,propagation:0},
-  reason:"fixture",
+const retiredAnchorSignal=(symbol:string,now:number):RegionEntrySignal&{entryModel:"ANCHOR_FLOW"}=>({
+  version:REGION_LIFECYCLE_VERSION,id:`af-${symbol}-retired`,symbol,kind:"MIGRATION",side:"LONG",boundary:"UPPER",
+  completedAt:now-1_000,expiresAt:now+600_000,signalPrice:101.2,stopPrice:100.6,targetPrice:null,
+  regionId:`rg-${symbol}`,regionConfirmedAt:now-600_000,regionLower:99,regionUpper:101,regionCenter:100,
+  regionWidth:2,regionWidthRate:.02,reason:"retired AnchorFlow fixture",entryModel:"ANCHOR_FLOW",
 });
 
-test("fresh READY first records the live retest extreme, then fills only after a small executable rebound",()=>{
-  const now=BASE+5*60*60_000,s=seeded(["BTC_USDT"],now);
-  s.anchorFlows!.BTC_USDT!.confirmationExtreme=null;
-  let state=advanceForward({state:s,now,paths:{},quotes:{BTC_USDT:quote(101.2,now)},contracts:{BTC_USDT:meta},
+test("retired AnchorFlow and REJECTION events cannot create new positions",()=>{
+  const now=BASE+5*60*60_000,s=initialMultiTurnForward(now-60_000);
+  s.lastCycleAt=now;s.lastQuoteCycleAt=0;s.regionLifecycles={BTC_USDT:lifecycle("BTC_USDT",now)};
+  s.anchorFlows={BTC_USDT:retiredAnchor("BTC_USDT",now)};
+  s.regionSignals=[retiredAnchorSignal("BTC_USDT",now),{
+    version:REGION_LIFECYCLE_VERSION,id:"reject-retired",symbol:"BTC_USDT",kind:"REJECTION",side:"SHORT",boundary:"UPPER",
+    completedAt:now-1_000,expiresAt:now+600_000,signalPrice:100.6,stopPrice:101.1,targetPrice:100,
+    regionId:"rg-BTC_USDT",regionConfirmedAt:now-600_000,regionLower:99,regionUpper:101,regionCenter:100,
+    regionWidth:2,regionWidthRate:.02,reason:"retired rejection fixture",
+  }];
+  const next=advanceForward({state:s,now,paths:{},quotes:{BTC_USDT:quote(101.2,now)},contracts:{BTC_USDT:meta},
     entrySymbols:["BTC_USDT"],allowDataCycle:false}).state;
-  assert.equal(state.positions.length,0);
-  assert.ok((state.anchorFlows?.BTC_USDT?.confirmationExtreme??0)>101.2);
-  const later=now+10_000;
-  state=advanceForward({state,now:later,paths:{},quotes:{BTC_USDT:quote(101.36,later)},contracts:{BTC_USDT:meta},
-    entrySymbols:["BTC_USDT"],allowDataCycle:false}).state;
-  assert.equal(state.positions.length,1);
-  assert.equal(state.anchorFlows?.BTC_USDT?.phase,"CONSUMED");
+  assert.equal(next.positions.length,0);
+  assert.equal(next.regionSignals?.length,0);
+  assert.deepEqual(next.anchorFlows,s.anchorFlows,"retired state may remain readable until the next completed data cycle, but it has no order authority");
 });
 
-test("fresh 5m retest can use its already completed minute context without a two-minute embargo",()=>{
-  const now=BASE+5*60*60_000,s=seeded(["BTC_USDT"],now);
-  s.anchorFlows!.BTC_USDT!.retestAt=now;
-  const state=advanceForward({state:s,now,paths:{},quotes:{BTC_USDT:quote(101.2,now)},contracts:{BTC_USDT:meta},
-    entrySymbols:["BTC_USDT"],allowDataCycle:false}).state;
-  assert.equal(state.positions.length,1);
-});
-
-test("FOLKS pending retest follows fresh quote lows before entry; six-second noise no longer hits the stale stop",()=>{
-  const now=BASE+5*60*60_000,s=seeded(["FOLKS_USDT"],now),symbol="FOLKS_USDT";
-  const geometry={regionLower:2.358,regionUpper:2.395,regionCenter:2.3855,regionWidth:.037,regionWidthRate:.037/2.3855};
-  Object.assign(s.regionSignals![0]!,geometry,{signalPrice:2.394,stopPrice:2.38804,pullbackExtreme:2.391,restartLevel:2.393});
-  Object.assign(s.anchorFlows![symbol]!,geometry,{pullbackExtreme:2.391,restartLevel:2.393,confirmationExtreme:null});
-  const go=(state:typeof s,at:number,bid:number,ask:number)=>advanceForward({state,now:at,paths:{},
-    quotes:{[symbol]:{bestBid:bid,bestAsk:ask,observedAt:at,fresh:true,entryReady:true}},contracts:{[symbol]:meta},
-    entrySymbols:[symbol],allowDataCycle:false}).state;
-  let state=go(s,now,2.3838,2.3840);assert.equal(state.positions.length,0);
-  state=go(state,now+2000,2.3878,2.3880);assert.equal(state.positions.length,1);
-  const trade=state.positions[0]!,stop=trade.stopPrice;
-  assert.ok(Math.abs(trade.entryPrice-2.38860)<.00001);
-  assert.ok(stop<2.381,"stop is outside the latest quote-observed pullback, not at stale 2.38804");
-  assert.ok(trade.plannedRisk<=8);assert.ok(trade.notional<=600);
-  assert.ok(Math.abs(trade.entryContext!.stopRate-(trade.entryPrice-stop)/trade.entryPrice)<1e-12);
-  state=go(state,now+8000,2.3850,2.3852);assert.equal(state.positions.length,1);
-  assert.equal(state.positions[0]!.stopPrice,stop);
-  state=go(state,now+10000,stop-.001,stop-.0008);assert.equal(state.positions.length,0);
-  assert.equal(state.history[0]!.exitAudit!.trigger,"HARD_STOP","real structure failure still exits immediately");
-});
-
-test("stale or uncompleted 1m evidence cannot bypass current AnchorFlow quote confirmation",()=>{
-  const now=BASE+5*60*60_000;
-  for(const offset of [-600_000,0]){
-    const s=seeded(["BTC_USDT"],now),flow=s.anchorFlows!.BTC_USDT!;
-    flow.confirmationExtreme=null;flow.retestAt=now-900_000;flow.restartLevel=100;
-    const start=now+offset,minutes=[
-      {time:start/1000,open:100,high:101,low:99.99,close:100.9,volume:1000},
-      {time:(start+60_000)/1000,open:100.9,high:101.5,low:100.89,close:101.48,volume:1000}];
-    const state=advanceForward({state:s,now,paths:{},minutePaths:{BTC_USDT:minutes},quotes:{BTC_USDT:quote(101.2,now)},
-      contracts:{BTC_USDT:meta},entrySymbols:["BTC_USDT"],allowDataCycle:false}).state;
-    assert.equal(state.positions.length,0,`offset ${offset} is not fresh completed confirmation`);
-  }
-});
-
-test("MUBARAK-like short cannot use an old quote high to sell inside a bottom consolidation",()=>{
-  const now=BASE+5*60*60_000,s=seeded(["MUBARAK_USDT"],now),symbol="MUBARAK_USDT";
-  const geometry={regionLower:.055,regionUpper:.057,regionCenter:.056,regionWidth:.002,regionWidthRate:.002/.056};
-  Object.assign(s.regionSignals![0]!,geometry,{side:"SHORT",boundary:"LOWER",signalPrice:.0549,stopPrice:.0557,
-    pullbackExtreme:.0555,restartLevel:.0552,anchorExpectedMoveRate:.035});
-  Object.assign(s.anchorFlows![symbol]!,geometry,{side:"SHORT",boundary:"LOWER",pullbackExtreme:.0555,
-    restartLevel:.0552,confirmationExtreme:.0555});
-  const minutes=[
-    {time:now/1000-120,open:.0549,high:.05505,low:.05465,close:.0548,volume:1000},
-    {time:now/1000-60,open:.0548,high:.0551,low:.0547,close:.05495,volume:800}];
-  const state=advanceForward({state:s,now,paths:{},minutePaths:{[symbol]:minutes},quotes:{[symbol]:quote(.05495,now)},
-    contracts:{[symbol]:meta},entrySymbols:[symbol],allowDataCycle:false}).state;
-  assert.equal(state.positions.length,0);assert.equal(state.anchorFlows![symbol]!.phase,"READY");
-  assert.ok(Object.keys(state.entryDiagnostics!.reasons).some(reason=>reason.includes("横盘")));
-});
-
-test("failed first-full-5m executable-MFE validation recycles the same valid region exactly once",()=>{
-  const now=BASE+5*60*60_000,s=seeded(["ETH_USDT"],now);
-  let state=advanceForward({state:s,now,paths:{},quotes:{ETH_USDT:quote(101.2,now)},contracts:{ETH_USDT:meta},
-    entrySymbols:["ETH_USDT"],allowDataCycle:false}).state;
-  assert.equal(state.positions.length,1);
-  const trade=state.positions[0]!,due=trade.entryValidation!.dueAt;
-  state.turnEngine!.frames.ETH_USDT={...(state.turnEngine!.frames.ETH_USDT??{}),"5m":frame5("ETH_USDT",due,trade.entryPrice*1.03)} as never;
-  state=advanceForward({state,now:due+1,paths:{},quotes:{ETH_USDT:quote(trade.entryPrice*.999,due+1)},contracts:{ETH_USDT:meta},
-    entrySymbols:["ETH_USDT"],allowDataCycle:false}).state;
-  assert.equal(state.positions.length,0);
-  assert.equal(state.history[0]?.entryValidation?.passed,false);
-  assert.match(state.history[0]?.exitReason??"",/真实可执行最高浮赢/);
-  assert.equal(state.anchorFlows?.ETH_USDT?.phase,"READY");
-  assert.equal(state.anchorFlows?.ETH_USDT?.retryCount,1);
-  assert.ok((state.anchorFlows?.ETH_USDT?.confirmationExtreme??0)>0);
-  assert.equal(state.anchorConsumed?.["rg-ETH_USDT:LONG"],undefined);
-  const retryAt=due+10_001;
-  state=advanceForward({state,now:retryAt,paths:{},quotes:{ETH_USDT:quote((state.anchorFlows!.ETH_USDT!.confirmationExtreme!)*1.002,retryAt)},
-    contracts:{ETH_USDT:meta},entrySymbols:["ETH_USDT"],allowDataCycle:false}).state;
-  assert.equal(state.positions.length,1,"the one allowed restart can refill without waiting for another completed 5m candle");
-  assert.equal(state.anchorFlows?.ETH_USDT?.retryCount,1);
-});
-
-test("only a completed AnchorFlow restart owns trend entry authority and preserves retest invalidation",()=>{
-  const now=BASE+6*60*60_000,s=seeded(["BTC_USDT"],now);
-  s.anchorFlows={BTC_USDT:readyAnchor("BTC_USDT",now)};
-  const state=advanceForward({state:s,now,paths:{},quotes:{BTC_USDT:quote(101.2,now)},contracts:{BTC_USDT:meta},
-    entrySymbols:["BTC_USDT"],allowDataCycle:false}).state;
-  assert.equal(state.positions.length,1);
-  const t=state.positions[0]!;
-  assert.equal(t.entryContext?.version,"anchor-flow-entry-v1");
-  assert.equal(t.entryContext?.regionKind,"MIGRATION");
-  assert.equal(t.turn?.timeframe,"15m");
-  assert.ok(t.stopPrice<=100.6,"new stop preserves the full latest retest structure");
-  assert.equal(t.rule.authority,"MULTI_TURN");
-  assert.equal(t.rule.grammar,ANCHOR_FLOW_VERSION);
-  assert.ok(t.leverage>=6&&t.leverage<=MULTI_TURN_TARGET_LEVERAGE);
-  assert.ok(Math.abs(t.margin-t.notional/t.leverage)<1e-9);
-  assert.ok(t.notional<=600.01);
-  const exact=(t.entryPrice-t.stopPrice)/t.entryPrice;
-  assert.ok(Math.abs(t.rule.stopRate-exact)<1e-12);
-  assert.equal(state.entryOpportunities?.length??0,0);
-  assert.equal(state.anchorFlows?.BTC_USDT?.phase,"CONSUMED");
-  assert.equal(state.anchorFlows?.BTC_USDT?.consumedAt,now);
-  assert.equal(state.anchorConsumed?.["rg-BTC_USDT:LONG"],now);
-});
-
-test("cold reconstruction can restore an old region but cannot backfill an already happened entry",()=>{
-  const p=regionPath(),zNow=(p.at(-1)!.time+300)*1000+1;
-  const rows=[...p];let prev=rows.at(-1)!.close;
-  for(const close of[101.0,101.4,101.7]){
-    const i=rows.length;rows.push({time:prev?rows.at(-1)!.time+300:p.at(-1)!.time+300,open:prev,high:Math.max(prev,close)*1.001,
-      low:Math.min(prev,close)*.999,close,volume:2000+i});prev=close;
-  }
-  const now=(rows.at(-1)!.time+300)*1000+1;
-  const state=advanceForward({state:initialMultiTurnForward(zNow-1000),now,paths:{BTC_USDT:rows},
-    quotes:{BTC_USDT:quote(rows.at(-1)!.close,now)},contracts:{BTC_USDT:meta},entrySymbols:["BTC_USDT"]}).state;
-  assert.ok(state.regionLifecycles?.BTC_USDT?.zone);
-  assert.equal(state.positions.length,0);
-  assert.equal(state.regionSignals?.length??0,0,"restored historical boundary events are state only, never catch-up orders");
-});
-
-test("a rejection trade can close at region center immediately without a minimum holding-age embargo",()=>{
-  const now=BASE+7*60*60_000,s=seeded(["ETH_USDT"],now);
-  s.regionSignals=[signal("ETH_USDT",now,{kind:"REJECTION",side:"SHORT",boundary:"UPPER",signalPrice:100.65,stopPrice:100.68,targetPrice:100,
-    reason:"fixture rejection"})];
-  s.regionLifecycles!.ETH_USDT=lifecycle("ETH_USDT",now,"IN_REGION");
-  let state=advanceForward({state:s,now,paths:{},quotes:{ETH_USDT:quote(100.6,now)},contracts:{ETH_USDT:meta},
-    entrySymbols:["ETH_USDT"],allowDataCycle:false}).state;
-  assert.equal(state.positions.length,1);
-  const later=now+1_000;
-  state=advanceForward({state,now:later,paths:{},quotes:{ETH_USDT:quote(99.95,later)},contracts:{ETH_USDT:meta},
-    entrySymbols:["ETH_USDT"],allowDataCycle:false}).state;
-  assert.equal(state.positions.length,0);
-  assert.equal(state.history[0]?.exitAudit?.trigger,"MULTI_TURN");
-  assert.match(state.history[0]?.exitReason??"",/区域中心/);
-});
-
-test("an extreme synchronized broad-market shock blocks only the opposite rejection in the real entry path",()=>{
-  const now=BASE+7*60*60_000,s=seeded(["ETH_USDT"],now);
-  s.regionSignals=[signal("ETH_USDT",now,{kind:"REJECTION",side:"SHORT",boundary:"UPPER",signalPrice:100.65,
-    stopPrice:100.68,targetPrice:100,reason:"fixture rejection"})];
-  s.regionLifecycles!.ETH_USDT=lifecycle("ETH_USDT",now,"IN_REGION");
-  const five={...frame5("ETH_USDT",now-300_000,100.6),direction:"LONG" as const,rawDirection:"LONG" as const,
-    directionConfidence:.8,breadthLong:.90};
-  const fifteen={...five,timeframe:"15m" as const,directionConfidence:.75,breadthLong:.76};
-  s.turnEngine!.diagnostics.markets=12;s.turnEngine!.frames.ETH_USDT={"5m":five,"15m":fifteen};
-  const state=advanceForward({state:s,now,paths:{},quotes:{ETH_USDT:quote(100.6,now)},contracts:{ETH_USDT:meta},
-    entrySymbols:["ETH_USDT"],allowDataCycle:false}).state;
-  assert.equal(state.positions.length,0);
-  assert.ok(Object.keys(state.entryDiagnostics!.reasons).some(reason=>reason.includes("同步冲击")));
-});
-
-test("profitable AnchorFlow trade uses the proven monotonic Multi-Turn profit floor",()=>{
-  const now=BASE+8*60*60_000,s=seeded(["SOL_USDT"],now);
-  let state=advanceForward({state:s,now,paths:{},quotes:{SOL_USDT:quote(101.2,now)},contracts:{SOL_USDT:meta},
-    entrySymbols:["SOL_USDT"],allowDataCycle:false}).state;
-  assert.equal(state.positions.length,1);
-  state.positions[0]!.favorable=.08;
-  const later=now+1_000,mid=state.positions[0]!.entryPrice*1.01;
-  state=advanceForward({state,now:later,paths:{},quotes:{SOL_USDT:quote(mid,later)},contracts:{SOL_USDT:meta},
-    entrySymbols:["SOL_USDT"],allowDataCycle:false}).state;
-  assert.equal(state.positions.length,0);
-  assert.equal(state.history[0]?.exitAudit?.trigger,"PROFIT_GIVEBACK");
-  assert.match(state.history[0]?.exitReason??"",/利润.*保护/);
-});
-
-test("AnchorFlow structural defense is the retest invalidation and is never widened",()=>{
-  const now=BASE+9*60*60_000,s=seeded(["AAVE_USDT"],now);
-  let state=advanceForward({state:s,now,paths:{},quotes:{AAVE_USDT:quote(101.2,now)},contracts:{AAVE_USDT:meta},
-    entrySymbols:["AAVE_USDT"],allowDataCycle:false}).state;
-  assert.equal(state.positions.length,1);
-  const initialStop=state.positions[0]!.stopPrice,hitAt=now+1_000;
-  state=advanceForward({state,now:hitAt,paths:{},quotes:{AAVE_USDT:quote(initialStop*.999,hitAt)},contracts:{AAVE_USDT:meta},
-    entrySymbols:["AAVE_USDT"],allowDataCycle:false}).state;
-  assert.equal(state.positions.length,0);
-  assert.equal(state.history[0]?.stopPrice,initialStop);
-  assert.equal(state.history[0]?.exitAudit?.trigger,"HARD_STOP");
-});
-
-test("AnchorFlow entries obey the rebuilt portfolio, directional, trade-risk and notional caps",()=>{
-  const now=BASE+10*60*60_000,symbols=Array.from({length:12},(_,i)=>`S${i}_USDT`),s=seeded(symbols,now);
-  const quotes=Object.fromEntries(symbols.map(x=>[x,quote(101.2,now)])),contracts=Object.fromEntries(symbols.map(x=>[x,meta]));
-  const state=advanceForward({state:s,now,paths:{},quotes,contracts,entrySymbols:symbols,allowDataCycle:false}).state;
-  const eq=forwardEquity(state,quotes,now).equity,total=state.positions.reduce((n,t)=>n+t.plannedRisk,0);
-  assert.ok(total<=eq*.04+1e-8);
-  assert.ok(state.positions.filter(t=>t.side==="LONG").reduce((n,t)=>n+t.plannedRisk,0)<=eq*.03+1e-8);
-  assert.ok(state.positions.every(t=>t.plannedRisk<=eq*.008+1e-8));
-  assert.ok(state.positions.every(t=>t.notional<=600.01));
-  assert.ok(state.positions.every(t=>t.turn?.timeframe==="15m"));
+test("a completed data cycle clears retired entry state while keeping region location",()=>{
+  const p=regionPath(),now=(p.at(-1)!.time+300)*1000+1,s=initialMultiTurnForward(now-1_000);
+  s.anchorFlows={BTC_USDT:retiredAnchor("BTC_USDT",now)};
+  s.regionSignals=[retiredAnchorSignal("BTC_USDT",now)];
+  const next=advanceForward({state:s,now,paths:{BTC_USDT:p},quotes:{BTC_USDT:quote(p.at(-1)!.close,now)},
+    contracts:{BTC_USDT:meta},entrySymbols:["BTC_USDT"]}).state;
+  assert.equal(next.positions.length,0);
+  assert.equal(Object.keys(next.anchorFlows??{}).length,0);
+  assert.equal(next.regionSignals?.length,0);
+  assert.ok(next.regionLifecycles?.BTC_USDT?.zone);
 });
 
 test("wall-clock time cannot consume a new data slot before a genuinely new completed 5m candle exists",()=>{
@@ -295,10 +81,11 @@ test("wall-clock time cannot consume a new data slot before a genuinely new comp
   s=advanceForward({state:s,now:later,paths:{BTC_USDT:p},quotes:{BTC_USDT:quote(p.at(-1)!.close,later)},contracts:{BTC_USDT:meta},
     entrySymbols:["BTC_USDT"]}).state;
   assert.equal(s.lastCycleAt,firstCycle);
-  const last=p.at(-1)!,fresh=[...p,{time:last.time+300,open:last.close,high:last.close*1.002,low:last.close*.999,close:last.close*1.001,volume:last.volume+1}];
+  const last=p.at(-1)!,fresh=[...p,{time:last.time+300,open:last.close,high:last.close*1.002,low:last.close*.999,
+    close:last.close*1.001,volume:last.volume+1}];
   const at=later+10_000;
-  s=advanceForward({state:s,now:at,paths:{BTC_USDT:fresh},quotes:{BTC_USDT:quote(fresh.at(-1)!.close,at)},contracts:{BTC_USDT:meta},
-    entrySymbols:["BTC_USDT"]}).state;
+  s=advanceForward({state:s,now:at,paths:{BTC_USDT:fresh},quotes:{BTC_USDT:quote(fresh.at(-1)!.close,at)},
+    contracts:{BTC_USDT:meta},entrySymbols:["BTC_USDT"]}).state;
   assert.equal(s.lastCycleAt,at);
 });
 
@@ -312,34 +99,37 @@ test("critical quote management can mark equity without consuming stale strategy
   assert.equal(next.state.lastCycleAt,cycle);assert.ok(next.state.daily.at(-1)!.lastAt>mark);
 });
 
-test("READY AnchorFlow symbols cannot be pushed out of the eleven realtime slots by lower-stage candidates",()=>{
-  const now=BASE+11*60*60_000,symbols=Array.from({length:12},(_,i)=>`W${i}_USDT`),s=seeded(symbols,now);
-  for(const symbol of symbols)s.anchorFlows![symbol]!.phase="WAIT_RETEST";
-  const ready=symbols.at(-1)!;s.anchorFlows![ready]!.phase="READY";s.anchorFlows![ready]!.readyAt=now;
-  const watched=forwardWatchSymbols(s,now,symbols);
-  assert.equal(watched.length,11);
-  assert.ok(watched.includes(ready));
+test("retired AnchorFlow state cannot occupy a scarce realtime watch slot",()=>{
+  const now=BASE+11*60*60_000,s=initialMultiTurnForward(now-60_000);
+  s.regionLifecycles={BTC_USDT:lifecycle("BTC_USDT",now)};
+  s.anchorFlows={OLD_USDT:retiredAnchor("OLD_USDT",now)};
+  const watched=forwardWatchSymbols(s,now,["BTC_USDT","OLD_USDT"]);
+  assert.ok(watched.includes("BTC_USDT"));
+  assert.equal(watched.includes("OLD_USDT"),false);
 });
 
 test("only active scan symbols and open positions can occupy scarce realtime watch slots",()=>{
-  const now=BASE+11*60*60_000,s=seeded(["BTC_USDT","OLD_USDT"],now);
+  const now=BASE+11*60*60_000,s=initialMultiTurnForward(now-60_000);
+  s.regionLifecycles={BTC_USDT:lifecycle("BTC_USDT",now),OLD_USDT:lifecycle("OLD_USDT",now)};
   const watched=forwardWatchSymbols(s,now,["BTC_USDT"]);
   assert.equal(watched.includes("BTC_USDT"),true);
   assert.equal(watched.includes("OLD_USDT"),false);
 });
 
-test("runtime summary exposes AnchorFlow as execution authority while retaining region location state",()=>{
-  const now=BASE+12*60*60_000,s=seeded(["BTC_USDT"],now);
+test("runtime summary exposes RegionLaunch as the sole current execution grammar",()=>{
+  const now=BASE+12*60*60_000,s=initialMultiTurnForward(now-60_000);
+  s.regionLifecycles={BTC_USDT:lifecycle("BTC_USDT",now)};
+  s.anchorFlows={BTC_USDT:retiredAnchor("BTC_USDT",now)};
+  s.regionSignals=[retiredAnchorSignal("BTC_USDT",now)];
   const summary=forwardSummary(s,{BTC_USDT:quote(101.2,now)},now);
-  assert.equal(summary.grammar,ANCHOR_FLOW_VERSION);
-  assert.equal(summary.executionVersion,ANCHOR_FLOW_VERSION);
+  assert.equal(summary.grammar,REGION_LAUNCH_VERSION);
+  assert.equal(summary.regionLaunchVersion,REGION_LAUNCH_VERSION);
   assert.equal(summary.regionVersion,REGION_LIFECYCLE_VERSION);
-  assert.ok(summary.regionLifecycles.length>=1);
-  assert.equal(summary.entryOpportunities.length,0);
-  assert.match(summary.boundaries.grammar,/AnchorFlow/);
+  assert.equal(summary.anchorFlows.length,0);assert.equal(summary.regionSignals.length,0);
+  assert.match(summary.boundaries.grammar,/单一执行通道|完整边界/);
 });
 
-test("old Forward account and a fresh AnchorFlow PAPER head still commit atomically with the old archive retained",async()=>{
+test("old Forward account and a fresh RegionLaunch PAPER head still commit atomically with the old archive retained",async()=>{
   class Memory{data=new Map<string,unknown>();async get<T>(k:string){return structuredClone(this.data.get(k)) as T|undefined;}
     async put(v:Record<string,unknown>){for(const[k,x]of Object.entries(v))this.data.set(k,structuredClone(x));}}
   const db=new Memory(),old=initialForward(BASE);old.balance=895;old.peakEquity=1020;old.maxDrawdown=.2;old.storage={persistedAt:BASE,error:null};
@@ -350,7 +140,7 @@ test("old Forward account and a fresh AnchorFlow PAPER head still commit atomica
   const restored=await readForwardStore(db,BASE+3000);
   assert.equal(restored.strategyAuthorityVersion,MULTI_TURN_VERSION);
   assert.equal(restored.regionVersion,REGION_LIFECYCLE_VERSION);
-  assert.equal(restored.executionVersion,ANCHOR_FLOW_VERSION);
+  assert.equal(restored.regionLaunchVersion,REGION_LAUNCH_VERSION);
   assert.equal(restored.initialEquity,1000);assert.equal(restored.balance,1000);
   assert.ok([...db.data.keys()].some(k=>k.startsWith(`${FORWARD_STORAGE}archive:`)));
   assert.ok(db.data.has(FORWARD_PROTECTION_STORAGE));
