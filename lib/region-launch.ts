@@ -183,13 +183,19 @@ export function advanceRegionLaunchUniverse(input:{paths:Record<string,RegionCan
       const wasArmed=state.phase==="ARMED"&&!!state.compression;
       const observedCompression=compressionFrom(rows,state,input.costRate);
       // The launch box is the full mature winding region, including every wick.
-      // Once a completed candle closes outside it, freeze that exact box long
-      // enough for the 1m confirmation path; never roll the breakout into a
-      // smaller child range and pretend the old extreme did not exist.
+      // While closes remain inside, new rejection wicks may only EXPAND that
+      // same box and its identity stays stable. The first outside close freezes
+      // the pre-departure box so the breakout can never enlarge its own boundary.
       let compression=observedCompression;
-      if(wasArmed&&!compression){
-        const old=state.compression!;
-        if(input.now<=old.endAt+4*REGION_BAR_MS)compression=old;
+      if(wasArmed){
+        const old=state.compression!,latest=rows.at(-1)!;
+        if(latest.close<old.lower||latest.close>old.upper){
+          compression=input.now<=old.endAt+4*REGION_BAR_MS?old:null;
+        }else if(observedCompression){
+          const lower=Math.min(old.lower,observedCompression.lower),upper=Math.max(old.upper,observedCompression.upper);
+          compression={...observedCompression,id:old.id,startAt:old.startAt,endAt:Math.max(old.endAt,observedCompression.endAt),
+            lower,upper,width:upper-lower,widthRate:(upper-lower)/Math.max(observedCompression.center,1e-12)};
+        }else if(input.now<=old.endAt+4*REGION_BAR_MS)compression=old;
       }
       state.compression=compression;state.quality=motherQuality(state,compression);
       if(compression){
