@@ -3,8 +3,9 @@ import { LiveHistoryReader } from "../lib/live-history-reader.ts";
 
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
-import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchLiquidations, fetchMarketTickers, fetchRecentTrades,
+import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchLiquidations, fetchRecentTrades,
   fetchStructureCandles, fetchTickerBbo, fetchUrgentFuturesBook } from "../lib/gate-market.ts";
+import { MarketDataHub } from "../lib/market-data-hub.ts";
 import { GateStreamingFeed } from "../lib/gate-stream.ts";
 import { closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_RISK_CAP, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
 import { aggregateFourHourCandles, analyzeSnapshot, ancillarySchedule, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, structureDirection, updateOpenInterestCohorts, type SymbolMemory } from "../lib/liquidity-runtime.ts";
@@ -77,7 +78,7 @@ const LIVE_ORDER_AUDIT_ADMISSION_MAX_AGE_MS = 300_000;
 const SYSTEM_HEALTH_STALE_AFTER_MS = 30_000;
 const FEED_HARD_FAILURE_COUNT = 4;
 const FEED_HARD_FAILURE_MS = 15_000;
-const FEED_RECOVERY_CONFIRMATIONS = 2;
+const FEED_RECOVERY_CONFIRMATIONS = 1;
 const FEED_QUALITY_WINDOW_MS = 60 * 60_000;
 const BACKGROUND_BOOK_INTERVALS = 5;
 const HEARTBEAT_MS = 30_000;
@@ -495,6 +496,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private forwardMinuteCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
   private forwardMinuteRetryAt = new Map<string,number>();
   private gateStream = new GateStreamingFeed();
+  private marketHub = new MarketDataHub();
   private forwardMinuteQuoteBars: Record<string,{minute:number;open:number;high:number;low:number;close:number;samples:number;
     firstAt:number;lastAt:number;completed:Array<{time:number;open:number;high:number;low:number;close:number;volume:number}>}> = {};
   private turnDailyCandles: Record<string, Awaited<ReturnType<typeof fetchStructureCandles>>> = {};
