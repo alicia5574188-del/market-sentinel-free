@@ -8,8 +8,8 @@ const START=Date.parse("2026-09-23T00:00:00Z")/1000;
 const bar=(offset:number,o:number,h:number,l:number,c:number):RegionCandle=>({time:START+offset,open:o,high:h,low:l,close:c,volume:1000});
 const motherRows=Array.from({length:36},(_,i)=>{
   const offset=-10_800+i*300,open=100+(i%2?-.10:.10),close=100+(i%2?.10:-.10);
-  const high=i===5?101.18:Math.max(open,close)+.22+(i%3)*.02;
-  const low=i===12?98.82:Math.min(open,close)-.22-(i%4)*.015;
+  const high=i===5?101.18:Math.max(open,close)+.08+(i%3)*.01;
+  const low=i===12?98.82:Math.min(open,close)-.08-(i%4)*.008;
   return bar(offset,open,high,low,close);
 });
 const fullLower=Math.min(...motherRows.map(x=>x.low)),fullUpper=Math.max(...motherRows.map(x=>x.high));
@@ -109,7 +109,7 @@ test("missing or late 1m data never creates a retroactive chase",()=>{
 });
 
 test("post-entry burst validation must clear modeled round-trip cost rather than ordinary noise",()=>{
-  assert.equal(regionLaunchValidationProofRate(.0022),.00275);
+  assert.ok(Math.abs(regionLaunchValidationProofRate(.0022)-.00275)<1e-12);
   assert.equal(regionLaunchValidationProofRate(.004),.005);
   assert.equal(regionLaunchValidationProofRate(.010),.006);
 });
