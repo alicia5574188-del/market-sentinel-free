@@ -31,7 +31,10 @@ export class GateStreamingFeed {
   ensure(books:string[],minutes:string[],structures:string[],now=Date.now()):Promise<void>{
     const wanted=new Map<string,{channel:string;payload:string[]}>();
     // Exposure is ordered first by the caller; no market-wide subscriptions.
-    for(const symbol of [...new Set(books)].slice(0,30))wanted.set(`book:${symbol}`,{channel:"futures.order_book",payload:[symbol,"20","0"]});
+    // Adaptive Ten only needs executable best bid/ask. Gate documents
+    // futures.book_ticker as the realtime BBO channel; the legacy full order
+    // book is intentionally not used for execution.
+    for(const symbol of [...new Set(books)].slice(0,30))wanted.set(`book:${symbol}`,{channel:"futures.book_ticker",payload:[symbol]});
     for(const [interval,symbols] of [["1m",minutes.slice(0,11)],["5m",structures.slice(0,30)]] as const)
       for(const symbol of new Set(symbols))wanted.set(`${interval}:${symbol}`,{channel:"futures.candlesticks",payload:[interval,symbol]});
     this.wanted=wanted;
@@ -79,8 +82,8 @@ export class GateStreamingFeed {
     for(const key of this.subscribed){
       if(this.wanted.has(key))continue;
       const split=key.indexOf(":"),kind=key.slice(0,split),symbol=key.slice(split+1);
-      this.socket.send(JSON.stringify({time:Math.floor(now/1000),channel:kind==="book"?"futures.order_book":"futures.candlesticks",
-        event:"unsubscribe",payload:kind==="book"?[symbol,"20","0"]:[kind,symbol]}));
+      this.socket.send(JSON.stringify({time:Math.floor(now/1000),channel:kind==="book"?"futures.book_ticker":"futures.candlesticks",
+        event:"unsubscribe",payload:kind==="book"?[symbol]:[kind,symbol]}));
       this.subscribed.delete(key);
     }
     for(const [key,request] of this.wanted)if(!this.subscribed.has(key)){
@@ -95,7 +98,18 @@ export class GateStreamingFeed {
     if(!message||typeof message!=="object")return;
     this.lastMessageAt=now;
     if(message.error){this.rejected++;this.disconnect("Gate stream subscription error",now);return;}
-    if(message.channel==="futures.order_book"&&message.event==="all"){
+    if(message.channel==="futures.book_ticker"&&message.event==="update"){
+      const row=message.result as Record<string,unknown>|null;
+      const symbol=typeof row?.s==="string"?row.s:"";
+      if(!row||!symbol||!this.wanted.has(`book:${symbol}`))return;
+      const observedAt=Number(row.t),sequence=Number(row.u),bid=Number(row.b),ask=Number(row.a),bidSize=Number(row.B),askSize=Number(row.A);
+      const previous=this.books.get(symbol);
+      if(!dataIsFresh(observedAt,now)||!Number.isSafeInteger(sequence)||sequence<=0
+        ||![bid,ask,bidSize,askSize].every(finite)||bid<=0||ask<=0||bid>=ask||bidSize<=0||askSize<=0
+        ||(previous&&(observedAt<previous.observedAt||sequence<previous.sequence))){this.rejected++;return;}
+      this.books.set(symbol,{symbol,observedAt,sequence,bids:[{price:bid,size:bidSize}],asks:[{price:ask,size:askSize}]});
+      this.acceptedBooks++;this.failures=0;this.lastError=null;
+    }else if(message.channel==="futures.order_book"&&message.event==="all"){
       const row=message.result as Record<string,unknown>|null;
       if(!row||typeof row.contract!=="string"||!this.wanted.has(`book:${row.contract}`))return;
       const observedAt=Number(row.t),sequence=Number(row.id);
