@@ -19,6 +19,8 @@ export const PAPER_COST={feeRate:.0007,slippageRate:.00025,fundingAllowancePerDa
   assumption:"双边吃单费各7bp＋滑点各2.5bp＋每日2bp不利资金费占位"};
 const ROUND_TRIP_COST=2*(PAPER_COST.feeRate+PAPER_COST.slippageRate);
 const TOTAL_RISK_RATE=.10,SIDE_RISK_RATE=.065,TOTAL_MARGIN_RATE=.75;
+const PROBE_RISK_POOL_RATE=.015,RELATION_RISK_CAP_RATE=.025,FIVE_MINUTE_NEW_RISK_RATE=.025;
+const PRIMARY_MIN_CHARGE_RATE=.0055,PROBE_MIN_CHARGE_RATE=.0025;
 const ROTATION_GAP=10,ROTATION_COOLDOWN_MS=2*60_000;
 const HISTORY_LIMIT=240,EVENT_LIMIT=160;
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
@@ -62,7 +64,7 @@ export type EntryContext={
   reason:string;entryScore:number;directionStrength:number;spaceScore:number;positionScore:number;executionScore:number;
   remainingSpaceRate:number;pullbackRiskRate:number;edgeRatio:number;expectedHoldMinutes:number;marketFit:number;
   regionId:string|null;regionLower?:number;regionUpper?:number;regionCenter?:number;
-  relationRuleId?:string;relationStatus?:RelationStatus;relationHorizon?:15|60|180;relationHealth?:number;
+  relationRuleId?:string;relationStatus?:RelationStatus;relationHorizon?:15|60|180;relationHealth?:number;portfolioRiskCharge?:number;
 };
 export type Trade={
   id:string;symbol:string;side:"LONG"|"SHORT";rule:Rule;openedAt:number;closedAt:number|null;status:"OPEN"|"CLOSED";
@@ -148,6 +150,10 @@ function normalizeTrade(raw:Trade,now:number):Trade{
   t.exitReason=t.exitReason??null;t.relationFailureBars=Math.max(0,Math.floor(safe(t.relationFailureBars)));t.lastRelationBar=safe(t.lastRelationBar,t.openedAt);
   t.execution="REAL_QUOTE_PAPER_MODEL";t.liveEligible=false;t.firstProfitAt=t.firstProfitAt??null;t.holdScore=safe(t.holdScore,50);
   t.profitFloorRate=Math.max(0,safe(t.profitFloorRate));t.expectedHoldMinutes=Math.max(5,safe(t.expectedHoldMinutes,t.entryContext?.expectedHoldMinutes??30));
+  if(t.entryContext&&!(safe(t.entryContext.portfolioRiskCharge)>0)){
+    const sizingEquity=safe(t.forecast?.sizingEquity),floor=sizingEquity*(t.entryContext.reserve===true?.003:.006);
+    if(floor>0)t.entryContext.portfolioRiskCharge=Math.max(t.plannedRisk,floor);
+  }
   t.peakPnlRate=Math.max(0,safe(t.peakPnlRate,t.favorable));return t;
 }
 export function normalizeForward(v:ForwardState|null|undefined,now:number):ForwardState{
@@ -391,18 +397,47 @@ function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
   }
   if(closed.size)s.positions=s.positions.filter(t=>!closed.has(t.id));
 }
-function candidateRiskRate(o:Opportunity){const base=o.reserve?.004:o.mode==="RANGE"?.006:o.premium?.009:.008;return base*clip(o.riskScale??1,.25,1);}
-function existingRisk(s:ForwardState,side?:"LONG"|"SHORT"){return s.positions.filter(t=>!side||t.side===side).reduce((n,t)=>n+t.plannedRisk,0);}
+function candidateRiskRate(o:Opportunity){
+  if(o.reserve)return .003;
+  const base=o.mode==="RANGE"?.006:o.premium?.009:.008;
+  return clip(base*clip(o.riskScale??1,.75,1),.006,.009);
+}
+const riskCharge=(t:Trade)=>Math.max(t.plannedRisk,t.entryContext?.portfolioRiskCharge??((t.forecast?.sizingEquity??0)*(t.entryContext?.reserve===true?.003:.006)));
+function existingRisk(s:ForwardState,side?:"LONG"|"SHORT"){return s.positions.filter(t=>!side||t.side===side).reduce((n,t)=>n+riskCharge(t),0);}
+function probeRisk(s:ForwardState){return s.positions.filter(t=>t.entryContext?.reserve===true).reduce((n,t)=>n+riskCharge(t),0);}
+function relationRisk(s:ForwardState,ruleId:string){return s.positions.filter(t=>t.entryContext?.relationRuleId===ruleId).reduce((n,t)=>n+riskCharge(t),0);}
+function cycleRiskAdded(s:ForwardState,since:number){return[...s.positions,...s.history].filter(t=>t.openedAt>=since).reduce((n,t)=>n+riskCharge(t),0);}
+function qualityBlockReason(s:ForwardState,o:Opportunity,equity:number){
+  if(!(equity>0))return"账户权益无效";
+  const use=existingRisk(s)/equity,health=o.relationHealth??0;
+  if(o.reserve){
+    if(use>=.05)return"探测仓只在组合风险低于5%时新增";
+    if(probeRisk(s)>=equity*PROBE_RISK_POOL_RATE-equity*.0005)return"探测风险池已满";
+    return null;
+  }
+  if(use>=.09&&(o.score<86||health<.84))return"高风险占用下只接受顶级成熟关系";
+  if(use>=.08&&(o.score<80||health<.78))return"风险占用超过8%，候选质量不足";
+  if(use>=.06&&(o.score<72||health<.70))return"风险占用超过6%，候选质量不足";
+  return null;
+}
 function openTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number){
   const side=o.side,d=dir(side),price=side==="LONG"?q.bestAsk:q.bestBid;
+  if(!o.relationRuleId)return"缺少Forward关系授权";
+  const qualityBlock=qualityBlockReason(s,o,equity);if(qualityBlock)return qualityBlock;
   // Analysis can come from Bybit/OKX/Binance. Only relative structure may cross
   // venues; all executable prices are re-anchored to the actual Gate quote.
   const stopRate=Number.isFinite(o.stopRate)?o.stopRate:Math.abs(o.price-o.stopPrice)/Math.max(o.price,1e-9);
   const targetRate=Number.isFinite(o.targetRate)?o.targetRate:Math.abs(o.targetPrice/o.price-1);
   if(!(stopRate>=.002&&stopRate<=.03))return"结构止损宽度不合理";
-  const headroom=Math.min(equity*TOTAL_RISK_RATE-existingRisk(s),equity*SIDE_RISK_RATE-existingRisk(s,side));
-  const wantedRisk=equity*candidateRiskRate(o);if(headroom<=equity*.001)return"组合风险已满";
-  const riskBudget=Math.min(wantedRisk,headroom),rawNotional=riskBudget/(stopRate+ROUND_TRIP_COST);
+  const totalHeadroom=equity*(TOTAL_RISK_RATE-.001)-existingRisk(s),sideHeadroom=equity*(SIDE_RISK_RATE-.0005)-existingRisk(s,side),
+    relationHeadroom=equity*RELATION_RISK_CAP_RATE-relationRisk(s,o.relationRuleId),
+    probeHeadroom=o.reserve?equity*PROBE_RISK_POOL_RATE-probeRisk(s):Infinity,
+    cycleHeadroom=equity*FIVE_MINUTE_NEW_RISK_RATE-cycleRiskAdded(s,s.lastCandleAt);
+  const headroom=Math.min(totalHeadroom,sideHeadroom,relationHeadroom,probeHeadroom,cycleHeadroom);
+  const wantedRisk=equity*candidateRiskRate(o);if(headroom<=equity*.001)return"风险预算已满";
+  const riskBudget=Math.min(wantedRisk,headroom),minCharge=equity*(o.reserve?PROBE_MIN_CHARGE_RATE:PRIMARY_MIN_CHARGE_RATE);
+  if(riskBudget<minCharge)return o.reserve?"剩余探测预算不足以形成有效仓位":"剩余组合预算不足以形成有效主仓";
+  const rawNotional=riskBudget/(stopRate+ROUND_TRIP_COST);
   const notionalCap=equity*(o.premium?.70:.60),targetNotional=Math.min(rawNotional,notionalCap);
   const leverage=Math.max(1,Math.min(10,Math.floor(contract.leverageMax||10))),mult=Math.max(contract.quantoMultiplier,1e-12);
   const minContracts=Math.max(1,Math.ceil(contract.minContracts??(Number(contract.orderSizeMin??1)||1)));
@@ -425,7 +460,7 @@ function openTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:nu
     peakPnlRate:0,exitControl:{policy:ADAPTIVE_ENGINE_VERSION,armedAt:null,armedQuoteAt:null,maxObservationGapMs:30_000,maxQuoteAgeMs:10_000},entryContext:{version:"adaptive-ten-entry-v1",capturedAt:now,timeframe:"5m",side,mode:o.mode,reserve:o.reserve===true,reason:o.reason,entryScore:o.score,
       directionStrength:o.directionStrength,spaceScore:o.spaceScore,positionScore:o.positionScore,executionScore:o.executionScore,
       remainingSpaceRate:o.netRemainingSpaceRate,pullbackRiskRate:o.pullbackRiskRate,edgeRatio:o.edgeRatio,expectedHoldMinutes:o.expectedHoldMinutes,
-      marketFit:o.marketFit,regionId:o.regionId,relationRuleId:o.relationRuleId,relationStatus:o.relationStatus,relationHorizon:o.relationHorizon,relationHealth:o.relationHealth,
+      marketFit:o.marketFit,regionId:o.regionId,relationRuleId:o.relationRuleId,relationStatus:o.relationStatus,relationHorizon:o.relationHorizon,relationHealth:o.relationHealth,portfolioRiskCharge:riskBudget,
       ...(region?{regionLower:region.lower*scale,regionUpper:region.upper*scale,regionCenter:region.center*scale}:{})},
     forecast:{remainingNetRate:o.netRemainingSpaceRate,quality:o.score/100,sizingEquity:equity}};
   s.positions.push(t);s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.lastEntryAt[o.symbol]=now;s.lastSide[o.symbol]=side;
@@ -457,15 +492,15 @@ function rotateIfNeeded(s:ForwardState,quotes:Record<string,Quote>,contracts:Rec
   s.lastRotationAt=now;event(s,now,"ROTATION",candidate.symbol,`${weak.symbol} → ${candidate.symbol}，优势差${(candidate.score-weakScore).toFixed(0)}分`);
   return true;
 }
-function fillSeats(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,equity:number){
-  const eligible=rankedEligible(s,now);
+export function fillForwardPortfolio(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,equity:number,premiumOnly:boolean){
+  const eligible=rankedEligible(s,now).filter(o=>!premiumOnly||o.premium);
   // This is a current-state blocker view, not a retry counter. One candidate can
   // contribute at most once per execution pass, so the UI can never show
   // hundreds of fake "failures" from the same waiting opportunity.
   s.entryDiagnostics={at:now,matched:eligible.length,opened:0,reasons:{}};
   let opened=0;const reject=(reason:string)=>{s.entryDiagnostics.reasons[reason]=(s.entryDiagnostics.reasons[reason]??0)+1;};
   for(const o of eligible){
-    if(opened>=3)break;const q=quotes[o.symbol],meta=contracts[o.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
+    const q=quotes[o.symbol],meta=contracts[o.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
     if(!meta){reject("等待合约规格");continue;}
     const last=s.lastExitAt[o.symbol]??0,lastSide=s.lastSide[o.symbol];
     const cooldown=lastSide&&lastSide!==o.side?5*60_000:8*60_000;if(now-last<cooldown){reject("同币短时防抖");continue;}
@@ -505,7 +540,8 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
       ||Number(!b.reserve)-Number(!a.reserve)||b.score-a.score).map(o=>[o.symbol,o] as const)).values()];
   }
   const mark=equityMark(s,input.quotes,input.now);s.peakEquity=Math.max(s.peakEquity,mark.equity);s.maxDrawdown=Math.max(s.maxDrawdown,1-mark.equity/Math.max(s.peakEquity,1));
-  updateDaily(s,input.now,mark.equity);rotateIfNeeded(s,input.quotes,input.contracts,input.now,mark.equity);const opened=fillSeats(s,input.quotes,input.contracts,input.now,mark.equity);
+  updateDaily(s,input.now,mark.equity);rotateIfNeeded(s,input.quotes,input.contracts,input.now,mark.equity);
+  const opened=fillForwardPortfolio(s,input.quotes,input.contracts,input.now,mark.equity,!dataDue);
   const d=s.relationEngine.diagnostics;
   const totalRisk=existingRisk(s),riskUse=mark.equity>0?100*totalRisk/mark.equity:0;
   s.latestReason=s.relationEngine.rules.length===0?d.warmup
@@ -568,7 +604,7 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     boundaries:{scope:"PAPER_AUTHORITY",grammar:"真实市场条件→15/60/180分钟成熟反应→关系生命周期；5/10/15/30/60/180分钟路径检查点只判断旧关系是否失效，不预测反向。",
       historyBackfill:false,sampleMeaning:"长期样本决定关系资格；近期成熟样本与进行中真实反应路径决定当前交易权。旧方向失效不会自动生成反向订单。",
       accounting:"模拟使用新鲜买卖价并计入手续费、滑点和资金费占位；同一持久化Trade事件供实盘执行。",
-      risk:"不设持仓席位数量上限；只受组合计划风险≤10%、同方向≤6.5%、保证金≤75%和单币一仓约束。ACTIVE正常竞争风险，PRESSURED/DEGRADED连续降权。",
+      risk:"不设持仓席位数量上限；总风险≤10%、同方向≤6.5%、同一关系≤2.5%、探测池≤1.5%、单个5m周期新增风险≤2.5%、保证金≤75%。风险越高，新候选质量门槛越高。",
       validation:"关系状态为ACTIVE/PRESSURED/DEGRADED/RECOVERING；反方向必须由自己的已成熟真实样本获得资格。",
       liquidation:"结构止损 + 无正向反馈 + 关系降级 + 独立反向机会 + MFE利润保护；关系恶化时优先退出未形成浮赢的弱仓，盈利仓先收紧保护。"},
     cost:PAPER_COST,nextCycleAt:s.lastCandleAt+BAR_MS};

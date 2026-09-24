@@ -70,6 +70,16 @@ test("protected PAPER/authentication sources remain unchanged by the LIVE adapte
   for(const[path,sha]of Object.entries(frozen))assert.equal(createHash("sha256").update(readFileSync(new URL(`../${path}`,import.meta.url))).digest("hex"),sha,path);
 });
 
+test("Safari pattern DOMException is normalized and a mutation is never replayed",async()=>{
+  const original=globalThis.fetch;let calls=0;
+  globalThis.fetch=async()=>{calls++;throw new DOMException("The string did not match the expected pattern.","SyntaxError");};
+  try{
+    await assert.rejects(()=>operatorRequest("/api/paper/reset","POST",{confirm:"RESET_PAPER"}),
+      e=>e instanceof OperatorRequestError&&e.status===0&&/未收到服务器确认/.test(e.message));
+    assert.equal(calls,1);
+  }finally{globalThis.fetch=original;}
+});
+
 test("browser TimeoutError is normalized to a Chinese no-replay warning",async()=>{
   const original=globalThis.fetch;
   globalThis.fetch=async()=>{const error=new Error("The operation was aborted due to timeout");error.name="TimeoutError";throw error;};

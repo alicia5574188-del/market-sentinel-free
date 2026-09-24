@@ -25,7 +25,9 @@ export default function PaperAccountReset({auth,runtime,onReset}:{auth:AuthSessi
       if(!result.ok||result.equity!==1000)throw new Error("服务器没有确认新的1000U模拟账户，未发布重置结果。");
       setConfirming(false);
       setNotice("模拟账户已原子重置为1000U；Forward Relation学习样本和关系状态已保留。");
-      onReset();
+      // Server confirmation is authoritative. A Safari/UI refresh problem after
+      // success must never be misreported as a failed financial reset.
+      try{onReset();}catch{/* periodic runtime refresh will reconcile the page */}
     }catch(e){setError(e instanceof Error?e.message:"模拟账户重置失败");}
     finally{submitting.current=false;setBusy(false);}
   };
