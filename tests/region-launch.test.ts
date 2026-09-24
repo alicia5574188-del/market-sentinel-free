@@ -12,7 +12,6 @@ const motherRows=Array.from({length:36},(_,i)=>{
   const low=i===12?98.82:Math.min(open,close)-.08-(i%4)*.008;
   return bar(offset,open,high,low,close);
 });
-const fullLower=Math.min(...motherRows.map(x=>x.low)),fullUpper=Math.max(...motherRows.map(x=>x.high));
 const mother:RegionZone={id:"mother",symbol:"BCH_USDT",startAt:(START-10_500)*1000,endAt:START*1000,confirmedAt:START*1000,bars:36,
   lower:99,upper:101,center:100,width:2,widthRate:.02,touchesUpper:6,touchesLower:6,crossings:7};
 const lifecycle=(zone=mother):RegionLifecycleState=>({version:REGION_LIFECYCLE_VERSION,symbol:"BCH_USDT",initializedAt:START*1000,
@@ -22,19 +21,29 @@ const q=(mid:number,at:number)=>({bestBid:mid-.005,bestAsk:mid+.005,observedAt:a
 const armed=()=>advanceRegionLaunchUniverse({paths:{BCH_USDT:motherRows},lifecycles:{BCH_USDT:lifecycle()},prior:{},
   now:(START+1)*1000,costRate:.0022}).states;
 
-test("the executable burst box is the full mature region including old wick extremes",()=>{
+test("the executable burst box uses accepted-price region bounds and ignores isolated wick probes",()=>{
   const s=armed().BCH_USDT!;
   assert.equal(s.version,REGION_LAUNCH_VERSION);assert.equal(s.phase,"ARMED");
   assert.equal(s.motherRegionId,mother.id);assert.equal(s.compression?.bars,36);
-  assert.equal(s.compression?.lower,fullLower);assert.equal(s.compression?.upper,fullUpper);
+  assert.equal(s.compression?.lower,mother.lower);assert.equal(s.compression?.upper,mother.upper);
   assert.equal(s.compression?.coreLower,mother.lower);assert.equal(s.compression?.coreUpper,mother.upper);
 });
 
-test("an inner move cannot launch while price has not left the full wick envelope",()=>{
-  const states=armed(),inside=bar(0,100.9,101.12,100.88,101.08);
+test("an inner move cannot launch while price has not left the accepted region",()=>{
+  const states=armed(),inside=bar(0,100.7,100.98,100.65,100.95);
   const r=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[inside]},now:(START+60)*1000,costRate:.0022});
   assert.equal(r.states.BCH_USDT?.phase,"ARMED");
   assert.equal(advanceRegionLaunchQuotes({states:r.states,quotes:{BCH_USDT:q(101.08,(START+61)*1000)},now:(START+61)*1000,costRate:.0022}).signals.length,0);
+});
+
+test("a changed lifecycle zone replaces a persisted overlapping mother immediately",()=>{
+  const old=armed().BCH_USDT!;
+  const next:RegionZone={...mother,id:"mother-v2",lower:99.35,upper:100.85,center:100.1,width:1.5,widthRate:.014985,bars:48,confirmedAt:START*1000+300_000};
+  const states=advanceRegionLaunchUniverse({paths:{BCH_USDT:motherRows},lifecycles:{BCH_USDT:lifecycle(next)},prior:{BCH_USDT:old},
+    now:(START+301)*1000,costRate:.0022}).states;
+  assert.equal(states.BCH_USDT?.motherRegionId,"mother-v2");
+  assert.equal(states.BCH_USDT?.motherLower,99.35);assert.equal(states.BCH_USDT?.motherUpper,100.85);
+  assert.equal(states.BCH_USDT?.compression?.lower,99.35);assert.equal(states.BCH_USDT?.compression?.upper,100.85);
 });
 
 test("unfinished 5m fast path requires a several-times-average full-box departure before 1m ignition",()=>{
