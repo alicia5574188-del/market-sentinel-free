@@ -2335,7 +2335,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         }
       }
       const inheritedAuditAt=orders?.checkedAt??this.liveOrderAuditAt;
-      orderAuditUsable=orderAuditUsable&&inheritedAuditAt>0&&now-inheritedAuditAt<=LIVE_ORDER_AUDIT_ADMISSION_MAX_AGE_MS;
+      orderAuditUsable=inheritedAuditAt>0&&now-inheritedAuditAt<=LIVE_ORDER_AUDIT_ADMISSION_MAX_AGE_MS;
       snapshot={account:core.account,positions:core.positions,orders:orders?.orders??[],priceOrders:orders?.priceOrders??[],checkedAt:core.checkedAt};
       this.liveSnapshotCache=structuredClone(snapshot);
     }
@@ -3699,7 +3699,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         liveMode: { requestedEnabled: this.runtime.live.requestedEnabled, operational: this.runtime.live.operational },
         liveExecution:{...this.liveExecution,inFlight:!!this.liveBackgroundWork,queued:this.liveSourcePending,
           timeoutStreak:this.liveReadTimeoutStreak,lastAccountAt:this.runtime.live.lastSyncAt,
-          lastOrderAuditAt:this.liveOrderSnapshotCache?.checkedAt??this.liveOrderAuditAt||null,
+          lastOrderAuditAt:(this.liveOrderSnapshotCache?.checkedAt??this.liveOrderAuditAt)||null,
           readTransport:this.liveClient?.readTransport??null},
         strategyArena: {
           version: canonical.version,
