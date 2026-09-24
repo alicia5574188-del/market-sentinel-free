@@ -2310,9 +2310,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       ?structuredClone(this.liveSnapshotCache):null;
     let snapshot:GateLiveSnapshot;
     let orderAuditUsable=true;
+    const splitPrivateReads=typeof client.snapshotCore==="function"&&typeof client.snapshotOrders==="function";
     if(cached){
       snapshot=cached;this.liveSyncUsedCached=true;
-    }else if(initialEnable||forceEntryCleanup||needsProtectionOrderLane){
+    }else if(!splitPrivateReads||initialEnable||forceEntryCleanup||needsProtectionOrderLane){
+      // Test doubles and legacy/member executors may still expose only the
+      // reviewed full-snapshot contract. Keep that compatibility path exact;
+      // production GateLiveClient uses the split lanes below.
       snapshot=await client.snapshot();this.liveSyncUsedCached=false;
       this.liveOrderSnapshotCache={orders:structuredClone(snapshot.orders),priceOrders:structuredClone(snapshot.priceOrders),checkedAt:snapshot.checkedAt};
       this.liveOrderAuditAt=snapshot.checkedAt;
