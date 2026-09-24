@@ -20,7 +20,44 @@ test("ordinary 5m participation fills toward ten seats without requiring a windi
   assert.equal(s.positions.length,ADAPTIVE_TARGET_POSITIONS);
   assert.ok(s.opportunities.some(o=>o.mode==="FLOW"&&o.eligible));
   assert.ok(s.positions.every(t=>t.entryContext?.mode==="FLOW"));
+  assert.ok(s.positions.every(t=>t.entryContext?.reserve!==true),"strong FLOW must remain primary, not reserve");
   assert.equal(s.positions.some(t=>t.entryContext?.regionId),false);
+});
+
+
+test("clean slow 5m trends may fill empty seats as half-risk reserve positions",()=>{
+  const symbols=Array.from({length:12},(_,i)=>`R${i}_USDT`),paths=Object.fromEntries(symbols.map(s=>[s,path(.0001)]));
+  const price=paths[symbols[0]]!.at(-1)!.close,now=(paths[symbols[0]]!.at(-1)!.time+300)*1000+1000;
+  const quotes=Object.fromEntries(symbols.map(s=>[s,quote(price,now)])),contracts=Object.fromEntries(symbols.map(s=>[s,contract]));
+  let s=initialForward(now-60_000);
+  for(let i=0;i<5;i++)s=advanceForward({state:s,now:now+i*1000,paths,quotes,contracts,entrySymbols:symbols,allowDataCycle:i===0}).state;
+  const reserves=s.opportunities.filter(o=>o.reserve&&o.eligible);
+  assert.ok(reserves.length>=10,"slow clean direction should produce reserve opportunities instead of an empty book");
+  assert.equal(s.positions.length,ADAPTIVE_TARGET_POSITIONS);
+  assert.ok(s.positions.every(t=>t.entryContext?.reserve===true));
+  assert.ok(s.positions.every(t=>t.plannedRisk<=s.initialEquity*.0041),"reserve risk must stay near half normal risk");
+});
+
+test("reserve opportunities cannot rotate a full primary ten-seat book",()=>{
+  const primarySymbols=Array.from({length:10},(_,i)=>`P${i}_USDT`),primaryPaths=Object.fromEntries(primarySymbols.map(s=>[s,path(.0015)]));
+  const primaryPrice=primaryPaths[primarySymbols[0]]!.at(-1)!.close,now=(primaryPaths[primarySymbols[0]]!.at(-1)!.time+300)*1000+1000;
+  const primaryQuotes=Object.fromEntries(primarySymbols.map(s=>[s,quote(primaryPrice,now)]));
+  const primaryContracts=Object.fromEntries(primarySymbols.map(s=>[s,contract]));
+  let s=initialForward(now-60_000);
+  for(let i=0;i<4;i++)s=advanceForward({state:s,now:now+i*1000,paths:primaryPaths,quotes:primaryQuotes,
+    contracts:primaryContracts,entrySymbols:primarySymbols,allowDataCycle:i===0}).state;
+  assert.equal(s.positions.length,10);const ids=s.positions.map(t=>t.id).sort();
+
+  const reserveSymbol="RESERVE_USDT",reservePath=path(.0001),reservePrice=reservePath.at(-1)!.close;
+  const probe=advanceForward({state:initialForward(now-60_000),now,paths:{[reserveSymbol]:reservePath},
+    quotes:{[reserveSymbol]:quote(reservePrice,now)},contracts:{[reserveSymbol]:contract},entrySymbols:[reserveSymbol]}).state;
+  const reserve=probe.opportunities.find(o=>o.symbol===reserveSymbol&&o.reserve&&o.eligible);assert.ok(reserve);
+  s.opportunities=[reserve!];
+  const allQuotes={...primaryQuotes,[reserveSymbol]:quote(reservePrice,now+5000)},allContracts={...primaryContracts,[reserveSymbol]:contract};
+  s=advanceForward({state:s,now:now+5000,paths:primaryPaths,quotes:allQuotes,contracts:allContracts,
+    entrySymbols:[...primarySymbols,reserveSymbol],allowDataCycle:false}).state;
+  assert.deepEqual(s.positions.map(t=>t.id).sort(),ids);
+  assert.equal(s.events.some(e=>e.kind==="ROTATION"&&e.subject===reserveSymbol),false);
 });
 
 test("ordinary participation never forces the eleventh seat",()=>{

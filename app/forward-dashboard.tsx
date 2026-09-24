@@ -39,7 +39,8 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   }catch{setExportStatus("导出失败，请重试。");}finally{setExporting(false);}};
 
   const positions=data?.positions??[],opportunities=[...(data?.opportunities??[])].sort((a,b)=>Number(b.eligible)-Number(a.eligible)||Number(b.premium)-Number(a.premium)||b.score-a.score);
-  const eligible=opportunities.filter(o=>o.eligible&&(!now||o.expiresAt>now)),premium=eligible.filter(o=>o.premium),ordinary=eligible.filter(o=>!o.premium);
+  const eligible=opportunities.filter(o=>o.eligible&&(!now||o.expiresAt>now)),premium=eligible.filter(o=>o.premium),
+    reserve=eligible.filter(o=>o.reserve),ordinary=eligible.filter(o=>!o.premium&&!o.reserve);
   const blockers=Object.entries(data?.entryDiagnostics?.reasons??{}).sort((a,b)=>b[1]-a[1]),mainBlocker=blockers[0]?.[0]??"当前没有额外阻塞";
   const pulse=data?.marketPulse,records=recordWindows(data?.history??[],t=>t.closedAt??0),archive=archivePage(records.archive,paperPage);
   const paperMargin=positions.reduce((n,t)=>n+t.margin,0),elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
@@ -58,7 +59,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
           <footer><span>起点 {fmt(data?.initialEquity,0)}</span><span>最大回撤 {fmt(data?data.maxDrawdown*100:null)}%</span></footer></div></section>
       <section className="fr-stats">
         <Stat label="当前席位" value={data?`${positions.length} / ${ADAPTIVE_TARGET_POSITIONS}`:"—"} note={positions.length>=ADAPTIVE_TARGET_POSITIONS?"满席仍持续扫描换仓":`还可补 ${Math.max(0,ADAPTIVE_TARGET_POSITIONS-positions.length)} 席`}/>
-        <Stat label="可参与机会" value={data?`${eligible.length} 个`:"—"} note={`普通 ${ordinary.length} · 高级 ${premium.length}`}/>
+        <Stat label="可参与机会" value={data?`${eligible.length} 个`:"—"} note={`主机会 ${ordinary.length} · 补位 ${reserve.length} · 高级 ${premium.length}`}/>
         <Stat label="市场状态" value={pulse?.bias==="UP"?"偏多":pulse?.bias==="DOWN"?"偏空":pulse?"分化":"—"} note={pulse?`上涨 ${pulse.up} · 下跌 ${pulse.down} · 中性 ${pulse.neutral}`:"等待5m数据"}/>
         <Stat label="实盘账户" value={`${fmt(liveOverview?.equity)} U`} note={`${liveOverview?.positionCount??"—"} 笔持仓 · 可用 ${fmt(liveOverview?.available)} U`}/>
       </section>
@@ -79,10 +80,10 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       <section className="fr-section fr-exec-flow-section"><div className="fr-section-head"><div><small>当前执行层</small><h2>Adaptive 10 闭环</h2></div><span>{time(data?.updatedAt)}</span></div>
         <div className="fr-exec-flow">
           <ExecStep index="01" title="30市场扫描" status={(data?.marketCount??0)>0?"运行中":"等待5m"} text={`当前维护 ${fmt(data?.marketCount,0)} 个5分钟市场；不依赖15m/1h/4h才能交易。`}/>
-          <ExecStep index="02" title="方向—空间" status={opportunities.length?"持续评分":"等待"} text={`方向、路径效率、剩余空间、回调风险和当前位置统一评分；当前 ${ordinary.length} 个普通可参与机会。`}/>
+          <ExecStep index="02" title="方向—空间" status={opportunities.length?"持续评分":"等待"} text={`方向、路径效率、剩余空间、回调风险和当前位置统一评分；当前主机会 ${ordinary.length} 个，低风险空席补位 ${reserve.length} 个。`}/>
           <ExecStep index="03" title="成熟区域高级机会" status={premium.length?"已发现":"持续观察"} text={`爆发突破、回踩重启、假突破反向、区域内部交易共用同一成熟区结构；当前 ${premium.length} 个高级机会。`}/>
           <ExecStep index="04" title="1分钟精确确认" status={premium.length?"按需启用":"无需占用"} text="1m不决定大方向，只在强突破/回踩等高级机会里确认小回调结束、重新启动或连续突破。"/>
-          <ExecStep index="05" title="10席位竞争" status={positions.length>=ADAPTIVE_TARGET_POSITIONS?"满席竞争":"正在补仓"} text={`当前 ${positions.length}/${ADAPTIVE_TARGET_POSITIONS} 席；未满按评分补仓，满席后新机会必须明显强于最弱持仓才换仓。`}/>
+          <ExecStep index="05" title="10席位竞争" status={positions.length>=ADAPTIVE_TARGET_POSITIONS?"满席竞争":"正在补仓"} text={`当前 ${positions.length}/${ADAPTIVE_TARGET_POSITIONS} 席；主机会优先，空席可用半风险补位；满席后补位机会没有换仓权限，只有更强主机会才能替换弱仓。`}/>
           <ExecStep index="06" title="入场后反馈" status={positions.length?"持续重评":"等待持仓"} text="快速浮赢提高持仓价值；长期围绕成本或很快浮亏会降级，但不会靠停止全部开仓来规避亏损。"/>
           <ExecStep index="07" title="退出与锁利" status={positions.length?"持续保护":"等待持仓"} text="结构止损、市场转向、时间失败、机会替换和MFE保护统一管理；约2R以后优先保留接近80%的峰值利润。"/>
         </div></section>
@@ -120,7 +121,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         <div className="fr-font-options">{[70,80,90,100,110].map(value=><button key={value} className={fontScale===value?"selected":""} onClick={()=>{setFontScale(value);try{localStorage.setItem("sentinel-ui-font-scale-v1",String(value));}catch{}}}>{value}%</button>)}</div></section>
       <section className="fr-section"><div className="fr-section-head"><h2>当前系统边界</h2><span>adaptive-ten-slim-v1</span></div>
         <Setting title="主周期" value="5m + 按需1m" text="5m负责结构、方向、空间和普通参与；1m只为高级机会做精确执行确认。"/>
-        <Setting title="组合" value="约10个持仓" text="持仓不是硬凑；未满主动补仓，满仓仍扫描并择优替换。高级机会可临时使用第11实时席。"/>
+        <Setting title="组合" value="约10个持仓" text="主机会优先；空席可用约半风险的方向—空间补位单维持样本与参与度。补位单不能替换正常仓；高级机会可临时使用第11实时席。"/>
         <Setting title="市场变化" value="实时优先" text="历史样本只做小幅评分修正，不能用旧胜率阻止当前方向切换。"/>
         <Setting title="风险" value="10%组合 / 6.5%同向" text={data?.boundaries.risk??"读取中"}/>
         <Setting title="实盘" value="同一持久化事件" text="模拟事件提交成功后立即唤醒event-driven LIVE；过期事件不补开，Gate是成交与账户唯一真相。"/>
@@ -138,7 +139,7 @@ function OpportunityGrid({rows,details=false}:{rows:NonNullable<View["opportunit
   if(!rows.length)return <Empty title="当前没有有效5分钟候选" text="系统继续扫描30个市场；这不会停止已有持仓保护。"/>;
   return <div className="fr-scoreboard">{rows.map((o,index)=><details className={`fr-score-row ${o.eligible?"is-eligible":""}`} key={o.id} open={false}>
     <summary><span className="fr-score-rank">#{index+1}</span><span className="fr-score-value">{fmt(o.score,0)}</span><span className="fr-score-symbol"><b>{o.symbol.replace("_"," / ")}</b><small>{o.side==="LONG"?"做多":"做空"} · {modeName(o.mode)}</small></span>
-      <span><small>方向</small><b>{fmt(o.directionStrength,0)}</b></span><span><small>净空间</small><b>{fmt(o.netRemainingSpaceRate*100,2)}%</b></span><span><small>空间/回调</small><b>{fmt(o.edgeRatio,2)}×</b></span><em>{o.eligible?(o.premium?"高级":"可参与"):"观察"}</em></summary>
+      <span><small>方向</small><b>{fmt(o.directionStrength,0)}</b></span><span><small>净空间</small><b>{fmt(o.netRemainingSpaceRate*100,2)}%</b></span><span><small>空间/回调</small><b>{fmt(o.edgeRatio,2)}×</b></span><em>{o.eligible?(o.premium?"高级":o.reserve?"补位":"主机会"):"观察"}</em></summary>
     {details&&<div className="fr-score-details"><div><h3>质量</h3><div className="fr-score-detail-grid"><Metric label="路径效率" value={fmt(o.pathEfficiency,0)}/><Metric label="动量持续" value={fmt(o.momentumPersistence,0)}/><Metric label="位置" value={fmt(o.positionScore,0)}/><Metric label="盘口" value={fmt(o.executionScore,0)}/></div></div>
       <div><h3>空间与风险</h3><div className="fr-score-detail-grid"><Metric label="总剩余空间" value={`${fmt(o.grossRemainingSpaceRate*100,2)}%`}/><Metric label="回调风险" value={`${fmt(o.pullbackRiskRate*100,2)}%`}/><Metric label="预计持有" value={`${fmt(o.expectedHoldMinutes,0)} 分钟`}/><Metric label="市场适配" value={fmt(o.marketFit,0)}/></div></div><p>{o.reason}</p></div>}
   </details>)}</div>;
@@ -150,7 +151,7 @@ function TradeList({trades,now,empty,compact=false}:{trades:Trade[];now:number;e
 function TradeCard({trade:t,now}:{trade:Trade;now:number}){
   const open=t.status==="OPEN",d=t.side==="LONG"?1:-1,px=open?t.lastPrice:t.exitPrice??t.lastPrice;
   const pnl=open?d*t.quantity*(px-t.entryPrice)-t.entryFee-t.quantity*px*.0007:t.netPnl??0,rate=t.notional>0?pnl/t.notional:0,ctx=t.entryContext;
-  return <details className="fr-position-row"><summary><span className="fr-position-primary"><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {ctx?modeName(ctx.mode):"兼容持仓"} · {fmt(t.leverage,0)}×</small>
+  return <details className="fr-position-row"><summary><span className="fr-position-primary"><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {ctx?(ctx.reserve?"补位 · ":"")+modeName(ctx.mode):"兼容持仓"} · {fmt(t.leverage,0)}×</small>
     <b className={pnl>=0?"fr-positive":"fr-negative"}>{signed(pnl)} U</b><small>{signed(rate*100,3)}% · {duration(t.openedAt,t.closedAt,now)}</small></span>
     <span className="fr-position-entry"><b>{open?`持仓评分 ${fmt(t.holdScore,0)}`:exitName(t.exitReason)}</b><small>MFE {fmt(t.favorable*100,2)}% · MAE {fmt(t.adverse*100,2)}% · 锁利 {fmt((t.profitFloorRate??0)*100,2)}%</small>
       <small>{ctx?`入场评分 ${fmt(ctx.entryScore,0)} · 净空间 ${fmt(ctx.remainingSpaceRate*100,2)}% · 首次浮赢 ${t.firstProfitAt?time(t.firstProfitAt):"尚未"}`:"历史兼容持仓"}</small></span></summary>
