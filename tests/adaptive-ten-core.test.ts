@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {ADAPTIVE_ENGINE_VERSION,ADAPTIVE_REALTIME_POSITION_CAP,ADAPTIVE_TARGET_POSITIONS,advanceForward,forwardSummary,
   initialForward,normalizeForward,type Candle,type Contract,type Quote} from "../lib/forward-relations.ts";
+import {restoreForwardProtectionCheckpoint} from "../lib/forward-protection-checkpoint.ts";
 
 const START=Date.parse("2026-09-24T00:00:00Z")/1000;
 const path=(step=.0015,bars=60):Candle[]=>{const out:Candle[]=[];let prev=100;
@@ -61,4 +62,29 @@ test("forward summary exposes the actual ten-seat engine instead of retired stra
   const s=initialForward(1000),view=forwardSummary(s,{},2000);
   assert.equal(view.engineVersion,ADAPTIVE_ENGINE_VERSION);assert.equal(view.targetPositions,10);assert.equal(view.realtimePositionCap,11);
   assert.match(view.boundaries.grammar,/5m方向—空间/);assert.match(view.boundaries.sampleMeaning,/实时市场方向优先/);
+});
+
+
+test("retired protection overlay is inert when the current PAPER account has no open risk",()=>{
+  const s=initialForward(1000);s.storage={persistedAt:900,error:null};
+  const legacy={version:"forward-protection-checkpoint-v1",startedAt:s.startedAt,baseRevision:s.revision,basePersistedAt:900,
+    quoteCycleAt:1100,peakEquity:1000,maxDrawdown:0,positions:[]};
+  assert.deepEqual(restoreForwardProtectionCheckpoint(s,legacy),s);
+});
+
+test("retired protection overlay migrates only tighter protection and observed path for an open trade",()=>{
+  const p=path(.0015),now=(p.at(-1)!.time+300)*1000+1000,price=p.at(-1)!.close;
+  let s=initialForward(now-60_000);
+  s=advanceForward({state:s,now,paths:{BTC_USDT:p},quotes:{BTC_USDT:quote(price,now)},contracts:{BTC_USDT:contract},
+    entrySymbols:["BTC_USDT"]}).state;
+  assert.equal(s.positions.length,1);s.storage={persistedAt:now,error:null};
+  const t=s.positions[0]!,stop=t.entryPrice*1.004,quoteAt=now+1000;
+  const legacy={version:"forward-protection-checkpoint-v1",startedAt:s.startedAt,baseRevision:s.revision,basePersistedAt:now,
+    quoteCycleAt:quoteAt,peakEquity:s.peakEquity+1,maxDrawdown:s.maxDrawdown,positions:[{
+      id:t.id,openedAt:t.openedAt,favorable:.02,adverse:.004,lastPrice:t.entryPrice*1.01,lastQuoteAt:quoteAt,
+      stopPrice:stop,relationFailureBars:0,lastRelationBar:quoteAt,profitProtection:{floorRate:.003},
+    }]};
+  const n=restoreForwardProtectionCheckpoint(s,legacy);
+  assert.equal(n.positions[0]!.stopPrice,stop);assert.equal(n.positions[0]!.favorable,.02);
+  assert.ok((n.positions[0]!.profitFloorRate??0)>=.004);assert.equal(n.positions[0]!.entryContext?.version,"adaptive-ten-entry-v1");
 });
