@@ -32,7 +32,8 @@ export default function PaperAccountReset({auth,runtime,onReset}:{auth:AuthSessi
 
   return <section className="fr-section" data-testid="owner-paper-reset">
     <div className="fr-section-head"><div><small>主账户专属</small><h2>模拟账户重置</h2></div><b>{runtime?.forward?.initialEquity===1000?"1000U基准":"账户维护"}</b></div>
-    <p className="fr-note">只重置当前主模拟账户。已有模拟持仓会先按新鲜可执行盘口归档，然后建立新的1000U账户纪元；旧账户历史仍保留在归档存储中，但不会接到新账户净值曲线。</p>\n    <p className="fr-note">Forward Relation 的成熟市场样本、待成熟样本、关系规则和生命周期状态会继续保留；重置账户不再触发策略冷启动。</p>
+    <p className="fr-note">只重置当前主模拟账户。已有模拟持仓会先按新鲜可执行盘口归档，然后建立新的1000U账户纪元；旧账户历史仍保留在归档存储中，但不会接到新账户净值曲线。</p>
+    <p className="fr-note">Forward Relation 的成熟市场样本、待成熟样本、关系规则和生命周期状态会继续保留；重置账户不再触发策略冷启动。</p>
     <p className="fr-note">不会修改交易策略、30市场扫描、Gate API、会员账户或LIVE开关。服务器只在实盘关闭且没有本系统实盘持仓/待成交订单时允许执行。</p>
     {error&&<div className="fr-error" role="alert"><b>重置未完成</b><p>{error}</p></div>}
     {notice&&<div className="fr-notice" role="status">{notice}</div>}
