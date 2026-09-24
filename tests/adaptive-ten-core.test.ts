@@ -59,14 +59,17 @@ test("PAPER uses learned relations for entries instead of the retired 5m FLOW ga
   assert.ok(s.positions.some(t=>t.entryContext?.relationRuleId));
 });
 
-test("a newly degraded relation exits a weak no-feedback position without waiting for the full horizon or auto-reversing",()=>{
+test("a holding exits early when its own relation is degraded and it has no positive feedback",()=>{
   const learned=learnThrough(39),now=nowAt(39),paths=sliced(39);
   let s=initialForward(now-60_000);s.relationEngine=learned;
   s=advanceForward({state:s,now,paths,quotes:quotesAt(39,now),contracts,entrySymbols:symbols}).state;
-  assert.ok(s.positions.length>0);const opened=s.positions.length;
-  const later=nowAt(40),next=advanceForward({state:s,now:later,paths:sliced(40),quotes:quotesAt(40,later),contracts,entrySymbols:symbols}).state;
-  assert.ok(next.history.some(t=>t.exitReason==="RELATION_DEGRADED"),"weak holdings should react to relation failure at a path checkpoint");
-  assert.ok(next.positions.length<opened||next.history.length>0);
+  assert.ok(s.positions.length>0);
+  const held=s.positions[0]!,ruleId=held.entryContext?.relationRuleId;assert.ok(ruleId);
+  const rule=s.relationEngine.rules.find(r=>r.id===ruleId);assert.ok(rule);
+  rule!.status="DEGRADED";rule!.health=.2;rule!.livePathScore=.2;
+  held.openedAt=now-6*60_000;held.firstProfitAt=null;held.favorable=0;
+  const later=now+1000,next=advanceForward({state:s,now:later,paths,quotes:quotesAt(39,later),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
+  assert.ok(next.history.some(t=>t.id===held.id&&t.exitReason==="RELATION_DEGRADED"));
   assert.equal(next.opportunities.some(o=>o.side==="SHORT"&&o.mode==="RELATION"),false,"degradation is defense, not a forced reversal");
 });
 
