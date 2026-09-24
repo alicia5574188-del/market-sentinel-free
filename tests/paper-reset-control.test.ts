@@ -13,9 +13,11 @@ test("owner PAPER reset remains isolated, confirmed and unavailable to members",
   assert.match(ownerAction,/ownerAuthenticated\(request, env\)/);
   assert.match(ownerAction,/RESET_PAPER/);
   assert.match(resetMethod,/runtime\.live\.requestedEnabled \|\| this\.runtime\.live\.operational/);
-  assert.match(resetMethod,/resetMultiTurnPaperAccount\(now\)/);
+  assert.match(resetMethod,/resetForwardAccountPreservingLearning\(previous,now\)/);
   assert.match(worker,/prepareForwardReset\(previous,closed,next,now\)/);
-  assert.match(worker,/initialMultiTurnForward\(now\)/);
+  assert.doesNotMatch(resetMethod,/initialForward\(now\)/);
+  assert.match(control,/学习样本和关系状态已保留/);
+  assert.match(control,/市场学习样本会保留/);
   assert.match(control,/auth\.username==="owner"/);
   assert.match(control,/!auth\.memberId/);
   assert.match(control,/auth\.role!=="member"/);
