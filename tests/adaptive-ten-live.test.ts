@@ -34,7 +34,8 @@ test("owner enable fences old PAPER positions and admits only new events",()=>{
   const late=startLiveSession(now+1000,s);
   assert.equal(sourceAfterEnable(trade,late,s.startedAt),false);
   const before=initialForward(now-10_000),early=startLiveSession(now-5000,before);
-  assert.equal(sourceAfterEnable(trade,early,before.startedAt),false,"different PAPER generation must not be mixed");
+  assert.notEqual(before.startedAt,s.startedAt);
+  assert.equal(sourceAfterEnable(trade,early,s.startedAt),false,"different PAPER generation must not be mixed");
   const sameGeneration=startLiveSession(trade.openedAt-1,{startedAt:s.startedAt,positions:[]});
   assert.equal(sourceAfterEnable(trade,sameGeneration,s.startedAt),true);
 });
