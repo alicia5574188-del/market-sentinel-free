@@ -1085,11 +1085,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private forwardHealth() {
     const s=this.forwardState;
     return {version:FORWARD_VERSION,policyVersion:s?.policyVersion??null,strategyAuthorityVersion:s?.strategyAuthorityVersion??null,
-      executionVersion:s?.executionVersion??null,regionVersion:s?.regionVersion??null,liveEligible:false,
+      executionVersion:s?.executionVersion??null,regionVersion:s?.regionVersion??null,regionLaunchVersion:s?.regionLaunchVersion??null,liveEligible:false,
       startedAt:s?.startedAt??null,initialEquity:s?.initialEquity??null,balance:s?.balance??null,
       lastCycleAt:s?.lastCycleAt??null,resolved:s?.resolved??0,openCount:s?.positions.length??0,
+      // anchorFlowCount stays visible only as an upgrade-drain diagnostic. It
+      // must fall to zero after the first completed data cycle because it has no
+      // new-entry authority.
       anchorFlowCount:Object.values(s?.anchorFlows??{}).filter(row=>row.phase!=="FAILED"&&row.phase!=="CONSUMED").length,
-      executableEventCount:(s?.regionSignals??[]).filter(row=>row.expiresAt>Date.now()).length,
+      regionLaunchCount:Object.values(s?.regionLaunches??{}).filter(row=>["ARMED","IGNITION","READY"].includes(row.phase)).length,
+      executableEventCount:(s?.regionLaunchSignals??[]).filter(row=>row.expiresAt>Date.now()).length,
       exitPolicyVersion:s?.exitPolicyUpgrade?.policy??null,exitPolicyActivatedAt:s?.exitPolicyUpgrade?.at??null,
       timelyExitOpenCount:s?.positions.filter(t=>!!t.exitControl&&t.exitControl.policy===s.exitPolicyUpgrade?.policy).length??0,
       inheritedExitOpenCount:s?.positions.filter(t=>!t.exitControl).length??0,
