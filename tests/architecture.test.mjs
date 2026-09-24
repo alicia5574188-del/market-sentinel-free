@@ -8,14 +8,21 @@ test("Forward Relation 2.0 is the only PAPER strategy authority and retired stra
   const core=await read("lib/forward-relations.ts");
   assert.match(core,/ADAPTIVE_ENGINE_VERSION=FORWARD_RELATION_V2_VERSION/);
   assert.match(core,/from "\.\/forward-relation-v2\.ts"/);
-  assert.match(core,/ADAPTIVE_TARGET_POSITIONS=10/);
-  assert.match(core,/ADAPTIVE_REALTIME_POSITION_CAP=11/);
+  assert.doesNotMatch(core,/ADAPTIVE_TARGET_POSITIONS|ADAPTIVE_REALTIME_POSITION_CAP/);
+  assert.match(core,/FORWARD_EXECUTION_BBO_CAP=30/);
+  assert.match(core,/FORWARD_MINUTE_CONFIRMATION_CAP=11/);
   for(const retired of["multi-turn","anchor-flow","region-launch","region-lifecycle","strategy-arena","regime-portfolio","all-regime-engine"])
     assert.doesNotMatch(core,new RegExp(`from .*\\b${retired.replace(/[.*+?^$()|[\\]{}]/g,"\\$&")}`));
   for(const mode of["RELATION","BREAKOUT","RETEST","FAILED_BREAKOUT","RANGE"])assert.match(core,new RegExp(`"${mode}"`));
   assert.match(core,/ROTATION_GAP=10/);
   assert.match(core,/TOTAL_RISK_RATE=\.10/);
   assert.match(core,/SIDE_RISK_RATE=\.065/);
+  const minute=core.slice(core.indexOf("export function forwardUrgentMinuteSymbols"),core.indexOf("export function forwardWatchSymbols"));
+  assert.doesNotMatch(minute,/s\.positions/);
+  assert.match(minute,/o\.premium&&o\.eligible/);
+  const rotation=core.slice(core.indexOf("function rotateIfNeeded"),core.indexOf("function fillSeats"));
+  assert.match(rotation,/sideFull/);assert.match(rotation,/existingRisk\(s,candidate\.side\)/);
+  assert.match(rotation,/structuredClone\(s\)/);
 });
 
 test("runtime alarm uses the slim market path and no strategy cutover can reset PAPER",async()=>{
@@ -61,12 +68,12 @@ test("LIVE, member, auth and credential infrastructure remain isolated from stra
   for(const source of[live,auth,vault])assert.doesNotMatch(source,/forward-relation-v2/);
 });
 
-test("operator UI and release config expose Forward Relation 2.0 while keeping 30 scan and 11 realtime capacity",async()=>{
+test("operator UI and release config expose Forward Relation 2.0 with risk-based holdings and 30 execution BBO capacity",async()=>{
   const [dashboard,worker,workflow,wrangler]=await Promise.all([
     read("app/forward-dashboard.tsx"),read("worker/index-clean.ts"),read(".github/workflows/sentinel-v2-ci.yml"),read("wrangler.jsonc"),
   ]);
   assert.match(dashboard,/哨兵 · Forward Relation 2\.0/);assert.match(dashboard,/反向独立确认/);
-  assert.match(worker,/SCAN_UNIVERSE_SIZE = 30/);assert.match(worker,/ADAPTIVE_REALTIME_POSITION_CAP/);
+  assert.match(worker,/SCAN_UNIVERSE_SIZE = 30/);assert.match(worker,/FORWARD_EXECUTION_BBO_CAP/);
   assert.match(workflow,/forward-relation-v2/);
   assert.match(wrangler,/MarketStream/);assert.match(wrangler,/MemberExecutor/);assert.match(wrangler,/MemberDirectory/);
 });

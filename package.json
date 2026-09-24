@@ -8,7 +8,7 @@
   "scripts": {
     "install:ci": "bash scripts/install-ci.sh",
     "research:aggregate-gate": "node scripts/aggregate-gate-history.mjs",
-    "test:direct": "node --experimental-strip-types --test tests/adaptive-ten-core.test.ts tests/market-data-hub.test.ts tests/gate-market.test.ts tests/gate-live.test.ts tests/gate-stream.test.ts tests/live-read-resilience.test.ts tests/credential-vault.test.ts tests/owner-auth.test.ts",
+    "test:direct": "node --experimental-strip-types --test tests/adaptive-ten-core.test.ts tests/paper-reset-control.test.ts tests/market-data-hub.test.ts tests/gate-market.test.ts tests/gate-live.test.ts tests/gate-stream.test.ts tests/live-read-resilience.test.ts tests/credential-vault.test.ts tests/owner-auth.test.ts",
     "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vite",
     "build": "bash scripts/build-verified.sh",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {ADAPTIVE_ENGINE_VERSION,ADAPTIVE_TARGET_POSITIONS,advanceForward,forwardSummary,initialForward,normalizeForward,
-  type Candle,type Contract,type Quote} from "../lib/forward-relations.ts";
+import {ADAPTIVE_ENGINE_VERSION,advanceForward,forwardSummary,initialForward,normalizeForward,resetForwardAccountPreservingLearning,
+  type Candle,type Contract,type Opportunity,type Quote} from "../lib/forward-relations.ts";
 import {FORWARD_RELATION_V2_VERSION,advanceRelationEngine,initialRelationEngine,relationCandidates} from "../lib/forward-relation-v2.ts";
 
 const START=Date.parse("2026-09-24T00:00:00Z")/1000;
@@ -57,10 +57,25 @@ test("PAPER uses learned relations for entries instead of the retired 5m FLOW ga
   const learned=learnThrough(39),now=nowAt(39),paths=sliced(39),quotes=quotesAt(39,now);
   let s=initialForward(now-60_000);s.relationEngine=learned;
   s=advanceForward({state:s,now,paths,quotes,contracts,entrySymbols:symbols}).state;
-  assert.ok(s.positions.length>0);assert.ok(s.positions.length<=ADAPTIVE_TARGET_POSITIONS);
+  assert.ok(s.positions.length>0);
   assert.ok(s.opportunities.some(o=>o.mode==="RELATION"&&o.eligible));
   assert.ok(s.positions.every(t=>t.entryContext?.mode==="RELATION"||t.entryContext?.regionId));
   assert.ok(s.positions.some(t=>t.entryContext?.relationRuleId));
+});
+
+test("position count is not capped at ten; risk and margin remain the limiting authorities",()=>{
+  const now=nowAt(39),paths=sliced(39);let s=initialForward(now-60_000);
+  s.lastCandleAt=now;s.opportunities=symbols.map((symbol,i)=>({id:`manual-${symbol}`,symbol,side:i%2?"SHORT":"LONG",mode:"RELATION",premium:false,reserve:true,
+    score:70,eligible:true,completedAt:now-1000,expiresAt:now+60_000,price:full[symbol]![39]!.close,stopPrice:full[symbol]![39]!.close*(i%2?1.003:.997),
+    targetPrice:full[symbol]![39]!.close*(i%2?.994:1.006),stopRate:.003,targetRate:.006,directionStrength:60,pathEfficiency:60,momentumPersistence:60,
+    positionScore:70,spaceScore:70,executionScore:90,grossRemainingSpaceRate:.006,netRemainingSpaceRate:.0041,pullbackRiskRate:.003,edgeRatio:1.36,
+    expectedHoldMinutes:60,marketFit:70,regionId:null,regionQuality:null,reason:"risk-limited fixture",relationRuleId:`r-${symbol}`,relationStatus:"ACTIVE",relationHorizon:60,
+    relationHealth:.25,riskScale:.25} satisfies Opportunity));
+  for(let i=0;i<4;i++)s=advanceForward({state:s,now:now+i*1000,paths,quotes:quotesAt(39,now+i*1000),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
+  assert.equal(s.positions.length,12,"legacy ten-seat cap must not stop otherwise risk-valid positions");
+  const equity=forwardSummary(s,quotesAt(39,now+4000),now+4000).equity;
+  assert.ok(s.positions.reduce((n,t)=>n+t.plannedRisk,0)<=equity*.10+1e-6);
+  assert.ok(s.positions.reduce((n,t)=>n+t.margin,0)<=equity*.75+1e-6);
 });
 
 test("a holding exits early when its own relation is degraded and it has no positive feedback",()=>{
@@ -95,9 +110,25 @@ test("strategy migration preserves account identity and financial history while 
   assert.equal(n.relationEngine.startedAt,5000);assert.equal(n.relationEngine.measured,0);
 });
 
+
+test("manual PAPER reset preserves causal learning while resetting the financial account",()=>{
+  const learned=learnThrough(39),now=nowAt(39),s=initialForward(now-60_000);s.relationEngine=learned;
+  s.sampleMemory["RELATION:MIXED:LONG"]={count:4,emaNetRate:.003,emaMfeRate:.008,emaMaeRate:.002,updatedAt:now};
+  s.balance=812.34;s.resolved=9;s.wins=4;s.turnover=5432;
+  const n=resetForwardAccountPreservingLearning(s,now+1000);
+  assert.equal(n.balance,1000);assert.equal(n.initialEquity,1000);assert.equal(n.resolved,0);assert.equal(n.wins,0);assert.equal(n.turnover,0);
+  assert.equal(n.positions.length,0);assert.equal(n.history.length,0);
+  assert.equal(n.relationEngine.samples.length,learned.samples.length);assert.equal(n.relationEngine.rules.length,learned.rules.length);
+  assert.equal(n.relationEngine.observations,learned.observations);assert.equal(n.relationEngine.measured,learned.measured);
+  assert.deepEqual(n.relationEngine.rules,learned.rules);assert.deepEqual(n.relationEngine.pending,learned.pending);
+  assert.deepEqual(n.sampleMemory,s.sampleMemory);
+  assert.match(n.latestReason,/保留/);
+});
+
 test("summary exposes relation lifecycle and the no-forced-reversal boundary",()=>{
   const s=initialForward(1000),view=forwardSummary(s,{},2000);
-  assert.equal(view.engineVersion,FORWARD_RELATION_V2_VERSION);assert.equal(view.targetPositions,10);assert.equal(view.realtimePositionCap,11);
+  assert.equal(view.engineVersion,FORWARD_RELATION_V2_VERSION);assert.equal(view.targetPositions,null);assert.equal(view.positionLimit,null);
+  assert.equal(view.executionBboCapacity,30);assert.equal(view.minuteConfirmationCapacity,11);
   assert.match(view.boundaries.grammar,/15\/60\/180/);assert.match(view.boundaries.sampleMeaning,/旧方向失效不会自动生成反向订单/);
   assert.equal(view.relationEngine.version,FORWARD_RELATION_V2_VERSION);
 });

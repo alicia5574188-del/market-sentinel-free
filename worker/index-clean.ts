@@ -28,7 +28,7 @@ import { type EventEntryAssessment, type RadarCandidate } from "../lib/market-ra
 import { initialMarketRegimes, marketRegimeSummary, normalizeMarketRegimes, residentCandleCandidate,
   type MarketRegimeCandidate, type MarketRegimeState, type ResidentCandleStructure } from "../lib/market-regime.ts";
 import { advanceStrategyArena, initialStrategyArena, normalizeStrategyArena, observeStrategyArena,
-  ARENA_FRICTION_RATE, MAX_PORTFOLIO_POSITIONS, PORTFOLIO_REALTIME_CAPACITY, resetStrategyArenaAccount,
+  ARENA_FRICTION_RATE, MAX_PORTFOLIO_POSITIONS, resetStrategyArenaAccount,
   type StrategyArenaState } from "../lib/strategy-arena.ts";
 import { ALL_REGIME_ENGINE_VERSION, allRegimePaperApproved } from "../lib/all-regime-engine.ts";
 import { allRegimePaperApproved as previousAllRegimePaperApproved } from "../lib/previous-all-regime-engine.ts";
@@ -39,9 +39,9 @@ import { evaluateRegimePortfolio, initialRegimePortfolio, normalizeRegimePortfol
   REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE, resetRegimePortfolio,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
-import { ADAPTIVE_ENGINE_VERSION, ADAPTIVE_REALTIME_POSITION_CAP, ADAPTIVE_TARGET_POSITIONS, advanceForward, closeForwardForReset,
+import { ADAPTIVE_ENGINE_VERSION, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONFIRMATION_CAP, advanceForward, closeForwardForReset,
   forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols, forwardUrgentQuoteSymbols, forwardWatchSymbols,
-  initialForward, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
+  resetForwardAccountPreservingLearning, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
 import { selectAnchorOpportunityUniverse } from "../lib/multi-turn-universe.ts";
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, prepareForwardReset,
   FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE } from "../lib/forward-store.ts";
@@ -921,7 +921,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     // that are actually eligible. Analysis-only markets stay on Bybit/Binance.
     const protectedSymbols=[...this.currentAuthorityProtectionSymbols()];
     const watched=this.forwardState?forwardWatchSymbols(this.forwardState,now,this.runtime.liquidUniverse):[];
-    const next=[...new Set([...protectedSymbols,...watched])].slice(0,ADAPTIVE_REALTIME_POSITION_CAP);
+    const next=[...new Set([...protectedSymbols,...watched])].slice(0,FORWARD_EXECUTION_BBO_CAP);
     if(next.length||this.runtime.symbols.length)this.applyRealtimeSymbols(next);
   }
 
@@ -968,7 +968,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       strategyAuthorityVersion:s?.strategyAuthorityVersion??null,executionVersion:s?.executionVersion??null,
       regionVersion:s?.regionVersion??null,regionLaunchVersion:s?.regionLaunchVersion??null,liveEligible:false,
       startedAt:s?.startedAt??null,initialEquity:s?.initialEquity??null,balance:s?.balance??null,lastCycleAt:s?.lastCycleAt??null,
-      resolved:s?.resolved??0,openCount:s?.positions.length??0,targetPositionCount:ADAPTIVE_TARGET_POSITIONS,
+      resolved:s?.resolved??0,openCount:s?.positions.length??0,targetPositionCount:null,positionLimit:null,
+      executionBboCapacity:FORWARD_EXECUTION_BBO_CAP,minuteConfirmationCapacity:FORWARD_MINUTE_CONFIRMATION_CAP,
       participationCandidateCount:s?.opportunities.length??0,participationEligibleCount:eligible.length,
       premiumOpportunityCount:eligible.filter(row=>row.premium).length,regionCount:Object.keys(s?.regions??{}).length,
       storage:{persistedAt:s?.storage.persistedAt??0,error:this.forwardError}};
@@ -1675,7 +1676,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if(!freshQuote(quote,now))throw new Error(`${position.symbol} 行情不新鲜，不能用旧价格重置模拟持仓`);
     }
     const closed=closeForwardForReset(previous,quotes,now);
-    const next=initialForward(now);
+    const next=resetForwardAccountPreservingLearning(previous,now);
     const prepared=await prepareForwardReset(previous,closed,next,now);
     const saved=await this.ctx.storage.get<{writeBudget?:unknown}>(FORWARD_PROTECTION_STORAGE);
     const protection=prepared.entries[FORWARD_PROTECTION_STORAGE] as Record<string,unknown>|undefined;
@@ -2742,7 +2743,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const actionableMarkets=this.runtime.symbols.filter(symbol=>this.symbolEntryReady(symbol,now)).length;
     const missingProtectedMarkets=[...protectedSymbols].filter(symbol=>!this.runtime.symbols.includes(symbol)
       ||!this.symbolManagementReady(symbol,now));
-    return{capacity:ADAPTIVE_REALTIME_POSITION_CAP,actionableMarkets,
+    return{capacity:FORWARD_EXECUTION_BBO_CAP,actionableMarkets,
       warmingMarkets:Math.max(0,this.runtime.symbols.length-actionableMarkets),
       protectedMarkets:protectedSymbols.size,protectedMarketsReady:missingProtectedMarkets.length===0,missingProtectedMarkets};
   }
@@ -2752,7 +2753,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const urgentSymbols=this.forwardUrgentSymbols();
     // Realtime Gate data is a scarce execution resource, never a scanner.
     // Keep only actual exposure and currently executable candidates resident.
-    const next=[...new Set([...protectedSymbols,...urgentSymbols])].slice(0,ADAPTIVE_REALTIME_POSITION_CAP);
+    const next=[...new Set([...protectedSymbols,...urgentSymbols])].slice(0,FORWARD_EXECUTION_BBO_CAP);
     if(next.length!==this.runtime.symbols.length||next.some((symbol,index)=>symbol!==this.runtime.symbols[index]))
       this.applyRealtimeSymbols(next);
   }
@@ -2813,7 +2814,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.forwardMinuteCandles??={};this.forwardMinuteQuoteBars??={};this.forwardMinuteRetryAt??=new Map();
     const targetCompletedAt=Math.floor(now/60_000)*60_000;
     const urgent=this.forwardState?forwardUrgentMinuteSymbols(this.forwardState,this.runtime.liquidUniverse??[])
-      .slice(0,ADAPTIVE_REALTIME_POSITION_CAP):[];
+      .slice(0,FORWARD_MINUTE_CONFIRMATION_CAP):[];
     const due=urgent.filter(symbol=>{
       if((this.forwardMinuteRetryAt.get(symbol)??0)>now)return false;
       const last=Math.max(this.forwardMinuteCandles[symbol]?.at(-1)?.time??0,this.gateStream.path(symbol,"1m").at(-1)?.time??0);
@@ -3298,7 +3299,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           markets: this.runtime.symbols.length,
           scannedMarkets: this.runtime.radar.scanned,
           scanUniverse: SCAN_UNIVERSE_SIZE,
-          realtimeCapacity: PORTFOLIO_REALTIME_CAPACITY,
+          realtimeCapacity: FORWARD_EXECUTION_BBO_CAP, minuteConfirmationCapacity: FORWARD_MINUTE_CONFIRMATION_CAP,
           plannedDoWritesPerDay: PRIMARY_PLANNED_DO_ROWS,
           twoMemberReservedDoRowsPerDay: TWO_MEMBER_PLANNED_DO_ROWS,
           resourceModelScope:"reserved rows; retries, controls, other workloads, request traffic and duration not certified",
@@ -3357,7 +3358,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           capacityCertified: false,
           internalAnalysisP99RedlineMs: 25, topLevelCpuP99RedlineMs: 8, assumedRuntimePollSeconds: 10,
           plannedForegroundDoRequestsPerDay: 8_640, plannedCronWatchdogsPerDay: 1_440, plannedTotalDoRequestsPerDay: 53_280,
-          maxOpenPositions: null, realtimeCapacity: PORTFOLIO_REALTIME_CAPACITY, plannedMaxD1BilledWritesPerDay: 4_800 } });
+          maxOpenPositions: null, realtimeCapacity: FORWARD_EXECUTION_BBO_CAP, minuteConfirmationCapacity: FORWARD_MINUTE_CONFIRMATION_CAP, plannedMaxD1BilledWritesPerDay: 4_800 } });
     }
     if (path === "/live-history" && request.method === "GET") return json(await this.privateLiveHistory());
     if (path === "/owner-status" && request.method === "GET") {

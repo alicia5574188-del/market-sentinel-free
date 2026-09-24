@@ -11,8 +11,8 @@ import { FORWARD_RELATION_V2_VERSION, advanceRelationEngine, initialRelationEngi
  */
 export const FORWARD_VERSION="forward-relations-v1.0";
 export const ADAPTIVE_ENGINE_VERSION=FORWARD_RELATION_V2_VERSION;
-export const ADAPTIVE_TARGET_POSITIONS=10;
-export const ADAPTIVE_REALTIME_POSITION_CAP=11;
+export const FORWARD_EXECUTION_BBO_CAP=30;
+export const FORWARD_MINUTE_CONFIRMATION_CAP=11;
 export const BAR_MS=300_000;
 export const FEATURES=["5分钟方向","路径效率","剩余空间","位置质量","回调风险","1分钟确认","区域质量","入场后反馈"] as const;
 export const PAPER_COST={feeRate:.0007,slippageRate:.00025,fundingAllowancePerDay:.0002,
@@ -423,14 +423,23 @@ function rankedEligible(s:ForwardState,now:number){
     .sort((a,b)=>Number(!b.reserve)-Number(!a.reserve)||Number(b.premium)-Number(a.premium)||b.score-a.score);
 }
 function rotateIfNeeded(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,equity:number){
-  if(s.positions.length<ADAPTIVE_TARGET_POSITIONS||now-s.lastRotationAt<ROTATION_COOLDOWN_MS)return false;
+  if(now-s.lastRotationAt<ROTATION_COOLDOWN_MS)return false;
   const candidate=rankedEligible(s,now).find(o=>!o.reserve);if(!candidate)return false;
-  const weak=[...s.positions].sort((a,b)=>(a.holdScore??50)-(b.holdScore??50))[0];if(!weak)return false;
+  const totalRisk=existingRisk(s),totalMargin=s.positions.reduce((n,t)=>n+t.margin,0),sideRisk=existingRisk(s,candidate.side);
+  const totalFull=equity>0&&totalRisk>=equity*(TOTAL_RISK_RATE-.006),sideFull=equity>0&&sideRisk>=equity*(SIDE_RISK_RATE-.004),
+    marginFull=equity>0&&totalMargin>=equity*(TOTAL_MARGIN_RATE-.05);
+  if(!totalFull&&!sideFull&&!marginFull)return false;
+  const pool=sideFull?s.positions.filter(t=>t.side===candidate.side):s.positions;
+  const weak=[...pool].sort((a,b)=>(a.holdScore??50)-(b.holdScore??50))[0];if(!weak)return false;
   const weakScore=weak.holdScore??50;if(candidate.score<weakScore+ROTATION_GAP)return false;
   const qOld=quotes[weak.symbol],qNew=quotes[candidate.symbol],meta=contracts[candidate.symbol];
   if(!freshQuote(qOld,now)||!freshQuote(qNew,now)||qNew!.entryReady!==true||!meta)return false;
+  const probe=structuredClone(s),probeWeak=probe.positions.find(t=>t.id===weak.id);if(!probeWeak)return false;
+  closeTrade(probe,probeWeak,probeWeak.side==="LONG"?qOld!.bestBid:qOld!.bestAsk,now,"OPPORTUNITY_REPLACED");
+  probe.positions=probe.positions.filter(t=>t.id!==probeWeak.id);
+  if(openTrade(probe,candidate,qNew!,meta,now,equity))return false;
   closeTrade(s,weak,weak.side==="LONG"?qOld!.bestBid:qOld!.bestAsk,now,"OPPORTUNITY_REPLACED");s.positions=s.positions.filter(t=>t.id!==weak.id);
-  const err=openTrade(s,candidate,qNew!,meta,now,equity);if(err)return false;
+  const err=openTrade(s,candidate,qNew!,meta,now,equity);if(err)throw new Error(`换仓预检通过但正式开仓失败：${err}`);
   s.lastRotationAt=now;event(s,now,"ROTATION",candidate.symbol,`${weak.symbol} → ${candidate.symbol}，优势差${(candidate.score-weakScore).toFixed(0)}分`);
   return true;
 }
@@ -442,7 +451,6 @@ function fillSeats(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<s
   s.entryDiagnostics={at:now,matched:eligible.length,opened:0,reasons:{}};
   let opened=0;const reject=(reason:string)=>{s.entryDiagnostics.reasons[reason]=(s.entryDiagnostics.reasons[reason]??0)+1;};
   for(const o of eligible){
-    const cap=o.premium?ADAPTIVE_REALTIME_POSITION_CAP:ADAPTIVE_TARGET_POSITIONS;if(s.positions.length>=cap)continue;
     if(opened>=3)break;const q=quotes[o.symbol],meta=contracts[o.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
     if(!meta){reject("等待合约规格");continue;}
     const last=s.lastExitAt[o.symbol]??0,lastSide=s.lastSide[o.symbol];
@@ -484,9 +492,9 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   const mark=equityMark(s,input.quotes,input.now);s.peakEquity=Math.max(s.peakEquity,mark.equity);s.maxDrawdown=Math.max(s.maxDrawdown,1-mark.equity/Math.max(s.peakEquity,1));
   updateDaily(s,input.now,mark.equity);rotateIfNeeded(s,input.quotes,input.contracts,input.now,mark.equity);const opened=fillSeats(s,input.quotes,input.contracts,input.now,mark.equity);
   const d=s.relationEngine.diagnostics;
-  s.latestReason=s.relationEngine.rules.length===0?d.warmup:s.positions.length>=ADAPTIVE_TARGET_POSITIONS
-    ?`Forward Relation 2.0 当前${s.positions.length}席；ACTIVE ${d.active} · 承压 ${d.pressured} · 降级 ${d.degraded}，继续让更健康关系替换弱仓。`
-    :`Forward Relation 2.0 当前${s.positions.length}/${ADAPTIVE_TARGET_POSITIONS}席；${s.opportunities.filter(o=>o.eligible).length}个可参与候选，关系风险持续迁移。`;
+  const totalRisk=existingRisk(s),riskUse=mark.equity>0?100*totalRisk/mark.equity:0;
+  s.latestReason=s.relationEngine.rules.length===0?d.warmup
+    :`Forward Relation 2.0 当前${s.positions.length}笔持仓；${s.opportunities.filter(o=>o.eligible).length}个可参与候选；计划风险已用${riskUse.toFixed(1)}%。ACTIVE ${d.active} · 承压 ${d.pressured} · 降级 ${d.degraded}。`;
   if(opened)s.latestReason+=` 本轮新开${opened}笔。`;
   const after=JSON.stringify({p:s.positions.map(t=>[t.id,t.status,t.stopPrice]),h:s.history.length,b:s.balance,r:s.revision});
   return{state:s,changed:before!==after||dataDue,protectionChanged:input.state.positions.some(t=>s.positions.find(n=>n.id===t.id)?.stopPrice!==t.stopPrice)};
@@ -494,6 +502,16 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
 export function closeForwardForReset(state:ForwardState,quotes:Record<string,Quote>,now:number){
   const s=normalizeForward(structuredClone(state),now);for(const t of [...s.positions]){const q=quotes[t.symbol],px=freshQuote(q,now)?(t.side==="LONG"?q!.bestBid:q!.bestAsk):t.lastPrice;closeTrade(s,t,px,now,"ACCOUNT_RESET");}
   s.positions=[];return s;
+}
+export function resetForwardAccountPreservingLearning(previous:ForwardState,now:number){
+  const prior=normalizeForward(structuredClone(previous),now),next=initialForward(now);
+  next.relationEngine=structuredClone(prior.relationEngine);
+  next.sampleMemory=structuredClone(prior.sampleMemory);
+  next.observations=next.relationEngine.observations;next.measured=next.relationEngine.measured;next.invalidated=next.relationEngine.invalidated;
+  next.latestReason=next.relationEngine.rules.length
+    ?`模拟账户已重置为1000U；保留${next.relationEngine.samples.length}份成熟市场反应和${next.relationEngine.rules.length}条关系，继续学习与交易。`
+    :`模拟账户已重置为1000U；已保留关系学习进度，继续积累真实市场反应。`;
+  return next;
 }
 export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols?:Iterable<string>){
   const allowed=entrySymbols?new Set(entrySymbols):null,keep=(x:string)=>!allowed||allowed.has(x);
@@ -505,12 +523,15 @@ export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols
 export function forwardUrgentMinuteSymbols(s:ForwardState,entrySymbols?:Iterable<string>){
   const allowed=entrySymbols?new Set(entrySymbols):null,keep=(x:string)=>!allowed||allowed.has(x);
   const relationSymbols=new Set(s.opportunities.filter(o=>o.eligible&&keep(o.symbol)).map(o=>o.symbol));
-  return[...new Set([...s.positions.map(t=>t.symbol),...s.opportunities.filter(o=>o.premium&&o.eligible&&keep(o.symbol)).map(o=>o.symbol),
+  // 1m is an entry-confirmation resource, not a holding-management resource.
+  // Open positions use executable BBO + 5m relation state, so they must not
+  // consume the bounded 1m lane when position count grows beyond eleven.
+  return[...new Set([...s.opportunities.filter(o=>o.premium&&o.eligible&&keep(o.symbol)).map(o=>o.symbol),
     ...Object.values(s.regions).filter(r=>keep(r.symbol)&&relationSymbols.has(r.symbol)&&r.quality>=55)
       .sort((a,b)=>b.quality-a.quality).slice(0,8).map(r=>r.symbol)])];
 }
 export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iterable<string>){
-  return forwardUrgentQuoteSymbols(s,now,entrySymbols).slice(0,ADAPTIVE_REALTIME_POSITION_CAP);
+  return forwardUrgentQuoteSymbols(s,now,entrySymbols).slice(0,FORWARD_EXECUTION_BBO_CAP);
 }
 export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:number){
   const mark=equityMark(s,quotes,now),eligible=s.opportunities.filter(o=>o.eligible&&o.expiresAt>now),reserve=eligible.filter(o=>o.reserve),d=s.relationEngine.diagnostics;
@@ -526,12 +547,13 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
       rules:s.relationEngine.rules.map(r=>({id:r.id,horizon:r.horizon,side:r.side,status:r.status,health:r.health,longNet:r.longNet,
         recentNet:r.recentNet,livePathScore:r.livePathScore,environmentFit:r.environmentFit,scope:r.scope,reason:r.reason}))},
     marketCount:s.selectedSymbols.length,markets:s.selectedSymbols,latestReason:s.latestReason,entryDiagnostics:s.entryDiagnostics,
-    fitDiagnostics:s.fitDiagnostics,storage:s.storage,targetPositions:ADAPTIVE_TARGET_POSITIONS,realtimePositionCap:ADAPTIVE_REALTIME_POSITION_CAP,
-    seatCount:s.positions.length,eligibleCount:eligible.length,reserveCount:reserve.length,premiumCount:eligible.filter(o=>o.premium).length,
+    fitDiagnostics:s.fitDiagnostics,storage:s.storage,targetPositions:null,positionLimit:null,executionBboCapacity:FORWARD_EXECUTION_BBO_CAP,
+    minuteConfirmationCapacity:FORWARD_MINUTE_CONFIRMATION_CAP,seatCount:s.positions.length,eligibleCount:eligible.length,
+    reserveCount:reserve.length,premiumCount:eligible.filter(o=>o.premium).length,
     boundaries:{scope:"PAPER_AUTHORITY",grammar:"真实市场条件→15/60/180分钟成熟反应→关系生命周期；5/10/15/30/60/180分钟路径检查点只判断旧关系是否失效，不预测反向。",
       historyBackfill:false,sampleMeaning:"长期样本决定关系资格；近期成熟样本与进行中真实反应路径决定当前交易权。旧方向失效不会自动生成反向订单。",
       accounting:"模拟使用新鲜买卖价并计入手续费、滑点和资金费占位；同一持久化Trade事件供实盘执行。",
-      risk:"组合计划风险≤10%，同方向≤6.5%，保证金≤75%；ACTIVE正常竞争风险，PRESSURED/DEGRADED连续降权但不靠全局停单规避亏损。",
+      risk:"不设持仓席位数量上限；只受组合计划风险≤10%、同方向≤6.5%、保证金≤75%和单币一仓约束。ACTIVE正常竞争风险，PRESSURED/DEGRADED连续降权。",
       validation:"关系状态为ACTIVE/PRESSURED/DEGRADED/RECOVERING；反方向必须由自己的已成熟真实样本获得资格。",
       liquidation:"结构止损 + 无正向反馈 + 关系降级 + 独立反向机会 + MFE利润保护；关系恶化时优先退出未形成浮赢的弱仓，盈利仓先收紧保护。"},
     cost:PAPER_COST,nextCycleAt:s.lastCandleAt+BAR_MS};

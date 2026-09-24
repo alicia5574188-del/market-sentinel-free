@@ -1,7 +1,7 @@
 "use client";
 
 import {useEffect,useLayoutEffect,useRef,useState,type CSSProperties,type ReactNode} from "react";
-import {ADAPTIVE_TARGET_POSITIONS,type Trade,type forwardSummary} from "../lib/forward-relations.ts";
+import {type Trade,type forwardSummary} from "../lib/forward-relations.ts";
 import {recordWindows,archivePage} from "../lib/record-view.ts";
 import {ArchivePagination} from "./record-controls.tsx";
 import EquityCurve from "./equity-curve.tsx";
@@ -13,7 +13,7 @@ const fmt=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)
 const signed=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)?`${v>=0?"+":""}${fmt(v,d)}`:"—";
 const time=(v?:number|null)=>v?new Date(v).toLocaleString("zh-CN",{timeZone:"Asia/Vientiane",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}):"—";
 const duration=(start:number,end:number|null|undefined,now:number)=>{const m=Math.floor(Math.max(0,(end??now)-start)/60000);return m<1?"<1分钟":m>=60?`${Math.floor(m/60)}小时${m%60}分`:`${m}分钟`;};
-const modeName=(mode:string)=>({RELATION:"市场关系",BREAKOUT:"爆发突破",RETEST:"回踩重启",FAILED_BREAKOUT:"假突破反向",RANGE:"区域内部"}[mode]??mode);
+const modeName=(mode:string)=>({RELATION:"市场关系",BREAKOUT:"市场关系 · 突破执行",RETEST:"市场关系 · 回踩执行",FAILED_BREAKOUT:"市场关系 · 失败突破执行",RANGE:"市场关系 · 区域执行"}[mode]??mode);
 const exitName=(reason:string|null)=>reason?({STRUCTURE_STOP:"结构止损",PROFIT_GIVEBACK:"利润保护",MARKET_FLIP:"独立反向关系",RELATION_DEGRADED:"关系降级",NO_POSITIVE_FEEDBACK:"无正向反馈",TIME_DECAY:"持仓超时",OPPORTUNITY_REPLACED:"更优机会替换",ACCOUNT_RESET:"手动重置"}[reason]??reason):"—";
 
 export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,memberName,cacheScope="owner"}:{
@@ -43,22 +43,22 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
     reserve=eligible.filter(o=>o.reserve),ordinary=eligible.filter(o=>!o.premium&&!o.reserve);
   const blockers=Object.entries(data?.entryDiagnostics?.reasons??{}).sort((a,b)=>b[1]-a[1]),mainBlocker=blockers[0]?.[0]??"当前没有额外阻塞";
   const pulse=data?.marketPulse,relation=data?.relationEngine?.diagnostics,records=recordWindows(data?.history??[],t=>t.closedAt??0),archive=archivePage(records.archive,paperPage);
-  const paperMargin=positions.reduce((n,t)=>n+t.margin,0),elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
+  const paperMargin=positions.reduce((n,t)=>n+t.margin,0),plannedRisk=positions.reduce((n,t)=>n+t.plannedRisk,0),riskUse=data?.equity?plannedRisk/data.equity:0,elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
   const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice(8):statusLabel??(healthy?"正常":"行情恢复中");
   const nav:[Tab,string,string][]=[["overview","◉","总览"],["execution","⌘","执行"],["paper","⇄","模拟"],["live","◈","实盘"],["journal","≋","记录"],["settings","⊙","系统"]];
   return <main className="fr-app" style={fontVars as CSSProperties} data-ui-version="forward-relation-v2">
     <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · Forward Relation 2.0</b><small>CAUSAL RESPONSE · LIFECYCLE · RISK MIGRATION</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
-    <div className="fr-subhead"><span>Gate USDT 永续 · 30市场扫描 · 目标10仓 · 11实时槽</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
+    <div className="fr-subhead"><span>Gate USDT 永续 · 30市场扫描 · 无席位数量上限 · 30执行BBO</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
     {memberName&&<p className="fr-note">{memberName} · 共用同一策略事件源，实盘账户与API完全独立。</p>}
 
     {tab==="overview"&&<>
       <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">FORWARD RELATION 2.0</span><h1>{systemStatus==="正常"?"系统正在正常运行":`系统状态：${systemStatus}`}</h1>
         <p>{data?.latestReason??"正在读取交易核心。"}</p>
-        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>15/60/180m真实反应</span><span>六级路径检查点</span><span>10席位持续竞争</span><span>旧关系快速降权</span><span>反向独立确认</span></div></div>
+        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>15/60/180m真实反应</span><span>六级路径检查点</span><span>风险决定持仓数量</span><span>旧关系快速降权</span><span>反向独立确认</span></div></div>
         <div className="fr-equity"><small>模拟账户权益 · USDT</small><strong>{fmt(data?.equity)}</strong><div className={(data?.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(data?.netPnl)} <span>U · {signed(data?data.netPnl/data.initialEquity*100:null)}%</span></div>
           <footer><span>起点 {fmt(data?.initialEquity,0)}</span><span>最大回撤 {fmt(data?data.maxDrawdown*100:null)}%</span></footer></div></section>
       <section className="fr-stats">
-        <Stat label="当前席位" value={data?`${positions.length} / ${ADAPTIVE_TARGET_POSITIONS}`:"—"} note={positions.length>=ADAPTIVE_TARGET_POSITIONS?"满席仍持续扫描换仓":`还可补 ${Math.max(0,ADAPTIVE_TARGET_POSITIONS-positions.length)} 席`}/>
+        <Stat label="当前持仓" value={data?`${positions.length} 笔`:"—"} note={`计划风险已用 ${fmt(riskUse*100,1)}% · 不设席位数量上限`}/>
         <Stat label="可参与机会" value={data?`${eligible.length} 个`:"—"} note={`主机会 ${ordinary.length} · 补位 ${reserve.length} · 高级 ${premium.length}`}/>
         <Stat label="市场状态" value={pulse?.bias==="UP"?"偏多":pulse?.bias==="DOWN"?"偏空":pulse?"分化":"—"} note={pulse?`上涨 ${pulse.up} · 下跌 ${pulse.down} · 中性 ${pulse.neutral}`:"等待5m数据"}/>
         <Stat label="实盘账户" value={`${fmt(liveOverview?.equity)} U`} note={`${liveOverview?.positionCount??"—"} 笔持仓 · 可用 ${fmt(liveOverview?.available)} U`}/>
@@ -67,7 +67,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
         <section className="fr-section"><div className="fr-section-head"><div><small>模拟账户</small><h2>净值变化</h2></div><span>含模型成本</span></div><EquityCurve data={data} healthy={healthy} cache={equityCache} cacheScope={cacheScope}/>
           <div className="fr-three"><div><small>累计成交额</small><b>{fmt(data?.turnover)} U</b></div><div><small>已扣费用</small><b>{fmt(data?.fees)} U</b></div><div><small>完成订单</small><b>{fmt(data?.resolved,0)}</b></div></div></section>
         <section className="fr-section fr-now-card"><div className="fr-section-head"><div><small>现在</small><h2>系统正在做什么</h2></div><span>{time(data?.updatedAt)}</span></div>
-          <div className="fr-three"><div><small>席位</small><b>{positions.length}/{ADAPTIVE_TARGET_POSITIONS}</b></div><div><small>候选</small><b>{eligible.length}</b></div><div><small>高级机会</small><b>{premium.length}</b></div></div>
+          <div className="fr-three"><div><small>持仓</small><b>{positions.length} 笔</b></div><div><small>候选</small><b>{eligible.length}</b></div><div><small>计划风险</small><b>{fmt(riskUse*100,1)}%</b></div></div>
           <div className="fr-insight"><span className="fr-dot"/><p>{data?.latestReason??"等待运行状态。"}</p></div>
           <button className="fr-button" onClick={()=>select("execution")}>查看实时执行 →</button></section>
       </div>
@@ -84,7 +84,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
           <ExecStep index="03" title="六级路径检查" status={(relation?.liveAnomalies??0)>0?"发现偏离":"持续核对"} text="5/10/15/30/60/180分钟只比较正在发生的真实反应是否仍像历史赚钱路径，用于快速降权，不负责预测反向。"/>
           <ExecStep index="04" title="关系生命周期" status={(relation?.degraded??0)>0?"正在迁移风险":"正常"} text={`ACTIVE ${fmt(relation?.active,0)} · 承压 ${fmt(relation?.pressured,0)} · 降级 ${fmt(relation?.degraded,0)} · 恢复中 ${fmt(relation?.recovering,0)}。`}/>
           <ExecStep index="05" title="独立反向确认" status="只认成熟样本" text="旧多头关系失效只降低多头权重；空头必须由自己的已成熟真实反应证明扣成本后有效，禁止失效即反手。"/>
-          <ExecStep index="06" title="10席位风险迁移" status={positions.length>=ADAPTIVE_TARGET_POSITIONS?"满席竞争":"持续补仓"} text={`当前 ${positions.length}/${ADAPTIVE_TARGET_POSITIONS} 席；健康关系先拿风险，承压/降级关系缩小仓位，释放风险给其他成熟关系。`}/>
+          <ExecStep index="06" title="风险驱动持仓" status={riskUse>=.09?"接近风险上限":"持续竞争"} text={`当前 ${positions.length} 笔持仓，计划风险已用 ${fmt(riskUse*100,1)}%；没有席位数量上限，健康关系只受10%组合风险、6.5%同向风险和75%保证金约束。`}/>
           <ExecStep index="07" title="执行与利润保护" status={positions.length?"持续保护":"等待持仓"} text="成熟区域与1m只优化执行位置；关系恶化优先退出没有正向反馈的弱仓，已有利润先收紧MFE保护。"/>
         </div></section>
       <section className="fr-stats">
@@ -102,7 +102,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
     {tab==="paper"&&<>
       <PageTitle eyebrow="REAL-FEED PAPER" title="模拟账户" text="模拟和实盘读取同一个持久化交易事件；模拟成交计入手续费、滑点和资金费占位，实盘仍以Gate真实成交为准。"/>
       <nav className="fr-live-tabs fr-paper-tabs">{([["account","账户"],["positions","持仓"],["history","记录"],["archive","归档"]] as const).map(([id,label])=><button key={id} className={paperTab===id?"selected":""} onClick={()=>setPaperTab(id)}>{label}</button>)}</nav>
-      {paperTab==="account"&&<><section className="fr-stats fr-paper-summary"><Stat label="模拟权益" value={`${fmt(data?.equity)} U`} note={`起始 ${fmt(data?.initialEquity)} U`}/><Stat label="保证金占用" value={`${fmt(paperMargin)} U`} note={`${positions.length} / ${ADAPTIVE_TARGET_POSITIONS} 席`}/><Stat label="浮动盈亏" value={`${signed(data?.floating)} U`} note="按当前可执行价估值"/><Stat label="累计成交额" value={`${fmt(data?.turnover)} U`} note={`已完成 ${fmt(data?.resolved,0)} 笔`}/></section>
+      {paperTab==="account"&&<><section className="fr-stats fr-paper-summary"><Stat label="模拟权益" value={`${fmt(data?.equity)} U`} note={`起始 ${fmt(data?.initialEquity)} U`}/><Stat label="保证金占用" value={`${fmt(paperMargin)} U`} note={`${positions.length} 笔持仓 · 无席位数量上限`}/><Stat label="浮动盈亏" value={`${signed(data?.floating)} U`} note="按当前可执行价估值"/><Stat label="累计成交额" value={`${fmt(data?.turnover)} U`} note={`已完成 ${fmt(data?.resolved,0)} 笔`}/></section>
         <TradeList trades={positions} now={now} empty="当前没有模拟持仓"/></>}
       {paperTab==="positions"&&<TradeList trades={positions} now={now} empty="当前没有模拟持仓"/>}
       {(paperTab==="history"||paperTab==="archive")&&<section className="fr-section"><div className="fr-section-head"><h2>{paperTab==="history"?"最近记录":"归档记录"}</h2><span>{paperTab==="history"?"最新10条":"更早记录"}</span></div>
@@ -122,7 +122,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       <section className="fr-section"><div className="fr-section-head"><h2>当前系统边界</h2><span>forward-relation-v2</span></div>
         <Setting title="学习周期" value="15m / 60m / 180m" text="每个周期只使用已经真实成熟的市场反应形成关系；不根据固定指标直接预测未来方向。"/>
         <Setting title="切换检测" value="5/10/15/30/60/180m" text="路径检查点只负责尽早发现旧关系正在失效；旧方向失效绝不自动等于反方向成立。"/>
-        <Setting title="组合" value="约10个持仓" text="ACTIVE关系正常竞争风险；承压、降级关系连续缩小仓位，释放风险给其他健康关系，而不是全局停止开仓。"/>
+        <Setting title="组合" value="无席位数量上限" text="持仓数量由10%组合计划风险、6.5%同向风险、75%保证金和单币一仓共同决定；ACTIVE关系正常竞争风险。"/>
         <Setting title="市场变化" value="长期资格 + 近期交易权" text="长期样本保留有效关系，近期成熟样本和正在发生的真实路径决定它现在还能用多大风险。"/>
         <Setting title="风险" value="10%组合 / 6.5%同向" text={data?.boundaries.risk??"读取中"}/>
         <Setting title="实盘" value="同一持久化事件" text="模拟事件提交成功后立即唤醒event-driven LIVE；过期事件不补开，Gate是成交与账户唯一真相。"/>
@@ -152,10 +152,10 @@ function TradeList({trades,now,empty,compact=false}:{trades:Trade[];now:number;e
 function TradeCard({trade:t,now}:{trade:Trade;now:number}){
   const open=t.status==="OPEN",d=t.side==="LONG"?1:-1,px=open?t.lastPrice:t.exitPrice??t.lastPrice;
   const pnl=open?d*t.quantity*(px-t.entryPrice)-t.entryFee-t.quantity*px*.0007:t.netPnl??0,rate=t.notional>0?pnl/t.notional:0,ctx=t.entryContext;
-  return <details className="fr-position-row"><summary><span className="fr-position-primary"><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {ctx?(ctx.reserve?"补位 · ":"")+modeName(ctx.mode):"兼容持仓"} · {fmt(t.leverage,0)}×</small>
+  return <details className="fr-position-row"><summary><span className="fr-position-primary"><b>{t.symbol.replace("_"," / ")}</b><small>{t.side==="LONG"?"多单":"空单"} · {ctx?(ctx.reserve?"低风险 · ":"")+modeName(ctx.mode):"兼容持仓"}{ctx?.relationHorizon?` · ${ctx.relationHorizon}m关系`:""} · {fmt(t.leverage,0)}×</small>
     <b className={pnl>=0?"fr-positive":"fr-negative"}>{signed(pnl)} U</b><small>{signed(rate*100,3)}% · {duration(t.openedAt,t.closedAt,now)}</small></span>
     <span className="fr-position-entry"><b>{open?`持仓评分 ${fmt(t.holdScore,0)}`:exitName(t.exitReason)}</b><small>MFE {fmt(t.favorable*100,2)}% · MAE {fmt(t.adverse*100,2)}% · 锁利 {fmt((t.profitFloorRate??0)*100,2)}%</small>
-      <small>{ctx?`入场评分 ${fmt(ctx.entryScore,0)} · 净空间 ${fmt(ctx.remainingSpaceRate*100,2)}% · 首次浮赢 ${t.firstProfitAt?time(t.firstProfitAt):"尚未"}`:"历史兼容持仓"}</small></span></summary>
+      <small>{ctx?`入场评分 ${fmt(ctx.entryScore,0)} · 关系 ${ctx.relationStatus??"—"} ${fmt((ctx.relationHealth??0)*100,0)} · 净空间 ${fmt(ctx.remainingSpaceRate*100,2)}% · 首次浮赢 ${t.firstProfitAt?time(t.firstProfitAt):"尚未"}`:"历史兼容持仓"}</small></span></summary>
     <article className="fr-trade fr-trade-unified"><dl><div><dt>入场价</dt><dd>{fmt(t.entryPrice,6)}</dd></div><div><dt>{open?"当前价":"出场价"}</dt><dd>{fmt(px,6)}</dd></div><div><dt>当前防守</dt><dd>{fmt(t.stopPrice,6)}</dd></div>
       <div><dt>名义金额</dt><dd>{fmt(t.notional)} U</dd></div><div><dt>保证金 / 杠杆</dt><dd>{fmt(t.margin)} U / {fmt(t.leverage,0)}×</dd></div><div><dt>计划风险</dt><dd>{fmt(t.plannedRisk)} U</dd></div>
       <div><dt>进场时间</dt><dd>{time(t.openedAt)}</dd></div><div><dt>持仓时长</dt><dd>{duration(t.openedAt,t.closedAt,now)}</dd></div><div><dt>预计持有</dt><dd>{fmt(t.expectedHoldMinutes,0)} 分钟</dd></div></dl>
