@@ -56,7 +56,9 @@ const overlap=(a:{low:number;high:number},b:{low:number;high:number})=>Math.max(
 
 export function regionLaunchValidationProofRate(modeledCostRate:number){
   const cost=finite(modeledCostRate)?Math.max(0,modeledCostRate):0;
-  return Math.max(.0015,Math.min(.0025,cost*.60));
+  // A valid burst should become meaningfully profitable quickly. Validation
+  // below round-trip modeled cost merely proves motion, not a usable entry.
+  return Math.max(.0025,Math.min(.0060,cost*1.25));
 }
 
 function compressionFrom(rows:RegionCandle[],mother:Pick<RegionLaunchState,
