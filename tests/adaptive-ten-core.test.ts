@@ -124,7 +124,8 @@ test("structure stop without positive feedback locks the whole probe family acro
   s.lastCandleAt=now;s.opportunities=[manualOpportunity(symbols[0]!,0,{reserve:true,premium:false,ruleId:"stop-r1",familyKey})];
   fillForwardPortfolio(s,quotesAt(39,now),contracts,now,1000,false);assert.equal(s.positions.length,1);
   const trade=s.positions[0]!,stopNow=now+10_000,stopQuote=quotesAt(39,stopNow);
-  const px=trade.stopPrice*1.001;stopQuote[trade.symbol]={bestBid:px*.9999,bestAsk:px,observedAt:stopNow,fresh:true,entryReady:true};
+  if(trade.side==="LONG"){const bid=trade.stopPrice*.999;stopQuote[trade.symbol]={bestBid:bid,bestAsk:bid*1.0001,observedAt:stopNow,fresh:true,entryReady:true};}
+  else{const ask=trade.stopPrice*1.001;stopQuote[trade.symbol]={bestBid:ask*.9999,bestAsk:ask,observedAt:stopNow,fresh:true,entryReady:true};}
   const stopped=advanceForward({state:s,now:stopNow,paths,quotes:stopQuote,contracts,entrySymbols:symbols,allowDataCycle:false}).state;
   assert.ok(stopped.history.some(t=>t.id===trade.id&&t.exitReason==="STRUCTURE_STOP"));
   assert.equal(stopped.familyProbeGuards[familyKey]?.reason,"STRUCTURE_STOP_NO_FEEDBACK");
