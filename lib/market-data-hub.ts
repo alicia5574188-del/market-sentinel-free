@@ -81,7 +81,7 @@ export class MarketDataHub{
       out.set(symbol,{source:"BYBIT",symbol,observedAt:now,last,bid,ask,volume24hUsd:Math.max(0,Number(row.turnover24h??0)),
         change24hRate:Number(row.price24hPcnt??0)});
     }
-    if(!out.size)throw new Error("Bybit empty ticker surface");return out;
+    if(out.size<20)throw new Error(`Bybit incomplete ticker surface: ${out.size}`);return out;
   }
   private async fetchBinance(now:number){
     type Row={symbol?:string;bidPrice?:string;askPrice?:string;bidQty?:string;askQty?:string;time?:number};
@@ -89,9 +89,10 @@ export class MarketDataHub{
     if(!Array.isArray(body))throw new Error("Binance ticker payload");
     const out=new Map<string,HubQuote>();
     for(const row of body){const symbol=canonical(row.symbol??"");if(!symbol)continue;const bid=Number(row.bidPrice),ask=Number(row.askPrice);
-      if(!(bid>0&&ask>bid))continue;const observedAt=Number(row.time)>0?Number(row.time):now;
+      if(!(bid>0&&ask>bid))continue;
+      const exchangeAt=Number(row.time),observedAt=exchangeAt>0&&exchangeAt<=now+2_000?Math.min(exchangeAt,now):now;
       out.set(symbol,{source:"BINANCE",symbol,observedAt,last:(bid+ask)/2,bid,ask,volume24hUsd:0,change24hRate:0});}
-    if(!out.size)throw new Error("Binance empty ticker surface");return out;
+    if(out.size<20)throw new Error(`Binance incomplete ticker surface: ${out.size}`);return out;
   }
 
   quote(symbol:string,now=Date.now()):ConsensusQuote|null{
