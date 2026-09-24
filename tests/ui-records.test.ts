@@ -114,11 +114,11 @@ test("new Gate reader is GET only, fixed pagination, no retry",async()=>{
 test("reviewed Gate adapter stays frozen outside the read-only settlement method",()=>{
  const file=readFileSync(new URL("../lib/gate-live.ts",import.meta.url),"utf8");
  const from=file.indexOf("  /** Read-only position-cycle settlements."),to=file.indexOf("  async createEntry",from);
- // 2026-09-23 owner-requested private timeout and edge repair: complete-body
- // GET races use two official futures routes; every signed request uses manual
- // redirect handling and rejects 3xx locally. Mutations stay single submit,
- // including body timeout. See LIVE_AND_SHOCK_CONTINUITY_2026-09-23.md.
- const old=file.slice(0,from)+file.slice(to);assert.equal(createHash("sha256").update(old).digest("hex"),"62c67c481a5df941fa6587e327e8f93b389999f1a8500983a0ce977e9c3f9624");
+ // 2026-09-23 private transport repair plus the 2026-09-24 owner-requested
+ // short-entry repair are reviewed together. Market IOC now asks Gate for
+ // RESULT instead of FULL clearing fields, while all mutations remain
+ // single-submit and unknown writes are reconciled by identity.
+ const old=file.slice(0,from)+file.slice(to);assert.equal(createHash("sha256").update(old).digest("hex"),"7e0ba1d36af1671f14b1bbe605d9ef9d777906c0db7286985a781a8273dccf48");
 });
 test("operational UI removes version narratives and friend terminology",()=>{
  const paths=["forward-dashboard.tsx","live-console.tsx","member-access.tsx"];
