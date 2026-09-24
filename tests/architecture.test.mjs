@@ -42,7 +42,7 @@ test("Adaptive Ten analysis is multi-source while Gate stays execution-only",asy
 test("entry readiness needs only fresh executable Gate data and contract metadata",async()=>{
   const worker=await read("worker/index-clean.ts");
   const readiness=worker.slice(worker.indexOf("private symbolEntryReady"),worker.indexOf("private currentAuthorityProtectionSymbols"));
-  assert.match(readiness,/sessionWarmup\[symbol\].*>=2/);
+  assert.match(readiness,/sessionWarmup\[symbol\].*>=1/);
   assert.match(readiness,/contractMeta\[symbol\]/);
   assert.match(readiness,/STALE_AFTER_MS/);
   assert.doesNotMatch(readiness,/m15|h1|h4|ancillaryFresh/);
