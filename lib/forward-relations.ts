@@ -726,8 +726,6 @@ function multiTurnEntryMemoryFor(s:ForwardState,candidate:TurnCandidate,now:numb
 function rankedMultiTurnEntryRows(s:ForwardState,now:number,entrySymbols?:ReadonlySet<string>){
   return (s.entryOpportunities??[])
     .filter(opportunity=>opportunity.eligible
-      &&typeof opportunity.stopPrice==="number"&&Number.isFinite(opportunity.stopPrice)
-      &&typeof opportunity.stopPenalty==="number"&&Number.isFinite(opportunity.stopPenalty)
       &&(!entrySymbols||entrySymbols.has(opportunity.symbol)))
     .map(opportunity=>{const candidate=entryOpportunityCandidate(opportunity);
       return{opportunity,candidate,memory:multiTurnEntryMemoryFor(s,candidate,now)};})
@@ -1305,15 +1303,15 @@ export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols
   const launchSignals=(s.regionLaunchSignals??[]).filter(signal=>signal.expiresAt>now&&(!allowed||allowed.has(signal.symbol)));
   const participation=(s.entryOpportunities??[]).filter(row=>row.eligible&&row.timeframe==="5m"&&(!allowed||allowed.has(row.symbol)))
     .sort((a,b)=>b.score-a.score||b.directionStrength-a.directionStrength||a.symbol.localeCompare(b.symbol));
-  const launchPriority:Record<RegionLaunchState["phase"],number>={READY:0,RETEST:1,IGNITION:2,ARMED:3,WATCH:9,CONSUMED:9};
-  const launches=Object.values(s.regionLaunches??{}).filter(row=>["READY","IGNITION","ARMED"].includes(row.phase)
-    &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>launchPriority[a.phase]-launchPriority[b.phase]
-      ||b.quality-a.quality||b.updatedAt-a.updatedAt||a.symbol.localeCompare(b.symbol));
-  // Existing positions retain protection priority, then fresh RegionLaunch
-  // states, then the highest-scored 5m participation candidates. The worker
-  // still enforces the same scarce 11-book realtime capacity.
-  return[...new Set([...s.positions.map(p=>p.symbol),...launchSignals.map(x=>x.symbol),...launches.map(x=>x.symbol),
-    ...participation.map(x=>x.symbol)])];
+  const urgentLaunches=Object.values(s.regionLaunches??{}).filter(row=>["READY","RETEST","IGNITION"].includes(row.phase)
+    &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>b.quality-a.quality||b.updatedAt-a.updatedAt||a.symbol.localeCompare(b.symbol));
+  const armedLaunches=Object.values(s.regionLaunches??{}).filter(row=>row.phase==="ARMED"
+    &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>b.quality-a.quality||b.updatedAt-a.updatedAt||a.symbol.localeCompare(b.symbol));
+  // Protection first. A RegionLaunch already in READY/RETEST/IGNITION remains
+  // premium, but ordinary ARMED observation can no longer starve the continuous
+  // 5m participation lane of all eleven executable books.
+  return[...new Set([...s.positions.map(p=>p.symbol),...launchSignals.map(x=>x.symbol),...urgentLaunches.map(x=>x.symbol),
+    ...participation.map(x=>x.symbol),...armedLaunches.map(x=>x.symbol)])];
 }
 
 export function forwardUrgentMinuteSymbols(s:ForwardState,entrySymbols?:Iterable<string>){
@@ -1336,12 +1334,12 @@ export function forwardWatchSymbols(s:ForwardState,now:number,entrySymbols?:Iter
     const launchSignals=(s.regionLaunchSignals??[]).filter(signal=>signal.expiresAt>now&&(!allowed||allowed.has(signal.symbol)));
     const participation=(s.entryOpportunities??[]).filter(row=>row.eligible&&row.timeframe==="5m"&&(!allowed||allowed.has(row.symbol)))
       .sort((a,b)=>b.score-a.score||b.directionStrength-a.directionStrength||a.symbol.localeCompare(b.symbol));
-    const launchPriority:Record<RegionLaunchState["phase"],number>={READY:0,RETEST:0,IGNITION:1,ARMED:2,WATCH:9,CONSUMED:9};
-    const launches=Object.values(s.regionLaunches??{}).filter(row=>["READY","IGNITION","ARMED"].includes(row.phase)
-      &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>launchPriority[a.phase]-launchPriority[b.phase]
-        ||b.quality-a.quality||b.updatedAt-a.updatedAt||a.symbol.localeCompare(b.symbol));
-    return[...new Set([...s.positions.map(p=>p.symbol),...launchSignals.map(x=>x.symbol),
-      ...launches.map(x=>x.symbol),...participation.map(x=>x.symbol),...regions.map(x=>x.symbol)])].slice(0,11);
+    const urgentLaunches=Object.values(s.regionLaunches??{}).filter(row=>["READY","RETEST","IGNITION"].includes(row.phase)
+      &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>b.quality-a.quality||b.updatedAt-a.updatedAt||a.symbol.localeCompare(b.symbol));
+    const armedLaunches=Object.values(s.regionLaunches??{}).filter(row=>row.phase==="ARMED"
+      &&(!allowed||allowed.has(row.symbol))).sort((a,b)=>b.quality-a.quality||b.updatedAt-a.updatedAt||a.symbol.localeCompare(b.symbol));
+    return[...new Set([...s.positions.map(p=>p.symbol),...launchSignals.map(x=>x.symbol),...urgentLaunches.map(x=>x.symbol),
+      ...participation.map(x=>x.symbol),...armedLaunches.map(x=>x.symbol),...regions.map(x=>x.symbol)])].slice(0,11);
   }
   const matched=Object.values(s.frames).filter(f=>now-f.at<11*60_000&&s.rules.some(r=>r.status==="EXPERIMENTAL"&&r.expiresAt>now&&ruleApplies(r,f.symbol)&&conditionMatches(f.x,r.conditions)));
   return[...new Set([...s.positions.map(p=>p.symbol),...matched.map(f=>f.symbol)])];
@@ -1383,12 +1381,12 @@ export function forwardSummary(s:ForwardState,quotes:Record<string,Quote>,now:nu
     rules:s.rules,positions:s.positions,history:s.history,events:s.events.slice(0,80),daily:s.daily,
     marketCount:s.selectedSymbols.length,markets:s.selectedSymbols,latestReason:s.latestReason,storage:s.storage,
     nextCycleAt:s.lastCycleAt?(Math.floor((s.lastCycleAt-90_000)/BAR_MS)+1)*BAR_MS+90_000:now,cost:PAPER_COST,
-    boundaries:multi?{scope:"PAPER_ONLY",grammar:"简单双通道：RegionLaunch负责成熟区域的高质量结构位置；5分钟方向—空间评分负责持续参与并补足约10个持仓。两者共享同一账户、退出、利润保护与实盘事件链，不再增加独立策略账户。",
-      historyBackfill:false,sampleMeaning:"历史K线只恢复结构和评分；不补过去订单。近期价格状态优先，旧交易结果只做短期同方向防抖，不阻止反方向快速重评",
-      accounting:"新鲜买卖价模拟成交；费用、滑点、结构止损与当前位置剩余空间全部进入下单经济性计算",
+    boundaries:multi?{scope:"PAPER_ONLY",grammar:"简单双通道：5分钟方向—空间评分负责持续参与并把组合维持在约10个席位；RegionLaunch负责成熟区域出现的更优结构机会并拥有更高替换优先级。",
+      historyBackfill:false,sampleMeaning:"历史K线只恢复评分与结构；不补过去订单。普通参与不要求先形成缠绕区域；近期市场方向和剩余空间优先，旧结果只做短时同方向防抖",
+      accounting:"新鲜买卖价模拟成交；费用、滑点、结构止损、当前腿已运行距离与前方剩余空间全部进入下单经济性计算",
       risk:"组合计划风险≤10%，同方向≤6.5%；目标10仓、RegionLaunch允许临时第11席；RegionLaunch单笔≤0.6%，5分钟参与单笔≤1.5%",
-      validation:"RegionLaunch保留60秒正反馈诊断；5分钟参与由实时方向、剩余空间和持仓价值持续管理",
-      liquidation:"所有持仓共用现有结构退出与单向利润保护；市场变化时弱仓可被明显更强候选择优替换"}:
+      validation:"5分钟参与要求方向脱离噪音、扣成本后仍有空间且当前位置没有明显追远；RegionLaunch继续保留60秒正反馈诊断",
+      liquidation:"所有持仓共用现有退出与单向利润保护；市场变化时弱仓可被明显更强候选择优替换"}:
       {scope:"PAPER_ONLY",grammar:"最多两个连续特征条件；方向、期限、止损和回吐退出由新市场反应生成",historyBackfill:false,
       sampleMeaning:"市场条件与后来反应；不是影子订单或连胜晋级",accounting:"新鲜买卖价模拟成交；净值包含退出费用与资金占位",
       risk:"单笔风险上限1.5%；同一关系family的所有并行币合计最多占一个1.5%风险槽；成交校准为负仍保留15%探测风险，单币小样本连续缩仓",
