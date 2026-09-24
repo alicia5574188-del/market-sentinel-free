@@ -2317,10 +2317,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       // Test doubles and legacy/member executors may still expose only the
       // reviewed full-snapshot contract. Keep that compatibility path exact;
       // production GateLiveClient uses the split lanes below.
-      snapshot=await client.snapshot({allowOrderFallback:false});this.liveSyncUsedCached=false;
-      const ordersCheckedAt=snapshot.ordersCheckedAt??snapshot.checkedAt;
-      this.liveOrderSnapshotCache={orders:structuredClone(snapshot.orders),priceOrders:structuredClone(snapshot.priceOrders),checkedAt:ordersCheckedAt};
-      this.liveOrderAuditAt=ordersCheckedAt;
+      snapshot=await client.snapshot();this.liveSyncUsedCached=false;
+      this.liveOrderSnapshotCache={orders:structuredClone(snapshot.orders),priceOrders:structuredClone(snapshot.priceOrders),checkedAt:snapshot.checkedAt};
+      this.liveOrderAuditAt=snapshot.checkedAt;
       this.liveSnapshotCache=structuredClone(snapshot);
     }else{
       // Routine short-horizon LIVE reconciliation only needs fresh account and
@@ -2341,8 +2340,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }
       const inheritedAuditAt=orders?.checkedAt??this.liveOrderAuditAt;
       orderAuditUsable=inheritedAuditAt>0&&now-inheritedAuditAt<=LIVE_ORDER_AUDIT_ADMISSION_MAX_AGE_MS;
-      snapshot={account:core.account,positions:core.positions,orders:orders?.orders??[],priceOrders:orders?.priceOrders??[],
-        checkedAt:core.checkedAt,ordersCheckedAt:orders?.checkedAt??inheritedAuditAt,orderAuditDegraded:!orderAuditUsable};
+      snapshot={account:core.account,positions:core.positions,orders:orders?.orders??[],priceOrders:orders?.priceOrders??[],checkedAt:core.checkedAt};
       this.liveSnapshotCache=structuredClone(snapshot);
     }
     // The committed PAPER account can advance while private reads are in flight.
