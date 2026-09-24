@@ -113,6 +113,6 @@ export async function prepareForwardReset(previous:ForwardState,closedLegacy:For
       throw new Error(`重置归档单笔记录超过预算：${trade.symbol}`);
     archiveEntries[`${FORWARD_STORAGE}archive:${String(now+i).padStart(16,"0")}:reset:${i}`]=packet;
   }
-  const accountEntries={...fresh.entries,...prepareForwardProtectionWrite(next).entries};
+  const accountEntries:Record<string,unknown>={...fresh.entries,...prepareForwardProtectionWrite(next).entries};
   return{state:next,archiveEntries,accountEntries,writes:Object.keys(archiveEntries).length+Object.keys(accountEntries).length,compression:fresh.compression};
 }
