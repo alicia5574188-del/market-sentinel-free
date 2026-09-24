@@ -26,6 +26,8 @@ test("Forward Relation 2.0 learns only from matured market responses and produce
   assert.ok(e.measured>=48,"five 15m groups across the market should have matured");
   assert.ok(e.rules.length>0,"mature cost-positive responses should produce relations");
   assert.ok(e.rules.some(r=>r.side==="LONG"&&r.status==="ACTIVE"));
+  assert.ok(e.rules.some(r=>r.side==="LONG"&&r.scope==="BASE"),"mature BASE authority must survive alongside faster RECENT probes");
+  assert.ok(relationCandidates(e).some(c=>c.side==="LONG"&&!c.reserve),"a healthy BASE relation should retain normal-risk authority");
   assert.equal(e.rules.some(r=>r.side==="SHORT"),false,"the opposite side must not be fabricated while only long responses matured");
   assert.ok(relationCandidates(e).length>0);
 });
