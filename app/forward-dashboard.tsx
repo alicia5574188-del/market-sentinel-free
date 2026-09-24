@@ -13,8 +13,8 @@ const fmt=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)
 const signed=(v:number|null|undefined,d=2)=>typeof v==="number"&&Number.isFinite(v)?`${v>=0?"+":""}${fmt(v,d)}`:"—";
 const time=(v?:number|null)=>v?new Date(v).toLocaleString("zh-CN",{timeZone:"Asia/Vientiane",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}):"—";
 const duration=(start:number,end:number|null|undefined,now:number)=>{const m=Math.floor(Math.max(0,(end??now)-start)/60000);return m<1?"<1分钟":m>=60?`${Math.floor(m/60)}小时${m%60}分`:`${m}分钟`;};
-const modeName=(mode:string)=>({FLOW:"方向—空间",BREAKOUT:"爆发突破",RETEST:"回踩重启",FAILED_BREAKOUT:"假突破反向",RANGE:"区域内部"}[mode]??mode);
-const exitName=(reason:string|null)=>reason?({STRUCTURE_STOP:"结构止损",PROFIT_GIVEBACK:"利润保护",MARKET_FLIP:"市场转向",NO_POSITIVE_FEEDBACK:"无正向反馈",TIME_DECAY:"持仓超时",OPPORTUNITY_REPLACED:"更优机会替换",ACCOUNT_RESET:"手动重置"}[reason]??reason):"—";
+const modeName=(mode:string)=>({RELATION:"市场关系",BREAKOUT:"爆发突破",RETEST:"回踩重启",FAILED_BREAKOUT:"假突破反向",RANGE:"区域内部"}[mode]??mode);
+const exitName=(reason:string|null)=>reason?({STRUCTURE_STOP:"结构止损",PROFIT_GIVEBACK:"利润保护",MARKET_FLIP:"独立反向关系",RELATION_DEGRADED:"关系降级",NO_POSITIVE_FEEDBACK:"无正向反馈",TIME_DECAY:"持仓超时",OPPORTUNITY_REPLACED:"更优机会替换",ACCOUNT_RESET:"手动重置"}[reason]??reason):"—";
 
 export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,livePanel,liveSystemPanel,liveEnabled,liveOverview,accountPanel,memberName,cacheScope="owner"}:{
   data:View|null;healthy:boolean;statusLabel?:string;feedAt:number|null;error:string|null;livePanel:ReactNode;liveSystemPanel?:ReactNode;
@@ -34,7 +34,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const fontVars:Record<string,string>={};for(let px=10;px<=64;px++)fontVars[`--fr-fs${px}`]=`${(px*fontScale/100).toFixed(2)}px`;
   const exportSnapshot=async()=>{if(exporting)return;setExporting(true);setExportStatus(null);try{
     const r=await fetch("/api/forward/export",{cache:"no-store",credentials:"same-origin"});if(!r.ok)throw new Error();
-    const blob=await r.blob(),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`adaptive-ten-snapshot-${new Date().toISOString().slice(0,10)}.json`;
+    const blob=await r.blob(),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`forward-relation-v2-snapshot-${new Date().toISOString().slice(0,10)}.json`;
     document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);setExportStatus("已开始下载。");
   }catch{setExportStatus("导出失败，请重试。");}finally{setExporting(false);}};
 
@@ -42,19 +42,19 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
   const eligible=opportunities.filter(o=>o.eligible&&(!now||o.expiresAt>now)),premium=eligible.filter(o=>o.premium),
     reserve=eligible.filter(o=>o.reserve),ordinary=eligible.filter(o=>!o.premium&&!o.reserve);
   const blockers=Object.entries(data?.entryDiagnostics?.reasons??{}).sort((a,b)=>b[1]-a[1]),mainBlocker=blockers[0]?.[0]??"当前没有额外阻塞";
-  const pulse=data?.marketPulse,records=recordWindows(data?.history??[],t=>t.closedAt??0),archive=archivePage(records.archive,paperPage);
+  const pulse=data?.marketPulse,relation=data?.relationEngine?.diagnostics,records=recordWindows(data?.history??[],t=>t.closedAt??0),archive=archivePage(records.archive,paperPage);
   const paperMargin=positions.reduce((n,t)=>n+t.margin,0),elapsed=data&&now?Math.max(0,(now-data.startedAt)/3600000):null;
   const systemStatus=statusLabel==="后台运行中"?"正常":statusLabel?.startsWith("后台运行中 · ")?statusLabel.slice(8):statusLabel??(healthy?"正常":"行情恢复中");
   const nav:[Tab,string,string][]=[["overview","◉","总览"],["execution","⌘","执行"],["paper","⇄","模拟"],["live","◈","实盘"],["journal","≋","记录"],["settings","⊙","系统"]];
-  return <main className="fr-app" style={fontVars as CSSProperties} data-ui-version="adaptive-ten-slim-v1">
-    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · Adaptive 10</b><small>5M CORE · 1M CONFIRM · TEN COMPETING SEATS</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
+  return <main className="fr-app" style={fontVars as CSSProperties} data-ui-version="forward-relation-v2">
+    <header className="fr-header"><div className="fr-brand"><span className="fr-emblem">↗</span><div><b>哨兵 · Forward Relation 2.0</b><small>CAUSAL RESPONSE · LIFECYCLE · RISK MIGRATION</small></div></div><span className={`fr-status ${healthy?"is-on":""}`}><i/>{healthy?"真实行情在线":"连接中"}</span></header>
     <div className="fr-subhead"><span>Gate USDT 永续 · 30市场扫描 · 目标10仓 · 11实时槽</span><span>实盘{liveEnabled?"已请求开启":"关闭"} · 所有者控制</span></div>
     {memberName&&<p className="fr-note">{memberName} · 共用同一策略事件源，实盘账户与API完全独立。</p>}
 
     {tab==="overview"&&<>
-      <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">ADAPTIVE TEN</span><h1>{systemStatus==="正常"?"系统正在正常运行":`系统状态：${systemStatus}`}</h1>
+      <section className="fr-hero"><div className="fr-hero-copy"><span className="fr-kicker">FORWARD RELATION 2.0</span><h1>{systemStatus==="正常"?"系统正在正常运行":`系统状态：${systemStatus}`}</h1>
         <p>{data?.latestReason??"正在读取交易核心。"}</p>
-        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>5m唯一主周期</span><span>1m只做确认</span><span>10席位持续竞争</span><span>市场转向即时重评</span><span>实盘同源事件</span></div></div>
+        <div className="fr-hero-tags"><span>连续运行 {elapsed==null?"—":fmt(elapsed,1)} 小时</span><span>15/60/180m真实反应</span><span>六级路径检查点</span><span>10席位持续竞争</span><span>旧关系快速降权</span><span>反向独立确认</span></div></div>
         <div className="fr-equity"><small>模拟账户权益 · USDT</small><strong>{fmt(data?.equity)}</strong><div className={(data?.netPnl??0)>=0?"fr-positive":"fr-negative"}>{signed(data?.netPnl)} <span>U · {signed(data?data.netPnl/data.initialEquity*100:null)}%</span></div>
           <footer><span>起点 {fmt(data?.initialEquity,0)}</span><span>最大回撤 {fmt(data?data.maxDrawdown*100:null)}%</span></footer></div></section>
       <section className="fr-stats">
@@ -76,19 +76,19 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
     </>}
 
     {tab==="execution"&&<>
-      <PageTitle eyebrow="ONE CLOSED LOOP" title="执行" text="只有一套交易核心：5分钟判断正在发生的方向、位置与剩余空间；成熟区域产生更优机会；1分钟只负责精确确认；所有候选和持仓持续争夺约10个席位。"/>
-      <section className="fr-section fr-exec-flow-section"><div className="fr-section-head"><div><small>当前执行层</small><h2>Adaptive 10 闭环</h2></div><span>{time(data?.updatedAt)}</span></div>
+      <PageTitle eyebrow="FORWARD RELATION 2.0" title="执行" text="系统不预测方向：先记录真实市场条件，再等待15/60/180分钟反应成熟；近期样本和进行中路径只决定旧关系的交易权，反方向必须靠自己的成熟样本获得资格。"/>
+      <section className="fr-section fr-exec-flow-section"><div className="fr-section-head"><div><small>当前执行层</small><h2>Forward Relation 2.0 闭环</h2></div><span>{time(data?.updatedAt)}</span></div>
         <div className="fr-exec-flow">
-          <ExecStep index="01" title="30市场扫描" status={(data?.marketCount??0)>0?"运行中":"等待5m"} text={`当前维护 ${fmt(data?.marketCount,0)} 个5分钟市场；不依赖15m/1h/4h才能交易。`}/>
-          <ExecStep index="02" title="方向—空间" status={opportunities.length?"持续评分":"等待"} text={`方向、路径效率、剩余空间、回调风险和当前位置统一评分；当前主机会 ${ordinary.length} 个，低风险空席补位 ${reserve.length} 个。`}/>
-          <ExecStep index="03" title="成熟区域高级机会" status={premium.length?"已发现":"持续观察"} text={`爆发突破、回踩重启、假突破反向、区域内部交易共用同一成熟区结构；当前 ${premium.length} 个高级机会。`}/>
-          <ExecStep index="04" title="1分钟精确确认" status={premium.length?"按需启用":"无需占用"} text="1m不决定大方向，只在强突破/回踩等高级机会里确认小回调结束、重新启动或连续突破。"/>
-          <ExecStep index="05" title="10席位竞争" status={positions.length>=ADAPTIVE_TARGET_POSITIONS?"满席竞争":"正在补仓"} text={`当前 ${positions.length}/${ADAPTIVE_TARGET_POSITIONS} 席；主机会优先，空席可用半风险补位；满席后补位机会没有换仓权限，只有更强主机会才能替换弱仓。`}/>
-          <ExecStep index="06" title="入场后反馈" status={positions.length?"持续重评":"等待持仓"} text="快速浮赢提高持仓价值；长期围绕成本或很快浮亏会降级，但不会靠停止全部开仓来规避亏损。"/>
-          <ExecStep index="07" title="退出与锁利" status={positions.length?"持续保护":"等待持仓"} text="结构止损、市场转向、时间失败、机会替换和MFE保护统一管理；约2R以后优先保留接近80%的峰值利润。"/>
+          <ExecStep index="01" title="真实条件采样" status={(relation?.markets??0)>0?"运行中":"等待5m"} text={`30市场持续记录条件；当前 ${fmt(relation?.matureSamples,0)} 份反应已经成熟，不用历史结果伪造冷启动成交。`}/>
+          <ExecStep index="02" title="15 / 60 / 180 分钟关系" status={(relation?.rules??0)>0?"已生成":"积累中"} text={`当前关系 ${fmt(relation?.rules,0)} 条：15m ${fmt(relation?.qualified15,0)} · 60m ${fmt(relation?.qualified60,0)} · 180m ${fmt(relation?.qualified180,0)}。`}/>
+          <ExecStep index="03" title="六级路径检查" status={(relation?.liveAnomalies??0)>0?"发现偏离":"持续核对"} text="5/10/15/30/60/180分钟只比较正在发生的真实反应是否仍像历史赚钱路径，用于快速降权，不负责预测反向。"/>
+          <ExecStep index="04" title="关系生命周期" status={(relation?.degraded??0)>0?"正在迁移风险":"正常"} text={`ACTIVE ${fmt(relation?.active,0)} · 承压 ${fmt(relation?.pressured,0)} · 降级 ${fmt(relation?.degraded,0)} · 恢复中 ${fmt(relation?.recovering,0)}。`}/>
+          <ExecStep index="05" title="独立反向确认" status="只认成熟样本" text="旧多头关系失效只降低多头权重；空头必须由自己的已成熟真实反应证明扣成本后有效，禁止失效即反手。"/>
+          <ExecStep index="06" title="10席位风险迁移" status={positions.length>=ADAPTIVE_TARGET_POSITIONS?"满席竞争":"持续补仓"} text={`当前 ${positions.length}/${ADAPTIVE_TARGET_POSITIONS} 席；健康关系先拿风险，承压/降级关系缩小仓位，释放风险给其他成熟关系。`}/>
+          <ExecStep index="07" title="执行与利润保护" status={positions.length?"持续保护":"等待持仓"} text="成熟区域与1m只优化执行位置；关系恶化优先退出没有正向反馈的弱仓，已有利润先收紧MFE保护。"/>
         </div></section>
       <section className="fr-stats">
-        <Stat label="市场广度" value={pulse?`${pulse.up}↑ / ${pulse.down}↓`:"—"} note={pulse?`强度 ${fmt(pulse.strength*100,0)}% · 波动扩张 ${fmt(pulse.expansion*100,0)}%`:"等待数据"}/>
+        <Stat label="关系状态" value={relation?`${relation.active} / ${relation.rules}`:"—"} note={relation?`ACTIVE / 总关系 · 承压 ${relation.pressured} · 降级 ${relation.degraded}`:"等待样本"}/>
         <Stat label="候选总数" value={data?`${opportunities.length}`:"—"} note={`${eligible.length} 个当前可参与`}/>
         <Stat label="本轮新开" value={fmt(data?.entryDiagnostics?.opened,0)} note={`匹配 ${fmt(data?.entryDiagnostics?.matched,0)}`}/>
         <Stat label="主要阻塞" value={mainBlocker} note={blockers[0]?`${blockers[0][1]} 次`:"没有额外阻塞"}/>
@@ -119,10 +119,11 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
       {accountPanel}{liveSystemPanel}
       <section ref={fontControl} className="fr-section fr-font-control"><div className="fr-section-head"><div><small>界面显示</small><h2>界面字号</h2></div><b>{fontScale}%</b></div>
         <div className="fr-font-options">{[70,80,90,100,110].map(value=><button key={value} className={fontScale===value?"selected":""} onClick={()=>{setFontScale(value);try{localStorage.setItem("sentinel-ui-font-scale-v1",String(value));}catch{}}}>{value}%</button>)}</div></section>
-      <section className="fr-section"><div className="fr-section-head"><h2>当前系统边界</h2><span>adaptive-ten-slim-v1</span></div>
-        <Setting title="主周期" value="5m + 按需1m" text="5m负责结构、方向、空间和普通参与；1m只为高级机会做精确执行确认。"/>
-        <Setting title="组合" value="约10个持仓" text="主机会优先；空席可用约半风险的方向—空间补位单维持样本与参与度。补位单不能替换正常仓；高级机会可临时使用第11实时席。"/>
-        <Setting title="市场变化" value="实时优先" text="历史样本只做小幅评分修正，不能用旧胜率阻止当前方向切换。"/>
+      <section className="fr-section"><div className="fr-section-head"><h2>当前系统边界</h2><span>forward-relation-v2</span></div>
+        <Setting title="学习周期" value="15m / 60m / 180m" text="每个周期只使用已经真实成熟的市场反应形成关系；不根据固定指标直接预测未来方向。"/>
+        <Setting title="切换检测" value="5/10/15/30/60/180m" text="路径检查点只负责尽早发现旧关系正在失效；旧方向失效绝不自动等于反方向成立。"/>
+        <Setting title="组合" value="约10个持仓" text="ACTIVE关系正常竞争风险；承压、降级关系连续缩小仓位，释放风险给其他健康关系，而不是全局停止开仓。"/>
+        <Setting title="市场变化" value="长期资格 + 近期交易权" text="长期样本保留有效关系，近期成熟样本和正在发生的真实路径决定它现在还能用多大风险。"/>
         <Setting title="风险" value="10%组合 / 6.5%同向" text={data?.boundaries.risk??"读取中"}/>
         <Setting title="实盘" value="同一持久化事件" text="模拟事件提交成功后立即唤醒event-driven LIVE；过期事件不补开，Gate是成交与账户唯一真相。"/>
         <Setting title="账户连续性" value="原地升级" text="策略版本变化不自动重置模拟账户、不改startedAt、不清历史；只有所有者重置按钮可以重置。"/>
@@ -136,7 +137,7 @@ export default function ForwardDashboard({data,healthy,statusLabel,feedAt,error,
 }
 
 function OpportunityGrid({rows,details=false}:{rows:NonNullable<View["opportunities"]>;details?:boolean}){
-  if(!rows.length)return <Empty title="当前没有有效5分钟候选" text="系统继续扫描30个市场；这不会停止已有持仓保护。"/>;
+  if(!rows.length)return <Empty title="当前没有成熟可参与关系" text="系统继续扫描30个市场并积累真实反应；已有持仓保护不会停止。"/>;
   return <div className="fr-scoreboard">{rows.map((o,index)=><details className={`fr-score-row ${o.eligible?"is-eligible":""}`} key={o.id} open={false}>
     <summary><span className="fr-score-rank">#{index+1}</span><span className="fr-score-value">{fmt(o.score,0)}</span><span className="fr-score-symbol"><b>{o.symbol.replace("_"," / ")}</b><small>{o.side==="LONG"?"做多":"做空"} · {modeName(o.mode)}</small></span>
       <span><small>方向</small><b>{fmt(o.directionStrength,0)}</b></span><span><small>净空间</small><b>{fmt(o.netRemainingSpaceRate*100,2)}%</b></span><span><small>空间/回调</small><b>{fmt(o.edgeRatio,2)}×</b></span><em>{o.eligible?(o.premium?"高级":o.reserve?"补位":"主机会"):"观察"}</em></summary>

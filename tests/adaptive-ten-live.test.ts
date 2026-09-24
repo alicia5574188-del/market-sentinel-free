@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {advanceForward,forwardEquity,initialForward,type Candle,type Contract,type Quote} from "../lib/forward-relations.ts";
+import {advanceForward,forwardEquity,initialForward,type Candle,type Contract,type Opportunity,type Quote} from "../lib/forward-relations.ts";
 import {buildProportionalMirror,forwardMirrorSources,liveEntryDriftGuard,mirrorSourceFresh} from "../lib/live-parity.ts";
 import {sourceAfterEnable,startLiveSession} from "../lib/live-session.ts";
 
@@ -15,8 +15,15 @@ const contract:Contract={quantoMultiplier:.001,leverageMax:20,maintenanceRate:.0
 function source(){
   const path=makePath(),now=(path.at(-1)!.time+300)*1000+1000,price=path.at(-1)!.close;
   let s=initialForward(now-60_000);
+  const opportunity:Opportunity={id:"fixture-relation",symbol:"BTC_USDT",side:"LONG",mode:"RELATION",premium:false,reserve:false,
+    score:82,eligible:true,completedAt:now-1000,expiresAt:now+60_000,price,stopPrice:price*.992,targetPrice:price*1.012,
+    stopRate:.008,targetRate:.012,directionStrength:82,pathEfficiency:80,momentumPersistence:80,positionScore:80,spaceScore:80,
+    executionScore:90,grossRemainingSpaceRate:.012,netRemainingSpaceRate:.0101,pullbackRiskRate:.008,edgeRatio:1.26,
+    expectedHoldMinutes:60,marketFit:80,regionId:null,regionQuality:null,reason:"已成熟Forward关系的LIVE同源测试事件",
+    relationRuleId:"fixture-rule",relationStatus:"ACTIVE",relationHorizon:60,relationHealth:.85,riskScale:.85};
+  s.opportunities=[opportunity];s.lastCandleAt=now;
   s=advanceForward({state:s,now,paths:{BTC_USDT:path},quotes:{BTC_USDT:q(price,now)},contracts:{BTC_USDT:contract},
-    entrySymbols:["BTC_USDT"]}).state;
+    entrySymbols:["BTC_USDT"],allowDataCycle:false}).state;
   assert.equal(s.positions.length,1);return{s,trade:s.positions[0]!,now,price};
 }
 

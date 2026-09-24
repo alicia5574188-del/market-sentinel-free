@@ -1,4 +1,4 @@
-name: Adaptive Ten Release
+name: Forward Relation 2.0 Release
 
 on:
   pull_request:
@@ -100,7 +100,7 @@ jobs:
           ' wrangler.jsonc >/dev/null
       - name: Deploy exact main
         run: npx wrangler deploy --config dist/server/wrangler.json
-      - name: Verify Adaptive Ten production health
+      - name: Verify Forward Relation 2.0 production health
         run: |
           set -euo pipefail
           for i in $(seq 1 18); do
@@ -110,8 +110,8 @@ jobs:
               .runtime.stale == false and
               .runtime.lastError == null and
               .runtime.forward.version == "forward-relations-v1.0" and
-              .runtime.forward.strategyAuthorityVersion == "adaptive-ten-slim-v1" and
-              .runtime.forward.executionVersion == "adaptive-ten-slim-v1" and
+              .runtime.forward.strategyAuthorityVersion == "forward-relation-v2" and
+              .runtime.forward.executionVersion == "forward-relation-v2" and
               .runtime.forward.targetPositionCount == 10 and
               .runtime.forward.storage.error == null and
               (.runtime.forward.storage.persistedAt|type) == "number" and .runtime.forward.storage.persistedAt > 0 and
@@ -174,7 +174,7 @@ jobs:
             body="$(curl -sS --max-time 15 "$WORKER_BASE_URL/__health" || true)"
             if jq -e '
               .runtime.authorityReady == true and .runtime.stale == false and .runtime.lastError == null and
-              .runtime.forward.strategyAuthorityVersion == "adaptive-ten-slim-v1" and
+              .runtime.forward.strategyAuthorityVersion == "forward-relation-v2" and
               .runtime.forward.targetPositionCount == 10 and .runtime.forward.storage.error == null and
               .runtime.forward.lastCycleAt > 0 and .runtime.realtimeReadiness.capacity == 11 and
               .runtime.realtimeReadiness.protectedMarketsReady == true and .runtime.multiSourceMarket.healthySources >= 2 and
