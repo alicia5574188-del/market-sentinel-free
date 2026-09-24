@@ -13,7 +13,7 @@ import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem
 import { buildBankruptcyReport, diagnoseClosedPosition, paperCycleSummary, recordCycleTrade, startPaperCycle,
   PAPER_BANKRUPTCY_EQUITY, PAPER_INITIAL_EQUITY, type BankruptcyReport, type PaperCycle } from "../lib/paper-cycle.ts";
 import { runtimeReady, type RuntimeHealthShape } from "../lib/runtime-health.ts";
-import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, isGateReadTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, gateMarkedEquity, gatePositionValuation, gateUnknownSubmissionCanResolve, isGateReadTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveExitTag, liveOrderId, liveOrderTag, loadGateLiveClient, type GateLiveOrder, type GateLiveSnapshot, type LiveEntrySizingCode } from "../lib/gate-live.ts";
 import { LIVE_SESSION_VERSION, establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, sameLiveSession, type LiveSession } from "../lib/live-session.ts";
 import type { GateSizeRules, SizeDiagnostic } from "../lib/gate-quantity.ts";
 import { encryptGateCredentials, gateKeyHint, normalizeGateCredentials, type GateCredentials } from "../lib/credential-vault.ts";
@@ -2383,13 +2383,26 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             this.recordLiveAudit({ observedAt: now, symbol, planId: entry.planId, stage: "ENTRY_SUBMIT",
               level: "SKIPPED", reason });
           } else entry.lastError = null;
-        } else if (now - entry.missingSince >= 6_000) {
+        } else if (entry.marketSubmittedAt!=null && gateUnknownSubmissionCanResolve(entry.marketSubmittedAt,now)) {
+          // Gate documents that a custom text ID for a zero-fill cancelled
+          // futures order may disappear after 60s, while any fully/partially
+          // filled order remains queryable by that text indefinitely. Reaching
+          // this branch means the fresh account snapshot has no position and a
+          // direct text lookup also returned not-found beyond that window.
           entry.status = "CANCELLED";
-          const reason = `Gate 在提交后6秒内未返回订单 ${entry.tag}，本计划不自动重放，避免重复开仓`;
+          entry.submissionResolved = true;
+          const reason = `Gate 在60秒订单身份核对窗口后仍无订单、持仓或成交 ${entry.tag}；确认本次未形成实盘暴露，原源单不重放，其他新机会恢复执行`;
+          entry.lastError = reason;
+          this.runtime.live.entrySkips[symbol] = { planId: entry.planId, symbol, code: "ENTRY_REJECTED", reason, observedAt: now };
+          this.recordLiveAudit({ observedAt: now, symbol, planId: entry.planId, stage: "ENTRY_SUBMIT",
+            level: "INFO", reason });
+        } else if (now - entry.missingSince >= 6_000) {
+          const reason = `Gate 暂未返回订单 ${entry.tag}；保留唯一订单身份继续核对至60秒，不自动重复提交`;
+          entry.status = "ERROR";
+          if(entry.lastError!==reason)this.recordLiveAudit({ observedAt: now, symbol, planId: entry.planId, stage: "ENTRY_SUBMIT",
+            level: "RECOVERING", reason });
           entry.lastError = reason;
           this.runtime.live.entrySkips[symbol] = { planId: entry.planId, symbol, code: "SUBMISSION_UNCONFIRMED", reason, observedAt: now };
-          this.recordLiveAudit({ observedAt: now, symbol, planId: entry.planId, stage: "ENTRY_SUBMIT",
-            level: "SKIPPED", reason });
         }
       }
       const selectedTrade = desiredPortfolio[symbol] ?? null;
@@ -2602,6 +2615,22 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const symbol = trade.symbol;
       if(!trade.forwardSource)continue; // Legacy sources only drain existing exposure.
       const plan = { ...arenaTradePlan(trade), expiresAt:trade.openedAt+trade.forwardSource.rule.horizon*60_000 };
+      const prior = this.runtime.live.entries[symbol];
+      // Identity fencing comes before quote/admission diagnostics. Once a market
+      // request crossed the network boundary, this exact PAPER parent can never
+      // be submitted again. If the post-60s reconciliation proved no exposure,
+      // preserve that final result instead of overwriting it with a stale-quote
+      // ECONOMICS message on the next pass.
+      if(prior?.planId===plan.id&&prior.marketSubmittedAt!=null){
+        if(this.liveEntryAwaitingReconcile(prior)){
+          this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"SUBMISSION_UNCONFIRMED",
+            reason:prior.lastError??"此前源单的提交尚待交易所确认，保留原身份和保护，不覆盖为新源单",observedAt:now};
+        }else if(prior.status==="CANCELLED"&&prior.submissionResolved){
+          this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"ENTRY_REJECTED",
+            reason:prior.lastError??"该源单已确认未形成实盘暴露；不重放同一源单",observedAt:now};
+        }
+        continue;
+      }
       const justTriggeredEntry = sourceAfterEnable(trade.forwardSource,this.runtime.live.activation,this.forwardState!.startedAt);
       if (!justTriggeredEntry
         || this.runtime.live.positions[symbol]?.status === "OPEN" || !this.mirrorQuoteReady(symbol)) {
@@ -2615,20 +2644,13 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const retainedSkip = this.runtime.live.entrySkips[symbol];
       if (retainedSkip?.planId === plan.id && ["LEVERAGE_REJECTED","ENTRY_REJECTED","SUBMISSION_UNCONFIRMED"].includes(retainedSkip.code)
         && now-retainedSkip.observedAt<60_000) continue;
-      const prior = this.runtime.live.entries[symbol];
       if(this.liveEntryAwaitingReconcile(prior)) {
         this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"SUBMISSION_UNCONFIRMED",
           reason:"此前源单的提交尚待交易所确认，保留原身份和保护，不覆盖为新源单",observedAt:now};
         continue;
       }
-      // Once a market request may have crossed the network boundary, absence
-      // from a later snapshot is NOT permission to submit the parent again.
-      if (prior && prior.planId === plan.id && (prior.status !== "CANCELLED"||prior.marketSubmittedAt!=null)) {
-        if(prior.status==="CANCELLED"||prior.status==="ERROR")
-          this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"SUBMISSION_UNCONFIRMED",
-            reason:prior.lastError??"该源单已提交过，等待成交核对，不自动重放",observedAt:now};
-        continue;
-      }
+      // A non-market or pre-submit prior can still be cancelled/replaced below.
+      if (prior && prior.planId === plan.id && prior.status !== "CANCELLED") continue;
       if (prior && !["FILLED", "CANCELLED"].includes(prior.status)) await this.cancelLiveEntry(client, prior);
       let intent: ReturnType<typeof buildLiveEntryIntent>;
       let binding:MirrorBinding|undefined;

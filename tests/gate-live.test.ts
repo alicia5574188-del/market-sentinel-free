@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildLiveEntryIntent, buildLiveStopIntent, GateEntryCancelledError, GateLiveClient, GateReadTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveOrderId, liveStopPriceForTick } from "../lib/gate-live.ts";
+import { buildLiveEntryIntent, buildLiveStopIntent, gateUnknownSubmissionCanResolve, GateEntryCancelledError, GateLiveClient, GateReadTimeoutError, LiveEntrySizingError, liveEntryDisposition, liveOrderId, liveStopPriceForTick } from "../lib/gate-live.ts";
 import type { PaperPlan } from "../lib/liquidity-core.ts";
 
 function plan(marketState: PaperPlan["marketState"], side: PaperPlan["side"]): PaperPlan {
@@ -367,4 +367,25 @@ test("both private routes hanging remain bounded and public diagnostics omit the
     assert.equal(client.readTransport.timeouts,1);
     assert.equal(client.readTransport.lastTimeoutPath,"/futures/usdt/orders");
   }finally{globalThis.fetch=real;}
+});
+
+
+test("live market entry uses RESULT mode so IOC execution does not wait for full clearing fields",async()=>{
+  const real=globalThis.fetch;const bodies:Record<string,unknown>[]=[];
+  globalThis.fetch=async(input,init)=>{
+    const request=new Request(input,init);bodies.push(JSON.parse(await request.text()) as Record<string,unknown>);
+    return Response.json({id_string:"123456789012345678",text:"t-ms-e-test",status:"finished",finish_as:"filled"});
+  };
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    const id=await client.createEntry({kind:"MARKET",tag:"t-ms-e-test",size:1,contracts:1,notional:100,plannedRisk:2,leverage:10,margin:10,
+      body:{contract:"BTC_USDT",size:"1",price:"0",tif:"ioc",text:"t-ms-e-test",reduce_only:false}});
+    assert.equal(id,"123456789012345678");assert.equal(bodies[0]?.action_mode,"RESULT");
+  }finally{globalThis.fetch=real;}
+});
+
+test("unknown submission is only final after Gate custom-text no-fill lookup window plus grace",()=>{
+  const submitted=1_000_000;
+  assert.equal(gateUnknownSubmissionCanResolve(submitted,submitted+64_999),false);
+  assert.equal(gateUnknownSubmissionCanResolve(submitted,submitted+65_000),true);
 });

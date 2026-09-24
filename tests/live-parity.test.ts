@@ -701,15 +701,21 @@ test("owner OFF continues reconciling an uncertain submission until a late verif
     assert.equal(scheduler.liveNeedsSync(),false);
   }finally{Date.now=original;}
 }));
-test("an unconfirmed old parent cannot be overwritten by a new same-coin source after a minute",()=>clock(async()=>{
+test("a same-coin replacement is allowed only after the old ambiguous parent is proven to have no live exposure",()=>clock(async()=>{
   const {h,gate}=await harness();gate.ambiguous=true;await enableNew(h);
   const original=Date.now;Date.now=()=>T+120000;
   try{
-    await h.syncLive(Date.now());h.forwardState.positions=[trade("replacement-parent")];
+    // Beyond Gate's custom-text zero-fill lookup window the fresh snapshot has
+    // no position and the direct tag lookup is still not-found, so the old
+    // parent is durably resolved as no exposure. It is never replayed.
+    await h.syncLive(Date.now());
+    assert.equal((live(h).entries.BTC_USDT as unknown as {submissionResolved?:boolean}).submissionResolved,true);
+    h.forwardState.positions=[trade("replacement-parent")];
     h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:Date.now(),fresh:true,entryReady:true}};
     await h.syncLive(Date.now());
-    assert.equal(gate.placed.length,1);assert.equal(live(h).entries.BTC_USDT.planId,"ft-fixture-1");
-    assert.equal(live(h).operational,false);
+    assert.equal(gate.placed.length,2);
+    assert.equal(live(h).entries.BTC_USDT.planId,"replacement-parent");
+    assert.equal(live(h).operational,false,"the NEW ambiguous parent is now the only unresolved exposure");
   }finally{Date.now=original;}
 }));
 

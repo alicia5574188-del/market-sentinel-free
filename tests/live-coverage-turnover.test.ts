@@ -263,3 +263,11 @@ test("UI shows system LIVE turnover and actual Gate fees beside the account summ
  assert.match(ui,/实盘累计成交额/);assert.match(ui,/live\?\.turnover\?\.total/);assert.match(ui,/全账户成交可能包含手工成交/);
  const worker=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8");assert.match(worker,/now-this.turnoverAttemptAt<60_000/);assert.match(worker,/this\.ctx\.waitUntil\(work\.finally/);
 });
+
+test("unknown LIVE entry reconciliation is bounded and cannot leave the account blocked forever",()=>{
+  const worker=readFileSync(new URL("../worker/index-clean.ts",import.meta.url),"utf8");
+  assert.match(worker,/gateUnknownSubmissionCanResolve\(entry\.marketSubmittedAt,now\)/);
+  assert.match(worker,/entry\.submissionResolved = true/);
+  assert.match(worker,/其他新机会恢复执行/);
+  assert.doesNotMatch(worker,/Gate 在提交后6秒内未返回订单 .*本计划不自动重放/);
+});
