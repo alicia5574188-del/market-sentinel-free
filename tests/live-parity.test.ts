@@ -709,7 +709,7 @@ test("a same-coin replacement is allowed only after the old ambiguous parent is 
     // no position and the direct tag lookup is still not-found, so the old
     // parent is durably resolved as no exposure. It is never replayed.
     await h.syncLive(Date.now());
-    assert.equal(live(h).entries.BTC_USDT.submissionResolved,true);
+    assert.equal((live(h).entries.BTC_USDT as unknown as {submissionResolved?:boolean}).submissionResolved,true);
     h.forwardState.positions=[trade("replacement-parent")];
     h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:Date.now(),fresh:true,entryReady:true}};
     await h.syncLive(Date.now());
