@@ -127,7 +127,7 @@ test("probe relationships share one 1.5% portfolio pool instead of fragmenting i
 test("different rule ids from one causal family can open only one reserve experiment",()=>{
   const now=nowAt(39),s=initialForward(now-60_000);s.lastCandleAt=now;
   const a=manualOpportunity(symbols[0]!,0,{premium:true,reserve:true,ruleId:"family-a",health:.25,score:72}),
-    b=manualOpportunity(symbols[1]!,1,{premium:true,reserve:true,ruleId:"family-b",health:.25,score:71});
+    b=manualOpportunity(symbols[2]!,2,{premium:true,reserve:true,ruleId:"family-b",health:.25,score:71});
   s.opportunities=[a,b];seedManualRules(s,s.opportunities,now);
   for(const [i,r] of s.relationEngine.rules.entries()){
     r.scope="RECENT";r.status="DEGRADED";r.health=.25;r.livePathScore=.70;r.environmentFit=.80;
