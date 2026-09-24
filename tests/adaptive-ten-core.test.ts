@@ -21,8 +21,8 @@ const contracts=Object.fromEntries(symbols.map(s=>[s,contract]));
 const seedManualRules=(state:ReturnType<typeof initialForward>,ops:Opportunity[],now:number)=>{
   const grouped=new Map<string,Opportunity[]>();
   for(const o of ops){if(!o.relationRuleId)continue;const rows=grouped.get(o.relationRuleId)??[];rows.push(o);grouped.set(o.relationRuleId,rows);}
-  state.relationEngine.rules=[...grouped.entries()].map(([id,rows],groupIndex)=>{const o=rows[0]!,idx=Math.max(0,symbols.indexOf(o.symbol)),
-    feature=idx%8,op:idx<8?"GE":"LE",health=o.relationHealth??.9;
+  state.relationEngine.rules=[...grouped.entries()].map(([id,rows])=>{const o=rows[0]!,idx=Math.max(0,symbols.indexOf(o.symbol)),
+    feature=idx%8,op=idx<8?"GE":"LE",health=o.relationHealth??.9;
     return{id,signature:id,scope:o.reserve?"RECENT":"BASE",horizon:o.relationHorizon??60,side:o.side,
       conditions:[{feature,op,threshold:0}],longNet:.01,recentNet:.008,standardError:.001,samples:40,longGroups:6,recentGroups:3,
       health,status:o.relationStatus??"ACTIVE",livePathScore:.78,environmentFit:.82,stopRate:o.stopRate,targetRate:o.targetRate,
