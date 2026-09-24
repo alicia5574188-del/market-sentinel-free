@@ -2,10 +2,10 @@
  * Multi-source public market data for Adaptive Ten.
  *
  * Analysis never depends on one venue. Gate remains the execution/account truth;
- * Bybit and Binance are independent public analysis feeds. Symbols are mapped
+ * Bybit, OKX and Binance are independent public analysis feeds. Symbols are mapped
  * only by exact USDT contract name (FOO_USDT <-> FOOUSDT); no heuristic aliasing.
  */
-export type MarketSource="BYBIT"|"BINANCE";
+export type MarketSource="BYBIT"|"OKX"|"BINANCE";
 export type HubQuote={source:MarketSource;symbol:string;observedAt:number;last:number;bid:number;ask:number;
   volume24hUsd:number;change24hRate:number};
 export type HubCandle={time:number;open:number;high:number;low:number;close:number;volume:number};
@@ -14,13 +14,16 @@ export type ConsensusQuote={symbol:string;observedAt:number;mid:number;bid:numbe
 type SourceHealth={lastSuccessAt:number;lastFailureAt:number;failures:number;lastError:string|null;rows:number};
 
 const BYBIT="https://api.bybit.com";
+const OKX="https://www.okx.com";
 const BINANCE="https://fapi.binance.com";
 const BULK_TIMEOUT_MS=1_200;
 const CANDLE_TIMEOUT_MS=1_500;
 const QUOTE_FRESH_MS=12_000;
 const finite=(v:number)=>Number.isFinite(v);
 const canonical=(external:string)=>external.endsWith("USDT")?external.slice(0,-4)+"_USDT":null;
+const canonicalOkx=(external:string)=>external.endsWith("-USDT-SWAP")?external.slice(0,-10)+"_USDT":null;
 export const externalSymbol=(gate:string)=>gate.endsWith("_USDT")?gate.slice(0,-5)+"USDT":null;
+export const okxSymbol=(gate:string)=>gate.endsWith("_USDT")?gate.slice(0,-5)+"-USDT-SWAP":null;
 
 async function json<T>(url:string,timeoutMs:number):Promise<T>{
   const response=await fetch(url,{headers:{Accept:"application/json"},signal:AbortSignal.timeout(timeoutMs)});
@@ -40,9 +43,11 @@ function continuous(rows:HubCandle[],seconds:number){
 
 export class MarketDataHub{
   private bybit=new Map<string,HubQuote>();
+  private okx=new Map<string,HubQuote>();
   private binance=new Map<string,HubQuote>();
   private health:Record<MarketSource,SourceHealth>={
     BYBIT:{lastSuccessAt:0,lastFailureAt:0,failures:0,lastError:null,rows:0},
+    OKX:{lastSuccessAt:0,lastFailureAt:0,failures:0,lastError:null,rows:0},
     BINANCE:{lastSuccessAt:0,lastFailureAt:0,failures:0,lastError:null,rows:0},
   };
   private lastAttemptAt=0;
@@ -57,12 +62,15 @@ export class MarketDataHub{
     this.inFlight=task;return task;
   }
   async refresh(now=Date.now()){
-    const [bybit,binance]=await Promise.allSettled([this.fetchBybit(now),this.fetchBinance(now)]);
+    const [bybit,okx,binance]=await Promise.allSettled([this.fetchBybit(now),this.fetchOkx(now),this.fetchBinance(now)]);
     if(bybit.status==="fulfilled"){this.bybit=bybit.value;this.ok("BYBIT",now,bybit.value.size);}
     else this.fail("BYBIT",now,bybit.reason);
+    if(okx.status==="fulfilled"){this.okx=okx.value;this.ok("OKX",now,okx.value.size);}
+    else this.fail("OKX",now,okx.reason);
     if(binance.status==="fulfilled"){this.binance=binance.value;this.ok("BINANCE",now,binance.value.size);}
     else this.fail("BINANCE",now,binance.reason);
-    if(bybit.status==="rejected"&&binance.status==="rejected")throw new Error("Bybit/Binance public market data unavailable");
+    if(bybit.status==="rejected"&&okx.status==="rejected"&&binance.status==="rejected")
+      throw new Error("Bybit/OKX/Binance public market data unavailable");
   }
   private ok(source:MarketSource,now:number,rows:number){this.health[source]={lastSuccessAt:now,lastFailureAt:this.health[source].lastFailureAt,
     failures:0,lastError:null,rows};}
@@ -83,6 +91,23 @@ export class MarketDataHub{
     }
     if(out.size<20)throw new Error(`Bybit incomplete ticker surface: ${out.size}`);return out;
   }
+  private async fetchOkx(now:number){
+    type Row={instId?:string;last?:string;bidPx?:string;askPx?:string;volCcy24h?:string;open24h?:string;ts?:string};
+    type Res={code?:string;data?:Row[]};
+    const body=await json<Res>(`${OKX}/api/v5/market/tickers?instType=SWAP`,BULK_TIMEOUT_MS);
+    if(body.code!=="0"||!Array.isArray(body.data))throw new Error("OKX ticker payload");
+    const out=new Map<string,HubQuote>();
+    for(const row of body.data){const symbol=canonicalOkx(row.instId??"");if(!symbol)continue;
+      const last=Number(row.last),bid=Number(row.bidPx),ask=Number(row.askPx),open=Number(row.open24h);
+      if(!(last>0&&bid>0&&ask>bid))continue;
+      const exchangeAt=Number(row.ts),observedAt=exchangeAt>0&&exchangeAt<=now+2_000?Math.min(exchangeAt,now):now;
+      const volumeBase=Math.max(0,Number(row.volCcy24h??0));
+      out.set(symbol,{source:"OKX",symbol,observedAt,last,bid,ask,volume24hUsd:volumeBase*last,
+        change24hRate:open>0?last/open-1:0});
+    }
+    if(out.size<20)throw new Error(`OKX incomplete ticker surface: ${out.size}`);return out;
+  }
+
   private async fetchBinance(now:number){
     type Row={symbol?:string;bidPrice?:string;askPrice?:string;bidQty?:string;askQty?:string;time?:number};
     const body=await json<Row[]>(`${BINANCE}/fapi/v1/ticker/bookTicker`,BULK_TIMEOUT_MS);
@@ -96,19 +121,21 @@ export class MarketDataHub{
   }
 
   quote(symbol:string,now=Date.now()):ConsensusQuote|null{
-    const rows=[this.bybit.get(symbol),this.binance.get(symbol)].filter((q):q is HubQuote=>!!q&&validQuote(q,now));
+    const rows=[this.bybit.get(symbol),this.okx.get(symbol),this.binance.get(symbol)]
+      .filter((q):q is HubQuote=>!!q&&validQuote(q,now));
     if(!rows.length)return null;
-    const mids=rows.map(q=>(q.bid+q.ask)/2).sort((a,b)=>a-b),mid=mids.length===2?(mids[0]!+mids[1]!)/2:mids[0]!;
+    const mids=rows.map(q=>(q.bid+q.ask)/2).sort((a,b)=>a-b);
+    const mid=mids.length%2?mids[Math.floor(mids.length/2)]!:(mids[mids.length/2-1]!+mids[mids.length/2]!)/2;
     const bid=Math.min(...rows.map(q=>q.bid)),ask=Math.max(...rows.map(q=>q.ask));
     const disagreement=rows.length>1?(Math.max(...mids)-Math.min(...mids))/Math.max(mid,1e-12):0;
-    const bybit=rows.find(q=>q.source==="BYBIT");
+    const directional=rows.find(q=>q.source==="BYBIT")??rows.find(q=>q.source==="OKX");
     return{symbol,observedAt:Math.max(...rows.map(q=>q.observedAt)),mid,bid,ask,sources:rows.map(q=>q.source),sourceCount:rows.length,
       disagreementRate:disagreement,volume24hUsd:Math.max(...rows.map(q=>q.volume24hUsd)),
-      change24hRate:bybit?.change24hRate??0};
+      change24hRate:directional?.change24hRate??0};
   }
   coverage(symbol:string,now=Date.now()){const q=this.quote(symbol,now);return q?{sourceCount:q.sourceCount,sources:q.sources,disagreementRate:q.disagreementRate}
     :{sourceCount:0,sources:[] as MarketSource[],disagreementRate:0};}
-  supports(symbol:string){return this.bybit.has(symbol)||this.binance.has(symbol);}
+  supports(symbol:string){return this.bybit.has(symbol)||this.okx.has(symbol)||this.binance.has(symbol);}
   radarRows<T extends {symbol:string;last:number;volume24hUsd:number;fundingRate:number}>(gate:T[],now=Date.now()){
     return gate.map(row=>{const q=this.quote(row.symbol,now);return{symbol:row.symbol,last:q?.mid??row.last,
       volume24hUsd:Math.max(row.volume24hUsd,q?.volume24hUsd??0),high24h:q?.mid??row.last,low24h:q?.mid??row.last,
@@ -116,13 +143,16 @@ export class MarketDataHub{
   }
 
   async candles(symbol:string,interval:"1m"|"5m",limit=120):Promise<{source:MarketSource;rows:HubCandle[]}|null>{
-    const external=externalSymbol(symbol);if(!external)return null;
+    const external=externalSymbol(symbol),okxInst=okxSymbol(symbol);if(!external||!okxInst)return null;
     // One source affinity per symbol keeps 1m confirmation and 5m structure on
-    // the same venue. If that venue fails, the whole symbol moves to the other.
+    // the same venue. If that venue fails, the whole symbol moves together.
     const preferred=this.candleSource.get(symbol)?.source;
-    const order:MarketSource[]=preferred?[preferred,preferred==="BYBIT"?"BINANCE":"BYBIT"]:["BYBIT","BINANCE"];
+    const all:MarketSource[]=["BYBIT","OKX","BINANCE"];
+    const order:MarketSource[]=preferred?[preferred,...all.filter(source=>source!==preferred)]:all;
     for(const source of order){
-      try{const rows=source==="BYBIT"?await this.bybitCandles(external,interval,limit):await this.binanceCandles(external,interval,limit);
+      try{const rows=source==="BYBIT"?await this.bybitCandles(external,interval,limit)
+        :source==="OKX"?await this.okxCandles(okxInst,interval,limit)
+        :await this.binanceCandles(external,interval,limit);
         if(rows.length>=Math.min(6,limit)){this.candleSource.set(symbol,{source,at:Date.now()});return{source,rows};}}
       catch{/* try independent source */}
     }
@@ -137,6 +167,17 @@ export class MarketDataHub{
     return continuous(body.result!.list!.map(r=>({time:Number(r[0])/1000,open:Number(r[1]),high:Number(r[2]),low:Number(r[3]),
       close:Number(r[4]),volume:Number(r[5])})).filter(r=>r.time+seconds<=completed),seconds).slice(-n);
   }
+  private async okxCandles(instId:string,interval:"1m"|"5m",limit:number){
+    type Res={code?:string;data?:string[][]};
+    const n=Math.max(2,Math.min(300,Math.floor(limit))),bar=interval;
+    const body=await json<Res>(`${OKX}/api/v5/market/candles?instId=${encodeURIComponent(instId)}&bar=${bar}&limit=${n}`,CANDLE_TIMEOUT_MS);
+    if(body.code!=="0"||!Array.isArray(body.data))throw new Error("OKX kline payload");
+    const seconds=interval==="1m"?60:300,completed=Math.floor(Date.now()/1000/seconds)*seconds;
+    return continuous(body.data.map(r=>({time:Number(r[0])/1000,open:Number(r[1]),high:Number(r[2]),low:Number(r[3]),
+      close:Number(r[4]),volume:Number(r[5])}))
+      .filter((r,i)=>body.data![i]?.[8]==="1"&&r.time+seconds<=completed),seconds).slice(-n);
+  }
+
   private async binanceCandles(symbol:string,interval:"1m"|"5m",limit:number){
     const n=Math.max(2,Math.min(1000,Math.floor(limit)));
     const body=await json<Array<[number,string,string,string,string,string,number,...unknown[]]>>(
@@ -148,9 +189,9 @@ export class MarketDataHub{
   }
 
   status(now=Date.now()){
-    const sources=(["BYBIT","BINANCE"] as MarketSource[]).map(source=>({source,...this.health[source],
+    const sources=(["BYBIT","OKX","BINANCE"] as MarketSource[]).map(source=>({source,...this.health[source],
       fresh:this.health[source].lastSuccessAt>0&&now-this.health[source].lastSuccessAt<=15_000}));
-    return{version:"multi-source-market-hub-v1",sources,healthySources:sources.filter(s=>s.fresh).length,
+    return{version:"multi-source-market-hub-v2",sources,healthySources:sources.filter(s=>s.fresh).length,
       lastSuccessAt:Math.max(...sources.map(s=>s.lastSuccessAt),0),lastAttemptAt:this.lastAttemptAt,inFlight:!!this.inFlight};
   }
 }
