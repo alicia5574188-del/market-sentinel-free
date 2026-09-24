@@ -112,7 +112,7 @@ test("strategy migration preserves account identity and financial history while 
 
 
 test("manual PAPER reset preserves causal learning while resetting the financial account",()=>{
-  const learned=learnThrough(39),now=nowAt(39);let s=initialForward(now-60_000);s.relationEngine=learned;
+  const learned=learnThrough(39),now=nowAt(39),s=initialForward(now-60_000);s.relationEngine=learned;
   s.sampleMemory["RELATION:MIXED:LONG"]={count:4,emaNetRate:.003,emaMfeRate:.008,emaMaeRate:.002,updatedAt:now};
   s.balance=812.34;s.resolved=9;s.wins=4;s.turnover=5432;
   const n=resetForwardAccountPreservingLearning(s,now+1000);
