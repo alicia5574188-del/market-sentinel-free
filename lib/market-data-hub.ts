@@ -106,6 +106,7 @@ export class MarketDataHub{
   }
   coverage(symbol:string,now=Date.now()){const q=this.quote(symbol,now);return q?{sourceCount:q.sourceCount,sources:q.sources,disagreementRate:q.disagreementRate}
     :{sourceCount:0,sources:[] as MarketSource[],disagreementRate:0};}
+  supports(symbol:string){return this.bybit.has(symbol)||this.binance.has(symbol);}
   radarRows<T extends {symbol:string;last:number;volume24hUsd:number;fundingRate:number}>(gate:T[],now=Date.now()){
     return gate.map(row=>{const q=this.quote(row.symbol,now);return{symbol:row.symbol,last:q?.mid??row.last,
       volume24hUsd:Math.max(row.volume24hUsd,q?.volume24hUsd??0),high24h:q?.mid??row.last,low24h:q?.mid??row.last,
