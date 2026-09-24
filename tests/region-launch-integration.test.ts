@@ -71,7 +71,7 @@ test("a move inside the mature full-wick region cannot create a trade even when 
 
 test("full RegionLaunch path opens only after current 5m strength, a small pullback and real restart",()=>{
   const now=BASE,{s,m}=driveFast(seeded(now),now);
-  assert.equal(s.positions.length,1);
+  assert.equal(s.positions.length,1,s.regionLaunches?.BCH_USDT?.reason);
   const t=s.positions[0]!;
   assert.equal(t.entryContext?.version,"region-launch-entry-v1");assert.equal(t.rule.grammar,REGION_LAUNCH_VERSION);
   assert.equal(t.entryValidation?.version,"region-launch-entry-validation-v1");assert.equal(t.entryValidation?.dueAt,t.openedAt+60_000);
