@@ -535,6 +535,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private liveBackgroundWork: Promise<void> | null = null;
   private liveSourcePending=false;
   private liveFastSourcePending=false;
+  private livePreferCachedNext=false;
   private liveSnapshotCache:GateLiveSnapshot|null=null;
   private liveNextReconcileAt=0;
   private liveSyncUsedCached=false;
@@ -2221,7 +2222,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         const started=Date.now(),requestsBefore=this.liveClient?.requestCount??0;
         this.liveExecution.startedAt=started;this.liveExecution.cycles++;
         try{
-          await this.syncLive(started,false,false,preferCached);
+          this.livePreferCachedNext=preferCached;
+          await this.syncLive(started);
           // If a committed PAPER source was handled from a very recent verified
           // Gate snapshot, immediately follow with one network reconciliation.
           // This removes the pre-submit private-read delay without pretending the
@@ -2250,12 +2252,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.ctx.waitUntil(task.finally(()=>{if(this.liveBackgroundWork===task)this.liveBackgroundWork=null;}));
   }
 
-  protected async syncLive(now:number,initialEnable=false,forceEntryCleanup=false,preferCached=false) {
+  protected async syncLive(now:number,initialEnable=false,forceEntryCleanup=false) {
     while(this.liveSyncWork){
       if(!initialEnable&&!forceEntryCleanup)return this.liveSyncWork;
       await this.liveSyncWork.catch(()=>undefined);
     }
-    const work=this.syncLiveOnce(Date.now(),initialEnable,forceEntryCleanup,preferCached);
+    const work=this.syncLiveOnce(Date.now(),initialEnable,forceEntryCleanup);
     this.liveSyncWork=work;
     try {
       await work;
@@ -2278,7 +2280,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     } finally { if(this.liveSyncWork===work)this.liveSyncWork=null; }
   }
 
-  private async syncLiveOnce(now: number, initialEnable = false, forceEntryCleanup = false, preferCached = false) {
+  private async syncLiveOnce(now: number, initialEnable = false, forceEntryCleanup = false) {
+    const preferCached=this.livePreferCachedNext&&!initialEnable&&!forceEntryCleanup;
+    this.livePreferCachedNext=false;
     // Owner actions and optional hourly evaluation can arrive between two book
     // loops. Reconcile first so LIVE can never observe an unregistered source leg.
     this.reconcileCanonicalMirror(now);
