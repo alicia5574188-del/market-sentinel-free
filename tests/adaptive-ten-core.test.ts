@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {ADAPTIVE_ENGINE_VERSION,ADAPTIVE_REALTIME_POSITION_CAP,ADAPTIVE_TARGET_POSITIONS,advanceForward,forwardSummary,
   initialForward,normalizeForward,type Candle,type Contract,type Quote} from "../lib/forward-relations.ts";
+import {restoreForwardProtectionCheckpoint} from "../lib/forward-protection-checkpoint.ts";
 
 const START=Date.parse("2026-09-24T00:00:00Z")/1000;
 const path=(step=.0015,bars=60):Candle[]=>{const out:Candle[]=[];let prev=100;
@@ -39,6 +40,23 @@ test("strategy normalization upgrades an old account in place instead of creatin
   assert.equal(n.startedAt,123);assert.equal(n.balance,876.54);assert.equal(n.resolved,7);assert.equal(n.turnover,4321);
   assert.equal(n.storage.persistedAt,999);assert.equal(n.engineVersion,ADAPTIVE_ENGINE_VERSION);
   assert.equal(n.strategyAuthorityVersion,ADAPTIVE_ENGINE_VERSION);assert.equal(n.executionVersion,ADAPTIVE_ENGINE_VERSION);
+});
+
+test("legacy protection checkpoint migrates without resetting or forgetting tightened protection",()=>{
+  const symbols=["BTC_USDT"],paths={BTC_USDT:path(.0015)},price=path(.0015).at(-1)!.close;
+  const now=(paths.BTC_USDT.at(-1)!.time+300)*1000+1000,contracts={BTC_USDT:contract};
+  let s=initialForward(now-60_000);
+  s=advanceForward({state:s,now,paths,quotes:{BTC_USDT:quote(price,now)},contracts,entrySymbols:symbols}).state;
+  assert.equal(s.positions.length,1);s.storage={persistedAt:now,error:null};
+  const t=s.positions[0]!,tight=t.entryPrice*1.004;
+  const legacy={version:"forward-protection-checkpoint-v1",startedAt:s.startedAt,baseRevision:s.revision,basePersistedAt:s.storage.persistedAt,
+    quoteCycleAt:now+1000,peakEquity:s.peakEquity+1,maxDrawdown:s.maxDrawdown,
+    positions:[{id:t.id,openedAt:t.openedAt,favorable:.012,adverse:.002,lastPrice:t.entryPrice*1.01,lastQuoteAt:now+1000,
+      stopPrice:tight,relationFailureBars:0,lastRelationBar:now,profitProtection:{floorRate:.004}}]};
+  const restored=restoreForwardProtectionCheckpoint(s,legacy);
+  assert.equal(restored.startedAt,s.startedAt);assert.equal(restored.balance,s.balance);assert.equal(restored.positions.length,1);
+  assert.equal(restored.positions[0]!.stopPrice,tight);assert.equal(restored.positions[0]!.profitFloorRate,.004);
+  assert.equal(restored.positions[0]!.favorable,.012);assert.equal(restored.lastQuoteCycleAt,now+1000);
 });
 
 test("profit protection tightens after a strong favorable move and never loosens",()=>{
