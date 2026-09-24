@@ -3,8 +3,8 @@ import { LiveHistoryReader } from "../lib/live-history-reader.ts";
 
 import { DurableObject } from "cloudflare:workers";
 import handler from "vinext/server/app-router-entry";
-import { GatePublicError, fetchActiveContracts, fetchBackgroundFuturesBook, fetchContractStats, fetchLiquidations,
-  fetchMarketTickers, fetchRecentTrades, fetchStructureCandles, fetchUrgentFuturesBook } from "../lib/gate-market.ts";
+import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchLiquidations, fetchMarketTickers, fetchRecentTrades,
+  fetchStructureCandles, fetchTickerBbo, fetchUrgentFuturesBook } from "../lib/gate-market.ts";
 import { GateStreamingFeed } from "../lib/gate-stream.ts";
 import { closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_RISK_CAP, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
 import { aggregateFourHourCandles, analyzeSnapshot, ancillarySchedule, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, structureDirection, updateOpenInterestCohorts, type SymbolMemory } from "../lib/liquidity-runtime.ts";
@@ -2821,9 +2821,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     this.runtime.feedQuality.attempts+=due.length;
     const rows=await Promise.allSettled(due.map(async symbol=>{
       const pushed=streamBook(symbol);if(pushed){this.gateStream.used("websocket");return{symbol,snapshot:pushed};}
-      const fetcher=urgent.has(symbol)?fetchUrgentFuturesBook:fetchBackgroundFuturesBook;
-      const snapshot=await fetcher(symbol,this.runtime.tickSize[symbol]??.0001,this.runtime.contractMeta[symbol]?.quantoMultiplier??1);
-      this.gateStream.used("rest");return{symbol,snapshot};
+      const tick=this.runtime.tickSize[symbol]??.0001,mult=this.runtime.contractMeta[symbol]?.quantoMultiplier??1;
+      try{
+        const snapshot=await fetchTickerBbo(symbol,tick,mult);this.gateStream.used("rest");return{symbol,snapshot};
+      }catch(error){
+        // Existing exposure and active candidates get one final depth fallback;
+        // ordinary warming markets yield to the next 2s cycle instead.
+        if(!urgent.has(symbol))throw error;
+        const snapshot=await fetchUrgentFuturesBook(symbol,tick,mult);this.gateStream.used("rest");return{symbol,snapshot};
+      }
     }));
     let successes=0;
     for(let i=0;i<rows.length;i++){

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fetchActiveContracts, fetchBackgroundFuturesBook, fetchContractStats, fetchFuturesBook, fetchLiquidations,
-  fetchMarketTickers, fetchStructureCandles, fetchUrgentFuturesBook } from "../lib/gate-market.ts";
+  fetchMarketTickers, fetchStructureCandles, fetchTickerBbo, fetchUrgentFuturesBook } from "../lib/gate-market.ts";
 
 const withFetch = async (body: unknown, run: () => Promise<void>) => {
   const prior = globalThis.fetch;
@@ -18,6 +18,16 @@ test("Gate book requires both exchange id and update, parses object levels, and 
     assert.equal(book.sequence, 7);
     assert.deepEqual(book.asks.map((row) => row.price), [101, 102]);
     assert.equal(book.bids[0].size, 1.98);
+  });
+});
+
+test("single-contract ticker BBO is a lightweight executable fallback",async()=>{
+  const before=Date.now();
+  await withFetch([{contract:"NEAR_USDT",highest_bid:"5.10",highest_size:"20",lowest_ask:"5.11",lowest_size:"25"}],async()=>{
+    const bbo=await fetchTickerBbo("NEAR_USDT",.001,.1);
+    assert.equal(bbo.bids[0]!.price,5.10);assert.equal(bbo.asks[0]!.price,5.11);
+    assert.ok(Math.abs(bbo.bids[0]!.size-10.2)<1e-10);assert.ok(Math.abs(bbo.asks[0]!.size-12.775)<1e-10);
+    assert.ok(bbo.observedAt>=before&&bbo.observedAt<=Date.now());
   });
 });
 

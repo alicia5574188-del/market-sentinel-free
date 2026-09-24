@@ -137,6 +137,10 @@ export type GateTicker = {
   mark_price?: string;
   index_price?: string;
   total_size?: string;
+  lowest_ask?: string;
+  lowest_size?: string;
+  highest_bid?: string;
+  highest_size?: string;
 };
 
 export type GateContract = {
@@ -202,6 +206,20 @@ export async function fetchMarketTickers() {
 export async function fetchTicker(symbol: string) {
   const rows = await gatePublic<GateTicker[]>(`/futures/usdt/tickers?contract=${encodeURIComponent(symbol)}`);
   return rows[0] ?? null;
+}
+
+/** Lightweight executable BBO fallback.
+ * Used only when the subscribed websocket does not currently have a usable BBO.
+ * A successful HTTP response is timestamped at receipt because Gate's ticker
+ * response carries current bid/ask but no per-row exchange timestamp. */
+export async function fetchTickerBbo(symbol:string,tickSize=.0001,quantoMultiplier=1):Promise<BookSnapshot>{
+  const rows=await gatePublic<GateTicker[]>(`/futures/usdt/tickers?contract=${encodeURIComponent(symbol)}`,900,2);
+  const row=rows[0],bid=Number(row?.highest_bid??0),ask=Number(row?.lowest_ask??0);
+  const bidContracts=Math.abs(Number(row?.highest_size??0)),askContracts=Math.abs(Number(row?.lowest_size??0));
+  if(!(bid>0&&ask>bid&&bidContracts>0&&askContracts>0))throw new Error(`${symbol} ticker BBO unavailable`);
+  const observedAt=Date.now(),mult=Math.max(quantoMultiplier,1e-12);
+  return{symbol,observedAt,sequence:observedAt,tickSize,
+    bids:[{price:bid,size:bidContracts*bid*mult}],asks:[{price:ask,size:askContracts*ask*mult}]};
 }
 
 export type GateTrade = { id?: number; create_time_ms?: string; price?: string; size?: string | number };
