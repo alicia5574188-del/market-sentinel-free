@@ -492,7 +492,7 @@ function rotateIfNeeded(s:ForwardState,quotes:Record<string,Quote>,contracts:Rec
   s.lastRotationAt=now;event(s,now,"ROTATION",candidate.symbol,`${weak.symbol} → ${candidate.symbol}，优势差${(candidate.score-weakScore).toFixed(0)}分`);
   return true;
 }
-function fillPortfolio(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,equity:number,premiumOnly:boolean){
+export function fillForwardPortfolio(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,equity:number,premiumOnly:boolean){
   const eligible=rankedEligible(s,now).filter(o=>!premiumOnly||o.premium);
   // This is a current-state blocker view, not a retry counter. One candidate can
   // contribute at most once per execution pass, so the UI can never show
@@ -541,7 +541,7 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
   }
   const mark=equityMark(s,input.quotes,input.now);s.peakEquity=Math.max(s.peakEquity,mark.equity);s.maxDrawdown=Math.max(s.maxDrawdown,1-mark.equity/Math.max(s.peakEquity,1));
   updateDaily(s,input.now,mark.equity);rotateIfNeeded(s,input.quotes,input.contracts,input.now,mark.equity);
-  const opened=fillPortfolio(s,input.quotes,input.contracts,input.now,mark.equity,!dataDue);
+  const opened=fillForwardPortfolio(s,input.quotes,input.contracts,input.now,mark.equity,!dataDue);
   const d=s.relationEngine.diagnostics;
   const totalRisk=existingRisk(s),riskUse=mark.equity>0?100*totalRisk/mark.equity:0;
   s.latestReason=s.relationEngine.rules.length===0?d.warmup
