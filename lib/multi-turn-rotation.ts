@@ -29,8 +29,10 @@ export function multiTurnRotationReentryCooldownMs(timeframe:TurnTimeframe){
   return Math.max(60*60_000,Math.min(8*60*60_000,TURN_CONFIG[timeframe].minutes*2*60_000));
 }
 
-export function rotationRiskSaturated(input:{equity:number;totalRisk:number;sideRisk:number;sleeveRisk:number;riskCap:number}){
+export function rotationRiskSaturated(input:{equity:number;totalRisk:number;sideRisk:number;sleeveRisk:number;riskCap:number;
+  positionCount?:number;targetPositions?:number}){
   if(!(input.equity>0))return false;
+  if(input.positionCount!=null&&input.targetPositions!=null&&input.positionCount>=input.targetPositions)return true;
   return input.totalRisk>=input.equity*.095
     ||input.sideRisk>=input.equity*.065*.95
     ||input.sleeveRisk>=input.equity*input.riskCap*.95;
