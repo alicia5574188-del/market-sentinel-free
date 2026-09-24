@@ -14,10 +14,15 @@ test("owner PAPER reset remains isolated, confirmed and unavailable to members",
   assert.match(ownerAction,/RESET_PAPER/);
   assert.match(resetMethod,/runtime\.live\.requestedEnabled\|\|this\.runtime\.live\.operational/);
   assert.match(resetMethod,/resetForwardAccountPreservingLearning\(previous,now\)/);
-  assert.match(worker,/prepareForwardReset\(previous,closed,next,now\)/);\n  assert.doesNotMatch(resetMethod,/行情不新鲜/);\n  assert.match(resetMethod,/for\(const\[key,value\]of Object\.entries\(prepared\.archiveEntries\)\)await transaction\.put\(key,value\)/);\n  assert.match(resetMethod,/prepared\.accountEntries/);\n  assert.match(resetMethod,/模拟账户重置失败（\$\{stage\}）/);
+  assert.match(worker,/prepareForwardReset\(previous,closed,next,now\)/);
+  assert.doesNotMatch(resetMethod,/行情不新鲜/);
+  assert.match(resetMethod,/for\(const\[key,value\]of Object\.entries\(prepared\.archiveEntries\)\)await transaction\.put\(key,value\)/);
+  assert.match(resetMethod,/prepared\.accountEntries/);
+  assert.match(resetMethod,/模拟账户重置失败（\$\{stage\}）/);
   assert.doesNotMatch(resetMethod,/initialForward\(now\)/);
   assert.match(control,/学习样本和关系状态已保留/);
-  assert.match(control,/市场学习样本会保留/);\n  assert.match(control,/try\{onReset\(\);\}catch/);
+  assert.match(control,/市场学习样本会保留/);
+  assert.match(control,/try\{onReset\(\);\}catch/);
   assert.match(control,/auth\.username==="owner"/);
   assert.match(control,/!auth\.memberId/);
   assert.match(control,/auth\.role!=="member"/);
