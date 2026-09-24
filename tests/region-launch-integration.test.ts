@@ -49,7 +49,7 @@ function step(state:ForwardState,now:number,mid:number,minutePaths:Record<string
 function fastPath(now:number){
   const breakout=candle(now,100.95,102.72,100.92,102.62);
   const pullback=candle(now+60_000,102.62,102.63,102.28,102.32);
-  const restart=candle(now+120_000,102.32,102.56,102.30,102.54);
+  const restart=candle(now+120_000,102.32,102.78,102.30,102.74);
   return{breakout,pullback,restart};
 }
 function driveFast(state:ForwardState,now:number){
@@ -58,7 +58,7 @@ function driveFast(state:ForwardState,now:number){
   // deliberately does not "help" the strategy with a later, farther chase.
   s=step(s,now+60_000,102.62,{BCH_USDT:[m.breakout]}).state;
   s=step(s,now+120_000,102.32,{BCH_USDT:[m.breakout,m.pullback]}).state;
-  s=step(s,now+180_000,102.54,{BCH_USDT:[m.breakout,m.pullback,m.restart]}).state;
+  s=step(s,now+180_000,102.74,{BCH_USDT:[m.breakout,m.pullback,m.restart]}).state;
   return{s,m};
 }
 
