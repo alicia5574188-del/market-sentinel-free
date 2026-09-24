@@ -238,7 +238,7 @@ export class MarketDataHub{
       completed=Math.floor(Date.now()/1000/seconds)*seconds,start=completed-seconds*(n+4);
     const body=await json<Res>(`${MEXC}/api/v1/contract/kline/${encodeURIComponent(symbol)}?interval=${granularity}&start=${start}&end=${completed}`,CANDLE_TIMEOUT_MS);
     if(body.success!==true||body.code!==0||!body.data||!Array.isArray(body.data.time))throw new Error("MEXC kline payload");
-    const d=body.data,rows=d.time.map((time,i)=>({time:Number(time),open:Number(d.open?.[i]),high:Number(d.high?.[i]),
+    const d=body.data,times=d.time,rows=times.map((time,i)=>({time:Number(time),open:Number(d.open?.[i]),high:Number(d.high?.[i]),
       low:Number(d.low?.[i]),close:Number(d.close?.[i]),volume:Number(d.vol?.[i]??0)}));
     return continuous(rows.filter(r=>r.time+seconds<=completed),seconds).slice(-n);
   }
