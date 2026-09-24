@@ -26,14 +26,13 @@ import { evaluateMultiTurnEntryMemory, type MultiTurnClosedOutcome } from "./mul
 import { entryOpportunityCandidate, type MultiTurnEntryOpportunity } from "./multi-turn-entry-opportunity.ts";
 import { MULTI_TURN_ROTATION_COOLDOWN_MS, MULTI_TURN_ROTATION_VERSION, evaluateRotationOpportunity,
   multiTurnRotationReentryCooldownMs, rankWeakRotationHoldings, rotationAdvantageEnough, rotationRiskSaturated } from "./multi-turn-rotation.ts";
-import { REGION_LIFECYCLE_VERSION, consumeRegionBoundary, evaluateRegionUniverse,
+import { REGION_LIFECYCLE_VERSION, evaluateRegionUniverse,
   type RegionEntrySignal, type RegionLifecycleState } from "./region-lifecycle.ts";
 import { evaluateRegionEntryPolicy } from "./region-entry-policy.ts";
-import { ANCHOR_FLOW_VERSION, anchorFlowExecutableProofRate, anchorFlowStopPrice,
+import { ANCHOR_FLOW_VERSION, anchorFlowExecutableProofRate,
   type AnchorFlowEntrySignal, type AnchorFlowState } from "./anchor-flow.ts";
 import { REGION_LAUNCH_VERSION, advanceRegionLaunchMinutes, advanceRegionLaunchQuotes, advanceRegionLaunchUniverse, consumeRegionLaunch, regionLaunchValidationProofRate,
   type RegionLaunchSignal, type RegionLaunchState } from "./region-launch.ts";
-import { assessStrongBreakout, evaluateMicroRestart } from "./micro-restart.ts";
 // The storage schema stays v1.0 so an algorithm upgrade cannot reset the ledger.
 export const FORWARD_VERSION = "forward-relations-v1.0";
 export const FORWARD_GRAMMAR = "conditional-response-conjunction-v1";
@@ -997,37 +996,6 @@ function regionRule(s:ForwardState,signal:RegionEntrySignal,stopRate:number,rema
     priorResponse:null,recentResponse:0,standardError:0,
     reason:launch?`RegionLaunch 15m管理：${signal.reason}`:anchor?`AnchorFlow 15m执行：${signal.reason}`:`区域拒绝 5m：${signal.reason}`,mutation:"CREATE",
     grammar:launch?REGION_LAUNCH_VERSION:anchor?ANCHOR_FLOW_VERSION:REGION_LIFECYCLE_VERSION,liveEligible:false,authority:"MULTI_TURN",turnTimeframe:launch||anchor?"15m":"5m"};
-}
-
-function anchorMinuteConfirmation(flow:AnchorFlowState|undefined,rows:Candle[]|undefined,costRate:number,now:number,price:number){
-  const waiting={microConfirmed:false,liveBreakout:false,reason:"当前连续1分钟确认尚未就绪；候选保留并等待已有数据通道补齐"};
-  if(!flow||flow.phase!=="READY"||flow.retestAt==null||flow.restartLevel==null||!rows?.length)return waiting;
-  const retestAt=flow.retestAt,restartLevel=flow.restartLevel;
-  const completed=rows.filter(row=>[row.time,row.open,row.high,row.low,row.close,row.volume].every(finite)
-    &&row.high>=row.low&&row.low>0&&(row.time+60)*1000>retestAt-BAR_MS&&(row.time+60)*1000<=now).sort((a,b)=>a.time-b.time).slice(-12);
-  if(completed.length<2)return waiting;
-  const last=completed.at(-1)!,previous=completed.at(-2)!,d=flow.side==="LONG"?1:-1;
-  if(last.time!==previous.time+60||now-(last.time+60)*1000>75_000)return waiting;
-  // A quote rebound measured from an old extreme is not a new entry signal.
-  // Require a break of the CURRENT local two-minute structure, or a freshly
-  // completed impulse/restart whose price has not already reversed.
-  const localBoundary=flow.side==="LONG"?Math.max(previous.high,last.high):Math.min(previous.low,last.low);
-  const liveBreakout=d*(price-localBoundary)>0;
-  for(let i=0;i<completed.length-1;i++){
-    const breakout=completed[i]!,at=(breakout.time+60)*1000;
-    if(at<retestAt)continue;
-    const quality=assessStrongBreakout({bar:breakout,side:flow.side,triggerPrice:restartLevel,
-      costRate,regionWidthRate:flow.regionWidthRate});
-    if(!quality.ok)continue;
-    const result=evaluateMicroRestart({breakout,following:completed.slice(i+1),side:flow.side,
-      triggerPrice:restartLevel,costRate,regionWidthRate:flow.regionWidthRate});
-    if(result.state==="READY"&&result.restartAt!=null&&now-result.restartAt<=75_000
-      &&result.restartAt===(last.time+60)*1000&&result.restartPrice!=null
-      &&d*(price/result.restartPrice-1)>=-costRate*.10)return{microConfirmed:true,liveBreakout,reason:result.reason};
-  }
-  return{microConfirmed:false,liveBreakout,reason:liveBreakout
-    ?`当前盘口顺向突破最近两根完整1分钟K的局部${flow.side==="LONG"?"高点":"低点"}${localBoundary.toPrecision(8)}，完成时间${(last.time+60)*1000}`
-    :"等待当前1分钟局部结构重新顺向突破，旧报价位移不能在横盘内触发入场"};
 }
 
 function openRegionTrades(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,
