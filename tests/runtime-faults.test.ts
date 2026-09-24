@@ -123,16 +123,16 @@ test("protected holding book failures retry on the two-second protection clock i
   assert.equal(stream.runtime.feedFailures.HOLD_USDT.retryAt, now + 2_000);
 });
 
-test("AnchorFlow READY and RETEST share the urgent one-minute data path without making it a hard dependency",async()=>{
+test("retired AnchorFlow states cannot consume urgent one-minute capacity",async()=>{
   const {stream}=await makeStream();const now=1_800_000_000_000;
   stream.forwardState={strategyAuthorityVersion:"multi-turn-v1",positions:[],regionSignals:[],
     anchorFlows:{
       READY_USDT:{symbol:"READY_USDT",phase:"READY",readyAt:now,createdAt:now-60_000},
       RETEST_USDT:{symbol:"RETEST_USDT",phase:"RETEST",readyAt:null,createdAt:now-120_000},
-    },regionLaunches:{}};
-  stream.runtime.liquidUniverse=["READY_USDT","RETEST_USDT"];
+    },regionLaunches:{LAUNCH_USDT:{symbol:"LAUNCH_USDT",phase:"ARMED",quality:.9,updatedAt:now}}};
+  stream.runtime.liquidUniverse=["READY_USDT","RETEST_USDT","LAUNCH_USDT"];
   const urgent=forwardUrgentMinuteSymbols(stream.forwardState,stream.runtime.liquidUniverse);
-  assert.deepEqual(urgent.slice(0,2),["READY_USDT","RETEST_USDT"]);
+  assert.deepEqual(urgent,["LAUNCH_USDT"]);
 });
 
 test("RegionLaunch ARMED markets stay on the two-second book clock across every background bucket",async()=>{
