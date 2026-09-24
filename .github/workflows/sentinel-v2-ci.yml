@@ -51,6 +51,8 @@ jobs:
           node --test tests/architecture.test.mjs tests/migration.test.mjs
           git diff --check
           npx wrangler deploy --dry-run --config dist/server/wrangler.json
+      # Diagnostic rerun after realtime BBO deployment.
+      # BBO post-deploy observation: read-only production sampling.
       - name: Observe current production without mutating it
         if: github.event_name == 'pull_request'
         run: |
@@ -59,7 +61,8 @@ jobs:
           if jq -e . >/dev/null 2>&1 <<<"$body"; then
             jq -c '{ok,version,mode,runtime:{state:.runtime.state,stale:.runtime.stale,lastError:.runtime.lastError,
               lastSuccessAt:.runtime.lastSuccessAt,forward:.runtime.forward,realtimeReadiness:.runtime.realtimeReadiness,
-              liveMode:.runtime.liveMode,limits:.runtime.limits}}' <<<"$body"
+              marketDataTransport:.runtime.marketDataTransport,feedQuality:.runtime.feedQuality,symbols:.runtime.symbols,
+              radar:.runtime.radar,liveMode:.runtime.liveMode,limits:.runtime.limits}}' <<<"$body"
           else
             echo '{"runtimeSnapshot":"unavailable"}'
           fi
@@ -100,15 +103,23 @@ jobs:
       - name: Verify Adaptive Ten production health
         run: |
           set -euo pipefail
-          for i in 1 2 3 4 5 6; do
+          for i in $(seq 1 18); do
             body="$(curl -sS --max-time 15 "$WORKER_BASE_URL/__health" || true)"
             if jq -e '
               .runtime.authorityReady == true and
+              .runtime.stale == false and
+              .runtime.lastError == null and
               .runtime.forward.version == "forward-relations-v1.0" and
               .runtime.forward.strategyAuthorityVersion == "adaptive-ten-slim-v1" and
               .runtime.forward.executionVersion == "adaptive-ten-slim-v1" and
               .runtime.forward.targetPositionCount == 10 and
+              .runtime.forward.storage.error == null and
+              (.runtime.forward.storage.persistedAt|type) == "number" and .runtime.forward.storage.persistedAt > 0 and
+              (.runtime.forward.lastCycleAt|type) == "number" and .runtime.forward.lastCycleAt > 0 and
               .runtime.realtimeReadiness.capacity == 11 and
+              .runtime.realtimeReadiness.protectedMarketsReady == true and
+              .runtime.realtimeReadiness.actionableMarkets >= 1 and
+              .runtime.radar.scanned > 0 and .runtime.radar.scanned <= 30 and
               .runtime.limits.scanUniverse == 30 and
               .runtime.limits.realtimeCapacity == 11 and
               (.runtime.liveMode.requestedEnabled|type) == "boolean" and
@@ -158,10 +169,19 @@ jobs:
           npm run build
           npm run typecheck
           npx wrangler deploy --config dist/server/wrangler.json
-          sleep 10
-          curl -fsS --max-time 15 "$WORKER_BASE_URL/__health" | jq -e '
-            .runtime.authorityReady == true and
-            .runtime.forward.strategyAuthorityVersion == "adaptive-ten-slim-v1" and
-            .runtime.forward.targetPositionCount == 10 and
-            .runtime.realtimeReadiness.capacity == 11
-          ' >/dev/null
+          for i in $(seq 1 18); do
+            body="$(curl -sS --max-time 15 "$WORKER_BASE_URL/__health" || true)"
+            if jq -e '
+              .runtime.authorityReady == true and .runtime.stale == false and .runtime.lastError == null and
+              .runtime.forward.strategyAuthorityVersion == "adaptive-ten-slim-v1" and
+              .runtime.forward.targetPositionCount == 10 and .runtime.forward.storage.error == null and
+              .runtime.forward.lastCycleAt > 0 and .runtime.realtimeReadiness.capacity == 11 and
+              .runtime.realtimeReadiness.protectedMarketsReady == true and .runtime.realtimeReadiness.actionableMarkets >= 1 and
+              .runtime.radar.scanned > 0 and .runtime.radar.scanned <= 30
+            ' <<<"$body" >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "$body"
+          exit 1
