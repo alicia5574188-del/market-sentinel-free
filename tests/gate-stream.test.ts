@@ -82,6 +82,19 @@ test("disconnect clears executable books and reconnect ignores late events from 
   sockets[1]!.message(message(now+2000,201));assert.equal(feed.book("BTC_USDT",.1,1,now+2000)?.sequence,201);
 }));
 
+test("Gate BBO stream accepts the full 30-market execution set while 1m confirmation remains separately bounded",async()=>{
+  const prior=globalThis.fetch,oldNow=Date.now,sockets:FakeSocket[]=[];Date.now=()=>now;
+  globalThis.fetch=async(_input,init)=>{assert.equal(new Headers(init?.headers).get("X-Gate-Size-Decimal"),"1");const socket=new FakeSocket();sockets.push(socket);
+    return{status:101,webSocket:socket} as unknown as Response;};
+  try{
+    const feed=new GateStreamingFeed(),books=Array.from({length:35},(_,i)=>`S${i}_USDT`),minutes=Array.from({length:20},(_,i)=>`M${i}_USDT`);
+    await feed.ensure(books,minutes,[],now);
+    const requests=sockets[0]!.sent.map(row=>JSON.parse(row)),bookSubs=requests.filter(row=>row.channel==="futures.book_ticker"&&row.event==="subscribe"),
+      minuteSubs=requests.filter(row=>row.channel==="futures.candlesticks"&&row.payload?.[0]==="1m"&&row.event==="subscribe");
+    assert.equal(bookSubs.length,30);assert.equal(minuteSubs.length,11);
+  }finally{globalThis.fetch=prior;Date.now=oldNow;}
+});
+
 test("subscription churn removes departed books and uses one connection",()=>fixture(async(feed,sockets)=>{
   sockets[0]!.message(message());
   await feed.ensure(["ETH_USDT"],["ETH_USDT"],["ETH_USDT"],now);
