@@ -1822,10 +1822,18 @@ test("an ambiguous entry response is reconciled once and never blindly replayed"
 
   const realNow=Date.now;Date.now=()=>openedAt+7_001;
   try{await stream.syncLive(openedAt+7_001);}finally{Date.now=realNow;}
-  assert.equal(stream.runtime.live.entries.BTC_USDT.status, "CANCELLED");
+  assert.equal(stream.runtime.live.entries.BTC_USDT.status, "ERROR");
   assert.equal(stream.runtime.live.entrySkips.BTC_USDT.code, "SUBMISSION_UNCONFIRMED");
-  assert.equal(stream.runtime.live.operational, false, "unknown submission is not proven flat after six seconds");
+  assert.equal(stream.runtime.live.operational, false, "six seconds is only an uncertainty warning, not proof of cancellation");
   assert.equal(createCalls, 1, "an unconfirmed mutation must never be repeated for the same PAPER plan");
+
+  Date.now=()=>openedAt+66_001;
+  try{await stream.syncLive(openedAt+66_001);}finally{Date.now=realNow;}
+  assert.equal(stream.runtime.live.entries.BTC_USDT.status, "CANCELLED");
+  assert.equal(stream.runtime.live.entries.BTC_USDT.submissionResolved, true);
+  assert.equal(stream.runtime.live.entrySkips.BTC_USDT.code, "ENTRY_REJECTED");
+  assert.equal(stream.runtime.live.operational, true, "fresh snapshot plus post-60s tag not-found proves there is no live exposure");
+  assert.equal(createCalls, 1, "resolved no-exposure must still never replay the same PAPER parent");
 });
 
 test("an ambiguous stop response is reconciled by tag instead of closing a fresh fill immediately", async () => {
