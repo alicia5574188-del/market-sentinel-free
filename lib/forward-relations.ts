@@ -427,7 +427,14 @@ function candidateRiskRate(o:Opportunity){
 const riskCharge=(t:Trade)=>Math.max(t.plannedRisk,t.entryContext?.portfolioRiskCharge??((t.forecast?.sizingEquity??0)*(t.entryContext?.reserve===true?.003:.006)));
 function existingRisk(s:ForwardState,side?:"LONG"|"SHORT"){return s.positions.filter(t=>!side||t.side===side).reduce((n,t)=>n+riskCharge(t),0);}
 function probeRisk(s:ForwardState){return s.positions.filter(t=>t.entryContext?.reserve===true).reduce((n,t)=>n+riskCharge(t),0);}
-function relationRisk(s:ForwardState,ruleId:string){return s.positions.filter(t=>t.entryContext?.relationRuleId===ruleId).reduce((n,t)=>n+riskCharge(t),0);}
+function tradeFamilyId(s:ForwardState,t:Trade){
+  if(t.entryContext?.relationFamilyId)return t.entryContext.relationFamilyId;
+  const rule=t.entryContext?.relationRuleId?s.relationEngine.rules.find(r=>r.id===t.entryContext?.relationRuleId):undefined;
+  return rule?relationFamilyId(rule):null;
+}
+function familyRisk(s:ForwardState,familyId:string){return s.positions.reduce((n,t)=>tradeFamilyId(s,t)===familyId?n+riskCharge(t):n,0);}
+function openReserveFamilyIds(s:ForwardState){return new Set(s.positions.filter(t=>t.entryContext?.reserve===true)
+  .map(t=>tradeFamilyId(s,t)).filter((x):x is string=>!!x));}
 function cycleRiskAdded(s:ForwardState,since:number){return[...s.positions,...s.history].filter(t=>t.openedAt>=since).reduce((n,t)=>n+riskCharge(t),0);}
 function qualityBlockReason(s:ForwardState,o:Opportunity,equity:number){
   if(!(equity>0))return"账户权益无效";
@@ -445,17 +452,22 @@ function qualityBlockReason(s:ForwardState,o:Opportunity,equity:number){
 function openTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:number,equity:number){
   const side=o.side,d=dir(side),price=side==="LONG"?q.bestAsk:q.bestBid;
   if(!o.relationRuleId)return"缺少Forward关系授权";
+  const authorityRule=s.relationEngine.rules.find(r=>r.id===o.relationRuleId);if(!authorityRule)return"Forward关系证据已更新，等待下一轮";
+  const familyId=relationFamilyId(authorityRule),familyBlock=familyAdmissionBlock({state:s.familyExperiment,rule:authorityRule,
+    allRules:s.relationEngine.rules,reserve:o.reserve===true,openFamilyIds:openReserveFamilyIds(s),netRate:o.netRemainingSpaceRate,
+    edgeRatio:o.edgeRatio,roundTripCost:ROUND_TRIP_COST});
+  if(familyBlock)return familyBlock;
   const qualityBlock=qualityBlockReason(s,o,equity);if(qualityBlock)return qualityBlock;
-  // Analysis can come from Bybit/OKX/Binance. Only relative structure may cross
+  // Analysis can come from Bybit/OKX/KuCoin. Only relative structure may cross
   // venues; all executable prices are re-anchored to the actual Gate quote.
   const stopRate=Number.isFinite(o.stopRate)?o.stopRate:Math.abs(o.price-o.stopPrice)/Math.max(o.price,1e-9);
   const targetRate=Number.isFinite(o.targetRate)?o.targetRate:Math.abs(o.targetPrice/o.price-1);
   if(!(stopRate>=.002&&stopRate<=.03))return"结构止损宽度不合理";
   const totalHeadroom=equity*(TOTAL_RISK_RATE-.001)-existingRisk(s),sideHeadroom=equity*(SIDE_RISK_RATE-.0005)-existingRisk(s,side),
-    relationHeadroom=equity*RELATION_RISK_CAP_RATE-relationRisk(s,o.relationRuleId),
+    familyHeadroom=equity*FAMILY_RISK_CAP_RATE-familyRisk(s,familyId),
     probeHeadroom=o.reserve?equity*PROBE_RISK_POOL_RATE-probeRisk(s):Infinity,
     cycleHeadroom=equity*FIVE_MINUTE_NEW_RISK_RATE-cycleRiskAdded(s,s.lastCandleAt);
-  const headroom=Math.min(totalHeadroom,sideHeadroom,relationHeadroom,probeHeadroom,cycleHeadroom);
+  const headroom=Math.min(totalHeadroom,sideHeadroom,familyHeadroom,probeHeadroom,cycleHeadroom);
   const wantedRisk=equity*candidateRiskRate(o);if(headroom<=equity*.001)return"风险预算已满";
   const riskBudget=Math.min(wantedRisk,headroom),minCharge=equity*(o.reserve?PROBE_MIN_CHARGE_RATE:PRIMARY_MIN_CHARGE_RATE);
   if(riskBudget<minCharge)return o.reserve?"剩余探测预算不足以形成有效仓位":"剩余组合预算不足以形成有效主仓";
@@ -482,7 +494,9 @@ function openTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:nu
     peakPnlRate:0,exitControl:{policy:ADAPTIVE_ENGINE_VERSION,armedAt:null,armedQuoteAt:null,maxObservationGapMs:30_000,maxQuoteAgeMs:10_000},entryContext:{version:"adaptive-ten-entry-v1",capturedAt:now,timeframe:"5m",side,mode:o.mode,reserve:o.reserve===true,reason:o.reason,entryScore:o.score,
       directionStrength:o.directionStrength,spaceScore:o.spaceScore,positionScore:o.positionScore,executionScore:o.executionScore,
       remainingSpaceRate:o.netRemainingSpaceRate,pullbackRiskRate:o.pullbackRiskRate,edgeRatio:o.edgeRatio,expectedHoldMinutes:o.expectedHoldMinutes,
-      marketFit:o.marketFit,regionId:o.regionId,relationRuleId:o.relationRuleId,relationStatus:o.relationStatus,relationHorizon:o.relationHorizon,relationHealth:o.relationHealth,portfolioRiskCharge:riskBudget,
+      marketFit:o.marketFit,regionId:o.regionId,relationRuleId:o.relationRuleId,relationStatus:o.relationStatus,relationHorizon:o.relationHorizon,
+      relationHealth:o.relationHealth,portfolioRiskCharge:riskBudget,relationFamilyId:familyId,relationEvidenceAt:authorityRule.lastQualifiedAt,
+      relationLivePathScore:authorityRule.livePathScore,
       ...(region?{regionLower:region.lower*scale,regionUpper:region.upper*scale,regionCenter:region.center*scale}:{})},
     forecast:{remainingNetRate:o.netRemainingSpaceRate,quality:o.score/100,sizingEquity:equity}};
   s.positions.push(t);s.balance-=entryFee;s.fees+=entryFee;s.turnover+=notional;s.lastEntryAt[o.symbol]=now;s.lastSide[o.symbol]=side;
