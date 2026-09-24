@@ -1113,7 +1113,7 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
     // During the short deploy-to-cutover window, the old PAPER generation may
     // still protect/close its existing positions, but it cannot consume fresh
     // completed candles or create another old-strategy entry.
-    manageMultiTurn(s,quotes,now);
+    manageMultiTurn(s,quotes,now,minutePaths);
     const marked=forwardEquity(s,quotes,now);
     if(!marked.stalePositions){
       s.peakEquity=Math.max(s.peakEquity,marked.equity);
@@ -1178,7 +1178,7 @@ function advanceMultiTurnForward(input:{state:ForwardState;now:number;paths:Reco
         {regions:regionRows.length,signals:region.signals.length,anchorSignals:0,anchorRejections:0});
     }
   }
-  manageMultiTurn(s,quotes,now);
+  manageMultiTurn(s,quotes,now,minutePaths);
   const launchMinutes=advanceRegionLaunchMinutes({states:s.regionLaunches??{},minutePaths,fiveMinutePaths:paths,quotes,frames:s.turnEngine?.frames,
     now,costRate:turnModeledCost("5m",0)});
   s.regionLaunches=launchMinutes.states;
