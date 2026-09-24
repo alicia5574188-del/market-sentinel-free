@@ -22,10 +22,9 @@ export default function EquityCurve({data,healthy,fixture,cache,cacheScope="owne
   useEffect(()=>{cycle.current=data?.lastCycleAt??0;},[data?.lastCycleAt]);
   const liveNow=data?.updatedAt??0;
   const context:CurveContext=useMemo(()=>({startedAt:data?.startedAt??0,initialEquity:data?.initialEquity??1000,
-    policy:data?.policyVersion??"unknown",exitPolicy:data?.exitPolicyVersion??"unknown",
-    comparableSince:Math.max(data?.startedAt??0,data?.policyUpgrade?.at??0,data?.exitPolicyUpgrade?.at??0),
-    persistedAt:data?.storage.persistedAt??0}),[data?.startedAt,data?.initialEquity,data?.policyVersion,data?.exitPolicyVersion,
-      data?.policyUpgrade?.at,data?.exitPolicyUpgrade?.at,data?.storage.persistedAt]);
+    policy:data?.policyVersion??"adaptive-ten-slim-v1",exitPolicy:data?.policyVersion??"adaptive-ten-slim-v1",
+    comparableSince:data?.startedAt??0,persistedAt:data?.storage.persistedAt??0}),
+    [data?.startedAt,data?.initialEquity,data?.policyVersion,data?.storage.persistedAt]);
   const account=context.startedAt;
   useEffect(()=>{if(account&&!fixture)store.configure(context,cacheScope);},[store,context,cacheScope,account,fixture]);
   useEffect(()=>()=>{if(!cache)store.cancel();},[store,cache]);
