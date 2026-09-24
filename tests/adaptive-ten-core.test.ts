@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {ADAPTIVE_ENGINE_VERSION,advanceForward,forwardSummary,initialForward,normalizeForward,resetForwardAccountPreservingLearning,
-  type Candle,type Contract,type Quote} from "../lib/forward-relations.ts";
+  type Candle,type Contract,type Opportunity,type Quote} from "../lib/forward-relations.ts";
 import {FORWARD_RELATION_V2_VERSION,advanceRelationEngine,initialRelationEngine,relationCandidates} from "../lib/forward-relation-v2.ts";
 
 const START=Date.parse("2026-09-24T00:00:00Z")/1000;
@@ -61,6 +61,21 @@ test("PAPER uses learned relations for entries instead of the retired 5m FLOW ga
   assert.ok(s.opportunities.some(o=>o.mode==="RELATION"&&o.eligible));
   assert.ok(s.positions.every(t=>t.entryContext?.mode==="RELATION"||t.entryContext?.regionId));
   assert.ok(s.positions.some(t=>t.entryContext?.relationRuleId));
+});
+
+test("position count is not capped at ten; risk and margin remain the limiting authorities",()=>{
+  const now=nowAt(39),paths=sliced(39);let s=initialForward(now-60_000);
+  s.lastCandleAt=now;s.opportunities=symbols.map((symbol,i)=>({id:`manual-${symbol}`,symbol,side:i%2?"SHORT":"LONG",mode:"RELATION",premium:false,reserve:true,
+    score:70,eligible:true,completedAt:now-1000,expiresAt:now+60_000,price:full[symbol]![39]!.close,stopPrice:full[symbol]![39]!.close*(i%2?1.003:.997),
+    targetPrice:full[symbol]![39]!.close*(i%2?.994:1.006),stopRate:.003,targetRate:.006,directionStrength:60,pathEfficiency:60,momentumPersistence:60,
+    positionScore:70,spaceScore:70,executionScore:90,grossRemainingSpaceRate:.006,netRemainingSpaceRate:.0041,pullbackRiskRate:.003,edgeRatio:1.36,
+    expectedHoldMinutes:60,marketFit:70,regionId:null,regionQuality:null,reason:"risk-limited fixture",relationRuleId:`r-${symbol}`,relationStatus:"ACTIVE",relationHorizon:60,
+    relationHealth:.25,riskScale:.25} satisfies Opportunity));
+  for(let i=0;i<4;i++)s=advanceForward({state:s,now:now+i*1000,paths,quotes:quotesAt(39,now+i*1000),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
+  assert.equal(s.positions.length,12,"legacy ten-seat cap must not stop otherwise risk-valid positions");
+  const equity=forwardSummary(s,quotesAt(39,now+4000),now+4000).equity;
+  assert.ok(s.positions.reduce((n,t)=>n+t.plannedRisk,0)<=equity*.10+1e-6);
+  assert.ok(s.positions.reduce((n,t)=>n+t.margin,0)<=equity*.75+1e-6);
 });
 
 test("a holding exits early when its own relation is degraded and it has no positive feedback",()=>{
