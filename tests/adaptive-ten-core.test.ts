@@ -47,6 +47,8 @@ test("opposite direction earns authority only after its own completed recent res
   const shorts=e.rules.filter(r=>r.side==="SHORT");
   assert.ok(shorts.length>0,"three completed negative 15m groups should be able to create an independent short relation");
   assert.ok(shorts.some(r=>r.scope==="RECENT"),"fast migration must still be based on matured recent samples");
+  const rapid=relationCandidates(e).filter(c=>c.side==="SHORT");
+  assert.ok(rapid.length>0&&rapid.every(c=>c.reserve),"recent reversal evidence may probe freed risk but cannot immediately take full rotation authority");
 });
 
 test("PAPER uses learned relations for entries instead of the retired 5m FLOW gate",()=>{
