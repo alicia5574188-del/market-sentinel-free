@@ -429,7 +429,7 @@ function openTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:nu
   const stopRate=Number.isFinite(o.stopRate)?o.stopRate:Math.abs(o.price-o.stopPrice)/Math.max(o.price,1e-9);
   const targetRate=Number.isFinite(o.targetRate)?o.targetRate:Math.abs(o.targetPrice/o.price-1);
   if(!(stopRate>=.002&&stopRate<=.03))return"结构止损宽度不合理";
-  const totalHeadroom=equity*TOTAL_RISK_RATE-existingRisk(s),sideHeadroom=equity*SIDE_RISK_RATE-existingRisk(s,side),
+  const totalHeadroom=equity*(TOTAL_RISK_RATE-.001)-existingRisk(s),sideHeadroom=equity*(SIDE_RISK_RATE-.0005)-existingRisk(s,side),
     relationHeadroom=equity*RELATION_RISK_CAP_RATE-relationRisk(s,o.relationRuleId),
     probeHeadroom=o.reserve?equity*PROBE_RISK_POOL_RATE-probeRisk(s):Infinity,
     cycleHeadroom=equity*FIVE_MINUTE_NEW_RISK_RATE-cycleRiskAdded(s,s.lastCandleAt);
