@@ -69,7 +69,7 @@ test("Bybit, OKX and MEXC form a three-source consensus while WAF fallbacks are 
     const q=hub.quote("ETH_USDT",1_000_001);assert.ok(q);assert.equal(q.sourceCount,3);
     assert.deepEqual(new Set(q.sources),new Set(["BYBIT","OKX","MEXC"]));
     assert.ok(q.mid>100&&q.mid<100.3);
-    const status=hub.status(1_000_001);assert.equal(status.healthySources,3);
+    const status=hub.status(1_000_001);assert.equal(status.version,"multi-source-market-hub-v4");assert.equal(status.healthySources,3);
     const bitget=status.sources.find(row=>row.source==="BITGET"),binance=status.sources.find(row=>row.source==="BINANCE");
     assert.equal(bitget?.lastError,"market source 403");assert.equal(binance?.lastError,"market source 403");
     assert.ok((bitget?.nextRetryAt??0)>1_000_001);assert.ok((binance?.nextRetryAt??0)>1_000_001);
