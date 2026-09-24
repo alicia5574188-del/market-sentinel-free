@@ -67,7 +67,7 @@ test("strong 1m impulse plus genuinely small pullback and full restart becomes R
   states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[breakout,pullback]},now:(START+120)*1000,costRate:.0022}).states;
   assert.equal(states.BCH_USDT?.phase,"IGNITION",states.BCH_USDT?.reason);
   states=advanceRegionLaunchMinutes({states,minutePaths:{BCH_USDT:[breakout,pullback,restart]},now:(START+180)*1000,costRate:.0022}).states;
-  assert.equal(states.BCH_USDT?.phase,"READY");
+  assert.equal(states.BCH_USDT?.phase,"READY",states.BCH_USDT?.reason);
   const ready=advanceRegionLaunchQuotes({states,quotes:{BCH_USDT:q(102.53,(START+181)*1000)},now:(START+181)*1000,costRate:.0022});
   assert.equal(ready.signals.length,1);assert.equal(ready.signals[0]!.entryModel,"REGION_LAUNCH");
 });
