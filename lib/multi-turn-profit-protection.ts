@@ -161,31 +161,31 @@ export function regionLaunchProfitFloor(
   riskRate:number,
   modeledCost=.0022,
   expectedMoveRate=0,
-  signal?:MultiTurnProfitSignal|null,
+  _signal?:MultiTurnProfitSignal|null,
 ):MultiTurnProfitFloor|null{
   if(![favorable,riskRate,modeledCost,expectedMoveRate].every(Number.isFinite)||riskRate<=0||favorable<=0)return null;
   const reachedR=favorable/riskRate;
-  const activationRate=Math.max(modeledCost*1.35,Math.min(.20*riskRate,.005));
+  // RegionLaunch v4 protects by realized price progress, not by a forecast.
+  // Before 0.5R the structural stop owns the trade. From 0.5R the trade may no
+  // longer give everything back; at 1R retain at least ~65% MFE, at 2R+ ~80%.
+  const activationRate=Math.max(modeledCost*1.10,riskRate*.50);
   if(favorable<activationRate)return null;
 
-  const expected=Math.max(activationRate,expectedMoveRate>0?expectedMoveRate:riskRate);
-  const progress=favorable/expected;
-  let base=.85;
-  if(progress>1&&progress<=1.5)base=.85-(progress-1)/.5*.03;
-  else if(progress>1.5&&progress<=2.5)base=.82-(progress-1.5)*.04;
-  else if(progress>2.5)base=.75;
+  let retentionRate:number;
+  if(reachedR<1)retentionRate=.35+(reachedR-.50)/.50*.30;
+  else if(reachedR<2)retentionRate=.65+(reachedR-1)*.15;
+  else retentionRate=Math.min(.88,.80+.04*Math.log2(Math.max(1,reachedR/2)));
 
-  const {adjustment,mode}=signalAdjustment(signal);
-  const retentionRate=clip(base+Math.max(0,adjustment),base,.94);
-  const costPositiveFloor=modeledCost+Math.max(.0005,modeledCost*.18);
-  const breathingRoom=Math.max(.0007,Math.min(.0015,modeledCost*.30));
+  retentionRate=clip(retentionRate,.35,.88);
+  const costPositiveFloor=modeledCost+Math.max(.00035,modeledCost*.15);
+  const breathingRoom=Math.max(.0005,Math.min(.0012,riskRate*.12));
   const floorRate=Math.min(favorable-breathingRoom,Math.max(favorable*retentionRate,costPositiveFloor));
   if(!(floorRate>modeledCost&&floorRate<favorable))return null;
   return{
     version:REGION_LAUNCH_PROFIT_PROTECTION_VERSION,
     reachedR,lockedR:floorRate/riskRate,floorRate,
     retentionRate:floorRate/favorable,activationRate,
-    checkpointBand:Math.floor(floorRate/riskRate*4+1e-9),mode,
+    checkpointBand:Math.floor(floorRate/riskRate*4+1e-9),mode:"NORMAL",
   };
 }
 
