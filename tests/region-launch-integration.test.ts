@@ -62,10 +62,10 @@ function driveFast(state:ForwardState,now:number){
   return{s,m};
 }
 
-test("a move inside the mature full-wick region cannot create a trade even when old AnchorFlow is READY",()=>{
+test("a move inside the accepted mature region cannot create a trade even when old AnchorFlow is READY",()=>{
   let s=seeded(BASE);
-  const inside=candle(BASE,100.7,101.10,100.65,101.05);
-  s=step(s,BASE+60_000,101.05,{BCH_USDT:[inside]}).state;
+  const inside=candle(BASE,100.7,100.98,100.65,100.95);
+  s=step(s,BASE+60_000,100.95,{BCH_USDT:[inside]}).state;
   assert.equal(s.positions.length,0);
   assert.equal(s.regionLaunches?.BCH_USDT?.phase,"ARMED");
   assert.equal(s.anchorFlows?.BCH_USDT?.phase,"READY","legacy state may exist until data-cycle cleanup but has no entry authority");
