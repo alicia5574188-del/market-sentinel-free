@@ -316,9 +316,9 @@ function buildOpportunities(s:ForwardState,paths:Record<string,Candle[]>,minuteP
       }
     }
   }
-  const best=[...new Map(all.sort((a,b)=>Number(b.eligible)-Number(a.eligible)||Number(b.premium)-Number(a.premium)
-    ||Number(!b.reserve)-Number(!a.reserve)||b.score-a.score).map(x=>[x.symbol,x] as const)).values()]
-    .sort((a,b)=>Number(b.eligible)-Number(a.eligible)||Number(b.premium)-Number(a.premium)||Number(!b.reserve)-Number(!a.reserve)||b.score-a.score);
+  const best=[...new Map(all.sort((a,b)=>Number(b.eligible)-Number(a.eligible)||Number(!b.reserve)-Number(!a.reserve)
+    ||Number(b.premium)-Number(a.premium)||b.score-a.score).map(x=>[x.symbol,x] as const)).values()]
+    .sort((a,b)=>Number(b.eligible)-Number(a.eligible)||Number(!b.reserve)-Number(!a.reserve)||Number(b.premium)-Number(a.premium)||b.score-a.score);
   return{pulse,regions,opportunities:best};
 }
 function equityMark(s:ForwardState,quotes:Record<string,Quote>,now:number){
@@ -420,7 +420,7 @@ function openTrade(s:ForwardState,o:Opportunity,q:Quote,contract:Contract,now:nu
 }
 function rankedEligible(s:ForwardState,now:number){
   return s.opportunities.filter(o=>o.eligible&&o.expiresAt>now&&!s.positions.some(t=>t.symbol===o.symbol))
-    .sort((a,b)=>Number(b.premium)-Number(a.premium)||b.score-a.score);
+    .sort((a,b)=>Number(!b.reserve)-Number(!a.reserve)||Number(b.premium)-Number(a.premium)||b.score-a.score);
 }
 function rotateIfNeeded(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,equity:number){
   if(s.positions.length<ADAPTIVE_TARGET_POSITIONS||now-s.lastRotationAt<ROTATION_COOLDOWN_MS)return false;
