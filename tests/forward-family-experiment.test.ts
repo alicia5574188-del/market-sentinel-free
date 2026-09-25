@@ -9,13 +9,19 @@ import type {RelationRule} from "../lib/forward-relation-v2.ts";
 const rule=(id:string,patch:Partial<RelationRule>={}):RelationRule=>({
   id,signature:id,scope:"RECENT",horizon:15,side:"SHORT",conditions:[{feature:2,op:"LE",threshold:-.2}],
   longNet:.003,recentNet:.0035,standardError:.001,samples:30,longGroups:3,recentGroups:3,health:.25,status:"DEGRADED",
-  livePathScore:.62,environmentFit:.78,stopRate:.005,targetRate:.007,updatedAt:10_000,lastQualifiedAt:9_000,
+  livePathScore:.62,environmentFit:.78,stopRate:.005,targetRate:.007,
+  exitProfile:{version:"sample-exit-plan-v1",bestHoldMinutes:15,feedbackDeadlineMinutes:10,maxHoldMinutes:30,normalAdverseRate:.005,
+    targetRate:.007,protectionActivationRate:.003,retentionRate:.75,samples:30,groups:3,
+    path:{15:{expectedRate:.003,adverseRate:.004,remainingEdgeRate:0}}},
+  updatedAt:10_000,lastQualifiedAt:9_000,
   symbols:["BTC_USDT","ETH_USDT"],reason:"fixture",...patch,
 });
 
-test("threshold variants of one causal idea share the same relation family",()=>{
+test("threshold, horizon and scope variants of one causal idea share the same relation family",()=>{
   const a=rule("a",{conditions:[{feature:2,op:"LE",threshold:-.17}]}),b=rule("b",{conditions:[{feature:2,op:"LE",threshold:-.31}]});
   assert.equal(relationFamilyId(a),relationFamilyId(b));
+  const horizonVariant=rule("h",{horizon:60,scope:"BASE",conditions:[{feature:2,op:"LE",threshold:-.25}]});
+  assert.equal(relationFamilyId(a),relationFamilyId(horizonVariant));
   const c=rule("c",{conditions:[{feature:2,op:"GE",threshold:-.31}]});
   assert.notEqual(relationFamilyId(a),relationFamilyId(c));
 });
