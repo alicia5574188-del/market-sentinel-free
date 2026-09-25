@@ -76,12 +76,11 @@ async function encodeSamplePages(samples:RelationMeasurement[]){
 }
 
 const SHA256=/^[0-9a-f]{64}$/,packedNumber=(value:unknown)=>value===null||Number.isFinite(value);
-function packedPageIssue(samples:unknown[],meta:SamplePageMeta,allowLegacySuperset=false){
+function packedPageIssue(samples:unknown[],meta:SamplePageMeta,allowLegacyDrift=false){
   const hourText=meta.id.split(":")[0]!,hour=Number(hourText);let priorAt=-1,priorSymbol="";
   if(!/^\d{16}:\d{3}$/.test(meta.id)||!Number.isSafeInteger(hour)||hour<0||hour%SAMPLE_PAGE_MS!==0)return "PAGE_ID";
   if(!samples.length||samples.length>SAMPLE_PAGE_ROWS)return "COUNT_INVALID";
-  const strictSuperset=allowLegacySuperset&&samples.length>meta.count;
-  if(samples.length!==meta.count&&!strictSuperset)return `COUNT_${samples.length}_${meta.count}`;
+  if(samples.length!==meta.count&&!allowLegacyDrift)return `COUNT_${samples.length}_${meta.count}`;
   for(const value of samples){
     if(!Array.isArray(value)||value.length<13||value[0]!=="m1"||typeof value[1]!=="string"||!value[1]
       ||!Number.isSafeInteger(value[2])||value[2]<hour||value[2]>=hour+SAMPLE_PAGE_MS)return "ROW_ID";
@@ -95,9 +94,7 @@ function packedPageIssue(samples:unknown[],meta:SamplePageMeta,allowLegacySupers
     priorAt=at;priorSymbol=symbol;
   }
   const firstAt=(samples[0] as unknown[])[2] as number,lastAt=(samples.at(-1) as unknown[])[2] as number;
-  return strictSuperset
-    ?firstAt>meta.firstAt||lastAt<meta.lastAt?"BOUNDS":null
-    :firstAt!==meta.firstAt||lastAt!==meta.lastAt?"BOUNDS":null;
+  return !allowLegacyDrift&&(firstAt!==meta.firstAt||lastAt!==meta.lastAt)?"BOUNDS":null;
 }
 
 export async function readForwardStore(storage: Reader, now: number) {
@@ -150,11 +147,12 @@ export async function readForwardStore(storage: Reader, now: number) {
       if(page.version!==FORWARD_PAGED_STATE_VERSION)throw new Error(`Forward样本分页内容异常：${meta.id}:VERSION`);
       if(page.id!==meta.id)throw new Error(`Forward样本分页内容异常：${meta.id}:PAGE_ID`);
       if(!Array.isArray(page.samples))throw new Error(`Forward样本分页内容异常：${meta.id}:SAMPLES`);
-      const allowLegacySuperset=meta.rawSha256===undefined,pageIssue=packedPageIssue(page.samples,meta,allowLegacySuperset);
+      const allowLegacyDrift=meta.rawSha256===undefined,pageIssue=packedPageIssue(page.samples,meta,allowLegacyDrift);
       if(pageIssue)throw new Error(`Forward样本分页内容异常：${meta.id}:${pageIssue}`);
-      if(page.samples.length>meta.count){
-        const firstAt=(page.samples[0] as unknown[])[2] as number,lastAt=(page.samples.at(-1) as unknown[])[2] as number,
-          bytesSha256=await digest(value),bytesKey=`${FORWARD_SAMPLE_RECOVERY_PREFIX}${meta.id}:${rawSha256}:bytes`;
+      const firstAt=(page.samples[0] as unknown[])[2] as number,lastAt=(page.samples.at(-1) as unknown[])[2] as number,
+        legacyPhysicalDrift=allowLegacyDrift&&(page.samples.length!==meta.count||firstAt!==meta.firstAt||lastAt!==meta.lastAt);
+      if(legacyPhysicalDrift){
+        const bytesSha256=await digest(value),bytesKey=`${FORWARD_SAMPLE_RECOVERY_PREFIX}${meta.id}:${rawSha256}:bytes`;
         legacySampleRecovery.push({meta:{version:"forward-sample-recovery-v1",sourceManifestSha256:head.sampleManifestSha256!,sourceId:meta.id,
           bytesKey,actualCount:page.samples.length,manifestCount:meta.count,firstAt,lastAt,length:value.length,rawLength:pageRaw.length,
           sha256:bytesSha256,rawSha256,encoding:meta.encoding},bytes:value.slice()});
@@ -163,15 +161,16 @@ export async function readForwardStore(storage: Reader, now: number) {
       samples.push(...page.samples);count+=page.samples.length;
       expectedCount+=meta.count;
     }
-    if(expectedCount!==manifest.count||count<manifest.count)throw new Error("Forward样本manifest数量异常");
+    if(expectedCount!==manifest.count)throw new Error("Forward样本manifest数量异常");
+    if(count<manifest.count)throw new Error(`Forward样本分页内容异常：COUNT_${count}_${manifest.count}`);
     decoded.relationEngine={...decoded.relationEngine,samples:samples as RelationMeasurement[]};
     decoded.storage={...decoded.storage,layout:FORWARD_PAGED_STATE_VERSION,
       sampleIntegrity:legacyRecovered||manifest.pages.some(page=>page.rawSha256===undefined)?"legacy-recovered":"raw-sha256"};
     const state=normalizeForward(decoded,now);
     if(legacySampleRecovery.length){
       // The authenticated legacy manifest describes the canonical, normalized
-      // page set. Accept an oversized retained page only when normalizing its
-      // complete decoded evidence reconstructs that exact authenticated set.
+      // page set. Accept physical count/boundary drift only when normalizing
+      // every decoded row reconstructs that exact authenticated set.
       const canonical=await encodeSamplePages(state.relationEngine.samples);
       const matches=canonical.length===manifest.pages.length&&canonical.every((page,index)=>{
         const expected=manifest.pages[index]!;return page.meta.id===expected.id&&page.meta.key===expected.key
