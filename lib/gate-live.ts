@@ -423,12 +423,13 @@ export class GateLiveClient {
 
   async createEntry(intent: LiveEntryIntent, beforeSend?: () => boolean) {
     const path = intent.kind === "PRICE_TRIGGER" ? "/futures/usdt/price_orders" : "/futures/usdt/orders";
-    // FULL waits for clearing information and can turn a perfectly valid short
-    // market order into an ambiguous six-second network timeout. RESULT keeps
-    // the one-shot IOC semantics but returns after the matching result without
-    // waiting for clearing fields. ACK is deliberately not used here because
-    // the caller creates native protection only after a definitive IOC result.
-    const body = intent.kind==="MARKET" ? {...intent.body,action_mode:"RESULT"} : intent.body;
+    // Gate documents ACK as the asynchronous create mode that returns only key
+    // order fields. For a market IOC the durable exchange order ID is more
+    // important than waiting on clearing data inside the single write request:
+    // once ACK returns, the worker persists that ID before any read-side fill
+    // inspection and all later recovery is GET-only. The mutation is still sent
+    // exactly once and is never replayed after a network-boundary ambiguity.
+    const body = intent.kind==="MARKET" ? {...intent.body,action_mode:"ACK"} : intent.body;
     const response = await this.request<GateLiveOrder>("POST", path, "", body, beforeSend);
     return responseId(response.raw, response.data);
   }
