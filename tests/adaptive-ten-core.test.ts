@@ -46,6 +46,12 @@ const manualOpportunity=(symbol:string,index:number,options:{reserve?:boolean;pr
 function learnThrough(last:number){let e=initialRelationEngine(nowAt(24)-1);for(let i=24;i<=last;i++)
   e=advanceRelationEngine({state:e,paths:sliced(i),now:nowAt(i)});return e;}
 
+function makePayoffEligible<T extends ReturnType<typeof initialRelationEngine>>(engine:T){
+  for(const rule of engine.rules){rule.exitProfile.targetRate=Math.max(rule.exitProfile.targetRate,.03);
+    rule.exitProfile.retentionRate=Math.max(rule.exitProfile.retentionRate,.85);rule.exitProfile.winRate=Math.max(rule.exitProfile.winRate??0,.80);}
+  return engine;
+}
+
 test("Forward Path Relation 3.0 learns from root paths without double-counting checkpoints",()=>{
   const e=learnThrough(39);
   assert.equal(e.version,FORWARD_RELATION_V2_VERSION);
@@ -115,7 +121,7 @@ test("a restart can seed closed root paths immediately instead of waiting a fres
 });
 
 test("PAPER uses learned relations for entries instead of the retired 5m FLOW gate",()=>{
-  const learned=learnThrough(39),now=nowAt(39),paths=sliced(39),quotes=quotesAt(39,now);
+  const learned=makePayoffEligible(learnThrough(39)),now=nowAt(39),paths=sliced(39),quotes=quotesAt(39,now);
   let s=initialForward(now-60_000);s.relationEngine=learned;
   s=advanceForward({state:s,now,paths,quotes,contracts,entrySymbols:symbols}).state;
   assert.ok(s.positions.length>0);
@@ -125,7 +131,7 @@ test("PAPER uses learned relations for entries instead of the retired 5m FLOW ga
 });
 
 test("pure relation trades keep sample MAE for path invalidation but a wider hard safety stop for account risk",()=>{
-  const learned=learnThrough(39),now=nowAt(39);let state=initialForward(now-60_000);state.relationEngine=learned;
+  const learned=makePayoffEligible(learnThrough(39)),now=nowAt(39);let state=initialForward(now-60_000);state.relationEngine=learned;
   state=advanceForward({state,now,paths:sliced(39),quotes:quotesAt(39,now),contracts,entrySymbols:symbols}).state;
   const trade=state.positions.find(t=>t.entryContext?.mode==="RELATION"&&t.exitPlan);assert.ok(trade);
   assert.equal(trade!.entryContext!.pullbackRiskRate,trade!.exitPlan!.normalAdverseRate);
@@ -300,7 +306,7 @@ test("v2 no-feedback exit requires weak recovery and exhausted future value",()=
 });
 
 test("v2 degraded relation waits while continuation remains, then exits and locks family after confirmed failure",()=>{
-  const learned=learnThrough(39),now=nowAt(39),paths=sliced(39);
+  const learned=makePayoffEligible(learnThrough(39)),now=nowAt(39),paths=sliced(39);
   let s=initialForward(now-60_000);s.relationEngine=learned;
   s=advanceForward({state:s,now,paths,quotes:quotesAt(39,now),contracts,entrySymbols:symbols}).state;
   assert.ok(s.positions.length>0);
