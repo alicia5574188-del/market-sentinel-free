@@ -42,6 +42,7 @@ import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regim
 import { ADAPTIVE_ENGINE_VERSION, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONFIRMATION_CAP, advanceForward, closeForwardForReset,
   forwardSummary, forwardEquity, freshQuote, forwardUrgentMinuteSymbols, forwardUrgentQuoteSymbols, forwardWatchSymbols,
   resetForwardAccountPreservingLearning, BAR_MS, FORWARD_VERSION, type ForwardState } from "../lib/forward-relations.ts";
+import { advanceForwardShock, initialForwardShockRuntime } from "../lib/forward-shock.ts";
 import { FORWARD_EXECUTION_VOLUME_FLOOR_USD, forwardExecutionUniverseEligible, selectAnchorOpportunityUniverse } from "../lib/multi-turn-universe.ts";
 import { readForwardStore, prepareForwardWrite, prepareForwardProtectionWrite, prepareForwardReset,
   FORWARD_STORAGE, FORWARD_PROTECTION_STORAGE } from "../lib/forward-store.ts";
@@ -515,6 +516,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private optionalWork: Promise<void> | null = null;
   protected forwardState: ForwardState | null = null;
   protected forwardError: string | null = null;
+  private forwardShockRuntime=initialForwardShockRuntime();
   private forwardBusy = false;
   private forwardLastAttemptAt = 0;
   private forwardProtectionBudget: ProtectionWriteBudget | null = null;
@@ -1053,11 +1055,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         this.forwardLastAttemptAt=state.lastQuoteCycleAt;return;
       }
       this.forwardLastAttemptAt=now;
-      const previous = state;
+      const previous = state,quotes=this.forwardQuotes(now);
+      const shock=advanceForwardShock({state:this.forwardShockRuntime,now,regions:state.regions,quotes,
+        entrySymbols:this.runtime.liquidUniverse});
+      this.forwardShockRuntime=shock.state;
       const next = advanceForward({ state: previous, now, paths: this.strategyCandles,minutePaths:this.forwardMinutePaths(),
-        quotes: this.forwardQuotes(now), contracts: this.regimeContracts(),
+        quotes, contracts: this.regimeContracts(),
         entrySymbols: this.runtime.liquidUniverse,learningSymbols:this.forwardLearningUniverse.length?this.forwardLearningUniverse:undefined,
-        allowDataCycle:dataCycleDue });
+        allowDataCycle:dataCycleDue,shockSignals:shock.signals,shockVetoSide:shock.vetoSide });
       if (next.changed || !previous.storage.persistedAt) {
         next.state.storage = { persistedAt: now, error: null };
         const prepared = await prepareForwardWrite(previous.storage.persistedAt ? previous : null, next.state, now, {compact:true});
@@ -1727,6 +1732,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       }finally{reservation.finish(false);}
 
       this.forwardCompression=prepared.compression;this.forwardState=prepared.state;this.forwardError=null;
+      this.forwardShockRuntime=initialForwardShockRuntime();
       this.forwardProtectionBudget=readProtectionWriteBudget(saved?.writeBudget);this.mirrorClosures.clear();
       return{ok:true,equity:1000,forward:forwardSummary(this.forwardState,this.regimeQuotes(now),now)};
     }catch(error){
@@ -2539,7 +2545,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       marginForNewEntries += intent.margin;
       notionalForNewEntries += intent.notional;
       staged.push({ symbol, plan, intent, binding,activation:structuredClone(this.runtime.live.activation??null) });
-      if(staged.length>=2)break; // Bound private requests per pass, not total holdings.
+      if(staged.length>=4)break; // One PAPER cycle can authorize at most four primary-risk entries; process that same committed signal batch without an artificial second wait.
     }
     for (const { symbol, plan, intent, binding,activation } of staged) {
       if(!this.runtime.live.requestedEnabled||!this.mirrorQuoteReady(symbol)
