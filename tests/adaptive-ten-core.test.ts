@@ -119,6 +119,18 @@ test("fast quote loop cannot open a premium region trade before any Forward Rela
   assert.equal(state.opportunities.some(o=>o.premium&&o.eligible),false);
 });
 
+test("fast quote normalization preserves current v3 frames and evidence diagnostics",()=>{
+  const learned=learnThrough(39),now=nowAt(39),frameCount=Object.keys(learned.frames).length,sampleCount=learned.samples.length,ruleCount=learned.rules.length;
+  assert.ok(frameCount>0&&sampleCount>0&&ruleCount>0);
+  let state=initialForward(now-60_000);state.relationEngine=learned;state.lastCandleAt=now;
+  state=advanceForward({state,now:now+1000,paths:sliced(39),quotes:quotesAt(39,now+1000),contracts,entrySymbols:symbols,allowDataCycle:false}).state;
+  assert.equal(Object.keys(state.relationEngine.frames).length,frameCount,"fast quote loop must not erase relation frames");
+  assert.equal(state.relationEngine.samples.length,sampleCount,"fast quote loop must not erase matured samples");
+  assert.equal(state.relationEngine.rules.length,ruleCount,"fast quote loop must not erase learned rules");
+  assert.equal(state.relationEngine.diagnostics.matureSamples,sampleCount,"display diagnostics must be derived from actual samples");
+  assert.equal(state.relationEngine.diagnostics.rules,ruleCount);
+});
+
 test("ordinary 5m relation inventory cannot keep opening on the fast quote loop",()=>{
   const now=nowAt(39),paths=sliced(39),symbol=symbols[0]!,s=initialForward(now-60_000);
   s.lastCandleAt=now;s.opportunities=[manualOpportunity(symbol,0,{premium:false})];
@@ -241,6 +253,8 @@ test("real Forward Relation 2.0 horizon records migrate into v3 root samples",()
   assert.equal(migrated.samples.find(r=>r.symbol==="BTC_USDT")?.cp[60],.011);
   assert.equal(migrated.samples.find(r=>r.symbol==="ETH_USDT")?.cp[60],.01);
   assert.equal(migrated.measured,66,"historical measured counter must remain intact");
+  assert.equal(migrated.diagnostics.matureSamples,2,"diagnostics must reflect migrated evidence instead of resetting to zero");
+  assert.equal(migrated.diagnostics.effectiveGroups,1);
 });
 
 test("strategy migration preserves account identity, financial history and causal samples instead of cold-resetting learning",()=>{
