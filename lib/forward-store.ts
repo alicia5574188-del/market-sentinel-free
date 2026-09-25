@@ -193,19 +193,24 @@ export async function readForwardStore(storage: Reader, now: number) {
       // Legacy manifests require their full historical byte identity; modern
       // raw-hash manifests use the stable uncompressed JSON hash as authority.
       const canonicalState=normalizeForward(canonicalDecoded!,canonicalAt),canonical=await encodeSamplePages(canonicalState.relationEngine.samples);
-      const matches=canonical.length===manifest.pages.length&&canonical.every((page,index)=>{
-        const expected=manifest.pages[index]!;
-        const topology=page.meta.id===expected.id&&page.meta.key===expected.key&&page.meta.count===expected.count
-          &&page.meta.firstAt===expected.firstAt&&page.meta.lastAt===expected.lastAt;
-        if(!topology)return false;
-        return rawPhysicalDrift
-          ?SHA256.test(expected.rawSha256??"")&&page.meta.rawLength===expected.rawLength&&page.meta.rawSha256===expected.rawSha256
-          :page.meta.length===expected.length&&page.meta.rawLength===expected.rawLength&&page.meta.sha256===expected.sha256
-            &&page.meta.encoding===expected.encoding;
-      });
-      if(!matches)throw new Error(rawPhysicalDrift
-        ?"Forward样本分页内容异常：RAW_CANONICAL_AT_PERSISTED_TIME"
-        :"Forward样本分页内容异常：LEGACY_CANONICAL_AT_PERSISTED_TIME");
+      let mismatch:string|null=null;
+      if(canonical.length!==manifest.pages.length)mismatch=`PAGE_COUNT_${canonical.length}_${manifest.pages.length}`;
+      else for(let index=0;index<canonical.length;index++){
+        const page=canonical[index]!,expected=manifest.pages[index]!,
+          topology=page.meta.id===expected.id&&page.meta.key===expected.key&&page.meta.count===expected.count
+            &&page.meta.firstAt===expected.firstAt&&page.meta.lastAt===expected.lastAt,
+          identity=rawPhysicalDrift
+            ?SHA256.test(expected.rawSha256??"")&&page.meta.rawLength===expected.rawLength&&page.meta.rawSha256===expected.rawSha256
+            :page.meta.length===expected.length&&page.meta.rawLength===expected.rawLength&&page.meta.sha256===expected.sha256
+              &&page.meta.encoding===expected.encoding;
+        if(!topology||!identity){
+          mismatch=`${expected.id}:AT_${canonicalAt}:EXP_${expected.count}_${expected.firstAt}_${expected.lastAt}_${expected.rawLength}_${expected.rawSha256??expected.sha256}:GOT_${page.meta.count}_${page.meta.firstAt}_${page.meta.lastAt}_${page.meta.rawLength}_${page.meta.rawSha256}`;
+          break;
+        }
+      }
+      if(mismatch)throw new Error(rawPhysicalDrift
+        ?`Forward样本分页内容异常：RAW_CANONICAL_AT_PERSISTED_TIME:${mismatch}`
+        :`Forward样本分页内容异常：LEGACY_CANONICAL_AT_PERSISTED_TIME:${mismatch}`);
     }
     const internal=state as ForwardStateWithRecovery;
     if(legacySampleRecovery.length)internal.__legacySampleRecovery=legacySampleRecovery;
