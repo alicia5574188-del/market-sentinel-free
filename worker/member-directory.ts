@@ -62,6 +62,11 @@ export class MemberDirectory extends DurableObject<CloudflareEnv> {
     if(!root||root.length<16)return json({error:"登录密钥服务未配置"},503);
     try {
       if(p==="/health")return json({version:MEMBERS_VERSION,configured:true,memberLimit:MEMBER_LIMIT,activeLimit:MEMBER_ACTIVE_LIMIT});
+      if(p==="/active-seats"&&request.method==="GET") {
+        if(request.headers.get("x-member-wake-token")!==root)return json({error:"内部唤醒未授权"},403);
+        const seats=await this.ctx.storage.get<string[]>("execution-seats")??[];
+        return json({version:MEMBERS_VERSION,ids:seats.filter(validMemberId).slice(0,MEMBER_ACTIVE_LIMIT)});
+      }
       if(p==="/overview") {
         const rows=await this.ctx.storage.list<MemberRecord>({prefix:"member:",limit:MEMBER_LIMIT}),invite=await this.currentInvite(root);
         return json({version:MEMBERS_VERSION,authVersion:MEMBER_AUTH_VERSION,members:[...rows.values()].map(publicRecord).sort((a,b)=>b.createdAt-a.createdAt),
