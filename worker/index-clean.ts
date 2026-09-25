@@ -7,7 +7,7 @@ import { GatePublicError, fetchActiveContracts, fetchContractStats, fetchGateRad
   fetchStructureCandles, fetchTickerBbo, fetchUrgentFuturesBook } from "../lib/gate-market.ts";
 import { MarketDataHub } from "../lib/market-data-hub.ts";
 import { GateStreamingFeed } from "../lib/gate-stream.ts";
-import { closePaperPosition, CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_RISK_CAP, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
+import { CORRELATED_DIRECTION_RISK_CAP, PORTFOLIO_RISK_CAP, remainingStressRisk, STALE_AFTER_MS, SYSTEM_VERSION, type Decision, type LiquidityRoute, type LiquidityZone, type MarketState, type PaperPlan, type PaperPosition, type RangeStructure, type Side } from "../lib/liquidity-core.ts";
 import { aggregateFourHourCandles, analyzeSnapshot, ancillarySchedule, deriveMinuteNoiseRate, deriveRangeStructure, deriveStructureZones, emptySymbolMemory, structureDirection, updateOpenInterestCohorts, type SymbolMemory } from "../lib/liquidity-runtime.ts";
 import { arenaProtectionStop, arenaTradePlan, liveMirrorExitRequired } from "../lib/arena-live.ts";
 import { drainPositionOutbox, enqueuePositionTransition, type PositionOutboxItem } from "../lib/paper-outbox.ts";
@@ -36,7 +36,7 @@ import { CANONICAL_PAPER_REFERENCE_EQUITY, canonicalPaperOpen, canonicalPaperSum
   initialCanonicalPaperState, normalizeCanonicalPaperState, reconcileCanonicalPaper,
   type CanonicalPaperState } from "../lib/dual-paper.ts";
 import { evaluateRegimePortfolio, initialRegimePortfolio, normalizeRegimePortfolio,
-  REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE, resetRegimePortfolio,
+  REGIME_EXECUTION_UNIVERSE, REGIME_HOURLY_REQUIRED_CANDLES, REGIME_PORTFOLIO_VERSION, REGIME_STRATEGIES, REGIME_SYSTEMS, REGIME_UNIVERSE,
   type RegimePortfolioState } from "../lib/regime-portfolio.ts";
 import type { PreviousMarketRegimeCandidate } from "../lib/previous-market-regime.ts";
 import { ADAPTIVE_ENGINE_VERSION, FORWARD_EXECUTION_BBO_CAP, FORWARD_MINUTE_CONFIRMATION_CAP, advanceForward, closeForwardForReset,
@@ -80,7 +80,6 @@ const FEED_HARD_FAILURE_COUNT = 4;
 const FEED_HARD_FAILURE_MS = 15_000;
 const FEED_RECOVERY_CONFIRMATIONS = 1;
 const FEED_QUALITY_WINDOW_MS = 60 * 60_000;
-const BACKGROUND_BOOK_INTERVALS = 5;
 const HEARTBEAT_MS = 30_000;
 const UNIVERSE_MS = 10 * 60_000;
 const RADAR_MS = 60_000;
@@ -464,17 +463,6 @@ async function batches<T>(tasks: Array<() => Promise<T>>, width = MAX_ANCILLARY_
 function percentile99(values: number[]) {
   if (!values.length) return 0;
   return [...values].sort((a, b) => a - b)[Math.min(values.length - 1, Math.ceil(values.length * 0.99) - 1)];
-}
-
-function openStressRisk(runtime: RuntimeState) {
-  return Object.values(runtime.positions).reduce((sum, position) => sum + (position?.status === "OPEN"
-    ? remainingStressRisk(position, runtime.evidence[position.symbol]?.midpoint ?? position.entryPrice) : 0), 0);
-}
-
-function directionalStressRisk(runtime: RuntimeState, side: Side | undefined) {
-  if (!side) return 0;
-  return Object.values(runtime.positions).reduce((sum, position) => sum + (position?.status === "OPEN" && position.side === side
-    ? remainingStressRisk(position, runtime.evidence[position.symbol]?.midpoint ?? position.entryPrice) : 0), 0);
 }
 
 function markToMarketEquity(runtime: RuntimeState) {
@@ -2084,14 +2072,19 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       await work;
       this.liveReadTimeoutStreak=0;
     } catch(error) {
-      // Background read-only Gate latency is retryable because no exchange
-      // mutation crossed the network boundary. Owner actions and forced OFF
-      // cleanup stay strict and receive the error immediately.
-      if(!initialEnable&&!forceEntryCleanup&&isGateReadTimeoutError(error)){
+      // A read-only Gate timeout is retryable because no exchange mutation
+      // crossed the network boundary. A first owner-enable timeout occurs only
+      // after its intent/fence were saved, so it remains pending and fail-closed;
+      // forced OFF cleanup stays strict and receives the error immediately.
+      if(!forceEntryCleanup&&isGateReadTimeoutError(error)){
         const decision=liveReadTimeoutDecision(this.liveReadTimeoutStreak);
         this.liveReadTimeoutStreak=decision.streak;
         if(!decision.escalated){
-          if(isTransientLiveReadErrorText(this.runtime.live.lastError))this.runtime.live.lastError=null;
+          if(initialEnable){
+            this.runtime.live.operational=false;this.runtime.live.lastError=safeError(error);
+            this.recordLiveAudit({observedAt:Date.now(),symbol:null,planId:null,stage:"LIVE_CONTROL",level:"RECOVERING",
+              reason:"所有者开启意图与起点已保存；首次Gate只读核对超时，保持零新增并由后台继续核对",error});
+          }else if(isTransientLiveReadErrorText(this.runtime.live.lastError))this.runtime.live.lastError=null;
           return;
         }
         throw new Error(decision.message!);

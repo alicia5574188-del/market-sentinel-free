@@ -12,8 +12,8 @@ const pos=(id:string,exitAt:number):Position=>({
 test("major-version record epoch hides prior LIVE records from both recent and archive views",async()=>{
   const epoch=2_000_000,old=pos("old",epoch-1),fresh=pos("fresh",epoch+1);
   const storage={
-    async get<T>(_key:string){return undefined as T|undefined;},
-    async list<T>(_options:{prefix:string;reverse:boolean;limit:number}){
+    async get<T>(){return undefined as T|undefined;},
+    async list<T>(){
       return new Map<string,T>([["old",{position:old} as T],["fresh",{position:fresh} as T]]);
     },
     async transaction<T>(fn:(tx:{put(entries:Record<string,unknown>):Promise<void>})=>Promise<T>){

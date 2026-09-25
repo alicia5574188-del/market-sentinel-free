@@ -189,6 +189,28 @@ test("ordinary entry validation can pass within seconds and reanchors remaining 
   assert.ok(t.forecast!.remainingNetRate>0,"validation consumes some edge but does not invent a no-trade policy");
 });
 
+test("the two-second quote loop advances an existing ordinary validation without starting unrelated ordinary entries",()=>{
+  const now=nowAt(39),symbol=symbols[0]!,other=symbols[1]!,state=initialForward(now-60_000);
+  state.lastCandleAt=now;
+  const candidate=manualOpportunity(symbol,0,{score:76,health:.7}),unrelated=manualOpportunity(other,1,{score:75,health:.7});
+  state.opportunities=[candidate,unrelated];seedManualRules(state,state.opportunities,now);
+  const base=quotesAt(39,now);
+  fillForwardPortfolio(state,base,contracts,now,1000,false);
+  assert.equal(state.positions.length,0);
+  assert.equal(state.entryValidations[candidate.id]?.status,"WAITING");
+  assert.equal(state.entryValidations[unrelated.id]?.status,"WAITING");
+
+  // Simulate that only the selected candidate remains in the realtime BBO lane.
+  delete state.entryValidations[unrelated.id];
+  for(let step=1;step<=3;step++){
+    const at=now+step*2500,factor=candidate.side==="LONG"?1+step*.00035:1-step*.00035;
+    const quote={...base[symbol]!,bestBid:base[symbol]!.bestBid*factor,bestAsk:base[symbol]!.bestAsk*factor,observedAt:at};
+    fillForwardPortfolio(state,{[symbol]:quote},contracts,at,1000,true);
+  }
+  assert.equal(state.positions.some(t=>t.symbol===symbol),true,"an already-started validation must finish on resident quotes");
+  assert.equal(state.entryValidations[unrelated.id],undefined,"quote-only passes must not start an unrelated ordinary candidate");
+});
+
 test("fast quote loop cannot open a premium region trade before any Forward Relation samples exist",()=>{
   const symbol="S0_USDT",rows:Array<Candle>=[],base=START;
   for(let i=0;i<24;i++){const open=100+(i%2?.01:-.01),close=100+(i%2?-.01:.01);

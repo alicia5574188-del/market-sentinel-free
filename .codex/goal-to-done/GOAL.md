@@ -586,3 +586,17 @@ cost. Deploy only if snapshot counterfactuals, 2200-sample/240-history/160-event
 storage stress, LIVE identity parity and the complete release gates improve on
 main without a large participation collapse. No reset, LIVE toggle, UI/member/
 auth change or real-money test.
+
+# 2026-09-25 — post-release participation and LIVE enable regression repair
+
+Explain and repair the post-release lack of ordinary Forward entries and the
+Gate LIVE-enable timeout shown by the owner. Preserve all strategy thresholds,
+financial/control history, owner intent, activation fences, unique-order
+recovery, native protection and fail-closed exchange semantics. Permit an
+already-started ordinary ENTRY_VALIDATION to consume its resident two-second
+BBO path without allowing quote-only cycles to originate unrelated ordinary
+orders. Treat only a genuine first read timeout after durably saved owner intent
+as pending activation; hard account/order conflicts must still fail visibly.
+Audit the complete affected execution boundary and slim only proven duplication
+whose behavior is locked by tests; do not broadly rewrite the worker during an
+incident repair.

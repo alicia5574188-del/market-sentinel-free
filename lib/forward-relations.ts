@@ -34,7 +34,6 @@ const ROTATION_GAP=10,ROTATION_COOLDOWN_MS=2*60_000;
 const HISTORY_LIMIT=240,EVENT_LIMIT=160;
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
 const median=(v:number[])=>{const a=v.filter(Number.isFinite).sort((x,y)=>x-y);return a.length?(a.length%2?a[(a.length-1)/2]:(a[a.length/2-1]+a[a.length/2])/2):0;};
-const quantile=(v:number[],p:number)=>{const a=v.filter(Number.isFinite).sort((x,y)=>x-y);return a.length?a[Math.min(a.length-1,Math.floor((a.length-1)*p))]:0;};
 const dir=(side:"LONG"|"SHORT")=>side==="LONG"?1:-1;
 const dayKey=(now:number)=>new Date(now+7*3600_000).toISOString().slice(0,10);
 const safe=(v:number|null|undefined,fallback=0)=>typeof v==="number"&&Number.isFinite(v)?v:fallback;
@@ -763,7 +762,7 @@ function rotateIfNeeded(s:ForwardState,quotes:Record<string,Quote>,contracts:Rec
   return true;
 }
 export function fillForwardPortfolio(s:ForwardState,quotes:Record<string,Quote>,contracts:Record<string,Contract>,now:number,equity:number,premiumOnly:boolean){
-  const eligible=rankedEligible(s,now).filter(o=>!premiumOnly||o.premium);
+  const eligible=rankedEligible(s,now).filter(o=>!premiumOnly||o.premium||s.entryValidations[o.id]?.status==="WAITING");
   // This is a current-state blocker view, not a retry counter. One candidate can
   // contribute at most once per execution pass, so the UI can never show
   // hundreds of fake "failures" from the same waiting opportunity.

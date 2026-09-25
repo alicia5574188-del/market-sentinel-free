@@ -722,3 +722,18 @@ private Gate action occurred.
 - Ordinary marginal/Reserve candidates use 12–24 second BBO entry validation. Strong mature relations remain immediate; actual closed fills calibrate predicted net edge against realized net, fee/funding cost and target capture without lowering the 19bp historical model.
 - Snapshot replay classifies SUI/XLM as WAIT_RETEST and LINK as CONTINUATION_DELAY. The strict extended-move lower bound removes only 2/76 trades, improves net from -6.9362U to -3.4959U and fees from 22.9027U to 22.1222U; the historical +17.0349U SUI winner remains immediate.
 - Local acceptance passes: Forward/storage/replay 59/59, direct 127/127, LIVE/Gate parity 38/38, full npm test, typecheck, build, lint (zero errors; 19 pre-existing warnings), architecture/migration 18/18, and clean diff check. PR/release is next; production and LIVE intent remain unchanged so far.
+
+# 2026-09-25 — participation/LIVE regression diagnosis
+
+- Fresh production read is healthy: 30-market stream, 21 fresh books, 1992 mature samples, 18 eligible relations, paged storage error null. The current PAPER epoch has one completed winner and no open position, so the system is not globally stalled.
+- Root cause of ordinary no-entry behavior is confirmed: the five-minute pass creates 12–24 second ENTRY_VALIDATION records, while every intervening two-second pass filters all non-premium opportunities before validation can advance. The next candle changes the candidate identity and starts over.
+- The screenshot's LIVE owner intent was durably saved, but the first `/futures/usdt/accounts` read timeout returned HTTP 409. The UI consequently rendered the same timeout as both persistent execution state and a failed operator action. Existing alarms already retry safely with no exchange mutation.
+- No account reset, sample/history deletion, LIVE toggle, credential change, real order or production mutation was performed during diagnosis.
+
+## 2026-09-25 — participation/LIVE repair acceptance
+
+- Ordinary validations now remain eligible only when their exact candidate ID is already WAITING; quote-only passes still cannot originate an unrelated ordinary Forward order.
+- A first typed Gate read timeout after a saved owner enable is pending/fail-closed and recovers on a later fresh snapshot without a second toggle or activation-fence change. Hard/non-read failures and forced OFF cleanup remain strict.
+- Restored the previously omitted real-Worker LIVE parity suite to the default release command and updated only its synthetic timing fixtures to the current 30-second copy contract.
+- Removed compiler-confirmed unused production helpers/imports and stale test fixtures; lint is now zero warnings without changing strategy thresholds or persisted schemas.
+- Acceptance: Forward 60/60, direct 128/128, LIVE/Gate parity 129/129, members 49/49, equity 61/61, architecture/migration 18/18; full npm test, build, typecheck, lint, diff check and Wrangler dry-run pass. Storage stress still preserves 2200 mature samples, 240 history rows, 160 events, pending roots, rules, regions and positions across restart.

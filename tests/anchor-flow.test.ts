@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ANCHOR_FLOW_VERSION, advanceAnchorFlowUniverse, anchorFlowExecutableProofRate } from "../lib/anchor-flow.ts";
+import { advanceAnchorFlowUniverse, anchorFlowExecutableProofRate } from "../lib/anchor-flow.ts";
 import { MULTI_TURN_VERSION, type MultiTurnState, type TurnEvidence, type TurnFrameState, type TurnSide } from "../lib/multi-turn-engine.ts";
 import { REGION_LIFECYCLE_VERSION, type RegionCandle, type RegionEntrySignal, type RegionLifecycleState } from "../lib/region-lifecycle.ts";
 

@@ -769,3 +769,9 @@ Repair only reproduced implementation faults under the user's explicit no-strate
 - Store mature causal evidence separately from the financial/control head in stable hour/row shards. Never truncate samples, pending roots, history, events, rules or positions to make a write fit.
 - Do not claim unknown counterfactual fills from the snapshot. SUI/XLM are causally blocked at the recorded entries; LINK is delayed and remains unknown without the missing resident two-second path.
 - Preserve the existing atomic PAPER commit and immediate serialized LIVE wake rather than modifying Gate timeout recovery, replay protection, minimum-lot uplift or risk freeze.
+
+## 2026-09-25 participation/LIVE regression decisions
+
+- A quote-only pass may continue the exact ordinary candidate whose validation is already WAITING; it may not start a different ordinary candidate. This repairs the intended seconds-scale confirmation without raising trade authority or changing thresholds.
+- Once owner intent and its activation fence are durably saved, a genuine Gate read timeout means pending/fail-closed activation, not rejected intent. Background reconciliation reuses the same fence; three consecutive timeouts still escalate, and non-timeout conflicts remain visible failures.
+- Do not perform a wholesale rewrite of the large worker in this incident. Limit slimming to shared predicates or duplicate error-state handling that can be proven behavior-equivalent by focused and full-suite tests.

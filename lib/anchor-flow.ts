@@ -96,7 +96,7 @@ function fail(state:AnchorFlowState,at:number,reason:string){
   state.phase="FAILED";state.failedAt=at;state.reason=reason;
 }
 function signalFromReady(input:{state:AnchorFlowState;signalPrice:number;at:number;frames?:MultiTurnState["frames"];costRate:number}){
-  const s=input.state,{signalPrice,at}=input,d=s.side==="LONG"?1:-1;
+  const s=input.state,{signalPrice,at}=input;
   const by=input.frames?.[s.symbol],f15=by?.["15m"],f1h=by?.["1h"];
   if(!f15?.ready||!f1h?.ready||s.retestAt==null||s.pullbackExtreme==null||s.restartLevel==null)return null;
   const stopPrice=anchorFlowStopPrice(s.side,s.pullbackExtreme,s.regionWidth,s.regionCenter,input.costRate);

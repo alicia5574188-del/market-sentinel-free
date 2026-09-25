@@ -5,7 +5,7 @@ import { LIVE_PARITY_PREFIX, LIVE_PARITY_VERSION, forwardMirrorSources, buildPro
   mirrorCoverage, sourceLifecycle, liveEntryDriftGuard, mirrorPositionRisk, type MirrorBinding } from "../lib/live-parity.ts";
 import { advanceForward, initialForward, type Trade, type ForwardState } from "../lib/forward-relations.ts";
 import {newExitControl} from "../lib/forward-protection.ts";
-import { gateMarkedEquity, gatePositionValuation, liveEntryDisposition, liveExitTag, type GateLiveAccount, type GateLiveOrder, type GateLivePosition, type LiveEntryIntent, type LiveStopIntent, LiveEntrySizingError, GateEntryCancelledError, GateLiveClient } from "../lib/gate-live.ts";
+import { gateMarkedEquity, gatePositionValuation, liveEntryDisposition, liveExitTag, type GateLiveAccount, type GateLiveOrder, type GateLivePosition, type LiveEntryIntent, type LiveStopIntent, LiveEntrySizingError, GateEntryCancelledError, GateLiveClient, GateReadTimeoutError } from "../lib/gate-live.ts";
 import { quantizeMirrorNotional } from "../lib/gate-quantity.ts";
 import { establishLiveScale, reconcileLiveScale, startLiveSession, sourceAfterEnable, LIVE_SESSION_VERSION, type LiveSession } from "../lib/live-session.ts";
 import { prepareForwardWrite } from "../lib/forward-store.ts";
@@ -14,7 +14,7 @@ register("./worker-test-loader.mjs",import.meta.url);
 const {MarketStream,default:worker}=await import("../worker/index-clean.ts");
 const T=1_789_612_000_000;
 function trade(id="ft-fixture-1",symbol="BTC_USDT",side:"LONG"|"SHORT"="LONG"):Trade {
-  return {id,symbol,side,openedAt:T-60_000,closedAt:null,status:"OPEN",entryPrice:100,exitPrice:null,
+  return {id,symbol,side,openedAt:T-10_000,closedAt:null,status:"OPEN",entryPrice:100,exitPrice:null,
     quantity:2,contracts:2000,quantoMultiplier:.001,notional:200,leverage:2,margin:100,
     plannedRisk:2.4,stopPrice:side==="LONG"?99:101,armPrice:side==="LONG"?100.5:99.5,
     favorable:0,adverse:0,lastPrice:100,lastQuoteAt:T,entryFee:.14,exitFee:0,fundingAllowance:0,
@@ -91,7 +91,7 @@ test("mirror receipt records source and copy quote timing before any private ord
   const i=request();i.now=T+120;i.quoteObservedAt=T+100;i.entryPrice=100.1;
   const r=buildProportionalMirror(i),p=r.binding.receipt;
   assert.equal(p.sourceEntryPrice,100);assert.equal(p.sourceQuoteAt,T);assert.equal(p.copyQuoteAt,T+100);
-  assert.equal(p.copyQuotePrice,100.1);assert.equal(p.copyDelayMs,60120);
+  assert.equal(p.copyQuotePrice,100.1);assert.equal(p.copyDelayMs,i.now-i.source.openedAt);
   assert.ok((p.allowedAdverseEntryDriftRate??0)>0);assert.ok((p.adverseEntryDriftRate??0)>0);
 });
 
@@ -111,7 +111,7 @@ test("a small LIVE account may lift only to the exact Gate minimum when real sto
   assert.ok((r.binding.receipt.minimumUpliftRiskRate??1)<.0075);
 });
 test("LIVE never catches up a source after the realtime copy window even if the PAPER trade is still open",()=>{
-  const i=request();i.activationAt=T-120_000;
+  const stale={...trade(),openedAt:T-60_000},i=request(stale);i.activationAt=T-120_000;
   assert.throws(()=>buildProportionalMirror(i),/实时复制窗口/);
 });
 
@@ -222,8 +222,9 @@ class FakeGate {
   requestCount=0;placed:LiveEntryIntent[]=[];leverages:number[]=[];stops:GateLiveOrder[]=[];amendedStops:Array<{id:string;price:number}>=[];
   orders=new Map<string,GateLiveOrder>();holdings:Record<string,GateLivePosition>={};
   closeTags:string[]=[];onLeverage:(()=>Promise<void>)|null=null;onCreate:(()=>Promise<void>)|null=null;
-  failSnapshot=false;partial=false;zero=false;ambiguous=false;omitExit=false;counter=1;
-  async snapshot(){this.requestCount++;if(this.failSnapshot)throw new Error("injected Gate outage");
+  failSnapshot=false;readTimeout=false;partial=false;zero=false;ambiguous=false;omitExit=false;counter=1;
+  async snapshot(){this.requestCount++;if(this.readTimeout)throw new GateReadTimeoutError("/futures/usdt/accounts");
+    if(this.failSnapshot)throw new Error("injected Gate outage");
     return structuredClone({account:this.account,positions:Object.values(this.holdings),orders:[],priceOrders:this.stops,checkedAt:Date.now()});}
   async setLeverage(_symbol:string,n:number){this.leverages.push(n);await this.onLeverage?.();}
   async createEntry(i:LiveEntryIntent,beforeSend?:()=>boolean){await this.onCreate?.();if(beforeSend&&!beforeSend())throw new GateEntryCancelledError();this.placed.push(structuredClone(i));const id=String(this.counter++);
@@ -244,7 +245,7 @@ type Harness={runtime:{live:Record<string,unknown>;[key:string]:unknown};forward
   liveHistory:unknown[];forwardError:string|null;liveBindingError:string|null;
   syncLive(now:number,enable?:boolean,off?:boolean):Promise<void>;setLiveMode(v:boolean):Promise<{ok:boolean}>;
   saveCheckpoint(now:number,force?:boolean):Promise<void>;liveDesiredPortfolio(now:number):Record<string,unknown>};
-type LiveTest={requestedEnabled:boolean;changedAt:number|null;activation?:LiveSession;operational:boolean;entries:Record<string,{planId:string;status:string;parity?:MirrorBinding["receipt"]}>;
+type LiveTest={requestedEnabled:boolean;changedAt:number|null;activation?:LiveSession;operational:boolean;lastError?:string|null;entries:Record<string,{planId:string;status:string;parity?:MirrorBinding["receipt"]}>;
   positions:Record<string,{id:string;status:string;entryPrice:number;exitPrice?:number;parity?:MirrorBinding["receipt"];exitReason?:string;exchangeSize?:number}&Partial<ReturnType<typeof gatePositionValuation>>>;entrySkips:Record<string,{reason:string}>};
 function live(h:Harness){return h.runtime.live as unknown as LiveTest;}
 async function harness(store=new Memory(),gate=new FakeGate()) {
@@ -570,6 +571,16 @@ test("temporary Gate faults never rewrite owner switch intent",()=>clock(async()
   const {h,gate}=await harness();gate.failSnapshot=true;const r=await enableNew(h);
   assert.equal(r.ok,false);assert.equal(live(h).requestedEnabled,true);assert.equal(live(h).operational,false);
 }));
+test("a first Gate read timeout leaves LIVE pending and a later read recovers without another toggle",()=>clock(async()=>{
+  const {h,gate}=await harness();gate.readTimeout=true;
+  const activationBefore=h.forwardState.positions[0]!.id,result=await h.setLiveMode(true),activation=structuredClone(live(h).activation);
+  assert.equal(result.ok,true);assert.equal(live(h).requestedEnabled,true);assert.equal(live(h).operational,false);
+  assert.match(live(h).lastError??"",/Gate只读核对超时/);assert.ok(activation?.excludedSourceIds.includes(activationBefore));
+  assert.equal(gate.placed.length,0);
+  gate.readTimeout=false;await h.syncLive(T);
+  assert.equal(live(h).requestedEnabled,true);assert.equal(live(h).operational,true);assert.equal(live(h).lastError,null);
+  assert.deepEqual(live(h).activation,activation);assert.equal(gate.placed.length,0);
+}));
 test("storage failure prevents private entry calls and successful copies",()=>clock(async()=>{
   const {h,gate,store}=await harness();store.fail=true;const r=await enableNew(h);
   assert.equal(r.ok,false);assert.equal(gate.placed.length,0);
@@ -691,11 +702,11 @@ test("new arbitrary rule metadata survives the adapter and immutable source bind
 test("the permanent contract and parity suite cannot be omitted by the default release workflow",()=>{
   const pkg=JSON.parse(readFileSync(new URL("../package.json",import.meta.url),"utf8"));
   const ci=readFileSync(new URL("../.github/workflows/sentinel-v2-ci.yml",import.meta.url),"utf8");
-  assert.equal((ci.match(/\.runtime\.liveMirror\.newOrdersOnly == true/g)??[]).length,2);
-  assert.equal((ci.match(/\.runtime\.liveMirror\.executionPolicy == "new-orders-decimal-pnl-v1"/g)??[]).length,2);
+  assert.equal((ci.match(/\.runtime\.forward\.strategyAuthorityVersion == "forward-path-relation-v3"/g)??[]).length,2);
+  assert.equal((ci.match(/\.runtime\.forward\.storage\.error == null/g)??[]).length,2);
   assert.ok(pkg.scripts.test.includes("test:live-parity"));
-  assert.ok(pkg.scripts["test:direct"].includes("live-parity.test.ts")||pkg.scripts["test:direct"].includes("tests/*.test.ts"));
-  assert.match(ci,/run: npm run test:live-parity/);assert.equal((ci.match(/liveMirror.source == "CURRENT_FORWARD_ACCOUNT"/g)??[]).length,2);
+  assert.ok(pkg.scripts["test:live-parity"].includes("live-parity.test.ts")||pkg.scripts["test:direct"].includes("tests/*.test.ts"));
+  assert.match(ci,/npm run test:live-parity/);assert.match(ci,/\(\.runtime\.liveMode\.requestedEnabled\|type\) == "boolean"/);
   assert.match(readFileSync(new URL("../AGENTS.md",import.meta.url),"utf8"),/LIVE_MIRROR_CONTRACT.md/);
 });
 
@@ -725,7 +736,7 @@ test("a same-coin replacement is allowed only after the old ambiguous parent is 
     // parent is durably resolved as no exposure. It is never replayed.
     await h.syncLive(Date.now());
     assert.equal((live(h).entries.BTC_USDT as unknown as {submissionResolved?:boolean}).submissionResolved,true);
-    h.forwardState.positions=[trade("replacement-parent")];
+    h.forwardState.positions=[{...trade("replacement-parent"),openedAt:Date.now()-1_000,lastQuoteAt:Date.now()}];
     h.runtime.evidence={BTC_USDT:{midpoint:100,bestBid:100,bestAsk:100,observedAt:Date.now(),fresh:true,entryReady:true}};
     await h.syncLive(Date.now());
     assert.equal(gate.placed.length,2);

@@ -1,6 +1,6 @@
 import { TURN_CONFIG, type TurnFrameState } from "./multi-turn-engine.ts";
 import { MULTI_TURN_MIN_LEVERAGE, MULTI_TURN_TARGET_LEVERAGE, multiTurnEntryLeverage } from "./multi-turn-entry-policy.ts";
-import { REGION_DETACH_WIDTHS, type RegionEntrySignal } from "./region-lifecycle.ts";
+import { type RegionEntrySignal } from "./region-lifecycle.ts";
 import { anchorFlowExecutableProofRate } from "./anchor-flow.ts";
 
 export const REGION_ENTRY_POLICY_VERSION="region-entry-policy-v1";

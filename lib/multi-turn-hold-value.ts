@@ -1,4 +1,4 @@
-import { TURN_CONFIG, type TurnFrameState, type TurnTimeframe } from "./multi-turn-engine.ts";
+import { type TurnFrameState, type TurnTimeframe } from "./multi-turn-engine.ts";
 
 export const MULTI_TURN_HOLD_VALUE_VERSION = "multi-turn-time-space-v1";
 export const MULTI_TURN_BEST_HOLD_BARS = 6;

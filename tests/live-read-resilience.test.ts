@@ -15,7 +15,7 @@ test("one or two Gate read timeouts stay transient; the third consecutive timeou
 
 test("only raw/transient read-timeout text is suppressible in the LIVE page",()=>{
   assert.equal(isTransientLiveReadErrorText("The operation was aborted due to timeout"),true);
-  assert.equal(isTransientLiveReadErrorText("Gate只读核对超时：/futures/usdt/accounts；本轮不执行新增实盘动作"),false);
+  assert.equal(isTransientLiveReadErrorText("Gate只读核对超时：/futures/usdt/accounts；本轮不执行新增实盘动作"),true);
   assert.equal(isTransientLiveReadErrorText("Gate账户核对连续3轮超时；已暂停新增复制"),false);
   assert.equal(isTransientLiveReadErrorText("结构止损更新结果暂不明确"),false);
 });
