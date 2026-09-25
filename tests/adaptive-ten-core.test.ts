@@ -85,7 +85,7 @@ test("candidate economics keep learned post-cost edge separate from relation hea
     livePathScore:.70,environmentFit:.80,symbols:[frame!.symbol]}];e.frames={[frame!.symbol]:frame!};
   const c=relationCandidates(e)[0];assert.ok(c);
   assert.equal(c!.netRate,.0024,"health controls authority and risk but must not discount the same sample edge twice");
-  assert.ok(c!.edgeRatio>.40);
+  assert.ok(c!.netRate/c!.stopRate>.40);
 });
 
 test("a restart can seed closed root paths immediately instead of waiting a fresh hour",()=>{
