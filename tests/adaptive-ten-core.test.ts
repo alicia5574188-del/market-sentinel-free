@@ -59,7 +59,7 @@ test("Forward Path Relation 3.0 learns from root paths without double-counting c
 });
 
 test("a still-positive relation is not auto-degraded only because quantile resynthesis changed its exact signature",()=>{
-  let e=learnThrough(35),source=e.rules.find(r=>r.side==="LONG");assert.ok(source);
+  const e=learnThrough(35),source=e.rules.find(r=>r.side==="LONG");assert.ok(source);
   const stale={...structuredClone(source!),id:"carryover-fixture",signature:"carryover-stale-signature",status:"DEGRADED" as const,health:.25,
     lastQualifiedAt:nowAt(35)-5*60_000,reason:"fixture"};
   e.rules=[stale];
