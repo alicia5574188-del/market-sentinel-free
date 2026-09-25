@@ -180,7 +180,7 @@ test("legacy evidence drift still fails closed unless persisted-time normalizati
   const head=structuredClone(write.entries[HEAD]) as {sampleManifestSha256:string};
   head.sampleManifestSha256=await digest(new TextEncoder().encode(JSON.stringify(manifest)));
   await db.put({...write.entries,[target.key]:changed,[FORWARD_SAMPLE_MANIFEST_STORAGE]:manifest,[HEAD]:head});
-  await assert.rejects(()=>readForwardStore(db,T+1),/LEGACY_CANONICAL_AT_PERSISTED_TIME/);
+  await assert.rejects(()=>readForwardStore(db,T+1),/EVIDENCE_CANONICAL_AT_PERSISTED_TIME/);
   assert.equal([...db.data.keys()].filter(key=>key.startsWith(FORWARD_SAMPLE_RECOVERY_PREFIX)).length,0);
 });
 
