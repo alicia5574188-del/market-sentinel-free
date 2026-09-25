@@ -13,7 +13,7 @@ test("Forward Path Relation 3.0 is the only PAPER strategy authority and retired
   assert.match(core,/FORWARD_MINUTE_CONFIRMATION_CAP=11/);
   for(const retired of["multi-turn","anchor-flow","region-launch","region-lifecycle","strategy-arena","regime-portfolio","all-regime-engine"])
     assert.doesNotMatch(core,new RegExp(`from .*\\b${retired.replace(/[.*+?^$()|[\\]{}]/g,"\\$&")}`));
-  for(const mode of["RELATION","BREAKOUT","RETEST","FAILED_BREAKOUT","RANGE"])assert.match(core,new RegExp(`"${mode}"`));
+  for(const mode of["RELATION","BREAKOUT","RETEST","FAILED_BREAKOUT","RANGE","SHOCK"])assert.match(core,new RegExp(`"${mode}"`));
   assert.match(core,/ROTATION_GAP=10/);
   assert.match(core,/TOTAL_RISK_RATE=\.10/);
   assert.match(core,/SIDE_RISK_RATE=\.065/);
@@ -38,6 +38,19 @@ test("Forward Path Relation 3.0 is the only PAPER strategy authority and retired
   const rotation=core.slice(core.indexOf("function rotateIfNeeded"),core.indexOf("export function fillForwardPortfolio"));
   assert.match(rotation,/sideFull/);assert.match(rotation,/existingRisk\(s,candidate\.side\)/);
   assert.match(rotation,/structuredClone\(s\)/);
+});
+
+test("Structural Interrupt is a bounded exception to sample authority, never a restored structure-first stack",async()=>{
+  const [core,interrupt]=await Promise.all([read("lib/forward-relations.ts"),read("lib/forward-structural-interrupt.ts")]);
+  assert.match(core,/from "\.\/forward-structural-interrupt\.ts"/);
+  assert.match(core,/if\(!isShock&&!o\.relationRuleId\)/);
+  assert.match(core,/structuralInterruptBlockReason/);
+  assert.match(core,/SHOCK_EVENT_RISK_RATE=\.015/);assert.match(core,/MAX_SHOCK_ENTRIES_PER_EVENT=3/);
+  assert.match(interrupt,/phase:"PRE_ALERT"\|"CONFIRMED"\|"COOLDOWN"/);
+  assert.match(interrupt,/preCount>=4&&preBreadth>=\.25/);assert.match(interrupt,/confirmed\.length>=3&&breadth>=\.20/);
+  assert.match(interrupt,/singleExtreme=.*\.0065/);
+  assert.doesNotMatch(core,/m\.ok\|\|body>avgBody\*2\.6/);
+  assert.match(core,/1m确认通过/);
 });
 
 test("runtime alarm uses the slim market path and no strategy cutover can reset PAPER",async()=>{
@@ -88,6 +101,15 @@ test("LIVE, member, auth and credential infrastructure remain isolated from stra
   assert.match(member,/memberExecutionClass/);assert.match(member,/forwardMirrorSources/);
   assert.match(auth,/verifyOwnerSession/);assert.match(vault,/encryptGateCredentials/);
   for(const source of[live,auth,vault])assert.doesNotMatch(source,/forward-relation-v2/);
+});
+
+test("fresh PAPER entries wake one LIVE pass without an artificial two-order staging queue or stale catch-up",async()=>{
+  const [worker,parity]=await Promise.all([read("worker/index-clean.ts"),read("lib/live-parity.ts")]);
+  const sync=worker.slice(worker.indexOf("protected async syncLive"),worker.indexOf("private suspendSymbol"));
+  assert.match(sync,/desiredTrades=Object\.values\(desiredPortfolio\)\.sort/);
+  assert.doesNotMatch(sync,/staged\.length>=2/);
+  assert.match(parity,/LIVE_SOURCE_ENTRY_MAX_DELAY_MS = 30_000/);
+  assert.match(parity,/minimumUplift/);assert.match(parity,/LIVE_MIN_CONTRACT_UPLIFT_MAX_RISK_RATE = \.0075/);
 });
 
 test("LIVE enable keeps owner intent ON while open-order audit retries safely",async()=>{
