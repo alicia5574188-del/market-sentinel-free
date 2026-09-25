@@ -182,7 +182,7 @@ test("terminal Gate orders are classified without ever replaying a successful en
   assert.equal(liveEntryDisposition({ status: "inactive" }, "PRICE_TRIGGER"), "ERROR");
 });
 
-test("private Gate requests are signed and order IDs remain strings", async () => {
+test("private REST Gate requests remain signed and 64-bit order IDs remain strings", async () => {
   const originalFetch = globalThis.fetch;
   const seen: Request[] = [];
   globalThis.fetch = async (input, init) => {
@@ -190,7 +190,9 @@ test("private Gate requests are signed and order IDs remain strings", async () =
     return Response.json({ id_string: "9223372036854775807" });
   };
   try {
-    const client = new GateLiveClient({ apiKey: "abcdefgh12345678", apiSecret: "secret-value-12345678", environment: "live" });
+    // Testnet intentionally keeps the REST adapter so this regression continues
+    // to verify HTTP signing independently from the new LIVE WebSocket order path.
+    const client = new GateLiveClient({ apiKey: "abcdefgh12345678", apiSecret: "secret-value-12345678", environment: "testnet" });
     const intent = buildLiveEntryIntent({ plan: plan("BREAKOUT", "LONG"), equity: 1_000, available: 1_000, openRisk: 0, quantoMultiplier: 0.001, leverageMax: 50 });
     assert.equal(await client.createEntry(intent), "9223372036854775807");
     assert.equal(seen.length, 1);
