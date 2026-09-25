@@ -252,7 +252,8 @@ export class GateLiveClient {
     preferredAlternatePaths:0};
   constructor(credentials: GateCredentials) { this.credentials = credentials; }
 
-  private async request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, query = "", value?: unknown, beforeSend?: () => boolean) {
+  private async request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, query = "", value?: unknown, beforeSend?: () => boolean,
+    writeTimeoutMs=6_000) {
     const timestamp = Math.floor(Date.now() / 1_000).toString();
     const signedPath = `/api/v4${path}`;
     const body = value == null ? "" : JSON.stringify(value);
@@ -305,7 +306,7 @@ export class GateLiveClient {
         return {data:result.data,raw:result.raw};
       }
       // Mutations remain single-submit, including a timeout reading the body.
-      return await send(false,AbortSignal.timeout(6_000));
+      return await send(false,AbortSignal.timeout(writeTimeoutMs));
     }catch(error){
       if(gateRequestTimedOut(error)){
         if(method==="GET"){
@@ -366,7 +367,9 @@ export class GateLiveClient {
 
   async setLeverage(symbol: string, leverage: number) {
     const query = `leverage=${encodeURIComponent(String(leverage))}`;
-    await this.request("POST", `/futures/usdt/positions/${encodeURIComponent(symbol)}/leverage`, query);
+    // Leverage is safely read-verifiable, so do not spend the full entry-write
+    // timeout before falling back to readback.
+    await this.request("POST", `/futures/usdt/positions/${encodeURIComponent(symbol)}/leverage`, query,undefined,undefined,2_500);
   }
 
   /** A leverage mutation has no order identity. If its response times out, verify
@@ -374,16 +377,23 @@ export class GateLiveClient {
    * treating it like an ambiguous entry order for sixty seconds. No write is
    * retried automatically. */
   async ensureLeverage(symbol:string,leverage:number){
+    // Most contracts already retain the requested setting. A safe hedged GET can
+    // avoid a mutation entirely and removes the leverage write from the hot
+    // entry path when no change is needed.
+    try{
+      const current=await this.position(symbol),actual=Number(current.leverage);
+      if(Number.isFinite(actual)&&Math.abs(actual-leverage)<1e-9)return{verified:true,recovered:false,already:true,actual};
+    }catch(error){if(!isGateReadTimeoutError(error))throw error;}
     try{
       await this.setLeverage(symbol,leverage);
-      return{verified:true,recovered:false,actual:leverage};
+      return{verified:true,recovered:false,already:false,actual:leverage};
     }catch(error){
       if(!(error instanceof Error)||!/Gate POST 请求超时：\/futures\/usdt\/positions\/.+\/leverage/.test(error.message))throw error;
       const first=await this.position(symbol),actual=Number(first.leverage);
-      if(Number.isFinite(actual)&&Math.abs(actual-leverage)<1e-9)return{verified:true,recovered:true,actual};
+      if(Number.isFinite(actual)&&Math.abs(actual-leverage)<1e-9)return{verified:true,recovered:true,already:false,actual};
       await new Promise(resolve=>setTimeout(resolve,350));
       const second=await this.position(symbol),retryActual=Number(second.leverage);
-      if(Number.isFinite(retryActual)&&Math.abs(retryActual-leverage)<1e-9)return{verified:true,recovered:true,actual:retryActual};
+      if(Number.isFinite(retryActual)&&Math.abs(retryActual-leverage)<1e-9)return{verified:true,recovered:true,already:false,actual:retryActual};
       throw new Error(`Gate 杠杆写入响应超时且安全回读未确认 ${symbol} 已为 ${leverage}×；本源单跳过，但不会锁住其他实盘机会`);
     }
   }
