@@ -20,6 +20,7 @@ export type MirrorReceipt = {
   sourcePolicy: string; sourceOpenedAt: number; sourceDeadline: number;
   sourceEntryPrice: number; sourceStopPrice: number; sourceArmPrice: number;
   sourceExitMode: Trade["rule"]["exitMode"]; sourceGivebackRate: number;
+  sourceExitPlanVersion?: string; sourceBestHoldMinutes?: number; sourceMaxHoldMinutes?: number;
   sourceNotional: number; sourceMargin: number; sourceLeverage: number;
   copiedAt: number; sourceEquity: number; liveEquity: number; ratio: number;
   targetNotional: number; targetMargin: number; requestedContracts: number;
@@ -39,6 +40,7 @@ export type MirrorBinding = { version: typeof LIVE_PARITY_VERSION; sourceAtCopy:
   receipt: MirrorReceipt; sourceAtClose?: Trade; actual?: unknown };
 
 function positive(v: number) { return Number.isFinite(v) && v > 0; }
+const sourceHoldMinutes=(t:Trade)=>Math.max(5,t.exitPlan?.maxHoldMinutes??t.expectedHoldMinutes??t.rule.horizon);
 export function validateMirrorSource(t: Trade) {
   if (!t || !t.id || !t.symbol || !["LONG", "SHORT"].includes(t.side)
     || t.status !== "OPEN" || !t.rule?.id || !positive(t.openedAt)
@@ -59,7 +61,7 @@ export function forwardMirrorSources(state: ForwardState, sourceEquity: number):
   for (const t of state.positions) {
     validateMirrorSource(t);
     if (out[t.symbol]) throw new Error(`${t.symbol} 出现多条逻辑持仓；禁止静默净额合并，须先升级逐腿执行适配器`);
-    const cost = 2*(PAPER_COST.feeRate+PAPER_COST.slippageRate)+PAPER_COST.fundingAllowancePerDay*t.rule.horizon/1440;
+    const cost = 2*(PAPER_COST.feeRate+PAPER_COST.slippageRate)+PAPER_COST.fundingAllowancePerDay*sourceHoldMinutes(t)/1440;
     out[t.symbol] = {
       id:t.id, strategyId:t.rule.id, strategyName:`关系规则 ${t.rule.id} v${t.rule.version}`,
       family:"TREND", lane:"PORTFOLIO", eventId:t.id, symbol:t.symbol, side:t.side,
@@ -91,7 +93,7 @@ export function sourceLifecycle(state: ForwardState | null, id: string) {
 }
 
 export function mirrorSourceFresh(t: Trade | undefined, id: string, now: number) {
-  return !!t && t.id===id && t.status==="OPEN" && now>=t.openedAt && now<t.openedAt+t.rule.horizon*60_000;
+  return !!t && t.id===id && t.status==="OPEN" && now>=t.openedAt && now<t.openedAt+sourceHoldMinutes(t)*60_000;
 }
 
 export function liveEntryDriftGuard(source:Trade,currentPrice:number) {
@@ -156,7 +158,7 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
     supportsDecimals:sized.supportsDecimals,targetNotional,minimumNotional:sized.minimumNotional,
     minimumMargin:sized.minimumNotional/t.leverage,requiredLiveEquity:input.sourceEquity*sized.minimumNotional/t.notional});
   const notional=contracts*one,leverage=t.leverage,margin=notional/leverage;
-  const cost=2*(PAPER_COST.feeRate+PAPER_COST.slippageRate)+PAPER_COST.fundingAllowancePerDay*t.rule.horizon/1440;
+  const cost=2*(PAPER_COST.feeRate+PAPER_COST.slippageRate)+PAPER_COST.fundingAllowancePerDay*sourceHoldMinutes(t)/1440;
   const plannedRisk=notional*(Math.abs(input.entryPrice-t.stopPrice)/input.entryPrice+cost);
   const sourceScaledRisk=t.plannedRisk*ratio;
   // Gate is the execution authority for actual fees and available margin. Do not
@@ -180,9 +182,10 @@ export function buildProportionalMirror(input:{source:Trade;sourceEquity:number;
     fail("RISK_CAP","源单杠杆与实际入场价无法保留止损前的保证金余量");
   const size=direction*contracts,tag=liveEntryTag(t.id);
   const receipt:MirrorReceipt={version:LIVE_PARITY_VERSION,sourceId:t.id,sourceRuleId:t.rule.id,sourcePolicy:input.policy,
-    sourceOpenedAt:t.openedAt,sourceDeadline:t.openedAt+t.rule.horizon*60_000,
+    sourceOpenedAt:t.openedAt,sourceDeadline:t.openedAt+sourceHoldMinutes(t)*60_000,
     sourceEntryPrice:t.entryPrice,sourceStopPrice:t.stopPrice,sourceArmPrice:t.armPrice,
     sourceExitMode:t.rule.exitMode,sourceGivebackRate:t.rule.givebackRate,
+    sourceExitPlanVersion:t.exitPlan?.version,sourceBestHoldMinutes:t.exitPlan?.bestHoldMinutes,sourceMaxHoldMinutes:t.exitPlan?.maxHoldMinutes,
     sourceNotional:t.notional,sourceMargin:t.margin,sourceLeverage:t.leverage,
     copiedAt:input.now,sourceEquity:input.sourceEquity,liveEquity:input.equity,ratio,targetNotional,targetMargin,
     requestedContracts,roundedContracts:contracts,roundingNotional:Math.max(0,targetNotional-notional),discrepancy:null,
