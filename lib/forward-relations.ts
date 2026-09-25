@@ -692,7 +692,8 @@ export function fillForwardPortfolio(s:ForwardState,quotes:Record<string,Quote>,
     const q=quotes[o.symbol],meta=contracts[o.symbol];if(!freshQuote(q,now)||q!.entryReady!==true){reject("等待实时盘口");continue;}
     if(!meta){reject("等待合约规格");continue;}
     const last=s.lastExitAt[o.symbol]??0,lastSide=s.lastSide[o.symbol];
-    const cooldown=lastSide&&lastSide!==o.side?5*60_000:8*60_000;if(now-last<cooldown){reject("同币短时防抖");continue;}
+    const cooldown=lastSide&&lastSide!==o.side?5*60_000:8*60_000;
+    if(!o.structuralInterrupt&&now-last<cooldown){reject("同币短时防抖");continue;}
     const error=openTrade(s,o,q!,meta,now,equity);if(error){reject(error);continue;}opened++;
   }
   s.entryDiagnostics.opened=opened;return opened;
@@ -726,8 +727,11 @@ export function advanceForward(input:{state:ForwardState;now:number;paths:Record
     for(const [symbol,region] of Object.entries(s.regions)){if(allowed&&!allowed.has(symbol))continue;const rows=validPath(input.paths[symbol]??[],input.now);if(!rows)continue;
       const support=bySymbol.get(symbol)??[];
       premium.push(...relationBackedRegionOpportunities(s,symbol,rows,input.minutePaths?.[symbol],input.quotes[symbol],input.now,pulse,region,support).filter(o=>o.premium));}
-    const base=s.opportunities.filter(o=>!o.premium&&o.expiresAt>input.now),combined=[...premium,...base];
-    s.opportunities=bestOpportunityPerSymbol(combined,(a,b)=>Number(b.eligible)-Number(a.eligible)||Number(b.premium)-Number(a.premium)
+    const existingShock=s.opportunities.filter(o=>o.structuralInterrupt&&o.expiresAt>input.now),
+      base=s.opportunities.filter(o=>!o.premium&&!o.structuralInterrupt&&o.expiresAt>input.now),
+      combined=[...existingShock,...premium,...base];
+    s.opportunities=bestOpportunityPerSymbol(combined,(a,b)=>Number(b.eligible)-Number(a.eligible)
+      ||Number(b.structuralInterrupt)-Number(a.structuralInterrupt)||Number(b.premium)-Number(a.premium)
       ||Number(!b.reserve)-Number(!a.reserve)||b.score-a.score);
   }
   if(input.shockVetoSide){
