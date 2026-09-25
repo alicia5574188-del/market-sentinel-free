@@ -2239,7 +2239,32 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         entry.missingSince = null;
       } else {
         entry.missingSince ??= now;
-        const inspected = await client.inspectEntry(entry.kind, symbol, entry.tag, entry.exchangeOrderId);
+        let inspected:GateLiveOrder|null=null,recovery:Awaited<ReturnType<GateLiveClient["recoverMarketEntry"]>>|null=null;
+        if(entry.parity&&entry.marketSubmittedAt!=null&&typeof client.recoverMarketEntry==="function"){
+          recovery=await client.recoverMarketEntry(symbol,entry.side,entry.tag,entry.exchangeOrderId,entry.marketSubmittedAt);
+          inspected=recovery.order;
+          if(inspected&&!entry.exchangeOrderId)entry.exchangeOrderId=liveOrderId(inspected);
+          if(recovery.exposure){
+            entry.status="FILLED";entry.submissionResolved=true;entry.missingSince=null;entry.lastError=null;
+            const px=recovery.fillPrice;
+            if(entry.parity&&px!=null){
+              const source=this.currentMirrorSource(entry.planId).trade;
+              if(source){const drift=liveEntryDriftGuard(source,px);Object.assign(entry.parity,{
+                exchangeEntryPrice:px,exchangeEntryAt:recovery.checkedAt,exchangeEntryDriftRate:drift.adverse});}
+            }
+            this.recordLiveAudit({observedAt:now,symbol,planId:entry.planId,stage:"ENTRY_SUBMIT",level:"INFO",
+              reason:`Gate 已通过 ${recovery.evidence.join("+")||"独立核对"} 确认实盘暴露；唯一订单不重放，立即进入持仓纳管`});
+            continue;
+          }
+          if(recovery.cancelled){
+            entry.status="CANCELLED";entry.submissionResolved=true;entry.missingSince=null;
+            entry.lastError="Gate 已确认 IOC 零成交；未形成实盘暴露，不重放同一模拟源单";
+            this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ENTRY_REJECTED",reason:entry.lastError,observedAt:now};
+            this.recordLiveAudit({observedAt:now,symbol,planId:entry.planId,stage:"ENTRY_SUBMIT",level:"INFO",
+              reason:`${entry.lastError}（${recovery.evidence.join("+")||"唯一订单身份"}）`});
+            continue;
+          }
+        }else inspected=await client.inspectEntry(entry.kind,symbol,entry.tag,entry.exchangeOrderId);
         if (inspected) {
           entry.exchangeOrderId = liveOrderId(inspected) ?? entry.exchangeOrderId;
           entry.status = liveEntryDisposition(inspected, entry.kind);
@@ -2253,20 +2278,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
               level: "SKIPPED", reason });
           } else entry.lastError = null;
         } else if (entry.marketSubmittedAt!=null && gateUnknownSubmissionCanResolve(entry.marketSubmittedAt,now)) {
-          // Gate documents that a custom text ID for a zero-fill cancelled
-          // futures order may disappear after 60s, while any fully/partially
-          // filled order remains queryable by that text indefinitely. Reaching
-          // this branch means the fresh account snapshot has no position and a
-          // direct text lookup also returned not-found beyond that window.
           entry.status = "CANCELLED";
           entry.submissionResolved = true;
-          const reason = `Gate 在60秒订单身份核对窗口后仍无订单、持仓或成交 ${entry.tag}；确认本次未形成实盘暴露，原源单不重放，其他新机会恢复执行`;
+          const reason = `Gate 在60秒唯一订单窗口后仍无订单、持仓或成交 ${entry.tag}；确认本次未形成实盘暴露，原源单不重放`;
           entry.lastError = reason;
           this.runtime.live.entrySkips[symbol] = { planId: entry.planId, symbol, code: "ENTRY_REJECTED", reason, observedAt: now };
           this.recordLiveAudit({ observedAt: now, symbol, planId: entry.planId, stage: "ENTRY_SUBMIT",
             level: "INFO", reason });
-        } else if (now - entry.missingSince >= 6_000) {
-          const reason = `Gate 暂未返回订单 ${entry.tag}；保留唯一订单身份继续核对至60秒，不自动重复提交`;
+        } else if (now - entry.missingSince >= 2_000) {
+          const reason = `Gate 暂未完成 ${entry.tag} 的订单/持仓/成交核对；保留唯一订单身份和风险额度，不自动重放，2秒后继续核对`;
           entry.status = "ERROR";
           if(entry.lastError!==reason)this.recordLiveAudit({ observedAt: now, symbol, planId: entry.planId, stage: "ENTRY_SUBMIT",
             level: "RECOVERING", reason });
