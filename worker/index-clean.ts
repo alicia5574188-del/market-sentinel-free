@@ -1885,6 +1885,22 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       currentStop: entry.invalidation }, tick);
   }
 
+  private async confirmLiveMarketEntry(client:GateLiveClient,entry:LiveEntry) {
+    let last:{state:"FILLED"|"CANCELLED"|"PENDING";order?:GateLiveOrder|null;position?:unknown}|null=null;
+    for(const delay of[0,150,350]){
+      if(delay)await new Promise(resolve=>setTimeout(resolve,delay));
+      if(typeof client.resolveMarketEntry==="function"){
+        last=await client.resolveMarketEntry(entry.symbol,entry.side,entry.tag,entry.exchangeOrderId);
+      }else{
+        const order=await client.inspectEntry("MARKET",entry.symbol,entry.tag,entry.exchangeOrderId);
+        const disposition=order?liveEntryDisposition(order,"MARKET"):null;
+        last={state:disposition==="FILLED"?"FILLED":disposition==="CANCELLED"?"CANCELLED":"PENDING",order,position:null};
+      }
+      if(last.state!=="PENDING")return last;
+    }
+    return last??{state:"PENDING" as const,order:null,position:null};
+  }
+
   private async createImmediateLiveStop(client: GateLiveClient, entry: LiveEntry) {
     const stop = this.liveEntryStopIntent(entry);
     entry.stopTag = stop.tag;
@@ -2631,18 +2647,28 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           if(!submissionStillAllowed())throw new GateEntryCancelledError();
           entry.exchangeOrderId = await client.createEntry(intent,submissionStillAllowed);
           entry.status = "OPEN";
-          const filled=await client.inspectEntry("MARKET",symbol,entry.tag,entry.exchangeOrderId);
-          const fillPrice=Number(filled?.fill_price);
+          const resolution=await this.confirmLiveMarketEntry(client,entry);
+          const resolvedOrder=resolution.order??null,resolvedPosition=resolution.position as GateLivePosition|null|undefined,
+            fillPrice=Number(resolvedOrder?.fill_price??resolvedPosition?.entry_price);
           if(entry.parity&&Number.isFinite(fillPrice)&&fillPrice>0){
             const actualDrift=liveEntryDriftGuard(source,fillPrice);
             Object.assign(entry.parity,{exchangeEntryPrice:fillPrice,exchangeEntryAt:Date.now(),
               exchangeEntryDriftRate:actualDrift.adverse});
           }
-          if(filled&&liveEntryDisposition(filled,"MARKET")==="CANCELLED"){
-            entry.status="CANCELLED";entry.submissionResolved=true;entry.lastError="Gate IOC零成交；未完成复制，不冒充成功";
+          if(resolution.state==="CANCELLED"){
+            entry.status="CANCELLED";entry.submissionResolved=true;entry.lastError="Gate IOC已确认零成交；未完成复制，不冒充成功";
             this.runtime.live.entrySkips[symbol]={planId:entry.planId,symbol,code:"ENTRY_REJECTED",reason:entry.lastError,observedAt:Date.now()};
             await this.saveCheckpoint(Date.now(),true);continue;
           }
+          if(resolution.state==="PENDING"){
+            entry.status="OPEN";entry.missingSince??=Date.now();
+            entry.lastError="Gate 已返回唯一订单身份，但成交状态仍在短时传播；按同一身份继续核对，不重复提交";
+            recoveringSubmission=entry;
+            this.recordLiveAudit({observedAt:Date.now(),symbol,planId:entry.planId,stage:"ENTRY_SUBMIT",level:"RECOVERING",
+              reason:entry.lastError});
+            await this.saveCheckpoint(Date.now(),true);break;
+          }
+          entry.submissionResolved=true;entry.missingSince=null;entry.lastError=null;
           await this.saveCheckpoint(Date.now(),true);
           await this.createImmediateLiveStop(client, entry);
           if (!entry.stopOrderId) {
@@ -2668,11 +2694,40 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: "ENTRY_REJECTED", reason, observedAt: now };
             this.recordLiveAudit({ observedAt: now, symbol, planId: plan.id, stage: "ENTRY_SUBMIT", level: "SKIPPED", reason, error });
           } else {
+            // A POST response timeout does not imply failure. Before entering the
+            // long no-replay fence, immediately seek independent proof from the
+            // order identity and contract position read lanes.
+            let recovered:{state:"FILLED"|"CANCELLED"|"PENDING";order?:GateLiveOrder|null;position?:unknown}|null=null;
+            try{recovered=await this.confirmLiveMarketEntry(client,entry);}catch{/* keep unique-identity recovery below */}
+            if(recovered?.state==="FILLED"){
+              const recoveredOrder=recovered.order??null,recoveredPosition=recovered.position as GateLivePosition|null|undefined,
+                recoveredPrice=Number(recoveredOrder?.fill_price??recoveredPosition?.entry_price);
+              entry.status="OPEN";entry.submissionResolved=true;entry.missingSince=null;entry.lastError=null;
+              if(!entry.exchangeOrderId&&recoveredOrder)entry.exchangeOrderId=liveOrderId(recoveredOrder);
+              if(entry.parity&&Number.isFinite(recoveredPrice)&&recoveredPrice>0){
+                const actualDrift=liveEntryDriftGuard(source,recoveredPrice);
+                Object.assign(entry.parity,{exchangeEntryPrice:recoveredPrice,exchangeEntryAt:Date.now(),
+                  exchangeEntryDriftRate:actualDrift.adverse});
+              }
+              this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"ENTRY_SUBMIT",level:"INFO",
+                reason:"Gate 提交响应虽超时，但订单/持仓安全回读已确认实际成交；继续创建原生保护，不重放入场"});
+              await this.saveCheckpoint(Date.now(),true);
+              await this.createImmediateLiveStop(client,entry);
+              if(!entry.stopOrderId){if(entry.protectionExitRequestedAt)recoveringSubmission=entry;else recoveringEntryStop=entry;break;}
+              await this.queueLiveBinding(entry);await this.saveCheckpoint(Date.now(),true);continue;
+            }
+            if(recovered?.state==="CANCELLED"){
+              entry.status="CANCELLED";entry.submissionResolved=true;entry.missingSince=null;
+              entry.lastError="Gate 提交响应虽超时，但安全回读已确认IOC零成交；不重放同一源单";
+              this.runtime.live.entrySkips[symbol]={planId:plan.id,symbol,code:"ENTRY_REJECTED",reason:entry.lastError,observedAt:Date.now()};
+              this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"ENTRY_SUBMIT",level:"INFO",reason:entry.lastError});
+              await this.saveCheckpoint(Date.now(),true);continue;
+            }
             entry.status = "ERROR";
             entry.missingSince = now;
             recoveringSubmission = entry;
             this.recordLiveAudit({ observedAt: now, symbol, planId: plan.id, stage: "ENTRY_SUBMIT", level: "RECOVERING",
-              reason: `${reason}；结果不明确，保留风险额度并按订单标签核对，不自动重复提交`, error });
+              reason: `${reason}；快速订单/持仓回读仍无定论，保留唯一身份继续核对，绝不自动重放`, error });
           }
         }
       } catch (error) {
