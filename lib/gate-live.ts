@@ -383,7 +383,7 @@ export class GateLiveClient {
     try{
       const current=await this.position(symbol),actual=Number(current.leverage);
       if(Number.isFinite(actual)&&Math.abs(actual-leverage)<1e-9)return{verified:true,recovered:false,already:true,actual};
-    }catch(error){if(!isGateReadTimeoutError(error))throw error;}
+    }catch{/* Precheck is an optimization only; the authoritative write below still reports any real account rejection. */}
     try{
       await this.setLeverage(symbol,leverage);
       return{verified:true,recovered:false,already:false,actual:leverage};
