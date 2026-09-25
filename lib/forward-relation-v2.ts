@@ -188,6 +188,28 @@ function ruleFrom(input:{state:RelationEngineState;paths:Record<string,RelationC
     health,status,livePathScore:live,environmentFit:fit,stopRate:profile.normalAdverseRate,targetRate:profile.targetRate,exitProfile:profile,
     updatedAt:now,lastQualifiedAt:now,symbols,reason} satisfies RelationRule;
 }
+function revalidateCarryover(old:RelationRule,state:RelationEngineState,paths:Record<string,RelationCandle[]>,rows:RelationMeasurement[],now:number,currentEnv:RelationEnvironment){
+  const selected=rows.filter(r=>matches(r.x,old.conditions)&&Number.isFinite(cpValue(r,old.horizon)));
+  if(selected.length<8)return{...old,status:"DEGRADED" as const,health:Math.min(.25,old.health),updatedAt:now,
+    reason:"旧关系有效样本不足；保留低风险观察，不推导反向"};
+  const recent=groupRows(selected,old.horizon,old.side).slice(-3),values=recent.map(x=>x.value),
+    se=values.length>=2?standardError(values):old.standardError,
+    recentNet=values.length>=2&&finite(se)?mean(values)-COST-.65*se:old.recentNet,
+    live=livePathScore(state,paths,old.conditions,old.side,selected,now),fit=envFit(selected,currentEnv),
+    newest=Math.max(...selected.map(r=>r.at)),hasNewEvidence=newest>old.lastQualifiedAt;
+  let status:RelationStatus;
+  if(live<.28||fit<.28||(hasNewEvidence&&recentNet<-COST*.15))status="DEGRADED";
+  else if(live<.55||fit<.42||(hasNewEvidence&&recentNet<=0))status="PRESSURED";
+  else if(old.status==="DEGRADED"||old.status==="PRESSURED")status="RECOVERING";
+  else status="PRESSURED";
+  const evidence=clip(Math.max(old.longNet,recentNet)/Math.max(COST*2,.008),0,1),
+    raw=clip(.40*evidence+.35*live+.25*fit,.12,1);
+  let health=status==="DEGRADED"?clip(raw,.15,.32):status==="RECOVERING"?clip(raw,.52,.78):clip(raw,.40,.62);
+  if(old.scope==="RECENT")health=Math.min(health,.72);
+  return{...old,recentNet,standardError:finite(se)?se:old.standardError,samples:selected.length,recentGroups:recent.length,
+    livePathScore:live,environmentFit:fit,status,health,updatedAt:now,
+    reason:"关系未被本轮阈值重合成；按现有成熟证据重新审查｜"+status+"｜近期净反应"+(recentNet*100).toFixed(2)+"%｜路径"+Math.round(live*100)+"｜环境"+Math.round(fit*100)};
+}
 function synthesize(state:RelationEngineState,paths:Record<string,RelationCandle[]>,now:number,currentEnv:RelationEnvironment){
   const rows=state.samples.filter(r=>now-r.at<=24*60*60_000),made:RelationRule[]=[];if(rows.length<24){state.rules=[];return;}
   const discovery=rows.slice(0,Math.max(1,Math.floor(rows.length*.6))),stumps:{conditions:RelationCondition[];base:CandidateEvaluation}[]=[];
@@ -206,7 +228,7 @@ function synthesize(state:RelationEngineState,paths:Record<string,RelationCandle
     if(!prior||r.health*r.longNet>prior.health*prior.longNet)best.set(key,r);}
   const next=[...best.values()].sort((a,b)=>b.health*b.longNet-a.health*a.longNet).slice(0,RULE_LIMIT);
   for(const old of state.rules){if(next.some(r=>r.signature===old.signature))continue;if(now-old.lastQualifiedAt>3*60*60_000)continue;
-    next.push({...old,status:"DEGRADED",health:Math.min(.25,old.health),updatedAt:now,reason:"旧关系未再通过新路径样本验证；仅保留低风险探测，不推导反向"});}
+    next.push(revalidateCarryover(old,state,paths,rows,now,currentEnv));}
   state.rules=next.sort((a,b)=>b.health*b.longNet-a.health*a.longNet).slice(0,RULE_LIMIT);
 }
 const objectRecord=(value:unknown):Record<string,unknown>|null=>value&&typeof value==="object"?value as Record<string,unknown>:null;
@@ -295,7 +317,7 @@ export function advanceRelationEngine(input:{state?:RelationEngineState|null;pat
 }
 export function relationCandidates(state:RelationEngineState){const rows:RelationCandidate[]=[];for(const frame of Object.values(state.frames))for(const rule of state.rules){
   if(!matches(frame.x,rule.conditions)||!rule.symbols.includes(frame.symbol))continue;const reserve=rule.scope==="RECENT"||rule.status!=="ACTIVE"||rule.health<.68,
-    net=Math.max(COST*.15,rule.longNet*clip(.45+.55*rule.health,.2,1)),gross=net+COST,edge=net/Math.max(rule.stopRate,COST),
+    net=Math.max(0,rule.longNet),gross=net+COST,edge=net/Math.max(rule.stopRate,COST),
     score=clip(32+36*rule.health+10*rule.environmentFit+10*rule.livePathScore+12*clip(edge/.8),0,100);if(rule.health<.15||!(rule.longNet>0))continue;
   rows.push({symbol:frame.symbol,ruleId:rule.id,side:rule.side,horizon:rule.horizon,status:rule.status,health:rule.health,score,netRate:net,grossRate:gross,
     stopRate:rule.stopRate,environmentFit:rule.environmentFit,livePathScore:rule.livePathScore,reserve,exitProfile:structuredClone(rule.exitProfile),
