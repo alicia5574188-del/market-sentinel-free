@@ -73,6 +73,13 @@ test("entry readiness needs only fresh executable Gate data and contract metadat
   assert.doesNotMatch(health,/ancillaryStarted|allWarm/);
 });
 
+test("health exposes bounded Forward diagnostics without adding strategy authority",async()=>{
+  const worker=await read("worker/index-clean.ts"),health=worker.slice(worker.indexOf("private forwardHealth()"),worker.indexOf("protected liveMirrorView()"));
+  assert.match(health,/relationDiagnostics/);assert.match(health,/entryDiagnostics/);assert.match(health,/candidateDiagnostics/);
+  assert.match(health,/slice\(0,8\)/);
+  assert.doesNotMatch(health,/openTrade\(|fillForwardPortfolio\(|GateLiveClient/);
+});
+
 test("LIVE, member, auth and credential infrastructure remain isolated from strategy code",async()=>{
   const [live,member,auth,vault]=await Promise.all([
     read("lib/gate-live.ts"),read("worker/member-executor.ts"),read("lib/owner-auth.ts"),read("lib/credential-vault.ts"),
