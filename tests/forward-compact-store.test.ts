@@ -78,7 +78,7 @@ test("legacy pages recover only through exact decoded page invariants and migrat
     pages:{id:string;key:string;count:number;firstAt:number;lastAt:number;length:number;rawLength:number;sha256:string;rawSha256?:string;encoding:string}[]
   };
   for(const page of manifest.pages)delete page.rawSha256;
-  manifest.pages[0]!.length++;manifest.pages[0]!.sha256="0".repeat(64);
+  manifest.pages[0]!.length++;manifest.pages[0]!.rawLength+=7;manifest.pages[0]!.sha256="0".repeat(64);
   const head=structuredClone(write.entries[HEAD]) as {sampleManifestSha256:string};
   head.sampleManifestSha256=await digest(new TextEncoder().encode(JSON.stringify(manifest)));
   await db.put({...write.entries,[FORWARD_SAMPLE_MANIFEST_STORAGE]:manifest,[HEAD]:head});
