@@ -71,6 +71,10 @@ export type GateLiveOrderSnapshot = {
   checkedAt: number;
 };
 export type GateLiveSnapshot = GateLiveCoreSnapshot & GateLiveOrderSnapshot;
+export type GateMarketEntryResolution={
+  state:"FILLED"|"CANCELLED"|"PENDING";checkedAt:number;
+  order:GateLiveOrder|null;position:GateLivePosition|null;orderError?:string;positionError?:string;
+};
 
 /** Gate classic futures `total` is wallet balance, not marked equity.
  * Never compare it directly with a PAPER balance including open PnL. Unified
@@ -248,6 +252,7 @@ export class GateLiveClient {
   readonly credentials: GateCredentials;
   requestCount = 0;
   private readRoutePreference=new Map<string,boolean>();
+  private verifiedLeverage=new Map<string,number>();
   readonly readTransport={version:"gate-private-dual-route-v2",hedges:0,recovered:0,timeouts:0,lastTimeoutPath:null as string|null,
     preferredAlternatePaths:0};
   constructor(credentials: GateCredentials) { this.credentials = credentials; }
@@ -377,23 +382,34 @@ export class GateLiveClient {
    * treating it like an ambiguous entry order for sixty seconds. No write is
    * retried automatically. */
   async ensureLeverage(symbol:string,leverage:number){
-    // Most contracts already retain the requested setting. A safe hedged GET can
-    // avoid a mutation entirely and removes the leverage write from the hot
-    // entry path when no change is needed.
+    if(this.verifiedLeverage.get(symbol)===leverage)return{verified:true,recovered:false,already:true,cached:true,actual:leverage};
+    // A safe hedged GET avoids a mutation when Gate already retains the desired
+    // leverage. Cache the verified flat-contract setting so later same-symbol
+    // signals do not pay any leverage-network delay at all.
     try{
       const current=await this.position(symbol),actual=Number(current.leverage);
-      if(Number.isFinite(actual)&&Math.abs(actual-leverage)<1e-9)return{verified:true,recovered:false,already:true,actual};
-    }catch{/* Precheck is an optimization only; the authoritative write below still reports any real account rejection. */}
+      if(Number.isFinite(actual)&&Math.abs(actual-leverage)<1e-9){
+        this.verifiedLeverage.set(symbol,leverage);
+        return{verified:true,recovered:false,already:true,cached:false,actual};
+      }
+    }catch(error){if(!isGateReadTimeoutError(error))throw error;}
     try{
       await this.setLeverage(symbol,leverage);
-      return{verified:true,recovered:false,already:false,actual:leverage};
+      this.verifiedLeverage.set(symbol,leverage);
+      return{verified:true,recovered:false,already:false,cached:false,actual:leverage};
     }catch(error){
       if(!(error instanceof Error)||!/Gate POST 请求超时：\/futures\/usdt\/positions\/.+\/leverage/.test(error.message))throw error;
       const first=await this.position(symbol),actual=Number(first.leverage);
-      if(Number.isFinite(actual)&&Math.abs(actual-leverage)<1e-9)return{verified:true,recovered:true,already:false,actual};
-      await new Promise(resolve=>setTimeout(resolve,350));
+      if(Number.isFinite(actual)&&Math.abs(actual-leverage)<1e-9){
+        this.verifiedLeverage.set(symbol,leverage);
+        return{verified:true,recovered:true,already:false,cached:false,actual};
+      }
+      await new Promise(resolve=>setTimeout(resolve,250));
       const second=await this.position(symbol),retryActual=Number(second.leverage);
-      if(Number.isFinite(retryActual)&&Math.abs(retryActual-leverage)<1e-9)return{verified:true,recovered:true,already:false,actual:retryActual};
+      if(Number.isFinite(retryActual)&&Math.abs(retryActual-leverage)<1e-9){
+        this.verifiedLeverage.set(symbol,leverage);
+        return{verified:true,recovered:true,already:false,cached:false,actual:retryActual};
+      }
       throw new Error(`Gate 杠杆写入响应超时且安全回读未确认 ${symbol} 已为 ${leverage}×；本源单跳过，但不会锁住其他实盘机会`);
     }
   }
@@ -420,12 +436,11 @@ export class GateLiveClient {
 
   async createEntry(intent: LiveEntryIntent, beforeSend?: () => boolean) {
     const path = intent.kind === "PRICE_TRIGGER" ? "/futures/usdt/price_orders" : "/futures/usdt/orders";
-    // FULL waits for clearing information and can turn a perfectly valid short
-    // market order into an ambiguous six-second network timeout. RESULT keeps
-    // the one-shot IOC semantics but returns after the matching result without
-    // waiting for clearing fields. ACK is deliberately not used here because
-    // the caller creates native protection only after a definitive IOC result.
-    const body = intent.kind==="MARKET" ? {...intent.body,action_mode:"RESULT"} : intent.body;
+    // Gate documents ACK as asynchronous and limited to key order fields.
+    // The executor confirms the returned identity through hedged reads before
+    // creating native protection. This removes matching/clearing latency from
+    // the single-submit POST without weakening the no-replay identity fence.
+    const body = intent.kind==="MARKET" ? {...intent.body,action_mode:"ACK"} : intent.body;
     const response = await this.request<GateLiveOrder>("POST", path, "", body, beforeSend);
     return responseId(response.raw, response.data);
   }
@@ -450,6 +465,32 @@ export class GateLiveClient {
       if (error instanceof Error && /Gate 404|ORDER_NOT_FOUND/.test(error.message)) return null;
       throw error;
     }
+  }
+
+  /** Resolve an ACKed or response-timeout market IOC without ever replaying it.
+   * A matching exchange position is independent proof of exposure even if the
+   * order read is still propagating. A definitive no-fill order cancels only
+   * when there is no matching position. */
+  async resolveMarketEntry(symbol:string,side:Side,tag:string,orderId:string|null):Promise<GateMarketEntryResolution>{
+    const [orderResult,positionResult]=await Promise.allSettled([
+      this.inspectEntry("MARKET",symbol,tag,orderId),
+      this.position(symbol),
+    ]);
+    const order=orderResult.status==="fulfilled"?orderResult.value:null,
+      position=positionResult.status==="fulfilled"?positionResult.value:null,
+      size=Number(position?.size??0),sign=side==="LONG"?1:-1,
+      matchingPosition=Number.isFinite(size)&&size!==0&&Math.sign(size)===sign;
+    if(matchingPosition)return{state:"FILLED",checkedAt:Date.now(),order,position,
+      ...(orderResult.status==="rejected"?{orderError:String(orderResult.reason)}:{}),
+      ...(positionResult.status==="rejected"?{positionError:String(positionResult.reason)}:{})};
+    if(order){
+      const disposition=liveEntryDisposition(order,"MARKET");
+      if(disposition==="FILLED")return{state:"FILLED",checkedAt:Date.now(),order,position};
+      if(disposition==="CANCELLED")return{state:"CANCELLED",checkedAt:Date.now(),order,position};
+    }
+    return{state:"PENDING",checkedAt:Date.now(),order,position,
+      ...(orderResult.status==="rejected"?{orderError:String(orderResult.reason)}:{}),
+      ...(positionResult.status==="rejected"?{positionError:String(positionResult.reason)}:{})};
   }
 
   async amendStop(orderId: string, stopPrice: number) {
