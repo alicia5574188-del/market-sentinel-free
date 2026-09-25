@@ -3,6 +3,7 @@ import { familyAdmissionBlock, familyExperimentSummary, initialFamilyExperimentS
   type FamilyExperimentState } from "./forward-family-experiment.ts";
 import { FORWARD_RELATION_V2_VERSION, advanceRelationEngine, initialRelationEngine, normalizeRelationEngine, relationCandidates,
   type RelationCandidate, type RelationEngineState, type RelationExitProfile, type RelationStatus } from "./forward-relation-v2.ts";
+import type { ForwardShockSignal } from "./forward-shock.ts";
 
 /**
  * Forward Path Relation 3.0 — PAPER authority.
@@ -10,7 +11,9 @@ import { FORWARD_RELATION_V2_VERSION, advanceRelationEngine, initialRelationEngi
  * One 5m root observation records its complete 5–60m response path. Mature
  * path evidence chooses direction, expected hold, normal adverse excursion,
  * feedback deadline and profit retention together. Region/1m logic remains
- * execution enhancement, never a second directional authority.
+ * execution enhancement during normal markets. A separately bounded structural
+ * interrupt may temporarily authorize only an already-confirmed outer-region
+ * shock; it never becomes a second normal-market strategy.
  */
 export const FORWARD_VERSION="forward-relations-v1.0";
 export const ADAPTIVE_ENGINE_VERSION=FORWARD_RELATION_V2_VERSION;
@@ -44,13 +47,14 @@ export type Rule={id:string;signature:string;parentId:string|null;version:number
   status:"EXPERIMENTAL"|"DORMANT";conditions:Condition[];side:"LONG"|"SHORT";horizon:number;stopRate:number;
   armRate:number;givebackRate:number;exitMode:"HORIZON"|"REACTION_DECAY";samples:number;trainGroups:number;checkGroups:number;
   estimatedNetRate:number;priorResponse:number|null;recentResponse:number;standardError:number;reason:string;
-  mutation:"CREATE"|"REVISE"|"RECALL";grammar:string;liveEligible:false;authority?:"ADAPTIVE_TEN"|"FORWARD_RELATION";turnTimeframe?:"5m"};
+  mutation:"CREATE"|"REVISE"|"RECALL";grammar:string;liveEligible:false;authority?:"ADAPTIVE_TEN"|"FORWARD_RELATION"|"STRUCTURAL_INTERRUPT";turnTimeframe?:"5m"};
 
-export type OpportunityMode="RELATION"|"BREAKOUT"|"RETEST"|"FAILED_BREAKOUT"|"RANGE";
+export type OpportunityMode="RELATION"|"BREAKOUT"|"RETEST"|"FAILED_BREAKOUT"|"RANGE"|"SHOCK";
 export type RegionState="IN_REGION"|"ABOVE"|"BELOW";
 export type Region={
   id:string;symbol:string;confirmedAt:number;lower:number;upper:number;center:number;widthRate:number;bars:number;
   quality:number;state:RegionState;lastSeenAt:number;
+  outerLower?:number;outerUpper?:number;outerCenter?:number;outerWidthRate?:number;outerBars?:number;outerQuality?:number;
 };
 export type Opportunity={
   id:string;symbol:string;side:"LONG"|"SHORT";mode:OpportunityMode;premium:boolean;reserve?:boolean;score:number;eligible:boolean;
@@ -59,6 +63,7 @@ export type Opportunity={
   grossRemainingSpaceRate:number;netRemainingSpaceRate:number;pullbackRiskRate:number;edgeRatio:number;
   expectedHoldMinutes:number;marketFit:number;regionId:string|null;regionQuality:number|null;reason:string;
   relationRuleId?:string;relationStatus?:RelationStatus;relationHorizon?:15|30|45|60;relationHealth?:number;riskScale?:number;
+  structuralInterrupt?:boolean;shockEventId?:string;shockConfirmedAt?:number;shockMarketBreadth?:number;
   exitPlan?:RelationExitProfile;
 };
 export type MarketPulse={at:number;up:number;down:number;neutral:number;bias:"UP"|"DOWN"|"MIXED";strength:number;expansion:number};
@@ -70,6 +75,7 @@ export type EntryContext={
   regionId:string|null;regionLower?:number;regionUpper?:number;regionCenter?:number;
   relationRuleId?:string;relationStatus?:RelationStatus;relationHorizon?:15|30|45|60;relationHealth?:number;portfolioRiskCharge?:number;
   relationFamilyId?:string;relationEvidenceAt?:number;relationLivePathScore?:number;
+  structuralInterrupt?:boolean;shockEventId?:string;shockConfirmedAt?:number;shockMarketBreadth?:number;
 };
 export type Trade={
   id:string;symbol:string;side:"LONG"|"SHORT";rule:Rule;openedAt:number;closedAt:number|null;status:"OPEN"|"CLOSED";
