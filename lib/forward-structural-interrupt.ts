@@ -18,16 +18,18 @@ export type MarketInterruptEvent={
   id:string;side:InterruptSide;startedAt:number;confirmedAt:number;lastAt:number;expiresAt:number;
   breadth:number;confirmedSymbols:string[];
 };
+export type MarketQuotePoint={at:number;price:number};
+export type MarketQuotePath={symbol:string;points:MarketQuotePoint[]};
 export type StructuralInterruptState={
-  version:typeof STRUCTURAL_INTERRUPT_VERSION;tracks:Record<string,InterruptTrack>;marketEvent:MarketInterruptEvent|null;
-  vetoSide:InterruptSide|null;vetoUntil:number;vetoBreadth:number;
+  version:typeof STRUCTURAL_INTERRUPT_VERSION;tracks:Record<string,InterruptTrack>;quotePaths:Record<string,MarketQuotePath>;
+  marketEvent:MarketInterruptEvent|null;vetoSide:InterruptSide|null;vetoUntil:number;vetoBreadth:number;
 };
 export type StructuralInterruptCandidate={
   symbol:string;side:InterruptSide;eventId:string;marketWide:boolean;boundary:number;confirmedAt:number;
   stopPrice:number;targetPrice:number;strength:number;outsideRate:number;atrRate:number;outerWidthRate:number;reason:string;
 };
 
-const TRACK_TTL_MS=90_000,EVENT_TTL_MS=45_000,COOLDOWN_MS=60_000,QUOTE_MAX_AGE_MS=8_000;
+const TRACK_TTL_MS=90_000,EVENT_TTL_MS=45_000,COOLDOWN_MS=60_000,QUOTE_MAX_AGE_MS=8_000,MARKET_PATH_MS=12_000;
 const clip=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
 const median=(values:number[])=>{const a=values.filter(Number.isFinite).sort((x,y)=>x-y);return a.length?(a.length%2?a[(a.length-1)/2]!:(a[a.length/2-1]!+a[a.length/2]!)/2):0;};
 const fresh=(q:InterruptQuote|undefined,now:number)=>!!q&&q.fresh&&q.bestBid>0&&q.bestAsk>=q.bestBid&&q.observedAt<=now&&now-q.observedAt<=QUOTE_MAX_AGE_MS;
@@ -72,7 +74,7 @@ export function detectOuterRegion(rows:InterruptCandle[],inner:{lower:number;upp
 }
 
 export function initialStructuralInterruptState():StructuralInterruptState{
-  return{version:STRUCTURAL_INTERRUPT_VERSION,tracks:{},marketEvent:null,vetoSide:null,vetoUntil:0,vetoBreadth:0};
+  return{version:STRUCTURAL_INTERRUPT_VERSION,tracks:{},quotePaths:{},marketEvent:null,vetoSide:null,vetoUntil:0,vetoBreadth:0};
 }
 export function normalizeStructuralInterruptState(value:unknown,now:number):StructuralInterruptState{
   if(!value||typeof value!=="object")return initialStructuralInterruptState();
@@ -83,9 +85,15 @@ export function normalizeStructuralInterruptState(value:unknown,now:number):Stru
       samples:Math.max(1,Math.floor(row.samples||1)),outsideSamples:Math.max(1,Math.floor(row.outsideSamples||1)),
       confirmedAt:Number.isFinite(row.confirmedAt??NaN)?row.confirmedAt:null,cooldownUntil:Number.isFinite(row.cooldownUntil)?row.cooldownUntil:0};
   }
+  const quotePaths:Record<string,MarketQuotePath>={};
+  for(const [symbol,path] of Object.entries(raw.quotePaths??{})){
+    const points=(path?.points??[]).filter(point=>Number.isFinite(point.at)&&Number.isFinite(point.price)&&point.price>0
+      &&point.at<=now&&now-point.at<=MARKET_PATH_MS+4_000).sort((a,b)=>a.at-b.at).slice(-10);
+    if(points.length)quotePaths[symbol]={symbol,points};
+  }
   const event=raw.marketEvent&&Number.isFinite(raw.marketEvent.expiresAt)&&raw.marketEvent.expiresAt>now-10_000?raw.marketEvent:null;
   const vetoSide=raw.vetoUntil&&raw.vetoUntil>now&&["LONG","SHORT"].includes(raw.vetoSide??"")?raw.vetoSide!:null;
-  return{version:STRUCTURAL_INTERRUPT_VERSION,tracks,marketEvent:event,vetoSide,vetoUntil:vetoSide?raw.vetoUntil!:0,
+  return{version:STRUCTURAL_INTERRUPT_VERSION,tracks,quotePaths,marketEvent:event,vetoSide,vetoUntil:vetoSide?raw.vetoUntil!:0,
     vetoBreadth:vetoSide&&Number.isFinite(raw.vetoBreadth)?raw.vetoBreadth!:0};
 }
 
@@ -116,13 +124,47 @@ function activeTracks(state:StructuralInterruptState,side:InterruptSide,now:numb
   return Object.values(state.tracks).filter(track=>track.side===side&&now-track.lastAt<=12_000
     &&(phase?track.phase===phase:track.phase!=="COOLDOWN"));
 }
+type MarketMoveSignal={symbol:string;side:InterruptSide;anchorAt:number;anchorPrice:number;currentPrice:number;extremePrice:number;
+  spanMs:number;samples:number;currentMoveRate:number;maxMoveRate:number;retraceRate:number};
+function updateMarketQuotePaths(state:StructuralInterruptState,quotes:Record<string,InterruptQuote>,now:number){
+  for(const [symbol,quote] of Object.entries(quotes)){
+    if(!fresh(quote,now))continue;const price=midpoint(quote),path=state.quotePaths[symbol]??{symbol,points:[]};
+    if(path.points.at(-1)?.at!==quote.observedAt)path.points.push({at:quote.observedAt,price});
+    path.points=path.points.filter(point=>now-point.at<=MARKET_PATH_MS).slice(-8);
+    state.quotePaths[symbol]=path;
+  }
+  for(const [symbol,path] of Object.entries(state.quotePaths))
+    if(!path.points.length||now-path.points.at(-1)!.at>QUOTE_MAX_AGE_MS)delete state.quotePaths[symbol];
+}
+function marketMoveSignals(state:StructuralInterruptState,now:number):MarketMoveSignal[]{
+  const out:MarketMoveSignal[]=[];
+  for(const path of Object.values(state.quotePaths)){
+    const points=path.points.filter(point=>now-point.at<=MARKET_PATH_MS).sort((a,b)=>a.at-b.at);
+    if(points.length<3||points.at(-1)!.at-points[0]!.at<4_000)continue;
+    const first=points[0]!,last=points.at(-1)!,raw=last.price/first.price-1;if(Math.abs(raw)<.0005)continue;
+    const side:InterruptSide=raw>0?"LONG":"SHORT",extreme=side==="LONG"?Math.max(...points.map(p=>p.price)):Math.min(...points.map(p=>p.price)),
+      currentMove=side==="LONG"?last.price/first.price-1:first.price/last.price-1,
+      maxMove=side==="LONG"?extreme/first.price-1:first.price/extreme-1,
+      retrace=Math.max(0,side==="LONG"?(extreme-last.price)/first.price:(last.price-extreme)/first.price);
+    out.push({symbol:path.symbol,side,anchorAt:first.at,anchorPrice:first.price,currentPrice:last.price,extremePrice:extreme,
+      spanMs:last.at-first.at,samples:points.length,currentMoveRate:currentMove,maxMoveRate:maxMove,retraceRate:retrace});
+  }
+  return out;
+}
+function dominantMarketSide(rows:MarketMoveSignal[]){
+  const long=rows.filter(row=>row.side==="LONG"),short=rows.filter(row=>row.side==="SHORT");
+  if(long.length===short.length)return{side:null as InterruptSide|null,rows:[] as MarketMoveSignal[]};
+  const side:InterruptSide=long.length>short.length?"LONG":"SHORT",winner=side==="LONG"?long:short,loser=side==="LONG"?short:long;
+  return winner.length>=Math.max(1,loser.length*1.5)?{side,rows:winner}:{side:null as InterruptSide|null,rows:[] as MarketMoveSignal[]};
+}
 
 export function advanceStructuralInterrupt(input:{state:StructuralInterruptState;regions:Record<string,InterruptRegion>;
   quotes:Record<string,InterruptQuote>;now:number}):StructuralInterruptState{
-  const state=normalizeStructuralInterruptState(structuredClone(input.state),input.now),watchable:string[]=[];
+  const state=normalizeStructuralInterruptState(structuredClone(input.state),input.now);
+  updateMarketQuotePaths(state,input.quotes,input.now);
   for(const [symbol,region] of Object.entries(input.regions)){
     if(!(region.outerBars&&region.outerBars>=18&&region.outerLower&&region.outerUpper&&region.outerUpper>region.outerLower))continue;
-    const quote=input.quotes[symbol];if(!fresh(quote,input.now))continue;watchable.push(symbol);
+    const quote=input.quotes[symbol];if(!fresh(quote,input.now))continue;
     const price=midpoint(quote!),atrRate=Math.max(.00045,region.atrRate??.00045),buffer=Math.max(.0008,atrRate*.18),
       up=outsideRate("LONG",price,region.outerUpper),down=outsideRate("SHORT",price,region.outerLower);
     const side:InterruptSide|null=up>=buffer&&up>=down?"LONG":down>=buffer?"SHORT":null,rate=side==="LONG"?up:side==="SHORT"?down:0;
@@ -144,23 +186,27 @@ export function advanceStructuralInterrupt(input:{state:StructuralInterruptState
     if(track.phase==="COOLDOWN"&&input.now>=track.cooldownUntil)delete state.tracks[symbol];
     else if(input.now-track.lastAt>TRACK_TTL_MS)delete state.tracks[symbol];
   }
-  const denom=Math.max(1,watchable.length),longPre=activeTracks(state,"LONG",input.now),shortPre=activeTracks(state,"SHORT",input.now),
-    longConfirmed=activeTracks(state,"LONG",input.now,"CONFIRMED"),shortConfirmed=activeTracks(state,"SHORT",input.now,"CONFIRMED");
-  const preSide=longPre.length>shortPre.length?"LONG":shortPre.length>longPre.length?"SHORT":null;
-  const preCount=preSide==="LONG"?longPre.length:preSide==="SHORT"?shortPre.length:0,preBreadth=preCount/denom;
-  if(preSide&&preCount>=4&&preBreadth>=.25){state.vetoSide=preSide;state.vetoUntil=input.now+15_000;state.vetoBreadth=preBreadth;}
-  else if(state.vetoUntil<=input.now){state.vetoSide=null;state.vetoUntil=0;state.vetoBreadth=0;}
-  const confirmedSide=longConfirmed.length>shortConfirmed.length?"LONG":shortConfirmed.length>longConfirmed.length?"SHORT":null,
-    confirmed=confirmedSide==="LONG"?longConfirmed:confirmedSide==="SHORT"?shortConfirmed:[],breadth=confirmed.length/denom;
-  if(confirmedSide&&confirmed.length>=3&&breadth>=.20){
-    const start=Math.min(...confirmed.map(track=>track.startedAt)),id=`shock-${confirmedSide}-${Math.floor(start/30_000)}`;
-    state.marketEvent={id,side:confirmedSide,startedAt:start,confirmedAt:Math.min(...confirmed.map(track=>track.confirmedAt??input.now)),
-      lastAt:input.now,expiresAt:input.now+EVENT_TTL_MS,breadth,confirmedSymbols:confirmed.map(track=>track.symbol)};
-    state.vetoSide=confirmedSide;state.vetoUntil=input.now+EVENT_TTL_MS;state.vetoBreadth=Math.max(state.vetoBreadth,breadth);
+  const allMoves=marketMoveSignals(state,input.now),denom=Math.max(1,allMoves.length),
+    pre=allMoves.filter(row=>row.currentMoveRate>=.0025&&row.maxMoveRate>=.0030
+      &&row.retraceRate<=Math.max(.0015,row.maxMoveRate*.45)),
+    confirmedMoves=allMoves.filter(row=>row.currentMoveRate>=.0045&&row.maxMoveRate>=.0050
+      &&row.retraceRate<=Math.max(.0015,row.maxMoveRate*.35)),
+    preDominant=dominantMarketSide(pre),confirmedDominant=dominantMarketSide(confirmedMoves),
+    preBreadth=preDominant.rows.length/denom,confirmedBreadth=confirmedDominant.rows.length/denom,
+    confirmedMedian=median(confirmedDominant.rows.map(row=>row.currentMoveRate));
+  if(preDominant.side&&preDominant.rows.length>=4&&preBreadth>=.20){
+    state.vetoSide=preDominant.side;state.vetoUntil=input.now+15_000;state.vetoBreadth=preBreadth;
+  }else if(state.vetoUntil<=input.now){state.vetoSide=null;state.vetoUntil=0;state.vetoBreadth=0;}
+  if(confirmedDominant.side&&confirmedDominant.rows.length>=4&&confirmedBreadth>=.18&&confirmedMedian>=.005){
+    const start=Math.min(...confirmedDominant.rows.map(row=>row.anchorAt)),
+      id=`shock-${confirmedDominant.side}-${Math.floor(start/30_000)}`;
+    state.marketEvent={id,side:confirmedDominant.side,startedAt:start,confirmedAt:input.now,lastAt:input.now,
+      expiresAt:input.now+EVENT_TTL_MS,breadth:confirmedBreadth,confirmedSymbols:confirmedDominant.rows.map(row=>row.symbol)};
+    state.vetoSide=confirmedDominant.side;state.vetoUntil=input.now+EVENT_TTL_MS;state.vetoBreadth=Math.max(state.vetoBreadth,confirmedBreadth);
   }else if(state.marketEvent){
-    const still=activeTracks(state,state.marketEvent.side,input.now,"CONFIRMED");
-    if(still.length){state.marketEvent={...state.marketEvent,lastAt:input.now,expiresAt:input.now+EVENT_TTL_MS,
-      breadth:still.length/denom,confirmedSymbols:still.map(track=>track.symbol)};}
+    const still=confirmedMoves.filter(row=>row.side===state.marketEvent!.side),breadth=still.length/denom;
+    if(still.length>=2){state.marketEvent={...state.marketEvent,lastAt:input.now,expiresAt:input.now+EVENT_TTL_MS,
+      breadth,confirmedSymbols:still.map(row=>row.symbol)};}
     else if(state.marketEvent.expiresAt<=input.now)state.marketEvent=null;
   }
   return state;
@@ -187,6 +233,29 @@ export function structuralInterruptCandidates(input:{state:StructuralInterruptSt
     if((track.side==="LONG"&&stopPrice>=price)||(track.side==="SHORT"&&stopPrice<=price))continue;
     out.push({symbol:track.symbol,side:track.side,eventId,marketWide,boundary:track.boundary,confirmedAt:track.confirmedAt,
       stopPrice,targetPrice,strength,outsideRate:track.currentOutsideRate,atrRate,outerWidthRate,reason});
+  }
+  const event=input.state.marketEvent;
+  if(event&&event.expiresAt>input.now){
+    const paths=marketMoveSignals(input.state,input.now).filter(row=>row.side===event.side&&event.confirmedSymbols.includes(row.symbol))
+      .sort((a,b)=>b.currentMoveRate-a.currentMoveRate);
+    for(const path of paths){
+      if(out.some(row=>row.symbol===path.symbol))continue;
+      const quote=input.quotes[path.symbol];if(!fresh(quote,input.now))continue;
+      const region=input.regions[path.symbol],atrRate=Math.max(.0015,region?.atrRate??path.maxMoveRate*.45),
+        requiredMove=Math.max(.006,region?.atrRate?region.atrRate*1.10:.006);
+      if(path.maxMoveRate<requiredMove||path.currentMoveRate<requiredMove*.78
+        ||path.retraceRate>Math.max(.0015,path.maxMoveRate*.35))continue;
+      const price=midpoint(quote!),shockDistance=Math.abs(path.anchorPrice-price),
+        stopDistance=Math.max(price*.0025,shockDistance*.45),
+        stopPrice=path.side==="LONG"?price-stopDistance:price+stopDistance,
+        targetRate=Math.max(.006,Math.min(.025,Math.max(path.maxMoveRate*1.25,atrRate*2.2))),
+        targetPrice=price*(1+sideDir(path.side)*targetRate),outerWidthRate=Math.max(region?.outerWidthRate??region?.widthRate??path.maxMoveRate,.001),
+        strength=clip(78+Math.min(12,path.maxMoveRate/.006*4)+event.breadth*10
+          -Math.min(8,path.retraceRate/Math.max(path.maxMoveRate,1e-9)*8),0,100),
+        reason=`市场级特大异常｜${event.side==="LONG"?"同步上冲":"同步下杀"}${(event.breadth*100).toFixed(0)}%｜2秒路径${path.samples}次/${(path.spanMs/1000).toFixed(0)}秒｜位移${(path.currentMoveRate*100).toFixed(2)}%｜无需等待1m/5m收线`;
+      out.push({symbol:path.symbol,side:path.side,eventId:event.id,marketWide:true,boundary:stopPrice,confirmedAt:event.confirmedAt,
+        stopPrice,targetPrice,strength,outsideRate:path.currentMoveRate,atrRate,outerWidthRate,reason});
+    }
   }
   return out.sort((a,b)=>b.strength-a.strength||b.outsideRate-a.outsideRate);
 }
