@@ -76,7 +76,7 @@ test("opposite direction earns authority only after its own completed recent res
   assert.ok(shorts.length>0,"three completed negative 15m groups should be able to create an independent short relation");
   assert.ok(shorts.some(r=>r.scope==="RECENT"),"fast migration must still be based on matured recent samples");
   const rapid=relationCandidates(e).filter(c=>c.side==="SHORT");
-  assert.ok(rapid.length>0&&rapid.every(c=>c.reserve),"recent reversal evidence may probe freed risk but cannot immediately take full rotation authority");
+  assert.ok(rapid.length>0&&rapid.some(c=>c.reserve),"recent reversal evidence must create at least one bounded probe; independently validated BASE evidence may coexist");
 });
 
 test("PAPER uses learned relations for entries instead of the retired 5m FLOW gate",()=>{
@@ -232,6 +232,6 @@ test("summary exposes relation lifecycle and the no-forced-reversal boundary",()
   const s=initialForward(1000),view=forwardSummary(s,{},2000);
   assert.equal(view.engineVersion,FORWARD_RELATION_V2_VERSION);assert.equal(view.targetPositions,null);assert.equal(view.positionLimit,null);
   assert.equal(view.executionBboCapacity,30);assert.equal(view.minuteConfirmationCapacity,11);
-  assert.match(view.boundaries.grammar,/5–60|15\/30\/45\/60/);assert.match(view.boundaries.sampleMeaning,/旧方向失效不会自动生成反向订单/);
+  assert.match(view.boundaries.grammar,/15分钟起.*60分钟/);assert.match(view.boundaries.sampleMeaning,/旧方向失效不会自动生成反向订单/);
   assert.equal(view.relationEngine.version,FORWARD_RELATION_V2_VERSION);
 });
