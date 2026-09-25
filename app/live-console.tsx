@@ -107,8 +107,16 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
   const audits=[...(live?.auditEvents??[])].sort((a,b)=>b.observedAt-a.observedAt);
   const tabs:[Section,string][]=[["account","账户"],["positions","持仓"],["history","记录"],["archive","归档"]];
   const copied=mirror?.eligibleCopiedCount??0,eligible=mirror?.eligibleSourceCount??0,missing=mirror?.eligibleMissingCount??0;
-  const copyHealthy=Boolean(mirror?.connected&&!mirror?.error&&missing===0);
-  const copyLabel=!mirror?"读取中":copyHealthy?`${copied} / ${eligible} · 正常`:`${copied} / ${eligible} · ${missing}笔待核对`;
+  const skipRows=Object.values(live?.entrySkips??{}).filter((row):row is NonNullable<typeof row>=>!!row);
+  const copyFailed=Boolean(mirror?.error)||skipRows.some(row=>["ENTRY_REJECTED","LEVERAGE_REJECTED"].includes(row.code));
+  const copyPending=!copyFailed&&(Boolean(mirror?.pendingCount)||entries.length>0
+    ||skipRows.some(row=>row.code==="SUBMISSION_UNCONFIRMED"));
+  const copyHealthy=Boolean(mirror?.connected&&!mirror?.error&&missing===0&&!copyFailed&&!copyPending);
+  const copyLabel=!mirror?"读取中":copyHealthy?`${copied} / ${eligible} · 正常`
+    :copyFailed?`${copied} / ${eligible} · 复制失败`:`${copied} / ${eligible} · ${missing}笔待核对`;
+  const liveStatus=!enabled?"已关闭":copyFailed?"复制异常":copyPending?"复制核对中":live?.operational?"运行中":"等待核对";
+  const liveSwitchStatus=!runtime?"读取状态…":!enabled?"已关闭":copyFailed?"已开启 · 复制异常"
+    :copyPending?"已开启 · 复制核对中":live?.operational?"已开启 · 正在运行":"已请求开启 · 等待核对";
 
   if(!auth?.authenticated)return <div className="fr-live" data-testid="native-live-console">
     <div className="fr-live-heading"><h1>{view==="system"?"账户与实盘管理":"实盘账户"}</h1><span>未登录</span></div>
@@ -121,7 +129,7 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
       </form></section></div>;
 
   if(view==="system")return <div className="fr-live fr-live-system" data-testid="live-system-console">
-    <div className="fr-live-heading"><h1>账户与实盘管理</h1><span>{auth.username} · {enabled?live?.operational?"实盘运行中":"实盘等待核对":"实盘已关闭"}</span></div>
+    <div className="fr-live-heading"><h1>账户与实盘管理</h1><span>{auth.username} · 实盘{liveStatus}</span></div>
     {error&&<div className="fr-error" role="alert"><b>操作未完成</b><p>{error}</p></div>}
     {notice&&<div className="fr-notice" role="status">{notice}</div>}
     <section className="fr-section"><div className="fr-section-head"><div><small>复制诊断</small><h2>模拟 → 实盘</h2></div><span className={copyHealthy?"fr-positive":missing||mirror?.error?"fr-negative":""}>{copyLabel}</span></div>
@@ -155,7 +163,7 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
   </div>;
 
   return <div className="fr-live" data-testid="native-live-console">
-    <div className="fr-live-heading"><h1>实盘账户</h1><span>{enabled?live?.operational?"运行中":"等待核对":"已关闭"}</span></div>
+    <div className="fr-live-heading"><h1>实盘账户</h1><span>{liveStatus}</span></div>
     <section className="fr-stats fr-live-summary" data-testid="live-equity-first"><LiveStat title="实盘账户权益" value={`${num(live?.equity)} U`} detail="Gate余额＋持仓浮盈"/>
       <LiveStat title="可用保证金" value={`${num(live?.available)} U`} detail="Gate可用余额"/>
       <LiveStat title="持仓浮动盈亏" value={`${signed(floating)} U`} detail="Gate实际回报"/>
@@ -180,7 +188,7 @@ function LiveConsoleSession({auth,runtime,onSession,onLive,onRefresh,view="trade
         {!!entries.length&&<button type="button" className="fr-text-button" onClick={()=>setSection("positions")}>查看 {entries.length} 笔待执行订单 →</button>}
       </section>
       <section id="live-control" className="fr-section fr-live-switch-panel" aria-label="实盘交易开关">
-        <div><span className="fr-overline">实盘交易开关</span><h2>{!runtime?"读取状态…":enabled?live?.operational?"已开启 · 正在运行":"已请求开启 · 等待核对":"已关闭"}</h2>
+        <div><span className="fr-overline">实盘交易开关</span><h2>{liveSwitchStatus}</h2>
           <p>只复制本次开启后新产生的模拟单；已有实盘持仓继续保留保护并跟随源单退出。</p></div>
         <button type="button" className={`fr-switch ${enabled?"is-enabled":""}`} role="switch" aria-label="实盘交易开关"
           aria-checked={enabled} disabled={!canControl||Boolean(busy)||(!enabled&&!credential?.configured)}
