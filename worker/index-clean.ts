@@ -671,7 +671,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if (this.authorityReady) {
         try{
           const cachedCatalog=await ctx.storage.get<Awaited<ReturnType<typeof fetchActiveContracts>>>("gate-contract-catalog:v1");
-          if(cachedCatalog?.length)this.contractCatalog=new Map(cachedCatalog.map(row=>[row.symbol,row]));
+          if(cachedCatalog?.length){this.contractCatalog=new Map(cachedCatalog.map(row=>[row.symbol,row]));
+            this.forwardLearningUniverse=cachedCatalog.filter(row=>adaptiveSymbolAllowed(row.symbol)&&row.volume24hUsd>=FORWARD_EXECUTION_VOLUME_FLOOR_USD).map(row=>row.symbol);}
         }catch{/* cached Gate universe is optional; live refresh will retry */}
         const loaded = await Promise.all(REGIME_EXECUTION_UNIVERSE.map(async (symbol) => {
           try {
@@ -836,6 +837,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
   private refreshUniverse(now: number, ranked: Awaited<ReturnType<typeof fetchActiveContracts>>) {
     if (ranked.length === 0) throw new Error("contract catalog unavailable: empty active-contract response");
     this.contractCatalog = new Map(ranked.map((row) => [row.symbol, row]));
+    this.forwardLearningUniverse=ranked.filter(row=>adaptiveSymbolAllowed(row.symbol)&&row.volume24hUsd>=FORWARD_EXECUTION_VOLUME_FLOOR_USD).map(row=>row.symbol);
     this.runtime.lastUniverseAt = now;
     for (const symbol of new Set([...this.runtime.symbols,...this.runtime.liquidUniverse])) this.applyContractMetadata(symbol);
     this.ctx.waitUntil(this.ctx.storage.put("gate-contract-catalog:v1",ranked).catch(()=>undefined));
