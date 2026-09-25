@@ -424,3 +424,25 @@ test("a recovered futures read path is preferred on the next read for the same e
     assert.ok(client.readTransport.preferredAlternatePaths>=1);
   }finally{globalThis.fetch=real;}
 });
+
+
+test("timed-out leverage mutation is recovered by readback without replaying the write",async()=>{
+  const real=globalThis.fetch;let posts=0,reads=0;
+  globalThis.fetch=async(input,init)=>{
+    const req=new Request(input,init),url=new URL(req.url);
+    if(req.method==="POST"&&url.pathname.endsWith("/positions/BTC_USDT/leverage")){
+      posts++;const error=new Error("The operation was aborted due to timeout");error.name="TimeoutError";throw error;
+    }
+    if(req.method==="GET"&&url.pathname.endsWith("/positions/BTC_USDT")){
+      reads++;return Response.json({contract:"BTC_USDT",size:0,leverage:"10"});
+    }
+    throw new Error(`unexpected ${req.method} ${url.pathname}`);
+  };
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    const result=await client.ensureLeverage("BTC_USDT",10);
+    assert.equal(result.verified,true);assert.equal(result.recovered,true);assert.equal(result.actual,10);
+    assert.equal(posts,1,"a timed-out mutation is never replayed");
+    assert.equal(reads,1,"safe readback may verify that Gate already applied it");
+  }finally{globalThis.fetch=real;}
+});
