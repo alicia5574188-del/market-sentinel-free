@@ -121,9 +121,13 @@ test("sample payoff uses winner/loss distribution and adverse tail instead of tr
     medianWinNetRate:.0030,medianLossNetRate:.0050,adverseP80Rate:.006,adverseP95Rate:.009,samples:60,groups:6,path:{}};
   const strong={...low,targetRate:.014,retentionRate:.80,winRate:.66,medianWinNetRate:.0065,medianLossNetRate:.0035,
     adverseP80Rate:.0055,adverseP95Rate:.008};
-  assert.match(relationHardPayoffBlock({exitProfile:low,hardStopRate:.012,netRate:.0012})??"",/样本典型盈亏不足/);
+  assert.match(relationHardPayoffBlock({exitProfile:low,hardStopRate:.012,netRate:.0012})??"",/样本稳健期望不足/);
   assert.equal(relationHardPayoffBlock({exitProfile:strong,hardStopRate:.012,netRate:.0035}),null,
     "a structurally wider disaster stop may coexist with positive typical payoff when sample losses exit earlier and the stop sits beyond the adverse tail");
+  const borderline={...low,targetRate:.0069,retentionRate:.77,winRate:.43,medianWinNetRate:.0033,medianLossNetRate:.0022,
+    adverseP80Rate:.0055,adverseP95Rate:.013};
+  assert.equal(relationHardPayoffBlock({exitProfile:borderline,hardStopRate:.016,netRate:.0025}),null,
+    "a modest but positive robust expectancy should not be rejected by a ratio-rounding cliff when the hard stop is beyond the adverse tail");
 });
 
 test("a restart can seed closed root paths immediately instead of waiting a fresh hour",()=>{
