@@ -71,6 +71,17 @@ export type GateLiveOrderSnapshot = {
   checkedAt: number;
 };
 export type GateLiveSnapshot = GateLiveCoreSnapshot & GateLiveOrderSnapshot;
+export type GateMarketEntryRecovery = {
+  order: GateLiveOrder | null;
+  position: GateLivePosition | null;
+  fill: GateConfirmedFill | null;
+  exposure: boolean;
+  cancelled: boolean;
+  fillPrice: number | null;
+  checkedAt: number;
+  evidence: Array<"ORDER"|"POSITION"|"FILL">;
+  errors: string[];
+};
 
 /** Gate classic futures `total` is wallet balance, not marked equity.
  * Never compare it directly with a PAPER balance including open PnL. Unified
@@ -248,11 +259,13 @@ export class GateLiveClient {
   readonly credentials: GateCredentials;
   requestCount = 0;
   private readRoutePreference=new Map<string,boolean>();
+  private leverageVerified=new Map<string,{leverage:number;at:number}>();
   readonly readTransport={version:"gate-private-dual-route-v2",hedges:0,recovered:0,timeouts:0,lastTimeoutPath:null as string|null,
     preferredAlternatePaths:0};
   constructor(credentials: GateCredentials) { this.credentials = credentials; }
 
-  private async request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, query = "", value?: unknown, beforeSend?: () => boolean) {
+  private async request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, query = "", value?: unknown,
+    beforeSend?: () => boolean, mutationTimeoutMs = 6_000) {
     const timestamp = Math.floor(Date.now() / 1_000).toString();
     const signedPath = `/api/v4${path}`;
     const body = value == null ? "" : JSON.stringify(value);
@@ -304,8 +317,10 @@ export class GateLiveClient {
         if(result.alternate)this.readTransport.recovered++;
         return {data:result.data,raw:result.raw};
       }
-      // Mutations remain single-submit, including a timeout reading the body.
-      return await send(false,AbortSignal.timeout(6_000));
+      // Mutations remain single-submit. Configuration writes may use a shorter
+      // response deadline because their result can be verified safely through a
+      // read-only endpoint; order writes retain the full ambiguity window.
+      return await send(false,AbortSignal.timeout(mutationTimeoutMs));
     }catch(error){
       if(gateRequestTimedOut(error)){
         if(method==="GET"){
@@ -360,9 +375,68 @@ export class GateLiveClient {
       checkedAt:Math.max(core.checkedAt,orders.checkedAt)};
   }
 
+  async position(symbol:string):Promise<GateLivePosition>{
+    return (await this.request<GateLivePosition>("GET",`/futures/usdt/positions/${encodeURIComponent(symbol)}`)).data;
+  }
+
   async setLeverage(symbol: string, leverage: number) {
     const query = `leverage=${encodeURIComponent(String(leverage))}`;
-    await this.request("POST", `/futures/usdt/positions/${encodeURIComponent(symbol)}/leverage`, query);
+    await this.request("POST", `/futures/usdt/positions/${encodeURIComponent(symbol)}/leverage`, query, undefined, undefined, 2_500);
+    this.leverageVerified.set(symbol,{leverage,at:Date.now()});
+  }
+
+  /** Leverage has no order identity. A timed-out response is therefore recovered
+   * by reading the flat-position configuration, never by replaying the write.
+   * A short cache avoids serial leverage mutations across near-simultaneous
+   * source signals while still expiring quickly enough to notice manual edits. */
+  async ensureLeverage(symbol:string,leverage:number){
+    const cached=this.leverageVerified.get(symbol);
+    if(cached&&cached.leverage===leverage&&Date.now()-cached.at<=10*60_000)
+      return{verified:true,recovered:false,cached:true,actual:leverage};
+    try{
+      await this.setLeverage(symbol,leverage);
+      return{verified:true,recovered:false,cached:false,actual:leverage};
+    }catch(error){
+      if(!(error instanceof Error)||!/Gate POST 请求超时：\/futures\/usdt\/positions\/.+\/leverage/.test(error.message))throw error;
+      const first=await this.position(symbol),actual=Number(first.leverage);
+      if(Number.isFinite(actual)&&Math.abs(actual-leverage)<1e-9){
+        this.leverageVerified.set(symbol,{leverage,at:Date.now()});
+        return{verified:true,recovered:true,cached:false,actual};
+      }
+      await new Promise(resolve=>setTimeout(resolve,250));
+      const second=await this.position(symbol),retryActual=Number(second.leverage);
+      if(Number.isFinite(retryActual)&&Math.abs(retryActual-leverage)<1e-9){
+        this.leverageVerified.set(symbol,{leverage,at:Date.now()});
+        return{verified:true,recovered:true,cached:false,actual:retryActual};
+      }
+      throw new Error(`Gate 杠杆写入响应超时且安全回读未确认 ${symbol} 已为 ${leverage}×；本源单跳过，但不会锁住其他实盘机会`);
+    }
+  }
+
+  /** Read-only evidence fan-out used only after a market submission response is
+   * ambiguous. It never retries the order. Position, unique order identity and
+   * confirmed fills are independent proofs; any one can establish exposure. */
+  async recoverMarketEntry(symbol:string,side:"LONG"|"SHORT",tag:string,orderId:string|null,submittedAt:number):Promise<GateMarketEntryRecovery>{
+    const now=Date.now(),from=Math.max(0,Math.floor((submittedAt-10_000)/1000)),to=Math.max(from,Math.floor(now/1000));
+    const [orderResult,positionResult,fillsResult]=await Promise.allSettled([
+      this.inspectEntry("MARKET",symbol,tag,orderId),
+      this.position(symbol),
+      this.confirmedFills(from,to,0,100),
+    ]);
+    const errors:string[]=[];
+    if(orderResult.status==="rejected")errors.push(orderResult.reason instanceof Error?orderResult.reason.message:String(orderResult.reason));
+    if(positionResult.status==="rejected")errors.push(positionResult.reason instanceof Error?positionResult.reason.message:String(positionResult.reason));
+    if(fillsResult.status==="rejected")errors.push(fillsResult.reason instanceof Error?fillsResult.reason.message:String(fillsResult.reason));
+    const order=orderResult.status==="fulfilled"?orderResult.value:null;
+    const position=positionResult.status==="fulfilled"&&Number(positionResult.value.size??0)!==0
+      &&Math.sign(Number(positionResult.value.size))===(side==="LONG"?1:-1)?positionResult.value:null;
+    const fills=fillsResult.status==="fulfilled"?fillsResult.value:[],fill=fills.find(row=>
+      (row.text??"")===tag||(orderId!=null&&String(row.order_id??"")===orderId))??null;
+    const disposition=order?liveEntryDisposition(order,"MARKET"):null,
+      exposure=!!position||!!fill||disposition==="FILLED",cancelled=disposition==="CANCELLED"&&!position&&!fill,
+      price=Number(fill?.price??order?.fill_price??position?.entry_price),evidence:Array<"ORDER"|"POSITION"|"FILL">=[];
+    if(order)evidence.push("ORDER");if(position)evidence.push("POSITION");if(fill)evidence.push("FILL");
+    return{order,position,fill,exposure,cancelled,fillPrice:Number.isFinite(price)&&price>0?price:null,checkedAt:Date.now(),evidence,errors};
   }
 
   /** Read-only, fixed time-window pagination; individual fills, not orders. */
