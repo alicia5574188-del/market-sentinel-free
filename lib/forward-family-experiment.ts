@@ -1,16 +1,16 @@
 /**
  * Forward Relation family experiment controller.
  *
- * A family groups threshold variants that express the same causal idea:
- * horizon + side + scope + condition feature/operator shape. Threshold values
- * are intentionally excluded so a failed idea cannot evade evidence control by
- * being re-synthesized with a nearby cutoff.
+ * A family groups variants that express the same causal idea:
+ * side + condition feature/operator shape. Threshold, horizon and BASE/RECENT
+ * scope are intentionally excluded so a failed idea cannot evade evidence
+ * control by changing a cutoff or merely moving from 30m to 45m.
  *
  * This module does not choose direction, stops, targets, sizing or profit exits.
  */
 import type {RelationRule} from "./forward-relation-v2.ts";
 
-export const FORWARD_FAMILY_EXPERIMENT_VERSION="forward-family-experiment-v1";
+export const FORWARD_FAMILY_EXPERIMENT_VERSION="forward-family-experiment-v2";
 
 export type FamilyFailureReason="RELATION_DEGRADED"|"NO_POSITIVE_FEEDBACK"|"STRUCTURE_STOP";
 export type FamilyGuardRecord={
