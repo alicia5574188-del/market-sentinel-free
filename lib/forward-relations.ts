@@ -480,8 +480,13 @@ function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
     const current=candidates.get(t.symbol),same=current&&current.side===t.side?current:null,opp=current&&current.side!==t.side?current:null,
       ageMin=(now-t.openedAt)/60_000,stopped=t.side==="LONG"?px<=t.stopPrice:px>=t.stopPrice,
       marketFlip=!!opp&&!opp.reserve&&opp.eligible&&opp.score>=66&&opp.score>(same?.score??0)+8;
+    const structural=t.entryContext?.structuralInterrupt===true,boundary=t.side==="LONG"?t.entryContext?.regionUpper:t.entryContext?.regionLower,
+      reaccepted=structural&&ageMin>=.10&&boundary!=null&&(t.side==="LONG"?px<=boundary*(1+.0002):px>=boundary*(1-.0002)),
+      rapidAllowance=Math.max(ROUND_TRIP_COST*.55,Math.min(.004,(t.entryContext?.pullbackRiskRate??.006)*.30)),
+      rapidFailure=structural&&ageMin>=.20&&!t.firstProfitAt&&signed<-rapidAllowance;
     let reason:string|null=null;
     if(stopped)reason=(t.profitFloorRate??0)>0?"PROFIT_GIVEBACK":"STRUCTURE_STOP";
+    else if(reaccepted||rapidFailure)reason="STRUCTURAL_INTERRUPT_FAILED";
     else if(marketFlip)reason="MARKET_FLIP";
     else if(t.exitPlan){
       const plan=t.exitPlan,checkpoint=planCheckpoint(plan,ageMin),point=checkpoint?.point,
