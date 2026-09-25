@@ -26,7 +26,7 @@ A checkpoint is not another sample. The root receives one identity and is enrich
 Retention is bounded for storage:
 - newest observations retain the highest density;
 - older observations are thinned by symbol/time bucket;
-- the learner keeps a bounded recent 48h path memory.
+- the learner keeps a bounded recent 24h path memory (maximum 2,200 retained root records).
 
 Old Forward Relation measurements are migrated into the new sample representation where their mature checkpoints are available. Strategy migration must not reset PAPER financial state.
 
