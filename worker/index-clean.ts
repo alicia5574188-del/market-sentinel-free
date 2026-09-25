@@ -1839,8 +1839,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           ?((q.bestBid??0)+(q.bestAsk??0))/2:NaN;
       return sum+mirrorPositionRisk(position,mark);
     }, 0);
-    const pendingRisk = Object.values(this.runtime.live.entries).reduce((sum, entry) => sum + (entry && ["SUBMITTING", "OPEN", "ERROR"].includes(entry.status)
-      ? entry.plannedRisk : 0), 0);
+    const pendingRisk = Object.values(this.runtime.live.entries).reduce((sum, entry) => sum + (entry
+      &&(["SUBMITTING","OPEN","ERROR"].includes(entry.status)||this.liveEntryAwaitingReconcile(entry)) ? entry.plannedRisk : 0), 0);
     return positionRisk + pendingRisk;
   }
 
@@ -1856,8 +1856,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
           ?((q.bestBid??0)+(q.bestAsk??0))/2:NaN;
       return sum+mirrorPositionRisk(position,mark);
     }, 0);
-    const pendingRisk = Object.values(this.runtime.live.entries).reduce((sum, entry) => sum + (entry && entry.side === side
-      && ["SUBMITTING", "OPEN", "ERROR"].includes(entry.status) ? entry.plannedRisk : 0), 0);
+    const pendingRisk = Object.values(this.runtime.live.entries).reduce((sum, entry) => sum + (entry && entry.side===side
+      &&(["SUBMITTING","OPEN","ERROR"].includes(entry.status)||this.liveEntryAwaitingReconcile(entry)) ? entry.plannedRisk : 0), 0);
     return positionRisk + pendingRisk;
   }
 
@@ -2198,16 +2198,37 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       const side: Side = Number(actual.size ?? 0) > 0 ? "LONG" : "SHORT";
       const position = this.runtime.live.positions[symbol];
       const entry = this.runtime.live.entries[symbol];
-      return !(position?.status === "OPEN" && position.side === side)
-        && !(entry?.side === side && (["SUBMITTING", "OPEN", "FILLED", "ERROR"].includes(entry.status)
-          || (entry.status === "CANCELLED" && (now - entry.createdAt < 60_000 || this.liveEntryAwaitingReconcile(entry)))));
+      const entryCanOwnExposure=entry?.side===side&&(!entry.parity||entry.marketSubmittedAt!=null)
+        &&(["SUBMITTING","OPEN","FILLED","ERROR"].includes(entry.status)
+          ||(entry.status==="CANCELLED"&&(now-entry.createdAt<60_000||this.liveEntryAwaitingReconcile(entry))));
+      return !(position?.status==="OPEN"&&position.side===side)&&!entryCanOwnExposure;
     });
     if (initialEnable && (unknownOrders.length || unmanagedPositions.length)) {
       throw new Error("Gate 已有未纳管仓位或挂单；执行暂停，所有者的开启选择保留");
     }
 
     for (const [symbol, entry] of Object.entries(this.runtime.live.entries)) {
-      if (!entry || entry.status === "FILLED" || (entry.status === "CANCELLED" && !this.liveEntryAwaitingReconcile(entry))) continue;
+      if (!entry || (entry.status==="FILLED"&&!this.liveEntryAwaitingReconcile(entry))
+        || (entry.status==="CANCELLED"&&!this.liveEntryAwaitingReconcile(entry))) continue;
+      const actualForEntry=actualPositions.find(p=>p.contract===symbol&&Number(p.size??0)!==0
+        &&Math.sign(Number(p.size))===(entry.side==="LONG"?1:-1));
+      if(entry.parity&&entry.marketSubmittedAt!=null&&actualForEntry){
+        entry.status="FILLED";entry.submissionResolved=true;entry.missingSince=null;entry.lastError=null;
+        const px=Number(actualForEntry.entry_price);
+        if(entry.parity&&Number.isFinite(px)&&px>0){
+          const source=this.currentMirrorSource(entry.planId).trade;
+          if(source){const drift=liveEntryDriftGuard(source,px);Object.assign(entry.parity,{
+            exchangeEntryPrice:px,exchangeEntryAt:snapshot.checkedAt,exchangeEntryDriftRate:drift.adverse});}
+        }
+        continue;
+      }
+      if(entry.parity&&entry.marketSubmittedAt==null&&["SUBMITTING","ERROR"].includes(entry.status)
+        &&now-entry.createdAt>=6_000){
+        entry.status="CANCELLED";entry.submissionResolved=true;entry.missingSince=null;
+        entry.lastError="实盘执行在订单提交网络边界之前中断；已确认没有提交订单，可由同一持久化模拟源重新进入本轮执行";
+        this.recordLiveAudit({observedAt:now,symbol,planId:entry.planId,stage:"ENTRY_SUBMIT",level:"INFO",reason:entry.lastError});
+        continue;
+      }
       const openOrder = exchangeOrders.find((order) => liveOrderTag(order) === entry.tag);
       if (openOrder) {
         entry.status = "OPEN";
@@ -2266,8 +2287,9 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       if (!position || position.status !== "OPEN") {
         const entry = this.runtime.live.entries[symbol];
         const selectedTrade = desiredPortfolio[symbol] ?? null;
-        if (!entry || entry.side !== side || (!["SUBMITTING", "OPEN", "FILLED", "ERROR"].includes(entry.status)
-          && !(entry.status === "CANCELLED" && now - entry.createdAt < 60_000))) throw new Error(`发现未纳管实盘仓位 ${symbol}`);
+        if (!entry || entry.side!==side || (entry.parity&&entry.marketSubmittedAt==null)
+          || (!["SUBMITTING","OPEN","FILLED","ERROR"].includes(entry.status)
+            && !(entry.status==="CANCELLED"&&now-entry.createdAt<60_000))) throw new Error(`发现未纳管实盘仓位 ${symbol}`);
         // A completed source can be replaced before an in-flight market order
         // returns. Reconcile the reserved OLD parent first, then close it; never
         // relabel that fill as the replacement or abandon its protection.
@@ -2433,15 +2455,21 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     const recoveringStop = Object.values(this.runtime.live.positions)
       .find((position) => position?.status === "OPEN" && position.stopSubmittingAt && !position.stopOrderId) ?? null;
     let recoveringEntryStop = Object.values(this.runtime.live.entries)
-      .find((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status)
-        && entry.stopSubmittingAt && !entry.stopOrderId) ?? null;
-    this.runtime.live.operational = !recoveringSubmission && !recoveringStop && !recoveringEntryStop;
-    this.runtime.live.lastError = recoveringSubmission
-      ? recoveringSubmission.lastError ?? `${recoveringSubmission.symbol} 的实盘提交正在与 Gate 核对`
-      : recoveringStop ? `${recoveringStop.symbol} 的结构止损正在按订单标签核对`
-        : recoveringEntryStop ? `${recoveringEntryStop.symbol} 的初始止损正在按订单标签核对` : null;
-    if(recoveringSubmission || recoveringStop || recoveringEntryStop) return;
-    let availableForNewEntries = available;
+      .find((entry) => entry && !["FILLED","CANCELLED"].includes(entry.status)
+        &&((entry.stopSubmittingAt&&!entry.stopOrderId)||entry.protectionExitRequestedAt)) ?? null;
+    this.runtime.live.operational = !recoveringStop&&!recoveringEntryStop;
+    this.runtime.live.lastError = recoveringStop ? `${recoveringStop.symbol} 的结构止损正在按订单标签核对`
+      : recoveringEntryStop ? `${recoveringEntryStop.symbol} 的初始保护/强制退出正在 Gate 核对`
+      : recoveringSubmission ? (recoveringSubmission.lastError
+        ?? `${recoveringSubmission.symbol} 的唯一订单身份仍在 Gate 核对；该笔风险已冻结，其他独立新机会继续执行`) : null;
+    if(recoveringStop||recoveringEntryStop) return;
+    const unresolvedEntryMargin=Object.values(this.runtime.live.entries).reduce((sum,entry)=>sum+(entry
+      &&(["SUBMITTING","OPEN","ERROR"].includes(entry.status)||this.liveEntryAwaitingReconcile(entry)) ? entry.margin : 0),0);
+    // A submit whose result is not visible yet may already have consumed Gate
+    // margin even when the current account snapshot has not caught up. Reserve
+    // that margin locally; once Gate exposes the position, it leaves this
+    // pending bucket and the exchange's available balance becomes authoritative.
+    let availableForNewEntries = Math.max(0,available-unresolvedEntryMargin);
     let riskForNewEntries = this.liveOpenRisk();
     const directionRiskForNewEntries: Record<Side, number> = {
       LONG: this.liveDirectionalRisk("LONG"),
@@ -2449,10 +2477,12 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     };
     let marginForNewEntries = [
       ...Object.values(this.runtime.live.positions).filter((position) => position?.status === "OPEN"),
-      ...Object.values(this.runtime.live.entries).filter((entry) => entry && ["SUBMITTING", "OPEN", "ERROR"].includes(entry.status)),
+      ...Object.values(this.runtime.live.entries).filter((entry) => entry
+        &&(["SUBMITTING","OPEN","ERROR"].includes(entry.status)||this.liveEntryAwaitingReconcile(entry))),
     ].reduce((sum, item) => sum + (item?.margin ?? 0), 0);
     let notionalForNewEntries=[...Object.values(this.runtime.live.positions).filter(p=>p?.status==="OPEN"),
-      ...Object.values(this.runtime.live.entries).filter(e=>e&&["SUBMITTING","OPEN","ERROR"].includes(e.status))]
+      ...Object.values(this.runtime.live.entries).filter(e=>e
+        &&(["SUBMITTING","OPEN","ERROR"].includes(e.status)||this.liveEntryAwaitingReconcile(e)))]
       .reduce((n,p)=>n+(p?.notional??0),0);
     const paperMark=forwardEquity(this.forwardState!,this.regimeQuotes(Date.now()),Date.now());
     let mirrorRatio=this.runtime.live.activation?.scaleRatio??null;
@@ -2569,11 +2599,14 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       try {
         if(!this.runtime.live.requestedEnabled||!sameLiveSession(activation,this.runtime.live.activation)){entry.status="CANCELLED";continue;}
         try {
-          await client.setLeverage(symbol, intent.leverage);
+          const leverageCheck=typeof client.ensureLeverage==="function"
+            ?await client.ensureLeverage(symbol,intent.leverage)
+            :(await client.setLeverage(symbol,intent.leverage),{verified:true,recovered:false,already:false,actual:intent.leverage});
+          if(leverageCheck.recovered)this.recordLiveAudit({observedAt:Date.now(),symbol,planId:plan.id,stage:"LEVERAGE",level:"INFO",
+            reason:`Gate 杠杆写入响应曾超时，但安全回读已确认 ${symbol}=${intent.leverage}×；继续本次同源入场，不重放杠杆写请求`});
         } catch (error) {
-          const reason = `Gate 未接受 ${symbol} 的 ${intent.leverage}× 杠杆，本计划已跳过：${safeError(error)}`;
-          entry.status = "CANCELLED";
-          entry.lastError = reason;
+          const reason = `Gate 未确认 ${symbol} 的 ${intent.leverage}× 杠杆，本计划已跳过但不会锁住其他新机会：${safeError(error)}`;
+          entry.status = "CANCELLED";entry.submissionResolved=true;entry.lastError = reason;
           this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: "LEVERAGE_REJECTED", reason, observedAt: now };
           this.recordLiveAudit({ observedAt: now, symbol, planId: plan.id, stage: "LEVERAGE", level: "SKIPPED", reason, error });
           continue;
@@ -2656,11 +2689,10 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
             this.runtime.live.entrySkips[symbol] = { planId: plan.id, symbol, code: "ENTRY_REJECTED", reason, observedAt: now };
             this.recordLiveAudit({ observedAt: now, symbol, planId: plan.id, stage: "ENTRY_SUBMIT", level: "SKIPPED", reason, error });
           } else {
-            entry.status = "ERROR";
-            entry.missingSince = now;
-            recoveringSubmission = entry;
+            entry.status = "ERROR";entry.missingSince = now;recoveringSubmission = entry;
+            this.liveSourcePending=true;this.liveFastSourcePending=false;
             this.recordLiveAudit({ observedAt: now, symbol, planId: plan.id, stage: "ENTRY_SUBMIT", level: "RECOVERING",
-              reason: `${reason}；结果不明确，保留风险额度并按订单标签核对，不自动重复提交`, error });
+              reason: `${reason}；唯一订单身份与风险额度已冻结，立即用新账户/订单快照核对，不自动重复提交，其他已通过风险检查的新源单继续执行`, error });
           }
         }
       } catch (error) {
@@ -2668,13 +2700,15 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         entry.lastError = safeError(error);
         throw error;
       }
-      if(entry.status==="ERROR")break; // Do not compound an unconfirmed exposure.
+      if(entry.status==="ERROR"&&(entry.stopSubmittingAt||entry.protectionExitRequestedAt))break;
     }
-    if (recoveringSubmission || recoveringEntryStop) {
+    if (recoveringEntryStop) {
       this.runtime.live.operational = false;
-      this.runtime.live.lastError = recoveringSubmission
-        ? recoveringSubmission.lastError ?? `${recoveringSubmission.symbol} 的实盘提交正在与 Gate 核对`
-        : `${recoveringEntryStop!.symbol} 的初始止损正在按订单标签核对`;
+      this.runtime.live.lastError = `${recoveringEntryStop.symbol} 的初始保护/强制退出正在按订单标签核对`;
+    } else if(recoveringSubmission){
+      this.runtime.live.operational=true;
+      this.runtime.live.lastError=recoveringSubmission.lastError
+        ?? `${recoveringSubmission.symbol} 的唯一订单身份仍在 Gate 核对；该笔风险已冻结，其他独立新机会继续执行`;
     }
     // A cached source-trigger pass is provisional by construction; the caller
     // schedules the immediate full Gate reconciliation. Network-backed passes

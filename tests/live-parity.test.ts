@@ -730,7 +730,7 @@ test("a same-coin replacement is allowed only after the old ambiguous parent is 
     await h.syncLive(Date.now());
     assert.equal(gate.placed.length,2);
     assert.equal(live(h).entries.BTC_USDT.planId,"replacement-parent");
-    assert.equal(live(h).operational,false,"the NEW ambiguous parent is now the only unresolved exposure");
+    assert.equal(live(h).operational,true,"an identity-only ambiguity reserves its own risk but no longer freezes unrelated LIVE execution");
   }finally{Date.now=original;}
 }));
 
@@ -764,15 +764,22 @@ test("real Worker keeps requested-but-unconfirmed closes and pending entries in 
   const before=r.liveOpenRisk();p.exitRequestedAt=T;
   assert.equal(r.liveOpenRisk(),before);assert.equal(r.liveDirectionalRisk("LONG"),before);
   const entries=h.runtime.live.entries as Record<string,unknown>;
-  entries.ETH_USDT={planId:"pending",symbol:"ETH_USDT",side:"SHORT",status:"OPEN",plannedRisk:2};
+  entries.ETH_USDT={planId:"pending",symbol:"ETH_USDT",side:"SHORT",status:"OPEN",plannedRisk:2,margin:1};
   assert.equal(r.liveOpenRisk(),before+2);assert.equal(r.liveDirectionalRisk("SHORT"),2);
   p.status="CLOSED";assert.equal(r.liveOpenRisk(),2);
+  entries.ETH_USDT={planId:"pending-cancelled",symbol:"ETH_USDT",side:"SHORT",status:"CANCELLED",plannedRisk:2,margin:1,
+    parity:{sourceId:"pending-cancelled"},marketSubmittedAt:T,submissionResolved:false};
+  assert.equal(r.liveOpenRisk(),2,"cancelled-but-unresolved one-shot identity must keep its risk reserved");
+  assert.equal(r.liveDirectionalRisk("SHORT"),2);
 }));
-test("an unknown prior submission blocks a different-symbol addition without rewriting owner intent",()=>clock(async()=>{
+test("an unknown prior submission reserves its risk but does not block an unrelated new source",()=>clock(async()=>{
   const {h,gate}=await harness();gate.ambiguous=true;await enableNew(h);
+  const r=h as unknown as {liveOpenRisk():number};const firstRisk=r.liveOpenRisk();assert.ok(firstRisk>0);
   addRiskTestSource(h);await h.syncLive(T);
-  assert.equal(gate.placed.length,1);assert.equal(live(h).requestedEnabled,true);
-  assert.equal(live(h).operational,false);assert.equal(live(h).entries.BTC_USDT.status,"ERROR");
+  assert.equal(gate.placed.length,2,"ETH source should still reach its own one-shot Gate submit while BTC identity is unresolved");
+  assert.equal(live(h).requestedEnabled,true);assert.equal(live(h).operational,true);
+  assert.equal(live(h).entries.BTC_USDT.status,"ERROR");assert.equal(live(h).entries.ETH_USDT.status,"ERROR");
+  assert.ok(r.liveOpenRisk()>firstRisk,"both ambiguous one-shot submissions retain risk capacity until resolved");
 }));
 test("fresh Gate mark defeats a stale public midpoint while a source-closed position is still pending actual exit",()=>clock(async()=>{
   const {h,gate}=await harness();await enableNew(h);await h.syncLive(T);
