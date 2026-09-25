@@ -426,6 +426,53 @@ test("a recovered futures read path is preferred on the next read for the same e
 });
 
 
+test("a live mutation inherits the currently healthy official futures route and still submits only once",async()=>{
+  const real=globalThis.fetch,hosts:string[]=[],methods:string[]=[];let firstPrimary=true;
+  globalThis.fetch=async(input,init)=>{
+    const req=new Request(input,init),host=new URL(req.url).hostname;hosts.push(host);methods.push(req.method);
+    if(req.method==="GET"&&host==="api.gateio.ws"&&firstPrimary){
+      firstPrimary=false;return new Promise<Response>(()=>{});
+    }
+    if(req.method==="GET")return Response.json({id:"123",status:"finished",fill_price:"100"});
+    assert.equal(req.method,"POST");
+    const body=JSON.parse(await req.text()) as Record<string,unknown>;
+    assert.equal(body.action_mode,"ACK");
+    return Response.json({id_string:"987654321012345678",text:"t-ms-e-route"});
+  };
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    await client.inspectEntry("MARKET","BTC_USDT","t-fixture","123");
+    assert.equal(client.readTransport.preferredAlternatePaths,1);
+    assert.equal(client.readTransport.preferredMutationHost,"fx-api.gateio.ws");
+    const before=hosts.length;
+    const id=await client.createEntry({kind:"MARKET",tag:"t-ms-e-route",size:1,contracts:1,notional:100,
+      plannedRisk:2,leverage:10,margin:10,body:{contract:"BTC_USDT",size:"1",price:"0",tif:"ioc",text:"t-ms-e-route",reduce_only:false}});
+    assert.equal(id,"987654321012345678");
+    assert.deepEqual(methods.slice(before),["POST"],"mutation must remain one-shot");
+    assert.deepEqual(hosts.slice(before),["fx-api.gateio.ws"],"the already-proven futures alternate should own the one mutation");
+  }finally{globalThis.fetch=real;}
+});
+
+test("a mutation timeout on the selected alternate is never replayed to primary",async()=>{
+  const real=globalThis.fetch,posts:string[]=[];let firstPrimary=true;
+  globalThis.fetch=async(input,init)=>{
+    const req=new Request(input,init),host=new URL(req.url).hostname;
+    if(req.method==="GET"&&host==="api.gateio.ws"&&firstPrimary){
+      firstPrimary=false;return new Promise<Response>(()=>{});
+    }
+    if(req.method==="GET")return Response.json({id:"123",status:"finished"});
+    posts.push(host);const error=new Error("The operation was aborted due to timeout");error.name="TimeoutError";throw error;
+  };
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    await client.inspectEntry("MARKET","BTC_USDT","t-fixture","123");
+    await assert.rejects(()=>client.createEntry({kind:"MARKET",tag:"t-ms-e-timeout",size:1,contracts:1,notional:100,
+      plannedRisk:2,leverage:10,margin:10,body:{contract:"BTC_USDT",size:"1",price:"0",tif:"ioc",text:"t-ms-e-timeout",reduce_only:false}}),
+      /提交结果可能不明确/);
+    assert.deepEqual(posts,["fx-api.gateio.ws"],"unknown writes must never fail over after crossing the network boundary");
+  }finally{globalThis.fetch=real;}
+});
+
 test("leverage precheck skips an unnecessary mutation before LIVE entry",async()=>{
   const real=globalThis.fetch;let reads=0,writes=0;
   globalThis.fetch=async(input,init)=>{
