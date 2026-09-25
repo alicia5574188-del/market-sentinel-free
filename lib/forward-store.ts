@@ -126,14 +126,15 @@ export async function readForwardStore(storage: Reader, now: number) {
         throw new Error(`Forward样本分页校验失败：${meta.id}`);
       prior=meta.id;const compressedMatches=value.length===meta.length&&await digest(value)===meta.sha256;
       let pageRaw:Uint8Array,page:{version?:string;id?:string;samples?:unknown[]};
-      try{
-        pageRaw=meta.encoding==="gzip"?await gunzip(value,FORWARD_SAMPLE_PAGE_MAX_BYTES):value;
-        if(pageRaw.length!==meta.rawLength)throw new Error("raw length");
-        const rawSha256=await digest(pageRaw);
-        if(meta.rawSha256!==undefined?(!SHA256.test(meta.rawSha256)||rawSha256!==meta.rawSha256):!compressedMatches)legacyRecovered=true;
-        if(meta.rawSha256!==undefined&&rawSha256!==meta.rawSha256)throw new Error("raw digest");
-        page=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(pageRaw)) as typeof page;
-      }catch{throw new Error(`Forward样本分页校验失败：${meta.id}`);}
+      try{pageRaw=meta.encoding==="gzip"?await gunzip(value,FORWARD_SAMPLE_PAGE_MAX_BYTES):value;}
+      catch{throw new Error(`Forward样本分页解压失败：${meta.id}`);}
+      const rawLengthMatches=pageRaw.length===meta.rawLength,rawSha256=await digest(pageRaw);
+      if(meta.rawSha256!==undefined){
+        if(!rawLengthMatches||!SHA256.test(meta.rawSha256)||rawSha256!==meta.rawSha256)
+          throw new Error(`Forward样本分页原始校验失败：${meta.id}`);
+      }else if(!compressedMatches||!rawLengthMatches)legacyRecovered=true;
+      try{page=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(pageRaw)) as typeof page;}
+      catch{throw new Error(`Forward样本分页JSON失败：${meta.id}`);}
       if(page.version!==FORWARD_PAGED_STATE_VERSION||page.id!==meta.id||!Array.isArray(page.samples)||!validPackedPage(page.samples,meta))
         throw new Error(`Forward样本分页内容异常：${meta.id}`);
       samples.push(...page.samples);count+=page.samples.length;
