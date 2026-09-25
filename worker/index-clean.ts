@@ -2158,7 +2158,8 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
     catch(error){sourceError=safeError(error);}
     this.turnoverAccountUser=snapshot.account.user==null?null:String(snapshot.account.user);
     const knownTags = new Set([
-      ...Object.values(this.runtime.live.entries).flatMap((entry) => entry && !["FILLED", "CANCELLED"].includes(entry.status)
+      ...Object.values(this.runtime.live.entries).flatMap((entry) => entry
+        &&(!["FILLED","CANCELLED"].includes(entry.status)||this.liveEntryAwaitingReconcile(entry))
         ? [entry.tag, entry.stopTag ?? this.liveEntryStopIntent(entry).tag] : []),
       ...Object.values(this.runtime.live.positions).flatMap((position) => position?.status === "OPEN" && position.stopTag ? [position.stopTag] : []),
     ]);
