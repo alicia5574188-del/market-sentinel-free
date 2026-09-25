@@ -424,3 +424,46 @@ test("a recovered futures read path is preferred on the next read for the same e
     assert.ok(client.readTransport.preferredAlternatePaths>=1);
   }finally{globalThis.fetch=real;}
 });
+
+
+test("leverage precheck skips an unnecessary mutation before LIVE entry",async()=>{
+  const real=globalThis.fetch;let reads=0,writes=0;
+  globalThis.fetch=async(input,init)=>{
+    const req=new Request(input,init),url=new URL(req.url);
+    if(req.method==="GET"&&url.pathname.endsWith("/positions/SOL_USDT")){
+      reads++;return Response.json({contract:"SOL_USDT",size:0,leverage:"10"});
+    }
+    if(req.method==="POST"&&url.pathname.endsWith("/positions/SOL_USDT/leverage")){
+      writes++;throw new Error("leverage write should not be sent");
+    }
+    throw new Error(`unexpected ${req.method} ${url.pathname}`);
+  };
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    const result=await client.ensureLeverage("SOL_USDT",10);
+    assert.equal(result.verified,true);assert.equal(result.already,true);assert.equal(result.recovered,false);
+    assert.equal(reads,1);assert.equal(writes,0);
+  }finally{globalThis.fetch=real;}
+});
+
+test("timed-out leverage mutation is verified by safe readback and never replayed",async()=>{
+  const real=globalThis.fetch;let reads=0,writes=0;
+  globalThis.fetch=async(input,init)=>{
+    const req=new Request(input,init),url=new URL(req.url);
+    if(req.method==="GET"&&url.pathname.endsWith("/positions/LSK_USDT")){
+      reads++;
+      return Response.json({contract:"LSK_USDT",size:0,leverage:reads===1?"5":"10"});
+    }
+    if(req.method==="POST"&&url.pathname.endsWith("/positions/LSK_USDT/leverage")){
+      writes++;const error=new Error("The operation was aborted due to timeout");error.name="TimeoutError";throw error;
+    }
+    throw new Error(`unexpected ${req.method} ${url.pathname}`);
+  };
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    const result=await client.ensureLeverage("LSK_USDT",10);
+    assert.equal(result.verified,true);assert.equal(result.recovered,true);assert.equal(result.actual,10);
+    assert.equal(writes,1,"ambiguous leverage writes are never replayed");
+    assert.equal(reads,2,"one precheck plus one post-timeout readback proves the resulting Gate state");
+  }finally{globalThis.fetch=real;}
+});
