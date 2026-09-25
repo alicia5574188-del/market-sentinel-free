@@ -124,7 +124,7 @@ export async function readForwardStore(storage: Reader, now: number) {
       ||await digest(encodeJson(manifest))!==head.sampleManifestSha256)throw new Error("Forward样本manifest校验失败，原账户不会被覆盖");
     const pageBytes=await Promise.all(manifest.pages.map(page=>storage.get<Uint8Array>(page.key))),samples:unknown[]=[];
     const legacySampleRecovery:LegacySampleRecovery[]=[];let count=0,expectedCount=0,prior="",legacyRecovered=false,
-      legacyStructuralDrift=false;
+      canonicalProofRequired=false;
     for(let i=0;i<manifest.pages.length;i++){
       const meta=manifest.pages[i]!,value=pageBytes[i];
       if(!value||meta.key!==`${FORWARD_SAMPLE_PAGE_PREFIX}${meta.id}`||meta.id<=prior||value.length>FORWARD_COMPACT_BYTES
@@ -141,28 +141,29 @@ export async function readForwardStore(storage: Reader, now: number) {
       const rawLengthMatches=pageRaw.length===meta.rawLength,rawSha256=await digest(pageRaw),
         rawHashValid=meta.rawSha256===undefined||SHA256.test(meta.rawSha256),
         rawHashMatches=meta.rawSha256!==undefined&&rawHashValid&&rawSha256===meta.rawSha256,
-        authenticatedCompressedRecovery=meta.rawSha256!==undefined&&rawHashValid&&!rawHashMatches&&rawLengthMatches&&compressedMatches;
+        authenticatedCompressedRecovery=meta.rawSha256!==undefined&&rawHashValid&&!rawHashMatches&&rawLengthMatches&&compressedMatches,
+        authenticatedRawRecovery=meta.rawSha256!==undefined&&rawHashValid&&rawHashMatches&&!rawLengthMatches,
+        rawIdentityDrift=meta.rawSha256!==undefined&&rawHashValid&&!rawHashMatches&&!authenticatedCompressedRecovery;
       if(meta.rawSha256!==undefined){
-        // A manifest is authenticated by the head and still contains the exact
-        // stored-byte SHA-256. If that compressed identity matches byte-for-byte
-        // while only the newer rawSha256 metadata disagrees, preserve/archive
-        // those authenticated bytes and rebuild the raw hash on the next atomic
-        // write. If neither identity matches, this remains real evidence loss
-        // and must stay fail-closed.
-        if(!rawLengthMatches||!rawHashValid||(!rawHashMatches&&!authenticatedCompressedRecovery))
-          throw new Error(`Forward样本分页原始校验失败：${meta.id}:COMPRESSED_${compressedMatches?"MATCH":"MISMATCH"}:LENGTH_${rawLengthMatches?"MATCH":"MISMATCH"}`);
-        if(authenticatedCompressedRecovery)legacyRecovered=true;
+        // Exact stored-byte identity or exact raw identity is sufficient on its
+        // own. If both identities differ, do not trust the retained page yet:
+        // parse only bounded valid evidence, then require the complete retained
+        // set at persistedAt to reconstruct the authenticated manifest exactly.
+        if(!rawHashValid)throw new Error(`Forward样本分页原始校验失败：${meta.id}:RAW_HASH_FORMAT`);
+        if(authenticatedCompressedRecovery||authenticatedRawRecovery||rawIdentityDrift)legacyRecovered=true;
       }else if(!compressedMatches||!rawLengthMatches)legacyRecovered=true;
       try{page=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(pageRaw)) as typeof page;}
       catch{throw new Error(`Forward样本分页JSON失败：${meta.id}`);}
       if(page.version!==FORWARD_PAGED_STATE_VERSION)throw new Error(`Forward样本分页内容异常：${meta.id}:VERSION`);
       if(page.id!==meta.id)throw new Error(`Forward样本分页内容异常：${meta.id}:PAGE_ID`);
       if(!Array.isArray(page.samples))throw new Error(`Forward样本分页内容异常：${meta.id}:SAMPLES`);
-      const allowLegacyDrift=meta.rawSha256===undefined,pageIssue=packedPageIssue(page.samples,meta,allowLegacyDrift);
+      const allowLegacyDrift=meta.rawSha256===undefined,allowEvidenceDrift=allowLegacyDrift||rawIdentityDrift,
+        pageIssue=packedPageIssue(page.samples,meta,allowEvidenceDrift);
       if(pageIssue)throw new Error(`Forward样本分页内容异常：${meta.id}:${pageIssue}`);
       const firstAt=(page.samples[0] as unknown[])[2] as number,lastAt=(page.samples.at(-1) as unknown[])[2] as number,
-        structuralDrift=allowLegacyDrift&&(page.samples.length!==meta.count||firstAt!==meta.firstAt||lastAt!==meta.lastAt),
-        legacyPhysicalDrift=authenticatedCompressedRecovery||(allowLegacyDrift&&(!compressedMatches||!rawLengthMatches||structuralDrift));
+        structuralDrift=allowEvidenceDrift&&(page.samples.length!==meta.count||firstAt!==meta.firstAt||lastAt!==meta.lastAt),
+        legacyPhysicalDrift=authenticatedCompressedRecovery||authenticatedRawRecovery||rawIdentityDrift
+          ||(allowLegacyDrift&&(!compressedMatches||!rawLengthMatches||structuralDrift));
       if(legacyPhysicalDrift){
         const bytesSha256=await digest(value),bytesKey=`${FORWARD_SAMPLE_RECOVERY_PREFIX}${meta.id}:${rawSha256}:bytes`;
         legacySampleRecovery.push({meta:{version:"forward-sample-recovery-v1",sourceManifestSha256:head.sampleManifestSha256!,sourceId:meta.id,
@@ -170,7 +171,7 @@ export async function readForwardStore(storage: Reader, now: number) {
           sha256:bytesSha256,rawSha256,encoding:meta.encoding},bytes:value.slice()});
         legacyRecovered=true;
       }
-      if(structuralDrift)legacyStructuralDrift=true;
+      if(structuralDrift||rawIdentityDrift)canonicalProofRequired=true;
       samples.push(...page.samples);count+=page.samples.length;
       expectedCount+=meta.count;
     }
@@ -180,20 +181,20 @@ export async function readForwardStore(storage: Reader, now: number) {
     decoded.storage={...decoded.storage,layout:FORWARD_PAGED_STATE_VERSION,
       sampleIntegrity:legacyRecovered||manifest.pages.some(page=>page.rawSha256===undefined)?"legacy-recovered":"raw-sha256"};
     const canonicalAt=Math.max(Number(decoded.storage.persistedAt)||0,Number(decoded.relationEngine.updatedAt)||0,decoded.startedAt),
-      canonicalDecoded=legacyStructuralDrift?structuredClone(decoded):null;
+      canonicalDecoded=canonicalProofRequired?structuredClone(decoded):null;
     const state=normalizeForward(decoded,now);
-    if(legacyStructuralDrift){
-      // Recreate the manifest at its persisted evidence time. Using startup
-      // time here would legitimately age out >24h samples before verification
-      // and falsely report topology drift after a long restart.
+    if(canonicalProofRequired){
+      // Recreate the authenticated page set at its persisted evidence time.
+      // Startup-time aging and shard redistribution are allowed only when this
+      // exact canonicalization reproduces every manifest byte identity.
       const canonicalState=normalizeForward(canonicalDecoded!,canonicalAt),canonical=await encodeSamplePages(canonicalState.relationEngine.samples);
       const matches=canonical.length===manifest.pages.length&&canonical.every((page,index)=>{
         const expected=manifest.pages[index]!;return page.meta.id===expected.id&&page.meta.key===expected.key
           &&page.meta.count===expected.count&&page.meta.firstAt===expected.firstAt&&page.meta.lastAt===expected.lastAt
           &&page.meta.length===expected.length&&page.meta.rawLength===expected.rawLength&&page.meta.sha256===expected.sha256
-          &&page.meta.encoding===expected.encoding;
+          &&page.meta.encoding===expected.encoding&&(expected.rawSha256===undefined||page.meta.rawSha256===expected.rawSha256);
       });
-      if(!matches)throw new Error("Forward样本分页内容异常：LEGACY_CANONICAL_AT_PERSISTED_TIME");
+      if(!matches)throw new Error("Forward样本分页内容异常：EVIDENCE_CANONICAL_AT_PERSISTED_TIME");
     }
     if(legacySampleRecovery.length)(state as ForwardStateWithRecovery).__legacySampleRecovery=legacySampleRecovery;
     const restored=restoreForwardProtectionCheckpoint(state,await storage.get<unknown>(FORWARD_PROTECTION_STORAGE));
