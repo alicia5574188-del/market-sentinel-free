@@ -12,6 +12,30 @@ function plan(marketState: PaperPlan["marketState"], side: PaperPlan["side"]): P
   };
 }
 
+class FakeTradeSocket {
+  readyState=1;
+  accepted=false;
+  sent:Record<string,unknown>[]=[];
+  listeners=new Map<string,(event:{data?:unknown})=>void>();
+  orderResult:Record<string,unknown>|null={id_string:"123456789012345678",text:"t-ms-e-test",status:"finished",finish_as:"filled",size:"1",left:"0",fill_price:"100"};
+  accept(){this.accepted=true;}
+  close(){this.readyState=3;}
+  addEventListener(type:string,listener:(event:{data?:unknown})=>void){this.listeners.set(type,listener);}
+  send(data:string){
+    const message=JSON.parse(data) as Record<string,unknown>;this.sent.push(message);
+    const channel=String(message.channel??""),payload=(message.payload??{}) as Record<string,unknown>,reqId=String(payload.req_id??"");
+    if(channel==="futures.login"){
+      queueMicrotask(()=>this.message({request_id:reqId,ack:false,header:{status:"200",channel:"futures.login",event:"api"},
+        data:{result:{status:"success"}}}));
+    }else if(channel==="futures.order_place"&&this.orderResult){
+      const result={...this.orderResult,text:((payload.req_param??{}) as Record<string,unknown>).text??this.orderResult.text};
+      queueMicrotask(()=>this.message({request_id:reqId,ack:true,header:{status:"200",channel:"futures.order_place",event:"api"},data:{result:{req_id:reqId}}}));
+      queueMicrotask(()=>this.message({request_id:reqId,ack:false,header:{status:"200",channel:"futures.order_place",event:"api"},data:{result}}));
+    }
+  }
+  message(value:unknown){this.listeners.get("message")?.({data:JSON.stringify(value)});}
+}
+
 test("a confirmed breakout becomes an IOC market order sized from its current entry", () => {
   const intent = buildLiveEntryIntent({ plan: plan("BREAKOUT", "LONG"), entryPrice: 100.25,
     equity: 1_000, available: 1_000, openRisk: 0, quantoMultiplier: 0.001, leverageMax: 50 });
@@ -370,17 +394,53 @@ test("both private routes hanging remain bounded and public diagnostics omit the
 });
 
 
-test("live market entry uses ACK mode and accepts the key-only order identity response",async()=>{
-  const real=globalThis.fetch;const bodies:Record<string,unknown>[]=[];
+test("live market entry uses authenticated Gate futures WebSocket and receives the real order id",async()=>{
+  const real=globalThis.fetch,socket=new FakeTradeSocket(),fetches:string[]=[];
   globalThis.fetch=async(input,init)=>{
-    const request=new Request(input,init);bodies.push(JSON.parse(await request.text()) as Record<string,unknown>);
-    return Response.json({id_string:"123456789012345678",text:"t-ms-e-test"});
+    fetches.push(String(input));
+    assert.equal(String(input),"https://fx-ws.gateio.ws/v4/ws/usdt");
+    assert.equal(new Headers(init?.headers).get("Upgrade"),"websocket");
+    assert.equal(new Headers(init?.headers).get("X-Gate-Size-Decimal"),"1");
+    return{status:101,webSocket:socket} as unknown as Response;
   };
   try{
     const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
     const id=await client.createEntry({kind:"MARKET",tag:"t-ms-e-test",size:1,contracts:1,notional:100,plannedRisk:2,leverage:10,margin:10,
       body:{contract:"BTC_USDT",size:"1",price:"0",tif:"ioc",text:"t-ms-e-test",reduce_only:false}});
-    assert.equal(id,"123456789012345678");assert.equal(bodies[0]?.action_mode,"ACK");
+    assert.equal(id,"123456789012345678");assert.equal(fetches.length,1);assert.ok(socket.accepted);
+    const [login,order]=socket.sent;
+    assert.equal(login?.channel,"futures.login");assert.equal(order?.channel,"futures.order_place");
+    const loginPayload=login?.payload as Record<string,unknown>;
+    assert.equal(loginPayload.api_key,"fixture-key");assert.match(String(loginPayload.signature),/^[0-9a-f]{128}$/);
+    assert.deepEqual((order?.payload as Record<string,unknown>).req_param,
+      {contract:"BTC_USDT",size:"1",price:"0",tif:"ioc",text:"t-ms-e-test",reduce_only:false});
+    assert.equal(client.writeTransport.orderRequests,1);assert.equal(client.writeTransport.orderAcks,1);
+    assert.equal(client.writeTransport.orderResults,1);assert.equal(client.writeTransport.loggedIn,true);
+  }finally{globalThis.fetch=real;}
+});
+
+test("WebSocket handshake failure is a definite pre-send cancellation, not a fake 60-second unknown order",async()=>{
+  const real=globalThis.fetch;let calls=0;
+  globalThis.fetch=async()=>{calls++;throw new Error("ws network unavailable");};
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    await assert.rejects(()=>client.createEntry({kind:"MARKET",tag:"t-ms-e-nosend",size:1,contracts:1,notional:100,plannedRisk:2,leverage:10,margin:10,
+      body:{contract:"BTC_USDT",size:"1",price:"0",tif:"ioc",text:"t-ms-e-nosend",reduce_only:false}}),
+      error=>error instanceof GateEntryCancelledError&&/未发送订单/.test(error.message));
+    assert.equal(calls,1);assert.equal(client.writeTransport.orderRequests,0);
+  }finally{globalThis.fetch=real;}
+});
+
+test("live market close uses the same authenticated WebSocket order channel",async()=>{
+  const real=globalThis.fetch,socket=new FakeTradeSocket();socket.orderResult={id_string:"998877665544332211",status:"finished",finish_as:"filled",size:"0",left:"0"};
+  globalThis.fetch=async()=>({status:101,webSocket:socket}) as unknown as Response;
+  try{
+    const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
+    const id=await client.closePosition("BTC_USDT","t-ms-x-close");
+    assert.equal(id,"998877665544332211");
+    const order=socket.sent.find(row=>row.channel==="futures.order_place")!;
+    assert.deepEqual((order.payload as Record<string,unknown>).req_param,
+      {contract:"BTC_USDT",size:0,price:"0",tif:"ioc",close:true,reduce_only:true,text:"t-ms-x-close"});
   }finally{globalThis.fetch=real;}
 });
 
@@ -426,7 +486,7 @@ test("a recovered futures read path is preferred on the next read for the same e
 });
 
 
-test("a live mutation inherits the currently healthy official futures route and still submits only once",async()=>{
+test("remaining REST account-setting mutations inherit the currently healthy official futures route and submit once",async()=>{
   const real=globalThis.fetch,hosts:string[]=[],methods:string[]=[];let firstPrimary=true;
   globalThis.fetch=async(input,init)=>{
     const req=new Request(input,init),host=new URL(req.url).hostname;hosts.push(host);methods.push(req.method);
@@ -434,10 +494,7 @@ test("a live mutation inherits the currently healthy official futures route and 
       firstPrimary=false;return new Promise<Response>(()=>{});
     }
     if(req.method==="GET")return Response.json({id:"123",status:"finished",fill_price:"100"});
-    assert.equal(req.method,"POST");
-    const body=JSON.parse(await req.text()) as Record<string,unknown>;
-    assert.equal(body.action_mode,"ACK");
-    return Response.json({id_string:"987654321012345678",text:"t-ms-e-route"});
+    assert.equal(req.method,"POST");return Response.json({});
   };
   try{
     const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
@@ -445,15 +502,13 @@ test("a live mutation inherits the currently healthy official futures route and 
     assert.equal(client.readTransport.preferredAlternatePaths,1);
     assert.equal(client.readTransport.preferredMutationHost,"fx-api.gateio.ws");
     const before=hosts.length;
-    const id=await client.createEntry({kind:"MARKET",tag:"t-ms-e-route",size:1,contracts:1,notional:100,
-      plannedRisk:2,leverage:10,margin:10,body:{contract:"BTC_USDT",size:"1",price:"0",tif:"ioc",text:"t-ms-e-route",reduce_only:false}});
-    assert.equal(id,"987654321012345678");
+    await client.setLeverage("BTC_USDT",10);
     assert.deepEqual(methods.slice(before),["POST"],"mutation must remain one-shot");
     assert.deepEqual(hosts.slice(before),["fx-api.gateio.ws"],"the already-proven futures alternate should own the one mutation");
   }finally{globalThis.fetch=real;}
 });
 
-test("a mutation timeout on the selected alternate is never replayed to primary",async()=>{
+test("a remaining REST mutation timeout on the selected alternate is never replayed to primary",async()=>{
   const real=globalThis.fetch,posts:string[]=[];let firstPrimary=true;
   globalThis.fetch=async(input,init)=>{
     const req=new Request(input,init),host=new URL(req.url).hostname;
@@ -466,9 +521,7 @@ test("a mutation timeout on the selected alternate is never replayed to primary"
   try{
     const client=new GateLiveClient({apiKey:"fixture-key",apiSecret:"fixture-secret",environment:"live"});
     await client.inspectEntry("MARKET","BTC_USDT","t-fixture","123");
-    await assert.rejects(()=>client.createEntry({kind:"MARKET",tag:"t-ms-e-timeout",size:1,contracts:1,notional:100,
-      plannedRisk:2,leverage:10,margin:10,body:{contract:"BTC_USDT",size:"1",price:"0",tif:"ioc",text:"t-ms-e-timeout",reduce_only:false}}),
-      /提交结果可能不明确/);
+    await assert.rejects(()=>client.setLeverage("BTC_USDT",10),/提交结果可能不明确/);
     assert.deepEqual(posts,["fx-api.gateio.ws"],"unknown writes must never fail over after crossing the network boundary");
   }finally{globalThis.fetch=real;}
 });
