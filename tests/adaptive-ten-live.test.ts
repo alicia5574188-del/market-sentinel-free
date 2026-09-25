@@ -81,3 +81,33 @@ test("stale events are never replayed into LIVE and adverse chase is bounded",()
   const bad=trade.side==="LONG"?trade.entryPrice*1.02:trade.entryPrice*.98;
   const guard=liveEntryDriftGuard(trade,bad);assert.ok(guard.adverse>guard.allowed);
 });
+
+
+test("small LIVE accounts may round up only to one Gate minimum quantum when actual risk stays bounded",()=>{
+  const {s,trade,now}=source(),sourceEquity=1000,small=structuredClone(trade);
+  small.entryPrice=10;small.lastPrice=10;small.stopPrice=9.78;small.armPrice=10.25;small.quantoMultiplier=1;
+  small.contracts=10;small.quantity=10;small.notional=100;small.leverage=10;small.margin=10;
+  small.plannedRisk=100*(.022+.0019);small.entryFee=.07;small.lastQuoteAt=now;
+  small.forecast={remainingNetRate:.015,quality:.9,sizingEquity:1000};
+  const equity=100,ratio=.1;
+  const result=buildProportionalMirror({source:small,sourceEquity,equity,available:equity,entryPrice:10,quantoMultiplier:1,
+    leverageMax:20,maintenanceRate:.005,openRisk:0,sameDirectionRisk:0,openMargin:0,openNotional:0,
+    now:small.openedAt+1000,policy:s.policyVersion,sizeRules:{enableDecimal:false,orderSizeMin:"2",orderSizeMax:"1000000"},
+    mirrorRatio:ratio,sourceRiskAuthority:true,quoteObservedAt:now});
+  assert.equal(result.binding.receipt.sizingMode,"MINIMUM_TOP_UP");
+  assert.equal(result.intent.contracts,2);
+  assert.equal(result.intent.notional,20);
+  assert.ok(result.intent.plannedRisk<=equity*.009+1e-9);
+  assert.match(result.binding.receipt.discrepancy??"",/最低张补齐/);
+});
+
+test("small LIVE minimum top-up still rejects materially oversized exchange quanta",()=>{
+  const {s,trade,now}=source(),small=structuredClone(trade);
+  small.entryPrice=10;small.lastPrice=10;small.stopPrice=9.78;small.armPrice=10.25;small.quantoMultiplier=1;
+  small.contracts=10;small.quantity=10;small.notional=100;small.leverage=10;small.margin=10;
+  small.plannedRisk=100*(.022+.0019);small.entryFee=.07;small.lastQuoteAt=now;
+  assert.throws(()=>buildProportionalMirror({source:small,sourceEquity:1000,equity:100,available:100,entryPrice:10,quantoMultiplier:1,
+    leverageMax:20,maintenanceRate:.005,openRisk:0,sameDirectionRisk:0,openMargin:0,openNotional:0,
+    now:small.openedAt+1000,policy:s.policyVersion,sizeRules:{enableDecimal:false,orderSizeMin:"10",orderSizeMax:"1000000"},
+    mirrorRatio:.1,sourceRiskAuthority:true,quoteObservedAt:now}),/最低一张会使仓位偏离或风险过大/);
+});
