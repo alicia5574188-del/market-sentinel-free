@@ -1066,7 +1066,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
         if(!reservation)throw new Error("前向写入预算不足；保留原账户，不提交未持久化订单");
         try {await this.ctx.storage.transaction(async transaction => { await transaction.put(prepared.entries); });reservation.finish(true);}
         finally {reservation.finish(false);}
-        next.state.storage.layout=FORWARD_PAGED_STATE_VERSION;
+        next.state.storage.layout=FORWARD_PAGED_STATE_VERSION;next.state.storage.sampleIntegrity="raw-sha256";
         this.forwardCompression=prepared.compression;
         for(const t of closures)this.mirrorClosures.set(t.id,structuredClone(t));
       } else if (next.protectionChanged) {

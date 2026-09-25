@@ -5,6 +5,8 @@ import { FORWARD_PAGED_STATE_VERSION, FORWARD_SAMPLE_MANIFEST_STORAGE, FORWARD_S
   FORWARD_STORAGE, prepareForwardWrite, readForwardStore } from "../lib/forward-store.ts";
 
 const T=1_795_000_000_000,HEAD=`${FORWARD_STORAGE}head`;
+const digest=async(bytes:Uint8Array)=>[...new Uint8Array(await crypto.subtle.digest("SHA-256",bytes as BufferSource))]
+  .map(v=>v.toString(16).padStart(2,"0")).join("");
 class Memory {
   data=new Map<string,unknown>();writes:string[][]=[];
   async get<V>(key:string){return structuredClone(this.data.get(key)) as V|undefined;}
@@ -53,6 +55,8 @@ test("paged store preserves 2200 mature samples plus the full financial/control 
   const s=stressFixture(),write=await prepareForwardWrite(s,s,T,{compact:true});
   assert.equal(write.compression.sampleCount,2200);assert.ok(write.compression.samplePages>1);
   assert.ok(write.compression.rawBytes<1024*1024);assert.equal((write.entries[HEAD] as {version:string}).version,FORWARD_PAGED_STATE_VERSION);
+  const manifest=write.entries[FORWARD_SAMPLE_MANIFEST_STORAGE] as {pages:{rawSha256?:string}[]};
+  assert.ok(manifest.pages.every(page=>/^[0-9a-f]{64}$/.test(page.rawSha256??"")));
   const db=new Memory();await db.put(write.entries);const restored=await readForwardStore(db,T+1);
   assert.equal(restored.relationEngine.samples.length,2200);assert.equal(Object.keys(restored.relationEngine.pending).length,160);
   assert.equal(restored.history.length,240);assert.equal(restored.events.length,160);assert.equal(restored.positions.length,2);
@@ -66,6 +70,42 @@ test("paged store preserves 2200 mature samples plus the full financial/control 
   await db.put(incremental.entries);const again=await readForwardStore(db,T+3);
   assert.equal(again.balance,continued.balance);assert.equal(again.relationEngine.samples.length,2200);
   assert.equal(again.relationEngine.samples.at(-1)!.response,.123);
+});
+
+test("legacy pages recover only through exact decoded page invariants and migrate to stable raw hashes",async()=>{
+  const s=stressFixture(),write=await prepareForwardWrite(s,s,T,{compact:true}),db=new Memory();
+  const manifest=structuredClone(write.entries[FORWARD_SAMPLE_MANIFEST_STORAGE]) as {
+    pages:{id:string;key:string;count:number;firstAt:number;lastAt:number;length:number;rawLength:number;sha256:string;rawSha256?:string;encoding:string}[]
+  };
+  for(const page of manifest.pages)delete page.rawSha256;
+  manifest.pages[0]!.length++;manifest.pages[0]!.sha256="0".repeat(64);
+  const head=structuredClone(write.entries[HEAD]) as {sampleManifestSha256:string};
+  head.sampleManifestSha256=await digest(new TextEncoder().encode(JSON.stringify(manifest)));
+  await db.put({...write.entries,[FORWARD_SAMPLE_MANIFEST_STORAGE]:manifest,[HEAD]:head});
+
+  const recovered=await readForwardStore(db,T+1);
+  assert.equal(recovered.relationEngine.samples.length,2200);
+  assert.equal(recovered.history.length,240);
+  const migrated=await prepareForwardWrite(recovered,recovered,T+2,{compact:true});
+  await db.put(migrated.entries);
+  const stable=db.data.get(FORWARD_SAMPLE_MANIFEST_STORAGE) as {pages:{rawSha256?:string}[]};
+  assert.ok(stable.pages.every(page=>/^[0-9a-f]{64}$/.test(page.rawSha256??"")));
+  assert.equal((await readForwardStore(db,T+3)).relationEngine.samples.length,2200);
+});
+
+test("stable raw hashes accept harmless compression identity drift but reject decoded content mismatch",async()=>{
+  const s=stressFixture(),write=await prepareForwardWrite(s,s,T,{compact:true});
+  for(const mode of ["compressed-only","raw"] as const){
+    const db=new Memory(),manifest=structuredClone(write.entries[FORWARD_SAMPLE_MANIFEST_STORAGE]) as {
+      pages:{length:number;sha256:string;rawSha256:string}[]
+    },head=structuredClone(write.entries[HEAD]) as {sampleManifestSha256:string};
+    manifest.pages[0]!.length++;manifest.pages[0]!.sha256="0".repeat(64);
+    if(mode==="raw")manifest.pages[0]!.rawSha256="f".repeat(64);
+    head.sampleManifestSha256=await digest(new TextEncoder().encode(JSON.stringify(manifest)));
+    await db.put({...write.entries,[FORWARD_SAMPLE_MANIFEST_STORAGE]:manifest,[HEAD]:head});
+    if(mode==="compressed-only")assert.equal((await readForwardStore(db,T+1)).relationEngine.samples.length,2200);
+    else await assert.rejects(()=>readForwardStore(db,T+1),/分页/);
+  }
 });
 
 test("manifest/page corruption fails closed and leaves the saved account untouched",async()=>{
@@ -85,8 +125,7 @@ test("future account extensions survive a paged rewrite without being mistaken f
 });
 
 test("a legacy monolithic account migrates to pages without losing samples, orders, pending roots or rules",async()=>{
-  const legacy=stressFixture(),raw=new TextEncoder().encode(JSON.stringify(legacy)),sha=[...new Uint8Array(await crypto.subtle.digest("SHA-256",raw))]
-    .map(v=>v.toString(16).padStart(2,"0")).join(""),db=new Memory();
+  const legacy=stressFixture(),raw=new TextEncoder().encode(JSON.stringify(legacy)),sha=await digest(raw),db=new Memory();
   await db.put({[HEAD]:{version:FORWARD_VERSION,count:1,length:raw.length,sha256:sha},[`${FORWARD_STORAGE}chunk:0`]:raw});
   const recovered=await readForwardStore(db,T+1);assert.equal(recovered.relationEngine.samples.length,2200);
   assert.equal(recovered.history.length,240);assert.equal(Object.keys(recovered.relationEngine.pending).length,160);

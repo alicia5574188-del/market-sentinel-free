@@ -1,3 +1,26 @@
+# 2026-09-25 — production restart exposed paged-sample integrity migration defect
+
+PR485/main `db8d2a7` passed exact-head CI and deployed, but production correctly
+stayed fail-closed with `Forward样本分页校验失败：0001790265600000:000`.
+The account, samples, history and owner LIVE=false intent were not reset or
+overwritten. Root cause is the v2 page writer comparing stable decoded page
+content to decide whether to retain an old page while publishing a manifest
+whose only page identity was freshly generated compressed bytes. A harmless
+compression identity difference can therefore make the new manifest reject the
+retained valid page after restart.
+
+Current recovery branch `fix/20260925-forward-page-integrity-recovery` adds a
+stable raw-content SHA-256 to each page manifest, validates page schema/hour/
+ordering/count/bounds before accepting it, and allows legacy recovery only when
+the stored page fully decodes and satisfies every authenticated manifest
+invariant. The next successful full cycle atomically upgrades the manifest;
+actual corruption remains fail-closed. Verification passes: 130 direct tests,
+62 Forward tests, 129 LIVE/Gate parity tests, 49 member tests, 61 equity tests,
+18 architecture/migration tests, native Gate-stream workerd smoke, build,
+typecheck, zero-warning lint, diff check and Wrangler dry-run. This includes the
+2200-sample restart/incremental/migration/tamper cases. Reviewed PR/main release
+and production continuous-save receipt remain pending.
+
 # 2026-09-23 — LIVE edge / shock continuity candidate verified locally
 
 Branch `fix/20260923-live-strategy-continuity` from deployed main `e645c1d` now
