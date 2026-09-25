@@ -51,8 +51,14 @@ const hash=(v:string)=>{let h=2166136261;for(let i=0;i<v.length;i++)h=Math.imul(
 const rootKey=(symbol:string,at:number)=>symbol+":"+at;
 const cpValue=(r:RelationMeasurement,h:number)=>Number(r.cp[h as RelationCheckpoint]);
 const directional=(r:RelationMeasurement,h:RelationHorizon,side:RelationSide)=>sign(side)*cpValue(r,h);
-const adverseAt=(r:RelationMeasurement,h:RelationCheckpoint,side:RelationSide)=>side==="LONG"?Number(r.downAt[h]??0):Number(r.upAt[h]??0);
-const favorableAt=(r:RelationMeasurement,h:RelationCheckpoint,side:RelationSide)=>side==="LONG"?Number(r.upAt[h]??0):Number(r.downAt[h]??0);
+function excursionAt(r:RelationMeasurement,h:RelationCheckpoint,field:"upAt"|"downAt"){
+  const exact=Number(r[field][h]);if(Number.isFinite(exact))return exact;
+  const later=REACTION_CHECKPOINTS.filter(x=>x>=h&&Number.isFinite(Number(r[field][x]))).at(0);
+  if(later!=null)return Number(r[field][later]);const earlier=REACTION_CHECKPOINTS.filter(x=>x<h&&Number.isFinite(Number(r[field][x]))).at(-1);
+  return earlier==null?0:Number(r[field][earlier]);
+}
+const adverseAt=(r:RelationMeasurement,h:RelationCheckpoint,side:RelationSide)=>side==="LONG"?excursionAt(r,h,"downAt"):excursionAt(r,h,"upAt");
+const favorableAt=(r:RelationMeasurement,h:RelationCheckpoint,side:RelationSide)=>side==="LONG"?excursionAt(r,h,"upAt"):excursionAt(r,h,"downAt");
 
 function blankDiagnostics(){
   return{markets:0,matureSamples:0,effectiveGroups:0,rules:0,active:0,pressured:0,degraded:0,recovering:0,liveAnomalies:0,
@@ -96,11 +102,18 @@ function refreshRelative(rows:RelationMeasurement[]){
   for(const group of byAt.values())for(const h of RELATION_HORIZONS){const values=group.map(r=>cpValue(r,h)).filter(Number.isFinite);if(values.length<3)continue;
     const m=median(values);for(const r of group)if(Number.isFinite(cpValue(r,h)))r.relativeAt[h]=cpValue(r,h)-m;}
 }
+function mergeRoots(rows:RelationMeasurement[]){
+  const byRoot=new Map<string,RelationMeasurement>();for(const r of rows){const key=rootKey(r.symbol,r.at),prior=byRoot.get(key);if(!prior){byRoot.set(key,r);continue;}
+    const cp={...prior.cp,...r.cp},upAt={...prior.upAt,...r.upAt},downAt={...prior.downAt,...r.downAt};
+    byRoot.set(key,{...prior,...r,cp,upAt,downAt,response:Number(cp[60]??r.response??prior.response),
+      up:Number(upAt[60]??r.up??prior.up),down:Number(downAt[60]??r.down??prior.down)});}
+  return[...byRoot.values()].sort((a,b)=>a.at-b.at);
+}
 function thinSamples(rows:RelationMeasurement[],now:number){
-  const sorted=rows.filter(r=>now-r.at<=48*60*60_000).sort((a,b)=>a.at-b.at),seen=new Set<string>(),out:RelationMeasurement[]=[];
+  const sorted=mergeRoots(rows).filter(r=>now-r.at<=24*60*60_000),seen=new Set<string>(),out:RelationMeasurement[]=[];
   for(let i=sorted.length-1;i>=0;i--){const r=sorted[i]!,age=now-r.at,bucket=age<=3*60*60_000?5:age<=12*60*60_000?15:60,
       key=r.symbol+":"+Math.floor(r.at/(bucket*60_000));if(seen.has(key))continue;seen.add(key);out.push(r);}
-  return out.reverse().slice(-3600);
+  return out.reverse().slice(-2200);
 }
 function groupRows(rows:RelationMeasurement[],h:RelationHorizon,side:RelationSide){
   const d=sign(side),m=new Map<number,Map<string,number[]>>();for(const r of rows){const v=cpValue(r,h);if(!Number.isFinite(v))continue;
