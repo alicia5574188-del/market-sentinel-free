@@ -272,9 +272,10 @@ export function relationHardPayoffBlock(input:{exitProfile:RelationExitProfile;h
     &&Number.isFinite(p.adverseP80Rate)&&Number.isFinite(p.adverseP95Rate)))return null;
   const retainedTarget=Math.max(0,p.targetRate*p.retentionRate-cost),
     typicalWin=Math.max(input.netRate,Math.min(retainedTarget,Math.max(0,p.medianWinNetRate??0))),
-    typicalLoss=Math.max(cost*.25,p.medianLossNetRate??0),payoff=typicalWin/Math.max(typicalLoss,1e-9),
-    breakeven=(1-winRate)/Math.max(winRate,1e-9),requiredPayoff=breakeven*1.10;
-  if(payoff<requiredPayoff)return `样本典型盈亏不足：${payoff.toFixed(2)}× < ${requiredPayoff.toFixed(2)}×（胜率${(winRate*100).toFixed(0)}%）`;
+    typicalLoss=Math.max(cost*.25,p.medianLossNetRate??0),
+    robustExpected=winRate*typicalWin-(1-winRate)*typicalLoss,
+    minimumExpected=Math.max(cost*.05,.00005);
+  if(robustExpected<minimumExpected)return `样本稳健期望不足：${(robustExpected*100).toFixed(3)}% < ${(minimumExpected*100).toFixed(3)}%（胜率${(winRate*100).toFixed(0)}%）`;
   const hardCoverage=typicalWin/Math.max(input.hardStopRate+cost,1e-9),p80=Math.max(0,p.adverseP80Rate??0),p95=Math.max(p80,p.adverseP95Rate??0),
     hardBeyond95=input.hardStopRate>=p95*1.05,hardBeyond80=input.hardStopRate>=p80*1.15,
     tailFloor=(hardBeyond95 ? .20 : hardBeyond80 ? .30 : .40)+(winRate<.55 ? .10 : 0);
