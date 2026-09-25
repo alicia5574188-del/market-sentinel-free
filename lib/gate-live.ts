@@ -360,9 +360,32 @@ export class GateLiveClient {
       checkedAt:Math.max(core.checkedAt,orders.checkedAt)};
   }
 
+  async position(symbol:string):Promise<GateLivePosition>{
+    return (await this.request<GateLivePosition>("GET",`/futures/usdt/positions/${encodeURIComponent(symbol)}`)).data;
+  }
+
   async setLeverage(symbol: string, leverage: number) {
     const query = `leverage=${encodeURIComponent(String(leverage))}`;
     await this.request("POST", `/futures/usdt/positions/${encodeURIComponent(symbol)}/leverage`, query);
+  }
+
+  /** A leverage mutation has no order identity. If its response times out, verify
+   * the flat-position configuration through the safe read lane instead of
+   * treating it like an ambiguous entry order for sixty seconds. No write is
+   * retried automatically. */
+  async ensureLeverage(symbol:string,leverage:number){
+    try{
+      await this.setLeverage(symbol,leverage);
+      return{verified:true,recovered:false,actual:leverage};
+    }catch(error){
+      if(!(error instanceof Error)||!/Gate POST 请求超时：\/futures\/usdt\/positions\/.+\/leverage/.test(error.message))throw error;
+      const first=await this.position(symbol),actual=Number(first.leverage);
+      if(Number.isFinite(actual)&&Math.abs(actual-leverage)<1e-9)return{verified:true,recovered:true,actual};
+      await new Promise(resolve=>setTimeout(resolve,350));
+      const second=await this.position(symbol),retryActual=Number(second.leverage);
+      if(Number.isFinite(retryActual)&&Math.abs(retryActual-leverage)<1e-9)return{verified:true,recovered:true,actual:retryActual};
+      throw new Error(`Gate 杠杆写入响应超时且安全回读未确认 ${symbol} 已为 ${leverage}×；本源单跳过，但不会锁住其他实盘机会`);
+    }
   }
 
   /** Read-only, fixed time-window pagination; individual fills, not orders. */
