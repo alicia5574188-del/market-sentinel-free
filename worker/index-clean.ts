@@ -2691,11 +2691,7 @@ export class MarketStream extends DurableObject<CloudflareEnv> {
       await this.saveCheckpoint(Date.now(),true);
       await this.syncLive(Date.now(), enabled, !enabled);
       this.recordLiveAudit({ observedAt: Date.now(), symbol: null, planId: null, stage: "LIVE_CONTROL", level: "INFO",
-        reason: enabled
-          ? this.runtime.live.operational
-            ? "所有者已开启；Gate账户、持仓与挂单核对完成，仅复制本次开启后新产生的模拟单"
-            : "所有者开启选择已保存；Gate挂单核对仍在后台恢复，核对完成后自动允许新增复制，不需要再次切换开关"
-          : "所有者已关闭实盘复制并请求撤销系统入场挂单" });
+        reason: enabled ? "所有者已开启，仅复制本次开启后新产生的模拟单；开启前已有单不补开，重复开启不重置起点" : "所有者已关闭实盘复制并请求撤销系统入场挂单" });
       await this.saveCheckpoint(Date.now(), true);
       return { ok: true, live: this.runtime.live };
     } catch (error) {
