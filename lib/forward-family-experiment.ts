@@ -90,13 +90,15 @@ function recovered(record:FamilyGuardRecord,rules:RelationRule[]){
 
 export function reserveExperimentValueBlock(input:{
   reserve:boolean;netRate:number;edgeRatio:number;livePathScore:number;environmentFit:number;roundTripCost:number;
+  status?:RelationRule["status"];health?:number;
 }){
   if(!input.reserve)return null;
-  const netFloor=Math.max(.0010,input.roundTripCost*.55);
+  const strongActive=input.status==="ACTIVE"&&(input.health??0)>=.60&&input.livePathScore>=.70&&input.environmentFit>=.65;
+  const netFloor=Math.max(.0010,input.roundTripCost*.55),edgeFloor=strongActive?.30:.45;
   if(input.netRate<netFloor)return `探测净空间不足：${(input.netRate*100).toFixed(2)}%`;
-  if(input.edgeRatio<.45)return `探测收益风险价值不足：${input.edgeRatio.toFixed(2)}`;
-  if(input.livePathScore<.55)return `探测路径尚未恢复：${Math.round(input.livePathScore*100)}`;
-  if(input.environmentFit<.60)return `探测环境匹配不足：${Math.round(input.environmentFit*100)}`;
+  if(input.edgeRatio<edgeFloor)return `探测收益风险价值不足：${input.edgeRatio.toFixed(2)}`;
+  if(input.livePathScore<(strongActive?.70:.55))return `探测路径尚未恢复：${Math.round(input.livePathScore*100)}`;
+  if(input.environmentFit<(strongActive?.65:.60))return `探测环境匹配不足：${Math.round(input.environmentFit*100)}`;
   return null;
 }
 
@@ -111,7 +113,8 @@ export function familyAdmissionBlock(input:{
   if(input.openFamilyIds.has(familyId))return `关系族${familyId}已有一笔探测仓`;
 
   return reserveExperimentValueBlock({reserve:true,netRate:input.netRate,edgeRatio:input.edgeRatio,
-    livePathScore:input.rule.livePathScore,environmentFit:input.rule.environmentFit,roundTripCost:input.roundTripCost});
+    livePathScore:input.rule.livePathScore,environmentFit:input.rule.environmentFit,roundTripCost:input.roundTripCost,
+    status:input.rule.status,health:input.rule.health});
 }
 
 export function recordFamilyFailure(input:{
