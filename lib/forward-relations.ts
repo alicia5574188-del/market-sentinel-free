@@ -537,7 +537,8 @@ function markAndManage(s:ForwardState,quotes:Record<string,Quote>,now:number){
       if(relationFailure)reason="RELATION_DEGRADED";else if(timeFailure)reason="NO_POSITIVE_FEEDBACK";else if(hardTime)reason="TIME_DECAY";
     }
     if(!reason){
-      const interrupt=structuralInterruptBlockReason(s.structuralInterrupt,t.symbol,t.side,now),
+      const shockTrack=s.structuralInterrupt.tracks[t.symbol],
+        interrupt=shockTrack?.phase==="CONFIRMED"&&now-shockTrack.lastAt<=12_000&&shockTrack.side!==t.side,
         fastMode=t.entryContext?.mode==="BREAKOUT"||t.entryContext?.mode==="RETEST"||t.entryContext?.mode==="SHOCK",
         fastAdverse=Math.max(ROUND_TRIP_COST*.8,Math.min((t.entryContext?.pullbackRiskRate??.01)*.25,.0025)),
         interruptBoundary=t.entryContext?.interruptBoundary??null,
