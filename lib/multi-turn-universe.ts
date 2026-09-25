@@ -106,8 +106,9 @@ export function selectAnchorOpportunityUniverse(input:{
     const range24hRate=Math.max(0,(row.high24h-row.low24h)/Math.max(row.last,1e-12));
     const travel=clip(range24hRate/.08),netMove=clip(Math.abs(row.change24hRate)/.05),
       executionVolume=forwardExecutionVolume24hUsd(row),
-      liquidityScore=clip((Math.log10(Math.max(executionVolume,1))-6)/3);
-    const activityScore=.45*travel+.20*netMove+.35*liquidityScore+(current.has(row.symbol)?.02:0);
+      liquidityScore=clip((Math.log10(Math.max(executionVolume,1))-6)/3),
+      movement=.70*travel+.30*netMove;
+    const activityScore=movement*(.72+.28*liquidityScore)+.04*liquidityScore+(current.has(row.symbol)?.02:0);
     return{row,range24hRate,activityScore,executionVolume};
   });
   const selected:AnchorOpportunityUniverseRow[]=[];
