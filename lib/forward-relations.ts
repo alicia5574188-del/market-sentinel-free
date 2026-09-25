@@ -780,8 +780,13 @@ export function forwardUrgentQuoteSymbols(s:ForwardState,now:number,entrySymbols
   const allowed=entrySymbols?new Set(entrySymbols):null,keep=(x:string)=>!allowed||allowed.has(x);
   const premium=s.opportunities.filter(o=>o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort((a,b)=>b.score-a.score);
   const normal=s.opportunities.filter(o=>!o.premium&&o.eligible&&o.expiresAt>now&&keep(o.symbol)).sort((a,b)=>b.score-a.score);
-  const regions=Object.values(s.regions).filter(r=>keep(r.symbol)).sort((a,b)=>b.quality-a.quality);
-  return[...new Set([...s.positions.map(t=>t.symbol),...premium.map(o=>o.symbol),...normal.map(o=>o.symbol),...regions.map(r=>r.symbol)])];
+  const regions=Object.values(s.regions).filter(r=>keep(r.symbol)).sort((a,b)=>b.quality-a.quality),
+    universe=entrySymbols?[...entrySymbols].filter(keep):[];
+  // All 30 execution-universe BBOs stay resident so a sudden market-wide shock
+  // can be recognized from the 2s price path even when only a few symbols have
+  // a mature region. Positions/candidates/regions retain priority when capacity is tight.
+  return[...new Set([...s.positions.map(t=>t.symbol),...premium.map(o=>o.symbol),...normal.map(o=>o.symbol),
+    ...regions.map(r=>r.symbol),...universe])];
 }
 export function forwardUrgentMinuteSymbols(s:ForwardState,entrySymbols?:Iterable<string>){
   const allowed=entrySymbols?new Set(entrySymbols):null,keep=(x:string)=>!allowed||allowed.has(x);
