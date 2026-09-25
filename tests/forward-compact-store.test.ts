@@ -206,6 +206,34 @@ test("raw-hash pages recover only when retained supersets reproduce the exact pe
   assert.equal((await readForwardStore(db,restartAt+2)).storage.sampleIntegrity,"raw-sha256");
 });
 
+test("structurally stale raw-hash pages preserve valid retained roots when manifest-only bytes cannot be reconstructed",async()=>{
+  const s=stressFixture();s.relationEngine.samples=Array.from({length:23},(_,i)=>sample(i));
+  const write=await prepareForwardWrite(s,s,T,{compact:true}),db=new Memory();
+  const manifest=write.entries[FORWARD_SAMPLE_MANIFEST_STORAGE] as {
+    count:number;pages:{id:string;key:string;count:number;encoding:"gzip"|"utf8"}[]
+  },target=manifest.pages[0]!,original=write.entries[target.key] as Uint8Array,
+    raw=target.encoding==="gzip"?await gunzip(original,512*1024):original,
+    page=JSON.parse(new TextDecoder().decode(raw)) as {samples:unknown[][]};
+  const replacement=structuredClone(page.samples.at(-1)!);
+  replacement[1]="ALT_USDT";
+  page.samples[0]=replacement;
+  page.samples.push(structuredClone(page.samples.at(-1)!));
+  const retainedRaw=new TextEncoder().encode(JSON.stringify(page)),
+    retained=target.encoding==="gzip"?await gzip(retainedRaw):retainedRaw;
+  await db.put({...write.entries,[target.key]:retained});
+
+  const recovered=await readForwardStore(db,T+1);
+  assert.equal(recovered.storage.sampleIntegrity,"legacy-recovered");
+  assert.equal(recovered.relationEngine.samples.length,23,
+    "retained evidence should normalize to causal roots without inventing the manifest-only row");
+  assert.ok(recovered.relationEngine.samples.some(row=>row.symbol==="ALT_USDT"));
+  const migrated=await prepareForwardWrite(recovered,recovered,T+2,{compact:true}),keys=Object.keys(migrated.entries),
+    recoveryBytesKey=keys.find(key=>key.startsWith(FORWARD_SAMPLE_RECOVERY_PREFIX)&&key.endsWith(":bytes"))!;
+  assert.ok(recoveryBytesKey);assert.deepEqual(migrated.entries[recoveryBytesKey],retained);
+  await db.put(migrated.entries);
+  assert.equal((await readForwardStore(db,T+3)).storage.sampleIntegrity,"raw-sha256");
+});
+
 test("incremental writer compares against the persisted manifest after time-based sample thinning",async()=>{
   const s=stressFixture(),first=await prepareForwardWrite(s,s,T,{compact:true}),db=new Memory();
   await db.put(first.entries);
