@@ -124,10 +124,10 @@ test("legacy retained strict supersets are canonically proven and atomically arc
   head.sampleManifestSha256=await digest(new TextEncoder().encode(JSON.stringify(manifest)));
   await db.put({...write.entries,[target.key]:oversized,[FORWARD_SAMPLE_MANIFEST_STORAGE]:manifest,[HEAD]:head});
 
-  const recovered=await readForwardStore(db,T+1);
-  assert.equal(recovered.relationEngine.samples.length,23);assert.equal(recovered.history.length,240);
-  const next=normalizeForward(structuredClone(recovered),T+2);next.storage={persistedAt:T+2,error:null};
-  const migrated=await prepareForwardWrite(recovered,next,T+2,{compact:true}),keys=Object.keys(migrated.entries),
+  const restartAt=T+25*60*60_000,recovered=await readForwardStore(db,restartAt);
+  assert.equal(recovered.relationEngine.samples.length,0);assert.equal(recovered.history.length,240);
+  const next=normalizeForward(structuredClone(recovered),restartAt+1);next.storage={persistedAt:restartAt+1,error:null};
+  const migrated=await prepareForwardWrite(recovered,next,restartAt+1,{compact:true}),keys=Object.keys(migrated.entries),
     recoveryBytesKey=keys.find(key=>key.startsWith(FORWARD_SAMPLE_RECOVERY_PREFIX)&&key.endsWith(":bytes"))!,
     recoveryManifestKey=keys.find(key=>key.startsWith(FORWARD_SAMPLE_RECOVERY_PREFIX)&&key.endsWith(":manifest"))!;
   assert.ok(recoveryBytesKey);assert.ok(recoveryManifestKey);assert.deepEqual(migrated.entries[recoveryBytesKey],oversized);
@@ -136,25 +136,25 @@ test("legacy retained strict supersets are canonically proven and atomically arc
   assert.equal(recovery.actualCount,target.count+1);assert.equal(recovery.manifestCount,target.count);
   assert.equal(recovery.sha256,await digest(oversized));assert.equal(recovery.rawSha256,await digest(oversizedRaw));
   assert.equal(migrated.compression.changedSamplePages,migrated.compression.samplePages);
-  await db.put(migrated.entries);const restarted=await readForwardStore(db,T+3);
-  assert.equal(restarted.relationEngine.samples.length,23);assert.equal(restarted.storage.sampleIntegrity,"raw-sha256");
+  await db.put(migrated.entries);const restarted=await readForwardStore(db,restartAt+2);
+  assert.equal(restarted.relationEngine.samples.length,0);assert.equal(restarted.storage.sampleIntegrity,"raw-sha256");
   assert.deepEqual(db.data.get(recoveryBytesKey),oversized);assert.deepEqual(db.data.get(recoveryManifestKey),recovery);
 });
 
-test("legacy evidence drift still fails closed unless normalization recreates the authenticated topology",async()=>{
+test("legacy evidence drift still fails closed unless persisted-time normalization recreates the authenticated bytes",async()=>{
   const s=stressFixture(),write=await prepareForwardWrite(s,s,T,{compact:true}),db=new Memory();
   const manifest=structuredClone(write.entries[FORWARD_SAMPLE_MANIFEST_STORAGE]) as {
     pages:{key:string;count:number;rawSha256?:string;encoding:"gzip"|"utf8"}[]
   },target=manifest.pages.findLast(page=>page.count<SAMPLE_PAGE_ROWS_FOR_TEST)!;
   const original=write.entries[target.key] as Uint8Array,raw=target.encoding==="gzip"?await gunzip(original,512*1024):original,
     page=JSON.parse(new TextDecoder().decode(raw)) as {samples:unknown[][]};
-  const extra=structuredClone(page.samples.at(-1)!);extra[1]="ZZZ_USDT";page.samples.push(extra);
+  const extra=structuredClone(page.samples.at(-1)!);extra[6]=[9,9,9,9,9,9,9,9];page.samples.push(extra);
   const changedRaw=new TextEncoder().encode(JSON.stringify(page)),changed=target.encoding==="gzip"?await gzip(changedRaw):changedRaw;
   for(const meta of manifest.pages)delete meta.rawSha256;
   const head=structuredClone(write.entries[HEAD]) as {sampleManifestSha256:string};
   head.sampleManifestSha256=await digest(new TextEncoder().encode(JSON.stringify(manifest)));
   await db.put({...write.entries,[target.key]:changed,[FORWARD_SAMPLE_MANIFEST_STORAGE]:manifest,[HEAD]:head});
-  await assert.rejects(()=>readForwardStore(db,T+1),/LEGACY_TOPOLOGY/);
+  await assert.rejects(()=>readForwardStore(db,T+1),/LEGACY_CANONICAL_AT_PERSISTED_TIME/);
   assert.equal([...db.data.keys()].filter(key=>key.startsWith(FORWARD_SAMPLE_RECOVERY_PREFIX)).length,0);
 });
 
