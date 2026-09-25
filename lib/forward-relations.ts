@@ -260,10 +260,6 @@ function marketPulse(paths:Record<string,Candle[]>,now:number):MarketPulse{
   const signed=rows.length?(up-down)/rows.length:0;
   return{at:now,up,down,neutral,bias:signed>.20?"UP":signed<-.20?"DOWN":"MIXED",strength:Math.abs(signed),expansion:rows.length?median(rows.map(r=>r.expansion)):0};
 }
-function sampleAdjustment(s:ForwardState,mode:OpportunityMode,side:"LONG"|"SHORT",pulse:MarketPulse){
-  const key=`${mode}:${pulse.bias}:${side}`,m=s.sampleMemory[key];if(!m||m.count<2)return 0;
-  return clip(m.emaNetRate/.003,-1,1)*4;
-}
 function minuteConfirm(minute:Candle[]|undefined,side:"LONG"|"SHORT",level:number,now:number){
   if(!minute?.length)return{ok:false,score:0,kind:"NONE" as const};
   const a=minute.filter(r=>r.time*1000+60_000<=now).slice(-8);if(a.length<3)return{ok:false,score:0,kind:"NONE" as const};
@@ -286,9 +282,9 @@ function relationOpportunity(c:RelationCandidate,rows:Candle[],q:Quote|undefined
     stopPrice:framePrice*(1-d*pullback),targetPrice:framePrice*(1+d*Math.max(.003,gross)),stopRate:pullback,targetRate:Math.max(.003,gross),
     directionStrength:c.health*100,pathEfficiency:c.livePathScore*100,momentumPersistence:c.environmentFit*100,positionScore:75,
     spaceScore:100*clip(edge/1.5),executionScore:exec,grossRemainingSpaceRate:gross,netRemainingSpaceRate:net,pullbackRiskRate:pullback,
-    edgeRatio:edge,expectedHoldMinutes:c.horizon,marketFit:c.environmentFit*100,regionId:null,regionQuality:null,
+    edgeRatio:edge,expectedHoldMinutes:c.exitProfile.bestHoldMinutes,marketFit:c.environmentFit*100,regionId:null,regionQuality:null,
     reason:reserveBlock?`${c.reason}｜${reserveBlock}`:c.reason,relationRuleId:c.ruleId,relationStatus:c.status,
-    relationHorizon:c.horizon,relationHealth:c.health,riskScale:clip(c.health,.25,1)};
+    relationHorizon:c.horizon,relationHealth:c.health,riskScale:clip(c.health,.25,1),exitPlan:structuredClone(c.exitProfile)};
 }
 function regionOpportunities(s:ForwardState,symbol:string,rows:Candle[],minute:Candle[]|undefined,q:Quote|undefined,now:number,pulse:MarketPulse,region:Region){
   const out:Opportunity[]=[],st=pathStats(rows),last=st.last,prev=rows.at(-2)!,price=last.close,exec=executionScore(q,now);
@@ -296,7 +292,7 @@ function regionOpportunities(s:ForwardState,symbol:string,rows:Candle[],minute:C
   const buffer=Math.max(st.atr*.12,.00045),add=(side:"LONG"|"SHORT",mode:OpportunityMode,baseScore:number,stop:number,target:number,reason:string,premium=true)=>{
     const d=dir(side),gross=Math.max(0,d*(target/price-1)),net=Math.max(0,gross-ROUND_TRIP_COST),pullback=Math.max(.0035,Math.abs(price-stop)/price);
     const edge=net/Math.max(pullback,1e-9),fit=pulse.bias==="MIXED"?60:pulse.bias===(side==="LONG"?"UP":"DOWN")?85:40;
-    const score=clip(baseScore+.08*exec+.06*fit+sampleAdjustment(s,mode,side,pulse),0,100);
+    const score=clip(baseScore+.08*exec+.06*fit,0,100);
     const stopRate=Math.abs(price-stop)/price,targetRate=Math.abs(target/price-1);
     out.push({id:`${mode.toLowerCase()}-${symbol}-${last.time}`,symbol,side,mode,premium,score,
       eligible:score>=58&&net>0&&edge>=.5,completedAt:(last.time+300)*1000,expiresAt:now+(premium?6:10)*60_000,price,stopPrice:stop,targetPrice:target,stopRate,targetRate,
@@ -344,7 +340,8 @@ function relationBackedRegionOpportunities(s:ForwardState,symbol:string,rows:Can
       livePathScore:relation.livePathScore,environmentFit:relation.environmentFit,roundTripCost:ROUND_TRIP_COST});
     out.push({...o,score:clip(o.score*.55+relation.score*.45,0,100),eligible:o.eligible&&relation.health>=.15&&!reserveBlock,
       reserve:relation.reserve,relationRuleId:relation.ruleId,relationStatus:relation.status,relationHorizon:relation.horizon,
-      relationHealth:relation.health,riskScale:clip(relation.health,.25,1),
+      relationHealth:relation.health,riskScale:clip(relation.health,.25,1),expectedHoldMinutes:relation.exitProfile.bestHoldMinutes,
+      exitPlan:structuredClone(relation.exitProfile),
       reason:`${relation.reason}${reserveBlock?`｜${reserveBlock}`:""}｜执行结构：${o.reason}`});
   }
   return out;
@@ -379,10 +376,6 @@ function closeTrade(s:ForwardState,t:Trade,price:number,now:number,reason:string
   t.status="CLOSED";t.closedAt=now;t.exitPrice=price;t.exitFee=exitFee;t.fundingAllowance=funding;t.grossPnl=gross;t.netPnl=net;t.exitReason=reason;
   t.exitAudit={trigger:reason,at:now};s.balance+=gross-exitFee-funding;s.grossPnl+=gross;s.fees+=exitFee;s.fundingAllowance+=funding;
   s.resolved++;if(net>0)s.wins++;s.turnover+=t.notional;t.lastQuoteAt=now;t.lastPrice=price;s.lastExitAt[t.symbol]=now;
-  const key=`${t.entryContext?.mode??"FLOW"}:${s.marketPulse.bias}:${t.side}`,prior=s.sampleMemory[key],alpha=prior?Math.max(.08,.35/Math.sqrt(prior.count+1)):.35;
-  const netRate=net/Math.max(t.notional,1e-9),mfe=t.favorable,mae=t.adverse;
-  s.sampleMemory[key]={count:(prior?.count??0)+1,emaNetRate:(prior?.emaNetRate??0)*(1-alpha)+netRate*alpha,
-    emaMfeRate:(prior?.emaMfeRate??0)*(1-alpha)+mfe*alpha,emaMaeRate:(prior?.emaMaeRate??0)*(1-alpha)+mae*alpha,updatedAt:now};
   s.history.unshift(t);s.history=s.history.slice(0,HISTORY_LIMIT);event(s,now,"EXIT",t.id,`${t.symbol} ${reason} ${net>=0?"+":""}${net.toFixed(2)}U`);
 }
 function protectionFloor(t:Trade){
@@ -608,7 +601,6 @@ export function resetForwardAccountPreservingLearning(previous:ForwardState,now:
   const prior=normalizeForward(structuredClone(previous),now),next=initialForward(now);
   next.relationEngine=structuredClone(prior.relationEngine);
   next.familyExperiment=structuredClone(prior.familyExperiment);
-  next.sampleMemory=structuredClone(prior.sampleMemory);
   next.observations=next.relationEngine.observations;next.measured=next.relationEngine.measured;next.invalidated=next.relationEngine.invalidated;
   next.latestReason=next.relationEngine.rules.length
     ?`模拟账户已重置为1000U；保留${next.relationEngine.samples.length}份成熟市场反应和${next.relationEngine.rules.length}条关系，继续学习与交易。`
